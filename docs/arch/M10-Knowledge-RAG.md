@@ -25,7 +25,7 @@
 | inv_M10_02 | 知识源拉取内容默认 taint=high——对于受信任的本地文件系统插件，可按策略降为 low | M11 Connector-Taint-Table |
 | inv_M10_03 | 每 chunk 携带 lineage metadata——source_uri + doc_version + chunk_seq + content_hash | DDL NOT NULL 约束 |
 | inv_M10_04 | Embedding 维度变更时禁止跨模型投影——通过 SurrealDB-Core 双索引隔离表实现无缝切换 | M10 §1.5 |
-| inv_M10_05 | GraphRAG LLM 调用受日预算硬上限（Tier 0 上限见 `spec/state.yaml §m10_kb.graphrag_llm_call_daily_budget_ht0`）——超限跳过 graph_build_task | M10 §2.7 预算上限 |
+| inv_M10_05 | GraphRAG LLM 取消严苛日预算限制（得益于 DeepSeek 的低成本）——全量生成高质量图谱 | M10 §2.7 预算释放 |
 | inv_M10_06 | 主引擎 M10 彻底剥离出站网络权限——任何第三方 API 调用必须在沙箱化的 Plugin 进程中执行 | 代码审计（M10 内无 HTTP Client） |
 
 ---
@@ -169,7 +169,7 @@ ContextExpander.Expand: LeafChunk.NodeID→DocNode→AugmentedContext{Content=Pa
 双模式检索:
   LocalSearch: query实体→findSimilarEntities(top-5)→bfsTraverse(depth=2, 每节点最多20出边, 总节点≤200)→collectChunks
     `[Taint-Prop]`: BFS路径取max TaintLevel→SubgraphMaxTaint。≥`[Taint-Medium]`→Provenance显式携带，供M4/M11门控(TaintHigh实体仅允许data slot)
-  GlobalSearch: findBestCluster → 取社区抽取式摘要（零 LLM，见 §2.7 CommunityExtractiveSummarizer）→ 注入 M4 LLM prompt 实现**延迟理解（Lazy Generation）**——将开销从预计算 O(N) 转移到读时 O(1)，仅在查询命中时让 LLM 理解摘要
+  GlobalSearch: findBestCluster → 直接取社区生成式摘要（CommunityGenerativeSummarizer，基于 DeepSeek 在后台预计算高质量总结）→ 注入 M4 LLM prompt，提升全局视角的回答准确性
     StalenessGuard: 对比摘要generated_at vs 实体updated_at max。delta>0→注入提示+追加未归档实体; delta>30%→触发后台集群重建
 
 ### 2.7 GraphBuildPipeline (知识图谱构建)
@@ -184,7 +184,7 @@ EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `pkg/s
 - Tier 0 (embedder=nil): FTS5 BM25 单路，按 rank 排序，TopK 截断。
 - Tier 1+ (embedder 非 nil): FTS5 + Dense Vector 双路 RRF 融合（k=60，FTS5 权重 1.0，向量权重 0.8）。密集向量通过 `VectorEmbedder.Embed` 计算查询向量后，与 `rag_chunks.embedding` 列余弦相似度排序；无 embedding 的 chunk 跳过（幂等）。`NewHybridRetrieverWithEmbedder` 注入 embedder，`NewHybridRetriever` 保持 Tier 0 默认。
 
-**CommunityExtractiveSummarizer**（纯 Go 确定性管道，零 LLM 调用）:
+**CommunityGenerativeSummarizer**（默认启用 DeepSeek 后台生成管道，不再受限于抽取式）:
 1. **社区检测**: Leiden/Louvain 算法划分社区 (`gonum/graph/community`)
 2. **PageRank**: 计算社区内实体中心度 → Top-5 高中心度实体
 3. **TextRank**: 计算关联文本片段的句子中心度 → Top-3 关键文本片段
@@ -204,11 +204,11 @@ EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `pkg/s
 5. **拼接存储**: `"Community entities: {e1, e2, e3}. Key context: {fragment1}. {fragment2}."` → `community_extractive_summary` 表
 6. **延迟**: 纯 Go，<5ms，零外部依赖
 
-**GraphRAG LLM 调用预算上限**:
-- 每日 LLM 调用上限: Tier 0 见 `spec/state.yaml §m10_kb.graphrag_llm_call_daily_budget_ht0`（单实体提取 + 关系提取），Tier 1+ = 500 次
-- GraphBuildWorker 每次轮询前检查当日 GraphRAG LLM 调用计数 (`polaris_graphrag_llm_calls_daily` Counter)。已达上限 → 跳过本轮 graph_build_task + WARN + 任务保持 pending 状态 + 设置 `next_retry_at = 次日 00:00:00 UTC`（M2 Outbox Worker 主查询和迟提交补偿均检查 next_retry_at，跳过未来重试时间的记录，避免每 30s 无条件死循环扫描）
-- 优先级: 优先处理用户最近 24h 活跃检索的知识库文档的图谱构建，48h+ 未访问的文档降级为低优先级
-- Global Search 零 LLM 调用（抽取式摘要替代生成式摘要）
+**GraphRAG LLM 调用预算释放**:
+- 每日 LLM 调用限制解除: 得益于 DeepSeek 的极低成本，Tier 1+ 原每日 500 次硬上限被彻底移除，全天候全量并发执行实体和关系提取。
+- GraphBuildWorker: 不再因财务开销而强制阻塞 graph_build_task，任务可充分利用空闲算力高速消费。
+- 优先级: 优先处理用户最近 24h 活跃检索的知识库文档的图谱构建，48h+ 未访问的文档降级为低优先级。
+- Global Search: 默认启用高质量的后台 LLM 生成式摘要（Generative Summarization），废弃原“为了省钱而被迫采用的抽取式摘要”方案。
 
 ### 2.8 ConceptSynthesizer (跨文档合成)
 

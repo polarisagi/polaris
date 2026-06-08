@@ -75,17 +75,15 @@ L3 LLM 输出 provider 推荐槽位，由 Route() 确定性函数验证（预算
 
 路由硬约束: ① 90% 走 L1 ② 质量优先 → 延迟 → cost tiebreaker ③ 仅 L3 级联可用 LLM 判定 ④ Pre-flight 成本估算保留 ⑤ Cache 一等公民 ⑥ 3 级软限流（告警不阻断）⑦ CircuitBreaker 必备
 
-### 4.2 五个 Model Pool
+### 4.2 三个核心 Model Pool
 
 | Pool | 候选模型示例 | 默认用途 |
 |------|------------|---------|
-| Budget | `<flash-class>`（DeepSeek V4 Flash / Gemini Flash / Qwen-Turbo 等）| 默认主路径（分类、摘要、路由判断、简单工具）|
-| Standard | `<standard-class>`（Claude Sonnet 4.6 / GPT-5.x / Gemini Pro 等）| 代码生成、多步推理、复杂工具编排 |
-| Reasoning | `<reasoning-class>`（Claude Opus 4.6 / DeepSeek V4 Pro / o-系列等）| 复杂架构决策、长链推理、自反思 |
-| Local-SLM | 3-8B GGUF 本地 | local_only / 离线 fallback |
-| Local-Reasoning | 14B+ 本地 | HT2+ local_only |
+| Budget | `<flash-class>`（DeepSeek V4 Flash 等）| 默认主路径（分类、摘要、路由判断、简单工具）|
+| Standard | `<standard-class>`（DeepSeek V4 / Claude Sonnet 4.6 等）| 代码生成、多步推理、复杂工具编排 |
+| Reasoning | `<reasoning-class>`（DeepSeek V4 Pro / o-系列等）| 复杂架构决策、长链推理、自反思 |
 
-> **默认推荐**：`configs/defaults.toml` 选 DeepSeek V4 Flash + Pro 组合（价格 / 质量 / 中文友好综合最优，Tier-0 长程验证）。用户可在 Web UI Settings 切换至任何兼容 Provider。
+> **强烈推荐**：`configs/defaults.toml` 选 DeepSeek V4 系列组合（价格优势与 Tier-0 极速响应兼具）。系统已不再为普通设备维护本地模型策略（本地模型仅限 Tier-3 超高配置节点独立启用）。
 
 ### 4.3 多模态请求预处理
 
@@ -286,8 +284,7 @@ CircuitBreaker 三态：Closed（正常）→ Open（熔断，冷却期拒绝请
 
 | 模型 | 用途 | 大小 | 加载条件 |
 |------|------|------|---------|
-| Qwen3-3B-Q4_K_M | LLM 推理 | ~2GB | local_only / 离线 |
-| Qwen3-8B-Q4_K_M | LLM 推理 | ~5GB | Tier 1+ local_only |
+| Qwen3-32B-Q4_K_M | LLM 推理 | ~20GB | Tier 3+ (64GB) local_only 专享 |
 | bge-reranker-base-Q4_K_M | Cross-encoder 重排 | ~50MB | 懒加载，首次 rerank 请求时 |
 | BGE-small-Q4_K_M | 本地 Embedding | ~100MB | local_only 或隐私 embedding 模式。输出 384-dim，通过 SurrealDB-Core 双索引隔离表（index_local_384）维持语义检索能力，避免永久降级 BM25。详见 M10 §2 双索引方案 |
 
@@ -369,12 +366,12 @@ OnModelUpgrade(ctx, oldVer, newVer):
 | 全部 Provider 熔断 | CircuitBreaker 全开 | 全模块 LLM 路径 | 返回 ErrAllProvidersExhausted | 冷却期满后半开探测 | 持续 > 5min → audit |
 | SemanticCache 满 (10000 entries) | 内存水位触发 | 仅缓存查询 | LRU 淘汰 MaxEntries/10 条目 | 自动 | — |
 | StreamBudgetGuard L2 触发 | TokenBurnDetector 加速度检测 (5s 窗口, accel > 3× baseline) | 单流 | FatalStreamAbort 硬阻断 → M4 S_REPLAN | TokenBurnRate 恢复正常后自动解除 | 单 session 反复触发 ≥3 次 → audit |
-| 本地模型加载失败（OOM/文件损坏） | llama.LoadModelFromFile err / RSS 检测 | local_only 全模块 LLM 路径 | 降级远程 API（非 local_only）；local_only → ErrLocalModelUnavailable | 空闲内存恢复后重新加载。local_only 模式下若持续 > 30s 无法重载 → 触发 M13 ResourceGovernor local_only 死锁恢复（M13 §2.0）：强制 Rollback Priority >= 2 的非核心任务腾出内存，重试 LLM 重载 | local_only 模式下死锁恢复仍失败 → 必须 HITL |
+| Tier-3 本地模型加载失败 | llama.LoadModelFromFile err / RSS 检测 | local_only 全模块 LLM 路径 | 降级远程 API（非 local_only）；local_only → ErrLocalModelUnavailable | 空闲内存恢复后重新加载。local_only 模式下若持续 > 30s 无法重载 → 触发 M13 ResourceGovernor local_only 死锁恢复 | local_only 模式下死锁恢复仍失败 → 必须 HITL |
 | Embedding API 不可用 | err return / timeout | 检索路径 | EmbeddingBatcher 返回错误，调用方降级 BM25/FTS5 | API 恢复后自动切回 | 全断 > 1h → audit |
 | EmbeddingBatcher High 队列 >80% | 队列水位 | 非交互 embedding 请求 | 指数退避 (50ms→2s) | 队列水位下降后恢复正常 | 持续 > 5min → audit |
 | ModelVersionRegistry 废弃迁移失败 | 连续 3 次 4xx/5xx | 单模型 | 保持旧模型 + WARN + 禁止自动切换 | 下一检测周期重试 | 版本 EOL 日迫近 |
 
-与 OSMemoryGuard 协同: 空闲内存 < 1.0GB → 强制卸载本地模型；L3 临界 → 全部 LLM 调用路由至远程 API。
+与 OSMemoryGuard 协同: (仅 Tier-3) 空闲内存 < 1.0GB → 强制卸载本地模型；L3 临界 → 全部 LLM 调用路由至远程 API。
 
 
 ## 默认参数

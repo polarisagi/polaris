@@ -426,9 +426,9 @@ SecretBackend OS 密钥链抽象:
   - Go 层纵深: RoundTripper 替换 no-op transport + DefaultResolver 覆写 NXDOMAIN + Dialer.Control 拒非 loopback IP
 启动期自检: DNS 解析公网域名 → 有响应 → 拒绝启动 (fail-closed)。
 
-Tier 0 本地模型守卫: M1 LocalProvider.Probe() 验证可加载模型且峰值 RSS + 已用内存 < 8GB (500MB 预留)，否则拒绝 local_only。
+Tier 3 本地模型守卫: M1 LocalProvider.Probe() 验证可加载模型且峰值 RSS + 已用内存 < 64GB (1GB 预留)，否则拒绝 local_only。
 
-白名单 `local_only_network_allowlist.toml` (用户 Ed25519 签名): 仅 M10 Connector 豁免，Tier 0 上限 5 条，变更需重启。Rust FFI 引擎 (SurrealDB-Core/Cedar) 无网络能力；Tier 1+ 加载时 OS 沙箱未生效 → 拒绝 local_only。
+白名单 `local_only_network_allowlist.toml` (用户 Ed25519 签名): 仅 M10 Connector 豁免，Tier 3 上限 5 条，变更需重启。Rust FFI 引擎 (SurrealDB-Core/Cedar) 无网络能力；Tier 0/1/2 彻底禁用 local_only，不进行加载。
 
 ---
 

@@ -99,7 +99,7 @@ Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状
 L0 拓扑 (<1ms, 所有 DAG): 节点熔断(`spec/state.yaml §m4_kernel.plan_dag_max_nodes`)→环检测(DFS 三色)→深度熔断(`spec/state.yaml §m4_kernel.plan_dag_max_depth`)→孤立节点
 L1 确定性 (<1ms, 所有动作): TaintGate + JSON Schema + Tool availability + PolicyGate[Cedar-Gate]
 L2 启发式 (<5ms, RiskHigh+): 批量规模(>100)→受保护路径→资源预估
-L3 LLM 看门狗 (~200ms, 仅 RiskPrivileged): Tier1 模型语义判断, <10次/小时
+L3 LLM 看门狗 (~200ms, 仅 RiskPrivileged): DeepSeek 模型高频语义判断, 不设硬性频次上限
 ```
 
 **ActiveTaintLevel（session 级全局污点）**：当前实现暂设 TaintNone，待 ActiveContext.TaintLevel 正式引入后再从 session 聚合污点读取。per-node 污点已在 `parsePlanOnSuccess` 中按 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点的拦截仍有效。
@@ -118,7 +118,7 @@ PolicyGate: `[Cedar-Gate]` {principal, action, resource, context} → FORBID 优
 
 HeuristicChecker (L2, RiskLevel>=RiskHigh): 批量检查(>100) / 受保护路径(`/etc/`,`/sys/`,`~/.ssh/`→拒绝) / 资源预估 vs Tier 阈值
 
-LLMWatchdog (L3, 仅 RiskPrivileged): Budget Pool 模型（M1 §4.2 `<flash-class>`）输出 ALLOW/DENY 判断，频次上限见 `spec/state.yaml §m4_kernel.l3_watchdog_max_per_hour`，超限 → L3+HITL 双审批。L3 为咨询信号——L0/L1/L2 确定性校验未放行的动作不会因 L3 通过而放行。L3 仅可建议拒绝（补充确定性门控），不可建议放行。**DENY 推进 FSM 至 S_VALIDATE_FAIL；ALLOW 或 LLM 不可用时推进至 S_VALIDATE_OK（fail-open）。** 实现见 `pkg/cognition/kernel/agent_execute.go`。
+LLMWatchdog (L3, 仅 RiskPrivileged): 直接默认使用 DeepSeek 输出 ALLOW/DENY 判断，因其低成本不再设严格的 `l3_watchdog_max_per_hour` 频次门槛，无需因超限而强制降级 fallback 至 HITL 审批。L3 为咨询信号——L0/L1/L2 确定性校验未放行的动作不会因 L3 通过而放行。L3 仅可建议拒绝（补充确定性门控），不可建议放行。**DENY 推进 FSM 至 S_VALIDATE_FAIL；ALLOW 或 LLM 不可用时推进至 S_VALIDATE_OK（fail-open）。** 实现见 `pkg/cognition/kernel/agent_execute.go`。
 
 ---
 

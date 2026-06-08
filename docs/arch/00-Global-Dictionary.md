@@ -28,13 +28,13 @@
 8GB 内存硬上限。核心路径必须在 8GB 内完整运行。超出能力通过硬件门控解锁，不作硬依赖。
 
 ### [Tier-1-Limit]
-16GB 内存。解锁中等规模本地模型、更大 Agent 并发。
+16GB 内存。解锁更大 Agent 并发。
 
 ### [Tier-2-Limit]
 24GB+ 内存。解锁 gVisor L3 sandbox、更大规模知识图谱。Linux 环境可选 Firecracker microVM 升级（最高隔离级别，需硬件 KVM）。
 
 ### [Tier-3-Limit]
-64GB+ 内存。解锁全能力，包括梯度训练 (QLoRA)。
+64GB+ 内存。解锁全能力（包括本地大模型推理、梯度训练 QLoRA，超高配置电脑专享）。
 
 ### [Day0-ColdStart]
 全模块强制要求：空索引/空数据库不报错，返回确定性降级行为。禁止因缺少数据而 panic 或阻塞启动。

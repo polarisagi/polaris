@@ -190,7 +190,7 @@ HardwareProbe → computeTier(): ≥64GB→T3, ≥24GB→T2, ≥16GB→T1, ≥8G
 FeatureGate → 计算 15 个特性的 FeatureState (Enabled/Degraded/Disabled)
        ↓
 AutoConfig.computeConfig() → 生成完整配置:
-  - computeInferenceConfig(): Provider选择 + 本地模型自动选择(3B/8B/14B/32B)
+  - computeInferenceConfig(): Provider选择 + 自动检测与配置（默认 DeepSeek 系列为主）
   - computeSandboxConfig(): L3平台自动选择(Firecracker/VZ/WSL2) + Wasm并发数
   - computeTrainingConfig(): QLoRA模型大小(1-3B/7B) + PRM启用判断
   - computeStorageConfig(): 引擎选择(SurrealDB-Core全Tier + SurrealDB-Core/SurrealDB-Core HT1+)
@@ -206,7 +206,7 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 |------|---------|---------|
 | L1 预警 | <1.5GB | QLoRA→Degraded, 禁止新Wasm沙箱 |
 | L2 紧急 | <1.0GB | QLoRA/大模型→Disabled, LogicCollapse暂停 |
-| L3 临界 | <512MB | 本地模型卸载, 全部非关键特性禁用 |
+| L3 临界 | <512MB | Tier-3本地模型卸载, 全部非关键特性禁用 |
 
 恢复后自动清除 Override，特性重新启用。256MB 迟滞防抖动。
 
@@ -229,7 +229,7 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 
 | 特性 | 门控规则 | 依赖 |
 |------|---------|------|
-| FeatureLocalInference | ≥Tier1, ≥2GB free | — |
+| FeatureLocalInference | ≥Tier3, ≥16GB free | — |
 | FeatureLocalEmbedding | ≥Tier0, ≥256MB free | — |
 | FeatureQLoRA | ≥Tier1, ≥4GB free | — |
 | FeaturePRMTraining | ≥Tier2, ≥8GB free | — |
@@ -238,7 +238,7 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 | FeatureGraphRAGFull | ≥Tier1, ≥1.5GB free | — |
 | FeatureSurrealDB-CoreFTS | ≥Tier1, ≥256MB free | — |
 | FeatureSurrealDB-CoreGraph | ≥Tier1, ≥512MB free | — |
-| FeatureLargeLocalLLM | ≥Tier2, ≥6GB free | LocalInference |
+| FeatureLargeLocalLLM | ≥Tier3, ≥24GB free | LocalInference |
 | FeatureLogicCollapse | ≥Tier1, ≥1GB free | L2Sandbox |
 | FeatureComputerUseGUI | ≥Tier0, ≥512MB, hasDisplay() | — |
 | FeaturePresidioPII | ≥Tier1, ≥512MB free | — |
@@ -259,7 +259,7 @@ CheckAndProtect:
 1. 获取可用内存 (ReadMemStats + sysinfo)
 2. 更新 slopeWindow
 3. 斜率快速通道: dV/dt < -100MB/s → 提前预警降级 (禁止新 Wasm 沙箱 + 暂停后台自进化)。即使当前空闲 > 1.5GB，若 4s 内下降 400MB 预判 OOM
-4. available < 512 MB → L3 临界: 卸载本地模型, 暂停后台自进化, 关闭 SurrealDB-Core cache, runtime.GC() + FreeOSMemory(), 告警
+4. available < 512 MB → L3 临界: Tier-3 卸载本地模型, 暂停后台自进化, 关闭 SurrealDB-Core cache, runtime.GC() + FreeOSMemory(), 告警
 5. available < 1.0 GB → L2 紧急: 限制并发 Agent < 2, 禁止 Logic Collapse, 挂起 Consolidation
 6. available < 1.5 GB → L1 预警: 禁止新 Wasm 沙箱, 提高上下文压缩阈值, 暂停后台自进化
 
@@ -273,7 +273,7 @@ CheckAndProtect:
 1. 获取可用系统内存
 2. 压力 = 1.0 - available/TotalRAM
 3. 抗抖动滞后: 60s 滑动窗口 (最近 2 次采样)
-   - 全部 > 80% → Tier 降级 (卸载本地模型, 关闭 SurrealDB-Core 缓存, 暂停后台)
+   - 全部 > 80% → Tier 降级 (Tier-3 卸载本地模型, 关闭 SurrealDB-Core 缓存, 暂停后台)
    - 全部 < 50% → Tier 恢复
    - 不一致 → 维持 + DEBUG
 4. 写入窗口
