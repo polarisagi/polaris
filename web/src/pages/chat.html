@@ -228,26 +228,26 @@
 
             <div class="flex items-center gap-1 ml-1">
               <!-- Model Badge -->
-              <select class="select select-ghost select-sm pl-3 pr-8 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.selectedModel">
-                <option value="">Auto</option>
+              <select class="select select-ghost select-sm pl-3 pr-8 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[120px] truncate" x-model="$store.chat.selectedModel">
+                <option value="" x-text="$store.i18n.t('chat_model_default')"></option>
                 <template x-for="m in $store.providers.allModels" :key="m.id">
                   <option :value="m.id" x-text="m.name || m.model_id"></option>
                 </template>
               </select>
 
               <!-- Reasoning Badge -->
-              <select class="select select-ghost select-sm pl-3 pr-8 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.reasoningEffort">
-                <option value="auto">Think: Auto</option>
-                <option value="low">Think: Low</option>
-                <option value="medium">Think: Medium</option>
-                <option value="high">Think: High</option>
+              <select class="select select-ghost select-sm pl-3 pr-8 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[100px] truncate" x-model="$store.chat.reasoningEffort">
+                <option value="auto" x-text="$store.i18n.t('reasoning_auto')"></option>
+                <option value="low" x-text="$store.i18n.t('reasoning_low')"></option>
+                <option value="medium" x-text="$store.i18n.t('reasoning_medium')"></option>
+                <option value="high" x-text="$store.i18n.t('reasoning_high')"></option>
               </select>
             </div>
           </div>
 
           <!-- Right Controls (Computer Mode, Mic, Submit, Interrupt) -->
           <div class="flex items-center gap-1">
-            <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm pl-3 pr-8 text-xs rounded-full font-medium shrink-0 h-8 min-h-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
+            <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm pl-3 pr-8 text-xs rounded-full font-medium shrink-1 max-w-[120px] truncate h-8 min-h-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
               <option value="default" x-text="$store.i18n.t('computer_mode_default_short')"></option>
               <option value="auto_review" x-text="$store.i18n.t('computer_mode_auto_short')"></option>
               <option value="full_access" x-text="$store.i18n.t('computer_mode_full_short')"></option>
