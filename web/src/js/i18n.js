@@ -72,11 +72,11 @@ export const zh = {
   chat_error_clear:  '清除',
   chat_model_label:  '模型',
   chat_effort_label: '推理强度',
-  chat_model_default:'自动',
-  reasoning_auto:    '自动',
-  reasoning_low:     '低',
-  reasoning_medium:  '中',
-  reasoning_high:    '高',
+  chat_model_default:'模型: 自动',
+  reasoning_auto:    '思考: 自动',
+  reasoning_low:     '思考: 低',
+  reasoning_medium:  '思考: 中',
+  reasoning_high:    '思考: 高',
 
   // 会话页
   sessions_title:    '会话历史',
@@ -614,11 +614,11 @@ export const en = {
   chat_thinking:     '🧠 Thinking',
   chat_thought:      '✅ Deep Thought',
   chat_error_clear:  'Dismiss',
-  chat_model_default:'Auto',
-  reasoning_auto:    'Auto',
-  reasoning_low:     'Low',
-  reasoning_medium:  'Medium',
-  reasoning_high:    'High',
+  chat_model_default:'Model: Auto',
+  reasoning_auto:    'Think: Auto',
+  reasoning_low:     'Think: Low',
+  reasoning_medium:  'Think: Medium',
+  reasoning_high:    'Think: High',
 
   // Sessions
   sessions_title:    'Session History',
