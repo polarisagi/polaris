@@ -44,7 +44,7 @@ var envSeeds = []envProviderSeed{
 		baseURL: "",
 		envKey:  "ANTHROPIC_API_KEY",
 		models: []envModelSeed{
-			{modelID: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet", role: "general"},
+			{modelID: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", role: "general"},
 		},
 	},
 	{

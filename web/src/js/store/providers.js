@@ -25,12 +25,22 @@ Alpine.store('providers', {
   },
   modelEditMode: 'create',
 
-  // ── 目录快速添加 ──────────────────────────────────────────────────────
+  // ── 目录快速添加 + 手动创建（统一 AddModal）──────────────────────────
   catalog: [],
   catalogLoading: false,
-  catalogSelected: null,     // 当前选中的 CatalogProvider 对象
-  catalogForm: { api_key: '', name: '', base_url: '' },
-  catalogSaving: false,
+
+  // 统一 Modal：内置厂商选择 or 自定义（id='__custom__'）
+  showAddModal: false,
+  addSelected: null,         // 选中的 CatalogProvider 或 {id:'__custom__',...}
+  addForm: { api_key: '', name: '', base_url: '', type: 'openai_compat', project_id: '', location: 'us-central1' },
+  addSaving: false,
+
+  // 兼容旧代码引用（Onboard 等仍使用 catalogSelected/catalogForm）
+  get catalogSelected() { return this.addSelected?.id !== '__custom__' ? this.addSelected : null },
+  get catalogSaving()   { return this.addSaving },
+  get showCatalogModal(){ return this.showAddModal && this.addSelected?.id !== '__custom__' },
+  set showCatalogModal(v){ if (!v) this.showAddModal = false },
+  get catalogForm()     { return this.addForm },
 
   // 所有启用厂商下的启用模型，供角色分配面板使用
   get allModels() {
@@ -65,52 +75,101 @@ Alpine.store('providers', {
     finally { this.catalogLoading = false }
   },
 
-  openFromCatalog() {
-    this.catalogSelected = null
-    this.catalogForm = { api_key: '', name: '', base_url: '' }
-    this.showCatalogModal = true
+  // 打开统一的 "添加 AI 厂商" Modal
+  openAdd() {
+    this.addSelected = null
+    this.addForm = { api_key: '', name: '', base_url: '', type: 'openai_compat', project_id: '', location: 'us-central1' }
+    this.showAddModal = true
     this.loadCatalog()
   },
 
-  selectCatalogEntry(entry) {
-    this.catalogSelected = entry
-    this.catalogForm.name = ''
-    this.catalogForm.base_url = ''
-    this.catalogForm.api_key = ''
+  // 选择目录中的一个厂商（或自定义占位符）
+  selectAddEntry(entry) {
+    this.addSelected = entry
+    this.addForm.api_key = ''
+    this.addForm.name = ''
+    this.addForm.base_url = ''
   },
 
-  async saveFromCatalog() {
-    if (!this.catalogSelected) return
-    this.catalogSaving = true
+  // 统一保存：内置厂商走 from-catalog，自定义走手动 POST /v1/providers
+  async saveAdd() {
+    if (!this.addSelected) return
+    this.addSaving = true
     try {
-      const body = {
-        catalog_id: this.catalogSelected.id,
-        api_key:    this.catalogForm.api_key,
-        name:       this.catalogForm.name || '',
-        base_url:   this.catalogForm.base_url || '',
-      }
-      const r = await fetch('/v1/providers/from-catalog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(body),
-      })
-      if (r.ok) {
-        this.showCatalogModal = false
-        await this.load()
-        await Alpine.store('modelRoles').load()
-        Alpine.store('toast').show('ok', '已添加厂商并自动配置模型')
+      if (this.addSelected.id === '__custom__') {
+        // 手动创建
+        const payload = {
+          name:       this.addForm.name,
+          type:       this.addForm.type,
+          base_url:   this.addForm.base_url  || '',
+          api_key:    this.addForm.api_key   || '',
+          project_id: this.addForm.project_id || '',
+          location:   this.addForm.location  || 'us-central1',
+          enabled:    true,
+        }
+        const r = await fetch('/v1/providers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(payload),
+        })
+        if (r.ok) {
+          this.showAddModal = false
+          await this.load()
+          Alpine.store('toast').show('ok', '厂商已创建，请手动添加模型')
+        } else {
+          const msg = await r.text()
+          Alpine.store('toast').show('error', '创建失败: ' + msg)
+        }
       } else {
-        const msg = await r.text()
-        Alpine.store('toast').show('error', '添加失败: ' + msg)
+        // 内置目录：from-catalog 自动配置模型和角色
+        const body = {
+          catalog_id: this.addSelected.id,
+          api_key:    this.addForm.api_key   || '',
+          name:       this.addForm.name      || '',
+          base_url:   this.addForm.base_url  || '',
+        }
+        const r = await fetch('/v1/providers/from-catalog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(body),
+        })
+        if (r.ok) {
+          const d = await r.json()
+          this.showAddModal = false
+          await this.load()
+          await Alpine.store('modelRoles').load()
+          // 构建成功消息：列出自动分配的角色
+          const defaultM   = (d.models || []).find(m => m.role === 'default')
+          const reasoningM = (d.models || []).find(m => m.role === 'reasoning')
+          let msg = `已添加 ${this.addSelected.display_name}`
+          if (defaultM)   msg += `，对话: ${defaultM.name || defaultM.model_id}`
+          if (reasoningM) msg += `，推理: ${reasoningM.name || reasoningM.model_id}`
+          Alpine.store('toast').show('ok', msg)
+        } else {
+          const msg = await r.text()
+          Alpine.store('toast').show('error', '添加失败: ' + msg)
+        }
       }
-    } finally { this.catalogSaving = false }
+    } finally { this.addSaving = false }
   },
 
+  // 兼容旧调用：openCreate → 打开自定义路径
   openCreate() {
-    this.form = { id: '', name: '', type: 'openai_compat', base_url: '', api_key: '', project_id: '', location: 'us-central1', enabled: true }
-    this.editMode = 'create'
-    this.showModal = true
+    this.openAdd()
+    // 延迟一帧等 Modal 打开后选中自定义
+    setTimeout(() => {
+      this.selectAddEntry({id:'__custom__', display_name:'自定义', models:[], is_local:false})
+    }, 50)
   },
+
+  // 兼容旧调用：openFromCatalog → 统一 openAdd
+  openFromCatalog() { this.openAdd() },
+
+  // 兼容旧调用：selectCatalogEntry → selectAddEntry
+  selectCatalogEntry(entry) { this.selectAddEntry(entry) },
+
+  // 兼容旧调用：saveFromCatalog → saveAdd
+  async saveFromCatalog() { await this.saveAdd() },
 
   openEdit(p) {
     this.form = { id: p.id, name: p.name, type: p.type, base_url: p.base_url, api_key: p.api_key, project_id: p.project_id, location: p.location, sa_key_json: p.sa_key_json, enabled: p.enabled }

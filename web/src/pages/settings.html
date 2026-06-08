@@ -21,44 +21,71 @@
         </div>
         <div class="flex gap-2">
           <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="$store.onboard.start()" :title="$store.i18n.t('settings_wizard_title')" x-text="'⚙ ' + $store.i18n.t('settings_wizard')"></button>
-          <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="$store.providers.openCreate()" x-text="$store.i18n.t('catalog_manual')"></button>
-          <button class="btn btn-primary btn-sm shadow-sm" @click="$store.providers.openFromCatalog()" x-text="'⚡ ' + $store.i18n.t('catalog_add')"></button>
+          <button class="btn btn-primary btn-sm shadow-sm" @click="$store.providers.openAdd()" x-text="'+ ' + $store.i18n.t('providers_add_btn')"></button>
         </div>
       </div>
 
-      <!-- Roles Configuration -->
-      <div class="card bg-base-200 border border-base-300 shadow-sm" x-data>
-        <div class="card-body p-6">
-          <h4 class="font-bold" x-text="$store.i18n.t('roles_title')"></h4>
-          <p class="text-xs text-base-content/60 mb-4" x-text="$store.i18n.t('roles_subtitle')"></p>
-          
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="form-control">
-              <label for="store-modelroles-defaultmodelid" class="label"><span class="label-text text-base-content/70" x-text="$store.i18n.t('roles_default')"></span></label>
-              <select id="store-modelroles-defaultmodelid" name="store-modelroles-defaultmodelid" class="select select-bordered w-full" x-model="$store.modelRoles.defaultModelID">
-                <option value="" x-text="$store.i18n.t('roles_none')"></option>
-                <template x-for="m in $store.providers.allModels" :key="m.id">
-                  <option :value="m.id" x-text="`[${m.providerName}] ${m.model_id}`"></option>
-                </template>
-              </select>
-              <label for="store-modelroles-reasoningmodelid" class="label" x-show="$store.modelRoles.defaultModelName"><span class="label-text-alt text-base-content/70" x-text="$store.i18n.t('settings_current') + `: ${$store.modelRoles.defaultProviderName} / ${$store.modelRoles.defaultModelName}`"></span></label>
+      <!-- Roles Configuration — 默认折叠，展示概要行 -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm" x-data="{ rolesExpanded: false }">
+        <div class="card-body p-4">
+          <!-- 折叠概要行 -->
+          <div class="flex items-center justify-between gap-4" x-show="!rolesExpanded">
+            <div class="flex flex-wrap items-center gap-3 text-sm">
+              <span class="font-bold text-base-content/70" x-text="$store.i18n.t('roles_title')"></span>
+              <template x-if="$store.modelRoles.defaultModelName">
+                <span class="badge badge-primary badge-outline gap-1">
+                  <span class="text-xs" x-text="$store.i18n.t('roles_default_label')"></span>
+                  <span class="font-mono text-xs" x-text="$store.modelRoles.defaultModelName"></span>
+                </span>
+              </template>
+              <template x-if="!$store.modelRoles.defaultModelName">
+                <span class="text-xs text-base-content/40" x-text="$store.i18n.t('roles_none_set')"></span>
+              </template>
+              <template x-if="$store.modelRoles.reasoningModelName">
+                <span class="badge badge-secondary badge-outline gap-1">
+                  <span class="text-xs" x-text="$store.i18n.t('roles_reasoning_label')"></span>
+                  <span class="font-mono text-xs" x-text="$store.modelRoles.reasoningModelName"></span>
+                </span>
+              </template>
             </div>
-            <div class="form-control">
-              <label for="store-modelroles-reasoningmodelid" class="label"><span class="label-text text-base-content/70" x-text="$store.i18n.t('roles_reasoning')"></span></label>
-              <select id="store-modelroles-reasoningmodelid" name="store-modelroles-reasoningmodelid" class="select select-bordered w-full" x-model="$store.modelRoles.reasoningModelID">
-                <option value="" x-text="$store.i18n.t('roles_none')"></option>
-                <template x-for="m in $store.providers.allModels" :key="m.id">
-                  <option :value="m.id" x-text="`[${m.providerName}] ${m.model_id}`"></option>
-                </template>
-              </select>
-              <div class="label" x-show="$store.modelRoles.reasoningModelName"><span class="label-text-alt text-base-content/70" x-text="$store.i18n.t('settings_current') + `: ${$store.modelRoles.reasoningProviderName} / ${$store.modelRoles.reasoningModelName}`"></span></div>
-            </div>
+            <button class="btn btn-xs btn-ghost shrink-0" @click="rolesExpanded = true" x-text="$store.i18n.t('roles_edit')"></button>
           </div>
-          <div class="card-actions justify-end mt-4">
-            <button class="btn btn-primary btn-sm" :disabled="$store.modelRoles.saving" @click="$store.modelRoles.save()">
-              <span x-show="$store.modelRoles.saving" class="loading loading-spinner loading-xs"></span>
-              <span x-show="!$store.modelRoles.saving" x-text="$store.i18n.t('roles_save')"></span>
-            </button>
+
+          <!-- 展开后：完整选择面板 -->
+          <div x-show="rolesExpanded" class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold" x-text="$store.i18n.t('roles_title')"></h4>
+              <button class="btn btn-xs btn-ghost" @click="rolesExpanded = false">✕</button>
+            </div>
+            <p class="text-xs text-base-content/60" x-text="$store.i18n.t('roles_subtitle')"></p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="form-control">
+                <label for="store-modelroles-defaultmodelid" class="label"><span class="label-text text-base-content/70" x-text="$store.i18n.t('roles_default')"></span></label>
+                <select id="store-modelroles-defaultmodelid" name="store-modelroles-defaultmodelid" class="select select-bordered w-full" x-model="$store.modelRoles.defaultModelID">
+                  <option value="" x-text="$store.i18n.t('roles_none')"></option>
+                  <template x-for="m in $store.providers.allModels" :key="m.id">
+                    <option :value="m.id" x-text="`[${m.providerName}] ${m.model_id}`"></option>
+                  </template>
+                </select>
+                <label for="store-modelroles-reasoningmodelid" class="label" x-show="$store.modelRoles.defaultModelName"><span class="label-text-alt text-base-content/70" x-text="$store.i18n.t('settings_current') + `: ${$store.modelRoles.defaultProviderName} / ${$store.modelRoles.defaultModelName}`"></span></label>
+              </div>
+              <div class="form-control">
+                <label for="store-modelroles-reasoningmodelid" class="label"><span class="label-text text-base-content/70" x-text="$store.i18n.t('roles_reasoning')"></span></label>
+                <select id="store-modelroles-reasoningmodelid" name="store-modelroles-reasoningmodelid" class="select select-bordered w-full" x-model="$store.modelRoles.reasoningModelID">
+                  <option value="" x-text="$store.i18n.t('roles_none')"></option>
+                  <template x-for="m in $store.providers.allModels" :key="m.id">
+                    <option :value="m.id" x-text="`[${m.providerName}] ${m.model_id}`"></option>
+                  </template>
+                </select>
+                <div class="label" x-show="$store.modelRoles.reasoningModelName"><span class="label-text-alt text-base-content/70" x-text="$store.i18n.t('settings_current') + `: ${$store.modelRoles.reasoningProviderName} / ${$store.modelRoles.reasoningModelName}`"></span></div>
+              </div>
+            </div>
+            <div class="flex justify-end">
+              <button class="btn btn-primary btn-sm" :disabled="$store.modelRoles.saving" @click="$store.modelRoles.save(); rolesExpanded = false">
+                <span x-show="$store.modelRoles.saving" class="loading loading-spinner loading-xs"></span>
+                <span x-show="!$store.modelRoles.saving" x-text="$store.i18n.t('roles_save')"></span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -284,11 +311,11 @@
 
     </div>
 
-    <!-- 厂商目录快速添加 Modal -->
-    <dialog class="modal" id="catalog_modal" x-effect="$store.providers.showCatalogModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showCatalogModal = false">
+    <!-- 添加 AI 厂商 Modal（统一入口：内置目录选择 + 自定义手动配置）-->
+    <dialog class="modal" id="add_provider_modal" x-effect="$store.providers.showAddModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showAddModal = false">
       <div class="modal-box bg-base-200 border border-base-300 w-11/12 max-w-3xl">
-        <h3 class="font-bold text-lg mb-1" x-text="$store.i18n.t('catalog_modal_title')"></h3>
-        <p class="text-sm text-base-content/60 mb-4" x-text="$store.i18n.t('catalog_select_hint')"></p>
+        <h3 class="font-bold text-lg mb-1" x-text="$store.i18n.t('add_provider_title')"></h3>
+        <p class="text-sm text-base-content/60 mb-4" x-text="$store.i18n.t('add_provider_subtitle')"></p>
 
         <!-- 加载中 -->
         <div x-show="$store.providers.catalogLoading" class="flex justify-center py-10">
@@ -296,90 +323,162 @@
         </div>
 
         <!-- 厂商卡片网格 -->
-        <div x-show="!$store.providers.catalogLoading" class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4 max-h-64 overflow-y-auto pr-1">
+        <div x-show="!$store.providers.catalogLoading" class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4 max-h-52 overflow-y-auto pr-1">
           <template x-for="entry in $store.providers.catalog" :key="entry.id">
             <button
               type="button"
               class="flex flex-col items-start p-3 rounded-box border text-left transition-all"
-              :class="$store.providers.catalogSelected?.id === entry.id
+              :class="$store.providers.addSelected?.id === entry.id
                 ? 'border-primary bg-primary/10 shadow-sm'
                 : 'border-base-300 bg-base-100 hover:border-primary/50 hover:bg-base-200'"
-              @click="$store.providers.selectCatalogEntry(entry)">
+              @click="$store.providers.selectAddEntry(entry)">
               <span class="font-bold text-sm truncate w-full" x-text="entry.display_name"></span>
-              <span class="text-xs text-base-content/50 mt-0.5" x-text="entry.models.length + ' 个预设模型'"></span>
+              <span class="text-xs text-base-content/50 mt-0.5" x-text="entry.is_local ? '本地无需 API Key' : entry.models.length + ' 个预设模型'"></span>
             </button>
           </template>
+          <!-- 自定义选项 -->
+          <button
+            type="button"
+            class="flex flex-col items-start p-3 rounded-box border text-left transition-all"
+            :class="$store.providers.addSelected?.id === '__custom__'
+              ? 'border-secondary bg-secondary/10 shadow-sm'
+              : 'border-base-300 bg-base-100 hover:border-secondary/50 hover:bg-base-200'"
+            @click="$store.providers.selectAddEntry({id:'__custom__', display_name:'自定义', models:[], is_local:false})">
+            <span class="font-bold text-sm">🔧 自定义</span>
+            <span class="text-xs text-base-content/50 mt-0.5">手动填写 URL 和 API Key</span>
+          </button>
         </div>
 
-        <!-- 选中后的详情区 -->
-        <template x-if="$store.providers.catalogSelected">
+        <!-- 选中内置厂商后的配置区 -->
+        <template x-if="$store.providers.addSelected && $store.providers.addSelected.id !== '__custom__'">
           <div class="space-y-4 border-t border-base-300 pt-4">
-
             <!-- 模型预览 -->
-            <div x-show="$store.providers.catalogSelected.models.length > 0">
+            <div x-show="$store.providers.addSelected.models.length > 0">
               <p class="text-xs font-bold text-base-content/60 uppercase tracking-wider mb-2" x-text="$store.i18n.t('catalog_models_preview')"></p>
               <div class="flex flex-wrap gap-1.5">
-                <template x-for="m in $store.providers.catalogSelected.models" :key="m.id">
+                <template x-for="m in $store.providers.addSelected.models" :key="m.id">
                   <span class="badge badge-sm gap-1 font-mono"
-                    :class="m.is_reasoning ? 'badge-secondary badge-outline' : m.capability_tier === 'smart' ? 'badge-primary badge-outline' : 'badge-ghost'">
+                    :class="m.recommended_role === 'reasoning' ? 'badge-secondary badge-outline' : m.recommended_role === 'default' ? 'badge-primary badge-outline' : 'badge-ghost'">
                     <span x-text="m.display_name"></span>
-                    <span x-show="m.is_reasoning" class="opacity-60" x-text="'· ' + $store.i18n.t('catalog_role_reasoning')"></span>
+                    <span class="opacity-60 text-xs" x-text="{'default':'· 对话','reasoning':'· 推理','general':'· 通用'}[m.recommended_role] || ''"></span>
                   </span>
                 </template>
               </div>
             </div>
-            <div x-show="$store.providers.catalogSelected.models.length === 0" class="text-xs text-base-content/50" x-text="$store.i18n.t('catalog_no_models')"></div>
+            <div x-show="$store.providers.addSelected.models.length === 0 && !$store.providers.addSelected.is_local" class="text-xs text-base-content/50" x-text="$store.i18n.t('catalog_no_models')"></div>
 
             <!-- API Key（本地厂商隐藏） -->
-            <div class="form-control w-full" x-show="!$store.providers.catalogSelected.is_local">
+            <div class="form-control w-full" x-show="!$store.providers.addSelected.is_local">
               <label class="label">
                 <span class="label-text font-bold" x-text="$store.i18n.t('catalog_api_key_label')"></span>
               </label>
-              <input type="password" class="input input-bordered w-full" x-model="$store.providers.catalogForm.api_key" placeholder="sk-..." autocomplete="off" />
+              <input id="add-modal-api-key" name="add-modal-api-key" type="password" class="input input-bordered w-full"
+                x-model="$store.providers.addForm.api_key" placeholder="sk-..." autocomplete="off"
+                @keydown.enter.prevent="$store.providers.saveAdd()" />
             </div>
-            <div x-show="$store.providers.catalogSelected.is_local" class="text-xs text-success font-bold p-2 bg-success/10 rounded border border-success/30" x-text="$store.i18n.t('catalog_local_no_key')"></div>
+            <div x-show="$store.providers.addSelected.is_local" class="text-xs text-success font-bold p-2 bg-success/10 rounded border border-success/30" x-text="$store.i18n.t('catalog_local_no_key')"></div>
 
-            <!-- 高级选项：名称 + Base URL（折叠） -->
+            <!-- 高级选项 -->
             <details class="text-sm">
-              <summary class="cursor-pointer text-base-content/60 hover:text-base-content select-none">高级选项</summary>
+              <summary class="cursor-pointer text-base-content/60 hover:text-base-content select-none" x-text="$store.i18n.t('catalog_advanced')"></summary>
               <div class="space-y-3 mt-3">
                 <div class="form-control w-full">
                   <label class="label">
                     <span class="label-text font-bold" x-text="$store.i18n.t('catalog_name_label')"></span>
                     <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_name_hint')"></span>
                   </label>
-                  <input type="text" class="input input-bordered input-sm w-full" x-model="$store.providers.catalogForm.name"
-                    :placeholder="$store.providers.catalogSelected.display_name" />
+                  <input id="add-modal-name" name="add-modal-name" type="text" class="input input-bordered input-sm w-full"
+                    x-model="$store.providers.addForm.name" :placeholder="$store.providers.addSelected.display_name" />
                 </div>
-                <div class="form-control w-full" x-show="$store.providers.catalogSelected.default_base_url">
+                <div class="form-control w-full" x-show="$store.providers.addSelected.default_base_url">
                   <label class="label">
                     <span class="label-text font-bold" x-text="$store.i18n.t('catalog_base_url_label')"></span>
                     <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_base_url_hint')"></span>
                   </label>
-                  <input type="url" class="input input-bordered input-sm w-full" x-model="$store.providers.catalogForm.base_url"
-                    :placeholder="$store.providers.catalogSelected.default_base_url" />
+                  <input id="add-modal-base-url" name="add-modal-base-url" type="url" class="input input-bordered input-sm w-full"
+                    x-model="$store.providers.addForm.base_url" :placeholder="$store.providers.addSelected.default_base_url" />
                 </div>
               </div>
             </details>
           </div>
         </template>
 
+        <!-- 自定义手动配置区 -->
+        <template x-if="$store.providers.addSelected?.id === '__custom__'">
+          <div class="space-y-4 border-t border-base-300 pt-4">
+            <div class="form-control w-full">
+              <label for="add-custom-type" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_type')"></span></label>
+              <select id="add-custom-type" name="add-custom-type" class="select select-bordered w-full" x-model="$store.providers.addForm.type">
+                <option value="openai_compat" x-text="$store.i18n.t('settings_openai_compat')"></option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="google_agent_platform">Google Agent Platform</option>
+                <option value="ollama" x-text="$store.i18n.t('settings_ollama')"></option>
+              </select>
+            </div>
+            <div class="form-control w-full">
+              <label for="add-custom-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_name')"></span></label>
+              <input id="add-custom-name" name="add-custom-name" type="text" class="input input-bordered w-full"
+                x-model="$store.providers.addForm.name" :placeholder="$store.i18n.t('providers_name_hint')" />
+            </div>
+            <template x-if="$store.providers.addForm.type === 'openai_compat' || $store.providers.addForm.type === 'ollama'">
+              <div class="form-control w-full">
+                <label for="add-custom-base-url" class="label"><span class="label-text font-bold">Base URL</span></label>
+                <input id="add-custom-base-url" name="add-custom-base-url" type="url" class="input input-bordered w-full"
+                  x-model="$store.providers.addForm.base_url"
+                  :placeholder="$store.providers.addForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com'" />
+              </div>
+            </template>
+            <template x-if="$store.providers.addForm.type !== 'ollama'">
+              <div class="form-control w-full">
+                <label for="add-custom-api-key" class="label"><span class="label-text font-bold">API Key</span></label>
+                <input id="add-custom-api-key" name="add-custom-api-key" type="password" class="input input-bordered w-full"
+                  x-model="$store.providers.addForm.api_key"
+                  :placeholder="{'anthropic':'sk-ant-...','google_agent_platform':'AIza...'}[$store.providers.addForm.type] || 'sk-...'" />
+              </div>
+            </template>
+            <template x-if="$store.providers.addForm.type === 'google_agent_platform'">
+              <div class="space-y-3">
+                <div class="form-control w-full">
+                  <label for="add-custom-project" class="label">
+                    <span class="label-text font-bold">GCP Project ID</span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_geap_optional')"></span>
+                  </label>
+                  <input id="add-custom-project" name="add-custom-project" type="text" class="input input-bordered w-full"
+                    x-model="$store.providers.addForm.project_id" placeholder="my-project-123" />
+                </div>
+                <div class="form-control w-full">
+                  <label for="add-custom-location" class="label">
+                    <span class="label-text font-bold">Region / Location</span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_us_central1')"></span>
+                  </label>
+                  <input id="add-custom-location" name="add-custom-location" type="text" class="input input-bordered w-full"
+                    x-model="$store.providers.addForm.location" placeholder="us-central1" />
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
         <div class="modal-action">
-          <button class="btn btn-ghost" @click="$store.providers.showCatalogModal = false" x-text="$store.i18n.t('cancel')"></button>
-          <button class="btn btn-primary" :disabled="$store.providers.catalogSaving || !$store.providers.catalogSelected || (!$store.providers.catalogSelected.is_local && !$store.providers.catalogForm.api_key)"
-            @click="$store.providers.saveFromCatalog()">
-            <span x-show="$store.providers.catalogSaving" class="loading loading-spinner loading-xs"></span>
-            <span x-text="$store.providers.catalogSaving ? $store.i18n.t('catalog_saving') : $store.i18n.t('catalog_save')"></span>
+          <button class="btn btn-ghost" @click="$store.providers.showAddModal = false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary"
+            :disabled="$store.providers.addSaving
+              || !$store.providers.addSelected
+              || ($store.providers.addSelected.id !== '__custom__' && !$store.providers.addSelected.is_local && !$store.providers.addForm.api_key)
+              || ($store.providers.addSelected.id === '__custom__' && !$store.providers.addForm.name)"
+            @click="$store.providers.saveAdd()">
+            <span x-show="$store.providers.addSaving" class="loading loading-spinner loading-xs"></span>
+            <span x-text="$store.providers.addSaving ? $store.i18n.t('catalog_saving') : $store.i18n.t('catalog_save')"></span>
           </button>
         </div>
       </div>
-      <div class="modal-backdrop" @click="$store.providers.showCatalogModal = false"></div>
+      <div class="modal-backdrop" @click="$store.providers.showAddModal = false"></div>
     </dialog>
 
-    <!-- Modals (Provider Edit, Channel Edit, Model Edit) Ported Over -->
+    <!-- Provider 编辑 Modal（用于编辑已有厂商，保持原有功能）-->
     <dialog class="modal" id="provider_modal" x-effect="$store.providers.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showModal = false">
       <div class="modal-box bg-base-200 border border-base-300">
-        <h3 class="font-bold text-lg mb-4" x-text="$store.providers.editMode === 'create' ? $store.i18n.t('providers_modal_create') : $store.i18n.t('providers_modal_edit')"></h3>
+        <h3 class="font-bold text-lg mb-4" x-text="$store.i18n.t('providers_modal_edit')"></h3>
         <div class="space-y-4">
           <div class="form-control w-full">
             <label for="store-providers-form-type" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_type')"></span></label>
@@ -435,7 +534,6 @@
                 </label>
                 <input id="store-providers-form-location" name="store-providers-form-location" type="text" class="input input-bordered w-full" x-model="$store.providers.form.location" placeholder="us-central1" />
               </div>
-              <div class="text-xs text-base-content/50 p-3 bg-base-100 rounded border border-base-300" x-text="$store.i18n.t('google_hint_no_project')"></div>
             </div>
           </template>
 

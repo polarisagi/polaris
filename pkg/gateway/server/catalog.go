@@ -21,12 +21,11 @@ type CatalogProvider struct {
 
 // CatalogModel sys_provider_models 字典条目（只读）。
 type CatalogModel struct {
-	ID             string `json:"id"`
-	ModelID        string `json:"model_id"`
-	DisplayName    string `json:"display_name"`
-	CapabilityTier string `json:"capability_tier"` // smart | fast
-	IsReasoning    bool   `json:"is_reasoning"`
-	DisplayOrder   int    `json:"display_order"`
+	ID              string `json:"id"`
+	ModelID         string `json:"model_id"`
+	DisplayName     string `json:"display_name"`
+	RecommendedRole string `json:"recommended_role"` // default | reasoning | general
+	DisplayOrder    int    `json:"display_order"`
 }
 
 // handleListCatalogProviders GET /v1/catalog/providers
@@ -60,7 +59,7 @@ func (s *Server) handleListCatalogProviders(w http.ResponseWriter, r *http.Reque
 	}
 
 	mrows, err := s.db.QueryContext(r.Context(),
-		`SELECT id, catalog_provider_id, model_id, display_name, capability_tier, is_reasoning, display_order
+		`SELECT id, catalog_provider_id, model_id, display_name, recommended_role, display_order
 		   FROM sys_provider_models ORDER BY catalog_provider_id, display_order`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -69,13 +68,11 @@ func (s *Server) handleListCatalogProviders(w http.ResponseWriter, r *http.Reque
 	defer mrows.Close()
 	for mrows.Next() {
 		m := CatalogModel{}
-		var isReasoning int
 		var provID string
-		if err := mrows.Scan(&m.ID, &provID, &m.ModelID, &m.DisplayName, &m.CapabilityTier, &isReasoning, &m.DisplayOrder); err != nil {
+		if err := mrows.Scan(&m.ID, &provID, &m.ModelID, &m.DisplayName, &m.RecommendedRole, &m.DisplayOrder); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		m.IsReasoning = isReasoning == 1
 		if p, ok := provMap[provID]; ok {
 			p.Models = append(p.Models, m)
 		}
@@ -166,9 +163,9 @@ func (s *Server) handleCreateProviderFromCatalog(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// 查模型字典
+	// 查模型字典（recommended_role 直接映射到 provider_models.role，零翻译）
 	mrows, err := s.db.QueryContext(r.Context(),
-		`SELECT model_id, display_name, capability_tier, is_reasoning
+		`SELECT model_id, display_name, recommended_role
 		   FROM sys_provider_models
 		  WHERE catalog_provider_id=?
 		  ORDER BY display_order`, req.CatalogID)
@@ -179,36 +176,32 @@ func (s *Server) handleCreateProviderFromCatalog(w http.ResponseWriter, r *http.
 	defer mrows.Close()
 
 	type catalogModelRow struct {
-		modelID     string
-		displayName string
-		tier        string
-		isReasoning bool
+		modelID         string
+		displayName     string
+		recommendedRole string
 	}
 	var catalogModels []catalogModelRow
 	for mrows.Next() {
 		var cm catalogModelRow
-		var isR int
-		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.tier, &isR); err != nil {
+		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.recommendedRole); err != nil {
 			continue
 		}
-		cm.isReasoning = isR == 1
 		catalogModels = append(catalogModels, cm)
 	}
 	_ = mrows.Close()
 
-	// 角色分配：default(第一个 smart 非推理) → reasoning(第一个推理) → general(其余)
-	defaultAssigned := false
-	reasoningAssigned := false
+	// 角色直接使用 recommended_role；独占角色（default/reasoning）先清旧值保证全局唯一
 	var createdModels []ProviderModel
 
 	for _, cm := range catalogModels {
-		role := "general"
-		if cm.isReasoning && !reasoningAssigned {
-			role = "reasoning"
-			reasoningAssigned = true
-		} else if !cm.isReasoning && cm.tier == "smart" && !defaultAssigned {
-			role = "default"
-			defaultAssigned = true
+		role := cm.recommendedRole
+		if role == "" {
+			role = "general"
+		}
+		// default/reasoning 为全局独占角色：写入前清除其他 provider_models 中同角色
+		if role == "default" || role == "reasoning" {
+			s.db.ExecContext(r.Context(), //nolint:errcheck
+				`UPDATE provider_models SET role='general' WHERE role=?`, role)
 		}
 
 		mbuf := make([]byte, 8)
