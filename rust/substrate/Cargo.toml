@@ -1,0 +1,22 @@
+[package]
+name = "substrate"
+version = "0.1.0"
+edition = "2021"
+description = "Polaris — Rust performance-critical path (FFI/sidecar)"
+
+[features]
+default = []
+tier1 = ["dep:surrealdb", "dep:tokio", "dep:serde"]
+
+[dependencies]
+# Embedding computation (SIMD)
+bytemuck = "1"
+# Zero-copy serialization for Go<->Rust vector transfer
+capnp = "0.25.3"
+cedar-policy = "4.10.0"
+surrealdb = { version = "2", features = ["kv-rocksdb", "kv-mem"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[lib]
+crate-type = ["staticlib", "cdylib"]

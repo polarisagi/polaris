@@ -1,0 +1,13 @@
+name: video_analysis
+description: "Extract keyframes from a video at a fixed interval and return them as base64-encoded JPEG data URIs. Requires ffmpeg."
+version: "1.0.0"
+capability: write-network
+risk_level: low
+sandbox: in-process
+side_effects:
+  - process-spawn
+  - file-write
+tags:
+  - video
+  - analysis
+  - media

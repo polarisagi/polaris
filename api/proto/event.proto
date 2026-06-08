@@ -1,0 +1,58 @@
+// EventLog payload schema — M2 events 表 Protobuf 序列化格式。
+// Go↔Rust 同 .proto 生成，约 60-80% 体积缩减 vs JSON。
+// 架构文档: docs/arch/02-Storage-Fabric-深度选型.md §2.1
+syntax = "proto3";
+
+package polaris.protocol;
+
+option go_package = "github.com/polarisagi/polaris/internal/protocol/pb";
+
+// Event 是写入 events 表的单一事件。
+// 各模块通过 EventLog.Subscribe 消费。
+message Event {
+  string id = 1;               // ULID
+  string topic = 2;            // "session.*" | "skill.*" | "safety.*"
+  string actor = 3;            // "agent-3" | "user" | "system"
+  string type = 4;             // "llm_call" | "tool_call" | "state_transition"
+  bytes payload = 5;           // 子类型序列化 (LLMCallPayload / ToolCallPayload / ...)
+  string idempotency_key = 6;
+  int64 occurred_at = 7;       // TSM: Unix microseconds
+  string durative_group_id = 8;
+  int64 created_at = 9;        // Unix microseconds
+  int32 taint_level = 10;      // [TaintLevel] 0-4, field 16383 tail HMAC
+  bytes hmac_signature = 11;   // SHA-256(protobuf_bytes + persistent_key)
+}
+
+// StateTransitionEvent 是 M4 FSM 状态转移事件。
+message StateTransitionEvent {
+  string task_id = 1;
+  string agent_id = 2;
+  int64 claimed_version = 3;
+  string event_type = 4;       // "state_transition" | "tool_call" | "observation" | "reflection"
+  bytes payload = 5;
+}
+
+// LLMCallPayload 是 LLM 调用事件的载荷。
+message LLMCallPayload {
+  string model = 1;
+  string provider = 2;
+  int32 input_tokens = 3;
+  int32 output_tokens = 4;
+  int32 cache_hit_tokens = 5;
+  double cost_usd = 6;
+  int64 latency_ms = 7;
+  string finish_reason = 8;
+  string route_tier = 9;       // "L1" | "L2" | "L3"
+}
+
+// ToolCallPayload 是工具调用事件的载荷。
+message ToolCallPayload {
+  string tool_name = 1;
+  string capability = 2;       // "read_only" | "write_local" | "write_network" | "privileged"
+  int32 risk_level = 3;
+  int32 sandbox_tier = 4;
+  string source = 5;           // "builtin" | "mcp" | "skill" | "a2a"
+  int64 latency_ms = 6;
+  bool success = 7;
+  string error = 8;
+}

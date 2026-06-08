@@ -1,0 +1,7 @@
+# Example threshold overrides for m10_knowledge.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'rag.final_top_k' = 5
+'rag.rerank_top_m' = 50
+'graphrag.daily_budget' = 200
+'chunk.size' = 256

@@ -1,0 +1,12 @@
+name: search_extension
+description: "Search the built-in marketplace catalog and the official online MCP registry for plugins, skills, or MCP servers. Returns a combined list with local results first."
+version: "1.0.0"
+capability: write-network
+risk_level: low
+sandbox: in-process
+side_effects:
+  - network-call
+tags:
+  - marketplace
+  - extensions
+  - search

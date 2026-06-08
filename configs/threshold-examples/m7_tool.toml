@@ -1,0 +1,8 @@
+# Example threshold overrides for m7_tool.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'sandbox.default_level' = 2
+'sandbox.dry_run_enabled' = true
+'wasm.max_memory_mb' = 256
+'wasm.max_wallclock_s' = 60
+'dryrun.protect_window_seconds' = 60

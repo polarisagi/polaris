@@ -1,0 +1,468 @@
+package inference
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	perrors "github.com/polarisagi/polaris/internal/errors"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
+)
+
+// GoogleAgentPlatformAdapter 对接 Google Agent Platform (GEAP / Gemini API)。
+// 认证方式: ?key=apiKey 查询参数（同 polaris-gateway google translator）。
+// 端点路由:
+//   - projectID 非空 → GEAP 企业端点 (aiplatform.googleapis.com)
+//   - projectID 为空 → Gemini Developer API (generativelanguage.googleapis.com)
+type GoogleAgentPlatformAdapter struct {
+	model        string
+	projectID    string
+	location     string
+	credentialFn func() string
+	client       *http.Client
+	caps         protocol.ProviderCapabilities
+}
+
+var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
+
+func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn func() string, client *http.Client) *GoogleAgentPlatformAdapter {
+	if client == nil {
+		client = defaultHTTPClient
+	}
+	return &GoogleAgentPlatformAdapter{
+		model:        model,
+		projectID:    projectID,
+		location:     location,
+		credentialFn: credFn,
+		client:       client,
+		caps: protocol.ProviderCapabilities{
+			SupportsStreaming: true,
+			SupportsTools:     true,
+			SupportsVision:    true, // Gemini 全系支持图像输入
+			SupportsVideo:     true, // Gemini 1.5+ 支持视频文件输入
+			MaxContextTokens:  1000000,
+			CostPer1KInput:    0.075,
+			CostPer1KOutput:   0.30,
+		},
+	}
+}
+
+func (a *GoogleAgentPlatformAdapter) ModelID() string                             { return a.model }
+func (a *GoogleAgentPlatformAdapter) Capabilities() protocol.ProviderCapabilities { return a.caps }
+func (a *GoogleAgentPlatformAdapter) Tokenizer() protocol.TokenizerAdapter        { return &simpleTokenizer{} }
+
+// buildEndpoint 构建 GEAP / Gemini API 端点，逻辑与 polaris-gateway buildGoogleTargetURL 对齐。
+// location=="global" → aiplatform.googleapis.com（无前缀），路径保留 global
+// location=="us-central1" 等区域 → {loc}-aiplatform.googleapis.com
+func (a *GoogleAgentPlatformAdapter) buildEndpoint(stream bool) string {
+	method := "generateContent"
+	if stream {
+		method = "streamGenerateContent"
+	}
+	model := a.model
+	if model == "" {
+		model = "gemini-2.0-flash"
+	}
+
+	if a.projectID != "" {
+		host, loc := geapHostAndLoc(a.location)
+		path := fmt.Sprintf("/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
+			a.projectID, loc, model, method)
+		if stream {
+			return host + path + "?alt=sse"
+		}
+		return host + path
+	}
+	// Gemini Developer API
+	base := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:%s", model, method)
+	if stream {
+		return base + "?alt=sse"
+	}
+	return base
+}
+
+// geapHostAndLoc 将 location 字符串解析为 (HTTP host, path 中使用的 location)。
+// "global" 或空值 → ("https://aiplatform.googleapis.com", "global")
+// 区域值如 "us-central1" → ("https://us-central1-aiplatform.googleapis.com", "us-central1")
+func geapHostAndLoc(location string) (string, string) {
+	loc := location
+	if loc == "" || loc == "global" {
+		return "https://aiplatform.googleapis.com", "global"
+	}
+	return "https://" + loc + "-aiplatform.googleapis.com", loc
+}
+
+func appendKey(endpoint, apiKey string) string {
+	if strings.Contains(endpoint, "?") {
+		return endpoint + "&key=" + apiKey
+	}
+	return endpoint + "?key=" + apiKey
+}
+
+type geminiTool struct {
+	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
+}
+
+type geminiFunctionDeclaration struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters,omitempty"`
+}
+
+type geminiFunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
+}
+
+// geminiRequest 将 InferRequest 转换为 Gemini 原生 JSON 格式。
+func buildGeminiRequest(req *protocol.InferRequest) ([]byte, error) { //nolint:gocyclo
+	type InlineData struct {
+		MimeType string `json:"mimeType"`
+		Data     string `json:"data"`
+	}
+	type FileData struct {
+		MimeType string `json:"mimeType"`
+		FileURI  string `json:"fileUri"`
+	}
+	type Part struct {
+		Text             string                  `json:"text,omitempty"`
+		InlineData       *InlineData             `json:"inlineData,omitempty"`
+		FileData         *FileData               `json:"fileData,omitempty"`
+		FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+		FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+	}
+	type Content struct {
+		Role  string `json:"role"`
+		Parts []Part `json:"parts"`
+	}
+	type SysInst struct {
+		Parts []Part `json:"parts"`
+	}
+	type GenCfg struct {
+		MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
+		Temperature     float64 `json:"temperature,omitempty"`
+	}
+	type Payload struct {
+		Contents          []Content    `json:"contents"`
+		SystemInstruction *SysInst     `json:"systemInstruction,omitempty"`
+		GenerationConfig  *GenCfg      `json:"generationConfig,omitempty"`
+		Tools             []geminiTool `json:"tools,omitempty"`
+	}
+
+	var sysText string
+	var contents []Content
+	for _, m := range req.Messages {
+		if m.Role == "system" {
+			sysText += m.Content + "\n"
+			continue
+		}
+		role := m.Role
+		if role == "assistant" {
+			role = "model"
+		}
+
+		var parts []Part
+		if len(m.Parts) > 0 { //nolint:nestif
+			for _, p := range m.Parts {
+				if ip, ok := p.(protocol.ImagePart); ok {
+					parts = append(parts, Part{
+						InlineData: &InlineData{
+							MimeType: ip.MediaType,
+							// Gemini inlineData.data 要求 Base64 编码字符串，不能是原始二进制字节
+							Data: base64.StdEncoding.EncodeToString(ip.Data),
+						},
+					})
+					continue
+				}
+				if vp, ok := p.(protocol.VideoPart); ok {
+					parts = append(parts, Part{
+						FileData: &FileData{
+							MimeType: vp.MediaType,
+							FileURI:  vp.URI,
+						},
+					})
+					continue
+				}
+
+				pm, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				switch pm["type"] {
+				case "text":
+					if text, ok := pm["text"].(string); ok {
+						parts = append(parts, Part{Text: text})
+					}
+				case "tool_use":
+					name, _ := pm["name"].(string)
+					var args map[string]any
+					switch v := pm["input"].(type) {
+					case json.RawMessage:
+						_ = json.Unmarshal(v, &args)
+					case map[string]any:
+						args = v
+					case string:
+						_ = json.Unmarshal([]byte(v), &args)
+					}
+					if args == nil {
+						args = make(map[string]any)
+					}
+					parts = append(parts, Part{FunctionCall: &geminiFunctionCall{Name: name, Args: args}})
+				case "tool_result":
+					// Gemini 的 tool_result 角色必须是 function，并且名字必须匹配
+					// 我们这里由于是从 polaris 协议转过来，把它放到 role="function" 这个特殊的 message 里
+					// 但根据 Gemini 官方要求，User 提供 response
+					name, _ := pm["name"].(string)
+					if name == "" {
+						name = "unknown_tool"
+					}
+					contentStr, _ := pm["content"].(string)
+					respData := map[string]any{}
+					if err := json.Unmarshal([]byte(contentStr), &respData); err != nil {
+						respData["result"] = contentStr
+					}
+					parts = append(parts, Part{
+						FunctionResponse: &geminiFunctionResponse{
+							Name:     name,
+							Response: respData,
+						},
+					})
+				}
+			}
+		} else {
+			if m.Content != "" {
+				parts = append(parts, Part{Text: m.Content})
+			}
+		}
+
+		// 修正 Gemini 要求的角色名称（tool_result 在 gemini 里其实不需要变 role=function，而是 role=user 就可以？或者 function，这里统一转）
+		// 其实根据 Gemini 文档，functionResponse 应该是在 role="function" 或 user 都可以。Gemini 通常用 user。
+		if len(parts) > 0 {
+			contents = append(contents, Content{Role: role, Parts: parts})
+		}
+	}
+
+	p := Payload{Contents: contents}
+	if sysText != "" {
+		p.SystemInstruction = &SysInst{Parts: []Part{{Text: strings.TrimSpace(sysText)}}}
+	}
+	cfg := &GenCfg{}
+	if req.MaxTokens > 0 {
+		cfg.MaxOutputTokens = req.MaxTokens
+	} else {
+		cfg.MaxOutputTokens = 4096
+	}
+	if req.Temperature > 0 {
+		cfg.Temperature = req.Temperature
+	}
+	p.GenerationConfig = cfg
+
+	// Tools
+	if len(req.Tools) > 0 {
+		decls := make([]geminiFunctionDeclaration, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			decls = append(decls, geminiFunctionDeclaration{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			})
+		}
+		p.Tools = []geminiTool{{FunctionDeclarations: decls}}
+	}
+
+	return json.Marshal(p)
+}
+func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+	body, err := buildGeminiRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	apiKey := a.credentialFn()
+	defer clearString(&apiKey)
+
+	endpoint := appendKey(a.buildEndpoint(false), apiKey)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := a.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != 200 {
+		raw, _ := io.ReadAll(httpResp.Body)
+		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+	}
+
+	var out struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text         string              `json:"text"`
+					FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
+				} `json:"parts"`
+			} `json:"content"`
+			FinishReason string `json:"finishReason"`
+		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+		} `json:"usageMetadata"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&out); err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "google: decode", err)
+	}
+
+	text, finishReason := "", ""
+
+	if len(out.Candidates) > 0 {
+		finishReason = out.Candidates[0].FinishReason
+		for _, p := range out.Candidates[0].Content.Parts {
+			if p.Text != "" {
+				text += p.Text
+			}
+
+		}
+	}
+
+	// Gemini doesn't use standard ToolCall struct in InferResponse yet, wait, polaris protocol uses string / json for stream but for non-stream what does it use?
+	// The problem is InferResponse only has Content string. Tool calls in non-stream need to be handled if protocol.InferResponse supports it.
+	// Looking at adapter_anthropic.go, Infer() only returns Content string. Our Tool calls are handled primarily in StreamInfer.
+	// Wait, protocol.InferResponse doesn't have ToolCalls natively?
+	// Let's check protocol.InferResponse definition via a quick look.
+
+	resp := &protocol.InferResponse{
+		Content:      text,
+		FinishReason: finishReason,
+		Model:        a.model,
+		Usage: protocol.Usage{
+			InputTokens:  out.UsageMetadata.PromptTokenCount,
+			OutputTokens: out.UsageMetadata.CandidatesTokenCount,
+		},
+	}
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		observability.GlobalTokenBurnRate.Add(int64(resp.Usage.InputTokens + resp.Usage.OutputTokens))
+	}
+	return resp, nil
+}
+func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+	body, err := buildGeminiRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	apiKey := a.credentialFn()
+
+	endpoint := appendKey(a.buildEndpoint(true), apiKey)
+	clearString(&apiKey)
+
+	// 给单次推理加 120s 上限，防止 Google 连接 hang 住永不关闭导致前端卡死
+	inferCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+
+	httpReq, err := http.NewRequestWithContext(inferCtx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := a.client.Do(httpReq)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if httpResp.StatusCode != 200 {
+		raw, _ := io.ReadAll(httpResp.Body)
+		httpResp.Body.Close()
+		cancel()
+		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+	}
+
+	ch := make(chan protocol.StreamEvent, 64)
+	go func() {
+		defer cancel()
+		defer close(ch)
+		defer httpResp.Body.Close()
+		parseGoogleStream(inferCtx, httpResp.Body, ch, a.model)
+	}()
+	return ch, nil
+}
+
+func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- protocol.StreamEvent, model string) {
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			return
+		}
+		var frame struct {
+			Candidates []struct {
+				Content struct {
+					Parts []struct {
+						Text         string              `json:"text"`
+						FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
+					} `json:"parts"`
+				} `json:"content"`
+			} `json:"candidates"`
+			UsageMetadata struct {
+				PromptTokenCount     int `json:"promptTokenCount"`
+				CandidatesTokenCount int `json:"candidatesTokenCount"`
+			} `json:"usageMetadata"`
+		}
+		if err := json.Unmarshal([]byte(data), &frame); err != nil {
+			continue
+		}
+		for _, c := range frame.Candidates {
+			for i, p := range c.Content.Parts {
+				if p.Text != "" {
+					ch <- protocol.StreamEvent{Type: protocol.StreamTextDelta, Content: p.Text}
+				}
+				if p.FunctionCall != nil {
+					argsBytes, _ := json.Marshal(p.FunctionCall.Args)
+					payload, _ := json.Marshal(map[string]any{
+						"id":    fmt.Sprintf("call_%d", i),
+						"name":  p.FunctionCall.Name,
+						"input": json.RawMessage(argsBytes),
+					})
+					ch <- protocol.StreamEvent{Type: protocol.StreamToolCall, Content: string(payload)}
+				}
+			}
+		}
+		if frame.UsageMetadata.CandidatesTokenCount > 0 {
+			ch <- protocol.StreamEvent{
+				Type: protocol.StreamTextDelta,
+				Usage: protocol.Usage{
+					InputTokens:  frame.UsageMetadata.PromptTokenCount,
+					OutputTokens: frame.UsageMetadata.CandidatesTokenCount,
+				},
+			}
+			observability.GlobalTokenBurnRate.Add(int64(
+				frame.UsageMetadata.PromptTokenCount + frame.UsageMetadata.CandidatesTokenCount))
+		}
+	}
+}

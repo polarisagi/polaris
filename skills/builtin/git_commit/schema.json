@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "git_commit",
+  "description": "Stage files and create a git commit with a message; returns the resulting commit hash.",
+  "type": "object",
+  "properties": {
+    "message": { "type": "string",  "description": "Commit message. Should follow conventional commits format." },
+    "files":   { "type": "array",  "items": { "type": "string" }, "description": "List of file paths to stage before committing. Omit or set 'all' to stage all changes." },
+    "all":     { "type": "boolean", "default": false, "description": "If true, stage all tracked modified files (equivalent to git commit -a)." },
+    "signoff": { "type": "boolean", "default": true,  "description": "If true, append a Signed-off-by trailer to the commit message." }
+  },
+  "required": ["message"]
+}

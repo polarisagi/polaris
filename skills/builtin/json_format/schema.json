@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "json_format",
+  "description": "Pretty-print and format JSON data with configurable indentation and optional key sorting.",
+  "type": "object",
+  "properties": {
+    "data":      { "type": "string",  "description": "The raw JSON string to format." },
+    "indent":    { "type": "integer", "default": 2,     "description": "Number of spaces per indentation level (default 2)." },
+    "sort_keys": { "type": "boolean", "default": false,  "description": "If true, sort object keys alphabetically." }
+  },
+  "required": ["data"]
+}

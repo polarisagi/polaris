@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "file_read",
+  "description": "Read and return the contents of a file within allowed directories.",
+  "type": "object",
+  "properties": {
+    "path":     { "type": "string",  "description": "Absolute path to the file to read. Must be within allowed directories." },
+    "encoding": { "type": "string",  "default": "utf-8", "description": "Text encoding to use when decoding the file (default utf-8)." },
+    "offset":   { "type": "integer", "default": 0,       "description": "Line offset to start reading from (0-based)." },
+    "limit":    { "type": "integer", "default": -1,      "description": "Maximum number of lines to read. -1 means read the entire file." }
+  },
+  "required": ["path"]
+}

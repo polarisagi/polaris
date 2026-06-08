@@ -1,0 +1,288 @@
+<div x-show="$store.nav.page === 'plugins'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100">
+  <div class="max-w-6xl mx-auto w-full flex flex-col">
+    
+    <!-- Page Header & Filters -->
+    <div class="mb-6 border-b border-base-300 pb-4">
+      <div class="flex justify-between items-end mb-4">
+        <div>
+          <h2 class="text-2xl font-bold text-base-content" x-text="$store.i18n.t('plugins_title')"></h2>
+          <div class="text-sm text-base-content/60 mt-1 flex items-center gap-2">
+            <span x-text="$store.plugins.catalog.length"></span>
+            <span x-text="$store.i18n.t('plugins_subtitle')"></span>
+            <div class="badge badge-success badge-sm badge-outline" x-text="`${$store.plugins.catalog.filter(e=>e.installed).length} ` + $store.i18n.t('plugins_installed')"></div>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm border border-base-300 shadow-sm" @click="$store.plugins.load()" :disabled="$store.plugins.loading">
+          <span x-show="$store.plugins.loading" class="loading loading-spinner loading-xs"></span>
+          <span x-show="!$store.plugins.loading" x-text="$store.i18n.t('plugins_refresh')"></span>
+        </button>
+      </div>
+
+      <div class="flex flex-wrap gap-4 items-center justify-between">
+        <div role="tablist" class="tabs tabs-boxed">
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'plugin' }" @click="$store.plugins.filter = 'plugin'" x-text="'📦 ' + $store.i18n.t('plugins_tab_plugin')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'app' }" @click="$store.plugins.filter = 'app'" x-text="'📱 ' + $store.i18n.t('plugins_tab_app')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'mcp' }" @click="$store.plugins.filter = 'mcp'" x-text="'⚙ ' + $store.i18n.t('plugins_tab_mcp')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'skill' }" @click="$store.plugins.filter = 'skill'" x-text="'⚡ ' + $store.i18n.t('plugins_tab_skill')"></a>
+          <a role="tab" class="tab" :class="{ 'tab-active font-bold': $store.plugins.filter === 'marketplace' }" @click="$store.plugins.filter = 'marketplace'" x-text="'🛒 ' + $store.i18n.t('plugins_tab_marketplace')"></a>
+        </div>
+
+        <div class="flex gap-2 w-full md:w-auto">
+          <label class="input input-bordered input-sm flex items-center gap-2 w-full md:w-64">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 opacity-70"><path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" /></svg>
+            <input id="store-plugins-search" name="store-plugins-search" type="search" class="grow" :placeholder="$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_search_marketplace') : `${$store.i18n.t('plugins_search_prefix')}${$store.plugins.typeLabel($store.plugins.filter)}...`" x-model="$store.plugins.search" />
+          </label>
+          <button class="btn btn-primary btn-sm" @click="$store.plugins.openCreateModal()" x-text="`+ ${$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_btn_add_market') : $store.i18n.t('plugins_btn_create')}`"></button>
+          <button class="btn btn-outline btn-sm" @click="$store.plugins.syncMarketplaces($store.plugins.filter !== 'marketplace')" :disabled="$store.plugins.syncing">
+            <span x-show="$store.plugins.syncing" class="loading loading-spinner loading-xs"></span>
+            <span x-show="!$store.plugins.syncing" x-text="'⟳ ' + $store.i18n.t('plugins_btn_sync')"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content Area -->
+    <div class="relative min-h-[400px]">
+      
+      <!-- Loading State -->
+      <div x-show="$store.plugins.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60 absolute inset-0 z-10 bg-base-100/50 backdrop-blur-sm">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <!-- Empty State -->
+      <div x-show="!$store.plugins.loading && $store.plugins.filtered.length === 0 && $store.plugins.filter !== 'marketplace'" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+        <div class="text-4xl mb-4 opacity-50">🔌</div>
+        <p class="text-lg" x-text="$store.i18n.t('plugins_empty', '未找到匹配的项')"></p>
+      </div>
+      
+      <div x-show="!$store.plugins.loading && $store.plugins.filteredMarketplaces.length === 0 && $store.plugins.filter === 'marketplace'" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+        <div class="text-4xl mb-4 opacity-50">🛒</div>
+        <p class="text-lg" x-text="$store.i18n.t('plugins_empty_market')"></p>
+      </div>
+
+      <!-- Plugin Grid -->
+      <div x-show="!$store.plugins.loading && $store.plugins.filtered.length > 0 && $store.plugins.filter !== 'marketplace'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="entry in $store.plugins.filtered" :key="entry.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full flex flex-col" :style="`border-left-width:4px;border-left-color:${$store.plugins.typeColor(entry.type)}`">
+            <div class="card-body p-5 flex flex-col h-full gap-4">
+              
+              <!-- Header -->
+              <div class="flex items-start gap-3">
+                <div class="text-2xl shrink-0" x-text="$store.plugins.publisherIcon(entry.publisher)"></div>
+                <div class="flex-1 min-w-0">
+                  <h3 class="font-bold text-sm truncate" x-text="entry.name"></h3>
+                  <div class="flex flex-wrap gap-1.5 mt-1.5">
+                    <span class="badge badge-xs font-bold uppercase" :style="`background:color-mix(in srgb,${$store.plugins.typeColor(entry.type)} 20%,transparent);color:${$store.plugins.typeColor(entry.type)};border-color:${$store.plugins.typeColor(entry.type)}`" x-text="$store.plugins.typeLabel(entry.type)"></span>
+                    <span class="badge badge-xs font-bold uppercase" :style="`background:color-mix(in srgb,${$store.plugins.trustColor(entry.trust_tier)} 20%,transparent);color:${$store.plugins.trustColor(entry.trust_tier)};border-color:${$store.plugins.trustColor(entry.trust_tier)}`" x-text="$store.plugins.trustLabel(entry.trust_tier)"></span>
+                    <span class="text-[10px] font-mono text-base-content/70 truncate max-w-full" x-text="entry.publisher"></span>
+                  </div>
+                </div>
+                <div x-show="entry.installed" class="w-2.5 h-2.5 rounded-full bg-success shadow-[0_0_8px_rgba(0,255,0,0.5)] shrink-0 mt-1" :title="$store.i18n.t('plugins_installed')"></div>
+              </div>
+
+              <!-- Description -->
+              <p class="text-xs text-base-content/70 flex-1 line-clamp-3" x-text="entry.description"></p>
+
+              <!-- Extra Info (MCP/URL) -->
+              <template x-if="!entry.type || entry.type === 'mcp'">
+                <div class="bg-base-100 rounded p-2 text-[10px] font-mono text-base-content/60 truncate border border-base-300">
+                  <span class="text-primary font-bold mr-1" x-text="entry.transport || 'stdio'"></span>
+                  <span x-show="entry.command" x-text="`${entry.command} ${(entry.args||[]).join(' ')}`"></span>
+                  <span x-show="!entry.command && entry.url" x-text="entry.url"></span>
+                </div>
+              </template>
+              <template x-if="entry.type === 'skill' || entry.type === 'plugin'">
+                <div class="bg-base-100 rounded p-2 text-[10px] font-mono truncate border border-base-300">
+                  <a :href="entry.url" target="_blank" rel="noopener" class="text-primary hover:underline" x-text="(entry.url||'').replace('https://','')"></a>
+                </div>
+              </template>
+
+              <!-- Tags -->
+              <div class="flex flex-wrap gap-1">
+                <template x-for="tag in (entry.tags||[])" :key="tag">
+                  <span class="badge badge-ghost badge-sm text-[10px] h-4" x-text="tag"></span>
+                </template>
+              </div>
+
+              <!-- Actions -->
+              <div class="card-actions mt-auto pt-4 border-t border-base-300 items-center justify-between">
+                <div class="flex-1 flex gap-2">
+                  <template x-if="!entry.installed">
+                    <button class="btn bg-primary text-primary-content border-primary hover:brightness-110 btn-sm flex-1 text-xs" :disabled="!!$store.plugins.installing[entry.id]" @click="$store.plugins.tryInstall(entry)">
+                      <span x-show="$store.plugins.installing[entry.id]" class="loading loading-spinner loading-xs"></span>
+                      <span x-text="$store.plugins.installing[entry.id] ? $store.i18n.t('plugins_installing') : $store.i18n.t('plugins_install')"></span>
+                    </button>
+                  </template>
+                  <template x-if="entry.installed">
+                    <div class="flex gap-2 flex-1 items-center w-full">
+                      <template x-if="entry.version && entry.installed_version && entry.version !== entry.installed_version">
+                        <div class="flex gap-2 flex-1 items-center">
+                          <span class="text-warning text-xs font-bold flex-1 flex items-center gap-1">💡 发现新版本</span>
+                          <button class="btn btn-warning btn-sm text-warning-content hover:brightness-110" :disabled="!!$store.plugins.installing[entry.id] || !!$store.plugins.uninstalling[entry.id]" @click="$store.plugins.upgrade(entry)">
+                            <span x-show="$store.plugins.installing[entry.id] || $store.plugins.uninstalling[entry.id]" class="loading loading-spinner loading-xs"></span>
+                            <span x-show="!($store.plugins.installing[entry.id] || $store.plugins.uninstalling[entry.id])">🚀 升级</span>
+                          </button>
+                        </div>
+                      </template>
+                      <template x-if="!entry.version || !entry.installed_version || entry.version === entry.installed_version">
+                        <div class="flex gap-2 flex-1 items-center">
+                          <span class="text-success text-xs font-bold flex-1 flex items-center gap-1">✓ <span x-text="$store.i18n.t('plugins_installed')"></span></span>
+                          <button class="btn btn-ghost btn-sm text-error hover:bg-error/10" :disabled="!!$store.plugins.uninstalling[entry.id]" @click="$store.plugins.uninstall(entry)">
+                            <span x-show="$store.plugins.uninstalling[entry.id]" class="loading loading-spinner loading-xs"></span>
+                            <span x-show="!$store.plugins.uninstalling[entry.id]" x-text="$store.i18n.t('plugins_uninstall')"></span>
+                          </button>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+                <a x-show="entry.homepage" :href="entry.homepage" target="_blank" rel="noopener" class="btn btn-ghost btn-sm text-xs px-2 shrink-0" x-text="$store.i18n.t('plugins_btn_details')"></a>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Marketplace Grid -->
+      <div x-show="!$store.plugins.loading && $store.plugins.filter === 'marketplace' && $store.plugins.filteredMarketplaces.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="entry in $store.plugins.filteredMarketplaces" :key="entry.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-secondary transition-colors h-full flex flex-col border-l-4 border-l-secondary">
+            <div class="card-body p-5 flex flex-col h-full gap-4">
+              <div class="flex items-start gap-3">
+                <div class="text-2xl shrink-0">🛒</div>
+                <div class="flex-1 min-w-0">
+                  <h3 class="font-bold text-sm truncate" x-text="entry.name"></h3>
+                  <div class="flex flex-wrap gap-1.5 mt-1.5 items-center">
+                    <span class="badge badge-secondary badge-xs badge-outline font-bold uppercase" x-text="$store.i18n.t('plugins_badge_market')"></span>
+                    <span class="text-[10px] font-mono text-base-content/70 truncate max-w-full" x-text="entry.publisher"></span>
+                  </div>
+                </div>
+                <div x-show="entry.is_builtin === 1" class="badge badge-success badge-sm badge-outline font-bold text-[10px]" :title="$store.i18n.t('plugins_badge_builtin')">Built-in</div>
+              </div>
+              <div class="text-xs text-base-content/70 flex-1 flex flex-col gap-2">
+                <div class="line-clamp-2" x-text="entry.description || ''"></div>
+                <div><span class="opacity-60" x-text="$store.i18n.t('plugins_label_type')"></span> <span class="font-mono font-bold" x-text="(entry.type || '').toUpperCase()"></span></div>
+                <div class="truncate"><span class="opacity-60" x-text="$store.i18n.t('plugins_label_url')"></span> <a :href="entry.repo_url" target="_blank" class="link link-primary font-mono" x-text="entry.repo_url"></a></div>
+              </div>
+              <div class="card-actions mt-auto pt-4 border-t border-base-300 justify-end">
+                <button x-show="entry.is_builtin === 0" class="btn btn-ghost btn-sm text-error hover:bg-error/10" @click="fetch(`/v1/plugins/marketplaces/${entry.id}`, {method:'DELETE'}).then(()=>$store.plugins.load())" x-text="$store.i18n.t('plugins_btn_del_market')"></button>
+                <div x-show="entry.is_builtin === 1" class="text-xs text-base-content/60 px-3 py-1.5" x-text="$store.i18n.t('plugins_builtin_nodel')"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+    </div>
+
+    <!-- Modals (Env Config, Create Plugin) Ported Over -->
+    <dialog class="modal" id="env_modal" x-effect="$store.plugins.showEnvModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showEnvModal = false">
+      <div class="modal-box bg-base-200 border border-base-300">
+        <h3 class="font-bold text-lg mb-4" x-text="$store.i18n.t('plugins_env_title') + (($store.plugins.envPending?.entry?.name) ? '：' + $store.plugins.envPending.entry.name : '')"></h3>
+        <p class="text-sm text-base-content/70 mb-4" x-text="$store.i18n.t('plugins_env_hint')"></p>
+        <div class="space-y-4">
+          <template x-for="[key] in Object.entries($store.plugins.envPending?.envVars || {})" :key="key">
+            <div class="form-control w-full">
+              <label for="form-field-1" class="label"><span class="label-text font-bold" x-text="key"></span></label>
+              <input id="form-field-1" name="form-field-1" type="password" class="input input-bordered w-full" :placeholder="`${$store.i18n.t('plugins_placeholder_env')} ${key}`" :value="$store.plugins.envPending?.envVars[key] || ''" @input="if($store.plugins.envPending) $store.plugins.envPending.envVars[key]=$event.target.value" />
+            </div>
+          </template>
+        </div>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.plugins.showEnvModal=false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary" @click="$store.plugins.confirmInstall()" x-text="$store.i18n.t('plugins_install')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.plugins.showEnvModal=false"></div>
+    </dialog>
+
+    <dialog class="modal" id="create_plugin_modal" x-effect="$store.plugins.showCreateModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.plugins.showCreateModal = false">
+      <div class="modal-box bg-base-200 border border-base-300 w-11/12 max-w-lg">
+        <h3 class="font-bold text-lg mb-4" x-text="`${$store.i18n.t('plugins_create_title')} ${$store.plugins.typeLabel($store.plugins.filter)}`"></h3>
+        <div class="space-y-4">
+          <div class="form-control">
+            <label for="store-plugins-createform-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_name')"></span></label>
+            <input id="store-plugins-createform-name" name="store-plugins-createform-name" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.name" :placeholder="$store.i18n.t('plugins_placeholder_name')" />
+          </div>
+
+          <div class="form-control" x-show="['skill', 'plugin', 'app', 'marketplace'].includes($store.plugins.filter)">
+            <label for="store-plugins-createform-description" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_desc')"></span></label>
+            <textarea id="store-plugins-createform-description" name="store-plugins-createform-description" class="textarea textarea-bordered h-24" x-model="$store.plugins.createForm.description" :placeholder="$store.i18n.t('plugins_placeholder_desc')"></textarea>
+          </div>
+
+          <!-- Type specific templates ported directly, just wrapping with DaisyUI classes -->
+          <template x-if="$store.plugins.filter === 'skill'">
+            <div class="space-y-4">
+              <div class="form-control">
+                <label for="store-plugins-createform-repo-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo')"></span></label>
+                <input id="store-plugins-createform-repo-url" name="store-plugins-createform-repo-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.repo_url" placeholder="https://github.com/..." />
+              </div>
+              <div class="form-control">
+                <label for="store-plugins-createform-entrypoint" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_entry')"></span></label>
+                <input id="store-plugins-createform-entrypoint" name="store-plugins-createform-entrypoint" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.entrypoint" placeholder="python main.py" />
+              </div>
+            </div>
+          </template>
+
+          <template x-if="$store.plugins.filter === 'plugin'">
+            <div class="form-control">
+              <label for="store-plugins-createform-manifest-url" class="label"><span class="label-text font-bold">Manifest URL</span></label>
+              <input id="store-plugins-createform-manifest-url" name="store-plugins-createform-manifest-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.manifest_url" placeholder="https://.../.well-known/ai-plugin.json" />
+            </div>
+          </template>
+
+          <template x-if="['app', 'marketplace'].includes($store.plugins.filter)">
+            <div class="form-control">
+              <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_repo_url')"></span></label>
+              <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full" x-model="$store.plugins.createForm.url" placeholder="https://..." />
+            </div>
+          </template>
+
+          <template x-if="$store.plugins.filter === 'mcp'">
+            <div class="space-y-4">
+              <div class="form-control">
+                <label for="store-plugins-createform-transport" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_transport')"></span></label>
+                <select id="store-plugins-createform-transport" name="store-plugins-createform-transport" class="select select-bordered" x-model="$store.plugins.createForm.transport">
+                  <option value="stdio">stdio</option>
+                  <option value="sse">sse</option>
+                </select>
+              </div>
+              
+              <template x-if="$store.plugins.createForm.transport === 'stdio'">
+                <div class="space-y-4">
+                  <div class="form-control">
+                    <label for="store-plugins-createform-command" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_cmd')"></span></label>
+                    <input id="store-plugins-createform-command" name="store-plugins-createform-command" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.command" placeholder="npx, python, etc." />
+                  </div>
+                  <div class="form-control">
+                    <label for="store-plugins-createform-args" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_args')"></span></label>
+                    <input id="store-plugins-createform-args" name="store-plugins-createform-args" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.args" placeholder='["-y", "@modelcontextprotocol/server-filesystem"]' />
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="$store.plugins.createForm.transport === 'sse'">
+                <div class="form-control">
+                  <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold">SSE URL</span></label>
+                  <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.url" placeholder="https://..." />
+                </div>
+              </template>
+
+              <div class="form-control">
+                <label for="store-plugins-createform-env" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('plugins_label_env')"></span></label>
+                <input id="store-plugins-createform-env" name="store-plugins-createform-env" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.env" placeholder='{"API_KEY": "value"}' />
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.plugins.showCreateModal=false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary" @click="$store.plugins.submitCreation()" x-text="$store.i18n.t('plugins_btn_save')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.plugins.showCreateModal=false"></div>
+    </dialog>
+
+  </div>
+</div>

@@ -1,0 +1,191 @@
+- vars:
+    query: "What is the capital of France?"
+  assert:
+    - type: icontains
+      value: "Paris"
+
+- vars:
+    query: "Who wrote 'To Kill a Mockingbird'?"
+  assert:
+    - type: icontains
+      value: "Harper Lee"
+
+- vars:
+    query: "What is the atomic number of Carbon?"
+  assert:
+    - type: icontains
+      value: "6"
+
+- vars:
+    query: "When was the first iPhone released?"
+  assert:
+    - type: icontains
+      value: "2007"
+
+- vars:
+    query: "Which planet is known as the Red Planet?"
+  assert:
+    - type: icontains
+      value: "Mars"
+
+- vars:
+    query: "What is the largest ocean on Earth?"
+  assert:
+    - type: icontains
+      value: "Pacific"
+
+- vars:
+    query: "Who painted the Mona Lisa?"
+  assert:
+    - type: icontains
+      value: "Leonardo da Vinci"
+
+- vars:
+    query: "What is the hardest natural substance on Earth?"
+  assert:
+    - type: icontains
+      value: "Diamond"
+
+- vars:
+    query: "How do I reverse a string in Python?"
+  assert:
+    - type: icontains
+      value: "[::-1]"
+
+- vars:
+    query: "How do I initialize an empty map in Go?"
+  assert:
+    - type: icontains
+      value: "make(map"
+
+- vars:
+    query: "How to declare a variable in Rust?"
+  assert:
+    - type: icontains
+      value: "let "
+
+- vars:
+    query: "How do I add an element to a list in Python?"
+  assert:
+    - type: icontains
+      value: ".append("
+
+- vars:
+    query: "How to parse JSON in JavaScript?"
+  assert:
+    - type: icontains
+      value: "JSON.parse("
+
+- vars:
+    query: "How do I start a goroutine in Go?"
+  assert:
+    - type: icontains
+      value: "go "
+
+- vars:
+    query: "How to read a file in Node.js synchronously?"
+  assert:
+    - type: icontains
+      value: "readFileSync"
+
+- vars:
+    query: "How do I get the length of an array in Java?"
+  assert:
+    - type: icontains
+      value: ".length"
+
+- vars:
+    query: "If today is Tuesday, what day was it 4 days ago?"
+  assert:
+    - type: icontains
+      value: "Friday"
+
+- vars:
+    query: "If John is twice as old as Mary, and Mary is 5, how old will John be in 10 years?"
+  assert:
+    - type: icontains
+      value: "20"
+
+- vars:
+    query: "A train leaves at 3:00 PM and travels 60 mph. How far is it at 5:30 PM?"
+  assert:
+    - type: icontains
+      value: "150"
+
+- vars:
+    query: "If I invest $100 at 5% simple interest, how much will I have after 3 years?"
+  assert:
+    - type: icontains
+      value: "115"
+
+- vars:
+    query: "If a project takes 5 workers 10 days, how long does it take 10 workers assuming equal efficiency?"
+  assert:
+    - type: icontains
+      value: "5"
+
+- vars:
+    query: "A shirt costs $50. It is discounted by 20%, then another 10% off the discounted price. Final price?"
+  assert:
+    - type: icontains
+      value: "36"
+
+- vars:
+    query: "If the first day of a non-leap year is a Monday, what day of the week is the last day of the year?"
+  assert:
+    - type: icontains
+      value: "Monday"
+
+- vars:
+    query: "I have 3 apples. I ate 1, gave 1 to a friend, and bought 2 more. How many do I have?"
+  assert:
+    - type: icontains
+      value: "3"
+
+- vars:
+    query: "Explain the difference between a process and a thread."
+  assert:
+    - type: icontains
+      value: "memory"
+
+- vars:
+    query: "What is a deadlock in concurrent programming?"
+  assert:
+    - type: icontains
+      value: "block"
+
+- vars:
+    query: "What is the time complexity of binary search?"
+  assert:
+    - type: icontains
+      value: "O(log n)"
+
+- vars:
+    query: "Describe what inversion of control is in software architecture."
+  assert:
+    - type: icontains
+      value: "framework"
+
+- vars:
+    query: "What is the difference between TCP and UDP?"
+  assert:
+    - type: icontains
+      value: "reliable"
+
+- vars:
+    query: "Explain what a memory leak is."
+  assert:
+    - type: icontains
+      value: "garbage"
+
+- vars:
+    query: "What is the CAP theorem in distributed systems?"
+  assert:
+    - type: icontains
+      value: "consistency"
+
+- vars:
+    query: "What is the purpose of a load balancer?"
+  assert:
+    - type: icontains
+      value: "distribute"

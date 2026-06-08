@@ -1,0 +1,241 @@
+package config
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/pelletier/go-toml/v2"
+
+	"github.com/polarisagi/polaris/configs"
+)
+
+type Config struct {
+	System        SystemConfig        `toml:"system"`
+	Inference     InferenceConfig     `toml:"inference"`
+	Storage       StorageConfig       `toml:"storage"`
+	Observability ObservabilityConfig `toml:"observability"`
+	Agent         AgentConfig         `toml:"agent"`
+	Orchestrator  OrchestratorConfig  `toml:"orchestrator"`
+	SelfImprove   SelfImproveConfig   `toml:"self_improve"`
+	Knowledge     KnowledgeConfig     `toml:"knowledge"`
+	Policy        PolicyConfig        `toml:"policy"`
+	Eval          EvalConfig          `toml:"eval"`
+	Interface     InterfaceConfig     `toml:"interface"`
+	Thresholds    Thresholds          `toml:"-"`
+}
+
+type SystemConfig struct {
+	Tier         int        `toml:"tier"`
+	MaxAgents    int        `toml:"max_agents"`
+	GoMemLimitMB int        `toml:"go_memlimit_mb"`
+	DataDir      string     `toml:"data_dir"`
+	Dirs         DirsConfig `toml:"dirs"`
+}
+
+// DirsConfig 允许 Operator 将特定子目录挂载到其他磁盘/分区。
+// 未设置的字段自动从 DataDir 派生（见 DataLayout.NewDataLayout）。
+// 典型场景：logs_dir 指向中央日志盘；db_dir 指向高速 NVMe；workspace_dir 指向 tmpfs。
+type DirsConfig struct {
+	LogsDir      string `toml:"logs_dir"`      // 覆盖 DataDir/logs
+	DBDir        string `toml:"db_dir"`        // 覆盖 DataDir/data（数据库文件）
+	WorkspaceDir string `toml:"workspace_dir"` // 覆盖 DataDir/workspace（Agent VFS 沙箱）
+	ModelsDir    string `toml:"models_dir"`    // 覆盖 DataDir/models（AI 模型文件）
+}
+
+type InferenceConfig struct {
+	DefaultProvider   string      `toml:"default_provider"`
+	ReasoningProvider string      `toml:"reasoning_provider"`
+	StructuredOutput  string      `toml:"structured_output"`
+	EmbedderDim       int         `toml:"embedder_dim"` // vector dimension; changes on local_only toggle
+	Cache             CacheConfig `toml:"cache"`
+	STT               STTConfig   `toml:"stt"`
+}
+
+type STTConfig struct {
+	SherpaVersion      string `toml:"sherpa_version"`
+	SenseVoiceModelURL string `toml:"sense_voice_model_url"`
+	PunctModelURL      string `toml:"punct_model_url"`
+}
+
+type CacheConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Backend string `toml:"backend"`
+}
+
+type StorageConfig struct {
+	Engines map[string]string `toml:"engines"`
+}
+
+type ObservabilityConfig struct {
+	Traces  TraceConfig  `toml:"traces"`
+	Metrics MetricConfig `toml:"metrics"`
+	Logs    LogConfig    `toml:"logs"`
+}
+
+type TraceConfig struct {
+	Enabled bool    `toml:"enabled"`
+	Sampler float64 `toml:"sampler"`
+}
+
+type MetricConfig struct {
+	Enabled bool `toml:"enabled"`
+}
+
+type LogConfig struct {
+	Level  string `toml:"level"`
+	Format string `toml:"format"`
+}
+
+type AgentConfig struct {
+	Kernel KernelConfig `toml:"kernel"`
+	Memory MemoryConfig `toml:"memory"`
+	Skill  SkillConfig  `toml:"skill"`
+}
+
+type KernelConfig struct {
+	StateMachine             string  `toml:"state_machine"`
+	DefaultSurpriseThreshold float64 `toml:"default_surprise_threshold"`
+}
+
+type MemoryConfig struct {
+	Layers        []string `toml:"layers"`
+	Consolidation string   `toml:"consolidation"`
+}
+
+type SkillConfig struct {
+	BuiltinPath                string `toml:"builtin_path"`
+	MaxLogicCollapseConcurrent int    `toml:"max_logic_collapse_concurrent"`
+}
+
+type OrchestratorConfig struct {
+	Mode     string `toml:"mode"`
+	Protocol string `toml:"protocol"`
+}
+
+type SelfImproveConfig struct {
+	Gradient       bool                `toml:"gradient"`
+	AutoCurriculum bool                `toml:"auto_curriculum"`
+	LogicCollapse  LogicCollapseConfig `toml:"logic_collapse"`
+}
+
+type LogicCollapseConfig struct {
+	Enabled              bool `toml:"enabled"`
+	MinSuccessForTrigger int  `toml:"min_success_for_trigger"`
+}
+
+type KnowledgeConfig struct {
+	RAG RAGConfig `toml:"rag"`
+}
+
+type RAGConfig struct {
+	Mode     string `toml:"mode"`
+	GraphRAG string `toml:"graphrag"`
+}
+
+type PolicyConfig struct {
+	Engine       string `toml:"engine"`
+	DefaultBlock bool   `toml:"default_block"`
+}
+
+type EvalConfig struct {
+	CIGate       bool `toml:"ci_gate"`
+	ShadowDeploy bool `toml:"shadow_deploy"`
+}
+
+type InterfaceConfig struct {
+	Host      string `toml:"host"`
+	Port      int    `toml:"port"`
+	CLI       bool   `toml:"cli"`
+	HTTP      bool   `toml:"http"`
+	GRPC      bool   `toml:"grpc"`
+	WebSocket bool   `toml:"websocket"`
+}
+
+func loadModuleTOML(modulePath string, target interface{}) error {
+	if _, err := os.Stat(modulePath); os.IsNotExist(err) {
+		return nil
+	}
+	data, err := os.ReadFile(modulePath)
+	if err != nil {
+		slog.Error("polaris: failed to read threshold override", "file", modulePath, "err", err)
+		return err
+	}
+	if err := toml.Unmarshal(data, target); err != nil {
+		slog.Error("polaris: failed to parse threshold override", "file", modulePath, "err", err)
+		return err
+	}
+	slog.Info("polaris: threshold override loaded", "file", modulePath)
+	return nil
+}
+
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Fallback to embedded configs
+		data, err = configs.FS.ReadFile("defaults.toml")
+		if err != nil {
+			return nil, err
+		}
+
+		// Attempt to export the defaults to the path for future edits
+		if errMkdir := os.MkdirAll(filepath.Dir(path), 0755); errMkdir == nil {
+			os.WriteFile(path, data, 0600) //nolint:errcheck
+		}
+	}
+	cfg := &Config{Thresholds: DefaultThresholds()}
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// Validate 对边界非法值做 Fail-Fast 校验，防止明显错误配置在运行期才暴露 panic。
+// 未填写的字段（零值）代表"使用系统默认"，不视为错误。
+func (c *Config) Validate() error {
+	if c.System.Tier < 0 || c.System.Tier > 3 {
+		return fmt.Errorf("config: system.tier must be 0-3, got %d", c.System.Tier)
+	}
+	// go_memlimit_mb 为 0 代表不设 GOMEMLIMIT（由运行时自动管理），合法。
+	// 非零时要求最低 64MB，低于此值会导致频繁 GC 甚至 OOM。
+	if c.System.GoMemLimitMB != 0 && c.System.GoMemLimitMB < 64 {
+		return fmt.Errorf("config: system.go_memlimit_mb must be >= 64 when set, got %d", c.System.GoMemLimitMB)
+	}
+	return nil
+}
+
+func LoadThresholds(dataDir string) (*Thresholds, error) {
+	t := DefaultThresholds()
+	configDir := os.Getenv("POLARIS_THRESHOLDS_DIR")
+	if configDir == "" {
+		configDir = filepath.Join(dataDir, "config")
+	}
+
+	modules := map[string]interface{}{
+		"m1_router.toml":        &t.M1Router,
+		"m2_storage.toml":       &t.M2Storage,
+		"m3_observability.toml": &t.M3Observability,
+		"m4_kernel.toml":        &t.M4Kernel,
+		"m5_memory.toml":        &t.M5Memory,
+		"m6_skill.toml":         &t.M6Skill,
+		"m7_tool.toml":          &t.M7Tool,
+		"m8_orchestrator.toml":  &t.M8Orchestrator,
+		"m9_self_improve.toml":  &t.M9SelfImprove,
+		"m10_knowledge.toml":    &t.M10Knowledge,
+		"m11_policy.toml":       &t.M11Policy,
+		"m12_eval.toml":         &t.M12Eval,
+		"m13_interface.toml":    &t.M13Interface,
+	}
+
+	for file, target := range modules {
+		if err := loadModuleTOML(filepath.Join(configDir, file), target); err != nil {
+			return nil, err
+		}
+	}
+
+	return &t, nil
+}

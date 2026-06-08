@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "template_render",
+  "description": "Render a Go template string with provided data bindings and return the output.",
+  "type": "object",
+  "properties": {
+    "template": { "type": "string", "description": "Go template string using {{.Field}} syntax." },
+    "data":     { "type": "object", "description": "Data object whose fields are accessible in the template as {{.FieldName}}." }
+  },
+  "required": ["template", "data"]
+}

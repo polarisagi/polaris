@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "text_translate",
+  "description": "Translate text between languages using the configured language model.",
+  "type": "object",
+  "properties": {
+    "text":        { "type": "string", "description": "The text to translate." },
+    "source_lang": { "type": "string", "description": "Source language code (e.g. 'en', 'zh', 'fr'). Omit to auto-detect." },
+    "target_lang": { "type": "string", "description": "Target language code (e.g. 'zh', 'en', 'ja')." }
+  },
+  "required": ["text", "target_lang"]
+}

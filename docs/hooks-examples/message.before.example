@@ -1,0 +1,13 @@
+#!/bin/sh
+# 示例：message.before 拦截包含敏感词的消息
+# 安装：cp message.before.example ~/.polaris/hooks/message.before && chmod +x ~/.polaris/hooks/message.before
+# 规则：非零退出 = 拦截；stdout = 返回给用户的原因
+
+BLOCKED_WORDS="password|secret|credit.card"
+
+if echo "$POLARIS_MESSAGE" | grep -qiE "$BLOCKED_WORDS"; then
+    echo "消息包含敏感内容，已拦截"
+    exit 1
+fi
+
+exit 0

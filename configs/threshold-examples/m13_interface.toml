@@ -1,0 +1,15 @@
+# Example threshold overrides for m13_interface.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'timeout.read_seconds' = 10
+'timeout.write_seconds' = 60
+'timeout.idle_seconds' = 120
+'timeout.graceful_shutdown_seconds' = 30
+'hitl.default_deadline_min_urgent' = 5
+'hitl.default_deadline_min_normal' = 60
+'hitl.default_deadline_min_long' = 1440
+'worker.intent_handler' = 4
+'worker.ingest' = 2
+'worker.background' = 2
+'worker.eval' = 1
+'worker.cron' = 1

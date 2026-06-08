@@ -1,0 +1,107 @@
+# polaris default configuration
+# Tier: 0 (8GB RAM) - all remote API, no local model
+
+[system]
+tier = 0
+max_agents = 3
+go_memlimit_mb = 150
+data_dir = "~/.polarisagi/polaris"
+
+# 运行时目录布局（从 data_dir 自动派生，无需手动设置）：
+#   data_dir/data/        — 数据库文件（polaris.db, surreal.db）
+#   data_dir/logs/        — 日志文件
+#   data_dir/config/      — Operator 配置覆盖 + 用户 prompts
+#   data_dir/extensions/  — 已安装插件（含内嵌 MCP 服务）
+#   data_dir/skills/      — 用户技能脚本 / Wasm
+#   data_dir/models/      — AI 模型文件（SenseVoice 等）
+#   data_dir/workspace/   — Agent 任务沙箱 VFS（每任务一子目录）
+#   data_dir/sessions/    — 会话 transcript 归档
+#   data_dir/audit/       — 审计档案
+#   data_dir/reports/     — 月度成本报告
+#   data_dir/cache/       — HTTP / 推理缓存
+#   data_dir/hooks/       — 用户事件 Hook 脚本
+#   data_dir/tmp/         — Marketplace 下载暂存
+#
+# 以下四个目录可独立挂载到其他磁盘/分区（空字符串 = 使用默认派生路径）：
+[system.dirs]
+logs_dir      = ""   # 示例："/var/log/polarisagi" — 中央日志盘
+db_dir        = ""   # 示例："/mnt/nvme/polarisagi/data" — 高速 NVMe
+workspace_dir = ""   # 示例："/tmp/polarisagi/workspace" — tmpfs 沙箱
+models_dir    = ""   # 示例："/mnt/data/models" — 大容量模型盘
+
+[inference]
+default_provider = "deepseek-v4-flash"
+reasoning_provider = "deepseek-v4-pro"
+structured_output = "grammar"
+
+[inference.cache]
+enabled = true
+backend = "pebble"
+
+[inference.stt]
+sherpa_version = "1.13.2"
+sense_voice_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09.tar.bz2"
+punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
+
+[storage.engines]
+relational = "sqlite"
+vector = "sqlite-vec"
+graph = "loradb"
+kv = "pebble"
+fulltext = "sqlite-fts5"
+eventlog = "wal"
+
+[observability.traces]
+enabled = true
+sampler = 1.0
+
+[observability.metrics]
+enabled = true
+
+[observability.logs]
+level = "info"
+format = "json"
+
+[agent.kernel]
+state_machine = "dual_route"
+default_surprise_threshold = 0.5
+
+[agent.memory]
+layers = ["working", "episodic", "semantic", "procedural"]
+consolidation = "manual"
+
+[agent.skill]
+builtin_path = "skills/"
+max_logic_collapse_concurrent = 1
+
+[orchestrator]
+mode = "blackboard"
+protocol = "structured_event"
+
+[self_improve]
+gradient = false
+auto_curriculum = false
+
+[self_improve.logic_collapse]
+enabled = true
+min_success_for_trigger = 50
+
+[knowledge.rag]
+mode = "hybrid"
+graphrag = "microsoft"
+
+[policy]
+engine = "cedar"
+default_block = true
+
+[eval]
+ci_gate = true
+shadow_deploy = false
+
+[interface]
+host = "127.0.0.1"
+port = 29999
+cli = true
+http = true
+grpc = false
+websocket = false

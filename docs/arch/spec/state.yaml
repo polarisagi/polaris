@@ -1,0 +1,1069 @@
+# =============================================================================
+# Polaris — State Machines & Invariants (L3 Behavioral Specification)
+# =============================================================================
+# File: docs/arch/spec/state.yaml
+# SSoT-Layer: L3 (Authoritative state machines + cross-module invariants)
+# Version: 2026-05-06 v1
+# Conventions:
+#   - State names are snake_case
+#   - Transitions reference (state, event_type) → (next_state, effects)
+#   - Invariants are testable predicates (M12 Eval enforces)
+#   - All time values use monotonic ns offset (MonoNs); wall_clock is human display only
+# §跳读 (Read offset/limit 按需局部加载):
+#   meta:14 / par:24 (M4 PAR 10态) / staging:193 (M9 7阶段) / taint:326 (M11 污点)
+#   kill_switch:417 (M11 D5) / task_status:467 (M8 7态) / outbox:555 (M2 4态)
+#   signals:633 (M3 信号) / global_invariants:679 / thresholds:745 (全模块阈值)
+# =============================================================================
+
+meta:
+  version: "2026-05-09 v2"
+  modules: 13
+  invariants_total: 86
+  go_package: internal/protocol
+
+# =============================================================================
+# §par: M4 Plan-Act-Reflect 10-state machine
+# =============================================================================
+
+par:
+  description: |
+    M4 default state machine. Single Agent task lifecycle.
+    LLM is co-processor; Go state machine owns control flow (invariant 6).
+    5 main states + 2 recovery states + 2 terminal states + idle + interrupt.
+    s_interrupt 由 UserInterrupt 协议（POST /v1/agent/{taskID}/interrupt）从任意活跃态注入；
+    Resume 路径返回 interruptFrom，Redirect 转 s_perceive，Abort 转 s_failed。
+    详见 docs/arch/M04-Agent-Kernel.md §1 与 pkg/cognition/kernel/state_machine.go。
+  initial: s_idle
+
+  states:
+    - s_idle
+    - s_perceive
+    - s_plan
+    - s_validate
+    - s_execute
+    - s_reflect
+    - s_replan
+    - s_rollback
+    - s_complete
+    - s_failed
+    - s_interrupt
+
+  transitions:
+    - from: s_idle
+      event: new_intent
+      to: s_perceive
+      effect: { kind: deterministic, fn: load_session_context }
+
+    - from: s_perceive
+      event: perceive_done
+      to: s_plan
+      effect:
+        kind: llm_fill
+        schema_ref: M4_PerceiveOutput
+        prompt_fn: build_perceive_prompt
+        on_success: store_task_model
+        on_failure: s_error
+        max_retry: 2
+        model_pool: budget
+
+    - from: s_plan
+      event: plan_done
+      to: s_validate
+      effect:
+        kind: llm_fill
+        schema_ref: M4_PlanOutput
+        prompt_fn: build_plan_prompt
+        on_success: store_dag
+        on_failure: s_error
+        max_retry: 2
+        model_pool: budget
+
+    - from: s_validate
+      event: validate_pass
+      to: s_execute
+      effect: { kind: deterministic, fn: schema_check_plan_dag }
+
+    - from: s_validate
+      event: validate_fail
+      to: s_replan
+      guard: { fn: replan_attempts_below_max }
+
+    - from: s_validate
+      event: validate_fail
+      to: s_failed
+      guard: { fn: replan_attempts_at_max }
+
+    - from: s_execute
+      event: all_steps_success
+      to: s_reflect
+      effect: { kind: deterministic, fn: aggregate_outputs }
+
+    - from: s_execute
+      event: step_failed_recoverable
+      to: s_execute
+      effect: { kind: deterministic, fn: retry_step_with_backoff }
+
+    - from: s_execute
+      event: step_failed_unrecoverable
+      to: s_rollback
+      guard: { fn: actions_are_reversible }
+
+    - from: s_execute
+      event: step_failed_unrecoverable
+      to: s_failed
+      guard: { fn: any_action_irreversible }
+      effect: { kind: deterministic, fn: alert_human_review }
+
+    - from: s_reflect
+      event: reflect_done
+      to: s_complete
+      effect:
+        kind: llm_fill
+        schema_ref: M4_ReflectionOutput
+        prompt_fn: build_reflection_prompt
+        on_success: emit_to_m9_reflexion_worker
+        on_failure: s_complete
+        max_retry: 1
+        model_pool: budget
+
+    - from: s_complete
+      event: terminal
+      to: s_idle
+      effect: { kind: deterministic, fn: write_session_complete_event }
+
+    - from: s_rollback
+      event: rollback_done
+      to: s_replan
+      guard: { fn: replan_attempts_below_max }
+
+    - from: s_rollback
+      event: rollback_done
+      to: s_failed
+      guard: { fn: replan_attempts_at_max }
+
+    - from: s_replan
+      event: replan_done
+      to: s_plan
+
+    - from: s_replan
+      event: replan_exhausted
+      to: s_failed
+
+    - from: s_failed
+      event: terminal
+      to: s_idle
+      effect: { kind: deterministic, fn: write_session_error_event }
+
+  invariants:
+    - id: par_inv_01
+      name: replay_no_relive_llm
+      predicate: |
+        For any session in events table, replaying from offset 0 must produce
+        identical state transitions WITHOUT issuing new LLM calls. LLM responses
+        are read from events.topic='llm.call.recorded'.
+      enforced_by: m12.replay_runner + m4.replay_mode_flag
+
+    - id: par_inv_02
+      name: irreversible_no_auto_rollback
+      predicate: |
+        If any step in DAG has Reversible=false, transition to s_rollback
+        is FORBIDDEN; must transit to s_failed with HITL alert.
+      enforced_by: m4.transition_guard + m7.dry_run_mode
+
+    - id: par_inv_03
+      name: prompt_pure_function
+      predicate: |
+        prompt-building functions referenced by llm_fill effects must be pure:
+        same StateContext → same prompt bytes. No wall_clock, no random.
+      enforced_by: m4.prompt_builder + CI unit_test
+
+    - id: par_inv_04
+      name: system1_no_llm_call
+      predicate: |
+        SurpriseIndex < 0.3 → skill cache path only. Zero LLM calls on this path.
+      enforced_by: m4.route_reasoning + code_review
+
+    - id: par_inv_05
+      name: dag_no_cycles
+      predicate: |
+        S_VALIDATE L0 topology check rejects cycles via DFS three-color algorithm.
+        Max nodes=50, max depth=10.
+      enforced_by: m4.s_validate + unit_test
+
+# =============================================================================
+# §staging: M9 Self-Improvement 7-stage pipeline
+# =============================================================================
+
+staging:
+  description: |
+    All M9 candidates (skill / lora / prompt / config / source_patch /
+    user_preference) MUST traverse this pipeline. M9 itself never modifies
+    production. Stage names are canonical; legacy names deprecated.
+  initial: candidate_emit
+
+  states:
+    - candidate_emit
+    - schema_validate
+    - initial_eval
+    - replay_shadow
+    - mirror_shadow
+    - canary_rollout
+    - full_promotion
+    - rejected
+    - rolled_back
+    - dead_letter
+
+  transitions:
+    - from: candidate_emit
+      event: candidate_written
+      to: schema_validate
+
+    - from: schema_validate
+      event: validate_pass
+      to: initial_eval
+
+    - from: schema_validate
+      event: validate_fail
+      to: rejected
+      effect: { kind: deterministic, fn: write_audit_rejected }
+
+    - from: initial_eval
+      event: eval_pass
+      to: replay_shadow
+
+    - from: initial_eval
+      event: eval_fail
+      to: rejected
+
+    - from: replay_shadow
+      event: shadow_pass
+      to: mirror_shadow
+      guard: { fn: candidate_level_at_least_evo_l3 }
+
+    - from: replay_shadow
+      event: shadow_pass
+      to: canary_rollout
+      guard: { fn: candidate_level_below_evo_l3 }
+
+    - from: replay_shadow
+      event: shadow_fail
+      to: rolled_back
+
+    - from: mirror_shadow
+      event: shadow_pass
+      to: canary_rollout
+
+    - from: mirror_shadow
+      event: shadow_fail
+      to: rolled_back
+
+    - from: canary_rollout
+      event: canary_pass
+      to: full_promotion
+      effect: { kind: deterministic, fn: write_audit_promoted }
+
+    - from: canary_rollout
+      event: canary_fail
+      to: rolled_back
+
+    - from: rejected
+      event: terminal
+      to: dead_letter
+
+    - from: rolled_back
+      event: terminal
+      to: dead_letter
+
+  evolution_levels:
+    Evo-L0:
+      description: Configuration adjustment (router weights, thresholds)
+      automation: full
+      gates: [telemetry_only]
+
+    Evo-L1:
+      description: Prompt / heuristic evolution
+      automation: full
+      gates: [initial_eval]
+
+    Evo-L2:
+      description: New skill / Logic Collapse output
+      automation: semi
+      gates: [initial_eval, replay_shadow, canary_rollout, cosign_signature]
+
+    Evo-L3:
+      description: Strategy / LoRA adapter modification
+      automation: review_required
+      gates: [initial_eval, replay_shadow, mirror_shadow, canary_rollout, multi_signature]
+
+    Evo-L4:
+      description: Source code / module structure modification
+      automation: strict_review
+      gates: [all_above, formal_verification, red_team, multi_signature]
+
+  invariants:
+    - id: staging_inv_01
+      name: m9_never_writes_production_directly
+      predicate: |
+        M9 workers MUST NOT write to production tables (skills, user_preferences,
+        policy_rules, model adapters) directly. All writes go through staging
+        7-stage and M11 full_promotion.
+      enforced_by: m11.policy_check + db_check_constraint
+
+    - id: staging_inv_02
+      name: safety_case_one_vote_veto
+      predicate: |
+        If initial_eval encounters a newly_failing safety case (suite='safety'),
+        candidate is REJECTED regardless of pass_rate on other cases.
+      enforced_by: m12.eval_runner
+
+    - id: staging_inv_03
+      name: provenance_id_required_for_immutable_core
+      predicate: |
+        Any write to user_preferences (production) MUST carry provenance_id
+        pointing to a staging_candidates record that completed full_promotion.
+      enforced_by: db_check + m5.immutable_core_load
+
+# =============================================================================
+# §taint: M11 Taint propagation rules
+# =============================================================================
+
+taint:
+  description: |
+    Taint level 5-enum: none < low < medium < high < user_reviewed.
+    Single source of truth across all modules (M2 schemas, M5 events, M7 tool
+    I/O, M8 blackboard, M10 ingestion).
+
+  levels:
+    - { name: none,           ord: 0, source: system_compile_time }
+    - { name: low,            ord: 1, source: user_input_or_workspace }
+    - { name: medium,         ord: 2, source: trusted_third_party_allowlist_or_llm_summary }
+    - { name: high,           ord: 3, source: untrusted_external_default }
+    - { name: user_reviewed,  ord: 4, source: explicit_user_downgrade }
+
+  propagation_rules:
+    - operation: connector_fetch
+      input_taint: any
+      output_taint: high
+      override_via: trusted_sources_allowlist
+
+    - operation: llm_call_with_data_slot
+      input_taints: [system_none, instruction_low, data_high_or_lower]
+      output_taint: max(data_slot_taints)
+
+    - operation: tool_call
+      input_taint: any
+      output_taint: max(input_taint, tool_default_taint)
+
+    - operation: skill_distillation
+      input_taint: any
+      output_taint: none
+      condition: cosign_signature_valid + capabilities_audited
+
+    - operation: user_review_downgrade
+      input_taint: high
+      output_taint: user_reviewed
+      requires: [hitl_confirm, audit_log_entry, single_record_only]
+
+    - operation: schema_validate_downgrade
+      input_taint: high_or_medium
+      output_taint: min(level-1, medium)
+      requires: [json_schema_validation_pass, format_or_pattern_or_enum_or_const_constraint_on_string_fields]
+
+    - operation: deterministic_transform_downgrade
+      input_taint: high_or_medium
+      output_taint: min(level-1, medium)
+      requires: [whitelisted_pure_function]
+      whitelist: [base64.DecodeString, hex.DecodeString, strconv.*, url.Parse+QueryUnescape,
+                  gzip.NewReader, crypto/sha256, crypto/blake3]
+
+    - operation: db_write
+      input_taint: x
+      stored_taint: x
+      monotonicity: "stored_taint >= prev_stored_taint OR via user_review_downgrade"
+
+  slot_isolation_matrix:
+    description: |
+      M11 D1 — physical slot separation in prompt assembly.
+      Critical: data slot content is NEVER parsed as system instruction.
+    slots:
+      system:       { taint: none,  llm_treats_as: instruction }
+      instruction:  { taint: low,   llm_treats_as: instruction }
+      data:         { taint: high,  llm_treats_as: analysis_target }
+      eg_demo:      { taint: none,  llm_treats_as: imitation_pattern }
+      tool_result:  { taint: high,  llm_treats_as: analysis_target }
+
+    forbidden_assemblies:
+      - { reason: "high-taint into instruction slot",
+          rule:   "data_slot_content MUST NOT be concatenated into instruction slot" }
+      - { reason: "tool_result drives next instruction without re-validation",
+          rule:   "tool_result MUST NOT auto-form next iteration's instruction" }
+
+  invariants:
+    - id: taint_inv_01
+      name: monotonicity
+      predicate: "taint level monotonically non-decreasing except via four sanctioned Sanitizer paths"
+      enforced_by: m11.taint_tracker + m3.telemetry
+
+    - id: taint_inv_02
+      name: schema_alignment
+      predicate: "All persistence tables (events, documents, chunks, tool_calls, blackboard_entries) use same 5-level enum"
+      enforced_by: db_check_constraint
+
+    - id: taint_inv_03
+      name: no_implicit_downgrade
+      predicate: "No code path decreases taint_level without explicit Sanitizer + audit"
+      enforced_by: m11.policy_check + CI grep_audit
+
+# =============================================================================
+# §kill_switch: M11 D5 emergency halt protocol
+# =============================================================================
+
+kill_switch:
+  description: |
+    Single-point emergency halt; all modules subscribe and respond.
+  trigger:
+    actors: [user, m11.policy_engine, m13.admin_endpoint]
+    requires: [audit_log_entry, signature_valid_or_root_user]
+
+  stages:
+    Stage1_THROTTLE:
+      trigger: "TokenBurnRate > 2x baseline OR 连续错误 > 5"
+      action: "降级 Tier 1 模型, max_steps=3, 禁止 write_network"
+      recovery: auto
+
+    Stage2_PAUSE:
+      trigger: "Stage 1 持续 > 10min OR 安全违规"
+      action: "停止所有新任务, 保留状态, 通知"
+      recovery: hitl_required
+
+    Stage3_FULLSTOP:
+      trigger: "Stage 2 未在 15min 内审批 OR 致命违规 OR 管理员手动"
+      action: "停止所有 goroutine + LLM 调用, 写入 .fullstop"
+      recovery: admin_unseal
+
+  response_protocol:
+    - module: m4_kernel
+      action: "save current trajectory → s_error → exit"
+      timeout_s: 30
+    - module: m9_workers
+      action: "complete current candidate batch → no new batch → exit"
+      timeout_s: 60
+    - module: m13_server
+      action: "reject new connections → drain in-flight → close listener"
+      timeout_s: 30
+    - module: m7_tools
+      action: "cancel running sandboxes → write audit entries"
+      timeout_s: 15
+    - module: m8_blackboard
+      action: "stop dispatching new claims → mark pending entries 'expired'"
+      timeout_s: 5
+    - module: m12_eval
+      action: "abort in-progress runs → mark 'canceled'"
+      timeout_s: 10
+
+  global_timeout_s: 120
+  fallback: SIGKILL
+
+# =============================================================================
+# §task_status: M8 Orchestrator TaskStatus 7-state machine
+# =============================================================================
+
+task_status:
+  description: |
+    M8 Blackboard task lifecycle. Single writer via CAS Version++.
+    States align with §1-bis Digital Axiom Lifecycle Arrow.
+  initial: pending
+
+  states:
+    - pending
+    - claimed
+    - executing
+    - done
+    - failed
+    - suspended
+    - compensating
+
+  transitions:
+    - from: pending
+      event: cas_claim
+      to: claimed
+      effect: { kind: deterministic, fn: cas_atomic_pointer_swap }
+
+    - from: claimed
+      event: begin_execution
+      to: executing
+      guard: { fn: verify_claimed_by == self_agent_id }
+
+    - from: executing
+      event: all_steps_success
+      to: done
+      effect: { kind: deterministic, fn: aggregate_outputs }
+
+    - from: executing
+      event: step_failed
+      to: failed
+      guard: { fn: any_action_irreversible }
+      effect: { kind: deterministic, fn: alert_human_review }
+
+    - from: executing
+      event: hitl_suspend
+      to: suspended
+      guard: { fn: hitl_gateway_active }
+
+    - from: executing
+      event: begin_compensation
+      to: compensating
+
+    - from: compensating
+      event: compensation_done
+      to: failed
+      effect: { kind: deterministic, fn: saga_compensation_completed }
+
+    - from: suspended
+      event: resume_from_suspended
+      to: executing
+      guard: { fn: hitl_approved_or_provider_recovered }
+
+    - from: suspended
+      event: hitl_timeout
+      to: failed
+      effect: { kind: deterministic, fn: gc_workspace }
+
+  invariants:
+    - id: task_inv_01
+      name: cas_monotonic
+      predicate: |
+        Task status transitions are monotonic: Pending→Claimed→Executing→Done|Failed|Suspended.
+        Rollback from Executing to a prior state is FORBIDDEN; only Compensating (after Executing)
+        is allowed for reversible actions.
+      enforced_by: m8.cas_version_lock + m8.transition_guard
+
+    - id: task_inv_02
+      name: reaper_reclaims_stale
+      predicate: |
+        Any task with Status=Claimed|Executing and ExpiresAt<now is reclaimed by Reaper within 1s.
+        Reaper resets to Pending with Version++ after 5s grace period.
+      enforced_by: m8.reaper_scan
+
+    - id: task_inv_03
+      name: suspend_no_auto_reclaim
+      predicate: |
+        Suspended tasks are exempt from Reaper reclamation. They remain in the tasks table
+        until explicit ResumeFromSuspended or HITL timeout.
+      enforced_by: m8.reaper_skip_suspended + m8.hitl_timeout_handler
+
+# =============================================================================
+# §outbox: M2 OutboxEntry 4-state machine
+# =============================================================================
+
+outbox:
+  description: |
+    M2 cross-engine async projection. At-least-once delivery with idempotency.
+    States align with §1-bis Digital Axiom Lifecycle Arrow (simplified).
+  initial: pending
+
+  states:
+    - pending
+    - processing
+    - done
+    - dead
+
+  transitions:
+    - from: pending
+      event: worker_acquire
+      to: processing
+      effect: { kind: deterministic, fn: atomic_update_status_with_crash_recovery_count }
+
+    - from: processing
+      event: worker_success
+      to: done
+      effect: { kind: deterministic, fn: update_status_done }
+
+    - from: processing
+      event: worker_failure_retryable
+      to: pending
+      guard: { fn: attempt_count_below_max(5) }
+      effect: { kind: deterministic, fn: exponential_backoff_update_next_retry_at }
+
+    - from: processing
+      event: worker_failure_permanent
+      to: dead
+      guard: { fn: attempt_count_at_max(5) }
+
+    - from: processing
+      event: poison_pill
+      to: dead
+      guard: { fn: crash_recovery_count_at_max(3) }
+
+    - from: dead
+      event: manual_rereview
+      to: pending
+      guard: { fn: admin_authorized }
+
+  invariants:
+    - id: outbox_inv_01
+      name: at_least_once
+      predicate: |
+        Each outbox entry is processed at least once.
+        Duplicate delivery is tolerated via idempotency_key UNIQUE constraint.
+      enforced_by: m2.idempotency_key_check + m2.outbox_worker
+
+    - id: outbox_inv_02
+      name: dead_letter_never_silent
+      predicate: |
+        Entries in dead status must generate an alert.
+        Silent dropping of dead entries is FORBIDDEN.
+      enforced_by: m2.dead_letter_monitor + m3.alert
+
+    - id: outbox_inv_03
+      name: crash_recovery_chain
+      predicate: |
+        crash_recovery_count increments atomically before FFI execution.
+        crash_recovery_count >= 3 → directly to dead (poison pill protection).
+      enforced_by: m2.outbox_worker + sql_atomic_update
+
+    - id: outbox_inv_04
+      name: business_delay_respected
+      predicate: |
+        fetchBatch must respect next_retry_at for business-level delays
+        (e.g., GraphRAG daily budget). Entries with future next_retry_at
+        must not be polled until the time elapses.
+      enforced_by: m2.outbox_fetch_query
+
+# =============================================================================
+# §signals: M3 observability signal maturity gates
+# =============================================================================
+
+signals:
+  description: |
+    Signals progress through experimental → beta → stable lifecycle.
+    Only stable signals are wired into control flow (router / circuit breaker).
+
+  token_burn_rate:
+    description: M3 — Day 1 computable signal
+    impl: tokens_per_unit_time (EMA_5s + EMA_30s)
+    stages: [stable]
+    used_by: [m1.budget_governor, m11.cost_circuit_breaker]
+
+  surprise_index:
+    description: |
+      M3 + M9 — 三层机会主义架构（替代原 OD-05 "2027+" 等待策略）。
+      根据 Provider 能力自动选择最优信号层级，不等待全 Provider 支持。
+    layers:
+      - layer: A_logprob
+        impl: per_token_logprob_sliding_window
+        providers: [openai (logprobs param), llama.cpp local (native logprob output)]
+        availability: local_only 模式 Day 1 可用；远程模式 OpenAI 模型可用时机会主义收集
+        stage: experimental
+        used_by: [m3.side_channel_collection]
+        control_flow: false
+        promotion_gate: "≥6 个月数据收集 + M12 评测确认 Layer A 增量收益显著优于 Layer B → 升为 stable"
+
+      - layer: B_markov
+        impl: markov_transition_matrix_conditional_probability (M9 MEMF) + embedding cosine distance (M3 basic)
+        providers: [all]
+        availability: Day 1 全 Provider 可用
+        stage: beta
+        used_by: [m4.route_reasoning, m9.workers_advisory]
+        control_flow: true
+        weight_max: 0.3
+
+      - layer: C_burnrate
+        impl: token_burn_rate_acceleration + semantic_drift_detection
+        providers: [all]
+        availability: Day 1 全 Provider 可用
+        stage: stable
+        used_by: [m11.cost_circuit_breaker]
+        control_flow: true
+
+# =============================================================================
+# §global_invariants: cross-module
+# =============================================================================
+
+global_invariants:
+  - id: g_inv_01
+    name: eventlog_is_truth_source
+    predicate: |
+      All derived engines (SurrealDB-Core, SurrealDB-Core KV, blackboard_entries) can be rebuilt
+      from events table replay. Crash recovery never loses business state.
+    enforced_by: m12.replay_test_suite
+
+  - id: g_inv_02
+    name: append_only_audit_log
+    predicate: |
+      audit_log table forbids UPDATE and DELETE (DB triggers enforce).
+      Hash chain (prev_hash → self_hash) detects tampering.
+    enforced_by: db_trigger + m11.verify_chain
+
+  - id: g_inv_03
+    name: no_wall_clock_for_global_ordering
+    predicate: |
+      Global ordering / retry / timeouts use monotonic ns offset.
+      wall_clock is stored only for human display.
+    enforced_by: code_review + CI grep_audit
+
+  - id: g_inv_04
+    name: no_free_form_nl_coordination
+    predicate: |
+      M8 blackboard messages MUST be schema-validated (M8_Coord* schemas).
+      Free-form NL chat between agents is forbidden.
+    enforced_by: m8.payload_validator
+
+  - id: g_inv_05
+    name: builtin_tool_no_backdoor
+    predicate: |
+      All tools (including builtin) require capability validation before exec.
+      No code path bypasses M11.PolicyGate.IsAuthorized.
+    enforced_by: m7.execute_guard + CI grep_audit
+
+  - id: g_inv_06
+    name: prompt_slot_physical_separation
+    predicate: |
+      Prompt assembler keeps system / instruction / data / tool_result in
+      physically separate slots; high-taint data never enters instruction slot.
+    enforced_by: m1.adapter + m11.policy_check
+
+  - id: g_inv_07
+    name: idempotency_key_format
+    predicate: |
+      All cross-module operations carry IdempotencyKey of format
+      '{module}-{op}-{sha256(payload)[:16]}-{nonce}'; conflict returns
+      original result without re-execution.
+    enforced_by: m2.outbox + unit_test
+
+  - id: g_inv_08
+    name: replay_no_new_llm_calls
+    predicate: |
+      During M12 replay or crash recovery, LLM calls are read from
+      events.topic='llm.call.recorded'; provider.Infer is NOT invoked.
+    enforced_by: m4.replay_mode_flag + m12.replay_runner
+
+# =============================================================================
+# §thresholds: parameterized starting defaults (NOT magic numbers)
+# =============================================================================
+# Starting defaults reflect industry consensus & engineering sense; final
+# production values land in config/*.toml after benchmark. §7.0 invariant 4
+# preserved: documents only carry directional sense; numeric defaults here
+# are starting points with explicit `re_eval_when` triggers for tuning.
+
+thresholds:
+  m1_router:
+    circuit_breaker_failure_count: 5
+    circuit_breaker_cooldown_seconds: 10
+    circuit_breaker_half_open_max: 1
+    pre_flight_cost_estimate_tolerance_pct: 15
+    cache_hit_ratio_warn: 0.30
+    ewma_alpha: 0.30
+    timeout_dial_seconds: 3
+    timeout_tls_seconds: 5
+    timeout_response_header_seconds: 30
+    timeout_total_seconds: 120
+    stream_heartbeat_seconds: 60
+    max_stream_buffer_kb: 256
+    semantic_cache_max_entries: 10000
+    semantic_cache_similarity_threshold: 0.95
+    semantic_cache_ttl_hours: 24
+    l1_target_hit_rate: 0.90
+    re_eval_when:
+      - circuit_breaker_failure_count: ["false_open_rate>0.05", "miss_open_drift_p95"]
+      - pre_flight_cost_estimate_tolerance_pct: ["long_tail_drift>0.30"]
+      - cache_hit_ratio_warn: ["provider_pricing_change"]
+      - max_stream_buffer_kb: ["large_response_frequency"]
+
+  m2_storage:
+    sqlite_page_size: 4096
+    sqlite_mmap_size_mb: 256
+    sqlite_busy_timeout_ms: 5000
+    sqlite_synchronous: NORMAL
+    wal_checkpoint_pages: 1000
+    SurrealDB_block_cache_mb: 50
+    SurrealDB-Core_hnsw_M: 16
+    SurrealDB-Core_hnsw_efConstruction: 200
+    SurrealDB-Core_hnsw_efSearch: 64
+    outbox_workers_SurrealDB-Core: 2
+    outbox_workers_fts: 2
+    outbox_workers_audit: 1
+    outbox_max_attempts: 5
+    outbox_backoff_initial_ms: 100
+    outbox_backoff_max_ms: 8000
+    eventlog_hot_days: 7
+    eventlog_warm_days: 30
+    eventlog_cold_archive: parquet
+    event_payload_max_kb: 64
+    snapshot_retention_hourly_24h: 7
+    snapshot_retention_weekly: 4
+    mutation_bus_channel_cap: 4096
+    max_rows_per_tx: 50
+    max_batch_size: 64
+    ticker_interval_ms: 10
+    re_eval_when:
+      - SurrealDB-Core_hnsw_*: ["recall_at_10<0.90"]
+      - wal_checkpoint_pages: ["wal_file_gb>1.0", "read_p95_drift"]
+      - outbox_max_attempts: ["dead_letter_rate>0.001"]
+      - eventlog_hot_days: ["business_lookback_change"]
+      - mutation_bus_channel_cap: ["channel_full_rate>0.01"]
+
+  m3_observability:
+    memory_governor_soft_pct: 0.60
+    memory_governor_medium_pct: 0.75
+    memory_governor_hard_pct: 0.85
+    memory_probe_period_seconds: 1
+    default_sampling_rate: 1.0
+    metric_bucket_seconds: 1
+    log_rotation_size_mb: 64
+    log_rotation_keep: 7
+    ring_buffer_per_pool_mb: 50
+    trace_retention_hot_days: 7
+    trace_retention_warm_days: 30
+    re_eval_when:
+      - memory_governor_*: ["false_positive_rate_per_min>0.01"]
+      - default_sampling_rate: ["events_per_day>1_000_000"]
+
+  m4_kernel:
+    max_retry_perceive: 2
+    max_retry_plan: 2
+    max_retry_reflect: 1
+    max_replan_attempts: 3
+    intent_channel_buffer: 16
+    context_window_compress_pct: 0.80
+    step_default_timeout_seconds: 60
+    plan_dag_max_nodes: 50
+    plan_dag_max_depth: 10
+    max_concurrent_nodes: 4
+    suspend_idle_threshold_minutes: 5
+    snapshot_interval_steps: 1000
+    snapshot_retention_count: 5
+    world_model_skip_threshold: 0.8
+    l3_watchdog_max_per_hour: 10
+    re_eval_when:
+      - max_retry_*: ["schema_fail_rate>0.05"]
+      - context_window_compress_pct: ["compress_recall_drop"]
+      - step_default_timeout_seconds: ["tool_long_tail>60s"]
+      - plan_dag_max_nodes: ["complex_pipeline_appears"]
+
+  m5_memory:
+    rrf_k: 60
+    retriever_top_k_vector: 20
+    retriever_top_k_fts: 20
+    retriever_top_k_graph: 10
+    retriever_top_k_recent: 10
+    chunk_text_size_tokens: 512
+    chunk_text_overlap_tokens: 64
+    mem_l0_cache_mb: 80
+    mem_l0_cache_ttl_minutes: 30
+    graph_max_depth: 3
+    consolidation_period_hours: 24
+    decay_half_life_days: 14
+    backfill_concurrency: 2
+    re_eval_when:
+      - chunk_*: ["recall_at_10<0.85"]
+      - mem_l0_cache_*: ["hit_ratio<0.60"]
+      - graph_max_depth: ["super_graph_tasks_appear"]
+
+  m6_skill:
+    selector_weights:
+      w_success_rate: 0.40
+      w_recency: 0.20
+      w_cost_eff: 0.30
+      w_failure_rate: 0.10
+    selector_top_k: 5
+    distillation_frequency_n: 8
+    distillation_similarity_eps: 0.18
+    skill_cache_ttl_hours: 24
+    skill_cb_failure_threshold: 5
+    canary_steps: [0.01, 0.10, 0.50, 1.00]
+    canary_dwell_per_step_hours_ht0: 1
+    wazero_pool_max: 8
+    skill_exec_timeout_low_seconds: 30
+    skill_exec_timeout_medium_high_seconds: 120
+    cosign_verify_cache_ttl_hours: 1
+    re_eval_when:
+      - distillation_*: ["false_trigger_rate", "miss_trigger_rate"]
+      - canary_*: ["regression_window_demand"]
+
+  m7_tool:
+    sbx_l2_low_fuel_giga: 1
+    sbx_l2_low_epoch_seconds: 5
+    sbx_l2_low_mem_mb: 64
+    sbx_l2_medium_fuel_giga: 5
+    sbx_l2_medium_epoch_seconds: 30
+    sbx_l2_medium_mem_mb: 256
+    sbx_l3_high_vcpu: 1
+    sbx_l3_high_seconds: 60
+    sbx_l3_high_mem_mb: 512
+    tool_default_timeout_low_seconds: 30
+    tool_default_timeout_medium_seconds: 120
+    tool_default_timeout_high_seconds: 300
+    mcp_host_pool_servers: 8
+    mcp_host_conn_per_server: 4
+    mcp_heartbeat_seconds: 30
+    rate_limit_builtin_qps: 100
+    rate_limit_mcp_qps: 10
+    rate_limit_shell_qps: 2
+    dryrun_protect_window_seconds: 60
+    output_taint_defaults:
+      builtin_fs_read: low
+      mcp_any: high
+      net_any: high
+      gui_any: high
+      shell_any: high
+      skill_any: high
+    re_eval_when:
+      - sbx_*: ["long_tail_hit_rate"]
+      - rate_limit_*: ["abuse_signal"]
+
+  m8_multiagent:
+    max_agents_desktop_ht0: 2
+    max_agents_server_ht0: 3
+    max_blackboard_pending: 256
+    max_coordination_token_per_task: 200000
+    max_task_wall_clock_minutes: 30
+    agent_restart_max_in_window: 3
+    agent_restart_window_seconds: 60
+    claim_deadline_seconds: 60
+    lease_ttl_seconds: 60
+    heartbeat_interval_seconds: 15
+    reaper_scan_interval_seconds: 1
+    subscribe_channel_buffer: 32
+    parent_ref_max_depth: 5
+    delegation_chain_max_depth: 3
+    supervisor_backoff_initial_ms: 100
+    supervisor_backoff_max_seconds: 30
+    re_eval_when:
+      - max_agents_desktop_ht0: ["concurrency_bottleneck"]
+      - max_agents_server_ht0: ["concurrency_bottleneck"]
+      - max_coordination_token_per_task: ["token_bankruptcy_event"]
+
+  m9_self_improve:
+    worker_cpu_pct_user_active: 0.05
+    worker_cpu_pct_idle: 0.50
+    worker_heartbeat_seconds: 30
+    worker_restart_backoff_initial_ms: 200
+    worker_restart_backoff_max_seconds: 60
+    reflexion_trigger_min_failures: 1
+    distillation_frequency_n: 8
+    distillation_similarity_eps: 0.18
+    curriculum_edge_low_bound: 0.40
+    curriculum_edge_high_bound: 0.70
+    personalization_candidate_ttl_days: 7
+    sensitive_filter_embedding_threshold: 0.85
+    canary_steps: [0.01, 0.10, 0.50, 1.00]
+    canary_dwell_per_step_hours_ht0: 1
+    lora_min_training_samples: 200
+    lora_qlora_bits: 4
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    fallacy_memf_min_cluster_size: 3
+    candidate_dead_letter_rereview_days: 30
+    re_eval_when:
+      - distillation_*: ["false_trigger_rate", "miss_trigger_rate"]
+      - lora_*: ["perplexity_regress"]
+      - canary_*: ["regression_signal"]
+
+  m10_kb:
+    chunk_md_max_tokens: 1024
+    chunk_html_max_tokens: 512
+    chunk_pdf_max_tokens: 768
+    chunk_code_max_tokens: 2048
+    chunk_csv_rows_per_block: 32
+    chunk_jupyter_max_tokens: 1024
+    pipeline_concurrency: 4
+    rebem_priority_weights:
+      w_access: 0.50
+      w_age: 0.30
+      w_recall_conf: 0.20
+    graphrag_entity_window_chunks: 2
+    watch_heartbeat_seconds: 30
+    connector_max_doc_size_mb: 10
+    document_version_keep: 3
+    recall_at_k_eval: 10
+    graphrag_llm_call_daily_budget_ht0: 200
+    re_eval_when:
+      - chunk_*: ["recall_at_10<0.85"]
+      - rebem_priority_weights: ["embed_backfill_roi"]
+
+  m11_policy:
+    capability_default_ttl_fs_seconds: 300
+    capability_default_ttl_net_seconds: 60
+    capability_default_ttl_shell_seconds: 30
+    capability_default_ttl_mcp_seconds: 120
+    capability_default_ttl_process_seconds: 30
+    capability_max_per_task: 16
+    taint_high_ratio_warn: 0.60
+    audit_log_retention_years: 2
+    kill_switch_global_timeout_seconds: 120
+    cedar_hot_reload_min_interval_seconds: 60
+    capability_revoke_lru: 1000
+    ed25519_key_rotation_days: 90
+    safe_dialer_dns_cache_ttl_seconds: 30
+    safe_dialer_toctou_delay_ms: 50
+    safe_dialer_max_ips_threshold: 20
+    escalation_timeout_minutes: 30
+    re_eval_when:
+      - capability_default_ttl_*: ["long_task_premature_expire"]
+      - taint_high_ratio_warn: ["false_alarm_rate"]
+      - kill_switch_global_timeout_seconds: ["module_drain_p95>120"]
+
+  m12_eval:
+    golden_set_min_size_day1: 30
+    golden_set_min_size_day30: 100
+    golden_set_min_size_day90: 300
+    regression_run_max_minutes_ht0: 10
+    regression_run_max_minutes_ht1plus: 30
+    case_timeout_core_seconds: 60
+    case_timeout_safety_private_seconds: 120
+    stratified_sample_pct:
+      high_freq: 0.50
+      edge: 0.30
+      safety: 0.20
+    regression_threshold_fail_ratio: 0.05
+    multi_judge_count: 3
+    judge_consensus_min: 2
+    judge_single_confidence: 0.90
+    embedding_similarity_pass: 0.85
+    snapshot_retention_per_suite_24h: 7
+    replay_sample_per_100_sessions: 5
+    canary_traffic_pct_steps: [0.01, 0.10, 0.50, 1.00]
+    mirror_shadow_traffic_steps: [0.05, 0.10, 0.25]
+    re_eval_when:
+      - golden_set_min_size_*: ["eval_signal_instability"]
+      - multi_judge_count: ["voting_cost_vs_inconclusive_rate"]
+      - regression_threshold_fail_ratio: ["false_reject_rate"]
+
+  m13_scheduler:
+    http_default_port: 17600
+    intent_handler_pool: 5
+    ingest_pool: 5
+    background_pool: 10
+    eval_pool: 2
+    cron_pool: 2
+    task_default_timeout_minutes: 30
+    task_max_attempts: 3
+    task_backoff_initial_seconds: 1
+    task_backoff_max_seconds: 64
+    hitl_default_deadline_minutes_urgent: 5
+    hitl_default_deadline_minutes_normal: 60
+    hitl_default_deadline_minutes_long: 1440
+    desktop_notify_max_per_channel_per_min: 5
+    http_rate_limit_global_qps: 100
+    http_rate_limit_per_user_qps: 20
+    mcp_rate_limit_per_server_qps: 30
+    sse_heartbeat_seconds: 15
+    ws_idle_timeout_seconds: 60
+    cron_tick_seconds: 1
+    taskqueue_heartbeat_seconds: 30
+    taskqueue_reclaim_ttl_seconds: 90
+    graceful_shutdown_timeout_seconds: 30
+    re_eval_when:
+      - "*_pool": ["pool_saturation_freq"]
+      - hitl_default_deadline_*: ["expire_rate"]
+      - http_rate_limit_*: ["abuse_signal"]
+
+# =============================================================================
+# END OF state.yaml
+# =============================================================================
+# Total: 5 state machines (PAR + Staging + KillSwitch + TaskStatus + Outbox) + 8 global invariants +
+# taint propagation rules + signal maturity gates + parameterized thresholds.
+# Test enforcement: M12 replay_test_suite + db_check_constraints + CI grep_audit.
+# =============================================================================

@@ -1,0 +1,170 @@
+package memory
+
+import (
+	"context"
+	"sort"
+	"strings"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+)
+
+// ============================================================================
+// HybridRetriever — BM25 + Dense Vector + Graph 三路融合检索（与 M10 共享）
+// ============================================================================
+
+// GraphTraverser consumer-side 接口：Tier1+ 图遍历路径（由 SurrealDBCoreStore 实现）。
+// consumer-side 定义，防止包循环依赖。
+type GraphTraverser interface {
+	GraphTraverse(startID, edgeType string, maxDepth int) ([]string, error)
+	GraphRelate(fromID, edgeType, toID string) error
+}
+
+type HybridRetrieverImpl struct {
+	store protocol.Store
+	graph GraphTraverser // Tier1+：图遍历路径，nil 时跳过
+}
+
+func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{store: store}
+}
+
+// NewHybridRetrieverWithGraph 创建含图路径的 HybridRetriever（Tier1+）。
+func NewHybridRetrieverWithGraph(store protocol.Store, graph GraphTraverser) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{store: store, graph: graph}
+}
+
+func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) {
+	// Stage 0 — 确定扫描前缀（隐私门控由调用方 M11 注入，此处按 scope 路由）
+	prefix := []byte("chunk:")
+	if scope.Type == "memory" {
+		prefix = []byte("episodic:")
+	}
+
+	// Stage 1 — 并行宽召回（BM25 + Simhash + Graph 三路）
+	var bm25Results []protocol.ScoredFragment
+	var simhashResults []protocol.ScoredFragment
+	var graphResults []protocol.ScoredFragment
+
+	iter, err := hr.store.Scan(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if iter != nil {
+		defer iter.Close()
+		queryFP := SimhashOf(query)
+		for iter.Next() {
+			content := string(iter.Value())
+			src := string(iter.Key())
+
+			// (a) BM25 路径: 关键词 TF 近似（词命中数/总词数）
+			if bm25Score := bm25Score(query, content); bm25Score > 0 {
+				bm25Results = append(bm25Results, protocol.ScoredFragment{
+					Content: content,
+					Score:   bm25Score,
+					Source:  src,
+				})
+			}
+
+			// (b) Simhash 路径: 汉明距离 <= 8 视为相关
+			contentFP := SimhashOf(content)
+			if dist := queryFP.Hamming(contentFP); dist <= 16 { // 放宽到 16 以覆盖更多候选
+				simScore := 1.0 - float64(dist)/64.0
+				simhashResults = append(simhashResults, protocol.ScoredFragment{
+					Content: content,
+					Score:   simScore,
+					Source:  src,
+				})
+			}
+		}
+	}
+
+	// Stage 1c — Graph 路径（Tier1+）：从 BM25 Top 结果的 source 出发做图遍历
+	if hr.graph != nil && len(bm25Results) > 0 {
+		top := bm25Results[0].Source // 以 BM25 最高分作为图遍历起点
+		neighbors, err := hr.graph.GraphTraverse(top, "", 2)
+		if err == nil {
+			for rank, nb := range neighbors {
+				// 图邻居按跳数衰减赋分：第1跳 0.7，第2跳 0.5
+				score := 0.7 / float64(rank/2+1)
+				graphResults = append(graphResults, protocol.ScoredFragment{
+					Content: nb, // 图路径用节点 ID 作为 Content 占位（调用方可二次 KV 取原文）
+					Score:   score,
+					Source:  nb,
+				})
+			}
+		}
+	}
+
+	// Stage 2 — RRF 融合 (k=60)
+	// score(d) = Σ weight_i / (k + rank_i + 1)
+	const rrfK = 60.0
+	scoreMap := make(map[string]float64)  // key → RRF 累计分
+	contentMap := make(map[string]string) // key → content
+
+	addRRF := func(results []protocol.ScoredFragment, weight float64) {
+		// 按 Score 降序排列后赋 rank
+		sorted := make([]protocol.ScoredFragment, len(results))
+		copy(sorted, results)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Score > sorted[j].Score })
+		for rank, frag := range sorted {
+			scoreMap[frag.Source] += weight / (rrfK + float64(rank) + 1)
+			contentMap[frag.Source] = frag.Content
+		}
+	}
+	addRRF(bm25Results, 1.0)
+	addRRF(simhashResults, 0.8) // Simhash 路径权重略低于 BM25
+	addRRF(graphResults, 0.6)   // Graph 路径（Tier1+，仅有图时生效）
+
+	// Stage 3 — 汇总 + BM25 精排（按 RRF 分降序即等效精排）
+	var merged []protocol.ScoredFragment //nolint:prealloc
+	for src, score := range scoreMap {
+		merged = append(merged, protocol.ScoredFragment{
+			Content: contentMap[src],
+			Score:   score,
+			Source:  src,
+		})
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
+
+	// Stage 4 — TopK 截断
+	topK := config.FinalTopK
+	if topK <= 0 {
+		topK = 20
+	}
+	if len(merged) > topK {
+		merged = merged[:topK]
+	}
+	return merged, nil
+}
+
+// bm25Score 计算 query 与 content 的 BM25 近似分（Tier 0 纯 Go，无 FTS5 扩展）。
+// 算法: 命中词数/总词数 × IDF 近似（log(1+1/freq)）。
+func bm25Score(query, content string) float64 {
+	if query == "" {
+		return 1.0 // 空 query 全召回
+	}
+	queryTokens := tokenize(query)
+	contentTokens := tokenize(content)
+	if len(contentTokens) == 0 {
+		return 0
+	}
+	// 构建内容词频 map
+	freq := make(map[string]int, len(contentTokens))
+	for _, t := range contentTokens {
+		freq[t]++
+	}
+	var score float64
+	for _, qt := range queryTokens {
+		if f, ok := freq[qt]; ok {
+			// TF × IDF 近似
+			tf := float64(f) / float64(len(contentTokens))
+			idf := 1.0 + 1.0/float64(f+1)
+			score += tf * idf
+		}
+		// 子串命中（BM25 降级）
+		if score == 0 && strings.Contains(strings.ToLower(content), strings.ToLower(qt)) {
+			score += 0.1
+		}
+	}
+	return score
+}

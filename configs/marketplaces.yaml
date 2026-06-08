@@ -1,0 +1,55 @@
+- id: polarisagi/polaris-plugins-official
+  name: Polaris Official Plugins
+  type: plugin
+  publisher: polarisagi
+  repo_url: https://github.com/polarisagi/polaris-plugins-official
+  description: Polaris 官方插件与扩展市场。包含核心的生存级外挂扩展以及官方维护的精选 MCP 与 Skills。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 0
+  created_at: "1970-01-01T00:00:00Z"
+- id: anthropic/claude-plugins-official
+  name: Anthropic Official Plugin Directory
+  type: plugin
+  publisher: anthropic
+  repo_url: https://github.com/anthropics/claude-plugins-official
+  description: Anthropic 官方 Claude Code Plugin 目录（55+ 精选插件）。目录结构：/plugins（Anthropic 自研）+ /external_plugins（审核第三方：Supabase/Firebase/Discord/Telegram 等）。每个 Plugin 捆绑 Skills + MCP Server + Hooks。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 10
+  created_at: "1970-01-01T00:00:00Z"
+- id: anthropic/skills
+  name: Anthropic Claude Skills
+  type: skill
+  publisher: anthropic
+  repo_url: https://github.com/anthropics/skills
+  description: Anthropic 官方 17 个 Claude Skills（开源，Apache 2.0）。文档类：pdf/docx/xlsx/pptx；设计类：brand-guidelines/canvas-design/theme-factory；工程类：claude-api-helper/mcp-builder/webapp-testing；创意类：algorithmic-art/internal-comms/slack-gifs。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 11
+  created_at: "1970-01-01T00:00:00Z"
+- id: openai/skills
+  name: OpenAI Skills Catalog
+  type: skill
+  publisher: openai
+  repo_url: https://github.com/openai/skills
+  description: OpenAI 官方 Skills 目录（agentskills.io 开放标准）。包含 11 个 curated 技能：cloudflare-deploy、develop-web-game、doc、gh-fix-ci、imagegen、jupyter-notebook、linear、netlify-deploy、notion-knowledge-capture、pdf、spreadsheet。跨平台兼容 Polaris。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 20
+  created_at: "1970-01-01T00:00:00Z"
+- id: google/skills
+  name: Google Agent Skills
+  type: skill
+  publisher: google
+  repo_url: https://github.com/google/skills
+  description: Google 官方 Cloud + Gemini Agent Skills 库（Google Cloud Next 2026 发布，Apache 2.0）。Cloud 技能：BigQuery、Cloud Run、Cloud SQL、AlloyDB、GKE、Firebase、Gemini API；架构技能：Security/Reliability/Cost-Optimization；Recipe：onboarding/authentication/network-observability。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 30
+  created_at: "1970-01-01T00:00:00Z"

@@ -1,0 +1,86 @@
+<div x-show="$store.nav.page === 'eval'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100">
+  <div class="max-w-4xl mx-auto w-full flex flex-col">
+    <div class="mb-8 border-b border-base-300 pb-4 flex justify-between items-end">
+      <div>
+        <h2 class="text-2xl font-bold text-base-content mb-1" x-text="$store.i18n.t('eval_title')"></h2>
+        <p class="text-sm text-base-content/60" x-text="$store.i18n.t('eval_subtitle')"></p>
+      </div>
+      <div class="flex gap-3 items-center">
+        <select id="store-eval-suite" name="store-eval-suite" class="select select-bordered select-sm bg-base-100 shadow-sm" x-model="$store.eval.suite" aria-label="Suite">
+          <option value="training" x-text="$store.i18n.t('eval_suite_training')"></option>
+          <option value="validation" x-text="$store.i18n.t('eval_suite_validation')"></option>
+        </select>
+        <button class="btn btn-primary btn-sm shadow-sm" @click="$store.eval.run()" :disabled="$store.eval.running">
+          <span x-show="$store.eval.running" class="loading loading-spinner loading-xs"></span>
+          <span x-show="!$store.eval.running" x-text="$store.i18n.t('eval_run')"></span>
+          <span x-show="$store.eval.running" x-text="$store.i18n.t('eval_running')"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    <div x-show="$store.eval.running && !$store.eval.report" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+      <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+      <p x-text="$store.i18n.t('eval_running')"></p>
+    </div>
+
+    <!-- Current Report -->
+    <template x-if="$store.eval.report">
+      <div class="card bg-base-200 border border-base-300 shadow-sm mb-6">
+        <div class="card-body p-6">
+          <div class="flex items-center justify-between mb-6">
+            <span class="font-bold text-lg font-mono" x-text="'Suite: ' + $store.eval.report.suite"></span>
+            <span class="badge badge-lg font-bold" :class="$store.eval.report.status === 'passed' ? 'badge-success' : $store.eval.report.status === 'failed' ? 'badge-error' : 'badge-warning'" x-text="$store.eval.statusLabel($store.eval.report.status)"></span>
+          </div>
+          
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div class="bg-base-100 rounded-box p-4 flex flex-col items-center justify-center border border-base-300 shadow-inner">
+              <div class="text-3xl font-bold font-mono text-base-content" x-text="$store.eval.report.total_cases"></div>
+              <div class="text-xs text-base-content/70 mt-1 uppercase tracking-wider font-bold" x-text="$store.i18n.t('eval_total')"></div>
+            </div>
+            <div class="bg-success/10 rounded-box p-4 flex flex-col items-center justify-center border border-success/20 shadow-inner">
+              <div class="text-3xl font-bold font-mono text-success" x-text="$store.eval.report.pass_count"></div>
+              <div class="text-xs text-success/70 mt-1 uppercase tracking-wider font-bold" x-text="$store.i18n.t('eval_pass')"></div>
+            </div>
+            <div class="bg-error/10 rounded-box p-4 flex flex-col items-center justify-center border border-error/20 shadow-inner">
+              <div class="text-3xl font-bold font-mono text-error" x-text="$store.eval.report.fail_count"></div>
+              <div class="text-xs text-error/70 mt-1 uppercase tracking-wider font-bold" x-text="$store.i18n.t('eval_fail')"></div>
+            </div>
+            <div class="bg-warning/10 rounded-box p-4 flex flex-col items-center justify-center border border-warning/20 shadow-inner">
+              <div class="text-3xl font-bold font-mono text-warning" x-text="$store.eval.report.safety_fail"></div>
+              <div class="text-xs text-warning/70 mt-1 uppercase tracking-wider font-bold" x-text="$store.i18n.t('eval_safety_fail')"></div>
+            </div>
+            <div class="bg-base-100 rounded-box p-4 flex flex-col items-center justify-center border border-base-300 shadow-inner">
+              <div class="text-3xl font-bold font-mono" :class="$store.eval.passRate($store.eval.report) >= 80 ? 'text-success' : 'text-error'" x-text="$store.eval.passRate($store.eval.report) + '%'"></div>
+              <div class="text-xs text-base-content/70 mt-1 uppercase tracking-wider font-bold" x-text="$store.i18n.t('eval_pass_rate')"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Empty State -->
+    <div x-show="!$store.eval.running && !$store.eval.report && $store.eval.history.length === 0" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+      <div class="text-5xl mb-4 opacity-50 grayscale">🧪</div>
+      <p class="text-lg font-bold text-base-content/70" x-text="$store.i18n.t('eval_no_results')"></p>
+    </div>
+
+    <!-- History -->
+    <template x-if="$store.eval.history.length > 0">
+      <div class="mt-8">
+        <h3 class="text-sm font-bold text-base-content/60 uppercase tracking-wider mb-4" x-text="$store.i18n.t('eval_history')"></h3>
+        <div class="space-y-2">
+          <template x-for="h in $store.eval.history" :key="h._runAt">
+            <div class="flex items-center gap-4 p-3 px-4 bg-base-200 rounded-box border border-base-300 shadow-sm transition-colors hover:border-primary">
+              <span class="font-bold text-sm w-24 shrink-0 font-mono" x-text="h.suite"></span>
+              <span class="badge badge-sm font-bold shrink-0" :class="h.status === 'passed' ? 'badge-success' : h.status === 'failed' ? 'badge-error' : 'badge-warning'" x-text="$store.eval.statusLabel(h.status)"></span>
+              <span class="text-xs text-base-content/60 font-mono" x-text="h.pass_count + '/' + h.total_cases + ' passed'"></span>
+              <span class="text-xs text-base-content/60 ml-auto font-mono" x-text="new Date(h._runAt).toLocaleString()"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+
+  </div>
+</div>

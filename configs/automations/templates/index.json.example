@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "source_id": "example/community",
+  "name": "示例社区模板集",
+  "description": "展示远程 index.json 格式规范",
+  "updated_at": "2026-05-22T00:00:00Z",
+  "templates": [
+    {
+      "icon": "🧪",
+      "name": "示例：每日测试覆盖率报告",
+      "description": "每天自动运行测试并汇总覆盖率变化趋势",
+      "prompt": "运行当前仓库的测试套件，汇总覆盖率与上次相比的变化，重点标注下降超过 2% 的模块。",
+      "trigger_type": "cron",
+      "cron_schedule": "0 7 * * 1-5",
+      "reasoning_effort": "medium",
+      "tags": ["testing", "coverage", "daily"],
+      "source": "example/community",
+      "author": "community"
+    }
+  ]
+}

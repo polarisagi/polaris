@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "list_dir",
+  "description": "List the entries of a directory (name, type, size). Restricted to allowed directories.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path of the directory to list. Must be within the allowed directories."
+    }
+  },
+  "required": ["path"]
+}

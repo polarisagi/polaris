@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "text_extract",
+  "description": "Extract structured entities, key-value pairs, or tables from unstructured text.",
+  "type": "object",
+  "properties": {
+    "text":          { "type": "string", "description": "The unstructured input text to extract from." },
+    "entities":      { "type": "array",  "items": { "type": "string" }, "description": "List of entity types to extract (e.g. ['person', 'organization', 'date'])." },
+    "output_schema": { "type": "object", "description": "JSON Schema defining the shape of the structured output to extract." }
+  },
+  "required": ["text"]
+}

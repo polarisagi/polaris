@@ -1,0 +1,13 @@
+# Example threshold overrides for m2_storage.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'sqlite.busy_timeout_ms' = 5000
+'surreal.buffer_pool_mb' = 64
+'eventlog.hot_days' = 7
+'eventlog.warm_days' = 30
+'transaction.max_batch_size' = 64
+'transaction.max_rows_per_tx' = 50
+'outbox.max_attempts' = 5
+'mutation_bus.channel_cap' = 4096
+'transaction.ticker_interval_ms' = 10
+'wal.checkpoint_pages' = 1000

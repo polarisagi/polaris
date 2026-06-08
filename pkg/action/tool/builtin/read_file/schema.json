@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "read_file",
+  "description": "Read the contents of a file at the specified path. Restricted to allowed directories.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path of the file to read. Must be within the allowed directories."
+    }
+  },
+  "required": ["path"]
+}

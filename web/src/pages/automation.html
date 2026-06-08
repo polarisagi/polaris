@@ -1,0 +1,162 @@
+<div x-show="$store.nav.page === 'automation'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100" x-data="{ tab: 'routine', _cronLoaded: false, _approvalsLoaded: false }">
+  <div class="max-w-4xl mx-auto w-full flex flex-col">
+    <div class="mb-8 border-b border-base-300 pb-4">
+      <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_automation')"></h2>
+      
+      <!-- Tabs -->
+      <div role="tablist" class="tabs tabs-boxed">
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'routine' }" @click="tab = 'routine'; if (!_cronLoaded) { $store.cron.load(); _cronLoaded = true }" x-text="$store.i18n.t('automation_tab_routine')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'triggers' }" @click="tab = 'triggers'" x-text="$store.i18n.t('automation_tab_triggers')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'approvals' }" @click="tab = 'approvals'; if (!_approvalsLoaded) { _approvalsLoaded = true }">
+          <span x-text="$store.i18n.t('automation_tab_approvals')"></span>
+          <div class="badge badge-sm badge-error ml-2" x-show="$store.approvals.list.length > 0" x-text="$store.approvals.list.length"></div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Routine Tab -->
+    <div x-show="tab === 'routine'" class="space-y-6">
+      <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('automation_tasks_title')"></h3>
+          <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('automation_tasks_desc')"></p>
+        </div>
+        <button class="btn btn-primary shadow-sm" @click="$store.cron.openCreate()" x-text="'+ ' + $store.i18n.t('automation_btn_new')"></button>
+      </div>
+
+      <div x-show="$store.cron.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <!-- Empty State -->
+      <div class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300" x-show="!$store.cron.loading && $store.cron.list.length === 0">
+        <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+        <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('automation_empty_title')"></h3>
+        <p class="text-sm mb-6" x-text="$store.i18n.t('automation_empty_desc')"></p>
+        <div class="flex gap-3 flex-wrap justify-center">
+          <template x-for="t in $store.cron.templates.slice(0,3)" :key="t.name">
+            <button class="btn btn-outline btn-sm bg-base-100" @click="$store.cron.openCreate(); $nextTick(()=>$store.cron.applyTemplate(t))">
+              <span x-text="t.icon"></span><span x-text="t.name"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Job Cards Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4" x-show="!$store.cron.loading && $store.cron.list.length > 0">
+        <template x-for="job in $store.cron.list" :key="job.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm transition-all" :class="job.enabled ? 'hover:border-primary' : 'opacity-60'">
+            <div class="card-body p-5">
+              <div class="flex justify-between items-start mb-2">
+                <div class="text-2xl">🤖</div>
+                <input id="form-field-2" name="form-field-2" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="job.enabled" @change="$store.cron.toggle(job)" @click.stop>
+              </div>
+              <h3 class="card-title text-base" x-text="job.name || job.id.slice(0,12)"></h3>
+              <p class="text-xs text-base-content/60 line-clamp-2 min-h-[2rem]" x-text="job.prompt"></p>
+              
+              <div class="flex flex-wrap gap-2 mt-4">
+                <div class="badge badge-ghost badge-sm font-mono" x-text="$store.cron.cronLabel(job.cron_schedule) || job.trigger_type"></div>
+                <div class="badge badge-ghost badge-sm" x-text="$store.i18n.t('automation_label_reasoning')+($store.cron.reasoningLevels.find(r=>r.value===job.reasoning_effort)||{label:'中'}).label"></div>
+              </div>
+
+              <div class="mt-4 pt-4 border-t border-base-300 text-xs text-base-content/70 flex items-center gap-2">
+                <template x-if="job.last_run_at">
+                  <div class="flex items-center gap-1.5 w-full">
+                    <div class="w-2 h-2 rounded-full" :class="job.last_run_status === 'ok' ? 'bg-success' : job.last_run_status === 'error' ? 'bg-error' : 'bg-warning'"></div>
+                    <span x-text="new Date(job.last_run_at).toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})"></span>
+                    <span class="ml-auto" x-show="job.run_count > 0" x-text="`${$store.i18n.t('automation_run_count').replace('{0}', job.run_count)}`"></span>
+                  </div>
+                </template>
+                <span x-show="!job.last_run_at" x-text="$store.i18n.t('automation_never_run')"></span>
+              </div>
+
+              <div class="card-actions justify-between mt-4">
+                <button class="btn btn-xs btn-ghost" @click="$store.cron.openRuns(job)" x-text="$store.i18n.t('automation_btn_history')"></button>
+                <div class="flex gap-2">
+                  <button class="btn btn-xs btn-primary btn-outline" @click="$store.cron.trigger(job)" :disabled="!job.enabled" x-text="$store.i18n.t('automation_btn_run')"></button>
+                  <button class="btn btn-xs btn-ghost" @click="$store.cron.openEdit(job)" x-text="$store.i18n.t('automation_btn_edit')"></button>
+                  <button class="btn btn-xs btn-ghost text-error hover:bg-error/10" @click="$store.cron.del(job.id)" x-text="$store.i18n.t('automation_btn_delete')"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Triggers Tab -->
+    <div x-show="tab === 'triggers'" class="space-y-6">
+      <div class="alert shadow-sm bg-base-200 border border-base-300">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <div>
+          <h3 class="font-bold" x-text="$store.i18n.t('automation_webhook_title')"></h3>
+          <div class="text-xs text-base-content/70 mt-1" x-text="$store.i18n.t('automation_webhook_desc')"></div>
+        </div>
+        <button class="btn btn-sm btn-ghost" @click="$store.nav.goto('settings')" x-text="$store.i18n.t('automation_webhook_goto')"></button>
+      </div>
+
+      <div class="space-y-3 mt-6">
+        <h3 class="text-sm font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('automation_webhook_list_title')"></h3>
+        <template x-for="job in $store.cron.list.filter(j=>j.trigger_type==='webhook'||j.trigger_type==='both')" :key="job.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm">
+            <div class="card-body p-4 flex-row items-center justify-between">
+              <div>
+                <h4 class="font-bold text-sm" x-text="job.name || job.id.slice(0,12)"></h4>
+                <p class="text-xs text-base-content/70 mt-1 font-mono" x-text="$store.i18n.t('automation_webhook_channel_id') + (job.channel_id || $store.i18n.t('automation_webhook_unbound'))"></p>
+              </div>
+              <button class="btn btn-sm btn-ghost" @click="$store.cron.openEdit(job)" x-text="$store.i18n.t('automation_btn_edit')"></button>
+            </div>
+          </div>
+        </template>
+        <div class="text-center py-10 text-sm text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300" x-show="!$store.cron.list.some(j=>j.trigger_type==='webhook'||j.trigger_type==='both')">
+          <span x-text="$store.i18n.t('automation_webhook_empty')"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Approvals Tab -->
+    <div x-show="tab === 'approvals'" class="space-y-6">
+      <div class="alert alert-error shadow-sm mb-6" x-show="$store.approvals.pollFailures >= 3" x-cloak>
+        <span x-text="$store.i18n.t('approvals_unreachable')"></span>
+      </div>
+
+      <div class="flex flex-col items-center justify-center py-20 text-base-content/60" x-show="$store.approvals.list.length === 0 && $store.approvals.pollFailures < 3">
+        <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"/></svg>
+        <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('approvals_empty_title', '暂无待审批操作')"></h3>
+        <p class="text-sm" x-text="$store.i18n.t('approvals_empty_hint', '所有操作均已处理')"></p>
+      </div>
+
+      <div class="space-y-4">
+        <template x-for="req in $store.approvals.list" :key="req.id">
+          <div class="card bg-base-200 border-l-4 shadow-sm" :class="req.risk_level === 'critical' ? 'border-error bg-error/10' : req.risk_level === 'high' ? 'border-error' : req.risk_level === 'medium' ? 'border-warning' : 'border-success'"
+               x-data="{ remaining: 0, _ti: null, comment: '', init() { const tick = () => { this.remaining = req._remainingMs() }; tick(); this._ti = setInterval(tick, 1000); this.$cleanup = () => clearInterval(this._ti) } }">
+            <div class="card-body p-5">
+              <div class="flex justify-between items-start mb-2">
+                <div>
+                  <h3 class="font-bold text-base" x-text="req.action"></h3>
+                  <p class="text-xs text-base-content/70 font-mono mt-1" x-text="`Agent: ${req.agent_id || req.agentID}  ·  ${req.id?.slice(0,12)}`"></p>
+                </div>
+                <div class="badge font-bold uppercase text-[10px]" :class="req.risk_level === 'critical' ? 'badge-error animate-pulse' : req.risk_level === 'high' ? 'badge-error badge-outline' : req.risk_level === 'medium' ? 'badge-warning badge-outline' : 'badge-success badge-outline'" x-text="(req.risk_level || 'medium')"></div>
+              </div>
+              
+              <div class="bg-base-100 rounded-box p-3 my-3 text-sm text-base-content/70 whitespace-pre-wrap border border-base-300" x-text="req.detail"></div>
+              
+              <input id="comment" name="comment" type="text" class="input input-sm input-bordered w-full text-xs" :placeholder="$store.i18n.t('tasks_note_optional')" x-model="comment" />
+              
+              <div class="card-actions justify-between items-center mt-4 pt-4 border-t border-base-300">
+                <div class="font-mono text-sm font-bold" :class="remaining > 60000 ? 'text-success' : remaining > 0 ? 'text-warning' : 'text-error'" x-text="remaining > 0 ? `⏱ ${Math.floor(remaining/60000)}:${String(Math.floor((remaining%60000)/1000)).padStart(2,'0')}` : '⌛ ' + $store.i18n.t('automation_approvals_timeout')"></div>
+                <div class="flex gap-2">
+                  <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="$store.approvals.resolve(req.id, 'deny', comment)" x-text="$store.i18n.t('approvals_deny')"></button>
+                  <button class="btn btn-sm btn-primary" :disabled="remaining <= 0" @click="$store.approvals.resolve(req.id, 'approve', comment)" x-text="$store.i18n.t('approvals_approve')"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- TODO: Port modals and sidebars from original if needed -->
+</div>

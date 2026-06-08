@@ -1,0 +1,25 @@
+description: "Polaris - M1 Inference Routing Benchmark"
+prompts:
+  - "Answer the following query concisely: {{query}}"
+
+providers:
+  - id: openai:chat:gpt-4o-mini
+    label: "OpenAI GPT-4o-mini"
+  - id: openai:chat:gpt-4o
+    label: "OpenAI GPT-4o"
+  - id: anthropic:messages:claude-3-5-haiku-20241022
+    label: "Anthropic Claude 3.5 Haiku"
+  - id: anthropic:messages:claude-3-7-sonnet-20250219
+    label: "Anthropic Claude 3.7 Sonnet"
+  - id: openai:chat:deepseek-chat
+    label: "DeepSeek V4 Flash"
+    config:
+      apiBaseUrl: "https://api.deepseek.com"
+      apiKeyEnvar: "DEEPSEEK_API_KEY"
+  - id: openai:chat:deepseek-reasoner
+    label: "DeepSeek V4 Pro"
+    config:
+      apiBaseUrl: "https://api.deepseek.com"
+      apiKeyEnvar: "DEEPSEEK_API_KEY"
+
+tests: benchmark/routing/golden_set.yaml

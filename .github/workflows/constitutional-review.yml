@@ -1,0 +1,62 @@
+name: Constitutional Review
+
+# 设计依据: docs/arch/decisions/ADR-0014-adversarial-review-action.md
+# 执行带 3：独立 AI reviewer 对 PR 做宪法违例审查
+# - 仅看 Diff + 00-Constitution.md
+# - 模型族区隔（开发用模型 ≠ 审查模型，通过 REVIEWER_MODEL 变量区隔）
+# - 输出格式严格：每条违例 "R<编号> | 文件:行 | 说明" 或 "NONE"
+# - warning-only：未阻断 CI，由人类 review 决定
+#
+# 所需 GitHub 配置（Settings → Secrets and variables）:
+#   Secrets : REVIEWER_API_KEY   — OpenAI-compatible API 密钥
+#   Variables: REVIEWER_API_BASE — API base URL（如 https://api.deepseek.com/v1）
+#              REVIEWER_MODEL    — 可选，默认 deepseek-chat
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check API Key
+        id: check_key
+        env:
+          KEY: ${{ secrets.REVIEWER_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::REVIEWER_API_KEY secret 未配置，跳过宪法审查"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate Diff
+        if: steps.check_key.outputs.skip == 'false'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF" --depth=50
+          git diff "origin/$BASE_REF...HEAD" > /tmp/pr.diff
+          echo "Diff size: $(wc -c < /tmp/pr.diff) bytes"
+
+      - name: Constitutional Review
+        if: steps.check_key.outputs.skip == 'false'
+        env:
+          REVIEWER_API_KEY: ${{ secrets.REVIEWER_API_KEY }}
+          REVIEWER_API_BASE: ${{ vars.REVIEWER_API_BASE }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/constitutional_review.sh

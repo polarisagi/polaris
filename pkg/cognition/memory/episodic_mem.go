@@ -1,0 +1,177 @@
+package memory
+
+import (
+	"context"
+	"encoding/json"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+)
+
+// EpisodicMem (L1) — 事件表 + 向量投影。
+type EpisodicMem struct {
+	store   protocol.Store
+	events  []protocol.Event
+	mu      sync.Mutex
+	indexer *EpisodicGraphIndexer // Tier1+：图索引器，nil 时跳过
+}
+
+func NewEpisodicMem(store protocol.Store) *EpisodicMem {
+	return &EpisodicMem{
+		store:  store,
+		events: make([]protocol.Event, 0),
+	}
+}
+
+// NewEpisodicMemWithGraph 创建含图索引的 EpisodicMem（Tier1+）。
+func NewEpisodicMemWithGraph(store protocol.Store, indexer *EpisodicGraphIndexer) *EpisodicMem {
+	return &EpisodicMem{
+		store:   store,
+		events:  make([]protocol.Event, 0),
+		indexer: indexer,
+	}
+}
+
+func (em *EpisodicMem) Append(ctx context.Context, ev protocol.Event) error {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+
+	key := []byte("episodic:" + ev.ID)
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	if err := em.store.Put(ctx, key, data); err != nil {
+		return err
+	}
+	em.events = append(em.events, ev)
+	// 图索引：将事件节点与代理/会话建立关联边（Tier1+，nil 时跳过）
+	if em.indexer != nil {
+		em.indexer.Index(ctx, ev)
+	}
+	return nil
+}
+
+func (em *EpisodicMem) Query(ctx context.Context, q protocol.EpisodicQuery) ([]protocol.ScoredEvent, error) { //nolint:gocyclo
+	em.mu.Lock()
+	defer em.mu.Unlock()
+
+	// 从 SQLite 按前缀扫描重建（重启后内存列表为空时兜底）
+	// 正常运行中 em.events 同步维护，此处双路径保证正确性
+	var events []protocol.Event
+	if len(em.events) > 0 {
+		events = em.events
+	} else {
+		// 从持久化存储按前缀 "episodic:" 扫描恢复
+		iter, err := em.store.Scan(ctx, []byte("episodic:"))
+		if err != nil {
+			return nil, err
+		}
+		for iter.Next() {
+			var ev protocol.Event
+			if jsonErr := json.Unmarshal(iter.Value(), &ev); jsonErr == nil {
+				events = append(events, ev)
+				em.events = append(em.events, ev) // 重建内存缓存
+			}
+		}
+		iter.Close()
+	}
+
+	var results []protocol.ScoredEvent //nolint:prealloc
+	for _, ev := range events {
+		if q.SessionID != "" && ev.TaskID != q.SessionID {
+			continue
+		}
+		score := 1.0
+		// 语义文本匹配（Topics 或 Semantic 关键词）
+		payload := string(ev.Payload)
+		if len(q.Topics) > 0 {
+			match := false
+			for _, topic := range q.Topics {
+				if strings.Contains(payload, topic) {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		if q.Semantic != "" && !strings.Contains(payload, q.Semantic) {
+			continue
+		}
+		results = append(results, protocol.ScoredEvent{Event: ev, Score: score})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+	if q.K > 0 && len(results) > q.K {
+		results = results[:q.K]
+	}
+	return results, nil
+}
+
+// Consolidate 将高频相似事件压缩蒸馏到 SemanticMem。
+// 触发条件: EpisodicMem 事件数 >= consolidateThreshold（当前: 20）。
+// 算法:
+//  1. 按 TaskType(EventType) 聚类
+//  2. 同类事件 >= 3 条，且两两 Simhash 距离 <= 8
+//  3. 取最新 3 条合并摘要写入 SemanticMem
+//  4. 原始事件打 consolidated=true 标记（不删除，保留审计链）
+func (em *EpisodicMem) Consolidate(ctx context.Context, semantic *SemanticMem) error {
+	em.mu.Lock()
+	events := make([]protocol.Event, len(em.events))
+	copy(events, em.events)
+	em.mu.Unlock()
+
+	if len(events) < 3 {
+		return nil
+	}
+
+	// 按 EventType 聚类（EventType 是 string defined type，显式转换）
+	groups := make(map[string][]protocol.Event)
+	for _, ev := range events {
+		groups[string(ev.Type)] = append(groups[string(ev.Type)], ev)
+	}
+
+	for evType, evs := range groups {
+		if len(evs) < 3 {
+			continue
+		}
+		// 取最新 3 条做 Simhash 相似验证
+		recent := evs
+		if len(recent) > 3 {
+			recent = recent[len(recent)-3:]
+		}
+		fp0 := SimhashOf(string(recent[0].Payload))
+		fp1 := SimhashOf(string(recent[1].Payload))
+		fp2 := SimhashOf(string(recent[2].Payload))
+		if !IsSimilar(fp0, fp1) && !IsSimilar(fp1, fp2) {
+			continue // 不够相似，跳过合并
+		}
+
+		// 构造合并摘要
+		summary := ""
+		for _, ev := range recent {
+			payload := string(ev.Payload)
+			if len(payload) > 200 {
+				payload = payload[:200]
+			}
+			summary += payload + " | "
+		}
+		docID := "consolidated_" + evType + "_" + recent[len(recent)-1].ID
+		doc := protocol.Document{
+			ID:         docID,
+			Title:      "Consolidated: " + evType,
+			SourceType: "episodic",
+			SourceURI:  summary, // 摘要存入 SourceURI（Document 无 Content 字段）
+		}
+		if semantic != nil {
+			_ = semantic.StoreDocument(ctx, doc)
+		}
+	}
+	return nil
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fetch_url",
+  "description": "Fetch the content of a public URL and return the response body. SSRF-guarded: private/internal network addresses are blocked.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "The public URL to fetch. Private/internal addresses (localhost, 192.168.x, 10.x, etc.) are blocked."
+    }
+  },
+  "required": ["url"]
+}

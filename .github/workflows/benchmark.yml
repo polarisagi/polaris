@@ -1,0 +1,43 @@
+name: Benchmark — M1 Provider Routing
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider to benchmark (empty = all)"
+        required: false
+        default: ""
+  schedule:
+    # 每月 1 日 06:00 UTC 自动执行
+    - cron: "0 6 1 * *"
+
+jobs:
+  routing-benchmark:
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install promptfoo
+        run: npm install -g promptfoo@latest
+
+      - name: Run routing benchmark
+        run: make benchmark-routing
+
+      - name: Archive benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: /tmp/polaris-benchmark-results.json
+          retention-days: 90

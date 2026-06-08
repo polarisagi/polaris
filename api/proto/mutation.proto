@@ -1,0 +1,37 @@
+// MutationBus payload schema — M2 DatabaseWriter 串行写格式。
+// 架构文档: docs/arch/02-Storage-Fabric-深度选型.md §2.3
+syntax = "proto3";
+
+package polaris.protocol;
+
+option go_package = "github.com/polarisagi/polaris/internal/protocol/pb";
+
+// MutationIntent 是单次状态变异请求。
+message MutationIntent {
+  string table = 1;
+  string operation = 2;        // "upsert" | "delete"
+  bytes key = 3;
+  bytes payload = 4;
+  string task_id = 5;
+  string agent_id = 6;
+  int64 claimed_version = 7;
+  int32 priority = 8;          // 0=Normal, 1=Flush
+  string composite_group_id = 9;
+}
+
+// CompositeMutationIntent 是多表原子提交请求。
+// DatabaseWriter 收集同 GroupID 成员，单 BEGIN IMMEDIATE COMMIT 原子提交。
+message CompositeMutationIntent {
+  string group_id = 1;
+  repeated MutationIntent intents = 2;
+}
+
+// OutboxRecord 是跨引擎投影任务。
+message OutboxRecord {
+  string target_engine = 1;    // "sqlite" | "surreal"
+  string operation = 2;        // "upsert" | "delete"
+  string scope = 3;
+  bytes payload = 4;
+  string idempotency_key = 5;
+  int32 version = 6;           // 版本高水位
+}

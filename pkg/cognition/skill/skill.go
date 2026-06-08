@@ -1,0 +1,316 @@
+package skill
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+
+	perrors "github.com/polarisagi/polaris/internal/errors"
+	"github.com/polarisagi/polaris/internal/protocol"
+)
+
+// 本文件实现 protocol.SkillRegistry / SkillSelector / SkillExecutor 的内存版本。
+// 持久化版本见 sqlite_registry.go (SQLiteRegistryImpl)。
+// 历史决策见 docs/arch/decisions/ADR-0002-skill-registry-consolidation.md
+//   —— 已消除本地 Registry/Skill/LogicCollapse/Trajectory/Step/LifecycleState 类型，
+//   统一直接使用 protocol.SkillMeta 存储与传递。
+
+// ============================================================================
+// RegistryImpl — protocol.SkillRegistry 实现（内存版）
+// ============================================================================
+
+// RegistryImpl 直接以 protocol.SkillMeta 为存储单元。
+// 强制约束: meta.Name 必须以 "skill:" 为前缀。
+// 重名注册 → name collision 错误，记录审计事件。
+type RegistryImpl struct {
+	skills map[string]*protocol.SkillMeta // name → meta
+	mu     sync.RWMutex
+	audit  []string // 审计日志
+}
+
+func NewRegistry() *RegistryImpl {
+	return &RegistryImpl{
+		skills: make(map[string]*protocol.SkillMeta),
+	}
+}
+
+// 编译期接口合规验证
+var (
+	_ protocol.SkillRegistry = (*RegistryImpl)(nil)
+	_ protocol.SkillSelector = (*SelectorImpl)(nil)
+	_ protocol.SkillExecutor = (*WasmSkillExecutor)(nil)
+)
+
+// Register 注册技能。未通过 cosign 签名验证的技能拒绝注册。
+func (r *RegistryImpl) Register(ctx context.Context, meta protocol.SkillMeta) error {
+	if meta.Trust < protocol.TrustLocal {
+		return errCosignVerifyFailed
+	}
+	if !strings.HasPrefix(meta.Name, "skill:") {
+		return perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("skill name error: got %s", meta.Name), errInvalidSkillName)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if existing, exists := r.skills[meta.Name]; exists {
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("skill name collision: %s (existing version %s)", meta.Name, existing.Version))
+	}
+
+	// 存储 meta 副本——避免 caller 修改外部变量影响内部状态
+	metaCopy := meta
+	r.skills[meta.Name] = &metaCopy
+	return nil
+}
+
+// Get 按名称和版本查询技能；返回副本，调用方修改不影响内部状态。
+func (r *RegistryImpl) Get(ctx context.Context, name, version string) (*protocol.SkillMeta, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	meta, ok := r.skills[name]
+	if !ok {
+		return nil, errSkillNotFound
+	}
+	if version != "" && meta.Version != version {
+		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("version mismatch: want %s, got %s", version, meta.Version))
+	}
+	out := *meta
+	return &out, nil
+}
+
+// List 按过滤条件列出技能。
+func (r *RegistryImpl) List(ctx context.Context, filter protocol.SkillFilter) ([]protocol.SkillMeta, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var result []protocol.SkillMeta //nolint:prealloc
+	for _, m := range r.skills {
+		if m.Deprecated && !filter.IncludeDeprecated {
+			continue
+		}
+		if filter.RiskLevelMax != "" && riskGT(m.RiskLevel, filter.RiskLevelMax) {
+			continue
+		}
+		if len(filter.Capabilities) > 0 && !hasCapability(m.Capabilities, filter.Capabilities) {
+			continue
+		}
+		result = append(result, *m)
+	}
+	return result, nil
+}
+
+// Deprecate 标记技能为废弃；记录审计。RegistryImpl 扩展方法（非 SkillRegistry 接口成员）。
+func (r *RegistryImpl) Deprecate(ctx context.Context, name, version string, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	meta, ok := r.skills[name]
+	if !ok {
+		return errSkillNotFound
+	}
+	meta.Deprecated = true
+	if version != "" {
+		meta.Version = version
+	}
+	r.audit = append(r.audit, fmt.Sprintf("deprecate %s: %s", name, reason))
+	return nil
+}
+
+// AuditLog 返回审计日志副本。
+func (r *RegistryImpl) AuditLog() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, len(r.audit))
+	copy(out, r.audit)
+	return out
+}
+
+// ============================================================================
+// SelectorImpl — protocol.SkillSelector 实现（启发式，不调 LLM）
+// ============================================================================
+
+// SelectorImpl 启发式排序: 能力匹配(0.4) + 复杂度匹配(0.3) + 通过率(0.2) + 延迟(0.1)。
+// 符合 par_inv_05: Selector 不调 LLM。
+type SelectorImpl struct {
+	registry protocol.SkillRegistry
+}
+
+func NewSelector(reg protocol.SkillRegistry) *SelectorImpl {
+	return &SelectorImpl{registry: reg}
+}
+
+// Select 启发式选择最佳技能（取 top 5）。
+func (s *SelectorImpl) Select(ctx context.Context, hint protocol.TaskHint) ([]protocol.SkillMeta, error) {
+	all, err := s.registry.List(ctx, protocol.SkillFilter{
+		Capabilities:      hint.CapabilitiesNeeded,
+		RiskLevelMax:      "high",
+		IncludeDeprecated: false,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return s.score(all[i], hint) > s.score(all[j], hint)
+	})
+
+	if len(all) > 5 {
+		all = all[:5]
+	}
+	return all, nil
+}
+
+func (s *SelectorImpl) score(meta protocol.SkillMeta, hint protocol.TaskHint) float64 {
+	capScore := 0.0
+	for _, want := range hint.CapabilitiesNeeded {
+		for _, has := range meta.Capabilities {
+			if has == want {
+				capScore += 1.0
+			}
+		}
+	}
+	if len(hint.CapabilitiesNeeded) > 0 {
+		capScore /= float64(len(hint.CapabilitiesNeeded))
+	}
+
+	complexityScore := 1.0
+	if hint.ComplexityScore > 0.8 && meta.RiskLevel == "low" {
+		complexityScore = 0.3 // 复杂任务需要高阶技能
+	}
+
+	passScore := meta.Benchmarks.PassRate
+	if passScore < 0 {
+		passScore = 0
+	}
+
+	latencyScore := 1.0
+	if meta.Benchmarks.AvgLatencyMs > 5000 {
+		latencyScore = 0.3
+	} else if meta.Benchmarks.AvgLatencyMs > 2000 {
+		latencyScore = 0.7
+	}
+
+	return capScore*0.4 + complexityScore*0.3 + passScore*0.2 + latencyScore*0.1
+}
+
+// ============================================================================
+// WasmSkillExecutor — protocol.SkillExecutor 实现
+// 架构文档: docs/arch/M06-Skill-Library.md §5
+// ============================================================================
+
+// WasmRunner 执行 Wasm 字节码（由 pkg/action.WazeroRuntime 实现，接口注入避免循环依赖）。
+type WasmRunner interface {
+	RunWasm(ctx context.Context, skillName string, wasmBytes []byte, input []byte) ([]byte, error)
+}
+
+// WasmLoader 从存储层加载已编译的 Wasm 字节码。
+type WasmLoader interface {
+	LoadWasm(skillID string) ([]byte, error)
+}
+
+type WasmSkillExecutor struct {
+	registry protocol.SkillRegistry
+	runner   WasmRunner // nil → 返回输入原文（Tier 0 降级）
+	loader   WasmLoader // 可选兜底：meta.WasmPath 不存在时尝试此加载器
+}
+
+// NewWasmSkillExecutor 构造执行器。runner 可选（nil 时退化为仅元数据验证）。
+// loader 作为文件系统兜底，marketplace 安装的技能优先走 meta.WasmPath。
+func NewWasmSkillExecutor(reg protocol.SkillRegistry, runner WasmRunner, loader WasmLoader) *WasmSkillExecutor {
+	return &WasmSkillExecutor{registry: reg, runner: runner, loader: loader}
+}
+
+// ExecuteSkill 执行 Wasm 技能。
+// 加载优先级: meta.WasmPath（marketplace 安装路径）> loader.LoadWasm（文件系统兜底）。
+// 降级路径（runner 为 nil 或两路均无法加载）: 返回输入原文，不中断调用链。
+func (e *WasmSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error) {
+	meta, err := e.registry.Get(ctx, skillID, "")
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "skill_executor: registry.Get", err)
+	}
+	if meta.Deprecated {
+		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("skill_executor: skill %s is deprecated", skillID))
+	}
+
+	if e.runner == nil {
+		return input, nil
+	}
+
+	// 优先从 extension_instances.install_path 读取（marketplace 安装路径）
+	var wasmBytes []byte
+	if meta.WasmPath != "" {
+		wasmBytes, err = os.ReadFile(meta.WasmPath)
+		if err != nil {
+			return input, nil //nolint:nilerr
+		}
+	} else if e.loader != nil {
+		wasmBytes, err = e.loader.LoadWasm(skillID)
+		if err != nil {
+			return input, nil //nolint:nilerr
+		}
+	} else {
+		return input, nil
+	}
+
+	if err := e.ValidateSkill(wasmBytes); err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "skill_executor: wasm validation", err)
+	}
+
+	return e.runner.RunWasm(ctx, skillID, wasmBytes, input)
+}
+
+// ValidateSkill 校验 Wasm 字节码合规性（魔数 + 长度）。
+func (e *WasmSkillExecutor) ValidateSkill(wasmBytes []byte) error {
+	// Wasm 文件头魔数: 0x00 0x61 0x73 0x6D
+	if len(wasmBytes) < 4 {
+		return perrors.New(perrors.CodeInternal, "skill_executor: wasm too short")
+	}
+	magic := []byte{0x00, 0x61, 0x73, 0x6D}
+	for i, b := range magic {
+		if wasmBytes[i] != b {
+			return perrors.New(perrors.CodeInternal, "skill_executor: invalid wasm magic header")
+		}
+	}
+	return nil
+}
+
+// ============================================================================
+// 辅助函数
+// ============================================================================
+
+// riskGT 比较风险等级，返回 a > b。等级序: low < medium < high < critical。
+func riskGT(a, b string) bool {
+	order := map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
+	return order[a] > order[b]
+}
+
+// hasCapability 检查 caps 是否包含 required 中所有项（顺序无关，大小写/空白容错）。
+func hasCapability(caps []string, required []string) bool {
+	for _, want := range required {
+		found := false
+		for _, c := range caps {
+			if strings.EqualFold(strings.TrimSpace(c), strings.TrimSpace(want)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// ============================================================================
+// 错误类型（同时被 sqlite_registry.go 使用）
+// ============================================================================
+
+var (
+	errCosignVerifyFailed = perrors.New(perrors.CodeInternal, "skill: cosign signature verification failed")
+	errSkillNotFound      = perrors.New(perrors.CodeInternal, "skill: not found")
+	errInvalidSkillName   = perrors.New(perrors.CodeInternal, "skill: name must start with 'skill:'")
+)

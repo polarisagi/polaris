@@ -1,0 +1,274 @@
+- id: mcp/filesystem
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Filesystem
+  description: 读写本地文件系统：支持读文件、写文件、目录列举、文件搜索和 diff。适合让 AI 直接操作工作目录。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - '{DATA_DIR}'
+  env: {}
+  url: ""
+  tags:
+    - files
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
+  timeout: 30
+  installed: false
+- id: mcp/fetch
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Fetch
+  description: 抓取公开网页内容并提取纯文本，支持 HTML → Markdown 转换。让 AI 实时获取网络资料。
+  transport: stdio
+  command: uvx
+  args:
+    - mcp-server-fetch
+  env: {}
+  url: ""
+  tags:
+    - web
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/fetch
+  timeout: 30
+  installed: false
+- id: mcp/brave-search
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Brave Search
+  description: 通过 Brave Search API 执行网页和新闻搜索，返回结构化结果。需要 Brave API Key。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-brave-search'
+  env:
+    BRAVE_API_KEY: ""
+  url: ""
+  tags:
+    - search
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search
+  timeout: 30
+  installed: false
+- id: mcp/github
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: GitHub
+  description: 操作 GitHub 仓库：读写文件、搜索代码、管理 Issue/PR、fork 仓库。需要 GitHub Token。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-github'
+  env:
+    GITHUB_PERSONAL_ACCESS_TOKEN: ""
+  url: ""
+  tags:
+    - dev
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/github
+  timeout: 30
+  installed: false
+- id: mcp/sqlite
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: SQLite
+  description: 对本地 SQLite 数据库执行 SQL 查询（读写），并提供表结构洞察功能。
+  transport: stdio
+  command: uvx
+  args:
+    - mcp-server-sqlite
+    - --db-path
+    - '{DATA_DIR}/polaris.db'
+  env: {}
+  url: ""
+  tags:
+    - database
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite
+  timeout: 30
+  installed: false
+- id: mcp/git
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Git
+  description: Git 仓库操作：读取历史提交、diff、blame、branch 管理、暂存与提交。
+  transport: stdio
+  command: uvx
+  args:
+    - mcp-server-git
+    - --repository
+    - '{DATA_DIR}'
+  env: {}
+  url: ""
+  tags:
+    - dev
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/git
+  timeout: 30
+  installed: false
+- id: mcp/memory
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Memory
+  description: 基于知识图谱的持久化记忆系统，支持跨会话存储实体关系。让 AI 记住用户偏好和项目上下文。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-memory'
+  env: {}
+  url: ""
+  tags:
+    - memory
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/memory
+  timeout: 30
+  installed: false
+- id: mcp/sequential-thinking
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Sequential Thinking
+  description: 为复杂问题提供结构化的逐步推理框架，支持反思和修正，避免推理跳跃。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-sequential-thinking'
+  env: {}
+  url: ""
+  tags:
+    - reasoning
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking
+  timeout: 30
+  installed: false
+- id: mcp/puppeteer
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Puppeteer
+  description: 浏览器自动化：截图、填表、点击交互、抓取动态 JS 渲染页面。无头浏览器驱动。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-puppeteer'
+  env: {}
+  url: ""
+  tags:
+    - browser
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer
+  timeout: 60
+  installed: false
+- id: mcp/slack
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Slack
+  description: 读取 Slack 频道历史、发送消息、列出用户和频道。需要 Slack Bot Token。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@modelcontextprotocol/server-slack'
+  env:
+    SLACK_BOT_TOKEN: ""
+    SLACK_TEAM_ID: ""
+  url: ""
+  tags:
+    - communication
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/slack
+  timeout: 30
+  installed: false
+- id: mcp/time
+  publisher: modelcontextprotocol
+  type: mcp
+  trust_tier: 3
+  name: Time
+  description: 时区转换工具，获取任意时区当前时间并在时区之间转换。轻量级无依赖。
+  transport: stdio
+  command: uvx
+  args:
+    - mcp-server-time
+  env: {}
+  url: ""
+  tags:
+    - utility
+    - official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/time
+  timeout: 10
+  installed: false
+
+- id: github/mcp-server
+  publisher: github
+  type: mcp
+  trust_tier: 3
+  name: GitHub MCP Server
+  description: GitHub 官方 MCP Server，原生集成 GitHub API：仓库管理、代码搜索、Issue/PR 操作、Actions 触发、Copilot 工作流。需要 GITHUB_TOKEN。
+  transport: stdio
+  command: npx
+  args:
+    - -y
+    - '@github/mcp-server'
+  env:
+    GITHUB_TOKEN: ""
+  url: ""
+  tags:
+    - dev
+    - github
+    - official
+  homepage: https://github.com/github/mcp-server
+  timeout: 30
+  installed: false
+- id: microsoft/playwright-mcp
+  publisher: microsoft
+  type: mcp
+  trust_tier: 3
+  name: Playwright MCP
+  description: Microsoft 官方 Playwright MCP Server，提供结构化浏览器自动化：页面导航、元素交互、表单填写、截图、PDF 导出。基于 accessibility tree，LLM 友好。
+  transport: stdio
+  command: npx
+  args:
+    - '@playwright/mcp@latest'
+  env: {}
+  url: ""
+  tags:
+    - browser
+    - automation
+    - official
+  homepage: https://github.com/microsoft/playwright-mcp
+  timeout: 60
+  installed: false
+- id: figma/mcp-server
+  publisher: figma
+  type: mcp
+  trust_tier: 3
+  name: Figma MCP Server
+  description: Figma 官方 MCP Server，让 AI 读取设计文件结构、组件层级、样式变量，实现设计稿到代码的精准转换。需要 FIGMA_API_KEY。
+  transport: streamable_http
+  command: ""
+  args: []
+  env:
+    FIGMA_API_KEY: ""
+  url: https://mcp.figma.com/mcp
+  tags:
+    - design
+    - ui
+    - official
+  homepage: https://www.figma.com/developers/mcp
+  timeout: 30
+  installed: false

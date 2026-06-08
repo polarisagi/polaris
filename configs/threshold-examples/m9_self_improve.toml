@@ -1,0 +1,10 @@
+# Example threshold overrides for m9_self_improve.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'worker.cpu_pct_user_active' = 0.05
+'worker.cpu_pct_idle' = 0.5
+'worker.heartbeat_seconds' = 30
+'worker.restart_backoff_initial_ms' = 200
+'worker.restart_backoff_max_seconds' = 60
+'canary.steps' = [0.01, 0.1, 0.5, 1.0]
+'canary.dwell_per_step_hours_ht0' = 1

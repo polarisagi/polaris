@@ -1,0 +1,178 @@
+package channels
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	perrors "github.com/polarisagi/polaris/internal/errors"
+
+	"github.com/gorilla/websocket"
+)
+
+const dingTalkStreamEndpointURL = "https://api.dingtalk.com/v1.0/gateway/connections/open"
+
+func (m *Manager) startDingTalkPoller(channelID, clientID, clientSecret string, cfg map[string]any) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.registerPoller(channelID, cancel)
+	go m.runDingTalkPoller(ctx, channelID, clientID, clientSecret, cfg)
+}
+
+func (m *Manager) runDingTalkPoller(ctx context.Context, channelID, clientID, clientSecret string, cfg map[string]any) {
+	slog.Info("dingtalk: stream poller started", "channel", channelID)
+	defer slog.Info("dingtalk: stream poller stopped", "channel", channelID)
+
+	backoff := 2 * time.Second
+	for {
+		if err := m.dingTalkConnect(ctx, channelID, clientID, clientSecret, cfg); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Error("dingtalk: connection error", "err", err, "backoff", backoff)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
+}
+
+func (m *Manager) dingTalkConnect(ctx context.Context, channelID, clientID, clientSecret string, cfg map[string]any) error {
+	wsURL, err := dingTalkGetEndpoint(ctx, m.httpClient, clientID, clientSecret)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("dingtalk: get endpoint: %v", err), err)
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("dingtalk: dial: %v", err), err)
+	}
+	defer conn.Close()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("dingtalk: read: %v", err), err)
+		}
+		var frame dingTalkFrame
+		if json.Unmarshal(raw, &frame) != nil {
+			continue
+		}
+		msgID, _ := frame.Headers["messageId"].(string)
+
+		switch frame.Type {
+		case "SYSTEM":
+			topic, _ := frame.Headers["topic"].(string)
+			if topic == "ping" {
+				_ = conn.WriteJSON(map[string]any{
+					"code":    200,
+					"headers": map[string]any{"messageId": msgID, "topic": "pong"},
+					"message": "OK",
+					"data":    nil,
+				})
+			}
+		case "EVENT":
+			ack := map[string]any{
+				"code":    200,
+				"headers": map[string]any{"messageId": msgID},
+				"message": "OK",
+				"data":    nil,
+			}
+			_ = conn.WriteJSON(ack)
+
+			var evData dingTalkEventData
+			if json.Unmarshal([]byte(frame.Data), &evData) != nil {
+				continue
+			}
+			text := strings.TrimSpace(evData.Text.Content)
+			if text == "" {
+				continue
+			}
+			chatID := evData.ConversationID
+			if chatID == "" {
+				chatID = evData.SenderID
+			}
+			go m.onMessage("dingtalk", channelID, cfg, Message{
+				Text: text, ChatID: chatID, UserID: evData.SenderID, ReplyToken: evData.SessionWebhook,
+			})
+		}
+	}
+}
+
+func dingTalkGetEndpoint(ctx context.Context, client *http.Client, clientID, clientSecret string) (string, error) {
+	body, _ := json.Marshal(map[string]string{
+		"clientId": clientID, "clientSecret": clientSecret,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dingTalkStreamEndpointURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", perrors.New(perrors.CodeInternal, fmt.Sprintf("dingtalk: endpoint status %d: %s", resp.StatusCode, b))
+	}
+	var result struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if json.Unmarshal(b, &result) != nil || result.Endpoint == "" {
+		return "", perrors.New(perrors.CodeInternal, "dingtalk: empty endpoint returned")
+	}
+	return result.Endpoint, nil
+}
+
+func dingTalkSendMessage(ctx context.Context, client *http.Client, sessionWebhook, text string) error {
+	body, _ := json.Marshal(map[string]any{
+		"msgtype": "text",
+		"text":    map[string]string{"content": text},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sessionWebhook, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("dingtalk: send status %d: %s", resp.StatusCode, b))
+	}
+	return nil
+}
+
+type dingTalkFrame struct {
+	SpecVersion string         `json:"specVersion"`
+	Type        string         `json:"type"`
+	Headers     map[string]any `json:"headers"`
+	Data        string         `json:"data"`
+}
+
+type dingTalkEventData struct {
+	ConversationID string `json:"conversationId"`
+	SenderID       string `json:"senderId"`
+	SessionWebhook string `json:"sessionWebhook"`
+	Text           struct {
+		Content string `json:"content"`
+	} `json:"text"`
+}

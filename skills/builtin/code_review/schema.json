@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "code_review",
+  "description": "Analyze code or a diff and return structured review feedback with severity, category, and suggestions.",
+  "type": "object",
+  "properties": {
+    "code":     { "type": "string", "description": "Code content or unified diff to review." },
+    "language": { "type": "string", "description": "Programming language of the code (e.g. 'go', 'python'). Helps focus language-specific checks." },
+    "focus":    { "type": "array",  "items": { "type": "string" }, "description": "Review focus areas (e.g. ['security', 'performance', 'style', 'correctness'])." }
+  },
+  "required": ["code"]
+}

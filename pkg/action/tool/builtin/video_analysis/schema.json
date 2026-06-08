@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "video_analysis",
+  "description": "Extract keyframes from a video at a fixed interval and return them as base64-encoded JPEG data URIs. Requires ffmpeg.",
+  "type": "object",
+  "properties": {
+    "video_uri": {
+      "type": "string",
+      "description": "URI or local file path of the video to analyze (e.g. '/tmp/clip.mp4')."
+    },
+    "interval_sec": {
+      "type": "integer",
+      "default": 5,
+      "description": "Interval in seconds between extracted keyframes (default 5)."
+    },
+    "max_frames": {
+      "type": "integer",
+      "default": 20,
+      "description": "Maximum number of keyframes to return. Prevents excessive memory usage on long videos (default 20)."
+    }
+  },
+  "required": ["video_uri"]
+}

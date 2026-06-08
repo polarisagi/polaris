@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "code_gen",
+  "description": "Generate code from a natural language specification and write it to the specified output file.",
+  "type": "object",
+  "properties": {
+    "spec":           { "type": "string", "description": "Natural language description of what the code should do." },
+    "language":       { "type": "string", "description": "Target programming language (e.g. 'go', 'python', 'typescript')." },
+    "output_path":    { "type": "string", "description": "File path where the generated code will be written." },
+    "test_framework": { "type": "string", "description": "Test framework to use for generated tests (e.g. 'pytest', 'jest', 'testing'). Optional." }
+  },
+  "required": ["spec", "language"]
+}

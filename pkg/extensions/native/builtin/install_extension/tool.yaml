@@ -1,0 +1,13 @@
+name: install_extension
+description: "Download and install an extension (plugin, skill, or MCP server) by its catalog ID. Use search_extension to find the ID first."
+version: "1.0.0"
+capability: write-local
+risk_level: high
+sandbox: in-process
+side_effects:
+  - network-call
+  - file-write
+tags:
+  - marketplace
+  - extensions
+  - install

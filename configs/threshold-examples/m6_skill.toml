@@ -1,0 +1,9 @@
+# Example threshold overrides for m6_skill.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'cache_size.gold' = 5
+'cache_size.silver' = 20
+'cache_size.bronze' = 25
+'cache_ttl.bronze_min' = 30
+'skill_exec.timeout_low_s' = 30
+'skill_exec.timeout_mh_s' = 120

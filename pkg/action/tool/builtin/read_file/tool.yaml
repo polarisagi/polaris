@@ -1,0 +1,12 @@
+name: read_file
+description: "Read the contents of a file at the specified path. Restricted to allowed directories."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - filesystem
+  - io
+  - read
