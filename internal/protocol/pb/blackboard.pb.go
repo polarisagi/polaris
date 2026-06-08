@@ -458,7 +458,7 @@ const file_blackboard_proto_rawDesc = "" +
 	"\bendpoint\x18\n" +
 	" \x01(\tR\bendpoint\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\v \x01(\fR\tpublicKeyB?Z=github.com/polarisagi/polaris/internal/protocol/pbb\x06proto3"
+	"public_key\x18\v \x01(\fR\tpublicKeyB4Z2github.com/polarisagi/polaris/internal/protocol/pbb\x06proto3"
 
 var (
 	file_blackboard_proto_rawDescOnce sync.Once

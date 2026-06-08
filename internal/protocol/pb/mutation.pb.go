@@ -296,7 +296,7 @@ const file_mutation_proto_rawDesc = "" +
 	"\x05scope\x18\x03 \x01(\tR\x05scope\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12'\n" +
 	"\x0fidempotency_key\x18\x05 \x01(\tR\x0eidempotencyKey\x12\x18\n" +
-	"\aversion\x18\x06 \x01(\x05R\aversionB?Z=github.com/polarisagi/polaris/internal/protocol/pbb\x06proto3"
+	"\aversion\x18\x06 \x01(\x05R\aversionB4Z2github.com/polarisagi/polaris/internal/protocol/pbb\x06proto3"
 
 var (
 	file_mutation_proto_rawDescOnce sync.Once

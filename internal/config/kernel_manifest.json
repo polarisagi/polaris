@@ -1,5 +1,5 @@
 {
-  "internal/config/config.go": "5e2a37d761aded3d55a7db7543c378c3236ce0faa87902531ece415d46677f3f",
+  "internal/config/config.go": "2483fce0197c82ef725cec3f1a651c0fea926233809179e209dc5afabd8c6b21",
   "internal/config/config_test.go": "40b5720ee581fbad054435a9f32c7a244b6fea062cf5ff4595a2eb7b224ca7e2",
   "internal/config/immutable_constants.go": "8e057a6287d45d63bee96b865469f514fa5ca96612ba75e01e147346654a7dc7",
   "internal/config/integrity_check.go": "d9bba07dfd561c08e03818e0b901edb12af03aa963b23cdee0deec1dd6dec6e5",

@@ -490,7 +490,7 @@ const file_event_proto_rawDesc = "" +
 	"\n" +
 	"latency_ms\x18\x06 \x01(\x03R\tlatencyMs\x12\x18\n" +
 	"\asuccess\x18\a \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05errorB?Z=github.com/polarisagi/polaris/internal/protocol/pbb\x06proto3"
+	"\x05error\x18\b \x01(\tR\x05errorB4Z2github.com/polarisagi/polaris/internal/protocol/pbb\x06proto3"
 
 var (
 	file_event_proto_rawDescOnce sync.Once
