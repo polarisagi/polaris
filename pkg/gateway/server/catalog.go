@@ -181,14 +181,49 @@ func (s *Server) handleCreateProviderFromCatalog(w http.ResponseWriter, r *http.
 		recommendedRole string
 	}
 	var catalogModels []catalogModelRow
+	hasGeneral := false
 	for mrows.Next() {
 		var cm catalogModelRow
 		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.recommendedRole); err != nil {
 			continue
 		}
+		if cm.recommendedRole == "general" {
+			hasGeneral = true
+		}
 		catalogModels = append(catalogModels, cm)
 	}
 	_ = mrows.Close()
+
+	// 补充 general 模型：如果内置字典中没有 general，用户又需要一个 general 进行日常 Agent 任务
+	// 根据用户要求，优先使用 reasoning 模型复制为 general，其次 default 模型
+	if !hasGeneral && len(catalogModels) > 0 {
+		var fallback catalogModelRow
+		found := false
+		for _, cm := range catalogModels {
+			if cm.recommendedRole == "reasoning" {
+				fallback = cm
+				found = true
+				break
+			}
+		}
+		if !found {
+			for _, cm := range catalogModels {
+				if cm.recommendedRole == "default" {
+					fallback = cm
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			fallback = catalogModels[0]
+		}
+		catalogModels = append(catalogModels, catalogModelRow{
+			modelID:         fallback.modelID,
+			displayName:     fallback.displayName,
+			recommendedRole: "general",
+		})
+	}
 
 	// 角色直接使用 recommended_role；独占角色（default/reasoning）先清旧值保证全局唯一
 	var createdModels []ProviderModel
