@@ -55,7 +55,7 @@ type Marketplace struct {
 }
 
 // PluginInterface 对应 plugin.json 的 interface 块（UI 展示元数据）。
-// 兼容 Polaris .codex-plugin/plugin.json 和 OpenAI agents/openai.yaml 的 interface 节。
+// 兼容 Polaris .polaris-plugin/plugin.json 和 OpenAI agents/openai.yaml 的 interface 节。
 type PluginInterface struct {
 	DisplayName      string   `json:"displayName,omitempty" yaml:"display_name,omitempty"`
 	ShortDescription string   `json:"shortDescription,omitempty" yaml:"short_description,omitempty"`
@@ -70,7 +70,7 @@ type PluginInterface struct {
 	DefaultPrompt    []string `json:"defaultPrompt,omitempty" yaml:"default_prompt,omitempty"`
 }
 
-// PluginJSON 表示 .codex-plugin/plugin.json 或 .claude-plugin/plugin.json 的完整清单格式。
+// PluginJSON 表示 .polaris-plugin/plugin.json 或 .claude-plugin/plugin.json 的完整清单格式。
 // 字段集覆盖 OpenAI Codex / Anthropic Claude Code 两家标准 plugin.json。
 type PluginJSON struct {
 	Name        string           `json:"name"`

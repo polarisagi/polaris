@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS plugins (
     -- 子 MCP 运行时策略（对应 Codex [plugins.xxx.mcp_servers.yyy]）
     -- JSON map: { "server-name": { "enabled": true, "approval_mode": "prompt", "enabled_tools": ["x"] } }
     mcp_policy   TEXT    NOT NULL DEFAULT '{}',
-    -- plugin.json 完整快照（运行时缓存；权威来源始终是 install_path/.codex-plugin/plugin.json）
+    -- plugin.json 完整快照（运行时缓存；权威来源始终是 install_path/.polaris-plugin/plugin.json）
     manifest     TEXT    NOT NULL DEFAULT '{}',
     created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))

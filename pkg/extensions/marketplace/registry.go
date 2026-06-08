@@ -91,7 +91,7 @@ func (r *Registry) ListEnabled() []*Plugin {
 }
 
 // ScanDir 扫描目录（每个子目录作为一个 protocol.protocol.PluginJSONJSON），加载所有找到的 protocol.protocol.PluginJSONJSON。
-// 忽略无 .codex-plugin/plugin.json 的子目录。
+// 忽略无 .polaris-plugin/plugin.json 的子目录。
 func (r *Registry) ScanDir(dir string) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

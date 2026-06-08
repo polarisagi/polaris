@@ -115,9 +115,9 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string) (stri
 	}
 
 	// Create a default plugin.json
-	pluginMetaDir := filepath.Join(pluginDir, ".codex-plugin")
+	pluginMetaDir := filepath.Join(pluginDir, ".polaris-plugin")
 	if err := os.MkdirAll(pluginMetaDir, 0755); err != nil {
-		return "", perrors.Wrap(perrors.CodeInternal, "plugin_creator: failed to create .codex-plugin directory", err)
+		return "", perrors.Wrap(perrors.CodeInternal, "plugin_creator: failed to create .polaris-plugin directory", err)
 	}
 
 	pluginJSON := fmt.Sprintf(`{

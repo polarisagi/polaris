@@ -103,7 +103,7 @@ func TestSkillMetaFromSKILLmd_NonExistentFile(t *testing.T) {
 func makePlugin(t *testing.T, dir string, manifest protocol.PluginJSON) string {
 	t.Helper()
 	pluginDir := filepath.Join(dir, manifest.Name)
-	codexDir := filepath.Join(pluginDir, ".codex-plugin")
+	codexDir := filepath.Join(pluginDir, ".polaris-plugin")
 	os.MkdirAll(codexDir, 0o755)
 
 	data, _ := json.Marshal(manifest)

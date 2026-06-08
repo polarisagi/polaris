@@ -48,7 +48,7 @@ func TestPluginCreator(t *testing.T) {
 	}
 
 	// Verify plugin.json exists
-	if _, err := os.Stat(filepath.Join(expectedDir, ".codex-plugin", "plugin.json")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(expectedDir, ".polaris-plugin", "plugin.json")); os.IsNotExist(err) {
 		t.Errorf("plugin.json was not created")
 	}
 

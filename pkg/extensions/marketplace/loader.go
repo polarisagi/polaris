@@ -94,7 +94,7 @@ func ParseSKILLmd(path string, signingKey []byte) (*protocol.SkillMeta, error) {
 
 // LoadPlugin 从指定目录加载完整的 Codex 插件树。
 func LoadPlugin(dir string) (*Plugin, error) {
-	manifestPath := filepath.Join(dir, ".codex-plugin", "plugin.json")
+	manifestPath := filepath.Join(dir, ".polaris-plugin", "plugin.json")
 	manifest, err := parseManifest(manifestPath)
 	if err != nil {
 		return nil, err

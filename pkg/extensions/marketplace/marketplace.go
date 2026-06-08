@@ -226,10 +226,10 @@ func (c *MCPMarketplaceClient) Install(ctx context.Context, pkg protocol.Registr
 		return "", perrors.Wrap(perrors.CodeInternal, "marketplace: failed to write .mcp.json", err)
 	}
 
-	// Generate .codex-plugin/plugin.json
-	pluginMetaDir := filepath.Join(pluginDir, ".codex-plugin")
+	// Generate .polaris-plugin/plugin.json
+	pluginMetaDir := filepath.Join(pluginDir, ".polaris-plugin")
 	if err := os.MkdirAll(pluginMetaDir, 0755); err != nil {
-		return "", perrors.Wrap(perrors.CodeInternal, "marketplace: failed to create .codex-plugin directory", err)
+		return "", perrors.Wrap(perrors.CodeInternal, "marketplace: failed to create .polaris-plugin directory", err)
 	}
 
 	manifest := protocol.PluginJSON{

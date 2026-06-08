@@ -156,8 +156,8 @@ func parseAnthropicTOML(tomlPath, baseID string, mp protocol.Marketplace) (proto
 // ─── Claude Plugin JSON（Anthropic 原生 Bundle）──────────────────────────────
 
 func parseClaudePluginJSON(dir, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
-	// 仅处理 .claude-plugin/plugin.json；跳过已有 .codex-plugin 的目录（原生格式优先）
-	if _, err := os.Stat(filepath.Join(dir, ".codex-plugin")); err == nil {
+	// 仅处理 .claude-plugin/plugin.json；跳过已有 .polaris-plugin 的目录（原生格式优先）
+	if _, err := os.Stat(filepath.Join(dir, ".polaris-plugin")); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))

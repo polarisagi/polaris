@@ -353,7 +353,7 @@ Tier 0 Bronze 并发编译硬限制 1: Bronze 按需编译瞬间额外占用 ~5-
 
 ## 9. AgentSkills 标准格式适配
 
-> **开放标准**：agentskills.io（由 Anthropic 发布，OpenAI Codex / Claude Code / GitHub Copilot / Cursor / Gemini CLI 等共同采纳）。Polaris 完整实现此标准，并与 Codex `.codex-plugin/plugin.json` 的 `"skills"` 字段规范对齐。
+> **开放标准**：agentskills.io（由 Anthropic 发布，OpenAI Codex / Claude Code / GitHub Copilot / Cursor / Gemini CLI 等共同采纳）。Polaris 完整实现此标准，并与 Codex `.polaris-plugin/plugin.json` 的 `"skills"` 字段规范对齐。
 
 ### 9.1 SKILL.md 完整 frontmatter
 

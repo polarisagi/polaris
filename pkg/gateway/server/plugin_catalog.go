@@ -605,7 +605,7 @@ func (s *Server) downloadAndInstallExtension(ctx context.Context, extID, catalog
 		var bundle protocol.PluginBundleManifest
 		var manifestRaw []byte
 		for _, manifestPath := range []string{
-			filepath.Join(destDir, ".codex-plugin", "plugin.json"),
+			filepath.Join(destDir, ".polaris-plugin", "plugin.json"),
 			filepath.Join(destDir, "plugin.json"),
 		} {
 			if raw, err2 := os.ReadFile(manifestPath); err2 == nil {
