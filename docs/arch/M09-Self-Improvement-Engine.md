@@ -196,7 +196,7 @@ SKILL.md → 收集轨迹 → LLM 编译 Wasm → System1 执行
 ### 2.3 外环: 架构演化（周/月级）
 
 ```
-Gate 1: Eval Harness 离线回归 — 全部黄金用例 + Welch's t-test p<0.05 → 发布 EventEvalCompleted
+Gate 0: Eval Harness 离线回归 — 全部黄金用例 + Welch's t-test p<0.05 → 发布 EventEvalCompleted
 Gate 1: Shadow (1% 流量) — `SubmitCandidate` 立即进入此阶段。`RecordEvalScore` 异步补充 Eval 结果：passRate < baseline×0.95 触发自动 Rollback；passRate ≥ baseline×1.05 将 status 激活为 running。
 Gate 2: Shadow Execution (3-7天) — `ConfirmShadow` 确认影子指标正常后推进至 Canary 5%。candidate 版本执行真实任务但输出不面用户，安全护栏禁止 write_network + privileged。
 Gate 3: Canary Rollout（阶梯: 5%→25%→50%→100%，每步驻留 24h）

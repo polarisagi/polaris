@@ -201,8 +201,9 @@ Phase 1 THROTTLE → Phase 2 PAUSE → Phase 3 FULLSTOP
 人工审批协议 (11-Policy-Safety, §4.4)。HITLGateway (13-Interface-Scheduler, §2.4) 实现审批网关。
 
 ### [SSRFGuard]
-5 阶段 SSRF/DNS Rebinding 防护 (11-Policy-Safety, §6):
-阶段 1 URL 解析 → 阶段 2 IP 校验 → 阶段 3 DNS 解析 + TOCTOU 消除 → 阶段 3.5 响应大小上限(>20 IP 拒绝) → 阶段 4 网络出口 Capability Token 强制执行。
+六阶段 SSRF/DNS Rebinding 防护 (11-Policy-Safety, §6):
+Phase 0 Capability 出口强制（read_only 禁写 HTTP / write_local 仅内网）→ Phase 1 DNS 解析 → Phase 2 blockedCIDRs 校验 → Phase 3 TOCTOU 延迟+二次 DNS+二次 CIDR → Phase 3.5 响应 IP 超阈值拒绝 → Phase 4 IP 锁定（覆写 DialContext，锁定已验证 IP）。
+阶段总数为六（含 Phase 0），与 M11 §6 SafeDialer 五阶段标注（不含 Phase 0 独立标注）等价——Phase 0 在 M11 正文中描述为 Capability 出口强制，本字典补全显式列出。
 
 ---
 
@@ -352,7 +353,7 @@ PII 检测与红化 (11-Policy-Safety, §5.1)。Tier 0 使用 Go 原生正则检
 - `[HeuristicsMemory]`: 成功启发式库。`task_type → []Heuristic`，检索时注入 prompt 引导。定义见 M9 §2.1。
 - `[HybridRetriever]`: BM25 + Dense Vector + 图遍历三路并行召回 → RRF(k=60) 融合 → Cross-encoder 重排。M5 和 M10 共享 `pkg/substrate/hybrid_retrieve.go` 底层引擎，检索范围和配置参数各自独立。
 - `[RRF]`: 倒数排名融合 (Reciprocal Rank Fusion)。公式: `weight / (k + rank + 1)`, k=60。多路检索结果归一化融合算法。
-- `[ProgressiveRollout]`: 1% → 5% → 25% → 50% → 100% 流量渐进式发布。M9 决策阶段推进，M13 TrafficSplitter 执行分发，M12 ShadowExecutor 对比评估。
+- `[ProgressiveRollout]`: 渐进式发布。Gate 1 Shadow 阶段以 1% 流量观测（不面用户）；Gate 3 Canary 阶梯为 5%→25%→50%→100%，每步驻留 24h。M9 决策阶段推进，M13 TrafficSplitter 执行分发，M12 ShadowExecutor 对比评估。权威定义见 M09 §2.3。
 - `[GEPA]`: 遗传-Pareto 反射式进化 (Genetic-Pareto-Evolutionary-Algorithm)。PromptOptimizer 三融合算法之一，种群 8 × 5 代 Pareto 前沿搜索。定义见 M9 §1.1。
 - `[MemAPO]`: 双记忆跨任务复用 Prompt 优化。PromptOptimizer 三融合算法之二。
 - `[ContraPrompt]`: 对比轨迹 Prompt 优化。PromptOptimizer 三融合算法之三。
@@ -384,7 +385,7 @@ PII 检测与红化 (11-Policy-Safety, §5.1)。Tier 0 使用 Go 原生正则检
 
 ## §9-quinquies 中断与漂移
 
-- `[UserInterrupt]`: 用户中断协议。M13 `POST /v1/agent/{taskID}/interrupt` 触发 M4 状态机进入 S_INTERRUPT（10 态扩为 11 态）。< 200ms 内传播 context.Cancel 至所有运行 LLM 调用与工具调用。与 [KillSwitch] FULLSTOP 同等优先级但作用域为单任务。定义见 M4 §1, M13 §1。
+- `[UserInterrupt]`: 用户中断协议。M13 `POST /v1/agent/{taskID}/interrupt` 触发 M4 状态机进入 S_INTERRUPT（状态总数见 M4 §1）。< 200ms 内传播 context.Cancel 至所有运行 LLM 调用与工具调用。与 [KillSwitch] FULLSTOP 同等优先级但作用域为单任务。定义见 M4 §1, M13 §1.2.5。
 - `[ReflectionMemory]`: 反思记忆。区别于 Episodic（事件流水）与 Semantic（事实图谱）——是 Agent 自身对"做了什么 + 学到什么"的元认知摘要。M5 §3.X 新表 `reflection_memory` 存储；触发: 任务终态 + Session 关闭 + 失败 reflection。区别于 M9 PersonaRefiner（用户画像更新）。
 - `[PerformanceDrift]`: 运行时任务质量漂移检测。M3 滑窗 [Window-Quality-10min] 统计任务成功率，对比 RollingBaseline（24h EMA），偏离 >2σ → WARN，>3σ → CRITICAL + 候选 [KillSwitch] Stage 1。区别于 M12 RegressionDetector（CI 触发的离线检测）。定义见 M3 §X。
 

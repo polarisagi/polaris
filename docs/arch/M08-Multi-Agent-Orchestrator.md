@@ -81,8 +81,8 @@ SupervisorEpoch: 启动时 [Storage-SQLite] sys_config 原子递增 `orchestrato
 
 ### 1.7 Reaper
 
-阶段1(1s): Lock 扫描, 跳过 Suspended/Compensating → Claimed/Executing+ExpiresAt过期 → `cancel(agent.ContextCancel)` + 等待 5s 宽限期（供工具 ctx.Done() 感知取消并中止，闭合 M7 §4.6 TOCTOU PostCheck 的孤儿副作用窗口）→ Version++ + 重置(ClaimedBy=nil,Status=Pending) → 发射 EventTaskReaped。Version++ 确保 [MutationBus] 残留 Intent 在乐观锁 `WHERE version=oldVersion` 失败。5s 宽限期内若工具已完成并进入 PostCheck，PostCheck 发现 Version 不匹配 → 审计 side_effect_orphaned + 写入 decision_log（M7 §4.6）。
-**崩溃恢复重建时**，扫描到的所有已过期 Executing/Claimed 任务**并发 cancel**（errgroup），等待 max(5s) 统一宽限期，而非串行等待。时间复杂度 O(max(5s))，而非 O(N×5s)。
+阶段1(1s): Lock 扫描, 跳过 Suspended/Compensating → Claimed/Executing+ExpiresAt过期 → `cancel(agent.ContextCancel)` + 等5s 宽限期（供工具 ctx.Done() 感知取消并中止，闭合 M7 §4.6 TOCTOU PostCheck 的孤児副作用窗口）→ Version++ + 重置(ClaimedBy=nil,Status=Pending) → 发射 EventTaskReaped。Version++ 确保 [MutationBus] 残留 Intent 在乐观锁 `WHERE version=oldVersion` 失败。5s 宽限期内若工具已完成并进入 PostCheck，PostCheck 发现 Version 不匹配 → 审计 side_effect_orphaned + 写入 decision_log（M7 §4.6）。
+**崩溃恢复重建时**，扫描到的所有已过期 Executing/Claimed 任务**并发 cancel**（errgroup），等待 max(5s) 统一宽限期，而非串行等待。时间复杂度 O(max(5s))，而非 O(N×5s)。正常运行期间（非崩溃恢复）始终为单一 goroutine 串行扫描，不并发。
 
 阶段2(30s, [Tier-0-Limit] 内存守卫): Lock 内 Status∈{Done,Failed}+UpdatedAt+5min<now+DependsOn反向索引满足 → `delete(tasks,taskID)`, len>50000 追加驱逐 → 释放 Lock → 逐条 MutationIntent→[MutationBus].Submit 归档; 失败→WARN+`~/.polarisagi/polaris/workspace/reaper_fallback/{taskID}.pb`
 
@@ -287,12 +287,7 @@ TopologyFitness 字段：Topology/TaskType/SuccessRate/AvgLatencyMs/AvgTokenCost
 
 **结论：不需要 SharedMemoryBus。**
 
-inv_M8_02 确立了 EventLog 为真相源（单机单 SQLite）。所有子 Agent 在同一进程内共享同一 SQLite 数据库，因此：
-- `episodic_events`、`semantic_memory`、`reflection_memory` 等表天然跨 Agent 可见
-- Blackboard（`tasks` 表）本身即协调层共享状态
-- Agent 间知识传递通过 Blackboard 的 `Result` payload + 各 Agent 读取 EventLog 实现
-
-引入独立的 SharedMemoryBus 组件会引入额外同步开销并与 MutationBus 产生写路径重叠，违反单写者原则（HE-Rule-6）。任何建议引入 SharedMemoryBus 的需求，应首先检查能否通过 Blackboard + EventLog 满足。
+inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所有子 Agent 共享同一 SQLite 数据库，`episodic_events`/`semantic_memory`/`reflection_memory` 等表天然跨 Agent 可见。Agent 间知识传递通过 Blackboard `Result` payload + 各 Agent 读取 EventLog 实现。引入独立的 SharedMemoryBus 会引入额外同步开销并与 MutationBus 产生写路径重叠，违反单写者原则（HE-Rule-6）。
 
 ---
 

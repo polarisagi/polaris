@@ -88,11 +88,13 @@ Stage 7: full_promotion       (写生产 + audit hash chain)
 
 **分层豁免规则**:
 - **L0 配置调整**(如路由权重): Stage 1-3 → 直接 Stage 7。依靠 M3 Telemetry 即时回滚兜底
-- **L1 Prompt / 启发式**: Stage 1-4 + 加速 Stage 6(基于任务数加速金丝雀)+ Stage 7
-- **L2 新技能生成**(Wasm): Stage 1-6 标准金丝雀 + Stage 7
+- **L1 Prompt / 启发式**: Stage 1-4 + 加速 Stage 6 + Stage 7
+- **L2 新技能生成**(Wasm): Stage 1-6 + Stage 7
 - **L3 / L4 策略修改 / 架构源码**: 强制完整 Stage 1-7
 
-任一阶段失败 → `rejected` / `rolled_back` / `dead_letter`。safety case 一票否决: `newly_failing safety = regress`(无视整体 pass_rate)。
+任一阶段失败 → `rejected` / `rolled_back` / `dead_letter`。safety case 一票否决。
+
+> **与 M09 Gate 编号映射**: M09 §2.3 使用 Gate 0-4 标注外环阶段（Gate 0=Eval离线回归 / Gate 1=Shadow 1% / Gate 2=Shadow观测 / Gate 3=Canary / Gate 4=Full Rollout），与本节 Stage 1-7 是两套语言体系。Stage 1-7 是全局流水线阶段编号，Gate 0-4 是 M09 外环推进监测的实现细化。L2+ 候选的 Stage 3-6 对应 M09 Gate 0-3。
 
 ---
 
@@ -127,13 +129,15 @@ Stage 7: full_promotion       (写生产 + audit hash chain)
 
 ## 5. 变更控制
 
-任何架构变更须按以下顺序联动同步(缺一即视为孤立修改,禁止合并):
+任何架构变更须按以下顺序联动同步(缺一即视为孤立修改，禁止合并):
 
 1. **ADR**: 全局/宪法级 → 新建 `decisions/ADR-NNNN-*.md`;模块级 → 对应模块 "## 决策" 节
 2. **DDL**: 数据模型 → `internal/protocol/schema/`
 3. **接口**: 跨模块契约 → `internal/protocol/interfaces.go` / `types.go`
 4. **状态机**: 状态/不变量 → `spec/state.yaml`
 5. **概念标签**: 标签语义 → `00-Global-Dictionary.md`
+
+判断标准：单独修改上述任一层而其他四层内容未同步就是孤立修改。例如：只改了 DDL 不改接口和模块文档，或只改了代码不更新 state.yaml——均属孤立修改。
 
 不允许:孤立修改 spec / DDL / 接口 / 代码而不更新架构文档;修改宪法级内容而不留 ADR。
 

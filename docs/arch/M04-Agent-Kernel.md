@@ -22,7 +22,7 @@
 | inv_M4_01 | LLM 仅做结构化填空——Go 状态机持有控制流，禁止 `while True: call LLM` | spec/state.yaml FSM 校验 |
 | inv_M4_02 | 重放时不重新调 LLM——用 EventLog 录像值（请求全文 + 响应全文） | M4 §8 ReplayMode 物理切断 |
 | inv_M4_03 | PromptFn 为纯函数——同 StateContext → 同 prompt 字节，禁止 wall_clock/random | CI `prompt_determinism` 测试 |
-| inv_M4_04 | System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath（0 表示"未计算"，不触发）；FastPath 仅合成 S_PERCEIVE 结果，不操作 DAGModel/ExecuteResult | M4 RouteReasoning 代码审计 |
+| inv_M4_04 | System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath（0 表示"未计算"，不触发）；FastPath 在 S_PERCEIVE 合成结果、S_PLAN 旁路 LLM（保留已有 DAGModel 或走空执行路径），不操作 DAGModel/ExecuteResult | M4 RouteReasoning 代码审计 |
 | inv_M4_05 | Suspend-on-Idle——空闲 Agent 不轮询，等待 intent channel 唤醒，空载 CPU<1% | M3 `polaris_goroutines` Gauge |
 | inv_M4_06 | 不可逆操作（write_network/privileged）禁止自动回滚——必须显式 HITL | M7 §5.3 DryRunMode + HITL |
 
@@ -118,7 +118,7 @@ PolicyGate: `[Cedar-Gate]` {principal, action, resource, context} → FORBID 优
 
 HeuristicChecker (L2, RiskLevel>=RiskHigh): 批量检查(>100) / 受保护路径(`/etc/`,`/sys/`,`~/.ssh/`→拒绝) / 资源预估 vs Tier 阈值
 
-LLMWatchdog (L3, 仅 RiskPrivileged): 直接默认使用 DeepSeek 输出 ALLOW/DENY 判断，因其低成本不再设严格的 `l3_watchdog_max_per_hour` 频次门槛，无需因超限而强制降级 fallback 至 HITL 审批。L3 为咨询信号——L0/L1/L2 确定性校验未放行的动作不会因 L3 通过而放行。L3 仅可建议拒绝（补充确定性门控），不可建议放行。**DENY 推进 FSM 至 S_VALIDATE_FAIL；ALLOW 或 LLM 不可用时推进至 S_VALIDATE_OK（fail-open）。** 实现见 `pkg/cognition/kernel/agent_execute.go`。
+LLMWatchdog (L3, 仅 RiskPrivileged): 使用 DeepSeek 输出 ALLOW/DENY，不设频次上限（成本可控）。L3 为补充信号——L0/L1/L2 未放行的动作不可因 L3 通过而放行；L3 DENY 推进 S_VALIDATE_FAIL，ALLOW 或 LLM 不可用时 fail-open 推进 S_VALIDATE_OK。实现见 `pkg/cognition/kernel/agent_execute.go`。
 
 ---
 

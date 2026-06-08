@@ -156,7 +156,7 @@ Eval Harness 仅提供对比原语。流量分发由 M9 ProgressiveRollout + M13
 每 10min 计算 100 条采样窗口均值（samplingRate=0.01，degradationThreshold=0.9），avgScore < baselineScore×0.9 触发 SilentDegradationAlert 并执行**归因分析**（Causal Attribution）：
 
 取 7 天前 pre-change baseline 快照，对比当前得分：
-- 当前显著低于 baseline 且 baseline 未退化 → **内部回归** → 自动回滚 7 天 L1-L3 产物 → 全量 Eval replay；
+- 当前显著低于 baseline 且 baseline 未退化 → **内部回归** → 触发 M9 autoRollback：L0/L1 候选直接切回旧 Baseline 版本；L2+ 候选重新入 Staging 流水线 Stage 1（不允许绕过 Staging 流程直接降级），同时触发全量 Eval replay；
 - 两者同比例退化（差分 < 5%）→ **外部因素**（Provider 降级/网络抖动）→ 仅 Alert，抑制自动回滚；
 - 两者退化比例不一致（差分 ≥ 5%）→ 混合因素 → 保守抑制回滚 + HITL；
 - 归因超时（> 60s）→ 同上保守策略。
@@ -232,7 +232,7 @@ TestPermissionModes:
   验证 `default` / `auto_review` / `full_access` 三种安全模式下，对不同信任等级扩展的安装拦截与运行时危险操作（如 write_network）的 HITL 审批/自动放行逻辑符合 Cedar 策略预期。
 ```
 
-CI: PR 自动执行，失败 = PR reject(P0 同级)。套件受 M9 Immutable Kernel 保护(`ci/safety/`)。
+CI: PR 自动执行，失败 = PR reject(P0 同级)。套件受 M11 Immutable Kernel 保护(`ci/safety/`)。
 
 ## 14. EvalStore
 

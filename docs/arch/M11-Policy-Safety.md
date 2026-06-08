@@ -13,9 +13,9 @@
 |-----------|-------------|
 | 策略评估引擎（allow/deny/redact） | 业务逻辑实现者 |
 | Capability Token 签发与撤销中心（短寿命 Ed25519） | 长期凭据持有者 |
-| 沙箱选型决策器（Sbx-L1/L2/L3） | 沙箱执行器（那是 M7 wazero/gVisor） |
+| 沙箱分级规则定义（Sbx-L1/L2/L3 判定依据: TrustTier + RiskLevel） | 沙箱执行器（那是 M7 wazero/gVisor），沙箱选型由 M7 ToolRegistry 指定 |
 | 污点标签传播规则（Taint 5 级 + PropagateTaint） | 污点数据存储者（那是 M2 events/chunks 表 TaintLevel 列） |
-| 安全事件审计源（AuditTrail hash chain，不可篡改） | 通用日志（那是 M3） |
+| 安全事件审计源（内存 HashChain 防篡改 + DB 永久化存档） | 通用业务日志（那是 M3） |
 | KillSwitch 阶段变迁的唯一触发者 | KillSwitch 响应执行（M4/M8/M13 各自响应） |
 | SafeDialer 统一网络出口（DNS + CIDR + TOCTOU） | 具体网络协议实现（那是 Go 标准库 net.Dialer） |
 
@@ -487,7 +487,7 @@ Hash Chain 结构：`RecordHash = SHA-256(序列化后记录，不含 RecordHash
 
 `VerifyIntegrity()` 遍历内存链逐条重算 RecordHash 并比对 PrevHash 链接，返回 (ok bool, brokenIndex int)。同时在 `RecoverOnStartup()` 中对从 DB 恢复的尾部 100 条记录执行完整性校验，不通过则拒绝启动。
 
-**DB 层 Hash Chain（全事件覆盖）**：`events` 表新增 `hash`/`prev_hash` 列，由 `DatabaseWriter.executeInsertEvent` 在 INSERT 时同步计算：`hash = SHA-256(id||topic||actor||type||payload||prev_hash)`。同一批次内链式连续（SQLite 可序列化事务内前一条 INSERT 对后续查询可见）。提供独立于内存审计链的持久可验证层，覆盖全表事件（不限 audit.policy topic）。
+**DB 层 Hash Chain（全事件覆盖）**：`events` 表新增 `hash`/`prev_hash` 列，由 `DatabaseWriter.executeInsertEvent` 在 INSERT 时同步计算：`hash = SHA-256(id||topic||actor||type||payload||prev_hash)`。提供独立于内存审计链的持久可验证层，覆盖全表事件（不限 audit.policy topic）。两条链的关系：内存审计链守护 audit.policy 事件实时可验证；DB 层 hash chain 是完整性备份，崩溃恢复后可验证全量历史事件。
 
 ### 7.2 Epoch 轮转
 

@@ -337,7 +337,7 @@ Stage 1 — 5 路宽召回:
     durative.RetrieveGroups(query, 5) → Label+Summary 参与 BM25 打分
 
 Stage 2 — RRF 融合:
-  score(d) = Σ weight_i / (60 + rank_i + 1)，按各路 rank 累加后降序
+  score(d) = Σ weight_i / (k + rank_i + 1)，k 见 `spec/state.yaml §m5_memory.rrf_k`（默认 60），按各路 rank 累加后降序
 
 Stage 3 — 截断: FinalTopK=20（默认，config.FinalTopK 可覆盖）
 ```
