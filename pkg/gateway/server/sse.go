@@ -342,6 +342,8 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 		var roundText strings.Builder
 		var roundReasoning strings.Builder
 		var toolCalls []map[string]json.RawMessage
+		var clientCancelled bool
+		ctxDoneCh := ctx.Done()
 	roundLoop:
 		for {
 			select {
@@ -354,7 +356,9 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 					roundReasoning.WriteString(ev.Content)
 				case protocol.StreamTextDelta:
 					if ev.Content != "" {
-						writeSSE(w, flusher, "token", map[string]string{"content": ev.Content})
+						if !clientCancelled {
+							writeSSE(w, flusher, "token", map[string]string{"content": ev.Content})
+						}
 						roundText.WriteString(ev.Content)
 						sb.WriteString(ev.Content)
 					}
@@ -370,10 +374,26 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 					if inferErr == "" {
 						inferErr = ev.Content
 					}
+				case protocol.StreamCancelled:
+					if t := ev.Usage.InputTokens + ev.Usage.OutputTokens; t > 0 {
+						totalTokens = t
+					}
+					break roundLoop
 				}
-			case <-ctx.Done():
-				return
+			case <-ctxDoneCh:
+				clientCancelled = true
+				ctxDoneCh = nil
 			}
+		}
+
+		if clientCancelled {
+			if totalTokens == 0 {
+				if mt, ok := p.Tokenizer().(protocol.MultimodalTokenizer); ok {
+					totalTokens = mt.EstimateRequest(inferReq)
+				}
+			}
+			// 如果客户端断开了连接，中断后续工具调用，不再进入下一轮 Tool 循环
+			break
 		}
 
 		// 没有 tool_call → 推理完成，退出循环
@@ -489,7 +509,7 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 			b, _ := json.Marshal(executedToolCalls)
 			tcJson = string(b)
 		}
-		if err := s.saveMessage(ctx, sessionID, "assistant", reply, tcJson, inferLatencyMs); err != nil {
+		if err := s.saveMessage(context.WithoutCancel(ctx), sessionID, "assistant", reply, tcJson, inferLatencyMs); err != nil {
 			slog.Error("server: saveMessage assistant", "session", sessionID, "err", err)
 		}
 		if tw != nil {
@@ -497,15 +517,16 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 		}
 	}
 	if isFirstTurn {
-		_ = s.updateSessionTitle(ctx, sessionID, req.Input)
+		_ = s.updateSessionTitle(context.WithoutCancel(ctx), sessionID, req.Input)
 	}
-	s.touchSession(ctx, sessionID)
+	s.touchSession(context.WithoutCancel(ctx), sessionID)
 
 	slog.Info("server: turn complete",
 		"session", sessionID,
 		"latency_ms", inferLatencyMs,
 		"tokens", totalTokens,
 		"reply_bytes", len(reply),
+		"client_cancelled", ctx.Err() != nil,
 	)
 
 	// message.after hook：fire-and-forget，不阻塞响应
