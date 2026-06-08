@@ -61,10 +61,12 @@ type sseAttachment struct {
 
 func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo
 	var req struct {
-		Input       string          `json:"input"`
-		SessionID   string          `json:"session_id,omitempty"`
-		RunID       string          `json:"run_id,omitempty"`
-		Attachments []sseAttachment `json:"attachments,omitempty"`
+		Input           string          `json:"input"`
+		SessionID       string          `json:"session_id,omitempty"`
+		RunID           string          `json:"run_id,omitempty"`
+		ModelID         string          `json:"model_id,omitempty"`
+		ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+		Attachments     []sseAttachment `json:"attachments,omitempty"`
 		// back-compat
 		ImageParts []sseImagePart `json:"image_parts,omitempty"`
 	}
@@ -257,10 +259,16 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 	}
 
 	// ── 选取最优 Provider ─────────────────────────────────────────────────
-	// 优先用 "default" 角色（对话模型），次选 "general"（参与全局 LB）
-	p := s.registry.PickProvider("default")
+	var p protocol.Provider
+	if req.ModelID != "" {
+		p = s.registry.PickProviderByRecordID(req.ModelID)
+	}
 	if p == nil {
-		p = s.registry.PickProvider("general")
+		// 优先用 "default" 角色（对话模型），次选 "general"（参与全局 LB）
+		p = s.registry.PickProvider("default")
+		if p == nil {
+			p = s.registry.PickProvider("general")
+		}
 	}
 	if p == nil {
 		if tw != nil {
@@ -302,11 +310,24 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 
 	const maxToolRounds = 10
 	for range maxToolRounds {
+		var effort protocol.ReasoningEffort
+		switch req.ReasoningEffort {
+		case "low":
+			effort = protocol.ReasoningEffortLow
+		case "medium":
+			effort = protocol.ReasoningEffortMedium
+		case "high":
+			effort = protocol.ReasoningEffortHigh
+		default:
+			effort = protocol.ReasoningEffortNone
+		}
+
 		inferReq := &protocol.InferRequest{
-			Messages:    history,
-			MaxTokens:   4096,
-			Temperature: 0.7,
-			Tools:       toolSchemas,
+			Messages:        history,
+			MaxTokens:       4096,
+			Temperature:     0.7,
+			Tools:           toolSchemas,
+			ReasoningEffort: effort,
 		}
 		ch, err := p.StreamInfer(ctx, inferReq)
 		if err != nil {

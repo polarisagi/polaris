@@ -221,6 +221,38 @@ func (r *ProviderRegistry) PickProvider(role string) protocol.Provider {
 	return e.provider
 }
 
+// PickProviderByRecordID 尝试通过 model 记录的 UUID 前缀寻找对应的 Provider。
+func (r *ProviderRegistry) PickProviderByRecordID(mID string) protocol.Provider {
+	if mID == "" {
+		return nil
+	}
+	suffix := mID
+	if len(suffix) >= 8 {
+		suffix = suffix[:8]
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var chosen *providerEntry
+	bestScore := -1.0
+	for name, e := range r.entries {
+		if !strings.HasSuffix(name, "/"+suffix) {
+			continue
+		}
+		if !e.cb.Allow() {
+			continue
+		}
+		if s := e.healthScore(); s > bestScore {
+			bestScore = s
+			chosen = e
+		}
+	}
+	if chosen != nil {
+		return chosen.provider
+	}
+	return nil
+}
+
 // PickProviderName 返回指定角色最优 Provider 的注册名（含模型标识），供状态展示。
 func (r *ProviderRegistry) PickProviderName(role string) string {
 	e := r.BestForRole(role, nil)
