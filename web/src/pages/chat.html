@@ -200,31 +200,6 @@
         </ul>
       </div>
 
-      <!-- Top Controls Row (Model & Reasoning) -->
-      <div class="flex items-center gap-3 mb-2 px-1">
-        <!-- Model Badge -->
-        <div class="flex items-center gap-1.5 bg-base-200/50 border border-base-300/50 px-3 py-1 rounded-full text-xs text-base-content/70 hover:bg-base-200 transition-colors">
-          <svg class="w-3.5 h-3.5 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
-          <select class="bg-transparent font-medium focus:outline-none cursor-pointer" x-model="$store.chat.selectedModel">
-            <option value="">默认核心模型</option>
-            <template x-for="m in $store.providers.allModels" :key="m.id">
-              <option :value="m.id" x-text="(m.name || m.model_id) + ' (' + m.providerName + ')'"></option>
-            </template>
-          </select>
-        </div>
-
-        <!-- Reasoning Badge -->
-        <div class="flex items-center gap-1.5 bg-base-200/50 border border-base-300/50 px-3 py-1 rounded-full text-xs text-base-content/70 hover:bg-base-200 transition-colors">
-          <svg class="w-3.5 h-3.5 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          <select class="bg-transparent font-medium focus:outline-none cursor-pointer" x-model="$store.chat.reasoningEffort">
-            <option value="auto">智能思考 (Auto)</option>
-            <option value="low">基础响应 (Low)</option>
-            <option value="medium">深度思考 (Medium)</option>
-            <option value="high">极限推理 (High)</option>
-          </select>
-        </div>
-      </div>
-
       <!-- Attachments -->
       <div class="flex gap-2 mb-2 flex-wrap" x-show="$store.chat.attachments.length > 0" x-cloak>
         <template x-for="(att, idx) in $store.chat.attachments" :key="idx">
@@ -236,36 +211,58 @@
         </template>
       </div>
 
-      <div class="flex items-end gap-2 w-full">
-        <button class="btn btn-circle btn-ghost btn-sm text-base-content/70" @click="$refs.fileInput.click()">
-          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-
-        <textarea id="input" name="input" class="w-full bg-transparent border-0 focus:ring-0 focus:outline-none resize-none px-2 py-3 leading-relaxed min-h-[48px] max-h-48 overflow-y-auto placeholder:text-base-content/60"
+      <div class="flex flex-col w-full">
+        <textarea id="input" name="input" class="w-full bg-transparent border-0 focus:ring-0 focus:outline-none resize-none px-2 py-2 leading-relaxed min-h-[48px] max-h-48 overflow-y-auto placeholder:text-base-content/60"
                   x-model="input" :rows="rows"
                   :placeholder="$store.i18n.t('chat_placeholder')"
                   :disabled="$store.chat.isActive && $store.chat.state !== 'COMPLETE'"
                   @keydown="onKeydown($event)" @input="$el.style.height='auto'; $el.style.height=Math.min($el.scrollHeight, 192)+'px'"
                   @paste="handlePaste($event)" @drop="handleDrop($event)" @dragover.prevent=""></textarea>
 
-        <div class="flex items-center gap-1">
-          <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm rounded-full font-medium w-28 shrink-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
-            <option value="default" x-text="$store.i18n.t('computer_mode_default_short')"></option>
-            <option value="auto_review" x-text="$store.i18n.t('computer_mode_auto_short')"></option>
-            <option value="full_access" x-text="$store.i18n.t('computer_mode_full_short')"></option>
-          </select>
+        <div class="flex items-center justify-between w-full mt-2">
+          <!-- Left Controls (Attachment, Model, Reasoning) -->
+          <div class="flex items-center gap-1">
+            <button class="btn btn-circle btn-ghost btn-sm text-base-content/70" @click="$refs.fileInput.click()">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
 
-          <button class="btn btn-circle btn-ghost btn-sm text-base-content/70" :class="$store.chat.isRecording ? 'text-error bg-error/10' : ''" @click="$store.chat.toggleRecording()">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-          </button>
-          
-          <button class="btn btn-circle btn-primary btn-sm" x-show="!$store.chat.isActive" @click="submit()" :disabled="!input.trim() && $store.chat.attachments.length === 0">
-            <svg class="w-4 h-4 ml-[-2px] mt-[1px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-          </button>
+            <!-- Model Badge -->
+            <select class="select select-ghost select-sm px-2 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.selectedModel">
+              <option value="">Auto</option>
+              <template x-for="m in $store.providers.allModels" :key="m.id">
+                <option :value="m.id" x-text="m.name || m.model_id"></option>
+              </template>
+            </select>
 
-          <button class="btn btn-circle btn-warning btn-sm" x-show="$store.chat.isActive" @click="$store.chat.interrupt('abort')">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
-          </button>
+            <!-- Reasoning Badge -->
+            <select class="select select-ghost select-sm px-2 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.reasoningEffort">
+              <option value="auto">Think: Auto</option>
+              <option value="low">Think: Low</option>
+              <option value="medium">Think: Medium</option>
+              <option value="high">Think: High</option>
+            </select>
+          </div>
+
+          <!-- Right Controls (Computer Mode, Mic, Submit, Interrupt) -->
+          <div class="flex items-center gap-1">
+            <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm px-2 text-xs rounded-full font-medium w-28 shrink-0 h-8 min-h-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
+              <option value="default" x-text="$store.i18n.t('computer_mode_default_short')"></option>
+              <option value="auto_review" x-text="$store.i18n.t('computer_mode_auto_short')"></option>
+              <option value="full_access" x-text="$store.i18n.t('computer_mode_full_short')"></option>
+            </select>
+
+            <button class="btn btn-circle btn-ghost btn-sm text-base-content/70 h-8 w-8 min-h-0" :class="$store.chat.isRecording ? 'text-error bg-error/10' : ''" @click="$store.chat.toggleRecording()">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </button>
+            
+            <button class="btn btn-circle btn-primary btn-sm h-8 w-8 min-h-0" x-show="!$store.chat.isActive" @click="submit()" :disabled="!input.trim() && $store.chat.attachments.length === 0">
+              <svg class="w-4 h-4 ml-[-2px] mt-[1px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+
+            <button class="btn btn-circle btn-warning btn-sm h-8 w-8 min-h-0" x-show="$store.chat.isActive" @click="$store.chat.interrupt('abort')">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
+            </button>
+          </div>
         </div>
       </div>
       <input id="form-field-20" name="form-field-20" type="file" multiple accept="*/*" class="hidden" x-ref="fileInput" @change="handleFileSelect($event)">
