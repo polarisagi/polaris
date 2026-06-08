@@ -25,6 +25,7 @@ import './store/eval.js'
 import './store/components.js'
 import './store/computer.js'
 import './store/plugins.js'
+import './store/update.js'
 
 // ── Markdown 渲染配置 ──────────────────────────────────────────────────────
 // marked v5+ 移除了 setOptions()，改用 marked.use()
@@ -112,6 +113,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 首次配置引导（延迟 400ms 等 Alpine reactive 系统就绪）
   setTimeout(() => Alpine.store('onboard').checkFirstRun(), 400)
+
+  // 版本检查与热更新（30s 后首检，6h 定时）
+  Alpine.store('update').init()
 
   // 刷新时恢复上次会话历史
   if (page === 'chat') {

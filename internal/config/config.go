@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	System        SystemConfig        `toml:"system"`
+	Download      DownloadConfig      `toml:"download"`
 	Inference     InferenceConfig     `toml:"inference"`
 	Storage       StorageConfig       `toml:"storage"`
 	Observability ObservabilityConfig `toml:"observability"`
@@ -24,6 +25,17 @@ type Config struct {
 	Eval          EvalConfig          `toml:"eval"`
 	Interface     InterfaceConfig     `toml:"interface"`
 	Thresholds    Thresholds          `toml:"-"`
+}
+
+// DownloadConfig 控制文件下载行为，包括中国区 GitHub 加速代理。
+type DownloadConfig struct {
+	// GithubProxy 控制 GitHub 资源的下载代理策略。
+	// 取值：
+	//   "auto"                 — 自动探测（默认）：连不上 github.com 时自动切换 ghproxy
+	//   "off" / "none"         — 始终直连，禁用代理
+	//   "https://ghproxy.net"  — 强制使用指定代理，不再探测
+	// 环境变量 POLARIS_GITHUB_PROXY 优先级高于此配置。
+	GithubProxy string `toml:"github_proxy"`
 }
 
 type SystemConfig struct {
@@ -51,12 +63,27 @@ type InferenceConfig struct {
 	EmbedderDim       int         `toml:"embedder_dim"` // vector dimension; changes on local_only toggle
 	Cache             CacheConfig `toml:"cache"`
 	STT               STTConfig   `toml:"stt"`
+	TTS               TTSConfig   `toml:"tts"`
 }
 
 type STTConfig struct {
 	SherpaVersion      string `toml:"sherpa_version"`
 	SenseVoiceModelURL string `toml:"sense_voice_model_url"`
 	PunctModelURL      string `toml:"punct_model_url"`
+}
+
+// TTSConfig 本地 TTS（sherpa-onnx）模型下载配置。
+// 模型文件下载后存放在 data_dir/models/tts/。
+type TTSConfig struct {
+	// SherpaVersion 与 STT 共用同一 sherpa-onnx 版本（共享动态库）。
+	// 留空时自动复用 inference.stt.sherpa_version。
+	SherpaVersion string `toml:"sherpa_version"`
+	// ModelURL sherpa-onnx TTS 模型 tar.bz2 下载地址（GitHub Releases）。
+	// 留空表示不启用本地 TTS，继续使用 edge-tts 云端 API。
+	ModelURL string `toml:"model_url"`
+	// TokensURL 词表文件单独下载地址（部分模型将 tokens.txt 独立发布）。
+	// 留空时假设 model URL 的归档中已包含 tokens.txt。
+	TokensURL string `toml:"tokens_url"`
 }
 
 type CacheConfig struct {

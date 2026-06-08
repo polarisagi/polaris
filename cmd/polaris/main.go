@@ -36,7 +36,9 @@ import (
 	"github.com/polarisagi/polaris/pkg/gateway/server"
 	"github.com/polarisagi/polaris/pkg/governance/eval"
 	"github.com/polarisagi/polaris/pkg/substrate"
+	"github.com/polarisagi/polaris/pkg/substrate/downloader"
 	"github.com/polarisagi/polaris/pkg/substrate/inference"
+	"github.com/polarisagi/polaris/pkg/substrate/updater"
 	"github.com/polarisagi/polaris/pkg/substrate/observability"
 	"github.com/polarisagi/polaris/pkg/substrate/policy"
 	"github.com/polarisagi/polaris/pkg/substrate/storage"
@@ -130,6 +132,10 @@ func run() error { //nolint:gocyclo
 		return errors.Wrap(errors.CodeInternal, "config.Load", err)
 	}
 	slog.Info("polaris: config loaded", "tier", cfg.System.Tier, "max_agents", cfg.System.MaxAgents)
+
+	// ─── 1.1 下载代理配置（必须在任何下载操作前调用）─────────────────────────────
+	// 优先级：POLARIS_GITHUB_PROXY 环境变量 > download.github_proxy 配置项 > 自动探测
+	downloader.Configure(cfg.Download.GithubProxy)
 
 	// ─── 0.3 数据目录解析与初始化 ─────────────────────────────────────────────
 	dataDir, err := resolveDataDirBase(cfg)
@@ -651,6 +657,18 @@ func run() error { //nolint:gocyclo
 			}
 		}
 	}
+
+	// ── OTA 热更新管理器 ─────────────────────────────────────────────────────────
+	updMgr := updater.New(Version, CommitHash, BuildDate, safeHTTPClient)
+	updMgr.SetRestartFn(func() {
+		// 使用 syscall.Exec 原地替换进程（保持 PID，launchd/systemd 无感重启）
+		exe, _ := os.Executable()
+		slog.Info("polaris: exec-restarting with new binary", "path", exe)
+		_ = syscall.Exec(exe, os.Args, os.Environ())
+		os.Exit(0) // syscall.Exec 失败时兜底
+	})
+	// 前端直接调 GitHub API 检查版本（hermes 设计），后端只负责执行更新，无需后台轮询。
+	httpServer.SetUpdater(updMgr)
 
 	httpServer.SetInstallManager(installMgr)
 	httpServer.SetSkillSigningKey(skillSigningKey)

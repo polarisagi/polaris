@@ -28,6 +28,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/substrate/inference"
 	"github.com/polarisagi/polaris/pkg/substrate/inference/stt"
 	"github.com/polarisagi/polaris/pkg/substrate/observability"
+	"github.com/polarisagi/polaris/pkg/substrate/updater"
 	webui "github.com/polarisagi/polaris/web"
 
 	"gopkg.in/yaml.v3"
@@ -60,6 +61,8 @@ type Server struct {
 	toolSchemaCache []protocol.ToolSchema
 	toolSchemaMu    sync.RWMutex
 
+	updater *updater.Manager // OTA 自更新管理器（可为 nil）
+
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
 	soulMDContent  string // ~/.polarisagi/polaris/config/SOUL.md 内容
 	serverPlatform string // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
@@ -72,9 +75,10 @@ type Server struct {
 	cronCancel context.CancelFunc
 }
 
-func (s *Server) SetInstallManager(m *marketplace.Manager) { s.installMgr = m }
-func (s *Server) SetScriptRunner(r marketplace.HookRunner) { s.scriptRunner = r }
-func (s *Server) SetSkillSigningKey(k []byte)              { s.skillSignKey = k }
+func (s *Server) SetInstallManager(m *marketplace.Manager)  { s.installMgr = m }
+func (s *Server) SetScriptRunner(r marketplace.HookRunner)  { s.scriptRunner = r }
+func (s *Server) SetSkillSigningKey(k []byte)               { s.skillSignKey = k }
+func (s *Server) SetUpdater(u *updater.Manager)             { s.updater = u }
 
 // SetMCPManager 注入 MCPManager（NewServer 之后、Start 之前调用）。
 // 同时注册缓存失效回调：异步插件 MCP 连接完成时自动清除 toolSchemaCache，
@@ -380,6 +384,10 @@ func NewServer(addr string, dataDir string, agent *kernel.Agent, bb protocol.Bla
 	// 系统备份 / 恢复
 	mux.HandleFunc("GET /v1/export/backup", s.handleExportBackup)
 	mux.HandleFunc("POST /v1/import/backup", s.handleImportBackup)
+
+	// 系统版本 & OTA 热更新（前端直接调 GitHub API 检查版本，后端只负责执行更新）
+	mux.HandleFunc("GET /v1/system/version", s.handleGetVersion)
+	mux.HandleFunc("POST /v1/system/update", s.handleTriggerUpdate)
 
 	s.setupWebUI(mux)
 

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/downloader"
 )
 
 // SkillFrontmatter 是 SKILL.md frontmatter 的完整解析结果（agentskills.io 开放标准字段）。
@@ -359,37 +359,10 @@ func discoverMarketplaceEntries(mpDir string, mp protocol.Marketplace) ([]protoc
 	return entries, err
 }
 
-// getGitHash 获取指定目录仓库的当前 HEAD hash
-func getGitHash(dir string) string {
-	cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
-	if out, err := cmd.Output(); err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return ""
-}
-
-// pullOrClone 尝试执行 git pull 或 clone。
-// available=false 表示仓库不可用；available=true+updated=false 表示仓库存在但无新变化。
-func pullOrClone(repoURL, mpDir, gitDir string) (available bool, updated bool) {
-	if _, err := os.Stat(gitDir); err == nil {
-		hashBefore := getGitHash(mpDir)
-		errPull := exec.Command("git", "-C", mpDir, "pull").Run()
-		if errPull == nil {
-			return true, hashBefore != getGitHash(mpDir)
-		}
-		os.RemoveAll(mpDir)
-	} else {
-		os.RemoveAll(mpDir)
-	}
-
-	if _, err := os.Stat(mpDir); os.IsNotExist(err) {
-		errClone := exec.Command("git", "clone", "--depth", "1", repoURL, mpDir).Run()
-		if errClone != nil {
-			return false, false
-		}
-		return true, true
-	}
-	return false, false
+// pullOrClone 通过 downloader.GitCloneOrPull 同步单个市场仓库。
+// 在中国大陆网络下自动走 ghproxy 加速。
+func pullOrClone(repoURL, mpDir string) (available bool, updated bool) {
+	return downloader.GitCloneOrPull(context.Background(), nil, repoURL, mpDir)
 }
 
 // syncMarketplace 同步单个市场
@@ -400,7 +373,6 @@ func (s *Server) syncMarketplace(ctx context.Context, mp protocol.Marketplace, t
 
 	safeID := strings.ReplaceAll(mp.ID, "/", "_")
 	mpDir := filepath.Join(tmpDir, safeID)
-	gitDir := filepath.Join(mpDir, ".git")
 
 	var available, updated bool
 	if localOnly {
@@ -409,7 +381,7 @@ func (s *Server) syncMarketplace(ctx context.Context, mp protocol.Marketplace, t
 			updated = true
 		}
 	} else {
-		available, updated = pullOrClone(mp.RepoURL, mpDir, gitDir)
+		available, updated = pullOrClone(mp.RepoURL, mpDir)
 	}
 
 	if !available {
@@ -451,13 +423,7 @@ func (s *Server) insertMarketplaceEntries(ctx context.Context, mp protocol.Marke
 	if err == nil {
 		_, _ = tx.ExecContext(ctx, "DELETE FROM extension_catalog WHERE marketplace_id = ?", mp.ID)
 
-		// 获取最新 commit hash 作为默认版本号
-		cmd := exec.Command("git", "-C", mpDir, "rev-parse", "--short", "HEAD")
-		out, errCmd := cmd.Output()
-		var defaultVersion string
-		if errCmd == nil {
-			defaultVersion = strings.TrimSpace(string(out))
-		}
+		defaultVersion := downloader.GitShortHash(mpDir)
 
 		for i := range entries {
 			e := &entries[i]

@@ -5,12 +5,17 @@ CARGO := cargo
 BINARY := polaris
 WEBUI_DIR := web
 
+VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+DATE     := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LDFLAGS  := -X main.Version=$(VERSION) -X main.CommitHash=$(COMMIT) -X main.BuildDate=$(DATE)
+
 build: generate-manifest rust-build build-ui
 	@mkdir -p bin/lib
 	@cp rust/substrate/target/release/libsubstrate.dylib bin/lib/ 2>/dev/null || true
 	@cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
 	@cp rust/substrate/target/release/substrate.dll bin/lib/ 2>/dev/null || true
-	$(GO) build -o bin/$(BINARY) ./cmd/polaris
+	$(GO) build -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
 	@$(MAKE) --no-print-directory _copy-skills
 
 build-tier1: generate-manifest rust-build-tier1 build-ui
@@ -18,7 +23,7 @@ build-tier1: generate-manifest rust-build-tier1 build-ui
 	@cp rust/substrate/target/release/libsubstrate.dylib bin/lib/ 2>/dev/null || true
 	@cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
 	@cp rust/substrate/target/release/substrate.dll bin/lib/ 2>/dev/null || true
-	$(GO) build -tags tier1 -o bin/$(BINARY) ./cmd/polaris
+	$(GO) build -tags tier1 -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
 	@$(MAKE) --no-print-directory _copy-skills
 
 # 将已编译的 wasm 复制到 bin/skills/ 使二进制可独立运行（不依赖 CWD）

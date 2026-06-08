@@ -29,6 +29,18 @@ db_dir        = ""   # 示例："/mnt/nvme/polarisagi/data" — 高速 NVMe
 workspace_dir = ""   # 示例："/tmp/polarisagi/workspace" — tmpfs 沙箱
 models_dir    = ""   # 示例："/mnt/data/models" — 大容量模型盘
 
+# ── 下载配置 ────────────────────────────────────────────────────────────────
+[download]
+# GitHub 下载代理（仅中国大陆有意义；海外用户 auto 模式会自动跳过代理）
+# "auto"                          → 自动探测：500ms 内可达 github.com 则直连（海外/VPN），
+#                                   否则判定为中国大陆网络，按优先级切换镜像（默认）
+# "off"                           → 始终直连，禁用代理
+# "https://ghproxy.net"           → 强制使用主镜像（中国区推荐）
+# "https://mirror.ghproxy.com"    → 强制使用备用镜像
+# auto 模式下降级顺序：ghproxy.net → mirror.ghproxy.com → 直连
+# 亦可通过环境变量设置（优先级更高）：export POLARIS_GITHUB_PROXY=https://ghproxy.net
+github_proxy = "auto"
+
 [inference]
 default_provider = "deepseek-v4-flash"
 reasoning_provider = "deepseek-v4-pro"
@@ -42,6 +54,13 @@ backend = "pebble"
 sherpa_version = "1.13.2"
 sense_voice_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09.tar.bz2"
 punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
+
+# 本地 TTS 模型（sherpa-onnx；留空则继续使用 edge-tts 云端 API）
+# 默认选用 Kokoro 中英双语模型（82M，Tier-0 可用）
+[inference.tts]
+sherpa_version = ""  # 留空复用 inference.stt.sherpa_version
+model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-kokoro-multi-lang-v1_1.tar.bz2"
+tokens_url = ""
 
 [storage.engines]
 relational = "sqlite"

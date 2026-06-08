@@ -115,7 +115,7 @@ func cliRequest(method, path string, body any, out any) error {
 
 // ── 版本 ─────────────────────────────────────────────────────────────────────
 
-func cliVersion() string { return "0.1.0" }
+func cliVersion() string { return Version }
 
 // ── Help ─────────────────────────────────────────────────────────────────────
 

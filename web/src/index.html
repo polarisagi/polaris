@@ -148,6 +148,32 @@
       </div>
     </header>
 
+    <!-- ── 新版本更新通知横幅 ────────────────────────── -->
+    <div x-show="$store.update.hasUpdate || $store.update.status === 'error'"
+         x-cloak
+         class="flex items-center justify-between px-4 py-1.5 text-xs font-medium shrink-0"
+         :class="$store.update.status === 'error' ? 'bg-error text-error-content' : 'bg-info text-info-content'">
+      <span x-show="$store.update.status !== 'error'">
+        发现新版本 <strong x-text="$store.update.latest"></strong>
+        <span class="opacity-70 ml-1" x-text="`（当前 ${$store.update.current}）`"></span>
+      </span>
+      <span x-show="$store.update.status === 'error'" x-text="'更新失败：' + $store.update.error"></span>
+      <div class="flex items-center gap-2">
+        <a x-show="$store.update.releaseURL && $store.update.status !== 'error'"
+           :href="$store.update.releaseURL" target="_blank" rel="noopener"
+           class="underline opacity-80 hover:opacity-100">查看更新日志</a>
+        <button @click="$store.update.status === 'error' ? ($store.update.hasUpdate = false) : $store.update.triggerUpdate()"
+                :disabled="$store.update.busy"
+                class="btn btn-xs btn-neutral ml-2">
+          <span x-show="!$store.update.busy" x-text="$store.update.status === 'error' ? '关闭' : '立即更新'"></span>
+          <span x-show="$store.update.busy" class="flex items-center gap-1">
+            <span class="loading loading-spinner loading-xs"></span>
+            <span x-text="$store.update.statusLabel"></span>
+          </span>
+        </button>
+      </div>
+    </div>
+
     <!-- Content pages -->
     <div id="content" class="flex-1 overflow-hidden relative flex flex-col">
       <page-fragment src="/pages/chat.html"></page-fragment>

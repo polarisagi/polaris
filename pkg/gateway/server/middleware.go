@@ -190,6 +190,8 @@ var adminWritePaths = []string{
 	"POST /v1/providers",
 	"PUT /v1/providers",
 	"DELETE /v1/providers",
+	// OTA 更新：特权操作，无 API Key 时仅限 localhost 访问
+	"POST /v1/system/update",
 }
 
 // isAdminWrite 判断当前请求是否属于高权限写操作。
