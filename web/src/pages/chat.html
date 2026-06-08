@@ -226,26 +226,28 @@
               <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </button>
 
-            <!-- Model Badge -->
-            <select class="select select-ghost select-sm px-2 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.selectedModel">
-              <option value="">Auto</option>
-              <template x-for="m in $store.providers.allModels" :key="m.id">
-                <option :value="m.id" x-text="m.name || m.model_id"></option>
-              </template>
-            </select>
+            <div class="flex items-center gap-1 ml-1">
+              <!-- Model Badge -->
+              <select class="select select-ghost select-sm pl-3 pr-8 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.selectedModel">
+                <option value="">Auto</option>
+                <template x-for="m in $store.providers.allModels" :key="m.id">
+                  <option :value="m.id" x-text="m.name || m.model_id"></option>
+                </template>
+              </select>
 
-            <!-- Reasoning Badge -->
-            <select class="select select-ghost select-sm px-2 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.reasoningEffort">
-              <option value="auto">Think: Auto</option>
-              <option value="low">Think: Low</option>
-              <option value="medium">Think: Medium</option>
-              <option value="high">Think: High</option>
-            </select>
+              <!-- Reasoning Badge -->
+              <select class="select select-ghost select-sm pl-3 pr-8 text-xs text-base-content/70 font-medium rounded-full hover:bg-base-200 transition-colors focus:outline-none cursor-pointer h-8 min-h-0" x-model="$store.chat.reasoningEffort">
+                <option value="auto">Think: Auto</option>
+                <option value="low">Think: Low</option>
+                <option value="medium">Think: Medium</option>
+                <option value="high">Think: High</option>
+              </select>
+            </div>
           </div>
 
           <!-- Right Controls (Computer Mode, Mic, Submit, Interrupt) -->
           <div class="flex items-center gap-1">
-            <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm px-2 text-xs rounded-full font-medium w-28 shrink-0 h-8 min-h-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
+            <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm pl-3 pr-8 text-xs rounded-full font-medium shrink-0 h-8 min-h-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
               <option value="default" x-text="$store.i18n.t('computer_mode_default_short')"></option>
               <option value="auto_review" x-text="$store.i18n.t('computer_mode_auto_short')"></option>
               <option value="full_access" x-text="$store.i18n.t('computer_mode_full_short')"></option>
