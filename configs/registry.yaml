@@ -17,22 +17,3 @@
   homepage: https://github.com/microsoft/playwright-mcp
   timeout: 60
   installed: false
-- id: figma/mcp-server
-  publisher: figma
-  type: mcp
-  trust_tier: 3
-  name: Figma MCP Server
-  description: Figma 官方 MCP Server，让 AI 读取设计文件结构、组件层级、样式变量，实现设计稿到代码的精准转换。需要 FIGMA_API_KEY。
-  transport: streamable_http
-  command: ""
-  args: []
-  env:
-    FIGMA_API_KEY: ""
-  url: https://mcp.figma.com/mcp
-  tags:
-    - design
-    - ui
-    - official
-  homepage: https://www.figma.com/developers/mcp
-  timeout: 30
-  installed: false
