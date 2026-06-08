@@ -205,20 +205,29 @@ Alpine.store('chat', {
   },
 
   interrupt(action = 'abort') {
-    if (!this.taskID) return
+    if (!this.taskID && !window._activeSseClient) return
     // 记录最后一条用户消息内容，供"恢复编辑"按钮使用
     if (action === 'abort') {
       const lastUser = [...this.messages].reverse().find(m => m.role === 'user')
       this.lastAbortedInput = lastUser ? lastUser.content : null
     }
-    fetch(`/v1/agent/${this.taskID}/interrupt`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ action }),
-    })
-    // 乐观更新：如果是 abort，立即标记中断徽章
-    if (action === 'abort' && this.currentTokens) {
+    if (this.taskID) {
+      fetch(`/v1/agent/${this.taskID}/interrupt`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ action }),
+      }).catch(e => console.error(e))
+    }
+    if (window._activeSseClient) {
+      window._activeSseClient.stop()
+      window._activeSseClient = null
+    }
+    // 乐观更新：立即结束状态
+    if (action === 'abort') {
       this._finalizeMessage(true)
+      this.state = 'COMPLETE'
+      this.thinkingOpen = false
+      Alpine.store('statusBar').poll()
     }
   },
 
@@ -227,6 +236,14 @@ Alpine.store('chat', {
     if (!this.lastAbortedInput) return
     window.dispatchEvent(new CustomEvent('restore-input', { detail: this.lastAbortedInput }))
     this.lastAbortedInput = null
+  },
+
+  // recallMessage 将指定的消息撤回并填入输入框，同时截断后面的对话
+  recallMessage(idx, content) {
+    if (this.isActive) return; // 如果正在生成中，不允许撤回
+    this.messages.splice(idx);
+    window.dispatchEvent(new CustomEvent('restore-input', { detail: content }));
+    this.lastAbortedInput = null;
   },
 
   speakText(text) {

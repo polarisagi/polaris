@@ -61,7 +61,7 @@
             <div class="divider text-xs text-base-content/30" x-show="msg.compactionAfter" x-cloak x-text="$store.i18n.t('chat_compressed')"></div>
 
             <template x-if="msg.role === 'user'">
-              <div class="chat chat-end">
+              <div class="chat chat-end group/msg">
                 <div class="chat-bubble bg-base-300 text-base-content break-words relative group text-left w-fit"
                      x-data="{ expanded: false, isLong: false }"
                      x-init="$nextTick(() => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 }); window.addEventListener('resize', () => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 })">
@@ -78,15 +78,14 @@
                     <button class="btn btn-xs btn-ghost text-base-content opacity-70 hover:opacity-100" @click="expanded = false" x-text="$store.i18n.t('chat_collapse_all')"></button>
                   </div>
                 </div>
-                <!-- 恢复编辑按钮：仅在该消息是上次被中断的用户输入时显示 -->
-                <div x-show="$store.chat.lastAbortedInput !== null && $store.chat.lastAbortedInput === msg.content"
-                     x-transition:enter="transition ease-out duration-200"
-                     x-transition:enter-start="opacity-0 translate-y-1"
-                     x-transition:enter-end="opacity-100 translate-y-0"
-                     class="flex justify-end mt-1 pr-1">
+                
+                <!-- 撤回编辑按钮：悬浮时显示 -->
+                <div class="flex justify-end mt-1 pr-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
                   <button class="btn btn-xs btn-ghost text-base-content/60 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 border border-base-300 hover:border-primary/30 transition-all"
-                          @click="$store.chat.restoreInput()"
-                          x-text="$store.i18n.t('chat_restore_input')">
+                          @click="$store.chat.recallMessage(idx, msg.content)"
+                          title="撤回并重新编辑">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+                    <span x-text="$store.i18n.t('chat_recall') || '撤回编辑'"></span>
                   </button>
                 </div>
               </div>
