@@ -8,6 +8,7 @@ Alpine.store('providers', {
   loading: false,
   showModal: false,
   showModelModal: false,
+  showCatalogModal: false,
   testingID: '',
   editMode: 'create',
   // 厂商凭据表单（无 model_id / role / is_default）
@@ -23,6 +24,13 @@ Alpine.store('providers', {
     role: 'general', enabled: true,
   },
   modelEditMode: 'create',
+
+  // ── 目录快速添加 ──────────────────────────────────────────────────────
+  catalog: [],
+  catalogLoading: false,
+  catalogSelected: null,     // 当前选中的 CatalogProvider 对象
+  catalogForm: { api_key: '', name: '', base_url: '' },
+  catalogSaving: false,
 
   // 所有启用厂商下的启用模型，供角色分配面板使用
   get allModels() {
@@ -44,6 +52,58 @@ Alpine.store('providers', {
       this.list = d.providers || []
     } catch { Alpine.store('toast').show('error', '加载厂商配置失败') }
     finally { this.loading = false }
+  },
+
+  async loadCatalog() {
+    if (this.catalog.length > 0) return
+    this.catalogLoading = true
+    try {
+      const r = await fetch('/v1/catalog/providers', { headers: authHeaders() })
+      const d = await r.json()
+      this.catalog = d.providers || []
+    } catch { Alpine.store('toast').show('error', '加载厂商目录失败') }
+    finally { this.catalogLoading = false }
+  },
+
+  openFromCatalog() {
+    this.catalogSelected = null
+    this.catalogForm = { api_key: '', name: '', base_url: '' }
+    this.showCatalogModal = true
+    this.loadCatalog()
+  },
+
+  selectCatalogEntry(entry) {
+    this.catalogSelected = entry
+    this.catalogForm.name = ''
+    this.catalogForm.base_url = ''
+    this.catalogForm.api_key = ''
+  },
+
+  async saveFromCatalog() {
+    if (!this.catalogSelected) return
+    this.catalogSaving = true
+    try {
+      const body = {
+        catalog_id: this.catalogSelected.id,
+        api_key:    this.catalogForm.api_key,
+        name:       this.catalogForm.name || '',
+        base_url:   this.catalogForm.base_url || '',
+      }
+      const r = await fetch('/v1/providers/from-catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+      })
+      if (r.ok) {
+        this.showCatalogModal = false
+        await this.load()
+        await Alpine.store('modelRoles').load()
+        Alpine.store('toast').show('ok', '已添加厂商并自动配置模型')
+      } else {
+        const msg = await r.text()
+        Alpine.store('toast').show('error', '添加失败: ' + msg)
+      }
+    } finally { this.catalogSaving = false }
   },
 
   openCreate() {

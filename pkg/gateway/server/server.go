@@ -269,9 +269,13 @@ func NewServer(addr string, dataDir string, agent *kernel.Agent, bb protocol.Bla
 	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
 	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
 
+	// 厂商字典 API（只读，内置种子）
+	mux.HandleFunc("GET /v1/catalog/providers", s.handleListCatalogProviders)
+
 	// LLM 厂商配置 API
 	mux.HandleFunc("GET /v1/providers", s.handleListProviders)
 	mux.HandleFunc("POST /v1/providers", s.handleCreateProvider)
+	mux.HandleFunc("POST /v1/providers/from-catalog", s.handleCreateProviderFromCatalog)
 	mux.HandleFunc("PUT /v1/providers/{providerID}", s.handleUpdateProvider)
 	mux.HandleFunc("DELETE /v1/providers/{providerID}", s.handleDeleteProvider)
 	mux.HandleFunc("POST /v1/providers/{providerID}/test", s.handleTestProvider)

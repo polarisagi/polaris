@@ -364,6 +364,26 @@ export const zh = {
 
   settings_current: '当前',
 
+  // ── 厂商目录快速添加 ──────────────────────────────────────────────────────
+  catalog_add:             '从目录添加',
+  catalog_manual:          '手动配置',
+  catalog_modal_title:     '选择厂商',
+  catalog_select_hint:     '选择厂商后填入 API Key，系统自动完成模型配置',
+  catalog_api_key_label:   'API Key',
+  catalog_name_label:      '显示名称',
+  catalog_name_hint:       '（可选，留空使用厂商默认名称）',
+  catalog_base_url_label:  'Base URL',
+  catalog_base_url_hint:   '（可选，留空使用默认端点）',
+  catalog_local_no_key:    '本地部署，无需 API Key',
+  catalog_models_preview:  '将自动配置的模型',
+  catalog_save:            '一键添加',
+  catalog_saving:          '添加中…',
+  catalog_no_models:       '该厂商无预设模型，添加后请手动配置',
+  catalog_tier_smart:      '旗舰',
+  catalog_tier_fast:       '极速',
+  catalog_role_reasoning:  '推理',
+  catalog_select_first:    '请先选择一个厂商',
+
   // ── 导航新增 ──────────────────────────────────────────────────────────────
   nav_automation: '自动化',
 

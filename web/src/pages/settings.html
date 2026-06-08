@@ -21,7 +21,8 @@
         </div>
         <div class="flex gap-2">
           <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="$store.onboard.start()" :title="$store.i18n.t('settings_wizard_title')" x-text="'⚙ ' + $store.i18n.t('settings_wizard')"></button>
-          <button class="btn btn-primary btn-sm shadow-sm" @click="$store.providers.openCreate()" x-text="$store.i18n.t('providers_add')"></button>
+          <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="$store.providers.openCreate()" x-text="$store.i18n.t('catalog_manual')"></button>
+          <button class="btn btn-primary btn-sm shadow-sm" @click="$store.providers.openFromCatalog()" x-text="'⚡ ' + $store.i18n.t('catalog_add')"></button>
         </div>
       </div>
 
@@ -282,6 +283,98 @@
       </div>
 
     </div>
+
+    <!-- 厂商目录快速添加 Modal -->
+    <dialog class="modal" id="catalog_modal" x-effect="$store.providers.showCatalogModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showCatalogModal = false">
+      <div class="modal-box bg-base-200 border border-base-300 w-11/12 max-w-3xl">
+        <h3 class="font-bold text-lg mb-1" x-text="$store.i18n.t('catalog_modal_title')"></h3>
+        <p class="text-sm text-base-content/60 mb-4" x-text="$store.i18n.t('catalog_select_hint')"></p>
+
+        <!-- 加载中 -->
+        <div x-show="$store.providers.catalogLoading" class="flex justify-center py-10">
+          <span class="loading loading-spinner loading-md text-primary"></span>
+        </div>
+
+        <!-- 厂商卡片网格 -->
+        <div x-show="!$store.providers.catalogLoading" class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4 max-h-64 overflow-y-auto pr-1">
+          <template x-for="entry in $store.providers.catalog" :key="entry.id">
+            <button
+              type="button"
+              class="flex flex-col items-start p-3 rounded-box border text-left transition-all"
+              :class="$store.providers.catalogSelected?.id === entry.id
+                ? 'border-primary bg-primary/10 shadow-sm'
+                : 'border-base-300 bg-base-100 hover:border-primary/50 hover:bg-base-200'"
+              @click="$store.providers.selectCatalogEntry(entry)">
+              <span class="font-bold text-sm truncate w-full" x-text="entry.display_name"></span>
+              <span class="text-xs text-base-content/50 mt-0.5" x-text="entry.models.length + ' 个预设模型'"></span>
+            </button>
+          </template>
+        </div>
+
+        <!-- 选中后的详情区 -->
+        <template x-if="$store.providers.catalogSelected">
+          <div class="space-y-4 border-t border-base-300 pt-4">
+
+            <!-- 模型预览 -->
+            <div x-show="$store.providers.catalogSelected.models.length > 0">
+              <p class="text-xs font-bold text-base-content/60 uppercase tracking-wider mb-2" x-text="$store.i18n.t('catalog_models_preview')"></p>
+              <div class="flex flex-wrap gap-1.5">
+                <template x-for="m in $store.providers.catalogSelected.models" :key="m.id">
+                  <span class="badge badge-sm gap-1 font-mono"
+                    :class="m.is_reasoning ? 'badge-secondary badge-outline' : m.capability_tier === 'smart' ? 'badge-primary badge-outline' : 'badge-ghost'">
+                    <span x-text="m.display_name"></span>
+                    <span x-show="m.is_reasoning" class="opacity-60" x-text="'· ' + $store.i18n.t('catalog_role_reasoning')"></span>
+                  </span>
+                </template>
+              </div>
+            </div>
+            <div x-show="$store.providers.catalogSelected.models.length === 0" class="text-xs text-base-content/50" x-text="$store.i18n.t('catalog_no_models')"></div>
+
+            <!-- API Key（本地厂商隐藏） -->
+            <div class="form-control w-full" x-show="!$store.providers.catalogSelected.is_local">
+              <label class="label">
+                <span class="label-text font-bold" x-text="$store.i18n.t('catalog_api_key_label')"></span>
+              </label>
+              <input type="password" class="input input-bordered w-full" x-model="$store.providers.catalogForm.api_key" placeholder="sk-..." autocomplete="off" />
+            </div>
+            <div x-show="$store.providers.catalogSelected.is_local" class="text-xs text-success font-bold p-2 bg-success/10 rounded border border-success/30" x-text="$store.i18n.t('catalog_local_no_key')"></div>
+
+            <!-- 高级选项：名称 + Base URL（折叠） -->
+            <details class="text-sm">
+              <summary class="cursor-pointer text-base-content/60 hover:text-base-content select-none">高级选项</summary>
+              <div class="space-y-3 mt-3">
+                <div class="form-control w-full">
+                  <label class="label">
+                    <span class="label-text font-bold" x-text="$store.i18n.t('catalog_name_label')"></span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_name_hint')"></span>
+                  </label>
+                  <input type="text" class="input input-bordered input-sm w-full" x-model="$store.providers.catalogForm.name"
+                    :placeholder="$store.providers.catalogSelected.display_name" />
+                </div>
+                <div class="form-control w-full" x-show="$store.providers.catalogSelected.default_base_url">
+                  <label class="label">
+                    <span class="label-text font-bold" x-text="$store.i18n.t('catalog_base_url_label')"></span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_base_url_hint')"></span>
+                  </label>
+                  <input type="url" class="input input-bordered input-sm w-full" x-model="$store.providers.catalogForm.base_url"
+                    :placeholder="$store.providers.catalogSelected.default_base_url" />
+                </div>
+              </div>
+            </details>
+          </div>
+        </template>
+
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.providers.showCatalogModal = false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary" :disabled="$store.providers.catalogSaving || !$store.providers.catalogSelected || (!$store.providers.catalogSelected.is_local && !$store.providers.catalogForm.api_key)"
+            @click="$store.providers.saveFromCatalog()">
+            <span x-show="$store.providers.catalogSaving" class="loading loading-spinner loading-xs"></span>
+            <span x-text="$store.providers.catalogSaving ? $store.i18n.t('catalog_saving') : $store.i18n.t('catalog_save')"></span>
+          </button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.providers.showCatalogModal = false"></div>
+    </dialog>
 
     <!-- Modals (Provider Edit, Channel Edit, Model Edit) Ported Over -->
     <dialog class="modal" id="provider_modal" x-effect="$store.providers.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showModal = false">

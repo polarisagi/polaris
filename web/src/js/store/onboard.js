@@ -5,16 +5,20 @@ import { authHeaders, levelGe, sanitizeContent } from '../utils.js'
 // ══════════════════════════════════════════════════════════════════════════
 Alpine.store('onboard', {
   show: false,
-  step: 1,  // 1 欢迎 | 2 Provider | 3 模型 | 4 接入（可选）
+  step: 1,  // 1 欢迎 | 2 Provider | 3 模型（仅手动路径） | 4 接入（可选）
 
-  // Step 2
+  // Step 2 — 目录路径（默认）
+  useCatalog: true,           // true=目录快速添加，false=手动配置
+  catalogSelected: null,      // 选中的 CatalogProvider
+  catalogAPIKey: '',
+  // Step 2 — 手动路径
   providerForm: { name: '', type: 'openai_compat', base_url: '', api_key: '', project_id: '', location: 'us-central1' },
   providerID: '',
   testingProvider: false,
   testResult: null,   // null | 'ok' | 'error'
   testMsg: '',
 
-  // Step 3（追踪已分配角色的 model UUID，用于合并调用 model-roles）
+  // Step 3（仅手动路径追踪已分配角色的 model UUID）
   modelForm: { model_id: '', name: '', role: 'default' },
   models: [],
   defaultModelID: '',
@@ -37,6 +41,8 @@ Alpine.store('onboard', {
 
   _open() {
     this.reset()
+    // 预加载目录（避免打开向导时再等待）
+    Alpine.store('providers').loadCatalog()
     this.show = true
   },
 
@@ -52,6 +58,9 @@ Alpine.store('onboard', {
 
   reset() {
     this.step = 1
+    this.useCatalog = true
+    this.catalogSelected = null
+    this.catalogAPIKey = ''
     this.providerForm = { name: '', type: 'openai_compat', base_url: '', api_key: '', project_id: '', location: 'us-central1' }
     this.providerID = ''
     this.testResult = null
@@ -63,7 +72,30 @@ Alpine.store('onboard', {
     this.channelForm = { name: '', type: 'telegram', config: {} }
   },
 
-  // ── Step 2 ────────────────────────────────────────────────────────────
+  // ── Step 2 目录路径 ───────────────────────────────────────────────────
+  async saveProviderFromCatalog() {
+    if (!this.catalogSelected) { Alpine.store('toast').show('error', '请先选择一个厂商'); return }
+    if (!this.catalogSelected.is_local && !this.catalogAPIKey.trim()) {
+      Alpine.store('toast').show('error', '请填写 API Key'); return
+    }
+    this.saving = true
+    try {
+      const r = await fetch('/v1/providers/from-catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ catalog_id: this.catalogSelected.id, api_key: this.catalogAPIKey }),
+      })
+      if (!r.ok) { Alpine.store('toast').show('error', '添加失败'); return }
+      const d = await r.json()
+      this.providerID = d.id
+      await Alpine.store('providers').load()
+      await Alpine.store('modelRoles').load()
+      this.step = 4  // 跳过模型步骤：from-catalog 已自动配置
+    } catch (e) { Alpine.store('toast').show('error', `添加失败: ${e.message}`) }
+    finally { this.saving = false }
+  },
+
+  // ── Step 2 手动路径 ───────────────────────────────────────────────────
   async saveProvider() {
     if (!this.providerForm.name.trim()) { Alpine.store('toast').show('error', '请填写厂商名称'); return }
     if (this.providerID) { this.step = 3; return }  // 已保存（测试时隐式创建），直接前进

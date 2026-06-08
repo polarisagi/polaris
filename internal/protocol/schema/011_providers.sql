@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS providers (
     location    TEXT NOT NULL DEFAULT '',
     sa_key_json TEXT NOT NULL DEFAULT '',
     enabled     INTEGER NOT NULL DEFAULT 1,
+    -- 来源厂商字典 ID（来自 sys_providers.id），用户手动创建时为空
+    catalog_id  TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
