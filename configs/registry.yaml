@@ -1,24 +1,3 @@
-- id: github/mcp-server
-  publisher: github
-  type: mcp
-  trust_tier: 3
-  name: GitHub MCP Server
-  description: GitHub 官方 MCP Server，原生集成 GitHub API：仓库管理、代码搜索、Issue/PR 操作、Actions 触发、Copilot 工作流。需要 GITHUB_TOKEN。
-  transport: stdio
-  command: npx
-  args:
-    - -y
-    - '@github/mcp-server'
-  env:
-    GITHUB_TOKEN: ""
-  url: ""
-  tags:
-    - dev
-    - github
-    - official
-  homepage: https://github.com/github/mcp-server
-  timeout: 30
-  installed: false
 - id: microsoft/playwright-mcp
   publisher: microsoft
   type: mcp
