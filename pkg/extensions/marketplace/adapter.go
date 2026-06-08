@@ -60,6 +60,12 @@ func ParseManifestDir(dir, mpRoot string, mp protocol.Marketplace) ([]protocol.R
 	if es := parseAppJSON(dir, baseID, mp); len(es) > 0 {
 		entries = append(entries, es...)
 	}
+	if e, ok := parsePackageJSON(filepath.Join(dir, "package.json"), baseID, mp); ok {
+		entries = append(entries, e)
+	}
+	if e, ok := parsePyProjectTOML(filepath.Join(dir, "pyproject.toml"), baseID, mp); ok {
+		entries = append(entries, e)
+	}
 
 	return entries, nil
 }
@@ -156,11 +162,21 @@ func parseAnthropicTOML(tomlPath, baseID string, mp protocol.Marketplace) (proto
 // ─── Claude Plugin JSON（Anthropic 原生 Bundle）──────────────────────────────
 
 func parseClaudePluginJSON(dir, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
-	// 仅处理 .claude-plugin/plugin.json；跳过已有 .polaris-plugin 的目录（原生格式优先）
+	// 仅处理 .claude-plugin/plugin.json 或 .codex-plugin/plugin.json；跳过已有 .polaris-plugin 的目录（原生格式优先）
 	if _, err := os.Stat(filepath.Join(dir, ".polaris-plugin")); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
+	
+	var pPath string
+	if _, err := os.Stat(filepath.Join(dir, ".claude-plugin", "plugin.json")); err == nil {
+		pPath = filepath.Join(dir, ".claude-plugin", "plugin.json")
+	} else if _, err := os.Stat(filepath.Join(dir, ".codex-plugin", "plugin.json")); err == nil {
+		pPath = filepath.Join(dir, ".codex-plugin", "plugin.json")
+	} else {
+		return protocol.RegistryEntry{}, false
+	}
+	
+	data, err := os.ReadFile(pPath)
 	if err != nil {
 		return protocol.RegistryEntry{}, false
 	}
@@ -279,4 +295,112 @@ func parseGoogleYAML(dir, baseID string, mp protocol.Marketplace, filename strin
 		})
 	}
 	return entries
+}
+
+type PackageJSON struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Version     string            `json:"version"`
+	Homepage    string            `json:"homepage"`
+	Dependencies map[string]string `json:"dependencies"`
+}
+
+func parsePackageJSON(path, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return protocol.RegistryEntry{}, false
+	}
+	var p PackageJSON
+	if err := json.Unmarshal(data, &p); err != nil {
+		return protocol.RegistryEntry{}, false
+	}
+
+	isMCP := false
+	if strings.Contains(p.Name, "mcp") {
+		isMCP = true
+	}
+	for k := range p.Dependencies {
+		if strings.Contains(k, "modelcontextprotocol") || k == "mcp" {
+			isMCP = true
+			break
+		}
+	}
+	if !isMCP {
+		return protocol.RegistryEntry{}, false
+	}
+
+	name := p.Name
+	if name == "" {
+		return protocol.RegistryEntry{}, false
+	}
+
+	cmd := "npx"
+	args := []string{"-y", p.Name + "@latest"}
+
+	return protocol.RegistryEntry{
+		ID:          baseID,
+		Publisher:   mp.Publisher,
+		Type:        "mcp",
+		TrustTier:   mp.TrustTier,
+		Name:        name,
+		Description: p.Description,
+		Homepage:    p.Homepage,
+		Command:     cmd,
+		Args:        args,
+		Timeout:     60,
+	}, true
+}
+
+type PyProjectTOML struct {
+	Project struct {
+		Name         string   `toml:"name"`
+		Description  string   `toml:"description"`
+		Version      string   `toml:"version"`
+		Dependencies []string `toml:"dependencies"`
+	} `toml:"project"`
+}
+
+func parsePyProjectTOML(path, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return protocol.RegistryEntry{}, false
+	}
+	var p PyProjectTOML
+	if err := toml.Unmarshal(data, &p); err != nil {
+		return protocol.RegistryEntry{}, false
+	}
+
+	isMCP := false
+	if strings.Contains(p.Project.Name, "mcp") {
+		isMCP = true
+	}
+	for _, dep := range p.Project.Dependencies {
+		if strings.Contains(dep, "mcp") {
+			isMCP = true
+			break
+		}
+	}
+	if !isMCP {
+		return protocol.RegistryEntry{}, false
+	}
+
+	name := p.Project.Name
+	if name == "" {
+		return protocol.RegistryEntry{}, false
+	}
+
+	cmd := "uvx"
+	args := []string{p.Project.Name}
+
+	return protocol.RegistryEntry{
+		ID:          baseID,
+		Publisher:   mp.Publisher,
+		Type:        "mcp",
+		TrustTier:   mp.TrustTier,
+		Name:        name,
+		Description: p.Project.Description,
+		Command:     cmd,
+		Args:        args,
+		Timeout:     60,
+	}, true
 }

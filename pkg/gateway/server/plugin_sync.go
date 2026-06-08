@@ -137,8 +137,8 @@ func parsePluginEntry(path string, mpDir string, mp protocol.Marketplace) (*prot
 		return nil, err
 	}
 
-	// 如果 plugin.json 在 .claude-plugin / .polaris-plugin 目录下，其上级目录才是插件主目录
-	if b := filepath.Base(relDir); b == ".claude-plugin" || b == ".polaris-plugin" {
+	// 如果 plugin.json 在 .claude-plugin / .polaris-plugin / .codex-plugin 目录下，其上级目录才是插件主目录
+	if b := filepath.Base(relDir); b == ".claude-plugin" || b == ".polaris-plugin" || b == ".codex-plugin" {
 		relDir = filepath.Dir(relDir)
 	}
 
@@ -272,6 +272,7 @@ func isPluginBundleRoot(dir string) (string, string) {
 		{"plugin.json", "plugin.json"},
 		{".claude-plugin/plugin.json", "plugin.json"},
 		{".polaris-plugin/plugin.json", "plugin.json"},
+		{".codex-plugin/plugin.json", "plugin.json"},
 		{"ai-plugin.json", "ai-plugin.json"},
 		{"plugin.toml", "plugin.toml"},
 		{".claude-plugin/plugin.toml", "plugin.toml"},
@@ -279,6 +280,8 @@ func isPluginBundleRoot(dir string) (string, string) {
 		{"agent-manifest.yaml", "agent-manifest.yaml"},
 		{"mcp.json", "mcp.json"},
 		{".mcp.json", "mcp.json"},
+		{"package.json", "package.json"},
+		{"pyproject.toml", "pyproject.toml"},
 	}
 
 	for _, m := range manifests {
@@ -313,6 +316,14 @@ func parseBundleManifest(manifestPath, manifestType, mpDir string, mp protocol.M
 	case "mcp.json":
 		if newEntries, err := parseMCPEntry(manifestPath, mpDir, mp); err == nil {
 			entries = append(entries, newEntries...)
+		}
+	case "package.json":
+		if entry, err := parsePackageJSONEntry(manifestPath, mpDir, mp); err == nil && entry != nil {
+			entries = append(entries, *entry)
+		}
+	case "pyproject.toml":
+		if entry, err := parsePyProjectTOMLEntry(manifestPath, mpDir, mp); err == nil && entry != nil {
+			entries = append(entries, *entry)
 		}
 	}
 	return entries
@@ -679,4 +690,132 @@ func (s *Server) handleSyncMarketplaces(w http.ResponseWriter, r *http.Request) 
 	slog.Info("polaris-server: manual sync marketplaces finished", "synced_count", syncedCount)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "synced", "synced_count": syncedCount})
+}
+
+type PackageJSON struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Version     string            `json:"version"`
+	Homepage    string            `json:"homepage"`
+	Dependencies map[string]string `json:"dependencies"`
+}
+
+func parsePackageJSONEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var p PackageJSON
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, err
+	}
+
+	isMCP := false
+	if strings.Contains(p.Name, "mcp") {
+		isMCP = true
+	}
+	for k := range p.Dependencies {
+		if strings.Contains(k, "modelcontextprotocol") || k == "mcp" {
+			isMCP = true
+			break
+		}
+	}
+	if !isMCP {
+		return nil, nil
+	}
+
+	relDir, _ := filepath.Rel(mpDir, filepath.Dir(path))
+	relPath := filepath.ToSlash(relDir)
+
+	name := p.Name
+	if name == "" {
+		name = filepath.Base(relDir)
+		name = formatName(name)
+	}
+
+	url := mp.RepoURL
+	if strings.Contains(url, "github.com") {
+		url = strings.TrimSuffix(url, "/") + "/tree/main/" + relPath
+	}
+
+	cmd := "npx"
+	args := []string{"-y", p.Name + "@latest"}
+
+	return &protocol.RegistryEntry{
+		ID:          mp.ID + "/" + relPath,
+		Publisher:   mp.Publisher,
+		Type:        "mcp",
+		TrustTier:   mp.TrustTier,
+		Name:        name,
+		Description: p.Description,
+		URL:         url,
+		Homepage:    p.Homepage,
+		Command:     cmd,
+		Args:        args,
+		Timeout:     60,
+	}, nil
+}
+
+type PyProjectTOML struct {
+	Project struct {
+		Name         string   `toml:"name"`
+		Description  string   `toml:"description"`
+		Version      string   `toml:"version"`
+		Dependencies []string `toml:"dependencies"`
+	} `toml:"project"`
+}
+
+func parsePyProjectTOMLEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var p PyProjectTOML
+	if err := toml.Unmarshal(data, &p); err != nil {
+		return nil, err
+	}
+
+	isMCP := false
+	if strings.Contains(p.Project.Name, "mcp") {
+		isMCP = true
+	}
+	for _, dep := range p.Project.Dependencies {
+		if strings.Contains(dep, "mcp") {
+			isMCP = true
+			break
+		}
+	}
+	if !isMCP {
+		return nil, nil
+	}
+
+	relDir, _ := filepath.Rel(mpDir, filepath.Dir(path))
+	relPath := filepath.ToSlash(relDir)
+
+	name := p.Project.Name
+	if name == "" {
+		name = filepath.Base(relDir)
+		name = formatName(name)
+	}
+
+	url := mp.RepoURL
+	if strings.Contains(url, "github.com") {
+		url = strings.TrimSuffix(url, "/") + "/tree/main/" + relPath
+	}
+
+	cmd := "uvx"
+	args := []string{p.Project.Name}
+
+	return &protocol.RegistryEntry{
+		ID:          mp.ID + "/" + relPath,
+		Publisher:   mp.Publisher,
+		Type:        "mcp",
+		TrustTier:   mp.TrustTier,
+		Name:        name,
+		Description: p.Project.Description,
+		URL:         url,
+		Command:     cmd,
+		Args:        args,
+		Timeout:     60,
+	}, nil
 }
