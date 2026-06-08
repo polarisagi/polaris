@@ -1060,6 +1060,13 @@ thresholds:
       - hitl_default_deadline_*: ["expire_rate"]
       - http_rate_limit_*: ["abuse_signal"]
 
+  m13_ext:
+    lazy_load_tool_threshold: 40   # 工具总数超过此值切换懒加载模式（M13-bis §4）
+    ambient_skill_max_chars: 4000  # ambient 技能注入 system prompt 的字符上限
+    re_eval_when:
+      - lazy_load_tool_threshold: ["context_overflow_freq"]
+      - ambient_skill_max_chars: ["context_saturation_freq"]
+
 # =============================================================================
 # END OF state.yaml
 # =============================================================================
