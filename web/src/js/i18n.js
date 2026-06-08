@@ -381,6 +381,7 @@ export const zh = {
   catalog_name_hint:       '（可选，留空使用厂商默认名称）',
   catalog_base_url_label:  'Base URL',
   catalog_base_url_hint:   '（可选，留空使用默认端点）',
+  catalog_advanced:        '高级选项',
   catalog_local_no_key:    '本地部署，无需 API Key',
   catalog_models_preview:  '将自动配置的模型',
   catalog_save:            '一键添加',

@@ -47,7 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_sys_prov_models_provider ON sys_provider_models(c
 
 INSERT OR IGNORE INTO sys_providers (id, display_name, provider_type, default_base_url, is_local, display_order) VALUES
 ('deepseek',  'DeepSeek (深度求索)',    'openai_compat',         'https://api.deepseek.com',                                  0,  1),
-('anthropic', 'Anthropic',             'anthropic',             '',                                                          0,  2),
+('anthropic', 'Anthropic',             'anthropic',             'https://api.anthropic.com',                                 0,  2),
 ('openai',    'OpenAI',                'openai_compat',         'https://api.openai.com',                                    0,  3),
 ('google',    'Google AI Studio',      'google_agent_platform', '',                                                          0,  4),
 ('moonshot',  '月之暗面 (Kimi)',         'openai_compat',         'https://api.moonshot.cn/v1',                                0,  5),
