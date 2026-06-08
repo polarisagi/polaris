@@ -396,7 +396,7 @@ Outbox Worker 消费事件走写连接（保证读己写）。Agent 查询 Episo
 - 关联模块: M11 Policy Safety | 关键契约: CredentialVault 为前置屏障（StorageFabric.Open() 须在 Init() 之后） | 位置: M11 §5.2
 - 关联模块: 接口定义 | 关键契约: Store/Transaction/Iterator/MutationIntent/DatabaseWriter | 位置: internal/protocol/interfaces.go, pkg/substrate/mutation_bus.go
 - 关联模块: 全局字典 | 关键契约: HE-Rule-6 State-in-DB、EventLog/MutationBus/Idempotency-Key 定义 | 位置: 00-Global-Dictionary §6
-- 关联模块: DDL | 关键契约: 全部 6 份 DDL（001_events 至 006_decision_log） | 位置: internal/protocol/schema/
+- 关联模块: DDL | 关键契约: 全部 DDL（001_events 至 021_plugins，共 21 份，权威目录 `internal/protocol/schema/`） | 位置: internal/protocol/schema/
 - 关联模块: DDL 约束 (entities 表) | 关键契约: `UNIQUE(name, type)` 约束位于 `004_semantic_memory.sql`，支持 GraphWriter OpUpsert 的幂等 ON CONFLICT 语义（M10 §2.7） | 位置: internal/protocol/schema/004_semantic_memory.sql
 - 关联模块: tasks 表新增列 | 关键契约: `pii_vault_blob TEXT`（nullable）—— SessionPIIVault.SuspendSnapshot 落盘字段（M11 §5.1）; `suspend_reason TEXT`（nullable）—— 区分 hitl / provider_exhausted / killswitch; `provider_suspended_count INTEGER DEFAULT 0` | 位置: M4 §8, M11 §5.1
 - 关联模块: 时序图 | 关键契约: EventLog 写入与崩溃恢复全流程 | 位置: DIAGRAMS.md#eventlog

@@ -221,7 +221,7 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 | MaxLogicCollapseConcurrent | 0(禁用) | 2 | 4 | 4 |
 | SkillPreloadGold/Silver/Bronze | 5/20/25 | 10/40/100 | 15/60/150 | 20/80/200 |
 | PipelineConcurrency | 2 | 4 | 6 | 8 |
-| GraphRAGLLMDailyBudget | 200 | 200 | 500 | 1000 |
+| GraphRAGConcurrentWorkers | 1 | 2 | 4 | 8 |
 | RegressionBudgetMin | 10 | 20 | 30 | 30 |
 | PoolIntentHandler/Ingest/Background/Eval/Cron | 5/5/10/2/2 | 5/5/10/2/2 | 10/8/15/4/4 | 15/12/20/6/6 |
 
