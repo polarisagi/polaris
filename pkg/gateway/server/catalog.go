@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,13 +11,13 @@ import (
 
 // CatalogProvider sys_providers 字典条目（只读）。
 type CatalogProvider struct {
-	ID             string          `json:"id"`
-	DisplayName    string          `json:"display_name"`
-	ProviderType   string          `json:"provider_type"`
-	DefaultBaseURL string          `json:"default_base_url"`
-	IsLocal        bool            `json:"is_local"`
-	DisplayOrder   int             `json:"display_order"`
-	Models         []CatalogModel  `json:"models"`
+	ID             string         `json:"id"`
+	DisplayName    string         `json:"display_name"`
+	ProviderType   string         `json:"provider_type"`
+	DefaultBaseURL string         `json:"default_base_url"`
+	IsLocal        bool           `json:"is_local"`
+	DisplayOrder   int            `json:"display_order"`
+	Models         []CatalogModel `json:"models"`
 }
 
 // CatalogModel sys_provider_models 字典条目（只读）。
@@ -99,6 +100,26 @@ type fromCatalogRequest struct {
 	BaseURL   string `json:"base_url"` // 可选，默认取 default_base_url
 }
 
+type catalogModelRow struct {
+	modelID         string
+	displayName     string
+	recommendedRole string
+}
+
+func getFallbackGeneralModel(models []catalogModelRow) catalogModelRow {
+	for _, cm := range models {
+		if cm.recommendedRole == "reasoning" {
+			return cm
+		}
+	}
+	for _, cm := range models {
+		if cm.recommendedRole == "default" {
+			return cm
+		}
+	}
+	return models[0]
+}
+
 // handleCreateProviderFromCatalog POST /v1/providers/from-catalog
 // 用户只需提供 catalog_id + api_key，系统自动：
 //  1. 查厂商字典填充 type / base_url
@@ -164,60 +185,16 @@ func (s *Server) handleCreateProviderFromCatalog(w http.ResponseWriter, r *http.
 	}
 
 	// 查模型字典（recommended_role 直接映射到 provider_models.role，零翻译）
-	mrows, err := s.db.QueryContext(r.Context(),
-		`SELECT model_id, display_name, recommended_role
-		   FROM sys_provider_models
-		  WHERE catalog_provider_id=?
-		  ORDER BY display_order`, req.CatalogID)
+	catalogModels, hasGeneral, err := s.fetchCatalogModels(r.Context(), req.CatalogID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer mrows.Close()
-
-	type catalogModelRow struct {
-		modelID         string
-		displayName     string
-		recommendedRole string
-	}
-	var catalogModels []catalogModelRow
-	hasGeneral := false
-	for mrows.Next() {
-		var cm catalogModelRow
-		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.recommendedRole); err != nil {
-			continue
-		}
-		if cm.recommendedRole == "general" {
-			hasGeneral = true
-		}
-		catalogModels = append(catalogModels, cm)
-	}
-	_ = mrows.Close()
 
 	// 补充 general 模型：如果内置字典中没有 general，用户又需要一个 general 进行日常 Agent 任务
 	// 根据用户要求，优先使用 reasoning 模型复制为 general，其次 default 模型
 	if !hasGeneral && len(catalogModels) > 0 {
-		var fallback catalogModelRow
-		found := false
-		for _, cm := range catalogModels {
-			if cm.recommendedRole == "reasoning" {
-				fallback = cm
-				found = true
-				break
-			}
-		}
-		if !found {
-			for _, cm := range catalogModels {
-				if cm.recommendedRole == "default" {
-					fallback = cm
-					found = true
-					break
-				}
-			}
-		}
-		if !found {
-			fallback = catalogModels[0]
-		}
+		fallback := getFallbackGeneralModel(catalogModels)
 		catalogModels = append(catalogModels, catalogModelRow{
 			modelID:         fallback.modelID,
 			displayName:     fallback.displayName,
@@ -225,37 +202,7 @@ func (s *Server) handleCreateProviderFromCatalog(w http.ResponseWriter, r *http.
 		})
 	}
 
-	// 角色直接使用 recommended_role；独占角色（default/reasoning）先清旧值保证全局唯一
-	var createdModels []ProviderModel
-
-	for _, cm := range catalogModels {
-		role := cm.recommendedRole
-		if role == "" {
-			role = "general"
-		}
-		// default/reasoning 为全局独占角色：写入前清除其他 provider_models 中同角色
-		if role == "default" || role == "reasoning" {
-			s.db.ExecContext(r.Context(), //nolint:errcheck
-				`UPDATE provider_models SET role='general' WHERE role=?`, role)
-		}
-
-		mbuf := make([]byte, 8)
-		rand.Read(mbuf) //nolint:errcheck
-		mID := "mdl_" + hex.EncodeToString(mbuf)
-
-		_, err := s.db.ExecContext(r.Context(),
-			`INSERT INTO provider_models(id,provider_id,model_id,name,role,enabled,created_at,updated_at)
-			 VALUES(?,?,?,?,?,1,?,?)`,
-			mID, provID, cm.modelID, cm.displayName, role, now, now)
-		if err != nil {
-			continue
-		}
-		createdModels = append(createdModels, ProviderModel{
-			ID: mID, ProviderID: provID, ModelID: cm.modelID,
-			Name: cm.displayName, Role: role, Enabled: true,
-			CreatedAt: now, UpdatedAt: now,
-		})
-	}
+	createdModels := s.createModelsForProvider(r.Context(), provID, catalogModels, now)
 
 	// 若目录无模型（如 Ollama），不报错，返回空模型列表
 	if createdModels == nil {
@@ -273,4 +220,65 @@ func (s *Server) handleCreateProviderFromCatalog(w http.ResponseWriter, r *http.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (s *Server) createModelsForProvider(ctx context.Context, provID string, catalogModels []catalogModelRow, now string) []ProviderModel {
+	createdModels := make([]ProviderModel, 0, len(catalogModels))
+
+	for _, cm := range catalogModels {
+		role := cm.recommendedRole
+		if role == "" {
+			role = "general"
+		}
+		// default/reasoning 为全局独占角色：写入前清除其他 provider_models 中同角色
+		if role == "default" || role == "reasoning" {
+			s.db.ExecContext(ctx, //nolint:errcheck
+				`UPDATE provider_models SET role='general' WHERE role=?`, role)
+		}
+
+		mbuf := make([]byte, 8)
+		rand.Read(mbuf) //nolint:errcheck
+		mID := "mdl_" + hex.EncodeToString(mbuf)
+
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO provider_models(id,provider_id,model_id,name,role,enabled,created_at,updated_at)
+			 VALUES(?,?,?,?,?,1,?,?)`,
+			mID, provID, cm.modelID, cm.displayName, role, now, now)
+		if err != nil {
+			continue
+		}
+		createdModels = append(createdModels, ProviderModel{
+			ID: mID, ProviderID: provID, ModelID: cm.modelID,
+			Name: cm.displayName, Role: role, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	return createdModels
+}
+
+func (s *Server) fetchCatalogModels(ctx context.Context, catalogID string) ([]catalogModelRow, bool, error) {
+	mrows, err := s.db.QueryContext(ctx,
+		`SELECT model_id, display_name, recommended_role
+		   FROM sys_provider_models
+		  WHERE catalog_provider_id=?
+		  ORDER BY display_order`, catalogID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer mrows.Close()
+
+	var catalogModels []catalogModelRow
+	hasGeneral := false
+	for mrows.Next() {
+		var cm catalogModelRow
+		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.recommendedRole); err != nil {
+			continue
+		}
+		if cm.recommendedRole == "general" {
+			hasGeneral = true
+		}
+		catalogModels = append(catalogModels, cm)
+	}
+	_ = mrows.Close()
+	return catalogModels, hasGeneral, nil
 }

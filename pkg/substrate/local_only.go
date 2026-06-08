@@ -110,11 +110,11 @@ func isLocalTLD(host string) bool {
 
 // Allowlist local_only 网络白名单。
 // 配置: ~/.polarisagi/polaris/config/local_only_network_allowlist.toml, Ed25519 签名防篡改。
-// 上限: Tier 0=5 条, Tier 1+=20 条。
+// 上限: Tier 3=5 条, Tier 0/1/2 禁用。
 // 仅 M10 Connector 子系统豁免; M1/M12/OTel 仍全阻断。
 type Allowlist struct {
 	entries []AllowlistEntry
-	maxSize int // Tier 0: 5, Tier 1+: 20
+	maxSize int // Tier 3: 5
 	mu      sync.RWMutex
 }
 
@@ -227,6 +227,15 @@ func IsLoopbackIP(ip net.IP) bool {
 // 3. loopback-only 网络连通性探测 (TCP SYN 至 8.8.8.8:53)
 // 4. 收到 SYN-ACK → 沙箱未生效 → 拒绝进入 local_only
 func (ns *NetworkSandbox) StartupCheck() error {
+	// 0. 内存硬件要求：强制 Tier 3 (64GB 级别) 才能使用 local_only
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	// 这里通过 OS 探测（若为物理机）或配置推断。简单使用运行时探测：
+	// Tier 3 要求物理/容器环境至少拥有充足的资源，此处仅做占位示例检查
+	// 实际应调用 M0 系统级硬件探测。
+	_ = memStats.Sys // TODO(Tier3): Check total physical memory >= 60GB
+	// TODO(Tier3): Check total physical memory >= 60GB
+
 	// DNS 泄露检测: 解析公网域名 → 收到响应 → 沙箱失效
 	addrs, err := ns.dnsResolver.LookupHost(context.Background(), "privacy-check.polarisagi/polaris-external.com")
 	if err == nil && len(addrs) > 0 {

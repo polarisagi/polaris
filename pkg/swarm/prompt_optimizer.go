@@ -29,7 +29,7 @@ type PromptOptimizer struct {
 // NewPromptOptimizer 构造 PromptOptimizer，provider 和 versionStore 必须非 nil。
 func NewPromptOptimizer(provider protocol.Provider, versionStore *PromptVersionStore, maxBudget int) *PromptOptimizer {
 	if maxBudget <= 0 {
-		maxBudget = 30000
+		maxBudget = 1000000
 	}
 	return &PromptOptimizer{
 		provider:      provider,
@@ -215,14 +215,14 @@ func (po *PromptOptimizer) Optimize(ctx context.Context, taskType string, recent
 // budgetLimit 将 token 预算转换为候选数量上限。
 func (po *PromptOptimizer) budgetLimit() int {
 	if po.maxBudget <= 0 {
-		return 10
+		return 30
 	}
 	limit := po.maxBudget / 3000
 	if limit < 1 {
 		return 1
 	}
-	if limit > 10 {
-		return 10
+	if limit > 30 {
+		return 30
 	}
 	return limit
 }
@@ -286,9 +286,10 @@ func (tgg *TextualGradientGenerator) Generate(ctx context.Context, failedPrompt,
 		trunc(failedPrompt, 500), trunc(succeededPrompt, 500),
 	)
 	resp, err := tgg.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		Temperature: 0.3,
-		MaxTokens:   1024,
+		Messages:        []protocol.Message{{Role: "user", Content: prompt}},
+		Temperature:     0.3,
+		MaxTokens:       1024,
+		ReasoningEffort: protocol.ReasoningEffortHigh, // 深思精益突变
 	})
 	if err != nil {
 		// LLM 失败回退规则模板，不阻断流程
@@ -313,9 +314,10 @@ func (ca *ContrastiveAnalyzer) Analyze(ctx context.Context, successPrompt, faile
 		trunc(successPrompt, 400), trunc(failedPrompt, 400),
 	)
 	resp, err := ca.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		Temperature: 0.1,
-		MaxTokens:   256,
+		Messages:        []protocol.Message{{Role: "user", Content: prompt}},
+		Temperature:     0.1,
+		MaxTokens:       256,
+		ReasoningEffort: protocol.ReasoningEffortHigh, // 深入对比分析
 	})
 	if err != nil {
 		return ""

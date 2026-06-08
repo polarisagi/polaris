@@ -222,7 +222,6 @@ func (e *L4LLMJudgeEvaluator) Evaluate(trajectory *AgentTrajectory, expected *Ev
 		return nil, perrors.New(perrors.CodeInternal, "L4LLMJudgeEvaluator: provider is nil")
 	}
 
-	// 将轨迹结构体转为文本供大模型裁判使用
 	trajJSON, _ := json.MarshalIndent(trajectory.Result, "", "  ")
 	expectedOutput := expected.ExpectedOutput
 
@@ -251,53 +250,70 @@ Reply strictly with JSON matching this structure: {"scores": {"dimension_name": 
 			{Role: "system", Content: "You are an objective AI evaluator."},
 			{Role: "user", Content: prompt},
 		},
-		Temperature: 0.1, // 低温保持确定性
+		Temperature: 0.1,
 	}
 
-	resp, err := e.provider.Infer(context.Background(), req)
-	if err != nil {
-		return nil, perrors.Wrap(perrors.CodeInternal, "judge provider infer failed", err)
-	}
-
-	// 简单的 JSON 抽取（考虑到大模型可能包含 markdown backticks）
-	content := strings.TrimSpace(resp.Content)
-	if cut, ok := strings.CutPrefix(content, "```json"); ok {
-		content = cut
-		content = strings.TrimSuffix(content, "```")
-	}
-
-	var judgeOutput struct {
-		Scores    map[string]float64 `json:"scores"`
-		Reasoning string             `json:"reasoning"`
-	}
-
-	if err := json.Unmarshal([]byte(content), &judgeOutput); err != nil {
-		return nil, perrors.Wrap(perrors.CodeInvalidInput, fmt.Sprintf("failed to parse judge JSON (content: %s)", content), err)
-	}
-
-	// 计算加权总分
-	var totalScore float64
-	var totalWeight float64
-	for _, r := range e.rubric {
-		if score, ok := judgeOutput.Scores[r.Name]; ok {
-			totalScore += score * r.Weight
-			totalWeight += r.Weight
+	// 辅助闭包：执行一次推理并解析得分
+	runInference := func() (*EvalResult, error) {
+		resp, err := e.provider.Infer(context.Background(), req)
+		if err != nil {
+			return nil, err
 		}
+		content := strings.TrimSpace(resp.Content)
+		if cut, ok := strings.CutPrefix(content, "```json"); ok {
+			content = cut
+			content = strings.TrimSuffix(content, "```")
+		}
+		var judgeOutput struct {
+			Scores    map[string]float64 `json:"scores"`
+			Reasoning string             `json:"reasoning"`
+		}
+		if err := json.Unmarshal([]byte(content), &judgeOutput); err != nil {
+			return nil, err
+		}
+		var totalScore float64
+		var totalWeight float64
+		for _, r := range e.rubric {
+			if score, ok := judgeOutput.Scores[r.Name]; ok {
+				totalScore += score * r.Weight
+				totalWeight += r.Weight
+			}
+		}
+		finalScore := 0.0
+		if totalWeight > 0 {
+			finalScore = totalScore / totalWeight
+		}
+		return &EvalResult{
+			Passed:        finalScore >= e.passThreshold,
+			Scores:        judgeOutput.Scores,
+			Details:       fmt.Sprintf("Score: %.2f. Reasoning: %s", finalScore, judgeOutput.Reasoning),
+			EvaluatorType: e.Type(),
+		}, nil
 	}
 
-	finalScore := 0.0
-	if totalWeight > 0 {
-		finalScore = totalScore / totalWeight
+	// 双 Judge 交叉验证
+	res1, err1 := runInference()
+	res2, err2 := runInference()
+
+	if err1 != nil {
+		return res2, err2
+	}
+	if err2 != nil {
+		return res1, err1
 	}
 
-	passed := finalScore >= e.passThreshold
+	// 结果一致，直接返回
+	if res1.Passed == res2.Passed {
+		return res1, nil
+	}
 
-	return &EvalResult{
-		Passed:        passed,
-		Scores:        judgeOutput.Scores,
-		Details:       fmt.Sprintf("Score: %.2f. Reasoning: %s", finalScore, judgeOutput.Reasoning),
-		EvaluatorType: e.Type(),
-	}, nil
+	// 不一致，引入第三 Judge 打破僵局
+	res3, err3 := runInference()
+	if err3 != nil {
+		// 降级，返回 res1 但附带 err3 说明第三裁判失败
+		return res1, err3
+	}
+	return res3, nil
 }
 func (e *L4LLMJudgeEvaluator) Type() string { return "L4_llm_judge" }
 
@@ -391,7 +407,7 @@ type EvalStore struct{}
 // AutoEvalBootstrapping — Day-0 冷启动自动生成 EvalCase。
 // 触发: 技能黄金用例=0 + System 2 成功 ≥ 50.
 // 1. EpisodicStore 最近 50 次成功 → embedding 余弦最大分散选 5 条
-// 2. LLM-as-Judge 审查: Tier 1+ → Tier 3 强力模型; Tier 0 → Self-Consistency (3 轮多数投票 + 双角色)
+// 2. LLM-as-Judge 审查: Tier 1+ → Tier 3 强力模型; 全 Tier 默认启用 Self-Consistency (5 轮多数投票 + 双角色)
 // 3. 5 条全过 → EvalCase(SourceSynthetic, auto_bootstrap)
 // 4. 技能 Eval 执行 ≥10 次后 deprecated=true.
 type AutoEvalBootstrapping struct {

@@ -75,10 +75,10 @@ type Server struct {
 	cronCancel context.CancelFunc
 }
 
-func (s *Server) SetInstallManager(m *marketplace.Manager)  { s.installMgr = m }
-func (s *Server) SetScriptRunner(r marketplace.HookRunner)  { s.scriptRunner = r }
-func (s *Server) SetSkillSigningKey(k []byte)               { s.skillSignKey = k }
-func (s *Server) SetUpdater(u *updater.Manager)             { s.updater = u }
+func (s *Server) SetInstallManager(m *marketplace.Manager) { s.installMgr = m }
+func (s *Server) SetScriptRunner(r marketplace.HookRunner) { s.scriptRunner = r }
+func (s *Server) SetSkillSigningKey(k []byte)              { s.skillSignKey = k }
+func (s *Server) SetUpdater(u *updater.Manager)            { s.updater = u }
 
 // SetMCPManager 注入 MCPManager（NewServer 之后、Start 之前调用）。
 // 同时注册缓存失效回调：异步插件 MCP 连接完成时自动清除 toolSchemaCache，

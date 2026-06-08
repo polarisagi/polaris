@@ -14,8 +14,8 @@ import (
 type BudgetManager struct {
 	maxReasoningSteps  int // 5
 	maxThinkingTokens  int // 4096
-	taskTokenBudget    int // 50K
-	sessionTokenBudget int // 200K
+	taskTokenBudget    int // 1M
+	sessionTokenBudget int // 5M
 	usedTokens         int
 	Now                func() time.Time // 允许注入虚拟时间
 }
@@ -25,8 +25,8 @@ func NewBudgetManager() *BudgetManager {
 	return &BudgetManager{
 		maxReasoningSteps:  5,
 		maxThinkingTokens:  4096,
-		taskTokenBudget:    50000,
-		sessionTokenBudget: 200000,
+		taskTokenBudget:    1000000,
+		sessionTokenBudget: 5000000,
 		usedTokens:         0,
 		Now:                time.Now,
 	}
