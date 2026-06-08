@@ -20,9 +20,10 @@ type GraphTraverser interface {
 }
 
 type HybridRetrieverImpl struct {
-	store   protocol.Store
-	graph   GraphTraverser        // Tier1+：图遍历路径，nil 时跳过
-	durative *DurativeMemoryManager // 第 5 路（temporal 查询激活），nil 时跳过
+	store        protocol.Store
+	graph        GraphTraverser         // Tier1+：图遍历路径，nil 时跳过
+	durative     *DurativeMemoryManager // 第 5 路（temporal 查询激活），nil 时跳过
+	reflectionMem protocol.ReflectionMemory // 第 4 路：SQL 实现优先，nil 时降级 KV 扫描
 }
 
 func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
@@ -37,6 +38,12 @@ func NewHybridRetrieverWithGraph(store protocol.Store, graph GraphTraverser) *Hy
 // NewHybridRetrieverWithDurative 创建含 DurativeMemory 第 5 路的 HybridRetriever。
 func NewHybridRetrieverWithDurative(store protocol.Store, graph GraphTraverser, durative *DurativeMemoryManager) *HybridRetrieverImpl {
 	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative}
+}
+
+// NewHybridRetrieverFull 创建全路径 HybridRetriever（Graph + Durative + ReflectionMem）。
+// reflectionMem 非 nil 时第 4 路走 SQL 查询；nil 时降级到 KV 前缀扫描（兼容旧部署）。
+func NewHybridRetrieverFull(store protocol.Store, graph GraphTraverser, durative *DurativeMemoryManager, reflectionMem protocol.ReflectionMemory) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative, reflectionMem: reflectionMem}
 }
 
 func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) {
@@ -98,21 +105,43 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope p
 		}
 	}
 
-	// 第 4 路（M05 §7，权重 0.15）：memory scope 时额外扫描 reflection: 前缀
+	// 第 4 路（M05 §7，权重 0.15）：跨会话 ReflectionMemory 召回
+	// 优先通过接口走 SQL 查询（SQLReflectionMem）；接口未注入时降级 KV 前缀扫描（旧部署兼容）。
 	var reflectionResults []protocol.ScoredFragment
 	if scope.Type == "memory" {
-		rIter, err := hr.store.Scan(ctx, []byte("reflection:"))
-		if err == nil && rIter != nil {
-			defer rIter.Close()
-			for rIter.Next() {
-				content := string(rIter.Value())
-				src := string(rIter.Key())
-				if s := bm25Score(query, content); s > 0 {
-					reflectionResults = append(reflectionResults, protocol.ScoredFragment{
-						Content: content,
-						Score:   s,
-						Source:  src,
-					})
+		if hr.reflectionMem != nil {
+			// SQL 路径：利用 idx_reflect_task_type 索引，避免全表扫描
+			entries, rerr := hr.reflectionMem.QueryReflections(ctx, protocol.ReflectionQuery{
+				Topic: query,
+				K:     20,
+			})
+			if rerr == nil {
+				for _, e := range entries {
+					content := e.Decision + " " + e.Strategy
+					if s := bm25Score(query, content); s > 0 {
+						reflectionResults = append(reflectionResults, protocol.ScoredFragment{
+							Content: content,
+							Score:   s,
+							Source:  "reflection:" + e.ID,
+						})
+					}
+				}
+			}
+		} else {
+			// KV 降级路径（旧 ReflectionMem 兼容）
+			rIter, err := hr.store.Scan(ctx, []byte("reflection:"))
+			if err == nil && rIter != nil {
+				defer rIter.Close()
+				for rIter.Next() {
+					content := string(rIter.Value())
+					src := string(rIter.Key())
+					if s := bm25Score(query, content); s > 0 {
+						reflectionResults = append(reflectionResults, protocol.ScoredFragment{
+							Content: content,
+							Score:   s,
+							Source:  src,
+						})
+					}
 				}
 			}
 		}

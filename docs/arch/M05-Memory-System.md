@@ -39,7 +39,7 @@
 
 ### 2.1 核心结构
 
-WorkingMemory/ImmutableCore/ActiveContext/Task/Observation/MemoryFragment 类型定义见 `pkg/cognition/memory.go`。NotesStore 和 UserProfile 见同文件。
+WorkingMemory/ImmutableCore/ActiveContext/Task/Observation/MemoryFragment 类型定义见 `pkg/cognition/memory/memory.go` 和 `pkg/cognition/memory/working_mem.go`。NotesStore 见 `pkg/cognition/memory/notes_store.go`；UserProfile 见 `pkg/swarm/persona_refiner.go`。
 
 **写入权分离**: M11 Policy → ImmutableCore.SafetyConstraints; M9 PersonalizationWorker → ImmutableCore.UserPreferences + InteractionSummary; 用户显式 `/set` → UserPreferences; M5 Memory System → 仅读取，永不写入。
 
@@ -179,27 +179,31 @@ RetrieveWithDurative:
 
 **与 M9 PersonaRefiner 区别**: PersonaRefiner 更新**用户画像**；ReflectionMemory 更新 **Agent 自身经验**。
 
-**表结构** (`reflection_memory`，DDL 见 `internal/protocol/schema/003_episodic_memory.sql`):
-- ID (ULID), TaskID (关联触发任务), TaskType
-- ReflectionType ∈ {success_pattern, failure_mode, efficiency_insight, cross_task_principle}
-- Content (≤500 tokens, [TaintLevel]=TaintLow——LLM 系统自生成 source='reflection'，[Taint-Floor-Medium] 豁免名单)
-- EvidenceEventIDs[] — 支持该反思的 Episodic 事件
-- Embedding (复用 M1 Embedder), Salience (0-1)
-- CreatedAt, AccessedCount, LastAccessedAt
+**表结构** (`reflection_memory`，DDL 见 `internal/protocol/schema/024_reflection_memory.sql`，实现见 `pkg/cognition/memory/sql_reflection_mem.go`):
+- `id` (TEXT PRIMARY KEY), `session_id`, `agent_id`
+- `task_type` (TEXT，专用列，`idx_reflect_task_type` 索引覆盖，避免全表扫描)
+- `reflection_type` ∈ {success_pattern, failure_mode, efficiency_insight, cross_task_principle}
+- `content` (≤500 tokens), `fail_reason`, `strategy`, `decision`
+- `salience` (REAL 0-1), `embedding` (BLOB, float16 量化), `embed_model_ver`
+- `accessed_count`, `last_accessed_at` (LRU 淘汰依据)
+- `evidence_ids_json` (支持该反思的 Episodic 事件 IDs), `meta_json`
+- `created_at` (Unix 秒)
+- HT0 上限：5000 条，LRU 淘汰批次 100 条
 
-**触发** (后台 worker `ReflectionWorker`):
-1. **任务终态触发**: S_COMPLETE / S_FAILED 进入时，若 task_type 在白名单（复杂任务，非简单查询）→ 投递 reflection job
-2. **Session 关闭批量触发**: 单 session 内 ≥3 个完成任务 → 跨任务模式提取
-3. **失败深度反思**: ReplanCount ≥ 2 触发失败模式 LLM 提取（"为什么这条路径反复失败"）
+**触发** (后台 worker `ReflectionWorker`，实现见 `pkg/swarm/self_improve/reflection_worker.go`):
+1. **任务终态触发**: S_COMPLETE / S_FAILED 进入时，若 task_type 在 `ReflectionConfig.TaskTypeWhitelist` → 投递 reflection job
+2. **失败深度反思**: `ReplanCount ≥ ReflectionConfig.MinReplanCount`（默认 2）触发失败模式 LLM 提取
+3. 白名单默认值: `["complex_reasoning", "coding", "research", "debug", "analysis"]`，可通过 `NewReflectionWorkerWithConfig` 覆盖
 
 **写入流程**:
-1. 收集 Evidence Episodic Events（同 task_id 或 task_type）
-2. LLM 提取（由于 DeepSeek V4 成本极低，默认使用 Flash 全量并发提取）→ 严格 JSON schema 输出
-3. M11 [FactualityGuard] 抽样核验（引用 Evidence 必须真实包含主张）
-4. 经 MutationBus 写入 `reflection_memory` 表
+1. 收集 Evidence Episodic Events（同 task_id）
+2. LLM 提取反思（JSON 严格输出），填充 `reflection_type` + `content`
+3. 直接写入 `reflection_memory` 表（`SQLReflectionMem.AppendReflection`）
 
 **读取** (M5 HybridRetriever 第 4 路召回，权重 0.15):
-- task 启动时 M4 S_PERCEIVE 拉取相同 task_type 的 top-3 reflection 注入 ZoneImmutable（标记 source='reflection'）
+- `HybridRetrieverImpl.reflectionMem` 非 nil 时，第 4 路通过 `ReflectionMemory.QueryReflections(Topic=query)` 走 SQL 索引查询
+- `reflectionMem` 为 nil 时降级为 KV 前缀 `reflection:` 扫描（旧部署兼容）
+- S_PERCEIVE / S_REPLAN 阶段：`buildPerceiveContext` / `buildPlanContext` 额外直接调用 `QueryReflections(Topic=TaskModel.Goal, K=3)` 注入 system prompt（非 ZoneImmutable——反思为 Agent 自生成，TaintLow，但不走 ContextAssembler 写入门控）
 - 与 [HeuristicsMemory] (M9 §2.1) 互补——后者是 task_type→prompt 模板，前者是 task_type→经验摘要
 
 **HT0 限制**: 表大小硬上限 5MB（约 5000 条 reflection），LRU 淘汰最久未访问。得益于 DeepSeek 的极低 API 成本，LLM 提取不再受严苛的财务配额约束，仅受 CPU/内存空闲资源控制（M9 BackgroundTaskScheduler [Priority-2]）。
@@ -265,14 +269,20 @@ Agent 动作完成后，写入路径拆分为两条线:
 
 ## 7. Read Path: HybridRetriever
 
+实现见 `pkg/cognition/memory/retriever.go`（`HybridRetrieverImpl`）。
+
 ```
-HybridRetriever (共享接口见 `pkg/substrate/hybrid_retrieve.go`):
-  bm25      BM25Index
-  denseVec  VectorIndex
-  graphDB   GraphTraverser
-  embedder  查询向量化
-  reranker  BM25Reranker (Tier 0: SQLite FTS5 BM25; Tier 1+: SurrealDB-Core BM25, 与 M10 同源)
-  config    RetrievalConfig
+HybridRetrieverImpl (pkg/cognition/memory/retriever.go):
+  store         protocol.Store          — KV 层（episodic:/chunk: 前缀扫描）
+  graph         GraphTraverser          — Tier1+，nil 跳过
+  durative      *DurativeMemoryManager  — 第 5 路，temporal 查询激活，nil 跳过
+  reflectionMem protocol.ReflectionMemory — 第 4 路 SQL 路径，nil 降级 KV 扫描
+
+构造器:
+  NewHybridRetriever(store)                          — 基础版（仅 BM25+Simhash）
+  NewHybridRetrieverWithGraph(store, graph)           — Tier1+ 图路径
+  NewHybridRetrieverWithDurative(store, graph, dur)  — +DurativeMemory 第 5 路
+  NewHybridRetrieverFull(store, graph, dur, reflMem) — 全路径（NewMemImplWithDB 默认使用）
 ```
 
 ### 7.1 BM25Index
@@ -305,31 +315,36 @@ Spreading Activation（关联发现模式）:
 
 ### 7.4 RRF 融合 + BM25 精排
 
-```
-Stage 0 — 隐私门控:
-  ctx.max_privacy_tier_allowed (M11 Policy Gate 注入)
-  → 传递至 Stage 1 所有子检索器 WHERE 硬约束 (fail-closed: 默认 PrivacySession)
+当前实现为 5 路 RRF 融合（`pkg/cognition/memory/retriever.go`，`HybridRetrieverImpl.Search`）：
 
-Stage 1 — 并行宽召回 (errgroup goroutine):
-  (a) bm25.Search(query, OversampleN × FinalTopK)    — 关键词召回
-  (b) denseVec.Search(queryEmb, OversampleN × FinalTopK) — 语义召回
-  (c) graphDB.Traverse(queryEmb, depth=2)             — 图遍历召回
+```
+Stage 0 — scope 路由:
+  scope.Type == "memory"  → prefix = episodic:
+  scope.Type == "chunk"   → prefix = chunk:
+  隐私门控由上层 M11 Policy Gate 在 ctx 中注入，retriever 不内联 ACL
+
+Stage 1 — 5 路宽召回:
+  路径 1: BM25（weight=1.0）
+    KV 前缀扫描 → 词频 TF×IDF 近似 BM25 打分（Tier 0 纯 Go，无 FTS5 依赖）
+  路径 2: Simhash（weight=0.8）
+    64-bit Simhash 指纹，汉明距离 ≤16 → simScore=1-(dist/64)
+  路径 3: Graph（weight=0.6，Tier1+，graph==nil 时跳过）
+    BM25 Top1 作起点 → GraphTraverse(depth=2) → 跳数衰减赋分
+  路径 4: ReflectionMemory（weight=0.15，scope=memory）
+    reflectionMem != nil → SQL QueryReflections（idx_reflect_task_type 索引加速）
+    reflectionMem == nil → 降级 KV 前缀扫描 reflection:（旧部署兼容）
+  路径 5: DurativeMemory（weight=0.3，scope=memory 且 ClassifyQuery==Temporal）
+    durative.RetrieveGroups(query, 5) → Label+Summary 参与 BM25 打分
 
 Stage 2 — RRF 融合:
-  weight / (k + rank + 1)，k 见 `spec/state.yaml §m5_memory.rrf_k`，三路累加后降序
+  score(d) = Σ weight_i / (60 + rank_i + 1)，按各路 rank 累加后降序
 
-Stage 3 — 重排:
-  1. BM25 精排: 取融合 topM, reranker.Rerank (Tier 0: SQLite FTS5; Tier 1+: SurrealDB-Core)
-  2. Cross-encoder 神经重排: M1 LocalProvider.Rerank(query, documents) → llama.cpp GGUF bge-reranker (~50MB, <50ms)
-     - Tier-3 本地模型已加载: 交叉编码打分 → BM25 ×0.3 + CrossEncoder ×0.7
-     - 本地模型未加载 (或 Tier 0/1/2): 纯 BM25 精排
-     - 远程模式: 可选 Cohere/Jina Rerank API（同接口，不同 Provider）
-
-Stage 4 — 截断: FinalTopK=10 (M5) | 5 (M10)
-  默认过滤: `WHERE session_type != 'auto_curriculum' OR explicit_include=true`（防止 Auto-Curriculum 失败轨迹污染 Agent 推理上下文）
-  仅 M9 自身评估显式 explicit_include=true 才能召回 auto_curriculum session
+Stage 3 — 截断: FinalTopK=20（默认，config.FinalTopK 可覆盖）
 ```
-M5/M10 共享 `pkg/substrate/hybrid_retrieve.go` 底层引擎。检索范围不同 (M5: episodic+semantic, M10: doc_nodes)，参数差异见 M10 §2.2 配置对照表。
+
+**M5/M10 共享关系**：检索范围不同（M5: episodic+semantic 前缀，M10: doc_nodes/chunk: 前缀），`HybridRetrieverImpl` 通过 `scope.Type` 参数路由，无需两套实例。M10 参数差异见 M10 §2.2。
+
+**跨版本嵌入兼容**：`MemoryEntry.EmbedModelVersion` 字段触发 `OnlineReindexer`（inv_M5_03）；当前 Tier 0 BM25+Simhash 路径不依赖 embedding API，嵌入模型变更不影响 Tier 0 召回。
 
 ### 7.5 Evidence Subgraph Extraction
 

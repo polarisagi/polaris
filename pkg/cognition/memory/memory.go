@@ -145,13 +145,20 @@ func NewMemImplWithGraph(store protocol.Store, graph GraphTraverser) *MemImpl {
 	}
 }
 
-// NewMemImplWithDB 创建含 SQL 持久化的 MemImpl（reflection_memory 表 + KV 其余层）。
-// db 非 nil 时 ReflectionMemory 切换到 SQLReflectionMem，利用索引加速跨会话 TaskType 查询。
+// NewMemImplWithDB 创建含全 SQL 持久化的 MemImpl。
+// db 非 nil 时同时切换：
+//   - reflection → SQLReflectionMem（reflection_memory 表，索引加速跨会话查询）
+//   - working.notes → SQLNotesStore（notes 表，跨 Session 笔记持久化）
+//   - retriever → NewHybridRetrieverFull（第 4 路走 SQL 接口而非 KV 前缀扫描）
 func NewMemImplWithDB(store protocol.Store, db DBAccessor) *MemImpl {
 	m := NewMemImpl(store)
 	if db != nil {
-		if sqlDB := db.DB(); sqlDB != nil {
-			m.reflection = NewSQLReflectionMem(sqlDB)
+		sqlDB := db.DB()
+		if sqlDB != nil {
+			sqlRefl := NewSQLReflectionMem(sqlDB)
+			m.reflection = sqlRefl
+			m.working = NewWorkingMemWithDB(sqlDB)
+			m.retriever = NewHybridRetrieverFull(store, nil, nil, sqlRefl)
 		}
 	}
 	return m

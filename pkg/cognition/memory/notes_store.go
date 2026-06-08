@@ -31,12 +31,14 @@ func NewSQLNotesStore(db *sql.DB) *SQLNotesStore {
 	return &SQLNotesStore{db: db}
 }
 
-// Get 按 key 查询笔记；不存在则返回 (nil, nil)。
+// Get 按 key 查询笔记；不存在或已过期则返回 (nil, nil)。
 func (s *SQLNotesStore) Get(ctx context.Context, key string) (*protocol.Note, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT key, content, version, tags_json, updated_at, expires_at
-		FROM notes WHERE key = ?
-	`, key)
+		FROM notes
+		WHERE key = ?
+		  AND (expires_at IS NULL OR expires_at > ?)
+	`, key, time.Now().Unix())
 	n, err := scanNote(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
