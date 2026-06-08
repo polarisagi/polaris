@@ -104,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
   Alpine.store('nav').page = page
   history.replaceState({}, '', page === 'chat' ? '/' : `/${page}`)
   
-  if (page === 'settings')   { Alpine.store('providers').load(); Alpine.store('modelRoles').load() }
+  if (page === 'settings' || page === 'chat') { Alpine.store('providers').load(); Alpine.store('modelRoles').load() }
   if (page === 'sessions')   Alpine.store('sessions').load()
   if (page === 'skills')     Alpine.store('skills').load()
   if (page === 'plugins')    Alpine.store('plugins').load()
