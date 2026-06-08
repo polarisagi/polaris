@@ -74,28 +74,28 @@ INSERT OR IGNORE INTO sys_provider_models (id, catalog_provider_id, model_id, di
 ('deepseek:deepseek-v4-flash',    'deepseek',  'deepseek-v4-flash',    'DeepSeek V4 Flash',   'default',   0),
 ('deepseek:deepseek-v4-pro',      'deepseek',  'deepseek-v4-pro',      'DeepSeek V4 Pro',     'reasoning', 1),
 
--- ── Anthropic（三模型：haiku=通用，sonnet=对话，opus=推理）────────────────
-('anthropic:claude-haiku-4-5',    'anthropic', 'claude-haiku-4-5',     'Claude Haiku 4.5',    'general',   2),
-('anthropic:claude-sonnet-4-6',   'anthropic', 'claude-sonnet-4-6',    'Claude Sonnet 4.6',   'default',   0),
+-- ── Anthropic（三模型：haiku=对话，sonnet=通用，opus=推理）────────────────
+('anthropic:claude-haiku-4-5',    'anthropic', 'claude-haiku-4-5',     'Claude Haiku 4.5',    'default',   0),
+('anthropic:claude-sonnet-4-6',   'anthropic', 'claude-sonnet-4-6',    'Claude Sonnet 4.6',   'general',   2),
 ('anthropic:claude-opus-4-8',     'anthropic', 'claude-opus-4-8',      'Claude Opus 4.8',     'reasoning', 1),
 
--- ── OpenAI（三模型：mini=通用，gpt-5.5=对话，o3=推理）───────────────────
-('openai:gpt-5.4-mini',           'openai',    'gpt-5.4-mini',         'GPT-5.4 Mini',        'general',   2),
-('openai:gpt-5.5',                'openai',    'gpt-5.5',              'GPT-5.5',             'default',   0),
+-- ── OpenAI（三模型：mini=对话，gpt-5.5=通用，o3=推理）───────────────────
+('openai:gpt-5.4-mini',           'openai',    'gpt-5.4-mini',         'GPT-5.4 Mini',        'default',   0),
+('openai:gpt-5.5',                'openai',    'gpt-5.5',              'GPT-5.5',             'general',   2),
 ('openai:o3',                     'openai',    'o3',                   'o3',                  'reasoning', 1),
 
--- ── Google AI Studio（无专用推理模型：pro=对话，flash=通用）────────────────
--- reasoning 路由自动 fallback 到 default（BestForRole 保证）
-('google:gemini-3.1-pro',         'google',    'gemini-3.1-pro',       'Gemini 3.1 Pro',      'default',   0),
-('google:gemini-3.5-flash',       'google',    'gemini-3.5-flash',     'Gemini 3.5 Flash',    'general',   1),
+-- ── Google AI Studio（两模型：flash=对话，pro=推理）────────────────
+-- 只有两个模型，符合推理和通用同源逻辑
+('google:gemini-3.5-flash',       'google',    'gemini-3.5-flash',     'Gemini 3.5 Flash',    'default',   0),
+('google:gemini-3.1-pro',         'google',    'gemini-3.1-pro',       'Gemini 3.1 Pro',      'reasoning', 1),
 
 -- ── 月之暗面 Kimi（两模型：k2.6=对话，k2-thinking=推理）──────────────────
 ('moonshot:kimi-k2.6',            'moonshot',  'kimi-k2.6',            'Kimi K2.6',           'default',   0),
 ('moonshot:kimi-k2-thinking',     'moonshot',  'kimi-k2-thinking',     'Kimi K2 Thinking',    'reasoning', 1),
 
--- ── 阿里云通义千问（三模型：flash=通用，max=对话，max-thinking=推理）────────
-('dashscope:qwen3.6-flash',       'dashscope', 'qwen3.6-flash',        'Qwen 3.6 Flash',      'general',   2),
-('dashscope:qwen-3-max',          'dashscope', 'qwen-3-max',           'Qwen 3 Max',          'default',   0),
+-- ── 阿里云通义千问（三模型：flash=对话，max=通用，max-thinking=推理）────────
+('dashscope:qwen3.6-flash',       'dashscope', 'qwen3.6-flash',        'Qwen 3.6 Flash',      'default',   0),
+('dashscope:qwen-3-max',          'dashscope', 'qwen-3-max',           'Qwen 3 Max',          'general',   2),
 ('dashscope:qwen3-max-thinking',  'dashscope', 'qwen3-max-thinking',   'Qwen 3 Max Thinking', 'reasoning', 1),
 
 -- ── 火山引擎豆包（两模型：lite=对话，pro=推理）───────────────────────────
