@@ -22,6 +22,8 @@ Alpine.store('chat', {
   _mediaRecorder: null,
   _audioChunks: [],
   lastAbortedInput: null,  // 上次被中断的用户输入内容，用于恢复编辑按钮
+  selectedModel: '',
+  reasoningEffort: 'auto',
 
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
 
@@ -192,6 +194,8 @@ Alpine.store('chat', {
         session_id: this.sessionID,
         run_id: runID,
         attachments: attachmentsPayload,
+        model_id: this.selectedModel || undefined,
+        reasoning_effort: this.reasoningEffort !== 'auto' ? this.reasoningEffort : undefined,
       },
       onEvent: (type, data) => this._onEvent(type, data),
       onError: (err) => this._onError(err),
