@@ -53,3 +53,25 @@
   enabled: 1
   sort_order: 30
   created_at: "1970-01-01T00:00:00Z"
+- id: openai/plugins
+  name: OpenAI Plugins
+  type: plugin
+  publisher: openai
+  repo_url: https://github.com/openai/plugins
+  description: OpenAI 官方 Plugins 仓库，包含官方维护的精选插件。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 25
+  created_at: "1970-01-01T00:00:00Z"
+- id: modelcontextprotocol/servers
+  name: Model Context Protocol Servers
+  type: mcp
+  publisher: modelcontextprotocol
+  repo_url: https://github.com/modelcontextprotocol/servers
+  description: Model Context Protocol (MCP) 官方开源服务器。提供基础的本地文件系统、SQLite 数据库、GitHub、Slack、Puppeteer 等工具的 MCP 实现。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 15
+  created_at: "1970-01-01T00:00:00Z"
