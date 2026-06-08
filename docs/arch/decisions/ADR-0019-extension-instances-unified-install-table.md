@@ -2,7 +2,8 @@
 
 **状态**: Accepted
 **日期**: 2026-05-22
-**取代**: skill_sources（023）、plugins（027）、apps（028）三表散乱安装记录
+**取代**: skill_sources（历史草案编号023）、plugins（历史027）、apps（历史028）三表散乱安装记录
+> 注：以上编号为 ADR 起草时的历史临时编号，最终已随 ADR-0019 执行重整为标准编号体系（001–021）。当前 DDL 权威目录参见 `internal/protocol/schema/`。
 **相关**: ADR-0016（TrustTier）、M13-bis-Extension-Registry.md
 
 ---
@@ -13,7 +14,7 @@
 
 1. **安装状态查询需 UNION 四表**：`getInstalledCatalogIDs` 发四条 SQL 才能得到完整视图。
 2. **安装断层**：`installSkillSource` 只写 `skill_sources`，未下载文件、未写 `skills`（008）运行时表，SkillExecutor 永远找不到该 skill。
-3. **026_skills.sql 是死代码**：008 已建 `skills` 表，026 的 `CREATE TABLE IF NOT EXISTS skills` 永远不执行，但其意图（目录级 skill 记录）无人承接。
+3. **026_skills.sql 是历史草案死代码**：008 已建 `skills` 表，026 的 `CREATE TABLE IF NOT EXISTS skills` 永远不执行，但其意图（目录级 skill 记录）无人承接。上述所有历史编号均已随 ADR-0019 执行重整消除。
 
 ---
 

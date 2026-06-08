@@ -52,9 +52,11 @@ ADR 被代码引用时，源文件头部加：
 | 0013 | lint 机械化 Phase 1（depguard / errorlint / nestif / gocyclo） | Accepted（已执行） | 2026-05-16 |
 | 0014 | 对抗审查 GitHub Action（执行带 3） | Accepted（已执行） | 2026-05-16 |
 | 0015 | Codex 特性集成（Plugin / Hooks / SKILL.md / Custom Agent / CSV fan-out） | Accepted | 2026-05-21 |
-| 0016 | 统一信任扩展模型 | Accepted | — |
+| 0016 | 统一信任扩展模型（TrustTier 五级 + 官方 Publisher 白名单） | Accepted | 2026-05-21 |
 | 0017 | MCP 默认传输层选 Streamable HTTP，SSE 降级 legacy | Accepted | 2026-05-21 |
 | 0018 | MCP Transport 用 TaintPreservingDecoder，禁 encoding/json 直解 | Accepted | 2026-05-21 |
+| 0019 | extension_instances 统一安装实例表（三层统一 State-in-DB） | Accepted | 2026-05-22 |
+| 0020 | 确立 DeepSeek V4 为全系统默认核心模型（Canonical Provider） | Accepted | 2026-06-08 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 

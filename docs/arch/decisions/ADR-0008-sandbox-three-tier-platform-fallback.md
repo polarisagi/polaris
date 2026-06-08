@@ -15,24 +15,26 @@
 **三级 Sandbox 抽象 + Tier-0 平台特化降级。**
 
 三级完整定义见 [00-Dict §5](../00-Global-Dictionary.md):
-- **L1 InProc**(Go function): 零隔离,仅限受信内置工具
+- **L1 InProc**（Go function）: 零隔离,仅限受信内置工具
 - **L2 wazero Wasm**: deny-by-default WASI,第三方技能默认级
-- **L3 gVisor**: 用户态内核 syscall 拦截,高风险/CodeAct 强制
+- **L3 平台原生 microVM**（统一 SandboxProvider 接口，调用方平台无感）:
+  - **Linux**: Firecracker (~125MB/VM, 需硬件 KVM)；KVM 不可用 → gVisor (runsc) 用户态内核
+  - **macOS**: Virtualization.framework (~80MB/VM)
+  - **Windows**: WSL2 + Hyper-V (~150MB/VM)
 
 Tier-0 平台特化:
-- macOS: L2 + Apple Sandbox profile(`sandbox-exec`)
-- Windows: L2 + Job Objects(AppContainer)
-- Tier-2+ Linux 可选 Firecracker microVM 升级(需硬件 KVM)
-- Tier-0 全平台 L3 不可用(gVisor 启动门槛 ≥256MB)
+- 全平台 Tier-0 L3 不可用（每个 L3 实例 ≥256MB，8GB 预算不足）
+- CapWriteNetwork/Privileged 在 Tier-0 → ErrTier0SandboxLimit，禁止降级到原生子进程
+- Tier-1+ 启用完整 L3（内存 ≥512MB 当前平台检测）)
 
 ## 被驳与反例守护
 
 | 方案 | 驳回理由 |
 |------|---------|
-| 单一 Sandbox 级别 | L3 太重(内置工具性能);L1 太轻(高风险无隔离) |
-| 全平台 gVisor | macOS/Windows 不支持;Tier-0 内存预算不足 |
-| Docker 容器 | 启动秒级;不便单二进制分发 |
-| 仅 Wasm(无 L3) | 高风险 CodeAct 缺少 syscall 隔离 |
+| 单一 Sandbox 级别 | L3 太重（内置工具性能）;L1 太轻（高风险无隔离） |
+| 全平台 gVisor | macOS/Windows 不支持 gVisor；Tier-0 内存预算不足；实际 L3 已按平台拆分（Linux=Firecracker/gVisor、macOS=VZ.framework、Windows=WSL2） |
+| Docker 容器 | 启动秒级；不便单二进制分发 |
+| 仅 Wasm（无 L3） | 高风险 CodeAct 缺少 syscall 隔离 |
 
 **反例守护**:
 - 未来如有人提议"为方便给所有工具降到 L1"—本 ADR 拒绝。L1 仅限**内置确定性工具**
