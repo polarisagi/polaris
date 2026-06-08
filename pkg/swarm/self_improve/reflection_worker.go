@@ -16,11 +16,27 @@ import (
 // 架构文档: docs/arch/M05-Memory-System.md §3.4
 // ============================================================================
 
+// ReflectionConfig 控制 ReflectionWorker 的触发策略。
+// 通过 NewReflectionWorkerWithConfig 注入；零值等效于默认白名单。
+type ReflectionConfig struct {
+	// TaskTypeWhitelist 允许触发反思的任务类型集合。空 slice 等效默认集合。
+	TaskTypeWhitelist []string
+	// MinReplanCount 低于此重规划次数时，白名单外的任务类型跳过反思（默认 2）。
+	MinReplanCount int
+}
+
+// defaultReflectionConfig 包含出厂默认值，可通过 configs/defaults.toml 覆盖。
+var defaultReflectionConfig = ReflectionConfig{
+	TaskTypeWhitelist: []string{"complex_reasoning", "coding", "research", "debug", "analysis"},
+	MinReplanCount:    2,
+}
+
 // ReflectionWorker 后台协程，负责在任务结束或 Session 关闭时提取 Agent 反思记忆。
 type ReflectionWorker struct {
 	episodic   protocol.EpisodicMemory
 	provider   protocol.Provider
 	reflection protocol.ReflectionMemory
+	cfg        ReflectionConfig
 }
 
 func NewReflectionWorker(episodic protocol.EpisodicMemory, provider protocol.Provider, reflection protocol.ReflectionMemory) *ReflectionWorker {
@@ -28,13 +44,30 @@ func NewReflectionWorker(episodic protocol.EpisodicMemory, provider protocol.Pro
 		episodic:   episodic,
 		provider:   provider,
 		reflection: reflection,
+		cfg:        defaultReflectionConfig,
+	}
+}
+
+// NewReflectionWorkerWithConfig 创建可配置触发策略的 ReflectionWorker。
+func NewReflectionWorkerWithConfig(episodic protocol.EpisodicMemory, provider protocol.Provider, reflection protocol.ReflectionMemory, cfg ReflectionConfig) *ReflectionWorker {
+	if len(cfg.TaskTypeWhitelist) == 0 {
+		cfg.TaskTypeWhitelist = defaultReflectionConfig.TaskTypeWhitelist
+	}
+	if cfg.MinReplanCount <= 0 {
+		cfg.MinReplanCount = defaultReflectionConfig.MinReplanCount
+	}
+	return &ReflectionWorker{
+		episodic:   episodic,
+		provider:   provider,
+		reflection: reflection,
+		cfg:        cfg,
 	}
 }
 
 // ConsolidateReflections 在任务终态触发。
 func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID string, taskType string, replanCount int) error {
-	// 如果不是需要深度反思的复杂任务类型，跳过
-	if taskType != "complex_reasoning" && taskType != "coding" && replanCount < 2 {
+	// 按配置白名单过滤：白名单外且重规划次数不足则跳过
+	if replanCount < rw.cfg.MinReplanCount && !rw.isWhitelisted(taskType) {
 		return nil
 	}
 
@@ -120,4 +153,14 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 	}
 
 	return rw.reflection.AppendReflection(ctx, entry)
+}
+
+// isWhitelisted 判断 taskType 是否在触发反思的白名单内。
+func (rw *ReflectionWorker) isWhitelisted(taskType string) bool {
+	for _, t := range rw.cfg.TaskTypeWhitelist {
+		if t == taskType {
+			return true
+		}
+	}
+	return false
 }

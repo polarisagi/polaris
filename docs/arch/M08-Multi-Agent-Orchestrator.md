@@ -283,6 +283,17 @@ TopologyFitness 字段：Topology/TaskType/SuccessRate/AvgLatencyMs/AvgTokenCost
 | Schema | Blackboard / TaskEntry / AgentCard / AgentHandle | `internal/protocol/interfaces.go`, `types.go` |
 | 全局字典 | Blackboard 定义、HE-Rule-5 状态机持有控制流 | 00-Global-Dictionary §8, §1-bis |
 
+### 11.1 多 Agent 共享记忆说明
+
+**结论：不需要 SharedMemoryBus。**
+
+inv_M8_02 确立了 EventLog 为真相源（单机单 SQLite）。所有子 Agent 在同一进程内共享同一 SQLite 数据库，因此：
+- `episodic_events`、`semantic_memory`、`reflection_memory` 等表天然跨 Agent 可见
+- Blackboard（`tasks` 表）本身即协调层共享状态
+- Agent 间知识传递通过 Blackboard 的 `Result` payload + 各 Agent 读取 EventLog 实现
+
+引入独立的 SharedMemoryBus 组件会引入额外同步开销并与 MutationBus 产生写路径重叠，违反单写者原则（HE-Rule-6）。任何建议引入 SharedMemoryBus 的需求，应首先检查能否通过 Blackboard + EventLog 满足。
+
 ---
 
 ## 12. Custom Agent Profile（ADR-0015 §2.4）

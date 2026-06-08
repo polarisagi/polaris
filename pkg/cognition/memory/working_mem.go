@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"strings"
 	"sync"
 	"text/template"
@@ -18,6 +19,7 @@ type WorkingMem struct {
 	immutable *ImmutableCore
 	context   *ContextWindowImpl
 	scratch   *ScratchPadImpl
+	notes     protocol.NotesStore
 }
 
 func NewWorkingMem() *WorkingMem {
@@ -25,12 +27,23 @@ func NewWorkingMem() *WorkingMem {
 		immutable: NewImmutableCore(),
 		context:   NewContextWindow(100),
 		scratch:   NewScratchPad(),
+		notes:     NewInMemNotesStore(),
 	}
+}
+
+// NewWorkingMemWithDB 创建含 SQL 持久化 NotesStore 的 WorkingMem。
+func NewWorkingMemWithDB(db *sql.DB) *WorkingMem {
+	w := NewWorkingMem()
+	if db != nil {
+		w.notes = NewSQLNotesStore(db)
+	}
+	return w
 }
 
 func (w *WorkingMem) Immutable() protocol.ImmutableCore { return w.immutable }
 func (w *WorkingMem) Context() protocol.ContextWindow   { return w.context }
 func (w *WorkingMem) Scratch() protocol.ScratchPad      { return w.scratch }
+func (w *WorkingMem) Notes() protocol.NotesStore        { return w.notes }
 
 func (ic *ImmutableCore) Load(ctx context.Context, userID, sessionID string) (protocol.ImmutableCoreView, error) {
 	var prefs []protocol.UserPreference //nolint:prealloc

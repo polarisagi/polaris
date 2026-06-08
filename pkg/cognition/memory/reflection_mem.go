@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,6 +122,21 @@ func (rm *ReflectionMem) QueryReflections(ctx context.Context, q protocol.Reflec
 		}
 		if q.AgentID != "" && e.AgentID != q.AgentID {
 			continue
+		}
+		// 跨会话 TaskType 过滤：匹配 Meta["task_type"]
+		if q.TaskType != "" {
+			mt, _ := e.Meta["task_type"].(string)
+			if mt != q.TaskType {
+				continue
+			}
+		}
+		// Topic 过滤：Decision 或 Strategy 含目标词
+		if q.Topic != "" {
+			topic := strings.ToLower(q.Topic)
+			if !strings.Contains(strings.ToLower(e.Decision), topic) &&
+				!strings.Contains(strings.ToLower(e.Strategy), topic) {
+				continue
+			}
 		}
 
 		// Update LRU metrics

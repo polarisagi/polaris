@@ -6,7 +6,9 @@ package swarm
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"maps"
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
@@ -16,14 +18,15 @@ import (
 // PromptOptimizer 执行 GEPA + MemAPO + ContraPrompt 三融合优化周期。
 // 所有依赖通过构造器注入，无全局状态（R1.3）。
 type PromptOptimizer struct {
-	provider      protocol.Provider   // 高质量模型，用于文本梯度和对比分析（R1.11）
-	versionStore  *PromptVersionStore // prompt_versions 表读写层（HE-Rule-6）
-	gradientGen   *TextualGradientGenerator
-	contrastAna   *ContrastiveAnalyzer
-	geneticSearch *GeneticPromptSearch
-	promptMem     *PromptMemory
-	errorMem      *ErrorPatternMemory
-	maxBudget     int // 软上限 30K tokens/周期
+	provider         protocol.Provider   // 高质量模型，用于文本梯度和对比分析（R1.11）
+	versionStore     *PromptVersionStore // prompt_versions 表读写层（HE-Rule-6）
+	heuristicsStore  *HeuristicsStore    // heuristics_memory + fallacy_records 跨会话持久化
+	gradientGen      *TextualGradientGenerator
+	contrastAna      *ContrastiveAnalyzer
+	geneticSearch    *GeneticPromptSearch
+	promptMem        *PromptMemory
+	errorMem         *ErrorPatternMemory
+	maxBudget        int // 软上限 30K tokens/周期
 }
 
 // NewPromptOptimizer 构造 PromptOptimizer，provider 和 versionStore 必须非 nil。
@@ -43,18 +46,80 @@ func NewPromptOptimizer(provider protocol.Provider, versionStore *PromptVersionS
 	}
 }
 
-// AddAvoidRule 将错误规避规则注入 ErrorPatternMemory。
+// NewPromptOptimizerWithDB 构造带 SQL 持久化的 PromptOptimizer。
+// db 非 nil 时激活跨会话 heuristics/fallacy 持久化路径；
+// 调用方在构造后应显式调用 LoadFromDB 恢复历史状态。
+func NewPromptOptimizerWithDB(provider protocol.Provider, versionStore *PromptVersionStore, db *sql.DB, maxBudget int) *PromptOptimizer {
+	po := NewPromptOptimizer(provider, versionStore, maxBudget)
+	if db != nil {
+		po.heuristicsStore = NewHeuristicsStore(db)
+	}
+	return po
+}
+
+// AddAvoidRule 将错误规避规则注入 ErrorPatternMemory，并异步持久化到 fallacy_records。
 // 由 self_improve.Engine 内环在收到 HeuristicGeneratedEvent 后调用。
 func (po *PromptOptimizer) AddAvoidRule(taskType, rule string) {
 	if po.errorMem == nil || rule == "" {
 		return
 	}
 	id := fmt.Sprintf("ep_%s_%d", taskType, time.Now().UnixNano())
-	po.errorMem.patterns[id] = &ErrorPattern{
+	pat := &ErrorPattern{
 		ID:        id,
+		TaskType:  taskType,
 		AvoidRule: rule,
 		Frequency: 1,
 	}
+	po.errorMem.patterns[id] = pat
+	if po.heuristicsStore != nil {
+		p := pat
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = po.heuristicsStore.SaveFallacy(ctx, p)
+		}()
+	}
+}
+
+// RecordHeuristic 记录成功策略到 PromptMemory，并异步持久化到 heuristics_memory。
+// 由 Eval 引擎在版本评分超越基准后调用。
+func (po *PromptOptimizer) RecordHeuristic(ctx context.Context, taskType string, s *PromptStrategy) {
+	if po.promptMem == nil || s == nil {
+		return
+	}
+	if s.ID == "" {
+		s.ID = fmt.Sprintf("hs_%s_%d", taskType, time.Now().UnixNano())
+	}
+	po.promptMem.entries[taskType] = append(po.promptMem.entries[taskType], s)
+	if po.heuristicsStore != nil {
+		go func() {
+			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = po.heuristicsStore.SaveHeuristic(saveCtx, taskType, s)
+		}()
+	}
+}
+
+// LoadFromDB 从 DB 恢复跨会话 heuristics 和 fallacy 规则到内存。
+// 应在构造后、首次 Optimize 前调用；加载失败不阻断（返回错误供调用方记录）。
+func (po *PromptOptimizer) LoadFromDB(ctx context.Context) error {
+	if po.heuristicsStore == nil {
+		return nil
+	}
+	heuristics, err := po.heuristicsStore.LoadHeuristics(ctx)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "prompt_optimizer: load heuristics", err)
+	}
+	for taskType, strategies := range heuristics {
+		po.promptMem.entries[taskType] = append(po.promptMem.entries[taskType], strategies...)
+	}
+
+	fallacies, err := po.heuristicsStore.LoadFallacies(ctx)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "prompt_optimizer: load fallacies", err)
+	}
+	maps.Copy(po.errorMem.patterns, fallacies)
+	return nil
 }
 
 // PromptStrategy prompt 策略。
@@ -93,6 +158,7 @@ type ErrorPatternMemory struct {
 // ErrorPattern 错误模式。
 type ErrorPattern struct {
 	ID           string
+	TaskType     string // 任务类型，用于 DB 持久化和按 taskType 过滤
 	Description  string
 	AvoidRule    string
 	Frequency    int
@@ -255,12 +321,16 @@ func (pm *PromptMemory) GetTopStrategies(taskType string, n int) []*PromptStrate
 	return sorted
 }
 
-// GetAvoidRules 返回指定 taskType 的所有 AvoidRule。
+// GetAvoidRules 返回匹配 taskType 的 AvoidRule 列表。
+// taskType 为空时返回全部规则（兼容冷启动场景）；
+// TaskType 为空的 ErrorPattern（旧格式）视为全局规则，始终包含。
 func (em *ErrorPatternMemory) GetAvoidRules(taskType string) []string {
-	_ = taskType // 当前实现返回所有规则；后续可按 taskType 过滤
 	var rules []string
 	for _, p := range em.patterns {
-		if p.AvoidRule != "" {
+		if p.AvoidRule == "" {
+			continue
+		}
+		if taskType == "" || p.TaskType == "" || p.TaskType == taskType {
 			rules = append(rules, p.AvoidRule)
 		}
 	}

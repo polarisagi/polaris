@@ -50,6 +50,7 @@ type mockWorkingMem struct {
 func (m *mockWorkingMem) Immutable() protocol.ImmutableCore { return m.immutable }
 func (m *mockWorkingMem) Context() protocol.ContextWindow   { return nil }
 func (m *mockWorkingMem) Scratch() protocol.ScratchPad      { return nil }
+func (m *mockWorkingMem) Notes() protocol.NotesStore        { return nil }
 
 type mockImmutableCore struct{}
 

@@ -111,6 +111,59 @@ func (dm *DurativeMemoryManager) Consolidate(ctx context.Context) error {
 	return nil
 }
 
+// RetrieveGroups 检索语义匹配的持续性记忆簇（temporal 查询路径）。
+// query 为空时返回全部 active 簇（topK 截断）；BM25 对 Summary+Label 打分。
+func (dm *DurativeMemoryManager) RetrieveGroups(ctx context.Context, query string, topK int) []DurativeGroup {
+	iter, err := dm.store.Scan(ctx, []byte("durative_group:"))
+	if err != nil || iter == nil {
+		return nil
+	}
+	defer iter.Close()
+
+	type scored struct {
+		group DurativeGroup
+		score float64
+	}
+	var candidates []scored
+	for iter.Next() {
+		var g DurativeGroup
+		if jsonErr := json.Unmarshal(iter.Value(), &g); jsonErr != nil {
+			continue
+		}
+		if g.Status == "archived" {
+			continue
+		}
+		s := 1.0
+		if query != "" {
+			s = bm25Score(query, g.Summary+" "+g.Label)
+		}
+		if s > 0 {
+			candidates = append(candidates, scored{group: g, score: s})
+		}
+	}
+
+	// 按分数降序排列
+	for i := 0; i < len(candidates)-1; i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[j].score > candidates[i].score {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
+		}
+	}
+
+	if topK <= 0 {
+		topK = 5
+	}
+	if len(candidates) > topK {
+		candidates = candidates[:topK]
+	}
+	result := make([]DurativeGroup, len(candidates))
+	for i, c := range candidates {
+		result[i] = c.group
+	}
+	return result
+}
+
 func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []protocol.ScoredEvent) error {
 	prompt := "Check if the following events form a continuous semantic narrative. Output JSON: {\"is_continuous\": true, \"summary\": \"...\", \"label\": \"...\"}\n"
 	for _, ev := range cluster {

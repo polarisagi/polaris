@@ -12,9 +12,8 @@ import (
 )
 
 // buildPerceiveContext 基于当前状态上下文（包含用户的原始任务描述/Intent）
-// 从 EpisodicMemory 与 WorkingMemory 组装感知阶段所需的 LLM 提示词。
-// 注：Agent 启动时的原始意图可以通过 context 传入，当前暂无单独的 Intent 字段，
-// 我们假设它在 S_PERCEIVE 阶段是从黑板或用户输入获取的，暂时用一段说明占位。
+// 从 EpisodicMemory、ReflectionMemory 与 WorkingMemory 组装感知阶段所需的 LLM 提示词。
+// M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
 func buildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]protocol.Message, error) {
 	if memory == nil {
 		return []protocol.Message{
@@ -24,8 +23,8 @@ func buildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *Sta
 
 	// 1. 查询相关的历史 Episodic 事件（如相似的任务意图）
 	query := protocol.EpisodicQuery{
-		Semantic: "agent task intent", // 临时检索词
-		K:        3,                   // 获取 Top-3 历史相关事件
+		Semantic: "agent task intent",
+		K:        3,
 	}
 	events, err := memory.Episodic().Query(ctx, query)
 	if err != nil {
@@ -40,11 +39,30 @@ func buildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *Sta
 		}
 	}
 
-	// 2. 组装 WorkingMemory（ImmutableCore 规范等）
-	// 此处仅做示例拼接，实际由 ImmutableCore.PrependToMessages 统一处理
+	// 2. 跨会话 Reflection 召回（M05 §3.4）：按目标主题词拉取历史经验注入上下文。
+	// TaskModel 为 nil（首次感知）时跳过，replanning 路径可复用已有目标词。
+	var reflectionCtx string
+	if rm := memory.Reflection(); rm != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
+		reflections, rerr := rm.QueryReflections(ctx, protocol.ReflectionQuery{
+			Topic: sCtx.TaskModel.Goal,
+			K:     3,
+		})
+		if rerr == nil && len(reflections) > 0 {
+			reflectionCtx = "Cross-Session Reflections (past experience for similar tasks):\n"
+			for _, r := range reflections {
+				reflectionCtx += fmt.Sprintf("- [%s] %s: %s\n",
+					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
+			}
+		}
+	}
+
+	// 3. 组装上下文
 	baseContent := "Structure the user intent into a TaskModel JSON.\n\n"
 	if len(sCtx.ReasoningState) > 0 {
 		baseContent += "Reasoning State from the previous iteration:\n" + string(sCtx.ReasoningState) + "\n\n"
+	}
+	if reflectionCtx != "" {
+		baseContent += reflectionCtx + "\n"
 	}
 	if episodicCtx != "" {
 		baseContent += episodicCtx + "\n"
@@ -57,7 +75,6 @@ func buildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *Sta
 		{Role: "system", Content: baseContent},
 	}
 
-	// 注入不可变核心区规则
 	if wm := memory.Working(); wm != nil {
 		msgs = wm.Immutable().PrependToMessages(msgs)
 	}
@@ -97,7 +114,26 @@ func buildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateCo
 		}
 	}
 
+	// 跨会话 Reflection 召回（M05 §3.4）：规划阶段注入成功/失败模式经验
+	var reflectionCtx string
+	if rm := memory.Reflection(); rm != nil && queryStr != "" {
+		reflections, rerr := rm.QueryReflections(ctx, protocol.ReflectionQuery{
+			Topic: queryStr,
+			K:     3,
+		})
+		if rerr == nil && len(reflections) > 0 {
+			reflectionCtx = "Cross-Session Reflections (execution patterns for similar tasks):\n"
+			for _, r := range reflections {
+				reflectionCtx += fmt.Sprintf("- [%s] %s: %s\n",
+					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
+			}
+		}
+	}
+
 	baseContent := "Generate an execution DAG based on the TaskModel.\n\n"
+	if reflectionCtx != "" {
+		baseContent += reflectionCtx + "\n"
+	}
 	if episodicCtx != "" {
 		baseContent += episodicCtx + "\n"
 	}

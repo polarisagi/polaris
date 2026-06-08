@@ -115,7 +115,7 @@ type MemImpl struct {
 	semantic   *SemanticMem
 	procedural *ProceduralMem
 	retriever  *HybridRetrieverImpl
-	reflection *ReflectionMem
+	reflection protocol.ReflectionMemory // KV 实现或 SQL 实现，由构造器决定
 }
 
 func NewMemImpl(store protocol.Store) *MemImpl {
@@ -143,6 +143,18 @@ func NewMemImplWithGraph(store protocol.Store, graph GraphTraverser) *MemImpl {
 		retriever:  NewHybridRetrieverWithGraph(store, graph),
 		reflection: NewReflectionMem(store),
 	}
+}
+
+// NewMemImplWithDB 创建含 SQL 持久化的 MemImpl（reflection_memory 表 + KV 其余层）。
+// db 非 nil 时 ReflectionMemory 切换到 SQLReflectionMem，利用索引加速跨会话 TaskType 查询。
+func NewMemImplWithDB(store protocol.Store, db DBAccessor) *MemImpl {
+	m := NewMemImpl(store)
+	if db != nil {
+		if sqlDB := db.DB(); sqlDB != nil {
+			m.reflection = NewSQLReflectionMem(sqlDB)
+		}
+	}
+	return m
 }
 
 func (m *MemImpl) Working() protocol.WorkingMemory       { return m.working }

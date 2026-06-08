@@ -20,8 +20,9 @@ type GraphTraverser interface {
 }
 
 type HybridRetrieverImpl struct {
-	store protocol.Store
-	graph GraphTraverser // Tier1+：图遍历路径，nil 时跳过
+	store   protocol.Store
+	graph   GraphTraverser        // Tier1+：图遍历路径，nil 时跳过
+	durative *DurativeMemoryManager // 第 5 路（temporal 查询激活），nil 时跳过
 }
 
 func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
@@ -31,6 +32,11 @@ func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
 // NewHybridRetrieverWithGraph 创建含图路径的 HybridRetriever（Tier1+）。
 func NewHybridRetrieverWithGraph(store protocol.Store, graph GraphTraverser) *HybridRetrieverImpl {
 	return &HybridRetrieverImpl{store: store, graph: graph}
+}
+
+// NewHybridRetrieverWithDurative 创建含 DurativeMemory 第 5 路的 HybridRetriever。
+func NewHybridRetrieverWithDurative(store protocol.Store, graph GraphTraverser, durative *DurativeMemoryManager) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative}
 }
 
 func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) {
@@ -45,18 +51,17 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope p
 	var simhashResults []protocol.ScoredFragment
 	var graphResults []protocol.ScoredFragment
 
-	iter, err := hr.store.Scan(ctx, prefix)
-	if err != nil {
-		return nil, err
-	}
-	if iter != nil {
+	scanAndScore := func(scanPrefix []byte) {
+		iter, err := hr.store.Scan(ctx, scanPrefix)
+		if err != nil || iter == nil {
+			return
+		}
 		defer iter.Close()
 		queryFP := SimhashOf(query)
 		for iter.Next() {
 			content := string(iter.Value())
 			src := string(iter.Key())
 
-			// (a) BM25 路径: 关键词 TF 近似（词命中数/总词数）
 			if bm25Score := bm25Score(query, content); bm25Score > 0 {
 				bm25Results = append(bm25Results, protocol.ScoredFragment{
 					Content: content,
@@ -65,15 +70,50 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope p
 				})
 			}
 
-			// (b) Simhash 路径: 汉明距离 <= 8 视为相关
 			contentFP := SimhashOf(content)
-			if dist := queryFP.Hamming(contentFP); dist <= 16 { // 放宽到 16 以覆盖更多候选
+			if dist := queryFP.Hamming(contentFP); dist <= 16 {
 				simScore := 1.0 - float64(dist)/64.0
 				simhashResults = append(simhashResults, protocol.ScoredFragment{
 					Content: content,
 					Score:   simScore,
 					Source:  src,
 				})
+			}
+		}
+	}
+
+	scanAndScore(prefix)
+
+	// 第 5 路（temporal 查询激活）：DurativeMemory 持续性记忆簇
+	var durativeResults []protocol.ScoredFragment
+	if scope.Type == "memory" && hr.durative != nil && ClassifyQuery(query) == QueryTypeTemporal {
+		groups := hr.durative.RetrieveGroups(ctx, query, 5)
+		for _, g := range groups {
+			content := g.Label + ": " + g.Summary
+			durativeResults = append(durativeResults, protocol.ScoredFragment{
+				Content: content,
+				Score:   bm25Score(query, content),
+				Source:  "durative_group:" + g.ID,
+			})
+		}
+	}
+
+	// 第 4 路（M05 §7，权重 0.15）：memory scope 时额外扫描 reflection: 前缀
+	var reflectionResults []protocol.ScoredFragment
+	if scope.Type == "memory" {
+		rIter, err := hr.store.Scan(ctx, []byte("reflection:"))
+		if err == nil && rIter != nil {
+			defer rIter.Close()
+			for rIter.Next() {
+				content := string(rIter.Value())
+				src := string(rIter.Key())
+				if s := bm25Score(query, content); s > 0 {
+					reflectionResults = append(reflectionResults, protocol.ScoredFragment{
+						Content: content,
+						Score:   s,
+						Source:  src,
+					})
+				}
 			}
 		}
 	}
@@ -112,8 +152,10 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope p
 		}
 	}
 	addRRF(bm25Results, 1.0)
-	addRRF(simhashResults, 0.8) // Simhash 路径权重略低于 BM25
-	addRRF(graphResults, 0.6)   // Graph 路径（Tier1+，仅有图时生效）
+	addRRF(simhashResults, 0.8)     // Simhash 路径权重略低于 BM25
+	addRRF(graphResults, 0.6)       // Graph 路径（Tier1+，仅有图时生效）
+	addRRF(reflectionResults, 0.15) // 第 4 路：跨会话 ReflectionMem（M05 §7）
+	addRRF(durativeResults, 0.3)    // 第 5 路：DurativeMemory（temporal 查询激活）
 
 	// Stage 3 — 汇总 + BM25 精排（按 RRF 分降序即等效精排）
 	var merged []protocol.ScoredFragment //nolint:prealloc

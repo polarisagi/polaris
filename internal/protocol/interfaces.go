@@ -323,14 +323,40 @@ type ReflectionEntry struct {
 type ReflectionQuery struct {
 	SessionID string
 	AgentID   string
-	K         int // 返回最近 K 条，0 = 不限
+	TaskType  string // 跨会话按任务类型过滤（M05 §3.4 S_PERCEIVE 注入）
+	Topic     string // 主题词过滤：匹配 Decision 或 Strategy 字段
+	K         int    // 返回最近 K 条，0 = 不限
 }
 
-// WorkingMemory (Mem-L0) — 进程内，非持久化。
+// WorkingMemory (Mem-L0) — 进程内，非持久化（Context + Scratch）+ 跨会话持久化（Notes）。
+// Notes() 可由 SQLNotesStore 实现跨会话持久化，其余字段仍为进程内状态。
 type WorkingMemory interface {
 	Immutable() ImmutableCore
 	Context() ContextWindow
 	Scratch() ScratchPad
+	Notes() NotesStore // M05 §2.2 跨会话轻量笔记，SQL 持久化
+}
+
+// NotesStore 跨会话轻量笔记存储（M05 §2.2）。
+// DDL 权威源：internal/protocol/schema/023_notes.sql
+// @consumer: M4(S_PERCEIVE 注入), M13(API read/write)
+// @producer: pkg/cognition/memory/ (SQLNotesStore / InMemNotesStore)
+type NotesStore interface {
+	Get(ctx context.Context, key string) (*Note, error)
+	Set(ctx context.Context, key, content string, tags []string) error
+	Delete(ctx context.Context, key string) error
+	List(ctx context.Context, tag string) ([]Note, error)
+	GC(ctx context.Context) (int, error) // 清理已过期 Note，返回删除条数
+}
+
+// Note 单条跨会话笔记。
+type Note struct {
+	Key       string    `json:"key"`
+	Content   string    `json:"content"`
+	Version   int       `json:"version"`
+	Tags      []string  `json:"tags,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // ImmutableCore — 永不裁剪的核心区，写入经 M9 staging + M11 闸控。

@@ -451,3 +451,98 @@ func keysWithPrefix(m map[string][]byte, prefix string) []string {
 	}
 	return keys
 }
+
+// TestReflectionMem_CrossSession — TaskType 和 Topic 过滤跨会话 Reflection 召回。
+func TestReflectionMem_CrossSession(t *testing.T) {
+	store := newMockStore()
+	rm := NewReflectionMem(store)
+	ctx := context.Background()
+
+	entries := []protocol.ReflectionEntry{
+		{
+			ID:        "ref1",
+			SessionID: "session-A",
+			Strategy:  "success_pattern",
+			Decision:  "使用并发 goroutine 加速文件解析",
+			Meta:      map[string]any{"task_type": "coding"},
+		},
+		{
+			ID:        "ref2",
+			SessionID: "session-B",
+			Strategy:  "failure_mode",
+			Decision:  "SQL 查询缺少索引导致超时",
+			Meta:      map[string]any{"task_type": "debug"},
+		},
+		{
+			ID:        "ref3",
+			SessionID: "session-C",
+			Strategy:  "efficiency_insight",
+			Decision:  "批量写入比逐条插入快 10 倍",
+			Meta:      map[string]any{"task_type": "coding"},
+		},
+	}
+	for _, e := range entries {
+		if err := rm.AppendReflection(ctx, e); err != nil {
+			t.Fatalf("AppendReflection: %v", err)
+		}
+	}
+
+	// 按 TaskType 过滤：应返回 coding 类型的 2 条
+	results, err := rm.QueryReflections(ctx, protocol.ReflectionQuery{TaskType: "coding", K: 10})
+	if err != nil {
+		t.Fatalf("QueryReflections TaskType: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("TaskType=coding 应返回 2 条，实际 %d", len(results))
+	}
+
+	// 按 Topic 过滤：只有 ref2 的 Decision 含"索引"
+	results, err = rm.QueryReflections(ctx, protocol.ReflectionQuery{Topic: "索引", K: 10})
+	if err != nil {
+		t.Fatalf("QueryReflections Topic: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != "ref2" {
+		t.Errorf("Topic=索引 应返回 ref2，实际 %v", results)
+	}
+
+	// SessionID 过滤仍正常工作
+	results, err = rm.QueryReflections(ctx, protocol.ReflectionQuery{SessionID: "session-A", K: 10})
+	if err != nil {
+		t.Fatalf("QueryReflections SessionID: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != "ref1" {
+		t.Errorf("SessionID=session-A 应返回 ref1，实际 %v", results)
+	}
+}
+
+// TestHybridRetriever_ReflectionPath — reflection: 第 4 路结果出现在 memory scope 检索中。
+func TestHybridRetriever_ReflectionPath(t *testing.T) {
+	store := &mockStoreWithScan{
+		mockStore: newMockStore(),
+		scanData: map[string][]byte{
+			"episodic:ev1":       []byte("configuration parsing complete"),
+			"reflection:ref1":    []byte("success_pattern: 使用并发 goroutine 加速 configuration parsing"),
+		},
+	}
+	hr := NewHybridRetriever(store)
+	ctx := context.Background()
+
+	scope := protocol.SearchScope{Type: "memory"}
+	config := protocol.RetrievalConfig{FinalTopK: 10}
+	results, err := hr.Search(ctx, "configuration parsing", scope, config)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	// reflection: 前缀的 key 应出现在结果中
+	found := false
+	for _, r := range results {
+		if len(r.Source) >= 11 && r.Source[:11] == "reflection:" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("reflection: 第 4 路结果未出现在 memory scope 检索结果中")
+	}
+}
