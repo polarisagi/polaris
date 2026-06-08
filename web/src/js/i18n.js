@@ -120,6 +120,9 @@ export const zh = {
   providers_default_badge: '默认',
 
   // 模型厂商 Modal
+  add_provider_title:     '添加 AI 厂商',
+  add_provider_subtitle:  '从预设目录选择或自定义配置',
+  providers_add_btn:      '添加厂商',
   providers_modal_create: '添加厂商',
   providers_modal_edit:   '编辑厂商',
   providers_type:         '厂商类型',
@@ -144,7 +147,11 @@ export const zh = {
   roles_subtitle:  '指定对话模型和推理模型，Router 按角色优先路由',
   roles_default:   '对话模型（快速）',
   roles_reasoning: '推理模型（深度）',
+  roles_default_label: '对话',
+  roles_reasoning_label: '推理',
   roles_none:      '— 不指定 —',
+  roles_none_set:  '尚未配置',
+  roles_edit:      '编辑',
   roles_save:      '保存角色',
   roles_saved:     '角色保存成功',
 
@@ -649,6 +656,9 @@ export const en = {
   providers_default_badge: 'Default',
 
   // Provider Modal
+  add_provider_title:     'Add AI Provider',
+  add_provider_subtitle:  'Select from preset catalog or configure manually',
+  providers_add_btn:      'Add Provider',
   providers_modal_create: 'Add Provider',
   providers_modal_edit:   'Edit Provider',
   providers_type:         'Provider Type',
@@ -672,7 +682,11 @@ export const en = {
   roles_subtitle:  'Assign chat and reasoning models; Router routes by role priority',
   roles_default:   'Chat Model (fast)',
   roles_reasoning: 'Reasoning Model (deep)',
+  roles_default_label: 'Chat',
+  roles_reasoning_label: 'Reasoning',
   roles_none:      '— Not specified —',
+  roles_none_set:  'Not configured',
+  roles_edit:      'Edit',
   roles_save:      'Save Roles',
   roles_saved:     'Roles saved',
 
