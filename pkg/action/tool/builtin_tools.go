@@ -24,13 +24,16 @@ import (
 
 // RegisterBuiltinTools 注册所有内置工具到 sandbox 与 registry，并绑定 InProcessSandbox 为执行器。
 // 工具元数据（名称/描述/Schema）从 builtin/<name>/tool.yaml + schema.json 文件加载，
-// 实现函数在本文件中定义。安全约束由 PolicyGate 前置校验 + 路径白名单双重保证。
+// 实现函数在本文件中定义。安全约束由平台原生沙箱 + 路径白名单双重保证。
 // 调用方式: 系统启动时调用一次（非线程安全）。
 func RegisterBuiltinTools(
 	sandbox *action.InProcessSandbox,
 	toolReg *InMemoryToolRegistry,
 	allowedPaths []string, // 文件系统路径白名单（read_file/list_dir/write_file 均受限）
 	dialer protocol.SafeDialer,
+	sandboxEnabled bool,      // 是否启用平台原生进程沙箱
+	netPolicy NetworkPolicy,  // bash/run_command 网络访问策略
+	bwrapPath string,         // Linux: bwrap 路径（空=自动查找）
 ) error {
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
@@ -42,8 +45,8 @@ func RegisterBuiltinTools(
 		{"list_dir", makeListDirFn(allowedPaths)},
 		{"write_file", makeWriteFileFn(allowedPaths)},
 		{"fetch_url", makeFetchURLFn(dialer)},
-		{"bash", makeBashFn(allowedPaths)},
-		{"run_command", makeRunCommandFn(allowedPaths)},
+		{"bash", makeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath)},
+		{"run_command", makeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath)},
 		{"get_datetime", getDatetimeFn},
 		{"csv_parse", csvParseFn},
 		{"diff_text", diffTextFn},
@@ -301,7 +304,16 @@ type bashArgs struct {
 	Command string `json:"command"`
 }
 
-func makeBashFn(allowedPaths []string) action.InProcessFn {
+// baseEnv 返回清理后的最小环境变量集（防止 LLM 通过 env 注入攻击）。
+func baseEnv() []string {
+	return []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:/opt/homebrew/bin",
+		"HOME=/tmp",
+		"TMPDIR=/tmp",
+	}
+}
+
+func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy NetworkPolicy, bwrapPath string) action.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args bashArgs
 		if err := json.Unmarshal(input, &args); err != nil {
@@ -311,7 +323,6 @@ func makeBashFn(allowedPaths []string) action.InProcessFn {
 			return nil, perrors.New(perrors.CodeInternal, "bash: command is required")
 		}
 
-		// 检查工作目录，如果设定了白名单，优先使用第一个白名单路径作为工作目录
 		workDir := ""
 		if len(allowedPaths) > 0 {
 			workDir = allowedPaths[0]
@@ -320,36 +331,54 @@ func makeBashFn(allowedPaths []string) action.InProcessFn {
 		execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		slog.Warn("native: executing high-risk bash command", "cmd", args.Command, "dir", workDir)
-		cmd := exec.CommandContext(execCtx, "bash", "-c", args.Command)
-		if workDir != "" {
+		slog.Warn("native_sandbox: executing bash command",
+			"sandbox_enabled", sandboxEnabled,
+			"network", netPolicy,
+			"cmd", args.Command,
+			"dir", workDir)
+
+		var cmd *exec.Cmd
+		var err error
+		if sandboxEnabled {
+			cfg := NativeSandboxCfg{
+				Command:       args.Command,
+				WorkDir:       workDir,
+				AllowedPaths:  allowedPaths,
+				NetworkPolicy: netPolicy,
+				Env:           baseEnv(),
+				BwrapPath:     bwrapPath,
+			}
+			cmd, err = WrapBashCmd(execCtx, cfg)
+			if err != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "bash: sandbox wrap failed", err)
+			}
+		} else {
+			// 沙箱禁用：仅 env 清理 + workDir + Linux namespace（最后防线）
+			cmd = exec.CommandContext(execCtx, "bash", "-c", args.Command)
 			cmd.Dir = workDir
+			cmd.Env = baseEnv()
+			if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
+				cmd.SysProcAttr = attrs
+			}
 		}
 
-		// 严格的环境变量隔离，仅允许基本 PATH
-		cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"}
-		// Linux: 注入 PID + 挂载 namespace 隔离，与 SandboxContainer 声明对齐
-		if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
-			cmd.SysProcAttr = attrs
-		}
-
-		outBytes, err := cmd.CombinedOutput()
+		outBytes, execErr := cmd.CombinedOutput()
 		result := map[string]any{
-			"command":   args.Command,
-			"output":    string(outBytes),
-			"exit_code": 0,
+			"command":          args.Command,
+			"output":           string(outBytes),
+			"exit_code":        0,
+			"sandbox_enabled":  sandboxEnabled,
+			"network_policy":   string(netPolicy),
 		}
-
-		if err != nil {
-			result["error"] = err.Error()
+		if execErr != nil {
+			result["error"] = execErr.Error()
 			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
+			if errors.As(execErr, &exitErr) {
 				result["exit_code"] = exitErr.ExitCode()
 			} else {
 				result["exit_code"] = -1
 			}
 		}
-
 		return json.Marshal(result)
 	}
 }
@@ -686,7 +715,7 @@ type runCommandArgs struct {
 	TimeoutS   int    `json:"timeout_s"`
 }
 
-func makeRunCommandFn(allowedPaths []string) action.InProcessFn {
+func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy NetworkPolicy, bwrapPath string) action.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args runCommandArgs
 		if err := json.Unmarshal(input, &args); err != nil {
@@ -696,11 +725,12 @@ func makeRunCommandFn(allowedPaths []string) action.InProcessFn {
 			return nil, perrors.New(perrors.CodeInternal, "run_command: command is required")
 		}
 
-		// 白名单检查
+		// 命令前缀白名单（构建工具，不含 bash/sh 等 shell 解释器）
 		cmdPrefix := strings.SplitN(strings.TrimSpace(args.Command), " ", 2)[0]
 		allowedCmds := map[string]bool{
-			"go": true, "cargo": true, "npm": true, "yarn": true,
-			"make": true, "pytest": true, "tsc": true,
+			"go": true, "cargo": true, "npm": true, "yarn": true, "pnpm": true,
+			"make": true, "pytest": true, "tsc": true, "python": true, "python3": true,
+			"pip": true, "pip3": true, "node": true, "deno": true, "bun": true,
 		}
 		if !allowedCmds[cmdPrefix] {
 			return nil, perrors.New(perrors.CodeForbidden, fmt.Sprintf("run_command: command %q not in whitelist", cmdPrefix))
@@ -724,34 +754,53 @@ func makeRunCommandFn(allowedPaths []string) action.InProcessFn {
 		execCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		slog.Info("run_command: executing", "cmd", args.Command, "dir", workDir)
-		cmd := exec.CommandContext(execCtx, "bash", "-c", args.Command)
-		if workDir != "" {
+		slog.Info("run_command: executing",
+			"sandbox_enabled", sandboxEnabled,
+			"network", netPolicy,
+			"cmd", args.Command,
+			"dir", workDir)
+
+		env := append(baseEnv(), "GOCACHE=/tmp/gocache", "CARGO_HOME=/tmp/cargo", "npm_config_cache=/tmp/npm")
+
+		var cmd *exec.Cmd
+		var cmdErr error
+		if sandboxEnabled {
+			cfg := NativeSandboxCfg{
+				Command:       args.Command,
+				WorkDir:       workDir,
+				AllowedPaths:  allowedPaths,
+				NetworkPolicy: netPolicy, // 构建工具通常需要网络（下载依赖），由上层配置控制
+				Env:           env,
+				BwrapPath:     bwrapPath,
+			}
+			cmd, cmdErr = WrapBashCmd(execCtx, cfg)
+			if cmdErr != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "run_command: sandbox wrap failed", cmdErr)
+			}
+		} else {
+			cmd = exec.CommandContext(execCtx, "bash", "-c", args.Command)
 			cmd.Dir = workDir
+			cmd.Env = env
+			if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
+				cmd.SysProcAttr = attrs
+			}
 		}
 
-		cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin", "GOCACHE=/tmp/gocache"}
-		if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
-			cmd.SysProcAttr = attrs
-		}
-
-		outBytes, err := cmd.CombinedOutput()
+		outBytes, execErr := cmd.CombinedOutput()
 		result := map[string]any{
 			"command":   args.Command,
 			"output":    string(outBytes),
 			"exit_code": 0,
 		}
-
-		if err != nil {
-			result["error"] = err.Error()
+		if execErr != nil {
+			result["error"] = execErr.Error()
 			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
+			if errors.As(execErr, &exitErr) {
 				result["exit_code"] = exitErr.ExitCode()
 			} else {
 				result["exit_code"] = -1
 			}
 		}
-
 		return json.Marshal(result)
 	}
 }

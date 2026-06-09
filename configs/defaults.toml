@@ -125,6 +125,17 @@ http = true
 grpc = false
 websocket = false
 
+[sandbox]
+# 是否启用平台原生进程隔离（macOS Seatbelt / Linux bubblewrap / Windows WSL2）。
+# false = 仅 env 清理 + workDir，用于调试或受信任环境。
+enabled        = true
+# 网络访问策略："block"（默认，对齐 Claude Code）或 "allow"。
+network_policy = "block"
+# 出站域名白名单，仅 network_policy="allow" 时有意义（macOS 支持，Linux 暂不支持细粒度）。
+allowed_domains = []
+# Linux bubblewrap 可执行路径，空 = 自动从 PATH 查找。
+bwrap_path = ""
+
 [compressor]
 # 模型上下文窗口大小（token 数）。自动压缩阈值 = context_window × auto_compact_pct / 100。
 # Tier-0 默认 32768（DeepSeek V3 实际窗口远大于此，可按需调高）。

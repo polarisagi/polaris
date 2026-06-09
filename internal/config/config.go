@@ -27,6 +27,7 @@ type Config struct {
 	Eval          EvalConfig          `toml:"eval"`
 	Interface     InterfaceConfig     `toml:"interface"`
 	Compressor    CompressorConfig    `toml:"compressor"`
+	Sandbox       SandboxConfig       `toml:"sandbox"`
 	Thresholds    Thresholds          `toml:"-"`
 }
 
@@ -181,6 +182,23 @@ type InterfaceConfig struct {
 	HTTP      bool   `toml:"http"`
 	GRPC      bool   `toml:"grpc"`
 	WebSocket bool   `toml:"websocket"`
+}
+
+// SandboxConfig 原生进程沙箱配置（bash / run_command 工具使用）。
+// 对齐 Claude Code 三平台策略：macOS Seatbelt / Linux bubblewrap / Windows WSL2。
+type SandboxConfig struct {
+	// Enabled 是否启用平台原生进程隔离。
+	// false = 仅环境变量清理 + workDir 限制（调试模式，不安全）。
+	Enabled bool `toml:"enabled"`
+	// NetworkPolicy 网络访问策略：
+	//   "block"（默认）— 禁止所有出站网络，对齐 Claude Code 默认行为
+	//   "allow"        — 允许所有出站网络
+	NetworkPolicy string `toml:"network_policy"`
+	// AllowedDomains NetworkPolicy="allow" 时的出站域名白名单（linux bwrap 暂不支持，macOS Seatbelt 支持）。
+	// 空列表 = 不限制域名（仅在 allow 模式下有意义）。
+	AllowedDomains []string `toml:"allowed_domains"`
+	// BwrapPath Linux 下 bubblewrap 可执行文件路径。空 = 自动 PATH 查找。
+	BwrapPath string `toml:"bwrap_path"`
 }
 
 // CompressorConfig 上下文压缩器配置，对齐 Claude Code 百分比阈值模型。

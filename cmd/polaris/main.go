@@ -400,7 +400,11 @@ func run() error { //nolint:gocyclo
 	prefsRepo := server.NewSQLPreferencesRepo(store.DB())
 	installMgr := marketplace.NewManager(store.DB(), mcpMgr, gate, prefsRepo, auditTrail, publisherTrustMap)
 
-	if err := tool.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, dialer); err != nil {
+	if err := tool.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, dialer,
+		cfg.Sandbox.Enabled,
+		tool.NetworkPolicy(cfg.Sandbox.NetworkPolicy),
+		cfg.Sandbox.BwrapPath,
+	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
 	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, store.DB(), mktClient, installMgr, hitlGateway); err != nil {
