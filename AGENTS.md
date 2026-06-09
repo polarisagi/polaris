@@ -115,7 +115,7 @@ make build-skills
 6. `docs/specs/0X-*.md` → 按域选读：Go→01 / Rust→02 / Agent→03 / 跨模块→04 / 审查→06 / 提交前→06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标杆
 8. `internal/protocol/` → 跨模块共享类型与接口契约
-9. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~020，共 20 张表）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
+9. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~028，共 25 张表）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
 **docs/arch/decisions/ 文件清单**（ADR-0001~0019，按需 grep 主题词）：
 - 0001 观测单例 · 0002 Skill 注册合并 · 0003 SQLite modernc · 0004 Tier-0 硬件层 · 0005 purego FFI Cedar
@@ -129,6 +129,7 @@ make build-skills
 006_decision_log · 007_tasks · 008_skills · 009_rag_chunks · 010_self_improve
 011_providers · 012_channels · 013_chat · 014_cron_jobs · 015_mcp_servers
 016_preferences · 017_automations · 018_plugin_marketplaces · 019_extension_catalog · 020_extension_instances · 021_plugins
+022_provider_catalog · 023_notes · 024_reflection_memory · 028_apps
 ```
 
 **禁止**：

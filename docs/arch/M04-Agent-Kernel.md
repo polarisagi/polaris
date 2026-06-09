@@ -379,7 +379,7 @@ Event ID 格式: {session_id}:{seq}:{event_type}
 | M4→M11 | TaintGate / PolicyGate / KillSwitch | 查阅，仅响应不主动触发。M11 §2, §4 |
 | M4→M11 | SessionPIIVault | Suspend 时落 pii_vault_blob；Restore/SecureZero 跟随 FSM 终态。M11 §5.1 |
 | M8→M4 | Blackboard.CAS Claim / LeaseHeartbeat | 多 Agent 调度入口。M8 §1 |
-| Schema | AgentState 枚举、DDL 001_events / 003_episodic_memory / 003_tasks（含 pii_vault_blob / suspend_reason / provider_suspended_count）| `internal/protocol/types.go`, `internal/protocol/schema/` |
+| Schema | AgentState 枚举、DDL 001_events / 003_episodic_memory / 007_tasks（含 pii_vault_blob / suspend_reason / provider_suspended_count）| `internal/protocol/types.go`, `internal/protocol/schema/` |
 | 全局字典 | HE-Rule-5 状态机控制流、XR-01 | 00-Global-Dictionary §1-bis, §1-ter |
 | 时序图 | EventLog 回放、KillSwitch 响应链 | DIAGRAMS.md#eventlog, #killswitch |
 
