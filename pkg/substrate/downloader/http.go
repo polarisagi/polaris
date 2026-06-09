@@ -12,12 +12,12 @@ import (
 )
 
 // Get 发起带 context 的 GET 请求，非 200 视为错误。
-// 不自动应用代理；需要代理支持时先调用 ResolveURL。
+// client 必须由调用方注入（通常是 substrate.NewSafeHTTPClient），禁止传 nil。
 func Get(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
-	c := client
-	if c == nil {
-		c = http.DefaultClient
+	if client == nil {
+		return nil, fmt.Errorf("downloader: http.Client is required; use substrate.NewSafeHTTPClient")
 	}
+	c := client
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("downloader: build request: %w", err)
@@ -36,10 +36,10 @@ func Get(ctx context.Context, client *http.Client, url string) (*http.Response, 
 // downloadChunk 向 url 发起 Range GET，将响应体写入 partPath。
 // offset>0 时携带 Range 头；服务端返回 206 则追加，返回 200 则覆写（服务端不支持 Range）。
 func downloadChunk(ctx context.Context, client *http.Client, url, partPath string, offset int64) error {
-	c := client
-	if c == nil {
-		c = http.DefaultClient
+	if client == nil {
+		return fmt.Errorf("downloader: http.Client is required; use substrate.NewSafeHTTPClient")
 	}
+	c := client
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("downloader: build request: %w", err)
