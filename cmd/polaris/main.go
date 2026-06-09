@@ -371,7 +371,7 @@ func run() error { //nolint:gocyclo
 	// ─── 6. Sandbox 路由器 (L1 M7) ───────────────────────────────────────────
 	var containerSandbox *action.ContainerSandbox
 	if autoConf != nil && autoConf.Gate.State(observability.FeatureL3Sandbox) != observability.FeatureDisabled {
-		containerSandbox = action.NewContainerSandbox(autoConf.Config.L3SandboxBackend)
+		containerSandbox = action.NewContainerSandbox(autoConf.Config.L3SandboxBackend, runtime.GOOS, autoConf.Config.Tier)
 		slog.Info("polaris: L3 container sandbox initialized", "backend", autoConf.Config.L3SandboxBackend)
 	}
 	inProcSandbox := action.NewInProcessSandbox()

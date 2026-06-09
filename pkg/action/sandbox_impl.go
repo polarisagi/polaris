@@ -10,6 +10,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // SandboxProvider 是沙箱执行抽象接口，允许对 Wasm/InProcess/Container 分别实现。
@@ -229,11 +230,13 @@ func (s *WasmSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol.Tool
 // 适用于: protocol.CapPrivileged + protocol.SideProcessSpawn
 // 约束: Tier 0 (8GB Linux) + 非 Linux 回退至 WasmSandbox
 type ContainerSandbox struct {
-	binPath string // 沙箱执行器二进制路径（如 /usr/local/bin/polaris-sandbox）
+	binPath  string // 沙箱执行器二进制路径（如 /usr/local/bin/polaris-sandbox）
+	platform string
+	hwTier   observability.Tier
 }
 
-func NewContainerSandbox(binPath string) *ContainerSandbox {
-	return &ContainerSandbox{binPath: binPath}
+func NewContainerSandbox(binPath, platform string, hwTier observability.Tier) *ContainerSandbox {
+	return &ContainerSandbox{binPath: binPath, platform: platform, hwTier: hwTier}
 }
 
 func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol.ToolResult, error) {
@@ -245,12 +248,21 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(quotaMs)*time.Millisecond)
 	defer cancel()
 
-	// MVP: 直接调用系统沙箱二进制（未来替换为 gVisor Runtime）
-	cmd := exec.CommandContext(execCtx, s.binPath, "--tool", spec.ToolName)
-	cmd.Stdin = bytes2ReadCloser(spec.Input)
-	// Linux: 注入命名空间隔离属性（CLONE_NEWPID|CLONE_NEWNS + Pdeathsig）
-	if attrs := containerSandboxSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
+	l3Available, backend := observability.TierSandboxConfig(s.hwTier, s.platform)
+	if !l3Available {
+		return &protocol.ToolResult{Success: false, Error: "ContainerSandbox: L3 not available on this tier/platform"}, nil
+	}
+
+	var cmd *exec.Cmd
+	switch backend {
+	case "firecracker":
+		cmd = buildFirecrackerCmd(execCtx, s.binPath, spec)
+	case "virtualization_framework":
+		cmd = buildVZCmd(execCtx, s.binPath, spec)
+	case "wsl2":
+		cmd = buildWSL2Cmd(execCtx, s.binPath, spec)
+	default:
+		return &protocol.ToolResult{Success: false, Error: fmt.Sprintf("ContainerSandbox: unknown backend %q", backend)}, nil
 	}
 
 	start := time.Now()
@@ -286,6 +298,27 @@ func (s *ContainerSandbox) RunScript(ctx context.Context, scriptPath, workDir st
 		return fmt.Errorf("sandbox: RunScript %q: %w", scriptPath, err)
 	}
 	return nil
+}
+
+func buildFirecrackerCmd(ctx context.Context, jailerPath string, spec SandboxSpec) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, jailerPath, "--id", spec.ToolName, "--exec-file", "/usr/local/bin/firecracker")
+	cmd.Stdin = bytes2ReadCloser(spec.Input)
+	if attrs := containerSandboxSysProcAttr(); attrs != nil {
+		cmd.SysProcAttr = attrs
+	}
+	return cmd
+}
+
+func buildVZCmd(ctx context.Context, vftoolPath string, spec SandboxSpec) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, vftoolPath, "--tool", spec.ToolName)
+	cmd.Stdin = bytes2ReadCloser(spec.Input)
+	return cmd
+}
+
+func buildWSL2Cmd(ctx context.Context, binPath string, spec SandboxSpec) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "wsl.exe", "-e", binPath, "--tool", spec.ToolName)
+	cmd.Stdin = bytes2ReadCloser(spec.Input)
+	return cmd
 }
 
 // ─── SandboxRouter ────────────────────────────────────────────────────────────

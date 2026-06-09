@@ -27,6 +27,7 @@ const (
 	FeaturePresidioPII     Feature = "presidio_pii"     // M11: Microsoft Presidio NER sidecar for PII detection
 	FeatureWebUI           Feature = "web_ui"           // M13: go:embed HTMX Web dashboard
 	FeatureActivationSteer Feature = "activation_steer" // M9: Activation Steering (hidden_state injection)
+	FeatureOTelExporter    Feature = "otel_exporter"    // M3: OTel SDK Prometheus exporter（Tier 1+）
 )
 
 // FeatureState describes the current availability of a feature.
@@ -66,6 +67,7 @@ var featureRules = map[Feature]featureRule{
 	FeaturePresidioPII:     {MinTier: Tier1, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 36},
 	FeatureWebUI:           {MinTier: Tier1, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 15},
 	FeatureActivationSteer: {MinTier: Tier1, MinMemoryMB: 1536, DegradeMemoryMB: 2048, Priority: 48},
+	FeatureOTelExporter:    {MinTier: Tier1, MinMemoryMB: 64, DegradeMemoryMB: 128, Priority: 18},
 }
 
 // FeatureGate provides runtime feature availability checks.
@@ -103,6 +105,14 @@ func (fg *FeatureGate) State(f Feature) FeatureState {
 		return state
 	}
 	return FeatureDisabled
+}
+
+// TotalRAM 返回启动时探测的物理总内存（字节）。
+func (fg *FeatureGate) TotalRAM() uint64 {
+	if fg.probe == nil {
+		return 0
+	}
+	return fg.probe.TotalRAM
 }
 
 // IsEnabled is a convenience method for the common case.

@@ -5,9 +5,18 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 var (
@@ -294,6 +303,78 @@ func ReportSurrealDBIndexSize(sizeMB int64) {
 //
 // 所有 gauge 不带 label（MVP 简化版；Tier 1+ 升级为 promhttp.Handler + 标准 OTel 维度）
 func MetricsHandler() http.Handler {
+	if fg := GlobalFeatureGate(); fg != nil && fg.IsEnabled(FeatureOTelExporter) {
+		return otelMetricsHandler()
+	}
+	return legacyMetricsHandler()
+}
+
+var (
+	otelOnce    sync.Once
+	otelHandler http.Handler
+)
+
+func getHostname() string {
+	h, _ := os.Hostname()
+	return h
+}
+
+func otelMetricsHandler() http.Handler {
+	otelOnce.Do(func() {
+		exporter, err := prometheus.New()
+		if err != nil {
+			fmt.Printf("failed to initialize prometheus exporter: %v\n", err)
+			return
+		}
+		res := resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName("polaris"),
+			semconv.ServiceVersion(config.BuildVersion),
+			semconv.HostName(getHostname()),
+		)
+		provider := sdkmetric.NewMeterProvider(
+			sdkmetric.WithReader(exporter),
+			sdkmetric.WithResource(res),
+		)
+		meter := provider.Meter("github.com/polarisagi/polaris/pkg/substrate/observability")
+
+		ema5sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema5s_tps")
+		ema30sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema30s_tps")
+		totalCounter, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.total")
+		throttleGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.throttle_stage")
+		surpriseGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index")
+		surpriseStaleGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index.stale")
+		surrealSizeGauge, _ := meter.Float64ObservableGauge("polaris.surrealdb.index_size_mb")
+
+		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+			tbr := GlobalTokenBurnRate
+			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
+			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
+			o.ObserveFloat64(totalCounter, float64(tbr.cumulativeTokens.Load()))
+			o.ObserveFloat64(throttleGauge, float64(tbr.CheckThrottle()))
+
+			si := GlobalSurpriseIndex
+			o.ObserveFloat64(surpriseGauge, si.Current())
+			staleVal := 0.0
+			if si.IsStale() {
+				staleVal = 1.0
+			}
+			o.ObserveFloat64(surpriseStaleGauge, staleVal)
+
+			ls := PolarisSurrealDBIndexSizeMB.Load()
+			o.ObserveFloat64(surrealSizeGauge, float64(ls))
+			return nil
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseStaleGauge, surrealSizeGauge)
+
+		otelHandler = promhttp.Handler()
+	})
+	if otelHandler != nil {
+		return otelHandler
+	}
+	return legacyMetricsHandler()
+}
+
+func legacyMetricsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 

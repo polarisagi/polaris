@@ -11,6 +11,7 @@ import (
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // local_only 隐私模式网络沙箱三层防御。
@@ -228,13 +229,18 @@ func IsLoopbackIP(ip net.IP) bool {
 // 4. 收到 SYN-ACK → 沙箱未生效 → 拒绝进入 local_only
 func (ns *NetworkSandbox) StartupCheck() error {
 	// 0. 内存硬件要求：强制 Tier 3 (64GB 级别) 才能使用 local_only
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-	// 这里通过 OS 探测（若为物理机）或配置推断。简单使用运行时探测：
-	// Tier 3 要求物理/容器环境至少拥有充足的资源，此处仅做占位示例检查
-	// 实际应调用 M0 系统级硬件探测。
-	_ = memStats.Sys // TODO(Tier3): Check total physical memory >= 60GB
-	// TODO(Tier3): Check total physical memory >= 60GB
+	const minPhysicalRAMForLocalOnly = 60 * 1024 * 1024 * 1024 // 60 GB
+	// local_only 模式需要 Tier3 硬件（64GB 级别），通过全局 FeatureGate 的 HardwareProbe 验证
+	fg := observability.GlobalFeatureGate()
+	if fg == nil || fg.TotalRAM() < minPhysicalRAMForLocalOnly {
+		totalGB := uint64(0)
+		if fg != nil {
+			totalGB = fg.TotalRAM() / (1024 * 1024 * 1024)
+		}
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf(
+			"local_only: requires >= 60 GB physical RAM (Tier3); detected %d GB", totalGB,
+		))
+	}
 
 	// DNS 泄露检测: 解析公网域名 → 收到响应 → 沙箱失效
 	addrs, err := ns.dnsResolver.LookupHost(context.Background(), "privacy-check.polarisagi/polaris-external.com")

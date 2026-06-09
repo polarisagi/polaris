@@ -11,6 +11,8 @@ import (
 	"github.com/polarisagi/polaris/configs"
 )
 
+var BuildVersion = "dev"
+
 type Config struct {
 	System        SystemConfig        `toml:"system"`
 	Download      DownloadConfig      `toml:"download"`
