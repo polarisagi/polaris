@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     pipeline_stage           TEXT,
     -- context_payload: 前序阶段结构化产出（JSON），Agent S_PERCEIVE 优先读取
     context_payload          TEXT,
+    -- Token 记账（Gap-A: per-task observability，HE-Rule-1）
+    -- tokens_input/output: 本任务累计 LLM 输入/输出 token 数
+    -- tokens_cache_read: Anthropic prompt cache 命中 token 数（缓存命中比输入便宜 10x）
+    -- cost_usd: 本任务估算费用（= input/1K × CostPer1KInput + output/1K × CostPer1KOutput）
+    tokens_input             INTEGER NOT NULL DEFAULT 0,
+    tokens_output            INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_read        INTEGER NOT NULL DEFAULT 0,
+    cost_usd                 REAL    NOT NULL DEFAULT 0.0,
     created_at               TEXT    NOT NULL,
     updated_at               TEXT    NOT NULL
 );

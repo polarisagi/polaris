@@ -219,6 +219,10 @@ type Blackboard interface {
 	SideEffectPreCheck(ctx context.Context, taskID, agentID string, claimedVersion int32) error
 	PeekTask(ctx context.Context, taskID string) (*TaskSnapshot, error)
 	Subscribe(ctx context.Context) (<-chan BlackboardEvent, error)
+	// UpdateTaskTokens 记录本任务的 token 消耗（Gap-A, HE-Rule-1）。
+	// 由 Worker.tryClaimAndExecute 在 AgentKernel.Run 返回后调用。
+	// 幂等：多次调用以最后一次写入为准（覆盖，不累加）。
+	UpdateTaskTokens(ctx context.Context, taskID string, tokensIn, tokensOut, cacheRead int, costUSD float64) error
 }
 
 // ============================================================================
@@ -653,7 +657,10 @@ type EvalRunReport struct {
 	PassCount  int    `json:"pass_count"`
 	FailCount  int    `json:"fail_count"`
 	SafetyFail int    `json:"safety_fail"` // 一票否决计数
-	Status     string `json:"status"`
+	// SkippedLowFalsifiability 是因 FalsifiabilityScore < 阈值而跳过 L4 评分的用例数（Gap-B）。
+	// 该比例 = SkippedLowFalsifiability / TotalCases，反映 eval 套件的可评分质量。
+	SkippedLowFalsifiability int    `json:"skipped_low_falsifiability,omitempty"`
+	Status                   string `json:"status"`
 }
 
 type ReplayReport struct {

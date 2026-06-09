@@ -61,6 +61,13 @@ type StateContext struct {
 	BudgetWarned   bool
 	BudgetPressure bool
 
+	// Token 分项记账（Gap-A, HE-Rule-1）。
+	// Worker.tryClaimAndExecute 在 Run 返回后读取这三个字段，写入 Blackboard。
+	// TokensUsed 保持不变（= TokensInput + TokensOutput），兼容现有预算逻辑。
+	TokensInput     int
+	TokensOutput    int
+	TokensCacheRead int
+
 	// Step Budget 控制（Adaptive Max-Steps）
 	// MaxStepsLimit 由 AgentConfig.MaxSteps 初始化；StepScorer 低分时动态收紧。
 	// 0 = 无上限（不推荐用于生产）。

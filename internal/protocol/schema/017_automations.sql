@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS automations (
     run_count         INTEGER NOT NULL DEFAULT 0,
     last_run_status   TEXT    NOT NULL DEFAULT '',       -- 'ok' | 'error' | 'running' | ''
     last_run_error    TEXT    NOT NULL DEFAULT '',
+    -- 电路断路器（Gap-C, HE-Rule-2）：连续 N 次 error 后开路，停止调度
+    failure_count     INTEGER NOT NULL DEFAULT 0,        -- 连续失败计数；status=ok 时清零
+    circuit_open      INTEGER NOT NULL DEFAULT 0,        -- 1=断路（cronTick 跳过），0=正常
+    circuit_opened_at TEXT    NOT NULL DEFAULT '',       -- 断路时间戳（ISO8601）
     created_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );

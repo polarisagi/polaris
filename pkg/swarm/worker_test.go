@@ -25,9 +25,10 @@ func (m *mockAgentKernel) Run(ctx context.Context) error {
 func (m *mockAgentKernel) SendIntent(trigger protocol.AgentTrigger) {
 	close(m.ch) // trigger the run
 }
-func (m *mockAgentKernel) GetState() protocol.AgentState { return m.state }
-func (m *mockAgentKernel) SetTaskIntent(intent []byte)   {}
-func (m *mockAgentKernel) GetExecuteResult() []byte      { return m.result }
+func (m *mockAgentKernel) GetState() protocol.AgentState  { return m.state }
+func (m *mockAgentKernel) SetTaskIntent(intent []byte)    {}
+func (m *mockAgentKernel) GetExecuteResult() []byte       { return m.result }
+func (m *mockAgentKernel) GetTokenUsage() (int, int, int) { return 0, 0, 0 }
 
 type mockBlackboard struct {
 	tasks  map[string]*protocol.TaskEntry
@@ -84,6 +85,9 @@ func (b *mockBlackboard) PeekTask(ctx context.Context, taskID string) (*protocol
 }
 func (b *mockBlackboard) Subscribe(ctx context.Context) (<-chan protocol.BlackboardEvent, error) {
 	return b.events, nil
+}
+func (b *mockBlackboard) UpdateTaskTokens(_ context.Context, _ string, _, _, _ int, _ float64) error {
+	return nil
 }
 
 func TestWorker_ListenLoop(t *testing.T) {

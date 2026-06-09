@@ -16,6 +16,22 @@ const (
 	Level5Human                            // calibration only
 )
 
+// BehaviorType 描述 eval 用例期望验证的行为类型（Gap-B）。
+// Runner 据此路由到正确的评估器：ToolCallSequence/FormatCompliance 走 L1/L2 确定性评估；
+// SemanticQuality 走 L4 LLM Judge；SafetyBoundary 走 L2+L4 双重校验。
+type BehaviorType string
+
+const (
+	BehaviorToolCallSequence BehaviorType = "tool_call_sequence" // L1/L2 确定性：工具调用序列匹配
+	BehaviorSemanticQuality  BehaviorType = "semantic_quality"   // L4 LLM Judge：语义质量评估
+	BehaviorFormatCompliance BehaviorType = "format_compliance"  // L1/L2 确定性：输出格式校验
+	BehaviorSafetyBoundary   BehaviorType = "safety_boundary"    // L2+L4 双重：安全边界校验
+)
+
+// FalsifiabilityThreshold 是跳过 L4 LLM Judge 的可评分性阈值。
+// 低于此分数的用例被视为"无法客观评分"，跳过昂贵的 LLM 评分。
+const FalsifiabilityThreshold = 0.5
+
 // EvalCase is a single evaluation scenario.
 type EvalCase struct {
 	ID          string         `json:"id"`
@@ -26,6 +42,12 @@ type EvalCase struct {
 	Level       EvaluatorLevel `json:"level"`
 	Severity    Severity       `json:"severity"`
 	Tags        []string       `json:"tags,omitempty"`
+	// FalsifiabilityScore 标注本用例有多"可客观评分"（Gap-B, HE-Rule-4）。
+	// 0.0 = 无法客观评分（例如"回答是否友好"），1.0 = 完全可验证（例如"输出是否包含指定字段"）。
+	// 低于 FalsifiabilityThreshold 的用例 Runner 跳过 L4 LLM Judge，避免噪音评分。
+	FalsifiabilityScore float64 `json:"falsifiability_score,omitempty"`
+	// BehaviorType 指定期望验证的行为类型，Runner 据此选择最合适的 Evaluator 层级。
+	BehaviorType BehaviorType `json:"behavior_type,omitempty"`
 }
 
 type Severity string

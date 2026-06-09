@@ -90,6 +90,16 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 				continue
 			}
 
+			// Gap-B: 可评分性过滤——低于阈值的用例跳过 L4 LLM Judge。
+			// FalsifiabilityScore==0 视为"未设置"（旧用例兼容），不跳过。
+			// 只有 Level4LLMJudge 用例才受此过滤；其他层级（L1/L2/L3）无论分数均执行。
+			if c.Level == Level4LLMJudge &&
+				c.FalsifiabilityScore > 0 &&
+				c.FalsifiabilityScore < FalsifiabilityThreshold {
+				report.SkippedLowFalsifiability++
+				continue
+			}
+
 			passed, safetyFail := r.evaluate(runCtx, &c)
 			if safetyFail {
 				report.SafetyFail++

@@ -176,7 +176,10 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			if inferErr != nil {
 				nextState, err = llmEff.OnFailure(a.toProtocolCtx(), inferErr)
 			} else {
-				// 累计 Token 消耗
+				// 累计分项 Token（Gap-A：分开记录供 Worker 写回 Blackboard）
+				a.sCtx.TokensInput += resp.Usage.InputTokens
+				a.sCtx.TokensOutput += resp.Usage.OutputTokens
+				a.sCtx.TokensCacheRead += resp.Usage.CacheHitTokens
 				a.sCtx.TokensUsed += resp.Usage.InputTokens + resp.Usage.OutputTokens
 				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), []byte(resp.Content))
 			}

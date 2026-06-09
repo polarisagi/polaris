@@ -211,6 +211,12 @@ func (a *Agent) GetExecuteResult() []byte {
 	return a.sCtx.ExecuteResult
 }
 
+// GetTokenUsage 返回本轮执行的分项 token 消耗（Gap-A）。
+// 由 Worker.tryClaimAndExecute 在 Run 返回后调用，写入 Blackboard.UpdateTaskTokens。
+func (a *Agent) GetTokenUsage() (tokensIn, tokensOut, cacheRead int) {
+	return a.sCtx.TokensInput, a.sCtx.TokensOutput, a.sCtx.TokensCacheRead
+}
+
 // InjectToolRegistry 注入工具注册表（运行时绑定，允许测试注入 mock）。
 func (a *Agent) InjectToolRegistry(tr protocol.ToolRegistry) { a.toolRegistry = tr }
 

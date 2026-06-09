@@ -20,6 +20,8 @@ type AgentKernel interface {
 	SetTaskIntent(intent []byte)
 	GetExecuteResult() []byte
 	SendIntent(trigger protocol.AgentTrigger)
+	// GetTokenUsage 返回本轮 Run 的分项 token 消耗（Gap-A, HE-Rule-1）。
+	GetTokenUsage() (tokensIn, tokensOut, cacheRead int)
 }
 
 // Worker 负责桥接 M8 Blackboard 和 M4 Agent Kernel。
@@ -121,6 +123,14 @@ func (w *Worker) tryClaimAndExecute(ctx context.Context, taskID string) {
 		case <-done:
 			// 执行结束
 			finalState := w.kernel.GetState()
+
+			// Gap-A: 写回 token 消耗，与任务状态写入解耦（记账失败不影响任务结果）
+			tokensIn, tokensOut, cacheRead := w.kernel.GetTokenUsage()
+			if tokensIn > 0 || tokensOut > 0 {
+				if err := w.blackboard.UpdateTaskTokens(ctx, taskID, tokensIn, tokensOut, cacheRead, 0); err != nil {
+					slog.Warn("worker: UpdateTaskTokens failed", "task_id", taskID, "err", err)
+				}
+			}
 
 			// 根据结果写回 Blackboard
 			if finalState == protocol.AgentStateFailed {

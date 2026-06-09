@@ -560,6 +560,21 @@ func (bb *SQLiteBlackboard) StopAll(ctx context.Context, reason string) error {
 	return nil
 }
 
+// UpdateTaskTokens 写入任务的 token 消耗（Gap-A, HE-Rule-1）。
+// SQL 覆盖写入（幂等），任务不存在时静默成功（已被 Reaper 清理）。
+func (bb *SQLiteBlackboard) UpdateTaskTokens(ctx context.Context, taskID string, tokensIn, tokensOut, cacheRead int, costUSD float64) error {
+	_, err := bb.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET tokens_input=?, tokens_output=?, tokens_cache_read=?, cost_usd=?, updated_at=datetime('now')
+		WHERE task_id=?`,
+		tokensIn, tokensOut, cacheRead, costUSD, taskID,
+	)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.UpdateTaskTokens", err)
+	}
+	return nil
+}
+
 // broadcast 广播事件到所有订阅通道（非阻塞，背压丢弃）。
 func (bb *SQLiteBlackboard) broadcast(ev protocol.BlackboardEvent) {
 	bb.subMu.RLock()

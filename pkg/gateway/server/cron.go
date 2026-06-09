@@ -384,6 +384,7 @@ func (s *Server) cronTick(ctx context.Context) {
 		       working_dir, reasoning_effort, result_action, sandbox_level, cedar_rules_json
 		FROM automations
 		WHERE enabled=1
+		  AND circuit_open=0
 		  AND (trigger_type='cron' OR trigger_type='both')
 		  AND cron_schedule != ''
 		  AND (next_run_at = '' OR next_run_at <= ?)
@@ -489,15 +490,8 @@ func (s *Server) executeAutomation(ctx context.Context, a *automation, trigger s
 				slog.Warn("automation: update run failed", "run", runID, "err", err)
 			}
 
-			// 更新 automations 统计
-			if _, err := s.db.ExecContext(context.Background(), `
-				UPDATE automations
-				SET last_run_status=?, last_run_error=?, run_count=run_count+1, updated_at=?
-				WHERE id=?`,
-				status, errMsg, finishedAt, a.ID,
-			); err != nil {
-				slog.Warn("automation: update stats failed", "id", a.ID, "err", err)
-			}
+			// 更新 automations 统计（含电路断路器，见 updateAutomationStats）
+			s.updateAutomationStats(a.ID, status, errMsg, finishedAt)
 		}()
 
 		// 准备 Provider
@@ -653,6 +647,53 @@ func parseReasoningEffort(e string) protocol.ReasoningEffort {
 }
 
 // ─── Cron 表达式解析（简化版，支持标准5字段格式 + @daily/@weekly 别名）────────
+
+// updateAutomationStats 更新 automations 表统计字段，含 Gap-C 电路断路器逻辑。
+// 连续 circuitThreshold 次 error → 置 circuit_open=1，cronTick 跳过该任务。
+// status=ok 时清零 failure_count 和 circuit_open（断路自愈）。
+const circuitBreakThreshold = 5
+
+func (s *Server) updateAutomationStats(automationID, status, errMsg, finishedAt string) {
+	bg := context.Background()
+	if status == "error" {
+		if _, err := s.db.ExecContext(bg, `
+			UPDATE automations
+			SET last_run_status=?, last_run_error=?,
+			    run_count=run_count+1,
+			    failure_count=failure_count+1,
+			    circuit_open=CASE WHEN failure_count+1 >= ? THEN 1 ELSE circuit_open END,
+			    circuit_opened_at=CASE WHEN failure_count+1 >= ? AND circuit_open=0
+			                         THEN ? ELSE circuit_opened_at END,
+			    updated_at=?
+			WHERE id=?`,
+			status, errMsg,
+			circuitBreakThreshold, circuitBreakThreshold, finishedAt,
+			finishedAt, automationID,
+		); err != nil {
+			slog.Warn("automation: update stats failed", "id", automationID, "err", err)
+			return
+		}
+		var circuitOpen int
+		_ = s.db.QueryRowContext(bg, `SELECT circuit_open FROM automations WHERE id=?`, automationID).Scan(&circuitOpen)
+		if circuitOpen == 1 {
+			slog.Warn("automation: circuit opened — consecutive failures exceeded threshold",
+				"id", automationID, "threshold", circuitBreakThreshold)
+		}
+		return
+	}
+	// status=ok 或 running 结束：清零断路器
+	if _, err := s.db.ExecContext(bg, `
+		UPDATE automations
+		SET last_run_status=?, last_run_error='',
+		    run_count=run_count+1,
+		    failure_count=0, circuit_open=0, circuit_opened_at='',
+		    updated_at=?
+		WHERE id=?`,
+		status, finishedAt, automationID,
+	); err != nil {
+		slog.Warn("automation: update stats failed", "id", automationID, "err", err)
+	}
+}
 
 // calcNextRun 基于当前时间计算下次触发时间（RFC3339）。
 //

@@ -298,11 +298,23 @@ type RetrievalConfig struct {
 	FinalTopK    int
 }
 
+// EvidenceType 标注检索结果的证据来源（Gap-D, HE-Rule-1 Surprise_Index）。
+// Agent 可据此决策是否需要二次验证：ExactMatch/HighVector 置信高，WeakSemantic 应附加不确定性标注。
+type EvidenceType string
+
+const (
+	EvidenceExactMatch   EvidenceType = "exact_match"   // 精确标题/关键字命中
+	EvidenceHighVector   EvidenceType = "high_vector"   // 向量相似度 > 0.85
+	EvidenceFTSKeyword   EvidenceType = "fts_keyword"   // BM25 全文检索命中
+	EvidenceWeakSemantic EvidenceType = "weak_semantic" // 弱语义相似（向量 <= 0.85）
+)
+
 type ScoredFragment struct {
-	Content  string
-	Score    float64
-	Source   string
-	Metadata map[string]string
+	Content      string
+	Score        float64
+	Source       string
+	Metadata     map[string]string
+	EvidenceType EvidenceType // 证据来源类型（零值=未标注，兼容旧路径）
 }
 
 // ============================================================================
@@ -425,6 +437,13 @@ type TaskEntry struct {
 	// ContextPayload 携带前序阶段的结构化产出（JSON），由 PipelineOrchestrator 填充。
 	// 下游 Agent 在 S_PERCEIVE 时优先读取此字段，而非全局记忆检索。
 	ContextPayload []byte
+
+	// ── Token 记账字段（Gap-A, HE-Rule-1）────────────────────────────────────
+	// Worker.tryClaimAndExecute 完成后调用 Blackboard.UpdateTaskTokens 写入。
+	TokensInput     int
+	TokensOutput    int
+	TokensCacheRead int
+	CostUSD         float64
 }
 
 // ============================================================================

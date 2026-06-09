@@ -96,19 +96,26 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 
 			if bm25Score := bm25Score(query, content); bm25Score > 0 {
 				bm25Results = append(bm25Results, protocol.ScoredFragment{
-					Content: content,
-					Score:   bm25Score,
-					Source:  src,
+					Content:      content,
+					Score:        bm25Score,
+					Source:       src,
+					EvidenceType: protocol.EvidenceFTSKeyword,
 				})
 			}
 
 			contentFP := SimhashOf(content)
 			if dist := queryFP.Hamming(contentFP); dist <= 16 {
 				simScore := 1.0 - float64(dist)/64.0
+				// Simhash 近似匹配：相似度高时归类 HighVector，否则 WeakSemantic
+				evidType := protocol.EvidenceWeakSemantic
+				if simScore >= 0.85 {
+					evidType = protocol.EvidenceHighVector
+				}
 				simhashResults = append(simhashResults, protocol.ScoredFragment{
-					Content: content,
-					Score:   simScore,
-					Source:  src,
+					Content:      content,
+					Score:        simScore,
+					Source:       src,
+					EvidenceType: evidType,
 				})
 			}
 		}
@@ -123,9 +130,10 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 		for _, g := range groups {
 			content := g.Label + ": " + g.Summary
 			durativeResults = append(durativeResults, protocol.ScoredFragment{
-				Content: content,
-				Score:   bm25Score(query, content),
-				Source:  "durative_group:" + g.ID,
+				Content:      content,
+				Score:        bm25Score(query, content),
+				Source:       "durative_group:" + g.ID,
+				EvidenceType: protocol.EvidenceFTSKeyword,
 			})
 		}
 	}
@@ -145,9 +153,10 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 					content := e.Decision + " " + e.Strategy
 					if s := bm25Score(query, content); s > 0 {
 						reflectionResults = append(reflectionResults, protocol.ScoredFragment{
-							Content: content,
-							Score:   s,
-							Source:  "reflection:" + e.ID,
+							Content:      content,
+							Score:        s,
+							Source:       "reflection:" + e.ID,
+							EvidenceType: protocol.EvidenceFTSKeyword,
 						})
 					}
 				}
@@ -162,9 +171,10 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 					src := string(rIter.Key())
 					if s := bm25Score(query, content); s > 0 {
 						reflectionResults = append(reflectionResults, protocol.ScoredFragment{
-							Content: content,
-							Score:   s,
-							Source:  src,
+							Content:      content,
+							Score:        s,
+							Source:       src,
+							EvidenceType: protocol.EvidenceFTSKeyword,
 						})
 					}
 				}
@@ -181,9 +191,10 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 				// 图邻居按跳数衰减赋分：第1跳 0.7，第2跳 0.5
 				score := 0.7 / float64(rank/2+1)
 				graphResults = append(graphResults, protocol.ScoredFragment{
-					Content: nb, // 图路径用节点 ID 作为 Content 占位（调用方可二次 KV 取原文）
-					Score:   score,
-					Source:  nb,
+					Content:      nb, // 图路径用节点 ID 作为 Content 占位（调用方可二次 KV 取原文）
+					Score:        score,
+					Source:       nb,
+					EvidenceType: protocol.EvidenceWeakSemantic, // 图路径：结构关联，非内容匹配
 				})
 			}
 		}
@@ -192,8 +203,9 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 	// Stage 2 — RRF 融合 (k=60)
 	// score(d) = Σ weight_i / (k + rank_i + 1)
 	const rrfK = 60.0
-	scoreMap := make(map[string]float64)  // key → RRF 累计分
-	contentMap := make(map[string]string) // key → content
+	scoreMap := make(map[string]float64)                  // key → RRF 累计分
+	contentMap := make(map[string]string)                 // key → content
+	evidenceMap := make(map[string]protocol.EvidenceType) // key → 最高权重路径的证据类型
 
 	addRRF := func(results []protocol.ScoredFragment, weight float64) {
 		// 按 Score 降序排列后赋 rank
@@ -201,7 +213,13 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 		copy(sorted, results)
 		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Score > sorted[j].Score })
 		for rank, frag := range sorted {
-			scoreMap[frag.Source] += weight / (rrfK + float64(rank) + 1)
+			contribution := weight / (rrfK + float64(rank) + 1)
+			prev := scoreMap[frag.Source]
+			scoreMap[frag.Source] += contribution
+			// 保留贡献最大那一路的证据类型（首次出现或新路贡献更大时更新）
+			if frag.EvidenceType != "" && (prev == 0 || contribution > prev) {
+				evidenceMap[frag.Source] = frag.EvidenceType
+			}
 			contentMap[frag.Source] = frag.Content
 		}
 	}
@@ -216,9 +234,10 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 	var merged []protocol.ScoredFragment //nolint:prealloc
 	for src, score := range scoreMap {
 		merged = append(merged, protocol.ScoredFragment{
-			Content: contentMap[src],
-			Score:   score,
-			Source:  src,
+			Content:      contentMap[src],
+			Score:        score,
+			Source:       src,
+			EvidenceType: evidenceMap[src],
 		})
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
@@ -307,10 +326,16 @@ func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db
 
 		score := cosineSimilarity(queryF32, vec)
 		if score > 0.5 {
+			// Gap-D：向量相似度 > 0.85 → HighVector；否则 WeakSemantic
+			evidType := protocol.EvidenceWeakSemantic
+			if score >= 0.85 {
+				evidType = protocol.EvidenceHighVector
+			}
 			vectorResults = append(vectorResults, protocol.ScoredFragment{
-				Content: content,
-				Score:   score,
-				Source:  content, // 简化 source
+				Content:      content,
+				Score:        score,
+				Source:       content,
+				EvidenceType: evidType,
 			})
 		}
 	}

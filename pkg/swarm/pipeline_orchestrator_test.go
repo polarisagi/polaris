@@ -70,6 +70,9 @@ func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan protocol.Blackboar
 	ch := make(chan protocol.BlackboardEvent)
 	return ch, nil
 }
+func (s *stubBlackboard) UpdateTaskTokens(_ context.Context, _ string, _, _, _ int, _ float64) error {
+	return nil
+}
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 

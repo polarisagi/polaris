@@ -338,6 +338,23 @@ func (b *Blackboard) Subscribe(ctx context.Context) (<-chan protocol.BlackboardE
 	return b.events, nil
 }
 
+// UpdateTaskTokens 更新任务的 token 消耗（Gap-A, HE-Rule-1）。
+// 内存版：直接更新 TaskEntry 字段，无 DB 写入。
+func (b *Blackboard) UpdateTaskTokens(_ context.Context, taskID string, tokensIn, tokensOut, cacheRead int, costUSD float64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry, ok := b.tasks[taskID]
+	if !ok {
+		return nil // 任务已过期或被 Reaper 清理，静默成功
+	}
+	entry.TokensInput = tokensIn
+	entry.TokensOutput = tokensOut
+	entry.TokensCacheRead = cacheRead
+	entry.CostUSD = costUSD
+	entry.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
 var (
 	ErrTaskNotFound = &BlackboardError{"task not found"}
 	ErrStaleLease   = &BlackboardError{"stale lease"}
