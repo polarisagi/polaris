@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "run_command",
+  "description": "Run restricted build, test, and formatting commands (e.g. go test, cargo test, make test).",
+  "type": "object",
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "The command line string to execute."
+    },
+    "working_dir": {
+      "type": "string",
+      "description": "Working directory for the command. If empty, the default workspace root will be used."
+    },
+    "timeout_s": {
+      "type": "integer",
+      "default": 30,
+      "description": "Execution timeout in seconds. Max 120."
+    }
+  },
+  "required": ["command"]
+}

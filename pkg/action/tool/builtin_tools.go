@@ -43,12 +43,14 @@ func RegisterBuiltinTools(
 		{"write_file", makeWriteFileFn(allowedPaths)},
 		{"fetch_url", makeFetchURLFn(dialer)},
 		{"bash", makeBashFn(allowedPaths)},
+		{"run_command", makeRunCommandFn(allowedPaths)},
 		{"get_datetime", getDatetimeFn},
 		{"csv_parse", csvParseFn},
 		{"diff_text", diffTextFn},
 		{"tts_edge", ExecuteEdgeTTS},
 		{"video_analysis", ExecuteVideoAnalysis},
 		{"sys_probe", sysProbeFn},
+		{"str_replace_editor", makeStrReplaceEditorFn(allowedPaths)},
 	}
 
 	for _, d := range defs {
@@ -550,4 +552,172 @@ func isPrivateURL(rawURL string) bool {
 		}
 	}
 	return false
+}
+
+// ─── str_replace_editor ──────────────────────────────────────────────────────
+
+type strReplaceEditorArgs struct {
+	Command string `json:"command"` // create, str_replace, view, undo_edit
+	Path    string `json:"path"`
+	OldStr  string `json:"old_str"`
+	NewStr  string `json:"new_str"`
+}
+
+// 内存中保存最近一次修改的备份 (session 级别应该在外部控制，这里简化为全局 map 作为 MVP)
+var undoBuffer = make(map[string]string)
+
+func makeStrReplaceEditorFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args strReplaceEditorArgs
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: invalid args", err)
+		}
+		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
+			return nil, err
+		}
+
+		cleanPath := filepath.Clean(args.Path)
+
+		switch args.Command {
+		case "create":
+			if _, err := os.Stat(cleanPath); err == nil {
+				return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: file already exists")
+			}
+			if err := os.WriteFile(cleanPath, []byte(args.NewStr), 0600); err != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: create failed", err)
+			}
+			return []byte(`{"status":"created"}`), nil
+
+		case "view":
+			data, err := os.ReadFile(cleanPath)
+			if err != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: view failed", err)
+			}
+			return data, nil
+
+		case "str_replace":
+			return executeStrReplace(cleanPath, args)
+
+		case "undo_edit":
+			oldContent, ok := undoBuffer[cleanPath]
+			if !ok {
+				return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: no undo history found for this file")
+			}
+			if err := os.WriteFile(cleanPath, []byte(oldContent), 0600); err != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: undo write failed", err)
+			}
+			delete(undoBuffer, cleanPath)
+			return []byte(`{"status":"undone"}`), nil
+
+		default:
+			return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("str_replace_editor: unknown command %q", args.Command))
+		}
+	}
+}
+
+func executeStrReplace(cleanPath string, args strReplaceEditorArgs) ([]byte, error) {
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: read failed", err)
+	}
+	content := string(data)
+
+	if args.OldStr == "" {
+		return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: old_str cannot be empty")
+	}
+
+	count := strings.Count(content, args.OldStr)
+	if count == 0 {
+		return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: old_str not found in file")
+	}
+	if count > 1 {
+		return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: old_str is not unique, matched multiple times. Please provide more context in old_str.")
+	}
+
+	// 备份到 undoBuffer
+	undoBuffer[cleanPath] = content
+
+	newContent := strings.Replace(content, args.OldStr, args.NewStr, 1)
+	if err := os.WriteFile(cleanPath, []byte(newContent), 0600); err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: write failed", err)
+	}
+	return []byte(`{"status":"replaced"}`), nil
+}
+
+// ─── run_command ─────────────────────────────────────────────────────────────
+
+type runCommandArgs struct {
+	Command    string `json:"command"`
+	WorkingDir string `json:"working_dir"`
+	TimeoutS   int    `json:"timeout_s"`
+}
+
+func makeRunCommandFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args runCommandArgs
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "run_command: invalid args", err)
+		}
+		if args.Command == "" {
+			return nil, perrors.New(perrors.CodeInternal, "run_command: command is required")
+		}
+
+		// 白名单检查
+		cmdPrefix := strings.SplitN(strings.TrimSpace(args.Command), " ", 2)[0]
+		allowedCmds := map[string]bool{
+			"go": true, "cargo": true, "npm": true, "yarn": true,
+			"make": true, "pytest": true, "tsc": true,
+		}
+		if !allowedCmds[cmdPrefix] {
+			return nil, perrors.New(perrors.CodeForbidden, fmt.Sprintf("run_command: command %q not in whitelist", cmdPrefix))
+		}
+
+		workDir := args.WorkingDir
+		if workDir == "" && len(allowedPaths) > 0 {
+			workDir = allowedPaths[0]
+		}
+		if workDir != "" {
+			if err := checkAllowedPath(workDir, allowedPaths); err != nil {
+				return nil, err
+			}
+		}
+
+		timeout := time.Duration(args.TimeoutS) * time.Second
+		if timeout <= 0 || timeout > 120*time.Second {
+			timeout = 30 * time.Second
+		}
+
+		execCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		slog.Info("run_command: executing", "cmd", args.Command, "dir", workDir)
+		cmd := exec.CommandContext(execCtx, "bash", "-c", args.Command)
+		if workDir != "" {
+			cmd.Dir = workDir
+		}
+
+		cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin", "GOCACHE=/tmp/gocache"}
+		if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
+			cmd.SysProcAttr = attrs
+		}
+
+		outBytes, err := cmd.CombinedOutput()
+		result := map[string]any{
+			"command":   args.Command,
+			"output":    string(outBytes),
+			"exit_code": 0,
+		}
+
+		if err != nil {
+			result["error"] = err.Error()
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				result["exit_code"] = exitErr.ExitCode()
+			} else {
+				result["exit_code"] = -1
+			}
+		}
+
+		return json.Marshal(result)
+	}
 }

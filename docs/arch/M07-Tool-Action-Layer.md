@@ -122,6 +122,20 @@ Schema 版本化（防技能断裂）: 新增可选字段=Patch, 新增必填字
   - `mcp:{server_id}:{scope}` token 格式
   - Cedar 策略可基于 scope 做 permit/forbid 决策
 
+### 3.1 核心内置工具层 (Built-in Tools)
+
+Polaris L1 层提供生存套件（Survival Kit）。其中，最核心的代码编辑和命令执行通过以下两个受限内置工具完成，严禁在外部或扩展层绕过它们：
+
+- **`str_replace_editor` (核心)**：替代传统的、容易引起副作用的全量文件写入。它提供 `create`, `view`, `str_replace`, `undo_edit`。
+  - **优势**：对齐业界 AI Coding 最佳实践（Targeted String Matching），避免基于行号带来的漂移问题。
+  - **安全与回退**：自带基于 WorkingMemory（Session级）的 `undo_edit` 内存环形缓冲，与 State-in-DB 设计完全兼容。若 `old_str` 匹配不唯一或不存，直接失败拒绝执行。
+- **`run_command` (核心)**：提供受限的测试、构建、格式化等执行环境。
+  - 严禁使用通用的 `bash` 工具（已被标注为高风险和永久禁止执行复杂逻辑），所有测试需通过 `run_command`（仅允许 `go test`, `cargo`, `make` 等白名单前缀）。
+  - 支持 `ContainerSandbox` 的命名空间隔离，限制最大超时为 120s，无 `stdin` 注入可能。
+
+**关于 Git MCP 的定位**：
+系统完全 VCS-Agnostic（无需内置 Git 版本控制）。若业务流需提交代码、切换分支，必须通过挂载 `polaris-git-mcp` 这一 L3 MCP 扩展。外部 Git 扩展绝不允许代劳底层文件覆写，只负责版本控制语义。
+
 ---
 
 ## 4. 三级沙箱架构（CANONICAL SOURCE）
