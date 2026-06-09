@@ -248,7 +248,7 @@
   </div>
 
   <!-- ═══════════════════════════════════════════════ Workflow 创建/编辑 Modal -->
-  <div class="modal" :class="{ 'modal-open': $store.workflow.showModal }">
+  <dialog id="workflow_modal" class="modal" x-effect="$store.workflow.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.workflow.showModal = false" x-cloak>
     <div class="modal-box w-11/12 max-w-3xl max-h-[90vh] overflow-y-auto">
       <h3 class="font-bold text-lg mb-4"
         x-text="$store.workflow.editMode === 'create' ? $store.i18n.t('wf_modal_create') : $store.i18n.t('wf_modal_edit')">
@@ -321,7 +321,7 @@
                     :disabled="$store.workflow.form.steps.length <= 1">✕</button>
                 </div>
 
-                <div class="grid grid-cols-2 gap-3 mb-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                   <div class="form-control">
                     <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_name')"></span></label>
                     <input type="text" class="input input-sm input-bordered" x-model="step.name"
@@ -346,7 +346,7 @@
                     :placeholder="$store.i18n.t('wf_step_ph_prompt')"></textarea>
                 </div>
 
-                <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div class="form-control">
                     <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_workdir')"></span></label>
                     <input type="text" class="input input-sm input-bordered font-mono" x-model="step.working_dir"
@@ -372,18 +372,21 @@
       </div>
 
       <div class="modal-action mt-6">
-        <button class="btn btn-ghost" @click="$store.workflow.showModal = false"
+        <button type="button" class="btn btn-ghost" @click="$store.workflow.showModal = false"
           x-text="$store.i18n.t('cancel')"></button>
-        <button class="btn btn-primary" @click="$store.workflow.save()"
+        <button type="button" class="btn btn-primary" @click="$store.workflow.save()"
           x-text="$store.i18n.t('save')"></button>
       </div>
     </div>
-    <div class="modal-backdrop" @click="$store.workflow.showModal = false"></div>
-  </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>close</button>
+    </form>
+  </dialog>
 
   <!-- ═══════════════════════════════════════════════ Workflow 执行历史侧栏 -->
+  <div class="fixed inset-0 bg-base-300/30 backdrop-blur-sm z-40" x-show="$store.workflow.showRuns" x-transition.opacity @click="$store.workflow.showRuns = false" x-cloak></div>
   <div class="fixed inset-y-0 right-0 w-full max-w-lg bg-base-100 shadow-2xl border-l border-base-300 flex flex-col z-50 transition-transform"
-    :class="$store.workflow.showRuns ? 'translate-x-0' : 'translate-x-full'">
+    :class="$store.workflow.showRuns ? 'translate-x-0' : 'translate-x-full'" x-cloak>
     <div class="p-4 border-b border-base-300 flex justify-between items-center">
       <div>
         <h3 class="font-bold" x-text="$store.i18n.t('wf_runs_title')"></h3>
