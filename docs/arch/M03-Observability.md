@@ -146,7 +146,7 @@ M3 提供两层 SurpriseIndex 计算，M4 按优先级消费：
 - 工具序列偏离度（toolSequenceDivergence）：当前任务工具调用序列 vs 同 task_type 历史成功序列的归一化 Levenshtein 距离（≤1.0），与完整版同名同义
 - 冷启动 (<10 条历史) → 固定 0.5。架构影响：强制导致 M4 走 System 1.5（0.3-0.6），避免了极度缺乏数据时过载触发 System 2，也防止了错误进入 System 1。
 - 计算开销：~100-300ms（仅 embedding API 调用），无 M9 依赖
-- 代码位置：`pkg/substrate/observability/surprise_basic.go`（L0，不依赖 pkg/swarm/）
+- 代码位置：`pkg/substrate/observability/metrics.go`（L0，不依赖 pkg/swarm/）
 
 **完整计算器 (M9 异步推送，已上线)**:
 三组件完整版：`0.4 × embeddingCosineDistance + 0.35 × toolSequenceDivergence + 0.25 × MEMFMatchScore`
