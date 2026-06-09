@@ -693,10 +693,10 @@ func (s *Server) handleSyncMarketplaces(w http.ResponseWriter, r *http.Request) 
 }
 
 type PackageJSON struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Version     string            `json:"version"`
-	Homepage    string            `json:"homepage"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	Version      string            `json:"version"`
+	Homepage     string            `json:"homepage"`
 	Dependencies map[string]string `json:"dependencies"`
 }
 

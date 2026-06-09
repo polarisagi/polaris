@@ -3,8 +3,10 @@ package substrate
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
@@ -13,13 +15,23 @@ import (
 type HybridSearchEngine struct {
 	router   *StorageRouter
 	embedder Embedder
+	stats    *CorpusStats
 }
 
 func NewHybridSearchEngine(router *StorageRouter, embedder Embedder) *HybridSearchEngine {
 	return &HybridSearchEngine{
 		router:   router,
 		embedder: embedder,
+		stats:    NewCorpusStats(),
 	}
+}
+
+func (e *HybridSearchEngine) AddDocument(ctx context.Context, id, content string) error {
+	if e.stats != nil {
+		terms := strings.Fields(strings.ToLower(content))
+		e.stats.AddDoc(terms)
+	}
+	return nil
 }
 
 func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []byte, config RetrievalConfig) ([]ScoredFragment, error) { //nolint:gocyclo,nestif
@@ -46,7 +58,7 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 				Content string `json:"content"`
 			}
 			if err := json.Unmarshal(ftsIter.Value(), &c); err == nil {
-				score := bm25Score(c.Content, query)
+				score := bm25Score(c.Content, query, e.stats)
 				if score > 0 {
 					ftsResults = append(ftsResults, ScoredFragment{
 						Content: c.Content,
@@ -121,7 +133,53 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 	return fused, nil
 }
 
-func bm25Score(doc string, query string) float64 {
+type CorpusStats struct {
+	mu          sync.RWMutex
+	docCount    int
+	totalLen    int
+	termDocFreq map[string]int
+}
+
+func NewCorpusStats() *CorpusStats {
+	return &CorpusStats{
+		termDocFreq: make(map[string]int),
+	}
+}
+
+func (cs *CorpusStats) AvgDocLen() float64 {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.docCount == 0 {
+		return 100.0
+	}
+	return float64(cs.totalLen) / float64(cs.docCount)
+}
+
+func (cs *CorpusStats) IDF(term string) float64 {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	df := cs.termDocFreq[term]
+	if df == 0 {
+		return 1.5
+	}
+	return math.Log(float64(cs.docCount-df+1)/float64(df+1) + 1.0)
+}
+
+func (cs *CorpusStats) AddDoc(terms []string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.docCount++
+	cs.totalLen += len(terms)
+	seen := make(map[string]bool, len(terms))
+	for _, t := range terms {
+		if !seen[t] {
+			cs.termDocFreq[t]++
+			seen[t] = true
+		}
+	}
+}
+
+func bm25Score(doc string, query string, stats *CorpusStats) float64 {
 	docTerms := strings.Fields(strings.ToLower(doc))
 	queryTerms := strings.Fields(strings.ToLower(query))
 	if len(docTerms) == 0 || len(queryTerms) == 0 {
@@ -135,7 +193,12 @@ func bm25Score(doc string, query string) float64 {
 
 	k1 := 1.2
 	b := 0.75
-	avgdl := 100.0 // MVP approximate average document length
+	var avgdl float64
+	if stats != nil {
+		avgdl = stats.AvgDocLen()
+	} else {
+		avgdl = 100.0 // MVP approximate average document length
+	}
 
 	score := 0.0
 	for _, q := range queryTerms {
@@ -143,8 +206,12 @@ func bm25Score(doc string, query string) float64 {
 		if !ok {
 			continue
 		}
-		// Approximate IDF without global corpus stats
-		idf := 1.5
+		var idf float64
+		if stats != nil {
+			idf = stats.IDF(q)
+		} else {
+			idf = 1.5
+		}
 		score += idf * (f * (k1 + 1)) / (f + k1*(1-b+b*(float64(len(docTerms))/avgdl)))
 	}
 	return score

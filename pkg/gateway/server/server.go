@@ -20,7 +20,6 @@ import (
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/cognition/kernel"
 	"github.com/polarisagi/polaris/pkg/cognition/memory"
 	"github.com/polarisagi/polaris/pkg/extensions/marketplace"
 	"github.com/polarisagi/polaris/pkg/extensions/mcp"
@@ -38,7 +37,7 @@ import (
 type Server struct {
 	addr            string
 	srv             *http.Server
-	agent           *kernel.Agent
+	agent           protocol.AgentController
 	blackboard      protocol.Blackboard
 	hitlGateway     protocol.HITL
 	db              *sql.DB
@@ -182,7 +181,7 @@ func (s *Server) clearToolSchemaCache() {
 
 // NewServer 创建新的 HTTP Server。
 // DEV_MODE=1 时将静态资源请求反向代理到 Vite dev server (:5173)。
-func NewServer(addr string, dataDir string, agent *kernel.Agent, bb protocol.Blackboard, hitlGateway protocol.HITL, db *sql.DB, registry *inference.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer) *Server {
+func NewServer(addr string, dataDir string, agent protocol.AgentController, bb protocol.Blackboard, hitlGateway protocol.HITL, db *sql.DB, registry *inference.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer) *Server {
 	tDir := filepath.Join(dataDir, "sessions")
 	go PruneTranscripts(tDir, 30) // 启动时异步清理 30 天前的 transcript
 
@@ -702,11 +701,6 @@ func (s *Server) handleGetPendingApprovals(w http.ResponseWriter, r *http.Reques
 // POST /v1/agent/{taskID}/interrupt
 // body: {"action":"resume"|"redirect"|"abort","redirect":"新意图文本","reason":"..."}
 func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
-	if s.agent == nil {
-		http.Error(w, "agent not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	taskID := r.PathValue("taskID")
 	var req struct {
 		Action   string `json:"action"`   // "resume" | "redirect" | "abort"
@@ -718,19 +712,25 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	action := kernel.InterruptResume
+	var action protocol.InterruptAction
 	switch req.Action {
+	case "resume":
+		action = protocol.InterruptResume
 	case "redirect":
-		action = kernel.InterruptRedirect
+		action = protocol.InterruptRedirect
 	case "abort":
-		action = kernel.InterruptAbort
+		action = protocol.InterruptAbort
+	default:
+		action = protocol.InterruptResume
 	}
 
-	s.agent.Interrupt(kernel.InterruptRequest{
-		Reason:   req.Reason,
-		Action:   action,
-		Redirect: req.Redirect,
-	})
+	if s.agent != nil {
+		s.agent.Interrupt(protocol.InterruptRequest{
+			Reason:   req.Reason,
+			Action:   action,
+			Redirect: req.Redirect,
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -825,13 +825,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	agentID := ""
 	agentConfig := map[string]any{}
 	if s.agent != nil {
-		agentID = s.agent.ID
-		agentState = agentStateString(s.agent.StateMachine().Current())
-		agentConfig = map[string]any{
-			"max_replan":     s.agent.Config.MaxReplan,
-			"default_budget": s.agent.Config.DefaultBudget,
-			"max_steps":      s.agent.Config.MaxSteps,
-		}
+		agentID = s.agent.AgentID()
+		agentState = agentStateString(s.agent.CurrentState())
+		agentConfig = s.agent.ConfigInfo()
 	}
 
 	// KillFullStop = 3；PolarisKillswitchStage 由 main.go KillSwitch 回调写入

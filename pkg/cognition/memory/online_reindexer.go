@@ -20,7 +20,7 @@ type Embedder interface {
 }
 
 // OnlineReindexer 后台批量更新 episodic_events.embedding + embed_model_version。
-// 触发条件: embed_model_version = ''（未索引）或 != 当前版本（版本切换）。
+// 触发条件: embed_model_version = ”（未索引）或 != 当前版本（版本切换）。
 // Tier 0 BM25+Simhash 路径不受影响——失败仅降级，不阻断检索（inv_M5_03）。
 type OnlineReindexer struct {
 	db        *sql.DB

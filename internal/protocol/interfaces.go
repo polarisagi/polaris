@@ -351,11 +351,11 @@ type NotesStore interface {
 
 // Note 单条跨会话笔记。
 type Note struct {
-	Key       string    `json:"key"`
-	Content   string    `json:"content"`
-	Version   int       `json:"version"`
-	Tags      []string  `json:"tags,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Key       string     `json:"key"`
+	Content   string     `json:"content"`
+	Version   int        `json:"version"`
+	Tags      []string   `json:"tags,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
@@ -728,4 +728,37 @@ type HITLOption struct {
 type HITLResponse struct {
 	OptionKey string
 	UserID    string
+}
+
+// ============================================================================
+// Agent 控制接口
+// ============================================================================
+
+// InterruptAction 中断处理语义。
+type InterruptAction int
+
+const (
+	InterruptResume   InterruptAction = iota // 恢复执行（回到被中断的状态）
+	InterruptRedirect                        // 重新规划（新意图 → S_PERCEIVE）
+	InterruptAbort                           // 终止任务 → S_FAILED
+)
+
+// InterruptRequest 用户中断请求。
+type InterruptRequest struct {
+	Reason   string // 中断原因（供 Audit 记录）
+	Action   InterruptAction
+	Redirect string // Action=InterruptRedirect 时的新意图文本
+}
+
+// AgentController 供 gateway 调用的 Agent 控制接口（consumer-side）
+type AgentController interface {
+	AgentID() string
+	SetTaskIntent(intent []byte)
+	SendIntent(trigger AgentTrigger) error
+	SurpriseIndex() float64
+	Memory() Memory
+	Interrupt(req InterruptRequest)
+	SetPreferences(map[string]string)
+	CurrentState() AgentState
+	ConfigInfo() map[string]any
 }

@@ -117,33 +117,112 @@ func (tbr *TokenBurnRate) CheckThrottle() ThrottleStage {
 // 基础版实现 (两组件: embedding + tool sequence).
 // 架构文档: docs/arch/M03-Observability-深度选型.md §4.0
 type SurpriseIndex struct {
-	defaultValue float64
-	staleness    time.Time
-	mu           sync.RWMutex
+	mu              sync.RWMutex
+	lastValue       float64
+	staleness       time.Time
+	historicalEmbed []float64
+	historicalTools map[string]int
+	callCount       int
 }
 
 func NewSurpriseIndex() *SurpriseIndex {
 	return &SurpriseIndex{
-		defaultValue: 0.5,
-		staleness:    time.Now(),
+		lastValue:       0.5,
+		staleness:       time.Now(),
+		historicalTools: make(map[string]int),
 	}
 }
 
 // ComputeBasic calculates the basic Phase 0.1 surprise index.
 func (si *SurpriseIndex) ComputeBasic(ctx context.Context, embedding []float64, toolSeq []string) float64 {
-	// MVP: return default fallback 0.5 (System 1.5) as the embedding and distance metrics
-	// are not yet populated locally.
 	si.mu.Lock()
+	defer si.mu.Unlock()
+
 	si.staleness = time.Now()
-	si.mu.Unlock()
-	return si.defaultValue
+	si.callCount++
+	if si.historicalTools == nil {
+		si.historicalTools = make(map[string]int)
+	}
+
+	cosineDist := si.computeCosineDist(embedding)
+	jaccardDist := si.computeJaccardDist(toolSeq)
+
+	if si.callCount > 100 {
+		for k, v := range si.historicalTools {
+			newV := int(float64(v) * 0.95)
+			if newV == 0 {
+				delete(si.historicalTools, k)
+			} else {
+				si.historicalTools[k] = newV
+			}
+		}
+	}
+
+	if si.callCount < 3 {
+		si.lastValue = 0.5
+	} else {
+		// α=0.7, β=0.3
+		si.lastValue = 0.7*cosineDist + 0.3*jaccardDist
+	}
+
+	return si.lastValue
+}
+
+func (si *SurpriseIndex) computeCosineDist(embedding []float64) float64 {
+	cosineDist := 0.0
+	if len(embedding) == 0 {
+		return cosineDist
+	}
+	if len(si.historicalEmbed) != len(embedding) {
+		si.historicalEmbed = make([]float64, len(embedding))
+		copy(si.historicalEmbed, embedding)
+	} else {
+		var dot, n1, n2 float64
+		for i, v := range embedding {
+			// EMA alpha=0.1
+			si.historicalEmbed[i] = 0.9*si.historicalEmbed[i] + 0.1*v
+			dot += v * si.historicalEmbed[i]
+			n1 += v * v
+			n2 += si.historicalEmbed[i] * si.historicalEmbed[i]
+		}
+		if n1 > 0 && n2 > 0 {
+			cosineSim := dot / (math.Sqrt(n1) * math.Sqrt(n2))
+			cosineDist = 1.0 - cosineSim
+		}
+	}
+	return cosineDist
+}
+
+func (si *SurpriseIndex) computeJaccardDist(toolSeq []string) float64 {
+	seen := make(map[string]bool)
+	intersection := 0
+	union := len(si.historicalTools)
+	for _, t := range toolSeq {
+		if !seen[t] {
+			seen[t] = true
+			if si.historicalTools[t] > 0 {
+				intersection++
+			} else {
+				union++
+			}
+		}
+	}
+	jaccardDist := 0.0
+	if union > 0 {
+		jaccardDist = 1.0 - float64(intersection)/float64(union)
+	}
+
+	for t := range seen {
+		si.historicalTools[t]++
+	}
+	return jaccardDist
 }
 
 // Current 返回最近一次计算的 SurpriseIndex 值，供 /metrics 暴露。
 func (si *SurpriseIndex) Current() float64 {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
-	return si.defaultValue
+	return si.lastValue
 }
 
 func (si *SurpriseIndex) IsStale() bool {

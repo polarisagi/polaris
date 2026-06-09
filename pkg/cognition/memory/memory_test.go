@@ -520,8 +520,8 @@ func TestHybridRetriever_ReflectionPath(t *testing.T) {
 	store := &mockStoreWithScan{
 		mockStore: newMockStore(),
 		scanData: map[string][]byte{
-			"episodic:ev1":       []byte("configuration parsing complete"),
-			"reflection:ref1":    []byte("success_pattern: 使用并发 goroutine 加速 configuration parsing"),
+			"episodic:ev1":    []byte("configuration parsing complete"),
+			"reflection:ref1": []byte("success_pattern: 使用并发 goroutine 加速 configuration parsing"),
 		},
 	}
 	hr := NewHybridRetriever(store)

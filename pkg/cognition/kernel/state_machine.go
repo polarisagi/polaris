@@ -27,23 +27,6 @@ type Transition struct {
 	Effects func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error)
 }
 
-// InterruptAction 中断处理语义。
-type InterruptAction int
-
-const (
-	InterruptResume   InterruptAction = iota // 恢复执行（回到被中断的状态）
-	InterruptRedirect                        // 重新规划（新意图 → S_PERCEIVE）
-	InterruptAbort                           // 终止任务 → S_FAILED
-)
-
-// InterruptRequest 用户中断请求。
-// 由 POST /v1/agent/{taskID}/interrupt 提交，inv_global_08 <200ms SLO。
-type InterruptRequest struct {
-	Reason   string // 中断原因（供 Audit 记录）
-	Action   InterruptAction
-	Redirect string // Action=InterruptRedirect 时的新意图文本
-}
-
 // StateMachine 管理 Agent 状态生命周期。
 type StateMachine struct {
 	current       protocol.AgentState
@@ -83,7 +66,7 @@ type StateContext struct {
 	SurpriseIndex float64
 
 	// 用户中断（S_INTERRUPT 相关，inv_global_08）
-	InterruptReq *InterruptRequest
+	InterruptReq *protocol.InterruptRequest
 
 	// ReasoningState 跨轮次持久化的推理状态（M04 §7.1 + M05 §3.1）。
 	// S_REFLECT 阶段产出，下轮 S_PERCEIVE 时注入 ContextWindow。

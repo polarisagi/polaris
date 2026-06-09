@@ -210,7 +210,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			// FastPath 空执行路径（SurpriseIndex 触发但无 LLM 生成 DAG）：nil DAGModel 直接放行。
 			// runValidateDAG 对 nil plan 会触发 L0 拦截，因此在进入前短路。
 			if a.sCtx.DAGModel == nil {
-				go a.SendIntent(protocol.TriggerValidateOk)
+				go func() { _ = a.SendIntent(protocol.TriggerValidateOk) }()
 				return nil
 			}
 			if err := a.runValidateDAG(ctx); err != nil {
@@ -245,7 +245,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 	// 优先判断是否有逻辑状态推进。如果有，说明 FSM 已经接管了这个业务错误，我们不抛出致命异常
 	if nextState != "" {
 		if trigger, ok := stateToTriggerMap[nextState]; ok {
-			go a.SendIntent(trigger)
+			go func() { _ = a.SendIntent(trigger) }()
 			return nil
 		}
 		return perrors.New(perrors.CodeInternal, fmt.Sprintf("unknown next state: %s (err: %v)", nextState, err))
@@ -289,7 +289,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 
 	if err := ValidateDAG(ctx, vCtx); err != nil {
 		// 校验失败→ 异步推送 TriggerValidateFail 以面向 FSM 的 S_REPLAN
-		go a.SendIntent(protocol.TriggerValidateFail)
+		go func() { _ = a.SendIntent(protocol.TriggerValidateFail) }()
 		// 返回非致命 error 提示调用方失败原因，但不能让 Run 循环崩溃
 		return perrors.Wrap(perrors.CodeInternal, "s_validate failed", err)
 	}
@@ -317,15 +317,15 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 				},
 				OnSuccess: func(pCtx protocol.StateContext, content []byte) (protocol.State, error) {
 					if strings.HasPrefix(strings.ToUpper(string(content)), "DENY") {
-						go a.SendIntent(protocol.TriggerValidateFail)
+						go func() { _ = a.SendIntent(protocol.TriggerValidateFail) }()
 						return "S_VALIDATE_FAIL", perrors.New(perrors.CodeForbidden, "LLM Watchdog denied: "+string(content))
 					}
-					go a.SendIntent(protocol.TriggerValidateOk)
+					go func() { _ = a.SendIntent(protocol.TriggerValidateOk) }()
 					return "S_VALIDATE_OK", nil
 				},
 				OnFailure: func(pCtx protocol.StateContext, err error) (protocol.State, error) {
 					// L3 失败为咨询信号，默认放行（fail-open）
-					go a.SendIntent(protocol.TriggerValidateOk)
+					go func() { _ = a.SendIntent(protocol.TriggerValidateOk) }()
 					return "S_VALIDATE_OK", nil
 				},
 				MaxRetry:  0, // 看门狗不重试
@@ -338,7 +338,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 	}
 
 	// 校验通过→ 异步推送 TriggerValidateOk
-	go a.SendIntent(protocol.TriggerValidateOk)
+	go func() { _ = a.SendIntent(protocol.TriggerValidateOk) }()
 	return nil
 }
 
@@ -349,13 +349,13 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	if a.sCtx.DAGModel == nil {
 		// DAGModel 为空时跳过执行（等价于空 DAG），直接推进 ExecuteDone
-		go a.SendIntent(protocol.TriggerExecuteDone)
+		go func() { _ = a.SendIntent(protocol.TriggerExecuteDone) }()
 		return nil
 	}
 
 	if a.toolRegistry == nil {
 		// fail-closed: 无工具注册表时拒绝执行
-		go a.SendIntent(protocol.TriggerExecuteFail)
+		go func() { _ = a.SendIntent(protocol.TriggerExecuteFail) }()
 		return perrors.New(perrors.CodeInternal, "runExecuteDAG: toolRegistry is nil (fail-closed)")
 	}
 
@@ -485,19 +485,19 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				`, time.Now().UnixMilli(), "m9_capability_gap", "upsert", "capability_gap", payloadBytes, uuid.New().String(), "pending")
 			}
 
-			go a.SendIntent(protocol.TriggerInterruptReceived)
+			go func() { _ = a.SendIntent(protocol.TriggerInterruptReceived) }()
 			return nil
 		}
 
 		// 执行失败 → 触发 S_ROLLBACK
-		go a.SendIntent(protocol.TriggerExecuteFail)
+		go func() { _ = a.SendIntent(protocol.TriggerExecuteFail) }()
 		return perrors.Wrap(perrors.CodeInternal, "runExecuteDAG: DAG execution failed", err)
 	}
 
 	// 聚合所有节点输出为 JSON 数组，反思阶段可获取完整 DAG 执行结果。
 	// 单节点时保持向后兼容（直接取 output 字节）；多节点时序列化为 {"results":[...]} 结构。
 	a.sCtx.ExecuteResult = aggregateDAGResults(results)
-	go a.SendIntent(protocol.TriggerExecuteDone)
+	go func() { _ = a.SendIntent(protocol.TriggerExecuteDone) }()
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -229,20 +230,44 @@ func (a *Agent) SetPreferences(prefs map[string]string) {
 	}
 }
 
+// AgentID 返回 Agent ID.
+func (a *Agent) AgentID() string { return a.ID }
+
+// CurrentState 返回 FSM 当前状态.
+func (a *Agent) CurrentState() protocol.AgentState {
+	return a.sm.Current()
+}
+
+// ConfigInfo 返回 Agent 运行配置.
+func (a *Agent) ConfigInfo() map[string]any {
+	return map[string]any{
+		"max_replan":     a.Config.MaxReplan,
+		"default_budget": a.Config.DefaultBudget,
+		"max_steps":      a.Config.MaxSteps,
+	}
+}
+
 // SendIntent 向 Agent 发送意图触发脉冲。
-func (a *Agent) SendIntent(trigger protocol.AgentTrigger) {
+func (a *Agent) SendIntent(trigger protocol.AgentTrigger) error {
 	select {
 	case a.intent <- trigger:
-	default:
+		return nil
+	case <-time.After(50 * time.Millisecond):
+		return perrors.New(perrors.CodeInternal, "SendIntent timeout")
 	}
+}
+
+// SurpriseIndex 返回最近一次计算的 SurpriseIndex。
+func (a *Agent) SurpriseIndex() float64 {
+	return a.sCtx.SurpriseIndex
 }
 
 // Interrupt 向 Agent 发送中断请求（非阻塞，inv_global_08 <200ms SLO）。
 // Resume → 恢复原状态；Redirect → 更新意图后恢复（重新规划）；Abort → S_FAILED。
-func (a *Agent) Interrupt(req InterruptRequest) {
+func (a *Agent) Interrupt(req protocol.InterruptRequest) {
 	a.sCtx.InterruptReq = &req
 	switch req.Action {
-	case InterruptRedirect:
+	case protocol.InterruptRedirect:
 		// 更新意图，Resume 后从当前状态重新规划
 		if req.Redirect != "" {
 			a.sCtx.RawIntentTS = substrate.NewTaintedString(
@@ -251,15 +276,15 @@ func (a *Agent) Interrupt(req InterruptRequest) {
 				"user_interrupt_redirect",
 			)
 		}
-		a.SendIntent(protocol.TriggerInterruptReceived)
+		_ = a.SendIntent(protocol.TriggerInterruptReceived)
 		// 注入到 S_INTERRUPT 后立即 Resume（Redirect = 新意图的 Resume）
-		go a.SendIntent(protocol.TriggerInterruptResume)
-	case InterruptAbort:
-		a.SendIntent(protocol.TriggerInterruptReceived)
-		go a.SendIntent(protocol.TriggerInterruptAbort)
-	default: // InterruptResume
-		a.SendIntent(protocol.TriggerInterruptReceived)
-		go a.SendIntent(protocol.TriggerInterruptResume)
+		go func() { _ = a.SendIntent(protocol.TriggerInterruptResume) }()
+	case protocol.InterruptAbort:
+		_ = a.SendIntent(protocol.TriggerInterruptReceived)
+		go func() { _ = a.SendIntent(protocol.TriggerInterruptAbort) }()
+	default: // protocol.InterruptResume
+		_ = a.SendIntent(protocol.TriggerInterruptReceived)
+		go func() { _ = a.SendIntent(protocol.TriggerInterruptResume) }()
 	}
 }
 

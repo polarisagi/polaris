@@ -1,14 +1,22 @@
 package cognition
 
 import (
+	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
+
+// WasmExecutor consumer-side 接口（在 cognition 包内定义）
+type WasmExecutor interface {
+	ExecuteTest(ctx context.Context, wasmBytes []byte, input []byte) ([]byte, error)
+}
 
 // 技能验证管线 + 演化引擎。
 // 架构文档: docs/arch/06-Skill-Library-深度选型.md §2.3, §4
@@ -24,11 +32,11 @@ type SkillValidationPipeline struct {
 }
 
 // NewSkillValidationPipeline 创建完整验证管线。
-func NewSkillValidationPipeline(signingKey []byte) *SkillValidationPipeline {
+func NewSkillValidationPipeline(signingKey []byte, executor WasmExecutor) *SkillValidationPipeline {
 	return &SkillValidationPipeline{
 		taintChecker:   &TaintChecker{},
 		staticAnalyzer: &StaticAnalyzer{},
-		wasmTester:     &WasmTester{},
+		wasmTester:     &WasmTester{runtime: executor},
 		riskAssessor:   &RiskAssessor{},
 		signer:         &Signer{privateKey: signingKey},
 	}
@@ -36,6 +44,8 @@ func NewSkillValidationPipeline(signingKey []byte) *SkillValidationPipeline {
 
 // Validate 执行完整四步验证。返回最终风险分级和签名，任一步骤失败立即终止。
 func (p *SkillValidationPipeline) Validate(code []byte, taintLevel int) (*ValidateResult, error) {
+	p.wasmTester.wasmBytes = code
+
 	// Step 0: Taint 检查
 	if err := p.taintChecker.Check(taintLevel); err != nil {
 		return nil, err
@@ -156,6 +166,8 @@ type AnalyzeResult struct {
 // 10,000 随机输入模糊测试 (fuzz). 全部通过 → Step 3; 失败 → 打回 LLM 修复 (最多 3 轮).
 type WasmTester struct {
 	testCases []TestCase
+	wasmBytes []byte
+	runtime   WasmExecutor
 }
 
 // TestCase 测试用例。
@@ -179,13 +191,25 @@ func (wt *WasmTester) Run() error {
 		return nil
 	}
 
+	if wt.runtime == nil {
+		return perrors.New(perrors.CodeInternal, "WasmExecutor not injected")
+	}
+
 	for _, tc := range wt.testCases {
-		// 每个用例创建独立 wazero 运行时实例——防止跨用例状态污染
-		// 实际 Wasm 执行由 pkg/action/wazero_runtime.go 的 WazeroRuntime 负责
-		// 此处为 MVP 行为验证层：
-		//   - 如果 impl.wasm 不存在或编译失败 → 返回错误
-		//   - 如果执行结果与 tc.Expect 不匹配（逐字节） → 返回错误
-		_ = tc // 测试用例数据已就绪，实际执行委托给 wazero_runtime
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		res, err := wt.runtime.ExecuteTest(ctx, wt.wasmBytes, tc.Input)
+		cancel()
+		if err != nil {
+			return perrors.Wrap(perrors.CodeInternal, "Wasm 行为测试执行失败", err)
+		}
+
+		if !bytes.Equal(res, tc.Expect) {
+			actualSummary := res
+			if len(actualSummary) > 32 {
+				actualSummary = actualSummary[:32]
+			}
+			return perrors.New(perrors.CodeInternal, fmt.Sprintf("测试用例 %s 输出不匹配: 期望 %x, 实际 %x...", tc.Name, tc.Expect, actualSummary))
+		}
 	}
 	return nil
 }

@@ -20,9 +20,9 @@ type GraphTraverser interface {
 }
 
 type HybridRetrieverImpl struct {
-	store        protocol.Store
-	graph        GraphTraverser         // Tier1+：图遍历路径，nil 时跳过
-	durative     *DurativeMemoryManager // 第 5 路（temporal 查询激活），nil 时跳过
+	store         protocol.Store
+	graph         GraphTraverser            // Tier1+：图遍历路径，nil 时跳过
+	durative      *DurativeMemoryManager    // 第 5 路（temporal 查询激活），nil 时跳过
 	reflectionMem protocol.ReflectionMemory // 第 4 路：SQL 实现优先，nil 时降级 KV 扫描
 }
 

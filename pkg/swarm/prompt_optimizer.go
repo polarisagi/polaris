@@ -18,15 +18,15 @@ import (
 // PromptOptimizer 执行 GEPA + MemAPO + ContraPrompt 三融合优化周期。
 // 所有依赖通过构造器注入，无全局状态（R1.3）。
 type PromptOptimizer struct {
-	provider         protocol.Provider   // 高质量模型，用于文本梯度和对比分析（R1.11）
-	versionStore     *PromptVersionStore // prompt_versions 表读写层（HE-Rule-6）
-	heuristicsStore  *HeuristicsStore    // heuristics_memory + fallacy_records 跨会话持久化
-	gradientGen      *TextualGradientGenerator
-	contrastAna      *ContrastiveAnalyzer
-	geneticSearch    *GeneticPromptSearch
-	promptMem        *PromptMemory
-	errorMem         *ErrorPatternMemory
-	maxBudget        int // 软上限 30K tokens/周期
+	provider        protocol.Provider   // 高质量模型，用于文本梯度和对比分析（R1.11）
+	versionStore    *PromptVersionStore // prompt_versions 表读写层（HE-Rule-6）
+	heuristicsStore *HeuristicsStore    // heuristics_memory + fallacy_records 跨会话持久化
+	gradientGen     *TextualGradientGenerator
+	contrastAna     *ContrastiveAnalyzer
+	geneticSearch   *GeneticPromptSearch
+	promptMem       *PromptMemory
+	errorMem        *ErrorPatternMemory
+	maxBudget       int // 软上限 30K tokens/周期
 }
 
 // NewPromptOptimizer 构造 PromptOptimizer，provider 和 versionStore 必须非 nil。

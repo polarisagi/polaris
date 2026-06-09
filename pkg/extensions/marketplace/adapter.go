@@ -166,7 +166,7 @@ func parseClaudePluginJSON(dir, baseID string, mp protocol.Marketplace) (protoco
 	if _, err := os.Stat(filepath.Join(dir, ".polaris-plugin")); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
-	
+
 	var pPath string
 	if _, err := os.Stat(filepath.Join(dir, ".claude-plugin", "plugin.json")); err == nil {
 		pPath = filepath.Join(dir, ".claude-plugin", "plugin.json")
@@ -175,7 +175,7 @@ func parseClaudePluginJSON(dir, baseID string, mp protocol.Marketplace) (protoco
 	} else {
 		return protocol.RegistryEntry{}, false
 	}
-	
+
 	data, err := os.ReadFile(pPath)
 	if err != nil {
 		return protocol.RegistryEntry{}, false
@@ -298,10 +298,10 @@ func parseGoogleYAML(dir, baseID string, mp protocol.Marketplace, filename strin
 }
 
 type PackageJSON struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Version     string            `json:"version"`
-	Homepage    string            `json:"homepage"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	Version      string            `json:"version"`
+	Homepage     string            `json:"homepage"`
 	Dependencies map[string]string `json:"dependencies"`
 }
 

@@ -14,11 +14,11 @@ import (
 type QueryType int
 
 const (
-	QueryTypeUnknown  QueryType = iota
-	QueryTypeTemporal           // 时间相关（最近事件、历史、今天等）
-	QueryTypeFactual            // 实体/定义查询（是什么、谁是）
-	QueryTypeHowTo              // 过程性知识（如何做、步骤）
-	QueryTypeReasoning          // 分析推理（为什么、比较、影响）
+	QueryTypeUnknown   QueryType = iota
+	QueryTypeTemporal            // 时间相关（最近事件、历史、今天等）
+	QueryTypeFactual             // 实体/定义查询（是什么、谁是）
+	QueryTypeHowTo               // 过程性知识（如何做、步骤）
+	QueryTypeReasoning           // 分析推理（为什么、比较、影响）
 )
 
 // String 返回可读标签，便于日志追踪。

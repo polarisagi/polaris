@@ -72,8 +72,8 @@ func TestOnlineReindexer_IndexesUnindexedRows(t *testing.T) {
 	embedder := &stubEmbedder{version: "v2", dim: 4}
 	r := NewOnlineReindexer(db, embedder)
 
-	insertEvent(t, db, "hello world", "")   // 未索引
-	insertEvent(t, db, "go is great", "")   // 未索引
+	insertEvent(t, db, "hello world", "")    // 未索引
+	insertEvent(t, db, "go is great", "")    // 未索引
 	insertEvent(t, db, "already done", "v2") // 已是最新版本
 
 	processed, remaining, err := r.Run(context.Background())

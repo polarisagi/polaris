@@ -136,6 +136,15 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 	// 注入 System Prompt
 	history = s.injectSystemPrompt(history)
 
+	// [新增] 将用户 input 注入 Agent FSM（非阻塞）
+	if s.agent != nil {
+		s.agent.SetTaskIntent([]byte(req.Input))
+		err := s.agent.SendIntent(protocol.TriggerIntentReceived)
+		if err != nil {
+			slog.Warn("server: fsm advance failed or timeout", "err", err)
+		}
+	}
+
 	// ── Transcript ────────────────────────────────────────────────────────
 	// 非阻塞：打开失败只警告，不中断对话。
 	tw, twErr := openTranscript(s.transcriptDir, sessionID, isFirstTurn)
@@ -330,6 +339,17 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 			Tools:           toolSchemas,
 			ReasoningEffort: effort,
 		}
+
+		// [新增] 读取 SurpriseIndex 决定推理策略
+		if s.agent != nil {
+			si := s.agent.SurpriseIndex()
+			if si > 0 && si < 0.3 {
+				// FastPath: 减少 maxTokens，禁用 chain-of-thought
+				inferReq.MaxTokens = 1024
+				inferReq.ReasoningEffort = protocol.ReasoningEffortNone
+			}
+		}
+
 		ch, err := p.StreamInfer(ctx, inferReq)
 		if err != nil {
 			if tw != nil {
@@ -536,6 +556,11 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 		"POLARIS_SESSION_ID": sessionID,
 		"POLARIS_CHANNEL":    "web",
 	})
+
+	// [新增] 推理完成后通知 FSM（非阻塞）
+	if s.agent != nil {
+		go func() { _ = s.agent.SendIntent(protocol.TriggerExecuteDone) }()
+	}
 
 	writeSSE(w, flusher, "complete", map[string]any{
 		"session_id":  sessionID,

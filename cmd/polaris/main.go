@@ -813,7 +813,7 @@ func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []str
 		errCh <- a.agent.Run(ctx)
 	}()
 
-	a.agent.SendIntent(protocol.TriggerIntentReceived)
+	_ = a.agent.SendIntent(protocol.TriggerIntentReceived)
 
 	select {
 	case err := <-errCh:
