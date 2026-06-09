@@ -46,6 +46,7 @@ type Server struct {
 	transcriptDir   string                                                                            // per-session JSONL transcript 目录
 	hooks           *HookRunner                                                                       // Shell Script Hooks（End-User 扩展点）
 	compressor      *Compressor                                                                       // 上下文超长自动压缩
+	slashRouter     *SlashCommandRouter                                                               // 斜线命令路由器（/context /compact /clear /help）
 	channelMgr      *channels.Manager                                                                 // 所有聊天平台 poller 管理
 	mcpMgr          *mcp.MCPManager                                                                   // MCP Server 连接管理
 	toolReg         protocol.ToolRegistry                                                             // builtin tool 元数据
@@ -181,7 +182,7 @@ func (s *Server) clearToolSchemaCache() {
 
 // NewServer 创建新的 HTTP Server。
 // DEV_MODE=1 时将静态资源请求反向代理到 Vite dev server (:5173)。
-func NewServer(addr string, dataDir string, agent protocol.AgentController, bb protocol.Blackboard, hitlGateway protocol.HITL, db *sql.DB, registry *inference.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer) *Server {
+func NewServer(addr string, dataDir string, agent protocol.AgentController, bb protocol.Blackboard, hitlGateway protocol.HITL, db *sql.DB, registry *inference.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig) *Server {
 	tDir := filepath.Join(dataDir, "sessions")
 	go PruneTranscripts(tDir, 30) // 启动时异步清理 30 天前的 transcript
 
@@ -248,7 +249,8 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 		}
 	}
 
-	s.compressor = newCompressor(db, s.hooks)
+	s.compressor = newCompressor(db, s.hooks, compressorCfg)
+	s.slashRouter = newSlashCommandRouter(s.compressor, db)
 	s.channelMgr = channels.NewManager(httpClient, func(channelType, channelID string, cfg map[string]any, msg channels.Message) {
 		s.dispatchChannelMessage(channelType, channelID, cfg, msg)
 	}, channels.WithSafeDialer(safeDialer))
@@ -307,6 +309,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	// 会话历史 API
 	mux.HandleFunc("GET /v1/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.handleGetSession)
+	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.handleGetSessionContext)
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.handleDeleteSession)
 
 	// 语音识别 API

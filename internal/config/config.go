@@ -26,6 +26,7 @@ type Config struct {
 	Policy        PolicyConfig        `toml:"policy"`
 	Eval          EvalConfig          `toml:"eval"`
 	Interface     InterfaceConfig     `toml:"interface"`
+	Compressor    CompressorConfig    `toml:"compressor"`
 	Thresholds    Thresholds          `toml:"-"`
 }
 
@@ -180,6 +181,21 @@ type InterfaceConfig struct {
 	HTTP      bool   `toml:"http"`
 	GRPC      bool   `toml:"grpc"`
 	WebSocket bool   `toml:"websocket"`
+}
+
+// CompressorConfig 上下文压缩器配置，对齐 Claude Code 百分比阈值模型。
+type CompressorConfig struct {
+	// ContextWindow 模型上下文窗口大小（token 数）。
+	// 自动压缩阈值 = ContextWindow × AutoCompactPct / 100。
+	// 0 = 使用内置默认值 32768（Tier-0 保守值）。
+	ContextWindow int `toml:"context_window"`
+	// AutoCompactPct 自动压缩触发百分比（1~100）。
+	// 对齐 Claude Code 默认值 95。0 = 使用内置默认值。
+	AutoCompactPct float64 `toml:"auto_compact_pct"`
+	// WarnPct 上下文使用率警告百分比，低于 AutoCompactPct 时提前告警。
+	WarnPct float64 `toml:"warn_pct"`
+	// MaxThrashCount 连续自动压缩但仍超阈值的最大次数，超出后停止自动压缩并告警。
+	MaxThrashCount int `toml:"max_thrash_count"`
 }
 
 func loadModuleTOML(modulePath string, target interface{}) error {

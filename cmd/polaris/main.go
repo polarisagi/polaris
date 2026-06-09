@@ -640,7 +640,7 @@ func run() error { //nolint:gocyclo
 		slog.Warn("polaris: FeatureWebUI disabled by FeatureGate — serving API-only mode, dashboard unavailable")
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Interface.Host, cfg.Interface.Port)
-	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer)
+	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer, cfg.Compressor)
 
 	// Ensure signing key exists
 	var skillSigningKey []byte

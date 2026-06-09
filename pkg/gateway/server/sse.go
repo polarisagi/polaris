@@ -288,8 +288,39 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 		return
 	}
 
-	// 上下文压缩：provider 已就绪，history 包含本轮新用户消息，超阈值则压缩
-	if s.compressor.NeedsCompact(history) {
+	// ── 斜线命令拦截（短路 LLM 推理）────────────────────────────────────────
+	if cmdResult := s.slashRouter.Dispatch(ctx, finalInput, sessionID, history, p, w, flusher); cmdResult.Handled {
+		if cmdResult.Response != "" {
+			if err := s.saveMessage(context.WithoutCancel(ctx), sessionID, "assistant", cmdResult.Response, "", 0); err != nil {
+				slog.Error("server: saveMessage slash response", "session", sessionID, "err", err)
+			}
+		}
+		s.touchSession(context.WithoutCancel(ctx), sessionID)
+		writeSSE(w, flusher, "complete", map[string]any{"session_id": sessionID, "session_title": ""})
+		return
+	}
+
+	// ── 上下文使用率评估（警告 + 防抖动告警 + 自动压缩）────────────────────────
+	// 阈值模型对齐 Claude Code：contextWindow × autoCompactPct%（默认 95%），
+	// warnPct%（默认 80%）时提前告警，连续 thrashing 后停止自动压缩并专项提示。
+	ctxStats := s.compressor.Stats(history)
+
+	if ctxStats.UsagePercent >= s.compressor.WarnPct() {
+		msg := fmt.Sprintf("上下文使用量已达 %d%%，可使用 /compact 手动压缩", int(ctxStats.UsagePercent))
+		if ctxStats.Thrashing {
+			msg = fmt.Sprintf("⚠ 自动压缩抖动：上下文 %d%% 使用量居高不下，请手动 /compact 并缩减单次工具输出规模", int(ctxStats.UsagePercent))
+		}
+		writeSSE(w, flusher, "context_warning", map[string]any{
+			"usage_percent": int(ctxStats.UsagePercent),
+			"token_count":   ctxStats.TokenCount,
+			"threshold":     ctxStats.Threshold,
+			"thrashing":     ctxStats.Thrashing,
+			"message":       msg,
+		})
+	}
+
+	// 自动压缩：非 thrashing 状态 + 超过 autoCompactPct 阈值 → 静默压缩后继续推理
+	if !ctxStats.Thrashing && s.compressor.NeedsCompact(history) {
 		writeSSE(w, flusher, "status", map[string]any{"type": "compacting", "message": "正在压缩上下文..."})
 		if compacted, res, err := s.compressor.Compact(ctx, sessionID, history, p); err == nil && !res.Skipped {
 			history = compacted
