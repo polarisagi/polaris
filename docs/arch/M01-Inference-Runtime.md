@@ -227,9 +227,11 @@ TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `pol
 
 ### 6.2 SemanticCache
 
-`[接口预留][实现依赖 SurrealDB-Core HNSW，当前版本未激活]` 类型定义见 `pkg/substrate/semantic_cache.go`（SemanticCache struct / CacheStore 接口 / Embedder 接口 / CacheEntry struct）。当前无 Get() / Put() / LookupSimilar() / TTL 淘汰方法实现，不参与推理路由。
+实现见 `pkg/substrate/semantic_cache.go`（SemanticCache struct / CacheStore 接口 / Embedder 接口 / CacheEntry struct / Get() / Put() / evictLRU()）。
 
-缓存设计意图（SurrealDB-Core HNSW 可用后实现）: SimilarityThreshold / MaxEntries / TTL 见 `spec/state.yaml §m1_router.semantic_cache_similarity_threshold` / `semantic_cache_max_entries` / `semantic_cache_ttl_hours`。三重匹配: RequestHash + Namespace + SystemPromptHash。hashRequest: SHA-256(Namespace + SystemPromptHash + ContextHint.Fingerprint + ActiveControlVectorLabels + TaskType + MessageContents)。满时 LRU 淘汰 MaxEntries/10。
+`[向量索引后端待激活]` CacheStore 接口依赖向量索引后端（设计为 SurrealDB-Core HNSW）提供 `FindClosest`；当 store=nil 时所有操作为安全空操作，不参与推理路由。Get/Put/LRU 淘汰逻辑已完整实现，等向量后端接入后即可启用。
+
+缓存三重匹配: RequestHash + Namespace + SystemPromptHash。hashRequest: SHA-256(Namespace + SystemPromptHash + ContextHint.Fingerprint + ActiveControlVectorLabels + TaskType + MessageContents)。满时 LRU 淘汰 MaxEntries/10。SimilarityThreshold / MaxEntries / TTL 见 `spec/state.yaml §m1_router.semantic_cache_similarity_threshold` / `semantic_cache_max_entries` / `semantic_cache_ttl_hours`。
 
 ---
 

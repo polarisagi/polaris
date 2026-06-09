@@ -414,7 +414,8 @@ web/
 │   │   ├── automation.html   # 聚合Tab：日常定时任务 · 触发器 · 待办审批
 │   │   ├── monitor.html      # 聚合Tab：状态 · 洞察 · Agent
 │   │   ├── settings.html     # 聚合Tab：提供方 · 接入 · 配置 · 电脑操控
-│   │   └── eval.html         # 评测套件（独立）
+│   │   ├── eval.html         # 评测套件（独立）
+│   │   └── onboard.html      # 首次引导向导（OnboardWizard：Provider/Model/Channel 三步配置，DOMContentLoaded 后 400ms 延迟检查）
 │   ├── js/
 │   │   ├── app.js            # Alpine stores 入口 + marked 配置 + URL路由初始化
 │   │   ├── sse.js            # SSEClient（fetch+ReadableStream + 指数退避重连）
