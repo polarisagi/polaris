@@ -157,6 +157,10 @@ func (wr *WazeroRuntime) ExecuteTool(ctx context.Context, skillName string, inpu
 	// MVP 降级逻辑：如果 Wasm 没有导出 polaris_malloc（例如空壳测试），直接返回成功
 	mallocFn := mod.ExportedFunction("polaris_malloc")
 	if mallocFn == nil {
+		// 快速 Wasm 可能在 context 过期前完成编译；此处补检保证 TOCTOU 防护不被绕过。
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return &protocol.ToolResult{
 			Success:    true,
 			Output:     []byte("Wasm executed successfully (MVP mode, no ABI)"),
