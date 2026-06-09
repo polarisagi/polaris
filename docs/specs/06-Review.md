@@ -8,6 +8,8 @@
 - [ ] 新接口在 `internal/protocol/` 定义（而非实现方），带 `@consumer/@producer/@arch` 注解
 - [ ] 跨模块事件是结构化类型（而非字符串 topic）
 - [ ] Rust 变更同步更新了 `internal/protocol/ffi-abi.md`
+- [ ] 安全门依赖必须 fail-closed：`if installMgr == nil { return 503 }`，禁止 nil 旁路安全检查（R1.14）
+- [ ] MCP stdio 子进程必须经 `sanitizeParentEnv()`，禁止直接 `cmd.Env = os.Environ()`（R1.15）
 
 ## C2 代码结构
 
@@ -35,6 +37,7 @@
 - [ ] 覆盖正常路径 + 边界值 + 错误路径
 - [ ] `make test` 通过
 - [ ] 对 AI 生成的测试：确认没有只覆盖 AI 自己知道的路径（加 reviewer 的边界测试）
+- [ ] 涉及 Schema 变更：已按 `05-Coding-Workflow.md W7` 流程（直改建表文件 / 禁 ALTER TABLE 补丁）
 
 ## C6 提交质量
 
@@ -65,7 +68,7 @@
 
 ## C9 PR 体积
 
-- [ ] diff 满足 `00-Constitution.md R8` 上限；超出已 link ADR 或拆分计划
+- [ ] diff 不超过 300 行（`00-Constitution.md R8` 确立的单 PR 上限）；超出已 link ADR 或拆分计划
 - [ ] 1 PR = 1 逻辑变更，无夹带顺手修改（R1 指令溯源性）
 - [ ] 契约 / 破坏性变更走 `05-Coding-Workflow.md W6.2` + `04-Module-Boundary.md B5`
 - [ ] R7 lint 通过：funlen / gocyclo / nestif

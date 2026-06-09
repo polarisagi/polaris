@@ -55,7 +55,7 @@ Skill 三件套（`skills/builtin/SKILL.md + schema.json + wasm.wasm`）：
 创作 → Logic Collapse（System 2 轨迹编译为 Wasm）→ 注册 → System 1 零推理执行
 ```
 
-- Skill 三件套（SKILL.md + schema.json + impl.wasm）均在 `skills/builtin/` 目录，impl.wasm 通过 `go:embed` 随二进制分发；元数据注册信息（skill ID、版本、签名）写入 skills 表
+- Skill 三件套（SKILL.md + schema.json + impl.wasm）均在 `skills/builtin/` 目录；impl.wasm 经 `go:embed` 打入二进制，运行时由 `EmbedWasmLoader` 从 embed.FS 加载（非直接文件系统读取）；元数据注册信息（skill ID、版本、签名）写入 skills 表
 - AI 生成的 Skill 必须经过 M6 四层 S_VALIDATE
 
 ## AGENT-5 SurpriseIndex 路由决策
@@ -71,3 +71,35 @@ SI = similarityWeight × cos_dist(currentEmbedding, historyCentroid)
 - SI 读取：通过 `SetSurpriseIndexProvider(fn func() float64)` 注入，nil 时返回 0.5
 
 参考 `pkg/swarm/self_improve/engine.go:196` `currentSurpriseIndex()`。
+
+## AGENT-6 TrustTier 准入约束（ADR-0016）
+
+所有 Skill/Plugin 注册必须显式设置 `TrustTier`，禁止为零或默认推断。五级定义：
+
+| TrustTier | 数值 | 来源 | 最大沙箱 | 审批 |
+|-----------|------|------|---------|------|
+| TrustSystem | 4 | Polaris 内置 | Sbx-L2/L3 | auto |
+| TrustOfficial | 3 | MCP 官方白名单 | Sbx-L2 | auto |
+| TrustCommunity | 2 | cosign 签名 | Sbx-L1 | prompt |
+| TrustLocal | 1 | HMAC 本地签名 | Sbx-L1 | prompt |
+| TrustUntrusted | 0 | 无签名 | **REJECT** | 禁止注册 |
+
+编码强制项：
+- AI 生成的 Skill 注册一律走 `TrustLocal`，经 M6 四层 S_VALIDATE 通过后可升 `TrustCommunity`
+- 禁止将 `TrustSystem` 直接赋予非内置技能（硬编码抦截）
+- Cedar 策略可基于 `trust_tier` 做 `permit/forbid` 决策；`TrustUntrusted` 则 fail-closed 拒绝注册
+
+## AGENT-7 CodeAct 使用边界（M07 §7.4）
+
+CodeAct 是 Ad-hoc 一次性代码执行，不沉淀为 Skill。
+
+**允许使用 CodeAct 的唱尔展条件（全部满足）：**
+1. 任务需要 ≥3 个工具组合 + 中间计算（单工具调用走标准 tool_call）
+2. 当前会话 `trust_level ≥ 3` 且 `approval_status == "approved"`
+3. 代码字段 `[TaintLevel] ≤ Medium`
+4. 环境支持 L3 microVM（**Tier-0 确定返回 `ErrTier0SandboxLimit`**，禁止降级执行）
+
+**禁止：**
+- 将 CodeAct 当作“快捷 Skill”高频重复调用——高频可复用模式进入 Logic Collapse / Auto-Curriculum
+- Tier-0 下任何形式的 CodeAct（没有安全容器即无隔离边界）
+- 跳过 PolicyGate 直接构造 CodeAct 请求（fail-closed）

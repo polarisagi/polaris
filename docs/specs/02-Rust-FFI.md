@@ -36,7 +36,8 @@ src/
 
 - `crate-type = ["staticlib", "cdylib"]` 不可移除
 - 依赖以最小化原则添加——每加一个 `[dependencies]` 必须说明理由
-- 当前依赖白名单：`cedar-policy`, `bytemuck`, `capnp`（新增需讨论）
+- 当前依赖白名单：`cedar-policy`（Cedar 策略引擎）、`bytemuck`（安全字节转换）、`capnp`（序列化）、`surrealdb`（认知检索轴，见 ADR-0010）
+- 新增依赖必须经过讨论并记录 ADR，禁止静默引入
 
 ## RUST-5 FFI 边界测试
 

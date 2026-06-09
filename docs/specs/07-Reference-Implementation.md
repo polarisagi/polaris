@@ -24,9 +24,10 @@
 | pkg/edge/scheduler | `pkg/edge/scheduler/scheduler.go` — ResourceGovernor | M13 三级降级资源治理 | 内存/CPU 探针、L1/L2/L3 阈值（1.5GB / 1.0GB / 512MB）、`sync.Cond` 让出准入、并发上限抢占式管理。**⚠ `pkg/edge/scheduler.go` (root) 已 Deprecated，不可作为标杆** |
 | pkg/edge/hitl | `pkg/edge/hitl/gateway.go` — GatewayImpl | M13 ESCALATE 协议人工审批网关 | `protocol.HITL` 实现、单点出入、Cedar 策略评估边界 |
 | pkg/gateway/server（HTTP Handler） | `pkg/gateway/server/channels.go` | HTTP Handler 四段式范式 | 输入解析→业务方法→错误 Warn→JSON 编码；SQL 不内嵌 handler；`slog.Warn("server: xxx failed", "err", err)` |
-| pkg/substrate/inference（LLM 调用） | `pkg/substrate/inference/adapter_anthropic.go` | Provider 适配器 + 出站 HTTP 范式 | `credentialFn()` JIT 拉取、`defer clearString` 内存擦除、`safeHTTPClient`（XR-06）、SSE 帧解析、perrors.Wrap 包装所有 HTTP 错误 |
 | pkg/substrate（MutationBus 写） | `pkg/substrate/mutation_bus.go` + `mutation_bus_execute.go` | AI 核心数据批量写范式 | `Submit` 投递 intent→channel、`flushBatch` BEGIN→逐条执行→COMMIT、`ResultCh` 同步确认、租约二次校验 |
 | pkg/substrate（Store 同步写） | `pkg/substrate/storage/store.go §Put/Txn` | 中频同步 KV 写范式 | `Store.Put`（同步确认）、`Store.Txn`（CAS/原子操作）；不适合高频批量场景 |
+| pkg/extensions/mcp | `pkg/extensions/mcp/mcp_manager.go` — MCPManager | MCP 客户端管理范式 | `LoadFromDB` 启动加载、`Add/Remove` 全局注册、`trust_tier≥3` 派生 `Trusted=true`、`sanitizeParentEnv()` stdio 隔离、`TaintPreservingDecoder` 反序列化 |
+| pkg/extensions/marketplace | `pkg/extensions/marketplace/manager.go` — Manager | 扩展市场安装范式 | `InstallExtension` 下载解压、`removePluginRuntime` 级联硬删、多厂商格式适配（`adapter.ParseManifestDir`） |
 
 > 全部 canonical 已由人工 PR 确认（[canonical] tag），见 `docs/specs/CHANGELOG.md`。
 > 部分包（substrate root / cognition root / swarm patterns / swarm supervisor / governance root）不设主 canonical——根层文件多为独立模块，无"复制范式"关系；写新代码时以最近相关子包的 canonical + 各 `pkg/*/AGENTS.md` 的"关键参照文件"区为锚。

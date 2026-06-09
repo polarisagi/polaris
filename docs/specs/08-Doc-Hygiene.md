@@ -1,6 +1,6 @@
 # 08 文档卫生规约（docs/arch/ 维护边界）
 
-> 对象：`docs/arch/M01~M13.md` + `00-Global-Dictionary.md` + `ARCHITECTURE.md`。
+> 对象：`docs/arch/M01~M13.md` + `M13-bis-Extension-Registry.md` + `00-Global-Dictionary.md` + `ARCHITECTURE.md`。
 > 目的：在 Token 预算与契约完整性之间维持稳态。AI 改架构文档时不可违反本规约。
 > 范围不含：`docs/arch/decisions/`（ADR 档案，独立维护）、`docs/arch/spec/state.yaml`（受 ADR-0006 治理）。
 

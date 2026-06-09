@@ -16,7 +16,7 @@ pkg/action/ (L1)       →  L1 可引用 L0，不可引用 L2/L3
     ↑
 pkg/substrate/ (L0)    →  L0 不可引用任何其他 pkg/
     ↑
-internal/              →  internal 不被任何 pkg/ 引用（相反，internal 被 pkg/ 引用）
+internal/              →  被任意 pkg/ 引用；internal/ 各包间不互引（避免内部循环）
 ```
 
 ## B2 跨模块通信通道
@@ -77,7 +77,7 @@ internal/              →  internal 不被任何 pkg/ 引用（相反，interna
 
 1. 同步更新 `internal/protocol/ffi-abi.md`
 2. ABI 版本号递增（`major.minor`，破坏性升 `major`）
-3. Go 侧 `cgo` / `purego` 加载时校验版本号，不匹配则 panic
+3. Go 側 `purego` 加载时校验版本号，不匹配则 panic（禁止与 CGO 混用，见 ADR-0011）
 4. 写 ADR 说明 ABI 兼容策略
 
 ### B5.4 用户感知边界

@@ -63,6 +63,8 @@ AI 在一个文件内可以测试和实现交替写（先 test→写函数签名
 - [ ] 00-Constitution.md 反模式：逐条检查无违例
 - [ ] HE-Rules 6 条工程量表：每条都有交代
 - [ ] 命名规范字典：新增标识符符合规范
+- [ ] 安全门 fail-closed（R1.14）：所有安全门依赖对 nil 均返回错误，禁止 nil 旁路
+- [ ] MCP 子进程环境隔离（R1.15）：所有 stdio 子进程已调 `sanitizeParentEnv()`
 - [ ] 测试通过：make test
 - [ ] 编译通过：make build
 - [ ] 没有顺手重构未损坏的代码（保持 100% 指令溯源性）

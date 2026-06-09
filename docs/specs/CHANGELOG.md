@@ -4,6 +4,36 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-06-09（架构文档全量审查 + specs 规范修订）
+
+**架构文档（docs/arch/）深度审查修复（3 次提交，共 7 处）**：
+
+- `M01-Inference-Runtime.md §4` | §4.4 编号重复（ComplexityDeterminer 与 Route 方法同编号），修正第二个为 §4.5，同步更新跳读索引
+- `M02-Storage-Fabric.md §16` | DDL 覆盖描述"全部 6 份 DDL"严重低估，实为 21 份（001~021），改为正确引用 `internal/protocol/schema/`
+- `M03-Observability.md §5.3` | TierParameterTable 中 `GraphRAGLLMDailyBudget` 参数与 M10 inv_M10_05"已取消财务日预算限制"直接冲突，改为 `GraphRAGConcurrentWorkers`（资源维度并发数）
+- `M04~M13`（上轮）| 共修复 22 处：Gate/Stage 流水线映射统一、预算财务与资源门控逻辑冲突消除、跨模块契约不一致等
+
+**ADR 体系修复**：
+
+- `decisions/README.md` | 索引缺失 ADR-0019/0020，补全；ADR-0016 日期空白修复；完善 0016 标题
+- `decisions/ADR-0008` | L3 沙箱描述"gVisor"与 M07 §4.1 三平台实现（Firecracker/VZ.framework/WSL2）不符，全面修正；Tier-2+ 改为 Tier-1+
+- `decisions/ADR-0019` | 背景中历史草案编号（023/026/027/028）与当前 DDL 目录（001-021）不符，补注说明已重整
+
+**ADR 新增**：
+
+- `decisions/ADR-0020` | 确立 DeepSeek V4 为全系统默认核心模型（Canonical Provider）；开放后台认知任务频率限制；本地模型重定位为延迟极限/物理隔离/灾备特权
+
+**docs/specs/ 规范修订**：
+
+- `02-Rust-FFI.md RUST-4` | 依赖白名单补充 `surrealdb`（ADR-0010 已引入），明确"新增须记录 ADR"
+- `03-Agent-Pattern.md AGENT-4` | Wasm 加载描述修正：`EmbedWasmLoader` 从 embed.FS 加载（而非直接文件系统读取），消除歧义
+- `04-Module-Boundary.md B1` | `internal/` 层描述逻辑倒装修正（原文语义相反）
+- `04-Module-Boundary.md B5.3` | 删除过时的 `cgo` 引用（ADR-0011 已完成全量 purego 迁移）
+- `06-Review.md C9` | R8 引用不精确，明确 diff ≤300 行来源
+- `07-Reference-Implementation.md §7.1` | 删除 `adapter_anthropic.go` 重复 canonical 条目（行 14 与行 27 重叠）
+- `08-Doc-Hygiene.md` | 对象范围补充 `M13-bis-Extension-Registry.md`
+- `INDEX.md 守则4` | "doc↔代码冲突"描述精确为"规约文档（docs/arch/ + docs/specs/）与代码冲突以规约为准"
+
 ## 2026-06-02（扩展系统全局架构重构）
 
 **架构决策变更（破坏性）**：
