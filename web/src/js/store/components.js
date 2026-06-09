@@ -113,20 +113,26 @@ Alpine.data('chatInput', () => ({
   selectSlash(item) {
     const nav = Alpine.store('nav')
     switch (item.cmd) {
-      case '/sessions': nav.navigate('sessions');     Alpine.store('sessions').load(); break
-      case '/skills':   nav.navigate('skills');        Alpine.store('skills').load(); break
-      case '/status':   nav.navigate('monitor');                                     break
-      case '/clear':    Alpine.store('chat').clearView();                          break
-      case '/compact':  this.sendCompact();                                        break
+      case '/sessions': nav.navigate('sessions'); Alpine.store('sessions').load(); break
+      case '/skills':   nav.navigate('skills');   Alpine.store('skills').load();   break
+      case '/status':   nav.navigate('monitor');                                   break
+      // 以下命令通过 SSE 管道发给后端斜杠命令路由器处理
+      case '/context':  Alpine.store('chat').submit('/context'); break
+      case '/compact':  this.sendCompact();                      break
+      case '/clear':
+        // clearView() 先清空前端视图，submit('/clear') 再让后端删除数据库历史
+        Alpine.store('chat').clearView()
+        Alpine.store('chat').submit('/clear')
+        break
+      case '/help':     Alpine.store('chat').submit('/help'); break
       default: Alpine.store('toast').show('ok', `命令 ${item.cmd} 暂未实现`)
     }
     this.input = ''
     this.showSlash = false
   },
 
-  async sendCompact() {
-    Alpine.store('toast').show('ok', '正在触发上下文压缩...')
-    // TODO: POST /v1/agent/compact
+  sendCompact() {
+    Alpine.store('chat').submit('/compact')
   },
 
   submit() {

@@ -24,6 +24,8 @@ Alpine.store('chat', {
   lastAbortedInput: null,  // 上次被中断的用户输入内容，用于恢复编辑按钮
   selectedModel: '',
   reasoningEffort: 'auto',
+  contextWarning: null,  // context_warning SSE 事件携带的数据
+  compacting: false,     // status/compacting 事件期间为 true
 
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
 
@@ -306,6 +308,20 @@ Alpine.store('chat', {
       case 'error':
         this._onError(data)
         break
+      case 'context_warning':
+        this.contextWarning = data
+        break
+      case 'status':
+        if (data.type === 'compacting') {
+          this.compacting = true
+        } else if (data.type === 'compacted') {
+          this.compacting = false
+          // 在当前消息列表末尾标记压缩节点，复用 compactionAfter 分隔线渲染
+          if (this.messages.length > 0) {
+            this.messages[this.messages.length - 1].compactionAfter = true
+          }
+        }
+        break
     }
 
     // 从响应体读取 taskID
@@ -362,6 +378,8 @@ Alpine.store('chat', {
     this.currentTokens = ''
     this.thinkingText = ''
     this.errorMsg = ''
+    this.contextWarning = null
+    this.compacting = false
     this.state = 'IDLE'
     this.lastAbortedInput = null
     window._activeSseClient?.stop()

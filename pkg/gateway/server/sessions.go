@@ -321,3 +321,37 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"query": q, "results": results})
 }
+
+// GET /v1/sessions/{sessionID}/context
+// 返回会话上下文使用统计：当前 token 数、阈值、使用率、最近压缩时间。
+func (s *Server) handleGetSessionContext(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionID")
+	if sessionID == "" {
+		http.Error(w, "sessionID required", http.StatusBadRequest)
+		return
+	}
+
+	history, err := s.loadMessages(r.Context(), sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	stats := s.compressor.Stats(history)
+
+	var lastCompactAt *time.Time
+	if !stats.LastCompactAt.IsZero() {
+		t := stats.LastCompactAt
+		lastCompactAt = &t
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"session_id":      sessionID,
+		"token_count":     stats.TokenCount,
+		"threshold":       stats.Threshold,
+		"usage_percent":   float64(int(stats.UsagePercent*10)) / 10.0,
+		"last_compact_at": lastCompactAt,
+		"message_count":   stats.MessageCount,
+	})
+}

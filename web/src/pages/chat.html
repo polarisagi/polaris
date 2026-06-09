@@ -41,6 +41,28 @@
     <button class="btn btn-sm btn-ghost" @click="$store.chat.state = 'IDLE'; $store.chat.errorMsg = ''" x-text="$store.i18n.t('chat_error_clear')"></button>
   </div>
 
+  <!-- Context Warning Banner（上下文使用量 ≥ 80% 时由后端 context_warning SSE 事件触发）
+       thrashing=true 时隐藏"立即压缩"按钮，改由用户手动输入 /compact 并缩减输出规模 -->
+  <div class="mx-4 mt-2 alert shadow-sm shrink-0"
+       :class="$store.chat.contextWarning?.thrashing ? 'alert-error' : 'alert-warning'"
+       x-show="$store.chat.contextWarning" x-cloak>
+    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+    <span x-text="$store.chat.contextWarning?.message || $store.i18n.t('chat_context_warning')"></span>
+    <div class="flex gap-1 ml-auto">
+      <button class="btn btn-sm btn-ghost" @click="$store.chat.contextWarning = null" x-text="$store.i18n.t('chat_error_clear')"></button>
+      <button x-show="!$store.chat.contextWarning?.thrashing"
+              class="btn btn-sm btn-warning"
+              @click="$store.chat.contextWarning = null; $store.chat.submit('/compact')"
+              x-text="$store.i18n.t('chat_compact_trigger')"></button>
+    </div>
+  </div>
+
+  <!-- Compacting Indicator（自动压缩进行中时显示，防止用户误以为卡住）-->
+  <div class="mx-4 mt-2 alert alert-info shadow-sm shrink-0 py-2" x-show="$store.chat.compacting" x-cloak>
+    <span class="loading loading-spinner loading-xs"></span>
+    <span x-text="$store.i18n.t('chat_compacting')"></span>
+  </div>
+
   <!-- Messages -->
   <div class="min-h-0 relative transition-all duration-500" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? 'flex-none' : 'flex-1'">
     <button x-show="!atBottom" @click="scrollBottom()" x-cloak class="btn btn-circle btn-primary btn-sm absolute bottom-4 right-6 z-20 shadow-lg opacity-90">↓</button>
