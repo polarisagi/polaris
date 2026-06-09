@@ -134,6 +134,12 @@ func (s *SQLNotesStore) List(ctx context.Context, tag string) ([]protocol.Note, 
 	return notes, rows.Err()
 }
 
+// ListByTask 返回关联到指定 taskID 的所有笔记。
+// 实现：查询包含 "task:{taskID}" tag 的笔记。
+func (s *SQLNotesStore) ListByTask(ctx context.Context, taskID string) ([]protocol.Note, error) {
+	return s.List(ctx, "task:"+taskID)
+}
+
 // GC 删除已过期笔记，返回删除条数。
 func (s *SQLNotesStore) GC(ctx context.Context) (int, error) {
 	res, err := s.db.ExecContext(ctx,
@@ -250,6 +256,11 @@ func (s *InMemNotesStore) List(_ context.Context, tag string) ([]protocol.Note, 
 		result = append(result, *n)
 	}
 	return result, nil
+}
+
+// ListByTask 返回关联到指定 taskID 的所有笔记。
+func (s *InMemNotesStore) ListByTask(ctx context.Context, taskID string) ([]protocol.Note, error) {
+	return s.List(ctx, "task:"+taskID)
 }
 
 func (s *InMemNotesStore) GC(_ context.Context) (int, error) {

@@ -51,6 +51,7 @@ func RegisterBuiltinTools(
 		{"video_analysis", ExecuteVideoAnalysis},
 		{"sys_probe", sysProbeFn},
 		{"str_replace_editor", makeStrReplaceEditorFn(allowedPaths)},
+		{"read_tool_ref", makeReadToolRefFn()},
 	}
 
 	for _, d := range defs {
@@ -92,6 +93,39 @@ func makeReadFileFn(allowedPaths []string) action.InProcessFn {
 		data, err := os.ReadFile(filepath.Clean(args.Path))
 		if err != nil {
 			return nil, perrors.Wrap(perrors.CodeInternal, "read_file", err)
+		}
+		return data, nil
+	}
+}
+
+// ─── read_tool_ref ────────────────────────────────────────────────────────────
+
+type readToolRefArgs struct {
+	ID string `json:"id"`
+}
+
+func makeReadToolRefFn() action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args readToolRefArgs
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "read_tool_ref: invalid args", err)
+		}
+		if args.ID == "" {
+			return nil, perrors.New(perrors.CodeInternal, "read_tool_ref: id is required")
+		}
+
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "read_tool_ref: home dir not found", err)
+		}
+
+		// Security: prevent path traversal
+		cleanID := filepath.Base(args.ID)
+		path := filepath.Join(home, ".polarisagi", "polaris", "data", "tool_refs", cleanID+".log")
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "read_tool_ref: file read error", err)
 		}
 		return data, nil
 	}

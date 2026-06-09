@@ -1,6 +1,7 @@
 package cognition
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -101,10 +102,22 @@ type ContextChunk struct {
 	Output    bool
 }
 
+// GroundingResult 包含评估结果。
+type GroundingResult struct {
+	Sufficient bool
+	Warning    string
+}
+
 // AssembleContext 组装 Agent LLM 调用的完整上下文。
 // 顺序: ZoneImmutable → ZoneMutableSkill → ZoneTaintedData
 // 安全约束: ZoneImmutable 内容 TaintLevel > TaintLow → panic 拒绝
-func AssembleContext(immutable, mutableSkill, taintedData string, taintLevel protocol.TaintLevel) string {
+func AssembleContext(
+	ctx context.Context,
+	immutable, mutableSkill, taintedData string,
+	taintLevel protocol.TaintLevel,
+	wm *WorldModel,
+	task string,
+) (string, *GroundingResult) {
 	var b strings.Builder
 	b.WriteString(immutable)
 	b.WriteString(mutableSkill)
@@ -119,7 +132,20 @@ func AssembleContext(immutable, mutableSkill, taintedData string, taintLevel pro
 		b.WriteString(taintedData)
 	}
 
-	return b.String()
+	fullContext := b.String()
+	res := &GroundingResult{Sufficient: true}
+
+	if wm != nil && task != "" {
+		suff, warning := wm.AssessGrounding(ctx, task, fullContext)
+		res.Sufficient = suff
+		res.Warning = warning
+		if !suff {
+			// 将缺失提示作为系统级别的 meta 注入到上下文末尾
+			fullContext += fmt.Sprintf("\n[System Warning: Knowledge gap detected. Consider further retrieval before action. Gap: %s]\n", warning)
+		}
+	}
+
+	return fullContext, res
 }
 
 // ValidateZoneWrite 验证向指定 Zone 写入的 TaintLevel 合法性。

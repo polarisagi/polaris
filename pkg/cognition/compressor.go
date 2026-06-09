@@ -1,12 +1,18 @@
 package cognition
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 )
+
+// ToolRefOffloader 定义工具长输出的安全落盘接口
+type ToolRefOffloader interface {
+	Offload(id string, data []byte) error
+}
 
 // ─── 压缩阈值常量 ─────────────────────────────────────────────────────────────
 
@@ -31,11 +37,19 @@ type SessionCompressor struct {
 	maxSummaryTokens   int
 	maxToolOutputBytes int
 	triggerPct         float64
-	anchor             string         // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
-	DurativeMemory     map[string]any // 持久化核心记忆对象
+	anchor             string           // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
+	DurativeMemory     map[string]any   // 持久化核心记忆对象
+	offloader          ToolRefOffloader // P0: 工具输出卸载器
 
 	mu             sync.Mutex
 	lastCompressAt time.Time
+}
+
+// InjectOffloader 注入 ToolRefOffloader 以开启文件落盘
+func (sc *SessionCompressor) InjectOffloader(o ToolRefOffloader) {
+	sc.mu.Lock()
+	sc.offloader = o
+	sc.mu.Unlock()
 }
 
 // NewSessionCompressor 创建压缩器。maxSummaryTokens 为 Stage 2 LLM 摘要的 token 预算。
@@ -81,7 +95,7 @@ func (sc *SessionCompressor) Compress(messages []protocol.Message, currentTokens
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxToolOutputBytes
 	}
-	pruned, _ := PruneToolOutputs(messages, maxBytes)
+	pruned, _ := PruneToolOutputs(messages, maxBytes, sc.offloader)
 	return pruned, true
 }
 
@@ -104,9 +118,9 @@ func (sc *SessionCompressor) SetAnchor(s string) {
 // PruneToolOutputs 将消息列表中超过 maxBytes 的 tool_result 内容替换为存根。
 // 原 messages 切片不被修改；返回新切片和被裁剪的 tool_result 条数。
 //
-// 存根格式: "[pruned: N bytes, id: <tool_use_id>]"
+// 存根格式: "[offloaded: N bytes → read_tool_ref("xxx")]"
 // content 支持两种 Anthropic 格式: string 和 []any（多块内容数组）。
-func PruneToolOutputs(messages []protocol.Message, maxBytes int) ([]protocol.Message, int) {
+func PruneToolOutputs(messages []protocol.Message, maxBytes int, offloader ToolRefOffloader) ([]protocol.Message, int) {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxToolOutputBytes
 	}
@@ -117,7 +131,7 @@ func PruneToolOutputs(messages []protocol.Message, maxBytes int) ([]protocol.Mes
 		if len(msg.Parts) == 0 {
 			continue
 		}
-		if parts, modified := prunePartsToolOutputs(msg.Parts, maxBytes, &total); modified {
+		if parts, modified := prunePartsToolOutputs(msg.Parts, maxBytes, offloader, &total); modified {
 			out[i].Parts = parts
 		}
 	}
@@ -126,7 +140,7 @@ func PruneToolOutputs(messages []protocol.Message, maxBytes int) ([]protocol.Mes
 
 // prunePartsToolOutputs 处理单条消息的 Parts。
 // 返回 (新切片, true) 表示有修改；(nil, false) 表示无修改，调用方无需替换。
-func prunePartsToolOutputs(parts []any, maxBytes int, counter *int) ([]any, bool) {
+func prunePartsToolOutputs(parts []any, maxBytes int, offloader ToolRefOffloader, counter *int) ([]any, bool) {
 	modified := false
 	newParts := make([]any, len(parts))
 	for i, p := range parts {
@@ -141,10 +155,25 @@ func prunePartsToolOutputs(parts []any, maxBytes int, counter *int) ([]any, bool
 			continue
 		}
 		id, _ := m["tool_use_id"].(string)
+
+		// P0: 卸载原始长输出
+		if offloader != nil {
+			var rawData []byte
+			switch v := m["content"].(type) {
+			case string:
+				rawData = []byte(v)
+			case []any:
+				rawData, _ = json.Marshal(v)
+			}
+			if len(rawData) > 0 {
+				_ = offloader.Offload(id, rawData)
+			}
+		}
+
 		newParts[i] = map[string]any{
 			"type":        "tool_result",
 			"tool_use_id": id,
-			"content":     fmt.Sprintf("[pruned: %d bytes, id: %s]", size, id),
+			"content":     fmt.Sprintf("[offloaded: %d bytes → read_tool_ref(%q)]", size, id),
 		}
 		*counter++
 		modified = true

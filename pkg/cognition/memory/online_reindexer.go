@@ -130,3 +130,45 @@ func f32tof16(f float32) uint16 {
 		return sign<<15 | uint16(exp)<<10 | mant
 	}
 }
+
+// DecodeFloat16 将 IEEE 754 half-precision BLOB 解析为 float32 向量。
+func DecodeFloat16(blob []byte) []float32 {
+	if len(blob)%2 != 0 {
+		return nil
+	}
+	vec := make([]float32, len(blob)/2)
+	for i := 0; i < len(vec); i++ {
+		h := binary.LittleEndian.Uint16(blob[i*2:])
+		vec[i] = f16tof32(h)
+	}
+	return vec
+}
+
+// f16tof32 IEEE 754 float16 → float32 转换。
+func f16tof32(h uint16) float32 {
+	sign := uint32((h >> 15) & 1)
+	exp := uint32((h >> 10) & 0x1F)
+	mant := uint32(h & 0x3FF)
+
+	switch exp {
+	case 0:
+		if mant == 0 {
+			return math.Float32frombits(sign << 31)
+		}
+		// Subnormal
+		for (mant & 0x400) == 0 {
+			mant <<= 1
+			exp--
+		}
+		exp++
+		mant &= 0x3FF
+		return math.Float32frombits((sign << 31) | ((exp + 127 - 15) << 23) | (mant << 13))
+	case 31:
+		if mant == 0 {
+			return math.Float32frombits((sign << 31) | 0x7F800000) // ±∞
+		}
+		return math.Float32frombits((sign << 31) | 0x7F800000 | (mant << 13)) // NaN
+	default:
+		return math.Float32frombits((sign << 31) | ((exp + 127 - 15) << 23) | (mant << 13))
+	}
+}

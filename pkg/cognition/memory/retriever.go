@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"math"
 	"sort"
 	"strings"
 
@@ -24,6 +26,12 @@ type HybridRetrieverImpl struct {
 	graph         GraphTraverser            // Tier1+：图遍历路径，nil 时跳过
 	durative      *DurativeMemoryManager    // 第 5 路（temporal 查询激活），nil 时跳过
 	reflectionMem protocol.ReflectionMemory // 第 4 路：SQL 实现优先，nil 时降级 KV 扫描
+	embedder      Embedder                  // P0：稠密向量检索
+}
+
+// InjectEmbedder 注入 M1 Embedding 接口，激活向量检索路径
+func (hr *HybridRetrieverImpl) InjectEmbedder(e Embedder) {
+	hr.embedder = e
 }
 
 func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
@@ -54,10 +62,26 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 		prefix = []byte("episodic:")
 	}
 
+	// Stage 0.5 — 计算查询向量
+	var queryF32 []float32
+	if hr.embedder != nil && query != "" {
+		if qVec, err := hr.embedder.Embed(ctx, query); err == nil {
+			queryF32 = qVec
+		}
+	}
+
 	// Stage 1 — 并行宽召回（BM25 + Simhash + Graph 三路）
 	var bm25Results []protocol.ScoredFragment
 	var simhashResults []protocol.ScoredFragment
 	var graphResults []protocol.ScoredFragment
+	var vectorResults []protocol.ScoredFragment
+
+	// P0：如果在 Memory Scope 且支持 SQL，使用 DBAccessor 从 episodic_events 表获取向量
+	if scope.Type == "memory" && queryF32 != nil {
+		if dba, ok := hr.store.(DBAccessor); ok {
+			vectorResults = hr.fetchVectorResultsFromSQL(ctx, dba.DB(), queryF32)
+		}
+	}
 
 	scanAndScore := func(scanPrefix []byte) {
 		iter, err := hr.store.Scan(ctx, scanPrefix)
@@ -183,6 +207,7 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 	}
 	addRRF(bm25Results, 1.0)
 	addRRF(simhashResults, 0.8)     // Simhash 路径权重略低于 BM25
+	addRRF(vectorResults, 0.6)      // Vector 稠密向量召回
 	addRRF(graphResults, 0.6)       // Graph 路径（Tier1+，仅有图时生效）
 	addRRF(reflectionResults, 0.15) // 第 4 路：跨会话 ReflectionMem（M05 §7）
 	addRRF(durativeResults, 0.3)    // 第 5 路：DurativeMemory（temporal 查询激活）
@@ -239,4 +264,55 @@ func bm25Score(query, content string) float64 {
 		}
 	}
 	return score
+}
+
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		v1 := float64(a[i])
+		v2 := float64(b[i])
+		dot += v1 * v2
+		normA += v1 * v1
+		normB += v2 * v2
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db *sql.DB, queryF32 []float32) []protocol.ScoredFragment {
+	var vectorResults []protocol.ScoredFragment
+	// 按时间倒序提取最近的 500 条带向量记录参与相似度计算
+	rows, queryErr := db.QueryContext(ctx, "SELECT content, embedding FROM episodic_events WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT 500")
+	if queryErr != nil {
+		return vectorResults
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content string
+		var embBlob []byte
+		if scanErr := rows.Scan(&content, &embBlob); scanErr != nil {
+			continue
+		}
+
+		vec := DecodeFloat16(embBlob)
+		if vec == nil {
+			continue
+		}
+
+		score := cosineSimilarity(queryF32, vec)
+		if score > 0.5 {
+			vectorResults = append(vectorResults, protocol.ScoredFragment{
+				Content: content,
+				Score:   score,
+				Source:  content, // 简化 source
+			})
+		}
+	}
+	return vectorResults
 }

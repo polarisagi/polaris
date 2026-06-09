@@ -2,6 +2,7 @@ package cognition
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -129,10 +130,10 @@ func (p *ConsolidationPipeline) llmExtract(
 ) ([]*protocol.Entity, []*protocol.Relation, error) {
 	prompt := fmt.Sprintf(
 		"Analyze the following AI agent session log and extract:\n"+
-			"1. Named entities (tools, concepts, files, people, systems)\n"+
-			"2. Relations between entities\n\n"+
+			"1. Named entities (type MUST be one of: user_preference, constraint, temporary_conclusion, entity)\n"+
+			"2. Relations between entities (type MUST be one of: depends_on, configures, conflicts_with, relates_to)\n\n"+
 			"Return ONLY valid JSON in this format:\n"+
-			`{"entities":[{"name":"...","type":"tool|concept|file|person|system"}],"relations":[{"from":"...","to":"...","type":"..."}]}`+
+			`{"entities":[{"name":"...","type":"..."}],"relations":[{"from":"...","to":"...","type":"..."}]}`+
 			"\n\nSession log:\n%s",
 		text,
 	)
@@ -273,6 +274,13 @@ func (p *ConsolidationPipeline) upsertSemantic(
 	relations []*protocol.Relation,
 ) error {
 	for _, e := range entities {
+		// P1: Contradiction Detection - check if an entity with same name and type exists
+		if existing, err := p.semantic.GetEntity(ctx, e.Type, e.Name); err == nil && existing != nil {
+			if e.Properties == nil {
+				e.Properties = make(map[string]any)
+			}
+			e.Properties["supersedes"] = existing.ID
+		}
 		if err := p.semantic.UpsertFact(ctx, *e); err != nil {
 			// 单条失败不阻断整体
 			_ = err
@@ -438,6 +446,10 @@ type ForgettingManager struct {
 	archiver          *ColdArchiver
 }
 
+type dbAccessor interface {
+	DB() *sql.DB
+}
+
 // NewForgettingManager 创建遗忘管理器，注入 Store 依赖。
 func NewForgettingManager(store protocol.Store, decayRate float64) *ForgettingManager {
 	return &ForgettingManager{
@@ -463,11 +475,42 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cutoff := time.Now().Add(-30 * 24 * time.Hour)
-	archived := 0
-	marked := 0
+	// P1: Optimization - Use SQL native query if possible
+	if dba, ok := fm.store.(dbAccessor); ok {
+		if err := fm.cleanupWithSQL(ctx, dba.DB()); err == nil {
+			return nil
+		}
+	}
 
-	// 扫描所有 episodic事件
+	return fm.cleanupWithKV(ctx)
+}
+
+func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, "SELECT id, salience, occurred_at FROM events WHERE topic IN ('memory.openclaw', 'memory')")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var salience float64
+		var occurredAt int64
+		if err := rows.Scan(&id, &salience, &occurredAt); err != nil {
+			continue
+		}
+
+		ageHours := float64(time.Now().UnixMilli()-occurredAt) / 3600000.0
+		decayWeight := fm.UpdateDecay(salience, ageHours)
+
+		if decayWeight < fm.salienceThreshold {
+			fm.processForgettableItem(ctx, id, decayWeight, ageHours)
+		}
+	}
+	return nil
+}
+
+func (fm *ForgettingManager) cleanupWithKV(ctx context.Context) error {
 	iter, err := fm.store.Scan(ctx, []byte("events:"))
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "PeriodicCleanup: scan events 失败", err)
@@ -488,7 +531,6 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 			continue
 		}
 
-		// 仅处理 episodic 层事件
 		if ev.Topic != "memory.openclaw" && ev.Topic != "memory" {
 			continue
 		}
@@ -496,34 +538,43 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 		ageHours := float64(time.Now().UnixMilli()-ev.OccurredAt) / 3600000.0
 		decayWeight := fm.UpdateDecay(ev.Salience, ageHours)
 
-		// 衰减权重低于阈值 → 标记为可遗忘
 		if decayWeight < fm.salienceThreshold {
-			// 写入 tombstone 标记（不删除原事件，仅标记）
-			tombstoneKey := fmt.Appendf(nil, "forgettable:%s", ev.ID)
-			tombstoneVal := fmt.Appendf(nil, `{"id":"%s","decay_weight":%.4f,"marked_at":%d}`, ev.ID, decayWeight, time.Now().UnixMilli())
-			_ = fm.store.Put(ctx, tombstoneKey, tombstoneVal)
-			marked++
-
-			// 超过 30 天 → 移入冷归档
-			if ageHours > 30*24 {
-				archiveKey := fmt.Appendf(nil, "archive:episodic:%s", ev.ID)
-				_ = fm.store.Put(ctx, archiveKey, val)
-				_ = fm.store.Delete(ctx, key)
-				_ = fm.store.Delete(ctx, tombstoneKey)
-				archived++
-				marked--
-			}
+			fm.processForgettableItemKV(ctx, ev.ID, decayWeight, ageHours, key, val)
 		}
 	}
 
 	if iter.Err() != nil {
 		return perrors.Wrap(perrors.CodeInternal, "PeriodicCleanup: 迭代失败", iter.Err())
 	}
-
-	_ = archived
-	_ = cutoff
-	_ = marked
 	return nil
+}
+
+func (fm *ForgettingManager) processForgettableItem(ctx context.Context, id string, decayWeight float64, ageHours float64) {
+	tombstoneKey := fmt.Appendf(nil, "forgettable:%s", id)
+	tombstoneVal := fmt.Appendf(nil, `{"id":"%s","decay_weight":%.4f,"marked_at":%d}`, id, decayWeight, time.Now().UnixMilli())
+	_ = fm.store.Put(ctx, tombstoneKey, tombstoneVal)
+
+	if ageHours > 30*24 {
+		if val, getErr := fm.store.Get(ctx, fmt.Appendf(nil, "events:%s", id)); getErr == nil {
+			archiveKey := fmt.Appendf(nil, "archive:episodic:%s", id)
+			_ = fm.store.Put(ctx, archiveKey, val)
+			_ = fm.store.Delete(ctx, fmt.Appendf(nil, "events:%s", id))
+			_ = fm.store.Delete(ctx, tombstoneKey)
+		}
+	}
+}
+
+func (fm *ForgettingManager) processForgettableItemKV(ctx context.Context, id string, decayWeight float64, ageHours float64, key, val []byte) {
+	tombstoneKey := fmt.Appendf(nil, "forgettable:%s", id)
+	tombstoneVal := fmt.Appendf(nil, `{"id":"%s","decay_weight":%.4f,"marked_at":%d}`, id, decayWeight, time.Now().UnixMilli())
+	_ = fm.store.Put(ctx, tombstoneKey, tombstoneVal)
+
+	if ageHours > 30*24 {
+		archiveKey := fmt.Appendf(nil, "archive:episodic:%s", id)
+		_ = fm.store.Put(ctx, archiveKey, val)
+		_ = fm.store.Delete(ctx, key)
+		_ = fm.store.Delete(ctx, tombstoneKey)
+	}
 }
 
 // QLearner Q-Learning 熵门控效用衰减。

@@ -232,11 +232,17 @@ RouteReasoning:
 
 双层决策体系: L1 World Model 在 LLM 调用前拦截，基于马尔可夫状态转移矩阵（拉普拉斯平滑，公式 `(success+1)/(total+2)`）和 Isotonic Regression 置信度校准，判断当前状态是否可以直接跳过 LLM 推理。校准置信度超阈值 (`spec/state.yaml §m4_kernel.world_model_skip_threshold`) 时跳过 LLM。L2 SurpriseIndex 在执行后进行结果质量评估和路由调整。
 
+**知识空缺感知 (Knowledge Gap Awareness)**:
+在 LLM 执行推理前，结合 Context Assembler 完成上下文组装后，调用 `WorldModel.AssessGrounding` 进行 Grounding 评估。该评估询问 LLM 当前上下文是否足以支撑任务的执行：
+- 如果充足，放行执行流程。
+- 如果发现关键实体或信息缺失，隐式将警告（如 `[System Warning: Knowledge gap detected. Consider further retrieval...]`）注射到 prompt 末尾，引导主体 Agent 在执行破坏性动作前优先触发检索或询问。
+这有效拦截了因上下文不足导致的"硬算"幻觉和冗余步骤开销。
+
 **重放确定性契约**: 跳过 LLM 时必须写入 EventLog `event_type='world_model_skip'` 事件（含 StateContext 哈希、转移矩阵版本、置信度、预测输出），重放时从 EventLog 读取该事件直接复用预测输出，禁止重新计算转移矩阵（转移矩阵在重放时刻可能已更新）。这保证 [HE-Rule-5] 状态机控制流的可重放性——World Model 跳过决策本身被视为状态机的一次结构化填空，与 LLM 调用同等待遇。
 
 仿真引擎: 优先使用 SurrealDB-Core KV 中存储的真实快照回放（VCR 模式），未命中时降级为 StatePredictor 的统计估算。反事实推演在 Wasm 沙箱内克隆状态并模拟替代动作，输出 VerificationResult 对比实际结果与模拟结果。
 
-实现见 `pkg/cognition/world_model.go`。
+实现见 `pkg/cognition/world_model.go` 及 `pkg/cognition/context_assembler.go`。
 
 ---
 

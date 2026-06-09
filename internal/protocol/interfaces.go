@@ -346,6 +346,7 @@ type NotesStore interface {
 	Set(ctx context.Context, key, content string, tags []string) error
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, tag string) ([]Note, error)
+	ListByTask(ctx context.Context, taskID string) ([]Note, error)
 	GC(ctx context.Context) (int, error) // 清理已过期 Note，返回删除条数
 }
 

@@ -1,6 +1,7 @@
 package cognition
 
 import (
+	"context"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -53,7 +54,8 @@ func TestBuildContext_LastZoneIsOutput(t *testing.T) {
 }
 
 func TestAssembleContext_Order(t *testing.T) {
-	result := AssembleContext("IMMUTABLE", "SKILL", "DATA", protocol.TaintNone)
+	ctx := context.Background()
+	result, _ := AssembleContext(ctx, "IMMUTABLE", "SKILL", "DATA", protocol.TaintNone, nil, "")
 	expected := "IMMUTABLESKILLDATA"
 	if result != expected {
 		t.Errorf("expected %q, got %q", expected, result)
@@ -61,7 +63,8 @@ func TestAssembleContext_Order(t *testing.T) {
 }
 
 func TestAssembleContext_EmptyParts(t *testing.T) {
-	result := AssembleContext("", "", "", protocol.TaintNone)
+	ctx := context.Background()
+	result, _ := AssembleContext(ctx, "", "", "", protocol.TaintNone, nil, "")
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
 	}
