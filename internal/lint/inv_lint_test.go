@@ -63,7 +63,7 @@ func walkPkgGoFiles(t *testing.T, root string, exemptRel map[string]bool,
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
-			return nil // 跳过解析失败的文件（生成代码等）
+			return nil //nolint:nilerr // 跳过解析失败的文件（生成代码等）
 		}
 		fn(fset, f, rel)
 		return nil

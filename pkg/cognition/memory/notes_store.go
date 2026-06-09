@@ -230,7 +230,7 @@ func (s *InMemNotesStore) List(_ context.Context, tag string) ([]protocol.Note, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	var result []protocol.Note
+	var result []protocol.Note //nolint:prealloc
 	for _, n := range s.notes {
 		if n.ExpiresAt != nil && now.After(*n.ExpiresAt) {
 			continue

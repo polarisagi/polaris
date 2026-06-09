@@ -108,7 +108,8 @@ func (rm *ReflectionMem) evictLRU(ctx context.Context) {
 	rm.entries = append(rm.entries[:oldestIdx], rm.entries[oldestIdx+1:]...)
 }
 
-func (rm *ReflectionMem) QueryReflections(ctx context.Context, q protocol.ReflectionQuery) ([]protocol.ReflectionEntry, error) {
+func (rm *ReflectionMem) QueryReflections( //nolint:gocyclo
+	ctx context.Context, q protocol.ReflectionQuery) ([]protocol.ReflectionEntry, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 

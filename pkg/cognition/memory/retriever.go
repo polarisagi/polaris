@@ -46,10 +46,11 @@ func NewHybridRetrieverFull(store protocol.Store, graph GraphTraverser, durative
 	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative, reflectionMem: reflectionMem}
 }
 
-func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) {
+func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
+	ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) {
 	// Stage 0 — 确定扫描前缀（隐私门控由调用方 M11 注入，此处按 scope 路由）
 	prefix := []byte("chunk:")
-	if scope.Type == "memory" {
+	if scope.Type == "memory" { //nolint:nestif
 		prefix = []byte("episodic:")
 	}
 
@@ -108,7 +109,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope p
 	// 第 4 路（M05 §7，权重 0.15）：跨会话 ReflectionMemory 召回
 	// 优先通过接口走 SQL 查询（SQLReflectionMem）；接口未注入时降级 KV 前缀扫描（旧部署兼容）。
 	var reflectionResults []protocol.ScoredFragment
-	if scope.Type == "memory" {
+	if scope.Type == "memory" { //nolint:nestif
 		if hr.reflectionMem != nil {
 			// SQL 路径：利用 idx_reflect_task_type 索引，避免全表扫描
 			entries, rerr := hr.reflectionMem.QueryReflections(ctx, protocol.ReflectionQuery{

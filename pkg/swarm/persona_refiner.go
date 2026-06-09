@@ -152,7 +152,7 @@ func (pr *PersonaRefiner) RefineAtSessionEnd(ctx context.Context, msgs []protoco
 		ReasoningEffort: protocol.ReasoningEffortLow,
 	})
 	if err != nil {
-		return nil // LLM 失败不阻断会话结束流程
+		return nil //nolint:nilerr // LLM 失败不阻断会话结束流程
 	}
 
 	pr.mu.Lock()

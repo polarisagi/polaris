@@ -14,7 +14,8 @@ import (
 // buildPerceiveContext 基于当前状态上下文（包含用户的原始任务描述/Intent）
 // 从 EpisodicMemory、ReflectionMemory 与 WorkingMemory 组装感知阶段所需的 LLM 提示词。
 // M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
-func buildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]protocol.Message, error) {
+func buildPerceiveContext( //nolint:gocyclo
+	ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]protocol.Message, error) {
 	if memory == nil {
 		return []protocol.Message{
 			{Role: "system", Content: "Structure the user intent into a TaskModel JSON."},
@@ -85,7 +86,8 @@ func buildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *Sta
 // buildPlanContext 基于已解析的 TaskModel 和可用工具列表
 // 从 Memory 系统组装生成 DAG 计划所需的 LLM 提示词。
 // tools 为 nil 时跳过工具注入（测试环境）。
-func buildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry) ([]protocol.Message, error) {
+func buildPlanContext( //nolint:gocyclo
+	ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry) ([]protocol.Message, error) {
 	if memory == nil {
 		return []protocol.Message{
 			{Role: "system", Content: "Generate an execution DAG based on the TaskModel."},

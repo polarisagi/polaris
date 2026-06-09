@@ -294,7 +294,8 @@ func isPluginBundleRoot(dir string) (string, string) {
 }
 
 // parseBundleManifest 根据清单类型解析插件包。
-func parseBundleManifest(manifestPath, manifestType, mpDir string, mp protocol.Marketplace) []protocol.RegistryEntry {
+func parseBundleManifest( //nolint:gocyclo
+	manifestPath, manifestType, mpDir string, mp protocol.Marketplace) []protocol.RegistryEntry {
 	var entries []protocol.RegistryEntry
 	switch manifestType {
 	case "plugin.json":

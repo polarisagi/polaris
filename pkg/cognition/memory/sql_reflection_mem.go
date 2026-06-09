@@ -85,7 +85,8 @@ func (rm *SQLReflectionMem) AppendReflection(ctx context.Context, entry protocol
 }
 
 // QueryReflections 按条件查询反思记录，利用 idx_reflect_task_type 索引避免全表扫描。
-func (rm *SQLReflectionMem) QueryReflections(ctx context.Context, q protocol.ReflectionQuery) ([]protocol.ReflectionEntry, error) {
+func (rm *SQLReflectionMem) QueryReflections( //nolint:gocyclo
+	ctx context.Context, q protocol.ReflectionQuery) ([]protocol.ReflectionEntry, error) {
 	var conds []string
 	var args []any
 
