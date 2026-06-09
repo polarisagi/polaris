@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS semantic_entities (
     source_event_id INTEGER,
     -- ↑ 溯源: 指向产生此实体的 M2 events.id。M11 AuditTrail 基于此追溯事实来源。
 
+    status          TEXT NOT NULL DEFAULT 'active',
+    -- ↑ 生命周期状态: 'active' | 'superseded' | 'expired' | 'merged'。
+    --   信念修正: 同类型近似实体写入时将旧版本标记为 'superseded'。
+    --   HybridRetriever 扫描时加 WHERE status='active' 过滤，消除旧矛盾事实污染。
+    --   来源: supermemory temporal belief revision + PruneMem lifecycle governance。
+
+    superseded_by   INTEGER REFERENCES semantic_entities(id),
+    -- ↑ 被取代者指向新实体的 DB id（status='superseded' 时填充）。
+    --   提供完整溯源链: 当前活跃版本 ← 历史版本序列（可回溯）。
+
     UNIQUE(entity_type, name)
     -- ↑ 实体类型 + 名称唯一 —— 同一实体多次提取通过 UpsertFact 更新属性。
 );
@@ -86,6 +96,11 @@ CREATE INDEX IF NOT EXISTS idx_semantic_rel_source ON semantic_relations(source_
 -- 入边反向索引（target → source，BFS 反向遍历 + 双向路径检索）
 CREATE INDEX IF NOT EXISTS idx_semantic_rel_target ON semantic_relations(target_id);
 
+-- 生命周期索引（status 查询加速，HybridRetriever WHERE status='active'）
+CREATE INDEX IF NOT EXISTS idx_semantic_ent_status ON semantic_entities(status);
+-- 被取代链索引（superseded_by 溯源查询）
+CREATE INDEX IF NOT EXISTS idx_semantic_ent_superseded ON semantic_entities(superseded_by) WHERE superseded_by IS NOT NULL;
+
 -- ----------------------------------------------------------------------------
 -- semantic_connectivity_cache: Effective Connectivity 派生缓存
 -- ----------------------------------------------------------------------------
@@ -117,4 +132,41 @@ CREATE TABLE IF NOT EXISTS semantic_connectivity_cache (
     -- ↑ 最后更新时间。
 
     PRIMARY KEY (source_id, target_id, hop_distance)
+);
+
+-- ============================================================================
+-- user_profile: 用户画像（L3 Persona 等价物）
+-- ============================================================================
+-- 架构角色: 从 Episodic 事件中自动合成的用户画像，每 50 条新事件触发一次合成。
+--           替代 ImmutableCore.UserPreferences 的静态 map，可随会话自动演化。
+-- 生产者: M5 ConsolidationPipeline Stage 3.5（UserProfileSynthesizer）
+-- 消费者: M4 Agent Kernel（VolatileBlock 注入）、M5 HybridRetriever（语义检索增强）
+-- 来源: supermemory User Profile + TencentDB L3 Persona 收敛方案。
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS user_profile (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    profile_key         TEXT NOT NULL UNIQUE DEFAULT 'default',
+    -- ↑ 画像键。单 Agent 单用户固定 'default'；多用户场景用 user_id。
+
+    stable_facts        JSON,
+    -- ↑ 稳定事实: 用户角色/技能/语言偏好等低频变化信息。
+    --   例: {"role":"data_scientist","lang":"zh-CN","timezone":"Asia/Shanghai"}
+
+    recent_activity     JSON,
+    -- ↑ 近期行为摘要（最近 7d，最多 20 条），滚动更新，旧条目按 TTL 淘汰。
+
+    behavioral_patterns JSON,
+    -- ↑ 行为模式: 常用工具频率、编码风格偏好、沟通习惯。
+    --   由 LLM 从 stable_facts + recent_activity 归纳（provider=nil 时规则 fallback）。
+
+    synthesis_count     INTEGER NOT NULL DEFAULT 0,
+    -- ↑ 累计合成次数，用于调试与触发频率控制。
+
+    last_event_ts       INTEGER,
+    -- ↑ 最后一次合成时最新事件的 Unix 毫秒时间戳，避免重复处理已消费事件。
+
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL
 );

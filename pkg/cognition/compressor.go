@@ -30,6 +30,10 @@ const (
 //
 // Stage 1 — tool output pre-pruning: 将超阈值 tool_result 替换为存根，立即释放 token。
 // Stage 2 — LLM 锚点摘要（由上层 LLM 调用填充 anchor 字段）。
+// Stage 3 — Mermaid 任务状态注入: 将 TaskMermaidCanvas 渲染结果嵌入 anchor 前缀，
+//           使 LLM 在压缩后仍能理解"当前走到哪一步、哪步失败了"。
+//
+// 来源: TencentDB Agent Memory 符号化短期记忆（61% token 节省原理）。
 //
 // 防抖动: 两次压缩之间强制 antithrashCooldown 冷却期，
 // 避免 compress→expand→compress 振荡（hermes-agent anti-thrashing 机制）。
@@ -40,6 +44,7 @@ type SessionCompressor struct {
 	anchor             string           // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
 	DurativeMemory     map[string]any   // 持久化核心记忆对象
 	offloader          ToolRefOffloader // P0: 工具输出卸载器
+	canvas             *TaskMermaidCanvas // 任务状态 Mermaid 画布（缺口 2）
 
 	mu             sync.Mutex
 	lastCompressAt time.Time
@@ -58,7 +63,30 @@ func NewSessionCompressor(maxSummaryTokens int) *SessionCompressor {
 		maxSummaryTokens:   maxSummaryTokens,
 		maxToolOutputBytes: defaultMaxToolOutputBytes,
 		triggerPct:         defaultTriggerPct,
+		canvas:             NewTaskMermaidCanvas(),
 	}
+}
+
+// TrackToolCall 通知压缩器：工具调用已发起（pending 状态）。
+// 应由 Agent Kernel 在发送 tool_use 消息后立即调用。
+func (sc *SessionCompressor) TrackToolCall(toolUseID, toolName string) {
+	sc.canvas.TrackToolCall(toolUseID, toolName)
+}
+
+// TrackToolResult 通知压缩器：工具调用已完成（success/failed 状态）。
+// summary 为 ≤40 字的执行结果摘要，由调用方提供。
+func (sc *SessionCompressor) TrackToolResult(toolUseID string, success bool, summary string) {
+	sc.canvas.TrackToolResult(toolUseID, success, summary)
+}
+
+// Canvas 返回当前 Mermaid 画布（供调试和测试使用）。
+func (sc *SessionCompressor) Canvas() *TaskMermaidCanvas {
+	return sc.canvas
+}
+
+// ResetCanvas 清空任务状态画布（任务边界切换时调用）。
+func (sc *SessionCompressor) ResetCanvas() {
+	sc.canvas.Reset()
 }
 
 // ShouldTrigger 报告当前 token 用量是否达到触发阈值（默认 65%）。
@@ -73,7 +101,13 @@ func (sc *SessionCompressor) ShouldTrigger(currentTokens, maxTokens int) bool {
 	return float64(currentTokens)/float64(maxTokens) >= thr
 }
 
-// Compress 执行两阶段压缩。
+// Compress 执行三阶段压缩。
+//
+// Stage 1 — tool output pre-pruning: 超阈值 tool_result 替换为 node_id 存根。
+// Stage 2 — LLM 锚点摘要（由上层填充 anchor 字段）。
+// Stage 3 — Mermaid 画布前缀注入: 将任务执行状态图嵌入 anchor，使 LLM 压缩后
+//
+//	仍能理解"走到哪步、哪步失败"（TencentDB 符号化记忆核心机制）。
 //
 // 返回修改后的消息列表和是否实际执行了压缩。
 // false 表示未达阈值，或被防抖动冷却期拦截。
@@ -90,12 +124,27 @@ func (sc *SessionCompressor) Compress(messages []protocol.Message, currentTokens
 	sc.lastCompressAt = time.Now()
 	sc.mu.Unlock()
 
-	// Stage 1: tool output pre-pruning
+	// Stage 1: tool output pre-pruning（含 offload 落盘）
 	maxBytes := sc.maxToolOutputBytes
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxToolOutputBytes
 	}
 	pruned, _ := PruneToolOutputs(messages, maxBytes, sc.offloader)
+
+	// Stage 3: 将 Mermaid 画布渲染结果注入 anchor 前缀
+	// 若画布有节点，则在 anchor 开头注入 "## Task State\n{mermaid}" 块，
+	// 后接原 LLM anchor 摘要（若有）。
+	sc.mu.Lock()
+	if mmd := sc.canvas.Render(); mmd != "" {
+		prefix := "## Task State (node_id → read_tool_ref for raw output)\n" + mmd
+		if sc.anchor != "" {
+			sc.anchor = prefix + "\n## Summary\n" + sc.anchor
+		} else {
+			sc.anchor = prefix
+		}
+	}
+	sc.mu.Unlock()
+
 	return pruned, true
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strconv"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -111,6 +112,157 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel protocol.Relation
 }
 
 func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (*protocol.Entity, error) {
+	db, err := sm.requireDB()
+	if err != nil {
+		return nil, err
+	}
+
+	const q = `SELECT id, name, entity_type, properties, embedding, source_event_id, version,
+	            status, COALESCE(superseded_by, 0)
+	            FROM semantic_entities WHERE entity_type = ? AND name = ?`
+	row := db.QueryRowContext(ctx, q, entityType, name)
+
+	var ent protocol.Entity
+	var propertiesJSON []byte
+	var embeddingBytes []byte
+
+	err = row.Scan(&ent.DBID, &ent.Name, &ent.Type, &propertiesJSON, &embeddingBytes,
+		&ent.SourceEventID, &ent.Version, &ent.Status, &ent.SupersededBy)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, perrors.New(perrors.CodeNotFound, "Entity not found")
+		}
+		return nil, err
+	}
+
+	ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+	if len(propertiesJSON) > 0 {
+		_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+	}
+	return &ent, nil
+}
+
+// ListActiveEntities 返回指定类型的活跃（status='active'）实体列表，供 Jaccard 矛盾检测使用。
+func (sm *SemanticMem) ListActiveEntities(ctx context.Context, entityType string, limit int) ([]protocol.Entity, error) {
+	db, err := sm.requireDB()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	const q = `SELECT id, name, entity_type, properties, source_event_id, version,
+	            status, COALESCE(superseded_by, 0)
+	            FROM semantic_entities WHERE status='active' AND entity_type=?
+	            ORDER BY updated_at DESC LIMIT ?`
+	rows, err := db.QueryContext(ctx, q, entityType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []protocol.Entity
+	for rows.Next() {
+		var ent protocol.Entity
+		var propertiesJSON []byte
+		if err := rows.Scan(&ent.DBID, &ent.Name, &ent.Type, &propertiesJSON,
+			&ent.SourceEventID, &ent.Version, &ent.Status, &ent.SupersededBy); err != nil {
+			continue
+		}
+		ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+		if len(propertiesJSON) > 0 {
+			_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+		}
+		result = append(result, ent)
+	}
+	return result, rows.Err()
+}
+
+// MarkEntitySuperseded 将旧实体标记为 superseded，并记录取代它的新实体 DBID。
+// 仅当当前 status='active' 时生效（防重复超越）。
+func (sm *SemanticMem) MarkEntitySuperseded(ctx context.Context, oldDBID int64, newDBID int64) error {
+	db, err := sm.requireDB()
+	if err != nil {
+		return err
+	}
+	var supersededBy any
+	if newDBID > 0 {
+		supersededBy = newDBID
+	}
+	_, err = db.ExecContext(ctx,
+		`UPDATE semantic_entities SET status='superseded', superseded_by=?, updated_at=?
+		 WHERE id=? AND status='active'`,
+		supersededBy, time.Now().UnixMilli(), oldDBID)
+	return err
+}
+
+// UpsertUserProfile 创建或更新用户画像。
+func (sm *SemanticMem) UpsertUserProfile(ctx context.Context, profile protocol.UserProfile) error {
+	db, err := sm.requireDB()
+	if err != nil {
+		return err
+	}
+	stableFacts, _ := json.Marshal(profile.StableFacts)
+	recentActivity, _ := json.Marshal(profile.RecentActivity)
+	behavioralPatterns, _ := json.Marshal(profile.BehavioralPatterns)
+	now := time.Now().UnixMilli()
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO user_profile (profile_key, stable_facts, recent_activity, behavioral_patterns,
+		                          synthesis_count, last_event_ts, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(profile_key) DO UPDATE SET
+		    stable_facts        = excluded.stable_facts,
+		    recent_activity     = excluded.recent_activity,
+		    behavioral_patterns = excluded.behavioral_patterns,
+		    synthesis_count     = excluded.synthesis_count,
+		    last_event_ts       = excluded.last_event_ts,
+		    updated_at          = excluded.updated_at`,
+		profile.ProfileKey,
+		nullableJSON(stableFacts), nullableJSON(recentActivity), nullableJSON(behavioralPatterns),
+		profile.SynthesisCount, profile.LastEventTS, now, now,
+	)
+	return err
+}
+
+// GetUserProfile 读取用户画像，不存在返回 nil 和 CodeNotFound 错误。
+func (sm *SemanticMem) GetUserProfile(ctx context.Context, profileKey string) (*protocol.UserProfile, error) {
+	db, err := sm.requireDB()
+	if err != nil {
+		return nil, err
+	}
+
+	const q = `SELECT profile_key, stable_facts, recent_activity, behavioral_patterns,
+	            synthesis_count, COALESCE(last_event_ts, 0)
+	            FROM user_profile WHERE profile_key=?`
+	row := db.QueryRowContext(ctx, q, profileKey)
+
+	var p protocol.UserProfile
+	var stableJSON, recentJSON, behavioralJSON []byte
+	err = row.Scan(&p.ProfileKey, &stableJSON, &recentJSON, &behavioralJSON,
+		&p.SynthesisCount, &p.LastEventTS)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, perrors.New(perrors.CodeNotFound, "user_profile not found")
+		}
+		return nil, err
+	}
+	if len(stableJSON) > 0 {
+		_ = json.Unmarshal(stableJSON, &p.StableFacts)
+	}
+	if len(recentJSON) > 0 {
+		_ = json.Unmarshal(recentJSON, &p.RecentActivity)
+	}
+	if len(behavioralJSON) > 0 {
+		_ = json.Unmarshal(behavioralJSON, &p.BehavioralPatterns)
+	}
+	return &p, nil
+}
+
+// ─── 内部辅助 ─────────────────────────────────────────────────────────────────
+
+func (sm *SemanticMem) requireDB() (*sql.DB, error) {
 	dbAccess, ok := sm.store.(DBAccessor)
 	if !ok {
 		return nil, perrors.New(perrors.CodeInternal, "Store does not implement DBAccessor")
@@ -119,33 +271,15 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 	if db == nil {
 		return nil, perrors.New(perrors.CodeInternal, "Underlying DB is nil")
 	}
+	return db, nil
+}
 
-	row := db.QueryRowContext(ctx, "SELECT id, name, entity_type, properties, embedding, source_event_id, version FROM semantic_entities WHERE entity_type = ? AND name = ?", entityType, name)
-
-	var ent protocol.Entity
-	var propertiesJSON []byte
-	var embeddingBytes []byte
-	var idInt int64
-
-	err := row.Scan(&idInt, &ent.Name, &ent.Type, &propertiesJSON, &embeddingBytes, &ent.SourceEventID, &ent.Version)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, perrors.New(perrors.CodeNotFound, "Entity not found")
-		}
-		return nil, err
+// nullableJSON 将空 JSON 对象/数组转为 nil，防止写入空白 "null" 字节。
+func nullableJSON(b []byte) any {
+	if len(b) == 0 || string(b) == "null" || string(b) == "{}" || string(b) == "[]" {
+		return nil
 	}
-
-	ent.ID = "entity:" + strconv.FormatInt(idInt, 10)
-
-	if len(propertiesJSON) > 0 {
-		if err := json.Unmarshal(propertiesJSON, &ent.Properties); err != nil {
-			return nil, err
-		}
-	}
-	// For embeddingBytes, in a real implementation we would convert float16 byte slice to []float32.
-	// Since we don't have the explicit quantizer here, we skip it or mock it.
-
-	return &ent, nil
+	return b
 }
 
 // ============================================================================

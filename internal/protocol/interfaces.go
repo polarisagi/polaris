@@ -435,6 +435,12 @@ type Entity struct {
 	Properties      map[string]any
 	SourceEventID   int64
 	Version         int
+
+	// 生命周期字段（信念修正 + 知识演化）
+	// 来源: supermemory temporal belief revision + PruneMem lifecycle governance
+	DBID         int64  // 数据库自增 ID，供 MarkEntitySuperseded 使用
+	Status       string // 'active'(默认) | 'superseded' | 'expired' | 'merged'
+	SupersededBy int64  // status='superseded' 时指向新版本实体的 DBID
 }
 
 type Relation struct {
@@ -450,6 +456,18 @@ type Relation struct {
 	SourceEventID int64
 }
 
+// UserProfile 用户画像（L3 Persona 等价物）。
+// 由 M5 ConsolidationPipeline Stage 3.5 每 50 条新事件自动合成，随使用演化。
+// 来源收敛: supermemory User Profile + TencentDB L3 Persona。
+type UserProfile struct {
+	ProfileKey         string         `json:"profile_key"`          // 默认 'default'
+	StableFacts        map[string]any `json:"stable_facts"`         // 低频变化事实（角色/技能/偏好）
+	RecentActivity     []string       `json:"recent_activity"`      // 近 7d 行为摘要（最多 20 条）
+	BehavioralPatterns map[string]any `json:"behavioral_patterns"`  // 工具频率/编码风格/沟通习惯
+	SynthesisCount     int            `json:"synthesis_count"`      // 累计合成次数
+	LastEventTS        int64          `json:"last_event_ts"`        // 最后消费事件的 Unix 毫秒时间戳
+}
+
 // SemanticMemory (Mem-L2) — 文档/实体/关系图。
 type SemanticMemory interface {
 	StoreDocument(ctx context.Context, doc Document) error
@@ -459,6 +477,14 @@ type SemanticMemory interface {
 	UpsertFact(ctx context.Context, entity Entity) error
 	UpsertRelation(ctx context.Context, rel Relation) error
 	GetEntity(ctx context.Context, entityType, name string) (*Entity, error)
+
+	// 生命周期接口 — 信念修正与知识演化（缺口 1）
+	ListActiveEntities(ctx context.Context, entityType string, limit int) ([]Entity, error)
+	MarkEntitySuperseded(ctx context.Context, oldDBID int64, newDBID int64) error
+
+	// 用户画像接口 — L3 Persona 合成与查询（缺口 3）
+	UpsertUserProfile(ctx context.Context, profile UserProfile) error
+	GetUserProfile(ctx context.Context, profileKey string) (*UserProfile, error)
 }
 
 type Document struct {

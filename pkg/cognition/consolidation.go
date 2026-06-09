@@ -80,8 +80,16 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 
 	// Stage 3 — 会话摘要生成
 	if err := p.summarizeSession(ctx, sessionID, events); err != nil {
-		// 非阻断：摘要失败不中止技能更新
-		_ = err
+		_ = err // 非阻断：摘要失败不中止后续阶段
+	}
+
+	// Stage 3.5 — 用户画像合成（L3 Persona）
+	// 触发条件: events ≥ 10（保证最低信号量）。异步友好，失败不阻断。
+	// 来源: supermemory User Profile + TencentDB L3 Persona 收敛方案。
+	if len(events) >= 10 {
+		if err := p.synthesizeUserProfile(ctx, events); err != nil {
+			_ = err // 非阻断
+		}
 	}
 
 	// Stage 4 — Logic Collapse → Skill Library
@@ -267,23 +275,42 @@ func (p *ConsolidationPipeline) ruleExtract(
 
 // ─── Stage 2 ─────────────────────────────────────────────────────────────────
 
-// upsertSemantic 将实体和关系批量写入 SemanticMemory。
+// upsertSemantic 将实体和关系批量写入 SemanticMemory，含生命周期信念修正。
+//
+// 信念修正策略（来源: supermemory + PruneMem 收敛）:
+//  1. 精确碰撞（相同 entity_type + name）: 写入新实体前将旧实体标记 superseded
+//  2. Jaccard 近似碰撞（相同 type，name 相似度 > 0.6）: 检测语义近似实体并标记 superseded
+//     主要用于 user_preference 类型（最易产生"language"/"prog_lang" 之类语义重复）
 func (p *ConsolidationPipeline) upsertSemantic(
 	ctx context.Context,
 	entities []*protocol.Entity,
 	relations []*protocol.Relation,
 ) error {
 	for _, e := range entities {
-		// P1: Contradiction Detection - check if an entity with same name and type exists
+		// 精确碰撞检测：同名同类型已存在 active 实体 → 标记旧版本 superseded
 		if existing, err := p.semantic.GetEntity(ctx, e.Type, e.Name); err == nil && existing != nil {
-			if e.Properties == nil {
-				e.Properties = make(map[string]any)
+			if existing.Status == "" || existing.Status == "active" {
+				_ = p.semantic.MarkEntitySuperseded(ctx, existing.DBID, 0)
 			}
-			e.Properties["supersedes"] = existing.ID
 		}
+
+		// Jaccard 近似碰撞检测：仅对 user_preference 类型启用（性能敏感，范围受控）
+		if e.Type == "user_preference" {
+			actives, err := p.semantic.ListActiveEntities(ctx, e.Type, 30)
+			if err == nil {
+				for _, act := range actives {
+					if act.Name == e.Name {
+						continue // 精确碰撞已处理
+					}
+					if jaccardSimilarity(act.Name, e.Name) > 0.6 {
+						_ = p.semantic.MarkEntitySuperseded(ctx, act.DBID, 0)
+					}
+				}
+			}
+		}
+
 		if err := p.semantic.UpsertFact(ctx, *e); err != nil {
-			// 单条失败不阻断整体
-			_ = err
+			_ = err // 单条失败不阻断整体
 		}
 	}
 	for _, r := range relations {
@@ -292,6 +319,59 @@ func (p *ConsolidationPipeline) upsertSemantic(
 		}
 	}
 	return nil
+}
+
+// jaccardSimilarity 计算两个字符串的 token 级 Jaccard 相似度 [0,1]。
+// 分词: 小写化 + 按空格/下划线/驼峰分割。来源: PruneMem curator-apply 近似去重逻辑。
+func jaccardSimilarity(a, b string) float64 {
+	tokA := jaccardTokenize(a)
+	tokB := jaccardTokenize(b)
+	if len(tokA) == 0 || len(tokB) == 0 {
+		return 0
+	}
+	setA := make(map[string]bool, len(tokA))
+	for _, t := range tokA {
+		setA[t] = true
+	}
+	setB := make(map[string]bool, len(tokB))
+	for _, t := range tokB {
+		setB[t] = true
+	}
+	intersection := 0
+	for t := range setA {
+		if setB[t] {
+			intersection++
+		}
+	}
+	union := len(setA) + len(setB) - intersection
+	if union == 0 {
+		return 1.0
+	}
+	return float64(intersection) / float64(union)
+}
+
+// jaccardTokenize 将字符串分割为小写 token 集合。
+// 按空格、下划线、连字符分割，同时拆分驼峰命名。
+func jaccardTokenize(s string) []string {
+	s = strings.ToLower(s)
+	// 驼峰拆分: 在大写字母前插入空格（先处理原始 camelCase 再转小写无效，但上面已转小写）
+	// 简化处理: 按非字母数字字符分割
+	var tokens []string
+	cur := strings.Builder{}
+	for _, r := range s {
+		if r == ' ' || r == '_' || r == '-' || r == '.' || r == '/' {
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+		} else {
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
 }
 
 // ─── Stage 3 ─────────────────────────────────────────────────────────────────
@@ -428,6 +508,184 @@ func (p *ConsolidationPipeline) updateSkills(
 		}
 	}
 	return nil
+}
+
+// ─── Stage 3.5 ───────────────────────────────────────────────────────────────
+
+// synthesizeUserProfile 从 Episodic 事件合成用户画像（L3 Persona）。
+//
+// 触发策略: events ≥ 10 且距上次合成 > 50 事件（由 LastEventTS 间接判断）。
+// 来源: supermemory User Profile + TencentDB L3 Persona 收敛方案。
+//
+// LLM 路径: provider 非 nil → 用 100 token prompt 让 LLM 归纳 JSON。
+// 规则 fallback: provider 为 nil → 统计工具频率 + 收集近期摘要。
+func (p *ConsolidationPipeline) synthesizeUserProfile(
+	ctx context.Context,
+	events []protocol.ScoredEvent,
+) error {
+	if p.semantic == nil {
+		return nil
+	}
+
+	// 读取现有画像（确定是否需要更新）
+	current, _ := p.semantic.GetUserProfile(ctx, "default")
+
+	// 若 events 最新时间戳距上次合成 < 1 分钟，跳过（防重复合成）
+	if current != nil && len(events) > 0 {
+		newestTS := events[0].Event.CreatedAt.UnixMilli()
+		for _, se := range events {
+			if ts := se.Event.CreatedAt.UnixMilli(); ts > newestTS {
+				newestTS = ts
+			}
+		}
+		if newestTS-current.LastEventTS < 60_000 {
+			return nil
+		}
+	}
+
+	// 收集最新 event 时间戳
+	var latestTS int64
+	for _, se := range events {
+		if ts := se.Event.CreatedAt.UnixMilli(); ts > latestTS {
+			latestTS = ts
+		}
+	}
+
+	profile := protocol.UserProfile{
+		ProfileKey:         "default",
+		StableFacts:        make(map[string]any),
+		BehavioralPatterns: make(map[string]any),
+		LastEventTS:        latestTS,
+	}
+	if current != nil {
+		profile.SynthesisCount = current.SynthesisCount + 1
+		// 保留已有稳定事实（不被规则覆盖）
+		for k, v := range current.StableFacts { //nolint:mapsloop
+			profile.StableFacts[k] = v
+		}
+	}
+
+	if p.provider != nil {
+		p.llmSynthesizeProfile(ctx, current, events, &profile)
+	} else {
+		p.ruleSynthesizeProfile(events, &profile)
+	}
+
+	return p.semantic.UpsertUserProfile(ctx, profile)
+}
+
+// llmSynthesizeProfile 通过 LLM 合成用户画像（100 token prompt，输出 JSON）。
+func (p *ConsolidationPipeline) llmSynthesizeProfile(
+	ctx context.Context,
+	current *protocol.UserProfile,
+	events []protocol.ScoredEvent,
+	out *protocol.UserProfile,
+) {
+	// 组装最近 15 条事件文本
+	var sb strings.Builder
+	limit := min(15, len(events))
+	for _, se := range events[:limit] {
+		sb.WriteString(string(se.Event.Type))
+		sb.WriteString(": ")
+		payload := string(se.Event.Payload)
+		if len(payload) > 100 {
+			payload = payload[:100]
+		}
+		sb.WriteString(payload)
+		sb.WriteByte('\n')
+	}
+
+	currentJSON := "{}"
+	if current != nil {
+		if b, err := json.Marshal(current); err == nil {
+			currentJSON = string(b)
+		}
+	}
+
+	prompt := fmt.Sprintf(
+		"Based on these agent session events, update the user profile. "+
+			"Return ONLY valid JSON with keys: stable_facts (object), recent_activity (string array ≤10 items), behavioral_patterns (object).\n\n"+
+			"Current profile: %s\n\nNew events:\n%s",
+		currentJSON, sb.String(),
+	)
+
+	resp, err := p.provider.Infer(ctx, &protocol.InferRequest{
+		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
+		MaxTokens:   512,
+		Temperature: 0.2,
+	})
+	if err != nil || resp == nil {
+		p.ruleSynthesizeProfile(events, out)
+		return
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	if idx := strings.Index(content, "{"); idx > 0 {
+		content = content[idx:]
+	}
+	if idx := strings.LastIndex(content, "}"); idx >= 0 && idx < len(content)-1 {
+		content = content[:idx+1]
+	}
+
+	var parsed struct {
+		StableFacts        map[string]any `json:"stable_facts"`
+		RecentActivity     []string       `json:"recent_activity"`
+		BehavioralPatterns map[string]any `json:"behavioral_patterns"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		p.ruleSynthesizeProfile(events, out)
+		return
+	}
+	if parsed.StableFacts != nil {
+		out.StableFacts = parsed.StableFacts
+	}
+	if len(parsed.RecentActivity) > 0 {
+		out.RecentActivity = parsed.RecentActivity
+	}
+	if parsed.BehavioralPatterns != nil {
+		out.BehavioralPatterns = parsed.BehavioralPatterns
+	}
+}
+
+// ruleSynthesizeProfile 规则 fallback：统计工具频率 + 收集近期事件摘要。
+func (p *ConsolidationPipeline) ruleSynthesizeProfile(
+	events []protocol.ScoredEvent,
+	out *protocol.UserProfile,
+) {
+	toolFreq := make(map[string]int)
+	eventTypFreq := make(map[string]int)
+	var recentSummaries []string
+
+	for _, se := range events {
+		eventTypFreq[string(se.Event.Type)]++
+
+		var payload struct {
+			ToolName string `json:"tool_name"`
+			Name     string `json:"name"`
+		}
+		if err := json.Unmarshal(se.Event.Payload, &payload); err == nil {
+			name := payload.ToolName
+			if name == "" {
+				name = payload.Name
+			}
+			if name != "" {
+				toolFreq[name]++
+			}
+		}
+
+		// 收集近期摘要（最多 20 条）
+		if len(recentSummaries) < 20 && len(se.Event.Payload) > 0 {
+			summary := string(se.Event.Payload)
+			if len(summary) > 80 {
+				summary = summary[:80]
+			}
+			recentSummaries = append(recentSummaries, string(se.Event.Type)+": "+summary)
+		}
+	}
+
+	out.BehavioralPatterns["tool_frequency"] = toolFreq
+	out.BehavioralPatterns["event_type_frequency"] = eventTypFreq
+	out.RecentActivity = recentSummaries
 }
 
 // ============================================================================
