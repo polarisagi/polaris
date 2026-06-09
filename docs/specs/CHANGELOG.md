@@ -4,6 +4,18 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-06-09（Gemini gap 报告核查：修复两处真实差异）
+
+**gap 核查结论（10 条 Gemini 报告）**：
+
+- ID 4 CoEvolutionSubscriber / ID 5 PRM 无文档：假 gap；CoEvSubscriber 存在于 `pkg/swarm/self_improve_calibrator.go`；PRM 有完整文档 M04 §4.6
+- ID 9 SemanticCache：真实gap — M01 §6.2 描述"无 Get/Put 实现"与代码实际（已实现）不符，已修复
+- ID 8 onboard.html：真实gap — M13 §8.1 目录遗漏 `onboard.html`（14.8K），已修复
+- ID 3 OnlineReindexer / ID 6 inv_ 测试：开发阶段已知缺口，暂保持文档意图，待代码补齐
+- ID 1/2/7/10：部分真实，属"设计超前于实现"正常状态，不改动文档
+
+commit 28c0915
+
 ## 2026-06-09（docs/specs 全量审查 + 架构文档一致性修复）
 
 **docs/specs/ 补充修订**：
