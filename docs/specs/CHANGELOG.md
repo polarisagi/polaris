@@ -4,6 +4,20 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-06-09（docs/specs 全量审查 + 架构文档一致性修复）
+
+**docs/specs/ 补充修订**：
+
+- `03-Agent-Pattern.md AGENT-1` | FSM 状态数 "10 态" → "11 态"（M04 §1 已加 S_INTERRUPT 为第 11 态）；流程图补 S_INTERRUPT 触发说明；System 1.5 上界 ≤0.6 → <0.6（与 `[System-1.5]` canonical 一致）
+- `03-Agent-Pattern.md AGENT-5` | SurpriseIndex 公式替换为 canonical 三组件引用（旧公式含 `tokenBurnRate/maxBurnRate`+`actionSequenceEntropy`，与 `00-Global-Dictionary §3` canonical 不符）
+
+**架构文档一致性修复（本会话 commit 1dfa428）**：
+
+- `M04-Agent-Kernel.md §13` | Schema 引用 `003_tasks` → `007_tasks`
+- `M09-Self-Improvement-Engine.md` | EvalGenerator `## 3.` → `## 3-bis.`（消除与主 §3 的重号）；同步更新 §跳读
+- `M02-Storage-Fabric.md §16` | DDL 总量 21 份 → 25 份，范围扩至 028_apps
+- `AGENTS.md` | DDL 清单补入 022~024/028，计数 20→25 张表
+
 ## 2026-06-09（架构文档全量审查 + specs 规范修订）
 
 **架构文档（docs/arch/）深度审查修复（3 次提交，共 7 处）**：

@@ -6,17 +6,19 @@
 
 所有涉及 LLM 调用的路径都必须是 Go 状态机的某个步骤，不存在独立的 `callLLMAndWait`。
 
-PAR 状态机 10 态的核心流转：
+FSM 11 态核心流转（S_IDLE 为空闲等待态，S_INTERRUPT 可从任意活跃态触发，详见 M04 §1）：
 
 ```
 s_perceive → s_plan → s_validate → s_execute → s_reflect → s_complete
                 ↓           ↓          ↓
             s_replan    s_rollback  s_failed
+
+任意活跃态 ──(UserInterrupt / KillSwitch)──→ s_interrupt
 ```
 
 - **System 1**（SurpriseIndex < 0.3）：零 LLM 调用，走缓存/规则路径
-- **System 1.5**（0.3 ≤ SI ≤ 0.6）：轻量 LLM，temperature 0
-- **System 2**（SI > 0.6）：重量推理，temperature > 0，Best-of-N
+- **System 1.5**（0.3 ≤ SI < 0.6）：轻量 LLM，temperature 0
+- **System 2**（SI ≥ 0.6）：重量推理，temperature > 0，Best-of-N
 
 新建 Agent 行为路径时必须：定义状态转换 → 定义事件 → 注册 handler。禁止自由调用 LLM 后再判断。
 
@@ -60,11 +62,15 @@ Skill 三件套（`skills/builtin/SKILL.md + schema.json + wasm.wasm`）：
 
 ## AGENT-5 SurpriseIndex 路由决策
 
+权威定义见 `[SurpriseIndex]` `00-Global-Dictionary §3` + M09 §2.0：
+
 ```
-SI = similarityWeight × cos_dist(currentEmbedding, historyCentroid)
-   + rateWeight × tokenBurnRate / maxBurnRate
-   + entropyWeight × actionSequenceEntropy
+SI = embeddingCosineDistance × 0.4
+   + toolSequenceDivergence  × 0.35
+   + MEMFMatchScore          × 0.25
 ```
+
+权重由 M9 DynamicDifficultyCalibrator 按 task_type 自适应调整。
 
 - SI < 0.3：走 System 1 缓存路径，零 LLM
 - SI > 0.85：跳过 Auto-Curriculum 生成（系统过载）
