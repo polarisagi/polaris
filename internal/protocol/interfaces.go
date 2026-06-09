@@ -460,12 +460,12 @@ type Relation struct {
 // 由 M5 ConsolidationPipeline Stage 3.5 每 50 条新事件自动合成，随使用演化。
 // 来源收敛: supermemory User Profile + TencentDB L3 Persona。
 type UserProfile struct {
-	ProfileKey         string         `json:"profile_key"`          // 默认 'default'
-	StableFacts        map[string]any `json:"stable_facts"`         // 低频变化事实（角色/技能/偏好）
-	RecentActivity     []string       `json:"recent_activity"`      // 近 7d 行为摘要（最多 20 条）
-	BehavioralPatterns map[string]any `json:"behavioral_patterns"`  // 工具频率/编码风格/沟通习惯
-	SynthesisCount     int            `json:"synthesis_count"`      // 累计合成次数
-	LastEventTS        int64          `json:"last_event_ts"`        // 最后消费事件的 Unix 毫秒时间戳
+	ProfileKey         string         `json:"profile_key"`         // 默认 'default'
+	StableFacts        map[string]any `json:"stable_facts"`        // 低频变化事实（角色/技能/偏好）
+	RecentActivity     []string       `json:"recent_activity"`     // 近 7d 行为摘要（最多 20 条）
+	BehavioralPatterns map[string]any `json:"behavioral_patterns"` // 工具频率/编码风格/沟通习惯
+	SynthesisCount     int            `json:"synthesis_count"`     // 累计合成次数
+	LastEventTS        int64          `json:"last_event_ts"`       // 最后消费事件的 Unix 毫秒时间戳
 }
 
 // SemanticMemory (Mem-L2) — 文档/实体/关系图。

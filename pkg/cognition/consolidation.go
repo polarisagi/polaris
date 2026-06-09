@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 	"time"
@@ -296,17 +297,7 @@ func (p *ConsolidationPipeline) upsertSemantic(
 
 		// Jaccard 近似碰撞检测：仅对 user_preference 类型启用（性能敏感，范围受控）
 		if e.Type == "user_preference" {
-			actives, err := p.semantic.ListActiveEntities(ctx, e.Type, 30)
-			if err == nil {
-				for _, act := range actives {
-					if act.Name == e.Name {
-						continue // 精确碰撞已处理
-					}
-					if jaccardSimilarity(act.Name, e.Name) > 0.6 {
-						_ = p.semantic.MarkEntitySuperseded(ctx, act.DBID, 0)
-					}
-				}
-			}
+			p.supersedeSimilarPreferences(ctx, e.Name)
 		}
 
 		if err := p.semantic.UpsertFact(ctx, *e); err != nil {
@@ -319,6 +310,22 @@ func (p *ConsolidationPipeline) upsertSemantic(
 		}
 	}
 	return nil
+}
+
+// supersedeSimilarPreferences 将与 newName Jaccard > 0.6 的活跃 user_preference 标记 superseded。
+func (p *ConsolidationPipeline) supersedeSimilarPreferences(ctx context.Context, newName string) {
+	actives, err := p.semantic.ListActiveEntities(ctx, "user_preference", 30)
+	if err != nil {
+		return
+	}
+	for _, act := range actives {
+		if act.Name == newName {
+			continue // 精确碰撞已在调用方处理
+		}
+		if jaccardSimilarity(act.Name, newName) > 0.6 {
+			_ = p.semantic.MarkEntitySuperseded(ctx, act.DBID, 0)
+		}
+	}
 }
 
 // jaccardSimilarity 计算两个字符串的 token 级 Jaccard 相似度 [0,1]。
@@ -560,9 +567,7 @@ func (p *ConsolidationPipeline) synthesizeUserProfile(
 	if current != nil {
 		profile.SynthesisCount = current.SynthesisCount + 1
 		// 保留已有稳定事实（不被规则覆盖）
-		for k, v := range current.StableFacts { //nolint:mapsloop
-			profile.StableFacts[k] = v
-		}
+		maps.Copy(profile.StableFacts, current.StableFacts)
 	}
 
 	if p.provider != nil {

@@ -52,11 +52,11 @@ type MmdEdge struct {
 
 // TaskMermaidCanvas 线程安全的 Mermaid 画布。
 type TaskMermaidCanvas struct {
-	mu          sync.Mutex
-	steps       []MmdStep
-	edges       []MmdEdge
+	mu           sync.Mutex
+	steps        []MmdStep
+	edges        []MmdEdge
 	pendingCalls map[string]string // tool_use_id → tool_name（等待结果）
-	seq         int
+	seq          int
 }
 
 // NewTaskMermaidCanvas 创建空画布。

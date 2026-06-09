@@ -151,9 +151,9 @@ func TestJaccardSimilarity(t *testing.T) {
 		want float64 // 下限
 	}{
 		{"language", "language", 1.0},
-		{"programming_language", "language", 0.4},         // 有交集
-		{"lang_preference", "language_preference", 0.30},  // 部分重叠（1/3=0.33）
-		{"go_version", "python_framework", 0.0},           // 无交集
+		{"programming_language", "language", 0.4},        // 有交集
+		{"lang_preference", "language_preference", 0.30}, // 部分重叠（1/3=0.33）
+		{"go_version", "python_framework", 0.0},          // 无交集
 	}
 	for _, tt := range tests {
 		got := jaccardSimilarity(tt.a, tt.b)

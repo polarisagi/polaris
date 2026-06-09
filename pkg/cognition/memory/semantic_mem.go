@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -129,7 +130,7 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 	err = row.Scan(&ent.DBID, &ent.Name, &ent.Type, &propertiesJSON, &embeddingBytes,
 		&ent.SourceEventID, &ent.Version, &ent.Status, &ent.SupersededBy)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, perrors.New(perrors.CodeNotFound, "Entity not found")
 		}
 		return nil, err
@@ -243,7 +244,7 @@ func (sm *SemanticMem) GetUserProfile(ctx context.Context, profileKey string) (*
 	err = row.Scan(&p.ProfileKey, &stableJSON, &recentJSON, &behavioralJSON,
 		&p.SynthesisCount, &p.LastEventTS)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, perrors.New(perrors.CodeNotFound, "user_profile not found")
 		}
 		return nil, err

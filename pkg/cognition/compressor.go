@@ -31,7 +31,8 @@ const (
 // Stage 1 — tool output pre-pruning: 将超阈值 tool_result 替换为存根，立即释放 token。
 // Stage 2 — LLM 锚点摘要（由上层 LLM 调用填充 anchor 字段）。
 // Stage 3 — Mermaid 任务状态注入: 将 TaskMermaidCanvas 渲染结果嵌入 anchor 前缀，
-//           使 LLM 在压缩后仍能理解"当前走到哪一步、哪步失败了"。
+//
+//	使 LLM 在压缩后仍能理解"当前走到哪一步、哪步失败了"。
 //
 // 来源: TencentDB Agent Memory 符号化短期记忆（61% token 节省原理）。
 //
@@ -41,9 +42,9 @@ type SessionCompressor struct {
 	maxSummaryTokens   int
 	maxToolOutputBytes int
 	triggerPct         float64
-	anchor             string           // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
-	DurativeMemory     map[string]any   // 持久化核心记忆对象
-	offloader          ToolRefOffloader // P0: 工具输出卸载器
+	anchor             string             // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
+	DurativeMemory     map[string]any     // 持久化核心记忆对象
+	offloader          ToolRefOffloader   // P0: 工具输出卸载器
 	canvas             *TaskMermaidCanvas // 任务状态 Mermaid 画布（缺口 2）
 
 	mu             sync.Mutex
