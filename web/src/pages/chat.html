@@ -23,7 +23,7 @@
      }">
 
   <!-- Thinking Panel -->
-  <div class="mx-auto mt-4 w-full max-w-4xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText" x-cloak>
+  <div class="mx-auto mt-4 w-full max-w-5xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText" x-cloak>
     <div class="border border-base-300 rounded-[1.25rem] overflow-hidden bg-base-200/50 w-fit max-w-2xl shadow-sm">
     <div class="flex items-center gap-2 p-2 px-4 cursor-pointer text-base-content/60 text-sm font-medium hover:bg-base-300/50 transition-colors" @click="$store.chat.thinkingOpen = !$store.chat.thinkingOpen">
       <span x-show="$store.chat.state === 'THINKING'" class="loading loading-spinner loading-xs"></span>
@@ -45,7 +45,7 @@
   <div class="min-h-0 relative transition-all duration-500" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? 'flex-none' : 'flex-1'">
     <button x-show="!atBottom" @click="scrollBottom()" x-cloak class="btn btn-circle btn-primary btn-sm absolute bottom-4 right-6 z-20 shadow-lg opacity-90">↓</button>
     <div class="overflow-y-auto p-4" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'h-full pb-8'" id="message-list">
-      <div class="max-w-4xl mx-auto w-full flex flex-col" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'min-h-full'">
+      <div class="max-w-5xl mx-auto w-full flex flex-col" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'min-h-full'">
 
         <!-- Empty State -->
         <div class="flex flex-col items-center justify-center text-base-content/60 space-y-4 py-8 transition-opacity duration-300" x-show="$store.chat.messages.length === 0 && $store.chat.state === 'IDLE'" x-cloak>
@@ -182,7 +182,7 @@
   </div>
 
   <!-- Input Area -->
-  <div class="p-4 shrink-0 w-full max-w-4xl mx-auto transition-all duration-500 ease-in-out" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'pb-8'" x-data="chatInput">
+  <div class="p-4 shrink-0 w-full max-w-5xl mx-auto transition-all duration-500 ease-in-out" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'pb-8'" x-data="chatInput">
     <div class="relative bg-base-100 hover:bg-base-200/60 shadow-md border border-base-300 focus-within:bg-base-100 focus-within:border-primary/50 focus-within:shadow-lg transition-all duration-300 flex flex-col p-2 px-4 rounded-[36px]">
       
       <!-- Command Menu -->
