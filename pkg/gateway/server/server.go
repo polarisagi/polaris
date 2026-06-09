@@ -334,6 +334,15 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.HandleFunc("POST /v1/automations/{id}/trigger", s.handleTriggerAutomation)
 	mux.HandleFunc("GET /v1/automation-templates", s.handleListAutomationTemplates)
 
+	// 工作流 (Workflows)
+	mux.HandleFunc("GET /v1/workflows", s.handleListWorkflows)
+	mux.HandleFunc("POST /v1/workflows", s.handleCreateWorkflow)
+	mux.HandleFunc("GET /v1/workflows/{id}", s.handleGetWorkflow)
+	mux.HandleFunc("PUT /v1/workflows/{id}", s.handleUpdateWorkflow)
+	mux.HandleFunc("DELETE /v1/workflows/{id}", s.handleDeleteWorkflow)
+	mux.HandleFunc("GET /v1/workflows/{id}/runs", s.handleListWorkflowRuns)
+	mux.HandleFunc("POST /v1/workflows/{id}/trigger", s.handleTriggerWorkflow)
+
 	// 聊天平台集成 API
 	mux.HandleFunc("GET /v1/channels", s.handleListChannels)
 	mux.HandleFunc("POST /v1/channels", s.handleCreateChannel)

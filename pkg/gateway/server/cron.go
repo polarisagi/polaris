@@ -413,6 +413,9 @@ func (s *Server) cronTick(ctx context.Context) {
 		a := &due[i]
 		go s.executeAutomation(ctx, a, "cron")
 	}
+
+	// 同批次触发到期工作流
+	s.cronTickWorkflows(ctx)
 }
 
 type cronCtxKey string
