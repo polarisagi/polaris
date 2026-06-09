@@ -346,6 +346,16 @@ Stage 3 — 截断: FinalTopK=20（默认，config.FinalTopK 可覆盖）
 
 **跨版本嵌入兼容**：`MemoryEntry.EmbedModelVersion` 字段触发 `OnlineReindexer`（inv_M5_03）；当前 Tier 0 BM25+Simhash 路径不依赖 embedding API，嵌入模型变更不影响 Tier 0 召回。
 
+**OnlineReindexer（批量重建 embedding 索引）**：
+
+实现见 `pkg/cognition/memory/online_reindexer.go`（`OnlineReindexer` struct）。
+
+- **触发条件**：`episodic_events.embed_model_version = ''`（OutboxWorker 尚未投影）或 `!= currentVersion`（模型切换）；走 `idx_ep_embed_ver` 偏索引，O(1) 量级扫描
+- **接口**：`Embedder`（consumer-side，`Embed(ctx, text) ([]float32, error)` + `ModelVersion() string`）——M1 EmbeddingBatcher 实现此接口注入，防包循环
+- **批处理**：`Run(ctx)` 每次取 50 条（`defaultReindexBatchSize`），每条 embed 后 `runtime.Gosched()` 让出调度，单条失败不中断整批（best-effort）
+- **量化**：float32 → float16 BLOB（IEEE 754 half-precision，小端序），与 DDL 003/004 规范一致；精度损失在 RRF 归一化路径中可接受
+- **返回**：`(processed int, remaining bool, err error)`；调用方循环调用直至 `remaining=false`；version 切换场景由调用方决策重触发，避免无限循环
+
 ### 7.5 Evidence Subgraph Extraction
 
 **EvidenceSubgraphExtractor**:
