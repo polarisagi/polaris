@@ -416,6 +416,103 @@ type TaskEntry struct {
 	SpawnDepth  int // 防止 Custom Agent 递归超限
 	CreatedAt   int64
 	UpdatedAt   int64
+
+	// ── 流水线阶段 handoff 字段 ──────────────────────────────────────────────
+	// PipelineID 标识本 Task 所属流水线实例；空表示非流水线任务。
+	PipelineID string
+	// PipelineStage 标识本 Task 在流水线中的阶段名（如 "research"/"plan"/"execute"/"verify"）。
+	PipelineStage string
+	// ContextPayload 携带前序阶段的结构化产出（JSON），由 PipelineOrchestrator 填充。
+	// 下游 Agent 在 S_PERCEIVE 时优先读取此字段，而非全局记忆检索。
+	ContextPayload []byte
+}
+
+// ============================================================================
+// Pipeline 流水线原语 — 专家 Agent 阶段编排
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator-深度选型.md §5
+// ============================================================================
+
+// PipelineStageSpec 定义流水线中的一个阶段。
+type PipelineStageSpec struct {
+	// Name 阶段名称（唯一标识符），如 "research"、"plan"、"execute"。
+	Name string
+	// Capability 需要的 Agent 能力标签；Orchestrator 据此选择最优 Worker。
+	Capability string
+	// TaskType 投递到 Blackboard 的任务类型（影响 FindBestAgent 能力匹配）。
+	TaskType string
+	// Priority 阶段任务的优先级（越小越优先）。
+	Priority int
+	// BudgetTokens 本阶段允许的最大 token 用量（0 = 继承全局预算）。
+	BudgetTokens int
+	// TimeoutSec 阶段超时（秒），0 表示不限制。
+	TimeoutSec int
+}
+
+// VerificationPolicy 控制流水线中对抗性验证阶段的行为。
+// 当 PipelineDescriptor.VerificationPolicy != nil 时，
+// PipelineOrchestrator 在最后执行阶段完成后自动追加验证阶段。
+type VerificationPolicy struct {
+	// Capability 验证 Agent 的能力标签（默认 "verify"）。
+	Capability string
+	// Adversarial 为 true 时，向 Verifier 注入对抗性初始假设：
+	// "目标未达成，直到代码证据证明"。
+	Adversarial bool
+	// BlockOnFail 为 true 时，BLOCKER 级别结果阻止流水线推进到 Done。
+	BlockOnFail bool
+}
+
+// VerificationVerdict 验证结论等级。
+type VerificationVerdict int
+
+const (
+	VerdictPass    VerificationVerdict = iota // 目标已达成
+	VerdictWarning                            // 有不确定项，人工决策
+	VerdictBlocker                            // 目标未达成，必须重规划
+)
+
+func (v VerificationVerdict) String() string {
+	switch v {
+	case VerdictPass:
+		return "PASS"
+	case VerdictWarning:
+		return "WARNING"
+	case VerdictBlocker:
+		return "BLOCKER"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// VerificationResult 验证阶段的结构化产出。
+type VerificationResult struct {
+	Verdict  VerificationVerdict
+	Findings []VerificationFinding
+	// Summary 为 Verifier Agent 的整体评述（可作为下一轮重规划的输入）。
+	Summary string
+}
+
+// VerificationFinding 单条验证发现。
+type VerificationFinding struct {
+	Verdict     VerificationVerdict
+	Description string
+	// EvidencePath 指向支撑此发现的代码/文件路径（可选）。
+	EvidencePath string
+}
+
+// PipelineDescriptor 定义一条多阶段专家 Agent 流水线。
+// PipelineOrchestrator 按 Stages 顺序依次执行，每阶段的 Result 作为
+// 下一阶段的 ContextPayload 传递，实现精确上下文隔离。
+type PipelineDescriptor struct {
+	// ID 流水线实例唯一标识（空时由 PipelineOrchestrator 自动生成）。
+	ID string
+	// Goal 原始任务目标，贯穿所有阶段，供 Verifier 做目标反向验证。
+	Goal string
+	// Stages 有序阶段列表，按索引顺序执行。
+	Stages []PipelineStageSpec
+	// VerificationPolicy 非 nil 时，在最后阶段之后追加对抗验证。
+	VerificationPolicy *VerificationPolicy
+	// MaxRetries 单阶段失败后的最大重试次数。
+	MaxRetries int
 }
 
 type TaskStatus int

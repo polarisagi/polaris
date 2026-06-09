@@ -209,6 +209,35 @@ SanitizeByDeterministicTransform:
   禁止: strings.Join/+=, text/template, regexp.ReplaceAll, exec.Command
   json.Unmarshal 不降级: 所有 string 字段完全继承输入字节流的原始 TaintLevel
 
+**内容层注入检测（`ScanInjectionPatterns`）** — 与结构层 Taint 正交的第二道防线：
+  实现见: `pkg/substrate/taint_sanitizer.go`
+  触发位置: `SanitizeToSafe` 内部，结构层（Level 检查）通过后，TaintLevel >= TaintMedium 时执行。
+  设计原则: 结构层（Taint Level）保证"来源可溯"，内容层（注入扫描）防止"受信源的恶意内容"绕过类型边界。
+
+  ```
+  SanitizeToSafe 两阶段防护:
+    1. 结构层: TaintLevel > TaintLow 且非 TaintUserReviewed → 拒绝 (error)
+    2. 内容层: TaintLevel >= TaintMedium → ScanInjectionPatterns(content)
+       命中高置信度模式 → 拒绝 (error: "injection pattern detected")
+       未命中 → 构造 SafeString{}
+  ```
+
+  `ScanInjectionPatterns` 规则集（16 条，OWASP LLM01 常见间接注入手法）：
+  - 角色覆盖: `ignore previous instructions` / `ignore all previous` / `disregard previous` / `forget your instructions`
+  - 人格劫持: `you are now` / `act as if you are` / `pretend you are`
+  - 系统角色注入: `system:` / `<system>` / `[system]`
+  - Markdown 指令注入: `### instruction` / `## new instruction` / `[inst]`
+  - Token 边界注入: `</s>` / `<|im_start|>` / `<|im_end|>`
+
+  扫描在 Unicode 归一化的小写文本上执行（折叠空白 + toLower），防止大小写/空格变体绕过。
+  假阳性设计原则: 扫描只在 `TaintLevel >= TaintMedium` 启用（系统内部生成内容 TaintNone/TaintLow 不扫描），且均为高置信度模式（无正则），最大限度减少误报。
+  `TaintUserReviewed` 来源绕过内容层扫描（人类已审查），直接构造 SafeString。
+
+  **与 Spotlighting 的分工**（§2.2）：
+  - Spotlighting: 运行时防护，将不可信数据用 `=== UNTRUSTED_DATA ===` 围栏包裹后注入 Prompt，防止 LLM 将其解析为指令。
+  - ScanInjectionPatterns: 边界防护，在数据转变为 SafeString 的最后一步阻断已知注入特征，确保含高置信度注入指令的内容不能以 SafeString 形态进入任何 Instruction Slot。
+  两者形成"注入到达 Prompt 前"（内容扫描）与"注入到达 Prompt 后"（Spotlighting）双重防线。
+
 ### 2.6 Agent Identity
 
 身份: Ed25519 KeyPair，私钥种子持久化 OS Keychain；DID 格式 `did:web:agent.local:{pubkey_hash[:8]}`，首次启动生成，后续启动恢复。

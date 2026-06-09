@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- 随 Intent/Result 跨 Agent 边界传递（inv_M8_05），只升不降
     intent_taint             INTEGER NOT NULL DEFAULT 0,
     result_taint             INTEGER NOT NULL DEFAULT 0,
+    -- 流水线阶段 handoff 字段（M08 §5 Pipeline Protocol）
+    -- pipeline_id: 所属流水线实例 ID，空表示非流水线任务
+    pipeline_id              TEXT,
+    -- pipeline_stage: 阶段名称（research/plan/execute/verify）
+    pipeline_stage           TEXT,
+    -- context_payload: 前序阶段结构化产出（JSON），Agent S_PERCEIVE 优先读取
+    context_payload          TEXT,
     created_at               TEXT    NOT NULL,
     updated_at               TEXT    NOT NULL
 );
@@ -31,3 +38,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- Reaper 轮询超时过期任务（status + expires_at 复合过滤）
 CREATE INDEX IF NOT EXISTS idx_tasks_reaper
     ON tasks(status, expires_at) WHERE expires_at IS NOT NULL;
+
+-- 流水线状态查询索引（按 pipeline_id + stage 快速定位）
+CREATE INDEX IF NOT EXISTS idx_tasks_pipeline
+    ON tasks(pipeline_id, pipeline_stage) WHERE pipeline_id IS NOT NULL;

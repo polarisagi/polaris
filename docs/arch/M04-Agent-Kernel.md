@@ -259,6 +259,22 @@ RouteReasoning:
 
 三模式: `fixed` (MaxReasoningSteps=5, MaxThinkingTokens=4096) / `adaptive` (`min(16384, 4096×(1+[SurpriseIndex]×3))`, 1000+ 样本后) / `batch` (32K, 夜间)
 
+### 7.0 任务级预算自适应截断
+
+任务级 Token 预算（`StateContext.TokenBudget`）在 `executeEffect` 的每次 DAG 节点循环入口处执行三级检测，实现见 `pkg/cognition/kernel/agent_execute.go`：
+
+| 阈值 | 条件 | 动作 |
+|------|------|------|
+| 50%（警告） | `TokensUsed * 100 / TokenBudget >= 50` | 首次写 `BudgetWarned=true`，记录 `slog.Info`；后续循环不重复 |
+| 75%（压迫） | `TokensUsed * 100 / TokenBudget >= 75` | 首次写 `BudgetPressure=true`，记录 `slog.Warn`；触发 S_PLAN `[BUDGET_CONSTRAINT]` 指令注入 |
+| 100%（硬熔断） | `TokensUsed > TokenBudget` | FSM 直接转 `S_FAILED`，错误码 `INFERENCE_OOM` |
+
+**BudgetPressure → [BUDGET_CONSTRAINT] 注入**（`promptPlan()`，`state_machine.go`）：
+- `BudgetPressure=true` 时，在 S_PLAN Prompt 末尾追加系统指令：
+  `[BUDGET_CONSTRAINT] Token budget > 75%. Generate a MINIMAL DAG: max 3 nodes, only strictly necessary tool calls, no exploratory steps. Remaining: N tokens.`
+- 该指令来源标记 `TaintNone`，经 `SanitizeToSafe` 后注入 `WriteInstruction` slot（符合 Taint 类型约束）。
+- `BudgetWarned`/`BudgetPressure` 字段定义在 `StateContext`；重放时从 EventLog 恢复，保证 `[inv_M4_03]` promptFn 确定性。
+
 M4 不重复实现 TokenBurnRate 检测逻辑，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate 的 CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 将速率直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是触发 KillSwitch 阶段变迁的**唯一路径**。M4 通过读取 M11 导出的 `polaris_killswitch_stage` Gauge（Normal=0 / Throttle=1 / Pause=2 / Fullstop=3）获知当前熔断阶段并调整行为:
 
 - **Throttle 阶段**: maxSteps 降至 3，禁止 write_network 操作

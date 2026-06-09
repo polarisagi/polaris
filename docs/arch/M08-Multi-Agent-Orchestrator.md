@@ -210,6 +210,59 @@ count < Limits.Mesh 且 CurrentMode==Mesh → TopologyHierarchy（降回）
 
 ---
 
+## 3-ter. PipelineOrchestrator（编排模式 8）
+
+> 实现: `pkg/swarm/pipeline_orchestrator.go`
+> 类型定义: `internal/protocol/types.go`（`PipelineDescriptor` / `PipelineStageSpec` / `VerificationPolicy` / `VerificationResult`）
+
+### 设计动机
+
+§3 的 Sequential 模式（编排模式 3）通过 `task.DependsOn` 在 Blackboard 层实现串行依赖。但对于**专家流水线**（Researcher→Planner→Executor→Verifier 四阶段）场景，需要：
+1. **结构化上下文传递**：前序阶段的结构化产出（JSON）精确注入下游阶段，而非共享全量上下文（防止 Token 膨胀与跨阶段污染）。
+2. **对抗性验证**：末尾专设独立验证 Agent，从"目标未达成"假设出发（不是 M4 内部的 S_REFLECT 自省）。
+3. **流水线级重试**：单阶段失败时在流水线层而非 Agent 层重试，避免重复计费已成功的前序阶段。
+
+### ContextPayload 传递协议
+
+```
+Stage[N].Result([]byte)  →  Stage[N+1].ContextPayload([]byte)
+```
+
+- `TaskEntry.ContextPayload`（`[]byte`，JSON）由 `PipelineOrchestrator.runStage` 在 `PostTask` 时填充。
+- `TaskEntry.PipelineID` / `TaskEntry.PipelineStage` 标识流水线归属，供审计与 Eval Harness 消费。
+- DDL 见 `internal/protocol/schema/007_tasks.sql`（含 `idx_tasks_pipeline` 索引）。
+- Agent Kernel 从 `ContextPayload` 读取上游产出，自行决定如何拼装至 Prompt——PipelineOrchestrator 不参与 Prompt 组装（Thin Orchestrator 原则）。
+
+### 执行流程
+
+```
+PipelineOrchestrator.Run(ctx, PipelineDescriptor)
+  ├─ 逐阶段顺序执行 runStage()
+  │    ├─ 构造 TaskEntry（含 PipelineID/Stage/ContextPayload）
+  │    ├─ Blackboard.PostTask → waitForCompletion（pollInterval 轮询 PeekTask）
+  │    └─ 返回 Result 作为下一阶段 ContextPayload
+  └─ 若 VerificationPolicy != nil → runVerification()
+       ├─ Adversarial=true：注入 [ADVERSARIAL_STANCE] 指令（假设目标未达成）
+       ├─ 解析 Agent 结果为 VerificationResult JSON
+       └─ 返回 VerdictPass / VerdictWarning / VerdictBlocker
+```
+
+### VerificationVerdict 语义
+
+| Verdict | 值 | 语义 |
+|---------|---|------|
+| `VerdictPass` | 0 | 目标已达成，可继续 |
+| `VerdictWarning` | 1 | 存在问题但不阻塞，需记录 |
+| `VerdictBlocker` | 2 | 关键缺失，`BlockOnFail=true` 时触发 ESCALATE |
+
+### 约束
+
+- 流水线阶段数上限 `AgentLimits.Pipeline = 5`（§3-bis），对齐前沿研究最优区间。
+- `Adversarial=true` 验证 Agent 拥有完全独立的 ContextAssembler（[Sub-agent-Isolation]），不继承任何执行阶段上下文。
+- 单阶段重试不超过 `PipelineDescriptor.MaxRetries`；全阶段失败则流水线终止，不触发全局 Saga 补偿（各 Agent Kernel 内部已持有 Saga 逻辑）。
+
+---
+
 ## 4. Agent Card 与能力发现
 
 AgentCard 声明 Agent 能力集（Skills/Tools/Models）、激活条件（TaskTypes/MaxLoad/RequiresTools）、信任级别与沙箱层级；AgentRegistry 以 RWMutex 保护 agentID→Handle 映射，支持本地 chan 与远程 A2A gRPC 两种 Handle 类型，心跳 60s 超时标记 unreachable 并从匹配池移除。

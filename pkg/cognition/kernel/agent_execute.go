@@ -14,6 +14,13 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
+// budgetWarnPct / budgetCriticalPct：Token 预算分级阈值（百分比，整数）。
+// 50% → 告警日志；75% → BudgetPressure 标记（S_PLAN 收紧 DAG）；100% → INFERENCE_OOM 硬失败。
+const (
+	budgetWarnPct     = 50
+	budgetCriticalPct = 75
+)
+
 func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error { //nolint:gocyclo
 	var nextState protocol.State
 	var err error
@@ -24,15 +31,43 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			return perrors.New(perrors.CodeInternal, "invalid LLMFillEffect type")
 		}
 
-		// 1. Budget Control: Inference OOM Check
-		if a.sCtx.TokenBudget > 0 && a.sCtx.TokensUsed > a.sCtx.TokenBudget {
-			// Token 破产，Session 级预算耗尽。熔断到 Failed，不重试。
-			// M4 不独立触发 KillSwitch 阶段变迁（XR-01），仅失败当前任务。
-			// M3 在下一轮 TokenBurnRate 检测时自驱触发 KillSwitch CheckAndAct。
+		// 1. Budget Control: 分级预算检查
+		if a.sCtx.TokenBudget > 0 {
+			used := a.sCtx.TokensUsed
+			budget := a.sCtx.TokenBudget
 
-			a.sm.history = append(a.sm.history, a.sm.current)
-			a.sm.current = protocol.AgentStateFailed
-			return perrors.New(perrors.CodeInternal, fmt.Sprintf("INFERENCE_OOM: token budget exceeded (%d > %d)", a.sCtx.TokensUsed, a.sCtx.TokenBudget))
+			switch {
+			case used > budget:
+				// 硬断路：INFERENCE_OOM，任务失败。
+				// M3 在下一轮 TokenBurnRate 检测时自驱触发 KillSwitch CheckAndAct。
+				a.sm.history = append(a.sm.history, a.sm.current)
+				a.sm.current = protocol.AgentStateFailed
+				return perrors.New(perrors.CodeInternal,
+					fmt.Sprintf("INFERENCE_OOM: token budget exceeded (%d > %d)", used, budget))
+
+			case used*100/budget >= budgetCriticalPct:
+				// 软阈值 75%：注入预算压力标记，S_PLAN 生成 DAG 时收紧规模。
+				// 已处于 S_EXECUTE 时该标记无效（DAG 已生成，继续执行到底）。
+				if !a.sCtx.BudgetPressure {
+					a.sCtx.BudgetPressure = true
+					slog.Warn("kernel: budget critical threshold reached, plan scope will be reduced",
+						"agent_id", a.ID,
+						"tokens_used", used,
+						"budget", budget,
+						"pct", used*100/budget)
+				}
+
+			case used*100/budget >= budgetWarnPct:
+				// 软阈值 50%：写一次日志，不改变行为。
+				if !a.sCtx.BudgetWarned {
+					a.sCtx.BudgetWarned = true
+					slog.Info("kernel: budget warning threshold reached",
+						"agent_id", a.ID,
+						"tokens_used", used,
+						"budget", budget,
+						"pct", used*100/budget)
+				}
+			}
 		}
 
 		if a.provider == nil {

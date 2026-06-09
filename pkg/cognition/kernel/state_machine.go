@@ -55,6 +55,11 @@ type StateContext struct {
 	// Inference Budget 控制
 	TokenBudget int
 	TokensUsed  int
+	// BudgetWarned / BudgetPressure 防重复日志标记（仅本轮 Agent 生命周期内有效）。
+	// BudgetWarned: 已越过 50% 告警水位（记录一次日志，不改变行为）。
+	// BudgetPressure: 已越过 75% 压力水位（S_PLAN 收紧 DAG 规模）。
+	BudgetWarned   bool
+	BudgetPressure bool
 
 	// Step Budget 控制（Adaptive Max-Steps）
 	// MaxStepsLimit 由 AgentConfig.MaxSteps 初始化；StepScorer 低分时动态收紧。
@@ -342,6 +347,25 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 			"m4_task_model",
 		)
 		b.WriteUserData(goalTS)
+	}
+
+	// 预算压力约束：75% 阈值已触发时，要求 LLM 生成最小必要 DAG。
+	// 防止在预算末尾生成大型 DAG 导致 S_EXECUTE 阶段触发 INFERENCE_OOM。
+	if sCtx.BudgetPressure {
+		budgetHint := fmt.Sprintf(
+			"[BUDGET_CONSTRAINT] Token budget is above %d%%. Generate a MINIMAL DAG: "+
+				"maximum 3 nodes, only strictly necessary tool calls, no exploratory steps. "+
+				"Remaining budget: %d tokens.",
+			budgetCriticalPct,
+			sCtx.TokenBudget-sCtx.TokensUsed,
+		)
+		budgetTS := substrate.NewTaintedString(
+			budgetHint,
+			substrate.TaintSource{OriginTaintLevel: protocol.TaintNone},
+			"system_budget_constraint",
+		)
+		safeHint, _ := substrate.SanitizeToSafe(budgetTS)
+		b.WriteInstruction(safeHint)
 	}
 
 	return b.Build()
