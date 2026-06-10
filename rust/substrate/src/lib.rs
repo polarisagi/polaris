@@ -431,15 +431,10 @@ mod tests {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // [Storage-SurrealDB-Core] 认知检索轴 FFI
-// 架构文档: docs/arch/M02-Storage-Fabric.md §10
+// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
 //
-// 功能: KV + 向量(暴力余弦 MVP) + 图(BFS邻接表) + FTS(TF-IDF倒排)
-// 内存: 纯内存实现，进程重启数据丢失；持久化由 Go 侧 SQLite Outbox 投影恢复。
-// Tier 1+: 接入真正的 surrealdb crate (kv-rocksdb + 真正 HNSW)。
+// 功能: KV + HNSW 向量 + 有向图遍历 + BM25 全文检索
+// 后端: surreal-mem（默认，kv-mem）/ surreal-rocksdb（显式，≥16GB）
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[cfg(not(feature = "tier1"))]
-mod surreal_mem;
-
-#[cfg(feature = "tier1")]
-mod surreal_tier1;
+mod surreal_store;

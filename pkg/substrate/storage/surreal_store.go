@@ -1,11 +1,12 @@
 // Package storage — SurrealDBCoreStore purego 桥接。
 // 历史: 原 cgo 实现已按 ADR-0011 Phase 3 迁移到 purego。
-// 架构文档: docs/arch/M02-Storage-Fabric.md §10
+// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
 //
 // SurrealDBCoreStore — [Storage-SurrealDB-Core] 认知检索轴的 Go 封装。
 // 实现 protocol.Store + 扩展接口（VectorStore / GraphStore / FTSStore）。
 //
-// Tier 0 MVP（纯内存），进程重启后数据丢失；持久化由 SQLite Outbox 投影负责（M02 §2.5）。
+// 后端选择: surreal-mem（默认，kv-mem）/ surreal-rocksdb（显式，≥16GB）。
+// kv-mem 进程重启后数据丢失；持久化由 SQLite Outbox 投影负责（M02 §2.5）。
 package storage
 
 import (
@@ -30,7 +31,7 @@ var (
 	surrealOnce sync.Once
 	surrealErr  error
 
-	surrealOpen          func(tier int32, dbPath string) int32
+	surrealOpen          func(backend string, dbPath string, vecDim int32) int32
 	surrealKvGet         func(key *byte, keyLen uintptr, outVal *uintptr, outLen *uintptr) int32
 	surrealKvPut         func(key *byte, keyLen uintptr, val *byte, valLen uintptr) int32
 	surrealKvDelete      func(key *byte, keyLen uintptr) int32
@@ -135,19 +136,15 @@ type SurrealDBCoreStore struct {
 var _ protocol.Store = (*SurrealDBCoreStore)(nil)
 
 // OpenSurrealDBCore 初始化全局 SurrealCoreStore（幂等）。
-// useHNSW=true：切换向量引擎到 HNSW（Tier1+），首次启用时全量重建索引。
-// HNSW 启用失败时降级暴力扫描，不阻断启动。
-func OpenSurrealDBCore(tier int32, dbPath string, useHNSW bool) (*SurrealDBCoreStore, error) {
+// backend: "mem"（默认）或 "rocksdb"（要求 ≥16GB，dbPath 不可为空）。
+// vecDim: HNSW 向量维度，需与嵌入模型一致（典型值 1536）。
+// useHNSW 参数已废弃（SurrealDB MTREE 索引始终激活），保留供调用方兼容使用。
+func OpenSurrealDBCore(backend, dbPath string, vecDim int, useHNSW bool) (*SurrealDBCoreStore, error) {
 	if err := bindSurreal(); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "surreal load lib", err)
 	}
-	if rc := surrealOpen(tier, dbPath); rc != 0 {
+	if rc := surrealOpen(backend, dbPath, int32(vecDim)); rc != 0 {
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_open failed: code %d", rc))
-	}
-	if useHNSW {
-		if rc := surrealVecSetMode(1); rc != 0 {
-			useHNSW = false
-		}
 	}
 	return &SurrealDBCoreStore{useHNSW: useHNSW}, nil
 }

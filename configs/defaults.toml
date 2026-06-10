@@ -136,6 +136,15 @@ allowed_domains = []
 # Linux bubblewrap 可执行路径，空 = 自动从 PATH 查找。
 bwrap_path = ""
 
+[cognition]
+# SurrealDB 认知存储后端（运行时选择，不影响编译）。
+# "mem" = kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；任意内存机器可用。
+# "rocksdb" = kv-rocksdb 持久化，要求 ≥16GB 可用内存，db_path 须指定。
+surreal_backend = "mem"
+surreal_db_path = ""
+# 向量嵌入维度（须与实际嵌入模型一致；典型值: OpenAI/DeepSeek = 1536）
+vec_dim = 1536
+
 [compressor]
 # 模型上下文窗口大小（token 数）。自动压缩阈值 = context_window × auto_compact_pct / 100。
 # Tier-0 默认 32768（DeepSeek V3 实际窗口远大于此，可按需调高）。

@@ -42,15 +42,17 @@ func (sr *StorageRouter) Route(ctx context.Context, req *StorageRequest) protoco
 	return sr.fallback
 }
 
-// NewStorageRouter 构造路由器。surreal 为 nil 时所有规则均回落 SQLite（Tier 0 降级路径）。
+// NewStorageRouter 构造路由器。surreal 通常非 nil（kv-mem 任意机器可用）；
+// 仅在 FFI 加载失败时为 nil，此时所有请求回落 SQLite。
 func NewStorageRouter(sqlite protocol.Store, surreal protocol.Store) *StorageRouter {
-	stores := map[string]protocol.Store{
-		"sqlite": sqlite,
-	}
+	stores := map[string]protocol.Store{"sqlite": sqlite}
 	if surreal != nil {
 		stores["surreal"] = surreal
 	}
-	rules := BuildRouteTable(surreal != nil)
+	rules := BuildRouteTable()
+	if surreal == nil {
+		rules = nil
+	}
 	return &StorageRouter{
 		stores:   stores,
 		rules:    rules,
@@ -59,12 +61,9 @@ func NewStorageRouter(sqlite protocol.Store, surreal protocol.Store) *StorageRou
 }
 
 // BuildRouteTable 生成路由规则表。
-// surrealAvailable=true: 向量/图/全文 → [Storage-SurrealDB-Core]; 否则全部回落 SQLite。
+// 向量/图/全文 → [Storage-SurrealDB-Core]；其余 → [Storage-SQLite]。
 // 路由对齐 docs/arch/M02-Storage-Fabric.md §1.3 路由矩阵。
-func BuildRouteTable(surrealAvailable bool) []RouteRule {
-	if !surrealAvailable {
-		return nil // 全部命中 fallback (SQLite)
-	}
+func BuildRouteTable() []RouteRule {
 	return []RouteRule{
 		{
 			// HNSW 向量近邻检索 → SurrealDB-Core

@@ -214,17 +214,16 @@ func run() error { //nolint:gocyclo
 	defer store.Close()
 	slog.Info("polaris: storage initialized", "db", layout.SQLiteDB)
 
-	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控，Tier0 内存，Tier1+ HNSW）──
-	// 门控必须在此检查：无 FFI 隔离时 OpenSurrealDBCore 在内存压力下可触发 OOM。
+	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）──
+	// kv-mem 后端默认，任意内存机器均可用；rocksdb 需显式配置（≥16GB）。
+	// 门控必须在此检查：无 FFI 隔离时 OpenSurrealDBCore 在极低内存下可触发 OOM。
 	var surrealStore *storage.SurrealDBCoreStore
 	if autoConf != nil && autoConf.Gate.State(observability.FeatureSurrealDBCore) != observability.FeatureDisabled {
-		useHNSW := autoConf.Config.SurrealVecMode == observability.SurrealVecHNSW
-		tier := int32(autoConf.Config.Tier)
-		if surrealCore, sErr := storage.OpenSurrealDBCore(tier, layout.SurrealDB, useHNSW); sErr != nil {
+		if surrealCore, sErr := storage.OpenSurrealDBCore("mem", layout.SurrealDB, 1536, false); sErr != nil {
 			slog.Warn("polaris: SurrealDB Core init failed, cognitive axis falls back to SQLite", "err", sErr)
 		} else {
 			surrealStore = surrealCore
-			slog.Info("polaris: SurrealDB Core initialized", "hnsw", useHNSW)
+			slog.Info("polaris: SurrealDB Core initialized", "backend", "mem")
 		}
 	} else {
 		slog.Info("polaris: SurrealDB Core disabled by FeatureGate (memory pressure), cognitive axis → SQLite")
