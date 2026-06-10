@@ -60,7 +60,7 @@ jobs:
       - name: Set up TinyGo
         uses: acifani/setup-tinygo@v2
         with:
-          tinygo-version: '0.31.2'
+          tinygo-version: '0.41.0'
           install-binaryen: 'false'
 
       - name: Build Skills
