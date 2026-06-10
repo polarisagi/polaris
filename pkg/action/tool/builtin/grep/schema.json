@@ -1,0 +1,46 @@
+{
+  "title": "grep",
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "description": "正则表达式搜索模式（Go regexp 语法）"
+    },
+    "path": {
+      "type": "string",
+      "description": "搜索根目录（可选，须在 allowedPaths 白名单内；默认遍历所有 allowedPaths）"
+    },
+    "glob": {
+      "type": "string",
+      "description": "文件名过滤 glob 模式，如 \"*.go\"、\"**/*.ts\"（可选）"
+    },
+    "output_mode": {
+      "type": "string",
+      "enum": ["content", "files_with_matches", "count"],
+      "description": "输出模式：content=匹配行详情，files_with_matches=文件路径列表（默认），count=每文件匹配计数"
+    },
+    "context_before": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "匹配行前显示的上下文行数（-B），默认 0"
+    },
+    "context_after": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "匹配行后显示的上下文行数（-A），默认 0"
+    },
+    "case_insensitive": {
+      "type": "boolean",
+      "description": "是否忽略大小写，默认 false"
+    },
+    "head_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "最大结果条数，默认 250"
+    }
+  },
+  "required": ["pattern"]
+}
