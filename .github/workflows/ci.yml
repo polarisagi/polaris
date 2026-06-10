@@ -50,6 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
       - run: cargo test --manifest-path rust/substrate/Cargo.toml
       - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
 
@@ -61,6 +64,9 @@ jobs:
         with:
           go-version: "1.26"
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
       - run: make build
 
   eval-gate:
