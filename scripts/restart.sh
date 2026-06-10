@@ -3,7 +3,6 @@
 # 用法：
 #   ./scripts/restart.sh          # 构建前端 + Go，重启（复用已有 Rust dylib）
 #   ./scripts/restart.sh --full   # 同上 + 重新构建 Rust FFI（Rust 代码有变更时使用）
-#   ./scripts/restart.sh --full --tier1  # 完全体构建（开启 RocksDB & HNSW）
 #   ./scripts/restart.sh --no-skills     # 跳过构建内置的 Wasm 技能（技能已存在时使用，加快重启）
 
 set -euo pipefail
@@ -12,13 +11,10 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 FULL_BUILD=false
-TIER1_BUILD=false
 SKIP_SKILLS=false
 for arg in "$@"; do
   if [[ "$arg" == "--full" ]]; then
     FULL_BUILD=true
-  elif [[ "$arg" == "--tier1" ]]; then
-    TIER1_BUILD=true
   elif [[ "$arg" == "--no-skills" ]]; then
     SKIP_SKILLS=true
   fi
@@ -87,12 +83,8 @@ fi
 # ── 2. Rust FFI（--full 时重建；否则验证 dylib 存在）──────
 if $FULL_BUILD; then
   echo "→ 构建 Rust FFI（--full 模式，约 60~120s）..."
-  CARGO_CMD="cargo build --release --manifest-path rust/substrate/Cargo.toml"
-  if $TIER1_BUILD; then
-    CARGO_CMD="$CARGO_CMD --features tier1"
-    echo "  已启用 tier1 硬件特性构建"
-  fi
-  eval $CARGO_CMD
+  # CFLAGS= LDFLAGS= 防止 Go/shell 链接标志污染 aws-lc-sys 的 C 编译环境
+  CFLAGS= LDFLAGS= cargo build --release --manifest-path rust/substrate/Cargo.toml
 else
   if [[ ! -f "$DYLIB_SRC" ]]; then
     echo "✗ Rust dylib 不存在：$DYLIB_SRC"
@@ -129,12 +121,7 @@ fi
 echo "→ 构建 Go 后端..."
 mkdir -p bin/lib
 cp "$DYLIB_SRC" "$DYLIB_DST"
-GO_CMD="CGO_ENABLED=0 go build"
-if $TIER1_BUILD; then
-  GO_CMD="$GO_CMD -tags tier1"
-fi
-GO_CMD="$GO_CMD -o bin/polaris ./cmd/polaris"
-eval $GO_CMD
+CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
 
 # ── 4.5 将已编译的 wasm 同步到 bin/skills/（供二进制运行时加载）──
 if ! $SKIP_SKILLS; then
