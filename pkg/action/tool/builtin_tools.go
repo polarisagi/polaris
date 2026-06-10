@@ -16,6 +16,11 @@ import (
 
 	"fmt"
 
+	"net/url"
+
+	"github.com/bmatcuk/doublestar/v4"
+
+	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sysenv"
@@ -34,6 +39,7 @@ func RegisterBuiltinTools(
 	sandboxEnabled bool, // 是否启用平台原生进程沙箱
 	netPolicy NetworkPolicy, // bash/run_command 网络访问策略
 	bwrapPath string, // Linux: bwrap 路径（空=自动查找）
+	cfg *config.Config,
 ) error {
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
@@ -55,6 +61,13 @@ func RegisterBuiltinTools(
 		{"sys_probe", sysProbeFn},
 		{"str_replace_editor", makeStrReplaceEditorFn(allowedPaths)},
 		{"read_tool_ref", makeReadToolRefFn()},
+		{"glob", makeGlobFn(allowedPaths)},
+		{"web_search", makeWebSearchFn(cfg, dialer)},
+		{"todo_write", makeTodoWriteFn(allowedPaths)},
+		{"todo_read", makeTodoReadFn(allowedPaths)},
+		{"multi_edit", makeMultiEditFn(allowedPaths)},
+		{"notebook_read", makeNotebookReadFn(allowedPaths)},
+		{"notebook_edit", makeNotebookEditFn(allowedPaths)},
 	}
 
 	defs = append(defs, getLegacyBuiltinDefs()...)
@@ -804,5 +817,256 @@ func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy Netw
 			}
 		}
 		return json.Marshal(result)
+	}
+}
+
+// ─── glob ────────────────────────────────────────────────────────────────────
+
+func makeGlobFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "glob: invalid args", err)
+		}
+		workDir := ""
+		if len(allowedPaths) > 0 {
+			workDir = allowedPaths[0]
+		}
+		if workDir == "" {
+			return nil, perrors.New(perrors.CodeInternal, "glob: no allowed paths configured")
+		}
+
+		fsys := os.DirFS(workDir)
+		matches, err := doublestar.Glob(fsys, args.Pattern)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "glob: error matching", err)
+		}
+
+		var fullPaths []string
+		for _, m := range matches {
+			fullPaths = append(fullPaths, filepath.Join(workDir, m))
+		}
+		return json.Marshal(map[string]any{"matches": fullPaths})
+	}
+}
+
+// ─── web_search ──────────────────────────────────────────────────────────────
+
+func makeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "web_search: invalid args", err)
+		}
+		if dialer == nil {
+			return nil, perrors.New(perrors.CodeInternal, "web_search: SafeDialer is required")
+		}
+
+		client := &http.Client{
+			Transport: &http.Transport{DialContext: dialer.DialContext},
+			Timeout:   30 * time.Second,
+		}
+
+		// MVP: DuckDuckGo HTML scraping
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://html.duckduckgo.com/html/?q="+url.QueryEscape(args.Query), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "web_search: req failed", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+
+		tagRe := regexp.MustCompile(`<[^>]*>`)
+		spaceRe := regexp.MustCompile(`\s+`)
+		snippets := regexp.MustCompile(`(?s)<a class="result__snippet[^>]*>(.*?)</a>`).FindAllStringSubmatch(string(body), 10)
+
+		var results []string
+		for _, s := range snippets {
+			txt := tagRe.ReplaceAllString(s[1], " ")
+			txt = strings.TrimSpace(spaceRe.ReplaceAllString(txt, " "))
+			results = append(results, txt)
+		}
+		return json.Marshal(map[string]any{"results": results})
+	}
+}
+
+// ─── todo_write & todo_read ──────────────────────────────────────────────────
+
+func getTodoPath(allowedPaths []string) (string, error) {
+	if len(allowedPaths) == 0 {
+		return "", perrors.New(perrors.CodeInternal, "todo: no workspace configured")
+	}
+	return filepath.Join(allowedPaths[0], ".polaris_todo.json"), nil
+}
+
+func makeTodoWriteFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Todos []string `json:"todos"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "todo_write: invalid args", err)
+		}
+		path, err := getTodoPath(allowedPaths)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.MarshalIndent(args.Todos, "", "  ")
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "todo_write: write failed", err)
+		}
+		return []byte(`{"status":"success"}`), nil
+	}
+}
+
+func makeTodoReadFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		path, err := getTodoPath(allowedPaths)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return []byte(`{"todos":[]}`), nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "todo_read: read failed", err)
+		}
+		var todos []string
+		if err := json.Unmarshal(data, &todos); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "todo_read: parse failed", err)
+		}
+		return json.Marshal(map[string]any{"todos": todos})
+	}
+}
+
+// ─── multi_edit ──────────────────────────────────────────────────────────────
+
+func makeMultiEditFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Path  string `json:"path"`
+			Edits []struct {
+				OldStr string `json:"old_str"`
+				NewStr string `json:"new_str"`
+			} `json:"edits"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "multi_edit: invalid args", err)
+		}
+		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
+			return nil, err
+		}
+		cleanPath := filepath.Clean(args.Path)
+		data, err := os.ReadFile(cleanPath)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "multi_edit: read failed", err)
+		}
+		content := string(data)
+		for _, edit := range args.Edits {
+			if strings.Count(content, edit.OldStr) != 1 {
+				return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("multi_edit: old_str not unique or not found: %q", edit.OldStr))
+			}
+			content = strings.Replace(content, edit.OldStr, edit.NewStr, 1)
+		}
+		if err := os.WriteFile(cleanPath, []byte(content), 0600); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "multi_edit: write failed", err)
+		}
+		return []byte(`{"status":"success"}`), nil
+	}
+}
+
+// ─── notebook ────────────────────────────────────────────────────────────────
+
+func makeNotebookReadFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_read: invalid args", err)
+		}
+		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(filepath.Clean(args.Path))
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_read: read failed", err)
+		}
+		var nb map[string]any
+		if err := json.Unmarshal(data, &nb); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_read: parse failed", err)
+		}
+		cells, _ := nb["cells"].([]any)
+		var out []map[string]any
+		for i, c := range cells {
+			cell, _ := c.(map[string]any)
+			out = append(out, map[string]any{
+				"index":     i,
+				"cell_type": cell["cell_type"],
+				"source":    cell["source"],
+				"outputs":   cell["outputs"],
+			})
+		}
+		return json.Marshal(map[string]any{"cells": out})
+	}
+}
+
+func makeNotebookEditFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Path      string `json:"path"`
+			CellIndex int    `json:"cell_index"`
+			Source    string `json:"source"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_edit: invalid args", err)
+		}
+		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
+			return nil, err
+		}
+		cleanPath := filepath.Clean(args.Path)
+		data, err := os.ReadFile(cleanPath)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_edit: read failed", err)
+		}
+		var nb map[string]any
+		if err := json.Unmarshal(data, &nb); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_edit: parse failed", err)
+		}
+		cells, ok := nb["cells"].([]any)
+		if !ok || args.CellIndex < 0 || args.CellIndex >= len(cells) {
+			return nil, perrors.New(perrors.CodeInternal, "notebook_edit: cell index out of bounds")
+		}
+		cell, _ := cells[args.CellIndex].(map[string]any)
+
+		// Jupyter source is usually array of strings or a single string
+		// Convert new source to array of strings (lines)
+		lines := strings.Split(args.Source, "\n")
+		var sourceLines []string
+		for i, l := range lines {
+			if i < len(lines)-1 {
+				sourceLines = append(sourceLines, l+"\n")
+			} else {
+				sourceLines = append(sourceLines, l)
+			}
+		}
+		cell["source"] = sourceLines
+		cells[args.CellIndex] = cell
+		nb["cells"] = cells
+
+		newData, _ := json.MarshalIndent(nb, "", "  ")
+		if err := os.WriteFile(cleanPath, newData, 0600); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_edit: write failed", err)
+		}
+		return []byte(`{"status":"success"}`), nil
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/action"
 )
@@ -23,7 +24,7 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
 	toolReg := NewInMemoryToolRegistry(nil) // 无 PolicyGate，只测工具逻辑
-	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, ""); err != nil {
+	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -51,7 +52,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
 	toolReg := NewInMemoryToolRegistry(nil)
-	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, ""); err != nil {
+	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -71,7 +72,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
 	toolReg := NewInMemoryToolRegistry(nil)
-	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, ""); err != nil {
+	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -106,7 +107,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
 	toolReg := NewInMemoryToolRegistry(nil)
-	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, ""); err != nil {
+	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -137,7 +138,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	sandbox := action.NewInProcessSandbox()
 	toolReg := NewInMemoryToolRegistry(nil)
-	if err := RegisterBuiltinTools(sandbox, toolReg, nil, dummyDialerPtr, false, NetworkBlock, ""); err != nil {
+	if err := RegisterBuiltinTools(sandbox, toolReg, nil, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -163,7 +164,7 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
 	sandbox := action.NewInProcessSandbox()
 	toolReg := NewInMemoryToolRegistry(nil)
-	if err := RegisterBuiltinTools(sandbox, toolReg, nil, dummyDialerPtr, false, NetworkBlock, ""); err != nil {
+	if err := RegisterBuiltinTools(sandbox, toolReg, nil, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 

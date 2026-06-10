@@ -95,6 +95,8 @@ consolidation = "manual"
 [agent.skill]
 builtin_path = "skills/"
 max_logic_collapse_concurrent = 1
+web_search_engine = "duckduckgo"
+web_search_api_key = ""
 
 [orchestrator]
 mode = "blackboard"

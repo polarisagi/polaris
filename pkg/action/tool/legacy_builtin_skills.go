@@ -36,7 +36,6 @@ func getLegacyBuiltinDefs() []struct {
 		name string
 		fn   action.InProcessFn
 	}{
-		{"web_fetch", makeLegacySkillFn("web_fetch")},
 		{"json_parse", makeLegacySkillFn("json_parse")},
 		{"text_summarize", makeLegacySkillFn("text_summarize")},
 		{"api_call", makeLegacySkillFn("api_call")},
@@ -45,15 +44,12 @@ func getLegacyBuiltinDefs() []struct {
 		{"markdown_render", makeLegacySkillFn("markdown_render")},
 		{"json_format", makeLegacySkillFn("json_format")},
 		{"text_translate", makeLegacySkillFn("text_translate")},
-		{"file_write", makeLegacySkillFn("file_write")},
 		{"template_render", makeLegacySkillFn("template_render")},
 		{"git_commit", makeLegacySkillFn("git_commit")},
 		{"data_query", makeLegacySkillFn("data_query")},
 		{"code_gen", makeLegacySkillFn("code_gen")},
-		{"file_read", makeLegacySkillFn("file_read")},
 		{"text_extract", makeLegacySkillFn("text_extract")},
 		{"code_review", makeLegacySkillFn("code_review")},
 		{"regex_match", makeLegacySkillFn("regex_match")},
-		{"shell_exec", makeLegacySkillFn("shell_exec")},
 	}
 }

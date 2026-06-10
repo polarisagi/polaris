@@ -149,6 +149,8 @@ type MemoryConfig struct {
 type SkillConfig struct {
 	BuiltinPath                string `toml:"builtin_path"`
 	MaxLogicCollapseConcurrent int    `toml:"max_logic_collapse_concurrent"`
+	WebSearchEngine            string `toml:"web_search_engine"`
+	WebSearchAPIKey            string `toml:"web_search_api_key"`
 }
 
 type OrchestratorConfig struct {

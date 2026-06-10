@@ -1,0 +1,2 @@
+name: multi_edit
+description: Perform multiple atomic string replacements in a single file.

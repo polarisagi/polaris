@@ -393,6 +393,7 @@ func run() error { //nolint:gocyclo
 		cfg.Sandbox.Enabled,
 		tool.NetworkPolicy(cfg.Sandbox.NetworkPolicy),
 		cfg.Sandbox.BwrapPath,
+		cfg,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

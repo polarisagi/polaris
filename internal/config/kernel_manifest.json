@@ -1,5 +1,5 @@
 {
-  "internal/config/config.go": "400414805e51aa1a850f2cc5fb7d612b1fc3917ae585e88ccd001b9b0d3091de",
+  "internal/config/config.go": "236e22e91056d60aa569b3202fc9ad446eb13b8f145d6833b1dd427a3e2b7220",
   "internal/config/config_test.go": "40b5720ee581fbad054435a9f32c7a244b6fea062cf5ff4595a2eb7b224ca7e2",
   "internal/config/immutable_constants.go": "8e057a6287d45d63bee96b865469f514fa5ca96612ba75e01e147346654a7dc7",
   "internal/config/integrity_check.go": "d9bba07dfd561c08e03818e0b901edb12af03aa963b23cdee0deec1dd6dec6e5",
@@ -29,8 +29,9 @@
   "pkg/action/sandbox_test.go": "0170c7941e40941aeb57a3d659779edac50747f08fcc92e594d55cc845aabd8b",
   "pkg/action/streaming_action_bus.go": "88722d73706824a5f3dd6d0fc84d442e6e3d1833e58d5ceb4e3476604d17db10",
   "pkg/action/taint_preserving_decoder.go": "ac8a23d097452901e132ec71f473ef35a43c2e1bcdfa6b5c07d90977ceb4f935",
-  "pkg/action/tool/builtin_tools.go": "029348d1fb751d4b5cab01ffbfb7db93a78dbb360ce21a026013f11bb17eb1ea",
-  "pkg/action/tool/builtin_tools_test.go": "e6e159ebcebdb81fd106ba4012c5ce470a2872c5cfcfca4eff8e4e60f75590a6",
+  "pkg/action/tool/builtin_tools.go": "1a3e75cd7ca429f5222e341056305162af24428951c7c80890d19c51ede121f5",
+  "pkg/action/tool/builtin_tools_test.go": "4b534d4c6f841ae5dce05efe09b513c3cd4b9fc18043a80d232f25a159de9864",
+  "pkg/action/tool/legacy_builtin_skills.go": "dc58694c5bbf54b41595bf93be5f812ae3196b3c86c795a76a738642c476d0bf",
   "pkg/action/tool/loader.go": "8cbfc908dd88536cc590fe806812c5ca37deb587a14261e790c4bf1c7931fb52",
   "pkg/action/tool/native_sandbox.go": "d83ebcbe68372b2730e62f7bd09d39ec90316e2f065561993b6e3f2d3ced467d",
   "pkg/action/tool/tool.go": "91c0c4431b4017e5a926068c8ae083eaf26597697a320198f347c54e1b3b33e1",

@@ -1,0 +1,1 @@
+{"title": "web_search", "type": "object", "properties": {"query": {"type": "string", "description": "The search query."}}, "required": ["query"]}
