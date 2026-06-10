@@ -4,10 +4,7 @@
 
 | 脚本 | make 入口 | 说明 | 触发场景 |
 |---|---|---|---|
-| `build_skills.sh` | `make build-skills` | 批量编译 `skills/builtin/*/impl.go` → `impl.wasm`（TinyGo） | 首次安装 / Skill 代码变更后 |
-| `build_skill.sh` | `make build-skill SKILL=<name>` | 编译单个 Skill | 开发单个 Skill 时 |
-| `generate_impl.sh` | —（一次性） | 为缺少 `impl.go` 的 Skill 目录生成 WASI stub | 新建 Skill 目录骨架时手动运行 |
-| `restart.sh` | —（本地开发） | 停旧进程 → 构建前端 + Skills + Go 后端 → 复制 wasm → 重启 | 本地联调；`--full` 同时重编 Rust FFI |
+| `restart.sh` | —（本地开发） | 停旧进程 → 构建前端 + Go 后端 → 重启 | 本地联调；`--full` 同时重编 Rust FFI |
 | `constitutional_review.sh` | —（CI 触发） | 调用 OpenAI-compatible LLM 对 PR diff 做宪法违例审查 | PR 合入 main 时由 CI 自动执行 |
 
 **tools/ 中的 Go 工具**（`//go:build ignore`，通过 `make` 调用）：

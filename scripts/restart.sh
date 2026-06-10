@@ -3,7 +3,7 @@
 # 用法：
 #   ./scripts/restart.sh          # 构建前端 + Go，重启（复用已有 Rust dylib）
 #   ./scripts/restart.sh --full   # 同上 + 重新构建 Rust FFI（Rust 代码有变更时使用）
-#   ./scripts/restart.sh --no-skills     # 跳过构建内置的 Wasm 技能（技能已存在时使用，加快重启）
+
 
 set -euo pipefail
 
@@ -11,12 +11,9 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 FULL_BUILD=false
-SKIP_SKILLS=false
 for arg in "$@"; do
   if [[ "$arg" == "--full" ]]; then
     FULL_BUILD=true
-  elif [[ "$arg" == "--no-skills" ]]; then
-    SKIP_SKILLS=true
   fi
 done
 
@@ -109,24 +106,13 @@ fi
 npm run build
 cd ..
 
-# ── 3.5 构建内置 Skills (Wasm) ───────────────────────────
-if $SKIP_SKILLS; then
-  echo "→ 跳过构建内置 Skills (Wasm)..."
-else
-  echo "→ 构建内置 Skills (Wasm)..."
-  make build-skills
-fi
+
 
 # ── 4. 复制 dylib 并构建 Go 后端 ─────────────────────────
 echo "→ 构建 Go 后端..."
 mkdir -p bin/lib
 cp "$DYLIB_SRC" "$DYLIB_DST"
 CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
-
-# ── 4.5 将已编译的 wasm 同步到 bin/skills/（供二进制运行时加载）──
-if ! $SKIP_SKILLS; then
-  make --no-print-directory _copy-skills
-fi
 
 # ── 5. 启动 ───────────────────────────────────────────────
 echo "→ 启动 Polaris..."
