@@ -159,3 +159,53 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 ---
 
 **END OF ARCHITECTURE.md**
+
+---
+
+## 7. 当前实现状态（代码与文档对齐）
+
+> 基于 2026-06-11 代码审计。状态以代码实际行为为准，不以文档预期为准。
+
+### 7.1 模块整体完成度
+
+| 模块 | 文档覆盖率 | 代码完成度 | 主要缺口 |
+|------|-----------|-----------|---------|
+| M1 Provider Router | 完整 | ✅ 完整 | — |
+| M2 Storage / EventLog / MutationBus | 完整 | ✅ 完整 | — |
+| M3 Observability | 完整 | ✅ 完整 | SurpriseIndex 基础版（两组件简化版）已实现 |
+| M4 Agent Kernel | 完整 | ✅ 完整 | ActiveContext.TaintLevel 跨轮次传播待实现；S_SUSPEND 状态缺失 |
+| M5 Memory | 完整 | ✅ 完整 | — |
+| M6 Skill Library | 完整 | ✅ 完整 | — |
+| M7 Tool Sandbox / MCP | 完整 | ✅ 完整 | sandbox 路径 Policy 检查与 CallTool 路径不对等（P2） |
+| M8 Multi-Agent Orchestrator | 完整 | ⚠️ 部分 | inv_M8_02 双写未实现；动态提权/Phased Startup/委托链校验缺失；内存版 CAS 校验 bug |
+| M9 Self-Improvement Engine | 完整 | ⚠️ 部分 | 内环成功轨迹未写；L2/L3/L4 进化路径计划中；CurriculumGenerator 接口不匹配 |
+| M10 Knowledge RAG | 完整 | ⚠️ 部分 | 结构化解析器缺失；摘要生成缺失；IncrementalIndexer 缺失；StructuredNavigator/QueryPlanner 缺失 |
+| M11 Policy / Safety | 完整 | ✅ 完整 | Cedar FFI 静默降级至 Go 规则引擎时无可观测性警告 |
+| M12 Eval Harness | 完整 | ✅ 完整 | — |
+| M13 Scheduler / Gateway | 完整 | ✅ 完整 | 日志 SSE 端点在无 API Key 时对局域网开放（P2） |
+| M13-bis Extension Registry | 完整 | ⚠️ 部分 | InstallExtension 为空壳；Automation/Agent 安装流绕过 Manager |
+
+### 7.2 跨模块已知缺口汇总
+
+| 缺口 | 严重度 | 涉及模块 | 说明 |
+|------|--------|---------|------|
+| Blackboard → EventLog 双写（inv_M8_02） | P0 | M8 | SQLiteBlackboard 直写 tasks 表，EventLog 无写入，崩溃后无法回放重建 |
+| InstallExtension 安装流空壳 | P0 | M13-bis | Manager.InstallExtension 仅 PolicyGate，不写库不下载不注册 |
+| Blackboard CompleteTask 阻塞写 channel | P0 | M8 | 内存版阻塞式 events <- 与其他非阻塞方法不一致，高并发下死锁风险 |
+| SideEffectPreCheck Version 校验缺失 | P1 | M8 | 内存版 claimedVersion 入参完全未使用（ABA 漏洞） |
+| 内环成功轨迹未写 HeuristicsMemory | P1 | M9 | Engine.Run() 仅处理失败事件，success_rate 永远为零 |
+| 知识摄入 6 阶段严重缩水 | P1 | M10 | 无结构化解析器，无多级摘要，无 Embedding，无 ANN 索引 |
+| Outbox RegisterOutboxHandlers 缺失 | P1 | M10 | GraphBuildWorker 无法被 Outbox 驱动 |
+| ActiveContext.TaintLevel 未实现 | P1 | M4 | 跨轮次污点传播历史丢失，后续 DAG 可能绕过 TaintGate |
+| SupervisorEpoch 非原子递增 | P1 | M8 | epoch++ 并发不安全 |
+| Phased Startup P0→P4 未实现 | P1 | M8 | 启动时无策略真空窗口保护 |
+| 委托链深度校验缺失 | P1 | M8 | SpawnDepth 字段存在但 PostTask 时未校验 |
+| StructuredNavigator + QueryPlanner 缺失 | P1 | M10 | 三阶段结构化检索仅剩 Hybrid 内容检索路径 |
+| IncrementalIndexer 缺失 | P1 | M10 | 无 Hash 对比增量检测，无 Tombstone + Compaction |
+
+### 7.3 审计依据
+
+代码审计日期：2026-06-11。审计报告见 outputs/ 目录：
+- `audit_extensions_swarm.md`（pkg/extensions + pkg/swarm）
+- `audit_substrate_cognition.md`（pkg/substrate + pkg/cognition）
+- `audit_gateway_governance.md`（pkg/gateway + pkg/edge + pkg/governance）

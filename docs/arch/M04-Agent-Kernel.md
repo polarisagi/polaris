@@ -95,14 +95,20 @@ Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状
 
 **前置条件**：若 `DAGModel == nil`（FastPath 空执行路径），`executeEffect` 在调用四层校验前直接发出 TriggerValidateOk，不进入校验流程。四层校验仅在 DAGModel 非 nil 时执行。
 
-```
-L0 拓扑 (<1ms, 所有 DAG): 节点熔断(`spec/state.yaml §m4_kernel.plan_dag_max_nodes`)→环检测(DFS 三色)→深度熔断(`spec/state.yaml §m4_kernel.plan_dag_max_depth`)→孤立节点
-L1 确定性 (<1ms, 所有动作): TaintGate + JSON Schema + Tool availability + PolicyGate[Cedar-Gate]
-L2 启发式 (<5ms, RiskHigh+): 批量规模(>100)→受保护路径→资源预估
-L3 LLM 看门狗 (~200ms, 仅 RiskPrivileged): DeepSeek 模型高频语义判断, 不设硬性频次上限
-```
+| 层级 | 延迟 | 适用范围 | 检查内容 |
+|------|------|---------|---------|
+| L0 拓扑 | <1ms | 所有 DAG | 节点数熔断 → DFS 三色环检测 → 深度熔断 → 孤立节点，阈值见 `spec/state.yaml §m4_kernel.plan_dag_max_nodes/max_depth` |
+| L1 确定性 | <1ms | 所有动作 | TaintGate + JSON Schema 双向校验 + Tool availability + PolicyGate（Cedar-Gate FORBID 优先） |
+| L2 启发式 | <5ms | RiskHigh+ | 批量规模（>100）/ 受保护路径 / 资源预估 vs Tier 阈值 |
+| L3 LLM 看门狗 | ~200ms | 仅 RiskPrivileged | DeepSeek 语义判断输出 ALLOW/DENY；L3 为补充信号，不可推翻 L0/L1/L2 拒绝；LLM 不可用时 fail-open |
+
+> **已知缺口**：L3 看门狗当前对所有含非只读工具的 DAG 均触发，未按 `RiskLevel` 过滤——RiskHigh 但非 RiskPrivileged 的任务会产生不必要的 ~200ms 延迟。待按节点实际 RiskLevel 收窄触发条件。
 
 **ActiveTaintLevel（session 级全局污点）**：当前实现暂设 TaintNone，待 ActiveContext.TaintLevel 正式引入后再从 session 聚合污点读取。per-node 污点已在 `parsePlanOnSuccess` 中按 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点的拦截仍有效。
+
+> **已知缺口（S_SUSPEND 持久化）**：FSM 存在 `S_SUSPEND` 状态枚举，但状态机未在转入 Suspend 时向 `tasks` 表写入 `suspended` 状态；`recovery.go` 的启动扫描依赖 DB 中的 suspended 标记来恢复挂起任务，导致进程崩溃后 provider_exhausted 类 Suspend 任务无法被自动唤醒。修复方向：在 `applyStateTransition` 的 Suspend 分支补充 `tasks.status='suspended'` 写入。
+
+> **已修复（validateTaintGate 旁路）**：`agent_execute.go` 中 `ActiveTaintLevel` 此前硬编码为 `TaintNone`，导致 session 级污点门控形同虚设。当前已按 DAG 节点 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点拦截有效。
 
 L1.1 资源冲突检测: 规范 artifactID → 对无依赖边的并行写冲突节点自动注入隐式序列化边 (EdgePrecondition), 审计 `implicit_resource_edge`。
 
@@ -181,15 +187,8 @@ DAGExecutor 实现见 `pkg/cognition/kernel/dag_executor.go`（旧版 `pkg/cogni
 - 复杂度来源：`StateContext.TaskModel.Complexity`，由 S_PERCEIVE 阶段写入
 
 **多候选并发生成与选优流程**:
-```
-S_PLAN 阶段检测到 prm != nil && ShouldActivate(complexity):
-  1. 并发生成 N 个候选 DAG（默认 MaxCandidates=3，Temperature=0.7 引入多样性）
-  2. SelectBest(ctx, goal, complexity, candidates):
-       - 并发 goroutine 对每个候选调用 DeepSeek budget-tier LLM（Temperature=0）
-       - 评分 JSON schema: {score: number(0-1), reason: string}
-       - 全部候选低于 MinThreshold(0.4) → fallback candidates[0]（不丢失规划）
-  3. 最优候选 JSON 注入 LLMFillEffect.OnSuccess → 推进 FSM 至 S_VALIDATE
-```
+
+S_PLAN 阶段若 PRM 已注入且 `ShouldActivate(complexity)` 返回 true，并发生成 `MaxCandidates`（默认 3）个候选 DAG，再并发调用 DeepSeek budget-tier LLM 对每个候选评分（0–1），选出最高分方案注入 LLMFillEffect 推进至 S_VALIDATE。全部候选分数低于 `MinThreshold`（默认 0.4）时 fallback 取第一个候选，保证规划不丢失。实现见 `pkg/cognition/prm/prm.go:DefaultPRM.SelectBest`。
 
 **PRMConfig 默认值**:
 | 字段 | 默认值 | 说明 |
@@ -326,19 +325,7 @@ PII: 快照不含明文——ToolResult 经 M7 §4.3 Step 5 PostExecution Redact
 
 **双重幂等防线**: 第一层 isReplaying 标志 物理切断副作用；第二层 UNIQUE(session_id, seq) 约束 + idempotency_key 保证重复事件的幂等消费。
 
-**Replay Key 算法（录像 key）**: 所有写入 EventLog 的事件 ID 必须满足重放确定性——同 session+seq → 同 ID，不依赖 wall clock。算法定义:
-
-```
-Event ID 格式: {session_id}:{seq}:{event_type}
-- session_id: 当前 Agent 会话唯一标识
-- seq:        StateMachine.eventSeq 单调递增计数器（自 StateMachine 创建起，每产生一个事件 +1）
-- event_type: 事件类型标识（perceive / plan / exec / action_pending / action_done）
-
-生成函数: StateMachine.nextEventID(sessionID, eventType)
-代码位置: pkg/cognition/kernel/state_machine.go
-重新调 LLM 检测: 回放时校验 EventLog 中 event_type+ID 与 FSM PrompFn 占位符的对应关系，
-              任何缺失匹配 → 触发 g_inv_08 防护（禁止重新调 LLM，进入 REPLAY_MISMATCH 审计）。
-```
+**Replay Key 算法（录像 key）**: 所有写入 EventLog 的事件 ID 格式为 `{session_id}:{seq}:{event_type}`，其中 `seq` 为 `StateMachine.eventSeq` 单调递增计数器，保证同 session+seq 始终生成相同 ID，不依赖 wall clock。生成函数 `StateMachine.nextEventID` 实现见 `pkg/cognition/kernel/state_machine.go`。回放时若 event_type+ID 与 FSM PromptFn 占位符对应关系缺失，触发 `g_inv_08` 防护（禁止重新调 LLM，进入 REPLAY_MISMATCH 审计）。
 
 在非重放路径上（`uuid.New().String()` 生成 2PC 中间事件），同一事件的重放时间戳不同但通过 idempotency_key 防重入——回放时 `isReplaying=true` 物理切断所有副作用，确保这些 UUID 事件不会被重新投递。
 

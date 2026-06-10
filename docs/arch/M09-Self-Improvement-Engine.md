@@ -32,13 +32,13 @@
 
 ## 1. 五条无梯度自改进路线（CANONICAL SOURCE）
 
-```
-(a) Eval 驱动 Prompt 优化: Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4]
-(b) 经验重放与反思: 失败轨迹 → LLM 反思 → Episodic Memory
-(c) 技能蒸馏 (Logic Collapse): 成功轨迹 → LLM 编译为 Wasm 技能 → Skill Library [Wasm-Sandbox]
-(d) 检索式个性化: 用户偏好 + 纠错历史 → UserProfile.InteractionSummary
-(e) Activation Steering: Control vector 推理时注入，仅 Tier 3+ (local_only)
-```
+| 路线 | 机制 | 实现状态 |
+|------|------|---------|
+| (a) Eval 驱动 Prompt 优化 | Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4] | ✅ 已实现 |
+| (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory | ⚠️ 部分：内环仅处理失败任务，成功轨迹不写 HeuristicsMemory（P1 缺陷） |
+| (c) Logic Collapse | 成功轨迹 → LLM 编译为 Wasm 技能 → Skill Library [Wasm-Sandbox] | ✅ 已实现（Tier 0 禁用，Tier 1+ 可选） |
+| (d) 检索式个性化 | 用户偏好 + 纠错历史 → UserProfile.InteractionSummary | ✅ 已实现 |
+| (e) Activation Steering | Control vector 推理时注入 | ✅ 已实现（仅 Tier 3+，local_only） |
 
 **local_only 模式下系统能力降级表**:
 | 能力 | 是否可用 | 替代方案 |
@@ -118,26 +118,9 @@ ROADMAP §4.4 决议了"三层机会主义架构"（Layer A logprob / Layer B Ma
 
 SurpriseIndex 类型和 Compute/Route 实现见 `pkg/swarm/surprise.go`。SurpriseCalculator 持有 context.CancelFunc，调用 `Close()` 可优雅停止 4 个 worker goroutine（防模块重启泄漏）。
 
-**BoundedWorkQueue + LoadShedder**:
-```
-队列: cap=256. 消费者: 固定 4 worker (不扩缩——饱和 API QPS)
+**BoundedWorkQueue + LoadShedder**：队列容量 256，固定 4 worker。LoadShedder 在队列满时丢弃 33%，使用率 >90% 持续 30s 升至 50%，<50% 恢复。深度 >64 的 background/auto_curriculum 请求直接丢弃。丢弃事件写 M3 `polaris_surprise_embedding_dropped` Counter。
 
-LoadShedder:
-  1. 队列满 → 每 3 个丢弃 1 个 (33%)
-  2. 使用率 > 90% 持续 30s → 50%
-  3. 使用率 < 50% → 0%
-  4. 丢弃 → M3 polaris_surprise_embedding_dropped Counter++
-
-优先级: 深度 > 64 → background/auto_curriculum 直接丢弃
-```
-
-**异步错误处理**:
-```
-单次: goroutine 内重试 1 次 (1s 退避), context.WithTimeout(5s)
-连续: 最近 3 次 ≥ 2 次失败 → 保持上次值 + WARN + M3 polaris_surprise_async_failures++
-持续: > 10min 失败 → safe default 0.5 + ALERT
-恢复: 首次成功即退出 safe default
-```
+**异步错误处理**：单次失败重试 1 次（1s 退避，5s 超时）；最近 3 次 ≥2 次失败 → 保持上次值 + WARN；持续 >10min 失败 → 降级 safe default 0.5 + ALERT；首次成功自动退出降级。
 
 计算结果异步推送至 M3 `polaris_surprise_index` Gauge，M4 通过读取该 Gauge 进行路由。M3 staleness 监控独立检测值更新间隔。
 
@@ -145,12 +128,9 @@ LoadShedder:
 
 每次 Agent 任务完成后自动执行:
 
-```
-任务完成 → [EventLog] → 成功: HeuristicsMemory + Logic Collapse → Wasm 技能 [Wasm-Sandbox]
-                       → 失败: Reflexion 反思 → MEMF + [Storage-SurrealDB-Core] + 发布 EventHeuristicGenerated (注入 PromptOptimizer 规避规则)
-                       → Consolidation Check → Semantic Memory (M5 L2)
-                       → Preference Learner (冷路径异步) → UserProfile
-```
+任务完成后：成功路径 → HeuristicsMemory 更新 + Logic Collapse 触发（Wasm 技能生成）；失败路径 → Reflexion 反思 → MEMF + SurrealDB-Core 写入 + 发布 EventHeuristicGenerated（注入 PromptOptimizer 规避规则）；后续 Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
+
+> ⚠️ **代码偏差**：`Engine.Run()` 内环 taskEvents 处理仅消费 `!ev.Success`（失败任务），成功任务完全忽略，HeuristicsMemory 的 success_rate 字段无数据来源，导致 skillGapAnalysis 可能永远返回空（P1 缺陷）。
 
 **MEMF** (FallacyMemoryPool) / **HeuristicsMemory** 类型和反馈校准/剪枝逻辑见 `pkg/swarm/memf.go`。
 
@@ -165,13 +145,7 @@ LoadShedder:
 
 技能成功率统计触发 + 定期后台任务:
 
-```
-成功率 < 30% 且使用 > 10 → 触发演化 (排除 UncontrollableFailure)
-成功率 > 90% 且使用 > 50 → 金牌技能 (高优先级缓存)
-连续 3 次 ControllableFailure → deprecated
-SKILL.md → 收集轨迹 → LLM 编译 Wasm → System1 执行
-已是 Wasm → 边缘案例 → TinyGo+wazero 验证 → version++
-```
+技能演化触发条件：成功率 <30% 且使用 >10 次（排除 UncontrollableFailure）；成功率 >90% 且使用 >50 次为金牌技能（高优先级缓存）；连续 3 次 ControllableFailure 标记 deprecated。SKILL.md 收集轨迹后 LLM 编译为 Wasm（System1 执行）；已是 Wasm 的技能经边缘案例触发 TinyGo+wazero 验证后 version++。
 
 **Auto-Curriculum Generator** 类型和生成流程见 `pkg/swarm/curriculum.go`。
 
@@ -195,14 +169,9 @@ SKILL.md → 收集轨迹 → LLM 编译 Wasm → System1 执行
 
 ### 2.3 外环: 架构演化（周/月级）
 
-```
-Gate 0: Eval Harness 离线回归 — 全部黄金用例 + Welch's t-test p<0.05 → 发布 EventEvalCompleted
-Gate 1: Shadow (1% 流量) — `SubmitCandidate` 立即进入此阶段。`RecordEvalScore` 异步补充 Eval 结果：passRate < baseline×0.95 触发自动 Rollback；passRate ≥ baseline×1.05 将 status 激活为 running。
-Gate 2: Shadow Execution (3-7天) — `ConfirmShadow` 确认影子指标正常后推进至 Canary 5%。candidate 版本执行真实任务但输出不面用户，安全护栏禁止 write_network + privileged。
-Gate 3: Canary Rollout（阶梯: 5%→25%→50%→100%，每步驻留 24h）
-  硬停止: error>baseline×1.2 | P95 latency>baseline×1.4 | 安全违规>0 | SurpriseIndex 退化 → autoRollback
-Gate 4: Full Rollout, 旧版本保留 7 天 rollback target
-```
+五阶段发布门控：Gate 0 Eval Harness 离线回归（全量黄金用例 + Welch's t-test p<0.05）→ Gate 1 Shadow 1% 流量（Eval 结果不达标自动 Rollback）→ Gate 2 Shadow Execution 3-7 天（真实任务但不面用户，禁 write_network/privileged）→ Gate 3 Canary 阶梯推进（5%→25%→50%→100%，每步 24h 驻留；error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback）→ Gate 4 Full Rollout（旧版本保留 7 天）。
+
+> ⚠️ **代码偏差**：外环 `RolloutStats` 在 M9 与 `pkg/swarm` 两包各有同名定义，字段基本一致但类型不互通；`Engine.handleEvalCompleted` 构造时 P95Latency/SafetyViolations/SurpriseIndexDegrade 全为零值（P1 缺陷）。
 
 实现见 `pkg/swarm/rollout.go` (ProgressiveRollout) 和 `pkg/swarm/rollout_store.go` (SQLiteRolloutStore)。持久化状态表 `rollout_states` 新增 `eval_score`（Eval 得分）与 `shadow_ok`（影子确认标志）列。Gate 转换由三个方法驱动：`SubmitCandidate`（Gate 0→1，自动进入 Shadow）、`RecordEvalScore`（Eval 结果写入，不达标自动 Rollback）、`ConfirmShadow`（Gate 1→2，影子观测通过）；`AdvanceGate` 仅处理 Gate 2+ 的 Canary 推进，不覆盖 Gate 0/1 专属路径。硬停止条件全局适用于所有 Gate。`StagingPipeline` 接口保持稳定，M13 TrafficSplitter 按 `canary_percent` 分发。
 
@@ -252,13 +221,13 @@ Gate 4: Full Rollout, 旧版本保留 7 天 rollback target
 
 ## 3. 五级演化层次 + 审批门控
 
-| 级别 | 范围 | 自动化 | 门控 | 回滚 |
-|------|------|--------|------|------|
-| **L0** | 配置调整 (路由权重/超时/模型选择/[SurpriseIndex]分位) | 全自动 | telemetry 监控 | 即时 |
-| **L1** | Prompt/Heuristic/system prompt/路由判据 | 全自动 | Eval Harness | 即时 |
-| **L2** | 新技能生成 (Skill Library 新条目) | 半自动 | 沙箱 + Eval + cosign | 即时 |
-| **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 |
-| **L4** | 源码/架构修改 (Go/Rust) | 严格审批 | 形式化验证 + Red Team + 多签 | git revert |
+| 级别 | 范围 | 自动化 | 门控 | 回滚 | 实现状态 |
+|------|------|--------|------|------|---------|
+| **L0** | 配置调整 (路由权重/超时/模型选择/[SurpriseIndex]分位) | 全自动 | telemetry 监控 | 即时 | ✅ 已实现 |
+| **L1** | Prompt/Heuristic/system prompt/路由判据 | 全自动 | Eval Harness | 即时 | ✅ 已实现 |
+| **L2** | 新技能生成 (Skill Library 新条目) | 半自动 | 沙箱 + Eval + cosign | 即时 | ⚠️ 计划中 |
+| **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 | ⚠️ 计划中 |
+| **L4** | 源码/架构修改 (Go/Rust) | 严格审批 | 形式化验证 + Red Team + 多签 | git revert | ⚠️ 计划中 |
 
 **L4 不可变内核** — `0400` + CI merge-block + pre-receive hook 三重保护:
 
@@ -347,7 +316,17 @@ QLoRA/PRM/ActivationSteering 的 Tier 门控由 `FeatureGate` 自动化：`Featu
 
 ### 当前实现状态
 
-三环架构（Reflexion/Curriculum/Rollout）+ PromptOptimizer + MEMF + SurpriseIndex 均已实现（`self_improve/engine.go`、`reflexion.go`、`curriculum.go`、`rollout.go`、`memf.go`、`surprise.go`）。**✅ 核心路径已完成**。
+| 组件 | 状态 | 说明 |
+|------|------|------|
+| 三环架构框架（Engine.Run） | ✅ 已实现 | `self_improve/engine.go`、`reflexion.go`、`curriculum.go`、`rollout.go` |
+| PromptOptimizer（GEPA/MemAPO/ContraPrompt） | ✅ 已实现 | `prompt_optimizer.go` |
+| MEMF + HeuristicsMemory | ✅ 已实现 | `memf.go`；SQLite 降级版 |
+| SurpriseIndex 三组件 | ✅ 已实现 | `surprise.go` |
+| 内环成功轨迹写 HeuristicsMemory | ⚠️ 未实现 | `Engine.Run()` 仅处理失败事件，success_rate 无数据来源 |
+| L2 SkillGeneration（Logic Collapse → 新技能） | ⚠️ 计划中 | EvolutionGate 接口无任何实现 |
+| L3 StrategyModify（LoRA adapter） | ⚠️ 计划中 | — |
+| L4 SourceArchitecture（multi-sig 源码修改） | ⚠️ 计划中 | CI 保护框架设计完成，执行路径未实现 |
+| CurriculumGenerator 接口绑定 | ⚠️ 缺陷 | `AutoCurriculumGenerator.Generate` 签名与 `CurriculumGenerator` 接口不匹配，Engine 无法通过接口调用 |
 
 ### 引入计划
 
