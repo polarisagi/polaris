@@ -926,8 +926,12 @@ type strReplaceEditorArgs struct {
 	NewStr  string `json:"new_str"`
 }
 
-// 内存中保存最近一次修改的备份 (session 级别应该在外部控制，这里简化为全局 map 作为 MVP)
-var undoBuffer = make(map[string]string)
+// undoBuffer 保存最近一次 str_replace_editor 修改的文件备份（undo_edit 恢复用）。
+// DAGExecutor 并发执行节点时多个 goroutine 可能同时调用 str_replace_editor，必须加锁保护。
+var (
+	undoBuffer   = make(map[string]string)
+	undoBufferMu sync.Mutex
+)
 
 func makeStrReplaceEditorFn(allowedPaths []string) action.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
@@ -962,14 +966,18 @@ func makeStrReplaceEditorFn(allowedPaths []string) action.InProcessFn {
 			return executeStrReplace(cleanPath, args)
 
 		case "undo_edit":
+			undoBufferMu.Lock()
 			oldContent, ok := undoBuffer[cleanPath]
+			if ok {
+				delete(undoBuffer, cleanPath)
+			}
+			undoBufferMu.Unlock()
 			if !ok {
 				return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: no undo history found for this file")
 			}
 			if err := os.WriteFile(cleanPath, []byte(oldContent), 0600); err != nil {
 				return nil, perrors.Wrap(perrors.CodeInternal, "str_replace_editor: undo write failed", err)
 			}
-			delete(undoBuffer, cleanPath)
 			return []byte(`{"status":"undone"}`), nil
 
 		default:
@@ -997,8 +1005,10 @@ func executeStrReplace(cleanPath string, args strReplaceEditorArgs) ([]byte, err
 		return nil, perrors.New(perrors.CodeInternal, "str_replace_editor: old_str is not unique, matched multiple times. Please provide more context in old_str.")
 	}
 
-	// 备份到 undoBuffer
+	// 备份到 undoBuffer（加锁：多个节点并发执行 str_replace_editor 时防竞争）
+	undoBufferMu.Lock()
 	undoBuffer[cleanPath] = content
+	undoBufferMu.Unlock()
 
 	newContent := strings.Replace(content, args.OldStr, args.NewStr, 1)
 	if err := os.WriteFile(cleanPath, []byte(newContent), 0600); err != nil {

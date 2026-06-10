@@ -102,6 +102,15 @@ type VersionStoreAdapter interface {
 	Activate(ctx context.Context, taskType, id string, baselineScore float64) error
 }
 
+// HeuristicsWriter M9 内环写入成功轨迹的接口（P1-4）。
+// 由 pkg/swarm.HeuristicsMemory 实现；self_improve 包通过此接口解耦，
+// 避免 swarm → self_improve → swarm 循环引用。
+type HeuristicsWriter interface {
+	// RecordSuccess 将成功任务的 taskType 写入 HeuristicsMemory，更新 success_rate。
+	// heuristicID 为空时由实现方自行生成（以 taskID 作为种子）。
+	RecordSuccess(taskID, taskType string)
+}
+
 // =============================================================================
 // Engine — M9 Self-Improvement Engine 主入口
 // 架构文档: docs/arch/M09-Self-Improvement-Engine.md §2
@@ -214,8 +223,9 @@ type Engine struct {
 	evalEvents <-chan protocol.EvalCompletedPayload
 
 	// 新增：外部适配器（接口解耦，防 swarm→self_improve 循环引用）
-	optimizer    PromptOptimizerAdapter // 可 nil，nil 时跳过 AvoidRule 注入
-	versionStore VersionStoreAdapter    // 可 nil，nil 时跳过评分更新
+	optimizer        PromptOptimizerAdapter // 可 nil，nil 时跳过 AvoidRule 注入
+	versionStore     VersionStoreAdapter    // 可 nil，nil 时跳过评分更新
+	heuristicsWriter HeuristicsWriter       // 可 nil，nil 时跳过成功轨迹写入（P1-4）
 
 	// 反思并发信号量（控制 goroutine 数量）
 	sem chan struct{}
@@ -232,6 +242,9 @@ func (e *Engine) SetOptimizer(opt PromptOptimizerAdapter) { e.optimizer = opt }
 
 // SetVersionStore 注入 VersionStoreAdapter（可选；nil 时外环跳过评分更新）。
 func (e *Engine) SetVersionStore(vs VersionStoreAdapter) { e.versionStore = vs }
+
+// SetHeuristicsWriter 注入 HeuristicsWriter（可选；nil 时内环跳过成功轨迹写入，P1-4）。
+func (e *Engine) SetHeuristicsWriter(hw HeuristicsWriter) { e.heuristicsWriter = hw }
 
 // SetHeuristicEvents 注入 HeuristicGenerated 事件通道（read-only 端）。
 func (e *Engine) SetHeuristicEvents(ch <-chan protocol.HeuristicGeneratedPayload) {
@@ -290,7 +303,7 @@ func (e *Engine) Run(ctx context.Context) error { //nolint:gocyclo
 		case <-ctx.Done():
 			return ctx.Err()
 
-		// 内环：任务完成事件 → Reflexion
+		// 内环：任务完成事件 → Reflexion（失败）或 HeuristicsWriter（成功）
 		case ev, ok := <-e.taskEvents:
 			if !ok {
 				return nil
@@ -310,6 +323,12 @@ func (e *Engine) Run(ctx context.Context) error { //nolint:gocyclo
 					}(ev)
 				default:
 					// 信号量满，丢弃（尽力而为原则）
+				}
+			} else {
+				// 成功轨迹写入 HeuristicsMemory，驱动 success_rate 更新（P1-4）。
+				// 原实现忽略成功任务，导致 skillGapAnalysis 永远读不到有效 success_rate。
+				if e.heuristicsWriter != nil {
+					e.heuristicsWriter.RecordSuccess(ev.TaskID, ev.TaskType)
 				}
 			}
 

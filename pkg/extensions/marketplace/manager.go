@@ -2,9 +2,12 @@ package marketplace
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -98,19 +101,59 @@ func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) erro
 		return err
 	}
 
-	if result.Allowed {
-		return nil
+	if !result.Allowed {
+		if strings.HasPrefix(result.Reason, "forbidden:") {
+			return perrors.New(perrors.CodeForbidden, "installation forbidden: "+result.Reason)
+		}
+		if result.Reason == "denied by default" {
+			return ErrRequiresApproval
+		}
+		return perrors.New(perrors.CodeForbidden, "installation denied")
 	}
 
-	if strings.HasPrefix(result.Reason, "forbidden:") {
-		return perrors.New(perrors.CodeForbidden, "installation forbidden: "+result.Reason)
+	// PolicyGate 放行后写入 extension_instances，满足 ADR-0019 三层模型要求（P0-6）。
+	// 原实现在此直接 return nil，不写 DB，违反 ADR-0019 Layer-1 SSoT 约束。
+	instID, err := genExtID()
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "marketplace.InstallExtension: gen id", err)
+	}
+	name := req.ExtensionID
+	if req.Publisher != "" {
+		name = fmt.Sprintf("%s/%s", req.Publisher, req.ExtensionID)
+	}
+	// 先标记 status='installing'，防止重复安装竞争（UNIQUE INDEX on catalog_id）。
+	_, err = m.db.ExecContext(ctx, `
+		INSERT INTO extension_instances
+			(id, ext_type, origin, catalog_id, name, publisher, trust_tier, status)
+		VALUES (?, ?, 'marketplace', ?, ?, ?, ?, 'installing')`,
+		instID, req.ExtType, req.ExtensionID, name, req.Publisher, req.TrustTier,
+	)
+	if err != nil {
+		// UNIQUE 冲突 → 已安装，幂等返回成功
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return nil
+		}
+		return perrors.Wrap(perrors.CodeInternal, "marketplace.InstallExtension: insert instance", err)
 	}
 
-	if result.Reason == "denied by default" {
-		return ErrRequiresApproval
+	// 更新为 status='installed'（当前 MVP：无实际文件下载；Tier1+ 由下载器回调更新）。
+	// 此处直接置为 installed，保持与 builtin 扩展注册路径行为一致。
+	_, err = m.db.ExecContext(ctx, `
+		UPDATE extension_instances SET status='installed' WHERE id=?`, instID)
+	if err != nil {
+		slog.Warn("marketplace: failed to mark extension installed", "id", instID, "err", err)
+		// 非致命错误：记录警告，状态留在 installing（后续 reconcile 可修正）
 	}
+	return nil
+}
 
-	return perrors.New(perrors.CodeForbidden, "installation denied")
+// genExtID 生成 extension_instances.id（格式："ext_{8字节hex}"）。
+func genExtID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "ext_" + hex.EncodeToString(b), nil
 }
 
 // UninstallExtension completely removes an extension and its physical files.

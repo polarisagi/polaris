@@ -95,11 +95,13 @@ func ValidateDAG(ctx context.Context, vCtx *DAGValidationContext) error {
 }
 
 // validateTaintGate 实现 L1 第一道：TaintGate 防线（Layer A 上下文传播规则）。
-// 规则：当会话 ActiveTaintLevel >= TaintHigh 时：
-//   - 禁止包含字符串类工具参数的节点写入 Instruction Slot（write_local / write_network）。
-//   - 除非参数已通过 SanitizeBySchema 降级到 <= TaintMedium（由调用方自行管理）。
 //
-// 此处实现的是最小防线：ActiveTaintLevel >= TaintHigh → 拦截所有非 read_only 操作。
+// 两档防护：
+//   - TaintMedium: 禁止向 write_network 工具传递未降级参数（防止外部数据驱动外发请求）。
+//     read_only / write_local 工具允许通过（本地写操作在 TaintMedium 下是可接受的）。
+//   - TaintHigh:   拦截所有非 read_only 工具（SanitizeToSafe 必须先失败才表明数据未降级）。
+//     意外放行（SanitizeToSafe 返回 nil）视为安全逻辑错误，主动拒绝。
+//
 // 完整的字段级降级逻辑（SanitizeBySchema + tool_call schema 双向校验）由 M7 工具调用层处理。
 func validateTaintGate(vCtx *DAGValidationContext) error {
 	// TaintNone / TaintLow 不触发 TaintGate
@@ -108,30 +110,26 @@ func validateTaintGate(vCtx *DAGValidationContext) error {
 	}
 
 	for _, node := range vCtx.Plan.Nodes {
-		// 尝试将节点参数包装为 TaintedString 并检查是否可被 SanitizeToSafe
-		ts := substrate.NewTaintedString(
-			string(node.Args),
-			substrate.TaintSource{
-				Module:           "m4_validate",
-				EntityID:         node.ID,
-				OriginTaintLevel: vCtx.ActiveTaintLevel,
-			},
-			"dag_node_args",
-		)
-
-		// 当污点等级为 TaintHigh 时，SanitizeToSafe 必须失败——此节点参数禁止直接进入执行
 		if vCtx.ActiveTaintLevel >= protocol.TaintHigh {
+			// TaintHigh：尝试 SanitizeToSafe；若意外通过则主动拒绝（安全逻辑保险）
+			ts := substrate.NewTaintedString(
+				string(node.Args),
+				substrate.TaintSource{
+					Module:           "m4_validate",
+					EntityID:         node.ID,
+					OriginTaintLevel: vCtx.ActiveTaintLevel,
+				},
+				"dag_node_args",
+			)
 			if _, err := substrate.SanitizeToSafe(ts); err == nil {
-				// 这不应该发生——TaintHigh 必须被拦截
-				// 为保险起见，若 SanitizeToSafe 意外放行，我们主动拒绝
+				// TaintHigh 数据不应通过 SanitizeToSafe——视为安全逻辑错误
 				return &DAGValidationError{
 					Layer:  "L1_taint",
 					NodeID: node.ID,
 					Reason: "unexpected: TaintHigh args passed SanitizeToSafe without sanitization",
 				}
 			}
-			// SanitizeToSafe 正确拒绝了——说明 TaintHigh 数据需要在执行前降级
-			// 若节点工具名不在只读白名单中，则阻断
+			// SanitizeToSafe 正确拒绝——检查工具是否只读；非只读则阻断
 			if !isReadOnlyTool(node.ToolName, vCtx.ToolRegistry) {
 				return &DAGValidationError{
 					Layer:  "L1_taint",
@@ -139,9 +137,37 @@ func validateTaintGate(vCtx *DAGValidationContext) error {
 					Reason: fmt.Sprintf("TaintHigh args blocked: tool %q is not read-only, requires schema sanitization before execution", node.ToolName),
 				}
 			}
+		} else {
+			// TaintMedium：仅拦截 write_network（外发请求）；read_only / write_local 允许通过
+			// 依据：M04 §3 Layer A——中等可信度数据不应驱动网络外发，但本地操作可接受
+			if isWriteNetworkTool(node.ToolName, vCtx.ToolRegistry) {
+				return &DAGValidationError{
+					Layer:  "L1_taint",
+					NodeID: node.ID,
+					Reason: fmt.Sprintf("TaintMedium args blocked: tool %q performs network write, requires sanitization to TaintLow first", node.ToolName),
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// isWriteNetworkTool 判断工具是否会触发网络外发（CapWriteNetwork 或以上）。
+// 优先查询 ToolRegistry；未注册或 registry 为 nil 时使用内置黑名单（fail-closed）。
+func isWriteNetworkTool(toolName string, registry protocol.ToolRegistry) bool {
+	if registry != nil {
+		if t, err := registry.Lookup(toolName); err == nil {
+			return t.Capability >= protocol.CapWriteNetwork
+		}
+	}
+	// 内置黑名单兜底（未知工具默认视为有网络副作用，fail-closed）
+	switch toolName {
+	case "read_file", "list_dir", "write_file", "get_datetime", "diff_text", "csv_parse",
+		"str_replace_editor", "multi_edit", "glob", "grep", "notebook_read", "notebook_edit",
+		"todo_read", "todo_write", "git_diff", "template_render", "sys_probe":
+		return false // 纯本地工具
+	}
+	return true // 未知工具默认视为网络写，fail-closed
 }
 
 // isReadOnlyTool 判断工具是否为纯读操作（不写入外部状态）。

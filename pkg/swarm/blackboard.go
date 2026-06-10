@@ -12,6 +12,9 @@ import (
 type Blackboard struct {
 	mu           sync.RWMutex
 	tasks        map[string]*protocol.TaskEntry
+	// taskVersions 每次状态变更时递增，供 SideEffectPreCheck 做 ABA 防护。
+	// 语义与 SQLiteBlackboard 中 tasks.version 列对齐（ADR-0019 §TOCTOU）。
+	taskVersions map[string]int32
 	events       chan protocol.BlackboardEvent
 	agents       map[string]*AgentHandle
 	backpressure bool
@@ -48,9 +51,10 @@ func (b *Blackboard) checkBackpressureLocked() {
 // NewBlackboard creates a new Blackboard.
 func NewBlackboard() *Blackboard {
 	return &Blackboard{
-		tasks:  make(map[string]*protocol.TaskEntry),
-		events: make(chan protocol.BlackboardEvent, 1024),
-		agents: make(map[string]*AgentHandle),
+		tasks:        make(map[string]*protocol.TaskEntry),
+		taskVersions: make(map[string]int32),
+		events:       make(chan protocol.BlackboardEvent, 1024),
+		agents:       make(map[string]*AgentHandle),
 	}
 }
 
@@ -125,6 +129,8 @@ func (b *Blackboard) StartExecution(ctx context.Context, taskID string, agentID 
 
 	entry.Status = protocol.TaskExecuting
 	entry.UpdatedAt = time.Now().Unix()
+	// 状态变更时递增版本，防止 SideEffectPreCheck ABA 误判
+	b.taskVersions[taskID]++
 	return nil
 }
 
@@ -142,13 +148,19 @@ func (b *Blackboard) CompleteTask(ctx context.Context, taskID string, agentID st
 	entry.Result = result
 	entry.Status = protocol.TaskDone
 	entry.UpdatedAt = time.Now().Unix()
+	b.taskVersions[taskID]++
 
-	b.events <- protocol.BlackboardEvent{
+	// 非阻塞写：channel 满时丢弃事件，与 PostTask/ClaimTask 等方法保持一致，
+	// 避免高并发下 channel 满导致持有 mu.Lock 的 goroutine 永久阻塞（P0-1）。
+	select {
+	case b.events <- protocol.BlackboardEvent{
 		Type:      "task_completed",
 		TaskID:    taskID,
 		AgentID:   agentID,
 		Payload:   result,
 		Timestamp: entry.UpdatedAt,
+	}:
+	default:
 	}
 	return nil
 }
@@ -167,13 +179,18 @@ func (b *Blackboard) FailTask(ctx context.Context, taskID string, agentID string
 	entry.Result = errBytes
 	entry.Status = protocol.TaskFailed
 	entry.UpdatedAt = time.Now().Unix()
+	b.taskVersions[taskID]++
 
-	b.events <- protocol.BlackboardEvent{
+	// 非阻塞写：同 CompleteTask（P0-1）
+	select {
+	case b.events <- protocol.BlackboardEvent{
 		Type:      "task_failed",
 		TaskID:    taskID,
 		AgentID:   agentID,
 		Payload:   errBytes,
 		Timestamp: entry.UpdatedAt,
+	}:
+	default:
 	}
 	return nil
 }
@@ -200,12 +217,17 @@ func (b *Blackboard) ClaimTask(ctx context.Context, taskID, agentID string) (boo
 	entry.ClaimedAt = now
 	entry.ExpiresAt = now + 60
 	entry.Status = protocol.TaskClaimed
+	b.taskVersions[taskID]++
 
-	b.events <- protocol.BlackboardEvent{
+	// 非阻塞写：同 CompleteTask/FailTask（P0-1）
+	select {
+	case b.events <- protocol.BlackboardEvent{
 		Type:      "task_claimed",
 		TaskID:    taskID,
 		AgentID:   agentID,
 		Timestamp: now,
+	}:
+	default:
 	}
 
 	return true, nil
@@ -305,6 +327,13 @@ func (b *Blackboard) SideEffectPreCheck(ctx context.Context, taskID, agentID str
 	}
 
 	if entry.ClaimedBy != agentID {
+		return ErrStaleLease
+	}
+
+	// ABA 防护：校验 claimedVersion 与当前版本是否一致。
+	// 若任务在 Claim 后被 Reaper 回收再被其他 Agent 重新 Claim（version 已递增），
+	// 此处会拦截，与 SQLiteBlackboard 版本行为对齐（P0-2）。
+	if cur := b.taskVersions[taskID]; cur != claimedVersion {
 		return ErrStaleLease
 	}
 

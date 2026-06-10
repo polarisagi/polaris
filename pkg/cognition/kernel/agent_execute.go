@@ -313,11 +313,14 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 
 	vCtx := &DAGValidationContext{
 		Plan: plan,
-		// ActiveTaintLevel: per-node TaintLevel 已在 parsePlanOnSuccess 中按 pCtx.MaxTaintLevel 传播。
-		// 此处 session 级全局污点暂设 TaintNone——待 ActiveContext.TaintLevel 正式引入后再读取。
-		// 注意: 不可直接赋 RawIntentTS.Level()（TaintHigh），否则 validateTaintGate
-		// 会拦截所有非只读工具，导致任何包含写操作的 DAG 永远无法通过校验。
-		ActiveTaintLevel: protocol.TaintNone,
+		// ActiveTaintLevel 取 DAGModel 所有节点的最高 TaintLevel（PropagateTaint 语义）。
+		// 依据: ADR-0007 自然传播规则——output = max(inputs)，只升不降。
+		// 不直接用 RawIntentTS.Level()（固定 TaintHigh）原因：
+		//   validateTaintGate 对 TaintHigh 会拦截所有非只读工具；
+		//   而节点 TaintLevel 来自 parsePlanOnSuccess 中 pCtx.MaxTaintLevel，
+		//   若 LLM 已将摘要降级为 TaintMedium，节点级应反映该降级结果。
+		// 若所有节点均为 TaintNone（FastPath/空 DAG），网关自然跳过（< TaintMedium）。
+		ActiveTaintLevel: maxNodeTaintLevel(plan),
 		PolicyGate:       a.policyGate,
 		ToolRegistry:     a.toolRegistry, // 用于 isReadOnlyTool 动态查询工具 Capability
 		AgentID:          a.sCtx.AgentID,
@@ -362,7 +365,11 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 					return "S_VALIDATE_OK", nil
 				},
 				OnFailure: func(pCtx protocol.StateContext, err error) (protocol.State, error) {
-					// L3 失败为咨询信号，默认放行（fail-open）
+					// L3 失败时 fail-open——架构设计，非疏漏。
+					// 依据: M04 §L3 LLM 看门狗: "LLM 不可用时 fail-open 推进 S_VALIDATE_OK"。
+					// L3 是补充信号层：L0/L1/L2 未放行的动作不可因 L3 通过而放行；
+					// L3 DENY 推进 ValidateFail，L3 LLM 不可用时不应因此阻断正常业务流。
+					// 禁止改为 fail-closed：L3 LLM 故障会导致所有非只读 DAG 永久卡住。
 					go func() { _ = a.SendIntent(protocol.TriggerValidateOk) }()
 					return "S_VALIDATE_OK", nil
 				},
@@ -642,4 +649,20 @@ func aggregateDAGResults(results []NodeResult) []byte {
 func mustMarshalString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// maxNodeTaintLevel 计算 DAGPlan 中所有节点的最高污点等级。
+// 实现 ADR-0007 PropagateTaint 语义：output = max(inputs)，只升不降。
+// plan 为 nil 或无节点时返回 TaintNone（validateTaintGate 自动跳过）。
+func maxNodeTaintLevel(plan *DAGPlan) protocol.TaintLevel {
+	if plan == nil {
+		return protocol.TaintNone
+	}
+	var max protocol.TaintLevel
+	for _, node := range plan.Nodes {
+		if node.TaintLevel > max {
+			max = node.TaintLevel
+		}
+	}
+	return max
 }

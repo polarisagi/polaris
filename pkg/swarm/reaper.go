@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,15 +65,16 @@ func (r *Reaper) Run(ctx context.Context) {
 // Worker 拉取式: SideEffectPreCheck 时读 epoch (O(1), <0.1ms)。
 // 不一致 → GracefulTermination + 重注册。
 type SupervisorEpoch struct {
+	// epoch 必须 64 位对齐，使用 atomic 操作防止并发竞争（P1-3）。
 	epoch int64
 }
 
-// Get 返回当前 epoch。
+// Get 原子读取当前 epoch。
 func (se *SupervisorEpoch) Get() int64 {
-	return se.epoch
+	return atomic.LoadInt64(&se.epoch)
 }
 
-// Increment 原子递增 epoch。
+// Increment 原子递增 epoch；并发安全（P1-3：原 se.epoch++ 为非原子操作）。
 func (se *SupervisorEpoch) Increment() {
-	se.epoch++
+	atomic.AddInt64(&se.epoch, 1)
 }
