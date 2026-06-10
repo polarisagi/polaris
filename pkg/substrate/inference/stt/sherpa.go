@@ -51,7 +51,7 @@ func LoadLibrary(libPath string) error {
 		return nil // 已成功加载，直接复用
 	}
 
-	lib, err := purego.Dlopen(libPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	lib, err := dlopen(libPath)
 	if err != nil {
 		loadErr = err
 		return loadErr

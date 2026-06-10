@@ -220,43 +220,50 @@ func (at *AuditTrail) RecoverOnStartup() error { //nolint:nestif
 		}
 	}
 
-	//nolint:nestif
 	if at.db != nil {
 		rows, err := at.db.Query(`
-			SELECT payload FROM events 
-			WHERE topic = 'audit.policy' 
+			SELECT payload FROM events
+			WHERE topic = 'audit.policy'
 			ORDER BY offset DESC LIMIT 100
 		`)
-		if err == nil {
-			defer rows.Close()
-			var loaded []*AuditRecord
-			for rows.Next() {
-				var payload []byte
-				if err := rows.Scan(&payload); err != nil {
-					continue
-				}
-				var rec AuditRecord
-				if err := json.Unmarshal(payload, &rec); err == nil {
-					loaded = append(loaded, &rec)
-				}
-			}
-			// Reverse loaded slice because we read DESC
-			for i, j := 0, len(loaded)-1; i < j; i, j = i+1, j-1 {
-				loaded[i], loaded[j] = loaded[j], loaded[i]
-			}
+		// 查询失败时返回错误，不能静默忽略——审计链恢复失败属于 fail-closed 场景
+		if err != nil {
+			return perrors.Wrap(perrors.CodeInternal, "audit: query events for recovery", err)
+		}
+		defer rows.Close()
 
-			at.mu.Lock()
-			at.records = append(at.records, loaded...)
-			if len(loaded) > 0 {
-				at.lastHash = loaded[len(loaded)-1].RecordHash
+		var loaded []*AuditRecord
+		for rows.Next() {
+			var payload []byte
+			if scanErr := rows.Scan(&payload); scanErr != nil {
+				// 单条解析失败：记录并跳过，不中止整体恢复
+				continue
 			}
-			at.mu.Unlock()
+			var rec AuditRecord
+			if unmarshalErr := json.Unmarshal(payload, &rec); unmarshalErr == nil {
+				loaded = append(loaded, &rec)
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return perrors.Wrap(perrors.CodeInternal, "audit: rows iteration error on recovery", rowsErr)
+		}
 
-			// Verify continuity of loaded records
-			ok, idx := at.VerifyIntegrity()
-			if !ok {
-				return perrors.New(perrors.CodeInternal, fmt.Sprintf("audit: integrity check failed on DB recovery at index %d", idx))
-			}
+		// DESC 读取结果倒序恢复为时间正序
+		for i, j := 0, len(loaded)-1; i < j; i, j = i+1, j-1 {
+			loaded[i], loaded[j] = loaded[j], loaded[i]
+		}
+
+		at.mu.Lock()
+		at.records = append(at.records, loaded...)
+		if len(loaded) > 0 {
+			at.lastHash = loaded[len(loaded)-1].RecordHash
+		}
+		at.mu.Unlock()
+
+		// 校验恢复的 hash 链完整性
+		ok, idx := at.VerifyIntegrity()
+		if !ok {
+			return perrors.New(perrors.CodeInternal, fmt.Sprintf("audit: integrity check failed on DB recovery at index %d", idx))
 		}
 	}
 

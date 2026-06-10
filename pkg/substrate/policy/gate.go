@@ -464,4 +464,6 @@ func trustLevel(ctx map[string]any) int {
 	return 0
 }
 
-var ErrTaintBlockedEgress = perrors.New(perrors.CodeInternal, "policy: taint egress blocked (TaintHigh data cannot exit without sanitization)")
+// ErrTaintBlockedEgress 实际阻断阈值为 TaintMedium 及以上（>= TaintMedium）。
+// 与 SafeDialer.TaintEgressCheck 采用同一阈值，两层一致——见 M11 §6。
+var ErrTaintBlockedEgress = perrors.New(perrors.CodeInternal, "policy: taint egress blocked (TaintMedium+ data cannot exit without sanitization)")

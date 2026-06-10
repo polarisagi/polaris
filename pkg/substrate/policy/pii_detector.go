@@ -67,6 +67,9 @@ func (d *PIIDetector) Detect(ctx context.Context, text string) ([]PIIMatch, erro
 }
 
 // Redact 将文本中所有 PII 替换为 [REDACTED:<type>]。
+// PIIMatch.Start/End 是 regexp.FindAllStringIndex 返回的字节偏移。
+// 从后往前替换保证前面的偏移量在本次迭代结束前始终有效。
+// 注意：替换操作在原始 string 字节层面进行，偏移来自正则匹配结果，天然是字节偏移，无需转换。
 func (d *PIIDetector) Redact(ctx context.Context, text string) (string, int, error) {
 	matches, err := d.Detect(ctx, text)
 	if err != nil {
@@ -75,18 +78,16 @@ func (d *PIIDetector) Redact(ctx context.Context, text string) (string, int, err
 	if len(matches) == 0 {
 		return text, 0, nil
 	}
-	// 从后往前替换，保持偏移量有效
-	result := []rune(text)
-	runes := []rune(text)
-	_ = result
+	// 从后往前替换：保持已处理片段前的字节偏移不变
 	out := text
 	for i := len(matches) - 1; i >= 0; i-- {
 		m := matches[i]
-		// 直接在字节层面操作（PII 通常为 ASCII）
-		if m.Start >= 0 && m.End <= len(out) {
-			out = out[:m.Start] + "[REDACTED:" + m.Type + "]" + out[m.End:]
+		// 边界防御：来自 Presidio 的 Start/End 可能超出当前 out 长度（迭代中 out 长度会变化）
+		// 但正则结果的偏移基于原始 text，从后往前替换时 m.End <= len(out) 始终成立
+		if m.Start < 0 || m.End > len(out) || m.Start > m.End {
+			continue
 		}
-		_ = runes
+		out = out[:m.Start] + "[REDACTED:" + m.Type + "]" + out[m.End:]
 	}
 	return out, len(matches), nil
 }

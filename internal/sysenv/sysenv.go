@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -65,16 +64,7 @@ func GetSystemInfo() *SystemInfo {
 	}
 
 	// 磁盘空间
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs("/", &stat); err == nil {
-		// Bavail 是非超级用户可用的块数，Bsize 是块大小
-		// 部分系统使用 Bsize，部分使用 Frsize，通常对于 macOS/Linux Bsize * Bavail 适用
-		// 避免 lint 报错 unnecessary conversion，stat.Bavail 本身可能已经是 uint64，但不同 OS 下不同
-		freeBytes := stat.Bavail * uint64(stat.Bsize)
-		info.DiskFreeGB = fmt.Sprintf("%.2f", float64(freeBytes)/(1024*1024*1024))
-	} else {
-		info.DiskFreeGB = "unknown"
-	}
+	info.DiskFreeGB = getDiskFreeGB("/")
 
 	// OS 版本和内存信息 (因平台而异)
 	info.OSVersion = getOSVersion()

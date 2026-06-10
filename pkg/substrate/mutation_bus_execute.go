@@ -17,6 +17,34 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol/pb"
 )
 
+// allowedTables 是 MutationBus 允许操作的表名白名单，防止 intent.Table 注入。
+// 调用方通过 intent.Table 指定目标表，必须在此集合内；否则 executeInsert/Upsert/Delete 拒绝执行。
+var allowedTables = map[string]struct{}{
+	"events":           {},
+	"decision_log":     {},
+	"tasks":            {},
+	"episodic_memory":  {},
+	"semantic_memory":  {},
+	"workspace_vfs":    {},
+	"rag_chunks":       {},
+	"skills":           {},
+	"self_improve":     {},
+	"outbox":           {},
+	"extension_instances": {},
+	"notes":            {},
+	"reflection_memory": {},
+	"apps":             {},
+}
+
+// validateTable 检查表名是否在白名单内；防止 SQL 注入。
+func validateTable(table string) error {
+	if _, ok := allowedTables[table]; !ok {
+		return perrors.New(perrors.CodeInvalidInput,
+			fmt.Sprintf("mutation_bus: table %q not in allowedTables whitelist", table))
+	}
+	return nil
+}
+
 // executeInsertEvent 执行针对 events 表的专门插入，含 M11 hash chain 计算。
 // intent.Payload 必须是 pb.Event 的序列化字节。
 func (dw *DatabaseWriter) executeInsertEvent(tx *sql.Tx, intent *MutationIntent) error {
@@ -231,6 +259,10 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 
 // executeInsert 执行 INSERT，含乐观锁 Version 校验。
 func (dw *DatabaseWriter) executeInsert(tx *sql.Tx, intent *MutationIntent) error {
+	// 表名白名单校验，防止 fmt.Sprintf 拼接 SQL 时被注入
+	if err := validateTable(intent.Table); err != nil {
+		return err
+	}
 	if intent.ClaimedVersion > 0 {
 		query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = ? AND version = ?", intent.Table)
 		var count int
@@ -249,6 +281,10 @@ func (dw *DatabaseWriter) executeInsert(tx *sql.Tx, intent *MutationIntent) erro
 
 // executeUpsert 执行 UPSERT，含乐观锁 Version 校验。
 func (dw *DatabaseWriter) executeUpsert(tx *sql.Tx, intent *MutationIntent) error {
+	// 表名白名单校验，防止 fmt.Sprintf 拼接 SQL 时被注入
+	if err := validateTable(intent.Table); err != nil {
+		return err
+	}
 	if intent.ClaimedVersion > 0 { //nolint:nestif
 		query := fmt.Sprintf("UPDATE %s SET payload = ?, version = ?, updated_at = datetime('now') WHERE id = ? AND version = ?", intent.Table)
 		result, err := tx.Exec(query, string(intent.Payload), intent.ClaimedVersion, string(intent.Key), intent.ClaimedVersion-1)
@@ -288,6 +324,10 @@ func (dw *DatabaseWriter) executeUpsert(tx *sql.Tx, intent *MutationIntent) erro
 
 // executeDelete 执行 DELETE。
 func (dw *DatabaseWriter) executeDelete(tx *sql.Tx, intent *MutationIntent) error {
+	// 表名白名单校验，防止 fmt.Sprintf 拼接 SQL 时被注入
+	if err := validateTable(intent.Table); err != nil {
+		return err
+	}
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = ?", intent.Table)
 	_, err := tx.Exec(query, string(intent.Key))
 	return err

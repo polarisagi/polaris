@@ -18,14 +18,16 @@ import (
 // blockedCIDRs 内网地址段 + loopback + link-local.
 // 架构文档: docs/arch/M11-Policy-Safety.md §6
 var blockedCIDRs = []string{
-	"127.0.0.0/8",
-	"10.0.0.0/8",
-	"172.16.0.0/12",
-	"192.168.0.0/16",
-	"169.254.0.0/16",
-	"::1/128",
-	"fc00::/7",
-	"fe80::/10",
+	"0.0.0.0/8",       // This Network（RFC 1122）
+	"127.0.0.0/8",     // Loopback
+	"10.0.0.0/8",      // RFC 1918 私有
+	"172.16.0.0/12",   // RFC 1918 私有
+	"192.168.0.0/16",  // RFC 1918 私有
+	"100.64.0.0/10",   // CGNAT 共享地址（RFC 6598）：云平台内部 LB/元数据常见范围
+	"169.254.0.0/16",  // Link-local（AWS/GCP/Azure 实例元数据 169.254.169.254）
+	"::1/128",         // IPv6 Loopback
+	"fc00::/7",        // IPv6 唯一本地地址
+	"fe80::/10",       // IPv6 Link-local
 }
 
 // parsedBlockedCIDRs 是 blockedCIDRs 预编译后的 *net.IPNet 列表，避免每次调用重新 ParseCIDR。

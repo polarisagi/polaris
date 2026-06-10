@@ -72,6 +72,7 @@ func NewDatabaseWriter(db *sql.DB, lc LeaseChecker) *DatabaseWriter {
 
 // Submit 提交单个 MutationIntent。
 // 严禁 default: sync execute 兜底——破坏单写者串行化。
+// 退避等待使用 time.NewTimer + ctx.Done()，保证 context 取消可立即返回，不阻塞调用方 goroutine。
 func (dw *DatabaseWriter) Submit(ctx context.Context, intent *MutationIntent) error {
 	targetCh := dw.ch
 	if intent.Priority == PriorityFlush {
@@ -84,19 +85,33 @@ func (dw *DatabaseWriter) Submit(ctx context.Context, intent *MutationIntent) er
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		// 指数退避重试: 10ms→50ms→250ms→1s→2s
-		backoff := []time.Duration{10 * time.Millisecond, 50 * time.Millisecond, 250 * time.Millisecond, time.Second, 2 * time.Second}
-		for i, d := range backoff {
-			time.Sleep(d)
-			select {
-			case targetCh <- intent:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-				if i == len(backoff)-1 {
-					return ErrMutationBusOverloaded
-				}
+	}
+
+	// 指数退避重试: 10ms→50ms→250ms→1s→2s
+	// 每次等待均响应 ctx.Done()，避免 time.Sleep 阻塞调用方 goroutine
+	backoff := []time.Duration{
+		10 * time.Millisecond,
+		50 * time.Millisecond,
+		250 * time.Millisecond,
+		time.Second,
+		2 * time.Second,
+	}
+	for i, d := range backoff {
+		timer := time.NewTimer(d)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		select {
+		case targetCh <- intent:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if i == len(backoff)-1 {
+				return ErrMutationBusOverloaded
 			}
 		}
 	}

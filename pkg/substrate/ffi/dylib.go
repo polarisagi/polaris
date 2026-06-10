@@ -92,7 +92,7 @@ func doLoad() (uintptr, error) {
 			lastErr = err
 			continue
 		}
-		h, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		h, err := dlopen(abs)
 		if err != nil {
 			lastErr = err
 			continue
