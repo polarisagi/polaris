@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ func RegisterBuiltinTools(
 	netPolicy NetworkPolicy, // bash/run_command 网络访问策略
 	bwrapPath string, // Linux: bwrap 路径（空=自动查找）
 	cfg *config.Config,
+	db *sql.DB, // cron_* 工具依赖；nil 时不注册这三个工具
 ) error {
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
@@ -72,6 +74,19 @@ func RegisterBuiltinTools(
 		{"git_diff", makeGitDiffFn(allowedPaths)},
 		{"git_commit", makeGitCommitFn(allowedPaths)},
 		{"template_render", templateRenderFn},
+		{"tool_search", makeToolSearchFn(toolReg)},
+	}
+
+	// cron_* 工具依赖 DB，仅在 db != nil 时注册（单元测试无 DB 时不报错）
+	if db != nil {
+		defs = append(defs, []struct {
+			name string
+			fn   action.InProcessFn
+		}{
+			{"cron_list", makeCronListFn(db)},
+			{"cron_create", makeCronCreateFn(db)},
+			{"cron_delete", makeCronDeleteFn(db)},
+		}...)
 	}
 
 	defs = append(defs, getLegacyBuiltinDefs()...)

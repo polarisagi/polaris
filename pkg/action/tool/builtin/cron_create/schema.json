@@ -1,0 +1,23 @@
+{
+  "title": "cron_create",
+  "type": "object",
+  "required": ["prompt", "schedule"],
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "description": "调度触发时发给 Agent 的任务描述"
+    },
+    "schedule": {
+      "type": "string",
+      "description": "标准 5 字段 cron 表达式，如 \"0 9 * * 1-5\"（工作日 9:00）"
+    },
+    "name": {
+      "type": "string",
+      "description": "任务名称（可选，便于 cron_list 识别）"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "绑定到指定会话（可选；空=每次触发新建会话）"
+    }
+  }
+}

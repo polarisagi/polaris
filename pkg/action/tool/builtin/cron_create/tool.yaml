@@ -1,0 +1,5 @@
+name: cron_create
+description: |
+  创建一个定时任务（cron job）。调度器在下次轮询时按 schedule 执行 prompt。
+  schedule 格式：标准 5 字段 cron 表达式，如 "0 9 * * 1-5"（工作日 9:00）、
+  "*/30 * * * *"（每 30 分钟）、"0 0 * * *"（每天午夜）。

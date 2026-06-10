@@ -394,6 +394,7 @@ func run() error { //nolint:gocyclo
 		tool.NetworkPolicy(cfg.Sandbox.NetworkPolicy),
 		cfg.Sandbox.BwrapPath,
 		cfg,
+		store.DB(),
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
