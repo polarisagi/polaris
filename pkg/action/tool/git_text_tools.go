@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -259,11 +260,7 @@ var templateRenderFn action.InProcessFn = func(_ context.Context, input []byte) 
 
 // ─── 辅助 ─────────────────────────────────────────────────────────────────────
 
-// isExitError 安全地断言 err 是否为 *exec.ExitError。
+// isExitError 用 errors.As 检测 err 链中是否包含 *exec.ExitError（兼容 wrapped error）。
 func isExitError(err error, out **exec.ExitError) bool {
-	e, ok := err.(*exec.ExitError)
-	if ok {
-		*out = e
-	}
-	return ok
+	return errors.As(err, out)
 }

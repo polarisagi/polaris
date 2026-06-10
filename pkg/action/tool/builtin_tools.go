@@ -1259,7 +1259,11 @@ func makeMultiEditFn(allowedPaths []string) action.InProcessFn {
 		// 第一遍：在原始内容中定位所有替换区间，防止链式污染。
 		// 链式污染：顺序替换时 edit[0].NewStr 若包含 edit[1].OldStr，
 		// 会被 edit[1] 二次替换，产生非预期结果。
-		type region struct{ start, end int; newStr string }
+		type region struct {
+			start  int
+			end    int
+			newStr string
+		}
 		regions := make([]region, 0, len(args.Edits))
 		for _, edit := range args.Edits {
 			if strings.Count(original, edit.OldStr) != 1 {
