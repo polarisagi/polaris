@@ -1,2 +1,5 @@
 name: notebook_edit
 description: Edit a specific cell in a Jupyter Notebook (.ipynb) file.
+capability: write-local
+side_effects:
+  - file-write

@@ -10,3 +10,6 @@ exec_mode: tool
 risk_level: high
 sandbox: L2
 capability: write-local
+side_effects:
+  - process-spawn
+  - state-mutate
