@@ -277,7 +277,7 @@ pub unsafe extern "C" fn surreal_kv_put(
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("UPSERT kv SET k = $k, v = $v WHERE k = $k; INSERT INTO kv (k, v) VALUES ($k, $v) ON DUPLICATE KEY UPDATE v = $v")
+                .query("UPSERT kv SET k = $k, v = $v WHERE k = $k")
                 .bind(("k", k))
                 .bind(("v", v))
                 .await;

@@ -45,8 +45,7 @@ type AutoConfigResult struct {
 	PRMEnabled     bool   `json:"prm_enabled"`
 
 	// Storage engines
-	StorageEngines []string       `json:"storage_engines"`
-	SurrealVecMode SurrealVecMode `json:"surreal_vec_mode"`
+	StorageEngines []string `json:"storage_engines"`
 
 	// Feature map
 	Features map[Feature]FeatureState `json:"features"`
@@ -151,28 +150,10 @@ func (ac *AutoConfig) computeTrainingConfig(c *AutoConfigResult) {
 	c.PRMEnabled = ac.Gate.IsEnabled(FeaturePRMTraining)
 }
 
-// SurrealVecMode 表示向量引擎模式。
-type SurrealVecMode int
-
-const (
-	SurrealVecBrute SurrealVecMode = 0 // Tier0：暴力余弦扫描
-	SurrealVecHNSW  SurrealVecMode = 1 // Tier1+：HNSW 图索引
-)
-
 func (ac *AutoConfig) computeStorageConfig(c *AutoConfigResult) {
 	engines := []string{"sqlite", "surreal"}
 	sort.Strings(engines)
 	c.StorageEngines = engines
-	c.SurrealVecMode = ac.SurrealVecModeForTier()
-}
-
-// SurrealVecModeForTier 返回当前硬件 Tier 对应的向量引擎模式。
-// Tier1+ 自动启用 HNSW（O(log N) 查询），Tier0 保持暴力扫描（O(N)，无额外内存开销）。
-func (ac *AutoConfig) SurrealVecModeForTier() SurrealVecMode {
-	if ac.Gate.IsEnabled(FeatureLocalInference) || ac.Probe.Tier >= Tier1 {
-		return SurrealVecHNSW
-	}
-	return SurrealVecBrute
 }
 
 func (ac *AutoConfig) computeMemoryBudget(c *AutoConfigResult) {
@@ -241,21 +222,17 @@ func (ac *AutoConfig) computeFeatureMap(c *AutoConfigResult) {
 // Summary returns a human-readable configuration summary for startup logging.
 func (ac *AutoConfig) Summary() string {
 	c := &ac.Config
-	vecMode := "bruteforce"
-	if c.SurrealVecMode == SurrealVecHNSW {
-		vecMode = "hnsw"
-	}
 	return fmt.Sprintf(
 		"AutoConfig: tier=T%d(%s) ram=%dMB(avail=%dMB) cpu=%d arch=%s os=%s provider=%s "+
 			"local_model=%s(autoload=%v) qlora=%s(enabled=%v) l3_sandbox=%s(backend=%s) "+
-			"wasm_workers=%d storage=%v vec_mode=%s",
+			"wasm_workers=%d storage=%v",
 		c.Tier, c.TierReason, c.TotalRAMMB, c.AvailableRAMMB,
 		c.CPUCores, c.CPUArch, c.OS,
 		c.DefaultProvider,
 		c.LocalModelID, c.LocalModelAutoLoad,
 		c.QLoRAModelSize, c.QLoRAEnabled,
 		map[bool]string{true: "yes", false: "no"}[c.L3SandboxAvailable], c.L3SandboxBackend,
-		c.WasmConcurrency, c.StorageEngines, vecMode,
+		c.WasmConcurrency, c.StorageEngines,
 	)
 }
 

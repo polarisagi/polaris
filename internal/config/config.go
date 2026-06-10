@@ -17,6 +17,7 @@ type Config struct {
 	System        SystemConfig        `toml:"system"`
 	Download      DownloadConfig      `toml:"download"`
 	Inference     InferenceConfig     `toml:"inference"`
+	Cognition     CognitionConfig     `toml:"cognition"`
 	Storage       StorageConfig       `toml:"storage"`
 	Observability ObservabilityConfig `toml:"observability"`
 	Agent         AgentConfig         `toml:"agent"`
@@ -29,6 +30,16 @@ type Config struct {
 	Compressor    CompressorConfig    `toml:"compressor"`
 	Sandbox       SandboxConfig       `toml:"sandbox"`
 	Thresholds    Thresholds          `toml:"-"`
+}
+
+// CognitionConfig SurrealDB 认知存储后端配置（ADR-0010）。
+type CognitionConfig struct {
+	// SurrealBackend 后端选择：
+	//   "mem"     — kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；任意机器可用。
+	//   "rocksdb" — kv-rocksdb 持久化，要求 ≥16GB；SurrealDBPath 不可为空。
+	SurrealBackend string `toml:"surreal_backend"`
+	// SurrealDBPath kv-rocksdb 后端数据库持久化路径；kv-mem 时忽略。
+	SurrealDBPath string `toml:"surreal_db_path"`
 }
 
 // DownloadConfig 控制文件下载行为，包括中国区 GitHub 加速代理。

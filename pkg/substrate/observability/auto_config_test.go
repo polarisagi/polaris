@@ -126,41 +126,6 @@ func TestAutoConfig_StorageEngineSelection(t *testing.T) {
 				t.Errorf("%s: missing surreal engine", tc.name)
 			}
 
-			if ac.Config.SurrealVecMode != SurrealVecBrute && ac.Config.SurrealVecMode != SurrealVecHNSW {
-				t.Errorf("%s: SurrealVecMode=%d out of range", tc.name, ac.Config.SurrealVecMode)
-			}
-		})
-	}
-}
-
-func TestAutoConfig_SurrealVecMode(t *testing.T) {
-	tests := []struct {
-		name     string
-		totalRAM uint64
-		wantHNSW bool
-	}{
-		{"Tier0_8GB_bruteforce", 8 * 1024 * 1024 * 1024, false},
-		{"Tier1_16GB_hnsw", 16 * 1024 * 1024 * 1024, true},
-		{"Tier2_32GB_hnsw", 32 * 1024 * 1024 * 1024, true},
-		{"Tier3_64GB_hnsw", 64 * 1024 * 1024 * 1024, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			hp := NewHardwareProbe(tt.totalRAM, tt.totalRAM/2)
-			guard := NewOSMemoryGuard(tt.totalRAM / (1024 * 1024))
-			fg := NewFeatureGate(hp, guard)
-			SetGlobalFeatureGate(fg)
-
-			ac := &AutoConfig{Probe: hp, Guard: guard, Gate: fg}
-			ac.computeConfig()
-
-			want := SurrealVecBrute
-			if tt.wantHNSW {
-				want = SurrealVecHNSW
-			}
-			if ac.Config.SurrealVecMode != want {
-				t.Errorf("%s: SurrealVecMode=%d, want %d", tt.name, ac.Config.SurrealVecMode, want)
-			}
 		})
 	}
 }

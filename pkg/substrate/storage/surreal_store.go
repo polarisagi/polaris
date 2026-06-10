@@ -128,25 +128,22 @@ func readBytesAndFree(ptr uintptr, n uintptr) []byte {
 // ─── SurrealDBCoreStore ───────────────────────────────────────────────────────
 
 // SurrealDBCoreStore 实现 protocol.Store，通过 purego 调用 Rust SurrealCore FFI。
-// 认知检索轴：KV + 向量近邻（Tier0=暴力扫描, Tier1+=HNSW）+ 图遍历 + 全文检索。
-type SurrealDBCoreStore struct {
-	useHNSW bool
-}
+// 认知检索轴：KV + HNSW 向量近邻（SurrealDB MTREE 原生）+ 有向图遍历 + BM25 全文检索。
+type SurrealDBCoreStore struct{}
 
 var _ protocol.Store = (*SurrealDBCoreStore)(nil)
 
 // OpenSurrealDBCore 初始化全局 SurrealCoreStore（幂等）。
 // backend: "mem"（默认）或 "rocksdb"（要求 ≥16GB，dbPath 不可为空）。
 // vecDim: HNSW 向量维度，需与嵌入模型一致（典型值 1536）。
-// useHNSW 参数已废弃（SurrealDB MTREE 索引始终激活），保留供调用方兼容使用。
-func OpenSurrealDBCore(backend, dbPath string, vecDim int, useHNSW bool) (*SurrealDBCoreStore, error) {
+func OpenSurrealDBCore(backend, dbPath string, vecDim int) (*SurrealDBCoreStore, error) {
 	if err := bindSurreal(); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "surreal load lib", err)
 	}
 	if rc := surrealOpen(backend, dbPath, int32(vecDim)); rc != 0 {
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_open failed: code %d", rc))
 	}
-	return &SurrealDBCoreStore{useHNSW: useHNSW}, nil
+	return &SurrealDBCoreStore{}, nil
 }
 
 // ─── protocol.Store 实现 ──────────────────────────────────────────────────────
@@ -227,20 +224,15 @@ func (s *SurrealDBCoreStore) Txn(_ context.Context, fn func(tx protocol.Transact
 }
 
 func (s *SurrealDBCoreStore) Capabilities() protocol.StoreCapabilities {
-	engine := "surreal-core-ffi/brute-cosine"
-	if s.useHNSW {
-		engine = "surreal-core-ffi/hnsw"
-	}
 	return protocol.StoreCapabilities{
 		SupportsSQL:      false,
 		SupportsVector:   true,
 		SupportsGraph:    true,
 		SupportsFullText: true,
-		Engine:           engine,
+		Engine:           "surreal-core-ffi/mtree",
 	}
 }
 
-func (s *SurrealDBCoreStore) UseHNSW() bool { return s.useHNSW }
 
 func (s *SurrealDBCoreStore) Close() error { return nil }
 
