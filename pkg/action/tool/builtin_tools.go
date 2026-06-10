@@ -601,27 +601,223 @@ func computeUnifiedDiff(oldLines, newLines []string) string { //nolint:gocyclo
 
 // ─── grep ─────────────────────────────────────────────────────────────────────
 
+// grepArgs 是 grep 工具的入参。字段文档见 builtin/grep/schema.json。
 type grepArgs struct {
 	Pattern         string `json:"pattern"`
-	Path            string `json:"path"`          // 搜索根目录（可选，默认遍历全部 allowedPaths）
-	Glob            string `json:"glob"`          // 文件名过滤，如 "*.go"（可选）
-	OutputMode      string `json:"output_mode"`   // "content" | "files_with_matches" | "count"，默认 files_with_matches
-	ContextBefore   int    `json:"context_before"` // 匹配行前 N 行（-B），上限 10
-	ContextAfter    int    `json:"context_after"`  // 匹配行后 N 行（-A），上限 10
+	Path            string `json:"path"`
+	Glob            string `json:"glob"`
+	OutputMode      string `json:"output_mode"`
+	ContextBefore   int    `json:"context_before"`
+	ContextAfter    int    `json:"context_after"`
 	CaseInsensitive bool   `json:"case_insensitive"`
-	HeadLimit       int    `json:"head_limit"` // 最大结果条数，默认 250，上限 1000
+	HeadLimit       int    `json:"head_limit"`
 }
 
 type grepMatch struct {
 	File          string   `json:"file"`
-	Line          int      `json:"line"` // 1-based 行号
+	Line          int      `json:"line"`
 	Text          string   `json:"text"`
 	ContextBefore []string `json:"context_before,omitempty"`
 	ContextAfter  []string `json:"context_after,omitempty"`
 }
 
+type grepFileCount struct {
+	File  string `json:"file"`
+	Count int    `json:"count"`
+}
+
+// grepRunner 封装单次 grep 调用的全部可变状态，将高圈复杂度拆分到多个小方法。
+type grepRunner struct {
+	re        *regexp.Regexp
+	args      grepArgs
+	mode      string
+	limit     int
+	matches   []grepMatch
+	files     []string
+	counts    []grepFileCount
+	total     int
+	truncated bool
+	seenFiles map[string]struct{}
+}
+
+func newGrepRunner(re *regexp.Regexp, args grepArgs) *grepRunner {
+	mode := args.OutputMode
+	if mode == "" {
+		mode = "files_with_matches"
+	}
+	limit := args.HeadLimit
+	if limit <= 0 {
+		limit = 250
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	return &grepRunner{
+		re:        re,
+		args:      args,
+		mode:      mode,
+		limit:     limit,
+		seenFiles: make(map[string]struct{}),
+	}
+}
+
+// grepClampArgs 收束上下文行数上限，防止超大上下文造成内存压力。
+func grepClampArgs(args *grepArgs) {
+	if args.ContextBefore < 0 {
+		args.ContextBefore = 0
+	}
+	if args.ContextAfter < 0 {
+		args.ContextAfter = 0
+	}
+	if args.ContextBefore > 10 {
+		args.ContextBefore = 10
+	}
+	if args.ContextAfter > 10 {
+		args.ContextAfter = 10
+	}
+}
+
+// grepValidateMode 校验 output_mode 合法性。
+func grepValidateMode(mode string) error {
+	switch mode {
+	case "", "content", "files_with_matches", "count":
+		return nil
+	default:
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("grep: unknown output_mode %q", mode))
+	}
+}
+
+// isBinaryData 检测前 512 字节是否含 null，是则视为二进制文件，跳过以避免乱码输出。
+func isBinaryData(data []byte) bool {
+	probe := data
+	if len(probe) > 512 {
+		probe = probe[:512]
+	}
+	for _, b := range probe {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// walk 实现 fs.WalkDirFunc，每个文件调用一次。
+func (g *grepRunner) walk(path string, d os.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return nil //nolint:nilerr // 目录项读取失败时静默跳过，不中断整体 walk
+	}
+	if d.IsDir() {
+		return nil
+	}
+	if g.truncated {
+		return filepath.SkipAll
+	}
+	if g.args.Glob != "" {
+		if matched, _ := doublestar.Match(g.args.Glob, filepath.Base(path)); !matched {
+			return nil
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil //nolint:nilerr // 权限不足等情况静默跳过
+	}
+	if isBinaryData(data) {
+		return nil
+	}
+	return g.scanFile(path, strings.Split(string(data), "\n"))
+}
+
+// scanFile 扫描单个文件的所有行，更新 runner 内部状态。
+func (g *grepRunner) scanFile(path string, lines []string) error {
+	matchCount := 0
+	hasMatch := false
+	for i, line := range lines {
+		if !g.re.MatchString(line) {
+			continue
+		}
+		matchCount++
+		hasMatch = true
+		if err := g.handleMatch(path, i, line, lines); err != nil {
+			return err // filepath.SkipAll 会向上传递至 WalkDir
+		}
+		if g.mode == "files_with_matches" {
+			break // 每文件只记录一次，无需扫描剩余行
+		}
+	}
+	return g.postFile(path, matchCount, hasMatch)
+}
+
+// handleMatch 处理单行匹配，按 mode 分发写入结果。
+func (g *grepRunner) handleMatch(path string, i int, line string, lines []string) error {
+	switch g.mode {
+	case "content":
+		g.matches = append(g.matches, g.buildMatch(path, i, line, lines))
+		if len(g.matches) >= g.limit {
+			g.truncated = true
+			return filepath.SkipAll
+		}
+	case "files_with_matches":
+		if _, seen := g.seenFiles[path]; !seen {
+			g.seenFiles[path] = struct{}{}
+			g.files = append(g.files, path)
+		}
+	}
+	return nil
+}
+
+// postFile 在文件扫描完成后执行 limit 检查（count / files_with_matches）。
+func (g *grepRunner) postFile(path string, matchCount int, hasMatch bool) error {
+	if g.mode == "files_with_matches" && len(g.files) >= g.limit {
+		g.truncated = true
+		return filepath.SkipAll
+	}
+	if g.mode == "count" && hasMatch {
+		g.total += matchCount
+		g.counts = append(g.counts, grepFileCount{File: path, Count: matchCount})
+		if len(g.counts) >= g.limit {
+			g.truncated = true
+			return filepath.SkipAll
+		}
+	}
+	return nil
+}
+
+// buildMatch 构造含上下文行的匹配记录（仅 content 模式使用）。
+func (g *grepRunner) buildMatch(path string, i int, line string, lines []string) grepMatch {
+	m := grepMatch{File: path, Line: i + 1, Text: line}
+	if g.args.ContextBefore > 0 {
+		start := i - g.args.ContextBefore
+		if start < 0 {
+			start = 0
+		}
+		m.ContextBefore = lines[start:i]
+	}
+	if g.args.ContextAfter > 0 {
+		end := i + 1 + g.args.ContextAfter
+		if end > len(lines) {
+			end = len(lines)
+		}
+		m.ContextAfter = lines[i+1 : end]
+	}
+	return m
+}
+
+// result 序列化最终输出，按 mode 返回对应结构。
+func (g *grepRunner) result() ([]byte, error) {
+	switch g.mode {
+	case "content":
+		return json.Marshal(map[string]any{"matches": g.matches, "truncated": g.truncated})
+	case "files_with_matches":
+		return json.Marshal(map[string]any{"files": g.files, "truncated": g.truncated})
+	case "count":
+		return json.Marshal(map[string]any{"counts": g.counts, "total": g.total, "truncated": g.truncated})
+	default:
+		return nil, perrors.New(perrors.CodeInternal, "grep: unreachable")
+	}
+}
+
 func makeGrepFn(allowedPaths []string) action.InProcessFn {
-	return func(ctx context.Context, input []byte) ([]byte, error) {
+	return func(_ context.Context, input []byte) ([]byte, error) {
 		var args grepArgs
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, perrors.Wrap(perrors.CodeInternal, "grep: invalid args", err)
@@ -632,8 +828,10 @@ func makeGrepFn(allowedPaths []string) action.InProcessFn {
 		if len(allowedPaths) == 0 {
 			return nil, perrors.New(perrors.CodeInternal, "grep: no allowed paths configured")
 		}
+		if err := grepValidateMode(args.OutputMode); err != nil {
+			return nil, err
+		}
 
-		// 编译正则（CaseInsensitive 通过前缀 flag 实现，无需额外分支）
 		reStr := args.Pattern
 		if args.CaseInsensitive {
 			reStr = "(?i)" + reStr
@@ -643,7 +841,6 @@ func makeGrepFn(allowedPaths []string) action.InProcessFn {
 			return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("grep: invalid pattern: %v", err))
 		}
 
-		// 确定搜索根目录
 		searchRoots := allowedPaths
 		if args.Path != "" {
 			if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
@@ -652,162 +849,19 @@ func makeGrepFn(allowedPaths []string) action.InProcessFn {
 			searchRoots = []string{filepath.Clean(args.Path)}
 		}
 
-		// 参数边界收束，防止 DoS
-		if args.ContextBefore < 0 {
-			args.ContextBefore = 0
-		}
-		if args.ContextAfter < 0 {
-			args.ContextAfter = 0
-		}
-		if args.ContextBefore > 10 {
-			args.ContextBefore = 10
-		}
-		if args.ContextAfter > 10 {
-			args.ContextAfter = 10
-		}
-		limit := args.HeadLimit
-		if limit <= 0 {
-			limit = 250
-		}
-		if limit > 1000 {
-			limit = 1000
-		}
-		mode := args.OutputMode
-		if mode == "" {
-			mode = "files_with_matches"
-		}
-		switch mode {
-		case "content", "files_with_matches", "count":
-		default:
-			return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("grep: unknown output_mode %q", mode))
-		}
-
-		type fileCount struct {
-			File  string `json:"file"`
-			Count int    `json:"count"`
-		}
-
-		var (
-			matches   []grepMatch
-			files     []string
-			counts    []fileCount
-			total     int
-			truncated bool
-		)
-		seenFiles := make(map[string]struct{})
-
-		walkFn := func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil || d.IsDir() {
-				return nil
-			}
-			// 截止检查：已到 limit 则直接跳过剩余 walk
-			if truncated {
-				return filepath.SkipAll
-			}
-			// 文件名 glob 过滤
-			if args.Glob != "" {
-				if matched, _ := doublestar.Match(args.Glob, filepath.Base(path)); !matched {
-					return nil
-				}
-			}
-
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil // 权限不足等情况静默跳过
-			}
-			// 二进制文件检测：前 512 字节含 null 则跳过，避免产生乱码输出
-			probe := data
-			if len(probe) > 512 {
-				probe = probe[:512]
-			}
-			for _, b := range probe {
-				if b == 0 {
-					return nil
-				}
-			}
-
-			lines := strings.Split(string(data), "\n")
-			fileMatchCount := 0
-
-			fileHasMatch := false
-			for i, line := range lines {
-				if !re.MatchString(line) {
-					continue
-				}
-				fileMatchCount++
-				fileHasMatch = true
-
-				if mode == "content" {
-					m := grepMatch{
-						File: path,
-						Line: i + 1,
-						Text: line,
-					}
-					if args.ContextBefore > 0 {
-						start := i - args.ContextBefore
-						if start < 0 {
-							start = 0
-						}
-						m.ContextBefore = lines[start:i]
-					}
-					if args.ContextAfter > 0 {
-						end := i + 1 + args.ContextAfter
-						if end > len(lines) {
-							end = len(lines)
-						}
-						m.ContextAfter = lines[i+1 : end]
-					}
-					matches = append(matches, m)
-					if len(matches) >= limit {
-						truncated = true
-						return filepath.SkipAll
-					}
-				} else if mode == "files_with_matches" {
-					// 找到首个匹配即记录文件，break 退出行扫描（无需继续）
-					if _, seen := seenFiles[path]; !seen {
-						seenFiles[path] = struct{}{}
-						files = append(files, path)
-					}
-					break
-				}
-				// count mode：继续扫描以累计该文件总匹配数
-			}
-
-			// files_with_matches limit 检查（行循环外）
-			if mode == "files_with_matches" && len(files) >= limit {
-				truncated = true
-				return filepath.SkipAll
-			}
-			// count mode：有匹配则追加
-			if mode == "count" && fileHasMatch {
-				total += fileMatchCount
-				counts = append(counts, fileCount{File: path, Count: fileMatchCount})
-				if len(counts) >= limit {
-					truncated = true
-					return filepath.SkipAll
-				}
-			}
-			return nil
-		}
+		grepClampArgs(&args)
+		runner := newGrepRunner(re, args)
 
 		for _, root := range searchRoots {
-			if err := filepath.WalkDir(filepath.Clean(root), walkFn); err != nil {
-				slog.Warn("grep: walk error", "root", root, "err", err)
+			if walkErr := filepath.WalkDir(filepath.Clean(root), runner.walk); walkErr != nil {
+				slog.Warn("grep: walk error", "root", root, "err", walkErr)
 			}
-			if truncated {
+			if runner.truncated {
 				break
 			}
 		}
 
-		switch mode {
-		case "content":
-			return json.Marshal(map[string]any{"matches": matches, "truncated": truncated})
-		case "files_with_matches":
-			return json.Marshal(map[string]any{"files": files, "truncated": truncated})
-		case "count":
-			return json.Marshal(map[string]any{"counts": counts, "total": total, "truncated": truncated})
-		}
-		return nil, perrors.New(perrors.CodeInternal, "grep: unreachable")
+		return runner.result()
 	}
 }
 
