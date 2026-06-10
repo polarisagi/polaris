@@ -235,9 +235,9 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 | FeaturePRMTraining | ≥Tier2, ≥8GB free | — |
 | FeatureL3Sandbox | ≥Tier0, ≥512MB free, 平台检测 | — |
 | FeatureL2Sandbox | ≥Tier0, ≥128MB free | — |
-| FeatureGraphRAGFull | ≥Tier1, ≥1.5GB free | — |
-| FeatureSurrealDB-CoreFTS | ≥Tier1, ≥256MB free | — |
-| FeatureSurrealDB-CoreGraph | ≥Tier1, ≥512MB free | — |
+| FeatureGraphRAGFull | ≥Tier0, ≥1.5GB free | — |
+| FeatureSurrealDB-CoreFTS | ≥Tier0, ≥256MB free | — |
+| FeatureSurrealDB-CoreGraph | ≥Tier0, ≥512MB free | — |
 | FeatureLargeLocalLLM | ≥Tier3, ≥24GB free | LocalInference |
 | FeatureLogicCollapse | ≥Tier1, ≥1GB free | L2Sandbox |
 | FeatureComputerUseGUI | ≥Tier0, ≥512MB, hasDisplay() | — |

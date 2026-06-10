@@ -318,15 +318,15 @@ CitationValidator.Validate(citation AnswerCitation, claim string) → Validation
 
 ### 5.1 SurrealDB-Core BM25 Reranker
 
-BM25Reranker (接口定义见 `pkg/substrate/`，M5/M10 共享): k1=1.2, b=0.75。FinalScore=RRF融合分×0.7+BM25精确分×0.3。Tier 1+ 实现: SurrealDB-Core FFI (<5ms)；Tier 0 实现: SQLite FTS5 BM25 (`bm25()` 辅助函数, <3ms, 同公式)。HardwareProbe 启动时选择实现，M10 通过接口注入，不直接依赖 SurrealDB-Core。
+BM25Reranker (接口定义见 `pkg/substrate/`，M5/M10 共享): k1=1.2, b=0.75。FinalScore=RRF融合分×0.7+BM25精确分×0.3。实现: SurrealDB-Core FFI (<5ms)。M10 通过接口注入，不直接依赖 SurrealDB-Core。
 
-Tokenization: Tier 0 → SQLite FTS5 + jieba 中文分词扩展（Go 纯实现）；Tier 1+ → SurrealDB-Core + jieba-rs / lindera 多语言分词器。M3 启动期检测系统 locale，自动选择默认分词器。
+Tokenization: SurrealDB-Core + jieba-rs / lindera 多语言分词器；M3 启动期检测系统 locale，自动选择默认分词器。
 
 方案矩阵: SurrealDB-Core BM25 FFI(<5ms,P0) / Late-Interaction ColBERT-style(<20ms,研究方向MVP不用) / ONNX(~130ms,不采用,278M~500MB+) / Python sidecar(~150ms,不采用)
 
 ### 5.2 Late-Interaction (研究方向)
 
-暂不采用 Late-Interaction——Go 生态无成熟 BPE/WordPiece tokenizer。目前 Tier 0 基线已实现基于 SurrealDB-Core（Rust FFI via purego，D-07 决议）的单向量 KNN + FTS5 BM25 的 RRF (Reciprocal Rank Fusion) 混合检索机制，满足生产环境需求。
+暂不采用 Late-Interaction——Go 生态无成熟 BPE/WordPiece tokenizer。当前已实现基于 SurrealDB-Core（Rust FFI via purego）的单向量 KNN + BM25 的 RRF (Reciprocal Rank Fusion) 混合检索机制，满足生产环境需求。
 
 ---
 

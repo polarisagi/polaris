@@ -51,15 +51,15 @@ Route(ctx, req) → Store:
 
 ### 1.3 路由规则表
 
-- 数据类型: Agent 会话状态/配置 | 访问模式: 随机读写 | 延迟要求: <1ms | Tier 0: [Storage-SQLite] | Tier 1+: [Storage-SQLite]
-- 数据类型: Embedding 向量 | 访问模式: 批量写 + KNN 读 | 延迟要求: <5ms | Tier 0: [Storage-SurrealDB-Core] | Tier 1+: [Storage-SurrealDB-Core]
-- 数据类型: 事件日志 | 访问模式: Append-only 写 + 时序扫描 | 延迟要求: <100us 写 | Tier 0: [Storage-SQLite] WAL | Tier 1+: [Storage-SQLite] WAL
-- 数据类型: 技能缓存（热点） | 访问模式: 高频读 | 延迟要求: <10us | Tier 0: [Storage-SurrealDB-Core] | Tier 1+: [Storage-SurrealDB-Core]
-- 数据类型: 知识图谱遍历 | 访问模式: 随机多跳读 | 延迟要求: <10ms | Tier 0: SQLite 邻接表 + 递归 CTE | Tier 1+: [Storage-SurrealDB-Core]（Rust FFI via purego，Datalog 规则引擎原生多跳推理）
-- 数据类型: 知识片段 (knowledge) / 全文检索 (fulltext) | 访问模式: 批量写 + ad-hoc 查询 | 延迟要求: <50ms | Tier 0: FTS5 | Tier 1+: [Storage-SurrealDB-Core]
-- 数据类型: 路由表/元数据 | 访问模式: 高频读 + 低频写 | 延迟要求: <1us | Tier 0: sync.Map / [Storage-SurrealDB-Core] | Tier 1+: [Storage-SurrealDB-Core]
+- 数据类型: Agent 会话状态/配置 | 访问模式: 随机读写 | 延迟要求: <1ms | 存储: [Storage-SQLite]
+- 数据类型: Embedding 向量 | 访问模式: 批量写 + KNN 读 | 延迟要求: <5ms | 存储: [Storage-SurrealDB-Core]
+- 数据类型: 事件日志 | 访问模式: Append-only 写 + 时序扫描 | 延迟要求: <100us 写 | 存储: [Storage-SQLite] WAL
+- 数据类型: 技能缓存（热点） | 访问模式: 高频读 | 延迟要求: <10us | 存储: [Storage-SurrealDB-Core]
+- 数据类型: 知识图谱遍历 | 访问模式: 随机多跳读 | 延迟要求: <10ms | 存储: [Storage-SurrealDB-Core]（Rust FFI via purego，原生多跳图遍历）
+- 数据类型: 知识片段 (knowledge) / 全文检索 (fulltext) | 访问模式: 批量写 + ad-hoc 查询 | 延迟要求: <50ms | 存储: [Storage-SurrealDB-Core]
+- 数据类型: 路由表/元数据 | 访问模式: 高频读 + 低频写 | 延迟要求: <1us | 存储: sync.Map / [Storage-SurrealDB-Core]
 
-> **编译部署指南**: 完整 Tier 1+ 引擎 (RocksDB & HNSW) 需要编译参数支持。官方启动脚本支持一键开启：`./scripts/restart.sh --full --tier1`。
+> **部署说明**: surreal-rocksdb 后端需显式配置 `backend = "rocksdb"`（要求 ≥16GB）；默认 surreal-mem 后端任意机器开箱即用。
 
 ---
 
@@ -361,11 +361,11 @@ Outbox Worker 消费事件走写连接（保证读己写）。Agent 查询 Episo
   - 用途: 系统控制轴。唯一的绝对真相源 (EventLog)、任务状态机、ACID 队列 (Outbox)。零 FFI 开销，最高稳定性。
 - 引擎: **[Storage-SurrealDB-Core]** ([surrealdb](https://github.com/surrealdb/surrealdb) crate，Rust cdylib via purego, CGO-Free FFI)
   - 用途: 认知检索轴。SurrealDB 嵌入式模式原生提供 KV + HNSW 向量索引 + 有向图遍历 + BM25 全文检索，单一 crate 四轴闭环。决策与被驳方案（Qdrant+neo4j+ES / 仅 SQLite 自建 / BoltDB / 全 Rust 重写 / rust-rocksdb 直接使用）见 [ADR-0010](./decisions/ADR-0010-surrealdb-cognitive-storage.md)。
-  - **Rust crate**: `surrealdb = { version = "2", features = ["kv-rocksdb"] }`
+  - **Rust crate**: `surrealdb = { version = "3", features = ["kv-mem", "kv-rocksdb"] }`
   - > [!IMPORTANT]
-    > **Tier 分级存储策略 (纯内存 vs 磁盘持久化)**
-    > - **Tier 0 (≤8GB)**: 项目自建兼容内存实现（`BTreeMap` + 暴力扫描），**不引入 surrealdb crate**，保持 Tier-0 依赖最小化；进程重启后认知数据丢失，完全依赖 SQLite Outbox 投影在启动时重建。
-    > - **Tier 1+ (≥16GB)**: 启用真正的 `surrealdb` crate（嵌入模式 + `kv-rocksdb` 后端），数据持久化写入 `~/.polarisagi/polaris/data/surreal.db`，HNSW 索引自动激活，实现高性能本地存储落盘。
+    > **后端选择策略（运行时配置，`configs/defaults.toml [cognition]`）**
+    > - **surreal-mem（默认）**: `kv-mem` 后端，任意内存机器可用（最低 512MB 总内存）；`vec_max` 启动时按可用内存自动计算；进程重启数据丢失，由 SQLite Outbox 投影恢复（§2.5）。
+    > - **surreal-rocksdb（显式配置）**: `kv-rocksdb` 后端，要求 ≥16GB；数据持久化落盘 `~/.polarisagi/polaris/data/surreal.db`；需显式设置 `backend = "rocksdb"`。
 - 引擎: **[Storage-Ristretto]** (纯 Go)
   - 用途: 热缓存轴。纯内存态的 L0 Working Memory。
 
