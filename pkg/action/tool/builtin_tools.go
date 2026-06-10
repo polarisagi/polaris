@@ -69,6 +69,9 @@ func RegisterBuiltinTools(
 		{"notebook_read", makeNotebookReadFn(allowedPaths)},
 		{"notebook_edit", makeNotebookEditFn(allowedPaths)},
 		{"grep", makeGrepFn(allowedPaths)},
+		{"git_diff", makeGitDiffFn(allowedPaths)},
+		{"git_commit", makeGitCommitFn(allowedPaths)},
+		{"template_render", templateRenderFn},
 	}
 
 	defs = append(defs, getLegacyBuiltinDefs()...)
