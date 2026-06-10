@@ -1,7 +1,7 @@
 # Polaris — 架构总览
 
 > 主入口 + SSoT 锚点。详细模块设计见 `M01..M13.md`,概念定义见 [00-Global-Dictionary](./00-Global-Dictionary.md),文档导航见 [INDEX.md](./INDEX.md)。
-> **§跳读**: 0:8 SSoT / 1:16 定位约束 / 2:62 49(SOFT)部署 / 3:75 Staging / 4:99 HT0预算 / 5:128 变更控制 / 6:142 配置层
+> **§跳读**: 0:8 SSoT / 1:16 定位约束 / 2:62 49(SOFT)部署 / 3:75 Staging / 4:101 HT0预算 / 5:130 变更控制 / 6:146 配置层
 
 ---
 

@@ -1,7 +1,7 @@
 # 模块 8: Multi-Agent Orchestrator
 
 > 单机黑板 + CAS 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 黑板+CAS(核心) / 2:119 Supervisor / 3:136 编排模式 / 3-bis:154 SwarmRouter / 4:213 AgentCard / 5:227 Task分解 / 8:236 拓扑自演化 / 10:251 (SOFT)降级 / 11:270 跨模块契约 / 12:288 Custom Agent / 13:328 CSV Fan-out
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 黑板+CAS(核心) / 2:119 Supervisor / 3:136 编排模式 / 3-bis:154 SwarmRouter / 4:266 AgentCard / 5:280 Task分解 / 8:289 拓扑自演化 / 10:304 (SOFT)降级 / 11:323 跨模块契约 / 12:347 Custom Agent / 13:387 CSV Fan-out
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |

@@ -3,7 +3,7 @@
 > API 优先架构。Provider Router 为核心。本地推理仅隐私/离线备选。
 > Go 实现 | [HE-Rule-1] [HE-Rule-2] [HE-Rule-3] [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
 > [Module-Topology] [Code-Package-Mapping] [Tier-0-Limit] [Tier-1-Limit]
-> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:129 Token预算 / 6:218 SemanticCache / 7:238 Fallback / 8:281 本地推理local_only / 9:338 ModelVersion / 12:364 349(SOFT)降级 / 13:384 依赖
+> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:127 Token预算 / 6:216 SemanticCache / 7:238 Fallback / 8:281 本地推理local_only / 9:337 ModelVersion / 12:363 349(SOFT)降级 / 13:383 依赖
 
 ---
 

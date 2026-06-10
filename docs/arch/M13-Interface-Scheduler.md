@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP/SSE + MCP + Web UI; 对内: 任务队列 + 定时任务 + HITL
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-> **§跳读**: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:34 对外接口 / 2:251 对内调度 / 3:350 MCP / 6:361 (SOFT)降级 / 7:378 跨模块契约 / 8:395 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences
+> **§跳读**: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:34 对外接口 / 2:289 对内调度 / 3:389 MCP / 6:400 (SOFT)降级 / 7:417 跨模块契约 / 8:434 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -82,6 +82,7 @@ GET    /v1/sessions                        列出会话
 GET    /v1/sessions/{id}                   会话详情
 DELETE /v1/sessions/{id}                   删除会话
 GET    /v1/sessions/{id}/recap             会话摘要
+GET    /v1/sessions/{id}/context           上下文诊断（token 用量 + 压缩统计，见 §1.2.6）
 
 ─── 搜索与洞察 ─────────────────────────────────────────
 GET  /v1/search                            全文搜索
@@ -170,7 +171,10 @@ POST /v1/chat/completions                  OpenAI 兼容端点（第三方客户
 ```
 
 SSE 请求 (`POST /v1/agent/stream`): query(string,req) / session_id(string,opt) / model(string,opt) / temperature(float32,opt) / max_tokens(int,opt)
-SSE 事件 (text/event-stream): "token" | "tool_call" | "tool_result" | "thinking" | "error" | "complete" → data: <JSON>\n\n
+SSE 事件 (text/event-stream): "token" | "tool_call" | "tool_result" | "thinking" | "error" | "complete" | "context_warning" | "status/compacting" | "status/compacted" → data: <JSON>\n\n
+- `context_warning`：上下文使用率 ≥ warnPct 时触发；payload: `{usage_pct, thrashing}`（thrashing=true 时前端变红色 Banner 并隐藏"立即压缩"按钮，见 §1.2.6）
+- `status/compacting`：压缩进行中（前端显示蓝色 Indicator）
+- `status/compacted`：压缩完成（前端在末尾消息标记分隔线）
 
 #### 1.2.1 认证
 
@@ -218,6 +222,40 @@ Body: { action: "resume" | "redirect" | "abort", instruction?: string }
 - 与 [KillSwitch] 同等优先级但作用域为单 task；KillSwitch FULLSTOP 覆盖所有 task，UserInterrupt 仅当前 taskID
 - 同 task 30s 内重复中断 → HTTP 429（防抖）
 - task 不存在 / 已 S_COMPLETE/S_FAILED → HTTP 404
+
+#### 1.2.6 上下文压缩机制（Compressor）
+
+`pkg/gateway/server/compressor.go` — 对齐 Claude Code 自动压缩机制。
+
+**阈值模型**（百分比，非绝对 token 数）：
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `context_window` | 32768 | 上下文窗口大小（token） |
+| `auto_compact_pct` | 95% | 自动压缩触发阈值（`contextWindow × pct`） |
+| `warn_pct` | 80% | 警告 Banner 触发阈值 |
+| `max_thrash_count` | 3 | 连续 thrashing 上限 |
+
+TOML 配置：`configs/defaults.toml [compressor]`。
+
+**Thrashing 防抖**：`compact()` 追踪 `thrashedCount`——压缩后仍超阈值则累计；连续 ≥ `max_thrash_count` 次后停止自动压缩，SSE 推送红色 `context_warning{thrashing:true}`，等待用户手动干预（`ForceCompact()` 重置计数给一次新机会）。
+
+**调用链**：`sse.go` 每轮推理前调用 `Compressor.NeedsCompact()` → thrashing 状态下跳过 → 否则调 `Compressor.Compact()`（LLM 摘要） → 压缩前后各推一次 SSE `status/compacting` / `status/compacted`。
+
+`GET /v1/sessions/{id}/context` 返回当前 `ContextStats`（token 数 / 阈值 / 使用率 / 上次压缩时间 / thrashing 状态），供前端 `/context` 斜线命令展示。
+
+#### 1.2.7 斜线命令系统（SlashCommandRouter）
+
+`pkg/gateway/server/slash_commands.go` — 在 SSE 层拦截用户输入（provider 选取后、LLM 推理前），不消耗 TokenBudget，不进入 Agent FSM。
+
+| 命令 | 行为 |
+|------|------|
+| `/context` | 读取 `ContextStats` → SSE 输出 token 使用率统计表格 |
+| `/compact` | 调 `ForceCompact()`（跳过阈值检查 + 重置 thrashing 计数）|
+| `/clear` | 物理删除 DB 中非 system 消息 + 前端 `clearView()` 双清 |
+| `/help` | SSE 输出所有注册命令列表 |
+
+`SlashCommandRouter.Dispatch()` 返回 `CommandResult{Handled, Response, UpdatedHistory}`；Handled=true 时调用方短路，直接发 `complete` 事件。命令回复作为助手消息持久化到 DB。
 
 ### 1.3 WebSocket [计划：可选升级路径]
 

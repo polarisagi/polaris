@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Wasm(wazero) | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、wazero 实现、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:127 三级沙箱(CANONICAL) / 5:263 PolicyGate / 6:318 Capability / 7:335 动作扩展 / 8:465 Usage演化 / 12:506 (SOFT)降级 / 13:524 跨模块契约 / 14:544 Plugin / 15:586 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:161 三级沙箱(CANONICAL) / 5:297 PolicyGate / 6:352 Capability / 7:369 动作扩展 / 8:499 Usage演化 / 12:540 (SOFT)降级 / 13:558 跨模块契约 / 14:578 Plugin / 15:620 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -130,11 +130,31 @@ Polaris L1 层提供生存套件（Survival Kit）。其中，最核心的代码
   - **优势**：对齐业界 AI Coding 最佳实践（Targeted String Matching），避免基于行号带来的漂移问题。
   - **安全与回退**：自带基于 WorkingMemory（Session级）的 `undo_edit` 内存环形缓冲，与 State-in-DB 设计完全兼容。若 `old_str` 匹配不唯一或不存，直接失败拒绝执行。
 - **`run_command` (核心)**：提供受限的测试、构建、格式化等执行环境。
-  - 严禁使用通用的 `bash` 工具（已被标注为高风险和永久禁止执行复杂逻辑），所有测试需通过 `run_command`（仅允许 `go test`, `cargo`, `make` 等白名单前缀）。
-  - 支持 `ContainerSandbox` 的命名空间隔离，限制最大超时为 120s，无 `stdin` 注入可能。
+  - 仅允许 `go test`, `cargo`, `make` 等构建工具前缀白名单，明确排除 `bash`/`sh` 等 shell 解释器直接命令。
+  - 通过 §3.2 `WrapBashCmd` 平台原生沙箱保护，限制最大超时 120s，无 `stdin` 注入可能。
+- **`bash` (受限内置)**：提供通用命令执行能力，无前缀白名单限制。
+  - 通过 §3.2 `WrapBashCmd` 平台原生沙箱保护（sandboxEnabled=true 时）。
+  - Auto-Curriculum 规则：LLM 生成技能（Wasm 层）中永久禁止调用 `bash`（字符集 `[A-Za-z0-9 ./\-_=:,]`，禁管道/重定向/命令替换），此限制不适用于 Built-in 层。
 
 **关于 Git MCP 的定位**：
 系统完全 VCS-Agnostic（无需内置 Git 版本控制）。若业务流需提交代码、切换分支，必须通过挂载 `polaris-git-mcp` 这一 L3 MCP 扩展。外部 Git 扩展绝不允许代劳底层文件覆写，只负责版本控制语义。
+
+### 3.2 平台原生进程沙箱（WrapBashCmd）
+
+`pkg/action/tool/native_sandbox.go` — 为内置 `bash` 和 `run_command` 工具提供进程级隔离，与 wazero Wasm 沙箱互补（wazero 管 Wasm 技能，原生沙箱管系统进程）。
+
+`WrapBashCmd(ctx, NativeSandboxCfg) (*exec.Cmd, error)` 按平台分发：
+
+| 平台 | 实现 | 隔离机制 |
+|------|------|---------|
+| macOS | Apple Seatbelt (`sandbox-exec -p <SBPL>`) | deny-default + 白名单可读/可写路径 + 网络策略 |
+| Linux | bubblewrap (`bwrap --unshare-pid/uts/ipc[/net]`) | rootfs ro-bind 系统目录 + bind workspace + namespace 隔离 |
+| Windows | WSL2 (`wsl.exe --cd`) | VM 级隔离；网络管控提示需 Windows 防火墙 |
+| 降级 | `wrapFallback` | env 清理 + 无额外 namespace（仅最后防线） |
+
+配置入口：`configs/defaults.toml [sandbox]`（`enabled=true`, `network_policy=block`）→ `internal/config.SandboxConfig`。
+`RegisterBuiltinTools(sandboxEnabled, netPolicy, bwrapPath)` 将配置注入各工具闭包。
+bwrap 不可用时自动降级 `wrapFallback`（WARN 审计），不向上层抛出错误。
 
 ---
 
