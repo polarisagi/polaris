@@ -217,29 +217,7 @@ func run() error { //nolint:gocyclo
 	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）──
 	// 后端由 [cognition] surreal_backend 控制：mem（默认）或 rocksdb（≥16GB 显式配置）。
 	// 向量维度由 [inference] embedder_dim 控制，需与嵌入模型一致。
-	var surrealStore *storage.SurrealDBCoreStore
-	if autoConf != nil && autoConf.Gate.State(observability.FeatureSurrealDBCore) != observability.FeatureDisabled {
-		surrealBackend := cfg.Cognition.SurrealBackend
-		if surrealBackend == "" {
-			surrealBackend = "mem"
-		}
-		surrealDBPath := cfg.Cognition.SurrealDBPath
-		if surrealDBPath == "" {
-			surrealDBPath = layout.SurrealDB
-		}
-		vecDim := cfg.Inference.EmbedderDim
-		if vecDim <= 0 {
-			vecDim = 1536
-		}
-		if surrealCore, sErr := storage.OpenSurrealDBCore(surrealBackend, surrealDBPath, vecDim); sErr != nil {
-			slog.Warn("polaris: SurrealDB Core init failed, cognitive axis falls back to SQLite", "err", sErr)
-		} else {
-			surrealStore = surrealCore
-			slog.Info("polaris: SurrealDB Core initialized", "backend", surrealBackend, "vec_dim", vecDim)
-		}
-	} else {
-		slog.Info("polaris: SurrealDB Core disabled by FeatureGate (memory pressure), cognitive axis → SQLite")
-	}
+	surrealStore := initSurrealStore(autoConf, cfg, layout)
 
 	// ─── 2.6 StorageRouter（三轴统一路由）────────────────────────────────────
 	var surrealProto protocol.Store
@@ -818,6 +796,37 @@ func printStartupSummary(cfg *config.Config, components ...any) {
 // kernel.Agent.Run(ctx) error 与 eval.EvalAgent.Run(ctx, []byte) ([]byte, []string, error) 签名不匹配。
 type evalAgentAdapter struct {
 	agent *kernel.Agent
+}
+
+// initSurrealStore 初始化 SurrealDB Core 认知存储，提取出独立函数以降低 main 嵌套复杂度。
+func initSurrealStore(
+	autoConf *observability.AutoConfig,
+	cfg *config.Config,
+	layout config.DataLayout,
+) *storage.SurrealDBCoreStore {
+	if autoConf == nil || autoConf.Gate.State(observability.FeatureSurrealDBCore) == observability.FeatureDisabled {
+		slog.Info("polaris: SurrealDB Core disabled by FeatureGate (memory pressure), cognitive axis → SQLite")
+		return nil
+	}
+	backend := cfg.Cognition.SurrealBackend
+	if backend == "" {
+		backend = "mem"
+	}
+	dbPath := cfg.Cognition.SurrealDBPath
+	if dbPath == "" {
+		dbPath = layout.SurrealDB
+	}
+	vecDim := cfg.Inference.EmbedderDim
+	if vecDim <= 0 {
+		vecDim = 1536
+	}
+	store, err := storage.OpenSurrealDBCore(backend, dbPath, vecDim)
+	if err != nil {
+		slog.Warn("polaris: SurrealDB Core init failed, cognitive axis falls back to SQLite", "err", err)
+		return nil
+	}
+	slog.Info("polaris: SurrealDB Core initialized", "backend", backend, "vec_dim", vecDim)
+	return store
 }
 
 func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []string, error) {
