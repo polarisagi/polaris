@@ -103,17 +103,21 @@ pub unsafe extern "C" fn wasmtime_execute(
     out_err: *mut *mut c_char,
 ) -> c_int {
     let result = panic::catch_unwind(|| -> c_int {
-        let global = GLOBAL_ENGINE.lock().unwrap();
-        let engine_state = match global.as_ref() {
-            Some(s) => s,
-            None => {
-                write_err(out_err, "Engine not initialized");
-                return WASMTIME_ERR_INTERNAL;
+        // 先取出 Arc clone，立即释放 Mutex。
+        // 原实现在持锁期间做模块编译（高耗时），会长时间阻塞其他并发调用方。
+        let engine_arc = {
+            let global = GLOBAL_ENGINE.lock().unwrap();
+            match global.as_ref() {
+                Some(s) => Arc::clone(s),
+                None => {
+                    write_err(out_err, "Engine not initialized; call wasmtime_init first");
+                    return WASMTIME_ERR_INTERNAL;
+                }
             }
-        };
+        }; // Mutex 在此释放，编译在锁外进行
 
         let _input_str = if input_json.is_null() {
-            ""
+            "{}"
         } else {
             match std::ffi::CStr::from_ptr(input_json).to_str() {
                 Ok(s) => s,
@@ -125,11 +129,9 @@ pub unsafe extern "C" fn wasmtime_execute(
         };
 
         let bytes = std::slice::from_raw_parts(wasm_bytes, wasm_len);
-        
-        // MVP: We'll implement execution by mapping WASI pipes later, 
-        // for now let's just make sure it compiles with WasiCtxBuilder.
-        // Wait, to safely test we can just compile the module.
-        let _module = match Module::from_binary(&engine_state.engine, bytes) {
+
+        // 编译验证（在锁外执行，Engine 本身线程安全）
+        let _module = match Module::from_binary(&engine_arc.engine, bytes) {
             Ok(m) => m,
             Err(e) => {
                 write_err(out_err, &format!("Compile error: {}", e));
@@ -137,8 +139,18 @@ pub unsafe extern "C" fn wasmtime_execute(
             }
         };
 
-        write_err(out_json, "{\"status\": \"mock_success\"}");
-        WASMTIME_OK
+        // TODO: 实现 WASI 执行路径（Task#wasmtime-wasi-execution）
+        //   1. WasiCtxBuilder::new().stdin(MemoryInputPipe(input_json))
+        //                           .stdout(MemoryOutputPipe)
+        //                           .build_p1()
+        //   2. Store::new(&engine_arc.engine, wasi_ctx)
+        //      store.set_fuel(100_000_000)  // 防 LLM 生成死循环
+        //   3. preview1::add_to_linker_sync(&mut linker, |cx| cx)
+        //   4. linker.instantiate → call "_start" → stdout → write_err(out_json, ...)
+        //
+        // 原实现返回 mock_success，会让调用方误以为执行成功，改为明确的未实现错误。
+        write_err(out_err, "wasmtime_execute: WASI execution path not yet implemented");
+        WASMTIME_ERR_INTERNAL
     });
 
     match result {
@@ -149,4 +161,7 @@ pub unsafe extern "C" fn wasmtime_execute(
         }
     }
 }
+
+// 消除 #[allow(dead_code)] — 错误码在执行路径实现后全部启用
+
 

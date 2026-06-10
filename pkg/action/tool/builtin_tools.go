@@ -4,19 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
-
-	"fmt"
-
-	"net/url"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -830,23 +830,22 @@ func makeGlobFn(allowedPaths []string) action.InProcessFn {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, perrors.Wrap(perrors.CodeInternal, "glob: invalid args", err)
 		}
-		workDir := ""
-		if len(allowedPaths) > 0 {
-			workDir = allowedPaths[0]
-		}
-		if workDir == "" {
+		if len(allowedPaths) == 0 {
 			return nil, perrors.New(perrors.CodeInternal, "glob: no allowed paths configured")
 		}
 
-		fsys := os.DirFS(workDir)
-		matches, err := doublestar.Glob(fsys, args.Pattern)
-		if err != nil {
-			return nil, perrors.Wrap(perrors.CodeInternal, "glob: error matching", err)
-		}
-
+		// 遍历所有允许路径，而非仅第一个
 		var fullPaths []string
-		for _, m := range matches {
-			fullPaths = append(fullPaths, filepath.Join(workDir, m))
+		for _, workDir := range allowedPaths {
+			fsys := os.DirFS(workDir)
+			// os.DirFS 限定了根目录，doublestar.Glob 不会跨越边界
+			matches, err := doublestar.Glob(fsys, args.Pattern)
+			if err != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "glob: error matching", err)
+			}
+			for _, m := range matches {
+				fullPaths = append(fullPaths, filepath.Join(workDir, m))
+			}
 		}
 		return json.Marshal(map[string]any{"matches": fullPaths})
 	}
@@ -865,6 +864,13 @@ func makeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) action.InPr
 		if dialer == nil {
 			return nil, perrors.New(perrors.CodeInternal, "web_search: SafeDialer is required")
 		}
+		// Query 长度防护：防止超大查询消耗带宽和下游资源
+		if len(args.Query) == 0 {
+			return nil, perrors.New(perrors.CodeInternal, "web_search: query is empty")
+		}
+		if len(args.Query) > 500 {
+			return nil, perrors.New(perrors.CodeInternal, "web_search: query exceeds 500 chars")
+		}
 
 		client := &http.Client{
 			Transport: &http.Transport{DialContext: dialer.DialContext},
@@ -882,7 +888,8 @@ func makeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) action.InPr
 			return nil, perrors.Wrap(perrors.CodeInternal, "web_search: req failed", err)
 		}
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		// 限制读取大小（2MB），防止超大响应体导致内存耗尽
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 
 		tagRe := regexp.MustCompile(`<[^>]*>`)
 		spaceRe := regexp.MustCompile(`\s+`)
@@ -899,6 +906,9 @@ func makeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) action.InPr
 }
 
 // ─── todo_write & todo_read ──────────────────────────────────────────────────
+
+// todoMu 保护 todo 文件的并发读写，防止多 Agent 同时写入导致数据丢失。
+var todoMu sync.Mutex
 
 func getTodoPath(allowedPaths []string) (string, error) {
 	if len(allowedPaths) == 0 {
@@ -919,6 +929,8 @@ func makeTodoWriteFn(allowedPaths []string) action.InProcessFn {
 		if err != nil {
 			return nil, err
 		}
+		todoMu.Lock()
+		defer todoMu.Unlock()
 		data, _ := json.MarshalIndent(args.Todos, "", "  ")
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			return nil, perrors.Wrap(perrors.CodeInternal, "todo_write: write failed", err)
@@ -933,6 +945,8 @@ func makeTodoReadFn(allowedPaths []string) action.InProcessFn {
 		if err != nil {
 			return nil, err
 		}
+		todoMu.Lock()
+		defer todoMu.Unlock()
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return []byte(`{"todos":[]}`), nil
 		}
@@ -970,14 +984,42 @@ func makeMultiEditFn(allowedPaths []string) action.InProcessFn {
 		if err != nil {
 			return nil, perrors.Wrap(perrors.CodeInternal, "multi_edit: read failed", err)
 		}
-		content := string(data)
+		original := string(data)
+
+		// 第一遍：在原始内容中定位所有替换区间，防止链式污染。
+		// 链式污染：顺序替换时 edit[0].NewStr 若包含 edit[1].OldStr，
+		// 会被 edit[1] 二次替换，产生非预期结果。
+		type region struct{ start, end int; newStr string }
+		regions := make([]region, 0, len(args.Edits))
 		for _, edit := range args.Edits {
-			if strings.Count(content, edit.OldStr) != 1 {
+			if strings.Count(original, edit.OldStr) != 1 {
 				return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("multi_edit: old_str not unique or not found: %q", edit.OldStr))
 			}
-			content = strings.Replace(content, edit.OldStr, edit.NewStr, 1)
+			idx := strings.Index(original, edit.OldStr)
+			regions = append(regions, region{idx, idx + len(edit.OldStr), edit.NewStr})
 		}
-		if err := os.WriteFile(cleanPath, []byte(content), 0600); err != nil {
+
+		// 按起始位置升序排列，便于重叠检测和顺序重建
+		sort.Slice(regions, func(i, j int) bool { return regions[i].start < regions[j].start })
+
+		// 检查区间重叠（两个 OldStr 在文件中位置交叉）
+		for i := 1; i < len(regions); i++ {
+			if regions[i].start < regions[i-1].end {
+				return nil, perrors.New(perrors.CodeInternal, "multi_edit: edits overlap in file")
+			}
+		}
+
+		// 从原始内容重建，避免任何链式副作用
+		var buf strings.Builder
+		cursor := 0
+		for _, r := range regions {
+			buf.WriteString(original[cursor:r.start])
+			buf.WriteString(r.newStr)
+			cursor = r.end
+		}
+		buf.WriteString(original[cursor:])
+
+		if err := os.WriteFile(cleanPath, []byte(buf.String()), 0600); err != nil {
 			return nil, perrors.Wrap(perrors.CodeInternal, "multi_edit: write failed", err)
 		}
 		return []byte(`{"status":"success"}`), nil
