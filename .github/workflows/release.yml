@@ -60,15 +60,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up TinyGo
-        uses: acifani/setup-tinygo@v2
-        with:
-          tinygo-version: '0.41.0'
-          install-binaryen: 'true'
-
-      - name: Build Skills
-        shell: bash
-        run: make build-skills
 
       - name: Build Project
         shell: bash

@@ -1,0 +1,12 @@
+name: code_review
+description: Analyze code or a diff and return structured review feedback with severity,
+  category, and suggestions.
+version: 1.0.0
+tags:
+- code
+- review
+- analysis
+exec_mode: tool
+risk_level: low
+sandbox: L1
+capability: read-only

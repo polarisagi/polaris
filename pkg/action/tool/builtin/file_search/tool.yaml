@@ -1,0 +1,12 @@
+name: file_search
+description: Recursively search file contents by pattern and return matched lines
+  with file paths and line numbers.
+version: 1.0.0
+tags:
+- filesystem
+- search
+- grep
+exec_mode: tool
+risk_level: low
+sandbox: L1
+capability: read-only

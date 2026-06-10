@@ -15,11 +15,7 @@ type FilesystemWasmLoader struct {
 }
 
 // NewFilesystemWasmLoader 构造文件系统 Wasm 加载器。
-// baseDir 默认为 "skills/builtin"。
 func NewFilesystemWasmLoader(baseDir string) *FilesystemWasmLoader {
-	if baseDir == "" {
-		baseDir = "skills/builtin"
-	}
 	return &FilesystemWasmLoader{baseDir: baseDir}
 }
 

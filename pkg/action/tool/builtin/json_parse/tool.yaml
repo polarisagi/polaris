@@ -1,0 +1,12 @@
+name: json_parse
+description: Parse a JSON string into structured data and optionally validate it against
+  a JSON Schema.
+version: 1.0.0
+tags:
+- json
+- data
+- parsing
+exec_mode: tool
+risk_level: low
+sandbox: L1
+capability: read-only

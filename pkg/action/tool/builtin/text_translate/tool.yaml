@@ -1,0 +1,11 @@
+name: text_translate
+description: Translate text between languages using the configured language model.
+version: 1.0.0
+tags:
+- text
+- nlp
+- translation
+exec_mode: tool
+risk_level: low
+sandbox: L1
+capability: read-only

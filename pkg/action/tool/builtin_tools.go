@@ -57,6 +57,8 @@ func RegisterBuiltinTools(
 		{"read_tool_ref", makeReadToolRefFn()},
 	}
 
+	defs = append(defs, getLegacyBuiltinDefs()...)
+
 	for _, d := range defs {
 		meta, err := LoadBuiltinToolMeta(d.name)
 		if err != nil {

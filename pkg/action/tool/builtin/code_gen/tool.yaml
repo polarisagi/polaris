@@ -1,0 +1,12 @@
+name: code_gen
+description: Generate code from a natural language specification and write it to the
+  specified output file.
+version: 1.0.0
+tags:
+- code
+- generation
+- ai
+exec_mode: tool
+risk_level: medium
+sandbox: L2
+capability: write-local

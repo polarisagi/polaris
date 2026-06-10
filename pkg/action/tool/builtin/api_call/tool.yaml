@@ -1,0 +1,12 @@
+name: api_call
+description: Make an authenticated HTTP API call and return the response body, headers,
+  and status code.
+version: 1.0.0
+tags:
+- network
+- http
+- api
+exec_mode: tool
+risk_level: high
+sandbox: L2
+capability: write-network

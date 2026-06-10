@@ -1,0 +1,12 @@
+name: git_commit
+description: Stage files and create a git commit with a message; returns the resulting
+  commit hash.
+version: 1.0.0
+tags:
+- git
+- vcs
+- commit
+exec_mode: tool
+risk_level: high
+sandbox: L2
+capability: write-local
