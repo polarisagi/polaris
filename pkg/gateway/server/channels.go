@@ -164,7 +164,14 @@ func (s *Server) handleWebhookReceive(w http.ResponseWriter, r *http.Request) {
 	var cfg map[string]any
 	json.Unmarshal([]byte(cfgJSON), &cfg) //nolint:errcheck
 
-	body, _ := io.ReadAll(r.Body)
+	// [P1修复] webhook body 读取缺少大小限制，恶意方可发送超大 payload 耗尽内存。
+	// 限制为 4MB：足够容纳所有平台的 webhook 消息，远低于 VFS 上传的 100MB。
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	if channelType == "line" {
 		channelSecret, _ := cfg["channel_secret"].(string)
@@ -187,9 +194,27 @@ func (s *Server) handleWebhookReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// MS Teams Change Notifications：需要 validationToken 握手
+	// [P2修复] validationToken 来自外部请求参数，直接 echo 存在反射型 XSS 风险。
+	// 增加长度限制（≤256字节）+ 内容净化（只允许字母数字和 -_），阻断注入向量。
 	if channelType == "teams" {
 		if vt := r.URL.Query().Get("validationToken"); vt != "" {
-			w.Header().Set("Content-Type", "text/plain")
+			// 校验 validationToken 格式，Teams 官方 token 仅含字母数字和连字符
+			if len(vt) > 256 {
+				http.Error(w, "invalid validationToken", http.StatusBadRequest)
+				return
+			}
+			safe := true
+			for _, c := range vt {
+				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+					safe = false
+					break
+				}
+			}
+			if !safe {
+				http.Error(w, "invalid validationToken", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Write([]byte(vt)) //nolint:errcheck
 			return
 		}

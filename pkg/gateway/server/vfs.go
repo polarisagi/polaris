@@ -10,10 +10,42 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// allowedUploadExts 文件上传扩展名白名单。
+// 仅允许媒体/文档/数据类文件，拒绝可执行/脚本类型，防止 WebShell 上传。
+var allowedUploadExts = map[string]struct{}{
+	// 图片
+	".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {}, ".webp": {}, ".bmp": {}, ".ico": {}, ".svg": {},
+	// 视频
+	".mp4": {}, ".webm": {}, ".mov": {}, ".avi": {}, ".mkv": {},
+	// 音频
+	".mp3": {}, ".wav": {}, ".ogg": {}, ".flac": {}, ".m4a": {},
+	// 文档/数据
+	".pdf": {}, ".txt": {}, ".md": {}, ".csv": {}, ".json": {}, ".yaml": {}, ".yml": {},
+	".docx": {}, ".xlsx": {}, ".pptx": {}, ".zip": {}, ".tar": {}, ".gz": {},
+}
+
+// sanitizeUploadExt 过滤文件扩展名，仅放行白名单条目，其余返回 ".blob"。
+// 同时确保扩展名以 "." 开头且全小写，防止大小写绕过。
+func sanitizeUploadExt(ext string) string {
+	if ext == "" {
+		return ".blob"
+	}
+	// 强制小写 + 确保只有一个 "." 前缀（阻止 "..php" 类路径注入）
+	lower := strings.ToLower(ext)
+	if len(lower) < 2 || lower[0] != '.' || strings.Contains(lower[1:], ".") {
+		return ".blob"
+	}
+	if _, ok := allowedUploadExts[lower]; ok {
+		return lower
+	}
+	return ".blob"
+}
 
 // handleVFSUpload 处理前端通用工作区文件上传
 // 对应路由：POST /v1/workspace/upload
@@ -45,10 +77,13 @@ func (s *Server) handleVFSUpload(w http.ResponseWriter, r *http.Request) {
 	tee := io.TeeReader(file, h)
 
 	fileID := uuid.New().String()
-	ext := filepath.Ext(header.Filename)
-	if ext == "" {
-		ext = ".blob"
-	}
+	rawExt := filepath.Ext(header.Filename)
+
+	// [P1修复] 直接使用客户端提供的文件扩展名有路径遍历和服务端执行风险：
+	// 1. 扩展名可含 ".." 路径片段（如 "../../etc/passwd"）
+	// 2. 可执行扩展名（.php/.py/.sh/.exe/.bat 等）在某些部署下可被直接执行
+	// 策略：仅允许媒体/文档类白名单扩展名，其余一律归档为 .blob
+	ext := sanitizeUploadExt(rawExt)
 
 	fileName := fileID + ext
 	filePath := filepath.Join(vfsRoot, fileName)

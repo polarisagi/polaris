@@ -108,6 +108,17 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []*ProviderConfig{}
 	}
+	// [P1修复] API key / SA 密钥明文不得随列表接口下发给前端。
+	// 前端只需判断 api_key 是否已设置（非空），不需要知道具体值。
+	// 脱敏规则：已设置 → 返回固定掩码字符串，未设置 → 返回空字符串。
+	for _, p := range list {
+		if p.APIKey != "" {
+			p.APIKey = "••••••••"
+		}
+		if p.SAKeyJSON != "" {
+			p.SAKeyJSON = "••••••••"
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"providers": list})
 }

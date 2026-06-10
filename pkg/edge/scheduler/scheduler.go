@@ -78,15 +78,28 @@ func NewResourceGovernor(maxConcurrent int) *ResourceGovernor {
 	return rg
 }
 
+// interactiveConcurrencyMultiplier 交互式任务（priority=0）允许超过 maxConcurrent 的倍数上限。
+// 防止 priority=0 任务无界堆积导致 OOM，同时保留其优先准入语义。
+const interactiveConcurrencyMultiplier = 4
+
 // Admit implements §2.0 3-level degradation rule:
-// 1. priority == 0 -> always admit
+// 1. priority == 0 -> 交互式任务，跳过 CPU/Mem 检查，但仍受 maxConcurrent×4 硬上限保护
 // 2. CPU > 70% -> reject non-interactive
 // 3. FreeMem < 512MB -> reject non-interactive
+//
+// [P1修复] 原实现 priority=0 无条件 inFlight++，无任何上限。
+// 攻击者可通过高频交互式请求无限堆积，导致 OOM。
+// 修复：priority=0 仍绕过资源检查，但受 maxConcurrent×interactiveConcurrencyMultiplier 硬上限约束。
 func (rg *ResourceGovernor) Admit(priority int) bool {
 	rg.mu.Lock()
 	defer rg.mu.Unlock()
 
 	if priority == 0 {
+		// 交互式任务上限：maxConcurrent × 倍数，保障高优先级任务快速准入的同时防止无界积压
+		hardCap := rg.maxConcurrent * interactiveConcurrencyMultiplier
+		if rg.inFlight >= hardCap {
+			return false
+		}
 		rg.inFlight++
 		return true
 	}

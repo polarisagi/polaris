@@ -50,18 +50,41 @@ func (rl *RateLimiter) Allow() bool {
 }
 
 // RateLimitManager 按标识符（IP/Fingerprint）隔离限流桶
+// [P2修复] 原实现 limiters map 无过期清理，长期运行会无界增长（内存泄漏）。
+// 每次 Allow 调用时记录最后活跃时间，后台 goroutine 每 5 分钟清理 15 分钟未活跃的条目。
 type RateLimitManager struct {
 	mu       sync.RWMutex
 	limiters map[string]*RateLimiter
+	lastSeen map[string]time.Time
 	rate     int
 	max      int
 }
 
 func NewRateLimitManager(rate, max int) *RateLimitManager {
-	return &RateLimitManager{
+	rm := &RateLimitManager{
 		limiters: make(map[string]*RateLimiter),
+		lastSeen: make(map[string]time.Time),
 		rate:     rate,
 		max:      max,
+	}
+	go rm.cleanupLoop()
+	return rm
+}
+
+// cleanupLoop 每 5 分钟清理超过 15 分钟未活跃的限流桶，防止内存无界增长。
+func (rm *RateLimitManager) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		cutoff := time.Now().Add(-15 * time.Minute)
+		rm.mu.Lock()
+		for key, t := range rm.lastSeen {
+			if t.Before(cutoff) {
+				delete(rm.limiters, key)
+				delete(rm.lastSeen, key)
+			}
+		}
+		rm.mu.Unlock()
 	}
 }
 
@@ -79,6 +102,10 @@ func (rm *RateLimitManager) Allow(key string) bool {
 		}
 		rm.mu.Unlock()
 	}
+
+	rm.mu.Lock()
+	rm.lastSeen[key] = time.Now()
+	rm.mu.Unlock()
 
 	return limiter.Allow()
 }
@@ -134,9 +161,20 @@ func (am *AuthManager) RecordSuccess(ip string) {
 }
 
 func extractIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
+	// [P1修复] X-Forwarded-For 可被客户端任意伪造。
+	// 仅在显式配置了受信任反向代理（POLARIS_TRUSTED_PROXY=1）时才信任该头部；
+	// 否则直接使用 TCP 层 RemoteAddr，防止攻击者通过伪造头绕过 IP 限流/锁定。
+	if os.Getenv("POLARIS_TRUSTED_PROXY") == "1" {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			// 取最后一个可信跳（最近的反向代理写入），而非首段（可被客户端控制）
+			for i := len(parts) - 1; i >= 0; i-- {
+				candidate := strings.TrimSpace(parts[i])
+				if candidate != "" {
+					return candidate
+				}
+			}
+		}
 	}
 	// r.RemoteAddr 通常包含端口
 	ip := r.RemoteAddr
@@ -213,13 +251,22 @@ func isLoopback(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
+// healthPaths 是精确豁免鉴权的健康/指标端点白名单。
+// [P1修复] 原 HasSuffix("z") 匹配过宽（任何以 z 结尾的路径均被豁免），
+// 改为显式白名单，防止类似 /v1/providers/fuzz 等路径意外跳过鉴权。
+var healthPaths = map[string]struct{}{
+	"/healthz": {},
+	"/readyz":  {},
+	"/metrics": {},
+}
+
 // checkAuth 执行 API Key 校验和匿名写保护，返回注入了身份的 context。
 // 校验失败时直接写响应并返回 false，调用方应立即 return。
 func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, expectedKey string, authManager *AuthManager) (context.Context, bool) {
 	ctx := r.Context()
 
-	// 跳过健康/指标端点（路径以 "z" 或 "metrics" 结尾）
-	if strings.HasSuffix(r.URL.Path, "z") || strings.HasSuffix(r.URL.Path, "metrics") || expectedKey == "" {
+	// 跳过健康/指标端点（精确白名单）
+	if _, isHealth := healthPaths[r.URL.Path]; isHealth || expectedKey == "" {
 		if expectedKey == "" && isAdminWrite(r.Method, r.URL.Path) && !isLoopback(clientIP) {
 			http.Error(w, "403 Forbidden: admin endpoints require POLARIS_API_KEY or localhost access", http.StatusForbidden)
 			return ctx, false
@@ -250,7 +297,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 	return WithAuthContext(ctx, &AuthContext{UserID: "admin", ClientType: "api"}), true
 }
 
-// withMiddleware 挂载所有基础网关级别的安全防护（Auth + Rate Limit + CORS + Logging）
+// withMiddleware 挂载所有基础网关级别的安全防护（Auth + Rate Limit + CORS + Logging + Panic Recovery）
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	// 按照 M13 规范，为每个 IP 分配一个单独的桶，限制默认并发 QPS
 	limiter := NewRateLimitManager(20, 50)
@@ -267,6 +314,19 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 		clientIP := extractIP(r)
 		isAPI := strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/healthz"
+
+		// [P0修复] panic recovery：防止单个 handler panic 导致整个服务崩溃。
+		// 捕获 panic 后返回 500，并记录堆栈，服务继续运行。
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("http: handler panic recovered", "method", r.Method, "path", r.URL.Path, "ip", clientIP, "panic", rec)
+				// 仅在 Header 尚未写出时写 500，避免重复写头
+				if lrw.statusCode == http.StatusOK {
+					http.Error(w, "internal server error", http.StatusInternalServerError)
+				}
+			}
+		}()
+
 		defer func() {
 			if !isAPI {
 				return
