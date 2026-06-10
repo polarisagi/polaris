@@ -67,7 +67,7 @@ Skill/JSONSchema/Condition/SkillSource 类型定义见 `pkg/extensions/skill/ski
 
 **Stage 1 — 轨迹记录**: Agent 成功完成多步任务后，完整执行轨迹（含 LLM 调用、工具调用、环境上下文）持久化到 Episodic Memory 的 EventLog。
 
-**Stage 2 — 非确定性剥离**: 将完整轨迹中的概率性部分（LLM 推理链）与确定性部分（工具调用）分离。LLM 调用中的具体决策提取为硬编码确定性参数，丢弃 LLM 中间推理链。环境上下文（绝对路径 → `{workspace}` 占位符、时间戳 → 相对时间、主机名/用户名/IP 移除）做平台无关化。仅保留确定性工具调用序列作为输出。
+**Stage 2 — 非确定性剥离**: 将完整轨迹中的概率性部分（LLM 推理链）与确定性部分（工具调用）分离。LLM 调用中的具体决策提取为硬编码确定性参数，丢弃 LLM 中间推理链。环境上下文（绝对路径 → `{workspace}` 占位符、时间戳 → 相对时间、主机名/用户名/IP 移除）做平台无关化。仅保留确定性工具调用序列（现已全部基于 L1 原生工具集如 `str_replace_editor`、`glob`）作为抽象基座输出。
 
 **Stage 3 — 参数化抽象**: 识别 Stage 2 输出中的可变参数（路径 → `{input_path}`、搜索词 → `{search_pattern}`、数值 → `{threshold}`），自动推断类型并生成 InputSchema 和 OutputSchema。提取默认值，标记 required 字段。
 

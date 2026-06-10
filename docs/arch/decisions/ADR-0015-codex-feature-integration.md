@@ -126,7 +126,7 @@ mcp_servers: []
 
 **决策**: 废弃用户手动编写模板的假设，在 `pkg/swarm/self_improve/` 下新增 `skill_creator.go` 机制。
 
-**理由**: 对标 Codex `$skill-creator`，技能和插件不应由人类手写。Polaris 内部注册一条特权系统级指令（System Prompt/Workflow），在会话中与用户对话获取意图后，由大模型自动利用标准的 `SKILL.md`（带 name/description 元数据前缀）和 `.mcp.json` 模板结构，在物理文件系统生成对应的规范化包。
+**理由**: 对标 Codex `$skill-creator`，技能和插件不应由人类手写。Polaris 内部注册一条特权系统级指令，在会话中与用户对话获取意图后，大模型基于已扩充的 L1 原生工具层（如 `str_replace_editor`, `multi_edit`, `run_command`），直接对物理文件系统进行精准的自动化读写，生成标准的 `SKILL.md`（带 name/description 元数据前缀）和 `.mcp.json` 规范化包。这种原生工具层的支撑消除了对历史受限 Wasm 技能进行底层文件操作的依赖。
 
 ### 2.7 Marketplace Integration (市场协议接入) (P1)
 
