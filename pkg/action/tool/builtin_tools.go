@@ -31,9 +31,9 @@ func RegisterBuiltinTools(
 	toolReg *InMemoryToolRegistry,
 	allowedPaths []string, // 文件系统路径白名单（read_file/list_dir/write_file 均受限）
 	dialer protocol.SafeDialer,
-	sandboxEnabled bool,      // 是否启用平台原生进程沙箱
-	netPolicy NetworkPolicy,  // bash/run_command 网络访问策略
-	bwrapPath string,         // Linux: bwrap 路径（空=自动查找）
+	sandboxEnabled bool, // 是否启用平台原生进程沙箱
+	netPolicy NetworkPolicy, // bash/run_command 网络访问策略
+	bwrapPath string, // Linux: bwrap 路径（空=自动查找）
 ) error {
 	// 元数据与实现绑定表：name → InProcessFn
 	// 元数据从 builtin/<name>/tool.yaml + schema.json 加载，不再硬编码在此处。
@@ -364,11 +364,11 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy NetworkPol
 
 		outBytes, execErr := cmd.CombinedOutput()
 		result := map[string]any{
-			"command":          args.Command,
-			"output":           string(outBytes),
-			"exit_code":        0,
-			"sandbox_enabled":  sandboxEnabled,
-			"network_policy":   string(netPolicy),
+			"command":         args.Command,
+			"output":          string(outBytes),
+			"exit_code":       0,
+			"sandbox_enabled": sandboxEnabled,
+			"network_policy":  string(netPolicy),
 		}
 		if execErr != nil {
 			result["error"] = execErr.Error()

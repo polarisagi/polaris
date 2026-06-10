@@ -233,7 +233,6 @@ func (s *SurrealDBCoreStore) Capabilities() protocol.StoreCapabilities {
 	}
 }
 
-
 func (s *SurrealDBCoreStore) Close() error { return nil }
 
 // ─── 扩展接口（向量 / 图 / 全文）────────────────────────────────────────────────
