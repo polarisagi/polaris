@@ -64,7 +64,7 @@ jobs:
         uses: acifani/setup-tinygo@v2
         with:
           tinygo-version: '0.41.0'
-          install-binaryen: 'false'
+          install-binaryen: 'true'
 
       - name: Build Skills
         shell: bash
