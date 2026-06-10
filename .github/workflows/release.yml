@@ -9,20 +9,42 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: GoReleaser
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ matrix.os_name }}-${{ matrix.arch_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_name: linux
+            arch_name: amd64
+          - os: ubuntu-24.04-arm
+            os_name: linux
+            arch_name: arm64
+          - os: macos-latest
+            os_name: darwin
+            arch_name: arm64
+          - os: macos-13
+            os_name: darwin
+            arch_name: amd64
+          - os: windows-latest
+            os_name: windows
+            arch_name: amd64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # GoReleaser 需要完整 git 历史生成 changelog
+          fetch-depth: 0
+
+      - name: Install make (Windows)
+        if: runner.os == 'Windows'
+        run: choco install make
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26'
           cache: true
 
       - name: Set up Node.js
@@ -32,13 +54,64 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Set up TinyGo
+        uses: acifani/setup-tinygo@v2
         with:
-          version: '~> v2'
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tinygo-version: '0.31.2'
+          install-binaryen: 'false'
+
+      - name: Build Skills
+        shell: bash
+        run: make build-skills
+
+      - name: Build Project
+        shell: bash
+        run: make build
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p release_pkg
+          # 拷贝编译产物
+          cp -r bin/* release_pkg/
+          # 拷贝配置文件
+          cp -r configs release_pkg/
+          cp -r policies release_pkg/
+          cp LICENSE release_pkg/
+          
+          # 创建压缩包
+          cd release_pkg
+          if [ "${{ matrix.os_name }}" = "windows" ]; then
+            # Windows 下压缩成 zip
+            7z a -tzip ../polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip ./*
+          else
+            # Linux / macOS 压缩成 tar.gz
+            tar -czvf ../polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz ./*
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}
+          path: polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.*
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
