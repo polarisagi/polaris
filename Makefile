@@ -77,13 +77,13 @@ docs-lint:
 	echo "docs-lint ok"
 
 rust-build:
-	$(CARGO) build --release --manifest-path rust/substrate/Cargo.toml
+	CFLAGS= LDFLAGS= $(CARGO) build --release --manifest-path rust/substrate/Cargo.toml
 
 rust-build-tier1:
-	$(CARGO) build --release --features tier1 --manifest-path rust/substrate/Cargo.toml
+	CFLAGS= LDFLAGS= $(CARGO) build --release --features tier1 --manifest-path rust/substrate/Cargo.toml
 
 rust-test:
-	$(CARGO) test --manifest-path rust/substrate/Cargo.toml
+	CFLAGS= LDFLAGS= $(CARGO) test --manifest-path rust/substrate/Cargo.toml
 
 fmt:
 	$(GO) fmt ./...
