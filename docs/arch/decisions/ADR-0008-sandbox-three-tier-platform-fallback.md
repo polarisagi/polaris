@@ -8,14 +8,14 @@
 
 ## 上下文
 
-工具执行风险跨度大:内置工具零风险 / LLM 生成技能中等风险 / shell/CodeAct 高风险。单一沙箱方案要么过重(影响内置性能)要么过轻(无法约束高风险)。同时 Tier 0 macOS/Windows 无 gVisor 支持。
+工具执行风险跨度大:文件编辑等内置工具低风险 / LLM 生成技能中等风险 / 通用 shell 或 CodeAct 高风险。单一沙箱方案要么过重(影响内置性能)要么过轻(无法约束高风险)。同时 Tier 0 macOS/Windows 无 gVisor 支持。
 
 ## 决策
 
 **三级 Sandbox 抽象 + Tier-0 平台特化降级。**
 
 三级完整定义见 [00-Dict §5](../00-Global-Dictionary.md):
-- **L1 InProc**（Go function）: 零隔离,仅限受信内置工具
+- **L1 原生层**（Go function / 平台原生子进程）: 高性能运行层。包含进程内受限执行（如 str_replace_editor）与挂载平台原生沙箱组件（如 bash/run_command 挂载 bubblewrap/seatbelt），仅限核心系统内置工具
 - **L2 wazero Wasm**: deny-by-default WASI,第三方技能默认级
 - **L3 平台原生 microVM**（统一 SandboxProvider 接口，调用方平台无感）:
   - **Linux**: Firecracker (~125MB/VM, 需硬件 KVM)；KVM 不可用 → gVisor (runsc) 用户态内核
