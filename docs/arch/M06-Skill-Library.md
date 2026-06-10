@@ -164,8 +164,8 @@ Logic Collapse 触发前验证源轨迹关键决策是否被后续 Semantic Memo
 
 M6 将技能命名空间与 Built-in 工具命名空间物理隔离：
 
-- 命名空间前缀: `skill:` | 归属: SkillLibrary 管理的技能（Built-in + Logic Collapse 生成 + 用户自定义） | 示例: `skill:file_read`
-- 命名空间前缀: `tool:` | 归属: M7 ToolRegistry 注册的 Built-in 原语工具 | 示例: `tool:file_read`
+- 命名空间前缀: `skill:` | 归属: SkillLibrary 管理的技能（Built-in + Logic Collapse 生成 + 用户自定义） | 示例: `skill:my_custom_skill`
+- 命名空间前缀: `tool:` | 归属: M7 ToolRegistry 注册的 Built-in 原语工具 | 示例: `tool:glob`
 
 SkillLibrary.Register 强制要求技能 ID 以 `skill:` 为前缀。M7 ToolRegistry.Register 强制要求工具名以 `tool:` 为前缀（或无前缀，向后兼容）。两者路由由 M4 RouteReasoning 在 System 1 命中阶段分别查找，**不存在跨命名空间同名覆盖**。
 
@@ -385,7 +385,7 @@ capability: read-write          # 描述性能力标签
 |------|------|------|
 | 独立安装（marketplace/user） | `skill:{ext_id后缀_hex}` | `skill:abc12345def67890` |
 | 插件子 Skill | `skill:{plugin-name}/{skill-slug}` | `skill:polaris-computer-use/computer_use` |
-| 内置 Skill（builtin） | `skill:builtin/{name}` | `skill:builtin/shell_exec` |
+| 内置 Skill（builtin） | `skill:builtin/{name}` | `skill:builtin/system_probe` |
 
 所有路径统一经 `SkillRegistry.Register()`，强制校验 `skill:` 前缀（禁止裸 SQL 绕过）。
 

@@ -124,20 +124,26 @@ Schema 版本化（防技能断裂）: 新增可选字段=Patch, 新增必填字
 
 ### 3.1 核心内置工具层 (Built-in Tools)
 
-Polaris L1 层提供生存套件（Survival Kit）。其中，最核心的代码编辑和命令执行通过以下两个受限内置工具完成，严禁在外部或扩展层绕过它们：
+Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接执行，提供最高性能且受限于原生沙箱策略。
 
-- **`str_replace_editor` (核心)**：替代传统的、容易引起副作用的全量文件写入。它提供 `create`, `view`, `str_replace`, `undo_edit`。
-  - **优势**：对齐业界 AI Coding 最佳实践（Targeted String Matching），避免基于行号带来的漂移问题。
-  - **安全与回退**：自带基于 WorkingMemory（Session级）的 `undo_edit` 内存环形缓冲，与 State-in-DB 设计完全兼容。若 `old_str` 匹配不唯一或不存，直接失败拒绝执行。
-- **`run_command` (核心)**：提供受限的测试、构建、格式化等执行环境。
-  - 仅允许 `go test`, `cargo`, `make` 等构建工具前缀白名单，明确排除 `bash`/`sh` 等 shell 解释器直接命令。
-  - 通过 §3.2 `WrapBashCmd` 平台原生沙箱保护，限制最大超时 120s，无 `stdin` 注入可能。
-- **`bash` (受限内置)**：提供通用命令执行能力，无前缀白名单限制。
-  - 通过 §3.2 `WrapBashCmd` 平台原生沙箱保护（sandboxEnabled=true 时）。
-  - Auto-Curriculum 规则：LLM 生成技能（Wasm 层）中永久禁止调用 `bash`（字符集 `[A-Za-z0-9 ./\-_=:,]`，禁管道/重定向/命令替换），此限制不适用于 Built-in 层。
+核心内置工具清单如下，严禁在外部或扩展层绕过它们（如：文件覆盖、网络拨号必须走这些原生入口）：
+
+- **文件操作与编辑**：
+  - `str_replace_editor`：核心防漂移编辑器，支持 Targeted String Matching 与内置 undo 缓冲。
+  - `multi_edit`：单文件多处非连续文本原子化修改。
+  - `glob`：受限的工作区目录结构和文件模式匹配。
+- **环境执行**：
+  - `run_command`：受限的安全构建执行（如 `go test`）。
+  - `bash`：通用脚本执行（挂载平台原生沙箱）。
+- **扩展原生能力**：
+  - `web_search`：原生网页检索（自带 SafeDialer 出站保护）。
+  - `todo_read` / `todo_write`：工作区沙盒化任务列表持久化管理。
+  - `notebook_read` / `notebook_edit`：原生 Jupyter Notebook 无缝拆解/封包支持。
+
+> 历史遗留的 Wasm 版 `file_read`/`file_write`/`web_fetch`/`shell_exec` 技能已全部废弃并清理。
 
 **关于 Git MCP 的定位**：
-系统完全 VCS-Agnostic（无需内置 Git 版本控制）。若业务流需提交代码、切换分支，必须通过挂载 `polaris-git-mcp` 这一 L3 MCP 扩展。外部 Git 扩展绝不允许代劳底层文件覆写，只负责版本控制语义。
+系统完全 VCS-Agnostic。Git 操作必须挂载 `polaris-git-mcp` 这一 L3 扩展处理。
 
 ### 3.2 平台原生进程沙箱（WrapBashCmd）
 
@@ -340,8 +346,8 @@ write_network/privileged 不可逆操作:
 
 ToolMeta Reversible=false 时，M7.DryRun(call): (a)参数校验(schema+类型+范围)→(b)权限检查→(c)目标存在性(本地stat/域名白名单+SSRF CIDR/recipient格式)——**禁止真实网络请求**(TCP dial/HTTP HEAD/DNS)→(d)副作用预估(bytes/rows/cost)→返回DryRunResult{Feasible,Warnings[],EstimatedImpact,Reason}。feasible+无warning→自动执行；feasible+有warning→HITL；not feasible→error
 
-- Tool类型: builtin(fs.write) | DryRun行为: 参数校验+路径存在性+权限+写入大小预估
-- Tool类型: builtin(shell.exec) | DryRun行为: 命令解析+白名单+参数验证
+- Tool类型: builtin(str_replace_editor) | DryRun行为: 参数校验+目标字符串存在唯一性+权限+撤销缓冲预估
+- Tool类型: builtin(run_command) | DryRun行为: 命令解析+白名单+参数验证
 - Tool类型: MCP proxy | DryRun行为: 仅本地Schema校验+SSRF预检，禁止转发真实请求
 - Tool类型: skill(wasm) | DryRun行为: 调用validate()入口，否则schema-only
 

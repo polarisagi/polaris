@@ -12,7 +12,7 @@
 
 通过全局代码审查发现三个关键事实，彻底改变了 ADR-0015 的部分前提：
 
-**发现 1**: `skills/builtin/shell_exec/SKILL.md` 证实**内置技能已经是 agentskills.io 标准格式**。格式统一问题**已经解决**，无需迁移。真正的问题是信任层太粗（`SignatureValid bool` 只有真/假）。
+**发现 1**: `skills/builtin/system_probe/SKILL.md` 证实**内置技能已经是 agentskills.io 标准格式**。格式统一问题**已经解决**，无需迁移。真正的问题是信任层太粗（`SignatureValid bool` 只有真/假）。
 
 **发现 2**: `pkg/gateway/server/plugin_catalog.go` 证实 **M13 已有 Plugin Catalog（MCP 专属）**，这是 Plugin Registry 的正确位置。ADR-0015 把 Plugin Registry 放 M7 是临时错误决策。
 

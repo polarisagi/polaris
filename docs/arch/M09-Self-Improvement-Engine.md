@@ -191,7 +191,7 @@ SKILL.md → 收集轨迹 → LLM 编译 Wasm → System1 执行
 8. [Sandbox-L2] 影子执行验证 → [Blackboard].PostTask(priority=0)
 9. 课程任务失败不进 MEMF（防止污染失败记忆池）; 成功率连续 < 20% → 标记 SourceSkill 需中环演化
 
-**Ephemeral Namespace**: FS → `os.TempDir()/auto_curriculum/{task_id}/` (任务后清理); NotesStore → 临时 SQLite; Semantic Graph → 临时图层 (≥80%成功率+Critic审核后合并); Episodic Memory → session_type='auto_curriculum'; 剥夺 write_network/read_network/privileged; 工具白名单: file_read, file_write, bash_restricted (字符集白名单+Wasm受限挂载); 网络需求 → localhost mock HTTP
+**Ephemeral Namespace**: FS → `os.TempDir()/auto_curriculum/{task_id}/` (任务后清理); NotesStore → 临时 SQLite; Semantic Graph → 临时图层 (≥80%成功率+Critic审核后合并); Episodic Memory → session_type='auto_curriculum'; 剥夺 write_network/read_network/privileged; 工具白名单: str_replace_editor, glob, bash_restricted (字符集白名单+Wasm受限挂载); 网络需求 → localhost mock HTTP
 
 ### 2.3 外环: 架构演化（周/月级）
 
