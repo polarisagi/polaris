@@ -153,9 +153,11 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 	inputBytes, _ := json.Marshal(c.Input)
 
 	var output []byte
+	var toolNames []string
 	if r.agent != nil {
 		var err error
-		output, _, err = r.agent.Run(ctx, inputBytes)
+		// 一次调用同时捕获 output 和 toolNames，避免因第二次调用产生重复执行副作用。
+		output, toolNames, err = r.agent.Run(ctx, inputBytes)
 		if err != nil {
 			return false, false
 		}
@@ -170,7 +172,6 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 	}
 
 	if expectedTools, ok := c.Expected["tools"].([]any); ok && len(expectedTools) > 0 && r.agent != nil {
-		_, toolNames, _ := r.agent.Run(ctx, inputBytes)
 		if !matchStringSets(toolNames, expectedTools) {
 			return false, false
 		}

@@ -86,7 +86,7 @@ wazero 确定性适配（`clock_time_get`/`random_get` 录制/回放）详见 [W
 
 ## 4. Eval Runner
 
-EvalRunner/EvalRunConfig/TrajectoryRecorder/TrajectoryReplayer 实现见 `pkg/governance/eval_runner.go`。
+`RunnerImpl` 实现见 `pkg/governance/eval/runner.go`，`SQLiteEvalStore` 见 `pkg/governance/eval/store.go`。
 
 CI: PR 变更 `prompts/** skills/** config/** go.mod` → replay P0+P1, 5min 超时。P0 失败阻塞，P1 单 Judge 置信度阈值见 `spec/state.yaml §m12_eval.judge_single_confidence`，低于阈值告警。
 
@@ -267,6 +267,12 @@ CoverageGaps: 输入工具注册表 → 返回未覆盖工具名
 ## 默认参数
 
 完整阈值与重评触发条件: `spec/state.yaml §thresholds.m12_eval`。
+
+## 17-bis. 已知 Bug 修复记录
+
+| 级别 | 文件 | 函数 | 问题描述 | 修复 |
+|------|------|------|---------|------|
+| P2 | `pkg/governance/eval/runner.go` | `evaluate` | 第一次 `agent.Run()` 用 `_` 丢弃 `toolNames`；若 `Expected["tools"]` 存在则发起第二次 `agent.Run()`，导致 Agent 被执行两次（重复 LLM 调用、非幂等副作用） | 改为一次调用同时捕获 `output, toolNames, err` |
 
 ## 18. 跨模块依赖与契约
 

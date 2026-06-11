@@ -354,7 +354,15 @@ PII: 快照不含明文——ToolResult 经 M7 §4.3 Step 5 PostExecution Redact
 
 ---
 
-## 12. 降级与失败模式（5 问全覆盖）
+## 12. 已知 Bug 修复记录
+
+| 级别 | 文件 | 函数 | 问题描述 | 修复 | Commit |
+|------|------|------|---------|------|--------|
+| P1 | `pkg/cognition/synaptic_plasticity.go` | `DecayUnused` | 自定义 `pow(base, exp)` 实际计算 `base^(int(exp*100))`，导致 `pow(0.8, 0.5)=0.8^50≈1.4e-5`（正确值 ≈0.894），近期访问边在首次 LTD 衰减时即被误判为接近零，触发过度修剪 | 改用 `math.Pow(base, exp)` | 4d7682f |
+
+---
+
+## 13. 降级与失败模式（5 问全覆盖）
 
 | 故障 | (Q1) 检测 | (Q2) 影响范围 | (Q3) 即时反应 | (Q4) 自动恢复 | (Q5) 人工介入触发 |
 |------|----------|------------|------------|------------|----------------|
@@ -396,6 +404,6 @@ PII: 快照不含明文——ToolResult 经 M7 §4.3 Step 5 PostExecution Redact
 
 ---
 
-## 默认参数
+## 14. 默认参数
 
 完整阈值与重评触发条件: `spec/state.yaml §thresholds.m4_kernel`。
