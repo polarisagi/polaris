@@ -20,13 +20,18 @@ import (
 // allowedTables 是 MutationBus 允许操作的表名白名单，防止 intent.Table 注入。
 // 调用方通过 intent.Table 指定目标表，必须在此集合内；否则 executeInsert/Upsert/Delete 拒绝执行。
 var allowedTables = map[string]struct{}{
-	"events":              {},
-	"decision_log":        {},
 	"tasks":               {},
+	"events":              {},
+	"workspace_vfs":       {},
 	"episodic_memory":     {},
 	"semantic_memory":     {},
-	"workspace_vfs":       {},
+	"knowledge_nodes":     {},
+	"knowledge_edges":     {},
+	"entities":            {},
 	"rag_chunks":          {},
+	"plugin_marketplaces": {},
+	"preferences":         {},
+	"decision_log":        {},
 	"skills":              {},
 	"self_improve":        {},
 	"outbox":              {},
