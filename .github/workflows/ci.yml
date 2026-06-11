@@ -38,7 +38,46 @@ jobs:
       - name: docs/arch 禁 Go 代码块 / 完整签名 (#9)
         run: make docs-lint
 
+  # 单次编译 Rust，产物通过 artifact 传递给下游 job
+  rust-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+      - name: Build Rust Substrate
+        run: make rust-build
+      - name: Upload Rust Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-libs
+          path: |
+            rust/substrate/target/release/libsubstrate.so
+            rust/substrate/target/release/libsubstrate.a
+          retention-days: 1
+
+  # cargo test + fmt check 复用同一缓存（编译产物已被 rust-build 预热）
+  rust:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+          save-if: false
+      - run: cargo test --manifest-path rust/substrate/Cargo.toml
+      - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
+
   test:
+    needs: [rust-build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,35 +85,24 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
         with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris"
+          name: rust-libs
+          path: rust/substrate/target/release
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
-      - name: Build Rust Substrate
-        run: make rust-build
       - name: spec consistency (state.yaml SSoT)
         run: go test -run "^TestSpec" ./internal/protocol/... -v
-      - run: go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out
+      - name: Go tests
+        env:
+          # 告知 Go 链接器 Rust .so 位置
+          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/substrate/target/release
+        run: go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out
       - run: go tool cover -func=coverage.out
 
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris"
-      - run: cargo test --manifest-path rust/substrate/Cargo.toml
-      - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
-
   build:
+    needs: [rust-build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,13 +115,15 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
         with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris"
-      - run: make build
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Build
+        env:
+          SKIP_RUST_BUILD: 1
+        run: make build
 
   eval-gate:
     needs: [lint, test, build, rust, docs-toc]
@@ -104,14 +134,18 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
         with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris"
+          name: rust-libs
+          path: rust/substrate/target/release
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
-      - name: Build Rust Substrate
-        run: make rust-build
-      - run: go run ./cmd/polaris eval --ci-gate
+      - name: Copy Rust libs
+        run: |
+          mkdir -p bin/lib
+          cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
+      - name: Eval Gate
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
+        run: go run ./cmd/polaris eval --ci-gate

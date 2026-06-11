@@ -110,18 +110,33 @@ jobs:
         with:
           targets: ${{ matrix.cargo_target }}
 
+      # sccache：object 级编译缓存，利用 GHA Cache 后端
+      # 即使 runner 变更，只要源码 + 编译参数不变就能命中
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      # Swatinem/rust-cache：缓存 target/ 目录（依赖编译产物）
+      # per-target 分区避免跨平台缓存污染
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
+          shared-key: "polaris-${{ matrix.cargo_target }}"
+          save-if: ${{ github.ref_type == 'tag' }}
 
       - name: Build Project Backend
         shell: bash
         env:
           CARGO_TARGET: ${{ matrix.cargo_target }}
           GOARCH: ${{ matrix.goarch }}
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
         run: make build-backend
+
+      - name: Show sccache stats
+        shell: bash
+        run: sccache --show-stats
 
       - name: Package
         shell: bash

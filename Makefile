@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint gen-threshold-examples generate-manifest
+.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint gen-threshold-examples generate-manifest build-backend build-tier1
 
 GO := go
 CARGO := cargo
@@ -13,14 +13,18 @@ LDFLAGS  := -X main.Version=$(VERSION) -X main.CommitHash=$(COMMIT) -X main.Buil
 CARGO_TARGET ?=
 CARGO_TARGET_DIR := rust/substrate/target/$(if $(CARGO_TARGET),$(CARGO_TARGET)/,)release
 
-build: generate-manifest rust-build build-ui
+# CI 优化：SKIP_RUST_BUILD=1 时跳过 Rust 编译（已通过 artifact 获取预编译 .so）
+SKIP_RUST_BUILD ?=
+_RUST_DEP := $(if $(SKIP_RUST_BUILD),,rust-build)
+
+build: generate-manifest $(_RUST_DEP) build-ui
 	@mkdir -p bin/lib
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
 	$(GO) build -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
 
-build-backend: generate-manifest rust-build
+build-backend: generate-manifest $(_RUST_DEP)
 	@mkdir -p bin/lib
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
