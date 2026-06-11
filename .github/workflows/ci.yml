@@ -43,6 +43,8 @@ jobs:
   # 最终产物缓存：如果 Rust 源码无变化，直接跳过工具链安装和编译
   rust-build:
     runs-on: ubuntu-latest
+    outputs:
+      rust_unchanged: ${{ steps.rust-final.outputs.cache-hit }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,16 +83,24 @@ jobs:
     needs: [rust-build]
     runs-on: ubuntu-latest
     steps:
+      - name: Skip if Rust code unchanged
+        if: needs.rust-build.outputs.rust_unchanged == 'true'
+        run: echo "Rust code unchanged. Skipping cargo test and fmt."
       - uses: actions/checkout@v4
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
           shared-key: "polaris-x86_64-unknown-linux-gnu"
           save-if: false
       - run: cargo test --manifest-path rust/substrate/Cargo.toml
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
       - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
 
   test:
     needs: [rust-build]
