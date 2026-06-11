@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] pkg/substrate/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:249 Cedar / 4:311 KillSwitch / 5:377 隐私 / 6:464 SSRF / 6.5:446 Factuality / 7:507 审计 / 8:531 多Agent宪法 / 9:556 威胁监控 / 13:570 降级 / 14:602 跨模块契约
+> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:442 SSRF / 6.5:446 Factuality / 7:487 审计 / 8:511 多Agent宪法 / 9:536 威胁监控 / 13:550 降级 / 14:582 跨模块契约
 
 ---
 
