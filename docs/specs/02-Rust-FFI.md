@@ -6,7 +6,6 @@
 
 - 所有跨语言调用使用 purego（零 CGO，纯 Go 调用 Rust 动态库）
 - 不引入 CGO，不在 Rust 侧增加 cbindgen
-- `lib.rs` 目前的单文件结构可以维持，除非功能增长超出合理范围（>2000 行判断）
 
 参考：`internal/protocol/ffi-abi.md` 定义调用约定。
 
@@ -21,22 +20,23 @@
 
 ## RUST-3 文件组织
 
-当前 `lib.rs` 54KB 单文件，功能边界明确时可以拆分：
+当前 `rust/substrate/src/` 已按功能拆分：
 
 ```
 src/
-├── lib.rs          # 顶层 FFI 导出函数 + crate 文档
-├── cedar.rs        # Cedar 策略引擎 FFI
-└── vector.rs       # SIMD 向量运算（bytemuck + capnp）
+├── lib.rs              # 顶层 FFI 导出函数 + crate 文档（442 行）
+├── surreal_store.rs    # SurrealDB 认知检索轴 FFI（见 ADR-0010/ADR-0011）
+├── wasmtime_engine.rs  # Wasmtime Wasm 执行引擎 FFI
+└── check_wasi.rs       # WASI 可用性探测
 ```
 
-拆分判定：当 `lib.rs` 中一个 `mod` 块 > 300 行时提取独立文件。
+拆分判定：新增子模块 > 300 行时提取独立文件，禁止无 ADR 静默扩大 lib.rs。
 
 ## RUST-4 Cargo.toml 约束
 
 - `crate-type = ["staticlib", "cdylib"]` 不可移除
 - 依赖以最小化原则添加——每加一个 `[dependencies]` 必须说明理由
-- 当前依赖白名单：`cedar-policy`（Cedar 策略引擎）、`bytemuck`（安全字节转换）、`capnp`（序列化）、`surrealdb`（认知检索轴，见 ADR-0010）
+- 当前依赖白名单：`cedar-policy`（Cedar 策略引擎）、`bytemuck`（安全字节转换）、`capnp`（序列化）、`surrealdb`（认知检索轴，见 ADR-0010）、`wasmtime`+`wasmtime-wasi`（Wasm 执行引擎）、`tokio`（异步运行时）、`serde`+`serde_json`（序列化）、`anyhow`（错误传播）、`bytes`+`lazy_static`（工具）
 - 新增依赖必须经过讨论并记录 ADR，禁止静默引入
 
 ## RUST-5 FFI 边界测试

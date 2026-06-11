@@ -4,6 +4,25 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-06-11（docs/arch/decisions + AGENTS.md + 02-Rust-FFI 全量修订）
+
+**ADR 过时内容修正（4 个 ADR）**：
+
+- `ADR-0005 §决策` | surreal_store.go cgo 状态描述由"历史遗留 P3 待处置"改为"cgo→purego 迁移已由 ADR-0011（2026-05-16）执行完毕"
+- `ADR-0010 §关联ADR` | 补入 ADR-0011 引用，删除"cgo 偏离待 P3 处置"过时注释
+- `ADR-0014 §决策` | 模型版本 "Opus 4.7"（不存在）→ "`claude-opus-4-8`"（Anthropic 当前最新旗舰）
+- `ADR-0015 §状态/§2.1/§2.3/§4/§5` | 标注 §2.1 Plugin 层定位已被 ADR-0016 取代；SignatureValid 方案标注已被 TrustTier 替代；§4 "Plugin 放 M13"条目标注已被 ADR-0016 推翻；§5 补 ADR-0016 引用
+
+**AGENTS.md（= CLAUDE.md）更新（6 处）**：
+
+- Header `6 pkg` → `8 pkg`；ADR 清单补 `0020 DeepSeek V4 · 0021 核心机制实现`；DDL 清单末尾补 `029_workflows`，计数 25→26 张表
+
+**docs/specs/ 规范修订**：
+
+- `02-Rust-FFI.md RUST-1` | 删除过时"单文件结构可维持"描述（已拆分为 4 文件）
+- `02-Rust-FFI.md RUST-3` | 更新文件组织为实际结构：`lib.rs`+`surreal_store.rs`+`wasmtime_engine.rs`+`check_wasi.rs`（旧描述为未落地的 cedar.rs/vector.rs 拆分方案）
+- `02-Rust-FFI.md RUST-4` | 依赖白名单补充 `wasmtime`+`wasmtime-wasi`+`tokio`+`serde`+`serde_json`+`anyhow`+`bytes`+`lazy_static`（已在 Cargo.toml 实际使用，旧白名单漏列）
+
 ## 2026-06-09（Gemini gap 报告核查：修复两处真实差异）
 
 **gap 核查结论（10 条 Gemini 报告）**：
