@@ -12,33 +12,79 @@ permissions:
   contents: write
 
 jobs:
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build UI
+        run: make build-ui
+
+      - name: Upload Frontend Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+          retention-days: 1
+
   build:
+    needs: build-frontend
     name: Build (${{ matrix.os_name }}-${{ matrix.arch_name }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner_os }}
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            os_name: linux
+          - os_name: linux
             arch_name: amd64
-          - os: ubuntu-24.04-arm
-            os_name: linux
+            runner_os: ubuntu-latest
+            cargo_target: 'x86_64-unknown-linux-gnu'
+            goarch: amd64
+          - os_name: linux
             arch_name: arm64
-          - os: macos-latest
-            os_name: darwin
+            runner_os: ubuntu-24.04-arm
+            cargo_target: 'aarch64-unknown-linux-gnu'
+            goarch: arm64
+          - os_name: darwin
             arch_name: arm64
-          - os: macos-13
-            os_name: darwin
+            runner_os: macos-latest
+            cargo_target: 'aarch64-apple-darwin'
+            goarch: arm64
+          - os_name: darwin
             arch_name: amd64
-          - os: windows-latest
-            os_name: windows
+            runner_os: macos-latest
+            cargo_target: 'x86_64-apple-darwin'
+            goarch: amd64
+          - os_name: windows
             arch_name: amd64
+            runner_os: windows-latest
+            cargo_target: 'x86_64-pc-windows-msvc'
+            goarch: amd64
+          - os_name: windows
+            arch_name: arm64
+            runner_os: windows-latest
+            cargo_target: 'aarch64-pc-windows-msvc'
+            goarch: arm64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
 
       - name: Install make (Windows)
         if: runner.os == 'Windows'
@@ -50,24 +96,22 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.cargo_target }}
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
 
-      - name: Build Project
+      - name: Build Project Backend
         shell: bash
-        run: make build
+        env:
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          GOARCH: ${{ matrix.goarch }}
+        run: make build-backend
 
       - name: Package
         shell: bash

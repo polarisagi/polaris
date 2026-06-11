@@ -10,18 +10,28 @@ COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE     := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS  := -X main.Version=$(VERSION) -X main.CommitHash=$(COMMIT) -X main.BuildDate=$(DATE)
 
+CARGO_TARGET ?=
+CARGO_TARGET_DIR := rust/substrate/target/$(if $(CARGO_TARGET),$(CARGO_TARGET)/,)release
+
 build: generate-manifest rust-build build-ui
 	@mkdir -p bin/lib
-	@cp rust/substrate/target/release/libsubstrate.dylib bin/lib/ 2>/dev/null || true
-	@cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
-	@cp rust/substrate/target/release/substrate.dll bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
+	$(GO) build -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
+
+build-backend: generate-manifest rust-build
+	@mkdir -p bin/lib
+	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
 	$(GO) build -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
 
 build-tier1: generate-manifest rust-build-tier1 build-ui
 	@mkdir -p bin/lib
-	@cp rust/substrate/target/release/libsubstrate.dylib bin/lib/ 2>/dev/null || true
-	@cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
-	@cp rust/substrate/target/release/substrate.dll bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/libsubstrate.dylib bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
+	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
 	$(GO) build -tags tier1 -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
 
 
@@ -63,10 +73,10 @@ docs-lint:
 	echo "docs-lint ok"
 
 rust-build:
-	CFLAGS= LDFLAGS= $(CARGO) build --release --manifest-path rust/substrate/Cargo.toml
+	CFLAGS= LDFLAGS= $(CARGO) build --release $(if $(CARGO_TARGET),--target $(CARGO_TARGET),) --manifest-path rust/substrate/Cargo.toml
 
 rust-build-tier1:
-	CFLAGS= LDFLAGS= $(CARGO) build --release --features tier1 --manifest-path rust/substrate/Cargo.toml
+	CFLAGS= LDFLAGS= $(CARGO) build --release $(if $(CARGO_TARGET),--target $(CARGO_TARGET),) --features tier1 --manifest-path rust/substrate/Cargo.toml
 
 rust-test:
 	CFLAGS= LDFLAGS= $(CARGO) test --manifest-path rust/substrate/Cargo.toml
