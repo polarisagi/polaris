@@ -32,13 +32,22 @@ func (ddc *DynamicDifficultyCalibrator) Calibrate() {
 		return
 	}
 
+	// 取最近 50 条：历史不足 50 时从头取全部，避免 len-50<0 的负索引 runtime panic
+	// （已知触发区间：20 ≤ len < 50，因上方 len<20 已 return）。
+	// 分母使用窗口实际长度，而非原来的 max(50, len) —— 后者在 len>50 时以总长除以仅 50 条的计数，
+	// 导致成功率被低估，误触发难度下调。
+	start := 0
+	if len(ddc.history) > 50 {
+		start = len(ddc.history) - 50
+	}
+	window := ddc.history[start:]
 	var successes int
-	for _, s := range ddc.history[len(ddc.history)-50:] {
+	for _, s := range window {
 		if s.Success {
 			successes++
 		}
 	}
-	rate := float64(successes) / float64(max(50, len(ddc.history)))
+	rate := float64(successes) / float64(len(window))
 
 	if rate < 0.5 {
 		ddc.currentLow = maxF(0.1, ddc.currentLow-ddc.adjustStep)
