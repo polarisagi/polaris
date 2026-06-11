@@ -5,7 +5,7 @@
 - **决策者**: 架构组
 - **相关模块**: M2 / M5 / M10 / `pkg/substrate/storage/surreal_store.go`
 - **实现详情**: [M02 §1.1](../M02-Storage-Fabric.md) | [00-Dict §6 Storage-SurrealDB-Core](../00-Global-Dictionary.md)
-- **关联 ADR**: [ADR-0003](./ADR-0003-sqlite-modernc-primary-storage.md)(互补) | [ADR-0005](./ADR-0005-purego-ffi-cedar.md)(surreal_store.go 当前 cgo 偏离待 P3 处置)
+- **关联 ADR**: [ADR-0003](./ADR-0003-sqlite-modernc-primary-storage.md)(互补) | [ADR-0005](./ADR-0005-purego-ffi-cedar.md) + [ADR-0011](./ADR-0011-cgo-to-purego-migration.md)(surreal_store.go cgo→purego 迁移已完成 2026-05-16)
 
 ## 技术选型
 

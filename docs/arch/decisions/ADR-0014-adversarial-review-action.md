@@ -23,7 +23,7 @@
 |--------|------|
 | 触发 | `pull_request: [opened, synchronize, reopened]` to `main` |
 | 必备 secret | `ANTHROPIC_API_KEY`；未设置时 no-op + warning（防 fork PR 误阻断） |
-| 模型 | 默认 `claude-sonnet-4-6`（开发 Opus 4.7），可经 `REVIEWER_MODEL` 覆盖；**不可与开发者用模型同型号** |
+| 模型 | 默认 `claude-sonnet-4-6`（开发 `claude-opus-4-8`），可经 `REVIEWER_MODEL` 覆盖；**不可与开发者用模型同型号** |
 | 输入 | 00-Constitution.md 全文（system prompt）+ PR diff（user message，>100KB 截断头部） |
 | 提示词约束 | 仅输出违例或 "NONE"；禁建议/表扬/推理；ADR 已豁免（如 ADR-0001）跳过；不假设；优先级 R1>R7>B1>R5 |
 | 决策 | warning-only（不阻断 CI），人类 review 兜底；reviewer 是 LLM 可能误报，硬阻断会让团队凭关键词钝化 |
