@@ -1,5 +1,8 @@
 name: Constitutional Review
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # 设计依据: docs/arch/decisions/ADR-0014-adversarial-review-action.md
 # 执行带 3：独立 AI reviewer 对 PR 做宪法违例审查
 # - 仅看 Diff + 00-Constitution.md
