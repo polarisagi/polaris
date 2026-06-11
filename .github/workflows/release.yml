@@ -80,6 +80,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Disable Windows Defender
+        if: runner.os == 'Windows'
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
+        shell: powershell
+
       - name: Download Frontend Artifact
         uses: actions/download-artifact@v4
         with:
@@ -105,6 +112,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
+          cache-on-failure: true
 
       - name: Build Project Backend
         shell: bash
