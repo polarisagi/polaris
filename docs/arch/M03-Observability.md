@@ -104,28 +104,17 @@ LRU 缓存 (cap=500); 满时新值 → `<overflow>` 桶。禁止标签: session_
 
 ### 3.1 计算
 
-```
-streamAccumulator: 每活跃 LLM 流 (cumulativeTokens, lastUpdateTime)
+每次 LLM 流 chunk 到达时累加 token 数；每 1s 计算瞬时速率（deltaTokens/1s），分别维护 EMA_5s（α=0.33）和 EMA_30s（α=0.06）两个滑动窗口。
 
-每 TCP chunk (N 个新 token):
-  1. cumulativeTokens += N, 记录 timestamp
+设计原理：TCP Nagle 和缓冲导致 token 到达呈间歇性断崖与爆发，直接 deltaTokens/deltaT 产生虚假加速度。双 EMA 窗口消除网络抖动伪影，将短时峰值与持续异常区分开来。
 
-每 1s tick:
-  2. 瞬时速率 = deltaTokens / 1s
-  3. EMA_5s  (α=0.33, 窗口 ~5s)
-  4. EMA_30s (α=0.06, 窗口 ~30s)
-```
+### 3.2 熔断阈值
 
-设计原理: TCP Nagle 和缓冲导致 token 到达呈间歇性断崖与爆发——相邻 chunk 间隔可从 100ms 骤降至 1ms，直接 deltaTokens/deltaT 产生虚假加速度。EMA 平滑将速率计算从微秒级 chunk 间隔升级为秒级滑动窗口，消除网络抖动伪影。
-
-### 3.2 熔断
-
-```
-EMA_5s  > baseline.P95 × 2.0 → Stage 1 THROTTLE (KillThrottle)  [KillSwitch]
-EMA_30s > baseline.P95 × 3.0 → Stage 2 HARD STOP (KillFullStop) [KillSwitch]
-EMA_30s > baseline.P95 × 10.0 → Stage 3 KillSwitch FULLSTOP (publishes polaris_token_burn_stage3_triggered_total Counter)
-WARN: ema_5s_rate, ema_30s_rate, baseline_p95, action="auto-throttle"
-```
+| 条件 | 触发阶段 | 动作 |
+|------|---------|------|
+| EMA_5s > baseline.P95 × 2.0 | Stage 1 THROTTLE | [KillSwitch] KillThrottle |
+| EMA_30s > baseline.P95 × 3.0 | Stage 2 HARD STOP | [KillSwitch] KillFullStop |
+| EMA_30s > baseline.P95 × 10.0 | Stage 3 FULLSTOP | [KillSwitch] + Counter `polaris_token_burn_stage3_triggered_total` |
 
 **BurnRate baseline 冷启动策略 (HE-Rule-1)**:
 - 前 50 个 LLM 调用 → 固定保护值 baseline.P95 = 200 tokens/s（保守上限）
@@ -225,27 +214,30 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 | RegressionBudgetMin | 10 | 20 | 30 | 30 |
 | PoolIntentHandler/Ingest/Background/Eval/Cron | 5/5/10/2/2 | 5/5/10/2/2 | 10/8/15/4/4 | 15/12/20/6/6 |
 
-### 5.4 FeatureGate 特性清单（15项）
+### 5.4 FeatureGate 特性清单（16项）
 
-| 特性 | 门控规则 | 依赖 |
-|------|---------|------|
-| FeatureLocalInference | ≥Tier3, ≥16GB free | — |
-| FeatureLocalEmbedding | ≥Tier0, ≥256MB free | — |
-| FeatureQLoRA | ≥Tier1, ≥4GB free | — |
-| FeaturePRMTraining | ≥Tier2, ≥8GB free | — |
-| FeatureL3Sandbox | ≥Tier0, ≥512MB free, 平台检测 | — |
-| FeatureL2Sandbox | ≥Tier0, ≥128MB free | — |
-| FeatureGraphRAGFull | ≥Tier0, ≥1.5GB free | — |
-| FeatureSurrealDB-CoreFTS | ≥Tier0, ≥256MB free | — |
-| FeatureSurrealDB-CoreGraph | ≥Tier0, ≥512MB free | — |
-| FeatureLargeLocalLLM | ≥Tier3, ≥24GB free | LocalInference |
-| FeatureLogicCollapse | ≥Tier1, ≥1GB free | L2Sandbox |
-| FeatureComputerUseGUI | ≥Tier0, ≥512MB, hasDisplay() | — |
-| FeaturePresidioPII | ≥Tier1, ≥512MB free | — |
-| FeatureWebUI | ≥Tier1, ≥128MB free | — |
-| FeatureActivationSteer | ≥Tier1, ≥1.5GB free | LocalInference |
+权威来源：`pkg/substrate/observability/feature_gate.go` `featureRules` 表。
 
-调用方一行代码检查: `observability.GlobalFeatureGate().IsEnabled(observability.FeatureQLoRA)`
+| 特性 | 最低 Tier | 最低空闲内存 | 跨特性依赖 |
+|------|----------|------------|-----------|
+| FeatureLocalInference | Tier1 | 2 GB | — |
+| FeatureLocalEmbedding | Tier0 | 256 MB | — |
+| FeatureLocalSTT | Tier0 | 128 MB | — |
+| FeatureQLoRA | Tier1 | 4 GB | — |
+| FeaturePRMTraining | Tier2 | 8 GB | — |
+| FeatureL3Sandbox | Tier0 | 512 MB | 平台检测 |
+| FeatureL2Sandbox | Tier0 | 128 MB | — |
+| FeatureGraphRAGFull | Tier1 | 1 GB | — |
+| FeatureSurrealDBCore | Tier0 | 256 MB | — |
+| FeatureLargeLocalLLM | Tier2 | 6 GB | LocalInference |
+| FeatureLogicCollapse | Tier1 | 1 GB | L2Sandbox |
+| FeatureComputerUseGUI | Tier0 | 512 MB | hasDisplay() |
+| FeaturePresidioPII | Tier1 | 512 MB | — |
+| FeatureWebUI | Tier1 | 128 MB | — |
+| FeatureActivationSteer | Tier1 | 1.5 GB | LocalInference |
+| FeatureOTelExporter | Tier1 | 64 MB | — |
+
+调用方检查: `observability.GlobalFeatureGate().IsEnabled(observability.FeatureQLoRA)`
 
 ---
 
@@ -267,17 +259,9 @@ CheckAndProtect:
 
 ## 7. MonitorMemoryPressure + FFIMemoryController
 
-### 7.1 MonitorMemoryPressure (后台 goroutine, 每 30s)
+### 7.1 RunMemoryWatcher (后台 goroutine, 每 5s)
 
-```
-1. 获取可用系统内存
-2. 压力 = 1.0 - available/TotalRAM
-3. 抗抖动滞后: 60s 滑动窗口 (最近 2 次采样)
-   - 全部 > 80% → Tier 降级 (Tier-3 卸载本地模型, 关闭 SurrealDB-Core 缓存, 暂停后台)
-   - 全部 < 50% → Tier 恢复
-   - 不一致 → 维持 + DEBUG
-4. 写入窗口
-```
+每 5s 调用 `ProbeAvailableMemoryMB()` 获取当前可用内存，经 `OSMemoryGuard.CheckAndProtect()` 计算压力等级，驱动 `MemoryPressureCallback()`：向 FeatureGate 推送 Override（临界时禁用大模型/QLoRA；恢复后清除 Override）。256MB 迟滞防抖。
 
 ### 7.2 FFIMemoryController
 
@@ -355,7 +339,7 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 - D6 抽样率随 drift 信号动态上调（漂移期 ×2，最高 20%）
 - 漂移期临时关闭 [BestOfN] N>1（防止漂移污染聚合结果）
 
-**实现锚点**: `pkg/substrate/observability/drift.go` (PerformanceDriftDetector)
+**实现锚点**: `pkg/substrate/observability/performance_drift.go` (PerformanceDriftDetector)
 - Hook 至 M4 状态机 S_COMPLETE/S_FAILED 转移（捕获 success/fail 信号）
 - 与 ContinuousSamplingMonitor (M12 §9) 共享 10min 窗口（避免重复扫描）
 
@@ -376,6 +360,19 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 ---
 
 > [HE-Rule-1] 物理实现: 从第 0 行代码起全链路可追溯——每次 token, tool call, memory 读写必须可追溯。
+
+---
+
+## 已知实现缺口与修复记录
+
+| 问题 | 严重级 | 状态 | 修复 |
+|------|-------|------|------|
+| `reassessAll()` ordered 列表遗漏 `FeatureOTelExporter`，永远 Disabled，`MetricsHandler()` 无法启用 OTel 路径 | P1 | ✅ 已修复 | 添加至 Layer 3 |
+| `tracer.go newID()` 纯时间戳，同纳秒并发碰撞 | P2 | ✅ 已修复 | 改为时间戳 + 原子计数器双高位 32 字符 ID |
+| `StartSpan()` 不传播父 TraceID，不设 ParentID，trace 树无法关联 | P2 | ✅ 已修复 | 从父 Span context 传播 TraceID/ParentID |
+| `getAvailableMemoryMB()` 单位混用（heapMB 当字节减）| P2 | ✅ 已修复 | 改为 `heapBytes := m.HeapAlloc` 再统一换算 |
+| `performance_drift.go` 与 M12 CI RegressionDetector 互补但尚未 Hook 至 M4 状态机 S_COMPLETE/S_FAILED | P2 | ⚠️ 未实现 | 等 M4 状态机补全后连接 |
+| Linux memory probe 用 `sysinfo.Bufferram` 未包含 page cache，MemAvailable 偏低，可能提前触发降级 | P2 | ⚠️ 待改进 | 考虑解析 `/proc/meminfo MemAvailable` |
 
 ---
 

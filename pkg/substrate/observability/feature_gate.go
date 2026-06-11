@@ -160,6 +160,8 @@ func (fg *FeatureGate) reassessAll() {
 		// Layer 2 — depends on local inference
 		FeatureLargeLocalLLM,   // depends on FeatureLocalInference
 		FeatureActivationSteer, // depends on FeatureLocalInference
+		// Layer 3 — observability exporters (no cross-feature dependency)
+		FeatureOTelExporter,
 	}
 
 	for _, feature := range ordered {
@@ -245,12 +247,13 @@ func (fg *FeatureGate) Reassess(availableMB uint64) {
 }
 
 // getAvailableMemoryMB estimates current free memory in MB.
+// fg.probe.AvailableRAM 以字节存储（来自 probeOSMemory），减去运行时堆占用后换算为 MB。
 func (fg *FeatureGate) getAvailableMemoryMB() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	heapMB := m.HeapAlloc / (1024 * 1024)
-	if fg.probe.AvailableRAM > heapMB {
-		return (fg.probe.AvailableRAM - heapMB) / (1024 * 1024)
+	heapBytes := m.HeapAlloc // 单位：字节，与 AvailableRAM 一致
+	if fg.probe.AvailableRAM > heapBytes {
+		return (fg.probe.AvailableRAM - heapBytes) / (1024 * 1024)
 	}
 	return 0
 }

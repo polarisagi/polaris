@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +43,8 @@ func NewTracer() *Tracer {
 	}
 }
 
+// StartSpan starts a new span. 若 ctx 中已有父 Span，则传播 TraceID 并设置 ParentID，
+// 保证同一请求链路内所有 Span 共享同一 TraceID，形成完整 trace 树。
 func (t *Tracer) StartSpan(ctx context.Context, kind SpanKind, name string) (*Span, context.Context) {
 	span := &Span{
 		TraceID:   newID(),
@@ -50,9 +53,15 @@ func (t *Tracer) StartSpan(ctx context.Context, kind SpanKind, name string) (*Sp
 		Name:      name,
 		StartTime: time.Now(),
 	}
+	// 传播父 Span 的 TraceID 和 SpanID，使 trace 树可关联。
+	if parent := SpanFromContext(ctx); parent != nil {
+		span.TraceID = parent.TraceID
+		span.ParentID = parent.SpanID
+	}
 	t.logger.Info("span_start",
 		"trace_id", span.TraceID,
 		"span_id", span.SpanID,
+		"parent_id", span.ParentID,
 		"kind", string(kind),
 		"name", name,
 	)
@@ -77,16 +86,27 @@ func SpanFromContext(ctx context.Context) *Span {
 	return s
 }
 
+// spanIDCounter 防止同纳秒内生成重复 SpanID/TraceID。
+var spanIDCounter atomic.Int64
+
+// newID 生成 32 字符十六进制 ID：高 16 位来自时间戳，低 16 位来自单调递增计数器。
+// 避免了纯时间戳方案在同纳秒并发调用时的碰撞。
 func newID() string {
-	return fmtHex(time.Now().UnixNano())
+	hi := time.Now().UnixNano()
+	lo := spanIDCounter.Add(1)
+	return fmtHex2(hi, lo)
 }
 
-func fmtHex(n int64) string {
+func fmtHex2(hi, lo int64) string {
 	const hex = "0123456789abcdef"
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	for i := 15; i >= 0; i-- {
-		b[i] = hex[n&0xf]
-		n >>= 4
+		b[i] = hex[hi&0xf]
+		hi >>= 4
+	}
+	for i := 31; i >= 16; i-- {
+		b[i] = hex[lo&0xf]
+		lo >>= 4
 	}
 	return string(b)
 }
