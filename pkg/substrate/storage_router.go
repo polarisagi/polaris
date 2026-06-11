@@ -7,7 +7,7 @@ import (
 )
 
 // StorageRouter — 统一存储路由（引擎选择 + SQLite 兜底）。
-// 三轴架构: [Storage-SQLite](控制轴) + [Storage-SurrealDB-Core](认知轴) + [Storage-Ristretto](热缓存)
+// 三轴架构: [Storage-SQLite](控制轴) + [Storage-SurrealDB-Core](认知轴) + [Storage-Native](热缓存)
 // 架构文档: docs/arch/M02-Storage-Fabric.md §1.2
 type StorageRouter struct {
 	stores   map[string]protocol.Store
