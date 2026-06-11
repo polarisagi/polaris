@@ -1,3 +1,6 @@
+run:
+  go: '1.24'
+
 linters:
   enable:
     # 既有基础 linter（不动）
