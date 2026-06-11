@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func (m *mockAgentKernel) GetExecuteResult() []byte       { return m.result }
 func (m *mockAgentKernel) GetTokenUsage() (int, int, int) { return 0, 0, 0 }
 
 type mockBlackboard struct {
+	mu     sync.Mutex
 	tasks  map[string]*protocol.TaskEntry
 	events chan protocol.BlackboardEvent
 }
@@ -43,6 +45,8 @@ func (b *mockBlackboard) PostBatch(ctx context.Context, tasks []*protocol.TaskEn
 	return nil
 }
 func (b *mockBlackboard) ClaimTask(ctx context.Context, taskID, agentID string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	entry, ok := b.tasks[taskID]
 	if !ok {
 		return false, nil
@@ -55,8 +59,12 @@ func (b *mockBlackboard) StartExecution(ctx context.Context, taskID, agentID str
 	return nil
 }
 func (b *mockBlackboard) CompleteTask(ctx context.Context, taskID, agentID string, result []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	entry := b.tasks[taskID]
-	entry.Status = protocol.TaskDone
+	if entry != nil {
+		entry.Status = protocol.TaskDone
+	}
 	return nil
 }
 func (b *mockBlackboard) FailTask(ctx context.Context, taskID, agentID string, errBytes []byte) error {
@@ -130,9 +138,11 @@ func TestWorker_ListenLoop(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 验证结果
+	bb.mu.Lock()
 	entry, ok := bb.tasks["task-1"]
 
 	if !ok {
+		bb.mu.Unlock()
 		t.Fatalf("task not found in blackboard")
 	}
 
@@ -143,6 +153,7 @@ func TestWorker_ListenLoop(t *testing.T) {
 	if entry.ClaimedBy != "agent-1" {
 		t.Errorf("expected task to be claimed by agent-1")
 	}
+	bb.mu.Unlock()
 }
 
 func TestWorker_ListenLoop_Push(t *testing.T) {
@@ -180,8 +191,10 @@ func TestWorker_ListenLoop_Push(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 验证结果
+	bb.mu.Lock()
 	entry, ok := bb.tasks["task-pushed"]
 	if !ok {
+		bb.mu.Unlock()
 		t.Fatalf("task not found in blackboard")
 	}
 
@@ -192,4 +205,5 @@ func TestWorker_ListenLoop_Push(t *testing.T) {
 	if entry.ClaimedBy != "agent-push" {
 		t.Errorf("expected task to be claimed by agent-push")
 	}
+	bb.mu.Unlock()
 }
