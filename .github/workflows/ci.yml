@@ -19,9 +19,10 @@ jobs:
           go-version: "1.26"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
+      - name: Run golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run ./...
 
   docs-toc:
     runs-on: ubuntu-latest
