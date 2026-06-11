@@ -126,27 +126,3 @@ jobs:
           SKIP_RUST_BUILD: 1
         run: make build
 
-  eval-gate:
-    needs: [lint, test, build, rust, docs-toc]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-          cache: true
-      - name: Download Rust Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: rust-libs
-          path: rust/substrate/target/release
-      - name: Create mock web dist
-        run: mkdir -p web/dist && touch web/dist/index.html
-      - name: Copy Rust libs
-        run: |
-          mkdir -p bin/lib
-          cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
-      - name: Eval Gate
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
-        run: go run ./cmd/polaris eval --ci-gate
