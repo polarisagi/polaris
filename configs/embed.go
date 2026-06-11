@@ -12,5 +12,5 @@ import "embed"
 // 排除（设计意图）：
 //   - threshold-examples/：仅供 Operator 复制到 ~/.polarisagi/polaris/config/ 使用，不嵌入
 //
-//go:embed *.yaml *.toml prompts automations
+//go:embed *.toml prompts automations extensions
 var FS embed.FS

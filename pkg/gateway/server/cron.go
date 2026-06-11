@@ -934,9 +934,9 @@ func (s *Server) fetchRemoteTemplates(src automationSource) []automationTemplate
 	return idx.Templates
 }
 
-// loadSources 从 embed.FS 读取 automation_sources.yaml（二进制自包含，不依赖工作目录）。
+// loadSources 从 embed.FS 读取 extensions/automation_sources.yaml（二进制自包含，不依赖工作目录）。
 func loadSources() []automationSource {
-	b, err := configs.FS.ReadFile("automation_sources.yaml")
+	b, err := configs.FS.ReadFile("extensions/automation_sources.yaml")
 	if err != nil {
 		return nil
 	}

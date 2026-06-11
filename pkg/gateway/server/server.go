@@ -435,10 +435,10 @@ func seedBuiltinConfig(db *sql.DB) {
 			}
 		}
 	} else {
-		slog.Warn("polaris-server: configs/marketplaces.yaml load failed", "err", err)
+		slog.Warn("polaris-server: configs/extensions/marketplaces.yaml load failed", "err", err)
 	}
 
-	if b, err := configs.FS.ReadFile("registry.yaml"); err == nil {
+	if b, err := configs.FS.ReadFile("extensions/registry.yaml"); err == nil {
 		var entries []protocol.RegistryEntry
 		if err := yaml.Unmarshal(b, &entries); err == nil {
 			for _, e := range entries {

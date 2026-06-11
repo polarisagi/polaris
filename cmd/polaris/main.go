@@ -290,7 +290,7 @@ func run() error { //nolint:gocyclo
 	slog.Info("polaris: policy gate initialized (deny-by-default)")
 
 	// ─── 3.5 信任发布者白名单 ────────────────────────────────────────────────
-	publisherTrustMap := config.LoadTrustedPublishers(configs.FS, "trusted-publishers.yaml")
+	publisherTrustMap := config.LoadTrustedPublishers(configs.FS, "extensions/trusted-publishers.yaml")
 
 	// ─── 4. 推理路由器 (L0 M1) ───────────────────────────────────────────────
 	dialer := substrate.NewSafeDialer()
