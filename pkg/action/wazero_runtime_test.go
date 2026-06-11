@@ -95,10 +95,10 @@ func TestWazeroRuntime_ABI(t *testing.T) {
 	}
 	config.Update(cfg)
 
-	// 读取刚编译的真实 regex_match Wasm 模块
-	wasmBytes, err := os.ReadFile("../../skills/builtin/regex_match/impl.wasm")
+	// 读取用于测试的 Wasm 模块（原生 skills 已抽离为扩展库，此处跳过真实依赖）
+	wasmBytes, err := os.ReadFile("../../testdata/wasm/regex_match_impl.wasm")
 	if err != nil {
-		t.Skipf("impl.wasm 未找到，跳过真实 Wasm 测试 (需执行 scripts/build_skills.sh): %v", err)
+		t.Skipf("测试用 regex_match_impl.wasm 未找到，跳过真实 Wasm 测试: %v", err)
 	}
 
 	wr := NewWazeroRuntime(context.Background(), 4)

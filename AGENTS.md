@@ -76,7 +76,6 @@ make test     # go test ./pkg/... ./internal/...
 make lint     # golangci-lint run ./...
 make rust-test
 make fmt
-make build-skills
 ```
 
 禁 `go test ./...` —— 必须 `make test`（保持 Makefile 构建约束）。

@@ -51,13 +51,13 @@ Agent A → EventTaskPosted → Blackboard → CAS Acquire → Agent B
 
 ## AGENT-4 Skill 生命周期
 
-Skill 三件套（`skills/builtin/SKILL.md + schema.json + wasm.wasm`）：
+Skill 三件套（`SKILL.md + schema.json + wasm.wasm`，现已迁移至独立的官方扩展仓库）：
 
 ```
 创作 → Logic Collapse（System 2 轨迹编译为 Wasm）→ 注册 → System 1 零推理执行
 ```
 
-- Skill 三件套（SKILL.md + schema.json + impl.wasm）均在 `skills/builtin/` 目录；impl.wasm 经 `go:embed` 打入二进制，运行时由 `EmbedWasmLoader` 从 embed.FS 加载（非直接文件系统读取）；元数据注册信息（skill ID、版本、签名）写入 skills 表
+- Skill 三件套（SKILL.md + schema.json + impl.wasm）现已迁移至官方插件仓库；主二进制不再通过 `go:embed` 直接硬编码打包其代码，而是通过扩展市场统一拉取；运行时仍由 Wasm 沙箱执行。元数据注册信息（skill ID、版本、签名）写入 skills 表
 - AI 生成的 Skill 必须经过 M6 四层 S_VALIDATE
 
 ## AGENT-5 SurpriseIndex 路由决策
