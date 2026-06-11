@@ -290,6 +290,14 @@ QLoRA/PRM/ActivationSteering 的 Tier 门控由 `FeatureGate` 自动化：`Featu
 与 OSMemoryGuard 协同: L1 预警 → 挂起 Auto-Curriculum + 暂停后台 worker 池 / L2 紧急 → 挂起 Consolidation + Reflexion / L3 临界 → 全部自进化活动暂停。
 
 
+## 6-bis. 已知 Bug 修复记录
+
+| # | 严重级 | 文件 | 函数 | 问题描述 | 修复提交 |
+|---|--------|------|------|---------|---------|
+| 1 | P1 | `pkg/swarm/self_improve_calibrator.go` | `DynamicDifficultyCalibrator.Calibrate()` | 当 `20 ≤ len(history) < 50` 时，`history[len-50:]` 计算出负索引，触发 runtime panic；同时分母 `max(50, len)` 在 `len>50` 时以总长除以仅 50 条窗口的计数，成功率被低估，误触发难度下调 | 40917d8 |
+
+---
+
 ## 默认参数
 
 完整阈值与重评触发条件: `spec/state.yaml §thresholds.m9_self_improve`。
