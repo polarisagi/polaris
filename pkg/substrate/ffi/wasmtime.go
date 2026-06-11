@@ -18,7 +18,7 @@ var (
 	wasmtimeInit       func(outErr *uintptr) int32
 	wasmtimePing       func() int32
 	wasmtimeFreeString func(ptr uintptr)
-	wasmtimeExecute    func(wasmBytes uintptr, wasmLen uintptr, inputJson uintptr, outJson *uintptr, outErr *uintptr) int32
+	wasmtimeExecute    func(wasmBytes uintptr, wasmLen uintptr, inputJson uintptr, workspaceDir uintptr, maxPages int32, maxFuel uint64, outJson *uintptr, outErr *uintptr) int32
 )
 
 func bindWasmtime() error {
@@ -99,8 +99,16 @@ func (e *WasmtimeEngine) Ping() int {
 	return int(wasmtimePing())
 }
 
+// ExecuteOptions 封装 Wasmtime 执行参数
+type ExecuteOptions struct {
+	Input        string
+	WorkspaceDir string
+	MaxPages     int32
+	MaxFuel      uint64
+}
+
 // Execute 执行 Wasm 组件
-func (e *WasmtimeEngine) Execute(ctx context.Context, wasmBytes []byte, input string) (string, error) {
+func (e *WasmtimeEngine) Execute(ctx context.Context, wasmBytes []byte, opts ExecuteOptions) (string, error) {
 	if err := bindWasmtime(); err != nil {
 		return "", err
 	}
@@ -110,9 +118,15 @@ func (e *WasmtimeEngine) Execute(ctx context.Context, wasmBytes []byte, input st
 	}
 
 	var inputCString uintptr
-	if input != "" {
-		inputBytes := append([]byte(input), 0)
+	if opts.Input != "" {
+		inputBytes := append([]byte(opts.Input), 0)
 		inputCString = uintptr(unsafe.Pointer(&inputBytes[0]))
+	}
+
+	var workspaceCString uintptr
+	if opts.WorkspaceDir != "" {
+		workspaceBytes := append([]byte(opts.WorkspaceDir), 0)
+		workspaceCString = uintptr(unsafe.Pointer(&workspaceBytes[0]))
 	}
 
 	var outJson uintptr
@@ -122,6 +136,9 @@ func (e *WasmtimeEngine) Execute(ctx context.Context, wasmBytes []byte, input st
 		uintptr(unsafe.Pointer(&wasmBytes[0])),
 		uintptr(len(wasmBytes)),
 		inputCString,
+		workspaceCString,
+		opts.MaxPages,
+		opts.MaxFuel,
 		&outJson,
 		&outErr,
 	)

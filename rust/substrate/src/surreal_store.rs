@@ -54,6 +54,7 @@ impl SurrealStore {
              DEFINE FIELD IF NOT EXISTS from_id ON edges TYPE string; \
              DEFINE FIELD IF NOT EXISTS edge_type ON edges TYPE string; \
              DEFINE FIELD IF NOT EXISTS to_id ON edges TYPE string; \
+             DEFINE FIELD IF NOT EXISTS weight ON edges TYPE float DEFAULT 1.0; \
              DEFINE INDEX IF NOT EXISTS edge_from ON edges FIELDS from_id, edge_type; \
              DEFINE TABLE IF NOT EXISTS docs SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS doc_id ON docs TYPE string; \
@@ -93,6 +94,12 @@ struct VecRow {
 #[derive(Debug, SurrealValue)]
 struct ToIdRow {
     to_id: String,
+}
+
+#[derive(Debug, SurrealValue)]
+struct ToIdWeightRow {
+    to_id: String,
+    weight: f64,
 }
 
 #[derive(Debug, SurrealValue)]
@@ -466,6 +473,7 @@ pub unsafe extern "C" fn surreal_graph_relate(
     from_id: *const c_char,
     edge_type: *const c_char,
     to_id: *const c_char,
+    weight: f64,
 ) -> c_int {
     let from = match unsafe { CStr::from_ptr(from_id) }.to_str() {
         Ok(s) => s.to_string(),
@@ -490,12 +498,134 @@ pub unsafe extern "C" fn surreal_graph_relate(
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("INSERT INTO edges (from_id, edge_type, to_id) VALUES ($from, $et, $to)")
+                .query("INSERT INTO edges (from_id, edge_type, to_id, weight) VALUES ($from, $et, $to, $weight)")
                 .bind(("from", from))
                 .bind(("et", et))
                 .bind(("to", to))
+                .bind(("weight", weight))
                 .await;
         });
+        SURREAL_OK
+    });
+    result.unwrap_or(SURREAL_ERR_PANIC)
+}
+
+// ─── surreal_graph_spreading_activation ───────────────────────────────────────
+
+/// 蔓延激活图算法（Spreading Activation）。
+/// 返回 JSON CString: [{"id":"<node>","score":<energy>},...]
+///
+/// # Safety
+/// start_ids_json 须为有效 JSON string 数组（例如 `["A", "B"]`）。
+#[no_mangle]
+pub unsafe extern "C" fn surreal_graph_spreading_activation(
+    start_ids_json: *const c_char,
+    max_depth: usize,
+    energy_decay: f64,
+    dormancy_threshold: f64,
+    fan_out_limit: usize,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    let ids_str = match unsafe { CStr::from_ptr(start_ids_json) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            write_cstr(out_json, "[]");
+            return SURREAL_ERR_UTF8;
+        }
+    };
+
+    let start_ids: Vec<String> = match serde_json::from_str(ids_str) {
+        Ok(v) => v,
+        Err(_) => {
+            write_cstr(out_json, "[]");
+            return SURREAL_ERR_UTF8;
+        }
+    };
+
+    let result = panic::catch_unwind(move || {
+        let Some(store_arc) = get_store() else {
+            write_cstr(out_json, "[]");
+            return SURREAL_OK;
+        };
+        let guard = match store_arc.read() {
+            Ok(g) => g,
+            Err(_) => return SURREAL_ERR_LOCK,
+        };
+
+        // 维护节点的累计能量，初始节点给予 1.0 能量
+        let mut node_energy: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        // 当前波前：每个元素是 (node_id, current_activation_energy)
+        let mut frontier: Vec<(String, f64)> = Vec::new();
+
+        for id in &start_ids {
+            node_energy.insert(id.clone(), 1.0);
+            frontier.push((id.clone(), 1.0));
+        }
+
+        for _ in 0..max_depth {
+            if frontier.is_empty() {
+                break;
+            }
+
+            let mut next_frontier: std::collections::HashMap<String, f64> =
+                std::collections::HashMap::new();
+
+            // 为避免对每个节点单独查询，可以批量查询，但为了简单与准确，我们用单个或批量 SQL。
+            // 由于每次查询可能有多个起点，我们可以用 `from_id IN $frontier`，但我们需要知道是谁连向的。
+            // 简单实现：逐个查询（如果 fan_out_limit 很大可能会慢，但在本地 rocksdb/mem 尚可接受）
+            for (curr_node, curr_energy) in frontier {
+                if curr_energy < dormancy_threshold {
+                    continue;
+                }
+
+                // 查出该节点所有的出去的边，按权重降序排列，取前 fan_out_limit
+                let sql = format!(
+                    "SELECT to_id, weight FROM edges WHERE from_id = $curr ORDER BY weight DESC LIMIT {fan_out_limit}"
+                );
+
+                let neighbors: Vec<ToIdWeightRow> = guard
+                    .rt
+                    .block_on(async {
+                        let mut resp = guard
+                            .db
+                            .query(&sql)
+                            .bind(("curr", curr_node.clone()))
+                            .await?;
+                        resp.take(0)
+                    })
+                    .unwrap_or_default();
+
+                for edge in neighbors {
+                    // 传播的能量 = 当前能量 * 边权重 * 衰减系数
+                    let transferred_energy = curr_energy * edge.weight * energy_decay;
+                    if transferred_energy >= dormancy_threshold {
+                        *next_frontier.entry(edge.to_id.clone()).or_insert(0.0) +=
+                            transferred_energy;
+                        *node_energy.entry(edge.to_id.clone()).or_insert(0.0) += transferred_energy;
+                    }
+                }
+            }
+
+            frontier = next_frontier.into_iter().collect();
+        }
+
+        // 最终过滤出非起点的节点，并按能量排序
+        let mut results: Vec<VecRow> = node_energy
+            .into_iter()
+            .filter(|(id, _)| !start_ids.contains(id))
+            .map(|(id, score)| VecRow { id, score })
+            .collect();
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // 取前 50（可选）
+        results.truncate(50);
+
+        write_cstr(out_json, &encode_scored(&results));
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)

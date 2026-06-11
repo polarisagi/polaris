@@ -1,8 +1,10 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
 use std::panic;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use wasmtime::*;
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 // ─── FFI 错误码 ────────────────────────────────────────────────────────────────
 const WASMTIME_OK: c_int = 0;
@@ -13,6 +15,31 @@ const WASMTIME_ERR_UTF8: c_int = -4;
 
 pub struct EngineState {
     pub engine: Engine,
+}
+
+struct SandboxState {
+    wasi: wasmtime_wasi::p1::WasiP1Ctx,
+    max_pages: usize,
+}
+
+impl wasmtime::ResourceLimiter for SandboxState {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool> {
+        Ok(desired <= self.max_pages)
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 impl EngineState {
@@ -96,6 +123,9 @@ pub unsafe extern "C" fn wasmtime_execute(
     wasm_bytes: *const u8,
     wasm_len: usize,
     input_json: *const c_char,
+    workspace_dir: *const c_char,
+    max_pages: c_int,
+    max_fuel: u64,
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
@@ -135,8 +165,8 @@ pub unsafe extern "C" fn wasmtime_execute(
             }
         };
 
-        let mut linker: Linker<wasmtime_wasi::p1::WasiP1Ctx> = Linker::new(&engine_arc.engine);
-        if let Err(e) = wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |cx| cx) {
+        let mut linker: Linker<SandboxState> = Linker::new(&engine_arc.engine);
+        if let Err(e) = wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |cx| &mut cx.wasi) {
             write_err(out_err, &format!("Failed to add wasi to linker: {}", e));
             return WASMTIME_ERR_INTERNAL;
         }
@@ -145,13 +175,47 @@ pub unsafe extern "C" fn wasmtime_execute(
             wasmtime_wasi::p2::pipe::MemoryInputPipe::new(bytes::Bytes::from(input_str.to_owned()));
         let stdout = wasmtime_wasi::p2::pipe::MemoryOutputPipe::new(10 * 1024 * 1024); // 10MB
 
-        let wasi_ctx = wasmtime_wasi::WasiCtxBuilder::new()
-            .stdin(stdin.clone())
-            .stdout(stdout.clone())
-            .build_p1();
+        let mut builder = WasiCtxBuilder::new();
+        builder.stdin(stdin.clone()).stdout(stdout.clone());
 
-        let mut store = Store::new(&engine_arc.engine, wasi_ctx);
-        if let Err(e) = store.set_fuel(100_000_000) {
+        // 如果传入了工作目录，则挂载为 /workspace
+        if !workspace_dir.is_null() {
+            if let Ok(host_path_str) = std::ffi::CStr::from_ptr(workspace_dir).to_str() {
+                if !host_path_str.is_empty() {
+                    let host_path = Path::new(host_path_str);
+                    if let Err(e) = builder.preopened_dir(
+                        host_path,
+                        "/workspace",
+                        DirPerms::all(),
+                        FilePerms::all(),
+                    ) {
+                        write_err(out_err, &format!("Failed to preopen directory: {}", e));
+                        return WASMTIME_ERR_INTERNAL;
+                    }
+                }
+            }
+        }
+
+        let wasi_ctx = builder.build_p1();
+
+        // 最大内存页数（默认 256 页 = 16MB）
+        let limit_pages = if max_pages > 0 {
+            max_pages as usize
+        } else {
+            256
+        };
+
+        let state = SandboxState {
+            wasi: wasi_ctx,
+            max_pages: limit_pages,
+        };
+
+        let mut store = Store::new(&engine_arc.engine, state);
+        store.limiter(|s| s as &mut dyn wasmtime::ResourceLimiter);
+
+        // 燃料设定
+        let fuel_limit = if max_fuel > 0 { max_fuel } else { 100_000_000 };
+        if let Err(e) = store.set_fuel(fuel_limit) {
             write_err(out_err, &format!("Failed to set fuel: {}", e));
             return WASMTIME_ERR_INTERNAL;
         }

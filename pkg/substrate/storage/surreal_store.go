@@ -31,20 +31,21 @@ var (
 	surrealOnce sync.Once
 	surrealErr  error
 
-	surrealOpen          func(backend string, dbPath string, vecDim int32) int32
-	surrealKvGet         func(key *byte, keyLen uintptr, outVal *uintptr, outLen *uintptr) int32
-	surrealKvPut         func(key *byte, keyLen uintptr, val *byte, valLen uintptr) int32
-	surrealKvDelete      func(key *byte, keyLen uintptr) int32
-	surrealKvScan        func(prefix *byte, prefixLen uintptr, outJSON *uintptr) int32
-	surrealVecUpsert     func(id string, embed *float32, dim uintptr) int32
-	surrealVecKnn        func(query *float32, dim uintptr, k uintptr, outJSON *uintptr) int32
-	surrealVecSetMode    func(mode int32) int32
-	surrealGraphRelate   func(fromID, edgeType, toID string) int32
-	surrealGraphTraverse func(startID, edgeType string, maxDepth uintptr, outJSON *uintptr) int32
-	surrealFTSIndex      func(docID, text string) int32
-	surrealFTSSearch     func(query string, k uintptr, outJSON *uintptr) int32
-	surrealFreeString    func(ptr uintptr)
-	surrealFreeBuf       func(ptr uintptr, length uintptr)
+	surrealOpen                     func(backend string, dbPath string, vecDim int32) int32
+	surrealKvGet                    func(key *byte, keyLen uintptr, outVal *uintptr, outLen *uintptr) int32
+	surrealKvPut                    func(key *byte, keyLen uintptr, val *byte, valLen uintptr) int32
+	surrealKvDelete                 func(key *byte, keyLen uintptr) int32
+	surrealKvScan                   func(prefix *byte, prefixLen uintptr, outJSON *uintptr) int32
+	surrealVecUpsert                func(id string, embed *float32, dim uintptr) int32
+	surrealVecKnn                   func(query *float32, dim uintptr, k uintptr, outJSON *uintptr) int32
+	surrealVecSetMode               func(mode int32) int32
+	surrealGraphRelate              func(fromID, edgeType, toID string, weight float64) int32
+	surrealGraphTraverse            func(startID, edgeType string, maxDepth uintptr, outJSON *uintptr) int32
+	surrealGraphSpreadingActivation func(startIDsJSON string, maxDepth uintptr, energyDecay float64, dormancyThreshold float64, fanOutLimit uintptr, outJSON *uintptr) int32
+	surrealFTSIndex                 func(docID, text string) int32
+	surrealFTSSearch                func(query string, k uintptr, outJSON *uintptr) int32
+	surrealFreeString               func(ptr uintptr)
+	surrealFreeBuf                  func(ptr uintptr, length uintptr)
 )
 
 func bindSurreal() error {
@@ -64,6 +65,7 @@ func bindSurreal() error {
 		purego.RegisterLibFunc(&surrealVecSetMode, lib, "surreal_vec_set_mode")
 		purego.RegisterLibFunc(&surrealGraphRelate, lib, "surreal_graph_relate")
 		purego.RegisterLibFunc(&surrealGraphTraverse, lib, "surreal_graph_traverse")
+		purego.RegisterLibFunc(&surrealGraphSpreadingActivation, lib, "surreal_graph_spreading_activation")
 		purego.RegisterLibFunc(&surrealFTSIndex, lib, "surreal_fts_index")
 		purego.RegisterLibFunc(&surrealFTSSearch, lib, "surreal_fts_search")
 		purego.RegisterLibFunc(&surrealFreeString, lib, "surreal_free_string")
@@ -271,12 +273,37 @@ func (s *SurrealDBCoreStore) VecKNN(query []float32, k int) ([]ScoredID, error) 
 }
 
 // GraphRelate 写入有向图边 from -[edgeType]-> to。
-func (s *SurrealDBCoreStore) GraphRelate(fromID, edgeType, toID string) error {
-	rc := surrealGraphRelate(fromID, edgeType, toID)
+func (s *SurrealDBCoreStore) GraphRelate(fromID, edgeType, toID string, weight float64) error {
+	rc := surrealGraphRelate(fromID, edgeType, toID, weight)
 	if rc != 0 {
 		return perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_graph_relate: code %d", rc))
 	}
 	return nil
+}
+
+// GraphSpreadingActivation 蔓延激活图遍历
+func (s *SurrealDBCoreStore) GraphSpreadingActivation(startIDs []string, maxDepth int, energyDecay float64, dormancyThreshold float64, fanOutLimit int) ([]ScoredID, error) {
+	if len(startIDs) == 0 {
+		return nil, perrors.New(perrors.CodeInternal, "surreal_graph_spreading_activation: empty startIDs")
+	}
+	startIDsJSON, err := json.Marshal(startIDs)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "surreal_graph_spreading_activation: marshal ids", err)
+	}
+
+	var outJSON uintptr
+	rc := surrealGraphSpreadingActivation(
+		string(startIDsJSON),
+		uintptr(maxDepth),
+		energyDecay,
+		dormancyThreshold,
+		uintptr(fanOutLimit),
+		&outJSON,
+	)
+	if rc != 0 {
+		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_graph_spreading_activation: code %d", rc))
+	}
+	return parseScoredJSON(readCStringAndFree(outJSON))
 }
 
 // GraphTraverse BFS 多跳图遍历；edgeType 为空串表示匹配所有边类型。

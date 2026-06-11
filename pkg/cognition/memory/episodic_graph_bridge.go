@@ -29,18 +29,18 @@ func (ei *EpisodicGraphIndexer) Index(_ context.Context, ev protocol.Event) {
 	node := "episodic:" + ev.ID
 
 	if ev.AgentID != "" {
-		if err := ei.graph.GraphRelate(node, "TRIGGERED_BY", "agent:"+ev.AgentID); err != nil {
+		if err := ei.graph.GraphRelate(node, "TRIGGERED_BY", "agent:"+ev.AgentID, 1.0); err != nil {
 			slog.Warn("episodic_graph: TRIGGERED_BY 边写入失败", "event", ev.ID, "err", err)
 		}
 	}
 	if ev.TaskID != "" && ev.TaskID != ev.ID {
-		if err := ei.graph.GraphRelate(node, "IN_SESSION", "session:"+ev.TaskID); err != nil {
+		if err := ei.graph.GraphRelate(node, "IN_SESSION", "session:"+ev.TaskID, 1.0); err != nil {
 			slog.Warn("episodic_graph: IN_SESSION 边写入失败", "event", ev.ID, "err", err)
 		}
 	}
 	if ev.Type == protocol.EventActionDone {
 		toolName := extractToolName(ev.Payload)
-		if err := ei.graph.GraphRelate(node, "ACTION_DONE", "entity:tool:"+toolName); err != nil {
+		if err := ei.graph.GraphRelate(node, "ACTION_DONE", "entity:tool:"+toolName, 1.0); err != nil {
 			slog.Warn("episodic_graph: ACTION_DONE 边写入失败", "event", ev.ID, "err", err)
 		}
 	}

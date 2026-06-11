@@ -18,7 +18,7 @@ import (
 // consumer-side 定义，防止包循环依赖。
 type GraphTraverser interface {
 	GraphTraverse(startID, edgeType string, maxDepth int) ([]string, error)
-	GraphRelate(fromID, edgeType, toID string) error
+	GraphRelate(fromID, edgeType, toID string, weight float64) error
 }
 
 type HybridRetrieverImpl struct {

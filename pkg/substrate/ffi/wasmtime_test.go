@@ -26,11 +26,13 @@ func TestWasmtimeExecute(t *testing.T) {
 
 	// minimal valid wasm module (empty)
 	wasmBytes := []byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00}
-	out, err := engine.Execute(context.TODO(), wasmBytes, `{"test": "input"}`)
+	out, err := engine.Execute(context.TODO(), wasmBytes, ffi.ExecuteOptions{
+		Input: `{"test": "input"}`,
+	})
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	if out != `{"status": "mock_success"}` {
+	if out != "" {
 		t.Fatalf("Execute returned unexpected: %q", out)
 	}
 }
