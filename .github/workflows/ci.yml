@@ -43,8 +43,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Build Rust Substrate
+        run: make rust-build
       - name: spec consistency (state.yaml SSoT)
         run: go test -run "^TestSpec" ./internal/protocol/... -v
       - run: go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out
@@ -87,6 +93,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Build Rust Substrate
+        run: make rust-build
       - run: go run ./cmd/polaris eval --ci-gate

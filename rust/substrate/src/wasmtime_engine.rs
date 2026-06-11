@@ -7,11 +7,8 @@ use wasmtime::*;
 // ─── FFI 错误码 ────────────────────────────────────────────────────────────────
 const WASMTIME_OK: c_int = 0;
 const WASMTIME_ERR_INTERNAL: c_int = -1;
-#[allow(dead_code)]
 const WASMTIME_ERR_COMPILE: c_int = -2;
-#[allow(dead_code)]
 const WASMTIME_ERR_EXECUTE: c_int = -3;
-#[allow(dead_code)]
 const WASMTIME_ERR_UTF8: c_int = -4;
 
 pub struct EngineState {
@@ -99,12 +96,11 @@ pub unsafe extern "C" fn wasmtime_execute(
     wasm_bytes: *const u8,
     wasm_len: usize,
     input_json: *const c_char,
-    _out_json: *mut *mut c_char,
+    out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
     let result = panic::catch_unwind(|| -> c_int {
         // 先取出 Arc clone，立即释放 Mutex。
-        // 原实现在持锁期间做模块编译（高耗时），会长时间阻塞其他并发调用方。
         let engine_arc = {
             let global = GLOBAL_ENGINE.lock().unwrap();
             match global.as_ref() {
@@ -114,9 +110,9 @@ pub unsafe extern "C" fn wasmtime_execute(
                     return WASMTIME_ERR_INTERNAL;
                 }
             }
-        }; // Mutex 在此释放，编译在锁外进行
+        };
 
-        let _input_str = if input_json.is_null() {
+        let input_str = if input_json.is_null() {
             "{}"
         } else {
             match std::ffi::CStr::from_ptr(input_json).to_str() {
@@ -131,7 +127,7 @@ pub unsafe extern "C" fn wasmtime_execute(
         let bytes = std::slice::from_raw_parts(wasm_bytes, wasm_len);
 
         // 编译验证（在锁外执行，Engine 本身线程安全）
-        let _module = match Module::from_binary(&engine_arc.engine, bytes) {
+        let module = match Module::from_binary(&engine_arc.engine, bytes) {
             Ok(m) => m,
             Err(e) => {
                 write_err(out_err, &format!("Compile error: {}", e));
@@ -139,21 +135,58 @@ pub unsafe extern "C" fn wasmtime_execute(
             }
         };
 
-        // TODO: 实现 WASI 执行路径（Task#wasmtime-wasi-execution）
-        //   1. WasiCtxBuilder::new().stdin(MemoryInputPipe(input_json))
-        //                           .stdout(MemoryOutputPipe)
-        //                           .build_p1()
-        //   2. Store::new(&engine_arc.engine, wasi_ctx)
-        //      store.set_fuel(100_000_000)  // 防 LLM 生成死循环
-        //   3. preview1::add_to_linker_sync(&mut linker, |cx| cx)
-        //   4. linker.instantiate → call "_start" → stdout → write_err(out_json, ...)
-        //
-        // 原实现返回 mock_success，会让调用方误以为执行成功，改为明确的未实现错误。
-        write_err(
-            out_err,
-            "wasmtime_execute: WASI execution path not yet implemented",
-        );
-        WASMTIME_ERR_INTERNAL
+        let mut linker: Linker<wasmtime_wasi::p1::WasiP1Ctx> = Linker::new(&engine_arc.engine);
+        if let Err(e) = wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |cx| cx) {
+            write_err(out_err, &format!("Failed to add wasi to linker: {}", e));
+            return WASMTIME_ERR_INTERNAL;
+        }
+
+        let stdin = wasmtime_wasi::p2::pipe::MemoryInputPipe::new(bytes::Bytes::from(input_str.to_owned()));
+        let stdout = wasmtime_wasi::p2::pipe::MemoryOutputPipe::new(10 * 1024 * 1024); // 10MB
+        
+        let wasi_ctx = wasmtime_wasi::WasiCtxBuilder::new()
+            .stdin(stdin.clone())
+            .stdout(stdout.clone())
+            .build_p1();
+
+        let mut store = Store::new(&engine_arc.engine, wasi_ctx);
+        if let Err(e) = store.set_fuel(100_000_000) {
+            write_err(out_err, &format!("Failed to set fuel: {}", e));
+            return WASMTIME_ERR_INTERNAL;
+        }
+
+        let instance = match linker.instantiate(&mut store, &module) {
+            Ok(inst) => inst,
+            Err(e) => {
+                write_err(out_err, &format!("Instantiate error: {}", e));
+                return WASMTIME_ERR_EXECUTE;
+            }
+        };
+
+        let start_func = match instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            Ok(f) => f,
+            Err(e) => {
+                write_err(out_err, &format!("Failed to find _start function: {}", e));
+                return WASMTIME_ERR_EXECUTE;
+            }
+        };
+
+        if let Err(e) = start_func.call(&mut store, ()) {
+            write_err(out_err, &format!("Execution error: {}", e));
+            return WASMTIME_ERR_EXECUTE;
+        }
+
+        let output_bytes = stdout.contents();
+        match std::str::from_utf8(&output_bytes) {
+            Ok(s) => {
+                write_err(out_json, s);
+                WASMTIME_OK
+            }
+            Err(_) => {
+                write_err(out_err, "Module output is not valid UTF-8");
+                WASMTIME_ERR_UTF8
+            }
+        }
     });
 
     match result {
@@ -164,5 +197,3 @@ pub unsafe extern "C" fn wasmtime_execute(
         }
     }
 }
-
-// 消除 #[allow(dead_code)] — 错误码在执行路径实现后全部启用
