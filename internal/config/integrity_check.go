@@ -33,26 +33,8 @@ func VerifyKernelIntegrity() error {
 			return nil
 		}
 
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if !info.IsDir() && filepath.Ext(path) == ".go" {
-				f, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				h := sha256.New()
-				if _, err := io.Copy(h, f); err != nil {
-					return err
-				}
-				currentManifest[path] = hex.EncodeToString(h.Sum(nil))
-			}
-			return nil
-		})
-		if err != nil && !os.IsNotExist(err) {
-			return errors.Wrap(errors.CodeInternal, fmt.Sprintf("failed to walk immutable package %s", dir), err)
+		if err := hashPackageDir(dir, currentManifest); err != nil {
+			return err
 		}
 	}
 
@@ -74,5 +56,30 @@ func VerifyKernelIntegrity() error {
 		}
 	}
 
+	return nil
+}
+
+func hashPackageDir(dir string, currentManifest map[string]string) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && filepath.Ext(path) == ".go" {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			h := sha256.New()
+			if _, err := io.Copy(h, f); err != nil {
+				return err
+			}
+			currentManifest[path] = hex.EncodeToString(h.Sum(nil))
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return errors.Wrap(errors.CodeInternal, fmt.Sprintf("failed to walk immutable package %s", dir), err)
+	}
 	return nil
 }
