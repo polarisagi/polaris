@@ -1,7 +1,7 @@
 # 模块 4: Agent Kernel
 
 > M4, `pkg/cognition/` | Go 状态机持有控制流，LLM 仅概率性填空 | `[HE-Rule-5]` `[Tier-0-Limit]`
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:84 Suspend-on-Idle / 3:94 S_VALIDATE / 4:131 DAG / 5:208 System1/2 / 6:230 WorldModel / 7:248 推理预算 / 8:312 CrashRecovery / 12:357 (SOFT)降级 / 13:375 跨模块契约
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:84 Suspend-on-Idle / 3:94 S_VALIDATE / 4:131 DAG / 5:208 System1/2 / 6:230 WorldModel / 7:248 推理预算 / 8:312 CrashRecovery / 12:357 (SOFT)降级 / 13:383 跨模块契约
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |

@@ -629,6 +629,20 @@ func run() error { //nolint:gocyclo
 		slog.Warn("polaris: LoadProvidersFromDB", "err", err)
 	}
 
+	// ─── 10.8 Eval Harness CI Gate ─────────────────────────────────────────────
+	if len(os.Args) > 2 && os.Args[1] == "eval" && os.Args[2] == "--ci-gate" {
+		slog.Info("polaris: running eval --ci-gate validation suite")
+		report, runErr := evalRunner.RunSuite(ctx, "validation", "ci")
+		if runErr != nil {
+			return errors.Wrap(errors.CodeInternal, "eval ci-gate execution failed", runErr)
+		}
+		if report.Status == "failed" {
+			return errors.New(errors.CodeInternal, fmt.Sprintf("eval ci-gate failed: pass=%d fail=%d safety_fail=%d", report.PassCount, report.FailCount, report.SafetyFail))
+		}
+		slog.Info("polaris: eval ci-gate passed", "pass_count", report.PassCount)
+		return nil
+	}
+
 	// ─── 11. M13 Interface Server ──────────────────────────────────────────────
 	// FeatureWebUI 仅控制 dashboard 是否渲染；REST API 始终启动（Agent 通信依赖）。
 	if autoConf != nil && autoConf.Gate.State(observability.FeatureWebUI) == observability.FeatureDisabled {

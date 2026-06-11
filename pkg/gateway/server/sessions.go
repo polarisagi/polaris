@@ -122,22 +122,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		// Parse duration if both exist.
 		// SQLite datetime() 输出 "2006-01-02 15:04:05"（空格分隔），
 		// 而非 "2006-01-02T15:04:05Z"（T+Z）。原始 layout 静默解析失败导致 TaskDuration 永远为 0。
-		if createdStr != "" && updatedStr != "" {
-			parseDBTime := func(s string) time.Time {
-				if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
-					return t
-				}
-				if t, err := time.Parse(time.RFC3339, s); err == nil {
-					return t
-				}
-				return time.Time{}
-			}
-			tC := parseDBTime(createdStr)
-			tU := parseDBTime(updatedStr)
-			if !tU.IsZero() && !tC.IsZero() {
-				m.TaskDuration = tU.Sub(tC).Milliseconds()
-			}
-		}
+		m.TaskDuration = parseTaskDuration(createdStr, updatedStr)
 
 		total += len(m.Content)
 		if total > maxChars {
@@ -150,6 +135,27 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sessionID, "messages": msgs})
+}
+
+func parseTaskDuration(createdStr, updatedStr string) int64 {
+	if createdStr == "" || updatedStr == "" {
+		return 0
+	}
+	parseDBTime := func(s string) time.Time {
+		if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+		return time.Time{}
+	}
+	tC := parseDBTime(createdStr)
+	tU := parseDBTime(updatedStr)
+	if !tU.IsZero() && !tC.IsZero() {
+		return tU.Sub(tC).Milliseconds()
+	}
+	return 0
 }
 
 // DELETE /v1/sessions/{sessionID}
