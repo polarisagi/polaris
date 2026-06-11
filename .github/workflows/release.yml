@@ -38,56 +38,33 @@ jobs:
           path: web/dist
           retention-days: 1
 
-  build:
+  # Linux: 两个架构需要不同 runner（amd64 无法交叉编译 arm64 的 RocksDB C++）
+  build-linux:
     needs: build-frontend
-    name: Build (${{ matrix.os_name }}-${{ matrix.arch_name }})
+    name: Build (linux-${{ matrix.arch_name }})
     runs-on: ${{ matrix.runner_os }}
     strategy:
       matrix:
         include:
-          - os_name: linux
-            arch_name: amd64
+          - arch_name: amd64
             runner_os: ubuntu-latest
             cargo_target: 'x86_64-unknown-linux-gnu'
             goarch: amd64
-          - os_name: linux
-            arch_name: arm64
+          - arch_name: arm64
             runner_os: ubuntu-24.04-arm
             cargo_target: 'aarch64-unknown-linux-gnu'
             goarch: arm64
-          - os_name: windows
-            arch_name: amd64
-            runner_os: windows-latest
-            cargo_target: 'x86_64-pc-windows-msvc'
-            goarch: amd64
-          - os_name: windows
-            arch_name: arm64
-            runner_os: windows-latest
-            cargo_target: 'aarch64-pc-windows-msvc'
-            goarch: arm64
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Disable Windows Defender
-        if: runner.os == 'Windows'
-        run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
-        shell: powershell
-
       - name: Download Frontend Artifact
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: web/dist
-
-      - name: Install make (Windows)
-        if: runner.os == 'Windows'
-        run: choco install make
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -112,7 +89,6 @@ jobs:
           save-if: ${{ github.ref_type == 'tag' }}
 
       - name: Build Project Backend
-        shell: bash
         env:
           CARGO_TARGET: ${{ matrix.cargo_target }}
           GOARCH: ${{ matrix.goarch }}
@@ -121,39 +97,29 @@ jobs:
         run: make build-backend
 
       - name: Show sccache stats
-        shell: bash
         run: sccache --show-stats
 
       - name: Package
-        shell: bash
         run: |
           mkdir -p release_pkg
           cp -r bin/* release_pkg/
           cp -r configs release_pkg/
           cp -r policies release_pkg/
           cp LICENSE release_pkg/
-
           cd release_pkg
-          if [ "${{ matrix.os_name }}" = "windows" ]; then
-            7z a -tzip ../polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip ./*
-            cd ..
-            sha256sum polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip \
-              > polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip.sha256
-          else
-            tar -czvf ../polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz ./*
-            cd ..
-            sha256sum polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz \
-              > polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz.sha256
-          fi
+          tar -czvf ../polaris-linux-${{ matrix.arch_name }}.tar.gz ./*
+          cd ..
+          sha256sum polaris-linux-${{ matrix.arch_name }}.tar.gz \
+            > polaris-linux-${{ matrix.arch_name }}.tar.gz.sha256
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}
-          path: polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.*
+          name: polaris-linux-${{ matrix.arch_name }}
+          path: polaris-linux-${{ matrix.arch_name }}.*
           retention-days: 1
 
-  # macOS: 同一 runner 上编译 arm64 + amd64，省掉一次工具链下载和 runner 排队
+  # macOS: 同一 runner 上编译 arm64 + amd64
   build-darwin:
     needs: build-frontend
     name: Build (darwin)
@@ -254,8 +220,124 @@ jobs:
       - name: Show sccache stats
         run: sccache --show-stats
 
+  # Windows: 同一 runner 上编译 amd64 + arm64
+  build-windows:
+    needs: build-frontend
+    name: Build (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Disable Windows Defender
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
+        shell: powershell
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+
+      - name: Install make
+        run: choco install make
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-windows"
+          save-if: ${{ github.ref_type == 'tag' }}
+
+      # ── amd64（原生）──
+      - name: Build Backend (amd64)
+        shell: bash
+        env:
+          CARGO_TARGET: x86_64-pc-windows-msvc
+          GOARCH: amd64
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: make build-backend
+
+      - name: Package (amd64)
+        shell: bash
+        run: |
+          mkdir -p release_pkg
+          cp -r bin/* release_pkg/
+          cp -r configs release_pkg/
+          cp -r policies release_pkg/
+          cp LICENSE release_pkg/
+          cd release_pkg
+          7z a -tzip ../polaris-windows-amd64.zip ./*
+          cd ..
+          sha256sum polaris-windows-amd64.zip > polaris-windows-amd64.zip.sha256
+
+      - name: Upload Artifact (amd64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-windows-amd64
+          path: polaris-windows-amd64.*
+          retention-days: 1
+
+      # ── arm64（交叉编译）──
+      - name: Clean previous build
+        shell: bash
+        run: rm -rf bin/ release_pkg/
+
+      - name: Build Backend (arm64)
+        shell: bash
+        env:
+          CARGO_TARGET: aarch64-pc-windows-msvc
+          GOARCH: arm64
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: make build-backend
+
+      - name: Package (arm64)
+        shell: bash
+        run: |
+          mkdir -p release_pkg
+          cp -r bin/* release_pkg/
+          cp -r configs release_pkg/
+          cp -r policies release_pkg/
+          cp LICENSE release_pkg/
+          cd release_pkg
+          7z a -tzip ../polaris-windows-arm64.zip ./*
+          cd ..
+          sha256sum polaris-windows-arm64.zip > polaris-windows-arm64.zip.sha256
+
+      - name: Upload Artifact (arm64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-windows-arm64
+          path: polaris-windows-arm64.*
+          retention-days: 1
+
+      - name: Show sccache stats
+        shell: bash
+        run: sccache --show-stats
+
   publish:
-    needs: [build, build-darwin]
+    needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
