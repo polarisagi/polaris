@@ -107,6 +107,7 @@ Telegram · Discord · Slack · 飞书 · 钉钉 · 企业微信 · Matrix · Ma
 - **MCP（Model Context Protocol）**：Streamable HTTP，支持作为 MCP 客户端和服务端
 - **Plugin Bundle**：多组件插件包，含 MCP 服务 + 技能 + 自动化
 - **Shell Script Hooks**：`~/.polarisagi/polaris/hooks/` 目录，无需改源码定制生命周期
+- **官方插件市场**：所有的默认插件、Wasm 技能和 MCP 服务均在我们的官方开源仓库 [polarisagi/polaris-plugins-official](https://github.com/polarisagi/polaris-plugins-official) 中独立维护。Polaris 主引擎会在运行时动态从该市场下载分发。
 
 ---
 

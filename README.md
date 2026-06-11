@@ -107,6 +107,7 @@ Telegram · Discord · Slack · Feishu · DingTalk · WeCom · Matrix · Matterm
 - **MCP (Model Context Protocol)**: Streamable HTTP, supports both MCP client and server roles
 - **Plugin Bundle**: multi-component plugin packages (MCP server + skills + automations)
 - **Shell Script Hooks**: drop scripts into `~/.polarisagi/polaris/hooks/` — no source changes needed
+- **Official Plugin Marketplace**: All default plugins, Wasm skills, and MCP servers are developed and maintained at our official open-source repository: [polarisagi/polaris-plugins-official](https://github.com/polarisagi/polaris-plugins-official). Extensions are dynamically downloaded at runtime.
 
 ### OpenAI-Compatible API
 
