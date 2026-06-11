@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build-frontend:
@@ -39,7 +40,7 @@ jobs:
           retention-days: 1
 
   # Rust 预编译：6 个 target 全部并行，产物通过 artifact 传递给下游 Go 编译
-  # 最终产物缓存：Rust 源码 + 依赖无变化时，跳过整个编译（不装 Rust 工具链）
+  # 最终产物缓存（跨 Tag 支持）：利用 GitHub CLI 下载上一次成功发布时的产物比对 Hash，实现跨 Tag 秒级跳过
   build-rust:
     name: Rust (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
@@ -68,39 +69,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 最终产物缓存：key = Rust 源码 + Cargo.toml + Cargo.lock 的 hash
-      # 命中时跳过后续所有编译步骤，直接上传 artifact
-      - name: Cache Rust final artifact
-        id: rust-final
-        uses: actions/cache@v4
-        with:
-          path: |
-            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
-            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
-            rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
-          key: rust-release-${{ matrix.cargo_target }}-${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}
+      # 跨 Tag 缓存核心机制：去上一次成功发版（Release 工作流）里下载包含 rust-hash.txt 的库
+      - name: Restore Rust from previous release
+        id: rust-restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          CURRENT_HASH="${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}"
+          echo "Current hash: $CURRENT_HASH"
+          
+          # 寻找最近一次成功的 Release 流水线
+          LATEST_RUN=$(gh run list --workflow=release.yml --status=success --limit=1 --json databaseId -q '.[0].databaseId' || echo "")
+          if [ -n "$LATEST_RUN" ]; then
+            echo "Found previous successful run: $LATEST_RUN"
+            gh run download $LATEST_RUN -n rust-${{ matrix.name }} -D prev_rust || echo "Artifact not found"
+            
+            if [ -f "prev_rust/rust-hash.txt" ]; then
+              PREV_HASH=$(cat prev_rust/rust-hash.txt)
+              if [ "$PREV_HASH" == "$CURRENT_HASH" ]; then
+                echo "Hash matches! Reusing artifacts across tags."
+                echo "cache-hit=true" >> $GITHUB_OUTPUT
+                mkdir -p rust/substrate/target/${{ matrix.cargo_target }}/release
+                cp prev_rust/* rust/substrate/target/${{ matrix.cargo_target }}/release/ || true
+                exit 0
+              fi
+            fi
+          fi
+          echo "cache-hit=false" >> $GITHUB_OUTPUT
 
-      # ── 以下步骤仅在缓存未命中时执行 ──
+      # ── 以下步骤仅在跨 Tag 缓存未命中时执行 ──
 
       - name: Disable Windows Defender
-        if: steps.rust-final.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        if: steps.rust-restore.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: powershell
         run: |
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
           Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
 
       - name: Set up Rust
-        if: steps.rust-final.outputs.cache-hit != 'true'
+        if: steps.rust-restore.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.cargo_target }}
 
       - name: Set up sccache
-        if: steps.rust-final.outputs.cache-hit != 'true'
+        if: steps.rust-restore.outputs.cache-hit != 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Rust Cache
-        if: steps.rust-final.outputs.cache-hit != 'true'
+        if: steps.rust-restore.outputs.cache-hit != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
@@ -109,15 +127,21 @@ jobs:
           save-if: ${{ github.ref_type == 'tag' }}
 
       - name: Build Rust
-        if: steps.rust-final.outputs.cache-hit != 'true'
+        if: steps.rust-restore.outputs.cache-hit != 'true'
         shell: bash
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo build --release --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
 
+      - name: Save Rust Hash for next release
+        if: steps.rust-restore.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}" > rust/substrate/target/${{ matrix.cargo_target }}/release/rust-hash.txt
+
       - name: Show sccache stats
-        if: steps.rust-final.outputs.cache-hit != 'true'
+        if: steps.rust-restore.outputs.cache-hit != 'true'
         shell: bash
         run: sccache --show-stats
 
@@ -131,6 +155,7 @@ jobs:
             rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
             rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
             rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
+            rust/substrate/target/${{ matrix.cargo_target }}/release/rust-hash.txt
           if-no-files-found: warn
           retention-days: 1
 
@@ -252,9 +277,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Download all artifacts
+      - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: polaris-*
           path: artifacts
           merge-multiple: true
       - name: Create GitHub Release
