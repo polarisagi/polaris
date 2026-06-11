@@ -128,7 +128,6 @@ func (r *Registry) ScanDir(dir string) (int, error) {
 func DefaultScanPaths(dataDir string) []string {
 	cwd, _ := os.Getwd()
 	return []string{
-		filepath.Join(cwd, "plugins", "builtin"),
 		filepath.Join(dataDir, "extensions"),
 		filepath.Join(cwd, ".polaris", "plugins"),
 	}

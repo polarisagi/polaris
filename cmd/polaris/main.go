@@ -420,14 +420,7 @@ func run() error { //nolint:gocyclo
 	skillSelector := skill.NewSelector(skillRegistry)
 	_ = skillSelector
 
-	// 将已编译的内置技能注册到 extension_instances（幂等 UPSERT）。
-	// 注册后 SkillMeta.WasmPath 由 registry.Get() 联查填充，无需 WasmLoader。
-	skillsDir := resolveBuiltinSkillsDir()
-	if err := skill.SeedBuiltinSkills(ctx, store.DB(), skillsDir); err != nil {
-		slog.Warn("polaris: builtin skill seeding partial failure", "err", err)
-	} else {
-		slog.Info("polaris: builtin skills seeded", "dir", skillsDir)
-	}
+	// 移除内置技能静态扫描：现统一通过 Marketplace 动态安装至标准数据目录。
 
 	wasmConcurrencyRT := 4
 	if autoConf != nil {
@@ -784,20 +777,6 @@ func resolveDataDirBase(cfg *config.Config) (string, error) {
 	return dir, nil
 }
 
-// resolveBuiltinSkillsDir 解析内置技能目录的绝对路径。
-// 优先查找与可执行文件同级的 skills/ 目录（make build 复制产物）；
-// 开发模式 fallback 到 CWD 下的 skills/builtin/。
-func resolveBuiltinSkillsDir() string {
-	if exe, err := os.Executable(); err == nil {
-		// make build 将 wasm 复制到 bin/skills/；二进制在 bin/ 下
-		d := filepath.Join(filepath.Dir(exe), "skills")
-		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
-			return d
-		}
-	}
-	// 开发模式：go run ./cmd/polaris 在项目根执行
-	return "skills/builtin"
-}
 
 func printStartupSummary(cfg *config.Config, components ...any) {
 	slog.Info("polaris: system initialized",

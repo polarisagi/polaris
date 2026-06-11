@@ -129,10 +129,10 @@ polaris/
 │   ├── edge/             # L3: scheduler, HITL
 │   └── gateway/          # L3: HTTP server, 18 channel adapters, Web UI
 ├── internal/             # Private shared: protocol, config, errors
-├── rust/substrate/       # Rust FFI performance paths (Cedar, embedded inference)
-├── skills/               # Built-in Wasm skill sources (compiled by make build-skills)
-├── plugins/builtin/      # Built-in plugin bundles
-├── policies/             # Cedar policy files (hard_constraints / soft_constraints)
+├── rust/substrate/       # Rust FFI
+├── policies/             # Cedar policies and security protocols
+├── testdata/             # Test fixtures and benchmark golden sets
+├── tools/                # Go build tools and codegen scripts
 ├── configs/              # Embedded default configs (bundled with binary)
 ├── web/                  # Web UI (Vite build, embedded in binary)
 ├── docs/arch/            # Architecture design docs (15 documents)

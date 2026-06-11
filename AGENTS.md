@@ -45,10 +45,7 @@ configs/                     嵌入式启动配置（随二进制打包）
   threshold-examples/        阈值覆盖示例（m*.toml；复制到 ~/.polarisagi/polaris/config/ 生效）
   automations/templates/     内置自动化模板
   agents/ prompts/ *.yaml    各类启动配置
-policies/                    Cedar 策略 + ESCALATE/KILLSWITCH 协议
-skills/builtin/              内置 Wasm 技能源码（make build-skills 编译；运行时从文件系统加载，不再 embed 进二进制）
 
-pkg/substrate/    L0: inference/storage/observability/policy
 pkg/cognition/    L1: kernel/memory/skill
 pkg/action/       L1: 原生内置工具集（核心读写、沙箱基础等 survival kit）
 pkg/extensions/   L2: 官方扩展包（Skill/MCP/Plugin/Browser，对齐 OpenAI/Anthropic 标准，独立于云端动态下载分发，不再硬编码）

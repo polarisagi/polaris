@@ -126,8 +126,6 @@ polaris/
 │   └── gateway/          # L3: HTTP server, channels (18 adapters), Web UI
 ├── internal/             # 私有共享：protocol, config, errors
 ├── rust/substrate/       # Rust FFI 性能路径（Cedar，嵌入式推理）
-├── skills/               # 内置 Wasm 技能源码（make build-skills 编译）
-├── plugins/builtin/      # 内置插件包
 ├── policies/             # Cedar 策略文件（hard_constraints / soft_constraints）
 ├── configs/              # 嵌入式默认配置（随二进制打包）
 ├── web/                  # Web UI（Vite 构建，嵌入二进制）
