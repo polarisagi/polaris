@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"math"
 	"sort"
 
@@ -135,6 +136,9 @@ func (hr *HybridRetrieverImpl) searchVector(ctx context.Context, queryText strin
 	if hr.cognitive != nil {
 		if hits, vecErr := hr.cognitive.VecKNN(queryEmbed, limit); vecErr == nil {
 			return hr.fetchCognitiveHits(ctx, hits)
+		} else {
+			// BUG-4 修复：VecKNN 错误不再静默吞噬，保证 HE-Rule §1 可观测性
+			slog.Warn("knowledge: SurrealDB VecKNN failed, degrading to linear scan", "err", vecErr)
 		}
 	}
 
@@ -146,7 +150,13 @@ func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []Co
 	for _, h := range hits {
 		var chunk Chunk
 		var taintSource sql.NullString
-		err := hr.db.QueryRowContext(ctx, "SELECT id, doc_id, content, taint_level, taint_source FROM rag_chunks WHERE id = ?", h.ID).Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource)
+		// BUG-3 修复：SELECT 补全全部 lineage 字段，确保 inv_M10_03 溯源完整性不变量
+		err := hr.db.QueryRowContext(ctx, `
+			SELECT id, doc_id, content, taint_level, taint_source,
+			       source_uri, doc_version, chunk_seq, content_hash, embed_model_version
+			FROM rag_chunks WHERE id = ?`, h.ID).
+			Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource,
+				&chunk.SourceURI, &chunk.DocVersion, &chunk.ChunkSeq, &chunk.ContentHash, &chunk.EmbedModelVersion)
 		if err == nil {
 			if taintSource.Valid {
 				chunk.TaintSource = taintSource.String

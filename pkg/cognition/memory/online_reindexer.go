@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math"
 	"runtime"
-	"strconv"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
@@ -107,12 +106,13 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 		}
 		// SurrealDB HNSW 同步写入（Tier1+）；失败不阻断 SQLite BLOB 路径（Tier0 继续可用）
 		if r.cognitive != nil {
-			// docID 优先用 event_uuid（与 FTSIndex 写入时一致），为空时降级到整数串
-			docID := e.eventUUID
-			if docID == "" {
-				docID = strconv.FormatInt(e.id, 10)
-			}
-			if upsertErr := r.cognitive.VecUpsert(docID, vec); upsertErr != nil {
+			if e.eventUUID == "" {
+				// event_uuid 为空（存量旧行）：整数串 docID 与 KV 键 "episodic:{uuid}" 不一致，
+				// 跳过 VecUpsert 避免检索时 content 退化为 ID 字符串（BUG-2 修复）。
+				// 此类行走 SQLite BLOB 余弦相似度降级路径，BM25/FTS 路径不受影响。
+				slog.Debug("reindexer: skipping SurrealDB VecUpsert for legacy row without event_uuid",
+					"id", e.id)
+			} else if upsertErr := r.cognitive.VecUpsert(e.eventUUID, vec); upsertErr != nil {
 				slog.Warn("reindexer: surreal vec_upsert failed, degrading to SQLite-only path",
 					"id", e.id, "err", upsertErr)
 			}

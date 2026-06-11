@@ -28,7 +28,7 @@ func ComputeLayoutFingerprint(layout *ContextLayout) ContextFingerprint {
 // 用法:
 //
 //	tracker := NewEpochTracker()
-//	layout := BuildContext(wm, maxTokens)
+//	layout := BuildContext(maxTokens)
 //	// ... 填充各 zone Content ...
 //	fp := ComputeLayoutFingerprint(layout)
 //	layout.Epoch = tracker.Check(fp)

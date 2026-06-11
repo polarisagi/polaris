@@ -7,7 +7,7 @@ import (
 // ─── ComputeLayoutFingerprint ──────────────────────────────────────────────────
 
 func TestFingerprint_EmptyLayout(t *testing.T) {
-	layout := BuildContext(nil, 1000)
+	layout := BuildContext(1000)
 	fp := ComputeLayoutFingerprint(layout)
 	if fp == "" {
 		t.Error("fingerprint should not be empty")
@@ -15,8 +15,8 @@ func TestFingerprint_EmptyLayout(t *testing.T) {
 }
 
 func TestFingerprint_SameLayout_SameFingerprint(t *testing.T) {
-	a := BuildContext(nil, 1000)
-	b := BuildContext(nil, 1000)
+	a := BuildContext(1000)
+	b := BuildContext(1000)
 	fpA := ComputeLayoutFingerprint(a)
 	fpB := ComputeLayoutFingerprint(b)
 	if fpA != fpB {
@@ -25,8 +25,8 @@ func TestFingerprint_SameLayout_SameFingerprint(t *testing.T) {
 }
 
 func TestFingerprint_DifferentTokens_DifferentFingerprint(t *testing.T) {
-	a := BuildContext(nil, 1000)
-	b := BuildContext(nil, 2000)
+	a := BuildContext(1000)
+	b := BuildContext(2000)
 	fpA := ComputeLayoutFingerprint(a)
 	fpB := ComputeLayoutFingerprint(b)
 	if fpA == fpB {
@@ -35,8 +35,8 @@ func TestFingerprint_DifferentTokens_DifferentFingerprint(t *testing.T) {
 }
 
 func TestFingerprint_DifferentContent_Different(t *testing.T) {
-	a := BuildContext(nil, 1000)
-	b := BuildContext(nil, 1000)
+	a := BuildContext(1000)
+	b := BuildContext(1000)
 	a.zones[0].Content = "hello"
 	b.zones[0].Content = "world"
 	fpA := ComputeLayoutFingerprint(a)

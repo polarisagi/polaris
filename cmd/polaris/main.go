@@ -430,8 +430,19 @@ func run() error { //nolint:gocyclo
 
 	// ─── 7. Knowledge RAG (L2 M10) ───────────────────────────────────────────
 	ingester := knowledgepkg.NewDefaultIngestionPipeline(storageRouter)
-	retriever := knowledgepkg.NewDefaultHybridRetriever(storageRouter, embedder)
-	slog.Info("polaris: knowledge RAG initialized (storage_router_backed)")
+	var retriever knowledgepkg.HybridRetriever
+	if surrealStore != nil {
+		// Tier1+：SQLite FTS5 + SurrealDB HNSW 双路检索（BUG-1 修复：cognitive 正式注入）
+		var knowledgeEmb knowledgepkg.VectorEmbedder
+		if embedder != nil {
+			knowledgeEmb = &knowledgeEmbedderAdapter{e: embedder}
+		}
+		retriever = knowledgepkg.NewHybridRetrieverWithCognitive(store.DB(), knowledgeEmb, &knowledgeCognAdapter{s: surrealStore})
+		slog.Info("polaris: knowledge RAG initialized (FTS5 + SurrealDB HNSW, Tier1+)")
+	} else {
+		retriever = knowledgepkg.NewDefaultHybridRetriever(storageRouter, embedder)
+		slog.Info("polaris: knowledge RAG initialized (StorageRouter, Tier0)")
+	}
 
 	// ─── 7.5 知识图谱构建管线（GraphBuildPipeline，M10 §2.7）───────────────────
 	// InferenceRouter 实现 protocol.Provider，作为图构建的 LLM 客户端。
@@ -853,6 +864,43 @@ func (a *surrealCognAdapter) FTSSearch(query string, k int) ([]memory.CognitiveS
 		out[i] = memory.CognitiveSearchResult{ID: h.ID, Score: h.Score}
 	}
 	return out, nil
+}
+
+// knowledgeCognAdapter 将 *storage.SurrealDBCoreStore 适配为 knowledge.CognitiveSearcher。
+// 返回类型 storage.ScoredID → knowledgepkg.CognitiveSearchResult（两个包独立定义，BUG-5 TODO）。
+// TODO(BUG-5): 与 surrealCognAdapter 合并，将 CognitiveSearchResult 统一到 internal/protocol。
+type knowledgeCognAdapter struct{ s *storage.SurrealDBCoreStore }
+
+func (a *knowledgeCognAdapter) VecKNN(query []float32, k int) ([]knowledgepkg.CognitiveSearchResult, error) {
+	hits, err := a.s.VecKNN(query, k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]knowledgepkg.CognitiveSearchResult, len(hits))
+	for i, h := range hits {
+		out[i] = knowledgepkg.CognitiveSearchResult{ID: h.ID, Score: h.Score}
+	}
+	return out, nil
+}
+
+func (a *knowledgeCognAdapter) FTSSearch(query string, k int) ([]knowledgepkg.CognitiveSearchResult, error) {
+	hits, err := a.s.FTSSearch(query, k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]knowledgepkg.CognitiveSearchResult, len(hits))
+	for i, h := range hits {
+		out[i] = knowledgepkg.CognitiveSearchResult{ID: h.ID, Score: h.Score}
+	}
+	return out, nil
+}
+
+// knowledgeEmbedderAdapter 将 substrate.Embedder 适配为 knowledge.VectorEmbedder。
+// substrate.Embedder.Embed(text string) []float32 → Embed(ctx, text) ([]float32, error)。
+type knowledgeEmbedderAdapter struct{ e substrate.Embedder }
+
+func (a *knowledgeEmbedderAdapter) Embed(_ context.Context, text string) ([]float32, error) {
+	return a.e.Embed(text), nil
 }
 
 func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []string, error) {
