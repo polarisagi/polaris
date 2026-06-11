@@ -99,7 +99,7 @@ pub unsafe extern "C" fn wasmtime_execute(
     wasm_bytes: *const u8,
     wasm_len: usize,
     input_json: *const c_char,
-    out_json: *mut *mut c_char,
+    _out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
     let result = panic::catch_unwind(|| -> c_int {
