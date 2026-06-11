@@ -62,7 +62,7 @@ jobs:
             goarch: arm64
           - os_name: darwin
             arch_name: amd64
-            runner_os: macos-13
+            runner_os: macos-latest
             cargo_target: 'x86_64-apple-darwin'
             goarch: amd64
           - os_name: windows
