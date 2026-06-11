@@ -179,30 +179,25 @@ Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256M
 
 ### 4.2 自动分级
 
-`AssignSandboxTier(tool) -> SandboxTier`:
+`AssignSandboxTier(tool, hwTier, goos) -> SandboxTier`（实现见 `pkg/action/sandbox.go`）:
 1. Source→最小级别: Builtin→InProcess；LLMGenerated→Wasm；MCP/A2A→Wasm
-2. Capability提升: ReadOnly/WriteLocal/WriteNetwork→>=Wasm；Privileged→MicroVM(L3)
-3. SideProcessSpawn→MicroVM(L3)
-4. Tier0 越权拦截: 步骤 3 判定为 MicroVM(L3) 且当前环境为 Tier0 (maxSandboxTier()==L2) → 直接返回 ErrTier0SandboxLimit 拒绝执行，禁止越权降级到原生子进程（防止突破安全底线）
+2. Capability提升: WriteNetwork+→Wasm；Privileged→Container
+3. SideProcessSpawn→Container
+4. 非 Linux Tier0 降级: 步骤 3 判定为 Container 且 hwTier==0 且 goos!="linux" → 降级 Wasm（L2 Wasm + OS 原生沙箱）
+
+**注意**：当前 `AssignSandboxTier` 实现（`pkg/action/sandbox.go`）不含 ErrTier0SandboxLimit 返回——非 Linux Tier0 场景降级为 WasmSandbox 而非报错。ErrTier0SandboxLimit 的拒绝逻辑属于**[计划中]**（文档描述的安全目标，代码未完整实现）。
 
 Auto-Curriculum: M9 `bash_restricted` 强制 L2 Wasm，字符集 `[A-Za-z0-9 ./\-_=:,]`，禁止管道/重定向/命令替换/`~/.polarisagi/polaris`。`bash` 永久禁止。
 
 ### 4.3 wazero 实现（CANONICAL SOURCE）
 
-`ExecuteTool` 流程:
-- 0 PII SecureUnredact (执行边界 Redact→Opaque Token→Unredact):
-  InputSchema `x-polaris-pii:true` 字段点对点还原 `args["email"]=vault.Resolve(token,fieldPath)`
-  自由文本 command 字段不声明 → 永不扫描；外部 API 调用使用结构化 HTTP 工具 (`http.call` + JSON body schema)
-  SessionPIIVault per-session，key=(sessionID,tokenID)，需 sessionID + pii_resolve 权限
-  Vault 缺失或权限不足 → 保留原文 + WARN + 审计 unredact_permission_denied
-- 1 ModuleConfig: 隔离命名+只读时钟+安全随机源
-- 2 Host Functions 注入: >=read_only→只读FS（AllowedPaths）；>=write_local→写入FS；>=write_network→网络代理（AllowedDomains）；privileged→走L3
-- 3 编译+实例化→调用"run"（encodeString传JSON）
-- 4 解析输出→ToolResult
-- 5 PostExecution PII Redact: ToolResult (含 Stdout/Stderr) 双路径:
-  (a) 原始 → WorkingMemory (session-scoped，Agent 推理用完整数据)
-  (b) 红化 → M11 PIIGuard.Redact(RedactReplace) → [MutationBus] → [EventLog] 永久存储。PII 匹配项替换 `[REDACTED_{TYPE}]`，不进入审计链
-  对称防护: Step 0 SecureUnredact + Step 5 Redact 闭合 SessionPIIVault 单向击穿——明文 PII/Token/凭证永不进入不可变审计。FSM Snapshot (M4 §8) 保留原始值供同 session 崩溃恢复，Session 关闭随 Vault 销毁
+`ExecuteTool` 已实现流程（`pkg/action/wazero_runtime.go`）：lease deadline 注入（write_network/privileged 操作强制 ctx deadline）→ 信号量控制并发数 → 编译/缓存查找 Wasm 模块 → 实例化 ModuleConfig（隔离命名+只读时钟）→ 调用 `_initialize`（reactor 初始化）→ `polaris_malloc` + memory.Write 写入 JSON 入参 → 调用 `run` 函数 → 解包返回指针/长度 → 深拷贝输出 → `polaris_free` 释放 → 返回 ToolResult。
+
+`RunWasm` 为 WASI 标准路径（stdout 捕获），`ExecuteTool` 为自定义 ABI 路径（polaris_malloc/run/polaris_free）。
+
+已实现能力：三级缓存（goldCache/silverCache/bronzeCache）+ 编译缓存（wazero CompilationCache）+ 并发信号量 + lease deadline TOCTOU 防护 + 资源硬限制检查（`ResourceLimits.CheckLimits`）。
+
+**[计划中]**：PII SecureUnredact（Step 0）、Host Functions 注入（FS/网络权限矩阵）、PostExecution PII Redact（Step 5）当前未在 `ExecuteTool` 中实现。`WASIPermission` 和 `ResourceLimits` 结构体已定义但未与 wazero 实例化路径挂钩。
 
 资源硬限制（超限→ErrSandboxResourceExhausted，不重试）：
 
@@ -445,13 +440,9 @@ ResolverModel:  string  // 视觉解析模型，如 "deepseek-chat" 或 "claude-
 
 `pkg/action/streaming_action_bus.go` 已实现 `StreamAction()`（含速率控制令牌桶 + ActionClipper 向量钳制 + maxSteps=1000 步数限制）。`DisplayServer` 接口已定义，平台适配（Xvfb/VNC/Wayland）待 Tier-1+ 接入，nil 时以 no-op 安全降级。
 
-StreamAction 6步流程（已实现）:
-1. 类型校验: 仅mouse_delta/key_sequence，其余→ErrStreamingUnsupportedType
-2. 速率限制: 滑动窗口+令牌桶，1s/max60(鼠标)或30(键盘)，超限背压等待100ms
-3. 边界钳制: mouse_delta dx/dy→[-MaxDeltaPerStep,MaxDeltaPerStep]；key_sequence→ASCII白名单
-4. 步数限制: 超maxSteps→ErrMaxStreamingStepsExceeded
-5. 帧缓冲写入: DisplayServer.SendAction（nil时no-op降级）
-6. 观察返回: StreamingActionResult{Success,FrameID,ScreenFrame,StepCount}
+StreamAction 已实现流程：步数检查（超 maxSteps 返回错误）→ 令牌桶速率控制（阻塞直到获得令牌或 ctx 取消）→ ActionClipper 向量钳制（可选）→ DisplayServer.SendAction（nil 时 no-op 安全降级）。
+
+**实现状态**：令牌桶（滑动窗口+令牌桶混合）和 ActionClipper 已在 `pkg/action/streaming_action_bus.go` 完整实现；类型校验和 ASCII 白名单属于文档设计目标，当前 `StreamAction` 对 `ContinuousAction.ActionType` 不做枚举约束，由调用方保证合法性。
 
 M4 S_EXECUTE路由: tool_call→ActionDiscretizer→ToolCall；mouse_delta→StreamingActionBus→虚拟帧缓冲；key_sequence→StreamingActionBus→虚拟帧缓冲；其他→ErrUnsupportedActionType
 
@@ -467,22 +458,14 @@ Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需
 
 **`inv_global_07` 强制约束**（无豁免）:
 - Source: `ToolSource=LLMGenerated`
-- Sandbox: `[Sandbox-L3]` 平台原生 microVM（Tier 0 拒绝执行，返回 `ErrTier0SandboxLimit`）
-- Capability Token: 一次性，MaxCalls=1，TTL=60s
-- Audit: 完整代码 + stdout/stderr + exit_code 写 EventLog（`event_type='codeact_exec'`）
-- Cedar 策略: deny-by-default，需 `permit code_act when context.session_trust_level >= 3 AND context.approval_status == "approved"`；`policyGate` 未注入时 fail-closed（返回 CodeInternal，不降级执行）
+- Sandbox: 强制 Level≥3（ContainerSandbox），`policyGate` + `sandbox.Level()` 双重门控，任一不满足立即 fail-closed
+- Capability Token: 由调用方通过 `req.CapabilityID` 传入（CodeAct 不自行 Mint，调用方须事先 JIT 签发）
+- Cedar 策略: deny-by-default，需 `permit code_act when ... approval_status == "approved"`；`policyGate` 未注入时 fail-closed
+- Audit: 完整代码 + stdout + exit_code（**[计划中]** — 当前实现中审计写 EventLog 尚未落地）
 
-**`ExecuteCodeAct` 流程**:
-```
-1. Schema 校验: language ∈ {python, javascript}; code_size <= 16KB; 禁止 import network/subprocess (lint)
-2. Taint 检查: code 字段 [TaintLevel] <= [Taint-Medium] (LLM 生成默认 Medium); >= High → 拒绝
-3. JIT Mint Capability Token: capability=code_act, MaxCalls=1, TTL=60s
-4. 进入 L3 microVM: 加载 Python/Node runtime 镜像 (Tier 2+ 预热, Tier 1 冷启动 ~3s)
-5. 注入受限工具集: 仅当前 task 已授权的 M7 工具子集作为 host function (Capability 委托链规则)
-6. 执行: ctx 5min 硬上限 (覆盖 [BestOfN] / [UserInterrupt] cancel)
-7. PostExec Redact: 同 §4.3 Step 5 (PII Guard + 双路径)
-8. 返回 ToolResult { Stdout, Stderr, ExitCode, AuditID }
-```
+**`Execute` 已实现流程**（`pkg/action/code_act.go`）：语言校验（python|bash）→ CapabilityID 非空检查 → Cedar 策略评估（fail-closed）→ sandbox.Level()≥3 断言 → 构造 SandboxSpec 调用 sandbox.Run → 返回 CodeActResult。
+
+Taint 检查、16KB 代码大小限制、PostExec PII Redact 属于文档设计目标，**[计划中]**，当前 `Execute` 未实现。
 
 **与 LLMGenerated wasm 技能的区别**:
 

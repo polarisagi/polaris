@@ -97,17 +97,12 @@ L3 LLM 输出 provider 推荐槽位，由 Route() 确定性函数验证（预算
 
 ### 4.4 ComplexityDeterminer
 
-实现见 `pkg/substrate/inference/router.go:InferenceRouter`。
-
-- outputEstimate: EMA α=0.3, window=100；冷启动默认 1024(simple) / 4096(code/research)
-- ToolCount > 5 OR outputEstimate > 4096 → Reasoning Pool
-- ToolCount > 1 OR outputEstimate > 1024 → Standard Pool
-- ELSE → Budget Pool
+**[计划中]** — 三层路由（L1规则/L2复杂度/L3 LLM）为设计目标；当前 `InferenceRouter`（`pkg/substrate/inference/router.go`）实现的是**单层 HealthScore 路由**（成功率×0.4 + 延迟×0.3 + 成本×0.2 + 质量×0.1），不含 L2 复杂度打分和 Budget/Standard/Reasoning Pool 分层。多 Provider 按健康分降序选择，失败时 Failover 至次优。
 
 ### 4.5 Route 方法
 
-实现见 `pkg/substrate/inference/router.go:Route()`。
-Provider 选择按 priorityOrder 遍历: tokenizer 预计算 token 数 → 成本估算 → budgetGate 准许 → quota 可用 → 返回 provider。全部不可用 → `ErrAllProvidersExhausted`。
+实现见 `pkg/substrate/inference/router.go:InferenceRouter.Infer()`/`StreamInfer()`。
+Provider 选择：`ProviderRegistry.best(req)` 按 healthScore 降序 + CircuitBreaker 状态 + 多模态能力过滤选取最优 Entry → 调用 Provider → 失败则 Failover（跳过已失败 Provider 重新 best 选取）。全部不可用 → `ErrAllProvidersFailed`。
 
 ### 4.5 路由配置参数
 
@@ -167,22 +162,13 @@ ReasoningEffort 默认: System 1.5 → low; System 2 → medium; 用户显式 + 
 - M3 独立导出 `polaris_reasoning_tokens_total` Gauge
 
 **`[BestOfN]` + `[SelfConsistency]`** — M1 ParallelSampler:
-```
-ParallelSample(req, N) → ([]InferResponse, error)
-  1. CapGate: Cedar permit context.task_priority >= 1 (低优任务拒绝)
-  2. 预算检查: estimated_cost × N <= remaining_session_budget (否则降级 N=1)
-  3. N 路 goroutine 并发调 Provider, temperature 各异 (0.3/0.5/0.7 默认)
-  4. ctx cancel 传播 (UserInterrupt / KillSwitch 立即终止全部)
-  5. 聚合:
-     - 结构化输出 → SelfConsistency.MajorityVote (相同 schema 多数投票)
-     - 自由文本 → BestOfN.Verifier (M11 FactualityGuard 抽样打分 → 取最高)
-  6. 返回最终 + 全部 reasoning_tokens 计入 burn rate
-```
 
-**HT0 默认配置**: N=1（关闭）。`FeatureGate.FeatureTestTimeCompute` 检查（≥Tier1 + 任务 priority>=1 + remaining_budget 充足）→ 启用。
+`ParallelSample(req, N)` 依次完成：Cedar CapGate 门控（`task_priority >= 1`）→ 预算检查（cost×N 超限降级 N=1）→ N 路 goroutine 并发推理（temperature 各异）→ ctx cancel 传播 → 结构化输出 MajorityVote / 自由文本 BestOfN.Verifier 聚合 → 所有 reasoning_tokens 计入 burn rate。
 
-**Cedar 策略** (M11 §3.1 增补):
-```
+HT0 默认 N=1（关闭），`FeatureGate.FeatureTestTimeCompute` 控制（≥Tier1 + priority>=1 + 余量充足）。**[计划中]** — `ParallelSample` 尚未在 `pkg/substrate/inference/` 中实现，路由层（`InferenceRouter`）当前仅支持单路推理。
+
+**Cedar 策略** (M11 §3.1 增补，供策略层参考，非当前执行路径):
+```cedar
 permit call_tool when resource.action == "parallel_sample" AND
   context.task_priority >= 1 AND context.tier >= 1 AND
   context.estimated_cost <= context.remaining_budget * 0.3
@@ -292,38 +278,9 @@ CircuitBreaker 三态：Closed（正常）→ Open（熔断，冷却期拒绝请
 
 ### 8.1 LocalProvider
 
-```
-NewLocalProvider(config):
-  1. SHA-256 校验模型文件
-  2. AvailableRAM >= MinRAMBytes + 512MiB
-  3. llama.LoadModelFromFile → llama.NewContext
-  4. return LocalProvider
+LocalProvider 通过 llama.cpp FFI 提供本地 GGUF 模型的 `Infer`/`StreamInfer`/`Rerank` 能力：启动时校验文件完整性与内存余量，懒加载模型，通过 `chat template + GBNF grammar` 支持结构化输出；Rerank 复用同进程 llama.cpp `/rerank` 端点，50 文档交叉编码 CPU < 50ms；`EvictKVCache` 在 Control Vector 变更 / 热切换 / Session 重置时清理 KV。
 
-Infer(ctx, req):
-  1. 构建 prompt (chat template + tools)
-  2. context.Completion(prompt, CompletionParams{MaxTokens, Temperature, StopTokens})
-  3. 解析输出
-
-InferWithSchema(ctx, req, schema):
-  1. grammar = schemaToGBNF(schema)
-  2. context.SetGrammar(grammar) → Infer → ClearGrammar()
-
-StreamInfer(ctx, req):
-  1. ch = make(chan StreamEvent, 64)
-  2. goroutine: context.StreamCompletion → ch ← StreamEvent → close(ch)
-
-Rerank(ctx, query, documents[]):
-  → llama.cpp /rerank endpoint (内嵌 server 模式, 同进程 FFI)
-  → 返回 [{index, score}] 按分降序
-  → 模型: bge-reranker-base.gguf (~50MB), 懒加载
-  → 50 文档交叉编码 <50ms (CPU)
-
-EvictKVCache(): context.ClearKVCache()
-  时机: Control Vector 变更 / 模型热切换 / Session 重置
-
-Tokenizer(): LlamaCppTokenizer{model}
-Capabilities(): Streaming=true, Tools≈70-80%, Thinking=false, Cost=0
-```
+当前实现状态：**[计划中]** — LocalProvider 接口已在 `internal/protocol/interfaces.go` 定义，但 `pkg/substrate/inference/` 中未见 llama.cpp FFI 桥接实现；本地推理能力待 Tier-3 节点专项激活。
 
 ### 8.2 生命周期
 
@@ -336,30 +293,11 @@ Capabilities(): Streaming=true, Tools≈70-80%, Thinking=false, Cost=0
 
 ## 9. ModelVersionRegistry
 
-```
-ModelVersionEntry:
-  Provider, ModelID, Version, Deprecated
-  PromptTemplate, OutputFormats, ToolCallStyle
-  MaxContext, Capabilities
-  Supersedes, ValidatedOn, BreakingChanges
-  LastVerifiedAt, CompatibilityScore (0-1)
+`ModelVersionEntry` 持有 Provider/ModelID/版本/废弃状态、PromptTemplate/ToolCallStyle/MaxContext/Capabilities 等元数据，以及 `ValidatedOn`（技能兼容测试通过列表）和 `CompatibilityScore`（0-1）。
 
-OnModelUpgrade(ctx, oldVer, newVer):
-  1. diffs = diffBehavior(oldVer, newVer)
-  2. FOR each skillID IN oldVer.ValidatedOn → runSkillCompatTest(ctx, skillID, newVer)
-  3. newVer.ValidatedOn = passingSkills
-  4. newVer.CompatibilityScore = computeScore(diffs)
-  5. IF CompatibilityScore < 0.8 → WARN
+`OnModelUpgrade` 流程：对比行为差异 → 重跑关联技能兼容测试 → 更新 ValidatedOn 与 CompatibilityScore，低于 0.8 时发 WARN。废弃迁移按 CompatibilityScore 分三档（≥0.9 自动 / 0.7-0.9 自动+WARN / <0.7 禁止自动）；连续 3 次 4xx/5xx 自动回退。Embedding 模型废弃时触发 M2 OnlineReindexer 全量重嵌（影子表 → Blue-Green swap）。
 
-废弃自动迁移:
-  1. 检测 X-Deprecation-Date / Sunset header
-  2. 查 upgrade_path → 同系列自动升级; 否则查 model_capability_matrix (capability vec 余弦相似度)
-  3. CompatibilityScore ≥ 0.9 → 自动切换; 0.7-0.9 → 自动 + WARN + 人工确认; < 0.7 → CRITICAL 禁止自动
-  4. 通知 M6 Skill Library 标记 needs_adaptation (P1)
-  5. 自动切换后连续 3 次 4xx/5xx → 回退 + CRITICAL 告警
-
-**Embedding 模型废弃迁移**: ModelVersionRegistry 覆盖 EmbeddingModel。当 Embedding 模型 Sunset 时，触发 M2 OnlineReindexer 同时迁移所有依赖该模型的向量索引（M5 全部 episodic_events/semantic_entities、M10 全部 doc_nodes/leaf_chunks/summaries、M6 SkillIndex、M1 SemanticCache）。迁移流程: EmbeddingModel.Deprecated → M2 OnlineReindexer 创建影子表 → 全量重嵌 → Blue-Green swap。
-```
+**[计划中]** — `ModelVersionRegistry` 当前未在 `pkg/substrate/inference/` 中落地，Provider Adapter 通过 `resolveXXXModel()` 函数处理废弃模型名到新名称的映射（已实现：Anthropic/OpenAI/DeepSeek 各有 resolve 函数）；完整的版本管理注册表待实现。
 ## 12. 降级与失败模式（5 问全覆盖）
 
 | 故障 | (Q1) 检测 | (Q2) 影响范围 | (Q3) 即时反应 | (Q4) 自动恢复 | (Q5) 人工介入触发 |
@@ -375,6 +313,14 @@ OnModelUpgrade(ctx, oldVer, newVer):
 
 与 OSMemoryGuard 协同: (仅 Tier-3) 空闲内存 < 1.0GB → 强制卸载本地模型；L3 临界 → 全部 LLM 调用路由至远程 API。
 
+
+## 10. 凭证池与速率限制追踪（已实现）
+
+**CredentialPool**（`pkg/substrate/inference/credential_pool.go`）：多 API Key 线程安全池，支持四种选择策略（FillFirst / RoundRobin / Random / LeastUsed）。`Pick()` 按策略选取冷却期已过的凭证；`RecordResult(err)` 调用 `Classify(err)` 并按 FailReason 设置冷却期（Auth 5min / Billing+RateLimit 60min / AuthPermanent 30天）。`CredFn()` 返回 `func() string`，与各 Adapter 构造函数直接兼容。
+
+**RateLimitTracker**（`pkg/substrate/inference/rate_tracker.go`）：解析 Provider HTTP 响应头中的 12 个速率限制字段（分钟/小时 × 请求/Token），提供 `SuggestDelay()` 供退避决策。`RateLimitCapturingTransport` 作为 `http.RoundTripper` 包装层自动捕获限速头，无需改动各 Adapter。`BackoffConfig.Delay(attempt)` 实现去相关抖动指数退避（防雷群效应）。
+
+**ErrorClassifier**（`pkg/substrate/inference/error_classifier.go`）：`Classify(err)` 提取 HTTP 状态码 + 关键词，分类为 17 种 FailReason，并填充 `Retryable/ShouldCompress/ShouldRotateCredential/ShouldFallback` 四个布尔恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 provider 错误体格式。
 
 ## 默认参数
 
