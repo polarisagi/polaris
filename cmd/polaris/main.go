@@ -777,7 +777,6 @@ func resolveDataDirBase(cfg *config.Config) (string, error) {
 	return dir, nil
 }
 
-
 func printStartupSummary(cfg *config.Config, components ...any) {
 	slog.Info("polaris: system initialized",
 		"tier", cfg.System.Tier,

@@ -238,75 +238,88 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 	slog.Info("updater: download verified, installing", "archive", archivePath)
 	m.setStatus(StatusInstalling)
 
-	exePath, err := os.Executable()
-	if err != nil {
-		m.setError("resolve executable: " + err.Error())
-		return
-	}
-	exePath, _ = filepath.EvalSymlinks(exePath)
-
-	newBinPath := exePath + ".new"
-	newLibDir := filepath.Join(filepath.Dir(exePath), "lib.new")
-	os.RemoveAll(newLibDir) // 清理可能残留的临时目录
-	os.MkdirAll(newLibDir, 0o755)
-
-	if err := extractFiles(archivePath, newBinPath, newLibDir); err != nil {
-		os.Remove(newBinPath) //nolint:errcheck
-		os.RemoveAll(newLibDir) //nolint:errcheck
-		os.Remove(archivePath)
-		m.setError("extract failed: " + err.Error())
-		return
-	}
-	os.Remove(archivePath) //nolint:errcheck
-
-	if err := os.Chmod(newBinPath, 0o755); err != nil {
-		os.Remove(newBinPath) //nolint:errcheck
-		os.RemoveAll(newLibDir) //nolint:errcheck
-		m.setError("chmod failed: " + err.Error())
+	if err := m.applyUpdate(archivePath); err != nil {
+		m.setError(err.Error())
 		return
 	}
 
-	// 准备替换 lib 目录
-	targetLibDir := filepath.Join(filepath.Dir(exePath), "lib")
-	
-	// 原子替换（Unix 可替换运行中文件；Windows 需延迟脚本）
-	if err := os.Rename(newBinPath, exePath); err != nil {
-		if goos == "windows" {
-			if scriptErr := writeWindowsUpdateScript(exePath, newBinPath, targetLibDir, newLibDir); scriptErr != nil {
-				os.Remove(newBinPath) //nolint:errcheck
-				os.RemoveAll(newLibDir) //nolint:errcheck
-				m.setError("replace failed (windows): " + err.Error())
-				return
-			}
-		} else {
-			os.Remove(newBinPath) //nolint:errcheck
-			os.RemoveAll(newLibDir) //nolint:errcheck
-			m.setError("replace failed: " + err.Error())
-			return
-		}
-	} else {
-		// Unix 环境下，二进制替换成功后替换 lib 目录
-		// Unix 不支持跨目录 Rename 到一个非空目录，所以先将新文件移动进去
-		files, _ := os.ReadDir(newLibDir)
-		os.MkdirAll(targetLibDir, 0o755)
-		for _, f := range files {
-			srcFile := filepath.Join(newLibDir, f.Name())
-			dstFile := filepath.Join(targetLibDir, f.Name())
-			os.Remove(dstFile) // 先移除旧的（如果是 running 的 .so，Remove 只会 unlink inode）
-			os.Rename(srcFile, dstFile)
-		}
-		os.RemoveAll(newLibDir)
-	}
-
-	slog.Info("updater: binary and libs replaced, restarting", "path", exePath)
+	slog.Info("updater: binary and libs replaced, restarting")
 	m.setStatus(StatusRestarting)
 
 	time.Sleep(500 * time.Millisecond)
 	if m.restartFn != nil {
 		m.restartFn()
 	} else {
+		exePath, _ := os.Executable()
+		exePath, _ = filepath.EvalSymlinks(exePath)
 		defaultRestart(exePath)
 	}
+}
+
+func (m *Manager) applyUpdate(archivePath string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	exePath, _ = filepath.EvalSymlinks(exePath)
+
+	newBinPath := exePath + ".new"
+	newLibDir := filepath.Join(filepath.Dir(exePath), "lib.new")
+	os.RemoveAll(newLibDir) // 清理可能残留的临时目录
+	if err := os.MkdirAll(newLibDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir failed: %w", err)
+	}
+
+	if err := extractFiles(archivePath, newBinPath, newLibDir); err != nil {
+		os.Remove(newBinPath)   //nolint:errcheck
+		os.RemoveAll(newLibDir) //nolint:errcheck
+		os.Remove(archivePath)  //nolint:errcheck
+		return fmt.Errorf("extract failed: %w", err)
+	}
+	os.Remove(archivePath) //nolint:errcheck
+
+	if err := os.Chmod(newBinPath, 0o755); err != nil {
+		os.Remove(newBinPath)   //nolint:errcheck
+		os.RemoveAll(newLibDir) //nolint:errcheck
+		return fmt.Errorf("chmod failed: %w", err)
+	}
+
+	targetLibDir := filepath.Join(filepath.Dir(exePath), "lib")
+
+	// 原子替换（Unix 可替换运行中文件；Windows 需延迟脚本）
+	errRename := os.Rename(newBinPath, exePath)
+	if errRename != nil {
+		if runtime.GOOS != "windows" {
+			os.Remove(newBinPath)   //nolint:errcheck
+			os.RemoveAll(newLibDir) //nolint:errcheck
+			return fmt.Errorf("replace failed: %w", errRename)
+		}
+		if scriptErr := writeWindowsUpdateScript(exePath, newBinPath, targetLibDir, newLibDir); scriptErr != nil {
+			os.Remove(newBinPath)   //nolint:errcheck
+			os.RemoveAll(newLibDir) //nolint:errcheck
+			return fmt.Errorf("replace failed (windows): %w", scriptErr)
+		}
+		return nil
+	}
+
+	return replaceUnixLibs(newLibDir, targetLibDir)
+}
+
+func replaceUnixLibs(newLibDir, targetLibDir string) error {
+	files, _ := os.ReadDir(newLibDir)
+	if err := os.MkdirAll(targetLibDir, 0o755); err != nil {
+		slog.Warn("updater: failed to create target lib dir", "err", err)
+	}
+	for _, f := range files {
+		srcFile := filepath.Join(newLibDir, f.Name())
+		dstFile := filepath.Join(targetLibDir, f.Name())
+		os.Remove(dstFile) //nolint:errcheck // 先移除旧的（如果是 running 的 .so，Remove 只会 unlink inode）
+		if err := os.Rename(srcFile, dstFile); err != nil {
+			slog.Warn("updater: failed to rename lib", "src", srcFile, "dst", dstFile, "err", err)
+		}
+	}
+	os.RemoveAll(newLibDir) //nolint:errcheck
+	return nil
 }
 
 // verifyChecksum 从 GitHub 直接下载 checksums.txt，验证 archivePath 的 SHA-256。
