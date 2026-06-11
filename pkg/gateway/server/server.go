@@ -424,7 +424,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 
 // seedBuiltinConfig 将 embedded yaml 配置作为种子数据写入数据库（INSERT OR IGNORE）。
 func seedBuiltinConfig(db *sql.DB) {
-	if b, err := configs.FS.ReadFile("marketplaces.yaml"); err == nil {
+	if b, err := configs.FS.ReadFile("extensions/marketplaces.yaml"); err == nil {
 		var mps []protocol.Marketplace
 		if err := yaml.Unmarshal(b, &mps); err == nil {
 			now := time.Now().UTC().Format(time.RFC3339)
@@ -449,7 +449,7 @@ func seedBuiltinConfig(db *sql.DB) {
 			}
 		}
 	} else {
-		slog.Warn("polaris-server: configs/registry.yaml load failed", "err", err)
+		slog.Warn("polaris-server: configs/extensions/registry.yaml load failed", "err", err)
 	}
 }
 
