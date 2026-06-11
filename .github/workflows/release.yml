@@ -120,31 +120,10 @@ jobs:
         with:
           targets: ${{ matrix.cargo_target }}
 
-      - name: Set up sccache
-        if: steps.rust-restore.outputs.cache-hit != 'true'
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Rust Cache
-        if: steps.rust-restore.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris-${{ matrix.cargo_target }}"
-          save-if: ${{ github.ref_type == 'tag' }}
-
       - name: Build Rust
         if: steps.rust-restore.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo build --release --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
-
-      - name: Show sccache stats
-        if: steps.rust-restore.outputs.cache-hit != 'true'
-        shell: bash
-        run: sccache --show-stats
 
       # ── 无论缓存是否命中，都准备并上传 artifact 供本流水线的 Go 编译使用，并作为下次发版的基准 ──
 
