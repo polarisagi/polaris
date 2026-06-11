@@ -55,16 +55,6 @@ jobs:
             runner_os: ubuntu-24.04-arm
             cargo_target: 'aarch64-unknown-linux-gnu'
             goarch: arm64
-          - os_name: darwin
-            arch_name: arm64
-            runner_os: macos-latest
-            cargo_target: 'aarch64-apple-darwin'
-            goarch: arm64
-          - os_name: darwin
-            arch_name: amd64
-            runner_os: macos-latest
-            cargo_target: 'x86_64-apple-darwin'
-            goarch: amd64
           - os_name: windows
             arch_name: amd64
             runner_os: windows-latest
@@ -110,13 +100,9 @@ jobs:
         with:
           targets: ${{ matrix.cargo_target }}
 
-      # sccache：object 级编译缓存，利用 GHA Cache 后端
-      # 即使 runner 变更，只要源码 + 编译参数不变就能命中
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.9
 
-      # Swatinem/rust-cache：缓存 target/ 目录（依赖编译产物）
-      # per-target 分区避免跨平台缓存污染
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -167,8 +153,109 @@ jobs:
           path: polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.*
           retention-days: 1
 
+  # macOS: 同一 runner 上编译 arm64 + amd64，省掉一次工具链下载和 runner 排队
+  build-darwin:
+    needs: build-frontend
+    name: Build (darwin)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-darwin"
+          save-if: ${{ github.ref_type == 'tag' }}
+
+      # ── arm64 ──
+      - name: Build Backend (arm64)
+        env:
+          CARGO_TARGET: aarch64-apple-darwin
+          GOARCH: arm64
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: make build-backend
+
+      - name: Package (arm64)
+        run: |
+          mkdir -p release_pkg
+          cp -r bin/* release_pkg/
+          cp -r configs release_pkg/
+          cp -r policies release_pkg/
+          cp LICENSE release_pkg/
+          cd release_pkg
+          tar -czvf ../polaris-darwin-arm64.tar.gz ./*
+          cd ..
+          shasum -a 256 polaris-darwin-arm64.tar.gz > polaris-darwin-arm64.tar.gz.sha256
+
+      - name: Upload Artifact (arm64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-darwin-arm64
+          path: polaris-darwin-arm64.*
+          retention-days: 1
+
+      # ── amd64（交叉编译）──
+      - name: Clean previous build
+        run: rm -rf bin/ release_pkg/
+
+      - name: Build Backend (amd64)
+        env:
+          CARGO_TARGET: x86_64-apple-darwin
+          GOARCH: amd64
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: make build-backend
+
+      - name: Package (amd64)
+        run: |
+          mkdir -p release_pkg
+          cp -r bin/* release_pkg/
+          cp -r configs release_pkg/
+          cp -r policies release_pkg/
+          cp LICENSE release_pkg/
+          cd release_pkg
+          tar -czvf ../polaris-darwin-amd64.tar.gz ./*
+          cd ..
+          shasum -a 256 polaris-darwin-amd64.tar.gz > polaris-darwin-amd64.tar.gz.sha256
+
+      - name: Upload Artifact (amd64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-darwin-amd64
+          path: polaris-darwin-amd64.*
+          retention-days: 1
+
+      - name: Show sccache stats
+        run: sccache --show-stats
+
   publish:
-    needs: build
+    needs: [build, build-darwin]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
