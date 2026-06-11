@@ -25,3 +25,9 @@ bytes = "1.11.1"
 
 [lib]
 crate-type = ["staticlib", "cdylib"]
+
+[profile.release]
+opt-level = "z"  # Optimize for size
+lto = true       # Enable Link Time Optimization
+codegen-units = 1 # Maximize size optimization across the crate
+strip = true     # Strip symbols from binary
