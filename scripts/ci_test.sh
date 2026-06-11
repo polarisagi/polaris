@@ -12,8 +12,9 @@ echo "======================================"
 echo "    Polaris 本地 CI 完整校验脚本      "
 echo "======================================"
 
-# 用于收集失败步骤的数组
+# 用于收集失败步骤和日志的数组
 FAILURES=()
+FAILURE_LOGS=()
 
 # 封装执行步骤的函数
 run_step() {
@@ -21,11 +22,18 @@ run_step() {
     shift
     echo ""
     echo -e "\033[1;34m▶ $step_name...\033[0m"
-    if eval "$@"; then
+    
+    local log_file=$(mktemp)
+    set -o pipefail
+    if eval "$@" 2>&1 | tee "$log_file"; then
+        set +o pipefail
         echo -e "\033[1;32m✅ 通过: $step_name\033[0m"
+        rm -f "$log_file"
     else
+        set +o pipefail
         echo -e "\033[1;31m❌ 失败: $step_name\033[0m"
         FAILURES+=("$step_name")
+        FAILURE_LOGS+=("$log_file")
     fi
 }
 
@@ -61,8 +69,12 @@ if [ ${#FAILURES[@]} -eq 0 ]; then
     exit 0
 else
     echo -e "\033[1;31m ❌ 本次 CI 校验未通过，发现以下流程执行失败：\033[0m"
-    for fail in "${FAILURES[@]}"; do
-        echo -e "\033[1;31m    - $fail\033[0m"
+    for i in "${!FAILURES[@]}"; do
+        echo -e "\033[1;31m    - ${FAILURES[$i]}\033[0m"
+        echo -e "\033[1;33m      ====== 错误日志摘要 ======\033[0m"
+        tail -n 30 "${FAILURE_LOGS[$i]}" | sed 's/^/      /'
+        echo -e "\033[1;33m      ==========================\033[0m"
+        rm -f "${FAILURE_LOGS[$i]}"
     done
     echo ""
     echo -e "\033[1;33m 请根据上方日志修复报错信息后再尝试推送。\033[0m"
