@@ -2,6 +2,7 @@
 # ci_test.sh - 完整的本地 CI 测试验证脚本
 # 该脚本复刻了 GitHub Actions (ci.yml) 中的全套流程，遇到错误不会立即中断，
 # 而是会执行完所有步骤并在最后汇总报错信息，确保在 Push 之前可以本地提前发现所有问题。
+# ./scripts/ci_test.sh
 
 # 获取脚本所在目录的上一级（项目根目录）
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
