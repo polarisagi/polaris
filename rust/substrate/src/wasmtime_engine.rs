@@ -141,9 +141,10 @@ pub unsafe extern "C" fn wasmtime_execute(
             return WASMTIME_ERR_INTERNAL;
         }
 
-        let stdin = wasmtime_wasi::p2::pipe::MemoryInputPipe::new(bytes::Bytes::from(input_str.to_owned()));
+        let stdin =
+            wasmtime_wasi::p2::pipe::MemoryInputPipe::new(bytes::Bytes::from(input_str.to_owned()));
         let stdout = wasmtime_wasi::p2::pipe::MemoryOutputPipe::new(10 * 1024 * 1024); // 10MB
-        
+
         let wasi_ctx = wasmtime_wasi::WasiCtxBuilder::new()
             .stdin(stdin.clone())
             .stdout(stdout.clone())
