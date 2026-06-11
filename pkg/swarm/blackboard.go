@@ -10,8 +10,8 @@ import (
 
 // Blackboard 协调黑板的内存实现。
 type Blackboard struct {
-	mu           sync.RWMutex
-	tasks        map[string]*protocol.TaskEntry
+	mu    sync.RWMutex
+	tasks map[string]*protocol.TaskEntry
 	// taskVersions 每次状态变更时递增，供 SideEffectPreCheck 做 ABA 防护。
 	// 语义与 SQLiteBlackboard 中 tasks.version 列对齐（ADR-0019 §TOCTOU）。
 	taskVersions map[string]int32

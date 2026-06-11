@@ -149,7 +149,10 @@ pub unsafe extern "C" fn wasmtime_execute(
         //   4. linker.instantiate → call "_start" → stdout → write_err(out_json, ...)
         //
         // 原实现返回 mock_success，会让调用方误以为执行成功，改为明确的未实现错误。
-        write_err(out_err, "wasmtime_execute: WASI execution path not yet implemented");
+        write_err(
+            out_err,
+            "wasmtime_execute: WASI execution path not yet implemented",
+        );
         WASMTIME_ERR_INTERNAL
     });
 
@@ -163,5 +166,3 @@ pub unsafe extern "C" fn wasmtime_execute(
 }
 
 // 消除 #[allow(dead_code)] — 错误码在执行路径实现后全部启用
-
-

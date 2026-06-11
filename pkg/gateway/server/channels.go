@@ -173,51 +173,8 @@ func (s *Server) handleWebhookReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if channelType == "line" {
-		channelSecret, _ := cfg["channel_secret"].(string)
-		sig := r.Header.Get("X-Line-Signature")
-		if channelSecret != "" && !channels.LineVerifySignature(channelSecret, string(body), sig) {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-	}
-
-	if channelType == "whatsapp" && r.Method == http.MethodGet {
-		challenge := r.URL.Query().Get("hub.challenge")
-		verifyToken, _ := cfg["verify_token"].(string)
-		if verifyToken != "" && r.URL.Query().Get("hub.verify_token") != verifyToken {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		w.Write([]byte(challenge)) //nolint:errcheck
+	if !s.verifyWebhookSource(w, r, channelType, cfg, body) {
 		return
-	}
-
-	// MS Teams Change Notifications：需要 validationToken 握手
-	// [P2修复] validationToken 来自外部请求参数，直接 echo 存在反射型 XSS 风险。
-	// 增加长度限制（≤256字节）+ 内容净化（只允许字母数字和 -_），阻断注入向量。
-	if channelType == "teams" {
-		if vt := r.URL.Query().Get("validationToken"); vt != "" {
-			// 校验 validationToken 格式，Teams 官方 token 仅含字母数字和连字符
-			if len(vt) > 256 {
-				http.Error(w, "invalid validationToken", http.StatusBadRequest)
-				return
-			}
-			safe := true
-			for _, c := range vt {
-				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
-					safe = false
-					break
-				}
-			}
-			if !safe {
-				http.Error(w, "invalid validationToken", http.StatusBadRequest)
-				return
-			}
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Write([]byte(vt)) //nolint:errcheck
-			return
-		}
 	}
 
 	msg := channels.ExtractMessage(channelType, body, r)
@@ -455,4 +412,61 @@ func (s *Server) dispatchChannelMessage(channelType, channelID string, cfg map[s
 // webhookURL 生成平台 webhook 接收地址（纯函数，无需 Server 接收者）。
 func webhookURL(channelType, channelID string) string {
 	return "/v1/webhooks/" + channelType + "/" + channelID
+}
+
+// verifyWebhookSource 统一校验 Webhook 来源。如果验证失败或处理了特定的握手请求则返回 false。
+func (s *Server) verifyWebhookSource(w http.ResponseWriter, r *http.Request, channelType string, cfg map[string]any, body []byte) bool {
+	switch channelType {
+	case "line":
+		return s.verifyLineWebhook(w, r, cfg, body)
+	case "whatsapp":
+		return s.verifyWhatsAppWebhook(w, r, cfg)
+	case "teams":
+		return s.verifyTeamsWebhook(w, r)
+	}
+	return true
+}
+
+func (s *Server) verifyLineWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) bool {
+	channelSecret, _ := cfg["channel_secret"].(string)
+	sig := r.Header.Get("X-Line-Signature")
+	if channelSecret != "" && !channels.LineVerifySignature(channelSecret, string(body), sig) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func (s *Server) verifyWhatsAppWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any) bool {
+	if r.Method != http.MethodGet {
+		return true
+	}
+	challenge := r.URL.Query().Get("hub.challenge")
+	verifyToken, _ := cfg["verify_token"].(string)
+	if verifyToken != "" && r.URL.Query().Get("hub.verify_token") != verifyToken {
+		w.WriteHeader(http.StatusForbidden)
+		return false
+	}
+	w.Write([]byte(challenge)) //nolint:errcheck
+	return false
+}
+
+func (s *Server) verifyTeamsWebhook(w http.ResponseWriter, r *http.Request) bool {
+	vt := r.URL.Query().Get("validationToken")
+	if vt == "" {
+		return true
+	}
+	if len(vt) > 256 {
+		http.Error(w, "invalid validationToken", http.StatusBadRequest)
+		return false
+	}
+	for _, c := range vt {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			http.Error(w, "invalid validationToken", http.StatusBadRequest)
+			return false
+		}
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(vt)) //nolint:errcheck
+	return false
 }

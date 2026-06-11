@@ -58,22 +58,20 @@ func NewCodeAct(sandbox SandboxProvider, policyGate protocol.PolicyGate, toolExe
 	}
 }
 
-// Execute 执行 LLM 生成的代码（强制 Sbx-L3 + Cedar 门控）。
-func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActResult, error) {
-	// 前置校验
+// validateExecuteRequest 抽离出的校验逻辑
+func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActRequest) error {
 	if req.Code == "" {
-		return nil, perrors.New(perrors.CodeInternal, "code_act: code is empty")
+		return perrors.New(perrors.CodeInternal, "code_act: code is empty")
 	}
 	if req.Language != "python" && req.Language != "bash" {
-		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("code_act: unsupported language %q (allowed: python|bash)", req.Language))
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("code_act: unsupported language %q (allowed: python|bash)", req.Language))
 	}
 	if req.CapabilityID == "" {
-		return nil, perrors.New(perrors.CodeForbidden, "code_act: capability_id required (inv_global_07)")
+		return perrors.New(perrors.CodeForbidden, "code_act: capability_id required (inv_global_07)")
 	}
 
-	// Cedar 策略评估（fail-closed：gate 未注入视为安全依赖缺失，直接拒绝）
 	if ca.policyGate == nil {
-		return nil, perrors.New(perrors.CodeInternal, "code_act: policy gate not available (fail-closed)")
+		return perrors.New(perrors.CodeInternal, "code_act: policy gate not available (fail-closed)")
 	}
 	evalCtx := map[string]any{
 		"source":              "llm_generated",
@@ -86,22 +84,28 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 		if err != nil {
 			reason = err.Error()
 		}
-		return nil, perrors.New(perrors.CodeForbidden, "code_act: policy gate denied: "+reason)
+		return perrors.New(perrors.CodeForbidden, "code_act: policy gate denied: "+reason)
 	}
 
-	// 沙箱执行（强制 L3，fail-closed）
 	if ca.sandbox == nil {
-		return nil, perrors.New(perrors.CodeInternal, "code_act: sandbox not available (fail-closed)")
+		return perrors.New(perrors.CodeInternal, "code_act: sandbox not available (fail-closed)")
 	}
-	// 级别断言：sandbox 必须实现 Level() 并返回 >=3（仅 ContainerSandbox 满足此约束）。
-	// SandboxProvider 接口不含 Level()，通过类型断言安全检查。
 	type levelProvider interface{ Level() int }
 	if lp, ok := ca.sandbox.(levelProvider); !ok || lp.Level() < 3 {
 		lvl := 0
 		if lp, ok2 := ca.sandbox.(levelProvider); ok2 {
 			lvl = lp.Level()
 		}
-		return nil, perrors.New(perrors.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", lvl))
+		return perrors.New(perrors.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", lvl))
+	}
+	return nil
+}
+
+// Execute 执行 LLM 生成的代码（强制 Sbx-L3 + Cedar 门控）。
+func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActResult, error) {
+	// 前置校验与权限检查
+	if err := ca.validateExecuteRequest(ctx, req); err != nil {
+		return nil, err
 	}
 
 	// 构造沙箱运行规格

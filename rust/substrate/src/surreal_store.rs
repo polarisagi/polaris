@@ -490,9 +490,7 @@ pub unsafe extern "C" fn surreal_graph_relate(
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query(
-                    "INSERT INTO edges (from_id, edge_type, to_id) VALUES ($from, $et, $to)",
-                )
+                .query("INSERT INTO edges (from_id, edge_type, to_id) VALUES ($from, $et, $to)")
                 .bind(("from", from))
                 .bind(("et", et))
                 .bind(("to", to))
@@ -542,8 +540,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
             Err(_) => return SURREAL_ERR_LOCK,
         };
 
-        let mut visited: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut frontier = vec![start.clone()];
         visited.insert(start.clone());
 
@@ -554,8 +551,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
             let sql = if et.is_empty() {
                 "SELECT to_id FROM edges WHERE from_id IN $frontier".to_string()
             } else {
-                "SELECT to_id FROM edges WHERE from_id IN $frontier AND edge_type = $et"
-                    .to_string()
+                "SELECT to_id FROM edges WHERE from_id IN $frontier AND edge_type = $et".to_string()
             };
             let next: Vec<String> = guard
                 .rt
@@ -567,9 +563,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
                         .bind(("et", et.clone()))
                         .await?;
                     let rows: Vec<ToIdRow> = resp.take(0)?;
-                    Ok::<Vec<String>, surrealdb::Error>(
-                        rows.into_iter().map(|r| r.to_id).collect(),
-                    )
+                    Ok::<Vec<String>, surrealdb::Error>(rows.into_iter().map(|r| r.to_id).collect())
                 })
                 .unwrap_or_default();
 
@@ -580,8 +574,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
         }
 
         // 排除起点自身
-        let result_ids: Vec<String> =
-            visited.into_iter().filter(|id| id != &start).collect();
+        let result_ids: Vec<String> = visited.into_iter().filter(|id| id != &start).collect();
         write_cstr(out_json, &encode_ids(&result_ids));
         SURREAL_OK
     });
