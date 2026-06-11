@@ -152,7 +152,49 @@ polaris/
 - Rust 1.94+ (`cargo` in PATH)
 - Git
 
-### Build and Run
+### One-Line Installation
+
+For users who just want to use Polaris without building from source, you can install the pre-compiled binary via the following one-line scripts.
+
+**Linux / macOS (Terminal):**
+```bash
+# Standard install
+curl -sSL https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
+
+# China region proxy (if raw.githubusercontent.com is blocked)
+curl -sSL https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
+# OR
+curl -sSL https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell run as Administrator):**
+```powershell
+# Standard install
+irm https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
+
+# China region proxy
+irm https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
+# OR
+irm https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
+```
+
+### Uninstallation
+
+To completely remove the background service and binary (your data in `~/.polarisagi/polaris` will be kept safe):
+
+**Linux / macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.sh | bash
+# Proxy: curl -sSL https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.sh | bash
+```
+
+**Windows (PowerShell run as Administrator):**
+```powershell
+irm https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.ps1 | iex
+# Proxy: irm https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.ps1 | iex
+```
+
+### Build from Source
 
 ```bash
 # Clone

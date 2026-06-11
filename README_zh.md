@@ -148,7 +148,49 @@ polaris/
 - Rust 1.94+（`cargo` 在 PATH 中）
 - Git
 
-### 构建与运行
+### 一键安装
+
+如果你只想使用 Polaris 而不需要修改源码，可以通过以下一键脚本安装编译好的最新二进制版本，并自动配置开机后台自启。
+
+**Linux / macOS (终端):**
+```bash
+# 标准安装
+curl -sSL https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
+
+# 中国大陆网络代理（推荐，如果直连失败）
+curl -sSL https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
+# 或使用备用代理
+curl -sSL https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.sh | bash
+```
+
+**Windows (以管理员身份运行 PowerShell):**
+```powershell
+# 标准安装
+irm https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
+
+# 中国大陆网络代理（推荐，如果直连失败）
+irm https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
+# 或使用备用代理
+irm https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/install.ps1 | iex
+```
+
+### 卸载
+
+彻底移除后台服务和二进制文件（你在 `~/.polarisagi/polaris` 下的数据库和配置数据会被安全保留）：
+
+**Linux / macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.sh | bash
+# 代理方式: curl -sSL https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.sh | bash
+```
+
+**Windows (以管理员身份运行 PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.ps1 | iex
+# 代理方式: irm https://ghproxy.net/https://raw.githubusercontent.com/polarisagi/polaris/main/scripts/uninstall.ps1 | iex
+```
+
+### 源码构建与运行
 
 ```bash
 # 克隆
