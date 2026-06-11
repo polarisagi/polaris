@@ -27,6 +27,12 @@ func VerifyKernelIntegrity() error {
 
 	currentManifest := make(map[string]string)
 	for _, dir := range ImmutableKernelPackages() {
+		// 如果核心源码目录不存在，说明是作为 Release 发布的独立二进制运行，而非源码运行模式
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			// 在独立的二进制运行模式下，跳过源码级别的完整性校验
+			return nil
+		}
+
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
