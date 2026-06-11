@@ -126,3 +126,36 @@ jobs:
           SKIP_RUST_BUILD: 1
         run: make build
 
+  eval-gate:
+    needs: [lint, test, build, rust, docs-toc]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Copy Rust libs
+        run: |
+          mkdir -p bin/lib
+          cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
+      - name: Eval Gate (Adaptive)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$DEEPSEEK_API_KEY" ] || [ -n "$OPENAI_API_KEY" ]; then
+            echo "::notice::Detected API Key. Running real eval --ci-gate..."
+            go run ./cmd/polaris eval --ci-gate
+          else
+            echo "::warning::跳过 Eval 门控：未检测到 DEEPSEEK_API_KEY 或 OPENAI_API_KEY Secret。系统能力防退化验证已被降级。请在仓库 Settings -> Secrets 中配置。"
+            echo "Skipped."
+          fi
