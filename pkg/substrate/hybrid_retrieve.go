@@ -93,10 +93,12 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 							n2 += v2 * v2
 						}
 						if n1 > 0 && n2 > 0 {
+							// 余弦相似度 = dot / (‖a‖ × ‖b‖) = dot / sqrt(n1 × n2)
+							// n1 = Σv1²，n2 = Σv2²，开根号得范数之积。
 							vecResults = append(vecResults, ScoredFragment{
 								Content: c.Content,
 								Source:  c.ID,
-								Score:   dot / (n1 * n2), // approx
+								Score:   dot / math.Sqrt(n1*n2),
 							})
 						}
 					}

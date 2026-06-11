@@ -29,7 +29,12 @@ func (b *BurnRateTracker) Add(tokens int, now time.Time) {
 }
 
 // Stage 返回当前熔断阶段: 0=Normal, 1=THROTTLE, 2=HARD_STOP.
+// baselineP95 <= 0 表示基线尚未建立（冷启动），始终返回 Normal，
+// 避免零基线导致任何正 EMA 值都触发 HARD_STOP 的误熔断。
 func (b *BurnRateTracker) Stage() int {
+	if b.baselineP95 <= 0 {
+		return 0
+	}
 	if b.ema30s > b.baselineP95*3.0 {
 		return 2
 	}
@@ -37,4 +42,9 @@ func (b *BurnRateTracker) Stage() int {
 		return 1
 	}
 	return 0
+}
+
+// SetBaseline 设置 P95 基线（需在足够样本积累后调用，通常为启动后 5 分钟）。
+func (b *BurnRateTracker) SetBaseline(p95 float64) {
+	b.baselineP95 = p95
 }

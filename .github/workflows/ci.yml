@@ -48,6 +48,7 @@ jobs:
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
+          shared-key: "polaris"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Build Rust Substrate
@@ -66,6 +67,7 @@ jobs:
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
+          shared-key: "polaris"
       - run: cargo test --manifest-path rust/substrate/Cargo.toml
       - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
 
@@ -86,6 +88,7 @@ jobs:
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
+          shared-key: "polaris"
       - run: make build
 
   eval-gate:
@@ -101,6 +104,7 @@ jobs:
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
+          shared-key: "polaris"
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Build Rust Substrate

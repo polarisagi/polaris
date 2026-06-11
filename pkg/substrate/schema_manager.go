@@ -7,6 +7,14 @@ import (
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
 
+// sqlTxWrapper 将 *sql.Tx 包装为 Transaction 接口，供 ApplyMigrations 注入迁移函数。
+type sqlTxWrapper struct{ tx *sql.Tx }
+
+func (w *sqlTxWrapper) Exec(query string, args ...any) error {
+	_, err := w.tx.Exec(query, args...)
+	return err
+}
+
 // SchemaManager — 版本化数据库迁移。
 // 架构文档: docs/arch/02-Storage-Fabric-深度选型.md §4
 
@@ -34,14 +42,32 @@ func NewSchemaManager(db *sql.DB, migrations []Migration) *SchemaManager {
 }
 
 // ApplyMigrations 按 version 升序执行未应用迁移，每次迁移前后标记状态。
+// db != nil 时每条迁移在独立事务内执行；db == nil 时传 nil Transaction（无状态模式）。
 func (sm *SchemaManager) ApplyMigrations() error {
 	for _, m := range sm.migrations {
 		if m.Version <= sm.currentVersion {
 			continue
 		}
 		_ = sm.BeginMigration(m.Version)
-		if err := m.Up(nil); err != nil {
-			return &MigrationError{m.Version, err.Error()}
+
+		var execErr error
+		if sm.db != nil {
+			// 在独立事务内执行迁移，失败自动回滚，避免传 nil 导致 nil pointer panic。
+			sqlTx, err := sm.db.Begin()
+			if err != nil {
+				return &MigrationError{m.Version, "begin tx: " + err.Error()}
+			}
+			if execErr = m.Up(&sqlTxWrapper{sqlTx}); execErr != nil {
+				_ = sqlTx.Rollback()
+			} else {
+				execErr = sqlTx.Commit()
+			}
+		} else {
+			execErr = m.Up(nil)
+		}
+
+		if execErr != nil {
+			return &MigrationError{m.Version, execErr.Error()}
 		}
 		sm.currentVersion = m.Version
 		_ = sm.CompleteMigration()
