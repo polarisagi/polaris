@@ -56,11 +56,11 @@ clean:
 
 # 重写 docs/arch/*.md 头部 §跳读 行号 (从实际 ## headers 同步)
 docs-sync:
-	$(GO) run tools/sync_doc_toc.go
+	env GOOS= GOARCH= $(GO) run tools/sync_doc_toc.go
 
 # CI 用: 校验 §跳读 与实际 headers 一致, drift 时退出非零
 docs-check:
-	$(GO) run tools/sync_doc_toc.go -check
+	env GOOS= GOARCH= $(GO) run tools/sync_doc_toc.go -check
 
 # 文档级 Go 代码块禁令 (#9): M_X 中不得出现 ```go / type X struct|interface / func 签名块.
 # 接口签名权威源在 internal/protocol/, 文档只允许字段名清单 + 单行语义 + Schema Anchor.
@@ -94,9 +94,9 @@ benchmark-routing:
 
 
 gen-threshold-examples:
-	$(GO) run tools/gen_threshold_examples.go configs/threshold-examples/
+	env GOOS= GOARCH= $(GO) run tools/gen_threshold_examples.go configs/threshold-examples/
 
 generate-manifest:
-	$(GO) run tools/generate_manifest.go
+	env GOOS= GOARCH= $(GO) run tools/generate_manifest.go
 
 all: tidy fmt lint test build gen-threshold-examples
