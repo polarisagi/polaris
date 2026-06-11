@@ -40,18 +40,33 @@ jobs:
         run: make docs-lint
 
   # 单次编译 Rust，产物通过 artifact 传递给下游 job
+  # 最终产物缓存：如果 Rust 源码无变化，直接跳过工具链安装和编译
   rust-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Rust final artifact
+        id: rust-final
+        uses: actions/cache@v4
+        with:
+          path: |
+            rust/substrate/target/release/libsubstrate.so
+            rust/substrate/target/release/libsubstrate.a
+          key: rust-ci-x86_64-unknown-linux-gnu-${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.rust-final.outputs.cache-hit != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust-final.outputs.cache-hit != 'true'
         with:
           workspaces: "rust/substrate"
           cache-on-failure: true
           shared-key: "polaris-x86_64-unknown-linux-gnu"
       - name: Build Rust Substrate
+        if: steps.rust-final.outputs.cache-hit != 'true'
         run: make rust-build
+
       - name: Upload Rust Artifact
         uses: actions/upload-artifact@v4
         with:

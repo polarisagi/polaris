@@ -38,21 +38,117 @@ jobs:
           path: web/dist
           retention-days: 1
 
-  # Linux: 两个架构需要不同 runner（amd64 无法交叉编译 arm64 的 RocksDB C++）
+  # Rust 预编译：6 个 target 全部并行，产物通过 artifact 传递给下游 Go 编译
+  # 最终产物缓存：Rust 源码 + 依赖无变化时，跳过整个编译（不装 Rust 工具链）
+  build-rust:
+    name: Rust (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            cargo_target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            cargo_target: aarch64-unknown-linux-gnu
+          - name: darwin-arm64
+            runner: macos-latest
+            cargo_target: aarch64-apple-darwin
+          - name: darwin-amd64
+            runner: macos-latest
+            cargo_target: x86_64-apple-darwin
+          - name: windows-amd64
+            runner: windows-latest
+            cargo_target: x86_64-pc-windows-msvc
+          - name: windows-arm64
+            runner: windows-latest
+            cargo_target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 最终产物缓存：key = Rust 源码 + Cargo.toml + Cargo.lock 的 hash
+      # 命中时跳过后续所有编译步骤，直接上传 artifact
+      - name: Cache Rust final artifact
+        id: rust-final
+        uses: actions/cache@v4
+        with:
+          path: |
+            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
+            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
+            rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
+          key: rust-release-${{ matrix.cargo_target }}-${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}
+
+      # ── 以下步骤仅在缓存未命中时执行 ──
+
+      - name: Disable Windows Defender
+        if: steps.rust-final.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
+
+      - name: Set up Rust
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.cargo_target }}
+
+      - name: Set up sccache
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Rust Cache
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-${{ matrix.cargo_target }}"
+          save-if: ${{ github.ref_type == 'tag' }}
+
+      - name: Build Rust
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo build --release --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
+
+      - name: Show sccache stats
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        shell: bash
+        run: sccache --show-stats
+
+      # ── 无论缓存是否命中，都上传 artifact 给下游 Go 编译 ──
+
+      - name: Upload Rust Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-${{ matrix.name }}
+          path: |
+            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
+            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
+            rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
+          if-no-files-found: warn
+          retention-days: 1
+
+  # Linux: 两架构并行，仅 Go 编译（Rust 已预编译）
   build-linux:
-    needs: build-frontend
+    needs: [build-frontend, build-rust]
     name: Build (linux-${{ matrix.arch_name }})
-    runs-on: ${{ matrix.runner_os }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - arch_name: amd64
-            runner_os: ubuntu-latest
-            cargo_target: 'x86_64-unknown-linux-gnu'
+            runner: ubuntu-latest
+            cargo_target: x86_64-unknown-linux-gnu
             goarch: amd64
           - arch_name: arm64
-            runner_os: ubuntu-24.04-arm
-            cargo_target: 'aarch64-unknown-linux-gnu'
+            runner: ubuntu-24.04-arm
+            cargo_target: aarch64-unknown-linux-gnu
             goarch: arm64
     steps:
       - name: Checkout
@@ -66,38 +162,24 @@ jobs:
           name: frontend-dist
           path: web/dist
 
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-linux-${{ matrix.arch_name }}
+          path: rust/substrate/target/${{ matrix.cargo_target }}/release
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
           cache: true
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.cargo_target }}
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris-${{ matrix.cargo_target }}"
-          save-if: ${{ github.ref_type == 'tag' }}
-
       - name: Build Project Backend
         env:
           CARGO_TARGET: ${{ matrix.cargo_target }}
           GOARCH: ${{ matrix.goarch }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
+          SKIP_RUST_BUILD: 1
         run: make build-backend
-
-      - name: Show sccache stats
-        run: sccache --show-stats
 
       - name: Package
         run: |
@@ -119,11 +201,20 @@ jobs:
           path: polaris-linux-${{ matrix.arch_name }}.*
           retention-days: 1
 
-  # macOS: 同一 runner 上编译 arm64 + amd64
+  # macOS: 两架构并行，仅 Go 编译（Rust 已预编译）
   build-darwin:
-    needs: build-frontend
-    name: Build (darwin)
+    needs: [build-frontend, build-rust]
+    name: Build (darwin-${{ matrix.arch_name }})
     runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - arch_name: arm64
+            cargo_target: aarch64-apple-darwin
+            goarch: arm64
+          - arch_name: amd64
+            cargo_target: x86_64-apple-darwin
+            goarch: amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,6 +226,12 @@ jobs:
         with:
           name: frontend-dist
           path: web/dist
+
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-darwin-${{ matrix.arch_name }}
+          path: rust/substrate/target/${{ matrix.cargo_target }}/release
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -142,32 +239,14 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris-darwin"
-          save-if: ${{ github.ref_type == 'tag' }}
-
-      # ── arm64 ──
-      - name: Build Backend (arm64)
+      - name: Build Backend
         env:
-          CARGO_TARGET: aarch64-apple-darwin
-          GOARCH: arm64
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          GOARCH: ${{ matrix.goarch }}
+          SKIP_RUST_BUILD: 1
         run: make build-backend
 
-      - name: Package (arm64)
+      - name: Package
         run: |
           mkdir -p release_pkg
           cp -r bin/* release_pkg/
@@ -175,56 +254,31 @@ jobs:
           cp -r policies release_pkg/
           cp LICENSE release_pkg/
           cd release_pkg
-          tar -czvf ../polaris-darwin-arm64.tar.gz ./*
+          tar -czvf ../polaris-darwin-${{ matrix.arch_name }}.tar.gz ./*
           cd ..
-          shasum -a 256 polaris-darwin-arm64.tar.gz > polaris-darwin-arm64.tar.gz.sha256
+          shasum -a 256 polaris-darwin-${{ matrix.arch_name }}.tar.gz > polaris-darwin-${{ matrix.arch_name }}.tar.gz.sha256
 
-      - name: Upload Artifact (arm64)
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: polaris-darwin-arm64
-          path: polaris-darwin-arm64.*
+          name: polaris-darwin-${{ matrix.arch_name }}
+          path: polaris-darwin-${{ matrix.arch_name }}.*
           retention-days: 1
 
-      # ── amd64（交叉编译）──
-      - name: Clean previous build
-        run: rm -rf bin/ release_pkg/
-
-      - name: Build Backend (amd64)
-        env:
-          CARGO_TARGET: x86_64-apple-darwin
-          GOARCH: amd64
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: make build-backend
-
-      - name: Package (amd64)
-        run: |
-          mkdir -p release_pkg
-          cp -r bin/* release_pkg/
-          cp -r configs release_pkg/
-          cp -r policies release_pkg/
-          cp LICENSE release_pkg/
-          cd release_pkg
-          tar -czvf ../polaris-darwin-amd64.tar.gz ./*
-          cd ..
-          shasum -a 256 polaris-darwin-amd64.tar.gz > polaris-darwin-amd64.tar.gz.sha256
-
-      - name: Upload Artifact (amd64)
-        uses: actions/upload-artifact@v4
-        with:
-          name: polaris-darwin-amd64
-          path: polaris-darwin-amd64.*
-          retention-days: 1
-
-      - name: Show sccache stats
-        run: sccache --show-stats
-
-  # Windows: 同一 runner 上编译 amd64 + arm64
+  # Windows: 两架构并行，仅 Go 编译（Rust 已预编译）
   build-windows:
-    needs: build-frontend
-    name: Build (windows)
+    needs: [build-frontend, build-rust]
+    name: Build (windows-${{ matrix.arch_name }})
     runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - arch_name: amd64
+            cargo_target: x86_64-pc-windows-msvc
+            goarch: amd64
+          - arch_name: arm64
+            cargo_target: aarch64-pc-windows-msvc
+            goarch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -232,16 +286,21 @@ jobs:
           fetch-depth: 0
 
       - name: Disable Windows Defender
+        shell: powershell
         run: |
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
-        shell: powershell
 
       - name: Download Frontend Artifact
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: web/dist
+
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-windows-${{ matrix.arch_name }}
+          path: rust/substrate/target/${{ matrix.cargo_target }}/release
 
       - name: Install make
         run: choco install make
@@ -252,33 +311,15 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust/substrate"
-          cache-on-failure: true
-          shared-key: "polaris-windows"
-          save-if: ${{ github.ref_type == 'tag' }}
-
-      # ── amd64（原生）──
-      - name: Build Backend (amd64)
+      - name: Build Backend
         shell: bash
         env:
-          CARGO_TARGET: x86_64-pc-windows-msvc
-          GOARCH: amd64
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          GOARCH: ${{ matrix.goarch }}
+          SKIP_RUST_BUILD: 1
         run: make build-backend
 
-      - name: Package (amd64)
+      - name: Package
         shell: bash
         run: |
           mkdir -p release_pkg
@@ -287,54 +328,16 @@ jobs:
           cp -r policies release_pkg/
           cp LICENSE release_pkg/
           cd release_pkg
-          7z a -tzip ../polaris-windows-amd64.zip ./*
+          7z a -tzip ../polaris-windows-${{ matrix.arch_name }}.zip ./*
           cd ..
-          sha256sum polaris-windows-amd64.zip > polaris-windows-amd64.zip.sha256
+          sha256sum polaris-windows-${{ matrix.arch_name }}.zip > polaris-windows-${{ matrix.arch_name }}.zip.sha256
 
-      - name: Upload Artifact (amd64)
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: polaris-windows-amd64
-          path: polaris-windows-amd64.*
+          name: polaris-windows-${{ matrix.arch_name }}
+          path: polaris-windows-${{ matrix.arch_name }}.*
           retention-days: 1
-
-      # ── arm64（交叉编译）──
-      - name: Clean previous build
-        shell: bash
-        run: rm -rf bin/ release_pkg/
-
-      - name: Build Backend (arm64)
-        shell: bash
-        env:
-          CARGO_TARGET: aarch64-pc-windows-msvc
-          GOARCH: arm64
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: make build-backend
-
-      - name: Package (arm64)
-        shell: bash
-        run: |
-          mkdir -p release_pkg
-          cp -r bin/* release_pkg/
-          cp -r configs release_pkg/
-          cp -r policies release_pkg/
-          cp LICENSE release_pkg/
-          cd release_pkg
-          7z a -tzip ../polaris-windows-arm64.zip ./*
-          cd ..
-          sha256sum polaris-windows-arm64.zip > polaris-windows-arm64.zip.sha256
-
-      - name: Upload Artifact (arm64)
-        uses: actions/upload-artifact@v4
-        with:
-          name: polaris-windows-arm64
-          path: polaris-windows-arm64.*
-          retention-days: 1
-
-      - name: Show sccache stats
-        shell: bash
-        run: sccache --show-stats
 
   publish:
     needs: [build-linux, build-darwin, build-windows]
