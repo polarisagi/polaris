@@ -18,12 +18,15 @@ import (
 //	CodeAct:        LLM 生成 Python/Bash → 一次性执行 → 结果返回（不持久化）
 //
 // 安全约束（inv_global_07）:
-//   - 强制 Sbx-L3（microVM），禁止降级为 L1/L2
+//   - 强制 Sbx-L3（ContainerSandbox），禁止降级为 L1/L2
 //   - 必须携带有效 CapabilityToken
 //   - 执行前 Cedar 策略评估（llm_generated forbid 规则阻断网络写入/部署）
 //   - 全链路 Audit（写入 EventLog）
+//
+// sandbox 字段使用包内 SandboxProvider 接口（Run 签名与 protocol.SandboxSpec 不同）。
+// LevelChecker 接口仅用于级别断言，由三个沙箱实现通过 Level() 满足。
 type CodeAct struct {
-	sandbox    protocol.SandboxProvider
+	sandbox    SandboxProvider
 	policyGate protocol.PolicyGate
 	toolExec   protocol.ToolExecutor
 }
@@ -46,7 +49,8 @@ type CodeActResult struct {
 }
 
 // NewCodeAct 创建 CodeAct 执行器。
-func NewCodeAct(sandbox protocol.SandboxProvider, policyGate protocol.PolicyGate, toolExec protocol.ToolExecutor) *CodeAct {
+// sandbox 必须为 Level()>=3 的沙箱（ContainerSandbox），违反则在 Execute 时 fail-closed。
+func NewCodeAct(sandbox SandboxProvider, policyGate protocol.PolicyGate, toolExec protocol.ToolExecutor) *CodeAct {
 	return &CodeAct{
 		sandbox:    sandbox,
 		policyGate: policyGate,
@@ -89,31 +93,30 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	if ca.sandbox == nil {
 		return nil, perrors.New(perrors.CodeInternal, "code_act: sandbox not available (fail-closed)")
 	}
-	if ca.sandbox.Level() < 3 {
-		// 安全物理断裂：CodeAct 不允许降级沙箱
-		return nil, perrors.New(perrors.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", ca.sandbox.Level()))
+	// 级别断言：sandbox 必须实现 Level() 并返回 >=3（仅 ContainerSandbox 满足此约束）。
+	// SandboxProvider 接口不含 Level()，通过类型断言安全检查。
+	type levelProvider interface{ Level() int }
+	if lp, ok := ca.sandbox.(levelProvider); !ok || lp.Level() < 3 {
+		lvl := 0
+		if lp, ok2 := ca.sandbox.(levelProvider); ok2 {
+			lvl = lp.Level()
+		}
+		return nil, perrors.New(perrors.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", lvl))
 	}
 
 	// 构造沙箱运行规格
-	var binary []byte
-	var args []string
+	var cmdBinary string
 	switch req.Language {
 	case "python":
-		// 将 Python 代码注入为 stdin，由 python3 -c 执行
-		binary = []byte("python3")
-		args = []string{"-c", sanitizeCodeForShell(req.Code)}
+		cmdBinary = "python3 -c " + sanitizeCodeForShell(req.Code)
 	case "bash":
-		binary = []byte("bash")
-		args = []string{"-c", sanitizeCodeForShell(req.Code)}
+		cmdBinary = "bash -c " + sanitizeCodeForShell(req.Code)
 	}
 
-	spec := protocol.SandboxSpec{
-		ImageOrBinary:    binary,
-		Args:             args,
-		CPUQuotaPct:      50,
-		MemoryLimitMB:    256,
-		WallClockTimeout: 30,    // 30s 超时
-		NetworkEgress:    false, // CodeAct 默认禁止出站网络
+	spec := SandboxSpec{
+		ToolName:   "code_act:" + req.Language,
+		Input:      []byte(cmdBinary),
+		CPUQuotaMs: 30000, // 30s 超时
 	}
 
 	result, err := ca.sandbox.Run(ctx, spec)
@@ -121,9 +124,13 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 		return nil, perrors.Wrap(perrors.CodeInternal, "code_act: sandbox execution failed", err)
 	}
 
+	exitCode := 0
+	if !result.Success {
+		exitCode = 1
+	}
 	return &CodeActResult{
 		Output:    result.Output,
-		ExitCode:  result.ExitCode,
+		ExitCode:  exitCode,
 		LatencyMs: result.LatencyMs,
 	}, nil
 }

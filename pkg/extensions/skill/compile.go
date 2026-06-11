@@ -747,6 +747,12 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 		return nil, ErrEvalGateNotPassed
 	}
 
+	// 0.3 Taint Check（前置：TaintMedium+ 轨迹严禁进入编译流水线）
+	// 必须在 LLM 代码生成之前拒绝，防止污染数据驱动代码生成路径
+	if traj.TaintLevel >= 2 {
+		return nil, ErrTaintedTrajectory
+	}
+
 	// 1. Freshness Check (500ms timeout)
 	freshness, err := c.freshnessChecker.Check(ctx, traj)
 	if err != nil {
@@ -771,12 +777,7 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 		return nil, perrors.Wrap(perrors.CodeInternal, "LLM 代码生成失败", err)
 	}
 
-	// 5. Taint Check（TaintMedium+ 严禁编译）
-	if traj.TaintLevel >= 2 {
-		return nil, ErrTaintedTrajectory
-	}
-
-	// 6. 静态分析: CFG + 系统调用审计 + 确定性检查
+	// 5. 静态分析: CFG + 系统调用审计 + 确定性检查
 	cfgResult, err := c.staticAnalyzer.Analyze(implGo)
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "静态分析错误", err)
@@ -785,25 +786,25 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 		return nil, &CompileError{violations: cfgResult.Violations}
 	}
 
-	// 7. AST 脱敏（PII 不离机）
+	// 6. AST 脱敏（PII 不离机）
 	sanitized, redactionMap, err := TaintSanitizeForRemoteCompilation(implGo)
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "AST 脱敏失败", err)
 	}
 
-	// 7.1 保存 redaction_map.json 到本地
+	// 6.1 保存 redaction_map.json 到本地
 	if req.WorkDir != "" {
 		mapBytes, _ := json.Marshal(redactionMap.Params)
 		_ = os.WriteFile(filepath.Join(req.WorkDir, "redaction_map.json"), mapBytes, 0600)
 	}
 
-	// 8. 远程双源编译
+	// 7. 远程双源编译
 	compileResult, err := c.dualCompiler.Compile(ctx, sanitized)
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "双源编译失败", err)
 	}
 
-	// 9. 本地 wazero 验证（魔数 + 可选测试用例执行）
+	// 8. 本地 wazero 验证（魔数 + 可选测试用例执行）
 	if err := validateWasmMagic(compileResult.WasmBytes); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "wasm 验证失败", err)
 	}
@@ -821,16 +822,16 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 		}
 	}
 
-	// 10. 风险分级（基于 impl.go WASI host function 声明）
+	// 9. 风险分级（基于 impl.go WASI host function 声明）
 	riskLevel, sandboxTier := assessRisk(implGo)
 
-	// 11. 签名
+	// 10. 签名
 	sig, err := signWasm(compileResult.WasmBytes, req.SigningKey)
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "wasm 签名失败", err)
 	}
 
-	// 12. 构建 SkillMeta
+	// 11. 构建 SkillMeta
 	skillName := "skill:" + traj.SkillID
 	meta := protocol.SkillMeta{
 		Name:       skillName,

@@ -67,6 +67,9 @@ func NewInProcessSandbox() *InProcessSandbox {
 	}
 }
 
+// Level 返回沙箱级别（实现 protocol.SandboxProvider）。
+func (s *InProcessSandbox) Level() int { return 1 }
+
 // Register 注册工具函数（并发安全，支持运行时动态注册 MCP 工具）。
 // 内置工具使用此方法，输出污点为 TaintNone。
 func (s *InProcessSandbox) Register(toolName string, fn InProcessFn) {
@@ -191,6 +194,9 @@ func NewWasmSandbox(ctx context.Context, concurrency int) *WasmSandbox {
 	}
 }
 
+// Level 返回沙箱级别（实现 protocol.SandboxProvider）。
+func (s *WasmSandbox) Level() int { return 2 }
+
 func (s *WasmSandbox) PreWarmCache(skillID string, wasmBytes []byte) error {
 	return s.runtime.PreWarmCache(skillID, wasmBytes)
 }
@@ -238,6 +244,9 @@ type ContainerSandbox struct {
 func NewContainerSandbox(binPath, platform string, hwTier observability.Tier) *ContainerSandbox {
 	return &ContainerSandbox{binPath: binPath, platform: platform, hwTier: hwTier}
 }
+
+// Level 返回沙箱级别（实现 protocol.SandboxProvider）。
+func (s *ContainerSandbox) Level() int { return 3 }
 
 func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol.ToolResult, error) {
 	quotaMs := spec.CPUQuotaMs

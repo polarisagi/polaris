@@ -47,11 +47,22 @@ func NewConsolidationPipeline(
 	}
 }
 
+// consolidationTimeout Consolidation 管线最大运行时间（兜底防止阻塞 M9 调度器）
+const consolidationTimeout = 5 * time.Minute
+
 // Run 执行完整 4 阶段压缩管线。
 // 约束: version++ 不可变版本 + source_event_id provenance + 信念修正 + Prospective Indexing.
+// 超时: 整体 5 分钟超时（独立于 ctx 父超时），防止 LLM 调用长时间阻塞调度器。
 func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error {
 	if p.episodic == nil || p.semantic == nil {
 		return perrors.New(perrors.CodeInternal, "consolidation: episodic and semantic memory required")
+	}
+
+	// 整体超时保护：Consolidation 为后台任务，不应无限阻塞
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		ctx, cancel = context.WithTimeout(ctx, consolidationTimeout)
+		defer cancel()
 	}
 
 	// 查询该 Session 的所有 Episodic 事件
