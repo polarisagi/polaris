@@ -69,7 +69,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 跨 Tag 缓存核心机制：去上一次成功发版（Release 工作流）里下载包含 rust-hash.txt 的库
+      # 跨 Tag 缓存核心机制：先下载极小的 Hash Artifact，如果匹配再去下载几十 MB 的真实产物
       - name: Restore Rust from previous release
         id: rust-restore
         env:
@@ -78,21 +78,28 @@ jobs:
         run: |
           CURRENT_HASH="${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}"
           echo "Current hash: $CURRENT_HASH"
+          echo "CURRENT_HASH=$CURRENT_HASH" >> $GITHUB_ENV
           
           # 寻找最近一次成功的 Release 流水线
           LATEST_RUN=$(gh run list --workflow=release.yml --status=success --limit=1 --json databaseId -q '.[0].databaseId' || echo "")
           if [ -n "$LATEST_RUN" ]; then
             echo "Found previous successful run: $LATEST_RUN"
-            gh run download $LATEST_RUN -n rust-${{ matrix.name }} -D prev_rust || echo "Artifact not found"
+            # 先仅仅下载 Hash 文件（几字节），避免盲目下载几十 MB 大文件
+            gh run download $LATEST_RUN -n rust-hash-${{ matrix.name }} -D prev_hash || echo "Hash artifact not found"
             
-            if [ -f "prev_rust/rust-hash.txt" ]; then
-              PREV_HASH=$(cat prev_rust/rust-hash.txt)
+            if [ -f "prev_hash/rust-hash.txt" ]; then
+              PREV_HASH=$(cat prev_hash/rust-hash.txt)
               if [ "$PREV_HASH" == "$CURRENT_HASH" ]; then
-                echo "Hash matches! Reusing artifacts across tags."
-                echo "cache-hit=true" >> $GITHUB_OUTPUT
-                mkdir -p rust/substrate/target/${{ matrix.cargo_target }}/release
-                cp prev_rust/* rust/substrate/target/${{ matrix.cargo_target }}/release/ || true
-                exit 0
+                echo "Hash matches! Downloading full artifacts..."
+                gh run download $LATEST_RUN -n rust-${{ matrix.name }} -D prev_rust || echo "Full artifact not found"
+                
+                # 检查是否成功下载了动态库
+                if ls prev_rust/libsubstrate.* prev_rust/substrate.dll 1> /dev/null 2>&1; then
+                  echo "cache-hit=true" >> $GITHUB_OUTPUT
+                  mkdir -p rust/substrate/target/${{ matrix.cargo_target }}/release
+                  cp prev_rust/* rust/substrate/target/${{ matrix.cargo_target }}/release/ || true
+                  exit 0
+                fi
               fi
             fi
           fi
@@ -134,18 +141,25 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo build --release --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
 
-      - name: Save Rust Hash for next release
-        if: steps.rust-restore.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          echo "${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}" > rust/substrate/target/${{ matrix.cargo_target }}/release/rust-hash.txt
-
       - name: Show sccache stats
         if: steps.rust-restore.outputs.cache-hit != 'true'
         shell: bash
         run: sccache --show-stats
 
-      # ── 无论缓存是否命中，都上传 artifact 给下游 Go 编译 ──
+      # ── 无论缓存是否命中，都准备并上传 artifact 供本流水线的 Go 编译使用，并作为下次发版的基准 ──
+
+      - name: Save Rust Hash for next release
+        shell: bash
+        run: |
+          mkdir -p rust/substrate/target/${{ matrix.cargo_target }}/release
+          echo "${{ env.CURRENT_HASH }}" > rust/substrate/target/${{ matrix.cargo_target }}/release/rust-hash.txt
+
+      - name: Upload Rust Hash Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-hash-${{ matrix.name }}
+          path: rust/substrate/target/${{ matrix.cargo_target }}/release/rust-hash.txt
+          retention-days: 1
 
       - name: Upload Rust Artifact
         uses: actions/upload-artifact@v4
@@ -155,7 +169,6 @@ jobs:
             rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
             rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
             rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
-            rust/substrate/target/${{ matrix.cargo_target }}/release/rust-hash.txt
           if-no-files-found: warn
           retention-days: 1
 
