@@ -364,18 +364,8 @@ func run() error { //nolint:gocyclo
 		slog.Info("polaris: L3 container sandbox initialized", "backend", autoConf.Config.L3SandboxBackend)
 	}
 	inProcSandbox := action.NewInProcessSandbox()
-	var wasmSandbox *action.WasmSandbox
-	if autoConf == nil || autoConf.Gate.State(observability.FeatureL2Sandbox) != observability.FeatureDisabled {
-		wasmConcurrency := 4
-		if autoConf != nil {
-			wasmConcurrency = autoConf.Config.WasmConcurrency
-		}
-		wasmSandbox = action.NewWasmSandbox(ctx, wasmConcurrency)
-		slog.Info("polaris: L2 Wasm sandbox initialized", "concurrency", wasmConcurrency)
-	} else {
-		slog.Info("polaris: L2 Wasm sandbox disabled by FeatureGate")
-	}
-	sandboxRouter := action.NewSandboxRouter(inProcSandbox, wasmSandbox, containerSandbox, runtime.GOOS, cfg.System.Tier)
+	// 内置工具直接信任，走 InProcess；LLM 生成代码/插件脚本走 Container 隔离。
+	sandboxRouter := action.NewSandboxRouter(inProcSandbox, containerSandbox, runtime.GOOS, cfg.System.Tier)
 	slog.Info("polaris: sandbox router initialized", "os", runtime.GOOS, "tier", cfg.System.Tier)
 
 	// ─── 6.3 内置工具注册 & MCP Manager ─────────────────────────────────────
@@ -421,17 +411,10 @@ func run() error { //nolint:gocyclo
 	_ = skillSelector
 
 	// 移除内置技能静态扫描：现统一通过 Marketplace 动态安装至标准数据目录。
-
-	wasmConcurrencyRT := 4
-	if autoConf != nil {
-		wasmConcurrencyRT = autoConf.Config.WasmConcurrency
-	}
-	wasmRT := action.NewWazeroRuntime(ctx, wasmConcurrencyRT)
-	wasmRunner := action.NewWasmRunnerAdapter(wasmRT)
-	// 所有技能（builtin + marketplace）均通过 SkillMeta.WasmPath 加载，loader=nil。
-	skillExecutor := skill.NewWasmSkillExecutor(skillRegistry, wasmRunner, nil)
+	// 技能以 TypeScript/Python 脚本形式安装，通过 ContainerSandbox 执行。
+	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, nil, nil)
 	_ = skillExecutor
-	slog.Info("polaris: skill library initialized (wazero-backed)")
+	slog.Info("polaris: skill library initialized (script-backed)")
 
 	// ─── 7. Knowledge RAG (L2 M10) ───────────────────────────────────────────
 	ingester := knowledgepkg.NewDefaultIngestionPipeline(storageRouter)

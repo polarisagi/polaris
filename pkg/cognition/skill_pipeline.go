@@ -13,30 +13,30 @@ import (
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
 
-// WasmExecutor consumer-side 接口（在 cognition 包内定义）
-type WasmExecutor interface {
-	ExecuteTest(ctx context.Context, wasmBytes []byte, input []byte) ([]byte, error)
+// ScriptExecutor consumer-side 接口（在 cognition 包内定义）
+type ScriptExecutor interface {
+	ExecuteTest(ctx context.Context, scriptBytes []byte, input []byte) ([]byte, error)
 }
 
 // 技能验证管线 + 演化引擎。
-// 架构文档: docs/arch/06-Skill-Library-深度选型.md §2.3, §4
+// 架构文档: docs/arch/M06-Skill-Library.md §2.3, §4
 
 // SkillValidationPipeline LLM 生成技能的四步验证。
-// Step 0: Taint-Check → Step 1: 静态分析 → Step 2: wazero 行为测试 → Step 3: 风险分级 → Step 4: 签名入库.
+// Step 0: Taint-Check → Step 1: 静态分析 → Step 2: 行为测试 → Step 3: 风险分级 → Step 4: 签名入库.
 type SkillValidationPipeline struct {
 	taintChecker   *TaintChecker
 	staticAnalyzer *StaticAnalyzer
-	wasmTester     *WasmTester
+	scriptTester   *ScriptTester
 	riskAssessor   *RiskAssessor
 	signer         *Signer
 }
 
 // NewSkillValidationPipeline 创建完整验证管线。
-func NewSkillValidationPipeline(signingKey []byte, executor WasmExecutor) *SkillValidationPipeline {
+func NewSkillValidationPipeline(signingKey []byte, executor ScriptExecutor) *SkillValidationPipeline {
 	return &SkillValidationPipeline{
 		taintChecker:   &TaintChecker{},
 		staticAnalyzer: &StaticAnalyzer{},
-		wasmTester:     &WasmTester{runtime: executor},
+		scriptTester:   &ScriptTester{runtime: executor},
 		riskAssessor:   &RiskAssessor{},
 		signer:         &Signer{privateKey: signingKey},
 	}
@@ -44,7 +44,7 @@ func NewSkillValidationPipeline(signingKey []byte, executor WasmExecutor) *Skill
 
 // Validate 执行完整四步验证。返回最终风险分级和签名，任一步骤失败立即终止。
 func (p *SkillValidationPipeline) Validate(code []byte, taintLevel int) (*ValidateResult, error) {
-	p.wasmTester.wasmBytes = code
+	p.scriptTester.scriptBytes = code
 
 	// Step 0: Taint 检查
 	if err := p.taintChecker.Check(taintLevel); err != nil {
@@ -60,8 +60,8 @@ func (p *SkillValidationPipeline) Validate(code []byte, taintLevel int) (*Valida
 		return nil, &SkillPipelineError{fmt.Sprintf("static analysis failed: %v", ar.Violations)}
 	}
 
-	// Step 2: Wasm 行为测试
-	if err := p.wasmTester.Run(); err != nil {
+	// Step 2: 脚本行为测试
+	if err := p.scriptTester.Run(); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "Wasm 行为测试失败", err)
 	}
 
@@ -161,13 +161,13 @@ type AnalyzeResult struct {
 	RiskLevel  int
 }
 
-// WasmTester Step 2 — wazero 沙箱行为测试。
-// for each test case in test/: 创建 wazero 沙箱 → 注入受控 Host Functions → 运行 impl.wasm → 对比输出.
-// 10,000 随机输入模糊测试 (fuzz). 全部通过 → Step 3; 失败 → 打回 LLM 修复 (最多 3 轮).
-type WasmTester struct {
-	testCases []TestCase
-	wasmBytes []byte
-	runtime   WasmExecutor
+// ScriptTester Step 2 — 沙箱行为测试（TypeScript/Python 脚本）。
+// 对每个测试用例在受控环境中执行脚本并对比输出。
+// 全部通过 → Step 3; 失败 → 打回 LLM 修复（最多 3 轮）。
+type ScriptTester struct {
+	testCases   []TestCase
+	scriptBytes []byte
+	runtime     ScriptExecutor
 }
 
 // TestCase 测试用例。
@@ -178,29 +178,29 @@ type TestCase struct {
 }
 
 // AddTestCase 添加测试用例。
-func (wt *WasmTester) AddTestCase(name string, input, expect []byte) {
+func (wt *ScriptTester) AddTestCase(name string, input, expect []byte) {
 	wt.testCases = append(wt.testCases, TestCase{Name: name, Input: input, Expect: expect})
 }
 
 // Run 执行所有测试用例。
-// MVP: 通过 wazero 即时编译并执行 Wasm 模块，对比输出。
+// MVP: 通过 ContainerSandbox 执行 TypeScript/Python 脚本，对比输出。
 // 约束: 每个测试用例独立沙箱实例，禁止跨用例状态泄漏。
-func (wt *WasmTester) Run() error {
+func (wt *ScriptTester) Run() error {
 	if len(wt.testCases) == 0 {
 		// 无测试用例 → 跳过（生产环境应至少有 schema.json 定义的输入/输出对）
 		return nil
 	}
 
 	if wt.runtime == nil {
-		return perrors.New(perrors.CodeInternal, "WasmExecutor not injected")
+		return perrors.New(perrors.CodeInternal, "ScriptExecutor not injected")
 	}
 
 	for _, tc := range wt.testCases {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		res, err := wt.runtime.ExecuteTest(ctx, wt.wasmBytes, tc.Input)
+		res, err := wt.runtime.ExecuteTest(ctx, wt.scriptBytes, tc.Input)
 		cancel()
 		if err != nil {
-			return perrors.Wrap(perrors.CodeInternal, "Wasm 行为测试执行失败", err)
+			return perrors.Wrap(perrors.CodeInternal, "脚本行为测试执行失败", err)
 		}
 
 		if !bytes.Equal(res, tc.Expect) {
@@ -215,12 +215,11 @@ func (wt *WasmTester) Run() error {
 }
 
 // RiskAssessor Step 3 — 风险分级。
-// 文件写入请求 → RiskLevel=medium; 网络请求 → RiskLevel=high; 无外部请求 → RiskLevel=low.
-// 分配 SandboxTier [Sandbox-L2].
+// 文件写入/网络请求 → RiskLevel=high → Container(L3); 纯计算 → RiskLevel=low → InProcess(L1).
 type RiskAssessor struct{}
 
 // Assess 根据代码内容评估风险级别和推荐沙箱层级。
-// 返回 (riskLevel: 0=low, 1=medium, 2=high; sandboxTier: 1=InProc, 2=Wasm, 3=gVisor).
+// 返回 (riskLevel: 0=low, 1=medium, 2=high; sandboxTier: 1=InProc, 3=Container).
 func (ra *RiskAssessor) Assess(code []byte) (riskLevel int, sandboxTier int) {
 	codeStr := string(code)
 
@@ -243,13 +242,13 @@ func (ra *RiskAssessor) Assess(code []byte) (riskLevel int, sandboxTier int) {
 	switch {
 	case hasShell:
 		riskLevel = 2   // high
-		sandboxTier = 3 // L3 gVisor (Tier 1+)
+		sandboxTier = 3 // L3 Container
 	case hasNetwork:
 		riskLevel = 2   // high
-		sandboxTier = 2 // L2 Wasm
+		sandboxTier = 3 // L3 Container
 	case hasFSWrite:
 		riskLevel = 1   // medium
-		sandboxTier = 2 // L2 Wasm
+		sandboxTier = 3 // L3 Container
 	default:
 		riskLevel = 0   // low — 纯计算/转换
 		sandboxTier = 1 // L1 InProc
@@ -333,7 +332,7 @@ func consecutiveFailures(history []bool) int {
 // triggerEvolution 根据技能状态分发演化策略。
 // - 成功率 < 30% 且使用次数 > 10 → DeprecationDynamic（移出主索引，保留手动恢复）
 // - 连续失败但成功率尚可 → 标记待 LLM 反思改进
-// - 安全漏洞/签名失效 → DeprecationHard（物理删除 Wasm + 撤销签名）
+// - 安全漏洞/签名失效 → DeprecationHard（物理删除脚本 + 撤销签名）
 func (e *SkillEvolutionEngine) triggerEvolution(skillID string) {
 	sk, ok := e.skills[skillID]
 	if !ok {
@@ -393,7 +392,7 @@ const (
 	DeprecationNormal   SkillDeprecationLevel = iota // LLM 生成更好版本 → version++
 	DeprecationFiltered                              // 连续 3 次测试失败 → deprecated=true
 	DeprecationDynamic                               // 成功率 < 30% 且使用 > 10 → 移出主索引
-	DeprecationHard                                  // 安全漏洞/签名失效 → 物理删除 Wasm + 撤销签名
+	DeprecationHard                                  // 安全漏洞/签名失效 → 物理删除脚本 + 撤销签名
 )
 
 var (

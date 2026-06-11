@@ -33,7 +33,7 @@ M11 与 M3/M12 的分工:
 |---|------|------|---------|---------|
 | **D1** | 数据污点追踪 | Taint 5 级 + Slot 物理分离 | 输入 | `pkg/substrate/taint.go` |
 | **D2** | 能力令牌 | 短寿命 Ed25519 + 最小权限 + 委托链 ≤3 | 权限 | `pkg/action/capability_token.go` |
-| **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(wazero Wasm) / L3(平台原生 microVM: Linux Firecracker / macOS VZ / Windows WSL2，gVisor 仅作 Linux KVM 不可用 fallback) | 执行 | `pkg/action/sandbox.go` |
+| **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(Rust 脚本沙箱) / L3(平台原生 microVM: Linux Firecracker / macOS VZ / Windows WSL2，gVisor 仅作 Linux KVM 不可用 fallback) | 执行 | `pkg/action/sandbox.go` |
 | **D4** | 宪法分层 | Layer 1(编译期常量) / 2(Cedar forbid) / 3(Cedar permit) / 4(多 Agent) | 决策 | `pkg/substrate/policy/` |
 | **D5** | Kill Switch + Audit | 三阶段 FSM + hash chain 仅追加 | 系统 | `pkg/substrate/killswitch.go` |
 | **D6** | [FactualityGuard] | 引用核验 + 数值一致性 + 抽样 LLM-as-Judge | **输出真实性** | `pkg/substrate/policy/` |

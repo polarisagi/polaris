@@ -14,7 +14,7 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 	meta := protocol.SkillMeta{
 		Name:         "skill:code_review",
 		Version:      "1.0.0",
-		Runtime:      "wasm",
+		Runtime:      "script",
 		RiskLevel:    "low",
 		Sandbox:      1,
 		Capabilities: []string{"read_file", "analyze"},

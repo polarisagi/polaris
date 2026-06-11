@@ -4,6 +4,10 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-06-11（架构升级：技能执行迁移至 TypeScript 脚本 + Rust 沙箱）
+
+- `M06/M09/M13-bis` | 技能执行从 TinyGo/impl.wasm/wazero 迁移至 TypeScript/Python 脚本（npx tsx），沙箱从 Go wazero 迁移至 Rust wasmtime（FFI）；内置工具直接信任不走沙箱；官方技能/插件移至独立仓库 polaris-plugins-official
+
 ## 2026-06-11（docs/arch/decisions + AGENTS.md + 02-Rust-FFI 全量修订）
 
 **ADR 过时内容修正（4 个 ADR）**：

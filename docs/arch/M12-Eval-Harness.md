@@ -82,7 +82,7 @@ EvalResult: Passed bool / Scores map[string]float64 / Details string / Evaluator
 
 **TrajectoryReplayerImpl** 验证规则：状态转移链不断裂（StateTrans[i].From == StateTrans[i-1].To），断裂时返回含 step 位置的 Fail 结果；重放路径不产生新 LLM 调用（zero-token 保证，`new_llm=0`）。
 
-wazero 确定性适配（`clock_time_get`/`random_get` 录制/回放）详见 [Wasm-Sandbox]；M7 按 ctx `eval_mode` 动态注入。CI 回放（毫秒/零费用/确定性）+ Nightly 重执行（真实模型）。
+脚本执行确定性适配（时钟/随机源 录制/回放）详见 [Script-Sandbox]；M7 按 ctx `eval_mode` 动态注入。CI 回放（毫秒/零费用/确定性）+ Nightly 重执行（真实模型）。
 
 ## 4. Eval Runner
 
@@ -171,7 +171,7 @@ Eval Harness 仅提供对比原语。流量分发由 M9 ProgressiveRollout + M13
 |-----|---------|------|
 | L0 配置 | SQLite 单表导出 | KB |
 | L1 Prompt | 文件+表导出 | KB-MB |
-| L2 新技能 | SQLite WAL + wasm 文件 | MB-数十MB |
+| L2 新技能 | SQLite WAL + 脚本文件 | MB-数十MB |
 | L3 策略/LoRA | 文件拷贝 | MB |
 | L4 源码 | 全量 Backup | GB |
 

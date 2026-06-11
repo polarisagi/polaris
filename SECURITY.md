@@ -17,7 +17,7 @@ AI Agent 项目的高敏感面：
 | 类别 | 示例 |
 |------|------|
 | **Prompt Injection** | 绕过 M11 Taint Tracking 五道防线、Spotlighting 失效、注入 instruction slot |
-| **Sandbox Escape** | wazero/microVM 逃逸、Capability Token 提权、WASI 权限矩阵绕过 |
+| **Sandbox Escape** | Rust 沙箱逃逸、Container 逃逸、Capability Token 提权 |
 | **Taint 降级路径滥用** | 非 Sanitizer 路径让 `TaintedString` 降级为 `SafeString` |
 | **Cedar Policy 绕过** | 静态规则缺陷、动态决策注入 |
 | **PII / 凭证泄漏** | SessionPIIVault 边界击穿、`[CredentialVault]` 明文落盘 |

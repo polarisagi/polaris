@@ -160,16 +160,16 @@ type HybridRetriever interface {
 
 // ============================================================================
 // M6 Skill Library — Skill Executor
-// @consumer: M4(Agent Kernel - System 1 技能缓存命中后执行 Wasm)
-// @producer: M7(Tool-Action - wazero Wasm 沙箱, [Wasm-Sandbox] 权威实现)
-// @arch: docs/arch/06-Skill-Library-深度选型.md §5
+// @consumer: M4(Agent Kernel - System 1 技能缓存命中后执行脚本)
+// @producer: M7(Tool-Action - Rust 沙箱, [Sandbox] 权威实现)
+// @arch: docs/arch/M06-Skill-Library.md §5
 // ============================================================================
 
-// SkillExecutor 执行已编译的 Wasm 技能，通过 wazero 沙箱调用。
-// Wasm 字节码的 wazero 编译和实例化由 M7 负责（M7 是沙箱的 CANONICAL SOURCE）。
+// SkillExecutor 执行 TypeScript/Python 技能脚本。
+// 脚本由 M7 负责沙箱执行（M7 是沙箱的 CANONICAL SOURCE）。
 type SkillExecutor interface {
 	ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error)
-	ValidateSkill(wasmBytes []byte) error
+	ValidateSkill(scriptBytes []byte) error
 }
 
 // ============================================================================
@@ -531,17 +531,17 @@ type SkillRegistry interface {
 type SkillMeta struct {
 	Name         string
 	Version      string // semver
-	Runtime      string // wasm (default) / script / builtin
+	Runtime      string // script (default) / builtin
 	RiskLevel    string // low / medium / high
-	Sandbox      int    // Sbx-L1=1 / Sbx-L2=2 / Sbx-L3=3
+	Sandbox      int    // Sbx-L1=1 / Sbx-L3=3
 	Capabilities []string
 	ExecMode     string    // tool / ambient
 	Trust        TrustTier // 替代 SignatureValid bool（ADR-0016 §2.1）
 	Idempotent   bool
 	Benchmarks   SkillBenchmarks
-	Instructions string // script runtime: SKILL.md 全文，供 LLM tool_use 返回
+	Instructions string // SKILL.md 全文，供 LLM tool_use 返回
 	Deprecated   bool
-	WasmPath     string // marketplace 安装路径（extension_instances.install_path + "/impl.wasm"）；空则由 WasmLoader 兜底
+	ScriptPath   string // marketplace 安装路径（extension_instances.install_path + "/src/index.ts"）
 	// PluginID 是来源插件的 plugins.id（"pl_xxx"）；独立安装的技能为空。
 	PluginID string
 }

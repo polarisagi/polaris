@@ -5,7 +5,7 @@ package swarm
 //
 // M9 BackgroundTaskScheduler 调用 LogicCollapseMonitor.RecordSuccess 记录每次成功轨迹。
 // 当 SuccessCount >= 50 且 SemanticVariance >= 0.1 且 EvalGate 通过时，
-// 异步触发 LogicCollapseCompiler.Compile 将轨迹蒸馏为 Wasm 技能。
+// 异步触发 LogicCollapseCompiler.Compile 将轨迹蒸馏为 TypeScript 技能脚本。
 
 import (
 	"context"
@@ -245,7 +245,7 @@ func (m *LogicCollapseMonitor) triggerCollapse(ctx context.Context, traj *extski
 
 	slog.Info("logic_collapse: skill compiled and registered",
 		"skill_id", traj.SkillID,
-		"wasm_hash", result.WasmHash,
+		"script_hash", result.ScriptHash,
 		"risk_level", result.RiskLevel,
 		"sandbox_tier", result.SandboxTier,
 	)
@@ -280,7 +280,7 @@ func NewDefaultLLMCodeGenerator(provider protocol.Provider) extskill.LLMCodeGene
 	return &defaultLLMCodeGenerator{provider: provider}
 }
 
-// GenerateImpl 将脱敏轨迹发送给 LLM 生成 TinyGo-compatible impl.go。
+// GenerateImpl 将脱敏轨迹发送给 LLM 生成 TypeScript MCP 技能脚本。
 func (g *defaultLLMCodeGenerator) GenerateImpl(ctx context.Context, traj *extskill.CollapseTrajectory) ([]byte, error) {
 	if g.provider == nil {
 		return nil, perrors.New(perrors.CodeInternal, "logic_collapse: LLM provider is nil")
@@ -290,26 +290,20 @@ func (g *defaultLLMCodeGenerator) GenerateImpl(ctx context.Context, traj *extski
 	inputSchemaDesc := buildSchemaDescription(traj.InputSchema)
 	outputSchemaDesc := buildSchemaDescription(traj.OutputSchema)
 
-	systemPrompt := `You are an AI generating Go code for a WebAssembly skill compiled with TinyGo.
+	systemPrompt := `You are an AI generating a TypeScript MCP skill for the Polaris agent system.
 
 STRICT REQUIREMENTS:
-1. Only use TinyGo-compatible standard library packages (strings, strconv, encoding/json, math)
-2. Export these three functions (Wasm ABI):
-   //go:export run
-   func run(ptr, length uint32) uint64
-   //go:export polaris_malloc
-   func polaris_malloc(size uint32) uint32
-   //go:export polaris_free
-   func polaris_free(ptr uint32)
-3. NO time.Now(), rand.Read(), os.Getenv() — use context_hint for runtime values
-4. NO os/exec, net/http, unsafe, syscall imports
-5. Input/output via Wasm linear memory as JSON
-6. Package name must be "main"
-7. Use //go:wasmimport polaris {capability} for host function declarations
+1. Use @modelcontextprotocol/sdk and standard TypeScript
+2. Export a default async function that accepts JSON input and returns JSON output
+3. NO dynamic execution: no eval(), no new Function(), no require()
+4. Use import (ESM), not require (CommonJS)
+5. NO direct filesystem writes or network calls unless explicitly declared in capabilities
+6. Input/output must be valid JSON-serializable objects
+7. The script runs via: npx tsx src/index.ts
 
-Output ONLY valid Go source code, no markdown, no explanation.`
+Output ONLY valid TypeScript source code, no markdown, no explanation.`
 
-	userPrompt := fmt.Sprintf(`Generate impl.go for skill "%s":
+	userPrompt := fmt.Sprintf(`Generate src/index.ts for skill "%s":
 
 Goal: %s
 
@@ -319,7 +313,7 @@ Tool call sequence (type signatures only):
 Input schema: %s
 Output schema: %s
 
-The impl.go must implement the deterministic equivalent of this tool call sequence.`,
+The script must implement the deterministic equivalent of this tool call sequence.`,
 		traj.SkillID,
 		traj.GoalDescription,
 		toolCallsDesc,

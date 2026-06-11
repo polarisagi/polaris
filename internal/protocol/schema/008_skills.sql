@@ -12,7 +12,7 @@
 CREATE TABLE IF NOT EXISTS skills (
     name        TEXT    PRIMARY KEY,             -- "skill:{slug}"，格式由 SkillRegistry 校验
     version     TEXT    NOT NULL,
-    runtime     TEXT    NOT NULL DEFAULT 'wasm', -- 'wasm' | 'script' | 'builtin'
+    runtime     TEXT    NOT NULL DEFAULT 'script', -- 'script' | 'builtin'
     risk_level  TEXT    NOT NULL DEFAULT 'high', -- 'low' | 'medium' | 'high'
     sandbox     INTEGER NOT NULL DEFAULT 1,      -- 1=启用沙箱
     capabilities TEXT   NOT NULL,               -- JSON array

@@ -102,7 +102,7 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*pr
 	}
 	meta.Trust = protocol.TrustTier(trustInt)
 	if installPath != "" {
-		meta.WasmPath = installPath + "/impl.wasm"
+		meta.ScriptPath = installPath + "/src/index.ts"
 	}
 
 	json.Unmarshal([]byte(capsRaw), &meta.Capabilities) //nolint:errcheck

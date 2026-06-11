@@ -65,25 +65,6 @@ func TestInProcessSandbox_Timeout(t *testing.T) {
 	}
 }
 
-// ─── WasmSandbox 测试 ─────────────────────────────────────────────────────────
-
-func TestWasmSandbox_StubExecution(t *testing.T) {
-	sb := NewWasmSandbox(context.Background(), 4)
-	emptyWasm := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
-	result, err := sb.Run(context.Background(), SandboxSpec{
-		ToolName:    "test-tool",
-		Input:       []byte(`{"key":"value"}`),
-		SandboxTier: protocol.SandboxWasm,
-		WasmBytes:   emptyWasm,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.Success {
-		t.Fatalf("expected success, got: %s", result.Error)
-	}
-}
-
 // ─── SandboxRouter 测试 ──────────────────────────────────────────────────────
 
 func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
@@ -91,7 +72,7 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	inProc.Register("list-files", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`["a","b"]`), nil
 	})
-	router := NewSandboxRouter(inProc, NewWasmSandbox(context.Background(), 4), nil, runtime.GOOS, 0)
+	router := NewSandboxRouter(inProc, nil, runtime.GOOS, 0)
 
 	tool := protocol.Tool{
 		Name:        "list-files",
@@ -109,12 +90,13 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	}
 }
 
-func TestSandboxRouter_MCPGoesToWasm(t *testing.T) {
-	wasmSb := NewWasmSandbox(context.Background(), 4)
-	emptyWasm := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
-	wasmSb.PreWarmCache("mcp-tool", emptyWasm)
-
-	router := NewSandboxRouter(NewInProcessSandbox(), wasmSb, nil, runtime.GOOS, 0)
+// TestSandboxRouter_MCPFallsToInProcessWithoutContainer 验证无 Container 时 MCP 降级到 InProcess。
+func TestSandboxRouter_MCPFallsToInProcessWithoutContainer(t *testing.T) {
+	inProc := NewInProcessSandbox()
+	inProc.Register("mcp-tool", func(_ context.Context, _ []byte) ([]byte, error) {
+		return []byte(`{}`), nil
+	})
+	router := NewSandboxRouter(inProc, nil, runtime.GOOS, 0)
 
 	tool := protocol.Tool{
 		Name:       "mcp-tool",
@@ -131,25 +113,6 @@ func TestSandboxRouter_MCPGoesToWasm(t *testing.T) {
 	}
 }
 
-func TestSandboxRouter_PrivilegedGoesToWasmOnNonLinux(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		t.Skip("skip non-linux fallback test on Linux")
-	}
-	router := NewSandboxRouter(NewInProcessSandbox(), NewWasmSandbox(context.Background(), 4), nil, runtime.GOOS, 0)
-
-	tool := protocol.Tool{
-		Name:        "sys-tool",
-		Source:      protocol.ToolBuiltin,
-		Capability:  protocol.CapPrivileged,
-		SideEffects: []protocol.SideEffect{protocol.SideProcessSpawn},
-	}
-
-	provider := router.Route(tool)
-	if _, ok := provider.(*WasmSandbox); !ok {
-		t.Fatalf("expected WasmSandbox on non-Linux, got %T", provider)
-	}
-}
-
 func TestAssignSandboxTier(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -159,9 +122,9 @@ func TestAssignSandboxTier(t *testing.T) {
 		wantTier   protocol.SandboxTier
 	}{
 		{"builtin-read", protocol.ToolBuiltin, protocol.CapReadOnly, nil, protocol.SandboxInProcess},
-		{"mcp-write", protocol.ToolMCP, protocol.CapWriteNetwork, nil, protocol.SandboxWasm},
-		{"llm-gen", protocol.ToolLLMGenerated, protocol.CapReadOnly, nil, protocol.SandboxWasm},
-		{"privileged-spawn", protocol.ToolBuiltin, protocol.CapPrivileged, []protocol.SideEffect{protocol.SideProcessSpawn}, protocol.SandboxWasm}, // non-Linux
+		{"mcp-write", protocol.ToolMCP, protocol.CapWriteNetwork, nil, protocol.SandboxContainer},
+		{"llm-gen", protocol.ToolLLMGenerated, protocol.CapReadOnly, nil, protocol.SandboxContainer},
+		{"privileged-spawn", protocol.ToolBuiltin, protocol.CapPrivileged, []protocol.SideEffect{protocol.SideProcessSpawn}, protocol.SandboxContainer},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

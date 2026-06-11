@@ -63,7 +63,7 @@ L1 架构散文(本文档+模块文档) → L2 结构真相(`internal/protocol/s
 
 | Tier | 内存 | 本地推理 | 默认路径 | 梯度训练 | 沙箱 |
 |------|------|----------|----------|----------|------|
-| HT0 | 8GB | 不预加载 | 远程 API（provider-agnostic）| 禁用 | L1 InProc + L2 wazero |
+| HT0 | 8GB | 不预加载 | 远程 API（provider-agnostic）| 禁用 | L1 InProc + L2 Rust 沙箱 |
 | HT1 | 16GB | 7-8B 可选 | 远程为主 | 1-3B QLoRA | + gVisor/VZ L3 |
 | HT2 | 24GB+ | 14B reasoning 可选 | 远程为主 | 7B QLoRA / DPO | + Firecracker(Linux KVM) |
 | HT3 | 64GB+ (Mac M) | 32B+ 可全本地 | local_only / 离线 | 全套 | 全套 |
@@ -110,7 +110,7 @@ Stage 7: full_promotion       (写生产 + audit hash chain)
 | M04 Agent Kernel | 110 | 110 | 3 Agent goroutine 栈 + DAG buffer |
 | M05 Memory | 177 | 177 | Mem-L0..L3 四层 |
 | M06 Skill Library | 65 | 65 | Wasm cache Gold/Silver/Bronze |
-| M07 Tool Action | 90 | 90 | wazero 实例池 + MCP Client |
+| M07 Tool Action | 90 | 90 | Rust 脚本沙箱 + MCP Client |
 | M08 Orchestrator | 89 | 89 | Blackboard + Agent goroutines ×2/×3 |
 | M09 Self-Improve | 30 (idle) | 30 (idle) | Worker pool suspend-on-idle |
 | M10 Knowledge RAG | 155 | 155 | 文档树 + Chunk 向量 + GraphRAG |

@@ -45,7 +45,7 @@
 |------|---------|---------|
 | (a) Eval 驱动 Prompt 优化 | 可用 | — |
 | (b) 经验重放与反思 | 可用 | — |
-| (c) Logic Collapse | Tier 0 禁用 / Tier 1+ 本地 TinyGo 编译 | 仅加载预编译技能 |
+| (c) Logic Collapse | Tier 0 禁用 / Tier 1+ LLM 生成 TypeScript 脚本 | 仅加载预生成技能 |
 | (d) 检索式个性化 | 可用 | — |
 | (e) Activation Steering | Tier 0/1/2 禁用 | 无替代 (仅 Tier 3+ 本地模型支持) |
 | Auto-Curriculum | 受限（仅 bash_restricted 工具白名单） | — |
@@ -145,7 +145,7 @@ SurpriseIndex 类型和 Compute/Route 实现见 `pkg/swarm/surprise.go`。Surpri
 
 技能成功率统计触发 + 定期后台任务:
 
-技能演化触发条件：成功率 <30% 且使用 >10 次（排除 UncontrollableFailure）；成功率 >90% 且使用 >50 次为金牌技能（高优先级缓存）；连续 3 次 ControllableFailure 标记 deprecated。SKILL.md 收集轨迹后 LLM 编译为 Wasm（System1 执行）；已是 Wasm 的技能经边缘案例触发 TinyGo+wazero 验证后 version++。
+技能演化触发条件：成功率 <30% 且使用 >10 次（排除 UncontrollableFailure）；成功率 >90% 且使用 >50 次为金牌技能（高优先级缓存）；连续 3 次 ControllableFailure 标记 deprecated。SKILL.md 收集轨迹后 LLM 蒸馏为 TypeScript 脚本（System1 执行）；已是脚本技能经边缘案例触发脚本验证后 version++。
 
 **Auto-Curriculum Generator** 类型和生成流程见 `pkg/swarm/curriculum.go`。
 

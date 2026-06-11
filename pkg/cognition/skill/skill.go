@@ -3,7 +3,6 @@ package skill
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -41,7 +40,7 @@ func NewRegistry() *RegistryImpl {
 var (
 	_ protocol.SkillRegistry = (*RegistryImpl)(nil)
 	_ protocol.SkillSelector = (*SelectorImpl)(nil)
-	_ protocol.SkillExecutor = (*WasmSkillExecutor)(nil)
+	_ protocol.SkillExecutor = (*ScriptSkillExecutor)(nil)
 )
 
 // Register 注册技能。未通过 cosign 签名验证的技能拒绝注册。
@@ -198,36 +197,35 @@ func (s *SelectorImpl) score(meta protocol.SkillMeta, hint protocol.TaskHint) fl
 }
 
 // ============================================================================
-// WasmSkillExecutor — protocol.SkillExecutor 实现
+// ScriptSkillExecutor — protocol.SkillExecutor 实现
 // 架构文档: docs/arch/M06-Skill-Library.md §5
 // ============================================================================
 
-// WasmRunner 执行 Wasm 字节码（由 pkg/action.WazeroRuntime 实现，接口注入避免循环依赖）。
-type WasmRunner interface {
-	RunWasm(ctx context.Context, skillName string, wasmBytes []byte, input []byte) ([]byte, error)
+// ScriptRunner 执行 TypeScript/Python 技能脚本（由 pkg/action.ContainerSandbox 实现，接口注入避免循环依赖）。
+type ScriptRunner interface {
+	RunScript(ctx context.Context, skillName string, scriptPath string, input []byte) ([]byte, error)
 }
 
-// WasmLoader 从存储层加载已编译的 Wasm 字节码。
-type WasmLoader interface {
-	LoadWasm(skillID string) ([]byte, error)
+// ScriptLoader 从存储层加载技能脚本路径。
+type ScriptLoader interface {
+	LoadScriptPath(skillID string) (string, error)
 }
 
-type WasmSkillExecutor struct {
+type ScriptSkillExecutor struct {
 	registry protocol.SkillRegistry
-	runner   WasmRunner // nil → 返回输入原文（Tier 0 降级）
-	loader   WasmLoader // 可选兜底：meta.WasmPath 不存在时尝试此加载器
+	runner   ScriptRunner // nil → 返回输入原文（降级）
+	loader   ScriptLoader // 可选兜底：meta.ScriptPath 不存在时尝试此加载器
 }
 
-// NewWasmSkillExecutor 构造执行器。runner 可选（nil 时退化为仅元数据验证）。
-// loader 作为文件系统兜底，marketplace 安装的技能优先走 meta.WasmPath。
-func NewWasmSkillExecutor(reg protocol.SkillRegistry, runner WasmRunner, loader WasmLoader) *WasmSkillExecutor {
-	return &WasmSkillExecutor{registry: reg, runner: runner, loader: loader}
+// NewScriptSkillExecutor 构造执行器。runner 可选（nil 时退化为仅元数据验证）。
+func NewScriptSkillExecutor(reg protocol.SkillRegistry, runner ScriptRunner, loader ScriptLoader) *ScriptSkillExecutor {
+	return &ScriptSkillExecutor{registry: reg, runner: runner, loader: loader}
 }
 
-// ExecuteSkill 执行 Wasm 技能。
-// 加载优先级: meta.WasmPath（marketplace 安装路径）> loader.LoadWasm（文件系统兜底）。
+// ExecuteSkill 执行 TypeScript/Python 技能脚本。
+// 加载优先级: meta.ScriptPath（marketplace 安装路径）> loader.LoadScriptPath（文件系统兜底）。
 // 降级路径（runner 为 nil 或两路均无法加载）: 返回输入原文，不中断调用链。
-func (e *WasmSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error) {
+func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error) {
 	meta, err := e.registry.Get(ctx, skillID, "")
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "skill_executor: registry.Get", err)
@@ -241,39 +239,28 @@ func (e *WasmSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, in
 	}
 
 	// 优先从 extension_instances.install_path 读取（marketplace 安装路径）
-	var wasmBytes []byte
-	if meta.WasmPath != "" {
-		wasmBytes, err = os.ReadFile(meta.WasmPath)
+	scriptPath := meta.ScriptPath
+	if scriptPath == "" && e.loader != nil {
+		scriptPath, err = e.loader.LoadScriptPath(skillID)
 		if err != nil {
 			return input, nil //nolint:nilerr
 		}
-	} else if e.loader != nil {
-		wasmBytes, err = e.loader.LoadWasm(skillID)
-		if err != nil {
-			return input, nil //nolint:nilerr
-		}
-	} else {
+	}
+	if scriptPath == "" {
 		return input, nil
 	}
 
-	if err := e.ValidateSkill(wasmBytes); err != nil {
-		return nil, perrors.Wrap(perrors.CodeInternal, "skill_executor: wasm validation", err)
+	if err := e.ValidateSkill([]byte(scriptPath)); err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "skill_executor: script validation", err)
 	}
 
-	return e.runner.RunWasm(ctx, skillID, wasmBytes, input)
+	return e.runner.RunScript(ctx, skillID, scriptPath, input)
 }
 
-// ValidateSkill 校验 Wasm 字节码合规性（魔数 + 长度）。
-func (e *WasmSkillExecutor) ValidateSkill(wasmBytes []byte) error {
-	// Wasm 文件头魔数: 0x00 0x61 0x73 0x6D
-	if len(wasmBytes) < 4 {
-		return perrors.New(perrors.CodeInternal, "skill_executor: wasm too short")
-	}
-	magic := []byte{0x00, 0x61, 0x73, 0x6D}
-	for i, b := range magic {
-		if wasmBytes[i] != b {
-			return perrors.New(perrors.CodeInternal, "skill_executor: invalid wasm magic header")
-		}
+// ValidateSkill 校验脚本路径合规性。
+func (e *ScriptSkillExecutor) ValidateSkill(scriptBytes []byte) error {
+	if len(scriptBytes) == 0 {
+		return perrors.New(perrors.CodeInternal, "skill_executor: empty script path")
 	}
 	return nil
 }

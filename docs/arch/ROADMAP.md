@@ -49,7 +49,7 @@
 已落地能力清单（按层）：
 
 - **L0 substrate**: Inference Router + CircuitBreaker + SemanticCache；SQLite + SurrealDB-Core（KV/Vec/Graph/FTS）+ PebbleDB；OTel + TokenBurnRate + SurpriseIndex + AutoConfig + FeatureGate；Cedar Policy + TaintTracking + AuditTrail + PIIDetector（Tier0 正则 + Tier1+ Presidio 门控）
-- **L1 cognition/action**: Agent FSM（10 态）+ DAG Executor + ContextAssembler + 四层记忆 + Consolidation；wazero Wasm Runner + MCP Client/Manager + CapabilityToken + CodeAct + LAM + Computer Use（Darwin/Linux/Windows）+ Skill Pipeline
+- **L1 cognition/action**: Agent FSM（10 态）+ DAG Executor + ContextAssembler + 四层记忆 + Consolidation；Rust 脚本沙箱 + MCP Client/Manager + CapabilityToken + CodeAct + LAM + Computer Use（Darwin/Linux/Windows）+ Skill Pipeline
 - **L2 swarm**: Blackboard（SQLite）+ CAS 协调 + Reaper + Supervisor Tree；SurpriseIndex Calculator + MEMF + GraphRAG（Tier0: Mini-Batch K-Means / Tier1+: DBSCAN）+ Reflexion + Rollout + PromptOptimizer；QLoRA Adapter（FeatureQLoRA 门控）+ PRM + Swarm Topology
 - **L3 governance/edge**: EvalCase + 五层 Evaluator + TrajectoryRecorder/Replayer + ShadowExecutor + 合成数据生成；HTTP/SSE + HITL Gateway + TaskQueue + ResourceGovernor + CLI
 

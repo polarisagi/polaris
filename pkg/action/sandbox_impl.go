@@ -13,7 +13,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
-// SandboxProvider 是沙箱执行抽象接口，允许对 Wasm/InProcess/Container 分别实现。
+// SandboxProvider 是沙箱执行抽象接口，允许对 InProcess/Container 分别实现。
 // 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.2
 type SandboxProvider interface {
 	// Run 执行工具并返回结果。spec 描述执行约束。
@@ -27,8 +27,8 @@ type SandboxSpec struct {
 	SandboxTier  protocol.SandboxTier
 	Capability   protocol.CapabilityLevel
 	SideEffects  []protocol.SideEffect
-	WasmPath     string   // SandboxTier=Wasm 时必填
-	WasmBytes    []byte   // 直接传入的 Wasm 字节码 (主要用于测试或直接下发)
+	ScriptPath   string   // TypeScript/Python 脚本路径（L3 Container 执行时使用）
+	ScriptBytes  []byte   // 脚本源码（测试或直接下发时使用）
 	AllowedPaths []string // 文件系统白名单
 	CPUQuotaMs   int      // 0 = 默认 5000ms
 	IOBudget     int64    // 0 = 默认 8MB
@@ -178,63 +178,11 @@ func (s *InProcessSandbox) Execute(ctx context.Context, toolName string, input [
 	return fn(ctx, input)
 }
 
-// ─── Tier 2: WasmSandbox ─────────────────────────────────────────────────────
-
-// WasmSandbox 通过 wazero 执行 Wasm 二进制。
-// MVP: wazero 实体由 Rust 编译生成，目前以 stub 验证集成路径。
-// 适用于: protocol.ToolMCP / ToolA2A / ToolLLMGenerated
-// 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.3
-type WasmSandbox struct {
-	runtime *WazeroRuntime
-}
-
-func NewWasmSandbox(ctx context.Context, concurrency int) *WasmSandbox {
-	return &WasmSandbox{
-		runtime: NewWazeroRuntime(ctx, concurrency),
-	}
-}
-
-// Level 返回沙箱级别（实现 protocol.SandboxProvider）。
-func (s *WasmSandbox) Level() int { return 2 }
-
-func (s *WasmSandbox) PreWarmCache(skillID string, wasmBytes []byte) error {
-	return s.runtime.PreWarmCache(skillID, wasmBytes)
-}
-
-func (s *WasmSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol.ToolResult, error) {
-	quotaMs := spec.CPUQuotaMs
-	if quotaMs == 0 {
-		quotaMs = 5000
-	}
-	ioBudget := spec.IOBudget
-	if ioBudget == 0 {
-		ioBudget = 8 * 1024 * 1024 // 8MB
-	}
-	maxCalls := spec.MaxCalls
-	if maxCalls == 0 {
-		maxCalls = 10000
-	}
-
-	config := &ExecuteConfig{
-		Capability:     int(spec.Capability),
-		SandboxTier:    int(spec.SandboxTier),
-		CPUQuotaMs:     quotaMs,
-		WallClockLimit: quotaMs * 3,
-		IOBudgetBytes:  ioBudget,
-		MaxHostCall:    maxCalls,
-		AllowedPaths:   spec.AllowedPaths,
-		WasmBytes:      spec.WasmBytes,
-	}
-
-	return s.runtime.RunWasm(ctx, spec.ToolName, spec.Input, config, protocol.TaintNone)
-}
-
 // ─── Tier 3: ContainerSandbox ────────────────────────────────────────────────
 
 // ContainerSandbox 通过 OS 子进程（未来集成 gVisor/Docker）执行特权工具。
 // 当前 MVP 实现：通过 exec.Command 在限制环境中执行二进制。
-// 适用于: protocol.CapPrivileged + protocol.SideProcessSpawn
-// 约束: Tier 0 (8GB Linux) + 非 Linux 回退至 WasmSandbox
+// 适用于: protocol.CapPrivileged / TypeScript 脚本技能 / LLM 生成代码执行
 type ContainerSandbox struct {
 	binPath  string // 沙箱执行器二进制路径（如 /usr/local/bin/polaris-sandbox）
 	platform string
@@ -333,20 +281,19 @@ func buildWSL2Cmd(ctx context.Context, binPath string, spec SandboxSpec) *exec.C
 // ─── SandboxRouter ────────────────────────────────────────────────────────────
 
 // SandboxRouter 根据 SandboxSpec.SandboxTier 路由至对应沙箱实现。
+// 内置工具走 InProcess（直接 Go 调用）；LLM 生成代码/插件走 Container。
 // 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.2 三层矩阵
 type SandboxRouter struct {
 	inProcess *InProcessSandbox
-	wasm      *WasmSandbox
 	container *ContainerSandbox
 	remote    *RemoteSandbox // L4：可选，Tier-0 OOM 逃生路径
 	goos      string         // "darwin" | "linux" | "windows"
 	hwTier    int            // 0 = Tier 0 (8GB) 主线
 }
 
-func NewSandboxRouter(inProcess *InProcessSandbox, wasm *WasmSandbox, container *ContainerSandbox, goos string, hwTier int) *SandboxRouter {
+func NewSandboxRouter(inProcess *InProcessSandbox, container *ContainerSandbox, goos string, hwTier int) *SandboxRouter {
 	return &SandboxRouter{
 		inProcess: inProcess,
-		wasm:      wasm,
 		container: container,
 		goos:      goos,
 		hwTier:    hwTier,
@@ -369,25 +316,14 @@ func (r *SandboxRouter) Route(tool protocol.Tool) SandboxProvider {
 		if r.remote != nil {
 			return r.remote
 		}
-		// 未配置远端，降级到 container/wasm/inProcess 链
 		fallthrough
-	case protocol.SandboxContainer:
+	case protocol.SandboxContainer, protocol.SandboxWasm:
 		if r.container != nil {
 			return r.container
 		}
-		// Tier-0 非 Linux 无 L3：优先走 Remote（逃生路径），再降 L2
 		if r.remote != nil {
 			return r.remote
 		}
-		if r.wasm != nil {
-			return r.wasm
-		}
-		return r.inProcess
-	case protocol.SandboxWasm:
-		if r.wasm != nil {
-			return r.wasm
-		}
-		// L2Sandbox 被 FeatureGate 禁用时降级到 in-process
 		return r.inProcess
 	default: // SandboxInProcess
 		return r.inProcess

@@ -23,7 +23,7 @@ type TierParameters struct {
 	SkillPreloadBronze         int `json:"skill_preload_bronze"`
 
 	// M7 Tool
-	WasmPoolMax       int `json:"wasm_pool_max"`
+	ScriptWorkerMax   int `json:"script_worker_max"`
 	MaxStreamBufferKB int `json:"max_stream_buffer_kb"`
 
 	// M8 Multi-Agent
@@ -63,7 +63,7 @@ func (ac *AutoConfig) computeTierParameters(p *TierParameters) {
 		p.SkillPreloadGold = 20
 		p.SkillPreloadSilver = 80
 		p.SkillPreloadBronze = 200
-		p.WasmPoolMax = 16
+		p.ScriptWorkerMax = 16
 		p.MaxStreamBufferKB = 1024
 		p.MaxBlackboardPending = 1024
 		p.MaxCoordinationToken = 500000
@@ -90,7 +90,7 @@ func (ac *AutoConfig) computeTierParameters(p *TierParameters) {
 		p.SkillPreloadGold = 15
 		p.SkillPreloadSilver = 60
 		p.SkillPreloadBronze = 150
-		p.WasmPoolMax = 12
+		p.ScriptWorkerMax = 12
 		p.MaxStreamBufferKB = 1024
 		p.MaxBlackboardPending = 512
 		p.MaxCoordinationToken = 350000
@@ -117,7 +117,7 @@ func (ac *AutoConfig) computeTierParameters(p *TierParameters) {
 		p.SkillPreloadGold = 10
 		p.SkillPreloadSilver = 40
 		p.SkillPreloadBronze = 100
-		p.WasmPoolMax = 8
+		p.ScriptWorkerMax = 8
 		p.MaxStreamBufferKB = 512
 		p.MaxBlackboardPending = 256
 		p.MaxCoordinationToken = 200000
@@ -144,7 +144,7 @@ func (ac *AutoConfig) computeTierParameters(p *TierParameters) {
 		p.SkillPreloadGold = 5
 		p.SkillPreloadSilver = 20
 		p.SkillPreloadBronze = 25
-		p.WasmPoolMax = 4
+		p.ScriptWorkerMax = 4
 		p.MaxStreamBufferKB = 256
 		p.MaxBlackboardPending = 128
 		p.MaxCoordinationToken = 100000
@@ -174,8 +174,8 @@ func (p *TierParameters) Param(name string) int { //nolint:gocyclo
 		return p.MemL0CacheMB
 	case "graph_max_depth":
 		return p.GraphMaxDepth
-	case "wasm_pool_max":
-		return p.WasmPoolMax
+	case "script_worker_max":
+		return p.ScriptWorkerMax
 	case "max_stream_buffer_kb":
 		return p.MaxStreamBufferKB
 	case "pipeline_concurrency":

@@ -90,8 +90,8 @@ type M6SkillThresholds struct {
 type M7ToolThresholds struct {
 	DefaultSandboxLevel        int  `toml:"sandbox.default_level"` // 2
 	DryRunEnabled              bool `toml:"sandbox.dry_run_enabled"`
-	MaxWasmMemoryMB            int  `toml:"wasm.max_memory_mb"`            // 256
-	MaxWasmWallclockS          int  `toml:"wasm.max_wallclock_s"`          // 60
+	MaxScriptMemoryMB          int  `toml:"script.max_memory_mb"`          // 256
+	MaxScriptWallclockS        int  `toml:"script.max_wallclock_s"`        // 60
 	DryRunProtectWindowSeconds int  `toml:"dryrun.protect_window_seconds"` // 60
 }
 
@@ -226,10 +226,10 @@ func DefaultThresholds() Thresholds {
 			SkillExecTimeoutMedHighSeconds: 120,
 		},
 		M7Tool: M7ToolThresholds{
-			DefaultSandboxLevel:        2,
+			DefaultSandboxLevel:        3,
 			DryRunEnabled:              true,
-			MaxWasmMemoryMB:            256,
-			MaxWasmWallclockS:          60,
+			MaxScriptMemoryMB:          256,
+			MaxScriptWallclockS:        60,
 			DryRunProtectWindowSeconds: 60,
 		},
 		M8Orchestrator: M8OrchestratorThresholds{

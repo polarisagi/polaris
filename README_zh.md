@@ -92,7 +92,7 @@ Telegram · Discord · Slack · 飞书 · 钉钉 · 企业微信 · Matrix · Ma
 
 - **五级污点传播**（TaintNone → TaintHigh）贯穿全链路，外部数据不进指令区
 - **Cedar 策略引擎**（purego FFI，无 CGO）用于工具调用授权
-- **三级沙箱**（InProcess / Wasm-wazero / Container）按风险等级隔离执行
+- **三级沙箱**（InProcess / Rust / Container）按风险等级隔离；内置工具直接信任，不走沙箱
 - **SafeDialer SSRF 防护**，屏蔽内网 RFC 地址段
 - **KillSwitch 三阶段熔断**，支持进程级、模型级、会话级停止
 

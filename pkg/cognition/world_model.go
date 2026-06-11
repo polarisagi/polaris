@@ -124,10 +124,10 @@ func (wm *WorldModel) ShouldSkipLLM(currentState string) bool {
 	return confidence > 0.8
 }
 
-// CounterfactualEngine Wasm 沙箱反事实推演。
+// CounterfactualEngine 反事实推演（沙箱执行）。
 type CounterfactualEngine struct {
 	//nolint:unused
-	wasmRuntime any // wazero Runtime
+	scriptRuntime any // Container 脚本执行运行时
 }
 
 // SimulationRuntime VCR 优先 ([Storage-SurrealDB-Core] KV 真实快照回放)。

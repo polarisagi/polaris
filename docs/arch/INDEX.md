@@ -8,7 +8,7 @@
 |------|----|---------|----------|
 | `spec/state.yaml` | SSoT 规约 | 52K | 状态机 + 全模块阈值（唯一权威） |
 | `M11-Policy-Safety.md` | L0 策略 | 41K | 五防线、Cedar、TaintedString、KillSwitch、PII Vault、SSRFGuard |
-| `M07-Tool-Action-Layer.md` | L1 工具 | 38K | MCP/A2A、wazero 三级沙箱、Capability Token、Workspace Bridge |
+| `M07-Tool-Action-Layer.md` | L1 工具 | 38K | MCP/A2A、Rust 沙箱三级分级、Capability Token、Workspace Bridge |
 | `M02-Storage-Fabric.md` | L0 存储 | 29K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
 | `M05-Memory-System.md` | L1 记忆 | 31K | 四层记忆、ContextAssembler、HybridRetriever、Consolidation |
 | `ARCHITECTURE.md` | 总览 | 10K | SSoT 锚点: 定位/硬约束、Staging 7 阶段、HT0 预算、变更控制、配置层 |

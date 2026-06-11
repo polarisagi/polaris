@@ -18,14 +18,14 @@ func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) protocol.San
 	case protocol.ToolBuiltin:
 		minTier = protocol.SandboxInProcess
 	case protocol.ToolLLMGenerated:
-		minTier = protocol.SandboxWasm
+		minTier = protocol.SandboxContainer
 	case protocol.ToolMCP, protocol.ToolA2A:
-		minTier = protocol.SandboxWasm
+		minTier = protocol.SandboxContainer
 	}
 
 	tier := minTier
 	if tool.Capability >= protocol.CapWriteNetwork {
-		tier = protocol.SandboxWasm
+		tier = protocol.SandboxContainer
 	}
 	if tool.Capability >= protocol.CapPrivileged {
 		tier = protocol.SandboxContainer
@@ -35,9 +35,6 @@ func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) protocol.San
 		tier = protocol.SandboxContainer
 	}
 
-	if tier == protocol.SandboxContainer && hwTier == 0 && goos != "linux" {
-		return protocol.SandboxWasm // L2 Wasm + OS 原生沙箱
-	}
 	return tier
 }
 

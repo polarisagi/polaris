@@ -92,7 +92,7 @@ Telegram · Discord · Slack · Feishu · DingTalk · WeCom · Matrix · Matterm
 
 - **5-level taint propagation** (TaintNone → TaintHigh) across the full chain — external data never enters the instruction zone
 - **Cedar policy engine** (via purego FFI, no CGO) for tool call authorization
-- **3-tier sandbox** (InProcess / Wasm-wazero / Container) with risk-based isolation
+- **3-tier sandbox** (InProcess / Rust-backed / Container) with risk-based isolation; built-in tools run trusted in-process
 - **SafeDialer SSRF protection** — blocks RFC-defined private address ranges (including CGNAT 100.64.0.0/10)
 - **KillSwitch 3-phase circuit breaker** — process-level, model-level, session-level stops
 

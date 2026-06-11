@@ -232,7 +232,7 @@ sequenceDiagram
     participant M4 as M4 Executor
     participant M7 as M7 ToolRegistry
     participant M11 as M11 PolicyGate
-    participant Sbx as M7 Sandbox (wazero)
+    participant Sbx as M7 Sandbox (Rust)
     participant M3 as M3 OTel/Audit
     
     M4->>M7: ExecuteTool(req, taintLevel)

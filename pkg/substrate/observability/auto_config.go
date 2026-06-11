@@ -37,7 +37,7 @@ type AutoConfigResult struct {
 	// Sandbox
 	L3SandboxAvailable bool   `json:"l3_sandbox_available"`
 	L3SandboxBackend   string `json:"l3_sandbox_backend"`
-	WasmConcurrency    int    `json:"wasm_concurrency"`
+	ScriptWorkers      int    `json:"script_workers"`
 
 	// Training (M9)
 	QLoRAEnabled   bool   `json:"qlora_enabled"`
@@ -131,13 +131,13 @@ func (ac *AutoConfig) computeSandboxConfig(c *AutoConfigResult) {
 
 	switch {
 	case c.Tier >= Tier3:
-		c.WasmConcurrency = 16
+		c.ScriptWorkers = 16
 	case c.Tier >= Tier2:
-		c.WasmConcurrency = 12
+		c.ScriptWorkers = 12
 	case c.Tier >= Tier1:
-		c.WasmConcurrency = 8
+		c.ScriptWorkers = 8
 	default:
-		c.WasmConcurrency = 4
+		c.ScriptWorkers = 4
 	}
 }
 
@@ -225,14 +225,14 @@ func (ac *AutoConfig) Summary() string {
 	return fmt.Sprintf(
 		"AutoConfig: tier=T%d(%s) ram=%dMB(avail=%dMB) cpu=%d arch=%s os=%s provider=%s "+
 			"local_model=%s(autoload=%v) qlora=%s(enabled=%v) l3_sandbox=%s(backend=%s) "+
-			"wasm_workers=%d storage=%v",
+			"script_workers=%d storage=%v",
 		c.Tier, c.TierReason, c.TotalRAMMB, c.AvailableRAMMB,
 		c.CPUCores, c.CPUArch, c.OS,
 		c.DefaultProvider,
 		c.LocalModelID, c.LocalModelAutoLoad,
 		c.QLoRAModelSize, c.QLoRAEnabled,
 		map[bool]string{true: "yes", false: "no"}[c.L3SandboxAvailable], c.L3SandboxBackend,
-		c.WasmConcurrency, c.StorageEngines,
+		c.ScriptWorkers, c.StorageEngines,
 	)
 }
 

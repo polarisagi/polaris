@@ -25,7 +25,7 @@ type SkillInfo struct {
 	Version     string `json:"version"`
 	Enabled     bool   `json:"enabled"`
 	ExecMode    string `json:"exec_mode"`           // "tool" | "ambient"
-	Source      string `json:"source"`              // "builtin" | "script" | "wasm"
+	Source      string `json:"source"`              // "builtin" | "script"
 	PluginID    string `json:"plugin_id,omitempty"` // 来自插件时填充
 }
 
@@ -161,8 +161,8 @@ func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Version     string `json:"version"`
-		Runtime     string `json:"runtime"` // "wasm"
-		Payload     []byte `json:"payload"` // Base64 Wasm bytes
+		Runtime    string `json:"runtime"`    // "script" | "builtin"
+		ScriptPath string `json:"script_path"` // 技能脚本安装路径
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -174,6 +174,7 @@ func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 		Name:       req.Name,
 		Version:    req.Version,
 		Runtime:    req.Runtime,
+		ScriptPath: req.ScriptPath,
 		Deprecated: false,
 	}
 

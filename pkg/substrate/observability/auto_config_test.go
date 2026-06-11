@@ -313,7 +313,7 @@ func TestTierParameters_AllTiers(t *testing.T) {
 		totalRAM   uint64
 		wantMaxDAG int
 		wantAgents int
-		wantWasm   int
+		wantScriptWorkers int
 	}{
 		{8 * gb, 4, 3, 4},
 		{16 * gb, 8, 5, 8},
@@ -333,8 +333,8 @@ func TestTierParameters_AllTiers(t *testing.T) {
 		if p.MaxAgents != tt.wantAgents {
 			t.Errorf("%s: MaxAgents=%d, want %d", tierName, p.MaxAgents, tt.wantAgents)
 		}
-		if p.WasmPoolMax != tt.wantWasm {
-			t.Errorf("%s: WasmPoolMax=%d, want %d", tierName, p.WasmPoolMax, tt.wantWasm)
+		if p.ScriptWorkerMax != tt.wantScriptWorkers {
+			t.Errorf("%s: ScriptWorkerMax=%d, want %d", tierName, p.ScriptWorkerMax, tt.wantScriptWorkers)
 		}
 	}
 }
@@ -348,8 +348,8 @@ func TestTierParameters_ParamLookup(t *testing.T) {
 	if v := p.Param("max_concurrent_dag_nodes"); v != 8 {
 		t.Errorf("max_concurrent_dag_nodes: got %d, want 8", v)
 	}
-	if v := p.Param("wasm_pool_max"); v != 8 {
-		t.Errorf("wasm_pool_max: got %d, want 8", v)
+	if v := p.Param("script_worker_max"); v != 8 {
+		t.Errorf("script_worker_max: got %d, want 8", v)
 	}
 	if v := p.Param("nonexistent"); v != 0 {
 		t.Errorf("nonexistent: got %d, want 0", v)
