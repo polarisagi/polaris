@@ -246,8 +246,13 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 	exePath, _ = filepath.EvalSymlinks(exePath)
 
 	newBinPath := exePath + ".new"
-	if err := extractBinary(archivePath, newBinPath); err != nil {
+	newLibDir := filepath.Join(filepath.Dir(exePath), "lib.new")
+	os.RemoveAll(newLibDir) // 清理可能残留的临时目录
+	os.MkdirAll(newLibDir, 0o755)
+
+	if err := extractFiles(archivePath, newBinPath, newLibDir); err != nil {
 		os.Remove(newBinPath) //nolint:errcheck
+		os.RemoveAll(newLibDir) //nolint:errcheck
 		os.Remove(archivePath)
 		m.setError("extract failed: " + err.Error())
 		return
@@ -256,26 +261,44 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 
 	if err := os.Chmod(newBinPath, 0o755); err != nil {
 		os.Remove(newBinPath) //nolint:errcheck
+		os.RemoveAll(newLibDir) //nolint:errcheck
 		m.setError("chmod failed: " + err.Error())
 		return
 	}
 
+	// 准备替换 lib 目录
+	targetLibDir := filepath.Join(filepath.Dir(exePath), "lib")
+	
 	// 原子替换（Unix 可替换运行中文件；Windows 需延迟脚本）
 	if err := os.Rename(newBinPath, exePath); err != nil {
 		if goos == "windows" {
-			if scriptErr := writeWindowsUpdateScript(exePath, newBinPath); scriptErr != nil {
+			if scriptErr := writeWindowsUpdateScript(exePath, newBinPath, targetLibDir, newLibDir); scriptErr != nil {
 				os.Remove(newBinPath) //nolint:errcheck
+				os.RemoveAll(newLibDir) //nolint:errcheck
 				m.setError("replace failed (windows): " + err.Error())
 				return
 			}
 		} else {
 			os.Remove(newBinPath) //nolint:errcheck
+			os.RemoveAll(newLibDir) //nolint:errcheck
 			m.setError("replace failed: " + err.Error())
 			return
 		}
+	} else {
+		// Unix 环境下，二进制替换成功后替换 lib 目录
+		// Unix 不支持跨目录 Rename 到一个非空目录，所以先将新文件移动进去
+		files, _ := os.ReadDir(newLibDir)
+		os.MkdirAll(targetLibDir, 0o755)
+		for _, f := range files {
+			srcFile := filepath.Join(newLibDir, f.Name())
+			dstFile := filepath.Join(targetLibDir, f.Name())
+			os.Remove(dstFile) // 先移除旧的（如果是 running 的 .so，Remove 只会 unlink inode）
+			os.Rename(srcFile, dstFile)
+		}
+		os.RemoveAll(newLibDir)
 	}
 
-	slog.Info("updater: binary replaced, restarting", "path", exePath)
+	slog.Info("updater: binary and libs replaced, restarting", "path", exePath)
 	m.setStatus(StatusRestarting)
 
 	time.Sleep(500 * time.Millisecond)
@@ -354,18 +377,24 @@ func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, arch
 	return nil
 }
 
-// extractBinary 从归档中提取 polaris 二进制到 destPath。
-func extractBinary(archivePath, destPath string) error {
+// extractFiles 从归档中提取 polaris 二进制和 lib 目录。
+func extractFiles(archivePath, destBinPath, destLibDir string) error {
 	binaryNames := map[string]bool{"polaris": true, "polaris.exe": true}
 	mapper := func(name string) (string, bool) {
-		if binaryNames[filepath.Base(name)] {
-			return destPath, true
+		nameStr := filepath.ToSlash(name)
+		if binaryNames[filepath.Base(nameStr)] && !strings.Contains(nameStr, "/") {
+			// 根目录的二进制文件
+			return destBinPath, true
+		}
+		if strings.HasPrefix(nameStr, "lib/") {
+			// lib 目录下的文件
+			return filepath.Join(destLibDir, filepath.Base(nameStr)), true
 		}
 		return "", false
 	}
 
 	if strings.HasSuffix(archivePath, ".zip") {
-		return downloader.ExtractZip(archivePath, filepath.Dir(destPath), mapper)
+		return downloader.ExtractZip(archivePath, filepath.Dir(destBinPath), mapper)
 	}
 	f, err := os.Open(archivePath)
 	if err != nil {
@@ -380,13 +409,17 @@ func defaultRestart(exePath string) {
 	os.Exit(0)
 }
 
-func writeWindowsUpdateScript(exePath, newBinPath string) error {
+func writeWindowsUpdateScript(exePath, newBinPath, targetLibDir, newLibDir string) error {
 	script := fmt.Sprintf(`@echo off
 timeout /t 2 /nobreak >nul
 move /Y "%s" "%s"
+if exist "%s" (
+    xcopy /Y /E /Q "%s\*" "%s\"
+    rmdir /S /Q "%s"
+)
 start "" "%s"
 del "%%~f0"
-`, newBinPath, exePath, exePath)
+`, newBinPath, exePath, newLibDir, newLibDir, targetLibDir, newLibDir, exePath)
 	scriptPath := exePath + ".update.bat"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		return err
