@@ -1,4 +1,4 @@
-package storage
+package substrate
 
 import (
 	"context"
@@ -8,19 +8,18 @@ import (
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/pb"
-	"github.com/polarisagi/polaris/pkg/substrate"
 )
 
 // SQLiteEventLog 实现了 protocol.EventLogger。
 // 所有写入请求通过 MutationBus 单写者进行序列化，以保证全局时序 (offset)。
 type SQLiteEventLog struct {
-	writer *substrate.DatabaseWriter
+	writer *DatabaseWriter
 }
 
 var _ protocol.EventLogger = (*SQLiteEventLog)(nil)
 
 // NewSQLiteEventLog 创建基于 SQLite MutationBus 的 EventLogger
-func NewSQLiteEventLog(writer *substrate.DatabaseWriter) *SQLiteEventLog {
+func NewSQLiteEventLog(writer *DatabaseWriter) *SQLiteEventLog {
 	return &SQLiteEventLog{writer: writer}
 }
 
@@ -32,7 +31,7 @@ func (l *SQLiteEventLog) AppendEvent(ctx context.Context, ev *pb.Event) error {
 	}
 
 	resultCh := make(chan error, 1)
-	intent := &substrate.MutationIntent{
+	intent := &MutationIntent{
 		Table:     "events",
 		Operation: "insert_event", // 会触发 executeInsertEvent
 		Payload:   payload,

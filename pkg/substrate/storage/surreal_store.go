@@ -38,7 +38,6 @@ var (
 	surrealKvScan                   func(prefix *byte, prefixLen uintptr, outJSON *uintptr) int32
 	surrealVecUpsert                func(id string, embed *float32, dim uintptr) int32
 	surrealVecKnn                   func(query *float32, dim uintptr, k uintptr, outJSON *uintptr) int32
-	surrealVecSetMode               func(mode int32) int32
 	surrealGraphRelate              func(fromID, edgeType, toID string, weight float64) int32
 	surrealGraphTraverse            func(startID, edgeType string, maxDepth uintptr, outJSON *uintptr) int32
 	surrealGraphSpreadingActivation func(startIDsJSON string, maxDepth uintptr, energyDecay float64, dormancyThreshold float64, fanOutLimit uintptr, outJSON *uintptr) int32
@@ -62,7 +61,6 @@ func bindSurreal() error {
 		purego.RegisterLibFunc(&surrealKvScan, lib, "surreal_kv_scan")
 		purego.RegisterLibFunc(&surrealVecUpsert, lib, "surreal_vec_upsert")
 		purego.RegisterLibFunc(&surrealVecKnn, lib, "surreal_vec_knn")
-		purego.RegisterLibFunc(&surrealVecSetMode, lib, "surreal_vec_set_mode")
 		purego.RegisterLibFunc(&surrealGraphRelate, lib, "surreal_graph_relate")
 		purego.RegisterLibFunc(&surrealGraphTraverse, lib, "surreal_graph_traverse")
 		purego.RegisterLibFunc(&surrealGraphSpreadingActivation, lib, "surreal_graph_spreading_activation")

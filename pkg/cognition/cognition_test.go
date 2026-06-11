@@ -10,8 +10,7 @@ import (
 // ─── ContextAssembler ────────────────────────────────────────────────────────
 
 func TestBuildContext_ZoneCount(t *testing.T) {
-	wm := &WorkingMemory{}
-	layout := BuildContext(wm, 8000)
+	layout := BuildContext(nil, 8000)
 	if layout == nil {
 		t.Fatal("expected non-nil layout")
 	}
@@ -21,8 +20,7 @@ func TestBuildContext_ZoneCount(t *testing.T) {
 }
 
 func TestBuildContext_TokenBudget(t *testing.T) {
-	wm := &WorkingMemory{}
-	layout := BuildContext(wm, 1000)
+	layout := BuildContext(nil, 1000)
 	total := 0
 	for _, z := range layout.zones {
 		total += z.MaxTokens
@@ -34,8 +32,7 @@ func TestBuildContext_TokenBudget(t *testing.T) {
 }
 
 func TestBuildContext_FirstZoneIsImmutable(t *testing.T) {
-	wm := &WorkingMemory{}
-	layout := BuildContext(wm, 4096)
+	layout := BuildContext(nil, 4096)
 	if len(layout.zones) == 0 {
 		t.Fatal("no zones")
 	}
@@ -45,8 +42,7 @@ func TestBuildContext_FirstZoneIsImmutable(t *testing.T) {
 }
 
 func TestBuildContext_LastZoneIsOutput(t *testing.T) {
-	wm := &WorkingMemory{}
-	layout := BuildContext(wm, 4096)
+	layout := BuildContext(nil, 4096)
 	last := layout.zones[len(layout.zones)-1]
 	if !last.Output {
 		t.Error("expected last zone to be output buffer")

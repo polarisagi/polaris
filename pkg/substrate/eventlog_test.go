@@ -1,4 +1,4 @@
-package storage
+package substrate
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol/pb"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
-	"github.com/polarisagi/polaris/pkg/substrate"
+	"github.com/polarisagi/polaris/pkg/substrate/storage"
 )
 
 func TestEventLogger(t *testing.T) {
@@ -21,7 +21,7 @@ func TestEventLogger(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "polaris.db")
-	store, err := OpenSQLite(dbPath, schema.FS)
+	store, err := storage.OpenSQLite(dbPath, schema.FS)
 	if err != nil {
 		t.Fatalf("OpenSQLite failed: %v", err)
 	}
@@ -29,8 +29,7 @@ func TestEventLogger(t *testing.T) {
 
 	// 准备 MutationBus 和 EventLogger
 	// OpenSQLite 会返回 *SQLiteStore，里面的 db 可以通过暴露出 GetDB 或者直接强制转换，或者我们在 store.go 里面加一个 DB() 方法。
-	// 这里因为是同一个包，可以直接访问 store.db。
-	writer := substrate.NewDatabaseWriter(store.db, nil)
+	writer := NewDatabaseWriter(store.DB(), nil)
 	// 启动 worker
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -59,7 +58,7 @@ func TestEventLogger(t *testing.T) {
 
 	// 验证落盘
 	var count int
-	if err := store.db.QueryRow("SELECT COUNT(*) FROM events WHERE id = ?", ev.Id).Scan(&count); err != nil {
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM events WHERE id = ?", ev.Id).Scan(&count); err != nil {
 		t.Fatalf("QueryRow failed: %v", err)
 	}
 	if count != 1 {

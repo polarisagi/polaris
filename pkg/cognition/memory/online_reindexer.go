@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"runtime"
+	"strconv"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
@@ -20,12 +21,13 @@ type Embedder interface {
 }
 
 // OnlineReindexer 后台批量更新 episodic_events.embedding + embed_model_version。
-// 触发条件: embed_model_version = ”（未索引）或 != 当前版本（版本切换）。
+// 触发条件: embed_model_version = “（未索引）或 != 当前版本（版本切换）。
 // Tier 0 BM25+Simhash 路径不受影响——失败仅降级，不阻断检索（inv_M5_03）。
 type OnlineReindexer struct {
 	db        *sql.DB
 	embedder  Embedder
 	batchSize int
+	cognitive CognitiveSearcher // Tier1+：SurrealDB HNSW 写入，nil 时仅更新 SQLite BLOB
 }
 
 const defaultReindexBatchSize = 50
@@ -39,6 +41,17 @@ func NewOnlineReindexer(db *sql.DB, embedder Embedder) *OnlineReindexer {
 	}
 }
 
+// NewOnlineReindexerWithCognitive 创建含 SurrealDB HNSW 写入的重建索引器（Tier1+）。
+// 每批 embedding 计算完成后，同步写入 SurrealDB HNSW 向量索引（不影响 SQLite BLOB 路径）。
+func NewOnlineReindexerWithCognitive(db *sql.DB, embedder Embedder, cognitive CognitiveSearcher) *OnlineReindexer {
+	return &OnlineReindexer{
+		db:        db,
+		embedder:  embedder,
+		batchSize: defaultReindexBatchSize,
+		cognitive: cognitive,
+	}
+}
+
 // Run 执行一批重建索引。返回 (已处理数, 是否还有未索引条目, error)。
 // 调用方在后台 goroutine 中循环调用，remaining=false 时停止。
 // 单条失败不中断整批（best-effort，与 Consolidation Stage 2 原则一致）。
@@ -47,7 +60,7 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 
 	// idx_ep_embed_ver 偏索引（WHERE embed_model_version = ''）加速扫描
 	rows, queryErr := r.db.QueryContext(ctx,
-		`SELECT id, content FROM episodic_events
+		`SELECT id, event_uuid, content FROM episodic_events
 		 WHERE embed_model_version = '' OR embed_model_version != ?
 		 LIMIT ?`,
 		version, r.batchSize,
@@ -58,13 +71,14 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 	defer rows.Close()
 
 	type entry struct {
-		id      int64
-		content string
+		id        int64
+		eventUUID string // 原始 Event.ID（UUID），供 SurrealDB VecUpsert 使用；空时回退到整数串
+		content   string
 	}
 	var batch []entry
 	for rows.Next() {
 		var e entry
-		if scanErr := rows.Scan(&e.id, &e.content); scanErr == nil {
+		if scanErr := rows.Scan(&e.id, &e.eventUUID, &e.content); scanErr == nil {
 			batch = append(batch, e)
 		}
 	}
@@ -90,6 +104,18 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 		); updateErr != nil {
 			slog.Warn("reindexer: update failed", "id", e.id, "err", updateErr)
 			continue
+		}
+		// SurrealDB HNSW 同步写入（Tier1+）；失败不阻断 SQLite BLOB 路径（Tier0 继续可用）
+		if r.cognitive != nil {
+			// docID 优先用 event_uuid（与 FTSIndex 写入时一致），为空时降级到整数串
+			docID := e.eventUUID
+			if docID == "" {
+				docID = strconv.FormatInt(e.id, 10)
+			}
+			if upsertErr := r.cognitive.VecUpsert(docID, vec); upsertErr != nil {
+				slog.Warn("reindexer: surreal vec_upsert failed, degrading to SQLite-only path",
+					"id", e.id, "err", upsertErr)
+			}
 		}
 		processed++
 		runtime.Gosched() // 批内让出调度，避免长时间独占 goroutine

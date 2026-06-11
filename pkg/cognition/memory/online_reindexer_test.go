@@ -43,7 +43,8 @@ func newTestDB(t *testing.T) *sql.DB {
 			salience            REAL    NOT NULL DEFAULT 0.5,
 			decay_weight        REAL    NOT NULL DEFAULT 1.0,
 			occurred_at         INTEGER,
-			embed_model_version TEXT    NOT NULL DEFAULT ''
+			embed_model_version TEXT    NOT NULL DEFAULT '',
+			event_uuid          TEXT    NOT NULL DEFAULT ''
 		)
 	`)
 	if err != nil {

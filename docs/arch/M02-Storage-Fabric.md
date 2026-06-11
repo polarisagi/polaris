@@ -344,12 +344,12 @@ Outbox Worker 消费事件走写连接（保证读己写）。Agent 查询 Episo
     > **后端选择策略（运行时配置，`configs/defaults.toml [cognition]`）**
     > - **surreal-mem（默认）**: `kv-mem` 后端，任意内存机器可用（最低 512MB 总内存）；`vec_max` 启动时按可用内存自动计算；进程重启数据丢失，由 SQLite Outbox 投影恢复（§2.5）。
     > - **surreal-rocksdb（显式配置）**: `kv-rocksdb` 后端，要求 ≥16GB；数据持久化落盘 `~/.polarisagi/polaris/data/surreal.db`；需显式设置 `backend = "rocksdb"`。
-- 引擎: **[Storage-Ristretto]** (纯 Go)
-  - 用途: 热缓存轴。纯内存态的 L0 Working Memory。
+- 引擎: **[Storage-Native]** (纯 Go 内存原生结构)
+  - 用途: 热缓存轴。纯内存态的 L0 Working Memory，使用 `sync.Map` 和原生切片，满足 8GB 内存 (Tier-0) 约束。
 
 ## 11. 四层记忆 → 存储绑定
 
-- 记忆层: L0 Working Memory | 物理存储: sync.Map / ristretto + Immutable Core | 持久化: 否
+- 记忆层: L0 Working Memory | 物理存储: 进程内原生 ContextWindow(Slice) + ScratchPad(sync.Map) [Tier-0] + Immutable Core | 持久化: 否
 - 记忆层: L1 Episodic Memory | 物理存储: [Storage-SQLite] events 表 + [Storage-SurrealDB-Core] embedding 列 + 时序 B-tree | 持久化: 是
 - 记忆层: L2 Semantic Memory | 物理存储: [Storage-SQLite] 邻接表 (entity + relation) + [Storage-SurrealDB-Core] | 持久化: 是
 - 记忆层: L3 Procedural Memory | 物理存储: [Storage-SurrealDB-Core] skill_id→SkillBytes + [Storage-SurrealDB-Core] | 持久化: 是

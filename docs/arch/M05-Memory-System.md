@@ -29,7 +29,7 @@
 
 ## 1. 四层记忆物理映射
 
-- 记忆层: L0 Working | 物理存储: 进程内 theine-go cache + Immutable Core(永不裁剪) + NotesStore(SQLite 持久化) | 读写比: 1:1000 | 延迟要求: <1µs
+- 记忆层: L0 Working | 物理存储: 进程内原生 ContextWindow(Slice) + ScratchPad(sync.Map) [Tier-0] + Immutable Core(永不裁剪) + NotesStore(SQLite 持久化) | 读写比: 1:1000 | 延迟要求: <1µs
 - 记忆层: L1 Episodic | 物理存储: [Storage-SQLite] session_events + [Storage-SurrealDB-Core] embedding 列 | 读写比: 100:1 | 延迟要求: 写<100µs, 读<5ms
 - 记忆层: L2 Semantic | 物理存储: [Storage-SurrealDB-Core] | 读写比: 1:50 | 延迟要求: <10ms
 - 记忆层: L3 Procedural | 物理存储: [Storage-SurrealDB-Core] skill_id→blob + [Storage-SurrealDB-Core] 语义检索 + 文件系统 SKILL.md | 读写比: 1:500 | 延迟要求: <10µs / <5ms
@@ -40,7 +40,7 @@
 
 ### 2.1 核心结构
 
-WorkingMemory/ImmutableCore/ActiveContext/Task/Observation/MemoryFragment 类型定义见 `pkg/cognition/memory/memory.go` 和 `pkg/cognition/memory/working_mem.go`。NotesStore 见 `pkg/cognition/memory/notes_store.go`；UserProfile 见 `pkg/swarm/persona_refiner.go`。
+WorkingMemory/ImmutableCore/ContextWindow/ScratchPad 接口定义见 `internal/protocol/interfaces.go`，实现见 `pkg/cognition/memory/working_mem.go`。NotesStore 见 `pkg/cognition/memory/notes_store.go`；UserProfile 见 `pkg/swarm/persona_refiner.go`。
 
 **写入权分离**: M11 Policy → ImmutableCore.SafetyConstraints; M9 PersonalizationWorker → ImmutableCore.UserPreferences + InteractionSummary; 用户显式 `/set` → UserPreferences; M5 Memory System → 仅读取，永不写入。
 

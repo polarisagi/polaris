@@ -145,6 +145,34 @@ func NewMemImplWithGraph(store protocol.Store, graph GraphTraverser) *MemImpl {
 	}
 }
 
+// NewMemImplFull 创建全功能 MemImpl（SurrealDB FTS+HNSW + Graph + SQL 全路径）。
+// 适用于 Tier1+（SurrealDB 可用时由 main.go 调用）。
+// cognitive 注入后：episodic 写入同步 FTS 索引，检索走 SurrealDB BM25+HNSW，图遍历启用。
+// db 同时驱动 SQLReflectionMem、SQLNotesStore、HybridRetrieverWithCognitive 全路径。
+func NewMemImplFull(store protocol.Store, graph GraphTraverser, cognitive CognitiveSearcher, db DBAccessor) *MemImpl {
+	indexer := NewEpisodicGraphIndexer(graph)
+	procedural := &ProceduralMem{skills: nil}
+	m := &MemImpl{
+		working:    NewWorkingMem(),
+		episodic:   NewEpisodicMemWithCognitive(store, indexer, cognitive),
+		semantic:   NewSemanticMem(store, nil),
+		procedural: procedural,
+	}
+	if db != nil {
+		sqlDB := db.DB()
+		if sqlDB != nil {
+			sqlRefl := NewSQLReflectionMem(sqlDB)
+			m.reflection = sqlRefl
+			m.working = NewWorkingMemWithDB(sqlDB)
+			m.retriever = NewHybridRetrieverWithCognitive(store, graph, nil, sqlRefl, cognitive)
+			return m
+		}
+	}
+	m.reflection = NewReflectionMem(store)
+	m.retriever = NewHybridRetrieverWithCognitive(store, graph, nil, nil, cognitive)
+	return m
+}
+
 // NewMemImplWithDB 创建含全 SQL 持久化的 MemImpl。
 // db 非 nil 时同时切换：
 //   - reflection → SQLReflectionMem（reflection_memory 表，索引加速跨会话查询）

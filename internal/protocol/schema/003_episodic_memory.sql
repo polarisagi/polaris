@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS episodic_events (
     decay_weight       REAL    NOT NULL DEFAULT 1.0,   -- 可 UPDATE，ForgettingManager 每日衰减
     occurred_at        INTEGER,
     embed_model_version TEXT   NOT NULL DEFAULT '',    -- 空字符串=未索引，OnlineReindexer 触发条件
+    event_uuid         TEXT    NOT NULL DEFAULT '',    -- 原始 Event.ID（UUID）；OutboxWorker 填充，供 SurrealDB VecUpsert/FTSIndex 使用
     UNIQUE(session_id, seq)
 );
 
@@ -31,6 +32,8 @@ CREATE INDEX IF NOT EXISTS idx_ep_occurred ON episodic_events(occurred_at, sessi
     WHERE occurred_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ep_embed_ver ON episodic_events(embed_model_version)
     WHERE embed_model_version = '';
+CREATE INDEX IF NOT EXISTS idx_ep_uuid ON episodic_events(event_uuid)
+    WHERE event_uuid != '';
 
 -- ----------------------------------------------------------------------------
 -- memory_group_mapping: 持续性记忆组映射（读时 LEFT JOIN，避免原位 UPDATE）

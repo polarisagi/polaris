@@ -1,4 +1,4 @@
-package storage
+package substrate
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
-	"github.com/polarisagi/polaris/pkg/substrate"
+	"github.com/polarisagi/polaris/pkg/substrate/storage"
 )
 
 func TestDecisionLogger(t *testing.T) {
@@ -22,14 +22,14 @@ func TestDecisionLogger(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "polaris.db")
-	store, err := OpenSQLite(dbPath, schema.FS)
+	store, err := storage.OpenSQLite(dbPath, schema.FS)
 	if err != nil {
 		t.Fatalf("OpenSQLite failed: %v", err)
 	}
 	defer store.Close()
 
 	// 准备 MutationBus 和 DecisionLogger
-	writer := substrate.NewDatabaseWriter(store.db, nil)
+	writer := NewDatabaseWriter(store.DB(), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go writer.Run(ctx)
@@ -61,7 +61,7 @@ func TestDecisionLogger(t *testing.T) {
 
 	// 验证落盘
 	var count int
-	if err := store.db.QueryRow("SELECT COUNT(*) FROM decision_log WHERE session_id = ? AND decision_type = ?", "sess-001", "route_model").Scan(&count); err != nil {
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM decision_log WHERE session_id = ? AND decision_type = ?", "sess-001", "route_model").Scan(&count); err != nil {
 		t.Fatalf("QueryRow failed: %v", err)
 	}
 	if count != 1 {

@@ -58,7 +58,7 @@
   "pkg/cognition/kernel/step_scorer.go": "3c92226b5c134309346853ecc42b3da2bf4c0d84434046de3646ed6d390b34d7",
   "pkg/cognition/kernel/transitions.go": "c92016d21af981e98043acdd6e84bf6a3fe67451453302e5fce202d39640c2c0",
   "pkg/substrate/observability/auto_config.go": "82f0b5aad8ede49b077db5af5b02a550cad32d750e689c50c2eb15dcaf8a99b4",
-  "pkg/substrate/observability/auto_config_test.go": "1b61647e254996a33a5c42f56155a640b2db9a0bbf36a5fbd7af65e84cf6c67b",
+  "pkg/substrate/observability/auto_config_test.go": "b584bb27795ad197668bee4646eaf1a23314918d08bff7e9715615d284683b71",
   "pkg/substrate/observability/doc.go": "bdaf53f8f007ef14f3250c03527cbf1ffff7d1c9445214f68f3495d5e0cff766",
   "pkg/substrate/observability/feature_gate.go": "a0f39c383df01b4dffe11e6660f68e5708da396dfabffff4135c4d02800c23b0",
   "pkg/substrate/observability/hardware_probe.go": "75003b2a46d0c662df95c5419cffe222d10f25db1265621d5e7e2a9e0fb6bb5c",

@@ -3,14 +3,6 @@ package cognition
 // 四层记忆类型定义。
 // 架构文档: docs/arch/05-Memory-System-深度选型.md §1-5
 
-// WorkingMemory L0 工作记忆。
-type WorkingMemory struct {
-	HotCache      map[string]any // theine-go S3-FIFO, ~50MB
-	Immutable     *ImmutableCore
-	Notes         *NotesStore
-	ActiveContext *ActiveContext
-}
-
 // ImmutableCore 不可变核心区（永不裁剪）。
 type ImmutableCore struct {
 	UserPreferences    map[string]string

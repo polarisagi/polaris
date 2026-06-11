@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"math"
 	"sort"
 	"strings"
@@ -21,12 +22,29 @@ type GraphTraverser interface {
 	GraphRelate(fromID, edgeType, toID string, weight float64) error
 }
 
+// CognitiveSearchResult 认知检索结果（consumer-side 类型，避免引入 substrate/storage 依赖）。
+type CognitiveSearchResult struct {
+	ID    string
+	Score float64
+}
+
+// CognitiveSearcher consumer-side 接口：SurrealDB FTS + HNSW 向量检索与索引写入（Tier1+）。
+// consumer-side 定义于 memory 包，防止与 substrate/storage 循环依赖。
+// nil 时自动降级 Tier0 路径（纯 Go BM25 + SQLite BLOB 内存余弦）。
+type CognitiveSearcher interface {
+	FTSIndex(docID, text string) error
+	VecUpsert(id string, embedding []float32) error
+	VecKNN(query []float32, k int) ([]CognitiveSearchResult, error)
+	FTSSearch(query string, k int) ([]CognitiveSearchResult, error)
+}
+
 type HybridRetrieverImpl struct {
 	store         protocol.Store
 	graph         GraphTraverser            // Tier1+：图遍历路径，nil 时跳过
 	durative      *DurativeMemoryManager    // 第 5 路（temporal 查询激活），nil 时跳过
 	reflectionMem protocol.ReflectionMemory // 第 4 路：SQL 实现优先，nil 时降级 KV 扫描
 	embedder      Embedder                  // P0：稠密向量检索
+	cognitive     CognitiveSearcher         // Tier1+：SurrealDB FTS+HNSW，nil 时降级 Tier0
 }
 
 // InjectEmbedder 注入 M1 Embedding 接口，激活向量检索路径
@@ -54,11 +72,17 @@ func NewHybridRetrieverFull(store protocol.Store, graph GraphTraverser, durative
 	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative, reflectionMem: reflectionMem}
 }
 
-func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
-	ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) {
+// NewHybridRetrieverWithCognitive 创建含 SurrealDB FTS+HNSW 路径的全功能 HybridRetriever（Tier1+）。
+// cognitive 注入后：BM25 路径走 SurrealDB BM25 FTS；向量路径走 SurrealDB HNSW KNN。
+// cognitive == nil 时自动降级为 Tier0（纯 Go BM25 + SQLite BLOB 余弦）。
+func NewHybridRetrieverWithCognitive(store protocol.Store, graph GraphTraverser, durative *DurativeMemoryManager, reflectionMem protocol.ReflectionMemory, cognitive CognitiveSearcher) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative, reflectionMem: reflectionMem, cognitive: cognitive}
+}
+
+func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope protocol.SearchScope, config protocol.RetrievalConfig) ([]protocol.ScoredFragment, error) { //nolint:gocyclo,nestif
 	// Stage 0 — 确定扫描前缀（隐私门控由调用方 M11 注入，此处按 scope 路由）
 	prefix := []byte("chunk:")
-	if scope.Type == "memory" { //nolint:nestif
+	if scope.Type == "memory" {
 		prefix = []byte("episodic:")
 	}
 
@@ -76,13 +100,42 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 	var graphResults []protocol.ScoredFragment
 	var vectorResults []protocol.ScoredFragment
 
-	// P0：如果在 Memory Scope 且支持 SQL，使用 DBAccessor 从 episodic_events 表获取向量
-	if scope.Type == "memory" && queryF32 != nil {
-		if dba, ok := hr.store.(DBAccessor); ok {
-			vectorResults = hr.fetchVectorResultsFromSQL(ctx, dba.DB(), queryF32)
+	// P0：向量检索 — Tier1+ 走 SurrealDB HNSW（O(log N)），Tier0 降级 SQLite BLOB 内存余弦
+	if queryF32 != nil { //nolint:nestif
+		if hr.cognitive != nil {
+			// Tier1+：SurrealDB HNSW KNN（原生余弦，O(log N)）
+			if hits, vecErr := hr.cognitive.VecKNN(queryF32, config.FinalTopK*3+30); vecErr == nil {
+				for _, h := range hits {
+					et := protocol.EvidenceWeakSemantic
+					if h.Score >= 0.85 {
+						et = protocol.EvidenceHighVector
+					}
+					// SurrealDB 返回 doc_id；尝试从 KV 取原文，失败时以 ID 占位
+					content := h.ID
+					if raw, kvErr := hr.store.Get(ctx, []byte("episodic:"+h.ID)); kvErr == nil {
+						var ev protocol.Event
+						if jsonErr := json.Unmarshal(raw, &ev); jsonErr == nil {
+							content = string(ev.Payload)
+						}
+					}
+					vectorResults = append(vectorResults, protocol.ScoredFragment{
+						Content:      content,
+						Score:        h.Score,
+						Source:       "episodic:" + h.ID,
+						EvidenceType: et,
+					})
+				}
+			}
+		} else if scope.Type == "memory" {
+			// Tier0 降级：SQLite episodic_events float16 BLOB + Go 余弦
+			if dba, ok := hr.store.(DBAccessor); ok {
+				vectorResults = hr.fetchVectorResultsFromSQL(ctx, dba.DB(), queryF32)
+			}
 		}
 	}
 
+	// scanAndScore 扫描 KV 前缀：Tier1+ 时只计算 Simhash（BM25 由 FTSSearch 接管）；
+	// Tier0 时同时计算 BM25 + Simhash。
 	scanAndScore := func(scanPrefix []byte) {
 		iter, err := hr.store.Scan(ctx, scanPrefix)
 		if err != nil || iter == nil {
@@ -94,13 +147,16 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 			content := string(iter.Value())
 			src := string(iter.Key())
 
-			if bm25Score := bm25Score(query, content); bm25Score > 0 {
-				bm25Results = append(bm25Results, protocol.ScoredFragment{
-					Content:      content,
-					Score:        bm25Score,
-					Source:       src,
-					EvidenceType: protocol.EvidenceFTSKeyword,
-				})
+			// BM25 Tier0 路径：cognitive 有效时由 FTSSearch 接管，不在此重复计算
+			if hr.cognitive == nil {
+				if score := bm25Score(query, content); score > 0 {
+					bm25Results = append(bm25Results, protocol.ScoredFragment{
+						Content:      content,
+						Score:        score,
+						Source:       src,
+						EvidenceType: protocol.EvidenceFTSKeyword,
+					})
+				}
 			}
 
 			contentFP := SimhashOf(content)
@@ -122,6 +178,11 @@ func (hr *HybridRetrieverImpl) Search( //nolint:gocyclo
 	}
 
 	scanAndScore(prefix)
+
+	// BM25 路径 — Tier1+：SurrealDB BM25 FTS（k1=1.2 b=0.75 原生）替换 Tier0 纯 Go 近似
+	if hr.cognitive != nil && query != "" {
+		bm25Results = append(bm25Results, hr.searchCognitiveFTS(ctx, query, config.FinalTopK)...)
+	}
 
 	// 第 5 路（temporal 查询激活）：DurativeMemory 持续性记忆簇
 	var durativeResults []protocol.ScoredFragment
@@ -340,4 +401,25 @@ func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db
 		}
 	}
 	return vectorResults
+}
+func (hr *HybridRetrieverImpl) searchCognitiveFTS(ctx context.Context, query string, finalTopK int) []protocol.ScoredFragment {
+	var results []protocol.ScoredFragment
+	if hits, ftsErr := hr.cognitive.FTSSearch(query, finalTopK*5+30); ftsErr == nil {
+		for _, h := range hits {
+			content := h.ID
+			if raw, kvErr := hr.store.Get(ctx, []byte("episodic:"+h.ID)); kvErr == nil {
+				var ev protocol.Event
+				if jsonErr := json.Unmarshal(raw, &ev); jsonErr == nil {
+					content = string(ev.Payload)
+				}
+			}
+			results = append(results, protocol.ScoredFragment{
+				Content:      content,
+				Score:        h.Score,
+				Source:       "episodic:" + h.ID,
+				EvidenceType: protocol.EvidenceFTSKeyword,
+			})
+		}
+	}
+	return results
 }

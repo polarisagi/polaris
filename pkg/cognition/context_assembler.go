@@ -34,7 +34,7 @@ const (
 //	Zone 5 Buffer (15%)           → output only
 //
 // 安全约束: Zone 3/4 内容若 [TaintLevel] >= [Taint-Medium] → 禁止进入 instruction slot。
-func BuildContext(wm *WorkingMemory, maxTokens int) *ContextLayout {
+func BuildContext(wm protocol.WorkingMemory, maxTokens int) *ContextLayout {
 	layout := &ContextLayout{
 		zones: make([]ContextChunk, 0, 5),
 	}

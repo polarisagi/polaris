@@ -266,8 +266,8 @@ func run() error { //nolint:gocyclo
 		dbWriter.Run(ctx) // ctx 取消时自动 flush + 退出
 		close(dbWriterDone)
 	}()
-	eventLog := storage.NewSQLiteEventLog(dbWriter)
-	decisionLog := storage.NewSQLiteDecisionLog(dbWriter)
+	eventLog := substrate.NewSQLiteEventLog(dbWriter)
+	decisionLog := substrate.NewSQLiteDecisionLog(dbWriter)
 	_ = eventLog    // 待 M4 Agent Kernel 注入（事件持久化）
 	_ = decisionLog // 待 M3 观测层注入（决策审计）
 	slog.Info("polaris: mutation bus (database writer) started")
@@ -349,7 +349,19 @@ func run() error { //nolint:gocyclo
 	}
 
 	router := inference.NewInferenceRouter(reg, dialer)
-	mem := memory.NewMemImpl(store)
+
+	// ─── 4.10 M5 记忆系统初始化（SurrealDB 可用时走全路径，否则 Tier0 降级）──
+	var mem *memory.MemImpl
+	if surrealStore != nil {
+		// Tier1+：FTS+HNSW+Graph+SQL 全路径
+		cogn := &surrealCognAdapter{s: surrealStore}
+		mem = memory.NewMemImplFull(store, surrealStore, cogn, store)
+		slog.Info("polaris: memory initialized with SurrealDB cognitive axis (Tier1+)")
+	} else {
+		// Tier0 降级：纯 Go BM25 + SQLite BLOB 余弦
+		mem = memory.NewMemImplWithDB(store, store)
+		slog.Info("polaris: memory initialized in Tier0 mode (SQLite-only, SurrealDB disabled)")
+	}
 	slog.Info("polaris: inference router and memory initialized")
 
 	// ─── 5. MEMF + 启发式记忆（M9 内环基础）────────────────────────────────────
@@ -804,6 +816,43 @@ func initSurrealStore(
 	}
 	slog.Info("polaris: SurrealDB Core initialized", "backend", backend, "vec_dim", vecDim)
 	return store
+}
+
+// surrealCognAdapter 将 *storage.SurrealDBCoreStore 适配为 memory.CognitiveSearcher。
+// FTSIndex / VecUpsert 签名完全一致，直接透传。
+// VecKNN / FTSSearch 返回类型 storage.ScoredID → memory.CognitiveSearchResult 需转换。
+type surrealCognAdapter struct{ s *storage.SurrealDBCoreStore }
+
+func (a *surrealCognAdapter) FTSIndex(docID, text string) error {
+	return a.s.FTSIndex(docID, text)
+}
+
+func (a *surrealCognAdapter) VecUpsert(id string, embedding []float32) error {
+	return a.s.VecUpsert(id, embedding)
+}
+
+func (a *surrealCognAdapter) VecKNN(query []float32, k int) ([]memory.CognitiveSearchResult, error) {
+	hits, err := a.s.VecKNN(query, k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]memory.CognitiveSearchResult, len(hits))
+	for i, h := range hits {
+		out[i] = memory.CognitiveSearchResult{ID: h.ID, Score: h.Score}
+	}
+	return out, nil
+}
+
+func (a *surrealCognAdapter) FTSSearch(query string, k int) ([]memory.CognitiveSearchResult, error) {
+	hits, err := a.s.FTSSearch(query, k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]memory.CognitiveSearchResult, len(hits))
+	for i, h := range hits {
+		out[i] = memory.CognitiveSearchResult{ID: h.ID, Score: h.Score}
+	}
+	return out, nil
 }
 
 func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []string, error) {

@@ -10,27 +10,47 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
+// maxEpisodicEvents Tier0 内存事件容量上限（防止 8GB 场景 OOM）。
+// 超出时 FIFO 淘汰最旧内存条目；SQLite 侧保留完整历史，不受此限制。
+const maxEpisodicEvents = 2000
+
 // EpisodicMem (L1) — 事件表 + 向量投影。
 type EpisodicMem struct {
-	store   protocol.Store
-	events  []protocol.Event
-	mu      sync.Mutex
-	indexer *EpisodicGraphIndexer // Tier1+：图索引器，nil 时跳过
+	store     protocol.Store
+	events    []protocol.Event
+	mu        sync.Mutex
+	indexer   *EpisodicGraphIndexer // Tier1+：图索引器，nil 时跳过
+	cognitive CognitiveSearcher     // Tier1+：SurrealDB FTS 索引写入，nil 时跳过
+	maxEvents int                   // 内存事件容量上限，0 表示不限制
 }
 
 func NewEpisodicMem(store protocol.Store) *EpisodicMem {
 	return &EpisodicMem{
-		store:  store,
-		events: make([]protocol.Event, 0),
+		store:     store,
+		events:    make([]protocol.Event, 0, 256),
+		maxEvents: maxEpisodicEvents,
 	}
 }
 
 // NewEpisodicMemWithGraph 创建含图索引的 EpisodicMem（Tier1+）。
 func NewEpisodicMemWithGraph(store protocol.Store, indexer *EpisodicGraphIndexer) *EpisodicMem {
 	return &EpisodicMem{
-		store:   store,
-		events:  make([]protocol.Event, 0),
-		indexer: indexer,
+		store:     store,
+		events:    make([]protocol.Event, 0, 256),
+		indexer:   indexer,
+		maxEvents: maxEpisodicEvents,
+	}
+}
+
+// NewEpisodicMemWithCognitive 创建含 SurrealDB FTS 索引路径的 EpisodicMem（Tier1+）。
+// 每次 Append 同步写入 SurrealDB FTS 倒排索引；VecUpsert 由 OnlineReindexer 异步完成。
+func NewEpisodicMemWithCognitive(store protocol.Store, indexer *EpisodicGraphIndexer, cognitive CognitiveSearcher) *EpisodicMem {
+	return &EpisodicMem{
+		store:     store,
+		events:    make([]protocol.Event, 0, 256),
+		indexer:   indexer,
+		cognitive: cognitive,
+		maxEvents: maxEpisodicEvents,
 	}
 }
 
@@ -46,10 +66,23 @@ func (em *EpisodicMem) Append(ctx context.Context, ev protocol.Event) error {
 	if err := em.store.Put(ctx, key, data); err != nil {
 		return err
 	}
+
+	// 容量门控：超过 maxEvents 时 FIFO 淘汰最旧内存条目（SQLite 侧不受影响）
 	em.events = append(em.events, ev)
+	if em.maxEvents > 0 && len(em.events) > em.maxEvents {
+		em.events = em.events[len(em.events)-em.maxEvents:]
+	}
+
 	// 图索引：将事件节点与代理/会话建立关联边（Tier1+，nil 时跳过）
 	if em.indexer != nil {
 		em.indexer.Index(ctx, ev)
+	}
+	// SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅降级到 Tier0 BM25 路径
+	if em.cognitive != nil {
+		payload := string(ev.Payload)
+		if payload != "" {
+			_ = em.cognitive.FTSIndex(ev.ID, payload)
+		}
 	}
 	return nil
 }
@@ -77,6 +110,11 @@ func (em *EpisodicMem) Query(ctx context.Context, q protocol.EpisodicQuery) ([]p
 			}
 		}
 		iter.Close()
+		// 重建完成后做容量截断，保留最新 maxEvents 条（防重启后 OOM）
+		if em.maxEvents > 0 && len(em.events) > em.maxEvents {
+			em.events = em.events[len(em.events)-em.maxEvents:]
+			events = em.events
+		}
 	}
 
 	var results []protocol.ScoredEvent //nolint:prealloc

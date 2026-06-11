@@ -1,4 +1,4 @@
-package storage
+package substrate
 
 import (
 	"context"
@@ -6,19 +6,18 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/substrate"
 )
 
 // SQLiteDecisionLog 实现了 protocol.DecisionLogger。
 // 所有写入请求通过 MutationBus 单写者进行序列化。
 type SQLiteDecisionLog struct {
-	writer *substrate.DatabaseWriter
+	writer *DatabaseWriter
 }
 
 var _ protocol.DecisionLogger = (*SQLiteDecisionLog)(nil)
 
 // NewSQLiteDecisionLog 创建基于 SQLite MutationBus 的 DecisionLogger
-func NewSQLiteDecisionLog(writer *substrate.DatabaseWriter) *SQLiteDecisionLog {
+func NewSQLiteDecisionLog(writer *DatabaseWriter) *SQLiteDecisionLog {
 	return &SQLiteDecisionLog{writer: writer}
 }
 
@@ -30,7 +29,7 @@ func (l *SQLiteDecisionLog) AppendDecision(ctx context.Context, entry *protocol.
 	}
 
 	resultCh := make(chan error, 1)
-	intent := &substrate.MutationIntent{
+	intent := &MutationIntent{
 		Table:     "decision_log",
 		Operation: "insert_decision", // 会触发 executeInsertDecision
 		Payload:   payload,

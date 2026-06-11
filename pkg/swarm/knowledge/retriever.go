@@ -15,13 +15,26 @@ type VectorEmbedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
+// CognitiveSearchResult 认知检索结果（consumer-side）。
+type CognitiveSearchResult struct {
+	ID    string
+	Score float64
+}
+
+// CognitiveSearcher consumer-side 接口：SurrealDB FTS + HNSW 向量检索（Tier1+）。
+type CognitiveSearcher interface {
+	VecKNN(query []float32, k int) ([]CognitiveSearchResult, error)
+	FTSSearch(query string, k int) ([]CognitiveSearchResult, error)
+}
+
 // HybridRetrieverImpl 实现 HybridRetriever。
 // 检索策略:
 //   - Tier 0 (embedder=nil): FTS5 BM25 单路，按 rank 排序。
 //   - Tier 1+ (embedder 非 nil): FTS5 + Dense Vector 双路 RRF 融合。
 type HybridRetrieverImpl struct {
-	db       *sql.DB
-	embedder VectorEmbedder // optional，nil = FTS5 only
+	db        *sql.DB
+	embedder  VectorEmbedder    // optional，nil = FTS5 only
+	cognitive CognitiveSearcher // optional，Tier 1+ SurrealDB HNSW
 }
 
 var _ HybridRetriever = (*HybridRetrieverImpl)(nil)
@@ -34,6 +47,11 @@ func NewHybridRetriever(db *sql.DB) *HybridRetrieverImpl {
 // NewHybridRetrieverWithEmbedder 创建含密集向量路径的检索器（Tier 1+）。
 func NewHybridRetrieverWithEmbedder(db *sql.DB, embedder VectorEmbedder) *HybridRetrieverImpl {
 	return &HybridRetrieverImpl{db: db, embedder: embedder}
+}
+
+// NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
+func NewHybridRetrieverWithCognitive(db *sql.DB, embedder VectorEmbedder, cognitive CognitiveSearcher) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive}
 }
 
 // Search 执行混合检索。
@@ -104,7 +122,7 @@ func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, 
 
 // searchVector 从 rag_chunks 读取已存储的 embedding，计算余弦相似度，返回 top-limit 条。
 // 仅对存储了 embedding 的 chunk 生效；无 embedding 的 chunk 跳过（向量路径幂等）。
-func (hr *HybridRetrieverImpl) searchVector(ctx context.Context, queryText string, limit int) ([]Chunk, error) {
+func (hr *HybridRetrieverImpl) searchVector(ctx context.Context, queryText string, limit int) ([]Chunk, error) { //nolint:gocyclo,nestif
 	queryEmbed, err := hr.embedder.Embed(ctx, queryText)
 	if err != nil {
 		return nil, err
@@ -113,7 +131,36 @@ func (hr *HybridRetrieverImpl) searchVector(ctx context.Context, queryText strin
 		return nil, nil
 	}
 
-	// 读取所有有 embedding 的 chunk（生产环境应使用 ANN 索引；Tier 0 线性扫描）
+	// Tier 1+: SurrealDB HNSW (O(log N))
+	if hr.cognitive != nil {
+		if hits, vecErr := hr.cognitive.VecKNN(queryEmbed, limit); vecErr == nil {
+			return hr.fetchCognitiveHits(ctx, hits)
+		}
+	}
+
+	return hr.searchVectorFallback(ctx, queryEmbed, limit)
+}
+
+func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []CognitiveSearchResult) ([]Chunk, error) {
+	var results []Chunk
+	for _, h := range hits {
+		var chunk Chunk
+		var taintSource sql.NullString
+		err := hr.db.QueryRowContext(ctx, "SELECT id, doc_id, content, taint_level, taint_source FROM rag_chunks WHERE id = ?", h.ID).Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource)
+		if err == nil {
+			if taintSource.Valid {
+				chunk.TaintSource = taintSource.String
+			}
+			results = append(results, chunk)
+		}
+	}
+	return results, nil
+}
+
+// searchVectorFallback 线性扫描降级
+func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEmbed []float32, limit int) ([]Chunk, error) {
+
+	// Tier 0 降级：读取所有有 embedding 的 chunk（线性扫描）
 	rows, err := hr.db.QueryContext(ctx, `
 		SELECT id, doc_id, content, taint_level, taint_source, embedding
 		FROM rag_chunks
