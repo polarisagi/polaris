@@ -47,6 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
+          cache-on-failure: true
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Build Rust Substrate
@@ -64,6 +65,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
+          cache-on-failure: true
       - run: cargo test --manifest-path rust/substrate/Cargo.toml
       - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
 
@@ -83,6 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
+          cache-on-failure: true
       - run: make build
 
   eval-gate:
@@ -97,6 +100,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust/substrate"
+          cache-on-failure: true
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Build Rust Substrate
