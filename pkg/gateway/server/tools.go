@@ -161,8 +161,8 @@ func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Version     string `json:"version"`
-		Runtime    string `json:"runtime"`    // "script" | "builtin"
-		ScriptPath string `json:"script_path"` // 技能脚本安装路径
+		Runtime     string `json:"runtime"`     // "script" | "builtin"
+		ScriptPath  string `json:"script_path"` // 技能脚本安装路径
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

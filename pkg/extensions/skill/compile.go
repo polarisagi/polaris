@@ -27,13 +27,13 @@ const (
 )
 
 var (
-	ErrLogicCollapseDisabled     = perrors.New(perrors.CodeInternal, "logic collapse: feature gate disabled (Tier0 or insufficient memory)")
-	ErrInsufficientSuccessCount  = perrors.New(perrors.CodeInternal, "logic collapse: success_count < 50")
-	ErrInsufficientDiversity     = perrors.New(perrors.CodeInternal, "logic collapse: semantic_variance < 0.1 — needs_more_diversity")
-	ErrEvalGateNotPassed         = perrors.New(perrors.CodeInternal, "logic collapse: eval gate not passed")
-	ErrStaleTrajectory           = perrors.New(perrors.CodeInternal, "logic collapse: stale trajectory — needs_adaptation")
-	ErrCompileGateRejected       = perrors.New(perrors.CodeInternal, "logic collapse: compile gate rejected (memory or concurrency limit)")
-	ErrTaintedTrajectory         = perrors.New(perrors.CodeInternal, "logic collapse: TaintMedium+ trajectory rejected — tainted_trajectory")
+	ErrLogicCollapseDisabled    = perrors.New(perrors.CodeInternal, "logic collapse: feature gate disabled (Tier0 or insufficient memory)")
+	ErrInsufficientSuccessCount = perrors.New(perrors.CodeInternal, "logic collapse: success_count < 50")
+	ErrInsufficientDiversity    = perrors.New(perrors.CodeInternal, "logic collapse: semantic_variance < 0.1 — needs_more_diversity")
+	ErrEvalGateNotPassed        = perrors.New(perrors.CodeInternal, "logic collapse: eval gate not passed")
+	ErrStaleTrajectory          = perrors.New(perrors.CodeInternal, "logic collapse: stale trajectory — needs_adaptation")
+	ErrCompileGateRejected      = perrors.New(perrors.CodeInternal, "logic collapse: compile gate rejected (memory or concurrency limit)")
+	ErrTaintedTrajectory        = perrors.New(perrors.CodeInternal, "logic collapse: TaintMedium+ trajectory rejected — tainted_trajectory")
 )
 
 // ─── 核心类型 ─────────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ type CollapseEntity struct {
 type CompileRequest struct {
 	Trajectory     *CollapseTrajectory
 	EvalGatePassed bool
-	SigningKey      []byte
+	SigningKey     []byte
 	WorkDir        string
 }
 
@@ -140,7 +140,7 @@ type LogicCollapseConfig struct {
 	Gate       *CompileGate
 	CodeGen    LLMCodeGenerator
 	Registry   protocol.SkillRegistry
-	SigningKey  []byte
+	SigningKey []byte
 	WorkDir    string
 }
 
@@ -250,4 +250,3 @@ func signScript(src []byte, key []byte) (string, error) {
 	mac.Write(src)
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
-

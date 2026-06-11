@@ -310,9 +310,9 @@ func TestFeatureGate_CrossFeatureDependencies(t *testing.T) {
 func TestTierParameters_AllTiers(t *testing.T) {
 	gb := uint64(1024 * 1024 * 1024)
 	tests := []struct {
-		totalRAM   uint64
-		wantMaxDAG int
-		wantAgents int
+		totalRAM          uint64
+		wantMaxDAG        int
+		wantAgents        int
 		wantScriptWorkers int
 	}{
 		{8 * gb, 4, 3, 4},
