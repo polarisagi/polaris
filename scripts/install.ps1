@@ -150,22 +150,20 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
 Remove-Item -Path $ZipPath -Force
 
-# 查找解压出的二进制
-$ExtractedExe = Get-ChildItem -Path $ExtractDir -Recurse -Filter "polaris.exe" | Select-Object -First 1
-if (-not $ExtractedExe) {
-    Write-Msg -zh "❌ 归档中未找到 polaris.exe。" -en "❌ polaris.exe not found in archive." -Color Red
-    Remove-Item -Path $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+# 复制整个解压目录内容到安装目录
+Copy-Item -Path "$ExtractDir\*" -Destination $InstallDir -Recurse -Force
+$FinalExe = "$InstallDir\$BinName"
+Remove-Item -Path $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+
+if (-not (Test-Path $FinalExe)) {
+    Write-Msg -zh "❌ 归档中未找到 $BinName。" -en "❌ $BinName not found in archive." -Color Red
     if ($IsZh) { Read-Host "按回车键退出" } else { Read-Host "Press Enter to exit" }
     exit 1
 }
 
-$FinalExe = "$InstallDir\$BinName"
-if (Test-Path $FinalExe) { Remove-Item -Path $FinalExe -Force -ErrorAction SilentlyContinue }
-Move-Item -Path $ExtractedExe.FullName -Destination $FinalExe -Force
-Remove-Item -Path $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
 Unblock-File -Path $FinalExe -ErrorAction SilentlyContinue
 
-Write-Msg -zh "✅ 二进制已安装: $FinalExe" -en "✅ Binary installed: $FinalExe" -Color Green
+Write-Msg -zh "✅ 程序及依赖已安装: $InstallDir" -en "✅ Binary and dependencies installed: $InstallDir" -Color Green
 
 # ── 6. 配置开机自启（Windows 任务计划）───────────────────────────────────────
 Write-Msg -zh "⚙️  配置开机自启（任务计划程序）..." `

@@ -125,19 +125,6 @@ mkdir -p "$TMP_DIR"
 tar -xzf "$TMP_ARCHIVE" -C "$TMP_DIR"
 rm -f "$TMP_ARCHIVE"
 
-# 在解压目录中找到二进制
-EXTRACTED_BIN=$(find "$TMP_DIR" -name "$BIN_NAME" -type f | head -1)
-if [ -z "$EXTRACTED_BIN" ]; then
-    EXTRACTED_BIN=$(find "$TMP_DIR" -name "${BIN_NAME}-${OS}-${ARCH}" -type f | head -1)
-fi
-if [ -z "$EXTRACTED_BIN" ]; then
-    msg "❌ 归档中未找到二进制文件 '$BIN_NAME'。" \
-        "❌ Binary '$BIN_NAME' not found in archive."
-    rm -rf "$TMP_DIR"
-    exit 1
-fi
-chmod +x "$EXTRACTED_BIN"
-
 # ── 4. 停止旧服务 ─────────────────────────────────────────────────────────────
 if [ "$OS" = "darwin" ]; then
     if launchctl list 2>/dev/null | grep -q "$PLIST_LABEL"; then
@@ -154,13 +141,13 @@ elif [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-# ── 5. 安装二进制 ─────────────────────────────────────────────────────────────
+# ── 5. 安装文件及依赖资源 ─────────────────────────────────────────────────────
 mkdir -p "$INSTALL_DIR"
-rm -f "${INSTALL_DIR}/${BIN_NAME}"
-mv -f "$EXTRACTED_BIN" "${INSTALL_DIR}/${BIN_NAME}"
+cp -R "$TMP_DIR"/* "$INSTALL_DIR/" 2>/dev/null || cp -r "$TMP_DIR"/* "$INSTALL_DIR/"
+chmod +x "${INSTALL_DIR}/${BIN_NAME}"
 rm -rf "$TMP_DIR"
 
-msg "✅ 二进制已安装: ${INSTALL_DIR}/${BIN_NAME}" \
+msg "✅ 程序已安装: ${INSTALL_DIR}/${BIN_NAME}" \
     "✅ Binary installed: ${INSTALL_DIR}/${BIN_NAME}"
 
 # ── 6. 配置系统服务 ───────────────────────────────────────────────────────────

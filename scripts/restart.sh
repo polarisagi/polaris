@@ -114,11 +114,18 @@ mkdir -p bin/lib
 cp "$DYLIB_SRC" "$DYLIB_DST"
 CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
 
-# ── 5. 启动 ───────────────────────────────────────────────
+# ── 5. 安装到标准目录 ─────────────────────────────────────
+INSTALL_DIR="$HOME/.polarisagi/polaris/bin"
+echo "→ 复制执行文件到标准目录 $INSTALL_DIR ..."
+mkdir -p "$INSTALL_DIR/lib"
+cp bin/polaris "$INSTALL_DIR/"
+cp -r bin/lib/* "$INSTALL_DIR/lib/"
+
+# ── 6. 启动 ───────────────────────────────────────────────
 echo "→ 启动 Polaris..."
 # Polaris 遵循配置层规范，默认使用 ~/.polarisagi/polaris/config.toml
 mkdir -p "$(dirname "$LOG_FILE")"
-nohup ./bin/polaris >> "$LOG_FILE" 2>&1 &
+nohup "$INSTALL_DIR/polaris" >> "$LOG_FILE" 2>&1 &
 
 # 等待最多 5s 确认端口监听
 for i in {1..10}; do
