@@ -114,14 +114,7 @@ mkdir -p bin/lib
 cp "$DYLIB_SRC" "$DYLIB_DST"
 CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
 
-# ── 5. 安装到标准目录 ─────────────────────────────────────
-INSTALL_DIR="$HOME/.polarisagi/polaris/bin"
-echo "→ 复制执行文件到标准目录 $INSTALL_DIR ..."
-mkdir -p "$INSTALL_DIR/lib"
-cp bin/polaris "$INSTALL_DIR/"
-cp -r bin/lib/* "$INSTALL_DIR/lib/"
-
-# ── 6. 启动 ───────────────────────────────────────────────
+# ── 5. 启动 ───────────────────────────────────────────────
 echo "→ 启动 Polaris (端口 $PORT)..."
 # 为本地测试生成独立的覆盖配置，避免与生产环境端口冲突
 DEV_CONFIG="$DATA_DIR/config_dev.toml"
@@ -135,7 +128,7 @@ rm -f "$DEV_CONFIG.bak"
 export POLARIS_CONFIG="$DEV_CONFIG"
 
 mkdir -p "$(dirname "$LOG_FILE")"
-nohup "$INSTALL_DIR/polaris" >> "$LOG_FILE" 2>&1 &
+nohup ./bin/polaris >> "$LOG_FILE" 2>&1 &
 
 # 等待最多 5s 确认端口监听
 for i in {1..10}; do
