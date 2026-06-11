@@ -14,7 +14,6 @@
 - 所有出站 HTTP 必经 SafeDialer (XR-06)
 - Cedar 评估必须在每个外部请求边界
 - KillSwitch 阶段仅读 gauge, 禁独立判定变迁
-- 根层 `scheduler.go` 已 Deprecated, 禁作标杆
 
 **文件索引**:
 - [标杆] `scheduler/scheduler.go`: ResourceGovernor (三级降级)

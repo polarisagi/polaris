@@ -8,7 +8,7 @@
 3. Agent 隔离: 独立 ContextAssembler, 禁共享父上下文; 仅通过 M8 Blackboard 交换
 4. Wasm Skill: 必经 SkillExecutor + Cedar Gate, 禁裸 wazero.NewRuntime
 5. Memory 写: 必走 MutationBus, 禁直接 INSERT (XR-04)
-6. 依赖单向: 禁 import pkg/{swarm,governance,edge,gateway}
+6. 依赖单向: 禁 import pkg/{swarm,extensions,governance,edge,gateway}
 
 **高频陷阱**:
 - FSM 11 态 (含 S_INTERRUPT), 修改必同步 `docs/arch/spec/state.yaml`
@@ -30,6 +30,7 @@
 - [参照] `drift_detector.go`: Embedding 空间漂移检测
 - [参照] `epoch.go`: ContextFingerprint + EpochTracker
 - [参照] `synaptic_plasticity.go`: 图边 LTP/LTD 可塑性
+- [参照] `prm/prm.go`: ProcessRewardModel (S_PLAN 阶段 N 候选 DAG 并发打分选优)
 
 **跨模块**:
 - 调用 L0 仅经 `internal/protocol/` (Store/Provider/PolicyGate/SkillExecutor)

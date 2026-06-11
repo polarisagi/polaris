@@ -33,6 +33,8 @@
 - [参照] `curriculum.go`: M9 中环边缘任务发现
 - [参照] `rollout.go`: M9 外环阶梯
 - [参照] `supervisor/tree.go`: 监督树
+- [参照] `topology/swarm.go`: Swarm 拓扑感知路由
+- [参照] `patterns/`: MapReduce / Parallel / Sequential 编排模式（swarm.go 入口）
 
 **跨模块**:
 - L1 通信与 L3 暴露均走 `internal/protocol/`

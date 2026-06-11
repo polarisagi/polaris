@@ -7,7 +7,7 @@
 2. Capability Token: 跨界访问必带 Token (Cedar 签发校验)
 3. 协议通信: 跨模块走 `internal/protocol/`, 禁字符串 topic
 4. CodeAct: Tier 0 禁用; Tier 1+ 需 Sandbox-L3+Audit, 计入 ReasoningTokens
-5. 依赖单向: 禁 import pkg/{swarm,governance,edge,gateway}
+5. 依赖单向: 禁 import pkg/{swarm,extensions,governance,edge,gateway}
 6. Hook 输出: ShellHook 输出强制 TaintLevel=High, 经 M11 PolicyGate 后才可注入上下文
 
 **高频陷阱**:
