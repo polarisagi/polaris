@@ -17,7 +17,7 @@ for arg in "$@"; do
   fi
 done
 
-PORT=28888
+PORT=28889
 DATA_DIR="${POLARIS_DATA_DIR:-$HOME/.polarisagi/polaris}"
 mkdir -p "$DATA_DIR"
 LOG_FILE="$DATA_DIR/logs/polaris.log"
@@ -122,8 +122,18 @@ cp bin/polaris "$INSTALL_DIR/"
 cp -r bin/lib/* "$INSTALL_DIR/lib/"
 
 # ── 6. 启动 ───────────────────────────────────────────────
-echo "→ 启动 Polaris..."
-# Polaris 遵循配置层规范，默认使用 ~/.polarisagi/polaris/config.toml
+echo "→ 启动 Polaris (端口 $PORT)..."
+# 为本地测试生成独立的覆盖配置，避免与生产环境端口冲突
+DEV_CONFIG="$DATA_DIR/config_dev.toml"
+if [ ! -f "$DEV_CONFIG" ]; then
+    cp configs/defaults.toml "$DEV_CONFIG"
+fi
+# 强制将开发配置的端口替换为脚本指定的测试端口
+sed -i.bak -e "s/port = [0-9]*/port = $PORT/" "$DEV_CONFIG"
+rm -f "$DEV_CONFIG.bak"
+
+export POLARIS_CONFIG="$DEV_CONFIG"
+
 mkdir -p "$(dirname "$LOG_FILE")"
 nohup "$INSTALL_DIR/polaris" >> "$LOG_FILE" 2>&1 &
 
