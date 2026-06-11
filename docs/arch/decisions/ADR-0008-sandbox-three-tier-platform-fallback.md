@@ -16,7 +16,7 @@
 
 三级完整定义见 [00-Dict §5](../00-Global-Dictionary.md):
 - **L1 原生层**（Go function / 平台原生子进程）: 高性能运行层。包含进程内受限执行（如 str_replace_editor）与挂载平台原生沙箱组件（如 bash/run_command 挂载 bubblewrap/seatbelt），仅限核心系统内置工具
-- **L2 wazero Wasm**: deny-by-default WASI,第三方技能默认级
+- **L2 Rust 脚本沙箱**（wasmtime_engine.rs FFI）: deny-by-default，TypeScript/Python 技能通过 npx tsx 在受控环境中执行；内置工具直接信任，不走 L2
 - **L3 平台原生 microVM**（统一 SandboxProvider 接口，调用方平台无感）:
   - **Linux**: Firecracker (~125MB/VM, 需硬件 KVM)；KVM 不可用 → gVisor (runsc) 用户态内核
   - **macOS**: Virtualization.framework (~80MB/VM)

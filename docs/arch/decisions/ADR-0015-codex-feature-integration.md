@@ -99,7 +99,7 @@ my-plugin/
 
 **解法（已被 ADR-0016 修正）**: ~~适配器对外部 SKILL.md 生成本地 HMAC-SHA256 签名，设置 `SignatureValid=true` 并附加 `trust:local` 标签。~~ → ADR-0016 §2.1 以 `TrustTier` 枚举替代 `SignatureValid bool`；外部 SKILL.md 对应 `TrustLocal(1)` 或 `TrustCommunity(2)`，Cedar 策略通过 `TrustTier.MaxSandboxTier()` 约束沙箱级别。
 
-**挑战 E**（progressive disclosure 语义）: Codex Skills 的 "初始只加载 name+description，按需加载全文" 与 Polaris SkillMeta 设计一致（SkillMeta 不含 SKILL.md 全文）。适配器只解析 frontmatter 生成 SkillMeta，全文 SKILL.md 按需读取（已有 wasm_loader.go 的懒加载模式）。
+**挑战 E**（progressive disclosure 语义）: Codex Skills 的 "初始只加载 name+description，按需加载全文" 与 Polaris SkillMeta 设计一致（SkillMeta 不含 SKILL.md 全文）。适配器只解析 frontmatter 生成 SkillMeta，全文 SKILL.md 按需读取（ScriptLoader 接口懒加载 src/index.ts 路径，`wasm_loader.go` 已于架构迁移时删除，见 ADR-0008）。
 
 ### 2.4 Custom Agent YAML（P2）
 
