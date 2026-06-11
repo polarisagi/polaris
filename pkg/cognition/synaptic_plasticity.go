@@ -1,5 +1,7 @@
 package cognition
 
+import "math"
+
 // Synaptic Plasticity — 图边可塑性（LTP 强化 + LTD 衰减）。
 // 架构文档: docs/arch/05-Memory-System-深度选型.md §7.6
 
@@ -71,17 +73,9 @@ func (sp *SynapticPlasticityManager) FeedbackCalibrate(usedEdges, candidateEdges
 // 物理修剪 (< pruneThreshold): 每日凌晨 3:00 cron DELETE-only.
 func (sp *SynapticPlasticityManager) DecayUnused(weight float64, daysSinceLastAccess int) float64 {
 	ratio := float64(daysSinceLastAccess) / float64(sp.ltdWindowDays)
-	effectiveWeight := weight * pow(sp.ltdRate, ratio)
+	// 使用 math.Pow 计算 ltdRate^ratio。
+	// 原自定义 pow 计算 base^(int(ratio*100))，导致 ratio=0.5 时得到 0.8^50≈1.4e-5 而非 0.8^0.5≈0.894，
+	// 引发近期访问边被过度修剪（误认为长期未访问）。
+	effectiveWeight := weight * math.Pow(sp.ltdRate, ratio)
 	return effectiveWeight
-}
-
-func pow(base float64, exp float64) float64 {
-	if exp == 0 {
-		return 1.0
-	}
-	result := 1.0
-	for i := 0; i < int(exp*100); i++ {
-		result *= base
-	}
-	return result
 }
