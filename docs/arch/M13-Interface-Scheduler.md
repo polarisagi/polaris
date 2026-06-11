@@ -407,6 +407,14 @@ ConnectMCP: 1.遍历 Servers 2.CommandTransport exec.Command→MCP 会话 3.sess
 
 与 OSMemoryGuard 协同: ResourceGovernor 实时读取 OSMemoryGuard.CurrentPressureLevel() → Admit 准入。shared semantics: L1/L2/L3 阈值同源(见 00-Global-Dictionary §1-ter XR-07)。
 
+## 6-bis. 已知 Bug 修复记录
+
+| # | 级别 | 文件 | 函数 | 问题描述 | commit |
+|---|------|------|------|----------|--------|
+| 1 | P3 | pkg/gateway/server/sessions.go | handleGetSession | `TaskDuration` 时间解析 layout 使用 `"2006-01-02T15:04:05Z"`，SQLite `datetime()` 实际输出 `"2006-01-02 15:04:05"`（空格分隔无 Z），两次 `time.Parse` 静默失败导致 `TaskDuration` 永远为 0。改用兼容两种格式的 `parseDBTime` 辅助函数。 | — |
+| 2 | P1 | pkg/gateway/server/cron.go | executeAutomation | `result_action="channel:XXX"` 路径调用 `channelMgr.SendReply(channelType="", ...)` 走 `default` 分支静默丢弃，自动化频道回复完全失效。修复：先从 `channels` 表查 `type` + `config_json`，传正确 `channelType` 再调用 `SendReply`。 | — |
+| 3 | P3 | pkg/edge/scheduler/cost_report.go | generateCostReport | `period` 字符串用 `fmt.Sprintf("%d-%02d", now.Year(), int(now.Month())-1)`，1月时 `Month()-1=0` 输出 `"YYYY-00"`。改为从 `monthStart.Year()` + `monthStart.Month()` 派生，1月正确输出上年12月 `"YYYY-12"`。 | — |
+
 ## 默认参数
 
 完整阈值与重评触发条件: `spec/state.yaml §thresholds.m13_scheduler`。

@@ -77,7 +77,8 @@ func generateCostReport(ctx context.Context, dir string, db *sql.DB) error {
 	}
 	defer f.Close()
 
-	period := fmt.Sprintf("%d-%02d", now.Year(), int(now.Month())-1)
+	// 用 monthStart 派生期间字符串，避免1月时 Month()-1=0 导致输出 "YYYY-00"
+	period := fmt.Sprintf("%d-%02d", monthStart.Year(), int(monthStart.Month()))
 	content := fmt.Sprintf("# Monthly Cost Report - %s\n\nGenerated at: %s\n\n",
 		period, now.Format(time.RFC3339))
 
