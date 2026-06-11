@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -60,7 +62,7 @@ jobs:
             goarch: arm64
           - os_name: darwin
             arch_name: amd64
-            runner_os: macos-latest
+            runner_os: macos-13
             cargo_target: 'x86_64-apple-darwin'
             goarch: amd64
           - os_name: windows
@@ -125,21 +127,22 @@ jobs:
         shell: bash
         run: |
           mkdir -p release_pkg
-          # 拷贝编译产物
           cp -r bin/* release_pkg/
-          # 拷贝配置文件
           cp -r configs release_pkg/
           cp -r policies release_pkg/
           cp LICENSE release_pkg/
-          
-          # 创建压缩包
+
           cd release_pkg
           if [ "${{ matrix.os_name }}" = "windows" ]; then
-            # Windows 下压缩成 zip
             7z a -tzip ../polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip ./*
+            cd ..
+            sha256sum polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip \
+              > polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.zip.sha256
           else
-            # Linux / macOS 压缩成 tar.gz
             tar -czvf ../polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz ./*
+            cd ..
+            sha256sum polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz \
+              > polaris-${{ matrix.os_name }}-${{ matrix.arch_name }}.tar.gz.sha256
           fi
 
       - name: Upload Artifact
