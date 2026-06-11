@@ -28,7 +28,7 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	}
 	db.SetMaxOpenConns(1)
 
-	_, err = db.Exec(`CREATE TABLE test_entities (
+	_, err = db.Exec(`CREATE TABLE entities (
 		id TEXT PRIMARY KEY,
 		payload TEXT,
 		version INTEGER,
@@ -71,7 +71,7 @@ func TestMutationBus_ConcurrentWrites(t *testing.T) {
 				// Each worker writes to its own distinct key to simulate 1000 distinct writes without version conflicts
 				key := fmt.Sprintf("entity_%d_%d", workerID, j)
 				intent := &MutationIntent{
-					Table:          "test_entities",
+					Table:          "entities",
 					Operation:      "insert",
 					Key:            []byte(key),
 					Payload:        []byte(fmt.Sprintf("data_%d_%d", workerID, j)),
@@ -102,7 +102,7 @@ func TestMutationBus_ConcurrentWrites(t *testing.T) {
 
 	// Verify all 1000 records are written correctly
 	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM test_entities").Scan(&count)
+	err := db.QueryRow("SELECT COUNT(*) FROM entities").Scan(&count)
 	if err != nil {
 		t.Fatalf("Failed to query count: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestMutationBus_OptimisticLocking(t *testing.T) {
 	go dw.Run(ctx)
 
 	// Pre-insert an entity
-	_, err := db.Exec(`INSERT INTO test_entities (id, payload, version, updated_at) VALUES (?, ?, ?, ?)`, "entity1", "init", 0, "now")
+	_, err := db.Exec(`INSERT INTO entities (id, payload, version, updated_at) VALUES (?, ?, ?, ?)`, "entity1", "init", 0, "now")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestMutationBus_OptimisticLocking(t *testing.T) {
 			defer wg.Done()
 			execCh := make(chan error, 1)
 			intent := &MutationIntent{
-				Table:          "test_entities",
+				Table:          "entities",
 				Operation:      "upsert",
 				Key:            []byte("entity1"),
 				Payload:        []byte(fmt.Sprintf("w%d", workerID)),
