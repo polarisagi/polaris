@@ -44,7 +44,7 @@ TrustUntrusted(0) → 无签名 → REJECT (fail-closed)
 
 ### 2.2 官方 Publisher 白名单
 
-预置受信 Publisher 列表（`configs/trusted-publishers.yaml`），离线验证方案：
+预置受信 Publisher 列表（`configs/extensions/trusted-publishers.yaml`），离线验证方案：
 
 | Publisher | GitHub Org | 原因 |
 |-----------|-----------|------|
@@ -130,7 +130,7 @@ dependencies:
 
 **问题**：外部官方技能更新频繁，自动跟进引入供应链风险，手动跟进带来运维负担。
 
-**解法**：`configs/official-registry.yaml` pin 所有官方入口版本（commit hash + sha256）。Polaris 启动时检查本地 pin 与远程 latest，若不一致则 WARN 日志（类 `brew outdated`）。**不自动升级**，Operator 手动 review + 更新 pin。
+**解法**：`configs/extensions/registry.yaml` pin 所有官方入口版本（commit hash + sha256）。Polaris 启动时检查本地 pin 与远程 latest，若不一致则 WARN 日志（类 `brew outdated`）。**不自动升级**，Operator 手动 review + 更新 pin。
 
 ### 挑战 4：MCP TrustTier 与 Taint 的映射
 
