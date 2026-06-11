@@ -1,120 +1,124 @@
 # polaris
 
-> 面向 2026+ 的**开源自托管** AI Agent 系统。严格遵循 Harness Engineering 六条架构不变量构建。单机 8GB 内存可运行，支持多种第三方平台接入，终端用户无需修改源码即可通过 Shell Script Hooks 自定义生命周期行为。
+> An **open-source, self-hosted** AI Agent system for 2026 and beyond. Built strictly on six Harness Engineering architectural invariants. Runs on a single machine with 8GB RAM. Supports major third-party platforms out of the box. End users can customize lifecycle behavior via Shell Script Hooks — no source code changes required.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](go.mod)
 [![Rust 1.94+](https://img.shields.io/badge/Rust-1.94+-orange?logo=rust)](rust/)
 
-[English](README_EN.md) | 中文
+[中文](README_zh.md) | English
 
 ---
 
-## 定位与约束
+## What It Is
 
-| 维度 | 内容 |
-|------|------|
-| 定位 | 开源自托管 AI Agent（2026+） |
-| 运行环境 | 单机可运行，消费级笔记本，8GB+ 内存 |
-| 底座语言 | Go（编排/服务）+ Rust（性能关键路径） |
-| 存储 | 多引擎并存：关系型 + 向量 + 图 + KV + 全文检索 + 事件流 |
-| 形态 | 多 Agent 协同：黑板模式 + CAS 原子认领 + Supervisor Tree |
-| 核心能力 | 自学习 / 自进化 / 自增强（无梯度主线 + 条件梯度训练） |
-| LLM 池 | Provider-agnostic：Flash 模型用于预算池（Tier 0-1），Reasoning 模型用于复杂推理（Tier 2-3）。支持 OpenAI / Anthropic / DeepSeek / Google / Ollama 协议 |
+| Dimension | Details |
+|-----------|---------|
+| Type | Open-source self-hosted AI Agent (2026+) |
+| Runtime | Single machine, consumer laptop, 8GB+ RAM |
+| Languages | Go (orchestration/service) + Rust (performance-critical paths) |
+| Storage | Multi-engine: relational + vector + graph + KV + full-text search + event stream |
+| Agent model | Multi-agent collaboration: Blackboard pattern + CAS atomic claim + Supervisor Tree |
+| Core capability | Self-learning / self-evolution / self-improvement (gradient-free primary + conditional gradient training) |
+| LLM pool | Provider-agnostic: Flash models for budget pool (Tier 0-1), Reasoning models for complex inference (Tier 2-3). Adapters for OpenAI / Anthropic / DeepSeek / Google / Ollama |
 
-> **默认推荐**：开箱即用配置（`configs/defaults.toml`）使用 DeepSeek V4 系列（Flash + Pro），已在 Tier-0 基线长程测试。任何兼容上述协议的 Provider 均可替换。
-
----
-
-## Harness Engineering 六条不变量
-
-| # | 不变量 | 内涵 |
-|---|--------|------|
-| 1 | **可观测优先** | 从第 0 行代码起全链路可追溯，Token_Burn_Rate + Surprise_Index 一等公民指标 |
-| 2 | **可验证执行** | 禁止概率过滤充当安全边界，安全决策物理/密码学可验证 |
-| 3 | **可组合原语** | 最小可复用单元，模块间热路径同步接口 + 冷路径结构化事件通信 |
-| 4 | **数据驱动迭代** | Eval Harness 驱动自进化，所有变更通过 CI 门控 |
-| 5 | **状态机持有控制流** | Go 确定性状态机持有控制流，LLM 仅做概率性填空 |
-| 6 | **State-in-DB** | 所有状态持久化落盘，异步事件解耦跨存储状态变更，崩溃恢复从 EventLog 回放 |
+> **Default recommendation**: The out-of-the-box config (`configs/defaults.toml`) uses the DeepSeek V4 series (Flash + Pro), validated in long-running Tier-0 baseline tests. Any provider compatible with the above protocols can be substituted.
 
 ---
 
-## 架构
+## Six Harness Engineering Invariants
 
-### 四层架构 / 13 模块 / 8 代码包
+| # | Invariant | Meaning |
+|---|-----------|---------|
+| 1 | **Observability First** | Full-chain traceability from line 0. Token_Burn_Rate + Surprise_Index are first-class metrics. |
+| 2 | **Verifiable Execution** | Probabilistic filters are not security boundaries. Safety decisions must be physically or cryptographically verifiable. |
+| 3 | **Composable Primitives** | Minimal reusable units. Synchronous interfaces on hot paths, structured events on cold paths. |
+| 4 | **Data-Driven Iteration** | Self-evolution driven by Eval Harness. All changes gated by CI. |
+| 5 | **State Machine Owns Control Flow** | A deterministic Go FSM owns control flow. LLMs are probabilistic co-processors. No `while True: call LLM`. |
+| 6 | **State-in-DB** | All state persisted to disk. Async events decouple cross-storage mutations. Crash recovery replays from EventLog. |
+
+---
+
+## Architecture
+
+### 4 Layers / 13 Modules / 8 Packages
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ L3  Gateway (M13) │ Eval Harness (M12) │ Edge/Scheduler      │  ← 接口/治理
+│ L3  Gateway (M13) │ Eval Harness (M12) │ Edge/Scheduler      │  ← Interface / Governance
 ├──────────────────────────────────────────────────────────────┤
-│ L2  Orchestrator (M8) │ Self-Improve (M9) │ RAG (M10)         │  ← 协同/学习
-│     Extensions (MCP/Plugin/Skill/Marketplace)                 │
+│ L2  Orchestrator (M8) │ Self-Improve (M9) │ RAG (M10)         │  ← Collaboration / Learning
+│     Extensions (MCP / Plugin / Skill / Marketplace)           │
 ├──────────────────────────────────────────────────────────────┤
-│ L1  Agent Kernel (M4) │ Memory (M5) │ Skill (M6)             │  ← 认知核心
+│ L1  Agent Kernel (M4) │ Memory (M5) │ Skill (M6)             │  ← Cognitive Core
 │     Tool & Action (M7)                                        │
 ├──────────────────────────────────────────────────────────────┤
-│ L0  Inference (M1) │ Storage (M2) │ Observability (M3)        │  ← 基础设施
+│ L0  Inference (M1) │ Storage (M2) │ Observability (M3)        │  ← Infrastructure
 │     Policy & Safety (M11)                                     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 代码包映射
+### Package Mapping
 
-| 代码包 | 覆盖模块 | 职责 |
-|--------|----------|------|
-| `pkg/substrate` | M1 · M2 · M3 · M11 | LLM 路由、多引擎存储、全链路追踪、策略执行、Taint 传播 |
-| `pkg/cognition` | M4 · M5 · M6 | Agent 状态机、分层记忆（四层）、技能库（Wasm） |
-| `pkg/action` | M7 | 三级沙箱执行、MCP 双向、工具注册、CodeAct |
-| `pkg/extensions` | — | MCP 客户端管理、插件市场、扩展安装流、Skill Creator |
-| `pkg/swarm` | M8 · M9 · M10 | 多 Agent 黑板、自进化引擎、知识图谱 RAG |
-| `pkg/governance` | M12 | 评测门控、轨迹回放、影子执行、Eval Harness |
-| `pkg/edge` | M13（调度） | 任务调度、HITL 网关、Cron 触发 |
-| `pkg/gateway` | M13（接口） | HTTP API Server（OpenAI 兼容）、Web UI、18 渠道适配 |
+| Package | Modules | Responsibilities |
+|---------|---------|-----------------|
+| `pkg/substrate` | M1 · M2 · M3 · M11 | LLM routing, multi-engine storage, full-chain tracing, policy enforcement, taint propagation |
+| `pkg/cognition` | M4 · M5 · M6 | Agent FSM, 4-layer memory system, Wasm skill library |
+| `pkg/action` | M7 | 3-tier sandbox execution, bidirectional MCP, tool registry, CodeAct |
+| `pkg/extensions` | — | MCP client management, plugin marketplace, extension install flow, Skill Creator |
+| `pkg/swarm` | M8 · M9 · M10 | Multi-agent blackboard, self-improvement engine, knowledge graph RAG |
+| `pkg/governance` | M12 | Eval gating, trajectory replay, shadow execution, CI integration |
+| `pkg/edge` | M13 (scheduling) | Task scheduling, HITL gateway, cron triggers |
+| `pkg/gateway` | M13 (interface) | HTTP API server (OpenAI-compatible), Web UI, 18 channel adapters |
 
-### 硬件分层
+### Hardware Tiers
 
-| Tier | RAM | 能力 |
-|------|-----|------|
-| Tier 0（地板） | 8GB | 全部远程 API，单 Agent |
-| Tier 1（甜点） | 16GB | 远程 API + 高并发 + 本地 Embedding |
-| Tier 2 | 24GB+ | 远程 API + 多 Agent + 全存储栈 |
-| Tier 3 | 64GB+（Apple Silicon） | 全本地推理，零云端依赖 |
-
----
-
-## 核心特性
-
-### 第三方平台接入（18 渠道）
-
-Telegram · Discord · Slack · 飞书 · 钉钉 · 企业微信 · Matrix · Mattermost · Microsoft Teams · Signal · SMS · Email · QQBot · Webhook · Home Assistant · 及更多
-
-### 安全体系
-
-- **五级污点传播**（TaintNone → TaintHigh）贯穿全链路，外部数据不进指令区
-- **Cedar 策略引擎**（purego FFI，无 CGO）用于工具调用授权
-- **三级沙箱**（InProcess / Wasm-wazero / Container）按风险等级隔离执行
-- **SafeDialer SSRF 防护**，屏蔽内网 RFC 地址段
-- **KillSwitch 三阶段熔断**，支持进程级、模型级、会话级停止
-
-### 自进化能力
-
-- **无梯度主线**：Reflexion 反思 → Logic Collapse 技能蒸馏 → PromptOptimizer 提示优化 → SurpriseIndex 自适应
-- **Eval Harness 驱动**：轨迹录制 → 影子执行 → 回归检测 → CI 门控 → 自动熔断
-- **Auto-Curriculum**：基于 SurpriseIndex 自动生成训练课程
-
-### 可扩展性
-
-- **MCP（Model Context Protocol）**：Streamable HTTP，支持作为 MCP 客户端和服务端
-- **Plugin Bundle**：多组件插件包，含 MCP 服务 + 技能 + 自动化
-- **Shell Script Hooks**：`~/.polarisagi/polaris/hooks/` 目录，无需改源码定制生命周期
+| Tier | RAM | Capabilities |
+|------|-----|-------------|
+| Tier 0 (floor) | 8GB | All-remote API, single agent |
+| Tier 1 (sweet spot) | 16GB | Remote API + high concurrency + local embedding |
+| Tier 2 | 24GB+ | Remote API + multi-agent + full storage stack |
+| Tier 3 | 64GB+ (Apple Silicon) | Fully local inference, zero cloud dependency |
 
 ---
 
-## 项目结构
+## Key Features
+
+### Third-Party Platform Support (18 channels)
+
+Telegram · Discord · Slack · Feishu · DingTalk · WeCom · Matrix · Mattermost · Microsoft Teams · Signal · SMS · Email · QQBot · Webhook · Home Assistant · and more
+
+### Security
+
+- **5-level taint propagation** (TaintNone → TaintHigh) across the full chain — external data never enters the instruction zone
+- **Cedar policy engine** (via purego FFI, no CGO) for tool call authorization
+- **3-tier sandbox** (InProcess / Wasm-wazero / Container) with risk-based isolation
+- **SafeDialer SSRF protection** — blocks RFC-defined private address ranges (including CGNAT 100.64.0.0/10)
+- **KillSwitch 3-phase circuit breaker** — process-level, model-level, session-level stops
+
+### Self-Improvement
+
+- **Gradient-free main path**: Reflexion → Logic Collapse skill distillation → PromptOptimizer → SurpriseIndex adaptation
+- **Eval Harness driven**: trajectory recording → shadow execution → regression detection → CI gating → auto circuit-breaker
+- **Auto-Curriculum**: automatically generates training curricula based on SurpriseIndex
+
+### Extensibility
+
+- **MCP (Model Context Protocol)**: Streamable HTTP, supports both MCP client and server roles
+- **Plugin Bundle**: multi-component plugin packages (MCP server + skills + automations)
+- **Shell Script Hooks**: drop scripts into `~/.polarisagi/polaris/hooks/` — no source changes needed
+
+### OpenAI-Compatible API
+
+The HTTP gateway exposes an OpenAI-compatible API, allowing any OpenAI-compatible client (ChatGPT clients, LangChain, etc.) to connect directly.
+
+---
+
+## Project Structure
 
 ```
 polaris/
-├── cmd/polaris/          # 主入口（CLI）
+├── cmd/polaris/          # Main entry point (CLI)
 ├── pkg/
 │   ├── substrate/        # L0: inference, storage, observability, policy
 │   ├── cognition/        # L1: kernel, memory, skill
@@ -123,98 +127,98 @@ polaris/
 │   ├── swarm/            # L2: orchestrator, self_improve, knowledge
 │   ├── governance/       # L3: eval harness
 │   ├── edge/             # L3: scheduler, HITL
-│   └── gateway/          # L3: HTTP server, channels (18 adapters), Web UI
-├── internal/             # 私有共享：protocol, config, errors
-├── rust/substrate/       # Rust FFI 性能路径（Cedar，嵌入式推理）
-├── skills/               # 内置 Wasm 技能源码（make build-skills 编译）
-├── plugins/builtin/      # 内置插件包
-├── policies/             # Cedar 策略文件（hard_constraints / soft_constraints）
-├── configs/              # 嵌入式默认配置（随二进制打包）
-├── web/                  # Web UI（Vite 构建，嵌入二进制）
-├── docs/arch/            # 架构设计文档（15 份）
+│   └── gateway/          # L3: HTTP server, 18 channel adapters, Web UI
+├── internal/             # Private shared: protocol, config, errors
+├── rust/substrate/       # Rust FFI performance paths (Cedar, embedded inference)
+├── skills/               # Built-in Wasm skill sources (compiled by make build-skills)
+├── plugins/builtin/      # Built-in plugin bundles
+├── policies/             # Cedar policy files (hard_constraints / soft_constraints)
+├── configs/              # Embedded default configs (bundled with binary)
+├── web/                  # Web UI (Vite build, embedded in binary)
+├── docs/arch/            # Architecture design docs (15 documents)
 ├── go.mod
 └── Makefile
 ```
 
-**运行时数据目录**：`~/.polarisagi/polaris/`（数据库、日志、Hooks、扩展、缓存等均在此目录）
+**Runtime data directory**: `~/.polarisagi/polaris/` — database, logs, hooks, extensions, and caches all live here.
 
 ---
 
-## 快速开始
+## Getting Started
 
-### 前置条件
+### Prerequisites
 
 - Go 1.26+
-- Rust 1.94+（`cargo` 在 PATH 中）
+- Rust 1.94+ (`cargo` in PATH)
 - Git
 
-### 构建与运行
+### Build and Run
 
 ```bash
-# 克隆
+# Clone
 git clone https://github.com/polarisagi/polaris.git
 cd polaris
 
-# 构建（Rust FFI → Go 二进制 → Web UI）
+# Build (Rust FFI → Go binary → Web UI)
 make build
 
-# 运行
+# Run
 ./bin/polaris
 
-# 打开 Web UI
+# Open Web UI
 open http://localhost:8080
 ```
 
-### 配置 Provider
+### Configure a Provider
 
-编辑 `configs/defaults.toml` 或在运行时数据目录创建覆盖文件：
+Edit `configs/defaults.toml`, or create an override file in the runtime data directory:
 
 ```bash
-# 推荐：DeepSeek V4（默认，开箱即用）
-# 其他兼容 OpenAI 协议的 Provider 直接替换 base_url 和 api_key
+# Default: DeepSeek V4 (out-of-the-box, no changes needed)
+# Any OpenAI-compatible provider: swap base_url and api_key
 ```
 
-### 常用 Make 命令
+### Common Make Targets
 
-| 命令 | 说明 |
-|------|------|
-| `make build` | 完整构建（Rust + Go + UI） |
-| `make test` | 运行测试套件 |
-| `make lint` | 代码静态检查 |
-| `make fmt` | 格式化代码 |
-| `make docs-sync` | 刷新架构文档 §跳读 行号索引 |
+| Command | Description |
+|---------|-------------|
+| `make build` | Full build (Rust + Go + UI) |
+| `make test` | Run test suite |
+| `make lint` | Static analysis |
+| `make fmt` | Format code |
+| `make docs-sync` | Refresh §TOC line numbers in architecture docs |
 | `make all` | tidy + fmt + lint + test + build |
 
 ---
 
-## 架构设计文档
+## Architecture Docs
 
-`docs/arch/` 目录下包含 15 份架构设计文档，覆盖全部 13 个模块：
+The `docs/arch/` directory contains 15 design documents covering all 13 modules:
 
-| 文档 | 内容 |
-|------|------|
-| `ARCHITECTURE.md` | 系统总览、SSoT 锚点、模块完成度 |
-| `00-Global-Dictionary.md` | 全局概念字典、HE-Rules、跨模块规则 |
-| `M01` ~ `M13-bis` | 13 个模块的设计、选型、实现状态 |
-
----
-
-## 贡献
-
-请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。本项目对 PR 质量与架构一致性有较高要求。
-
-安全漏洞请参阅 [SECURITY.md](SECURITY.md) 通过私信渠道上报。
+| Document | Content |
+|----------|---------|
+| `ARCHITECTURE.md` | System overview, SSoT anchors, module completion status |
+| `00-Global-Dictionary.md` | Global concept dictionary, HE-Rules, cross-module contracts |
+| `M01` – `M13-bis` | Per-module design, technology choices, implementation status |
 
 ---
 
-## 联系与社区
+## Contributing
 
-- **官方网站**: [https://polarisagi.online/](https://polarisagi.online/)
-- **作者 / 关注我**: mrlaoliai（全网同名：小红书、抖音、TikTok、X 平台等）
-- **联系邮箱**: [polarisagi.online@gmail.com](mailto:polarisagi.online@gmail.com)
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. This project maintains high standards for PR quality and architectural consistency.
+
+To report security vulnerabilities, see [SECURITY.md](SECURITY.md) for the private disclosure channel.
 
 ---
 
-## 许可证
+## Community
+
+- **Website**: [https://polarisagi.online/](https://polarisagi.online/)
+- **Author**: mrlaoliai (same handle everywhere: Xiaohongshu, Douyin, TikTok, X, etc.)
+- **Email**: [polarisagi.online@gmail.com](mailto:polarisagi.online@gmail.com)
+
+---
+
+## License
 
 [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0)
