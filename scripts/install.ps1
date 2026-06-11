@@ -14,7 +14,7 @@ $BinName    = "polaris.exe"
 $InstallDir = "$env:USERPROFILE\.polarisagi\polaris\bin"
 $DataDir    = "$env:USERPROFILE\.polarisagi\polaris"
 $LogDir     = "$DataDir\logs"
-$Port       = 29999
+$Port       = 28888
 $TaskName   = "PolarisAGI-Polaris"
 
 Write-Msg -zh "🌌 正在安装/更新 PolarisAGI Polaris..." `

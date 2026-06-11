@@ -43,7 +43,7 @@ var cliDict = map[string][2]string{
 	"help_repl_clr":   {"  /clear      清屏", "  /clear      Clear screen"},
 	"help_repl_quit":  {"  /quit       退出", "  /quit       Exit REPL"},
 	"help_env":        {"Environment:", "Environment:"},
-	"help_env_url":    {"  POLARIS_SERVER_URL    API 地址（默认 http://localhost:29999）", "  POLARIS_SERVER_URL    API URL (default http://localhost:29999)"},
+	"help_env_url":    {"  POLARIS_SERVER_URL    API 地址（默认 http://localhost:28888）", "  POLARIS_SERVER_URL    API URL (default http://localhost:28888)"},
 	"help_env_cfg":    {"  POLARIS_CONFIG        配置文件路径（默认 configs/defaults.toml）", "  POLARIS_CONFIG        Config file path (default configs/defaults.toml)"},
 
 	"init_title":     {"  ★  Polaris 初始化向导  ", "  ★  Polaris Setup Wizard  "},

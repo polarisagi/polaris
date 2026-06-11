@@ -124,7 +124,7 @@ shadow_deploy = false
 
 [interface]
 host = "127.0.0.1"
-port = 29999
+port = 28888
 cli = true
 http = true
 grpc = false

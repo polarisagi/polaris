@@ -18,9 +18,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/v1': 'http://localhost:29999',
-      '/healthz': 'http://localhost:29999',
-      '/metrics': 'http://localhost:29999',
+      '/v1': 'http://localhost:28888',
+      '/healthz': 'http://localhost:28888',
+      '/metrics': 'http://localhost:28888',
     },
   },
 })

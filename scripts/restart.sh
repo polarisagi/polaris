@@ -17,7 +17,7 @@ for arg in "$@"; do
   fi
 done
 
-PORT=29999
+PORT=28888
 DATA_DIR="${POLARIS_DATA_DIR:-$HOME/.polarisagi/polaris}"
 mkdir -p "$DATA_DIR"
 LOG_FILE="$DATA_DIR/logs/polaris.log"

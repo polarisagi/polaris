@@ -204,7 +204,7 @@ make build
 ./bin/polaris
 
 # 打开 Web UI
-open http://localhost:29999
+open http://localhost:28888
 ```
 
 ### 配置 Provider

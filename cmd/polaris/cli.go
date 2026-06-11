@@ -48,7 +48,7 @@ func cliServerURL() string {
 	if u := os.Getenv("POLARIS_SERVER_URL"); u != "" {
 		return strings.TrimRight(u, "/")
 	}
-	return "http://localhost:29999"
+	return "http://localhost:28888"
 }
 
 func cliCheckServer() error {
@@ -327,7 +327,7 @@ func runInit() error { //nolint:gocyclo
 	fmt.Println()
 	fmt.Println(t("init_next"))
 	fmt.Printf("  %s %s\n", clr(ansiAccent+ansiBold, "polaris chat"), t("init_next_chat"))
-	fmt.Printf("  %s %s\n", clr(ansiAccent+ansiBold, "open http://localhost:29999"), t("init_next_web"))
+	fmt.Printf("  %s %s\n", clr(ansiAccent+ansiBold, "open http://localhost:28888"), t("init_next_web"))
 	fmt.Println()
 	return nil
 }

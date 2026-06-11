@@ -7,7 +7,7 @@ INSTALL_DIR="$HOME/.polarisagi/polaris/bin"
 DATA_DIR="$HOME/.polarisagi/polaris"
 PLIST_LABEL="com.polarisagi.polaris"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-PORT=29999
+PORT=28888
 
 if [[ "$LANG" == *"zh"* ]] || [[ "$LC_ALL" == *"zh"* ]] || [[ "$LANGUAGE" == *"zh"* ]]; then
     LANG_ZH=true
