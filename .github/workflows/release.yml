@@ -13,10 +13,44 @@ permissions:
   actions: read
 
 jobs:
-  # 在执行任何耗时打包前，先做极速交叉编译检查（Fail-Fast 机制）
-  precheck-go:
-    name: Pre-check Go
+  # 1. 优先执行 Go 打包 (Fail-Fast 机制)
+  # 全部在 ubuntu 上完成（零 CGO，purego 运行时加载），如果 Go 代码有错立刻失败，阻断下游耗时打包。
+  build-go:
+    name: Build Go (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+            cargo_target: x86_64-unknown-linux-gnu
+            binary_suffix: ""
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+            cargo_target: aarch64-unknown-linux-gnu
+            binary_suffix: ""
+          - name: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            cargo_target: aarch64-apple-darwin
+            binary_suffix: ""
+          - name: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            cargo_target: x86_64-apple-darwin
+            binary_suffix: ""
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            cargo_target: x86_64-pc-windows-msvc
+            binary_suffix: ".exe"
+          - name: windows-arm64
+            goos: windows
+            goarch: arm64
+            cargo_target: aarch64-pc-windows-msvc
+            binary_suffix: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,23 +61,27 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Check Go Compilation (All Targets)
-        run: |
-          echo "Checking linux-amd64..."
-          GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/polaris
-          echo "Checking linux-arm64..."
-          GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/polaris
-          echo "Checking darwin-arm64..."
-          GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/polaris
-          echo "Checking darwin-amd64..."
-          GOOS=darwin GOARCH=amd64 go build -o /dev/null ./cmd/polaris
-          echo "Checking windows-amd64..."
-          GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/polaris
-          echo "Checking windows-arm64..."
-          GOOS=windows GOARCH=arm64 go build -o /dev/null ./cmd/polaris
+      - name: Build Backend (cross-compile)
+        env:
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          SKIP_RUST_BUILD: 1
+        run: make build-backend
+
+      - name: Rename binary for Windows
+        if: matrix.binary_suffix == '.exe'
+        run: mv bin/polaris bin/polaris.exe
+
+      - name: Upload Go Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-${{ matrix.name }}
+          path: bin/polaris*
+          retention-days: 1
 
   build-frontend:
-    needs: precheck-go
     name: Build Frontend
     runs-on: ubuntu-latest
     steps:
@@ -69,10 +107,10 @@ jobs:
           path: web/dist
           retention-days: 1
 
-  # Rust 预编译：6 个 target 全部并行，产物通过 artifact 传递给下游 Go 编译
-  # 最终产物缓存（跨 Tag 支持）：利用 GitHub CLI 下载上一次成功发布时的产物比对 Hash，实现跨 Tag 秒级跳过
+  # 2. Rust 预编译 (依赖 build-go)
+  # 只有 Go 编译成功，才会启动耗时的 Rust 编译
   build-rust:
-    needs: precheck-go
+    needs: build-go
     name: Rust (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -100,7 +138,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 跨 Tag 缓存核心机制：先下载极小的 Hash Artifact，如果匹配再去下载几十 MB 的真实产物
       - name: Restore Rust from previous release
         id: rust-restore
         env:
@@ -111,11 +148,9 @@ jobs:
           echo "Current hash: $CURRENT_HASH"
           echo "CURRENT_HASH=$CURRENT_HASH" >> $GITHUB_ENV
           
-          # 寻找最近一次成功的 Release 流水线
           LATEST_RUN=$(gh run list --workflow=release.yml --status=success --limit=1 --json databaseId -q '.[0].databaseId' || echo "")
           if [ -n "$LATEST_RUN" ]; then
             echo "Found previous successful run: $LATEST_RUN"
-            # 先仅仅下载 Hash 文件（几字节），避免盲目下载几十 MB 大文件
             gh run download $LATEST_RUN -n rust-hash-${{ matrix.name }} -D prev_hash || echo "Hash artifact not found"
             
             if [ -f "prev_hash/rust-hash.txt" ]; then
@@ -124,7 +159,6 @@ jobs:
                 echo "Hash matches! Downloading full artifacts..."
                 gh run download $LATEST_RUN -n rust-${{ matrix.name }} -D prev_rust || echo "Full artifact not found"
                 
-                # 检查是否成功下载了动态库
                 if ls prev_rust/libsubstrate.* prev_rust/substrate.dll 1> /dev/null 2>&1; then
                   echo "cache-hit=true" >> $GITHUB_OUTPUT
                   mkdir -p rust/substrate/target/${{ matrix.cargo_target }}/release
@@ -135,8 +169,6 @@ jobs:
             fi
           fi
           echo "cache-hit=false" >> $GITHUB_OUTPUT
-
-      # ── 以下步骤仅在跨 Tag 缓存未命中时执行 ──
 
       - name: Disable Windows Defender
         if: steps.rust-restore.outputs.cache-hit != 'true' && runner.os == 'Windows'
@@ -155,8 +187,6 @@ jobs:
         if: steps.rust-restore.outputs.cache-hit != 'true'
         shell: bash
         run: cargo build --release --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
-
-      # ── 无论缓存是否命中，都准备并上传 artifact 供本流水线的 Go 编译使用，并作为下次发版的基准 ──
 
       - name: Save Rust Hash for next release
         shell: bash
@@ -182,62 +212,30 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-  # Go 交叉编译 + 打包：全部在 ubuntu 上完成（零 CGO，purego 运行时加载）
-  # 省掉 macOS / Windows runner 的分配等待和额外工具安装
-  build-packages:
-    needs: [build-frontend, build-rust]
+  # 3. 最后合并打包 (依赖 build-frontend, build-go, build-rust)
+  # 从各个 artifact 收集产物并最终压缩
+  package:
+    needs: [build-frontend, build-go, build-rust]
     name: Package (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - name: linux-amd64
-            goos: linux
-            goarch: amd64
-            cargo_target: x86_64-unknown-linux-gnu
-            rust_artifact: rust-linux-amd64
             archive_format: tar.gz
-            binary_suffix: ""
           - name: linux-arm64
-            goos: linux
-            goarch: arm64
-            cargo_target: aarch64-unknown-linux-gnu
-            rust_artifact: rust-linux-arm64
             archive_format: tar.gz
-            binary_suffix: ""
           - name: darwin-arm64
-            goos: darwin
-            goarch: arm64
-            cargo_target: aarch64-apple-darwin
-            rust_artifact: rust-darwin-arm64
             archive_format: tar.gz
-            binary_suffix: ""
           - name: darwin-amd64
-            goos: darwin
-            goarch: amd64
-            cargo_target: x86_64-apple-darwin
-            rust_artifact: rust-darwin-amd64
             archive_format: tar.gz
-            binary_suffix: ""
           - name: windows-amd64
-            goos: windows
-            goarch: amd64
-            cargo_target: x86_64-pc-windows-msvc
-            rust_artifact: rust-windows-amd64
             archive_format: zip
-            binary_suffix: ".exe"
           - name: windows-arm64
-            goos: windows
-            goarch: arm64
-            cargo_target: aarch64-pc-windows-msvc
-            rust_artifact: rust-windows-arm64
             archive_format: zip
-            binary_suffix: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Download Frontend Artifact
         uses: actions/download-artifact@v4
@@ -245,30 +243,17 @@ jobs:
           name: frontend-dist
           path: web/dist
 
+      - name: Download Go Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: go-${{ matrix.name }}
+          path: bin
+
       - name: Download Rust Artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.rust_artifact }}
-          path: rust/substrate/target/${{ matrix.cargo_target }}/release
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
-
-      - name: Build Backend (cross-compile)
-        env:
-          CARGO_TARGET: ${{ matrix.cargo_target }}
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          SKIP_RUST_BUILD: 1
-        run: make build-backend
-
-      - name: Rename binary for Windows
-        if: matrix.binary_suffix == '.exe'
-        run: mv bin/polaris bin/polaris.exe
+          name: rust-${{ matrix.name }}
+          path: bin/lib
 
       - name: Package
         run: |
@@ -295,7 +280,7 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: [build-packages]
+    needs: [package]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
