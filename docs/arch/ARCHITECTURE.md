@@ -46,6 +46,7 @@ L1 架构散文(本文档+模块文档) → L2 结构真相(`internal/protocol/s
 - 存储: 嵌入式优先(SQLite + SurrealDB-Core + 本地 FS),禁独立进程 DB
 - 网络: 默认 127.0.0.1,远程绑定需显式 + TLS + capability + audit
 - 安全: 物理隔离 > 提示词加固,外部内容 Taint=High 默认
+- 语音: 本地 STT 选型强制为 Sherpa-ONNX + SenseVoice（零 Python 依赖，极低内存开销），严格对齐 Tier 0 约束。
 
 **权威源指引**:
 - HE 六不变量(可观测/可验证/可组合/数据驱动/状态机控制流/State-in-DB): [00-Global-Dictionary §1-bis](./00-Global-Dictionary.md)

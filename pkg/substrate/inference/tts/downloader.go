@@ -75,16 +75,20 @@ func ttsModelPresent(modelDir string) bool {
 	return false
 }
 
-// ttsModelMapper 提取 TTS 模型所需的所有组件文件（扁平输出到 modelDir）。
-// kokoro / piper / Matcha-TTS 使用不同文件集合，按扩展名统一覆盖。
 func ttsModelMapper(modelDir string) func(string) (string, bool) {
 	return func(name string) (string, bool) {
+		// Kokoro 等模型依赖 espeak-ng-data，必须保留完整的子目录结构
+		if idx := strings.Index(name, "espeak-ng-data"); idx != -1 {
+			relPath := name[idx:]
+			return filepath.Join(modelDir, relPath), true
+		}
+
 		base := filepath.Base(name)
 		switch {
 		case strings.HasSuffix(base, ".onnx"),
 			strings.HasSuffix(base, ".bin"),
 			base == "tokens.txt",
-			base == "lexicon.txt",
+			strings.HasPrefix(base, "lexicon") && strings.HasSuffix(base, ".txt"),
 			strings.HasSuffix(base, ".json"):
 			return filepath.Join(modelDir, base), true
 		}

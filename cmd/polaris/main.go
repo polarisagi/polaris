@@ -717,6 +717,7 @@ func run() error { //nolint:gocyclo
 		sttGate = autoConf.Gate
 	}
 	server.InitSTTEngine(ctx, dataDir, sttGate, safeHTTPClient, cfg.Inference.STT)
+	server.InitTTSEngine(ctx, dataDir, sttGate, safeHTTPClient, cfg.Inference.TTS)
 
 	if err := httpServer.Start(); err != nil {
 		slog.Error("polaris: failed to start HTTP server", "err", err)

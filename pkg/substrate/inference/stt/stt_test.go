@@ -141,11 +141,11 @@ func TestNewEngine_LibraryNotLoaded(t *testing.T) {
 func TestTranscribe_MockFallback(t *testing.T) {
 	// recognizer=nil → mock fallback
 	e := &Engine{recognizer: nil}
-	text, err := e.Transcribe([]float32{0.1, 0.2}, 16000)
+	res, err := e.Transcribe([]float32{0.1, 0.2}, 16000)
 	if err != nil {
 		t.Fatalf("mock fallback should not error: %v", err)
 	}
-	if text == "" {
+	if res.Text == "" {
 		t.Error("mock fallback should return non-empty text")
 	}
 }

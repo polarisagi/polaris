@@ -51,7 +51,7 @@ func LoadLibrary(libPath string) error {
 		return nil // 已成功加载，直接复用
 	}
 
-	lib, err := dlopen(libPath)
+	lib, err := Dlopen(libPath)
 	if err != nil {
 		loadErr = err
 		return loadErr
@@ -183,11 +183,18 @@ func (e *Engine) Close() {
 	}
 }
 
+// Result 包含语音识别的文字和扩展（情感、事件）信息
+type Result struct {
+	Text    string `json:"text"`
+	Emotion string `json:"emotion"`
+	Event   string `json:"event"`
+}
+
 // Transcribe 传入 16000Hz 16-bit PCM 单声道音频数据并返回文本
-func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
+func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 	if !loaded || e.recognizer == nil {
 		// Mock 回退：如果未正确初始化，返回模拟文本
-		return "（未连接真实引擎，此为本地 Mock 语音转文字）", nil
+		return Result{Text: "（未连接真实引擎，此为本地 Mock 语音转文字）"}, nil
 	}
 
 	e.mu.Lock()
@@ -195,7 +202,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 	stream := CreateOfflineStream(e.recognizer)
 	if stream == nil {
-		return "", errors.New("failed to create stream")
+		return Result{}, errors.New("failed to create stream")
 	}
 	defer DestroyOfflineStream(stream)
 
@@ -206,7 +213,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 	resPtr := GetOfflineStreamResult(stream)
 	if resPtr == 0 {
-		return "", errors.New("failed to get result")
+		return Result{}, errors.New("failed to get result")
 	}
 	defer DestroyOfflineRecognizerResult(resPtr)
 
@@ -214,7 +221,18 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
 	// 按照 SherpaOnnx 规范，result 的第一个字段就是 text 指针
 	textPtr := *(**byte)(unsafe.Pointer(resPtr))
 	if textPtr == nil {
-		return "", nil
+		return Result{}, nil
+	}
+
+	// 提取 Emotion 和 Event (offset 40, 48)
+	emotionPtr := *(**byte)(unsafe.Pointer(resPtr + 40))
+	eventPtr := *(**byte)(unsafe.Pointer(resPtr + 48))
+	var emotionText, eventText string
+	if emotionPtr != nil {
+		emotionText = parseCString(uintptr(unsafe.Pointer(emotionPtr)))
+	}
+	if eventPtr != nil {
+		eventText = parseCString(uintptr(unsafe.Pointer(eventPtr)))
 	}
 
 	// 简单的 C 字符串转 Go 字符串
@@ -231,7 +249,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
 		runtime.KeepAlive(cRawText)
 	}
 
-	return rawText, nil
+	return Result{Text: rawText, Emotion: emotionText, Event: eventText}, nil
 }
 
 func parseCString(ptr uintptr) string {

@@ -4,7 +4,8 @@ package stt
 
 import "syscall"
 
-func dlopen(abs string) (uintptr, error) {
+// Dlopen 平台安全地加载动态库
+func Dlopen(abs string) (uintptr, error) {
 	h, err := syscall.LoadLibrary(abs)
 	return uintptr(h), err
 }

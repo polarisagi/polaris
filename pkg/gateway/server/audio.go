@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/pkg/substrate/inference/stt"
+	"github.com/polarisagi/polaris/pkg/substrate/inference/tts"
 )
 
 // globalSTTEngine 使用 atomic.Pointer 保证并发安全：
@@ -25,6 +27,45 @@ var globalSTTEngine atomic.Pointer[stt.Engine]
 // SetSTTEngine 原子替换全局 STT 引擎实例（goroutine-safe）。
 func SetSTTEngine(engine *stt.Engine) {
 	globalSTTEngine.Store(engine)
+}
+
+var globalTTSEngine atomic.Pointer[tts.Engine]
+
+func SetTTSEngine(engine *tts.Engine) {
+	globalTTSEngine.Store(engine)
+}
+
+func (s *Server) handleAudioSpeech(w http.ResponseWriter, r *http.Request) {
+	engine := globalTTSEngine.Load()
+	if engine == nil {
+		http.Error(w, "TTS Engine not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Input string `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Input == "" {
+		http.Error(w, "input is empty", http.StatusBadRequest)
+		return
+	}
+
+	wavData, err := engine.Generate(req.Input)
+	if err != nil {
+		slog.Error("audio: tts generation failed", "err", err)
+		http.Error(w, "internal server error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(wavData)))
+	if _, err := w.Write(wavData); err != nil {
+		slog.Warn("audio: failed to write response", "err", err)
+	}
 }
 
 // handleAudioTranscriptions 处理前端语音输入并转写文本
@@ -81,9 +122,8 @@ func (s *Server) handleAudioTranscriptions(w http.ResponseWriter, r *http.Reques
 	cmd.Stdout = &outBuf
 	if err := cmd.Run(); err != nil {
 		slog.Error("ffmpeg decode failed", "err", err)
-		// 机器上没有 ffmpeg 时触发 Mock（纯测试回退）
-		mockText, _ := engine.Transcribe(nil, 16000)
-		respondJSON(w, map[string]any{"text": mockText})
+		mockRes, _ := engine.Transcribe(nil, 16000)
+		respondJSON(w, mockRes)
 		return
 	}
 
@@ -94,13 +134,13 @@ func (s *Server) handleAudioTranscriptions(w http.ResponseWriter, r *http.Reques
 		samples[i] = math.Float32frombits(bits)
 	}
 
-	text, err := engine.Transcribe(samples, 16000)
+	res, err := engine.Transcribe(samples, 16000)
 	if err != nil {
 		http.Error(w, "stt failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	respondJSON(w, map[string]any{"text": text})
+	respondJSON(w, res)
 }
 
 func respondJSON(w http.ResponseWriter, data any) {

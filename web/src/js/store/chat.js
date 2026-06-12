@@ -83,17 +83,34 @@ Alpine.store('chat', {
 
   async toggleRecording() {
     if (this.isRecording) {
-      if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
-        this._mediaRecorder.stop();
+      if (this._globalRecorder && this._globalRecorder.state !== 'inactive') {
+        this._globalRecorder.stop();
       }
       return;
     }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      window.dispatchEvent(new CustomEvent('stt-start'));
 
-      // 按优先级探测浏览器支持的 mimeType：
-      // webm（Chrome/Firefox） → mp4（iOS Safari 14.3+） → ogg（Firefox） → 系统默认
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContextCtor();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      analyser.fftSize = 512;
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      let silenceStart = null;
+      const SILENCE_THRESHOLD = 5;
+      const SHORT_PAUSE_MS = 500;
+      const LONG_PAUSE_MS = 2500;
+
+      this._globalChunks = [];
+      this._currentChunkChunks = [];
+
       const preferredTypes = ['audio/webm', 'audio/mp4', 'audio/ogg'];
       let mimeType = '';
       for (const t of preferredTypes) {
@@ -102,66 +119,135 @@ Alpine.store('chat', {
           break;
         }
       }
-
       const recorderOpts = mimeType ? { mimeType } : {};
-      this._mediaRecorder = new MediaRecorder(stream, recorderOpts);
-      this._audioChunks = [];
 
-      this._mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          this._audioChunks.push(e.data);
-        }
+      // Global Recorder
+      this._globalRecorder = new MediaRecorder(stream, recorderOpts);
+      this._globalRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) this._globalChunks.push(e.data);
       };
 
-      this._mediaRecorder.onstop = async () => {
-        this.isRecording = false;
-        stream.getTracks().forEach(track => track.stop());
+      // Chunk Recorder
+      this._chunkRecorder = new MediaRecorder(stream, recorderOpts);
+      this._chunkRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) this._currentChunkChunks.push(e.data);
+      };
 
-        // 使用实际录制时协商的 mimeType（Safari 可能是 audio/mp4 而非 audio/webm）
-        const actualMime = this._mediaRecorder.mimeType || mimeType || 'audio/webm';
-        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
-        const audioBlob = new Blob(this._audioChunks, { type: actualMime });
-        this._audioChunks = [];
-        
-        if (Alpine.store('toast')) {
-          Alpine.store('toast').show('ok', '正在识别语音...');
-        }
+      let isSpeaking = false;
+      let checkVADTimeout;
 
+      const uploadChunk = async (blob, ext) => {
         const formData = new FormData();
-        formData.append('file', audioBlob, `recording.${ext}`);
-        
+        formData.append('file', blob, `chunk.${ext}`);
         try {
           const headers = authHeaders();
           delete headers['Content-Type'];
-
-          const resp = await fetch('/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: headers,
-            body: formData
-          });
-
+          const resp = await fetch('/v1/audio/transcriptions', { method: 'POST', headers, body: formData });
           if (resp.ok) {
             const data = await resp.json();
             if (data.text) {
-              window.dispatchEvent(new CustomEvent('stt-result', { detail: data.text }));
+              window.dispatchEvent(new CustomEvent('stt-chunk', { detail: data.text }));
+            }
+          }
+        } catch (e) {
+          console.error("Chunk STT Error", e);
+        }
+      };
+
+      this._chunkRecorder.onstop = () => {
+        if (this._currentChunkChunks.length === 0) return;
+        const actualMime = this._chunkRecorder.mimeType || mimeType || 'audio/webm';
+        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+        const audioBlob = new Blob(this._currentChunkChunks, { type: actualMime });
+        this._currentChunkChunks = [];
+        uploadChunk(audioBlob, ext);
+      };
+
+      const checkVAD = () => {
+        if (!this.isRecording) return;
+
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) { sum += dataArray[i]; }
+        const average = sum / bufferLength;
+
+        const now = Date.now();
+        if (average > SILENCE_THRESHOLD) {
+          if (!isSpeaking) {
+            isSpeaking = true;
+            silenceStart = null;
+            if (this._chunkRecorder.state === 'inactive') {
+              this._currentChunkChunks = [];
+              this._chunkRecorder.start();
+            }
+          } else {
+            silenceStart = null;
+          }
+        } else {
+          if (isSpeaking) {
+            if (!silenceStart) silenceStart = now;
+            else if (now - silenceStart > SHORT_PAUSE_MS) {
+              isSpeaking = false;
+              if (this._chunkRecorder.state !== 'inactive') {
+                this._chunkRecorder.stop();
+              }
+            }
+          } else {
+            if (silenceStart && now - silenceStart > LONG_PAUSE_MS) {
+              this.toggleRecording(); // Auto stop on long silence
+              return;
+            }
+          }
+        }
+        checkVADTimeout = requestAnimationFrame(checkVAD);
+      };
+
+      this._globalRecorder.onstop = async () => {
+        this.isRecording = false;
+        cancelAnimationFrame(checkVADTimeout);
+        if (this._chunkRecorder.state !== 'inactive') {
+          this._chunkRecorder.stop();
+        }
+        stream.getTracks().forEach(track => track.stop());
+        audioContext.close();
+
+        const actualMime = this._globalRecorder.mimeType || mimeType || 'audio/webm';
+        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+        const audioBlob = new Blob(this._globalChunks, { type: actualMime });
+        this._globalChunks = [];
+
+        if (Alpine.store('toast')) {
+          Alpine.store('toast').show('ok', Alpine.store('i18n').t('chat_stt_global_checking'));
+        }
+
+        const formData = new FormData();
+        formData.append('file', audioBlob, `global.${ext}`);
+
+        try {
+          const headers = authHeaders();
+          delete headers['Content-Type'];
+          const resp = await fetch('/v1/audio/transcriptions', { method: 'POST', headers, body: formData });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.text) {
+              window.dispatchEvent(new CustomEvent('stt-final', { detail: data }));
             }
           } else {
             throw new Error(`Status ${resp.status}`);
           }
         } catch (e) {
-          console.error("STT Failed", e);
-          if (Alpine.store('toast')) {
-            Alpine.store('toast').show('error', '语音识别失败');
-          }
+          console.error("Global STT Failed", e);
+          if (Alpine.store('toast')) Alpine.store('toast').show('error', Alpine.store('i18n').t('chat_stt_error'));
         }
       };
 
-      this._mediaRecorder.start();
+      this._globalRecorder.start();
       this.isRecording = true;
+      checkVAD();
 
     } catch (e) {
       console.error("Failed to start recording", e);
-      alert('无法访问麦克风，请检查浏览器权限');
+      alert(Alpine.store('i18n').t('chat_stt_mic_error'));
     }
   },
 
@@ -248,16 +334,136 @@ Alpine.store('chat', {
     this.lastAbortedInput = null;
   },
 
-  speakText(text) {
-    if (!this.ttsEnabled || !window.speechSynthesis || !text) return;
-    window.speechSynthesis.cancel(); // 中断上一条未播完的语音
-    const utterance = new SpeechSynthesisUtterance(text);
-    // 优先使用中文语音，回退到系统默认
-    const voices = window.speechSynthesis.getVoices();
-    const zhVoice = voices.find(v => v.lang.startsWith('zh'));
-    if (zhVoice) utterance.voice = zhVoice;
-    utterance.lang = zhVoice ? zhVoice.lang : 'zh-CN';
-    window.speechSynthesis.speak(utterance);
+  playingMsgIdx: null,
+  _audioPlayer: null,
+
+  async toggleSpeakText(idx, text) {
+    if (!text) return;
+
+    if (this.playingMsgIdx === idx && this._audioPlayer) {
+      this._audioPlayer.pause();
+      this._audioPlayer = null;
+      this.playingMsgIdx = null;
+      return;
+    }
+
+    if (this._audioPlayer) {
+      this._audioPlayer.pause();
+      this._audioPlayer = null;
+    }
+
+    this.playingMsgIdx = idx;
+
+    // 同步创建一个 Audio 对象并预热（静音/空白），以绕过浏览器的异步长期等待后的自动播放拦截
+    const audio = new Audio();
+    audio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
+    audio.play().catch(() => {});
+
+    this._audioPlayer = audio;
+
+    // 预处理文本，去除对于 TTS 不友好的符号和内容，避免产生乱音
+    let cleanText = text
+      // 去除 Emoji
+      .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}]/gu, '')
+      // 去除多行代码块 (TTS 读代码体验很差，直接跳过)
+      .replace(/```[\s\S]*?```/g, '')
+      // 去除图片语法
+      .replace(/!\[.*?\]\(.*?\)/g, '')
+      // 提取链接文字
+      .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')
+      // 移除多余的 Markdown 标记 (粗体、斜体、引用、标题)
+      .replace(/[*_~`#>]/g, '')
+      // 移除行首的无序列表符
+      .replace(/^- /gm, '')
+      // 将中文标点统一替换为英文标点，帮助海外核心的 TTS 模型正确识别停顿
+      .replace(/，/g, ', ')
+      .replace(/。/g, '. ')
+      .replace(/！/g, '! ')
+      .replace(/？/g, '? ')
+      .replace(/：/g, ': ')
+      .replace(/；/g, '; ')
+      .replace(/“|”/g, '"')
+      .replace(/‘|’/g, "'")
+      .replace(/（/g, ' ( ')
+      .replace(/）/g, ' ) ')
+      .replace(/、/g, ', ')
+      .trim();
+
+    // 按句号、感叹号、问号、换行符进行断句，避免长文本生成过慢
+    const regex = /([。？！.?!]|\n+)/;
+    const parts = cleanText.split(regex);
+    const sentences = [];
+    for (let i = 0; i < parts.length; i += 2) {
+      const sentence = (parts[i] + (parts[i + 1] || '')).trim();
+      if (sentence.length > 0) sentences.push(sentence);
+    }
+
+    if (sentences.length === 0) {
+      this.playingMsgIdx = null;
+      this._audioPlayer = null;
+      return;
+    }
+
+    try {
+      let isStopped = false;
+      
+      // 预先清理函数
+      const cleanup = () => {
+        isStopped = true;
+        if (this.playingMsgIdx === idx) {
+          this.playingMsgIdx = null;
+          this._audioPlayer = null;
+        }
+      };
+
+      for (let i = 0; i < sentences.length; i++) {
+        // 如果中途被切断或按了停止按钮
+        if (isStopped || this.playingMsgIdx !== idx || this._audioPlayer !== audio) {
+          break;
+        }
+
+        const sentence = sentences[i];
+        
+        // 抓取当前句子的音频
+        const resp = await fetch('/v1/audio/speech', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: sentence })
+        });
+        
+        if (!resp.ok) throw new Error('TTS Request Failed');
+        
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+
+        if (isStopped || this.playingMsgIdx !== idx || this._audioPlayer !== audio) {
+          URL.revokeObjectURL(url);
+          break;
+        }
+
+        // 播放当前句子
+        audio.src = url;
+        
+        // 包装 play 在 Promise 中等待结束
+        await new Promise((resolve, reject) => {
+          audio.onended = resolve;
+          audio.onerror = reject;
+          audio.play().catch(reject);
+        });
+
+        URL.revokeObjectURL(url);
+      }
+      
+      // 播放全部完成
+      cleanup();
+
+    } catch (e) {
+      console.error('Audio playback failed:', e);
+      if (this.playingMsgIdx === idx) {
+        this.playingMsgIdx = null;
+        this._audioPlayer = null;
+      }
+    }
   },
 
   _onEvent(type, data) {
@@ -340,10 +546,6 @@ Alpine.store('chat', {
     this.thinkingOpen = false
     window._activeSseClient = null
     Alpine.store('statusBar').poll()
-    // 回复结束后自动朗读（TTS 开关打开时）
-    if (this.ttsEnabled && this.currentTokens) {
-      this.speakText(this.currentTokens)
-    }
   },
 
   _onError(err) {
@@ -367,8 +569,8 @@ Alpine.store('chat', {
       this.messages.push({ role: 'assistant', content, toolCalls: [], aborted })
     }
     
-    if (!aborted && content) {
-      this.speakText(content.replace(/<[^>]+>/g, '')); // Strip basic HTML for TTS
+    if (!aborted && content && this.ttsEnabled) {
+      this.toggleSpeakText(this.messages.length - 1, content.replace(/<[^>]+>/g, '')); // Strip basic HTML for TTS
     }
     this.currentTokens = ''
   },

@@ -62,7 +62,7 @@ punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punct
 # 默认选用 Kokoro 中英双语模型（82M，Tier-0 可用）
 [inference.tts]
 sherpa_version = ""  # 留空复用 inference.stt.sherpa_version
-model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-kokoro-multi-lang-v1_1.tar.bz2"
+model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2"
 tokens_url = ""
 
 [storage.engines]

@@ -116,11 +116,13 @@ CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
 
 # ── 5. 启动 ───────────────────────────────────────────────
 echo "→ 启动 Polaris (端口 $PORT)..."
-# 为本地测试生成独立的覆盖配置，避免与生产环境端口冲突
+# 每次启动强制使用全新的默认配置
 DEV_CONFIG="$DATA_DIR/config_dev.toml"
-if [ ! -f "$DEV_CONFIG" ]; then
-    cp configs/defaults.toml "$DEV_CONFIG"
-fi
+echo "  清理旧配置..."
+rm -rf "$DATA_DIR/config"
+mkdir -p "$DATA_DIR/config"
+cp configs/defaults.toml "$DEV_CONFIG"
+
 # 强制将开发配置的端口替换为脚本指定的测试端口
 sed -i.bak -e "s/port = [0-9]*/port = $PORT/" "$DEV_CONFIG"
 rm -f "$DEV_CONFIG.bak"

@@ -20,8 +20,20 @@ Alpine.data('chatInput', () => ({
         this.showSlash = false
       }
     })
-    window.addEventListener('stt-result', (e) => {
-      this.input += (this.input ? ' ' : '') + e.detail;
+    window.addEventListener('stt-start', () => {
+      this._sttBaseInput = this.input;
+      this._sttCurrentChunk = '';
+    });
+    window.addEventListener('stt-chunk', (e) => {
+      this._sttCurrentChunk += (this._sttCurrentChunk ? ' ' : '') + e.detail;
+      this.input = (this._sttBaseInput ? this._sttBaseInput + ' ' : '') + this._sttCurrentChunk;
+    });
+    window.addEventListener('stt-final', (e) => {
+      let finalStr = e.detail.text;
+      if (e.detail.emotion && e.detail.emotion !== "NEUTRAL" && e.detail.emotion !== "UNKNOWN" && e.detail.emotion !== "") {
+        finalStr = `[情绪: ${e.detail.emotion}] ` + finalStr;
+      }
+      this.input = (this._sttBaseInput ? this._sttBaseInput + '\n' : '') + finalStr;
     });
     // 恢复编辑：将中断的用户消息填回输入框并聚焦
     window.addEventListener('restore-input', (e) => {

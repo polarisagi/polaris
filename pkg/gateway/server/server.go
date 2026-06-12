@@ -26,6 +26,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/gateway/channels"
 	"github.com/polarisagi/polaris/pkg/substrate/inference"
 	"github.com/polarisagi/polaris/pkg/substrate/inference/stt"
+	"github.com/polarisagi/polaris/pkg/substrate/inference/tts"
 	"github.com/polarisagi/polaris/pkg/substrate/observability"
 	"github.com/polarisagi/polaris/pkg/substrate/updater"
 	webui "github.com/polarisagi/polaris/web"
@@ -314,6 +315,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 
 	// 语音识别 API
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.handleAudioTranscriptions)
+	mux.HandleFunc("POST /v1/audio/speech", s.handleAudioSpeech)
 
 	// VFS 通用文件上传
 	mux.HandleFunc("POST /v1/workspace/upload", s.handleVFSUpload)
@@ -499,6 +501,47 @@ func InitSTTEngine(ctx context.Context, dataDir string, gate *observability.Feat
 
 		SetSTTEngine(engine)
 		slog.Info("stt: real engine active (sherpa-onnx SenseVoice)", "model_dir", modelDir)
+	}()
+}
+
+// InitTTSEngine 按 FeatureGate 门控初始化 TTS 引擎。
+// 流程与 InitSTTEngine 类似。
+func InitTTSEngine(ctx context.Context, dataDir string, gate *observability.FeatureGate, httpClient *http.Client, ttsConfig config.TTSConfig) {
+	ttsDir := filepath.Join(dataDir, "models", "kokoro")
+
+	if gate != nil && gate.State(observability.FeatureLocalSTT) == observability.FeatureDisabled {
+		slog.Info("tts: disabled by FeatureGate")
+		return
+	}
+
+	if ttsConfig.ModelURL == "" {
+		slog.Info("tts: no model configured, disabled")
+		return
+	}
+
+	go func() {
+		// 复用 stt 的库路径下载逻辑
+		sttDir := filepath.Join(dataDir, "models", "sensevoice")
+		if err := tts.EnsureAssets(ctx, sttDir, ttsDir, httpClient, ttsConfig.SherpaVersion, ttsConfig.ModelURL); err != nil {
+			slog.Warn("tts: asset download failed", "err", err)
+			return
+		}
+
+		libPath := filepath.Join(sttDir, stt.LibName())
+		if err := tts.LoadLibrary(libPath); err != nil {
+			slog.Warn("tts: library load failed", "err", err)
+			return
+		}
+
+		modelDir := tts.ModelDir(ttsDir)
+		engine, err := tts.NewEngine(modelDir)
+		if err != nil {
+			slog.Warn("tts: engine init failed", "err", err)
+			return
+		}
+
+		SetTTSEngine(engine)
+		slog.Info("tts: real engine active (sherpa-onnx Kokoro)", "model_dir", modelDir)
 	}()
 }
 

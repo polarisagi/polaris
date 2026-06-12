@@ -66,7 +66,7 @@
   <!-- Messages -->
   <div class="min-h-0 relative transition-all duration-500" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? 'flex-none' : 'flex-1'">
     <button x-show="!atBottom" @click="scrollBottom()" x-cloak class="btn btn-circle btn-primary btn-sm absolute bottom-4 right-6 z-20 shadow-lg opacity-90">↓</button>
-    <div class="overflow-y-auto p-4" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'h-full pb-8'" id="message-list">
+    <div class="overflow-y-auto min-h-0 p-4" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'h-full pb-8'" id="message-list">
       <div class="max-w-5xl mx-auto w-full flex flex-col" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'min-h-full'">
 
         <!-- Empty State -->
@@ -114,7 +114,7 @@
             </template>
 
             <template x-if="msg.role === 'assistant'">
-              <div class="chat chat-start relative">
+              <div class="chat chat-start relative group/msg">
                 <div class="badge badge-warning badge-xs absolute -top-1 right-0 z-10" x-show="msg.aborted" x-text="'⚠ ' + $store.i18n.t('chat_interrupted')"></div>
                 
                 <div class="chat-bubble bg-base-200 text-base-content relative group text-left w-fit" 
@@ -179,6 +179,24 @@
                     <button class="btn btn-xs btn-ghost" @click="expanded = false; $nextTick(() => { $el.closest('.chat-bubble').scrollIntoView({behavior:'smooth', block:'center'}) })" x-text="$store.i18n.t('chat_collapse_all')"></button>
                   </div>
                 </div>
+
+                <!-- 播放语音按钮：悬浮时显示 -->
+                <div class="flex justify-start mt-1 pl-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
+                  <button class="btn btn-xs btn-ghost text-base-content/60 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 border border-base-300 hover:border-primary/30 transition-all"
+                          @click="$store.chat.toggleSpeakText(idx, msg.content.replace(/<[^>]+>/g, ''))"
+                          :title="$store.chat.playingMsgIdx === idx ? $store.i18n.t('chat_stop') : $store.i18n.t('chat_play')">
+                    
+                    <template x-if="$store.chat.playingMsgIdx !== idx">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
+                    </template>
+                    <template x-if="$store.chat.playingMsgIdx === idx">
+                      <svg class="w-3.5 h-3.5 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>
+                    </template>
+                    
+                    <span :class="$store.chat.playingMsgIdx === idx ? 'text-error' : ''" x-text="$store.chat.playingMsgIdx === idx ? $store.i18n.t('chat_stop') : $store.i18n.t('chat_play')"></span>
+                  </button>
+                </div>
+
               </div>
             </template>
           </div>
