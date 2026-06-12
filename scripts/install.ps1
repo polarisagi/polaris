@@ -33,33 +33,100 @@ if ($OldProc) {
     Start-Sleep -Seconds 2
 }
 
+# ── 2.5 环境依赖预检与自动安装 (Dependencies) ────────────────────────────────
+Write-Msg -zh "🔍 正在检查并自动安装必要运行环境..." -en "🔍 Checking and installing required dependencies..." -Color Cyan
+
+if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
+    Write-Msg -zh "⚠️  缺少 Git。正在尝试安装..." -en "⚠️  Git not found. Attempting to install..." -Color Yellow
+    try { winget install --id Git.Git -e --source winget } catch { Write-Msg -zh "⚠️ 请手动安装 Git" -en "⚠️ Please install Git manually" -Color Red }
+}
+
+if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
+    Write-Msg -zh "   📦 正在安装 uv..." -en "   📦 Installing uv..." -Color Gray
+    try { Invoke-WebRequest -Uri "https://astral.sh/uv/install.ps1" -UseBasicParsing | Invoke-Expression } catch { }
+    $env:Path += ";$env:USERPROFILE\.cargo\bin;$env:USERPROFILE\.local\bin"
+}
+
+if (-not (Get-Command "python" -ErrorAction SilentlyContinue) -and -not (Get-Command "python3" -ErrorAction SilentlyContinue)) {
+    Write-Msg -zh "   🐍 正在通过 uv 安装 Python..." -en "   🐍 Installing Python via uv..." -Color Gray
+    try { 
+        uv python install 3 
+        $UvPythonExe = uv python find 3
+        if ($UvPythonExe) {
+            $UvPythonDir = Split-Path $UvPythonExe -Parent
+            $env:Path += ";$UvPythonDir"
+            $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            if ($UserPath -notmatch [regex]::Escape($UvPythonDir)) {
+                [Environment]::SetEnvironmentVariable("Path", "$UserPath;$UvPythonDir", "User")
+            }
+        }
+    } catch { }
+}
+
+if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
+    Write-Msg -zh "   🟢 正在安装 Node.js..." -en "   🟢 Installing Node.js..." -Color Gray
+    try { winget install --id OpenJS.NodeJS -e --source winget } catch {
+        Write-Msg -zh "⚠️ 请手动安装 Node.js" -en "⚠️ Please install Node.js manually" -Color Red
+    }
+}
+Write-Msg -zh "✅ 基础环境准备就绪。" -en "✅ Dependencies ready." -Color Green
+
 # ── 3. 确定架构与下载候选列表 ────────────────────────────────────────────────
 $Arch        = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $ArchiveName = "polaris-windows-$Arch.zip"
 $GithubURL   = "https://github.com/$Repo/releases/latest/download/$ArchiveName"
 $ProxyHosts  = @("https://ghproxy.net", "https://mirror.ghproxy.com")
 
-# 与 Go 端 autoProbe 保持一致：500ms 内可达 github.com → 海外/VPN 直连
-Write-Msg -zh "🌐 正在检测网络环境（500ms 阈值）..." `
-           -en "🌐 Detecting network environment (500ms threshold)..." -Color Cyan
+# 判断当前网络环境是否处于中国大陆
+function Test-IsMainlandChina {
+    $Timeout = 2
+
+    # 尝试 1: ipinfo.io
+    try {
+        $Country = (Invoke-RestMethod -Uri "https://ipinfo.io/country" -TimeoutSec $Timeout -ErrorAction Stop).Trim()
+        if ([string]::IsNullOrEmpty($Country) -eq $false) {
+            return ($Country -eq "CN")
+        }
+    } catch {}
+
+    # 尝试 2: cloudflare trace
+    try {
+        $Trace = Invoke-RestMethod -Uri "https://1.1.1.1/cdn-cgi/trace" -TimeoutSec $Timeout -ErrorAction Stop
+        if ($Trace -match "loc=([A-Z]{2})") {
+            return ($Matches[1] -eq "CN")
+        }
+    } catch {}
+
+    # 尝试 3: ip.sb
+    try {
+        $IpSb = Invoke-RestMethod -Uri "https://api.ip.sb/geoip" -TimeoutSec $Timeout -ErrorAction Stop
+        if ($IpSb.country_code) {
+            return ($IpSb.country_code -eq "CN")
+        }
+    } catch {}
+
+    # 降级：如果全部失败，测速 Github
+    try {
+        Invoke-WebRequest -Uri "https://github.com" -UseBasicParsing -TimeoutSec 1 -Method Head -ErrorAction Stop | Out-Null
+        return $false
+    } catch {
+        return $true
+    }
+}
+
+Write-Msg -zh "🌐 正在检测网络环境归属地及代理情况..." `
+           -en "🌐 Detecting network geolocation and VPN..." -Color Cyan
 
 $CandidateURLs = [System.Collections.ArrayList]::new()
-$IsDirectReachable = $false
 
-try {
-    $Res = Invoke-WebRequest -Uri "https://github.com" -UseBasicParsing -TimeoutSec 0.5 `
-                             -Method Head -ErrorAction Stop
-    $IsDirectReachable = $true
-    Write-Msg -zh "✅ GitHub 低延迟直连（<500ms），无需代理。" `
-               -en "✅ GitHub low-latency direct (<500ms), no proxy needed." -Color Green
-} catch { }
-
-if ($IsDirectReachable) {
+if (-not (Test-IsMainlandChina)) {
+    Write-Msg -zh "✅ 当前网络为海外 IP 或已开启全局代理，将使用直连。" `
+               -en "✅ Network is outside mainland China or VPN active. Using direct connection." -Color Green
     $CandidateURLs.Add($GithubURL) | Out-Null
     foreach ($p in $ProxyHosts) { $CandidateURLs.Add("$p/$GithubURL") | Out-Null }
 } else {
-    Write-Msg -zh "⚠️  GitHub 响应慢，判定为中国大陆网络，切换镜像代理..." `
-               -en "⚠️  GitHub slow, likely China mainland, switching to proxy mirrors..." -Color Yellow
+    Write-Msg -zh "⚠️  检测到当前网络位于中国大陆且未全局代理，切换镜像代理..." `
+               -en "⚠️  Mainland China network detected without VPN. Switching to proxy mirrors..." -Color Yellow
     foreach ($p in $ProxyHosts) {
         try {
             Invoke-WebRequest -Uri $p -UseBasicParsing -TimeoutSec 5 -Method Head -ErrorAction Stop | Out-Null
@@ -71,6 +138,7 @@ if ($IsDirectReachable) {
     }
     $CandidateURLs.Add($GithubURL) | Out-Null  # 直连兜底
 }
+
 
 # ── 4. 下载（支持断点续传，逐源重试）────────────────────────────────────────
 Write-Msg -zh "⬇️  开始下载（支持断点续传）..." `

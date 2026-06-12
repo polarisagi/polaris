@@ -324,6 +324,8 @@ func replaceUnixLibs(newLibDir, targetLibDir string) error {
 
 // verifyChecksum 从 GitHub 直接下载 checksums.txt，验证 archivePath 的 SHA-256。
 // checksums.txt 不走 ghproxy 代理：即使镜像被篡改，仍以 GitHub 的校验值为权威。
+//
+//nolint:gocyclo
 func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, archivePath string) error {
 	checksumURL := fmt.Sprintf(
 		"https://github.com/%s/%s/releases/download/%s/polaris_%s_checksums.txt",
@@ -334,22 +336,44 @@ func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, arch
 	if c == nil {
 		c = &http.Client{Timeout: 30 * time.Second}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
-	if err != nil {
-		return fmt.Errorf("checksum request: %w", err)
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return fmt.Errorf("download checksums.txt: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("checksums.txt: HTTP %d", resp.StatusCode)
+
+	var data []byte
+	var downloadErr error
+
+	// 尝试 downloader 提供的候选节点（直连优先，失败后尝试代理）
+	// 这里放宽了严格的不走代理限制：直连 GitHub 会优先尝试，若完全被阻断则降级使用镜像。
+	// 这对在中国大陆完全无法访问 GitHub 的环境是必须的。
+	for _, u := range downloader.CandidateURLs(ctx, c, checksumURL) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			downloadErr = fmt.Errorf("checksum request: %w", err)
+			continue
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			downloadErr = fmt.Errorf("download checksums.txt from %s: %w", u, err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			downloadErr = fmt.Errorf("checksums.txt from %s: HTTP %d", u, resp.StatusCode)
+			continue
+		}
+
+		data, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 最多 1MB
+		resp.Body.Close()
+		if err != nil {
+			downloadErr = fmt.Errorf("read checksums.txt from %s: %w", u, err)
+			continue
+		}
+		// 成功下载
+		downloadErr = nil
+		break
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 最多 1MB
-	if err != nil {
-		return fmt.Errorf("read checksums.txt: %w", err)
+	if downloadErr != nil {
+		return downloadErr
 	}
 
 	// 格式：<sha256hex>  <filename>
@@ -357,9 +381,10 @@ func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, arch
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[1] == archiveName {
-			expectedHash, err = hex.DecodeString(fields[0])
-			if err != nil {
-				return fmt.Errorf("invalid checksum hex: %w", err)
+			var errDecode error
+			expectedHash, errDecode = hex.DecodeString(fields[0])
+			if errDecode != nil {
+				return fmt.Errorf("invalid checksum hex: %w", errDecode)
 			}
 			break
 		}

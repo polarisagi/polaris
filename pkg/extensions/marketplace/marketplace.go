@@ -16,6 +16,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/downloader"
 )
 
 // MCPMarketplaceClient handles interactions with external MCP registries.
@@ -157,31 +158,9 @@ func (c *MCPMarketplaceClient) Install(ctx context.Context, pkg protocol.Registr
 		}
 
 		slog.Info("marketplace: downloading binary release", "url", pkg.URL, "to", binaryPath)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pkg.URL, nil)
-		if err != nil {
-			return "", perrors.Wrap(perrors.CodeInternal, "marketplace: invalid download request", err)
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
+		if err := downloader.DownloadFile(ctx, c.httpClient, pkg.URL, binaryPath); err != nil {
 			return "", perrors.Wrap(perrors.CodeInternal, "marketplace: binary download failed", err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return "", perrors.New(perrors.CodeInternal, fmt.Sprintf("marketplace: download returned %d", resp.StatusCode))
-		}
-
-		outFile, err := os.OpenFile(binaryPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-		if err != nil {
-			return "", perrors.Wrap(perrors.CodeInternal, "marketplace: failed to create binary file", err)
-		}
-
-		if _, err := io.Copy(outFile, resp.Body); err != nil {
-			outFile.Close()
-			return "", perrors.Wrap(perrors.CodeInternal, "marketplace: failed to write binary file", err)
-		}
-		outFile.Close()
 		actualCommand = binaryPath
 	}
 

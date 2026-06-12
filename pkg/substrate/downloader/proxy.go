@@ -2,9 +2,12 @@ package downloader
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -76,21 +79,16 @@ func probe(ctx context.Context, client *http.Client) {
 	})
 }
 
-// autoProbe 以 500ms 严格超时探测 github.com 区分网络环境：
-//   - 海外 / VPN：github.com 通常 < 200ms → 直连，不需要代理
-//   - 中国大陆：github.com 通常 ≥ 1s 或超时 → 切换镜像代理
-//
-// 即使中国大陆偶尔能连上 github.com，也因超时而正确切代理，避免不稳定下载。
+// autoProbe 探测当前网络环境以决定是否使用代理。
+//   - 海外 / VPN：直接连接
+//   - 中国大陆：使用镜像代理
 func autoProbe(ctx context.Context, client *http.Client) string {
-	// 500ms 内可达 → 海外/VPN 环境，直连即可
-	fastClient := &http.Client{Timeout: 500 * time.Millisecond}
-	if headOK(ctx, fastClient, "https://github.com") {
-		slog.Info("downloader: GitHub reachable directly (<500ms), proxy not needed")
+	if !isMainlandChina(ctx, client) {
+		slog.Info("downloader: Network is outside mainland China or VPN active, proxy not needed")
 		return ""
 	}
 
-	// github.com 慢或不可达 → 判定为中国大陆或受限网络，尝试镜像代理
-	slog.Info("downloader: GitHub slow/unreachable, probing China mainland proxy mirrors")
+	slog.Info("downloader: Mainland China network detected, probing proxy mirrors")
 	slowClient := client
 	if slowClient == nil {
 		slowClient = &http.Client{Timeout: 6 * time.Second}
@@ -104,6 +102,123 @@ func autoProbe(ctx context.Context, client *http.Client) string {
 
 	slog.Warn("downloader: all proxies unreachable, falling back to direct")
 	return ""
+}
+
+// isMainlandChina 并发探测多个 GeoIP 服务以判断用户是否在中国大陆。
+// 如果用户挂了全局 VPN，出口 IP 为海外，将会返回 false。
+// 探测过程带有 2 秒超时，如果全失败，则降级为测试 GitHub 的连通性。
+//
+//nolint:gocyclo
+func isMainlandChina(ctx context.Context, baseClient *http.Client) bool {
+	probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer probeCancel()
+
+	var transport http.RoundTripper = http.DefaultTransport
+	if baseClient != nil && baseClient.Transport != nil {
+		transport = baseClient.Transport
+	}
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: transport,
+	}
+
+	resCh := make(chan string, 3)
+	var wg sync.WaitGroup
+
+	// 探测 1: ipinfo.io
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "https://ipinfo.io/country", nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("User-Agent", "curl/8.0.0")
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			b, _ := io.ReadAll(resp.Body)
+			if country := strings.TrimSpace(string(b)); len(country) == 2 {
+				resCh <- country
+			}
+		}
+	}()
+
+	// 探测 2: 1.1.1.1 trace
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "https://1.1.1.1/cdn-cgi/trace", nil)
+		if err != nil {
+			return
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			b, _ := io.ReadAll(resp.Body)
+			for _, line := range strings.Split(string(b), "\n") {
+				if strings.HasPrefix(line, "loc=") {
+					resCh <- strings.TrimSpace(strings.TrimPrefix(line, "loc="))
+					return
+				}
+			}
+		}
+	}()
+
+	// 探测 3: api.ip.sb
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "https://api.ip.sb/geoip", nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("User-Agent", "curl/8.0.0")
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			var data struct {
+				CountryCode string `json:"country_code"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&data); err == nil && data.CountryCode != "" {
+				resCh <- data.CountryCode
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(resCh)
+	}()
+
+	// 获取第一个成功的国家代码
+	for country := range resCh {
+		if country != "" {
+			isCN := (country == "CN")
+			slog.Debug("downloader: GeoIP resolved", "country", country, "is_cn", isCN)
+			return isCN
+		}
+	}
+
+	slog.Warn("downloader: all GeoIP probes failed, falling back to GitHub ping")
+	// 降级: 测试 GitHub 连通性
+	fastClient := &http.Client{
+		Timeout:   1 * time.Second,
+		Transport: transport,
+	}
+	if headOK(ctx, fastClient, "https://github.com") {
+		return false // 能快速连上，假设为非大陆或已代理
+	}
+	return true // 连不上，假设为大陆
 }
 
 // headOK 发起 HEAD 请求，有响应则返回 true。

@@ -34,38 +34,143 @@ case "$ARCH" in
         ;;
 esac
 
-# ── 1. 确定下载候选 URL 列表 ─────────────────────────────────────────────────
+# ── 0. 确定网络环境 (Network Detection) ───────────────────────────────────────
+PROXY_HOSTS=("https://ghproxy.net" "https://mirror.ghproxy.com")
+GH_PROXY=""
+
+# 判断当前网络环境是否处于中国大陆
+is_mainland_china() {
+    local timeout=2
+    local country=""
+    
+    # 尝试 1: ipinfo.io
+    country=$(curl -sSf -m $timeout https://ipinfo.io/country 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$country" ]; then
+        [ "$country" = "CN" ] && return 0 || return 1
+    fi
+    
+    # 尝试 2: cloudflare trace
+    local cf_trace=$(curl -sSf -m $timeout https://1.1.1.1/cdn-cgi/trace 2>/dev/null || true)
+    if [ -n "$cf_trace" ] && echo "$cf_trace" | grep -q "loc="; then
+        if echo "$cf_trace" | grep -q "loc=CN"; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+    
+    # 尝试 3: ip.sb
+    local ipsb=$(curl -sSf -m $timeout https://api.ip.sb/geoip 2>/dev/null || true)
+    if [ -n "$ipsb" ] && echo "$ipsb" | grep -q 'country_code'; then
+        if echo "$ipsb" | grep -q '"country_code":"CN"' || echo "$ipsb" | grep -q '"country_code": "CN"'; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+    
+    # 降级：如果所有 IP 接口都失败，测速 Github
+    if ! curl -sSf -I --max-time 1 "https://github.com" > /dev/null 2>&1; then
+        return 0 # Github 连不上或很慢，假设是大陆
+    else
+        return 1 # Github 能连上，假设非大陆
+    fi
+}
+
+msg "🌐 正在检测网络环境归属地及代理情况..." "🌐 Detecting network geolocation and VPN..."
+
+if ! is_mainland_china; then
+    msg "✅ 当前网络为海外 IP 或已开启全局代理，将使用直连。" \
+        "✅ Network is outside mainland China or VPN active. Using direct connection."
+else
+    msg "⚠️  检测到当前网络位于中国大陆且未全局代理，寻找镜像代理..." \
+        "⚠️  Mainland China network detected without VPN. Switching to proxy mirrors..."
+    for p in "${PROXY_HOSTS[@]}"; do
+        if curl -sSf -I --max-time 5 "$p" > /dev/null 2>&1; then
+            GH_PROXY="${p}/"
+            msg "   ✅ 选用镜像代理: $p" "   ✅ Using proxy: $p"
+            break
+        fi
+    done
+fi
+
+
+# ── 1. 环境依赖预检与自动安装 (Dependencies) ──────────────────────────────────
+msg "🔍 正在检查并自动安装必要运行环境 (Checking & installing dependencies)..." \
+    "🔍 Checking and installing required dependencies..."
+
+# 1. Git (唯一依赖系统全局安装的工具)
+if ! command -v git >/dev/null 2>&1; then
+    if [ "$OS" = "darwin" ]; then
+        msg "⚠️  macOS 缺少 Git。正在唤起系统安装向导..." \
+            "⚠️  macOS is missing Git. Triggering system install wizard..."
+        xcode-select --install || true
+        msg "💡 请在弹窗中完成安装后，重新运行本脚本。" \
+            "💡 Please complete the installation in the prompt and re-run this script."
+        exit 1
+    else
+        msg "⚠️  未检测到 Git。请先通过包管理器 (如 apt/yum) 安装 git 后重试。" \
+            "⚠️  Git not found. Please install it via your package manager (apt/yum) and retry."
+        exit 1
+    fi
+fi
+
+# 2. uv (跨平台包管理器)
+if ! command -v uv >/dev/null 2>&1; then
+    msg "   📦 正在安装 uv..." "   📦 Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+fi
+
+# 3. Python (通过 uv 独立安装)
+if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+    msg "   🐍 正在通过 uv 安装 Python 环境..." "   🐍 Installing Python via uv..."
+    uv python install 3
+    
+    # 将 uv 安装的 python 软链接到 PATH 中，确保后续服务能找到
+    UV_PYTHON_BIN=$(uv python find 3 2>/dev/null || true)
+    if [ -n "$UV_PYTHON_BIN" ]; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$UV_PYTHON_BIN" "$HOME/.local/bin/python3"
+        ln -sf "$UV_PYTHON_BIN" "$HOME/.local/bin/python"
+    fi
+fi
+
+# 4. Node.js (通过 nvm 安装)
+if ! command -v node >/dev/null 2>&1; then
+    msg "   🟢 正在安装 Node.js (通过 nvm)..." "   🟢 Installing Node.js (via nvm)..."
+    export NVM_DIR="$HOME/.nvm"
+    if [ -n "$GH_PROXY" ]; then
+        curl -o- "${GH_PROXY}https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh" | NVM_SOURCE="${GH_PROXY}https://github.com/nvm-sh/nvm.git" bash
+        # 为 nvm 设置国内节点镜像，防止 node 下载超时
+        export NVM_NODEJS_ORG_MIRROR="https://npmmirror.com/mirrors/node/"
+    else
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
+    fi
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 24
+fi
+
+msg "✅ 基础环境准备就绪 (Dependencies ready)。" "✅ Dependencies ready."
+
+# ── 2. 确定 Polaris 下载源 ─────────────────────────────────────────────────
 ARCHIVE_NAME="${BIN_NAME}-${OS}-${ARCH}.tar.gz"
 GITHUB_BASE="https://github.com/${REPO}/releases/latest/download"
 DIRECT_URL="${GITHUB_BASE}/${ARCHIVE_NAME}"
-PROXY_HOSTS=("https://ghproxy.net" "https://mirror.ghproxy.com")
-
-# 与 Go 端 autoProbe 保持一致：500ms 内可达 github.com → 判定海外/VPN 直连
-# 海外到 GitHub 通常 <200ms；中国大陆通常 ≥1s 或超时
-msg "🌐 正在检测网络环境（500ms 阈值）..." "🌐 Detecting network environment (500ms threshold)..."
 
 CANDIDATE_URLS=()
-if curl -sSf -I --max-time 0.5 "https://github.com" > /dev/null 2>&1; then
-    # 低延迟直连：海外或 VPN，优先直连
-    msg "✅ GitHub 低延迟直连（<500ms），无需代理。" \
-        "✅ GitHub low-latency direct (<500ms), no proxy needed."
+if [ -z "$GH_PROXY" ]; then
     CANDIDATE_URLS+=("$DIRECT_URL")
     for p in "${PROXY_HOSTS[@]}"; do
         CANDIDATE_URLS+=("${p}/${DIRECT_URL}")
     done
 else
-    # 高延迟或超时：判定为中国大陆受限网络，优先使用镜像代理
-    msg "⚠️  GitHub 响应慢（>500ms），判定为中国大陆网络，切换镜像代理..." \
-        "⚠️  GitHub slow (>500ms), likely China mainland network, switching to proxy mirrors..."
+    CANDIDATE_URLS+=("${GH_PROXY}${DIRECT_URL}")
     for p in "${PROXY_HOSTS[@]}"; do
-        if curl -sSf -I --max-time 5 "$p" > /dev/null 2>&1; then
+        if [ "${p}/" != "$GH_PROXY" ]; then
             CANDIDATE_URLS+=("${p}/${DIRECT_URL}")
-            msg "   ✅ 可用镜像: $p" "   ✅ Reachable proxy: $p"
-        else
-            msg "   ⚠️  不可用: $p" "   ⚠️  Unreachable: $p"
         fi
     done
-    # 直连作为最后备用（中国大陆不稳定但有时可用）
     CANDIDATE_URLS+=("$DIRECT_URL")
 fi
 
@@ -151,6 +256,18 @@ msg "✅ 程序已安装: ${INSTALL_DIR}/${BIN_NAME}" \
     "✅ Binary installed: ${INSTALL_DIR}/${BIN_NAME}"
 
 # ── 6. 配置系统服务 ───────────────────────────────────────────────────────────
+# 提前准备服务所需要的 PATH 环境变量
+NVM_BIN_PATH=""
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    \. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
+    NVM_BIN_PATH=$(dirname "$(nvm which current 2>/dev/null)" 2>/dev/null || echo "")
+fi
+
+SERVICE_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.cargo/bin:${HOME}/.local/bin:${INSTALL_DIR}"
+if [ -n "$NVM_BIN_PATH" ]; then
+    SERVICE_PATH="${NVM_BIN_PATH}:${SERVICE_PATH}"
+fi
+
 if [ "$OS" = "darwin" ]; then
     msg "⚙️  配置 macOS launchd 后台服务..." "⚙️  Configuring macOS launchd service..."
     mkdir -p "$HOME/Library/LaunchAgents"
@@ -182,7 +299,7 @@ if [ "$OS" = "darwin" ]; then
         <key>HOME</key>
         <string>${HOME}</string>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${INSTALL_DIR}</string>
+        <string>${SERVICE_PATH}</string>
     </dict>
 </dict>
 </plist>
@@ -204,6 +321,7 @@ Description=PolarisAGI Polaris AI Agent
 After=network.target
 
 [Service]
+Environment="PATH=${SERVICE_PATH}"
 ExecStart=${INSTALL_DIR}/${BIN_NAME}
 Restart=on-failure
 RestartSec=5
