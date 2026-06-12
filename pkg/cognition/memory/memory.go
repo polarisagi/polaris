@@ -99,7 +99,7 @@ type ImmutableCore struct {
 
 func NewImmutableCore() *ImmutableCore {
 	return &ImmutableCore{
-		AgentName:       "Polaris", // default name
+		AgentName:       "Polaris (北极星)", // default name
 		AgentRole:       "一个开源自托管 AI Agent",
 		UserPreferences: make(map[string]string),
 	}
