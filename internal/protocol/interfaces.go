@@ -59,6 +59,17 @@ type Store interface {
 	Close() error
 }
 
+// StoreExtStats 为底层存储引擎可选的统计扩展。
+// 由具体 Store 实现提供，上层通过类型断言进行安全调用。
+type StoreExtStats interface {
+	Stats() (string, error)
+}
+
+// StoreExtVector 为底层存储引擎可选的向量操作扩展。
+type StoreExtVector interface {
+	VecSetMode(mode int) error
+}
+
 // EventLogger 定义了将事件安全、串行写入 M2 events 表的契约。
 type EventLogger interface {
 	AppendEvent(ctx context.Context, ev *pb.Event) error
@@ -298,6 +309,8 @@ type Memory interface {
 	Procedural() ProceduralMemory
 	Retriever() HybridRetriever
 	Reflection() ReflectionMemory // 元认知反思层，M05 §3.4
+	StoreStats() (string, error)
+	SetVectorMode(mode int) error
 }
 
 // ReflectionMemory 元认知反思层（Mem-L1.5，插于 Episodic 与 Semantic 之间）。
@@ -485,6 +498,8 @@ type SemanticMemory interface {
 	// 用户画像接口 — L3 Persona 合成与查询（缺口 3）
 	UpsertUserProfile(ctx context.Context, profile UserProfile) error
 	GetUserProfile(ctx context.Context, profileKey string) (*UserProfile, error)
+	StoreStats() (string, error)
+	SetVectorMode(mode int) error
 }
 
 type Document struct {

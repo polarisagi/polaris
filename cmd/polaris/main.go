@@ -377,8 +377,9 @@ func run() error { //nolint:gocyclo
 		slog.Info("polaris: L3 container sandbox initialized", "backend", autoConf.Config.L3SandboxBackend)
 	}
 	inProcSandbox := action.NewInProcessSandbox()
-	// 内置工具直接信任，走 InProcess；LLM 生成代码/插件脚本走 Container 隔离。
-	sandboxRouter := action.NewSandboxRouter(inProcSandbox, containerSandbox, runtime.GOOS, cfg.System.Tier)
+	wasmtimeSandbox := tool.NewWasmtimeSandbox(layout.Workspace)
+	// 内置工具直接信任，走 InProcess；Wasm 走 Wasmtime；LLM 生成代码/插件脚本走 Container 隔离。
+	sandboxRouter := action.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, cfg.System.Tier)
 	slog.Info("polaris: sandbox router initialized", "os", runtime.GOOS, "tier", cfg.System.Tier)
 
 	// ─── 6.3 内置工具注册 & MCP Manager ─────────────────────────────────────

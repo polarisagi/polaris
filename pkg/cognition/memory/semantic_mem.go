@@ -59,6 +59,20 @@ func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []p
 	return nil
 }
 
+func (sm *SemanticMem) StoreStats() (string, error) {
+	if ext, ok := sm.store.(protocol.StoreExtStats); ok {
+		return ext.Stats()
+	}
+	return "{}", nil
+}
+
+func (sm *SemanticMem) SetVectorMode(mode int) error {
+	if ext, ok := sm.store.(protocol.StoreExtVector); ok {
+		return ext.VecSetMode(mode)
+	}
+	return nil
+}
+
 func (sm *SemanticMem) GetDocument(ctx context.Context, id string) (*protocol.Document, error) {
 	data, err := sm.store.Get(ctx, []byte("doc:"+id))
 	if err != nil {

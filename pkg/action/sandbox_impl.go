@@ -286,15 +286,17 @@ func buildWSL2Cmd(ctx context.Context, binPath string, spec SandboxSpec) *exec.C
 type SandboxRouter struct {
 	inProcess *InProcessSandbox
 	container *ContainerSandbox
+	wasmtime  SandboxProvider
 	remote    *RemoteSandbox // L4：可选，Tier-0 OOM 逃生路径
 	goos      string         // "darwin" | "linux" | "windows"
 	hwTier    int            // 0 = Tier 0 (8GB) 主线
 }
 
-func NewSandboxRouter(inProcess *InProcessSandbox, container *ContainerSandbox, goos string, hwTier int) *SandboxRouter {
+func NewSandboxRouter(inProcess *InProcessSandbox, container *ContainerSandbox, wasmtime SandboxProvider, goos string, hwTier int) *SandboxRouter {
 	return &SandboxRouter{
 		inProcess: inProcess,
 		container: container,
+		wasmtime:  wasmtime,
 		goos:      goos,
 		hwTier:    hwTier,
 	}
@@ -317,7 +319,18 @@ func (r *SandboxRouter) Route(tool protocol.Tool) SandboxProvider {
 			return r.remote
 		}
 		fallthrough
-	case protocol.SandboxContainer, protocol.SandboxWasm:
+	case protocol.SandboxWasm:
+		if r.wasmtime != nil {
+			return r.wasmtime
+		}
+		if r.container != nil {
+			return r.container
+		}
+		if r.remote != nil {
+			return r.remote
+		}
+		return r.inProcess
+	case protocol.SandboxContainer:
 		if r.container != nil {
 			return r.container
 		}

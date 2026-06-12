@@ -199,6 +199,14 @@ func (m *MemImpl) Procedural() protocol.ProceduralMemory { return m.procedural }
 func (m *MemImpl) Retriever() protocol.HybridRetriever   { return m.retriever }
 func (m *MemImpl) Reflection() protocol.ReflectionMemory { return m.reflection }
 
+func (m *MemImpl) StoreStats() (string, error) {
+	return m.semantic.StoreStats()
+}
+
+func (m *MemImpl) SetVectorMode(mode int) error {
+	return m.semantic.SetVectorMode(mode)
+}
+
 func (m *MemImpl) InjectSkillRegistry(sr protocol.SkillRegistry) {
 	m.procedural.skills = sr
 }

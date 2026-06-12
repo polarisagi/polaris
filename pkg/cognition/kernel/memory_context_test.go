@@ -21,6 +21,8 @@ func (m *mockMemory) Semantic() protocol.SemanticMemory     { return nil }
 func (m *mockMemory) Procedural() protocol.ProceduralMemory { return nil }
 func (m *mockMemory) Retriever() protocol.HybridRetriever   { return nil }
 func (m *mockMemory) Reflection() protocol.ReflectionMemory { return nil }
+func (m *mockMemory) StoreStats() (string, error)           { return "{}", nil }
+func (m *mockMemory) SetVectorMode(mode int) error          { return nil }
 
 type mockEpisodicMem struct {
 	events  []protocol.Event

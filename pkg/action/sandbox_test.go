@@ -72,7 +72,7 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	inProc.Register("list-files", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`["a","b"]`), nil
 	})
-	router := NewSandboxRouter(inProc, nil, runtime.GOOS, 0)
+	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
 
 	tool := protocol.Tool{
 		Name:        "list-files",
@@ -96,7 +96,7 @@ func TestSandboxRouter_MCPFallsToInProcessWithoutContainer(t *testing.T) {
 	inProc.Register("mcp-tool", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`{}`), nil
 	})
-	router := NewSandboxRouter(inProc, nil, runtime.GOOS, 0)
+	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
 
 	tool := protocol.Tool{
 		Name:       "mcp-tool",
