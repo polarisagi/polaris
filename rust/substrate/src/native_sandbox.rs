@@ -320,6 +320,7 @@ fn build_ulimit_prefix(max_memory_mb: Option<u64>) -> String {
 
 /// 构建 SBPL（Apple Sandbox Profile Language）策略。
 /// 默认拒绝，白名单开放：系统只读 + AllowedPaths 读写 + /tmp 读写。
+#[cfg(target_os = "macos")]
 fn build_seatbelt_profile(
     allowed_paths: &[String],
     workdir: &str,
@@ -406,6 +407,7 @@ fn build_seatbelt_profile(
 }
 
 /// SBPL 路径字符串转义（仅处理双引号和反斜杠）
+#[cfg(target_os = "macos")]
 fn sbpl_escape(path: &str) -> String {
     let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{}\"", escaped)
