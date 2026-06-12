@@ -62,6 +62,7 @@ type rustSandboxRequest struct {
 	EnvExtra     []string `json:"env_extra,omitempty"`
 	TimeoutMs    uint64   `json:"timeout_ms,omitempty"`
 	BwrapPath    string   `json:"bwrap_path,omitempty"`
+	MaxMemoryMB  uint64   `json:"max_memory_mb,omitempty"`
 }
 
 // RustSandboxResponse 与 Rust NativeSandboxResponse 字段对齐。
@@ -69,6 +70,7 @@ type RustSandboxResponse struct {
 	Output        string `json:"output"`
 	ExitCode      int    `json:"exit_code"`
 	SandboxMethod string `json:"sandbox_method"`
+	MemoryLimited bool   `json:"memory_limited"`
 }
 
 // ─── FFI 字符串辅助 ───────────────────────────────────────────────────────────
@@ -121,6 +123,7 @@ func RustSandboxExec(cfg NativeSandboxCfg, timeoutMs uint64) (*RustSandboxRespon
 		EnvExtra:     cfg.Env,
 		TimeoutMs:    timeoutMs,
 		BwrapPath:    cfg.BwrapPath,
+		MaxMemoryMB:  cfg.MaxMemoryMB,
 	}
 
 	inputJSON, err := json.Marshal(req)

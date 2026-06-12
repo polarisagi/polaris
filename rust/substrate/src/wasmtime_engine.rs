@@ -126,6 +126,8 @@ pub unsafe extern "C" fn wasmtime_execute(
     workspace_dir: *const c_char,
     max_pages: c_int,
     max_fuel: u64,
+    network_allowed: c_int,
+    max_output_bytes: c_int,
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
@@ -173,10 +175,21 @@ pub unsafe extern "C" fn wasmtime_execute(
 
         let stdin =
             wasmtime_wasi::p2::pipe::MemoryInputPipe::new(bytes::Bytes::from(input_str.to_owned()));
-        let stdout = wasmtime_wasi::p2::pipe::MemoryOutputPipe::new(10 * 1024 * 1024); // 10MB
+            
+        let max_out = if max_output_bytes > 0 {
+            max_output_bytes as usize
+        } else {
+            10 * 1024 * 1024
+        };
+        let stdout = wasmtime_wasi::p2::pipe::MemoryOutputPipe::new(max_out);
 
         let mut builder = WasiCtxBuilder::new();
         builder.stdin(stdin.clone()).stdout(stdout.clone());
+        
+        if network_allowed == 1 {
+            builder.inherit_network();
+            builder.allow_ip_name_lookup(true);
+        }
 
         // 如果传入了工作目录，则挂载为 /workspace
         if !workspace_dir.is_null() {

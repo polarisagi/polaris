@@ -57,6 +57,7 @@ struct NativeSandboxRequest {
     // 仅 Linux exec_bwrap 使用，其他平台编译时视为 dead_code
     #[allow(dead_code)]
     bwrap_path: Option<String>,
+    max_memory_mb: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +65,7 @@ struct NativeSandboxResponse {
     output: String,
     exit_code: i32,
     sandbox_method: String,
+    memory_limited: bool,
 }
 
 /// 工具探测结果（供 Go 侧展示给 LLM 或用于调试）
@@ -81,6 +83,8 @@ struct ToolProbeResult {
     wsl2_available: bool,
     /// 探测到的语言运行时目录（存在的）
     found_runtimes: Vec<String>,
+    /// Wasmtime 运行时是否支持网络
+    wasi_network_supported: bool,
 }
 
 // ─── PATH 自动构建 ─────────────────────────────────────────────────────────────
@@ -302,6 +306,20 @@ fn build_safe_env(extra: &[String], sandbox_path: &str) -> Vec<(String, String)>
     result
 }
 
+/// 构建 ulimit 虚拟内存限制前缀命令
+fn build_ulimit_prefix(max_memory_mb: Option<u64>) -> String {
+    if let Some(mb) = max_memory_mb {
+        if mb > 0 {
+            // POSIX ulimit -v 单位是 KB
+            format!("ulimit -v {}; ", mb * 1024)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    }
+}
+
 // ─── macOS Seatbelt ────────────────────────────────────────────────────────────
 
 /// 构建 SBPL（Apple Sandbox Profile Language）策略。
@@ -413,14 +431,14 @@ fn exec_seatbelt(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, St
 
     let profile = build_seatbelt_profile(&allowed, workdir, network_block, &sandbox_path);
 
-    // 注入 PATH 到命令前缀（Seatbelt 继承父进程 env，但 sandbox-exec 会清空部分 env）
+    let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
     let env_prefix: String = env_vars
         .iter()
         .map(|(k, v)| format!("export {}={};", k, shell_quote_value(v)))
         .collect::<Vec<_>>()
         .join(" ");
 
-    let full_command = format!("{} {}", env_prefix, req.command);
+    let full_command = format!("{}{}{}", ulimit_prefix, env_prefix, req.command);
 
     let mut cmd = Command::new(&sandbox_exec);
     cmd.args(["-p", &profile, "bash", "-c", &full_command]);
@@ -431,7 +449,7 @@ fn exec_seatbelt(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, St
         cmd.env(k, v);
     }
 
-    run_with_timeout(cmd, timeout_ms, "seatbelt")
+    run_with_timeout(cmd, timeout_ms, "seatbelt", req.max_memory_mb.unwrap_or(0) > 0)
 }
 
 // ─── Linux bubblewrap ─────────────────────────────────────────────────────────
@@ -554,12 +572,14 @@ fn exec_bwrap(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, Strin
     }
 
     // 执行命令
-    args.extend(["--".into(), "bash".into(), "-c".into(), req.command.clone()]);
+    let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
+    let full_cmd = format!("{}{}", ulimit_prefix, req.command);
+    args.extend(["--".into(), "bash".into(), "-c".into(), full_cmd]);
 
     let mut cmd = Command::new(&bwrap_path);
     cmd.args(&args);
 
-    run_with_timeout(cmd, timeout_ms, "bwrap")
+    run_with_timeout(cmd, timeout_ms, "bwrap", req.max_memory_mb.unwrap_or(0) > 0)
 }
 
 // ─── Linux namespace-only 降级 ─────────────────────────────────────────────────
@@ -573,8 +593,11 @@ fn exec_namespace_fallback(req: &NativeSandboxRequest) -> Result<NativeSandboxRe
     let sandbox_path = build_sandbox_path();
     let env_vars = build_safe_env(req.env_extra.as_deref().unwrap_or(&[]), &sandbox_path);
 
+    let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
+    let full_bare_cmd = format!("{}{}", ulimit_prefix, req.command);
+
     let mut cmd = Command::new("bash");
-    cmd.args(["-c", &req.command]);
+    cmd.args(["-c", &full_bare_cmd]);
     cmd.current_dir(workdir);
     cmd.env_clear();
     for (k, v) in &env_vars {
@@ -588,7 +611,7 @@ fn exec_namespace_fallback(req: &NativeSandboxRequest) -> Result<NativeSandboxRe
             .map(|(k, v)| format!("export {}={};", k, shell_quote_value(v)))
             .collect::<Vec<_>>()
             .join(" ");
-        let full_cmd = format!("{} {}", env_prefix, req.command);
+        let full_cmd = format!("{}{}{}", ulimit_prefix, env_prefix, req.command);
         let mut ns_cmd = Command::new(&unshare);
         ns_cmd.args(["--pid", "--fork", "bash", "-c", &full_cmd]);
         ns_cmd.current_dir(workdir);
@@ -596,10 +619,10 @@ fn exec_namespace_fallback(req: &NativeSandboxRequest) -> Result<NativeSandboxRe
         for (k, v) in &env_vars {
             ns_cmd.env(k, v);
         }
-        return run_with_timeout(ns_cmd, timeout_ms, "namespace");
+        return run_with_timeout(ns_cmd, timeout_ms, "namespace", req.max_memory_mb.unwrap_or(0) > 0);
     }
 
-    run_with_timeout(cmd, timeout_ms, "bare")
+    run_with_timeout(cmd, timeout_ms, "bare", req.max_memory_mb.unwrap_or(0) > 0)
 }
 
 // ─── Windows WSL2 ──────────────────────────────────────────────────────────────
@@ -612,9 +635,7 @@ fn exec_wsl2(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
     let timeout_ms = req.timeout_ms.unwrap_or(30_000);
     let network_block = req.network_block.unwrap_or(true);
     if network_block {
-        // WSL2 无法从宿主控制 Linux VM 网络，仅记录警告
-        // 实际网络隔离依赖 Windows Firewall 规则
-        eprintln!("[native_sandbox] WARNING: network_block=true ignored in WSL2; configure Windows Firewall manually");
+        eprintln!("[native_sandbox] WARNING: using unshare --net in WSL2 for network blocking, requires WSL2 Linux env to support it");
     }
 
     let mut args: Vec<String> = Vec::new();
@@ -632,19 +653,24 @@ fn exec_wsl2(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
     // 在 WSL2 内构建 PATH 注入前缀（WSL2 会继承 Windows PATH + distro PATH）
     let sandbox_path = build_sandbox_path();
     let env_vars = build_safe_env(req.env_extra.as_deref().unwrap_or(&[]), &sandbox_path);
+    let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
     let env_prefix: String = env_vars
         .iter()
         .map(|(k, v)| format!("export {}={};", k, shell_quote_value(v)))
         .collect::<Vec<_>>()
         .join(" ");
-    let full_command = format!("{} {}", env_prefix, req.command);
+    let full_command = format!("{}{}{}", ulimit_prefix, env_prefix, req.command);
 
-    args.extend(["-e".into(), "bash".into(), "-c".into(), full_command]);
+    if network_block {
+        args.extend(["-e".into(), "unshare".into(), "--net".into(), "bash".into(), "-c".into(), full_command]);
+    } else {
+        args.extend(["-e".into(), "bash".into(), "-c".into(), full_command]);
+    }
 
     let mut cmd = Command::new(&wsl);
     cmd.args(&args);
 
-    run_with_timeout(cmd, timeout_ms, "wsl2")
+    run_with_timeout(cmd, timeout_ms, "wsl2", req.max_memory_mb.unwrap_or(0) > 0)
 }
 
 // ─── 跨平台 bare 降级 ─────────────────────────────────────────────────────────
@@ -656,11 +682,19 @@ fn exec_bare(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
     let sandbox_path = build_sandbox_path();
     let env_vars = build_safe_env(req.env_extra.as_deref().unwrap_or(&[]), &sandbox_path);
 
+    let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
     let shell = if cfg!(windows) { "cmd.exe" } else { "bash" };
     let shell_flag = if cfg!(windows) { "/C" } else { "-c" };
+    
+    // Windows cmd doesn't support ulimit, so we only apply it for bash
+    let full_cmd = if cfg!(windows) {
+        req.command.clone()
+    } else {
+        format!("{}{}", ulimit_prefix, req.command)
+    };
 
     let mut cmd = Command::new(shell);
-    cmd.args([shell_flag, &req.command]);
+    cmd.args([shell_flag, &full_cmd]);
     if !workdir.is_empty() {
         cmd.current_dir(workdir);
     }
@@ -669,7 +703,8 @@ fn exec_bare(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
         cmd.env(k, v);
     }
 
-    run_with_timeout(cmd, timeout_ms, "bare")
+    let memory_limited = !cfg!(windows) && req.max_memory_mb.unwrap_or(0) > 0;
+    run_with_timeout(cmd, timeout_ms, "bare", memory_limited)
 }
 
 // ─── 执行引擎 ─────────────────────────────────────────────────────────────────
@@ -683,6 +718,7 @@ fn run_with_timeout(
     mut cmd: Command,
     timeout_ms: u64,
     method: &str,
+    memory_limited: bool,
 ) -> Result<NativeSandboxResponse, String> {
     use std::io::Read;
     use std::sync::{Arc, Mutex};
@@ -767,6 +803,7 @@ fn run_with_timeout(
         output: combined,
         exit_code: exit_status.code().unwrap_or(-1),
         sandbox_method: method.to_string(),
+        memory_limited,
     })
 }
 
@@ -967,6 +1004,7 @@ fn probe_tools() -> ToolProbeResult {
         seatbelt_available,
         wsl2_available,
         found_runtimes,
+        wasi_network_supported: true,
     }
 }
 

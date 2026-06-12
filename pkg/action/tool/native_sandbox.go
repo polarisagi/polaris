@@ -40,6 +40,7 @@ type NativeSandboxCfg struct {
 	Env           []string      // 环境变量（已清理）
 	BwrapPath     string        // Linux: bwrap 可执行路径（空=自动查找）
 	TimeoutMs     uint64        // 超时毫秒（0 = Rust 侧默认 30000）
+	MaxMemoryMB   uint64        // 内存限制（MB，0=不限制）
 }
 
 // WrapBashCmd 将 bash 命令包装到平台原生沙箱，返回可执行的 exec.Cmd。
