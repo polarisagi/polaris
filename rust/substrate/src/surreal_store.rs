@@ -65,7 +65,7 @@ impl SurrealStore {
         rt.block_on(async { db.use_ns("polaris").use_db("cognition").await })?;
 
         // FIX: MTREE → HNSW（M=8, EF_CONSTRUCTION=64），内存占用减少约 50%，适配 VPS
-        // FIX: docs 表移除 doc_id 字段，改用 type::thing('docs', $id) record ID + record::id() 投影
+        // FIX: docs 表移除 doc_id 字段，改用 type::record('docs', $id) record ID + record::id() 投影
         //      避免 UNIQUE 约束缺失导致重复文档降低 BM25 精度
         let ddl = format!(
             "DEFINE TABLE IF NOT EXISTS kv SCHEMAFULL; \
@@ -74,7 +74,7 @@ impl SurrealStore {
              DEFINE INDEX IF NOT EXISTS kv_k ON kv FIELDS k UNIQUE; \
              DEFINE TABLE IF NOT EXISTS vectors SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS embed ON vectors TYPE array<float>; \
-             DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EF_CONSTRUCTION 64; \
+             DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EFC 64; \
              DEFINE TABLE IF NOT EXISTS edges SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS from_id ON edges TYPE string; \
              DEFINE FIELD IF NOT EXISTS edge_type ON edges TYPE string; \
@@ -84,7 +84,7 @@ impl SurrealStore {
              DEFINE TABLE IF NOT EXISTS docs SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS body ON docs TYPE string; \
              DEFINE ANALYZER IF NOT EXISTS ascii_lower TOKENIZERS class FILTERS lowercase; \
-             DEFINE INDEX IF NOT EXISTS fts_idx ON docs FIELDS body SEARCH ANALYZER ascii_lower BM25;"
+             DEFINE INDEX IF NOT EXISTS fts_idx ON docs FIELDS body FULLTEXT ANALYZER ascii_lower BM25;"
         );
 
         // FIX: DDL 失败改为 eprintln 记录而非 `let _ = ...` 静默丢弃，便于问题排查
@@ -133,7 +133,7 @@ struct ToIdWeightRow {
     weight: f64,
 }
 
-// FIX: doc_id 由 record::id(id) AS doc_id 投影，与 type::thing UPSERT 结构匹配
+// FIX: doc_id 由 record::id(id) AS doc_id 投影，与 type::record UPSERT 结构匹配
 #[derive(Debug, SurrealValue)]
 struct DocScoreRow {
     doc_id: String,
@@ -316,7 +316,7 @@ pub unsafe extern "C" fn surreal_kv_get(
 
 // ─── surreal_kv_put ───────────────────────────────────────────────────────────
 
-/// FIX: 使用 type::thing('kv', $k) 确定性 RecordId，避免并发 UPSERT WHERE 竞态。
+/// FIX: 使用 type::record('kv', $k) 确定性 RecordId，避免并发 UPSERT WHERE 竞态。
 /// 原 `UPSERT kv SET ... WHERE k = $k`：两个协程同时写新 key 时，WHERE 均未匹配 →
 /// 各自 INSERT 新行 → UNIQUE INDEX 报错但被 `let _ =` 静默丢弃，数据写入失败。
 ///
@@ -340,14 +340,17 @@ pub unsafe extern "C" fn surreal_kv_put(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        // FIX: type::thing('kv', $k) → record ID = kv:$k_hex，UPSERT 天然幂等无竞态
+        // FIX: type::record('kv', $k) → record ID = kv:$k_hex，UPSERT 天然幂等无竞态
         guard.rt.block_on(async {
-            let _ = guard
+            let res = guard
                 .db
-                .query("UPSERT type::thing('kv', $k) SET k = $k, v = $v")
+                .query("UPSERT type::record('kv', $k) SET k = $k, v = $v")
                 .bind(("k", k))
                 .bind(("v", v))
                 .await;
+            if let Err(e) = res {
+                eprintln!("[surreal_kv_put] Query error: {e}");
+            }
         });
         SURREAL_OK
     });
@@ -356,7 +359,7 @@ pub unsafe extern "C" fn surreal_kv_put(
 
 // ─── surreal_kv_delete ────────────────────────────────────────────────────────
 
-/// FIX: DELETE type::thing('kv', $k) 直接定位 record ID，O(1)，避免全表扫描。
+/// FIX: DELETE type::record('kv', $k) 直接定位 record ID，O(1)，避免全表扫描。
 /// 原 `DELETE kv WHERE k = $k` 需 kv_k 索引扫描，而 record ID 直接访问更高效。
 ///
 /// # Safety
@@ -376,7 +379,7 @@ pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("DELETE type::thing('kv', $k)")
+                .query("DELETE type::record('kv', $k)")
                 .bind(("k", k))
                 .await;
         });
@@ -418,12 +421,22 @@ pub unsafe extern "C" fn surreal_kv_scan(
             .block_on(async {
                 let mut resp = guard
                     .db
-                    .query("SELECT k, v FROM kv WHERE string::startsWith(k, $prefix) ORDER BY k")
+                    .query("SELECT k, v FROM kv WHERE string::starts_with(k, $prefix) ORDER BY k")
                     .bind(("prefix", prefix_hex))
                     .await?;
-                resp.take(0)
+                let rows: Vec<KvRow> = match resp.take(0) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[surreal_kv_scan] Error taking rows: {e}");
+                        vec![]
+                    }
+                };
+                Ok::<Vec<KvRow>, surrealdb::Error>(rows)
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                eprintln!("[surreal_kv_scan] query error: {e}");
+                vec![]
+            });
 
         let mut json = String::from("[");
         let mut first = true;
@@ -443,7 +456,7 @@ pub unsafe extern "C" fn surreal_kv_scan(
 
 // ─── surreal_vec_upsert ───────────────────────────────────────────────────────
 
-/// FIX: 使用 type::thing('vectors', $id) 明确指定 record ID。
+/// FIX: 使用 type::record('vectors', $id) 明确指定 record ID。
 /// 原 `UPSERT vectors SET id = $id, embed = $embed`：在 SCHEMAFULL 模式下
 /// `id` 不是普通字段，SET id = $id 无效 → record ID 变为随机生成，UPSERT 不幂等。
 ///
@@ -470,10 +483,10 @@ pub unsafe extern "C" fn surreal_vec_upsert(
             Err(_) => return SURREAL_ERR_LOCK,
         };
         guard.rt.block_on(async {
-            // FIX: type::thing('vectors', $id) → record ID = vectors:$id，幂等
+            // FIX: type::record('vectors', $id) → record ID = vectors:$id，幂等
             let _ = guard
                 .db
-                .query("UPSERT type::thing('vectors', $id) SET embed = $embed")
+                .query("UPSERT type::record('vectors', $id) SET embed = $embed")
                 .bind(("id", id_str))
                 .bind(("embed", embed_vec))
                 .await;
@@ -506,7 +519,7 @@ pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("DELETE type::thing('vectors', $id)")
+                .query("DELETE type::record('vectors', $id)")
                 .bind(("id", id_str))
                 .await;
         });
@@ -601,14 +614,14 @@ pub unsafe extern "C" fn surreal_graph_relate(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        // FIX: type::thing('edges', $ek) 确定性 ID = edges:(from\x1fet\x1fto)
+        // FIX: type::record('edges', $ek) 确定性 ID = edges:(from\x1fet\x1fto)
         // UPSERT 保证同一条边最多一条记录，同时支持 weight 更新
         let edge_key = edge_record_key(&from, &et, &to);
         guard.rt.block_on(async {
             let _ = guard
                 .db
                 .query(
-                    "UPSERT type::thing('edges', $ek) \
+                    "UPSERT type::record('edges', $ek) \
                      SET from_id = $from, edge_type = $et, to_id = $to, weight = $weight",
                 )
                 .bind(("ek", edge_key))
@@ -869,7 +882,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
 
 // ─── surreal_fts_index ────────────────────────────────────────────────────────
 
-/// FIX: 使用 type::thing('docs', $id) UPSERT，原子操作代替非原子 DELETE + INSERT。
+/// FIX: 使用 type::record('docs', $id) UPSERT，原子操作代替非原子 DELETE + INSERT。
 /// 原实现：DELETE docs WHERE doc_id=$id; INSERT INTO docs ... 不是原子操作，
 /// 且 doc_id 是普通字段无 UNIQUE 约束 → 多次写入产生重复文档降低 BM25 精度。
 ///
@@ -897,7 +910,7 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
             // FIX: 原子 UPSERT，record ID = docs:$id，天然唯一
             let _ = guard
                 .db
-                .query("UPSERT type::thing('docs', $id) SET body = $body")
+                .query("UPSERT type::record('docs', $id) SET body = $body")
                 .bind(("id", id))
                 .bind(("body", body))
                 .await;
@@ -930,7 +943,7 @@ pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("DELETE type::thing('docs', $id)")
+                .query("DELETE type::record('docs', $id)")
                 .bind(("id", id))
                 .await;
         });
@@ -944,7 +957,7 @@ pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
 /// BM25 全文检索，返回 JSON CString，须 surreal_free_string 释放。
 /// JSON: [{"id":"<doc_id>","score":<f64>},...]
 ///
-/// FIX: 使用 record::id(id) AS doc_id，与 type::thing UPSERT 结构匹配。
+/// FIX: 使用 record::id(id) AS doc_id，与 type::record UPSERT 结构匹配。
 /// 原 `SELECT doc_id` 对应表字段，已从 DDL 移除。
 ///
 /// # Safety
@@ -971,7 +984,7 @@ pub unsafe extern "C" fn surreal_fts_search(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        // FIX: record::id(id) AS doc_id — 与 type::thing 存储的 record ID 结构一致
+        // FIX: record::id(id) AS doc_id — 与 type::record 存储的 record ID 结构一致
         let sql = format!(
             "SELECT record::id(id) AS doc_id, search::score(0) AS score FROM docs \
              WHERE body @0@ $q ORDER BY score DESC LIMIT {k}"
@@ -1100,4 +1113,94 @@ pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
     );
     write_cstr(out_json, &json);
     SURREAL_OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+
+    unsafe fn read_out_json(out: *mut c_char) -> String {
+        let cstr = CStr::from_ptr(out);
+        let s = cstr.to_string_lossy().into_owned();
+        surreal_free_string(out);
+        s
+    }
+
+    #[test]
+    fn test_surreal_store_all_features() {
+        unsafe {
+            let rc = surreal_open(std::ptr::null(), std::ptr::null(), 3);
+            assert_eq!(rc, SURREAL_OK);
+
+            // 1. KV
+            let key = b"test_key";
+            let val = b"test_val";
+            assert_eq!(surreal_kv_put(key.as_ptr(), key.len(), val.as_ptr(), val.len()), SURREAL_OK);
+            
+            let mut out_val: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            assert_eq!(surreal_kv_get(key.as_ptr(), key.len(), &mut out_val, &mut out_len), SURREAL_OK);
+            assert_eq!(std::slice::from_raw_parts(out_val, out_len), b"test_val");
+            surreal_free_buf(out_val, out_len);
+
+            let mut out_json: *mut c_char = std::ptr::null_mut();
+            assert_eq!(surreal_kv_scan(b"test_".as_ptr(), 5, &mut out_json), SURREAL_OK);
+            let scan_json = read_out_json(out_json);
+            assert!(scan_json.contains(&bytes_to_hex(b"test_key")), "scan_json was {}", scan_json);
+
+            assert_eq!(surreal_kv_delete(key.as_ptr(), key.len()), SURREAL_OK);
+
+            // 2. Vector
+            let id1 = CString::new("vec1").unwrap();
+            let embed1 = vec![1.0, 0.0, 0.0];
+            assert_eq!(surreal_vec_upsert(id1.as_ptr(), embed1.as_ptr(), 3), SURREAL_OK);
+            
+            let id2 = CString::new("vec2").unwrap();
+            let embed2 = vec![0.0, 1.0, 0.0];
+            assert_eq!(surreal_vec_upsert(id2.as_ptr(), embed2.as_ptr(), 3), SURREAL_OK);
+
+            let query = vec![1.0, 0.1, 0.0];
+            assert_eq!(surreal_vec_knn(query.as_ptr(), 3, 2, &mut out_json), SURREAL_OK);
+            let knn_json = read_out_json(out_json);
+            assert!(knn_json.contains("vec1"));
+
+            assert_eq!(surreal_vec_delete(id1.as_ptr()), SURREAL_OK);
+
+            // 3. Graph
+            let from = CString::new("nodeA").unwrap();
+            let et = CString::new("knows").unwrap();
+            let to = CString::new("nodeB").unwrap();
+            assert_eq!(surreal_graph_relate(from.as_ptr(), et.as_ptr(), to.as_ptr(), 1.0), SURREAL_OK);
+
+            let empty = CString::new("").unwrap();
+            assert_eq!(surreal_graph_traverse(from.as_ptr(), empty.as_ptr(), 2, &mut out_json), SURREAL_OK);
+            let traverse_json = read_out_json(out_json);
+            assert!(traverse_json.contains("nodeB"));
+
+            let start_ids = CString::new("[\"nodeA\"]").unwrap();
+            assert_eq!(surreal_graph_spreading_activation(start_ids.as_ptr(), 2, 0.8, 0.1, 10, &mut out_json), SURREAL_OK);
+            let sa_json = read_out_json(out_json);
+            assert!(sa_json.contains("nodeB"));
+
+            assert_eq!(surreal_graph_delete_edges(from.as_ptr(), et.as_ptr()), SURREAL_OK);
+
+            // 4. FTS
+            let doc_id = CString::new("doc1").unwrap();
+            let text = CString::new("Hello world surreal").unwrap();
+            assert_eq!(surreal_fts_index(doc_id.as_ptr(), text.as_ptr()), SURREAL_OK);
+
+            let q = CString::new("world").unwrap();
+            assert_eq!(surreal_fts_search(q.as_ptr(), 10, &mut out_json), SURREAL_OK);
+            let search_json = read_out_json(out_json);
+            assert!(search_json.contains("doc1"));
+
+            assert_eq!(surreal_fts_delete(doc_id.as_ptr()), SURREAL_OK);
+
+            // 5. Stats
+            assert_eq!(surreal_stats(&mut out_json), SURREAL_OK);
+            let stats_json = read_out_json(out_json);
+            assert!(stats_json.contains("\"ready\":true"));
+        }
+    }
 }
