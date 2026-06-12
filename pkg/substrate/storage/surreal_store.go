@@ -49,6 +49,8 @@ var (
 	surrealFTSSearch                func(query string, k uintptr, outJSON *uintptr) int32
 	surrealFreeString               func(ptr uintptr)
 	surrealFreeBuf                  func(ptr uintptr, length uintptr)
+	surrealVecSetMode               func(mode int32) int32
+	surrealStats                    func(outJSON *uintptr) int32
 )
 
 func bindSurreal() error {
@@ -77,6 +79,8 @@ func bindSurreal() error {
 		purego.RegisterLibFunc(&surrealFTSSearch, lib, "surreal_fts_search")
 		purego.RegisterLibFunc(&surrealFreeString, lib, "surreal_free_string")
 		purego.RegisterLibFunc(&surrealFreeBuf, lib, "surreal_free_buf")
+		purego.RegisterLibFunc(&surrealVecSetMode, lib, "surreal_vec_set_mode")
+		purego.RegisterLibFunc(&surrealStats, lib, "surreal_stats")
 	})
 	return surrealErr
 }
@@ -246,6 +250,25 @@ func (s *SurrealDBCoreStore) Capabilities() protocol.StoreCapabilities {
 }
 
 func (s *SurrealDBCoreStore) Close() error { return nil }
+
+// VecSetMode 设置向量存储模式（0: 精确搜索, 1: 近似搜索等，根据 Rust 端定义）。
+func (s *SurrealDBCoreStore) VecSetMode(mode int) error {
+	rc := surrealVecSetMode(int32(mode))
+	if rc != 0 {
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_vec_set_mode: code %d", rc))
+	}
+	return nil
+}
+
+// Stats 返回存储后端的诊断统计信息（JSON）。
+func (s *SurrealDBCoreStore) Stats() (string, error) {
+	var outJSON uintptr
+	rc := surrealStats(&outJSON)
+	if rc != 0 {
+		return "", perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_stats: code %d", rc))
+	}
+	return readCStringAndFree(outJSON), nil
+}
 
 // ─── 扩展接口（向量 / 图 / 全文）────────────────────────────────────────────────
 
