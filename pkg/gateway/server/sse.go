@@ -801,6 +801,15 @@ func loadOperationalDirectives() string {
 	if op := memory.ReadPrompt("operational/memory_hygiene.md", ""); op != "" {
 		opDirectives = append(opDirectives, op)
 	}
+	if op := memory.ReadPrompt("operational/coding_style.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
+	if op := memory.ReadPrompt("operational/output_efficiency.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
+	if op := memory.ReadPrompt("operational/risky_actions.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
 
 	if len(opDirectives) > 0 {
 		return strings.Join(opDirectives, "\n\n")
