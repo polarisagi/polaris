@@ -13,7 +13,37 @@ permissions:
   actions: read
 
 jobs:
+  # 在执行任何耗时打包前，先做极速交叉编译检查（Fail-Fast 机制）
+  precheck-go:
+    name: Pre-check Go
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Check Go Compilation (All Targets)
+        run: |
+          echo "Checking linux-amd64..."
+          GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/polaris
+          echo "Checking linux-arm64..."
+          GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/polaris
+          echo "Checking darwin-arm64..."
+          GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/polaris
+          echo "Checking darwin-amd64..."
+          GOOS=darwin GOARCH=amd64 go build -o /dev/null ./cmd/polaris
+          echo "Checking windows-amd64..."
+          GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/polaris
+          echo "Checking windows-arm64..."
+          GOOS=windows GOARCH=arm64 go build -o /dev/null ./cmd/polaris
+
   build-frontend:
+    needs: precheck-go
     name: Build Frontend
     runs-on: ubuntu-latest
     steps:
@@ -42,6 +72,7 @@ jobs:
   # Rust 预编译：6 个 target 全部并行，产物通过 artifact 传递给下游 Go 编译
   # 最终产物缓存（跨 Tag 支持）：利用 GitHub CLI 下载上一次成功发布时的产物比对 Hash，实现跨 Tag 秒级跳过
   build-rust:
+    needs: precheck-go
     name: Rust (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     strategy:
