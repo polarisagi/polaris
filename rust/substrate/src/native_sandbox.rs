@@ -195,11 +195,7 @@ fn build_sandbox_path() -> String {
 
 /// 路径分隔符（Unix: ':', Windows: ';'）
 fn path_separator() -> char {
-    if cfg!(windows) {
-        ';'
-    } else {
-        ':'
-    }
+    if cfg!(windows) { ';' } else { ':' }
 }
 
 /// 无重复追加路径
@@ -645,7 +641,9 @@ fn exec_wsl2(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
     let timeout_ms = req.timeout_ms.unwrap_or(30_000);
     let network_block = req.network_block.unwrap_or(true);
     if network_block {
-        eprintln!("[native_sandbox] WARNING: using unshare --net in WSL2 for network blocking, requires WSL2 Linux env to support it");
+        eprintln!(
+            "[native_sandbox] WARNING: using unshare --net in WSL2 for network blocking, requires WSL2 Linux env to support it"
+        );
     }
 
     let mut args: Vec<String> = Vec::new();
@@ -957,10 +955,12 @@ fn ns_write_cstr(out: *mut *mut c_char, msg: &str) {
 }
 
 unsafe fn ns_read_cstr<'a>(ptr: *const c_char) -> Result<&'a str, ()> {
-    if ptr.is_null() {
-        return Ok("");
+    unsafe {
+        if ptr.is_null() {
+            return Ok("");
+        }
+        CStr::from_ptr(ptr).to_str().map_err(|_| ())
     }
-    CStr::from_ptr(ptr).to_str().map_err(|_| ())
 }
 
 // ─── 工具探测 ─────────────────────────────────────────────────────────────────
@@ -1033,57 +1033,59 @@ fn probe_tools() -> ToolProbeResult {
 /// input_json, out_json, out_err 必须是有效指针（out_* 可为 null）。
 /// 返回值：NS_OK(0) 表示进程成功启动并退出（exit_code 见 out_json）；
 ///         负数表示沙箱自身出错（非命令执行失败）。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn native_sandbox_exec(
     input_json: *const c_char,
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    let result = panic::catch_unwind(|| -> c_int {
-        let json_str = match ns_read_cstr(input_json) {
-            Ok(s) => s,
-            Err(_) => {
-                ns_write_cstr(out_err, "invalid UTF-8 in input_json");
-                return NS_ERR_UTF8;
-            }
-        };
-
-        let req: NativeSandboxRequest = match serde_json::from_str(json_str) {
-            Ok(r) => r,
-            Err(e) => {
-                ns_write_cstr(out_err, &format!("JSON parse error: {}", e));
-                return NS_ERR_INTERNAL;
-            }
-        };
-
-        match dispatch_sandbox(&req) {
-            Ok(resp) => match serde_json::to_string(&resp) {
-                Ok(json) => {
-                    ns_write_cstr(out_json, &json);
-                    NS_OK
+    unsafe {
+        let result = panic::catch_unwind(|| -> c_int {
+            let json_str = match ns_read_cstr(input_json) {
+                Ok(s) => s,
+                Err(_) => {
+                    ns_write_cstr(out_err, "invalid UTF-8 in input_json");
+                    return NS_ERR_UTF8;
                 }
+            };
+
+            let req: NativeSandboxRequest = match serde_json::from_str(json_str) {
+                Ok(r) => r,
                 Err(e) => {
-                    ns_write_cstr(out_err, &format!("JSON serialize error: {}", e));
+                    ns_write_cstr(out_err, &format!("JSON parse error: {}", e));
+                    return NS_ERR_INTERNAL;
+                }
+            };
+
+            match dispatch_sandbox(&req) {
+                Ok(resp) => match serde_json::to_string(&resp) {
+                    Ok(json) => {
+                        ns_write_cstr(out_json, &json);
+                        NS_OK
+                    }
+                    Err(e) => {
+                        ns_write_cstr(out_err, &format!("JSON serialize error: {}", e));
+                        NS_ERR_INTERNAL
+                    }
+                },
+                Err(e) => {
+                    // 超时
+                    if e.contains("timeout") {
+                        ns_write_cstr(out_err, &e);
+                        return NS_ERR_TIMEOUT;
+                    }
+                    ns_write_cstr(out_err, &e);
                     NS_ERR_INTERNAL
                 }
-            },
-            Err(e) => {
-                // 超时
-                if e.contains("timeout") {
-                    ns_write_cstr(out_err, &e);
-                    return NS_ERR_TIMEOUT;
-                }
-                ns_write_cstr(out_err, &e);
+            }
+        });
+
+        match result {
+            Ok(code) => code,
+            Err(_) => {
+                ns_write_cstr(out_err, "panic in native_sandbox_exec");
                 NS_ERR_INTERNAL
             }
-        }
-    });
-
-    match result {
-        Ok(code) => code,
-        Err(_) => {
-            ns_write_cstr(out_err, "panic in native_sandbox_exec");
-            NS_ERR_INTERNAL
         }
     }
 }
@@ -1092,7 +1094,7 @@ pub unsafe extern "C" fn native_sandbox_exec(
 ///
 /// # Safety
 /// out_json, out_err 必须是有效指针或 null。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn native_sandbox_probe_tools(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
@@ -1124,10 +1126,12 @@ pub unsafe extern "C" fn native_sandbox_probe_tools(
 ///
 /// # Safety
 /// ptr 须为 native_sandbox_* 分配的指针，或 null。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn native_sandbox_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        drop(CString::from_raw(ptr));
+    unsafe {
+        if !ptr.is_null() {
+            drop(CString::from_raw(ptr));
+        }
     }
 }
 

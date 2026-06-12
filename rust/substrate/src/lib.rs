@@ -56,7 +56,7 @@ const SUBSTRATE_ABI_MINOR: u16 = 1;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
 /// Go 侧用 `(version >> 16) & 0xFFFF` 提取 major。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn substrate_abi_version() -> u32 {
     ((SUBSTRATE_ABI_MAJOR as u32) << 16) | (SUBSTRATE_ABI_MINOR as u32)
 }
@@ -69,50 +69,52 @@ pub extern "C" fn substrate_abi_version() -> u32 {
 ///
 /// # Safety
 /// policies_text 必须是有效的 NUL-terminated C 字符串，caller 负责生命周期。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cedar_load_policies(
     policies_text: *const c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    let result = panic::catch_unwind(|| -> c_int {
-        // 解析输入字符串
-        let text = match unsafe_cstr_to_str(policies_text) {
-            Ok(s) => s,
+    unsafe {
+        let result = panic::catch_unwind(|| -> c_int {
+            // 解析输入字符串
+            let text = match unsafe_cstr_to_str(policies_text) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(out_err, "invalid UTF-8 in policy text");
+                    return CEDAR_ERR_UTF8;
+                }
+            };
+
+            // 解析 PolicySet
+            let new_set = match text.parse::<PolicySet>() {
+                Ok(ps) => ps,
+                Err(e) => {
+                    write_err(out_err, &format!("policy parse error: {e}"));
+                    return CEDAR_ERR_PARSE;
+                }
+            };
+
+            // 写入全局 PolicyStore
+            let store = policy_store();
+            // 显式绑定 write guard，防止临时值在 match 结束前 drop（E0597）
+            let mut guard = match store.write() {
+                Ok(g) => g,
+                Err(e) => {
+                    write_err(out_err, &format!("lock poisoned: {e}"));
+                    return CEDAR_ERR_INTERNAL;
+                }
+            };
+            *guard = new_set;
+            write_err(out_err, "");
+            0
+        });
+
+        match result {
+            Ok(code) => code,
             Err(_) => {
-                write_err(out_err, "invalid UTF-8 in policy text");
-                return CEDAR_ERR_UTF8;
+                write_err(out_err, "panic in cedar_load_policies");
+                CEDAR_ERR_INTERNAL
             }
-        };
-
-        // 解析 PolicySet
-        let new_set = match text.parse::<PolicySet>() {
-            Ok(ps) => ps,
-            Err(e) => {
-                write_err(out_err, &format!("policy parse error: {e}"));
-                return CEDAR_ERR_PARSE;
-            }
-        };
-
-        // 写入全局 PolicyStore
-        let store = policy_store();
-        // 显式绑定 write guard，防止临时值在 match 结束前 drop（E0597）
-        let mut guard = match store.write() {
-            Ok(g) => g,
-            Err(e) => {
-                write_err(out_err, &format!("lock poisoned: {e}"));
-                return CEDAR_ERR_INTERNAL;
-            }
-        };
-        *guard = new_set;
-        write_err(out_err, "");
-        0
-    });
-
-    match result {
-        Ok(code) => code,
-        Err(_) => {
-            write_err(out_err, "panic in cedar_load_policies");
-            CEDAR_ERR_INTERNAL
         }
     }
 }
@@ -131,7 +133,7 @@ pub unsafe extern "C" fn cedar_load_policies(
 ///
 /// # Safety
 /// 所有 *const c_char 参数须为有效 NUL-terminated C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cedar_evaluate(
     principal: *const c_char,
     action: *const c_char,
@@ -139,101 +141,103 @@ pub unsafe extern "C" fn cedar_evaluate(
     context_json: *const c_char,
     out_reason: *mut *mut c_char,
 ) -> c_int {
-    let result = panic::catch_unwind(|| -> c_int {
-        // 解析四个输入参数
-        let p_str = match unsafe_cstr_to_str(principal) {
-            Ok(s) => s,
+    unsafe {
+        let result = panic::catch_unwind(|| -> c_int {
+            // 解析四个输入参数
+            let p_str = match unsafe_cstr_to_str(principal) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(out_reason, "invalid UTF-8: principal");
+                    return CEDAR_ERR_UTF8;
+                }
+            };
+            let a_str = match unsafe_cstr_to_str(action) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(out_reason, "invalid UTF-8: action");
+                    return CEDAR_ERR_UTF8;
+                }
+            };
+            let r_str = match unsafe_cstr_to_str(resource) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(out_reason, "invalid UTF-8: resource");
+                    return CEDAR_ERR_UTF8;
+                }
+            };
+            let ctx_str = match unsafe_cstr_to_str(context_json) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(out_reason, "invalid UTF-8: context_json");
+                    return CEDAR_ERR_UTF8;
+                }
+            };
+
+            // 构造 EntityUID
+            let p_uid = match p_str.parse::<EntityUid>() {
+                Ok(u) => u,
+                Err(e) => {
+                    write_err(out_reason, &format!("principal parse: {e}"));
+                    return CEDAR_ERR_CONTEXT;
+                }
+            };
+            let a_uid = match a_str.parse::<EntityUid>() {
+                Ok(u) => u,
+                Err(e) => {
+                    write_err(out_reason, &format!("action parse: {e}"));
+                    return CEDAR_ERR_CONTEXT;
+                }
+            };
+            let r_uid = match r_str.parse::<EntityUid>() {
+                Ok(u) => u,
+                Err(e) => {
+                    write_err(out_reason, &format!("resource parse: {e}"));
+                    return CEDAR_ERR_CONTEXT;
+                }
+            };
+
+            // 构造 Context（从 JSON）
+            let ctx = match Context::from_json_str(ctx_str, None) {
+                Ok(c) => c,
+                Err(e) => {
+                    write_err(out_reason, &format!("context parse: {e}"));
+                    return CEDAR_ERR_CONTEXT;
+                }
+            };
+
+            let store = policy_store();
+            // 显式绑定 guard，防止 store 在 guard 使用前 drop（E0597）
+            let guard = match store.read() {
+                Ok(g) => g,
+                Err(e) => {
+                    write_err(out_reason, &format!("lock poisoned: {e}"));
+                    return CEDAR_ERR_INTERNAL;
+                }
+            };
+            let policy_set: &PolicySet = &guard;
+
+            let request = Request::new(p_uid, a_uid, r_uid, ctx, None)
+                .expect("Request::new should not fail with validated EntityUIDs");
+
+            let authorizer = Authorizer::new();
+            // 空 Entities —— 实体属性通过 context_json 传递（MVP 简化）
+            let entities = Entities::empty();
+            let response = authorizer.is_authorized(&request, policy_set, &entities);
+
+            let (code, reason) = match response.decision() {
+                Decision::Allow => (CEDAR_ALLOW, "allow"),
+                Decision::Deny => (CEDAR_DENY, "deny"),
+            };
+            write_err(out_reason, reason);
+            code
+        });
+
+        match result {
+            Ok(code) => code,
             Err(_) => {
-                write_err(out_reason, "invalid UTF-8: principal");
-                return CEDAR_ERR_UTF8;
+                write_err(out_reason, "panic in cedar_evaluate");
+                CEDAR_ERR_INTERNAL
             }
-        };
-        let a_str = match unsafe_cstr_to_str(action) {
-            Ok(s) => s,
-            Err(_) => {
-                write_err(out_reason, "invalid UTF-8: action");
-                return CEDAR_ERR_UTF8;
-            }
-        };
-        let r_str = match unsafe_cstr_to_str(resource) {
-            Ok(s) => s,
-            Err(_) => {
-                write_err(out_reason, "invalid UTF-8: resource");
-                return CEDAR_ERR_UTF8;
-            }
-        };
-        let ctx_str = match unsafe_cstr_to_str(context_json) {
-            Ok(s) => s,
-            Err(_) => {
-                write_err(out_reason, "invalid UTF-8: context_json");
-                return CEDAR_ERR_UTF8;
-            }
-        };
-
-        // 构造 EntityUID
-        let p_uid = match p_str.parse::<EntityUid>() {
-            Ok(u) => u,
-            Err(e) => {
-                write_err(out_reason, &format!("principal parse: {e}"));
-                return CEDAR_ERR_CONTEXT;
-            }
-        };
-        let a_uid = match a_str.parse::<EntityUid>() {
-            Ok(u) => u,
-            Err(e) => {
-                write_err(out_reason, &format!("action parse: {e}"));
-                return CEDAR_ERR_CONTEXT;
-            }
-        };
-        let r_uid = match r_str.parse::<EntityUid>() {
-            Ok(u) => u,
-            Err(e) => {
-                write_err(out_reason, &format!("resource parse: {e}"));
-                return CEDAR_ERR_CONTEXT;
-            }
-        };
-
-        // 构造 Context（从 JSON）
-        let ctx = match Context::from_json_str(ctx_str, None) {
-            Ok(c) => c,
-            Err(e) => {
-                write_err(out_reason, &format!("context parse: {e}"));
-                return CEDAR_ERR_CONTEXT;
-            }
-        };
-
-        let store = policy_store();
-        // 显式绑定 guard，防止 store 在 guard 使用前 drop（E0597）
-        let guard = match store.read() {
-            Ok(g) => g,
-            Err(e) => {
-                write_err(out_reason, &format!("lock poisoned: {e}"));
-                return CEDAR_ERR_INTERNAL;
-            }
-        };
-        let policy_set: &PolicySet = &guard;
-
-        let request = Request::new(p_uid, a_uid, r_uid, ctx, None)
-            .expect("Request::new should not fail with validated EntityUIDs");
-
-        let authorizer = Authorizer::new();
-        // 空 Entities —— 实体属性通过 context_json 传递（MVP 简化）
-        let entities = Entities::empty();
-        let response = authorizer.is_authorized(&request, policy_set, &entities);
-
-        let (code, reason) = match response.decision() {
-            Decision::Allow => (CEDAR_ALLOW, "allow"),
-            Decision::Deny => (CEDAR_DENY, "deny"),
-        };
-        write_err(out_reason, reason);
-        code
-    });
-
-    match result {
-        Ok(code) => code,
-        Err(_) => {
-            write_err(out_reason, "panic in cedar_evaluate");
-            CEDAR_ERR_INTERNAL
         }
     }
 }
@@ -242,7 +246,7 @@ pub unsafe extern "C" fn cedar_evaluate(
 
 /// 返回当前 PolicySet 中的策略数量。
 /// 用于健康检查和热更新验证。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cedar_policy_count() -> c_int {
     let store = policy_store();
     let guard = match store.read() {
@@ -261,7 +265,7 @@ pub extern "C" fn cedar_policy_count() -> c_int {
 ///
 /// # Safety
 /// ptr 须为 cedar_* 函数分配的指针，或 null。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cedar_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         // 重新构造 CString 以正确释放

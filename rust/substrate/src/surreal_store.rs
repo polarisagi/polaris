@@ -10,9 +10,9 @@ use std::panic;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
+use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, Mem, RocksDb};
 use surrealdb::types::SurrealValue;
-use surrealdb::Surreal;
 use tokio::runtime::Runtime;
 
 // ─── FFI 错误码 ────────────────────────────────────────────────────────────────
@@ -207,7 +207,7 @@ fn edge_record_key(from: &str, et: &str, to: &str) -> String {
 /// 配置 SurrealDB Tokio 运行时工作线程数。必须在 surreal_open 前调用（否则使用默认值）。
 /// n <= 0 表示 auto（min(CPU 核心数, 4)）；推荐 VPS 设为 2 节省内存。
 /// 此函数为新增扩展 API（SUBSTRATE_ABI_MINOR 1），不改变 surreal_open 签名。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn surreal_set_worker_threads(n: c_int) -> c_int {
     let v = if n <= 0 { 0u32 } else { n as u32 };
     WORKER_THREADS.store(v, Ordering::Relaxed);
@@ -222,7 +222,7 @@ pub extern "C" fn surreal_set_worker_threads(n: c_int) -> c_int {
 ///
 /// # Safety
 /// backend/db_path 须为有效 NUL-terminated C 字符串或 null。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_open(
     backend: *const c_char,
     db_path: *const c_char,
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn surreal_open(
 ///
 /// # Safety
 /// key 须为 key_len 字节长的有效内存地址。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_get(
     key: *const u8,
     key_len: usize,
@@ -322,7 +322,7 @@ pub unsafe extern "C" fn surreal_kv_get(
 ///
 /// # Safety
 /// key/val 须为对应 len 字节长的有效内存地址。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_put(
     key: *const u8,
     key_len: usize,
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn surreal_kv_put(
 ///
 /// # Safety
 /// key 须为 key_len 字节长的有效内存地址。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_int {
     let k = bytes_to_hex(unsafe { std::slice::from_raw_parts(key, key_len) });
     let result = panic::catch_unwind(|| {
@@ -395,7 +395,7 @@ pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_
 ///
 /// # Safety
 /// prefix 须为 prefix_len 字节长的有效内存地址。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_scan(
     prefix: *const u8,
     prefix_len: usize,
@@ -462,7 +462,7 @@ pub unsafe extern "C" fn surreal_kv_scan(
 ///
 /// # Safety
 /// id 须为 NUL-terminated UTF-8；embed 须指向 dim 个 f32。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_vec_upsert(
     id: *const c_char,
     embed: *const f32,
@@ -502,7 +502,7 @@ pub unsafe extern "C" fn surreal_vec_upsert(
 ///
 /// # Safety
 /// id 须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
     let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
         Ok(s) => s.to_string(),
@@ -538,7 +538,7 @@ pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
 ///
 /// # Safety
 /// query 须指向 dim 个 f32。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_vec_knn(
     query: *const f32,
     dim: usize,
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn surreal_vec_knn(
 ///
 /// # Safety
 /// 所有参数须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_graph_relate(
     from_id: *const c_char,
     edge_type: *const c_char,
@@ -643,7 +643,7 @@ pub unsafe extern "C" fn surreal_graph_relate(
 ///
 /// # Safety
 /// from_id/edge_type 须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_graph_delete_edges(
     from_id: *const c_char,
     edge_type: *const c_char,
@@ -692,7 +692,7 @@ pub unsafe extern "C" fn surreal_graph_delete_edges(
 ///
 /// # Safety
 /// start_ids_json 须为有效 JSON string 数组（如 `["A", "B"]`）。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_graph_spreading_activation(
     start_ids_json: *const c_char,
     max_depth: usize,
@@ -807,7 +807,7 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
 ///
 /// # Safety
 /// start_id/edge_type 须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_graph_traverse(
     start_id: *const c_char,
     edge_type: *const c_char,
@@ -888,7 +888,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
 ///
 /// # Safety
 /// doc_id/text 须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c_char) -> c_int {
     let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
         Ok(s) => s.to_string(),
@@ -926,7 +926,7 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
 ///
 /// # Safety
 /// doc_id 须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
     let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
         Ok(s) => s.to_string(),
@@ -962,7 +962,7 @@ pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
 ///
 /// # Safety
 /// query 须为有效 NUL-terminated UTF-8 C 字符串。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_search(
     query: *const c_char,
     k: usize,
@@ -1021,7 +1021,7 @@ pub unsafe extern "C" fn surreal_fts_search(
 ///
 /// # Safety
 /// ptr 须为上述函数分配的指针，或 null。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe { drop(CString::from_raw(ptr)) };
@@ -1032,7 +1032,7 @@ pub unsafe extern "C" fn surreal_free_string(ptr: *mut c_char) {
 ///
 /// # Safety
 /// ptr 须为 surreal_kv_get 分配的指针，len 须与 out_len 一致，或 ptr 为 null。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_free_buf(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {
         unsafe { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len))) };
@@ -1042,7 +1042,7 @@ pub unsafe extern "C" fn surreal_free_buf(ptr: *mut u8, len: usize) {
 // ─── surreal_vec_set_mode — 兼容接口（no-op）──────────────────────────────────
 // SurrealDB HNSW 索引始终激活，此函数保留仅为 ABI 兼容（原 MTREE 模式切换接口）。
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn surreal_vec_set_mode(_mode: c_int) -> c_int {
     SURREAL_OK
 }
@@ -1052,7 +1052,7 @@ pub extern "C" fn surreal_vec_set_mode(_mode: c_int) -> c_int {
 /// 返回当前后端状态 JSON，须 surreal_free_string 释放。
 /// JSON: {"backend":"surreal","ready":true,"kv_count":N,"vec_count":N,"doc_count":N,"edge_count":N}
 /// 未初始化时：{"backend":"none","ready":false}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
     let Some(store_arc) = get_store() else {
         write_cstr(out_json, r#"{"backend":"none","ready":false}"#);
@@ -1119,10 +1119,12 @@ mod tests {
     use std::ffi::{CStr, CString};
 
     unsafe fn read_out_json(out: *mut c_char) -> String {
-        let cstr = CStr::from_ptr(out);
-        let s = cstr.to_string_lossy().into_owned();
-        surreal_free_string(out);
-        s
+        unsafe {
+            let cstr = CStr::from_ptr(out);
+            let s = cstr.to_string_lossy().into_owned();
+            surreal_free_string(out);
+            s
+        }
     }
 
     #[test]
