@@ -194,20 +194,19 @@ pub unsafe extern "C" fn wasmtime_execute(
             }
 
             // 如果传入了工作目录，则挂载为 /workspace
-            if !workspace_dir.is_null() {
-                if let Ok(host_path_str) = std::ffi::CStr::from_ptr(workspace_dir).to_str() {
-                    if !host_path_str.is_empty() {
-                        let host_path = Path::new(host_path_str);
-                        if let Err(e) = builder.preopened_dir(
-                            host_path,
-                            "/workspace",
-                            DirPerms::all(),
-                            FilePerms::all(),
-                        ) {
-                            write_err(out_err, &format!("Failed to preopen directory: {}", e));
-                            return WASMTIME_ERR_INTERNAL;
-                        }
-                    }
+            if !workspace_dir.is_null()
+                && let Ok(host_path_str) = std::ffi::CStr::from_ptr(workspace_dir).to_str()
+                && !host_path_str.is_empty()
+            {
+                let host_path = Path::new(host_path_str);
+                if let Err(e) = builder.preopened_dir(
+                    host_path,
+                    "/workspace",
+                    DirPerms::all(),
+                    FilePerms::all(),
+                ) {
+                    write_err(out_err, &format!("Failed to preopen directory: {}", e));
+                    return WASMTIME_ERR_INTERNAL;
                 }
             }
 

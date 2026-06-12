@@ -835,10 +835,10 @@ fn which_tool(name: &str) -> Option<String> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&candidate) {
-                    if meta.permissions().mode() & 0o111 != 0 {
-                        return Some(candidate.to_string_lossy().to_string());
-                    }
+                if let Ok(meta) = std::fs::metadata(&candidate)
+                    && meta.permissions().mode() & 0o111 != 0
+                {
+                    return Some(candidate.to_string_lossy().to_string());
                 }
             }
             #[cfg(not(unix))]

@@ -148,10 +148,10 @@ struct CountRow {
 // ─── 内部工具 ──────────────────────────────────────────────────────────────────
 
 fn write_cstr(out: *mut *mut c_char, s: &str) {
-    if !out.is_null() {
-        if let Ok(cs) = CString::new(s) {
-            unsafe { *out = cs.into_raw() };
-        }
+    if !out.is_null()
+        && let Ok(cs) = CString::new(s)
+    {
+        unsafe { *out = cs.into_raw() };
     }
 }
 

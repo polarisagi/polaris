@@ -254,8 +254,8 @@ pub extern "C" fn cedar_policy_count() -> c_int {
         Err(_) => return -1,
     };
     // 显式绑定避免临时 guard 在 match 结束时 drop（E0597）
-    let count = guard.policies().count() as c_int;
-    count
+
+    guard.policies().count() as c_int
 }
 
 // ─── cedar_free_string ─────────────────────────────────────────────────────────
