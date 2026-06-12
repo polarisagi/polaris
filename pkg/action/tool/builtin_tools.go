@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -338,13 +339,173 @@ type bashArgs struct {
 	Command string `json:"command"`
 }
 
-// baseEnv 返回清理后的最小环境变量集（防止 LLM 通过 env 注入攻击）。
+// baseEnv 返回清理后的安全环境变量集。
+//
+// 设计：继承宿主 PATH（保留用户安装的 python/node/cargo/go 等），
+// 追加平台通用工具目录（Homebrew/nix/cargo/pyenv/nvm 等），
+// 剔除高危变量（LD_PRELOAD / DYLD_INSERT_LIBRARIES 等注入向量）。
+//
+// 修复依据：原来 PATH 硬编码为 "/usr/local/bin:/usr/bin:/bin:..." 会导致
+// sandbox 内 python3/node/go 等命令找不到（"command not found"）。
 func baseEnv() []string {
-	return []string{
-		"PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:/opt/homebrew/bin",
-		"HOME=/tmp",
+	// 构建安全 PATH（继承宿主 + 追加常见工具目录）
+	sandboxPath := buildSandboxEnvPath()
+
+	// 基础安全变量
+	vars := []string{
+		"PATH=" + sandboxPath,
 		"TMPDIR=/tmp",
+		"TEMP=/tmp",
 	}
+
+	// HOME：使用真实 home（工具链需要 ~/.cargo 等目录）
+	if home, err := os.UserHomeDir(); err == nil {
+		vars = append(vars, "HOME="+home)
+	} else {
+		vars = append(vars, "HOME=/tmp")
+	}
+
+	// 安全白名单变量透传
+	safePassthrough := []string{
+		"LANG", "LC_ALL", "LC_CTYPE",
+		"TZ", "USER", "LOGNAME",
+		"PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "VIRTUAL_ENV",
+		"NODE_PATH", "NODE_ENV",
+		"GOPATH", "GOROOT", "GOMODCACHE", "GOCACHE",
+		"CARGO_HOME", "RUSTUP_HOME",
+		"JAVA_HOME",
+	}
+	for _, key := range safePassthrough {
+		if val := os.Getenv(key); val != "" {
+			vars = append(vars, key+"="+val)
+		}
+	}
+
+	// 高危变量黑名单（显式排除，确保不通过 os.Environ 漏入）
+	// 此函数不调用 os.Environ()，仅白名单透传，因此黑名单是 defense-in-depth。
+	return vars
+}
+
+// buildSandboxEnvPath 构建沙箱进程的 PATH。
+// 策略：宿主 PATH + 平台常见工具目录，去重保序。
+func buildSandboxEnvPath() string {
+	var parts []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			parts = append(parts, p)
+			seen[p] = true
+		}
+	}
+
+	// 1. 继承宿主 PATH（最重要：pyenv/nvm/cargo shims 等需要宿主 PATH）
+	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
+		add(p)
+	}
+	// 2. 平台基础目录（保底）
+	for _, p := range []string{"/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/usr/sbin", "/bin", "/sbin"} {
+		add(p)
+	}
+	// 3. macOS Homebrew
+	if runtime.GOOS == "darwin" {
+		add("/opt/homebrew/bin")
+		add("/opt/homebrew/sbin")
+	}
+	// 4–6. nix + 用户工具目录 + Linux 特定（各自提取以降低圈复杂度）
+	sandboxPathAddNix(add)
+	sandboxPathAddUserTools(add)
+	sandboxPathAddLinux(add)
+
+	return strings.Join(parts, string(filepath.ListSeparator))
+}
+
+// sandboxPathAddNix 添加 nix/NixOS PATH 目录（存在则加入）。
+func sandboxPathAddNix(add func(string)) {
+	for _, p := range []string{
+		"/nix/var/nix/profiles/default/bin",
+		"/run/current-system/sw/bin",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			add(p)
+		}
+	}
+}
+
+// sandboxPathAddUserTools 添加 HOME 相对的用户级工具目录（存在则加入）。
+func sandboxPathAddUserTools(add func(string)) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	for _, p := range []string{
+		home + "/.cargo/bin",
+		home + "/.local/bin",
+		home + "/go/bin",
+		home + "/.go/bin",
+		home + "/.pyenv/shims",
+		home + "/.pyenv/bin",
+		home + "/.nvm/versions/node/current/bin",
+		home + "/.deno/bin",
+		home + "/.bun/bin",
+		home + "/.asdf/shims",
+		home + "/.asdf/bin",
+		home + "/.rye/shims",
+		home + "/.local/share/mise/shims",
+		home + "/.rbenv/shims",
+		home + "/.rbenv/bin",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			add(p)
+		}
+	}
+}
+
+// sandboxPathAddLinux 添加 Linux 特定 PATH 目录（snap / conda；存在则加入）。
+func sandboxPathAddLinux(add func(string)) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	for _, p := range []string{
+		"/snap/bin",
+		"/opt/conda/bin", "/opt/miniconda3/bin", "/opt/anaconda3/bin",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			add(p)
+		}
+	}
+}
+
+// execInSandbox 通过 Rust FFI（或 Go 降级）在沙箱中执行命令。
+// 返回 (output, cmdErr, sandboxMethod, setupErr)。
+// setupErr != nil 表示沙箱初始化失败（非命令执行失败）。
+func execInSandbox(ctx context.Context, cfg NativeSandboxCfg) ([]byte, error, string, error) {
+	goCmd, rustResp, wrapErr := WrapBashCmd(ctx, cfg)
+	if wrapErr != nil {
+		return nil, nil, "", wrapErr
+	}
+	if rustResp != nil {
+		var cmdErr error
+		if rustResp.ExitCode != 0 {
+			cmdErr = fmt.Errorf("exit status %d", rustResp.ExitCode)
+		}
+		return []byte(rustResp.Output), cmdErr, rustResp.SandboxMethod, nil
+	}
+	if goCmd != nil {
+		out, cmdErr := goCmd.CombinedOutput()
+		return out, cmdErr, "go_fallback", nil
+	}
+	return nil, nil, "none", nil
+}
+
+// execWithoutSandbox 在无沙箱模式下执行 bash 命令（env 清理 + Linux namespace 保底）。
+func execWithoutSandbox(ctx context.Context, command, workDir string, env []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.Dir = workDir
+	cmd.Env = env
+	if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
+		cmd.SysProcAttr = attrs
+	}
+	return cmd.CombinedOutput()
 }
 
 func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy NetworkPolicy, bwrapPath string) action.InProcessFn {
@@ -371,8 +532,10 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy NetworkPol
 			"cmd", args.Command,
 			"dir", workDir)
 
-		var cmd *exec.Cmd
-		var err error
+		var outBytes []byte
+		var execErr error
+		var sandboxMethod string
+
 		if sandboxEnabled {
 			cfg := NativeSandboxCfg{
 				Command:       args.Command,
@@ -381,27 +544,25 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy NetworkPol
 				NetworkPolicy: netPolicy,
 				Env:           baseEnv(),
 				BwrapPath:     bwrapPath,
+				TimeoutMs:     30_000,
 			}
-			cmd, err = WrapBashCmd(execCtx, cfg)
-			if err != nil {
-				return nil, perrors.Wrap(perrors.CodeInternal, "bash: sandbox wrap failed", err)
+			var setupErr error
+			outBytes, execErr, sandboxMethod, setupErr = execInSandbox(execCtx, cfg)
+			if setupErr != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "bash: sandbox wrap failed", setupErr)
 			}
 		} else {
-			// 沙箱禁用：仅 env 清理 + workDir + Linux namespace（最后防线）
-			cmd = exec.CommandContext(execCtx, "bash", "-c", args.Command)
-			cmd.Dir = workDir
-			cmd.Env = baseEnv()
-			if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
-				cmd.SysProcAttr = attrs
-			}
+			// 沙箱禁用：env 清理 + workDir + Linux namespace（最后防线）
+			sandboxMethod = "disabled"
+			outBytes, execErr = execWithoutSandbox(execCtx, args.Command, workDir, baseEnv())
 		}
 
-		outBytes, execErr := cmd.CombinedOutput()
 		result := map[string]any{
 			"command":         args.Command,
 			"output":          string(outBytes),
 			"exit_code":       0,
 			"sandbox_enabled": sandboxEnabled,
+			"sandbox_method":  sandboxMethod,
 			"network_policy":  string(netPolicy),
 		}
 		if execErr != nil {
@@ -1072,8 +1233,10 @@ func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy Netw
 
 		env := append(baseEnv(), "GOCACHE=/tmp/gocache", "CARGO_HOME=/tmp/cargo", "npm_config_cache=/tmp/npm")
 
-		var cmd *exec.Cmd
-		var cmdErr error
+		var outBytes []byte
+		var execErr error
+		var sandboxMethod string
+
 		if sandboxEnabled {
 			cfg := NativeSandboxCfg{
 				Command:       args.Command,
@@ -1082,25 +1245,23 @@ func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy Netw
 				NetworkPolicy: netPolicy, // 构建工具通常需要网络（下载依赖），由上层配置控制
 				Env:           env,
 				BwrapPath:     bwrapPath,
+				TimeoutMs:     uint64(timeout.Milliseconds()),
 			}
-			cmd, cmdErr = WrapBashCmd(execCtx, cfg)
-			if cmdErr != nil {
-				return nil, perrors.Wrap(perrors.CodeInternal, "run_command: sandbox wrap failed", cmdErr)
+			var setupErr error
+			outBytes, execErr, sandboxMethod, setupErr = execInSandbox(execCtx, cfg)
+			if setupErr != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "run_command: sandbox wrap failed", setupErr)
 			}
 		} else {
-			cmd = exec.CommandContext(execCtx, "bash", "-c", args.Command)
-			cmd.Dir = workDir
-			cmd.Env = env
-			if attrs := action.ContainerSandboxSysProcAttr(); attrs != nil {
-				cmd.SysProcAttr = attrs
-			}
+			sandboxMethod = "disabled"
+			outBytes, execErr = execWithoutSandbox(execCtx, args.Command, workDir, env)
 		}
 
-		outBytes, execErr := cmd.CombinedOutput()
 		result := map[string]any{
-			"command":   args.Command,
-			"output":    string(outBytes),
-			"exit_code": 0,
+			"command":        args.Command,
+			"output":         string(outBytes),
+			"exit_code":      0,
+			"sandbox_method": sandboxMethod,
 		}
 		if execErr != nil {
 			result["error"] = execErr.Error()

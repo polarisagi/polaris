@@ -3,7 +3,8 @@ package action
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -109,12 +110,22 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	}
 
 	// 构造沙箱运行规格
+	// 安全策略：LLM 生成代码写入临时文件执行，禁止通过 -c 参数拼接（shell 注入向量）。
+	// 原 `python3 -c <code>` 方式存在注入风险：代码中的引号/反斜杠可逃逸 shell 边界。
+	// 临时文件路径使用随机后缀，避免路径预测攻击。
+	tmpFile, err := writeTempScript(req.Language, req.Code)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "code_act: write temp script failed", err)
+	}
+	defer os.Remove(tmpFile) // 执行后立即删除，防止敏感代码驻留磁盘
+
 	var cmdBinary string
 	switch req.Language {
 	case "python":
-		cmdBinary = "python3 -c " + sanitizeCodeForShell(req.Code)
+		// 直接执行临时文件（无 shell 展开）
+		cmdBinary = fmt.Sprintf("python3 %s", filepath.Clean(tmpFile))
 	case "bash":
-		cmdBinary = "bash -c " + sanitizeCodeForShell(req.Code)
+		cmdBinary = fmt.Sprintf("bash %s", filepath.Clean(tmpFile))
 	}
 
 	spec := SandboxSpec{
@@ -139,13 +150,35 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	}, nil
 }
 
-// sanitizeCodeForShell 对 LLM 生成代码进行基本清洗（防止 shell 注入）。
-// 移除反引号、$() 命令替换、常见危险命令前缀。
-// 注意：这是 defense-in-depth 层，沙箱隔离才是主要保护。
-func sanitizeCodeForShell(code string) string {
-	// 移除 shell 命令替换语法（防止嵌套执行逃逸）
-	code = strings.ReplaceAll(code, "`", "")
-	// 不移除 $()，因为 Python 代码中 $() 不是 shell 语法
-	// bash 代码的 $() 由 L3 沙箱隔离保护
-	return code
+// writeTempScript 将 LLM 生成代码写入临时文件，返回文件路径。
+// 文件权限 0600（仅当前用户可读），后缀依语言区分（.py / .sh）。
+func writeTempScript(language, code string) (string, error) {
+	var ext string
+	switch language {
+	case "python":
+		ext = "*.py"
+	case "bash":
+		ext = "*.sh"
+	default:
+		ext = "*.tmp"
+	}
+
+	f, err := os.CreateTemp("", "polaris_codeact_"+ext)
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(code); err != nil {
+		os.Remove(f.Name())
+		return "", fmt.Errorf("write temp file: %w", err)
+	}
+	// 设置执行权限（bash 脚本需要）
+	if language == "bash" {
+		if err := os.Chmod(f.Name(), 0700); err != nil {
+			os.Remove(f.Name())
+			return "", fmt.Errorf("chmod temp file: %w", err)
+		}
+	}
+	return f.Name(), nil
 }

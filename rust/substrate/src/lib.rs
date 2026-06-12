@@ -440,3 +440,7 @@ mod tests {
 mod surreal_store;
 
 pub mod wasmtime_engine;
+
+// 平台原生进程沙箱：macOS Seatbelt / Linux bwrap / Windows WSL2
+// FFI: native_sandbox_exec / native_sandbox_probe_tools / native_sandbox_free_string
+mod native_sandbox;
