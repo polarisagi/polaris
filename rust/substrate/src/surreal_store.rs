@@ -64,7 +64,7 @@ impl SurrealStore {
         })?;
         rt.block_on(async { db.use_ns("polaris").use_db("cognition").await })?;
 
-        // FIX: MTREE → HNSW（M=8, EF_CONSTRUCTION=64），内存占用减少约 50%，适配 VPS
+        // FIX: MTREE → HNSW（M=8, EFC=64），内存占用减少约 50%，适配 VPS
         // FIX: docs 表移除 doc_id 字段，改用 type::record('docs', $id) record ID + record::id() 投影
         //      避免 UNIQUE 约束缺失导致重复文档降低 BM25 精度
         let ddl = format!(
@@ -1066,47 +1066,45 @@ pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
         }
     };
 
-    let (kv_count, vec_count, doc_count, edge_count) = guard
-        .rt
-        .block_on(async {
-            let kv: i64 = guard
-                .db
-                .query("SELECT count() AS count FROM kv GROUP ALL")
-                .await
-                .ok()
-                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-                .and_then(|v| v.into_iter().next())
-                .map(|r| r.count)
-                .unwrap_or(0);
-            let vec: i64 = guard
-                .db
-                .query("SELECT count() AS count FROM vectors GROUP ALL")
-                .await
-                .ok()
-                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-                .and_then(|v| v.into_iter().next())
-                .map(|r| r.count)
-                .unwrap_or(0);
-            let doc: i64 = guard
-                .db
-                .query("SELECT count() AS count FROM docs GROUP ALL")
-                .await
-                .ok()
-                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-                .and_then(|v| v.into_iter().next())
-                .map(|r| r.count)
-                .unwrap_or(0);
-            let edge: i64 = guard
-                .db
-                .query("SELECT count() AS count FROM edges GROUP ALL")
-                .await
-                .ok()
-                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-                .and_then(|v| v.into_iter().next())
-                .map(|r| r.count)
-                .unwrap_or(0);
-            (kv, vec, doc, edge)
-        });
+    let (kv_count, vec_count, doc_count, edge_count) = guard.rt.block_on(async {
+        let kv: i64 = guard
+            .db
+            .query("SELECT count() AS count FROM kv GROUP ALL")
+            .await
+            .ok()
+            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+            .and_then(|v| v.into_iter().next())
+            .map(|r| r.count)
+            .unwrap_or(0);
+        let vec: i64 = guard
+            .db
+            .query("SELECT count() AS count FROM vectors GROUP ALL")
+            .await
+            .ok()
+            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+            .and_then(|v| v.into_iter().next())
+            .map(|r| r.count)
+            .unwrap_or(0);
+        let doc: i64 = guard
+            .db
+            .query("SELECT count() AS count FROM docs GROUP ALL")
+            .await
+            .ok()
+            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+            .and_then(|v| v.into_iter().next())
+            .map(|r| r.count)
+            .unwrap_or(0);
+        let edge: i64 = guard
+            .db
+            .query("SELECT count() AS count FROM edges GROUP ALL")
+            .await
+            .ok()
+            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+            .and_then(|v| v.into_iter().next())
+            .map(|r| r.count)
+            .unwrap_or(0);
+        (kv, vec, doc, edge)
+    });
 
     let json = format!(
         r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count}}}"#
@@ -1136,32 +1134,54 @@ mod tests {
             // 1. KV
             let key = b"test_key";
             let val = b"test_val";
-            assert_eq!(surreal_kv_put(key.as_ptr(), key.len(), val.as_ptr(), val.len()), SURREAL_OK);
-            
+            assert_eq!(
+                surreal_kv_put(key.as_ptr(), key.len(), val.as_ptr(), val.len()),
+                SURREAL_OK
+            );
+
             let mut out_val: *mut u8 = std::ptr::null_mut();
             let mut out_len: usize = 0;
-            assert_eq!(surreal_kv_get(key.as_ptr(), key.len(), &mut out_val, &mut out_len), SURREAL_OK);
+            assert_eq!(
+                surreal_kv_get(key.as_ptr(), key.len(), &mut out_val, &mut out_len),
+                SURREAL_OK
+            );
             assert_eq!(std::slice::from_raw_parts(out_val, out_len), b"test_val");
             surreal_free_buf(out_val, out_len);
 
             let mut out_json: *mut c_char = std::ptr::null_mut();
-            assert_eq!(surreal_kv_scan(b"test_".as_ptr(), 5, &mut out_json), SURREAL_OK);
+            assert_eq!(
+                surreal_kv_scan(b"test_".as_ptr(), 5, &mut out_json),
+                SURREAL_OK
+            );
             let scan_json = read_out_json(out_json);
-            assert!(scan_json.contains(&bytes_to_hex(b"test_key")), "scan_json was {}", scan_json);
+            assert!(
+                scan_json.contains(&bytes_to_hex(b"test_key")),
+                "scan_json was {}",
+                scan_json
+            );
 
             assert_eq!(surreal_kv_delete(key.as_ptr(), key.len()), SURREAL_OK);
 
             // 2. Vector
             let id1 = CString::new("vec1").unwrap();
             let embed1 = vec![1.0, 0.0, 0.0];
-            assert_eq!(surreal_vec_upsert(id1.as_ptr(), embed1.as_ptr(), 3), SURREAL_OK);
-            
+            assert_eq!(
+                surreal_vec_upsert(id1.as_ptr(), embed1.as_ptr(), 3),
+                SURREAL_OK
+            );
+
             let id2 = CString::new("vec2").unwrap();
             let embed2 = vec![0.0, 1.0, 0.0];
-            assert_eq!(surreal_vec_upsert(id2.as_ptr(), embed2.as_ptr(), 3), SURREAL_OK);
+            assert_eq!(
+                surreal_vec_upsert(id2.as_ptr(), embed2.as_ptr(), 3),
+                SURREAL_OK
+            );
 
             let query = vec![1.0, 0.1, 0.0];
-            assert_eq!(surreal_vec_knn(query.as_ptr(), 3, 2, &mut out_json), SURREAL_OK);
+            assert_eq!(
+                surreal_vec_knn(query.as_ptr(), 3, 2, &mut out_json),
+                SURREAL_OK
+            );
             let knn_json = read_out_json(out_json);
             assert!(knn_json.contains("vec1"));
 
@@ -1171,27 +1191,52 @@ mod tests {
             let from = CString::new("nodeA").unwrap();
             let et = CString::new("knows").unwrap();
             let to = CString::new("nodeB").unwrap();
-            assert_eq!(surreal_graph_relate(from.as_ptr(), et.as_ptr(), to.as_ptr(), 1.0), SURREAL_OK);
+            assert_eq!(
+                surreal_graph_relate(from.as_ptr(), et.as_ptr(), to.as_ptr(), 1.0),
+                SURREAL_OK
+            );
 
             let empty = CString::new("").unwrap();
-            assert_eq!(surreal_graph_traverse(from.as_ptr(), empty.as_ptr(), 2, &mut out_json), SURREAL_OK);
+            assert_eq!(
+                surreal_graph_traverse(from.as_ptr(), empty.as_ptr(), 2, &mut out_json),
+                SURREAL_OK
+            );
             let traverse_json = read_out_json(out_json);
             assert!(traverse_json.contains("nodeB"));
 
             let start_ids = CString::new("[\"nodeA\"]").unwrap();
-            assert_eq!(surreal_graph_spreading_activation(start_ids.as_ptr(), 2, 0.8, 0.1, 10, &mut out_json), SURREAL_OK);
+            assert_eq!(
+                surreal_graph_spreading_activation(
+                    start_ids.as_ptr(),
+                    2,
+                    0.8,
+                    0.1,
+                    10,
+                    &mut out_json
+                ),
+                SURREAL_OK
+            );
             let sa_json = read_out_json(out_json);
             assert!(sa_json.contains("nodeB"));
 
-            assert_eq!(surreal_graph_delete_edges(from.as_ptr(), et.as_ptr()), SURREAL_OK);
+            assert_eq!(
+                surreal_graph_delete_edges(from.as_ptr(), et.as_ptr()),
+                SURREAL_OK
+            );
 
             // 4. FTS
             let doc_id = CString::new("doc1").unwrap();
             let text = CString::new("Hello world surreal").unwrap();
-            assert_eq!(surreal_fts_index(doc_id.as_ptr(), text.as_ptr()), SURREAL_OK);
+            assert_eq!(
+                surreal_fts_index(doc_id.as_ptr(), text.as_ptr()),
+                SURREAL_OK
+            );
 
             let q = CString::new("world").unwrap();
-            assert_eq!(surreal_fts_search(q.as_ptr(), 10, &mut out_json), SURREAL_OK);
+            assert_eq!(
+                surreal_fts_search(q.as_ptr(), 10, &mut out_json),
+                SURREAL_OK
+            );
             let search_json = read_out_json(out_json);
             assert!(search_json.contains("doc1"));
 
