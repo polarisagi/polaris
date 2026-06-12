@@ -647,6 +647,8 @@ func (s *Server) injectSystemPrompt(history []protocol.Message) []protocol.Messa
 			ic.ModelGuidance = ""
 		}
 
+		ic.OperationalDirectives = loadOperationalDirectives()
+
 		// 平台感知提示
 		ic.PlatformHint = memory.PlatformHintFor(s.serverPlatform)
 
@@ -782,4 +784,26 @@ func (s *Server) SetActivatedSystemPrompt(taskType, promptText string) {
 	s.activatedSystemPromptMu.Lock()
 	s.activatedSystemPrompt = promptText
 	s.activatedSystemPromptMu.Unlock()
+}
+
+func loadOperationalDirectives() string {
+	var opDirectives []string
+
+	if op := memory.ReadPrompt("operational/tool_use.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
+	if op := memory.ReadPrompt("operational/task_completion.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
+	if op := memory.ReadPrompt("operational/execution_discipline.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
+	if op := memory.ReadPrompt("operational/memory_hygiene.md", ""); op != "" {
+		opDirectives = append(opDirectives, op)
+	}
+
+	if len(opDirectives) > 0 {
+		return strings.Join(opDirectives, "\n\n")
+	}
+	return ""
 }

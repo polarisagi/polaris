@@ -95,6 +95,9 @@ type ImmutableCore struct {
 	// 来源：~/.polarisagi/polaris/config/prompts/custom_instructions.md 或 Web UI 编辑。
 	// DB 删除不影响（文件持久化），factory reset 时才清空。
 	CustomInstructions string `json:"custom_instructions,omitempty"`
+
+	// OperationalDirectives 高级操作指令集合（含 Tool-Use, Task Completion 等）。
+	OperationalDirectives string `json:"operational_directives,omitempty"`
 }
 
 func NewImmutableCore() *ImmutableCore {
