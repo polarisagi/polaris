@@ -175,7 +175,7 @@ pub unsafe extern "C" fn wasmtime_execute(
 
         let stdin =
             wasmtime_wasi::p2::pipe::MemoryInputPipe::new(bytes::Bytes::from(input_str.to_owned()));
-            
+
         let max_out = if max_output_bytes > 0 {
             max_output_bytes as usize
         } else {
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn wasmtime_execute(
 
         let mut builder = WasiCtxBuilder::new();
         builder.stdin(stdin.clone()).stdout(stdout.clone());
-        
+
         if network_allowed == 1 {
             builder.inherit_network();
             builder.allow_ip_name_lookup(true);

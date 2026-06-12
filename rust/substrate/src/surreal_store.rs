@@ -1164,20 +1164,20 @@ mod tests {
 
             // 2. Vector
             let id1 = CString::new("vec1").unwrap();
-            let embed1 = vec![1.0, 0.0, 0.0];
+            let embed1 = [1.0, 0.0, 0.0];
             assert_eq!(
                 surreal_vec_upsert(id1.as_ptr(), embed1.as_ptr(), 3),
                 SURREAL_OK
             );
 
             let id2 = CString::new("vec2").unwrap();
-            let embed2 = vec![0.0, 1.0, 0.0];
+            let embed2 = [0.0, 1.0, 0.0];
             assert_eq!(
                 surreal_vec_upsert(id2.as_ptr(), embed2.as_ptr(), 3),
                 SURREAL_OK
             );
 
-            let query = vec![1.0, 0.1, 0.0];
+            let query = [1.0, 0.1, 0.0];
             assert_eq!(
                 surreal_vec_knn(query.as_ptr(), 3, 2, &mut out_json),
                 SURREAL_OK

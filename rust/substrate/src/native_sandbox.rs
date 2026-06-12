@@ -449,7 +449,12 @@ fn exec_seatbelt(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, St
         cmd.env(k, v);
     }
 
-    run_with_timeout(cmd, timeout_ms, "seatbelt", req.max_memory_mb.unwrap_or(0) > 0)
+    run_with_timeout(
+        cmd,
+        timeout_ms,
+        "seatbelt",
+        req.max_memory_mb.unwrap_or(0) > 0,
+    )
 }
 
 // ─── Linux bubblewrap ─────────────────────────────────────────────────────────
@@ -619,7 +624,12 @@ fn exec_namespace_fallback(req: &NativeSandboxRequest) -> Result<NativeSandboxRe
         for (k, v) in &env_vars {
             ns_cmd.env(k, v);
         }
-        return run_with_timeout(ns_cmd, timeout_ms, "namespace", req.max_memory_mb.unwrap_or(0) > 0);
+        return run_with_timeout(
+            ns_cmd,
+            timeout_ms,
+            "namespace",
+            req.max_memory_mb.unwrap_or(0) > 0,
+        );
     }
 
     run_with_timeout(cmd, timeout_ms, "bare", req.max_memory_mb.unwrap_or(0) > 0)
@@ -662,7 +672,14 @@ fn exec_wsl2(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
     let full_command = format!("{}{}{}", ulimit_prefix, env_prefix, req.command);
 
     if network_block {
-        args.extend(["-e".into(), "unshare".into(), "--net".into(), "bash".into(), "-c".into(), full_command]);
+        args.extend([
+            "-e".into(),
+            "unshare".into(),
+            "--net".into(),
+            "bash".into(),
+            "-c".into(),
+            full_command,
+        ]);
     } else {
         args.extend(["-e".into(), "bash".into(), "-c".into(), full_command]);
     }
@@ -685,7 +702,7 @@ fn exec_bare(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String
     let ulimit_prefix = build_ulimit_prefix(req.max_memory_mb);
     let shell = if cfg!(windows) { "cmd.exe" } else { "bash" };
     let shell_flag = if cfg!(windows) { "/C" } else { "-c" };
-    
+
     // Windows cmd doesn't support ulimit, so we only apply it for bash
     let full_cmd = if cfg!(windows) {
         req.command.clone()

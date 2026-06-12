@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_invalid_utf8_returns_error() {
-        let bad: *const c_char = b"\xff\xfe\0".as_ptr() as *const c_char;
+        let bad: *const c_char = c"\xff\xfe".as_ptr() as *const c_char;
         let mut out: *mut c_char = std::ptr::null_mut();
         let a = cstr("Action::\"infer\"");
         let r = cstr("Resource::\"x\"");
