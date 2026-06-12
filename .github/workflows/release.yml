@@ -16,6 +16,7 @@ jobs:
   # 1. 优先执行 Go 打包 (Fail-Fast 机制)
   # 全部在 ubuntu 上完成（零 CGO，purego 运行时加载），如果 Go 代码有错立刻失败，阻断下游耗时打包。
   build-go:
+    needs: build-frontend
     name: Build Go (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
@@ -60,6 +61,12 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
 
       - name: Build Backend (cross-compile)
         env:
@@ -212,10 +219,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-  # 3. 最后合并打包 (依赖 build-frontend, build-go, build-rust)
+  # 3. 最后合并打包 (依赖 build-go, build-rust)
   # 从各个 artifact 收集产物并最终压缩
   package:
-    needs: [build-frontend, build-go, build-rust]
+    needs: [build-go, build-rust]
     name: Package (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
@@ -236,12 +243,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download Frontend Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: web/dist
 
       - name: Download Go Artifact
         uses: actions/download-artifact@v4
