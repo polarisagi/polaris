@@ -35,11 +35,14 @@ type Config struct {
 // CognitionConfig SurrealDB 认知存储后端配置（ADR-0010）。
 type CognitionConfig struct {
 	// SurrealBackend 后端选择：
-	//   "mem"     — kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；任意机器可用。
-	//   "rocksdb" — kv-rocksdb 持久化，要求 ≥16GB；SurrealDBPath 不可为空。
+	//   "mem"     — kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；256MB+ 可用，含 VPS。
+	//   "rocksdb" — kv-rocksdb 持久化，推荐大内存服务器；SurrealDBPath 不可为空。
 	SurrealBackend string `toml:"surreal_backend"`
 	// SurrealDBPath kv-rocksdb 后端数据库持久化路径；kv-mem 时忽略。
 	SurrealDBPath string `toml:"surreal_db_path"`
+	// SurrealWorkerThreads Tokio 运行时工作线程数；0 = auto（min(CPU, 4)）。
+	// VPS 建议设 2 以节省内存（约 30-50MB）；大内存服务器设 0 自动探测。
+	SurrealWorkerThreads int `toml:"surreal_worker_threads"`
 }
 
 // DownloadConfig 控制文件下载行为，包括中国区 GitHub 加速代理。

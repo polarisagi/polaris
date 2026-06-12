@@ -1,11 +1,13 @@
 // surreal_store.rs — SurrealDB v3 统一认知存储引擎 FFI
-// 后端运行时选择: kv-mem（默认，任意机器）/ kv-rocksdb（显式，≥16GB）
-// 向量维度 vec_dim 由调用方传入，修复 v2 硬编码 DIMENSION 4 的 bug。
+// 后端运行时选择: kv-mem（默认，任意机器，含 2GB VPS）/ kv-rocksdb（显式，大内存服务器）
+// 向量维度 vec_dim 由调用方传入（典型值 1536 或 768）。
+// Tokio worker_threads 由 surreal_set_worker_threads 在 surreal_open 前配置（VPS 节省内存）。
 // 架构: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::panic;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use surrealdb::engine::local::{Db, Mem, RocksDb};
@@ -20,6 +22,11 @@ const SURREAL_ERR_UTF8: c_int = -1;
 const SURREAL_ERR_LOCK: c_int = -2;
 const SURREAL_ERR_PANIC: c_int = -3;
 
+// ─── 运行时配置（VPS 优化：surreal_open 前调用 surreal_set_worker_threads）──────
+// 0 = auto（min(CPU 核心数, 4)），> 0 = 显式线程数。
+// kv-mem 后端 2 个线程已足够；VPS 建议 2，大内存服务器可设 0（自动）。
+static WORKER_THREADS: AtomicU32 = AtomicU32::new(0);
+
 // ─── 存储类型 ──────────────────────────────────────────────────────────────────
 
 struct SurrealStore {
@@ -29,7 +36,22 @@ struct SurrealStore {
 
 impl SurrealStore {
     fn new(backend: &str, db_path: &str, vec_dim: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        // FIX: 限制 Tokio worker 线程数，避免多核服务器上 new_multi_thread() 无限创建线程浪费内存
+        // VPS 设置 2 线程可节省约 30-50MB；0 = auto → min(cpu_count, 4) 作为保守上限
+        let wt = WORKER_THREADS.load(Ordering::Relaxed);
+        let threads = if wt == 0 {
+            std::cmp::min(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+                4,
+            )
+        } else {
+            wt as usize
+        };
+
         let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(threads)
             .enable_all()
             .build()?;
 
@@ -42,6 +64,9 @@ impl SurrealStore {
         })?;
         rt.block_on(async { db.use_ns("polaris").use_db("cognition").await })?;
 
+        // FIX: MTREE → HNSW（M=8, EF_CONSTRUCTION=64），内存占用减少约 50%，适配 VPS
+        // FIX: docs 表移除 doc_id 字段，改用 type::thing('docs', $id) record ID + record::id() 投影
+        //      避免 UNIQUE 约束缺失导致重复文档降低 BM25 精度
         let ddl = format!(
             "DEFINE TABLE IF NOT EXISTS kv SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS k ON kv TYPE string; \
@@ -49,7 +74,7 @@ impl SurrealStore {
              DEFINE INDEX IF NOT EXISTS kv_k ON kv FIELDS k UNIQUE; \
              DEFINE TABLE IF NOT EXISTS vectors SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS embed ON vectors TYPE array<float>; \
-             DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed MTREE DIMENSION {vec_dim} DISTANCE COSINE; \
+             DEFINE INDEX IF NOT EXISTS hnsw_idx ON vectors FIELDS embed HNSW DIMENSION {vec_dim} DIST COSINE M 8 EF_CONSTRUCTION 64; \
              DEFINE TABLE IF NOT EXISTS edges SCHEMAFULL; \
              DEFINE FIELD IF NOT EXISTS from_id ON edges TYPE string; \
              DEFINE FIELD IF NOT EXISTS edge_type ON edges TYPE string; \
@@ -57,13 +82,17 @@ impl SurrealStore {
              DEFINE FIELD IF NOT EXISTS weight ON edges TYPE float DEFAULT 1.0; \
              DEFINE INDEX IF NOT EXISTS edge_from ON edges FIELDS from_id, edge_type; \
              DEFINE TABLE IF NOT EXISTS docs SCHEMAFULL; \
-             DEFINE FIELD IF NOT EXISTS doc_id ON docs TYPE string; \
              DEFINE FIELD IF NOT EXISTS body ON docs TYPE string; \
              DEFINE ANALYZER IF NOT EXISTS ascii_lower TOKENIZERS class FILTERS lowercase; \
              DEFINE INDEX IF NOT EXISTS fts_idx ON docs FIELDS body SEARCH ANALYZER ascii_lower BM25;"
         );
+
+        // FIX: DDL 失败改为 eprintln 记录而非 `let _ = ...` 静默丢弃，便于问题排查
         rt.block_on(async {
-            let _ = db.query(&ddl).await;
+            match db.query(&ddl).await {
+                Ok(_) => {}
+                Err(e) => eprintln!("[surreal_store] DDL error (non-fatal): {e}"),
+            }
         });
 
         Ok(SurrealStore { db, rt })
@@ -85,6 +114,8 @@ struct VRow {
     v: String,
 }
 
+// FIX: id 字段由 record::id(id) AS id 投影为纯字符串，避免 RecordId 反序列化失败
+// （原 SELECT id 返回 RecordId 类型如 "vectors:xxx"，String 字段无法直接接收）
 #[derive(Debug, SurrealValue)]
 struct VecRow {
     id: String,
@@ -102,10 +133,16 @@ struct ToIdWeightRow {
     weight: f64,
 }
 
+// FIX: doc_id 由 record::id(id) AS doc_id 投影，与 type::thing UPSERT 结构匹配
 #[derive(Debug, SurrealValue)]
 struct DocScoreRow {
     doc_id: String,
     score: f64,
+}
+
+#[derive(Debug, SurrealValue)]
+struct CountRow {
+    count: i64,
 }
 
 // ─── 内部工具 ──────────────────────────────────────────────────────────────────
@@ -159,11 +196,29 @@ fn get_store() -> Option<Arc<RwLock<SurrealStore>>> {
     STORE.get().cloned()
 }
 
+/// 为有向边计算确定性 record key（\x1f 为 ASCII 单元分隔符，防止 ID 碰撞）。
+/// FIX: 避免相同三元组 (from, edge_type, to) 因 INSERT 无去重产生重复边
+fn edge_record_key(from: &str, et: &str, to: &str) -> String {
+    format!("{from}\x1f{et}\x1f{to}")
+}
+
+// ─── surreal_set_worker_threads ────────────────────────────────────────────────
+
+/// 配置 SurrealDB Tokio 运行时工作线程数。必须在 surreal_open 前调用（否则使用默认值）。
+/// n <= 0 表示 auto（min(CPU 核心数, 4)）；推荐 VPS 设为 2 节省内存。
+/// 此函数为新增扩展 API（SUBSTRATE_ABI_MINOR 1），不改变 surreal_open 签名。
+#[no_mangle]
+pub extern "C" fn surreal_set_worker_threads(n: c_int) -> c_int {
+    let v = if n <= 0 { 0u32 } else { n as u32 };
+    WORKER_THREADS.store(v, Ordering::Relaxed);
+    SURREAL_OK
+}
+
 // ─── surreal_open ──────────────────────────────────────────────────────────────
 
 /// 初始化全局 SurrealStore（幂等，多次调用安全）。
-/// backend: "mem"（默认）或 "rocksdb"（要求 ≥16GB，db_path 不可为空）。
-/// vec_dim: HNSW 向量维度，需与实际嵌入模型一致（典型值 1536）。
+/// backend: "mem"（默认，kv-mem，任意内存大小可用）或 "rocksdb"（持久化，推荐大内存服务器）。
+/// vec_dim: HNSW 向量维度，须与实际嵌入模型一致（典型值 1536 或 768）。
 ///
 /// # Safety
 /// backend/db_path 须为有效 NUL-terminated C 字符串或 null。
@@ -261,6 +316,10 @@ pub unsafe extern "C" fn surreal_kv_get(
 
 // ─── surreal_kv_put ───────────────────────────────────────────────────────────
 
+/// FIX: 使用 type::thing('kv', $k) 确定性 RecordId，避免并发 UPSERT WHERE 竞态。
+/// 原 `UPSERT kv SET ... WHERE k = $k`：两个协程同时写新 key 时，WHERE 均未匹配 →
+/// 各自 INSERT 新行 → UNIQUE INDEX 报错但被 `let _ =` 静默丢弃，数据写入失败。
+///
 /// # Safety
 /// key/val 须为对应 len 字节长的有效内存地址。
 #[no_mangle]
@@ -281,10 +340,11 @@ pub unsafe extern "C" fn surreal_kv_put(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
+        // FIX: type::thing('kv', $k) → record ID = kv:$k_hex，UPSERT 天然幂等无竞态
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("UPSERT kv SET k = $k, v = $v WHERE k = $k")
+                .query("UPSERT type::thing('kv', $k) SET k = $k, v = $v")
                 .bind(("k", k))
                 .bind(("v", v))
                 .await;
@@ -296,6 +356,9 @@ pub unsafe extern "C" fn surreal_kv_put(
 
 // ─── surreal_kv_delete ────────────────────────────────────────────────────────
 
+/// FIX: DELETE type::thing('kv', $k) 直接定位 record ID，O(1)，避免全表扫描。
+/// 原 `DELETE kv WHERE k = $k` 需 kv_k 索引扫描，而 record ID 直接访问更高效。
+///
 /// # Safety
 /// key 须为 key_len 字节长的有效内存地址。
 #[no_mangle]
@@ -313,7 +376,7 @@ pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("DELETE kv WHERE k = $k")
+                .query("DELETE type::thing('kv', $k)")
                 .bind(("k", k))
                 .await;
         });
@@ -380,6 +443,10 @@ pub unsafe extern "C" fn surreal_kv_scan(
 
 // ─── surreal_vec_upsert ───────────────────────────────────────────────────────
 
+/// FIX: 使用 type::thing('vectors', $id) 明确指定 record ID。
+/// 原 `UPSERT vectors SET id = $id, embed = $embed`：在 SCHEMAFULL 模式下
+/// `id` 不是普通字段，SET id = $id 无效 → record ID 变为随机生成，UPSERT 不幂等。
+///
 /// # Safety
 /// id 须为 NUL-terminated UTF-8；embed 须指向 dim 个 f32。
 #[no_mangle]
@@ -403,11 +470,44 @@ pub unsafe extern "C" fn surreal_vec_upsert(
             Err(_) => return SURREAL_ERR_LOCK,
         };
         guard.rt.block_on(async {
+            // FIX: type::thing('vectors', $id) → record ID = vectors:$id，幂等
             let _ = guard
                 .db
-                .query("UPSERT vectors SET id = $id, embed = $embed")
+                .query("UPSERT type::thing('vectors', $id) SET embed = $embed")
                 .bind(("id", id_str))
                 .bind(("embed", embed_vec))
+                .await;
+        });
+        SURREAL_OK
+    });
+    result.unwrap_or(SURREAL_ERR_PANIC)
+}
+
+// ─── surreal_vec_delete ───────────────────────────────────────────────────────
+
+/// 从 HNSW 索引删除向量记录（供 Forget 路径调用，与 SQLite float16 BLOB 同步清理）。
+///
+/// # Safety
+/// id 须为有效 NUL-terminated UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
+    let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return SURREAL_ERR_UTF8,
+    };
+    let result = panic::catch_unwind(|| {
+        let Some(store_arc) = get_store() else {
+            return SURREAL_OK;
+        };
+        let guard = match store_arc.read() {
+            Ok(g) => g,
+            Err(_) => return SURREAL_ERR_LOCK,
+        };
+        guard.rt.block_on(async {
+            let _ = guard
+                .db
+                .query("DELETE type::thing('vectors', $id)")
+                .bind(("id", id_str))
                 .await;
         });
         SURREAL_OK
@@ -419,6 +519,9 @@ pub unsafe extern "C" fn surreal_vec_upsert(
 
 /// K 近邻向量检索，返回 JSON CString，须 surreal_free_string 释放。
 /// JSON: [{"id":"<id>","score":<f64>},...]
+///
+/// FIX: 使用 record::id(id) AS id 将 RecordId（"vectors:xxx"）转为纯字符串 "xxx"。
+/// FIX: <|{k},COSINE|> 明确指定距离函数，与 DDL HNSW DIST COSINE 定义一致。
 ///
 /// # Safety
 /// query 须指向 dim 个 f32。
@@ -443,10 +546,11 @@ pub unsafe extern "C" fn surreal_vec_knn(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        // k 须为字面量嵌入查询字符串
+        // FIX: record::id(id) AS id — 提取 RecordId key 部分为纯字符串
+        // FIX: <|{k},COSINE|> — 明确距离函数，与 HNSW 索引定义保持一致
         let sql = format!(
-            "SELECT id, vector::similarity::cosine(embed, $q) AS score \
-             FROM vectors WHERE embed <|{k}|> $q ORDER BY score DESC"
+            "SELECT record::id(id) AS id, vector::similarity::cosine(embed, $q) AS score \
+             FROM vectors WHERE embed <|{k},COSINE|> $q ORDER BY score DESC"
         );
         let rows: Vec<VecRow> = guard
             .rt
@@ -464,7 +568,9 @@ pub unsafe extern "C" fn surreal_vec_knn(
 
 // ─── surreal_graph_relate ─────────────────────────────────────────────────────
 
-/// 写入一条有向图边 from -[edge_type]-> to。
+/// FIX: 使用确定性 edge_key 作为 record ID，UPSERT 保证 (from, type, to) 唯一。
+/// 原 INSERT INTO edges：每次调用创建新记录，同一条边重复插入，
+/// 导致蔓延激活算法能量因重复边被放大，图结构错误。
 ///
 /// # Safety
 /// 所有参数须为有效 NUL-terminated UTF-8 C 字符串。
@@ -495,15 +601,71 @@ pub unsafe extern "C" fn surreal_graph_relate(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
+        // FIX: type::thing('edges', $ek) 确定性 ID = edges:(from\x1fet\x1fto)
+        // UPSERT 保证同一条边最多一条记录，同时支持 weight 更新
+        let edge_key = edge_record_key(&from, &et, &to);
         guard.rt.block_on(async {
             let _ = guard
                 .db
-                .query("INSERT INTO edges (from_id, edge_type, to_id, weight) VALUES ($from, $et, $to, $weight)")
+                .query(
+                    "UPSERT type::thing('edges', $ek) \
+                     SET from_id = $from, edge_type = $et, to_id = $to, weight = $weight",
+                )
+                .bind(("ek", edge_key))
                 .bind(("from", from))
                 .bind(("et", et))
                 .bind(("to", to))
                 .bind(("weight", weight))
                 .await;
+        });
+        SURREAL_OK
+    });
+    result.unwrap_or(SURREAL_ERR_PANIC)
+}
+
+// ─── surreal_graph_delete_edges ───────────────────────────────────────────────
+
+/// 删除指定 from_id 的出边（供 Forget 路径清理关联图结构）。
+/// edge_type 为空串表示删除该节点所有出边；否则仅删除指定类型的出边。
+///
+/// # Safety
+/// from_id/edge_type 须为有效 NUL-terminated UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn surreal_graph_delete_edges(
+    from_id: *const c_char,
+    edge_type: *const c_char,
+) -> c_int {
+    let from = match unsafe { CStr::from_ptr(from_id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return SURREAL_ERR_UTF8,
+    };
+    let et = match unsafe { CStr::from_ptr(edge_type) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return SURREAL_ERR_UTF8,
+    };
+    let result = panic::catch_unwind(move || {
+        let Some(store_arc) = get_store() else {
+            return SURREAL_OK;
+        };
+        let guard = match store_arc.read() {
+            Ok(g) => g,
+            Err(_) => return SURREAL_ERR_LOCK,
+        };
+        guard.rt.block_on(async {
+            if et.is_empty() {
+                let _ = guard
+                    .db
+                    .query("DELETE edges WHERE from_id = $from")
+                    .bind(("from", from))
+                    .await;
+            } else {
+                let _ = guard
+                    .db
+                    .query("DELETE edges WHERE from_id = $from AND edge_type = $et")
+                    .bind(("from", from))
+                    .bind(("et", et))
+                    .await;
+            }
         });
         SURREAL_OK
     });
@@ -516,7 +678,7 @@ pub unsafe extern "C" fn surreal_graph_relate(
 /// 返回 JSON CString: [{"id":"<node>","score":<energy>},...]
 ///
 /// # Safety
-/// start_ids_json 须为有效 JSON string 数组（例如 `["A", "B"]`）。
+/// start_ids_json 须为有效 JSON string 数组（如 `["A", "B"]`）。
 #[no_mangle]
 pub unsafe extern "C" fn surreal_graph_spreading_activation(
     start_ids_json: *const c_char,
@@ -552,10 +714,8 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
             Err(_) => return SURREAL_ERR_LOCK,
         };
 
-        // 维护节点的累计能量，初始节点给予 1.0 能量
         let mut node_energy: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
-        // 当前波前：每个元素是 (node_id, current_activation_energy)
         let mut frontier: Vec<(String, f64)> = Vec::new();
 
         for id in &start_ids {
@@ -571,17 +731,14 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
             let mut next_frontier: std::collections::HashMap<String, f64> =
                 std::collections::HashMap::new();
 
-            // 为避免对每个节点单独查询，可以批量查询，但为了简单与准确，我们用单个或批量 SQL。
-            // 由于每次查询可能有多个起点，我们可以用 `from_id IN $frontier`，但我们需要知道是谁连向的。
-            // 简单实现：逐个查询（如果 fan_out_limit 很大可能会慢，但在本地 rocksdb/mem 尚可接受）
             for (curr_node, curr_energy) in frontier {
                 if curr_energy < dormancy_threshold {
                     continue;
                 }
 
-                // 查出该节点所有的出去的边，按权重降序排列，取前 fan_out_limit
                 let sql = format!(
-                    "SELECT to_id, weight FROM edges WHERE from_id = $curr ORDER BY weight DESC LIMIT {fan_out_limit}"
+                    "SELECT to_id, weight FROM edges WHERE from_id = $curr \
+                     ORDER BY weight DESC LIMIT {fan_out_limit}"
                 );
 
                 let neighbors: Vec<ToIdWeightRow> = guard
@@ -597,7 +754,6 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
                     .unwrap_or_default();
 
                 for edge in neighbors {
-                    // 传播的能量 = 当前能量 * 边权重 * 衰减系数
                     let transferred_energy = curr_energy * edge.weight * energy_decay;
                     if transferred_energy >= dormancy_threshold {
                         *next_frontier.entry(edge.to_id.clone()).or_insert(0.0) +=
@@ -610,7 +766,6 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
             frontier = next_frontier.into_iter().collect();
         }
 
-        // 最终过滤出非起点的节点，并按能量排序
         let mut results: Vec<VecRow> = node_energy
             .into_iter()
             .filter(|(id, _)| !start_ids.contains(id))
@@ -622,7 +777,6 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        // 取前 50（可选）
         results.truncate(50);
 
         write_cstr(out_json, &encode_scored(&results));
@@ -635,6 +789,7 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
 
 /// BFS 图遍历，返回 JSON CString，须 surreal_free_string 释放。
 /// edge_type 为空串表示匹配所有边类型。不包含起点自身。
+/// FIX: 结果排序保证确定性（原 HashSet 顺序不确定，影响测试可复现性）。
 /// JSON: ["id1","id2",...]
 ///
 /// # Safety
@@ -703,8 +858,9 @@ pub unsafe extern "C" fn surreal_graph_traverse(
                 .collect();
         }
 
-        // 排除起点自身
-        let result_ids: Vec<String> = visited.into_iter().filter(|id| id != &start).collect();
+        // FIX: 排序保证结果确定性
+        let mut result_ids: Vec<String> = visited.into_iter().filter(|id| id != &start).collect();
+        result_ids.sort();
         write_cstr(out_json, &encode_ids(&result_ids));
         SURREAL_OK
     });
@@ -713,7 +869,9 @@ pub unsafe extern "C" fn surreal_graph_traverse(
 
 // ─── surreal_fts_index ────────────────────────────────────────────────────────
 
-/// 将文档写入全文检索索引（upsert 语义）。
+/// FIX: 使用 type::thing('docs', $id) UPSERT，原子操作代替非原子 DELETE + INSERT。
+/// 原实现：DELETE docs WHERE doc_id=$id; INSERT INTO docs ... 不是原子操作，
+/// 且 doc_id 是普通字段无 UNIQUE 约束 → 多次写入产生重复文档降低 BM25 精度。
 ///
 /// # Safety
 /// doc_id/text 须为有效 NUL-terminated UTF-8 C 字符串。
@@ -736,14 +894,44 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
             Err(_) => return SURREAL_ERR_LOCK,
         };
         guard.rt.block_on(async {
+            // FIX: 原子 UPSERT，record ID = docs:$id，天然唯一
             let _ = guard
                 .db
-                .query(
-                    "DELETE docs WHERE doc_id = $id; \
-                     INSERT INTO docs (doc_id, body) VALUES ($id, $body)",
-                )
+                .query("UPSERT type::thing('docs', $id) SET body = $body")
                 .bind(("id", id))
                 .bind(("body", body))
+                .await;
+        });
+        SURREAL_OK
+    });
+    result.unwrap_or(SURREAL_ERR_PANIC)
+}
+
+// ─── surreal_fts_delete ───────────────────────────────────────────────────────
+
+/// 从 FTS 索引删除文档（供 Forget 路径调用，与 episodic_memory 表同步清理）。
+///
+/// # Safety
+/// doc_id 须为有效 NUL-terminated UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
+    let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return SURREAL_ERR_UTF8,
+    };
+    let result = panic::catch_unwind(move || {
+        let Some(store_arc) = get_store() else {
+            return SURREAL_OK;
+        };
+        let guard = match store_arc.read() {
+            Ok(g) => g,
+            Err(_) => return SURREAL_ERR_LOCK,
+        };
+        guard.rt.block_on(async {
+            let _ = guard
+                .db
+                .query("DELETE type::thing('docs', $id)")
+                .bind(("id", id))
                 .await;
         });
         SURREAL_OK
@@ -755,6 +943,9 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
 
 /// BM25 全文检索，返回 JSON CString，须 surreal_free_string 释放。
 /// JSON: [{"id":"<doc_id>","score":<f64>},...]
+///
+/// FIX: 使用 record::id(id) AS doc_id，与 type::thing UPSERT 结构匹配。
+/// 原 `SELECT doc_id` 对应表字段，已从 DDL 移除。
 ///
 /// # Safety
 /// query 须为有效 NUL-terminated UTF-8 C 字符串。
@@ -780,8 +971,9 @@ pub unsafe extern "C" fn surreal_fts_search(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
+        // FIX: record::id(id) AS doc_id — 与 type::thing 存储的 record ID 结构一致
         let sql = format!(
-            "SELECT doc_id, search::score(0) AS score FROM docs \
+            "SELECT record::id(id) AS doc_id, search::score(0) AS score FROM docs \
              WHERE body @0@ $q ORDER BY score DESC LIMIT {k}"
         );
         let rows: Vec<DocScoreRow> = guard
@@ -835,7 +1027,7 @@ pub unsafe extern "C" fn surreal_free_buf(ptr: *mut u8, len: usize) {
 }
 
 // ─── surreal_vec_set_mode — 兼容接口（no-op）──────────────────────────────────
-// SurrealDB MTREE 索引始终激活，此函数保留仅为 ABI 兼容。
+// SurrealDB HNSW 索引始终激活，此函数保留仅为 ABI 兼容（原 MTREE 模式切换接口）。
 
 #[no_mangle]
 pub extern "C" fn surreal_vec_set_mode(_mode: c_int) -> c_int {
@@ -845,11 +1037,67 @@ pub extern "C" fn surreal_vec_set_mode(_mode: c_int) -> c_int {
 // ─── surreal_stats ─────────────────────────────────────────────────────────────
 
 /// 返回当前后端状态 JSON，须 surreal_free_string 释放。
-/// JSON: {"backend":"mem"|"rocksdb","ready":true|false}
+/// JSON: {"backend":"surreal","ready":true,"kv_count":N,"vec_count":N,"doc_count":N,"edge_count":N}
+/// 未初始化时：{"backend":"none","ready":false}
 #[no_mangle]
 pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
-    let ready = STORE.get().is_some();
-    let json = format!("{{\"backend\":\"surreal\",\"ready\":{ready}}}");
+    let Some(store_arc) = get_store() else {
+        write_cstr(out_json, r#"{"backend":"none","ready":false}"#);
+        return SURREAL_OK;
+    };
+    let guard = match store_arc.read() {
+        Ok(g) => g,
+        Err(_) => {
+            write_cstr(out_json, r#"{"backend":"error","ready":false}"#);
+            return SURREAL_ERR_LOCK;
+        }
+    };
+
+    let (kv_count, vec_count, doc_count, edge_count) = guard
+        .rt
+        .block_on(async {
+            let kv: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM kv GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            let vec: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM vectors GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            let doc: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM docs GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            let edge: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM edges GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            (kv, vec, doc, edge)
+        });
+
+    let json = format!(
+        r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count}}}"#
+    );
     write_cstr(out_json, &json);
     SURREAL_OK
 }

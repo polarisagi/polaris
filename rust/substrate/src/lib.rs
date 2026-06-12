@@ -49,7 +49,10 @@ const CEDAR_ERR_UTF8: c_int = -4; // 非法 UTF-8 输入
 const SUBSTRATE_ABI_MAJOR: u16 = 1;
 
 /// ABI 次版本号：加法变更时递增。
-const SUBSTRATE_ABI_MINOR: u16 = 0;
+/// 1: 新增 surreal_set_worker_threads / surreal_vec_delete / surreal_fts_delete /
+///    surreal_graph_delete_edges；surreal_stats 扩展四路计数字段；
+///    HNSW 替换 MTREE；docs 表移除 doc_id 字段（type::thing + record::id()）。
+const SUBSTRATE_ABI_MINOR: u16 = 1;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
 /// Go 侧用 `(version >> 16) & 0xFFFF` 提取 major。
@@ -434,7 +437,7 @@ mod tests {
 // 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
 //
 // 功能: KV + HNSW 向量 + 有向图遍历 + BM25 全文检索
-// 后端: surreal-mem（默认，kv-mem）/ surreal-rocksdb（显式，≥16GB）
+// 后端: surreal-mem（默认，kv-mem，256MB+ 可用，含 VPS）/ surreal-rocksdb（显式，持久化）
 // ═══════════════════════════════════════════════════════════════════════════════
 
 mod surreal_store;

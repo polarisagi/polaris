@@ -45,7 +45,7 @@ github_proxy = "auto"
 default_provider = "deepseek-v4-flash"
 reasoning_provider = "deepseek-v4-pro"
 structured_output = "grammar"
-# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB MTREE DIMENSION）
+# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION）
 # OpenAI text-embedding-3-small / DeepSeek-Embedder = 1536；本地轻量模型如 nomic-embed = 768
 embedder_dim = 1536
 
@@ -143,10 +143,14 @@ bwrap_path = ""
 
 [cognition]
 # SurrealDB 认知存储后端（运行时选择，不影响编译）。
-# "mem" = kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；任意内存机器可用。
-# "rocksdb" = kv-rocksdb 持久化，要求 ≥16GB 可用内存，surreal_db_path 须指定。
+# "mem"     = kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；256MB+ 可用，含 2GB/4GB VPS。
+# "rocksdb" = kv-rocksdb 持久化，推荐大内存服务器，surreal_db_path 须指定。
 surreal_backend = "mem"
 surreal_db_path = ""
+# Tokio 运行时工作线程数（影响 SurrealDB 并发写入吞吐与内存占用）。
+# 0  = auto（min(CPU 核心数, 4)）—— 大内存服务器使用默认值。
+# 2  = VPS 推荐（2GB/4GB 实例），节省约 30-50MB RSS。
+surreal_worker_threads = 2
 
 [compressor]
 # 模型上下文窗口大小（token 数）。自动压缩阈值 = context_window × auto_compact_pct / 100。

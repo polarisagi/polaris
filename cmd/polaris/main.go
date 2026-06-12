@@ -215,8 +215,9 @@ func run() error { //nolint:gocyclo
 	slog.Info("polaris: storage initialized", "db", layout.SQLiteDB)
 
 	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）──
-	// 后端由 [cognition] surreal_backend 控制：mem（默认）或 rocksdb（≥16GB 显式配置）。
+	// 后端由 [cognition] surreal_backend 控制：mem（默认，256MB+ 可用）或 rocksdb（持久化）。
 	// 向量维度由 [inference] embedder_dim 控制，需与嵌入模型一致。
+	// Tokio 线程数由 [cognition] surreal_worker_threads 控制（0=auto，VPS 建议设 2）。
 	surrealStore := initSurrealStore(autoConf, cfg, layout)
 
 	// ─── 2.6 StorageRouter（三轴统一路由）────────────────────────────────────
@@ -799,6 +800,8 @@ type evalAgentAdapter struct {
 }
 
 // initSurrealStore 初始化 SurrealDB Core 认知存储，提取出独立函数以降低 main 嵌套复杂度。
+// backend: "mem"（默认，256MB+ 可用）/ "rocksdb"（持久化，推荐大内存服务器）。
+// workerThreads: <= 0 = auto（min(CPU, 4)）；VPS 推荐在 config 中设 2 以节省内存。
 func initSurrealStore(
 	autoConf *observability.AutoConfig,
 	cfg *config.Config,
@@ -820,12 +823,17 @@ func initSurrealStore(
 	if vecDim <= 0 {
 		vecDim = 1536
 	}
-	store, err := storage.OpenSurrealDBCore(backend, dbPath, vecDim)
+	workerThreads := cfg.Cognition.SurrealWorkerThreads
+	store, err := storage.OpenSurrealDBCore(backend, dbPath, vecDim, workerThreads)
 	if err != nil {
 		slog.Warn("polaris: SurrealDB Core init failed, cognitive axis falls back to SQLite", "err", err)
 		return nil
 	}
-	slog.Info("polaris: SurrealDB Core initialized", "backend", backend, "vec_dim", vecDim)
+	slog.Info("polaris: SurrealDB Core initialized",
+		"backend", backend,
+		"vec_dim", vecDim,
+		"worker_threads", workerThreads,
+	)
 	return store
 }
 

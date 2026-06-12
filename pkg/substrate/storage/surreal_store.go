@@ -5,7 +5,7 @@
 // SurrealDBCoreStore — [Storage-SurrealDB-Core] 认知检索轴的 Go 封装。
 // 实现 protocol.Store + 扩展接口（VectorStore / GraphStore / FTSStore）。
 //
-// 后端选择: surreal-mem（默认，kv-mem）/ surreal-rocksdb（显式，≥16GB）。
+// 后端选择: surreal-mem（默认，kv-mem，256MB+ 即可，含 VPS）/ surreal-rocksdb（显式持久化）。
 // kv-mem 进程重启后数据丢失；持久化由 SQLite Outbox 投影负责（M02 §2.5）。
 package storage
 
@@ -31,17 +31,21 @@ var (
 	surrealOnce sync.Once
 	surrealErr  error
 
+	surrealSetWorkerThreads         func(n int32) int32
 	surrealOpen                     func(backend string, dbPath string, vecDim int32) int32
 	surrealKvGet                    func(key *byte, keyLen uintptr, outVal *uintptr, outLen *uintptr) int32
 	surrealKvPut                    func(key *byte, keyLen uintptr, val *byte, valLen uintptr) int32
 	surrealKvDelete                 func(key *byte, keyLen uintptr) int32
 	surrealKvScan                   func(prefix *byte, prefixLen uintptr, outJSON *uintptr) int32
 	surrealVecUpsert                func(id string, embed *float32, dim uintptr) int32
+	surrealVecDelete                func(id string) int32
 	surrealVecKnn                   func(query *float32, dim uintptr, k uintptr, outJSON *uintptr) int32
 	surrealGraphRelate              func(fromID, edgeType, toID string, weight float64) int32
+	surrealGraphDeleteEdges         func(fromID, edgeType string) int32
 	surrealGraphTraverse            func(startID, edgeType string, maxDepth uintptr, outJSON *uintptr) int32
 	surrealGraphSpreadingActivation func(startIDsJSON string, maxDepth uintptr, energyDecay float64, dormancyThreshold float64, fanOutLimit uintptr, outJSON *uintptr) int32
 	surrealFTSIndex                 func(docID, text string) int32
+	surrealFTSDelete                func(docID string) int32
 	surrealFTSSearch                func(query string, k uintptr, outJSON *uintptr) int32
 	surrealFreeString               func(ptr uintptr)
 	surrealFreeBuf                  func(ptr uintptr, length uintptr)
@@ -54,17 +58,22 @@ func bindSurreal() error {
 			surrealErr = err
 			return
 		}
+		// ABI_MINOR=1 新增：surreal_set_worker_threads / vec_delete / fts_delete / graph_delete_edges
+		purego.RegisterLibFunc(&surrealSetWorkerThreads, lib, "surreal_set_worker_threads")
 		purego.RegisterLibFunc(&surrealOpen, lib, "surreal_open")
 		purego.RegisterLibFunc(&surrealKvGet, lib, "surreal_kv_get")
 		purego.RegisterLibFunc(&surrealKvPut, lib, "surreal_kv_put")
 		purego.RegisterLibFunc(&surrealKvDelete, lib, "surreal_kv_delete")
 		purego.RegisterLibFunc(&surrealKvScan, lib, "surreal_kv_scan")
 		purego.RegisterLibFunc(&surrealVecUpsert, lib, "surreal_vec_upsert")
+		purego.RegisterLibFunc(&surrealVecDelete, lib, "surreal_vec_delete")
 		purego.RegisterLibFunc(&surrealVecKnn, lib, "surreal_vec_knn")
 		purego.RegisterLibFunc(&surrealGraphRelate, lib, "surreal_graph_relate")
+		purego.RegisterLibFunc(&surrealGraphDeleteEdges, lib, "surreal_graph_delete_edges")
 		purego.RegisterLibFunc(&surrealGraphTraverse, lib, "surreal_graph_traverse")
 		purego.RegisterLibFunc(&surrealGraphSpreadingActivation, lib, "surreal_graph_spreading_activation")
 		purego.RegisterLibFunc(&surrealFTSIndex, lib, "surreal_fts_index")
+		purego.RegisterLibFunc(&surrealFTSDelete, lib, "surreal_fts_delete")
 		purego.RegisterLibFunc(&surrealFTSSearch, lib, "surreal_fts_search")
 		purego.RegisterLibFunc(&surrealFreeString, lib, "surreal_free_string")
 		purego.RegisterLibFunc(&surrealFreeBuf, lib, "surreal_free_buf")
@@ -134,12 +143,15 @@ type SurrealDBCoreStore struct{}
 var _ protocol.Store = (*SurrealDBCoreStore)(nil)
 
 // OpenSurrealDBCore 初始化全局 SurrealCoreStore（幂等）。
-// backend: "mem"（默认）或 "rocksdb"（要求 ≥16GB，dbPath 不可为空）。
-// vecDim: HNSW 向量维度，需与嵌入模型一致（典型值 1536）。
-func OpenSurrealDBCore(backend, dbPath string, vecDim int) (*SurrealDBCoreStore, error) {
+// backend: "mem"（默认，256MB+ 可用，含 VPS）或 "rocksdb"（持久化，dbPath 不可为空）。
+// vecDim: HNSW 向量维度，需与嵌入模型一致（典型值 1536 或 768）。
+// workerThreads: Tokio 运行时线程数；<= 0 表示 auto（min(CPU, 4)），VPS 建议传 2。
+func OpenSurrealDBCore(backend, dbPath string, vecDim, workerThreads int) (*SurrealDBCoreStore, error) {
 	if err := bindSurreal(); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "surreal load lib", err)
 	}
+	// 在 surreal_open 前设置线程数（只在首次初始化时生效）
+	surrealSetWorkerThreads(int32(workerThreads))
 	if rc := surrealOpen(backend, dbPath, int32(vecDim)); rc != 0 {
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_open failed: code %d", rc))
 	}
@@ -229,7 +241,7 @@ func (s *SurrealDBCoreStore) Capabilities() protocol.StoreCapabilities {
 		SupportsVector:   true,
 		SupportsGraph:    true,
 		SupportsFullText: true,
-		Engine:           "surreal-core-ffi/mtree",
+		Engine:           "surreal-core-ffi/hnsw",
 	}
 }
 
@@ -323,7 +335,7 @@ func (s *SurrealDBCoreStore) FTSIndex(docID, text string) error {
 	return nil
 }
 
-// FTSSearch TF-IDF 全文检索，返回 top-k 结果。
+// FTSSearch BM25 全文检索，返回 top-k 结果。
 func (s *SurrealDBCoreStore) FTSSearch(query string, k int) ([]ScoredID, error) {
 	var outJSON uintptr
 	rc := surrealFTSSearch(query, uintptr(k), &outJSON)
@@ -331,6 +343,34 @@ func (s *SurrealDBCoreStore) FTSSearch(query string, k int) ([]ScoredID, error) 
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_fts_search: code %d", rc))
 	}
 	return parseScoredJSON(readCStringAndFree(outJSON))
+}
+
+// VecDelete 从 HNSW 索引删除向量记录（供 Forget 路径调用）。
+func (s *SurrealDBCoreStore) VecDelete(id string) error {
+	rc := surrealVecDelete(id)
+	if rc != 0 {
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_vec_delete: code %d", rc))
+	}
+	return nil
+}
+
+// FTSDelete 从 BM25 FTS 索引删除文档（供 Forget 路径调用）。
+func (s *SurrealDBCoreStore) FTSDelete(docID string) error {
+	rc := surrealFTSDelete(docID)
+	if rc != 0 {
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_fts_delete: code %d", rc))
+	}
+	return nil
+}
+
+// GraphDeleteEdges 删除 fromID 的出边（供 Forget 路径清理图结构）。
+// edgeType 为空串表示删除所有出边。
+func (s *SurrealDBCoreStore) GraphDeleteEdges(fromID, edgeType string) error {
+	rc := surrealGraphDeleteEdges(fromID, edgeType)
+	if rc != 0 {
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_graph_delete_edges: code %d", rc))
+	}
+	return nil
 }
 
 // ─── surrealTx — 伪事务（内存 KV 无真实回滚，MVP 限制）────────────────────────
