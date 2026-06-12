@@ -99,6 +99,8 @@ func mapSandbox(s string) protocol.SandboxTier {
 		return protocol.SandboxContainer
 	case "remote":
 		return protocol.SandboxRemote
+	case "wasm":
+		return protocol.SandboxWasm
 	default:
 		return protocol.SandboxInProcess
 	}

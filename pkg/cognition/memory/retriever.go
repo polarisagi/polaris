@@ -100,6 +100,15 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope p
 	var graphResults []protocol.ScoredFragment
 	var vectorResults []protocol.ScoredFragment
 
+	// 根据 scope 决定向量搜索模式（内部聚合分析用近似模式，实时问答用精确模式）
+	if ext, ok := hr.store.(protocol.StoreExtVector); ok {
+		if scope.Type == "memory" && config.FinalTopK > 10 {
+			_ = ext.VecSetMode(1) // 近似 HNSW
+		} else {
+			_ = ext.VecSetMode(0) // 精确匹配
+		}
+	}
+
 	// P0：向量检索 — Tier1+ 走 SurrealDB HNSW（O(log N)），Tier0 降级 SQLite BLOB 内存余弦
 	if queryF32 != nil { //nolint:nestif
 		if hr.cognitive != nil {

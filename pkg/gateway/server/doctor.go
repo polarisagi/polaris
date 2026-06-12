@@ -54,6 +54,13 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ── 记忆引擎统计 ────────────────────────────────────────────────────
+	if s.agent != nil && s.agent.Memory() != nil {
+		if stats, err := s.agent.Memory().StoreStats(); err == nil && stats != "{}" {
+			add("memory_backend", true, stats)
+		}
+	}
+
 	// ── Provider 配置 ─────────────────────────────────────────────────
 	defaultP := s.registry.PickProvider("default")
 	generalP := s.registry.PickProvider("general")
