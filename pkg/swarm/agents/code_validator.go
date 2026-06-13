@@ -101,6 +101,8 @@ func (ga *GovernanceAgent) ValidateCode(language string, code []byte, caps Capab
 		return validateByPatterns(code, bashDangerousPatterns, caps)
 	case "wasm":
 		return ga.ValidateWasmImports(code, caps)
+	case "typescript", "ts", "javascript", "js":
+		return validateByPatterns(code, typescriptDangerousPatterns, caps)
 	default:
 		// 未知语言：记录日志，不拦截（不能假设恶意）
 		slog.Warn("code_validator: unknown language, skipping", "language", language)
@@ -276,4 +278,61 @@ func (ga *GovernanceAgent) ValidateWasmImports(wasmBytes []byte, caps Capability
 	}
 
 	return nil
+}
+
+// typescriptDangerousPatterns TypeScript/JavaScript 危险调用规则表。
+// 设计说明：这是第一道静态防线（正则），覆盖"明显恶意"模式。
+// 运行时第二道防线由 Deno 权限标志（capability flags）承担，见 plugin_creator.go。
+var typescriptDangerousPatterns = []codeRule{
+	{
+		id:          "TS001",
+		description: "动态代码执行：eval() / new Function()",
+		requiredCap: "dynamic_eval",
+		pattern:     regexp.MustCompile(`\beval\s*\(|new\s+Function\s*\(`),
+	},
+	{
+		id:          "TS002",
+		description: "子进程启动：child_process 模块",
+		requiredCap: "shell_exec",
+		// require/import 两种导入方式均覆盖
+		pattern: regexp.MustCompile(`require\s*\(\s*['"]child_process['"]\s*\)|from\s+['"]child_process['"]`),
+	},
+	{
+		id:          "TS003",
+		description: "动态变量导入：import(variable)，无法静态分析目标模块",
+		requiredCap: "dynamic_import",
+		// 匹配 import() 且括号内不是字符串字面量（字符串以引号开头）
+		pattern: regexp.MustCompile(`\bimport\s*\(\s*[^"'\x60]`),
+	},
+	{
+		id:          "TS004",
+		description: "进程强制退出或发送信号",
+		requiredCap: "process_signal",
+		pattern:     regexp.MustCompile(`process\.(exit|kill|abort)\s*\(`),
+	},
+	{
+		id:          "TS005",
+		description: "文件系统破坏性操作：rm / unlink / rmdir",
+		requiredCap: "destructive_fs",
+		pattern:     regexp.MustCompile(`fs\.(rm|unlink|rmdir|rmdirSync|unlinkSync|rmSync)\s*\(`),
+	},
+	{
+		id:          "TS006",
+		description: "Base64 解码后紧跟动态执行（混淆逃逸模式）",
+		requiredCap: "dynamic_eval",
+		// 同一段代码中同时出现 atob/Buffer.from+base64 和 eval/Function
+		pattern: regexp.MustCompile(`(?s)(atob\s*\(|Buffer\.from\s*\([^)]+,\s*['"]base64['"]\s*\)).*?(eval\s*\(|new\s+Function\s*\()`),
+	},
+	{
+		id:          "TS007",
+		description: "危险路径写入：写入 /etc、/sys、/proc、/boot",
+		requiredCap: "system_write",
+		pattern:     regexp.MustCompile(`writeFile[Ss]ync?\s*\(\s*["'](/etc|/sys|/proc|/boot|/root)`),
+	},
+	{
+		id:          "TS008",
+		description: "网络原始 Socket（绕过 HTTP 层）",
+		requiredCap: "network_raw",
+		pattern:     regexp.MustCompile(`require\s*\(\s*['"]net['"]\s*\)|from\s+['"]net['"]`),
+	},
 }

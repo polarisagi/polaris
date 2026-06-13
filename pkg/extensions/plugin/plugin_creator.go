@@ -4,12 +4,47 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
+
+// denoPermFlags 根据信任等级返回 Deno 运行时权限标志。
+// 对应 extension_instances.trust_tier 的语义：
+//
+//	1 = user（用户手动创建）    → 最小权限，仅允许出站网络 + 环境变量读取
+//	2 = learned（M9 自演化）    → 与 user 相同
+//	3 = marketplace（市场安装） → 允许出站网络 + env + 有限只读文件
+//	4 = builtin（内置）         → 全权限（仅内置插件使用）
+func denoPermFlags(trustTier int) []string {
+	switch {
+	case trustTier >= 4:
+		// 内置插件：全权限
+		return []string{"--allow-all"}
+	case trustTier == 3:
+		// 市场插件：网络 + env + 只读（不允许写文件、不允许子进程）
+		return []string{
+			"--allow-net",
+			"--allow-env",
+			"--allow-read",
+		}
+	default:
+		// user / learned：最小权限，仅出站网络 + env（无文件 IO，无子进程）
+		return []string{
+			"--allow-net",
+			"--allow-env",
+		}
+	}
+}
+
+func checkDenoAvailable() bool {
+	cmd := exec.Command("deno", "--version")
+	return cmd.Run() == nil
+}
 
 // LLMClient is a minimal interface for the PluginCreator to generate responses.
 type LLMClient interface {
@@ -41,19 +76,19 @@ type GeneratedPlugin struct {
 const pluginCreatorSystemPrompt = `
 You are the internal plugin-creator agent. Your job is to translate a user's intent into a fully functional MCP (Model Context Protocol) plugin using TypeScript.
 A plugin MUST have a concise name (kebab-case) and a clear description.
-You must use the '@modelcontextprotocol/sdk' package to define the server.
+You must use the 'npm:@modelcontextprotocol/sdk' package to define the server. The plugin will run on the Deno runtime, so use 'npm:' prefix for Node.js packages.
 
 Output ONLY valid JSON matching this schema:
 {
   "name": "plugin-name",
   "description": "What this plugin does...",
-  "typescript_code": "import { McpServer } from \"@modelcontextprotocol/sdk/server/mcp.js\";\nimport { StdioServerTransport } from \"@modelcontextprotocol/sdk/server/stdio.js\";\nimport { z } from \"zod\";\n\nconst server = new McpServer({ name: \"plugin-name\", version: \"1.0.0\" });\n\nserver.tool(\"my_tool\", \"Description\", {}, async () => ({\n  content: [{ type: \"text\", text: \"Done\" }],\n}));\n\nconst transport = new StdioServerTransport();\nawait server.connect(transport);\n"
+  "typescript_code": "import { McpServer } from \"npm:@modelcontextprotocol/sdk/server/mcp.js\";\nimport { StdioServerTransport } from \"npm:@modelcontextprotocol/sdk/server/stdio.js\";\nimport { z } from \"npm:zod\";\n\nconst server = new McpServer({ name: \"plugin-name\", version: \"1.0.0\" });\n\nserver.tool(\"my_tool\", \"Description\", {}, async () => ({\n  content: [{ type: \"text\", text: \"Done\" }],\n}));\n\nconst transport = new StdioServerTransport();\nawait server.connect(transport);\n"
 }
 Do not include any Markdown wrappers like ` + "```json" + ` in the output. Ensure the TypeScript code is properly escaped in the JSON string.
 `
 
 // GeneratePlugin takes a user's intent, calls the LLM, and creates the physical plugin directory, .mcp.json, and server.py.
-func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string) (string, error) {
+func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trustTier int) (string, error) {
 	if c.llm == nil {
 		return "", perrors.New(perrors.CodeInternal, "plugin_creator: LLM client is nil")
 	}
@@ -89,29 +124,19 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string) (stri
 		return "", perrors.Wrap(perrors.CodeInternal, "plugin_creator: failed to write src/index.ts", err)
 	}
 
-	// Write package.json（npx tsx 无需编译步骤，直接运行 TypeScript）
-	packageJSON := fmt.Sprintf(`{
+	// Write deno.json (Deno config, no node_modules required)
+	denoConfigPath := filepath.Join(pluginDir, "deno.json")
+	denoConfig := fmt.Sprintf(`{
   "name": "%s",
   "version": "1.0.0",
-  "description": "%s",
-  "type": "module",
-  "scripts": {
-    "start": "npx tsx src/index.ts"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
-    "tsx": "^4.0.0"
+  "imports": {
+    "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.0.0",
+    "zod": "npm:zod@^3.0.0"
   }
-}`, result.Name, result.Description)
-
-	packageJSONPath := filepath.Join(pluginDir, "package.json")
-	if err := os.WriteFile(packageJSONPath, []byte(packageJSON), 0644); err != nil {
-		return "", perrors.Wrap(perrors.CodeInternal, "plugin_creator: failed to write package.json", err)
+}
+`, result.Name)
+	if err := os.WriteFile(denoConfigPath, []byte(denoConfig), 0644); err != nil {
+		return "", perrors.Wrap(perrors.CodeInternal, "plugin_creator: failed to write deno.json", err)
 	}
 
 	// Create a default plugin.json
@@ -132,15 +157,31 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string) (stri
 		return "", perrors.Wrap(perrors.CodeInternal, "plugin_creator: failed to write plugin.json", err)
 	}
 
-	// Create .mcp.json（使用 npx tsx 直接运行 TypeScript，无需预编译）
+	var cmd string
+	var argsJSON string
+
+	if checkDenoAvailable() {
+		// Deno available
+		permFlags := denoPermFlags(trustTier)
+		denoArgs := append([]string{"run", "--no-prompt"}, permFlags...)
+		denoArgs = append(denoArgs, "src/index.ts")
+		cmd = "deno"
+		argsJSON = marshalArgs(denoArgs)
+	} else {
+		slog.Warn("plugin_creator: deno not found, falling back to npx tsx (no sandbox restrictions)")
+		cmd = "npx"
+		argsJSON = `["tsx", "src/index.ts"]`
+	}
+
+	// Create .mcp.json
 	mcpJSON := fmt.Sprintf(`{
   "mcpServers": {
     "%s": {
-      "command": "npx",
-      "args": ["tsx", "src/index.ts"]
+      "command": "%s",
+      "args": %s
     }
   }
-}`, result.Name)
+}`, result.Name, cmd, argsJSON)
 
 	mcpJSONPath := filepath.Join(pluginDir, ".mcp.json")
 	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0644); err != nil {
@@ -148,6 +189,11 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string) (stri
 	}
 
 	return pluginDir, nil
+}
+
+func marshalArgs(args []string) string {
+	b, _ := json.Marshal(args)
+	return string(b)
 }
 
 func extractJSON(input string) string {

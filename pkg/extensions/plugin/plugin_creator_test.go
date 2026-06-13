@@ -27,7 +27,7 @@ func TestPluginCreator(t *testing.T) {
 
 	creator := NewPluginCreator(&MockLLMClient{}, tempDir)
 
-	pluginDir, err := creator.GeneratePlugin(context.Background(), "create a test plugin")
+	pluginDir, err := creator.GeneratePlugin(context.Background(), "create a test plugin", 1)
 	if err != nil {
 		t.Fatalf("GeneratePlugin failed: %v", err)
 	}
@@ -42,9 +42,9 @@ func TestPluginCreator(t *testing.T) {
 		t.Errorf("src/index.ts was not created")
 	}
 
-	// Verify package.json exists
-	if _, err := os.Stat(filepath.Join(expectedDir, "package.json")); os.IsNotExist(err) {
-		t.Errorf("package.json was not created")
+	// Verify deno.json exists
+	if _, err := os.Stat(filepath.Join(expectedDir, "deno.json")); os.IsNotExist(err) {
+		t.Errorf("deno.json was not created")
 	}
 
 	// Verify plugin.json exists
