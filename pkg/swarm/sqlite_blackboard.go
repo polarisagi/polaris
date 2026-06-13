@@ -585,15 +585,12 @@ func (bb *SQLiteBlackboard) StartReaper(ctx context.Context) {
 // 2. 等待 5s 宽限期（供 M7 工具感知 ctx.Done() 并完成清理）。
 // 3. 宽限期结束后强制更新 DB：Status=Pending, Version++。
 func (bb *SQLiteBlackboard) reap(ctx context.Context) {
-	bb.mu.Lock()
-
 	rows, err := bb.db.QueryContext(ctx, `
 		SELECT task_id, claimed_by FROM tasks
 		WHERE status IN (?,?) AND expires_at < datetime('now')`,
 		statusClaimed, statusRunning,
 	)
 	if err != nil {
-		bb.mu.Unlock()
 		return
 	}
 
@@ -604,19 +601,22 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 		var r row
 		if rows.Scan(&r.taskID, &r.agentID) == nil {
 			expired = append(expired, r)
-			// 触发任务级别的 cancel，通知协程中止
-			if cancel, ok := bb.cancels[r.taskID]; ok && cancel != nil {
-				cancel()
-				delete(bb.cancels, r.taskID)
-			}
 		}
 	}
 	rows.Close()
-	bb.mu.Unlock()
 
 	if len(expired) == 0 {
 		return
 	}
+
+	bb.mu.Lock()
+	for _, r := range expired {
+		if cancel, ok := bb.cancels[r.taskID]; ok && cancel != nil {
+			cancel()
+			delete(bb.cancels, r.taskID)
+		}
+	}
+	bb.mu.Unlock()
 
 	// 宽限期：给 M7 工具的 ctx.Done() 感知路径留出 5s 时间窗口
 	select {
