@@ -56,6 +56,41 @@ impl EngineState {
 // 全局 Engine 单例，避免重复创建（开销较大）
 lazy_static::lazy_static! {
     static ref GLOBAL_ENGINE: Mutex<Option<Arc<EngineState>>> = Mutex::new(None);
+    static ref WARM_POOL: Mutex<Vec<Store<SandboxState>>> = Mutex::new(Vec::new());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wasmtime_pool_init(n: c_int) -> c_int {
+    // 确保 engine 存在
+    let engine_arc = match GLOBAL_ENGINE.lock() {
+        Ok(global) => match global.as_ref() {
+            Some(s) => Arc::clone(s),
+            None => return WASMTIME_ERR_INTERNAL,
+        },
+        Err(_) => return WASMTIME_ERR_INTERNAL,
+    };
+
+    let mut pool = match WARM_POOL.lock() {
+        Ok(p) => p,
+        Err(_) => return WASMTIME_ERR_INTERNAL,
+    };
+
+    if !pool.is_empty() {
+        return WASMTIME_OK; // 已初始化
+    }
+
+    for _ in 0..n {
+        let mut builder = WasiCtxBuilder::new();
+        let wasi_ctx = builder.build_p1();
+        let state = SandboxState {
+            wasi: wasi_ctx,
+            max_pages: 16,
+        };
+        let mut store = Store::new(&engine_arc.engine, state);
+        store.limiter(|s| s as &mut dyn wasmtime::ResourceLimiter);
+        pool.push(store);
+    }
+    WASMTIME_OK
 }
 
 #[unsafe(no_mangle)]
@@ -219,38 +254,58 @@ pub unsafe extern "C" fn wasmtime_execute(
                 256
             };
 
-            let state = SandboxState {
-                wasi: wasi_ctx,
-                max_pages: limit_pages,
+            let mut store = {
+                let mut pool = WARM_POOL.lock().unwrap();
+                if let Some(mut pooled_store) = pool.pop() {
+                    // 更新 pooled_store 的内部状态
+                    let state = pooled_store.data_mut();
+                    state.wasi = wasi_ctx;
+                    state.max_pages = limit_pages;
+                    pooled_store
+                } else {
+                    let state = SandboxState {
+                        wasi: wasi_ctx,
+                        max_pages: limit_pages,
+                    };
+                    let mut s = Store::new(&engine_arc.engine, state);
+                    s.limiter(|s| s as &mut dyn wasmtime::ResourceLimiter);
+                    s
+                }
             };
 
-            let mut store = Store::new(&engine_arc.engine, state);
-            store.limiter(|s| s as &mut dyn wasmtime::ResourceLimiter);
-
             // 燃料设定
-            let fuel_limit = if max_fuel > 0 { max_fuel } else { 100_000_000 };
-            if let Err(e) = store.set_fuel(fuel_limit) {
+            if let Err(e) = store.set_fuel(if max_fuel > 0 { max_fuel } else { 100_000_000 }) {
                 write_err(out_err, &format!("Failed to set fuel: {}", e));
                 return WASMTIME_ERR_INTERNAL;
             }
 
             let instance = match linker.instantiate(&mut store, &module) {
-                Ok(inst) => inst,
+                Ok(i) => i,
                 Err(e) => {
                     write_err(out_err, &format!("Instantiate error: {}", e));
                     return WASMTIME_ERR_EXECUTE;
                 }
             };
 
-            let start_func = match instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            let start = match instance.get_typed_func::<(), ()>(&mut store, "_start") {
                 Ok(f) => f,
-                Err(e) => {
-                    write_err(out_err, &format!("Failed to find _start function: {}", e));
+                Err(_) => {
+                    write_err(out_err, "Module does not export '_start' function");
                     return WASMTIME_ERR_EXECUTE;
                 }
             };
 
-            if let Err(e) = start_func.call(&mut store, ()) {
+            let exec_result = start.call(&mut store, ());
+
+            // 回收 Store 到对象池
+            if let Ok(mut pool) = WARM_POOL.lock() {
+                // 限制池大小防止泄露
+                if pool.len() < 16 {
+                    pool.push(store);
+                }
+            }
+
+            if let Err(e) = exec_result {
                 write_err(out_err, &format!("Execution error: {}", e));
                 return WASMTIME_ERR_EXECUTE;
             }

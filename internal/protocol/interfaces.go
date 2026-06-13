@@ -421,6 +421,7 @@ type ScratchPad interface {
 type EpisodicMemory interface {
 	Append(ctx context.Context, ev Event) error
 	Query(ctx context.Context, q EpisodicQuery) ([]ScoredEvent, error)
+	MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error)
 }
 
 type EpisodicQuery struct {

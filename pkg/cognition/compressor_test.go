@@ -58,7 +58,7 @@ func TestPruneToolOutputs_NoPrune_UnderThreshold(t *testing.T) {
 	msgs := []protocol.Message{
 		{Role: "user", Parts: []any{toolResult("id1", "small content")}},
 	}
-	out, count := PruneToolOutputs(msgs, 100, nil)
+	out, count := PruneToolOutputs(msgs, 100, nil, nil)
 	if count != 0 {
 		t.Errorf("want 0 pruned, got %d", count)
 	}
@@ -73,7 +73,7 @@ func TestPruneToolOutputs_PrunesLargeString(t *testing.T) {
 	msgs := []protocol.Message{
 		{Role: "user", Parts: []any{toolResult("id42", big)}},
 	}
-	out, count := PruneToolOutputs(msgs, 100, nil)
+	out, count := PruneToolOutputs(msgs, 100, nil, nil)
 	if count != 1 {
 		t.Errorf("want 1 pruned, got %d", count)
 	}
@@ -91,7 +91,7 @@ func TestPruneToolOutputs_MultiBlockContent(t *testing.T) {
 	// Anthropic 多块格式: content = []any{{"type":"text","text":"..."}, ...}
 	part := toolResultMultiBlock("id99", strings.Repeat("a", 150), strings.Repeat("b", 60))
 	msgs := []protocol.Message{{Role: "user", Parts: []any{part}}}
-	_, count := PruneToolOutputs(msgs, 100, nil)
+	_, count := PruneToolOutputs(msgs, 100, nil, nil)
 	if count != 1 {
 		t.Errorf("multi-block content (210 bytes total): want 1 pruned, got %d", count)
 	}
@@ -104,7 +104,7 @@ func TestPruneToolOutputs_PreservesNonToolResultParts(t *testing.T) {
 			toolResult("id1", strings.Repeat("y", 200)),
 		}},
 	}
-	out, count := PruneToolOutputs(msgs, 100, nil)
+	out, count := PruneToolOutputs(msgs, 100, nil, nil)
 	if count != 1 {
 		t.Fatalf("want 1 pruned, got %d", count)
 	}
@@ -119,7 +119,7 @@ func TestPruneToolOutputs_OriginalUnmodified(t *testing.T) {
 	orig := []protocol.Message{
 		{Role: "user", Parts: []any{toolResult("id1", bigContent)}},
 	}
-	_, _ = PruneToolOutputs(orig, 100, nil)
+	_, _ = PruneToolOutputs(orig, 100, nil, nil)
 	// 原始消息不可变
 	p := orig[0].Parts[0].(map[string]any)
 	if p["content"] != bigContent {
@@ -133,14 +133,14 @@ func TestPruneToolOutputs_MultipleMessages(t *testing.T) {
 		{Role: "user", Parts: []any{toolResult("t2", "small")}},
 		{Role: "user", Parts: []any{toolResult("t3", strings.Repeat("b", 300))}},
 	}
-	_, count := PruneToolOutputs(msgs, 100, nil)
+	_, count := PruneToolOutputs(msgs, 100, nil, nil)
 	if count != 2 {
 		t.Errorf("want 2 pruned (t1, t3), got %d", count)
 	}
 }
 
 func TestPruneToolOutputs_EmptyMessages(t *testing.T) {
-	_, count := PruneToolOutputs(nil, 100, nil)
+	_, count := PruneToolOutputs(nil, 100, nil, nil)
 	if count != 0 {
 		t.Errorf("nil messages: want 0, got %d", count)
 	}

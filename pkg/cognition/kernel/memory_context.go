@@ -57,8 +57,24 @@ func buildPerceiveContext( //nolint:gocyclo
 		}
 	}
 
-	// 3. 组装上下文
+	// 3. 耳语线索注入（非阻塞，Memory Agent 推送的历史经验线索）
+	var whisperCtx string
+	if sCtx.WhisperChan != nil {
+		select {
+		case w := <-sCtx.WhisperChan:
+			if w.Salience >= 0.5 { // 低显著度线索过滤
+				whisperCtx = fmt.Sprintf("## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content)
+			}
+		default:
+			// 无线索，继续
+		}
+	}
+
+	// 4. 组装上下文
 	baseContent := "Structure the user intent into a TaskModel JSON.\n\n"
+	if whisperCtx != "" {
+		baseContent += whisperCtx + "\n"
+	}
 	if len(sCtx.ReasoningState) > 0 {
 		baseContent += "Reasoning State from the previous iteration:\n" + string(sCtx.ReasoningState) + "\n\n"
 	}

@@ -74,19 +74,12 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	})
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
 
-	tool := protocol.Tool{
-		Name:        "list-files",
-		Source:      protocol.ToolBuiltin,
-		Capability:  protocol.CapReadOnly,
-		SideEffects: []protocol.SideEffect{protocol.SideNone},
-	}
-
-	result, err := router.Execute(context.Background(), tool, nil)
+	res, err := router.Execute(context.Background(), protocol.Tool{SandboxTier: 1, Name: "list-files"}, nil, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Success {
-		t.Fatalf("expected success: %s", result.Error)
+	if !res.Success {
+		t.Fatalf("expected success: %s", res.Error)
 	}
 }
 
@@ -98,17 +91,11 @@ func TestSandboxRouter_MCPFallsToInProcessWithoutContainer(t *testing.T) {
 	})
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
 
-	tool := protocol.Tool{
-		Name:       "mcp-tool",
-		Source:     protocol.ToolMCP,
-		Capability: protocol.CapWriteNetwork,
-	}
-
-	result, err := router.Execute(context.Background(), tool, []byte("{}"))
+	res, err := router.Execute(context.Background(), protocol.Tool{SandboxTier: 3, Name: "mcp-tool"}, []byte("{}"), protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Success {
+	if !res.Success {
 		t.Fatalf("expected success")
 	}
 }

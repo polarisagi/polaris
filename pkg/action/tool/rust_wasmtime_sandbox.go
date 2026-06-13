@@ -23,8 +23,9 @@ var (
 	wasmtimeErr  error
 
 	wasmtimeInit       func(outErr *uintptr) int32
+	wasmtimePoolInit   func(n int32) int32
 	wasmtimePing       func() int32
-	wasmtimeExecute    func(wasmBytes *byte, wasmLen uintptr, inputJSON *byte, workspaceDir *byte, maxPages int32, networkAllowed int32, outJSON *uintptr, outErr *uintptr) int32
+	wasmtimeExecute    func(wasmBytes *byte, wasmLen uintptr, inputJSON *byte, workspaceDir *byte, maxPages int32, networkAllowed int32, fuel int64, maxMounts int32, outJSON *uintptr, outErr *uintptr) int32
 	wasmtimeFreeString func(ptr uintptr)
 )
 
@@ -36,6 +37,7 @@ func bindWasmtime() error {
 			return
 		}
 		purego.RegisterLibFunc(&wasmtimeInit, lib, "wasmtime_init")
+		purego.RegisterLibFunc(&wasmtimePoolInit, lib, "wasmtime_pool_init")
 		purego.RegisterLibFunc(&wasmtimePing, lib, "wasmtime_ping")
 		purego.RegisterLibFunc(&wasmtimeExecute, lib, "wasmtime_execute")
 		purego.RegisterLibFunc(&wasmtimeFreeString, lib, "wasmtime_free_string")
@@ -75,6 +77,18 @@ func WasmtimeInit() error {
 	return nil
 }
 
+// WasmtimePoolInit 初始化 Wasmtime 的热池
+func WasmtimePoolInit(n int) error {
+	if err := bindWasmtime(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "rust_wasmtime: dylib not available", err)
+	}
+	rc := wasmtimePoolInit(int32(n))
+	if rc != 0 {
+		return perrors.New(perrors.CodeInternal, fmt.Sprintf("wasmtime_pool_init failed: %d", rc))
+	}
+	return nil
+}
+
 // WasmtimePing 探测 Wasmtime 引擎状态
 func WasmtimePing() error {
 	if err := bindWasmtime(); err != nil {
@@ -88,7 +102,7 @@ func WasmtimePing() error {
 }
 
 // WasmtimeExecute 执行 WebAssembly 模块并返回 JSON 结果
-func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, maxPages int, networkAllowed bool) (string, error) {
+func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, maxPages int, networkAllowed bool, fuel int, maxMounts int) (string, error) {
 	if err := bindWasmtime(); err != nil {
 		return "", perrors.Wrap(perrors.CodeInternal, "rust_wasmtime: dylib not available", err)
 	}
@@ -125,6 +139,8 @@ func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, ma
 		workspacePtr,
 		int32(maxPages),
 		netAllow,
+		int64(fuel),
+		int32(maxMounts),
 		&outJSON,
 		&outErr,
 	)

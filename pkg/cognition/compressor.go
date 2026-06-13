@@ -1,9 +1,12 @@
 package cognition
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -27,6 +30,9 @@ const (
 // ─── SessionCompressor ────────────────────────────────────────────────────────
 
 // SessionCompressor 两阶段上下文压缩器。
+// 对应架构概念：L0 极速工作记忆 (Working Memory) 的符号化卸载层 (Symbolic Offloading Layer)。
+// 存根格式 "[offloaded: N bytes → read_tool_ref("xxx")]" 即 <log_ref> 符号指针。
+// Stage 3 Mermaid 注入对应 TencentDB-Agent PruneMem 机制。
 //
 // Stage 1 — tool output pre-pruning: 将超阈值 tool_result 替换为存根，立即释放 token。
 // Stage 2 — LLM 锚点摘要（由上层 LLM 调用填充 anchor 字段）。
@@ -42,10 +48,12 @@ type SessionCompressor struct {
 	maxSummaryTokens   int
 	maxToolOutputBytes int
 	triggerPct         float64
-	anchor             string             // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
-	DurativeMemory     map[string]any     // 持久化核心记忆对象
-	offloader          ToolRefOffloader   // P0: 工具输出卸载器
-	canvas             *TaskMermaidCanvas // 任务状态 Mermaid 画布（缺口 2）
+	anchor             string                // 锚点摘要（架构决策/失败原因/修复方案/风格偏好 永久保留）
+	DurativeMemory     map[string]any        // 持久化核心记忆对象
+	offloader          ToolRefOffloader      // P0: 工具输出卸载器
+	canvas             *TaskMermaidCanvas    // 任务状态 Mermaid 画布（缺口 2）
+	memPressure        *atomic.Int32         // 由 GovernanceAgent 注入，nil 时忽略
+	outboxWriter       protocol.OutboxWriter // Outbox 写入器，用于触发后续异步任务
 
 	mu             sync.Mutex
 	lastCompressAt time.Time
@@ -55,6 +63,20 @@ type SessionCompressor struct {
 func (sc *SessionCompressor) InjectOffloader(o ToolRefOffloader) {
 	sc.mu.Lock()
 	sc.offloader = o
+	sc.mu.Unlock()
+}
+
+// InjectMemPressure 注入内存压力指针（由顶层 wire 调用）。
+func (sc *SessionCompressor) InjectMemPressure(p *atomic.Int32) {
+	sc.mu.Lock()
+	sc.memPressure = p
+	sc.mu.Unlock()
+}
+
+// InjectOutboxWriter 注入 Outbox 写入器
+func (sc *SessionCompressor) InjectOutboxWriter(w protocol.OutboxWriter) {
+	sc.mu.Lock()
+	sc.outboxWriter = w
 	sc.mu.Unlock()
 }
 
@@ -99,6 +121,17 @@ func (sc *SessionCompressor) ShouldTrigger(currentTokens, maxTokens int) bool {
 	if thr <= 0 {
 		thr = defaultTriggerPct
 	}
+
+	// 内存压力高时降低触发阈值，提前启动压缩
+	if sc.memPressure != nil {
+		switch sc.memPressure.Load() {
+		case 1: // MemPressureModerate
+			thr = thr * 0.65
+		case 2: // MemPressureCritical
+			thr = thr * 0.35
+		}
+	}
+
 	return float64(currentTokens)/float64(maxTokens) >= thr
 }
 
@@ -130,7 +163,7 @@ func (sc *SessionCompressor) Compress(messages []protocol.Message, currentTokens
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxToolOutputBytes
 	}
-	pruned, _ := PruneToolOutputs(messages, maxBytes, sc.offloader)
+	pruned, _ := PruneToolOutputs(messages, maxBytes, sc.offloader, sc.outboxWriter)
 
 	// Stage 3: 将 Mermaid 画布渲染结果注入 anchor 前缀
 	// 若画布有节点，则在 anchor 开头注入 "## Task State\n{mermaid}" 块，
@@ -166,11 +199,12 @@ func (sc *SessionCompressor) SetAnchor(s string) {
 // ─── Tool Output Pre-Pruning ──────────────────────────────────────────────────
 
 // PruneToolOutputs 将消息列表中超过 maxBytes 的 tool_result 内容替换为存根。
+// 实现 Symbolic Offloading：将超阈值工具输出替换为符号指针，保护 L0 工作记忆。
 // 原 messages 切片不被修改；返回新切片和被裁剪的 tool_result 条数。
 //
 // 存根格式: "[offloaded: N bytes → read_tool_ref("xxx")]"
 // content 支持两种 Anthropic 格式: string 和 []any（多块内容数组）。
-func PruneToolOutputs(messages []protocol.Message, maxBytes int, offloader ToolRefOffloader) ([]protocol.Message, int) {
+func PruneToolOutputs(messages []protocol.Message, maxBytes int, offloader ToolRefOffloader, outboxWriter protocol.OutboxWriter) ([]protocol.Message, int) {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxToolOutputBytes
 	}
@@ -181,7 +215,7 @@ func PruneToolOutputs(messages []protocol.Message, maxBytes int, offloader ToolR
 		if len(msg.Parts) == 0 {
 			continue
 		}
-		if parts, modified := prunePartsToolOutputs(msg.Parts, maxBytes, offloader, &total); modified {
+		if parts, modified := prunePartsToolOutputs(msg.Parts, maxBytes, offloader, outboxWriter, &total); modified {
 			out[i].Parts = parts
 		}
 	}
@@ -190,7 +224,7 @@ func PruneToolOutputs(messages []protocol.Message, maxBytes int, offloader ToolR
 
 // prunePartsToolOutputs 处理单条消息的 Parts。
 // 返回 (新切片, true) 表示有修改；(nil, false) 表示无修改，调用方无需替换。
-func prunePartsToolOutputs(parts []any, maxBytes int, offloader ToolRefOffloader, counter *int) ([]any, bool) {
+func prunePartsToolOutputs(parts []any, maxBytes int, offloader ToolRefOffloader, outboxWriter protocol.OutboxWriter, counter *int) ([]any, bool) {
 	modified := false
 	newParts := make([]any, len(parts))
 	for i, p := range parts {
@@ -207,6 +241,7 @@ func prunePartsToolOutputs(parts []any, maxBytes int, offloader ToolRefOffloader
 		id, _ := m["tool_use_id"].(string)
 
 		// P0: 卸载原始长输出
+		//nolint:nestif
 		if offloader != nil {
 			var rawData []byte
 			switch v := m["content"].(type) {
@@ -216,7 +251,18 @@ func prunePartsToolOutputs(parts []any, maxBytes int, offloader ToolRefOffloader
 				rawData, _ = json.Marshal(v)
 			}
 			if len(rawData) > 0 {
-				_ = offloader.Offload(id, rawData)
+				if err := offloader.Offload(id, rawData); err == nil {
+					// 若卸载的内容疑似为错误堆栈（启发式检测），触发语义压缩
+					if outboxWriter != nil && looksLikeErrorStack(rawData) {
+						_ = outboxWriter.Write(context.Background(), protocol.OutboxEntry{
+							TargetEngine:   "semantic_compress",
+							Operation:      "compress",
+							Scope:          "error_stack",
+							Payload:        []byte(`{"vfs_id":"` + id + `"}`),
+							IdempotencyKey: "semantic_compress:error_stack:" + id,
+						})
+					}
+				}
 			}
 		}
 
@@ -298,4 +344,22 @@ func estimateOneImage(m map[string]any) int {
 		return imageTokensSmall
 	}
 	return imageTokensFullHD
+}
+
+// looksLikeErrorStack 启发式检测长文本是否为错误堆栈
+func looksLikeErrorStack(data []byte) bool {
+	s := string(data)
+	if len(s) < 20 {
+		return false
+	}
+	return containsAny(s, "panic:", "stack trace", "goroutine ", "Error:")
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

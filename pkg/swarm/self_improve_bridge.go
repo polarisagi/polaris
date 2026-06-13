@@ -21,7 +21,7 @@ func NewReflexionBridge(e *ReflexionEngine) *ReflexionBridge {
 
 var _ si.Reflector = (*ReflexionBridge)(nil)
 
-func (b *ReflexionBridge) Reflect(ctx context.Context, taskID, taskType string, result *si.TaskResult, trajectory []si.Step) (*si.Reflection, error) {
+func (b *ReflexionBridge) Reflect(ctx context.Context, taskID, taskType string, result *si.TaskResult, trajectory []si.Step, replanCount int) (*si.Reflection, error) {
 	swarmResult := &TaskResult{
 		TaskID:       result.TaskID,
 		Success:      result.Success,
@@ -38,7 +38,7 @@ func (b *ReflexionBridge) Reflect(ctx context.Context, taskID, taskType string, 
 			Success:   s.Success,
 		}
 	}
-	ref, err := b.engine.Reflect(ctx, taskID, taskType, swarmResult, swarmSteps)
+	ref, err := b.engine.Reflect(ctx, taskID, taskType, swarmResult, swarmSteps, replanCount)
 	if err != nil || ref == nil {
 		return nil, err
 	}

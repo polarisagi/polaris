@@ -57,6 +57,20 @@ func (w *OutboxWorker) RegisterHandler(taskType string, handler OutboxHandler) {
 	w.handlers[taskType] = handler
 }
 
+// Write 实现 protocol.OutboxWriter 接口，提供同步写入 Outbox 表的能力。
+func (w *OutboxWorker) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	if w.db == nil {
+		return perrors.New(perrors.CodeInternal, "outbox db is nil")
+	}
+	const q = `INSERT INTO outbox (target_engine, operation, scope, payload, idempotency_key, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`
+	now := time.Now().UnixMilli()
+	_, err := w.db.ExecContext(ctx, q, entry.TargetEngine, entry.Operation, entry.Scope, entry.Payload, entry.IdempotencyKey, now)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "failed to write outbox", err)
+	}
+	return nil
+}
+
 // FetchBatch 读取待处理 Outbox 记录。
 // 主查询: WHERE id > cursor AND status IN ('pending','failed')
 //

@@ -1,5 +1,7 @@
 package self_improve
 
+// EvolutionLevel L0~L4 对应自我演化的五个层级，L4 需多签名审批。
+
 import (
 	"context"
 	"time"
@@ -172,7 +174,7 @@ func DefaultEngineConfig() *EngineConfig {
 
 // Reflector 内环反思接口（由 pkg/swarm.ReflexionEngine 实现，通过接口解耦）。
 type Reflector interface {
-	Reflect(ctx context.Context, taskID, taskType string, result *TaskResult, trajectory []Step) (*Reflection, error)
+	Reflect(ctx context.Context, taskID, taskType string, result *TaskResult, trajectory []Step, replanCount int) (*Reflection, error)
 }
 
 // Reflection 反思结果（镜像 swarm.Reflection 以避免循环引用）。
@@ -319,7 +321,9 @@ func (e *Engine) Run(ctx context.Context) error { //nolint:gocyclo
 							FailureClass: event.Failure,
 							Output:       event.Output,
 						}
-						_, _ = e.reflector.Reflect(ctx, event.TaskID, event.TaskType, result, nil)
+						if e.reflector != nil {
+							_, _ = e.reflector.Reflect(ctx, event.TaskID, event.TaskType, result, nil, 0)
+						}
 					}(ev)
 				default:
 					// 信号量满，丢弃（尽力而为原则）

@@ -33,6 +33,10 @@ type SandboxSpec struct {
 	CPUQuotaMs   int      // 0 = 默认 5000ms
 	IOBudget     int64    // 0 = 默认 8MB
 	MaxCalls     int      // 0 = 默认 10000
+	SystemTier   int      // 硬件分级
+	TaintLevel   protocol.TaintLevel
+	DryRunMode   bool
+	MockProxyEnv string
 }
 
 // ─── Tier 1: InProcessSandbox ────────────────────────────────────────────────
@@ -57,7 +61,7 @@ type InProcessFn func(ctx context.Context, input []byte) ([]byte, error)
 // InProcessRichFn 富工具执行函数签名，返回完整 ToolResult（含 ImageParts）。
 // 适用于 MCP 工具等可能返回图片/多媒体内容的外部工具。
 // 调用方（InProcessSandbox.Run）会将 ToolResult.TaintLevel 设为注册时指定的 taint（若未设置）。
-type InProcessRichFn func(ctx context.Context, input []byte) (*protocol.ToolResult, error)
+type InProcessRichFn func(ctx context.Context, spec SandboxSpec) (*protocol.ToolResult, error)
 
 func NewInProcessSandbox() *InProcessSandbox {
 	return &InProcessSandbox{
@@ -124,12 +128,13 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 
 	// 优先走富工具路径（MCP 等可返回 ImageParts 的工具）
 	if richFn != nil {
-		res, err := richFn(execCtx, spec.Input)
+		// InProcessRichFn 工具执行
+		res, execErr := richFn(execCtx, spec)
 		latency := time.Since(start).Milliseconds()
-		if err != nil {
+		if execErr != nil {
 			return &protocol.ToolResult{
 				Success:    false,
-				Error:      err.Error(),
+				Error:      execErr.Error(),
 				LatencyMs:  latency,
 				TaintLevel: taint,
 			}, nil
@@ -149,11 +154,11 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("inprocess_sandbox: unknown tool %q", spec.ToolName))
 	}
 
-	out, err := fn(execCtx, spec.Input)
-	if err != nil {
+	out, execErr := fn(execCtx, spec.Input)
+	if execErr != nil {
 		return &protocol.ToolResult{
 			Success:    false,
-			Error:      err.Error(),
+			Error:      execErr.Error(),
 			LatencyMs:  time.Since(start).Milliseconds(),
 			TaintLevel: taint,
 		}, nil
@@ -168,7 +173,7 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 
 // Execute 满足 tool.SandboxExecutor 接口（简化版，无 SandboxSpec 包装），
 // 允许 InProcessSandbox 直接作为 InMemoryToolRegistry 的执行后端。
-func (s *InProcessSandbox) Execute(ctx context.Context, toolName string, input []byte) ([]byte, error) {
+func (s *InProcessSandbox) Execute(ctx context.Context, toolName string, input []byte, taintLevel protocol.TaintLevel) ([]byte, error) {
 	s.mu.RLock()
 	fn, ok := s.registry[toolName]
 	s.mu.RUnlock()
@@ -345,7 +350,7 @@ func (r *SandboxRouter) Route(tool protocol.Tool) SandboxProvider {
 
 // Execute 完整执行路径：Route → Run → ToolResult。
 // SandboxSpec.SandboxTier 使用 AssignSandboxTier 升级后的实际 tier，保证审计信息与执行一致。
-func (r *SandboxRouter) Execute(ctx context.Context, tool protocol.Tool, input []byte) (*protocol.ToolResult, error) {
+func (r *SandboxRouter) Execute(ctx context.Context, tool protocol.Tool, input []byte, taintLevel protocol.TaintLevel) (*protocol.ToolResult, error) {
 	actualTier := AssignSandboxTier(tool, r.hwTier, r.goos)
 	provider := r.Route(tool)
 	spec := SandboxSpec{
@@ -355,6 +360,8 @@ func (r *SandboxRouter) Execute(ctx context.Context, tool protocol.Tool, input [
 		Capability:  tool.Capability,
 		SideEffects: tool.SideEffects,
 		CPUQuotaMs:  int(tool.Timeout.Milliseconds()),
+		SystemTier:  r.hwTier,
+		TaintLevel:  taintLevel,
 	}
 	return provider.Run(ctx, spec)
 }

@@ -51,6 +51,7 @@ type StateContext struct {
 	MaxReplan     int
 	Timeout       time.Duration
 	StartedAt     time.Time
+	WhisperChan   <-chan protocol.MemoryWhisper // 异步接收 MemoryAgent 线索
 
 	// Inference Budget 控制
 	TokenBudget int

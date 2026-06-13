@@ -2,11 +2,14 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -212,4 +215,32 @@ func (em *EpisodicMem) Consolidate(ctx context.Context, semantic *SemanticMem) e
 		}
 	}
 	return nil
+}
+
+// MarkCold 找出 before 时间点之前的 active 事件，并将其冷冻（cold=1）。
+// 返回更新的记录数。
+func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error) {
+	if em.store == nil {
+		return 0, nil
+	}
+
+	// 这里更新数据库表 episodic_events 的 cold 字段
+	query := "UPDATE episodic_events SET cold = 1 WHERE session_id = ? AND timestamp < ? AND cold = 0"
+	if sqlStore, ok := em.store.(interface {
+		Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+	}); ok {
+		result, err := sqlStore.Exec(ctx, query, sessionID, before.Unix())
+		if err != nil {
+			return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: mark cold failed", err)
+		}
+
+		affected, err := result.RowsAffected()
+		if err != nil {
+			//nolint:nilerr
+			return 0, nil
+		}
+
+		return int(affected), nil
+	}
+	return 0, nil
 }

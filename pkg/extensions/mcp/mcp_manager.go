@@ -299,10 +299,10 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 // makeMCPToolFn 创建调用 MCP 工具的富执行函数。
 // 返回完整 ToolResult（含 ImageParts），使用 CallToolTainted 进行污点保护反序列化（M07 §1 安全要求）。
 func makeMCPToolFn(client *MCPClient, mcpName string) action.InProcessRichFn {
-	return func(ctx context.Context, input []byte) (*protocol.ToolResult, error) {
+	return func(ctx context.Context, spec action.SandboxSpec) (*protocol.ToolResult, error) {
 		var args map[string]any
-		if len(input) > 0 {
-			json.Unmarshal(input, &args) //nolint:errcheck
+		if len(spec.Input) > 0 {
+			json.Unmarshal(spec.Input, &args) //nolint:errcheck
 		}
 		// CallToolTainted 内部执行 TaintPreservingDecoder，taint 通过 RegisterRich 传递
 		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)

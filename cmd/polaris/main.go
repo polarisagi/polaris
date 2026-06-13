@@ -43,6 +43,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/substrate/storage"
 	"github.com/polarisagi/polaris/pkg/substrate/updater"
 	"github.com/polarisagi/polaris/pkg/swarm"
+	"github.com/polarisagi/polaris/pkg/swarm/agents"
 	knowledgepkg "github.com/polarisagi/polaris/pkg/swarm/knowledge"
 	si "github.com/polarisagi/polaris/pkg/swarm/self_improve"
 	"github.com/polarisagi/polaris/pkg/swarm/supervisor"
@@ -376,8 +377,9 @@ func run() error { //nolint:gocyclo
 		containerSandbox = action.NewContainerSandbox(autoConf.Config.L3SandboxBackend, runtime.GOOS, autoConf.Config.Tier)
 		slog.Info("polaris: L3 container sandbox initialized", "backend", autoConf.Config.L3SandboxBackend)
 	}
+	mockProxy := action.NewMockProxy(store.DB())
 	inProcSandbox := action.NewInProcessSandbox()
-	wasmtimeSandbox := tool.NewWasmtimeSandbox(layout.Workspace)
+	wasmtimeSandbox := tool.NewWasmtimeSandbox(layout.Workspace, mockProxy)
 	// 内置工具直接信任，走 InProcess；Wasm 走 Wasmtime；LLM 生成代码/插件脚本走 Container 隔离。
 	sandboxRouter := action.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, cfg.System.Tier)
 	slog.Info("polaris: sandbox router initialized", "os", runtime.GOOS, "tier", cfg.System.Tier)
@@ -402,7 +404,7 @@ func run() error { //nolint:gocyclo
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
-	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, store.DB(), mktClient, installMgr, hitlGateway); err != nil {
+	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, store.DB(), mktClient, installMgr, hitlGateway, outboxWorker); err != nil {
 		slog.Warn("polaris: native extension tool registration partial failure", "err", err)
 	}
 	slog.Info("polaris: builtin tools registered, MCP manager initialized")
@@ -418,6 +420,14 @@ func run() error { //nolint:gocyclo
 		return recoveryHandler.Handle(ctx, rec.Payload)
 	})
 	slog.Info("polaris: ProviderRecoveryHandler registered to outbox for m1_provider_recovered")
+
+	// 注册 E5+E6 Handlers
+	semanticCompressHandler := agents.NewSemanticCompressHandler(mem.Semantic())
+	outboxWorker.RegisterHandler("semantic_compress", semanticCompressHandler.Handle)
+
+	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler()
+	outboxWorker.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
+	slog.Info("polaris: SemanticCompressHandler and ExtensionLibrarianHandler registered")
 
 	// ─── 6.5 Skill Library (L1 M6) ───────────────────────────────────────────
 	skillRegistry := skill.NewSQLiteRegistry(store.DB())
@@ -536,7 +546,7 @@ func run() error { //nolint:gocyclo
 			Name:        toolName,
 			SandboxTier: 1,
 		}
-		return sandboxRouter.Execute(ctx, tool, args)
+		return sandboxRouter.Execute(ctx, tool, args, protocol.TaintNone)
 	}, nil)
 	slog.Info("polaris: agent kernel & DAG executor initialized")
 	evalRunner.InjectAgent(&evalAgentAdapter{agent: agent})
@@ -706,7 +716,7 @@ func run() error { //nolint:gocyclo
 			}
 			return &protocol.ToolResult{Output: []byte(output)}, nil
 		}
-		return sandboxRouter.Execute(ctx, protocol.Tool{Name: name}, args)
+		return sandboxRouter.Execute(ctx, protocol.Tool{Name: name}, args, protocol.TaintNone)
 	})
 	httpServer.SetLogStore(logStore)
 	httpServer.SetEvalRunner(evalRunner)

@@ -11,8 +11,9 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
-// ReflexionEngine — Reflexion 反思链（内环失败处理）。
-// 架构文档: docs/arch/M09-Self-Improvement-Engine.md §2.1
+// ReflexionEngine 是 AgentHER (Hindsight Experience Replay) 的核心引擎。
+// 失败路径：Reflexion 三步（原有实现）。
+// 成功路径：success-after-replan → 完整轨迹提炼 → SurrealDB（见 ReplaySuccess 方法，待实现）。
 
 // FailureClass 区分失败类型，与 self_improve/engine.go 保持语义一致。
 // Uncontrollable 失败（网络/Provider 故障）不计入 MEMF，防止污染失败记忆池。
@@ -99,9 +100,14 @@ func (re *ReflexionEngine) Reflect(
 	taskType string,
 	result *TaskResult,
 	trajectory []Step,
+	replanCount int,
 ) (*Reflection, error) {
 	if result == nil || result.Success {
-		// 成功任务不需要反思
+		// AgentHER：如果是经过 replan 后才成功（replanCount > 0），
+		// 这是宝贵的"犯错→探索→纠偏"轨迹，写入 SurrealDB 技能库
+		if result != nil && result.Success && replanCount > 0 && len(trajectory) > 0 {
+			return re.replaySuccess(ctx, taskID, taskType, trajectory, replanCount)
+		}
 		return nil, nil
 	}
 
@@ -180,6 +186,41 @@ func (re *ReflexionEngine) Reflect(
 	}
 
 	return ref, nil
+}
+
+// replaySuccess 将成功纠偏轨迹提炼为 SurrealDB 技能记忆（AgentHER 核心）。
+//
+// 处理流程：
+//  1. 调用 LLM，输入完整 trajectory（含失败步骤和最终成功步骤）
+//  2. Prompt：提炼这次"犯错→成功"的关键洞察，输出 {"insight": "...", "tags": [...]}
+//  3. 将 insight 写入 SurrealDB：
+//     - FTSIndex(docID=taskID+"_her", text=insight)
+//     - GraphRelate(taskType, "learned_from_failure", insight_id, weight=float64(replanCount))
+//  4. 同时写入 reflection_memory 表：reflection_type='success_pattern'
+//
+// 注意：replaySuccess 异步执行（goroutine），不阻塞主反思流程。
+func (re *ReflexionEngine) replaySuccess(
+	ctx context.Context,
+	taskID, taskType string,
+	trajectory []Step,
+	replanCount int,
+) (*Reflection, error) {
+	go func() {
+		// 模拟 AgentHER 成功轨迹异步提炼逻辑
+		if re.llmInfer != nil {
+			prompt := fmt.Sprintf("Analyze successful trajectory after %d replans. Extract insight.", replanCount)
+			insight, _ := re.llmInfer(context.Background(), prompt)
+			// TODO: Write insight to SurrealDB and reflection_memory table
+			_ = insight
+		}
+	}()
+	return &Reflection{
+		TaskID:             taskID,
+		Cause:              "success_after_replan",
+		Counterfactual:     "",
+		GeneratedHeuristic: "",
+		CreatedAt:          time.Now().Unix(),
+	}, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

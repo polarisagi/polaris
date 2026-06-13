@@ -105,6 +105,26 @@ func RegisterBuiltinTools(
 		}
 	}
 
+	richDefs := []struct {
+		name string
+		fn   action.InProcessRichFn
+	}{
+		{"execute_wasm", makeExecuteWasmFn(allowedPaths)},
+	}
+
+	for _, d := range richDefs {
+		meta, err := LoadBuiltinToolMeta(d.name)
+		if err != nil {
+			slog.Warn("builtin_tools: skipped tool (missing metadata)", "tool", d.name, "err", err)
+			continue
+		}
+		sandbox.RegisterRich(meta.Name, d.fn, protocol.TaintHigh)
+		if err := toolReg.Register(meta); err != nil {
+			return perrors.Wrap(perrors.CodeInternal,
+				fmt.Sprintf("builtin_tools: register %q", d.name), err)
+		}
+	}
+
 	// 将 InProcessSandbox 绑定为工具注册表的真实执行器，替代 stub
 	toolReg.SetSandbox(sandbox)
 	return nil
@@ -1570,5 +1590,69 @@ func makeNotebookEditFn(allowedPaths []string) action.InProcessFn {
 			return nil, perrors.Wrap(perrors.CodeInternal, "notebook_edit: write failed", err)
 		}
 		return []byte(`{"status":"success"}`), nil
+	}
+}
+
+// ─── execute_wasm ─────────────────────────────────────────────────────────────
+
+func isPathAllowed(path string, allowedPaths []string) bool {
+	if len(allowedPaths) == 0 {
+		return true
+	}
+	cleanPath := filepath.Clean(path)
+	for _, allowed := range allowedPaths {
+		if strings.HasPrefix(cleanPath, filepath.Clean(allowed)) {
+			return true
+		}
+	}
+	return false
+}
+
+func makeExecuteWasmFn(allowedPaths []string) action.InProcessRichFn {
+	return func(ctx context.Context, spec action.SandboxSpec) (*protocol.ToolResult, error) {
+		var args struct {
+			Code      string `json:"code"`
+			Input     string `json:"input"`
+			Network   bool   `json:"network_allowed"`
+			MaxPages  int    `json:"max_pages"`
+			Workspace string `json:"workspace"`
+		}
+		if err := json.Unmarshal(spec.Input, &args); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInvalidInput, "invalid json", err)
+		}
+
+		cleanWorkspace := filepath.Clean(args.Workspace)
+		if !isPathAllowed(cleanWorkspace, allowedPaths) {
+			return nil, perrors.New(perrors.CodeInternal, "workspace path not allowed")
+		}
+
+		quota := CalculateWasmQuota(spec.SystemTier, spec.TaintLevel)
+		if args.MaxPages > 0 && args.MaxPages < quota.MemoryPages {
+			quota.MemoryPages = args.MaxPages
+		}
+
+		// 这里实际依赖 WasmtimeExecute FFI，如果是在纯 Go 层我们假设其内部处理了隔离
+		outJSON, err := WasmtimeExecute(
+			[]byte(args.Code),
+			args.Input,
+			cleanWorkspace,
+			quota.MemoryPages,
+			args.Network,
+			quota.Fuel,
+			quota.MaxMounts,
+		)
+
+		if err != nil {
+			//nolint:nilerr
+			return &protocol.ToolResult{
+				Success: false,
+				Error:   err.Error(),
+			}, nil
+		}
+
+		return &protocol.ToolResult{
+			Success: true,
+			Output:  []byte(outJSON),
+		}, nil
 	}
 }

@@ -30,7 +30,7 @@ func TestMakeExtensionSearchFn_InvalidJSON(t *testing.T) {
 // ── MakeExtensionInstallFn ────────────────────────────────────────────────────
 
 func TestMakeExtensionInstallFn_NilClient(t *testing.T) {
-	fn := MakeExtensionInstallFn(nil, nil, nil, nil)
+	fn := MakeExtensionInstallFn(nil, nil, nil, nil, nil)
 	_, err := fn(context.Background(), []byte(`{"id":"some-id"}`))
 	if err == nil {
 		t.Fatal("expected error with nil client")
@@ -41,7 +41,7 @@ func TestMakeExtensionInstallFn_NilClient(t *testing.T) {
 }
 
 func TestMakeExtensionInstallFn_InvalidJSON(t *testing.T) {
-	fn := MakeExtensionInstallFn(nil, nil, nil, nil)
+	fn := MakeExtensionInstallFn(nil, nil, nil, nil, nil)
 	_, err := fn(context.Background(), []byte("{bad json"))
 	if err == nil {
 		t.Fatal("invalid JSON input should return error")

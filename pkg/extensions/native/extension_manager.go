@@ -133,7 +133,7 @@ func findRegistryTarget(ctx context.Context, id string, db *sql.DB, client *mark
 }
 
 // MakeExtensionInstallFn creates an InProcessFn for installing official extensions.
-func MakeExtensionInstallFn(db *sql.DB, client *marketplace.MCPMarketplaceClient, installMgr *marketplace.Manager, hitlGateway protocol.HITL) action.InProcessFn {
+func MakeExtensionInstallFn(db *sql.DB, client *marketplace.MCPMarketplaceClient, installMgr *marketplace.Manager, hitlGateway protocol.HITL, outboxWriter protocol.OutboxWriter) action.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args installExtensionArgs
 		if err := json.Unmarshal(input, &args); err != nil {
@@ -183,6 +183,18 @@ func MakeExtensionInstallFn(db *sql.DB, client *marketplace.MCPMarketplaceClient
 		}
 
 		slog.Info("native: installed extension successfully", "id", args.ID, "dir", installDir)
+
+		// 投递 Outbox 任务给 ExtensionLibrarian 异步处理
+		if outboxWriter != nil {
+			_ = outboxWriter.Write(ctx, protocol.OutboxEntry{
+				TargetEngine:   "extension_librarian",
+				Operation:      "index_extension",
+				Scope:          "extension:" + args.ID,
+				Payload:        []byte(`{"extension_id":"` + args.ID + `"}`),
+				IdempotencyKey: "index_ext_" + args.ID,
+			})
+		}
+
 		result := map[string]string{
 			"status":        "success",
 			"id":            args.ID,

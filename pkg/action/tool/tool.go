@@ -32,7 +32,7 @@ type InMemoryToolRegistry struct {
 
 // SandboxExecutor 是工具注册表最小执行器接口（速率限前需要工具元数据）。
 type SandboxExecutor interface {
-	Execute(ctx context.Context, name string, input []byte) ([]byte, error)
+	Execute(ctx context.Context, name string, input []byte, taintLevel protocol.TaintLevel) ([]byte, error)
 }
 
 var _ protocol.ToolRegistry = (*InMemoryToolRegistry)(nil)
@@ -153,7 +153,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}
 
 	// 真实 Sandbox 执行路径
-	out, execErr := sb.Execute(ctx, name, input)
+	out, execErr := sb.Execute(ctx, name, input, taintLevel)
 	if execErr != nil {
 		return &protocol.ToolResult{ //nolint:nilerr
 			Success:    false,

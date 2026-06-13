@@ -22,13 +22,14 @@ func RegisterExtensionTools(
 	marketplaceClient *marketplace.MCPMarketplaceClient,
 	installMgr *marketplace.Manager,
 	hitlGateway protocol.HITL,
+	outboxWriter protocol.OutboxWriter,
 ) error {
 	defs := []struct {
 		name string
 		fn   action.InProcessFn
 	}{
 		{"search_extension", MakeExtensionSearchFn(db, marketplaceClient)},
-		{"install_extension", MakeExtensionInstallFn(db, marketplaceClient, installMgr, hitlGateway)},
+		{"install_extension", MakeExtensionInstallFn(db, marketplaceClient, installMgr, hitlGateway, outboxWriter)},
 	}
 
 	for _, d := range defs {

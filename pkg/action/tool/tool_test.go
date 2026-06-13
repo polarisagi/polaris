@@ -43,7 +43,7 @@ type mockSandbox struct {
 	err    error
 }
 
-func (s *mockSandbox) Execute(_ context.Context, _ string, _ []byte) ([]byte, error) {
+func (s *mockSandbox) Execute(_ context.Context, _ string, _ []byte, _ protocol.TaintLevel) ([]byte, error) {
 	return s.output, s.err
 }
 

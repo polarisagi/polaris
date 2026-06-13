@@ -13,7 +13,7 @@ type mockReflector struct {
 	calls atomic.Int32
 }
 
-func (m *mockReflector) Reflect(_ context.Context, _, _ string, _ *TaskResult, _ []Step) (*Reflection, error) {
+func (m *mockReflector) Reflect(_ context.Context, _, _ string, _ *TaskResult, _ []Step, _ int) (*Reflection, error) {
 	m.calls.Add(1)
 	return &Reflection{}, nil
 }

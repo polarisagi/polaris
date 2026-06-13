@@ -79,6 +79,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 		// 2. System 1/2 Routing & World Model Inference Skip
 		// 如果在 S_PERCEIVE 阶段，且 SurpriseIndex 很低 (<0.3)，走 FastPath 跳过 LLM
+		// System I 快思考路径：SurpriseIndex < 0.3 时直接旁路 LLM，对应三轨推理引擎的"降维"轨道。
 		if a.sm.Current() == protocol.AgentStatePerceive {
 			// FastPath (M09 Logic Collapse): 跳过 S_PERCEIVE LLM 推理，产生合成感知结果。
 			// 不操作 DAGModel/ExecuteResult——外部注入的 DAGModel 保持不变。
@@ -105,6 +106,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			}
 
 			// PRM 多候选路径：并发生成 N 个方案，打分选最优。
+			// System II 慢思考路径（中级）：PRM Judge Agent 对 N 个 DAG 候选方案打分，
+			// 选出最优方案执行。对应三轨推理引擎的"升维-PRM轨道"。
 			if a.prm != nil &&
 				a.sCtx.TaskModel != nil &&
 				a.prm.ShouldActivate(a.sCtx.TaskModel.Complexity) {
@@ -411,6 +414,36 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 	// 将 ToolRegistry.ExecuteTool 绑定为 DAGExecutor 的工具执行函数
 	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel protocol.TaintLevel) (*protocol.ToolResult, error) {
+		if toolName == "spawn_planner" {
+			// spawn_planner 特殊处理：不走普通工具执行路径，而是：
+			// 1. 发送 InterruptRequest{Action: InterruptResume}（挂起自身，等待 whisperChan）
+			// 2. 返回特殊的待定结果，主脑将依靠 PlannerPool 推送的结果恢复
+			// 3. 在这里不直接创建 PlannerPool，而是通过专门的回调或外层触发，
+			// 或者如果允许的话，在这里异步启动 PlannerPool。
+			// (稍后将通过 go func() 启动 PlannerPool)
+
+			// 解析参数
+			var argsMap map[string]string
+			_ = json.Unmarshal(args, &argsMap)
+			goal := argsMap["goal"]
+			taskType := argsMap["task_type"]
+			if taskType == "" {
+				taskType = "general"
+			}
+
+			if a.plannerSpawner != nil {
+				go a.plannerSpawner(ctx, goal, taskType, a.provider)
+			}
+
+			// 发送挂起意图
+			go func() { _ = a.SendIntent(protocol.TriggerInterruptReceived) }()
+
+			return &protocol.ToolResult{
+				Success: true,
+				Output:  []byte("Planner pool spawned, agent suspended waiting for whisper."),
+			}, nil
+		}
+
 		tool, err := a.toolRegistry.Lookup(toolName)
 		isIdempotent := true
 		if err == nil {

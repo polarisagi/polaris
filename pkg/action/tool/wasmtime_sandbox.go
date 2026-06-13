@@ -11,13 +11,19 @@ import (
 // WasmtimeSandbox 实现 SandboxProvider，利用 Rust Wasmtime 引擎执行 Wasm 字节码。
 type WasmtimeSandbox struct {
 	workspaceDir string
+	mockProxy    *action.MockProxy
 }
 
 // NewWasmtimeSandbox 初始化 Wasmtime 沙箱。
-func NewWasmtimeSandbox(workspaceDir string) *WasmtimeSandbox {
+func NewWasmtimeSandbox(workspaceDir string, mockProxy *action.MockProxy) *WasmtimeSandbox {
 	// 尝试初始化 Wasmtime FFI，失败（如无 dylib）会在 WasmtimeExecute 时报错拦截。
 	_ = WasmtimeInit()
-	return &WasmtimeSandbox{workspaceDir: workspaceDir}
+	// 初始化 Wasmtime Warm-Pool，预热 5 个实例
+	_ = WasmtimePoolInit(5)
+	return &WasmtimeSandbox{
+		workspaceDir: workspaceDir,
+		mockProxy:    mockProxy,
+	}
 }
 
 // Level 返回沙箱安全层级 (L2)。
@@ -27,6 +33,11 @@ func (s *WasmtimeSandbox) Level() int {
 
 // Run 执行 Wasm 沙箱调用。
 func (s *WasmtimeSandbox) Run(ctx context.Context, spec action.SandboxSpec) (*protocol.ToolResult, error) {
+	if spec.DryRunMode && s.mockProxy != nil {
+		// MockProxy 拦截 DryRun 执行
+		return s.mockProxy.Execute(ctx, spec.ToolName, spec.Input)
+	}
+
 	start := time.Now()
 
 	// quotaMs := spec.CPUQuotaMs
@@ -40,14 +51,18 @@ func (s *WasmtimeSandbox) Run(ctx context.Context, spec action.SandboxSpec) (*pr
 		networkAllowed = true
 	}
 
+	// 动态计算配额
+	quota := CalculateWasmQuota(spec.SystemTier, spec.TaintLevel)
+
 	// 执行 FFI 调用
-	// 注意：Wasm 引擎内存页计算目前传递硬编码 16 (16*64KB = 1MB)，后续可由 cfg 提供
 	outJSON, execErr := WasmtimeExecute(
 		spec.ScriptBytes,
 		string(spec.Input),
 		s.workspaceDir,
-		16, // maxPages
+		quota.MemoryPages,
 		networkAllowed,
+		quota.Fuel,
+		quota.MaxMounts,
 	)
 
 	latency := time.Since(start).Milliseconds()

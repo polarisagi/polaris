@@ -114,6 +114,23 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 	return nil
 }
 
+// MarkColdEpisodicEvents 滑动窗口算法：找出 1 小时以前且未被固化的事件，打上 cold 标签。
+// 这是短程记忆降维 (C2) 的实现。
+func (p *ConsolidationPipeline) MarkColdEpisodicEvents(ctx context.Context, sessionID string) error {
+	if p.episodic == nil {
+		return nil
+	}
+
+	// 1 小时前的事件
+	before := time.Now().Add(-1 * time.Hour)
+	_, err := p.episodic.MarkCold(ctx, sessionID, before)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "consolidation: failed to mark cold episodic events", err)
+	}
+
+	return nil
+}
+
 // ─── Stage 1 ─────────────────────────────────────────────────────────────────
 
 // extractEntitiesAndRelations 从 Episodic 事件中提取实体与关系。

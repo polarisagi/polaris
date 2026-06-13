@@ -34,6 +34,10 @@ func (m *mockEpisodicMem) Append(ctx context.Context, ev protocol.Event) error {
 	return nil
 }
 
+func (m *mockEpisodicMem) MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error) {
+	return 0, nil
+}
+
 func (m *mockEpisodicMem) Query(ctx context.Context, q protocol.EpisodicQuery) ([]protocol.ScoredEvent, error) {
 	m.queries = append(m.queries, q)
 	var results []protocol.ScoredEvent

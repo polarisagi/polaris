@@ -22,22 +22,24 @@ import (
 
 // Agent 是系统核心执行单元——一个 goroutine，空闲时挂起。
 type Agent struct {
-	ID           string
-	db           *sql.DB
-	intent       chan protocol.AgentTrigger
-	sm           *StateMachine
-	sCtx         *StateContext
-	Config       AgentConfig
-	ctx          context.Context
-	cancel       context.CancelFunc
-	taintGate    TaintGate
-	provider     protocol.Provider     // LLM 调用入口（由 M1 提供）
-	policyGate   protocol.PolicyGate   // Cedar 策略引擎（由 M11 提供）
-	hitl         protocol.HITL         // 人工审批网关
-	toolRegistry protocol.ToolRegistry // 工具注册表（由 M7 提供）
-	memory       protocol.Memory       // 四层记忆系统（由 M5 提供）
-	prm          *prm.DefaultPRM       // 可选；nil 时跳过多候选打分
-	scorer       *stepScorer           // Adaptive Max-Steps 打分器
+	ID             string
+	db             *sql.DB
+	intent         chan protocol.AgentTrigger
+	sm             *StateMachine
+	sCtx           *StateContext
+	Config         AgentConfig
+	ctx            context.Context
+	cancel         context.CancelFunc
+	taintGate      TaintGate
+	provider       protocol.Provider             // LLM 调用入口（由 M1 提供）
+	policyGate     protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
+	hitl           protocol.HITL                 // 人工审批网关
+	toolRegistry   protocol.ToolRegistry         // 工具注册表（由 M7 提供）
+	memory         protocol.Memory               // 四层记忆系统（由 M5 提供）
+	prm            *prm.DefaultPRM               // 可选；nil 时跳过多候选打分
+	scorer         *stepScorer                   // Adaptive Max-Steps 打分器
+	whisperChan    <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
+	plannerSpawner func(ctx context.Context, goal, taskType string, provider protocol.Provider)
 }
 
 type AgentConfig struct {
@@ -185,6 +187,19 @@ func (a *Agent) InjectPolicyGate(pg protocol.PolicyGate) { a.policyGate = pg }
 
 // InjectHITL 注入人工审批网关。
 func (a *Agent) InjectHITL(hitl protocol.HITL) { a.hitl = hitl }
+
+// InjectWhisperChan 注入耳语接收通道（由顶层 wire 调用，可 nil）。
+func (a *Agent) InjectWhisperChan(ch <-chan protocol.MemoryWhisper) {
+	a.whisperChan = ch
+	if a.sCtx != nil {
+		a.sCtx.WhisperChan = ch
+	}
+}
+
+// InjectPlannerSpawner 注入 PlannerPool 构造器，打破循环依赖
+func (a *Agent) InjectPlannerSpawner(fn func(ctx context.Context, goal, taskType string, provider protocol.Provider)) {
+	a.plannerSpawner = fn
+}
 
 // SetTaskIntent 设置任务意图（供 M8 Orchestrator 注入黑板任务信息）。
 func (a *Agent) SetTaskIntent(intent []byte) {
