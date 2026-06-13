@@ -14,6 +14,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // Gate 是 PolicyGate 的 substrate 层实现。
@@ -315,7 +317,7 @@ func (g *Gate) IsAuthorized(
 	}
 	ch := make(chan result, 1)
 	go func() {
-		allowed, err := g.evaluate(principal, action, resource, evalCtx)
+		allowed, err := g.evaluate(ctx, principal, action, resource, evalCtx)
 		ch <- result{allowed, err}
 	}()
 
@@ -405,23 +407,25 @@ func (g *Gate) AddPermitRule(r PermitRule) {
 }
 
 // evaluate 执行实际策略评估（在 goroutine 内调用以支持超时）。
-func (g *Gate) evaluate(principal, action, resource string, ctx map[string]any) (bool, error) {
+func (g *Gate) evaluate(ctx context.Context, principal, action, resource string, evalCtx map[string]any) (bool, error) {
 	// Step 0: 如果 Cedar 引擎加载了策略，优先通过 Rust FFI 评估
 	if g.cedar != nil && g.cedar.PolicyCount() > 0 {
 		pUID := formatCedarUID("Principal", principal)
 		aUID := formatCedarUID("Action", action)
 		rUID := formatCedarUID("Resource", resource)
 
-		allowed, reason, err := g.cedar.Evaluate(pUID, aUID, rUID, ctx)
+		allowed, reason, err := g.cedar.Evaluate(pUID, aUID, rUID, evalCtx)
 		// 如果 Cedar 评估成功且未抛出 FFI 层级的异常，则直接返回其结果
 		if err == nil {
 			// 将 Cedar reason 注入 ctx（或者只是为了区分）
-			if !allowed && ctx != nil {
-				ctx["cedar_reason"] = reason
+			if !allowed && evalCtx != nil {
+				evalCtx["cedar_reason"] = reason
 			}
 			return allowed, nil
 		}
 		// 若 Cedar 失败 (如 JSON marshal 错误)，降级到 Go 兜底规则
+		observability.GlobalCedarDegradedTotal.Add(1)
+		slog.WarnContext(ctx, "cedar ffi failed, degrading to go rules", "error", err)
 	}
 
 	g.mu.RLock()
@@ -429,14 +433,14 @@ func (g *Gate) evaluate(principal, action, resource string, ctx map[string]any) 
 
 	// Step 1: Forbid 规则优先（任意一条命中 → deny）
 	for _, fr := range g.forbidRules {
-		if fr.MatchFn(principal, action, resource, ctx) {
+		if fr.MatchFn(principal, action, resource, evalCtx) {
 			return false, nil
 		}
 	}
 
 	// Step 2: Permit 规则（任意一条命中 → allow）
 	for _, pr := range g.permitRules {
-		if pr.MatchFn(principal, action, resource, ctx) {
+		if pr.MatchFn(principal, action, resource, evalCtx) {
 			return true, nil
 		}
 	}

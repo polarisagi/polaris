@@ -28,6 +28,9 @@ var (
 	// GlobalKillswitchStage 全局 KillSwitch 阶段原子量（0=Normal…3=FullStop）。
 	// killswitch.go 的 StateChangeCallback 写入；M13 handleStatus 读取。
 	GlobalKillswitchStage atomic.Int32
+
+	// GlobalCedarDegradedTotal tracks the number of times Cedar FFI evaluation failed.
+	GlobalCedarDegradedTotal atomic.Int64
 )
 
 // TokenBurnRate tracks token consumption rate for circuit breaking.
@@ -424,6 +427,12 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_surrealdb_index_size_mb SurrealDB-Core index memory usage\n")
 		fmt.Fprintf(w, "# TYPE polaris_surrealdb_index_size_mb gauge\n")
 		fmt.Fprintf(w, "polaris_surrealdb_index_size_mb %d\n", ls)
+
+		// ── Cedar Degraded Total ──────────────────────────────────────────────────
+		cd := GlobalCedarDegradedTotal.Load()
+		fmt.Fprintf(w, "# HELP polaris_cedar_degraded_total Total number of Cedar FFI evaluation failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_cedar_degraded_total counter\n")
+		fmt.Fprintf(w, "polaris_cedar_degraded_total %d\n", cd)
 	})
 }
 
