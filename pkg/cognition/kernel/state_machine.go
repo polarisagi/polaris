@@ -47,6 +47,7 @@ type StateMachine struct {
 type StateContext struct {
 	AgentID       string
 	SessionID     string
+	TaskID        string                  // 当前认领的 Blackboard task_id；由 Worker 在 Run() 前通过 SetTaskID() 注入
 	RawIntentTS   substrate.TaintedString // 原始自然语言意图 (外部输入，带污点)
 	TaskModel     *TaskModel              // S_PERCEIVE 产出
 	DAGModel      *DAGModel               // S_PLAN 产出

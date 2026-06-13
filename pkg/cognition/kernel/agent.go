@@ -218,6 +218,11 @@ func (a *Agent) InjectOutboxWriter(ow protocol.OutboxWriter) {
 	a.outboxWriter = ow
 }
 
+// SetTaskID 由 Worker 在调用 Run() 前注入 Blackboard task_id，供内核写 tasks 表时使用。
+func (a *Agent) SetTaskID(id string) {
+	a.sCtx.TaskID = id
+}
+
 // SetTaskIntent 设置任务意图（供 M8 Orchestrator 注入黑板任务信息）。
 func (a *Agent) SetTaskIntent(intent []byte) {
 	intentStr := string(intent)
