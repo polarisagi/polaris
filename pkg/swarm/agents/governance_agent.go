@@ -32,6 +32,7 @@ type GovernanceAgent struct {
 	db            *sql.DB             // 读写 outbox 幂等键
 	memPressure   *atomic.Int32       // 共享内存压力等级（Memory Agent 也读这个）
 	probeInterval time.Duration       // 内存探测间隔，默认 5s
+	auditAgent    *SecurityAuditAgent // nil = 跳过 LLM 语义审查
 }
 
 // MemPressureLevel 内存压力等级。
@@ -85,6 +86,33 @@ func (ga *GovernanceAgent) CheckIdempotent(ctx context.Context, operationHash st
 		return nil, false
 	}
 	return payload, true
+}
+
+// WithSecurityAuditAgent 注入安全审查代理
+func (ga *GovernanceAgent) WithSecurityAuditAgent(a *SecurityAuditAgent) {
+	ga.auditAgent = a
+}
+
+// ValidateCodeWithAudit 两层安全审查入口。
+// Layer 1（同步）：规则命中 → 立即返回 error。
+// Layer 2（异步）：规则通过 → 后台 LLM 审查，发现风险通过 HITL 通知用户。
+// taskID/agentID 为空时自动生成临时 ID。
+func (ga *GovernanceAgent) ValidateCodeWithAudit(
+	ctx context.Context,
+	language string,
+	code []byte,
+	caps CapabilitySet,
+	taskID, agentID string,
+) error {
+	// Layer 1: 硬边界
+	if err := ga.ValidateCode(language, code, caps); err != nil {
+		return err
+	}
+	// Layer 2: AI 审查（异步，不阻塞）
+	if ga.auditAgent != nil {
+		ga.auditAgent.AuditAsync(ctx, language, code, taskID, agentID)
+	}
+	return nil
 }
 
 // RecordExecution 记录执行成功的操作到 outbox（用于下次幂等命中）。
