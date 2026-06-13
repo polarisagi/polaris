@@ -165,19 +165,6 @@ func parseAuditResult(raw string) (*AuditResult, error) {
 	return &result, nil
 }
 
-func severityRank(s string) int {
-	switch s {
-	case "danger", "high":
-		return 3
-	case "warning", "medium":
-		return 2
-	case "info", "low":
-		return 1
-	default:
-		return 0
-	}
-}
-
 func (a *SecurityAuditAgent) hasSignificantRisk(r *AuditResult) bool {
 	for _, item := range r.RiskItems {
 		if item.Severity == "warning" || item.Severity == "danger" {
@@ -357,23 +344,6 @@ func sanitizeCode(code []byte) string {
 		s = "// [SECURITY: injection tokens removed]\n" + s
 	}
 	return s
-}
-
-// extractJSON 从 LLM 响应中提取 JSON（兼容 Markdown 代码块）。
-func extractJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "```") {
-		lines := strings.Split(raw, "\n")
-		if len(lines) > 2 {
-			raw = strings.Join(lines[1:len(lines)-1], "\n")
-		}
-	}
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start >= 0 && end > start {
-		return raw[start : end+1]
-	}
-	return raw
 }
 
 func newAuditID() string {

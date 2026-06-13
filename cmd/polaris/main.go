@@ -431,9 +431,10 @@ func run() error { //nolint:gocyclo
 	slog.Info("polaris: ProviderRecoveryHandler registered to outbox for m1_provider_recovered")
 
 	// 注册 E5+E6 Handlers
-	var llmInfer agents.LLMInferFunc = func(ctx context.Context, prompt string) (string, error) {
+	var llmInfer agents.LLMInferFunc = func(ctx context.Context, prompt string, opts ...protocol.InferOption) (string, error) {
 		if router != nil {
-			resp, err := router.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithModel("reasoning"))
+			inferOpts := append([]protocol.InferOption{protocol.WithModel("reasoning")}, opts...)
+			resp, err := router.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, inferOpts...)
 			if err != nil {
 				return "", err
 			}
