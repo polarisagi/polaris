@@ -52,8 +52,6 @@ M10 长期方向是消费 `M13-bis Extension Registry` 中声明了 `capability:
 
 **DocTree 持久化**: `PipelineImpl.Ingest` 将文档分块写入 `rag_chunks` SQLite 表（FTS5 支持）的同时，将 DocTree 序列化为 JSON 写入 `rag_docs` 表（uri 为主键，ON CONFLICT DO UPDATE 幂等）。
 
-> ⚠️ **当前实现偏差**：`DefaultIngestionPipeline.Ingest` 实际走 `StorageRouter.Route → BatchWrite`（KV Store），未写 SQLite `rag_chunks` 表，导致 FTS5 全文索引和 ContextExpander 无数据可读（P0 缺陷，ROUND17 修复中：改为 `INSERT INTO rag_chunks`）。
-
 **可观测性**: 同步延迟 >1800s → ALERT + 暂停非关键知识源。
 
 ### 1.3 文档树数据结构

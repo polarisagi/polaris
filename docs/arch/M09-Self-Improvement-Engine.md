@@ -171,7 +171,6 @@ SurpriseIndex 类型和 Compute/Route 实现见 `pkg/swarm/surprise.go`。Surpri
 
 五阶段发布门控：Gate 0 Eval Harness 离线回归（全量黄金用例 + Welch's t-test p<0.05）→ Gate 1 Shadow 1% 流量（Eval 结果不达标自动 Rollback）→ Gate 2 Shadow Execution 3-7 天（真实任务但不面用户，禁 write_network/privileged）→ Gate 3 Canary 阶梯推进（5%→25%→50%→100%，每步 24h 驻留；error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback）→ Gate 4 Full Rollout（旧版本保留 7 天）。
 
-> ⚠️ **代码偏差**：外环 `RolloutStats` 在 M9（`self_improve`）与 `pkg/swarm` 两包各有同名定义，字段基本一致但类型不互通。`Engine.handleEvalCompleted`（`engine.go:404`）调用 `AdvanceGate` 时仅填 `ErrorRate/BaselineErrorRate`，而 `ev`（`protocol.EvalCompletedPayload`）已有的 `SafetyViolations`/`P95LatencyMs`/`BaselineP95Ms` 被丢弃，导致 `CheckHardStop` 安全刹车从 Eval 路径无法触发（P1 缺陷，ROUND18 G2 修复中：补全三字段映射，无需新增任何结构体字段）。
 
 实现见 `pkg/swarm/rollout.go` (ProgressiveRollout) 和 `pkg/swarm/rollout_store.go` (SQLiteRolloutStore)。持久化状态表 `rollout_states` 新增 `eval_score`（Eval 得分）与 `shadow_ok`（影子确认标志）列。Gate 转换由三个方法驱动：`SubmitCandidate`（Gate 0→1，自动进入 Shadow）、`RecordEvalScore`（Eval 结果写入，不达标自动 Rollback）、`ConfirmShadow`（Gate 1→2，影子观测通过）；`AdvanceGate` 仅处理 Gate 2+ 的 Canary 推进，不覆盖 Gate 0/1 专属路径。硬停止条件全局适用于所有 Gate。`StagingPipeline` 接口保持稳定，M13 TrafficSplitter 按 `canary_percent` 分发。
 
