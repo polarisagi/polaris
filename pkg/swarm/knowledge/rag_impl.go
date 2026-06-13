@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -263,79 +262,42 @@ func (ce *ContextExpander) Expand(ctx context.Context, chunks []Chunk) ([]Augmen
 	return results, nil
 }
 
-// StructuredNavigator 在摘要索引中导航，定位目标 DocNode 后再做内容检索。
-// 仅当 FeatureDeepRAG 开启时调用。
+// StructuredNavigator 在摘要索引中导航，用 FTS5 BM25 定位最相关的 doc_id。
+// 注：rag_chunks 表无 embedding 字段，向量在 SurrealDB-Core；此处使用 BM25 全文搜索。
 type StructuredNavigator struct {
-	router   *substrate.StorageRouter
-	embedder substrate.Embedder
+	router *substrate.StorageRouter
 }
 
-func NewStructuredNavigator(router *substrate.StorageRouter, embedder substrate.Embedder) *StructuredNavigator {
-	return &StructuredNavigator{router: router, embedder: embedder}
+func NewStructuredNavigator(router *substrate.StorageRouter) *StructuredNavigator {
+	return &StructuredNavigator{router: router}
 }
 
-// Navigate 返回与 query 最相关的 docScope（docID 或 ""=全局降级）。
+// Navigate 用 FTS5 在 summary 块中全文搜索，返回最相关的 doc_id（""=降级全文搜索）。
 func (sn *StructuredNavigator) Navigate(ctx context.Context, query string) (string, error) {
-	emb32 := sn.embedder.Embed(query)
-	if len(emb32) == 0 {
-		return "", nil // 失败降级：全文搜索
+	if query == "" {
+		return "", nil
 	}
-	emb := make([]float64, len(emb32))
-	for i, v := range emb32 {
-		emb[i] = float64(v)
-	}
-
 	db, err := sn.router.GetPrimary()
 	if err != nil {
 		return "", nil //nolint:nilerr
 	}
 
-	// 在 rag_chunks 中找 chunk_type='summary' 的摘要块，按向量距离排序
-	// 此处使用简化的余弦相似度（实际可接 SurrealDB vec_search）
-	rows, err := db.QueryContext(ctx,
-		`SELECT doc_id, embedding FROM rag_chunks WHERE chunk_type='summary' LIMIT 100`)
-	if err != nil {
+	// FTS5 全文搜索 summary 块，取 BM25 rank 最高的 doc_id
+	// summary 块在摘要生成完成前为空，此时返回 "" 自动降级全文搜索
+	row := db.QueryRowContext(ctx, `
+        SELECT rc.doc_id
+        FROM rag_chunks_fts fts
+        JOIN rag_chunks rc ON rc.rowid = fts.rowid
+        WHERE rag_chunks_fts MATCH ?
+          AND rc.chunk_type = 'summary'
+        ORDER BY rank
+        LIMIT 1`, query)
+
+	var docID string
+	if err := row.Scan(&docID); err != nil {
 		return "", nil //nolint:nilerr
 	}
-	defer rows.Close()
-
-	bestDocID := ""
-	bestScore := 0.5 // RelevanceScore 低于此值时 fallback 全文搜索
-	for rows.Next() {
-		var docID string
-		var embBytes []byte
-		if err := rows.Scan(&docID, &embBytes); err != nil {
-			continue
-		}
-		// 计算余弦相似度（embedding 存储为 JSON float64 数组）
-		var docEmb []float64
-		if err := json.Unmarshal(embBytes, &docEmb); err != nil {
-			continue
-		}
-		score := cosineSimilarity(emb, docEmb)
-		if score > bestScore {
-			bestScore = score
-			bestDocID = docID
-		}
-	}
-	return bestDocID, nil // "" 表示降级全文搜索
-}
-
-// cosineSimilarity 计算两个向量的余弦相似度（内联辅助函数）。
-func cosineSimilarity(a, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	return docID, nil
 }
 
 // QueryPlanner 将复杂查询分解为子查询。
