@@ -21,6 +21,7 @@ const SURREAL_NOT_FOUND: c_int = 1;
 const SURREAL_ERR_UTF8: c_int = -1;
 const SURREAL_ERR_LOCK: c_int = -2;
 const SURREAL_ERR_PANIC: c_int = -3;
+const SURREAL_ERR_QUERY: c_int = -4;
 
 // ─── 运行时配置（VPS 优化：surreal_open 前调用 surreal_set_worker_threads）──────
 // 0 = auto（min(CPU 核心数, 4)），> 0 = 显式线程数。
@@ -282,18 +283,23 @@ pub unsafe extern "C" fn surreal_kv_get(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let res: Option<VRow> = guard
-            .rt
-            .block_on(async {
-                let mut resp = guard
-                    .db
-                    .query("SELECT v FROM kv WHERE k = $k LIMIT 1")
-                    .bind(("k", key_hex))
-                    .await?;
-                let rows: Vec<VRow> = resp.take(0)?;
-                Ok::<Option<VRow>, surrealdb::Error>(rows.into_iter().next())
-            })
-            .unwrap_or(None);
+        let res_result = guard.rt.block_on(async {
+            let mut resp = guard
+                .db
+                .query("SELECT v FROM kv WHERE k = $k LIMIT 1")
+                .bind(("k", key_hex))
+                .await?;
+            let rows: Vec<VRow> = resp.take(0)?;
+            Ok::<Option<VRow>, surrealdb::Error>(rows.into_iter().next())
+        });
+
+        let res = match res_result {
+            Ok(opt) => opt,
+            Err(e) => {
+                eprintln!("[surreal_kv_get] Query error: {e}");
+                return SURREAL_ERR_QUERY;
+            }
+        };
 
         match res {
             None => SURREAL_NOT_FOUND,
@@ -341,17 +347,18 @@ pub unsafe extern "C" fn surreal_kv_put(
             Err(_) => return SURREAL_ERR_LOCK,
         };
         // FIX: type::record('kv', $k) → record ID = kv:$k_hex，UPSERT 天然幂等无竞态
-        guard.rt.block_on(async {
-            let res = guard
+        let q_res = guard.rt.block_on(async {
+            guard
                 .db
                 .query("UPSERT type::record('kv', $k) SET k = $k, v = $v")
                 .bind(("k", k))
                 .bind(("v", v))
-                .await;
-            if let Err(e) = res {
-                eprintln!("[surreal_kv_put] Query error: {e}");
-            }
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_kv_put] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -376,13 +383,17 @@ pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        guard.rt.block_on(async {
-            let _ = guard
+        let q_res = guard.rt.block_on(async {
+            guard
                 .db
                 .query("DELETE type::record('kv', $k)")
                 .bind(("k", k))
-                .await;
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_kv_delete] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -482,15 +493,19 @@ pub unsafe extern "C" fn surreal_vec_upsert(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        guard.rt.block_on(async {
+        let q_res = guard.rt.block_on(async {
             // FIX: type::record('vectors', $id) → record ID = vectors:$id，幂等
-            let _ = guard
+            guard
                 .db
                 .query("UPSERT type::record('vectors', $id) SET embed = $embed")
                 .bind(("id", id_str))
                 .bind(("embed", embed_vec))
-                .await;
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_vec_upsert] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -516,13 +531,17 @@ pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        guard.rt.block_on(async {
-            let _ = guard
+        let q_res = guard.rt.block_on(async {
+            guard
                 .db
                 .query("DELETE type::record('vectors', $id)")
                 .bind(("id", id_str))
-                .await;
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_vec_delete] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -617,8 +636,8 @@ pub unsafe extern "C" fn surreal_graph_relate(
         // FIX: type::record('edges', $ek) 确定性 ID = edges:(from\x1fet\x1fto)
         // UPSERT 保证同一条边最多一条记录，同时支持 weight 更新
         let edge_key = edge_record_key(&from, &et, &to);
-        guard.rt.block_on(async {
-            let _ = guard
+        let q_res = guard.rt.block_on(async {
+            guard
                 .db
                 .query(
                     "UPSERT type::record('edges', $ek) \
@@ -629,8 +648,12 @@ pub unsafe extern "C" fn surreal_graph_relate(
                 .bind(("et", et))
                 .bind(("to", to))
                 .bind(("weight", weight))
-                .await;
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_graph_relate] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -664,22 +687,26 @@ pub unsafe extern "C" fn surreal_graph_delete_edges(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        guard.rt.block_on(async {
+        let q_res = guard.rt.block_on(async {
             if et.is_empty() {
-                let _ = guard
+                guard
                     .db
                     .query("DELETE edges WHERE from_id = $from")
                     .bind(("from", from))
-                    .await;
+                    .await
             } else {
-                let _ = guard
+                guard
                     .db
                     .query("DELETE edges WHERE from_id = $from AND edge_type = $et")
                     .bind(("from", from))
                     .bind(("et", et))
-                    .await;
+                    .await
             }
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_graph_delete_edges] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -906,15 +933,19 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        guard.rt.block_on(async {
+        let q_res = guard.rt.block_on(async {
             // FIX: 原子 UPSERT，record ID = docs:$id，天然唯一
-            let _ = guard
+            guard
                 .db
                 .query("UPSERT type::record('docs', $id) SET body = $body")
                 .bind(("id", id))
                 .bind(("body", body))
-                .await;
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_fts_index] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
@@ -940,13 +971,17 @@ pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        guard.rt.block_on(async {
-            let _ = guard
+        let q_res = guard.rt.block_on(async {
+            guard
                 .db
                 .query("DELETE type::record('docs', $id)")
                 .bind(("id", id))
-                .await;
+                .await
         });
+        if let Err(e) = q_res {
+            eprintln!("[surreal_fts_delete] Query error: {e}");
+            return SURREAL_ERR_QUERY;
+        }
         SURREAL_OK
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
