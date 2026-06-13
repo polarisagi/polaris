@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate"
 )
 
 // budgetWarnPct / budgetCriticalPct：Token 预算分级阈值（百分比，整数）。
@@ -170,6 +172,17 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			reqMsgs := llmEff.PromptFn(a.toProtocolCtx())
 			resp, inferErr = a.provider.Infer(ctx, reqMsgs, protocol.WithModel(llmEff.ModelPool), protocol.WithThinkingMode(llmEff.ThinkingMode))
 			if inferErr != nil {
+				if errors.Is(inferErr, substrate.ErrAllProvidersFailed) {
+					// 写 DB：标记任务为 suspended，供 recovery.go 恢复扫描
+					if a.db != nil {
+						updateSQL := `UPDATE tasks SET status='suspended', suspend_reason='provider_exhausted', updated_at=? WHERE task_id=?`
+						_, dbErr := a.db.ExecContext(ctx, updateSQL, time.Now().UTC(), a.sCtx.SessionID)
+						if dbErr != nil {
+							slog.Warn("agent: failed to write suspended status", "task_id", a.sCtx.SessionID, "err", dbErr)
+						}
+					}
+					// 继续原有的 Suspended 状态机转移逻辑（不 return，让 FSM 处理后续）
+				}
 				nextState, err = llmEff.OnFailure(a.toProtocolCtx(), inferErr)
 			} else {
 				// 累计分项 Token（Gap-A：分开记录供 Worker 写回 Blackboard）
