@@ -60,7 +60,7 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 	// idx_ep_embed_ver 偏索引（WHERE embed_model_version = ''）加速扫描
 	rows, queryErr := r.db.QueryContext(ctx,
 		`SELECT id, event_uuid, content FROM episodic_events
-		 WHERE embed_model_version = '' OR embed_model_version != ?
+		 WHERE (embed_model_version = '' OR embed_model_version != ?) AND cold = 0
 		 LIMIT ?`,
 		version, r.batchSize,
 	)
@@ -125,7 +125,7 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 	// 仅检测 ''，版本切换场景由调用方决策是否重新触发，避免无限循环
 	var cnt int
 	_ = r.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM episodic_events WHERE embed_model_version = ''`,
+		`SELECT COUNT(1) FROM episodic_events WHERE embed_model_version = '' AND cold = 0`,
 	).Scan(&cnt)
 
 	return processed, cnt > 0, nil

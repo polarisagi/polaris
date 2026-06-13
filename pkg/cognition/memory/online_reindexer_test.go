@@ -44,7 +44,8 @@ func newTestDB(t *testing.T) *sql.DB {
 			decay_weight        REAL    NOT NULL DEFAULT 1.0,
 			occurred_at         INTEGER,
 			embed_model_version TEXT    NOT NULL DEFAULT '',
-			event_uuid          TEXT    NOT NULL DEFAULT ''
+			event_uuid          TEXT    NOT NULL DEFAULT '',
+			cold                INTEGER NOT NULL DEFAULT 0
 		)
 	`)
 	if err != nil {
@@ -53,11 +54,11 @@ func newTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func insertEvent(t *testing.T, db *sql.DB, content, version string) int64 {
+func insertEvent(t *testing.T, db *sql.DB, content, version string, cold int) int64 {
 	t.Helper()
 	res, err := db.Exec(
-		`INSERT INTO episodic_events (content, embed_model_version) VALUES (?, ?)`,
-		content, version,
+		`INSERT INTO episodic_events (content, embed_model_version, cold) VALUES (?, ?, ?)`,
+		content, version, cold,
 	)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -73,9 +74,9 @@ func TestOnlineReindexer_IndexesUnindexedRows(t *testing.T) {
 	embedder := &stubEmbedder{version: "v2", dim: 4}
 	r := NewOnlineReindexer(db, embedder)
 
-	insertEvent(t, db, "hello world", "")    // 未索引
-	insertEvent(t, db, "go is great", "")    // 未索引
-	insertEvent(t, db, "already done", "v2") // 已是最新版本
+	insertEvent(t, db, "hello world", "", 0)    // 未索引
+	insertEvent(t, db, "go is great", "", 0)    // 未索引
+	insertEvent(t, db, "already done", "v2", 0) // 已是最新版本
 
 	processed, remaining, err := r.Run(context.Background())
 	if err != nil {
@@ -114,7 +115,7 @@ func TestOnlineReindexer_SkipsCurrentVersion(t *testing.T) {
 	embedder := &stubEmbedder{version: "v3", dim: 4}
 	r := NewOnlineReindexer(db, embedder)
 
-	insertEvent(t, db, "current", "v3") // 已是最新
+	insertEvent(t, db, "current", "v3", 0) // 已是最新
 
 	processed, remaining, err := r.Run(context.Background())
 	if err != nil {
@@ -125,6 +126,46 @@ func TestOnlineReindexer_SkipsCurrentVersion(t *testing.T) {
 	}
 	if remaining {
 		t.Error("remaining should be false when all rows are up to date")
+	}
+}
+
+func TestOnlineReindexer_SkipsColdEvents(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	embedder := &stubEmbedder{version: "v4", dim: 4}
+	r := NewOnlineReindexer(db, embedder)
+
+	insertEvent(t, db, "cold event", "", 1) // cold=1, 应该被跳过
+	insertEvent(t, db, "hot event", "", 0)  // cold=0, 正常填充
+
+	processed, remaining, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if processed != 1 {
+		t.Errorf("processed=%d, want 1", processed)
+	}
+	if remaining {
+		t.Error("remaining should be false")
+	}
+
+	// 验证 hot event 已更新
+	var ver string
+	if err := db.QueryRow(`SELECT embed_model_version FROM episodic_events WHERE content = 'hot event'`).Scan(&ver); err != nil {
+		t.Fatal(err)
+	}
+	if ver != "v4" {
+		t.Errorf("hot event embed_model_version=%q, want %q", ver, "v4")
+	}
+
+	// 验证 cold event 未更新
+	var coldVer string
+	if err := db.QueryRow(`SELECT embed_model_version FROM episodic_events WHERE content = 'cold event'`).Scan(&coldVer); err != nil {
+		t.Fatal(err)
+	}
+	if coldVer != "" {
+		t.Errorf("cold event embed_model_version=%q, want empty string", coldVer)
 	}
 }
 
