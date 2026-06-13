@@ -5,10 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/action/tool"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
@@ -77,28 +78,15 @@ func (h *HookRunner) exec(event string, env map[string]string, timeout time.Dura
 		return 0, "", errNotFound
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, path)
-	cmd.Env = append(os.Environ(), buildHookEnv(env)...)
-
-	var buf strings.Builder
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-
-	if runErr := cmd.Run(); runErr != nil {
+	ctx := context.Background()
+	exitCode, output, runErr := tool.RunHookScript(ctx, path, buildHookEnv(env), timeout)
+	if runErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			slog.Warn("hook: timeout", "event", event, "timeout", timeout, "err", perrors.New(perrors.CodeInternal, "log event"))
-			return 1, buf.String(), nil
 		}
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			return exitErr.ExitCode(), buf.String(), nil
-		}
-		return 1, buf.String(), runErr
+		return exitCode, output, runErr
 	}
-	return 0, buf.String(), nil
+	return exitCode, output, nil
 }
 
 func buildHookEnv(env map[string]string) []string {
