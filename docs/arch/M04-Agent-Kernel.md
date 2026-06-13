@@ -324,7 +324,7 @@ PII: 快照不含明文——ToolResult 经 M7 §4.3 Step 5 PostExecution Redact
 
 **S_REPLAN 降级**: M1 CircuitBreaker 熔断时，执行零 LLM 的确定性图剪枝（纯 Go 图遍历）：移除失败节点及其所有直接后继节点，注入 degraded_replan 标记。此步骤禁止任何 LLM 调用——剪枝逻辑为纯函数，幂等且可重放。
 
-**`ErrAllProvidersExhausted` 专项处理（全 Provider 熔断）**:
+**`ErrAllProvidersFailed` 专项处理（全 Provider 熔断）**:
   1. 确定性图剪枝后检查剩余 DAG 节点:
      (a) 有 System 1 可执行节点（SurpriseIndex <0.3，零 LLM，纯本地 Wasm/Go 技能）→ 继续执行，**不消耗 ReplanCount**；LLM 依赖节点等 Provider 恢复
      (b) 全部需 LLM → **不消耗 ReplanCount**，转 `Suspended(suspend_reason=provider_exhausted, provider_suspended_count++)`；Blackboard 写标记；调 `SessionPIIVault.SuspendSnapshot(ctx, taskID)` 持久化 PII

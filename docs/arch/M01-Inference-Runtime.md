@@ -29,7 +29,7 @@
 | inv_M1_02 | 每次 Infer/StreamInfer 须写 EventLog（全文 + usage） | M2 events 表审计 |
 | inv_M1_03 | L1/L2 路由严格零 LLM 调用——仅 L3 级联路由可用 LLM 判定 | code review 强制 |
 | inv_M1_04 | 流中断时 usage 标记 `estimated=true`，禁止静默丢弃 | M3 指标 `estimated` 标签 |
-| inv_M1_05 | CircuitBreaker 全熔断返回 ErrAllProvidersExhausted，不静默降级 | 集成测试 |
+| inv_M1_05 | CircuitBreaker 全熔断返回 ErrAllProvidersFailed，不静默降级 | 集成测试 |
 | inv_M1_06 | API Key 经 CredentialVault JIT 获取，`[]byte` 使用后 `subtle.ConstantTimeCopy` + memclr 清零 | CI `key_leak_lint` 扫描 |
 
 ---
@@ -229,7 +229,7 @@ CircuitBreaker 三态：Closed（正常）→ Open（熔断，冷却期拒绝请
 
 **StreamInfer Failover**：`StreamInfer` 与 `Infer` 同等纳入 CircuitBreaker 覆盖。每次 StreamInfer 调用记录延迟并更新 HealthScorer，若 Provider 返回错误则触发 Failover 切换至下一可用 Provider（逻辑与 Infer 路径一致）。流式错误中断时 usage 标记 `estimated=true`（inv_M1_04）。
 
-**Provider 恢复事件**: 当所有 Provider 均处于 Open 状态（`ErrAllProvidersExhausted` 已触发）后，任意一个 Provider 的 CircuitBreaker 完成 HalfOpen→Closed 转换（半开探测成功）时，M1 向 M2 Outbox 写入：
+**Provider 恢复事件**: 当所有 Provider 均处于 Open 状态（`ErrAllProvidersFailed` 已触发）后，任意一个 Provider 的 CircuitBreaker 完成 HalfOpen→Closed 转换（半开探测成功）时，M1 向 M2 Outbox 写入：
   `MutationIntent{Table:"outbox", Op:OpInsert, Payload:{target_engine:"m4_provider_recovery", provider_id:<providerID>, recovered_at:<timestamp>}}`
 此事件经 M2 Outbox Worker 投递至 M4（M4 §8 Provider 恢复唤醒路径），M4 据此自动唤醒处于 `Suspended(suspend_reason=provider_exhausted)` 的任务。
 多 Provider 场景下，若多个 Provider 同时恢复，事件幂等合并（M4 Outbox Worker 在同一 batch 内去重 task_id，避免重复唤醒）。
@@ -287,7 +287,7 @@ LocalProvider 通过 llama.cpp FFI 提供本地 GGUF 模型的 `Infer`/`StreamIn
 | 故障 | (Q1) 检测 | (Q2) 影响范围 | (Q3) 即时反应 | (Q4) 自动恢复 | (Q5) 人工介入触发 |
 |------|----------|------------|------------|------------|----------------|
 | 单 Provider 限流/不可用 | EWMA p95 > 阈值 / 5xx 连续 | 仅本 Provider | Fallback：同 Pool → 降级 Pool → 拒绝 | 半开探测 | 同 Pool 全断 → audit severity=warn |
-| 全部 Provider 熔断 | CircuitBreaker 全开 | 全模块 LLM 路径 | 返回 ErrAllProvidersExhausted | 冷却期满后半开探测 | 持续 > 5min → audit |
+| 全部 Provider 熔断 | CircuitBreaker 全开 | 全模块 LLM 路径 | 返回 ErrAllProvidersFailed | 冷却期满后半开探测 | 持续 > 5min → audit |
 | SemanticCache 满 (10000 entries) | 内存水位触发 | 仅缓存查询 | LRU 淘汰 MaxEntries/10 条目 | 自动 | — |
 | StreamBudgetGuard L2 触发 | TokenBurnDetector 加速度检测 (5s 窗口, accel > 3× baseline) | 单流 | FatalStreamAbort 硬阻断 → M4 S_REPLAN | TokenBurnRate 恢复正常后自动解除 | 单 session 反复触发 ≥3 次 → audit |
 | Tier-3 本地模型加载失败 | llama.LoadModelFromFile err / RSS 检测 | local_only 全模块 LLM 路径 | 降级远程 API（非 local_only）；local_only → ErrLocalModelUnavailable | 空闲内存恢复后重新加载。local_only 模式下若持续 > 30s 无法重载 → 触发 M13 ResourceGovernor local_only 死锁恢复 | local_only 模式下死锁恢复仍失败 → 必须 HITL |

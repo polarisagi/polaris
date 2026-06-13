@@ -130,19 +130,19 @@ HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 
 
 查询 embed 后在摘要索引搜索 top-20 候选，章节级权重×1.2 优于文档级，RelevanceScore<0.5 时 fallback 到文档根节点（全文搜索）。
 
-> ⚠️ **当前实现缺失**：`HybridRetrieverImpl` 中不存在 StructuredNavigator，三阶段结构化检索的导航阶段完全缺失（P1 缺陷）。
+> **[计划中]**：`HybridRetrieverImpl` 暂未实现 StructuredNavigator，三阶段结构化检索的目录导航阶段待后续迭代接入。
 
 ### 2.4 QueryPlanner
 
 简单查询（<30 tokens）直接跳过分解。复杂查询 LLM 分解为 2-5 个子查询，每个子查询携带 TargetScope 和 Weight，支持 concat/deduplicate/interleave 三种合并策略。
 
-> ⚠️ **当前实现缺失**：`HybridRetrieverImpl` 无 QueryPlanner，无 KnowledgeBase.Search 聚合入口，无 ContextExpander.Expand（P1 缺陷）。
+> **[计划中]**：QueryPlanner、KnowledgeBase.Search 聚合入口、ContextExpander.Expand 均未实现；当前检索路径为 BM25 + Vector 双路 RRF，三阶段深度 RAG 待后续迭代。
 
 ### 2.5 KnowledgeBase.Search (完整入口)
 
 三阶段聚合：QueryPlanner 分解 → 每个子查询走 StructuredNavigator（目录导航）+ HybridRetriever（内容检索）+ ContextExpander（上下文展开，LeafChunk 扩展为 AugmentedContext 含 ParentChunk/SectionPath/Provenance/前后兄弟内容）→ 跨子查询 RRF 去重排序。
 
-> ⚠️ **当前实现状态**：仅 HybridSearch 内容检索路径可用，KnowledgeBase.Search 聚合入口未实现。
+> **[计划中]**：当前仅 HybridSearch 内容检索路径可用（BM25 + Vector 双路 RRF）；KnowledgeBase.Search 三阶段聚合入口待实现。
 
 ### 2.6 KnowledgeGraph (知识图谱增强)
 
