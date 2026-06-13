@@ -754,20 +754,35 @@ func (s *Server) injectSystemPrompt(history []protocol.Message) []protocol.Messa
 	return ic.PrependToMessages(history)
 }
 
-// buildAmbientSkillsSection 查询所有 ambient skill 的 instructions，返回可追加到 system prompt 的段落。
-// 独立函数消除 injectSystemPrompt 的 nestif 深度。
+// buildAmbientSkillsSection 按 trust_tier 降序注入 ambient skill instructions，总字符数不超过 4000。
+// 超限时优先保留 trust_tier 高的，其余截断并记录 WARN 日志。
 func (s *Server) buildAmbientSkillsSection() string {
-	rows, err := s.db.Query(`SELECT name, instructions FROM skills WHERE exec_mode='ambient' AND deprecated=0`)
+	// trust_tier DESC 确保高信任技能优先；4000 字符上限保护上下文窗口
+	rows, err := s.db.Query(
+		`SELECT name, instructions FROM skills
+         WHERE exec_mode='ambient' AND deprecated=0
+         ORDER BY trust_tier DESC`)
 	if err != nil {
 		return ""
 	}
 	defer rows.Close()
+
+	const maxChars = 4000
 	var parts []string
+	total := 0
 	for rows.Next() {
 		var name, inst string
-		if rows.Scan(&name, &inst) == nil {
-			parts = append(parts, "Ambient Skill: "+name+"\n"+inst)
+		if rows.Scan(&name, &inst) != nil {
+			continue
 		}
+		entry := "Ambient Skill: " + name + "\n" + inst
+		if total+len(entry) > maxChars {
+			slog.Warn("ambient skill truncated: char limit reached",
+				"skill", name, "limit", maxChars, "current", total)
+			break
+		}
+		parts = append(parts, entry)
+		total += len(entry)
 	}
 	if len(parts) == 0 {
 		return ""
