@@ -41,7 +41,8 @@ type MemoryAgent struct {
 }
 
 // LLMInferFunc LLM 调用函数类型（依赖注入，可 mock）。
-type LLMInferFunc func(ctx context.Context, prompt string) (string, error)
+// opts 遵循 protocol.InferOption 函数选项模式，支持 WithThinkingMode 等。
+type LLMInferFunc func(ctx context.Context, prompt string, opts ...protocol.InferOption) (string, error)
 
 // SurrealWriterInterface 最小化 SurrealDB 写入接口（防止循环依赖）。
 type SurrealWriterInterface interface {
