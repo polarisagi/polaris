@@ -1,7 +1,7 @@
 # 模块 3: Observability & Telemetry
 
 > OTel-native | slog | Token_Burn_Rate + Surprise_Index 一等公民 | Hardware Probe | [HE-Rule-1] [HE-Rule-4] | Go
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:168 HardwareProbe+AutoConfig / 6:244 OSMemoryGuard / 7:260 MonitorMemoryPressure / 8:283 LogLevel / 9:291 TraceContext / 10:303 DecisionLog / 10.1:316 PerformanceDrift / 11:352 Langfuse / 14:382 (SOFT)降级 / 15:399 依赖
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:170 HardwareProbe+AutoConfig / 6:246 OSMemoryGuard / 7:262 MonitorMemoryPressure / 8:285 LogLevel / 9:293 TraceContext / 10:305 DecisionLog / 10.1:316 PerformanceDrift / 11:354 Langfuse / 14:384 (SOFT)降级 / 15:401 依赖
 ## 0-bis. 职责边界
 
 | M3 **是** | M3 **不是** |
@@ -130,16 +130,18 @@ M3 提供两层 SurpriseIndex 计算，M4 按优先级消费：
 ### 4.0 双层计算架构
 
 **基础计算器 (M3 内置，始终在线)**:
-两组件简化版：`0.55 × embeddingCosineDistance + 0.45 × toolSequenceDivergence`
-- embedding 余弦距离：基于 M1 Embedding API 当前推理输出 vs 历史同类 task_type 的质心向量
-- 工具序列偏离度（toolSequenceDivergence）：当前任务工具调用序列 vs 同 task_type 历史成功序列的归一化 Levenshtein 距离（≤1.0），与完整版同名同义
-- 冷启动 (<10 条历史) → 固定 0.5。架构影响：强制导致 M4 走 System 1.5（0.3-0.6），避免了极度缺乏数据时过载触发 System 2，也防止了错误进入 System 1。
+两组件简化版（Phase 0.1 当前实现）：`0.7 × cosineDist + 0.3 × jaccardDist`
+- embedding 余弦距离（cosineDist）：当前推理 embedding vs EMA 历史质心向量（EMA α=0.1）
+- 工具集合 Jaccard 距离（jaccardDist）：`1 - |当前工具集 ∩ 历史工具集| / |当前工具集 ∪ 历史工具集|`；历史工具集计数按 0.95 EMA 衰减（每 100 次调用触发一次衰减）
+- 冷启动（callCount < 3）→ 固定 0.5。架构影响：强制导致 M4 走 System 1.5（0.3-0.6），避免极度缺乏数据时错误触发 System 2 或 System 1。
 - 计算开销：~100-300ms（仅 embedding API 调用），无 M9 依赖
-- 代码位置：`pkg/substrate/observability/metrics.go`（L0，不依赖 pkg/swarm/）
+- 代码位置：`pkg/substrate/observability/metrics.go` `ComputeBasic()`（L0，不依赖 pkg/swarm/）
+
+> **升级计划（Phase 1）**：toolSequenceDivergence 预期改为归一化 Levenshtein 距离（序列感知），权重调整为 `0.55 × cosineDist + 0.45 × toolSequenceDivergence`，冷启动阈值升为 <10。升级后与完整版共享相同算法定义。
 
 **完整计算器 (M9 异步推送，已上线)**:
 三组件完整版：`0.4 × embeddingCosineDistance + 0.35 × toolSequenceDivergence + 0.25 × MEMFMatchScore`
-计算公式、BoundedWorkQueue 和 LoadShedder 的权威实现位于 M9 §2.0。基础版与完整版的两个共有组件（embeddingCosineDistance / toolSequenceDivergence）实现完全同源，仅完整版多 MEMFMatchScore 一项 M9 依赖。
+计算公式、BoundedWorkQueue 和 LoadShedder 的权威实现位于 M9 §2.0。完整版的 toolSequenceDivergence 使用归一化 Levenshtein 距离（与基础版 Phase 1 目标对齐），MEMFMatchScore 为独有扩展。
 
 **M4 消费优先级**: 优先读取 M9 推送的 `polaris_surprise_index`（完整版）。staleness > 60s 时回退到 `polaris_surprise_index_basic`（M3 基础版）。两者均不可用 → 0.5 (System 1.5)。
 
