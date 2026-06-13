@@ -402,8 +402,11 @@ func (e *Engine) handleEvalCompleted(ctx context.Context, ev protocol.EvalComple
 	if e.rollout != nil {
 		go func() {
 			_ = e.rollout.AdvanceGate(ctx, ev.CandidateID, RolloutStats{
-				BaselineErrorRate: 1.0 - e.cfg.BaselinePassRate,
-				ErrorRate:         1.0 - ev.PassRate,
+				BaselineErrorRate:  1.0 - e.cfg.BaselinePassRate,
+				ErrorRate:          1.0 - ev.PassRate,
+				SafetyViolations:   ev.SafetyViolations,
+				P95Latency:         ev.P95LatencyMs,
+				BaselineP95Latency: ev.BaselineP95Ms,
 			})
 		}()
 	}

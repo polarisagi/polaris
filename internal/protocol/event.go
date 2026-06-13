@@ -92,10 +92,13 @@ type HeuristicGeneratedPayload struct {
 // 对应 EventType = EventEvalCompleted。
 // 发布方在 RunSuite 返回后发布；订阅方更新 prompt_versions.score 并决定是否触发 Rollout。
 type EvalCompletedPayload struct {
-	Suite       string  `json:"suite"`        // "training" | "validation"
-	CandidateID string  `json:"candidate_id"` // prompt_versions.id，空表示基线评测
-	PassRate    float64 `json:"pass_rate"`    // 0.0~1.0
-	BlockDeploy bool    `json:"block_deploy"` // safety_fail>0 时为 true
-	RunID       string  `json:"run_id"`
-	CreatedAt   int64   `json:"created_at"`
+	Suite            string  `json:"suite"`        // "training" | "validation"
+	CandidateID      string  `json:"candidate_id"` // prompt_versions.id，空表示基线评测
+	PassRate         float64 `json:"pass_rate"`    // 0.0~1.0
+	BlockDeploy      bool    `json:"block_deploy"` // safety_fail>0 时为 true
+	SafetyViolations int     `json:"safety_violations"`
+	P95LatencyMs     float64 `json:"p95_latency_ms"`
+	BaselineP95Ms    float64 `json:"baseline_p95_ms"`
+	RunID            string  `json:"run_id"`
+	CreatedAt        int64   `json:"created_at"`
 }

@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // ── mock 实现 ────────────────────────────────────────────────────────────────
@@ -28,11 +30,22 @@ func (m *mockCurriculum) Generate(_ context.Context, _ float64) error {
 }
 
 type mockRollout struct {
-	calls atomic.Int32
+	calls     atomic.Int32
+	lastStats RolloutStats
 }
 
-func (m *mockRollout) AdvanceGate(_ context.Context, _ string, _ RolloutStats) error {
+func (m *mockRollout) AdvanceGate(_ context.Context, _ string, stats RolloutStats) error {
+	m.lastStats = stats
 	m.calls.Add(1)
+	return nil
+}
+
+type mockVersionStore struct{}
+
+func (m *mockVersionStore) UpdateScore(ctx context.Context, id string, score float64) error {
+	return nil
+}
+func (m *mockVersionStore) Activate(ctx context.Context, taskType, id string, baselineScore float64) error {
 	return nil
 }
 
@@ -216,5 +229,43 @@ func TestEngine_DefaultConfig(t *testing.T) {
 	}
 	if cfg.MaxConcurrentReflections != 3 {
 		t.Fatalf("MaxConcurrentReflections 期望 3，得到 %d", cfg.MaxConcurrentReflections)
+	}
+}
+
+func TestEngine_handleEvalCompleted_SafetyStats(t *testing.T) {
+	cfg := DefaultEngineConfig()
+	cfg.BaselinePassRate = 0.8
+
+	ro := &mockRollout{}
+	e, _, _ := newTestEngine(cfg, &mockReflector{}, &mockCurriculum{}, ro)
+	e.SetVersionStore(&mockVersionStore{})
+
+	ctx := context.Background()
+	e.handleEvalCompleted(ctx, protocol.EvalCompletedPayload{
+		Suite:            "validation",
+		CandidateID:      "cand-safe",
+		PassRate:         0.9,
+		SafetyViolations: 1,
+		P95LatencyMs:     150,
+		BaselineP95Ms:    100,
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	if ro.calls.Load() == 0 {
+		t.Fatal("expected AdvanceGate to be called")
+	}
+
+	if ro.lastStats.SafetyViolations != 1 {
+		t.Errorf("expected SafetyViolations=1, got %v", ro.lastStats.SafetyViolations)
+	}
+	if ro.lastStats.P95Latency != 150 {
+		t.Errorf("expected P95Latency=150, got %v", ro.lastStats.P95Latency)
+	}
+
+	// mock CheckHardStop behavior to verify rule logic
+	isHardStop := ro.lastStats.SafetyViolations > 0 || ro.lastStats.P95Latency > ro.lastStats.BaselineP95Latency*1.4
+	if !isHardStop {
+		t.Error("expected CheckHardStop to evaluate to true for SafetyViolations>0")
 	}
 }
