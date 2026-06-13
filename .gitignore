@@ -91,3 +91,6 @@ skills/**/*.wasm
 worktrees/
 .sisyphus/
 repomix-output.xml
+
+# Upgrade docs
+docs/upgrade/
