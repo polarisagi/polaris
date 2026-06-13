@@ -113,19 +113,21 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 	}
 
 	// Trigger security gate / DB registration via InstallExtension
-	if c.installMgr != nil {
-		extID := "ext_llm_" + fmt.Sprintf("%d", time.Now().UnixNano())
-		installReq := marketplace.InstallRequest{
-			Principal:   "llm_agent",
-			ExtensionID: extID,
-			ExtType:     "skill",
-			TrustTier:   1, // TrustLocal
-			Publisher:   "agent",
-			HasHooks:    false,
-		}
-		if err := c.installMgr.InstallExtension(ctx, installReq); err != nil {
-			return "", perrors.Wrap(perrors.CodeForbidden, "skill_creator: installation blocked by policy gate", err)
-		}
+	if c.installMgr == nil {
+		return "", perrors.New(perrors.CodeInternal,
+			"skill_creator: security manager not initialized, refusing to install (fail-closed)")
+	}
+	extID := "ext_llm_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	installReq := marketplace.InstallRequest{
+		Principal:   "llm_agent",
+		ExtensionID: extID,
+		ExtType:     "skill",
+		TrustTier:   1, // TrustLocal
+		Publisher:   "agent",
+		HasHooks:    false,
+	}
+	if err := c.installMgr.InstallExtension(ctx, installReq); err != nil {
+		return "", perrors.Wrap(perrors.CodeForbidden, "skill_creator: installation blocked by policy gate", err)
 	}
 
 	return pluginDir, nil
