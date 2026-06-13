@@ -400,3 +400,8 @@ func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
 		a.sCtx.InstalledExtensionsInfo = ""
 	}
 }
+
+// InjectExtensionActivator 注入按需扩展激活器。
+func (a *Agent) InjectExtensionActivator(activator ExtensionActivatorIface) {
+	a.sm.WithExtensionActivator(activator)
+}

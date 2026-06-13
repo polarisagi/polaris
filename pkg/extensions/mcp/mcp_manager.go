@@ -357,3 +357,66 @@ func validateLLMNamePart(s string) error {
 	}
 	return nil
 }
+
+// DynamicConnectRequest 动态连接 MCP server 的参数。
+type DynamicConnectRequest struct {
+	ServerName string // 唯一名称，用于工具名前缀
+	Transport  string // "stdio" | "sse" | "http"
+	Command    string // stdio 模式：可执行文件路径
+	Args       []string
+	URL        string // sse/http 模式：端点 URL
+}
+
+// DynamicConnect 动态连接一个 MCP server 并注册其工具到沙箱。
+// 幂等：同名 server 已连接时直接返回 nil。
+func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectRequest) error {
+	m.mu.Lock()
+	if _, exists := m.entries[req.ServerName]; exists {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
+	cfg := MCPClientConfig{
+		ServerName: req.ServerName,
+		Transport:  MCPTransport(req.Transport),
+		Command:    req.Command,
+		Args:       req.Args,
+		URL:        req.URL,
+	}
+	client := NewMCPClient(cfg, m.httpClient)
+	if err := client.Connect(ctx); err != nil {
+		return err
+	}
+	if err := client.Initialize(ctx); err != nil {
+		client.Close()
+		return err
+	}
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		client.Close()
+		return err
+	}
+
+	validTools := m.registerTools(req.ServerName, client, tools)
+
+	m.mu.Lock()
+	if _, exists := m.entries[req.ServerName]; exists {
+		m.mu.Unlock()
+		client.Close()
+		return nil
+	}
+	m.entries[req.ServerName] = &mcpEntry{
+		client: client,
+		name:   req.ServerName,
+		cfg:    cfg,
+		tools:  validTools,
+	}
+	notify := m.onToolsChanged
+	m.mu.Unlock()
+
+	if notify != nil {
+		notify()
+	}
+	return nil
+}

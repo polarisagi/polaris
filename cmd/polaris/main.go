@@ -548,6 +548,10 @@ func run() error { //nolint:gocyclo
 	agent.InjectHITL(hitlGateway)
 	// 注入 ToolRegistry：FSM runExecuteDAG 路径依赖非 nil registry，否则 fail-closed。
 	agent.InjectToolRegistry(toolReg)
+
+	// 构造 ExtensionActivator（需要 db + cognitive + mcpMgr）
+	activator := native.NewExtensionActivator(store.DB(), nativeCogn, mcpMgr)
+	agent.InjectExtensionActivator(&extensionActivatorAdapter{inner: activator})
 	// 注入记忆系统：ImmutableCore 持有 AgentName/ModelID/SystemPromptTemplate，
 	// NewServer 和 injectSystemPrompt 均依赖 agent.Memory() != nil 才会写入系统提示词。
 	agent.InjectMemory(mem)
@@ -1013,4 +1017,23 @@ func (a nativeCognAdapter) GraphSpreadingActivation(startIDs []string, maxDepth 
 		out[i] = native.ScoredResult{ID: r.ID, Score: r.Score}
 	}
 	return out, nil
+}
+
+type extensionActivatorAdapter struct {
+	inner *native.ExtensionActivator
+}
+
+func (a *extensionActivatorAdapter) FindAndActivate(ctx context.Context, goal string) ([]kernel.ExtActivatedHint, error) {
+	hints, err := a.inner.FindAndActivate(ctx, goal)
+	if err != nil || hints == nil {
+		return nil, err
+	}
+	result := make([]kernel.ExtActivatedHint, 0, len(hints))
+	for _, h := range hints {
+		result = append(result, kernel.ExtActivatedHint{
+			ToolName:    h.ToolName,
+			Description: h.Description,
+		})
+	}
+	return result, nil
 }

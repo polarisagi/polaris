@@ -3,6 +3,8 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +39,8 @@ type StateMachine struct {
 	startedAt     time.Time
 	interruptFrom protocol.AgentState // S_INTERRUPT 时记录被中断的原状态（Resume 路径用）
 	mu            sync.Mutex
+	activator     ExtensionActivatorIface
+	dynamicHints  []ExtActivatedHint
 }
 
 // StateContext 穿越状态机各转移的共享上下文（与 protocol.StateContext 互补）。
@@ -233,6 +237,11 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 	// 特殊处理: S_REPLAN 计数 + 耗尽检查
 	if t.To == protocol.AgentStateReplan {
 		sm.replanCount++
+
+		// S_REPLAN：尝试按需激活未加载的扩展，补充工具集后重规划。
+		// 仅在第一次 replan 时触发（避免每次 replan 都触发语义搜索）。
+		sm.tryActivateExtensions(ctx, sCtx)
+
 		if sm.replanCount >= sCtx.MaxReplan {
 			// replan 耗尽 → 自动进阶 S_FAILED，返回 ErrReplanExhausted
 			sm.history = append(sm.history, current, t.To)
@@ -315,6 +324,15 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	// 有记忆系统时注入历史执行经验（Episodic Top-5 + 任务目标 + 工具列表）
 	if pCtx.Mem != nil {
 		if msgs, err := buildPlanContext(sm.bgCtx(), pCtx.Mem, sCtx, pCtx.Tools, sCtx.Cognitive); err == nil {
+			if len(sm.dynamicHints) > 0 && len(msgs) > 0 {
+				var sb strings.Builder
+				sb.WriteString("\n\n## 本次重规划新增可用工具\n")
+				sb.WriteString("以下工具刚刚被激活，你可以在重规划中使用它们：\n")
+				for _, h := range sm.dynamicHints {
+					sb.WriteString(fmt.Sprintf("- **%s**: %s\n", h.ToolName, h.Description))
+				}
+				msgs[0].Content += sb.String()
+			}
 			return msgs
 		}
 	}
@@ -449,4 +467,40 @@ func (sm *StateMachine) executeDAG(ctx context.Context, sCtx protocol.StateConte
 func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateContext) (protocol.State, error) {
 	// Saga 逆序补偿——已执行步骤的 Undo 操作
 	return protocol.State("S_ROLLBACK_OK"), nil
+}
+
+// ExtensionActivatorIface 消费方接口（防止包循环，定义在调用方）。
+type ExtensionActivatorIface interface {
+	FindAndActivate(ctx context.Context, goal string) ([]ExtActivatedHint, error)
+}
+
+// ExtActivatedHint 从扩展激活器传入 state_machine 的工具提示。
+type ExtActivatedHint struct {
+	ToolName    string
+	Description string
+}
+
+// WithExtensionActivator 注入按需扩展激活器（可选，启动时由上层 wire）。
+func (sm *StateMachine) WithExtensionActivator(a ExtensionActivatorIface) {
+	sm.activator = a
+}
+
+func (sm *StateMachine) tryActivateExtensions(ctx context.Context, sCtx *StateContext) {
+	if sm.replanCount != 1 || sm.activator == nil {
+		return
+	}
+	goal := ""
+	if sCtx != nil && sCtx.TaskModel != nil {
+		goal = sCtx.TaskModel.Goal
+	}
+	if goal == "" {
+		return
+	}
+	hints, hintErr := sm.activator.FindAndActivate(ctx, goal)
+	if hintErr == nil && len(hints) > 0 {
+		sm.dynamicHints = hints
+		slog.Info("extension_activator: activated extensions for replan",
+			"count", len(hints),
+			"goal", goal)
+	}
 }
