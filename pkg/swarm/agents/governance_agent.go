@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"database/sql"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -65,17 +66,55 @@ func (ga *GovernanceAgent) Run(ctx context.Context) {
 // 查 outbox 表，命中返回 (mockResponse, true)，未命中返回 (nil, false)。
 // 哈希算法：SHA256(method + url + body)，截取前 32 字节作为 idempotency_key。
 func (ga *GovernanceAgent) CheckIdempotent(ctx context.Context, operationHash string) ([]byte, bool) {
-	// 略：从 db 中查 operationHash
-	return nil, false
+	var payload []byte
+	err := ga.db.QueryRowContext(ctx, `
+		SELECT payload FROM outbox 
+		WHERE idempotency_key = ? AND status = 'done' LIMIT 1
+	`, operationHash).Scan(&payload)
+
+	if err != nil {
+		return nil, false
+	}
+	return payload, true
 }
 
 // RecordExecution 记录执行成功的操作到 outbox（用于下次幂等命中）。
 func (ga *GovernanceAgent) RecordExecution(ctx context.Context, operationHash string, response []byte) error {
-	// 略：记录到 db
-	return nil
+	_, err := ga.db.ExecContext(ctx, `
+		INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(idempotency_key) DO UPDATE SET payload=excluded.payload, status='done'
+	`,
+		time.Now().UnixMilli(),
+		"mock_response_cache",
+		"upsert",
+		"idempotency",
+		response,
+		operationHash,
+		"done",
+	)
+	return err
 }
 
 // probeMemory 探测系统空闲内存，更新 memPressure atomic。
 func (ga *GovernanceAgent) probeMemory() {
-	// 略：读取 /proc/meminfo 等
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// A simple heuristic using MemStats if OS specific logic is omitted.
+	// We'll calculate fake pressure based on alloc.
+	// Since runtime.MemStats gives process memory, not system, we use a fixed heuristic or dummy for cross-platform.
+
+	const (
+		moderateLimit = 800 * 1024 * 1024  // 800MB
+		criticalLimit = 1500 * 1024 * 1024 // 1.5GB
+	)
+
+	alloc := m.Alloc
+	if alloc >= criticalLimit {
+		ga.memPressure.Store(int32(MemPressureCritical))
+	} else if alloc >= moderateLimit {
+		ga.memPressure.Store(int32(MemPressureModerate))
+	} else {
+		ga.memPressure.Store(int32(MemPressureNormal))
+	}
 }

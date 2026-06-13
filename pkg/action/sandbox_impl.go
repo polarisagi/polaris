@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -227,6 +228,14 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 		return &protocol.ToolResult{Success: false, Error: fmt.Sprintf("ContainerSandbox: unknown backend %q", backend)}, nil
 	}
 
+	if spec.DryRunMode && spec.MockProxyEnv != "" {
+		env := cmd.Env
+		if env == nil {
+			env = os.Environ()
+		}
+		cmd.Env = append(env, "HTTP_PROXY="+spec.MockProxyEnv, "HTTPS_PROXY="+spec.MockProxyEnv)
+	}
+
 	start := time.Now()
 	out, err := cmd.Output()
 	if err != nil {
@@ -256,6 +265,7 @@ func (s *ContainerSandbox) RunScript(ctx context.Context, scriptPath, workDir st
 	if attrs := containerSandboxSysProcAttr(); attrs != nil {
 		cmd.SysProcAttr = attrs
 	}
+	// Note: RunScript typically doesn't use SandboxSpec, so we don't have MockProxyEnv here.
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sandbox: RunScript %q: %w", scriptPath, err)
 	}

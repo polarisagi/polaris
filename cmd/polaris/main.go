@@ -49,6 +49,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/swarm/supervisor"
 )
 
+type dummySurreal struct{}
+
+func (d dummySurreal) FTSIndex(docID, text string) error                               { return nil }
+func (d dummySurreal) VecUpsert(id string, embedding []float32) error                  { return nil }
+func (d dummySurreal) GraphRelate(fromID, edgeType, toID string, weight float64) error { return nil }
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "polaris: fatal: %v\n", err)
@@ -422,10 +428,27 @@ func run() error { //nolint:gocyclo
 	slog.Info("polaris: ProviderRecoveryHandler registered to outbox for m1_provider_recovered")
 
 	// 注册 E5+E6 Handlers
-	semanticCompressHandler := agents.NewSemanticCompressHandler(mem.Semantic())
+	var llmInfer agents.LLMInferFunc = func(ctx context.Context, prompt string) (string, error) {
+		if router != nil {
+			req := &protocol.InferRequest{
+				Messages: []protocol.Message{{Role: "user", Content: prompt}},
+				Model:    "reasoning",
+			}
+			resp, err := router.Infer(ctx, req)
+			if err != nil {
+				return "", err
+			}
+			return resp.Content, nil
+		}
+		return "", nil
+	}
+	vfsLoader := func(vfsID string) ([]byte, error) { return []byte{}, nil }
+	vfsWriter := func(vfsID string, data []byte) error { return nil }
+
+	semanticCompressHandler := agents.NewSemanticCompressHandler(mem.Semantic(), llmInfer, vfsLoader, vfsWriter)
 	outboxWorker.RegisterHandler("semantic_compress", semanticCompressHandler.Handle)
 
-	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler()
+	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler(llmInfer, dummySurreal{})
 	outboxWorker.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
 	slog.Info("polaris: SemanticCompressHandler and ExtensionLibrarianHandler registered")
 

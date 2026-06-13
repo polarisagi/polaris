@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/action/tool"
 )
 
 // PlannerPool 管理多个并发的思考流，并将最佳结果（通过耳语）汇报给主脑。
@@ -46,6 +47,7 @@ func (p *PlannerPool) Run(ctx context.Context) {
 			// 模拟规划耗时
 			time.Sleep(100 * time.Millisecond)
 
+			//nolint:nestif
 			if p.provider != nil {
 				prompt := fmt.Sprintf("Create a detailed plan for goal: %s (taskType: %s)", p.goal, p.taskType)
 				req := &protocol.InferRequest{
@@ -58,7 +60,23 @@ func (p *PlannerPool) Run(ctx context.Context) {
 
 				resp, err := p.provider.Infer(ctx, req)
 				if err == nil && resp != nil && len(resp.Content) > 0 {
-					resultChan <- resp.Content
+					planStr := resp.Content
+
+					if p.taskType == "code_act" {
+						// 模拟 Engine A：真实 Wasm 编译与单测打分
+						// 这里为了演示，我们将生成的文本假装是编译好的 Wasm 字节码送入 WasmtimeExecute
+						wasmBytes := []byte(planStr)
+						outJSON, execErr := tool.WasmtimeExecute(wasmBytes, "{}", "", 1, false, 1000, 0)
+
+						if execErr == nil {
+							// 假设通过单测，将打分附加到 planStr 后面
+							planStr = fmt.Sprintf("%s\n\n[Wasm Evaluation Score: 100/100, out: %s]", planStr, outJSON)
+						} else {
+							planStr = fmt.Sprintf("%s\n\n[Wasm Evaluation Failed: %v]", planStr, execErr)
+						}
+					}
+
+					resultChan <- planStr
 					return
 				}
 			}

@@ -72,6 +72,15 @@ type ReflexionEngine struct {
 	llmInfer func(ctx context.Context, prompt string) (string, error)
 	// heuristicCh 非 nil 时，步骤3完成后将 AvoidRule 发布给 self_improve.Engine 内环。
 	heuristicCh chan<- protocol.HeuristicGeneratedPayload
+	// db 和 surreal 用于回写 AgentHER 轨迹
+	db      *sql.DB
+	surreal SurrealWriter
+}
+
+// SurrealWriter defines the subset of SurrealDB operations needed.
+type SurrealWriter interface {
+	FTSIndex(docID, text string) error
+	GraphRelate(fromID, edgeType, toID string, weight float64) error
 }
 
 // NewReflexionEngine 创建反思引擎。
@@ -85,6 +94,12 @@ func NewReflexionEngine(
 		heuristics: heuristics,
 		llmInfer:   llmInfer,
 	}
+}
+
+// InjectDependencies 为 AgentHER 注入外部依赖。
+func (re *ReflexionEngine) InjectDependencies(db *sql.DB, surreal SurrealWriter) {
+	re.db = db
+	re.surreal = surreal
 }
 
 // SetHeuristicChannel 注入事件发布通道（可选；nil 时不发布，HE-Rule-3）。
@@ -210,8 +225,19 @@ func (re *ReflexionEngine) replaySuccess(
 		if re.llmInfer != nil {
 			prompt := fmt.Sprintf("Analyze successful trajectory after %d replans. Extract insight.", replanCount)
 			insight, _ := re.llmInfer(context.Background(), prompt)
-			// TODO: Write insight to SurrealDB and reflection_memory table
-			_ = insight
+
+			if insight != "" && re.surreal != nil {
+				docID := taskID + "_her"
+				_ = re.surreal.FTSIndex(docID, insight)
+				_ = re.surreal.GraphRelate(taskType, "learned_from_failure", docID, float64(replanCount))
+			}
+
+			if insight != "" && re.db != nil {
+				_, _ = re.db.ExecContext(context.Background(), `
+					INSERT INTO reflection_memory (task_id, reflection_type, content, created_at)
+					VALUES (?, ?, ?, ?)
+				`, taskID, "success_pattern", insight, time.Now().Unix())
+			}
 		}
 	}()
 	return &Reflection{

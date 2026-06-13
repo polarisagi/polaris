@@ -2,27 +2,94 @@ package action
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // MockProxy 实现了 Dry-Run 模式下对工具请求的拦截与仿真响应。
-// 依据 TaintLevel，如果是 DryRun 模式，则从 032_mock_response_cache.sql 中查询对应的 Mock 响应返回。
+// 现在作为真实的 HTTP 代理服务器运行。
 type MockProxy struct {
-	db *sql.DB
+	db     *sql.DB
+	server *http.Server
+	addr   string
 }
 
 func NewMockProxy(db *sql.DB) *MockProxy {
 	return &MockProxy{db: db}
 }
 
-// Execute 拦截工具调用
+// Start 启动 HTTP 代理服务器，监听随机可用端口。
+func (m *MockProxy) Start() error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	m.addr = listener.Addr().String()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", m.handleProxyRequest)
+
+	m.server = &http.Server{Handler: mux}
+	go func() {
+		_ = m.server.Serve(listener)
+	}()
+
+	slog.Info("MockProxy HTTP server started", "addr", m.addr)
+	return nil
+}
+
+// Stop 停止代理服务器
+func (m *MockProxy) Stop(ctx context.Context) error {
+	if m.server != nil {
+		return m.server.Shutdown(ctx)
+	}
+	return nil
+}
+
+// Addr 返回代理监听的地址 (例如 127.0.0.1:xxx)
+func (m *MockProxy) Addr() string {
+	return m.addr
+}
+
+func (m *MockProxy) handleProxyRequest(w http.ResponseWriter, r *http.Request) {
+	// 读取前1KB内容用于哈希
+	bodyBytes := make([]byte, 1024)
+	n, _ := io.ReadFull(r.Body, bodyBytes)
+	bodyBytes = bodyBytes[:n]
+
+	hashInput := r.Method + r.URL.String() + string(bodyBytes)
+	hash := sha256.Sum256([]byte(hashInput))
+	opHash := hex.EncodeToString(hash[:])[:32]
+
+	var mockBody string
+	var statusCode int
+
+	err := m.db.QueryRow(`
+		SELECT response_body, status_code FROM mock_response_cache
+		WHERE operation_hash = ? LIMIT 1
+	`, opHash).Scan(&mockBody, &statusCode)
+
+	if err != nil {
+		// Cache miss
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error": "Mock miss"}`))
+		return
+	}
+
+	w.WriteHeader(statusCode)
+	_, _ = w.Write([]byte(mockBody))
+}
+
+// Execute 拦截内部直接调用的工具调用，作为后备
 func (m *MockProxy) Execute(ctx context.Context, toolName string, args []byte) (*protocol.ToolResult, error) {
-	// 如果需要实现 Dry-Run 拦截逻辑：
-	// 返回预设好的 JSON 等
-	// 这里做个简单的实现
 	outMap := make(map[string]interface{})
 	outMap["mocked"] = true
 	outMap["tool"] = toolName

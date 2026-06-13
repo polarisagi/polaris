@@ -81,8 +81,57 @@ func (ma *MemoryAgent) Run(ctx context.Context) {
 				// skip distillation
 				continue
 			}
-			// Simulate distillation logic
-			// _ = ma.distill(ctx)
+			_ = ma.distill(ctx)
 		}
 	}
+}
+
+func (ma *MemoryAgent) distill(ctx context.Context) error {
+	// 找到需要降维/蒸馏的冷记录
+	cutoff := time.Now().Add(-ma.coldWindowAge).Unix()
+
+	rows, err := ma.db.QueryContext(ctx, `
+		SELECT id, content FROM episodic_events
+		WHERE cold = 0 AND timestamp < ?
+		ORDER BY timestamp ASC LIMIT 20
+	`, cutoff)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var ids []int
+	var contents []string
+	for rows.Next() {
+		var id int
+		var c string
+		if err := rows.Scan(&id, &c); err == nil {
+			ids = append(ids, id)
+			contents = append(contents, c)
+		}
+	}
+
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// 模拟将 contents 合并发给 LLM 蒸馏
+	// 在实际实现中，会提取成 json，包含 (sub, pred, obj)
+	prompt := "Extract factual triples from the following memory:\n"
+	for _, c := range contents {
+		prompt += c + "\n"
+	}
+
+	triplesJSON, err := ma.llmInfer(ctx, prompt)
+	if err == nil && len(triplesJSON) > 0 {
+		// 假装写入 SurrealDB
+		_ = ma.surreal.FTSIndex("distilled_memory", triplesJSON)
+	}
+
+	// 更新为 cold = 1
+	for _, id := range ids {
+		_, _ = ma.db.ExecContext(ctx, "UPDATE episodic_events SET cold = 1 WHERE id = ?", id)
+	}
+
+	return nil
 }
