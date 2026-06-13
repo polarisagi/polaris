@@ -253,7 +253,7 @@ TopologyFitness 字段：Topology/TaskType/SuccessRate/AvgLatencyMs/AvgTokenCost
 | Gradual | 100% | 7d | 成功率/token效率退化>3pp |
 | Commit | 100% | 永久 | — |
 
-启用: ≥50历史执行/类型; 全 Tier 已支持 7 种模式（patterns/ 目录: Supervisor/Sequential/Parallel/Hierarchy/MapReduce/Reflection/Swarm）。
+启用: ≥50历史执行/类型; 全 Tier 已支持 7 种模式，按职责分层存放：执行模式（`patterns/`：Sequential/Parallel/MapReduce/Swarm）、容错基础设施（`supervisor/`：Supervisor OneForOne 重启树）、路由拓扑（`topology/`：Hierarchy，与执行层正交见 §3-bis）、认知循环（`reflexion.go`：Reflection，深度耦合 M4 S_REFLECT/M9）。
 
 ---
 
