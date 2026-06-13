@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -10,11 +9,12 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync/atomic"
 
 	"github.com/google/uuid"
+
+	"github.com/polarisagi/polaris/pkg/action/tool"
 
 	"github.com/polarisagi/polaris/pkg/substrate/inference/stt"
 	"github.com/polarisagi/polaris/pkg/substrate/inference/tts"
@@ -116,18 +116,13 @@ func (s *Server) handleAudioTranscriptions(w http.ResponseWriter, r *http.Reques
 
 	// 使用 ffmpeg 提取为 16000Hz f32le 原始 PCM 数据流
 	// 不落地 wav 文件，直接通过管道读取标准输出
-	cmd := exec.Command("ffmpeg", "-y", "-i", inPath, "-f", "f32le", "-ac", "1", "-ar", "16000", "-")
-
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	if err := cmd.Run(); err != nil {
+	pcmBytes, err := tool.ConvertToRawPCM(r.Context(), inPath)
+	if err != nil {
 		slog.Error("ffmpeg decode failed", "err", err)
 		mockRes, _ := engine.Transcribe(nil, 16000)
 		respondJSON(w, mockRes)
 		return
 	}
-
-	pcmBytes := outBuf.Bytes()
 	samples := make([]float32, len(pcmBytes)/4)
 	for i := range samples {
 		bits := binary.LittleEndian.Uint32(pcmBytes[i*4 : (i+1)*4])
