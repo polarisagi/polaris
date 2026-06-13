@@ -11,7 +11,7 @@ import (
 
 func TestMakeExtensionSearchFn_NilBackends(t *testing.T) {
 	// db=nil, client=nil → 两个后端都不可用，应报错
-	fn := MakeExtensionSearchFn(nil, nil)
+	fn := MakeExtensionSearchFn(nil, nil, nil, nil)
 	input, _ := json.Marshal(map[string]string{"query": "git"})
 	_, err := fn(context.Background(), input)
 	if err == nil {
@@ -20,7 +20,7 @@ func TestMakeExtensionSearchFn_NilBackends(t *testing.T) {
 }
 
 func TestMakeExtensionSearchFn_InvalidJSON(t *testing.T) {
-	fn := MakeExtensionSearchFn(nil, nil)
+	fn := MakeExtensionSearchFn(nil, nil, nil, nil)
 	_, err := fn(context.Background(), []byte("not-json"))
 	if err == nil {
 		t.Fatal("invalid JSON input should return error")

@@ -23,12 +23,14 @@ func RegisterExtensionTools(
 	installMgr *marketplace.Manager,
 	hitlGateway protocol.HITL,
 	outboxWriter protocol.OutboxWriter,
+	cognitive CognitiveSearcher,
+	embedFn EmbedFn,
 ) error {
 	defs := []struct {
 		name string
 		fn   action.InProcessFn
 	}{
-		{"search_extension", MakeExtensionSearchFn(db, marketplaceClient)},
+		{"search_extension", MakeExtensionSearchFn(db, marketplaceClient, cognitive, embedFn)},
 		{"install_extension", MakeExtensionInstallFn(db, marketplaceClient, installMgr, hitlGateway, outboxWriter)},
 	}
 

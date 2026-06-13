@@ -409,7 +409,11 @@ func run() error { //nolint:gocyclo
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
-	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, store.DB(), mktClient, installMgr, hitlGateway, outboxWorker); err != nil {
+	var nativeCogn native.CognitiveSearcher
+	if surrealStore != nil {
+		nativeCogn = nativeCognAdapter{s: surrealStore}
+	}
+	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, store.DB(), mktClient, installMgr, hitlGateway, outboxWorker, nativeCogn, nil); err != nil {
 		slog.Warn("polaris: native extension tool registration partial failure", "err", err)
 	}
 	slog.Info("polaris: builtin tools registered, MCP manager initialized")
@@ -961,4 +965,52 @@ func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []str
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
 	}
+}
+
+// nativeCognAdapter 将 *storage.SurrealDBCoreStore 适配为 native.CognitiveSearcher。
+type nativeCognAdapter struct{ s *storage.SurrealDBCoreStore }
+
+func (a nativeCognAdapter) FTSSearch(query string, k int) ([]native.ScoredResult, error) {
+	if a.s == nil {
+		return nil, nil
+	}
+	res, err := a.s.FTSSearch(query, k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]native.ScoredResult, len(res))
+	for i, r := range res {
+		out[i] = native.ScoredResult{ID: r.ID, Score: r.Score}
+	}
+	return out, nil
+}
+
+func (a nativeCognAdapter) VecKNN(query []float32, k int) ([]native.ScoredResult, error) {
+	if a.s == nil {
+		return nil, nil
+	}
+	res, err := a.s.VecKNN(query, k)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]native.ScoredResult, len(res))
+	for i, r := range res {
+		out[i] = native.ScoredResult{ID: r.ID, Score: r.Score}
+	}
+	return out, nil
+}
+
+func (a nativeCognAdapter) GraphSpreadingActivation(startIDs []string, maxDepth int, energyDecay, dormancyThreshold float64, fanOutLimit int) ([]native.ScoredResult, error) {
+	if a.s == nil {
+		return nil, nil
+	}
+	res, err := a.s.GraphSpreadingActivation(startIDs, maxDepth, energyDecay, dormancyThreshold, fanOutLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]native.ScoredResult, len(res))
+	for i, r := range res {
+		out[i] = native.ScoredResult{ID: r.ID, Score: r.Score}
+	}
+	return out, nil
 }

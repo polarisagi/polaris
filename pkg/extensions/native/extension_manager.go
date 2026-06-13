@@ -23,10 +23,44 @@ type installExtensionArgs struct {
 	ID string `json:"id"`
 }
 
+// CognitiveSearcher 认知检索接口（消费方定义，实现由 SurrealDBCoreStore 提供）。
+type CognitiveSearcher interface {
+	// FTSSearch BM25 全文检索，返回 top-k 结果（docID + score）。
+	FTSSearch(query string, k int) ([]ScoredResult, error)
+	// VecKNN 向量近邻检索，query 为查询向量，k 为返回数量。
+	VecKNN(query []float32, k int) ([]ScoredResult, error)
+	// GraphSpreadingActivation 从起始节点蔓延激活图遍历。
+	GraphSpreadingActivation(startIDs []string, maxDepth int, energyDecay, dormancyThreshold float64, fanOutLimit int) ([]ScoredResult, error)
+}
+
+// ScoredResult 检索结果条目。
+type ScoredResult struct {
+	ID    string // 形如 "ext_{extensionID}"
+	Score float64
+}
+
+// EmbedFn 文本向量化函数（依赖注入，nil 时跳过向量检索）。
+type EmbedFn func(ctx context.Context, text string) ([]float32, error)
+
 // MakeExtensionSearchFn 创建 search_extension 工具函数。
-// 搜索策略：本地 extension_catalog 优先（5个内置市场同步缓存），再补充查询线上 MCP 注册表，合并去重。
-// db 为 nil 时降级为纯网络搜索；client 为 nil 时降级为纯本地搜索。
-func MakeExtensionSearchFn(db *sql.DB, client *marketplace.MCPMarketplaceClient) action.InProcessFn {
+//
+// 检索优先级：
+//  1. SurrealDB FTSSearch（BM25 全文，索引由 Extension Librarian 写入）
+//  2. SurrealDB VecKNN（语义向量近邻，需 embedFn 不为 nil）
+//  3. SurrealDB GraphSpreadingActivation（从 FTS/Vec 命中节点沿 "provides" 边扩散）
+//  4. SQLite extension_catalog LIKE 查询（fallback）
+//  5. 线上 MCP 注册表（最后兜底）
+//
+// cognitive 或 db 为 nil 时自动降级，不影响可用性。
+//
+//nolint:gocyclo
+func MakeExtensionSearchFn(
+	db *sql.DB,
+	client *marketplace.MCPMarketplaceClient,
+	cognitive CognitiveSearcher,
+	embedFn EmbedFn,
+) action.InProcessFn {
+	//nolint:nestif
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args searchExtensionArgs
 		if err := json.Unmarshal(input, &args); err != nil {
@@ -40,33 +74,130 @@ func MakeExtensionSearchFn(db *sql.DB, client *marketplace.MCPMarketplaceClient)
 
 		seen := make(map[string]bool)
 		var results []protocol.RegistryEntry
+		var startIDs []string
 
-		// 1. 本地 extension_catalog（5个内置市场同步缓存）
-		if db != nil {
+		// Step 1: SurrealDB FTSSearch
+		if cognitive != nil {
+			ftsRes, err := cognitive.FTSSearch(args.Query, 10)
+			if err != nil {
+				slog.Warn("search_extension: FTSSearch failed", "err", err)
+			} else {
+				var ids []string
+				for _, r := range ftsRes {
+					if strings.HasPrefix(r.ID, "ext_") {
+						extID := strings.TrimPrefix(r.ID, "ext_")
+						ids = append(ids, extID)
+						startIDs = append(startIDs, r.ID)
+					}
+				}
+				if len(ids) > 0 && db != nil {
+					entries, err := fetchExtensionsByIDs(ctx, db, ids)
+					if err != nil {
+						slog.Warn("search_extension: fetch FTS extensions failed", "err", err)
+					} else {
+						for _, e := range entries {
+							if !seen[e.ID] {
+								seen[e.ID] = true
+								results = append(results, e)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Step 2: SurrealDB VecKNN
+		if cognitive != nil && embedFn != nil {
+			vec, err := embedFn(ctx, args.Query)
+			if err != nil {
+				slog.Warn("search_extension: embed query failed", "err", err)
+			} else {
+				vecRes, err := cognitive.VecKNN(vec, 10)
+				if err != nil {
+					slog.Warn("search_extension: VecKNN failed", "err", err)
+				} else {
+					var ids []string
+					for _, r := range vecRes {
+						if strings.HasPrefix(r.ID, "ext_") {
+							extID := strings.TrimPrefix(r.ID, "ext_")
+							ids = append(ids, extID)
+							startIDs = append(startIDs, r.ID)
+						}
+					}
+					if len(ids) > 0 && db != nil {
+						entries, err := fetchExtensionsByIDs(ctx, db, ids)
+						if err != nil {
+							slog.Warn("search_extension: fetch VecKNN extensions failed", "err", err)
+						} else {
+							for _, e := range entries {
+								if !seen[e.ID] {
+									seen[e.ID] = true
+									results = append(results, e)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Step 3: SurrealDB GraphSpreadingActivation
+		if cognitive != nil && len(startIDs) > 0 {
+			graphRes, err := cognitive.GraphSpreadingActivation(startIDs, 2, 0.7, 0.1, 5)
+			if err != nil {
+				slog.Warn("search_extension: GraphSpreadingActivation failed", "err", err)
+			} else {
+				var ids []string
+				for _, r := range graphRes {
+					if strings.HasPrefix(r.ID, "ext_") {
+						extID := strings.TrimPrefix(r.ID, "ext_")
+						ids = append(ids, extID)
+					}
+				}
+				if len(ids) > 0 && db != nil {
+					entries, err := fetchExtensionsByIDs(ctx, db, ids)
+					if err != nil {
+						slog.Warn("search_extension: fetch Graph extensions failed", "err", err)
+					} else {
+						for _, e := range entries {
+							if !seen[e.ID] {
+								seen[e.ID] = true
+								results = append(results, e)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Step 4: SQLite LIKE fallback
+		if len(results) < 3 && db != nil {
 			localResults, err := searchLocalCatalog(ctx, db, args.Query)
 			if err != nil {
 				slog.Warn("search_extension: local catalog search failed", "err", err)
+			} else {
+				for _, e := range localResults {
+					if !seen[e.ID] {
+						seen[e.ID] = true
+						results = append(results, e)
+					}
+				}
 			}
-			for _, e := range localResults {
-				seen[e.ID] = true
-				results = append(results, e)
-			}
-			slog.Info("native: search_extension local hits", "count", len(localResults))
 		}
 
-		// 2. 线上 MCP 注册表补充（去重已出现的 ID）
-		if client != nil {
+		// Step 5: 线上 MCP 注册表兜底
+		if len(results) == 0 && client != nil {
 			netResults, err := client.Search(ctx, args.Query)
 			if err != nil {
 				slog.Warn("search_extension: online registry search failed", "err", err)
-			}
-			for _, e := range netResults {
-				if !seen[e.ID] {
-					seen[e.ID] = true
-					results = append(results, e)
+			} else {
+				for _, e := range netResults {
+					if !seen[e.ID] {
+						seen[e.ID] = true
+						results = append(results, e)
+					}
 				}
 			}
-			slog.Info("native: search_extension online hits (after dedup)", "total", len(results))
 		}
 
 		if len(results) == 0 && db == nil && client == nil {
@@ -104,6 +235,50 @@ func searchLocalCatalog(ctx context.Context, db *sql.DB, query string) ([]protoc
 			continue
 		}
 		results = append(results, e)
+	}
+	return results, rows.Err()
+}
+
+// fetchExtensionsByIDs 根据 extensionID 列表从 extension_instances 批量查询元数据。
+func fetchExtensionsByIDs(ctx context.Context, db *sql.DB, ids []string) ([]protocol.RegistryEntry, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf("SELECT id, name, publisher, config FROM extension_instances WHERE id IN (%s)", strings.Join(placeholders, ","))
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "fetchExtensionsByIDs: db query failed", err)
+	}
+	defer rows.Close()
+
+	var results []protocol.RegistryEntry
+	for rows.Next() {
+		var id, name, publisher, configStr string
+		if err := rows.Scan(&id, &name, &publisher, &configStr); err != nil {
+			continue
+		}
+		var desc string
+		if configStr != "" {
+			var config map[string]any
+			if err := json.Unmarshal([]byte(configStr), &config); err == nil {
+				if d, ok := config["description"].(string); ok {
+					desc = d
+				}
+			}
+		}
+		results = append(results, protocol.RegistryEntry{
+			ID:          id,
+			Name:        name,
+			Publisher:   publisher,
+			Description: desc,
+		})
 	}
 	return results, rows.Err()
 }
