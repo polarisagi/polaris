@@ -3,7 +3,7 @@
 - **状态**: Accepted
 - **日期**: 2026-05-21
 - **决策者**: AI Architect
-- **相关模块**: M7 Tool Action Layer (pkg/action/mcp)
+- **相关模块**: M7 Tool Action Layer / `pkg/extensions/mcp/`
 
 ## 上下文
 
@@ -33,8 +33,7 @@ MCP 协议早期定义了 stdio / SSE（Server-Sent Events）/ HTTP 三类传输
 
 ## 引用代码
 
-- `pkg/action/mcp_client.go`（Streamable HTTP 实现）
-- `pkg/action/mcp_transport.go`（错误映射）
+- `pkg/extensions/mcp/mcp_client.go`（Streamable HTTP 实现；MCP Client 层已迁移至 L2 扩展层 `pkg/extensions/mcp/`）
 - `docs/arch/M07-Tool-Action-Layer.md §1`（MCP 双向架构）
 
 ## 修订记录
@@ -42,3 +41,4 @@ MCP 协议早期定义了 stdio / SSE（Server-Sent Events）/ HTTP 三类传输
 | 日期 | 变更 |
 |------|------|
 | 2026-05-21 | 初稿，从 M07 §1 抽离决策 |
+| 2026-06-13 | 引用路径更新：pkg/action/mcp_client.go → pkg/extensions/mcp/mcp_client.go；mcp_transport.go 不存在 |

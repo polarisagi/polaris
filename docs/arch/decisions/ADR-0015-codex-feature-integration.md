@@ -93,7 +93,9 @@ my-plugin/
 
 ### 2.3 agentskills.io 标准适配（P2）
 
-**决策**: 在 `pkg/cognition/skill/` 新增 `agentskills_adapter.go` 将 SKILL.md 格式转换为 `protocol.SkillMeta`。
+> **⚠ 实现状态（2026-06-13）**：`agentskills_adapter.go` 尚未创建。SKILL.md 解析逻辑当前直接在 `pkg/extensions/skill/` 及 `pkg/cognition/` 中按需读取，未抽象为独立适配器。后续如需独立适配器，创建路径应为 `pkg/extensions/skill/agentskills_adapter.go`（非 `pkg/cognition/skill/`，L2 层已整合至 `pkg/extensions/`）。
+
+**决策**: 在 `pkg/extensions/skill/` 新增 `agentskills_adapter.go`（原计划路径 `pkg/cognition/skill/` 已废弃，L2 扩展层统一至 `pkg/extensions/`）将 SKILL.md 格式转换为 `protocol.SkillMeta`。
 
 **挑战 D**（cosign 签名缺失）: agentskills.io SKILL.md 无 SIGNATURE 文件，Polaris Register() 要求 `SignatureValid=true`。
 

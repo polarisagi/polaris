@@ -12,9 +12,9 @@
    - **实现机制**：在 `pkg/substrate/observability/metrics.go` 实现 `SurpriseIndex` 的基础版本。计算过程结合了基于 `embedding` 的 Cosine 距离（采用 EMA 平滑）以及基于 `toolSeq` 的 Jaccard 距离。
    - **并发设计**：使用 `sync.RWMutex` 确保该单例在高并发情况下的读写安全。这不仅满足了可观测的一等公民诉求，同时也提供了 S_PERCEIVE 阶段无思考触发 (FastPath) 的路由基础。
 
-2. **WasmTester 与沙箱能力下沉 (L1 -> L0 接口)**
-   - **实现机制**：在 `pkg/cognition/skill_pipeline.go` 定义 Consumer-side `WasmExecutor` 接口。
-   - **解耦逻辑**：解耦了认知层对 `pkg/action` Wasm 沙箱实例的直接依赖。`WasmTester` 提供运行时冷启动时间以及内存消耗测试，满足可观测原则与隔离要求。
+2. **ScriptTester 与沙箱能力下沉 (L1 -> L0 接口)**
+   - **实现机制**：在 `pkg/cognition/skill_pipeline.go` 定义 Consumer-side `ScriptExecutor` 接口。
+   - **解耦逻辑**：解耦了认知层对 `pkg/action` 脚本沙箱实例的直接依赖。`ScriptTester` 提供运行时冷启动时间以及内存消耗测试，满足可观测原则与隔离要求。
 
 3. **BM25 混合检索中的全局状态统计 (L0)**
    - **实现机制**：在 `pkg/substrate/hybrid_retrieve.go` 引入了 `CorpusStats` 结构。动态记录总文档数、分词频次、平均长度。
@@ -27,3 +27,10 @@
 ## 后果
 - **正面**：成功串联了四大模块（观测、沙箱、检索、状态机）。消除了模块循环依赖的隐患，并且完全维持 8GB 以下内存的 Tier-0 可观测标准和错误处理策略 (`internal/errors`)。
 - **负面**：`CorpusStats` 状态缓存在内存中存在节点宕机数据丢失的风险；未来在需要持久化或跨节点扩容时，需要进一步与 M2 Storage 接驳（暂作为二阶段改进项）。
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-06-09 | 初稿，Accepted |
+| 2026-06-13 | WasmTester/WasmExecutor → ScriptTester/ScriptExecutor（与 skill_pipeline.go 实际命名对齐） |

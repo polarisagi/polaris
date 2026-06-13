@@ -47,7 +47,8 @@
 ## 影响
 
 - `pkg/gateway/server/plugin_catalog.go`：`installSkillSource` / `handleUninstallPlugin` / `appendCustomCatalogs` 重写
-- `internal/protocol/schema/`：新增 034、035、036 迁移文件
+- `internal/protocol/schema/`：`020_extension_instances.sql`（主表）；相关运行时表均在原始 DDL 中直接包含所需字段（上线前阶段，无独立迁移补丁文件）
+  > **注（2026-06-13）**：原计划的 034/035/036 迁移补丁文件**未创建**。`extension_instances` 表及相关字段变更均已内嵌于 020/021/028 等原始 DDL 文件，直接删库重建生效。
 - `M13-bis-Extension-Registry.md`：安装流完整描述
 - M9 Self-Improvement Engine：promote 路径必须经 `extension_instances` → `SkillRegistry`（inv_M6_02）
 

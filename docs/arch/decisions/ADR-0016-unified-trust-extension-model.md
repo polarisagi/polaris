@@ -109,12 +109,16 @@ dependencies:
 
 ### 挑战 1：SignatureValid bool → TrustTier（proto-break）
 
-**影响**：`protocol.SkillMeta.SignatureValid bool` 有 6 处引用（4 处在 skill 包，2 处在 plugin 包）。数据库 `008_skills.sql` 有 `signature_valid BOOLEAN` 列。
+**影响**：`protocol.SkillMeta.SignatureValid bool` 有 6 处引用（4 处在 skill 包，2 处在 plugin 包）。
 
-**解法**：
-- 添加 `021_skill_trust_tier.sql` 迁移：ADD `trust_tier INTEGER`，从 `signature_valid` 保守迁移（`true → TrustCommunity(2)`）
-- 新代码只写 `trust_tier`，旧 `signature_valid` 列保留（向后兼容读取），不再写入
-- 下次内置技能 UPSERT 时，会以 `TrustSystem(4)` 覆盖，无需手动升级
+**解法（已实现，2026-06-13 更新）**：
+- `trust_tier` 直接内嵌于各原始 DDL 文件，无需独立迁移补丁：
+  - `008_skills.sql`：`trust_tier INTEGER NOT NULL DEFAULT 0`（`signature_valid` 列已废弃移除）
+  - `019_extension_catalog.sql`：`trust_tier INTEGER NOT NULL DEFAULT 1`
+  - `020_extension_instances.sql`：`trust_tier INTEGER NOT NULL DEFAULT 0`
+  - `021_plugins.sql`：`trust_tier INTEGER NOT NULL DEFAULT 1`
+- 原计划的 `021_skill_trust_tier.sql` 独立迁移文件**未创建**（上线前阶段直接修改原始 DDL + 删库重建，符合 DDL 修改策略）
+- 内置技能首次 UPSERT 时以 `TrustSystem(4)` 写入，无需手动升级
 
 ### 挑战 2：三大平台「官方」的边界
 
@@ -136,10 +140,10 @@ dependencies:
 
 **问题**：`MCPClient.Trusted bool` 控制 TaintLevel，无法区分 TrustOfficial 和 TrustCommunity。
 
-**解法**：
-- `MCPServerConfig` 增加 `TrustTier int` 字段（数据库 `022_mcp_trust_tier.sql`）
+**解法（已实现，2026-06-13 更新）**：
+- `015_mcp_servers.sql` 直接包含 `trust_tier INTEGER NOT NULL DEFAULT 2`（原计划的独立迁移文件 `022_mcp_trust_tier.sql`**未创建**，上线前直接修改原始 DDL）
 - `MCPClientConfig.Trusted bool` 由 `TrustTier >= TrustOfficial` 派生，无需修改 MCPClient 接口
-- `mcp_servers` 表现有 `catalog_id` 非空的条目（官方推荐安装）自动迁移到 `trust_tier=3`
+- `mcp_servers` 表现有 `catalog_id` 非空的条目默认 `trust_tier=2`（TrustCommunity），官方条目需显式升级至 `trust_tier=3`
 
 ### 挑战 5：Plugin Bundle 与现有 Catalog 的关系
 
@@ -167,7 +171,7 @@ dependencies:
 |---|---|---|
 | R2 可验证执行 | TrustOfficial 技能在 Sbx-L2 执行 | inv_M6_03 + inv_M7_03 保持，TrustTier.MaxSandboxTier() 硬约束 |
 | R2 可验证执行 | TrustUntrusted fail-closed | `Trust < TrustLocal` → 拒绝注册，与原 `!SignatureValid` 语义等价 |
-| R6 State-in-DB | trust_tier 落 SQLite | 021/022 迁移脚本，无内存专属状态 |
+| R6 State-in-DB | trust_tier 落 SQLite | 直接内嵌于 008/015/019/020/021 原始 DDL，无内存专属状态 |
 
 ---
 
@@ -190,3 +194,10 @@ dependencies:
 - M06 §9: AgentSkills 格式适配（确认 SKILL.md 已是标准，无需迁移）
 - M07 §14,15: Plugin Registry + Hook（保留，M7 层基础设施正确）
 - M13 §Plugin Catalog: 扩展 CatalogEntry（Publisher + TrustTier + Type）
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-05-21 | 初稿，Accepted |
+| 2026-06-13 | 挑战1/4：021_skill_trust_tier.sql / 022_mcp_trust_tier.sql 未创建；trust_tier 直接内嵌于原始 DDL 008/015/019/020/021 |
