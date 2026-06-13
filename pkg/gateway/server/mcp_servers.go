@@ -115,7 +115,7 @@ func (s *Server) handleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 		Publisher:   "user",
 		HasHooks:    false,
 	}
-	if err := s.installMgr.InstallExtension(r.Context(), installReq); err != nil {
+	if err := s.installMgr.Authorize(r.Context(), installReq); err != nil {
 		http.Error(w, "policy denied: "+err.Error(), http.StatusForbidden)
 		return
 	}
@@ -170,6 +170,28 @@ func (s *Server) handleUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	if s.installMgr == nil {
+		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	authCtxM := FromContext(r.Context())
+	principal := authCtxM.UserID
+	if principal == "" {
+		principal = "user"
+	}
+	if err := s.installMgr.Authorize(r.Context(), marketplace.InstallRequest{
+		Principal:   principal,
+		ExtensionID: id,
+		ExtType:     "mcp",
+		TrustTier:   c.TrustTier,
+		Publisher:   "user",
+		HasHooks:    false,
+	}); err != nil {
+		http.Error(w, "policy denied: "+err.Error(), http.StatusForbidden)
+		return
+	}
+
 	argsBytes, _ := json.Marshal(c.Args)
 	envBytes, _ := json.Marshal(c.Env)
 	now := time.Now().UTC().Format(time.RFC3339)

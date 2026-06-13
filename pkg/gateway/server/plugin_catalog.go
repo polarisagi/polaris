@@ -235,7 +235,7 @@ func (s *Server) handleInstallPlugin(w http.ResponseWriter, r *http.Request) { /
 		Publisher:   entry.Publisher,
 		HasHooks:    hasHooks,
 	}
-	if err := s.installMgr.InstallExtension(r.Context(), installReq); err != nil { //nolint:nestif
+	if err := s.installMgr.Authorize(r.Context(), installReq); err != nil { //nolint:nestif
 		if errors.Is(err, marketplace.ErrRequiresApproval) {
 			// Trigger HITL via hitlGateway
 			if s.hitlGateway != nil {

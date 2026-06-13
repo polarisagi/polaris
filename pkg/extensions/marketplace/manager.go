@@ -92,10 +92,10 @@ func (m *Manager) WithRegistrar(r RuntimeRegistrar) *Manager {
 	return m
 }
 
-// InstallExtension handles the install flow with M11 Cedar-Gate.
+// Authorize handles the install flow with M11 Cedar-Gate without writing to DB.
 //
 //nolint:gocyclo
-func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) error {
+func (m *Manager) Authorize(ctx context.Context, req InstallRequest) error {
 	mode, err := m.prefsRepo.GetPermissionMode(ctx)
 	if err != nil {
 		mode = protocol.ModeAutoReview
@@ -136,6 +136,14 @@ func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) erro
 			return ErrRequiresApproval
 		}
 		return perrors.New(perrors.CodeForbidden, "installation denied")
+	}
+	return nil
+}
+
+// InstallExtension handles the install flow with M11 Cedar-Gate and stores to DB.
+func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) error {
+	if err := m.Authorize(ctx, req); err != nil {
+		return err
 	}
 
 	// PolicyGate 放行后写入 extension_instances，满足 ADR-0019 三层模型要求（P0-6）。

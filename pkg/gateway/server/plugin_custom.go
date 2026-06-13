@@ -45,7 +45,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) { //n
 		Publisher:   "user",
 		HasHooks:    false,
 	}
-	if err := s.installMgr.InstallExtension(r.Context(), installReq0); err != nil { //nolint:nestif
+	if err := s.installMgr.Authorize(r.Context(), installReq0); err != nil { //nolint:nestif
 		if errors.Is(err, marketplace.ErrRequiresApproval) {
 			if s.hitlGateway != nil {
 				_, _ = s.hitlGateway.Prompt(r.Context(), protocol.HITLPrompt{
@@ -123,7 +123,7 @@ func (s *Server) handleCreatePlugin(w http.ResponseWriter, r *http.Request) { //
 		Publisher:   "user",
 		HasHooks:    false,
 	}
-	if err := s.installMgr.InstallExtension(r.Context(), installReq1); err != nil { //nolint:nestif
+	if err := s.installMgr.Authorize(r.Context(), installReq1); err != nil { //nolint:nestif
 		if errors.Is(err, marketplace.ErrRequiresApproval) {
 			if s.hitlGateway != nil {
 				_, _ = s.hitlGateway.Prompt(r.Context(), protocol.HITLPrompt{
@@ -200,7 +200,7 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) { //nol
 		Publisher:   "user",
 		HasHooks:    false,
 	}
-	if err := s.installMgr.InstallExtension(r.Context(), installReq2); err != nil { //nolint:nestif
+	if err := s.installMgr.Authorize(r.Context(), installReq2); err != nil { //nolint:nestif
 		if errors.Is(err, marketplace.ErrRequiresApproval) {
 			if s.hitlGateway != nil {
 				_, _ = s.hitlGateway.Prompt(r.Context(), protocol.HITLPrompt{
@@ -292,7 +292,7 @@ func (s *Server) handleCreateMCP(w http.ResponseWriter, r *http.Request) { //nol
 		Publisher:   "user",
 		HasHooks:    false,
 	}
-	if err := s.installMgr.InstallExtension(r.Context(), installReq3); err != nil { //nolint:nestif
+	if err := s.installMgr.Authorize(r.Context(), installReq3); err != nil { //nolint:nestif
 		if errors.Is(err, marketplace.ErrRequiresApproval) {
 			if s.hitlGateway != nil {
 				_, _ = s.hitlGateway.Prompt(r.Context(), protocol.HITLPrompt{
