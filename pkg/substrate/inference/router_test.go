@@ -2,7 +2,9 @@ package inference
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -128,5 +130,62 @@ func TestClearString(t *testing.T) {
 	clearString(&s)
 	if s != "" {
 		t.Fatal("clearString should empty the string")
+	}
+}
+
+type mockOutboxWriter struct {
+	entries []protocol.OutboxEntry
+}
+
+func (m *mockOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	m.entries = append(m.entries, entry)
+	return nil
+}
+
+func TestCircuitBreaker_OnRecovery(t *testing.T) {
+	reg := NewProviderRegistry()
+	p := &mockProvider{failCount: 0}
+	reg.Register("recover_test", "RecoverTest", p)
+
+	outbox := &mockOutboxWriter{}
+	ir := NewInferenceRouter(reg, nil)
+	ir.InjectOutboxWriter(outbox)
+
+	entry := reg.entries["recover_test"]
+	// 强制状态为 HalfOpen
+	entry.cb.state.Store(int32(circuitHalfOpen))
+
+	// 触发 RecordSuccess
+	entry.recordOutcome(true, func() {
+		reg.mu.RLock()
+		fn := reg.onRecovery
+		name := entry.name
+		reg.mu.RUnlock()
+		if fn != nil {
+			fn(name)
+		}
+	})
+
+	// 等待异步回调执行
+	time.Sleep(50 * time.Millisecond)
+
+	if len(outbox.entries) == 0 {
+		t.Fatal("expected outbox entry to be created on recovery")
+	}
+
+	found := false
+	for _, evt := range outbox.entries {
+		if evt.Operation == "provider_recovery" {
+			found = true
+			if !strings.Contains(string(evt.Payload), "m4_provider_recovery") {
+				t.Errorf("payload missing event_type: %s", evt.Payload)
+			}
+			if !strings.Contains(string(evt.Payload), "recover_test") {
+				t.Errorf("payload missing provider_name: %s", evt.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("did not find provider_recovery outbox event")
 	}
 }

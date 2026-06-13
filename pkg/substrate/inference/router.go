@@ -11,7 +11,9 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,9 +69,11 @@ func (cb *circuitBreaker) Allow() bool {
 	return false
 }
 
-func (cb *circuitBreaker) RecordSuccess() {
+func (cb *circuitBreaker) RecordSuccess() (recovered bool) {
+	prev := circuitState(cb.state.Load())
 	cb.failures.Store(0)
 	cb.state.Store(int32(circuitClosed))
+	return prev == circuitHalfOpen
 }
 
 func (cb *circuitBreaker) RecordFailure() {
@@ -125,28 +129,39 @@ func (e *providerEntry) recordLatency(ms float64) {
 	e.mu.Unlock()
 }
 
-func (e *providerEntry) recordOutcome(success bool) {
+func (e *providerEntry) recordOutcome(success bool, onRecovery func()) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if success {
 		e.successRate = e.successRate*0.95 + 0.05
-		e.cb.RecordSuccess()
+		if recovered := e.cb.RecordSuccess(); recovered && onRecovery != nil {
+			go onRecovery() // 异步触发，不阻断热路径
+		}
 	} else {
 		e.successRate = e.successRate * 0.95
 		e.cb.RecordFailure()
 	}
-	e.mu.Unlock()
 }
 
 // ─── ProviderRegistry ──────────────────────────────────────────────────────────
 
 // ProviderRegistry 注册/注销 Provider，支持热更新。
 type ProviderRegistry struct {
-	mu      sync.RWMutex
-	entries map[string]*providerEntry
+	mu         sync.RWMutex
+	entries    map[string]*providerEntry
+	onRecovery func(providerName string) // 可选：Provider 熔断恢复时的回调
 }
 
 func NewProviderRegistry() *ProviderRegistry {
 	return &ProviderRegistry{entries: make(map[string]*providerEntry)}
+}
+
+// InjectRecoveryHandler 注入 Provider 恢复回调，由上层（如 InferenceRouter）在初始化时调用。
+// fn 在 circuitBreaker HalfOpen→Closed 时触发，providerName 为恢复的 Provider 名称。
+func (r *ProviderRegistry) InjectRecoveryHandler(fn func(providerName string)) {
+	r.mu.Lock()
+	r.onRecovery = fn
+	r.mu.Unlock()
 }
 
 func (r *ProviderRegistry) Register(name, displayName string, p protocol.Provider) {
@@ -300,8 +315,13 @@ func (r *ProviderRegistry) best(req *protocol.InferRequest) *providerEntry {
 // InferenceRouter 实现 protocol.Provider，对上层透明地完成多厂商路由。
 // 架构文档: docs/arch/M01-Inference-Runtime.md §4
 type InferenceRouter struct {
-	registry *ProviderRegistry
-	client   *http.Client
+	registry     *ProviderRegistry
+	client       *http.Client
+	outboxWriter protocol.OutboxWriter
+}
+
+func (ir *InferenceRouter) InjectOutboxWriter(w protocol.OutboxWriter) {
+	ir.outboxWriter = w
 }
 
 var _ protocol.Provider = (*InferenceRouter)(nil)
@@ -311,10 +331,27 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer) *Infe
 	if dialer != nil {
 		transport.DialContext = dialer.DialContext
 	}
-	return &InferenceRouter{
+	ir := &InferenceRouter{
 		registry: reg,
 		client:   &http.Client{Transport: transport, Timeout: 120 * time.Second},
 	}
+	reg.InjectRecoveryHandler(func(providerName string) {
+		// 向 outbox 投递 m4_provider_recovery 事件，唤醒因 provider_suspended 挂起的 Agent
+		if ir.outboxWriter == nil {
+			return
+		}
+		payload, _ := json.Marshal(map[string]string{
+			"event_type":    "m4_provider_recovery",
+			"provider_name": providerName,
+		})
+		_ = ir.outboxWriter.Write(context.Background(), protocol.OutboxEntry{
+			TargetEngine:   "agent_kernel",
+			Operation:      "provider_recovery",
+			Payload:        payload,
+			IdempotencyKey: "recovery:" + providerName + ":" + strconv.FormatInt(time.Now().Unix(), 10),
+		})
+	})
+	return ir
 }
 
 func (ir *InferenceRouter) ModelID() string {
@@ -353,7 +390,15 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, o
 	resp, err := entry.provider.Infer(ctx, msgs, opts...)
 	ms := float64(time.Since(start).Milliseconds())
 	entry.recordLatency(ms)
-	entry.recordOutcome(err == nil)
+	entry.recordOutcome(err == nil, func() {
+		ir.registry.mu.RLock()
+		fn := ir.registry.onRecovery
+		name := entry.name
+		ir.registry.mu.RUnlock()
+		if fn != nil {
+			fn(name)
+		}
+	})
 	if err != nil {
 		// Failover: 尝试次优 Provider
 		return ir.failover(ctx, msgs, opts, req, entry.name)
@@ -387,7 +432,15 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []protocol.Mess
 	start := time.Now()
 	ch, err := entry.provider.StreamInfer(ctx, msgs, opts...)
 	entry.recordLatency(float64(time.Since(start).Milliseconds()))
-	entry.recordOutcome(err == nil)
+	entry.recordOutcome(err == nil, func() {
+		ir.registry.mu.RLock()
+		fn := ir.registry.onRecovery
+		name := entry.name
+		ir.registry.mu.RUnlock()
+		if fn != nil {
+			fn(name)
+		}
+	})
 	if err != nil {
 		// Failover: 尝试次优 Provider
 		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
@@ -423,7 +476,15 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []protocol.M
 		return nil, perrors.New(perrors.CodeInternal, "inference_router: all providers failed (stream)")
 	}
 	ch, err := chosen.provider.StreamInfer(ctx, msgs, opts...)
-	chosen.recordOutcome(err == nil)
+	chosen.recordOutcome(err == nil, func() {
+		ir.registry.mu.RLock()
+		fn := ir.registry.onRecovery
+		name := chosen.name
+		ir.registry.mu.RUnlock()
+		if fn != nil {
+			fn(name)
+		}
+	})
 	return ch, err
 }
 
@@ -491,7 +552,15 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message
 		return nil, perrors.New(perrors.CodeInternal, "inference_router: all providers failed")
 	}
 	resp, err := chosen.provider.Infer(ctx, msgs, opts...)
-	chosen.recordOutcome(err == nil)
+	chosen.recordOutcome(err == nil, func() {
+		ir.registry.mu.RLock()
+		fn := ir.registry.onRecovery
+		name := chosen.name
+		ir.registry.mu.RUnlock()
+		if fn != nil {
+			fn(name)
+		}
+	})
 	return resp, err
 }
 
