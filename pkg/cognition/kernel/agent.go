@@ -41,6 +41,7 @@ type Agent struct {
 	whisperChan     <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
 	whisperSendChan chan<- protocol.MemoryWhisper // PlannerPool 推送端
 	plannerSpawner  func(ctx context.Context, goal, taskType string, provider protocol.Provider)
+	outboxWriter    protocol.OutboxWriter
 }
 
 type AgentConfig struct {
@@ -210,6 +211,11 @@ func (a *Agent) GetWhisperChan() chan<- protocol.MemoryWhisper {
 // InjectPlannerSpawner 注入 PlannerPool 构造器，打破循环依赖
 func (a *Agent) InjectPlannerSpawner(fn func(ctx context.Context, goal, taskType string, provider protocol.Provider)) {
 	a.plannerSpawner = fn
+}
+
+// InjectOutboxWriter 注入 OutboxWriter
+func (a *Agent) InjectOutboxWriter(ow protocol.OutboxWriter) {
+	a.outboxWriter = ow
 }
 
 // SetTaskIntent 设置任务意图（供 M8 Orchestrator 注入黑板任务信息）。

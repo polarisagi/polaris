@@ -194,12 +194,28 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			} else {
 				content = `{"Goal": "` + a.sCtx.RawIntentTS.Content() + `", "Complexity": 0.1}`
 			}
+			eventID := a.sm.nextEventID(a.sCtx.SessionID, "perceive")
 			_ = a.memory.Episodic().Append(ctx, protocol.Event{
-				ID:        a.sm.nextEventID(a.sCtx.SessionID, "perceive"),
+				ID:        eventID,
 				Type:      "task_perceived",
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			})
+			if a.outboxWriter != nil {
+				evPayload, _ := json.Marshal(protocol.Event{
+					ID:        eventID,
+					Type:      "task_perceived",
+					TaskID:    a.sCtx.SessionID,
+					Payload:   []byte(content),
+					CreatedAt: time.Now(),
+				})
+				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
+					TargetEngine:   "episodic",
+					Operation:      "project",
+					Payload:        evPayload,
+					IdempotencyKey: a.sCtx.SessionID + ":perceive:" + a.sCtx.AgentID,
+				})
+			}
 		}
 
 		// 成功完成计划，写入计划记忆
@@ -211,12 +227,28 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				planBytes, _ := json.Marshal(a.sCtx.DAGModel)
 				content = string(planBytes)
 			}
+			eventID := a.sm.nextEventID(a.sCtx.SessionID, "plan")
 			_ = a.memory.Episodic().Append(ctx, protocol.Event{
-				ID:        a.sm.nextEventID(a.sCtx.SessionID, "plan"),
+				ID:        eventID,
 				Type:      "plan_generated",
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			})
+			if a.outboxWriter != nil {
+				evPayload, _ := json.Marshal(protocol.Event{
+					ID:        eventID,
+					Type:      "plan_generated",
+					TaskID:    a.sCtx.SessionID,
+					Payload:   []byte(content),
+					CreatedAt: time.Now(),
+				})
+				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
+					TargetEngine:   "episodic",
+					Operation:      "project",
+					Payload:        evPayload,
+					IdempotencyKey: a.sCtx.SessionID + ":plan:" + a.sCtx.AgentID,
+				})
+			}
 		}
 
 		// 成功完成反思，写入反思记忆，并保存 ReasoningState
@@ -228,12 +260,28 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			// 保存至内存上下文以供跨轮次携带
 			a.sCtx.ReasoningState = []byte(content)
 
+			eventID := a.sm.nextEventID(a.sCtx.SessionID, "reflect")
 			_ = a.memory.Episodic().Append(ctx, protocol.Event{
-				ID:        a.sm.nextEventID(a.sCtx.SessionID, "reflect"),
+				ID:        eventID,
 				Type:      "reflection_completed",
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			})
+			if a.outboxWriter != nil {
+				evPayload, _ := json.Marshal(protocol.Event{
+					ID:        eventID,
+					Type:      "reflection_completed",
+					TaskID:    a.sCtx.SessionID,
+					Payload:   []byte(content),
+					CreatedAt: time.Now(),
+				})
+				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
+					TargetEngine:   "episodic",
+					Operation:      "project",
+					Payload:        evPayload,
+					IdempotencyKey: a.sCtx.SessionID + ":reflect:" + a.sCtx.AgentID,
+				})
+			}
 		}
 	} else {
 		detEff, ok := effect.(protocol.DeterministicEffect)
@@ -264,12 +312,28 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			// runExecuteDAG 内负责在完成后将结果写入 a.sCtx.ExecuteResult
 			err := a.runExecuteDAG(ctx)
 			if err == nil && a.memory != nil && len(a.sCtx.ExecuteResult) > 0 {
+				eventID := a.sm.nextEventID(a.sCtx.SessionID, "exec")
 				_ = a.memory.Episodic().Append(ctx, protocol.Event{
-					ID:        a.sm.nextEventID(a.sCtx.SessionID, "exec"),
+					ID:        eventID,
 					Type:      "execution_completed",
 					Payload:   a.sCtx.ExecuteResult,
 					CreatedAt: time.Now(),
 				})
+				if a.outboxWriter != nil {
+					evPayload, _ := json.Marshal(protocol.Event{
+						ID:        eventID,
+						Type:      "execution_completed",
+						TaskID:    a.sCtx.SessionID,
+						Payload:   a.sCtx.ExecuteResult,
+						CreatedAt: time.Now(),
+					})
+					_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
+						TargetEngine:   "episodic",
+						Operation:      "project",
+						Payload:        evPayload,
+						IdempotencyKey: a.sCtx.SessionID + ":exec:" + a.sCtx.AgentID,
+					})
+				}
 			}
 			// 业务执行失败会触发 ExecuteFail，同样不抛出以免阻断状态机
 			return nil

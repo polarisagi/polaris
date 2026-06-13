@@ -448,7 +448,9 @@ func run() error { //nolint:gocyclo
 
 	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler(store.DB(), dummySurreal{}, llmInfer, nil)
 	outboxWorker.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
-	slog.Info("polaris: SemanticCompressHandler and ExtensionLibrarianHandler registered")
+
+	outboxWorker.RegisterHandler("episodic", memory.EpisodicProjectorHandler(store.DB()))
+	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
 
 	// ─── 6.5 Skill Library (L1 M6) ───────────────────────────────────────────
 	skillRegistry := skill.NewSQLiteRegistry(store.DB())
@@ -546,6 +548,7 @@ func run() error { //nolint:gocyclo
 	agent.InjectHITL(hitlGateway)
 	// 注入 ToolRegistry：FSM runExecuteDAG 路径依赖非 nil registry，否则 fail-closed。
 	agent.InjectToolRegistry(toolReg)
+	agent.InjectOutboxWriter(outboxWorker)
 
 	// 注入 PlannerPool 构造器，打破 kernel↔swarm 循环依赖
 	agent.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
