@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -270,6 +272,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.HandleFunc("GET /v1/logs/stream", s.handleLogStream)
 	mux.HandleFunc("POST /v1/agent/query", s.handleAgentQuery)
 	mux.HandleFunc("POST /v1/agent/stream", s.handleAgentStream)
+	mux.HandleFunc("GET /v1/agent/tasks/{taskID}", s.handleGetAgentTask)
 	mux.HandleFunc("POST /v1/agent/{taskID}/interrupt", s.handleAgentInterrupt) // inv_global_08 <200ms
 	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
 	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
@@ -715,7 +718,8 @@ func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(report)
 }
 
-// handleAgentQuery 处理同步的单次对话/查询请求。
+// handleAgentQuery 将用户查询发布为异步 Blackboard Task，立即返回 task_id。
+// 调用方通过 GET /v1/agent/tasks/{taskID} 轮询结果（HE-Rule-5 FSM 控制流）。
 func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Input     string `json:"input"`
@@ -725,16 +729,72 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.Input) == "" {
+		http.Error(w, "input must not be empty", http.StatusBadRequest)
+		return
+	}
 
-	// 阻塞等待内核执行（MVP 直接向 Agent 注入 Intent，但目前内核仅支持独占执行）
-	// M8 Blackboard 集成后应该发布 Task，然后等待
-	s.agent.SetTaskIntent([]byte(req.Input))
-	// s.agent.SendIntent(...) 启动等
+	if s.blackboard == nil {
+		// Blackboard 未注入时退化：直接注入 Agent Intent，返回兼容响应
+		s.agent.SetTaskIntent([]byte(req.Input))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"task_id": "",
+			"status":  "pending",
+			"note":    "blackboard not available; intent injected directly",
+		})
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	task := &protocol.TaskEntry{
+		ID:          "task-" + uuid.NewString(),
+		Type:        "agent_query",
+		Priority:    0,
+		Status:      protocol.TaskPending,
+		Intent:      []byte(req.Input),
+		IntentTaint: protocol.TaintMedium, // 外部用户输入，中等置信度
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if err := s.blackboard.PostTask(r.Context(), task); err != nil {
+		slog.Error("handleAgentQuery: PostTask failed", "error", err)
+		http.Error(w, "failed to submit task", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted) // 202 Accepted
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"response": "Agent query acknowledged (async). Use SSE for streaming or Blackboard for results.",
+		"task_id": task.ID,
+		"status":  "pending",
 	})
+}
+
+// handleGetAgentTask 查询 Blackboard 中指定 task 的当前状态快照。
+// GET /v1/agent/tasks/{taskID}
+func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	if taskID == "" {
+		http.Error(w, "taskID is required", http.StatusBadRequest)
+		return
+	}
+
+	if s.blackboard == nil {
+		http.Error(w, "blackboard not available", http.StatusNotImplemented)
+		return
+	}
+
+	snap, err := s.blackboard.PeekTask(r.Context(), taskID)
+	if err != nil {
+		slog.Warn("handleGetAgentTask: PeekTask failed", "task_id", taskID, "error", err)
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(snap)
 }
 
 // handleGetPendingApprovals 获取待审批任务。
