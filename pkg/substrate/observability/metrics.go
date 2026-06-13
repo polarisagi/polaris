@@ -340,6 +340,8 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		)
 		meter := provider.Meter("github.com/polarisagi/polaris/pkg/substrate/observability")
 
+		InitMetrics(meter)
+
 		ema5sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema5s_tps")
 		ema30sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema30s_tps")
 		totalCounter, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.total")
