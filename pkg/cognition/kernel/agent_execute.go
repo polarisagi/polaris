@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -569,7 +571,8 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 	// 聚合所有节点输出为 JSON 数组，反思阶段可获取完整 DAG 执行结果。
 	// 单节点时保持向后兼容（直接取 output 字节）；多节点时序列化为 {"results":[...]} 结构。
-	a.sCtx.ExecuteResult = aggregateDAGResults(results)
+	raw := aggregateDAGResults(results)
+	a.sCtx.ExecuteResult = truncateExecResult(a.sCtx.SessionID, raw)
 	go func() { _ = a.SendIntent(protocol.TriggerExecuteDone) }()
 	return nil
 }
@@ -670,6 +673,34 @@ func aggregateDAGResults(results []NodeResult) []byte {
 	}
 	buf = append(buf, "]}"...)
 	return buf
+}
+
+// maxExecResultBytes 注入 LLM 的工具执行结果最大字节数（≈ 2000 token × 4 bytes/token）。
+const maxExecResultBytes = 8000
+
+// truncateExecResult 截断过长的执行结果，超限部分落盘并返回 log_ref 占位符。
+// 落盘路径：~/.polarisagi/polaris/logs/exec_results/<logID>.txt
+// LLM 收到：原文（≤8KB）或 <log_ref id="<logID>" bytes="<N>" /> 提示符（>8KB）
+func truncateExecResult(sessionID string, raw []byte) []byte {
+	if len(raw) <= maxExecResultBytes {
+		return raw
+	}
+
+	logID := fmt.Sprintf("%s-%d", sessionID, time.Now().UnixNano())
+	logDir := filepath.Join(os.ExpandEnv("$HOME"), ".polarisagi", "polaris", "logs", "exec_results")
+	// 创建目录（best-effort，失败不阻断）
+	if err := os.MkdirAll(logDir, 0700); err == nil {
+		logPath := filepath.Join(logDir, logID+".txt")
+		_ = os.WriteFile(logPath, raw, 0600)
+	}
+
+	// 截取前 512 字节作为内联预览，其余引用 log_ref
+	preview := raw[:512]
+	ref := fmt.Sprintf(
+		"<log_ref id=%q bytes=%d />\n[Preview]\n%s\n[...truncated, see log]",
+		logID, len(raw), preview,
+	)
+	return []byte(ref)
 }
 
 // mustMarshalString 将字符串 JSON 安全序列化为带引号的 JSON 字符串字面量。
