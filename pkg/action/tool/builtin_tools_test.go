@@ -127,7 +127,8 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 		"content": "written by agent",
 		"append":  false,
 	})
-	result, err := toolReg.ExecuteTool(context.Background(), "write_file", args, protocol.TaintNone)
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, "cap-write_file-token")
+	result, err := toolReg.ExecuteTool(ctx, "write_file", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool write_file: %v", err)
 	}
@@ -160,7 +161,8 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	}
 	for _, url := range blocked {
 		args, _ := json.Marshal(map[string]string{"url": url})
-		result, err := toolReg.ExecuteTool(context.Background(), "fetch_url", args, protocol.TaintNone)
+		ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, "cap-fetch_url-token")
+		result, err := toolReg.ExecuteTool(ctx, "fetch_url", args, protocol.TaintNone)
 		if err != nil {
 			t.Fatalf("ExecuteTool should not return err: %v", err)
 		}
@@ -179,7 +181,8 @@ func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"url": "https://example.com/api"})
-	result, err := toolReg.ExecuteTool(context.Background(), "fetch_url", args, protocol.TaintNone)
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, "cap-fetch_url-token")
+	result, err := toolReg.ExecuteTool(ctx, "fetch_url", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool fetch_url: %v", err)
 	}

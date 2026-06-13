@@ -529,18 +529,7 @@ func run() error { //nolint:gocyclo
 	defer reaperStop()
 
 	reaper := swarm.NewReaper(blackboard)
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-reaperCtx.Done():
-				return
-			case <-ticker.C:
-				reaper.Phase1(reaperCtx)
-			}
-		}
-	}()
+	go reaper.Run(reaperCtx)
 
 	sched := scheduler.NewSQLiteScheduler(store)
 	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
