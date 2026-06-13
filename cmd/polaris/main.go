@@ -45,6 +45,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/swarm"
 	"github.com/polarisagi/polaris/pkg/swarm/agents"
 	knowledgepkg "github.com/polarisagi/polaris/pkg/swarm/knowledge"
+	"github.com/polarisagi/polaris/pkg/swarm/planner"
 	si "github.com/polarisagi/polaris/pkg/swarm/self_improve"
 	"github.com/polarisagi/polaris/pkg/swarm/supervisor"
 )
@@ -545,6 +546,18 @@ func run() error { //nolint:gocyclo
 	agent.InjectHITL(hitlGateway)
 	// 注入 ToolRegistry：FSM runExecuteDAG 路径依赖非 nil registry，否则 fail-closed。
 	agent.InjectToolRegistry(toolReg)
+
+	// 注入 PlannerPool 构造器，打破 kernel↔swarm 循环依赖
+	agent.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
+		// whisperChan 由 agent 暴露，将 PlannerPool 最佳结果推回主脑
+		whisperChan := agent.GetWhisperChan()
+		if whisperChan == nil {
+			slog.Warn("spawn_planner: whisperChan is nil, PlannerPool 结果无法回传")
+			return
+		}
+		pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan)
+		pool.Run(ctx)
+	})
 
 	// 构造 ExtensionActivator（需要 db + cognitive + mcpMgr）
 	activator := native.NewExtensionActivator(store.DB(), nativeCogn, mcpMgr)

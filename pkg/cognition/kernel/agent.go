@@ -22,24 +22,25 @@ import (
 
 // Agent 是系统核心执行单元——一个 goroutine，空闲时挂起。
 type Agent struct {
-	ID             string
-	db             *sql.DB
-	intent         chan protocol.AgentTrigger
-	sm             *StateMachine
-	sCtx           *StateContext
-	Config         AgentConfig
-	ctx            context.Context
-	cancel         context.CancelFunc
-	taintGate      TaintGate
-	provider       protocol.Provider             // LLM 调用入口（由 M1 提供）
-	policyGate     protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
-	hitl           protocol.HITL                 // 人工审批网关
-	toolRegistry   protocol.ToolRegistry         // 工具注册表（由 M7 提供）
-	memory         protocol.Memory               // 四层记忆系统（由 M5 提供）
-	prm            *prm.DefaultPRM               // 可选；nil 时跳过多候选打分
-	scorer         *stepScorer                   // Adaptive Max-Steps 打分器
-	whisperChan    <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
-	plannerSpawner func(ctx context.Context, goal, taskType string, provider protocol.Provider)
+	ID              string
+	db              *sql.DB
+	intent          chan protocol.AgentTrigger
+	sm              *StateMachine
+	sCtx            *StateContext
+	Config          AgentConfig
+	ctx             context.Context
+	cancel          context.CancelFunc
+	taintGate       TaintGate
+	provider        protocol.Provider             // LLM 调用入口（由 M1 提供）
+	policyGate      protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
+	hitl            protocol.HITL                 // 人工审批网关
+	toolRegistry    protocol.ToolRegistry         // 工具注册表（由 M7 提供）
+	memory          protocol.Memory               // 四层记忆系统（由 M5 提供）
+	prm             *prm.DefaultPRM               // 可选；nil 时跳过多候选打分
+	scorer          *stepScorer                   // Adaptive Max-Steps 打分器
+	whisperChan     <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
+	whisperSendChan chan<- protocol.MemoryWhisper // PlannerPool 推送端
+	plannerSpawner  func(ctx context.Context, goal, taskType string, provider protocol.Provider)
 }
 
 type AgentConfig struct {
@@ -54,6 +55,7 @@ type AgentConfig struct {
 
 func NewAgent(id string, db *sql.DB, taintGate TaintGate, provider protocol.Provider) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
+	wCh := make(chan protocol.MemoryWhisper, 4) // 缓冲 4 条，防 PlannerPool 阻塞
 	return &Agent{
 		ID:     id,
 		db:     db,
@@ -63,12 +65,15 @@ func NewAgent(id string, db *sql.DB, taintGate TaintGate, provider protocol.Prov
 			AgentID:        id,
 			MaxReplan:      3,
 			SysEnvSnapshot: sysenv.GetSystemInfo().FormatMarkdown(),
+			WhisperChan:    wCh,
 		},
-		ctx:       ctx,
-		cancel:    cancel,
-		taintGate: taintGate,
-		provider:  provider,
-		scorer:    newDefaultStepScorer(),
+		ctx:             ctx,
+		cancel:          cancel,
+		taintGate:       taintGate,
+		provider:        provider,
+		scorer:          newDefaultStepScorer(),
+		whisperChan:     wCh,
+		whisperSendChan: wCh,
 	}
 }
 
@@ -194,6 +199,12 @@ func (a *Agent) InjectWhisperChan(ch <-chan protocol.MemoryWhisper) {
 	if a.sCtx != nil {
 		a.sCtx.WhisperChan = ch
 	}
+}
+
+// GetWhisperChan 返回 whisper 推送通道，供 PlannerPool 将最佳结果推回主脑。
+// 注意：whisperChan 为 receive-only，PlannerPool 持有 send-only 端。
+func (a *Agent) GetWhisperChan() chan<- protocol.MemoryWhisper {
+	return a.whisperSendChan
 }
 
 // InjectPlannerSpawner 注入 PlannerPool 构造器，打破循环依赖
