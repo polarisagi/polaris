@@ -18,6 +18,7 @@ package swarm
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 	DefaultLeaseTTL    = 60 * time.Second
 	HeartbeatInterval  = 15 * time.Second
 	ReaperScanInterval = 1 * time.Second
+	MaxSpawnDepth      = 3 // inv_M8_06: 委托链深度 ≤3
 
 	statusPending = "pending"
 	statusClaimed = "claimed"
@@ -78,6 +80,12 @@ func (bb *SQLiteBlackboard) removeCancelFunc(taskID string) {
 
 // PostTask 发布任务到黑板（INSERT OR IGNORE，幂等键保护）。
 func (bb *SQLiteBlackboard) PostTask(ctx context.Context, task *protocol.TaskEntry) error {
+	// 防止 Custom Agent 无限递归派生（inv_M8_06）
+	if task.SpawnDepth > MaxSpawnDepth {
+		return perrors.New(perrors.CodeForbidden,
+			fmt.Sprintf("blackboard.PostTask: SpawnDepth %d exceeds max %d (inv_M8_06)",
+				task.SpawnDepth, MaxSpawnDepth))
+	}
 	_, err := bb.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, created_at, updated_at)
 		VALUES(?,?,?,?,0,datetime('now'),datetime('now'))`,
@@ -112,6 +120,11 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*protocol.Tas
 	defer stmt.Close()
 
 	for _, task := range tasks {
+		if task.SpawnDepth > MaxSpawnDepth {
+			return perrors.New(perrors.CodeForbidden,
+				fmt.Sprintf("blackboard.PostBatch: SpawnDepth %d exceeds max %d (inv_M8_06)",
+					task.SpawnDepth, MaxSpawnDepth))
+		}
 		if _, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority); err != nil {
 			return perrors.Wrap(perrors.CodeInternal, "blackboard.PostBatch", err)
 		}
