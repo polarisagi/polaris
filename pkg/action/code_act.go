@@ -116,12 +116,14 @@ func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActReques
 		}
 		return perrors.New(perrors.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", lvl))
 	}
-	if ca.govAgent != nil {
-		// Mock capability check
-		caps := map[string]bool{}
-		if err := ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps); err != nil {
-			return err
-		}
+	if ca.govAgent == nil {
+		return perrors.New(perrors.CodeInternal,
+			"code_act: governance agent not initialized, refusing code execution (fail-closed)")
+	}
+	// Mock capability check
+	caps := map[string]bool{}
+	if err := ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps); err != nil {
+		return err
 	}
 
 	return nil
