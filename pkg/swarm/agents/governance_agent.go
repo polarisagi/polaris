@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -153,6 +155,21 @@ func probeMemoryLinux() float64 {
 }
 
 func probeMemoryDarwin() float64 {
+	// 1. 通过 syscall.Sysctl 获取物理内存总量（hw.memsize，字节）
+	s, err := syscall.Sysctl("hw.memsize")
+	if err != nil {
+		return probeMemoryFallback()
+	}
+
+	b := []byte(s)
+	if len(b) < 8 {
+		padded := make([]byte, 8)
+		copy(padded, b)
+		b = padded
+	}
+	memsize := float64(binary.LittleEndian.Uint64(b))
+
+	// 2. vm_stat 部分
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
@@ -180,12 +197,17 @@ func probeMemoryDarwin() float64 {
 		}
 	}
 
-	// Calculate a pseudo freePct, since Darwin total memory requires sysctl
-	// Fallback to MemStats logic or assume fixed ratio for dummy if sysctl isn't used
-	// Using dummy free percentage based on page count just as fallback
-	pseudoAvail := (pagesFree + pagesInactive) * 4096
-	// Let's just fallback to the runtime stats since Darwin mem calculation is tricky without sysctl hw.memsize
-	_ = pseudoAvail
+	pageSize := float64(syscall.Getpagesize())
+
+	// 3. 可用内存 = (pagesFree + pagesInactive) * pageSize
+	avail := (pagesFree + pagesInactive) * pageSize
+
+	// 4. freePct = 可用内存 / 物理内存总量
+	if memsize > 0 {
+		return avail / memsize
+	}
+
+	// 5. 任何步骤出错或异常均 fallback
 	return probeMemoryFallback()
 }
 
