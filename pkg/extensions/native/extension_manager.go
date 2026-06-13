@@ -323,41 +323,39 @@ func MakeExtensionInstallFn(db *sql.DB, client *marketplace.MCPMarketplaceClient
 		}
 
 		// Security Gate check before installing
-		if installMgr != nil {
-			installReq := marketplace.InstallRequest{
-				Principal:   "agent",
-				ExtensionID: "ext_" + target.ID, // arbitrary temporary ID
-				ExtType:     target.Type,
-				TrustTier:   target.TrustTier,
-				Publisher:   target.Publisher,
-				HasHooks:    false,
-			}
-			if err := installMgr.InstallExtension(ctx, installReq); err != nil {
-				if errors.Is(err, marketplace.ErrRequiresApproval) && hitlGateway != nil {
-					_, _ = hitlGateway.Prompt(ctx, protocol.HITLPrompt{
-						ID:             installReq.ExtensionID,
-						CheckpointType: "security_review",
-						PromptText:     "Agent requests to install extension: " + target.Name,
-						Options: []protocol.HITLOption{
-							{Key: "approve", Label: "Approve"},
-							{Key: "deny", Label: "Deny"},
-						},
-					})
-					return json.Marshal(map[string]string{
-						"status":  "pending_approval",
-						"message": "Installation suspended pending user approval. Please wait for user response.",
-					})
-				}
-				return nil, perrors.Wrap(perrors.CodeForbidden, "install_extension: blocked by policy", err)
-			}
+		if installMgr == nil {
+			return nil, perrors.New(perrors.CodeInternal, "install_extension: security manager not initialized, refusing to install (fail-closed)")
 		}
 
-		installDir, err := client.Install(ctx, *target)
-		if err != nil {
-			return nil, perrors.Wrap(perrors.CodeInternal, "install_extension: install failed", err)
+		installReq := marketplace.InstallRequest{
+			Principal:   "agent",
+			ExtensionID: "ext_" + target.ID, // arbitrary temporary ID
+			ExtType:     target.Type,
+			TrustTier:   target.TrustTier,
+			Publisher:   target.Publisher,
+			HasHooks:    false,
+			Target:      target, // 新增：Catalog 查找结果，installer 用它定位下载包
+		}
+		if err := installMgr.InstallExtension(ctx, installReq); err != nil {
+			if errors.Is(err, marketplace.ErrRequiresApproval) && hitlGateway != nil {
+				_, _ = hitlGateway.Prompt(ctx, protocol.HITLPrompt{
+					ID:             installReq.ExtensionID,
+					CheckpointType: "security_review",
+					PromptText:     "Agent requests to install extension: " + target.Name,
+					Options: []protocol.HITLOption{
+						{Key: "approve", Label: "Approve"},
+						{Key: "deny", Label: "Deny"},
+					},
+				})
+				return json.Marshal(map[string]string{
+					"status":  "pending_approval",
+					"message": "Installation suspended pending user approval. Please wait for user response.",
+				})
+			}
+			return nil, perrors.Wrap(perrors.CodeForbidden, "install_extension: blocked by policy", err)
 		}
 
-		slog.Info("native: installed extension successfully", "id", args.ID, "dir", installDir)
+		slog.Info("native: installed extension successfully via marketplace manager", "id", args.ID)
 
 		// 投递 Outbox 任务给 ExtensionLibrarian 异步处理
 		if outboxWriter != nil {
@@ -371,10 +369,9 @@ func MakeExtensionInstallFn(db *sql.DB, client *marketplace.MCPMarketplaceClient
 		}
 
 		result := map[string]string{
-			"status":        "success",
-			"id":            args.ID,
-			"installed_dir": installDir,
-			"message":       "Extension installed successfully. The environment will auto-reload to expose new capabilities.",
+			"status":  "success",
+			"id":      args.ID,
+			"message": "Extension installed successfully. The environment will auto-reload to expose new capabilities.",
 		}
 		return json.Marshal(result)
 	}

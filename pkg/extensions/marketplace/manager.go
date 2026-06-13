@@ -25,6 +25,18 @@ type HookRunner interface {
 	RunScript(ctx context.Context, hookPath, workDir string) error
 }
 
+// ExtensionInstaller 负责将扩展文件下载到本地并返回安装目录。
+// 调用方注入具体实现（如 MCPMarketplaceClient.Install）。
+type ExtensionInstaller interface {
+	Install(ctx context.Context, target any) (installDir string, err error)
+}
+
+// RuntimeRegistrar 负责将已下载扩展注册到运行时（SkillRegistry / MCPManager）。
+// 调用方按 ext_type 提供实现；nil 时跳过注册（测试 / MVP 场景）。
+type RuntimeRegistrar interface {
+	Register(ctx context.Context, extType, installDir, instID string) error
+}
+
 type InstallRequest struct {
 	Principal   string
 	ExtensionID string
@@ -32,6 +44,7 @@ type InstallRequest struct {
 	TrustTier   int
 	Publisher   string
 	HasHooks    bool
+	Target      any // 新增：Catalog 查找结果，installer 用它定位下载包
 }
 
 var ErrRequiresApproval = errors.New("installation requires user approval")
@@ -45,6 +58,8 @@ type Manager struct {
 	publisherTrustMap map[string]int
 	// hookRunner 通过 WithHookRunner 注入；nil 时 uninstall hook 降级为 warn+skip
 	hookRunner HookRunner
+	installer  ExtensionInstaller // 新增：文件下载
+	registrar  RuntimeRegistrar   // 新增：运行时注册
 }
 
 func NewManager(db *sql.DB, mcpMgr any, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *substrate.AuditTrail, publisherTrustMap map[string]int) *Manager {
@@ -67,7 +82,19 @@ func (m *Manager) WithHookRunner(hr HookRunner) *Manager {
 	return m
 }
 
+func (m *Manager) WithInstaller(i ExtensionInstaller) *Manager {
+	m.installer = i
+	return m
+}
+
+func (m *Manager) WithRegistrar(r RuntimeRegistrar) *Manager {
+	m.registrar = r
+	return m
+}
+
 // InstallExtension handles the install flow with M11 Cedar-Gate.
+//
+//nolint:gocyclo
 func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) error {
 	mode, err := m.prefsRepo.GetPermissionMode(ctx)
 	if err != nil {
@@ -144,6 +171,36 @@ func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) erro
 		slog.Warn("marketplace: failed to mark extension installed", "id", instID, "err", err)
 		// 非致命错误：记录警告，状态留在 installing（后续 reconcile 可修正）
 	}
+
+	// 文件下载（若注入了 installer）
+	var installDir string
+	if m.installer != nil && req.Target != nil {
+		// status 先置为 downloading，下载完再置 installed
+		_, _ = m.db.ExecContext(ctx,
+			`UPDATE extension_instances SET status='downloading' WHERE id=?`, instID)
+
+		dir, dlErr := m.installer.Install(ctx, req.Target)
+		if dlErr != nil {
+			_, _ = m.db.ExecContext(ctx,
+				`UPDATE extension_instances SET status='failed' WHERE id=?`, instID)
+			return perrors.Wrap(perrors.CodeInternal, "marketplace: download failed", dlErr)
+		}
+		installDir = dir
+
+		_, _ = m.db.ExecContext(ctx,
+			`UPDATE extension_instances SET status='installed', install_path=? WHERE id=?`,
+			installDir, instID)
+	}
+
+	// 运行时注册（若注入了 registrar）
+	if m.registrar != nil {
+		if regErr := m.registrar.Register(ctx, req.ExtType, installDir, instID); regErr != nil {
+			// 注册失败记录 WARN，不回滚 DB（extension_instances 保留，下次重启 LoadFromDB 兜底）
+			slog.Warn("marketplace: runtime registration failed",
+				"inst_id", instID, "ext_type", req.ExtType, "err", regErr)
+		}
+	}
+
 	return nil
 }
 
