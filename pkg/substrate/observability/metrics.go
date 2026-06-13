@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -324,7 +325,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 	otelOnce.Do(func() {
 		exporter, err := prometheus.New()
 		if err != nil {
-			fmt.Printf("failed to initialize prometheus exporter: %v\n", err)
+			slog.Warn("observability: failed to initialize prometheus exporter", "err", err)
 			return
 		}
 		res := resource.NewWithAttributes(
