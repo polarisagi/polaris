@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS rag_docs (
+    uri           TEXT PRIMARY KEY,
+    doc_id        TEXT NOT NULL,
+    tree_json     TEXT NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rag_docs_doc_id ON rag_docs(doc_id);
+
 CREATE INDEX IF NOT EXISTS idx_rag_doc       ON rag_chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_rag_embed_ver ON rag_chunks(embed_model_version)
     WHERE embed_model_version = '';

@@ -45,62 +45,78 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 
 	chunks := p.chunkDocument(docNode.Content, docNode.ID, initialTaint, doc.Ref)
 
-	store := p.router.Route(ctx, &substrate.StorageRequest{
-		DataType:   "knowledge",
-		AccessMode: "batch_write",
-	})
-
-	var ops []protocol.Op //nolint:prealloc
-	for _, c := range chunks {
-		data, _ := json.Marshal(c)
-		ops = append(ops, protocol.Op{
-			Key:   fmt.Appendf(nil, "chunk:%s:%s", docNode.ID, c.ID),
-			Value: data,
-			Type:  protocol.OpPut,
-		})
+	db, err := p.router.GetPrimary()
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: get primary db failed", err)
 	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	docData, _ := json.Marshal(tree)
-	ops = append(ops, protocol.Op{
-		Key:   fmt.Appendf(nil, "doc:%s", docNode.ID),
-		Value: docData,
-		Type:  protocol.OpPut,
-	})
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO rag_docs (uri, doc_id, tree_json) VALUES (?, ?, ?)`,
+		doc.Ref.URI, docNode.ID, string(docData),
+	); err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: insert rag_docs", err)
+	}
 
-	if err := store.BatchWrite(ctx, ops); err != nil {
-		return nil, perrors.Wrap(perrors.CodeInternal, "failed to persist document and chunks", err)
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR REPLACE INTO rag_chunks
+			(id, doc_id, content, taint_level, taint_source, source_uri, doc_version,
+			 chunk_seq, content_hash, embed_model_version, chunk_type, chunk_index)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: prepare stmt", err)
+	}
+	defer stmt.Close()
+
+	for i, c := range chunks {
+		if _, err := stmt.ExecContext(ctx,
+			c.ID, c.DocID, c.Content, c.TaintLevel, c.TaintSource,
+			c.SourceURI, c.DocVersion, i, c.ContentHash, "", c.ChunkType, c.ChunkIndex,
+		); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: insert chunk", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: commit", err)
 	}
 
 	return tree, nil
 }
 
 func (p *DefaultIngestionPipeline) Delete(ctx context.Context, uri string) error {
-	store := p.router.Route(ctx, &substrate.StorageRequest{
-		DataType:   "knowledge",
-		AccessMode: "batch_write",
-	})
-
-	prefix := fmt.Appendf(nil, "chunk:%s:", uri)
-	iter, err := store.Scan(ctx, prefix)
+	db, err := p.router.GetPrimary()
 	if err != nil {
-		return err
+		return perrors.Wrap(perrors.CodeInternal, "delete: get primary db failed", err)
 	}
-	defer iter.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "delete: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	var ops []protocol.Op
-	for iter.Next() {
-		ops = append(ops, protocol.Op{
-			Key:  iter.Key(),
-			Type: protocol.OpDelete,
-		})
+	var docID string
+	err = tx.QueryRowContext(ctx, `SELECT doc_id FROM rag_docs WHERE uri = ?`, uri).Scan(&docID)
+	if err == nil && docID != "" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM rag_chunks WHERE doc_id = ?`, docID); err != nil {
+			return perrors.Wrap(perrors.CodeInternal, "delete: rag_chunks by doc_id", err)
+		}
+	} else {
+		// fallback to delete by source_uri if doc_id not found
+		if _, err := tx.ExecContext(ctx, `DELETE FROM rag_chunks WHERE source_uri = ?`, uri); err != nil {
+			return perrors.Wrap(perrors.CodeInternal, "delete: rag_chunks by source_uri", err)
+		}
 	}
 
-	ops = append(ops, protocol.Op{
-		Key:  fmt.Appendf(nil, "doc:%s", uri),
-		Type: protocol.OpDelete,
-	})
+	if _, err := tx.ExecContext(ctx, `DELETE FROM rag_docs WHERE uri = ?`, uri); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "delete: rag_docs", err)
+	}
 
-	return store.BatchWrite(ctx, ops)
+	return tx.Commit()
 }
 
 func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, taintLevel int, ref DocumentRef) []Chunk {
