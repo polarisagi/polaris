@@ -100,25 +100,29 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}
 
 	// Phase 0: PolicyGate 校验（Capability Token 出口 + Cedar Forbid/Permit）
-	if r.policy != nil {
-		allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "tool_execute", name,
-			map[string]any{
-				"tool_source":            string(tool.Source),
-				"risk_level":             int(tool.RiskLevel),
-				"trust_level":            toolTrustLevel(tool.Source),
-				"capability_token_valid": tool.Capability <= protocol.CapReadOnly,
-			})
-		if pErr != nil || !allowed {
-			reason := "policy denied"
-			if pErr != nil {
-				reason = pErr.Error()
-			}
-			return &protocol.ToolResult{
-				Success:    false,
-				Error:      fmt.Sprintf("tool_registry: policy blocked: %s", reason),
-				TaintLevel: taintLevel,
-			}, nil
+	if r.policy == nil {
+		return &protocol.ToolResult{
+			Success: false,
+			Error:   "tool_registry: policy gate not initialized, refusing tool call (fail-closed)",
+		}, perrors.New(perrors.CodeInternal, "tool_registry: policy gate not initialized")
+	}
+	allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "tool_execute", name,
+		map[string]any{
+			"tool_source":            string(tool.Source),
+			"risk_level":             int(tool.RiskLevel),
+			"trust_level":            toolTrustLevel(tool.Source),
+			"capability_token_valid": tool.Capability <= protocol.CapReadOnly,
+		})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
 		}
+		return &protocol.ToolResult{
+			Success:    false,
+			Error:      fmt.Sprintf("tool_registry: policy blocked: %s", reason),
+			TaintLevel: taintLevel,
+		}, nil
 	}
 
 	// Rate Limiter：按工具来源分组

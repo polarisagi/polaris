@@ -19,11 +19,21 @@ type dummyDialer struct {
 
 var dummyDialerPtr = &dummyDialer{}
 
+type mockPolicy struct{}
+
+func (mockPolicy) IsAuthorized(ctx context.Context, principal, action, resource string, contextData map[string]any) (bool, error) {
+	return true, nil
+}
+
+func (mockPolicy) Review(ctx context.Context, req protocol.PolicyReviewRequest) (protocol.PolicyReviewResult, error) {
+	return protocol.PolicyReviewResult{Allowed: true}, nil
+}
+
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
-	toolReg := NewInMemoryToolRegistry(nil) // 无 PolicyGate，只测工具逻辑
+	toolReg := NewInMemoryToolRegistry(mockPolicy{}) // 无 PolicyGate，只测工具逻辑
 	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -51,7 +61,7 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
-	toolReg := NewInMemoryToolRegistry(nil)
+	toolReg := NewInMemoryToolRegistry(mockPolicy{})
 	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -71,7 +81,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
-	toolReg := NewInMemoryToolRegistry(nil)
+	toolReg := NewInMemoryToolRegistry(mockPolicy{})
 	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -106,7 +116,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sandbox := action.NewInProcessSandbox()
-	toolReg := NewInMemoryToolRegistry(nil)
+	toolReg := NewInMemoryToolRegistry(mockPolicy{})
 	if err := RegisterBuiltinTools(sandbox, toolReg, []string{tmpDir}, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -137,7 +147,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 // TestBuiltinTools_FetchURL_SSRFGuard 验证 fetch_url 阻断私有地址。
 func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	sandbox := action.NewInProcessSandbox()
-	toolReg := NewInMemoryToolRegistry(nil)
+	toolReg := NewInMemoryToolRegistry(mockPolicy{})
 	if err := RegisterBuiltinTools(sandbox, toolReg, nil, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -163,7 +173,7 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 // TestBuiltinTools_FetchURL_PublicURL 验证 fetch_url 放行公共 URL（MVP stub 模式）。
 func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
 	sandbox := action.NewInProcessSandbox()
-	toolReg := NewInMemoryToolRegistry(nil)
+	toolReg := NewInMemoryToolRegistry(mockPolicy{})
 	if err := RegisterBuiltinTools(sandbox, toolReg, nil, dummyDialerPtr, false, NetworkBlock, "", &config.Config{}, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}

@@ -139,6 +139,18 @@ func TestExecuteTool_ToolNotRegistered(t *testing.T) {
 	}
 }
 
+func TestExecuteTool_PolicyNil(t *testing.T) {
+	r := NewInMemoryToolRegistry(nil)
+	_ = r.Register(minTool("test-tool"))
+	res, err := r.ExecuteTool(context.Background(), "test-tool", []byte("x"), protocol.TaintNone)
+	if err == nil {
+		t.Fatal("expected error when policy is nil")
+	}
+	if res.Success || res.Error != "tool_registry: policy gate not initialized, refusing tool call (fail-closed)" {
+		t.Fatalf("expected fail-closed error, got res: %+v", res)
+	}
+}
+
 func TestExecuteTool_NoSandbox_ReturnsInput(t *testing.T) {
 	r := newAllowRegistry()
 	_ = r.Register(minTool("echo"))
