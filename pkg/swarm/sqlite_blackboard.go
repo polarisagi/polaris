@@ -18,6 +18,7 @@ package swarm
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -51,6 +52,23 @@ type SQLiteBlackboard struct {
 }
 
 var _ protocol.Blackboard = (*SQLiteBlackboard)(nil)
+
+// writeTaskEvent 在给定事务内向 events 表写入任务状态转换事件（inv_M8_02）。
+// 直接事务内写入而非经 MutationBus，原因与 CAS 操作相同：需同步确认执行结果。
+// payload 为最小 JSON，满足 events 表 NOT NULL 约束，不破坏 hash-chain（M11 audit 可选覆盖）。
+func (bb *SQLiteBlackboard) writeTaskEvent(
+	ctx context.Context, tx *sql.Tx, actor, evType, taskID string,
+) error {
+	// id: "bb:<evType>:<taskID>:<UnixNano>" 在单写 SQLite（MaxOpenConns=1）中实际唯一
+	id := fmt.Sprintf("bb:%s:%s:%d", evType, taskID, time.Now().UnixNano())
+	payload, _ := json.Marshal(map[string]string{"task_id": taskID, "event": evType})
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO events (id, topic, actor, type, payload, created_at)
+		VALUES (?, 'agent.task', ?, ?, ?, ?)`,
+		id, actor, evType, payload, time.Now().UnixMilli(),
+	)
+	return err
+}
 
 // NewSQLiteBlackboard 创建 SQLiteBlackboard。
 // db 须已完成 WAL 初始化（由 StorageFabric 传入）。
@@ -86,7 +104,13 @@ func (bb *SQLiteBlackboard) PostTask(ctx context.Context, task *protocol.TaskEnt
 			fmt.Sprintf("blackboard.PostTask: SpawnDepth %d exceeds max %d (inv_M8_06)",
 				task.SpawnDepth, MaxSpawnDepth))
 	}
-	_, err := bb.db.ExecContext(ctx, `
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.PostTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, created_at, updated_at)
 		VALUES(?,?,?,?,0,datetime('now'),datetime('now'))`,
 		task.ID, task.Type, statusPending, task.Priority,
@@ -94,10 +118,16 @@ func (bb *SQLiteBlackboard) PostTask(ctx context.Context, task *protocol.TaskEnt
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "blackboard.PostTask", err)
 	}
-	bb.broadcast(protocol.BlackboardEvent{
-		Type:   "task_posted",
-		TaskID: task.ID,
-	})
+	// INSERT OR IGNORE：仅首次插入（rows>0）写事件，避免重复幂等 post 产生噪音事件
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		if err := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_posted", task.ID); err != nil {
+			return perrors.Wrap(perrors.CodeInternal, "blackboard.PostTask: write event", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.PostTask: commit", err)
+	}
+	bb.broadcast(protocol.BlackboardEvent{Type: "task_posted", TaskID: task.ID})
 	return nil
 }
 
@@ -125,8 +155,14 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*protocol.Tas
 				fmt.Sprintf("blackboard.PostBatch: SpawnDepth %d exceeds max %d (inv_M8_06)",
 					task.SpawnDepth, MaxSpawnDepth))
 		}
-		if _, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority); err != nil {
+		result, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority)
+		if err != nil {
 			return perrors.Wrap(perrors.CodeInternal, "blackboard.PostBatch", err)
+		}
+		if rows, _ := result.RowsAffected(); rows > 0 {
+			if err := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_posted", task.ID); err != nil {
+				return perrors.Wrap(perrors.CodeInternal, "blackboard.PostBatch: write event", err)
+			}
 		}
 	}
 
@@ -149,8 +185,14 @@ func (bb *SQLiteBlackboard) ClaimTask(ctx context.Context, taskID, agentID strin
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, perrors.Wrap(perrors.CodeInternal, "blackboard.ClaimTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	expiresAt := time.Now().Add(DefaultLeaseTTL).UTC().Format(time.RFC3339)
-	result, err := bb.db.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, claimed_by=?, claimed_at=datetime('now'), expires_at=?, version=version+1, updated_at=datetime('now')
 		WHERE task_id=? AND status=?`,
@@ -161,20 +203,28 @@ func (bb *SQLiteBlackboard) ClaimTask(ctx context.Context, taskID, agentID strin
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return false, nil // 被抢先或不存在
+		return false, nil // CAS miss：被抢先或任务不存在，Rollback 由 defer 执行
 	}
-	bb.broadcast(protocol.BlackboardEvent{
-		Type:    "task_claimed",
-		TaskID:  taskID,
-		AgentID: agentID,
-	})
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_claimed", taskID); err != nil {
+		return false, perrors.Wrap(perrors.CodeInternal, "blackboard.ClaimTask: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, perrors.Wrap(perrors.CodeInternal, "blackboard.ClaimTask: commit", err)
+	}
+	bb.broadcast(protocol.BlackboardEvent{Type: "task_claimed", TaskID: taskID, AgentID: agentID})
 	return true, nil
 }
 
 // StartExecution 将任务从 claimed 推进到 running 状态，表示 Agent 已开始实际执行。
 // 需持有认领权（claimed_by == agentID）；幂等：already-running 不报错。
 func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID string) error {
-	res, err := bb.db.ExecContext(ctx, `
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.StartExecution: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, version=version+1, updated_at=datetime('now')
 		WHERE task_id=? AND claimed_by=? AND status=?`,
@@ -191,6 +241,14 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 		if status != statusRunning {
 			return ErrTaskNotOwned
 		}
+		// already-running 幂等路径：不写事件，直接 Rollback 返回 nil
+		return nil
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_running", taskID); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.StartExecution: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.StartExecution: commit", err)
 	}
 	bb.broadcast(protocol.BlackboardEvent{
 		Type:    "task_running",
@@ -206,7 +264,13 @@ func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID st
 	bb.removeCancelFunc(taskID)
 	bb.mu.Unlock()
 
-	res, err := bb.db.ExecContext(ctx, `
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.CompleteTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, version=version+1, updated_at=datetime('now')
 		WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,
@@ -218,6 +282,12 @@ func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID st
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
 		return ErrTaskNotOwned
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_completed", taskID); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.CompleteTask: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.CompleteTask: commit", err)
 	}
 	bb.broadcast(protocol.BlackboardEvent{
 		Type:    "task_completed",
@@ -233,7 +303,13 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 	bb.removeCancelFunc(taskID)
 	bb.mu.Unlock()
 
-	res, err := bb.db.ExecContext(ctx, `
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.FailTask: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, version=version+1, updated_at=datetime('now')
 		WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,
@@ -245,6 +321,12 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
 		return ErrTaskNotOwned
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_failed", taskID); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.FailTask: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.FailTask: commit", err)
 	}
 	bb.broadcast(protocol.BlackboardEvent{
 		Type:    "task_failed",

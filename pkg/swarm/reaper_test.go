@@ -39,6 +39,22 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to create tasks table: %v", err)
 	}
+
+	// writeTaskEvent 需要 events 表（inv_M8_02 事务内双写）
+	_, err = db.Exec(`
+		CREATE TABLE events (
+			offset    INTEGER PRIMARY KEY AUTOINCREMENT,
+			id        TEXT NOT NULL UNIQUE,
+			topic     TEXT NOT NULL,
+			actor     TEXT NOT NULL,
+			type      TEXT NOT NULL,
+			payload   BLOB NOT NULL,
+			created_at INTEGER NOT NULL
+		)
+	`)
+	if err != nil {
+		t.Fatalf("failed to create events table: %v", err)
+	}
 	return db
 }
 
