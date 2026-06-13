@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -205,56 +204,6 @@ func probeMemoryLinux() float64 {
 }
 
 func probeMemoryDarwin() float64 {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	// 1. 获取物理内存总量（hw.memsize，字节）
-	cmdSys := exec.CommandContext(ctx, "sysctl", "-n", "hw.memsize")
-	sysOut, err := cmdSys.Output()
-	if err != nil {
-		return probeMemoryFallback()
-	}
-
-	memsizeStr := strings.TrimSpace(string(sysOut))
-	memsize, err := strconv.ParseFloat(memsizeStr, 64)
-	if err != nil || memsize <= 0 {
-		return probeMemoryFallback()
-	}
-
-	// 2. vm_stat 部分
-	cmd := exec.CommandContext(ctx, "vm_stat")
-	out, err := cmd.Output()
-	if err != nil {
-		return probeMemoryFallback()
-	}
-
-	var pagesFree, pagesInactive float64
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Pages free:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				val := strings.TrimRight(parts[2], ".")
-				pagesFree, _ = strconv.ParseFloat(val, 64)
-			}
-		} else if strings.HasPrefix(line, "Pages inactive:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				val := strings.TrimRight(parts[2], ".")
-				pagesInactive, _ = strconv.ParseFloat(val, 64)
-			}
-		}
-	}
-
-	pageSize := float64(os.Getpagesize())
-
-	// 3. 可用内存 = (pagesFree + pagesInactive) * pageSize
-	avail := (pagesFree + pagesInactive) * pageSize
-
-	// 4. freePct = 可用内存 / 物理内存总量
-	if memsize > 0 {
-		return avail / memsize
-	}
 	return probeMemoryFallback()
 }
 
