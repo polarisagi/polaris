@@ -16,11 +16,11 @@ import (
 
 var (
 	// M1 LLM 调用
-	instrLLMCallsTotal    metric.Int64Counter
-	instrLLMLatencyMs     metric.Float64Histogram
-	instrTokensTotal      metric.Int64Counter
-	instrAPIcostUSD       metric.Float64Counter
-	instrBurnStage3Total  metric.Int64Counter
+	instrLLMCallsTotal   metric.Int64Counter
+	instrLLMLatencyMs    metric.Float64Histogram
+	instrTokensTotal     metric.Int64Counter
+	instrAPIcostUSD      metric.Float64Counter
+	instrBurnStage3Total metric.Int64Counter
 
 	// M7 工具调用 & 沙箱
 	instrToolCallsTotal metric.Int64Counter
@@ -148,10 +148,10 @@ func registerObservableGauges(meter metric.Meter) {
 
 // attribute helpers（内部使用，避免重复字面量）
 
-func attrProvider(v string) attribute.KeyValue  { return attribute.String("provider", v) }
-func attrModel(v string) attribute.KeyValue     { return attribute.String("model", v) }
-func attrStatus(v string) attribute.KeyValue    { return attribute.String("status", v) }
-func attrType(v string) attribute.KeyValue      { return attribute.String("type", v) }
-func attrCallType(v string) attribute.KeyValue  { return attribute.String("call_type", v) }
-func attrCategory(v string) attribute.KeyValue  { return attribute.String("tool_category", v) }
+func attrProvider(v string) attribute.KeyValue    { return attribute.String("provider", v) }
+func attrModel(v string) attribute.KeyValue       { return attribute.String("model", v) }
+func attrStatus(v string) attribute.KeyValue      { return attribute.String("status", v) }
+func attrType(v string) attribute.KeyValue        { return attribute.String("type", v) }
+func attrCallType(v string) attribute.KeyValue    { return attribute.String("call_type", v) }
+func attrCategory(v string) attribute.KeyValue    { return attribute.String("tool_category", v) }
 func attrSandboxTier(v string) attribute.KeyValue { return attribute.String("sandbox_tier", v) }
