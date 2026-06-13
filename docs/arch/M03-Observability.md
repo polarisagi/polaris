@@ -1,7 +1,7 @@
 # 模块 3: Observability & Telemetry
 
 > OTel-native | slog | Token_Burn_Rate + Surprise_Index 一等公民 | Hardware Probe | [HE-Rule-1] [HE-Rule-4] | Go
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:168 HardwareProbe+AutoConfig / 6:244 OSMemoryGuard / 7:260 MonitorMemoryPressure / 8:283 LogLevel / 9:291 TraceContext / 10:303 DecisionLog / 10.1:316 PerformanceDrift / 11:350 Langfuse / 14:379 (SOFT)降级 / 15:396 依赖
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:168 HardwareProbe+AutoConfig / 6:244 OSMemoryGuard / 7:260 MonitorMemoryPressure / 8:283 LogLevel / 9:291 TraceContext / 10:303 DecisionLog / 10.1:316 PerformanceDrift / 11:352 Langfuse / 14:381 (SOFT)降级 / 15:398 依赖
 ## 0-bis. 职责边界
 
 | M3 **是** | M3 **不是** |
