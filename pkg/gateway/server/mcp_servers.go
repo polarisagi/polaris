@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/extensions/marketplace"
 	"github.com/polarisagi/polaris/pkg/extensions/mcp"
 )
@@ -146,7 +147,7 @@ func (s *Server) handleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if c.Enabled && s.mcpMgr != nil {
-		go s.startMCPServer(c)
+		go s.startMCPServer(protocol.Detach(r.Context()), c)
 	}
 
 	c.CreatedAt, c.UpdatedAt = now, now
@@ -213,7 +214,7 @@ func (s *Server) handleUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
 		s.mcpMgr.Remove(id)
 		if c.Enabled {
 			c.ID = id
-			go s.startMCPServer(c)
+			go s.startMCPServer(protocol.Detach(r.Context()), c)
 		}
 	}
 
@@ -286,8 +287,8 @@ func (s *Server) handleTestMCPServer(w http.ResponseWriter, r *http.Request) {
 }
 
 // startMCPServer 异步连接 MCP Server（新建/更新时 goroutine 调用）。
-func (s *Server) startMCPServer(c MCPServerConfig) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func (s *Server) startMCPServer(ctx context.Context, c MCPServerConfig) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	if err := s.startMCPServerCtx(ctx, c); err != nil {
 		slog.Warn("mcp: connect server failed", "id", c.ID, "err", err)

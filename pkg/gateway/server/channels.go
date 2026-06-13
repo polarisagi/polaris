@@ -188,12 +188,11 @@ func (s *Server) handleWebhookReceive(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	go s.dispatchChannelMessage(channelType, channelID, cfg, msg)
-	go s.triggerWebhookAutomations(channelID, msg.Text)
+	go s.dispatchChannelMessage(protocol.Detach(r.Context()), channelType, channelID, cfg, msg)
+	go s.triggerWebhookAutomations(protocol.Detach(r.Context()), channelID, msg.Text)
 }
 
-func (s *Server) triggerWebhookAutomations(channelID, text string) {
-	ctx := context.Background()
+func (s *Server) triggerWebhookAutomations(ctx context.Context, channelID, text string) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, reasoning_effort, result_action,
@@ -238,8 +237,7 @@ func (s *Server) triggerWebhookAutomations(channelID, text string) {
 }
 
 // dispatchChannelMessage 推理 + 发回平台。被 webhook handler 和各平台 poller 共用。
-func (s *Server) dispatchChannelMessage(channelType, channelID string, cfg map[string]any, msg channels.Message) { //nolint:gocyclo
-	ctx := context.Background()
+func (s *Server) dispatchChannelMessage(ctx context.Context, channelType, channelID string, cfg map[string]any, msg channels.Message) { //nolint:gocyclo
 
 	// Telegram allowed_user_ids 白名单过滤
 	if channelType == "telegram" && msg.UserID != "" { //nolint:nestif

@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"log/slog"
 	"net"
 	"net/http"
@@ -265,13 +267,18 @@ var healthPaths = map[string]struct{}{
 func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, expectedKey string, authManager *AuthManager) (context.Context, bool) {
 	ctx := r.Context()
 
+	// 生成 TraceID (req_ 开头)
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	traceID := "req_" + hex.EncodeToString(b)
+
 	// 跳过健康/指标端点（精确白名单）
 	if _, isHealth := healthPaths[r.URL.Path]; isHealth || expectedKey == "" {
 		if expectedKey == "" && isAdminWrite(r.Method, r.URL.Path) && !isLoopback(clientIP) {
 			http.Error(w, "403 Forbidden: admin endpoints require POLARIS_API_KEY or localhost access", http.StatusForbidden)
 			return ctx, false
 		}
-		return WithAuthContext(ctx, &AuthContext{UserID: "anonymous", ClientType: "unknown"}), true
+		return WithAuthContext(ctx, &AuthContext{UserID: "anonymous", ClientType: "unknown", TraceID: traceID}), true
 	}
 
 	if authManager.IsLocked(clientIP) {
@@ -294,7 +301,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 
 	authManager.RecordSuccess(clientIP)
 	// MVP 阶段单一 API Key，统一记录为 admin
-	return WithAuthContext(ctx, &AuthContext{UserID: "admin", ClientType: "api"}), true
+	return WithAuthContext(ctx, &AuthContext{UserID: "admin", ClientType: "api", TraceID: traceID}), true
 }
 
 // withMiddleware 挂载所有基础网关级别的安全防护（Auth + Rate Limit + CORS + Logging + Panic Recovery）

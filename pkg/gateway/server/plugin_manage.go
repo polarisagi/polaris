@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/extensions/mcp"
 )
 
@@ -201,7 +202,7 @@ func (s *Server) enablePluginComponents(ctx context.Context, pluginID, now strin
 					&c.URL, &c.Timeout, &c.WorkDir) == nil {
 					json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 					json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
-					go s.startMCPServer(c)
+					go s.startMCPServer(protocol.Detach(ctx), c)
 				}
 			}
 			mcpRows.Close()
@@ -263,7 +264,7 @@ func (s *Server) handleTogglePluginMCP(w http.ResponseWriter, r *http.Request) {
 				&c.URL, &c.Timeout, &c.WorkDir) == nil {
 				json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 				json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
-				go s.startMCPServer(c)
+				go s.startMCPServer(protocol.Detach(r.Context()), c)
 			}
 		}
 	}

@@ -258,7 +258,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	s.compressor = newCompressor(db, s.hooks, compressorCfg)
 	s.slashRouter = newSlashCommandRouter(s.compressor, db)
 	s.channelMgr = channels.NewManager(httpClient, func(channelType, channelID string, cfg map[string]any, msg channels.Message) {
-		s.dispatchChannelMessage(channelType, channelID, cfg, msg)
+		s.dispatchChannelMessage(context.Background(), channelType, channelID, cfg, msg)
 	}, channels.WithSafeDialer(safeDialer))
 
 	mux := http.NewServeMux()

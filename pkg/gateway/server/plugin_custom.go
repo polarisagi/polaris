@@ -351,7 +351,7 @@ func (s *Server) handleCreateMCP(w http.ResponseWriter, r *http.Request) { //nol
 	}
 
 	if s.mcpMgr != nil {
-		go s.startMCPServer(MCPServerConfig{
+		go s.startMCPServer(protocol.Detach(r.Context()), MCPServerConfig{
 			ID:        mcpID,
 			Name:      req.Name,
 			Transport: req.Transport,

@@ -14,7 +14,7 @@ const (
 type AuthContext struct {
 	UserID     string
 	ClientType string // e.g., "cli", "webui", "api"
-	// 未来 M11 接入时，可追加 Token, Scopes 等字段
+	TraceID    string // 全链路请求唯一追踪 ID
 }
 
 // WithAuthContext 将鉴权上下文注入请求 context 中

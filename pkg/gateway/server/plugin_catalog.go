@@ -336,7 +336,7 @@ func (s *Server) internalInstallMCP(ctx context.Context, extID string, entry *pr
 	}
 
 	if s.mcpMgr != nil {
-		go s.startMCPServer(cfg)
+		go s.startMCPServer(protocol.Detach(ctx), cfg)
 	}
 
 	cfg.CreatedAt, cfg.UpdatedAt = now, now
@@ -394,7 +394,7 @@ func (s *Server) internalInstallGeneric(ctx context.Context, extID string, entry
 	}
 
 	if entry.Type == "skill" || entry.Type == "plugin" {
-		go s.downloadAndInstallExtension(context.Background(), extID, req.CatalogID, entry, now, name)
+		go s.downloadAndInstallExtension(protocol.Detach(ctx), extID, req.CatalogID, entry, now, name)
 	}
 
 	return map[string]any{
@@ -797,7 +797,7 @@ func (s *Server) registerPluginMCPServers(ctx context.Context, pluginID, pluginN
 				Command: def.Command, Args: def.Args, Env: def.Env,
 				URL: def.URL, Timeout: 30, WorkDir: installPath,
 			}
-			go s.startMCPServer(cfg)
+			go s.startMCPServer(protocol.Detach(ctx), cfg)
 		}
 	}
 }
