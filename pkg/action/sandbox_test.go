@@ -106,12 +106,17 @@ func TestAssignSandboxTier(t *testing.T) {
 		source     protocol.ToolSource
 		capability protocol.CapabilityLevel
 		effects    []protocol.SideEffect
+		hwTier     int
+		goos       string
 		wantTier   protocol.SandboxTier
 	}{
-		{"builtin-read", protocol.ToolBuiltin, protocol.CapReadOnly, nil, protocol.SandboxInProcess},
-		{"mcp-write", protocol.ToolMCP, protocol.CapWriteNetwork, nil, protocol.SandboxContainer},
-		{"llm-gen", protocol.ToolLLMGenerated, protocol.CapReadOnly, nil, protocol.SandboxContainer},
-		{"privileged-spawn", protocol.ToolBuiltin, protocol.CapPrivileged, []protocol.SideEffect{protocol.SideProcessSpawn}, protocol.SandboxContainer},
+		{"builtin-read", protocol.ToolBuiltin, protocol.CapReadOnly, nil, 1, "linux", protocol.SandboxInProcess},
+		{"mcp-write", protocol.ToolMCP, protocol.CapWriteNetwork, nil, 1, "linux", protocol.SandboxWasm},
+		{"llm-gen", protocol.ToolLLMGenerated, protocol.CapReadOnly, nil, 1, "linux", protocol.SandboxWasm},
+		{"privileged-spawn", protocol.ToolBuiltin, protocol.CapPrivileged, []protocol.SideEffect{protocol.SideProcessSpawn}, 1, "linux", protocol.SandboxContainer},
+		{"tier0-linux-container", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 0, "linux", protocol.SandboxContainer},
+		{"tier0-darwin-downgrade", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 0, "darwin", protocol.SandboxWasm},
+		{"tier1-darwin-no-downgrade", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 1, "darwin", protocol.SandboxContainer},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -120,7 +125,7 @@ func TestAssignSandboxTier(t *testing.T) {
 				Capability:  tt.capability,
 				SideEffects: tt.effects,
 			}
-			got := AssignSandboxTier(tool, 0, "darwin")
+			got := AssignSandboxTier(tool, tt.hwTier, tt.goos)
 			if got != tt.wantTier {
 				t.Errorf("expected tier %d, got %d", tt.wantTier, got)
 			}

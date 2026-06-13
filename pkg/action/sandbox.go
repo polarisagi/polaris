@@ -17,22 +17,25 @@ func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) protocol.San
 	switch tool.Source {
 	case protocol.ToolBuiltin:
 		minTier = protocol.SandboxInProcess
-	case protocol.ToolLLMGenerated:
-		minTier = protocol.SandboxContainer
-	case protocol.ToolMCP, protocol.ToolA2A:
-		minTier = protocol.SandboxContainer
+	case protocol.ToolLLMGenerated, protocol.ToolMCP, protocol.ToolA2A:
+		minTier = protocol.SandboxWasm // 规则 1：L2，非 L3
 	}
 
 	tier := minTier
-	if tool.Capability >= protocol.CapWriteNetwork {
-		tier = protocol.SandboxContainer
+	if tool.Capability >= protocol.CapWriteNetwork && tier < protocol.SandboxWasm {
+		tier = protocol.SandboxWasm // 规则 2：WriteNetwork+ → L2 底线
 	}
 	if tool.Capability >= protocol.CapPrivileged {
-		tier = protocol.SandboxContainer
+		tier = protocol.SandboxContainer // 规则 2：Privileged → L3
 	}
 
 	if hasSideEffect(tool.SideEffects, protocol.SideProcessSpawn) {
-		tier = protocol.SandboxContainer
+		tier = protocol.SandboxContainer // 规则 3
+	}
+
+	// 规则 4：非 Linux Tier0，Container 降级 Wasm（L2 + OS 原生沙箱）
+	if tier == protocol.SandboxContainer && hwTier == 0 && goos != "linux" {
+		tier = protocol.SandboxWasm
 	}
 
 	return tier
