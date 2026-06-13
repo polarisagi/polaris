@@ -32,6 +32,17 @@ type OpenAIRequest struct {
 	ResponseFormat *OpenAIResponseFormat `json:"response_format,omitempty"`
 	Tools          []OpenAITool          `json:"tools,omitempty"`
 	StreamOptions  *OpenAIStreamOptions  `json:"stream_options,omitempty"`
+	// DeepSeek thinking mode 控制
+	// ReasoningEffort: "high" | "max"（ThinkingDisabled 时不发送）
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	Thinking        *ThinkingConfig `json:"thinking,omitempty"`
+}
+
+// ThinkingConfig DeepSeek extended thinking 控制体。
+// Type 固定为 "enabled"；BudgetTokens 可选（0 = 不限制）。
+type ThinkingConfig struct {
+	Type         string `json:"type"` // 固定 "enabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 // OpenAIStreamOptions 控制流式响应附加行为。
@@ -131,10 +142,24 @@ func (c *OpenAICompatibleClient) SendRequest(ctx context.Context, apiKey string,
 // translateRequest 将内部的 protocol.InferRequest 转换为 OpenAI 兼容的载荷。
 func translateRequest(req *protocol.InferRequest, supportsVision bool) *OpenAIRequest {
 	out := &OpenAIRequest{
-		Model:       req.Model,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      false,
+		Model:     req.Model,
+		MaxTokens: req.MaxTokens,
+		Stream:    false,
+	}
+
+	// ThinkingMode 路由：enabled 时强制 Temperature=0，DeepSeek 要求
+	switch req.ThinkingMode {
+	case protocol.ThinkingHigh:
+		out.ReasoningEffort = "high"
+		out.Thinking = &ThinkingConfig{Type: "enabled"}
+		out.Temperature = 0 // thinking 模式不兼容 temperature/top_p
+	case protocol.ThinkingMax:
+		out.ReasoningEffort = "max"
+		out.Thinking = &ThinkingConfig{Type: "enabled"}
+		out.Temperature = 0
+	default:
+		// ThinkingDisabled：不发送 thinking 字段，透传用户 temperature
+		out.Temperature = req.Temperature
 	}
 
 	if req.ResponseFormat != nil {
@@ -157,7 +182,13 @@ func translateRequest(req *protocol.InferRequest, supportsVision bool) *OpenAIRe
 			}
 			out.Messages = append(out.Messages, oaiMsgs...)
 		} else {
-			out.Messages = append(out.Messages, OpenAIMessage{Role: msg.Role, Content: msg.Content})
+			// DeepSeek thinking mode：纯文本 assistant 消息也必须回传 reasoning_content
+			oaiMsg := OpenAIMessage{
+				Role:             msg.Role,
+				Content:          msg.Content,
+				ReasoningContent: msg.ReasoningContent, // 空字符串时 json omitempty 自动省略
+			}
+			out.Messages = append(out.Messages, oaiMsg)
 		}
 	}
 
