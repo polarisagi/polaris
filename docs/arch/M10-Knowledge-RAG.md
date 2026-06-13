@@ -64,7 +64,7 @@ DocNode/LeafChunk/ParentChunk/Chunk 类型定义见 `pkg/swarm/knowledge/rag.go`
 
 `Ingester.ParseAndBuildTree` 在解析后分层生成 LeafChunk（~256 tokens 语义断点）和 ParentChunk（SectionPath + 前同级 TopicSentence + 完整内容），后台 goroutine 生成多级摘要，`extractStructuredContent` 提取表格 schema 和代码块元数据。
 
-> ⚠️ **当前实现降级**：生产 `PipelineImpl` 仅按 `\n\n` 双换行切分，无任何结构化解析器。所有节点 Level=1，无层级嵌套，多级摘要和父子双存均缺失。`rag_impl.go` 的分块逻辑按字符数（parentSize=1000/leafSize=250）而非 token 数切分，与 ~256 tokens 设计不符（P1 缺陷）。
+> **当前实现**：`rag_impl.go` 已实现父子双存（ParentChunk=1000 字符 / LeafChunk=250 字符），结构化解析器（goldmark/pdfcpu/tree-sitter）和多级摘要生成**[计划中]**尚未接入，当前按 `\n\n` 双换行切分。
 
 ### 1.5 嵌入维度变更 (三相渐进恢复)
 
@@ -72,7 +72,7 @@ M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-
 
 | 阶段 | 触发 | 操作 | 延迟 |
 |------|------|------|------|
-| Phase 1: 双索引无缝切换 | Embedder.Dimension() 变更 | SurrealDB-Core 内维护双表 (index_remote_4096 / index_local_384)。切换模型时将检索请求路由至对应维度的表。**禁止永久降级 BM25**。 | <1ms |
+| Phase 1: 双索引无缝切换 | Embedder.Dimension() 变更 | SurrealDB-Core 内维护单张动态维度表（`vec_dim` 列随模型切换更新）；切换模型时将检索请求路由至新维度索引。**禁止永久降级 BM25**。 | <1ms |
 | Phase 2: 优先级热恢复 | Phase 1 后 | 优先级队列重嵌 Top 50 Chunk: 0.4×M5 WorkingMemory引用频次 + 0.3×DurativeGroup活跃度 + 0.2×7天查询频率 + 0.1×访问时间倒数。每Chunk 2s超时，原子替换 | ~25-75s |
 | Phase 3: 全量回填 | CPU idle>70% + 空闲内存>500MB | 后台单线程, 5文档/批+1s冷却 | ~5.5h (10K docs) |
 | BM25 永久降级 | >30天未访问 | 不重嵌，永久BM25 | 0 |

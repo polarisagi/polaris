@@ -106,7 +106,7 @@ Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状
 
 **ActiveTaintLevel（session 级全局污点）**：当前实现暂设 TaintNone，待 ActiveContext.TaintLevel 正式引入后再从 session 聚合污点读取。per-node 污点已在 `parsePlanOnSuccess` 中按 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点的拦截仍有效。
 
-> **已知缺口（S_SUSPEND 持久化）**：FSM 存在 `S_SUSPEND` 状态枚举，但状态机未在转入 Suspend 时向 `tasks` 表写入 `suspended` 状态；`recovery.go` 的启动扫描依赖 DB 中的 suspended 标记来恢复挂起任务，导致进程崩溃后 provider_exhausted 类 Suspend 任务无法被自动唤醒。修复方向：在 `applyStateTransition` 的 Suspend 分支补充 `tasks.status='suspended'` 写入。
+> **已知缺口（Suspended 持久化）**：挂起（`TaskSuspended`）状态未及时写入 `tasks.status`，`recovery.go` 启动扫描依赖该标记，导致进程崩溃后 `provider_exhausted` 类挂起任务无法自动唤醒。修复方向：在转入 Suspended 时补写 `tasks.status='suspended'`。
 
 > **已修复（validateTaintGate 旁路）**：`agent_execute.go` 中 `ActiveTaintLevel` 此前硬编码为 `TaintNone`，导致 session 级污点门控形同虚设。当前已按 DAG 节点 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点拦截有效。
 
@@ -276,7 +276,7 @@ RouteReasoning:
 - 该指令来源标记 `TaintNone`，经 `SanitizeToSafe` 后注入 `WriteInstruction` slot（符合 Taint 类型约束）。
 - `BudgetWarned`/`BudgetPressure` 字段定义在 `StateContext`；重放时从 EventLog 恢复，保证 `[inv_M4_03]` promptFn 确定性。
 
-M4 不重复实现 TokenBurnRate 检测逻辑，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate 的 CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 将速率直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是触发 KillSwitch 阶段变迁的**唯一路径**。M4 通过读取 M11 导出的 `polaris_killswitch_stage` Gauge（Normal=0 / Throttle=1 / Pause=2 / Fullstop=3）获知当前熔断阶段并调整行为:
+M4 不重复实现 TokenBurnRate 检测逻辑，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate 的 CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 将速率直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是触发 KillSwitch 阶段变迁的**唯一路径**。M4 通过读取 M11 导出的 `polaris_killswitch_stage` Gauge（Normal=0 / Throttle=1 / Pause=2 / Fullstop=3）获知当前熔断阶段并调整行为（**[计划中]**：Gauge 轮询与阶段响应逻辑尚未实现）:
 
 - **Throttle 阶段**: maxSteps 降至 3，禁止 write_network 操作
 - **Pause 阶段**: 优雅完成当前 DAGNode，不启动新任务，等待 M11 恢复或 ESCALATE

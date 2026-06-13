@@ -97,7 +97,7 @@ L3 LLM 输出 provider 推荐槽位，由 Route() 确定性函数验证（预算
 
 ### 4.4 ComplexityDeterminer
 
-**[计划中]** — 三层路由（L1规则/L2复杂度/L3 LLM）为设计目标；当前 `InferenceRouter`（`pkg/substrate/inference/router.go`）实现的是**单层 HealthScore 路由**（成功率×0.4 + 延迟×0.3 + 成本×0.2 + 质量×0.1），不含 L2 复杂度打分和 Budget/Standard/Reasoning Pool 分层。多 Provider 按健康分降序选择，失败时 Failover 至次优。
+**[计划中]** — 三层路由（L1规则/L2复杂度/L3 LLM）为设计目标；当前 `InferenceRouter`（`pkg/substrate/inference/router.go`）实现的是**单层 HealthScore 路由**（成功率×0.4 + 延迟×0.3 + 成本×0.2 + 质量×0.1），不含 L2 复杂度打分。多 Provider 按健康分降序选择，失败时 Failover 至次优。**Role Pool 已实现**：`ProviderRegistry.RegisterWithRole(name, displayName, role, p)` / `BestForRole(role, req)` 支持 `general`/`default`/`reasoning` 三类角色池，调用方可按角色而非全局最优选取 Provider（实现见 `pkg/substrate/inference/router.go`）。
 
 ### 4.5 Route 方法
 

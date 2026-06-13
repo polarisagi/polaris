@@ -104,7 +104,7 @@ Agent Card 服务端路径: `/.well-known/agent-card.json`（A2A v0.3+ 强制）
 - `Pdeathsig=SIGKILL`：父进程退出时自动 SIGKILL 子进程，消灭孤儿
 非 Linux 平台（`sandbox_other.go`）返回 nil，路由层已降级至 WasmSandbox，不到达此路径。
 `ContainerSandboxSysProcAttr()` 已导出，供 `bash` 工具和 Hook Runner 复用相同的隔离属性。
-Landlock LSM 文件系统白名单（`LandlockRestrictSelf`）需在子进程内调用，需 reexec 模式（`POLARIS_SANDBOX_EXEC` 环境变量触发）；Tier1+ 环境由 `maxSandboxTier()` 自动解锁，Tier0 不启用。
+**[计划中]** Landlock LSM 文件系统白名单（`LandlockRestrictSelf` + `POLARIS_SANDBOX_EXEC` reexec 模式）尚未在 `sandbox_linux.go` 中实现；当前 ContainerSandbox 仅注入 PID/Mount 命名空间隔离。
 A2A 同进程黑板模式（M8）；跨机: HTTP/gRPC 端点。构建时按部署配置选择。
 
 ---

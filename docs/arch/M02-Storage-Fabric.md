@@ -349,9 +349,9 @@ Outbox Worker 消费事件走写连接（保证读己写）。Agent 查询 Episo
 
 ## 11. 四层记忆 → 存储绑定
 
-- 记忆层: L0 Working Memory | 物理存储: 进程内原生 ContextWindow(Slice) + ScratchPad(sync.Map) [Tier-0] + Immutable Core | 持久化: 否
-- 记忆层: L1 Episodic Memory | 物理存储: [Storage-SQLite] events 表 + [Storage-SurrealDB-Core] embedding 列 + 时序 B-tree | 持久化: 是
-- 记忆层: L2 Semantic Memory | 物理存储: [Storage-SQLite] 邻接表 (entity + relation) + [Storage-SurrealDB-Core] | 持久化: 是
+- 记忆层: L0 Working Memory | 物理存储: 进程内原生 ContextWindow(Slice) + ScratchPad(sync.Map) [Tier-0] + Immutable Core | 持久化: 跨 session 笔记经 NotesStore（SQLite `notes` 表）持久化，工作上下文本身进程内
+- 记忆层: L1 Episodic Memory | 物理存储: [Storage-SQLite] `episodic_events` 表 + [Storage-SurrealDB-Core] embedding 列 + 时序 B-tree | 持久化: 是
+- 记忆层: L2 Semantic Memory | 物理存储: [Storage-SQLite] 主存储（邻接表 entity + relation）；[Storage-SurrealDB-Core] 负责图遍历 + KNN 向量检索 | 持久化: 是
 - 记忆层: L3 Procedural Memory | 物理存储: [Storage-SurrealDB-Core] skill_id→SkillBytes + [Storage-SurrealDB-Core] | 持久化: 是
 ## 15. 降级与失败模式
 
