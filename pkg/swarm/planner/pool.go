@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,12 +12,17 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
+type SandboxExecutor interface {
+	Execute(ctx context.Context, cmd string, args []string, workDir string, timeout time.Duration) ([]byte, error)
+}
+
 // PlannerPool 管理多个并发的思考流，并将最佳结果（通过耳语）汇报给主脑。
 type PlannerPool struct {
 	goal        string
 	taskType    string
 	whisperChan chan<- protocol.MemoryWhisper // 结果返回通道
 	provider    protocol.Provider
+	sandbox     SandboxExecutor
 }
 
 // NewPlannerPool 创建 PlannerPool。
@@ -132,25 +136,20 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 
 	relDir := "./" + filepath.Base(tmpDir)
 
-	cmdBuild := exec.CommandContext(buildCtx, "go", "build", relDir)
-	cmdBuild.Dir = wd
-	buildErr := cmdBuild.Run()
-
 	var compileScore float64 = 0.0
 
-	//nolint:nestif
-	if buildErr == nil {
-		testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
-		defer cancel2()
+	if p.sandbox != nil {
+		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", relDir}, wd, 30*time.Second)
+		if buildErr == nil {
+			testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel2()
 
-		cmdTest := exec.CommandContext(testCtx, "go", "test", "-json", "-timeout", "20s", relDir)
-		cmdTest.Dir = wd
-		out, _ := cmdTest.CombinedOutput()
-
-		if cmdTest.ProcessState != nil && cmdTest.ProcessState.Success() {
-			compileScore = 1.0
-		} else {
-			compileScore = parseTestScore(out)
+			out, testErr := p.sandbox.Execute(testCtx, "go", []string{"test", "-json", "-timeout", "20s", relDir}, wd, 20*time.Second)
+			if testErr == nil {
+				compileScore = 1.0
+			} else {
+				compileScore = parseTestScore(out)
+			}
 		}
 	}
 
