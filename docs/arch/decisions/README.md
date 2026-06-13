@@ -57,6 +57,10 @@ ADR 被代码引用时，源文件头部加：
 | 0018 | MCP Transport 用 TaintPreservingDecoder，禁 encoding/json 直解 | Accepted | 2026-05-21 |
 | 0019 | extension_instances 统一安装实例表（三层统一 State-in-DB） | Accepted | 2026-05-22 |
 | 0020 | 确立 DeepSeek V4 为全系统默认核心模型（Canonical Provider） | Accepted | 2026-06-08 |
+| 0021 | 核心机制实现（SurpriseIndex / WasmTester / BM25 / FSM） | Accepted | 2026-06-09 |
+| 0022 | ThinkingMode 三档路由取代 BestOfN/MCTS 多候选方案 | Accepted | 2026-06-13 |
+| 0023 | episodic 写路径双轨制（kv_store 热路径 + OutboxWorker 冷投影） | Accepted | 2026-06-13 |
+| 0024 | GovernanceAgent 代码安全三层防线（AST + 正则 + 单次 ThinkingMax LLM） | Accepted | 2026-06-13 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 

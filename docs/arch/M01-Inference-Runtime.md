@@ -3,7 +3,7 @@
 > API 优先架构。Provider Router 为核心。本地推理仅隐私/离线备选。
 > Go 实现 | [HE-Rule-1] [HE-Rule-2] [HE-Rule-3] [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
 > [Module-Topology] [Code-Package-Mapping] [Tier-0-Limit] [Tier-1-Limit]
-> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:122 Token预算 / 6:202 SemanticCache / 7:224 Fallback / 8:267 本地推理local_only / 9:294 ModelVersion / 12:301 349(SOFT)降级 / 13:329 依赖
+> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:122 Token预算 / 6:186 SemanticCache / 7:208 Fallback / 8:251 本地推理local_only / 9:278 ModelVersion / 12:285 349(SOFT)降级 / 13:313 依赖
 
 ---
 
@@ -139,40 +139,24 @@ Provider 选择：`ProviderRegistry.best(req)` 按 healthScore 降序 + CircuitB
 三模式: `fixed` (MaxReasoningSteps=5, MaxThinkingTokens=4096) / `adaptive` (`min(16384, 4096×(1+SI×3))`) / `batch` (32K, 夜间 2-6am, 非交互)。
 [TokenBurnRate] Stage1 THROTTLE → 降一档: batch→adaptive, adaptive→fixed, fixed→256。
 
-### 5.2-bis Test-Time Compute — `[ReasoningEffort]` `[BestOfN]` `[SelfConsistency]`
+### 5.2-bis Test-Time Compute — `[ThinkingMode]`
 
-> 对齐 2025-2026 推理模型范式 (o3 / DeepSeek R / Claude thinking)。与 [System-1/1.5/2] **正交**，详见 [00-Global-Dictionary §9-ter]。
+> 对齐 DeepSeek V4 Pro / Claude Sonnet thinking 原生推理范式。MCTS/BestOfN/多候选路由已废弃——Provider 原生扩展思考（native extended thinking）覆盖相同能力。
 
-**[ReasoningEffort]** — Provider 接口一等公民字段:
-```
-InferRequest.ReasoningEffort ∈ {low, medium, high}
-```
-Adapter 映射:
-- OpenAI/o-系列 → `reasoning_effort`
-- DeepSeek R → `reasoning_budget` (low=2k / med=8k / high=32k)
-- Claude → `thinking.budget_tokens` (low=1k / med=4k / high=16k)
-- Local-SLM → ignored（不支持）
-- Local-Reasoning (HT2+) → 内部 `MaxThinkingTokens` 映射
+**`[ThinkingMode]`** — M4 `SelectThinkingMode` 按以下信号三档驱动，由 Adapter 翻译为 Provider-specific API 字段:
 
-ReasoningEffort 默认: System 1.5 → low; System 2 → medium; 用户显式 + Cedar permit → high。
+| 档位 | 触发条件 | DeepSeek V4 Pro 映射 | Claude 映射 |
+|------|---------|----------------------|-------------|
+| `ThinkingDisabled` | SI < 0.3 且 replanCount=0 且 TaintLevel < 3 | 无 thinking 字段 | 无 thinking 字段 |
+| `ThinkingHigh` | 0.3 ≤ SI < 0.6 | `reasoning_effort="high"` + `thinking.type="enabled"` | `thinking.budget_tokens=4096` |
+| `ThinkingMax` | SI ≥ 0.6 或 replanCount > 0 或 TaintLevel ≥ 3 | `reasoning_effort="max"` + `thinking.type="enabled"` | `thinking.budget_tokens=16384` |
 
-**`[ReasoningTokens]`** 计量:
-- InferResponse.Usage 分字段: `prompt_tokens` / `completion_tokens` / `reasoning_tokens`
-- 三者均计入 [TokenBurnRate]（同等权重）
-- M3 独立导出 `polaris_reasoning_tokens_total` Gauge
+**约束**:
+- DeepSeek V4 Pro thinking 启用时温度强制为 0（API 要求）
+- 多轮工具调用序列中，`reasoning_content` 必须随 assistant 消息回传至下一轮 prompt——Adapter 负责从响应中提取并写入 `ProviderResponse.ReasoningContent`；M4 通过 `StateContext.LastReasoningContent` 跨轮持有
+- HT0 下 `ThinkingMax` 可正常运行（DeepSeek V4 Pro token 成本低，无预算门控）
 
-**`[BestOfN]` + `[SelfConsistency]`** — M1 ParallelSampler:
-
-`ParallelSample(req, N)` 依次完成：Cedar CapGate 门控（`task_priority >= 1`）→ 预算检查（cost×N 超限降级 N=1）→ N 路 goroutine 并发推理（temperature 各异）→ ctx cancel 传播 → 结构化输出 MajorityVote / 自由文本 BestOfN.Verifier 聚合 → 所有 reasoning_tokens 计入 burn rate。
-
-HT0 默认 N=1（关闭），`FeatureGate.FeatureTestTimeCompute` 控制（≥Tier1 + priority>=1 + 余量充足）。**[计划中]** — `ParallelSample` 尚未在 `pkg/substrate/inference/` 中实现，路由层（`InferenceRouter`）当前仅支持单路推理。
-
-**Cedar 策略** (M11 §3.1 增补，供策略层参考，非当前执行路径):
-```cedar
-permit call_tool when resource.action == "parallel_sample" AND
-  context.task_priority >= 1 AND context.tier >= 1 AND
-  context.estimated_cost <= context.remaining_budget * 0.3
-```
+**`[ReasoningTokens]`** 计量: `InferResponse.Usage` 分字段 `reasoning_tokens`，计入 [TokenBurnRate]；M3 导出 `polaris_reasoning_tokens_total` Gauge。
 
 ### 5.3 StreamBudgetGuard
 
