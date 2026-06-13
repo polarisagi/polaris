@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -36,8 +37,6 @@ const (
 
 // circuitBreaker 连续失败 → Open(冷却期) → HalfOpen 探测。
 // 架构文档: M01 §4.5（参数权威源 spec/state.yaml §m1_router.circuit_breaker_*）
-// 常量值与 internal/config/thresholds.go DefaultThresholds.M1Router 手工同步，
-// spec_consistency_test 守护核心 SSoT。
 type circuitBreaker struct {
 	state       atomic.Int32
 	failures    atomic.Int32
@@ -46,9 +45,18 @@ type circuitBreaker struct {
 	openDur     time.Duration
 }
 
-func newCircuitBreaker() *circuitBreaker {
-	// 数值同 spec/state.yaml §m1_router.circuit_breaker_failure_count / _cooldown_seconds
-	cb := &circuitBreaker{maxFailures: 5, openDur: 10 * time.Second}
+// newCircuitBreaker 按 M1RouterThresholds 配置创建熔断器。
+// 零值字段回退 spec/state.yaml 默认值（5 次失败 / 10s 冷却）。
+func newCircuitBreaker(cfg config.M1RouterThresholds) *circuitBreaker {
+	maxFail := int32(cfg.CircuitBreakerFailureCount)
+	if maxFail <= 0 {
+		maxFail = 5 // spec/state.yaml §m1_router.circuit_breaker_failure_count 默认值
+	}
+	cooldown := time.Duration(cfg.CircuitBreakerCooldownSeconds) * time.Second
+	if cooldown <= 0 {
+		cooldown = 10 * time.Second // spec/state.yaml §m1_router.circuit_breaker_cooldown_seconds 默认值
+	}
+	cb := &circuitBreaker{maxFailures: maxFail, openDur: cooldown}
 	cb.state.Store(int32(circuitClosed))
 	return cb
 }
@@ -100,12 +108,12 @@ type providerEntry struct {
 	// costScore: 由 ProviderCapabilities.CostPer1KInput 驱动（值越小越好）
 }
 
-func newProviderEntry(name, displayName string, p protocol.Provider) *providerEntry {
+func newProviderEntry(name, displayName string, p protocol.Provider, cfg config.M1RouterThresholds) *providerEntry {
 	return &providerEntry{
 		name:        name,
 		displayName: displayName,
 		provider:    p,
-		cb:          newCircuitBreaker(),
+		cb:          newCircuitBreaker(cfg),
 		p95ms:       200, // 初始 P95 假设 200ms
 		successRate: 1.0,
 	}
@@ -150,10 +158,14 @@ type ProviderRegistry struct {
 	mu         sync.RWMutex
 	entries    map[string]*providerEntry
 	onRecovery func(providerName string) // 可选：Provider 熔断恢复时的回调
+	cfg        config.M1RouterThresholds // 熔断器配置（来自 M1RouterThresholds TOML）
 }
 
-func NewProviderRegistry() *ProviderRegistry {
-	return &ProviderRegistry{entries: make(map[string]*providerEntry)}
+func NewProviderRegistry(cfg config.M1RouterThresholds) *ProviderRegistry {
+	return &ProviderRegistry{
+		entries: make(map[string]*providerEntry),
+		cfg:     cfg,
+	}
 }
 
 // InjectRecoveryHandler 注入 Provider 恢复回调，由上层（如 InferenceRouter）在初始化时调用。
@@ -167,7 +179,7 @@ func (r *ProviderRegistry) InjectRecoveryHandler(fn func(providerName string)) {
 func (r *ProviderRegistry) Register(name, displayName string, p protocol.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.entries[name] = newProviderEntry(name, displayName, p)
+	r.entries[name] = newProviderEntry(name, displayName, p, r.cfg)
 }
 
 func (r *ProviderRegistry) Unregister(name string) {
@@ -187,7 +199,7 @@ func (r *ProviderRegistry) UnregisterAll() {
 func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p protocol.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e := newProviderEntry(name, displayName, p)
+	e := newProviderEntry(name, displayName, p, r.cfg)
 	e.role = role
 	r.entries[name] = e
 }

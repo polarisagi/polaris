@@ -315,7 +315,7 @@ func run() error { //nolint:gocyclo
 	safeHTTPClient := substrate.NewSafeHTTPClient(dialer)
 	inference.SetDefaultHTTPClient(safeHTTPClient)
 
-	reg := inference.NewProviderRegistry()
+	reg := inference.NewProviderRegistry(cfg.Thresholds.M1Router)
 	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。
 	// 禁止 env var 直接注册内存 registry，DB 是唯一权威源。
 	server.SeedProvidersFromEnv(ctx, store.DB())

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -14,7 +15,7 @@ import (
 // ─── CircuitBreaker 测试 ───────────────────────────────────────────────────────
 
 func TestCircuitBreaker_OpenAfter5Failures(t *testing.T) {
-	cb := newCircuitBreaker()
+	cb := newCircuitBreaker(config.M1RouterThresholds{})
 	for i := 0; i < 5; i++ {
 		if !cb.Allow() {
 			t.Fatalf("circuit should be closed at failure %d", i)
@@ -27,7 +28,7 @@ func TestCircuitBreaker_OpenAfter5Failures(t *testing.T) {
 }
 
 func TestCircuitBreaker_RecoveryOnSuccess(t *testing.T) {
-	cb := newCircuitBreaker()
+	cb := newCircuitBreaker(config.M1RouterThresholds{})
 	for i := 0; i < 4; i++ {
 		cb.RecordFailure()
 	}
@@ -73,7 +74,7 @@ var errProviderUnavailable = perrors.New(perrors.CodeProviderExhausted, "provide
 // ─── InferenceRouter 测试 ─────────────────────────────────────────────────────
 
 func TestInferenceRouter_Failover(t *testing.T) {
-	reg := NewProviderRegistry()
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	// primary: 第一次调用失败
 	primary := &mockProvider{failCount: 1, caps: protocol.ProviderCapabilities{CostPer1KInput: 1.0}}
 	// secondary: 始终成功
@@ -94,7 +95,7 @@ func TestInferenceRouter_Failover(t *testing.T) {
 }
 
 func TestInferenceRouter_AllProvidersCircuitOpen(t *testing.T) {
-	reg := NewProviderRegistry()
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	p := &mockProvider{failCount: 100}
 	reg.Register("only", "Only", p)
 	// 手动打开熔断器
@@ -109,7 +110,7 @@ func TestInferenceRouter_AllProvidersCircuitOpen(t *testing.T) {
 }
 
 func TestInferenceRouter_HealthScorePreference(t *testing.T) {
-	reg := NewProviderRegistry()
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	// cheap: 低成本，始终成功
 	cheap := &mockProvider{caps: protocol.ProviderCapabilities{CostPer1KInput: 0.1, SupportsStreaming: true}}
 	// expensive: 高成本
@@ -155,7 +156,7 @@ func (m *mockOutboxWriter) getEntries() []protocol.OutboxEntry {
 }
 
 func TestCircuitBreaker_OnRecovery(t *testing.T) {
-	reg := NewProviderRegistry()
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
 	p := &mockProvider{failCount: 0}
 	reg.Register("recover_test", "RecoverTest", p)
 
