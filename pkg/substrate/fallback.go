@@ -200,7 +200,7 @@ func (fe *FallbackExecutor) Execute() error {
 }
 
 // ErrAllProvidersFailed 全部 Provider 不可用时返回的哨兵错误。
-var ErrAllProvidersFailed = perrors.New(perrors.CodeInternal, "fallback: all providers unavailable")
+var ErrAllProvidersFailed = perrors.New(perrors.CodeProviderExhausted, "fallback: all providers unavailable")
 
 // Provider 降级链中的 Provider 引用。
 type Provider interface {
