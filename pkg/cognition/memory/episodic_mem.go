@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +19,11 @@ import (
 // maxEpisodicEvents Tier0 内存事件容量上限（防止 8GB 场景 OOM）。
 // 超出时 FIFO 淘汰最旧内存条目；SQLite 侧保留完整历史，不受此限制。
 const maxEpisodicEvents = 2000
+
+// maxEpisodicPayloadBytes kv_store 单条 episodic 事件 Payload 的最大字节数。
+// 超限部分落盘到 ~/.polarisagi/polaris/logs/events/ 并替换为 log_ref 占位符，
+// 保留前 512 字节作为 BM25 可搜索摘要。
+const maxEpisodicPayloadBytes = 8192
 
 // EpisodicMem (L1) — 事件表 + 向量投影。
 type EpisodicMem struct {
@@ -60,6 +68,11 @@ func NewEpisodicMemWithCognitive(store protocol.Store, indexer *EpisodicGraphInd
 func (em *EpisodicMem) Append(ctx context.Context, ev protocol.Event) error {
 	em.mu.Lock()
 	defer em.mu.Unlock()
+
+	// Payload 门控：超限落盘 + log_ref 替换
+	if len(ev.Payload) > maxEpisodicPayloadBytes {
+		ev.Payload = truncateEpisodicPayload(ev.ID, ev.Payload)
+	}
 
 	key := []byte("episodic:" + ev.ID)
 	data, err := json.Marshal(ev)
@@ -243,4 +256,24 @@ func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before ti
 		return int(affected), nil
 	}
 	return 0, nil
+}
+
+// truncateEpisodicPayload 将超限 Payload 落盘，返回含 log_ref 占位符的截断版本。
+// 落盘路径：~/.polarisagi/polaris/logs/events/<id>.bin
+// 返回内容：前 512 字节（BM25 可用）+ log_ref JSON 片段
+func truncateEpisodicPayload(eventID string, raw []byte) []byte {
+	logDir := filepath.Join(os.ExpandEnv("$HOME"), ".polarisagi", "polaris", "logs", "events")
+	if err := os.MkdirAll(logDir, 0700); err == nil {
+		_ = os.WriteFile(filepath.Join(logDir, eventID+".bin"), raw, 0600)
+	}
+
+	preview := raw
+	if len(preview) > 512 {
+		preview = preview[:512]
+	}
+	ref := fmt.Sprintf(
+		`{"log_ref":%q,"bytes":%d,"preview":%s}`,
+		eventID, len(raw), string(preview),
+	)
+	return []byte(ref)
 }

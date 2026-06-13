@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -37,6 +39,41 @@ func (m *mockStore) Txn(ctx context.Context, fn func(tx protocol.Transaction) er
 }
 func (m *mockStore) Capabilities() protocol.StoreCapabilities { return protocol.StoreCapabilities{} }
 func (m *mockStore) Close() error                             { return nil }
+
+func TestEpisodicMem_AppendTruncatesPayload(t *testing.T) {
+	store := newMockStore()
+	mem := NewEpisodicMem(store)
+
+	largePayload := make([]byte, 10000)
+	for i := range largePayload {
+		largePayload[i] = 'A'
+	}
+
+	ev := protocol.Event{
+		ID:      "test-event-1",
+		Payload: largePayload,
+	}
+
+	err := mem.Append(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+
+	key := []byte("episodic:test-event-1")
+	data, err := store.Get(context.Background(), key)
+	if err != nil {
+		t.Fatalf("Store Get failed: %v", err)
+	}
+
+	if len(data) > 8192 {
+		t.Errorf("Appended data too large: %d > 8192", len(data))
+	}
+
+	logPath := filepath.Join(os.ExpandEnv("$HOME"), ".polarisagi", "polaris", "logs", "events", "test-event-1.bin")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Errorf("Truncated payload file not found at %s", logPath)
+	}
+}
 
 func TestWorkingMemory_ImmutableCore(t *testing.T) {
 	ic := NewImmutableCore()
