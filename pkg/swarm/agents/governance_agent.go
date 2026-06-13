@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"io"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -207,24 +205,23 @@ func probeMemoryLinux() float64 {
 }
 
 func probeMemoryDarwin() float64 {
-	// 1. 通过 syscall.Sysctl 获取物理内存总量（hw.memsize，字节）
-	s, err := syscall.Sysctl("hw.memsize")
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// 1. 获取物理内存总量（hw.memsize，字节）
+	cmdSys := exec.CommandContext(ctx, "sysctl", "-n", "hw.memsize")
+	sysOut, err := cmdSys.Output()
 	if err != nil {
 		return probeMemoryFallback()
 	}
 
-	b := []byte(s)
-	if len(b) < 8 {
-		padded := make([]byte, 8)
-		copy(padded, b)
-		b = padded
+	memsizeStr := strings.TrimSpace(string(sysOut))
+	memsize, err := strconv.ParseFloat(memsizeStr, 64)
+	if err != nil || memsize <= 0 {
+		return probeMemoryFallback()
 	}
-	memsize := float64(binary.LittleEndian.Uint64(b))
 
 	// 2. vm_stat 部分
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
 	cmd := exec.CommandContext(ctx, "vm_stat")
 	out, err := cmd.Output()
 	if err != nil {
@@ -249,7 +246,7 @@ func probeMemoryDarwin() float64 {
 		}
 	}
 
-	pageSize := float64(syscall.Getpagesize())
+	pageSize := float64(os.Getpagesize())
 
 	// 3. 可用内存 = (pagesFree + pagesInactive) * pageSize
 	avail := (pagesFree + pagesInactive) * pageSize
@@ -258,8 +255,6 @@ func probeMemoryDarwin() float64 {
 	if memsize > 0 {
 		return avail / memsize
 	}
-
-	// 5. 任何步骤出错或异常均 fallback
 	return probeMemoryFallback()
 }
 
