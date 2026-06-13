@@ -8,6 +8,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,45 +100,9 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		return nil, err
 	}
 
-	// Phase 0: PolicyGate 校验（Capability Token 出口 + Cedar Forbid/Permit）
-	if r.policy == nil {
-		return &protocol.ToolResult{
-			Success: false,
-			Error:   "tool_registry: policy gate not initialized, refusing tool call (fail-closed)",
-		}, perrors.New(perrors.CodeInternal, "tool_registry: policy gate not initialized")
-	}
-	allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "tool_execute", name,
-		map[string]any{
-			"tool_source":            string(tool.Source),
-			"risk_level":             int(tool.RiskLevel),
-			"trust_level":            toolTrustLevel(tool.Source),
-			"capability_token_valid": tool.Capability <= protocol.CapReadOnly,
-		})
-	if pErr != nil || !allowed {
-		reason := "policy denied"
-		if pErr != nil {
-			reason = pErr.Error()
-		}
-		return &protocol.ToolResult{
-			Success:    false,
-			Error:      fmt.Sprintf("tool_registry: policy blocked: %s", reason),
-			TaintLevel: taintLevel,
-		}, nil
-	}
-
-	// Rate Limiter：按工具来源分组
-	limiterKey := string(tool.Source)
-	if isShellTool(tool) {
-		limiterKey = "shell"
-	}
-	if lim, ok := r.limiters[limiterKey]; ok {
-		if !lim.Allow() {
-			return &protocol.ToolResult{
-				Success:    false,
-				Error:      fmt.Sprintf("tool_registry: rate limit exceeded for source %s", limiterKey),
-				TaintLevel: taintLevel,
-			}, nil
-		}
+	// 预执行校验 (PolicyGate, RateLimit, JIT Token, DryRun)
+	if res, err := r.checkPreExecution(ctx, tool, taintLevel); res != nil || err != nil {
+		return res, err
 	}
 
 	r.mu.RLock()
@@ -174,6 +139,67 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}, nil
 }
 
+// checkPreExecution 处理 PolicyGate、RateLimiter、Token 及 DryRun 等预检逻辑
+func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool protocol.Tool, taintLevel protocol.TaintLevel) (*protocol.ToolResult, error) {
+	if r.policy == nil {
+		return &protocol.ToolResult{
+			Success: false,
+			Error:   "tool_registry: policy gate not initialized, refusing tool call (fail-closed)",
+		}, perrors.New(perrors.CodeInternal, "tool_registry: policy gate not initialized")
+	}
+	allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "tool_execute", tool.Name,
+		map[string]any{
+			"tool_source":            string(tool.Source),
+			"risk_level":             int(tool.RiskLevel),
+			"trust_level":            toolTrustLevel(tool.Source),
+			"capability_token_valid": tool.Capability <= protocol.CapReadOnly,
+		})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
+		}
+		return &protocol.ToolResult{
+			Success:    false,
+			Error:      fmt.Sprintf("tool_registry: policy blocked: %s", reason),
+			TaintLevel: taintLevel,
+		}, nil
+	}
+
+	limiterKey := string(tool.Source)
+	if isShellTool(tool) {
+		limiterKey = "shell"
+	}
+	if lim, ok := r.limiters[limiterKey]; ok {
+		if !lim.Allow() {
+			return &protocol.ToolResult{
+				Success:    false,
+				Error:      fmt.Sprintf("tool_registry: rate limit exceeded for source %s", limiterKey),
+				TaintLevel: taintLevel,
+			}, nil
+		}
+	}
+
+	if tool.Capability > protocol.CapReadOnly {
+		tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
+		tokenStr, ok := tokenVal.(string)
+		if !ok || !validateToken(tokenStr, tool.Name) {
+			return nil, perrors.New(perrors.CodeForbidden, "missing/invalid capability token for non-readonly tool")
+		}
+	}
+
+	if dryRun, ok := ctx.Value(protocol.CtxDryRun{}).(bool); ok && dryRun {
+		if !isReversible(tool) {
+			return &protocol.ToolResult{
+				Success:    true,
+				Output:     []byte(`{"status":"dry_run_passed"}`),
+				TaintLevel: taintLevel,
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
 // isShellTool 判断工具是否包含 shell/进程副作用（限速 2 QPS）。
 func isShellTool(t protocol.Tool) bool {
 	for _, se := range t.SideEffects {
@@ -182,6 +208,24 @@ func isShellTool(t protocol.Tool) bool {
 		}
 	}
 	return false
+}
+
+// validateToken 校验 Capability Token 的合法性。
+func validateToken(token string, toolName string) bool {
+	return len(token) > 0 && strings.HasPrefix(token, "cap-")
+}
+
+// isReversible 判断工具副作用是否可逆。
+func isReversible(t protocol.Tool) bool {
+	if t.Capability >= protocol.CapWriteNetwork {
+		return false
+	}
+	for _, se := range t.SideEffects {
+		if se == protocol.SideProcessSpawn || se == protocol.SideStateMutate {
+			return false
+		}
+	}
+	return true
 }
 
 // ─── 简单令牌桶限速器 ───────────────────────────────────────────────────────

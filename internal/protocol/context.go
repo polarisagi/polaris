@@ -31,3 +31,9 @@ func (d detachedContext) Value(key any) any {
 func Detach(ctx context.Context) context.Context {
 	return detachedContext{parent: ctx}
 }
+
+// CtxCapabilityToken 用于在 context 中传递 capability token
+type CtxCapabilityToken struct{}
+
+// CtxDryRun 用于在 context 中指示当前是否为 dry run 模式
+type CtxDryRun struct{}
