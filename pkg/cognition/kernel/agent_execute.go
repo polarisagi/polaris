@@ -176,9 +176,9 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 					// 写 DB：标记任务为 suspended，供 recovery.go 恢复扫描
 					if a.db != nil {
 						updateSQL := `UPDATE tasks SET status='suspended', suspend_reason='provider_exhausted', updated_at=? WHERE task_id=?`
-						_, dbErr := a.db.ExecContext(ctx, updateSQL, time.Now().UTC(), a.sCtx.SessionID)
+						_, dbErr := a.db.ExecContext(ctx, updateSQL, time.Now().UTC(), a.sCtx.TaskID)
 						if dbErr != nil {
-							slog.Warn("agent: failed to write suspended status", "task_id", a.sCtx.SessionID, "err", dbErr)
+							slog.Warn("agent: failed to write suspended status", "task_id", a.sCtx.TaskID, "err", dbErr)
 						}
 					}
 					// 继续原有的 Suspended 状态机转移逻辑（不 return，让 FSM 处理后续）
