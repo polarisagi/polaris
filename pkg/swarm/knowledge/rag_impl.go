@@ -40,7 +40,7 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		SourcePath: doc.Ref.URI,
 	}
 
-	chunks := p.chunkDocument(docNode.Content, docNode.ID, initialTaint)
+	chunks := p.chunkDocument(docNode.Content, docNode.ID, initialTaint, doc.Ref)
 
 	store := p.router.Route(ctx, &substrate.StorageRequest{
 		DataType:   "knowledge",
@@ -100,7 +100,7 @@ func (p *DefaultIngestionPipeline) Delete(ctx context.Context, uri string) error
 	return store.BatchWrite(ctx, ops)
 }
 
-func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, taintLevel int) []Chunk {
+func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, taintLevel int, ref DocumentRef) []Chunk {
 	var chunks []Chunk
 
 	// 简单实现：按 1000 字符切分为 ParentChunk，按 250 字符切分为 LeafChunk
@@ -120,6 +120,8 @@ func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, t
 			SectionPath: []string{"root"},
 			TaintLevel:  taintLevel,
 			TaintSource: "ingestion",
+			SourceURI:   ref.URI,
+			DocVersion:  ref.ContentHash,
 		}
 		chunks = append(chunks, parentChunk)
 
@@ -135,6 +137,8 @@ func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, t
 				ParentChunkID: parentChunkID,
 				TaintLevel:    taintLevel, // 污染标记传递，防止 Taint Washing
 				TaintSource:   "ingestion",
+				SourceURI:     ref.URI,
+				DocVersion:    ref.ContentHash,
 			}
 			chunks = append(chunks, leafChunk)
 		}
