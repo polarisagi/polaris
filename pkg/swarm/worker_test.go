@@ -27,6 +27,7 @@ func (m *mockAgentKernel) SendIntent(trigger protocol.AgentTrigger) {
 	close(m.ch) // trigger the run
 }
 func (m *mockAgentKernel) GetState() protocol.AgentState  { return m.state }
+func (m *mockAgentKernel) SetTaskID(id string)            {}
 func (m *mockAgentKernel) SetTaskIntent(intent []byte)    {}
 func (m *mockAgentKernel) GetExecuteResult() []byte       { return m.result }
 func (m *mockAgentKernel) GetTokenUsage() (int, int, int) { return 0, 0, 0 }

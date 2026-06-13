@@ -17,6 +17,7 @@ type AgentKernel interface {
 	GetID() string
 	Run(ctx context.Context) error
 	GetState() protocol.AgentState
+	SetTaskID(id string)
 	SetTaskIntent(intent []byte)
 	GetExecuteResult() []byte
 	SendIntent(trigger protocol.AgentTrigger)
@@ -94,6 +95,7 @@ func (w *Worker) tryClaimAndExecute(ctx context.Context, taskID string) {
 	slog.Info("worker: task claimed", "agent", w.agentID, "task_id", taskID)
 
 	// 2. 将任务注入 AgentKernel
+	w.kernel.SetTaskID(taskID)
 	w.kernel.SetTaskIntent([]byte(fmt.Sprintf("Handle task: %s", taskID)))
 
 	// 为了不阻塞 ListenLoop（防止错过心跳或其他事件），我们新起一个 goroutine 跑 Kernel，
