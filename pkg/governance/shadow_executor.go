@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"os/exec"
 	"sort"
 )
+
+// AgentRunner 接口，测试时可 mock，生产走 M8 协议
+type AgentRunner interface {
+	RunVersion(ctx context.Context, version, mode string) ([]byte, error)
+}
 
 // ShadowExecutor — 影子执行与对比评估。
 // 架构文档: docs/arch/12-Eval-Harness-深度选型.md §8
@@ -15,6 +19,7 @@ import (
 // 流量分发由 M9 ProgressiveRollout (pkg/swarm/rollout.go) 决策，
 // M13 TrafficSplitter (pkg/edge/scheduler.go) 执行。
 type ShadowExecutor struct {
+	runner     AgentRunner
 	baseline   *ShadowVersion
 	candidate  *ShadowVersion
 	store      *ShadowStore
@@ -22,10 +27,11 @@ type ShadowExecutor struct {
 }
 
 // NewShadowExecutor 创建 ShadowExecutor。
-func NewShadowExecutor(store *ShadowStore) *ShadowExecutor {
+func NewShadowExecutor(store *ShadowStore, runner AgentRunner) *ShadowExecutor {
 	return &ShadowExecutor{
 		store:      store,
 		comparator: &ShadowComparator{},
+		runner:     runner,
 	}
 }
 
@@ -89,23 +95,12 @@ func (sc *ShadowComparator) Compare(baseline, candidate *AgentTrajectory) *Compa
 //	工具序列 vs baseline: 归一化去时间戳/随机数/路径 → 新工具调用 → structural_anomaly → HITL
 func (se *ShadowExecutor) Execute(ctx context.Context, task *EvalTask) (*ComparisonResult, error) {
 	// Phase 1: 并行 Execute(共享 ctx) → 超时标记不可用
-	// 这里演示如何执行二进制并注入隔离属性。生产中将通过真实的 AgentRunner 收集轨迹。
-
-	// Baseline 执行
-	baselineCmd := exec.CommandContext(ctx, "polaris-agent", "--version", se.baseline.Version)
-	baselineCmd.Env = append(baselineCmd.Env, "POLARIS_ENV=production")
-
-	// Candidate 执行（DryRun 模式）
-	candidateCmd := exec.CommandContext(ctx, "polaris-agent", "--version", se.candidate.Version)
-	candidateCmd.Env = append(candidateCmd.Env, "X_POLARIS_DRYRUN=true")
-
-	// 进程隔离: Linux CLONE_NEWNET; macOS Proxy/Offline Fallback
-	isolateNetwork(candidateCmd)
+	// 生产中将通过真实的 AgentRunner 收集轨迹。
 
 	var baselineResult, candidateResult *AgentTrajectory
 
 	// Collect baseline trajectory
-	baselineOut, err := baselineCmd.Output()
+	baselineOut, err := se.runner.RunVersion(ctx, se.baseline.Version, "production")
 	if err == nil {
 		var traj AgentTrajectory
 		if json.Unmarshal(baselineOut, &traj) == nil {
@@ -113,8 +108,8 @@ func (se *ShadowExecutor) Execute(ctx context.Context, task *EvalTask) (*Compari
 		}
 	}
 
-	// Collect candidate trajectory
-	candidateOut, err := candidateCmd.Output()
+	// Collect candidate trajectory (DryRun 模式)
+	candidateOut, err := se.runner.RunVersion(ctx, se.candidate.Version, "dryrun")
 	if err == nil {
 		var traj AgentTrajectory
 		if json.Unmarshal(candidateOut, &traj) == nil {
