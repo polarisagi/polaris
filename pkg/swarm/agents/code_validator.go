@@ -318,10 +318,10 @@ var typescriptDangerousPatterns = []codeRule{
 	},
 	{
 		id:          "TS006",
-		description: "Base64 解码后紧跟动态执行（混淆逃逸模式）",
+		description: "base64 decode chained with eval/Function constructor (proximity ≤200 chars)",
 		requiredCap: "dynamic_eval",
-		// 同一段代码中同时出现 atob/Buffer.from+base64 和 eval/Function
-		pattern: regexp.MustCompile(`(?s)(atob\s*\(|Buffer\.from\s*\([^)]+,\s*['"]base64['"]\s*\)).*?(eval\s*\(|new\s+Function\s*\()`),
+		// (?s) 已移除；.{0,200} 限制 decode→eval 间距，避免跨函数/文件误报
+		pattern: regexp.MustCompile(`(atob\s*\(|Buffer\.from\s*\([^)]+,\s*['"]base64['"]\s*\)).{0,200}(eval\s*\(|new\s+Function\s*\()`),
 	},
 	{
 		id:          "TS007",
