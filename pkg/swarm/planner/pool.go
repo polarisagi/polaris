@@ -130,7 +130,9 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel1()
 
-	cmdBuild := exec.CommandContext(buildCtx, "go", "build", ".")
+	relDir := "./" + filepath.Base(tmpDir)
+
+	cmdBuild := exec.CommandContext(buildCtx, "go", "build", relDir)
 	cmdBuild.Dir = wd
 	buildErr := cmdBuild.Run()
 
@@ -141,8 +143,7 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel2()
 
-		relDir := "./" + filepath.Base(tmpDir)
-		cmdTest := exec.CommandContext(testCtx, "go", "test", "-run", ".", "-timeout", "20s", relDir)
+		cmdTest := exec.CommandContext(testCtx, "go", "test", "-json", "-timeout", "20s", relDir)
 		cmdTest.Dir = wd
 		out, _ := cmdTest.CombinedOutput()
 
@@ -165,24 +166,27 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	}
 }
 
-// 解析 go test 输出，统计 PASS 和 FAIL 行数
+// 解析 go test -json 输出，统计具体 Test 的 PASS 和 FAIL 数量
 func parseTestScore(output []byte) float64 {
 	out := string(output)
-	// go test 成功：输出 "ok  <package>"
-	// go test 失败：输出 "FAIL <package>"
-	// 无测试文件：输出 "[no test files]"
 	if strings.Contains(out, "no test files") || strings.TrimSpace(out) == "" {
 		return 0.5 // 编译成功但无测试，得中等分
 	}
+
 	lines := strings.Split(out, "\n")
 	var pass, fail int
 	for _, line := range lines {
-		if strings.HasPrefix(line, "ok ") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// 寻找 JSON 格式输出中对 Test 级别的事件
+		if strings.Contains(line, `"Action":"pass"`) && strings.Contains(line, `"Test":`) {
 			pass++
-		} else if strings.HasPrefix(line, "FAIL") || strings.HasPrefix(strings.TrimSpace(line), "--- FAIL") {
+		} else if strings.Contains(line, `"Action":"fail"`) && strings.Contains(line, `"Test":`) {
 			fail++
 		}
 	}
+
 	total := pass + fail
 	if total == 0 {
 		return 0.5
