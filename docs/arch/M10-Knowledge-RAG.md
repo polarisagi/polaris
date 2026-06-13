@@ -3,7 +3,7 @@
 > 消费 `[Storage-SQLite]` + `[Storage-SurrealDB-Core]`，非独立存储 | Hybrid Search + GraphRAG | 增量索引 | 来源追踪
 > Go 检索流水线 + GraphRAG，Rust SurrealDB-Core FFI 侧车
 > `[Code-Package-Mapping]`: pkg/swarm/ | `[Module-Topology]`: M10 L2 | `[HE-Rule-5]` `[HE-Rule-6]`
-> **§跳读**: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:104 检索 / 3:187 增量索引 / 4:209 来源追踪 / 5:244 Reranking / 6:260 检索质量 / 7:266 数据流闭环 / 9:274 (SOFT)降级 / 10:292 跨模块契约
+> **§跳读**: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:104 检索 / 3:186 增量索引 / 4:208 来源追踪 / 5:243 Reranking / 6:259 检索质量 / 7:265 数据流闭环 / 9:273 (SOFT)降级 / 10:291 跨模块契约
 ## 0-bis. 职责边界
 
 | M10 **是** | M10 **不是** |
@@ -128,21 +128,20 @@ HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 
 
 ### 2.3 StructuredNavigator (目录层)
 
-查询 embed 后在摘要索引搜索 top-20 候选，章节级权重×1.2 优于文档级，RelevanceScore<0.5 时 fallback 到文档根节点（全文搜索）。
-
-> **[计划中]**：`HybridRetrieverImpl` 暂未实现 StructuredNavigator，三阶段结构化检索的目录导航阶段待后续迭代接入。
+查询 embed 后在摘要索引搜索 top-20 候选，章节级权重×1.2 优于文档级，RelevanceScore<0.5 时 fallback 到文档根节点（全文搜索）。实现见 `pkg/swarm/knowledge/rag_impl.go` `StructuredNavigator`。**FeatureGate 门控**：`FeatureDeepRAG`（Tier 1+，≥16GB）；Tier 0 自动退化为全文搜索。
 
 ### 2.4 QueryPlanner
 
-简单查询（<30 tokens）直接跳过分解。复杂查询 LLM 分解为 2-5 个子查询，每个子查询携带 TargetScope 和 Weight，支持 concat/deduplicate/interleave 三种合并策略。
-
-> **[计划中]**：QueryPlanner、KnowledgeBase.Search 聚合入口、ContextExpander.Expand 均未实现；当前检索路径为 BM25 + Vector 双路 RRF，三阶段深度 RAG 待后续迭代。
+简单查询（<30 tokens）直接跳过分解，走单路检索。复杂查询 LLM 分解为 2-5 个子查询，每个子查询携带 TargetScope 和 Weight，支持 concat/deduplicate/interleave 三种合并策略。**FeatureGate 门控**：`FeatureDeepRAG`（Tier 1+）；Tier 0 跳过分解步骤。
 
 ### 2.5 KnowledgeBase.Search (完整入口)
 
-三阶段聚合：QueryPlanner 分解 → 每个子查询走 StructuredNavigator（目录导航）+ HybridRetriever（内容检索）+ ContextExpander（上下文展开，LeafChunk 扩展为 AugmentedContext 含 ParentChunk/SectionPath/Provenance/前后兄弟内容）→ 跨子查询 RRF 去重排序。
+实现见 `pkg/swarm/knowledge/rag_impl.go` `KnowledgeBase.Search`。
 
-> **[计划中]**：当前仅 HybridSearch 内容检索路径可用（BM25 + Vector 双路 RRF）；KnowledgeBase.Search 三阶段聚合入口待实现。
+- **Tier 0（全部）**：HybridRetriever（BM25+Vector RRF）→ ContextExpander（LeafChunk 扩展 ParentChunk + 兄弟块，纯 DB 查询）
+- **Tier 1+（FeatureDeepRAG 开启）**：QueryPlanner（LLM 分解）→ StructuredNavigator（目录导航）→ HybridRetriever → ContextExpander → 跨子查询 RRF 去重
+
+`ContextExpander` 全 Tier 均启用（仅 DB 查询，无 LLM 开销），扩展结果封装为 `AugmentedContext`（含 ParentChunk / SectionPath / Provenance / 前后兄弟块）。`FeatureDeepRAG` 在 `feature_gate.go` 注册，Tier 0 返回 false，Tier 1+ 返回 true。
 
 ### 2.6 KnowledgeGraph (知识图谱增强)
 
