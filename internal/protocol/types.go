@@ -18,7 +18,8 @@ type InferRequest struct {
 	Temperature     float64
 	Thinking        *ThinkingConfig
 	ResponseFormat  *ResponseFormat // 支持强制 JSON Schema / GBNF 等结构化约束
-	ReasoningEffort ReasoningEffort // TTC 推理深度控制（None=不传，High=最大扩展思考）
+	ReasoningEffort ReasoningEffort
+	ThinkingMode    ThinkingMode // TTC 推理深度控制（None=不传，High=最大扩展思考）
 }
 
 func (req *InferRequest) HasImageParts() bool {
@@ -101,6 +102,77 @@ type InferResponse struct {
 	Usage        Usage
 	Model        string
 	FinishReason string
+}
+
+// ThinkingMode DeepSeek V4 思考预算档位。
+// 对应 API 参数：reasoning_effort（high/max）+ thinking type（enabled/disabled）。
+type ThinkingMode string
+
+const (
+	// ThinkingDisabled 关闭思考，适用于日常简单请求。
+	// API: extra_body={"thinking":{"type":"disabled"}}
+	ThinkingDisabled ThinkingMode = "disabled"
+
+	// ThinkingHigh 高档思考（~100K token 预算），适用于常规规划。
+	// API: reasoning_effort="high" + thinking type="enabled"
+	ThinkingHigh ThinkingMode = "high"
+
+	// ThinkingMax 最大思考（~384K token 预算），适用于失败重规划、高风险任务。
+	// API: reasoning_effort="max" + thinking type="enabled"
+	ThinkingMax ThinkingMode = "max"
+)
+
+// InferOptions Provider 调用的可选参数集合。
+type InferOptions struct {
+	ThinkingMode    ThinkingMode // 默认 ThinkingDisabled
+	MaxTokens       int          // 0 = 使用模型默认值
+	Model           string
+	Tools           []ToolSchema
+	ResponseFormat  *ResponseFormat
+	Temperature     float64
+	ReasoningEffort ReasoningEffort
+}
+
+// InferOption 函数选项模式，用于构造 InferOptions。
+type InferOption func(*InferOptions)
+
+// WithThinkingMode 设置思考模式。
+func WithThinkingMode(mode ThinkingMode) InferOption {
+	return func(o *InferOptions) { o.ThinkingMode = mode }
+}
+
+// WithMaxTokens 设置最大输出 token 数。
+func WithMaxTokens(n int) InferOption {
+	return func(o *InferOptions) { o.MaxTokens = n }
+}
+
+// WithModel 设置覆盖使用的 Model。
+func WithModel(model string) InferOption {
+	return func(o *InferOptions) { o.Model = model }
+}
+
+// WithTools 设置提供的工具列表。
+func WithTools(tools []ToolSchema) InferOption {
+	return func(o *InferOptions) { o.Tools = tools }
+}
+
+// ApplyInferOptions 合并选项，返回最终参数。
+func ApplyInferOptions(opts []InferOption) InferOptions {
+	o := InferOptions{ThinkingMode: ThinkingDisabled}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
+// ProviderResponse Provider 完整响应，包含思考内容和最终答案。
+type ProviderResponse struct {
+	Content          string          // 最终回答
+	ReasoningContent string          // CoT 思考内容（thinking mode 时有值）
+	ToolCalls        []InferToolCall // 工具调用（若模型发起）；用现有 ToolCall 类型
+	Usage            Usage           // Token 用量；用现有 Usage 类型（若存在）
+	Model            string          // 添加以兼容现有使用
+	FinishReason     string          // 添加以兼容现有使用
 }
 
 type Usage struct {
@@ -716,4 +788,19 @@ func itoa(i int) string {
 		buf[pos] = '-'
 	}
 	return string(buf[pos:])
+}
+
+// WithResponseFormat 设置响应格式
+func WithResponseFormat(fmt *ResponseFormat) InferOption {
+	return func(o *InferOptions) { o.ResponseFormat = fmt }
+}
+
+// WithTemperature 设置温度
+func WithTemperature(temp float64) InferOption {
+	return func(o *InferOptions) { o.Temperature = temp }
+}
+
+// WithReasoningEffort 设置思考深度
+func WithReasoningEffort(effort ReasoningEffort) InferOption {
+	return func(o *InferOptions) { o.ReasoningEffort = effort }
 }

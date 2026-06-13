@@ -381,7 +381,7 @@ func (s *Server) handleAgentStream(w http.ResponseWriter, r *http.Request) { //n
 			}
 		}
 
-		ch, err := p.StreamInfer(ctx, inferReq)
+		ch, err := p.StreamInfer(ctx, inferReq.Messages)
 		if err != nil {
 			if tw != nil {
 				tw.WriteError("infer_error", truncate(err.Error(), 300))

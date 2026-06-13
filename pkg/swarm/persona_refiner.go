@@ -145,12 +145,7 @@ func (pr *PersonaRefiner) RefineAtSessionEnd(ctx context.Context, msgs []protoco
 
 	prompt := "Based on the following conversation, describe the user's key characteristics in 1-2 sentences. Focus on communication style, expertise level, and preferences. Output ONLY the description.\n\n" + sb.String()
 
-	resp, err := pr.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:        []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:       200,
-		Temperature:     0.2,
-		ReasoningEffort: protocol.ReasoningEffortLow,
-	})
+	resp, err := pr.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(200))
 	if err != nil {
 		return nil //nolint:nilerr // LLM 失败不阻断会话结束流程
 	}

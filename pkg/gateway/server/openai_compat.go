@@ -159,7 +159,7 @@ func (s *Server) handleOpenAIChatStream(w http.ResponseWriter, r *http.Request, 
 		Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Role: "assistant"}}},
 	})
 
-	ch, err := p.StreamInfer(ctx, inferReq)
+	ch, err := p.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
 		slog.Error("openai_compat: StreamInfer failed", "err", err)
 		s.writeOAIChunk(w, flusher, oaiChunk{
@@ -208,7 +208,7 @@ func (s *Server) handleOpenAIChatSync(w http.ResponseWriter, r *http.Request, p 
 
 	// 使用 StreamInfer 逐 chunk 收集完整内容（与流式路径复用同一 Provider 实现）
 	ctx := r.Context()
-	ch, err := p.StreamInfer(ctx, inferReq)
+	ch, err := p.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, truncate(err.Error(), 200)), http.StatusInternalServerError)
 		return

@@ -6,6 +6,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // parsePlanOnSuccess 将 LLM 返回的 DAG JSON 解析为 DAGModel 并写入 sCtx，消除 S_PLAN / S_REPLAN 重复逻辑。
@@ -77,9 +78,17 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: protocol.TriggerPerceiveDone,
 		To:      protocol.AgentStatePlan,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			var originTaint protocol.TaintLevel
+			if sCtx.RawIntentTS.Source.OriginTaintLevel != 0 {
+				originTaint = sCtx.RawIntentTS.Source.OriginTaintLevel
+			} else {
+				originTaint = protocol.TaintMedium
+			}
+			thinkMode := observability.SelectThinkingMode(sm.replanCount, originTaint, observability.GlobalSurpriseIndex.Current())
 			return []protocol.Effect{
 				protocol.LLMFillEffect{
-					SchemaRef: "plan_dag",
+					ThinkingMode: thinkMode,
+					SchemaRef:    "plan_dag",
 					PromptFn: func(pCtx protocol.StateContext) []protocol.Message {
 						return sm.promptPlan(sCtx, pCtx)
 					},
@@ -213,9 +222,17 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: protocol.TriggerReplanDone,
 		To:      protocol.AgentStatePlan,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			var originTaint protocol.TaintLevel
+			if sCtx.RawIntentTS.Source.OriginTaintLevel != 0 {
+				originTaint = sCtx.RawIntentTS.Source.OriginTaintLevel
+			} else {
+				originTaint = protocol.TaintMedium
+			}
+			thinkMode := observability.SelectThinkingMode(sm.replanCount, originTaint, observability.GlobalSurpriseIndex.Current())
 			return []protocol.Effect{
 				protocol.LLMFillEffect{
-					SchemaRef: "plan_dag",
+					ThinkingMode: thinkMode,
+					SchemaRef:    "plan_dag",
 					PromptFn: func(pCtx protocol.StateContext) []protocol.Message {
 						return sm.promptPlan(sCtx, pCtx)
 					},

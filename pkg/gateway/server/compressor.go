@@ -321,7 +321,7 @@ func (c *Compressor) summarize(ctx context.Context, msgs []protocol.Message, max
 		Temperature: 0.3,
 	}
 
-	ch, err := provider.StreamInfer(ctx, inferReq)
+	ch, err := provider.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
 		return "", err
 	}

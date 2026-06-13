@@ -30,8 +30,8 @@ import (
 // API Key JIT 从 CredentialVault 获取（使用后 subtle.ConstantTimeCopy + memclr 清零）、
 // 结构化错误转换为 PolarisError（禁止暴露裸 error）。
 type Provider interface {
-	Infer(ctx context.Context, req *InferRequest) (*InferResponse, error)
-	StreamInfer(ctx context.Context, req *InferRequest) (<-chan StreamEvent, error)
+	Infer(ctx context.Context, messages []Message, opts ...InferOption) (*ProviderResponse, error)
+	StreamInfer(ctx context.Context, messages []Message, opts ...InferOption) (<-chan StreamEvent, error)
 	Capabilities() ProviderCapabilities
 	Tokenizer() TokenizerAdapter
 	ModelID() string
@@ -123,6 +123,7 @@ type LLMFillEffect struct {
 	OnFailure      func(sCtx StateContext, err error) (State, error)   // LLM 失败 → 错误状态
 	MaxRetry       int
 	ModelPool      string // budget / standard / reasoning
+	ThinkingMode   ThinkingMode
 	IdempotencyKey IdempotencyKey
 }
 

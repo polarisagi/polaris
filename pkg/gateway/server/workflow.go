@@ -581,7 +581,7 @@ func (s *Server) runWorkflowStep(ctx context.Context, sessionID, prompt, working
 	const maxToolRounds = 10
 
 	for range maxToolRounds {
-		ch, err := p.StreamInfer(ctx, req)
+		ch, err := p.StreamInfer(ctx, req.Messages)
 		if err != nil {
 			return "", fmt.Errorf("infer: %w", err)
 		}

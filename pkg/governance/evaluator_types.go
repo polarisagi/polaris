@@ -255,7 +255,7 @@ Reply strictly with JSON matching this structure: {"scores": {"dimension_name": 
 
 	// 辅助闭包：执行一次推理并解析得分
 	runInference := func() (*EvalResult, error) {
-		resp, err := e.provider.Infer(context.Background(), req)
+		resp, err := e.provider.Infer(context.Background(), req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 		if err != nil {
 			return nil, err
 		}

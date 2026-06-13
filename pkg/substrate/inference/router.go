@@ -326,7 +326,22 @@ func (ir *InferenceRouter) ModelID() string {
 }
 
 // Infer 路由单次请求到最优 Provider，失败时 failover 至次优。
-func (ir *InferenceRouter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
+
 	// 统一预处理：降采样超规格图片、PNG/GIF→JPEG 格式转换
 	// 覆盖所有调用方（Gateway / Cognition Kernel / Swarm / Extensions）
 	normalizeInferRequest(req)
@@ -335,19 +350,34 @@ func (ir *InferenceRouter) Infer(ctx context.Context, req *protocol.InferRequest
 		return nil, perrors.New(perrors.CodeInternal, "inference_router: no available providers")
 	}
 	start := time.Now()
-	resp, err := entry.provider.Infer(ctx, req)
+	resp, err := entry.provider.Infer(ctx, msgs, opts...)
 	ms := float64(time.Since(start).Milliseconds())
 	entry.recordLatency(ms)
 	entry.recordOutcome(err == nil)
 	if err != nil {
 		// Failover: 尝试次优 Provider
-		return ir.failover(ctx, req, entry.name)
+		return ir.failover(ctx, msgs, opts, req, entry.name)
 	}
 	return resp, nil
 }
 
 // StreamInfer 路由流式请求，内嵌延迟记录与 Failover。
-func (ir *InferenceRouter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
+
 	// 统一预处理：与 Infer 路径一致，确保流式和非流式路径均受益
 	normalizeInferRequest(req)
 	entry := ir.registry.best(req)
@@ -355,18 +385,18 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, req *protocol.InferR
 		return nil, perrors.New(perrors.CodeInternal, "inference_router: no available providers")
 	}
 	start := time.Now()
-	ch, err := entry.provider.StreamInfer(ctx, req)
+	ch, err := entry.provider.StreamInfer(ctx, msgs, opts...)
 	entry.recordLatency(float64(time.Since(start).Milliseconds()))
 	entry.recordOutcome(err == nil)
 	if err != nil {
 		// Failover: 尝试次优 Provider
-		return ir.streamFailover(ctx, req, entry.name)
+		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
 	}
 	return ch, nil
 }
 
 // streamFailover 流式路径次优选择。
-func (ir *InferenceRouter) streamFailover(ctx context.Context, req *protocol.InferRequest, skip string) (<-chan protocol.StreamEvent, error) {
+func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []protocol.Message, opts []protocol.InferOption, req *protocol.InferRequest, skip string) (<-chan protocol.StreamEvent, error) {
 	ir.registry.mu.RLock()
 	defer ir.registry.mu.RUnlock()
 	var chosen *providerEntry
@@ -392,7 +422,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, req *protocol.Inf
 	if chosen == nil {
 		return nil, perrors.New(perrors.CodeInternal, "inference_router: all providers failed (stream)")
 	}
-	ch, err := chosen.provider.StreamInfer(ctx, req)
+	ch, err := chosen.provider.StreamInfer(ctx, msgs, opts...)
 	chosen.recordOutcome(err == nil)
 	return ch, err
 }
@@ -434,7 +464,7 @@ func (ir *InferenceRouter) Tokenizer() protocol.TokenizerAdapter {
 	return entry.provider.Tokenizer()
 }
 
-func (ir *InferenceRouter) failover(ctx context.Context, req *protocol.InferRequest, skip string) (*protocol.InferResponse, error) {
+func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message, opts []protocol.InferOption, req *protocol.InferRequest, skip string) (*protocol.ProviderResponse, error) {
 	ir.registry.mu.RLock()
 	defer ir.registry.mu.RUnlock()
 	bestScore := -1.0
@@ -460,7 +490,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, req *protocol.InferRequ
 	if chosen == nil {
 		return nil, perrors.New(perrors.CodeInternal, "inference_router: all providers failed")
 	}
-	resp, err := chosen.provider.Infer(ctx, req)
+	resp, err := chosen.provider.Infer(ctx, msgs, opts...)
 	chosen.recordOutcome(err == nil)
 	return resp, err
 }

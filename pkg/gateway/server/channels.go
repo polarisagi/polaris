@@ -313,12 +313,11 @@ func (s *Server) dispatchChannelMessage(channelType, channelID string, cfg map[s
 	const maxToolRounds = 10
 	startInfer := time.Now()
 	for range maxToolRounds {
-		ch, err := p.StreamInfer(ctx, &protocol.InferRequest{
-			Messages:    history,
-			MaxTokens:   2048,
-			Temperature: 0.7,
-			Tools:       toolSchemas,
-		})
+		ch, err := p.StreamInfer(ctx, history,
+			protocol.WithMaxTokens(2048),
+			protocol.WithTemperature(0.7),
+			protocol.WithTools(toolSchemas),
+		)
 		if err != nil {
 			slog.Error("channel dispatch: StreamInfer", "channel", channelID, "err", err)
 			return

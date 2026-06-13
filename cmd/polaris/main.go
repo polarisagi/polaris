@@ -433,11 +433,7 @@ func run() error { //nolint:gocyclo
 	// 注册 E5+E6 Handlers
 	var llmInfer agents.LLMInferFunc = func(ctx context.Context, prompt string) (string, error) {
 		if router != nil {
-			req := &protocol.InferRequest{
-				Messages: []protocol.Message{{Role: "user", Content: prompt}},
-				Model:    "reasoning",
-			}
-			resp, err := router.Infer(ctx, req)
+			resp, err := router.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithModel("reasoning"))
 			if err != nil {
 				return "", err
 			}

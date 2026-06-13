@@ -128,7 +128,7 @@ func (p *DefaultPRM) scoreCandidate(ctx context.Context, goal string, plan *prot
 		},
 	}
 
-	resp, err := p.provider.Infer(ctx, req)
+	resp, err := p.provider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return 0, perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("prm: infer failed: %v", err), err)
 	}

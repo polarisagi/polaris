@@ -121,7 +121,7 @@ func (fg *FactualityGuard) semanticJudge(ctx context.Context, content, contextDo
 		MaxTokens:   64,
 		Temperature: 0,
 	}
-	resp, err := fg.llmProvider.Infer(judgeCtx, req)
+	resp, err := fg.llmProvider.Infer(judgeCtx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
 		return FactualityUncertain, "llm_judge_unavailable"
 	}

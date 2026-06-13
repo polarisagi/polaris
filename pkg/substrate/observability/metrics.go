@@ -18,6 +18,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 var (
@@ -424,4 +425,19 @@ func legacyMetricsHandler() http.Handler {
 		fmt.Fprintf(w, "# TYPE polaris_surrealdb_index_size_mb gauge\n")
 		fmt.Fprintf(w, "polaris_surrealdb_index_size_mb %d\n", ls)
 	})
+}
+
+// SelectThinkingMode 根据当前系统的运行时状态，决定应该使用哪个档位的 ThinkingMode。
+// 规则：
+// 1. 若重规划次数 > 0，或任务最大污点等级 >= 3（TaintHigh），或 SurpriseIndex > 0.6，则使用 ThinkingMax (Fail-safe/High-risk)
+// 2. 若 SurpriseIndex >= 0.3，则使用 ThinkingHigh (Moderate risk)
+// 3. 否则默认 ThinkingDisabled
+func SelectThinkingMode(replanCount int, maxTaint protocol.TaintLevel, surpriseIndex float64) protocol.ThinkingMode {
+	if replanCount > 0 || maxTaint >= protocol.TaintHigh || surpriseIndex > 0.6 {
+		return protocol.ThinkingMax
+	}
+	if surpriseIndex >= 0.3 {
+		return protocol.ThinkingHigh
+	}
+	return protocol.ThinkingDisabled
 }

@@ -174,11 +174,7 @@ func (p *ConsolidationPipeline) llmExtract(
 			"\n\nSession log:\n%s",
 		text,
 	)
-	resp, err := p.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   1024,
-		Temperature: 0.1,
-	})
+	resp, err := p.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(1024))
 	if err != nil {
 		return p.ruleExtract(sessionID, text)
 	}
@@ -459,11 +455,7 @@ func (p *ConsolidationPipeline) buildSummary(
 				"Focus on: what was accomplished, what tools were used, and key outcomes.\n\n%s",
 			text,
 		)
-		resp, err := p.provider.Infer(ctx, &protocol.InferRequest{
-			Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-			MaxTokens:   256,
-			Temperature: 0.3,
-		})
+		resp, err := p.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(256))
 		if err == nil && resp != nil {
 			return strings.TrimSpace(resp.Content)
 		}
@@ -642,11 +634,7 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 		currentJSON, sb.String(),
 	)
 
-	resp, err := p.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   512,
-		Temperature: 0.2,
-	})
+	resp, err := p.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(512))
 	if err != nil || resp == nil {
 		p.ruleSynthesizeProfile(events, out)
 		return

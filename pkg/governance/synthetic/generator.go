@@ -263,16 +263,14 @@ func (g *EvalGenerator) validateGroundedness(ctx context.Context, chunk string, 
 // ── 内部工具 ─────────────────────────────────────────────────────────────────
 
 func (g *EvalGenerator) infer(ctx context.Context, prompt string, schema map[string]any) ([]byte, error) {
-	resp, err := g.provider.Infer(ctx, &protocol.InferRequest{
-		Model:       "deepseek-chat", // budget 层：批量生成无需推理能力
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   512,
-		Temperature: 0.7, // 多样性：避免生成同质问题
-		ResponseFormat: &protocol.ResponseFormat{
+	resp, err := g.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}},
+		protocol.WithModel("deepseek-chat"), // budget 层：批量生成无需推理能力
+		protocol.WithMaxTokens(512),
+		protocol.WithResponseFormat(&protocol.ResponseFormat{
 			Type:       "json_schema",
 			JSONSchema: schema,
-		},
-	})
+		}),
+	)
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("synthetic: infer: %v", err), err)
 	}

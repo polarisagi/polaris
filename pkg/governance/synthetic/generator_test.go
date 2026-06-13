@@ -17,7 +17,7 @@ type mockProvider struct {
 	idx       int
 }
 
-func (m *mockProvider) Infer(_ context.Context, _ *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (m *mockProvider) Infer(_ context.Context, _ []protocol.Message, _ ...protocol.InferOption) (*protocol.ProviderResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.idx >= len(m.responses) {
@@ -25,10 +25,10 @@ func (m *mockProvider) Infer(_ context.Context, _ *protocol.InferRequest) (*prot
 	}
 	resp := m.responses[m.idx]
 	m.idx++
-	return &protocol.InferResponse{Content: resp}, nil
+	return &protocol.ProviderResponse{Content: resp}, nil
 }
 
-func (m *mockProvider) StreamInfer(_ context.Context, _ *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (m *mockProvider) StreamInfer(_ context.Context, _ []protocol.Message, _ ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
 	ch := make(chan protocol.StreamEvent)
 	close(ch)
 	return ch, nil

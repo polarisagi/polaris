@@ -104,12 +104,7 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 		sb.String(),
 	)
 
-	resp, err := rw.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:        []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:       512,
-		Temperature:     0.2,
-		ReasoningEffort: protocol.ReasoningEffortLow,
-	})
+	resp, err := rw.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(512))
 	if err != nil {
 		return err
 	}

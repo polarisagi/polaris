@@ -32,11 +32,11 @@ var _ protocol.Provider = (*ProviderAdapter)(nil)
 
 // Infer implements the non-streaming inference call.
 // Each specific adapter (e.g. OpenAI/Anthropic) should embed ProviderAdapter and override this.
-func (p *ProviderAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (p *ProviderAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
 	return nil, perrors.New(perrors.CodeInternal, "not implemented")
 }
 
 // StreamInfer implements the streaming inference call.
-func (p *ProviderAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (p *ProviderAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
 	return nil, perrors.New(perrors.CodeInternal, "not implemented")
 }

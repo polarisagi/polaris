@@ -42,7 +42,7 @@ Output ONLY valid JSON. No markdown formatting or extra text.`, name, descriptio
 		},
 	}
 
-	resp, err := g.provider.Infer(ctx, req)
+	resp, err := g.provider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return protocol.Tool{}, fmt.Errorf("llm infer failed: %w", err)
 	}

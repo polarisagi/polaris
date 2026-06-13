@@ -546,7 +546,7 @@ func (s *Server) executeAutomation(ctx context.Context, a *automation, trigger s
 		const maxToolRounds = 10
 
 		for range maxToolRounds {
-			ch, err := p.StreamInfer(bgCtx, req)
+			ch, err := p.StreamInfer(bgCtx, req.Messages)
 			if err != nil {
 				status = "error"
 				errMsg = "infer failed: " + err.Error()

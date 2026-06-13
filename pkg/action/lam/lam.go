@@ -174,7 +174,7 @@ func (e *ComputerUseEngine) resolveAction(ctx context.Context, intent string, st
 		},
 	}
 
-	resp, err := e.provider.Infer(ctx, req)
+	resp, err := e.provider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("lam: VLM resolve action: %v", err), err)
 	}

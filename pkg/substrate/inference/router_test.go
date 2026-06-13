@@ -46,15 +46,15 @@ type mockProvider struct {
 	caps      protocol.ProviderCapabilities
 }
 
-func (m *mockProvider) Infer(_ context.Context, _ *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (m *mockProvider) Infer(_ context.Context, _ []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
 	m.callCount++
 	if m.callCount <= m.failCount {
 		return nil, errProviderUnavailable
 	}
-	return &protocol.InferResponse{Content: "ok", FinishReason: "stop"}, nil
+	return &protocol.ProviderResponse{Content: "ok", FinishReason: "stop"}, nil
 }
 
-func (m *mockProvider) StreamInfer(_ context.Context, _ *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (m *mockProvider) StreamInfer(_ context.Context, _ []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
 	ch := make(chan protocol.StreamEvent, 1)
 	ch <- protocol.StreamEvent{Type: protocol.StreamTextDelta, Content: "ok"}
 	close(ch)
@@ -80,9 +80,7 @@ func TestInferenceRouter_Failover(t *testing.T) {
 	reg.Register("secondary", "Secondary", secondary)
 
 	router := NewInferenceRouter(reg, nil)
-	resp, err := router.Infer(context.Background(), &protocol.InferRequest{
-		Messages: []protocol.Message{{Role: "user", Content: "hello"}},
-	})
+	resp, err := router.Infer(context.Background(), []protocol.Message{{Role: "user", Content: "hello"}})
 	// primary 失败后应 failover 至 secondary
 	if err != nil {
 		t.Fatalf("expected failover success, got err: %v", err)
@@ -101,7 +99,7 @@ func TestInferenceRouter_AllProvidersCircuitOpen(t *testing.T) {
 	reg.entries["only"].cb.openUntil.Store(^int64(0)) // 永不恢复
 
 	router := NewInferenceRouter(reg, nil)
-	_, err := router.Infer(context.Background(), &protocol.InferRequest{})
+	_, err := router.Infer(context.Background(), []protocol.Message{})
 	if err == nil {
 		t.Fatal("should fail when all circuits are open")
 	}

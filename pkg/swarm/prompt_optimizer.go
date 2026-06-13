@@ -355,12 +355,7 @@ func (tgg *TextualGradientGenerator) Generate(ctx context.Context, failedPrompt,
 			"Output ONLY the improved prompt text, no explanation.",
 		trunc(failedPrompt, 500), trunc(succeededPrompt, 500),
 	)
-	resp, err := tgg.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:        []protocol.Message{{Role: "user", Content: prompt}},
-		Temperature:     0.3,
-		MaxTokens:       1024,
-		ReasoningEffort: protocol.ReasoningEffortHigh, // 深思精益突变
-	})
+	resp, err := tgg.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(1024), protocol.WithThinkingMode(protocol.ThinkingHigh))
 	if err != nil {
 		// LLM 失败回退规则模板，不阻断流程
 		return "Improve: " + trunc(failedPrompt, 200)
@@ -383,12 +378,7 @@ func (ca *ContrastiveAnalyzer) Analyze(ctx context.Context, successPrompt, faile
 			"Successful:\n%s\n\nFailed:\n%s\n\nOutput only the avoid-rule sentence.",
 		trunc(successPrompt, 400), trunc(failedPrompt, 400),
 	)
-	resp, err := ca.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:        []protocol.Message{{Role: "user", Content: prompt}},
-		Temperature:     0.1,
-		MaxTokens:       256,
-		ReasoningEffort: protocol.ReasoningEffortHigh, // 深入对比分析
-	})
+	resp, err := ca.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(256), protocol.WithThinkingMode(protocol.ThinkingHigh))
 	if err != nil {
 		return ""
 	}

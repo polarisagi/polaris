@@ -74,7 +74,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			return perrors.New(perrors.CodeInternal, "agent missing provider for LLMFillEffect")
 		}
 
-		var resp *protocol.InferResponse
+		var resp *protocol.ProviderResponse
 		var inferErr error
 
 		// 2. System 1/2 Routing & World Model Inference Skip
@@ -123,12 +123,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 				for range n {
 					go func() {
-						r := &protocol.InferRequest{
-							Model:       llmEff.ModelPool,
-							Messages:    baseMessages,
-							Temperature: 0.7, // 候选间引入多样性
-						}
-						cResp, cErr := a.provider.Infer(ctx, r)
+						cResp, cErr := a.provider.Infer(ctx, baseMessages, protocol.WithModel(llmEff.ModelPool), protocol.WithThinkingMode(llmEff.ThinkingMode))
 						if cErr != nil {
 							candidateCh <- candidateResult{}
 							return
@@ -161,7 +156,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 					}
 					bestJSON, _ := json.Marshal(best)
 					// 构造合成响应，保证 HANDLE_MEM 处的记忆写入正常触发
-					resp = &protocol.InferResponse{Content: string(bestJSON)}
+					resp = &protocol.ProviderResponse{Content: string(bestJSON)}
 					nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), bestJSON)
 					goto HANDLE_MEM
 				}
@@ -170,12 +165,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 		}
 
 		{
-			req := &protocol.InferRequest{
-				Model:    llmEff.ModelPool,
-				Messages: llmEff.PromptFn(a.toProtocolCtx()),
-			}
-
-			resp, inferErr = a.provider.Infer(ctx, req)
+			reqMsgs := llmEff.PromptFn(a.toProtocolCtx())
+			resp, inferErr = a.provider.Infer(ctx, reqMsgs, protocol.WithModel(llmEff.ModelPool), protocol.WithThinkingMode(llmEff.ThinkingMode))
 			if inferErr != nil {
 				nextState, err = llmEff.OnFailure(a.toProtocolCtx(), inferErr)
 			} else {

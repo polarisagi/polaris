@@ -285,7 +285,21 @@ func buildGeminiRequest(req *protocol.InferRequest) ([]byte, error) { //nolint:g
 
 	return json.Marshal(p)
 }
-func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {
 		return nil, err
@@ -348,7 +362,7 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, req *protocol.In
 	// Wait, protocol.InferResponse doesn't have ToolCalls natively?
 	// Let's check protocol.InferResponse definition via a quick look.
 
-	resp := &protocol.InferResponse{
+	resp := &protocol.ProviderResponse{
 		Content:      text,
 		FinishReason: finishReason,
 		Model:        a.model,
@@ -362,7 +376,21 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, req *protocol.In
 	}
 	return resp, nil
 }
-func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {
 		return nil, err

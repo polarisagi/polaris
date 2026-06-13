@@ -65,7 +65,21 @@ func (a *OpenAIAdapter) Tokenizer() protocol.TokenizerAdapter {
 	return newTiktokenTokenizer(a.model)
 }
 
-func (a *OpenAIAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = resolveOpenAIModel(a.model)
 	if req.Model != "" {
@@ -80,7 +94,7 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (
 		return nil, err
 	}
 
-	out := &protocol.InferResponse{
+	out := &protocol.ProviderResponse{
 		Model: resp.ID,
 		Usage: protocol.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
@@ -112,7 +126,21 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (
 	return out, nil
 }
 
-func (a *OpenAIAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = resolveOpenAIModel(a.model)
 	if req.Model != "" {

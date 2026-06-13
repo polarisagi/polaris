@@ -293,7 +293,7 @@ func (ag *AutoCurriculumGenerator) generateDescriptionsLLM(skill string, limit i
 		MaxTokens:   256,
 		Temperature: 0.8,
 	}
-	resp, err := ag.llmProvider.Infer(ctx, req)
+	resp, err := ag.llmProvider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -364,7 +364,7 @@ func (ag *AutoCurriculumGenerator) llmJudgeSafe(ctx context.Context, desc string
 		MaxTokens:   8,
 		Temperature: 0,
 	}
-	resp, err := ag.llmProvider.Infer(judgeCtx, req)
+	resp, err := ag.llmProvider.Infer(judgeCtx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
 		return true // fail-open：LLM 故障不阻断课程生成
 	}

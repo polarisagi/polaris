@@ -44,11 +44,7 @@ func (wm *WorldModel) AssessGrounding(ctx context.Context, task string, contextT
 		task, contextText,
 	)
 
-	resp, err := wm.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   128,
-		Temperature: 0.1,
-	})
+	resp, err := wm.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(128))
 	if err != nil {
 		return true, "" // 评估失败默认放行
 	}

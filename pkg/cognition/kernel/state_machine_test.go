@@ -406,23 +406,23 @@ type mockProvider struct {
 	failOn    string // 指定在哪个 prompt 时报错
 }
 
-func (m *mockProvider) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
-	if m.failOn != "" && len(req.Messages) > 0 {
-		if strings.Contains(req.Messages[0].Content, m.failOn) {
+func (m *mockProvider) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	if m.failOn != "" && len(msgs) > 0 {
+		if strings.Contains(msgs[0].Content, m.failOn) {
 			m.failCount++
 			return nil, perrors.New(perrors.CodeInternal, "mock llm failure")
 		}
 	}
 
 	// 如果是请求 DAG Plan，则返回合法的 DAGModel JSON
-	if len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "基于 TaskModel 生成执行 DAG") {
-		return &protocol.InferResponse{Content: `{"nodes":[{"id":"n1","action":"test_tool","params":{},"retry":0,"timeout":""}],"edges":[]}`}, nil
+	if len(msgs) > 0 && strings.Contains(msgs[0].Content, "基于 TaskModel 生成执行 DAG") {
+		return &protocol.ProviderResponse{Content: `{"nodes":[{"id":"n1","action":"test_tool","params":{},"retry":0,"timeout":""}],"edges":[]}`}, nil
 	}
 
-	return &protocol.InferResponse{Content: "mock_success"}, nil
+	return &protocol.ProviderResponse{Content: "mock_success"}, nil
 }
 
-func (m *mockProvider) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (m *mockProvider) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
 	return nil, perrors.New(perrors.CodeInternal, "not implemented")
 }
 

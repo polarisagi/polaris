@@ -328,7 +328,7 @@ The script must implement the deterministic equivalent of this tool call sequenc
 		},
 	}
 
-	resp, err := g.provider.Infer(ctx, req)
+	resp, err := g.provider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "LLM inference failed", err)
 	}

@@ -87,7 +87,21 @@ func (a *AnthropicAdapter) Tokenizer() protocol.TokenizerAdapter {
 	return &simpleTokenizer{}
 }
 
-func (a *AnthropicAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	body, err := a.buildAnthropicRequest(req, false)
 	if err != nil {
 		return nil, err
@@ -153,7 +167,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, req *protocol.InferRequest
 			})
 		}
 	}
-	resp := &protocol.InferResponse{
+	resp := &protocol.ProviderResponse{
 		Content:      textBuilder.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: out.StopReason,
@@ -173,7 +187,21 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, req *protocol.InferRequest
 	return resp, nil
 }
 
-func (a *AnthropicAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	body, err := a.buildAnthropicRequest(req, true)
 	if err != nil {
 		return nil, err

@@ -297,7 +297,7 @@ func validateL3Watchdog(ctx context.Context, vCtx *DAGValidationContext) error {
 		MaxTokens: 10,
 	}
 
-	resp, err := vCtx.Provider.Infer(ctx, req)
+	resp, err := vCtx.Provider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens), protocol.WithThinkingMode(protocol.ThinkingHigh))
 	if err != nil {
 		// fail-open: LLM 不可用时不阻断执行（L3 是辅助层，非主防线）
 		return nil //nolint:nilerr

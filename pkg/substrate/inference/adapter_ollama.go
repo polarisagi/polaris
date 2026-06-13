@@ -49,7 +49,21 @@ func (a *OllamaAdapter) Capabilities() protocol.ProviderCapabilities { return a.
 
 func (a *OllamaAdapter) Tokenizer() protocol.TokenizerAdapter { return &simpleTokenizer{} }
 
-func (a *OllamaAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (a *OllamaAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = a.model
 	apiReq.Stream = false
@@ -59,7 +73,7 @@ func (a *OllamaAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (
 		return nil, perrors.Wrap(perrors.CodeInternal, "ollama infer", err)
 	}
 
-	out := &protocol.InferResponse{
+	out := &protocol.ProviderResponse{
 		Model: a.model,
 		Usage: protocol.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
@@ -76,7 +90,21 @@ func (a *OllamaAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (
 	return out, nil
 }
 
-func (a *OllamaAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = a.model
 	tok := &simpleTokenizer{}

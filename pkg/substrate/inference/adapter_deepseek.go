@@ -54,7 +54,21 @@ func (d *DeepSeekAdapter) Tokenizer() protocol.TokenizerAdapter {
 }
 
 // Infer 阻塞执行单次全量推理。
-func (d *DeepSeekAdapter) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
+func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
 	apiKey := d.credentialFn()
 	defer clearString(&apiKey)
@@ -66,7 +80,7 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, req *protocol.InferRequest)
 		return nil, err
 	}
 
-	out := &protocol.InferResponse{
+	out := &protocol.ProviderResponse{
 		Model: resp.ID,
 		Usage: protocol.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
@@ -88,7 +102,21 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, req *protocol.InferRequest)
 }
 
 // StreamInfer 执行流式推理并返回事件通道。
-func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
+	options := &protocol.InferOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	req := &protocol.InferRequest{
+		Messages:        msgs,
+		Model:           options.Model,
+		MaxTokens:       options.MaxTokens,
+		Tools:           options.Tools,
+		ThinkingMode:    options.ThinkingMode,
+		Temperature:     options.Temperature,
+		ResponseFormat:  options.ResponseFormat,
+		ReasoningEffort: options.ReasoningEffort,
+	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
 	apiKey := d.credentialFn()
 	defer clearString(&apiKey)

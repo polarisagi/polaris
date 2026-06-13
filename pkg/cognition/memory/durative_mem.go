@@ -170,11 +170,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []p
 		prompt += string(ev.Event.Payload) + "\n"
 	}
 
-	resp, err := dm.provider.Infer(ctx, &protocol.InferRequest{
-		Messages:    []protocol.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   256,
-		Temperature: 0.1,
-	})
+	resp, err := dm.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}}, protocol.WithMaxTokens(256))
 	if err != nil {
 		return err
 	}

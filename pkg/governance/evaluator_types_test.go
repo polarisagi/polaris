@@ -59,10 +59,10 @@ type mockJudgeProvider struct {
 	response string
 }
 
-func (m *mockJudgeProvider) Infer(ctx context.Context, req *protocol.InferRequest) (*protocol.InferResponse, error) {
-	return &protocol.InferResponse{Content: m.response}, nil
+func (m *mockJudgeProvider) Infer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (*protocol.ProviderResponse, error) {
+	return &protocol.ProviderResponse{Content: m.response}, nil
 }
-func (m *mockJudgeProvider) StreamInfer(ctx context.Context, req *protocol.InferRequest) (<-chan protocol.StreamEvent, error) {
+func (m *mockJudgeProvider) StreamInfer(ctx context.Context, msgs []protocol.Message, opts ...protocol.InferOption) (<-chan protocol.StreamEvent, error) {
 	return nil, nil
 }
 func (m *mockJudgeProvider) Capabilities() protocol.ProviderCapabilities {
