@@ -113,20 +113,25 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	}
 	patchStr := resp.Content
 
-	tmpDir, err := os.MkdirTemp("", "polaris-pool-a-*")
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	tmpDir, err := os.MkdirTemp(".", "planner-pool-*")
 	if err != nil {
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
-	testFile := filepath.Join(tmpDir, "main.go")
+	testFile := filepath.Join(tmpDir, "patch_test.go")
 	_ = os.WriteFile(testFile, []byte(patchStr), 0600)
 
 	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel1()
 
-	cmdBuild := exec.CommandContext(buildCtx, "go", "build", "./...")
-	cmdBuild.Dir = tmpDir
+	cmdBuild := exec.CommandContext(buildCtx, "go", "build", ".")
+	cmdBuild.Dir = wd
 	buildErr := cmdBuild.Run()
 
 	var compileScore float64 = 0.0
@@ -136,20 +141,15 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel2()
 
-		cmdTest := exec.CommandContext(testCtx, "go", "test", "-run", ".", "-timeout", "20s", "./...")
-		cmdTest.Dir = tmpDir
+		relDir := "./" + filepath.Base(tmpDir)
+		cmdTest := exec.CommandContext(testCtx, "go", "test", "-run", ".", "-timeout", "20s", relDir)
+		cmdTest.Dir = wd
 		out, _ := cmdTest.CombinedOutput()
 
 		if cmdTest.ProcessState != nil && cmdTest.ProcessState.Success() {
 			compileScore = 1.0
 		} else {
-			outStr := string(out)
-			if strings.Contains(outStr, "no test files") || outStr == "" {
-				compileScore = 0.5
-			} else {
-				// simple dummy parsing logic
-				compileScore = 0.5 + 0.5*0.5 // partial success simulation
-			}
+			compileScore = parseTestScore(out)
 		}
 	}
 
@@ -163,6 +163,31 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		score:   compileScore,
 		content: content,
 	}
+}
+
+// 解析 go test 输出，统计 PASS 和 FAIL 行数
+func parseTestScore(output []byte) float64 {
+	out := string(output)
+	// go test 成功：输出 "ok  <package>"
+	// go test 失败：输出 "FAIL <package>"
+	// 无测试文件：输出 "[no test files]"
+	if strings.Contains(out, "no test files") || strings.TrimSpace(out) == "" {
+		return 0.5 // 编译成功但无测试，得中等分
+	}
+	lines := strings.Split(out, "\n")
+	var pass, fail int
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ok ") {
+			pass++
+		} else if strings.HasPrefix(line, "FAIL") || strings.HasPrefix(strings.TrimSpace(line), "--- FAIL") {
+			fail++
+		}
+	}
+	total := pass + fail
+	if total == 0 {
+		return 0.5
+	}
+	return 0.5 + 0.5*float64(pass)/float64(total)
 }
 
 func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultChan chan<- workerResult) {
