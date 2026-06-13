@@ -3,7 +3,7 @@
 > API 优先架构。Provider Router 为核心。本地推理仅隐私/离线备选。
 > Go 实现 | [HE-Rule-1] [HE-Rule-2] [HE-Rule-3] [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
 > [Module-Topology] [Code-Package-Mapping] [Tier-0-Limit] [Tier-1-Limit]
-> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:122 Token预算 / 6:186 SemanticCache / 7:208 Fallback / 8:251 本地推理local_only / 9:278 ModelVersion / 12:285 349(SOFT)降级 / 13:313 依赖
+> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:124 Token预算 / 6:188 SemanticCache / 7:210 Fallback / 8:253 本地推理local_only / 9:280 ModelVersion / 12:287 349(SOFT)降级 / 13:315 依赖
 
 ---
 
@@ -116,6 +116,8 @@ Provider 选择：`ProviderRegistry.best(req)` 按 healthScore 降序 + CircuitB
 | CircuitBreaker 冷却时间 | `spec/state.yaml §m1_router.circuit_breaker_cooldown_seconds` |
 | CircuitBreaker 半开探测上限 | `spec/state.yaml §m1_router.circuit_breaker_half_open_max` |
 | MaxStreamBufferSize | `spec/state.yaml §m1_router.max_stream_buffer_kb`（Tier 1+ 可配至 1MB） |
+
+> ⚠️ **当前实现偏差**：`newCircuitBreaker()` 将 `maxFailures`/`openDur` 硬编码在代码中（与 spec/state.yaml 值手工同步），`NewProviderRegistry()` 不接受 `M1RouterThresholds` 参数，TOML 热覆盖对熔断器参数无效（P1 缺陷，ROUND20 J2 修复中：配置通过 `NewProviderRegistry(cfg)` 注入）。
 
 ---
 

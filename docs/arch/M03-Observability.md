@@ -1,7 +1,7 @@
 # 模块 3: Observability & Telemetry
 
 > OTel-native | slog | Token_Burn_Rate + Surprise_Index 一等公民 | Hardware Probe | [HE-Rule-1] [HE-Rule-4] | Go
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:168 HardwareProbe+AutoConfig / 6:244 OSMemoryGuard / 7:260 MonitorMemoryPressure / 8:283 LogLevel / 9:291 TraceContext / 10:303 DecisionLog / 10.1:316 PerformanceDrift / 11:352 Langfuse / 14:381 (SOFT)降级 / 15:398 依赖
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:168 HardwareProbe+AutoConfig / 6:244 OSMemoryGuard / 7:260 MonitorMemoryPressure / 8:283 LogLevel / 9:291 TraceContext / 10:303 DecisionLog / 10.1:316 PerformanceDrift / 11:352 Langfuse / 14:382 (SOFT)降级 / 15:399 依赖
 ## 0-bis. 职责边界
 
 | M3 **是** | M3 **不是** |
@@ -375,6 +375,7 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 | `getAvailableMemoryMB()` 单位混用（heapMB 当字节减）| P2 | ✅ 已修复 | 改为 `heapBytes := m.HeapAlloc` 再统一换算 |
 | `performance_drift.go` 与 M12 CI RegressionDetector 互补但尚未 Hook 至 M4 状态机 S_COMPLETE/S_FAILED | P2 | ⚠️ 未实现 | 等 M4 状态机补全后连接 |
 | Linux memory probe 用 `sysinfo.Bufferram` 未包含 page cache，MemAvailable 偏低，可能提前触发降级 | P2 | ⚠️ 待改进 | 考虑解析 `/proc/meminfo MemAvailable` |
+| M03 文档列举 20+ 业务指标（`polaris_llm_calls_total`/`polaris_tool_calls_total`/`polaris_memory_ops_total` 等），当前 `metrics.go` 仅实现 7 个（TBR × 4 + SurpriseIndex × 2 + SurrealDB index size）；各模块埋点（M1/M4/M5/M7/M8）均为空 | P2 | ⚠️ 计划中 | 下一 Milestone 统一补充各模块调用埋点 |
 
 ---
 

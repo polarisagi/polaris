@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:167 三级沙箱(CANONICAL) / 5:298 PolicyGate / 6:353 Capability / 7:370 动作扩展 / 8:504 Usage演化 / 12:545 (SOFT)降级 / 13:563 跨模块契约 / 14:583 Plugin / 15:625 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:167 三级沙箱(CANONICAL) / 5:298 PolicyGate / 6:353 Capability / 7:370 动作扩展 / 8:503 Usage演化 / 12:544 (SOFT)降级 / 13:562 跨模块契约 / 14:582 Plugin / 15:624 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）

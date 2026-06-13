@@ -3,7 +3,7 @@
 > 消费 `[Storage-SQLite]` + `[Storage-SurrealDB-Core]`，非独立存储 | Hybrid Search + GraphRAG | 增量索引 | 来源追踪
 > Go 检索流水线 + GraphRAG，Rust SurrealDB-Core FFI 侧车
 > `[Code-Package-Mapping]`: pkg/swarm/ | `[Module-Topology]`: M10 L2 | `[HE-Rule-5]` `[HE-Rule-6]`
-> **§跳读**: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:106 检索 / 3:188 增量索引 / 4:210 来源追踪 / 5:245 Reranking / 6:261 检索质量 / 7:267 数据流闭环 / 9:275 (SOFT)降级 / 10:293 跨模块契约
+> **§跳读**: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:104 检索 / 3:186 增量索引 / 4:208 来源追踪 / 5:243 Reranking / 6:259 检索质量 / 7:265 数据流闭环 / 9:273 (SOFT)降级 / 10:291 跨模块契约
 ## 0-bis. 职责边界
 
 | M10 **是** | M10 **不是** |
