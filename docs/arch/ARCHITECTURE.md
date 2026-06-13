@@ -184,14 +184,14 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 | M11 Policy / Safety | 完整 | ✅ 完整 | Cedar FFI 静默降级至 Go 规则引擎时无可观测性警告 |
 | M12 Eval Harness | 完整 | ✅ 完整 | — |
 | M13 Scheduler / Gateway | 完整 | ✅ 完整 | 日志 SSE 端点在无 API Key 时对局域网开放（P2） |
-| M13-bis Extension Registry | 完整 | ⚠️ 部分 | InstallExtension 为空壳；Automation/Agent 安装流绕过 Manager |
+| M13-bis Extension Registry | 完整 | ⚠️ 部分 | Manager.InstallExtension 已写 extension_instances，但缺文件下载与 SkillRegistry/MCPManager 注册注入 |
 
 ### 7.2 跨模块已知缺口汇总
 
 | 缺口 | 严重度 | 涉及模块 | 说明 |
 |------|--------|---------|------|
 | Blackboard → EventLog 双写（inv_M8_02） | P0 | M8 | SQLiteBlackboard 直写 tasks 表，EventLog 无写入，崩溃后无法回放重建 |
-| InstallExtension 安装流空壳 | P0 | M13-bis | Manager.InstallExtension 仅 PolicyGate，不写库不下载不注册 |
+| InstallExtension 安装流不完整 | P1 | M13-bis | Manager.InstallExtension 已完成 PolicyGate + extension_instances 写入，但未接入文件下载接口与 SkillRegistry/MCPManager 运行时注册；Agent 路径由 MakeExtensionInstallFn 在 Manager 调用后额外 client.Install() 补充，两路逻辑尚未统一 |
 | Blackboard CompleteTask 阻塞写 channel | P0 | M8 | 内存版阻塞式 events <- 与其他非阻塞方法不一致，高并发下死锁风险 |
 | SideEffectPreCheck Version 校验缺失 | P1 | M8 | 内存版 claimedVersion 入参完全未使用（ABA 漏洞） |
 | 内环成功轨迹未写 HeuristicsMemory | P1 | M9 | Engine.Run() 仅处理失败事件，success_rate 永远为零 |
