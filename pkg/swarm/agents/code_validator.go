@@ -3,8 +3,11 @@ package agents
 import (
 	"bytes"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"regexp"
+	"strings"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
@@ -335,4 +338,97 @@ var typescriptDangerousPatterns = []codeRule{
 		requiredCap: "network_raw",
 		pattern:     regexp.MustCompile(`require\s*\(\s*['"]net['"]\s*\)|from\s+['"]net['"]`),
 	},
+}
+
+// dangerousGoPackages 未持有对应 Capability 时禁止导入的包。
+var dangerousGoPackages = map[string]string{
+	"os/exec":       "shell_exec",
+	"syscall":       "shell_exec",
+	"unsafe":        "native_memory",
+	"net":           "network_raw",
+	"net/http":      "network_raw",
+	"crypto/tls":    "network_raw",
+	"plugin":        "shell_exec",
+	"runtime/debug": "native_memory",
+}
+
+// auditGoAST 解析 Go 源码 AST，拦截未授权包导入。
+// 仅扫描 import 声明，O(imports) 复杂度，不做全量 AST 遍历。
+func auditGoAST(code []byte, caps CapabilitySet) error {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", code, parser.ImportsOnly)
+	if err != nil {
+		// 解析失败 = 语法错误代码，阻断执行
+		return perrors.New(perrors.CodeForbidden, "go AST parse failed: "+err.Error())
+	}
+	for _, imp := range f.Imports {
+		if imp.Path == nil {
+			continue
+		}
+		// 去除引号
+		pkg := strings.Trim(imp.Path.Value, `"`)
+		if requiredCap, blocked := dangerousGoPackages[pkg]; blocked {
+			if !caps[requiredCap] {
+				return perrors.New(perrors.CodeForbidden,
+					fmt.Sprintf("AST: unauthorized import %q requires capability %q", pkg, requiredCap))
+			}
+		}
+	}
+	return nil
+}
+
+// pythonDangerousImports Python 禁止导入映射（import 行扫描，不用正则全文匹配）。
+var pythonDangerousImports = map[string]string{
+	"subprocess": "shell_exec",
+	"os":         "shell_exec", // os.system / os.popen
+	"pty":        "shell_exec",
+	"socket":     "network_raw",
+	"urllib":     "network_raw",
+	"requests":   "network_raw",
+	"ctypes":     "native_memory",
+	"cffi":       "native_memory",
+}
+
+// bashDangerousCommands Bash 禁止命令映射（行首匹配）。
+var bashDangerousCommands = map[string]string{
+	"curl ":  "network_raw",
+	"wget ":  "network_raw",
+	"nc ":    "network_raw",
+	"ncat ":  "network_raw",
+	"eval ":  "shell_exec",
+	"exec ":  "shell_exec",
+	"chmod ": "shell_exec",
+	"chown ": "shell_exec",
+}
+
+// tsDangerousImports TypeScript/JavaScript 禁止导入映射。
+var tsDangerousImports = map[string]string{
+	"child_process":  "shell_exec",
+	"fs":             "shell_exec",
+	"net":            "network_raw",
+	"http":           "network_raw",
+	"https":          "network_raw",
+	"vm":             "shell_exec",
+	"worker_threads": "shell_exec",
+}
+
+// auditImportLines 扫描代码每行，检测危险 import/require 语句。
+// 不做完整 AST 解析，仅匹配 import/from/require 行，性能 O(lines)。
+func auditImportLines(code []byte, dangerousMap map[string]string, caps CapabilitySet) error {
+	for _, line := range strings.Split(string(code), "\n") {
+		trimmed := strings.TrimSpace(line)
+		// 跳过注释行
+		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		for keyword, requiredCap := range dangerousMap {
+			if strings.Contains(trimmed, keyword) {
+				if !caps[requiredCap] {
+					return perrors.New(perrors.CodeForbidden,
+						fmt.Sprintf("AST: dangerous import/use of %q requires capability %q", keyword, requiredCap))
+				}
+			}
+		}
+	}
+	return nil
 }

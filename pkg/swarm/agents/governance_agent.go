@@ -93,7 +93,8 @@ func (ga *GovernanceAgent) WithSecurityAuditAgent(a *SecurityAuditAgent) {
 	ga.auditAgent = a
 }
 
-// ValidateCodeWithAudit 两层安全审查入口。
+// ValidateCodeWithAudit 三层安全审查入口。
+// Layer 0（同步）：AST 前置拦截。
 // Layer 1（同步）：规则命中 → 立即返回 error。
 // Layer 2（异步）：规则通过 → 后台 LLM 审查，发现风险通过 HITL 通知用户。
 // taskID/agentID 为空时自动生成临时 ID。
@@ -104,6 +105,11 @@ func (ga *GovernanceAgent) ValidateCodeWithAudit(
 	caps CapabilitySet,
 	taskID, agentID string,
 ) error {
+	// Layer 0：同步 AST 前置拦截（最快 fast-fail）
+	if err := ga.AuditAST(language, code, caps); err != nil {
+		return err
+	}
+
 	// Layer 1: 硬边界
 	if err := ga.ValidateCode(language, code, caps); err != nil {
 		return err
@@ -113,6 +119,24 @@ func (ga *GovernanceAgent) ValidateCodeWithAudit(
 		ga.auditAgent.AuditAsync(ctx, language, code, taskID, agentID)
 	}
 	return nil
+}
+
+// AuditAST 在代码注入沙箱前执行同步 AST 级前置拦截（Layer 0）。
+// 当前实现：Go 代码走 go/parser；Python/Bash/TS 走增强正则 import 扫描。
+// 返回第一个违规即 fast-fail，不扫描全文（性能优先）。
+func (ga *GovernanceAgent) AuditAST(language string, code []byte, caps CapabilitySet) error {
+	switch language {
+	case "go":
+		return auditGoAST(code, caps)
+	case "python":
+		return auditImportLines(code, pythonDangerousImports, caps)
+	case "bash", "sh":
+		return auditImportLines(code, bashDangerousCommands, caps)
+	case "typescript", "javascript":
+		return auditImportLines(code, tsDangerousImports, caps)
+	default:
+		return nil // 未知语言：宽松放行，正则层已覆盖
+	}
 }
 
 // RecordExecution 记录执行成功的操作到 outbox（用于下次幂等命中）。
