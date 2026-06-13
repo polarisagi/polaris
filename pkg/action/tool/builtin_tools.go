@@ -22,6 +22,8 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 
+	_ "modernc.org/sqlite" // data_query 工具的 SQLite 驱动（ADR-0003：纯 Go，无 CGO）
+
 	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -76,6 +78,7 @@ func RegisterBuiltinTools(
 		{"git_commit", makeGitCommitFn(allowedPaths)},
 		{"template_render", templateRenderFn},
 		{"tool_search", makeToolSearchFn(toolReg)},
+		{"data_query", makeDataQueryFn(allowedPaths)},
 	}
 
 	// cron_* 工具依赖 DB，仅在 db != nil 时注册（单元测试无 DB 时不报错）
@@ -89,8 +92,6 @@ func RegisterBuiltinTools(
 			{"cron_delete", makeCronDeleteFn(db)},
 		}...)
 	}
-
-	defs = append(defs, getLegacyBuiltinDefs()...)
 
 	for _, d := range defs {
 		meta, err := LoadBuiltinToolMeta(d.name)
@@ -1654,5 +1655,122 @@ func makeExecuteWasmFn(allowedPaths []string) action.InProcessRichFn {
 			Success: true,
 			Output:  []byte(outJSON),
 		}, nil
+	}
+}
+
+// makeDataQueryFn 返回 data_query 工具的执行函数。
+// 约束：SELECT-only、allowedPaths 路径白名单、参数化查询、只读连接、行数上限。
+// 驱动：modernc.org/sqlite（纯 Go，无 CGO，ADR-0003）。
+//
+//nolint:gocyclo
+func makeDataQueryFn(allowedPaths []string) action.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args struct {
+			Query    string `json:"query"`
+			Database string `json:"database"`
+			Params   []any  `json:"params"`
+			MaxRows  int    `json:"max_rows"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return nil, perrors.New(perrors.CodeInternal, "data_query: invalid input JSON")
+		}
+
+		// 行数上限校验
+		if args.MaxRows <= 0 {
+			args.MaxRows = 1000
+		}
+		if args.MaxRows > 10000 {
+			args.MaxRows = 10000
+		}
+
+		// 路径白名单校验（与 read_file 共用机制）
+		if err := checkAllowedPath(args.Database, allowedPaths); err != nil {
+			return nil, perrors.Wrap(perrors.CodeForbidden, "data_query: database path not allowed", err)
+		}
+
+		// SELECT-only 校验：去除前导空白和注释后检查首个关键字
+		trimmed := strings.ToUpper(strings.TrimSpace(args.Query))
+		// 去除 SQL 单行注释（-- ...）后再检查
+		if idx := strings.Index(trimmed, "--"); idx == 0 {
+			// 整行是注释，不允许
+			return nil, perrors.New(perrors.CodeForbidden, "data_query: query must start with SELECT")
+		}
+		if !strings.HasPrefix(trimmed, "SELECT") {
+			return nil, perrors.New(perrors.CodeForbidden,
+				"data_query: only SELECT queries are permitted (got: "+trimmed[:min(20, len(trimmed))]+"...)")
+		}
+
+		// 只读连接（mode=ro 阻止任何写操作在 OS 层）
+		dbURI := fmt.Sprintf("file:%s?mode=ro&_busy_timeout=5000", filepath.Clean(args.Database))
+		db, err := sql.Open("sqlite", dbURI)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "data_query: open db failed", err)
+		}
+		defer db.Close()
+
+		// 单连接只读，无需连接池
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+
+		// 30 秒查询超时
+		qCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		rows, err := db.QueryContext(qCtx, args.Query, args.Params...)
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "data_query: query failed", err)
+		}
+		defer rows.Close()
+
+		cols, err := rows.Columns()
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "data_query: get columns failed", err)
+		}
+
+		// 收集结果行
+		result := make([]map[string]any, 0, min(args.MaxRows, 64))
+		truncated := false
+		rowCount := 0
+		vals := make([]any, len(cols))
+		valPtrs := make([]any, len(cols))
+		for i := range vals {
+			valPtrs[i] = &vals[i]
+		}
+
+		for rows.Next() {
+			if rowCount >= args.MaxRows {
+				truncated = true
+				break
+			}
+			if err := rows.Scan(valPtrs...); err != nil {
+				return nil, perrors.Wrap(perrors.CodeInternal, "data_query: scan row failed", err)
+			}
+			row := make(map[string]any, len(cols))
+			for i, col := range cols {
+				// SQLite 返回 []byte 时转 string，便于 JSON 序列化
+				switch v := vals[i].(type) {
+				case []byte:
+					row[col] = string(v)
+				default:
+					row[col] = v
+				}
+			}
+			result = append(result, row)
+			rowCount++
+		}
+		if err := rows.Err(); err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "data_query: rows iteration failed", err)
+		}
+
+		out, err := json.Marshal(map[string]any{
+			"rows":      result,
+			"count":     rowCount,
+			"truncated": truncated,
+			"columns":   cols,
+		})
+		if err != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "data_query: marshal result failed", err)
+		}
+		return out, nil
 	}
 }
