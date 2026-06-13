@@ -11,7 +11,8 @@
 //   - 直接持有 *sql.DB（MaxOpenConns=1），不经 MutationBus。
 //   - CAS 操作（ClaimTask/CompleteTask/FailTask）需要同步确认 RowsAffected，
 //     MutationBus 的异步批量模型无法满足此语义，故保留直接写。
-//   - 串行化由 sql.DB MaxOpenConns=1 + WAL busy_timeout=5000ms 保证，不会死锁。
+//   - 串行化由 sql.DB MaxOpenConns=1 + WAL busy_timeout=5000ms 保证写串行化。
+//   - 事务内所有查询必须走 tx.*，禁止在同一 goroutine 内混用 bb.db.*（连接池耗尽死锁）。
 
 package swarm
 
@@ -182,9 +183,6 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*protocol.Tas
 // ClaimTask CAS 原子认领：仅 status=pending 且无 claimed_by 时成功。
 // 返回 (true, nil) 表示认领成功；(false, nil) 表示被他人抢先。
 func (bb *SQLiteBlackboard) ClaimTask(ctx context.Context, taskID, agentID string) (bool, error) {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
 	tx, err := bb.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, perrors.Wrap(perrors.CodeInternal, "blackboard.ClaimTask: begin tx", err)
@@ -237,7 +235,7 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 	if rows == 0 {
 		// 可能已是 running（幂等）或未认领（错误）
 		var status string
-		_ = bb.db.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status)
+		_ = tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status)
 		if status != statusRunning {
 			return ErrTaskNotOwned
 		}
@@ -358,11 +356,14 @@ func (bb *SQLiteBlackboard) RenewLease(ctx context.Context, taskID, agentID stri
 
 // SuspendForHITL 将 Executing 的任务挂起（HITL超时戳覆盖ExpiresAt）。
 func (bb *SQLiteBlackboard) SuspendForHITL(ctx context.Context, taskID, agentID string, timeout int64) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.SuspendForHITL: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	expiresAt := time.Unix(timeout, 0).UTC().Format(time.RFC3339)
-	res, err := bb.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, expires_at=?, updated_at=datetime('now'), version=version+1
 		WHERE task_id=? AND claimed_by=? AND status=?`,
@@ -375,23 +376,31 @@ func (bb *SQLiteBlackboard) SuspendForHITL(ctx context.Context, taskID, agentID 
 	if rows == 0 {
 		return ErrTaskNotOwned
 	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_suspended_hitl", taskID); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.SuspendForHITL: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.SuspendForHITL: commit", err)
+	}
+	bb.broadcast(protocol.BlackboardEvent{Type: "task_suspended_hitl", TaskID: taskID, AgentID: agentID})
 	return nil
 }
 
 // ResumeFromHITL 恢复被挂起的任务（!approved → Failed）。
 func (bb *SQLiteBlackboard) ResumeFromHITL(ctx context.Context, taskID, agentID string, approved bool) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.ResumeFromHITL: begin tx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	var newStatus string
-	if approved {
-		newStatus = statusRunning
-	} else {
+	newStatus := statusRunning
+	if !approved {
 		newStatus = statusFailed
 	}
 
 	expiresAt := time.Now().Add(DefaultLeaseTTL).UTC().Format(time.RFC3339)
-	res, err := bb.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, expires_at=?, updated_at=datetime('now'), version=version+1
 		WHERE task_id=? AND claimed_by=? AND status=?`,
@@ -404,14 +413,22 @@ func (bb *SQLiteBlackboard) ResumeFromHITL(ctx context.Context, taskID, agentID 
 	if rows == 0 {
 		return ErrTaskNotOwned
 	}
+	evType := "task_resumed_hitl_approved"
+	if !approved {
+		evType = "task_resumed_hitl_rejected"
+	}
+	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, evType, taskID); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.ResumeFromHITL: write event", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "blackboard.ResumeFromHITL: commit", err)
+	}
+	bb.broadcast(protocol.BlackboardEvent{Type: evType, TaskID: taskID, AgentID: agentID})
 	return nil
 }
 
 // BeginCompensation 开始补偿链（状态改为 compensating，提供 300s 时间预算）。
 func (bb *SQLiteBlackboard) BeginCompensation(ctx context.Context, taskID, agentID string) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
 	expiresAt := time.Now().Add(300 * time.Second).UTC().Format(time.RFC3339)
 
 	res, err := bb.db.ExecContext(ctx, `
@@ -432,9 +449,6 @@ func (bb *SQLiteBlackboard) BeginCompensation(ctx context.Context, taskID, agent
 
 // EndCompensation 补偿完成（状态改为 failed，进入正常回收）。
 func (bb *SQLiteBlackboard) EndCompensation(ctx context.Context, taskID, agentID string) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
 	res, err := bb.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, updated_at=datetime('now'), version=version+1
@@ -453,9 +467,6 @@ func (bb *SQLiteBlackboard) EndCompensation(ctx context.Context, taskID, agentID
 
 // SideEffectPreCheck TOCTOU 校验。
 func (bb *SQLiteBlackboard) SideEffectPreCheck(ctx context.Context, taskID, agentID string, claimedVersion int32) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
 	var status string
 	var claimedBy sql.NullString
 	var expiresAtStr string
@@ -615,9 +626,6 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 	}
 
 	// 宽限期结束，强制回写 DB
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
 	for _, r := range expired {
 		_, _ = bb.db.ExecContext(ctx, `
 			UPDATE tasks
@@ -639,9 +647,6 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 
 // StopAll KillSwitch FullStop 响应：所有 Executing 任务进入 Suspended(oom_evicted)。
 func (bb *SQLiteBlackboard) StopAll(ctx context.Context, reason string) error {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
 	_, err := bb.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, suspend_reason=?, version=version+1, updated_at=datetime('now')
