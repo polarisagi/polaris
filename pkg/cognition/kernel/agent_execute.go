@@ -175,6 +175,10 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				a.sCtx.TokensOutput += resp.Usage.OutputTokens
 				a.sCtx.TokensCacheRead += resp.Usage.CacheHitTokens
 				a.sCtx.TokensUsed += resp.Usage.InputTokens + resp.Usage.OutputTokens
+				// 保存 reasoning_content 供下轮消息历史回传（BUG-04 fix）
+				if resp.ReasoningContent != "" {
+					a.sCtx.LastReasoningContent = resp.ReasoningContent
+				}
 				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), []byte(resp.Content))
 			}
 		}

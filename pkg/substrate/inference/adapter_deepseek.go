@@ -13,12 +13,23 @@ type DeepSeekAdapter struct {
 	credentialFn func() string
 	client       *OpenAICompatibleClient
 	capabilities protocol.ProviderCapabilities
+	modelID      string // 通过配置注入，默认 "deepseek-v4-flash"
 }
 
-// NewDeepSeekAdapter 构造一个 DeepSeek 适配器。
-func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client) *DeepSeekAdapter {
+// NewDeepSeekAdapter 构造 DeepSeek 适配器。
+// modelID 传 "" 时默认使用 "deepseek-v4-flash"（V4 Flash，低成本推理）；
+// 传 "deepseek-v4-pro" 时启用 1M context 上限。
+func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client, modelID string) *DeepSeekAdapter {
 	if httpClient == nil {
 		httpClient = defaultHTTPClient
+	}
+	if modelID == "" {
+		modelID = "deepseek-v4-flash"
+	}
+
+	maxCtx := 65536 // v4-flash 默认
+	if modelID == "deepseek-v4-pro" || modelID == "deepseek-reasoner" {
+		maxCtx = 1_000_000 // V4 Pro 支持 1M context
 	}
 
 	c := &OpenAICompatibleClient{
@@ -29,11 +40,12 @@ func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client) *DeepSeek
 	return &DeepSeekAdapter{
 		credentialFn: credFn,
 		client:       c,
+		modelID:      modelID,
 		capabilities: protocol.ProviderCapabilities{
 			SupportsStreaming: true,
 			SupportsTools:     true,
 			SupportsThinking:  true,
-			MaxContextTokens:  64000,
+			MaxContextTokens:  maxCtx,
 			CostPer1KInput:    0.14, // 预估费率
 			CostPer1KOutput:   0.28,
 		},
@@ -41,7 +53,7 @@ func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client) *DeepSeek
 }
 
 func (d *DeepSeekAdapter) ModelID() string {
-	return "deepseek-v4-flash" // 或者通过参数动态传入
+	return d.modelID
 }
 
 func (d *DeepSeekAdapter) Capabilities() protocol.ProviderCapabilities {
@@ -96,6 +108,18 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []protocol.Message, op
 		contentStr, _ := resp.Choices[0].Message.Content.(string)
 		out.Content = contentStr
 		out.FinishReason = resp.Choices[0].FinishReason
+		// thinking mode 下提取 reasoning_content（非 thinking 模式时为空字符串，安全）
+		out.ReasoningContent = resp.Choices[0].Message.ReasoningContent
+		// 提取 tool_calls（若有）
+		if len(resp.Choices[0].Message.ToolCalls) > 0 {
+			for _, tc := range resp.Choices[0].Message.ToolCalls {
+				out.ToolCalls = append(out.ToolCalls, protocol.InferToolCall{
+					ID:    tc.ID,
+					Name:  tc.Function.Name,
+					Input: []byte(tc.Function.Arguments),
+				})
+			}
+		}
 	}
 
 	return out, nil

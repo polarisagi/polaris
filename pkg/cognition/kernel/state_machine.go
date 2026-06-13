@@ -103,6 +103,10 @@ type StateContext struct {
 
 	// Cognitive 语义检索接口（L2）
 	Cognitive CognitiveSearcher
+
+	// LastReasoningContent 上一轮 LLM 在 thinking 模式下产出的推理内容。
+	// 由 agent_execute.go 在成功 Infer 后写入，供下一轮 PromptFn 注入消息历史。
+	LastReasoningContent string
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
