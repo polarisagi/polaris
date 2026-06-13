@@ -16,12 +16,13 @@ type OllamaAdapter struct {
 	baseURL string
 	client  *OpenAICompatibleClient
 	caps    protocol.ProviderCapabilities
+	tbr     *observability.TokenBurnRate
 }
 
 var _ protocol.Provider = (*OllamaAdapter)(nil)
 
 // NewOllamaAdapter 构造 Ollama 本地推理适配器。
-func NewOllamaAdapter(model string, httpClient *http.Client) *OllamaAdapter {
+func NewOllamaAdapter(model string, httpClient *http.Client, tbr *observability.TokenBurnRate) *OllamaAdapter {
 	if httpClient == nil {
 		httpClient = defaultHTTPClient
 	}
@@ -41,6 +42,7 @@ func NewOllamaAdapter(model string, httpClient *http.Client) *OllamaAdapter {
 			CostPer1KInput:    0.0,
 			CostPer1KOutput:   0.0,
 		},
+		tbr: tbr,
 	}
 }
 
@@ -85,7 +87,9 @@ func (a *OllamaAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts
 		out.Content = contentStr
 	}
 	if out.Usage.InputTokens > 0 || out.Usage.OutputTokens > 0 {
-		observability.GlobalTokenBurnRate.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		if a.tbr != nil {
+			a.tbr.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		}
 	}
 	return out, nil
 }

@@ -22,7 +22,6 @@ import (
 )
 
 var (
-	GlobalTokenBurnRate = NewTokenBurnRate()
 	GlobalSurpriseIndex = NewSurpriseIndex()
 
 	// GlobalKillswitchStage 全局 KillSwitch 阶段原子量（0=Normal…3=FullStop）。
@@ -304,11 +303,11 @@ func ReportSurrealDBIndexSize(sizeMB int64) {
 //	polaris_surrealdb_index_size_mb         — SurrealDB-Core 索引内存占用（Gauge）
 //
 // 所有 gauge 不带 label（MVP 简化版；Tier 1+ 升级为 promhttp.Handler + 标准 OTel 维度）
-func MetricsHandler() http.Handler {
+func MetricsHandler(tbr *TokenBurnRate) http.Handler {
 	if fg := GlobalFeatureGate(); fg != nil && fg.IsEnabled(FeatureOTelExporter) {
-		return otelMetricsHandler()
+		return otelMetricsHandler(tbr)
 	}
-	return legacyMetricsHandler()
+	return legacyMetricsHandler(tbr)
 }
 
 var (
@@ -321,7 +320,7 @@ func getHostname() string {
 	return h
 }
 
-func otelMetricsHandler() http.Handler {
+func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 	otelOnce.Do(func() {
 		exporter, err := prometheus.New()
 		if err != nil {
@@ -349,7 +348,6 @@ func otelMetricsHandler() http.Handler {
 		surrealSizeGauge, _ := meter.Float64ObservableGauge("polaris.surrealdb.index_size_mb")
 
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-			tbr := GlobalTokenBurnRate
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
 			o.ObserveFloat64(totalCounter, float64(tbr.cumulativeTokens.Load()))
@@ -373,15 +371,14 @@ func otelMetricsHandler() http.Handler {
 	if otelHandler != nil {
 		return otelHandler
 	}
-	return legacyMetricsHandler()
+	return legacyMetricsHandler(tbr)
 }
 
-func legacyMetricsHandler() http.Handler {
+func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 		// ── TokenBurnRate（HE-Rule-1 一等公民，必须在 /metrics 可见）──────────────
-		tbr := GlobalTokenBurnRate
 		ema5 := tbr.EMA5s()
 		ema30 := tbr.EMA30s()
 		cumTokens := tbr.cumulativeTokens.Load()

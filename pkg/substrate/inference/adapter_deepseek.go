@@ -14,12 +14,13 @@ type DeepSeekAdapter struct {
 	client       *OpenAICompatibleClient
 	capabilities protocol.ProviderCapabilities
 	modelID      string // 通过配置注入，默认 "deepseek-v4-flash"
+	tbr          *observability.TokenBurnRate
 }
 
 // NewDeepSeekAdapter 构造 DeepSeek 适配器。
 // modelID 传 "" 时默认使用 "deepseek-v4-flash"（V4 Flash，低成本推理）；
 // 传 "deepseek-v4-pro" 时启用 1M context 上限。
-func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client, modelID string) *DeepSeekAdapter {
+func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client, modelID string, tbr *observability.TokenBurnRate) *DeepSeekAdapter {
 	if httpClient == nil {
 		httpClient = defaultHTTPClient
 	}
@@ -49,6 +50,7 @@ func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client, modelID s
 			CostPer1KInput:    0.14, // 预估费率
 			CostPer1KOutput:   0.28,
 		},
+		tbr: tbr,
 	}
 }
 
@@ -101,7 +103,9 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []protocol.Message, op
 	}
 
 	if out.Usage.InputTokens > 0 || out.Usage.OutputTokens > 0 {
-		observability.GlobalTokenBurnRate.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		if d.tbr != nil {
+			d.tbr.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		}
 	}
 
 	if len(resp.Choices) > 0 {

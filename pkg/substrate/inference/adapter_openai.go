@@ -16,13 +16,14 @@ type OpenAIAdapter struct {
 	credentialFn func() string
 	client       *OpenAICompatibleClient
 	caps         protocol.ProviderCapabilities
+	tbr          *observability.TokenBurnRate
 }
 
 var _ protocol.Provider = (*OpenAIAdapter)(nil)
 
 // NewOpenAIAdapter 初始化一个 OpenAI 适配器。
 // baseURL 默认为 "https://api.openai.com/v1"（如果传入空串）。
-func NewOpenAIAdapter(baseURL, model string, credFn func() string, client *http.Client) *OpenAIAdapter {
+func NewOpenAIAdapter(baseURL, model string, credFn func() string, client *http.Client, tbr *observability.TokenBurnRate) *OpenAIAdapter {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -50,6 +51,7 @@ func NewOpenAIAdapter(baseURL, model string, credFn func() string, client *http.
 			CostPer1KInput:   0.15,
 			CostPer1KOutput:  0.60,
 		},
+		tbr: tbr,
 	}
 }
 
@@ -103,7 +105,9 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts
 	}
 
 	if out.Usage.InputTokens > 0 || out.Usage.OutputTokens > 0 {
-		observability.GlobalTokenBurnRate.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		if a.tbr != nil {
+			a.tbr.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
+		}
 	}
 
 	if len(resp.Choices) > 0 {

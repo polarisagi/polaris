@@ -74,6 +74,8 @@ type Server struct {
 
 	// Cron runner 生命周期控制
 	cronCancel context.CancelFunc
+
+	tbr *observability.TokenBurnRate
 }
 
 func (s *Server) SetInstallManager(m *marketplace.Manager) { s.installMgr = m }
@@ -183,7 +185,7 @@ func (s *Server) clearToolSchemaCache() {
 
 // NewServer 创建新的 HTTP Server。
 // DEV_MODE=1 时将静态资源请求反向代理到 Vite dev server (:5173)。
-func NewServer(addr string, dataDir string, agent protocol.AgentController, bb protocol.Blackboard, hitlGateway protocol.HITL, db *sql.DB, registry *inference.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig) *Server {
+func NewServer(addr string, dataDir string, agent protocol.AgentController, bb protocol.Blackboard, hitlGateway protocol.HITL, db *sql.DB, registry *inference.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, tbr *observability.TokenBurnRate) *Server {
 	tDir := filepath.Join(dataDir, "sessions")
 	go PruneTranscripts(tDir, 30) // 启动时异步清理 30 天前的 transcript
 
@@ -198,6 +200,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 		transcriptDir: tDir,
 		hooks:         NewHookRunner(dataDir),
 		dataDir:       dataDir,
+		tbr:           tbr,
 	}
 
 	// 注入内置的 yaml 配置作为种子数据到数据库（SSoT 架构）
@@ -263,7 +266,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.HandleFunc("GET /readyz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
-	mux.Handle("GET /metrics", observability.MetricsHandler())
+	mux.Handle("GET /metrics", observability.MetricsHandler(s.tbr))
 	mux.HandleFunc("GET /v1/logs/stream", s.handleLogStream)
 	mux.HandleFunc("POST /v1/agent/query", s.handleAgentQuery)
 	mux.HandleFunc("POST /v1/agent/stream", s.handleAgentStream)

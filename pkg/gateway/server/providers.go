@@ -483,5 +483,5 @@ func (s *Server) reloadProviders() {
 	if s.registry == nil || s.db == nil {
 		return
 	}
-	_ = LoadProvidersFromDB(context.Background(), s.db, s.registry, s.httpClient)
+	_ = LoadProvidersFromDB(context.Background(), s.db, s.registry, s.httpClient, s.tbr)
 }

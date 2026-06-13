@@ -8,7 +8,7 @@
 |---|--------|------|------|
 | R1.1 | 跨层越权调用 | service 调用 DAO、controller 含业务逻辑 | 调用只能逐层：ctrl → svc → dao |
 | R1.2 | 裸 error 传播 | `return err` 不含上下文 | `return perrors.Wrap(CodeXxx, msg, err)` |
-| R1.3 | 全局可变变量 | `var x = ...` 在 `pkg/` 下 | 结构体字段 + 构造函数注入 |
+| R1.3 | 全局可变变量 | `var x = ...` 在 `pkg/` 下（**豁免**：哨兵错误 `var ErrXxx = perrors.New(...)` 是 Go 惯例，`errors.Is` 依赖指针相等，不得改为 `perrors.New` 内联调用；但可变状态单例如 `var GlobalXxx = NewXxx()` 仍违规） | 结构体字段 + 构造函数注入 |
 | R1.4 | 接口定义在实现方 | dao 包暴露 `type Dao interface` | `internal/protocol/` 统一声明，`@consumer` 标记 |
 | R1.5 | 超过 3 层嵌套回调 | if 套 for 套 select | 提取命名函数 + early return |
 | R1.6 | 隐式字符串耦合 | 模块间通过字符串 topic/channel 通信 | `internal/protocol/` 结构化事件类型 |

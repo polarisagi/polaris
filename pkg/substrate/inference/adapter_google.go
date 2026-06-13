@@ -29,11 +29,12 @@ type GoogleAgentPlatformAdapter struct {
 	credentialFn func() string
 	client       *http.Client
 	caps         protocol.ProviderCapabilities
+	tbr          *observability.TokenBurnRate
 }
 
 var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
 
-func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn func() string, client *http.Client) *GoogleAgentPlatformAdapter {
+func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn func() string, client *http.Client, tbr *observability.TokenBurnRate) *GoogleAgentPlatformAdapter {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -52,6 +53,7 @@ func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn fun
 			CostPer1KInput:    0.075,
 			CostPer1KOutput:   0.30,
 		},
+		tbr: tbr,
 	}
 }
 
@@ -372,7 +374,9 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []protocol.
 		},
 	}
 	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
-		observability.GlobalTokenBurnRate.Add(int64(resp.Usage.InputTokens + resp.Usage.OutputTokens))
+		if a.tbr != nil {
+			a.tbr.Add(int64(resp.Usage.InputTokens + resp.Usage.OutputTokens))
+		}
 	}
 	return resp, nil
 }
@@ -427,12 +431,12 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []pro
 		defer cancel()
 		defer close(ch)
 		defer httpResp.Body.Close()
-		parseGoogleStream(inferCtx, httpResp.Body, ch, a.model)
+		parseGoogleStream(inferCtx, httpResp.Body, ch, a.model, a.tbr)
 	}()
 	return ch, nil
 }
 
-func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- protocol.StreamEvent, model string) {
+func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- protocol.StreamEvent, model string, tbr *observability.TokenBurnRate) {
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
 		select {
@@ -489,8 +493,9 @@ func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- protocol.S
 					OutputTokens: frame.UsageMetadata.CandidatesTokenCount,
 				},
 			}
-			observability.GlobalTokenBurnRate.Add(int64(
-				frame.UsageMetadata.PromptTokenCount + frame.UsageMetadata.CandidatesTokenCount))
+			if tbr != nil {
+				tbr.Add(int64(frame.UsageMetadata.PromptTokenCount + frame.UsageMetadata.CandidatesTokenCount))
+			}
 		}
 	}
 }

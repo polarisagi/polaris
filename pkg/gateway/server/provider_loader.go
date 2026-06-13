@@ -7,11 +7,12 @@ import (
 	"net/http"
 
 	"github.com/polarisagi/polaris/pkg/substrate/inference"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // LoadProvidersFromDB 从 providers + provider_models 两表 JOIN，
 // 每个启用的 (provider, model) 组合注册一个带角色的 Adapter 到 ProviderRegistry。
-func LoadProvidersFromDB(ctx context.Context, db *sql.DB, reg *inference.ProviderRegistry, httpClient *http.Client) error {
+func LoadProvidersFromDB(ctx context.Context, db *sql.DB, reg *inference.ProviderRegistry, httpClient *http.Client, tbr *observability.TokenBurnRate) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT p.id, p.name, p.type, p.base_url, p.api_key, p.project_id, p.location,
 		       m.id, m.name, m.model_id, m.role
@@ -47,16 +48,16 @@ func LoadProvidersFromDB(ctx context.Context, db *sql.DB, reg *inference.Provide
 
 		switch typ {
 		case "openai_compat":
-			reg.RegisterWithRole(name, displayName, role, inference.NewOpenAIAdapter(baseURL, modelID, credFn, httpClient))
+			reg.RegisterWithRole(name, displayName, role, inference.NewOpenAIAdapter(baseURL, modelID, credFn, httpClient, tbr))
 		case "anthropic":
-			reg.RegisterWithRole(name, displayName, role, inference.NewAnthropicAdapter(modelID, credFn, httpClient))
+			reg.RegisterWithRole(name, displayName, role, inference.NewAnthropicAdapter(modelID, credFn, httpClient, tbr))
 		case "google_agent_platform":
-			reg.RegisterWithRole(name, displayName, role, inference.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credFn, httpClient))
+			reg.RegisterWithRole(name, displayName, role, inference.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credFn, httpClient, tbr))
 		case "ollama":
 			if baseURL == "" {
 				baseURL = "http://localhost:11434"
 			}
-			reg.RegisterWithRole(name, displayName, role, inference.NewOpenAIAdapter(baseURL+"/v1", modelID, credFn, httpClient))
+			reg.RegisterWithRole(name, displayName, role, inference.NewOpenAIAdapter(baseURL+"/v1", modelID, credFn, httpClient, tbr))
 		}
 	}
 	return rows.Err()

@@ -24,6 +24,7 @@ type AnthropicAdapter struct {
 	caps                protocol.ProviderCapabilities
 	enablePromptCaching bool   // 注入 cache_control 标记以激活 prompt caching
 	baseURL             string // 空值 → "https://api.anthropic.com"（测试可覆盖）
+	tbr                 *observability.TokenBurnRate
 }
 
 var _ protocol.Provider = (*AnthropicAdapter)(nil)
@@ -42,7 +43,7 @@ func WithAnthropicPromptCaching() AnthropicOption {
 }
 
 // NewAnthropicAdapter 构造 Anthropic 适配器。
-func NewAnthropicAdapter(model string, credFn func() string, client *http.Client, opts ...AnthropicOption) *AnthropicAdapter {
+func NewAnthropicAdapter(model string, credFn func() string, client *http.Client, tbr *observability.TokenBurnRate, opts ...AnthropicOption) *AnthropicAdapter {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -50,6 +51,7 @@ func NewAnthropicAdapter(model string, credFn func() string, client *http.Client
 		model:        model,
 		credentialFn: credFn,
 		client:       client,
+		tbr:          tbr,
 		caps: protocol.ProviderCapabilities{
 			SupportsStreaming: true,
 			SupportsTools:     true,
@@ -180,8 +182,9 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []protocol.Message, o
 		},
 	}
 
-	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
-		observability.GlobalTokenBurnRate.Add(int64(resp.Usage.InputTokens + resp.Usage.OutputTokens))
+	// 扣除 token（EMA + 总量计算）
+	if a.tbr != nil {
+		a.tbr.Add(int64(resp.Usage.InputTokens + resp.Usage.OutputTokens))
 	}
 
 	return resp, nil
@@ -404,7 +407,11 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, body io.Rea
 						CacheCreationTokens: frame.Message.Usage.CacheCreationInputTokens,
 					},
 				}
-				observability.GlobalTokenBurnRate.Add(int64(frame.Message.Usage.InputTokens))
+				if frame.Message.Usage.InputTokens > 0 {
+					if a.tbr != nil {
+						a.tbr.Add(int64(frame.Message.Usage.InputTokens))
+					}
+				}
 			}
 		case "content_block_start":
 			switch frame.ContentBlock.Type {
@@ -453,7 +460,9 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, body io.Rea
 					Type:  protocol.StreamTextDelta,
 					Usage: protocol.Usage{OutputTokens: frame.Usage.OutputTokens},
 				}
-				observability.GlobalTokenBurnRate.Add(int64(frame.Usage.OutputTokens))
+				if a.tbr != nil {
+					a.tbr.Add(int64(frame.Usage.OutputTokens))
+				}
 			}
 		case "message_stop":
 			return

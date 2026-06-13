@@ -15,6 +15,7 @@ type AutoConfig struct {
 	Probe  *HardwareProbe
 	Guard  *OSMemoryGuard
 	Gate   *FeatureGate
+	TBR    *TokenBurnRate
 	Config AutoConfigResult
 }
 
@@ -73,6 +74,7 @@ func NewAutoConfig() (*AutoConfig, error) {
 
 	ac := &AutoConfig{
 		Probe: NewHardwareProbe(totalRAM, availableRAM),
+		TBR:   NewTokenBurnRate(),
 	}
 	ac.Guard = NewOSMemoryGuard(totalRAM / (1024 * 1024))
 	ac.Gate = NewFeatureGate(ac.Probe, ac.Guard)

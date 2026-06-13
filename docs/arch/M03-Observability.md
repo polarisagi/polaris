@@ -243,7 +243,7 @@ OSMemoryGuard 每秒探测 free memory → 三级水位触发 MemoryPressureCall
 
 ## 6. OSMemoryGuard — 绝对空闲内存兜底
 
-OSMemoryGuard 与 M13 ResourceGovernor 共享统一三级资源降级体系。**阈值权威定义来源**: `spec/state.yaml §thresholds.memory_pressure`（全局单一来源，M3 和 M13 均读此节，禁止在各模块配置文件中独立硬编码）。M3 `criticalThresholdMB` / `warningThresholdMB` / `cautionThresholdMB` 三个结构体字段在启动时从 `spec/state.yaml §thresholds.memory_pressure` 加载；M13 ResourceGovernor 的对应阈值同样来源于此节，通过 `config.LoadThresholds(dataDir)` 获取，阈值通过 `Thresholds.M3Observability` 字段读取，不使用各自 `~/.polarisagi/polaris/config/m3_observability.toml` / `~/.polarisagi/polaris/config/m13_interface.toml` 的本地副本。两者对同一阈值独立采样，任一触发即执行降级。
+OSMemoryGuard 与 M13 ResourceGovernor 共享统一三级资源降级体系。**阈值实际加载路径**：`internal/config/thresholds.go` 的 `M3ObservabilityThresholds`（`MemCautionMB`=1536 / `MemWarningMB`=1024 / `MemCriticalMB`=512，通过 `config.LoadThresholds(dataDir)` 读取 `~/.polarisagi/polaris/config/m3_observability.toml` 覆盖）。`spec/state.yaml §thresholds.memory_pressure` 定义百分比策略（`memory_governor_soft_pct` 等），与 MB 绝对值阈值是两套互补系统，非同一来源。
 
 实现见 `pkg/substrate/observability/hardware_probe.go` (OSMemoryGuard)。结构体字段: criticalThresholdMB(512MB, **L3 临界**) / warningThresholdMB(1.0GB, **L2 紧急**) / cautionThresholdMB(1.5GB, **L1 预警**) / slopeWindow(4次采样环形缓冲区) / slopeThreshold(-100MB/s) / slopeInterval(5s)。
 
@@ -331,9 +331,11 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 **告警阈值**:
 | 偏差 | 等级 | 响应 |
 |------|------|------|
-| > 2σ | WARN | M3 metric + `polaris_drift_warn_total` Counter |
-| > 3σ | CRITICAL | M11 候选 [KillSwitch] Stage 1 THROTTLE + 候选 [ESCALATE] HITL |
+| > 2σ（当前实现：相对下降 >15%，可配 `driftThreshold`，默认 0.15） | WARN | M3 metric + `polaris_drift_warn_total` Counter |
+| > 3σ（当前实现：>15% 触发 WARN 后持续恶化） | CRITICAL | M11 候选 [KillSwitch] Stage 1 THROTTLE + 候选 [ESCALATE] HITL |
 | > 3σ 持续 30min | KILL | 强制 KillSwitch Stage 1 + M9 PromptOptimizer 当 task_type 候选自动撤回（rollback 最近 staging 批次） |
+
+> **实现说明**：`performance_drift.go` 当前使用可配置的相对下降阈值（`driftThreshold`，默认 0.15=15%），而非统计学 >2σ。`polaris_task_drift_sigma` Gauge 字段留作未来接入标准差计算的扩展点。
 
 **与 M11 [FactualityGuard] 联动**:
 - D6 抽样率随 drift 信号动态上调（漂移期 ×2，最高 20%）

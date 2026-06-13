@@ -57,6 +57,7 @@ type KillSwitch struct {
 
 	// dataDir 用于写入 .fullstop 文件（默认 ~/.polarisagi/polaris）
 	dataDir string
+	tbr     *observability.TokenBurnRate
 }
 
 // GetState 返回当前 KillSwitch 阶段的线程安全快照，供 M4/M8/M13 读 gauge 降级响应。
@@ -66,11 +67,14 @@ func (ks *KillSwitch) GetState() KillState {
 	return ks.state
 }
 
-func NewKillSwitch(dataDir string) *KillSwitch {
+func NewKillSwitch(dataDir string, tbr *observability.TokenBurnRate) *KillSwitch {
 	return &KillSwitch{
 		state:          KillNormal,
+		reason:         "System OK",
+		actor:          "system",
 		stateEnteredAt: time.Now(),
 		dataDir:        dataDir,
+		tbr:            tbr,
 	}
 }
 
@@ -126,10 +130,9 @@ func (ks *KillSwitch) IsSealed() bool {
 	return ks.state == KillFullStop
 }
 
-// shouldThrottleLocked 须在 mu 持有时调用。
 func (ks *KillSwitch) shouldThrottleLocked() bool {
-	// 读全局 TokenBurnRate（observability.GlobalTokenBurnRate 是唯一真相源，inference 适配器写入它）
-	if observability.GlobalTokenBurnRate.CheckThrottle() >= observability.ThrottleStage1 {
+	// 读 TokenBurnRate（observability.TokenBurnRate 是唯一真相源，inference 适配器写入它）
+	if ks.tbr != nil && ks.tbr.CheckThrottle() >= observability.ThrottleStage1 {
 		return true
 	}
 	return ks.monitors.errorCounter > 5

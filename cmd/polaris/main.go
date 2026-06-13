@@ -163,13 +163,26 @@ func run() error { //nolint:gocyclo
 	}
 	cfg.Thresholds = *thresholds
 
+	// ─── 0.34 硬件探针 & TBR ────────────────────────────────────────────────
+	autoConf, err := observability.NewAutoConfig()
+	if err != nil {
+		slog.Warn("polaris: AutoConfig failed, using Tier0 defaults", "err", err)
+	}
+
+	var tbr *observability.TokenBurnRate
+	if autoConf != nil {
+		tbr = autoConf.TBR
+	} else {
+		tbr = observability.NewTokenBurnRate()
+	}
+
 	// ─── 0.35 KillSwitch 初始化 ────────────────────────────────────────────────
 	// 启动前先检查封印文件：若存在则拒绝启动（FullStop 状态跨重启持久化）
 	if substrate.IsFullStopFilePresent(dataDir) {
 		return errors.New(errors.CodeInternal,
 			"system is sealed (.fullstop exists in "+dataDir+"); remove the file to restart")
 	}
-	ks = substrate.NewKillSwitch(dataDir)
+	ks = substrate.NewKillSwitch(dataDir, tbr)
 	// 同步到 observability 全局原子量（供 M13 handleStatus 读取）
 	ks.StateChangeCallback = func(newState substrate.KillState, _ string) {
 		observability.GlobalKillswitchStage.Store(int32(newState))
@@ -184,11 +197,7 @@ func run() error { //nolint:gocyclo
 	slog.SetDefault(slog.New(logStore))
 	slog.Info("polaris: logger initialized", "data_dir", dataDir)
 
-	// ─── 0.5 硬件探针 → Tier 判定 → FeatureGate ───────────────────────────
-	autoConf, err := observability.NewAutoConfig()
-	if err != nil {
-		slog.Warn("polaris: AutoConfig failed, using Tier0 defaults", "err", err)
-	} else {
+	if autoConf != nil {
 		slog.Info("polaris: hardware probed",
 			"tier", autoConf.Config.Tier,
 			"ram_mb", autoConf.Config.TotalRAMMB,
@@ -205,7 +214,7 @@ func run() error { //nolint:gocyclo
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				observability.GlobalTokenBurnRate.Tick()
+				tbr.Tick()
 			}
 		}
 	}()
@@ -322,7 +331,7 @@ func run() error { //nolint:gocyclo
 			if localModel == "" {
 				localModel = "llama3.2"
 			}
-			reg.Register("ollama-local", "Local LLM", inference.NewOllamaAdapter(localModel, safeHTTPClient))
+			reg.Register("ollama-local", "Local LLM", inference.NewOllamaAdapter(localModel, safeHTTPClient, tbr))
 			slog.Info("polaris: Ollama local inference registered", "model", localModel)
 		}
 		// ─── 4.6 本地嵌入（Ollama，FeatureLocalEmbedding 门控）──────────────────
@@ -351,7 +360,7 @@ func run() error { //nolint:gocyclo
 		// ─── 4.9 大型本地模型（FeatureLargeLocalLLM 门控，Tier2+，7B+ 量化模型）──
 		if autoConf.Gate.State(observability.FeatureLargeLocalLLM) != observability.FeatureDisabled {
 			if largeModel, ok := observability.TierLocalModel(autoConf.Config.Tier); ok {
-				reg.Register("ollama-large", "Large Local LLM", inference.NewOllamaAdapter(largeModel, safeHTTPClient))
+				reg.Register("ollama-large", "Large Local LLM", inference.NewOllamaAdapter(largeModel, safeHTTPClient, tbr))
 				slog.Info("polaris: large local LLM registered", "model", largeModel)
 			}
 		}
@@ -676,7 +685,7 @@ func run() error { //nolint:gocyclo
 
 	// ─── 10.7 从 DB 加载全部厂商配置（唯一合法的 Provider 注册路径）
 	// env var 凭据已在步骤 4 由 SeedProvidersFromEnv 写入 DB，此处统一加载。
-	if err := server.LoadProvidersFromDB(ctx, store.DB(), reg, safeHTTPClient); err != nil {
+	if err := server.LoadProvidersFromDB(ctx, store.DB(), reg, safeHTTPClient, tbr); err != nil {
 		slog.Warn("polaris: LoadProvidersFromDB", "err", err)
 	}
 
@@ -700,7 +709,7 @@ func run() error { //nolint:gocyclo
 		slog.Warn("polaris: FeatureWebUI disabled by FeatureGate — serving API-only mode, dashboard unavailable")
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Interface.Host, cfg.Interface.Port)
-	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer, cfg.Compressor)
+	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer, cfg.Compressor, tbr)
 
 	// Ensure signing key exists
 	var skillSigningKey []byte
