@@ -164,8 +164,9 @@ func isWriteNetworkTool(toolName string, registry protocol.ToolRegistry) bool {
 	switch toolName {
 	case "read_file", "list_dir", "write_file", "get_datetime", "diff_text", "csv_parse",
 		"str_replace_editor", "multi_edit", "glob", "grep", "notebook_read", "notebook_edit",
-		"todo_read", "todo_write", "git_diff", "template_render", "sys_probe":
-		return false // 纯本地工具
+		"todo_read", "todo_write", "git_diff", "template_render", "sys_probe",
+		"search_web", "fetch_url": // 纯读网络工具，不向外写入，与 isReadOnlyTool 保持一致
+		return false
 	}
 	return true // 未知工具默认视为网络写，fail-closed
 }
