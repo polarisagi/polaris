@@ -28,6 +28,7 @@ const (
 	FeatureWebUI           Feature = "web_ui"           // M13: go:embed HTMX Web dashboard
 	FeatureActivationSteer Feature = "activation_steer" // M9: Activation Steering (hidden_state injection)
 	FeatureOTelExporter    Feature = "otel_exporter"    // M3: OTel SDK Prometheus exporter（Tier 1+）
+	FeatureDeepRAG         Feature = "deep_rag"         // M10: 三阶段深度 RAG（Tier 1+，≥16GB）
 )
 
 // FeatureState describes the current availability of a feature.
@@ -67,6 +68,7 @@ var featureRules = map[Feature]featureRule{
 	FeaturePresidioPII:     {MinTier: Tier1, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 36},
 	FeatureWebUI:           {MinTier: Tier1, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 15},
 	FeatureActivationSteer: {MinTier: Tier1, MinMemoryMB: 1536, DegradeMemoryMB: 2048, Priority: 48},
+	FeatureDeepRAG:         {MinTier: Tier1, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 45},
 	FeatureOTelExporter:    {MinTier: Tier1, MinMemoryMB: 64, DegradeMemoryMB: 128, Priority: 18},
 }
 
@@ -156,6 +158,7 @@ func (fg *FeatureGate) reassessAll() {
 		FeatureQLoRA,
 		FeaturePRMTraining,
 		FeatureGraphRAGFull,
+		FeatureDeepRAG,
 		FeatureLogicCollapse, // depends on FeatureL2Sandbox
 		// Layer 2 — depends on local inference
 		FeatureLargeLocalLLM,   // depends on FeatureLocalInference
@@ -283,12 +286,14 @@ func (fg *FeatureGate) DegradationOrder() []Feature {
 		FeatureLargeLocalLLM,   // 55: 7B+ models
 		FeatureQLoRA,           // 50: gradient training
 		FeatureActivationSteer, // 48: hidden_state injection
+		FeatureDeepRAG,         // 45: Three-stage Deep RAG
 		FeatureLogicCollapse,   // 42: TinyGo compile
 		FeatureGraphRAGFull,    // 40: Leiden + KuzuDB
 		FeatureComputerUseGUI,  // 38: VLM + screen control
 		FeaturePresidioPII,     // 36: NER sidecar
 		FeatureL3Sandbox,       // 30: microVM
 		FeatureLocalInference,  // 20: local model
+		FeatureOTelExporter,    // 18: OTel exporter
 		FeatureWebUI,           // 15: Web dashboard
 		FeatureLocalSTT,        // 12: 本地 STT（sherpa-onnx）
 		FeatureLocalEmbedding,  // 10: embedding model

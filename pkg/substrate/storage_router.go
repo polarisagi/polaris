@@ -2,7 +2,9 @@ package substrate
 
 import (
 	"context"
+	"database/sql"
 
+	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -58,6 +60,17 @@ func NewStorageRouter(sqlite protocol.Store, surreal protocol.Store) *StorageRou
 		rules:    rules,
 		fallback: sqlite,
 	}
+}
+
+// GetPrimary returns the raw *sql.DB handle of the primary (fallback) store, if available.
+func (sr *StorageRouter) GetPrimary() (*sql.DB, error) {
+	type dbProvider interface {
+		DB() *sql.DB
+	}
+	if p, ok := sr.fallback.(dbProvider); ok {
+		return p.DB(), nil
+	}
+	return nil, perrors.New(perrors.CodeInternal, "primary store does not support direct DB access")
 }
 
 // BuildRouteTable 生成路由规则表。

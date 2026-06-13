@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content_hash       TEXT    NOT NULL DEFAULT '',
     -- 向量嵌入版本（inv_M5_03）：空字符串=未索引，OnlineReindexer 触发条件
     embed_model_version TEXT   NOT NULL DEFAULT '',
+    chunk_type         TEXT    NOT NULL DEFAULT 'leaf',
+    chunk_index        INTEGER NOT NULL DEFAULT 0,
     created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 

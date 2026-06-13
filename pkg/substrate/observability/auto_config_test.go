@@ -386,8 +386,9 @@ func TestFeatureGate_DegradationOrder_Complete(t *testing.T) {
 	fg := NewFeatureGate(hp, guard)
 
 	order := fg.DegradationOrder()
-	if len(order) != 15 {
-		t.Errorf("DegradationOrder length: got %d, want 15", len(order))
+	expectedLen := len(featureRules)
+	if len(order) != expectedLen {
+		t.Errorf("DegradationOrder length: got %d, want %d", len(order), expectedLen)
 	}
 	// PRM should be first to degrade
 	if order[0] != FeaturePRMTraining {

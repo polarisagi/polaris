@@ -84,6 +84,8 @@ type Chunk struct {
 	ChunkSeq          int    `json:"chunk_seq"`
 	ContentHash       string `json:"content_hash"`
 	EmbedModelVersion string `json:"embed_model_version"`
+	ChunkType         string `json:"chunk_type"`
+	ChunkIndex        int    `json:"chunk_index"`
 }
 
 // Entity is a node in the knowledge graph extracted from documents.
@@ -119,6 +121,7 @@ type SearchQuery struct {
 	Embedding []float64 `json:"embedding,omitempty"`
 	TopK      int       `json:"top_k"`
 	Strategy  string    `json:"strategy"` // "hybrid" | "graph" | "fts" | "vector"
+	DocScope  string    `json:"doc_scope"`
 }
 
 // IngestionPipeline processes documents into the knowledge index.
@@ -133,4 +136,27 @@ type GraphRAG interface {
 	DetectCommunities(ctx context.Context) error
 	GlobalSearch(ctx context.Context, query string) ([]Chunk, error)
 	LocalSearch(ctx context.Context, query string, entityID string) ([]Chunk, error)
+}
+
+// AugmentedContext 是 ContextExpander 的输出，包含叶块及其上下文。
+type AugmentedContext struct {
+	Primary     Chunk  // 命中的 LeafChunk
+	Parent      *Chunk // 父块（ParentChunk），nil 表示已是顶层
+	PrevSibling *Chunk // 前一个兄弟 LeafChunk，nil 表示无
+	NextSibling *Chunk // 后一个兄弟 LeafChunk，nil 表示无
+}
+
+// SubQuery 是 QueryPlanner 分解出的子查询。
+type SubQuery struct {
+	Text        string  // 子查询文本
+	TargetScope string  // 检索范围（docID 或 ""=全局）
+	Weight      float64 // 合并时的权重（0~1，归一化后使用）
+}
+
+// KnowledgeBaseSearchRequest 是 KnowledgeBase.Search 的统一入口参数。
+type KnowledgeBaseSearchRequest struct {
+	Query    string
+	TopK     int
+	DocScope string // 限定检索范围（docID），"" 表示全局
+	TaintMax int    // 最高允许的 TaintLevel
 }
