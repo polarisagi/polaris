@@ -22,6 +22,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // ─── CircuitBreaker ────────────────────────────────────────────────────────────
@@ -415,6 +416,18 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, o
 		// Failover: 尝试次优 Provider
 		return ir.failover(ctx, msgs, opts, req, entry.name)
 	}
+	// M3 埋点：LLM 调用成功后记录指标
+	if resp != nil {
+		caps := entry.provider.Capabilities()
+		costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
+			float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
+			float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+		observability.RecordLLMCall(ctx,
+			entry.name, resp.Model, "success", ms,
+			resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
+			costUSD,
+		)
+	}
 	return resp, nil
 }
 
@@ -538,6 +551,7 @@ func (ir *InferenceRouter) Tokenizer() protocol.TokenizerAdapter {
 }
 
 func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message, opts []protocol.InferOption, req *protocol.InferRequest, skip string) (*protocol.ProviderResponse, error) {
+	start := time.Now()
 	ir.registry.mu.RLock()
 	defer ir.registry.mu.RUnlock()
 	bestScore := -1.0
@@ -573,6 +587,17 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message
 			fn(name)
 		}
 	})
+	if err == nil && resp != nil {
+		caps := chosen.provider.Capabilities()
+		costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
+			float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
+			float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+		observability.RecordLLMCall(ctx,
+			chosen.name, resp.Model, "failover", float64(time.Since(start).Milliseconds()),
+			resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
+			costUSD,
+		)
+	}
 	return resp, err
 }
 

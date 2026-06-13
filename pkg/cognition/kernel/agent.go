@@ -135,6 +135,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			// 终态检查
 			current := a.sm.Current()
 			if current == protocol.AgentStateComplete || current == protocol.AgentStateFailed {
+				// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）
+				observability.RecordTaskOutcome(ctx, current == protocol.AgentStateComplete)
 				return nil
 			}
 

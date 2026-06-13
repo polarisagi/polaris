@@ -111,7 +111,19 @@ func (s *InProcessSandbox) Unregister(toolName string) {
 	delete(s.taintMap, toolName)
 }
 
-func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol.ToolResult, error) {
+func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (result *protocol.ToolResult, runErr error) {
+	start := time.Now()
+	tierLabel := observability.SandboxTierLabel(int(spec.SandboxTier))
+	defer func() {
+		latencyMs := float64(time.Since(start).Milliseconds())
+		status := "success"
+		if runErr != nil {
+			status = "error"
+		}
+		observability.RecordToolCall(ctx, spec.ToolName, status, tierLabel, latencyMs)
+		observability.RecordSandboxExecution(ctx, tierLabel)
+	}()
+
 	s.mu.RLock()
 	fn, ok := s.registry[spec.ToolName]
 	richFn := s.richRegistry[spec.ToolName]
@@ -124,8 +136,6 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 	}
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(quotaMs)*time.Millisecond)
 	defer cancel()
-
-	start := time.Now()
 
 	// 优先走富工具路径（MCP 等可返回 ImageParts 的工具）
 	if richFn != nil {
