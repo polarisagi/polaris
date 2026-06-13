@@ -401,10 +401,15 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 
 	// L3: LLM 看门狗校验 (上提为标准 FSM Effect)
 	// 仅对 Tier 1+ 生效
-	if vCtx.SystemTier >= 1 && a.provider != nil && vCtx.Plan != nil {
+	if vCtx.SystemTier >= 1 && a.provider != nil && vCtx.Plan != nil { //nolint:nestif
 		var dangerous []string
 		for _, node := range vCtx.Plan.Nodes {
-			if !isReadOnlyTool(node.ToolName, a.toolRegistry) {
+			tool, err := a.toolRegistry.Lookup(node.ToolName)
+			if err != nil {
+				continue
+			}
+			// L3 仅针对 RiskPrivileged 节点，非只读但低风险节点已由 L1/L2 覆盖
+			if tool.RiskLevel == protocol.RiskPrivileged {
 				dangerous = append(dangerous, fmt.Sprintf("Tool: %s, Args: %s", node.ToolName, string(node.Args)))
 			}
 		}
