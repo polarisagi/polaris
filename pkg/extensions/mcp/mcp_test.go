@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -98,6 +99,18 @@ func TestMCPManager_CallTool_ServerNotFound(t *testing.T) {
 	_, err := m.CallTool(context.Background(), "nonexistent-server", "some_tool", nil)
 	if err == nil {
 		t.Fatal("calling tool on non-existent server should return error")
+	}
+}
+
+func TestMCPManager_CallTool_PolicyNil(t *testing.T) {
+	m := NewMCPManager(nil, nil, nil)
+	m.entries["fake-server"] = &mcpEntry{}
+	_, err := m.CallTool(context.Background(), "fake-server", "some_tool", nil)
+	if err == nil {
+		t.Fatal("expected error when policy is nil")
+	}
+	if !strings.Contains(err.Error(), "policy gate not initialized") {
+		t.Fatalf("expected fail-closed policy error, got: %v", err)
 	}
 }
 

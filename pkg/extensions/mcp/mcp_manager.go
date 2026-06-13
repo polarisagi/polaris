@@ -146,24 +146,26 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 	}
 
 	// PolicyGate: deny-by-default，与 ToolRegistry 路径保持一致
-	if m.policy != nil {
-		tl := 2 // MCP Server 信任等级（社区级别）
-		if e.cfg.Trusted {
-			tl = 3 // 白名单 MCP Server 提升信任等级
+	if m.policy == nil {
+		return "", perrors.New(perrors.CodeInternal,
+			"mcp_manager: policy gate not initialized, refusing tool call (fail-closed)")
+	}
+	tl := 2 // MCP Server 信任等级（社区级别）
+	if e.cfg.Trusted {
+		tl = 3 // 白名单 MCP Server 提升信任等级
+	}
+	allowed, pErr := m.policy.IsAuthorized(ctx, "agent", "tool_execute",
+		serverID+":"+toolName,
+		map[string]any{
+			"tool_source": "mcp",
+			"trust_level": tl,
+		})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
 		}
-		allowed, pErr := m.policy.IsAuthorized(ctx, "agent", "tool_execute",
-			serverID+":"+toolName,
-			map[string]any{
-				"tool_source": "mcp",
-				"trust_level": tl,
-			})
-		if pErr != nil || !allowed {
-			reason := "policy denied"
-			if pErr != nil {
-				reason = pErr.Error()
-			}
-			return "", perrors.New(perrors.CodeForbidden, fmt.Sprintf("mcp_manager: policy blocked %s: %s", toolName, reason))
-		}
+		return "", perrors.New(perrors.CodeForbidden, fmt.Sprintf("mcp_manager: policy blocked %s: %s", toolName, reason))
 	}
 
 	text, _, _, err := e.client.CallToolTainted(ctx, toolName, args)
