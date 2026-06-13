@@ -89,7 +89,7 @@ func TestBuildPerceiveContext(t *testing.T) {
 		// buildPerceiveContext 会用占位检索词去检索。
 	}
 
-	msgs, err := buildPerceiveContext(context.Background(), mem, sCtx)
+	msgs, err := buildPerceiveContext(context.Background(), mem, sCtx, nil)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

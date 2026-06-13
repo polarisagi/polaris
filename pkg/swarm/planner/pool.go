@@ -124,7 +124,7 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	}
 	defer os.RemoveAll(tmpDir)
 
-	testFile := filepath.Join(tmpDir, "patch_test.go")
+	testFile := filepath.Join(tmpDir, "patch_gen.go")
 	_ = os.WriteFile(testFile, []byte(patchStr), 0600)
 
 	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)

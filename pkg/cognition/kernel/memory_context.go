@@ -11,11 +11,27 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
+// CognitiveSearcher L2 语义检索接口（消费方定义，防止包循环）。
+// 实现由上层注入（pkg/cognition 层调用方提供 SurrealDBCoreStore）。
+type CognitiveSearcher interface {
+	// FTSSearch BM25 全文检索，返回 top-k 结果（docID + snippet）。
+	FTSSearch(query string, k int) ([]CogResult, error)
+	// VecKNN 向量近邻检索，embedding 为查询向量，k 为返回数量。
+	VecKNN(embedding []float32, k int) ([]CogResult, error)
+}
+
+// CogResult 单条语义检索结果。
+type CogResult struct {
+	DocID   string
+	Score   float64
+	Snippet string
+}
+
 // buildPerceiveContext 基于当前状态上下文（包含用户的原始任务描述/Intent）
 // 从 EpisodicMemory、ReflectionMemory 与 WorkingMemory 组装感知阶段所需的 LLM 提示词。
 // M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
 func buildPerceiveContext( //nolint:gocyclo
-	ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]protocol.Message, error) {
+	ctx context.Context, memory protocol.Memory, sCtx *StateContext, cognitive CognitiveSearcher) ([]protocol.Message, error) {
 	if memory == nil {
 		return []protocol.Message{
 			{Role: "system", Content: "Structure the user intent into a TaskModel JSON."},
@@ -70,7 +86,21 @@ func buildPerceiveContext( //nolint:gocyclo
 		}
 	}
 
-	// 4. 组装上下文
+	// 4. L2 语义记忆（SurrealDB FTSSearch，Memory Agent 蒸馏写入）
+	var semanticCtx string
+	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
+		ftsResults, err := cognitive.FTSSearch(sCtx.TaskModel.Goal, 5)
+		if err == nil && len(ftsResults) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Semantic Memory (L2):\n")
+			for _, r := range ftsResults {
+				sb.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+			}
+			semanticCtx = sb.String()
+		}
+	}
+
+	// 5. 组装上下文
 	baseContent := "Structure the user intent into a TaskModel JSON.\n\n"
 	if whisperCtx != "" {
 		baseContent += whisperCtx + "\n"
@@ -83,6 +113,9 @@ func buildPerceiveContext( //nolint:gocyclo
 	}
 	if episodicCtx != "" {
 		baseContent += episodicCtx + "\n"
+	}
+	if semanticCtx != "" {
+		baseContent += semanticCtx + "\n"
 	}
 	if sCtx.InstalledExtensionsInfo != "" {
 		baseContent += sCtx.InstalledExtensionsInfo + "\n\n"
@@ -103,7 +136,7 @@ func buildPerceiveContext( //nolint:gocyclo
 // 从 Memory 系统组装生成 DAG 计划所需的 LLM 提示词。
 // tools 为 nil 时跳过工具注入（测试环境）。
 func buildPlanContext( //nolint:gocyclo
-	ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry) ([]protocol.Message, error) {
+	ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry, cognitive CognitiveSearcher) ([]protocol.Message, error) {
 	if memory == nil {
 		return []protocol.Message{
 			{Role: "system", Content: "Generate an execution DAG based on the TaskModel."},
@@ -148,12 +181,31 @@ func buildPlanContext( //nolint:gocyclo
 		}
 	}
 
+	// 4. L2 语义记忆（SurrealDB FTSSearch）
+	var semanticCtx string
+	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
+		queryTopic := sCtx.TaskModel.Goal
+		ftsResults, err := cognitive.FTSSearch(queryTopic, 5)
+		if err == nil && len(ftsResults) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Semantic Memory (L2):\n")
+			for _, r := range ftsResults {
+				sb.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+			}
+			semanticCtx = sb.String()
+		}
+	}
+
+	// 5. 组装系统提示词
 	baseContent := "Generate an execution DAG based on the TaskModel.\n\n"
 	if reflectionCtx != "" {
 		baseContent += reflectionCtx + "\n"
 	}
 	if episodicCtx != "" {
 		baseContent += episodicCtx + "\n"
+	}
+	if semanticCtx != "" {
+		baseContent += semanticCtx + "\n"
 	}
 
 	if sCtx.TaskModel != nil {

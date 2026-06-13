@@ -96,6 +96,9 @@ type StateContext struct {
 
 	// InstalledExtensionsInfo 包含当前系统已安装的扩展清单
 	InstalledExtensionsInfo string
+
+	// Cognitive 语义检索接口（L2）
+	Cognitive CognitiveSearcher
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
@@ -278,7 +281,7 @@ func (sm *StateMachine) add(t Transition) {
 func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateContext) []protocol.Message {
 	// 有记忆系统时注入历史事件（Episodic 相关任务 + ReasoningState 跨轮持久化）
 	if pCtx.Mem != nil {
-		if msgs, err := buildPerceiveContext(sm.bgCtx(), pCtx.Mem, sCtx); err == nil {
+		if msgs, err := buildPerceiveContext(sm.bgCtx(), pCtx.Mem, sCtx, sCtx.Cognitive); err == nil {
 			return msgs
 		}
 	}
@@ -311,7 +314,7 @@ func (sm *StateMachine) onPerceiveFailure(sCtx protocol.StateContext, err error)
 func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContext) []protocol.Message {
 	// 有记忆系统时注入历史执行经验（Episodic Top-5 + 任务目标 + 工具列表）
 	if pCtx.Mem != nil {
-		if msgs, err := buildPlanContext(sm.bgCtx(), pCtx.Mem, sCtx, pCtx.Tools); err == nil {
+		if msgs, err := buildPlanContext(sm.bgCtx(), pCtx.Mem, sCtx, pCtx.Tools, sCtx.Cognitive); err == nil {
 			return msgs
 		}
 	}

@@ -218,7 +218,24 @@ func (a *Agent) SetTaskIntent(intent []byte) {
 		"task_intent_input",
 	)
 
-	a.sCtx.SurpriseIndex = observability.GlobalSurpriseIndex.ComputeBasic(context.Background(), nil, []string{"intent"})
+	{
+		var goalStr string
+		if a.sCtx.TaskModel != nil {
+			goalStr = a.sCtx.TaskModel.Goal
+		} else {
+			goalStr = a.sCtx.RawIntentTS.Content()
+		}
+		goalWords := strings.Fields(goalStr)
+		if len(goalWords) > 8 {
+			goalWords = goalWords[:8]
+		}
+		toolSeq := append([]string{"intent"}, goalWords...)
+		a.sCtx.SurpriseIndex = observability.GlobalSurpriseIndex.ComputeBasic(
+			context.Background(),
+			nil,
+			toolSeq,
+		)
+	}
 }
 
 // GetExecuteResult 获取执行成果（供 M8 Orchestrator 写回黑板）。
