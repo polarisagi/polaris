@@ -128,7 +128,7 @@ func TestInferenceRouter_HealthScorePreference(t *testing.T) {
 }
 
 func TestClearString(t *testing.T) {
-	s := "secret-api-key-12345"
+	s := strings.Clone("secret-api-key-12345")
 	clearString(&s)
 	if s != "" {
 		t.Fatal("clearString should empty the string")

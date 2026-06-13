@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"runtime"
+	"runtime/metrics"
 	"sync"
 	"sync/atomic"
 
@@ -128,9 +129,15 @@ func registerObservableGauges(meter metric.Meter) {
 		// goroutines & memory：直接从 runtime 读取，无额外 goroutine
 		o.ObserveFloat64(goroutinesGauge, float64(runtime.NumGoroutine()))
 
-		var ms runtime.MemStats
-		runtime.ReadMemStats(&ms)
-		o.ObserveFloat64(memAllocMBGauge, float64(ms.HeapAlloc)/1024.0/1024.0)
+		samples := []metrics.Sample{
+			{Name: "/memory/classes/heap/objects:bytes"},
+		}
+		metrics.Read(samples)
+		heapBytes := uint64(0)
+		if samples[0].Value.Kind() == metrics.KindUint64 {
+			heapBytes = samples[0].Value.Uint64()
+		}
+		o.ObserveFloat64(memAllocMBGauge, float64(heapBytes)/1024.0/1024.0)
 
 		// agents active（外部通过 SetActiveAgents 更新）
 		o.ObserveFloat64(agentsActiveGauge, float64(activeAgentsCount.Load()))

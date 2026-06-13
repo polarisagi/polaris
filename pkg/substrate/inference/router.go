@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
@@ -413,6 +414,10 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, o
 		}
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// ctx 已取消或超时，不发起 failover（节省 Token 和 goroutine）
+			return nil, err
+		}
 		// Failover: 尝试次优 Provider
 		return ir.failover(ctx, msgs, opts, req, entry.name)
 	}
@@ -467,6 +472,10 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []protocol.Mess
 		}
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// ctx 已取消或超时，不发起 failover（节省 Token 和 goroutine）
+			return nil, err
+		}
 		// Failover: 尝试次优 Provider
 		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
 	}
@@ -603,9 +612,14 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
-// clearString API Key 使用后归零（防止 heap dump 泄漏敏感数据）。
+// clearString API Key 使用后原地清零（防止 heap dump 泄漏敏感数据）。
+// 使用 unsafe.StringData + unsafe.Slice 直接操作底层字节（Go 1.20+）。
 func clearString(s *string) {
-	b := []byte(*s)
+	if len(*s) == 0 {
+		return
+	}
+	// 取底层数组指针并以 byte slice 视图覆写，不产生副本
+	b := unsafe.Slice(unsafe.StringData(*s), len(*s))
 	for i := range b {
 		b[i] = 0
 	}
