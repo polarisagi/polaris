@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,12 +135,23 @@ func TestClearString(t *testing.T) {
 }
 
 type mockOutboxWriter struct {
+	mu      sync.Mutex
 	entries []protocol.OutboxEntry
 }
 
 func (m *mockOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.entries = append(m.entries, entry)
 	return nil
+}
+
+func (m *mockOutboxWriter) getEntries() []protocol.OutboxEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make([]protocol.OutboxEntry, len(m.entries))
+	copy(res, m.entries)
+	return res
 }
 
 func TestCircuitBreaker_OnRecovery(t *testing.T) {
@@ -168,13 +180,14 @@ func TestCircuitBreaker_OnRecovery(t *testing.T) {
 
 	// 等待异步回调执行
 	time.Sleep(50 * time.Millisecond)
+	entries := outbox.getEntries()
 
-	if len(outbox.entries) == 0 {
+	if len(entries) == 0 {
 		t.Fatal("expected outbox entry to be created on recovery")
 	}
 
 	found := false
-	for _, evt := range outbox.entries {
+	for _, evt := range entries {
 		if evt.Operation == "provider_recovery" {
 			found = true
 			if !strings.Contains(string(evt.Payload), "m4_provider_recovery") {
