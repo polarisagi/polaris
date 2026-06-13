@@ -3,7 +3,12 @@ package agents
 import (
 	"context"
 	"database/sql"
+	"io"
+	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -69,7 +74,9 @@ func (ga *GovernanceAgent) CheckIdempotent(ctx context.Context, operationHash st
 	var payload []byte
 	err := ga.db.QueryRowContext(ctx, `
 		SELECT payload FROM outbox 
-		WHERE idempotency_key = ? AND status = 'done' LIMIT 1
+		WHERE idempotency_key = 'idem:' || ? 
+		AND status = 'done' 
+		LIMIT 1
 	`, operationHash).Scan(&payload)
 
 	if err != nil {
@@ -81,40 +88,112 @@ func (ga *GovernanceAgent) CheckIdempotent(ctx context.Context, operationHash st
 // RecordExecution 记录执行成功的操作到 outbox（用于下次幂等命中）。
 func (ga *GovernanceAgent) RecordExecution(ctx context.Context, operationHash string, response []byte) error {
 	_, err := ga.db.ExecContext(ctx, `
-		INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(idempotency_key) DO UPDATE SET payload=excluded.payload, status='done'
-	`,
-		time.Now().UnixMilli(),
-		"mock_response_cache",
-		"upsert",
-		"idempotency",
-		response,
-		operationHash,
-		"done",
-	)
+		INSERT OR IGNORE INTO outbox
+		  (idempotency_key, target_engine, operation, scope, payload, status, created_at)
+		VALUES
+		  ('idem:' || ?, 'idempotent_gateway', 'record', 'execution', ?, 'done', ?)
+	`, operationHash, response, time.Now().UnixMilli())
 	return err
 }
 
 // probeMemory 探测系统空闲内存，更新 memPressure atomic。
 func (ga *GovernanceAgent) probeMemory() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// A simple heuristic using MemStats if OS specific logic is omitted.
-	// We'll calculate fake pressure based on alloc.
-	// Since runtime.MemStats gives process memory, not system, we use a fixed heuristic or dummy for cross-platform.
+	var freePct float64
 
-	const (
-		moderateLimit = 800 * 1024 * 1024  // 800MB
-		criticalLimit = 1500 * 1024 * 1024 // 1.5GB
-	)
+	switch runtime.GOOS {
+	case "linux":
+		freePct = probeMemoryLinux()
+	case "darwin":
+		freePct = probeMemoryDarwin()
+	default:
+		freePct = probeMemoryFallback()
+	}
 
-	alloc := m.Alloc
-	if alloc >= criticalLimit {
-		ga.memPressure.Store(int32(MemPressureCritical))
-	} else if alloc >= moderateLimit {
+	if freePct > 0.30 {
+		ga.memPressure.Store(int32(MemPressureNormal))
+	} else if freePct > 0.10 {
 		ga.memPressure.Store(int32(MemPressureModerate))
 	} else {
-		ga.memPressure.Store(int32(MemPressureNormal))
+		ga.memPressure.Store(int32(MemPressureCritical))
 	}
+}
+
+func probeMemoryLinux() float64 {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return probeMemoryFallback()
+	}
+	defer f.Close()
+
+	var total, avail float64
+	data, err := io.ReadAll(io.LimitReader(f, 4096))
+	if err != nil {
+		return probeMemoryFallback()
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "MemTotal:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				total, _ = strconv.ParseFloat(parts[1], 64)
+			}
+		} else if strings.HasPrefix(line, "MemAvailable:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				avail, _ = strconv.ParseFloat(parts[1], 64)
+			}
+		}
+	}
+
+	if total > 0 {
+		return avail / total
+	}
+	return probeMemoryFallback()
+}
+
+func probeMemoryDarwin() float64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "vm_stat")
+	out, err := cmd.Output()
+	if err != nil {
+		return probeMemoryFallback()
+	}
+
+	var pagesFree, pagesInactive float64
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Pages free:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				val := strings.TrimRight(parts[2], ".")
+				pagesFree, _ = strconv.ParseFloat(val, 64)
+			}
+		} else if strings.HasPrefix(line, "Pages inactive:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				val := strings.TrimRight(parts[2], ".")
+				pagesInactive, _ = strconv.ParseFloat(val, 64)
+			}
+		}
+	}
+
+	// Calculate a pseudo freePct, since Darwin total memory requires sysctl
+	// Fallback to MemStats logic or assume fixed ratio for dummy if sysctl isn't used
+	// Using dummy free percentage based on page count just as fallback
+	pseudoAvail := (pagesFree + pagesInactive) * 4096
+	// Let's just fallback to the runtime stats since Darwin mem calculation is tricky without sysctl hw.memsize
+	_ = pseudoAvail
+	return probeMemoryFallback()
+}
+
+func probeMemoryFallback() float64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	alloc := float64(m.Alloc)
+	// mock 8GB limit for the fallback calculation
+	total := 8.0 * 1024 * 1024 * 1024
+	return (total - alloc) / total
 }

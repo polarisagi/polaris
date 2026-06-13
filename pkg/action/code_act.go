@@ -30,6 +30,21 @@ type CodeAct struct {
 	sandbox    SandboxProvider
 	policyGate protocol.PolicyGate
 	toolExec   protocol.ToolExecutor
+	govAgent   govAgent // 可选的安全校验网关
+}
+
+type govAgent interface {
+	ValidateCode(language string, code []byte, caps map[string]bool) error
+}
+
+// CodeActOption 定义初始化选项
+type CodeActOption func(*CodeAct)
+
+// WithGovernanceAgent 允许在初始化时注入治理守门人进行安全校验
+func WithGovernanceAgent(ga govAgent) CodeActOption {
+	return func(c *CodeAct) {
+		c.govAgent = ga
+	}
 }
 
 // CodeActRequest CodeAct 执行请求。
@@ -49,14 +64,16 @@ type CodeActResult struct {
 	LatencyMs int64
 }
 
-// NewCodeAct 创建 CodeAct 执行器。
-// sandbox 必须为 Level()>=3 的沙箱（ContainerSandbox），违反则在 Execute 时 fail-closed。
-func NewCodeAct(sandbox SandboxProvider, policyGate protocol.PolicyGate, toolExec protocol.ToolExecutor) *CodeAct {
-	return &CodeAct{
+func NewCodeAct(sandbox SandboxProvider, policyGate protocol.PolicyGate, toolExec protocol.ToolExecutor, opts ...CodeActOption) *CodeAct {
+	ca := &CodeAct{
 		sandbox:    sandbox,
 		policyGate: policyGate,
 		toolExec:   toolExec,
 	}
+	for _, opt := range opts {
+		opt(ca)
+	}
+	return ca
 }
 
 // validateExecuteRequest 抽离出的校验逻辑
@@ -99,6 +116,14 @@ func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActReques
 		}
 		return perrors.New(perrors.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", lvl))
 	}
+	if ca.govAgent != nil {
+		// Mock capability check
+		caps := map[string]bool{}
+		if err := ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

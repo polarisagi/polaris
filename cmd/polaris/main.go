@@ -383,9 +383,8 @@ func run() error { //nolint:gocyclo
 		containerSandbox = action.NewContainerSandbox(autoConf.Config.L3SandboxBackend, runtime.GOOS, autoConf.Config.Tier)
 		slog.Info("polaris: L3 container sandbox initialized", "backend", autoConf.Config.L3SandboxBackend)
 	}
-	mockProxy := action.NewMockProxy(store.DB())
 	inProcSandbox := action.NewInProcessSandbox()
-	wasmtimeSandbox := tool.NewWasmtimeSandbox(layout.Workspace, mockProxy)
+	wasmtimeSandbox := tool.NewWasmtimeSandbox(layout.Workspace)
 	// 内置工具直接信任，走 InProcess；Wasm 走 Wasmtime；LLM 生成代码/插件脚本走 Container 隔离。
 	sandboxRouter := action.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, cfg.System.Tier)
 	slog.Info("polaris: sandbox router initialized", "os", runtime.GOOS, "tier", cfg.System.Tier)
@@ -442,13 +441,10 @@ func run() error { //nolint:gocyclo
 		}
 		return "", nil
 	}
-	vfsLoader := func(vfsID string) ([]byte, error) { return []byte{}, nil }
-	vfsWriter := func(vfsID string, data []byte) error { return nil }
-
-	semanticCompressHandler := agents.NewSemanticCompressHandler(mem.Semantic(), llmInfer, vfsLoader, vfsWriter)
+	semanticCompressHandler := agents.NewSemanticCompressHandler(store.DB(), llmInfer, "~/.polarisagi/polaris/data/vfs/")
 	outboxWorker.RegisterHandler("semantic_compress", semanticCompressHandler.Handle)
 
-	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler(llmInfer, dummySurreal{})
+	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler(store.DB(), dummySurreal{}, llmInfer, nil)
 	outboxWorker.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
 	slog.Info("polaris: SemanticCompressHandler and ExtensionLibrarianHandler registered")
 

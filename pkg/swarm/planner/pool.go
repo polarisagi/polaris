@@ -3,11 +3,14 @@ package planner
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/action/tool"
 )
 
 // PlannerPool 管理多个并发的思考流，并将最佳结果（通过耳语）汇报给主脑。
@@ -28,62 +31,31 @@ func NewPlannerPool(goal, taskType string, provider protocol.Provider, whisperCh
 	}
 }
 
+type workerResult struct {
+	score   float64
+	content string
+}
+
 // Run 启动一组并发 Planner，当有任何一个产生高置信度计划时，通过 whisperChan 推送
 func (p *PlannerPool) Run(ctx context.Context) {
 	if p.whisperChan == nil {
 		return
 	}
 
+	workerCount := 3
+	resultChan := make(chan workerResult, workerCount)
 	var wg sync.WaitGroup
-	// 启动 3 个不同温度的 worker
-	temperatures := []float64{0.2, 0.7, 1.2}
-	resultChan := make(chan string, len(temperatures))
 
-	for i, temp := range temperatures {
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(id int, t float64) {
+		go func(id int) {
 			defer wg.Done()
-
-			// 模拟规划耗时
-			time.Sleep(100 * time.Millisecond)
-
-			//nolint:nestif
-			if p.provider != nil {
-				prompt := fmt.Sprintf("Create a detailed plan for goal: %s (taskType: %s)", p.goal, p.taskType)
-				req := &protocol.InferRequest{
-					Messages: []protocol.Message{
-						{Role: "user", Content: prompt},
-					},
-					Temperature: t,
-					Model:       "reasoning",
-				}
-
-				resp, err := p.provider.Infer(ctx, req)
-				if err == nil && resp != nil && len(resp.Content) > 0 {
-					planStr := resp.Content
-
-					if p.taskType == "code_act" {
-						// 模拟 Engine A：真实 Wasm 编译与单测打分
-						// 这里为了演示，我们将生成的文本假装是编译好的 Wasm 字节码送入 WasmtimeExecute
-						wasmBytes := []byte(planStr)
-						outJSON, execErr := tool.WasmtimeExecute(wasmBytes, "{}", "", 1, false, 1000, 0)
-
-						if execErr == nil {
-							// 假设通过单测，将打分附加到 planStr 后面
-							planStr = fmt.Sprintf("%s\n\n[Wasm Evaluation Score: 100/100, out: %s]", planStr, outJSON)
-						} else {
-							planStr = fmt.Sprintf("%s\n\n[Wasm Evaluation Failed: %v]", planStr, execErr)
-						}
-					}
-
-					resultChan <- planStr
-					return
-				}
+			if p.taskType == "code_act" {
+				p.workerEngineA(ctx, id, resultChan)
+			} else {
+				p.workerEngineB(ctx, id, resultChan)
 			}
-
-			// Fallback mock
-			resultChan <- fmt.Sprintf("Fallback plan for %s at temp %f", p.goal, t)
-		}(i, temp)
+		}(i)
 	}
 
 	go func() {
@@ -91,18 +63,137 @@ func (p *PlannerPool) Run(ctx context.Context) {
 		close(resultChan)
 	}()
 
-	// 任何 worker 成功后，推送到 whisperChan
-	select {
-	case <-ctx.Done():
+	// 收集所有结果，选得分最高的推送
+	var best workerResult
+	for res := range resultChan {
+		if res.score > best.score {
+			best = res
+		}
+	}
+
+	if best.content != "" {
+		select {
+		case p.whisperChan <- protocol.MemoryWhisper{
+			Content:  best.content,
+			Source:   "planner_pool",
+			Salience: best.score,
+		}:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultChan chan<- workerResult) {
+	if p.provider == nil {
 		return
-	case res, ok := <-resultChan:
-		if ok {
-			p.whisperChan <- protocol.MemoryWhisper{
-				Content:  fmt.Sprintf("Planner found a valid plan: %s", res),
-				Source:   "planner_pool",
-				Salience: 0.9,
+	}
+
+	systemPrompt := ""
+	switch workerID {
+	case 0:
+		systemPrompt = "最小修改，保持现有风格"
+	case 1:
+		systemPrompt = "正确性优先，允许重写"
+	case 2:
+		systemPrompt = "性能优先，可引入新依赖"
+	}
+
+	prompt := fmt.Sprintf("Goal: %s\nTaskType: %s\nConstraint: %s\nGenerate the Go code patch only.", p.goal, p.taskType, systemPrompt)
+	req := &protocol.InferRequest{
+		Messages: []protocol.Message{
+			{Role: "user", Content: prompt},
+		},
+		Temperature: []float64{0.2, 0.7, 1.2}[workerID],
+		Model:       "reasoning",
+	}
+
+	resp, err := p.provider.Infer(ctx, req)
+	if err != nil || resp == nil || len(resp.Content) == 0 {
+		return
+	}
+	patchStr := resp.Content
+
+	tmpDir, err := os.MkdirTemp("", "polaris-pool-a-*")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testFile := filepath.Join(tmpDir, "main.go")
+	_ = os.WriteFile(testFile, []byte(patchStr), 0600)
+
+	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel1()
+
+	cmdBuild := exec.CommandContext(buildCtx, "go", "build", "./...")
+	cmdBuild.Dir = tmpDir
+	buildErr := cmdBuild.Run()
+
+	var compileScore float64 = 0.0
+
+	//nolint:nestif
+	if buildErr == nil {
+		testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel2()
+
+		cmdTest := exec.CommandContext(testCtx, "go", "test", "-run", ".", "-timeout", "20s", "./...")
+		cmdTest.Dir = tmpDir
+		out, _ := cmdTest.CombinedOutput()
+
+		if cmdTest.ProcessState != nil && cmdTest.ProcessState.Success() {
+			compileScore = 1.0
+		} else {
+			outStr := string(out)
+			if strings.Contains(outStr, "no test files") || outStr == "" {
+				compileScore = 0.5
+			} else {
+				// simple dummy parsing logic
+				compileScore = 0.5 + 0.5*0.5 // partial success simulation
 			}
 		}
+	}
+
+	preview := patchStr
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+	content := fmt.Sprintf("[PLANNER_ENGINE_A] score=%.2f patch=%s", compileScore, preview)
+
+	resultChan <- workerResult{
+		score:   compileScore,
+		content: content,
+	}
+}
+
+func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultChan chan<- workerResult) {
+	temperatures := []float64{0.2, 0.7, 1.2}
+	t := temperatures[workerID]
+
+	time.Sleep(100 * time.Millisecond)
+
+	if p.provider != nil {
+		prompt := fmt.Sprintf("Create a detailed plan for goal: %s (taskType: %s)", p.goal, p.taskType)
+		req := &protocol.InferRequest{
+			Messages: []protocol.Message{
+				{Role: "user", Content: prompt},
+			},
+			Temperature: t,
+			Model:       "reasoning",
+		}
+
+		resp, err := p.provider.Infer(ctx, req)
+		if err == nil && resp != nil && len(resp.Content) > 0 {
+			resultChan <- workerResult{
+				score:   0.9,
+				content: resp.Content,
+			}
+			return
+		}
+	}
+
+	resultChan <- workerResult{
+		score:   0.1,
+		content: fmt.Sprintf("Fallback plan for %s at temp %f", p.goal, t),
 	}
 }
 

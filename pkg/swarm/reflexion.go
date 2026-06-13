@@ -221,35 +221,73 @@ func (re *ReflexionEngine) replaySuccess(
 	replanCount int,
 ) (*Reflection, error) {
 	go func() {
-		// 模拟 AgentHER 成功轨迹异步提炼逻辑
-		if re.llmInfer != nil {
-			prompt := fmt.Sprintf("Analyze successful trajectory after %d replans. Extract insight.", replanCount)
-			insight, _ := re.llmInfer(context.Background(), prompt)
+		if re.llmInfer == nil {
+			return
+		}
 
-			if insight != "" && re.surreal != nil {
-				docID := taskID + "_her"
-				_ = re.surreal.FTSIndex(docID, insight)
-				_ = re.surreal.GraphRelate(taskType, "learned_from_failure", docID, float64(replanCount))
-			}
+		formattedTraj := formatTrajectory(trajectory)
+		prompt := fmt.Sprintf(`Analyze this successful trajectory that required %d replans.
+Extract the core pattern/insight of why it failed initially and how it eventually succeeded.
+Output strictly JSON:
+{
+  "insight": "The specific learned strategy",
+  "tags": ["tag1", "tag2"]
+}
+Trajectory:
+%s`, replanCount, formattedTraj)
 
-			if insight != "" && re.db != nil {
-				_, _ = re.db.ExecContext(context.Background(), `
-					INSERT INTO reflection_memory (task_id, reflection_type, content, created_at)
-					VALUES (?, ?, ?, ?)
-				`, taskID, "success_pattern", insight, time.Now().Unix())
-			}
+		insightJSON, err := re.llmInfer(context.Background(), prompt)
+		if err != nil {
+			return
+		}
+
+		var parsed struct {
+			Insight string   `json:"insight"`
+			Tags    []string `json:"tags"`
+		}
+		if err := json.Unmarshal([]byte(insightJSON), &parsed); err != nil {
+			return
+		}
+
+		if parsed.Insight == "" {
+			return
+		}
+
+		docID := "her_" + taskID
+		if re.surreal != nil {
+			_ = re.surreal.FTSIndex(docID, parsed.Insight+" "+fmt.Sprint(parsed.Tags))
+			_ = re.surreal.GraphRelate("task_type:"+taskType, "learned_pattern", docID, float64(replanCount))
+		}
+
+		if re.db != nil {
+			_, _ = re.db.ExecContext(context.Background(), `
+				INSERT OR IGNORE INTO reflection_memory 
+				  (task_id, reflection_type, content, created_at)
+				VALUES (?, 'success_pattern', ?, ?)
+			`, taskID, insightJSON, time.Now().Unix())
 		}
 	}()
+
 	return &Reflection{
-		TaskID:             taskID,
-		Cause:              "success_after_replan",
-		Counterfactual:     "",
-		GeneratedHeuristic: "",
-		CreatedAt:          time.Now().Unix(),
+		TaskID:    taskID,
+		Cause:     "success_after_replan",
+		CreatedAt: time.Now().Unix(),
 	}, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+func formatTrajectory(traj []Step) string {
+	var out string
+	for _, s := range traj {
+		status := "SUCCESS"
+		if !s.Success {
+			status = "FAILED"
+		}
+		out += fmt.Sprintf("Step %d: Action=%s, Result=%s, Status=%s\n", s.Index, s.Action, s.Result, status)
+	}
+	return out
+}
 
 // infer LLM 主路径 + 规则回退。
 // DeepSeek ¥1/1M tokens 使反思分析的经济成本可忽略。

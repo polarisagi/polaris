@@ -3,100 +3,90 @@ package action
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net"
 	"net/http"
-
-	"github.com/polarisagi/polaris/internal/protocol"
+	"sync"
 )
 
-// MockProxy 实现了 Dry-Run 模式下对工具请求的拦截与仿真响应。
-// 现在作为真实的 HTTP 代理服务器运行。
+// MockProxy 是 MCTS 试运行期间的本地 HTTP 代理服务器。
 type MockProxy struct {
-	db     *sql.DB
-	server *http.Server
-	addr   string
+	mockTable map[string]MockResponse
+	listener  net.Listener
+	mu        sync.RWMutex
+	server    *http.Server
 }
 
-func NewMockProxy(db *sql.DB) *MockProxy {
-	return &MockProxy{db: db}
+// MockResponse 单条 Mock 响应定义。
+type MockResponse struct {
+	StatusCode int               `json:"status_code"` // 默认 200
+	Body       json.RawMessage   `json:"body"`        // 响应体 JSON
+	Headers    map[string]string `json:"headers"`     // 可选响应头
 }
 
-// Start 启动 HTTP 代理服务器，监听随机可用端口。
-func (m *MockProxy) Start() error {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+// NewMockProxy 创建并启动 MockProxy，监听 127.0.0.1:0（动态端口）。
+// 返回 *MockProxy 和代理监听地址（如 "127.0.0.1:54321"）。
+func NewMockProxy(mockTable map[string]MockResponse) (*MockProxy, string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	m.addr = listener.Addr().String()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", m.handleProxyRequest)
-
-	m.server = &http.Server{Handler: mux}
+	mp := &MockProxy{mockTable: mockTable, listener: ln}
+	mp.server = &http.Server{Handler: mp}
 	go func() {
-		_ = m.server.Serve(listener)
+		_ = mp.server.Serve(ln)
 	}()
-
-	slog.Info("MockProxy HTTP server started", "addr", m.addr)
-	return nil
+	return mp, ln.Addr().String(), nil
 }
 
-// Stop 停止代理服务器
-func (m *MockProxy) Stop(ctx context.Context) error {
-	if m.server != nil {
-		return m.server.Shutdown(ctx)
-	}
-	return nil
-}
-
-// Addr 返回代理监听的地址 (例如 127.0.0.1:xxx)
-func (m *MockProxy) Addr() string {
-	return m.addr
-}
-
-func (m *MockProxy) handleProxyRequest(w http.ResponseWriter, r *http.Request) {
-	// 读取前1KB内容用于哈希
-	bodyBytes := make([]byte, 1024)
-	n, _ := io.ReadFull(r.Body, bodyBytes)
-	bodyBytes = bodyBytes[:n]
-
-	hashInput := r.Method + r.URL.String() + string(bodyBytes)
+// ServeHTTP 实现 http.Handler 接口，处理所有代理请求。
+func (mp *MockProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	hashInput := r.Method + " " + r.URL.String()
 	hash := sha256.Sum256([]byte(hashInput))
-	opHash := hex.EncodeToString(hash[:])[:32]
+	opHash := hex.EncodeToString(hash[:])[:16]
 
-	var mockBody string
-	var statusCode int
+	mp.mu.RLock()
+	resp, ok := mp.mockTable[opHash]
+	mp.mu.RUnlock()
 
-	err := m.db.QueryRow(`
-		SELECT response_body, status_code FROM mock_response_cache
-		WHERE operation_hash = ? LIMIT 1
-	`, opHash).Scan(&mockBody, &statusCode)
-
-	if err != nil {
-		// Cache miss
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error": "Mock miss"}`))
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"mocked": true}`))
 		return
 	}
 
-	w.WriteHeader(statusCode)
-	_, _ = w.Write([]byte(mockBody))
+	for k, v := range resp.Headers {
+		w.Header().Set(k, v)
+	}
+
+	status := resp.StatusCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	if len(resp.Body) > 0 {
+		_, _ = w.Write(resp.Body)
+	} else {
+		_, _ = w.Write([]byte(`{}`))
+	}
 }
 
-// Execute 拦截内部直接调用的工具调用，作为后备
-func (m *MockProxy) Execute(ctx context.Context, toolName string, args []byte) (*protocol.ToolResult, error) {
-	outMap := make(map[string]interface{})
-	outMap["mocked"] = true
-	outMap["tool"] = toolName
+// EnvVars 返回需要注入沙箱的环境变量。
+func (mp *MockProxy) EnvVars() map[string]string {
+	addr := mp.listener.Addr().String()
+	return map[string]string{
+		"HTTP_PROXY":  "http://" + addr,
+		"HTTPS_PROXY": "http://" + addr,
+		"NO_PROXY":    "",
+	}
+}
 
-	bytes, _ := json.Marshal(outMap)
-	return &protocol.ToolResult{
-		Success: true,
-		Output:  bytes,
-	}, nil
+// Close 优雅关闭代理服务器。
+func (mp *MockProxy) Close() error {
+	if mp.server != nil {
+		return mp.server.Shutdown(context.Background())
+	}
+	return nil
 }

@@ -2,7 +2,11 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -76,25 +80,27 @@ func (ma *MemoryAgent) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Check mem pressure
-			if ma.memPressure != nil && ma.memPressure.Load() >= 2 { // MemPressureCritical
-				// skip distillation
+			if ma.memPressure != nil && ma.memPressure.Load() >= 2 {
+				// 内存严重不足时跳过蒸馏，保护系统稳定性
 				continue
 			}
-			_ = ma.distill(ctx)
+			if err := ma.distill(ctx); err != nil {
+				slog.Error("memory_agent: distill failed", "err", err)
+			}
 		}
 	}
 }
 
 func (ma *MemoryAgent) distill(ctx context.Context) error {
-	// 找到需要降维/蒸馏的冷记录
-	cutoff := time.Now().Add(-ma.coldWindowAge).Unix()
+	distillCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-	rows, err := ma.db.QueryContext(ctx, `
-		SELECT id, content FROM episodic_events
-		WHERE cold = 0 AND timestamp < ?
-		ORDER BY timestamp ASC LIMIT 20
-	`, cutoff)
+	rows, err := ma.db.QueryContext(distillCtx, `
+		SELECT id, content FROM episodic_memory
+		WHERE json_extract(meta, '$.cold') = 1
+		AND distilled_at IS NULL
+		ORDER BY created_at ASC LIMIT 20
+	`)
 	if err != nil {
 		return err
 	}
@@ -110,27 +116,44 @@ func (ma *MemoryAgent) distill(ctx context.Context) error {
 			contents = append(contents, c)
 		}
 	}
-
 	if len(ids) == 0 {
 		return nil
 	}
 
-	// 模拟将 contents 合并发给 LLM 蒸馏
-	// 在实际实现中，会提取成 json，包含 (sub, pred, obj)
-	prompt := "Extract factual triples from the following memory:\n"
+	prompt := "以下是来自 AI Agent 执行日志的片段，请提取其中的事实三元组。\n" +
+		"每个三元组格式：{\"subject\": \"...\", \"predicate\": \"...\", \"object\": \"...\"}\n" +
+		"只输出 JSON 数组，不要任何解释。\n\n日志片段：\n"
 	for _, c := range contents {
 		prompt += c + "\n"
 	}
 
-	triplesJSON, err := ma.llmInfer(ctx, prompt)
-	if err == nil && len(triplesJSON) > 0 {
-		// 假装写入 SurrealDB
-		_ = ma.surreal.FTSIndex("distilled_memory", triplesJSON)
+	triplesJSON, err := ma.llmInfer(distillCtx, prompt)
+	if err != nil {
+		return err
 	}
 
-	// 更新为 cold = 1
+	var triples []struct {
+		Subject   string `json:"subject"`
+		Predicate string `json:"predicate"`
+		Object    string `json:"object"`
+	}
+	if err := json.Unmarshal([]byte(triplesJSON), &triples); err != nil {
+		slog.Warn("memory_agent: failed to unmarshal LLM output", "err", err)
+		// 仍然标记为处理完成，避免无限重试相同日志？这里按要求更新。
+	}
+
+	for _, t := range triples {
+		docID := "triple_" + fmt.Sprintf("%x", sha256.Sum256([]byte(t.Subject+t.Predicate+t.Object)))[:16]
+		_ = ma.surreal.FTSIndex(docID, t.Subject+" "+t.Predicate+" "+t.Object)
+		_ = ma.surreal.GraphRelate(t.Subject, t.Predicate, t.Object, 1.0)
+	}
+
+	now := time.Now().Unix()
 	for _, id := range ids {
-		_, _ = ma.db.ExecContext(ctx, "UPDATE episodic_events SET cold = 1 WHERE id = ?", id)
+		_, _ = ma.db.ExecContext(distillCtx, `
+			UPDATE episodic_memory SET meta = json_patch(meta, '{"distilled_at": `+fmt.Sprintf("%d", now)+`}')
+			WHERE id = ?
+		`, id)
 	}
 
 	return nil

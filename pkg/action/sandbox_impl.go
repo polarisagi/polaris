@@ -228,12 +228,23 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*protocol
 		return &protocol.ToolResult{Success: false, Error: fmt.Sprintf("ContainerSandbox: unknown backend %q", backend)}, nil
 	}
 
-	if spec.DryRunMode && spec.MockProxyEnv != "" {
+	if spec.DryRunMode {
+		mockTable := make(map[string]MockResponse) // 空 mock 表作为默认
+		proxy, proxyAddr, errProxy := NewMockProxy(mockTable)
+		if errProxy != nil {
+			return nil, perrors.Wrap(perrors.CodeInternal, "create mock proxy failed", errProxy)
+		}
+		defer proxy.Close()
+
 		env := cmd.Env
 		if env == nil {
 			env = os.Environ()
 		}
-		cmd.Env = append(env, "HTTP_PROXY="+spec.MockProxyEnv, "HTTPS_PROXY="+spec.MockProxyEnv)
+		for k, v := range proxy.EnvVars() {
+			env = append(env, k+"="+v)
+		}
+		cmd.Env = env
+		_ = proxyAddr // 用于日志
 	}
 
 	start := time.Now()
