@@ -3,7 +3,7 @@
 > 消费 `[Storage-SQLite]` + `[Storage-SurrealDB-Core]`，非独立存储 | Hybrid Search + GraphRAG | 增量索引 | 来源追踪
 > Go 检索流水线 + GraphRAG，Rust SurrealDB-Core FFI 侧车
 > `[Code-Package-Mapping]`: pkg/swarm/ | `[Module-Topology]`: M10 L2 | `[HE-Rule-5]` `[HE-Rule-6]`
-> **§跳读**: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:104 检索 / 3:186 增量索引 / 4:208 来源追踪 / 5:243 Reranking / 6:259 检索质量 / 7:265 数据流闭环 / 9:273 (SOFT)降级 / 10:291 跨模块契约
+> **§跳读**: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:33 摄入 / 2:106 检索 / 3:188 增量索引 / 4:210 来源追踪 / 5:245 Reranking / 6:261 检索质量 / 7:267 数据流闭环 / 9:275 (SOFT)降级 / 10:293 跨模块契约
 ## 0-bis. 职责边界
 
 | M10 **是** | M10 **不是** |
@@ -50,7 +50,9 @@
 **Plugin-driven Ingestion（长期架构目标）**:
 M10 长期方向是消费 `M13-bis Extension Registry` 中声明了 `capability: knowledge_provider` 的 Plugin（MCP 协议），将外部知识获取完全下放至插件沙箱（L2/L3），零信任边界。短期阶段 ObsidianConnector+SyncScheduler 作为 P0 内置 Connector 使用。
 
-**DocTree 持久化**: `PipelineImpl.Ingest` 将文档分块写入 `rag_chunks`（FTS5 支持）的同时，将 DocTree 结构序列化为 JSON 写入 `rag_docs` 表（uri 为主键，ON CONFLICT DO UPDATE 幂等）。
+**DocTree 持久化**: `PipelineImpl.Ingest` 将文档分块写入 `rag_chunks` SQLite 表（FTS5 支持）的同时，将 DocTree 序列化为 JSON 写入 `rag_docs` 表（uri 为主键，ON CONFLICT DO UPDATE 幂等）。
+
+> ⚠️ **当前实现偏差**：`DefaultIngestionPipeline.Ingest` 实际走 `StorageRouter.Route → BatchWrite`（KV Store），未写 SQLite `rag_chunks` 表，导致 FTS5 全文索引和 ContextExpander 无数据可读（P0 缺陷，ROUND17 修复中：改为 `INSERT INTO rag_chunks`）。
 
 **可观测性**: 同步延迟 >1800s → ALERT + 暂停非关键知识源。
 
@@ -128,7 +130,7 @@ HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 
 
 ### 2.3 StructuredNavigator (目录层)
 
-查询 embed 后在摘要索引搜索 top-20 候选，章节级权重×1.2 优于文档级，RelevanceScore<0.5 时 fallback 到文档根节点（全文搜索）。实现见 `pkg/swarm/knowledge/rag_impl.go` `StructuredNavigator`。**FeatureGate 门控**：`FeatureDeepRAG`（Tier 1+，≥16GB）；Tier 0 自动退化为全文搜索。
+查询在 `rag_chunks_fts`（FTS5）中搜索 `chunk_type='summary'` 的摘要块，取 BM25 rank 最高的 doc_id 定位目标文档，RelevanceScore<阈值时 fallback 全局全文搜索。**注**：`rag_chunks` 表无 `embedding` 字段，向量索引在 SurrealDB-Core；StructuredNavigator 使用 BM25 FTS5 而非向量搜索。实现见 `pkg/swarm/knowledge/rag_impl.go` `StructuredNavigator`。**FeatureGate 门控**：`FeatureDeepRAG`（Tier 1+，≥16GB）；Tier 0 自动退化为全文搜索。
 
 ### 2.4 QueryPlanner
 

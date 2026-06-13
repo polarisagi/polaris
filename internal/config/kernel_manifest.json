@@ -8,7 +8,7 @@
   "internal/config/thresholds.go": "23550b8e55d3f0783f35074bc2669a6fdbaa42c58b9dd71d3081862e261f45f9",
   "internal/config/trusted_publishers.go": "24404530cb4a373bb6e77c259d1d44d472b1a86cc0922adde68b18b215cf8104",
   "pkg/action/capability_token.go": "b5bca19d87bbd586a2d16acec39ab1e6a1130e5360ce35d9f2d593cc1bf8e5d9",
-  "pkg/action/code_act.go": "d919826eaccf423b65c2cef7c572817f16c4cbd3ad5dad84c11439654f0b2fad",
+  "pkg/action/code_act.go": "c4beaf9344dfb0cde4a6d2e60e4db388c974d22e16dcda0e150ca48d1766f9f3",
   "pkg/action/continuous_action.go": "902b430e1d0eb700b7d3d2d49b0734e85f1963d5299ed87ed1aa15d750c9526d",
   "pkg/action/display_server_xvfb.go": "5378bf8e2a5a4a474836a8e5726f60c0b7ef2280ab8922c69038f8d837ab00a2",
   "pkg/action/doc.go": "f15e0e8e082d2f941558ac138e877dd13defd26c1b60774bb5feff6ff7a418dd",

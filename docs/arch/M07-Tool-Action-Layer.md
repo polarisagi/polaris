@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:167 三级沙箱(CANONICAL) / 5:298 PolicyGate / 6:353 Capability / 7:370 动作扩展 / 8:502 Usage演化 / 12:543 (SOFT)降级 / 13:561 跨模块契约 / 14:581 Plugin / 15:623 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:167 三级沙箱(CANONICAL) / 5:298 PolicyGate / 6:353 Capability / 7:370 动作扩展 / 8:504 Usage演化 / 12:545 (SOFT)降级 / 13:563 跨模块契约 / 14:583 Plugin / 15:625 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -496,6 +496,8 @@ LLM 生成代码（CodeAct / LLMGenerated Wasm）在进入沙箱前须经 `Gover
 Layer 0/1 为同步卡口，失败直接阻断代码进入沙箱。Layer 2 为深度异步审计，仅在 L0/L1 通过后并发启动，不阻断热路径但审计结论必须在沙箱执行前到达（超时则 fail-closed）。
 
 实现见 `pkg/swarm/agents/governance_agent.go`、`pkg/swarm/agents/code_validator.go`、`pkg/swarm/agents/security_audit_agent.go`。
+
+> ⚠️ **当前实现偏差**：`pkg/action/code_act.go:119` 中 `govAgent` 以 `if ca.govAgent != nil` 守卫，nil 时跳过 `ValidateCode`（fail-open，违反 R1.14）。`sandbox` 和 `policyGate` 已 fail-closed；仅 `govAgent` 旁路（P0 缺陷，ROUND18 G1 修复中：改为 nil 时返回 `CodeInternal` 错误）。
 
 ---
 
