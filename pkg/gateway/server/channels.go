@@ -167,6 +167,7 @@ func (s *Server) handleWebhookReceive(w http.ResponseWriter, r *http.Request) {
 	// [P1修复] webhook body 读取缺少大小限制，恶意方可发送超大 payload 耗尽内存。
 	// 限制为 4MB：足够容纳所有平台的 webhook 消息，远低于 VFS 上传的 100MB。
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)

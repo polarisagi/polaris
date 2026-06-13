@@ -316,6 +316,9 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			defer r.Body.Close()
+		}
 		lrw := NewLoggingResponseWriter(w)
 		w = lrw
 
