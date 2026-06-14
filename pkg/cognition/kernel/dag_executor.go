@@ -71,6 +71,7 @@ type NodeResult struct {
 	NodeID    string
 	Output    []byte
 	LatencyMs int64
+	Suspended bool
 	Err       error
 }
 
@@ -279,7 +280,7 @@ func (e *DAGExecutor) executeNode(ctx context.Context, node ExecNode) NodeResult
 				if si > 0.7 {
 					return NodeResult{NodeID: node.ID, Err: perrors.New(perrors.CodeInternal, fmt.Sprintf("dynamic replanning: surprise index %.2f > 0.7", si))}
 				}
-				return NodeResult{NodeID: node.ID, Output: res.Output}
+				return NodeResult{NodeID: node.ID, Output: res.Output, Suspended: res.Suspended}
 			}
 		} else {
 			lastErr = err

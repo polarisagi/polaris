@@ -470,6 +470,8 @@ type ToolResult struct {
 	LatencyMs  int64
 	Error      string
 	TaintLevel TaintLevel
+	// Suspended 表示工具执行使当前任务挂起（如 spawn_planner）
+	Suspended bool
 	// ImageParts 工具执行返回的图片内容（MCP type="image" content block 等）。
 	// nil 表示无图片输出，现有工具无需修改。
 	// sse.go 将图片追加到 toolResultParts 切片，各适配器已天然支持 protocol.ImagePart。

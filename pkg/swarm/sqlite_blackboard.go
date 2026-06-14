@@ -34,12 +34,12 @@ const (
 	ReaperScanInterval = 1 * time.Second
 	MaxSpawnDepth      = 3 // inv_M8_06: 委托链深度 ≤3
 
-	statusPending = "pending"
-	statusClaimed = "claimed"
-	statusRunning = "running"
-	statusDone    = "done"
-	statusFailed  = "failed"
-	statusSuspend = "suspended"
+	statusPending   = "pending"
+	statusClaimed   = "claimed"
+	statusRunning   = "running"
+	statusDone      = "done"
+	statusFailed    = "failed"
+	statusSuspended = "suspended"
 )
 
 // SQLiteBlackboard 实现 protocol.Blackboard，以 SQLite 为持久化后端。
@@ -367,7 +367,7 @@ func (bb *SQLiteBlackboard) SuspendForHITL(ctx context.Context, taskID, agentID 
 		UPDATE tasks
 		SET status=?, expires_at=?, updated_at=datetime('now'), version=version+1
 		WHERE task_id=? AND claimed_by=? AND status=?`,
-		statusSuspend, expiresAt, taskID, agentID, statusRunning,
+		statusSuspended, expiresAt, taskID, agentID, statusRunning,
 	)
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "blackboard.SuspendForHITL", err)
@@ -404,7 +404,7 @@ func (bb *SQLiteBlackboard) ResumeFromHITL(ctx context.Context, taskID, agentID 
 		UPDATE tasks
 		SET status=?, expires_at=?, updated_at=datetime('now'), version=version+1
 		WHERE task_id=? AND claimed_by=? AND status=?`,
-		newStatus, expiresAt, taskID, agentID, statusSuspend,
+		newStatus, expiresAt, taskID, agentID, statusSuspended,
 	)
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "blackboard.ResumeFromHITL", err)
@@ -527,7 +527,7 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*proto
 		status = protocol.TaskDone
 	case statusFailed:
 		status = protocol.TaskFailed
-	case statusSuspend:
+	case statusSuspended:
 		status = protocol.TaskSuspended
 	case "compensating":
 		status = protocol.TaskCompensating
@@ -651,7 +651,7 @@ func (bb *SQLiteBlackboard) StopAll(ctx context.Context, reason string) error {
 		UPDATE tasks
 		SET status=?, suspend_reason=?, version=version+1, updated_at=datetime('now')
 		WHERE status IN (?, ?)`,
-		statusSuspend, reason, statusClaimed, statusRunning,
+		statusSuspended, reason, statusClaimed, statusRunning,
 	)
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "blackboard.StopAll", err)
@@ -694,3 +694,19 @@ var (
 	ErrTaskNotOwned         = perrors.New(perrors.CodeInternal, "blackboard: task not owned by this agent or in wrong state")
 	ErrStaleBlackboardLease = perrors.New(perrors.CodeInternal, "blackboard: lease expired or task not claimed by this agent")
 )
+
+// ResumeFromSuspended 将 suspended 任务重置为 pending 以便重新调度（幂等）。
+func (bb *SQLiteBlackboard) ResumeFromSuspended(ctx context.Context, taskID string) error {
+	res, err := bb.db.ExecContext(ctx, `
+		UPDATE tasks SET status=?, claimed_by=NULL, claimed_at=NULL,
+			expires_at=NULL, version=version+1, updated_at=datetime('now')
+		WHERE task_id=? AND status=?`,
+		statusPending, taskID, statusSuspended)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "ResumeFromSuspended", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return perrors.New(perrors.CodeNotFound, "ResumeFromSuspended: no suspended task "+taskID)
+	}
+	return nil
+}

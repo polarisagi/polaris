@@ -518,8 +518,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			go func() { _ = a.SendIntent(protocol.TriggerInterruptReceived) }()
 
 			return &protocol.ToolResult{
-				Success: true,
-				Output:  []byte("Planner pool spawned, agent suspended waiting for whisper."),
+				Success:   true,
+				Suspended: true,
+				Output:    []byte("Planner pool spawned, agent suspended waiting for whisper."),
 			}, nil
 		}
 
@@ -649,6 +650,14 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		// 执行失败 → 触发 S_ROLLBACK
 		go func() { _ = a.SendIntent(protocol.TriggerExecuteFail) }()
 		return perrors.Wrap(perrors.CodeInternal, "runExecuteDAG: DAG execution failed", err)
+	}
+
+	// 检查是否有节点挂起
+	for _, res := range results {
+		if res.Suspended {
+			// spawn_planner 等工具已触发中断，无需再发 ExecuteDone
+			return nil
+		}
 	}
 
 	// 聚合所有节点输出为 JSON 数组，反思阶段可获取完整 DAG 执行结果。

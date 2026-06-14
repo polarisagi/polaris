@@ -525,6 +525,7 @@ func run() error { //nolint:gocyclo
 
 	// ─── 9. Blackboard & Scheduler (L2 M8 + L3 M13) ─────────────────────────
 	blackboard := swarm.NewSQLiteBlackboard(store.DB())
+	recoveryHandler.SetBlackboard(blackboard)
 	reaperCtx, reaperStop := context.WithCancel(ctx)
 	defer reaperStop()
 

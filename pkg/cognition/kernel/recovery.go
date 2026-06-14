@@ -29,15 +29,20 @@ type PIIVaultRestorer interface {
 // BlackboardResumer 从 suspended 状态恢复任务到 Blackboard 的接口。
 type BlackboardResumer interface {
 	ResumeFromSuspended(ctx context.Context, taskID string) error
-	PostTask(ctx context.Context, task protocol.TaskEntry) error
+	PostTask(ctx context.Context, task *protocol.TaskEntry) error
 }
 
 // NewProviderRecoveryHandler 创建恢复处理器（依赖注入，nil 安全降级）。
-func NewProviderRecoveryHandler(vault PIIVaultRestorer, board BlackboardResumer) *ProviderRecoveryHandler {
+func NewProviderRecoveryHandler(vault PIIVaultRestorer, blackboard BlackboardResumer) *ProviderRecoveryHandler {
 	return &ProviderRecoveryHandler{
 		piiVault:   vault,
-		blackboard: board,
+		blackboard: blackboard,
 	}
+}
+
+// SetBlackboard dynamically injects the blackboard into the handler.
+func (h *ProviderRecoveryHandler) SetBlackboard(bb BlackboardResumer) {
+	h.blackboard = bb
 }
 
 // Handle 消费 provider_recovery Outbox 事件，执行两步恢复。
@@ -89,7 +94,7 @@ func (h *ProviderRecoveryHandler) Handle(ctx context.Context, payload []byte) er
 			Priority:  priority,
 			ClaimedBy: data.AgentID,
 		}
-		if postErr := h.blackboard.PostTask(ctx, entry); postErr != nil {
+		if postErr := h.blackboard.PostTask(ctx, &entry); postErr != nil {
 			return perrors.Wrap(perrors.CodeInternal, "recovery: re-post task failed", postErr)
 		}
 	}
