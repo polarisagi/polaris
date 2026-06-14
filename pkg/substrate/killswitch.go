@@ -1,6 +1,7 @@
 package substrate
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,6 +59,8 @@ type KillSwitch struct {
 	// dataDir 用于写入 .fullstop 文件（默认 ~/.polarisagi/polaris）
 	dataDir string
 	tbr     *observability.TokenBurnRate
+
+	recoveryCallback func(ctx context.Context)
 }
 
 // GetState 返回当前 KillSwitch 阶段的线程安全快照，供 M4/M8/M13 读 gauge 降级响应。
@@ -295,4 +298,29 @@ func (ks *KillSwitch) IsFullStopped() bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	return ks.state == KillFullStop
+}
+
+// OnRecovery 注册恢复回调
+func (ks *KillSwitch) OnRecovery(cb func(ctx context.Context)) {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	ks.recoveryCallback = cb
+}
+
+// ManualRecover 线程安全地手动触发恢复（解除封印）。
+func (ks *KillSwitch) ManualRecover(ctx context.Context, actor, reason string) {
+	ks.mu.Lock()
+	wasSealed := ks.state == KillFullStop
+	ks.actor = actor
+	ks.monitors.errorCounter = 0
+	ks.monitors.safetyViolations = 0
+	ks.monitors.fatalViolations = 0
+	ks.monitors.irreversibleAttempts = 0
+	ks.transitionLocked(KillNormal, reason)
+	cb := ks.recoveryCallback
+	ks.mu.Unlock()
+
+	if wasSealed && cb != nil {
+		cb(ctx)
+	}
 }

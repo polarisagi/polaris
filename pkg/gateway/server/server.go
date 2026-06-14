@@ -415,7 +415,11 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.HandleFunc("GET /v1/system/version", s.handleGetVersion)
 	mux.HandleFunc("POST /v1/system/update", s.handleTriggerUpdate)
 
-	s.setupWebUI(mux)
+	if observability.GlobalFeatureGate().State(observability.FeatureWebUI) != observability.FeatureDisabled {
+		s.setupWebUI(mux)
+	} else {
+		slog.Info("polaris: WebUI disabled by FeatureGate")
+	}
 
 	// 挂载中间件
 	handler := s.withMiddleware(mux)

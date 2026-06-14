@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"math/rand"
 	"sort"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // AgentRunner 接口，测试时可 mock，生产走 M8 协议
@@ -99,23 +102,33 @@ func (se *ShadowExecutor) Execute(ctx context.Context, task *EvalTask) (*Compari
 
 	var baselineResult, candidateResult *AgentTrajectory
 
+	g, gCtx := errgroup.WithContext(ctx)
+
 	// Collect baseline trajectory
-	baselineOut, err := se.runner.RunVersion(ctx, se.baseline.Version, "production")
-	if err == nil {
-		var traj AgentTrajectory
-		if json.Unmarshal(baselineOut, &traj) == nil {
-			baselineResult = &traj
+	g.Go(func() error {
+		baselineOut, err := se.runner.RunVersion(gCtx, se.baseline.Version, "shadow")
+		if err == nil {
+			var traj AgentTrajectory
+			if json.Unmarshal(baselineOut, &traj) == nil {
+				baselineResult = &traj
+			}
 		}
-	}
+		return nil // Do not block the other branch
+	})
 
 	// Collect candidate trajectory (DryRun 模式)
-	candidateOut, err := se.runner.RunVersion(ctx, se.candidate.Version, "dryrun")
-	if err == nil {
-		var traj AgentTrajectory
-		if json.Unmarshal(candidateOut, &traj) == nil {
-			candidateResult = &traj
+	g.Go(func() error {
+		candidateOut, err := se.runner.RunVersion(gCtx, se.candidate.Version, "dryrun")
+		if err == nil {
+			var traj AgentTrajectory
+			if json.Unmarshal(candidateOut, &traj) == nil {
+				candidateResult = &traj
+			}
 		}
-	}
+		return nil
+	})
+
+	_ = g.Wait()
 
 	// Phase 2: Compare 对比 diff
 	res := se.comparator.Compare(baselineResult, candidateResult)
@@ -188,6 +201,13 @@ func NewContinuousSamplingMonitor(rate, baseline, threshold float64, windowSize 
 // GetSamplingRate 返回采样率。
 func (csm *ContinuousSamplingMonitor) GetSamplingRate() float64 {
 	return csm.samplingRate
+}
+
+// Record 记录采样（根据采样率门控）
+func (csm *ContinuousSamplingMonitor) Record(sample QualitySample) {
+	if rand.Float64() < csm.samplingRate {
+		csm.slidingWindow.AddSample(sample)
+	}
 }
 
 // SlidingWindow 滑动窗口（max=100）。

@@ -13,8 +13,22 @@ import (
 
 // GatewayImpl 实现了 protocol.HITL，管理人机交互网关 [ESCALATE]。
 // 架构文档: docs/arch/M13-Interface-Scheduler.md §2.4
+type HITLNotification struct {
+	CheckpointID string
+	TaskID       string
+	Description  string
+	Risk         string
+	Timeout      int64
+	ReviewURL    string
+}
+
+type Notifier interface {
+	Notify(ctx context.Context, msg HITLNotification) error
+}
+
 type GatewayImpl struct {
-	store protocol.Store
+	store    protocol.Store
+	notifier Notifier
 
 	// waiters 保存等待审批结果的 channel
 	mu      sync.Mutex
@@ -22,6 +36,10 @@ type GatewayImpl struct {
 }
 
 var _ protocol.HITL = (*GatewayImpl)(nil)
+
+func (g *GatewayImpl) SetNotifier(n Notifier) {
+	g.notifier = n
+}
 
 func NewGateway(store protocol.Store) *GatewayImpl {
 	return &GatewayImpl{
@@ -40,6 +58,18 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p protocol.HITLPrompt) (*proto
 	}
 	if err := g.store.Put(ctx, key, data); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "hitl_gateway: put failed", err)
+	}
+	if g.notifier != nil {
+		go func() {
+			_ = g.notifier.Notify(context.Background(), HITLNotification{
+				CheckpointID: p.ID,
+				TaskID:       "",
+				Description:  p.PromptText,
+				Risk:         p.CheckpointType,
+				Timeout:      p.DeadlineNs,
+				ReviewURL:    "/v1/hitl/review?id=" + p.ID,
+			})
+		}()
 	}
 
 	// 2. 注册 waiter
@@ -110,4 +140,19 @@ func (g *GatewayImpl) Pending(ctx context.Context) ([]protocol.HITLPrompt, error
 		}
 	}
 	return prompts, nil
+}
+
+// ChannelNotifier 适配器实现（通过 Dispatch 发送）
+type ChannelNotifier struct {
+	// 实际应用中可能需要注入具体的 channel 实例或 client
+}
+
+func NewChannelNotifier() *ChannelNotifier {
+	return &ChannelNotifier{}
+}
+
+func (c *ChannelNotifier) Notify(ctx context.Context, msg HITLNotification) error {
+	// 在此处集成到现有的 pkg/gateway/channels 逻辑或 slog 告警
+	// log.Printf("ChannelNotifier: HITL triggered for Checkpoint %s", msg.CheckpointID)
+	return nil
 }

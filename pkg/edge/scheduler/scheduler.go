@@ -82,44 +82,50 @@ func NewResourceGovernor(maxConcurrent int) *ResourceGovernor {
 // 防止 priority=0 任务无界堆积导致 OOM，同时保留其优先准入语义。
 const interactiveConcurrencyMultiplier = 4
 
+const (
+	memL1 = 1024
+	memL2 = 512
+	memL3 = 256
+)
+
 // Admit implements §2.0 3-level degradation rule:
-// 1. priority == 0 -> 交互式任务，跳过 CPU/Mem 检查，但仍受 maxConcurrent×4 硬上限保护
-// 2. CPU > 70% -> reject non-interactive
-// 3. FreeMem < 512MB -> reject non-interactive
-//
-// [P1修复] 原实现 priority=0 无条件 inFlight++，无任何上限。
-// 攻击者可通过高频交互式请求无限堆积，导致 OOM。
-// 修复：priority=0 仍绕过资源检查，但受 maxConcurrent×interactiveConcurrencyMultiplier 硬上限约束。
-func (rg *ResourceGovernor) Admit(priority int) bool {
+func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 	rg.mu.Lock()
 	defer rg.mu.Unlock()
 
+	freeMemMB := rg.memProbeFn()
+	cpuUsage := rg.cpuProbeFn()
+	degradeLevel := 0
+
+	if freeMemMB < memL1 || cpuUsage > 70.0 {
+		degradeLevel = 1
+	}
+	if freeMemMB < memL2 || cpuUsage > 90.0 {
+		degradeLevel = 2
+	}
+
+	if freeMemMB < memL3 {
+		return false, 2
+	}
+	if (cpuUsage > 70.0 || freeMemMB < 512) && priority != 0 {
+		return false, 2
+	}
+
 	if priority == 0 {
-		// 交互式任务上限：maxConcurrent × 倍数，保障高优先级任务快速准入的同时防止无界积压
 		hardCap := rg.maxConcurrent * interactiveConcurrencyMultiplier
 		if rg.inFlight >= hardCap {
-			return false
+			return false, degradeLevel
 		}
 		rg.inFlight++
-		return true
-	}
-
-	freeMemMB := rg.memProbeFn()
-	if freeMemMB < 512 {
-		return false
-	}
-
-	cpuUsage := rg.cpuProbeFn()
-	if cpuUsage > 70.0 {
-		return false
+		return true, degradeLevel
 	}
 
 	if rg.inFlight >= rg.maxConcurrent {
-		return false
+		return false, degradeLevel
 	}
 
 	rg.inFlight++
-	return true
+	return true, degradeLevel
 }
 
 // InFlight 返回当前进行中的任务数。

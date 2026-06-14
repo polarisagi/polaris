@@ -190,6 +190,11 @@ func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEm
 	var scored_ []scored
 
 	for rows.Next() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		var chunk Chunk
 		var taintSource sql.NullString
 		var embJSON sql.NullString

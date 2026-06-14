@@ -2,8 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -121,27 +120,7 @@ func (s *Server) handleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if c.ID == "" {
-		b := make([]byte, 8)
-		rand.Read(b) //nolint:errcheck
-		c.ID = "mcp_" + hex.EncodeToString(b)
-	}
-	if c.Transport == "" {
-		c.Transport = "stdio"
-	}
-	if c.Timeout == 0 {
-		c.Timeout = 30
-	}
-	argsBytes, _ := json.Marshal(c.Args)
-	envBytes, _ := json.Marshal(c.Env)
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	_, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO mcp_servers(id, name, transport, command, args, env, url, enabled, timeout, trust_tier, created_at, updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.Name, c.Transport, c.Command, string(argsBytes), string(envBytes),
-		c.URL, boolToInt(c.Enabled), c.Timeout, c.TrustTier, now, now)
-	if err != nil {
+	if err := s.installMgr.InstallExtension(r.Context(), installReq); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -150,6 +129,7 @@ func (s *Server) handleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 		go s.startMCPServer(protocol.Detach(r.Context()), c)
 	}
 
+	now := time.Now().UTC().Format(time.RFC3339)
 	c.CreatedAt, c.UpdatedAt = now, now
 	s.clearToolSchemaCache()
 	w.Header().Set("Content-Type", "application/json")

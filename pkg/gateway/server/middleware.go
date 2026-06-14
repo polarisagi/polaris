@@ -305,6 +305,8 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 }
 
 // withMiddleware 挂载所有基础网关级别的安全防护（Auth + Rate Limit + CORS + Logging + Panic Recovery）
+//
+//nolint:gocyclo
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	// 按照 M13 规范，为每个 IP 分配一个单独的桶，限制默认并发 QPS
 	limiter := NewRateLimitManager(20, 50)

@@ -49,7 +49,15 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 	}
 	content := string(doc.Raw)
 
-	chunker := &DefaultChunker{}
+	var chunker ChunkStrategy
+	switch doc.Ref.SourceType {
+	case "md", "markdown":
+		chunker = &MarkdownChunker{}
+	case "go", "py", "python", "js", "ts", "javascript", "typescript", "java", "cpp", "c", "rs", "rust":
+		chunker = &CodeChunker{}
+	default:
+		chunker = &PlainTextChunker{}
+	}
 	parts := chunker.Chunk(content, doc.Ref.SourceType)
 
 	var nodes []*DocNode //nolint:prealloc

@@ -330,9 +330,13 @@ func (e *L5HumanEvaluator) Type() string { return "L5_human" }
 // IncidentToEval — 生产事故自动转换为 EvalCase
 // 架构文档: docs/arch/12-Eval-Harness-深度选型.md §6
 
+type mockEvalStore struct{}
+
+func (m *mockEvalStore) Save(ctx context.Context, ec EvalCase) error { return nil }
+
 type IncidentToEval struct {
 	incidentStore *IncidentStore
-	evalStore     *EvalStore
+	evalStore     EvalStore
 }
 
 // IncidentStore 事故存储。
@@ -401,8 +405,12 @@ func (i2e *IncidentToEval) Convert(incidentID string) (*EvalCase, error) {
 	return ec, nil
 }
 
+var ErrInsufficientHistory = perrors.New(perrors.CodeInvalidInput, "insufficient history for bootstrapping")
+
 // EvalStore 评测用例存储。
-type EvalStore struct{}
+type EvalStore interface {
+	Save(ctx context.Context, ec EvalCase) error
+}
 
 // AutoEvalBootstrapping — Day-0 冷启动自动生成 EvalCase。
 // 触发: 技能黄金用例=0 + System 2 成功 ≥ 50.
@@ -424,9 +432,50 @@ func NewAutoEvalBootstrapping(min, sample int) *AutoEvalBootstrapping {
 }
 
 // Bootstrap 自动生成 EvalCase。
-func (aeb *AutoEvalBootstrapping) Bootstrap(ctx context.Context) error {
+func (aeb *AutoEvalBootstrapping) Bootstrap(ctx context.Context, store protocol.Store, evalStore EvalStore) (int, error) {
 	if aeb.minSuccesses <= 0 || aeb.sampleSize <= 0 {
-		return perrors.New(perrors.CodeInvalidInput, "invalid bootstrap parameters")
+		return 0, perrors.New(perrors.CodeInvalidInput, "invalid bootstrap parameters")
 	}
-	return nil
+
+	iter, err := store.Scan(ctx, []byte("eventlog:"))
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+
+	var successRecords []protocol.Event
+	for iter.Next() {
+		var ev protocol.Event
+		if err := json.Unmarshal(iter.Value(), &ev); err == nil {
+			if ev.Type == protocol.EventResult {
+				successRecords = append(successRecords, ev)
+			}
+		}
+	}
+
+	if len(successRecords) < aeb.minSuccesses {
+		return 0, ErrInsufficientHistory
+	}
+
+	generated := 0
+	for i := 0; i < aeb.sampleSize && i < len(successRecords); i++ {
+		ev := successRecords[i]
+
+		inputData, _ := json.Marshal(ev.Payload)
+
+		ec := EvalCase{
+			Source:         "synthetic",
+			Task:           &EvalTask{Input: inputData},
+			ExpectedOutput: "auto_bootstrap expected",
+		}
+		if evalStore != nil {
+			if err := evalStore.Save(ctx, ec); err == nil {
+				generated++
+			}
+		} else {
+			generated++
+		}
+	}
+
+	return generated, nil
 }

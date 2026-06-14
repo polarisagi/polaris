@@ -12,19 +12,19 @@ func TestResourceGovernor_AdmitPriority(t *testing.T) {
 	rg.cpuProbeFn = func() float64 { return 30.0 }
 
 	// priority=0 always admit
-	if !rg.Admit(0) {
+	if !(func() bool { ok, _ := rg.Admit(0); return ok })() {
 		t.Errorf("priority=0 should always admit")
 	}
 	rg.Release()
 
 	// priority=1 admit under normal pressure
-	if !rg.Admit(1) {
+	if !(func() bool { ok, _ := rg.Admit(1); return ok })() {
 		t.Errorf("priority=1 should admit under normal load")
 	}
 	rg.Release()
 
 	// priority=5 admit under normal pressure
-	if !rg.Admit(5) {
+	if !(func() bool { ok, _ := rg.Admit(5); return ok })() {
 		t.Errorf("priority=5 should admit under normal load")
 	}
 	rg.Release()
@@ -36,13 +36,13 @@ func TestResourceGovernor_MemoryPressure(t *testing.T) {
 	rg.cpuProbeFn = func() float64 { return 30.0 }
 
 	// priority=0 always admit even under memory pressure
-	if !rg.Admit(0) {
+	if !(func() bool { ok, _ := rg.Admit(0); return ok })() {
 		t.Errorf("priority=0 should always admit")
 	}
 	rg.Release()
 
 	// priority=3 rejected under memory pressure
-	if rg.Admit(3) {
+	if (func() bool { ok, _ := rg.Admit(3); return ok })() {
 		t.Errorf("priority=3 should be rejected under memory pressure (<512MB free)")
 	}
 }
@@ -53,13 +53,13 @@ func TestResourceGovernor_CPUThreshold(t *testing.T) {
 	rg.cpuProbeFn = func() float64 { return 80.0 }
 
 	// priority=0 always admit
-	if !rg.Admit(0) {
+	if !(func() bool { ok, _ := rg.Admit(0); return ok })() {
 		t.Errorf("priority=0 should always admit")
 	}
 	rg.Release()
 
 	// priority=3 rejected under high CPU
-	if rg.Admit(3) {
+	if (func() bool { ok, _ := rg.Admit(3); return ok })() {
 		t.Errorf("priority=3 should be rejected under high CPU (>70%%)")
 	}
 }
@@ -71,18 +71,18 @@ func TestResourceGovernor_ConcurrentLimit(t *testing.T) {
 
 	// Fill all 3 slots
 	for i := 0; i < 3; i++ {
-		if !rg.Admit(1) {
+		if !(func() bool { ok, _ := rg.Admit(1); return ok })() {
 			t.Fatalf("slot %d: should admit", i)
 		}
 	}
 
 	// 4th task rejected at capacity
-	if rg.Admit(1) {
+	if (func() bool { ok, _ := rg.Admit(1); return ok })() {
 		t.Errorf("4th task should be rejected (capacity=3)")
 	}
 
 	// priority=0 always admitted even at capacity
-	if !rg.Admit(0) {
+	if !(func() bool { ok, _ := rg.Admit(0); return ok })() {
 		t.Errorf("priority=0 should always admit even at capacity")
 	}
 	rg.Release()
@@ -92,7 +92,7 @@ func TestResourceGovernor_ConcurrentLimit(t *testing.T) {
 	rg.Release()
 	rg.Release()
 
-	if !rg.Admit(1) {
+	if !(func() bool { ok, _ := rg.Admit(1); return ok })() {
 		t.Errorf("after release, should admit")
 	}
 	rg.Release()
@@ -104,7 +104,7 @@ func TestResourceGovernor_WaitForCapacity(t *testing.T) {
 	rg.cpuProbeFn = func() float64 { return 30.0 }
 
 	// Fill the only slot
-	if !rg.Admit(1) {
+	if !(func() bool { ok, _ := rg.Admit(1); return ok })() {
 		t.Fatalf("should admit first task")
 	}
 

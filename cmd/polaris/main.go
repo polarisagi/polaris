@@ -407,6 +407,7 @@ func run() error { //nolint:gocyclo
 	mktClient := marketplace.NewMCPMarketplaceClient("", layout.Extensions)
 
 	hitlGateway := hitl.NewGateway(store)
+	hitlGateway.SetNotifier(hitl.NewChannelNotifier())
 	prefsRepo := server.NewSQLPreferencesRepo(store.DB())
 	installMgr := marketplace.NewManager(store.DB(), mcpMgr, gate, prefsRepo, auditTrail, publisherTrustMap)
 
@@ -536,6 +537,29 @@ func run() error { //nolint:gocyclo
 
 	// ─── 9. Blackboard & Scheduler (L2 M8 + L3 M13) ─────────────────────────
 	blackboard := swarm.NewSQLiteBlackboard(store.DB())
+	ks.OnRecovery(func(ctx context.Context) {
+		slog.Info("polaris: KillSwitch recovery triggered, resuming suspended tasks")
+		// 查询因 oom_evicted 被 suspend 的任务并唤醒
+		rows, err := store.DB().QueryContext(ctx, "SELECT id FROM tasks WHERE status =  + protocol.TaskStatusSuspended + ")
+		if err == nil {
+			defer rows.Close()
+			var taskIDs []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err == nil {
+					taskIDs = append(taskIDs, id)
+				}
+			}
+			for _, id := range taskIDs {
+				_ = blackboard.ResumeFromSuspended(ctx, id)
+			}
+		}
+		_ = outboxWorker.Write(ctx, protocol.OutboxEntry{
+			Operation: "killswitch_recovery",
+			Payload:   []byte(`{"status": "recovered"}`),
+		})
+	})
+
 	recoveryHandler.SetBlackboard(blackboard)
 	reaperCtx, reaperStop := context.WithCancel(ctx)
 	defer reaperStop()
@@ -544,6 +568,7 @@ func run() error { //nolint:gocyclo
 	go reaper.Run(reaperCtx)
 
 	sched := scheduler.NewSQLiteScheduler(store)
+
 	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
 
 	// ─── 9.5 M8 Multi-Agent Orchestrator ─────────────────────────────────────

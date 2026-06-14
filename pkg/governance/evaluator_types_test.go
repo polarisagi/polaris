@@ -234,7 +234,7 @@ func TestL3_NilTrajectory(t *testing.T) {
 func TestIncidentToEval_Convert_NotFound(t *testing.T) {
 	i2e := &IncidentToEval{
 		incidentStore: &IncidentStore{incidents: []*Incident{}},
-		evalStore:     &EvalStore{},
+		evalStore:     &mockEvalStore{},
 	}
 	_, err := i2e.Convert("nonexistent")
 	if err == nil {
@@ -258,7 +258,7 @@ func TestIncidentToEval_Convert_Success(t *testing.T) {
 	}
 	i2e := &IncidentToEval{
 		incidentStore: &IncidentStore{incidents: []*Incident{inc}},
-		evalStore:     &EvalStore{},
+		evalStore:     &mockEvalStore{},
 	}
 	ec, err := i2e.Convert("INC-001")
 	if err != nil {
@@ -282,7 +282,7 @@ func TestIncidentToEval_Convert_Success(t *testing.T) {
 }
 
 func TestIncidentToEval_NilStore(t *testing.T) {
-	i2e := &IncidentToEval{incidentStore: nil, evalStore: &EvalStore{}}
+	i2e := &IncidentToEval{incidentStore: nil, evalStore: &mockEvalStore{}}
 	_, err := i2e.Convert("x")
 	if err == nil {
 		t.Fatal("expected error for nil incidentStore")
