@@ -20,11 +20,11 @@
 | 编号 | 不变量 | 验证方式 | 实现状态 |
 |------|--------|---------|---------|
 | inv_M8_01 | 禁止自由 NL 多 Agent 对话——所有协调经 schema 原语（Intent/Request/Claim/Result/Fail） | BlackboardEvent schema 强制 | ✅ 已实现 |
-| inv_M8_02 | Blackboard 写入与 EventLog 同事务双写——EventLog 是真相源 | M2 CompositeMutationIntent | ⚠️ 计划中 |
+| inv_M8_02 | Blackboard 写入与 EventLog 同事务双写——EventLog 是真相源 | M2 CompositeMutationIntent | ✅ 已实现 |
 | inv_M8_03 | Task 状态单调推进 Pending→Claimed→Executing→Done/Failed，禁止回退 | CAS Version++ 乐观锁 | ✅ 已实现 |
 | inv_M8_04 | Agent Lease TTL 60s + 心跳 15s ±5s jitter + Reaper 1s 扫描——Lease 过期任务自动回收 | M8 §1.7 Reaper | ✅ 已实现（注：Reaper toxicity 计数机制为代码扩展，文档未含） |
 | inv_M8_05 | Taint 经 Blackboard 传播——input_data 携带原始 TaintLevel，协调期间不降级 | M8 §4 blackboard_entries taint_level CHECK | ✅ 已实现 |
-| inv_M8_06 | 委托链深度 ≤3——跨 Agent 委托禁止超过 3 层 | M11 §8 Layer 4 多 Agent 宪法 | ✅ 已实现（`const MaxSpawnDepth=3`，`sqlite_blackboard.go` PostTask/PostBatch 前置校验） |
+| inv_M8_06 | 委托链深度 ≤3——跨 Agent 委托禁止超过 3 层 | M11 §8 Layer 4 多 Agent 宪法 | ✅ 已实现（`sqlite_blackboard.go` 已校验；内存版 `blackboard.go` PostTask/PostBatch 缺失，待 K7 补齐） |
 
 ---
 
