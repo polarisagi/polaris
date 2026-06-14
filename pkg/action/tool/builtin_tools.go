@@ -1640,7 +1640,7 @@ func makeExecuteWasmFn(allowedPaths []string) action.InProcessRichFn {
 			quota.MemoryPages,
 			args.Network,
 			quota.Fuel,
-			quota.MaxMounts,
+			10*1024*1024,
 		)
 
 		if err != nil {

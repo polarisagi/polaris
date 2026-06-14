@@ -29,7 +29,8 @@ impl wasmtime::ResourceLimiter for SandboxState {
         desired: usize,
         _maximum: Option<usize>,
     ) -> Result<bool> {
-        Ok(desired <= self.max_pages)
+        // desired is in bytes. max_pages is in 64KiB pages.
+        Ok(desired <= self.max_pages * 65536)
     }
 
     fn table_growing(
@@ -101,6 +102,14 @@ pub unsafe extern "C" fn wasmtime_free_string(ptr: *mut c_char) {
     }
 }
 
+/// 释放由 wasmtime 侧分配的字节切片
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wasmtime_free_bytes(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() {
+        unsafe { drop(Vec::from_raw_parts(ptr, len, len)) };
+    }
+}
+
 /// 写入 out 指针处的错误字符串（调用方须用 wasmtime_free_string 释放）。
 fn write_err(out: *mut *mut c_char, msg: &str) {
     if out.is_null() {
@@ -114,20 +123,6 @@ fn write_err(out: *mut *mut c_char, msg: &str) {
                 unsafe { *out = cs.into_raw() }
             }
         }
-    }
-}
-
-/// 写入正常输出，若包含 \0 则返回错误，避免损坏二进制载荷
-fn write_out_json(out: *mut *mut c_char, msg: &str) -> Result<(), ()> {
-    if out.is_null() {
-        return Ok(());
-    }
-    match CString::new(msg) {
-        Ok(cs) => {
-            unsafe { *out = cs.into_raw() };
-            Ok(())
-        }
-        Err(_) => Err(()),
     }
 }
 
@@ -147,7 +142,8 @@ pub unsafe extern "C" fn wasmtime_execute(
     max_fuel: u64,
     network_allowed: c_int,
     max_output_bytes: c_int,
-    out_json: *mut *mut c_char,
+    out_json: *mut *mut u8,
+    out_json_len: *mut usize,
     out_err: *mut *mut c_char,
 ) -> c_int {
     unsafe {
@@ -270,25 +266,42 @@ pub unsafe extern "C" fn wasmtime_execute(
             let exec_result = start.call(&mut store, ());
 
             if let Err(e) = exec_result {
-                write_err(out_err, &format!("Execution error: {}", e));
-                return WASMTIME_ERR_EXECUTE;
+                // 在整条错误因果链中查找 I32Exit。WASI proc_exit 经 p1 适配器抛出时，
+                // I32Exit 可能位于 std::error::Error 的 source 链中，而 anyhow 顶层
+                // downcast_ref 只查 anyhow 上下文层、不遍历 source 链 → 会漏判，把正常
+                // exit(0) 误当作执行错误。改用 e.chain() 遍历全链以稳健识别退出码。
+                let exit_code = e
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<wasmtime_wasi::I32Exit>().map(|x| x.0));
+                match exit_code {
+                    // exit(0) 为正常退出，视为成功
+                    Some(0) => {}
+                    Some(code) => {
+                        write_err(out_err, &format!("Execution error: exit status {}", code));
+                        return WASMTIME_ERR_EXECUTE;
+                    }
+                    None => {
+                        write_err(out_err, &format!("Execution error: {}", e));
+                        return WASMTIME_ERR_EXECUTE;
+                    }
+                }
             }
 
             let output_bytes = stdout.contents();
-            match std::str::from_utf8(&output_bytes) {
-                Ok(s) => {
-                    if write_out_json(out_json, s).is_ok() {
-                        WASMTIME_OK
-                    } else {
-                        write_err(out_err, "Module output contains null bytes");
-                        WASMTIME_ERR_UTF8
-                    }
-                }
-                Err(_) => {
-                    write_err(out_err, "Module output is not valid UTF-8");
-                    WASMTIME_ERR_UTF8
-                }
+            // into_boxed_slice() 保证底层分配 capacity == len，与 wasmtime_free_bytes 的
+            // Vec::from_raw_parts(ptr, len, len) 严格匹配。原 shrink_to_fit() 仅尽力收缩、
+            // 不保证 capacity == len，按 len 重建 Vec 释放会因容量不符触发 UB。
+            let mut boxed = output_bytes.to_vec().into_boxed_slice();
+            let len = boxed.len();
+            let ptr = boxed.as_mut_ptr();
+            std::mem::forget(boxed);
+            if !out_json.is_null() {
+                *out_json = ptr;
             }
+            if !out_json_len.is_null() {
+                *out_json_len = len;
+            }
+            WASMTIME_OK
         });
 
         match result {

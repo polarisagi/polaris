@@ -25,8 +25,9 @@ var (
 	wasmtimeInit       func(outErr *uintptr) int32
 	wasmtimePoolInit   func(n int32) int32
 	wasmtimePing       func() int32
-	wasmtimeExecute    func(wasmBytes *byte, wasmLen uintptr, inputJSON *byte, workspaceDir *byte, maxPages int32, networkAllowed int32, fuel int64, maxMounts int32, outJSON *uintptr, outErr *uintptr) int32
+	wasmtimeExecute    func(wasmBytes *byte, wasmLen uintptr, inputJSON *byte, workspaceDir *byte, maxPages int32, maxFuel uint64, networkAllowed int32, maxOutputBytes int32, outJSON *uintptr, outJSONLen *uintptr, outErr *uintptr) int32
 	wasmtimeFreeString func(ptr uintptr)
+	wasmtimeFreeBytes  func(ptr uintptr, len uintptr)
 )
 
 func bindWasmtime() error {
@@ -41,6 +42,7 @@ func bindWasmtime() error {
 		purego.RegisterLibFunc(&wasmtimePing, lib, "wasmtime_ping")
 		purego.RegisterLibFunc(&wasmtimeExecute, lib, "wasmtime_execute")
 		purego.RegisterLibFunc(&wasmtimeFreeString, lib, "wasmtime_free_string")
+		purego.RegisterLibFunc(&wasmtimeFreeBytes, lib, "wasmtime_free_bytes")
 	})
 	return wasmtimeErr
 }
@@ -61,6 +63,19 @@ func readAndFreeWasmtimeStr(ptr uintptr) string {
 	s := string(unsafe.Slice((*byte)(unsafe.Pointer(ptr)), n))
 	wasmtimeFreeString(ptr)
 	return s
+}
+
+// readAndFreeWasmtimeBytes 读取 Rust 分配的字节切片并立即 free，返回 Go byte slice
+func readAndFreeWasmtimeBytes(ptr uintptr, length uintptr) []byte {
+	if ptr == 0 || length == 0 {
+		return nil
+	}
+	s := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), length)
+	// copy slice data since we are going to free the C memory
+	b := make([]byte, length)
+	copy(b, s)
+	wasmtimeFreeBytes(ptr, length)
+	return b
 }
 
 // WasmtimeInit 初始化全局 Wasmtime Engine
@@ -102,7 +117,7 @@ func WasmtimePing() error {
 }
 
 // WasmtimeExecute 执行 WebAssembly 模块并返回 JSON 结果
-func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, maxPages int, networkAllowed bool, fuel int, maxMounts int) (string, error) {
+func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, maxPages int, networkAllowed bool, fuel int, maxOutputBytes int) (string, error) {
 	if err := bindWasmtime(); err != nil {
 		return "", perrors.Wrap(perrors.CodeInternal, "rust_wasmtime: dylib not available", err)
 	}
@@ -125,6 +140,7 @@ func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, ma
 	}
 
 	var outJSON uintptr
+	var outJSONLen uintptr
 	var outErr uintptr
 
 	var workspacePtr *byte
@@ -138,19 +154,20 @@ func WasmtimeExecute(wasmBytes []byte, inputJSON string, workspaceDir string, ma
 		&inputCStr[0],
 		workspacePtr,
 		int32(maxPages),
+		uint64(fuel),
 		netAllow,
-		int64(fuel),
-		int32(maxMounts),
+		int32(maxOutputBytes),
 		&outJSON,
+		&outJSONLen,
 		&outErr,
 	)
 
 	errStr := readAndFreeWasmtimeStr(outErr)
-	jsonStr := readAndFreeWasmtimeStr(outJSON)
+	jsonBytes := readAndFreeWasmtimeBytes(outJSON, outJSONLen)
 
 	if rc != 0 {
 		return "", perrors.New(perrors.CodeInternal, fmt.Sprintf("wasmtime_execute failed (code %d): %s", rc, errStr))
 	}
 
-	return jsonStr, nil
+	return string(jsonBytes), nil
 }

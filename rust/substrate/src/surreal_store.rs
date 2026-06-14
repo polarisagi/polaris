@@ -427,27 +427,23 @@ pub unsafe extern "C" fn surreal_kv_scan(
             Ok(g) => g,
             Err(_) => return SURREAL_ERR_LOCK,
         };
-        let rows: Vec<KvRow> = guard
-            .rt
-            .block_on(async {
-                let mut resp = guard
-                    .db
-                    .query("SELECT k, v FROM kv WHERE string::starts_with(k, $prefix) ORDER BY k")
-                    .bind(("prefix", prefix_hex))
-                    .await?;
-                let rows: Vec<KvRow> = match resp.take(0) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        eprintln!("[surreal_kv_scan] Error taking rows: {e}");
-                        vec![]
-                    }
-                };
-                Ok::<Vec<KvRow>, surrealdb::Error>(rows)
-            })
-            .unwrap_or_else(|e| {
+        // FIX: 查询出错时返回 SURREAL_ERR_QUERY，不再以空结果伪装"无匹配"。
+        let rows_result: Result<Vec<KvRow>, surrealdb::Error> = guard.rt.block_on(async {
+            let mut resp = guard
+                .db
+                .query("SELECT k, v FROM kv WHERE string::starts_with(k, $prefix) ORDER BY k")
+                .bind(("prefix", prefix_hex))
+                .await?;
+            let rows: Vec<KvRow> = resp.take(0)?;
+            Ok(rows)
+        });
+        let rows = match rows_result {
+            Ok(r) => r,
+            Err(e) => {
                 eprintln!("[surreal_kv_scan] query error: {e}");
-                vec![]
-            });
+                return SURREAL_ERR_QUERY;
+            }
+        };
 
         let mut json = String::from("[");
         let mut first = true;
@@ -584,13 +580,18 @@ pub unsafe extern "C" fn surreal_vec_knn(
             "SELECT record::id(id) AS id, vector::similarity::cosine(embed, $q) AS score \
              FROM vectors WHERE embed <|{k},COSINE|> $q ORDER BY score DESC"
         );
-        let rows: Vec<VecRow> = guard
-            .rt
-            .block_on(async {
-                let mut resp = guard.db.query(&sql).bind(("q", q_vec)).await?;
-                resp.take(0)
-            })
-            .unwrap_or_default();
+        // FIX: 查询出错时返回 SURREAL_ERR_QUERY，不再以空结果伪装"无匹配"。
+        let rows_result: Result<Vec<VecRow>, surrealdb::Error> = guard.rt.block_on(async {
+            let mut resp = guard.db.query(&sql).bind(("q", q_vec)).await?;
+            resp.take(0)
+        });
+        let rows = match rows_result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[surreal_vec_knn] query error: {e}");
+                return SURREAL_ERR_QUERY;
+            }
+        };
 
         write_cstr(out_json, &encode_scored(&rows));
         SURREAL_OK
@@ -781,17 +782,21 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
                      ORDER BY weight DESC LIMIT {fan_out_limit}"
                 );
 
-                let neighbors: Vec<ToIdWeightRow> = guard
-                    .rt
-                    .block_on(async {
-                        let mut resp = guard
-                            .db
-                            .query(&sql)
-                            .bind(("curr", curr_node.clone()))
-                            .await?;
-                        resp.take(0)
-                    })
-                    .unwrap_or_default();
+                // FIX: 查询出错时返回 SURREAL_ERR_QUERY，不再以空邻居伪装"无出边"。
+                let neighbors: Vec<ToIdWeightRow> = match guard.rt.block_on(async {
+                    let mut resp = guard
+                        .db
+                        .query(&sql)
+                        .bind(("curr", curr_node.clone()))
+                        .await?;
+                    resp.take(0)
+                }) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("[surreal_graph_spreading_activation] query error: {e}");
+                        return SURREAL_ERR_QUERY;
+                    }
+                };
 
                 for edge in neighbors {
                     let transferred_energy = curr_energy * edge.weight * energy_decay;
@@ -878,19 +883,23 @@ pub unsafe extern "C" fn surreal_graph_traverse(
             } else {
                 "SELECT to_id FROM edges WHERE from_id IN $frontier AND edge_type = $et".to_string()
             };
-            let next: Vec<String> = guard
-                .rt
-                .block_on(async {
-                    let mut resp = guard
-                        .db
-                        .query(&sql)
-                        .bind(("frontier", frontier.clone()))
-                        .bind(("et", et.clone()))
-                        .await?;
-                    let rows: Vec<ToIdRow> = resp.take(0)?;
-                    Ok::<Vec<String>, surrealdb::Error>(rows.into_iter().map(|r| r.to_id).collect())
-                })
-                .unwrap_or_default();
+            // FIX: 查询出错时返回 SURREAL_ERR_QUERY，不再以空结果伪装"无可达节点"。
+            let next: Vec<String> = match guard.rt.block_on(async {
+                let mut resp = guard
+                    .db
+                    .query(&sql)
+                    .bind(("frontier", frontier.clone()))
+                    .bind(("et", et.clone()))
+                    .await?;
+                let rows: Vec<ToIdRow> = resp.take(0)?;
+                Ok::<Vec<String>, surrealdb::Error>(rows.into_iter().map(|r| r.to_id).collect())
+            }) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("[surreal_graph_traverse] query error: {e}");
+                    return SURREAL_ERR_QUERY;
+                }
+            };
 
             frontier = next
                 .into_iter()
@@ -1024,13 +1033,18 @@ pub unsafe extern "C" fn surreal_fts_search(
             "SELECT record::id(id) AS doc_id, search::score(0) AS score FROM docs \
              WHERE body @0@ $q ORDER BY score DESC LIMIT {k}"
         );
-        let rows: Vec<DocScoreRow> = guard
-            .rt
-            .block_on(async {
-                let mut resp = guard.db.query(&sql).bind(("q", q)).await?;
-                resp.take(0)
-            })
-            .unwrap_or_default();
+        // FIX: 查询出错时返回 SURREAL_ERR_QUERY，不再以空结果伪装"无匹配"。
+        let rows_result: Result<Vec<DocScoreRow>, surrealdb::Error> = guard.rt.block_on(async {
+            let mut resp = guard.db.query(&sql).bind(("q", q)).await?;
+            resp.take(0)
+        });
+        let rows = match rows_result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[surreal_fts_search] query error: {e}");
+                return SURREAL_ERR_QUERY;
+            }
+        };
 
         let mut json = String::from("[");
         let mut first = true;

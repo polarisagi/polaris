@@ -64,7 +64,7 @@ func (s *WasmtimeSandbox) Run(ctx context.Context, spec action.SandboxSpec) (*pr
 		quota.MemoryPages,
 		networkAllowed,
 		quota.Fuel,
-		quota.MaxMounts,
+		10*1024*1024,
 	)
 
 	latency := time.Since(start).Milliseconds()

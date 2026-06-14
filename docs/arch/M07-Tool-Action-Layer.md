@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:167 三级沙箱(CANONICAL) / 5:298 PolicyGate / 6:353 Capability / 7:370 动作扩展 / 8:503 Usage演化 / 12:544 (SOFT)降级 / 13:562 跨模块契约 / 14:582 Plugin / 15:624 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:167 三级沙箱(CANONICAL) / 5:300 PolicyGate / 6:355 Capability / 7:372 动作扩展 / 8:505 Usage演化 / 12:546 (SOFT)降级 / 13:564 跨模块契约 / 14:584 Plugin / 15:626 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -186,6 +186,8 @@ Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256M
 4. 非 Linux Tier0 降级: 步骤 3 判定为 Container 且 hwTier==0 且 goos!="linux" → 降级 Wasm（L2 Wasm + OS 原生沙箱）
 
 **注意**：当前 `AssignSandboxTier` 实现（`pkg/action/sandbox.go`）不含 ErrTier0SandboxLimit 返回——非 Linux Tier0 场景降级为 WasmSandbox 而非报错。ErrTier0SandboxLimit 的拒绝逻辑属于**[计划中]**（文档描述的安全目标，代码未完整实现）。
+
+**[审查修正 R21 / ADR-0025]**：截至审查，`sandbox.go` 实现与上述规则 1–2 **相反**——误将 `LLMGenerated`/`MCP`/`A2A`/`CapWriteNetwork` 赋为 L3 Container（应为 L2 Wasm），且规则 4（非 Linux Tier0 Container 降级 Wasm）未实现（`hwTier`/`goos` 参数未使用）。修复对齐本节规则 1–4，详见 `docs/upgrade/GEMINI_PATCH_R21_GlobalAudit.md` A5。
 
 Auto-Curriculum: M9 `bash_restricted` 强制 L2 Wasm，字符集 `[A-Za-z0-9 ./\-_=:,]`，禁止管道/重定向/命令替换/`~/.polarisagi/polaris`。`bash` 永久禁止。
 
