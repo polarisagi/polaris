@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // RateLimiter 基于 Token Bucket 实现单桶限流
@@ -326,6 +328,12 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 		clientIP := extractIP(r)
 		isAPI := strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/healthz"
+
+		if observability.GlobalKillswitchStage.Load() >= 3 && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metrics" {
+			w.Header().Set("Retry-After", "3600")
+			http.Error(w, "503 Service Unavailable: emergency stop active", http.StatusServiceUnavailable)
+			return
+		}
 
 		// [P0修复] panic recovery：防止单个 handler panic 导致整个服务崩溃。
 		// 捕获 panic 后返回 500，并记录堆栈，服务继续运行。
