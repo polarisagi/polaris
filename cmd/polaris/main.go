@@ -516,7 +516,8 @@ func run() error { //nolint:gocyclo
 			}
 			return graphPipeline.Run(ctx, payload.DocID)
 		})
-		slog.Info("polaris: GraphBuildPipeline registered to outbox for graph_build")
+		outboxWorker.RegisterHandler(knowledgepkg.EventTypeRAGDocIngested, knowledgepkg.NewGraphBuildOutboxHandler(graphPipeline).Handle)
+		slog.Info("polaris: GraphBuildPipeline registered to outbox for graph_build and rag_doc_ingested")
 	}
 
 	// ─── 7.6 PII 检测器（M11 §5.1）──────────────────────────────────────────

@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 func simpleHash(s string) uint64 {
@@ -20,13 +21,15 @@ func simpleHash(s string) uint64 {
 // 生产实现: 将文本分块落盘到 SQLite rag_chunks 表（FTS5 支持），
 // 同时将 DocTree 元数据持久化到 rag_docs 表（JSON 序列化）。
 type PipelineImpl struct {
-	db *sql.DB
+	db           *sql.DB
+	provider     protocol.Provider
+	outboxWriter protocol.OutboxWriter
 }
 
 var _ IngestionPipeline = (*PipelineImpl)(nil)
 
 // NewPipeline 创建 PipelineImpl，并确保 rag_docs 表存在。
-func NewPipeline(db *sql.DB) *PipelineImpl {
+func NewPipeline(db *sql.DB, provider protocol.Provider, outboxWriter protocol.OutboxWriter) *PipelineImpl {
 	// CREATE TABLE IF NOT EXISTS，幂等；上线前阶段可随主 schema 建表
 	_, _ = db.Exec(`
 		CREATE TABLE IF NOT EXISTS rag_docs (
@@ -39,14 +42,32 @@ func NewPipeline(db *sql.DB) *PipelineImpl {
 			updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	return &PipelineImpl{db: db}
+	return &PipelineImpl{db: db, provider: provider, outboxWriter: outboxWriter}
 }
 
 // Ingest 将文档转换为 Chunk 并持久化。
-func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint int) (*DocTree, error) {
+func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint int) (*DocTree, error) { //nolint:gocyclo
 	if doc == nil {
 		return nil, perrors.New(perrors.CodeInvalidInput, "knowledge: doc is nil")
 	}
+
+	// 增量检测：hash 相同则跳过重摄取，返回缓存 DocTree
+	var existingHash string
+	_ = p.db.QueryRowContext(ctx,
+		`SELECT content_hash FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
+	).Scan(&existingHash)
+	if existingHash != "" && existingHash == doc.Ref.ContentHash {
+		var treeJSON string
+		if err := p.db.QueryRowContext(ctx,
+			`SELECT tree_json FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
+		).Scan(&treeJSON); err == nil && treeJSON != "" {
+			var cached DocTree
+			if json.Unmarshal([]byte(treeJSON), &cached) == nil {
+				return &cached, nil
+			}
+		}
+	}
+
 	content := string(doc.Raw)
 
 	var chunker ChunkStrategy
@@ -120,6 +141,44 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 			updated_at   = CURRENT_TIMESTAMP
 	`, doc.Ref.URI, doc.Ref.Title, doc.Ref.SourceType, doc.Ref.ContentHash, string(treeJSON)); docErr != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "ingester: upsert rag_docs failed", docErr)
+	}
+
+	// LLM 摘要生成（Tier 1+，provider 可用时）
+	// 为每个 ParentChunk 生成 summary 类型块，供 StructuredNavigator 的 FTS5 导航使用。
+	if p.provider != nil && len(nodes) > 0 {
+		for _, node := range nodes {
+			if node.Level != 1 || node.Content == "" {
+				continue
+			}
+			summaryID := node.ID + "_summary"
+			resp, err := p.provider.Infer(ctx, []protocol.Message{
+				{Role: "system", Content: "用一句话（50字以内）总结以下文本片段的核心内容，输出纯文本，不加任何格式："},
+				{Role: "user", Content: node.Content},
+			}, protocol.WithModel("standard"))
+			if err != nil || resp.Content == "" {
+				continue
+			}
+			summaryHash := fmt.Sprintf("%x", simpleHash(resp.Content))
+			_, _ = p.db.ExecContext(ctx, `
+				INSERT INTO rag_chunks (id, doc_id, content, taint_level, taint_source,
+					source_uri, doc_version, chunk_seq, content_hash, embed_model_version, chunk_type)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'summary')
+				ON CONFLICT(id) DO UPDATE SET
+					content=excluded.content,
+					content_hash=excluded.content_hash,
+					created_at=CURRENT_TIMESTAMP
+			`, summaryID, doc.Ref.URI, resp.Content, initialTaint, "llm_summary",
+				doc.Ref.URI, doc.Ref.ContentHash, -1, summaryHash)
+		}
+	}
+
+	// 异步触发 GraphBuild（Outbox 解耦）
+	if p.outboxWriter != nil {
+		payload, _ := json.Marshal(map[string]string{"doc_id": doc.Ref.URI})
+		_ = p.outboxWriter.Write(ctx, protocol.OutboxEntry{
+			TargetEngine: EventTypeRAGDocIngested,
+			Payload:      payload,
+		})
 	}
 
 	return tree, nil

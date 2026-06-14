@@ -51,7 +51,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 func TestPipelineImpl_Ingest(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db)
+	pipeline := NewPipeline(db, nil, nil)
 
 	doc := &Document{
 		Ref: DocumentRef{
@@ -87,7 +87,7 @@ func TestPipelineImpl_Ingest(t *testing.T) {
 func TestHybridRetrieverImpl_Search(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db)
+	pipeline := NewPipeline(db, nil, nil)
 	retriever := NewHybridRetriever(db)
 
 	doc := &Document{

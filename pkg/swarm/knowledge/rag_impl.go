@@ -29,6 +29,28 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		return nil, perrors.New(perrors.CodeInvalidInput, "document is nil")
 	}
 
+	db, err := p.router.GetPrimary()
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: get primary db failed", err)
+	}
+
+	// 增量检测：hash 相同则跳过重摄取，返回缓存 DocTree
+	var existingHash string
+	_ = db.QueryRowContext(ctx,
+		`SELECT content_hash FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
+	).Scan(&existingHash)
+	if existingHash != "" && existingHash == doc.Ref.ContentHash {
+		var treeJSON string
+		if err := db.QueryRowContext(ctx,
+			`SELECT tree_json FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
+		).Scan(&treeJSON); err == nil && treeJSON != "" {
+			var cached DocTree
+			if json.Unmarshal([]byte(treeJSON), &cached) == nil {
+				return &cached, nil
+			}
+		}
+	}
+
 	docNode := &DocNode{
 		ID:      fmt.Sprintf("doc_%s_%d", doc.Ref.ContentHash, time.Now().UnixNano()),
 		Title:   doc.Ref.Title,
@@ -44,10 +66,6 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 
 	chunks := p.chunkDocument(docNode.Content, docNode.ID, initialTaint, doc.Ref)
 
-	db, err := p.router.GetPrimary()
-	if err != nil {
-		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: get primary db failed", err)
-	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: begin tx", err)
