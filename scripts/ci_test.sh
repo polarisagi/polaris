@@ -37,7 +37,7 @@ run_step() {
     fi
 }
 
-run_step "[1/10] 准备环境: 创建 Mock Web dist" "mkdir -p web/dist && touch web/dist/index.html"
+run_step "[1/11] 准备环境: 创建 Mock Web dist" "mkdir -p web/dist && touch web/dist/index.html"
 
 # 确保 golangci-lint 已安装，并加入 PATH 环境变量
 if ! command -v golangci-lint &> /dev/null; then
@@ -45,23 +45,25 @@ if ! command -v golangci-lint &> /dev/null; then
     go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
     export PATH=$PATH:$(go env GOPATH)/bin
 fi
-run_step "[2/10] 执行静态检查 (make lint)" "make lint"
+run_step "[2/11] 执行 Go 静态检查 (make lint)" "make lint"
 
-run_step "[3/10] 执行 docs/arch 一致性检查" "make docs-check && make docs-lint"
+run_step "[3/11] 执行 Rust 格式化与静态检查" "cargo fmt --manifest-path rust/substrate/Cargo.toml --check && cargo clippy --manifest-path rust/substrate/Cargo.toml -- -D warnings"
 
-run_step "[4/10] 编译 Rust Substrate 模块" "make rust-build"
+run_step "[4/11] 执行 docs/arch 一致性检查" "make docs-check && make docs-lint"
 
-run_step "[5/10] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
+run_step "[5/11] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
 
-run_step "[6/10] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out && go tool cover -func=coverage.out"
+run_step "[6/11] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out && go tool cover -func=coverage.out"
 
-run_step "[7/10] 运行 Rust 单元测试与格式化检查" "make rust-test && cargo fmt --manifest-path rust/substrate/Cargo.toml --check"
+run_step "[7/11] 运行 Rust 单元测试" "make rust-test"
 
-run_step "[8/10] 执行全量编译 (make build)" "make build"
+run_step "[8/11] 编译 Rust Substrate 模块" "make rust-build"
 
-run_step "[9/10] 验证生成的配置是否最新" "make gen-threshold-examples && git diff --exit-code configs/threshold-examples/"
+run_step "[9/11] 执行全量编译 (make build)" "make build"
 
-run_step "[10/10] 验证 Eval Harness Gate" "go run ./cmd/polaris eval --ci-gate"
+run_step "[10/11] 验证生成的配置是否最新" "make gen-threshold-examples && git diff --exit-code configs/threshold-examples/"
+
+run_step "[11/11] 验证 Eval Harness Gate" "go run ./cmd/polaris eval --ci-gate"
 
 echo ""
 echo "======================================"
