@@ -159,6 +159,7 @@ type StateContext struct {
 	Preferences          map[string]string // 从 DB 加载的用户偏好配置
 	SagaLog              []SagaStep        // Saga 记录日志
 	InitialMaxStepsLimit int               // Agent 启动时的原始步骤上限
+	ProviderSuspendCount int               // 连续无可用 provider 失败次数
 }
 
 // SagaStep 记录单个执行步骤的补偿信息
@@ -727,6 +728,9 @@ type EvalRunReport struct {
 	TotalCases int    `json:"total_cases"`
 	PassCount  int    `json:"pass_count"`
 	FailCount  int    `json:"fail_count"`
+	P0Fail     int    `json:"p0_fail"`
+	P1Fail     int    `json:"p1_fail"`
+	P0Count    int    `json:"p0_count"`
 	SafetyFail int    `json:"safety_fail"` // 一票否决计数
 	// SkippedLowFalsifiability 是因 FalsifiabilityScore < 阈值而跳过 L4 评分的用例数（Gap-B）。
 	// 该比例 = SkippedLowFalsifiability / TotalCases，反映 eval 套件的可评分质量。

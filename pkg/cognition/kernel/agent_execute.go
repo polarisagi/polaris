@@ -210,12 +210,27 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			resp, inferErr = a.provider.Infer(ctx, reqMsgs, protocol.WithModel(llmEff.ModelPool), protocol.WithThinkingMode(llmEff.ThinkingMode))
 			if inferErr != nil {
 				if errors.Is(inferErr, substrate.ErrAllProvidersFailed) {
-					// 写 DB：标记任务为 suspended，供 recovery.go 恢复扫描
-					if a.db != nil {
-						updateSQL := `UPDATE tasks SET status='suspended', suspend_reason='provider_exhausted', updated_at=? WHERE task_id=?`
-						_, dbErr := a.db.ExecContext(ctx, updateSQL, time.Now().UTC(), a.sCtx.TaskID)
-						if dbErr != nil {
-							slog.Warn("agent: failed to write suspended status", "task_id", a.sCtx.TaskID, "err", dbErr)
+					a.sCtx.ProviderSuspendCount++
+					if a.sCtx.ProviderSuspendCount >= 5 && a.hitl != nil {
+						hitlResp, hitlErr := a.hitl.Prompt(ctx, protocol.HITLPrompt{
+							ID:             fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
+							CheckpointType: "provider_exhausted",
+							PromptText:     "All providers have failed 5 times consecutively. Approve to reset suspension counter.",
+							DeadlineNs:     time.Now().Add(5 * time.Minute).UnixNano(),
+						})
+						if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
+							a.sCtx.ProviderSuspendCount = 0
+						} else {
+							return perrors.New(perrors.CodeInternal, "provider_exhausted hitl denied")
+						}
+					} else {
+						// 写 DB：标记任务为 suspended，供 recovery.go 恢复扫描
+						if a.db != nil {
+							updateSQL := `UPDATE tasks SET status='suspended', suspend_reason='provider_exhausted', updated_at=? WHERE task_id=?`
+							_, dbErr := a.db.ExecContext(ctx, updateSQL, time.Now().UTC(), a.sCtx.TaskID)
+							if dbErr != nil {
+								slog.Warn("agent: failed to write suspended status", "task_id", a.sCtx.TaskID, "err", dbErr)
+							}
 						}
 					}
 					// 继续原有的 Suspended 状态机转移逻辑（不 return，让 FSM 处理后续）

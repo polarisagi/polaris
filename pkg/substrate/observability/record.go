@@ -59,9 +59,15 @@ func RecordLLMCall(
 
 // IncrBurnStage3 记录 TokenBurnRate Stage3 FULLSTOP 触发（边沿计数，每次触发调用一次）。
 // 调用方: pkg/substrate/inference/router.go 或 M11 KillSwitch 触发点。
-func IncrBurnStage3(ctx context.Context) {
+func IncrBurnStage3() {
 	if instrBurnStage3Total != nil {
-		instrBurnStage3Total.Add(ctx, 1)
+		instrBurnStage3Total.Add(context.Background(), 1)
+	}
+}
+
+func IncrEventBufferDrainTimeout(count int64) {
+	if instrEventBufferDrainTimeoutTotal != nil {
+		instrEventBufferDrainTimeoutTotal.Add(context.Background(), count)
 	}
 }
 

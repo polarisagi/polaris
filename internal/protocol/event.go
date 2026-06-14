@@ -96,6 +96,7 @@ type EvalCompletedPayload struct {
 	Suite            string  `json:"suite"`        // "training" | "validation"
 	CandidateID      string  `json:"candidate_id"` // prompt_versions.id，空表示基线评测
 	PassRate         float64 `json:"pass_rate"`    // 0.0~1.0
+	P0PassRate       float64 `json:"p0_pass_rate"` // P0用例通过率
 	BlockDeploy      bool    `json:"block_deploy"` // safety_fail>0 时为 true
 	SafetyViolations int     `json:"safety_violations"`
 	P95LatencyMs     float64 `json:"p95_latency_ms"`

@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
+
+var ErrBatcherSaturated = errors.New("embedding batcher saturated")
 
 // EmbeddingBatcher — Embedding API 批量调用优化器。
 // 架构文档: docs/arch/01-Inference-Runtime-深度选型.md §6.1
@@ -208,6 +211,13 @@ func (b *EmbeddingBatcher) enqueue(req EmbedRequest) {
 			return
 		}
 	}
+
+	// Queue is full, send saturation error and delete from dedupMap
+	res := EmbedResult{Error: ErrBatcherSaturated}
+	for _, ch := range b.dedupMap[key] {
+		ch <- res
+	}
+	delete(b.dedupMap, key)
 }
 
 func (b *EmbeddingBatcher) flushBatch(ctx context.Context, texts []string, model string) ([]EmbedResult, error) {

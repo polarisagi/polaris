@@ -363,7 +363,7 @@ mcp_servers: []
 ```
 
 **执行流程**:
-`ReadCSV` 解析后按行展开为 TaskEntry 批量 PostTask，并发 PeekTask 轮询；所有行 Done/Failed 后写入结果 CSV。每行状态经 EventLog 双写（inv_M8_02 要求，但当前 inv_M8_02 未实现，见 §0-ter）。
+`ReadCSV` 解析后按行展开为 TaskEntry 批量 PostTask，并发 PeekTask 轮询；所有行 Done/Failed 后写入结果 CSV。每行状态经 EventLog 双写（inv_M8_02，已实现）。
 
 **状态持久化**（HE-Rule-6 State-in-DB）:
 - 每行 Task 的状态变更经 `TaskEntry.Status` 写入 Blackboard → EventLog 双写（inv_M8_02）

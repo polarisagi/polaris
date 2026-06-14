@@ -160,6 +160,10 @@ func (ks *KillSwitch) shouldFullStopLocked() bool {
 	if ks.state == KillPause && time.Since(ks.stateEnteredAt) > 15*time.Minute {
 		return true
 	}
+	if ks.tbr != nil && ks.tbr.CheckThrottle() >= observability.ThrottleStage3 {
+		observability.IncrBurnStage3()
+		return true
+	}
 	return false
 }
 

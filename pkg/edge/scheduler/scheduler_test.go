@@ -3,10 +3,12 @@ package scheduler
 import (
 	"context"
 	"testing"
+
+	"github.com/polarisagi/polaris/internal/config"
 )
 
 func TestResourceGovernor_AdmitPriority(t *testing.T) {
-	rg := NewResourceGovernor(10)
+	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
 	// Override probes for deterministic test
 	rg.memProbeFn = func() int64 { return 2048 }
 	rg.cpuProbeFn = func() float64 { return 30.0 }
@@ -31,7 +33,7 @@ func TestResourceGovernor_AdmitPriority(t *testing.T) {
 }
 
 func TestResourceGovernor_MemoryPressure(t *testing.T) {
-	rg := NewResourceGovernor(10)
+	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
 	rg.memProbeFn = func() int64 { return 256 } // below 512MB
 	rg.cpuProbeFn = func() float64 { return 30.0 }
 
@@ -48,7 +50,7 @@ func TestResourceGovernor_MemoryPressure(t *testing.T) {
 }
 
 func TestResourceGovernor_CPUThreshold(t *testing.T) {
-	rg := NewResourceGovernor(10)
+	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
 	rg.memProbeFn = func() int64 { return 2048 }
 	rg.cpuProbeFn = func() float64 { return 80.0 }
 
@@ -65,7 +67,7 @@ func TestResourceGovernor_CPUThreshold(t *testing.T) {
 }
 
 func TestResourceGovernor_ConcurrentLimit(t *testing.T) {
-	rg := NewResourceGovernor(3)
+	rg := NewResourceGovernor(3, config.ResourceGovernorConfig{})
 	rg.memProbeFn = func() int64 { return 2048 }
 	rg.cpuProbeFn = func() float64 { return 30.0 }
 
@@ -99,7 +101,7 @@ func TestResourceGovernor_ConcurrentLimit(t *testing.T) {
 }
 
 func TestResourceGovernor_WaitForCapacity(t *testing.T) {
-	rg := NewResourceGovernor(1)
+	rg := NewResourceGovernor(1, config.ResourceGovernorConfig{})
 	rg.memProbeFn = func() int64 { return 2048 }
 	rg.cpuProbeFn = func() float64 { return 30.0 }
 

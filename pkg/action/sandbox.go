@@ -9,12 +9,14 @@ import (
 // 返回 (分配的 tier, error)。error 非 nil 时调用方不得执行工具。
 // M07 §4.2: Tier0 上需要 SandboxContainer 的工具返回 ErrTier0SandboxLimit。
 func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) (protocol.SandboxTier, error) {
-	minTier := protocol.SandboxInProcess
+	var minTier protocol.SandboxTier
 	switch tool.Source {
 	case protocol.ToolBuiltin:
 		minTier = protocol.SandboxInProcess
 	case protocol.ToolLLMGenerated, protocol.ToolMCP, protocol.ToolA2A:
 		minTier = protocol.SandboxWasm // 规则 1：L2，非 L3
+	default:
+		minTier = protocol.SandboxWasm
 	}
 
 	tier := minTier

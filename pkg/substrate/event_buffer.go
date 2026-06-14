@@ -2,10 +2,12 @@ package substrate
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // EventWriteBuffer — MPSC 批量写入缓冲。
@@ -121,7 +123,17 @@ func (b *EventWriteBuffer) Serve() {
 // Stop 关闭 channel，排空残余事件。
 func (b *EventWriteBuffer) Stop() {
 	close(b.ch)
-	b.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		slog.Error("event buffer drain timeout")
+		observability.IncrEventBufferDrainTimeout(int64(len(b.ch)))
+	}
 }
 
 // consumeLoop 批量收集事件 → 构造 MutationIntent → 投递至 MutationBus → DatabaseWriter 串行 INSERT。

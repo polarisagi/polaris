@@ -1,7 +1,6 @@
 package substrate
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,7 +31,7 @@ func (wm *WorkspaceManager) GetRootDir() string {
 }
 
 type WorkspaceManifest struct {
-	TaskID    int64
+	TaskID    string
 	CreatedAt int64
 	Files     []WorkspaceFile
 	TotalSize int64
@@ -47,8 +46,8 @@ type WorkspaceFile struct {
 
 // Create 为任务创建隔离工作区目录，并注册 manifest。
 // 目录路径: {rootDir}/{taskID}/，权限 0700（仅当前进程可读写）。
-func (wm *WorkspaceManager) Create(taskID int64) (string, error) {
-	key := fmt.Sprintf("%d", taskID)
+func (wm *WorkspaceManager) Create(taskID string) (string, error) {
+	key := taskID
 	if _, exists := wm.manifests[key]; exists {
 		return filepath.Join(wm.rootDir, key), nil // 幂等
 	}
@@ -64,8 +63,8 @@ func (wm *WorkspaceManager) Create(taskID int64) (string, error) {
 }
 
 // RegisterFile 将文件记录到工作区 manifest，供 CheckQuota 和 GC 使用。
-func (wm *WorkspaceManager) RegisterFile(taskID int64, f WorkspaceFile) {
-	key := fmt.Sprintf("%d", taskID)
+func (wm *WorkspaceManager) RegisterFile(taskID string, f WorkspaceFile) {
+	key := taskID
 	m, ok := wm.manifests[key]
 	if !ok {
 		return
@@ -114,8 +113,8 @@ func (wm *WorkspaceManager) GC(now int64, activeTaskIDs []string) {
 }
 
 // DirPath 返回任务工作区的物理路径（不创建）。
-func (wm *WorkspaceManager) DirPath(taskID int64) string {
-	return filepath.Join(wm.rootDir, fmt.Sprintf("%d", taskID))
+func (wm *WorkspaceManager) DirPath(taskID string) string {
+	return filepath.Join(wm.rootDir, taskID)
 }
 
 var ErrWorkspaceQuotaExhausted = &WorkspaceError{"workspace quota exhausted"}

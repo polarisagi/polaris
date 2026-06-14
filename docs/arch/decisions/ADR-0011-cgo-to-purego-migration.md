@@ -72,4 +72,4 @@ ADR-0005 决策购零 CGO（purego 桥接），但代码实际滞后：
 | 日期 | 变更 |
 |------|------|
 | 2026-05-16 | 初稿，Accepted；代码执行待 B 阶段批准 |
-| 2026-05-16 | Phase 1~5 全部执行完毕；ABI 1.0；`make build/test` 全套绿；副发现 ffi-abi.md §1.1 引擎清单与 lib.rs 不符（已 §7.5 标记） |
+| 2026-05-16 | Phase 1~5 全部执行完毕；ABI 1.1（Major=1, Minor=1）；`make build/test` 全套绿；副发现 ffi-abi.md §1.1 引擎清单与 lib.rs 不符（已 §7.5 标记） |

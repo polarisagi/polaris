@@ -35,6 +35,9 @@ func (b *BurnRateTracker) Stage() int {
 	if b.baselineP95 <= 0 {
 		return 0
 	}
+	if b.ema30s > b.baselineP95*10.0 {
+		return 3
+	}
 	if b.ema30s > b.baselineP95*3.0 {
 		return 2
 	}

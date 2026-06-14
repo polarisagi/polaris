@@ -7,7 +7,7 @@
 - M6 **是**: 技能注册、索引、检索、生命周期管理 | M6 **不是**: 技能沙箱执行（那是 M7）
 - M6 **是**: Logic Collapse 蒸馏（System 2 轨迹 → TypeScript 脚本生成） | M6 **不是**: LLM 推理调用（那是 M1）
 - M6 **是**: SkillSelector 启发式匹配（不调 LLM） | M6 **不是**: Agent 状态机控制（那是 M4）
-- M6 **是**: cosign 签名验证（加载前置） | M6 **不是**: 签名策略制定（那是 M11 Cedar-Gate）
+- M6 **是**: HMAC-SHA256 签名验证（加载前置；本地离线签名，非 cosign） | M6 **不是**: 签名策略制定（那是 M11 Cedar-Gate）
 - M6 **是**: SKILL.md（script runtime）或 SKILL.md + src/index.ts（script runtime，Logic Collapse 生成）技能管理 | M6 **不是**: 工具注册与发现（那是 M7 ToolRegistry）
 
 ---
@@ -18,7 +18,7 @@
 - 编号: inv_M6_02 | 不变量: Logic Collapse 产物必经 staging 7 阶段——禁止 M9 直写 skills 表 | 验证方式: M9 → M2 Outbox 路径审计
 - 编号: inv_M6_03 | 不变量: risk_level 缺失/歧义时默认最高风险——SandboxTier 取最严格级别 | 验证方式: M11 PolicyGate 代码审计
 - 编号: inv_M6_04 | 不变量: 仅幂等技能可缓存结果——非幂等技能每次重新执行 | 验证方式: SkillCache key 包含 idempotency 标记
-- 编号: inv_M6_05 | 不变量: cosign 签名校验失败 → fail-closed 拒绝加载 + CRITICAL 审计 | 验证方式: M6 §2 验证流水线 Step 4
+- 编号: inv_M6_05 | 不变量: HMAC-SHA256 签名校验失败 → fail-closed 拒绝加载 + CRITICAL 审计 | 验证方式: M6 §2 验证流水线 Step 4
 - 编号: inv_M6_06 | 不变量: 编译前安全闸门全部满足才触发 Logic Collapse——成功次数/语义方差/Eval Gate | 验证方式: M6 §2.2 编译前安全闸门
 
 ---
@@ -42,7 +42,7 @@ skill-name/
 ├── src/
 │   └── index.ts        # TypeScript 脚本（Logic Collapse 蒸馏产物）
 ├── test/               # 测试用例 (Eval Harness 输入)
-└── SIGNATURE           # cosign 签名
+└── SIGNATURE           # HMAC-SHA256 签名
 ```
 
 script runtime 技能由市场安装（SKILL.md 即最终产物）；Logic Collapse 生成的技能从 script 轨迹蒸馏为 TypeScript 脚本，经 Rust 沙箱（wasmtime_engine.rs）或 Container 沙箱执行。
@@ -73,7 +73,7 @@ Skill/JSONSchema/Condition/SkillSource 类型定义见 `internal/protocol/interf
 
 **Stage 4 — 契约推导**: 默认采用 DeepSeek V4 推导技能的前置条件（所需环境/工具/权限）、后置条件（验证标准）、风险等级和沙箱 tier。
 
-**Stage 5 — 脚本生成 + 索引 + 签名**: LLM 生成 TypeScript 脚本（src/index.ts）经静态分析后 → Rust 沙箱行为测试（wasmtime_engine.rs）→ cosign 签名 → 写入 Skill Index → SurrealDB-Core KV 缓存。
+**Stage 5 — 脚本生成 + 索引 + 签名**: LLM 生成 TypeScript 脚本（src/index.ts）经静态分析后 → Rust 沙箱行为测试（wasmtime_engine.rs）→ HMAC-SHA256 签名 → 写入 Skill Index → SurrealDB-Core KV 缓存。
 
 ### 2.2 Logic Collapse: System 2 → System 1
 
@@ -297,7 +297,7 @@ promoteOrCache: 成功率>0.9 && 使用>50 → gold; 成功率>0.7 || 7天使用
 
 - 故障场景: SkillSelector 未匹配任何技能 | 降级路径: 退到 LLM 通用工具调用路径 | 恢复策略: 新技能注册后自动生效
 - 故障场景: 脚本生成失败 | 降级路径: `ErrLogicCollapseUnavailableInLocalOnly` + 降级到 SKILL.md 模式 (WARN) | 恢复策略: LLM 蒸馏失败缓存标记，下次重试
-- 故障场景: cosign 签名校验失败 | 降级路径: 拒绝加载（fail-closed）+ CRITICAL 审计 | 恢复策略: 重新签名或回滚旧版本
+- 故障场景: HMAC-SHA256 签名校验失败 | 降级路径: 拒绝加载（fail-closed）+ CRITICAL 审计 | 恢复策略: 重新签名或回滚旧版本
 - 故障场景: 技能执行超时 | 降级路径: 硬 kill（超时见 `spec/state.yaml §m6_skill.skill_exec_timeout_low_seconds` / `skill_exec_timeout_medium_high_seconds`）+ ErrSkillTimeout | 恢复策略: 下次调用正常执行
 - 故障场景: 技能缓存 LRU 驱逐 | 降级路径: 冷加载 (~100ms 延迟) | 恢复策略: 热度恢复后自动缓存
 
@@ -313,7 +313,7 @@ promoteOrCache: 成功率>0.9 && 使用>50 → gold; 成功率>0.7 || 7天使用
 - 关联模块: M5 Memory | 关键契约: L3 Procedural Memory（SurrealDB-Core skillKV + SurrealDB-Core 检索）、M5 skillKV 与 M6 ScriptSkillCache 的关系 | 位置: M5 §5, M6 §5.1
 - 关联模块: M7 Tool Action | 关键契约: Rust Script Sandbox（CANONICAL SOURCE，wasmtime_engine.rs）、能力权限矩阵 | 位置: M7 §4
 - 关联模块: M9 Self-Improve | 关键契约: Logic Collapse 触发 → M6 编译流水线 | 位置: M9 §1.1
-- 关联模块: M11 Policy Safety | 关键契约: Skill RiskLevel 评估、cosign 签名验证、SandboxTier 分配 | 位置: M11 §2, M7 §5
+- 关联模块: M11 Policy Safety | 关键契约: Skill RiskLevel 评估、HMAC-SHA256 签名验证、SandboxTier 分配 | 位置: M11 §2, M7 §5
 - 关联模块: M12 Eval Harness | 关键契约: 技能编译前 Eval Gate 自动化回归测试 | 位置: M12 §7
 - 关联模块: 全局字典 | 关键契约: Logic-Collapse/Script-Sandbox 定义、HE-Rule-3 可组合原语 | 位置: 00-Global-Dictionary §5, §2
 - 关联模块: DDL | 关键契约: Skill 存储物理路径（SQLite skills 表 + SurrealDB-Core Outbox 投影） | 位置: internal/protocol/schema/

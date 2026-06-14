@@ -288,7 +288,7 @@ staging:
     Evo-L2:
       description: New skill / Logic Collapse output
       automation: semi
-      gates: [initial_eval, replay_shadow, canary_rollout, cosign_signature]
+      gates: [initial_eval, replay_shadow, canary_rollout, hmac_sha256_signature]
 
     Evo-L3:
       description: Strategy / LoRA adapter modification
@@ -357,7 +357,7 @@ taint:
     - operation: skill_distillation
       input_taint: any
       output_taint: none
-      condition: cosign_signature_valid + capabilities_audited
+      condition: hmac_sha256_signature_valid + capabilities_audited
 
     - operation: user_review_downgrade
       input_taint: high
@@ -876,7 +876,7 @@ thresholds:
     wazero_pool_max: 8
     skill_exec_timeout_low_seconds: 30
     skill_exec_timeout_medium_high_seconds: 120
-    cosign_verify_cache_ttl_hours: 1
+    hmac_sha256_verify_cache_ttl_hours: 1
     re_eval_when:
       - distillation_*: ["false_trigger_rate", "miss_trigger_rate"]
       - canary_*: ["regression_window_demand"]

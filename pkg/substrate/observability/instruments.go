@@ -17,12 +17,13 @@ import (
 
 var (
 	// M1 LLM 调用
-	instrLLMCallsTotal   metric.Int64Counter
-	instrLLMLatencyMs    metric.Float64Histogram
-	instrTokensTotal     metric.Int64Counter
-	instrAPIcostUSD      metric.Float64Counter
-	instrBurnStage3Total metric.Int64Counter
-	instrLLMCacheHitRate metric.Float64Histogram // (ISSUE-04)
+	instrLLMCallsTotal                metric.Int64Counter
+	instrLLMLatencyMs                 metric.Float64Histogram
+	instrTokensTotal                  metric.Int64Counter
+	instrAPIcostUSD                   metric.Float64Counter
+	instrBurnStage3Total              metric.Int64Counter
+	instrLLMCacheHitRate              metric.Float64Histogram // (ISSUE-04)
+	instrEventBufferDrainTimeoutTotal metric.Int64Counter
 
 	// M7 工具调用 & 沙箱
 	instrToolCallsTotal metric.Int64Counter
@@ -92,8 +93,12 @@ func initInstruments(meter metric.Meter) {
 
 	// Stage3 FULLSTOP 边沿计数（与 M03 §3.2 KillSwitch 联动）
 	instrBurnStage3Total, _ = meter.Int64Counter(
-		"polaris.token_burn.stage3_triggered_total",
+		"polaris_token_burn_extreme_total",
 		metric.WithDescription("TokenBurnRate Stage3 FULLSTOP 触发次数"),
+	)
+	instrEventBufferDrainTimeoutTotal, _ = meter.Int64Counter(
+		"polaris_eventbuffer_drain_timeout",
+		metric.WithDescription("未写入 EventWriteBuffer 因 Stop 超时而丢弃的事件数"),
 	)
 
 	// 工具调用

@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-> **§跳读**: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:28 接口层 / 2:52 EventLog / 2.6:167 tasks表 / 3:181 容量 / 4:224 Workspace / 5:268 SchemaManager / 6:280 Reindexer / 7:293 Go↔Rust FFI / 8:317 连接池 / 9:325 多写者 / 10:336 引擎速查 / 11:350 四层记忆映射 / 15:356 428(SOFT)降级 / 16:368 依赖
+> **§跳读**: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:28 接口层 / 2:52 EventLog / 2.6:167 tasks表 / 3:181 容量 / 4:216 Workspace / 5:260 SchemaManager / 6:272 Reindexer / 7:285 Go↔Rust FFI / 8:309 连接池 / 9:317 多写者 / 10:328 引擎速查 / 11:342 四层记忆映射 / 15:348 428(SOFT)降级 / 16:360 依赖
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）
@@ -207,17 +207,9 @@ D3 (紧急) 触发: 磁盘使用率 >90% → 淘汰已归档→Parquet 的 Cold 
 | 索引 + 临时 | ~40 | ~100 | 向量索引 + FTS5 + 迁移备份 |
 | **EventLog 合计** | **~310** | **~750** | 占 M2 总预算 310MB (HT0 steady) 的主体 |
 
-### 3.4 归档实现接口
+### 3.4 归档实现接口【计划中，未实现】
 
-EventLog Archiver 作为 M2 后台周期性 Worker（与 OnlineReindexer 共享调度插槽），运行序列：
-1. 读取 `events.meta.archived` 标记或 `created_at < now - 30d`
-2. 批量导出 → Parquet（zstd 压缩，block size=64KB）
-3. 写 `events_archive.parquet` 至 `data/cold/events/{year}/{month}/`
-4. UNIQUE(sha256_of_content) 防重复归档
-5. 写入 archived 记录至 events 表 hash chain（含 Parquet 文件指纹）
-6. Cold 数据清理: sha256 验证通过 → 删除原始 events 行（ESCAPE 审批后方可执行）
-
-Tier 0 默认禁用自动归档（HT0 无磁盘压力），仅在磁盘水位触发时由 M3 OSMemoryGuard 三级降级信号激活。
+EventLog Archiver 设计为 M2 后台周期性 Worker：按 `created_at < now - 30d` 批量导出 → Parquet（zstd 压缩）→ `data/cold/events/{year}/{month}/` → sha256 防重复 → 原始行删除（需 ESCAPE 审批）。Tier 0 默认禁用，由 M3 OSMemoryGuard 磁盘水位信号激活。
 
 ---
 

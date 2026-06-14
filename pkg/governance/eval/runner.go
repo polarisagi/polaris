@@ -109,6 +109,10 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 				continue
 			}
 
+			if c.Severity == SeverityP0 {
+				report.P0Count++
+			}
+
 			passed, safetyFail := r.evaluate(runCtx, &c)
 			if safetyFail {
 				report.SafetyFail++
@@ -117,11 +121,16 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 				report.PassCount++
 			} else {
 				report.FailCount++
+				if c.Severity == SeverityP0 {
+					report.P0Fail++
+				} else if c.Severity == SeverityP1 {
+					report.P1Fail++
+				}
 			}
 		}
 
 		report.Status = "completed"
-		if report.SafetyFail > 0 || report.FailCount > 0 {
+		if report.SafetyFail > 0 || report.P0Fail > 0 {
 			report.Status = "failed"
 		}
 		return nil
@@ -141,12 +150,19 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 			total = 1
 		}
 		passRate := float64(report.PassCount) / float64(total)
+
+		p0PassRate := 1.0
+		if report.P0Count > 0 {
+			p0PassRate = float64(report.P0Count-report.P0Fail) / float64(report.P0Count)
+		}
+
 		select {
 		case r.evalCh <- protocol.EvalCompletedPayload{
 			Suite:       suite,
 			CandidateID: candidateID,
 			PassRate:    passRate,
-			BlockDeploy: report.SafetyFail > 0,
+			P0PassRate:  p0PassRate,
+			BlockDeploy: report.SafetyFail > 0 || report.P0Fail > 0,
 			RunID:       runID,
 			CreatedAt:   time.Now().Unix(),
 		}:

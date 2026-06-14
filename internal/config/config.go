@@ -57,11 +57,20 @@ type DownloadConfig struct {
 }
 
 type SystemConfig struct {
-	Tier         int        `toml:"tier"`
-	MaxAgents    int        `toml:"max_agents"`
-	GoMemLimitMB int        `toml:"go_memlimit_mb"`
-	DataDir      string     `toml:"data_dir"`
-	Dirs         DirsConfig `toml:"dirs"`
+	Tier             int                    `toml:"tier"`
+	MaxAgents        int                    `toml:"max_agents"`
+	GoMemLimitMB     int                    `toml:"go_memlimit_mb"`
+	DataDir          string                 `toml:"data_dir"`
+	Dirs             DirsConfig             `toml:"dirs"`
+	ResourceGovernor ResourceGovernorConfig `toml:"resource_governor"`
+}
+
+type ResourceGovernorConfig struct {
+	MemL1FreeMB int     `toml:"mem_l1_free_mb"`
+	MemL2FreeMB int     `toml:"mem_l2_free_mb"`
+	MemL3FreeMB int     `toml:"mem_l3_free_mb"`
+	CPUL1Pct    float64 `toml:"cpu_l1_pct"`
+	CPUL2Pct    float64 `toml:"cpu_l2_pct"`
 }
 
 // DirsConfig 允许 Operator 将特定子目录挂载到其他磁盘/分区。

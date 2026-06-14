@@ -14,7 +14,9 @@ import (
 // 架构文档: docs/arch/04-Agent-Kernel-深度选型.md §7
 
 type WorldModel struct {
-	predictor  *StatePredictor
+	//nolint:unused
+	predictor *StatePredictor
+	//nolint:unused
 	confidence *ConfidenceScorer
 	//nolint:unused
 	counterfactual *CounterfactualEngine
@@ -109,16 +111,9 @@ func (cs *ConfidenceScorer) Calibrate(rawProb float64) float64 {
 	return rawProb
 }
 
-// ShouldSkipLLM 判断是否可跳过 LLM 调用。
-// Predict → Calibrate → 校准置信度 > 0.8 → 跳过 LLM。
-func (wm *WorldModel) ShouldSkipLLM(currentState string) bool {
-	if wm.predictor == nil || wm.confidence == nil {
-		return false
-	}
-	_, prob := wm.predictor.Predict(currentState)
-	confidence := wm.confidence.Calibrate(prob)
-	return confidence > 0.8
-}
+// NOTE: ShouldSkipLLM dead code removed.
+// LLM skipping is now handled via the SurpriseIndex < 0.3 fast path checks
+// instead of StatePredictor to avoid missing transition records.
 
 // CounterfactualEngine 反事实推演（沙箱执行）。
 type CounterfactualEngine struct {

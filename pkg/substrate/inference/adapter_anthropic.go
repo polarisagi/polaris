@@ -47,10 +47,19 @@ func NewAnthropicAdapter(model string, credFn func() []byte, client *http.Client
 	if client == nil {
 		client = defaultHTTPClient
 	}
+
+	// Wrap transport for key injection
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	customClient := *client // shallow copy
+	customClient.Transport = keyInjectRT{inner: transport, keyFn: credFn}
+
 	a := &AnthropicAdapter{
 		model:        model,
 		credentialFn: credFn,
-		client:       client,
+		client:       &customClient,
 		tbr:          tbr,
 		caps: protocol.ProviderCapabilities{
 			SupportsStreaming: true,
@@ -108,15 +117,12 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []protocol.Message, o
 	if err != nil {
 		return nil, err
 	}
-	apiKey := a.credentialFn()
-	defer clearBytes(apiKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", string(apiKey))
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	if req.ThinkingMode != "" && req.ThinkingMode != protocol.ThinkingDisabled {
 		httpReq.Header.Add("anthropic-beta", "interleaved-thinking-2025-05-14")
@@ -212,15 +218,12 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []protocol.Mess
 	if err != nil {
 		return nil, err
 	}
-	apiKey := a.credentialFn()
-	defer clearBytes(apiKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", string(apiKey))
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	if req.ThinkingMode != "" && req.ThinkingMode != protocol.ThinkingDisabled {
 		httpReq.Header.Add("anthropic-beta", "interleaved-thinking-2025-05-14")
@@ -518,4 +521,19 @@ func resolveAnthropicModel(requested string) string {
 		}
 		return requested
 	}
+}
+
+// keyInjectRT injects the API key safely during the HTTP round trip.
+type keyInjectRT struct {
+	inner http.RoundTripper
+	keyFn func() []byte
+}
+
+func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	apiKey := rt.keyFn()
+	defer clearBytes(apiKey)
+	req.Header.Set("x-api-key", string(apiKey))
+	resp, err := rt.inner.RoundTrip(req)
+	req.Header.Del("x-api-key") // clear the copy from map immediately
+	return resp, err
 }

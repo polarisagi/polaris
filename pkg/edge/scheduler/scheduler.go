@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
 )
 
 // TaskStatus 任务生命周期枚举。
@@ -51,14 +53,23 @@ type ResourceGovernor struct {
 	cond          *sync.Cond
 	maxConcurrent int
 	inFlight      int
+	cfg           config.ResourceGovernorConfig
 
 	memProbeFn func() (freeMB int64)
 	cpuProbeFn func() (usage float64)
 }
 
-func NewResourceGovernor(maxConcurrent int) *ResourceGovernor {
+func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *ResourceGovernor {
+	if cfg.MemL1FreeMB == 0 {
+		cfg.MemL1FreeMB = 1024
+		cfg.MemL2FreeMB = 512
+		cfg.MemL3FreeMB = 256
+		cfg.CPUL1Pct = 70.0
+		cfg.CPUL2Pct = 90.0
+	}
 	rg := &ResourceGovernor{
 		maxConcurrent: maxConcurrent,
+		cfg:           cfg,
 		memProbeFn: func() int64 {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
@@ -82,12 +93,6 @@ func NewResourceGovernor(maxConcurrent int) *ResourceGovernor {
 // 防止 priority=0 任务无界堆积导致 OOM，同时保留其优先准入语义。
 const interactiveConcurrencyMultiplier = 4
 
-const (
-	memL1 = 1024
-	memL2 = 512
-	memL3 = 256
-)
-
 // Admit implements §2.0 3-level degradation rule:
 func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 	rg.mu.Lock()
@@ -97,17 +102,17 @@ func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 	cpuUsage := rg.cpuProbeFn()
 	degradeLevel := 0
 
-	if freeMemMB < memL1 || cpuUsage > 70.0 {
+	if freeMemMB < int64(rg.cfg.MemL1FreeMB) || cpuUsage > rg.cfg.CPUL1Pct {
 		degradeLevel = 1
 	}
-	if freeMemMB < memL2 || cpuUsage > 90.0 {
+	if freeMemMB < int64(rg.cfg.MemL2FreeMB) || cpuUsage > rg.cfg.CPUL2Pct {
 		degradeLevel = 2
 	}
 
-	if freeMemMB < memL3 {
+	if freeMemMB < int64(rg.cfg.MemL3FreeMB) {
 		return false, 2
 	}
-	if (cpuUsage > 70.0 || freeMemMB < 512) && priority != 0 {
+	if (cpuUsage > rg.cfg.CPUL1Pct || freeMemMB < int64(rg.cfg.MemL2FreeMB)) && priority != 0 {
 		return false, 2
 	}
 

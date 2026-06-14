@@ -33,6 +33,8 @@ type GatewayImpl struct {
 	// waiters 保存等待审批结果的 channel
 	mu      sync.Mutex
 	waiters map[string]chan protocol.HITLResponse
+
+	allowedAutoApproveTypes []string
 }
 
 var _ protocol.HITL = (*GatewayImpl)(nil)
@@ -43,9 +45,16 @@ func (g *GatewayImpl) SetNotifier(n Notifier) {
 
 func NewGateway(store protocol.Store) *GatewayImpl {
 	return &GatewayImpl{
-		store:   store,
-		waiters: make(map[string]chan protocol.HITLResponse),
+		store:                   store,
+		waiters:                 make(map[string]chan protocol.HITLResponse),
+		allowedAutoApproveTypes: []string{},
 	}
+}
+
+func (g *GatewayImpl) SetAllowedAutoApproveTypes(types []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.allowedAutoApproveTypes = types
 }
 
 // Prompt 挂起当前任务并请求人工审批。
@@ -88,7 +97,7 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p protocol.HITLPrompt) (*proto
 	select {
 	case <-ctx.Done():
 		// 超时/取消
-		action := resolveTimeoutAction(p)
+		action := g.resolveTimeoutAction(p)
 		switch action {
 		case "auto_approve":
 			resp := protocol.HITLResponse{Approved: true, Reason: "auto_approved_on_timeout"}
@@ -106,9 +115,20 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p protocol.HITLPrompt) (*proto
 	}
 }
 
-func resolveTimeoutAction(p protocol.HITLPrompt) string {
-	if p.CheckpointType == "low_risk" {
-		return "auto_approve"
+func (g *GatewayImpl) resolveTimeoutAction(p protocol.HITLPrompt) string {
+	if p.RiskLevel == 0 {
+		g.mu.Lock()
+		allowed := false
+		for _, t := range g.allowedAutoApproveTypes {
+			if p.CheckpointType == t {
+				allowed = true
+				break
+			}
+		}
+		g.mu.Unlock()
+		if allowed {
+			return "auto_approve"
+		}
 	}
 	if p.CheckpointType == "high_risk" || p.RiskLevel >= 3 {
 		return "auto_deny"

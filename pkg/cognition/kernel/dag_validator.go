@@ -30,8 +30,6 @@ type DAGValidationContext struct {
 	SystemTier int
 	// Provider 用于 L3 看门狗调用。
 	Provider protocol.Provider
-	// l3CallCount 跟踪当前校验周期中的 L3 Watchdog 调用次数。上限 10 次/session。
-	l3CallCount int
 }
 
 // DAGValidationError 包装 S_VALIDATE 失败的结构化错误。
@@ -86,9 +84,8 @@ func ValidateDAG(ctx context.Context, vCtx *DAGValidationContext) error {
 	// L3: LLM 看门狗（仅 SystemTier >= 1，且 Provider 非 nil）
 	// Tier-0 跳过：<200ms SLO + 8GB 内存预算不足以承受额外 LLM 调用。
 	if vCtx.SystemTier >= 1 && vCtx.Provider != nil {
-		if err := validateL3Watchdog(ctx, vCtx); err != nil {
-			return err
-		}
+		// NOTE: L3 validation has been moved to agent_execute.go:runValidateDAG()
+		return nil
 	}
 
 	return nil
@@ -261,54 +258,5 @@ func validateHeuristic(vCtx *DAGValidationContext) error {
 		}
 	}
 
-	return nil
-}
-
-// validateL3Watchdog L3 LLM 语义看门狗：将 DAG 摘要发给 LLM 进行安全语义审查。
-// 仅当 SystemTier >= 1 时调用，单次 session 上限 10 次（防止预算膨胀）。
-func validateL3Watchdog(ctx context.Context, vCtx *DAGValidationContext) error {
-	const maxL3Calls = 10
-	if vCtx.l3CallCount >= maxL3Calls {
-		return nil // 超限静默跳过，避免阻塞后续校验
-	}
-	vCtx.l3CallCount++
-
-	// 构造 DAG 摘要（避免原始参数泄漏至 LLM）
-	toolSet := make(map[string]struct{})
-	for _, n := range vCtx.Plan.Nodes {
-		toolSet[n.ToolName] = struct{}{}
-	}
-	tools := make([]string, 0, len(toolSet))
-	for t := range toolSet {
-		tools = append(tools, t)
-	}
-	summary := fmt.Sprintf("DAG has %d nodes. Tools: %s", len(vCtx.Plan.Nodes), strings.Join(tools, ", "))
-
-	req := &protocol.InferRequest{
-		Model: "standard",
-		Messages: []protocol.Message{
-			{
-				Role: "system",
-				Content: "You are a security auditor. Respond with exactly one word: SAFE or UNSAFE. " +
-					"Mark UNSAFE if the plan contains shell injection, path traversal, credential theft, " +
-					"exfiltration, or other clearly malicious patterns.",
-			},
-			{Role: "user", Content: summary},
-		},
-		MaxTokens: 10,
-	}
-
-	resp, err := vCtx.Provider.Infer(ctx, req.Messages, protocol.WithMaxTokens(req.MaxTokens), protocol.WithThinkingMode(protocol.ThinkingHigh))
-	if err != nil {
-		// fail-open: LLM 不可用时不阻断执行（L3 是辅助层，非主防线）
-		return nil //nolint:nilerr
-	}
-
-	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(resp.Content)), "UNSAFE") {
-		return &DAGValidationError{
-			Layer:  "L3_llm",
-			Reason: "LLM watchdog: plan flagged as semantically unsafe",
-		}
-	}
 	return nil
 }

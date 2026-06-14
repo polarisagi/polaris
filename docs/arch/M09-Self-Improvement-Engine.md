@@ -224,7 +224,7 @@ SurpriseIndex 类型和 Compute/Route 实现见 `pkg/swarm/surprise.go`。Surpri
 |------|------|--------|------|------|---------|
 | **L0** | 配置调整 (路由权重/超时/模型选择/[SurpriseIndex]分位) | 全自动 | telemetry 监控 | 即时 | ✅ 已实现 |
 | **L1** | Prompt/Heuristic/system prompt/路由判据 | 全自动 | Eval Harness | 即时 | ✅ 已实现 |
-| **L2** | 新技能生成 (Skill Library 新条目) | 半自动 | 沙箱 + Eval + cosign | 即时 | ⚠️ 计划中 |
+| **L2** | 新技能生成 (Skill Library 新条目) | 半自动 | 沙箱 + Eval + HMAC-SHA256 签名 | 即时 | ⚠️ 计划中 |
 | **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 | ⚠️ 计划中 |
 | **L4** | 源码/架构修改 (Go/Rust) | 严格审批 | 形式化验证 + Red Team + 多签 | git revert | ⚠️ 计划中 |
 
