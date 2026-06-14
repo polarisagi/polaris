@@ -242,7 +242,7 @@ DDL 见 `internal/protocol/schema/004_semantic_memory.sql`。图存储使用 [St
 - 推理关键词（"为什么"/"分析"/"比较"）→ `reasoning`
 - 规则未命中 → `unknown`（等效全搜）
 
-**Tier-1+（待实现）**: 查询 embedding 与 4 个类型原型向量余弦相似度比较（置信度 <0.3 时回退 `unknown`）。Tier-0 成本约束禁止此处调用 embedding API。
+**Tier-1+（✅ 已实现）**: `ClassifyQuerySemantic(ctx, query, embedder)` 在 `query_classifier_semantic.go` 中；`InitPrototypes` 预计算 4 类原型向量并缓存；运行时余弦相似度比较，置信度 <0.3 回退 `unknown`；embedder=nil 或原型未初始化时自动降级至 Tier-0 关键词路径。
 
 **RetrievalRouter（已实现，在 HybridRetriever.Search 内）**:
 - `temporal` → 激活第 5 路 `DurativeMemory`（`DurativeMemoryManager.RetrieveGroups`）
