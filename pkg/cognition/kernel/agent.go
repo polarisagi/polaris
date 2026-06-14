@@ -57,6 +57,7 @@ type AgentConfig struct {
 func NewAgent(id string, db *sql.DB, taintGate TaintGate, provider protocol.Provider) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	wCh := make(chan protocol.MemoryWhisper, 4) // 缓冲 4 条，防 PlannerPool 阻塞
+	tracker := newEpochTracker()
 	return &Agent{
 		ID:     id,
 		db:     db,
@@ -67,6 +68,7 @@ func NewAgent(id string, db *sql.DB, taintGate TaintGate, provider protocol.Prov
 			MaxReplan:      3,
 			SysEnvSnapshot: sysenv.GetSystemInfo().FormatMarkdown(),
 			WhisperChan:    wCh,
+			EpochTracker:   tracker,
 		},
 		ctx:             ctx,
 		cancel:          cancel,

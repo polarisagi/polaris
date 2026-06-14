@@ -58,6 +58,9 @@ type StateContext struct {
 	StartedAt     time.Time
 	WhisperChan   <-chan protocol.MemoryWhisper // 异步接收 MemoryAgent 线索
 
+	ContextEpoch int64         // B2: 记录当前 Prompt 序列的版本号
+	EpochTracker *epochTracker // B2: tracker 实例
+
 	// Inference Budget 控制
 	TokenBudget int
 	TokensUsed  int
@@ -314,7 +317,11 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 	))
 	b.WriteInstruction(safeInst)
 	b.WriteUserData(sCtx.RawIntentTS)
-	return b.Build()
+	msgs := b.Build()
+	if sCtx.EpochTracker != nil {
+		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+	}
+	return msgs
 }
 
 func (sm *StateMachine) onPerceiveSuccess(sCtx protocol.StateContext, fill []byte) (protocol.State, error) {
@@ -329,14 +336,9 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	// 有记忆系统时注入历史执行经验（Episodic Top-5 + 任务目标 + 工具列表）
 	if pCtx.Mem != nil {
 		if msgs, err := buildPlanContext(sm.bgCtx(), pCtx.Mem, sCtx, pCtx.Tools, sCtx.Cognitive); err == nil {
-			if len(sm.dynamicHints) > 0 && len(msgs) > 0 {
-				var sb strings.Builder
-				sb.WriteString("\n\n## 本次重规划新增可用工具\n")
-				sb.WriteString("以下工具刚刚被激活，你可以在重规划中使用它们：\n")
-				for _, h := range sm.dynamicHints {
-					sb.WriteString(fmt.Sprintf("- **%s**: %s\n", h.ToolName, h.Description))
-				}
-				msgs[0].Content += sb.String()
+			sm.appendDynamicHints(msgs)
+			if sCtx.EpochTracker != nil {
+				sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 			}
 			return msgs
 		}
@@ -402,7 +404,11 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		b.WriteInstruction(safeHint)
 	}
 
-	return b.Build()
+	msgs := b.Build()
+	if sCtx.EpochTracker != nil {
+		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+	}
+	return msgs
 }
 
 func (sm *StateMachine) onPlanFailure(sCtx protocol.StateContext, err error) (protocol.State, error) {
@@ -435,7 +441,11 @@ func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateCon
 		"m4_execute_result",
 	)
 	b.WriteUserData(resultTS)
-	return b.Build()
+	msgs := b.Build()
+	if sCtx.EpochTracker != nil {
+		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+	}
+	return msgs
 }
 
 // bgCtx 返回用于内存检索的后台 context（不绑定任务生命周期）。
@@ -483,6 +493,18 @@ type ExtensionActivatorIface interface {
 type ExtActivatedHint struct {
 	ToolName    string
 	Description string
+}
+
+func (sm *StateMachine) appendDynamicHints(msgs []protocol.Message) {
+	if len(sm.dynamicHints) > 0 && len(msgs) > 0 {
+		var sb strings.Builder
+		sb.WriteString("\n\n## 本次重规划新增可用工具\n")
+		sb.WriteString("以下工具刚刚被激活，你可以在重规划中使用它们：\n")
+		for _, h := range sm.dynamicHints {
+			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", h.ToolName, h.Description))
+		}
+		msgs[0].Content += sb.String()
+	}
 }
 
 // WithExtensionActivator 注入按需扩展激活器（可选，启动时由上层 wire）。
