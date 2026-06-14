@@ -1,14 +1,5 @@
 package swarm
 
-import (
-	"context"
-	"fmt"
-	"sync"
-	"time"
-
-	perrors "github.com/polarisagi/polaris/internal/errors"
-)
-
 // 编排模式实现。
 // 架构文档: docs/arch/08-Multi-Agent-Orchestrator-深度选型.md §3, §1.3-1.9
 
@@ -24,77 +15,6 @@ const (
 	ModeReflection                          // 执行→审查→改进
 	ModeSwarm                               // 去中心化handoff
 )
-
-// PhasedStartup 分阶段启动（拓扑排序确保被依赖 Agent 先于消费者启动）。
-// 1. DependencyGraph: 解析 I/O 声明, DFS 三色环路检测
-// 2. TopologicalSort: Kahn 入度分层
-// 3. PhasedStart: P0 [M11] Policy+Cedar-Gate + Blackboard+SQLite → P1 M5+M10 索引 → P2 M6+M7 注册 → P3 Orchestrator+Planner → P4 Worker/Reviewer
-// 4. HealthCheckGate: 每层 30s 超时 → ErrPhaseStartupTimeout
-type PhasedStartup struct {
-	phases []StartupPhase
-}
-
-// StartupPhase 启动阶段。
-type StartupPhase struct {
-	Name       string
-	Components []string
-	Timeout    int // 30s
-}
-
-// Start 执行分阶段启动。
-func (ps *PhasedStartup) Start(ctx context.Context) error {
-	for _, phase := range ps.phases {
-		if err := ps.startPhase(ctx, phase); err != nil {
-			return perrors.New(perrors.CodeInternal, fmt.Sprintf("startup phase %q failed: %v", phase.Name, err))
-		}
-	}
-	return nil
-}
-
-func (ps *PhasedStartup) startPhase(ctx context.Context, phase StartupPhase) error {
-	// 应用 30s 熔断超时
-	timeout := time.Duration(phase.Timeout) * time.Second
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-
-	phaseCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// 模拟健康检查：并发启动各个 Component 并等待就绪
-	errCh := make(chan error, len(phase.Components))
-	var wg sync.WaitGroup
-
-	for _, comp := range phase.Components {
-		wg.Add(1)
-		go func(c string) {
-			defer wg.Done()
-
-			// 模拟各组件启动，实际实现中应调用各 Component 的 Init() / Start()
-			// 如果在 30s 内未就绪或发生 Panic，应返回 error
-			select {
-			case <-time.After(10 * time.Millisecond): // 模拟快速启动
-				// success
-			case <-phaseCtx.Done():
-				errCh <- perrors.New(perrors.CodeInternal, fmt.Sprintf("component %s timeout", c))
-			}
-		}(comp)
-	}
-
-	// 等待所有组件完成或 ctx 超时
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
-	}
-
-	return phaseCtx.Err()
-}
 
 // TopologyEvolver 编排拓扑自演化。
 // Evaluate: 获取候选 fitness → Pareto 前沿 (成功率 × token 效率)

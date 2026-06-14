@@ -2,12 +2,18 @@ package swarm
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+)
+
+const (
+	escalateP2AfterMinutes = 5  // M08 §1.8: Priority=2 等待超过此值升至 1
+	escalateP3AfterMinutes = 15 // M08 §1.8: Priority=3 等待超过此值强制提权
 )
 
 // Orchestrator 是多 Agent 协调的核心，封装了 Blackboard 和 AgentRegistry 的调度逻辑。
@@ -91,13 +97,27 @@ func (o *Orchestrator) dispatchPendingTasks(ctx context.Context) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// 1. 获取所有 pending 任务，按 priority ASC, created_at ASC 排序
-	rows, err := o.bb.db.QueryContext(ctx, `
-		SELECT task_id, priority, type
+	// 1. 获取所有 pending 任务，按 priority ASC, created_at ASC 排序 (含动态优先级计算)
+	query := fmt.Sprintf(`
+		SELECT task_id, type, priority,
+			MAX(0,
+				priority
+				- CASE
+					WHEN priority >= 3
+						 AND CAST((julianday('now') - julianday(created_at)) * 1440 AS INTEGER) >= %d
+					  THEN 2
+					WHEN priority >= 2
+						 AND CAST((julianday('now') - julianday(created_at)) * 1440 AS INTEGER) >= %d
+					  THEN 1
+					ELSE 0
+				  END
+			) AS eff_priority
 		FROM tasks
 		WHERE status = 'pending'
-		ORDER BY priority ASC, created_at ASC
-	`)
+		ORDER BY eff_priority ASC, created_at ASC
+	`, escalateP3AfterMinutes, escalateP2AfterMinutes)
+
+	rows, err := o.bb.db.QueryContext(ctx, query)
 	if err != nil {
 		return
 	}
@@ -106,7 +126,11 @@ func (o *Orchestrator) dispatchPendingTasks(ctx context.Context) {
 	var pendingTasks []protocol.TaskEntry
 	for rows.Next() {
 		var task protocol.TaskEntry
-		if err := rows.Scan(&task.ID, &task.Priority, &task.Type); err == nil {
+		var effPriority int
+		if err := rows.Scan(&task.ID, &task.Type, &task.Priority, &effPriority); err == nil {
+			if effPriority < task.Priority {
+				slog.Info("orchestrator: task priority escalated", "task_id", task.ID, "from", task.Priority, "to", effPriority)
+			}
 			pendingTasks = append(pendingTasks, task)
 		}
 	}

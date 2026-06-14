@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"strings"
 )
 
@@ -89,4 +90,10 @@ func matchAny(text string, keywords []string) bool {
 		}
 	}
 	return false
+}
+
+// QueryEmbedder 语义分类所需的向量嵌入接口（consumer-side，防止包循环）。
+// Tier-0 传 nil 跳过语义路径；Tier-1+ 注入 substrate.EmbeddingBatcher 实现。
+type QueryEmbedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
 }
