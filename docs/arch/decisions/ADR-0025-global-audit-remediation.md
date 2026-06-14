@@ -34,7 +34,7 @@
 
 ## 核验更正
 
-**M05 上下文三区组装"全部缺失"——失实**。`pkg/cognition/context_assembler.go`、`epoch.go`、`consolidation.go` 均已实现且有测试。但深入复核发现**更严重的真实缺陷**：`memory_context.go` 的三个 builder 把 episodic/semantic/whisper 等外部检索数据直接拼进 `system` 角色且**无 Spotlighting 围栏**（Prompt Injection 面），而 `ContextAssembler` 系与 `kernel.PromptBuilder`（M11 §3 唯一合法组装器）功能重叠的死代码（零非测试调用方）。**修复方案（R22 已立项）**：三 builder 统一到 `PromptBuilder` + 污点围栏、Epoch 上主路径、删除重复 `ContextAssembler`/`epoch.go`。详见 `docs/upgrade/GEMINI_PATCH_R22_M05_PromptBuilder.md`。
+**M05 上下文三区组装"全部缺失"——失实**。`pkg/cognition/context_assembler.go`、`epoch.go`、`consolidation.go` 均已实现且有测试。但深入复核发现**更严重的真实缺陷**：`memory_context.go` 的三个 builder 把 episodic/semantic/whisper 等外部检索数据直接拼进 `system` 角色且**无 Spotlighting 围栏**（Prompt Injection 面），而 `ContextAssembler` 系与 `kernel.PromptBuilder`（M11 §3 唯一合法组装器）功能重叠的死代码（零非测试调用方）。**修复方案（R22 已修复）**：三 builder 统一到 `PromptBuilder` + 污点围栏、Epoch 上主路径、删除重复 `ContextAssembler`/`epoch.go`。详见 `docs/upgrade/GEMINI_PATCH_R22_M05_PromptBuilder.md`。
 
 ## 后果
 

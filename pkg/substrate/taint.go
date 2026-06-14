@@ -118,7 +118,7 @@ func (tt *TaintTracker) GetMaxTaint(ids ...string) protocol.TaintLevel {
 // Spotlighting — 不可信数据围栏标记（M11 §2.2）
 // 步骤1: 生成标记 = SHA-256(content)[:8]（内容派生，保证重放确定性）
 // 步骤2: 包裹为 "=== UNTRUSTED_DATA_{hex} ===\n{data}\n=== END_UNTRUSTED_DATA ==="
-// 调用方: M5 ContextAssembler.Build（ZoneTaintedData 追加前强制包裹）
+// 调用方: kernel.PromptBuilder.WriteUserData
 // =============================================================================
 
 // Spotlighting 对不可信数据槽内容加围栏标记，防止 LLM 将其解析为系统指令。
