@@ -673,27 +673,9 @@ func (ir *InferenceRouter) Tokenizer() protocol.TokenizerAdapter {
 func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message, opts []protocol.InferOption, req *protocol.InferRequest, skip string) (*protocol.ProviderResponse, error) {
 	start := time.Now()
 	ir.registry.mu.RLock()
-	defer ir.registry.mu.RUnlock()
-	bestScore := -1.0
-	var chosen *providerEntry
-	for name, e := range ir.registry.entries {
-		if name == skip || !e.cb.Allow() {
-			continue
-		}
-		if req != nil {
-			caps := e.provider.Capabilities()
-			if req.HasImageParts() && !caps.SupportsVision {
-				continue
-			}
-			if req.HasVideoParts() && !caps.SupportsVideo {
-				continue
-			}
-		}
-		if s := e.healthScore(); s > bestScore {
-			bestScore = s
-			chosen = e
-		}
-	}
+	chosen := ir.findBestProviderLocked(req, skip)
+	ir.registry.mu.RUnlock()
+
 	if chosen == nil {
 		return nil, fmt.Errorf("inference_router: %w", ErrAllProvidersFailed)
 	}
@@ -708,38 +690,63 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message
 		}
 	})
 	if err == nil && resp != nil {
-		caps := chosen.provider.Capabilities()
-		costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
-			float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
-			float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
-		observability.RecordLLMCall(ctx,
-			chosen.name, resp.Model, "failover", float64(time.Since(start).Milliseconds()),
-			resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
-			costUSD,
-		)
-
-		if ir.eventWriter != nil {
-			go func() {
-				ctx2, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-				defer cancel()
-				sessionID := ""
-				if sid, ok := ctx.Value("session_id").(string); ok {
-					sessionID = sid
-				}
-				ms := float64(time.Since(start).Milliseconds())
-				_ = ir.eventWriter.WriteEvent(ctx2, "llm_call", map[string]any{
-					"provider_name": chosen.name,
-					"model":         resp.Model,
-					"input_tokens":  resp.Usage.InputTokens,
-					"output_tokens": resp.Usage.OutputTokens,
-					"latency_ms":    ms,
-					"session_id":    sessionID,
-					"timestamp":     time.Now(),
-				})
-			}()
-		}
+		ir.recordFailoverMetrics(ctx, chosen, resp, start)
 	}
 	return resp, err
+}
+
+func (ir *InferenceRouter) findBestProviderLocked(req *protocol.InferRequest, skip string) *providerEntry {
+	bestScore := -1.0
+	var chosen *providerEntry
+	for name, e := range ir.registry.entries {
+		if name == skip || !e.cb.Allow() {
+			continue
+		}
+		if req != nil {
+			caps := e.provider.Capabilities()
+			if (req.HasImageParts() && !caps.SupportsVision) || (req.HasVideoParts() && !caps.SupportsVideo) {
+				continue
+			}
+		}
+		if s := e.healthScore(); s > bestScore {
+			bestScore = s
+			chosen = e
+		}
+	}
+	return chosen
+}
+
+func (ir *InferenceRouter) recordFailoverMetrics(ctx context.Context, chosen *providerEntry, resp *protocol.ProviderResponse, start time.Time) {
+	caps := chosen.provider.Capabilities()
+	costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
+		float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
+		float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+	ms := float64(time.Since(start).Milliseconds())
+	observability.RecordLLMCall(ctx,
+		chosen.name, resp.Model, "failover", ms,
+		resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
+		costUSD,
+	)
+
+	if ir.eventWriter != nil {
+		go func() {
+			ctx2, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			sessionID := ""
+			if sid, ok := ctx.Value("session_id").(string); ok {
+				sessionID = sid
+			}
+			_ = ir.eventWriter.WriteEvent(ctx2, "llm_call", map[string]any{
+				"provider_name": chosen.name,
+				"model":         resp.Model,
+				"input_tokens":  resp.Usage.InputTokens,
+				"output_tokens": resp.Usage.OutputTokens,
+				"latency_ms":    ms,
+				"session_id":    sessionID,
+				"timestamp":     time.Now(),
+			})
+		}()
+	}
 }
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────

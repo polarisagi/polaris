@@ -114,33 +114,11 @@ func (em *EpisodicMem) Query(ctx context.Context, q protocol.EpisodicQuery) ([]p
 
 	// 重启后内存列表为空时从持久化存储按前缀扫描恢复
 	if len(events) == 0 {
-		iter, err := em.store.Scan(ctx, []byte("episodic:"))
+		var err error
+		events, err = em.loadEventsFromStore(ctx)
 		if err != nil {
 			return nil, err
 		}
-
-		var loaded []protocol.Event
-		for iter.Next() {
-			var ev protocol.Event
-			if jsonErr := json.Unmarshal(iter.Value(), &ev); jsonErr == nil {
-				loaded = append(loaded, ev)
-			}
-		}
-		iter.Close()
-
-		em.mu.Lock()
-		if len(em.events) == 0 { // double check
-			em.events = append(em.events, loaded...)
-			if em.maxEvents > 0 && len(em.events) > em.maxEvents {
-				em.events = em.events[len(em.events)-em.maxEvents:]
-			}
-			events = make([]protocol.Event, len(em.events))
-			copy(events, em.events)
-		} else {
-			events = make([]protocol.Event, len(em.events))
-			copy(events, em.events)
-		}
-		em.mu.Unlock()
 	}
 
 	var results []protocol.ScoredEvent //nolint:prealloc
@@ -286,4 +264,32 @@ func truncateEpisodicPayload(eventID string, raw []byte) []byte {
 		eventID, len(raw), string(preview),
 	)
 	return []byte(ref)
+}
+
+func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]protocol.Event, error) {
+	iter, err := em.store.Scan(ctx, []byte("episodic:"))
+	if err != nil {
+		return nil, err
+	}
+
+	var loaded []protocol.Event
+	for iter.Next() {
+		var ev protocol.Event
+		if jsonErr := json.Unmarshal(iter.Value(), &ev); jsonErr == nil {
+			loaded = append(loaded, ev)
+		}
+	}
+	iter.Close()
+
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	if len(em.events) == 0 { // double check
+		em.events = append(em.events, loaded...)
+		if em.maxEvents > 0 && len(em.events) > em.maxEvents {
+			em.events = em.events[len(em.events)-em.maxEvents:]
+		}
+	}
+	events := make([]protocol.Event, len(em.events))
+	copy(events, em.events)
+	return events, nil
 }

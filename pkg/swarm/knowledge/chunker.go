@@ -34,17 +34,8 @@ func splitByLimit(text string) []string {
 				chunks = append(chunks, current.String())
 				current.Reset()
 			}
-
-			// 单个句子仍超长，直接切片
-			if len(s) > chunkMaxBytes {
-				for len(s) > chunkMaxBytes {
-					chunks = append(chunks, s[:chunkMaxBytes])
-					s = s[chunkMaxBytes:]
-				}
-				if len(s) > 0 {
-					current.WriteString(s + addDot)
-				}
-			} else {
+			chunks, s = handleLongSentence(chunks, s)
+			if len(s) > 0 {
 				current.WriteString(s + addDot)
 			}
 		} else {
@@ -56,6 +47,17 @@ func splitByLimit(text string) []string {
 	}
 
 	return chunks
+}
+
+func handleLongSentence(chunks []string, s string) ([]string, string) {
+	if len(s) <= chunkMaxBytes {
+		return chunks, s
+	}
+	for len(s) > chunkMaxBytes {
+		chunks = append(chunks, s[:chunkMaxBytes])
+		s = s[chunkMaxBytes:]
+	}
+	return chunks, s
 }
 
 // PlainTextChunker 按双换行符粗粒度分块（Fallback）。

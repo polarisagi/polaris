@@ -27,8 +27,10 @@ import (
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
-	"github.com/polarisagi/polaris/internal/protocol"
+
 	"golang.org/x/sync/errgroup"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 const (
@@ -692,8 +694,8 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 	}
 
 	// 宽限期结束，强制回写 DB（批量 UPDATE）
-	var taskIDs []any
-	var placeholders []string
+	var taskIDs = make([]any, 0, len(expired))
+	var placeholders = make([]string, 0, len(expired))
 	for _, r := range expired {
 		taskIDs = append(taskIDs, r.taskID)
 		placeholders = append(placeholders, "?")

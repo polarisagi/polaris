@@ -92,8 +92,23 @@ func NewCodeAct(sandbox SandboxProvider, policyGate protocol.PolicyGate, toolExe
 	return ca
 }
 
-// validateExecuteRequest 抽离出的校验逻辑
 func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActRequest) error {
+	if err := ca.validateBasic(req); err != nil {
+		return err
+	}
+	if err := ca.validatePolicyAndEnv(ctx, req); err != nil {
+		return err
+	}
+	if err := ca.validateAST(req); err != nil {
+		return err
+	}
+	if err := ca.validateL1(req); err != nil {
+		return err
+	}
+	return ca.validateL2(ctx, req)
+}
+
+func (ca *CodeAct) validateBasic(req CodeActRequest) error {
 	if req.Code == "" {
 		return perrors.New(perrors.CodeInternal, "code_act: code is empty")
 	}
@@ -103,7 +118,10 @@ func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActReques
 	if req.CapabilityID == "" {
 		return perrors.New(perrors.CodeForbidden, "code_act: capability_id required (inv_global_07)")
 	}
+	return nil
+}
 
+func (ca *CodeAct) validatePolicyAndEnv(ctx context.Context, req CodeActRequest) error {
 	if ca.policyGate == nil {
 		return perrors.New(perrors.CodeInternal, "code_act: policy gate not available (fail-closed)")
 	}
@@ -136,45 +154,40 @@ func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActReques
 		return perrors.New(perrors.CodeInternal,
 			"code_act: governance agent not initialized, refusing code execution (fail-closed)")
 	}
+	return nil
+}
 
-	// L0 AST 校验
-	if ca.astChecker != nil {
-		if req.Language == "python" {
-			if err := ca.astChecker.CheckPython([]byte(req.Code)); err != nil {
-				return err
-			}
-		} else if req.Language == "bash" {
-			if err := ca.astChecker.CheckBash([]byte(req.Code)); err != nil {
-				return err
-			}
-		}
+func (ca *CodeAct) validateAST(req CodeActRequest) error {
+	if ca.astChecker == nil {
+		return nil
 	}
+	if req.Language == "python" {
+		return ca.astChecker.CheckPython([]byte(req.Code))
+	} else if req.Language == "bash" {
+		return ca.astChecker.CheckBash([]byte(req.Code))
+	}
+	return nil
+}
 
-	// L1 正则匹配校验
+func (ca *CodeAct) validateL1(req CodeActRequest) error {
 	caps := map[string]bool{}
-	if err := ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps); err != nil {
-		return err
-	}
+	return ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps)
+}
 
-	// L2 LLM 同行评审 (污点级别较高时触发)
-	if req.TaintLevel >= protocol.TaintHigh {
-		if ca.reviewer != nil {
-			risk, err := ca.reviewer.Review(ctx, req.Code)
-			if err != nil {
-				return perrors.Wrap(perrors.CodeInternal, "code_act: L2 peer review failed", err)
-			}
-			if risk == "danger" {
-				return perrors.New(perrors.CodeForbidden, "code_act: L2 peer review rejected (danger)")
-			} else if risk == "warning" {
-				// 触发 HITL 等机制，这里可根据协议要求扩展，暂且记录日志或阻断
-				return perrors.New(perrors.CodeForbidden, "code_act: L2 peer review rejected (warning - needs HITL)")
-			}
-		} else {
-			// 退化为 L1 严格模式（这里 L1 已经通过，可增加额外逻辑，如阻断）
-			// prompt: "L2 nil → 退化为扩展正则" (这里可以认为 L1 ValidateCode 已经做了，或者我们可以再做一次更严谨的)
-		}
+func (ca *CodeAct) validateL2(ctx context.Context, req CodeActRequest) error {
+	if req.TaintLevel < protocol.TaintHigh || ca.reviewer == nil {
+		return nil
 	}
-
+	risk, err := ca.reviewer.Review(ctx, req.Code)
+	if err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "code_act: L2 peer review failed", err)
+	}
+	if risk == "danger" {
+		return perrors.New(perrors.CodeForbidden, "code_act: L2 peer review rejected (danger)")
+	}
+	if risk == "warning" {
+		return perrors.New(perrors.CodeForbidden, "code_act: L2 peer review rejected (warning - needs HITL)")
+	}
 	return nil
 }
 
