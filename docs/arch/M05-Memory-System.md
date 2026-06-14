@@ -58,7 +58,7 @@ ZoneTaintedData=2    // 外部数据，[TaintLevel] Tracked，永不进入指令
 
 **kernel.PromptBuilder 写入门控**:
 0. **InteractionSummary 特例**: M9 PersonaRefiner 生成的 InteractionSummary (`source='persona_refinement'` + Ed25519 签名) 写 ZoneImmutable 前执行 `SanitizeByDeterministicTransform`（保留 <200 tokens 摘要 + SHA-256 校验和），TaintLevel 强制 TaintLow。固定白名单——仅 `source='persona_refinement'` + 有效 M9 签名可写 ZoneImmutable
-1. zone==ZoneImmutable 且内容 TaintLevel > TaintLow → panic 拒绝 (tainted 数据越界进不可变区)
+1. zone==ZoneImmutable 且内容 TaintLevel > TaintLow → 编译期阻断：`WriteInstruction`/`WriteSystemPrompt` 参数类型强制为 `substrate.SafeString`，`TaintedString` 无法隐式传入（`prompt.go` 实现），运行时 panic 路径已移除
 2. zone==ZoneTaintedData 且内容 Tainted → 接受写入（正确归宿）; zone!=ZoneTaintedData 且 TaintLevel >= TaintMedium → 降级路由到 ZoneTaintedData + WARN + 审计事件 `prompt_builder_taint_zone_routing`
 3. zone==ZoneMutableSkill → 验证 Ed25519 ApprovalSignature（M9 签发）→ 签名无效则降级 ZoneTaintedData + WARN + 审计事件 `prompt_builder_mutable_skill_integrity_failed`
 4. 签名通过 → Monotonic Version Gate: 查询 `sys_config.min_skill_version`，version < min → 拒绝 + CRITICAL + 审计事件 `prompt_builder_rollback_attack_blocked`

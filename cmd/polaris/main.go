@@ -315,7 +315,7 @@ func run() error { //nolint:gocyclo
 	publisherTrustMap := config.LoadTrustedPublishers(configs.FS, "extensions/trusted-publishers.yaml")
 
 	// ─── 4. 推理路由器 (L0 M1) ───────────────────────────────────────────────
-	dialer := substrate.NewSafeDialer(0, cfg.System.EgressAllowedDomains)
+	dialer := substrate.NewSafeDialer(0, cfg.System.EgressAllowedDomains, cfg.Thresholds.M11Policy)
 	safeHTTPClient := substrate.NewSafeHTTPClient(dialer)
 	inference.SetDefaultHTTPClient(safeHTTPClient)
 
@@ -744,7 +744,10 @@ func run() error { //nolint:gocyclo
 	addr := fmt.Sprintf("%s:%d", cfg.Interface.Host, cfg.Interface.Port)
 	apiRateLimiter := rate.NewLimiter(rate.Limit(50), 100)
 	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer, cfg.Compressor, tbr, apiRateLimiter)
-
+	httpServer.SetAuditTrail(auditTrail)
+	httpServer.SetLogStore(logStore)
+	httpServer.SetToolRegistry(toolReg)
+	httpServer.SetSkillRegistry(skillRegistry)
 	// Ensure signing key exists
 	var skillSigningKey []byte
 	if key := os.Getenv("POLARIS_SKILL_SIGNING_KEY"); key != "" { //nolint:nestif

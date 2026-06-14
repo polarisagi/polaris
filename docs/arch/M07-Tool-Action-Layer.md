@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:169 三级沙箱(CANONICAL) / 5:302 PolicyGate / 6:357 Capability / 7:374 动作扩展 / 8:506 Usage演化 / 12:547 (SOFT)降级 / 13:565 跨模块契约 / 14:585 Plugin / 15:627 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:112 注册 / 4:169 三级沙箱(CANONICAL) / 5:300 PolicyGate / 6:355 Capability / 7:372 动作扩展 / 8:504 Usage演化 / 12:545 (SOFT)降级 / 13:563 跨模块契约 / 14:583 Plugin / 15:625 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -185,9 +185,7 @@ Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256M
 1. Source→最小级别: Builtin→InProcess；LLMGenerated→Wasm；MCP/A2A→Wasm
 2. Capability提升: WriteNetwork+→Wasm；Privileged→Container
 3. SideProcessSpawn→Container
-4. 非 Linux Tier0 降级: 步骤 3 判定为 Container 且 hwTier==0 且 goos!="linux" → 降级 Wasm（L2 Wasm + OS 原生沙箱）
-
-✅ **已修复**：`AssignSandboxTier` 返回 `(SandboxTier, error)`；Tier0 上需要 Container 的工具返回 `ErrTier0SandboxLimit`（定义于 `internal/errors`），全平台拒绝（不再区分 goos），调用方必须显式处理，禁止静默降级（M07 §4.2）。
+4. Tier0 Container 请求全平台拒绝：`AssignSandboxTier` 返回 `(SandboxTier, error)`；hwTier==0 需要 Container 的工具返回 `ErrTier0SandboxLimit`，不区分 goos，不降级 Wasm，调用方必须显式处理（M07 §4.2）。
 
 **脚本风险评估默认沙箱等级**：`assessScriptRisk`（`pkg/extensions/skill/compile.go`）`default` 分支返回 L2 Wasm（`SandboxWasm=2`），对来源不明或 LLM 生成的脚本采用隔离执行；仅 `source='builtin'` 明确白名单脚本可走 L1 InProcess。
 

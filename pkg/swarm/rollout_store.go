@@ -46,13 +46,6 @@ func NewSQLiteRolloutStore(db *sql.DB) (*SQLiteRolloutStore, error) {
 	if _, err := db.Exec(createRolloutTable); err != nil {
 		return nil, perrors.Wrap(perrors.CodeInternal, "rollout_store: create table", err)
 	}
-	// 兼容旧表（无 eval_score/shadow_ok 列）：ADD COLUMN IF NOT EXISTS
-	for _, col := range []string{
-		"ALTER TABLE rollout_states ADD COLUMN eval_score REAL NOT NULL DEFAULT -1",
-		"ALTER TABLE rollout_states ADD COLUMN shadow_ok INTEGER NOT NULL DEFAULT 0",
-	} {
-		_, _ = db.Exec(col) // 已存在时忽略错误
-	}
 	return &SQLiteRolloutStore{
 		db:      db,
 		rollout: NewProgressiveRollout(),

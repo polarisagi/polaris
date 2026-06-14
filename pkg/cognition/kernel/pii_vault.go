@@ -76,6 +76,11 @@ func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string
 	return nil
 }
 
+func (v *SessionPIIVault) SecureZero(ctx context.Context, taskID string) error {
+	_, err := v.db.ExecContext(ctx, "DELETE FROM preferences WHERE key LIKE ?", fmt.Sprintf("pii_vault:%s:%%", taskID))
+	return err
+}
+
 func encryptFieldVault(key []byte, plaintext string) (string, error) {
 	if plaintext == "" {
 		return "", nil

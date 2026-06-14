@@ -246,7 +246,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 	newAttempts := record.Attempts + 1
 	if newAttempts >= w.maxRetries || record.CrashRecoveryCount >= 3 {
 		_, _ = w.db.ExecContext(ctx,
-			"UPDATE outbox SET status='dead', attempts=?, processed_at=? WHERE id=?",
+			"UPDATE outbox SET status='dead', attempts=?, processed_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, now, record.ID)
 		observability.GlobalOutboxDeadLetterTotal.Add(1)
 		slog.Error("outbox message dead", "id", record.ID, "target", record.TargetEngine, "attempts", newAttempts, "crash", record.CrashRecoveryCount)
@@ -255,7 +255,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		backoffMs := (int64(1) << newAttempts) * 5000
 		nextRetry := now + backoffMs
 		_, _ = w.db.ExecContext(ctx,
-			"UPDATE outbox SET status='failed', attempts=?, next_retry_at=? WHERE id=?",
+			"UPDATE outbox SET status='failed', attempts=?, next_retry_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, nextRetry, record.ID)
 	}
 	return err

@@ -58,6 +58,8 @@ type RolloutStats struct {
 // 实现该接口的存储层应通过事件或持久化队列来推进状态。
 type StagingPipeline interface {
 	SubmitCandidate(ctx context.Context, snapshot *AgentVersionSnapshot) error
+	RecordEvalScore(ctx context.Context, version string, passRate float64, baselinePassRate float64) error
+	ConfirmShadow(ctx context.Context, version string) error
 	AdvanceGate(ctx context.Context, version string, stats RolloutStats) (*RolloutState, error)
 	Rollback(ctx context.Context, version string, reason string) error
 	GetState(ctx context.Context, version string) (*RolloutState, error)

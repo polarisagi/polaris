@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS rollout_states (
     current_gate      INTEGER NOT NULL DEFAULT 0,
     canary_percent    INTEGER NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL,
+    eval_score        REAL    NOT NULL DEFAULT -1,
+    shadow_ok         INTEGER NOT NULL DEFAULT 0,
     started_at        INTEGER NOT NULL,
     last_advanced_at  INTEGER NOT NULL
 );

@@ -522,6 +522,10 @@ type TaskEntry struct {
 	// 下游 Agent 在 S_PERCEIVE 时优先读取此字段，而非全局记忆检索。
 	ContextPayload []byte
 
+	// 隔离沙箱相关字段
+	Namespace     string   `json:"namespace,omitempty"`
+	ToolWhitelist []string `json:"tool_whitelist,omitempty"`
+
 	// ── Token 记账字段（Gap-A, HE-Rule-1）────────────────────────────────────
 	// Worker.tryClaimAndExecute 完成后调用 Blackboard.UpdateTaskTokens 写入。
 	TokensInput     int

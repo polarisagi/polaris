@@ -3,6 +3,7 @@ package substrate
 import (
 	"context"
 	"database/sql"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -137,6 +138,7 @@ func (dw *DatabaseWriter) SubmitBatch(ctx context.Context, intents []*MutationIn
 				return ctx.Err()
 			default:
 			}
+			runtime.Gosched()
 		}
 	}
 	return nil

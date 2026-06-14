@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -49,7 +50,7 @@ func init() {
 // 所有出站网络连接必须通过此入口，CI safe_dialer_lint 扫描裸 net.Dial/grpc.Dial/http.Get → ERROR。
 type SafeDialer struct {
 	dnsCache    map[string][]net.IP // hostname → resolved IPs
-	dnsCacheTTL time.Duration       // 默认 30s
+	dnsCacheTTL time.Duration       // 从 config 注入
 	dnsCacheMu  sync.RWMutex
 	dnsCacheTs  map[string]time.Time
 
@@ -63,19 +64,37 @@ type SafeDialer struct {
 
 	taintLevel     int
 	allowedDomains []string
+
+	toctouDelayMs   int
+	maxIPsThreshold int
 }
 
 var _ protocol.SafeDialer = (*SafeDialer)(nil)
 
 // NewSafeDialer 初始化安全拨号器。
-func NewSafeDialer(taintLevel int, allowedDomains []string) *SafeDialer {
+func NewSafeDialer(taintLevel int, allowedDomains []string, m11 config.M11PolicyThresholds) *SafeDialer {
+	ttl := 30 * time.Second
+	if m11.SafeDialerDNSCacheTTLSecond > 0 {
+		ttl = time.Duration(m11.SafeDialerDNSCacheTTLSecond) * time.Second
+	}
+	delay := 50
+	if m11.SafeDialerTOCTOUDelayMs > 0 {
+		delay = m11.SafeDialerTOCTOUDelayMs
+	}
+	maxIPs := 20
+	if m11.SafeDialerMaxIPsThreshold > 0 {
+		maxIPs = m11.SafeDialerMaxIPsThreshold
+	}
+
 	return &SafeDialer{
-		dnsCache:       make(map[string][]net.IP),
-		dnsCacheTTL:    30 * time.Second,
-		dnsCacheTs:     make(map[string]time.Time),
-		quicDisabled:   true, // 禁用 QUIC/HTTP3 — 防止 UDP 绕过 DialContext
-		taintLevel:     taintLevel,
-		allowedDomains: allowedDomains,
+		dnsCache:        make(map[string][]net.IP),
+		dnsCacheTTL:     ttl,
+		dnsCacheTs:      make(map[string]time.Time),
+		quicDisabled:    true, // 禁用 QUIC/HTTP3 — 防止 UDP 绕过 DialContext
+		taintLevel:      taintLevel,
+		allowedDomains:  allowedDomains,
+		toctouDelayMs:   delay,
+		maxIPsThreshold: maxIPs,
 	}
 }
 
@@ -83,7 +102,7 @@ func NewSafeDialer(taintLevel int, allowedDomains []string) *SafeDialer {
 // 所有 Adapter 和工具调用须使用此工厂，禁止传入 http.DefaultClient。
 func NewSafeHTTPClient(sd *SafeDialer) *http.Client {
 	if sd == nil {
-		sd = NewSafeDialer(0, nil)
+		sd = NewSafeDialer(0, nil, config.M11PolicyThresholds{})
 	}
 	transport := &http.Transport{
 		DialContext:         sd.DialContext,
@@ -148,7 +167,7 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	// Phase 3: 50ms TOCTOU 延迟 + 二次 DNS 解析（强制绕过缓存，TOCTOU 保护）
-	if err := sleepCtx(ctx, 50*time.Millisecond); err != nil {
+	if err := sleepCtx(ctx, time.Duration(sd.toctouDelayMs)*time.Millisecond); err != nil {
 		return nil, err
 	}
 	ips2, err := sd.resolveDNSBypass(ctx, host) // 绕过缓存，防止 DNS rebinding 漏过 TOCTOU
@@ -160,7 +179,7 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	// Phase 3.5: 响应 IP >20 拒绝
-	if len(ips2) > 20 {
+	if len(ips2) > sd.maxIPsThreshold {
 		return nil, &ErrDNSResponseTooLarge{Host: host, Count: len(ips2)}
 	}
 

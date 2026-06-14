@@ -3,7 +3,7 @@
 > Go | L3 治理层 | [Code-Package-Mapping] → pkg/governance/
 > [HE-Rule-4]: Eval 第 0 行存在，失败 = PR 不能合并
 > 黄金测试集 + 轨迹回放 + 影子执行 + 回归基线 + 自动熔断
-> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:32 EvalCase / 2:58 Evaluator5层 / 3:75 轨迹录制 / 4:87 Runner / 5:93 Suite分区 / 6:129 IncidentToEval / 7:138 AutoBootstrap / 8:148 影子执行 / 9:154 连续采样 / 10:168 增量快照 / 11:180 回归检测 / 12:196 集成回放 / 13:212 InvariantTestSuite / 14:239 EvalStore / 15:248 闭环 / 17:254 279(SOFT)降级 / 18:279 依赖
+> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:32 EvalCase / 2:58 Evaluator5层 / 3:75 轨迹录制 / 4:87 Runner / 5:93 Suite分区 / 6:129 IncidentToEval / 7:138 AutoBootstrap / 8:148 影子执行 / 9:154 连续采样 / 10:168 增量快照 / 11:180 回归检测 / 12:190 集成回放 / 13:206 InvariantTestSuite / 14:233 EvalStore / 15:242 闭环 / 17:248 279(SOFT)降级 / 18:273 依赖
 ## 0-bis. 职责边界
 
 | M12 **是** | M12 **不是** |
@@ -181,13 +181,7 @@ Eval Harness 仅提供对比原语。流量分发由 M9 ProgressiveRollout + M13
 
 **实现**: `pkg/governance/eval/eval.go`（RegressionDetector.Check）
 
-`RegressionDetector.Check(metric string, current float64) *RegressionAlert` 对三个指标执行绝对阈值检测（30 天 StatsBucket 滚动窗口）：
-
-| 指标 | 触发条件 | 级别 | 动作 |
-|------|---------|------|------|
-| token_burn_rate | current > P95×2.0 | Critical | throttle |
-| surprise_index | current > P95，连续 3 天 | Warning | — |
-| task_success_rate | current < Mean-0.05 | Critical | rollback |
+`RegressionDetector.Check(ctx, baseline, current EvalResult) *RegressionAlert` 对 `TaskSuccessRate` 执行**相对百分比阈值**检测：`drop = (baseline.TaskSuccessRate - current.TaskSuccessRate) / baseline.TaskSuccessRate`，超阈值返回 `RegressionAlert{Level: Critical, Action: rollback}`，nil 表示无回归。
 
 触发返回 `RegressionAlert{Metric, Level, Current, Baseline, Action}`，nil 表示无回归。调用方（M9 外环）按 Action 执行 throttle/rollback，`RegressionDetector` 本身不执行侧效应。
 

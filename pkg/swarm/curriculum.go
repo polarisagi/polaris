@@ -189,11 +189,13 @@ func (ag *AutoCurriculumGenerator) Generate(ctx context.Context, bb protocol.Bla
 				skill, sample.TaskDescription, sample.DifficultyEstimate,
 			))
 			entry := &protocol.TaskEntry{
-				ID:        fmt.Sprintf("ac_%s_%d", skill, time.Now().UnixNano()),
-				Type:      skill,
-				Priority:  3,
-				Intent:    taskPayload,
-				CreatedAt: time.Now().Unix(),
+				ID:            fmt.Sprintf("ac_%s_%d", skill, time.Now().UnixNano()),
+				Type:          skill,
+				Priority:      3,
+				Intent:        taskPayload,
+				Namespace:     fmt.Sprintf("curriculum_%s", skill),
+				ToolWhitelist: []string{"read_file", "list_dir"},
+				CreatedAt:     time.Now().Unix(),
 			}
 			if err := bb.PostTask(ctx, entry); err == nil {
 				posted = append(posted, sample)

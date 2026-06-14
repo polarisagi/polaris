@@ -27,6 +27,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/extensions/marketplace"
 	"github.com/polarisagi/polaris/pkg/extensions/mcp"
 	"github.com/polarisagi/polaris/pkg/gateway/channels"
+	"github.com/polarisagi/polaris/pkg/substrate"
 	"github.com/polarisagi/polaris/pkg/substrate/inference"
 	"github.com/polarisagi/polaris/pkg/substrate/inference/stt"
 	"github.com/polarisagi/polaris/pkg/substrate/inference/tts"
@@ -83,9 +84,12 @@ type Server struct {
 	// lastEventOffset 记录上次 eventTick 已处理的最大 events.offset，防止重复触发。
 	lastEventOffset int64
 
-	rateLimiter *rate.Limiter
+	rateLimiter      *rate.Limiter
+	interruptLimiter *RateLimitManager
+	auditTrail       *substrate.AuditTrail
 }
 
+func (s *Server) SetAuditTrail(at *substrate.AuditTrail)   { s.auditTrail = at }
 func (s *Server) SetInstallManager(m *marketplace.Manager) { s.installMgr = m }
 func (s *Server) SetScriptRunner(r marketplace.HookRunner) { s.scriptRunner = r }
 func (s *Server) SetSkillSigningKey(k []byte)              { s.skillSignKey = k }
@@ -198,18 +202,19 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	go PruneTranscripts(tDir, 30) // 启动时异步清理 30 天前的 transcript
 
 	s := &Server{
-		addr:          addr,
-		agent:         agent,
-		blackboard:    bb,
-		hitlGateway:   hitlGateway,
-		db:            db,
-		registry:      registry,
-		httpClient:    httpClient,
-		transcriptDir: tDir,
-		hooks:         NewHookRunner(dataDir),
-		dataDir:       dataDir,
-		tbr:           tbr,
-		rateLimiter:   rateLimiter,
+		addr:             addr,
+		agent:            agent,
+		blackboard:       bb,
+		hitlGateway:      hitlGateway,
+		db:               db,
+		registry:         registry,
+		httpClient:       httpClient,
+		transcriptDir:    tDir,
+		hooks:            NewHookRunner(dataDir),
+		dataDir:          dataDir,
+		tbr:              tbr,
+		rateLimiter:      rateLimiter,
+		interruptLimiter: NewRateLimitManager(1, 10), // Approx 10 req/min with burst
 	}
 
 	// 注入内置的 yaml 配置作为种子数据到数据库（SSoT 架构）
@@ -830,7 +835,21 @@ func (s *Server) handleGetPendingApprovals(w http.ResponseWriter, r *http.Reques
 // POST /v1/agent/{taskID}/interrupt
 // body: {"action":"resume"|"redirect"|"abort","redirect":"新意图文本","reason":"..."}
 func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
+	clientIP := extractIP(r)
+	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	taskID := r.PathValue("taskID")
+
+	authCtx := FromContext(r.Context())
+	if authCtx == nil || (authCtx.UserID != "admin" && authCtx.UserID != "system") {
+		// MVP 阶段仅 admin 可操作。在多租户下需检查 task 所属 user。
+		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
+		return
+	}
+
 	var req struct {
 		Action   string `json:"action"`   // "resume" | "redirect" | "abort"
 		Redirect string `json:"redirect"` // action=redirect 时的新意图
@@ -858,6 +877,21 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 			Reason:   req.Reason,
 			Action:   action,
 			Redirect: req.Redirect,
+		})
+	}
+
+	if s.auditTrail != nil {
+		detail, _ := json.Marshal(map[string]any{
+			"task_id":  taskID,
+			"action":   req.Action,
+			"redirect": req.Redirect,
+			"reason":   req.Reason,
+		})
+		_ = s.auditTrail.Record(&substrate.AuditRecord{
+			ActionType:   "interrupt",
+			ActionDetail: detail,
+			AgentID:      authCtx.UserID,
+			Timestamp:    time.Now().UnixMicro(),
 		})
 	}
 
