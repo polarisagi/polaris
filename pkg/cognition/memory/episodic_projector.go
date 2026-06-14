@@ -2,9 +2,15 @@ package memory
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -18,7 +24,7 @@ const maxEpisodicContent = 2048
 // EpisodicProjectorHandler 消费 outbox 中 target_engine="episodic" 的记录，
 // 将事件投影写入 episodic_events 表（M05 §3.1 派生投影表）。
 // 注意：本 handler 为幂等操作（INSERT OR IGNORE），重放安全。
-func EpisodicProjectorHandler(db *sql.DB) substrate.OutboxHandler {
+func EpisodicProjectorHandler(db *sql.DB, encKey []byte) substrate.OutboxHandler {
 	return func(ctx context.Context, record *substrate.OutboxRecord) error {
 		var ev protocol.Event
 		if err := json.Unmarshal(record.Payload, &ev); err != nil {
@@ -49,6 +55,15 @@ func EpisodicProjectorHandler(db *sql.DB) substrate.OutboxHandler {
 			cold = 1
 		}
 
+		rs := string(ev.ReasoningState)
+		if rs != "" {
+			var errEnc error
+			rs, errEnc = encryptField(encKey, rs)
+			if errEnc != nil {
+				return fmt.Errorf("episodic projector: reasoning_state encryption failed: %w", errEnc)
+			}
+		}
+
 		_, err := db.ExecContext(ctx, `
             INSERT OR IGNORE INTO episodic_events
                 (session_id, seq, timestamp, event_type, source, content,
@@ -63,8 +78,31 @@ func EpisodicProjectorHandler(db *sql.DB) substrate.OutboxHandler {
 			now,             // occurred_at
 			ev.ID,           // event_uuid（供 SurrealDB VecUpsert 使用）
 			cold,
-			string(ev.ReasoningState),
+			rs,
 		)
 		return err
 	}
+}
+
+func encryptField(key []byte, plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+	if len(key) == 0 {
+		return "", errors.New("encryption key is missing")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aesgcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	ciphertext := aesgcm.Seal(nil, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(append(nonce, ciphertext...)), nil
 }

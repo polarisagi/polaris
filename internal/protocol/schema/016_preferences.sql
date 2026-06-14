@@ -3,6 +3,7 @@
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS preferences (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    expired_at INTEGER
 );

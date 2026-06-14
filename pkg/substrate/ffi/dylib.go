@@ -13,6 +13,7 @@ package ffi
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,6 +28,7 @@ import (
 // Rust 侧 substrate_abi_version() 返回 (major<<16)|minor；major 不匹配 → panic。
 // 升级 ABI 同步修改：rust/substrate/src/lib.rs SUBSTRATE_ABI_MAJOR + 此常量。
 const ExpectedABIMajor uint16 = 1
+const ExpectedABIMinor uint16 = 0
 
 var (
 	libHandle uintptr
@@ -121,5 +123,12 @@ func verifyABI(lib uintptr) error {
 			ExpectedABIMajor, gotMajor, got,
 		))
 	}
+
+	gotMinor := uint16(got & 0xFFFF)
+	if gotMinor != ExpectedABIMinor {
+		slog.Warn("substrate ABI minor mismatch — rebuild recommended",
+			"want_minor", ExpectedABIMinor, "got_minor", gotMinor, "raw", got)
+	}
+
 	return nil
 }

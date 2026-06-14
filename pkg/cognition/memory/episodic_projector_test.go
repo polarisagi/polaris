@@ -43,7 +43,7 @@ func TestEpisodicProjectorHandler(t *testing.T) {
 		t.Fatalf("create table: %v", err)
 	}
 
-	handler := EpisodicProjectorHandler(db)
+	handler := EpisodicProjectorHandler(db, make([]byte, 32))
 
 	largePayload := make([]byte, 3000)
 	for i := range largePayload {
@@ -88,7 +88,10 @@ func TestEpisodicProjectorHandler(t *testing.T) {
 	if cold != 0 {
 		t.Errorf("cold should be 0, got %d", cold)
 	}
-	if reasoningState != string(ev.ReasoningState) {
-		t.Errorf("reasoning_state mismatch: expected %s, got %s", ev.ReasoningState, reasoningState)
+	if reasoningState == "" {
+		t.Error("reasoning_state should not be empty")
+	}
+	if reasoningState == string(ev.ReasoningState) {
+		t.Error("reasoning_state should be encrypted, got plaintext")
 	}
 }

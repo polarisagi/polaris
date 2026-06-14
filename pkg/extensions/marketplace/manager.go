@@ -145,6 +145,27 @@ func (m *Manager) Authorize(ctx context.Context, req InstallRequest) error {
 	return nil
 }
 
+// AuthorizeAction authorizes arbitrary actions (e.g., "plugin:manage").
+func (m *Manager) AuthorizeAction(ctx context.Context, action string, target any) error {
+	if m.policyGate == nil {
+		return nil
+	}
+	reviewReq := protocol.PolicyReviewRequest{
+		Principal: "system",
+		Action:    action,
+		Resource:  "plugin",
+		Context:   map[string]any{},
+	}
+	res, err := m.policyGate.Review(ctx, reviewReq)
+	if err != nil {
+		return err
+	}
+	if !res.Allowed {
+		return perrors.New(perrors.CodeForbidden, action+" action denied by policy")
+	}
+	return nil
+}
+
 // InstallExtension handles the install flow with M11 Cedar-Gate and stores to DB.
 func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) error {
 	if err := m.Authorize(ctx, req); err != nil {

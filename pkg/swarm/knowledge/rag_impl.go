@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -15,12 +16,14 @@ import (
 
 // DefaultIngestionPipeline 实现了 IngestionPipeline，负责分块与打标污染等级
 type DefaultIngestionPipeline struct {
-	router *substrate.StorageRouter
+	router   *substrate.StorageRouter
+	provider protocol.Provider
 }
 
-func NewDefaultIngestionPipeline(router *substrate.StorageRouter) *DefaultIngestionPipeline {
+func NewDefaultIngestionPipeline(router *substrate.StorageRouter, provider protocol.Provider) *DefaultIngestionPipeline {
 	return &DefaultIngestionPipeline{
-		router: router,
+		router:   router,
+		provider: provider,
 	}
 }
 
@@ -102,7 +105,43 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		return nil, perrors.Wrap(perrors.CodeInternal, "ingestion: commit", err)
 	}
 
+	go p.buildSummaryTree(context.Background(), docNode, db)
+
 	return tree, nil
+}
+
+func (p *DefaultIngestionPipeline) buildSummaryTree(ctx context.Context, docNode *DocNode, db *sql.DB) {
+	if p.provider == nil {
+		return
+	}
+
+	rows, err := db.QueryContext(ctx, "SELECT content FROM rag_chunks WHERE doc_id = ? AND chunk_type = 'parent' ORDER BY chunk_index ASC LIMIT 3", docNode.ID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var contents []string
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err == nil {
+			contents = append(contents, content)
+		}
+	}
+
+	if len(contents) == 0 {
+		return
+	}
+
+	prompt := fmt.Sprintf("请根据以下文档片段，生成一个不超过200 tokens的文档级摘要：\n%s", strings.Join(contents, "\n\n"))
+	resp, err := p.provider.Infer(ctx, []protocol.Message{{Role: "user", Content: prompt}})
+	if err != nil || resp == nil || resp.Content == "" {
+		return
+	}
+
+	summaryID := fmt.Sprintf("doc_summary_%s", docNode.ID)
+	_, _ = db.ExecContext(ctx, `INSERT OR REPLACE INTO rag_chunks (id, doc_id, content, taint_level, taint_source, chunk_type, chunk_index) VALUES (?,?,?,?,?,?,?)`,
+		summaryID, docNode.ID, resp.Content, 0, "ingestion_summary", "doc_summary", -1)
 }
 
 func (p *DefaultIngestionPipeline) Delete(ctx context.Context, uri string) error {

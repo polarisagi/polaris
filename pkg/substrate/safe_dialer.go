@@ -60,17 +60,22 @@ type SafeDialer struct {
 	// localOnlyIPFilter local_only 模式下的 IP 过滤函数。
 	// nil = 未启用；非 nil = 仅允许 filter(ip)==true 的 IP。
 	localOnlyIPFilter func(net.IP) bool
+
+	taintLevel     int
+	allowedDomains []string
 }
 
 var _ protocol.SafeDialer = (*SafeDialer)(nil)
 
 // NewSafeDialer 初始化安全拨号器。
-func NewSafeDialer() *SafeDialer {
+func NewSafeDialer(taintLevel int, allowedDomains []string) *SafeDialer {
 	return &SafeDialer{
-		dnsCache:     make(map[string][]net.IP),
-		dnsCacheTTL:  30 * time.Second,
-		dnsCacheTs:   make(map[string]time.Time),
-		quicDisabled: true, // 禁用 QUIC/HTTP3 — 防止 UDP 绕过 DialContext
+		dnsCache:       make(map[string][]net.IP),
+		dnsCacheTTL:    30 * time.Second,
+		dnsCacheTs:     make(map[string]time.Time),
+		quicDisabled:   true, // 禁用 QUIC/HTTP3 — 防止 UDP 绕过 DialContext
+		taintLevel:     taintLevel,
+		allowedDomains: allowedDomains,
 	}
 }
 
@@ -78,7 +83,7 @@ func NewSafeDialer() *SafeDialer {
 // 所有 Adapter 和工具调用须使用此工厂，禁止传入 http.DefaultClient。
 func NewSafeHTTPClient(sd *SafeDialer) *http.Client {
 	if sd == nil {
-		sd = NewSafeDialer()
+		sd = NewSafeDialer(0, nil)
 	}
 	transport := &http.Transport{
 		DialContext:         sd.DialContext,
@@ -106,7 +111,7 @@ func NewSafeHTTPClient(sd *SafeDialer) *http.Client {
 // Phase 3: 50ms TOCTOU 延迟后二次 DNS 解析 → ips2，重新 blockedCIDRs 校验
 // Phase 3.5: len(ips2) > 20 → 拒绝
 // Phase 4: 验证通过后锁定 ips2 中首个非阻塞 IP 建立连接
-func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) { //nolint:gocyclo,nestif
 	// QUIC/HTTP3 阻断: 拒绝 UDP 连接
 	if sd.quicDisabled && strings.EqualFold(network, "udp") {
 		return nil, &ErrQUICDisabled{}
@@ -116,6 +121,19 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	if err != nil {
 		host = address
 		port = "443"
+	}
+
+	if protocol.TaintLevel(sd.taintLevel) == protocol.TaintMedium {
+		allowed := false
+		for _, d := range sd.allowedDomains {
+			if strings.EqualFold(host, d) || strings.HasSuffix(strings.ToLower(host), "."+strings.ToLower(d)) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, perrors.New(perrors.CodeForbidden, "safe_dialer: TaintMedium requests are restricted to allowed domains")
+		}
 	}
 
 	// Phase 1: DNS 解析

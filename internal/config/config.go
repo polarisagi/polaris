@@ -57,12 +57,14 @@ type DownloadConfig struct {
 }
 
 type SystemConfig struct {
-	Tier             int                    `toml:"tier"`
-	MaxAgents        int                    `toml:"max_agents"`
-	GoMemLimitMB     int                    `toml:"go_memlimit_mb"`
-	DataDir          string                 `toml:"data_dir"`
-	Dirs             DirsConfig             `toml:"dirs"`
-	ResourceGovernor ResourceGovernorConfig `toml:"resource_governor"`
+	Tier                 int                    `toml:"tier"`
+	MaxAgents            int                    `toml:"max_agents"`
+	GoMemLimitMB         int                    `toml:"go_memlimit_mb"`
+	DataDir              string                 `toml:"data_dir"`
+	Dirs                 DirsConfig             `toml:"dirs"`
+	ResourceGovernor     ResourceGovernorConfig `toml:"resource_governor"`
+	DataEncryptionKey    []byte                 `toml:"data_encryption_key"`
+	EgressAllowedDomains []string               `toml:"egress_allowed_domains"`
 }
 
 type ResourceGovernorConfig struct {

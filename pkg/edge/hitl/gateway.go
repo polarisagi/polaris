@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -196,5 +197,15 @@ func NewChannelNotifier() *ChannelNotifier {
 func (c *ChannelNotifier) Notify(ctx context.Context, msg HITLNotification) error {
 	// 在此处集成到现有的 pkg/gateway/channels 逻辑或 slog 告警
 	// log.Printf("ChannelNotifier: HITL triggered for Checkpoint %s", msg.CheckpointID)
+	return nil
+}
+
+// BroadcastTainted 广播污染事件。
+func (g *GatewayImpl) BroadcastTainted(ctx context.Context, event string, taintLevel protocol.TaintLevel) error {
+	if taintLevel == protocol.TaintHigh {
+		slog.Warn("hitl_drop_high_taint")
+		return nil
+	}
+	// 正常广播逻辑（占位）
 	return nil
 }

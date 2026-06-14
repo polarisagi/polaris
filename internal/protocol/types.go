@@ -131,6 +131,7 @@ type InferOptions struct {
 	Tools           []ToolSchema
 	ResponseFormat  *ResponseFormat
 	Temperature     float64
+	TopP            float64
 	ReasoningEffort ReasoningEffort
 	ThinkingBudget  int
 }
@@ -809,6 +810,11 @@ func WithResponseFormat(fmt *ResponseFormat) InferOption {
 // WithTemperature 设置温度
 func WithTemperature(temp float64) InferOption {
 	return func(o *InferOptions) { o.Temperature = temp }
+}
+
+// WithTopP 设置 TopP
+func WithTopP(topP float64) InferOption {
+	return func(o *InferOptions) { o.TopP = topP }
 }
 
 // WithReasoningEffort 设置思考深度

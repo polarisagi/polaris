@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/errors"
@@ -313,7 +315,7 @@ func run() error { //nolint:gocyclo
 	publisherTrustMap := config.LoadTrustedPublishers(configs.FS, "extensions/trusted-publishers.yaml")
 
 	// ─── 4. 推理路由器 (L0 M1) ───────────────────────────────────────────────
-	dialer := substrate.NewSafeDialer()
+	dialer := substrate.NewSafeDialer(0, cfg.System.EgressAllowedDomains)
 	safeHTTPClient := substrate.NewSafeHTTPClient(dialer)
 	inference.SetDefaultHTTPClient(safeHTTPClient)
 
@@ -461,7 +463,7 @@ func run() error { //nolint:gocyclo
 	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler(store.DB(), dummySurreal{}, llmInfer, nil)
 	outboxWorker.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
 
-	outboxWorker.RegisterHandler("episodic", memory.EpisodicProjectorHandler(store.DB()))
+	outboxWorker.RegisterHandler("episodic", memory.EpisodicProjectorHandler(store.DB(), cfg.System.DataEncryptionKey))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
 
 	// ─── 6.5 Skill Library (L1 M6) ───────────────────────────────────────────
@@ -476,7 +478,7 @@ func run() error { //nolint:gocyclo
 	slog.Info("polaris: skill library initialized (script-backed)")
 
 	// ─── 7. Knowledge RAG (L2 M10) ───────────────────────────────────────────
-	ingester := knowledgepkg.NewDefaultIngestionPipeline(storageRouter)
+	ingester := knowledgepkg.NewDefaultIngestionPipeline(storageRouter, router)
 	var retriever knowledgepkg.HybridRetriever
 	if surrealStore != nil {
 		// Tier1+：SQLite FTS5 + SurrealDB HNSW 双路检索（BUG-1 修复：cognitive 正式注入）
@@ -564,6 +566,8 @@ func run() error { //nolint:gocyclo
 	})
 
 	recoveryHandler.SetBlackboard(blackboard)
+	piiVault := kernel.NewSessionPIIVault(store.DB(), cfg.System.DataEncryptionKey, mem)
+	recoveryHandler.SetPIIVault(piiVault)
 	reaperCtx, reaperStop := context.WithCancel(ctx)
 	defer reaperStop()
 
@@ -738,7 +742,8 @@ func run() error { //nolint:gocyclo
 		slog.Warn("polaris: FeatureWebUI disabled by FeatureGate — serving API-only mode, dashboard unavailable")
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Interface.Host, cfg.Interface.Port)
-	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer, cfg.Compressor, tbr)
+	apiRateLimiter := rate.NewLimiter(rate.Limit(50), 100)
+	httpServer := server.NewServer(addr, dataDir, agent, blackboard, hitlGateway, store.DB(), reg, safeHTTPClient, dialer, cfg.Compressor, tbr, apiRateLimiter)
 
 	// Ensure signing key exists
 	var skillSigningKey []byte

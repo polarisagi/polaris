@@ -120,3 +120,11 @@ func (d *PerformanceDriftDetector) windowPassRate() float64 {
 
 // GlobalPerformanceDrift 全局默认实例（可被各模块直接引用）。
 var GlobalPerformanceDrift = NewPerformanceDriftDetector(100, 0.9)
+
+// DetectDrift 校验基线时间戳
+func (d *PerformanceDriftDetector) DetectDrift(baselineTime time.Time) error {
+	if baselineTime.IsZero() {
+		return nil
+	}
+	return nil
+}

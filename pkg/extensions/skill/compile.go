@@ -10,10 +10,15 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/action"
+	"github.com/polarisagi/polaris/pkg/action/tool"
 	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
@@ -35,6 +40,8 @@ var (
 	ErrCompileGateRejected      = perrors.New(perrors.CodeInternal, "logic collapse: compile gate rejected (memory or concurrency limit)")
 	ErrCompileGateBusy          = perrors.New(perrors.CodeInternal, "logic collapse: compile gate busy")
 	ErrTaintedTrajectory        = perrors.New(perrors.CodeInternal, "logic collapse: TaintMedium+ trajectory rejected — tainted_trajectory")
+	ErrHighRiskTaintedScript    = perrors.New(perrors.CodeForbidden, "logic collapse: high-risk APIs in tainted trajectory — compile blocked")
+	ErrSandboxProbeFailed       = perrors.New(perrors.CodeInternal, "logic collapse: sandbox probe failed")
 )
 
 // ─── 核心类型 ─────────────────────────────────────────────────────────────────
@@ -175,6 +182,10 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 		defer c.gate.Release()
 	}
 
+	// Redact PII in schema before generating prompt
+	req.Trajectory.InputSchema = redactPIIFields(req.Trajectory.InputSchema)
+	req.Trajectory.OutputSchema = redactPIIFields(req.Trajectory.OutputSchema)
+
 	// LLM 生成 TypeScript 脚本
 	src, err := c.codeGen.GenerateImpl(ctx, req.Trajectory)
 	if err != nil {
@@ -183,6 +194,14 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 
 	// 风险分级
 	riskLevel, sandboxTier := assessScriptRisk(src, "llm_generated")
+	if riskLevel == "high" && protocol.TaintLevel(req.Trajectory.TaintLevel) >= protocol.TaintMedium {
+		return nil, ErrHighRiskTaintedScript
+	}
+
+	// 沙箱探针
+	if err := runSandboxProbe(ctx, src, req.WorkDir); err != nil {
+		return nil, err
+	}
 
 	// 签名
 	sig, err := signScript(src, c.signingKey)
@@ -260,4 +279,56 @@ func signScript(src []byte, key []byte) (string, error) {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(src)
 	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+var piiRegex = regexp.MustCompile(`(?i)(email|phone|password|token|secret|key|ssn)`)
+
+func redactPIIFields(schema map[string]string) map[string]string {
+	if schema == nil {
+		return nil
+	}
+	res := make(map[string]string, len(schema))
+	for k, v := range schema {
+		if piiRegex.MatchString(k) && !isTypeScriptType(v) {
+			res[k] = "<REDACTED>"
+		} else {
+			res[k] = v
+		}
+	}
+	return res
+}
+
+func isTypeScriptType(s string) bool {
+	s = strings.TrimSpace(s)
+	lower := strings.ToLower(s)
+	switch lower {
+	case "string", "number", "boolean", "any", "void", "object", "unknown", "never":
+		return true
+	}
+	if strings.Contains(lower, "[]") || strings.HasPrefix(lower, "array") || strings.HasPrefix(lower, "record") || strings.HasPrefix(s, "{") {
+		return true
+	}
+	return false
+}
+
+func runSandboxProbe(ctx context.Context, src []byte, workDir string) error {
+	if workDir == "" {
+		return nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	sb := tool.NewWasmtimeSandbox(workDir)
+	res, err := sb.Run(probeCtx, action.SandboxSpec{
+		ToolName:    "probe",
+		ScriptBytes: src,
+		Input:       []byte("{}"),
+	})
+	if err != nil {
+		return ErrSandboxProbeFailed
+	}
+	if !res.Success {
+		return ErrSandboxProbeFailed
+	}
+	return nil
 }

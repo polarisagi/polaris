@@ -47,7 +47,8 @@ type EvalCase struct {
 	// 低于 FalsifiabilityThreshold 的用例 Runner 跳过 L4 LLM Judge，避免噪音评分。
 	FalsifiabilityScore float64 `json:"falsifiability_score,omitempty"`
 	// BehaviorType 指定期望验证的行为类型，Runner 据此选择最合适的 Evaluator 层级。
-	BehaviorType BehaviorType `json:"behavior_type,omitempty"`
+	BehaviorType BehaviorType   `json:"behavior_type,omitempty"`
+	Config       map[string]any `json:"config,omitempty"`
 }
 
 type Severity string

@@ -45,6 +45,11 @@ func (h *ProviderRecoveryHandler) SetBlackboard(bb BlackboardResumer) {
 	h.blackboard = bb
 }
 
+// SetPIIVault dynamically injects the PIIVault into the handler.
+func (h *ProviderRecoveryHandler) SetPIIVault(vault PIIVaultRestorer) {
+	h.piiVault = vault
+}
+
 // Handle 消费 provider_recovery Outbox 事件，执行两步恢复。
 // 幂等：重复触发同一 taskID 安全，RestoreFromSnapshot 和 ResumeFromSuspended 均应幂等。
 func (h *ProviderRecoveryHandler) Handle(ctx context.Context, payload []byte) error {

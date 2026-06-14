@@ -374,6 +374,12 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if s.rateLimiter != nil && !s.rateLimiter.Allow() {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "429 Too Many Requests: global API limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+
 		ctx, ok := s.checkAuth(w, r, clientIP, expectedKey, authManager)
 		if !ok {
 			return

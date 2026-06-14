@@ -90,7 +90,7 @@ func (d *TokenBurnDetector) CheckAcceleration(accumulated int) error {
 	d.samples = append(d.samples, burnSample{tokens: int64(accumulated), ts: now})
 
 	// 保留 5s 窗口
-	cutoff := now - 5_000_000 // 5s in microseconds
+	cutoff := time.Now().Add(-5 * time.Second).UnixMicro()
 	start := 0
 	for start < len(d.samples) && d.samples[start].ts < cutoff {
 		start++

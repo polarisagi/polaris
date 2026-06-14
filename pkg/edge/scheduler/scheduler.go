@@ -11,6 +11,7 @@ import (
 	"context"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -54,6 +55,8 @@ type ResourceGovernor struct {
 	maxConcurrent int
 	inFlight      int
 	cfg           config.ResourceGovernorConfig
+
+	awake int32
 
 	memProbeFn func() (freeMB int64)
 	cpuProbeFn func() (usage float64)
@@ -169,6 +172,12 @@ func (rg *ResourceGovernor) Release() {
 	rg.inFlight--
 	rg.cond.Signal()
 	rg.mu.Unlock()
+}
+
+func (rg *ResourceGovernor) WakeUp() {
+	if atomic.CompareAndSwapInt32(&rg.awake, 0, 1) {
+		rg.cond.Broadcast()
+	}
 }
 
 // HITLCheckpoint HITL 审批点（供 CronJob 注入审批等待）。

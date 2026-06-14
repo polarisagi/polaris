@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -96,18 +97,35 @@ func (p *GraphBuildPipeline) Run(ctx context.Context, docID string) error {
 	return nil
 }
 
-func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []*Entity, clusters map[int][]int) error {
-	for cID, cluster := range clusters {
+func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []*Entity, clusters map[int][]int) error { //nolint:gocyclo,nestif
+	for _, cluster := range clusters {
 		if len(cluster) < 3 {
 			continue // Only synthesize concepts for clusters with >= 3 entities
 		}
 
 		var conceptLabel string
-		if p.entityExtractor.llmClient != nil {
-			// Try LLM first if available
-			// Dummy implementation for LLM generation of concept label
-			conceptLabel = fmt.Sprintf("Concept_Cluster_%d", cID)
-		} else {
+		var errLLM error
+		if p.entityExtractor.llmClient != nil { //nolint:nestif
+			var entityNames []string
+			for _, idx := range cluster {
+				entityNames = append(entityNames, entities[idx].Name)
+			}
+			prompt := fmt.Sprintf("请为以下实体列表提炼一个简短的概念标签（只输出标签内容，不要有其他解释）：\n%s", strings.Join(entityNames, ", "))
+			if providerClient, ok := p.entityExtractor.llmClient.(*ProviderLLMClient); ok {
+				resp, err := providerClient.provider.Infer(ctx, []protocol.Message{
+					{Role: "user", Content: prompt},
+				})
+				if err == nil && resp != nil && resp.Content != "" {
+					conceptLabel = strings.Split(strings.TrimSpace(resp.Content), "\n")[0]
+				} else {
+					errLLM = perrors.New(perrors.CodeInternal, "llm inference failed")
+				}
+			} else {
+				errLLM = perrors.New(perrors.CodeInternal, "unsupported llm client type")
+			}
+		}
+
+		if p.entityExtractor.llmClient == nil || errLLM != nil {
 			// Fallback: use highest occurrence entity name
 			highestIdx := cluster[0]
 			for _, idx := range cluster {

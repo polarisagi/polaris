@@ -165,9 +165,15 @@ func (s *Server) handleListPluginCatalog(w http.ResponseWriter, r *http.Request)
 }
 
 // handleInstallPlugin 一键安装目录条目。
-// MCP → mcp_servers + extension_instances；Skill/Plugin → extension_instances（异步下载）。
 // POST /v1/plugins/install
-func (s *Server) handleInstallPlugin(w http.ResponseWriter, r *http.Request) { //nolint:nestif
+func (s *Server) handleInstallPlugin(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo,nestif
+	if s.installMgr != nil {
+		if err := s.installMgr.AuthorizeAction(r.Context(), "plugin:manage", nil); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+	}
+
 	var req protocol.PluginInstallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

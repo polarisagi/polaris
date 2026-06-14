@@ -174,7 +174,7 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 	return report, runErr
 }
 
-func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, safetyFail bool) { //nolint:gocyclo
+func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, safetyFail bool) { //nolint:gocyclo,nestif
 	inputBytes, _ := json.Marshal(c.Input)
 
 	var output []byte
@@ -220,7 +220,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 
 	// Level4LLMJudge：LLM 语义评判路径
 	// 若无注入 Provider 则静默跳过（退化为已通过的字符串检查结果）
-	if c.Level == Level4LLMJudge && r.llmProvider != nil {
+	if c.Level == Level4LLMJudge && r.llmProvider != nil { //nolint:nestif
 		criteria, _ := c.Expected["criteria"].(string)
 		if criteria == "" {
 			// fallback：用 case Description 作为评判标准
@@ -247,7 +247,17 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 
-		resp, llmErr := r.llmProvider.Infer(tCtx, msgs)
+		var inferOpts []protocol.InferOption
+		if c.Config != nil {
+			if temp, ok := c.Config["Temperature"].(float64); ok {
+				inferOpts = append(inferOpts, protocol.WithTemperature(temp))
+			}
+			if topP, ok := c.Config["TopP"].(float64); ok {
+				inferOpts = append(inferOpts, protocol.WithTopP(topP))
+			}
+		}
+
+		resp, llmErr := r.llmProvider.Infer(tCtx, msgs, inferOpts...)
 		if llmErr != nil {
 			// LLM 调用失败：记录日志，沿用字符串检查结果（true）
 			slog.Warn("l4_judge: LLM 调用失败，退化为字符串检查结果",

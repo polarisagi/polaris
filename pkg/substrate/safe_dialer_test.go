@@ -11,7 +11,7 @@ import (
 )
 
 func TestSafeDialer_LocalOnlyIPFilter(t *testing.T) {
-	sd := NewSafeDialer()
+	sd := NewSafeDialer(0, nil)
 	sd.SetLocalOnlyFilter(func(ip net.IP) bool {
 		return ip.IsLoopback()
 	})
@@ -33,7 +33,7 @@ func TestSafeDialer_LocalOnlyIPFilter(t *testing.T) {
 }
 
 func TestSafeDialer_QUICDisabled(t *testing.T) {
-	sd := NewSafeDialer()
+	sd := NewSafeDialer(0, nil)
 
 	// Ensure QUIC/UDP is disabled by default
 	_, err := sd.DialContext(context.Background(), "udp", "1.1.1.1:443")
@@ -46,7 +46,7 @@ func TestSafeDialer_QUICDisabled(t *testing.T) {
 }
 
 func TestSafeDialer_InjectHTTPTransport(t *testing.T) {
-	sd := NewSafeDialer()
+	sd := NewSafeDialer(0, nil)
 
 	// Reset DefaultTransport to avoid polluting
 	dt := http.DefaultTransport.(*http.Transport)
@@ -80,7 +80,7 @@ func TestSafeDialer_InjectHTTPTransport(t *testing.T) {
 // TestSafeDialer_BlockedCIDR 验证 Phase 2 SSRF 阻断逻辑。
 // 使用 containsBlockedCIDR 直接单元测试，避免真实 DNS 解析。
 func TestSafeDialer_BlockedCIDR(t *testing.T) {
-	sd := NewSafeDialer()
+	sd := NewSafeDialer(0, nil)
 
 	cases := []struct {
 		ip      string
@@ -111,7 +111,7 @@ func TestSafeDialer_BlockedCIDR(t *testing.T) {
 
 // TestSafeDialer_TaintEgressCheck 验证污点出口拦截。
 func TestSafeDialer_TaintEgressCheck(t *testing.T) {
-	sd := NewSafeDialer()
+	sd := NewSafeDialer(0, nil)
 
 	// Low taint 应放行
 	if err := sd.TaintEgressCheck([]protocol.TaintLevel{protocol.TaintLow}); err != nil {
@@ -149,7 +149,7 @@ func TestSafeDialer_DNSTooManyIPs(t *testing.T) {
 
 // TestNewSafeHTTPClient 验证 NewSafeHTTPClient 正确配置 transport。
 func TestNewSafeHTTPClient(t *testing.T) {
-	sd := NewSafeDialer()
+	sd := NewSafeDialer(0, nil)
 	client := NewSafeHTTPClient(sd)
 
 	if client == nil {
