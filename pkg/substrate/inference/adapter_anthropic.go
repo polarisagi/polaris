@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unsafe"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -531,9 +532,12 @@ type keyInjectRT struct {
 
 func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	apiKey := rt.keyFn()
-	defer clearBytes(apiKey)
-	req.Header.Set("x-api-key", string(apiKey))
+	// 直接用 []byte 构造 canonical header value，避免 string() 产生不可清零副本。
+	// http.Header 内部会 clone string，但此处我们在 RoundTrip 返回后立即
+	// 删除 header 引用，将泄漏窗口收窄到单次 TCP write。
+	req.Header.Set("x-api-key", unsafe.String(unsafe.SliceData(apiKey), len(apiKey)))
 	resp, err := rt.inner.RoundTrip(req)
-	req.Header.Del("x-api-key") // clear the copy from map immediately
+	req.Header.Del("x-api-key") // 立即清除 header map 引用
+	clearBytes(apiKey)          // 清零原始 key 字节
 	return resp, err
 }

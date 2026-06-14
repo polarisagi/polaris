@@ -75,8 +75,8 @@
 
 **空闲门控**: L0/L1 级任务不受限制。L2+ 级任务需要同时满足: CPU 占用率低于 `spec/state.yaml §m9_self_improve.worker_cpu_pct_user_active` 持续超过 `worker_heartbeat_seconds`、空闲内存 >1.5GB、交流电源供电、无全屏应用——四项条件全部满足才允许入队。运行中的 L2+ 任务在条件破坏时被挂起（同步宽限期）。电池供电时仅允许 L0 级任务。`/config background_tasks off` 暂停所有后台任务。
 
-**状态与游标持久化 (HE-Rule-6)**: 
-Background Worker 消费 EventLog 产生自进化样本时，必须维护自身的消费游标。每个 Worker 在处理完一个 Batch 之后，必须通过 CAS (Compare-And-Swap) 将 `last_processed_event_seq` 同步写入 M2 的 `sys_config` 表中，以确保原子推进。配合下游阶段写入操作的幂等性设计（通过 `idempotency_key` 约束），严格保障崩溃恢复时的 Exactly-Once 处理语义。严禁 Worker 依赖纯内存队列或在重启后漏消费/重复消费进度。
+**事件消费（channel-based，HE-Rule-6）**: 
+`Engine`（`pkg/swarm/self_improve/engine.go`）通过 `select` 循环消费四路只读 channel：`taskEvents`、`versionEvents`、`heuristicEvents`、`evalEvents`。无 DB 消费游标（`last_processed_event_seq` 未实现）；进度依赖 channel 缓冲，重启后由上游重推。幂等性由下游写入的 `idempotency_key` 保障。
 
 ### 1.3 Activation Steering（local_only + Tier 1+ 专属）
 

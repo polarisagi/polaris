@@ -1,105 +1,111 @@
 # Polaris — FFI ABI 规范
 
-> **§跳读**: 0:7 总则 / 1:19 内存 / 2:54 错误 / 3:68 并发 / 4:80 容量 / 5:85 命名 / 6:92 ABI协议
-> 跨语言 FFI 边界 ABI 规范 (Go ↔ Rust)。
+> **§跳读**: 0:7 总则 / 1:18 加载 / 2:40 ABI版本 / 3:55 错误 / 4:65 并发 / 5:78 命名
+> 跨语言 FFI 边界 ABI 规范 (Go ↔ Rust)。**ADR-0011**: CGO 已全面迁移至 `github.com/ebitengine/purego`。
 
 ## 1. 总则
 
-所有跨语言调用必经 C ABI (cdylib/CGO), 禁其他桥接。
+所有 Go→Rust 调用经 purego `Dlopen` / `RegisterLibFunc`，**禁用 CGO**（`import "C"` 不可出现在 FFI 路径）。Rust 侧编译为 cdylib（`.so`/`.dylib`），暴露 `extern "C"` 符号。
 
 ### 1.1 适用范围
+
 | 方向 | 调用方式 | 模块 | 用途 |
 |------|---------|------|------|
-| Go→Rust | `import "C"` + cdylib | `rust/substrate/` | 本地推理/向量/全文/图存储 |
-| Rust→Go | Go 回调函数指针 | — | 预留 (暂未使用) |
+| Go→Rust | purego `RegisterLibFunc` | `rust/substrate/` | 本地推理/向量/全文/图存储 |
+| Rust→Go | 不支持（禁回调函数指针） | — | 不适用 |
 
 ### 1.2 隔离原则
-- Rust cdylib 独立线程执行, 不阻塞 Go scheduler
-- FFI 超时 <5s (Go `context.WithTimeout` 兜底)
-- Rust 侧崩溃(SIGSEGV/SIGABRT)不可恢复 → Go 侧 `log.Fatalf` + CRITICAL 告警
 
-## 2. 内存生命周期
+- purego 调用在 Go goroutine 中执行，不阻塞 Go scheduler（无 CGO 抢占问题）
+- FFI 超时 <5s（`context.WithTimeout` 兜底）
+- Rust 侧崩溃（SIGSEGV/SIGABRT）不可恢复 → Go 侧 `log.Fatalf` + CRITICAL 告警
 
-### 2.1 所有权规则
-| 分配方 | 释放方 | 场景 | 机制 |
-|------|-------|------|------|
-| Go (C.malloc) | Go (C.free) | 入参 | CGO 分配 C 内存 |
-| Rust (Box) | Rust | 返回值 | Rust `extern "C"` 须提供对应 `_free` |
-| Rust (String/Vec) | Rust | 跨调用持久态 | `Box::into_raw/from_raw` 传递 opaque ptr |
+## 2. 库加载
 
-### 2.2 字符串传递
-边界统一用 `*const c_char` (NUL-terminated):
-- Go→Rust: `C.CString` → Rust `CStr` (只读)
-- Rust→Go: `CString::into_raw` → 暴露 `_free_string(ptr)` 供 Go 释放
-- 禁 Rust 返回 `*const u8` 切片 (防无 NUL 越界)
+`pkg/substrate/ffi/dylib.go` 通过 `sync.Once` 加载 dylib，路径优先级：
 
-### 2.3 字节传递
-结构化数据 (proto/JSON/向量) 用 FfiBytes:
-```c
-typedef struct { const uint8_t *data; size_t len; } FfiBytes;
-void FfiBytes_drop(FfiBytes b); // Rust 侧释放
-```
+1. `POLARIS_SUBSTRATE_LIB` 环境变量
+2. 可执行文件同级 `lib/` 目录
+3. dev：`rust/substrate/target/release/`（逐级向上搜索）
 
-### 2.4 Opaque 句柄
-长生命周期对象经 `*mut c_void` opaque ptr:
-- 创建: `Box::into_raw` 返回 `*mut c_void`
-- 消费: `Box::from_raw(handle as *mut Engine)`
-- 异常: 统一返 NULL, Go 侧取 errno
+`RegisterLibFunc` 按函数签名将 Rust 导出符号绑定到 Go 函数变量（值类型）。字符串传参 **不经** `C.CString`，直接传 Go string（purego 内部处理 NUL 约定）。
 
-## 3. 错误处理
+### 2.1 字符串与字节传递
 
-### 3.1 返回值约定
 | 场景 | Go 侧 | Rust 侧 |
 |------|-------|---------|
-| 成功 | 检查 NULL/nil | 返有效指针/0, errno=0 |
-| 可恢复 | 读 errno + CGO 最后错误 | 返 NULL/错误码, 设置 errno |
-| 不可恢复 | log.Fatalf + CRITICAL | 返 NULL, internal panic |
+| Go→Rust 字符串 | Go `string`（purego 透传） | `*const c_char`（只读，CStr） |
+| Rust→Go 字符串 | purego 接收 `uintptr`（字符串指针），Go 侧复制后调 `_free_string` | `CString::into_raw`，须配套导出 `_free_string(ptr)` |
+| 结构化数据 | 序列化为 JSON/protobuf，通过 `*const u8 + len` 对传 | 接收 slice，Go 侧提供 `FfiBytes_drop` |
 
-### 3.2 错误字符串
-Rust 侧错误写入 `thread_local! FFI_LAST_ERROR`:
-- 写: `set_last_error(msg)`
-- 读: 导出 `ffi_last_error() -> *const c_char` 供 Go 获取
+**purego 限制**：不支持结构体值类型跨边界（只传指针/标量）；复杂数据走 JSON 或 protobuf 编码后传指针+长度。
 
-## 4. 并发安全
+### 2.2 内存所有权
 
-### 4.1 线程模型
-- llama.cpp: 串行 (global mutex)
-- LanceDB/CozoDB: 任意 (内建锁)
-- Tantivy: 多读单写 (IndexWriter 独占)
+| 分配方 | 释放方 | 机制 |
+|--------|--------|------|
+| Go | Go | Go GC，不需手动释放 |
+| Rust（返回值） | Rust | 须导出配套 `_free`，Go 侧调用释放 |
+| Rust（opaque 句柄） | Rust | `Box::into_raw` / `Box::from_raw` |
 
-### 4.2 禁止模式
-- 禁 Rust 启动非导出长驻后台线程 (Go 无法追踪)
-- 禁 Rust 回调 Go 函数指针 (跨 goroutine 会 panic)
-- 禁 Rust 持有 Go 内存跨越边界 (防 GC 移动)
+**禁止**：Rust 持有 Go 内存跨 FFI 边界（purego 无 pinning，GC 可移动）。
 
-## 5. 内存容量约束
-- 单次 FFI 调用 <64MB (超出触发 M11 KillSwitch Throttle)
-- 句柄泄露: CI `ffi_leak_check` 扫描未成对的 `_free`
-- Rust 侧 panic: 边界加 `catch_unwind`, panic 转换至 `log.Fatal`
+## 3. ABI 版本协议
+
+### 3.1 版本号定义
+
+Rust 导出 `substrate_abi_version() -> u32`（高16位=major, 低16位=minor）。
+
+| 侧 | 当前值 |
+|----|--------|
+| Go `ExpectedABIMajor` | 1 |
+| Go `ExpectedABIMinor` | 1 |
+| Rust `SUBSTRATE_ABI_MAJOR` | 1 |
+| Rust `SUBSTRATE_ABI_MINOR` | 1 |
+
+### 3.2 校验机制（`pkg/substrate/ffi/dylib.go` `verifyABI`）
+
+- major 不匹配 → **panic**（fail-fast）
+- minor：Go < Rust → warn（dylib 更新，Go 未同步）；Go > Rust → warn（dylib 过旧）
+
+### 3.3 升级条件
+
+- **升 major**：删导出符号、改函数签名、改错误码语义
+- **升 minor**：新增导出符号、新增错误码
+
+## 4. 错误处理
+
+### 4.1 返回值约定
+
+| 场景 | Go 侧 | Rust 侧 |
+|------|-------|---------|
+| 成功 | 检查零值/空指针 | 返有效值，errno=0 |
+| 可恢复 | 读 errno + `ffi_last_error()` | 返 NULL/0，设 errno |
+| 不可恢复 | `log.Fatalf` + CRITICAL | panic（`catch_unwind` 转 NULL）|
+
+### 4.2 错误字符串
+
+Rust 侧错误写 `thread_local! FFI_LAST_ERROR`：导出 `ffi_last_error() -> *const c_char`，Go 侧读取后调 `_free_string` 释放。
+
+## 5. 并发安全
+
+- **llama.cpp**：串行（global mutex）
+- **LanceDB/CozoDB**：任意（内建锁）
+- **Tantivy**：多读单写（IndexWriter 独占）
+
+禁止 Rust 启动非导出长驻后台线程（Go 无法追踪）。
 
 ## 6. 命名规范
-- `{engine}_{action}`: `lancedb_search`
-- `{type}_new` / `{type}_free`: `engine_new` / `engine_free` (必配对)
-- `{type}_drop`: `FfiBytes_drop` (纯数据)
-**所有 FFI 导出符号必须统一在 `rust/substrate/src/ffi/mod.rs` 声明, 禁散落.**
 
-## 7. ABI 版本协议 (ADR-0011)
+- `{engine}_{action}`：`lancedb_search`
+- `{type}_new` / `{type}_free`：`engine_new` / `engine_free`（必配对）
+- `{type}_drop`：`FfiBytes_drop`（纯数据）
 
-### 7.1 协议定义
-导出 `substrate_abi_version() -> u32` (高16位=major, 低16位=minor)。
-当前版本: **1.0** (`0x00010000`)。
+**所有 FFI 导出符号必须统一在 `rust/substrate/src/ffi/mod.rs` 声明，禁散落。**
 
-### 7.2 校验机制
-Go 侧 `purego.Dlopen` 后立即校验:
-- major 不匹配 → **panic** (fail-fast)
-- minor: 旧<新 允许; 旧>新 警告 (dylib 比 Go 旧)
+## 7. 符号清单（ABI 1.1）
 
-### 7.3 升级条件
-- **升 major**: 删导出、改签名、改错误码语义
-- **升 minor**: 增导出、增错误码
-
-### 7.4 符号清单 (ABI 1.0)
-- **通用**: `substrate_abi_version`
-- **M11**: `cedar_load_policies`, `cedar_evaluate`, `cedar_policy_count`, `cedar_free_string`
-- **M2**: `surreal_open`, `surreal_kv_{get,put,delete,scan}`, `surreal_vec_{upsert,knn,set_mode}`, `surreal_graph_{relate,traverse}`, `surreal_fts_{index,search}`, `surreal_free_{string,buf}`
-- **加载器**: 查 `POLARIS_SUBSTRATE_LIB` → 同级 `lib/` → dev 各级 `target/release/`
+- **通用**：`substrate_abi_version`, `ffi_last_error`, `ffi_last_error_free`
+- **M11（Cedar）**：`cedar_load_policies`, `cedar_evaluate`, `cedar_policy_count`, `cedar_free_string`
+- **M2（SurrealDB）**：`surreal_open`, `surreal_kv_{get,put,delete,scan}`, `surreal_vec_{upsert,knn,set_mode}`, `surreal_graph_{relate,traverse}`, `surreal_fts_{index,search}`, `surreal_free_{string,buf}`
+- **内存容量约束**：单次 FFI 调用数据 <64MB；句柄泄露 CI `ffi_leak_check` 扫描未配对的 `_free`

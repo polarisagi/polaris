@@ -34,9 +34,13 @@ type mcpRPCRequest struct {
 type mcpRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      *int64          `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *mcpRPCError    `json:"error,omitempty"`
 }
+
+type ServerRequestHandler func(ctx context.Context, method string, id int64, params json.RawMessage) (json.RawMessage, error)
 
 type mcpRPCError struct {
 	Code    int    `json:"code"`
@@ -82,6 +86,15 @@ type MCPClient struct {
 
 	done chan struct{}
 	once sync.Once
+
+	serverReqHandler ServerRequestHandler
+}
+
+// SetServerRequestHandler 注册服务端主动请求处理器。
+func (c *MCPClient) SetServerRequestHandler(h ServerRequestHandler) {
+	c.mu.Lock()
+	c.serverReqHandler = h
+	c.mu.Unlock()
 }
 
 func NewMCPClient(cfg MCPClientConfig, httpClient *http.Client) *MCPClient {
@@ -419,7 +432,20 @@ func (c *MCPClient) readSSESingleResponse(r io.Reader) (*mcpRPCResponse, error) 
 
 func (c *MCPClient) dispatch(resp *mcpRPCResponse) {
 	if resp.ID == nil {
+		if resp.Method != "" {
+			slog.Debug("mcp: server notification", "server", c.cfg.ServerName, "method", resp.Method)
+		}
 		return
+	}
+	if resp.Method != "" {
+		c.mu.Lock()
+		_, inPending := c.pending[*resp.ID]
+		handler := c.serverReqHandler
+		c.mu.Unlock()
+		if !inPending {
+			go c.handleServerRequest(resp.Method, *resp.ID, resp.Params, handler)
+			return
+		}
 	}
 	c.mu.Lock()
 	ch, ok := c.pending[*resp.ID]
@@ -435,6 +461,60 @@ func (c *MCPClient) dispatch(resp *mcpRPCResponse) {
 	}
 }
 
+// handleServerRequest 在独立 goroutine 中处理服务端主动请求，回复 JSON-RPC 响应。
+func (c *MCPClient) handleServerRequest(method string, id int64, params json.RawMessage, handler ServerRequestHandler) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var result json.RawMessage
+	var rpcErr *mcpRPCError
+
+	if handler != nil {
+		var err error
+		result, err = handler(ctx, method, id, params)
+		if err != nil {
+			rpcErr = &mcpRPCError{Code: -32603, Message: err.Error()}
+		}
+	} else {
+		// 无 handler：返回 MethodNotFound
+		rpcErr = &mcpRPCError{Code: -32601, Message: "method not found: " + method}
+	}
+
+	resp := mcpRPCRequest{
+		JSONRPC: "2.0",
+		ID:      &id,
+	}
+	_ = resp // suppress unused
+	// 通过 postRaw 发送响应（复用现有发送路径）
+	payload, _ := json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      int64           `json:"id"`
+		Result  json.RawMessage `json:"result,omitempty"`
+		Error   *mcpRPCError    `json:"error,omitempty"`
+	}{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr})
+	_ = c.postRaw(ctx, payload)
+}
+
+func (c *MCPClient) postRaw(ctx context.Context, b []byte) error {
+	switch c.cfg.Transport {
+	case MCPStdio:
+		_, err := c.stdin.Write(append(b, '\n'))
+		return err
+	case MCPSSE:
+		return c.httpPostOnly(ctx, c.postURL, b)
+	case MCPStreamableHTTP:
+		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b)
+		if err != nil {
+			return err
+		}
+		if resp != nil {
+			c.dispatch(resp)
+		}
+		return nil
+	}
+	return perrors.New(perrors.CodeInternal, "mcp: unknown transport")
+}
+
 // ─── MCP 协议方法 ─────────────────────────────────────────────────────────────
 
 // mcpProtocolVersion 当前实现支持的 MCP 协议版本（2025-11-25 为当前稳定版本）。
@@ -442,14 +522,15 @@ const mcpProtocolVersion = "2025-11-25"
 
 // Initialize 执行 MCP 初始化握手，校验服务器返回的协议版本。
 func (c *MCPClient) Initialize(ctx context.Context) error {
+	caps := map[string]any{}
+	if c.serverReqHandler != nil {
+		caps["roots"] = map[string]any{"listChanged": false}
+		caps["sampling"] = map[string]any{}
+	}
 	result, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
-		"capabilities": map[string]any{
-			// 声明客户端支持的能力，服务器据此开启对应功能
-			"roots":    map[string]any{"listChanged": false},
-			"sampling": map[string]any{},
-		},
-		"clientInfo": map[string]any{"name": "polaris", "version": "1.0"},
+		"capabilities":    caps,
+		"clientInfo":      map[string]any{"name": "polaris", "version": "1.0"},
 	})
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "mcp: initialize", err)

@@ -28,7 +28,7 @@ import (
 // Rust 侧 substrate_abi_version() 返回 (major<<16)|minor；major 不匹配 → panic。
 // 升级 ABI 同步修改：rust/substrate/src/lib.rs SUBSTRATE_ABI_MAJOR + 此常量。
 const ExpectedABIMajor uint16 = 1
-const ExpectedABIMinor uint16 = 0
+const ExpectedABIMinor uint16 = 1
 
 var (
 	libHandle uintptr

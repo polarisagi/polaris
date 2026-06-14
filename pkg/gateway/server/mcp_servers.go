@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 
 	"encoding/json"
 	"log/slog"
@@ -125,11 +126,28 @@ func (s *Server) handleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 生成 ID 并持久化到 mcp_servers（State-in-DB，重启可恢复）
+	if c.ID == "" {
+		c.ID = "mcp_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	argsBytes, _ := json.Marshal(c.Args)
+	envBytes, _ := json.Marshal(c.Env)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(r.Context(),
+		`INSERT INTO mcp_servers(id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,'','','',?,?)`,
+		c.ID, c.Name, c.Transport, c.Command,
+		string(argsBytes), string(envBytes),
+		c.URL, boolToInt(c.Enabled), c.Timeout, c.TrustTier, now, now)
+	if err != nil {
+		http.Error(w, "db: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	if c.Enabled && s.mcpMgr != nil {
 		go s.startMCPServer(protocol.Detach(r.Context()), c)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
 	c.CreatedAt, c.UpdatedAt = now, now
 	s.clearToolSchemaCache()
 	w.Header().Set("Content-Type", "application/json")

@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] pkg/substrate/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:442 SSRF / 6.5:446 Factuality / 7:486 审计 / 8:510 多Agent宪法 / 9:537 威胁监控 / 13:551 降级 / 14:583 跨模块契约
+> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:416 SSRF / 6.5:446 Factuality / 7:460 审计 / 8:484 多Agent宪法 / 9:511 威胁监控 / 13:525 降级 / 14:557 跨模块契约
 
 ---
 
@@ -371,50 +371,24 @@ PIIGuard:
 
   **PIIGuard 双向防护**: PIIGuard 同时在输入端（M4→M7 工具参数 SecureUnredact 之前）和输出端（M7 ToolResult→EventLog PostExecution Redact，M7 §4.3 Step 5）工作。输入端阻止 PII 进入 LLM Provider，输出端阻止 PII 进入不可变审计轨迹。Tier 0 仅保证结构化 PII 模式检测覆盖两端。
 
-SessionPIIVault:
-  RedactAndVault(ctx, fieldPath, value) → 存入 per-session 内存 Vault (key=sessionID, tokenID), 返回 OpaqueToken; 结构化字段替换为 {"$pii_ref": "tokenID"}
-  SecureUnredact(ctx, tokenID, fieldPath, authProof) → 验证: (a) tokenID 属当前 session, (b) Capability Token 持有 pii_resolve, (c) fieldPath 在 InputSchema 声明 x-polaris-pii: true
-  shell.exec/python.run 等自由命令字符串的 command 字段不声明 x-polaris-pii, SecureUnredact 拒绝解析
-  单 session vault 硬上限 1MB（约 10000 个 token），超限 → 拒绝新 PII 检测 + WARN
-  Session 关闭事件 → vault.Destroy 立即销毁 (不可恢复), 满足 GDPR 数据最小化
-  M3 暴露 polaris_pii_vault_size_mb gauge 监控
+SessionPIIVault（实现：`pkg/cognition/kernel/pii_vault.go`）:
+  Snapshot(ctx, taskID, fields map[string]string) → 逐字段 AES-256-GCM 加密写入 `preferences` 表（key=`pii_vault:{taskID}:{field}`，TTL=1h）
+  RestoreFromSnapshot(ctx, taskID) → 读 preferences 表解密，写回 WorkingMemory.Scratch
+  SecureZero(ctx, taskID) → DELETE FROM preferences WHERE key LIKE `pii_vault:{taskID}:%`
 
-  **跨会话挂起持久化（解决 Suspended 任务 PII 丢失）**:
-  SuspendSnapshot(ctx, taskID):
-    token map (tokenID→PII 明文) → msgpack → AES-256-GCM + persistent_key 加密（nonce 随机，prepend 密文头）
-    ≤4KB → tasks.pii_vault_blob 列 (base64)；>4KB → VFS blob (`~/.polarisagi/polaris/vfs/`) + tasks.vfs_ref (VFS refcount+1)
-    落盘: MutationIntent{Table:"tasks", Op:OpPatch, Payload:{pii_vault_blob:...}} 经 MutationBus 串行
-    落盘成功 → 立即清零内存 vault（GDPR：明文不持久驻留）
-    架构约束: 仅 Tier-0 单机有效；persistent_key 源 OS Keychain，跨机迁移不可解密——已知限制
-  RestoreFromSnapshot(ctx, taskID):
-    读 tasks.pii_vault_blob（vfs_ref 则从 VFS 读完整 blob，VFS refcount-1 入队 GC）
-    AES-256-GCM 解密 → 反序列化 token map → 重建内存 Vault（绑定新 sessionID）
-    成功 → 原子清除 tasks.pii_vault_blob (MutationIntent OpPatch null)，Vault 回归内存态
-    失败 (blob 损坏 / key 轮换) → ErrPIIVaultRestoreFailed + CRITICAL，任务强制 S_FAILED
-  SecureZero(ctx, taskID):
-    任务转 Done/Failed 时调用。原子: (1) 清零 tasks.pii_vault_blob (2) VFS blob 解引用→refcount=0 自动 GC (3) 写 pii_vault_purged 审计
-    M4 FSM 转 S_FAILED/S_COMPLETE 时调用，早于 M2 WorkspaceManager GC
+  当前边界：PII 字段直接存入 preferences 表（持久化），TTL 1h 自动过期。
+  Token 映射（OpaqueToken/SecureUnredact）、VFS blob 路径、MutationBus 落盘均为计划中功能，暂未实现。
 
-### 5.2 Credential Vault [CredentialVault]
+### 5.2 Credential Vault [CredentialVault] 【计划中，未实现】
 
-SecretBackend OS 密钥链抽象:
-  Get(key) → ([]byte, error), 未找到 → ErrSecretNotFound, 调用方清零
-  Set(key, value) → error, 写入后调用方清零 value
-  Delete(key) → error, 幂等
-  List() → ([]string, error), 不返回凭证值
-  延迟: Get/Set <5ms, List <20ms
+> 当前实现：各 Adapter 通过注入的 `credentialFn() []byte` 获取 API Key（见 M1 §3）。OS Keychain 抽象层（SecretBackend）尚未实现。以下为设计规格，待实现时参考。
 
-平台适配:
-  macOS: Security Framework (keychain)
-  Linux: Secret Service API (libsecret/gnome-keyring)
-  Windows: Credential Manager API (credential.h)
-  Fallback: age-encrypted file (password-derived key)
-  依赖: github.com/99designs/keyring, 优先级: macOS Keychain > Windows Credential Manager > Linux kernel keyring > encrypted file
+计划接口:
+  Get(key) → ([]byte, error)，使用后调用方清零
+  Set(key, value) → error
+  Delete(key) → error（幂等）
 
-安全原则:
-  凭证永不落盘明文, 仅 OS 密钥链获取, 运行时驻留内存
-  使用后立即清零 (subtle.ConstantTimeCopy + manual memclr)
-  审计日志记录访问事件 (谁/何时/什么凭证) 不记录凭证内容
+计划平台适配: macOS Keychain / Linux libsecret / Windows Credential Manager / age-encrypted file fallback
 
 **persistent_key 轮换**:
   触发: `polaris vault rotate-master-key`

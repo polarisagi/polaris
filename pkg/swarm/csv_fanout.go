@@ -31,6 +31,12 @@ type CSVFanoutJob struct {
 	MaxConcurrency int
 	// MaxRuntimeSec 每个 worker 最大执行秒数（0 = 1800s）。
 	MaxRuntimeSec int
+	// EventLog 可选；nil 时跳过 EventLog 写入
+	EventLog CSVFanoutEventLogger
+}
+
+type CSVFanoutEventLogger interface {
+	Append(ctx context.Context, ev protocol.Event) error
 }
 
 // RowResult 单行 CSV 的执行结果。
@@ -56,7 +62,7 @@ type FanoutResult struct {
 // RunCSVFanout 执行 CSV fan-out，将每行 CSV 作为独立任务发布到 Blackboard。
 // 调用方负责提供 Blackboard 实例和 SubAgent 执行后端。
 // 本函数：读 CSV → 构建 TaskEntry → PostBatch → 并发等待 → 聚合结果。
-func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob) (*FanoutResult, error) {
+func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob) (*FanoutResult, error) { //nolint:gocyclo
 	if err := validateFanoutJob(&job); err != nil {
 		return nil, err
 	}
@@ -97,6 +103,16 @@ func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob)
 		return nil, perrors.Wrap(perrors.CodeInternal, fmt.Sprintf("csv_fanout: post batch: %v", err), err)
 	}
 
+	// 写 EventLog: csv_job_row_posted（一条聚合，避免单行 N 条爆日志）
+	if job.EventLog != nil {
+		_ = job.EventLog.Append(ctx, protocol.Event{
+			ID:      jobID + "_posted",
+			Type:    protocol.EventType("csv_job_row_posted"),
+			TaskID:  jobID,
+			Payload: []byte(fmt.Sprintf(`{"job_id":%q,"total":%d}`, jobID, len(rows))),
+		})
+	}
+
 	// 并发等待所有 Task 完成（简化版：轮询 Blackboard 状态）
 	concurrency := job.MaxConcurrency
 	if concurrency <= 0 {
@@ -134,6 +150,19 @@ func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob)
 			} else {
 				results[idx].Status = "done"
 				results[idx].Result = result
+			}
+
+			if job.EventLog != nil {
+				evType := "csv_job_row_done"
+				if taskErr != nil {
+					evType = "csv_job_row_error"
+				}
+				_ = job.EventLog.Append(waitCtx, protocol.Event{
+					ID:      e.ID + "_result",
+					Type:    protocol.EventType(evType),
+					TaskID:  jobID,
+					Payload: []byte(fmt.Sprintf(`{"row_id":%q,"status":%q}`, e.ID, results[idx].Status)),
+				})
 			}
 		}(i, entry)
 	}

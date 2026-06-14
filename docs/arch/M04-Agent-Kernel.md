@@ -116,7 +116,7 @@ TaintGate (L1 第一道 — `[Taint-Prop]`):
 - Layer B 精确子串: `taint_sensitive` 字段 vs active taint set
 - 输入反序列化: TaintedJSONNode 递归树 (禁止 map[string]any, 防 Go JSON 剥离污点标记)
 - TaintBlocked → HITL → TaintExemptionToken (field_hash+TTL)
-- SchemaValidator: Taint 扫描 → InputSchema 校验 → OutputSchema 一致性 → 幂等 ID 合法性
+- SchemaValidator: Taint 扫描 → InputSchema 校验 → OutputSchema 一致性 → 幂等 ID 合法性（`dag_validator.go` 仅校验结构，字段级 Taint 降级 SanitizeBySchema 在 M7 工具调用层执行）
 
 PolicyGate: `[Cedar-Gate]` {principal, action, resource, context} → FORBID 优先
 

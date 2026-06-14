@@ -310,8 +310,8 @@ TaskStore: Enqueue/Dequeue/MarkComplete/MarkFailed/ListPending/Close
   实现: SurrealDBTaskStore(key:task:{id}) / SQLiteTaskStore; [Tier-0-Limit] 非热路径
   类型定义: `pkg/edge/scheduler/scheduler.go`（ResourceGovernor / TaskQueue）、`pkg/edge/hitl/gateway.go`（HITLGateway）、`pkg/edge/scheduler.go`（TrafficSplitter，该文件余量已 Deprecated，迁移至 `pkg/edge/scheduler/` 中）
 
-**Global Semaphore (并发限制)**:
-在 M13 引入全局跨模块并发控制信号量（Global Semaphore）。确保 LLM 推理节点（M1/M4/M9 均会调用 LLM）的**总并发度**上限不超出硬件或 API 的物理承载极限。当多个 worker (Agent, BackgroundTask, Cron 等) 争抢 LLM 资源时，通过 M13 Global Semaphore 进行排队，防止过载打爆本地 GPU/内存 或触发 API 供应商 429。默认配置 Tier 0 仅允许 GlobalSemaphore=1，Tier 1+ 视配置（`config.GlobalConcurrency`）决定。
+**并发治理（ResourceGovernor）**:
+全局并发控制由 `ResourceGovernor`（`pkg/edge/scheduler/scheduler.go`）实现三级降级准入，而非独立信号量。`Admit(priority)` 检测可用内存和 goroutine 数，按 L1/L2/L3 阈值返回准入决定。priority=0（交互式）允许超 `maxConcurrent` 上限 4×；低优先级任务在 L2 压力下直接拒绝。独立全局 LLM 信号量（GlobalSemaphore）未实现，为计划中功能。
 
 TaskQueue 交付语义: at-least-once, 幂等键 = ScheduledTask.ID。
 

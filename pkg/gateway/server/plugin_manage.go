@@ -215,11 +215,13 @@ func (s *Server) enablePluginComponents(ctx context.Context, pluginID, now strin
 // 直接操作 mcp_servers.enabled（权威来源），不再通过 mcp_policy.enabled。
 // PATCH /v1/plugins/{id}/mcp/{serverName}
 func (s *Server) handleTogglePluginMCP(w http.ResponseWriter, r *http.Request) {
-	if s.installMgr != nil {
-		if err := s.installMgr.AuthorizeAction(r.Context(), "plugin:manage", nil); err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
-		}
+	if s.installMgr == nil {
+		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.installMgr.AuthorizeAction(r.Context(), "plugin:manage", nil); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
 	}
 
 	pluginID := r.PathValue("id")

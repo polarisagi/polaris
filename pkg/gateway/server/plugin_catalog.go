@@ -167,11 +167,13 @@ func (s *Server) handleListPluginCatalog(w http.ResponseWriter, r *http.Request)
 // handleInstallPlugin 一键安装目录条目。
 // POST /v1/plugins/install
 func (s *Server) handleInstallPlugin(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo,nestif
-	if s.installMgr != nil {
-		if err := s.installMgr.AuthorizeAction(r.Context(), "plugin:manage", nil); err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
-		}
+	if s.installMgr == nil {
+		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.installMgr.AuthorizeAction(r.Context(), "plugin:manage", nil); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
 	}
 
 	var req protocol.PluginInstallRequest

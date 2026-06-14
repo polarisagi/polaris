@@ -77,7 +77,7 @@ M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-
 | Phase 3: 全量回填 | CPU idle>70% + 空闲内存>500MB | 后台单线程, 5文档/批+1s冷却 | ~5.5h (10K docs) |
 | BM25 永久降级 | >30天未访问 | 不重嵌，永久BM25 | 0 |
 
-跨模块: M2 OnlineReindexer 检测维度变更, M1 Embedder.Init() 暴露 Dimension(), M10 通过 `internal/config/runtime.go` embeddingDim atomic 获取, M5 ActiveDocumentTracker 提供文档热度
+跨模块: M5 OnlineReindexer 检测维度变更（实现位于 `pkg/cognition/memory/online_reindexer.go`，原地 UPDATE `episodic_events.embedding`，无 shadow table）, M1 Embedder.Init() 暴露 Dimension(), M10 通过 `internal/config/runtime.go` embeddingDim atomic 获取, M5 ActiveDocumentTracker 提供文档热度
 
 ### 1.6 多级摘要生成
 
