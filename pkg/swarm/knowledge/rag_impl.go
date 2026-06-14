@@ -119,22 +119,23 @@ func (p *DefaultIngestionPipeline) Delete(ctx context.Context, uri string) error
 }
 
 func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, taintLevel int, ref DocumentRef) []Chunk {
-	var chunks []Chunk
+	const parentMaxRunes = 1000
+	const leafMaxRunes = 250
 
-	// 简单实现：按 1000 字符切分为 ParentChunk，按 250 字符切分为 LeafChunk
-	parentSize := 1000
-	leafSize := 250
+	// Step 1: 段落切分
+	paragraphs := splitParagraphs(content)
 
-	runes := []rune(content)
+	// Step 2: 段落合并为 ParentChunk
+	parents := mergeParagraphsIntoParents(paragraphs, parentMaxRunes)
+
+	// Step 3: ParentChunk → LeafChunks（句子边界切分）
+	var chunks []Chunk //nolint:prealloc
 	chunkIndex := 0
-
-	for i := 0; i < len(runes); i += parentSize {
-		end := min(i+parentSize, len(runes))
-
-		parentChunkID := fmt.Sprintf("pchunk_%s_%d", docID, i)
+	for pi, parentText := range parents {
+		parentChunkID := fmt.Sprintf("pchunk_%s_%d", docID, pi)
 		parentChunk := Chunk{
 			ID:          parentChunkID,
-			Content:     string(runes[i:end]),
+			Content:     parentText,
 			DocID:       docID,
 			SectionPath: []string{"root"},
 			TaintLevel:  taintLevel,
@@ -147,29 +148,111 @@ func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, t
 		chunkIndex++
 		chunks = append(chunks, parentChunk)
 
-		// 对 ParentChunk 进一步切分为 LeafChunk
-		for j := i; j < end; j += leafSize {
-			leafEnd := min(j+leafSize, end)
-			leafChunkID := fmt.Sprintf("lchunk_%s_%d", docID, j)
-			leafChunk := Chunk{
+		leaves := splitIntoLeaves(parentText, leafMaxRunes)
+		for li, leafText := range leaves {
+			leafChunkID := fmt.Sprintf("lchunk_%s_%d_%d", docID, pi, li)
+			chunks = append(chunks, Chunk{
 				ID:            leafChunkID,
-				Content:       string(runes[j:leafEnd]),
+				Content:       leafText,
 				DocID:         docID,
 				SectionPath:   []string{"root", parentChunkID},
 				ParentChunkID: parentChunkID,
-				TaintLevel:    taintLevel, // 污染标记传递，防止 Taint Washing
+				TaintLevel:    taintLevel,
 				TaintSource:   "ingestion",
 				SourceURI:     ref.URI,
 				DocVersion:    ref.ContentHash,
 				ChunkType:     "leaf",
 				ChunkIndex:    chunkIndex,
-			}
+			})
 			chunkIndex++
-			chunks = append(chunks, leafChunk)
 		}
 	}
-
 	return chunks
+}
+
+// splitParagraphs 以双换行切分段落，过滤空段落。
+func splitParagraphs(content string) []string {
+	parts := strings.Split(content, "\n\n")
+	result := parts[:0]
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// mergeParagraphsIntoParents 将段落累积为 ParentChunk，不超过 maxRunes。
+// 单段落超限时整段作为一个 parent（兜底：留给 leaf 强切）。
+func mergeParagraphsIntoParents(paragraphs []string, maxRunes int) []string {
+	var parents []string
+	var buf []rune
+	for _, para := range paragraphs {
+		pr := []rune(para)
+		if len(buf)+len(pr)+2 > maxRunes && len(buf) > 0 {
+			parents = append(parents, string(buf))
+			buf = buf[:0]
+		}
+		if len(pr) > maxRunes {
+			if len(buf) > 0 {
+				parents = append(parents, string(buf))
+				buf = buf[:0]
+			}
+			// 超长单段落硬切分
+			for start := 0; start < len(pr); start += maxRunes {
+				end := start + maxRunes
+				if end > len(pr) {
+					end = len(pr)
+				}
+				parents = append(parents, string(pr[start:end]))
+			}
+			continue
+		}
+		if len(buf) > 0 {
+			buf = append(buf, '\n', '\n')
+		}
+		buf = append(buf, pr...)
+	}
+	if len(buf) > 0 {
+		parents = append(parents, string(buf))
+	}
+	return parents
+}
+
+// splitIntoLeaves 在句子边界切分文本为 LeafChunk，每个不超过 maxRunes。
+// 句子结束符：。！？；（中文）和 ". " "! " "? "（英文，后接空格/EOF）。
+func splitIntoLeaves(text string, maxRunes int) []string {
+	runes := []rune(text)
+	var leaves []string
+	start := 0
+	for start < len(runes) {
+		end := min(start+maxRunes, len(runes))
+		if end < len(runes) {
+			// 在 [start, end] 内找最后一个句子结束符
+			cut := -1
+			for i := end - 1; i > start; i-- {
+				r := runes[i]
+				if r == '。' || r == '！' || r == '？' || r == '；' {
+					cut = i + 1
+					break
+				}
+				// 英文：结束符后跟空格
+				if (r == '.' || r == '!' || r == '?') && i+1 < len(runes) && runes[i+1] == ' ' {
+					cut = i + 2 // 包含空格
+					break
+				}
+			}
+			if cut > start {
+				end = cut
+			}
+		}
+		leaf := strings.TrimSpace(string(runes[start:end]))
+		if leaf != "" {
+			leaves = append(leaves, leaf)
+		}
+		start = end
+	}
+	return leaves
 }
 
 // DefaultHybridRetriever 实现了 HybridRetriever

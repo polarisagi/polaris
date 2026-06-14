@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS skills (
     deprecated  INTEGER NOT NULL DEFAULT 0,
     -- 来自插件 bundle 的技能标注其所属插件 ID（plugins.id = "pl_xxx"），
     -- 便于插件卸载时级联废弃；独立安装的技能留空。
+    depends_on  TEXT    NOT NULL DEFAULT '[]',  -- JSON string[]，技能名列表；Register 时做环检测
+    composes_of TEXT    NOT NULL DEFAULT '[]',  -- JSON string[]，此技能内聚合的子技能（超集）
     plugin_id   TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))

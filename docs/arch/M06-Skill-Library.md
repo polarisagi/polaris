@@ -51,7 +51,7 @@ script runtime 技能由市场安装（SKILL.md 即最终产物）；Logic Colla
 
 Skill/JSONSchema/Condition/SkillSource 类型定义见 `internal/protocol/interfaces.go`（旧路径 `pkg/extensions/skill/skill.go` 已迁移）。
 
-依赖环检测 **[计划中]**: 设计目标：Register 时对 DependsOn ∪ ComposesOf 构建有向图 → DFS 三色染色检测后向边。SkillMeta 当前无 `DependsOn`/`ComposesOf`/`needs_compat_check` 字段，依赖管理尚未实现。
+依赖环检测 **✅ 已实现**：`SkillMeta` 新增 `DependsOn []string` + `ComposesOf []string` 字段，`008_skills.sql` 同步增列；`SQLiteRegistryImpl.Register()` 和 in-memory `RegistryImpl.Register()` 均在 INSERT 前执行 BFS 环检测，发现循环依赖返回错误，拒绝注册。`needs_compat_check` 字段留待版本更新路径实现。
 
 版本更新 **[计划中]**: 子技能 Version++ → SkillIndex 反向依赖扫描 → 标记 `needs_compat_check` → 半隔离沙箱集成测试。
 

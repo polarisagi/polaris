@@ -14,8 +14,9 @@ CREATE TABLE IF NOT EXISTS automations (
     id                TEXT    PRIMARY KEY,               -- "auto_{8字节hex}"
     name              TEXT    NOT NULL DEFAULT '',
     prompt            TEXT    NOT NULL,
-    trigger_type      TEXT    NOT NULL DEFAULT 'cron',  -- 'cron' | 'webhook' | 'both' | 'manual'
+    trigger_type      TEXT    NOT NULL DEFAULT 'cron' CHECK(trigger_type IN ('cron','webhook','both','manual','event')),
     cron_schedule     TEXT    NOT NULL DEFAULT '',       -- cron 表达式；trigger_type=webhook 时可空
+    event_filter      TEXT    NOT NULL DEFAULT '{}',     -- JSON: {"topic":"agent.task","type":"task_complete"}
     channel_id        TEXT    NOT NULL DEFAULT '',       -- channels.id；webhook 触发时非空
     working_dir       TEXT    NOT NULL DEFAULT '',       -- 可选文件操作根路径；留空=Agent 自主决定
     reasoning_effort  TEXT    NOT NULL DEFAULT 'medium', -- 'low' | 'medium' | 'high' | 'ultra'
@@ -49,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_auto_channel     ON automations(channel_id)  WHER
 CREATE TABLE IF NOT EXISTS automation_runs (
     id             TEXT    PRIMARY KEY,               -- "run_{8字节hex}"
     automation_id  TEXT    NOT NULL,                  -- automations.id
-    trigger        TEXT    NOT NULL DEFAULT 'cron',   -- 'cron' | 'webhook' | 'manual'
+    trigger        TEXT    NOT NULL DEFAULT 'cron' CHECK(trigger IN ('cron','webhook','manual','event')),
     status         TEXT    NOT NULL DEFAULT 'running',-- 'running' | 'ok' | 'error' | 'timeout'
     session_id     TEXT    NOT NULL DEFAULT '',       -- chat_sessions.id；执行产生的 session
     started_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),

@@ -26,6 +26,10 @@ var (
 	// Safety errors — one-veto: any occurrence must trigger safety_fail in eval harness.
 	// 不得归入 uncontrollable 组：污点违规是安全红线，必须计入安全指标并触发一票否决。
 	ErrTaintViolation = errors.New("taint gate rejected: external data entering instruction slot")
+
+	// ErrTier0SandboxLimit 是 Tier-0 硬件无法满足 L3 容器沙箱要求时返回的错误。
+	// M07 §4.2: 不提供静默降级，调用方必须显式处理或拒绝工具执行。
+	ErrTier0SandboxLimit = New(CodeSandboxTier0Limit, "container sandbox requires Linux or Tier-1+ hardware")
 )
 
 // Code categorises errors for observability and routing.
@@ -45,6 +49,7 @@ const (
 	CodeProviderExhausted  Code = "PROVIDER_EXHAUSTED"
 	CodeNetworkUnavailable Code = "NETWORK_UNAVAILABLE"
 	CodeTaintViolation     Code = "TAINT_VIOLATION"
+	CodeSandboxTier0Limit  Code = "SANDBOX_TIER0_LIMIT"
 )
 
 type Error struct {

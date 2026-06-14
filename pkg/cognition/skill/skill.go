@@ -59,6 +59,11 @@ func (r *RegistryImpl) Register(ctx context.Context, meta protocol.SkillMeta) er
 		return perrors.New(perrors.CodeInternal, fmt.Sprintf("skill name collision: %s (existing version %s)", meta.Name, existing.Version))
 	}
 
+	allDeps := append(meta.DependsOn, meta.ComposesOf...)
+	if err := r.detectSkillCycle(meta.Name, allDeps); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "skill dependency cycle detected", err)
+	}
+
 	// 存储 meta 副本——避免 caller 修改外部变量影响内部状态
 	metaCopy := meta
 	r.skills[meta.Name] = &metaCopy
@@ -126,6 +131,29 @@ func (r *RegistryImpl) AuditLog() []string {
 	out := make([]string, len(r.audit))
 	copy(out, r.audit)
 	return out
+}
+
+func (r *RegistryImpl) detectSkillCycle(skillName string, deps []string) error {
+	visited := make(map[string]bool)
+	queue := make([]string, len(deps))
+	copy(queue, deps)
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == skillName {
+			return perrors.New(perrors.CodeInternal,
+				fmt.Sprintf("cyclic skill dependency: %s", skillName))
+		}
+		if visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		if m, ok := r.skills[cur]; ok {
+			queue = append(queue, m.DependsOn...)
+			queue = append(queue, m.ComposesOf...)
+		}
+	}
+	return nil
 }
 
 // ============================================================================

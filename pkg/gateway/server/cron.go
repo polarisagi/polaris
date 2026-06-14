@@ -46,6 +46,7 @@ type automation struct {
 	LastRunError    string `json:"last_run_error"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
+	EventFilter     string `json:"event_filter"`
 }
 
 type automationRun struct {
@@ -80,7 +81,7 @@ func (s *Server) handleListAutomations(w http.ResponseWriter, r *http.Request) {
 		       working_dir, reasoning_effort, result_action,
 		       sandbox_level, cedar_rules_json, enabled,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
-		       created_at, updated_at
+		       created_at, updated_at, event_filter
 		FROM automations ORDER BY created_at DESC`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -97,7 +98,7 @@ func (s *Server) handleListAutomations(w http.ResponseWriter, r *http.Request) {
 			&a.WorkingDir, &a.ReasoningEffort, &a.ResultAction,
 			&a.SandboxLevel, &a.CedarRulesJSON, &enabledInt,
 			&a.LastRunAt, &a.NextRunAt, &a.RunCount, &a.LastRunStatus, &a.LastRunError,
-			&a.CreatedAt, &a.UpdatedAt,
+			&a.CreatedAt, &a.UpdatedAt, &a.EventFilter,
 		); err != nil {
 			continue
 		}
@@ -125,6 +126,7 @@ func (s *Server) handleCreateAutomation(w http.ResponseWriter, r *http.Request) 
 		ResultAction    string `json:"result_action"`
 		CedarRulesJSON  string `json:"cedar_rules_json"`
 		Enabled         *bool  `json:"enabled"`
+		EventFilter     string `json:"event_filter"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -150,6 +152,9 @@ func (s *Server) handleCreateAutomation(w http.ResponseWriter, r *http.Request) 
 	if req.CedarRulesJSON == "" {
 		req.CedarRulesJSON = "[]"
 	}
+	if req.EventFilter == "" {
+		req.EventFilter = "{}"
+	}
 
 	enabled := true
 	if req.Enabled != nil {
@@ -168,12 +173,12 @@ func (s *Server) handleCreateAutomation(w http.ResponseWriter, r *http.Request) 
 			id, name, prompt, trigger_type, cron_schedule, channel_id,
 			working_dir, reasoning_effort, result_action,
 			sandbox_level, cedar_rules_json, enabled,
-			next_run_at, created_at, updated_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			next_run_at, created_at, updated_at, event_filter
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, req.Name, req.Prompt, req.TriggerType, req.CronSchedule, req.ChannelID,
 		req.WorkingDir, req.ReasoningEffort, req.ResultAction,
 		2, req.CedarRulesJSON, boolToInt(enabled),
-		nextRun, now, now,
+		nextRun, now, now, req.EventFilter,
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -186,6 +191,7 @@ func (s *Server) handleCreateAutomation(w http.ResponseWriter, r *http.Request) 
 
 // ─── PUT /v1/automations/{id} ─────────────────────────────────────────────────
 
+//nolint:gocyclo
 func (s *Server) handleUpdateAutomation(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
 
@@ -200,6 +206,7 @@ func (s *Server) handleUpdateAutomation(w http.ResponseWriter, r *http.Request) 
 		ResultAction    *string `json:"result_action"`
 		CedarRulesJSON  *string `json:"cedar_rules_json"`
 		Enabled         *bool   `json:"enabled"`
+		EventFilter     *string `json:"event_filter"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -211,11 +218,11 @@ func (s *Server) handleUpdateAutomation(w http.ResponseWriter, r *http.Request) 
 	err := s.db.QueryRowContext(r.Context(), `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled
+		       sandbox_level, cedar_rules_json, enabled, event_filter
 		FROM automations WHERE id=?`, jobID).
 		Scan(&j.ID, &j.Name, &j.Prompt, &j.TriggerType, &j.CronSchedule, &j.ChannelID,
 			&j.WorkingDir, &j.ReasoningEffort, &j.ResultAction,
-			&j.SandboxLevel, &j.CedarRulesJSON, &enabledInt)
+			&j.SandboxLevel, &j.CedarRulesJSON, &enabledInt, &j.EventFilter)
 	if err != nil {
 		http.Error(w, "automation not found", http.StatusNotFound)
 		return
@@ -252,6 +259,9 @@ func (s *Server) handleUpdateAutomation(w http.ResponseWriter, r *http.Request) 
 	if req.Enabled != nil {
 		j.Enabled = *req.Enabled
 	}
+	if req.EventFilter != nil {
+		j.EventFilter = *req.EventFilter
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	nextRun := ""
@@ -263,11 +273,11 @@ func (s *Server) handleUpdateAutomation(w http.ResponseWriter, r *http.Request) 
 		UPDATE automations
 		SET name=?, prompt=?, trigger_type=?, cron_schedule=?, channel_id=?,
 		    working_dir=?, reasoning_effort=?, result_action=?,
-		    cedar_rules_json=?, enabled=?, next_run_at=?, updated_at=?
+		    cedar_rules_json=?, enabled=?, next_run_at=?, updated_at=?, event_filter=?
 		WHERE id=?`,
 		j.Name, j.Prompt, j.TriggerType, j.CronSchedule, j.ChannelID,
 		j.WorkingDir, j.ReasoningEffort, j.ResultAction,
-		j.CedarRulesJSON, boolToInt(j.Enabled), nextRun, now, jobID,
+		j.CedarRulesJSON, boolToInt(j.Enabled), nextRun, now, j.EventFilter, jobID,
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -371,6 +381,7 @@ func (s *Server) startCronRunner(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.cronTick(ctx)
+				s.eventTick(ctx)
 			}
 		}
 	}()
@@ -416,6 +427,103 @@ func (s *Server) cronTick(ctx context.Context) {
 
 	// 同批次触发到期工作流
 	s.cronTickWorkflows(ctx)
+}
+
+// eventTick 处理内部事件触发的 automation (trigger_type='event' or 'both').
+func (s *Server) eventTick(ctx context.Context) {
+	// 提取当前增量事件 (since lastEventOffset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT offset, topic, type, payload
+		FROM events
+		WHERE offset > ? ORDER BY offset ASC
+	`, s.lastEventOffset)
+	if err != nil {
+		slog.Warn("eventTick: query events failed", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	var events []struct {
+		Offset  int64
+		Topic   string
+		Type    string
+		Payload string
+	}
+	maxOffset := s.lastEventOffset
+	for rows.Next() {
+		var ev struct {
+			Offset  int64
+			Topic   string
+			Type    string
+			Payload string
+		}
+		if err := rows.Scan(&ev.Offset, &ev.Topic, &ev.Type, &ev.Payload); err == nil {
+			events = append(events, ev)
+			if ev.Offset > maxOffset {
+				maxOffset = ev.Offset
+			}
+		}
+	}
+	rows.Close()
+
+	if len(events) == 0 {
+		return
+	}
+
+	// 查找配置为 event 触发的 automations
+	aRows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, prompt, trigger_type, cron_schedule,
+		       working_dir, reasoning_effort, result_action, sandbox_level, cedar_rules_json, event_filter
+		FROM automations
+		WHERE enabled=1
+		  AND circuit_open=0
+		  AND (trigger_type='event' OR trigger_type='both')
+		  AND event_filter != '' AND event_filter != '{}'
+		  AND last_run_status != 'running'
+	`)
+	if err != nil {
+		slog.Warn("eventTick: query automations failed", "err", err)
+		return
+	}
+	defer aRows.Close()
+
+	var autos []automation
+	for aRows.Next() {
+		var a automation
+		if err := aRows.Scan(
+			&a.ID, &a.Name, &a.Prompt, &a.TriggerType, &a.CronSchedule,
+			&a.WorkingDir, &a.ReasoningEffort, &a.ResultAction, &a.SandboxLevel, &a.CedarRulesJSON, &a.EventFilter,
+		); err == nil {
+			autos = append(autos, a)
+		}
+	}
+	aRows.Close()
+
+	for _, ev := range events {
+		for i := range autos {
+			a := &autos[i]
+			if matchEventFilter(a.EventFilter, ev.Topic, ev.Type, ev.Payload) {
+				go s.executeAutomation(ctx, a, "event")
+			}
+		}
+	}
+
+	s.lastEventOffset = maxOffset
+}
+
+func matchEventFilter(filterJSON, topic, typ, payload string) bool {
+	var f map[string]interface{}
+	if err := json.Unmarshal([]byte(filterJSON), &f); err != nil {
+		return false
+	}
+	if wantTopic, ok := f["topic"].(string); ok && wantTopic != "" && wantTopic != topic {
+		return false
+	}
+	if wantType, ok := f["type"].(string); ok && wantType != "" && wantType != typ {
+		return false
+	}
+	// TODO: payload depth match if needed
+	return true
 }
 
 type cronCtxKey string

@@ -185,7 +185,7 @@ Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256M
 3. SideProcessSpawn→Container
 4. 非 Linux Tier0 降级: 步骤 3 判定为 Container 且 hwTier==0 且 goos!="linux" → 降级 Wasm（L2 Wasm + OS 原生沙箱）
 
-**注意**：当前 `AssignSandboxTier` 实现（`pkg/action/sandbox.go`）不含 ErrTier0SandboxLimit 返回——非 Linux Tier0 场景降级为 WasmSandbox 而非报错。ErrTier0SandboxLimit 的拒绝逻辑属于**[计划中]**（文档描述的安全目标，代码未完整实现）。
+✅ **已修复**：`AssignSandboxTier` 返回 `(SandboxTier, error)`；Tier0 上需要 Container 的工具返回 `ErrTier0SandboxLimit`（定义于 `internal/errors`），全平台拒绝（不再区分 goos），调用方必须显式处理，禁止静默降级（M07 §4.2）。
 
 **[审查修正 R21 / ADR-0025]**：截至审查，`sandbox.go` 实现与上述规则 1–2 **相反**——误将 `LLMGenerated`/`MCP`/`A2A`/`CapWriteNetwork` 赋为 L3 Container（应为 L2 Wasm），且规则 4（非 Linux Tier0 Container 降级 Wasm）未实现（`hwTier`/`goos` 参数未使用）。修复对齐本节规则 1–4，详见 `docs/upgrade/GEMINI_PATCH_R21_GlobalAudit.md` A5。
 

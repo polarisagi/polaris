@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -205,5 +206,44 @@ func TestSelector_SelectEmptyRegistry(t *testing.T) {
 	})
 	if len(results) != 0 {
 		t.Errorf("空 Registry 应返回 0 结果, 实际 %d", len(results))
+	}
+}
+
+func TestRegister_NoDeps(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+	err := reg.Register(ctx, protocol.SkillMeta{Name: "skill:a", Trust: protocol.TrustSystem})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestRegister_DirectCycle(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+	err := reg.Register(ctx, protocol.SkillMeta{Name: "skill:a", DependsOn: []string{"skill:a"}, Trust: protocol.TrustSystem})
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("expected cycle error, got %v", err)
+	}
+}
+
+func TestRegister_IndirectCycle(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+	reg.Register(ctx, protocol.SkillMeta{Name: "skill:b", DependsOn: []string{"skill:a"}, Trust: protocol.TrustSystem})
+	err := reg.Register(ctx, protocol.SkillMeta{Name: "skill:a", DependsOn: []string{"skill:b"}, Trust: protocol.TrustSystem})
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("expected cycle error, got %v", err)
+	}
+}
+
+func TestRegister_ValidDAG(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+	errB := reg.Register(ctx, protocol.SkillMeta{Name: "skill:b", Trust: protocol.TrustSystem})
+	errA := reg.Register(ctx, protocol.SkillMeta{Name: "skill:a", DependsOn: []string{"skill:b"}, Trust: protocol.TrustSystem})
+	errC := reg.Register(ctx, protocol.SkillMeta{Name: "skill:c", DependsOn: []string{"skill:b"}, Trust: protocol.TrustSystem})
+	if errB != nil || errA != nil || errC != nil {
+		t.Fatal("expected no error for valid DAG")
 	}
 }

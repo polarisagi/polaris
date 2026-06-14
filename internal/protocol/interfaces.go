@@ -569,6 +569,11 @@ type SkillMeta struct {
 	Instructions string // SKILL.md 全文，供 LLM tool_use 返回
 	Deprecated   bool
 	ScriptPath   string // marketplace 安装路径（extension_instances.install_path + "/src/index.ts"）
+	// DependsOn 此技能执行前必须可用的其他技能名列表（skill:{slug} 格式）。
+	// Register 时会对 DependsOn ∪ ComposesOf 做 DFS 环检测，发现环返回错误。
+	DependsOn []string
+	// ComposesOf 此技能聚合包含的子技能列表（超集关系）。
+	ComposesOf []string
 	// PluginID 是来源插件的 plugins.id（"pl_xxx"）；独立安装的技能为空。
 	PluginID string
 }

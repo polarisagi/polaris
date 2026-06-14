@@ -1,18 +1,14 @@
 package action
 
 import (
+	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // AssignSandboxTier 根据工具的风险等级和来源自动分配沙箱等级。
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §4.2
-//
-// 规则:
-//  1. Source → 最小级别: Builtin→InProcess, LLMGenerated→Wasm, MCP/A2A→Wasm
-//  2. Capability 提升: ReadOnly/WriteLocal/WriteNetwork→>=Wasm, Privileged→Container
-//  3. SideProcessSpawn → Container
-//  4. Tier0 非 Linux L2 降级
-func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) protocol.SandboxTier {
+// 返回 (分配的 tier, error)。error 非 nil 时调用方不得执行工具。
+// M07 §4.2: Tier0 上需要 SandboxContainer 的工具返回 ErrTier0SandboxLimit。
+func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) (protocol.SandboxTier, error) {
 	minTier := protocol.SandboxInProcess
 	switch tool.Source {
 	case protocol.ToolBuiltin:
@@ -33,12 +29,12 @@ func AssignSandboxTier(tool protocol.Tool, hwTier int, goos string) protocol.San
 		tier = protocol.SandboxContainer // 规则 3
 	}
 
-	// 规则 4：非 Linux Tier0，Container 降级 Wasm（L2 + OS 原生沙箱）
-	if tier == protocol.SandboxContainer && hwTier == 0 && goos != "linux" {
-		tier = protocol.SandboxWasm
+	// 规则 4：Tier0 上 Container 需求 → 拒绝（不降级，防安全底线突破）
+	if tier == protocol.SandboxContainer && hwTier == 0 {
+		return protocol.SandboxInProcess, perrors.ErrTier0SandboxLimit
 	}
 
-	return tier
+	return tier, nil
 }
 
 func hasSideEffect(effects []protocol.SideEffect, target protocol.SideEffect) bool {

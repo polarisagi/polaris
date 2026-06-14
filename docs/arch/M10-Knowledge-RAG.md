@@ -64,7 +64,7 @@ DocNode/LeafChunk/ParentChunk/Chunk 类型定义见 `pkg/swarm/knowledge/rag.go`
 
 `Ingester.ParseAndBuildTree` 在解析后分层生成 LeafChunk（~256 tokens 语义断点）和 ParentChunk（SectionPath + 前同级 TopicSentence + 完整内容），后台 goroutine 生成多级摘要，`extractStructuredContent` 提取表格 schema 和代码块元数据。
 
-> **当前实现**：`rag_impl.go` 已实现父子双存（ParentChunk=1000 字符 / LeafChunk=250 字符），结构化解析器（goldmark/pdfcpu/tree-sitter）和多级摘要生成**[计划中]**尚未接入，当前按 `\n\n` 双换行切分。
+> **当前实现**：`rag_impl.go` 已实现父子双存，`chunkDocument` 采用语义边界切分（✅ 已修复）：先按 `\n\n` 切段落合并为 ParentChunk（≤1000 runes），再按中英文句子结束符（。！？；/ `.` `!` `?` + 空格）切 LeafChunk（≤250 runes），无边界时兜底字符切；结构化解析器（goldmark/pdfcpu/tree-sitter）和多级摘要生成**[计划中]**尚未接入。
 
 ### 1.5 嵌入维度变更 (三相渐进恢复)
 

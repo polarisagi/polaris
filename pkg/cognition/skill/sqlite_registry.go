@@ -36,11 +36,19 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta protocol.SkillMe
 	capsBytes, _ := json.Marshal(meta.Capabilities)
 	benchBytes, _ := json.Marshal(meta.Benchmarks)
 
+	dependsJSON, _ := json.Marshal(meta.DependsOn)
+	composesJSON, _ := json.Marshal(meta.ComposesOf)
+
+	allDeps := append(meta.DependsOn, meta.ComposesOf...)
+	if err := r.detectSkillCycle(ctx, meta.Name, allDeps); err != nil {
+		return perrors.Wrap(perrors.CodeInternal, "skill dependency cycle detected", err)
+	}
+
 	query := `
 		INSERT INTO skills (
 			name, version, runtime, risk_level, sandbox, capabilities, exec_mode,
-			trust_tier, idempotent, benchmarks, instructions, deprecated, plugin_id, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(name) DO UPDATE SET
 			version=excluded.version,
 			runtime=excluded.runtime,
@@ -53,13 +61,15 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta protocol.SkillMe
 			benchmarks=excluded.benchmarks,
 			instructions=excluded.instructions,
 			deprecated=excluded.deprecated,
+			depends_on=excluded.depends_on,
+			composes_of=excluded.composes_of,
 			plugin_id=excluded.plugin_id,
 			updated_at=CURRENT_TIMESTAMP
 	`
 	_, err := r.db.ExecContext(ctx, query,
 		meta.Name, meta.Version, meta.Runtime, meta.RiskLevel, meta.Sandbox,
 		string(capsBytes), meta.ExecMode, int(meta.Trust), meta.Idempotent, string(benchBytes), meta.Instructions, meta.Deprecated,
-		meta.PluginID,
+		string(dependsJSON), string(composesJSON), meta.PluginID,
 	)
 	if err != nil {
 		return perrors.Wrap(perrors.CodeInternal, "sqlite_registry: insert failed", err)
@@ -73,7 +83,7 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*pr
 	query := `
 		SELECT s.name, s.version, s.runtime, s.risk_level, s.sandbox, s.capabilities, s.exec_mode,
 		       s.trust_tier, s.idempotent, s.benchmarks, s.instructions, s.deprecated,
-		       s.plugin_id, COALESCE(ei.install_path, '')
+		       s.depends_on, s.composes_of, s.plugin_id, COALESCE(ei.install_path, '')
 		FROM skills s
 		LEFT JOIN extension_instances ei ON ei.runtime_id = s.name AND ei.ext_type = 'skill'
 		WHERE s.name = ?
@@ -87,12 +97,12 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*pr
 	row := r.db.QueryRowContext(ctx, query, args...)
 
 	var meta protocol.SkillMeta
-	var capsRaw, benchRaw, installPath string
+	var capsRaw, benchRaw, dependsJSON, composesJSON, installPath string
 	var trustInt int
 	err := row.Scan(
 		&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
 		&capsRaw, &meta.ExecMode, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
-		&meta.PluginID, &installPath,
+		&dependsJSON, &composesJSON, &meta.PluginID, &installPath,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -105,8 +115,10 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*pr
 		meta.ScriptPath = installPath + "/src/index.ts"
 	}
 
-	json.Unmarshal([]byte(capsRaw), &meta.Capabilities) //nolint:errcheck
-	json.Unmarshal([]byte(benchRaw), &meta.Benchmarks)  //nolint:errcheck
+	json.Unmarshal([]byte(capsRaw), &meta.Capabilities)    //nolint:errcheck
+	json.Unmarshal([]byte(benchRaw), &meta.Benchmarks)     //nolint:errcheck
+	json.Unmarshal([]byte(dependsJSON), &meta.DependsOn)   //nolint:errcheck
+	json.Unmarshal([]byte(composesJSON), &meta.ComposesOf) //nolint:errcheck
 
 	return &meta, nil
 }
@@ -114,7 +126,7 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*pr
 func (r *SQLiteRegistryImpl) List(ctx context.Context, filter protocol.SkillFilter) ([]protocol.SkillMeta, error) {
 	query := `
 		SELECT name, version, runtime, risk_level, sandbox, capabilities, exec_mode,
-		       trust_tier, idempotent, benchmarks, instructions, deprecated, plugin_id
+		       trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id
 		FROM skills WHERE 1=1
 	`
 	var args []any
@@ -132,18 +144,20 @@ func (r *SQLiteRegistryImpl) List(ctx context.Context, filter protocol.SkillFilt
 	var result []protocol.SkillMeta
 	for rows.Next() {
 		var meta protocol.SkillMeta
-		var capsRaw, benchRaw string
+		var capsRaw, benchRaw, dependsJSON, composesJSON string
 		var trustInt int
 		if err := rows.Scan(
 			&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
 			&capsRaw, &meta.ExecMode, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
-			&meta.PluginID,
+			&dependsJSON, &composesJSON, &meta.PluginID,
 		); err != nil {
 			return nil, err
 		}
 		meta.Trust = protocol.TrustTier(trustInt)
-		json.Unmarshal([]byte(capsRaw), &meta.Capabilities) //nolint:errcheck
-		json.Unmarshal([]byte(benchRaw), &meta.Benchmarks)  //nolint:errcheck
+		json.Unmarshal([]byte(capsRaw), &meta.Capabilities)    //nolint:errcheck
+		json.Unmarshal([]byte(benchRaw), &meta.Benchmarks)     //nolint:errcheck
+		json.Unmarshal([]byte(dependsJSON), &meta.DependsOn)   //nolint:errcheck
+		json.Unmarshal([]byte(composesJSON), &meta.ComposesOf) //nolint:errcheck
 
 		// 内存级二次过滤
 		if filter.RiskLevelMax != "" && riskGT(meta.RiskLevel, filter.RiskLevelMax) {
@@ -172,6 +186,41 @@ func (r *SQLiteRegistryImpl) Deprecate(ctx context.Context, name, version string
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
 		return errSkillNotFound
+	}
+	return nil
+}
+
+// detectSkillCycle 对 DependsOn ∪ ComposesOf 做 BFS 环检测。
+// 若从 deps 出发可达 skillName，则存在循环依赖，返回非 nil error。
+// 图中不存在 skillName 的邻居时视为叶节点（依赖已满足或尚未安装）。
+func (r *SQLiteRegistryImpl) detectSkillCycle(ctx context.Context, skillName string, deps []string) error {
+	visited := make(map[string]bool)
+	queue := make([]string, len(deps))
+	copy(queue, deps)
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == skillName {
+			return perrors.New(perrors.CodeInternal,
+				fmt.Sprintf("cyclic skill dependency: %s → … → %s", skillName, skillName))
+		}
+		if visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		// 读取当前节点的依赖
+		var dJSON, cJSON string
+		err := r.db.QueryRowContext(ctx,
+			`SELECT depends_on, composes_of FROM skills WHERE name = ?`, cur,
+		).Scan(&dJSON, &cJSON)
+		if err != nil {
+			continue // 节点不存在 → 叶节点，继续
+		}
+		var curDeps, curCompose []string
+		json.Unmarshal([]byte(dJSON), &curDeps)    //nolint:errcheck
+		json.Unmarshal([]byte(cJSON), &curCompose) //nolint:errcheck
+		queue = append(queue, curDeps...)
+		queue = append(queue, curCompose...)
 	}
 	return nil
 }

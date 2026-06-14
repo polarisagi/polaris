@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -109,14 +110,15 @@ func TestAssignSandboxTier(t *testing.T) {
 		hwTier     int
 		goos       string
 		wantTier   protocol.SandboxTier
+		wantErr    error
 	}{
-		{"builtin-read", protocol.ToolBuiltin, protocol.CapReadOnly, nil, 1, "linux", protocol.SandboxInProcess},
-		{"mcp-write", protocol.ToolMCP, protocol.CapWriteNetwork, nil, 1, "linux", protocol.SandboxWasm},
-		{"llm-gen", protocol.ToolLLMGenerated, protocol.CapReadOnly, nil, 1, "linux", protocol.SandboxWasm},
-		{"privileged-spawn", protocol.ToolBuiltin, protocol.CapPrivileged, []protocol.SideEffect{protocol.SideProcessSpawn}, 1, "linux", protocol.SandboxContainer},
-		{"tier0-linux-container", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 0, "linux", protocol.SandboxContainer},
-		{"tier0-darwin-downgrade", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 0, "darwin", protocol.SandboxWasm},
-		{"tier1-darwin-no-downgrade", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 1, "darwin", protocol.SandboxContainer},
+		{"builtin-read", protocol.ToolBuiltin, protocol.CapReadOnly, nil, 1, "linux", protocol.SandboxInProcess, nil},
+		{"mcp-write", protocol.ToolMCP, protocol.CapWriteNetwork, nil, 1, "linux", protocol.SandboxWasm, nil},
+		{"llm-gen", protocol.ToolLLMGenerated, protocol.CapReadOnly, nil, 1, "linux", protocol.SandboxWasm, nil},
+		{"privileged-spawn", protocol.ToolBuiltin, protocol.CapPrivileged, []protocol.SideEffect{protocol.SideProcessSpawn}, 1, "linux", protocol.SandboxContainer, nil},
+		{"tier0-linux-container", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 0, "linux", protocol.SandboxInProcess, perrors.ErrTier0SandboxLimit},
+		{"tier0-darwin-downgrade", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 0, "darwin", protocol.SandboxInProcess, perrors.ErrTier0SandboxLimit},
+		{"tier1-darwin-no-downgrade", protocol.ToolBuiltin, protocol.CapPrivileged, nil, 1, "darwin", protocol.SandboxContainer, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,9 +127,18 @@ func TestAssignSandboxTier(t *testing.T) {
 				Capability:  tt.capability,
 				SideEffects: tt.effects,
 			}
-			got := AssignSandboxTier(tool, tt.hwTier, tt.goos)
-			if got != tt.wantTier {
-				t.Errorf("expected tier %d, got %d", tt.wantTier, got)
+			got, err := AssignSandboxTier(tool, tt.hwTier, tt.goos)
+			if tt.wantErr != nil {
+				if err != tt.wantErr {
+					t.Errorf("expected error %v, got %v", tt.wantErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if got != tt.wantTier {
+					t.Errorf("expected tier %d, got %d", tt.wantTier, got)
+				}
 			}
 		})
 	}

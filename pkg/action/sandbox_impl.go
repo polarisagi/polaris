@@ -347,43 +347,52 @@ func (r *SandboxRouter) WithRemote(remote *RemoteSandbox) *SandboxRouter {
 
 // Route 根据工具属性选择最合适的沙箱，返回 SandboxProvider。
 // 规则与 AssignSandboxTier 保持一致。
-func (r *SandboxRouter) Route(tool protocol.Tool) SandboxProvider {
-	tier := AssignSandboxTier(tool, r.hwTier, r.goos)
+func (r *SandboxRouter) Route(tool protocol.Tool) (SandboxProvider, error) {
+	tier, err := AssignSandboxTier(tool, r.hwTier, r.goos)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeSandboxTier0Limit, "sandbox tier assignment rejected", err)
+	}
 	switch tier {
 	case protocol.SandboxRemote:
 		if r.remote != nil {
-			return r.remote
+			return r.remote, nil
 		}
 		fallthrough
 	case protocol.SandboxWasm:
 		if r.wasmtime != nil {
-			return r.wasmtime
+			return r.wasmtime, nil
 		}
 		if r.container != nil {
-			return r.container
+			return r.container, nil
 		}
 		if r.remote != nil {
-			return r.remote
+			return r.remote, nil
 		}
-		return r.inProcess
+		return r.inProcess, nil
 	case protocol.SandboxContainer:
 		if r.container != nil {
-			return r.container
+			return r.container, nil
 		}
 		if r.remote != nil {
-			return r.remote
+			return r.remote, nil
 		}
-		return r.inProcess
+		return r.inProcess, nil
 	default: // SandboxInProcess
-		return r.inProcess
+		return r.inProcess, nil
 	}
 }
 
 // Execute 完整执行路径：Route → Run → ToolResult。
 // SandboxSpec.SandboxTier 使用 AssignSandboxTier 升级后的实际 tier，保证审计信息与执行一致。
 func (r *SandboxRouter) Execute(ctx context.Context, tool protocol.Tool, input []byte, taintLevel protocol.TaintLevel) (*protocol.ToolResult, error) {
-	actualTier := AssignSandboxTier(tool, r.hwTier, r.goos)
-	provider := r.Route(tool)
+	actualTier, err := AssignSandboxTier(tool, r.hwTier, r.goos)
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeSandboxTier0Limit, "sandbox tier assignment rejected", err)
+	}
+	provider, err := r.Route(tool)
+	if err != nil {
+		return nil, err
+	}
 	spec := SandboxSpec{
 		ToolName:    tool.Name,
 		Input:       input,

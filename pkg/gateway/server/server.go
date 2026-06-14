@@ -78,6 +78,9 @@ type Server struct {
 	cronCancel context.CancelFunc
 
 	tbr *observability.TokenBurnRate
+
+	// lastEventOffset 记录上次 eventTick 已处理的最大 events.offset，防止重复触发。
+	lastEventOffset int64
 }
 
 func (s *Server) SetInstallManager(m *marketplace.Manager) { s.installMgr = m }
