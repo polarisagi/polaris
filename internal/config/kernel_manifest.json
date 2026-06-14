@@ -62,7 +62,7 @@
   "pkg/cognition/kernel/inv_test.go": "4d0f8b5b28c52aa451157e07f89235a8848450c22ec41aaddb67225a127f0e68",
   "pkg/cognition/kernel/memory_context.go": "8e697a9748927e3b0d6c44ba1452b3cb147a6a948460b508953bd6873de6569a",
   "pkg/cognition/kernel/memory_context_test.go": "fb425cc8e325b8b8b370e8324dfe3aa021ba202744c97d5cec59607b5fb83e32",
-  "pkg/cognition/kernel/pii_vault.go": "0dee5810d919fc0e28947ab6fdd80802ac9cb6a4f081285d5a67d3126b828e00",
+  "pkg/cognition/kernel/pii_vault.go": "bc459d6ed5e87fefa099691fb86154534400b6ed0d5356fa0665d7577601470e",
   "pkg/cognition/kernel/prompt.go": "c9f09417fdd2a11545eee9a84773f63481b4fb34986bbc570fc4258940c7dd8c",
   "pkg/cognition/kernel/recovery.go": "e55d29ae9b3d3a791530bc2803fe7b8d8ccd0b945ff84aec73060951d152df4f",
   "pkg/cognition/kernel/state_machine.go": "39cb79062fb584d916a16dd9c89e7eb58dfc9354fa23d0e38c3e36be7cb2acbe",
