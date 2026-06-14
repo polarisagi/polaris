@@ -245,7 +245,7 @@ SurpriseIndex 类型和 Compute/Route 实现见 `pkg/swarm/surprise.go`。Surpri
 
 **CI 强制**: L4 PR → process-external CI pipeline (独立进程，非进程内 eval) → `immutable_kernel_check` 扫描 → 命中白名单外 → auto reject (2 安全审批者 override)。CI 配置自身受 pre-receive hook 保护。L4 自进化不得在运行进程内执行 Holdout Set 评估——必须通过独立 CI runner。
 
-实现见 `pkg/swarm/prompt_optimizer.go` (AutoConfigOptimizer)。L0 级自动配置优化: OptimizeRouteWeights() 基于 7 天 ProviderStats 调整路由权重（cps<Avg×0.8→weight+0.1，cps>Avg×1.5→weight-0.1）；CalibrateSurpriseThresholds() 基于 30 天 System 1 命中率取 P10/P50/P90 替代静态 [0.3, 0.7]。
+实现见 `pkg/swarm/self_improve_calibrator.go` (AutoConfigOptimizer)。L0 级自动配置优化: OptimizeRouteWeights() 基于 7 天 ProviderStats 调整路由权重（cps<Avg×0.8→weight+0.1，cps>Avg×1.5→weight-0.1）；CalibrateSurpriseThresholds() 基于 30 天 System 1 命中率取 P10/P50/P90 替代静态 [0.3, 0.7]。
 
 ---
 

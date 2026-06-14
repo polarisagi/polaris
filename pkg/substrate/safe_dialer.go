@@ -282,7 +282,7 @@ func (sd *SafeDialer) containsBlockedCIDR(ips []net.IP) bool {
 }
 
 // TaintEgressCheck 出口拦截: payload 中任一字段 TaintLevel ≥ TaintMedium
-// 且未经 SanitizeByUserApproval → 拒绝出站。
+// 且未经 SanitizeByUserReview → 拒绝出站。
 func (sd *SafeDialer) TaintEgressCheck(taintLevels []protocol.TaintLevel) error {
 	for _, tl := range taintLevels {
 		if tl >= protocol.TaintMedium {
@@ -359,7 +359,7 @@ type ErrTaintBlockedEgress struct {
 }
 
 func (e *ErrTaintBlockedEgress) Error() string {
-	return fmt.Sprintf("safe_dialer: taint level %s blocked egress (requires SanitizeByUserApproval)", e.Level.String())
+	return fmt.Sprintf("safe_dialer: taint level %s blocked egress (requires SanitizeByUserReview)", e.Level.String())
 }
 
 type ErrCapabilityWriteBlocked struct {

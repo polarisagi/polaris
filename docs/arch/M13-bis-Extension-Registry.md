@@ -1,7 +1,7 @@
 # 模块 13-bis: Extension Registry
 
 > 扩展系统的市场、安装、路由三层模型。覆盖 MCP / Skill / Plugin / App / Automation / Agent 六类扩展。[HE-Rule-3] [HE-Rule-6]
-> **§跳读**: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:79 技能执行模式 / 4:105 工具懒加载 / 5:130 安装流 / 6:202 信任门控 / 7:248 文件系统 / 8:278 调用路由 / 9:311 自动化 / 10:383 跨代理协作 / 11:409 学习技能归并 / 12:436 表引用
+> **§跳读**: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:79 技能执行模式 / 4:104 工具懒加载 / 5:129 安装流 / 6:201 信任门控 / 7:247 文件系统 / 8:277 调用路由 / 9:310 自动化 / 10:382 跨代理协作 / 11:408 学习技能归并 / 12:435 表引用
 
 ---
 
@@ -96,7 +96,6 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 **代码约束**：
 - `server.go injectSystemPrompt()` 负责 ambient 注入
 - `buildToolSchemas()` 负责 tool 模式的 schema 构建（仅 `runtime='script'`）
-- ⚠️ **当前缺口**：`pkg/gateway/server/sse.go:buildAmbientSkillsSection()` 缺少 `ORDER BY trust_tier DESC` 和 4000 字符截断，修复见 GEMINI_PATCH_ROUND14 问题 B
 - Logic Collapse 脚本技能经 `execute_skill` 工具调用，不直接注入 LLM 工具列表
 - 两条路径互不干扰
 
@@ -223,7 +222,7 @@ Cedar Gate（TrustTier 严格校验）→ 写 extension_instances（ext_type=age
 |------|---------|------------|
 | `POST /v1/plugins/install` | ✅ | — |
 | `POST /v1/mcp/create` | ✅ | — |
-| `POST /v1/mcp-servers`（运维管理接口） | ✅ **不可例外** | 直接写库，无 PolicyGate |
+| `POST /v1/mcp-servers`（运维管理接口） | ✅ **不可例外** | 调 installMgr.Authorize + InstallExtension |
 | `PUT /v1/plugins/{id}` / `PATCH /v1/plugins/{id}/mcp/{name}` | ✅ | 修改 mcp_servers.enabled 后实时 Remove/startMCPServer |
 | `PUT /v1/mcp-servers/{id}`（更新） | ✅ | — |
 

@@ -178,7 +178,7 @@ SanitizeBySummarization:
   硬地板: TaintMedium, 摘要永不进入 instruction slot
   M4 Layer A 豁免: 系统自生成摘要 (source='compaction'/'persona_refinement'/'consolidation'/'skill_compilation') 标记 TaintMedium 但不参与 ActiveContext.TaintLevel 计算
 
-SanitizeByUserApproval:
+SanitizeByUserReview:
   条件: 用户 /approve 命令确认
   结果: data.Level = TaintUserReviewed, ApprovedBy = "user"
 
@@ -242,7 +242,7 @@ Agent 能力策略 (permit + conditions):
   read_only: trust_level >= 1 → permit
   write_local: trust_level >= 2 AND allowed_paths 含 target_path → permit
   write_network: trust_level >= 3 AND approval == "approved" AND cap_token_valid → permit
-    附加 TaintLevel 约束: write_network 工具调用参数中任一 `[TaintLevel]` ≥ `[Taint-Medium]` → forbid (需经 SanitizeByUserApproval 降至 TaintLow 或 TaintUserReviewed 后方可放行)
+    附加 TaintLevel 约束: write_network 工具调用参数中任一 `[TaintLevel]` ≥ `[Taint-Medium]` → forbid (需经 SanitizeByUserReview 降至 TaintLow 或 TaintUserReviewed 后方可放行)
     附加配额约束 (OWASP LLM06 Excessive Agency 防护): Capability Token 必须包含 `MaxCallsPerTask` 维度（如单工具上限 50 次），杜绝无限制死循环代理。
 
 **trust_level 数据来源**（插件/MCP 场景）:
@@ -452,7 +452,7 @@ blockedCIDRs: 127.0.0.0/8 / 10.0.0.0/8 / 100.64.0.0/10（CGNAT，已补充）/ 1
 **统一安全 Dialer** (`internal/protocol/interfaces.go` SafeDialer):
   M11 导出 SafeDialer.DialContext。四层注入覆盖全出站: http.Transport.DialContext / grpc.WithContextDialer / websocket.Dialer.NetDialContext / net.DefaultDialer.Control
   DialContext 内执行五阶段 SSRF (Phase 0-4)。
-  Taint 出口拦截: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上级别（TaintMedium/TaintHigh）未经 SanitizeByUserApproval → ErrTaintBlockedEgress。Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防止出口绕过。
+  Taint 出口拦截: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上级别（TaintMedium/TaintHigh）未经 SanitizeByUserReview → ErrTaintBlockedEgress。Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防止出口绕过。
   两层纵深: M7 Policy Gate4（声明层预检）+ M11 SafeDialer.TaintEgressCheck（出口层终检，调用方职责）。
   M7/M10/M13 所有出站必经此入口。CI `safe_dialer_lint` 扫描裸 `net.Dial` / `grpc.Dial` / `http.Get` → ERROR。
   **✅ 已修复（SurrealStore 出口缺失）**：Go 侧 SurrealStore wrapper 在调用 `surreal_store_insert` / `surreal_store_query` FFI 前补充 `SafeDialer.TaintEgressCheck`，确保 TaintHigh 数据不绕过出口拦截直写认知存储。

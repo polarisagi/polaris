@@ -324,7 +324,7 @@ permit(principal in Role::"Agent", action == Action::"call_tool", resource) when
 - **Gate1 Cedar 策略评估**: FORBID → 触发 HITL
 - **Gate2 Capability Token 验证**: Ed25519 签名 + 5min TTL + scope + 未撤销
 - **Gate3 Rate Limiter**: 全局 / 每工具 / 每 Session
-- **Gate4 Taint 追踪**: 外部输入标记 tainted，不入 system prompt。工具参数逐字段标 TaintLevel——任一 ≥ `[Taint-Medium]` 且 Capability ≥ write_network → 拒绝（需 SanitizeByUserApproval）。覆盖文件写入（§4.5）+ 网络出口（M11 SafeDialer）两层
+- **Gate4 Taint 追踪**: 外部输入标记 tainted，不入 system prompt。工具参数逐字段标 TaintLevel——任一 ≥ `[Taint-Medium]` 且 Capability ≥ write_network → 拒绝（需 SanitizeByUserReview）。覆盖文件写入（§4.5）+ 网络出口（M11 SafeDialer）两层
 - **Gate5 出站预检**: 目标 URL 静态 CIDR 匹配（阻 `127.0.0.0/8` `10.0.0.0/8` `172.16.0.0/12` `192.168.0.0/16` `::1`），白名单域名放行。实际连接委托 M11 SafeDialer（§6）执行五阶段 SSRF 防护（DNS + TOCTOU + IP 锁定）
 - 通过 → 执行 L1/L2/L3
 
