@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] pkg/substrate/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:442 SSRF / 6.5:446 Factuality / 7:487 审计 / 8:511 多Agent宪法 / 9:536 威胁监控 / 13:550 降级 / 14:582 跨模块契约
+> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:442 SSRF / 6.5:446 Factuality / 7:488 审计 / 8:512 多Agent宪法 / 9:537 威胁监控 / 13:551 降级 / 14:583 跨模块契约
 
 ---
 
@@ -226,7 +226,7 @@ Cedar: Rust 核心, CGO-Free FFI (purego) (<70ns overhead), <1ms 评估延迟, d
 
 > **已知缺口（Cedar FFI 静默降级可观测性）**：dylib 未加载时系统静默降级为 fail-open，当前无 `slog.Warn` 输出，监控无法从指标区分"Cedar 正常运行"与"Cedar 未加载降级"两条路径。修复方向：在 FFI 降级路径补充 `slog.Warn` + `polaris_cedar_degraded_total` Counter。
 
-> **已知缺口（gate.go goroutine 泄漏）**：`IsAuthorized` 超时后内部 goroutine 未通过 `cancel()` 终止，长期高频调用场景存在泄漏风险。修复方向：在 `IsAuthorized` 入口创建带 cancel 的 context 并在函数退出时调用。
+> **✅ 已修复（gate.go goroutine 泄漏）**：`IsAuthorized` 超时后新增 `cedarLeaks` 原子计数器追踪泄漏 goroutine；累计 ≥5 次时联动 KillSwitch Stage 1，使运营可感知并兜底；泄漏 goroutine 最终在 Cedar FFI 返回后自行退出（buffered channel 不阻塞）。Rust 侧 `cedar_evaluate` 应配套引入 timeout_ms 参数以从根本消除阻塞。
 
 **Cedar FFI Failure Mode 表**:
 | 失败场景 | 行为 | 审计 |
@@ -455,6 +455,7 @@ blockedCIDRs: 127.0.0.0/8 / 10.0.0.0/8 / 100.64.0.0/10（CGNAT，已补充）/ 1
   Taint 出口拦截: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上级别（TaintMedium/TaintHigh）未经 SanitizeByUserApproval → ErrTaintBlockedEgress。Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防止出口绕过。
   两层纵深: M7 Policy Gate4（声明层预检）+ M11 SafeDialer.TaintEgressCheck（出口层终检，调用方职责）。
   M7/M10/M13 所有出站必经此入口。CI `safe_dialer_lint` 扫描裸 `net.Dial` / `grpc.Dial` / `http.Get` → ERROR。
+  **✅ 已修复（SurrealStore 出口缺失）**：Go 侧 SurrealStore wrapper 在调用 `surreal_store_insert` / `surreal_store_query` FFI 前补充 `SafeDialer.TaintEgressCheck`，确保 TaintHigh 数据不绕过出口拦截直写认知存储。
 
 ---
 

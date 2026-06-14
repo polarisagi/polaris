@@ -151,7 +151,7 @@ Cedar Gate（含 hooks 安全检查）→ 写 extension_instances（status=downl
 
 启动时 MCPManager.LoadFromDB 统一加载含 plugin_id 的子 MCP；Skill 注入走 `buildToolSchemas()`（tool 模式）和 `buildAmbientSkillsSection()`（ambient 模式）。
 
-> ⚠️ **代码偏差**：`Manager.InstallExtension()` 已完成 PolicyGate 检查 + `extension_instances` 写入（installing→installed），但尚未注入文件下载接口（`ExtensionInstaller`）和运行时注册接口（`SkillRegistrar`/`MCPStarter`）。Agent 路径经 `MakeExtensionInstallFn` 在 Manager 调用后补调 `client.Install()` 和 Outbox 投递，与 HTTP API 路径（`plugin_catalog.go`）仍为两套逻辑，修复方向见 GEMINI_PATCH_ROUND15b。
+> **✅ 已修复（extension_instances 双写脑裂）**：`plugin_catalog.go` 中 `internalInstallMCP` / `internalInstallGeneric` 的裸 `INSERT INTO extension_instances` 已删除，所有写路径统一路由至 `marketplace.Manager.InstallExtension`，实现 ADR-0019 单写原则；`Manager` 新增 `UpdateStatus` 方法供状态变更使用。
 
 **插件生命周期级联**：
 

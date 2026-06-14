@@ -662,3 +662,5 @@ hooks:
 - **Linux namespace 隔离**: 自动注入 `ContainerSandboxSysProcAttr()`（PID + 挂载 namespace），与 ContainerSandbox.RunScript 保持一致的隔离策略
 
 **代码位置**: `pkg/action/hook/` (hook.go / runner.go / registry.go / hook_linux.go / hook_other.go)
+
+> **✅ 已修复（native_sandbox.rs mutex 中毒）**：`rust/substrate/src/native_sandbox.rs` 中 stdout/stderr 采集子线程的 `buf.lock().unwrap()` 已改为 `unwrap_or_else(|e| e.into_inner())`，锁中毒时取回内部数据而非 panic，子线程不再因锁异常丢失输出。

@@ -172,7 +172,7 @@ DAGExecutor 实现见 `pkg/cognition/kernel/dag_executor.go`（旧版 `pkg/cogni
 **Adaptive Max-Steps 闭环**:
 - `StateContext` 持有 `StepsUsed / MaxStepsLimit`；`AgentConfig.MaxSteps` 在首次 `Run()` 时写入 `MaxStepsLimit`（0=无上限，不推荐生产）。
 - `Agent.Run()` 每轮 trigger 前计步：`StepsUsed > MaxStepsLimit` → FSM 熔断至 `S_FAILED`，错误码 `MAX_STEPS_EXCEEDED`。
-- 每次工具调用后调用 `adjustMaxSteps(current, score)`：score < 0.5 → 收紧 10%（防低质量循环），score ≥ 0.5 → 保持不变（防预算膨胀）。
+- 每次工具调用后调用 `adjustMaxSteps(current, score)`：score < 0.5 → 收紧 10%（防低质量循环），score ≥ 0.5 → 保持不变（防预算膨胀）。**✅ 已修复**：`StateContext.InitialMaxStepsLimit` 记录初始值，每次 S_PLAN 生成新 DAG 时重置 `MaxStepsLimit`，惩罚仅在当前 DAG 执行周期内生效，不跨任务累积。
 
 **Best-of-N 与 Replanning 阻断**:
 双路径输出为 Best-of-N 搜索提供置信度排序，低分分支标记为 MEMF 失败候选池，累积低于警戒线立即触发重规划或 Saga 补偿。

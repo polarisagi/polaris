@@ -388,3 +388,4 @@ Outbox Worker 消费事件走写连接（保证读己写）。Agent 查询 Episo
 | P1 | `pkg/substrate/burn_rate.go` | `baselineP95` 零初始化，`Stage()` 对任意正 EMA 均返回 HARD_STOP（熔断器永远开路） | 添加冷启动守卫：`baselineP95 <= 0` 时返回 Normal；新增 `SetBaseline(p95)` 方法供采样稳定后调用 |
 | P1 | `pkg/substrate/schema_manager.go` | `ApplyMigrations()` 传 `nil` 作为 `Transaction` 参数，迁移函数调用 `tx.Exec()` 必然 nil pointer panic | 封装 `sqlTxWrapper{*sql.Tx}`，`db != nil` 时在独立事务内执行迁移，失败自动回滚 |
 | P2 | `pkg/substrate/hybrid_retrieve.go` | 余弦相似度公式 `dot / (n1 * n2)` 错误（除以范数平方积而非范数积），检索评分严重偏低 | 修正为 `dot / math.Sqrt(n1 * n2)` |
+| P2 | `rust/substrate/src/surreal_store.rs` | HTTP 连接无重试，瞬时网络抖动直接报错 | 新增 `with_retry(3, f)` 辅助函数，指数退避 50ms→100ms→200ms，覆盖所有网络调用 |

@@ -334,6 +334,7 @@ QLoRA/PRM/ActivationSteering 的 Tier 门控由 `FeatureGate` 自动化：`Featu
 | L3 StrategyModify（LoRA adapter） | ⚠️ 计划中 | — |
 | L4 SourceArchitecture（multi-sig 源码修改） | ⚠️ 计划中 | CI 保护框架设计完成，执行路径未实现 |
 | CurriculumGenerator 接口绑定 | ⚠️ 缺陷 | `AutoCurriculumGenerator.Generate` 签名与 `CurriculumGenerator` 接口不匹配，Engine 无法通过接口调用 |
+| FastPath 跳过 Intent Vector 记录 | ✅ 已修复 | FastPath 合成感知结果后，异步调用 `memStore.RecordIntentVector`（source="fastpath_synthetic"），确保所有路径均写入 Intent 记录供后续 BM25/语义检索使用 |
 
 ### 引入计划
 
