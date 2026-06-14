@@ -330,6 +330,7 @@ func (r *ProviderRegistry) best(req *protocol.InferRequest) *providerEntry {
 // 架构文档: docs/arch/M01-Inference-Runtime.md §4
 type InferenceRouter struct {
 	registry     *ProviderRegistry
+	rateTracker  *RateLimitTracker
 	client       *http.Client
 	outboxWriter protocol.OutboxWriter
 }
@@ -345,9 +346,17 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer) *Infe
 	if dialer != nil {
 		transport.DialContext = dialer.DialContext
 	}
+	tracker := NewRateLimitTracker()
 	ir := &InferenceRouter{
-		registry: reg,
-		client:   &http.Client{Transport: transport, Timeout: 120 * time.Second},
+		registry:    reg,
+		rateTracker: tracker,
+		client: &http.Client{
+			Transport: &RateLimitCapturingTransport{
+				Inner:   transport,
+				Tracker: tracker,
+			},
+			Timeout: 120 * time.Second,
+		},
 	}
 	reg.InjectRecoveryHandler(func(providerName string) {
 		// 向 outbox 投递 m4_provider_recovery 事件，唤醒因 provider_suspended 挂起的 Agent

@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] pkg/substrate/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:442 SSRF / 6.5:446 Factuality / 7:488 审计 / 8:512 多Agent宪法 / 9:537 威胁监控 / 13:551 降级 / 14:583 跨模块契约
+> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:223 Cedar / 4:289 KillSwitch / 5:355 隐私 / 6:442 SSRF / 6.5:446 Factuality / 7:488 审计 / 8:512 多Agent宪法 / 9:539 威胁监控 / 13:553 降级 / 14:585 跨模块契约
 
 ---
 
@@ -521,6 +521,8 @@ Cedar 策略扩展 (Layer 4):
   forbid send_message → BlackboardEvent: payload 含 cross_agent_prohibited_data AND principal.id != source_agent_id
   forbid delegate_task: delegation_chain_depth >= 3
   forbid call_tool: capability == "write_network" AND 任一 collaborating_agent trust_level < 3
+
+**JIT Token 委托能力收缩**：`ValidateDelegation`（`pkg/action/capability_token.go`）强制执行权限收缩规则——effectiveCaps = intersect(parentToken.Claims.Caps, requestedCaps)；交集为空时返回 `ErrCapabilityInsufficient`；子 Agent 永远无法获得超过父 Token 所持有的能力。委托链深度上限 3 层由 depth 参数控制，父 Token 有效性先经 `TokenManager.Verify()` 确认。
 
 黑板消息最小权限路由:
 

@@ -25,7 +25,6 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) { //n
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
 	extID := "ext_" + newHex(8)
 
 	if s.installMgr == nil {
@@ -72,15 +71,9 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) { //n
 		"entrypoint": req.Entrypoint,
 	})
 
-	_, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO extension_instances
-		 (id, ext_type, origin, catalog_id, name, publisher, trust_tier,
-		  runtime_id, install_path, config, status, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,'','',?,'installed',?,?)`,
-		extID, "skill", "user", "",
-		req.Name, "user", 1,
-		string(configJSON), now, now)
-	if err != nil {
+	installReq0.Name = req.Name
+	installReq0.Config = string(configJSON)
+	if err := s.installMgr.InstallExtension(r.Context(), installReq0); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -103,7 +96,6 @@ func (s *Server) handleCreatePlugin(w http.ResponseWriter, r *http.Request) { //
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
 	extID := "ext_" + newHex(8)
 
 	if s.installMgr == nil {
@@ -149,15 +141,9 @@ func (s *Server) handleCreatePlugin(w http.ResponseWriter, r *http.Request) { //
 		"manifest_url": req.ManifestURL,
 	})
 
-	_, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO extension_instances
-		 (id, ext_type, origin, catalog_id, name, publisher, trust_tier,
-		  runtime_id, install_path, config, status, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,'','',?,'installed',?,?)`,
-		extID, "plugin", "user", "",
-		req.Name, "user", 1,
-		string(configJSON), now, now)
-	if err != nil {
+	installReq1.Name = req.Name
+	installReq1.Config = string(configJSON)
+	if err := s.installMgr.InstallExtension(r.Context(), installReq1); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -234,15 +220,10 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) { //nol
 	}
 
 	configJSON, _ := json.Marshal(map[string]any{"url": req.URL})
-	_, err = s.db.ExecContext(r.Context(),
-		`INSERT INTO extension_instances
-		 (id, ext_type, origin, catalog_id, name, publisher, trust_tier,
-		  runtime_id, install_path, config, status, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,'',?,'installed',?,?)`,
-		extID, "app", "user", "",
-		req.Name, "user", 1, appID,
-		string(configJSON), now, now)
-	if err != nil {
+	installReq2.Name = req.Name
+	installReq2.Config = string(configJSON)
+	installReq2.RuntimeID = appID
+	if err := s.installMgr.InstallExtension(r.Context(), installReq2); err != nil {
 		// 回滚 apps 插入
 		_, _ = s.db.ExecContext(r.Context(), "DELETE FROM apps WHERE id=?", appID)
 		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
@@ -335,15 +316,10 @@ func (s *Server) handleCreateMCP(w http.ResponseWriter, r *http.Request) { //nol
 		"url":       req.URL,
 	})
 
-	_, err = s.db.ExecContext(r.Context(),
-		`INSERT INTO extension_instances
-		 (id, ext_type, origin, catalog_id, name, publisher, trust_tier,
-		  runtime_id, install_path, config, status, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,1,?,?,'{}','installed',?,?)`,
-		extID, "mcp", "user", "",
-		req.Name, "user",
-		mcpID, string(configJSON), now, now)
-	if err != nil {
+	installReq3.Name = req.Name
+	installReq3.Config = string(configJSON)
+	installReq3.RuntimeID = mcpID
+	if err := s.installMgr.InstallExtension(r.Context(), installReq3); err != nil {
 		// 回滚 mcp_servers
 		s.db.ExecContext(r.Context(), `DELETE FROM mcp_servers WHERE id=?`, mcpID) //nolint:errcheck
 		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)

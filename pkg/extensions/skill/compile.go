@@ -173,7 +173,7 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 	}
 
 	// 风险分级
-	riskLevel, sandboxTier := assessScriptRisk(src)
+	riskLevel, sandboxTier := assessScriptRisk(src, "llm_generated")
 
 	// 签名
 	sig, err := signScript(src, c.signingKey)
@@ -215,7 +215,7 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 // assessScriptRisk 基于 TypeScript 源码评估风险级别和推荐沙箱层级。
-func assessScriptRisk(src []byte) (riskLevel string, sandboxTier int) {
+func assessScriptRisk(src []byte, source string) (riskLevel string, sandboxTier int) {
 	s := string(src)
 	switch {
 	case contains(s, "exec(", "child_process", "spawnSync"):
@@ -224,8 +224,10 @@ func assessScriptRisk(src []byte) (riskLevel string, sandboxTier int) {
 		return "medium", 3 // L3 Container（网络需最高隔离）
 	case contains(s, "fs.write", "writeFile", "createWriteStream"):
 		return "medium", 3 // L3 Container
-	default:
+	case source == "builtin" || source == "user_verified":
 		return "low", 1 // L1 InProcess
+	default:
+		return "medium", 2 // L2 SandboxWasm
 	}
 }
 

@@ -194,8 +194,22 @@ func (w *OutboxWorker) processBatch(ctx context.Context, cursor int64, batchSize
 
 // processAndMark 处理记录并更新状态（done / failed + 指数退避）。
 func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord) error {
-	err := w.Process(ctx, record)
 	now := time.Now().UnixMilli()
+
+	// Atomically mark as processing to prevent concurrent worker pick-up
+	res, err := w.db.ExecContext(ctx,
+		"UPDATE outbox SET status='processing', updated_at=? WHERE id=? AND status IN ('pending', 'failed')",
+		now, record.ID)
+	if err != nil {
+		return err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return nil // Grabbed by another worker, simply skip
+	}
+
+	err = w.Process(ctx, record)
+	now = time.Now().UnixMilli()
 
 	if err == nil {
 		_, _ = w.db.ExecContext(ctx,

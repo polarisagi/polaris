@@ -1103,63 +1103,76 @@ pub extern "C" fn surreal_vec_set_mode(_mode: c_int) -> c_int {
 /// 未初始化时：{"backend":"none","ready":false}
 #[unsafe(no_mangle)]
 pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
-    let Some(store_arc) = get_store() else {
-        write_cstr(out_json, r#"{"backend":"none","ready":false}"#);
-        return SURREAL_OK;
-    };
-    let guard = match store_arc.read() {
-        Ok(g) => g,
-        Err(_) => {
-            write_cstr(out_json, r#"{"backend":"error","ready":false}"#);
-            return SURREAL_ERR_LOCK;
-        }
-    };
+    let result = panic::catch_unwind(|| {
+        let Some(store_arc) = get_store() else {
+            write_cstr(out_json, r#"{"backend":"none","ready":false}"#);
+            return SURREAL_OK;
+        };
+        let guard = match store_arc.read() {
+            Ok(g) => g,
+            Err(_) => {
+                write_cstr(out_json, r#"{"backend":"error","ready":false}"#);
+                return SURREAL_ERR_LOCK;
+            }
+        };
 
-    let (kv_count, vec_count, doc_count, edge_count) = guard.rt.block_on(async {
-        let kv: i64 = guard
-            .db
-            .query("SELECT count() AS count FROM kv GROUP ALL")
-            .await
-            .ok()
-            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-            .and_then(|v| v.into_iter().next())
-            .map(|r| r.count)
-            .unwrap_or(0);
-        let vec: i64 = guard
-            .db
-            .query("SELECT count() AS count FROM vectors GROUP ALL")
-            .await
-            .ok()
-            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-            .and_then(|v| v.into_iter().next())
-            .map(|r| r.count)
-            .unwrap_or(0);
-        let doc: i64 = guard
-            .db
-            .query("SELECT count() AS count FROM docs GROUP ALL")
-            .await
-            .ok()
-            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-            .and_then(|v| v.into_iter().next())
-            .map(|r| r.count)
-            .unwrap_or(0);
-        let edge: i64 = guard
-            .db
-            .query("SELECT count() AS count FROM edges GROUP ALL")
-            .await
-            .ok()
-            .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
-            .and_then(|v| v.into_iter().next())
-            .map(|r| r.count)
-            .unwrap_or(0);
-        (kv, vec, doc, edge)
+        let (kv_count, vec_count, doc_count, edge_count) = guard.rt.block_on(async {
+            let kv: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM kv GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            let vec: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM vectors GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            let doc: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM docs GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            let edge: i64 = guard
+                .db
+                .query("SELECT count() AS count FROM edges GROUP ALL")
+                .await
+                .ok()
+                .and_then(|mut r| r.take::<Vec<CountRow>>(0).ok())
+                .and_then(|v| v.into_iter().next())
+                .map(|r| r.count)
+                .unwrap_or(0);
+            (kv, vec, doc, edge)
+        });
+
+        let json = format!(
+            r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count}}}"#
+        );
+        write_cstr(out_json, &json);
+        SURREAL_OK
     });
 
-    let json = format!(
-        r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count}}}"#
-    );
-    write_cstr(out_json, &json);
-    SURREAL_OK
+    match result {
+        Ok(ret) => ret,
+        Err(_) => {
+            write_cstr(
+                out_json,
+                r#"{"backend":"surreal","ready":false,"error":"panic"}"#,
+            );
+            SURREAL_ERR_PANIC
+        }
+    }
 }
 
 #[cfg(test)]

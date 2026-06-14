@@ -255,6 +255,9 @@ func makeWriteFileFn(allowedPaths []string) action.InProcessFn {
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
 			return nil, err
 		}
+		if err := checkForbiddenPath(args.Path); err != nil {
+			return nil, err
+		}
 
 		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 		if args.Append {
@@ -272,6 +275,33 @@ func makeWriteFileFn(allowedPaths []string) action.InProcessFn {
 		}
 		return []byte(`{"written":true}`), nil
 	}
+}
+
+func checkForbiddenPath(path string) error {
+	cleanPath := filepath.Clean(path)
+	home, err := os.UserHomeDir()
+	var forbidden []string
+	if err == nil {
+		forbidden = []string{
+			filepath.Join(home, ".polarisagi", "polaris", "config"),
+			filepath.Join(home, ".polarisagi", "polaris", "data"),
+			filepath.Join(home, ".ssh"),
+			filepath.Join(home, ".gnupg"),
+			"/etc",
+			"/usr",
+			"/bin",
+			"/sbin",
+		}
+	} else {
+		forbidden = []string{"/etc", "/usr", "/bin", "/sbin"}
+	}
+
+	for _, f := range forbidden {
+		if cleanPath == f || strings.HasPrefix(cleanPath, f+string(filepath.Separator)) {
+			return perrors.New(perrors.CodeForbidden, fmt.Sprintf("write_file: path is in forbidden directory: %s", path))
+		}
+	}
+	return nil
 }
 
 // ─── fetch_url ────────────────────────────────────────────────────────────────

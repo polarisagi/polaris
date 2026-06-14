@@ -19,8 +19,8 @@ func newCardinalityGuard(cap int) *cardinalityGuard {
 	}
 }
 
-// Allow 若 value 已在 LRU 中则直接返回；否则加入，满时淘汰最旧条目（真 LRU）。
-// 保证 Prometheus label 基数不超过 cap，同时不会因填满而永久丢弃新值。
+// Allow 若 value 已在集合中则直接返回；否则若未满则加入。
+// 超过 cap 后，新值映射为 "<overflow>" 桶，防止高基标签爆炸 Prometheus 内存。
 func (g *cardinalityGuard) Allow(value string) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -28,9 +28,7 @@ func (g *cardinalityGuard) Allow(value string) string {
 		return value
 	}
 	if len(g.order) >= g.cap {
-		evict := g.order[0]
-		g.order = g.order[1:]
-		delete(g.index, evict)
+		return "<overflow>"
 	}
 	g.index[value] = struct{}{}
 	g.order = append(g.order, value)

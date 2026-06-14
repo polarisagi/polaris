@@ -1,5 +1,13 @@
 package cognition
 
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+)
+
 // 四层记忆类型定义。
 // 架构文档: docs/arch/05-Memory-System-深度选型.md §1-5
 
@@ -18,6 +26,30 @@ type ActiveContext struct {
 	RecentObservations []Observation
 	RetrievedContext   []MemoryFragment
 	TaintLevel         int
+}
+
+// Rebuild 重建 ActiveContext 状态。
+// 在方法内回放最近的 event 来重构状态。如重建耗时 > 500ms，需通过 slog.Warn 发出警告。
+func (ac *ActiveContext) Rebuild(ctx context.Context, events []protocol.Event) error {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		if duration > 500*time.Millisecond {
+			slog.Warn("cognition: ActiveContext.Rebuild exceeded 500ms SLA", "duration_ms", duration.Milliseconds(), "events", len(events))
+		}
+	}()
+
+	// 重建状态：最多处理最近 1000 条
+	limit := len(events)
+	if limit > 1000 {
+		events = events[limit-1000:]
+	}
+
+	for _, e := range events {
+		// MVP 占位：实际应根据 e.Type 更新 ac.CurrentTask / ac.RecentObservations
+		_ = e
+	}
+	return nil
 }
 
 // Task 当前任务。

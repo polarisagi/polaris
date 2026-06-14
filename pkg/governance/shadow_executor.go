@@ -171,15 +171,17 @@ type ContinuousSamplingMonitor struct {
 	slidingWindow        *SlidingWindow
 	baselineScore        float64
 	degradationThreshold float64 // 0.9
+	onDegradation        func()
 }
 
 // NewContinuousSamplingMonitor 创建 ContinuousSamplingMonitor。
-func NewContinuousSamplingMonitor(rate, baseline, threshold float64, windowSize int) *ContinuousSamplingMonitor {
+func NewContinuousSamplingMonitor(rate, baseline, threshold float64, windowSize int, onDeg func()) *ContinuousSamplingMonitor {
 	return &ContinuousSamplingMonitor{
 		samplingRate:         rate,
 		slidingWindow:        &SlidingWindow{maxSize: windowSize},
 		baselineScore:        baseline,
 		degradationThreshold: threshold,
+		onDegradation:        onDeg,
 	}
 }
 
@@ -210,12 +212,25 @@ type QualitySample struct {
 	SessionID string
 }
 
+// DegradationAlert 退化告警
+type DegradationAlert struct {
+	Message string
+}
+
 // CheckDegradation 每 10min 检测退化。
 // avgScore < baselineScore × 0.9 → SilentDegradationAlert.
 // 自动回滚: 冻结 M9 Auto-Curriculum → 回退 7 天 L1-L3 产物 → 全量 Eval replay.
-func (csm *ContinuousSamplingMonitor) CheckDegradation() bool {
+func (csm *ContinuousSamplingMonitor) CheckDegradation() (bool, *DegradationAlert) {
 	avg := csm.slidingWindow.Average()
-	return avg < csm.baselineScore*csm.degradationThreshold
+	degraded := avg < csm.baselineScore*csm.degradationThreshold
+	var alert *DegradationAlert
+	if degraded {
+		alert = &DegradationAlert{Message: "SilentDegradationAlert: Quality score dropped below threshold"}
+		if csm.onDegradation != nil {
+			csm.onDegradation()
+		}
+	}
+	return degraded, alert
 }
 
 func (sw *SlidingWindow) Average() float64 {
@@ -238,16 +253,49 @@ func (sw *SlidingWindow) Average() float64 {
 // [SurpriseIndex]: current > baseline P95 且连续 3 天 → AlertWarning
 // Task_Success_Rate: current < baseline Mean-0.05 → AlertCritical, auto-rollback
 type RegressionDetector struct {
-	baselineWindow int                     // 30d
-	buckets        map[string]*StatsBucket // metric_name → bucket
+	baselineWindow  int                     // 30d
+	buckets         map[string]*StatsBucket // metric_name → bucket
+	consecutiveDays map[string]int
 }
 
 // NewRegressionDetector 创建 RegressionDetector。
 func NewRegressionDetector(bw int) *RegressionDetector {
 	return &RegressionDetector{
-		baselineWindow: bw,
-		buckets:        make(map[string]*StatsBucket),
+		baselineWindow:  bw,
+		buckets:         make(map[string]*StatsBucket),
+		consecutiveDays: make(map[string]int),
 	}
+}
+
+// RegressionAlert 回归告警
+type RegressionAlert struct {
+	Level   string // Critical, Warning
+	Message string
+}
+
+// Check 检查给定指标的回归状态
+func (rd *RegressionDetector) Check(metric string, current float64) *RegressionAlert {
+	b := rd.GetBucket(metric)
+	switch metric {
+	case "TokenBurnRate":
+		if current > b.P95()*2.0 {
+			return &RegressionAlert{Level: "Critical", Message: "TokenBurnRate exceeded P95*2.0"}
+		}
+	case "SurpriseIndex":
+		if current > b.P95() {
+			rd.consecutiveDays[metric]++
+			if rd.consecutiveDays[metric] >= 3 {
+				return &RegressionAlert{Level: "Warning", Message: "SurpriseIndex exceeded P95 for 3 consecutive days"}
+			}
+		} else {
+			rd.consecutiveDays[metric] = 0
+		}
+	case "Task_Success_Rate":
+		if current < b.Mean()-0.05 {
+			return &RegressionAlert{Level: "Critical", Message: "Task_Success_Rate dropped below Mean-0.05"}
+		}
+	}
+	return nil
 }
 
 // GetBucket 返回或者创建 Bucket。

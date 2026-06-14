@@ -304,7 +304,7 @@ LocalProvider 通过 llama.cpp FFI 提供本地 GGUF 模型的 `Infer`/`StreamIn
 
 **CredentialPool**（`pkg/substrate/inference/credential_pool.go`）：多 API Key 线程安全池，支持四种选择策略（FillFirst / RoundRobin / Random / LeastUsed）。`Pick()` 按策略选取冷却期已过的凭证；`RecordResult(err)` 调用 `Classify(err)` 并按 FailReason 设置冷却期（Auth 5min / Billing+RateLimit 60min / AuthPermanent 30天）。`CredFn()` 返回 `func() string`，与各 Adapter 构造函数直接兼容。
 
-**RateLimitTracker**（`pkg/substrate/inference/rate_tracker.go`）：解析 Provider HTTP 响应头中的 12 个速率限制字段（分钟/小时 × 请求/Token），提供 `SuggestDelay()` 供退避决策。`RateLimitCapturingTransport` 作为 `http.RoundTripper` 包装层自动捕获限速头，无需改动各 Adapter。`BackoffConfig.Delay(attempt)` 实现去相关抖动指数退避（防雷群效应）。
+**RateLimitTracker**（`pkg/substrate/inference/rate_tracker.go`）：解析 Provider HTTP 响应头中的 12 个速率限制字段（分钟/小时 × 请求/Token），提供 `SuggestDelay()` 供退避决策。`RateLimitCapturingTransport` 作为 `http.RoundTripper` 包装层自动捕获限速头，接入点：`InferenceRouter` 创建 `http.Client` 时以 `RateLimitCapturingTransport{inner: &http.Transport{...}, tracker: rateTracker}` 替代裸 Transport，确保所有 Provider HTTP 调用的限速响应头自动汇入 `RateTracker`，无需改动各 Adapter。`BackoffConfig.Delay(attempt)` 实现去相关抖动指数退避（防雷群效应）。
 
 **ErrorClassifier**（`pkg/substrate/inference/error_classifier.go`）：`Classify(err)` 提取 HTTP 状态码 + 关键词，分类为 17 种 FailReason，并填充 `Retryable/ShouldCompress/ShouldRotateCredential/ShouldFallback` 四个布尔恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 provider 错误体格式。
 

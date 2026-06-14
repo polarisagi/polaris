@@ -3,7 +3,7 @@
 > Go | L3 治理层 | [Code-Package-Mapping] → pkg/governance/
 > [HE-Rule-4]: Eval 第 0 行存在，失败 = PR 不能合并
 > 黄金测试集 + 轨迹回放 + 影子执行 + 回归基线 + 自动熔断
-> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:32 EvalCase / 2:58 Evaluator5层 / 3:75 轨迹录制 / 4:87 Runner / 5:93 Suite分区 / 6:129 IncidentToEval / 7:138 AutoBootstrap / 8:148 影子执行 / 9:154 连续采样 / 10:168 增量快照 / 11:180 回归检测 / 12:194 集成回放 / 13:210 InvariantTestSuite / 14:237 EvalStore / 15:246 闭环 / 17:252 279(SOFT)降级 / 18:277 依赖
+> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:32 EvalCase / 2:58 Evaluator5层 / 3:75 轨迹录制 / 4:87 Runner / 5:93 Suite分区 / 6:129 IncidentToEval / 7:138 AutoBootstrap / 8:148 影子执行 / 9:154 连续采样 / 10:168 增量快照 / 11:180 回归检测 / 12:196 集成回放 / 13:212 InvariantTestSuite / 14:239 EvalStore / 15:248 闭环 / 17:254 279(SOFT)降级 / 18:279 依赖
 ## 0-bis. 职责边界
 
 | M12 **是** | M12 **不是** |
@@ -86,7 +86,7 @@ EvalResult: Passed bool / Scores map[string]float64 / Details string / Evaluator
 
 ## 4. Eval Runner
 
-`RunnerImpl` 实现见 `pkg/governance/eval/runner.go`，`SQLiteEvalStore` 见 `pkg/governance/eval/store.go`。
+`RunnerImpl` 实现见 `pkg/governance/eval_runner.go`（L1AssertionEvaluator / L2SchemaEvaluator / L3TrajectoryEvaluator / L4LLMJudgeEvaluator-stub / L5HumanEvaluator-stub + `RunnerImpl.Run()`）。L4/L5 为 Stub，`JudgeScore` 由外部异步注入。`BlockDeploy = P0PassRate < 1.0`，`WarnDeploy = P1PassRate < 0.8`。
 
 CI: PR 变更 `prompts/** skills/** config/** go.mod` → replay P0+P1, 5min 超时。P0 失败阻塞，P1 单 Judge 置信度阈值见 `spec/state.yaml §m12_eval.judge_single_confidence`，低于阈值告警。
 
@@ -181,15 +181,17 @@ Eval Harness 仅提供对比原语。流量分发由 M9 ProgressiveRollout + M13
 
 **实现**: `pkg/governance/eval/eval.go`（RegressionDetector.Check）
 
-`RegressionDetector.Check(baseline, current *RunMetrics) *RegressionAlert` 对三个指标执行相对变化率检测：
+`RegressionDetector.Check(metric string, current float64) *RegressionAlert` 对三个指标执行绝对阈值检测（30 天 StatsBucket 滚动窗口）：
 
-| 指标 | 触发条件 | 语义 |
-|------|---------|------|
-| TaskSuccessRate | 下降 > 5%（相对值） | 安全一票否决，无例外 |
-| AvgLatencyMs | 上升 > 20%（相对值） | P95 延迟回归 |
-| TokenBurnRate | 上升 > 30%（相对值） | 成本软约束 |
+| 指标 | 触发条件 | 级别 | 动作 |
+|------|---------|------|------|
+| token_burn_rate | current > P95×2.0 | Critical | throttle |
+| surprise_index | current > P95，连续 3 天 | Warning | — |
+| task_success_rate | current < Mean-0.05 | Critical | rollback |
 
-任一触发返回 `RegressionAlert{Metric, Baseline, Current, Threshold}`，nil 表示无回归。调用方（M9 外环 Engine.handleEvalCompleted）基于 Alert 决定是否触发 autoRollback。
+触发返回 `RegressionAlert{Metric, Level, Current, Baseline, Action}`，nil 表示无回归。调用方（M9 外环）按 Action 执行 throttle/rollback，`RegressionDetector` 本身不执行侧效应。
+
+**连续采样退化告警**：`ContinuousSamplingMonitor.CheckDegradation()` 返回 `(degraded bool, alert *DegradationAlert)`；degraded=true 时触发 `slog.Warn("SilentDegradationAlert")` 并调用注入的 `onDegradation` 回调（由 M9 注入冻结 Auto-Curriculum + 回滚链逻辑）。
 
 ## 12. 集成轨迹回放
 
