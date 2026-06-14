@@ -9,6 +9,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate"
 )
 
 // CognitiveSearcher L2 语义检索接口（消费方定义，防止包循环）。
@@ -32,13 +33,27 @@ type CogResult struct {
 // M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
 func buildPerceiveContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.Memory, sCtx *StateContext, cognitive CognitiveSearcher) ([]protocol.Message, error) {
+	b := NewPromptBuilder()
+
+	// 1. 可信系统指令（基础模板 + 扩展信息）
+	instr := "Structure the user intent into a TaskModel JSON.\n\n"
+	if sCtx.InstalledExtensionsInfo != "" {
+		instr += sCtx.InstalledExtensionsInfo + "\n\n"
+	}
+	safe, err := substrate.SanitizeToSafe(substrate.NewTaintedString(
+		instr, substrate.TaintSource{OriginTaintLevel: protocol.TaintNone}, "perceive_system_prompt"))
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "buildPerceiveContext: sanitize instr", err)
+	}
+	b.WriteInstruction(safe)
+
 	if memory == nil {
-		return []protocol.Message{
-			{Role: "system", Content: "Structure the user intent into a TaskModel JSON."},
-		}, nil
+		return b.Build(), nil
 	}
 
-	// 1. 查询相关的历史 Episodic 事件（如相似的任务意图）
+	var retrieved strings.Builder
+
+	// 1. 查询相关的历史 Episodic 事件
 	query := protocol.EpisodicQuery{
 		Semantic: "agent task intent",
 		K:        3,
@@ -48,82 +63,68 @@ func buildPerceiveContext( //nolint:gocyclo
 		return nil, perrors.Wrap(perrors.CodeInternal, "failed to query episodic memory", err)
 	}
 
-	var episodicCtx string
 	if len(events) > 0 {
-		episodicCtx = "Relevant Historical Episodic Memories:\n"
+		retrieved.WriteString("Relevant Historical Episodic Memories:\n")
 		for _, e := range events {
-			episodicCtx += fmt.Sprintf("- [%s] %s: %s\n", e.Event.CreatedAt.Format(time.RFC3339), e.Event.Type, string(e.Event.Payload))
+			retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n", e.Event.CreatedAt.Format(time.RFC3339), e.Event.Type, string(e.Event.Payload)))
 		}
 	}
 
-	// 2. 跨会话 Reflection 召回（M05 §3.4）：按目标主题词拉取历史经验注入上下文。
-	// TaskModel 为 nil（首次感知）时跳过，replanning 路径可复用已有目标词。
-	var reflectionCtx string
+	// 2. 跨会话 Reflection 召回
 	if rm := memory.Reflection(); rm != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
 		reflections, rerr := rm.QueryReflections(ctx, protocol.ReflectionQuery{
 			Topic: sCtx.TaskModel.Goal,
 			K:     3,
 		})
 		if rerr == nil && len(reflections) > 0 {
-			reflectionCtx = "Cross-Session Reflections (past experience for similar tasks):\n"
+			retrieved.WriteString("Cross-Session Reflections (past experience for similar tasks):\n")
 			for _, r := range reflections {
-				reflectionCtx += fmt.Sprintf("- [%s] %s: %s\n",
-					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
+				retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n",
+					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision))
 			}
 		}
 	}
 
-	// 3. 耳语线索注入（非阻塞，Memory Agent 推送的历史经验线索）
-	var whisperCtx string
+	// 3. 耳语线索注入
 	if sCtx.WhisperChan != nil {
 		select {
 		case w := <-sCtx.WhisperChan:
-			if w.Salience >= 0.5 { // 低显著度线索过滤
-				whisperCtx = fmt.Sprintf("## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content)
+			if w.Salience >= 0.5 {
+				retrieved.WriteString(fmt.Sprintf("## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content))
 			}
 		default:
-			// 无线索，继续
 		}
 	}
 
-	// 4. L2 语义记忆（SurrealDB FTSSearch，Memory Agent 蒸馏写入）
-	var semanticCtx string
+	// 4. L2 语义记忆
 	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
 		ftsResults, err := cognitive.FTSSearch(sCtx.TaskModel.Goal, 5)
 		if err == nil && len(ftsResults) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Semantic Memory (L2):\n")
+			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {
-				sb.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
 			}
-			semanticCtx = sb.String()
 		}
 	}
 
-	// 5. 组装上下文
-	baseContent := "Structure the user intent into a TaskModel JSON.\n\n"
-	if whisperCtx != "" {
-		baseContent += whisperCtx + "\n"
-	}
 	if len(sCtx.ReasoningState) > 0 {
-		baseContent += "Reasoning State from the previous iteration:\n" + string(sCtx.ReasoningState) + "\n\n"
-	}
-	if reflectionCtx != "" {
-		baseContent += reflectionCtx + "\n"
-	}
-	if episodicCtx != "" {
-		baseContent += episodicCtx + "\n"
-	}
-	if semanticCtx != "" {
-		baseContent += semanticCtx + "\n"
-	}
-	if sCtx.InstalledExtensionsInfo != "" {
-		baseContent += sCtx.InstalledExtensionsInfo + "\n\n"
+		retrieved.WriteString("Reasoning State from the previous iteration:\n")
+		retrieved.WriteString(string(sCtx.ReasoningState))
+		retrieved.WriteString("\n\n")
 	}
 
-	msgs := []protocol.Message{
-		{Role: "system", Content: baseContent},
+	if retrieved.Len() > 0 {
+		b.WriteUserData(substrate.NewTaintedString(
+			retrieved.String(),
+			substrate.TaintSource{OriginTaintLevel: protocol.TaintMedium},
+			"retrieved_memory"))
 	}
+
+	if sCtx.RawIntentTS.Content() != "" {
+		b.WriteUserData(sCtx.RawIntentTS)
+	}
+
+	msgs := b.Build()
 
 	if wm := memory.Working(); wm != nil {
 		msgs = wm.Immutable().PrependToMessages(msgs)
@@ -137,13 +138,33 @@ func buildPerceiveContext( //nolint:gocyclo
 // tools 为 nil 时跳过工具注入（测试环境）。
 func buildPlanContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry, cognitive CognitiveSearcher) ([]protocol.Message, error) {
-	if memory == nil {
-		return []protocol.Message{
-			{Role: "system", Content: "Generate an execution DAG based on the TaskModel."},
-		}, nil
+	b := NewPromptBuilder()
+
+	instr := "Generate an execution DAG based on the TaskModel.\n\n"
+	if sCtx.TaskModel != nil {
+		taskJson, _ := json.Marshal(sCtx.TaskModel)
+		instr += "Parsed TaskModel:\n" + string(taskJson) + "\n\n"
+	}
+	if sCtx.InstalledExtensionsInfo != "" {
+		instr += sCtx.InstalledExtensionsInfo + "\n\n"
+	}
+	if tools != nil {
+		instr += buildToolListSection(tools)
 	}
 
-	// 查询与任务目标或已有子任务相关的历史记忆
+	safe, err := substrate.SanitizeToSafe(substrate.NewTaintedString(
+		instr, substrate.TaintSource{OriginTaintLevel: protocol.TaintNone}, "plan_system_prompt"))
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "buildPlanContext: sanitize instr", err)
+	}
+	b.WriteInstruction(safe)
+
+	if memory == nil {
+		return b.Build(), nil
+	}
+
+	var retrieved strings.Builder
+
 	var queryStr string
 	if sCtx.TaskModel != nil {
 		queryStr = sCtx.TaskModel.Goal
@@ -157,74 +178,46 @@ func buildPlanContext( //nolint:gocyclo
 		return nil, perrors.Wrap(perrors.CodeInternal, "failed to query episodic memory", err)
 	}
 
-	var episodicCtx string
 	if len(events) > 0 {
-		episodicCtx = "Historical execution experiences for reference:\n"
+		retrieved.WriteString("Historical execution experiences for reference:\n")
 		for _, e := range events {
-			episodicCtx += fmt.Sprintf("- [%s] %s: %s\n", e.Event.CreatedAt.Format(time.RFC3339), e.Event.Type, string(e.Event.Payload))
+			retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n", e.Event.CreatedAt.Format(time.RFC3339), e.Event.Type, string(e.Event.Payload)))
 		}
 	}
 
-	// 跨会话 Reflection 召回（M05 §3.4）：规划阶段注入成功/失败模式经验
-	var reflectionCtx string
 	if rm := memory.Reflection(); rm != nil && queryStr != "" {
 		reflections, rerr := rm.QueryReflections(ctx, protocol.ReflectionQuery{
 			Topic: queryStr,
 			K:     3,
 		})
 		if rerr == nil && len(reflections) > 0 {
-			reflectionCtx = "Cross-Session Reflections (execution patterns for similar tasks):\n"
+			retrieved.WriteString("Cross-Session Reflections (execution patterns for similar tasks):\n")
 			for _, r := range reflections {
-				reflectionCtx += fmt.Sprintf("- [%s] %s: %s\n",
-					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
+				retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n",
+					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision))
 			}
 		}
 	}
 
-	// 4. L2 语义记忆（SurrealDB FTSSearch）
-	var semanticCtx string
 	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
 		queryTopic := sCtx.TaskModel.Goal
 		ftsResults, err := cognitive.FTSSearch(queryTopic, 5)
 		if err == nil && len(ftsResults) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Semantic Memory (L2):\n")
+			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {
-				sb.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
 			}
-			semanticCtx = sb.String()
 		}
 	}
 
-	// 5. 组装系统提示词
-	baseContent := "Generate an execution DAG based on the TaskModel.\n\n"
-	if reflectionCtx != "" {
-		baseContent += reflectionCtx + "\n"
-	}
-	if episodicCtx != "" {
-		baseContent += episodicCtx + "\n"
-	}
-	if semanticCtx != "" {
-		baseContent += semanticCtx + "\n"
+	if retrieved.Len() > 0 {
+		b.WriteUserData(substrate.NewTaintedString(
+			retrieved.String(),
+			substrate.TaintSource{OriginTaintLevel: protocol.TaintMedium},
+			"retrieved_memory"))
 	}
 
-	if sCtx.TaskModel != nil {
-		taskJson, _ := json.Marshal(sCtx.TaskModel)
-		baseContent += "Parsed TaskModel:\n" + string(taskJson) + "\n\n"
-	}
-
-	if sCtx.InstalledExtensionsInfo != "" {
-		baseContent += sCtx.InstalledExtensionsInfo + "\n\n"
-	}
-
-	// 注入可用工具列表，LLM 必须仅使用列表中的工具名称（action 字段）
-	if tools != nil {
-		baseContent += buildToolListSection(tools)
-	}
-
-	msgs := []protocol.Message{
-		{Role: "system", Content: baseContent},
-	}
+	msgs := b.Build()
 
 	if wm := memory.Working(); wm != nil {
 		msgs = wm.Immutable().PrependToMessages(msgs)
@@ -258,26 +251,30 @@ func buildToolListSection(tools protocol.ToolRegistry) string {
 	return sb.String()
 }
 
-// buildReflectContext 组装反思阶段的 Prompt。
 func buildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]protocol.Message, error) {
-	if memory == nil {
-		return []protocol.Message{
-			{Role: "system", Content: "Reflect on the execution result and evaluate the completion of the goal."},
-		}, nil
-	}
+	b := NewPromptBuilder()
 
-	baseContent := "Reflect on the execution result and evaluate the completion of the goal.\n\n"
+	instr := "Reflect on the execution result and evaluate the completion of the goal.\n\n"
+	safe, err := substrate.SanitizeToSafe(substrate.NewTaintedString(
+		instr, substrate.TaintSource{OriginTaintLevel: protocol.TaintNone}, "reflect_system_prompt"))
+	if err != nil {
+		return nil, perrors.Wrap(perrors.CodeInternal, "buildReflectContext: sanitize instr", err)
+	}
+	b.WriteInstruction(safe)
 
 	if len(sCtx.ExecuteResult) > 0 {
-		baseContent += "Execution Result Summary:\n" + string(sCtx.ExecuteResult) + "\n\n"
+		b.WriteUserData(substrate.NewTaintedString(
+			"Execution Result Summary:\n"+string(sCtx.ExecuteResult)+"\n\n",
+			substrate.TaintSource{OriginTaintLevel: protocol.TaintMedium},
+			"execute_result"))
 	}
 
-	msgs := []protocol.Message{
-		{Role: "system", Content: baseContent},
-	}
+	msgs := b.Build()
 
-	if wm := memory.Working(); wm != nil {
-		msgs = wm.Immutable().PrependToMessages(msgs)
+	if memory != nil {
+		if wm := memory.Working(); wm != nil {
+			msgs = wm.Immutable().PrependToMessages(msgs)
+		}
 	}
 
 	return msgs, nil
