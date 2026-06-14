@@ -34,6 +34,11 @@ var (
 
 	// GlobalOutboxDeadLetterTotal tracks the number of outbox records marked as dead.
 	GlobalOutboxDeadLetterTotal atomic.Int64
+
+	// GlobalFactualityJudgeUnavailableTotal 记录 L3 SemanticJudge 因超时/故障静默降级的累计次数。
+	// factuality_guard.go semanticJudge() 在 llm_judge_unavailable 时写入。
+	// OTel gauge 在 RegisterMetrics() 的 RegisterCallback 中注册。
+	GlobalFactualityJudgeUnavailableTotal atomic.Int64
 )
 
 // TokenBurnRate tracks token consumption rate for circuit breaking.
@@ -359,6 +364,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		killswitchGauge, _ := meter.Float64ObservableGauge("polaris.killswitch.stage")
 		cedarDegradedGauge, _ := meter.Float64ObservableGauge("polaris.cedar.degraded_total")
 		outboxDeadLetterGauge, _ := meter.Float64ObservableGauge("polaris.outbox.dead_letter_total")
+		factualityJudgeUnavailableGauge, _ := meter.Float64ObservableGauge("polaris.factuality.judge_unavailable_total")
 
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
@@ -381,8 +387,9 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(killswitchGauge, float64(GlobalKillswitchStage.Load()))
 			o.ObserveFloat64(cedarDegradedGauge, float64(GlobalCedarDegradedTotal.Load()))
 			o.ObserveFloat64(outboxDeadLetterGauge, float64(GlobalOutboxDeadLetterTotal.Load()))
+			o.ObserveFloat64(factualityJudgeUnavailableGauge, float64(GlobalFactualityJudgeUnavailableTotal.Load()))
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge)
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge)
 
 		otelHandler = promhttp.Handler()
 	})

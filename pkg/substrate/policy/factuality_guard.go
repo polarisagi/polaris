@@ -8,6 +8,7 @@ import (
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // FactualityGuard D6 防线——LLM 输出真实性核验。
@@ -123,6 +124,9 @@ func (fg *FactualityGuard) semanticJudge(ctx context.Context, content, contextDo
 	}
 	resp, err := fg.llmProvider.Infer(judgeCtx, req.Messages, protocol.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
+		// L3 Judge 不可用：计数告警，不阻断（FactualityUncertain）
+		// 监控指标: polaris.factuality.judge_unavailable_total
+		observability.GlobalFactualityJudgeUnavailableTotal.Add(1)
 		return FactualityUncertain, "llm_judge_unavailable"
 	}
 	upper := strings.ToUpper(strings.TrimSpace(resp.Content))
