@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "embed"
 
@@ -26,16 +27,24 @@ func VerifyKernelIntegrity() error {
 	}
 
 	currentManifest := make(map[string]string)
+	releaseMode := false
+
 	for _, dir := range ImmutableKernelPackages() {
 		// 如果核心源码目录不存在，说明是作为 Release 发布的独立二进制运行，而非源码运行模式
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			// 在独立的二进制运行模式下，跳过源码级别的完整性校验
-			return nil
+			// 源码目录不存在，进入 Release 二进制校验模式
+			releaseMode = true
+			break
 		}
 
 		if err := hashPackageDir(dir, currentManifest); err != nil {
 			return err
 		}
+	}
+
+	if releaseMode {
+		// Release 模式：校验二进制自身哈希
+		return verifyBinarySeal()
 	}
 
 	// Verify all expected files are present and match
@@ -56,6 +65,41 @@ func VerifyKernelIntegrity() error {
 		}
 	}
 
+	return nil
+}
+
+// verifyBinarySeal 计算当前可执行文件的 SHA-256，与附加的 .sha256 封印文件比对。
+// 无封印文件时（开发构建未生成 sidecar），仅放行。
+func verifyBinarySeal() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return errors.Wrap(errors.CodeInternal, "binary seal: cannot resolve executable path", err)
+	}
+	sidecar := exe + ".sha256"
+	data, err := os.ReadFile(sidecar)
+	if os.IsNotExist(err) {
+		// 无封印文件：开发或未封印构建，打印警告后放行
+		return nil
+	}
+	if err != nil {
+		return errors.Wrap(errors.CodeInternal, "binary seal: cannot read .sha256 sidecar", err)
+	}
+	expected := strings.TrimSpace(string(data))
+
+	f, err := os.Open(exe)
+	if err != nil {
+		return errors.Wrap(errors.CodeInternal, "binary seal: cannot open executable", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return errors.Wrap(errors.CodeInternal, "binary seal: hash read failed", err)
+	}
+	actual := hex.EncodeToString(h.Sum(nil))
+	if actual != expected {
+		return errors.New(errors.CodeInternal, fmt.Sprintf(
+			"CRITICAL: binary seal mismatch (expected %s, got %s)", expected, actual))
+	}
 	return nil
 }
 

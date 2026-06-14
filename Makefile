@@ -38,6 +38,11 @@ build-tier1: generate-manifest rust-build-tier1 build-ui
 	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
 	$(GO) build -tags tier1 -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
 
+build-release: rust-build
+	$(GO) build -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
+	sha256sum bin/$(BINARY) | awk '{print $$1}' > bin/$(BINARY).sha256
+	@echo "==> 封印文件: bin/$(BINARY).sha256"
+
 
 build-ui:
 	@cd $(WEBUI_DIR) && npm install --silent && npm run build
