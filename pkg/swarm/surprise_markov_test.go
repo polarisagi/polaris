@@ -238,3 +238,38 @@ func TestWithMarkovMatrix_ReplacesInternal(t *testing.T) {
 		t.Errorf("expected 1 transition in replaced matrix, got %f", replaced.TotalTransitions())
 	}
 }
+
+func TestUpdateWeighted_System2Debiasing(t *testing.T) {
+	m := NewMarkovMatrix()
+
+	// 自然序列：全权重写入 10 次
+	natural := []string{"search", "read", "write"}
+	for range 10 {
+		m.UpdateWeighted(natural, 1.0)
+	}
+
+	// MCTS 探索序列：降权 0.3 写入 10 次
+	explored := []string{"bash", "exec", "verify"}
+	for range 10 {
+		m.UpdateWeighted(explored, 0.3)
+	}
+
+	// 自然序列应比探索序列积累更多转移权重
+	naturalTotal := m.counts["search"]["read"]
+	exploredTotal := m.counts["bash"]["exec"]
+
+	if naturalTotal <= exploredTotal {
+		t.Fatalf("自然序列权重 %.2f 应大于 MCTS 探索序列权重 %.2f", naturalTotal, exploredTotal)
+	}
+	// naturalTotal ≈ 10.0, exploredTotal ≈ 3.0
+}
+
+func TestUpdate_BackwardCompatibility(t *testing.T) {
+	m := NewMarkovMatrix()
+	seq := []string{"a", "b", "c"}
+
+	m.Update(seq)
+	if m.counts["a"]["b"] != 1.0 {
+		t.Fatalf("Update() 应等价于 UpdateWeighted(seq, 1.0)")
+	}
+}

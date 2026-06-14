@@ -67,12 +67,22 @@ type SurpriseCalculator struct {
 	cancel          context.CancelFunc
 }
 
+// RoutingSource 标记触发本次计算的执行路径来源。
+// 0 = 未知（兼容旧调用方）；1 = System 1（快速路径）；2 = System 2 / MCTS 探索。
+// System 2 探索序列对马尔可夫矩阵的权重衰减为 0.3，防止探索偏置分布。
+const (
+	RoutingSourceUnknown int = 0
+	RoutingSourceSystem1 int = 1
+	RoutingSourceSystem2 int = 2
+)
+
 type CalcRequest struct {
-	TaskID   string
-	TaskType string
-	Keywords []string // Embedding 的替代
-	ToolSeq  []string // 工具序列
-	ResultCh chan float64
+	TaskID        string
+	TaskType      string
+	Keywords      []string // Embedding 的替代
+	ToolSeq       []string // 工具序列
+	RoutingSource int      // 执行路径来源，见 RoutingSource* 常量
+	ResultCh      chan float64
 }
 
 // NewSurpriseCalculator 使用默认 Layer B 阈值（DefaultLayerBThreshold）构造计算器。
@@ -176,7 +186,13 @@ func (c *SurpriseCalculator) processRequest(req *CalcRequest) {
 			toolSurprise = 1.0
 		}
 	}
-	markov.Update(req.ToolSeq) // 在线学习（计算完成后更新）
+	// System 2 / MCTS 探索序列权重衰减 0.3，避免探索偏置马尔可夫矩阵分布。
+	// RoutingSourceUnknown（旧调用方兼容）视为全权重。
+	markovWeight := 1.0
+	if req.RoutingSource == RoutingSourceSystem2 {
+		markovWeight = 0.3
+	}
+	markov.UpdateWeighted(req.ToolSeq, markovWeight)
 
 	memfSurprise := 0.1
 	if c.memfPool != nil && c.memfPool.db != nil {

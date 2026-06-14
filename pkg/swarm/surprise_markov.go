@@ -34,7 +34,14 @@ func NewMarkovMatrix() *MarkovMatrix {
 
 // Update 用一条新工具序列在线更新转移计数（流式增量，无需批量重建）。
 func (m *MarkovMatrix) Update(seq []string) {
-	if len(seq) < 2 {
+	m.UpdateWeighted(seq, 1.0)
+}
+
+// UpdateWeighted 加权更新转移计数，weight 范围 (0, 1]。
+// 用于 System 2/MCTS 探索序列降权，防止探索路径偏置马尔可夫分布。
+// weight=1.0 等价于 Update()；weight=0.3 适用于 System 2 探索序列。
+func (m *MarkovMatrix) UpdateWeighted(seq []string, weight float64) {
+	if len(seq) < 2 || weight <= 0 {
 		return
 	}
 	m.mu.Lock()
@@ -47,8 +54,8 @@ func (m *MarkovMatrix) Update(seq []string) {
 		if m.counts[from] == nil {
 			m.counts[from] = make(map[string]float64)
 		}
-		m.counts[from][to]++
-		m.totals[from]++
+		m.counts[from][to] += weight
+		m.totals[from] += weight
 	}
 }
 
