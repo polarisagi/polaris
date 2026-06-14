@@ -88,10 +88,32 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p protocol.HITLPrompt) (*proto
 	select {
 	case <-ctx.Done():
 		// 超时/取消
-		return nil, ctx.Err()
+		action := resolveTimeoutAction(p)
+		switch action {
+		case "auto_approve":
+			resp := protocol.HITLResponse{Approved: true, Reason: "auto_approved_on_timeout"}
+			_ = g.Respond(context.Background(), p.ID, resp)
+			return &resp, nil
+		case "auto_deny":
+			resp := protocol.HITLResponse{Approved: false, Reason: "auto_denied_on_timeout"}
+			_ = g.Respond(context.Background(), p.ID, resp)
+			return &resp, nil
+		default: // "kill_pause" 或未配置
+			return nil, ctx.Err()
+		}
 	case resp := <-ch:
 		return &resp, nil
 	}
+}
+
+func resolveTimeoutAction(p protocol.HITLPrompt) string {
+	if p.CheckpointType == "low_risk" {
+		return "auto_approve"
+	}
+	if p.CheckpointType == "high_risk" || p.RiskLevel >= 3 {
+		return "auto_deny"
+	}
+	return "kill_pause"
 }
 
 // Respond 提交人工审批决策。

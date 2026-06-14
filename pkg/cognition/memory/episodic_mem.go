@@ -225,25 +225,64 @@ func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before ti
 		return 0, nil
 	}
 
-	// 这里更新数据库表 episodic_events 的 cold 字段
-	query := "UPDATE episodic_events SET cold = 1 WHERE session_id = ? AND timestamp < ? AND cold = 0"
-	if sqlStore, ok := em.store.(interface {
-		Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
-	}); ok {
-		result, err := sqlStore.Exec(ctx, query, sessionID, before.Unix())
-		if err != nil {
-			return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: mark cold failed", err)
+	dbProv, ok := em.store.(interface{ DB() *sql.DB })
+	//nolint:nestif
+	if !ok {
+		// 兼容原有的 Exec fallback
+		query := "UPDATE episodic_events SET cold = 1 WHERE session_id = ? AND timestamp < ? AND cold = 0"
+		if sqlStore, ok := em.store.(interface {
+			Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+		}); ok {
+			result, err := sqlStore.Exec(ctx, query, sessionID, before.Unix())
+			if err != nil {
+				return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: mark cold failed", err)
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				//nolint:nilerr
+				return 0, nil
+			}
+			return int(affected), nil
 		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			//nolint:nilerr
-			return 0, nil
-		}
-
-		return int(affected), nil
+		return 0, nil
 	}
-	return 0, nil
+
+	db := dbProv.DB()
+	if db == nil {
+		return 0, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: begin tx failed", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	query := "UPDATE episodic_events SET cold = 1 WHERE session_id = ? AND timestamp < ? AND cold = 0"
+	result, err := tx.ExecContext(ctx, query, sessionID, before.Unix())
+	if err != nil {
+		return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: mark cold failed", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		//nolint:nilerr
+		return 0, nil
+	}
+
+	if affected > 0 {
+		insertLog := `INSERT INTO episodic_events_change_log
+			(session_id, changed_at, change_type, affected_count)
+			VALUES (?, ?, 'mark_cold', ?)`
+		if _, err := tx.ExecContext(ctx, insertLog, sessionID, time.Now().Unix(), affected); err != nil {
+			return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: write change_log failed", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, perrors.Wrap(perrors.CodeInternal, "episodic_mem: commit tx failed", err)
+	}
+
+	return int(affected), nil
 }
 
 // truncateEpisodicPayload 将超限 Payload 落盘，返回含 log_ref 占位符的截断版本。

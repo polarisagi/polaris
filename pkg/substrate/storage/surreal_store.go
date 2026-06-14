@@ -207,6 +207,9 @@ func (s *SurrealDBCoreStore) Scan(_ context.Context, prefix []byte) (protocol.It
 	rc := surrealKvScan(bytePtrOrNil(prefix), uintptr(len(prefix)), &outJSON)
 	runtime.KeepAlive(prefix)
 	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_kv_scan: code %d", rc))
 	}
 	jsonStr := readCStringAndFree(outJSON)
@@ -265,6 +268,9 @@ func (s *SurrealDBCoreStore) Stats() (string, error) {
 	var outJSON uintptr
 	rc := surrealStats(&outJSON)
 	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
 		return "", perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_stats: code %d", rc))
 	}
 	return readCStringAndFree(outJSON), nil
@@ -300,6 +306,9 @@ func (s *SurrealDBCoreStore) VecKNN(query []float32, k int) ([]ScoredID, error) 
 	rc := surrealVecKnn(&query[0], uintptr(len(query)), uintptr(k), &outJSON)
 	runtime.KeepAlive(query)
 	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_vec_knn: code %d", rc))
 	}
 	return parseScoredJSON(readCStringAndFree(outJSON))
@@ -334,6 +343,9 @@ func (s *SurrealDBCoreStore) GraphSpreadingActivation(startIDs []string, maxDept
 		&outJSON,
 	)
 	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_graph_spreading_activation: code %d", rc))
 	}
 	return parseScoredJSON(readCStringAndFree(outJSON))
@@ -344,6 +356,9 @@ func (s *SurrealDBCoreStore) GraphTraverse(startID, edgeType string, maxDepth in
 	var outJSON uintptr
 	rc := surrealGraphTraverse(startID, edgeType, uintptr(maxDepth), &outJSON)
 	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_graph_traverse: code %d", rc))
 	}
 	return parseIDsJSON(readCStringAndFree(outJSON))
@@ -363,6 +378,9 @@ func (s *SurrealDBCoreStore) FTSSearch(query string, k int) ([]ScoredID, error) 
 	var outJSON uintptr
 	rc := surrealFTSSearch(query, uintptr(k), &outJSON)
 	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
 		return nil, perrors.New(perrors.CodeInternal, fmt.Sprintf("surreal_fts_search: code %d", rc))
 	}
 	return parseScoredJSON(readCStringAndFree(outJSON))

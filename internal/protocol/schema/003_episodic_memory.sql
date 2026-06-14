@@ -48,3 +48,17 @@ CREATE TABLE IF NOT EXISTS memory_group_mapping (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mgm_group ON memory_group_mapping(group_id);
+
+-- ----------------------------------------------------------------------------
+-- episodic_events_change_log: 事件冷冻操作审计日志
+-- 生产者: M5 EpisodicMem.MarkCold
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS episodic_events_change_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT    NOT NULL,
+    changed_at     INTEGER NOT NULL,
+    change_type    TEXT    NOT NULL,
+    affected_count INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ep_change_log_session ON episodic_events_change_log(session_id, changed_at);

@@ -13,10 +13,10 @@ type TokenOperation struct {
 	Params   map[string]any
 }
 
-var globalTokenManager *policy.TokenManager
+var GlobalTokenManager *policy.TokenManager
 
 func init() {
-	globalTokenManager, _ = policy.NewTokenManager()
+	GlobalTokenManager, _ = policy.NewTokenManager()
 }
 
 func opsToCapabilities(ops []TokenOperation) []policy.CapabilityType {
@@ -60,7 +60,7 @@ func NewJITToken(agentID, sessionID string, ops []TokenOperation, depth int, san
 	if depth >= 3 {
 		return nil, ErrMaxDelegationDepth
 	}
-	return globalTokenManager.Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute)
+	return GlobalTokenManager.Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute)
 }
 
 // ValidateDelegation 校验委托链。
@@ -71,12 +71,12 @@ func ValidateDelegation(parentToken *policy.Token, parentDepth int, agentID, ses
 	if parentDepth >= 2 {
 		return nil, ErrMaxDelegationDepth
 	}
-	if err := globalTokenManager.Verify(parentToken); err != nil {
+	if err := GlobalTokenManager.Verify(parentToken); err != nil {
 		return nil, ErrTokenInvalid
 	}
 
-	// 规则2: 沙箱单调 (target 级别不得高于 caller，数字越大级别越高)
-	if targetSandboxTier > parentToken.Claims.SandboxTier {
+	// 规则2: 沙箱单调 (target 隔离不得弱于 caller，数字越大隔离越强)
+	if targetSandboxTier < parentToken.Claims.SandboxTier {
 		return nil, ErrSandboxTierEscalation
 	}
 
@@ -88,7 +88,7 @@ func ValidateDelegation(parentToken *policy.Token, parentDepth int, agentID, ses
 	}
 
 	// Sign sub token
-	return globalTokenManager.Mint(agentID, effectiveCaps, targetSandboxTier, 5*time.Minute)
+	return GlobalTokenManager.Mint(agentID, effectiveCaps, targetSandboxTier, 5*time.Minute)
 }
 
 var (

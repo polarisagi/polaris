@@ -5045,6 +5045,7 @@ dependencies = [
  "capnp",
  "cedar-policy",
  "lazy_static",
+ "libc",
  "serde",
  "serde_json",
  "surrealdb",

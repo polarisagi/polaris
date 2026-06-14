@@ -744,6 +744,15 @@ fn run_with_timeout(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {}", e))?;
 
     // 提前取走管道句柄，交给读取线程——必须在 try_wait 循环前完成，
@@ -783,7 +792,13 @@ fn run_with_timeout(
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if std::time::Instant::now() > deadline {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+                    }
+                    #[cfg(not(unix))]
                     let _ = child.kill();
+
                     // kill 后管道 EOF，线程自然结束
                     let _ = t_out.join();
                     let _ = t_err.join();
@@ -792,7 +807,13 @@ fn run_with_timeout(
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
+                #[cfg(unix)]
+                unsafe {
+                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+                }
+                #[cfg(not(unix))]
                 let _ = child.kill();
+
                 let _ = t_out.join();
                 let _ = t_err.join();
                 return Err(format!("wait failed: {}", e));

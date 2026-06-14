@@ -8,13 +8,14 @@ package tool
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/action"
+	"github.com/polarisagi/polaris/pkg/substrate/policy"
 )
 
 // InMemoryToolRegistry 实现 protocol.ToolRegistry。
@@ -147,12 +148,17 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool proto
 			Error:   "tool_registry: policy gate not initialized, refusing tool call (fail-closed)",
 		}, perrors.New(perrors.CodeInternal, "tool_registry: policy gate not initialized")
 	}
+
+	tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
+	tok, _ := tokenVal.(*policy.Token)
+	tokenValid := validateToken(tok, tool.Name)
+
 	allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "tool_execute", tool.Name,
 		map[string]any{
 			"tool_source":            string(tool.Source),
 			"risk_level":             int(tool.RiskLevel),
 			"trust_level":            toolTrustLevel(tool.Source),
-			"capability_token_valid": tool.Capability <= protocol.CapReadOnly,
+			"capability_token_valid": tokenValid,
 		})
 	if pErr != nil || !allowed {
 		reason := "policy denied"
@@ -180,12 +186,8 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool proto
 		}
 	}
 
-	if tool.Capability > protocol.CapReadOnly {
-		tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
-		tokenStr, ok := tokenVal.(string)
-		if !ok || !validateToken(tokenStr, tool.Name) {
-			return nil, perrors.New(perrors.CodeForbidden, "missing/invalid capability token for non-readonly tool")
-		}
+	if !tokenValid {
+		return nil, perrors.New(perrors.CodeForbidden, "missing/invalid capability token for tool")
 	}
 
 	if dryRun, ok := ctx.Value(protocol.CtxDryRun{}).(bool); ok && dryRun {
@@ -211,8 +213,11 @@ func isShellTool(t protocol.Tool) bool {
 }
 
 // validateToken 校验 Capability Token 的合法性。
-func validateToken(token string, toolName string) bool {
-	return len(token) > 0 && strings.HasPrefix(token, "cap-")
+func validateToken(tok *policy.Token, toolName string) bool {
+	if tok == nil {
+		return false
+	}
+	return action.GlobalTokenManager.Verify(tok) == nil
 }
 
 // isReversible 判断工具副作用是否可逆。

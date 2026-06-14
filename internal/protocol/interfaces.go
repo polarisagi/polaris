@@ -797,6 +797,7 @@ type HITLPrompt struct {
 	PromptText     string
 	Options        []HITLOption
 	DeadlineNs     int64
+	RiskLevel      int
 }
 
 type HITLOption struct {
@@ -807,6 +808,8 @@ type HITLOption struct {
 type HITLResponse struct {
 	OptionKey string
 	UserID    string
+	Approved  bool
+	Reason    string
 }
 
 // ============================================================================

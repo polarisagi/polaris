@@ -304,6 +304,7 @@ const (
 	AgentStateComplete                    // S_COMPLETE: 成功终态
 	AgentStateFailed                      // S_FAILED: 失败终态（ReplanGuard 超限）
 	AgentStateInterrupt                   // S_INTERRUPT: 用户中断暂停态（非终态，可 Resume/Redirect/Abort）
+	AgentStateSuspended                   // S_SUSPENDED: 空闲挂起（Suspend-on-Idle）
 )
 
 type AgentTrigger int

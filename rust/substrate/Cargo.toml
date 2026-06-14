@@ -23,6 +23,9 @@ lazy_static = "1.5.0"
 anyhow = "1.0.102"
 bytes = "1.11.1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lib]
 crate-type = ["staticlib", "cdylib"]
 

@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/action"
+	"github.com/polarisagi/polaris/pkg/substrate/policy"
 )
 
 type dummyDialer struct {
@@ -29,6 +31,11 @@ func (mockPolicy) Review(ctx context.Context, req protocol.PolicyReviewRequest) 
 	return protocol.PolicyReviewResult{Allowed: true}, nil
 }
 
+func mockToken(caps []policy.CapabilityType) *policy.Token {
+	tok, _ := action.GlobalTokenManager.Mint("agent1", caps, 1, 5*time.Minute)
+	return tok
+}
+
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -45,7 +52,9 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"path": testFile})
-	result, err := toolReg.ExecuteTool(context.Background(), "read_file", args, protocol.TaintNone)
+	tok := mockToken([]policy.CapabilityType{policy.CapFS})
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	result, err := toolReg.ExecuteTool(ctx, "read_file", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool read_file: %v", err)
 	}
@@ -67,7 +76,9 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"path": "/etc/passwd"})
-	result, err := toolReg.ExecuteTool(context.Background(), "read_file", args, protocol.TaintNone)
+	tok := mockToken([]policy.CapabilityType{policy.CapFS})
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	result, err := toolReg.ExecuteTool(ctx, "read_file", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool should not return err: %v", err)
 	}
@@ -91,7 +102,9 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("b"), 0o600)
 
 	args, _ := json.Marshal(map[string]string{"path": tmpDir})
-	result, err := toolReg.ExecuteTool(context.Background(), "list_dir", args, protocol.TaintNone)
+	tok := mockToken([]policy.CapabilityType{policy.CapFS})
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	result, err := toolReg.ExecuteTool(ctx, "list_dir", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool list_dir: %v", err)
 	}
@@ -127,7 +140,8 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 		"content": "written by agent",
 		"append":  false,
 	})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, "cap-write_file-token")
+	tok := mockToken([]policy.CapabilityType{policy.CapFS})
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
 	result, err := toolReg.ExecuteTool(ctx, "write_file", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool write_file: %v", err)
@@ -161,7 +175,8 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	}
 	for _, url := range blocked {
 		args, _ := json.Marshal(map[string]string{"url": url})
-		ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, "cap-fetch_url-token")
+		tok := mockToken([]policy.CapabilityType{policy.CapNetwork})
+		ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
 		result, err := toolReg.ExecuteTool(ctx, "fetch_url", args, protocol.TaintNone)
 		if err != nil {
 			t.Fatalf("ExecuteTool should not return err: %v", err)
@@ -181,7 +196,8 @@ func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"url": "https://example.com/api"})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, "cap-fetch_url-token")
+	tok := mockToken([]policy.CapabilityType{policy.CapNetwork})
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
 	result, err := toolReg.ExecuteTool(ctx, "fetch_url", args, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool fetch_url: %v", err)

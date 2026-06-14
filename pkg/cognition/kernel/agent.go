@@ -46,9 +46,10 @@ type Agent struct {
 }
 
 type AgentConfig struct {
-	MaxReplan     int
-	DefaultBudget int
-	MaxSteps      int
+	MaxReplan      int
+	DefaultBudget  int
+	MaxSteps       int
+	IdleTimeoutSec int
 	// SystemTier 对应硬件层级（0=Tier0/8GB, 1+=Tier1+）。
 	// L3 LLM 看门狗仅在 SystemTier >= 1 时激活。
 	// 由 M3 HardwareProbe 探测结果注入。
@@ -104,18 +105,28 @@ func NewAgentWithDefaults(id string) *Agent {
 
 // Run 启动 Agent 事件循环（Suspend-on-Idle）。
 // 空闲时阻塞在 intent channel 上，不轮询——符合 par_inv_05。
+//
+//nolint:gocyclo
 func (a *Agent) Run(ctx context.Context) error {
 	// 从 AgentConfig 初始化步骤预算（仅在首次 Run 时设置，支持外部注入覆盖）
 	if a.Config.MaxSteps > 0 && a.sCtx.MaxStepsLimit == 0 {
 		a.sCtx.MaxStepsLimit = a.Config.MaxSteps
 		a.sCtx.InitialMaxStepsLimit = a.Config.MaxSteps
 	}
+	idleTimeout := a.Config.IdleTimeoutSec
+	if idleTimeout <= 0 {
+		idleTimeout = 300
+	}
+	idleTimer := time.NewTimer(time.Duration(idleTimeout) * time.Second)
+	defer idleTimer.Stop()
+
 	for {
 		// 动态加载已安装插件信息
 		a.refreshInstalledExtensions(ctx)
 
 		select {
 		case trigger := <-a.intent:
+			idleTimer.Reset(time.Duration(idleTimeout) * time.Second)
 			// Adaptive Max-Steps: 步骤计数 + 预算熔断
 			a.sCtx.StepsUsed++
 			if a.sCtx.MaxStepsLimit > 0 && a.sCtx.StepsUsed > a.sCtx.MaxStepsLimit {
@@ -154,6 +165,11 @@ func (a *Agent) Run(ctx context.Context) error {
 				return nil
 			}
 
+		case <-idleTimer.C:
+			// Suspend-on-Idle：持久化状态后退出，由上层 Supervisor 决定是否重启
+			a.sm.history = append(a.sm.history, a.sm.current)
+			a.sm.current = protocol.AgentStateSuspended
+			return ErrIdleTimeout
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -400,6 +416,7 @@ func (g *defaultTaintGate) Gate(level int) error {
 
 var (
 	ErrReplanExhausted = perrors.New(perrors.CodeResourceExhausted, "replan guard: max replan count reached, escalate to HITL")
+	ErrIdleTimeout     = perrors.New(perrors.CodeResourceExhausted, "agent idle timeout")
 	errTaintViolation  = perrors.ErrTaintViolation
 )
 

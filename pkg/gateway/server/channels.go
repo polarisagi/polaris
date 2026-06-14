@@ -2,13 +2,17 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,8 +425,19 @@ func (s *Server) verifyWebhookSource(w http.ResponseWriter, r *http.Request, cha
 		return s.verifyWhatsAppWebhook(w, r, cfg)
 	case "teams":
 		return s.verifyTeamsWebhook(w, r)
+	case "telegram":
+		return s.verifyTelegramWebhook(w, r, cfg)
+	case "slack":
+		return s.verifySlackWebhook(w, r, cfg, body)
+	case "discord":
+		return s.verifyDiscordWebhook(w, r, cfg, body)
+	default:
+		if secret, _ := cfg["webhook_secret"].(string); secret != "" {
+			// 通用 HMAC-SHA256 验证（X-Hub-Signature-256 header）
+			return s.verifyGenericHMAC(w, r, secret, body)
+		}
+		return true // 无 secret 配置则放行（向后兼容）
 	}
-	return true
 }
 
 func (s *Server) verifyLineWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) bool {
@@ -467,4 +482,101 @@ func (s *Server) verifyTeamsWebhook(w http.ResponseWriter, r *http.Request) bool
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte(vt)) //nolint:errcheck
 	return false
+}
+
+func (s *Server) verifyTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any) bool {
+	botToken, ok := cfg["bot_token"].(string)
+	if !ok || botToken == "" {
+		return true // 无 token 则放行（向后兼容）
+	}
+	secretToken := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+	if secretToken == "" {
+		slog.Warn("telegram webhook: missing X-Telegram-Bot-Api-Secret-Token")
+		return true // 测试环境放行
+	}
+	mac := hmac.New(sha256.New, []byte("WebAppData"))
+	mac.Write([]byte(botToken))
+	expectedToken := hex.EncodeToString(mac.Sum(nil))
+	if secretToken != expectedToken {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func (s *Server) verifySlackWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) bool {
+	secret, ok := cfg["signing_secret"].(string)
+	if !ok || secret == "" {
+		return true
+	}
+	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
+	if timestamp == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil || time.Since(time.Unix(ts, 0)) > 5*time.Minute {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	sig := r.Header.Get("X-Slack-Signature")
+	if !strings.HasPrefix(sig, "v0=") {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(fmt.Sprintf("v0:%s:%s", timestamp, body)))
+	expectedSig := "v0=" + hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func (s *Server) verifyDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) bool {
+	pubKeyStr, ok := cfg["public_key"].(string)
+	if !ok || pubKeyStr == "" {
+		return true
+	}
+	pubKey, err := hex.DecodeString(pubKeyStr)
+	if err != nil || len(pubKey) != ed25519.PublicKeySize {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	sigStr := r.Header.Get("X-Signature-Ed25519")
+	ts := r.Header.Get("X-Signature-Timestamp")
+	if sigStr == "" || ts == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	sig, err := hex.DecodeString(sigStr)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	msg := []byte(ts)
+	msg = append(msg, body...)
+	if !ed25519.Verify(pubKey, msg, sig) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func (s *Server) verifyGenericHMAC(w http.ResponseWriter, r *http.Request, secret string, body []byte) bool {
+	sig := r.Header.Get("X-Hub-Signature-256")
+	if sig == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	sig = strings.TrimPrefix(sig, "sha256=")
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
 }

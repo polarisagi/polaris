@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/action"
+	"github.com/polarisagi/polaris/pkg/substrate/policy"
 )
 
 // ─── mock：PolicyGate ───────────────────────────────────────────────────────
@@ -55,6 +58,15 @@ func minTool(name string) protocol.Tool {
 		Name:   name,
 		Source: protocol.ToolBuiltin,
 	}
+}
+
+func mockTokenForTest() *policy.Token {
+	tok, _ := action.GlobalTokenManager.Mint("test-agent", []policy.CapabilityType{policy.CapProcess}, 1, 5*time.Minute)
+	return tok
+}
+
+func ctxWithToken() context.Context {
+	return context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, mockTokenForTest())
 }
 
 // newAllowRegistry 创建带 allow 策略的注册表。
@@ -133,7 +145,7 @@ func TestList_Multiple(t *testing.T) {
 
 func TestExecuteTool_ToolNotRegistered(t *testing.T) {
 	r := newAllowRegistry()
-	_, err := r.ExecuteTool(context.Background(), "ghost", []byte("x"), protocol.TaintNone)
+	_, err := r.ExecuteTool(ctxWithToken(), "ghost", []byte("x"), protocol.TaintNone)
 	if err == nil {
 		t.Fatal("未注册工具 ExecuteTool 应返回 error")
 	}
@@ -142,7 +154,7 @@ func TestExecuteTool_ToolNotRegistered(t *testing.T) {
 func TestExecuteTool_PolicyNil(t *testing.T) {
 	r := NewInMemoryToolRegistry(nil)
 	_ = r.Register(minTool("test-tool"))
-	res, err := r.ExecuteTool(context.Background(), "test-tool", []byte("x"), protocol.TaintNone)
+	res, err := r.ExecuteTool(ctxWithToken(), "test-tool", []byte("x"), protocol.TaintNone)
 	if err == nil {
 		t.Fatal("expected error when policy is nil")
 	}
@@ -156,7 +168,7 @@ func TestExecuteTool_NoSandbox_ReturnsInput(t *testing.T) {
 	_ = r.Register(minTool("echo"))
 
 	input := []byte("hello")
-	res, err := r.ExecuteTool(context.Background(), "echo", input, protocol.TaintNone)
+	res, err := r.ExecuteTool(ctxWithToken(), "echo", input, protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool 意外 error: %v", err)
 	}
@@ -172,7 +184,7 @@ func TestExecuteTool_PolicyDenied(t *testing.T) {
 	r := NewInMemoryToolRegistry(&mockPolicyGate{allow: false})
 	_ = r.Register(minTool("secret"))
 
-	res, err := r.ExecuteTool(context.Background(), "secret", []byte("x"), protocol.TaintNone)
+	res, err := r.ExecuteTool(ctxWithToken(), "secret", []byte("x"), protocol.TaintNone)
 	// policy deny 时应返回 nil err + Success=false（不泄露内部错误）
 	if err != nil {
 		t.Fatalf("policy deny 不应返回底层 error，实际: %v", err)
@@ -190,7 +202,7 @@ func TestExecuteTool_SandboxError(t *testing.T) {
 	_ = r.Register(minTool("boom"))
 	r.SetSandbox(&mockSandbox{err: perrors.New(perrors.CodeInternal, "sandbox kaboom")})
 
-	res, err := r.ExecuteTool(context.Background(), "boom", []byte("x"), protocol.TaintNone)
+	res, err := r.ExecuteTool(ctxWithToken(), "boom", []byte("x"), protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("sandbox 错误不应作为函数 error 返回，实际: %v", err)
 	}
@@ -207,7 +219,7 @@ func TestExecuteTool_SandboxSuccess(t *testing.T) {
 	_ = r.Register(minTool("ok"))
 	r.SetSandbox(&mockSandbox{output: []byte("world")})
 
-	res, err := r.ExecuteTool(context.Background(), "ok", []byte("hello"), protocol.TaintNone)
+	res, err := r.ExecuteTool(ctxWithToken(), "ok", []byte("hello"), protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("意外 error: %v", err)
 	}
@@ -223,7 +235,7 @@ func TestExecuteTool_TaintPropagation(t *testing.T) {
 	r := newAllowRegistry()
 	_ = r.Register(minTool("tainted"))
 
-	res, err := r.ExecuteTool(context.Background(), "tainted", []byte("x"), protocol.TaintHigh)
+	res, err := r.ExecuteTool(ctxWithToken(), "tainted", []byte("x"), protocol.TaintHigh)
 	if err != nil {
 		t.Fatalf("意外 error: %v", err)
 	}
@@ -243,7 +255,7 @@ func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 	_ = r.Register(shellTool)
 
 	// 不注入 sandbox，验证路径不 panic，能正常返回
-	res, err := r.ExecuteTool(context.Background(), "run-sh", []byte("ls"), protocol.TaintNone)
+	res, err := r.ExecuteTool(ctxWithToken(), "run-sh", []byte("ls"), protocol.TaintNone)
 	if err != nil {
 		t.Fatalf("shell 工具 ExecuteTool 不应 panic/error: %v", err)
 	}
@@ -259,7 +271,7 @@ func TestExecuteTool_PolicyError(t *testing.T) {
 	r := NewInMemoryToolRegistry(&mockPolicyGateWithError{})
 	_ = r.Register(minTool("err-tool"))
 
-	result, err := r.ExecuteTool(context.Background(), "err-tool", nil, protocol.TaintNone)
+	result, err := r.ExecuteTool(ctxWithToken(), "err-tool", nil, protocol.TaintNone)
 	// policy engine 返回 error 时应返回 nil err + Success=false（不泄露内部错误）
 	if err != nil {
 		t.Fatalf("不期望底层 error: %v", err)
@@ -279,7 +291,7 @@ func TestExecuteTool_ContextCancelled_PolicyStillRuns(t *testing.T) {
 	r := NewInMemoryToolRegistry(&mockPolicyGate{allow: true})
 	_ = r.Register(minTool("ctx-tool"))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctxWithToken())
 	cancel()
 
 	result, err := r.ExecuteTool(ctx, "ctx-tool", []byte("data"), protocol.TaintNone)

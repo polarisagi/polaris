@@ -21,18 +21,18 @@ func TestValidateDelegation_SandboxTier(t *testing.T) {
 		t.Errorf("sub token tier mismatch")
 	}
 
-	// 2. 降级委托 (2 -> 1)
-	subTok2, err := ValidateDelegation(parentTok, 1, "agent-B", "session-1", ops, 1)
+	// 2. 提升隔离度委托 (2 -> 3) (更安全，应允许)
+	subTok2, err := ValidateDelegation(parentTok, 1, "agent-B", "session-1", ops, 3)
 	if err != nil {
-		t.Errorf("expected success for lower tier delegation, got: %v", err)
+		t.Errorf("expected success for stronger isolation delegation, got: %v", err)
 	}
-	if subTok2 == nil || subTok2.Claims.SandboxTier != 1 {
+	if subTok2 == nil || subTok2.Claims.SandboxTier != 3 {
 		t.Errorf("sub token tier mismatch")
 	}
 
-	// 3. 升级委托 (2 -> 3) - 应该失败
-	_, err = ValidateDelegation(parentTok, 1, "agent-B", "session-1", ops, 3)
+	// 3. 降低隔离度委托 (2 -> 1) - 越权（沙箱逃逸），应该失败
+	_, err = ValidateDelegation(parentTok, 1, "agent-B", "session-1", ops, 1)
 	if err != ErrSandboxTierEscalation {
-		t.Errorf("expected ErrSandboxTierEscalation for tier escalation, got: %v", err)
+		t.Errorf("expected ErrSandboxTierEscalation for isolation downgrade, got: %v", err)
 	}
 }
