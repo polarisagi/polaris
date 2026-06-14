@@ -122,6 +122,10 @@ type StateContext struct {
 	// GroundingGap 记录知识接地的缺口信息，由 WorldModel.AssessGrounding 产出，用于注入 Prompt
 	GroundingGap string
 
+	// BlindZoneHITLRequired 标记本次任务被 BlindZoneDetector 判定为盲区候选。
+	// S_PLAN 阶段写入（agent_execute.go），S_VALIDATE 阶段读取以触发 HITL 检查点。
+	BlindZoneHITLRequired bool
+
 	// SkillVersions 记录已注入的技能版本，用于验证版本单调性
 	SkillVersions map[string]int64
 }

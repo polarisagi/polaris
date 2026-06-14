@@ -439,3 +439,23 @@ Go 内存内统一为 `pkg/substrate/taint.go` 的 `TaintLevel` 枚举类型 (in
 ## §13 标识符↔概念映射表(命名一致性 SSoT)
 
 命名规范统一在 [`docs/specs/00-Constitution.md §R2`](../specs/00-Constitution.md) 维护(动词/名词/量纲/错误码/指标 5 张表)。本字典 §12 [标签→实现文件追溯] 仍是概念→代码的查阅源。
+
+## §V8-Principle：哥德尔边界原则
+
+**[Concept:V8-GoedelBoundary]**
+
+Polaris 是一个足够强大的系统。根据哥德尔不完备性定理的工程类比，
+任何足够强大的自验证系统都包含其无法从内部识别的真盲区。
+
+**工程约束**：系统的每一层自我验证必须对应一个**不随系统演化而演化**的外部参照锚点：
+
+| 自我验证层 | 盲区类型 | 外部锚点 |
+|-----------|---------|---------|
+| MEMF 失败记忆 | B3 认知死区 | S4 BlindZone Detector |
+| EvalHarness 目标函数 | B1 目标函数漂移 | S2 Meta-Eval Sentinel |
+| 连续采样滚动基线 | B4 无绝对锚点 | S3 Founding Behavioral Anchor |
+| LLM-as-Judge | B2 相关评判偏差 | S1 Red Team Protocol + L5 Human |
+| KillSwitch 自动触发 | — | Stage 3 FULLSTOP 需人工 unseal |
+
+**禁止规则**：禁止用自动化机制替换上述任何外部锚点。
+越自动化的系统，越需要保留这些独立的验证节点。

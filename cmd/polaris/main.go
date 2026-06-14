@@ -176,6 +176,8 @@ func run() error { //nolint:gocyclo
 		tbr = observability.NewTokenBurnRate()
 	}
 
+	observability.GetFoundingAnchorDriftScore = eval.GetGlobalDriftScore
+
 	// ─── 0.35 KillSwitch 初始化 ────────────────────────────────────────────────
 	// 启动前先检查封印文件：若存在则拒绝启动（FullStop 状态跨重启持久化）
 	if substrate.IsFullStopFilePresent(dataDir) {

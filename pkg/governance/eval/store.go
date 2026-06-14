@@ -53,7 +53,12 @@ func (s *SQLiteEvalStore) GetValidationCases(ctx context.Context, agentRole stri
 
 // PutCase 保存一个新的 EvalCase 到指定分区 (training 或 validation)。
 func (s *SQLiteEvalStore) PutCase(ctx context.Context, partition, agentRole string, c EvalCase) error {
-	if partition != "training" && partition != "validation" {
+	validPartitions := map[string]bool{
+		"training":     true,
+		"validation":   true,
+		"meta_holdout": true, // V8-S2: Meta-Eval 专属分区，密钥与 Holdout 分离
+	}
+	if !validPartitions[partition] {
 		return perrors.New(perrors.CodeInternal, fmt.Sprintf("eval_store: invalid partition %s", partition))
 	}
 	key := fmt.Sprintf("eval:case:%s:%s:%s", partition, agentRole, c.ID)

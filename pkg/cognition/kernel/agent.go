@@ -22,27 +22,28 @@ import (
 
 // Agent 是系统核心执行单元——一个 goroutine，空闲时挂起。
 type Agent struct {
-	ID              string
-	db              *sql.DB
-	intent          chan protocol.AgentTrigger
-	sm              *StateMachine
-	sCtx            *StateContext
-	Config          AgentConfig
-	ctx             context.Context
-	cancel          context.CancelFunc
-	taintGate       TaintGate
-	provider        protocol.Provider             // LLM 调用入口（由 M1 提供）
-	policyGate      protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
-	hitl            protocol.HITL                 // 人工审批网关
-	toolRegistry    protocol.ToolRegistry         // 工具注册表（由 M7 提供）
-	memory          protocol.Memory               // 四层记忆系统（由 M5 提供）
-	worldModel      WorldModel                    // 认知世界模型，nil 时安全降级
-	prm             *prm.DefaultPRM               // 可选；nil 时跳过多候选打分
-	scorer          *stepScorer                   // Adaptive Max-Steps 打分器
-	whisperChan     <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
-	whisperSendChan chan<- protocol.MemoryWhisper // PlannerPool 推送端
-	plannerSpawner  func(ctx context.Context, goal, taskType string, provider protocol.Provider)
-	outboxWriter    protocol.OutboxWriter
+	ID                string
+	db                *sql.DB
+	intent            chan protocol.AgentTrigger
+	sm                *StateMachine
+	sCtx              *StateContext
+	Config            AgentConfig
+	ctx               context.Context
+	cancel            context.CancelFunc
+	taintGate         TaintGate
+	provider          protocol.Provider             // LLM 调用入口（由 M1 提供）
+	policyGate        protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
+	hitl              protocol.HITL                 // 人工审批网关
+	toolRegistry      protocol.ToolRegistry         // 工具注册表（由 M7 提供）
+	memory            protocol.Memory               // 四层记忆系统（由 M5 提供）
+	worldModel        WorldModel                    // 认知世界模型，nil 时安全降级
+	prm               *prm.DefaultPRM               // 可选；nil 时跳过多候选打分
+	blindZoneDetector BlindZoneDetector             // 可选；nil 时跳过盲区检查
+	scorer            *stepScorer                   // Adaptive Max-Steps 打分器
+	whisperChan       <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
+	whisperSendChan   chan<- protocol.MemoryWhisper // PlannerPool 推送端
+	plannerSpawner    func(ctx context.Context, goal, taskType string, provider protocol.Provider)
+	outboxWriter      protocol.OutboxWriter
 }
 
 type AgentConfig struct {
@@ -54,6 +55,12 @@ type AgentConfig struct {
 	// L3 LLM 看门狗仅在 SystemTier >= 1 时激活。
 	// 由 M3 HardwareProbe 探测结果注入。
 	SystemTier int
+}
+
+// BlindZoneDetector 盲区探测器接口，打破 L1 到 L2 的依赖。
+type BlindZoneDetector interface {
+	RecordProduction(taskType string)
+	IsBlindZone(taskType string) bool
 }
 
 func NewAgent(id string, db *sql.DB, taintGate TaintGate, provider protocol.Provider) *Agent {
@@ -224,6 +231,12 @@ func (a *Agent) InjectProvider(p protocol.Provider) { a.provider = p }
 
 // InjectPRM 注入过程奖励模型（可选）。注入后 S_PLAN 阶段对复杂任务启用多候选打分。
 func (a *Agent) InjectPRM(p *prm.DefaultPRM) { a.prm = p }
+
+// InjectBlindZoneDetector 注入认知盲区探测器（可选）。
+// 注入后，S_PLAN 阶段对生产出现≥5次但 MEMF 零记录的任务类型强制 System2 路由。
+func (a *Agent) InjectBlindZoneDetector(d BlindZoneDetector) {
+	a.blindZoneDetector = d
+}
 
 // InjectPolicyGate 注入 Cedar PolicyGate（允许运行时替换，例如用于单元测试注入 mock）。
 func (a *Agent) InjectPolicyGate(pg protocol.PolicyGate) { a.policyGate = pg }

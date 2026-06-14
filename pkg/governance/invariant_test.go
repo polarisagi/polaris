@@ -11,8 +11,10 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/governance/eval"
 	"github.com/polarisagi/polaris/pkg/substrate"
-	"github.com/polarisagi/polaris/pkg/substrate/policy"
+	subpolicy "github.com/polarisagi/polaris/pkg/substrate/policy"
+	"github.com/polarisagi/polaris/pkg/swarm"
 )
 
 // TestInvariant5_SeparationOfConcerns [HE-Rule-5]
@@ -70,20 +72,20 @@ func TestInvariant5_SeparationOfConcerns(t *testing.T) {
 		}
 
 		// TaintGate 确保 TaintHigh 不得写入 instruction slot（M11 D1 防线）
-		gate := &policy.TaintGate{}
+		gate := &subpolicy.TaintGate{}
 
 		// data 槽应接受 TaintHigh
-		if err := gate.CheckSlotAssignment(policy.SlotData, protocol.TaintHigh); err != nil {
+		if err := gate.CheckSlotAssignment(subpolicy.SlotData, protocol.TaintHigh); err != nil {
 			t.Errorf("[HE-Rule-5] data 槽应接受 TaintHigh，实际错误: %v", err)
 		}
 
 		// instruction 槽禁止 TaintHigh（prompt injection 防线）
-		if err := gate.CheckSlotAssignment(policy.SlotInstruction, protocol.TaintHigh); err == nil {
+		if err := gate.CheckSlotAssignment(subpolicy.SlotInstruction, protocol.TaintHigh); err == nil {
 			t.Error("[HE-Rule-5] instruction 槽应拒绝 TaintHigh，实际通过——M11 D1 防线失效")
 		}
 
 		// system 槽只允许 TaintNone（系统常量）
-		if err := gate.CheckSlotAssignment(policy.SlotSystem, protocol.TaintLow); err == nil {
+		if err := gate.CheckSlotAssignment(subpolicy.SlotSystem, protocol.TaintLow); err == nil {
 			t.Error("[HE-Rule-5] system 槽应拒绝 TaintLow，实际通过")
 		}
 	})
@@ -116,13 +118,13 @@ func TestFullSafetyChain(t *testing.T) {
 	}
 
 	// Step 2: TaintGate 阻止 TaintHigh 注入 instruction slot（M11 §2.1 D1 防线）
-	gate := &policy.TaintGate{}
-	if err := gate.CheckSlotAssignment(policy.SlotInstruction, tainted.Level()); err == nil {
+	gate := &subpolicy.TaintGate{}
+	if err := gate.CheckSlotAssignment(subpolicy.SlotInstruction, tainted.Level()); err == nil {
 		t.Fatal("[SafetyChain] Step2: TaintHigh 内容注入 instruction slot 应被拒绝（M11 D1 失效）")
 	}
 
 	// Step 3: TaintGate 出口检查阻止 TaintHigh 直接输出到外部接口
-	if err := gate.CheckSlotAssignment(policy.SlotSystem, tainted.Level()); err == nil {
+	if err := gate.CheckSlotAssignment(subpolicy.SlotSystem, tainted.Level()); err == nil {
 		t.Fatal("[SafetyChain] Step3: TaintHigh 内容写入 system slot 应被拒绝")
 	}
 
@@ -148,4 +150,106 @@ func TestFullSafetyChain(t *testing.T) {
 	}
 	// 但围栏标记不得直接写入 instruction slot（已由 Step2 保证）
 
+}
+
+// TestInvariant_V8_BlindZoneDetectorContract [V8-S4]
+//
+// 验证: BlindZoneDetector 核心合约。
+//  1. 出现 <5 次不触发盲区
+//  2. MarkResolved 后计数重置到阈值以下
+//  3. ExtractTaskType 确定性
+func TestInvariant_V8_BlindZoneDetectorContract(t *testing.T) {
+	t.Run("under_threshold_not_blindzone", func(t *testing.T) {
+		d := swarm.NewBlindZoneDetector(nil) // nil db：IsBlindZone 在 count<5 时直接返回 false
+		for i := 0; i < 4; i++ {
+			d.RecordProduction("test_task_type")
+		}
+		if d.IsBlindZone("test_task_type") {
+			t.Error("[V8-S4] 出现 <5 次的任务类型不应触发盲区")
+		}
+	})
+
+	t.Run("extract_task_type_deterministic", func(t *testing.T) {
+		goal := "Write a Python function to sort"
+		key1 := swarm.ExtractTaskType(goal)
+		key2 := swarm.ExtractTaskType(goal)
+		if key1 != key2 {
+			t.Errorf("[V8-S4] ExtractTaskType 非确定性: %q != %q", key1, key2)
+		}
+		if key1 == "" {
+			t.Error("[V8-S4] ExtractTaskType 不得返回空字符串")
+		}
+	})
+
+	t.Run("mark_resolved_clears_counter", func(t *testing.T) {
+		d := swarm.NewBlindZoneDetector(nil)
+		for i := 0; i < 6; i++ {
+			d.RecordProduction("sensitive_task")
+		}
+		d.MarkResolved("sensitive_task")
+		// 计数已重置到 <5，IsBlindZone 直接返回 false（无需 DB 查询）
+		if d.IsBlindZone("sensitive_task") {
+			t.Error("[V8-S4] MarkResolved 后盲区应解除")
+		}
+	})
+}
+
+// TestInvariant_V8_FoundingAnchorSignature [V8-S3]
+//
+// 验证: 创始锚点不变量。
+//  1. DriftWarnThreshold < DriftFreezeThreshold（阈值顺序不变量）
+//  2. 空指纹对比不触发 FREEZE
+//  3. 无签名/无公钥开发模式通过校验
+func TestInvariant_V8_FoundingAnchorSignature(t *testing.T) {
+	t.Run("threshold_ordering_invariant", func(t *testing.T) {
+		if eval.DriftWarnThreshold >= eval.DriftFreezeThreshold {
+			t.Errorf("[V8-S3] DriftWarnThreshold(%.2f) 必须 < DriftFreezeThreshold(%.2f)",
+				eval.DriftWarnThreshold, eval.DriftFreezeThreshold)
+		}
+	})
+
+	t.Run("empty_fingerprint_zero_drift", func(t *testing.T) {
+		anchor := &eval.FoundingAnchor{
+			Version:     "1.0",
+			Fingerprint: eval.BehaviorFingerprint{},
+		}
+		current := eval.BehaviorFingerprint{}
+		report := eval.CompareWithAnchor(anchor, current)
+		if report.ShouldFreeze {
+			t.Error("[V8-S3] 空指纹对比空指纹不应触发 FREEZE")
+		}
+		if report.OverallDriftScore > 0.01 {
+			t.Errorf("[V8-S3] 空指纹漂移评分应接近 0，实际: %.4f", report.OverallDriftScore)
+		}
+	})
+
+	t.Run("no_signature_dev_mode_passes", func(t *testing.T) {
+		anchor := &eval.FoundingAnchor{Signature: ""}
+		if !eval.VerifySignature(anchor, nil) {
+			t.Error("[V8-S3] 无签名/无公钥应在开发模式通过校验")
+		}
+	})
+}
+
+// TestInvariant_V8_MetaEvalFalsifiabilityFloor [V8-S2]
+//
+// 验证: MetaEvalSentinel 不变量。
+//  1. FalsifiabilityFloor 默认值 ≥ 0.6（防止测试被软化）
+//  2. MinBehaviorTypeCoverage 默认值 > 0
+func TestInvariant_V8_MetaEvalFalsifiabilityFloor(t *testing.T) {
+	t.Run("default_floor_not_below_0_6", func(t *testing.T) {
+		sentinel := eval.NewMetaEvalSentinel(nil)
+		if sentinel.FalsifiabilityFloor < 0.6 {
+			t.Errorf("[V8-S2] FalsifiabilityFloor 默认值不得低于 0.6，实际: %.2f",
+				sentinel.FalsifiabilityFloor)
+		}
+	})
+
+	t.Run("min_coverage_positive", func(t *testing.T) {
+		sentinel := eval.NewMetaEvalSentinel(nil)
+		if sentinel.MinBehaviorTypeCoverage <= 0 {
+			t.Errorf("[V8-S2] MinBehaviorTypeCoverage 必须 > 0，实际: %d",
+				sentinel.MinBehaviorTypeCoverage)
+		}
+	})
 }

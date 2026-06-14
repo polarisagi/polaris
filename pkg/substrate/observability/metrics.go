@@ -39,7 +39,13 @@ var (
 	// factuality_guard.go semanticJudge() 在 llm_judge_unavailable 时写入。
 	// OTel gauge 在 RegisterMetrics() 的 RegisterCallback 中注册。
 	GlobalFactualityJudgeUnavailableTotal atomic.Int64
+
+	// GlobalBlindZoneRoutingTotal 因 BlindZone 检测强制升级为 System2 的累计次数（V8-S4）。
+	GlobalBlindZoneRoutingTotal atomic.Int64
 )
+
+// GetFoundingAnchorDriftScore 由 policy 包在 main.go 中注入（避免包循环依赖）。
+var GetFoundingAnchorDriftScore func() float64 = func() float64 { return 0.0 }
 
 // TokenBurnRate tracks token consumption rate for circuit breaking.
 // 架构文档: docs/arch/M03-Observability-深度选型.md §3
@@ -366,6 +372,19 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		outboxDeadLetterGauge, _ := meter.Float64ObservableGauge("polaris.outbox.dead_letter_total")
 		factualityJudgeUnavailableGauge, _ := meter.Float64ObservableGauge("polaris.factuality.judge_unavailable_total")
 
+		// V8-S4: BlindZone 路由计数
+		blindZoneGauge, _ := meter.Float64ObservableGauge(
+			"polaris.blind_zone.routing_total",
+			metric.WithDescription("因 BlindZone 检测强制升级为 System2 的累计次数"),
+		)
+
+		// V8-S3: 创始锚点漂移评分
+		// 注意：若 policy 包导入形成循环，使用函数变量注入（见 §3.3 循环依赖处理）
+		anchorDriftGauge, _ := meter.Float64ObservableGauge(
+			"polaris.founding_anchor.drift_score",
+			metric.WithDescription("与创始行为锚点的综合漂移评分 [0,1]"),
+		)
+
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
@@ -388,8 +407,12 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(cedarDegradedGauge, float64(GlobalCedarDegradedTotal.Load()))
 			o.ObserveFloat64(outboxDeadLetterGauge, float64(GlobalOutboxDeadLetterTotal.Load()))
 			o.ObserveFloat64(factualityJudgeUnavailableGauge, float64(GlobalFactualityJudgeUnavailableTotal.Load()))
+
+			o.ObserveFloat64(blindZoneGauge, float64(GlobalBlindZoneRoutingTotal.Load()))
+			o.ObserveFloat64(anchorDriftGauge, GetFoundingAnchorDriftScore())
+
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge)
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge)
 
 		otelHandler = promhttp.Handler()
 	})

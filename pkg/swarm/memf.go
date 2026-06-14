@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/polarisagi/polaris/pkg/cognition" //nolint:staticcheck
 )
@@ -20,6 +22,7 @@ type FallacyMemoryPool struct {
 	db         *sql.DB
 	calibrator *DynamicDifficultyCalibrator
 	mu         sync.Mutex
+	blindZone  *BlindZoneDetector // 可选；写入成功后通知 BlindZoneDetector 解除盲区
 }
 
 func NewFallacyMemoryPool(db *sql.DB) *FallacyMemoryPool {
@@ -27,6 +30,11 @@ func NewFallacyMemoryPool(db *sql.DB) *FallacyMemoryPool {
 		db:         db,
 		calibrator: &DynamicDifficultyCalibrator{adjustStep: 0.05, targetSuccessRate: 0.6},
 	}
+}
+
+// InjectBlindZoneDetector 注入盲区探测器（可选，nil 时跳过通知）。
+func (m *FallacyMemoryPool) InjectBlindZoneDetector(d *BlindZoneDetector) {
+	m.blindZone = d
 }
 
 // FallacyRecord 单条失败记录。
@@ -58,6 +66,10 @@ func (m *FallacyMemoryPool) AddRecord(record *FallacyRecord) error {
 			node_quality_score = node_quality_score + 0.1
 	`, record.ID, record.TaskType, record.FailureType, string(kwBytes), record.Reflection, record.OccurrenceCount, record.NodeQualityScore, record.CreatedAt)
 
+	// 写入成功后通知 BlindZoneDetector 解除该 task_type 的盲区标记
+	if err == nil && m.blindZone != nil {
+		m.blindZone.MarkResolved(record.TaskType)
+	}
 	return err
 }
 
@@ -170,4 +182,122 @@ func (hm *HeuristicsMemory) GetRelevant(taskType string, keywords []string) ([]*
 	}
 
 	return heurs, nil
+}
+
+// ============================================================================
+// BlindZoneDetector — 认知盲区探测器（V8-S4 缓解机制）
+// 追踪在生产中出现但 MEMF 无任何记录的任务类型。
+// 生产出现 ≥5 次且 MEMF 记录 ≤1 → BlindZone 候选，触发强制 System2 + HITL。
+// ============================================================================
+
+// BlindZoneDetector 认知盲区探测器。
+type BlindZoneDetector struct {
+	mu                    sync.RWMutex
+	productionOccurrences map[string]int   // taskType → 生产出现次数
+	firstSeenAt           map[string]int64 // taskType → 首次出现 Unix 时间戳
+	db                    *sql.DB          // 只读，用于查询 fallacy_records 表
+}
+
+// BlindZoneEntry 盲区条目（用于日志与 OTel 输出）。
+type BlindZoneEntry struct {
+	TaskType        string
+	ProductionCount int
+	MemfRecordCount int
+	FirstSeenAt     int64
+}
+
+// NewBlindZoneDetector 构造探测器。db 用于查询 fallacy_records（010_self_improve.sql 定义）。
+func NewBlindZoneDetector(db *sql.DB) *BlindZoneDetector {
+	return &BlindZoneDetector{
+		productionOccurrences: make(map[string]int),
+		firstSeenAt:           make(map[string]int64),
+		db:                    db,
+	}
+}
+
+// RecordProduction 记录 taskType 在生产中的一次出现。
+// 由 pkg/cognition/kernel/agent_execute.go S_PLAN 阶段开头调用。
+func (d *BlindZoneDetector) RecordProduction(taskType string) {
+	if taskType == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.productionOccurrences[taskType]++
+	if _, ok := d.firstSeenAt[taskType]; !ok {
+		d.firstSeenAt[taskType] = time.Now().Unix()
+	}
+}
+
+// IsBlindZone 判断 taskType 是否为活跃盲区候选。
+// 条件：生产出现 ≥5 次 AND MEMF 记录 ≤1（SQL 查询 fallacy_records）。
+// 返回 true 时调用方须强制 System2 路由。
+func (d *BlindZoneDetector) IsBlindZone(taskType string) bool {
+	d.mu.RLock()
+	count := d.productionOccurrences[taskType]
+	d.mu.RUnlock()
+	if count < 5 {
+		return false // 未达到观测阈值，直接跳过 DB 查询
+	}
+	var memfCount int
+	if d.db != nil {
+		_ = d.db.QueryRow(
+			`SELECT COUNT(*) FROM fallacy_records WHERE task_type = ?`, taskType,
+		).Scan(&memfCount)
+	}
+	return memfCount <= 1
+}
+
+// MarkResolved 当 MEMF 首次为该 taskType 写入记录时调用，清除盲区标记。
+// 由 FallacyMemoryPool.AddRecord() 写入成功后自动调用。
+func (d *BlindZoneDetector) MarkResolved(taskType string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// 重置到阈值以下（保留历史，但退出盲区判定）
+	if d.productionOccurrences[taskType] >= 5 {
+		d.productionOccurrences[taskType] = 3
+	}
+}
+
+// ActiveBlindZones 返回当前活跃盲区列表（productionCount≥5 且 memf≤1）。
+// 用于 OTel gauge 和运维日志。
+func (d *BlindZoneDetector) ActiveBlindZones() []BlindZoneEntry {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var result []BlindZoneEntry
+	for taskType, count := range d.productionOccurrences {
+		if count < 5 {
+			continue
+		}
+		var memfCount int
+		if d.db != nil {
+			_ = d.db.QueryRow(
+				`SELECT COUNT(*) FROM fallacy_records WHERE task_type = ?`, taskType,
+			).Scan(&memfCount)
+		}
+		if memfCount <= 1 {
+			result = append(result, BlindZoneEntry{
+				TaskType:        taskType,
+				ProductionCount: count,
+				MemfRecordCount: memfCount,
+				FirstSeenAt:     d.firstSeenAt[taskType],
+			})
+		}
+	}
+	return result
+}
+
+// ExtractTaskType 从任务目标字符串提取规范化任务类型键。
+// 取前 3 个非空词的小写形式作为分组 key。
+// 示例: "Write a Python function to sort..." → "write_a_python"
+// MVP 降级方案：若 StateContext 未来新增 TaskType 字段，直接使用该字段替代。
+func ExtractTaskType(goal string) string {
+	words := strings.Fields(strings.ToLower(goal))
+	if len(words) == 0 {
+		return "unknown"
+	}
+	if len(words) > 3 {
+		words = words[:3]
+	}
+	return strings.Join(words, "_")
 }

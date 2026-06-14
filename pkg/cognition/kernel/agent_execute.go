@@ -16,6 +16,7 @@ import (
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/substrate"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
 
 // budgetWarnPct / budgetCriticalPct：Token 预算分级阈值（百分比，整数）。
@@ -112,6 +113,24 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 		// S_PLAN 阶段
 		if a.sm.Current() == protocol.AgentStatePlan {
+			// ── BlindZone 检查（V8-S4，GEMINI_PATCH_ROUND23_V8）─────────────────
+			// 若该任务类型生产出现≥5次但 MEMF 零记录，强制升级到 System2 路由。
+			// 原理：系统对该类任务缺乏失败记忆闭环，快速路由的"信心"来源不明。
+			if a.blindZoneDetector != nil && a.sCtx.TaskModel != nil {
+				taskType := extractTaskType(a.sCtx.TaskModel.Goal)
+				a.blindZoneDetector.RecordProduction(taskType)
+				if a.blindZoneDetector.IsBlindZone(taskType) {
+					// 强制落入 System2 路由区间（SurpriseIndex ≥ 0.6）
+					// 不覆盖已经更高的 SurpriseIndex
+					if a.sCtx.SurpriseIndex < 0.65 {
+						a.sCtx.SurpriseIndex = 0.65
+					}
+					a.sCtx.BlindZoneHITLRequired = true
+					observability.GlobalBlindZoneRoutingTotal.Add(1)
+				}
+			}
+			// ── BlindZone 检查结束 ────────────────────────────────────────────────
+
 			if a.worldModel != nil && a.sCtx.TaskModel != nil {
 				// 注入上下文给 WorldModel 进行知识接地评估
 				// 这里使用 TaskModel.Goal 作为 task，并将 SysEnvSnapshot 等作为 contextText
@@ -884,4 +903,17 @@ func maxNodeTaintLevel(plan *DAGPlan) protocol.TaintLevel {
 		}
 	}
 	return max
+}
+
+// extractTaskType 从任务目标字符串提取规范化任务类型键。
+// 与 swarm.ExtractTaskType 保持一致，避免 L1 到 L2 的依赖。
+func extractTaskType(goal string) string {
+	words := strings.Fields(strings.ToLower(goal))
+	if len(words) == 0 {
+		return "unknown"
+	}
+	if len(words) > 3 {
+		words = words[:3]
+	}
+	return strings.Join(words, "_")
 }

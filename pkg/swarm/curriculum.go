@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -382,11 +383,25 @@ func (ag *AutoCurriculumGenerator) isFrozen(skill string) bool {
 	return false
 }
 
+// FoundingAnchorMeta 提供创始行为锚点元数据（解耦依赖）。
+type FoundingAnchorMeta interface {
+	GetCreatedAt() int64
+	GetTaskCount() int
+}
+
+// RedTeamRunner 执行红队演练并注入到 Holdout 评估集（解耦依赖）。
+type RedTeamRunner interface {
+	RunAndInject(ctx context.Context) error
+}
+
 // BackgroundTaskScheduler 后台调度器。
 type BackgroundTaskScheduler struct {
 	generator      *AutoCurriculumGenerator
 	bb             protocol.Blackboard
-	surpriseReader SurpriseReader // nil 时使用默认值 0.5
+	surpriseReader SurpriseReader
+	foundingAnchor FoundingAnchorMeta // 可选；nil 时跳过周度漂移检查
+	anchorDataDir  string             // ~/.polarisagi/polaris/
+	redTeam        RedTeamRunner      // 可选；nil 时跳过 24h 红队探测
 }
 
 // SurpriseReader 读取当前系统 SurpriseIndex。
@@ -404,6 +419,17 @@ func (b *BackgroundTaskScheduler) InjectSurpriseReader(r SurpriseReader) {
 	b.surpriseReader = r
 }
 
+// InjectFoundingAnchor 注入创始行为锚点（可选）。
+func (b *BackgroundTaskScheduler) InjectFoundingAnchor(anchor FoundingAnchorMeta, dataDir string) {
+	b.foundingAnchor = anchor
+	b.anchorDataDir = dataDir
+}
+
+// InjectRedTeamProtocol 注入 Red Team 协议（可选）。
+func (b *BackgroundTaskScheduler) InjectRedTeamProtocol(r RedTeamRunner) {
+	b.redTeam = r
+}
+
 // readSurprise 读取当前系统 SurpriseIndex。
 // 优先级: surpriseReader → 0.5 默认值。
 func (b *BackgroundTaskScheduler) readSurprise() float64 {
@@ -415,6 +441,7 @@ func (b *BackgroundTaskScheduler) readSurprise() float64 {
 
 // Start 启动后台守护协程（2 分钟轮询）。
 func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
+	// 保持原有：2 分钟 AutoCurriculum 生成（不修改）
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
@@ -428,4 +455,51 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 			}
 		}
 	}()
+
+	// 新增：7 天 FoundingAnchor 漂移检查（V8-S3）
+	if b.foundingAnchor != nil {
+		go func() {
+			ticker := time.NewTicker(7 * 24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					b.runFoundingAnchorCheck(ctx)
+				}
+			}
+		}()
+	}
+
+	// 新增：24 小时 Red Team 常态化探测（V8-S1）
+	if b.redTeam != nil {
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := b.redTeam.RunAndInject(ctx); err != nil {
+						slog.Error("red team: run and inject failed", "err", err)
+					}
+				}
+			}
+		}()
+	}
+}
+
+// runFoundingAnchorCheck 执行周度创始锚点漂移检查。
+// TODO: 完整实现需注入 TrajectoryStore 读取近期轨迹。MVP 阶段记录 anchor 存在性。
+func (b *BackgroundTaskScheduler) runFoundingAnchorCheck(_ context.Context) {
+	if b.foundingAnchor == nil {
+		return
+	}
+	// TODO: 注入 TrajectoryStore 后读取近期 100 条轨迹，调用 CompareWithAnchor
+	slog.Info("founding anchor check: anchor present",
+		"created_at", b.foundingAnchor.GetCreatedAt(),
+		"task_count", b.foundingAnchor.GetTaskCount(),
+	)
 }
