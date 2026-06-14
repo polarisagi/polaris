@@ -93,6 +93,19 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 				fastResult := `{"Goal":` + mustMarshalString(a.sCtx.RawIntentTS.Content()) + `,"Complexity":0.1}`
 				nextState, err = llmEff.OnSuccess(protocol.StateContext{}, []byte(fastResult))
+				if a.memory != nil {
+					go func(ts string) {
+						_ = a.memory.Episodic().Append(context.Background(), protocol.Event{
+							ID:        uuid.New().String(),
+							Type:      protocol.EventIntent,
+							Status:    protocol.StatusDone,
+							TaskID:    a.sCtx.SessionID,
+							AgentID:   a.sCtx.AgentID,
+							Payload:   []byte(fmt.Sprintf(`{"intent":%q}`, ts)),
+							CreatedAt: time.Now(),
+						})
+					}(a.sCtx.RawIntentTS.Content())
+				}
 				goto HANDLE_MEM
 			}
 		}
@@ -106,6 +119,19 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				// SurpriseIndex == 0 表示"未计算"，不触发。
 				nextState = "S_PLAN_DONE"
 				err = nil
+				if a.memory != nil {
+					go func(ts string) {
+						_ = a.memory.Episodic().Append(context.Background(), protocol.Event{
+							ID:        uuid.New().String(),
+							Type:      protocol.EventIntent,
+							Status:    protocol.StatusDone,
+							TaskID:    a.sCtx.SessionID,
+							AgentID:   a.sCtx.AgentID,
+							Payload:   []byte(fmt.Sprintf(`{"intent":%q,"path":"fast_plan"}`, ts)),
+							CreatedAt: time.Now(),
+						})
+					}(a.sCtx.RawIntentTS.Content())
+				}
 				goto HANDLE_MEM
 			}
 
@@ -233,6 +259,11 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 		// 成功完成计划，写入计划记忆
 		if nextState == "S_PLAN_DONE" && a.memory != nil && (resp != nil || a.sCtx.SurpriseIndex < 0.3) {
+			// 恢复步骤预算 (ISSUE-08)
+			if a.sCtx.InitialMaxStepsLimit > 0 {
+				a.sCtx.MaxStepsLimit = a.sCtx.InitialMaxStepsLimit
+			}
+
 			var content string
 			if resp != nil {
 				content = resp.Content
@@ -622,6 +653,18 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				Payload:   []byte(fmt.Sprintf(`{"tool":"%s","status":"%s"}`, toolName, status)),
 				CreatedAt: time.Now(),
 			})
+		}
+
+		if err == nil && res != nil && res.Success {
+			toolDef, lookupErr := a.toolRegistry.Lookup(toolName)
+			if lookupErr == nil && toolDef.UndoFn != "" {
+				a.sCtx.SagaLog = append(a.sCtx.SagaLog, protocol.SagaStep{
+					NodeID:   toolName, // executor 不传 NodeID，暂以 toolName 代替
+					ToolName: toolName,
+					UndoFn:   toolDef.UndoFn,
+					Args:     args,
+				})
+			}
 		}
 
 		return res, err

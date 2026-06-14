@@ -80,8 +80,10 @@ type StateContext struct {
 	// Step Budget 控制（Adaptive Max-Steps）
 	// MaxStepsLimit 由 AgentConfig.MaxSteps 初始化；StepScorer 低分时动态收紧。
 	// 0 = 无上限（不推荐用于生产）。
-	StepsUsed     int
-	MaxStepsLimit int
+	StepsUsed            int
+	MaxStepsLimit        int
+	InitialMaxStepsLimit int                 // 原始步骤上限 (ISSUE-08)
+	SagaLog              []protocol.SagaStep // Saga 记录 (ISSUE-03)
 
 	// 认知状态
 	SurpriseIndex float64
@@ -481,6 +483,15 @@ func (sm *StateMachine) executeDAG(ctx context.Context, sCtx protocol.StateConte
 
 func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateContext) (protocol.State, error) {
 	// Saga 逆序补偿——已执行步骤的 Undo 操作
+	for i := len(sCtx.SagaLog) - 1; i >= 0; i-- {
+		step := sCtx.SagaLog[i]
+		if step.UndoFn != "" && sCtx.Tools != nil {
+			_, err := sCtx.Tools.ExecuteTool(ctx, step.UndoFn, step.Args, sCtx.MaxTaintLevel)
+			if err != nil {
+				slog.Warn("Saga rollback failed for step", "node_id", step.NodeID, "tool", step.UndoFn, "err", err)
+			}
+		}
+	}
 	return protocol.State("S_ROLLBACK_OK"), nil
 }
 

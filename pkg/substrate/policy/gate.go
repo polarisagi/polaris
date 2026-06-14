@@ -37,6 +37,7 @@ type Gate struct {
 	permitRules     []PermitRule
 	consecutiveFail atomic.Int64
 	onKillSwitch    func()       // 连续失败 10 次时触发
+	cedarLeaks      atomic.Int64 // 累计 Cedar FFI goroutine 泄漏数
 	cedar           *CedarEngine // Rust FFI 引擎
 }
 
@@ -332,6 +333,11 @@ func (g *Gate) IsAuthorized(
 	case <-time.After(10 * time.Millisecond):
 		// 超时 → fail-closed
 		g.recordFailure()
+		leaks := g.cedarLeaks.Add(1)
+		if leaks >= 5 && g.onKillSwitch != nil {
+			g.onKillSwitch()
+		}
+		observability.GlobalCedarDegradedTotal.Add(1)
 		return false, perrors.New(perrors.CodeInternal, "policy: evaluation timeout (>10ms)")
 	case <-ctx.Done():
 		g.recordFailure()

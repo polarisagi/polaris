@@ -46,6 +46,11 @@ func RecordLLMCall(
 				metric.WithAttributes(attrType("cache_hit")))
 		}
 	}
+	if instrLLMCacheHitRate != nil && (inputTokens+cacheHitTokens) > 0 {
+		hitRate := float64(cacheHitTokens) / float64(inputTokens+cacheHitTokens)
+		instrLLMCacheHitRate.Record(ctx, hitRate,
+			metric.WithAttributes(attrProvider(provider), attrModel(model)))
+	}
 	if instrAPIcostUSD != nil && costUSD > 0 {
 		instrAPIcostUSD.Add(ctx, costUSD,
 			metric.WithAttributes(attrProvider(provider), attrModel(model), attrCallType("llm")))

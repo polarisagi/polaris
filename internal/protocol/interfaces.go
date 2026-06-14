@@ -144,14 +144,24 @@ type StateEvent struct {
 
 // StateContext 穿越状态机各转移的共享上下文。
 type StateContext struct {
-	AgentID       string
-	SessionID     string
-	MaxTaintLevel TaintLevel // 继承自上下文请求的最高污点等级 (Taint Washing Fix)
-	Mem           Memory
-	Tools         ToolRegistry
-	Provider      Provider
-	Policy        PolicyGate
-	Preferences   map[string]string // 从 DB 加载的用户偏好配置
+	AgentID              string
+	SessionID            string
+	MaxTaintLevel        TaintLevel // 继承自上下文请求的最高污点等级 (Taint Washing Fix)
+	Mem                  Memory
+	Tools                ToolRegistry
+	Provider             Provider
+	Policy               PolicyGate
+	Preferences          map[string]string // 从 DB 加载的用户偏好配置
+	SagaLog              []SagaStep        // Saga 记录日志
+	InitialMaxStepsLimit int               // Agent 启动时的原始步骤上限
+}
+
+// SagaStep 记录单个执行步骤的补偿信息
+type SagaStep struct {
+	NodeID   string
+	ToolName string
+	UndoFn   string
+	Args     []byte
 }
 
 // ============================================================================

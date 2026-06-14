@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -39,12 +40,16 @@ type RuntimeRegistrar interface {
 
 type InstallRequest struct {
 	Principal   string
-	ExtensionID string
+	ExtensionID string // Instance ID (ext_...)
+	CatalogID   string
+	Name        string
 	ExtType     string // plugin, skill, mcp
 	TrustTier   int
 	Publisher   string
 	HasHooks    bool
-	Target      any // 新增：Catalog 查找结果，installer 用它定位下载包
+	Target      any // Catalog 查找结果，installer 用它定位下载包
+	Config      string
+	RuntimeID   string
 }
 
 var ErrRequiresApproval = errors.New("installation requires user approval")
@@ -146,22 +151,41 @@ func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) erro
 		return err
 	}
 
-	// PolicyGate 放行后写入 extension_instances，满足 ADR-0019 三层模型要求（P0-6）。
-	// 原实现在此直接 return nil，不写 DB，违反 ADR-0019 Layer-1 SSoT 约束。
-	instID, err := genExtID()
-	if err != nil {
-		return perrors.Wrap(perrors.CodeInternal, "marketplace.InstallExtension: gen id", err)
-	}
-	name := req.ExtensionID
-	if req.Publisher != "" {
-		name = fmt.Sprintf("%s/%s", req.Publisher, req.ExtensionID)
-	}
+	req = normalizeInstallRequest(req)
+
 	// 先标记 status='installing'，防止重复安装竞争（UNIQUE INDEX on catalog_id）。
-	_, err = m.db.ExecContext(ctx, `
+	if err := m.insertExtensionInstance(ctx, req); err != nil {
+		return err
+	}
+
+	return m.postInstallSteps(ctx, req)
+}
+
+func normalizeInstallRequest(req InstallRequest) InstallRequest {
+	if req.ExtensionID == "" {
+		b := make([]byte, 8)
+		_, _ = rand.Read(b)
+		req.ExtensionID = "ext_" + hex.EncodeToString(b)
+	}
+	if req.Name == "" {
+		req.Name = req.ExtensionID
+		if req.Publisher != "" {
+			req.Name = fmt.Sprintf("%s/%s", req.Publisher, req.ExtensionID)
+		}
+	}
+	if req.Config == "" {
+		req.Config = "{}"
+	}
+	return req
+}
+
+func (m *Manager) insertExtensionInstance(ctx context.Context, req InstallRequest) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := m.db.ExecContext(ctx, `
 		INSERT INTO extension_instances
-			(id, ext_type, origin, catalog_id, name, publisher, trust_tier, status)
-		VALUES (?, ?, 'marketplace', ?, ?, ?, ?, 'installing')`,
-		instID, req.ExtType, req.ExtensionID, name, req.Publisher, req.TrustTier,
+			(id, ext_type, origin, catalog_id, name, publisher, trust_tier, runtime_id, config, status, created_at, updated_at)
+		VALUES (?, ?, 'marketplace', ?, ?, ?, ?, ?, ?, 'installing', ?, ?)`,
+		req.ExtensionID, req.ExtType, req.CatalogID, req.Name, req.Publisher, req.TrustTier, req.RuntimeID, req.Config, now, now,
 	)
 	if err != nil {
 		// UNIQUE 冲突 → 已安装，幂等返回成功
@@ -170,55 +194,41 @@ func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) erro
 		}
 		return perrors.Wrap(perrors.CodeInternal, "marketplace.InstallExtension: insert instance", err)
 	}
+	return nil
+}
 
-	// 更新为 status='installed'（当前 MVP：无实际文件下载；Tier1+ 由下载器回调更新）。
-	// 此处直接置为 installed，保持与 builtin 扩展注册路径行为一致。
-	_, err = m.db.ExecContext(ctx, `
-		UPDATE extension_instances SET status='installed' WHERE id=?`, instID)
-	if err != nil {
-		slog.Warn("marketplace: failed to mark extension installed", "id", instID, "err", err)
-		// 非致命错误：记录警告，状态留在 installing（后续 reconcile 可修正）
+func (m *Manager) postInstallSteps(ctx context.Context, req InstallRequest) error {
+	instID := req.ExtensionID
+
+	// 更新为 status='installed'（若非需下载类型）。
+	if req.ExtType == "mcp" || req.ExtType == "" {
+		_, err := m.db.ExecContext(ctx, `UPDATE extension_instances SET status='installed' WHERE id=?`, instID)
+		if err != nil {
+			slog.Warn("marketplace: failed to mark extension installed", "id", instID, "err", err)
+		}
 	}
 
 	// 文件下载（若注入了 installer）
 	var installDir string
 	if m.installer != nil && req.Target != nil {
-		// status 先置为 downloading，下载完再置 installed
-		_, _ = m.db.ExecContext(ctx,
-			`UPDATE extension_instances SET status='downloading' WHERE id=?`, instID)
-
+		_, _ = m.db.ExecContext(ctx, `UPDATE extension_instances SET status='downloading' WHERE id=?`, instID)
 		dir, dlErr := m.installer.Install(ctx, req.Target)
 		if dlErr != nil {
-			_, _ = m.db.ExecContext(ctx,
-				`UPDATE extension_instances SET status='failed' WHERE id=?`, instID)
+			_, _ = m.db.ExecContext(ctx, `UPDATE extension_instances SET status='failed' WHERE id=?`, instID)
 			return perrors.Wrap(perrors.CodeInternal, "marketplace: download failed", dlErr)
 		}
 		installDir = dir
-
-		_, _ = m.db.ExecContext(ctx,
-			`UPDATE extension_instances SET status='installed', install_path=? WHERE id=?`,
-			installDir, instID)
+		_, _ = m.db.ExecContext(ctx, `UPDATE extension_instances SET status='installed', install_path=? WHERE id=?`, installDir, instID)
 	}
 
 	// 运行时注册（若注入了 registrar）
 	if m.registrar != nil {
 		if regErr := m.registrar.Register(ctx, req.ExtType, installDir, instID); regErr != nil {
-			// 注册失败记录 WARN，不回滚 DB（extension_instances 保留，下次重启 LoadFromDB 兜底）
-			slog.Warn("marketplace: runtime registration failed",
-				"inst_id", instID, "ext_type", req.ExtType, "err", regErr)
+			slog.Warn("marketplace: runtime registration failed", "inst_id", instID, "ext_type", req.ExtType, "err", regErr)
 		}
 	}
 
 	return nil
-}
-
-// genExtID 生成 extension_instances.id（格式："ext_{8字节hex}"）。
-func genExtID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return "ext_" + hex.EncodeToString(b), nil
 }
 
 // UninstallExtension completely removes an extension and its physical files.
@@ -343,4 +353,12 @@ func (m *Manager) cleanCatalog(ctx context.Context, origin, catalogID string) {
 			_, _ = m.db.ExecContext(ctx, "DELETE FROM extension_catalog WHERE id=?", catalogID)
 		}
 	}
+}
+
+// UpdateStatus 更新 extension_instances 状态
+func (m *Manager) UpdateStatus(ctx context.Context, id, status string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE extension_instances SET status=?, updated_at=? WHERE id=?`,
+		status, time.Now().UTC().Format(time.RFC3339), id)
+	return err
 }

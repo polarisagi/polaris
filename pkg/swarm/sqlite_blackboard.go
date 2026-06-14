@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -575,9 +576,60 @@ func (bb *SQLiteBlackboard) StartReaper(ctx context.Context) {
 				return
 			case <-ticker.C:
 				bb.reap(ctx)
+				bb.reaperPhase2(ctx)
 			}
 		}
 	}()
+}
+
+const ZombieTaskTTL = 5 * time.Minute
+
+// reaperPhase2 清理长时间未完成的僵尸任务（running/pending 超 5 分钟）。
+// 对 running 任务先 cancel（通过 bb.cancels），再标记 failed；
+// 对 pending 超时任务直接标记 failed（防止饥饿任务永久堆积）。
+func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
+	cutoff := time.Now().Add(-ZombieTaskTTL).UnixMilli()
+
+	// 1. 取消 running 中的超时任务
+	rows, err := bb.db.QueryContext(ctx,
+		`SELECT task_id FROM tasks WHERE status='running' AND updated_at < ?`, cutoff)
+	if err != nil {
+		slog.WarnContext(ctx, "reaper phase2: query running failed", "error", err)
+		return
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		_ = rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	_ = rows.Close()
+
+	bb.mu.Lock()
+	for _, id := range ids {
+		if cancel, ok := bb.cancels[id]; ok {
+			cancel()
+			delete(bb.cancels, id)
+		}
+	}
+	bb.mu.Unlock()
+
+	if len(ids) > 0 {
+		// 批量标记 failed
+		for _, id := range ids {
+			_, _ = bb.db.ExecContext(ctx,
+				`UPDATE tasks SET status='failed', error='reaper_phase2_zombie_timeout', updated_at=? WHERE task_id=? AND status='running'`,
+				time.Now().UnixMilli(), id)
+			slog.WarnContext(ctx, "reaper phase2: zombie task killed", "task_id", id)
+		}
+	}
+
+	// 2. pending 超时（饥饿）任务
+	_, _ = bb.db.ExecContext(ctx,
+		`UPDATE tasks SET status='failed', error='reaper_phase2_pending_timeout', updated_at=?
+         WHERE status='pending' AND created_at < ?`,
+		time.Now().UnixMilli(), cutoff)
 }
 
 // reap 扫描 expires_at 已过期的 claimed 任务。

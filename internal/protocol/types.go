@@ -406,6 +406,7 @@ type Tool struct {
 	SandboxTier  SandboxTier
 	Source       ToolSource
 	SourceURI    string
+	UndoFn       string // 补偿工具的名称 (ISSUE-03)
 	Timeout      time.Duration
 	RetryPolicy  *RetryPolicy
 }

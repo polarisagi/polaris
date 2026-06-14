@@ -312,19 +312,23 @@ func (s *Server) internalInstallMCP(ctx context.Context, extID string, entry *pr
 	}
 	configJSON, _ := json.Marshal(configMap)
 
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO extension_instances
-		 (id, ext_type, origin, catalog_id, name, publisher, trust_tier,
-		  runtime_id, install_path, config, status, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,'installed',?,?)`,
-		extID, "mcp", "marketplace", req.CatalogID,
-		cfg.Name, entry.Publisher, entry.TrustTier,
-		mcpID, "", string(configJSON), now, now)
-	if err != nil {
+	installReq := marketplace.InstallRequest{
+		Principal:   "system", // Auth is already checked in handleInstallPlugin
+		ExtensionID: extID,
+		CatalogID:   req.CatalogID,
+		Name:        cfg.Name,
+		ExtType:     "mcp",
+		TrustTier:   entry.TrustTier,
+		Publisher:   entry.Publisher,
+		Config:      string(configJSON),
+		RuntimeID:   mcpID,
+	}
+
+	if err := s.installMgr.InstallExtension(ctx, installReq); err != nil {
 		return nil, err
 	}
 
-	_, err = s.db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO mcp_servers(id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, created_at, updated_at)
 		 VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?)`,
 		mcpID, cfg.Name, cfg.Transport, cfg.Command,
@@ -381,15 +385,19 @@ func (s *Server) internalInstallGeneric(ctx context.Context, extID string, entry
 		status = "downloading"
 	}
 
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO extension_instances
-		 (id, ext_type, origin, catalog_id, name, publisher, trust_tier,
-		  runtime_id, install_path, config, status, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,'','',?,?,?,?)`,
-		extID, entry.Type, "marketplace", req.CatalogID,
-		name, entry.Publisher, entry.TrustTier,
-		string(configJSON), status, now, now)
-	if err != nil {
+	installReq := marketplace.InstallRequest{
+		Principal:   "system",
+		ExtensionID: extID,
+		CatalogID:   req.CatalogID,
+		Name:        name,
+		ExtType:     entry.Type,
+		TrustTier:   entry.TrustTier,
+		Publisher:   entry.Publisher,
+		Config:      string(configJSON),
+		RuntimeID:   "",
+	}
+
+	if err := s.installMgr.InstallExtension(ctx, installReq); err != nil {
 		return nil, err
 	}
 
@@ -705,7 +713,10 @@ func (s *Server) downloadAndInstallExtension(ctx context.Context, extID, catalog
 }
 
 func (s *Server) updateExtensionInstanceError(ctx context.Context, extID, errMsg string) {
-	_, _ = s.db.ExecContext(ctx, `UPDATE extension_instances SET status='error', error_msg=?, updated_at=? WHERE id=?`,
+	if s.installMgr != nil {
+		_ = s.installMgr.UpdateStatus(ctx, extID, "error")
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE extension_instances SET error_msg=?, updated_at=? WHERE id=?`,
 		errMsg, time.Now().UTC().Format(time.RFC3339), extID)
 }
 

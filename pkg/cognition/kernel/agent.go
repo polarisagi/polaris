@@ -97,6 +97,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// 从 AgentConfig 初始化步骤预算（仅在首次 Run 时设置，支持外部注入覆盖）
 	if a.Config.MaxSteps > 0 && a.sCtx.MaxStepsLimit == 0 {
 		a.sCtx.MaxStepsLimit = a.Config.MaxSteps
+		a.sCtx.InitialMaxStepsLimit = a.Config.MaxSteps
 	}
 	for {
 		// 动态加载已安装插件信息
@@ -175,14 +176,16 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 		maxTaint = a.sCtx.RawIntentTS.Level()
 	}
 	return protocol.StateContext{
-		AgentID:       a.ID,
-		SessionID:     a.sCtx.SessionID,
-		MaxTaintLevel: maxTaint,
-		Mem:           a.memory,
-		Tools:         a.toolRegistry,
-		Provider:      a.provider,
-		Policy:        a.policyGate,
-		Preferences:   a.sCtx.Preferences,
+		AgentID:              a.ID,
+		SessionID:            a.sCtx.SessionID,
+		MaxTaintLevel:        maxTaint,
+		Mem:                  a.memory,
+		Tools:                a.toolRegistry,
+		Provider:             a.provider,
+		Policy:               a.policyGate,
+		Preferences:          a.sCtx.Preferences,
+		SagaLog:              a.sCtx.SagaLog,
+		InitialMaxStepsLimit: a.sCtx.InitialMaxStepsLimit,
 	}
 }
 

@@ -22,6 +22,7 @@ var (
 	instrTokensTotal     metric.Int64Counter
 	instrAPIcostUSD      metric.Float64Counter
 	instrBurnStage3Total metric.Int64Counter
+	instrLLMCacheHitRate metric.Float64Histogram // (ISSUE-04)
 
 	// M7 工具调用 & 沙箱
 	instrToolCallsTotal metric.Int64Counter
@@ -74,6 +75,13 @@ func initInstruments(meter metric.Meter) {
 	instrTokensTotal, _ = meter.Int64Counter(
 		"polaris.tokens.consumed_total",
 		metric.WithDescription("消耗 token 总数 (label: type: input/output/cache_hit)"),
+	)
+
+	// Cache Hit Rate Histogram (ISSUE-04)
+	instrLLMCacheHitRate, _ = meter.Float64Histogram(
+		"polaris.llm.cache_hit_rate",
+		metric.WithDescription("LLM Context Caching 命中率 (label: provider, model)"),
+		metric.WithExplicitBucketBoundaries(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 	)
 
 	// API 费用（USD）

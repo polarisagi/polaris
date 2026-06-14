@@ -760,7 +760,7 @@ fn run_with_timeout(
             if let Some(ref mut pipe) = stdout_pipe {
                 let mut tmp = Vec::new();
                 let _ = pipe.read_to_end(&mut tmp);
-                *buf.lock().unwrap() = tmp;
+                *buf.lock().unwrap_or_else(|e| e.into_inner()) = tmp;
             }
         })
     };
@@ -770,7 +770,7 @@ fn run_with_timeout(
             if let Some(ref mut pipe) = stderr_pipe {
                 let mut tmp = Vec::new();
                 let _ = pipe.read_to_end(&mut tmp);
-                *buf.lock().unwrap() = tmp;
+                *buf.lock().unwrap_or_else(|e| e.into_inner()) = tmp;
             }
         })
     };
