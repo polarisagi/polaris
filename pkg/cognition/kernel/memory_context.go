@@ -114,6 +114,10 @@ func buildPerceiveContext( //nolint:gocyclo
 	}
 
 	if retrieved.Len() > 0 {
+		// 召回数据携带 TaintMedium，需反馈到会话全局污点（只升不降）
+		if protocol.TaintMedium > sCtx.GlobalTaintLevel {
+			sCtx.GlobalTaintLevel = protocol.TaintMedium
+		}
 		b.WriteUserData(substrate.NewTaintedString(
 			retrieved.String(),
 			substrate.TaintSource{OriginTaintLevel: protocol.TaintMedium},
@@ -214,6 +218,9 @@ func buildPlanContext( //nolint:gocyclo
 	}
 
 	if retrieved.Len() > 0 {
+		if protocol.TaintMedium > sCtx.GlobalTaintLevel {
+			sCtx.GlobalTaintLevel = protocol.TaintMedium
+		}
 		b.WriteUserData(substrate.NewTaintedString(
 			retrieved.String(),
 			substrate.TaintSource{OriginTaintLevel: protocol.TaintMedium},

@@ -64,6 +64,10 @@ func (b *Blackboard) PostTask(ctx context.Context, entry *protocol.TaskEntry) er
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if entry.SpawnDepth > MaxSpawnDepth {
+		return ErrSpawnDepthExceeded
+	}
+
 	b.checkBackpressureLocked()
 	if b.backpressure {
 		return ErrBackpressure
@@ -89,6 +93,12 @@ func (b *Blackboard) PostTask(ctx context.Context, entry *protocol.TaskEntry) er
 func (b *Blackboard) PostBatch(ctx context.Context, entries []*protocol.TaskEntry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	for _, task := range entries {
+		if task.SpawnDepth > MaxSpawnDepth {
+			return ErrSpawnDepthExceeded
+		}
+	}
 
 	b.checkBackpressureLocked()
 	if b.backpressure {
@@ -385,9 +395,10 @@ func (b *Blackboard) UpdateTaskTokens(_ context.Context, taskID string, tokensIn
 }
 
 var (
-	ErrTaskNotFound = &BlackboardError{"task not found"}
-	ErrStaleLease   = &BlackboardError{"stale lease"}
-	ErrBackpressure = &BlackboardError{"backpressure active"}
+	ErrTaskNotFound       = &BlackboardError{"task not found"}
+	ErrStaleLease         = &BlackboardError{"stale lease"}
+	ErrBackpressure       = &BlackboardError{"backpressure active"}
+	ErrSpawnDepthExceeded = &BlackboardError{"spawn depth exceeded"}
 )
 
 type BlackboardError struct{ msg string }

@@ -95,6 +95,10 @@ type StateContext struct {
 	// S_REFLECT 阶段产出，下轮 S_PERCEIVE 时注入 ContextWindow。
 	ReasoningState []byte
 
+	// GlobalTaintLevel 跨轮次累积的最高污点等级（只升不降，ADR-0007）。
+	// 覆盖场景：多轮任务、记忆召回、跨会话 ReasoningState 注入。
+	GlobalTaintLevel protocol.TaintLevel
+
 	// 偏好配置
 	Preferences map[string]string
 

@@ -200,7 +200,10 @@ var stateToTriggerMap = map[protocol.State]protocol.AgentTrigger{
 func (a *Agent) toProtocolCtx() protocol.StateContext {
 	maxTaint := protocol.TaintNone
 	if a.sCtx != nil {
-		maxTaint = a.sCtx.RawIntentTS.Level()
+		maxTaint = a.sCtx.GlobalTaintLevel
+		if lv := a.sCtx.RawIntentTS.Level(); lv > maxTaint {
+			maxTaint = lv
+		}
 	}
 	return protocol.StateContext{
 		AgentID:              a.ID,
@@ -273,6 +276,11 @@ func (a *Agent) SetTaskIntent(intent []byte) {
 		},
 		"task_intent_input",
 	)
+
+	// 单调递增全局污点（只升不降）
+	if lv := a.sCtx.RawIntentTS.Level(); lv > a.sCtx.GlobalTaintLevel {
+		a.sCtx.GlobalTaintLevel = lv
+	}
 
 	{
 		var goalStr string
