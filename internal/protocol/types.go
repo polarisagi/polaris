@@ -20,6 +20,7 @@ type InferRequest struct {
 	ResponseFormat  *ResponseFormat // 支持强制 JSON Schema / GBNF 等结构化约束
 	ReasoningEffort ReasoningEffort
 	ThinkingMode    ThinkingMode // TTC 推理深度控制（None=不传，High=最大扩展思考）
+	ThinkingBudget  int
 }
 
 func (req *InferRequest) HasImageParts() bool {
@@ -131,6 +132,7 @@ type InferOptions struct {
 	ResponseFormat  *ResponseFormat
 	Temperature     float64
 	ReasoningEffort ReasoningEffort
+	ThinkingBudget  int
 }
 
 // InferOption 函数选项模式，用于构造 InferOptions。
@@ -139,6 +141,11 @@ type InferOption func(*InferOptions)
 // WithThinkingMode 设置思考模式。
 func WithThinkingMode(mode ThinkingMode) InferOption {
 	return func(o *InferOptions) { o.ThinkingMode = mode }
+}
+
+// WithThinkingBudget 设置扩展思考的 token 预算
+func WithThinkingBudget(budget int) InferOption {
+	return func(o *InferOptions) { o.ThinkingBudget = budget }
 }
 
 // WithMaxTokens 设置最大输出 token 数。

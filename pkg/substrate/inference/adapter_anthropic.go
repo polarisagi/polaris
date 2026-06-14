@@ -19,7 +19,7 @@ import (
 // AnthropicAdapter 实现 protocol.Provider，对接 Anthropic Messages API。
 type AnthropicAdapter struct {
 	model               string
-	credentialFn        func() string
+	credentialFn        func() []byte
 	client              *http.Client
 	caps                protocol.ProviderCapabilities
 	enablePromptCaching bool   // 注入 cache_control 标记以激活 prompt caching
@@ -43,7 +43,7 @@ func WithAnthropicPromptCaching() AnthropicOption {
 }
 
 // NewAnthropicAdapter 构造 Anthropic 适配器。
-func NewAnthropicAdapter(model string, credFn func() string, client *http.Client, tbr *observability.TokenBurnRate, opts ...AnthropicOption) *AnthropicAdapter {
+func NewAnthropicAdapter(model string, credFn func() []byte, client *http.Client, tbr *observability.TokenBurnRate, opts ...AnthropicOption) *AnthropicAdapter {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -109,15 +109,18 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []protocol.Message, o
 		return nil, err
 	}
 	apiKey := a.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey)
+	httpReq.Header.Set("x-api-key", string(apiKey))
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if req.ThinkingMode != "" && req.ThinkingMode != protocol.ThinkingDisabled {
+		httpReq.Header.Add("anthropic-beta", "interleaved-thinking-2025-05-14")
+	}
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
@@ -210,15 +213,18 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []protocol.Mess
 		return nil, err
 	}
 	apiKey := a.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey)
+	httpReq.Header.Set("x-api-key", string(apiKey))
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if req.ThinkingMode != "" && req.ThinkingMode != protocol.ThinkingDisabled {
+		httpReq.Header.Add("anthropic-beta", "interleaved-thinking-2025-05-14")
+	}
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
@@ -294,6 +300,18 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *protocol.InferRequest, str
 	if stream {
 		payload["stream"] = true
 	}
+
+	if req.ThinkingMode != "" && req.ThinkingMode != protocol.ThinkingDisabled {
+		budget := req.ThinkingBudget
+		if budget <= 0 {
+			budget = 8000
+		}
+		payload["thinking"] = map[string]any{
+			"type":          "enabled",
+			"budget_tokens": budget,
+		}
+	}
+
 	// 传入工具 schema（Anthropic tools 格式）
 	if len(req.Tools) > 0 {
 		anthropicTools := make([]map[string]any, 0, len(req.Tools))

@@ -67,14 +67,15 @@ const (
 // Event is the unit of structured coordination on the blackboard.
 // Natural language content goes in Payload; coordination metadata is typed.
 type Event struct {
-	ID        string        `json:"id"`
-	Type      EventType     `json:"type"`
-	Status    EventStatus   `json:"status"`
-	TaskID    string        `json:"task_id"`
-	AgentID   string        `json:"agent_id,omitempty"`
-	Payload   []byte        `json:"payload,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
-	TTL       time.Duration `json:"ttl,omitempty"`
+	ID             string        `json:"id"`
+	Type           EventType     `json:"type"`
+	Status         EventStatus   `json:"status"`
+	TaskID         string        `json:"task_id"`
+	AgentID        string        `json:"agent_id,omitempty"`
+	Payload        []byte        `json:"payload,omitempty"`
+	ReasoningState []byte        `json:"reasoning_state,omitempty"`
+	CreatedAt      time.Time     `json:"created_at"`
+	TTL            time.Duration `json:"ttl,omitempty"`
 }
 
 // HeuristicGeneratedPayload Reflexion 生成启发式规则后的事件 payload。

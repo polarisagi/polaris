@@ -36,7 +36,7 @@ func LoadProvidersFromDB(ctx context.Context, db *sql.DB, reg *inference.Provide
 		}
 
 		keyCopy := apiKey
-		credFn := func() string { return keyCopy }
+		credFn := func() []byte { return []byte(keyCopy) }
 		// 注册名使用 model 记录 ID 前缀，保证同厂商多模型不冲突
 		name := fmt.Sprintf("%s/%s", typ, mID[:8])
 

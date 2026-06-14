@@ -113,6 +113,12 @@ type StateContext struct {
 	// LastReasoningContent 上一轮 LLM 在 thinking 模式下产出的推理内容。
 	// 由 agent_execute.go 在成功 Infer 后写入，供下一轮 PromptFn 注入消息历史。
 	LastReasoningContent string
+
+	// GroundingGap 记录知识接地的缺口信息，由 WorldModel.AssessGrounding 产出，用于注入 Prompt
+	GroundingGap string
+
+	// SkillVersions 记录已注入的技能版本，用于验证版本单调性
+	SkillVersions map[string]int64
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
@@ -355,6 +361,11 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		"ToolsSection":      buildToolListSection(pCtx.Tools),
 		"ExtensionsSection": sCtx.InstalledExtensionsInfo,
 	})
+
+	if sCtx.GroundingGap != "" {
+		tmpl += "\n\nCritical Knowledge Gap:\n" + sCtx.GroundingGap + "\n(Please address this gap explicitly in the plan.)"
+	}
+
 	safeInst, _ := substrate.SanitizeToSafe(substrate.NewTaintedString(
 		tmpl,
 		substrate.TaintSource{OriginTaintLevel: protocol.TaintNone},

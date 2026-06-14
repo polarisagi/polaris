@@ -26,7 +26,7 @@ type GoogleAgentPlatformAdapter struct {
 	model        string
 	projectID    string
 	location     string
-	credentialFn func() string
+	credentialFn func() []byte
 	client       *http.Client
 	caps         protocol.ProviderCapabilities
 	tbr          *observability.TokenBurnRate
@@ -34,7 +34,7 @@ type GoogleAgentPlatformAdapter struct {
 
 var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
 
-func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn func() string, client *http.Client, tbr *observability.TokenBurnRate) *GoogleAgentPlatformAdapter {
+func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn func() []byte, client *http.Client, tbr *observability.TokenBurnRate) *GoogleAgentPlatformAdapter {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -307,9 +307,9 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []protocol.
 		return nil, err
 	}
 	apiKey := a.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
-	endpoint := appendKey(a.buildEndpoint(false), apiKey)
+	endpoint := appendKey(a.buildEndpoint(false), string(apiKey))
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -401,8 +401,8 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []pro
 	}
 	apiKey := a.credentialFn()
 
-	endpoint := appendKey(a.buildEndpoint(true), apiKey)
-	clearString(&apiKey)
+	endpoint := appendKey(a.buildEndpoint(true), string(apiKey))
+	clearBytes(apiKey)
 
 	// 给单次推理加 120s 上限，防止 Google 连接 hang 住永不关闭导致前端卡死
 	inferCtx, cancel := context.WithTimeout(ctx, 120*time.Second)

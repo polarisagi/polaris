@@ -3,6 +3,7 @@ package substrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -206,5 +207,51 @@ func TestProcess_NoHandler(t *testing.T) {
 	// 无 handler → 静默跳过，不报错
 	if err := w.Process(context.Background(), record); err != nil {
 		t.Fatalf("unexpected error for missing handler: %v", err)
+	}
+}
+
+func TestProcess_VersionCheck(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	w := NewOutboxWorker(db, 5, 3)
+
+	handlerCalled := false
+	handler := func(ctx context.Context, r *OutboxRecord) error {
+		handlerCalled = true
+		return nil
+	}
+
+	checker := func(ctx context.Context, r *OutboxRecord) (int64, error) {
+		// pretend existing version is 5
+		return 5, nil
+	}
+	w.RegisterHandler("surrealdb", handler, checker)
+
+	// Old version: 4 <= 5 -> ErrVersionStale
+	recordOld := &OutboxRecord{ID: 1, TargetEngine: "surrealdb", Version: 4, CrashRecoveryCount: 0}
+	err := w.Process(context.Background(), recordOld)
+	if !errors.Is(err, ErrVersionStale) {
+		t.Errorf("expected ErrVersionStale, got: %v", err)
+	}
+	if handlerCalled {
+		t.Error("handler should not be called for old version")
+	}
+
+	// Same version: 5 <= 5 -> ErrVersionStale
+	recordSame := &OutboxRecord{ID: 2, TargetEngine: "surrealdb", Version: 5, CrashRecoveryCount: 0}
+	err = w.Process(context.Background(), recordSame)
+	if !errors.Is(err, ErrVersionStale) {
+		t.Errorf("expected ErrVersionStale for same version, got: %v", err)
+	}
+
+	// New version: 6 > 5 -> success
+	handlerCalled = false
+	recordNew := &OutboxRecord{ID: 3, TargetEngine: "surrealdb", Version: 6, CrashRecoveryCount: 0}
+	err = w.Process(context.Background(), recordNew)
+	if err != nil {
+		t.Errorf("expected success for new version, got: %v", err)
+	}
+	if !handlerCalled {
+		t.Error("handler should be called for new version")
 	}
 }

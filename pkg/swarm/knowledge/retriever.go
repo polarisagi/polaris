@@ -171,6 +171,7 @@ func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []Co
 func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEmbed []float32, limit int) ([]Chunk, error) {
 
 	// Tier 0 降级：读取所有有 embedding 的 chunk（线性扫描）
+	// 注意: 5000 行上限为 Tier-0 内存预算约束，后续考虑配置化
 	rows, err := hr.db.QueryContext(ctx, `
 		SELECT id, doc_id, content, taint_level, taint_source, embedding
 		FROM rag_chunks

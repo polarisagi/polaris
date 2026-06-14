@@ -1,6 +1,9 @@
 package kernel
 
 import (
+	"crypto/ed25519"
+	"log/slog"
+
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/substrate"
@@ -42,8 +45,34 @@ func (b *PromptBuilder) WriteSystemEnvironment(snapshot string) {
 }
 
 // WriteSkillContext 将技能上下文写入 ZoneMutableSkill 区。
-func (b *PromptBuilder) WriteSkillContext(ctxMsg protocol.Message) {
-	b.zones[ZoneMutableSkill] = append(b.zones[ZoneMutableSkill], ctxMsg)
+func (b *PromptBuilder) WriteSkillContext(sCtx *StateContext, skill protocol.Skill, pubKey ed25519.PublicKey) {
+	// 2. 先验 Ed25519 签名
+	if !ed25519.Verify(pubKey, []byte(skill.Content), skill.Signature) {
+		slog.Warn("WriteSkillContext: signature verification failed, skipping skill", "skill", skill.Name)
+		return
+	}
+
+	// 3. 版本单调检查
+	if sCtx.SkillVersions == nil {
+		sCtx.SkillVersions = make(map[string]int64)
+	}
+	lastVer, exists := sCtx.SkillVersions[skill.Name]
+	if exists && skill.Version < lastVer {
+		slog.Warn("WriteSkillContext: version rollback detected, rejecting skill", "skill", skill.Name, "version", skill.Version, "last", lastVer)
+		return
+	}
+	sCtx.SkillVersions[skill.Name] = skill.Version
+
+	// 4. TrustLevel 标记
+	content := skill.Content
+	if skill.Trust < protocol.TrustOfficial {
+		content = "[UNTRUSTED]\n" + content
+	}
+
+	b.zones[ZoneMutableSkill] = append(b.zones[ZoneMutableSkill], protocol.Message{
+		Role:    "system",
+		Content: content,
+	})
 }
 
 // WriteUserData 将不受信的外部输入写入 User 角色，并强制进行 Spotlighting 围栏保护。

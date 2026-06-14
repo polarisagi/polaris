@@ -29,7 +29,7 @@ const maxEpisodicPayloadBytes = 8192
 type EpisodicMem struct {
 	store     protocol.Store
 	events    []protocol.Event
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	indexer   *EpisodicGraphIndexer // Tier1+：图索引器，nil 时跳过
 	cognitive CognitiveSearcher     // Tier1+：SurrealDB FTS 索引写入，nil 时跳过
 	maxEvents int                   // 内存事件容量上限，0 表示不限制
@@ -104,33 +104,43 @@ func (em *EpisodicMem) Append(ctx context.Context, ev protocol.Event) error {
 }
 
 func (em *EpisodicMem) Query(ctx context.Context, q protocol.EpisodicQuery) ([]protocol.ScoredEvent, error) { //nolint:gocyclo
-	em.mu.Lock()
-	defer em.mu.Unlock()
-
-	// 从 SQLite 按前缀扫描重建（重启后内存列表为空时兜底）
-	// 正常运行中 em.events 同步维护，此处双路径保证正确性
+	em.mu.RLock()
 	var events []protocol.Event
 	if len(em.events) > 0 {
-		events = em.events
-	} else {
-		// 从持久化存储按前缀 "episodic:" 扫描恢复
+		events = make([]protocol.Event, len(em.events))
+		copy(events, em.events)
+	}
+	em.mu.RUnlock()
+
+	// 重启后内存列表为空时从持久化存储按前缀扫描恢复
+	if len(events) == 0 {
 		iter, err := em.store.Scan(ctx, []byte("episodic:"))
 		if err != nil {
 			return nil, err
 		}
+
+		var loaded []protocol.Event
 		for iter.Next() {
 			var ev protocol.Event
 			if jsonErr := json.Unmarshal(iter.Value(), &ev); jsonErr == nil {
-				events = append(events, ev)
-				em.events = append(em.events, ev) // 重建内存缓存
+				loaded = append(loaded, ev)
 			}
 		}
 		iter.Close()
-		// 重建完成后做容量截断，保留最新 maxEvents 条（防重启后 OOM）
-		if em.maxEvents > 0 && len(em.events) > em.maxEvents {
-			em.events = em.events[len(em.events)-em.maxEvents:]
-			events = em.events
+
+		em.mu.Lock()
+		if len(em.events) == 0 { // double check
+			em.events = append(em.events, loaded...)
+			if em.maxEvents > 0 && len(em.events) > em.maxEvents {
+				em.events = em.events[len(em.events)-em.maxEvents:]
+			}
+			events = make([]protocol.Event, len(em.events))
+			copy(events, em.events)
+		} else {
+			events = make([]protocol.Event, len(em.events))
+			copy(events, em.events)
 		}
+		em.mu.Unlock()
 	}
 
 	var results []protocol.ScoredEvent //nolint:prealloc
@@ -176,10 +186,10 @@ func (em *EpisodicMem) Query(ctx context.Context, q protocol.EpisodicQuery) ([]p
 //  3. 取最新 3 条合并摘要写入 SemanticMem
 //  4. 原始事件打 consolidated=true 标记（不删除，保留审计链）
 func (em *EpisodicMem) Consolidate(ctx context.Context, semantic *SemanticMem) error {
-	em.mu.Lock()
+	em.mu.RLock()
 	events := make([]protocol.Event, len(em.events))
 	copy(events, em.events)
-	em.mu.Unlock()
+	em.mu.RUnlock()
 
 	if len(events) < 3 {
 		return nil

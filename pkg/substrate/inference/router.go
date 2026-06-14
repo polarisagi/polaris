@@ -12,19 +12,22 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/polarisagi/polaris/internal/config"
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
+
+// ErrAllProvidersFailed 所有 Provider 耗尽哨兵
+var ErrAllProvidersFailed = perrors.New(perrors.CodeInternal, "inference: all providers exhausted")
 
 // ─── CircuitBreaker ────────────────────────────────────────────────────────────
 
@@ -333,6 +336,15 @@ type InferenceRouter struct {
 	rateTracker  *RateLimitTracker
 	client       *http.Client
 	outboxWriter protocol.OutboxWriter
+	eventWriter  protocol.EventWriter
+}
+
+type RouterOption func(*InferenceRouter)
+
+func WithEventWriter(w protocol.EventWriter) RouterOption {
+	return func(ir *InferenceRouter) {
+		ir.eventWriter = w
+	}
 }
 
 func (ir *InferenceRouter) InjectOutboxWriter(w protocol.OutboxWriter) {
@@ -341,7 +353,7 @@ func (ir *InferenceRouter) InjectOutboxWriter(w protocol.OutboxWriter) {
 
 var _ protocol.Provider = (*InferenceRouter)(nil)
 
-func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer) *InferenceRouter {
+func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts ...RouterOption) *InferenceRouter {
 	transport := &http.Transport{}
 	if dialer != nil {
 		transport.DialContext = dialer.DialContext
@@ -357,6 +369,9 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer) *Infe
 			},
 			Timeout: 120 * time.Second,
 		},
+	}
+	for _, opt := range opts {
+		opt(ir)
 	}
 	reg.InjectRecoveryHandler(func(providerName string) {
 		// 向 outbox 投递 m4_provider_recovery 事件，唤醒因 provider_suspended 挂起的 Agent
@@ -400,6 +415,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, o
 		Temperature:     options.Temperature,
 		ResponseFormat:  options.ResponseFormat,
 		ReasoningEffort: options.ReasoningEffort,
+		ThinkingBudget:  options.ThinkingBudget,
 	}
 
 	// 统一预处理：降采样超规格图片、PNG/GIF→JPEG 格式转换
@@ -407,7 +423,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, o
 	normalizeInferRequest(req)
 	entry := ir.registry.best(req)
 	if entry == nil {
-		return nil, perrors.New(perrors.CodeInternal, "inference_router: no available providers")
+		return nil, fmt.Errorf("inference_router: %w", ErrAllProvidersFailed)
 	}
 	start := time.Now()
 	resp, err := entry.provider.Infer(ctx, msgs, opts...)
@@ -441,6 +457,27 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []protocol.Message, o
 			resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
 			costUSD,
 		)
+
+		if ir.eventWriter != nil {
+			go func() {
+				// 超时 200ms
+				ctx2, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				sessionID := ""
+				if sid, ok := ctx.Value("session_id").(string); ok {
+					sessionID = sid
+				}
+				_ = ir.eventWriter.WriteEvent(ctx2, "llm_call", map[string]any{
+					"provider_name": entry.name,
+					"model":         resp.Model,
+					"input_tokens":  resp.Usage.InputTokens,
+					"output_tokens": resp.Usage.OutputTokens,
+					"latency_ms":    ms,
+					"session_id":    sessionID,
+					"timestamp":     time.Now(),
+				})
+			}()
+		}
 	}
 	return resp, nil
 }
@@ -460,13 +497,14 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []protocol.Mess
 		Temperature:     options.Temperature,
 		ResponseFormat:  options.ResponseFormat,
 		ReasoningEffort: options.ReasoningEffort,
+		ThinkingBudget:  options.ThinkingBudget,
 	}
 
 	// 统一预处理：与 Infer 路径一致，确保流式和非流式路径均受益
 	normalizeInferRequest(req)
 	entry := ir.registry.best(req)
 	if entry == nil {
-		return nil, perrors.New(perrors.CodeInternal, "inference_router: no available providers")
+		return nil, fmt.Errorf("inference_router: %w", ErrAllProvidersFailed)
 	}
 	start := time.Now()
 	ch, err := entry.provider.StreamInfer(ctx, msgs, opts...)
@@ -488,7 +526,68 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []protocol.Mess
 		// Failover: 尝试次优 Provider
 		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
 	}
-	return ch, nil
+
+	return ir.wrapStreamChannel(ctx, ch, entry.name, options.Model), nil
+}
+
+// wrapStreamChannel 封装流处理，以便在流结束或中断时记录事件
+func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan protocol.StreamEvent, providerName, model string) <-chan protocol.StreamEvent {
+	out := make(chan protocol.StreamEvent)
+	go func() {
+		defer close(out)
+		start := time.Now()
+		var inputTokens, outputTokens int
+		interrupted := false
+		for {
+			select {
+			case <-ctx.Done():
+				interrupted = true
+				ir.writeStreamEvent(ctx, providerName, model, inputTokens, outputTokens, float64(time.Since(start).Milliseconds()), interrupted)
+				return
+			case ev, ok := <-ch:
+				if !ok {
+					ir.writeStreamEvent(ctx, providerName, model, inputTokens, outputTokens, float64(time.Since(start).Milliseconds()), interrupted)
+					return
+				}
+				if ev.Type == protocol.StreamError || ev.Type == protocol.StreamCancelled {
+					interrupted = true
+				}
+				// 累计 token 以供最终写入
+				if ev.Usage.InputTokens > inputTokens {
+					inputTokens = ev.Usage.InputTokens
+				}
+				if ev.Usage.OutputTokens > outputTokens {
+					outputTokens = ev.Usage.OutputTokens
+				}
+				out <- ev
+			}
+		}
+	}()
+	return out
+}
+
+func (ir *InferenceRouter) writeStreamEvent(ctx context.Context, providerName, model string, inputTokens, outputTokens int, ms float64, interrupted bool) {
+	if ir.eventWriter == nil {
+		return
+	}
+	go func() {
+		ctx2, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		sessionID := ""
+		if sid, ok := ctx.Value("session_id").(string); ok {
+			sessionID = sid
+		}
+		_ = ir.eventWriter.WriteEvent(ctx2, "llm_call", map[string]any{
+			"provider_name":         providerName,
+			"model":                 model,
+			"input_tokens":          inputTokens,
+			"output_tokens":         outputTokens,
+			"latency_ms":            ms,
+			"session_id":            sessionID,
+			"timestamp":             time.Now(),
+			"streaming_interrupted": interrupted,
+		})
+	}()
 }
 
 // streamFailover 流式路径次优选择。
@@ -516,7 +615,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []protocol.M
 		}
 	}
 	if chosen == nil {
-		return nil, perrors.New(perrors.CodeInternal, "inference_router: all providers failed (stream)")
+		return nil, fmt.Errorf("inference_router: stream: %w", ErrAllProvidersFailed)
 	}
 	ch, err := chosen.provider.StreamInfer(ctx, msgs, opts...)
 	chosen.recordOutcome(err == nil, func() {
@@ -528,6 +627,9 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []protocol.M
 			fn(name)
 		}
 	})
+	if err == nil {
+		return ir.wrapStreamChannel(ctx, ch, chosen.name, req.Model), nil
+	}
 	return ch, err
 }
 
@@ -593,7 +695,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message
 		}
 	}
 	if chosen == nil {
-		return nil, perrors.New(perrors.CodeInternal, "inference_router: all providers failed")
+		return nil, fmt.Errorf("inference_router: %w", ErrAllProvidersFailed)
 	}
 	resp, err := chosen.provider.Infer(ctx, msgs, opts...)
 	chosen.recordOutcome(err == nil, func() {
@@ -615,24 +717,38 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []protocol.Message
 			resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
 			costUSD,
 		)
+
+		if ir.eventWriter != nil {
+			go func() {
+				ctx2, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				sessionID := ""
+				if sid, ok := ctx.Value("session_id").(string); ok {
+					sessionID = sid
+				}
+				ms := float64(time.Since(start).Milliseconds())
+				_ = ir.eventWriter.WriteEvent(ctx2, "llm_call", map[string]any{
+					"provider_name": chosen.name,
+					"model":         resp.Model,
+					"input_tokens":  resp.Usage.InputTokens,
+					"output_tokens": resp.Usage.OutputTokens,
+					"latency_ms":    ms,
+					"session_id":    sessionID,
+					"timestamp":     time.Now(),
+				})
+			}()
+		}
 	}
 	return resp, err
 }
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
-// clearString API Key 使用后原地清零（防止 heap dump 泄漏敏感数据）。
-// 使用 unsafe.StringData + unsafe.Slice 直接操作底层字节（Go 1.20+）。
-func clearString(s *string) {
-	if len(*s) == 0 {
-		return
-	}
-	// 取底层数组指针并以 byte slice 视图覆写，不产生副本
-	b := unsafe.Slice(unsafe.StringData(*s), len(*s))
+// clearBytes API Key 使用后原地清零（防止 heap dump 泄漏敏感数据）。
+func clearBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
-	*s = ""
 }
 
 func max64(a, b float64) float64 {

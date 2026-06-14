@@ -57,7 +57,7 @@ func cooldownFor(r FailReason) time.Duration {
 // PooledCredential 池中单个凭证的运行时状态。
 // 外部通过 CredFn() 和 RecordResult() 与其交互，不直接读写字段。
 type PooledCredential struct {
-	key   string // API key 明文（池生命周期内常驻内存）
+	key   []byte // API key 明文（池生命周期内常驻内存）
 	label string // 日志可见标识符，不包含 key 内容
 
 	mu            sync.Mutex
@@ -76,10 +76,10 @@ func (c *PooledCredential) Available() bool {
 	return c.cooldownUntil.IsZero() || time.Now().After(c.cooldownUntil)
 }
 
-// CredFn 返回与 adapter 构造函数兼容的 func() string。
+// CredFn 返回与 adapter 构造函数兼容的 func() []byte。
 // 每次调用累计 requestCount，adapter 侧仍应 defer clearString(&local) 清零局部拷贝。
-func (c *PooledCredential) CredFn() func() string {
-	return func() string {
+func (c *PooledCredential) CredFn() func() []byte {
+	return func() []byte {
 		c.mu.Lock()
 		c.requestCount++
 		c.mu.Unlock()
@@ -154,7 +154,7 @@ func NewCredentialPool(keys []string, strategy SelectStrategy) *CredentialPool {
 	p := &CredentialPool{strategy: strategy}
 	for i, k := range keys {
 		label := labelFor(i, k)
-		p.creds = append(p.creds, &PooledCredential{key: k, label: label})
+		p.creds = append(p.creds, &PooledCredential{key: []byte(k), label: label})
 	}
 	return p
 }
@@ -169,7 +169,7 @@ func (p *CredentialPool) Add(key, label string) {
 	if label == "" {
 		label = labelFor(len(p.creds), key)
 	}
-	cred := &PooledCredential{key: key, label: label}
+	cred := &PooledCredential{key: []byte(key), label: label}
 	p.mu.Lock()
 	p.creds = append(p.creds, cred)
 	p.mu.Unlock()
@@ -220,14 +220,14 @@ func (p *CredentialPool) Pick() *PooledCredential {
 	}
 }
 
-// CredFn 返回与 adapter credentialFn 字段兼容的 func() string。
+// CredFn 返回与 adapter credentialFn 字段兼容的 func() []byte。
 // 每次调用内部执行一次 Pick()，不做失败反馈。
 // 适用于只有一个 key 或不需要失败追踪的场景。
-func (p *CredentialPool) CredFn() func() string {
-	return func() string {
+func (p *CredentialPool) CredFn() func() []byte {
+	return func() []byte {
 		c := p.Pick()
 		if c == nil {
-			return ""
+			return nil
 		}
 		c.mu.Lock()
 		c.requestCount++

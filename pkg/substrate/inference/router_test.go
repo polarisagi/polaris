@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -127,11 +128,13 @@ func TestInferenceRouter_HealthScorePreference(t *testing.T) {
 	}
 }
 
-func TestClearString(t *testing.T) {
-	s := strings.Clone("secret-api-key-12345")
-	clearString(&s)
-	if s != "" {
-		t.Fatal("clearString should empty the string")
+func TestClearBytes(t *testing.T) {
+	s := []byte("secret-api-key-12345")
+	clearBytes(s)
+	for _, v := range s {
+		if v != 0 {
+			t.Fatal("clearBytes should zero the slice")
+		}
 	}
 }
 
@@ -201,5 +204,28 @@ func TestCircuitBreaker_OnRecovery(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("did not find provider_recovery outbox event")
+	}
+}
+
+func TestErrAllProvidersFailed(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+	router := NewInferenceRouter(reg, nil)
+
+	// Without any providers, it should fail with ErrAllProvidersFailed
+	_, err := router.Infer(context.Background(), []protocol.Message{{Role: "user", Content: "Hello"}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrAllProvidersFailed) {
+		t.Fatalf("expected ErrAllProvidersFailed, got %v", err)
+	}
+
+	// For stream as well
+	_, err = router.StreamInfer(context.Background(), []protocol.Message{{Role: "user", Content: "Hello"}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrAllProvidersFailed) {
+		t.Fatalf("expected ErrAllProvidersFailed, got %v", err)
 	}
 }

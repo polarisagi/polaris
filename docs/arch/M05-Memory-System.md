@@ -558,7 +558,7 @@ EmbeddingVersionTracker:
 | TaskMermaidCanvas | `pkg/cognition/mmd_canvas.go` `pkg/cognition/compressor.go` | **✅ 已完成** — 线程安全 Mermaid `graph LR` 画布；`SessionCompressor` 新增 Stage 3 注入逻辑；12 个单元测试覆盖节点样式、截断、Jaccard、Compressor 集成 |
 | EpisodicGraphBridge | `pkg/cognition/memory/episodic_graph_bridge.go` | **✅ 已完成** — `ACTION_DONE` 事件已实现解析 `event.Payload` 提取真实 `tool_name` 构建动态图边，移除硬编码 |
 | ReflectionMem | `pkg/cognition/memory/reflection_mem.go` | **✅ 已完成** — 实现了基于 HT0 限额的 LRU 缓存驱逐与存取机制 |
-| ContextAssembler | `pkg/cognition/context_assembler.go` | **✅ 已完成** — 实现了针对 TaintData 且 TaintMedium 以上的 M11 Spotlighting 封锁包装 |
+| ContextAssembler | ~~`pkg/cognition/context_assembler.go`~~ | **已移除** — 功能合并至 `kernel.PromptBuilder`（`pkg/cognition/kernel/prompt.go`），TaintData Spotlighting 由 PromptBuilder.WriteUserData 门控执行（见 §11） |
 | DurativeMemoryManager | `pkg/cognition/memory/durative_mem.go` | **✅ 已完成** — 实现了持续性记忆组 `DurativeGroup` 的聚类合并引擎 |
 | EdgeWeightManager | `pkg/cognition/memory/edge_weight.go` | **✅ 已完成** — 实现了动态读时图边衰减（`DecayUnused`）以及 BFS 子图抽取引擎 |
 | ReflectionWorker | `pkg/swarm/self_improve/reflection_worker.go` | **✅ 已完成** — 实现后台提取，在 session 完成后执行经验萃取入库 |

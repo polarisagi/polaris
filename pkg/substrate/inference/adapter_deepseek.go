@@ -10,7 +10,7 @@ import (
 
 // DeepSeekAdapter 实现 protocol.Provider，对接 DeepSeek 官方 API (兼容 OpenAI 格式)。
 type DeepSeekAdapter struct {
-	credentialFn func() string
+	credentialFn func() []byte
 	client       *OpenAICompatibleClient
 	capabilities protocol.ProviderCapabilities
 	modelID      string // 通过配置注入，默认 "deepseek-v4-flash"
@@ -20,7 +20,7 @@ type DeepSeekAdapter struct {
 // NewDeepSeekAdapter 构造 DeepSeek 适配器。
 // modelID 传 "" 时默认使用 "deepseek-v4-flash"（V4 Flash，低成本推理）；
 // 传 "deepseek-v4-pro" 时启用 1M context 上限。
-func NewDeepSeekAdapter(credFn func() string, httpClient *http.Client, modelID string, tbr *observability.TokenBurnRate) *DeepSeekAdapter {
+func NewDeepSeekAdapter(credFn func() []byte, httpClient *http.Client, modelID string, tbr *observability.TokenBurnRate) *DeepSeekAdapter {
 	if httpClient == nil {
 		httpClient = defaultHTTPClient
 	}
@@ -85,11 +85,11 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []protocol.Message, op
 	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
 	apiKey := d.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
-	resp, err := d.client.SendRequest(ctx, apiKey, apiReq)
+	resp, err := d.client.SendRequest(ctx, string(apiKey), apiReq)
 	if err != nil {
 		return nil, err
 	}
@@ -147,12 +147,12 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []protocol.Messa
 	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
 	apiKey := d.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
 	tok := newTiktokenTokenizer("deepseek-v4")
-	return d.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
+	return d.client.SendStreamRequest(ctx, string(apiKey), apiReq, tok.EstimateRequest(req))
 }
 
 // resolveDeepSeekModel 负责将旧模型名称迁移到新模型名称（90天过渡期 fallback）

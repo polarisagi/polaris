@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			provider_suspended_count INTEGER DEFAULT 0,
 			suspend_reason TEXT,
 			version INTEGER,
+			retry_count INTEGER DEFAULT 0,
+			max_retries INTEGER DEFAULT 3,
 			created_at DATETIME,
 			updated_at DATETIME
 		)
@@ -96,5 +99,52 @@ func TestReaperCancelGracePeriod(t *testing.T) {
 		// success
 	default:
 		t.Errorf("cancel func was not called!")
+	}
+}
+
+func TestReaperCancelParallel(t *testing.T) {
+	db := setupTestDB(t)
+	bb := NewSQLiteBlackboard(db)
+	ctx := context.Background()
+
+	// 模拟 100 个需要 cancel 的过期任务
+	const numTasks = 100
+	var cancelTriggered []chan struct{}
+	for i := 0; i < numTasks; i++ {
+		taskID := fmt.Sprintf("task_%d", i)
+		_, err := bb.db.Exec(`INSERT INTO tasks (task_id, session_id, status, claimed_by, expires_at, created_at, updated_at) 
+			VALUES (?, 'session', ?, 'agent1', datetime('now', '-10 seconds'), datetime('now'), datetime('now'))`, taskID, "claimed")
+		if err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		cancelCtx, cancel := context.WithCancel(context.Background())
+		bb.RegisterCancelFunc(taskID, cancel)
+
+		ch := make(chan struct{})
+		cancelTriggered = append(cancelTriggered, ch)
+		go func(c context.Context, ch chan struct{}) {
+			<-c.Done()
+			// 模拟慢 cancel
+			time.Sleep(10 * time.Millisecond)
+			close(ch)
+		}(cancelCtx, ch)
+	}
+
+	start := time.Now()
+	// 使用 bb.reap(ctx) 测试
+	bb.reap(ctx)
+	elapsed := time.Since(start)
+
+	if elapsed > 5500*time.Millisecond {
+		t.Errorf("reap took %v, expected parallel cancel taking ~5s", elapsed)
+	}
+
+	for _, ch := range cancelTriggered {
+		select {
+		case <-ch:
+		default:
+			t.Errorf("cancel func was not called!")
+		}
 	}
 }

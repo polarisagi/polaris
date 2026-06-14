@@ -13,7 +13,7 @@ import (
 // 复用了 client.go 中通用的 OpenAICompatibleClient。
 type OpenAIAdapter struct {
 	model        string
-	credentialFn func() string
+	credentialFn func() []byte
 	client       *OpenAICompatibleClient
 	caps         protocol.ProviderCapabilities
 	tbr          *observability.TokenBurnRate
@@ -23,7 +23,7 @@ var _ protocol.Provider = (*OpenAIAdapter)(nil)
 
 // NewOpenAIAdapter 初始化一个 OpenAI 适配器。
 // baseURL 默认为 "https://api.openai.com/v1"（如果传入空串）。
-func NewOpenAIAdapter(baseURL, model string, credFn func() string, client *http.Client, tbr *observability.TokenBurnRate) *OpenAIAdapter {
+func NewOpenAIAdapter(baseURL, model string, credFn func() []byte, client *http.Client, tbr *observability.TokenBurnRate) *OpenAIAdapter {
 	if client == nil {
 		client = defaultHTTPClient
 	}
@@ -89,9 +89,9 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []protocol.Message, opts
 	}
 
 	apiKey := a.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
-	resp, err := a.client.SendRequest(ctx, apiKey, apiReq)
+	resp, err := a.client.SendRequest(ctx, string(apiKey), apiReq)
 	if err != nil {
 		return nil, err
 	}
@@ -152,10 +152,10 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []protocol.Message
 	}
 
 	apiKey := a.credentialFn()
-	defer clearString(&apiKey)
+	defer clearBytes(apiKey)
 
 	tok := newTiktokenTokenizer(a.model)
-	return a.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
+	return a.client.SendStreamRequest(ctx, string(apiKey), apiReq, tok.EstimateRequest(req))
 }
 
 func resolveOpenAIModel(requested string) string {

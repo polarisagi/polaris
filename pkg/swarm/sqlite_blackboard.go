@@ -22,11 +22,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -661,14 +663,26 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 		return
 	}
 
+	var toCancel []context.CancelFunc
 	bb.mu.Lock()
 	for _, r := range expired {
 		if cancel, ok := bb.cancels[r.taskID]; ok && cancel != nil {
-			cancel()
+			toCancel = append(toCancel, cancel)
 			delete(bb.cancels, r.taskID)
 		}
 	}
 	bb.mu.Unlock()
+
+	// 并发 cancel
+	var eg errgroup.Group
+	for _, cancel := range toCancel {
+		c := cancel
+		eg.Go(func() error {
+			c()
+			return nil
+		})
+	}
+	_ = eg.Wait()
 
 	// 宽限期：给 M7 工具的 ctx.Done() 感知路径留出 5s 时间窗口
 	select {
@@ -677,18 +691,29 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 		return
 	}
 
-	// 宽限期结束，强制回写 DB
+	// 宽限期结束，强制回写 DB（批量 UPDATE）
+	var taskIDs []any
+	var placeholders []string
 	for _, r := range expired {
-		_, _ = bb.db.ExecContext(ctx, `
-			UPDATE tasks
-			SET status = CASE WHEN toxicity + 1 >= 3 THEN ? ELSE ? END,
-			    claimed_by=NULL, claimed_at=NULL, expires_at=NULL,
-			    provider_suspended_count=provider_suspended_count+1,
-			    toxicity=toxicity+1,
-			    version=version+1, updated_at=datetime('now')
-			WHERE task_id=? AND status IN (?,?)`,
-			statusFailed, statusPending, r.taskID, statusClaimed, statusRunning,
-		)
+		taskIDs = append(taskIDs, r.taskID)
+		placeholders = append(placeholders, "?")
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE tasks
+		SET status = CASE WHEN retry_count + 1 >= max_retries THEN ? ELSE ? END,
+		    claimed_by=NULL, claimed_at=NULL, expires_at=NULL,
+		    provider_suspended_count=provider_suspended_count+1,
+		    retry_count=retry_count+1,
+		    version=version+1, updated_at=datetime('now')
+		WHERE status IN (?,?) AND task_id IN (%s)`, strings.Join(placeholders, ","))
+
+	args := []any{statusFailed, statusPending, statusClaimed, statusRunning}
+	args = append(args, taskIDs...)
+
+	_, _ = bb.db.ExecContext(ctx, query, args...)
+
+	for _, r := range expired {
 		bb.broadcast(protocol.BlackboardEvent{
 			Type:    "task_lease_expired",
 			TaskID:  r.taskID,

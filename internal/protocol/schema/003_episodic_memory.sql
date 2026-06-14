@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS episodic_events (
     embed_model_version TEXT   NOT NULL DEFAULT '',    -- 空字符串=未索引，OnlineReindexer 触发条件
     event_uuid         TEXT    NOT NULL DEFAULT '',    -- 原始 Event.ID（UUID）；OutboxWorker 填充，供 SurrealDB VecUpsert/FTSIndex 使用
     cold               INTEGER NOT NULL DEFAULT 0,     -- 滑动窗口降维标签，0=active, 1=cold
+    reasoning_state    TEXT,                           -- CoT 轨迹
     UNIQUE(session_id, seq)
 );
 

@@ -112,6 +112,17 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 		// S_PLAN 阶段
 		if a.sm.Current() == protocol.AgentStatePlan {
+			if a.worldModel != nil && a.sCtx.TaskModel != nil {
+				// 注入上下文给 WorldModel 进行知识接地评估
+				// 这里使用 TaskModel.Goal 作为 task，并将 SysEnvSnapshot 等作为 contextText
+				ok, gap := a.worldModel.AssessGrounding(a.ctx, a.sCtx.TaskModel.Goal, a.sCtx.SysEnvSnapshot)
+				if !ok && gap != "" {
+					a.sCtx.GroundingGap = gap
+				} else {
+					a.sCtx.GroundingGap = ""
+				}
+			}
+
 			if a.sCtx.SurpriseIndex > 0 && a.sCtx.SurpriseIndex < 0.3 {
 				// FastPath 路径：S_PERCEIVE 已坍缩，直接旁路 LLM 规划。
 				// DAGModel 为 nil 时 runExecuteDAG 直接推进 ExecuteDone，

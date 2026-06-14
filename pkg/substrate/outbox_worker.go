@@ -3,11 +3,18 @@ package substrate
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/substrate/observability"
 )
+
+var ErrVersionStale = errors.New("outbox: version stale")
 
 // OutboxWorker — 跨引擎投递 Worker。
 // 消费 M2 outbox 表，将投影写入目标引擎（[Storage-SQLite] / [Storage-SurrealDB-Core]）。
@@ -16,8 +23,9 @@ import (
 type OutboxWorker struct {
 	db           *sql.DB
 	handlers     map[string]OutboxHandler // TargetEngine → HandlerFunc
-	pollInterval int64                    // seconds，5s 默认
-	maxRetries   int                      // 3
+	versionCheck map[string]func(context.Context, *OutboxRecord) (int64, error)
+	pollInterval int64 // seconds，5s 默认
+	maxRetries   int   // 3
 }
 
 // NewOutboxWorker 创建 OutboxWorker，db 必须非 nil（fail-fast）。
@@ -31,6 +39,7 @@ func NewOutboxWorker(db *sql.DB, pollInterval int64, maxRetries int) *OutboxWork
 	return &OutboxWorker{
 		db:           db,
 		handlers:     make(map[string]OutboxHandler),
+		versionCheck: make(map[string]func(context.Context, *OutboxRecord) (int64, error)),
 		pollInterval: pollInterval,
 		maxRetries:   maxRetries,
 	}
@@ -47,14 +56,17 @@ type OutboxRecord struct {
 	Scope              string
 	Payload            []byte
 	IdempotencyKey     protocol.IdempotencyKey
-	Version            int
+	Version            int64
 	Attempts           int
 	CrashRecoveryCount int
 }
 
-// RegisterHandler 注册 Outbox 任务处理器。
-func (w *OutboxWorker) RegisterHandler(taskType string, handler OutboxHandler) {
+// RegisterHandler 注册 Outbox 任务处理器。可选传入版本检查器以支持高水位拦截。
+func (w *OutboxWorker) RegisterHandler(taskType string, handler OutboxHandler, checker ...func(context.Context, *OutboxRecord) (int64, error)) {
 	w.handlers[taskType] = handler
+	if len(checker) > 0 {
+		w.versionCheck[taskType] = checker[0]
+	}
 }
 
 // Write 实现 protocol.OutboxWriter 接口，提供同步写入 Outbox 表的能力。
@@ -135,6 +147,12 @@ func scanOutboxRows(rows *sql.Rows) ([]*OutboxRecord, error) {
 			return nil, perrors.Wrap(perrors.CodeInternal, "outbox scan failed", err)
 		}
 		r.IdempotencyKey = protocol.IdempotencyKey(ikey)
+		parts := strings.Split(ikey, ":")
+		if len(parts) >= 5 {
+			if v, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
+				r.Version = v
+			}
+		}
 		records = append(records, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -218,11 +236,20 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		return nil
 	}
 
+	if errors.Is(err, ErrVersionStale) {
+		_, _ = w.db.ExecContext(ctx,
+			"UPDATE outbox SET status='skipped', processed_at=? WHERE id=?",
+			now, record.ID)
+		return err
+	}
+
 	newAttempts := record.Attempts + 1
 	if newAttempts >= w.maxRetries || record.CrashRecoveryCount >= 3 {
 		_, _ = w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='dead', attempts=?, processed_at=? WHERE id=?",
 			newAttempts, now, record.ID)
+		observability.GlobalOutboxDeadLetterTotal.Add(1)
+		slog.Error("outbox message dead", "id", record.ID, "target", record.TargetEngine, "attempts", newAttempts, "crash", record.CrashRecoveryCount)
 	} else {
 		// 指数退避：2^attempt × 5s
 		backoffMs := (int64(1) << newAttempts) * 5000
@@ -260,8 +287,18 @@ func (w *OutboxWorker) Process(ctx context.Context, record *OutboxRecord) error 
 	}
 
 	if record.CrashRecoveryCount >= 3 {
+		observability.GlobalOutboxDeadLetterTotal.Add(1)
+		slog.Error("outbox message dead (poison pill)", "id", record.ID, "target", record.TargetEngine)
 		return nil
 	}
+
+	if check, ok := w.versionCheck[record.TargetEngine]; ok && check != nil {
+		existingVersion, err := check(ctx, record)
+		if err == nil && existingVersion >= record.Version {
+			return ErrVersionStale
+		}
+	}
+
 	handler, ok := w.handlers[record.TargetEngine]
 	if !ok {
 		return nil

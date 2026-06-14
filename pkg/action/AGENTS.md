@@ -20,7 +20,7 @@
 **文件索引**:
 - [标杆] `tool/tool.go`: InMemoryToolRegistry (M7 主入口)
 - [标杆] `sandbox_impl.go`: SandboxProvider 抽象 + InProcessSandbox
-- [标杆] `wazero_runtime.go`: Wasm 实例化 + Gold/Silver/Bronze 限额
+- [标杆] `sandbox_impl.go`: Wasm 实例化 + Gold/Silver/Bronze 限额
 - [参照] `tool/builtin_tools.go`: RegisterBuiltinTools (新增内置工具)
 - [参照] `code_act.go`: ad-hoc 代码执行 (Tier 1+)
 - [参照] `lam/lam.go`: LargeActionModel GUI 动作意图解析

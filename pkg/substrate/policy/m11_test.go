@@ -40,7 +40,7 @@ func TestCapabilityToken_MintVerify(t *testing.T) {
 		t.Fatalf("NewTokenManager: %v", err)
 	}
 
-	tok, err := tm.Mint("agent-0", []policy.CapabilityType{policy.CapNetwork}, 0)
+	tok, err := tm.Mint("agent-0", []policy.CapabilityType{policy.CapNetwork}, 1, 0)
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestCapabilityToken_MintVerify(t *testing.T) {
 // TestCapabilityToken_Revoke 验证 Revoke 后令牌验证失败。
 func TestCapabilityToken_Revoke(t *testing.T) {
 	tm, _ := policy.NewTokenManager()
-	tok, _ := tm.Mint("agent-0", []policy.CapabilityType{policy.CapShell}, 0)
+	tok, _ := tm.Mint("agent-0", []policy.CapabilityType{policy.CapShell}, 1, 0)
 
 	tm.Revoke(tok.Claims.TokenID)
 

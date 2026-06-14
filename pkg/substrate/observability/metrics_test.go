@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +64,22 @@ func Test_SurpriseIndex_Current_ReflectsLastCompute(t *testing.T) {
 	val := si.ComputeBasic(context.Background(), []float64{0.1}, []string{"toolA"})
 	if si.Current() != val {
 		t.Errorf("Expected Current() %v == lastCompute %v", si.Current(), val)
+	}
+}
+
+func Test_SurpriseIndex_GatherMetrics(t *testing.T) {
+	tbr := NewTokenBurnRate()
+	handler := legacyMetricsHandler(tbr)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "polaris_surprise_index ") {
+		t.Error("Missing polaris_surprise_index")
+	}
+	if !strings.Contains(body, "polaris_surprise_index_basic ") {
+		t.Error("Missing polaris_surprise_index_basic")
 	}
 }

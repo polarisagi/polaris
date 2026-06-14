@@ -36,6 +36,7 @@ type Agent struct {
 	hitl            protocol.HITL                 // 人工审批网关
 	toolRegistry    protocol.ToolRegistry         // 工具注册表（由 M7 提供）
 	memory          protocol.Memory               // 四层记忆系统（由 M5 提供）
+	worldModel      WorldModel                    // 认知世界模型，nil 时安全降级
 	prm             *prm.DefaultPRM               // 可选；nil 时跳过多候选打分
 	scorer          *stepScorer                   // Adaptive Max-Steps 打分器
 	whisperChan     <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
@@ -78,6 +79,16 @@ func NewAgent(id string, db *sql.DB, taintGate TaintGate, provider protocol.Prov
 		whisperChan:     wCh,
 		whisperSendChan: wCh,
 	}
+}
+
+// WorldModel 定义了认知模型所需的知识接地感知接口。
+type WorldModel interface {
+	AssessGrounding(ctx context.Context, task string, contextText string) (bool, string)
+}
+
+// InjectWorldModel 注入认知世界模型
+func (a *Agent) InjectWorldModel(wm WorldModel) {
+	a.worldModel = wm
 }
 
 // NewAgentWithPolicyGate 创建带策略引擎的 Agent（主要用于生产环境）。

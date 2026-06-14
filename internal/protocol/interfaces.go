@@ -80,6 +80,11 @@ type DecisionLogger interface {
 	AppendDecision(ctx context.Context, entry *DecisionLogEntry) error
 }
 
+// EventWriter 异步写入事件
+type EventWriter interface {
+	WriteEvent(ctx context.Context, evType string, payload map[string]any) error
+}
+
 // ============================================================================
 // M4 Agent Kernel — StepScorer
 // @consumer: M4(Agent Kernel - 执行步骤评分, Best-of-N 剪枝)
@@ -576,6 +581,14 @@ type SkillMeta struct {
 	ComposesOf []string
 	// PluginID 是来源插件的 plugins.id（"pl_xxx"）；独立安装的技能为空。
 	PluginID string
+}
+
+type Skill struct {
+	Name      string
+	Version   int64
+	Signature []byte
+	Content   string
+	Trust     TrustTier
 }
 
 type SkillBenchmarks struct {

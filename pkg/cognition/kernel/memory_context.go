@@ -145,6 +145,9 @@ func buildPlanContext( //nolint:gocyclo
 		taskJson, _ := json.Marshal(sCtx.TaskModel)
 		instr += "Parsed TaskModel:\n" + string(taskJson) + "\n\n"
 	}
+	if sCtx.GroundingGap != "" {
+		instr += "Critical Knowledge Gap:\n" + sCtx.GroundingGap + "\n(Please address this gap explicitly in the plan.)\n\n"
+	}
 	if sCtx.InstalledExtensionsInfo != "" {
 		instr += sCtx.InstalledExtensionsInfo + "\n\n"
 	}

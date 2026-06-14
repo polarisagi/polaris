@@ -505,7 +505,18 @@ func run() error { //nolint:gocyclo
 	} else {
 		slog.Info("polaris: GraphRAG pipeline disabled by FeatureGate (Tier1+, 1024MB min)")
 	}
-	_ = graphPipeline
+	if graphPipeline != nil {
+		outboxWorker.RegisterHandler("graph_build", func(ctx context.Context, rec *substrate.OutboxRecord) error {
+			var payload struct {
+				DocID string `json:"doc_id"`
+			}
+			if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+				return err
+			}
+			return graphPipeline.Run(ctx, payload.DocID)
+		})
+		slog.Info("polaris: GraphBuildPipeline registered to outbox for graph_build")
+	}
 
 	// ─── 7.6 PII 检测器（M11 §5.1）──────────────────────────────────────────
 	var piiDetector *policy.PIIDetector

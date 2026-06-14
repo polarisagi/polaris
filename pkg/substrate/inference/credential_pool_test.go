@@ -31,7 +31,7 @@ func TestNewSingleCredentialPool(t *testing.T) {
 		t.Fatal("Pick() should not be nil")
 	}
 	fn := c.CredFn()
-	if got := fn(); got != "sk-test-key" {
+	if got := fn(); string(got) != "sk-test-key" {
 		t.Fatalf("CredFn() want %q, got %q", "sk-test-key", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestStrategyFillFirst(t *testing.T) {
 		if c == nil {
 			t.Fatal("unexpected nil")
 		}
-		if c.key != "k0" {
+		if string(c.key) != "k0" {
 			t.Errorf("FillFirst should always pick k0, got %s", c.key)
 		}
 	}
@@ -187,7 +187,7 @@ func TestStrategyFillFirst_Skip_Cooldown(t *testing.T) {
 	if c == nil {
 		t.Fatal("unexpected nil")
 	}
-	if c.key != "k1" {
+	if string(c.key) != "k1" {
 		t.Errorf("FillFirst should skip k0 and pick k1, got %s", c.key)
 	}
 }
@@ -200,7 +200,7 @@ func TestStrategyRoundRobin(t *testing.T) {
 		if c == nil {
 			t.Fatal("unexpected nil")
 		}
-		keys[i] = c.key
+		keys[i] = string(c.key)
 	}
 	// 应轮转 k0 k1 k2 k0 k1 k2
 	want := []string{"k0", "k1", "k2", "k0", "k1", "k2"}
@@ -221,7 +221,7 @@ func TestStrategyRoundRobin_Skip_Cooldown(t *testing.T) {
 		if c == nil {
 			t.Fatal("unexpected nil")
 		}
-		picked[i] = c.key
+		picked[i] = string(c.key)
 	}
 	// k1 被跳过，应轮转 k0 k2 k0 k2（从 k0 开始，跳 k1）
 	for _, k := range picked {
@@ -244,7 +244,7 @@ func TestStrategyLeastUsed(t *testing.T) {
 	if c == nil {
 		t.Fatal("unexpected nil")
 	}
-	if c.key == "k0" {
+	if string(c.key) == "k0" {
 		t.Errorf("LeastUsed should skip k0 (count=100), got k0")
 	}
 }
@@ -257,7 +257,7 @@ func TestStrategyRandom(t *testing.T) {
 		if c == nil {
 			t.Fatal("unexpected nil")
 		}
-		seen[c.key] = true
+		seen[string(c.key)] = true
 	}
 	// 200 次随机选取，理论上三个 key 都会出现
 	if len(seen) < 2 {
@@ -285,7 +285,7 @@ func TestPool_CredFn_ReturnsKeys(t *testing.T) {
 	fn := p.CredFn()
 
 	got0, got1 := fn(), fn()
-	if got0 == "" || got1 == "" {
+	if len(got0) == 0 || len(got1) == 0 {
 		t.Fatal("CredFn should return non-empty keys")
 	}
 }
@@ -295,7 +295,7 @@ func TestPool_CredFn_AllCooling_ReturnsEmpty(t *testing.T) {
 	p.creds[0].RecordFailureReason(ReasonBilling)
 
 	fn := p.CredFn()
-	if got := fn(); got != "" {
+	if got := fn(); len(got) != 0 {
 		t.Errorf("all cooling CredFn() want empty, got %q", got)
 	}
 }

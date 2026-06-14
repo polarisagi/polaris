@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"strings"
 
 	perrors "github.com/polarisagi/polaris/internal/errors"
 )
@@ -49,13 +48,13 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 		return nil, perrors.New(perrors.CodeInvalidInput, "knowledge: doc is nil")
 	}
 	content := string(doc.Raw)
-	// 简单的基于双换行符的分段
-	parts := strings.Split(content, "\n\n")
+
+	chunker := &DefaultChunker{}
+	parts := chunker.Chunk(content, doc.Ref.SourceType)
 
 	var nodes []*DocNode //nolint:prealloc
 
 	for i, part := range parts {
-		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}

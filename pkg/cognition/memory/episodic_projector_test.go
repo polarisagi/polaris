@@ -35,7 +35,8 @@ func TestEpisodicProjectorHandler(t *testing.T) {
 			occurred_at         INTEGER,
 			embed_model_version TEXT    NOT NULL DEFAULT '',
 			event_uuid          TEXT    NOT NULL DEFAULT '',
-			cold                INTEGER NOT NULL DEFAULT 0
+			cold                INTEGER NOT NULL DEFAULT 0,
+			reasoning_state     TEXT    NOT NULL DEFAULT ''
 		)
 	`)
 	if err != nil {
@@ -49,11 +50,12 @@ func TestEpisodicProjectorHandler(t *testing.T) {
 		largePayload[i] = 'B'
 	}
 	ev := protocol.Event{
-		ID:        "test-event-2",
-		Type:      "execution_completed",
-		TaskID:    "session-1",
-		Payload:   largePayload,
-		CreatedAt: time.Now(),
+		ID:             "test-event-2",
+		Type:           "execution_completed",
+		TaskID:         "session-1",
+		Payload:        largePayload,
+		ReasoningState: []byte("this is a test reasoning trace"),
+		CreatedAt:      time.Now(),
 	}
 	payloadBytes, _ := json.Marshal(ev)
 
@@ -71,7 +73,8 @@ func TestEpisodicProjectorHandler(t *testing.T) {
 
 	var content string
 	var cold int
-	err = db.QueryRow("SELECT content, cold FROM episodic_events WHERE event_uuid = ?", "test-event-2").Scan(&content, &cold)
+	var reasoningState string
+	err = db.QueryRow("SELECT content, cold, reasoning_state FROM episodic_events WHERE event_uuid = ?", "test-event-2").Scan(&content, &cold, &reasoningState)
 	if err != nil {
 		t.Fatalf("query failed: %v", err)
 	}
@@ -84,5 +87,8 @@ func TestEpisodicProjectorHandler(t *testing.T) {
 	}
 	if cold != 0 {
 		t.Errorf("cold should be 0, got %d", cold)
+	}
+	if reasoningState != string(ev.ReasoningState) {
+		t.Errorf("reasoning_state mismatch: expected %s, got %s", ev.ReasoningState, reasoningState)
 	}
 }

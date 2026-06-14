@@ -52,8 +52,8 @@ func EpisodicProjectorHandler(db *sql.DB) substrate.OutboxHandler {
 		_, err := db.ExecContext(ctx, `
             INSERT OR IGNORE INTO episodic_events
                 (session_id, seq, timestamp, event_type, source, content,
-                 salience, decay_weight, occurred_at, embed_model_version, event_uuid, cold)
-            VALUES (?, ?, ?, ?, ?, ?, 0.5, 1.0, ?, '', ?, ?)`,
+                 salience, decay_weight, occurred_at, embed_model_version, event_uuid, cold, reasoning_state)
+            VALUES (?, ?, ?, ?, ?, ?, 0.5, 1.0, ?, '', ?, ?, ?)`,
 			sessionID,
 			record.ID,       // seq
 			now,             // timestamp
@@ -63,6 +63,7 @@ func EpisodicProjectorHandler(db *sql.DB) substrate.OutboxHandler {
 			now,             // occurred_at
 			ev.ID,           // event_uuid（供 SurrealDB VecUpsert 使用）
 			cold,
+			string(ev.ReasoningState),
 		)
 		return err
 	}

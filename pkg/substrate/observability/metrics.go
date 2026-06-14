@@ -31,6 +31,9 @@ var (
 
 	// GlobalCedarDegradedTotal tracks the number of times Cedar FFI evaluation failed.
 	GlobalCedarDegradedTotal atomic.Int64
+
+	// GlobalOutboxDeadLetterTotal tracks the number of outbox records marked as dead.
+	GlobalOutboxDeadLetterTotal atomic.Int64
 )
 
 // TokenBurnRate tracks token consumption rate for circuit breaking.
@@ -350,10 +353,12 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		totalCounter, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.total")
 		throttleGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.throttle_stage")
 		surpriseGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index")
+		surpriseBasicGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index_basic")
 		surpriseStaleGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index.stale")
 		surrealSizeGauge, _ := meter.Float64ObservableGauge("polaris.surrealdb.index_size_mb")
 		killswitchGauge, _ := meter.Float64ObservableGauge("polaris.killswitch.stage")
 		cedarDegradedGauge, _ := meter.Float64ObservableGauge("polaris.cedar.degraded_total")
+		outboxDeadLetterGauge, _ := meter.Float64ObservableGauge("polaris.outbox.dead_letter_total")
 
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
@@ -363,6 +368,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 
 			si := GlobalSurpriseIndex
 			o.ObserveFloat64(surpriseGauge, si.Current())
+			o.ObserveFloat64(surpriseBasicGauge, si.Current())
 			staleVal := 0.0
 			if si.IsStale() {
 				staleVal = 1.0
@@ -374,8 +380,9 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 
 			o.ObserveFloat64(killswitchGauge, float64(GlobalKillswitchStage.Load()))
 			o.ObserveFloat64(cedarDegradedGauge, float64(GlobalCedarDegradedTotal.Load()))
+			o.ObserveFloat64(outboxDeadLetterGauge, float64(GlobalOutboxDeadLetterTotal.Load()))
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge)
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge)
 
 		otelHandler = promhttp.Handler()
 	})
@@ -423,6 +430,10 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# TYPE polaris_surprise_index gauge\n")
 		fmt.Fprintf(w, "polaris_surprise_index %g\n", siVal)
 
+		fmt.Fprintf(w, "# HELP polaris_surprise_index_basic Current surprise index basic (no labels) (0.0~1.0)\n")
+		fmt.Fprintf(w, "# TYPE polaris_surprise_index_basic gauge\n")
+		fmt.Fprintf(w, "polaris_surprise_index_basic %g\n", siVal)
+
 		fmt.Fprintf(w, "# HELP polaris_surprise_index_stale Whether surprise index is stale (1=stale >120s)\n")
 		fmt.Fprintf(w, "# TYPE polaris_surprise_index_stale gauge\n")
 		fmt.Fprintf(w, "polaris_surprise_index_stale %d\n", siStale)
@@ -444,6 +455,12 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_killswitch_stage Current M13 KillSwitch stage\n")
 		fmt.Fprintf(w, "# TYPE polaris_killswitch_stage gauge\n")
 		fmt.Fprintf(w, "polaris_killswitch_stage %d\n", stage)
+
+		// ── Outbox Dead Letters ────────────────────────────────────────────────
+		dl := GlobalOutboxDeadLetterTotal.Load()
+		fmt.Fprintf(w, "# HELP polaris_outbox_dead_letter_total Total number of outbox messages dead\n")
+		fmt.Fprintf(w, "# TYPE polaris_outbox_dead_letter_total counter\n")
+		fmt.Fprintf(w, "polaris_outbox_dead_letter_total %d\n", dl)
 	})
 }
 

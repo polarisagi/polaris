@@ -33,6 +33,7 @@ var (
 	ErrEvalGateNotPassed        = perrors.New(perrors.CodeInternal, "logic collapse: eval gate not passed")
 	ErrStaleTrajectory          = perrors.New(perrors.CodeInternal, "logic collapse: stale trajectory — needs_adaptation")
 	ErrCompileGateRejected      = perrors.New(perrors.CodeInternal, "logic collapse: compile gate rejected (memory or concurrency limit)")
+	ErrCompileGateBusy          = perrors.New(perrors.CodeInternal, "logic collapse: compile gate busy")
 	ErrTaintedTrajectory        = perrors.New(perrors.CodeInternal, "logic collapse: TaintMedium+ trajectory rejected — tainted_trajectory")
 )
 
@@ -164,6 +165,14 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 	}
 	if !req.EvalGatePassed {
 		return nil, ErrEvalGateNotPassed
+	}
+
+	if c.gate != nil {
+		freeMB := int64(observability.ProbeAvailableMemoryMB())
+		if !c.gate.TryAcquire(freeMB) {
+			return nil, ErrCompileGateBusy
+		}
+		defer c.gate.Release()
 	}
 
 	// LLM 生成 TypeScript 脚本

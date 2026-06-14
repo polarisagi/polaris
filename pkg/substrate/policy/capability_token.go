@@ -53,11 +53,12 @@ var (
 
 // TokenClaims 是令牌的 JSON 负载。
 type TokenClaims struct {
-	TokenID   string           `json:"tid"`
-	AgentID   string           `json:"aid"`
-	Caps      []CapabilityType `json:"caps"`
-	IssuedAt  int64            `json:"iat"`
-	ExpiresAt int64            `json:"exp"`
+	TokenID     string           `json:"tid"`
+	AgentID     string           `json:"aid"`
+	Caps        []CapabilityType `json:"caps"`
+	SandboxTier int              `json:"sandbox_tier"`
+	IssuedAt    int64            `json:"iat"`
+	ExpiresAt   int64            `json:"exp"`
 }
 
 // Token 是签发后的完整令牌。
@@ -92,11 +93,13 @@ func NewTokenManager() (*TokenManager, error) {
 	}, nil
 }
 
-// Mint 签发一个新的短寿命能力令牌。
-// 若未指定 TTL（传 0），则根据 caps 中优先级最高的能力类型自动选择最短 TTL。
-func (tm *TokenManager) Mint(agentID string, caps []CapabilityType, ttl time.Duration) (*Token, error) {
-	if agentID == "" || len(caps) == 0 {
-		return nil, perrors.New(perrors.CodeInvalidInput, "capability_token: agentID and caps are required")
+// Mint 签发新的能力令牌。
+func (tm *TokenManager) Mint(agentID string, caps []CapabilityType, sandboxTier int, ttl time.Duration) (*Token, error) {
+	if len(caps) == 0 {
+		return nil, perrors.New(perrors.CodeInvalidInput, "policy: empty capabilities")
+	}
+	if agentID == "" {
+		return nil, perrors.New(perrors.CodeInvalidInput, "capability_token: agentID is required")
 	}
 	if ttl <= 0 {
 		// 选取所有能力中最短的 TTL（最小权限原则）
@@ -105,11 +108,12 @@ func (tm *TokenManager) Mint(agentID string, caps []CapabilityType, ttl time.Dur
 
 	tokenID := generateTokenID()
 	claims := TokenClaims{
-		TokenID:   tokenID,
-		AgentID:   agentID,
-		Caps:      caps,
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(ttl).Unix(),
+		TokenID:     tokenID,
+		AgentID:     agentID,
+		Caps:        caps,
+		SandboxTier: sandboxTier,
+		IssuedAt:    time.Now().Unix(),
+		ExpiresAt:   time.Now().Add(ttl).Unix(),
 	}
 
 	payload, err := json.Marshal(claims)
