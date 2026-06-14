@@ -35,7 +35,7 @@
 | 路线 | 机制 | 实现状态 |
 |------|------|---------|
 | (a) Eval 驱动 Prompt 优化 | Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4] | ✅ 已实现 |
-| (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory | ⚠️ 部分：内环仅处理失败任务，成功轨迹不写 HeuristicsMemory（P1 缺陷） |
+| (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory | ✅ 已实现：`Engine.Run()` 内环已添加 `RecordSuccess` 调用，成功轨迹写入 HeuristicsMemory |
 | (c) Logic Collapse | 成功轨迹 → LLM 编译为 Wasm 技能 → Skill Library [Wasm-Sandbox] | ✅ 已实现（Tier 0 禁用，Tier 1+ 可选） |
 | (d) 检索式个性化 | 用户偏好 + 纠错历史 → UserProfile.InteractionSummary | ✅ 已实现 |
 | (e) Activation Steering | Control vector 推理时注入 | ✅ 已实现（仅 Tier 3+，local_only） |
@@ -130,7 +130,7 @@ SurpriseIndex 类型和 Compute/Route 实现见 `pkg/swarm/surprise.go`。Surpri
 
 任务完成后：成功路径 → HeuristicsMemory 更新 + Logic Collapse 触发（Wasm 技能生成）；失败路径 → Reflexion 反思 → MEMF + SurrealDB-Core 写入 + 发布 EventHeuristicGenerated（注入 PromptOptimizer 规避规则）；后续 Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
 
-> ⚠️ **代码偏差**：`Engine.Run()` 内环 taskEvents 处理仅消费 `!ev.Success`（失败任务），成功任务完全忽略，HeuristicsMemory 的 success_rate 字段无数据来源，导致 skillGapAnalysis 可能永远返回空（P1 缺陷）。
+> ✅ `Engine.Run()` 已补充 `RecordSuccess` 调用，成功/失败任务均写入 HeuristicsMemory，skillGapAnalysis 数据来源完整。
 
 **MEMF** (FallacyMemoryPool) / **HeuristicsMemory** 类型和反馈校准/剪枝逻辑见 `pkg/swarm/memf.go`。
 
@@ -329,11 +329,11 @@ QLoRA/PRM/ActivationSteering 的 Tier 门控由 `FeatureGate` 自动化：`Featu
 | PromptOptimizer（GEPA/MemAPO/ContraPrompt） | ✅ 已实现 | `prompt_optimizer.go` |
 | MEMF + HeuristicsMemory | ✅ 已实现 | `memf.go`；SQLite 降级版 |
 | SurpriseIndex 三组件 | ✅ 已实现 | `surprise.go` |
-| 内环成功轨迹写 HeuristicsMemory | ⚠️ 未实现 | `Engine.Run()` 仅处理失败事件，success_rate 无数据来源 |
+| 内环成功轨迹写 HeuristicsMemory | ✅ 已修复 | `Engine.Run()` 已添加 `RecordSuccess`，success_rate 数据来源完整 |
 | L2 SkillGeneration（Logic Collapse → 新技能） | ⚠️ 计划中 | EvolutionGate 接口无任何实现 |
 | L3 StrategyModify（LoRA adapter） | ⚠️ 计划中 | — |
 | L4 SourceArchitecture（multi-sig 源码修改） | ⚠️ 计划中 | CI 保护框架设计完成，执行路径未实现 |
-| CurriculumGenerator 接口绑定 | ⚠️ 缺陷 | `AutoCurriculumGenerator.Generate` 签名与 `CurriculumGenerator` 接口不匹配，Engine 无法通过接口调用 |
+| CurriculumGenerator 接口绑定 | ✅ 已修复 | 通过 Adapter 适配器对齐接口签名 |
 | FastPath 跳过 Intent Vector 记录 | ✅ 已修复 | FastPath 合成感知结果后，异步调用 `memStore.RecordIntentVector`（source="fastpath_synthetic"），确保所有路径均写入 Intent 记录供后续 BM25/语义检索使用 |
 
 ### 引入计划

@@ -86,7 +86,7 @@ EvalResult: Passed bool / Scores map[string]float64 / Details string / Evaluator
 
 ## 4. Eval Runner
 
-`RunnerImpl` 实现见 `pkg/governance/eval_runner.go`（L1AssertionEvaluator / L2SchemaEvaluator / L3TrajectoryEvaluator / L4LLMJudgeEvaluator-stub / L5HumanEvaluator-stub + `RunnerImpl.Run()`）。L4/L5 为 Stub，`JudgeScore` 由外部异步注入。`BlockDeploy = P0PassRate < 1.0`，`WarnDeploy = P1PassRate < 0.8`。
+`RunnerImpl` 及评测器接口定义分布于 `pkg/governance/` 根目录（旧体系）与 `pkg/governance/eval/`（新体系，BehaviorType/FalsifiabilityScore）。当前两套并存，ROUND21 P1 任务将清理根目录旧代码，统一至 `eval/` 子包。L4/L5 为 Stub，`JudgeScore` 由外部异步注入。`BlockDeploy = P0PassRate < 1.0`，`WarnDeploy = P1PassRate < 0.8`。
 
 CI: PR 变更 `prompts/** skills/** config/** go.mod` → replay P0+P1, 5min 超时。P0 失败阻塞，P1 单 Judge 置信度阈值见 `spec/state.yaml §m12_eval.judge_single_confidence`，低于阈值告警。
 
@@ -285,5 +285,5 @@ CoverageGaps: 输入工具注册表 → 返回未覆盖工具名
 | M6 Skill Library | Auto-Eval-Bootstrapping（技能黄金用例自动生成）| M6 §2.2 |
 | M9 Self-Improve | PromptOptimizer 早停依据（Training Set + Validation Set）、ProgressiveRollout 对比评估 | M9 §1.1, §2.3 |
 | M11 Policy Safety | Eval 执行中禁止 M9 访问 Holdout Set（Ed25519 签名隔离 + 进程边界）| M11 §8, M12 §5 |
-| 接口定义 | Evaluator/EvalResult/EvalCase/TrajectoryEvent | pkg/governance/evaluator_types.go |
+| 接口定义 | Evaluator/EvalResult/EvalCase/TrajectoryEvent | pkg/governance/eval/（新体系）；根目录旧文件 ROUND21 清理中 |
 | 全局字典 | HE-Rule-4 数据驱动迭代 | 00-Global-Dictionary §2 |

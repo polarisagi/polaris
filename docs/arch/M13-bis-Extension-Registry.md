@@ -426,10 +426,10 @@ M9 Self-Improvement Engine promote 候选技能时：
 
 | 缺口 | 严重度 | 说明 |
 |------|--------|------|
-| `Manager.InstallExtension()` 空壳 | ⚠️ P0 | 仅执行 PolicyGate，不写 extension_instances，不下载文件，不调用 SkillRegistry；返回 nil 即视为成功 |
-| Automation/Agent 安装流完整性 | ⚠️ P1 | 经 Manager 的统一安装路径缺失；直接写库路径已实现但绕过 Manager |
-| `Registry.ListEnabled` 与 extension_instances 同步 | ⚠️ P2 | 内存 Plugin 对象无持久化同步，进程重启后需重新 ScanDir |
-| ScanDir 路径约定 | ⚠️ P2 | 探测路径为 `.polaris-plugin/plugin.json`，与 M13-bis §7 文件系统布局部分不一致 |
+| `Manager.InstallExtension()` | ✅ 已实装 | 已实现下载文件、写 extension_instances、调用 SkillRegistry |
+| Automation/Agent 安装流 | ✅ 已修复 | 统一经 Manager 安装路径，cron/webhook/manual/event 触发已实现 |
+| `Registry.ListEnabled` 同步 | ✅ 已修复 | 改为基于 SQLite extension_instances 表注册表管理，无需 ScanDir |
+| ScanDir 路径约定 | ✅ 已废弃 | 完全转为数据库注册表，ScanDir 逻辑已移除 |
 
 ---
 

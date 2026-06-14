@@ -117,7 +117,7 @@ Provider 选择：`ProviderRegistry.best(req)` 按 healthScore 降序 + CircuitB
 | CircuitBreaker 半开探测上限 | `spec/state.yaml §m1_router.circuit_breaker_half_open_max` |
 | MaxStreamBufferSize | `spec/state.yaml §m1_router.max_stream_buffer_kb`（Tier 1+ 可配至 1MB） |
 
-> ⚠️ **当前实现偏差**：`newCircuitBreaker()` 将 `maxFailures`/`openDur` 硬编码在代码中（与 spec/state.yaml 值手工同步），`NewProviderRegistry()` 不接受 `M1RouterThresholds` 参数，TOML 热覆盖对熔断器参数无效（P1 缺陷，ROUND20 J2 修复中：配置通过 `NewProviderRegistry(cfg)` 注入）。
+> ✅ `NewProviderRegistry(cfg)` 已接受 `M1RouterThresholds`，熔断器参数通过配置注入，TOML 热覆盖生效。
 
 ---
 

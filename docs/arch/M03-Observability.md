@@ -376,8 +376,8 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 | `StartSpan()` 不传播父 TraceID，不设 ParentID，trace 树无法关联 | P2 | ✅ 已修复 | 从父 Span context 传播 TraceID/ParentID |
 | `getAvailableMemoryMB()` 单位混用（heapMB 当字节减）| P2 | ✅ 已修复 | 改为 `heapBytes := m.HeapAlloc` 再统一换算 |
 | `performance_drift.go` 与 M12 CI RegressionDetector 互补但尚未 Hook 至 M4 状态机 S_COMPLETE/S_FAILED | P2 | ⚠️ 未实现 | 等 M4 状态机补全后连接 |
-| Linux memory probe 用 `sysinfo.Bufferram` 未包含 page cache，MemAvailable 偏低，可能提前触发降级 | P2 | 🔄 R21 立项修复 | 解析 `/proc/meminfo MemAvailable`（复用 `internal/sysenv`），见 ADR-0025 / GEMINI_PATCH_R21 A12 |
-| M03 文档列举 20+ 业务指标，当前 `metrics.go` 仅实现 7 个（TBR×4 + SurpriseIndex×2 + SurrealDB size）；各模块埋点（M1/M4/M7）均为空 | P2 | 🔄 ROUND K1 修复中 | 新增 `instruments.go`/`record.go`/`cardinality_guard.go`；M1 router.go + M7 sandbox_impl.go + M4 agent.go 三处埋点；覆盖 11 个指标；embedding/memory/policy/FFI 四类留下一 Milestone |
+| Linux memory probe 未包含 page cache | P2 | ✅ 已修复 | 改为解析 `/proc/meminfo MemAvailable` |
+| 监控指标实现不完整 | P2 | ✅ 已修复 | `instruments.go` 已覆盖 11 个指标（含沙箱、LLM 调用等），M1/M4/M7 三处埋点已实装；embedding/memory/policy/FFI 四类为后续 Milestone |
 | `polaris_llm_cache_hit_rate` Gauge 未实现，文档列举但监控无法读取 | P2 | ✅ 已修复 | `observability` 层新增 `GlobalLLMCacheHitTotal` / `GlobalLLMCacheTotal` 原子计数器，MetricsHandler 计算并暴露 gauge；Provider 适配器在 `cache_read_input_tokens > 0` 时上报命中 |
 
 ---

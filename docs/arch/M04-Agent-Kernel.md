@@ -1,7 +1,7 @@
 # 模块 4: Agent Kernel
 
 > M4, `pkg/cognition/` | Go 状态机持有控制流，LLM 仅概率性填空 | `[HE-Rule-5]` `[Tier-0-Limit]`
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:84 Suspend-on-Idle / 3:94 S_VALIDATE / 4:131 DAG / 5:212 System1/2 / 6:232 WorldModel / 7:250 推理预算 / 8:303 CrashRecovery / 12:348 (SOFT)降级 / 13:374 跨模块契约
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:84 Suspend-on-Idle / 3:94 S_VALIDATE / 4:129 DAG / 5:210 System1/2 / 6:230 WorldModel / 7:248 推理预算 / 8:301 CrashRecovery / 12:346 (SOFT)降级 / 13:372 跨模块契约
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -102,13 +102,11 @@ Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状
 | L2 启发式 | <5ms | RiskHigh+ | 批量规模（>100）/ 受保护路径 / 资源预估 vs Tier 阈值 |
 | L3 LLM 看门狗 | ~200ms | 仅 RiskPrivileged | DeepSeek 语义判断输出 ALLOW/DENY；L3 为补充信号，不可推翻 L0/L1/L2 拒绝；LLM 不可用时 fail-open |
 
-> **已知缺口**：L3 看门狗当前对所有含非只读工具的 DAG 均触发，未按 `RiskLevel` 过滤——RiskHigh 但非 RiskPrivileged 的任务会产生不必要的 ~200ms 延迟。待按节点实际 RiskLevel 收窄触发条件。
+> ✅ L3 看门狗已增加 `RiskPrivileged` 过滤，仅对特权任务触发，消除多余延迟。
 
-**ActiveTaintLevel（session 级全局污点）**：当前实现暂设 TaintNone，待 ActiveContext.TaintLevel 正式引入后再从 session 聚合污点读取。per-node 污点已在 `parsePlanOnSuccess` 中按 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点的拦截仍有效。
+**ActiveTaintLevel（session 级全局污点）**：已按 DAG 节点 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点拦截有效。
 
-> **已知缺口（Suspended 持久化）**：挂起（`TaskSuspended`）状态未及时写入 `tasks.status`，`recovery.go` 启动扫描依赖该标记，导致进程崩溃后 `provider_exhausted` 类挂起任务无法自动唤醒。修复方向：在转入 Suspended 时补写 `tasks.status='suspended'`。
-
-> **已修复（validateTaintGate 旁路）**：`agent_execute.go` 中 `ActiveTaintLevel` 此前硬编码为 `TaintNone`，导致 session 级污点门控形同虚设。当前已按 DAG 节点 `pCtx.MaxTaintLevel` 传播，L1 TaintGate 对单节点污点拦截有效。
+> ✅ Suspended 状态已在转入时正确写入 `tasks.status='suspended'`，崩溃后 `provider_exhausted` 类任务可自动唤醒。
 
 L1.1 资源冲突检测: 规范 artifactID → 对无依赖边的并行写冲突节点自动注入隐式序列化边 (EdgePrecondition), 审计 `implicit_resource_edge`。
 
