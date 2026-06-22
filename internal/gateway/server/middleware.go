@@ -316,7 +316,8 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 	// 未配置 API Key：仅允许本机回环访问，防止远程未授权调用
 	if expectedKey == "" {
 		if !isLoopback(clientIP) {
-			http.Error(w, "403 Forbidden: POLARIS_API_KEY not set; remote access requires API key", http.StatusForbidden)
+			slog.Warn("http: POLARIS_API_KEY not set, rejecting non-localhost request", "ip", clientIP, "path", r.URL.Path)
+			http.Error(w, "403 Forbidden: POLARIS_API_KEY not configured; set it in environment or restrict to localhost", http.StatusForbidden)
 			return ctx, false
 		}
 		// loopback 无 key：视为 webui 场景（页面加载并发多请求），用 webui quota 而非 unknown，
