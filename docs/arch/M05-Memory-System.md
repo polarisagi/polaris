@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:254 L3 Procedural / 6:264 写路径 / 7:276 HybridRetriever / 8:356 EffConn / 9:366 Consolidation / 10:391 Forgetting / 11:408 PromptBuilder / 12:478 Drift / 14:516 496(SOFT)降级 / 15:538 依赖
+> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:254 L3 Procedural / 6:307 写路径 / 7:319 HybridRetriever / 8:399 EffConn / 9:409 Consolidation / 10:434 Forgetting / 11:451 PromptBuilder / 12:521 Drift / 14:559 496(SOFT)降级 / 15:581 依赖
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -258,6 +258,49 @@ DDL 见 `internal/protocol/schema/004_semantic_memory.sql`。图存储使用 [St
 双轨检索: System 1 路径通过 IntentSignature 在 SurrealKV 中做 O(1) 精确匹配（亚毫秒级），命中后由 M6 WasmSkillCache 缓存编译产物直接执行。System 2 路径在 SurrealDB-Core 中做 KNN 语义搜索，返回候选技能后按成功率排序，渐进披露注入 LLM prompt。
 
 L3 Procedural 技能索引相关 DDL 实质托管于 M2 SurrealKV KV 引擎（`internal/store/surreal_store.go`），SKILL.md 元数据从文件系统懒加载。M5 skillKV 与 M6 WasmSkillCache 的关系见 M6 §5.1。
+
+---
+
+## 5-bis. LLM 主动写记忆工具（Agent Self-Memory Writing）
+
+> **概念边界**：§6 "Write Path" 描述的是系统在 Agent 轮次结束后自动触发的被动记忆积累路径（情景→冷投影→语义/图）。本节描述的是 **LLM 在推理过程中主动调用工具、即时写入或更新语义记忆**的能力——两条路径并存，互不干扰。
+
+### 5-bis.1 设计动机
+
+被动积累仅在对话结束后异步落盘，LLM 在当次推理中无法确认某个关键事实已被持久化。主动写工具解决了这个问题：LLM 可在同一轮推理内确认"我已将此事实写入长期记忆"，后续对话可立即检索到。
+
+### 5-bis.2 工具集（`internal/tool/builtin/memory_tools.go`）
+
+| 工具名 | Capability | 语义 |
+|--------|------------|------|
+| `memory_write` | `CapWriteLocal` | 写入/覆盖一条语义事实（`SemanticMemWriter.UpsertFact`），支持 `valid_until` 过期时长 |
+| `memory_search` | `CapReadOnly` | 混合检索（BM25 + vector + graph，`HybridRetriever`），返回最相关事实 |
+| `memory_append` | `CapWriteLocal` | 追加属性到已有实体（`UpsertFact` upsert 语义，不覆盖 description） |
+| `memory_expire` | `CapWriteLocal` | 标记事实失效（`SemanticMemWriter.Archive`），含 reason 审计字段 |
+
+所有工具 `SandboxTier = SandboxInProcess`、`RiskLevel = RiskLow`，经 PolicyGate 五阶段后在 InProcessSandbox 执行。
+
+### 5-bis.3 注册路径
+
+```
+boot_tools.go（或 boot_agent.go）
+  └─ builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)
+        ├─ sbx.Register(tool.Name, fn)         // InProcessSandbox 执行函数
+        └─ toolReg.Register(tool)              // InMemoryToolRegistry 工具元数据
+```
+
+- `semanticWriter`：`SemanticMemWriter` 接口，实现方为 `internal/memory/store/semantic_mem.go`
+- `retriever`：`protocol.HybridRetriever` 接口，实现方为 `internal/memory/retrieval/retriever.go`
+- 工具元数据**内联构造**（不走 `tool.LoadBuiltinToolMeta` embed FS），防止 `builtin/<name>/` 目录缺失时静默跳过。
+
+### 5-bis.4 与被动写路径的关系
+
+| 维度 | 被动路径（§6） | 主动写工具（§5-bis）|
+|------|--------------|-------------------|
+| 触发时机 | Agent 轮次结束后 outbox 异步 | LLM 推理中调用 tool_call |
+| 目标存储 | 情景记忆 → 冷投影 → 语义 | 直接写语义记忆（`semantic_memory` 表）|
+| LLM 可确认 | 否（异步） | 是（同步返回写入结果） |
+| 数据来源 | 系统自动采集对话轨迹 | LLM 显式决策哪些事实值得持久化 |
 
 ---
 

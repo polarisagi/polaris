@@ -382,6 +382,7 @@ PII 检测与红化 (11-Policy-Safety, §5.1)。Tier 0 使用 Go 原生正则检
 - `[FactualityGuard]`: 安全防线 D6（与 D1~D5 同等级），守护 LLM 输出的事实性。运行时抽样 5%（可配）经 [CitationValidator] + 数值一致性检查。检测到 hallucination → 标记 `TaintLevel` 强制升至 [Taint-Medium] + 触发 LLM-as-Judge 二次裁决。完整定义见 M11 §X。
 - `[CitationValidator]`: 引用核验器。M10 RAG 输出强制附带 `chunk_id` 引用；FactualityGuard 抽样验证引用 chunk 真实包含输出主张。定义见 M10 §4.X。
 - `[CodeAct]`: 即时代码执行行动空间。区别于 [Logic-Collapse]（沉淀型脚本技能）与 LLM 生成脚本（走 staging 流水线）——CodeAct 是**单次 ad-hoc 代码 + 立即执行**。强制 [Sandbox-L3]（HT0 不可用）+ Capability Token + Audit。定义见 M7 §X。
+- `[Memory-Write-Tool]`: LLM 主动写记忆工具集。区别于被动记忆积累（Agent 轮次结束后 outbox 异步落盘）——是 LLM **在推理中即时调用工具、主动写入语义记忆**的能力。包含 4 个内置工具：`memory_write`（写入/覆盖事实）、`memory_search`（混合检索）、`memory_append`（追加属性）、`memory_expire`（标记失效）；实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)`。写入底层对接 `SemanticMemWriter.UpsertFact/Archive`；检索对接 `HybridRetriever`。全部 `SandboxTier=InProcess`、`RiskLevel=Low`，走 PolicyGate 五阶段。定义见 M5 §5-bis，工具层描述见 M7 §3.1。
 
 ## §9-quinquies 中断与漂移
 
