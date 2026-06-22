@@ -113,7 +113,7 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*ty
 	}
 	meta.Trust = types.TrustTier(trustInt)
 	if installPath != "" {
-		meta.ScriptPath = installPath + "/src/index.ts"
+		meta.ScriptPath = installPath + "/src/skill.py"
 	}
 
 	json.Unmarshal([]byte(capsRaw), &meta.Capabilities)    //nolint:errcheck

@@ -311,7 +311,7 @@ func (m *LogicCollapseMonitor) GetStats(skillID string) *TrajectoryStats {
 
 // ─── defaultLLMCodeGenerator — LLM 代码生成实现 ───────────────────────────────
 
-// defaultLLMCodeGenerator 使用 protocol.Provider 生成 TinyGo impl.go。
+// defaultLLMCodeGenerator 使用 protocol.Provider 生成 Python 技能脚本（ADR-0026）。
 type defaultLLMCodeGenerator struct {
 	provider protocol.Provider
 }
@@ -321,7 +321,7 @@ func NewDefaultLLMCodeGenerator(provider protocol.Provider) extskill.LLMCodeGene
 	return &defaultLLMCodeGenerator{provider: provider}
 }
 
-// GenerateImpl 将脱敏轨迹发送给 LLM 生成 TypeScript MCP 技能脚本。
+// GenerateImpl 将脱敏轨迹发送给 LLM 生成 Python 技能脚本（src/skill.py，ContainerSandbox 执行）。
 func (g *defaultLLMCodeGenerator) GenerateImpl(ctx context.Context, traj *extskill.CollapseTrajectory) ([]byte, error) {
 	if g.provider == nil {
 		return nil, apperr.New(apperr.CodeInternal, "logic_collapse: LLM provider is nil")

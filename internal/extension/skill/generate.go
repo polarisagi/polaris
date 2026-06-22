@@ -2,8 +2,8 @@ package skill
 
 // Logic Collapse 编译流水线。
 // 架构文档: docs/arch/M06-Skill-Library.md §2.2
-// 技能以 TypeScript 脚本形式生成，通过 npx tsx 直接运行，无需预编译。
-// 顺序: freshnessCheck → taintCheck → evalGate → compileGate → DataStripping → LLM 代码生成 → 风险分级 → 沙箱探针 → 签名 → 入库
+// 技能以 Python 脚本形式生成（src/skill.py），通过 ContainerSandbox L3 执行（ADR-0026）。
+// 顺序: freshnessCheck → taintCheck → evalGate → compileGate → DataStripping → LLM 代码生成 → ValidatePython → 风险分级 → 沙箱探针 → 签名 → 入库
 
 import (
 	"github.com/polarisagi/polaris/internal/observability/probe"
@@ -222,10 +222,15 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 	req.Trajectory.InputSchema = redactPIIFields(req.Trajectory.InputSchema)
 	req.Trajectory.OutputSchema = redactPIIFields(req.Trajectory.OutputSchema)
 
-	// LLM 生成 TypeScript 脚本
+	// LLM 生成 Python 脚本
 	src, err := c.codeGen.GenerateImpl(ctx, req.Trajectory)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "compile: LLM code gen failed", err)
+	}
+
+	// Python 静态安全检查（禁止 os/subprocess/socket/eval/exec）
+	if err := ValidatePython(string(src)); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "compile: Python static analysis failed", err)
 	}
 
 	// 风险分级
