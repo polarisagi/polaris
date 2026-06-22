@@ -81,14 +81,14 @@ func TestExtensionActivator_FindAndActivate(t *testing.T) {
 			updated_at TEXT
 		);
 		INSERT INTO extension_instances (id, ext_type, runtime_id, config, status, origin, catalog_id, name, publisher, trust_tier, install_path, error_msg) VALUES 
-			('ext_1', 'skill', 'my_skill', '{}', 'installed', '', '', '', '', 0, '', ''),
-			('ext_2', 'mcp', 'my_mcp', '{}', 'installed', '', '', '', '', 0, '', ''),
-			('ext_3', 'plugin', 'my_plugin', '{}', 'installed', '', '', '', '', 0, '', ''),
-			('ext_4', 'unknown', 'unk', '{}', 'installed', '', '', '', '', 0, '', '');
+			('ext_1', 'skill', 'my_skill', '{}', 'installed', '', '', '', '', 1, '', ''),
+			('ext_2', 'mcp', 'my_mcp', '{}', 'installed', '', '', '', '', 1, '', ''),
+			('ext_3', 'plugin', 'my_plugin', '{}', 'installed', '', '', '', '', 1, '', ''),
+			('ext_4', 'unknown', 'unk', '{}', 'installed', '', '', '', '', 1, '', '');
 		
 		INSERT INTO mcp_servers (id, command, args, url, transport, name, env, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, created_at, updated_at) VALUES 
-			('my_mcp', 'echo', '["hello"]', '', 'stdio', '', '', 1, 0, 0, '', '', '', '', ''),
-			('my_plugin', '', '', 'http://localhost:8080/sse', 'sse', '', '', 1, 0, 0, '', '', '', '', '');
+			('my_mcp', 'echo', '["hello"]', '', 'stdio', '', '', 1, 0, 1, '', '', '', '', ''),
+			('my_plugin', '', '', 'http://localhost:8080/sse', 'sse', '', '', 1, 0, 1, '', '', '', '', '');
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestExtensionActivator_ActivateMCP_NilMgr(t *testing.T) {
 			deleted_at TEXT
 		);
 		INSERT INTO extension_instances (id, ext_type, runtime_id, config, status, origin, catalog_id, name, publisher, trust_tier, install_path, error_msg) VALUES 
-			('ext_2', 'mcp', 'my_mcp', '{}', 'installed', '', '', '', '', 0, '', '');
+			('ext_2', 'mcp', 'my_mcp', '{}', 'installed', '', '', '', '', 1, '', '');
 	`)
 	if err != nil {
 		t.Fatal(err)

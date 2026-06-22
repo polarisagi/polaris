@@ -37,6 +37,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/polarisagi/polaris/configs"
+	"github.com/polarisagi/polaris/internal/action/codeact"
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
@@ -118,6 +119,7 @@ type Server struct {
 	pluginHandler    *plugin.PluginHandler
 	chatHandler      *chat.ChatHandler
 	sysadminHandler  *sysadmin.SysAdminHandler
+	codeActEngine    *codeact.CodeAct // LLM 生成代码执行引擎（可为 nil，降级拒绝）
 }
 
 func (s *Server) SetAuditTrail(at *security.AuditTrail)   { s.auditTrail = at }
@@ -155,6 +157,10 @@ func (s *Server) SetUpdater(u *updater.Manager) {
 		s.sysadminHandler.Updater = u
 	}
 }
+
+// SetCodeActEngine 注入 CodeAct 执行引擎。在 NewServer 之后、Serve 之前调用。
+// ca 为 nil 时 POST /v1/agent/codeact 返回 503。
+func (s *Server) SetCodeActEngine(ca *codeact.CodeAct) { s.codeActEngine = ca }
 
 // SetMCPManager 注入 MCPManager（NewServer 之后、Start 之前调用）。
 // 同时注册缓存失效回调：异步插件 MCP 连接完成时自动清除 toolSchemaCache，
@@ -347,6 +353,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.Handle("GET /metrics", metrics.MetricsHandler(s.tbr))
 	mux.HandleFunc("GET /v1/logs/stream", s.handleLogStream)
 	mux.HandleFunc("POST /v1/agent/query", s.handleAgentQuery)
+	mux.HandleFunc("POST /v1/agent/codeact", s.handleCodeAct)
 	mux.HandleFunc("POST /v1/agent/stream", s.chatHandler.HandleAgentStream)
 	mux.HandleFunc("GET /v1/agent/tasks/{taskID}", s.handleGetAgentTask)
 	mux.HandleFunc("POST /v1/agent/{taskID}/interrupt", s.handleAgentInterrupt) // inv_global_08 <200ms

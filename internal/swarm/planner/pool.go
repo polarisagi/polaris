@@ -2,6 +2,7 @@ package planner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ type PlannerPool struct {
 	whisperChan chan<- protocol.MemoryWhisper // 结果返回通道
 	provider    protocol.Provider
 	sandbox     SandboxExecutor
+	decomposer  *TaskDecomposer
 }
 
 // NewPlannerPool 创建 PlannerPool。
@@ -34,6 +36,7 @@ func NewPlannerPool(goal, taskType string, provider protocol.Provider, whisperCh
 		taskType:    taskType,
 		whisperChan: whisperChan,
 		provider:    provider,
+		decomposer:  NewTaskDecomposer(provider), // 自动注入
 	}
 }
 
@@ -196,6 +199,19 @@ func parseTestScore(output []byte) float64 {
 }
 
 func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultChan chan<- workerResult) {
+	// workerID==0 使用结构化分解，其他 worker 继续原有路径（多样性）
+	if workerID == 0 && p.decomposer != nil {
+		nodes, err := p.decomposer.Decompose(ctx, p.goal)
+		if err == nil && len(nodes) > 0 {
+			dagJSON, _ := json.Marshal(nodes)
+			resultChan <- workerResult{
+				score:   0.95, // 结构化分解得高分
+				content: fmt.Sprintf("[DECOMPOSED_DAG] %s", string(dagJSON)),
+			}
+			return
+		}
+	}
+
 	temperatures := []float64{0.2, 0.7, 1.2}
 	t := temperatures[workerID]
 

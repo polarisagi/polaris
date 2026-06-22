@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/action/codeact"
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/llm"
@@ -658,6 +659,39 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				Success:   true,
 				Suspended: true,
 				Output:    []byte("Planner pool spawned, agent suspended waiting for whisper."),
+			}, nil
+		}
+
+		if strings.HasPrefix(toolName, "code_act:") {
+			if a.codeAct == nil {
+				return nil, apperr.New(apperr.CodeInternal,
+					"agent: codeAct engine not injected; cannot execute code_act node")
+			}
+			lang := strings.TrimPrefix(toolName, "code_act:")
+			// Args JSON 应包含 {"code":"...","capability_id":"..."}
+			var codeArgs struct {
+				Code         string           `json:"code"`
+				CapabilityID string           `json:"capability_id"`
+				TaintLevel   types.TaintLevel `json:"taint_level"`
+			}
+			if err := json.Unmarshal(args, &codeArgs); err != nil {
+				return nil, apperr.Wrap(apperr.CodeInvalidInput, "code_act: unmarshal args", err)
+			}
+			caResult, err := a.codeAct.Execute(ctx, codeact.CodeActRequest{
+				Language:     lang,
+				Code:         codeArgs.Code,
+				CapabilityID: codeArgs.CapabilityID,
+				SessionID:    a.sCtx.SessionID,
+				AgentID:      a.ID,
+				TaintLevel:   codeArgs.TaintLevel,
+			})
+			if err != nil {
+				return nil, apperr.Wrap(apperr.CodeInternal, "code_act: execute failed", err)
+			}
+			return &types.ToolResult{
+				Output:    caResult.Output,
+				Success:   caResult.ExitCode == 0,
+				LatencyMs: caResult.LatencyMs,
 			}, nil
 		}
 

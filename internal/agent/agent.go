@@ -14,6 +14,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 
+	"github.com/polarisagi/polaris/internal/action/codeact"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -54,6 +55,7 @@ type Agent struct {
 	extQuerier        protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
 	toolCallRecorder  ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
 	memInjector       MemoryInjector            // NEW: 组装前主动记忆注入
+	codeAct           *codeact.CodeAct          // LLM 代码执行引擎；nil 时 code_act 节点返回错误
 }
 
 // MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
@@ -95,6 +97,9 @@ func (a *Agent) SetToolCallRecorder(r ToolCallRecorder) {
 func (a *Agent) SetMemoryInjector(i MemoryInjector) {
 	a.memInjector = i
 }
+
+// SetCodeAct 注入 CodeAct 引擎，在 Agent 创建后 kernel 启动前调用。
+func (a *Agent) SetCodeAct(ca *codeact.CodeAct) { a.codeAct = ca }
 
 // BlindZoneDetector 盲区探测器接口，打破 L1 到 L2 的依赖。
 type BlindZoneDetector interface {

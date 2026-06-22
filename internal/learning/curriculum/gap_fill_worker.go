@@ -84,7 +84,7 @@ func (w *GapFillWorker) extractMissingTool(errStr string) string {
 }
 
 func (w *GapFillWorker) synthesizeSkill(ctx context.Context, toolName string) error {
-	gen := synthetic.NewSyntheticSkillGen(w.provider)
+	gen := synthetic.NewSyntheticSkillGen(w.provider, nil)
 	skill, err := gen.Generate(ctx, toolName, "Auto-synthesized skill for "+toolName)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)

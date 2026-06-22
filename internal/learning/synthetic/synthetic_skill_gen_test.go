@@ -13,7 +13,7 @@ func TestSyntheticSkillGen(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("NilProvider", func(t *testing.T) {
-		gen := NewSyntheticSkillGen(nil)
+		gen := NewSyntheticSkillGen(nil, nil)
 		_, err := gen.Generate(ctx, "test", "test desc")
 		if err == nil {
 			t.Errorf("Expected error for nil provider")
@@ -29,7 +29,7 @@ func TestSyntheticSkillGen(t *testing.T) {
 			},
 		}
 
-		gen := NewSyntheticSkillGen(prov)
+		gen := NewSyntheticSkillGen(prov, nil)
 		tool, err := gen.Generate(ctx, "test_skill", "desc")
 		if err != nil {
 			t.Errorf("Generate failed: %v", err)
@@ -57,7 +57,7 @@ func TestSyntheticSkillGen(t *testing.T) {
 			},
 		}
 
-		gen := NewSyntheticSkillGen(prov)
+		gen := NewSyntheticSkillGen(prov, nil)
 		_, err := gen.Generate(ctx, "test", "test desc")
 		if err == nil || !strings.Contains(err.Error(), "failed to parse") {
 			t.Errorf("Expected parse error, got: %v", err)

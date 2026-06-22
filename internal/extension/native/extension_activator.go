@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ActivatedToolHint 已激活扩展的工具描述，注入规划 Prompt。
@@ -88,13 +89,24 @@ func (a *ExtensionActivator) activateOne(ctx context.Context, extID, snippet str
 		return nil, nil
 	}
 
+	// 信任分级门控（ADR-0016 §2.1 / HE-2 可验证执行）：
+	// TrustUntrusted(0) 的扩展不允许激活——其来源未经任何签名或审核。
+	// TrustLocal(1)+ 的扩展正常激活；trust_tier 透传至 MCP 连接请求供污点传播使用。
+	if types.TrustTier(inst.TrustTier) == types.TrustUntrusted {
+		slog.Warn("extension_activator: blocked untrusted extension",
+			"ext_id", extID, "trust_tier", inst.TrustTier)
+		return nil, apperr.New(apperr.CodeForbidden,
+			"extension_activator: trust_tier=0 (Untrusted) blocks activation; install from a trusted source")
+	}
+	trustTier := types.TrustTier(inst.TrustTier)
+
 	extType := inst.ExtType
 	runtimeID := inst.RuntimeID
 	config := inst.Config
 
 	switch extType {
 	case "mcp":
-		return a.activateMCP(ctx, extID, runtimeID, config, snippet)
+		return a.activateMCP(ctx, extID, runtimeID, config, snippet, trustTier)
 	case "skill":
 		// Skill 工具已在启动时通过 skills 表注册到 ToolRegistry，无需动态连接。
 		// 只需将其描述注入 Prompt 告知 LLM 可用即可。
@@ -105,14 +117,14 @@ func (a *ExtensionActivator) activateOne(ctx context.Context, extID, snippet str
 		}, nil
 	case "plugin":
 		// Plugin 是 TypeScript MCP server，与 MCP 激活路径相同。
-		return a.activateMCP(ctx, extID, runtimeID, config, snippet)
+		return a.activateMCP(ctx, extID, runtimeID, config, snippet, trustTier)
 	default:
 		return nil, nil
 	}
 }
 
 // activateMCP 通过 MCPManager 动态连接一个 MCP server（幂等）。
-func (a *ExtensionActivator) activateMCP(ctx context.Context, extID, runtimeID, configJSON, snippet string) (*ActivatedToolHint, error) {
+func (a *ExtensionActivator) activateMCP(ctx context.Context, extID, runtimeID, configJSON, snippet string, trustTier types.TrustTier) (*ActivatedToolHint, error) {
 	if a.mcpMgr == nil {
 		return nil, nil
 	}
@@ -135,6 +147,7 @@ func (a *ExtensionActivator) activateMCP(ctx context.Context, extID, runtimeID, 
 	}
 
 	// 动态连接（MCPManager 内部检查是否已连接，避免重复）
+	slog.Debug("extension_activator: connecting MCP", "server", runtimeID, "trust_tier", trustTier)
 	connectErr := a.mcpMgr.DynamicConnect(ctx, mcp.DynamicConnectRequest{
 		ServerName: runtimeID,
 		Transport:  transport, // "stdio" | "sse" | "http"
