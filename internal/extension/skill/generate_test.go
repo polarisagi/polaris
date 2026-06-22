@@ -89,17 +89,17 @@ func TestDetectObfuscatedRisk(t *testing.T) {
 	if !detectObfuscatedRisk(`eval("test")`) {
 		t.Errorf("failed to detect eval")
 	}
-	if !detectObfuscatedRisk(`new Function("return 1")`) {
-		t.Errorf("failed to detect Function")
-	}
-	if !detectObfuscatedRisk(`obj['exec']()`) {
+	if !detectObfuscatedRisk(`exec("return 1")`) {
 		t.Errorf("failed to detect exec")
 	}
-	if !detectObfuscatedRisk(`atob('somebase64')`) {
-		t.Errorf("failed to detect atob")
+	if !detectObfuscatedRisk(`import os`) {
+		t.Errorf("failed to detect import os")
 	}
-	if detectObfuscatedRisk(`console.log("hello")`) {
-		t.Errorf("false positive on console.log")
+	if !detectObfuscatedRisk(`__import__('os')`) {
+		t.Errorf("failed to detect __import__")
+	}
+	if detectObfuscatedRisk(`print("hello")`) {
+		t.Errorf("false positive on print")
 	}
 }
 
@@ -109,29 +109,29 @@ func TestAssessScriptRisk(t *testing.T) {
 		t.Errorf("expected high/3")
 	}
 
-	r, t_ = assessScriptRisk([]byte("child_process.exec()"), "")
+	r, t_ = assessScriptRisk([]byte("subprocess.Popen()"), "")
 	if r != "high" || t_ != 3 {
 		t.Errorf("expected high/3")
 	}
 
-	r, t_ = assessScriptRisk([]byte("fetch('http://example.com')"), "")
+	r, t_ = assessScriptRisk([]byte("requests.get('http://example.com')"), "")
 	if r != "medium" || t_ != 3 {
 		t.Errorf("expected medium/3")
 	}
 
-	r, t_ = assessScriptRisk([]byte("fs.writeFile()"), "")
+	r, t_ = assessScriptRisk([]byte("open('file', 'w')"), "")
 	if r != "medium" || t_ != 3 {
 		t.Errorf("expected medium/3")
 	}
 
-	r, t_ = assessScriptRisk([]byte("console.log()"), "builtin")
+	r, t_ = assessScriptRisk([]byte("print('hello')"), "builtin")
 	if r != "low" || t_ != 1 {
 		t.Errorf("expected low/1")
 	}
 
-	r, t_ = assessScriptRisk([]byte("console.log()"), "other")
-	if r != "medium" || t_ != 2 {
-		t.Errorf("expected medium/2")
+	r, t_ = assessScriptRisk([]byte("print('hello')"), "other")
+	if r != "medium" || t_ != 3 {
+		t.Errorf("expected medium/3")
 	}
 }
 
@@ -180,14 +180,14 @@ func TestIsTypeScriptType(t *testing.T) {
 }
 
 func TestRunSandboxProbe(t *testing.T) {
-	err := runSandboxProbe(context.Background(), []byte(""), "")
+	err := runSandboxProbe(context.Background(), nil, []byte(""), "")
 	if err != nil {
 		t.Errorf("expected nil error on empty dir")
 	}
 
 	// This assumes tests won't have a fully valid wasm sandbox environment available,
 	// so we expect it to fail if workDir is provided.
-	err = runSandboxProbe(context.Background(), []byte("console.log('hi')"), "/tmp/work")
+	err = runSandboxProbe(context.Background(), nil, []byte("console.log('hi')"), "/tmp/work")
 	if err == nil {
 		// Just a warning, not failing the test because environment dependencies may vary
 		t.Logf("probe did not fail in test environment")

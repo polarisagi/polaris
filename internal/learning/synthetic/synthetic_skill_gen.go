@@ -128,7 +128,7 @@ func (g *SyntheticSkillGen) registerSkill(ctx context.Context, name, description
 		Runtime:      "script",
 		RiskLevel:    "low",
 		Sandbox:      1,
-		Capabilities: []string{fmt.Sprintf("%d", types.CapReadOnly)},
+		Capabilities: []string{"read_only"}, // SkillMeta.Capabilities 存字符串标签，非整数枚举
 		ExecMode:     "tool",
 		Trust:        types.TrustLocal, // 合成技能视为本地可信（用实例密钥）
 		Instructions: fmt.Sprintf("Synthetic skill: %s\nInput schema: %s", description, string(schemaBytes)),

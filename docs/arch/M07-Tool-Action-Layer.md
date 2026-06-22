@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:113 注册 / 4:164 三级沙箱(CANONICAL) / 5:299 PolicyGate / 6:354 Capability / 7:371 动作扩展 / 8:503 Usage演化 / 12:544 (SOFT)降级 / 13:562 跨模块契约 / 14:582 Plugin / 15:624 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:113 注册 / 4:164 三级沙箱(CANONICAL) / 5:299 PolicyGate / 6:354 Capability / 7:371 动作扩展 / 8:504 Usage演化 / 12:545 (SOFT)降级 / 13:563 跨模块契约 / 14:583 Plugin / 15:625 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -10,7 +10,7 @@
 - M7 **是**: 沙箱分级执行（Sbx-L1/L2/L3） | M7 **不是**: 沙箱选型决策（那是 M11 PolicyGate）
 - M7 **是**: Capability Token 签发与校验（沙箱门口） | M7 **不是**: 凭证长期存储（那是 M11 CredentialVault）
 - M7 **是**: ExecuteTool 调用入口（含 SideEffectPreCheck） | M7 **不是**: 工具调用时机决策（那是 M4 状态机）
-- M7 **是**: 技能脚本执行（委托 Rust 脚本沙箱，npx tsx） | M7 **不是**: 技能发现与匹配（那是 M6 SkillSelector）
+- M7 **是**: 技能脚本执行（Logic Collapse Python 脚本委托 ContainerSandbox；普通 script 技能委托 InProcessSandbox） | M7 **不是**: 技能发现与匹配（那是 M6 SkillSelector）
 - M7 **是**: 所有出站网络连接强制经 M11 SafeDialer | M7 **不是**: 网络策略制定（那是 M11 SSRFGuard）
 
 ---
@@ -453,7 +453,7 @@ Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需
 
 ### 7.4 `[CodeAct]` — 即时代码执行行动空间
 
-> 对齐 2024 CodeAct (Wang et al.) / OpenInterpreter / SWE-agent。区别于 [Logic-Collapse]（沉淀型 Wasm 技能，走 staging）与 LLMGenerated wasm（走 Auto-Curriculum 流水线）——CodeAct 是 **ad-hoc 一次性代码 + 立即执行**，不沉淀。
+> 对齐 2024 CodeAct (Wang et al.) / OpenInterpreter / SWE-agent。区别于 [Logic-Collapse]（沉淀型 Python 技能，走 staging 流水线后写入 Skill Library）——CodeAct 是 **ad-hoc 一次性代码 + 立即执行**，不沉淀。共用 ContainerSandbox 执行路径，运行时依赖一致。
 
 **用途**: M4 S_EXECUTE 可选行为空间。当任务需要"组合多个工具 + 中间计算 + 条件分支"时，LLM 直接生成 Python/JS 代码片段，由 M7 执行——比多次 tool_call 更紧凑、组合性更强。
 
@@ -464,20 +464,21 @@ Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需
 - Cedar 策略: deny-by-default，需 `permit code_act when ... approval_status == "approved"`；`policyGate` 未注入时 fail-closed
 - Audit: 完整代码 + stdout + exit_code，通过 `toolExec.RecordAudit(ctx, "code_act", auditPayload)` 写入 EventLog（已实现，`internal/action/codeact/code_act.go`）
 
-**`Execute` 已实现流程**（`internal/action/codeact/code_act.go`）：语言校验（python|bash）→ CapabilityID 非空检查 → Cedar 策略评估（fail-closed）→ sandbox.Level()≥3 断言 → 构造 SandboxSpec 调用 sandbox.Run → 返回 CodeActResult。
+**`Execute` 已实现并接线**（`internal/action/codeact/code_act.go`）：语言校验（python|bash）→ CapabilityID 非空检查 → Cedar 策略评估（fail-closed）→ sandbox.Level()≥3 断言 → 构造 SandboxSpec 调用 sandbox.Run → 返回 CodeActResult。`boot_server.go` 在 `FeatureL3Sandbox` 启用时构造引擎，注入 `agent.SetCodeAct()` 和 `httpServer.SetCodeActEngine()`（Batch 3+4 完成）。
 
-Taint 检查、16KB 代码大小限制、PostExec PII Redact 属于文档设计目标，**[计划中]**，当前 `Execute` 未实现。
+Taint 检查、16KB 代码大小限制、PostExec PII Redact 属于文档设计目标，**[计划中]**。
 
-**与 LLMGenerated wasm 技能的区别**:
+**与 Logic Collapse Python 技能的区别**:
 
-| 维度 | CodeAct (本节) | LLMGenerated Wasm (M9 Auto-Curriculum) |
-|------|---------------|---------------------------------------|
-| 沉淀 | 否（一次性） | 是（写入 Skill Library） |
-| Staging 流水线 | 不走 | 完整 7 阶段 (M9 §1.5) |
-| Sandbox | L3 microVM (Python/JS runtime) | L2 Rust 脚本沙箱 |
-| 用途 | 即时复杂组合 | 高频可复用模式 |
-| 风险评估 | 单次 + Audit | 长期 + Eval 验证 |
-| HT0 可用 | 否 | 否（也需 [Sandbox-L3] for Wasm 生成阶段，Wasm 执行可用 L2） |
+| 维度 | CodeAct (本节) | Logic Collapse Python 技能 (M6) |
+|------|---------------|--------------------------------|
+| 沉淀 | 否（一次性） | 是（写入 Skill Library，HE-6） |
+| Staging 流水线 | 不走 | 完整 7 阶段（ValidatePython + Eval Gate + 签名）|
+| Sandbox | L3 ContainerSandbox（共用） | L3 ContainerSandbox（共用） |
+| 执行路径 | `writeTempScript` → sandbox.Run | SkillRegistry 读 skill.py → sandbox.Run |
+| 用途 | 即时复杂组合 | 高频可复用模式（零 LLM System 1）|
+| 触发 | M4 显式选择 | M9 自动后台触发（≥50 成功轨迹）|
+| HT0 可用 | 否（L3 依赖）| 否（L3 + FeatureLogicCollapse 双门控）|
 
 **M4 S_EXECUTE 决策树**（扩展 §5 RouteReasoning）:
 - 单工具调用 → 标准 tool_call

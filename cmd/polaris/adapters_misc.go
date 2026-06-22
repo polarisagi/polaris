@@ -23,6 +23,7 @@ import (
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	si "github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/store/search"
+	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -153,3 +154,18 @@ func (a *hitlNotifierAdapter) NotifyHITL(_ context.Context, skillID, reason stri
 
 // 确保 memory 包被引用（编译器 unused import 检查）
 var _ retrieval.Embedder = (*memEmbedderAdapter)(nil)
+
+// govAgentAdapter 将 *agents.GovernanceAgent 适配为 codeact 包的 govAgent 接口。
+// codeact 包在 internal/action/codeact/ 定义私有 govAgent 接口：
+//
+//	ValidateCode(language string, code []byte, caps map[string]bool) error
+//
+// 由于 CapabilitySet 已改为类型别名，GovernanceAgent 直接满足接口，此适配器仅供文档目的。
+// 若将来 CapabilitySet 改回命名类型，在此处加转换逻辑即可。
+type govAgentAdapter struct {
+	inner *swarmAgents.GovernanceAgent
+}
+
+func (a *govAgentAdapter) ValidateCode(language string, code []byte, caps map[string]bool) error {
+	return a.inner.ValidateCode(language, code, caps)
+}

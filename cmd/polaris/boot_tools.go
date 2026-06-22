@@ -61,7 +61,16 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		slog.Info("polaris: L3 container sandbox initialized", "backend", sb.AutoConf.Config.L3SandboxBackend)
 	}
 	inProcSandbox := sandbox.NewInProcessSandbox()
-	wasmtimeSandbox := toolsb.NewWasmtimeSandbox(sb.Layout.Workspace)
+	// B4-F5: WasmtimeSandbox（L2）门控
+	// FeatureL2Sandbox 未启用时（内存 < 512MB 或 Tier 低于要求），传 nil 给 SandboxRouter。
+	// SandboxRouter 收到 nil wasmtimeSandbox 时，Wasm 工具降级到 InProcessSandbox。
+	var wasmtimeSandbox *toolsb.WasmtimeSandbox
+	if sb.AutoConf == nil || sb.AutoConf.Gate.State(probe.FeatureL2Sandbox) != probe.FeatureDisabled {
+		wasmtimeSandbox = toolsb.NewWasmtimeSandbox(sb.Layout.Workspace)
+		slog.Info("polaris: WasmtimeSandbox (L2) initialized")
+	} else {
+		slog.Info("polaris: WasmtimeSandbox (L2) skipped (FeatureL2Sandbox disabled)")
+	}
 	sandboxRouter := sandbox.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, sb.Cfg.System.Tier)
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
@@ -157,6 +166,11 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// ─── §6.5 Skill Library (L1 M6) ─────────────────────────────────────────
 	skillRegistry := skill.NewSQLiteRegistry(sb.Store.DB())
+
+	// B4-F4: 热注入 SkillRegistry 到 GapFillWorker
+	// （boot 顺序约束：skillRegistry 在 gapFillWorker 之后初始化，故用 Set 方法后注入）
+	gapFillWorker.SetSkillRegistry(skillRegistry)
+	slog.Info("polaris: GapFillWorker.SkillRegistry injected (HE-6 State-in-DB now active)")
 	skillSelector := skill.NewSelector(skillRegistry)
 	_ = skillSelector
 

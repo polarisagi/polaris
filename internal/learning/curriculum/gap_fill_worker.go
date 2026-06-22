@@ -23,6 +23,13 @@ type GapFillWorker struct {
 	db       protocol.SQLQuerier
 	provider protocol.Provider
 	registry protocol.ToolRegistry
+	skillReg protocol.SkillRegistry // 合成技能持久化目标（HE-6 State-in-DB）；nil 时仅生成不持久化
+}
+
+// SetSkillRegistry 注入持久化目标，允许在 GapFillWorker 构造后热注入
+// （boot 顺序约束：skillRegistry 在 gapFillWorker 之后才初始化）。
+func (w *GapFillWorker) SetSkillRegistry(reg protocol.SkillRegistry) {
+	w.skillReg = reg
 }
 
 func NewGapFillWorker(db protocol.SQLQuerier, provider protocol.Provider, registry protocol.ToolRegistry) *GapFillWorker {
@@ -84,7 +91,8 @@ func (w *GapFillWorker) extractMissingTool(errStr string) string {
 }
 
 func (w *GapFillWorker) synthesizeSkill(ctx context.Context, toolName string) error {
-	gen := synthetic.NewSyntheticSkillGen(w.provider, nil)
+	// w.skillReg nil 时降级：技能仍生成（供即时工具调用），但不持久化（Tier-0 降级场景）。
+	gen := synthetic.NewSyntheticSkillGen(w.provider, w.skillReg)
 	skill, err := gen.Generate(ctx, toolName, "Auto-synthesized skill for "+toolName)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)

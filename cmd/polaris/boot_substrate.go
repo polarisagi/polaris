@@ -219,6 +219,17 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// ─── 2.5 SurrealDB Core 认知存储（FeatureSurrealDBCore 门控）────────────
 	surrealStore := initSurrealStore(autoConf, cfg, layout)
 
+	// B4-F3: 将 SurrealDB Purge 回调注入 AutoConfig，
+	// 使 OSMemoryGuard DegradationCritical 时可清理认知轴内存。
+	if autoConf != nil && surrealStore != nil {
+		autoConf.WithSurrealPurger(func() {
+			if err := surrealStore.Purge(); err != nil {
+				slog.Warn("polaris: surrealStore.Purge failed during memory pressure", "err", err)
+			}
+		})
+		slog.Info("polaris: SurrealDB purger wired into AutoConfig memory pressure callback")
+	}
+
 	// ─── 2.6 StorageRouter（三轴统一路由）───────────────────────────────────
 	var surrealProto protocol.Store
 	if surrealStore != nil {

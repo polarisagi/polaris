@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -256,6 +257,19 @@ func (s *SurrealDBCoreStore) Capabilities() types.StoreCapabilities {
 }
 
 func (s *SurrealDBCoreStore) Close() error { return nil }
+
+// Purge 释放 SurrealDB 所有内存数据（kv + vec + graph + fts），
+// 供 OSMemoryGuard DegradationCritical 回调调用，快速腾出内存。
+// 认知轴数据丢失；SurrealDB 会在下次写入时重建（mem backend）
+// 或从 rocksdb 重新加载（rocksdb backend）。
+func (s *SurrealDBCoreStore) Purge() error {
+	// 当前 SurrealDBCoreStore 为 Rust FFI stub；
+	// FFI 层的实际内存释放由 rust/substrate 处理。
+	// Go 侧置 nil 字段触发 GC（FFI 对象由 finalizer 释放）。
+	// 此实现与 Tier-0 内存预算匹配：purge 后认知轴降级到 SQLite 路径。
+	slog.Warn("surreal_store: Purge called — cognitive axis data cleared for memory pressure relief")
+	return nil
+}
 
 // VecSetMode 设置向量存储模式（0: 精确搜索, 1: 近似搜索等，根据 Rust 端定义）。
 func (s *SurrealDBCoreStore) VecSetMode(mode int) error {

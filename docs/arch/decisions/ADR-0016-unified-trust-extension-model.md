@@ -84,7 +84,7 @@ Plugin 安装位置：M13 `/v1/plugins/` API（扩展现有 Catalog）。
 ```
 skill-name/
 ├── SKILL.md          # frontmatter: name, description + 使用指令（必须）
-├── src/index.ts      # Logic Collapse 产物（TypeScript 脚本，可选，存在时优先执行）
+├── src/skill.py      # Logic Collapse 产物（Python 脚本，可选，存在时优先执行，ADR-0026）
 ├── SIGNATURE         # cosign 签名（内置/官方）或 HMAC（本地）
 └── agents/
     └── polaris.yaml  # 元数据扩展（可选）

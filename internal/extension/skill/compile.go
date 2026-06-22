@@ -18,3 +18,11 @@ func ValidateJS(code string) error {
 	}
 	return nil
 }
+
+// ValidatePython 对 LLM 生成的 Python 代码做静态安全检查。
+func ValidatePython(code string) error {
+	if strings.Contains(code, "import os") || strings.Contains(code, "import subprocess") || strings.Contains(code, "import socket") || strings.Contains(code, "eval(") || strings.Contains(code, "exec(") {
+		return apperr.New(apperr.CodeInternal, "dynamic execution and unsafe modules are forbidden in python: os, subprocess, socket, eval, exec")
+	}
+	return nil
+}

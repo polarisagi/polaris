@@ -78,7 +78,7 @@ internal/
   learning/        自进化引擎（三环架构）
     surprise/      SurpriseIndex + 漂移检测
     reflexion/     HER ReflexionEngine + 异步耳语通道
-    synthetic/     合成评估用例 + Wasm Skill 生成
+    synthetic/     合成评估用例 + Python Skill 生成（Logic Collapse 蒸馏）
     curriculum/    自动课程 + 动态难度校准
   knowledge/       RAG + 知识图谱
     graphrag/      图谱构建管线、图遍历、社区摘要
@@ -86,7 +86,7 @@ internal/
   extension/       扩展注册与运行时
     mcp/           MCP 客户端管理（LoadFromDB / TaintPreservingDecoder）
     plugin/        插件系统
-    skill/         Skill 编译与执行（LogicCollapse / Wasm）
+    skill/         Skill 编译与执行（LogicCollapse Python / ContainerSandbox）
     marketplace/   插件市场（安装/卸载/级联删除）
     native/        本地扩展激活器
     models/        扩展模型定义
@@ -202,19 +202,21 @@ make check-all    # fmt → lint → test → test-race → rust-lint → rust-t
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锚点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0021）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0026）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go→01 / Rust→02 / Agent→03 / 跨模块→04 / 审查→06 / 提交前→06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标杆
 8. `internal/protocol/` → 跨模块共享类型与接口契约
 9. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~032，共 29 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
-**docs/arch/decisions/ 文件清单**（ADR-0001~0021，按需 grep 主题词）：
+**docs/arch/decisions/ 文件清单**（ADR-0001~0026，按需 grep 主题词）：
 - 0001 观测单例 · 0002 Skill 注册合并 · 0003 SQLite modernc · 0004 Tier-0 硬件层 · 0005 purego FFI Cedar
 - 0006 state.yaml SSoT · 0007 污点五级 · 0008 沙箱三级回退 · 0009 KillSwitch 三阶段 · 0010 SurrealDB 认知存储
 - 0011 CGO→purego · 0012 spec 一致性测试 · 0013 Lint 阶段1 · 0014 对抗审查 Action · 0015 Codex 特性集成
 - 0016 统一信任扩展模型 · 0017 MCP Streamable HTTP · 0018 MCP 污点解码器 · 0019 扩展实例统一安装表
 - 0020 DeepSeek V4 默认提供商 · 0021 核心机制实现（SurpriseIndex/WasmTester/BM25/FSM）
+- 0022 ThinkingMode 三档路由 · 0023 episodic 写路径双轨制 · 0024 GovernanceAgent 代码安全三层防线
+- 0025 全局架构审查修复（R21）· 0026 Logic Collapse Python+ContainerSandbox 运行时
 
 **internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，29 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```

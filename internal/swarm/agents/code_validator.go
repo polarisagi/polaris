@@ -13,7 +13,7 @@ import (
 )
 
 // CapabilitySet 表示沙箱能力集，用于权限判断
-type CapabilitySet map[string]bool
+type CapabilitySet = map[string]bool
 
 type codeRule struct {
 	id          string

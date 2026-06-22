@@ -51,13 +51,13 @@ Agent A → EventTaskPosted → Blackboard → CAS Acquire → Agent B
 
 ## AGENT-4 Skill 生命周期
 
-Skill 三件套（`SKILL.md + schema.json + src/index.ts`，现已迁移至独立的官方扩展仓库 polaris-plugins-official）：
+Skill 三件套（`SKILL.md + schema.json + src/skill.py`，现已迁移至独立的官方扩展仓库 polaris-plugins-official）：
 
 ```
-创作 → Logic Collapse（System 2 轨迹编译为 TypeScript 技能）→ 注册 → System 1 零推理执行
+创作 → Logic Collapse（System 2 轨迹蒸馏为 Python 技能，ADR-0026）→ 注册 → System 1 零推理执行
 ```
 
-- Skill 三件套（SKILL.md + schema.json + src/index.ts）现已迁移至官方插件仓库（polaris-plugins-official），不再内置于主仓库；主二进制不再通过 `go:embed` 硬编码打包技能代码，而是通过扩展市场统一拉取；运行时由 Container 沙箱执行（npx tsx）。元数据注册信息（skill ID、版本、签名）写入 skills 表
+- Skill 三件套（SKILL.md + schema.json + src/skill.py）现已迁移至官方插件仓库（polaris-plugins-official），不再内置于主仓库；主二进制不再通过 `go:embed` 硬编码打包技能代码，而是通过扩展市场统一拉取；运行时由 ContainerSandbox L3 执行（Python `def execute(input: dict) -> dict:`）。元数据注册信息（skill ID、版本、签名）写入 skills 表
 - AI 生成的 Skill 必须经过 M6 四层 S_VALIDATE
 
 ## AGENT-5 SurpriseIndex 路由决策

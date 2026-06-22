@@ -20,7 +20,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -155,6 +154,7 @@ type LogicCollapseCompiler struct {
 	freshnessChecker FreshnessChecker // nil 时使用时间戳兜底检查
 	signingKey       []byte
 	workDir          string
+	containerSandbox sandbox.SandboxProvider
 }
 
 // LogicCollapseConfig 编译器配置。
@@ -165,6 +165,7 @@ type LogicCollapseConfig struct {
 	FreshnessChecker FreshnessChecker // 可选，nil 时用时间戳兜底
 	SigningKey       []byte
 	WorkDir          string
+	ContainerSandbox sandbox.SandboxProvider
 }
 
 func NewLogicCollapseCompiler(cfg LogicCollapseConfig) *LogicCollapseCompiler {
@@ -175,6 +176,7 @@ func NewLogicCollapseCompiler(cfg LogicCollapseConfig) *LogicCollapseCompiler {
 		freshnessChecker: cfg.FreshnessChecker,
 		signingKey:       cfg.SigningKey,
 		workDir:          cfg.WorkDir,
+		containerSandbox: cfg.ContainerSandbox,
 	}
 }
 
@@ -233,7 +235,7 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 	}
 
 	// 沙箱探针
-	if err := runSandboxProbe(ctx, src, req.WorkDir); err != nil {
+	if err := runSandboxProbe(ctx, c.containerSandbox, src, req.WorkDir); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "LogicCollapseCompiler.Compile", err)
 	}
 
@@ -256,7 +258,7 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 		Sandbox:    sandboxTier,
 		Trust:      types.TrustSystem,
 		ExecMode:   "tool",
-		ScriptPath: req.WorkDir + "/" + req.Trajectory.SkillID + "/src/index.ts",
+		ScriptPath: req.WorkDir + "/" + req.Trajectory.SkillID + "/src/skill.py",
 	}
 	if c.registry != nil {
 		if err := c.registry.Register(ctx, skillMeta); err != nil {
@@ -280,14 +282,12 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 // 覆盖：eval/Function构造器调用、动态属性拼接访问、base64解码执行、import()动态模块。
 var (
 	riskPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\beval\s*\(`),                         // eval(
-		regexp.MustCompile(`new\s+Function\s*\(`),                 // new Function(
-		regexp.MustCompile(`\[\s*["'](exec|spawn|fork)["']\s*\]`), // obj["exec"](
-		regexp.MustCompile(`atob\s*\(`),                           // base64 decode + exec
-		regexp.MustCompile(`import\s*\(\s*[^"'\s]`),               // 动态 import(var)
-		regexp.MustCompile(`require\s*\(\s*[^"'\s]`),              // 动态 require(var)
-		regexp.MustCompile(`process\s*\[\s*["']`),                 // process["env"]
-		regexp.MustCompile(`globalThis\s*\.\s*(eval|Function)`),   // globalThis.eval
+		regexp.MustCompile(`\beval\s*\(`),
+		regexp.MustCompile(`\bexec\s*\(`),
+		regexp.MustCompile(`import\s+os\b`),
+		regexp.MustCompile(`import\s+subprocess\b`),
+		regexp.MustCompile(`__import__\s*\(`),
+		regexp.MustCompile(`getattr\s*\(`),
 	}
 )
 
@@ -308,16 +308,16 @@ func assessScriptRisk(src []byte, source string) (riskLevel string, sandboxTier 
 		return "high", 3
 	}
 	switch {
-	case contains(s, "exec(", "child_process", "spawnSync"):
+	case contains(s, "subprocess", "os.system", "os.popen"):
 		return "high", 3 // L3 Container
-	case contains(s, "fetch(", "http.", "axios", "net."):
+	case contains(s, "requests.", "urllib", "http.", "socket"):
 		return "medium", 3 // L3 Container（网络需最高隔离）
-	case contains(s, "fs.write", "writeFile", "createWriteStream"):
+	case contains(s, "open(", "os.write"):
 		return "medium", 3 // L3 Container
 	case source == "builtin" || source == "user_verified":
 		return "low", 1 // L1 InProcess
 	default:
-		return "medium", 2 // L2 SandboxWasm
+		return "medium", 3 // L3 Container (since it's Python, run in container)
 	}
 }
 
@@ -376,14 +376,17 @@ func isTypeScriptType(s string) bool {
 	return false
 }
 
-func runSandboxProbe(ctx context.Context, src []byte, workDir string) error {
+func runSandboxProbe(ctx context.Context, sb sandbox.SandboxProvider, src []byte, workDir string) error {
 	if workDir == "" {
+		return nil
+	}
+	if sb == nil {
+		// 如果 L3 未启用，跳过沙箱测试，仅做静态检查
 		return nil
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	sb := toolsb.NewWasmtimeSandbox(workDir)
 	res, err := sb.Run(probeCtx, sandbox.SandboxSpec{
 		ToolName:    "probe",
 		ScriptBytes: src,

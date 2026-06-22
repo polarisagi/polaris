@@ -331,20 +331,17 @@ func (g *defaultLLMCodeGenerator) GenerateImpl(ctx context.Context, traj *extski
 	inputSchemaDesc := buildSchemaDescription(traj.InputSchema)
 	outputSchemaDesc := buildSchemaDescription(traj.OutputSchema)
 
-	systemPrompt := `You are an AI generating a TypeScript MCP skill for the Polaris agent system.
+	systemPrompt := `You are an AI generating a Python skill for the Polaris agent system.
 
 STRICT REQUIREMENTS:
-1. Use @modelcontextprotocol/sdk and standard TypeScript
-2. Export a default async function that accepts JSON input and returns JSON output
-3. NO dynamic execution: no eval(), no new Function(), no require()
-4. Use import (ESM), not require (CommonJS)
-5. NO direct filesystem writes or network calls unless explicitly declared in capabilities
-6. Input/output must be valid JSON-serializable objects
-7. The script runs via: npx tsx src/index.ts
+1. Output ONLY valid Python source code, no markdown, no explanation.
+2. Define a function: def execute(input: dict) -> dict:
+3. NO dynamic execution: no eval(), no exec()
+4. NO direct filesystem writes or network calls unless explicitly declared in capabilities
+5. Input/output must be valid JSON-serializable objects
+6. The script runs via ContainerSandbox using Python 3.`
 
-Output ONLY valid TypeScript source code, no markdown, no explanation.`
-
-	userPrompt := fmt.Sprintf(`Generate src/index.ts for skill "%s":
+	userPrompt := fmt.Sprintf(`Generate src/skill.py for skill "%s":
 
 Goal: %s
 
@@ -376,7 +373,8 @@ The script must implement the deterministic equivalent of this tool call sequenc
 
 	src := strings.TrimSpace(resp.Content)
 	// 剥离 LLM 可能包裹的 Markdown 代码块
-	src = strings.TrimPrefix(src, "```go")
+	src = strings.TrimPrefix(src, "```python")
+	src = strings.TrimPrefix(src, "```py")
 	src = strings.TrimPrefix(src, "```")
 	src = strings.TrimSuffix(src, "```")
 	src = strings.TrimSpace(src)

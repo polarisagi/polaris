@@ -20,16 +20,18 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/polarisagi/polaris/internal/action/codeact"
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/server"
 	si "github.com/polarisagi/polaris/internal/learning"
+	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
 // 返回 *server.Server，调用方 run() 负责 Shutdown。
-func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) {
+func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) { //nolint:gocyclo
 	addr := fmt.Sprintf("%s:%d", sb.Cfg.Interface.Host, sb.Cfg.Interface.Port)
 	apiRateLimiter := rate.NewLimiter(rate.Limit(50), 100)
 	httpServer := server.NewServer(addr, sb.DataDir, ab.Agent, ab.Blackboard, tb.HITLGateway,
@@ -55,37 +57,70 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		}
 	}
 
+	// ─── [B4-F2] CodeAct 引擎初始化（FeatureL3Sandbox 门控）───────────────────
+	// CodeAct 强制依赖 Sbx-L3（ContainerSandbox）；L3 未启用时跳过。
+	// 架构文档: docs/arch/M07-Tool-Action-Layer.md §7.4
+	if tb.ContainerSandbox != nil {
+		// GovernanceAgent 是 CodeAct 的 L1 代码安全校验网关（必须非 nil）。
+		// policyGate：protocol.PolicyGate 接口；security/policy.Gate 通过 IsAuthorized 满足。
+		govAgent, _ := swarmAgents.NewGovernanceAgent(sb.Gate, sb.Store.DB())
+		codeActEngine := codeact.NewCodeAct(
+			tb.ContainerSandbox,
+			sb.Gate,
+			nil, // toolExec 审计可选；nil 时跳过 RecordAudit 调用
+			codeact.WithGovernanceAgent(&govAgentAdapter{inner: govAgent}),
+			codeact.WithHITL(tb.HITLGateway),
+		)
+		ab.Agent.SetCodeAct(codeActEngine)
+		httpServer.SetCodeActEngine(codeActEngine)
+		slog.Info("polaris: CodeAct engine initialized and injected",
+			"sandbox", "L3-container",
+			"backend", sb.AutoConf.Config.L3SandboxBackend,
+		)
+	} else {
+		slog.Info("polaris: CodeAct engine skipped (FeatureL3Sandbox disabled or ContainerSandbox nil)")
+	}
+	// ─── [/B4-F2] ────────────────────────────────────────────────────────────
+
 	// ─── [P2-FIX] M9：LogicCollapseMonitor + StagingPipeline ────────────────
 	// 在 skillSigningKey 初始化之后创建，确保编译器签名密钥可用。
-	collapseCompilerTier := probe.Tier0
-	if sb.AutoConf != nil {
-		collapseCompilerTier = sb.AutoConf.Config.Tier
-	}
-	collapseCompiler := extskill.NewLogicCollapseCompiler(extskill.LogicCollapseConfig{
-		Gate:       extskill.NewCompileGate(collapseCompilerTier),
-		CodeGen:    si.NewDefaultLLMCodeGenerator(sb.Router),
-		Registry:   tb.SkillRegistry,
-		WorkDir:    sb.Layout.Workspace,
-		SigningKey: skillSigningKey,
-	})
-	collapseMonitor := si.NewLogicCollapseMonitor(
-		collapseCompiler,
-		si.NewDefaultLLMCodeGenerator(sb.Router),
-		tb.SkillRegistry,
-		&hitlNotifierAdapter{gateway: tb.HITLGateway},
-		skillSigningKey,
-		sb.Layout.Workspace,
-	)
-	rolloutStore, rolloutStoreErr := optimizer.NewSQLiteRolloutStore(sb.Store.DB())
-	if rolloutStoreErr != nil {
-		slog.Warn("polaris: failed to init SQLiteRolloutStore, L2 staging disabled", "err", rolloutStoreErr)
+	// FeatureLogicCollapse 门控：内存 < 1024MB 时跳过（避免在 Tier-0 低内存 VPS 加重负担）。
+	logicCollapseEnabled := sb.AutoConf != nil &&
+		sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled
+
+	if logicCollapseEnabled {
+		collapseCompilerTier := sb.AutoConf.Config.Tier
+		collapseCompiler := extskill.NewLogicCollapseCompiler(extskill.LogicCollapseConfig{
+			Gate:             extskill.NewCompileGate(collapseCompilerTier),
+			CodeGen:          si.NewDefaultLLMCodeGenerator(sb.Router),
+			Registry:         tb.SkillRegistry,
+			WorkDir:          sb.Layout.Workspace,
+			SigningKey:       skillSigningKey,
+			ContainerSandbox: tb.ContainerSandbox,
+		})
+		collapseMonitor := si.NewLogicCollapseMonitor(
+			collapseCompiler,
+			si.NewDefaultLLMCodeGenerator(sb.Router),
+			tb.SkillRegistry,
+			&hitlNotifierAdapter{gateway: tb.HITLGateway},
+			skillSigningKey,
+			sb.Layout.Workspace,
+		)
+		rolloutStore, rolloutStoreErr := optimizer.NewSQLiteRolloutStore(sb.Store.DB())
+		if rolloutStoreErr != nil {
+			slog.Warn("polaris: failed to init SQLiteRolloutStore, L2 staging disabled", "err", rolloutStoreErr)
+		} else {
+			collapseMonitor.WithStagingPipeline(rolloutStore)
+			slog.Info("polaris: StagingPipeline injected into LogicCollapseMonitor")
+		}
+		ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
+		slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel",
+			"feature", probe.FeatureLogicCollapse,
+			"tier", collapseCompilerTier,
+		)
 	} else {
-		collapseMonitor.WithStagingPipeline(rolloutStore)
-		slog.Info("polaris: StagingPipeline injected into LogicCollapseMonitor")
+		slog.Info("polaris: LogicCollapseMonitor skipped (FeatureLogicCollapse disabled or AutoConf nil)")
 	}
-	// 注入 ToolCallRecorder：工具调用成功时 Agent Kernel 自动累积轨迹触发 Logic Collapse
-	ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
-	slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel")
 	// ─── [/P2-FIX] ───────────────────────────────────────────────────────────
 
 	// ─── OTA 热更新管理器 ─────────────────────────────────────────────────────

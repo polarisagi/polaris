@@ -38,7 +38,7 @@
 |------|------|---------|
 | (a) Eval 驱动 Prompt 优化 | Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4] | ✅ 已实现 |
 | (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory | ✅ 已实现：`Engine.Run()` 内环已添加 `RecordSuccess` 调用，成功轨迹写入 HeuristicsMemory |
-| (c) Logic Collapse | 成功轨迹 → LLM 编译为 Wasm 技能 → Skill Library [Wasm-Sandbox] | ✅ 已实现（Tier 0+/≥8GB 可用，并发=1；<8GB VPS 禁用） |
+| (c) Logic Collapse | 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → Skill Library | ✅ 已实现（Tier 0+/≥8GB 且 L3 可用，并发=1；<8GB VPS 禁用。决策见 ADR-0026） |
 | (d) 检索式个性化 | 用户偏好 + 纠错历史 → UserProfile.InteractionSummary | ✅ 已实现 |
 | (e) Activation Steering | Control vector 推理时注入 | ✅ 已实现（仅 Tier 3+，local_only） |
 
@@ -47,7 +47,7 @@
 |------|---------|---------|
 | (a) Eval 驱动 Prompt 优化 | 可用 | — |
 | (b) 经验重放与反思 | 可用 | — |
-| (c) Logic Collapse | <8GB VPS 禁用 / Tier 0+（≥8GB）LLM 生成 TypeScript 脚本 | 仅加载预生成技能 |
+| (c) Logic Collapse | <8GB VPS 禁用 / L3 不可用时禁用 / Tier 0+（≥8GB 且 L3 可用）LLM 生成 Python 脚本 | 仅加载预生成技能 |
 | (d) 检索式个性化 | 可用 | — |
 | (e) Activation Steering | Tier 0/1/2 禁用 | 无替代 (仅 Tier 3+ 本地模型支持) |
 | Auto-Curriculum | 受限（仅 bash_restricted 工具白名单） | — |
