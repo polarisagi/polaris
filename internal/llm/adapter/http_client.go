@@ -14,13 +14,13 @@ import (
 // 架构约束 inv_M11_05: 所有出站连接经 SafeDialer.DialContext 五阶段 SSRF 防护。
 var defaultHTTPClientPtr atomic.Pointer[http.Client]
 
-func init() {
-	defaultHTTPClientPtr.Store(&http.Client{})
-}
-
 // defaultHTTPClient 返回当前注入的 HTTP 客户端（原子读，并发安全）。
 func defaultHTTPClient() *http.Client {
-	return defaultHTTPClientPtr.Load()
+	p := defaultHTTPClientPtr.Load()
+	if p == nil {
+		panic("llm/adapter: defaultHTTPClient used before SetDefaultHTTPClient was called; call SetDefaultHTTPClient in main() before creating any Provider")
+	}
+	return p
 }
 
 // SetDefaultHTTPClient 注入全局安全 HTTP 客户端。
