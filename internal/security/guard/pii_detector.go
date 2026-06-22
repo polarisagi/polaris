@@ -73,7 +73,7 @@ func (d *PIIDetector) Detect(ctx context.Context, text string) ([]PIIMatch, erro
 func (d *PIIDetector) Redact(ctx context.Context, text string) (string, int, error) {
 	matches, err := d.Detect(ctx, text)
 	if err != nil {
-		return text, 0, fmt.Errorf("PIIDetector.Redact: %w", err)
+		return text, 0, apperr.Wrap(apperr.CodeInternal, "PIIDetector.Redact", err)
 	}
 	if len(matches) == 0 {
 		return text, 0, nil
@@ -209,13 +209,13 @@ func (pc *presidioClient) analyze(ctx context.Context, text string) ([]PIIMatch,
 	body, _ := json.Marshal(presidioAnalyzeReq{Text: text, Language: "zh"})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pc.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("presidioClient.analyze: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "presidioClient.analyze", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := pc.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("presidioClient.analyze: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "presidioClient.analyze", err)
 	}
 	defer resp.Body.Close()
 
@@ -226,7 +226,7 @@ func (pc *presidioClient) analyze(ctx context.Context, text string) ([]PIIMatch,
 
 	var results []presidioResult
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("presidioClient.analyze: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "presidioClient.analyze", err)
 	}
 
 	matches := make([]PIIMatch, 0, len(results))

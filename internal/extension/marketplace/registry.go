@@ -112,7 +112,7 @@ func (r *Registry) ScanDir(dir string) (int, error) {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return count, fmt.Errorf("Registry.ScanDir: %w", err)
+			return count, apperr.Wrap(apperr.CodeInternal, "Registry.ScanDir", err)
 		}
 		if regErr := r.Register(p); regErr != nil {
 			// 已注册则跳过，不报错

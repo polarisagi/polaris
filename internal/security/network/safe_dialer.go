@@ -168,7 +168,7 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 
 	// Phase 3: 50ms TOCTOU 延迟 + 二次 DNS 解析（强制绕过缓存，TOCTOU 保护）
 	if err := sleepCtx(ctx, time.Duration(sd.toctouDelayMs)*time.Millisecond); err != nil {
-		return nil, fmt.Errorf("SafeDialer.DialContext: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SafeDialer.DialContext", err)
 	}
 	ips2, err := sd.resolveDNSBypass(ctx, host) // 绕过缓存，防止 DNS rebinding 漏过 TOCTOU
 	if err != nil {
@@ -288,7 +288,7 @@ func (sd *SafeDialer) resolveDNSBypass(ctx context.Context, host string) ([]net.
 	var r net.Resolver
 	ips, err := r.LookupIPAddr(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("SafeDialer.resolveDNSBypass: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SafeDialer.resolveDNSBypass", err)
 	}
 
 	result := make([]net.IP, len(ips))

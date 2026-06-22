@@ -124,13 +124,13 @@ func (r *InMemoryToolRegistry) List() []types.Tool {
 func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 	tool, err := r.Lookup(name)
 	if err != nil {
-		return nil, fmt.Errorf("InMemoryToolRegistry.ExecuteTool: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
 	}
 
 	// 预执行校验 (PolicyGate, RateLimit, JIT Token, DryRun)
 	if res, err := r.checkPreExecution(ctx, tool, taintLevel); res != nil || err != nil {
 		if err != nil {
-			return res, fmt.Errorf("InMemoryToolRegistry.ExecuteTool: %w", err)
+			return res, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
 		}
 		return res, nil
 	}

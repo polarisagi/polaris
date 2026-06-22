@@ -2,10 +2,11 @@ package skill
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 const (
@@ -119,7 +120,7 @@ func (c *ScriptSkillCache) GetOrSpawn(ctx context.Context, skillID string) (*Pro
 	}
 	handle, err := c.spawnFn(ctx, skillID)
 	if err != nil {
-		return nil, fmt.Errorf("ScriptSkillCache.GetOrSpawn: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "ScriptSkillCache.GetOrSpawn", err)
 	}
 
 	// 5. 放入 bronze（等待 promoteOrCache 晋级）

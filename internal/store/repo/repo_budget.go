@@ -2,11 +2,11 @@ package repo
 
 import (
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -30,11 +30,11 @@ func (r *SQLiteBudgetRepository) GetBudget(ctx context.Context) (float64, error)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("db error: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	val, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse error: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "parse error", err)
 	}
 	return val, nil
 }
@@ -45,7 +45,7 @@ func (r *SQLiteBudgetRepository) SetBudget(ctx context.Context, monthlyUSD float
 		`INSERT OR REPLACE INTO kv_store(key, value, updated_at) VALUES(?,?,datetime('now'))`,
 		budgetKey, val)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }

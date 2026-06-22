@@ -31,14 +31,14 @@ func TwilioSendSMS(ctx context.Context, client *http.Client, accountSID, authTok
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL,
 		strings.NewReader(formData.Encode()))
 	if err != nil {
-		return fmt.Errorf("TwilioSendSMS: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "TwilioSendSMS", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString(
 		[]byte(accountSID+":"+authToken)))
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("TwilioSendSMS: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "TwilioSendSMS", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

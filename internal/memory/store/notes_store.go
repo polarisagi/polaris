@@ -182,7 +182,7 @@ func scanNote(s interface {
 	var updatedAt int64
 	var expiresAtSQL sql.NullInt64
 	if err := s.Scan(&n.Key, &n.Content, &n.Version, &tagsJSON, &updatedAt, &expiresAtSQL); err != nil {
-		return nil, fmt.Errorf("scanNote: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "scanNote", err)
 	}
 	n.UpdatedAt = time.Unix(updatedAt, 0)
 	if expiresAtSQL.Valid {

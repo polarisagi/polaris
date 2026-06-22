@@ -159,7 +159,7 @@ func (g *EvalGenerator) generateSimple(ctx context.Context, chunk string) (*Synt
 		"required": []string{"question", "answer"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("EvalGenerator.generateSimple: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "EvalGenerator.generateSimple", err)
 	}
 
 	var qa simpleQA
@@ -191,7 +191,7 @@ func (g *EvalGenerator) evolveReasoning(ctx context.Context, chunk string, base 
 		"required":   []string{"question", "answer"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("EvalGenerator.evolveReasoning: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "EvalGenerator.evolveReasoning", err)
 	}
 
 	var qa simpleQA
@@ -226,7 +226,7 @@ func (g *EvalGenerator) evolveConditioning(ctx context.Context, chunk string, ba
 		"required":   []string{"question", "answer"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("EvalGenerator.evolveConditioning: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "EvalGenerator.evolveConditioning", err)
 	}
 
 	var qa simpleQA
@@ -264,7 +264,7 @@ func (g *EvalGenerator) validateGroundedness(ctx context.Context, chunk string, 
 		"required":   []string{"grounded"},
 	})
 	if err != nil {
-		return false, fmt.Errorf("EvalGenerator.validateGroundedness: %w", err)
+		return false, apperr.Wrap(apperr.CodeInternal, "EvalGenerator.validateGroundedness", err)
 	}
 
 	var result groundednessOutput

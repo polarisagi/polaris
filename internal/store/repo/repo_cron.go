@@ -3,8 +3,9 @@ package repo
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -26,7 +27,7 @@ func (r *SQLiteCronRepository) ListCronJobs(ctx context.Context) ([]types.CronJo
 		`SELECT id, name, prompt, schedule, session_id, enabled, last_run_at, next_run_at, failure_count, circuit_open, last_error, circuit_opened_at, created_at
 		FROM cron_jobs ORDER BY created_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteCronRepository.ListCronJobs: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.ListCronJobs", err)
 	}
 	defer rows.Close()
 
@@ -35,7 +36,7 @@ func (r *SQLiteCronRepository) ListCronJobs(ctx context.Context) ([]types.CronJo
 		var row types.CronJobRow
 		var enabledInt, circuitOpenInt int
 		if err := rows.Scan(&row.ID, &row.Name, &row.Prompt, &row.Schedule, &row.SessionID, &enabledInt, &row.LastRunAt, &row.NextRunAt, &row.FailureCount, &circuitOpenInt, &row.LastError, &row.CircuitOpenedAt, &row.CreatedAt); err != nil {
-			return nil, fmt.Errorf("SQLiteCronRepository.ListCronJobs scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.ListCronJobs scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		row.CircuitOpen = circuitOpenInt == 1
@@ -55,7 +56,7 @@ func (r *SQLiteCronRepository) GetCronJob(ctx context.Context, id string) (*type
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteCronRepository.GetCronJob: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.GetCronJob", err)
 	}
 	row.Enabled = enabledInt == 1
 	row.CircuitOpen = circuitOpenInt == 1
@@ -73,7 +74,7 @@ func (r *SQLiteCronRepository) CreateCronJob(ctx context.Context, row types.Cron
 		VALUES(?,?,?,?,?,?,?)`,
 		row.ID, row.Name, row.Prompt, row.Schedule, row.SessionID, enabledInt, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
-		return fmt.Errorf("SQLiteCronRepository.CreateCronJob: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.CreateCronJob", err)
 	}
 	return nil
 }
@@ -88,7 +89,7 @@ func (r *SQLiteCronRepository) UpdateCronJob(ctx context.Context, row types.Cron
 		`UPDATE cron_jobs SET name=?, prompt=?, schedule=?, session_id=?, enabled=? WHERE id=?`,
 		row.Name, row.Prompt, row.Schedule, row.SessionID, enabledInt, row.ID)
 	if err != nil {
-		return fmt.Errorf("SQLiteCronRepository.UpdateCronJob: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.UpdateCronJob", err)
 	}
 	return nil
 }
@@ -97,7 +98,7 @@ func (r *SQLiteCronRepository) UpdateCronJob(ctx context.Context, row types.Cron
 func (r *SQLiteCronRepository) DeleteCronJob(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM cron_jobs WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteCronRepository.DeleteCronJob: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.DeleteCronJob", err)
 	}
 	return nil
 }
@@ -112,7 +113,7 @@ func (r *SQLiteCronRepository) UpdateCircuitBreaker(ctx context.Context, id stri
 		`UPDATE cron_jobs SET failure_count=?, circuit_open=?, last_error=?, circuit_opened_at=? WHERE id=?`,
 		failureCount, circuitOpenInt, lastError, circuitOpenedAt, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteCronRepository.UpdateCircuitBreaker: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.UpdateCircuitBreaker", err)
 	}
 	return nil
 }
@@ -123,7 +124,7 @@ func (r *SQLiteCronRepository) UpdateLastRun(ctx context.Context, id, lastRunAt,
 		`UPDATE cron_jobs SET last_run_at=?, next_run_at=? WHERE id=?`,
 		lastRunAt, nextRunAt, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteCronRepository.UpdateLastRun: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.UpdateLastRun", err)
 	}
 	return nil
 }

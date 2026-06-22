@@ -53,7 +53,7 @@ func NewOSNetworkSandbox() *OSNetworkSandbox {
 // Enable 激活 OS 级网络沙箱。失败 → fail-closed 拒绝进入 local_only。
 func (s *OSNetworkSandbox) Enable() error {
 	if err := s.enableOS(); err != nil {
-		return fmt.Errorf("OSNetworkSandbox.Enable: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "OSNetworkSandbox.Enable", err)
 	}
 	s.enabled = true
 	return nil

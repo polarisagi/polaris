@@ -3,11 +3,12 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -56,10 +57,10 @@ func (rm *ReflectionMem) AppendReflection(ctx context.Context, entry types.Refle
 	key := []byte("reflection:" + entry.ID)
 	data, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("ReflectionMem.AppendReflection: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ReflectionMem.AppendReflection", err)
 	}
 	if err := rm.store.Put(ctx, key, data); err != nil {
-		return fmt.Errorf("ReflectionMem.AppendReflection: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ReflectionMem.AppendReflection", err)
 	}
 	rm.entries = append(rm.entries, entry)
 	return nil

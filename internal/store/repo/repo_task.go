@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -34,7 +35,7 @@ func (r *SQLiteTaskReadRepository) GetTaskProviderSuspendCount(ctx context.Conte
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("SQLiteTaskReadRepository.GetTaskProviderSuspendCount: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskReadRepository.GetTaskProviderSuspendCount", err)
 	}
 	return count, nil
 }
@@ -49,7 +50,7 @@ func (r *SQLiteTaskReadRepository) GetTaskIntentTaint(ctx context.Context, taskI
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("SQLiteTaskReadRepository.GetTaskIntentTaint: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskReadRepository.GetTaskIntentTaint", err)
 	}
 	return taint, nil
 }
@@ -65,7 +66,7 @@ func (r *SQLiteTaskReadRepository) AggregateTokenCosts(ctx context.Context, star
 		   AND created_at >= ? AND created_at < ?`,
 		startISO, endISO)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteTaskReadRepository.AggregateTokenCosts: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskReadRepository.AggregateTokenCosts", err)
 	}
 	defer rows.Close()
 
@@ -102,7 +103,7 @@ func (r *SQLiteTaskReadRepository) AggregateTokenCosts(ctx context.Context, star
 		a.TotalCostUSD += p.CostUSD
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SQLiteTaskReadRepository.AggregateTokenCosts rows: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskReadRepository.AggregateTokenCosts rows", err)
 	}
 
 	result := make([]types.TokenCostAgg, 0, len(agg))

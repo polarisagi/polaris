@@ -3,11 +3,12 @@ package store
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"text/template"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/prompt"
 
@@ -268,7 +269,7 @@ func CompactWorkingMemory(ctx context.Context, cw *ContextWindowImpl, em *Episod
 	cw.mu.Unlock()
 
 	if err := cw.Compress(ctx, targetTokens); err != nil {
-		return fmt.Errorf("CompactWorkingMemory: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CompactWorkingMemory", err)
 	}
 
 	cw.mu.Lock()

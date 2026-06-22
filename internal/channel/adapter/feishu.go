@@ -158,12 +158,12 @@ func FeishuGetTenantToken(ctx context.Context, client *http.Client, domain, appI
 	body, _ := json.Marshal(map[string]string{"app_id": appID, "app_secret": appSecret})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("FeishuGetTenantToken: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "FeishuGetTenantToken", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("FeishuGetTenantToken: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "FeishuGetTenantToken", err)
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -180,12 +180,12 @@ func feishuGetWSEndpoint(ctx context.Context, client *http.Client, domain, appID
 	url := domain + "/open-apis/event/v1/im/ws/endpoint?app_id=" + appID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("feishuGetWSEndpoint: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "feishuGetWSEndpoint", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("feishuGetWSEndpoint: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "feishuGetWSEndpoint", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -211,13 +211,13 @@ func FeishuSendMessage(ctx context.Context, client *http.Client, domain, token, 
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("FeishuSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "FeishuSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("FeishuSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "FeishuSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

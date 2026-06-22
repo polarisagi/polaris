@@ -185,11 +185,11 @@ func verifyDownload(ctx context.Context, client *http.Client, filePath, expected
 func fetchChecksumFromURL(ctx context.Context, client *http.Client, checksumURL, filename string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("fetchChecksumFromURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "fetchChecksumFromURL", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetchChecksumFromURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "fetchChecksumFromURL", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -197,7 +197,7 @@ func fetchChecksumFromURL(ctx context.Context, client *http.Client, checksumURL,
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 上限 1MB
 	if err != nil {
-		return "", fmt.Errorf("fetchChecksumFromURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "fetchChecksumFromURL", err)
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)

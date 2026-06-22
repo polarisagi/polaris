@@ -3,8 +3,9 @@ package repo
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -29,7 +30,7 @@ func (r *SQLiteChatRepository) CreateSession(ctx context.Context, row types.Chat
 		`INSERT OR IGNORE INTO chat_sessions(id, title, thrashing_index, created_at, updated_at) VALUES(?, ?, ?, ?, ?)`,
 		row.ID, row.Title, row.ThrashingIndex, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
-		return fmt.Errorf("SQLiteChatRepository.CreateSession: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.CreateSession", err)
 	}
 	return nil
 }
@@ -44,7 +45,7 @@ func (r *SQLiteChatRepository) GetSession(ctx context.Context, id string) (*type
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteChatRepository.GetSession: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.GetSession", err)
 	}
 	return &row, nil
 }
@@ -58,7 +59,7 @@ func (r *SQLiteChatRepository) ListSessions(ctx context.Context, limit int) ([]t
 		GROUP BY cs.id 
 		ORDER BY cs.updated_at DESC LIMIT ?`, limit)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteChatRepository.ListSessions: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions", err)
 	}
 	defer rows.Close()
 
@@ -66,7 +67,7 @@ func (r *SQLiteChatRepository) ListSessions(ctx context.Context, limit int) ([]t
 	for rows.Next() {
 		var row types.ChatSessionRow
 		if err := rows.Scan(&row.ID, &row.Title, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt, &row.MessageCount); err != nil {
-			return nil, fmt.Errorf("SQLiteChatRepository.ListSessions scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions scan", err)
 		}
 		result = append(result, row)
 	}
@@ -79,7 +80,7 @@ func (r *SQLiteChatRepository) UpdateSessionTitle(ctx context.Context, id, title
 		`UPDATE chat_sessions SET title=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
 		title, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteChatRepository.UpdateSessionTitle: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.UpdateSessionTitle", err)
 	}
 	return nil
 }
@@ -90,7 +91,7 @@ func (r *SQLiteChatRepository) UpdateSessionThrashingIndex(ctx context.Context, 
 		`UPDATE chat_sessions SET thrashing_index=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
 		idx, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteChatRepository.UpdateSessionThrashingIndex: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.UpdateSessionThrashingIndex", err)
 	}
 	return nil
 }
@@ -99,7 +100,7 @@ func (r *SQLiteChatRepository) UpdateSessionThrashingIndex(ctx context.Context, 
 func (r *SQLiteChatRepository) DeleteSession(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteChatRepository.DeleteSession: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.DeleteSession", err)
 	}
 	return nil
 }
@@ -111,7 +112,7 @@ func (r *SQLiteChatRepository) AppendMessage(ctx context.Context, row types.Chat
 		VALUES(?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
 		row.SessionID, row.Role, row.Content, row.ToolCalls)
 	if err != nil {
-		return fmt.Errorf("SQLiteChatRepository.AppendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.AppendMessage", err)
 	}
 	return nil
 }
@@ -125,7 +126,7 @@ func (r *SQLiteChatRepository) ListMessages(ctx context.Context, sessionID strin
 		`SELECT id, session_id, role, content, tool_calls, created_at, updated_at
 		FROM chat_messages WHERE session_id=? ORDER BY id ASC LIMIT ?`, sessionID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteChatRepository.ListMessages: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListMessages", err)
 	}
 	defer rows.Close()
 
@@ -133,7 +134,7 @@ func (r *SQLiteChatRepository) ListMessages(ctx context.Context, sessionID strin
 	for rows.Next() {
 		var row types.ChatMessageRow
 		if err := rows.Scan(&row.ID, &row.SessionID, &row.Role, &row.Content, &row.ToolCalls, &row.CreatedAt, &row.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("SQLiteChatRepository.ListMessages scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListMessages scan", err)
 		}
 		result = append(result, row)
 	}
@@ -148,7 +149,7 @@ func (r *SQLiteChatRepository) SearchMessages(ctx context.Context, query string,
 		JOIN chat_messages cm ON cm.id = fts.rowid
 		WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?`, query, limit)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteChatRepository.SearchMessages: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.SearchMessages", err)
 	}
 	defer rows.Close()
 
@@ -156,7 +157,7 @@ func (r *SQLiteChatRepository) SearchMessages(ctx context.Context, query string,
 	for rows.Next() {
 		var row types.ChatMessageRow
 		if err := rows.Scan(&row.ID, &row.SessionID, &row.Role, &row.Content, &row.ToolCalls, &row.CreatedAt, &row.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("SQLiteChatRepository.SearchMessages scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.SearchMessages scan", err)
 		}
 		result = append(result, row)
 	}
@@ -170,7 +171,7 @@ func (r *SQLiteChatRepository) RestoreSession(ctx context.Context, id, title str
 		`INSERT OR IGNORE INTO chat_sessions(id, title, thrashing_index, created_at, updated_at) VALUES(?,?,?,?,?)`,
 		id, title, thrashing, createdAt, updatedAt)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -180,7 +181,7 @@ func (r *SQLiteChatRepository) RestoreMessage(ctx context.Context, id, sessionID
 		`INSERT OR IGNORE INTO chat_messages(id, session_id, role, content, created_at) VALUES(?,?,?,?,?)`,
 		id, sessionID, role, content, createdAt)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -189,7 +190,7 @@ func (r *SQLiteChatRepository) TouchSession(ctx context.Context, id string) erro
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE chat_sessions SET updated_at=datetime('now') WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -198,7 +199,7 @@ func (r *SQLiteChatRepository) ClearNonSystemMessages(ctx context.Context, sessi
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM chat_messages WHERE session_id=? AND role != 'system'`, sessionID)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -206,18 +207,18 @@ func (r *SQLiteChatRepository) ClearNonSystemMessages(ctx context.Context, sessi
 func (r *SQLiteChatRepository) ReplaceSessionMessages(ctx context.Context, sessionID string, msgs []types.ChatMessageRow) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages WHERE session_id=?`, sessionID); err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	for _, m := range msgs {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO chat_messages(session_id, role, content) VALUES(?,?,?)`,
 			sessionID, m.Role, m.Content); err != nil {
-			return fmt.Errorf("db error: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 	}
 	return tx.Commit()

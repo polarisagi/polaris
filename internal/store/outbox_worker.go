@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -114,7 +113,7 @@ func (w *OutboxWorker) FetchBatch(ctx context.Context, cursor int64, batchSize i
 
 	records, err := scanOutboxRows(rows)
 	if err != nil {
-		return nil, fmt.Errorf("OutboxWorker.FetchBatch: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "OutboxWorker.FetchBatch", err)
 	}
 
 	// 补充查询: cursor 以前遗漏的失败记录
@@ -200,7 +199,7 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 func (w *OutboxWorker) processBatch(ctx context.Context, cursor int64, batchSize int) (int64, error) {
 	records, err := w.FetchBatch(ctx, cursor, batchSize)
 	if err != nil {
-		return cursor, fmt.Errorf("OutboxWorker.processBatch: %w", err)
+		return cursor, apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processBatch", err)
 	}
 
 	maxID := cursor
@@ -222,7 +221,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		"UPDATE outbox SET status='processing', updated_at=? WHERE id=? AND status IN ('pending', 'failed')",
 		now, record.ID)
 	if err != nil {
-		return fmt.Errorf("OutboxWorker.processAndMark: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
@@ -244,7 +243,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 			"UPDATE outbox SET status='skipped', processed_at=? WHERE id=?",
 			now, record.ID)
 		if err != nil {
-			return fmt.Errorf("OutboxWorker.processAndMark: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
 		}
 		return nil
 	}
@@ -265,7 +264,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 			newAttempts, nextRetry, record.ID)
 	}
 	if err != nil {
-		return fmt.Errorf("OutboxWorker.processAndMark: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
 	}
 	return nil
 }

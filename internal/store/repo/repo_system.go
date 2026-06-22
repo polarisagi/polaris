@@ -2,10 +2,10 @@ package repo
 
 import (
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"database/sql"
-	"fmt"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -26,7 +26,7 @@ func (r *SQLiteSystemRepository) UpsertPreference(ctx context.Context, key, valu
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 		key, value)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -34,7 +34,7 @@ func (r *SQLiteSystemRepository) UpsertPreference(ctx context.Context, key, valu
 func (r *SQLiteSystemRepository) DeletePreference(ctx context.Context, key string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM preferences WHERE key=?`, key)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -44,7 +44,7 @@ func (r *SQLiteSystemRepository) UpsertKV(ctx context.Context, key, value string
 		`INSERT OR REPLACE INTO kv_store(key, value, updated_at) VALUES(?,?,datetime('now'))`,
 		key, value)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -54,7 +54,7 @@ func (r *SQLiteSystemRepository) RestoreKV(ctx context.Context, key, value, upda
 		`INSERT OR IGNORE INTO kv_store(key, value, updated_at) VALUES(?,?,?)`,
 		key, value, updatedAt)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -66,7 +66,7 @@ func (r *SQLiteSystemRepository) UpsertVFSRef(ctx context.Context, vfsURI string
 		ON CONFLICT(vfs_ref) DO UPDATE SET ref_count = ref_count + 1
 	`, vfsURI, blobSize, createdAt)
 	if err != nil {
-		return fmt.Errorf("SQLiteSystemRepository.UpsertVFSRef: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteSystemRepository.UpsertVFSRef", err)
 	}
 	return nil
 }
@@ -78,7 +78,7 @@ func (r *SQLiteSystemRepository) GetPreference(ctx context.Context, key string) 
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("SQLiteSystemRepository.GetPreference: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteSystemRepository.GetPreference", err)
 	}
 	return val, nil
 }
@@ -86,7 +86,7 @@ func (r *SQLiteSystemRepository) GetPreference(ctx context.Context, key string) 
 func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[string]string, error) {
 	rows, err := r.db.QueryContext(ctx, "SELECT key, value FROM preferences")
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteSystemRepository.ListPreferences: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteSystemRepository.ListPreferences", err)
 	}
 	defer rows.Close()
 
@@ -94,7 +94,7 @@ func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[strin
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err != nil {
-			return nil, fmt.Errorf("SQLiteSystemRepository.ListPreferences scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteSystemRepository.ListPreferences scan", err)
 		}
 		prefs[k] = v
 	}
@@ -104,7 +104,7 @@ func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[strin
 func (r *SQLiteSystemRepository) GetPermissionMode(ctx context.Context) (types.PermissionMode, error) {
 	val, err := r.GetPreference(ctx, "permission_mode")
 	if err != nil {
-		return types.ModeAutoReview, fmt.Errorf("error: %w", err) // default
+		return types.ModeAutoReview, apperr.Wrap(apperr.CodeInternal, "error", err) // default
 	}
 	return types.PermissionMode(val), nil
 }

@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"time"
 
@@ -82,7 +81,7 @@ func EpisodicProjectorHandler(db protocol.SQLQuerier, encKey []byte) store.Outbo
 			rs,
 		)
 		if err != nil {
-			return fmt.Errorf("EpisodicProjectorHandler: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "EpisodicProjectorHandler", err)
 		}
 		return nil
 	}
@@ -97,15 +96,15 @@ func encryptField(key []byte, plaintext string) (string, error) {
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("encryptField: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "encryptField", err)
 	}
 	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", fmt.Errorf("encryptField: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "encryptField", err)
 	}
 	nonce := make([]byte, aesgcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("encryptField: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "encryptField", err)
 	}
 	ciphertext := aesgcm.Seal(nil, nonce, []byte(plaintext), nil)
 	return base64.StdEncoding.EncodeToString(append(nonce, ciphertext...)), nil

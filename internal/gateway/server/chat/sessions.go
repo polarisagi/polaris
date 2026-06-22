@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -162,7 +164,7 @@ func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request
 func (h *ChatHandler) EnsureSession(ctx context.Context, sessionID string) error {
 	err := h.ChatRepo.CreateSession(ctx, types.ChatSessionRow{ID: sessionID, Title: ""})
 	if err != nil {
-		return fmt.Errorf("Server.ensureSession: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Server.ensureSession", err)
 	}
 	return nil
 }
@@ -175,7 +177,7 @@ func (h *ChatHandler) LoadMessages(ctx context.Context, sessionID string) ([]typ
 	rows, err := h.DB.QueryContext(ctx,
 		`SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY id`, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("Server.loadMessages: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.loadMessages", err)
 	}
 	defer rows.Close()
 
@@ -183,7 +185,7 @@ func (h *ChatHandler) LoadMessages(ctx context.Context, sessionID string) ([]typ
 	for rows.Next() {
 		var m types.Message
 		if err := rows.Scan(&m.Role, &m.Content); err != nil {
-			return nil, fmt.Errorf("Server.loadMessages: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "Server.loadMessages", err)
 		}
 		msgs = append(msgs, m)
 	}
@@ -203,7 +205,7 @@ func (h *ChatHandler) SaveMessage(ctx context.Context, sessionID, role, content 
 		row.CreatedAt = now.Add(-time.Duration(durationMs) * time.Millisecond).Format(time.RFC3339)
 	}
 	if err := h.ChatRepo.AppendMessage(ctx, row); err != nil {
-		return fmt.Errorf("Server.saveMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Server.saveMessage", err)
 	}
 	return nil
 }
@@ -217,7 +219,7 @@ func (h *ChatHandler) UpdateSessionTitle(ctx context.Context, sessionID, firstIn
 	}
 	err := h.ChatRepo.UpdateSessionTitle(ctx, sessionID, title)
 	if err != nil {
-		return fmt.Errorf("Server.updateSessionTitle: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Server.updateSessionTitle", err)
 	}
 	return nil
 }

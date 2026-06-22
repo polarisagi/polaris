@@ -104,7 +104,7 @@ func LoadPlugin(dir string) (*Plugin, error) {
 	manifestPath := filepath.Join(dir, ".polaris-plugin", "plugin.json")
 	manifest, err := parseManifest(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("LoadPlugin: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "LoadPlugin", err)
 	}
 
 	plugin := &Plugin{
@@ -134,11 +134,11 @@ func LoadPlugin(dir string) (*Plugin, error) {
 func loadMCPConfig(path string) (*protocol.MCPConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("loadMCPConfig: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "loadMCPConfig", err)
 	}
 	var c protocol.MCPConfig
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("loadMCPConfig: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "loadMCPConfig", err)
 	}
 	if c.MCPServers == nil {
 		c.MCPServers = make(map[string]protocol.MCPServerDef)
@@ -181,11 +181,11 @@ func parseFlatMCPConfig(data []byte) map[string]protocol.MCPServerDef {
 func parseManifest(path string) (*protocol.PluginJSON, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parseManifest: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseManifest", err)
 	}
 	var manifest protocol.PluginJSON
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("parseManifest: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseManifest", err)
 	}
 	return &manifest, nil
 }

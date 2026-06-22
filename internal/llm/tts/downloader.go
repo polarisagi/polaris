@@ -50,7 +50,7 @@ func EnsureAssets(ctx context.Context, libDir, ttsDir string, httpClient *http.C
 	modelDir := ModelDir(ttsDir)
 	if !ttsModelPresent(modelDir) {
 		slog.Info("tts: downloading TTS model", "dest", modelDir)
-		if err := downloader.DownloadExtractTarBz2(ctx, httpClient, modelURL, ttsModelMapper(modelDir)); err != nil {
+		if err := downloader.DownloadExtractTarBz2(ctx, httpClient, modelURL, modelDir, ttsModelMapper(modelDir)); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "tts: model download failed", err)
 		}
 		slog.Info("tts: model ready", "dir", modelDir)

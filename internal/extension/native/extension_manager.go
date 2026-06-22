@@ -225,7 +225,7 @@ func MakeExtensionSearchFn(
 func searchLocalCatalog(ctx context.Context, extRepo protocol.ExtensionRepository, query string) ([]protocol.RegistryEntry, error) {
 	rows, err := extRepo.SearchCatalog(ctx, query, 50)
 	if err != nil {
-		return nil, fmt.Errorf("searchLocalCatalog: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "searchLocalCatalog", err)
 	}
 
 	results := make([]protocol.RegistryEntry, 0, len(rows))

@@ -51,7 +51,7 @@ func RegisterMemoryTools(
 	for _, e := range entries {
 		sbx.Register(e.tool.Name, e.fn)
 		if err := toolReg.Register(e.tool); err != nil {
-			return fmt.Errorf("memory_tools: register %s: %w", e.tool.Name, err)
+			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("memory_tools: register %s", e.tool.Name), err)
 		}
 	}
 	return nil

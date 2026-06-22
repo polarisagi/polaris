@@ -163,7 +163,7 @@ func (s *Supervisor) executeSafely(w *WorkerEntry) (err error) {
 	}()
 	err = w.Fn(s.ctx)
 	if err != nil {
-		return fmt.Errorf("Supervisor.executeSafely: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Supervisor.executeSafely", err)
 	}
 	return nil
 }

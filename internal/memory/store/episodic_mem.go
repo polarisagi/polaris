@@ -83,10 +83,10 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event) error {
 	key := []byte("episodic:" + ev.ID)
 	data, err := json.Marshal(ev)
 	if err != nil {
-		return fmt.Errorf("EpisodicMem.Append: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "EpisodicMem.Append", err)
 	}
 	if err := em.store.Put(ctx, key, data); err != nil {
-		return fmt.Errorf("EpisodicMem.Append: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "EpisodicMem.Append", err)
 	}
 
 	// 容量门控：超过 maxEvents 时 FIFO 淘汰最旧内存条目（SQLite 侧不受影响）
@@ -123,7 +123,7 @@ func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]type
 		var err error
 		events, err = em.loadEventsFromStore(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("EpisodicMem.Query: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "EpisodicMem.Query", err)
 		}
 	}
 
@@ -301,7 +301,7 @@ func truncateEpisodicPayload(eventID string, raw []byte) []byte {
 func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, error) {
 	iter, err := em.store.Scan(ctx, []byte("episodic:"))
 	if err != nil {
-		return nil, fmt.Errorf("EpisodicMem.loadEventsFromStore: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "EpisodicMem.loadEventsFromStore", err)
 	}
 
 	var loaded []types.Event

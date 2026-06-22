@@ -2,8 +2,9 @@ package graphrag
 
 import (
 	"context"
-	"fmt"
 	"math"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ---------------------------------------------------------------------------
@@ -182,7 +183,7 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 
 		summaries, err := c.summarizer.Summarize(ctx, communities)
 		if err != nil {
-			return labels, fmt.Errorf("Clusterer.Cluster: %w", err)
+			return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster", err)
 		}
 
 		for _, s := range summaries {
@@ -198,7 +199,7 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 				Properties: props,
 			}
 			if err := gw.UpsertEntity(ctx, entity); err != nil {
-				return labels, fmt.Errorf("Clusterer.Cluster: %w", err)
+				return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster", err)
 			}
 		}
 	}

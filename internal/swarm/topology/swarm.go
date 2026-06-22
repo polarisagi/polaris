@@ -2,7 +2,6 @@ package topology
 
 import (
 	"context"
-	"fmt"
 	"math/rand/v2"
 	"sync"
 
@@ -403,7 +402,7 @@ func (s *SwarmRouter) routeHierarchy(ctx context.Context, intent string) (*Route
 	}
 	taskID, err := s.publisher.Publish(ctx, []byte(intent), 0)
 	if err != nil {
-		return nil, fmt.Errorf("SwarmRouter.routeHierarchy: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SwarmRouter.routeHierarchy", err)
 	}
 	return &RouteResult{Mode: TopologyHierarchy, TaskID: taskID}, nil
 }

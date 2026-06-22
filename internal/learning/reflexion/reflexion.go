@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
@@ -122,7 +123,7 @@ func (re *ReflexionEngine) Reflect(
 			UseCount:    0,
 			Keywords:    extractKeywords(taskType, cause),
 		}); err != nil {
-			_ = err // 写入失败不阻断主流程
+			slog.Warn("reflexion: heuristic write failed", "err", err)
 		}
 	}
 

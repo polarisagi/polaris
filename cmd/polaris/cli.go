@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"golang.org/x/term"
 )
 
@@ -649,7 +651,7 @@ func runExport(args []string) error {
 
 	resp, err := cliHTTP.Get(cliServerURL() + "/v1/export/backup")
 	if err != nil {
-		return fmt.Errorf("export: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "export", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -659,13 +661,13 @@ func runExport(args []string) error {
 
 	f, err := os.Create(outFile)
 	if err != nil {
-		return fmt.Errorf("export: create file: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "export: create file", err)
 	}
 	defer f.Close()
 
 	n, err := io.Copy(f, resp.Body)
 	if err != nil {
-		return fmt.Errorf("export: write: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "export: write", err)
 	}
 	fmt.Printf("%s  导出完成: %s  (%d bytes)\n", clr(ansiOk, "✓"), outFile, n)
 	return nil
@@ -687,19 +689,19 @@ func runImport(args []string) error {
 	inFile := args[0]
 	f, err := os.Open(inFile)
 	if err != nil {
-		return fmt.Errorf("import: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "import", err)
 	}
 	defer f.Close()
 
 	req, err := http.NewRequest("POST", cliServerURL()+"/v1/import/backup", f)
 	if err != nil {
-		return fmt.Errorf("import: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "import", err)
 	}
 	req.Header.Set("Content-Type", "application/jsonl")
 
 	resp, err := cliHTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("import: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "import", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {

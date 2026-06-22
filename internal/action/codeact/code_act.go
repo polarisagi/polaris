@@ -104,16 +104,16 @@ func NewCodeAct(sandbox sandbox.SandboxProvider, policyGate protocol.PolicyGate,
 
 func (ca *CodeAct) validateExecuteRequest(ctx context.Context, req CodeActRequest) error {
 	if err := ca.validateBasic(req); err != nil {
-		return fmt.Errorf("CodeAct.validateExecuteRequest: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
 	}
 	if err := ca.validatePolicyAndEnv(ctx, req); err != nil {
-		return fmt.Errorf("CodeAct.validateExecuteRequest: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
 	}
 	if err := ca.validateAST(req); err != nil {
-		return fmt.Errorf("CodeAct.validateExecuteRequest: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
 	}
 	if err := ca.validateL1(req); err != nil {
-		return fmt.Errorf("CodeAct.validateExecuteRequest: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CodeAct.validateExecuteRequest", err)
 	}
 	return ca.validateL2(ctx, req)
 }
@@ -227,7 +227,7 @@ func (ca *CodeAct) requestHITLForWarning(ctx context.Context, req CodeActRequest
 func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActResult, error) {
 	// 前置校验与权限检查
 	if err := ca.validateExecuteRequest(ctx, req); err != nil {
-		return nil, fmt.Errorf("CodeAct.Execute: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "CodeAct.Execute", err)
 	}
 
 	// 构造沙箱运行规格

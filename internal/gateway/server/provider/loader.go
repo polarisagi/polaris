@@ -2,6 +2,7 @@ package provider
 
 import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"fmt"
@@ -23,7 +24,7 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, reg *llm.P
 		 WHERE p.enabled=1 AND m.enabled=1
 		 ORDER BY p.created_at, m.created_at`)
 	if err != nil {
-		return fmt.Errorf("LoadProvidersFromDB: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "LoadProvidersFromDB", err)
 	}
 	defer rows.Close()
 

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/bzip2"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,23 +16,23 @@ import (
 
 // ExtractTarBz2 流式解压 .tar.bz2，对每个普通文件调用 mapper 决定是否写出及写入路径。
 // mapper(tarEntryName) → (destAbsPath, shouldWrite)
-func ExtractTarBz2(r io.Reader, mapper func(string) (string, bool)) error {
+func ExtractTarBz2(r io.Reader, destDir string, mapper func(string) (string, bool)) error {
 	bzr := bzip2.NewReader(r)
 	tr := tar.NewReader(bzr)
-	return extractTar(tr, mapper)
+	return extractTar(tr, destDir, mapper)
 }
 
 // ExtractTarGz 流式解压 .tar.gz。
-func ExtractTarGz(r io.Reader, mapper func(string) (string, bool)) error {
+func ExtractTarGz(r io.Reader, destDir string, mapper func(string) (string, bool)) error {
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "downloader: gzip open failed", err)
 	}
 	defer gzr.Close()
-	return extractTar(tar.NewReader(gzr), mapper)
+	return extractTar(tar.NewReader(gzr), destDir, mapper)
 }
 
-func extractTar(tr *tar.Reader, mapper func(string) (string, bool)) error {
+func extractTar(tr *tar.Reader, destDir string, mapper func(string) (string, bool)) error {
 	written := 0
 	for {
 		hdr, err := tr.Next()
@@ -45,8 +46,13 @@ func extractTar(tr *tar.Reader, mapper func(string) (string, bool)) error {
 			continue
 		}
 		destPath, ok := mapper(hdr.Name)
-		if !ok {
+		if !ok || destPath == "" {
 			continue
+		}
+		// 防路径遍历：确保目标路径在 destDir 内
+		cleanDest := filepath.Clean(destPath)
+		if !strings.HasPrefix(cleanDest+string(os.PathSeparator), filepath.Clean(destDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("extractTar: path traversal detected: %q", hdr.Name)
 		}
 		if err := writeFromReader(tr, destPath, os.FileMode(hdr.Mode)|0o600); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "downloader: write "+destPath+" failed", err)

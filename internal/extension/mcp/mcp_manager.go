@@ -109,7 +109,7 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 		m.mu.Unlock()
 		slog.Error("mcp_manager: start server failed", "id", serverID, "name", name, "err", err)
 		if err != nil {
-			return fmt.Errorf("MCPManager.Add: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "MCPManager.Add", err)
 		}
 		return nil
 	}
@@ -203,7 +203,7 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 		return "", apperr.Wrap(apperr.CodeInternal, "mcp_manager: call tool", err)
 	}
 	if err != nil {
-		return text, fmt.Errorf("MCPManager.CallTool: %w", err)
+		return text, apperr.Wrap(apperr.CodeInternal, "MCPManager.CallTool", err)
 	}
 	return text, nil
 }
@@ -355,7 +355,7 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 		// CallToolTainted 内部执行 TaintPreservingDecoder，taint 通过 RegisterRich 传递
 		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)
 		if err != nil {
-			return nil, fmt.Errorf("makeMCPToolFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeMCPToolFn", err)
 		}
 		return &types.ToolResult{
 			Success:    true,
@@ -439,16 +439,16 @@ func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectReque
 	}
 	client := NewMCPClient(cfg, m.httpClient)
 	if err := client.Connect(ctx); err != nil {
-		return fmt.Errorf("MCPManager.DynamicConnect: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPManager.DynamicConnect", err)
 	}
 	if err := client.Initialize(ctx); err != nil {
 		client.Close()
-		return fmt.Errorf("MCPManager.DynamicConnect: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPManager.DynamicConnect", err)
 	}
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		client.Close()
-		return fmt.Errorf("MCPManager.DynamicConnect: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPManager.DynamicConnect", err)
 	}
 
 	validTools := m.registerTools(req.ServerName, client, tools)
@@ -508,7 +508,7 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 		if strings.Contains(err.Error(), "no rows") {
 			return apperr.New(apperr.CodeNotFound, "mcp server not found")
 		}
-		return fmt.Errorf("MCPManager.Update: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPManager.Update", err)
 	}
 
 	m.Remove(id)
@@ -558,7 +558,7 @@ func (m *MCPManager) makeSamplingHandler() ServerRequestHandler {
 			}
 			resp, err := m.samplingProvider.Infer(ctx, req.Messages, opts...)
 			if err != nil {
-				return nil, fmt.Errorf("MCPManager.makeSamplingHandler: %w", err)
+				return nil, apperr.Wrap(apperr.CodeInternal, "MCPManager.makeSamplingHandler", err)
 			}
 			result, _ := json.Marshal(map[string]any{
 				"role":    "assistant",

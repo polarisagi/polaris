@@ -2,10 +2,11 @@ package connector
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -73,7 +74,7 @@ func (s *SyncScheduler) Start(ctx context.Context) error {
 
 	events, err := s.connector.Watch(ctx)
 	if err != nil {
-		return fmt.Errorf("SyncScheduler.Start: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.Start", err)
 	}
 
 	ticker := time.NewTicker(s.debounceWin)
@@ -106,7 +107,7 @@ func (s *SyncScheduler) Start(ctx context.Context) error {
 func (s *SyncScheduler) fullSync(ctx context.Context) error {
 	refs, err := s.connector.List(ctx)
 	if err != nil {
-		return fmt.Errorf("SyncScheduler.fullSync: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.fullSync", err)
 	}
 	for _, ref := range refs {
 		if err := s.ingestRef(ctx, ref); err != nil {
@@ -162,7 +163,7 @@ func (s *SyncScheduler) handleEvent(ctx context.Context, pe *pendingEvent) {
 func (s *SyncScheduler) ingestRef(ctx context.Context, ref *types.DocumentRef) error {
 	syncDoc, err := s.connector.Fetch(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("SyncScheduler.ingestRef: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.ingestRef", err)
 	}
 	doc := &knowledge.Document{
 		Ref: knowledge.DocumentRef{
@@ -179,7 +180,7 @@ func (s *SyncScheduler) ingestRef(ctx context.Context, ref *types.DocumentRef) e
 	}
 	_, err = s.pipeline.Ingest(ctx, doc, s.taintLevel)
 	if err != nil {
-		return fmt.Errorf("SyncScheduler.ingestRef: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.ingestRef", err)
 	}
 	return nil
 }

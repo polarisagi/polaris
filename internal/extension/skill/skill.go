@@ -179,7 +179,7 @@ func (s *SelectorImpl) Select(ctx context.Context, hint types.TaskHint) ([]types
 		IncludeDeprecated: false,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("SelectorImpl.Select: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SelectorImpl.Select", err)
 	}
 
 	sort.Slice(all, func(i, j int) bool {

@@ -97,13 +97,13 @@ func formatName(s string) string {
 func parseSkillEntry(path string, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
 	relDir, err := filepath.Rel(mpDir, filepath.Dir(path))
 	if err != nil {
-		return nil, fmt.Errorf("parseSkillEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseSkillEntry", err)
 	}
 	relPath := filepath.ToSlash(relDir)
 
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parseSkillEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseSkillEntry", err)
 	}
 
 	name, desc, tags, _ := parseSkillMD(string(contentBytes))
@@ -137,7 +137,7 @@ func parseSkillEntry(path string, mpDir string, mp protocol.Marketplace) (*proto
 func parsePluginEntry(path string, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
 	relDir, err := filepath.Rel(mpDir, filepath.Dir(path))
 	if err != nil {
-		return nil, fmt.Errorf("parsePluginEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePluginEntry", err)
 	}
 
 	// 如果 plugin.json 在 .claude-plugin / .polaris-plugin / .codex-plugin 目录下，其上级目录才是插件主目录
@@ -149,7 +149,7 @@ func parsePluginEntry(path string, mpDir string, mp protocol.Marketplace) (*prot
 
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parsePluginEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePluginEntry", err)
 	}
 
 	var pJSON protocol.PluginJSON
@@ -201,18 +201,18 @@ func parsePluginEntry(path string, mpDir string, mp protocol.Marketplace) (*prot
 func parseMCPEntry(path string, mpDir string, mp protocol.Marketplace) ([]protocol.RegistryEntry, error) {
 	relDir, err := filepath.Rel(mpDir, filepath.Dir(path))
 	if err != nil {
-		return nil, fmt.Errorf("parseMCPEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseMCPEntry", err)
 	}
 	relPath := filepath.ToSlash(relDir)
 
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parseMCPEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseMCPEntry", err)
 	}
 
 	var mcpConfig protocol.MCPConfig
 	if err := json.Unmarshal(contentBytes, &mcpConfig); err != nil {
-		return nil, fmt.Errorf("parseMCPEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseMCPEntry", err)
 	}
 
 	// 兼容扁平格式
@@ -340,7 +340,7 @@ func discoverMarketplaceEntries(mpDir string, mp protocol.Marketplace) ([]protoc
 
 	err := filepath.Walk(mpDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return fmt.Errorf("discoverMarketplaceEntries: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "discoverMarketplaceEntries", err)
 		}
 		if info.IsDir() {
 			if info.Name() == ".git" {
@@ -372,7 +372,7 @@ func discoverMarketplaceEntries(mpDir string, mp protocol.Marketplace) ([]protoc
 	})
 
 	if err != nil {
-		return entries, fmt.Errorf("discoverMarketplaceEntries: %w", err)
+		return entries, apperr.Wrap(apperr.CodeInternal, "discoverMarketplaceEntries", err)
 	}
 	return entries, nil
 }
@@ -469,7 +469,7 @@ func (h *PluginHandler) SyncAllMarketplaces(ctx context.Context, localOnly bool)
 	var mps []protocol.Marketplace
 	rows, err := h.DB.QueryContext(ctx, "SELECT id, name, type, publisher, repo_url, description, is_builtin, trust_tier, enabled, created_at FROM plugin_marketplaces WHERE enabled=1")
 	if err != nil {
-		return 0, fmt.Errorf("Server.SyncAllMarketplaces: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "Server.SyncAllMarketplaces", err)
 	}
 	for rows.Next() {
 		var m protocol.Marketplace
@@ -502,11 +502,11 @@ func (h *PluginHandler) SyncAllMarketplaces(ctx context.Context, localOnly bool)
 func parseAIPluginEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parseAIPluginEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseAIPluginEntry", err)
 	}
 	var p protocol.AIPluginJSON
 	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("parseAIPluginEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseAIPluginEntry", err)
 	}
 	relDir, _ := filepath.Rel(mpDir, filepath.Dir(path))
 	relPath := filepath.ToSlash(relDir)
@@ -556,11 +556,11 @@ var errSkipEntry = apperr.New(apperr.CodeInternal, "skip entry")
 func parsePluginTOMLEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parsePluginTOMLEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePluginTOMLEntry", err)
 	}
 	var p protocol.AnthropicPluginTOML
 	if err := toml.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("parsePluginTOMLEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePluginTOMLEntry", err)
 	}
 	if p.Plugin.Name == "" && p.MCP.Command == "" {
 		return nil, errSkipEntry
@@ -609,11 +609,11 @@ func parsePluginTOMLEntry(path, mpDir string, mp protocol.Marketplace) (*protoco
 func parseGoogleSkillsEntry(path, mpDir string, mp protocol.Marketplace) ([]protocol.RegistryEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parseGoogleSkillsEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseGoogleSkillsEntry", err)
 	}
 	var g protocol.GoogleSkillsYAML
 	if err := yaml.Unmarshal(data, &g); err != nil {
-		return nil, fmt.Errorf("parseGoogleSkillsEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parseGoogleSkillsEntry", err)
 	}
 
 	relDir, _ := filepath.Rel(mpDir, filepath.Dir(path))
@@ -702,11 +702,11 @@ type PackageJSON struct {
 func parsePackageJSONEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parsePackageJSONEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePackageJSONEntry", err)
 	}
 	var p PackageJSON
 	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("parsePackageJSONEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePackageJSONEntry", err)
 	}
 
 	isMCP := false
@@ -767,11 +767,11 @@ type PyProjectTOML struct {
 func parsePyProjectTOMLEntry(path, mpDir string, mp protocol.Marketplace) (*protocol.RegistryEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("parsePyProjectTOMLEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePyProjectTOMLEntry", err)
 	}
 	var p PyProjectTOML
 	if err := toml.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("parsePyProjectTOMLEntry: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "parsePyProjectTOMLEntry", err)
 	}
 
 	isMCP := false

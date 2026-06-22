@@ -316,7 +316,7 @@ func (c *Compressor) summarize(ctx context.Context, msgs []apptypes.Message, max
 
 	ch, err := provider.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
-		return "", fmt.Errorf("Compressor.summarize: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "Compressor.summarize", err)
 	}
 
 	var result strings.Builder

@@ -598,7 +598,7 @@ func (r *SandboxRouter) Execute(ctx context.Context, tool types.Tool, input []by
 	}
 	provider, err := r.Route(tool)
 	if err != nil {
-		return nil, fmt.Errorf("sandbox route tool %q: %w", tool.Name, err)
+		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox route tool %q", tool.Name), err)
 	}
 	spec := SandboxSpec{
 		ToolName:    tool.Name,

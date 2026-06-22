@@ -2,12 +2,13 @@ package observability
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -37,7 +38,7 @@ func (t *TeeHandler) Handle(ctx context.Context, r slog.Record) error {
 	for _, h := range t.handlers {
 		if h.Enabled(ctx, r.Level) {
 			if err := h.Handle(ctx, r.Clone()); err != nil {
-				return fmt.Errorf("TeeHandler.Handle: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "TeeHandler.Handle", err)
 			}
 		}
 	}

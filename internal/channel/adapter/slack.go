@@ -112,13 +112,13 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 func slackGetSocketURL(ctx context.Context, client *http.Client, appToken string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackConnectionsOpen, bytes.NewReader([]byte{}))
 	if err != nil {
-		return "", fmt.Errorf("slackGetSocketURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "slackGetSocketURL", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+appToken)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("slackGetSocketURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "slackGetSocketURL", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -139,13 +139,13 @@ func SlackSendMessage(ctx context.Context, client *http.Client, botToken, channe
 	body, _ := json.Marshal(map[string]string{"channel": channel, "text": text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackPostMessage, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("SlackSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SlackSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+botToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("SlackSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SlackSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

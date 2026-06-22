@@ -37,12 +37,12 @@ func TeamsGetAccessToken(ctx context.Context, client *http.Client, tenantID, cli
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL,
 		bytes.NewReader([]byte(body)))
 	if err != nil {
-		return "", fmt.Errorf("TeamsGetAccessToken: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "TeamsGetAccessToken", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("TeamsGetAccessToken: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "TeamsGetAccessToken", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -66,13 +66,13 @@ func TeamsSendMessage(ctx context.Context, client *http.Client, accessToken, cha
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("TeamsSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "TeamsSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("TeamsSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "TeamsSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

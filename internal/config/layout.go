@@ -1,9 +1,10 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // DataLayout 定义运行时数据根目录下所有子目录的规范布局。
@@ -107,7 +108,7 @@ func (l DataLayout) MkdirAll() error {
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			return fmt.Errorf("DataLayout.MkdirAll: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "DataLayout.MkdirAll", err)
 		}
 	}
 	return nil

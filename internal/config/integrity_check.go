@@ -38,7 +38,7 @@ func VerifyKernelIntegrity() error {
 		}
 
 		if err := hashPackageDir(dir, currentManifest); err != nil {
-			return fmt.Errorf("VerifyKernelIntegrity: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "VerifyKernelIntegrity", err)
 		}
 	}
 
@@ -106,17 +106,17 @@ func verifyBinarySeal() error {
 func hashPackageDir(dir string, currentManifest map[string]string) error {
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return fmt.Errorf("hashPackageDir: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "hashPackageDir", err)
 		}
 		if !info.IsDir() && filepath.Ext(path) == ".go" {
 			f, err := os.Open(path)
 			if err != nil {
-				return fmt.Errorf("hashPackageDir: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "hashPackageDir", err)
 			}
 			defer f.Close()
 			h := sha256.New()
 			if _, err := io.Copy(h, f); err != nil {
-				return fmt.Errorf("hashPackageDir: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "hashPackageDir", err)
 			}
 			currentManifest[path] = hex.EncodeToString(h.Sum(nil))
 		}

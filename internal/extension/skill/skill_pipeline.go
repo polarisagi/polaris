@@ -48,7 +48,7 @@ func (p *SkillValidationPipeline) Validate(code []byte, taintLevel int) (*Valida
 
 	// Step 0: Taint 检查
 	if err := p.taintChecker.Check(taintLevel); err != nil {
-		return nil, fmt.Errorf("SkillValidationPipeline.Validate: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SkillValidationPipeline.Validate", err)
 	}
 
 	// Step 1: 静态分析

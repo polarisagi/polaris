@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -63,7 +62,7 @@ func (h *ExtensionLibrarianHandler) Handle(ctx context.Context, record *store.Ou
 	docContent := h.readDocContent(installPath, name, publisher)
 	parsed, err := h.analyzeContent(ctx, docContent)
 	if err != nil {
-		return fmt.Errorf("ExtensionLibrarianHandler.Handle: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ExtensionLibrarianHandler.Handle", err)
 	}
 
 	return h.indexAndRelate(ctx, req.ExtensionID, parsed)
@@ -76,7 +75,7 @@ func (h *ExtensionLibrarianHandler) getInstanceInfo(ctx context.Context, extID s
 		FROM extension_instances WHERE id = ?
 	`, extID).Scan(&name, &publisher, &installPath, &configStr)
 	if err != nil {
-		return name, publisher, installPath, fmt.Errorf("ExtensionLibrarianHandler.getInstanceInfo: %w", err)
+		return name, publisher, installPath, apperr.Wrap(apperr.CodeInternal, "ExtensionLibrarianHandler.getInstanceInfo", err)
 	}
 	return name, publisher, installPath, nil
 }

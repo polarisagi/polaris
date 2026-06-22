@@ -3,7 +3,6 @@ package graphrag
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -35,7 +34,7 @@ func (gt *GraphTraverser) TraverseChunks(ctx context.Context, queryText string, 
 	// Step 1: 以 queryText 文本匹配实体（FTS5 名称检索，限 top-5 种子）
 	seeds, err := gt.findSeedEntities(ctx, queryText, 5)
 	if err != nil || len(seeds) == 0 {
-		return nil, fmt.Errorf("GraphTraverser.TraverseChunks: %w", err) // 无种子实体，降级（调用方回退到 FTS5+Vector）
+		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.TraverseChunks", err) // 无种子实体，降级（调用方回退到 FTS5+Vector）
 	}
 
 	// Step 2: BFS 扩散（depth=2，≤200 节点，每节点 ≤20 出边）
@@ -152,7 +151,7 @@ func (gt *GraphTraverser) fetchNeighbors(ctx context.Context, entityID int64, li
 		ORDER BY r.weight DESC
 		LIMIT ?`, entityID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("GraphTraverser.fetchNeighbors: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.fetchNeighbors", err)
 	}
 	defer rows.Close()
 	var ids []int64
@@ -171,7 +170,7 @@ func (gt *GraphTraverser) fetchEntityName(ctx context.Context, entityID int64) (
 	err := gt.db.QueryRowContext(ctx,
 		`SELECT name FROM semantic_entities WHERE id = ?`, entityID).Scan(&name)
 	if err != nil {
-		return name, fmt.Errorf("GraphTraverser.fetchEntityName: %w", err)
+		return name, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.fetchEntityName", err)
 	}
 	return name, nil
 }
@@ -187,7 +186,7 @@ func (gt *GraphTraverser) chunksForEntity(ctx context.Context, entityName string
 			ORDER BY rank LIMIT ?
 		) AND rc.deleted_at IS NULL`, entityName, limit)
 	if err != nil {
-		return nil, fmt.Errorf("GraphTraverser.chunksForEntity: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.chunksForEntity", err)
 	}
 	defer rows.Close()
 	var chunks []Chunk

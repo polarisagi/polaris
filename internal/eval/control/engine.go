@@ -137,7 +137,7 @@ func NewEngine(pubKeys map[string]ed25519.PublicKey) *Engine {
 func (e *Engine) VerifyRequest(agentRole, partition string, signature []byte, timestamp int64) error {
 	// 步骤 1：角色访问白名单（提前拦截，避免无效签名运算）
 	if err := e.CheckAccess(agentRole, partition); err != nil {
-		return fmt.Errorf("Engine.VerifyRequest: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Engine.VerifyRequest", err)
 	}
 
 	// 步骤 2：防重放时间窗口
@@ -171,7 +171,7 @@ func (e *Engine) VerifyRequest(agentRole, partition string, signature []byte, ti
 // 对应 store.go 中 "MVP: 忽略签名校验" 的临时占位行为的迁移路径。
 func (e *Engine) VerifyRequestDev(agentRole, partition string, signature []byte, timestamp int64) error {
 	if err := e.CheckAccess(agentRole, partition); err != nil {
-		return fmt.Errorf("Engine.VerifyRequestDev: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Engine.VerifyRequestDev", err)
 	}
 	if _, ok := e.pubKeys[agentRole]; !ok {
 		// dev/test 模式：无注册密钥时仅做访问白名单检查

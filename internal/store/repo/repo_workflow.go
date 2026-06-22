@@ -2,10 +2,10 @@ package repo
 
 import (
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"database/sql"
-	"fmt"
 )
 
 type SQLiteWorkflowRepository struct {
@@ -28,7 +28,7 @@ func boolToInt(b bool) int {
 func (r *SQLiteWorkflowRepository) CreateWorkflowWithSteps(ctx context.Context, wf repo.WorkflowRow, steps []repo.WorkflowStepRow) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -39,7 +39,7 @@ func (r *SQLiteWorkflowRepository) CreateWorkflowWithSteps(ctx context.Context, 
 		wf.ID, wf.Name, wf.Description, wf.TriggerType, wf.CronSchedule,
 		boolToInt(wf.Enabled), wf.NextRunAt, wf.CreatedAt, wf.UpdatedAt,
 	); err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 
 	for _, st := range steps {
@@ -50,7 +50,7 @@ func (r *SQLiteWorkflowRepository) CreateWorkflowWithSteps(ctx context.Context, 
 			st.ID, st.WorkflowID, st.Seq, st.Name, st.AutomationID, st.Prompt,
 			st.ReasoningEffort, st.WorkingDir, boolToInt(st.InputFromPrev),
 		); err != nil {
-			return fmt.Errorf("db error: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 	}
 
@@ -60,7 +60,7 @@ func (r *SQLiteWorkflowRepository) CreateWorkflowWithSteps(ctx context.Context, 
 func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, wf repo.WorkflowRow, steps []repo.WorkflowStepRow, updateSteps bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -71,13 +71,13 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, 
 		wf.Name, wf.Description, wf.TriggerType, wf.CronSchedule,
 		boolToInt(wf.Enabled), wf.NextRunAt, wf.UpdatedAt, wf.ID,
 	); err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 
 	if updateSteps {
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM workflow_steps WHERE workflow_id=?`, wf.ID); err != nil {
-			return fmt.Errorf("db error: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 		for _, st := range steps {
 			if _, err := tx.ExecContext(ctx, `
@@ -87,7 +87,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, 
 				st.ID, st.WorkflowID, st.Seq, st.Name, st.AutomationID, st.Prompt,
 				st.ReasoningEffort, st.WorkingDir, boolToInt(st.InputFromPrev),
 			); err != nil {
-				return fmt.Errorf("db error: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "db error", err)
 			}
 		}
 	}
@@ -98,7 +98,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, 
 func (r *SQLiteWorkflowRepository) DeleteWorkflow(ctx context.Context, wfID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -108,7 +108,7 @@ func (r *SQLiteWorkflowRepository) DeleteWorkflow(ctx context.Context, wfID stri
 		`DELETE FROM workflows WHERE id=?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, wfID); err != nil {
-			return fmt.Errorf("db error: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 	}
 
@@ -122,7 +122,7 @@ func (r *SQLiteWorkflowRepository) CreateWorkflowRun(ctx context.Context, runID,
 		runID, wfID, trigger, status, currentStep, totalSteps, startedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -135,7 +135,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowRunStatus(ctx context.Context, 
 		status, finishedAt, errMsg, stepOutputs, currentStep, runID,
 	)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowRunCurrentStep(ctx context.Cont
 		`UPDATE workflow_runs SET current_step=? WHERE id=?`, currentStep, runID,
 	)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -157,7 +157,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowLastRun(ctx context.Context, wf
 		lastRunAt, nextRunAt, lastRunStatus, updatedAt, wfID,
 	)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -178,7 +178,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowStats(ctx context.Context, wfID
 			circuitBreakThreshold, circuitBreakThreshold, finishedAt,
 			finishedAt, wfID,
 		)
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE workflows
@@ -190,7 +190,7 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowStats(ctx context.Context, wfID
 		status, finishedAt, wfID,
 	)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }

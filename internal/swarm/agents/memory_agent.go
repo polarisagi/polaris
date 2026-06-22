@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -104,7 +106,7 @@ func (ma *MemoryAgent) distill(ctx context.Context) error {
 		ORDER BY created_at ASC LIMIT 20
 	`)
 	if err != nil {
-		return fmt.Errorf("MemoryAgent.distill: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MemoryAgent.distill", err)
 	}
 	defer rows.Close()
 
@@ -131,7 +133,7 @@ func (ma *MemoryAgent) distill(ctx context.Context) error {
 
 	triplesJSON, err := ma.llmInfer(distillCtx, prompt)
 	if err != nil {
-		return fmt.Errorf("MemoryAgent.distill: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MemoryAgent.distill", err)
 	}
 
 	var triples []struct {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -75,17 +77,17 @@ func ValidateDAG(ctx context.Context, vCtx *DAGValidationContext) (err error) {
 
 	// L1-Taint
 	if err := validateTaintGate(vCtx); err != nil {
-		return fmt.Errorf("ValidateDAG: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ValidateDAG", err)
 	}
 
 	// L1-Policy
 	if err := validatePolicyGate(ctx, vCtx); err != nil {
-		return fmt.Errorf("ValidateDAG: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ValidateDAG", err)
 	}
 
 	// L2: Heuristic 启发式校验
 	if err := validateHeuristic(vCtx); err != nil {
-		return fmt.Errorf("ValidateDAG: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ValidateDAG", err)
 	}
 
 	// L3: LLM 看门狗（仅 SystemTier >= 1，且 Provider 非 nil）

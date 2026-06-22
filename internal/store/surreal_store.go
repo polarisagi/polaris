@@ -229,11 +229,11 @@ func (s *SurrealDBCoreStore) BatchWrite(ctx context.Context, ops []types.Op) err
 		switch op.Type {
 		case types.OpPut:
 			if err := s.Put(ctx, op.Key, op.Value); err != nil {
-				return fmt.Errorf("SurrealDBCoreStore.BatchWrite: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "SurrealDBCoreStore.BatchWrite", err)
 			}
 		case types.OpDelete:
 			if err := s.Delete(ctx, op.Key); err != nil {
-				return fmt.Errorf("SurrealDBCoreStore.BatchWrite: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "SurrealDBCoreStore.BatchWrite", err)
 			}
 		}
 	}

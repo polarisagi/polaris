@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -27,6 +28,29 @@ const (
 // EvolutionGate verifies that a change at the given level passes all required checks.
 type EvolutionGate interface {
 	Approve(ctx context.Context, level EvolutionLevel, change *Change) error
+}
+
+// SimpleEvolutionGate 默认实现：L0/L1 自动批准，L2 记录日志，L3/L4 拒绝（需多签名）。
+// 生产环境应替换为支持多签名审批的实现。
+type SimpleEvolutionGate struct {
+	// 可扩展：注入 HITL gateway、审批人列表等
+}
+
+func (g *SimpleEvolutionGate) Approve(ctx context.Context, level EvolutionLevel, change *Change) error {
+	switch {
+	case level <= L1PromptHeuristic:
+		// L0/L1 自动批准
+		slog.Info("evolution gate: auto-approved", "level", level, "desc", change.Description)
+		return nil
+	case level == L2SkillGeneration:
+		// L2 半自动：记录日志并批准（未来可接 HITL）
+		slog.Warn("evolution gate: L2 skill generation approved (semi-auto)", "desc", change.Description)
+		return nil
+	default:
+		// L3/L4 拒绝（多签名未实现）
+		return apperr.New(apperr.CodeForbidden,
+			fmt.Sprintf("evolution gate: L%d change requires multi-signature approval (not yet implemented): %s", level, change.Description))
+	}
 }
 
 type Change struct {
@@ -253,6 +277,7 @@ type Engine struct {
 	hitlGateway     protocol.HITL
 	stagingPipeline StagingPipelineAdapter
 	l4TriggerCh     <-chan Change // admin 主动触发 L4，非自动检测
+	evolutionGate   EvolutionGate // M12: EvolutionGate instance
 }
 
 // SetSurpriseIndexProvider 注入 SurpriseIndex 读取函数（Tier1+ 从 M3 Metrics 读取）。
@@ -317,6 +342,7 @@ func NewEngine(
 		taskEvents:    taskEvents,
 		versionEvents: versionEvents,
 		sem:           make(chan struct{}, maxConcurrent),
+		evolutionGate: &SimpleEvolutionGate{},
 	}
 }
 

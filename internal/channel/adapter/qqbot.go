@@ -245,12 +245,12 @@ func qqbotGetAccessToken(ctx context.Context, client *http.Client, appID, client
 	body, _ := json.Marshal(map[string]string{"appId": appID, "clientSecret": clientSecret})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, qqbotTokenURL, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("qqbotGetAccessToken: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "qqbotGetAccessToken", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("qqbotGetAccessToken: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "qqbotGetAccessToken", err)
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -265,12 +265,12 @@ func qqbotGetAccessToken(ctx context.Context, client *http.Client, appID, client
 func qqbotGetGatewayURL(ctx context.Context, client *http.Client, accessToken string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, qqbotGatewayAPI, nil)
 	if err != nil {
-		return "", fmt.Errorf("qqbotGetGatewayURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "qqbotGetGatewayURL", err)
 	}
 	req.Header.Set("Authorization", "QQBot "+accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("qqbotGetGatewayURL: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "qqbotGetGatewayURL", err)
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -303,13 +303,13 @@ func QqbotSendMessage(ctx context.Context, client *http.Client, token, msgType, 
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return fmt.Errorf("QqbotSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "QqbotSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("QqbotSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "QqbotSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

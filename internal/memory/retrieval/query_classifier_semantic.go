@@ -2,9 +2,10 @@ package retrieval
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // SemanticQueryClassifier 使用语义向量分类意图
@@ -35,7 +36,7 @@ func (s *SemanticQueryClassifier) InitPrototypes(ctx context.Context, embedder Q
 	for qt, seed := range prototypeSeeds {
 		v, err := embedder.Embed(ctx, seed)
 		if err != nil {
-			return fmt.Errorf("SemanticQueryClassifier.InitPrototypes: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SemanticQueryClassifier.InitPrototypes", err)
 		}
 		vecs[qt] = v
 	}

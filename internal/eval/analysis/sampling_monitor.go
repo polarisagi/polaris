@@ -4,9 +4,9 @@ package analysis
 
 import (
 	"github.com/polarisagi/polaris/internal/eval/harness"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -125,7 +125,7 @@ func (m *ContinuousSamplingMonitor) CheckDegradation() (bool, *DegradationAlert)
 func (m *ContinuousSamplingMonitor) LoadSevenDaySnapshot(ctx context.Context, store *harness.SQLiteEvalStore) error {
 	avg, err := store.GetPassRateAvgSince(ctx, time.Now().AddDate(0, 0, -7))
 	if err != nil {
-		return fmt.Errorf("ContinuousSamplingMonitor.LoadSevenDaySnapshot: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ContinuousSamplingMonitor.LoadSevenDaySnapshot", err)
 	}
 	m.mu.Lock()
 	m.sevenDayAvg = avg

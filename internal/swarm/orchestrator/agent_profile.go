@@ -62,7 +62,7 @@ func LoadAgentProfiles(dir string) ([]AgentProfile, error) {
 		}
 		p, err := loadProfile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, fmt.Errorf("LoadAgentProfiles: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "LoadAgentProfiles", err)
 		}
 		if err := validateProfile(p); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("agent_profile: %s: %v", e.Name(), err), err)

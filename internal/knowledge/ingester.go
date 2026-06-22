@@ -194,7 +194,7 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 func (p *PipelineImpl) Delete(ctx context.Context, uri string) error {
 	_, err := p.db.ExecContext(ctx, "UPDATE rag_chunks SET deleted_at = CURRENT_TIMESTAMP WHERE doc_id = ?", uri)
 	if err != nil {
-		return fmt.Errorf("PipelineImpl.Delete: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "PipelineImpl.Delete", err)
 	}
 	return nil
 }

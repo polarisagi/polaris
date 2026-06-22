@@ -6,9 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -281,7 +282,7 @@ func (h *ProviderHandler) fetchCatalogModels(ctx context.Context, catalogID stri
 		  WHERE catalog_provider_id=?
 		  ORDER BY display_order`, catalogID)
 	if err != nil {
-		return nil, false, fmt.Errorf("Server.fetchCatalogModels: %w", err)
+		return nil, false, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels", err)
 	}
 	defer mrows.Close()
 

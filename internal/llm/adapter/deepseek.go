@@ -2,9 +2,9 @@ package adapter
 
 import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
-	"fmt"
 	"net/http"
 
 	llmparent "github.com/polarisagi/polaris/internal/llm"
@@ -96,7 +96,7 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []types.Message, opts 
 
 	resp, err := d.client.SendRequest(ctx, apiKey, apiReq)
 	if err != nil {
-		return nil, fmt.Errorf("DeepSeekAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.Infer", err)
 	}
 
 	out := &types.ProviderResponse{
@@ -165,7 +165,7 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 	tok := llmparent.NewTiktokenTokenizer("deepseek-v4")
 	rawCh, err := d.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
 	if err != nil {
-		return nil, fmt.Errorf("DeepSeekAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.StreamInfer", err)
 	}
 
 	outCh := make(chan types.StreamEvent, 100)

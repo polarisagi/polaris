@@ -102,20 +102,20 @@ func (s *SQLiteStore) runMigrations() error { //nolint:gocyclo
 	// 读取已应用版本
 	rows, err := s.db.Query("SELECT version FROM schema_versions ORDER BY version")
 	if err != nil {
-		return fmt.Errorf("SQLiteStore.runMigrations: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.runMigrations", err)
 	}
 	applied := make(map[int]bool)
 	for rows.Next() {
 		var v int
 		if err := rows.Scan(&v); err != nil {
 			rows.Close()
-			return fmt.Errorf("SQLiteStore.runMigrations: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.runMigrations", err)
 		}
 		applied[v] = true
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("SQLiteStore.runMigrations: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.runMigrations", err)
 	}
 
 	if s.schemaFS == nil {
@@ -146,7 +146,7 @@ func (s *SQLiteStore) runMigrations() error { //nolint:gocyclo
 		}
 		data, err := fs.ReadFile(s.schemaFS, e.Name())
 		if err != nil {
-			return fmt.Errorf("SQLiteStore.runMigrations: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.runMigrations", err)
 		}
 		pending = append(pending, mig{ver, e.Name(), string(data)})
 	}
@@ -185,7 +185,7 @@ func (s *SQLiteStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 		return nil, apperr.ErrNotFound
 	}
 	if err != nil {
-		return val, fmt.Errorf("SQLiteStore.Get: %w", err)
+		return val, apperr.Wrap(apperr.CodeInternal, "SQLiteStore.Get", err)
 	}
 	return val, nil
 }
@@ -199,7 +199,7 @@ func (s *SQLiteStore) Put(ctx context.Context, key, value []byte) error {
 		key, value,
 	)
 	if err != nil {
-		return fmt.Errorf("SQLiteStore.Put: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.Put", err)
 	}
 	return nil
 }
@@ -207,7 +207,7 @@ func (s *SQLiteStore) Put(ctx context.Context, key, value []byte) error {
 func (s *SQLiteStore) Delete(ctx context.Context, key []byte) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM kv_store WHERE key = ?", key)
 	if err != nil {
-		return fmt.Errorf("SQLiteStore.Delete: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.Delete", err)
 	}
 	return nil
 }
@@ -230,7 +230,7 @@ func (s *SQLiteStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterato
 		)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteStore.Scan: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteStore.Scan", err)
 	}
 	return &sqliteIterator{rows: rows}, nil
 }
@@ -251,7 +251,7 @@ func (s *SQLiteStore) ImportBackupRow(ctx context.Context, table string, row map
 			`INSERT OR IGNORE INTO chat_sessions(id, title, thrashing_index, created_at, updated_at) VALUES(?,?,?,?,?)`,
 			id, title, thrashing, createdAt, updatedAt)
 		if err != nil {
-			return fmt.Errorf("ImportBackupRow chat_sessions: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "ImportBackupRow chat_sessions", err)
 		}
 		return nil
 
@@ -268,7 +268,7 @@ func (s *SQLiteStore) ImportBackupRow(ctx context.Context, table string, row map
 			`INSERT OR IGNORE INTO chat_messages(id, session_id, role, content, created_at) VALUES(?,?,?,?,?)`,
 			id, sessionID, role, content, createdAt)
 		if err != nil {
-			return fmt.Errorf("ImportBackupRow chat_messages: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "ImportBackupRow chat_messages", err)
 		}
 		return nil
 
@@ -283,12 +283,12 @@ func (s *SQLiteStore) ImportBackupRow(ctx context.Context, table string, row map
 			`INSERT OR IGNORE INTO kv_store(key, value, updated_at) VALUES(?,?,?)`,
 			key, value, updatedAt)
 		if err != nil {
-			return fmt.Errorf("ImportBackupRow kv_store: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "ImportBackupRow kv_store", err)
 		}
 		return nil
 
 	default:
-		return fmt.Errorf("ImportBackupRow: unknown table %s", table)
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("ImportBackupRow: unknown table %s", table))
 	}
 }
 
@@ -296,7 +296,7 @@ func (s *SQLiteStore) ImportBackupRow(ctx context.Context, table string, row map
 func (s *SQLiteStore) LoadAllPreferences(ctx context.Context) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM preferences`)
 	if err != nil {
-		return nil, fmt.Errorf("LoadAllPreferences: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "LoadAllPreferences", err)
 	}
 	defer rows.Close()
 
@@ -304,7 +304,7 @@ func (s *SQLiteStore) LoadAllPreferences(ctx context.Context) (map[string]string
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err != nil {
-			return nil, fmt.Errorf("LoadAllPreferences: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "LoadAllPreferences", err)
 		}
 		prefs[k] = v
 	}
@@ -318,7 +318,7 @@ func (s *SQLiteStore) SetPreference(ctx context.Context, key, value string) erro
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 		key, value)
 	if err != nil {
-		return fmt.Errorf("SetPreference: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SetPreference", err)
 	}
 	return nil
 }
@@ -327,7 +327,7 @@ func (s *SQLiteStore) SetPreference(ctx context.Context, key, value string) erro
 func (s *SQLiteStore) BatchWrite(ctx context.Context, ops []types.Op) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("SQLiteStore.BatchWrite: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.BatchWrite", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 	for _, op := range ops {
@@ -337,13 +337,13 @@ func (s *SQLiteStore) BatchWrite(ctx context.Context, ops []types.Op) error {
 				"INSERT OR REPLACE INTO kv_store(key, value, updated_at) VALUES(?,?,datetime('now'))",
 				op.Key, op.Value,
 			); err != nil {
-				return fmt.Errorf("SQLiteStore.BatchWrite: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.BatchWrite", err)
 			}
 		case types.OpDelete:
 			if _, err := tx.ExecContext(ctx,
 				"DELETE FROM kv_store WHERE key = ?", op.Key,
 			); err != nil {
-				return fmt.Errorf("SQLiteStore.BatchWrite: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.BatchWrite", err)
 			}
 		}
 	}
@@ -354,12 +354,12 @@ func (s *SQLiteStore) BatchWrite(ctx context.Context, ops []types.Op) error {
 func (s *SQLiteStore) Txn(ctx context.Context, fn func(tx protocol.Transaction) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("SQLiteStore.Txn: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.Txn", err)
 	}
 	stx := &sqliteTx{tx: tx}
 	if err := fn(stx); err != nil {
 		tx.Rollback() //nolint:errcheck
-		return fmt.Errorf("SQLiteStore.Txn: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteStore.Txn", err)
 	}
 	return tx.Commit()
 }
@@ -425,7 +425,7 @@ func (t *sqliteTx) Get(key []byte) ([]byte, error) {
 		return nil, apperr.ErrNotFound
 	}
 	if err != nil {
-		return val, fmt.Errorf("sqliteTx.Get: %w", err)
+		return val, apperr.Wrap(apperr.CodeInternal, "sqliteTx.Get", err)
 	}
 	return val, nil
 }
@@ -436,7 +436,7 @@ func (t *sqliteTx) Put(key, value []byte) error {
 		key, value,
 	)
 	if err != nil {
-		return fmt.Errorf("sqliteTx.Put: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "sqliteTx.Put", err)
 	}
 	return nil
 }
@@ -444,7 +444,7 @@ func (t *sqliteTx) Put(key, value []byte) error {
 func (t *sqliteTx) Delete(key []byte) error {
 	_, err := t.tx.Exec("DELETE FROM kv_store WHERE key = ?", key)
 	if err != nil {
-		return fmt.Errorf("sqliteTx.Delete: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "sqliteTx.Delete", err)
 	}
 	return nil
 }
@@ -464,7 +464,7 @@ func (t *sqliteTx) Scan(prefix []byte) (protocol.Iterator, error) {
 		)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("sqliteTx.Scan: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "sqliteTx.Scan", err)
 	}
 	return &sqliteIterator{rows: rows}, nil
 }

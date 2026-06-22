@@ -65,7 +65,7 @@ type FanoutResult struct {
 // 本函数：读 CSV → 构建 TaskEntry → PostBatch → 并发等待 → 聚合结果。
 func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob) (*FanoutResult, error) { //nolint:gocyclo
 	if err := validateFanoutJob(&job); err != nil {
-		return nil, fmt.Errorf("RunCSVFanout: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "RunCSVFanout", err)
 	}
 
 	headers, rows, err := readCSV(job.CSVPath)
@@ -203,7 +203,7 @@ func waitForTask(ctx context.Context, bb protocol.Blackboard, taskID string) (st
 		case <-ticker.C:
 			snap, err := bb.PeekTask(ctx, taskID)
 			if err != nil {
-				return "", fmt.Errorf("waitForTask: %w", err)
+				return "", apperr.Wrap(apperr.CodeInternal, "waitForTask", err)
 			}
 			if snap == nil {
 				continue
@@ -222,14 +222,14 @@ func waitForTask(ctx context.Context, bb protocol.Blackboard, taskID string) (st
 func readCSV(path string) (headers []string, rows []map[string]string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("readCSV: %w", err)
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "readCSV", err)
 	}
 	defer f.Close()
 
 	r := csv.NewReader(f)
 	records, err := r.ReadAll()
 	if err != nil {
-		return nil, nil, fmt.Errorf("readCSV: %w", err)
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "readCSV", err)
 	}
 	if len(records) < 2 {
 		return nil, nil, apperr.New(apperr.CodeInternal, "CSV must have header row and at least one data row")
@@ -274,14 +274,14 @@ func itemIDForRow(row map[string]string, headers []string, idCol string, idx int
 func writeResultCSV(path string, headers []string, results []RowResult) error {
 	f, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("writeResultCSV: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "writeResultCSV", err)
 	}
 	defer f.Close()
 
 	w := csv.NewWriter(f)
 	outHeaders := append(headers, "job_id_row", "status", "result", "error", "duration_ms")
 	if err := w.Write(outHeaders); err != nil {
-		return fmt.Errorf("writeResultCSV: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "writeResultCSV", err)
 	}
 
 	for _, r := range results {
@@ -298,7 +298,7 @@ func writeResultCSV(path string, headers []string, results []RowResult) error {
 			fmt.Sprintf("%d", durMs),
 		)
 		if err := w.Write(record); err != nil {
-			return fmt.Errorf("writeResultCSV: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "writeResultCSV", err)
 		}
 	}
 	w.Flush()

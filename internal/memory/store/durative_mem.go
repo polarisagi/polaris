@@ -181,7 +181,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 
 	resp, err := dm.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
 	if err != nil {
-		return fmt.Errorf("DurativeMemoryManager.processCluster: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DurativeMemoryManager.processCluster", err)
 	}
 
 	content := strings.TrimSpace(resp.Content)
@@ -198,7 +198,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 		Label        string `json:"label"`
 	}
 	if err := json.Unmarshal([]byte(content), &res); err != nil {
-		return fmt.Errorf("DurativeMemoryManager.processCluster: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DurativeMemoryManager.processCluster", err)
 	}
 
 	if !res.IsContinuous {

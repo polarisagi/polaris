@@ -2,11 +2,12 @@ package chat
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 const transcriptVersion = 1
@@ -36,12 +37,12 @@ type TranscriptWriter struct {
 // writeHeader=true 时追加会话起始行（isFirstTurn 时使用）。
 func openTranscript(dir, sessionID string, writeHeader bool) (*TranscriptWriter, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("openTranscript: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "openTranscript", err)
 	}
 	path := filepath.Join(dir, sessionID+".jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("openTranscript: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "openTranscript", err)
 	}
 	tw := &TranscriptWriter{f: f}
 	if writeHeader {

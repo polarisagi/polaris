@@ -89,7 +89,7 @@ func (e *ComputerUseEngine) ExecuteAction(ctx context.Context, intent string, sc
 
 	actionJSON, err := e.resolveAction(ctx, intent, screenState, useVision)
 	if err != nil {
-		return nil, fmt.Errorf("ComputerUseEngine.ExecuteAction: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "ComputerUseEngine.ExecuteAction", err)
 	}
 
 	// dry-run 模式（executor 未注入）：返回解析的动作 JSON 供调试

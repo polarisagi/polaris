@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/memory/store"
@@ -105,7 +107,7 @@ func (f *WriteFilter) llmEvaluate(
 		types.WithMaxTokens(64),
 	)
 	if err != nil {
-		return EvalResult{}, fmt.Errorf("write_filter: provider infer: %w", err)
+		return EvalResult{}, apperr.Wrap(apperr.CodeInternal, "write_filter: provider infer", err)
 	}
 
 	text := strings.TrimSpace(resp.Content)
@@ -118,7 +120,7 @@ func (f *WriteFilter) llmEvaluate(
 		Reason string  `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		return EvalResult{}, fmt.Errorf("write_filter: parse llm response: %w", err)
+		return EvalResult{}, apperr.Wrap(apperr.CodeInternal, "write_filter: parse llm response", err)
 	}
 
 	if result.Score < 0 {

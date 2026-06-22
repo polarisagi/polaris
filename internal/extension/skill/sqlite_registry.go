@@ -152,7 +152,7 @@ func (r *SQLiteRegistryImpl) List(ctx context.Context, filter types.SkillFilter)
 			&capsRaw, &meta.ExecMode, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
 			&dependsJSON, &composesJSON, &meta.PluginID,
 		); err != nil {
-			return nil, fmt.Errorf("SQLiteRegistryImpl.List: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRegistryImpl.List", err)
 		}
 		meta.Trust = types.TrustTier(trustInt)
 		json.Unmarshal([]byte(capsRaw), &meta.Capabilities)    //nolint:errcheck

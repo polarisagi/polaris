@@ -210,7 +210,7 @@ func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response
 func (g *GatewayImpl) Pending(ctx context.Context) ([]types.HITLPrompt, error) {
 	iter, err := g.store.Scan(ctx, []byte("hitl:pending:"))
 	if err != nil {
-		return nil, fmt.Errorf("GatewayImpl.Pending: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GatewayImpl.Pending", err)
 	}
 	defer iter.Close()
 

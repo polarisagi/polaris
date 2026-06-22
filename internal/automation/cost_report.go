@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -65,7 +67,7 @@ func NewCostReporter() *CostReporter {
 
 func (r *CostReporter) generateCostReport(ctx context.Context, dir string, db protocol.SQLQuerier) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("CostReporter.generateCostReport: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CostReporter.generateCostReport", err)
 	}
 
 	now := time.Now()
@@ -85,7 +87,7 @@ func (r *CostReporter) generateCostReport(ctx context.Context, dir string, db pr
 	path := filepath.Join(dir, "monthly_cost_report.md")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return fmt.Errorf("CostReporter.generateCostReport: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CostReporter.generateCostReport", err)
 	}
 	defer f.Close()
 
@@ -128,7 +130,7 @@ func (r *CostReporter) generateCostReport(ctx context.Context, dir string, db pr
 
 	_, err = f.WriteString(content)
 	if err != nil {
-		return fmt.Errorf("CostReporter.generateCostReport: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "CostReporter.generateCostReport", err)
 	}
 	return nil
 }

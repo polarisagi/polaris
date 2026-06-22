@@ -2,7 +2,6 @@ package codeact
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/go-python/gpython/ast"
@@ -37,7 +36,7 @@ type DefaultASTChecker struct{}
 func (d *DefaultASTChecker) CheckPython(code []byte) error {
 	// L0-A：字符串模式检查（ctypes/cffi/importlib 等 FFI/动态导入绕过路径）
 	if err := d.checkPythonStringPatterns(code); err != nil {
-		return fmt.Errorf("l0_ast.CheckPython: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "l0_ast.CheckPython", err)
 	}
 
 	mod, err := parser.ParseString(string(code), py.ExecMode)
@@ -156,7 +155,7 @@ func (d *DefaultASTChecker) checkPythonCall(n *ast.Call, dangerousAliases map[st
 func (d *DefaultASTChecker) CheckBash(code []byte) error {
 	// L0-A：字符串模式检查（/dev/tcp 网络绕过、变量间接引用）
 	if err := d.checkBashStringPatterns(string(code)); err != nil {
-		return fmt.Errorf("l0_ast.CheckBash: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "l0_ast.CheckBash", err)
 	}
 
 	f, err := syntax.NewParser().Parse(strings.NewReader(string(code)), "")

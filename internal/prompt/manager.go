@@ -1,11 +1,12 @@
 package prompt
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // DefaultPolarisIdentityFallback 是极简兜底文本。
@@ -106,7 +107,7 @@ func (pm *Manager) LoadSoulMD() string {
 func (pm *Manager) WriteUserPrompt(name, content string) error {
 	dir := filepath.Join(pm.resolveConfigDir(), "prompts")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("WriteUserPrompt: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "WriteUserPrompt", err)
 	}
 	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600)
 }
@@ -119,7 +120,7 @@ func (pm *Manager) DeleteUserPrompt(name string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("DeleteUserPrompt: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DeleteUserPrompt", err)
 	}
 	return nil
 }

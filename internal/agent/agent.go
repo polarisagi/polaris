@@ -202,19 +202,19 @@ func (a *Agent) Run(ctx context.Context) error {
 			if err != nil {
 				if errors.Is(err, fsm.ErrReplanExhausted) {
 					// sm.Dispatch 内部已经将状态转移至 S_FAILED，此处直接返回该错误
-					return fmt.Errorf("Agent.Run: %w", err)
+					return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
 				}
 				// context 取消由 M8 Reaper 触发——直接退出，不触发 S_ROLLBACK
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				return fmt.Errorf("Agent.Run: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
 			}
 
 			// 执行 Effects: LLMFillEffect → 调 LLM；DeterministicEffect → 直接执行
 			for _, effect := range effects {
 				if err := a.executeEffect(ctx, effect); err != nil {
-					return fmt.Errorf("Agent.Run: %w", err)
+					return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
 				}
 			}
 

@@ -203,10 +203,10 @@ func LoadOrCreate(dataDir string, privKey ed25519.PrivateKey, trajectories []har
 
 	data, err := json.MarshalIndent(anchor, "", "  ")
 	if err != nil {
-		return nil, false, fmt.Errorf("LoadOrCreate: %w", err)
+		return nil, false, apperr.Wrap(apperr.CodeInternal, "LoadOrCreate", err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return nil, false, fmt.Errorf("LoadOrCreate: %w", err)
+		return nil, false, apperr.Wrap(apperr.CodeInternal, "LoadOrCreate", err)
 	}
 	return anchor, true, nil
 }

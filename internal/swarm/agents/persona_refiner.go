@@ -10,10 +10,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -76,7 +77,7 @@ func (pr *PersonaRefiner) Load(ctx context.Context) error {
 	if err := row.Scan(&raw); errors.Is(err, sql.ErrNoRows) {
 		return nil // 冷启动，保持默认
 	} else if err != nil {
-		return fmt.Errorf("PersonaRefiner.Load: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "PersonaRefiner.Load", err)
 	}
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
@@ -93,14 +94,14 @@ func (pr *PersonaRefiner) Save(ctx context.Context) error {
 	raw, err := json.Marshal(pr.profile)
 	pr.mu.Unlock()
 	if err != nil {
-		return fmt.Errorf("PersonaRefiner.Save: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "PersonaRefiner.Save", err)
 	}
 	_, err = pr.db.ExecContext(ctx, `
 		INSERT INTO preferences (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value
 	`, profilePreferenceKey, string(raw))
 	if err != nil {
-		return fmt.Errorf("PersonaRefiner.Save: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "PersonaRefiner.Save", err)
 	}
 	return nil
 }

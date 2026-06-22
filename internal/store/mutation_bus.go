@@ -3,10 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // MutationBus -- AI 核心数据串行写总线（events/decision_log）。
@@ -130,7 +131,7 @@ func (dw *DatabaseWriter) SubmitBatch(ctx context.Context, intents []*MutationIn
 		batch := intents[i:end]
 		for _, intent := range batch {
 			if err := dw.Submit(ctx, intent); err != nil {
-				return fmt.Errorf("DatabaseWriter.SubmitBatch: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.SubmitBatch", err)
 			}
 		}
 		if end < len(intents) {
@@ -150,7 +151,7 @@ func (dw *DatabaseWriter) SubmitComposite(ctx context.Context, comp *CompositeMu
 	for i := range comp.Intents {
 		comp.Intents[i].CompositeGroupID = comp.GroupID
 		if err := dw.Submit(ctx, &comp.Intents[i]); err != nil {
-			return fmt.Errorf("DatabaseWriter.SubmitComposite: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.SubmitComposite", err)
 		}
 	}
 	return nil

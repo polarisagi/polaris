@@ -88,11 +88,11 @@ func tgGetUpdates(ctx context.Context, client *http.Client, token string, offset
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("tgGetUpdates: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "tgGetUpdates", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tgGetUpdates: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "tgGetUpdates", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)

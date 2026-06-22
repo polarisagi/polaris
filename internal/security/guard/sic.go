@@ -2,7 +2,6 @@ package guard
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -51,7 +50,7 @@ func (s *SICCleaner) CleanInstructions(ctx context.Context, text string) (string
 		detected, err := s.detect(ctx, current)
 		if err != nil {
 			// 检测器故障，fail-closed
-			return "", fmt.Errorf("SICCleaner.CleanInstructions: %w", err)
+			return "", apperr.Wrap(apperr.CodeInternal, "SICCleaner.CleanInstructions", err)
 		}
 		if !detected {
 			// 无注入特征，提前完成

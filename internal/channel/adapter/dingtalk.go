@@ -112,12 +112,12 @@ func dingTalkGetEndpoint(ctx context.Context, client *http.Client, clientID, cli
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dingTalkStreamEndpointURL, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("dingTalkGetEndpoint: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "dingTalkGetEndpoint", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("dingTalkGetEndpoint: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "dingTalkGetEndpoint", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -140,12 +140,12 @@ func DingTalkSendMessage(ctx context.Context, client *http.Client, sessionWebhoo
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sessionWebhook, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("DingTalkSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DingTalkSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("DingTalkSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DingTalkSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

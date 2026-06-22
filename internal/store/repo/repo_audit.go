@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -32,7 +34,7 @@ func (r *SQLiteAuditRepository) AppendAuditEvent(ctx context.Context, row types.
 		row.ID, "audit.policy", row.Actor, row.Action,
 		row.Meta, time.Now().UnixMicro())
 	if err != nil {
-		return fmt.Errorf("SQLiteAuditRepository.AppendAuditEvent: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAuditRepository.AppendAuditEvent", err)
 	}
 	return nil
 }
@@ -58,7 +60,7 @@ func (r *SQLiteAuditRepository) ListAuditEvents(ctx context.Context, limit int, 
 			limit)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteAuditRepository.ListAuditEvents: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAuditRepository.ListAuditEvents", err)
 	}
 	defer rows.Close()
 
@@ -68,14 +70,14 @@ func (r *SQLiteAuditRepository) ListAuditEvents(ctx context.Context, limit int, 
 		var createdAt int64
 		var resource string // topic 字段
 		if err := rows.Scan(&row.ID, &row.Action, &row.Actor, &resource, &row.Meta, &createdAt); err != nil {
-			return nil, fmt.Errorf("SQLiteAuditRepository.ListAuditEvents scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAuditRepository.ListAuditEvents scan", err)
 		}
 		row.Resource = resource
 		row.CreatedAt = fmt.Sprintf("%d", createdAt)
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SQLiteAuditRepository.ListAuditEvents rows: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAuditRepository.ListAuditEvents rows", err)
 	}
 	return result, nil
 }
@@ -87,7 +89,7 @@ func (r *SQLiteAuditRepository) DeleteAuditEventsBefore(ctx context.Context, bef
 		`DELETE FROM events WHERE topic = 'audit.policy' AND created_at < ?`,
 		before)
 	if err != nil {
-		return 0, fmt.Errorf("SQLiteAuditRepository.DeleteAuditEventsBefore: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteAuditRepository.DeleteAuditEventsBefore", err)
 	}
 	n, _ := result.RowsAffected()
 	return n, nil

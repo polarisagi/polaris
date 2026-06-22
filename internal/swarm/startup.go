@@ -2,9 +2,10 @@ package swarm
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -68,7 +69,7 @@ func (ps *PhasedStartup) Run(ctx context.Context) error {
 			if entry.OnFail != nil {
 				entry.OnFail(entry.Phase, err)
 			}
-			return fmt.Errorf("PhasedStartup.Run: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "PhasedStartup.Run", err)
 		}
 		slog.Info("startup: phase complete", "phase", entry.Name)
 	}

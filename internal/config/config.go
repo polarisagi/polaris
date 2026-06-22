@@ -257,11 +257,11 @@ func loadModuleTOML(modulePath string, target interface{}) error {
 	data, err := os.ReadFile(modulePath)
 	if err != nil {
 		slog.Error("polaris: failed to read threshold override", "file", modulePath, "err", err)
-		return fmt.Errorf("loadModuleTOML: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "loadModuleTOML", err)
 	}
 	if err := toml.Unmarshal(data, target); err != nil {
 		slog.Error("polaris: failed to parse threshold override", "file", modulePath, "err", err)
-		return fmt.Errorf("loadModuleTOML: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "loadModuleTOML", err)
 	}
 	slog.Info("polaris: threshold override loaded", "file", modulePath)
 	return nil
@@ -271,18 +271,18 @@ func Load(path string) (*Config, error) {
 	// 1. 先以 defaults.toml 作为基底（保证所有字段有默认值）
 	defaultsData, err := configs.FS.ReadFile("defaults.toml")
 	if err != nil {
-		return nil, fmt.Errorf("Load: read embedded defaults: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Load: read embedded defaults", err)
 	}
 	cfg := &Config{Thresholds: DefaultThresholds()}
 	if err := toml.Unmarshal(defaultsData, cfg); err != nil {
-		return nil, fmt.Errorf("Load: parse embedded defaults: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Load: parse embedded defaults", err)
 	}
 
 	// 2. 若用户 config.toml 存在，叠加覆盖（仅写入的字段生效，其余保留 defaults）
 	userData, readErr := os.ReadFile(path)
 	if readErr == nil {
 		if err := toml.Unmarshal(userData, cfg); err != nil {
-			return nil, fmt.Errorf("Load: parse %s: %w", path, err)
+			return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("Load: parse %s", path), err)
 		}
 	} else {
 		// 用户配置不存在，导出 defaults 供后续手动编辑（幂等，失败忽略）
@@ -292,7 +292,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("Load: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Load", err)
 	}
 	return cfg, nil
 }
@@ -341,7 +341,7 @@ func LoadThresholds(dataDir string) (*Thresholds, error) {
 
 	for file, target := range modules {
 		if err := loadModuleTOML(filepath.Join(configDir, file), target); err != nil {
-			return nil, fmt.Errorf("LoadThresholds: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "LoadThresholds", err)
 		}
 	}
 

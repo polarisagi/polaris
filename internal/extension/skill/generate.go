@@ -12,7 +12,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -235,7 +234,7 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 
 	// 沙箱探针
 	if err := runSandboxProbe(ctx, src, req.WorkDir); err != nil {
-		return nil, fmt.Errorf("LogicCollapseCompiler.Compile: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "LogicCollapseCompiler.Compile", err)
 	}
 
 	// 签名

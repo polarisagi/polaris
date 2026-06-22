@@ -36,11 +36,11 @@ func (v *SessionPIIVault) Snapshot(ctx context.Context, taskID string, fields ma
 		dbKey := fmt.Sprintf("pii_vault:%s:%s", taskID, key)
 		encVal, err := encryptFieldVault(v.encKey, val)
 		if err != nil {
-			return fmt.Errorf("SessionPIIVault.Snapshot: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Snapshot", err)
 		}
 		_, err = v.db.ExecContext(ctx, "INSERT OR REPLACE INTO preferences (key, value, expired_at) VALUES (?, ?, ?)", dbKey, encVal, expiredAt)
 		if err != nil {
-			return fmt.Errorf("SessionPIIVault.Snapshot: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.Snapshot", err)
 		}
 	}
 	return nil
@@ -50,7 +50,7 @@ func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string
 	now := time.Now().UnixMilli()
 	rows, err := v.db.QueryContext(ctx, "SELECT key, value FROM preferences WHERE key LIKE ? AND (expired_at IS NULL OR expired_at > ?)", fmt.Sprintf("pii_vault:%s:%%", taskID), now)
 	if err != nil {
-		return fmt.Errorf("SessionPIIVault.RestoreFromSnapshot: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.RestoreFromSnapshot", err)
 	}
 	defer rows.Close()
 
@@ -76,7 +76,7 @@ func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string
 func (v *SessionPIIVault) SecureZero(ctx context.Context, taskID string) error {
 	_, err := v.db.ExecContext(ctx, "DELETE FROM preferences WHERE key LIKE ?", fmt.Sprintf("pii_vault:%s:%%", taskID))
 	if err != nil {
-		return fmt.Errorf("SessionPIIVault.SecureZero: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SessionPIIVault.SecureZero", err)
 	}
 	return nil
 }
@@ -90,15 +90,15 @@ func encryptFieldVault(key []byte, plaintext string) (string, error) {
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("encryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "encryptFieldVault", err)
 	}
 	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", fmt.Errorf("encryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "encryptFieldVault", err)
 	}
 	nonce := make([]byte, aesgcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("encryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "encryptFieldVault", err)
 	}
 	ciphertext := aesgcm.Seal(nil, nonce, []byte(plaintext), nil)
 	return base64.StdEncoding.EncodeToString(append(nonce, ciphertext...)), nil
@@ -113,15 +113,15 @@ func decryptFieldVault(key []byte, cryptoText string) (string, error) {
 	}
 	data, err := base64.StdEncoding.DecodeString(cryptoText)
 	if err != nil {
-		return "", fmt.Errorf("decryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "decryptFieldVault", err)
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("decryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "decryptFieldVault", err)
 	}
 	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", fmt.Errorf("decryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "decryptFieldVault", err)
 	}
 	nonceSize := aesgcm.NonceSize()
 	if len(data) < nonceSize {
@@ -130,7 +130,7 @@ func decryptFieldVault(key []byte, cryptoText string) (string, error) {
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return "", fmt.Errorf("decryptFieldVault: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "decryptFieldVault", err)
 	}
 	return string(plaintext), nil
 }

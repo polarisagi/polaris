@@ -2,7 +2,8 @@ package protocol
 
 import (
 	"encoding/json"
-	"fmt"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ============================================================================
@@ -163,7 +164,7 @@ type bundleManifestWire struct {
 func (m *PluginBundleManifest) UnmarshalJSON(data []byte) error {
 	var w bundleManifestWire
 	if err := json.Unmarshal(data, &w); err != nil {
-		return fmt.Errorf("PluginBundleManifest.UnmarshalJSON: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "PluginBundleManifest.UnmarshalJSON", err)
 	}
 	m.Name = w.Name
 	m.Version = w.Version

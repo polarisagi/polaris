@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -127,7 +129,7 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 func (s *SQLiteScheduler) writeTask(ctx context.Context, st *storedTask) error {
 	data, err := json.Marshal(st)
 	if err != nil {
-		return fmt.Errorf("SQLiteScheduler.writeTask: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.writeTask", err)
 	}
 	return s.store.Put(ctx, []byte("scheduler:task:"+st.Task.ID), data)
 }
@@ -138,7 +140,7 @@ func (s *SQLiteScheduler) Submit(ctx context.Context, task types.Task) (string, 
 	}
 	st := storedTask{Task: task, Status: "pending", Attempts: 0}
 	if err := s.writeTask(ctx, &st); err != nil {
-		return "", fmt.Errorf("SQLiteScheduler.Submit: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.Submit", err)
 	}
 
 	s.publish(task.ID, types.TaskEvent{TaskID: task.ID, State: "submitted"})
@@ -149,12 +151,12 @@ func (s *SQLiteScheduler) Get(ctx context.Context, id string) (*types.Task, erro
 	key := []byte("scheduler:task:" + id)
 	data, err := s.store.Get(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteScheduler.Get: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.Get", err)
 	}
 	// 兼容旧格式（直接序列化 types.Task）和新格式（storedTask 包装）
 	var st storedTask
 	if err := json.Unmarshal(data, &st); err != nil {
-		return nil, fmt.Errorf("SQLiteScheduler.Get: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.Get", err)
 	}
 	if st.Task.ID != "" {
 		return &st.Task, nil
@@ -162,7 +164,7 @@ func (s *SQLiteScheduler) Get(ctx context.Context, id string) (*types.Task, erro
 	// 降级：旧格式直接解析为 Task
 	var task types.Task
 	if err := json.Unmarshal(data, &task); err != nil {
-		return nil, fmt.Errorf("SQLiteScheduler.Get: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.Get", err)
 	}
 	return &task, nil
 }
@@ -178,7 +180,7 @@ func (s *SQLiteScheduler) Cancel(ctx context.Context, id string) error {
 		})
 	}
 	if err != nil {
-		return fmt.Errorf("SQLiteScheduler.Cancel: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.Cancel", err)
 	}
 	return nil
 }

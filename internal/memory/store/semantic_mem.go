@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -44,7 +43,7 @@ func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document) er
 	key := []byte("doc:" + doc.ID)
 	data, err := json.Marshal(doc)
 	if err != nil {
-		return fmt.Errorf("SemanticMem.StoreDocument: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreDocument", err)
 	}
 	return sm.store.Put(ctx, key, data)
 }
@@ -54,10 +53,10 @@ func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []t
 		key := []byte("chunk:" + ch.ID)
 		data, err := json.Marshal(ch)
 		if err != nil {
-			return fmt.Errorf("SemanticMem.StoreChunks: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreChunks", err)
 		}
 		if err := sm.store.Put(ctx, key, data); err != nil {
-			return fmt.Errorf("SemanticMem.StoreChunks: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreChunks", err)
 		}
 	}
 	return nil
@@ -80,11 +79,11 @@ func (sm *SemanticMem) SetVectorMode(mode int) error {
 func (sm *SemanticMem) GetDocument(ctx context.Context, id string) (*types.Document, error) {
 	data, err := sm.store.Get(ctx, []byte("doc:"+id))
 	if err != nil {
-		return nil, fmt.Errorf("SemanticMem.GetDocument: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetDocument", err)
 	}
 	var doc types.Document
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("SemanticMem.GetDocument: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetDocument", err)
 	}
 	return &doc, nil
 }
@@ -92,7 +91,7 @@ func (sm *SemanticMem) GetDocument(ctx context.Context, id string) (*types.Docum
 func (sm *SemanticMem) Archive(ctx context.Context, id string, reason string) error {
 	doc, err := sm.GetDocument(ctx, id)
 	if err != nil {
-		return fmt.Errorf("SemanticMem.Archive: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.Archive", err)
 	}
 	doc.Archived = true
 	return sm.StoreDocument(ctx, *doc)
@@ -101,7 +100,7 @@ func (sm *SemanticMem) Archive(ctx context.Context, id string, reason string) er
 func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity) error {
 	db, err := sm.requireDB()
 	if err != nil {
-		return fmt.Errorf("SemanticMem.UpsertFact: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
 	}
 
 	now := time.Now().UnixMilli()
@@ -136,7 +135,7 @@ func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity) erro
 		nullableInt64(validFrom), nullableInt64(validUntil),
 	)
 	if err != nil {
-		return fmt.Errorf("SemanticMem.UpsertFact: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
 	}
 	return nil
 }
@@ -194,7 +193,7 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation) e
 	}
 	db, err := sm.requireDB()
 	if err != nil {
-		return fmt.Errorf("SemanticMem.UpsertRelation: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertRelation", err)
 	}
 
 	now := time.Now().UnixMilli()
@@ -228,7 +227,7 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation) e
 		now, nullableInt64(rel.SourceEventID), now, confidence,
 	)
 	if err != nil {
-		return fmt.Errorf("SemanticMem.UpsertRelation: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertRelation", err)
 	}
 	return nil
 }
@@ -236,7 +235,7 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation) e
 func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error) {
 	db, err := sm.requireDB()
 	if err != nil {
-		return nil, fmt.Errorf("SemanticMem.GetEntity: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetEntity", err)
 	}
 
 	const q = `SELECT id, name, entity_type, properties, embedding,
@@ -260,7 +259,7 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, apperr.New(apperr.CodeNotFound, "Entity not found")
 		}
-		return nil, fmt.Errorf("SemanticMem.GetEntity: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetEntity", err)
 	}
 
 	ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
@@ -274,7 +273,7 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 func (sm *SemanticMem) ListActiveEntities(ctx context.Context, entityType string, limit int) ([]types.Entity, error) {
 	db, err := sm.requireDB()
 	if err != nil {
-		return nil, fmt.Errorf("SemanticMem.ListActiveEntities: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.ListActiveEntities", err)
 	}
 	if limit <= 0 {
 		limit = 50
@@ -289,7 +288,7 @@ func (sm *SemanticMem) ListActiveEntities(ctx context.Context, entityType string
 	            ORDER BY updated_at DESC LIMIT ?`
 	rows, err := db.QueryContext(ctx, q, entityType, limit)
 	if err != nil {
-		return nil, fmt.Errorf("SemanticMem.ListActiveEntities: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.ListActiveEntities", err)
 	}
 	defer rows.Close()
 
@@ -318,7 +317,7 @@ func (sm *SemanticMem) ListActiveEntities(ctx context.Context, entityType string
 func (sm *SemanticMem) MarkEntitySuperseded(ctx context.Context, oldDBID int64, newDBID int64) error {
 	db, err := sm.requireDB()
 	if err != nil {
-		return fmt.Errorf("SemanticMem.MarkEntitySuperseded: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.MarkEntitySuperseded", err)
 	}
 	var supersededBy any
 	if newDBID > 0 {
@@ -329,7 +328,7 @@ func (sm *SemanticMem) MarkEntitySuperseded(ctx context.Context, oldDBID int64, 
 		 WHERE id=? AND status='active'`,
 		supersededBy, time.Now().UnixMilli(), oldDBID)
 	if err != nil {
-		return fmt.Errorf("SemanticMem.MarkEntitySuperseded: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.MarkEntitySuperseded", err)
 	}
 	return nil
 }
@@ -338,7 +337,7 @@ func (sm *SemanticMem) MarkEntitySuperseded(ctx context.Context, oldDBID int64, 
 func (sm *SemanticMem) UpsertUserProfile(ctx context.Context, profile types.UserProfile) error {
 	db, err := sm.requireDB()
 	if err != nil {
-		return fmt.Errorf("SemanticMem.UpsertUserProfile: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertUserProfile", err)
 	}
 	stableFacts, _ := json.Marshal(profile.StableFacts)
 	recentActivity, _ := json.Marshal(profile.RecentActivity)
@@ -361,7 +360,7 @@ func (sm *SemanticMem) UpsertUserProfile(ctx context.Context, profile types.User
 		profile.SynthesisCount, profile.LastEventTS, now, now,
 	)
 	if err != nil {
-		return fmt.Errorf("SemanticMem.UpsertUserProfile: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertUserProfile", err)
 	}
 	return nil
 }
@@ -370,7 +369,7 @@ func (sm *SemanticMem) UpsertUserProfile(ctx context.Context, profile types.User
 func (sm *SemanticMem) GetUserProfile(ctx context.Context, profileKey string) (*types.UserProfile, error) {
 	db, err := sm.requireDB()
 	if err != nil {
-		return nil, fmt.Errorf("SemanticMem.GetUserProfile: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetUserProfile", err)
 	}
 
 	const q = `SELECT profile_key, stable_facts, recent_activity, behavioral_patterns,
@@ -386,7 +385,7 @@ func (sm *SemanticMem) GetUserProfile(ctx context.Context, profileKey string) (*
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, apperr.New(apperr.CodeNotFound, "user_profile not found")
 		}
-		return nil, fmt.Errorf("SemanticMem.GetUserProfile: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetUserProfile", err)
 	}
 	if len(stableJSON) > 0 {
 		_ = json.Unmarshal(stableJSON, &p.StableFacts)

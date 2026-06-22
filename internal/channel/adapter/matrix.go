@@ -85,12 +85,12 @@ func matrixLogin(ctx context.Context, client *http.Client, homeserver, username,
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s/_matrix/client/v3/login", homeserver), bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("matrixLogin: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "matrixLogin", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("matrixLogin: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "matrixLogin", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -122,14 +122,14 @@ func matrixSync(ctx context.Context, client *http.Client, homeserver, accessToke
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", nil, fmt.Errorf("matrixSync: %w", err)
+		return "", nil, apperr.Wrap(apperr.CodeInternal, "matrixSync", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	syncClient := &http.Client{Timeout: 40 * time.Second}
 	resp, err := syncClient.Do(req)
 	if err != nil {
-		return "", nil, fmt.Errorf("matrixSync: %w", err)
+		return "", nil, apperr.Wrap(apperr.CodeInternal, "matrixSync", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -185,13 +185,13 @@ func (s *MatrixSender) SendMessage(ctx context.Context, client *http.Client, hom
 	body, _ := json.Marshal(map[string]any{"msgtype": "m.text", "body": text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("MatrixSender.SendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MatrixSender.SendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("MatrixSender.SendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MatrixSender.SendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

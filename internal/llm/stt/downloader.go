@@ -85,7 +85,7 @@ func EnsureAssets(ctx context.Context, sttDir string, httpClient *http.Client, v
 	modelDir := filepath.Join(sttDir, "model")
 	if !modelFilesPresent(modelDir) {
 		slog.Info("stt: downloading SenseVoice model", "dest", modelDir)
-		if err := downloader.DownloadExtractTarBz2(ctx, httpClient, modelURL, sttModelMapper(modelDir)); err != nil {
+		if err := downloader.DownloadExtractTarBz2(ctx, httpClient, modelURL, modelDir, sttModelMapper(modelDir)); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "stt: model download failed", err)
 		}
 		slog.Info("stt: model ready", "dir", modelDir)
@@ -98,7 +98,7 @@ func EnsureAssets(ctx context.Context, sttDir string, httpClient *http.Client, v
 		punctDir := filepath.Join(sttDir, "punct_model")
 		if _, err := os.Stat(filepath.Join(punctDir, "model.onnx")); os.IsNotExist(err) {
 			slog.Info("stt: downloading punctuation model", "dest", punctDir)
-			if err := downloader.DownloadExtractTarBz2(ctx, httpClient, punctModelURL, sttModelMapper(punctDir)); err != nil {
+			if err := downloader.DownloadExtractTarBz2(ctx, httpClient, punctModelURL, punctDir, sttModelMapper(punctDir)); err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "stt: punctuation model download failed", err)
 			}
 			slog.Info("stt: punctuation model ready", "dir", punctDir)

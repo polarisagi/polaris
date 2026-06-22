@@ -1,10 +1,11 @@
 package vfs
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // WorkspaceManager — 重型中间物文件系统。
@@ -19,10 +20,53 @@ type WorkspaceManager struct {
 // NewWorkspaceManager 创建 WorkspaceManager，rootDir 不存在时自动创建。
 func NewWorkspaceManager(rootDir string, maxSize int64) *WorkspaceManager {
 	_ = os.MkdirAll(rootDir, 0o700)
-	return &WorkspaceManager{
+	wm := &WorkspaceManager{
 		rootDir:   rootDir,
 		maxSize:   maxSize,
 		manifests: make(map[string]*WorkspaceManifest),
+	}
+	wm.rebuildManifests()
+	return wm
+}
+
+// rebuildManifests 扫描 rootDir 重建 manifests，避免重启后 quota/GC 失效。
+func (wm *WorkspaceManager) rebuildManifests() {
+	entries, err := os.ReadDir(wm.rootDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		taskID := e.Name()
+		dir := filepath.Join(wm.rootDir, taskID)
+		var totalSize int64
+		var files []WorkspaceFile
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			totalSize += info.Size()
+			files = append(files, WorkspaceFile{
+				Path: path,
+				Size: info.Size(),
+			})
+			return nil
+		})
+		var createdAt int64
+		if info, _ := e.Info(); info != nil {
+			createdAt = info.ModTime().Unix()
+		}
+		wm.manifests[taskID] = &WorkspaceManifest{
+			TaskID:    taskID,
+			CreatedAt: createdAt,
+			Files:     files,
+			TotalSize: totalSize,
+		}
 	}
 }
 
@@ -54,7 +98,7 @@ func (wm *WorkspaceManager) Create(taskID string) (string, error) {
 	}
 	dir := filepath.Join(wm.rootDir, key)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("WorkspaceManager.Create: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.Create", err)
 	}
 	wm.manifests[key] = &WorkspaceManifest{
 		TaskID:    taskID,

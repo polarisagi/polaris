@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/polarisagi/polaris/internal/store"
 
@@ -50,7 +49,7 @@ func (l *SQLiteEventLog) AppendEvent(ctx context.Context, ev *pb.Event) error {
 		return ctx.Err()
 	case err := <-resultCh:
 		if err != nil {
-			return fmt.Errorf("SQLiteEventLog.AppendEvent: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteEventLog.AppendEvent", err)
 		}
 		return nil
 	}

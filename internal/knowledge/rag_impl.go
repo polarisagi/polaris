@@ -436,7 +436,7 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query *SearchQuery)
 
 	fragments, err := r.engine.Search(ctx, query.Text, []byte("chunk:"), config)
 	if err != nil {
-		return nil, fmt.Errorf("DefaultHybridRetriever.Search: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "DefaultHybridRetriever.Search", err)
 	}
 
 	var finalResults []Chunk //nolint:prealloc

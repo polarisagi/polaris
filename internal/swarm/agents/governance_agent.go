@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -106,12 +107,12 @@ func (ga *GovernanceAgent) ValidateCodeWithAudit(
 ) error {
 	// Layer 0：同步 AST 前置拦截（最快 fast-fail）
 	if err := ga.AuditAST(language, code, caps); err != nil {
-		return fmt.Errorf("GovernanceAgent.ValidateCodeWithAudit: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.ValidateCodeWithAudit", err)
 	}
 
 	// Layer 1: 硬边界
 	if err := ga.ValidateCode(language, code, caps); err != nil {
-		return fmt.Errorf("GovernanceAgent.ValidateCodeWithAudit: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.ValidateCodeWithAudit", err)
 	}
 	// Layer 2: AI 审查（异步，不阻塞）
 	if ga.auditAgent != nil {
@@ -147,7 +148,7 @@ func (ga *GovernanceAgent) RecordExecution(ctx context.Context, operationHash st
 		  ('idem:' || ?, 'idempotent_gateway', 'record', 'execution', ?, 'done', ?)
 	`, operationHash, response, time.Now().UnixMilli())
 	if err != nil {
-		return fmt.Errorf("GovernanceAgent.RecordExecution: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.RecordExecution", err)
 	}
 	return nil
 }

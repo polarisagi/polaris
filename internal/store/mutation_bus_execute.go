@@ -89,7 +89,7 @@ func (dw *DatabaseWriter) executeInsertEvent(tx *sql.Tx, intent *MutationIntent)
 		currentHash,
 	)
 	if err != nil {
-		return fmt.Errorf("DatabaseWriter.executeInsertEvent: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeInsertEvent", err)
 	}
 	return nil
 }
@@ -117,7 +117,7 @@ func (dw *DatabaseWriter) executeInsertDecision(tx *sql.Tx, intent *MutationInte
 		entry.Outcome,
 	)
 	if err != nil {
-		return fmt.Errorf("DatabaseWriter.executeInsertDecision: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeInsertDecision", err)
 	}
 	return nil
 }
@@ -186,7 +186,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 	tx, err := dw.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		dw.failAll(validBatch, apperr.Wrap(apperr.CodeInternal, "BEGIN IMMEDIATE failed", err))
-		return fmt.Errorf("DatabaseWriter.flushBatch: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.flushBatch", err)
 	}
 	defer func() { _ = tx.Rollback() }() // 异常回滚; COMMIT 后 Rollback 为 no-op
 
@@ -222,7 +222,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 			}
 			// 其他错误（DB 故障、未知操作）→ ROLLBACK 全部
 			dw.failAll(validBatch, err)
-			return fmt.Errorf("DatabaseWriter.flushBatch: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.flushBatch", err)
 		}
 		results = append(results, resultRec{intent, nil})
 	}
@@ -238,7 +238,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 	// 步骤 5: COMMIT
 	if err := tx.Commit(); err != nil {
 		dw.failAll(validBatch, apperr.Wrap(apperr.CodeInternal, "COMMIT failed", err))
-		return fmt.Errorf("DatabaseWriter.flushBatch: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.flushBatch", err)
 	}
 
 	// COMMIT 成功后统一通知各 intent ResultCh
@@ -255,7 +255,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 func (dw *DatabaseWriter) executeInsert(tx *sql.Tx, intent *MutationIntent) error {
 	// 表名白名单校验，防止 fmt.Sprintf 拼接 SQL 时被注入
 	if err := validateTable(intent.Table); err != nil {
-		return fmt.Errorf("DatabaseWriter.executeInsert: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeInsert", err)
 	}
 	if intent.ClaimedVersion > 0 {
 		query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = ? AND version = ?", intent.Table)
@@ -271,7 +271,7 @@ func (dw *DatabaseWriter) executeInsert(tx *sql.Tx, intent *MutationIntent) erro
 	query := fmt.Sprintf("INSERT OR REPLACE INTO %s (id, payload, version, updated_at) VALUES (?, ?, ?, datetime('now'))", intent.Table)
 	_, err := tx.Exec(query, string(intent.Key), string(intent.Payload), intent.ClaimedVersion)
 	if err != nil {
-		return fmt.Errorf("DatabaseWriter.executeInsert: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeInsert", err)
 	}
 	return nil
 }
@@ -280,7 +280,7 @@ func (dw *DatabaseWriter) executeInsert(tx *sql.Tx, intent *MutationIntent) erro
 func (dw *DatabaseWriter) executeUpsert(tx *sql.Tx, intent *MutationIntent) error {
 	// 表名白名单校验，防止 fmt.Sprintf 拼接 SQL 时被注入
 	if err := validateTable(intent.Table); err != nil {
-		return fmt.Errorf("DatabaseWriter.executeUpsert: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeUpsert", err)
 	}
 	if intent.ClaimedVersion > 0 { //nolint:nestif
 		query := fmt.Sprintf("UPDATE %s SET payload = ?, version = ?, updated_at = datetime('now') WHERE id = ? AND version = ?", intent.Table)
@@ -317,7 +317,7 @@ func (dw *DatabaseWriter) executeUpsert(tx *sql.Tx, intent *MutationIntent) erro
 	query := fmt.Sprintf("INSERT OR REPLACE INTO %s (id, payload, updated_at) VALUES (?, ?, datetime('now'))", intent.Table)
 	_, err := tx.Exec(query, string(intent.Key), string(intent.Payload))
 	if err != nil {
-		return fmt.Errorf("DatabaseWriter.executeUpsert: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeUpsert", err)
 	}
 	return nil
 }
@@ -326,12 +326,12 @@ func (dw *DatabaseWriter) executeUpsert(tx *sql.Tx, intent *MutationIntent) erro
 func (dw *DatabaseWriter) executeDelete(tx *sql.Tx, intent *MutationIntent) error {
 	// 表名白名单校验，防止 fmt.Sprintf 拼接 SQL 时被注入
 	if err := validateTable(intent.Table); err != nil {
-		return fmt.Errorf("DatabaseWriter.executeDelete: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeDelete", err)
 	}
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = ?", intent.Table)
 	_, err := tx.Exec(query, string(intent.Key))
 	if err != nil {
-		return fmt.Errorf("DatabaseWriter.executeDelete: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DatabaseWriter.executeDelete", err)
 	}
 	return nil
 }

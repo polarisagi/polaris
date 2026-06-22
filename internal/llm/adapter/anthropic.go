@@ -120,12 +120,12 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 	}
 	body, err := a.buildAnthropicRequest(req, false)
 	if err != nil {
-		return nil, fmt.Errorf("AnthropicAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.Infer", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("AnthropicAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.Infer", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
@@ -135,7 +135,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("AnthropicAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.Infer", err)
 	}
 	defer httpResp.Body.Close()
 
@@ -224,12 +224,12 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 	}
 	body, err := a.buildAnthropicRequest(req, true)
 	if err != nil {
-		return nil, fmt.Errorf("AnthropicAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.StreamInfer", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("AnthropicAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.StreamInfer", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
@@ -239,7 +239,7 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("AnthropicAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.StreamInfer", err)
 	}
 
 	if httpResp.StatusCode != 200 {
@@ -549,7 +549,7 @@ func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Del("x-api-key")  // 立即清除 header map 引用
 	llmparent.ClearBytes(apiKey) // 清零原始 key 字节
 	if err != nil {
-		return resp, fmt.Errorf("keyInjectRT.RoundTrip: %w", err)
+		return resp, apperr.Wrap(apperr.CodeInternal, "keyInjectRT.RoundTrip", err)
 	}
 	return resp, nil
 }

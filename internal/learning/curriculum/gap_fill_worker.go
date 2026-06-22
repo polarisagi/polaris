@@ -68,7 +68,7 @@ func (w *GapFillWorker) HandleOutbox(ctx context.Context, record *store.OutboxRe
 	`, status, time.Now().UnixMilli(), gapID)
 
 	if err != nil {
-		return fmt.Errorf("GapFillWorker.HandleOutbox: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.HandleOutbox", err)
 	}
 	return nil
 }
@@ -87,7 +87,7 @@ func (w *GapFillWorker) synthesizeSkill(ctx context.Context, toolName string) er
 	gen := synthetic.NewSyntheticSkillGen(w.provider)
 	skill, err := gen.Generate(ctx, toolName, "Auto-synthesized skill for "+toolName)
 	if err != nil {
-		return fmt.Errorf("GapFillWorker.synthesizeSkill: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)
 	}
 	if w.registry != nil {
 		_ = w.registry.Register(skill)

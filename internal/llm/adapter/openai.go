@@ -2,9 +2,9 @@ package adapter
 
 import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -98,7 +98,7 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 
 	resp, err := a.client.SendRequest(ctx, apiKey, apiReq)
 	if err != nil {
-		return nil, fmt.Errorf("OpenAIAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.Infer", err)
 	}
 
 	out := &types.ProviderResponse{
@@ -168,7 +168,7 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 	tok := llmparent.NewTiktokenTokenizer(a.model)
 	rawCh, err := a.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
 	if err != nil {
-		return nil, fmt.Errorf("OpenAIAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.StreamInfer", err)
 	}
 
 	outCh := make(chan types.StreamEvent, 100)

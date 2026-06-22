@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	memgraph "github.com/polarisagi/polaris/internal/memory/graph"
 	memretrieval "github.com/polarisagi/polaris/internal/memory/retrieval"
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
@@ -98,7 +100,7 @@ func (m *MemImpl) InjectRelevantMemory(ctx context.Context, sessionID string, qu
 	}
 	frags, err := m.retriever.Search(ctx, query, types.SearchScope{Type: "memory"}, cfg)
 	if err != nil {
-		return "", fmt.Errorf("MemImpl.InjectRelevantMemory: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "MemImpl.InjectRelevantMemory", err)
 	}
 
 	if len(frags) == 0 {

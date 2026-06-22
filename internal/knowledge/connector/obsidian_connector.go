@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/fsnotify/fsnotify"
 
@@ -27,7 +28,7 @@ type ObsidianConnector struct {
 func NewObsidianConnector(basePath string) (*ObsidianConnector, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("NewObsidianConnector: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "NewObsidianConnector", err)
 	}
 
 	c := &ObsidianConnector{
@@ -74,7 +75,7 @@ func (c *ObsidianConnector) List(ctx context.Context) ([]*types.DocumentRef, err
 
 	err := filepath.WalkDir(c.basePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("ObsidianConnector.List: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "ObsidianConnector.List", err)
 		}
 
 		if d.IsDir() {
@@ -120,7 +121,7 @@ func (c *ObsidianConnector) List(ctx context.Context) ([]*types.DocumentRef, err
 	})
 
 	if err != nil {
-		return refs, fmt.Errorf("ObsidianConnector.List: %w", err)
+		return refs, apperr.Wrap(apperr.CodeInternal, "ObsidianConnector.List", err)
 	}
 	return refs, nil
 }
@@ -132,7 +133,7 @@ func (c *ObsidianConnector) Fetch(ctx context.Context, ref *types.DocumentRef) (
 
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
-		return nil, fmt.Errorf("ObsidianConnector.Fetch: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "ObsidianConnector.Fetch", err)
 	}
 
 	contentStr := string(data)
@@ -182,7 +183,7 @@ func (c *ObsidianConnector) Watch(ctx context.Context) (<-chan types.ChangeEvent
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("ObsidianConnector.Watch: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "ObsidianConnector.Watch", err)
 	}
 
 	go func() {

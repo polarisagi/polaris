@@ -437,7 +437,7 @@ func validateDAGTopology(plan *DAGPlan) error { //nolint:gocyclo
 			}
 			if color[dep] == white {
 				if err := dfs(dep, depth+1); err != nil {
-					return fmt.Errorf("validateDAGTopology: %w", err)
+					return apperr.Wrap(apperr.CodeInternal, "validateDAGTopology", err)
 				}
 			}
 		}
@@ -448,7 +448,7 @@ func validateDAGTopology(plan *DAGPlan) error { //nolint:gocyclo
 	for _, n := range plan.Nodes {
 		if color[n.ID] == white {
 			if err := dfs(n.ID, 0); err != nil {
-				return fmt.Errorf("validateDAGTopology: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "validateDAGTopology", err)
 			}
 		}
 	}

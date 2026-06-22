@@ -3,8 +3,9 @@ package repo
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -37,7 +38,7 @@ func (r *SQLiteProviderRepository) UpsertProvider(ctx context.Context, row types
 		row.ID, row.Name, row.Type, row.BaseURL, row.APIKey, row.ProjectID, row.Location,
 		row.SAKeyJSON, row.Enabled, row.CatalogID, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.UpsertProvider: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.UpsertProvider", err)
 	}
 	return nil
 }
@@ -55,7 +56,7 @@ func (r *SQLiteProviderRepository) GetProvider(ctx context.Context, id string) (
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteProviderRepository.GetProvider: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.GetProvider", err)
 	}
 	row.Enabled = enabledInt == 1
 	return row, nil
@@ -67,7 +68,7 @@ func (r *SQLiteProviderRepository) ListProviders(ctx context.Context) ([]types.P
 		`SELECT id, name, type, base_url, api_key, project_id, location, sa_key_json, enabled, catalog_id, created_at, updated_at
 		FROM providers ORDER BY created_at`)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteProviderRepository.ListProviders: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListProviders", err)
 	}
 	defer rows.Close()
 	var result []types.ProviderRow
@@ -76,7 +77,7 @@ func (r *SQLiteProviderRepository) ListProviders(ctx context.Context) ([]types.P
 		var enabledInt int
 		if err := rows.Scan(&row.ID, &row.Name, &row.Type, &row.BaseURL, &row.APIKey, &row.ProjectID,
 			&row.Location, &row.SAKeyJSON, &enabledInt, &row.CatalogID, &row.CreatedAt, &row.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("SQLiteProviderRepository.ListProviders scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListProviders scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		result = append(result, row)
@@ -88,7 +89,7 @@ func (r *SQLiteProviderRepository) ListProviders(ctx context.Context) ([]types.P
 func (r *SQLiteProviderRepository) DeleteProvider(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.DeleteProvider: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.DeleteProvider", err)
 	}
 	return nil
 }
@@ -103,7 +104,7 @@ func (r *SQLiteProviderRepository) UpsertModel(ctx context.Context, row types.Pr
 		  enabled=excluded.enabled, updated_at=excluded.updated_at`,
 		row.ID, row.ProviderID, row.ModelID, row.Name, row.Role, row.Enabled, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.UpsertModel: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.UpsertModel", err)
 	}
 	return nil
 }
@@ -114,7 +115,7 @@ func (r *SQLiteProviderRepository) ListModels(ctx context.Context, providerID st
 		`SELECT id, provider_id, model_id, name, role, enabled, created_at, updated_at
 		FROM provider_models WHERE provider_id=? ORDER BY created_at`, providerID)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteProviderRepository.ListModels: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListModels", err)
 	}
 	defer rows.Close()
 	var result []types.ProviderModelRow
@@ -122,7 +123,7 @@ func (r *SQLiteProviderRepository) ListModels(ctx context.Context, providerID st
 		var row types.ProviderModelRow
 		var enabledInt int
 		if err := rows.Scan(&row.ID, &row.ProviderID, &row.ModelID, &row.Name, &row.Role, &enabledInt, &row.CreatedAt, &row.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("SQLiteProviderRepository.ListModels scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListModels scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		result = append(result, row)
@@ -134,7 +135,7 @@ func (r *SQLiteProviderRepository) ListModels(ctx context.Context, providerID st
 func (r *SQLiteProviderRepository) DeleteModelsByProvider(ctx context.Context, providerID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM provider_models WHERE provider_id=?`, providerID)
 	if err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.DeleteModelsByProvider: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.DeleteModelsByProvider", err)
 	}
 	return nil
 }
@@ -160,7 +161,7 @@ func (r *SQLiteProviderRepository) ClearModelRoles(ctx context.Context, targetRo
 	}
 	_, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -168,7 +169,7 @@ func (r *SQLiteProviderRepository) ClearModelRoles(ctx context.Context, targetRo
 func (r *SQLiteProviderRepository) SetModelRole(ctx context.Context, id string, role string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE provider_models SET role=? WHERE id=?`, role, id)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -177,14 +178,14 @@ func (r *SQLiteProviderRepository) SetModelRole(ctx context.Context, id string, 
 func (r *SQLiteProviderRepository) SeedIfEmpty(ctx context.Context, rows []types.ProviderRow, models []types.ProviderModelRow) error {
 	var count int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM providers`).Scan(&count); err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.SeedIfEmpty count: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.SeedIfEmpty count", err)
 	}
 	if count > 0 {
 		return nil // 已有数据，不操作
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.SeedIfEmpty begin: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.SeedIfEmpty begin", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 	for _, row := range rows {
@@ -200,7 +201,7 @@ func (r *SQLiteProviderRepository) SeedIfEmpty(ctx context.Context, rows []types
 			row.ID, row.Name, row.Type, row.BaseURL, row.APIKey, row.ProjectID, row.Location,
 			row.SAKeyJSON, row.Enabled, row.CatalogID, row.CreatedAt, row.UpdatedAt)
 		if err != nil {
-			return fmt.Errorf("SQLiteProviderRepository.SeedIfEmpty insert provider: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.SeedIfEmpty insert provider", err)
 		}
 	}
 	for _, model := range models {
@@ -215,11 +216,11 @@ func (r *SQLiteProviderRepository) SeedIfEmpty(ctx context.Context, rows []types
 			VALUES(?,?,?,?,?,?,?,?)`,
 			model.ID, model.ProviderID, model.ModelID, model.Name, model.Role, model.Enabled, model.CreatedAt, model.UpdatedAt)
 		if err != nil {
-			return fmt.Errorf("SQLiteProviderRepository.SeedIfEmpty insert model: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.SeedIfEmpty insert model", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("SQLiteProviderRepository.SeedIfEmpty commit: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.SeedIfEmpty commit", err)
 	}
 	return nil
 }
@@ -235,7 +236,7 @@ func (r *SQLiteProviderRepository) SeedFromEnv(ctx context.Context, p types.Prov
 		 VALUES (?, ?, ?, ?, ?, '', '', '', ?, ?, ?)`,
 		p.ID, p.Name, p.Type, p.BaseURL, p.APIKey, enabled, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
-		return false, fmt.Errorf("db error: %w", err)
+		return false, apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	inserted, _ := res.RowsAffected()
 	return inserted > 0, nil
@@ -246,7 +247,7 @@ func (r *SQLiteProviderRepository) UpdateProviderAPIKey(ctx context.Context, id,
 		`UPDATE providers SET api_key=?, updated_at=? WHERE id=?`,
 		apiKey, updatedAt, id)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -262,7 +263,7 @@ func (r *SQLiteProviderRepository) SeedModelFromEnv(ctx context.Context, m types
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.ProviderID, m.ModelID, m.Name, m.Role, enabled, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -277,7 +278,7 @@ func (r *SQLiteProviderRepository) CreateProvider(ctx context.Context, p types.P
 		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.Type, p.BaseURL, p.APIKey, p.ProjectID, p.Location, p.SAKeyJSON, enabled, p.CatalogID, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -293,7 +294,7 @@ func (r *SQLiteProviderRepository) UpdateProvider(ctx context.Context, id string
 		 WHERE id=?`,
 		p.Name, p.Type, p.BaseURL, p.APIKey, p.ProjectID, p.Location, p.SAKeyJSON, enabled, p.CatalogID, p.UpdatedAt, id)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }
@@ -301,7 +302,7 @@ func (r *SQLiteProviderRepository) UpdateProvider(ctx context.Context, id string
 func (r *SQLiteProviderRepository) DeleteModel(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM provider_models WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("db error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
 	return nil
 }

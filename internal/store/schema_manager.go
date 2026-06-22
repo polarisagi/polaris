@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"fmt"
 	"strconv"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -14,7 +13,7 @@ type sqlTxWrapper struct{ tx *sql.Tx }
 func (w *sqlTxWrapper) Exec(query string, args ...any) error {
 	_, err := w.tx.Exec(query, args...)
 	if err != nil {
-		return fmt.Errorf("sqlTxWrapper.Exec: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "sqlTxWrapper.Exec", err)
 	}
 	return nil
 }
@@ -114,7 +113,7 @@ func (sm *SchemaManager) BeginMigration(version int) error {
 			"ON CONFLICT(key) DO UPDATE SET value='in_progress'",
 	)
 	if err != nil {
-		return fmt.Errorf("SchemaManager.BeginMigration: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SchemaManager.BeginMigration", err)
 	}
 	_, _ = sm.db.Exec(
 		"INSERT INTO sys_config(key,value) VALUES('migration_version',?) "+
@@ -134,7 +133,7 @@ func (sm *SchemaManager) CompleteMigration() error {
 			"ON CONFLICT(key) DO UPDATE SET value='completed'",
 	)
 	if err != nil {
-		return fmt.Errorf("SchemaManager.CompleteMigration: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SchemaManager.CompleteMigration", err)
 	}
 	return nil
 }

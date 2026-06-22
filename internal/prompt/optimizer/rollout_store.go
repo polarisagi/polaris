@@ -87,7 +87,7 @@ func (s *SQLiteRolloutStore) RecordEvalScore(ctx context.Context, version string
 		WHERE version = ? AND status = 'pending'
 	`, passRate, now, version)
 	if err != nil {
-		return fmt.Errorf("SQLiteRolloutStore.RecordEvalScore: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.RecordEvalScore", err)
 	}
 	return nil
 }
@@ -97,7 +97,7 @@ func (s *SQLiteRolloutStore) RecordEvalScore(ctx context.Context, version string
 func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) error {
 	state, err := s.GetState(ctx, version)
 	if err != nil {
-		return fmt.Errorf("SQLiteRolloutStore.ConfirmShadow: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ConfirmShadow", err)
 	}
 	if state.CurrentGate != GateShadowExecution {
 		return nil
@@ -109,7 +109,7 @@ func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) 
 		WHERE version = ?
 	`, now, version)
 	if err != nil {
-		return fmt.Errorf("SQLiteRolloutStore.ConfirmShadow: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ConfirmShadow", err)
 	}
 	return nil
 }
@@ -123,7 +123,7 @@ func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) 
 func (s *SQLiteRolloutStore) AdvanceGate(ctx context.Context, version string, stats RolloutStats) (*RolloutState, error) {
 	state, err := s.GetState(ctx, version)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteRolloutStore.AdvanceGate: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.AdvanceGate", err)
 	}
 	if state.Status == RolloutStatusRolledBack || state.Status == RolloutStatusCommitted {
 		return state, nil
@@ -132,7 +132,7 @@ func (s *SQLiteRolloutStore) AdvanceGate(ctx context.Context, version string, st
 	// 硬停止：任意指标超限立即回滚
 	if s.rollout.CheckHardStop(stats) {
 		if err := s.Rollback(ctx, version, "hard stop: metrics regression or safety violation"); err != nil {
-			return nil, fmt.Errorf("SQLiteRolloutStore.AdvanceGate: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.AdvanceGate", err)
 		}
 		return s.GetState(ctx, version)
 	}
@@ -193,7 +193,7 @@ func (s *SQLiteRolloutStore) GetState(ctx context.Context, version string) (*Rol
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("rollout_store: version %q not found", version))
 		}
-		return nil, fmt.Errorf("SQLiteRolloutStore.GetState: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.GetState", err)
 	}
 	st.BaselineVersion = baseline
 	return &st, nil

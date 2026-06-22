@@ -4,7 +4,6 @@ import (
 	"github.com/polarisagi/polaris/internal/learning"
 
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
@@ -44,7 +43,7 @@ func (b *ReflexionBridge) Reflect(ctx context.Context, taskID, taskType string, 
 	}
 	ref, err := b.engine.Reflect(ctx, taskID, taskType, swarmResult, swarmSteps, replanCount)
 	if err != nil || ref == nil {
-		return nil, fmt.Errorf("ReflexionBridge.Reflect: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "ReflexionBridge.Reflect", err)
 	}
 	return &learning.Reflection{
 		TaskID:             ref.TaskID,

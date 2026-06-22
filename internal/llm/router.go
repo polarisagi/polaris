@@ -14,7 +14,6 @@ import (
 
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -443,7 +442,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 	if err != nil {
 		if ctx.Err() != nil {
 			// ctx 已取消或超时，不发起 failover（节省 Token 和 goroutine）
-			return nil, fmt.Errorf("InferenceRouter.Infer: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer", err)
 		}
 		// Failover: 尝试次优 Provider
 		return ir.failover(ctx, msgs, opts, req, entry.name)
@@ -523,7 +522,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	if err != nil {
 		if ctx.Err() != nil {
 			// ctx 已取消或超时，不发起 failover（节省 Token 和 goroutine）
-			return nil, fmt.Errorf("InferenceRouter.StreamInfer: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.StreamInfer", err)
 		}
 		// Failover: 尝试次优 Provider
 		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
@@ -644,7 +643,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 		return ir.wrapStreamChannel(ctx, ch, chosen.name, req.Model), nil
 	}
 	if err != nil {
-		return ch, fmt.Errorf("InferenceRouter.streamFailover: %w", err)
+		return ch, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamFailover", err)
 	}
 	return ch, nil
 }
@@ -709,7 +708,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 		ir.recordFailoverMetrics(ctx, chosen, resp, start)
 	}
 	if err != nil {
-		return resp, fmt.Errorf("InferenceRouter.failover: %w", err)
+		return resp, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.failover", err)
 	}
 	return resp, nil
 }

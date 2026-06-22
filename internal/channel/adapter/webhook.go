@@ -24,13 +24,13 @@ func LineSendMessage(ctx context.Context, client *http.Client, accessToken, repl
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://api.line.me/v2/bot/message/reply", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("LineSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "LineSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("LineSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "LineSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -48,13 +48,13 @@ func LinePushMessage(ctx context.Context, client *http.Client, accessToken, to, 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://api.line.me/v2/bot/message/push", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("LinePushMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "LinePushMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("LinePushMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "LinePushMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -88,13 +88,13 @@ func WhatsappSendMessage(ctx context.Context, client *http.Client, phoneNumberID
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("WhatsappSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "WhatsappSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("WhatsappSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "WhatsappSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

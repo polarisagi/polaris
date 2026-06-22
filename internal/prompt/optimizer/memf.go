@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/memory/graph" //nolint:staticcheck
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -75,7 +76,7 @@ func (m *FallacyMemoryPool) AddRecord(ctx context.Context, record *FallacyRecord
 		m.blindZone.MarkResolved(record.TaskType)
 	}
 	if err != nil {
-		return fmt.Errorf("FallacyMemoryPool.AddRecord: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "FallacyMemoryPool.AddRecord", err)
 	}
 	return nil
 }
@@ -107,7 +108,7 @@ func (m *FallacyMemoryPool) FeedbackCalibrate(ctx context.Context, recordID stri
 	}
 	_, err := m.DB.ExecContext(ctx, `UPDATE fallacy_records SET node_quality_score = node_quality_score + ? WHERE id = ?`, delta, recordID)
 	if err != nil {
-		return fmt.Errorf("FallacyMemoryPool.FeedbackCalibrate: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "FallacyMemoryPool.FeedbackCalibrate", err)
 	}
 	return nil
 }
@@ -121,7 +122,7 @@ func (m *FallacyMemoryPool) PruneCandidates(ctx context.Context, now int64) ([]*
 		WHERE node_quality_score > 0.7 AND (? - created_at) > ?
 	`, now, int64(30*86400))
 	if err != nil {
-		return nil, fmt.Errorf("FallacyMemoryPool.PruneCandidates: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "FallacyMemoryPool.PruneCandidates", err)
 	}
 	defer rows.Close()
 
@@ -145,7 +146,7 @@ func (m *FallacyMemoryPool) PruneCandidates(ctx context.Context, now int64) ([]*
 func (m *FallacyMemoryPool) DeleteRecord(ctx context.Context, recordID string) error {
 	_, err := m.DB.ExecContext(ctx, "DELETE FROM fallacy_records WHERE id = ?", recordID)
 	if err != nil {
-		return fmt.Errorf("FallacyMemoryPool.DeleteRecord: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "FallacyMemoryPool.DeleteRecord", err)
 	}
 	return nil
 }
@@ -181,7 +182,7 @@ func (hm *HeuristicsMemory) GetRelevant(ctx context.Context, taskType string, ke
 	`, taskType)
 
 	if err != nil {
-		return nil, fmt.Errorf("HeuristicsMemory.GetRelevant: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "HeuristicsMemory.GetRelevant", err)
 	}
 	defer rows.Close()
 
@@ -404,7 +405,7 @@ func (hm *HeuristicsMemory) Add(ctx context.Context, h *Heuristic) error {
 			use_count = use_count + 1
 	`, h.ID, h.Content, h.TaskType, h.SuccessRate, h.UseCount, string(kwBytes), time.Now().Unix())
 	if err != nil {
-		return fmt.Errorf("HeuristicsMemory.Add: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "HeuristicsMemory.Add", err)
 	}
 	return nil
 }
@@ -417,7 +418,7 @@ func (hm *HeuristicsMemory) UpdateSuccessRate(ctx context.Context, id string, su
 		return nil // 记录不存在，跳过
 	}
 	if err != nil {
-		return fmt.Errorf("HeuristicsMemory.UpdateSuccessRate: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "HeuristicsMemory.UpdateSuccessRate", err)
 	}
 	var observation float64
 	if success {
@@ -430,7 +431,7 @@ func (hm *HeuristicsMemory) UpdateSuccessRate(ctx context.Context, id string, su
 		newRate, id,
 	)
 	if err != nil {
-		return fmt.Errorf("HeuristicsMemory.UpdateSuccessRate: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "HeuristicsMemory.UpdateSuccessRate", err)
 	}
 	return nil
 }

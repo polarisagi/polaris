@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -61,7 +62,7 @@ func (ci *CascadeInvalidator) Invalidate(ctx context.Context, entityID int64) ([
 	// 写入 change_log 审计记录
 	if err := ci.logInvalidation(ctx, entityID, pendingReview, now); err != nil {
 		// 审计失败不阻断主流程
-		_ = err
+		slog.Warn("cascade_invalidator: audit write failed", "err", err)
 	}
 
 	return pendingReview, nil

@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -50,7 +49,7 @@ func (l *SQLiteDecisionLog) AppendDecision(ctx context.Context, entry *types.Dec
 		return ctx.Err()
 	case err := <-resultCh:
 		if err != nil {
-			return fmt.Errorf("SQLiteDecisionLog.AppendDecision: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteDecisionLog.AppendDecision", err)
 		}
 		return nil
 	}

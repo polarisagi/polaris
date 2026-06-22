@@ -494,7 +494,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 	// 只有当没有状态流转时，才把底层技术错误抛出导致 Agent 终止
 	if err != nil {
-		return fmt.Errorf("Agent.executeEffect: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Agent.executeEffect", err)
 	}
 
 	return nil
@@ -808,7 +808,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		}
 
 		if err != nil {
-			return res, fmt.Errorf("Agent.runExecuteDAG: %w", err)
+			return res, apperr.Wrap(apperr.CodeInternal, "Agent.runExecuteDAG", err)
 		}
 		return res, nil
 	}

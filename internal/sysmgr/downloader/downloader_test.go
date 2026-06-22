@@ -122,7 +122,7 @@ func TestExtractTarGz(t *testing.T) {
 	_ = gzw.Close()
 
 	destFile := filepath.Join(dir, "file.txt")
-	err := ExtractTarGz(&buf, func(name string) (string, bool) {
+	err := ExtractTarGz(&buf, dir, func(name string) (string, bool) {
 		if strings.HasSuffix(name, "file.txt") {
 			return destFile, true
 		}
@@ -155,7 +155,7 @@ func TestExtractTarGz_NoTargetFiles(t *testing.T) {
 	_ = gzw.Close()
 
 	// mapper 全拒绝 → 应返回"no target files"错误
-	err := ExtractTarGz(&buf, func(_ string) (string, bool) { return "", false })
+	err := ExtractTarGz(&buf, t.TempDir(), func(_ string) (string, bool) { return "", false })
 	if err == nil {
 		t.Error("expected error when no files extracted, got nil")
 	}

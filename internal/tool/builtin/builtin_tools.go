@@ -154,7 +154,7 @@ func makeReadFileFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "read_file: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeReadFileFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeReadFileFn", err)
 		}
 
 		data, err := os.ReadFile(filepath.Clean(args.Path))
@@ -221,7 +221,7 @@ func makeListDirFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "list_dir: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeListDirFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeListDirFn", err)
 		}
 
 		entries, err := os.ReadDir(filepath.Clean(args.Path))
@@ -261,10 +261,10 @@ func makeWriteFileFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "write_file: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeWriteFileFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeWriteFileFn", err)
 		}
 		if err := checkForbiddenPath(args.Path); err != nil {
-			return nil, fmt.Errorf("makeWriteFileFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeWriteFileFn", err)
 		}
 
 		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
@@ -1034,7 +1034,7 @@ func (g *grepRunner) scanFile(path string, lines []string) error {
 		matchCount++
 		hasMatch = true
 		if err := g.handleMatch(path, i, line, lines); err != nil {
-			return fmt.Errorf("grepRunner.scanFile: %w", err) // filepath.SkipAll 会向上传递至 WalkDir
+			return apperr.Wrap(apperr.CodeInternal, "grepRunner.scanFile", err) // filepath.SkipAll 会向上传递至 WalkDir
 		}
 		if g.mode == "files_with_matches" {
 			break // 每文件只记录一次，无需扫描剩余行
@@ -1125,7 +1125,7 @@ func makeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.New(apperr.CodeInternal, "grep: no allowed paths configured")
 		}
 		if err := grepValidateMode(args.OutputMode); err != nil {
-			return nil, fmt.Errorf("makeGrepFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeGrepFn", err)
 		}
 
 		reStr := args.Pattern
@@ -1140,7 +1140,7 @@ func makeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 		searchRoots := allowedPaths
 		if args.Path != "" {
 			if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-				return nil, fmt.Errorf("makeGrepFn: %w", err)
+				return nil, apperr.Wrap(apperr.CodeInternal, "makeGrepFn", err)
 			}
 			searchRoots = []string{filepath.Clean(args.Path)}
 		}
@@ -1215,7 +1215,7 @@ func makeStrReplaceEditorFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "str_replace_editor: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeStrReplaceEditorFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeStrReplaceEditorFn", err)
 		}
 
 		cleanPath := filepath.Clean(args.Path)
@@ -1327,7 +1327,7 @@ func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy tool
 		}
 		if workDir != "" {
 			if err := checkAllowedPath(workDir, allowedPaths); err != nil {
-				return nil, fmt.Errorf("makeRunCommandFn: %w", err)
+				return nil, apperr.Wrap(apperr.CodeInternal, "makeRunCommandFn", err)
 			}
 		}
 
@@ -1450,7 +1450,7 @@ func makeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) sandbox.InP
 		// MVP: DuckDuckGo HTML scraping
 		req, err := http.NewRequestWithContext(ctx, "GET", "https://html.duckduckgo.com/html/?q="+url.QueryEscape(args.Query), nil)
 		if err != nil {
-			return nil, fmt.Errorf("makeWebSearchFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeWebSearchFn", err)
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 		resp, err := client.Do(req)
@@ -1496,7 +1496,7 @@ func makeTodoWriteFn(allowedPaths []string, mu *sync.Mutex) sandbox.InProcessFn 
 		}
 		path, err := getTodoPath(allowedPaths)
 		if err != nil {
-			return nil, fmt.Errorf("makeTodoWriteFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeTodoWriteFn", err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -1514,7 +1514,7 @@ func makeTodoReadFn(allowedPaths []string, mu *sync.Mutex) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		path, err := getTodoPath(allowedPaths)
 		if err != nil {
-			return nil, fmt.Errorf("makeTodoReadFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeTodoReadFn", err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -1548,7 +1548,7 @@ func makeMultiEditFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "multi_edit: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeMultiEditFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeMultiEditFn", err)
 		}
 		cleanPath := filepath.Clean(args.Path)
 		data, err := os.ReadFile(cleanPath)
@@ -1612,7 +1612,7 @@ func makeNotebookReadFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "notebook_read: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeNotebookReadFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeNotebookReadFn", err)
 		}
 		data, err := os.ReadFile(filepath.Clean(args.Path))
 		if err != nil {
@@ -1648,7 +1648,7 @@ func makeNotebookEditFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "notebook_edit: invalid args", err)
 		}
 		if err := checkAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, fmt.Errorf("makeNotebookEditFn: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeNotebookEditFn", err)
 		}
 		cleanPath := filepath.Clean(args.Path)
 		data, err := os.ReadFile(cleanPath)

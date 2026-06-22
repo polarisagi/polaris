@@ -327,7 +327,7 @@ func (c *MCPClient) connectSSE(ctx context.Context) error {
 	sseURL := strings.TrimRight(c.cfg.URL, "/") + "/sse"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sseURL, nil)
 	if err != nil {
-		return fmt.Errorf("MCPClient.connectSSE: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPClient.connectSSE", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
@@ -412,7 +412,7 @@ func (c *MCPClient) call(ctx context.Context, method string, params any) (json.R
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
-		return nil, fmt.Errorf("MCPClient.call: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.call", err)
 	}
 
 	select {
@@ -447,13 +447,13 @@ func (c *MCPClient) notify(ctx context.Context, method string, params any) error
 func (c *MCPClient) send(ctx context.Context, req mcpRPCRequest) error {
 	b, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("MCPClient.send: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPClient.send", err)
 	}
 	switch c.cfg.Transport {
 	case MCPStdio:
 		_, err = c.stdin.Write(append(b, '\n'))
 		if err != nil {
-			return fmt.Errorf("MCPClient.send: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "MCPClient.send", err)
 		}
 		return nil
 	case MCPSSE:
@@ -461,7 +461,7 @@ func (c *MCPClient) send(ctx context.Context, req mcpRPCRequest) error {
 	case MCPStreamableHTTP:
 		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b)
 		if err != nil {
-			return fmt.Errorf("MCPClient.send: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "MCPClient.send", err)
 		}
 		if resp != nil {
 			c.dispatch(resp)
@@ -481,12 +481,12 @@ func (c *MCPClient) setMCPHeaders(req *http.Request) {
 func (c *MCPClient) httpPostOnly(ctx context.Context, url string, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("MCPClient.httpPostOnly: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostOnly", err)
 	}
 	c.setMCPHeaders(req)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("MCPClient.httpPostOnly: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostOnly", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -501,14 +501,14 @@ func (c *MCPClient) httpPostOnly(ctx context.Context, url string, body []byte) e
 func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte) (*mcpRPCResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("MCPClient.httpPostReceive: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
 	c.setMCPHeaders(req)
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("MCPClient.httpPostReceive: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
 	defer resp.Body.Close()
 
@@ -518,7 +518,7 @@ func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte
 
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
-		return nil, fmt.Errorf("MCPClient.httpPostReceive: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "MCPClient.httpPostReceive", err)
 	}
 	var r mcpRPCResponse
 	if err := json.Unmarshal(b, &r); err != nil {
@@ -631,7 +631,7 @@ func (c *MCPClient) postRaw(ctx context.Context, b []byte) error {
 	case MCPStdio:
 		_, err := c.stdin.Write(append(b, '\n'))
 		if err != nil {
-			return fmt.Errorf("MCPClient.postRaw: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "MCPClient.postRaw", err)
 		}
 		return nil
 	case MCPSSE:
@@ -639,7 +639,7 @@ func (c *MCPClient) postRaw(ctx context.Context, b []byte) error {
 	case MCPStreamableHTTP:
 		resp, err := c.httpPostReceive(ctx, c.cfg.URL, b)
 		if err != nil {
-			return fmt.Errorf("MCPClient.postRaw: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "MCPClient.postRaw", err)
 		}
 		if resp != nil {
 			c.dispatch(resp)

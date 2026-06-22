@@ -174,7 +174,7 @@ func (c *CronEvalCache) Next(expr, tz string, from time.Time) (time.Time, error)
 
 	sched, err := ParseCron(expr)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("CronEvalCache.Next: %w", err)
+		return time.Time{}, apperr.Wrap(apperr.CodeInternal, "CronEvalCache.Next", err)
 	}
 
 	fromLocal := from.In(loc)

@@ -126,34 +126,34 @@ func imapFetchUnseen(ctx context.Context, dialCtx dialContextFunc, addr, user, p
 	w := func(cmd string) error {
 		_, err := fmt.Fprintf(conn, "%s\r\n", cmd)
 		if err != nil {
-			return fmt.Errorf("imapFetchUnseen: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 		}
 		return nil
 	}
 	readLine := func() (string, error) {
 		line, err := r.ReadString('\n')
 		if err != nil {
-			return strings.TrimRight(line, "\r\n"), fmt.Errorf("imapFetchUnseen: %w", err)
+			return strings.TrimRight(line, "\r\n"), apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 		}
 		return strings.TrimRight(line, "\r\n"), nil
 	}
 
 	if _, err := readLine(); err != nil {
-		return nil, fmt.Errorf("imapFetchUnseen: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 	}
 	if err := w("A001 LOGIN " + user + " " + password); err != nil {
-		return nil, fmt.Errorf("imapFetchUnseen: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 	}
 	if line, err := readLine(); err != nil || !strings.HasPrefix(line, "A001 OK") {
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("imap: login failed: %s", line))
 	}
 	if err := w("A002 SELECT INBOX"); err != nil {
-		return nil, fmt.Errorf("imapFetchUnseen: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 	}
 	for {
 		line, err := readLine()
 		if err != nil {
-			return nil, fmt.Errorf("imapFetchUnseen: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 		}
 		if strings.HasPrefix(line, "A002 OK") {
 			break
@@ -163,13 +163,13 @@ func imapFetchUnseen(ctx context.Context, dialCtx dialContextFunc, addr, user, p
 		}
 	}
 	if err := w("A003 SEARCH UNSEEN"); err != nil {
-		return nil, fmt.Errorf("imapFetchUnseen: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 	}
 	var seqNums []string
 	for {
 		line, err := readLine()
 		if err != nil {
-			return nil, fmt.Errorf("imapFetchUnseen: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "imapFetchUnseen", err)
 		}
 		if strings.HasPrefix(line, "* SEARCH") {
 			parts := strings.Fields(line)

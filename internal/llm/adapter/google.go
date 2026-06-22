@@ -310,7 +310,7 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("GoogleAgentPlatformAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
 	apiKey := a.credentialFn()
 	defer llmparent.ClearBytes(apiKey)
@@ -318,13 +318,13 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	endpoint := appendKey(a.buildEndpoint(false), string(apiKey))
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("GoogleAgentPlatformAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("GoogleAgentPlatformAdapter.Infer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
 	defer httpResp.Body.Close()
 
@@ -408,7 +408,7 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("GoogleAgentPlatformAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	apiKey := a.credentialFn()
 
@@ -421,14 +421,14 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	httpReq, err := http.NewRequestWithContext(inferCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("GoogleAgentPlatformAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("GoogleAgentPlatformAdapter.StreamInfer: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	if httpResp.StatusCode != 200 {
 		raw, _ := io.ReadAll(httpResp.Body)

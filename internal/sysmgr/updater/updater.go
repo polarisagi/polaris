@@ -456,7 +456,7 @@ func extractFiles(archivePath, destBinPath, destLibDir string) error {
 		return apperr.Wrap(apperr.CodeInternal, "open archive for extract", err)
 	}
 	defer f.Close()
-	return downloader.ExtractTarGz(f, mapper)
+	return downloader.ExtractTarGz(f, filepath.Dir(destBinPath), mapper)
 }
 
 func (m *Manager) defaultRestart(exePath string) {
@@ -477,7 +477,7 @@ del "%%~f0"
 `, newBinPath, exePath, newLibDir, newLibDir, targetLibDir, newLibDir, exePath)
 	scriptPath := exePath + ".update.bat"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		return fmt.Errorf("write windows update script: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "write windows update script", err)
 	}
 	go func() {
 		time.Sleep(200 * time.Millisecond)

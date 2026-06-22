@@ -145,7 +145,7 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 	})
 
 	if err != nil && report == nil {
-		return nil, fmt.Errorf("RunnerImpl.RunSuite: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "RunnerImpl.RunSuite", err)
 	}
 	if err != nil {
 		runErr = err

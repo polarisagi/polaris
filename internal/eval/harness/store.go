@@ -35,10 +35,10 @@ func NewSQLiteEvalStore(store protocol.Store, engine *control.Engine) *SQLiteEva
 // GetTrainingCases 获取用于训练和优化的评测用例 (Training Set)。
 func (s *SQLiteEvalStore) GetTrainingCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
 	if err := verifyEvalSignature(agentRole, control.PartitionTraining, signature); err != nil {
-		return nil, fmt.Errorf("SQLiteEvalStore.GetTrainingCases: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetTrainingCases", err)
 	}
 	if err := s.engine.CheckAccess(agentRole, control.PartitionTraining); err != nil {
-		return nil, fmt.Errorf("SQLiteEvalStore.GetTrainingCases: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetTrainingCases", err)
 	}
 	return s.scanCasesByPrefix(ctx, "eval:case:training:"+agentRole+":")
 }
@@ -46,10 +46,10 @@ func (s *SQLiteEvalStore) GetTrainingCases(ctx context.Context, agentRole string
 // GetValidationCases 获取用于泛化验证的评测用例 (Holdout Set)。
 func (s *SQLiteEvalStore) GetValidationCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
 	if err := verifyEvalSignature(agentRole, control.PartitionValidation, signature); err != nil {
-		return nil, fmt.Errorf("SQLiteEvalStore.GetValidationCases: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetValidationCases", err)
 	}
 	if err := s.engine.CheckAccess(agentRole, control.PartitionValidation); err != nil {
-		return nil, fmt.Errorf("SQLiteEvalStore.GetValidationCases: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetValidationCases", err)
 	}
 	return s.scanCasesByPrefix(ctx, "eval:case:validation:"+agentRole+":")
 }
@@ -68,7 +68,7 @@ func (s *SQLiteEvalStore) PutCase(ctx context.Context, partition, agentRole stri
 	key := fmt.Sprintf("eval:case:%s:%s:%s", partition, agentRole, c.ID)
 	data, err := json.Marshal(c)
 	if err != nil {
-		return fmt.Errorf("SQLiteEvalStore.PutCase: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.PutCase", err)
 	}
 	return s.store.Put(ctx, []byte(key), data)
 }
@@ -76,7 +76,7 @@ func (s *SQLiteEvalStore) PutCase(ctx context.Context, partition, agentRole stri
 func (s *SQLiteEvalStore) scanCasesByPrefix(ctx context.Context, prefix string) ([]any, error) {
 	iter, err := s.store.Scan(ctx, []byte(prefix))
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteEvalStore.scanCasesByPrefix: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.scanCasesByPrefix", err)
 	}
 	defer iter.Close()
 

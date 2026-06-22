@@ -420,7 +420,7 @@ func (g *Gate) IsAuthorized(
 func (g *Gate) Review(ctx context.Context, req types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
 	allowed, err := g.IsAuthorized(ctx, req.Principal, req.Action, req.Resource, req.Context)
 	if err != nil {
-		return types.PolicyReviewResult{Allowed: false, Reason: err.Error()}, fmt.Errorf("Gate.Review: %w", err)
+		return types.PolicyReviewResult{Allowed: false, Reason: err.Error()}, apperr.Wrap(apperr.CodeInternal, "Gate.Review", err)
 	}
 
 	reason := "denied by default"

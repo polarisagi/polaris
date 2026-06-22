@@ -132,10 +132,10 @@ func downloadExtract(ctx context.Context, client *http.Client, rawURL string, ex
 	defer mu.Unlock()
 
 	if err := downloadResume(ctx, client, rawURL, archivePath); err != nil {
-		return fmt.Errorf("downloadExtract: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "downloadExtract", err)
 	}
 	if err := extract(archivePath); err != nil {
-		return fmt.Errorf("downloadExtract: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "downloadExtract", err)
 	}
 	os.Remove(archivePath) //nolint:errcheck
 	return nil
@@ -148,26 +148,26 @@ func DownloadFile(ctx context.Context, client *http.Client, rawURL, destPath str
 }
 
 // DownloadExtractTarBz2 下载 .tar.bz2 并调用 mapper 选择性提取，支持断点续传。
-func DownloadExtractTarBz2(ctx context.Context, client *http.Client, rawURL string, mapper func(string) (string, bool)) error {
+func DownloadExtractTarBz2(ctx context.Context, client *http.Client, rawURL string, destDir string, mapper func(string) (string, bool)) error {
 	return downloadExtract(ctx, client, rawURL, func(path string) error {
 		f, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("DownloadExtractTarBz2: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "DownloadExtractTarBz2", err)
 		}
 		defer f.Close()
-		return ExtractTarBz2(f, mapper)
+		return ExtractTarBz2(f, destDir, mapper)
 	})
 }
 
 // DownloadExtractTarGz 下载 .tar.gz 并调用 mapper 选择性提取，支持断点续传。
-func DownloadExtractTarGz(ctx context.Context, client *http.Client, rawURL string, mapper func(string) (string, bool)) error {
+func DownloadExtractTarGz(ctx context.Context, client *http.Client, rawURL string, destDir string, mapper func(string) (string, bool)) error {
 	return downloadExtract(ctx, client, rawURL, func(path string) error {
 		f, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("DownloadExtractTarGz: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "DownloadExtractTarGz", err)
 		}
 		defer f.Close()
-		return ExtractTarGz(f, mapper)
+		return ExtractTarGz(f, destDir, mapper)
 	})
 }
 
@@ -176,7 +176,7 @@ func DownloadExtractLibs(ctx context.Context, client *http.Client, rawURL, destD
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "downloader: mkdir "+destDir+" failed", err)
 	}
-	return DownloadExtractTarBz2(ctx, client, rawURL, func(name string) (string, bool) {
+	return DownloadExtractTarBz2(ctx, client, rawURL, destDir, func(name string) (string, bool) {
 		base := lastSegment(name)
 		if strings.HasSuffix(base, ".dylib") || strings.HasSuffix(base, ".so") ||
 			strings.HasSuffix(base, ".dll") {

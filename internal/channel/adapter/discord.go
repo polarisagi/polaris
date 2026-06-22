@@ -235,13 +235,13 @@ func DiscordSendMessage(ctx context.Context, client *http.Client, token, channel
 	url := fmt.Sprintf("%s/channels/%s/messages", discordAPIBase, channelID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("DiscordSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DiscordSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bot "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("DiscordSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "DiscordSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

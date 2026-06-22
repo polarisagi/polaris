@@ -92,7 +92,7 @@ func (p *GraphBuildPipeline) Run(ctx context.Context, docID string) error {
 
 	// Phase 5: ConceptSynthesizer
 	if err := p.synthesizeConcepts(ctx, entities, clusters); err != nil {
-		return fmt.Errorf("GraphBuildPipeline.Run: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline.Run", err)
 	}
 
 	return nil

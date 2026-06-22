@@ -10,7 +10,6 @@ package automation
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"os"
 	"runtime"
 	"strconv"
@@ -75,7 +74,7 @@ func (cs *cpuSampler) Usage() float64 {
 func readProcStatCPU() (idle, total uint64, err error) {
 	f, err := os.Open("/proc/stat")
 	if err != nil {
-		return 0, 0, fmt.Errorf("readProcStatCPU: %w", err)
+		return 0, 0, apperr.Wrap(apperr.CodeInternal, "readProcStatCPU", err)
 	}
 	defer f.Close()
 

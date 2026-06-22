@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -22,6 +21,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // MockProxy 是 MCTS 试运行期间的本地 HTTP 代理服务器。
@@ -48,25 +49,25 @@ type MockResponse struct {
 func NewMockProxy(mockTable map[string]MockResponse) (*MockProxy, string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, "", fmt.Errorf("NewMockProxy: %w", err)
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "NewMockProxy", err)
 	}
 	mp := &MockProxy{mockTable: mockTable, listener: ln}
 
 	// 生成自签根 CA（仅用于 DryRun 沙箱，生命周期与 MockProxy 相同）
 	if err := mp.initCA(); err != nil {
 		_ = ln.Close()
-		return nil, "", fmt.Errorf("NewMockProxy: %w", err)
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "NewMockProxy", err)
 	}
 
 	// 将 CA cert 写到临时文件（供沙箱 SSL_CERT_FILE 指向）
 	f, err := os.CreateTemp("", "polaris-mock-ca-*.pem")
 	if err != nil {
 		_ = ln.Close()
-		return nil, "", fmt.Errorf("NewMockProxy: %w", err)
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "NewMockProxy", err)
 	}
 	if _, err := f.Write(mp.caCertPEM); err != nil {
 		_ = ln.Close()
-		return nil, "", fmt.Errorf("NewMockProxy: %w", err)
+		return nil, "", apperr.Wrap(apperr.CodeInternal, "NewMockProxy", err)
 	}
 	_ = f.Close()
 	mp.caCertFile = f.Name()
@@ -79,7 +80,7 @@ func NewMockProxy(mockTable map[string]MockResponse) (*MockProxy, string, error)
 func (mp *MockProxy) initCA() error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return fmt.Errorf("MockProxy.initCA: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MockProxy.initCA", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -92,11 +93,11 @@ func (mp *MockProxy) initCA() error {
 	}
 	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
-		return fmt.Errorf("MockProxy.initCA: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MockProxy.initCA", err)
 	}
 	cert, err := x509.ParseCertificate(derBytes)
 	if err != nil {
-		return fmt.Errorf("MockProxy.initCA: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "MockProxy.initCA", err)
 	}
 	mp.caKey = key
 	mp.caCert = cert

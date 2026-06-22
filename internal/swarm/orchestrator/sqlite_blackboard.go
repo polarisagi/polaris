@@ -83,7 +83,7 @@ func (bb *SQLiteBlackboard) writeTaskEvent(
 		id, actor, evType, payload, time.Now().UnixMilli(),
 	)
 	if err != nil {
-		return fmt.Errorf("SQLiteBlackboard.writeTaskEvent: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteBlackboard.writeTaskEvent", err)
 	}
 	return nil
 }

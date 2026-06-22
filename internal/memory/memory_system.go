@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -93,7 +95,7 @@ func (ms *MemorySystemImpl) Retrieve(ctx context.Context, q *RetrievalQuery) ([]
 	}
 	frags, err := ms.mem.retriever.Search(ctx, q.Text, scope, config)
 	if err != nil {
-		return nil, fmt.Errorf("MemorySystemImpl.Retrieve: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Retrieve", err)
 	}
 	var entries []MemoryEntry //nolint:prealloc
 	for _, f := range frags {
@@ -127,7 +129,7 @@ func (ms *MemorySystemImpl) InjectRelevantMemory(ctx context.Context, sessionID 
 	}
 	frags, err := ms.mem.retriever.Search(ctx, query, types.SearchScope{Type: "memory"}, cfg)
 	if err != nil {
-		return "", fmt.Errorf("MemorySystemImpl.InjectRelevantMemory: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.InjectRelevantMemory", err)
 	}
 
 	if len(frags) == 0 {

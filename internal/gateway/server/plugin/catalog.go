@@ -3,6 +3,7 @@ package plugin
 import (
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"crypto/rand"
@@ -347,7 +348,7 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 	}
 
 	if err := h.InstallMgr.InstallExtension(ctx, installReq); err != nil {
-		return nil, fmt.Errorf("Server.internalInstallMCP: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.internalInstallMCP", err)
 	}
 
 	err := h.ExtRepo.UpsertMCPServer(ctx, apptypes.MCPServerRow{
@@ -367,7 +368,7 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 	})
 	if err != nil {
 		_ = h.ExtRepo.DeleteInstance(ctx, extID)
-		return nil, fmt.Errorf("Server.internalInstallMCP: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.internalInstallMCP", err)
 	}
 
 	if h.MCPMgr != nil {
@@ -430,7 +431,7 @@ func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string
 	}
 
 	if err := h.InstallMgr.InstallExtension(ctx, installReq); err != nil {
-		return nil, fmt.Errorf("Server.internalInstallGeneric: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.internalInstallGeneric", err)
 	}
 
 	if entry.Type == "skill" || entry.Type == "plugin" {
@@ -747,25 +748,25 @@ func (h *PluginHandler) updateExtensionInstanceError(ctx context.Context, extID,
 func copyDir(src string, dst string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
-		return fmt.Errorf("copyDir: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "copyDir", err)
 	}
 	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return fmt.Errorf("copyDir: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "copyDir", err)
 	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
-		return fmt.Errorf("copyDir: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "copyDir", err)
 	}
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 		if entry.IsDir() {
 			if err := copyDir(srcPath, dstPath); err != nil {
-				return fmt.Errorf("copyDir: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "copyDir", err)
 			}
 		} else {
 			if err := copyFile(srcPath, dstPath); err != nil {
-				return fmt.Errorf("copyDir: %w", err)
+				return apperr.Wrap(apperr.CodeInternal, "copyDir", err)
 			}
 		}
 	}
@@ -775,11 +776,11 @@ func copyDir(src string, dst string) error {
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("copyFile: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "copyFile", err)
 	}
 	info, err := os.Stat(src)
 	if err != nil {
-		return fmt.Errorf("copyFile: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "copyFile", err)
 	}
 	return os.WriteFile(dst, data, info.Mode())
 }

@@ -2,10 +2,10 @@ package repo
 
 import (
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"database/sql"
-	"fmt"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -35,7 +35,7 @@ func (r *SQLiteAutomationRepository) CreateAutomation(ctx context.Context, row r
 		row.RequiresHITL, row.RiskLevel,
 		row.NextRunAt, row.CreatedAt, row.UpdatedAt, row.EventFilter)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.CreateAutomation: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.CreateAutomation", err)
 	}
 	return nil
 }
@@ -55,7 +55,7 @@ func (r *SQLiteAutomationRepository) UpdateAutomation(ctx context.Context, row r
 		row.RequiresHITL, row.RiskLevel,
 		row.NextRunAt, row.UpdatedAt, row.EventFilter, row.ID)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.UpdateAutomation: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.UpdateAutomation", err)
 	}
 	return nil
 }
@@ -63,7 +63,7 @@ func (r *SQLiteAutomationRepository) UpdateAutomation(ctx context.Context, row r
 func (r *SQLiteAutomationRepository) DeleteAutomation(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM automations WHERE id=?`, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.DeleteAutomation: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.DeleteAutomation", err)
 	}
 	return nil
 }
@@ -85,7 +85,7 @@ func (r *SQLiteAutomationRepository) GetAutomation(ctx context.Context, id strin
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteAutomationRepository.GetAutomation: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.GetAutomation", err)
 	}
 	row.Enabled = enabledInt == 1
 	row.RequiresHITL = hitlInt == 1
@@ -100,7 +100,7 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 		       requires_hitl, risk_level, next_run_at, last_run_status, created_at, updated_at, event_filter
 		FROM automations ORDER BY created_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("SQLiteAutomationRepository.ListAutomations: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListAutomations", err)
 	}
 	defer rows.Close()
 
@@ -112,7 +112,7 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 			&row.WorkingDir, &row.ReasoningEffort, &row.ResultAction,
 			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt,
 			&hitlInt, &row.RiskLevel, &row.NextRunAt, &row.LastRunStatus, &row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
-			return nil, fmt.Errorf("SQLiteAutomationRepository.ListAutomations scan: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListAutomations scan", err)
 		}
 		row.Enabled = enabledInt == 1
 		row.RequiresHITL = hitlInt == 1
@@ -124,7 +124,7 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 func (r *SQLiteAutomationRepository) UpdateAutomationStatus(ctx context.Context, id, lastRunStatus string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE automations SET last_run_status=? WHERE id=?`, lastRunStatus, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.UpdateAutomationStatus: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.UpdateAutomationStatus", err)
 	}
 	return nil
 }
@@ -135,7 +135,7 @@ func (r *SQLiteAutomationRepository) UpdateAutomationStatusAndSchedule(ctx conte
 		SET last_run_status=?, last_run_at=?, next_run_at=?, updated_at=datetime('now')
 		WHERE id=?`, lastRunStatus, lastRunAt, nextRunAt, id)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.UpdateAutomationStatusAndSchedule: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.UpdateAutomationStatusAndSchedule", err)
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func (r *SQLiteAutomationRepository) CreateRun(ctx context.Context, row repo.Aut
 		INSERT INTO automation_runs (id, automation_id, status, error, started_at)
 		VALUES (?, ?, ?, ?, ?)`, row.ID, row.AutomationID, row.Status, row.Error, row.StartedAt)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.CreateRun: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.CreateRun", err)
 	}
 	return nil
 }
@@ -155,14 +155,14 @@ func (r *SQLiteAutomationRepository) UpdateRunStatus(ctx context.Context, id, st
 		_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, error=?, completed_at=?, duration_ms=? WHERE id=?`,
 			status, errorMsg, completedAt, durationMs, id)
 		if err != nil {
-			return fmt.Errorf("error: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "error", err)
 		}
 		return nil
 	}
 	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, error=?, completed_at=? WHERE id=?`,
 		status, errorMsg, completedAt, id)
 	if err != nil {
-		return fmt.Errorf("error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "error", err)
 	}
 	return nil
 }
@@ -170,7 +170,7 @@ func (r *SQLiteAutomationRepository) UpdateRunStatus(ctx context.Context, id, st
 func (r *SQLiteAutomationRepository) DeleteRunsByAutomationID(ctx context.Context, automationID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM automation_runs WHERE automation_id=?`, automationID)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.DeleteRunsByAutomationID: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.DeleteRunsByAutomationID", err)
 	}
 	return nil
 }
@@ -178,7 +178,7 @@ func (r *SQLiteAutomationRepository) DeleteRunsByAutomationID(ctx context.Contex
 func (r *SQLiteAutomationRepository) TimeoutRuns(ctx context.Context, startedBefore string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status='timeout', error='execution timeout' WHERE status='running' AND started_at < ?`, startedBefore)
 	if err != nil {
-		return fmt.Errorf("SQLiteAutomationRepository.TimeoutRuns: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.TimeoutRuns", err)
 	}
 	return nil
 }
@@ -188,7 +188,7 @@ func (r *SQLiteAutomationRepository) UpdateAutomationStats(ctx context.Context, 
 		_, err := r.db.ExecContext(ctx, "UPDATE automations SET last_run_status=?, last_run_error=?, run_count=run_count+1, failure_count=failure_count+1, circuit_open=CASE WHEN failure_count+1 >= ? THEN 1 ELSE circuit_open END, circuit_opened_at=CASE WHEN failure_count+1 >= ? AND circuit_open=0 THEN ? ELSE circuit_opened_at END, updated_at=? WHERE id=?", status, errMsg, circuitBreakThreshold, circuitBreakThreshold, finishedAt, finishedAt, id)
 		if err != nil {
 			if err != nil {
-				return 0, fmt.Errorf("error: %w", err)
+				return 0, apperr.Wrap(apperr.CodeInternal, "error", err)
 			}
 			return 0, nil
 		}
@@ -198,7 +198,7 @@ func (r *SQLiteAutomationRepository) UpdateAutomationStats(ctx context.Context, 
 	}
 	_, err := r.db.ExecContext(ctx, "UPDATE automations SET last_run_status=?, last_run_error='', run_count=run_count+1, failure_count=0, circuit_open=0, circuit_opened_at='', updated_at=? WHERE id=?", status, finishedAt, id)
 	if err != nil {
-		return 0, fmt.Errorf("error: %w", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "error", err)
 	}
 	return 0, nil
 }

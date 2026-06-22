@@ -940,7 +940,7 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQLQuerier) error {
 	rows, err := db.QueryContext(ctx, "SELECT id, salience, occurred_at FROM events WHERE topic IN ('memory.openclaw', 'memory')")
 	if err != nil {
-		return fmt.Errorf("ForgettingManager.cleanupWithSQL: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ForgettingManager.cleanupWithSQL", err)
 	}
 	defer rows.Close()
 

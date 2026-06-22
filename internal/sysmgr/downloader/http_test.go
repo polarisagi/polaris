@@ -129,7 +129,7 @@ func TestDownloadExtractTarBz2_Gz(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	err := DownloadExtractTarBz2(ctx, http.DefaultClient, "http://127.0.0.1:0/fake.bz2", nil)
+	err := DownloadExtractTarBz2(ctx, http.DefaultClient, "http://127.0.0.1:0/fake.bz2", t.TempDir(), nil)
 	if err == nil {
 		t.Errorf("expected err")
 	}
@@ -138,7 +138,7 @@ func TestDownloadExtractTarBz2_Gz(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel2()
 
-	err = DownloadExtractTarGz(ctx2, http.DefaultClient, "http://127.0.0.1:0/fake.gz", nil)
+	err = DownloadExtractTarGz(ctx2, http.DefaultClient, "http://127.0.0.1:0/fake.gz", t.TempDir(), nil)
 	if err == nil {
 		t.Errorf("expected err")
 	}

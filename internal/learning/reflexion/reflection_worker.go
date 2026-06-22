@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -70,6 +72,8 @@ func NewReflectionWorkerWithConfig(episodic protocol.EpisodicMemory, provider pr
 }
 
 // ConsolidateReflections 在任务终态触发。
+//
+//nolint:gocyclo
 func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID string, taskType string, replanCount int) error {
 	// 按配置白名单过滤：白名单外且重规划次数不足则跳过
 	if replanCount < rw.cfg.MinReplanCount && !rw.isWhitelisted(taskType) {
@@ -126,7 +130,7 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 
 	resp, err := rw.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
 	if err != nil {
-		return fmt.Errorf("ReflectionWorker.ConsolidateReflections: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ReflectionWorker.ConsolidateReflections", err)
 	}
 
 	// 3. 解析结果
@@ -143,14 +147,23 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 		Content        string `json:"content"`
 	}
 	if err := json.Unmarshal([]byte(content), &res); err != nil {
-		return fmt.Errorf("ReflectionWorker.ConsolidateReflections: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "ReflectionWorker.ConsolidateReflections", err)
 	}
 
 	if res.Content == "" {
 		return nil
 	}
 
-	// 4. M11 FactualityGuard 抽样核验 (这里简化为直接写入)
+	// 4. M11 FactualityGuard 抽样核验
+	fg := guard.NewFactualityGuard()
+	if rw.provider != nil {
+		fg.InjectLLMProvider(rw.provider)
+	}
+	verdict, _ := fg.Verify(ctx, res.Content, sb.String(), types.TaintLow)
+	if verdict.Verdict == guard.FactualityFail {
+		slog.Warn("reflection_worker: factuality check failed, skipping write")
+		return nil
+	}
 	// 5. 写入 ReflectionMemory
 	entry := types.ReflectionEntry{
 		ID:         fmt.Sprintf("ref_%d", time.Now().UnixNano()),

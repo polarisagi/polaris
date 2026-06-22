@@ -145,7 +145,7 @@ func (po *PipelineOrchestrator) runStage(
 		result, err := po.waitForCompletion(ctx, taskID, stage.TimeoutSec)
 		if err != nil {
 			if attempt == retries {
-				return nil, fmt.Errorf("PipelineOrchestrator.runStage: %w", err)
+				return nil, apperr.Wrap(apperr.CodeInternal, "PipelineOrchestrator.runStage", err)
 			}
 			slog.Warn("pipeline: stage failed, retrying", "stage", stage.Name, "attempt", attempt, "err", err)
 			time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)

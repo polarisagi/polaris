@@ -433,13 +433,13 @@ func loadGateCedarPolicies(gate *policy.Gate, cfg config.PolicyConfig) error {
 		if diskPath != "" {
 			b, err := os.ReadFile(diskPath)
 			if err != nil {
-				return "", fmt.Errorf("cedar: read %s: %w", diskPath, err)
+				return "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("cedar: read %s", diskPath), err)
 			}
 			return string(b), nil
 		}
 		b, err := configs.FS.ReadFile(embedPath)
 		if err != nil {
-			return "", fmt.Errorf("cedar: read embed %s: %w", embedPath, err)
+			return "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("cedar: read embed %s", embedPath), err)
 		}
 		return string(b), nil
 	}

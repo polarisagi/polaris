@@ -130,7 +130,7 @@ func (m *Manager) Authorize(ctx context.Context, req InstallRequest) error {
 
 	result, err := m.policyGate.Review(ctx, reviewReq)
 	if err != nil {
-		return fmt.Errorf("Manager.Authorize: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.Authorize", err)
 	}
 
 	if !result.Allowed {
@@ -158,7 +158,7 @@ func (m *Manager) AuthorizeAction(ctx context.Context, principal string, action 
 	}
 	res, err := m.policyGate.Review(ctx, reviewReq)
 	if err != nil {
-		return fmt.Errorf("Manager.AuthorizeAction: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.AuthorizeAction", err)
 	}
 	if !res.Allowed {
 		return apperr.New(apperr.CodeForbidden, action+" action denied by policy")
@@ -169,14 +169,14 @@ func (m *Manager) AuthorizeAction(ctx context.Context, principal string, action 
 // InstallExtension handles the install flow with M11 Cedar-Gate and stores to DB.
 func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) error {
 	if err := m.Authorize(ctx, req); err != nil {
-		return fmt.Errorf("Manager.InstallExtension: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.InstallExtension", err)
 	}
 
 	req = normalizeInstallRequest(req)
 
 	// 先标记 status='installing'，防止重复安装竞争（UNIQUE INDEX on catalog_id）。
 	if err := m.insertExtensionInstance(ctx, req); err != nil {
-		return fmt.Errorf("Manager.InstallExtension: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.InstallExtension", err)
 	}
 
 	return m.postInstallSteps(ctx, req)
@@ -268,7 +268,7 @@ func (m *Manager) postInstallSteps(ctx context.Context, req InstallRequest) erro
 func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) error {
 	allInsts, err := m.extRepo.ListInstances(ctx)
 	if err != nil {
-		return fmt.Errorf("Manager.UninstallExtension: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension", err)
 	}
 
 	var insts []types.ExtInstanceRow
@@ -385,7 +385,7 @@ type InstanceUpdate struct {
 func (m *Manager) UpdateInstance(ctx context.Context, id string, upd InstanceUpdate) error {
 	if upd.Status != "" {
 		if err := m.extRepo.UpdateInstanceStatus(ctx, id, upd.Status, upd.ErrorMsg); err != nil {
-			return fmt.Errorf("Manager.UpdateInstance: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
 		}
 	} else if upd.ClearError {
 		// UpdateInstanceStatus with empty errorMsg will clear it conceptually,
@@ -394,7 +394,7 @@ func (m *Manager) UpdateInstance(ctx context.Context, id string, upd InstanceUpd
 	}
 	if upd.InstallPath != "" {
 		if err := m.extRepo.UpdateInstanceInstallPath(ctx, id, upd.InstallPath); err != nil {
-			return fmt.Errorf("Manager.UpdateInstance: %w", err)
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UpdateInstance", err)
 		}
 	}
 	// Note: RuntimeID update is dropped as it's not present in ExtensionRepository's direct update methods,

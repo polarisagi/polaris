@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -51,7 +53,7 @@ func (h *ProviderHandler) listProviders(db protocol.SQLQuerier) ([]*ProviderConf
 		`SELECT id,name,type,base_url,api_key,project_id,location,sa_key_json,enabled,created_at,updated_at
 		   FROM providers ORDER BY created_at`)
 	if err != nil {
-		return nil, fmt.Errorf("Server.listProviders: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 	}
 	defer rows.Close()
 
@@ -62,28 +64,28 @@ func (h *ProviderHandler) listProviders(db protocol.SQLQuerier) ([]*ProviderConf
 		var enabled int
 		if err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.APIKey,
 			&p.ProjectID, &p.Location, &p.SAKeyJSON, &enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("Server.listProviders: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 		}
 		p.Enabled = enabled == 1
 		provMap[p.ID] = p
 		order = append(order, p.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("Server.listProviders: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 	}
 
 	mrows, err := db.QueryContext(context.Background(),
 		`SELECT id,provider_id,model_id,name,role,enabled,created_at,updated_at
 		   FROM provider_models ORDER BY created_at`)
 	if err != nil {
-		return nil, fmt.Errorf("Server.listProviders: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 	}
 	defer mrows.Close()
 	for mrows.Next() {
 		m := ProviderModel{}
 		var enabled int
 		if err := mrows.Scan(&m.ID, &m.ProviderID, &m.ModelID, &m.Name, &m.Role, &enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("Server.listProviders: %w", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 		}
 		m.Enabled = enabled == 1
 		if p, ok := provMap[m.ProviderID]; ok {
@@ -91,7 +93,7 @@ func (h *ProviderHandler) listProviders(db protocol.SQLQuerier) ([]*ProviderConf
 		}
 	}
 	if err := mrows.Err(); err != nil {
-		return nil, fmt.Errorf("Server.listProviders: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "Server.listProviders", err)
 	}
 
 	out := make([]*ProviderConfig, 0, len(order))
@@ -403,7 +405,10 @@ func probeProvider(ctx context.Context, client *http.Client, typ, baseURL, apiKe
 		if baseURL == "" {
 			baseURL = "https://api.openai.com"
 		}
-		req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+"/v1/models", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+"/v1/models", nil)
+		if err != nil {
+			return false, fmt.Sprintf("请求构建失败: %v", err)
+		}
 		if apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 		}
@@ -421,7 +426,10 @@ func probeProvider(ctx context.Context, client *http.Client, typ, baseURL, apiKe
 		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
 
 	case "anthropic":
-		req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.anthropic.com/v1/models", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://api.anthropic.com/v1/models", nil)
+		if err != nil {
+			return false, fmt.Sprintf("请求构建失败: %v", err)
+		}
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		resp, err := client.Do(req)
@@ -466,7 +474,10 @@ func probeProvider(ctx context.Context, client *http.Client, typ, baseURL, apiKe
 				model, apiKey)
 		}
 		reqBody := `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}],"generationConfig":{"maxOutputTokens":1}}`
-		req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBufferString(reqBody))
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBufferString(reqBody))
+		if err != nil {
+			return false, fmt.Sprintf("请求构建失败: %v", err)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {

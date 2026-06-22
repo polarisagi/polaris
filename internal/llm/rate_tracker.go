@@ -1,12 +1,13 @@
 package llm
 
 import (
-	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"time"
 )
@@ -199,7 +200,7 @@ func (t *RateLimitCapturingTransport) RoundTrip(r *http.Request) (*http.Response
 		t.Tracker.Parse(t.Provider, resp.Header)
 	}
 	if err != nil {
-		return resp, fmt.Errorf("RateLimitCapturingTransport.RoundTrip: %w", err)
+		return resp, apperr.Wrap(apperr.CodeInternal, "RateLimitCapturingTransport.RoundTrip", err)
 	}
 	return resp, nil
 }

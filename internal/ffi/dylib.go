@@ -101,7 +101,7 @@ func doLoad() (uintptr, error) {
 			continue
 		}
 		if err := verifyABI(h); err != nil {
-			return 0, fmt.Errorf("doLoad: %w", err)
+			return 0, apperr.Wrap(apperr.CodeInternal, "doLoad", err)
 		}
 		return h, nil
 	}

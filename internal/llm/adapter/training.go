@@ -62,7 +62,7 @@ func (a *QLoRAAdapter) Train(ctx context.Context, samples []TrainingSample) (*Tr
 	result, err := postJSON(ctx, a.client, a.endpoint, body)
 	if err != nil {
 		slog.Warn("inference: QLoRA training service unavailable", "endpoint", a.endpoint, "err", err)
-		return nil, fmt.Errorf("QLoRAAdapter.Train: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "QLoRAAdapter.Train", err)
 	}
 	slog.Info("inference: QLoRA training submitted", "job_id", result.JobID, "step", result.Step)
 	return result, nil
@@ -98,7 +98,7 @@ func (a *PRMAdapter) Train(ctx context.Context, samples []TrainingSample) (*Trai
 	result, err := postJSON(ctx, a.client, a.endpoint, body)
 	if err != nil {
 		slog.Warn("inference: PRM training service unavailable", "endpoint", a.endpoint, "err", err)
-		return nil, fmt.Errorf("PRMAdapter.Train: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "PRMAdapter.Train", err)
 	}
 	slog.Info("inference: PRM training submitted", "job_id", result.JobID, "step", result.Step)
 	return result, nil

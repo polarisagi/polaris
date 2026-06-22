@@ -40,14 +40,14 @@ func signalReceiveSSE(ctx context.Context, host PollerHost, channelID, apiURL, a
 	url := fmt.Sprintf("%s/v1/receive/%s", apiURL, account)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("Manager.signalReceiveSSE: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.signalReceiveSSE", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
 	client := &http.Client{Timeout: 0}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("Manager.signalReceiveSSE: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "Manager.signalReceiveSSE", err)
 	}
 	defer resp.Body.Close()
 
@@ -92,12 +92,12 @@ func SignalSendMessage(ctx context.Context, client *http.Client, apiURL, account
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s/v2/send", apiURL), bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("SignalSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SignalSendMessage", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("SignalSendMessage: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "SignalSendMessage", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

@@ -173,7 +173,7 @@ func (tm *TokenManager) Revoke(tokenID string) {
 // HasCap 检查令牌是否持有指定能力（先经 Verify 验证有效性）。
 func (tm *TokenManager) HasCap(tok *Token, cap CapabilityType) (bool, error) {
 	if err := tm.Verify(tok); err != nil {
-		return false, fmt.Errorf("TokenManager.HasCap: %w", err)
+		return false, apperr.Wrap(apperr.CodeInternal, "TokenManager.HasCap", err)
 	}
 	for _, c := range tok.Claims.Caps {
 		if c == cap {
