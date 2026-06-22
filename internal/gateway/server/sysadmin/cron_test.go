@@ -82,14 +82,86 @@ func TestCalcNextRun(t *testing.T) {
 }
 
 func TestMatchEventFilter(t *testing.T) {
-	filter := `{"topic": "a", "type": "b"}`
-	if !matchEventFilter(filter, "a", "b", "") {
-		t.Errorf("expected true")
+	tests := []struct {
+		name       string
+		filterJSON string
+		topic      string
+		typ        string
+		payload    string
+		want       bool
+	}{
+		{
+			name:       "no payload condition (should match)",
+			filterJSON: `{"topic":"test-topic","type":"test-type"}`,
+			topic:      "test-topic",
+			typ:        "test-type",
+			payload:    `{"any":"thing"}`,
+			want:       true,
+		},
+		{
+			name:       "payload condition met (should match)",
+			filterJSON: `{"topic":"test-topic","payload":{"foo":"bar","num":123}}`,
+			topic:      "test-topic",
+			typ:        "any-type",
+			payload:    `{"foo":"bar","num":123,"extra":"value"}`,
+			want:       true,
+		},
+		{
+			name:       "payload condition not met (should not match)",
+			filterJSON: `{"topic":"test-topic","payload":{"foo":"bar"}}`,
+			topic:      "test-topic",
+			typ:        "any-type",
+			payload:    `{"foo":"baz"}`,
+			want:       false,
+		},
+		{
+			name:       "payload condition missing key (should not match)",
+			filterJSON: `{"payload":{"required":"yes"}}`,
+			topic:      "any",
+			typ:        "any",
+			payload:    `{"other":"yes"}`,
+			want:       false,
+		},
+		{
+			name:       "payload not JSON when filter has payload condition (should not match)",
+			filterJSON: `{"payload":{"foo":"bar"}}`,
+			topic:      "any",
+			typ:        "any",
+			payload:    `not-json`,
+			want:       false,
+		},
+		{
+			name:       "payload not JSON but no payload condition (should match)",
+			filterJSON: `{"topic":"test-topic"}`,
+			topic:      "test-topic",
+			typ:        "any",
+			payload:    `not-json`,
+			want:       true,
+		},
+		{
+			name:       "type mismatch",
+			filterJSON: `{"type":"type1"}`,
+			topic:      "any",
+			typ:        "type2",
+			payload:    `{}`,
+			want:       false,
+		},
+		{
+			name:       "topic mismatch",
+			filterJSON: `{"topic":"topic1"}`,
+			topic:      "topic2",
+			typ:        "any",
+			payload:    `{}`,
+			want:       false,
+		},
 	}
-	if matchEventFilter(filter, "b", "b", "") {
-		t.Errorf("expected false")
-	}
-	if matchEventFilter(`invalid json`, "a", "b", "") {
-		t.Errorf("expected false for invalid json")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchEventFilter(tt.filterJSON, tt.topic, tt.typ, tt.payload)
+			if got != tt.want {
+				t.Errorf("matchEventFilter() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -74,11 +74,11 @@ func (r *SQLiteSystemRepository) UpsertVFSRef(ctx context.Context, vfsURI string
 func (r *SQLiteSystemRepository) GetPreference(ctx context.Context, key string) (string, error) {
 	var val string
 	err := r.db.QueryRowContext(ctx, "SELECT value FROM preferences WHERE key = ?", key).Scan(&val)
-	if err != nil {
-		if err != nil {
-			return "", fmt.Errorf("error: %w", err)
-		}
+	if err == sql.ErrNoRows {
 		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("SQLiteSystemRepository.GetPreference: %w", err)
 	}
 	return val, nil
 }
@@ -86,10 +86,7 @@ func (r *SQLiteSystemRepository) GetPreference(ctx context.Context, key string) 
 func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[string]string, error) {
 	rows, err := r.db.QueryContext(ctx, "SELECT key, value FROM preferences")
 	if err != nil {
-		if err != nil {
-			return nil, fmt.Errorf("error: %w", err)
-		}
-		return nil, nil
+		return nil, fmt.Errorf("SQLiteSystemRepository.ListPreferences: %w", err)
 	}
 	defer rows.Close()
 
@@ -97,10 +94,7 @@ func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[strin
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err != nil {
-			if err != nil {
-				return nil, fmt.Errorf("error: %w", err)
-			}
-			return nil, nil
+			return nil, fmt.Errorf("SQLiteSystemRepository.ListPreferences scan: %w", err)
 		}
 		prefs[k] = v
 	}

@@ -552,7 +552,6 @@ func (h *SysAdminHandler) eventTick(ctx context.Context) {
 	h.LastEventOffset = maxOffset
 }
 
-//nolint:unused
 func matchEventFilter(filterJSON, topic, typ, payload string) bool {
 	var f map[string]interface{}
 	if err := json.Unmarshal([]byte(filterJSON), &f); err != nil {
@@ -564,7 +563,24 @@ func matchEventFilter(filterJSON, topic, typ, payload string) bool {
 	if wantType, ok := f["type"].(string); ok && wantType != "" && wantType != typ {
 		return false
 	}
-	// TODO: payload depth match if needed
+	// payload 子集匹配：event_filter 中的 payload 对象所有 key-value 必须在实际 payload 中存在
+	if wantPayload, ok := f["payload"].(map[string]interface{}); ok && len(wantPayload) > 0 {
+		var actualPayload map[string]interface{}
+		if err := json.Unmarshal([]byte(payload), &actualPayload); err != nil {
+			// payload 非 JSON 对象时，若 filter 有 payload 条件则不匹配
+			return false
+		}
+		for k, wantVal := range wantPayload {
+			actualVal, exists := actualPayload[k]
+			if !exists {
+				return false
+			}
+			// 字符串类型精确比较；其余类型转字符串后比较（避免数字类型不一致）
+			if fmt.Sprintf("%v", actualVal) != fmt.Sprintf("%v", wantVal) {
+				return false
+			}
+		}
+	}
 	return true
 }
 

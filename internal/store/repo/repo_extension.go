@@ -210,7 +210,10 @@ func (r *SQLiteExtensionRepository) DeleteOrphanCatalogEntries(ctx context.Conte
 		}
 		delOrphanQuery := "DELETE FROM extension_catalog WHERE marketplace_id != 'builtin' AND marketplace_id NOT IN (" + queryMarks + ")"
 		_, err := r.db.ExecContext(ctx, delOrphanQuery, activeMarketplaceIDs...)
-		return fmt.Errorf("db error: %w", err)
+		if err != nil {
+			return fmt.Errorf("SQLiteExtensionRepository.DeleteOrphanCatalogEntries: %w", err)
+		}
+		return nil
 	}
 	_, err := r.db.ExecContext(ctx, "DELETE FROM extension_catalog WHERE marketplace_id != 'builtin'")
 	if err != nil {
@@ -452,10 +455,7 @@ func (r *SQLiteExtensionRepository) UpsertApp(ctx context.Context, row types.App
 			"catalog_id=excluded.catalog_id, updated_at=excluded.updated_at",
 		row.ID, row.Name, row.DisplayName, row.Description, row.URL, row.Publisher, enabledInt, row.TrustTier, row.CatalogID, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
-		if err != nil {
-			return fmt.Errorf("error: %w", err)
-		}
-		return nil
+		return fmt.Errorf("SQLiteExtensionRepository.UpsertApp: %w", err)
 	}
 	return nil
 }
@@ -483,19 +483,13 @@ func (r *SQLiteExtensionRepository) UpdatePluginStatus(ctx context.Context, id s
 func (r *SQLiteExtensionRepository) SetPluginComponentsEnabled(ctx context.Context, pluginID string, enabled int, now string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		if err != nil {
-			return fmt.Errorf("error: %w", err)
-		}
-		return nil
+		return fmt.Errorf("SQLiteExtensionRepository.SetPluginComponentsEnabled: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
 	_, err = tx.ExecContext(ctx, "UPDATE mcp_servers SET enabled=?, updated_at=? WHERE plugin_id=?", enabled, now, pluginID)
 	if err != nil {
-		if err != nil {
-			return fmt.Errorf("error: %w", err)
-		}
-		return nil
+		return fmt.Errorf("SQLiteExtensionRepository.SetPluginComponentsEnabled: %w", err)
 	}
 
 	deprecated := 0
@@ -504,10 +498,7 @@ func (r *SQLiteExtensionRepository) SetPluginComponentsEnabled(ctx context.Conte
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE skills SET deprecated=?, updated_at=? WHERE plugin_id=?", deprecated, now, pluginID)
 	if err != nil {
-		if err != nil {
-			return fmt.Errorf("error: %w", err)
-		}
-		return nil
+		return fmt.Errorf("SQLiteExtensionRepository.SetPluginComponentsEnabled: %w", err)
 	}
 
 	return tx.Commit()
