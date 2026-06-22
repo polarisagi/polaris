@@ -230,7 +230,6 @@ jobs:
           mkdir -p "release_pkg/${ARCHIVE_NAME}"
           cp -r bin/* "release_pkg/${ARCHIVE_NAME}/"
           cp -r configs "release_pkg/${ARCHIVE_NAME}/"
-          cp -r policies "release_pkg/${ARCHIVE_NAME}/"
           cp LICENSE "release_pkg/${ARCHIVE_NAME}/"
           cd release_pkg
           if [ "${{ matrix.archive_format }}" = "zip" ]; then
