@@ -17,7 +17,7 @@
 | `M13-bis-Extension-Registry.md` | L3 扩展 | 5K | 三层模型（Market/Instances/Runtime）、安装流、信任门控、文件系统、调用路由、M9 归并 |
 | `M10-Knowledge-RAG.md` | L2 知识 | 25K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
 | `M09-Self-Improvement-Engine.md` | L2 自演化 | 25K | 五条无梯度路线、SurpriseIndex 完整版、MEMF、Auto-Curriculum |
-| `M06-Skill-Library.md` | L1 技能 | 23K | 技能三件套、Logic Collapse、Wasm 编译、三级检索 |
+| `M06-Skill-Library.md` | L1 技能 | 23K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
 | `M03-Observability.md` | L0 可观测 | 22K | OTel、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
 | `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `M01-Inference-Runtime.md` | L0 推理 | 19K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |

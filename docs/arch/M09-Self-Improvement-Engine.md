@@ -130,7 +130,7 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 每次 Agent 任务完成后自动执行:
 
-任务完成后：成功路径 → HeuristicsMemory 更新 + Logic Collapse 触发（Wasm 技能生成）；失败路径 → Reflexion 反思 → MEMF + SurrealDB-Core 写入 + 发布 EventHeuristicGenerated（注入 PromptOptimizer 规避规则）；后续 Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
+任务完成后：成功路径 → HeuristicsMemory 更新 + Logic Collapse 触发（Python 技能蒸馏，ADR-0026）；失败路径 → Reflexion 反思 → MEMF + SurrealDB-Core 写入 + 发布 EventHeuristicGenerated（注入 PromptOptimizer 规避规则）；后续 Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
 
 > ✅ `Engine.Run()` 已补充 `RecordSuccess` 调用，成功/失败任务均写入 HeuristicsMemory，skillGapAnalysis 数据来源完整。
 

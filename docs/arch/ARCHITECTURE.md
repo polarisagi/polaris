@@ -100,7 +100,7 @@ Stage 7: full_promotion       (写生产 + audit hash chain)
 **分层豁免规则**:
 - **L0 配置调整**(如路由权重): Stage 1-3 → 直接 Stage 7。依靠 M3 Telemetry 即时回滚兜底
 - **L1 Prompt / 启发式**: Stage 1-4 + 加速 Stage 6 + Stage 7
-- **L2 新技能生成**(Wasm): Stage 1-6 + Stage 7
+- **L2 新技能生成**(Python + ContainerSandbox，ADR-0026): Stage 1-6 + Stage 7
 - **L3 / L4 策略修改 / 架构源码**: 强制完整 Stage 1-7
 
 任一阶段失败 → `rejected` / `rolled_back` / `dead_letter`。safety case 一票否决。

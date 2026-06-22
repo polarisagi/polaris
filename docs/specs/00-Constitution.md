@@ -65,7 +65,7 @@
 |------|------|------|
 | 任务 | `Task` | Job / Work / Action（`Action` 是工具调用专用） |
 | 计划 | `Plan` | Workflow / Pipeline（`Pipeline` 仅指 `Staging-Pipeline`） |
-| 技能（Wasm 化） | `Skill` | Capability / Function |
+| 技能（Python 蒸馏，ContainerSandbox，ADR-0026） | `Skill` | Capability / Function |
 | 工具（执行边） | `Tool` | Action / Operation |
 | 记忆 | `Memory` | Cache / Store（`Store` 是存储引擎） |
 | 黑板 | `Blackboard` | SharedState / Bus |

@@ -509,7 +509,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 - 维度: 进化对象 | Logic Collapse (M6): 创建新技能 | Tool Usage Policy Evolution (M7): 已有工具的使用策略
 - 维度: 触发条件 | Logic Collapse (M6): 50+ 成功 | Tool Usage Policy Evolution (M7): 每次调用后更新统计
-- 维度: 输出 | Logic Collapse (M6): Wasm + SKILL.md | Tool Usage Policy Evolution (M7): 策略提示词 + 参数建议
+- 维度: 输出 | Logic Collapse (M6): Python 技能（src/skill.py）+ SKILL.md | Tool Usage Policy Evolution (M7): 策略提示词 + 参数建议
 - 维度: 粒度 | Logic Collapse (M6): 工具级 | Tool Usage Policy Evolution (M7): 调用级
 
 ### 8.2 策略模型
