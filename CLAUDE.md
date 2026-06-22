@@ -143,11 +143,10 @@ internal/
     pb/            Protobuf 生成文件
     schema/        DDL SQL 文件（29 个，SSoT）
   config/          配置加载 + 编译期不变量
-  errors/          统一错误类型（禁裸 error 泄漏）
   lint/            CI 静态扫描规则
 
 pkg/               通用工具（无业务逻辑，任意层可引用）
-  apperr/          应用错误基类
+  apperr/          统一错误类型（禁裸 error 泄漏调用链）——`apperr.New/Wrap/IsCode/HTTPStatus`
   types/           基础共享类型
   version/         版本信息
 
@@ -177,7 +176,7 @@ make check-all    # fmt → lint → test → test-race → rust-lint → rust-t
 ## 编码约定
 
 - Go 接口在调用方定义（consumer-side，防包循环）
-- 错误统一 `internal/errors`（禁裸 error 泄漏调用链）
+- 错误统一 `pkg/apperr`（`apperr.New/Wrap`；禁裸 `errors.New`/`fmt.Errorf` 泄漏调用链）
 - `internal/` 禁全局可变变量（并发安全 + 测试隔离；ADR-0001 豁免仅限 observability/metrics 一等公民指标）
 - 跨模块走 `internal/protocol/` 结构化事件（禁字符串隐式耦合）
 - Rust 仅性能关键 FFI（维持语言边界）
