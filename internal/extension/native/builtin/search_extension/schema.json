@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "search_extension",
+  "description": "Search the built-in marketplace catalog and the official online MCP registry for plugins, skills, or MCP servers.",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Search keyword to match against extension names and descriptions (e.g. 'git', 'browser', 'notion')."
+    }
+  },
+  "required": ["query"]
+}

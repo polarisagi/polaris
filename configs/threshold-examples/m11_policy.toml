@@ -1,0 +1,9 @@
+# Example threshold overrides for m11_policy.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'capability.default_ttl_seconds' = 300
+'audit.retention_days' = 730
+'escalation.timeout_minutes' = 30
+'safe_dialer.dns_cache_ttl_seconds' = 30
+'safe_dialer.toctou_delay_ms' = 50
+'safe_dialer.max_ips_threshold' = 20

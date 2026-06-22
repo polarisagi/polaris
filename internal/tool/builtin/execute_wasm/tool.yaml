@@ -1,0 +1,8 @@
+name: "execute_wasm"
+description: "Execute a WebAssembly binary module in a sandboxed environment."
+version: "1.0.0"
+source: "builtin"
+risk_level: 2
+capability: "write_local"
+side_effects:
+  - "process_spawn"

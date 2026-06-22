@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "bash",
+  "description": "Execute a bash command in a sandboxed environment. Restricted to allowed working directories.",
+  "type": "object",
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Bash command string to execute (passed to bash -c). Runs in the first allowed directory as working directory."
+    }
+  },
+  "required": ["command"]
+}

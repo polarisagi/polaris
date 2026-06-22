@@ -1,0 +1,111 @@
+# Polaris 内置自动化模板
+# 格式说明：
+#   icon            - 展示图标（emoji）
+#   name            - 模板名称
+#   description     - 简短说明（展示在市场卡片）
+#   prompt          - Agent 执行时使用的完整 prompt
+#   trigger_type    - cron | webhook | both | manual
+#   cron_schedule   - 标准 5 字段 cron 表达式（trigger_type=cron/both 时必填）
+#   reasoning_effort - low | medium | high | ultra
+#   tags            - 分类标签，用于前端筛选
+#   source          - 来源标识（builtin/community/remote）
+#   author          - 作者/发布者
+
+- icon: "🐛"
+  name: "每日缺陷扫描"
+  description: "扫描最近 24 小时 commit，定位潜在 bug 并给出最小修复建议"
+  prompt: |
+    扫描最近的 commit（自上次运行以来，或过去 24 小时内），查找可能的 bug 并提出最小修复方案。
+    规则：
+    - 只使用仓库中的具体证据（commit SHA, PR, 文件路径, diff, 失败的测试, CI 信号），不要猜测 bug
+    - 如果证据不足，请说明并跳过
+    - 优先选择最小且安全的修复
+    - 避免重构和无关清理
+  trigger_type: cron
+  cron_schedule: "0 9 * * 1-5"
+  reasoning_effort: high
+  tags: [debug, daily, code-quality]
+  source: builtin
+  author: polaris
+
+- icon: "📋"
+  name: "每周工作回顾"
+  description: "根据已合并 PR 自动生成周报草稿"
+  prompt: |
+    根据已合并的 PR 起草每周发布说明（如有链接请附上）。
+    规则：
+    - 仅报告当前仓库中的内容，不要凭空想象当周历史
+    - 如果代码库中没有历史记录，说明并跳过
+    - 避免对审查者或评论者施加不当影响
+    - 区分「已完成」与「进行中」
+  trigger_type: cron
+  cron_schedule: "0 9 * * 1"
+  reasoning_effort: medium
+  tags: [weekly, report, pr]
+  source: builtin
+  author: polaris
+
+- icon: "🔄"
+  name: "站会更新"
+  description: "每日早会前自动汇总 git 状态，生成简洁的站会素材"
+  prompt: |
+    为站会总结 git 状态。
+    规则：
+    - 陈述应对 commit、PR、文件有具体支撑，不要臆测未来工作
+    - 保持简洁，确保团队同步
+    - 提供足够细节以便快速对齐
+  trigger_type: cron
+  cron_schedule: "0 8 * * 1-5"
+  reasoning_effort: low
+  tags: [daily, standup, team]
+  source: builtin
+  author: polaris
+
+- icon: "🚨"
+  name: "CI 失败修复"
+  description: "总结 CI 失败与不稳定测试，给出首要修复建议"
+  prompt: |
+    总结上一个 CI 窗口中的 CI 失败和不稳定测试；提出首要修复建议。
+    规则：
+    - 只使用确切的工具作为依据：测试、CI 日志、代码变更历史
+    - 避免过于自信地直接断言原因
+    - 区分「已观察」与「推测」
+  trigger_type: cron
+  cron_schedule: "0 10 * * 1-5"
+  reasoning_effort: high
+  tags: [ci, debug, daily]
+  source: builtin
+  author: polaris
+
+- icon: "📊"
+  name: "PR 深度评审"
+  description: "基于近期 PR Review 提炼可执行的技能提升建议"
+  prompt: |
+    根据近期 PR 和 Code Review，建议下一步需要深入提升的具体技能。
+    规则：
+    - 每条建议都要有具体证据（PR 主题、审查意见、反复出现的问题）
+    - 避免泛泛的建议
+    - 复盘出现的问题
+    - 每条建议具体可执行
+  trigger_type: cron
+  cron_schedule: "0 17 * * 5"
+  reasoning_effort: medium
+  tags: [weekly, review, growth]
+  source: builtin
+  author: polaris
+
+- icon: "🎮"
+  name: "项目监控"
+  description: "每日项目健康报告：commit 摘要、Issue、PR 状态"
+  prompt: |
+    为当前项目创建每日状态报告，使用简洁的 Markdown 格式输出，包括：
+    - 最新提交摘要
+    - 未解决的 issue
+    - 开放的 PR 状态
+    - 测试覆盖率趋势（如可获取）
+  trigger_type: cron
+  cron_schedule: "0 9 * * *"
+  reasoning_effort: medium
+  tags: [daily, monitoring, report]
+  source: builtin
+  author: polaris

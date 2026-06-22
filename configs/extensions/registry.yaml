@@ -1,0 +1,19 @@
+- id: microsoft/playwright-mcp
+  publisher: microsoft
+  type: mcp
+  trust_tier: 3
+  name: Playwright MCP
+  description: Microsoft 官方 Playwright MCP Server，提供结构化浏览器自动化：页面导航、元素交互、表单填写、截图、PDF 导出。基于 accessibility tree，LLM 友好。
+  transport: stdio
+  command: npx
+  args:
+    - '@playwright/mcp@latest'
+  env: {}
+  url: ""
+  tags:
+    - browser
+    - automation
+    - official
+  homepage: https://github.com/microsoft/playwright-mcp
+  timeout: 60
+  installed: false

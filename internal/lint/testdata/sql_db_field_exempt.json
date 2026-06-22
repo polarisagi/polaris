@@ -1,0 +1,16 @@
+{
+  "_comment": "Test_inv_NoRawSQLDBField *sql.DB 字段豁免列表。\n仅 pkg/substrate/storage/ 层（L0 substrate）允许直持 *sql.DB，此为架构设计意图，长期有效。\n非 storage 层须改为 protocol.SQLQuerier 或 protocol.BlackboardDB 接口（已完成）。",
+  "pkg/substrate/storage/store.go": true,
+  "pkg/substrate/storage/mutation_bus.go": true,
+  "pkg/substrate/storage/outbox_worker.go": true,
+  "pkg/substrate/storage/schema_manager.go": true,
+  "pkg/substrate/storage/repo_chat.go": true,
+  "pkg/substrate/storage/repo_provider.go": true,
+  "pkg/substrate/storage/repo_cron.go": true,
+  "pkg/substrate/storage/repo_extension.go": true,
+  "pkg/substrate/storage/repo_audit.go": true,
+  "pkg/substrate/storage/repo_task.go": true,
+  "pkg/substrate/storage/repo_budget.go": true,
+  "pkg/substrate/storage/repo_system.go": true,
+  "pkg/substrate/storage/repo_workflow.go": true
+}

@@ -1,0 +1,6 @@
+name: todo_write
+description: Write or update the agent's todo list. Will persist to the current session workspace.
+capability: write-local
+side_effects:
+  - file-write
+  - state-mutate

@@ -1,0 +1,101 @@
+# Binaries
+/polaris
+/polaris-*
+*.exe
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Go
+*.test
+*.out
+go.work
+
+# Rust
+rust/target/
+
+# IDE
+.idea/
+.vscode/
+.cursor
+.claude/
+.gemini/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# Config
+.env
+.env.local
+configs/local.yaml
+
+# Data directories (runtime)
+/data/
+/sessions/
+/logs/
+*.log
+
+# Databases & Embedded Stores
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
+*.lancedb
+
+# Backups & Archives
+*.tar.zst
+*.tar.gz
+*.zip
+*.bak
+图片
+
+# Personal workspace (不入库)
+/local_playground/
+code_review_report.md
+
+# Scripts & Misc
+__pycache__/
+*.py[cod]
+
+# Firecrawl search cache
+.firecrawl/
+
+# Web UI — Node.js (根目录误生成的也一并排除)
+node_modules/
+/package-lock.json
+/package.json
+
+# Web UI build artifacts（Go embed 需要目录存在，用 .gitkeep 占位）
+web/dist/*
+!web/dist/.gitkeep
+web/bin/
+
+# Skills — Wasm 编译产物（由 make build-skills 生成，不提交）
+skills/**/*.wasm
+
+# Worktrees
+.worktrees/
+worktrees/
+.sisyphus/
+repomix-output.xml
+
+
+# 前端依赖（勿提交）
+web/node_modules/
+web/dist/
+pkg/swarm/orchestrator/test_fanout_out.csv
+internal/swarm/orchestrator/test_fanout_out.csv
+docs/upgrade/

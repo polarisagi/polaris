@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "git_diff",
+  "description": "Show changes between git commits, branches, or the working tree as a unified diff.",
+  "type": "object",
+  "properties": {
+    "ref_a":      { "type": "string",  "description": "First git ref (commit hash, branch, or tag). Omit to use the working tree." },
+    "ref_b":      { "type": "string",  "description": "Second git ref to compare against. Omit to compare ref_a against the working tree." },
+    "staged":     { "type": "boolean", "default": false, "description": "If true, show staged (index) changes instead of unstaged changes." },
+    "file_path":  { "type": "string",  "description": "Limit the diff to a specific file or directory path." }
+  },
+  "required": []
+}

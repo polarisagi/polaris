@@ -1,0 +1,4 @@
+name: cron_list
+description: |
+  列出所有已注册的定时任务（cron jobs），包含 ID、schedule、上次/下次执行时间、
+  启用状态及断路器状态。无需参数。

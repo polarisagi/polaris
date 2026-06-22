@@ -1,0 +1,15 @@
+#!/bin/sh
+# 示例：AI 回复后追加写入本地日记文件
+# 安装：cp message.after.example ~/.polaris/hooks/message.after && chmod +x ~/.polaris/hooks/message.after
+
+DIARY="$HOME/polaris-diary.md"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+cat >> "$DIARY" <<EOF
+
+## $DATE [$POLARIS_CHANNEL]
+
+**AI:** $POLARIS_REPLY
+
+---
+EOF

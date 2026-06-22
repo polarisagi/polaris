@@ -1,0 +1,8 @@
+name: cron_delete
+description: |
+  按 ID 删除定时任务。ID 从 cron_list 或 cron_create 返回结果中获取。
+  删除后调度器立即停止调度该任务。
+capability: write-local
+risk_level: medium
+side_effects:
+  - state-mutate

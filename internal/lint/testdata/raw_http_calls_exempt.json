@@ -1,0 +1,4 @@
+{
+  "_comment": "Test_inv_M1_01_NoRawHTTPCalls 豁免列表。\n清理方向：safe_dialer.go 是 SafeDialer 实现，合法持有；长期有效，不应删除。",
+  "pkg/substrate/security/safe_dialer.go": true
+}

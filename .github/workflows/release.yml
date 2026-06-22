@@ -1,0 +1,267 @@
+name: Release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  # 1. 优先执行 Go 打包 (Fail-Fast 机制)
+  # 全部在 ubuntu 上完成（零 CGO，purego 运行时加载），如果 Go 代码有错立刻失败，阻断下游耗时打包。
+  build-go:
+    needs: build-frontend
+    name: Build Go (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+            cargo_target: x86_64-unknown-linux-gnu
+            binary_suffix: ""
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+            cargo_target: aarch64-unknown-linux-gnu
+            binary_suffix: ""
+          - name: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            cargo_target: aarch64-apple-darwin
+            binary_suffix: ""
+          - name: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            cargo_target: x86_64-apple-darwin
+            binary_suffix: ""
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            cargo_target: x86_64-pc-windows-msvc
+            binary_suffix: ".exe"
+          - name: windows-arm64
+            goos: windows
+            goarch: arm64
+            cargo_target: aarch64-pc-windows-msvc
+            binary_suffix: ".exe"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe --tags 需要完整历史；0 = 全量拉取
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+
+      - name: Build Backend (cross-compile)
+        env:
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          SKIP_RUST_BUILD: 1
+          # 用 GitHub 事件元数据直接覆盖版本号，不依赖 git describe
+          # 即使 shallow clone 或工作树脏，VERSION 也始终等于触发的 tag（如 v1.2.3）
+          VERSION: ${{ github.ref_name }}
+        run: make build-backend
+
+      - name: Rename binary for Windows
+        if: matrix.binary_suffix == '.exe'
+        run: mv bin/polaris bin/polaris.exe
+
+      - name: Upload Go Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-${{ matrix.name }}
+          path: bin/polaris*
+          retention-days: 1
+
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build UI
+        run: make build-ui
+
+      - name: Upload Frontend Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+          retention-days: 1
+
+  # 2. Rust 预编译 (依赖 build-go)
+  # 只有 Go 编译成功，才会启动耗时的 Rust 编译。
+  # 使用 Swatinem/rust-cache@v2 缓存 ~/.cargo 与 target/ 目录（GitHub Cache 服务，TTL 7天，10GB上限）。
+  # 只要 Cargo.lock 与 src/ 无变化，cargo 增量编译几乎瞬间完成，无需重新编译。
+  build-rust:
+    needs: build-go
+    name: Rust (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            cargo_target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            cargo_target: aarch64-unknown-linux-gnu
+          - name: darwin-arm64
+            runner: macos-latest
+            cargo_target: aarch64-apple-darwin
+          - name: darwin-amd64
+            runner: macos-latest
+            cargo_target: x86_64-apple-darwin
+          - name: windows-amd64
+            runner: windows-latest
+            cargo_target: x86_64-pc-windows-msvc
+          - name: windows-arm64
+            runner: windows-latest
+            cargo_target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Disable Windows Defender
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.cargo_target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存范围限定到 rust/substrate，避免污染其他路径
+          workspaces: rust/substrate
+          # 按 target triple 隔离缓存，防止不同平台互相覆盖
+          key: ${{ matrix.cargo_target }}
+
+      - name: Build Rust
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
+
+      - name: Upload Rust Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-${{ matrix.name }}
+          path: |
+            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
+            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
+            rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
+          if-no-files-found: warn
+          retention-days: 1
+
+  # 3. 最后合并打包 (依赖 build-go, build-rust)
+  # 从各个 artifact 收集产物并最终压缩
+  package:
+    needs: [build-go, build-rust]
+    name: Package (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            archive_format: tar.gz
+          - name: linux-arm64
+            archive_format: tar.gz
+          - name: darwin-arm64
+            archive_format: tar.gz
+          - name: darwin-amd64
+            archive_format: tar.gz
+          - name: windows-amd64
+            archive_format: zip
+          - name: windows-arm64
+            archive_format: zip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Go Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: go-${{ matrix.name }}
+          path: bin
+
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-${{ matrix.name }}
+          path: bin/lib
+
+      - name: Package
+        run: |
+          ARCHIVE_NAME="polaris-${{ matrix.name }}"
+          mkdir -p "release_pkg/${ARCHIVE_NAME}"
+          cp -r bin/* "release_pkg/${ARCHIVE_NAME}/"
+          cp -r configs "release_pkg/${ARCHIVE_NAME}/"
+          cp -r policies "release_pkg/${ARCHIVE_NAME}/"
+          cp LICENSE "release_pkg/${ARCHIVE_NAME}/"
+          cd release_pkg
+          if [ "${{ matrix.archive_format }}" = "zip" ]; then
+            zip -r "../${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+          else
+            tar -czvf "../${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          fi
+          cd ..
+          sha256sum ${ARCHIVE_NAME}.* > ${ARCHIVE_NAME}.${{ matrix.archive_format }}.sha256
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-${{ matrix.name }}
+          path: polaris-${{ matrix.name }}.*
+          retention-days: 1
+
+  publish:
+    needs: [package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: polaris-*
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

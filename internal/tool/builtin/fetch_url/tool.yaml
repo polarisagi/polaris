@@ -1,0 +1,12 @@
+name: fetch_url
+description: "Fetch the content of a public URL and return the response body. SSRF-guarded: private/internal network addresses are blocked."
+version: "1.0.0"
+capability: write-network
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - network-call
+tags:
+  - network
+  - http
+  - web

@@ -1,0 +1,21 @@
+{
+  "_comment": "R1.3 ratchet baseline — 只增不减（除非真正清理）。以下文件因架构/语言约束无法消除包级 var，永久豁免。",
+  "_permanent_reason": {
+    "ffi_bindings":     "purego FFI 函数指针必须包级绑定（ADR-0011）",
+    "wasm_abi":         "WASM ABI 要求 retain map / activeHandler 包级可用（ADR-0008）",
+    "otel_instruments": "OTel SDK metric.* 接口在 Init() 前为 nil，Init 后只写一次；ADR-0001 架构决策",
+    "rust_sandbox":     "Rust FFI 沙箱函数指针需包级注册（ADR-0008/0011）",
+    "sdk_hooks":        "Skill SDK 注册表由运行时动态注入，无法注入式替换",
+    "version_info":     "Go build ldflags -X 要求使用包级别变量注入"
+  },
+  "pkg/version/version.go":                     true,
+  "pkg/action/tool/rust_native_sandbox.go":     true,
+  "pkg/action/tool/rust_wasmtime_sandbox.go":   true,
+  "pkg/substrate/ffi/dylib.go":                 true,
+  "pkg/substrate/inference/stt/sherpa.go":      true,
+  "pkg/substrate/inference/tts/sherpa.go":      true,
+  "pkg/substrate/observability/instruments.go": true,
+  "pkg/substrate/policy/cedar_ffi.go":          true,
+  "pkg/substrate/storage/surreal_store.go":     true,
+  "pkg/cognition/skill/sdk/sdk.go":             true
+}

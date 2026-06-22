@@ -1,0 +1,230 @@
+<dialog id="onboard-modal" class="modal" x-effect="$store.onboard.show ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.onboard.show = false" x-cloak x-data>
+  <div class="modal-box max-w-2xl">
+
+    <!-- 关闭 / 跳过 -->
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"  @click="$store.onboard.dismiss()" :title="$store.i18n.t('onboard_skip_title')">✕</button></form>
+
+    <!-- 步骤进度（step 2-4 显示） -->
+    
+    <!-- 步骤进度 -->
+    <ul class="steps w-full mb-8" x-show="$store.onboard.step >= 2 && $store.onboard.step <= 4">
+      <li class="step step-primary" x-text="$store.i18n.t('onboard_welcome')"></li>
+      <li class="step" :class="$store.onboard.step >= 2 ? 'step-primary' : ''" x-text="$store.i18n.t('onboard_step1')"></li>
+      <li class="step" :class="$store.onboard.step >= 3 ? 'step-primary' : ''" x-text="$store.i18n.t('onboard_step2')"></li>
+      <li class="step" :class="$store.onboard.step >= 4 ? 'step-primary' : ''" x-text="$store.i18n.t('onboard_step_channel')"></li>
+    </ul>
+
+    <!-- ─── Step 1: 欢迎 ─────────────────────────────────────── -->
+    <div x-show="$store.onboard.step === 1" class="onboard-step">
+      <div class="text-6xl mb-4 text-center">🚀</div>
+      <h2 class="text-2xl font-bold mb-2" x-text="$store.i18n.t('onboard_welcome')"></h2>
+      <p class="text-base-content/70 mb-6" x-text="$store.i18n.t('onboard_desc')"></p>
+      <div class="modal-action mt-6">
+        <button class="btn btn-primary" @click="$store.onboard.step = 2" x-text="$store.i18n.t('onboard_start')"></button>
+        <button class="btn btn-ghost" @click="$store.onboard.dismiss()" x-text="$store.i18n.t('onboard_skip_btn')"></button>
+      </div>
+    </div>
+
+    <!-- ─── Step 2: LLM Provider ─────────────────────────────── -->
+    <div x-show="$store.onboard.step === 2" class="onboard-step">
+      <h2 class="text-2xl font-bold mb-2" x-text="$store.i18n.t('onboard_step1')"></h2>
+      <p class="text-base-content/70 mb-4" x-text="$store.i18n.t('onboard_step1_desc')"></p>
+
+      <!-- ── 目录路径（默认）─────────────────────────────────── -->
+      <div x-show="$store.onboard.useCatalog">
+        <!-- 厂商卡片网格 -->
+        <div x-show="$store.providers.catalogLoading" class="flex justify-center py-6">
+          <span class="loading loading-spinner loading-sm text-primary"></span>
+        </div>
+        <div x-show="!$store.providers.catalogLoading" class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4 max-h-52 overflow-y-auto pr-1">
+          <template x-for="entry in $store.providers.catalog" :key="entry.id">
+            <button type="button"
+              class="flex flex-col items-start p-2.5 rounded-box border text-left transition-all"
+              :class="$store.onboard.catalogSelected?.id === entry.id
+                ? 'border-primary bg-primary/10'
+                : 'border-base-300 bg-base-100 hover:border-primary/50 hover:bg-base-200'"
+              @click="$store.onboard.catalogSelected = entry; $store.onboard.catalogAPIKey = ''">
+              <span class="font-bold text-sm truncate w-full" x-text="entry.display_name"></span>
+              <span class="text-xs text-base-content/50 mt-0.5" x-text="entry.models.length + ' 个预设模型'"></span>
+            </button>
+          </template>
+        </div>
+
+        <!-- 选中厂商后：模型预览 + API Key -->
+        <template x-if="$store.onboard.catalogSelected">
+          <div class="space-y-3 border border-base-300 rounded-box p-4 bg-base-100">
+            <div x-show="$store.onboard.catalogSelected.models.length > 0" class="flex flex-wrap gap-1.5">
+              <template x-for="m in $store.onboard.catalogSelected.models" :key="m.id">
+                <span class="badge badge-sm font-mono"
+                  :class="m.is_reasoning ? 'badge-secondary badge-outline' : m.capability_tier === 'smart' ? 'badge-primary badge-outline' : 'badge-ghost'">
+                  <span x-text="m.display_name"></span>
+                </span>
+              </template>
+            </div>
+            <div class="form-control w-full" x-show="!$store.onboard.catalogSelected.is_local">
+              <label class="label py-1"><span class="label-text font-bold">API Key</span></label>
+              <input type="password" class="input input-bordered w-full" x-model="$store.onboard.catalogAPIKey"
+                placeholder="sk-..." autocomplete="off" @keydown.enter.prevent="$store.onboard.saveProviderFromCatalog()" />
+            </div>
+            <div x-show="$store.onboard.catalogSelected.is_local" class="text-xs text-success font-bold" x-text="$store.i18n.t('catalog_local_no_key')"></div>
+          </div>
+        </template>
+
+        <div class="modal-action mt-4">
+          <button class="btn btn-primary" @click="$store.onboard.saveProviderFromCatalog()" :disabled="$store.onboard.saving">
+            <span x-show="$store.onboard.saving" class="loading loading-spinner loading-xs"></span>
+            下一步 →
+          </button>
+          <button class="btn btn-ghost btn-sm" @click="$store.onboard.step = 1" x-text="$store.i18n.t('onboard_back')"></button>
+          <button class="btn btn-ghost btn-sm text-base-content/50" @click="$store.onboard.useCatalog = false">手动配置 ›</button>
+        </div>
+      </div>
+
+      <!-- ── 手动路径（高级）──────────────────────────────────── -->
+      <div x-show="!$store.onboard.useCatalog">
+        <label class="form-control w-full mb-4">
+          <div class="label"><span class="label-text font-medium" x-text="$store.i18n.t('providers_type')"></span></div>
+          <select id="ob-provider-type" name="ob-provider-type" class="select select-bordered w-full" x-model="$store.onboard.providerForm.type">
+            <option value="openai_compat" x-text="$store.i18n.t('onboard_provider_openai')"></option>
+            <option value="anthropic">Anthropic</option>
+            <option value="google_agent_platform">Google</option>
+            <option value="ollama" x-text="$store.i18n.t('onboard_provider_ollama')"></option>
+          </select>
+        </label>
+        <label class="form-control w-full mb-4">
+          <div class="label"><span class="label-text font-medium" x-text="$store.i18n.t('providers_name')"></span></div>
+          <input id="ob-provider-name" name="ob-provider-name" class="input input-bordered w-full" type="text"
+                 x-model="$store.onboard.providerForm.name"
+                 :placeholder="$store.i18n.t('onboard_ph_provider')[$store.onboard.providerForm.type]" />
+        </label>
+        <template x-if="$store.onboard.providerForm.type === 'openai_compat' || $store.onboard.providerForm.type === 'ollama'">
+          <label class="form-control w-full mb-4">
+            <div class="label"><span class="label-text font-medium">Base URL</span></div>
+            <input id="ob-base-url" name="ob-base-url" class="input input-bordered w-full" type="url"
+                   x-model="$store.onboard.providerForm.base_url"
+                   :placeholder="$store.onboard.providerForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com'" />
+          </label>
+        </template>
+        <template x-if="$store.onboard.providerForm.type !== 'ollama'">
+          <label class="form-control w-full mb-4">
+            <div class="label"><span class="label-text font-medium">API Key</span></div>
+            <input id="ob-api-key" name="ob-api-key" class="input input-bordered w-full" type="password"
+                   x-model="$store.onboard.providerForm.api_key"
+                   :placeholder="{ openai_compat: 'sk-...', anthropic: 'sk-ant-...', google_agent_platform: 'AIza...' }[$store.onboard.providerForm.type] || 'API Key'" />
+          </label>
+        </template>
+
+        <!-- 连接测试结果 -->
+        <div x-show="$store.onboard.testResult" class="alert mt-4" :class="$store.onboard.testResult === 'ok' ? 'alert-success' : 'alert-error'">
+          <span x-text="$store.onboard.testResult === 'ok' ? '✓ ' : '✗ '"></span>
+          <span x-text="$store.onboard.testMsg"></span>
+        </div>
+
+        <div class="modal-action mt-6">
+          <button class="btn btn-primary" @click="$store.onboard.saveProvider()" :disabled="$store.onboard.saving">
+            <span x-show="$store.onboard.saving" class="loading loading-spinner loading-xs"></span>
+            下一步 →
+          </button>
+          <button class="btn btn-ghost" @click="$store.onboard.testProvider()"
+                  :disabled="$store.onboard.testingProvider || $store.onboard.saving">
+            <span x-show="$store.onboard.testingProvider" class="loading loading-spinner loading-xs"></span>
+            <span x-show="!$store.onboard.testingProvider" x-text="$store.i18n.t('providers_test')"></span>
+          </button>
+          <button class="btn btn-ghost btn-sm text-base-content/50" @click="$store.onboard.useCatalog = true">← 返回目录选择</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Step 3: 添加模型 ──────────────────────────────────── -->
+    <div x-show="$store.onboard.step === 3" class="onboard-step">
+      <h2 class="text-2xl font-bold mb-2" x-text="$store.i18n.t('onboard_step2')"></h2>
+      <p class="text-base-content/70 mb-6" x-text="$store.i18n.t('onboard_step2_desc')"></p>
+
+      <!-- 已添加模型标签 -->
+      <div x-show="$store.onboard.models.length > 0" class="onboard-model-list">
+        <template x-for="m in $store.onboard.models" :key="m.model_id">
+          <div class="badge badge-lg gap-2">
+            <span x-text="m.model_id"></span>
+            <span class="badge badge-sm badge-neutral"  x-text="$store.i18n.t('onboard_role_map')[m.role]"></span>
+          </div>
+        </template>
+      </div>
+
+      <label class="form-control w-full mb-4">
+        <div class="label"><span class="label-text font-medium"  x-text="$store.i18n.t('providers_model_id')"></span></div>
+        <input id="ob-model-id" name="ob-model-id" class="input input-bordered w-full" type="text"
+               x-model="$store.onboard.modelForm.model_id"
+               @keydown.enter.prevent="$store.onboard.addModel()"
+               :placeholder="$store.i18n.t('onboard_ph_model')" />
+        </label>
+      <label class="form-control w-full mb-4">
+        <div class="label"><span class="label-text font-medium"  x-text="$store.i18n.t('onboard_model_usage')"></span></div>
+        <select id="ob-model-role" name="ob-model-role" class="select select-bordered w-full" x-model="$store.onboard.modelForm.role">
+          <option value="default" x-text="$store.i18n.t('onboard_usage_chat')"></option>
+          <option value="reasoning" x-text="$store.i18n.t('onboard_usage_reasoning')"></option>
+          <option value="general" x-text="$store.i18n.t('onboard_usage_general')"></option>
+        </select>
+        </label>
+
+      <div class="modal-action mt-6">
+        <button class="btn btn-ghost" @click="$store.onboard.addModel()" :disabled="$store.onboard.saving">
+          <span x-show="$store.onboard.saving" class="loading loading-spinner loading-xs"></span>
+          <span x-text="'+ ' + $store.i18n.t('onboard_btn_add')"></span>
+        </button>
+        <button class="btn btn-primary" @click="$store.onboard.step = 4"
+                :disabled="$store.onboard.models.length === 0">
+          下一步 →
+        </button>
+        <button class="btn btn-ghost" @click="$store.onboard.step = 2" x-text="$store.i18n.t('onboard_back')"></button>
+      </div>
+      <div x-show="$store.onboard.models.length === 0"
+           class="text-xs text-base-content/60 mt-2.5" x-text="$store.i18n.t('onboard_need_model')"></div>
+    </div>
+
+    <!-- ─── Step 4: 第三方接入（可选） ───────────────────────────── -->
+    <div x-show="$store.onboard.step === 4" class="onboard-step">
+      <h2 class="text-2xl font-bold mb-2" x-text="'Step 3 · ' + $store.i18n.t('onboard_step_channel')">
+        <span class="text-[13px] text-base-content/60 font-normal" x-text="$store.i18n.t('onboard_optional')"></span>
+      </h2>
+      <p class="text-base-content/70 mb-6" x-text="$store.i18n.t('onboard_step3_desc')"></p>
+
+      <label class="form-control w-full mb-4">
+        <div class="label"><span class="label-text font-medium"  x-text="$store.i18n.t('onboard_channel_type')"></span></div>
+        <select id="ob-channel-type" name="ob-channel-type" class="select select-bordered w-full" x-model="$store.onboard.channelForm.type">
+          <option value="telegram">Telegram Bot</option>
+          <option value="feishu" x-text="$store.i18n.t('onboard_feishu')"></option>
+          <option value="slack">Slack</option>
+          <option value="discord">Discord</option>
+          <option value="webhook" x-text="$store.i18n.t('onboard_webhook')"></option>
+        </select>
+        </label>
+      <label class="form-control w-full mb-4">
+        <div class="label"><span class="label-text font-medium"  x-text="$store.i18n.t('onboard_channel_name')"></span></div>
+        <input id="ob-channel-name" name="ob-channel-name" class="input input-bordered w-full" type="text"
+               x-model="$store.onboard.channelForm.name"
+               :placeholder="$store.i18n.t('onboard_ph_channel')" />
+        </label>
+      <template x-if="$store.onboard.channelConfigLabel($store.onboard.channelForm.type)">
+        <label class="form-control w-full mb-4">
+          <div class="label"><span class="label-text font-medium" 
+                 x-text="$store.onboard.channelConfigLabel($store.onboard.channelForm.type)"></span></div>
+          <input id="ob-channel-token" name="ob-channel-token" class="input input-bordered w-full" type="password"
+                 :value="$store.onboard.channelForm.config[$store.onboard.channelConfigKey($store.onboard.channelForm.type)] || ''"
+                 @input="$store.onboard.channelForm.config[$store.onboard.channelConfigKey($store.onboard.channelForm.type)] = $event.target.value"
+                 placeholder="..." />
+        </label>
+      </template>
+
+      <div class="modal-action mt-6">
+        <button class="btn btn-primary" @click="$store.onboard.saveChannelAndFinish()" :disabled="$store.onboard.saving">
+          <span x-show="$store.onboard.saving" class="loading loading-spinner loading-xs"></span>
+          保存渠道并完成
+        </button>
+        <button class="btn btn-ghost" @click="$store.onboard.finish()" x-text="$store.i18n.t('onboard_finish')"></button>
+        <button class="btn btn-ghost" @click="$store.onboard.step = 3" x-text="$store.i18n.t('onboard_back')"></button>
+      </div>
+    </div>
+
+  </div>
+
+</dialog>

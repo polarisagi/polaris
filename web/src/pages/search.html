@@ -1,0 +1,50 @@
+<div x-show="$store.nav.page === 'search'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100">
+  <div class="max-w-5xl mx-auto w-full flex flex-col">
+    <div class="mb-8 border-b border-base-300 pb-4">
+      <h2 class="text-2xl font-bold text-base-content" x-text="$store.i18n.t('search_title')"></h2>
+      <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('search_subtitle')"></p>
+    </div>
+
+    <div class="flex gap-2 mb-8">
+      <input id="store-search-query" name="store-search-query" type="search" class="input input-bordered flex-1 shadow-sm" :placeholder="$store.i18n.t('search_placeholder')" x-model="$store.search.query" @keydown.enter="$store.search.run()" />
+      <button class="btn btn-primary shadow-sm" @click="$store.search.run()" :disabled="$store.search.loading">
+        <span x-show="$store.search.loading" class="loading loading-spinner loading-sm"></span>
+        <span x-show="!$store.search.loading" x-text="$store.i18n.t('search_text')"></span>
+      </button>
+    </div>
+
+    <!-- Empty States -->
+    <div class="flex flex-col items-center justify-center py-20 text-base-content/60" x-show="!$store.search.searched && !$store.search.loading">
+      <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+      <p class="text-lg" x-text="$store.i18n.t('search_empty')"></p>
+    </div>
+
+    <div class="alert alert-info shadow-sm" x-show="$store.search.searched && $store.search.results.length === 0">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+      <span x-text="$store.i18n.t('search_no_results')"></span>
+    </div>
+
+    <!-- Results -->
+    <div class="space-y-4" x-show="$store.search.results.length > 0">
+      <template x-for="sr in $store.search.results" :key="sr.session_id">
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors cursor-pointer" @click="$store.search.openSession(sr.session_id)">
+          <div class="card-body p-4">
+            <div class="flex justify-between items-start mb-2">
+              <h3 class="font-bold text-sm" x-text="sr.title || sr.session_id.slice(0,16)+'…'"></h3>
+              <span class="text-xs text-base-content/70" x-text="new Date(sr.updated_at).toLocaleString('zh-CN')"></span>
+            </div>
+            <div class="space-y-2">
+              <template x-for="(m, i) in sr.matches" :key="i">
+                <div class="bg-base-100 rounded-box p-3 border-l-4 border-primary">
+                  <div class="text-[10px] font-bold text-base-content/70 mb-1 uppercase" x-text="m.role === 'user' ? $store.i18n.t('search_role_user') : $store.i18n.t('search_role_ai')"></div>
+                  <div class="text-sm leading-relaxed" x-html="m.snippet.replace(/\*\*(.*?)\*\*/g, '<mark class=\'bg-primary/20 text-primary px-1 rounded\'>$1</mark>')"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+  </div>
+</div>

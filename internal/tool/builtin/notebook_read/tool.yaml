@@ -1,0 +1,2 @@
+name: notebook_read
+description: Read the contents of a Jupyter Notebook (.ipynb) file.

@@ -1,0 +1,467 @@
+<div x-show="$store.nav.page === 'monitor'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100" x-data="{ tab: 'status', _insightsLoaded: false, _agentsLoaded: false }">
+  <div class="max-w-5xl mx-auto w-full flex flex-col">
+    <div class="mb-8 border-b border-base-300 pb-4">
+      <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_monitor')"></h2>
+      
+      <!-- Tabs -->
+      <div role="tablist" class="tabs tabs-boxed">
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'status' }" @click="tab = 'status'" x-text="$store.i18n.t('nav_status')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'insights' }" @click="tab = 'insights'; if (!_insightsLoaded) { $store.insights.load(); _insightsLoaded = true }" x-text="$store.i18n.t('nav_insights')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'agents' }" @click="tab = 'agents'; if (!_agentsLoaded) { $store.agents.load(); _agentsLoaded = true }" x-text="$store.i18n.t('nav_agents')"></a>
+      </div>
+    </div>
+
+    <!-- Status Tab -->
+    <div x-show="tab === 'status'" class="space-y-6"
+         x-data="{
+           metrics: {},
+           async load() {
+             try {
+               const r = await fetch('/v1/status');
+               if (r.ok) this.metrics = await r.json();
+             } catch {}
+           },
+           init() { this.load(); setInterval(() => this.load(), 10000); }
+         }">
+      
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+        <!-- Connection Status -->
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+          <div class="card-body p-5">
+            <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_conn')"></h3>
+            <div class="flex items-center gap-3">
+              <div class="w-3 h-3 rounded-full" :class="$store.statusBar.connected ? 'bg-success shadow-[0_0_8px_rgba(0,255,0,0.4)]' : 'bg-error'"></div>
+              <span class="font-bold text-lg" x-text="$store.statusBar.connected ? $store.i18n.t('status_conn_ok') : $store.i18n.t('status_conn_fail')"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Model ID -->
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+          <div class="card-body p-5">
+            <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_model')"></h3>
+            <div class="font-mono text-sm break-all font-bold" x-text="$store.statusBar.modelID || metrics.model_id || '—'"></div>
+          </div>
+        </div>
+
+        <!-- Tokens -->
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+          <div class="card-body p-5">
+            <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_token')"></h3>
+            <div class="font-mono font-bold text-xl mb-2" x-text="$store.statusBar.tokenUsed.toLocaleString()"></div>
+            <progress class="progress w-full" :class="$store.statusBar.tokenPct > 0.95 ? 'progress-error' : $store.statusBar.tokenPct > 0.80 ? 'progress-warning' : 'progress-primary'" :value="$store.statusBar.tokenPct * 100" max="100"></progress>
+            <div class="text-xs text-base-content/70 mt-1" x-text="`/ ${$store.statusBar.tokenLimit.toLocaleString()} (${Math.round($store.statusBar.tokenPct*100)}%)`"></div>
+          </div>
+        </div>
+
+        <!-- Memory -->
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+          <div class="card-body p-5">
+            <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_memory')"></h3>
+            <div class="font-mono font-bold text-xl mb-2" x-text="`${$store.statusBar.memoryMB} MB`"></div>
+            <progress class="progress w-full" :class="$store.statusBar.memPct > 0.9 ? 'progress-error' : $store.statusBar.memPct > 0.75 ? 'progress-warning' : 'progress-primary'" :value="$store.statusBar.memPct * 100" max="100"></progress>
+            <div class="text-xs text-base-content/70 mt-1" x-text="`/ ${$store.statusBar.memoryLimitMB} MB (${Math.round($store.statusBar.memPct*100)}%)`"></div>
+          </div>
+        </div>
+
+        <!-- Cost -->
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+          <div class="card-body p-5">
+            <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_cost')"></h3>
+            <div class="font-mono font-bold text-xl" x-text="`¥ ${$store.statusBar.costCNY.toFixed(4)}`"></div>
+          </div>
+        </div>
+
+        <!-- Service Status -->
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+          <div class="card-body p-5">
+            <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-2" x-text="$store.i18n.t('status_service')"></h3>
+            <div class="font-bold text-lg">
+              <span x-show="$store.statusBar.sealed" class="text-error animate-pulse" x-text="$store.i18n.t('status_sealed')"></span>
+              <span x-show="!$store.statusBar.sealed" class="text-success" x-text="$store.i18n.t('status_running')"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Doctor Checks -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors"
+           x-data="{
+             checks: [],
+             ok: true,
+             loading: false,
+             async run() {
+               this.loading = true;
+               try {
+                 const r = await fetch('/v1/doctor');
+                 const d = await r.json();
+                 this.checks = d.checks || [];
+                 this.ok = d.ok;
+               } catch {} finally { this.loading = false; }
+             },
+             init() { this.run(); }
+           }">
+        <div class="card-body p-5">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="font-bold text-base" x-text="$store.i18n.t('monitor_diagnostics')"></h3>
+            <button class="btn btn-sm btn-ghost" @click="run()" :disabled="loading">
+              <span x-show="loading" class="loading loading-spinner loading-xs"></span>
+              <span x-show="!loading" x-text="$store.i18n.t('monitor_recheck')"></span>
+            </button>
+          </div>
+          
+          <div class="space-y-2">
+            <template x-for="c in checks" :key="c.name">
+              <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm">
+                <span class="font-bold text-lg" :class="c.ok ? 'text-success' : 'text-error'" x-text="c.ok ? '✓' : '✕'"></span>
+                <span class="font-bold text-sm min-w-[120px]" x-text="c.name"></span>
+                <span class="text-xs text-base-content/60" x-text="c.detail"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- Raw Metrics -->
+      <div class="collapse collapse-arrow bg-base-200 border border-base-300 shadow-sm rounded-box hover:border-primary transition-colors">
+        <input id="form-field-18" name="form-field-18" type="checkbox" /> 
+        <div class="collapse-title font-bold text-sm" x-text="$store.i18n.t('status_metrics')"></div>
+        <div class="collapse-content">
+          <div class="bg-base-100 p-4 rounded-box overflow-x-auto border border-base-300 shadow-inner" x-data="{ raw: '' }" x-init="fetch('/metrics').then(r=>r.text()).then(t=>raw=t)">
+            <pre class="font-mono text-xs text-base-content/60" x-text="raw || $store.i18n.t('loading')"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Insights Tab -->
+    <div x-show="tab === 'insights'" class="space-y-6">
+      
+      <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('insights_title')"></h3>
+          <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('insights_subtitle')"></p>
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="form-field-19" name="form-field-19" :aria-label="$store.i18n.t('monitor_period')" class="select select-bordered select-sm shadow-sm" x-model.number="$store.insights.days" @change="$store.insights.load()">
+            <option value="7" x-text="$store.i18n.t('monitor_7d')"></option>
+            <option value="30" x-text="$store.i18n.t('monitor_30d')"></option>
+            <option value="90" x-text="$store.i18n.t('monitor_90d')"></option>
+          </select>
+        </div>
+      </div>
+
+      <div x-show="$store.insights.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <template x-if="$store.insights.data && !$store.insights.loading">
+        <div class="space-y-6">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+              <div class="card-body p-4 text-center">
+                <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-1" x-text="$store.i18n.t('insights_total_sessions')"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.insights.data.total_sessions.toLocaleString()"></div>
+              </div>
+            </div>
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+              <div class="card-body p-4 text-center">
+                <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-1" x-text="$store.i18n.t('insights_total_messages')"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.insights.data.total_messages.toLocaleString()"></div>
+              </div>
+            </div>
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+              <div class="card-body p-4 text-center">
+                <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-1" x-text="`${$store.i18n.t('monitor_days_sessions').replace('{0}', $store.insights.data.period_days)}`"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.insights.data.period_sessions.toLocaleString()"></div>
+              </div>
+            </div>
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+              <div class="card-body p-4 text-center">
+                <h3 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-1" x-text="`${$store.i18n.t('monitor_days_msgs').replace('{0}', $store.insights.data.period_days)}`"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.insights.data.period_messages.toLocaleString()"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <div class="card-body p-5">
+              <h3 class="font-bold text-sm mb-4" x-text="$store.i18n.t('insights_role_breakdown')"></h3>
+              <div class="flex gap-4 flex-wrap">
+                <template x-for="[role, cnt] in Object.entries($store.insights.data.role_breakdown || {})" :key="role">
+                  <div class="flex items-center gap-2">
+                    <span class="badge badge-ghost font-mono uppercase" x-text="role"></span>
+                    <span class="font-bold font-mono" x-text="cnt.toLocaleString()"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <div class="card-body p-5">
+              <h3 class="font-bold text-sm mb-4" x-text="$store.i18n.t('insights_daily_trend')"></h3>
+              <div x-show="$store.insights.data.daily_trend.length === 0" class="text-sm text-base-content/70" x-text="$store.i18n.t('monitor_no_data')"></div>
+              
+              <div class="flex items-end gap-1 h-24 overflow-x-auto pb-4">
+                <template x-for="d in $store.insights.data.daily_trend" :key="d.day">
+                  <div class="flex flex-col items-center gap-1 min-w-[28px] group">
+                    <div class="text-[9px] text-base-content/70 opacity-0 group-hover:opacity-100 transition-opacity" x-text="d.count"></div>
+                    <div class="bg-primary rounded-t-sm w-4 transition-all hover:bg-primary-focus"
+                         :style="`height:${Math.round(d.count/$store.insights.maxDailyCount()*64)+4}px`"
+                         :title="`${d.day}: ${$store.i18n.t('monitor_count_msgs').replace('{0}', d.count)}`"></div>
+                    <div class="text-[9px] text-base-content/70 transform -rotate-90 mt-2"
+                         x-text="d.day.slice(5)"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <div class="card-body p-5">
+              <h3 class="font-bold text-sm mb-4" x-text="$store.i18n.t('insights_top_sessions')"></h3>
+              <div x-show="$store.insights.data.top_sessions.length === 0" class="text-sm text-base-content/70" x-text="$store.i18n.t('monitor_no_data')"></div>
+              <div class="space-y-2">
+                <template x-for="(sess, i) in $store.insights.data.top_sessions" :key="sess.id">
+                  <div class="flex items-center gap-3 p-2 rounded-box hover:bg-base-100 transition-colors cursor-pointer border border-transparent hover:border-base-300"
+                       @click="Alpine.store('chat').loadSession(sess.id); Alpine.store('nav').navigate('chat')">
+                    <span class="text-xs font-mono font-bold text-base-content/60 w-5 text-right" x-text="i+1"></span>
+                    <div class="flex-1 min-w-0 truncate text-sm font-medium" x-text="sess.title || sess.id.slice(0,20)+'…'"></div>
+                    <span class="badge badge-sm badge-ghost" x-text="`${$store.i18n.t('monitor_count_msgs').replace('{0}', sess.message_count)}`"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <div class="alert shadow-sm bg-base-200 border border-base-300 mt-6">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <div class="flex-1">
+          <h3 class="font-bold text-sm" x-text="$store.i18n.t('monitor_export')"></h3>
+          <div class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('monitor_export_desc')"></div>
+        </div>
+        <div class="flex gap-2" x-data="{fmt:'sharegpt',days:30}">
+          <select id="fmt" name="fmt" :aria-label="$store.i18n.t('monitor_export_fmt')" class="select select-bordered select-sm shadow-sm" x-model="fmt">
+            <option value="sharegpt">ShareGPT</option>
+            <option value="openai">OpenAI</option>
+            <option value="raw">Raw JSON</option>
+          </select>
+          <a class="btn btn-sm btn-outline bg-base-100 shadow-sm"
+             :href="`/v1/export/trajectories?format=${fmt}&days=${$store.insights.days}&min_turns=2`"
+             download="trajectories.jsonl" x-text="$store.i18n.t('monitor_export_jsonl')"></a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agents Tab -->
+    <div x-show="tab === 'agents'" class="space-y-6">
+      
+      <div class="flex justify-between items-center bg-base-200 p-6 rounded-box border border-base-300">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('agents_title')"></h3>
+          <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('agents_subtitle')"></p>
+        </div>
+        <button class="btn btn-primary btn-sm shadow-sm" @click="$store.agents.load()">
+          <span x-show="$store.agents.loading" class="loading loading-spinner loading-xs"></span>
+          <span x-show="!$store.agents.loading" x-text="$store.i18n.t('agents_refresh')"></span>
+        </button>
+      </div>
+
+      <div x-show="$store.agents.loading" class="flex flex-col items-center justify-center py-20 text-base-content/40">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <template x-if="!$store.agents.loading">
+        <div class="space-y-6">
+          
+          <!-- Agent Metrics -->
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="card bg-base-200 border border-base-300 shadow-sm col-span-2 md:col-span-4 hover:border-primary transition-colors">
+              <div class="card-body p-5">
+                <h3 class="text-sm font-bold mb-4" x-text="$store.i18n.t('agents_status')"></h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_id')"></div>
+                    <div class="font-mono font-bold text-sm" x-text="$store.agents.agentID || '—'"></div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_state')"></div>
+                    <div class="font-bold text-sm flex items-center gap-2">
+                      <div class="w-2.5 h-2.5 rounded-full" :class="$store.agents.agentState === 'idle' || $store.agents.agentState === 'complete' ? 'bg-success shadow-[0_0_8px_rgba(0,255,0,0.4)]' : 'bg-warning shadow-[0_0_8px_rgba(255,165,0,0.4)]'"></div>
+                      <span x-text="$store.agents.stateLabel($store.agents.agentState)"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-4 pt-4 border-t border-base-300">
+                  <div class="text-xs text-base-content/50 uppercase tracking-wider mb-3" x-text="$store.i18n.t('agents_config')"></div>
+                  <div class="flex flex-wrap gap-2">
+                    <span class="badge badge-ghost font-mono">
+                      <span class="text-base-content/50 mr-1" x-text="$store.i18n.t('agents_max_replan') + ':'"></span>
+                      <span class="font-bold" x-text="$store.agents.agentConfig.max_replan ?? '—'"></span>
+                    </span>
+                    <span class="badge badge-ghost font-mono">
+                      <span class="text-base-content/50 mr-1" x-text="$store.i18n.t('agents_max_steps') + ':'"></span>
+                      <span class="font-bold" x-text="$store.agents.agentConfig.max_steps ?? '—'"></span>
+                    </span>
+                    <span class="badge badge-ghost font-mono">
+                      <span class="text-base-content/50 mr-1" x-text="$store.i18n.t('agents_default_budget') + ':'"></span>
+                      <span class="font-bold" x-text="$store.agents.agentConfig.default_budget ?? '—'"></span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
+              <div class="card-body p-4">
+                <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_tools')"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.agents.tools.length"></div>
+                <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_tools_count')"></div>
+              </div>
+            </div>
+            
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
+              <div class="card-body p-4">
+                <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_skills')"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.agents.enabledSkillCount"></div>
+                <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_skills_count')"></div>
+              </div>
+            </div>
+
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
+              <div class="card-body p-4">
+                <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_mcp')"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.agents.mcpServers.length"></div>
+                <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_mcp_count')"></div>
+              </div>
+            </div>
+
+            <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors text-center">
+              <div class="card-body p-4">
+                <h3 class="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-1" x-text="$store.i18n.t('agents_channels')"></h3>
+                <div class="font-mono font-bold text-2xl" x-text="$store.agents.channels.filter(c=>c.enabled).length"></div>
+                <div class="text-[10px] text-base-content/40 mt-1" x-text="$store.i18n.t('agents_channels_count')"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- MCP Servers List -->
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <div class="card-body p-5">
+              <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                <span x-text="$store.i18n.t('agents_mcp')"></span>
+                <span class="badge badge-sm badge-ghost" x-text="$store.agents.mcpServers.length"></span>
+              </h3>
+              
+              <div x-show="$store.agents.mcpServers.length === 0" class="text-sm text-base-content/50 py-4 text-center border border-dashed border-base-300 rounded-box" x-text="$store.i18n.t('agents_no_mcp')"></div>
+              
+              <div class="space-y-2">
+                <template x-for="srv in $store.agents.mcpServers" :key="srv.id">
+                  <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm">
+                    <div class="w-2.5 h-2.5 rounded-full shrink-0"
+                         :class="srv.connected ? 'bg-success shadow-[0_0_8px_rgba(0,255,0,0.4)]' : 'bg-error'"></div>
+                    <span class="font-bold text-sm flex-1 truncate" x-text="srv.name"></span>
+                    <!-- 插件来源：plugin_id 非空时显示插件名 -->
+                    <template x-if="srv.plugin_id">
+                      <span class="badge badge-xs badge-warning badge-outline font-mono shrink-0"
+                            x-text="'📦 ' + (srv.plugin_name || 'PLUGIN')"></span>
+                    </template>
+                    <span class="badge badge-xs badge-ghost font-mono uppercase shrink-0" x-text="srv.transport"></span>
+                    <span x-show="srv.tool_count > 0" class="badge badge-xs badge-primary badge-outline font-bold shrink-0"
+                          x-text="`${$store.i18n.t('monitor_tools').replace('{0}', srv.tool_count)}`"></span>
+                    <span class="text-xs font-bold shrink-0"
+                          :class="srv.connected ? 'text-success' : 'text-error'"
+                          x-text="srv.connected ? $store.i18n.t('agents_connected') : $store.i18n.t('agents_disconnected')"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tools List -->
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <div class="card-body p-5">
+              <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                <span x-text="$store.i18n.t('agents_tools')"></span>
+                <span class="badge badge-sm badge-ghost" x-text="$store.agents.tools.length"></span>
+              </h3>
+              
+              <div x-show="$store.agents.tools.length === 0" class="text-sm text-base-content/50 py-4 text-center border border-dashed border-base-300 rounded-box" x-text="$store.i18n.t('cap_no_tools')"></div>
+              
+              <div class="space-y-2">
+                <template x-for="t in $store.agents.tools" :key="t.name">
+                  <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm">
+                    <!-- 工具名称：mcp__ 前缀转为可读格式 -->
+                    <span class="font-bold text-sm flex-1 truncate font-mono"
+                          x-text="t.name.startsWith('mcp__') ? t.name.replace('mcp__', '').replace(/__/g, ':') : t.name"></span>
+                    <span class="text-xs text-base-content/60 truncate max-w-sm hidden md:block"
+                          x-text="t.description || ''"></span>
+                    <!-- source 徽章：plugin/mcp/builtin 显示不同颜色 -->
+                    <span class="badge badge-xs font-mono uppercase shrink-0"
+                          :class="{
+                            'badge-warning badge-outline': t.source === 'plugin',
+                            'badge-info badge-outline': t.source === 'mcp',
+                            'badge-ghost': t.source !== 'plugin' && t.source !== 'mcp'
+                          }"
+                          x-text="t.source || 'builtin'"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- Skills List -->
+          <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors">
+            <div class="card-body p-5">
+              <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                <span x-text="$store.i18n.t('agents_skills')"></span>
+                <span class="badge badge-sm badge-ghost" x-text="`${$store.agents.enabledSkillCount} / ${$store.agents.skills.length}`"></span>
+              </h3>
+
+              <div x-show="$store.agents.skills.length === 0" class="text-sm text-base-content/50 py-4 text-center border border-dashed border-base-300 rounded-box" x-text="$store.i18n.t('cap_no_skills')"></div>
+
+              <div class="space-y-2">
+                <template x-for="sk in $store.agents.skills" :key="sk.name">
+                  <div class="flex items-center gap-3 p-3 bg-base-100 rounded-box border border-base-300 shadow-sm"
+                       :class="!sk.enabled ? 'opacity-50' : ''">
+                    <!-- exec_mode 色块指示：tool=绿，ambient=蓝 -->
+                    <div class="w-2 h-2 rounded-full shrink-0 mt-0.5"
+                         :class="sk.exec_mode === 'ambient' ? 'bg-info' : 'bg-success'"></div>
+                    <!-- 技能名（去掉 skill: 前缀，plugin 技能展示 plugin/slug 格式） -->
+                    <span class="font-bold text-sm flex-1 truncate font-mono"
+                          :class="sk.enabled ? 'text-primary' : 'text-base-content/40'"
+                          x-text="$store.agents.skillDisplayName(sk.name)"></span>
+                    <!-- 描述 -->
+                    <span class="text-xs text-base-content/60 truncate max-w-xs hidden lg:block"
+                          x-text="sk.description || ''"></span>
+                    <!-- exec_mode 徽章 -->
+                    <span class="badge badge-xs font-bold shrink-0"
+                          :class="$store.agents.skillModeClass(sk.exec_mode)"
+                          x-text="$store.agents.skillModeLabel(sk.exec_mode)"></span>
+                    <!-- 插件来源徽章 -->
+                    <template x-if="sk.plugin_id">
+                      <span class="badge badge-xs badge-ghost font-mono shrink-0">PLUGIN</span>
+                    </template>
+                    <!-- 版本 -->
+                    <span class="badge badge-xs badge-ghost font-mono shrink-0" x-text="sk.version || 'v1'"></span>
+                    <!-- 启用状态 -->
+                    <span class="text-xs font-bold shrink-0"
+                          :class="sk.enabled ? 'text-success' : 'text-error'"
+                          x-text="sk.enabled ? $store.i18n.t('cap_enable') : $store.i18n.t('cap_disable')"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </template>
+    </div>
+
+  </div>
+</div>

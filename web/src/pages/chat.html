@@ -1,0 +1,318 @@
+<div x-show="$store.nav.page === 'chat'" class="flex flex-col flex-1 h-full min-h-0 relative transition-all duration-500"
+     :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? 'justify-center pb-[15vh]' : ''"
+     x-data="{
+       atBottom: true,
+       _el: null,
+       init() {
+         this.$nextTick(() => {
+           this._el = document.getElementById('message-list');
+           if (!this._el) return;
+           this._el.addEventListener('scroll', () => {
+             this.atBottom = this._el.scrollHeight - this._el.scrollTop - this._el.clientHeight < 60;
+           });
+           new MutationObserver(() => {
+             if (this.atBottom) this._el.scrollTop = this._el.scrollHeight;
+           }).observe(this._el, { childList: true, subtree: true, characterData: true });
+           this._el.scrollTop = this._el.scrollHeight;
+         });
+       },
+       scrollBottom() {
+         if (this._el) this._el.scrollTo({ top: this._el.scrollHeight, behavior: 'smooth' });
+         this.atBottom = true;
+       }
+     }">
+
+  <!-- Thinking Panel -->
+  <div class="mx-auto mt-4 w-full max-w-5xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText" x-cloak>
+    <div class="border border-base-300 rounded-[1.25rem] overflow-hidden bg-base-200/50 w-fit max-w-2xl shadow-sm">
+    <div class="flex items-center gap-2 p-2 px-4 cursor-pointer text-base-content/60 text-sm font-medium hover:bg-base-300/50 transition-colors" @click="$store.chat.thinkingOpen = !$store.chat.thinkingOpen">
+      <span x-show="$store.chat.state === 'THINKING'" class="loading loading-spinner loading-xs"></span>
+      <span x-text="$store.chat.state === 'THINKING' ? $store.i18n.t('chat_thinking') : $store.i18n.t('chat_thought')"></span>
+      <svg class="w-4 h-4 ml-auto transition-transform" :class="$store.chat.thinkingOpen ? '' : '-rotate-90'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+    </div>
+    <div class="p-3 px-4 text-base-content/70 italic whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-base-300 text-sm" x-show="$store.chat.thinkingOpen" x-text="$store.chat.thinkingText"></div>
+    </div>
+  </div>
+
+  <!-- Error Banner -->
+  <div class="mx-4 mt-2 alert alert-error shadow-sm shrink-0" x-show="$store.chat.state === 'ERROR'" x-cloak>
+    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    <span x-text="$store.chat.errorMsg"></span>
+    <button class="btn btn-sm btn-ghost" @click="$store.chat.state = 'IDLE'; $store.chat.errorMsg = ''" x-text="$store.i18n.t('chat_error_clear')"></button>
+  </div>
+
+  <!-- Context Warning Banner（上下文使用量 ≥ 80% 时由后端 context_warning SSE 事件触发）
+       thrashing=true 时隐藏"立即压缩"按钮，改由用户手动输入 /compact 并缩减输出规模 -->
+  <div class="mx-4 mt-2 alert shadow-sm shrink-0"
+       :class="$store.chat.contextWarning?.thrashing ? 'alert-error' : 'alert-warning'"
+       x-show="$store.chat.contextWarning" x-cloak>
+    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+    <span x-text="$store.chat.contextWarning?.message || $store.i18n.t('chat_context_warning')"></span>
+    <div class="flex gap-1 ml-auto">
+      <button class="btn btn-sm btn-ghost" @click="$store.chat.contextWarning = null" x-text="$store.i18n.t('chat_error_clear')"></button>
+      <button x-show="!$store.chat.contextWarning?.thrashing"
+              class="btn btn-sm btn-warning"
+              @click="$store.chat.contextWarning = null; $store.chat.submit('/compact')"
+              x-text="$store.i18n.t('chat_compact_trigger')"></button>
+    </div>
+  </div>
+
+  <!-- Compacting Indicator（自动压缩进行中时显示，防止用户误以为卡住）-->
+  <div class="mx-4 mt-2 alert alert-info shadow-sm shrink-0 py-2" x-show="$store.chat.compacting" x-cloak>
+    <span class="loading loading-spinner loading-xs"></span>
+    <span x-text="$store.i18n.t('chat_compacting')"></span>
+  </div>
+
+  <!-- Messages -->
+  <div class="min-h-0 relative transition-all duration-500" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? 'flex-none' : 'flex-1'">
+    <button x-show="!atBottom" @click="scrollBottom()" x-cloak class="btn btn-circle btn-primary btn-sm absolute bottom-4 right-6 z-20 shadow-lg opacity-90">↓</button>
+    <div class="overflow-y-auto min-h-0 p-4" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'h-full pb-8'" id="message-list">
+      <div class="max-w-5xl mx-auto w-full flex flex-col" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'min-h-full'">
+
+        <!-- Empty State -->
+        <div class="flex flex-col items-center justify-center text-base-content/60 space-y-4 py-8 transition-opacity duration-300" x-show="$store.chat.messages.length === 0 && $store.chat.state === 'IDLE'" x-cloak>
+          <div class="p-4 bg-base-200 rounded-full">
+            <svg class="w-12 h-12" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-base-content/80" x-text="$store.i18n.t('chat_empty_title')"></h3>
+          <p class="text-sm max-w-md text-center" x-text="$store.i18n.t('chat_empty_hint')"></p>
+        </div>
+
+        <template x-for="(msg, idx) in $store.chat.messages" :key="idx">
+          <div class="mb-4">
+            <div class="divider text-xs text-base-content/30" x-show="msg.compactionAfter" x-cloak x-text="$store.i18n.t('chat_compressed')"></div>
+
+            <template x-if="msg.role === 'user'">
+              <div class="chat chat-end group/msg">
+                <div class="chat-bubble bg-base-300 text-base-content break-words relative group text-left w-fit"
+                     x-data="{ expanded: false, isLong: false }"
+                     x-init="$nextTick(() => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 }); window.addEventListener('resize', () => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 })">
+                  <div x-ref="content" class="whitespace-pre-wrap transition-all duration-300 relative text-left w-full" :class="expanded ? '' : 'max-h-32 overflow-hidden'" x-text="msg.content"></div>
+
+                  <!-- Gradient Overlay & Hover Badge -->
+                  <div x-show="isLong && !expanded" @click="expanded = true"
+                       class="absolute bottom-0 left-0 w-full h-16 bg-gradient-to-t from-base-300 to-transparent flex items-end justify-center pb-1 cursor-pointer transition-opacity">
+                    <div class="badge badge-sm badge-ghost opacity-0 group-hover:opacity-100 transition-opacity shadow-sm mb-1 border-none" x-text="$store.i18n.t('chat_click_expand')"></div>
+                  </div>
+
+                  <!-- Collapse Button -->
+                  <div x-show="expanded" class="text-center mt-2 -mb-2">
+                    <button class="btn btn-xs btn-ghost text-base-content opacity-70 hover:opacity-100" @click="expanded = false" x-text="$store.i18n.t('chat_collapse_all')"></button>
+                  </div>
+                </div>
+                
+                <!-- 撤回编辑按钮：悬浮时显示 -->
+                <div class="flex justify-end mt-1 pr-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
+                  <button class="btn btn-xs btn-ghost text-base-content/60 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 border border-base-300 hover:border-primary/30 transition-all"
+                          @click="$store.chat.recallMessage(idx, msg.content)"
+                          title="撤回并重新编辑">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+                    <span x-text="$store.i18n.t('chat_recall') || '撤回编辑'"></span>
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="msg.role === 'assistant'">
+              <div class="chat chat-start relative group/msg">
+                <div class="badge badge-warning badge-xs absolute -top-1 right-0 z-10" x-show="msg.aborted" x-text="'⚠ ' + $store.i18n.t('chat_interrupted')"></div>
+                
+                <div class="chat-bubble bg-base-200 text-base-content relative group text-left w-fit" 
+                     :class="{ 'border-warning border': msg.aborted }"
+                     x-data="{ expanded: false, isLong: false }"
+                     x-init="$nextTick(() => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 }); window.addEventListener('resize', () => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 })">
+                  
+                  <div x-ref="content" class="transition-all duration-300 relative" :class="expanded ? '' : 'max-h-32 overflow-hidden'">
+                    <template x-if="msg.toolCalls && msg.toolCalls.length > 0">
+                      <div class="mb-4">
+                        <div class="collapse collapse-arrow bg-base-100 border border-base-300 shadow-sm text-xs rounded-xl">
+                          <input type="checkbox" />
+                          <div class="collapse-title font-medium flex items-center justify-between py-2 min-h-0">
+                            <div class="flex items-center gap-2 text-base-content/80">
+                              <span>🛠️</span>
+                              <span x-text="'执行了 ' + msg.toolCalls.length + ' 个动作'"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                              <span x-show="msg.taskDuration > 0" class="text-base-content/50" x-text="+(msg.taskDuration/1000).toFixed(1) + 's'"></span>
+                            </div>
+                          </div>
+                          <div class="collapse-content px-4 pb-2">
+                            <template x-for="(tc, ti) in msg.toolCalls" :key="ti">
+                              <div class="mb-3 last:mb-0 rounded-lg border border-base-200 bg-base-200/50 overflow-hidden">
+                                <div class="flex items-center gap-2 p-2 bg-base-300/30 text-base-content font-mono font-bold border-b border-base-200">
+                                  <span class="text-primary">⚡</span><span x-text="tc.name"></span>
+                                  <span x-show="tc.output !== null" class="ml-auto opacity-70 badge badge-ghost badge-xs font-normal" x-text="$store.i18n.t('chat_complete') || 'Complete'"></span>
+                                  <span x-show="tc.output === null" class="loading loading-spinner loading-xs ml-auto text-primary"></span>
+                                </div>
+                                <div class="p-2 bg-base-100/50 border-b border-base-200 font-mono text-base-content/70 whitespace-pre-wrap" x-text="typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input, null, 2)"></div>
+                                <div x-show="tc.output !== null" class="p-2 overflow-x-auto max-h-48 overflow-y-auto font-mono text-base-content/80 relative">
+                                  <template x-if="tc.output && typeof tc.output === 'string' && tc.output.includes('<image data length:')">
+                                    <div class="text-info flex items-center gap-2">
+                                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                      截图已成功捕获
+                                    </div>
+                                  </template>
+                                  <template x-if="!(tc.output && typeof tc.output === 'string' && tc.output.includes('<image data length:'))">
+                                    <template x-for="line in (tc.output || '').split('\n')" :key="line">
+                                      <div class="flex gap-2"><span class="text-base-content/30 shrink-0 select-none">┊</span><span class="whitespace-pre" x-text="line"></span></div>
+                                    </template>
+                                  </template>
+                                </div>
+                              </div>
+                            </template>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                    
+                    <div x-html="renderMarkdown(msg.content)" class="prose prose-sm prose-base-content max-w-none break-words"></div>
+                  </div>
+                  
+                  <!-- Gradient Overlay & Hover Badge -->
+                  <div x-show="isLong && !expanded" @click="expanded = true"
+                       class="absolute bottom-0 left-0 w-full h-24 bg-gradient-to-t from-base-200 via-base-200/80 to-transparent flex items-end justify-center pb-2 cursor-pointer transition-opacity">
+                    <div class="badge badge-outline bg-base-100 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm mb-1" x-text="$store.i18n.t('chat_click_expand_all')"></div>
+                  </div>
+                  
+                  <!-- Collapse Button -->
+                  <div x-show="expanded" class="text-center mt-3 -mb-1">
+                    <button class="btn btn-xs btn-ghost" @click="expanded = false; $nextTick(() => { $el.closest('.chat-bubble').scrollIntoView({behavior:'smooth', block:'center'}) })" x-text="$store.i18n.t('chat_collapse_all')"></button>
+                  </div>
+                </div>
+
+                <!-- 播放语音按钮：悬浮时显示 -->
+                <div class="flex justify-start mt-1 pl-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
+                  <button class="btn btn-xs btn-ghost text-base-content/60 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 border border-base-300 hover:border-primary/30 transition-all"
+                          @click="$store.chat.toggleSpeakText(idx, msg.content.replace(/<[^>]+>/g, ''))"
+                          :title="$store.chat.playingMsgIdx === idx ? $store.i18n.t('chat_stop') : $store.i18n.t('chat_play')">
+                    
+                    <template x-if="$store.chat.playingMsgIdx !== idx">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
+                    </template>
+                    <template x-if="$store.chat.playingMsgIdx === idx">
+                      <svg class="w-3.5 h-3.5 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>
+                    </template>
+                    
+                    <span :class="$store.chat.playingMsgIdx === idx ? 'text-error' : ''" x-text="$store.chat.playingMsgIdx === idx ? $store.i18n.t('chat_stop') : $store.i18n.t('chat_play')"></span>
+                  </button>
+                </div>
+
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Streaming Bubble -->
+        <div class="chat chat-start" x-show="$store.chat.state === 'STREAMING' || $store.chat.state === 'TOOL_RUNNING'" x-cloak>
+          <div class="chat-bubble bg-base-100 text-base-content border border-primary/50 shadow-sm">
+            <div x-html="renderMarkdown($store.chat.currentTokens)" class="prose prose-sm max-w-none break-words markdown-body inline"></div>
+            <span class="inline-block w-1 h-3 bg-primary ml-1 animate-pulse"></span>
+          </div>
+        </div>
+
+        <!-- Thinking Bubble -->
+        <div class="chat chat-start" x-show="$store.chat.state === 'SUBMITTING' || $store.chat.state === 'THINKING'" x-cloak>
+          <div class="chat-bubble bg-base-100/50 text-base-content border border-base-200">
+            <span class="loading loading-dots loading-sm text-base-content/60"></span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Input Area -->
+  <div class="p-4 shrink-0 w-full max-w-5xl mx-auto transition-all duration-500 ease-in-out" :class="($store.chat.messages.length === 0 && $store.chat.state === 'IDLE') ? '' : 'pb-8'" x-data="chatInput">
+    <div class="relative bg-base-100 hover:bg-base-200/60 shadow-md border border-base-300 focus-within:bg-base-100 focus-within:border-primary/50 focus-within:shadow-lg transition-all duration-300 flex flex-col p-2 px-4 rounded-[36px]">
+      
+      <!-- Command Menu -->
+      <div class="absolute bottom-full left-0 mb-2 w-full bg-base-100 border border-base-300 rounded-box shadow-xl z-50 overflow-hidden" x-show="showSlash" x-cloak>
+        <ul class="menu menu-sm bg-base-100 rounded-box p-2">
+          <template x-for="(item, i) in slashItems" :key="item.cmd">
+            <li>
+              <a :class="{ 'active': slashFocus === i }" @click.prevent="selectSlash(item)">
+                <span class="font-mono text-primary font-bold" x-text="item.cmd"></span>
+                <span class="text-base-content/60" x-text="item.desc"></span>
+              </a>
+            </li>
+          </template>
+        </ul>
+      </div>
+
+      <!-- Attachments -->
+      <div class="flex gap-2 mb-2 flex-wrap" x-show="$store.chat.attachments.length > 0" x-cloak>
+        <template x-for="(att, idx) in $store.chat.attachments" :key="idx">
+          <div class="relative w-14 h-14 rounded-box border border-base-300 bg-base-100 flex items-center justify-center shadow-sm">
+            <template x-if="att.dataUrl"><img :src="att.dataUrl" class="w-full h-full object-cover rounded-box"></template>
+            <template x-if="!att.dataUrl"><div class="text-2xl opacity-50">📄</div></template>
+            <button @click="$store.chat.removeAttachment(idx)" class="btn btn-xs btn-circle btn-error absolute -top-2 -right-2 w-5 h-5 min-h-0 text-[10px]">✕</button>
+          </div>
+        </template>
+      </div>
+
+      <div class="flex flex-col w-full">
+        <textarea id="input" name="input" class="w-full bg-transparent border-0 focus:ring-0 focus:outline-none resize-none px-2 py-2 leading-relaxed min-h-[48px] max-h-48 overflow-y-auto placeholder:text-base-content/60"
+                  x-model="input" :rows="rows"
+                  :placeholder="$store.i18n.t('chat_placeholder')"
+                  :disabled="$store.chat.isActive && $store.chat.state !== 'COMPLETE'"
+                  @keydown="onKeydown($event)" @input="$el.style.height='auto'; $el.style.height=Math.min($el.scrollHeight, 192)+'px'"
+                  @paste="handlePaste($event)" @drop="handleDrop($event)" @dragover.prevent=""></textarea>
+
+        <div class="flex items-center justify-between w-full mt-2">
+          <!-- Left Controls (Attachment, Model, Reasoning) -->
+          <div class="flex items-center gap-1">
+            <button class="btn btn-circle btn-ghost btn-sm text-base-content/70" @click="$refs.fileInput.click()">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+
+            <div class="flex items-center gap-4 ml-1">
+              <!-- Model Badge -->
+              <select class="select select-bordered bg-base-200 select-sm text-xs font-medium rounded-full hover:bg-base-300 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[220px] truncate" x-model="$store.chat.selectedModel">
+                <option value="" x-text="$store.i18n.t('chat_model_default')"></option>
+                <template x-for="m in $store.providers.allModels" :key="m.id">
+                  <option :value="m.id" x-text="$store.providers.roleLabel(m.role) + ': ' + (m.name || m.model_id)"></option>
+                </template>
+              </select>
+
+              <!-- Reasoning Badge -->
+              <select class="select select-bordered bg-base-200 select-sm text-xs font-medium rounded-full hover:bg-base-300 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[120px] truncate" x-model="$store.chat.reasoningEffort">
+                <option value="auto" x-text="$store.i18n.t('reasoning_auto')"></option>
+                <option value="low" x-text="$store.i18n.t('reasoning_low')"></option>
+                <option value="medium" x-text="$store.i18n.t('reasoning_medium')"></option>
+                <option value="high" x-text="$store.i18n.t('reasoning_high')"></option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Right Controls (Computer Mode, Mic, Submit, Interrupt) -->
+          <div class="flex items-center gap-1">
+            <select id="store-computer-mode" name="store-computer-mode" class="select select-ghost select-sm pl-3 pr-8 text-xs rounded-full font-medium shrink-1 max-w-[120px] truncate h-8 min-h-0" x-model="$store.computer.mode" @change="$store.computer.setMode($event.target.value)">
+              <option value="default" x-text="$store.i18n.t('computer_mode_default_short')"></option>
+              <option value="auto_review" x-text="$store.i18n.t('computer_mode_auto_short')"></option>
+              <option value="full_access" x-text="$store.i18n.t('computer_mode_full_short')"></option>
+            </select>
+
+            <button class="btn btn-circle btn-ghost btn-sm text-base-content/70 h-8 w-8 min-h-0" :class="$store.chat.isRecording ? 'text-error bg-error/10' : ''" @click="$store.chat.toggleRecording()">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </button>
+            
+            <button class="btn btn-circle btn-primary btn-sm h-8 w-8 min-h-0" x-show="!$store.chat.isActive" @click="submit()" :disabled="!input.trim() && $store.chat.attachments.length === 0">
+              <svg class="w-4 h-4 ml-[-2px] mt-[1px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+
+            <button class="btn btn-circle btn-warning btn-sm h-8 w-8 min-h-0" x-show="$store.chat.isActive" @click="$store.chat.interrupt('abort')">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <input id="form-field-20" name="form-field-20" type="file" multiple accept="*/*" class="hidden" x-ref="fileInput" @change="handleFileSelect($event)">
+    </div>
+    
+    <!-- Shortcuts Hints -->
+    <div class="text-center mt-3 text-xs font-medium text-base-content/60" x-show="$store.chat.messages.length === 0" x-transition.opacity.duration.500ms x-cloak>
+      <kbd class="kbd kbd-xs bg-transparent border-base-300 shadow-none text-base-content/60">Ctrl+K</kbd> <span x-html="$store.i18n.t('chat_clear_session') + ' &amp;nbsp;&amp;nbsp;'"></span>
+      <kbd class="kbd kbd-xs bg-transparent border-base-300 shadow-none text-base-content/60">Ctrl+C</kbd> <span x-text="$store.i18n.t('chat_interrupt')"></span>
+    </div>
+  </div>
+</div>

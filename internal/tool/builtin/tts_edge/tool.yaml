@@ -1,0 +1,14 @@
+name: tts_edge
+description: "Convert text to speech using Edge TTS and return a base64-encoded audio data URI (audio/mp3)."
+version: "1.0.0"
+capability: write-network
+risk_level: low
+sandbox: in-process
+side_effects:
+  - network-call
+  - process-spawn
+  - file-write
+tags:
+  - tts
+  - audio
+  - speech

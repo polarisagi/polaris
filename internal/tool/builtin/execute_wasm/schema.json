@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "module_path": { "type": "string" },
+    "args": { "type": "string" },
+    "mount_dirs": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["module_path"]
+}

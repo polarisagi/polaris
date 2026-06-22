@@ -1,0 +1,7 @@
+name: grep
+description: |
+  使用正则表达式在文件内容中搜索匹配行。支持三种输出模式：
+  - files_with_matches（默认）：仅返回含匹配的文件路径列表
+  - content：返回每条匹配行及上下文（-A/-B）
+  - count：返回每个文件的匹配行数
+  自动跳过二进制文件。所有路径受 allowedPaths 白名单约束。

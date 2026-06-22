@@ -1,0 +1,577 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/pkg/apperr"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// MCPServerInfo MCP Server 运行时状态快照。
+type MCPServerInfo struct {
+	ID        string
+	Name      string
+	Transport string
+	Connected bool
+	Tools     []MCPTool
+	Error     string
+}
+
+type mcpEntry struct {
+	client *MCPClient
+	name   string
+	cfg    MCPClientConfig
+	tools  []MCPTool
+	errMsg string
+}
+
+// ToolRegistrar MCP 工具注册到 InMemoryToolRegistry 的最小接口（consumer-side 定义，防包循环）。
+// 实现由 pkg/action/tool.InMemoryToolRegistry 提供。
+type ToolRegistrar interface {
+	Register(tool types.Tool) error
+	Unregister(name string)
+}
+
+// MCPManager 管理所有 MCP Server 连接，动态注册工具到 InProcessSandbox。
+type MCPManager struct {
+	mu               sync.RWMutex
+	entries          map[string]*mcpEntry
+	sandbox          *sandbox.InProcessSandbox
+	toolReg          ToolRegistrar // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
+	httpClient       *http.Client
+	policy           protocol.PolicyGate // 对 CallTool 直接路径执行安全检查
+	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
+	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
+}
+
+// SetSamplingProvider 注入 LLM Provider，供 MCP sampling 回调使用。
+func (m *MCPManager) SetSamplingProvider(p protocol.Provider) {
+	m.mu.Lock()
+	m.samplingProvider = p
+	m.mu.Unlock()
+}
+
+func NewMCPManager(sbx *sandbox.InProcessSandbox, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
+	return &MCPManager{
+		entries:    make(map[string]*mcpEntry),
+		sandbox:    sbx,
+		httpClient: httpClient,
+		policy:     policy,
+	}
+}
+
+// SetOnToolsChanged 注册工具集变更回调，异步连接完成后触发。
+func (m *MCPManager) SetOnToolsChanged(fn func()) {
+	m.mu.Lock()
+	m.onToolsChanged = fn
+	m.mu.Unlock()
+}
+
+// SetToolRegistrar 注入 InMemoryToolRegistry，使 MCP 工具同步可被 Agent Kernel FSM 发现。
+// 必须在任何 Add() 调用之前设置；否则已连接的服务器工具不会同步。
+func (m *MCPManager) SetToolRegistrar(reg ToolRegistrar) {
+	m.mu.Lock()
+	m.toolReg = reg
+	m.mu.Unlock()
+}
+
+// Add 连接一个 MCP Server，发现工具并注册到 sandbox。
+// 连接失败时仍写入 tombstone entry（errMsg 非空），使 ListServers 能向 UI 暴露失败原因。
+// name 必须满足 ^[a-zA-Z0-9_-]+$，否则拒绝安装。
+func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClientConfig) error {
+	if err := validateLLMNamePart(name); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, fmt.Sprintf("mcp: server name %q invalid (must match ^[a-zA-Z0-9_-]+$)", name), err)
+	}
+
+	slog.Info("mcp_manager: starting mcp server", "id", serverID, "name", name, "transport", cfg.Transport, "command", cfg.Command)
+
+	m.mu.Lock()
+
+	if old, ok := m.entries[serverID]; ok {
+		if old.client != nil {
+			old.client.Close()
+		}
+		m.unregisterTools(old.name, old.tools)
+	}
+
+	storeFailed := func(err error) error {
+		m.entries[serverID] = &mcpEntry{name: name, cfg: cfg, errMsg: err.Error()}
+		m.mu.Unlock()
+		slog.Error("mcp_manager: start server failed", "id", serverID, "name", name, "err", err)
+		if err != nil {
+			return fmt.Errorf("MCPManager.Add: %w", err)
+		}
+		return nil
+	}
+
+	client := NewMCPClient(cfg, m.httpClient)
+	if err := client.Connect(ctx); err != nil {
+		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: connect %q", serverID), err)
+		return storeFailed(wrapped)
+	}
+	if m.samplingProvider != nil {
+		client.SetServerRequestHandler(m.makeSamplingHandler())
+	}
+	if err := client.Initialize(ctx); err != nil {
+		client.Close()
+		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: initialize %q", serverID), err)
+		return storeFailed(wrapped)
+	}
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		client.Close()
+		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: list tools %q", serverID), err)
+		return storeFailed(wrapped)
+	}
+
+	validTools := m.registerTools(name, client, tools)
+	m.entries[serverID] = &mcpEntry{
+		client: client,
+		name:   name,
+		cfg:    cfg,
+		tools:  validTools,
+	}
+	notify := m.onToolsChanged
+	m.mu.Unlock()
+
+	slog.Info("mcp_manager: server connected", "id", serverID, "tools", len(tools))
+	// 锁外触发回调，避免回调内反向加锁导致死锁
+	if notify != nil {
+		notify()
+	}
+	return nil
+}
+
+// Remove 断开并移除 MCP Server，取消注册其所有工具。
+func (m *MCPManager) Remove(serverID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.entries[serverID]; ok {
+		if e.client != nil {
+			e.client.Close()
+		}
+		m.unregisterTools(e.name, e.tools)
+		delete(m.entries, serverID)
+	}
+}
+
+// CallTool 直接路由调用指定的 MCP 工具。
+// 执行 PolicyGate 校验（与 InMemoryToolRegistry.ExecuteTool 语义一致）。
+func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, args map[string]any) (string, error) {
+	m.mu.RLock()
+	e, ok := m.entries[serverID]
+	m.mu.RUnlock()
+	if !ok {
+		return "", apperr.New(apperr.CodeInternal, "mcp_manager: server not found: "+serverID)
+	}
+
+	// PolicyGate: deny-by-default，与 ToolRegistry 路径保持一致
+	if m.policy == nil {
+		return "", apperr.New(apperr.CodeInternal,
+			"mcp_manager: policy gate not initialized, refusing tool call (fail-closed)")
+	}
+	tl := 2 // MCP Server 信任等级（社区级别）
+	if e.cfg.Trusted {
+		tl = 3 // 白名单 MCP Server 提升信任等级
+	}
+	allowed, pErr := m.policy.IsAuthorized(ctx, "agent", "tool_execute",
+		serverID+":"+toolName,
+		map[string]any{
+			"tool_source": "mcp",
+			"trust_level": tl,
+		})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
+		}
+		return "", apperr.New(apperr.CodeForbidden, fmt.Sprintf("mcp_manager: policy blocked %s: %s", toolName, reason))
+	}
+
+	text, _, _, err := e.client.CallToolTainted(ctx, toolName, args)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "mcp_manager: call tool", err)
+	}
+	if err != nil {
+		return text, fmt.Errorf("MCPManager.CallTool: %w", err)
+	}
+	return text, nil
+}
+
+// ListServers 返回所有 MCP Server 的运行时状态快照。
+func (m *MCPManager) ListServers() []MCPServerInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]MCPServerInfo, 0, len(m.entries))
+	for id, e := range m.entries {
+		result = append(result, MCPServerInfo{
+			ID:        id,
+			Name:      e.name,
+			Transport: string(e.cfg.Transport),
+			Connected: e.errMsg == "",
+			Tools:     e.tools,
+			Error:     e.errMsg,
+		})
+	}
+	return result
+}
+
+// ListToolSchemas 返回所有已连接 MCP 工具的 ToolSchema，用于注入 InferRequest。
+func (m *MCPManager) ListToolSchemas() []types.ToolSchema {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []types.ToolSchema
+	for _, e := range m.entries {
+		for _, t := range e.tools {
+			var schema any
+			json.Unmarshal(t.InputSchema, &schema) //nolint:errcheck
+			result = append(result, types.ToolSchema{
+				Name:        MCPToolName(e.name, t.Name),
+				Description: t.Description,
+				Parameters:  schema,
+			})
+		}
+	}
+	return result
+}
+
+// LoadFromDB 启动时从数据库加载并异步连接所有已启用的 MCP Server。
+// 统一加载独立安装的 MCP（plugin_id=”）和插件内嵌的 MCP（plugin_id != ”）。
+// dataDir 用于展开 args/url 中的 {DATA_DIR} 占位符；plugin MCP 的工作目录由 work_dir 字段提供。
+func (m *MCPManager) LoadFromDB(ctx context.Context, extRepo protocol.ExtensionRepository, dataDir string) {
+	servers, err := extRepo.ListMCPServers(ctx)
+	if err != nil {
+		slog.Error("mcp_manager: load from db", "err", err)
+		return
+	}
+
+	for _, s := range servers {
+		if !s.Enabled {
+			continue
+		}
+		var args []string
+		json.Unmarshal([]byte(s.Args), &args) //nolint:errcheck
+		var env map[string]string
+		json.Unmarshal([]byte(s.Env), &env) //nolint:errcheck
+
+		for i, a := range args {
+			args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
+		}
+
+		resolvedURL := strings.ReplaceAll(s.URL, "{DATA_DIR}", dataDir)
+		// "streamable_http" 是数据库存储值，兼容 Claude Code 的 "streamable-http" 别名
+		transport := s.Transport
+		if transport == "streamable-http" {
+			transport = string(MCPStreamableHTTP)
+		}
+		cfg := MCPClientConfig{
+			Transport:  MCPTransport(transport),
+			Command:    s.Command,
+			Args:       args,
+			Env:        env,
+			URL:        resolvedURL,
+			WorkDir:    s.WorkDir, // plugin MCP 设为 install_path；独立 MCP 为空（继承父进程 cwd）
+			Timeout:    time.Duration(s.Timeout) * time.Second,
+			ServerName: s.Name,
+			// trust_tier >= 3 (Official/System) → TaintMedium；其余保持 TaintHigh
+			Trusted: s.TrustTier >= 3,
+		}
+		// 每个 server 独立 goroutine，避免一个慢连接阻塞其他
+		go func(id, name string, cfg MCPClientConfig) {
+			connCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			if err := m.Add(connCtx, id, name, cfg); err != nil {
+				slog.Error("mcp_manager: load server failed", "id", id, "err", err)
+			}
+		}(s.ID, s.Name, cfg)
+	}
+}
+
+// maxLLMToolNameLen 是 OpenAI 兼容接口对 function.name 的最大长度限制。
+const maxLLMToolNameLen = 64
+
+// registerTools 注册合法的 MCP 工具到 sandbox，返回实际注册成功的工具子集。
+// 服务器名（serverName）在 Add() 中已经过 validateLLMNamePart 校验，此处信任。
+// 工具名来自外部 MCP 服务器，不可控：非法字符静默替换并记录警告；超长则跳过。
+func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools []MCPTool) []MCPTool {
+	// 确定此 server 的污点等级：白名单 → TaintMedium；其余 → TaintHigh
+	taint := types.TaintHigh
+	if client.cfg.Trusted {
+		taint = types.TaintMedium
+	}
+	valid := make([]MCPTool, 0, len(tools))
+	for _, t := range tools {
+		llmName := MCPToolName(serverName, t.Name)
+		if llmName != MCPToolName(serverName, SanitizeToolNamePart(t.Name)) || t.Name != SanitizeToolNamePart(t.Name) {
+			slog.Warn("mcp: tool name sanitized", "server", serverName, "original", t.Name, "llm_name", llmName)
+		}
+		if len(llmName) > maxLLMToolNameLen {
+			slog.Warn("mcp: tool LLM name too long, skipped", "server", serverName, "tool", t.Name, "llm_name", llmName, "max", maxLLMToolNameLen)
+			continue
+		}
+		fn := makeMCPToolFn(client, t.Name)
+		// RegisterRich 将 MCP 工具注册到富工具路径（支持 ImageParts 回传）
+		m.sandbox.RegisterRich(llmName, fn, taint)
+		// 同步到 InMemoryToolRegistry，使 Agent Kernel FSM 可发现此工具
+		if m.toolReg != nil {
+			riskLevel := types.RiskHigh
+			if client.cfg.Trusted {
+				riskLevel = types.RiskMedium
+			}
+			regErr := m.toolReg.Register(types.Tool{
+				Name:        llmName,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+				Source:      types.ToolMCP,
+				RiskLevel:   riskLevel,
+			})
+			if regErr != nil {
+				slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
+			}
+		}
+		valid = append(valid, t)
+	}
+	return valid
+}
+
+// makeMCPToolFn 创建调用 MCP 工具的富执行函数。
+// 返回完整 ToolResult（含 ImageParts），使用 CallToolTainted 进行污点保护反序列化（M07 §1 安全要求）。
+func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
+	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+		var args map[string]any
+		if len(spec.Input) > 0 {
+			json.Unmarshal(spec.Input, &args) //nolint:errcheck
+		}
+		// CallToolTainted 内部执行 TaintPreservingDecoder，taint 通过 RegisterRich 传递
+		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)
+		if err != nil {
+			return nil, fmt.Errorf("makeMCPToolFn: %w", err)
+		}
+		return &types.ToolResult{
+			Success:    true,
+			Output:     []byte(text),
+			ImageParts: imgs, // MCP type="image" content block 解析结果
+		}, nil
+	}
+}
+
+func (m *MCPManager) unregisterTools(serverName string, tools []MCPTool) {
+	for _, t := range tools {
+		llmName := MCPToolName(serverName, t.Name)
+		m.sandbox.Unregister(llmName)
+		// 同步从 InMemoryToolRegistry 注销，保持可发现性状态一致
+		if m.toolReg != nil {
+			m.toolReg.Unregister(llmName)
+		}
+	}
+}
+
+// MCPToolName 生成 LLM 工具名，格式：mcp__<serverName>__<toolName>。
+// serverName 由调用方（Add）保证合法；toolName 来自外部，经 SanitizeToolNamePart 处理。
+func (m *MCPManager) MCPToolName(serverName, toolName string) string {
+	return MCPToolName(serverName, toolName)
+}
+
+func MCPToolName(serverName, toolName string) string {
+	return "mcp__" + serverName + "__" + SanitizeToolNamePart(toolName)
+}
+
+// SanitizeToolNamePart 将外部工具名中不符合 ^[a-zA-Z0-9_-]+$ 的字符替换为下划线。
+// 仅用于来自外部 MCP 服务器的工具名；用户配置的服务器名走 validateLLMNamePart 硬校验。
+func SanitizeToolNamePart(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, s)
+}
+
+// validateLLMNamePart 校验字符串是否满足 OpenAI 工具名规范 ^[a-zA-Z0-9_-]+$。
+// 用于用户可控的名称（MCP server name、skill name），非法则快速失败。
+func validateLLMNamePart(s string) error {
+	if s == "" {
+		return apperr.New(apperr.CodeInvalidInput, "name must not be empty")
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("char %q not in ^[a-zA-Z0-9_-]+$", r))
+		}
+	}
+	return nil
+}
+
+// DynamicConnectRequest 动态连接 MCP server 的参数。
+type DynamicConnectRequest struct {
+	ServerName string // 唯一名称，用于工具名前缀
+	Transport  string // "stdio" | "sse" | "http"
+	Command    string // stdio 模式：可执行文件路径
+	Args       []string
+	URL        string // sse/http 模式：端点 URL
+}
+
+// DynamicConnect 动态连接一个 MCP server 并注册其工具到沙箱。
+// 幂等：同名 server 已连接时直接返回 nil。
+func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectRequest) error {
+	m.mu.Lock()
+	if _, exists := m.entries[req.ServerName]; exists {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
+	cfg := MCPClientConfig{
+		ServerName: req.ServerName,
+		Transport:  MCPTransport(req.Transport),
+		Command:    req.Command,
+		Args:       req.Args,
+		URL:        req.URL,
+	}
+	client := NewMCPClient(cfg, m.httpClient)
+	if err := client.Connect(ctx); err != nil {
+		return fmt.Errorf("MCPManager.DynamicConnect: %w", err)
+	}
+	if err := client.Initialize(ctx); err != nil {
+		client.Close()
+		return fmt.Errorf("MCPManager.DynamicConnect: %w", err)
+	}
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		client.Close()
+		return fmt.Errorf("MCPManager.DynamicConnect: %w", err)
+	}
+
+	validTools := m.registerTools(req.ServerName, client, tools)
+
+	m.mu.Lock()
+	if _, exists := m.entries[req.ServerName]; exists {
+		m.mu.Unlock()
+		client.Close()
+		return nil
+	}
+	m.entries[req.ServerName] = &mcpEntry{
+		client: client,
+		name:   req.ServerName,
+		cfg:    cfg,
+		tools:  validTools,
+	}
+	notify := m.onToolsChanged
+	m.mu.Unlock()
+
+	if notify != nil {
+		notify()
+	}
+	return nil
+}
+
+// MCPUpdateConfig 包含 MCP Server 可更新字段。
+type MCPUpdateConfig struct {
+	Name      string
+	Transport string
+	Command   string
+	Args      []string
+	Env       map[string]string
+	URL       string
+	Enabled   bool
+	Timeout   int
+	TrustTier int
+}
+
+// Update 更新并重启 MCP 连接，同时同步 DB。
+func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg MCPUpdateConfig, dataDir string) error {
+	argsBytes, _ := json.Marshal(cfg.Args)
+	envBytes, _ := json.Marshal(cfg.Env)
+
+	fields := map[string]any{
+		"name":       cfg.Name,
+		"transport":  cfg.Transport,
+		"command":    cfg.Command,
+		"args":       string(argsBytes),
+		"env":        string(envBytes),
+		"url":        cfg.URL,
+		"enabled":    cfg.Enabled,
+		"timeout":    cfg.Timeout,
+		"trust_tier": cfg.TrustTier,
+	}
+
+	if err := extRepo.UpdateMCPServer(ctx, id, fields); err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return apperr.New(apperr.CodeNotFound, "mcp server not found")
+		}
+		return fmt.Errorf("MCPManager.Update: %w", err)
+	}
+
+	m.Remove(id)
+	if cfg.Enabled {
+		clientCfg := MCPClientConfig{
+			Transport:  MCPTransport(cfg.Transport),
+			Command:    cfg.Command,
+			Args:       make([]string, len(cfg.Args)),
+			Env:        cfg.Env,
+			URL:        strings.ReplaceAll(cfg.URL, "{DATA_DIR}", dataDir),
+			Timeout:    time.Duration(cfg.Timeout) * time.Second,
+			ServerName: cfg.Name,
+			Trusted:    cfg.TrustTier >= 3,
+		}
+		for i, a := range cfg.Args {
+			clientCfg.Args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
+		}
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := m.Add(bgCtx, id, cfg.Name, clientCfg); err != nil {
+				slog.Warn("mcp: connect server failed after update", "id", id, "err", err)
+			}
+		}()
+	}
+	return nil
+}
+
+// makeSamplingHandler 构建 MCP server 主动请求处理器，支持 sampling/createMessage 和 roots/list。
+func (m *MCPManager) makeSamplingHandler() ServerRequestHandler {
+	return func(ctx context.Context, method string, id int64, params json.RawMessage) (json.RawMessage, error) {
+		switch method {
+		case "sampling/createMessage":
+			if m.samplingProvider == nil {
+				return nil, apperr.New(apperr.CodeInternal, "sampling: no provider configured")
+			}
+			var req struct {
+				Messages  []types.Message `json:"messages"`
+				MaxTokens int             `json:"maxTokens"`
+			}
+			if err := json.Unmarshal(params, &req); err != nil {
+				return nil, apperr.Wrap(apperr.CodeInvalidInput, "sampling: invalid params", err)
+			}
+			opts := []types.InferOption{}
+			if req.MaxTokens > 0 {
+				opts = append(opts, types.WithMaxTokens(req.MaxTokens))
+			}
+			resp, err := m.samplingProvider.Infer(ctx, req.Messages, opts...)
+			if err != nil {
+				return nil, fmt.Errorf("MCPManager.makeSamplingHandler: %w", err)
+			}
+			result, _ := json.Marshal(map[string]any{
+				"role":    "assistant",
+				"content": map[string]any{"type": "text", "text": resp.Content},
+				"model":   resp.Model,
+			})
+			return result, nil
+		case "roots/list":
+			// 返回空 roots 列表（当前不暴露文件系统 roots）
+			result, _ := json.Marshal(map[string]any{"roots": []any{}})
+			return result, nil
+		default:
+			return nil, apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("mcp: unsupported server method %q", method))
+		}
+	}
+}

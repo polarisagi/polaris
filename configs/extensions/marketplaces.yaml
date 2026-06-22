@@ -1,0 +1,99 @@
+- id: polarisagi/polaris-plugins-official
+  name: Polaris Official Plugins
+  type: plugin
+  publisher: polarisagi
+  repo_url: https://github.com/polarisagi/polaris-plugins-official
+  description: Polaris 官方插件与扩展市场。包含核心的生存级外挂扩展以及官方维护的精选 MCP 与 Skills。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 0
+  created_at: "1970-01-01T00:00:00Z"
+- id: anthropic/claude-plugins-official
+  name: Anthropic Official Plugin Directory
+  type: plugin
+  publisher: anthropic
+  repo_url: https://github.com/anthropics/claude-plugins-official
+  description: Anthropic 官方 Claude Code Plugin 目录（55+ 精选插件）。目录结构：/plugins（Anthropic 自研）+ /external_plugins（审核第三方：Supabase/Firebase/Discord/Telegram 等）。每个 Plugin 捆绑 Skills + MCP Server + Hooks。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 10
+  created_at: "1970-01-01T00:00:00Z"
+- id: anthropic/skills
+  name: Anthropic Claude Skills
+  type: skill
+  publisher: anthropic
+  repo_url: https://github.com/anthropics/skills
+  description: Anthropic 官方 17 个 Claude Skills（开源，Apache 2.0）。文档类：pdf/docx/xlsx/pptx；设计类：brand-guidelines/canvas-design/theme-factory；工程类：claude-api-helper/mcp-builder/webapp-testing；创意类：algorithmic-art/internal-comms/slack-gifs。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 11
+  created_at: "1970-01-01T00:00:00Z"
+- id: anthropic/claude-plugins-community
+  name: Anthropic Community Plugins
+  type: plugin
+  publisher: anthropic
+  repo_url: https://github.com/anthropics/claude-plugins-community
+  description: Anthropic 官方整理的社区 Claude Code Plugin 目录。包含由社区开发者贡献并经官方汇总的第三方插件。
+  is_builtin: 1
+  trust_tier: 2
+  enabled: 1
+  sort_order: 12
+  created_at: "1970-01-01T00:00:00Z"
+- id: anthropic/knowledge-work-plugins
+  name: Anthropic Knowledge Work Plugins
+  type: plugin
+  publisher: anthropic
+  repo_url: https://github.com/anthropics/knowledge-work-plugins
+  description: Anthropic 官方发布的知识工作流（Knowledge Work）相关插件。包含各种高级的信息处理与工作流自动化插件。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 13
+  created_at: "1970-01-01T00:00:00Z"
+- id: openai/skills
+  name: OpenAI Skills Catalog
+  type: skill
+  publisher: openai
+  repo_url: https://github.com/openai/skills
+  description: OpenAI 官方 Skills 目录（agentskills.io 开放标准）。包含 11 个 curated 技能：cloudflare-deploy、develop-web-game、doc、gh-fix-ci、imagegen、jupyter-notebook、linear、netlify-deploy、notion-knowledge-capture、pdf、spreadsheet。跨平台兼容 Polaris。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 20
+  created_at: "1970-01-01T00:00:00Z"
+- id: google/skills
+  name: Google Agent Skills
+  type: skill
+  publisher: google
+  repo_url: https://github.com/google/skills
+  description: Google 官方 Cloud + Gemini Agent Skills 库（Google Cloud Next 2026 发布，Apache 2.0）。Cloud 技能：BigQuery、Cloud Run、Cloud SQL、AlloyDB、GKE、Firebase、Gemini API；架构技能：Security/Reliability/Cost-Optimization；Recipe：onboarding/authentication/network-observability。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 30
+  created_at: "1970-01-01T00:00:00Z"
+- id: openai/plugins
+  name: OpenAI Plugins
+  type: plugin
+  publisher: openai
+  repo_url: https://github.com/openai/plugins
+  description: OpenAI 官方 Plugins 仓库，包含官方维护的精选插件。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 25
+  created_at: "1970-01-01T00:00:00Z"
+- id: modelcontextprotocol/servers
+  name: Model Context Protocol Servers
+  type: mcp
+  publisher: modelcontextprotocol
+  repo_url: https://github.com/modelcontextprotocol/servers
+  description: Model Context Protocol (MCP) 官方开源服务器。提供基础的本地文件系统、SQLite 数据库、GitHub、Slack、Puppeteer 等工具的 MCP 实现。
+  is_builtin: 1
+  trust_tier: 3
+  enabled: 1
+  sort_order: 15
+  created_at: "1970-01-01T00:00:00Z"

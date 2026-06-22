@@ -1,0 +1,703 @@
+<div x-show="$store.nav.page === 'settings'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100" x-data="{ tab: 'providers', _chLoaded: false, _cfgLoaded: false }">
+  <div class="max-w-5xl mx-auto w-full flex flex-col">
+    <div class="mb-8 border-b border-base-300 pb-4">
+      <h2 class="text-2xl font-bold text-base-content mb-4" x-text="$store.i18n.t('nav_settings')"></h2>
+      
+      <!-- Tabs -->
+      <div role="tablist" class="tabs tabs-boxed">
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'providers' }" @click="tab = 'providers'" x-text="$store.i18n.t('nav_providers')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'channels' }" @click="tab = 'channels'; if (!_chLoaded) { $store.channels.load(); _chLoaded = true }" x-text="$store.i18n.t('nav_channels')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'config' }" @click="tab = 'config'; if (!_cfgLoaded) { $store.config.load(); _cfgLoaded = true }" x-text="$store.i18n.t('nav_config')"></a>
+        <a role="tab" class="tab" :class="{ 'tab-active font-bold': tab === 'computer' }" @click="tab = 'computer'" x-text="$store.i18n.t('nav_computer')"></a>
+      </div>
+    </div>
+
+    <!-- Providers Tab -->
+    <div x-show="tab === 'providers'" class="space-y-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('providers_title')"></h3>
+          <p class="text-sm text-base-content/60" x-text="$store.i18n.t('providers_subtitle')"></p>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="$store.onboard.start()" :title="$store.i18n.t('settings_wizard_title')" x-text="'⚙ ' + $store.i18n.t('settings_wizard')"></button>
+          <button class="btn btn-primary btn-sm shadow-sm" @click="$store.providers.openAdd()" x-text="'+ ' + $store.i18n.t('providers_add_btn')"></button>
+        </div>
+      </div>
+
+      <!-- Roles Configuration — 默认折叠，展示概要行 -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm" x-data="{ rolesExpanded: false }">
+        <div class="card-body p-4">
+          <!-- 折叠概要行 -->
+          <div class="flex items-center justify-between gap-4" x-show="!rolesExpanded">
+            <div class="flex flex-wrap items-center gap-3 text-sm">
+              <span class="font-bold text-base-content/70" x-text="$store.i18n.t('roles_title')"></span>
+              <template x-if="$store.modelRoles.defaultModelName">
+                <span class="badge badge-primary badge-outline gap-1">
+                  <span class="text-xs" x-text="$store.i18n.t('roles_default_label')"></span>
+                  <span class="font-mono text-xs" x-text="$store.modelRoles.defaultModelName"></span>
+                </span>
+              </template>
+              <template x-if="!$store.modelRoles.defaultModelName">
+                <span class="text-xs text-base-content/40" x-text="$store.i18n.t('roles_none_set')"></span>
+              </template>
+              <template x-if="$store.modelRoles.reasoningModelName">
+                <span class="badge badge-secondary badge-outline gap-1">
+                  <span class="text-xs" x-text="$store.i18n.t('roles_reasoning_label')"></span>
+                  <span class="font-mono text-xs" x-text="$store.modelRoles.reasoningModelName"></span>
+                </span>
+              </template>
+            </div>
+            <button class="btn btn-xs btn-ghost shrink-0" @click="rolesExpanded = true" x-text="$store.i18n.t('roles_edit')"></button>
+          </div>
+
+          <!-- 展开后：完整选择面板 -->
+          <div x-show="rolesExpanded" class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold" x-text="$store.i18n.t('roles_title')"></h4>
+              <button class="btn btn-xs btn-ghost" @click="rolesExpanded = false">✕</button>
+            </div>
+            <p class="text-xs text-base-content/60" x-text="$store.i18n.t('roles_subtitle')"></p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="form-control">
+                <label for="store-modelroles-defaultmodelid" class="label"><span class="label-text text-base-content/70" x-text="$store.i18n.t('roles_default')"></span></label>
+                <select id="store-modelroles-defaultmodelid" name="store-modelroles-defaultmodelid" class="select select-bordered w-full" x-model="$store.modelRoles.defaultModelID">
+                  <option value="" x-text="$store.i18n.t('roles_none')"></option>
+                  <template x-for="m in $store.providers.allModels" :key="m.id">
+                    <option :value="m.id" x-text="`[${m.providerName}] ${m.model_id}`"></option>
+                  </template>
+                </select>
+                <label for="store-modelroles-reasoningmodelid" class="label" x-show="$store.modelRoles.defaultModelName"><span class="label-text-alt text-base-content/70" x-text="$store.i18n.t('settings_current') + `: ${$store.modelRoles.defaultProviderName} / ${$store.modelRoles.defaultModelName}`"></span></label>
+              </div>
+              <div class="form-control">
+                <label for="store-modelroles-reasoningmodelid" class="label"><span class="label-text text-base-content/70" x-text="$store.i18n.t('roles_reasoning')"></span></label>
+                <select id="store-modelroles-reasoningmodelid" name="store-modelroles-reasoningmodelid" class="select select-bordered w-full" x-model="$store.modelRoles.reasoningModelID">
+                  <option value="" x-text="$store.i18n.t('roles_none')"></option>
+                  <template x-for="m in $store.providers.allModels" :key="m.id">
+                    <option :value="m.id" x-text="`[${m.providerName}] ${m.model_id}`"></option>
+                  </template>
+                </select>
+                <div class="label" x-show="$store.modelRoles.reasoningModelName"><span class="label-text-alt text-base-content/70" x-text="$store.i18n.t('settings_current') + `: ${$store.modelRoles.reasoningProviderName} / ${$store.modelRoles.reasoningModelName}`"></span></div>
+              </div>
+            </div>
+            <div class="flex justify-end">
+              <button class="btn btn-primary btn-sm" :disabled="$store.modelRoles.saving" @click="$store.modelRoles.save(); rolesExpanded = false">
+                <span x-show="$store.modelRoles.saving" class="loading loading-spinner loading-xs"></span>
+                <span x-show="!$store.modelRoles.saving" x-text="$store.i18n.t('roles_save')"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div x-show="$store.providers.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <div x-show="!$store.providers.loading && $store.providers.list.length === 0" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+        <div class="text-4xl mb-4 opacity-50">🤖</div>
+        <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('providers_empty_title')"></h3>
+        <p class="text-sm" x-text="$store.i18n.t('providers_empty_hint')"></p>
+      </div>
+
+      <div class="space-y-4" x-show="!$store.providers.loading && $store.providers.list.length > 0">
+        <template x-for="p in $store.providers.list" :key="p.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm transition-all" :class="{ 'opacity-60': !p.enabled, 'hover:border-primary': p.enabled }">
+            <div class="card-body p-5">
+              <div class="flex justify-between items-start mb-2">
+                <div>
+                  <span class="badge badge-primary badge-outline badge-sm font-bold uppercase mb-2" x-text="$store.providers.typeLabel(p.type)"></span>
+                  <h3 class="font-bold text-lg" x-text="p.name"></h3>
+                  <div class="flex flex-wrap gap-2 text-xs text-base-content/70 font-mono mt-1">
+                    <span x-show="p.base_url" x-text="p.base_url"></span>
+                    <span x-show="p.project_id" x-text="`${$store.i18n.t('settings_project')} ${p.project_id}`"></span>
+                  </div>
+                </div>
+                <input id="form-field-3" name="form-field-3" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="p.enabled" @change="$store.providers.toggle(p)">
+              </div>
+
+              <div class="mt-4 pt-4 border-t border-base-300">
+                <h4 class="text-xs font-bold text-base-content/70 uppercase tracking-wider mb-3" x-text="$store.i18n.t('nav_providers')"></h4>
+                <div x-show="!p.models || p.models.length === 0" class="text-xs text-base-content/60 mb-3" x-text="$store.i18n.t('settings_no_model')"></div>
+                
+                <div class="space-y-2 mb-3">
+                  <template x-for="m in (p.models || [])" :key="m.id">
+                    <div class="flex items-center gap-3 bg-base-100 p-2 px-3 rounded-box border border-base-300">
+                      <span class="font-mono text-sm flex-1 truncate" x-text="m.model_id"></span>
+                      <span class="badge badge-xs font-bold shrink-0" :class="m.role==='default' ? 'badge-primary' : m.role==='reasoning' ? 'badge-secondary' : 'badge-ghost'" x-text="$store.providers.roleLabel(m.role)"></span>
+                      <input id="form-field-4" name="form-field-4" type="checkbox" class="toggle toggle-sm" :class="m.enabled ? 'toggle-success' : 'toggle-ghost opacity-50'" :checked="m.enabled" @change="$store.providers.toggleModel(p.id, m)">
+                      <div class="flex gap-1 shrink-0">
+                        <button class="btn btn-xs btn-ghost text-base-content/70 hover:text-base-content" @click="$store.providers.openEditModel(p.id, m)" x-text="$store.i18n.t('providers_edit')"></button>
+                        <button class="btn btn-xs btn-ghost text-error/50 hover:text-error hover:bg-error/10" @click="$store.providers.removeModel(p.id, m.id)" x-text="$store.i18n.t('providers_delete')"></button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <button class="btn btn-xs btn-outline bg-base-100" @click="$store.providers.openAddModel(p.id)" x-text="$store.i18n.t('settings_add_model')"></button>
+              </div>
+
+              <div class="card-actions justify-end mt-4 pt-4 border-t border-base-300">
+                <button class="btn btn-sm btn-ghost" @click="$store.providers.test(p.id)" :disabled="$store.providers.testingID === p.id">
+                  <span x-show="$store.providers.testingID === p.id" class="loading loading-spinner loading-xs"></span>
+                  <span x-show="$store.providers.testingID !== p.id" x-text="$store.i18n.t('providers_test')"></span>
+                </button>
+                <button class="btn btn-sm btn-ghost" @click="$store.providers.openEdit(p)" x-text="$store.i18n.t('providers_edit')"></button>
+                <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="confirm($store.i18n.t('providers_confirm_del')) && $store.providers.remove(p.id)" x-text="$store.i18n.t('providers_delete')"></button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Channels Tab -->
+    <div x-show="tab === 'channels'" class="space-y-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('channels_title')"></h3>
+          <p class="text-sm text-base-content/60" x-text="$store.i18n.t('channels_subtitle')"></p>
+        </div>
+        <button class="btn btn-primary btn-sm shadow-sm" @click="$store.channels.openCreate()" x-text="$store.i18n.t('channels_add')"></button>
+      </div>
+
+      <div x-show="$store.channels.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <div x-show="!$store.channels.loading && $store.channels.list.length === 0" class="flex flex-col items-center justify-center py-20 text-base-content/60 bg-base-200/50 rounded-box border border-dashed border-base-300">
+        <div class="text-4xl mb-4 opacity-50">🔗</div>
+        <h3 class="text-lg font-bold text-base-content/80 mb-1" x-text="$store.i18n.t('channels_empty_title')"></h3>
+        <p class="text-sm" x-text="$store.i18n.t('channels_empty_hint')"></p>
+      </div>
+
+      <div class="space-y-4" x-show="!$store.channels.loading && $store.channels.list.length > 0">
+        <template x-for="c in $store.channels.list" :key="c.id">
+          <div class="card bg-base-200 border border-base-300 shadow-sm transition-all" :class="{ 'opacity-60': !c.enabled, 'hover:border-primary': c.enabled }">
+            <div class="card-body p-5">
+              <div class="flex justify-between items-start mb-2">
+                <div class="flex items-center gap-3">
+                  <span class="text-2xl" x-text="$store.channels.typeIcon(c.type)"></span>
+                  <div>
+                    <span class="badge badge-primary badge-outline badge-sm font-bold uppercase mb-1" x-text="$store.channels.typeLabel(c.type)"></span>
+                    <h3 class="font-bold text-lg" x-text="c.name"></h3>
+                  </div>
+                </div>
+                <input id="form-field-5" name="form-field-5" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="c.enabled" @change="$store.channels.toggle(c)" :aria-label="c.name + $store.i18n.t('settings_enable_status')">
+              </div>
+
+              <div x-show="c.webhook_url" class="mt-4 pt-4 border-t border-base-300">
+                <h4 class="text-xs font-bold text-base-content/70 mb-2">Webhook URL</h4>
+                <div class="flex items-center gap-2 bg-base-100 p-2 px-3 rounded-box border border-base-300 font-mono text-xs">
+                  <span class="flex-1 truncate text-base-content/80" x-text="c.webhook_url"></span>
+                  <button class="btn btn-xs btn-outline shrink-0" @click="$store.channels.copyWebhook(c.webhook_url)" x-text="$store.i18n.t('channels_copy_webhook')"></button>
+                </div>
+              </div>
+
+              <div class="card-actions justify-end mt-4 pt-4 border-t border-base-300">
+                <button class="btn btn-sm btn-ghost" @click="$store.channels.openEdit(c)" x-text="$store.i18n.t('channels_edit')"></button>
+                <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click="confirm($store.i18n.t('confirm_delete')) && $store.channels.remove(c.id)" x-text="$store.i18n.t('channels_delete')"></button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Config Tab -->
+    <div x-show="tab === 'config'" class="space-y-6 flex flex-col flex-1">
+      <div class="flex justify-between items-center">
+        <div>
+          <h3 class="font-bold text-lg" x-text="$store.i18n.t('config_title')"></h3>
+          <p class="text-sm text-base-content/60" x-text="$store.i18n.t('config_subtitle')"></p>
+        </div>
+        <div class="flex items-center gap-4">
+          <span class="text-xs text-base-content/70 font-mono" x-show="$store.config.path" x-text="`${$store.i18n.t('config_path')}: ${$store.config.path}`"></span>
+          <button class="btn btn-outline btn-sm shadow-sm bg-base-100" @click="$store.config.load()" :disabled="$store.config.loading">
+            <span x-show="$store.config.loading" class="loading loading-spinner loading-xs"></span>
+            <span x-show="!$store.config.loading" x-text="$store.i18n.t('config_reload')"></span>
+          </button>
+        </div>
+      </div>
+
+      <div x-show="$store.config.loading" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+        <span class="loading loading-spinner loading-lg mb-4 text-primary"></span>
+        <p x-text="$store.i18n.t('loading')"></p>
+      </div>
+
+      <div class="flex flex-col flex-1" x-show="!$store.config.loading && $store.config.raw">
+        <div class="flex justify-between items-center mb-2">
+          <span class="font-bold text-sm" x-text="$store.i18n.t('config_raw')"></span>
+          <button class="btn btn-xs btn-ghost" @click="$store.config.copy()" x-text="$store.config.copied ? $store.i18n.t('config_copied') : $store.i18n.t('config_copy')"></button>
+        </div>
+        <pre class="bg-base-200 border border-base-300 rounded-box p-4 overflow-auto font-mono text-sm leading-relaxed flex-1 text-base-content/80 shadow-inner" x-text="$store.config.raw"></pre>
+      </div>
+    </div>
+
+    <!-- Computer Control Tab -->
+    <div x-show="tab === 'computer'" class="space-y-6" x-data="{ store: $store.computer }">
+      <div>
+        <h3 class="font-bold text-lg" x-text="$store.i18n.t('computer_control_title')"></h3>
+        <p class="text-sm text-base-content/60" x-text="$store.i18n.t('computer_control_desc')"></p>
+      </div>
+
+      <!-- Permission Modes -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card-body p-6">
+          <h4 class="font-bold mb-4" x-text="$store.i18n.t('computer_mode_title')"></h4>
+          <div class="space-y-3">
+            <label class="flex items-start p-4 rounded-box border cursor-pointer transition-colors" :class="store.mode === 'default' ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-100 hover:bg-base-200'">
+              <input type="radio" name="settings_computer_mode" value="default" class="radio radio-primary radio-sm mt-1" :checked="store.mode === 'default'" @change="store.setMode('default')">
+              <div class="ml-4 flex-1">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-bold text-sm" x-text="$store.i18n.t('computer_mode_default')"></span>
+                  <span class="badge badge-success badge-sm badge-outline font-bold" x-text="$store.i18n.t('computer_mode_default_badge')"></span>
+                </div>
+                <p class="text-xs text-base-content/60" x-text="$store.i18n.t('computer_mode_default_desc')"></p>
+              </div>
+            </label>
+
+            <label class="flex items-start p-4 rounded-box border cursor-pointer transition-colors" :class="store.mode === 'auto_review' ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-100 hover:bg-base-200'">
+              <input type="radio" name="settings_computer_mode" value="auto_review" class="radio radio-primary radio-sm mt-1" :checked="store.mode === 'auto_review'" @change="store.setMode('auto_review')">
+              <div class="ml-4 flex-1">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-bold text-sm" x-text="$store.i18n.t('computer_mode_auto')"></span>
+                  <span class="badge badge-primary badge-sm badge-outline font-bold" x-text="$store.i18n.t('computer_mode_auto_badge')"></span>
+                </div>
+                <p class="text-xs text-base-content/60" x-text="$store.i18n.t('computer_mode_auto_desc')"></p>
+              </div>
+            </label>
+
+            <label class="flex items-start p-4 rounded-box border cursor-pointer transition-colors" :class="store.mode === 'full_access' ? 'border-error bg-error/5' : 'border-base-300 bg-base-100 hover:bg-base-200'">
+              <input type="radio" name="settings_computer_mode" value="full_access" class="radio radio-error radio-sm mt-1" :checked="store.mode === 'full_access'" @change="store.setMode('full_access')">
+              <div class="ml-4 flex-1">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-bold text-sm text-error" x-text="$store.i18n.t('computer_mode_full')"></span>
+                  <span class="badge badge-error badge-sm animate-pulse font-bold" x-text="$store.i18n.t('computer_mode_full_badge')"></span>
+                </div>
+                <p class="text-xs text-base-content/60" x-text="$store.i18n.t('computer_mode_full_desc')"></p>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Allowed Apps -->
+      <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card-body p-6">
+          <h4 class="font-bold" x-text="$store.i18n.t('computer_apps_title')"></h4>
+          <p class="text-xs text-base-content/60 mb-6" x-text="$store.i18n.t('computer_apps_desc')"></p>
+          
+          <div class="space-y-4">
+            <div class="flex items-center justify-between p-4 bg-base-100 rounded-box border border-base-300">
+              <div>
+                <div class="font-bold text-sm" x-text="$store.i18n.t('computer_any_app')"></div>
+                <div class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('computer_any_app_desc')"></div>
+              </div>
+              <input id="form-field-6" name="form-field-6" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="store.anyAppEnabled" @change="store.toggleAnyApp()" @click.stop>
+            </div>
+
+            <div class="flex items-center justify-between p-4 bg-base-100 rounded-box border border-base-300">
+              <div>
+                <div class="font-bold text-sm" x-text="$store.i18n.t('computer_chrome')"></div>
+                <div class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('computer_chrome_desc')"></div>
+              </div>
+              <input id="form-field-7" name="form-field-7" type="checkbox" class="toggle toggle-primary toggle-sm" :checked="store.chromeEnabled" @change="store.toggleChrome()" @click.stop>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 添加 AI 厂商 Modal（统一入口：内置目录选择 + 自定义手动配置）-->
+    <dialog class="modal" id="add_provider_modal" x-effect="$store.providers.showAddModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showAddModal = false">
+      <div class="modal-box bg-base-200 border border-base-300 w-11/12 max-w-3xl">
+        <h3 class="font-bold text-lg mb-1" x-text="$store.i18n.t('add_provider_title')"></h3>
+        <p class="text-sm text-base-content/60 mb-4" x-text="$store.i18n.t('add_provider_subtitle')"></p>
+
+        <!-- 加载中 -->
+        <div x-show="$store.providers.catalogLoading" class="flex justify-center py-10">
+          <span class="loading loading-spinner loading-md text-primary"></span>
+        </div>
+
+        <!-- 厂商卡片网格 -->
+        <div x-show="!$store.providers.catalogLoading" class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4 max-h-52 overflow-y-auto pr-1">
+          <template x-for="entry in $store.providers.catalog" :key="entry.id">
+            <button
+              type="button"
+              class="flex flex-col items-start p-3 rounded-box border text-left transition-all"
+              :class="$store.providers.addSelected?.id === entry.id
+                ? 'border-primary bg-primary/10 shadow-sm'
+                : 'border-base-300 bg-base-100 hover:border-primary/50 hover:bg-base-200'"
+              @click="$store.providers.selectAddEntry(entry)">
+              <span class="font-bold text-sm truncate w-full" x-text="entry.display_name"></span>
+              <span class="text-xs text-base-content/50 mt-0.5" x-text="entry.is_local ? '本地无需 API Key' : entry.models.length + ' 个预设模型'"></span>
+            </button>
+          </template>
+          <!-- 自定义选项 -->
+          <button
+            type="button"
+            class="flex flex-col items-start p-3 rounded-box border text-left transition-all"
+            :class="$store.providers.addSelected?.id === '__custom__'
+              ? 'border-secondary bg-secondary/10 shadow-sm'
+              : 'border-base-300 bg-base-100 hover:border-secondary/50 hover:bg-base-200'"
+            @click="$store.providers.selectAddEntry({id:'__custom__', display_name:'自定义', models:[], is_local:false})">
+            <span class="font-bold text-sm">🔧 自定义</span>
+            <span class="text-xs text-base-content/50 mt-0.5">手动填写 URL 和 API Key</span>
+          </button>
+        </div>
+
+        <!-- 选中内置厂商后的配置区 -->
+        <template x-if="$store.providers.addSelected && $store.providers.addSelected.id !== '__custom__'">
+          <div class="space-y-4 border-t border-base-300 pt-4">
+            <!-- 模型预览 -->
+            <div x-show="$store.providers.addSelected.models.length > 0">
+              <p class="text-xs font-bold text-base-content/60 uppercase tracking-wider mb-2" x-text="$store.i18n.t('catalog_models_preview')"></p>
+              <div class="flex flex-wrap gap-1.5">
+                <template x-for="m in $store.providers.addSelected.models" :key="m.id">
+                  <span class="badge badge-sm gap-1 font-mono"
+                    :class="m.recommended_role === 'reasoning' ? 'badge-secondary badge-outline' : m.recommended_role === 'default' ? 'badge-primary badge-outline' : 'badge-ghost'">
+                    <span x-text="m.display_name"></span>
+                    <span class="opacity-60 text-xs" x-text="{'default':'· 对话','reasoning':'· 推理','general':'· 通用'}[m.recommended_role] || ''"></span>
+                  </span>
+                </template>
+              </div>
+            </div>
+            <div x-show="$store.providers.addSelected.models.length === 0 && !$store.providers.addSelected.is_local" class="text-xs text-base-content/50" x-text="$store.i18n.t('catalog_no_models')"></div>
+
+            <!-- API Key（本地厂商隐藏） -->
+            <div class="form-control w-full" x-show="!$store.providers.addSelected.is_local">
+              <label class="label">
+                <span class="label-text font-bold" x-text="$store.i18n.t('catalog_api_key_label')"></span>
+              </label>
+              <input id="add-modal-api-key" name="add-modal-api-key" type="password" class="input input-bordered w-full"
+                x-model="$store.providers.addForm.api_key" placeholder="sk-..." autocomplete="off"
+                @keydown.enter.prevent="$store.providers.saveAdd()" />
+            </div>
+            <div x-show="$store.providers.addSelected.is_local" class="text-xs text-success font-bold p-2 bg-success/10 rounded border border-success/30" x-text="$store.i18n.t('catalog_local_no_key')"></div>
+
+            <!-- 高级选项 -->
+            <details class="text-sm">
+              <summary class="cursor-pointer text-base-content/60 hover:text-base-content select-none" x-text="$store.i18n.t('catalog_advanced')"></summary>
+              <div class="space-y-3 mt-3">
+                <div class="form-control w-full">
+                  <label class="label">
+                    <span class="label-text font-bold" x-text="$store.i18n.t('catalog_name_label')"></span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_name_hint')"></span>
+                  </label>
+                  <input id="add-modal-name" name="add-modal-name" type="text" class="input input-bordered input-sm w-full"
+                    x-model="$store.providers.addForm.name" :placeholder="$store.providers.addSelected.display_name" />
+                </div>
+                <div class="form-control w-full" x-show="$store.providers.addSelected.default_base_url">
+                  <label class="label">
+                    <span class="label-text font-bold" x-text="$store.i18n.t('catalog_base_url_label')"></span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_base_url_hint')"></span>
+                  </label>
+                  <input id="add-modal-base-url" name="add-modal-base-url" type="url" class="input input-bordered input-sm w-full"
+                    x-model="$store.providers.addForm.base_url" :placeholder="$store.providers.addSelected.default_base_url" />
+                </div>
+              </div>
+            </details>
+          </div>
+        </template>
+
+        <!-- 自定义手动配置区 -->
+        <template x-if="$store.providers.addSelected?.id === '__custom__'">
+          <div class="space-y-4 border-t border-base-300 pt-4">
+            <div class="form-control w-full">
+              <label for="add-custom-type" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_type')"></span></label>
+              <select id="add-custom-type" name="add-custom-type" class="select select-bordered w-full" x-model="$store.providers.addForm.type">
+                <option value="openai_compat" x-text="$store.i18n.t('settings_openai_compat')"></option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="google_agent_platform">Google Agent Platform</option>
+                <option value="ollama" x-text="$store.i18n.t('settings_ollama')"></option>
+              </select>
+            </div>
+            <div class="form-control w-full">
+              <label for="add-custom-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_name')"></span></label>
+              <input id="add-custom-name" name="add-custom-name" type="text" class="input input-bordered w-full"
+                x-model="$store.providers.addForm.name" :placeholder="$store.i18n.t('providers_name_hint')" />
+            </div>
+            <template x-if="$store.providers.addForm.type === 'openai_compat' || $store.providers.addForm.type === 'ollama'">
+              <div class="form-control w-full">
+                <label for="add-custom-base-url" class="label"><span class="label-text font-bold">Base URL</span></label>
+                <input id="add-custom-base-url" name="add-custom-base-url" type="url" class="input input-bordered w-full"
+                  x-model="$store.providers.addForm.base_url"
+                  :placeholder="$store.providers.addForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com'" />
+              </div>
+            </template>
+            <template x-if="$store.providers.addForm.type !== 'ollama'">
+              <div class="form-control w-full">
+                <label for="add-custom-api-key" class="label"><span class="label-text font-bold">API Key</span></label>
+                <input id="add-custom-api-key" name="add-custom-api-key" type="password" class="input input-bordered w-full"
+                  x-model="$store.providers.addForm.api_key"
+                  :placeholder="{'anthropic':'sk-ant-...','google_agent_platform':'AIza...'}[$store.providers.addForm.type] || 'sk-...'" />
+              </div>
+            </template>
+            <template x-if="$store.providers.addForm.type === 'google_agent_platform'">
+              <div class="space-y-3">
+                <div class="form-control w-full">
+                  <label for="add-custom-project" class="label">
+                    <span class="label-text font-bold">GCP Project ID</span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_geap_optional')"></span>
+                  </label>
+                  <input id="add-custom-project" name="add-custom-project" type="text" class="input input-bordered w-full"
+                    x-model="$store.providers.addForm.project_id" placeholder="my-project-123" />
+                </div>
+                <div class="form-control w-full">
+                  <label for="add-custom-location" class="label">
+                    <span class="label-text font-bold">Region / Location</span>
+                    <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_us_central1')"></span>
+                  </label>
+                  <input id="add-custom-location" name="add-custom-location" type="text" class="input input-bordered w-full"
+                    x-model="$store.providers.addForm.location" placeholder="us-central1" />
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.providers.showAddModal = false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary"
+            :disabled="$store.providers.addSaving
+              || !$store.providers.addSelected
+              || ($store.providers.addSelected.id !== '__custom__' && !$store.providers.addSelected.is_local && !$store.providers.addForm.api_key)
+              || ($store.providers.addSelected.id === '__custom__' && !$store.providers.addForm.name)"
+            @click="$store.providers.saveAdd()">
+            <span x-show="$store.providers.addSaving" class="loading loading-spinner loading-xs"></span>
+            <span x-text="$store.providers.addSaving ? $store.i18n.t('catalog_saving') : $store.i18n.t('catalog_save')"></span>
+          </button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.providers.showAddModal = false"></div>
+    </dialog>
+
+    <!-- Provider 编辑 Modal（用于编辑已有厂商，保持原有功能）-->
+    <dialog class="modal" id="provider_modal" x-effect="$store.providers.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showModal = false">
+      <div class="modal-box bg-base-200 border border-base-300">
+        <h3 class="font-bold text-lg mb-4" x-text="$store.i18n.t('providers_modal_edit')"></h3>
+        <div class="space-y-4">
+          <div class="form-control w-full">
+            <label for="store-providers-form-type" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_type')"></span></label>
+            <select id="store-providers-form-type" name="store-providers-form-type" class="select select-bordered w-full" x-model="$store.providers.form.type">
+              <option value="openai_compat" x-text="$store.i18n.t('settings_openai_compat')"></option>
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="google_agent_platform">Google Agent Platform</option>
+              <option value="ollama" x-text="$store.i18n.t('settings_ollama')"></option>
+            </select>
+          </div>
+          <div class="form-control w-full">
+            <label for="store-providers-form-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_name')"></span></label>
+            <input id="store-providers-form-name" name="store-providers-form-name" type="text" class="input input-bordered w-full" x-model="$store.providers.form.name" :placeholder="$store.i18n.t('providers_name_hint')" />
+          </div>
+          
+          <template x-if="$store.providers.form.type === 'openai_compat' || $store.providers.form.type === 'ollama'">
+            <div class="space-y-4">
+              <div class="form-control w-full">
+                <label for="store-providers-form-base-url" class="label"><span class="label-text font-bold">Base URL</span></label>
+                <input id="store-providers-form-base-url" name="store-providers-form-base-url" type="url" class="input input-bordered w-full" x-model="$store.providers.form.base_url" :placeholder="$store.providers.form.type === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com'" />
+              </div>
+              <div class="form-control w-full" x-show="$store.providers.form.type !== 'ollama'">
+                <label for="store-providers-form-api-key" class="label"><span class="label-text font-bold">API Key</span></label>
+                <input id="store-providers-form-api-key" name="store-providers-form-api-key" type="password" class="input input-bordered w-full" x-model="$store.providers.form.api_key" placeholder="sk-..." />
+              </div>
+            </div>
+          </template>
+
+          <template x-if="$store.providers.form.type === 'anthropic'">
+            <div class="form-control w-full">
+              <label for="store-providers-form-api-key" class="label"><span class="label-text font-bold">API Key</span></label>
+              <input id="store-providers-form-api-key" name="store-providers-form-api-key" type="password" class="input input-bordered w-full" x-model="$store.providers.form.api_key" placeholder="sk-ant-..." />
+            </div>
+          </template>
+
+          <template x-if="$store.providers.form.type === 'google_agent_platform'">
+            <div class="space-y-4">
+              <div class="form-control w-full">
+                <label for="store-providers-form-api-key" class="label"><span class="label-text font-bold">API Key</span></label>
+                <input id="store-providers-form-api-key" name="store-providers-form-api-key" type="password" class="input input-bordered w-full" x-model="$store.providers.form.api_key" placeholder="AI Studio / GEAP API Key" />
+              </div>
+              <div class="form-control w-full">
+                <label for="store-providers-form-project-id" class="label">
+                  <span class="label-text font-bold">GCP Project ID</span>
+                  <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_geap_optional')"></span>
+                </label>
+                <input id="store-providers-form-project-id" name="store-providers-form-project-id" type="text" class="input input-bordered w-full" x-model="$store.providers.form.project_id" placeholder="my-project-123" />
+              </div>
+              <div class="form-control w-full">
+                <label for="store-providers-form-location" class="label">
+                  <span class="label-text font-bold">Region / Location</span>
+                  <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_us_central1')"></span>
+                </label>
+                <input id="store-providers-form-location" name="store-providers-form-location" type="text" class="input input-bordered w-full" x-model="$store.providers.form.location" placeholder="us-central1" />
+              </div>
+            </div>
+          </template>
+
+          <div class="form-control mt-4">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input id="store-providers-form-enabled" name="store-providers-form-enabled" type="checkbox" class="toggle toggle-primary" x-model="$store.providers.form.enabled">
+              <span class="label-text font-bold" x-text="$store.i18n.t('providers_enabled')"></span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.providers.showModal=false" x-text="$store.i18n.t('providers_cancel')"></button>
+          <button class="btn btn-primary" @click="$store.providers.save()" x-text="$store.i18n.t('providers_save')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.providers.showModal=false"></div>
+    </dialog>
+
+    <!-- Provider Model Modal (Ported Over from custom modal logic, just styled with DaisyUI) -->
+    <!-- You can find original functionality preserved below -->
+    <dialog class="modal" id="model_modal" x-effect="$store.providers.showModelModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.providers.showModelModal = false">
+      <div class="modal-box bg-base-200 border border-base-300">
+        <h3 class="font-bold text-lg mb-4" x-text="$store.providers.modelEditMode === 'create' ? $store.i18n.t('settings_add_model') : $store.i18n.t('settings_edit_model')"></h3>
+        <div class="space-y-4">
+          <div class="form-control w-full">
+            <label for="store-providers-modelform-model-id" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('providers_model_id')"></span></label>
+            <input id="store-providers-modelform-model-id" name="store-providers-modelform-model-id" type="text" class="input input-bordered w-full" x-model="$store.providers.modelForm.model_id" :placeholder="$store.i18n.t('settings_ph_model_id')" />
+            <div class="label"><span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_model_doc')"></span></div>
+          </div>
+          <div class="form-control w-full">
+            <label for="store-providers-modelform-name" class="label">
+              <span class="label-text font-bold" x-text="$store.i18n.t('providers_name')"></span>
+              <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_name_optional')"></span>
+            </label>
+            <input id="store-providers-modelform-name" name="store-providers-modelform-name" type="text" class="input input-bordered w-full" x-model="$store.providers.modelForm.name" :placeholder="$store.i18n.t('settings_ph_model_name')" />
+          </div>
+          <div class="form-control w-full">
+            <label for="store-providers-modelform-role" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('settings_route_role')"></span></label>
+            <select id="store-providers-modelform-role" name="store-providers-modelform-role" class="select select-bordered w-full" x-model="$store.providers.modelForm.role">
+              <option value="general" x-text="$store.i18n.t('settings_role_general')"></option>
+              <option value="default" x-text="$store.i18n.t('settings_role_chat')"></option>
+              <option value="reasoning" x-text="$store.i18n.t('settings_role_reasoning')"></option>
+            </select>
+            <label for="store-providers-modelform-enabled" class="label"><span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_role_unique')"></span></label>
+          </div>
+          <div class="form-control mt-4">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input id="store-providers-modelform-enabled" name="store-providers-modelform-enabled" type="checkbox" class="toggle toggle-primary" x-model="$store.providers.modelForm.enabled">
+              <span class="label-text font-bold" x-text="$store.i18n.t('providers_enabled')"></span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.providers.showModelModal=false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary" @click="$store.providers.saveModel()" x-text="$store.i18n.t('save')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.providers.showModelModal=false"></div>
+    </dialog>
+
+    <!-- Channel Edit Modal -->
+    <dialog class="modal" id="channel_modal" x-effect="$store.channels.showModal ? (!$el.open && $el.showModal()) : $el.close()" @close="$store.channels.showModal = false">
+      <div class="modal-box bg-base-200 border border-base-300">
+        <h3 class="font-bold text-lg mb-4" x-text="$store.channels.editMode === 'create' ? $store.i18n.t('channels_add') : $store.i18n.t('channels_edit')"></h3>
+        <div class="space-y-4">
+          <div class="form-control w-full">
+            <label for="store-channels-form-type" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('channels_type')"></span></label>
+            <select id="store-channels-form-type" name="store-channels-form-type" class="select select-bordered w-full" x-model="$store.channels.form.type" @change="$store.channels.form.config={}">
+              <option value="telegram">✈ Telegram</option>
+              <option value="feishu" x-text="'🪁 ' + $store.i18n.t('channels_feishu')"></option>
+              <option value="slack"># Slack</option>
+              <option value="discord">🎮 Discord</option>
+              <option value="webhook" x-text="'⚡ ' + $store.i18n.t('channels_webhook')"></option>
+            </select>
+          </div>
+          <div class="form-control w-full">
+            <label for="store-channels-form-name" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('channels_name')"></span></label>
+            <input id="store-channels-form-name" name="store-channels-form-name" type="text" class="input input-bordered w-full" x-model="$store.channels.form.name" :placeholder="$store.i18n.t('settings_ph_channel_name')" />
+          </div>
+
+          <!-- Channel specific fields -->
+          <template x-if="$store.channels.form.type === 'telegram'">
+            <div class="space-y-4">
+              <div class="form-control w-full">
+                <label for="form-field-8" class="label"><span class="label-text font-bold">Bot Token</span></label>
+                <input id="form-field-8" name="form-field-8" type="password" class="input input-bordered w-full" placeholder="123456:ABC-DEF1234..." :value="$store.channels.form.config.bot_token || ''" @input="$store.channels.form.config.bot_token = $event.target.value" />
+              </div>
+              <div class="form-control w-full">
+                <label for="form-field-9" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('channels_allow_users')"></span></label>
+                <input id="form-field-9" name="form-field-9" type="text" class="input input-bordered w-full" placeholder="123456789,987654321" :value="$store.channels.form.config.allowed_user_ids || ''" @input="$store.channels.form.config.allowed_user_ids = $event.target.value" />
+              </div>
+              <div class="text-xs text-base-content/50 p-3 bg-base-100 rounded border border-base-300">
+                <span x-text="$store.i18n.t('channels_feishu_hint')"></span> <strong>Long Polling</strong> <span x-text="$store.i18n.t('channels_feishu_hint2')"></span>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="$store.channels.form.type === 'feishu'">
+            <div class="space-y-4">
+              <div class="form-control w-full">
+                <label for="form-field-10" class="label"><span class="label-text font-bold">App ID</span></label>
+                <input id="form-field-10" name="form-field-10" type="text" class="input input-bordered w-full" placeholder="cli_..." :value="$store.channels.form.config.app_id || ''" @input="$store.channels.form.config.app_id = $event.target.value" />
+              </div>
+              <div class="form-control w-full">
+                <label for="form-field-11" class="label"><span class="label-text font-bold">App Secret</span></label>
+                <input id="form-field-11" name="form-field-11" type="password" class="input input-bordered w-full" placeholder="App Secret" :value="$store.channels.form.config.app_secret || ''" @input="$store.channels.form.config.app_secret = $event.target.value" />
+              </div>
+              <div class="form-control w-full">
+                <label for="form-field-12" class="label"><span class="label-text font-bold">Verification Token</span></label>
+                <input id="form-field-12" name="form-field-12" type="text" class="input input-bordered w-full" placeholder="Verification Token" :value="$store.channels.form.config.verification_token || ''" @input="$store.channels.form.config.verification_token = $event.target.value" />
+              </div>
+              <div class="form-control w-full">
+                <label for="form-field-13" class="label"><span class="label-text font-bold" x-text="$store.i18n.t('channels_encrypt_key')"></span></label>
+                <input id="form-field-13" name="form-field-13" type="password" class="input input-bordered w-full" :placeholder="$store.i18n.t('settings_ph_encrypt')" :value="$store.channels.form.config.encrypt_key || ''" @input="$store.channels.form.config.encrypt_key = $event.target.value" />
+              </div>
+            </div>
+          </template>
+
+          <template x-if="$store.channels.form.type === 'slack'">
+            <div class="space-y-4">
+              <div class="form-control w-full">
+                <label for="form-field-8" class="label"><span class="label-text font-bold">Bot Token</span></label>
+                <input id="form-field-14" name="form-field-14" type="password" class="input input-bordered w-full" placeholder="xoxb-..." :value="$store.channels.form.config.bot_token || ''" @input="$store.channels.form.config.bot_token = $event.target.value" />
+              </div>
+              <div class="form-control w-full">
+                <label for="form-field-15" class="label"><span class="label-text font-bold">Signing Secret</span></label>
+                <input id="form-field-15" name="form-field-15" type="password" class="input input-bordered w-full" placeholder="Signing Secret" :value="$store.channels.form.config.signing_secret || ''" @input="$store.channels.form.config.signing_secret = $event.target.value" />
+              </div>
+            </div>
+          </template>
+
+          <template x-if="$store.channels.form.type === 'discord'">
+            <div class="space-y-4">
+              <div class="form-control w-full">
+                <label for="form-field-8" class="label"><span class="label-text font-bold">Bot Token</span></label>
+                <input id="form-field-16" name="form-field-16" type="password" class="input input-bordered w-full" placeholder="Discord Bot Token" :value="$store.channels.form.config.bot_token || ''" @input="$store.channels.form.config.bot_token = $event.target.value" />
+              </div>
+              <div class="form-control w-full">
+                <label for="form-field-17" class="label"><span class="label-text font-bold">Public Key</span></label>
+                <input id="form-field-17" name="form-field-17" type="text" class="input input-bordered w-full" placeholder="Application Public Key" :value="$store.channels.form.config.public_key || ''" @input="$store.channels.form.config.public_key = $event.target.value" />
+              </div>
+            </div>
+          </template>
+
+          <template x-if="$store.channels.form.type === 'webhook'">
+            <div class="text-xs text-base-content/50 p-3 bg-base-100 rounded border border-base-300">
+              <span x-text="$store.i18n.t('channels_webhook_hint')"></span> <code>{"content":"消息文本"}</code> <span x-text="$store.i18n.t('channels_webhook_hint2')"></span>
+            </div>
+          </template>
+
+          <div class="form-control mt-4">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input id="store-channels-form-enabled" name="store-channels-form-enabled" type="checkbox" class="toggle toggle-primary" x-model="$store.channels.form.enabled">
+              <span class="label-text font-bold" x-text="$store.i18n.t('settings_enable')"></span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="$store.channels.showModal=false" x-text="$store.i18n.t('cancel')"></button>
+          <button class="btn btn-primary" @click="$store.channels.save()" x-text="$store.i18n.t('save')"></button>
+        </div>
+      </div>
+      <div class="modal-backdrop" @click="$store.channels.showModal=false"></div>
+    </dialog>
+
+  </div>
+</div>

@@ -1,0 +1,55 @@
+// Blackboard payload schema — M8 多 Agent 协调黑板消息格式。
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md
+syntax = "proto3";
+
+package polaris.protocol;
+
+option go_package = "github.com/polarisagi/polaris/internal/protocol/pb";
+
+// BlackboardEvent 是黑板上发布的结构化事件。
+// 禁止 P2P 自然语言协调——自然语言仅作 payload content。
+message BlackboardEvent {
+  string type = 1;             // "task_posted" | "claimed" | "reaped" | "completed" | "failed" |
+                               // "agent_registered" | "agent_deregistered" | "co_evolution" | "topology_change"
+  string task_id = 2;
+  string agent_id = 3;
+  bytes payload = 4;
+  int64 timestamp = 5;         // Unix microseconds
+  bytes trace_context = 6;     // OTel W3C Trace Context
+}
+
+// TaskIntent 是发布到黑板的任务意图。
+message TaskIntent {
+  string goal = 1;
+  string task_type = 2;
+  int32 priority = 3;          // 0=最高
+  repeated string required_capabilities = 4;
+  bytes input = 5;             // JSON 序列化输入
+  int64 deadline = 6;          // Unix microseconds
+}
+
+// TaskResult 是任务完成结果。
+message TaskResult {
+  string task_id = 1;
+  string agent_id = 2;
+  bool success = 3;
+  bytes output = 4;
+  string error = 5;
+  int64 latency_ms = 6;
+  int32 tokens_consumed = 7;
+}
+
+// AgentCard 是 Agent 能力声明（A2A v0.3 兼容格式）。
+message AgentCard {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  repeated string skills = 4;
+  repeated string tools = 5;
+  repeated string models = 6;
+  int32 max_concurrent = 7;
+  int32 trust_level = 8;
+  int32 sandbox_tier = 9;
+  string endpoint = 10;
+  bytes public_key = 11;       // Ed25519
+}

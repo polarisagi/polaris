@@ -1,0 +1,31 @@
+package fsm
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/pkg/types"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+)
+
+// CognitiveSearcher L2 语义检索接口（消费方定义，防止包循环）。
+
+type CogResult struct {
+	DocID   string
+	Snippet string
+	Score   float32
+}
+
+type CognitiveSearcher interface {
+	FTSSearch(query string, k int) ([]CogResult, error)
+	VecKNN(embedding []float32, k int) ([]CogResult, error)
+}
+
+// ContextBuilder 接口由使用状态机的客户端（如 agent）实现，
+// 用于在状态机执行时注入 Prompt 上下文组装能力。
+type ContextBuilder interface {
+	BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error)
+	BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry, cognitive CognitiveSearcher) ([]types.Message, error)
+	BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]types.Message, error)
+	BuildToolListSection(tools protocol.ToolRegistry) string
+}

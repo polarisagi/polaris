@@ -1,0 +1,1 @@
+{"title": "notebook_edit", "type": "object", "properties": {"path": {"type": "string", "description": "The path to the notebook file."}, "cell_index": {"type": "integer", "description": "The index of the cell to edit."}, "source": {"type": "string", "description": "The new source content for the cell."}}, "required": ["path", "cell_index", "source"]}

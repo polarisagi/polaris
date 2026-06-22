@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The ID of the offloaded tool output."
+    }
+  },
+  "required": ["id"]
+}

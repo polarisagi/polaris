@@ -1,0 +1,4 @@
+{
+  "_comment": "Test_inv_M11_05_NoRawNetDial 豁免列表。\n清理方向：safe_dialer.go 是 SafeDialer 唯一实现，内部合法使用 net.Dialer{}.DialContext（struct method，非包函数）。此豁免长期有效，不应删除。",
+  "pkg/substrate/security/safe_dialer.go": true
+}
