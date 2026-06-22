@@ -193,7 +193,7 @@ func fetchChecksumFromURL(ctx context.Context, client *http.Client, checksumURL,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("checksum server returned %d", resp.StatusCode)
+		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("fetchChecksumFromURL: server returned %d", resp.StatusCode))
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 上限 1MB
 	if err != nil {
@@ -205,7 +205,7 @@ func fetchChecksumFromURL(ctx context.Context, client *http.Client, checksumURL,
 			return fields[0], nil
 		}
 	}
-	return "", fmt.Errorf("filename %q not found in checksums", filename)
+	return "", apperr.New(apperr.CodeNotFound, fmt.Sprintf("fetchChecksumFromURL: filename %q not found in checksums", filename))
 }
 
 // Install auto-configures the downloaded MCP server into a local plugin layout.

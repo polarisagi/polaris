@@ -52,7 +52,7 @@ func extractTar(tr *tar.Reader, destDir string, mapper func(string) (string, boo
 		// 防路径遍历：确保目标路径在 destDir 内
 		cleanDest := filepath.Clean(destPath)
 		if !strings.HasPrefix(cleanDest+string(os.PathSeparator), filepath.Clean(destDir)+string(os.PathSeparator)) {
-			return fmt.Errorf("extractTar: path traversal detected: %q", hdr.Name)
+			return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("extractTar: path traversal detected: %q", hdr.Name))
 		}
 		if err := writeFromReader(tr, destPath, os.FileMode(hdr.Mode)|0o600); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "downloader: write "+destPath+" failed", err)

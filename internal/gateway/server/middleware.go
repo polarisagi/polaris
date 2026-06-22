@@ -358,7 +358,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 	expectedKey := os.Getenv("POLARIS_API_KEY")
 	if expectedKey == "" {
-		slog.Warn("http: POLARIS_API_KEY not set — all /v1/ endpoints are unauthenticated; admin write paths restricted to localhost only")
+		slog.Warn("http: POLARIS_API_KEY not set — non-localhost requests will be rejected with 403; set POLARIS_API_KEY to enable remote access")
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
