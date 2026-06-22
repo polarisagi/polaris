@@ -217,7 +217,7 @@ func (h *ProviderHandler) HandleTestProvider(w http.ResponseWriter, r *http.Requ
 		modelID = models[0].ModelID
 	}
 
-	ok, msg := probeProvider(p.Type, p.BaseURL, p.APIKey, modelID, p.ProjectID, p.Location)
+	ok, msg := probeProvider(r.Context(), h.HTTPClient, p.Type, p.BaseURL, p.APIKey, modelID, p.ProjectID, p.Location)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": ok, "message": msg})
 }
@@ -397,15 +397,13 @@ func (h *ProviderHandler) HandleSetModelRoles(w http.ResponseWriter, r *http.Req
 
 // ── probe ─────────────────────────────────────────────────────────────────────
 
-func probeProvider(typ, baseURL, apiKey, modelID, projectID, location string) (bool, string) { //nolint:gocyclo
-	client := &http.Client{Timeout: 10 * time.Second}
-
+func probeProvider(ctx context.Context, client *http.Client, typ, baseURL, apiKey, modelID, projectID, location string) (bool, string) { //nolint:gocyclo
 	switch typ {
 	case "openai_compat", "ollama":
 		if baseURL == "" {
 			baseURL = "https://api.openai.com"
 		}
-		req, _ := http.NewRequest("GET", strings.TrimRight(baseURL, "/")+"/v1/models", nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+"/v1/models", nil)
 		if apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 		}
@@ -423,7 +421,7 @@ func probeProvider(typ, baseURL, apiKey, modelID, projectID, location string) (b
 		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
 
 	case "anthropic":
-		req, _ := http.NewRequest("GET", "https://api.anthropic.com/v1/models", nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.anthropic.com/v1/models", nil)
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		resp, err := client.Do(req)
@@ -468,7 +466,7 @@ func probeProvider(typ, baseURL, apiKey, modelID, projectID, location string) (b
 				model, apiKey)
 		}
 		reqBody := `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}],"generationConfig":{"maxOutputTokens":1}}`
-		req, _ := http.NewRequest("POST", endpoint, bytes.NewBufferString(reqBody))
+		req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBufferString(reqBody))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
