@@ -441,7 +441,7 @@ func (h *SysAdminHandler) verifyWebhookSource(w http.ResponseWriter, r *http.Req
 	case "whatsapp":
 		return h.verifyWhatsAppWebhook(w, r, cfg, body)
 	case "teams":
-		return h.verifyTeamsWebhook(w, r)
+		return h.verifyTeamsWebhook(w, r, cfg, body)
 	case "telegram":
 		return h.verifyTelegramWebhook(w, r, cfg)
 	case "slack":
@@ -504,24 +504,42 @@ func (h *SysAdminHandler) verifyWhatsAppWebhook(w http.ResponseWriter, r *http.R
 	return true
 }
 
-func (h *SysAdminHandler) verifyTeamsWebhook(w http.ResponseWriter, r *http.Request) bool {
+func (h *SysAdminHandler) verifyTeamsWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) bool { //nolint:gocyclo
 	vt := r.URL.Query().Get("validationToken")
-	if vt == "" {
-		return true
-	}
-	if len(vt) > 256 {
-		http.Error(w, "invalid validationToken", http.StatusBadRequest)
-		return false
-	}
-	for _, c := range vt {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+	if vt != "" {
+		if len(vt) > 256 {
 			http.Error(w, "invalid validationToken", http.StatusBadRequest)
 			return false
 		}
+		for _, c := range vt {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+				http.Error(w, "invalid validationToken", http.StatusBadRequest)
+				return false
+			}
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte(vt)) //nolint:errcheck
+		return false
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(vt)) //nolint:errcheck
-	return false
+
+	expectedState, _ := cfg["client_state"].(string)
+	if expectedState != "" {
+		var payload struct {
+			Value []struct {
+				ClientState string `json:"clientState"`
+			} `json:"value"`
+		}
+		if json.Unmarshal(body, &payload) != nil || len(payload.Value) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return false
+		}
+		if payload.Value[0].ClientState != expectedState {
+			slog.Warn("teams webhook: clientState mismatch; rejecting")
+			w.WriteHeader(http.StatusUnauthorized)
+			return false
+		}
+	}
+	return true
 }
 
 func (h *SysAdminHandler) verifyTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any) bool {

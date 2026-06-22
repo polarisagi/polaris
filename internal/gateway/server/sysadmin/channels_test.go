@@ -85,7 +85,7 @@ func TestVerifyTeamsWebhook(t *testing.T) {
 	// Validation request
 	req := httptest.NewRequest(http.MethodPost, "/?validationToken=validToken123", nil)
 	w := httptest.NewRecorder()
-	if h.verifyTeamsWebhook(w, req) {
+	if h.verifyTeamsWebhook(w, req, nil, nil) {
 		t.Errorf("Expected false for validation token request")
 	}
 	if w.Body.String() != "validToken123" {
@@ -95,14 +95,14 @@ func TestVerifyTeamsWebhook(t *testing.T) {
 	// Normal request
 	req = httptest.NewRequest(http.MethodPost, "/", nil)
 	w = httptest.NewRecorder()
-	if !h.verifyTeamsWebhook(w, req) {
+	if !h.verifyTeamsWebhook(w, req, nil, nil) {
 		t.Errorf("Expected true for normal request without validationToken")
 	}
 
 	// Invalid characters in token
 	req = httptest.NewRequest(http.MethodPost, "/?validationToken=invalid@token!", nil)
 	w = httptest.NewRecorder()
-	if h.verifyTeamsWebhook(w, req) {
+	if h.verifyTeamsWebhook(w, req, nil, nil) {
 		t.Errorf("Expected false for invalid token chars")
 	}
 	if w.Code != http.StatusBadRequest {
