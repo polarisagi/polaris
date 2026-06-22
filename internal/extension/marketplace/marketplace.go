@@ -37,7 +37,7 @@ func NewMCPMarketplaceClient(registryURL, baseInstallDir string, httpClient *htt
 		registryURL = "https://registry.modelcontextprotocol.io/v0.1"
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		panic("marketplace: httpClient must not be nil; inject a SafeDialer-backed client")
 	}
 	return &MCPMarketplaceClient{
 		httpClient:     httpClient,

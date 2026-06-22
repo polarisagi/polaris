@@ -43,7 +43,7 @@ func TestMCPMarketplaceClient_Search(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewMCPMarketplaceClient(ts.URL, "", nil)
+	client := NewMCPMarketplaceClient(ts.URL, "", &http.Client{})
 	entries, err := client.Search(context.Background(), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestMCPMarketplaceClient_Search_Error(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewMCPMarketplaceClient(ts.URL, "", nil)
+	client := NewMCPMarketplaceClient(ts.URL, "", &http.Client{})
 	_, err := client.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("expected error")
@@ -73,7 +73,7 @@ func TestMCPMarketplaceClient_Search_Error(t *testing.T) {
 
 func TestMCPMarketplaceClient_Install_Stdio(t *testing.T) {
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, nil)
+	client := NewMCPMarketplaceClient("", dir, &http.Client{})
 
 	pkg := protocol.RegistryEntry{
 		ID:          "test/pkg",
@@ -104,7 +104,7 @@ func TestMCPMarketplaceClient_Install_Stdio(t *testing.T) {
 
 func TestMCPMarketplaceClient_Install_HTTP(t *testing.T) {
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, nil)
+	client := NewMCPMarketplaceClient("", dir, &http.Client{})
 
 	pkg := protocol.RegistryEntry{
 		ID:        "test/pkg",
@@ -145,7 +145,7 @@ func TestMCPMarketplaceClient_Install_Download(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, nil)
+	client := NewMCPMarketplaceClient("", dir, &http.Client{})
 
 	pkg := protocol.RegistryEntry{
 		ID:      "test/download",
@@ -179,7 +179,7 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewMCPMarketplaceClient("", t.TempDir(), nil)
+	client := NewMCPMarketplaceClient("", t.TempDir(), &http.Client{})
 
 	// 1. Checksum matched
 	pkg1 := protocol.RegistryEntry{
