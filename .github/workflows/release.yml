@@ -2,6 +2,7 @@ name: Release
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_NET_RETRY: 3
 
 on:
   push:
