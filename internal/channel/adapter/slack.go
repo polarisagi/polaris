@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -100,6 +102,8 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 			localCfg["bot_token"] = botToken
 			go host.OnMessage("slack", channelID, localCfg, Message{
 				Text: payload.Event.Text, ChatID: payload.Event.Channel, UserID: payload.Event.User,
+
+				TaintLevel: types.TaintHigh,
 			})
 		case "interactive":
 			if envelopeID != "" {

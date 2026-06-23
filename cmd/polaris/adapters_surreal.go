@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/extension/native"
 	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/store"
@@ -115,6 +116,33 @@ func (a *knowledgeBaseAdapter) SearchJSON(ctx context.Context, query string, top
 		return nil, err
 	}
 	return json.Marshal(results)
+}
+
+// ─── fsmKnowledgeAdapter ──────────────────────────────────────────────────────
+//
+// 将 *knowledgepkg.KnowledgeBase 适配为 fsm.KnowledgeSearcher
+type fsmKnowledgeAdapter struct{ kb *knowledgepkg.KnowledgeBase }
+
+func (a *fsmKnowledgeAdapter) SearchRAG(ctx context.Context, query string, topK int) ([]fsm.KnowledgeResult, error) {
+	if a.kb == nil {
+		return nil, nil
+	}
+	results, err := a.kb.Search(ctx, knowledgepkg.KnowledgeBaseSearchRequest{
+		Query: query,
+		TopK:  topK,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]fsm.KnowledgeResult, len(results))
+	for i, r := range results {
+		out[i] = fsm.KnowledgeResult{
+			Content: r.Primary.Content,
+			Source:  r.Primary.SourceURI,
+			Score:   1.0, // RAG 内部如果无分值则给1.0，或如果后续有分数可更新
+		}
+	}
+	return out, nil
 }
 
 // ─── nativeCognAdapter ────────────────────────────────────────────────────────

@@ -5,7 +5,8 @@
 // SurrealDBCoreStore — [Storage-SurrealDB-Core] 认知检索轴的 Go 封装。
 // 实现 protocol.Store + 扩展接口（VectorStore / GraphStore / FTSStore）。
 //
-// 后端选择: surreal-mem（默认，kv-mem，256MB+ 即可，含 VPS）/ surreal-rocksdb（显式持久化）。
+// 后端选择: surreal-rocksdb（默认，持久化，≥4GB 机器）/ surreal-mem（低内存降级，kv-mem）。
+// 降级规则由 boot_substrate.go initSurrealStore 按 TotalRAM 自动决定：<2GB 完全跳过，2-4GB 降为 mem。
 // kv-mem 进程重启后数据丢失；持久化由 SQLite Outbox 投影负责（M02 §2.5）。
 package store
 
@@ -366,6 +367,23 @@ func (s *SurrealDBCoreStore) GraphSpreadingActivation(startIDs []string, maxDept
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_graph_spreading_activation: code %d", rc))
 	}
 	return parseScoredJSON(readCStringAndFree(outJSON))
+}
+
+// SpreadingActivation 实现 protocol.GraphTraverser 接口：将底层 GraphSpreadingActivation
+// 的 []ScoredID 结果转换为 []types.ScoredNode，屏蔽内部存储类型。
+func (s *SurrealDBCoreStore) SpreadingActivation(startIDs []string, maxDepth int, energyDecay, dormancyThreshold float64, fanOutLimit int) ([]types.ScoredNode, error) {
+	if len(startIDs) == 0 {
+		return nil, nil
+	}
+	scored, err := s.GraphSpreadingActivation(startIDs, maxDepth, energyDecay, dormancyThreshold, fanOutLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.ScoredNode, len(scored))
+	for i, r := range scored {
+		out[i] = types.ScoredNode{ID: r.ID, Score: r.Score}
+	}
+	return out, nil
 }
 
 // GraphTraverse BFS 多跳图遍历；edgeType 为空串表示匹配所有边类型。

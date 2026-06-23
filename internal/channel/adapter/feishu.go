@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -149,6 +151,8 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 		localCfg["_feishu_domain"] = domain
 		go host.OnMessage("feishu", channelID, localCfg, Message{
 			Text: text, ChatID: event.Event.Message.ChatID, UserID: event.Event.Sender.SenderID.OpenID,
+
+			TaintLevel: types.TaintHigh,
 		})
 	}
 }

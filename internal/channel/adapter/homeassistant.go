@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -206,6 +208,8 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 
 		go host.OnMessage("homeassistant", channelID, cfg, Message{
 			Text: text, ChatID: channelID, UserID: "homeassistant",
+
+			TaintLevel: types.TaintHigh,
 		})
 	}
 }

@@ -46,6 +46,7 @@ type ToolBundle struct {
 	HITLGateway      *hitl.GatewayImpl
 	SysRepo          *repo.SQLiteSystemRepository
 	ExtRepo          *repo.SQLiteExtensionRepository
+	AppRepo          *repo.SQLiteAppRepository
 	InstallMgr       *marketplace.Manager
 	SkillRegistry    protocol.SkillRegistry
 	NativeCogn       native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
@@ -91,6 +92,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
 	prefsRepo := sysRepo
 	extRepo := repo.NewSQLiteExtensionRepository(sb.Store.DB())
+	appRepo := repo.NewSQLiteAppRepository(sb.Store.DB())
 	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap)
 	if containerSandbox != nil {
 		installMgr.WithHookRunner(containerSandbox)
@@ -105,6 +107,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		cronRepo,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
+	}
+
+	// ─── §6.5 Skill Library (L1 M6) ─────────────────────────────────────────
+	skillRegistry := skill.NewSQLiteRegistry(sb.Store.DB())
+
+	if err := builtin.RegisterSkillTools(inProcSandbox, toolReg, skillRegistry, sb.Outbox); err != nil {
+		slog.Warn("polaris: skill tool registration failed", "err", err)
 	}
 
 	if mb.Mem != nil {
@@ -164,11 +173,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	sb.Outbox.RegisterHandler("episodic", consolidation.EpisodicProjectorHandler(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
 
-	// ─── §6.5 Skill Library (L1 M6) ─────────────────────────────────────────
-	skillRegistry := skill.NewSQLiteRegistry(sb.Store.DB())
-
 	// B4-F4: 热注入 SkillRegistry 到 GapFillWorker
-	// （boot 顺序约束：skillRegistry 在 gapFillWorker 之后初始化，故用 Set 方法后注入）
+	// GapFillWorker 构造函数不接受 skillRegistry，通过 SetSkillRegistry 后注入解耦初始化顺序。
 	gapFillWorker.SetSkillRegistry(skillRegistry)
 	slog.Info("polaris: GapFillWorker.SkillRegistry injected (HE-6 State-in-DB now active)")
 	skillSelector := skill.NewSelector(skillRegistry)
@@ -255,6 +261,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		HITLGateway:      hitlGateway,
 		SysRepo:          sysRepo,
 		ExtRepo:          extRepo,
+		AppRepo:          appRepo,
 		InstallMgr:       installMgr,
 		SkillRegistry:    skillRegistry,
 		NativeCogn:       nativeCogn,

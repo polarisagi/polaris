@@ -2,6 +2,7 @@ package channel
 
 import (
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
+	"github.com/polarisagi/polaris/pkg/types"
 
 	"encoding/json"
 	"net/http"
@@ -47,7 +48,7 @@ func extractTelegramWebhook(body []byte) cadapter.Message {
 	text, _ := msg["text"].(string)
 	chatID := jsonNestedInt64(msg, "chat", "id")
 	userID := jsonNestedInt64(msg, "from", "id")
-	return cadapter.Message{Text: text, ChatID: chatID, UserID: userID}
+	return cadapter.Message{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
 }
 
 func extractDiscordWebhook(body []byte) cadapter.Message {
@@ -63,7 +64,7 @@ func extractDiscordWebhook(body []byte) cadapter.Message {
 	if bot {
 		return cadapter.Message{}
 	}
-	return cadapter.Message{Text: text, ChatID: channelID, UserID: userID}
+	return cadapter.Message{Text: text, ChatID: channelID, UserID: userID, TaintLevel: types.TaintHigh}
 }
 
 func extractSlackWebhook(body []byte) cadapter.Message {
@@ -79,7 +80,7 @@ func extractSlackWebhook(body []byte) cadapter.Message {
 		if botID != "" {
 			return cadapter.Message{}
 		}
-		return cadapter.Message{Text: text, ChatID: chatID, UserID: userID}
+		return cadapter.Message{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
 	}
 	return cadapter.Message{}
 }
@@ -99,7 +100,7 @@ func extractFeishuWebhook(body []byte) cadapter.Message {
 					senderMap, _ := ev["sender"].(map[string]any)
 					senderID, _ := senderMap["sender_id"].(map[string]any)
 					openID, _ := senderID["open_id"].(string)
-					return cadapter.Message{Text: text, ChatID: chatID, UserID: openID}
+					return cadapter.Message{Text: text, ChatID: chatID, UserID: openID, TaintLevel: types.TaintHigh}
 				}
 			}
 		}
@@ -136,7 +137,7 @@ func extractLineWebhook(body []byte) cadapter.Message {
 	}
 	replyToken, _ := ev["replyToken"].(string)
 	userID, _ := src["userId"].(string)
-	return cadapter.Message{Text: text, ChatID: chatID, UserID: userID, ReplyToken: replyToken}
+	return cadapter.Message{Text: text, ChatID: chatID, UserID: userID, ReplyToken: replyToken, TaintLevel: types.TaintHigh}
 }
 
 func extractQQBotWebhook(body []byte) cadapter.Message {
@@ -148,7 +149,7 @@ func extractQQBotWebhook(body []byte) cadapter.Message {
 	channelID, _ := raw["channel_id"].(string)
 	author, _ := raw["author"].(map[string]any)
 	userID, _ := author["id"].(string)
-	return cadapter.Message{Text: text, ChatID: channelID, UserID: userID}
+	return cadapter.Message{Text: text, ChatID: channelID, UserID: userID, TaintLevel: types.TaintHigh}
 }
 
 func extractWhatsAppWebhook(body []byte) cadapter.Message {
@@ -179,7 +180,7 @@ func extractWhatsAppWebhook(body []byte) cadapter.Message {
 	textObj, _ := m["text"].(map[string]any)
 	text, _ := textObj["body"].(string)
 	from, _ := m["from"].(string)
-	return cadapter.Message{Text: text, ChatID: from, UserID: from}
+	return cadapter.Message{Text: text, ChatID: from, UserID: from, TaintLevel: types.TaintHigh}
 }
 
 // extractTwilioWebhook 解析 Twilio 入站 SMS（application/x-www-form-urlencoded）。
@@ -195,7 +196,7 @@ func extractTwilioWebhook(r *http.Request) cadapter.Message {
 	if text == "" || from == "" {
 		return cadapter.Message{}
 	}
-	return cadapter.Message{Text: text, ChatID: from, UserID: from}
+	return cadapter.Message{Text: text, ChatID: from, UserID: from, TaintLevel: types.TaintHigh}
 }
 
 // extractTeamsWebhook 解析 MS Teams / MS Graph 变更通知。
@@ -226,7 +227,7 @@ func extractTeamsWebhook(body []byte) cadapter.Message {
 	if text == "" || chatID == "" {
 		return cadapter.Message{}
 	}
-	return cadapter.Message{Text: text, ChatID: chatID, UserID: userID}
+	return cadapter.Message{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
 }
 
 func extractGenericWebhook(body []byte) cadapter.Message {
@@ -235,7 +236,7 @@ func extractGenericWebhook(body []byte) cadapter.Message {
 		return cadapter.Message{}
 	}
 	text, _ := raw["content"].(string)
-	return cadapter.Message{Text: text, ChatID: "webhook"}
+	return cadapter.Message{Text: text, ChatID: "webhook", TaintLevel: types.TaintHigh}
 }
 
 // jsonNestedInt64 从嵌套 map 提取 float64 ID 字段并转字符串。

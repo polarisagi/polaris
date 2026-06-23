@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -71,6 +73,8 @@ func RunMatrixPoller(ctx context.Context, host PollerHost, channelID, homeserver
 			}
 			go host.OnMessage("matrix", channelID, cfg, Message{
 				Text: ev.Content.Body, ChatID: ev.RoomID, UserID: ev.Sender,
+
+				TaintLevel: types.TaintHigh,
 			})
 		}
 	}

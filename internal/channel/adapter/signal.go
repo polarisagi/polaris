@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -80,6 +82,8 @@ func signalReceiveSSE(ctx context.Context, host PollerHost, channelID, apiURL, a
 		}
 		go host.OnMessage("signal", channelID, cfg, Message{
 			Text: dm.Message, ChatID: chatID, UserID: env.Envelope.SourceNumber,
+
+			TaintLevel: types.TaintHigh,
 		})
 	}
 	return scanner.Err()

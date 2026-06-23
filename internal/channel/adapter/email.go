@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -78,6 +80,8 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 				ChatID:     em.From,
 				UserID:     em.From,
 				ReplyToken: em.MessageID,
+
+				TaintLevel: types.TaintHigh,
 			})
 		}
 	}

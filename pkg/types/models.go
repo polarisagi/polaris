@@ -114,6 +114,13 @@ type ScoredFragment struct {
 	TaintLevel   TaintLevel   // 来源数据污点等级，注入 Prompt 时须遵循 PropagateTaint 规则
 }
 
+// ScoredNode 图遍历结果：节点 ID + 激活能量（Spreading Activation）或跳数衰减分（BFS）。
+// Score 由 SA 算法按边权重传播产生，物理意义明确，无需外部硬编码衰减系数。
+type ScoredNode struct {
+	ID    string
+	Score float64 // SA: energy；BFS: hop-decay score
+}
+
 // ============================================================================
 // M7 Tool & Action — 工具执行层 POD
 // 来源: internal/protocol/go §M7 / internal/protocol/interfaces.go §M7
@@ -455,8 +462,9 @@ type Trajectory struct {
 
 // CognitiveSearchResult SurrealDB FTS + HNSW 向量检索的单条结果。
 type CognitiveSearchResult struct {
-	ID    string
-	Score float64
+	ID      string
+	Score   float64
+	Content string
 }
 
 // ============================================================================

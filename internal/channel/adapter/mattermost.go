@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -93,6 +95,8 @@ func mattermostConnect(ctx context.Context, host PollerHost, channelID, mmURL, t
 		}
 		go host.OnMessage("mattermost", channelID, cfg, Message{
 			Text: post.Message, ChatID: post.ChannelID, UserID: post.UserID,
+
+			TaintLevel: types.TaintHigh,
 		})
 	}
 }

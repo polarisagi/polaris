@@ -473,59 +473,82 @@ func loadGateCedarPolicies(gate *policy.Gate, cfg config.PolicyConfig) error {
 	return gate.LoadCedarPolicies(combined)
 }
 
-// initSurrealStore 初始化 SurrealDB Core 认知存储，提取独立函数以降低嵌套复杂度。
-// backend: "mem"（默认，256MB+ 可用）/ "rocksdb"（持久化，推荐大内存服务器）。
-// workerThreads: <= 0 = auto（min(CPU, 4)）；VPS 推荐在 config 中设 2 以节省内存。
-// 从 main.go 移入，与调用方 bootSubstrate 共存于同一文件。
+// initSurrealStore 初始化 SurrealDB Core 认知存储。
+//
+// 内存分级策略（默认开启，按硬件自动降级）：
+//
+//	TotalRAM < 2GB  → 完全跳过 SurrealDB，cognitive axis 降级到纯 SQLite
+//	2GB ≤ RAM < 4GB → 强制 "mem" 后端（无持久化，进程重启丢失）
+//	TotalRAM ≥ 4GB  → 使用 config 配置值（默认 "rocksdb"，持久化）
+//
+// FeatureGate（可用 RAM < 512MB 时）提供运行时动态降级兜底。
 func initSurrealStore(
 	autoConf *observability.AutoConfig,
 	cfg *config.Config,
 	layout config.DataLayout,
 ) *sysstore.SurrealDBCoreStore {
+	const (
+		minRAMForSurreal   = 2 * 1024 * 1024 * 1024 // 2GB：以下完全跳过
+		memBackendRAMLimit = 4 * 1024 * 1024 * 1024 // 4GB：以下强制 mem 后端
+		largeRAMThreshold  = 8 * 1024 * 1024 * 1024 // 8GB：workerThreads 自动升档
+	)
+
 	if autoConf == nil {
 		slog.Warn("polaris: AutoConfig 初始化失败，SurrealDB Core 跳过，cognitive axis → SQLite")
 		return nil
 	}
-	if autoConf.Gate.State(probe.FeatureSurrealDBCore) == probe.FeatureDisabled {
-		slog.Info("polaris: SurrealDB Core disabled by FeatureGate (memory pressure), cognitive axis → SQLite")
+
+	// 硬件能力门控：< 2GB 物理内存直接跳过
+	if autoConf.Probe.TotalRAM < minRAMForSurreal {
+		slog.Info("polaris: SurrealDB Core skipped (TotalRAM < 2GB), cognitive axis → SQLite",
+			"total_ram_mb", autoConf.Probe.TotalRAM/(1024*1024),
+		)
 		return nil
 	}
+
+	// FeatureGate 动态门控：可用内存压力时降级（运行时兜底）
+	if autoConf.Gate.State(probe.FeatureSurrealDBCore) == probe.FeatureDisabled {
+		slog.Info("polaris: SurrealDB Core disabled by FeatureGate (available memory pressure), cognitive axis → SQLite")
+		return nil
+	}
+
+	// 确定实际后端：配置默认 "rocksdb"，低内存机器强制降级为 "mem"
 	backend := cfg.Cognition.SurrealBackend
 	if backend == "" {
-		backend = "mem"
+		backend = "rocksdb"
 	}
+	if backend == "rocksdb" && autoConf.Probe.TotalRAM < memBackendRAMLimit {
+		backend = "mem"
+		slog.Info("polaris: SurrealDB backend downgraded rocksdb→mem (TotalRAM 2-4GB, no persistence)",
+			"total_ram_mb", autoConf.Probe.TotalRAM/(1024*1024),
+		)
+	}
+
 	dbPath := cfg.Cognition.SurrealDBPath
 	if dbPath == "" {
 		dbPath = layout.SurrealDB
-	}
-
-	// TotalRAM ≥ 8GB 自动从 mem 升级到 rocksdb——持久化认知轴，无需手动改配置。
-	const rocksdbAutoThreshold = 8 * 1024 * 1024 * 1024 // 8 GB
-	autoBackend := backend
-	if backend == "mem" && autoConf.Probe.TotalRAM >= rocksdbAutoThreshold {
-		autoBackend = "rocksdb"
-		slog.Info("polaris: SurrealDB backend auto-upgraded mem→rocksdb (TotalRAM ≥ 8GB)",
-			"total_ram_gb", autoConf.Probe.TotalRAM/(1024*1024*1024),
-			"db_path", dbPath,
-		)
 	}
 
 	vecDim := cfg.Inference.EmbedderDim
 	if vecDim <= 0 {
 		vecDim = 1536
 	}
+
+	// ≥ 8GB 时 workerThreads 自动升档以匹配 rocksdb I/O 并发需求
 	workerThreads := cfg.Cognition.SurrealWorkerThreads
-	if workerThreads <= 2 && autoConf.Probe.TotalRAM >= rocksdbAutoThreshold {
+	if workerThreads <= 2 && autoConf.Probe.TotalRAM >= largeRAMThreshold {
 		workerThreads = 0 // 0 = auto: min(CPU, 4)
 	}
-	st, err := sysstore.OpenSurrealDBCore(autoBackend, dbPath, vecDim, workerThreads)
+
+	st, err := sysstore.OpenSurrealDBCore(backend, dbPath, vecDim, workerThreads)
 	if err != nil {
 		slog.Warn("polaris: SurrealDB Core init failed, cognitive axis falls back to SQLite", "err", err)
 		return nil
 	}
 	slog.Info("polaris: SurrealDB Core initialized",
-		"backend", autoBackend,
-		"configured_backend", backend,
+		"backend", backend,
+		"configured_backend", cfg.Cognition.SurrealBackend,
+		"total_ram_gb", autoConf.Probe.TotalRAM/(1024*1024*1024),
 		"vec_dim", vecDim,
 		"worker_threads", workerThreads,
 	)

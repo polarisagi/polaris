@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // cpuSampler 读取 /proc/stat 计算真实 CPU 占用率（M13 §3 ResourceGovernor）。
@@ -274,4 +276,22 @@ func (c *HITLCheckpoint) AwaitApproval(ctx context.Context) (bool, error) {
 	case <-time.After(c.Timeout):
 		return false, apperr.New(apperr.CodeTimeout, "hitl: approval timeout") // 超时视为拒绝
 	}
+}
+
+// Scheduler 定时/异步任务调度执行器。
+type Scheduler struct {
+	invoker protocol.AgentInvoker
+}
+
+func NewScheduler(invoker protocol.AgentInvoker) *Scheduler {
+	return &Scheduler{invoker: invoker}
+}
+
+func (s *Scheduler) ExecuteTask(ctx context.Context, task *types.Task) error {
+	if s.invoker != nil && task != nil && task.Type == "agent" {
+		_, err := s.invoker.InvokeAgent(ctx, string(task.Payload))
+		return err
+	}
+	// 支持原本的 tool 或 script 执行逻辑
+	return nil
 }

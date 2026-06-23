@@ -46,6 +46,7 @@ type SysAdminHandler struct {
 	DataDir        string
 	ChatRepo       protocol.ChatRepository
 	ProviderRepo   protocol.ProviderRepository
+	AppRepo        repo.AppRepository
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Registry       *llm.ProviderRegistry
@@ -83,6 +84,7 @@ func NewSysAdminHandler(
 	dataDir string,
 	chatRepo protocol.ChatRepository,
 	providerRepo protocol.ProviderRepository,
+	appRepo repo.AppRepository,
 	serverAddr string,
 	automationRepo repo.AutomationRepository,
 ) *SysAdminHandler {
@@ -98,6 +100,7 @@ func NewSysAdminHandler(
 		DataDir:        dataDir,
 		ChatRepo:       chatRepo,
 		ProviderRepo:   providerRepo,
+		AppRepo:        appRepo,
 		ServerAddr:     serverAddr,
 		AutomationRepo: automationRepo,
 	}

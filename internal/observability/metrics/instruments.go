@@ -196,3 +196,22 @@ func RecordLLMCacheHit(provider, model string, hit bool) {
 		),
 	)
 }
+
+// RecordMemoryToolCall 记录记忆工具调用指标。
+// 在 InstrToolCallsTotal 为 nil 时静默跳过（Tier-0 无 OTel 场景）。
+func RecordMemoryToolCall(ctx context.Context, toolName string, success bool) {
+	if InstrToolCallsTotal == nil {
+		return
+	}
+	result := "success"
+	if !success {
+		result = "failure"
+	}
+	InstrToolCallsTotal.Add(ctx, 1,
+		metric.WithAttributes(
+			attribute.String("tool", toolName),
+			attribute.String("category", "memory"),
+			attribute.String("result", result),
+		),
+	)
+}

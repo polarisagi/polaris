@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -75,6 +77,8 @@ func RunTelegramPoller(ctx context.Context, host PollerHost, poller *telegramPol
 				Text:   upd.Message.Text,
 				ChatID: fmt.Sprintf("%d", upd.Message.Chat.ID),
 				UserID: fmt.Sprintf("%d", upd.Message.From.ID),
+
+				TaintLevel: types.TaintHigh,
 			}
 			go host.OnMessage("telegram", channelID, cfg, msg)
 		}

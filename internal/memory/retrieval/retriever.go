@@ -241,20 +241,38 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		}
 	}
 
-	// Stage 1c — Graph 路径（Tier1+）：从 BM25 Top 结果的 source 出发做图遍历
+	// Stage 1c — Graph 路径（Tier1+）：Spreading Activation 多种子能量扩散
+	// 设计决策：用 SA 替代原 BFS + 硬编码衰减系数。
+	//   - 取 BM25 Top-3 作为种子，比单节点覆盖更广
+	//   - SA energy 按边权重传播，分数有物理意义，无需外部硬编码
+	//   - 参数：maxDepth=3, energyDecay=0.7, dormancy=0.05, fanOut=10
 	if hr.graph != nil && len(bm25Results) > 0 {
-		top := bm25Results[0].Source // 以 BM25 最高分作为图遍历起点
-		neighbors, err := hr.graph.GraphTraverse(top, "", 2)
-		if err == nil {
-			for rank, nb := range neighbors {
-				// 图邻居按跳数衰减赋分：第1跳 0.7，第2跳 0.5
-				score := 0.7 / float64(rank/2+1)
+		const (
+			saMaxSeeds          = 3
+			saMaxDepth          = 3
+			saEnergyDecay       = 0.7
+			saDormancyThreshold = 0.05
+			saFanOutLimit       = 10
+		)
+		seedIDs := make([]string, 0, saMaxSeeds)
+		seenSeed := make(map[string]struct{}, saMaxSeeds)
+		for _, r := range bm25Results {
+			if len(seedIDs) >= saMaxSeeds {
+				break
+			}
+			if _, dup := seenSeed[r.Source]; !dup && r.Source != "" {
+				seenSeed[r.Source] = struct{}{}
+				seedIDs = append(seedIDs, r.Source)
+			}
+		}
+		if nodes, err := hr.graph.SpreadingActivation(seedIDs, saMaxDepth, saEnergyDecay, saDormancyThreshold, saFanOutLimit); err == nil {
+			for _, n := range nodes {
 				graphResults = append(graphResults, types.ScoredFragment{
-					Content:      nb, // 图路径用节点 ID 作为 Content 占位（调用方可二次 KV 取原文）
-					Score:        score,
-					Source:       nb,
-					EvidenceType: types.EvidenceWeakSemantic, // 图路径：结构关联，非内容匹配
-					TaintLevel:   taintForSource(nb),
+					Content:      n.ID, // 节点 ID 作为 Content 占位；上层可二次 KV 取原文
+					Score:        n.Score,
+					Source:       n.ID,
+					EvidenceType: types.EvidenceWeakSemantic,
+					TaintLevel:   taintForSource(n.ID),
 				})
 			}
 		}

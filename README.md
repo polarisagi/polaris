@@ -10,6 +10,81 @@
 
 ---
 
+## Why Polaris
+
+Polaris was born from a fundamental question: why are today's AI Agents so fragile?
+
+The mainstream answer is an endless loop: call LLM → parse JSON → wait for tool response → call LLM again. This looks elegant but is deeply flawed — it hands total control to a probabilistic language model, and probability is no foundation for a reliable system.
+
+Polaris takes a fundamentally different path.
+
+**LLMs are co-processors, not controllers.** In Polaris, a deterministic Go FSM owns the control flow — deciding how tasks advance, when to pause, and how to roll back on failure. The LLM's role is precisely bounded: fill in structured slots at designated nodes. When the model hallucinates, the system doesn't crash. When it times out, the FSM has a defined fallback.
+
+**Code is a more powerful execution medium than JSON call chains.** For complex tasks, Polaris doesn't chain API calls — that produces exponential context bloat and cascading failure risk. CodeAct synthesizes verifiable sandbox code on the fly and executes it in batch, substituting compiler determinism for LLM probability and eliminating intermediate-state explosion entirely.
+
+**Compute is allocated by difficulty, not applied uniformly.** The Surprise Index classifies task novelty in milliseconds: familiar tasks run through a zero-LLM local skill library; moderately complex tasks use lightweight inference; only genuinely novel, high-risk tasks trigger heavy-weight reasoning — or a pool of parallel search branches that trade compute for correctness.
+
+**Safety boundaries must be physically verifiable.** All external data enters with a five-level taint tag that only escalates; tool execution passes through Cedar policy's three-layer defense; code runs inside a three-tier sandbox. Probabilistic prompt filtering is never a security boundary in Polaris — probability cannot defend against deterministic attacks.
+
+**Evolution must be falsifiable, not self-reported.** Every improvement — prompt tuning, skill distillation, config change — must pass an independent holdout test set and survive a live-traffic canary window before entering production memory. Failed trajectories are permanently recorded too: the next time the system walks into a similar trap, it brakes automatically rather than repeating the mistake.
+
+All of this runs on a single 8 GB machine. No Kafka, no Redis, no Kubernetes — just clone and run.
+
+---
+
+## Six Core Capabilities
+
+### An Execution Engine That Never Goes Off the Rails
+
+Most AI agents are built around an infinite loop: keep asking the LLM "what's next" and let the model decide where the system goes. This is like a car with no brakes — one hallucination and the whole task can spiral or collapse.
+
+Polaris strips the model of control over execution flow entirely. Every step is governed by a deterministic finite state machine (FSM) written in Go: when to proceed, when to pause, when to roll back on failure — all hardcoded logic, not improvised by the model. Complex tasks don't run as chains of JSON API calls but are compiled into verifiable sandbox code and executed in batch, backed by compiler correctness rather than LLM probability. The model does exactly one thing: fill in structured answers at designated checkpoints.
+
+### Think Hard on Hard Problems, Not on Easy Ones
+
+Calling a top-tier reasoning model costs enough to handle hundreds of simple questions. Routing everything through the same level of inference is enormously wasteful; routing everything through the cheapest model means failing on tasks that actually need depth.
+
+Polaris resolves this with the Surprise Index — a real-time measure of how "unfamiliar" a task is to the system, computed in milliseconds. Familiar tasks go straight to the local skill library: zero LLM calls, millisecond response. Moderately complex tasks use a lightweight model for a quick answer. Only tasks the system has genuinely never encountered trigger heavy-weight reasoning — or a pool of parallel search paths running in the background, trading compute for a higher first-pass success rate.
+
+### A Team of Three, Each With One Job
+
+Asking one AI to handle everything — execute tasks, find information, audit safety — is like asking one person to drive, navigate, and check seatbelts simultaneously. Something will always get dropped.
+
+Polaris runs three specialized agents in parallel, physically isolated from each other:
+
+- **Supervisor**: faces the user directly and holds sole authority over the task.
+- **Librarian**: runs silently in the background, digesting documents and history, whispering distilled insights to the Supervisor at critical moments.
+- **Governance**: operates entirely outside the business flow, auditing every piece of code before execution — catching malicious intent hidden inside syntactically valid logic.
+
+All three coordinate through an async blackboard. If one fails, the other two are unaffected.
+
+### Four Layers of Memory That Deepen Over Time
+
+Most AI systems forget everything the moment a conversation ends. Those that do offer "memory" typically just accumulate raw chat history — an ever-growing text pile with rapidly diminishing information density.
+
+Polaris uses four independent memory layers modeled on human cognition:
+
+- **Working memory**: holds the active context of the current task, driving real-time reasoning.
+- **Episodic memory**: records the full event history, precisely searchable across sessions.
+- **Semantic memory**: builds a knowledge graph of concepts and relationships that grows richer with every interaction.
+- **Procedural memory**: stores validated skill scripts — proven execution paths that can be replayed without re-reasoning.
+
+The four layers work together: the longer you use Polaris, the more precisely it understands your preferences, habits, and domain.
+
+### Security Is an Engineering Problem, Not a Trust Problem
+
+"Add a line to the prompt telling the model not to do dangerous things" — that's the security boundary for most AI systems today. The problem: models are probabilistic. They can be bypassed by carefully crafted inputs and hijacked by injected content. Convincing a probability engine with words is not security.
+
+Polaris's safety architecture is built on physical isolation. All externally sourced data — user input, web content, tool responses — is tagged with a taint level that can only escalate, never decrease, and can never flow into the system's instruction zone. All tool calls pass through Cedar policy's three-layer authorization. Code execution runs inside a three-tier sandbox; at the highest isolation level, even malicious code cannot escape to affect the host system.
+
+### Improvement Must Earn Its Place
+
+AI self-improvement is a double-edged sword: a model can confidently "optimize" its way to a worse version and never notice. Self-evolution without external validation is, at its core, hallucination reinforcement.
+
+Every improvement in Polaris — prompt tuning, skill distillation, config change — must pass a seven-stage CI pipeline, clear an independent holdout test set, and survive a live-traffic canary window before entering production memory. At the same time, every failed trajectory is permanently stored in the Fallacy Memory Pool (MEMF): the next time the system approaches a similar trap, it gets an early warning and brakes automatically. Real progress gets promoted. Regressions cannot.
+
+---
+
 ## Design Philosophy
 
 | Principle | One-liner |

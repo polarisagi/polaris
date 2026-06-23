@@ -193,6 +193,9 @@ func (m *MockGraphTraverser) GraphTraverse(startID, edgeType string, maxDepth in
 func (m *MockGraphTraverser) GraphRelate(fromID, edgeType, toID string, weight float64) error {
 	return nil
 }
+func (m *MockGraphTraverser) SpreadingActivation(_ []string, _ int, _, _ float64, _ int) ([]types.ScoredNode, error) {
+	return nil, nil
+}
 
 var _ protocol.GraphTraverser = (*MockGraphTraverser)(nil)
 

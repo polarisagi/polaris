@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -149,6 +151,8 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 			}
 			go host.OnMessage("wecom", channelID, cfg, Message{
 				Text: content, ChatID: chatID, UserID: userID,
+
+				TaintLevel: types.TaintHigh,
 			})
 		}
 	}

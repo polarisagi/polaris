@@ -74,6 +74,7 @@ type Server struct {
 	channelRepo    prepo.ChannelRepository
 	automationRepo prepo.AutomationRepository
 	workflowRepo   prepo.WorkflowRepository
+	appRepo        prepo.AppRepository
 	registry       *llm.ProviderRegistry                                                          // 热重载 Provider 注册表
 	httpClient     *http.Client                                                                   // 复用 SafeHTTPClient
 	transcriptDir  string                                                                         // per-session JSONL transcript 目录
@@ -246,6 +247,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	s.channelRepo = repo.NewSQLiteChannelRepository(sqlDB)
 	s.automationRepo = repo.NewSQLiteAutomationRepository(sqlDB)
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(sqlDB)
+	s.appRepo = repo.NewSQLiteAppRepository(sqlDB)
 
 	// 注入内置的 yaml 配置作为种子数据到数据库（SSoT 架构）
 	seedBuiltinConfig(s)
@@ -325,6 +327,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 		ExtRepo:        s.extRepo,
 		ChannelRepo:    s.channelRepo,
 		AutomationRepo: s.automationRepo,
+		AppRepo:        s.appRepo,
 		Registry:       s.registry,
 		HTTPClient:     httpClient,
 		DataDir:        s.dataDir,
@@ -444,7 +447,14 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.HandleFunc("POST /v1/channels", s.sysadminHandler.HandleCreateChannel)
 	mux.HandleFunc("PUT /v1/channels/{channelID}", s.sysadminHandler.HandleUpdateChannel)
 	mux.HandleFunc("DELETE /v1/channels/{channelID}", s.sysadminHandler.HandleDeleteChannel)
-	// mux.HandleFunc("...", s.xx.HandleTelegramWebhook)
+
+	// App Sandbox 生命周期 API (M13)
+	mux.HandleFunc("GET /v1/apps", s.sysadminHandler.HandleListApps)
+	mux.HandleFunc("POST /v1/apps", s.sysadminHandler.HandleCreateApp)
+	mux.HandleFunc("GET /v1/apps/{id}", s.sysadminHandler.HandleGetApp)
+	mux.HandleFunc("PUT /v1/apps/{id}", s.sysadminHandler.HandleUpdateApp)
+	mux.HandleFunc("DELETE /v1/apps/{id}", s.sysadminHandler.HandleDeleteApp)
+	mux.HandleFunc("POST /v1/apps/{id}/enable", s.sysadminHandler.HandleSetAppEnabled)
 
 	// 工具 & Skill 管理 API
 	mux.HandleFunc("GET /v1/tools", s.sysadminHandler.HandleListTools)

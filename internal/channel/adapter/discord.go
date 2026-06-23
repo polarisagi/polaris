@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -224,6 +226,8 @@ func DiscordConnect( //nolint:gocyclo
 				}
 				go host.OnMessage("discord", channelID, cfg, Message{
 					Text: dmsg.Content, ChatID: dmsg.ChannelID, UserID: dmsg.Author.ID,
+
+					TaintLevel: types.TaintHigh,
 				})
 			}
 		}

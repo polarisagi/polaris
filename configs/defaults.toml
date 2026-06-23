@@ -148,14 +148,17 @@ bwrap_path = ""
 
 [cognition]
 # SurrealDB 认知存储后端（运行时选择，不影响编译）。
-# "mem"     = kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；适用于 <8GB VPS。
-# "rocksdb" = kv-rocksdb 持久化，数据落盘 data/surreal.db，RSS ~200MB；可显式强制开启。
-# 注意：TotalRAM ≥ 8GB 时系统会自动将 "mem" 升级为 "rocksdb"（含 8GB 开发机）。
-surreal_backend = "mem"
+# "rocksdb" = kv-rocksdb 持久化（默认），数据落盘 data/surreal.db，RSS ~200MB。
+#             系统自动根据内存降级：
+#               TotalRAM < 2GB  → SurrealDB 完全跳过，cognitive axis → SQLite
+#               2GB ≤ RAM < 4GB → 强制降级为 "mem"（进程重启数据丢失）
+#               TotalRAM ≥ 4GB  → 使用本配置值（默认 "rocksdb"，持久化）
+# "mem"     = kv-mem 进程内存，重启丢失，可手动设置强制 mem 模式（如低配 VPS）。
+surreal_backend = "rocksdb"
 surreal_db_path = ""
 # Tokio 运行时工作线程数（影响 SurrealDB 并发写入吞吐与内存占用）。
-# 0  = auto（min(CPU 核心数, 4)）—— 大内存服务器使用默认值。
-# 2  = VPS 推荐（2GB/4GB 实例），节省约 30-50MB RSS。
+# 0  = auto（min(CPU 核心数, 4)）—— ≥8GB 机器自动选择。
+# 2  = 4GB 内存机器推荐，节省约 30-50MB RSS。
 surreal_worker_threads = 2
 
 [compressor]

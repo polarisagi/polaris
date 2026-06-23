@@ -38,9 +38,16 @@ type SQLiteScheduler struct {
 	// eventBus 用于分发任务事件给订阅者
 	mu          sync.RWMutex
 	subscribers map[string]map[chan types.TaskEvent]struct{}
+	invoker     protocol.AgentInvoker
 }
 
 var _ protocol.Scheduler = (*SQLiteScheduler)(nil)
+
+func (s *SQLiteScheduler) SetAgentInvoker(invoker protocol.AgentInvoker) {
+	s.mu.Lock()
+	s.invoker = invoker
+	s.mu.Unlock()
+}
 
 func NewSQLiteScheduler(store protocol.Store) *SQLiteScheduler {
 	return &SQLiteScheduler{
@@ -111,7 +118,16 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 
 		taskCopy := st.Task
 		go func(st storedTask) {
-			dispErr := dispatchFn(ctx, &taskCopy)
+			var dispErr error
+			s.mu.RLock()
+			inv := s.invoker
+			s.mu.RUnlock()
+			if inv != nil && taskCopy.Type == "agent" {
+				_, dispErr = inv.InvokeAgent(ctx, string(taskCopy.Payload))
+			} else {
+				dispErr = dispatchFn(ctx, &taskCopy)
+			}
+
 			if dispErr == nil {
 				st.Status = "completed"
 				_ = s.writeTask(ctx, &st)

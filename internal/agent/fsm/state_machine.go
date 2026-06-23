@@ -2,6 +2,7 @@ package fsm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -125,6 +126,9 @@ type StateContext struct {
 
 	// Cognitive 语义检索接口（L2）
 	Cognitive CognitiveSearcher
+
+	// KnowledgeSearcher 知识 RAG 检索接口（M10）
+	KnowledgeSearcher KnowledgeSearcher
 
 	// LastReasoningContent 上一轮 LLM 在 thinking 模式下产出的推理内容。
 	// 由 agent_execute.go 在成功 Infer 后写入，供下一轮 PromptFn 注入消息历史。
@@ -495,6 +499,35 @@ func (sm *StateMachine) bgCtx() (context.Context, context.CancelFunc) {
 }
 
 func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte) (types.State, error) {
+	var ref ReflectionModel
+	if err := json.Unmarshal(fill, &ref); err != nil {
+		slog.Warn("reflect: failed to parse ReflectionModel", "err", err)
+		return types.State("S_REFLECT_DONE"), nil
+	}
+
+	if len(ref.Learnings) > 0 && sCtx.Mem != nil {
+		ctx, cancel := sm.bgCtx()
+		defer cancel()
+		for _, learning := range ref.Learnings {
+			if learning == "" {
+				continue
+			}
+			event := types.Event{
+				ID:        fmt.Sprintf("reflect_%d", time.Now().UnixNano()),
+				Type:      types.EventType("learning"),
+				Status:    types.StatusDone,
+				TaskID:    sCtx.SessionID,
+				AgentID:   sCtx.AgentID,
+				Payload:   []byte(`{"learning":` + fmt.Sprintf("%q", learning) + `}`),
+				CreatedAt: time.Now(),
+			}
+			if err := sCtx.Mem.Episodic().Append(ctx, event); err != nil {
+				slog.Warn("reflect: failed to write learning to episodic memory",
+					"session_id", sCtx.SessionID, "err", err)
+			}
+		}
+	}
+
 	return types.State("S_REFLECT_DONE"), nil
 }
 

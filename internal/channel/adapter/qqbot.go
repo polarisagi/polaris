@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -235,6 +237,8 @@ func qqbotConnect( //nolint:gocyclo
 				localCfg["_qqbot_msg_type"] = p.T
 				go host.OnMessage("qqbot", channelID, localCfg, Message{
 					Text: msg.Content, ChatID: chatID, UserID: msg.Author.ID,
+
+					TaintLevel: types.TaintHigh,
 				})
 			}
 		}

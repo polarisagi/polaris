@@ -62,6 +62,22 @@ type Marketplace struct {
 	CreatedAt   string `json:"created_at" yaml:"created_at"`
 }
 
+// App 富交互应用（App）运行时模型（对应 028_apps.sql）。
+// 提供独立于 MCP 的前端扩展能力。
+type App struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	Publisher   string `json:"publisher"`
+	Enabled     bool   `json:"enabled"`
+	TrustTier   int    `json:"trust_tier"`
+	CatalogID   string `json:"catalog_id"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
 // PluginInterface 对应 plugin.json 的 interface 块（UI 展示元数据）。
 // 兼容 Polaris .polaris-plugin/plugin.json 和 OpenAI agents/openai.yaml 的 interface 节。
 type PluginInterface struct {

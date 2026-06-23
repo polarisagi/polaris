@@ -102,6 +102,17 @@ func BuildPerceiveContext( //nolint:gocyclo
 		}
 	}
 
+	// 5. M10 知识库检索结果 (RAG)
+	if sCtx.KnowledgeSearcher != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
+		ragResults, err := sCtx.KnowledgeSearcher.SearchRAG(ctx, sCtx.TaskModel.Goal, 3)
+		if err == nil && len(ragResults) > 0 {
+			retrieved.WriteString("Knowledge Base (RAG):\n")
+			for _, r := range ragResults {
+				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content))
+			}
+		}
+	}
+
 	if len(sCtx.ReasoningState) > 0 {
 		retrieved.WriteString("Reasoning State from the previous iteration:\n")
 		retrieved.WriteString(string(sCtx.ReasoningState))
@@ -210,6 +221,16 @@ func BuildPlanContext( //nolint:gocyclo
 			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {
 				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+			}
+		}
+	}
+
+	if sCtx.KnowledgeSearcher != nil && queryStr != "" {
+		ragResults, err := sCtx.KnowledgeSearcher.SearchRAG(ctx, queryStr, 3)
+		if err == nil && len(ragResults) > 0 {
+			retrieved.WriteString("Knowledge Base (RAG):\n")
+			for _, r := range ragResults {
+				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content))
 			}
 		}
 	}

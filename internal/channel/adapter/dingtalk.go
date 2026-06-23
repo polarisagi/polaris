@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/gorilla/websocket"
@@ -101,6 +103,8 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 			}
 			go host.OnMessage("dingtalk", channelID, cfg, Message{
 				Text: text, ChatID: chatID, UserID: evData.SenderID, ReplyToken: evData.SessionWebhook,
+
+				TaintLevel: types.TaintHigh,
 			})
 		}
 	}

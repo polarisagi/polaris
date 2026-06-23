@@ -140,6 +140,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agent.SetMemoryInjector(mb.Mem)
 	}
 
+	if kb != nil && kb.KnowledgeBase != nil {
+		agent.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
+	}
+
 	if prefs, err := tb.SysRepo.ListPreferences(ctx); err == nil {
 		agent.SetPreferences(prefs)
 	} else {
@@ -161,6 +165,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	slog.Info("polaris: agent kernel & DAG executor initialized")
 
 	evalRunner.InjectAgent(&evalAgentAdapter{agent: agent})
+	sched.SetAgentInvoker(&agentInvokerAdapter{agent: agent})
 
 	// ─── §10.3 M9 Self-Improvement Engine ────────────────────────────────────
 	taskEventCh := make(chan si.TaskCompleteEvent, 64)
@@ -254,4 +259,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Supervisor:    sv,
 		ReaperStop:    reaperStop,
 	}, nil
+}
+
+type agentInvokerAdapter struct {
+	agent *sysagent.Agent
+}
+
+func (a *agentInvokerAdapter) InvokeAgent(ctx context.Context, intent string, opts ...any) (string, error) {
+	a.agent.SetTaskIntent([]byte(intent))
+	err := a.agent.SendIntent(types.TriggerIntentReceived)
+	return a.agent.AgentID(), err
 }

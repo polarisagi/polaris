@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 type Message struct {
@@ -12,6 +13,7 @@ type Message struct {
 	ChatID     string
 	UserID     string
 	ReplyToken string
+	TaintLevel types.TaintLevel
 }
 
 type MessageHandler func(channelType, channelID string, cfg map[string]any, msg Message)

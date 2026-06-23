@@ -820,9 +820,21 @@ type TaskReadRepository interface {
 
 // GraphTraverser consumer-side 接口：Tier1+ 图遍历路径（由 SurrealDBCoreStore 实现）。
 // consumer-side 定义，防止包循环依赖。
+//
+// 两种遍历模式：
+//   - GraphTraverse: BFS 有界宽度优先，适用于精确邻居枚举
+//   - SpreadingActivation: 能量扩散遍历，多种子 + 边权重传播，适用于关联发现
+//
+// SpreadingActivation 是 HybridRetriever 图路径的首选算法（替代硬编码衰减的 BFS）。
 type GraphTraverser interface {
 	GraphTraverse(startID, edgeType string, maxDepth int) ([]string, error)
 	GraphRelate(fromID, edgeType, toID string, weight float64) error
+	// SpreadingActivation 多种子能量扩散图遍历。
+	//   energyDecay:        每跳衰减系数（推荐 0.7）
+	//   dormancyThreshold:  休眠阈值，energy ≤ 此值的节点停止扩散（推荐 0.05）
+	//   fanOutLimit:        每节点最大邻居扩散数（防扇出爆炸，推荐 10）
+	// nil SurrealDB 时实现方应返回空切片而非 error。
+	SpreadingActivation(startIDs []string, maxDepth int, energyDecay, dormancyThreshold float64, fanOutLimit int) ([]types.ScoredNode, error)
 }
 
 // CognitiveSearchResult 认知检索结果（consumer-side 类型，避免引入 substrate/storage 依赖）。
@@ -835,4 +847,14 @@ type CognitiveSearcher interface {
 	VecUpsert(id string, embedding []float32) error
 	VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error)
 	FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error)
+}
+
+// AgentInvoker 用于触发 Agent 会话。
+type AgentInvoker interface {
+	InvokeAgent(ctx context.Context, intent string, opts ...any) (string, error)
+}
+
+// Reranker 用于对检索结果进行重排序。
+type Reranker interface {
+	Rerank(ctx context.Context, query string, docs []types.CognitiveSearchResult) ([]types.CognitiveSearchResult, error)
 }

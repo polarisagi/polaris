@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // VectorEmbedder 向量嵌入接口（consumer-side，防止包循环）。
@@ -40,9 +41,14 @@ type HybridRetrieverImpl struct {
 	embedder  VectorEmbedder           // optional，nil = FTS5 only
 	cognitive CognitiveSearcher        // optional，Tier 1+ SurrealDB HNSW
 	graph     *graphrag.GraphTraverser // optional，Tier 0+ 图遍历（M10 §2.6）
+	reranker  protocol.Reranker        // optional，Cross-encoder reranking
 }
 
 var _ HybridRetriever = (*HybridRetrieverImpl)(nil)
+
+func (hr *HybridRetrieverImpl) SetReranker(r protocol.Reranker) {
+	hr.reranker = r
+}
 
 // NewHybridRetriever 创建 FTS5-only 检索器（Tier 0）。
 func NewHybridRetriever(db protocol.SQLQuerier) *HybridRetrieverImpl {
@@ -100,14 +106,46 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) (
 	}
 
 	// RRF 三路融合（有 vector 或 graph 时才融合）
+	var finalResults []Chunk
 	if len(vecResults) > 0 || len(graphResults) > 0 {
-		return rrfThreeWay(ftsResults, vecResults, graphResults, topK), nil
+		finalResults = rrfThreeWay(ftsResults, vecResults, graphResults, topK*2)
+	} else {
+		finalResults = ftsResults
 	}
 
-	if len(ftsResults) > topK {
-		ftsResults = ftsResults[:topK]
+	if hr.reranker != nil && len(finalResults) > 0 {
+		finalResults = hr.applyReranker(ctx, query.Text, finalResults)
 	}
-	return ftsResults, nil
+
+	if len(finalResults) > topK {
+		finalResults = finalResults[:topK]
+	}
+	return finalResults, nil
+}
+
+func (hr *HybridRetrieverImpl) applyReranker(ctx context.Context, queryText string, results []Chunk) []Chunk {
+	docs := make([]types.CognitiveSearchResult, len(results))
+	chunkMap := make(map[string]Chunk)
+	for i, c := range results {
+		docs[i] = types.CognitiveSearchResult{
+			ID:      c.ID,
+			Score:   0,
+			Content: c.Content,
+		}
+		chunkMap[c.ID] = c
+	}
+	rerankedDocs, err := hr.reranker.Rerank(ctx, queryText, docs)
+	if err != nil {
+		slog.Warn("knowledge: reranker failed, fallback to original order", "err", err)
+		return results
+	}
+	finalResults := make([]Chunk, 0, len(rerankedDocs))
+	for _, rd := range rerankedDocs {
+		if c, ok := chunkMap[rd.ID]; ok {
+			finalResults = append(finalResults, c)
+		}
+	}
+	return finalResults
 }
 
 // searchFTS 使用 FTS5 BM25 检索，返回 limit 条结果。

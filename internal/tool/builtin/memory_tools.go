@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/tool"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -46,6 +47,7 @@ func RegisterMemoryTools(
 		{tool: memorySearchTool(), fn: makeMemorySearchFn(retriever)},
 		{tool: memoryAppendTool(), fn: makeMemoryAppendFn(semanticWriter)},
 		{tool: memoryExpireTool(), fn: makeMemoryExpireFn(semanticWriter)},
+		{tool: memoryReflectTool(), fn: makeMemoryReflectFn(semanticWriter)},
 	}
 
 	for _, e := range entries {
@@ -205,6 +207,7 @@ func makeMemoryWriteFn(writer SemanticMemWriter) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args memoryWriteArgs
 		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_write", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_write: invalid args", err)
 		}
 		if args.EntityType == "" {
@@ -235,8 +238,10 @@ func makeMemoryWriteFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		}
 
 		if err := writer.UpsertFact(ctx, ent); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_write", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_write: upsert failed", err)
 		}
+		metrics.RecordMemoryToolCall(ctx, "memory_write", true)
 		b, _ := json.Marshal(map[string]string{
 			"status":      "success",
 			"entity_type": args.EntityType,
@@ -255,9 +260,11 @@ func makeMemorySearchFn(retriever protocol.HybridRetriever) sandbox.InProcessFn 
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args memorySearchArgs
 		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: invalid args", err)
 		}
 		if retriever == nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
 			b, _ := json.Marshal(map[string]string{"error": "memory unavailable"})
 			return b, nil
 		}
@@ -275,13 +282,16 @@ func makeMemorySearchFn(retriever protocol.HybridRetriever) sandbox.InProcessFn 
 
 		results, err := retriever.Search(ctx, args.Query, types.SearchScope{Type: "memory"}, cfg)
 		if err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: search failed", err)
 		}
 
 		b, err := json.Marshal(results)
 		if err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: encode response", err)
 		}
+		metrics.RecordMemoryToolCall(ctx, "memory_search", true)
 		return b, nil
 	}
 }
@@ -297,6 +307,7 @@ func makeMemoryAppendFn(writer SemanticMemWriter) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args memoryAppendArgs
 		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_append", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_append: invalid args", err)
 		}
 		if args.EntityType == "" {
@@ -325,8 +336,10 @@ func makeMemoryAppendFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		ent.SyncVersion = time.Now().UnixNano()
 
 		if err := writer.UpsertFact(ctx, *ent); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_append", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_append: upsert failed", err)
 		}
+		metrics.RecordMemoryToolCall(ctx, "memory_append", true)
 		return []byte(`{"status":"success"}`), nil
 	}
 }
@@ -341,6 +354,7 @@ func makeMemoryExpireFn(writer SemanticMemWriter) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args memoryExpireArgs
 		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_expire", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_expire: invalid args", err)
 		}
 		if args.EntityType == "" {
@@ -351,6 +365,7 @@ func makeMemoryExpireFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		// 丢弃 err 避免 nilerr：不存在是预期场景，其他错误同样不阻断工具响应。
 		ent, _ := writer.GetEntity(ctx, args.EntityType, args.Name)
 		if ent == nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_expire", false)
 			b, _ := json.Marshal(map[string]string{
 				"status": "not_found",
 				"name":   args.Name,
@@ -364,13 +379,84 @@ func makeMemoryExpireFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		}
 
 		if err := writer.Archive(ctx, ent.ID, reason); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_expire", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_expire: archive failed", err)
 		}
+		metrics.RecordMemoryToolCall(ctx, "memory_expire", true)
 		b, _ := json.Marshal(map[string]string{
 			"status": "success",
 			"name":   args.Name,
 			"reason": reason,
 		})
 		return b, nil
+	}
+}
+
+func memoryReflectTool() types.Tool {
+	return types.Tool{
+		Name: "memory_reflect",
+		Description: "Trigger an explicit reflection on past events to generate high-level insights or rules. " +
+			"Useful when the agent notices a recurring pattern or makes a significant mistake.",
+		Version:     "1.0.0",
+		Source:      types.ToolBuiltin,
+		Capability:  types.CapWriteLocal,
+		RiskLevel:   types.RiskLow,
+		SandboxTier: types.SandboxInProcess,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"topic": map[string]any{
+					"type":        "string",
+					"description": "The topic or goal being reflected upon",
+				},
+				"insight": map[string]any{
+					"type":        "string",
+					"description": "The generalized learning or strategy derived",
+				},
+				"decision": map[string]any{
+					"type":        "string",
+					"description": "Actionable decision for future similar tasks",
+				},
+			},
+			"required": []string{"topic", "insight", "decision"},
+		},
+	}
+}
+
+type memoryReflectArgs struct {
+	Topic    string `json:"topic"`
+	Insight  string `json:"insight"`
+	Decision string `json:"decision"`
+}
+
+func makeMemoryReflectFn(writer SemanticMemWriter) sandbox.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args memoryReflectArgs
+		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_reflect", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_reflect: invalid args", err)
+		}
+
+		ent := types.Entity{
+			ID:          fmt.Sprintf("ref_%d", time.Now().UnixNano()), // 纳秒精度避免同秒内 ID 碰撞
+			Name:        args.Topic,
+			Type:        "Reflection",
+			TaintLevel:  types.TaintLow,
+			Confidence:  1.0,
+			SyncVersion: time.Now().UnixNano(),
+			Properties: map[string]any{
+				"insight":     args.Insight,
+				"decision":    args.Decision,
+				"source_type": "agent_reflection",
+			},
+		}
+
+		if err := writer.UpsertFact(ctx, ent); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_reflect", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_reflect: upsert failed", err)
+		}
+
+		metrics.RecordMemoryToolCall(ctx, "memory_reflect", true)
+		return []byte(`{"status":"success"}`), nil
 	}
 }

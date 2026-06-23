@@ -422,7 +422,17 @@ func (a *Agent) InjectToolRegistry(tr protocol.ToolRegistry) { a.toolRegistry = 
 // InjectMemory 注入记忆系统（运行时绑定，允许测试注入 mock）。
 func (a *Agent) InjectMemory(mem protocol.Memory) { a.memory = mem }
 
-// Memory 获取记忆系统实例。
+// SetCognitiveSearcher 注入 L2 语义记忆检索器
+func (a *Agent) SetCognitiveSearcher(cs fsm.CognitiveSearcher) {
+	a.sCtx.Cognitive = cs
+}
+
+// SetKnowledgeSearcher 注入 RAG 知识检索器 (M10)
+func (a *Agent) SetKnowledgeSearcher(ks fsm.KnowledgeSearcher) {
+	a.sCtx.KnowledgeSearcher = ks
+}
+
+// Memory 返回 Agent 挂载的物理记忆实例
 func (a *Agent) Memory() protocol.Memory { return a.memory }
 
 // SetPreferences 注入用户配置偏好（如 computer_use_mode）。
