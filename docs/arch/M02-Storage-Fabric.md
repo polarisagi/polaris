@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-> **§跳读**: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:28 接口层 / 2:52 EventLog / 2.6:167 tasks表 / 3:175 容量 / 4:210 Workspace / 5:254 SchemaManager / 6:266 Reindexer / 7:280 Go↔Rust FFI / 8:304 连接池 / 9:312 多写者 / 10:323 引擎速查 / 11:337 四层记忆映射 / 15:343 428(SOFT)降级 / 16:355 依赖
+> **§跳读**: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:28 接口层 / 2:52 EventLog / 2.6:167 tasks表 / 3:175 容量 / 4:210 Workspace / 5:254 SchemaManager / 6:266 Reindexer / 7:280 Go↔Rust FFI / 8:304 连接池 / 9:312 多写者 / 10:323 引擎速查 / 11:340 四层记忆映射 / 15:346 428(SOFT)降级 / 16:358 依赖
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）

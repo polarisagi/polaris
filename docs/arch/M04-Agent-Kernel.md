@@ -1,7 +1,7 @@
 # 模块 4: Agent Kernel
 
 > M4, `internal/agent/` | Go 状态机持有控制流，LLM 仅概率性填空 | `[HE-Rule-5]` `[Tier-0-Limit]`
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:84 Suspend-on-Idle / 3:96 S_VALIDATE / 4:132 DAG / 5:199 System1/2 / 6:219 WorldModel / 7:230 推理预算 / 8:285 CrashRecovery / 12:330 (SOFT)降级 / 13:356 跨模块契约
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:86 Suspend-on-Idle / 3:98 S_VALIDATE / 4:134 DAG / 5:201 System1/2 / 6:221 WorldModel / 7:232 推理预算 / 8:287 CrashRecovery / 12:332 (SOFT)降级 / 13:358 跨模块契约
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
