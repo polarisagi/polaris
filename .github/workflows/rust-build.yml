@@ -1,0 +1,320 @@
+name: Build Rust Artifacts
+
+# 仅在 rust/substrate 源码变更时触发，或手动触发（首次 / 强制重建）。
+# 产物以 content-hash 为 tag 发布到 GitHub pre-release，release.yml 直接下载，
+# 彻底解耦 Rust 编译与版本发布，只要 Rust 不改就零开销。
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_NET_RETRY: 3
+  CARGO_TERM_COLOR: always
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rust/**'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: '强制重建（忽略已存在的缓存 release）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # 创建 / 删除 pre-release
+
+jobs:
+  # ─────────────────────────────────────────────
+  # 1. 计算 rust/substrate 目录的 git tree hash，
+  #    确认同一内容是否已经发布过 pre-release。
+  # ─────────────────────────────────────────────
+  check:
+    name: Check — already built?
+    runs-on: ubuntu-latest
+    outputs:
+      hash:  ${{ steps.hash.outputs.hash }}
+      skip:  ${{ steps.check.outputs.skip }}
+      tag:   ${{ steps.hash.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute rust/substrate tree hash
+        id: hash
+        run: |
+          # git tree-object hash 对目录内容唯一，内容不变则 hash 不变
+          HASH=$(git rev-parse HEAD:rust/substrate)
+          TAG="rust-substrate-${HASH}"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
+          echo "hash=$HASH  tag=$TAG"
+
+      - name: Check if pre-release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.hash.outputs.tag }}
+          FORCE: ${{ github.event.inputs.force_rebuild }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Force rebuild requested."
+          elif gh release view "$TAG" &>/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG exists, skipping build."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG not found, will build."
+          fi
+
+  # ─────────────────────────────────────────────
+  # 2. Linux amd64（原生）
+  # ─────────────────────────────────────────────
+  build-linux-amd64:
+    name: Rust — linux-amd64
+    needs: check
+    if: needs.check.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      # 分层缓存：先查最终产物，命中则跳过 cargo build
+      - name: Cache final artifact
+        id: final-cache
+        uses: actions/cache@v4
+        with:
+          path: rust/substrate/target/x86_64-unknown-linux-gnu/release/libsubstrate.so
+          key: rust-artifact-x86_64-unknown-linux-gnu-${{ needs.check.outputs.hash }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        with:
+          workspaces: rust/substrate
+          shared-key: linux-amd64
+
+      - name: Build
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu --manifest-path rust/substrate/Cargo.toml
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp rust/substrate/target/x86_64-unknown-linux-gnu/release/libsubstrate.so \
+             dist/libsubstrate-linux-amd64.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-linux-amd64
+          path: dist/libsubstrate-linux-amd64.so
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # 3. Linux arm64（原生 ARM runner，公开仓库免费）
+  # ─────────────────────────────────────────────
+  build-linux-arm64:
+    name: Rust — linux-arm64
+    needs: check
+    if: needs.check.outputs.skip == 'false'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache final artifact
+        id: final-cache
+        uses: actions/cache@v4
+        with:
+          path: rust/substrate/target/aarch64-unknown-linux-gnu/release/libsubstrate.so
+          key: rust-artifact-aarch64-unknown-linux-gnu-${{ needs.check.outputs.hash }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        with:
+          workspaces: rust/substrate
+          shared-key: linux-arm64
+
+      - name: Build
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        run: cargo build --release --locked --target aarch64-unknown-linux-gnu --manifest-path rust/substrate/Cargo.toml
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp rust/substrate/target/aarch64-unknown-linux-gnu/release/libsubstrate.so \
+             dist/libsubstrate-linux-arm64.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-linux-arm64
+          path: dist/libsubstrate-linux-arm64.so
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # 4. macOS：两个 target 共用 1 个 runner
+  #    顺序编译 aarch64 + x86_64，省掉一次 runner 分配
+  # ─────────────────────────────────────────────
+  build-darwin:
+    name: Rust — darwin (arm64 + amd64)
+    needs: check
+    if: needs.check.outputs.skip == 'false'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache final artifacts (darwin dual)
+        id: final-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            rust/substrate/target/aarch64-apple-darwin/release/libsubstrate.dylib
+            rust/substrate/target/x86_64-apple-darwin/release/libsubstrate.dylib
+          key: rust-artifact-darwin-dual-${{ needs.check.outputs.hash }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        with:
+          workspaces: rust/substrate
+          shared-key: darwin-dual
+
+      - name: Build darwin-arm64
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        run: cargo build --release --locked --target aarch64-apple-darwin --manifest-path rust/substrate/Cargo.toml
+
+      - name: Build darwin-amd64
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        run: cargo build --release --locked --target x86_64-apple-darwin --manifest-path rust/substrate/Cargo.toml
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp rust/substrate/target/aarch64-apple-darwin/release/libsubstrate.dylib \
+             dist/libsubstrate-darwin-arm64.dylib
+          cp rust/substrate/target/x86_64-apple-darwin/release/libsubstrate.dylib \
+             dist/libsubstrate-darwin-amd64.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-darwin
+          path: dist/
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # 5. Windows：两个 target 共用 1 个 runner
+  # ─────────────────────────────────────────────
+  build-windows:
+    name: Rust — windows (amd64 + arm64)
+    needs: check
+    if: needs.check.outputs.skip == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Windows Defender 扫描 Rust 编译中间产物极慢，预先排除
+      - name: Disable Windows Defender scanning on workspace
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.rustup"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
+
+      - name: Cache final artifacts (windows dual)
+        id: final-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            rust/substrate/target/x86_64-pc-windows-msvc/release/substrate.dll
+            rust/substrate/target/aarch64-pc-windows-msvc/release/substrate.dll
+          key: rust-artifact-windows-dual-${{ needs.check.outputs.hash }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        with:
+          workspaces: rust/substrate
+          shared-key: windows-dual
+
+      - name: Build windows-amd64
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc --manifest-path rust/substrate/Cargo.toml
+
+      - name: Build windows-arm64
+        if: steps.final-cache.outputs.cache-hit != 'true'
+        run: cargo build --release --locked --target aarch64-pc-windows-msvc --manifest-path rust/substrate/Cargo.toml
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp rust/substrate/target/x86_64-pc-windows-msvc/release/substrate.dll \
+             dist/substrate-windows-amd64.dll
+          cp rust/substrate/target/aarch64-pc-windows-msvc/release/substrate.dll \
+             dist/substrate-windows-arm64.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-windows
+          path: dist/
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # 6. 汇总所有平台产物，发布为 pre-release
+  #    tag = rust-substrate-<hash>，永久保留
+  # ─────────────────────────────────────────────
+  publish-artifacts:
+    name: Publish Rust pre-release
+    needs: [check, build-linux-amd64, build-linux-arm64, build-darwin, build-windows]
+    if: needs.check.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rust-*
+          path: dist
+          merge-multiple: true
+
+      - name: List staged files
+        run: ls -lh dist/
+
+      # 若 force_rebuild，先删除旧 release 再重建
+      - name: Delete existing release (force rebuild)
+        if: github.event.inputs.force_rebuild == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+
+      - name: Create pre-release with Rust artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:  ${{ needs.check.outputs.tag }}
+          HASH: ${{ needs.check.outputs.hash }}
+        run: |
+          gh release create "$TAG" \
+            --title "Rust Substrate Artifacts (${HASH:0:8})" \
+            --notes "$(cat <<'EOF'
+          Auto-generated pre-compiled Rust substrate artifacts.
+
+          **Tree hash**: \`${HASH}\`
+          **Platforms**: linux-amd64, linux-arm64, darwin-arm64, darwin-amd64, windows-amd64, windows-arm64
+
+          This release is consumed automatically by the release workflow.
+          Do not delete unless you want to force a rebuild.
+          EOF
+          )" \
+            --prerelease \
+            dist/*

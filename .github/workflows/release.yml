@@ -1,8 +1,32 @@
 name: Release
 
+# ═══════════════════════════════════════════════════════════════════════
+# 优化摘要（对比旧版）
+#
+# 旧流程关键路径：
+#   build-frontend (3min)
+#     → build-go [6×ubuntu, 并行] (~4min)
+#       → build-rust [6×各平台, 串行等待 Go] (~20min macOS/Win)
+#         → package → publish
+#   总计 ~30min；macOS 占 2 个 runner
+#
+# 新流程关键路径：
+#   prepare (30s) ─┐
+#   build-frontend ─┤ 并行
+#   build-go ───────┘
+#     → package (下载预编译 Rust, ~30s) → publish
+#   总计 ~8-10min；零 Rust 编译开销
+#
+# 优化点一览：
+#   ① Rust 完全剥离 — 产物存 GitHub pre-release（rust-build.yml 维护）
+#   ② prepare job 与 build-frontend 并行，提前拿到 Rust hash
+#   ③ build-go 全部 ubuntu-latest 纯交叉编译，Go module cache 命中极快
+#   ④ 并发控制：同一 tag 只允许一个 release 流水线运行
+#   ⑤ 找不到预编译产物时 fail-fast 并给出可操作提示
+# ═══════════════════════════════════════════════════════════════════════
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  CARGO_NET_RETRY: 3
 
 on:
   push:
@@ -13,98 +37,61 @@ permissions:
   contents: write
   actions: read
 
+# 同一 tag 只允许一个 release 运行，防止并发写 release
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # 1. 优先执行 Go 打包 (Fail-Fast 机制)
-  # 全部在 ubuntu 上完成（零 CGO，purego 运行时加载），如果 Go 代码有错立刻失败，阻断下游耗时打包。
-  build-go:
-    needs: build-frontend
-    name: Build Go (${{ matrix.name }})
+  # ───────────────────────────────────────────────
+  # 0. prepare：计算 Rust hash，验证预编译产物存在
+  #    与 build-frontend 并行，无串行开销
+  # ───────────────────────────────────────────────
+  prepare:
+    name: Prepare
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - name: linux-amd64
-            goos: linux
-            goarch: amd64
-            cargo_target: x86_64-unknown-linux-gnu
-            binary_suffix: ""
-          - name: linux-arm64
-            goos: linux
-            goarch: arm64
-            cargo_target: aarch64-unknown-linux-gnu
-            binary_suffix: ""
-          - name: darwin-arm64
-            goos: darwin
-            goarch: arm64
-            cargo_target: aarch64-apple-darwin
-            binary_suffix: ""
-          - name: darwin-amd64
-            goos: darwin
-            goarch: amd64
-            cargo_target: x86_64-apple-darwin
-            binary_suffix: ""
-          - name: windows-amd64
-            goos: windows
-            goarch: amd64
-            cargo_target: x86_64-pc-windows-msvc
-            binary_suffix: ".exe"
-          - name: windows-arm64
-            goos: windows
-            goarch: arm64
-            cargo_target: aarch64-pc-windows-msvc
-            binary_suffix: ".exe"
+    outputs:
+      rust_hash: ${{ steps.hash.outputs.hash }}
+      rust_tag:  ${{ steps.hash.outputs.tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # git describe --tags 需要完整历史；0 = 全量拉取
+          fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
+      - name: Compute Rust substrate tree hash
+        id: hash
+        run: |
+          HASH=$(git rev-parse HEAD:rust/substrate)
+          TAG="rust-substrate-${HASH}"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
+          echo "Rust hash=$HASH"
 
-      - name: Download Frontend Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: web/dist
-
-      - name: Build Backend (cross-compile)
+      - name: Verify prebuilt Rust release exists
         env:
-          CARGO_TARGET: ${{ matrix.cargo_target }}
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          SKIP_RUST_BUILD: 1
-          # 用 GitHub 事件元数据直接覆盖版本号，不依赖 git describe
-          # 即使 shallow clone 或工作树脏，VERSION 也始终等于触发的 tag（如 v1.2.3）
-          VERSION: ${{ github.ref_name }}
-        run: make build-backend
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.hash.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" &>/dev/null 2>&1; then
+            echo "::error::预编译 Rust 产物未找到（tag: $TAG）"
+            echo "::error::请先运行：gh workflow run rust-build.yml"
+            echo "::error::或在 Actions → Build Rust Artifacts → Run workflow 手动触发"
+            exit 1
+          fi
+          echo "✓ Found prebuilt Rust release: $TAG"
 
-      - name: Rename binary for Windows
-        if: matrix.binary_suffix == '.exe'
-        run: mv bin/polaris bin/polaris.exe
-
-      - name: Upload Go Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: go-${{ matrix.name }}
-          path: bin/polaris*
-          retention-days: 1
-
+  # ───────────────────────────────────────────────
+  # 1. 构建前端
+  # ───────────────────────────────────────────────
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
@@ -113,125 +100,157 @@ jobs:
       - name: Build UI
         run: make build-ui
 
-      - name: Upload Frontend Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: web/dist
           retention-days: 1
 
-  # 2. Rust 预编译 (依赖 build-go)
-  # 只有 Go 编译成功，才会启动耗时的 Rust 编译。
-  # 使用 Swatinem/rust-cache@v2 缓存 ~/.cargo 与 target/ 目录（GitHub Cache 服务，TTL 7天，10GB上限）。
-  # 只要 Cargo.lock 与 src/ 无变化，cargo 增量编译几乎瞬间完成，无需重新编译。
-  build-rust:
-    needs: build-go
-    name: Rust (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - name: linux-amd64
-            runner: ubuntu-latest
-            cargo_target: x86_64-unknown-linux-gnu
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-            cargo_target: aarch64-unknown-linux-gnu
-          - name: darwin-arm64
-            runner: macos-latest
-            cargo_target: aarch64-apple-darwin
-          - name: darwin-amd64
-            runner: macos-latest
-            cargo_target: x86_64-apple-darwin
-          - name: windows-amd64
-            runner: windows-latest
-            cargo_target: x86_64-pc-windows-msvc
-          - name: windows-arm64
-            runner: windows-latest
-            cargo_target: aarch64-pc-windows-msvc
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Disable Windows Defender
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cargo"
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.cargo_target }}
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          # 缓存范围限定到 rust/substrate，避免污染其他路径
-          workspaces: rust/substrate
-          # 按 target triple 隔离缓存，防止不同平台互相覆盖
-          key: ${{ matrix.cargo_target }}
-
-      - name: Build Rust
-        shell: bash
-        run: cargo build --release --locked --target ${{ matrix.cargo_target }} --manifest-path rust/substrate/Cargo.toml
-
-      - name: Upload Rust Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-${{ matrix.name }}
-          path: |
-            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.so
-            rust/substrate/target/${{ matrix.cargo_target }}/release/libsubstrate.dylib
-            rust/substrate/target/${{ matrix.cargo_target }}/release/substrate.dll
-          if-no-files-found: warn
-          retention-days: 1
-
-  # 3. 最后合并打包 (依赖 build-go, build-rust)
-  # 从各个 artifact 收集产物并最终压缩
-  package:
-    needs: [build-go, build-rust]
-    name: Package (${{ matrix.name }})
+  # ───────────────────────────────────────────────
+  # 2. 交叉编译 Go 二进制（全部在 ubuntu-latest，CGO=0）
+  #    与 prepare 并行，等 frontend 完成后即启动
+  # ───────────────────────────────────────────────
+  build-go:
+    name: Build Go (${{ matrix.name }})
+    needs: build-frontend
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: true   # 任一平台失败立即取消其余，避免浪费
+      matrix:
+        include:
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+            cargo_target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+            cargo_target: aarch64-unknown-linux-gnu
+          - name: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            cargo_target: aarch64-apple-darwin
+          - name: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            cargo_target: x86_64-apple-darwin
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            cargo_target: x86_64-pc-windows-msvc
+            binary_suffix: ".exe"
+          - name: windows-arm64
+            goos: windows
+            goarch: arm64
+            cargo_target: aarch64-pc-windows-msvc
+            binary_suffix: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true          # 缓存 GOPATH/pkg/mod 和 ~/.cache/go-build
+
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+
+      - name: Build Go binary (cross-compile)
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CARGO_TARGET: ${{ matrix.cargo_target }}
+          SKIP_RUST_BUILD: 1
+          VERSION: ${{ github.ref_name }}
+        run: make build-backend
+
+      - name: Rename binary (Windows)
+        if: matrix.binary_suffix == '.exe'
+        run: mv bin/polaris bin/polaris.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-${{ matrix.name }}
+          path: bin/polaris${{ matrix.binary_suffix }}
+          retention-days: 1
+
+  # ───────────────────────────────────────────────
+  # 3. 打包发布（依赖 build-go + prepare）
+  #    Rust 产物直接从 pre-release 下载，无编译开销
+  # ───────────────────────────────────────────────
+  package:
+    name: Package (${{ matrix.name }})
+    needs: [build-go, prepare]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
       matrix:
         include:
           - name: linux-amd64
             archive_format: tar.gz
+            rust_artifact: libsubstrate-linux-amd64.so
+            rust_libname:  libsubstrate.so
           - name: linux-arm64
             archive_format: tar.gz
+            rust_artifact: libsubstrate-linux-arm64.so
+            rust_libname:  libsubstrate.so
           - name: darwin-arm64
             archive_format: tar.gz
+            rust_artifact: libsubstrate-darwin-arm64.dylib
+            rust_libname:  libsubstrate.dylib
           - name: darwin-amd64
             archive_format: tar.gz
+            rust_artifact: libsubstrate-darwin-amd64.dylib
+            rust_libname:  libsubstrate.dylib
           - name: windows-amd64
             archive_format: zip
+            rust_artifact: substrate-windows-amd64.dll
+            rust_libname:  substrate.dll
           - name: windows-arm64
             archive_format: zip
+            rust_artifact: substrate-windows-arm64.dll
+            rust_libname:  substrate.dll
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download Go Artifact
+      - name: Download Go binary
         uses: actions/download-artifact@v4
         with:
           name: go-${{ matrix.name }}
           path: bin
 
-      - name: Download Rust Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: rust-${{ matrix.name }}
-          path: bin/lib
+      # 从 pre-release 下载对应平台的预编译 Rust .so / .dylib / .dll
+      - name: Download prebuilt Rust artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:      ${{ needs.prepare.outputs.rust_tag }}
+          ARTIFACT: ${{ matrix.rust_artifact }}
+          LIBNAME:  ${{ matrix.rust_libname }}
+        run: |
+          mkdir -p bin/lib
+          gh release download "$TAG" \
+            --pattern "$ARTIFACT" \
+            --dir bin/lib \
+            --clobber
+          # 重命名为运行时期望的规范文件名
+          if [ "$ARTIFACT" != "$LIBNAME" ]; then
+            mv "bin/lib/$ARTIFACT" "bin/lib/$LIBNAME"
+          fi
 
-      - name: Package
+      - name: Package release archive
         run: |
           ARCHIVE_NAME="polaris-${{ matrix.name }}"
           mkdir -p "release_pkg/${ARCHIVE_NAME}"
-          cp -r bin/* "release_pkg/${ARCHIVE_NAME}/"
-          cp -r configs "release_pkg/${ARCHIVE_NAME}/"
-          cp LICENSE "release_pkg/${ARCHIVE_NAME}/"
+          cp -r bin/polaris* "release_pkg/${ARCHIVE_NAME}/"   # binary (含 .exe)
+          cp -r bin/lib      "release_pkg/${ARCHIVE_NAME}/"   # Rust dylib
+          cp -r configs      "release_pkg/${ARCHIVE_NAME}/"
+          cp LICENSE         "release_pkg/${ARCHIVE_NAME}/"
           cd release_pkg
           if [ "${{ matrix.archive_format }}" = "zip" ]; then
             zip -r "../${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
@@ -239,27 +258,32 @@ jobs:
             tar -czvf "../${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
           fi
           cd ..
-          sha256sum ${ARCHIVE_NAME}.* > ${ARCHIVE_NAME}.${{ matrix.archive_format }}.sha256
+          sha256sum ${ARCHIVE_NAME}.${{ matrix.archive_format }} \
+            > ${ARCHIVE_NAME}.${{ matrix.archive_format }}.sha256
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: polaris-${{ matrix.name }}
           path: polaris-${{ matrix.name }}.*
           retention-days: 1
 
+  # ───────────────────────────────────────────────
+  # 4. 发布 GitHub Release
+  # ───────────────────────────────────────────────
   publish:
+    name: Publish GitHub Release
     needs: [package]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: polaris-*
           path: artifacts
           merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
