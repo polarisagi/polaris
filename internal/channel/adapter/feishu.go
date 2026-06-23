@@ -188,7 +188,7 @@ func feishuGetWSEndpoint(ctx context.Context, client *http.Client, domain, appID
 		return "", apperr.Wrap(apperr.CodeInternal, "feishuGetWSEndpoint", err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	var result struct {
 		Data struct {
 			URL string `json:"url"`
@@ -221,7 +221,7 @@ func FeishuSendMessage(ctx context.Context, client *http.Client, domain, token, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("feishu SendMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil

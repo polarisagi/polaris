@@ -203,5 +203,5 @@ func (h *ChatHandler) RunPostProcessors(ctx context.Context, sessionID, reply st
 	}
 	_ = h.SaveMessage(ctx, sessionID, "assistant", reply, "", 0)
 	_ = h.UpdateSessionTitle(ctx, sessionID, reply)
-	h.TouchSession(ctx, sessionID)
+	_ = h.TouchSession(ctx, sessionID) // error logged inside
 }

@@ -199,7 +199,9 @@ func (ks *KillSwitch) writeFullStopFile(reason string) {
 		}
 		content := fmt.Sprintf("{\"timestamp\":%d,\"reason\":%q,\"actor\":%q}\n",
 			time.Now().Unix(), reason, actor)
-		_ = os.WriteFile(filepath.Join(dataDir, ".fullstop"), []byte(content), 0o600)
+		if err := os.WriteFile(filepath.Join(dataDir, ".fullstop"), []byte(content), 0o600); err != nil {
+			panic(fmt.Sprintf("killswitch: failed to write .fullstop file (fail-closed): %v", err))
+		}
 	}
 }
 

@@ -100,7 +100,9 @@ func (at *AuditTrail) Record(record *AuditRecord) error {
 		typ := "system"
 		payload := mustJSON(record) // 序列化完整结构（虽然规范建议 protobuf，暂按 JSON 存）
 
-		err := at.repo.AppendAuditEvent(context.Background(), types.AuditEventRow{
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
 			ID:     id,
 			Actor:  actor,
 			Action: typ,
@@ -167,12 +169,14 @@ func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 	// 持久化到数据库
 	if at.repo != nil {
 		payload := mustJSON(epochEnd)
-		_ = at.repo.AppendAuditEvent(context.Background(), types.AuditEventRow{
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
 			ID:     epochEnd.EventID,
 			Actor:  "system",
 			Action: "system",
 			Meta:   string(payload),
 		})
+		cancel()
 	}
 
 	at.records = append(at.records, epochEnd)
@@ -204,12 +208,14 @@ func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 	// 持久化到数据库
 	if at.repo != nil {
 		payload := mustJSON(epochStart)
-		_ = at.repo.AppendAuditEvent(context.Background(), types.AuditEventRow{
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
 			ID:     epochStart.EventID,
 			Actor:  "system",
 			Action: "system",
 			Meta:   string(payload),
 		})
+		cancel()
 	}
 
 	at.records = []*AuditRecord{epochStart}
@@ -237,7 +243,9 @@ func (at *AuditTrail) recoverFromDB() error {
 		return nil
 	}
 
-	events, err := at.repo.ListAuditEvents(context.Background(), 100, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events, err := at.repo.ListAuditEvents(ctx, 100, "")
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "audit: query events for recovery", err)
 	}

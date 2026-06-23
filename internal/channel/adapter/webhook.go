@@ -34,7 +34,7 @@ func LineSendMessage(ctx context.Context, client *http.Client, accessToken, repl
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("line replyMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil
@@ -58,7 +58,7 @@ func LinePushMessage(ctx context.Context, client *http.Client, accessToken, to, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("line pushMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil
@@ -98,7 +98,7 @@ func WhatsappSendMessage(ctx context.Context, client *http.Client, phoneNumberID
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("whatsapp SendMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil

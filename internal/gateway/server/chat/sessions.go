@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -225,15 +226,22 @@ func (h *ChatHandler) UpdateSessionTitle(ctx context.Context, sessionID, firstIn
 }
 
 // touchSession 更新 updated_at（每次对话后调用）。
-func (h *ChatHandler) TouchSession(ctx context.Context, sessionID string) {
-	_ = h.ChatRepo.TouchSession(context.Background(), sessionID)
+func (h *ChatHandler) TouchSession(ctx context.Context, sessionID string) error {
+	tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.ChatRepo.TouchSession(tctx, sessionID); err != nil {
+		slog.Warn("server: failed to touch session", "session", sessionID, "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "ChatHandler.TouchSession", err)
+	}
+	return nil
 }
 
 // newSessionID 生成 16 字节随机 hex ID。
+// 熵池耗尽时降级为纳秒时间戳，确保唯一性（不使用固定零值，防止 session 碰撞）。
 func newSessionID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("sess_%d", 0)
+		return fmt.Sprintf("sess_%d", time.Now().UnixNano())
 	}
 	return "sess_" + hex.EncodeToString(b)
 }

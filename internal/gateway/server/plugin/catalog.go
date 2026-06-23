@@ -210,9 +210,13 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 
 	// 防重复
 	var existCount int
-	h.DB.QueryRowContext(r.Context(), //nolint:errcheck
+	errExist := h.DB.QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM extension_instances WHERE catalog_id=?`, req.CatalogID).
-		Scan(&existCount) //nolint:errcheck
+		Scan(&existCount)
+	if errExist != nil {
+		http.Error(w, "failed to check existing installation", http.StatusInternalServerError)
+		return
+	}
 	if existCount > 0 {
 		http.Error(w, "already installed", http.StatusConflict)
 		return

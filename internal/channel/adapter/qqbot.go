@@ -313,7 +313,7 @@ func QqbotSendMessage(ctx context.Context, client *http.Client, token, msgType, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("qqbot SendMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil

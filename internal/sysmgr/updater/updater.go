@@ -204,7 +204,11 @@ func (m *Manager) TriggerUpdate(ctx context.Context, version string) error {
 		}
 	}
 
-	go m.doUpdate(context.Background(), version)
+	ctxUpdate, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	go func() {
+		defer cancel()
+		m.doUpdate(ctxUpdate, version)
+	}()
 	return nil
 }
 

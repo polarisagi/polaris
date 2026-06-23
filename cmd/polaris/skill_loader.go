@@ -43,7 +43,7 @@ func parseDescription(instructions, capsRaw string) string {
 // loadSkillsToToolRegistry 启动时将 DB 中 runtime='script' exec_mode='tool' 的技能
 // 批量同步到 InMemoryToolRegistry 和 InProcessSandbox，
 // 使 Agent Kernel FSM 在系统已安装的技能上具备可发现能力。
-func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolReg *polartool.InMemoryToolRegistry, sbx *sandbox.InProcessSandbox) {
+func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolReg *polartool.InMemoryToolRegistry, sbx *sandbox.InProcessSandbox) { //nolint:gocyclo
 	if db == nil || toolReg == nil || sbx == nil {
 		return
 	}
@@ -75,8 +75,10 @@ func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolR
 		sbx.Register(llmName, func(ctx context.Context, input []byte) ([]byte, error) {
 			var dbInst string
 			if db != nil {
-				_ = db.QueryRowContext(ctx,
-					`SELECT instructions FROM skills WHERE name=? AND deprecated=0`, "skill:"+capturedSlug).Scan(&dbInst)
+				if err := db.QueryRowContext(ctx,
+					`SELECT instructions FROM skills WHERE name=? AND deprecated=0`, "skill:"+capturedSlug).Scan(&dbInst); err != nil {
+					slog.Debug("skill_loader: reload from db failed or not found", "skill", capturedSlug, "err", err)
+				}
 			}
 			inst := dbInst
 			if inst == "" {
@@ -110,6 +112,9 @@ func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolR
 			continue
 		}
 		count++
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("loadSkillsToToolRegistry: rows iteration error", "err", err)
 	}
 	if count > 0 {
 		slog.Info("polaris: loaded skills from DB to InMemoryToolRegistry", "count", count)

@@ -92,7 +92,7 @@ func (c *MCPMarketplaceClient) Search(ctx context.Context, query string) ([]prot
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("marketplace: search returned %d", resp.StatusCode))
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "marketplace: failed to read response", err)
 	}

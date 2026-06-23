@@ -93,7 +93,7 @@ func matrixLogin(ctx context.Context, client *http.Client, homeserver, username,
 		return "", apperr.Wrap(apperr.CodeInternal, "matrixLogin", err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("matrix: login status %d: %s", resp.StatusCode, b))
 	}
@@ -132,7 +132,7 @@ func matrixSync(ctx context.Context, client *http.Client, homeserver, accessToke
 		return "", nil, apperr.Wrap(apperr.CodeInternal, "matrixSync", err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("matrix: sync status %d: %s", resp.StatusCode, b))
 	}

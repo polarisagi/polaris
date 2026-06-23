@@ -159,7 +159,11 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 	if rw.provider != nil {
 		fg.InjectLLMProvider(rw.provider)
 	}
-	verdict, _ := fg.Verify(ctx, res.Content, sb.String(), types.TaintLow)
+	verdict, errVerify := fg.Verify(ctx, res.Content, sb.String(), types.TaintLow)
+	if errVerify != nil {
+		slog.Warn("reflection_worker: factuality check returned error, skipping write", "err", errVerify)
+		return nil
+	}
 	if verdict.Verdict == guard.FactualityFail {
 		slog.Warn("reflection_worker: factuality check failed, skipping write")
 		return nil

@@ -140,7 +140,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != 200 {
-		raw, _ := io.ReadAll(httpResp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("anthropic: HTTP %d: %s", httpResp.StatusCode, raw))
 	}
 
@@ -243,7 +243,7 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 	}
 
 	if httpResp.StatusCode != 200 {
-		raw, _ := io.ReadAll(httpResp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		httpResp.Body.Close()
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("anthropic: HTTP %d: %s", httpResp.StatusCode, raw))
 	}

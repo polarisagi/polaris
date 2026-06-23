@@ -76,5 +76,5 @@ func TestSessionsInternal(t *testing.T) {
 	h.UpdateSessionTitle(ctx, "sess-1", "new title")
 
 	// touchSession
-	h.TouchSession(ctx, "sess-1")
+	_ = h.TouchSession(ctx, "sess-1")
 }

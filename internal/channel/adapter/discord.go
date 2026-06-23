@@ -245,7 +245,7 @@ func DiscordSendMessage(ctx context.Context, client *http.Client, token, channel
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("discord SendMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil

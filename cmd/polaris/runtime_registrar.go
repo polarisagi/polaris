@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -126,8 +127,11 @@ func (r *runtimeRegistrarAdapter) syncSkillToToolRegistry(skillName string, inst
 		// 运行时重查 instructions（优先 DB 最新值，fallback 启动时快照）
 		var dbInst string
 		if db != nil {
-			_ = db.QueryRowContext(ctx,
+			err := db.QueryRowContext(ctx,
 				`SELECT instructions FROM skills WHERE name=? AND deprecated=0`, "skill:"+skillName).Scan(&dbInst)
+			if err != nil && err != sql.ErrNoRows {
+				slog.Warn("failed to fetch latest skill instructions from db", "skill", skillName, "err", err)
+			}
 		}
 		inst := dbInst
 		if inst == "" {
@@ -136,7 +140,9 @@ func (r *runtimeRegistrarAdapter) syncSkillToToolRegistry(skillName string, inst
 		var req struct {
 			Input string `json:"input"`
 		}
-		_ = json.Unmarshal(input, &req)
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid input for skill", err)
+		}
 		out := inst
 		if req.Input != "" {
 			out += "\n\n---\n\n输入：" + req.Input

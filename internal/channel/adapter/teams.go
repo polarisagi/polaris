@@ -45,7 +45,7 @@ func TeamsGetAccessToken(ctx context.Context, client *http.Client, tenantID, cli
 		return "", apperr.Wrap(apperr.CodeInternal, "TeamsGetAccessToken", err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("teams: token status %d: %s", resp.StatusCode, b))
 	}

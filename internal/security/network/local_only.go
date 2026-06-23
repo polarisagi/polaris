@@ -234,7 +234,9 @@ func (ns *NetworkSandbox) StartupCheck() error {
 	}
 
 	// DNS 泄露检测: 解析公网域名 → 收到响应 → 沙箱失效
-	addrs, err := ns.dnsResolver.LookupHost(context.Background(), "privacy-check.polarisagi/polaris-external.com")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	addrs, err := ns.dnsResolver.LookupHost(ctx, "privacy-check.polarisagi/polaris-external.com")
 	if err == nil && len(addrs) > 0 {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("local_only: DNS leak detected — %d addresses resolved for privacy check domain", len(addrs)))
 	}

@@ -329,7 +329,7 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != 200 {
-		raw, _ := io.ReadAll(httpResp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
 	}
 
@@ -431,7 +431,7 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	if httpResp.StatusCode != 200 {
-		raw, _ := io.ReadAll(httpResp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		httpResp.Body.Close()
 		cancel()
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))

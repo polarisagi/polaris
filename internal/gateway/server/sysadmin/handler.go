@@ -25,10 +25,10 @@ import (
 
 type ChatDispatcher interface {
 	EnsureSession(ctx context.Context, sessionID string) error
-	InjectSystemPrompt(history []types.Message) []types.Message
+	InjectSystemPrompt(ctx context.Context, history []types.Message) []types.Message
 	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls string, toolCount int64) error
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
-	TouchSession(ctx context.Context, sessionID string)
+	TouchSession(ctx context.Context, sessionID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]types.Message, error)
 	GenerateReply(ctx context.Context, req *types.InferRequest, sessionID string) (string, error)
 	RunPostProcessors(ctx context.Context, sessionID, reply string)

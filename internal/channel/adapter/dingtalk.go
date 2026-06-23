@@ -120,7 +120,7 @@ func dingTalkGetEndpoint(ctx context.Context, client *http.Client, clientID, cli
 		return "", apperr.Wrap(apperr.CodeInternal, "dingTalkGetEndpoint", err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("dingtalk: endpoint status %d: %s", resp.StatusCode, b))
 	}

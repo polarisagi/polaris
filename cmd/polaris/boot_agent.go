@@ -212,10 +212,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	rollout := optimizer.NewProgressiveRollout()
 	rolloutBridge := reflexion.NewRolloutBridge(rollout)
 
-	m9Engine := learning.NewEngine(nil, reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
-
 	promptOptimizer := optimizer.NewPromptOptimizer(nil, nil, 0)
-	_ = promptOptimizer
+	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
+	m9Engine.SetOptimizer(promptOptimizer)
+
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
 
 	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)

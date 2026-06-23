@@ -154,7 +154,9 @@ func run() error { //nolint:gocyclo
 
 	// ─── §13 零 Provider 引导（Zero-Provider Detection）─────────────────────
 	var providerCount int
-	_ = sb.Store.DB().QueryRow("SELECT COUNT(*) FROM providers").Scan(&providerCount)
+	if err := sb.Store.DB().QueryRow("SELECT COUNT(*) FROM providers").Scan(&providerCount); err != nil {
+		slog.Warn("polaris: failed to check provider count from db", "err", err)
+	}
 	if providerCount == 0 {
 		if cliTTY {
 			_ = runInit()

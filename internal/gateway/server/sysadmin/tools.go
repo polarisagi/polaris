@@ -134,7 +134,7 @@ func (h *SysAdminHandler) HandleExecuteTool(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

@@ -132,7 +132,7 @@ func (c *OpenAICompatibleClient) SendRequest(ctx context.Context, apiKey []byte,
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(httpResp.Body)
+		body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("api error (status %d): %s", httpResp.StatusCode, strings.TrimSpace(string(body))))
 	}
 

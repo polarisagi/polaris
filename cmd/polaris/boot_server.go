@@ -88,7 +88,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	logicCollapseEnabled := sb.AutoConf != nil &&
 		sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled
 
-	if logicCollapseEnabled {
+	if logicCollapseEnabled && tb.ContainerSandbox != nil {
 		collapseCompilerTier := sb.AutoConf.Config.Tier
 		collapseCompiler := extskill.NewLogicCollapseCompiler(extskill.LogicCollapseConfig{
 			Gate:             extskill.NewCompileGate(collapseCompilerTier),
@@ -119,7 +119,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			"tier", collapseCompilerTier,
 		)
 	} else {
-		slog.Info("polaris: LogicCollapseMonitor skipped (FeatureLogicCollapse disabled or AutoConf nil)")
+		slog.Info("polaris: LogicCollapseMonitor skipped (FeatureLogicCollapse disabled, AutoConf nil, or ContainerSandbox nil)")
 	}
 	// ─── [/P2-FIX] ───────────────────────────────────────────────────────────
 

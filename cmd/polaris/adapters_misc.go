@@ -24,6 +24,7 @@ import (
 	si "github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/store/search"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -32,9 +33,15 @@ import (
 // SurrealDB 不可用时（<8GB VPS）的空实现占位，实现 agents.SurrealWriterInterface。
 type dummySurreal struct{}
 
-func (d dummySurreal) FTSIndex(docID, text string) error                               { return nil }
-func (d dummySurreal) VecUpsert(id string, embedding []float32) error                  { return nil }
-func (d dummySurreal) GraphRelate(fromID, edgeType, toID string, weight float64) error { return nil }
+func (d dummySurreal) FTSIndex(docID, text string) error {
+	return apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
+func (d dummySurreal) VecUpsert(id string, embedding []float32) error {
+	return apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
+func (d dummySurreal) GraphRelate(fromID, edgeType, toID string, weight float64) error {
+	return apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
 
 // ─── evalAgentAdapter ─────────────────────────────────────────────────────────
 //
@@ -113,7 +120,7 @@ func (a *memEmbedderAdapter) ModelVersion() string { return a.model }
 type collapseRecorderAdapter struct{ m *si.LogicCollapseMonitor }
 
 func (a *collapseRecorderAdapter) RecordToolSuccess(ctx context.Context, toolName string) {
-	go a.m.RecordSuccess(ctx, &extskill.CollapseTrajectory{
+	go a.m.RecordSuccess(context.WithoutCancel(ctx), &extskill.CollapseTrajectory{
 		SkillID:     toolName,
 		CompletedAt: time.Now().Unix(),
 		TaintLevel:  0,

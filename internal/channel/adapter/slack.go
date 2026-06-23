@@ -121,7 +121,7 @@ func slackGetSocketURL(ctx context.Context, client *http.Client, appToken string
 		return "", apperr.Wrap(apperr.CodeInternal, "slackGetSocketURL", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	var result struct {
 		OK  bool   `json:"ok"`
 		URL string `json:"url"`
@@ -149,7 +149,7 @@ func SlackSendMessage(ctx context.Context, client *http.Client, botToken, channe
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("slack postMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil

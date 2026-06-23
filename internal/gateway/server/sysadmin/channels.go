@@ -189,7 +189,7 @@ func (h *SysAdminHandler) HandleWebhookReceive(w http.ResponseWriter, r *http.Re
 	// 限制为 4MB：足够容纳所有平台的 webhook 消息，远低于 VFS 上传的 100MB。
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	defer r.Body.Close()
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
@@ -415,7 +415,7 @@ func (h *SysAdminHandler) dispatchChannelMessage(ctx context.Context, channelTyp
 		slog.Error("channel dispatch: saveMessage assistant", "err", err)
 	}
 	_ = h.Chat.UpdateSessionTitle(ctx, sessionKey, msg.Text)
-	h.Chat.TouchSession(ctx, sessionKey)
+	_ = h.Chat.TouchSession(ctx, sessionKey)
 
 	h.Hooks.Fire("message.after", map[string]string{
 		"POLARIS_REPLY":      reply,

@@ -37,7 +37,7 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			b, _ := io.ReadAll(resp.Body)
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 			slog.Warn("telegram: sendMessage non-200", "status", resp.StatusCode, "body", string(b), "err", apperr.New(apperr.CodeInternal, "log event"))
 		}
 

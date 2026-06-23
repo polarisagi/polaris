@@ -311,6 +311,8 @@ func (tm *TokenManager) minTTL(caps []CapabilityType) time.Duration {
 // generateTokenID 生成唯一令牌 ID（使用随机 8 字节的十六进制编码）。
 func generateTokenID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return fmt.Sprintf("%x", b)
 }

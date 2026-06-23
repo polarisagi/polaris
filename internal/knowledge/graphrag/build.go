@@ -137,9 +137,13 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 			conceptLabel = entities[highestIdx].Name
 		}
 
+		var maxTaint types.TaintLevel
 		sourceEntityIDs := make([]string, 0, len(cluster))
 		for _, idx := range cluster {
 			sourceEntityIDs = append(sourceEntityIDs, entities[idx].ID)
+			if entities[idx].TaintLevel > maxTaint {
+				maxTaint = entities[idx].TaintLevel
+			}
 		}
 
 		conceptEntity := types.Entity{
@@ -147,8 +151,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 			Name:       conceptLabel,
 			Type:       "Concept",
 			Properties: map[string]any{"cluster_size": len(cluster), "source_entities": sourceEntityIDs},
-			// Assume ConceptSynthesizer runs in a context where event tracking is not direct, or trace to doc processing event
-			TaintLevel: types.TaintLevel(0), // Inherit appropriately in real impl
+			TaintLevel: maxTaint,
 		}
 
 		if err := p.semanticMem.UpsertFact(ctx, conceptEntity); err != nil {

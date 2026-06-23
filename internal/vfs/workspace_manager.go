@@ -92,7 +92,11 @@ type WorkspaceFile struct {
 // Create 为任务创建隔离工作区目录，并注册 manifest。
 // 目录路径: {rootDir}/{taskID}/，权限 0700（仅当前进程可读写）。
 func (wm *WorkspaceManager) Create(taskID string) (string, error) {
-	key := taskID
+	key := filepath.Base(filepath.Clean(taskID))
+	if key == "." || key == "/" || key == "\\" {
+		return "", apperr.New(apperr.CodeInvalidInput, "invalid taskID")
+	}
+
 	if _, exists := wm.manifests[key]; exists {
 		return filepath.Join(wm.rootDir, key), nil // 幂等
 	}
@@ -109,7 +113,7 @@ func (wm *WorkspaceManager) Create(taskID string) (string, error) {
 
 // RegisterFile 将文件记录到工作区 manifest，供 CheckQuota 和 GC 使用。
 func (wm *WorkspaceManager) RegisterFile(taskID string, f WorkspaceFile) {
-	key := taskID
+	key := filepath.Base(filepath.Clean(taskID))
 	m, ok := wm.manifests[key]
 	if !ok {
 		return
@@ -159,7 +163,8 @@ func (wm *WorkspaceManager) GC(now int64, activeTaskIDs []string) {
 
 // DirPath 返回任务工作区的物理路径（不创建）。
 func (wm *WorkspaceManager) DirPath(taskID string) string {
-	return filepath.Join(wm.rootDir, taskID)
+	key := filepath.Base(filepath.Clean(taskID))
+	return filepath.Join(wm.rootDir, key)
 }
 
 var ErrWorkspaceQuotaExhausted = &WorkspaceError{"workspace quota exhausted"}

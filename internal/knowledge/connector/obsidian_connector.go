@@ -128,8 +128,13 @@ func (c *ObsidianConnector) List(ctx context.Context) ([]*types.DocumentRef, err
 
 // Fetch 读取单个文件的内容，并分离出 YAML frontmatter 作为元数据。
 func (c *ObsidianConnector) Fetch(ctx context.Context, ref *types.DocumentRef) (*types.SyncDocument, error) {
-	relPath := strings.TrimPrefix(ref.URI, "file://")
+	relPath := filepath.Clean(strings.TrimPrefix(ref.URI, "file://"))
 	fullPath := filepath.Join(c.basePath, relPath)
+
+	base := filepath.Clean(c.basePath)
+	if !strings.HasPrefix(fullPath, base+string(os.PathSeparator)) && fullPath != base {
+		return nil, apperr.New(apperr.CodeForbidden, "path traversal detected")
+	}
 
 	data, err := os.ReadFile(fullPath)
 	if err != nil {

@@ -487,7 +487,7 @@ func probeProvider(ctx context.Context, client *http.Client, typ, baseURL, apiKe
 		if resp.StatusCode == 200 {
 			return true, "连接正常"
 		}
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		limit := len(raw)
 		if limit > 200 {
 			limit = 200

@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -177,8 +178,13 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 
 	if c.summarizer != nil && gw != nil {
 		communities := make(map[int][]string)
+		// 同步计算每个社区的最高污点级别，确保摘要节点不低于其成员的最高污点
+		communityMaxTaint := make(map[int]types.TaintLevel)
 		for i, label := range labels {
 			communities[label] = append(communities[label], entities[i].Name)
+			if entities[i].TaintLevel > communityMaxTaint[label] {
+				communityMaxTaint[label] = entities[i].TaintLevel
+			}
 		}
 
 		summaries, err := c.summarizer.Summarize(ctx, communities)
@@ -197,6 +203,7 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 				Name:       "Community Summary",
 				Type:       "Community",
 				Properties: props,
+				TaintLevel: communityMaxTaint[s.CommunityID], // 继承成员最高污点，防止外部数据洗白
 			}
 			if err := gw.UpsertEntity(ctx, entity); err != nil {
 				return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster", err)

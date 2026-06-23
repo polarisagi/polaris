@@ -136,7 +136,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	isFirstTurn := len(history) == 0
 
 	if len(history) > 0 {
-		history = s.InjectSystemPrompt(history)
+		history = s.InjectSystemPrompt(ctx, history)
 	}
 	// [新增] 将用户 input 注入 Agent FSM（非阻塞）
 	if s.Agent != nil {
@@ -293,11 +293,13 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	// ── 斜线命令拦截（短路 LLM 推理）────────────────────────────────────────
 	if cmdResult := s.SlashRouter.Dispatch(ctx, finalInput, sessionID, history, p, w, flusher); cmdResult.Handled {
 		if cmdResult.Response != "" {
-			if err := s.SaveMessage(context.WithoutCancel(ctx), sessionID, "assistant", cmdResult.Response, "", 0); err != nil {
+			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", 0); err != nil {
 				slog.Error("server: saveMessage slash response", "session", sessionID, "err", err)
 			}
 		}
-		s.TouchSession(context.WithoutCancel(ctx), sessionID)
+		_ = s.TouchSession(context.WithoutCancel(ctx), sessionID)
 		writeSSE(w, flusher, "complete", map[string]any{"session_id": sessionID, "session_title": ""})
 		return
 	}
@@ -568,13 +570,17 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 
 	// ── 持久化 assistant 回复 ─────────────────────────────────────────────
 	reply := sb.String()
+
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer saveCancel()
+
 	if reply != "" || len(executedToolCalls) > 0 {
 		var tcJson string
 		if len(executedToolCalls) > 0 {
 			b, _ := json.Marshal(executedToolCalls)
 			tcJson = string(b)
 		}
-		if err := s.SaveMessage(context.WithoutCancel(ctx), sessionID, "assistant", reply, tcJson, inferLatencyMs); err != nil {
+		if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, tcJson, inferLatencyMs); err != nil {
 			slog.Error("server: saveMessage assistant", "session", sessionID, "err", err)
 		}
 		if tw != nil {
@@ -582,9 +588,9 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if isFirstTurn {
-		_ = s.UpdateSessionTitle(context.WithoutCancel(ctx), sessionID, req.Input)
+		_ = s.UpdateSessionTitle(saveCtx, sessionID, req.Input)
 	}
-	s.TouchSession(context.WithoutCancel(ctx), sessionID)
+	_ = s.TouchSession(saveCtx, sessionID)
 
 	slog.Info("server: turn complete",
 		"session", sessionID,
@@ -612,7 +618,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (s *ChatHandler) InjectSystemPrompt(history []types.Message) []types.Message { //nolint:gocyclo,nestif
+func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, history []types.Message) []types.Message { //nolint:gocyclo,nestif
 	if s.Agent == nil || s.Agent.Memory() == nil {
 		return history
 	}
@@ -686,7 +692,7 @@ func (s *ChatHandler) InjectSystemPrompt(history []types.Message) []types.Messag
 
 		// 1. 已安装插件（来自 plugins 表），格式：display_name: description [MCPs: name ✓/✗]
 		if s.DB != nil {
-			plugRows, err := s.DB.QueryContext(context.Background(),
+			plugRows, err := s.DB.QueryContext(ctx,
 				`SELECT id, name, display_name, description, mcp_policy FROM plugins WHERE enabled=1`)
 			if err == nil {
 				defer plugRows.Close()
@@ -763,7 +769,7 @@ func (s *ChatHandler) InjectSystemPrompt(history []types.Message) []types.Messag
 	// Ambient skills 追加到模板（已在上方重置为 baseSystemPromptTpl / activatedPrompt，无累积风险）。
 	// 唯一来源是 skills 表，State-in-DB 原则；插件 ambient skill 在安装时由 registerPluginSkills 写入。
 	if s.DB != nil {
-		ic.SystemPromptTemplate += s.buildAmbientSkillsSection()
+		ic.SystemPromptTemplate += s.buildAmbientSkillsSection(ctx)
 	}
 
 	return ic.PrependToMessages(history)
@@ -771,9 +777,9 @@ func (s *ChatHandler) InjectSystemPrompt(history []types.Message) []types.Messag
 
 // buildAmbientSkillsSection 按 trust_tier 降序注入 ambient skill instructions，总字符数不超过 4000。
 // 超限时优先保留 trust_tier 高的，其余截断并记录 WARN 日志。
-func (s *ChatHandler) buildAmbientSkillsSection() string {
+func (s *ChatHandler) buildAmbientSkillsSection(ctx context.Context) string {
 	// trust_tier DESC 确保高信任技能优先；4000 字符上限保护上下文窗口
-	rows, err := s.DB.QueryContext(context.Background(),
+	rows, err := s.DB.QueryContext(ctx,
 		`SELECT name, instructions FROM skills
          WHERE exec_mode='ambient' AND deprecated=0
          ORDER BY trust_tier DESC`)

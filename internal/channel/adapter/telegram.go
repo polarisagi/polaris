@@ -95,7 +95,7 @@ func tgGetUpdates(ctx context.Context, client *http.Client, token string, offset
 		return nil, apperr.Wrap(apperr.CodeInternal, "tgGetUpdates", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 
 	var result struct {
 		OK     bool       `json:"ok"`

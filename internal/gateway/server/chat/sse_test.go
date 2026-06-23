@@ -3,6 +3,7 @@ package chat
 import (
 	"github.com/polarisagi/polaris/internal/store/repo"
 
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -114,7 +115,7 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill1', 'inst1', 'ambient', 0, 1)`)
 	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill4', 'inst4', 'ambient', 0, 4)`)
 
-	result := srv.buildAmbientSkillsSection()
+	result := srv.buildAmbientSkillsSection(context.Background())
 	if !strings.Contains(result, "skill4") {
 		t.Fatal("missing skill4")
 	}
@@ -128,7 +129,7 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill6', ?, 'ambient', 0, 6)`, strings.Repeat("B", 2000))
 	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill5', ?, 'ambient', 0, 5)`, strings.Repeat("C", 2500))
 
-	result2 := srv.buildAmbientSkillsSection()
+	result2 := srv.buildAmbientSkillsSection(context.Background())
 	if len(result2) > 4100 { //
 
 		// 等有额外开销
