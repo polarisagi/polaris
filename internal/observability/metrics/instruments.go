@@ -40,8 +40,9 @@ var ActiveAgentsCount atomic.Int64
 
 // TaskSuccessCount / TaskTotalCount 由 RecordTaskOutcome() 更新。
 var (
-	TaskSuccessCount atomic.Int64
-	TaskTotalCount   atomic.Int64
+	TaskSuccessCount         atomic.Int64
+	TaskTotalCount           atomic.Int64
+	GlobalSkillCacheHitTotal atomic.Int64
 )
 
 // ── InitMetrics ─────────────────────────────────────────────────────────────

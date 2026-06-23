@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	skillpkg "github.com/polarisagi/polaris/internal/extension/skill"
 
 	"github.com/polarisagi/polaris/internal/action/codeact"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
@@ -51,11 +52,12 @@ type Agent struct {
 	whisperSendChan   chan<- protocol.MemoryWhisper // PlannerPool 推送端
 	plannerSpawner    func(ctx context.Context, goal, taskType string, provider protocol.Provider)
 	outboxWriter      protocol.OutboxWriter
-	piiVault          *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
-	extQuerier        protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
-	toolCallRecorder  ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
-	memInjector       MemoryInjector            // NEW: 组装前主动记忆注入
-	codeAct           *codeact.CodeAct          // LLM 代码执行引擎；nil 时 code_act 节点返回错误
+	piiVault          *agentctx.SessionPIIVault  // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
+	extQuerier        protocol.SQLQuerier        // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
+	toolCallRecorder  ToolCallRecorder           // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
+	memInjector       MemoryInjector             // NEW: 组装前主动记忆注入
+	codeAct           *codeact.CodeAct           // LLM 代码执行引擎；nil 时 code_act 节点返回错误
+	skillCache        *skillpkg.ScriptSkillCache // 可选；nil 时 FastPath 跳过缓存查询
 }
 
 // MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
@@ -100,6 +102,13 @@ func (a *Agent) SetMemoryInjector(i MemoryInjector) {
 
 // SetCodeAct 注入 CodeAct 引擎，在 Agent 创建后 kernel 启动前调用。
 func (a *Agent) SetCodeAct(ca *codeact.CodeAct) { a.codeAct = ca }
+
+// WithSkillCache 注入 ScriptSkillCache，启用 FastPath 技能命中路径。
+// nil-safe：不注入时 FastPath 退回合成 JSON 路径。
+func (a *Agent) WithSkillCache(sc *skillpkg.ScriptSkillCache) *Agent {
+	a.skillCache = sc
+	return a
+}
 
 // BlindZoneDetector 盲区探测器接口，打破 L1 到 L2 的依赖。
 type BlindZoneDetector interface {

@@ -164,7 +164,7 @@ func (fg *FeatureGate) reassessAll() {
 		FeaturePRMTraining,
 		FeatureGraphRAGFull,
 		FeatureDeepRAG,
-		FeatureLogicCollapse, // depends on FeatureL2Sandbox
+		FeatureLogicCollapse, // depends on FeatureL3Sandbox（M06 §116，ADR-0026）
 		// Layer 2 — depends on local inference
 		FeatureLargeLocalLLM,   // depends on FeatureLocalInference
 		FeatureActivationSteer, // depends on FeatureLocalInference
@@ -210,7 +210,7 @@ func (fg *FeatureGate) computeState(f Feature, rule featureRule, availableMB uin
 			return FeatureDisabled
 		}
 	case FeatureLogicCollapse:
-		if fg.stateWithOverride(FeatureL2Sandbox) == FeatureDisabled {
+		if fg.stateWithOverride(FeatureL3Sandbox) == FeatureDisabled {
 			return FeatureDisabled
 		}
 	}

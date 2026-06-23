@@ -264,10 +264,12 @@ func (s *SurrealDBCoreStore) Close() error { return nil }
 // 认知轴数据丢失；SurrealDB 会在下次写入时重建（mem backend）
 // 或从 rocksdb 重新加载（rocksdb backend）。
 func (s *SurrealDBCoreStore) Purge() error {
-	// 当前 SurrealDBCoreStore 为 Rust FFI stub；
-	// FFI 层的实际内存释放由 rust/substrate 处理。
-	// Go 侧置 nil 字段触发 GC（FFI 对象由 finalizer 释放）。
-	// 此实现与 Tier-0 内存预算匹配：purge 后认知轴降级到 SQLite 路径。
+	// 通知 Rust 侧释放所有认知轴内存（kv + vec + graph + fts）。
+	// Rust surreal_purge() 是 no-op 安全：FFI 未加载时函数指针为 nil。
+	// 执行后 SurrealDB 内存引用清空；mem 后端数据丢失（可接受，OSMemoryGuard
+	// DegradationCritical 触发时已判定认知轴数据可牺牲）；
+	// rocksdb 后端数据持久化，重新 Open 可恢复。
+	SurrealPurge() // 调用已注册的 FFI：surreal_purge()
 	slog.Warn("surreal_store: Purge called — cognitive axis data cleared for memory pressure relief")
 	return nil
 }

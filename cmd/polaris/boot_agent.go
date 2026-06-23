@@ -23,7 +23,9 @@ import (
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/extension/native"
+	"github.com/polarisagi/polaris/internal/extension/skill"
 	si "github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
@@ -162,6 +164,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		}
 		return tb.SandboxRouter.Execute(ctx, tool, args, types.TaintNone)
 	}, nil)
+
+	// Inject ScriptSkillCache
+	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled {
+		if tb.SkillRegistry != nil { // skillRegistry 已在 boot_tools.go 构建
+			skillCache := skill.NewScriptSkillCache(nil, 0, 0, 0)
+			agent.WithSkillCache(skillCache)
+			slog.Info("polaris: ScriptSkillCache injected into Agent FastPath")
+		}
+	}
+
 	slog.Info("polaris: agent kernel & DAG executor initialized")
 
 	evalRunner.InjectAgent(&evalAgentAdapter{agent: agent})

@@ -114,7 +114,46 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			// 具体能力识别将在后续通过 intent 向量检索实现（ADR-M09）。
 			// 注意: SurpriseIndex == 0 表示"未计算"（默认值），不触发 FastPath。
 			if a.sCtx.SurpriseIndex > 0 && a.sCtx.SurpriseIndex < 0.3 {
+				// System 1 FastPath：先查技能缓存（M09 Logic Collapse 蒸馏产出）
+				// 命中则直接执行 Python 脚本，绕过 LLM；未命中退回合成 JSON 路径。
+				if a.skillCache != nil && a.sCtx.TaskModel != nil {
+					skillID := extractTaskType(a.sCtx.TaskModel.Goal)
+					if handle, cacheErr := a.skillCache.GetOrSpawn(ctx, skillID); cacheErr == nil && handle != nil {
+						// 技能缓存命中：执行 Python 脚本
+						// ProcessHandle 不包含执行方法，实际执行通过 ToolRegistry 路由到 M7 Sandbox
+						runCtx, runCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+						defer runCancel()
 
+						toolName := skillID
+						if !strings.HasPrefix(toolName, "skill:") {
+							toolName = "skill:" + toolName
+						}
+
+						res, runErr := a.toolRegistry.ExecuteTool(runCtx, toolName, []byte(a.sCtx.RawIntentTS.Content()), a.sCtx.GlobalTaintLevel)
+						if runErr == nil && res != nil && res.Success {
+							scriptResult := string(res.Output)
+							nextState, err = llmEff.OnSuccess(protocol.StateContext{}, []byte(scriptResult))
+
+							metrics.GlobalSkillCacheHitTotal.Add(1) // 可观测：缓存命中计数
+							if a.memory != nil {
+								go func(intentJSON, result string) {
+									a.writeEpisodicWithExtract(context.Background(), types.Event{
+										ID:        uuid.New().String(),
+										Type:      types.EventIntent,
+										Status:    types.StatusDone,
+										TaskID:    a.sCtx.SessionID,
+										AgentID:   a.sCtx.AgentID,
+										Payload:   []byte(`{"intent":` + intentJSON + `,"skill_result":` + result + `}`),
+										CreatedAt: time.Now(),
+									})
+								}(a.sCtx.RawIntentTS.MarshalJSONString(), scriptResult)
+							}
+							goto HANDLE_MEM
+						}
+					}
+				}
+
+				// 技能缓存未命中或不可用：退回合成 JSON 路径（现有行为保持不变）
 				fastResult := `{"Goal":` + a.sCtx.RawIntentTS.MarshalJSONString() + `,"Complexity":0.1}`
 				nextState, err = llmEff.OnSuccess(protocol.StateContext{}, []byte(fastResult))
 				if a.memory != nil {
