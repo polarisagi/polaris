@@ -113,7 +113,7 @@ M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-
 
 HybridRetrieverConfig: BM25Weight=0.3, VectorWeight=0.6, GraphWeight=0.1, RRF_K 见 `spec/state.yaml §m5_memory.rrf_k`（M5/M10 共享），OversampleN=3, RerankTopM=50, FinalTopK=5
 
-4 级流水线：三路并行宽召回（BM25 + Dense Vector + Graph Traverse，限定 scope 子树，部分路失败降级继续）→ RRF 融合 → SurrealDB-Core BM25 Reranker（Top RerankTopM=50）→ FinalTopK=5 截断。
+5 级流水线：三路并行宽召回（BM25 + Dense Vector + Graph Traverse，限定 scope 子树，部分路失败降级继续）→ RRF 融合 → SurrealDB-Core BM25 Reranker（Top RerankTopM=50）→ CrossEncoder 精排（可选，consumer-side `CrossEncoderReranker` 接口注入，未注入时跳过）→ FinalTopK=5 截断。
 
 共享 `internal/store/` 底层 RRF+Rerank 引擎（HybridRetriever）。引擎提供统一检索接口，三路检索器（BM25/DenseVec/GraphTraverser）通过依赖注入绑定各模块实际存储后端。M5 检索 episodic_events+semantic_entities（跨层并行，scope=memory），M10 检索 doc_nodes（先导航再检索，scope=document_tree）。差异锁定在 RetrievalConfig:
 | 参数 | M5 | M10 |

@@ -32,6 +32,8 @@
 
 状态枚举权威定义见 `internal/protocol/types.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Complete/Failed)。`[HE-Rule-5]` LLM 填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)。
 
+`ReflectionModel` 结构：`{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后，若 `Learnings` 非空，逐条写入 episodic memory（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断状态流转至 S_COMPLETE。
+
 ```
 S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 DAG)──→ S_VALIDATE ──┬──OK──→ S_EXECUTE ──┬──OK──→ S_REFLECT ──→ S_COMPLETE
                                                     │                  │              │

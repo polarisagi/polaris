@@ -347,8 +347,8 @@ Traverse（BFS）:
 
 Spreading Activation（关联发现模式）:
 1. top-3 种子实体，activation_energy=1.0
-2. 扩散: energy × edge.weight 传播至邻居，自身 ×0.5 衰减。≤0.05 停止
-3. 最多 5 轮
+2. 扩散: energy × edge.weight 传播至邻居，自身 ×0.7 衰减（`energyDecay=0.7`）；energy ≤0.05 停止（dormancyThreshold）
+3. 最多 5 轮（fanOutLimit=5）
 4. 按最终 energy 降序 topK
 5. 模式选择: query 含"为什么"/"原因"/"关联"/"影响" → Spreading Activation; 否则 BFS
 
