@@ -250,6 +250,7 @@ type Blackboard interface {
 	// 由 Worker.tryClaimAndExecute 在 AgentKernel.Run 返回后调用。
 	// 幂等：多次调用以最后一次写入为准（覆盖，不累加）。
 	UpdateTaskTokens(ctx context.Context, taskID string, tokensIn, tokensOut, cacheRead int, costUSD float64) error
+	AcquireBackgroundPermit(ctx context.Context, taskType string) error
 }
 
 // ============================================================================

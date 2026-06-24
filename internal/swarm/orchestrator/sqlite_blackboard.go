@@ -30,6 +30,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/polarisagi/polaris/internal/sysmgr"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -862,4 +864,13 @@ func (bb *SQLiteBlackboard) ResumeFromSuspended(ctx context.Context, taskID stri
 // Ping 实现 Pinger 接口，P0 阶段 HealthCheckGate 使用。
 func (bb *SQLiteBlackboard) Ping(ctx context.Context) error {
 	return bb.db.PingContext(ctx)
+}
+
+// AcquireBackgroundPermit 根据系统认知压力分配后台许可（CC-2: GlobalCognitivePressure）。
+func (bb *SQLiteBlackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
+	level := sysmgr.GetPressureManager().Current()
+	if level == sysmgr.PressureCritical {
+		return apperr.New(apperr.CodeResourceExhausted, "system is under critical pressure, background tasks are denied")
+	}
+	return nil
 }

@@ -83,6 +83,10 @@ func (b *mockBlackboard) ResumeFromHITL(ctx context.Context, taskID, agentID str
 func (b *mockBlackboard) BeginCompensation(ctx context.Context, taskID, agentID string) error {
 	return nil
 }
+
+func (b *mockBlackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
+	return nil
+}
 func (b *mockBlackboard) EndCompensation(ctx context.Context, taskID, agentID string) error {
 	return nil
 }

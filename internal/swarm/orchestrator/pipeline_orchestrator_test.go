@@ -70,7 +70,11 @@ func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan types.BlackboardEv
 	ch := make(chan types.BlackboardEvent)
 	return ch, nil
 }
-func (s *stubBlackboard) UpdateTaskTokens(_ context.Context, _ string, _, _, _ int, _ float64) error {
+func (s *stubBlackboard) UpdateTaskTokens(ctx context.Context, taskID string, promptTokens, completionTokens, cacheRead int, cost float64) error {
+	return nil
+}
+
+func (s *stubBlackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
 	return nil
 }
 

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sysmgr"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -435,4 +437,13 @@ type AgentCard struct {
 	SandboxTier   int
 	Endpoint      string
 	MaxDepth      int // 0 表示使用全局 MaxSpawnDepth 默认值
+}
+
+// AcquireBackgroundPermit 根据系统认知压力分配后台许可（CC-2: GlobalCognitivePressure）。
+func (b *Blackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
+	level := sysmgr.GetPressureManager().Current()
+	if level == sysmgr.PressureCritical {
+		return apperr.New(apperr.CodeResourceExhausted, "system is under critical pressure, background tasks are denied")
+	}
+	return nil
 }
