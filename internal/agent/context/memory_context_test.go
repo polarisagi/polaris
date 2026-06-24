@@ -32,7 +32,7 @@ type mockEpisodicMem struct {
 	queries []types.EpisodicQuery
 }
 
-func (m *mockEpisodicMem) Append(ctx context.Context, ev types.Event) error {
+func (m *mockEpisodicMem) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
 	m.events = append(m.events, ev)
 	return nil
 }

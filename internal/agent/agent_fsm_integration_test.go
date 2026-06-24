@@ -149,7 +149,7 @@ type mockEpisodicMemForIntegration struct {
 	events []types.Event
 }
 
-func (m *mockEpisodicMemForIntegration) Append(ctx context.Context, ev types.Event) error {
+func (m *mockEpisodicMemForIntegration) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
 	m.events = append(m.events, ev)
 	return nil
 }
