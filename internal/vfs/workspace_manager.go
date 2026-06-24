@@ -1,12 +1,14 @@
 package vfs
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // WorkspaceManager — 重型中间物文件系统。
@@ -29,7 +31,10 @@ func NewWorkspaceManager(rootDir string, maxSize int64) *WorkspaceManager {
 		gcCh:      make(chan string, 1000),
 	}
 	wm.rebuildManifests()
-	go wm.gcWorker()
+	// gcWorker 负责异步清理墓碑目录；panic 不应导致 tombstone 永久堆积，用 SafeGo 保护
+	concurrent.SafeGo(context.Background(), "vfs.tombstone.gc", func(_ context.Context) {
+		wm.gcWorker()
+	})
 	return wm
 }
 
