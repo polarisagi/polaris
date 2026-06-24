@@ -80,8 +80,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
 	}
-	tokenVerify := func(t *token.Token) bool { return action.GetTokenManager().Verify(t) == nil }
-	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, tokenVerify)
+	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, &inlineTokenVerifier{})
 	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
 
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
@@ -224,6 +223,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		if payload.SessionID == "" {
 			return nil
 		}
+
+
 		return consolidationPipeline.Run(ctx, payload.SessionID)
 	})
 	slog.Info("polaris: memory consolidation pipeline registered (OutboxWorker/memory_consolidate)")
@@ -276,3 +277,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		RecoveryHandler:  recoveryHandler,
 	}, nil
 }
+
+type inlineTokenVerifier struct{}
+
+func (v *inlineTokenVerifier) Verify(t *token.Token) error { return action.GetTokenManager().Verify(t) }
+
+var _ sandbox.TokenVerifier = (*inlineTokenVerifier)(nil)

@@ -65,11 +65,11 @@ type ExecEnvelope struct {
 	router      *SandboxRouter
 	hwTier      int
 	goos        string
-	tokenVerify func(*token.Token) bool // boot 注入：action.GetTokenManager().Verify(t)==nil（避免 import 环）
+	tokenVerifier TokenVerifier // Boot 注入，打破依赖环
 }
 
-func NewExecEnvelope(policy protocol.PolicyGate, router *SandboxRouter, hwTier int, goos string, tokenVerify func(*token.Token) bool) *ExecEnvelope {
-	return &ExecEnvelope{policy: policy, router: router, hwTier: hwTier, goos: goos, tokenVerify: tokenVerify}
+func NewExecEnvelope(policy protocol.PolicyGate, router *SandboxRouter, hwTier int, goos string, verifier TokenVerifier) *ExecEnvelope {
+	return &ExecEnvelope{policy: policy, router: router, hwTier: hwTier, goos: goos, tokenVerifier: verifier}
 }
 
 func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResult, error) {
@@ -107,7 +107,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 
 	// Step 3: Capability Token（Privileged 强制；走 boot 注入的统一校验，语义同 tool.go）
 	if req.Tool.Capability >= types.CapPrivileged {
-		if req.CapToken == nil || e.tokenVerify == nil || !e.tokenVerify(req.CapToken) {
+		if req.CapToken == nil || e.tokenVerifier == nil || e.tokenVerifier.Verify(req.CapToken) != nil {
 			return &ExecResult{Success: false,
 				Error:     "exec_envelope: privileged action requires valid capability token",
 				LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
