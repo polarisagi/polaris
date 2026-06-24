@@ -6,8 +6,6 @@
 package tool
 
 import (
-
-
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -69,15 +67,6 @@ func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope) *InMemoryToolRegist
 			"shell": newRateLimiter(2),
 		},
 	}
-}
-
-// getRateLimiter 获取对应 Source 的限速器。
-func (r *InMemoryToolRegistry) getRateLimiter(source types.ToolSource) *rateLimiter {
-	key := string(source)
-	if _, ok := r.limiters[key]; !ok {
-		return r.limiters[string(types.ToolBuiltin)]
-	}
-	return r.limiters[key]
 }
 
 // Register 注册工具；同名覆盖（热更新 MCP schema 时使用）。
@@ -147,7 +136,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		TrustTier:  tool.TrustTier,
 		Tool:       tool,
 		Input:      input,
-		TaintLevel: types.TaintNone, // Envelope 将在执行后计算新的 TaintLevel
+		TaintLevel: taintLevel, // Envelope 将在执行后计算新的 TaintLevel
 		CPUQuotaMs: int(tool.Timeout.Milliseconds()),
 	})
 
@@ -170,15 +159,17 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}
 
 	if execErr != nil {
-		return &types.ToolResult{
+		return &types.ToolResult{ //nolint:nilerr
 			Success:    false,
 			Error:      execErr.Error(),
 			TaintLevel: taintLevel,
 		}, nil
 	}
 	return &types.ToolResult{
-		Success:    true,
+		Success:    res.Success,
 		Output:     res.Output,
+		Error:      res.Error,
+		LatencyMs:  res.LatencyMs,
 		TaintLevel: res.TaintLevel,
 		ImageParts: res.ImageParts,
 	}, nil

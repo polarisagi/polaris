@@ -23,7 +23,7 @@ func TestEpisodicMem(t *testing.T) {
 		Payload:   []byte(`{"key":"value"}`),
 		CreatedAt: time.Now(),
 	}
-	err := mem.Append(ctx, ev)
+	err := mem.Append(ctx, ev, types.TaintNone)
 	if err != nil {
 		t.Fatalf("Append failed: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSemanticMem(t *testing.T) {
 		ID:        "doc1",
 		SourceURI: "test doc",
 	}
-	err := mem.StoreDocument(ctx, doc)
+	err := mem.StoreDocument(ctx, doc, types.TaintNone)
 	if err != nil {
 		t.Fatalf("StoreDocument failed: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSemanticMem(t *testing.T) {
 		Name: "Alice",
 		Type: "person",
 	}
-	err = mem.UpsertFact(ctx, fact)
+	err = mem.UpsertFact(ctx, fact, types.TaintNone)
 	if err != nil {
 		t.Fatalf("UpsertFact failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSemanticMem(t *testing.T) {
 		Name: "Bob",
 		Type: "person",
 	}
-	if err2 := mem.UpsertFact(ctx, fact2); err2 != nil {
+	if err2 := mem.UpsertFact(ctx, fact2, types.TaintNone); err2 != nil {
 		t.Fatalf("UpsertFact Bob failed: %v", err2)
 	}
 
@@ -130,7 +130,7 @@ func TestSemanticMem(t *testing.T) {
 		FromDBID:     alice.DBID,
 		ToDBID:       bob.DBID,
 	}
-	err = mem.UpsertRelation(ctx, rel)
+	err = mem.UpsertRelation(ctx, rel, types.TaintNone)
 	if err != nil {
 		t.Fatalf("UpsertRelation failed: %v", err)
 	}

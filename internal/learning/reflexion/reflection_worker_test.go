@@ -14,7 +14,9 @@ type MockEpisodicMemory struct {
 	QueryFunc func(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error)
 }
 
-func (m *MockEpisodicMemory) Append(ctx context.Context, ev types.Event) error { return nil }
+func (m *MockEpisodicMemory) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
+	return nil
+}
 func (m *MockEpisodicMemory) Query(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
 	if m.QueryFunc != nil {
 		return m.QueryFunc(ctx, query)

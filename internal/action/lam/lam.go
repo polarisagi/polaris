@@ -95,21 +95,8 @@ func (e *ComputerUseEngine) ExecuteAction(ctx context.Context, intent string, sc
 	}
 
 	// 解析 actionJSON 以进行权限控制
-	var actionMap map[string]any
-	if err := json.Unmarshal(actionJSON, &actionMap); err == nil {
-		if actionType, ok := actionMap["action"].(string); ok {
-			if e.policy != nil {
-				allowed, pErr := e.policy.IsAuthorized(ctx, "agent", "computer_use", "action:"+actionType,
-					map[string]any{"action": actionType, "target": "lam"})
-				if pErr != nil || !allowed {
-					reason := "policy denied"
-					if pErr != nil {
-						reason = pErr.Error()
-					}
-					return nil, apperr.New(apperr.CodeForbidden, "computer_use denied: "+reason)
-				}
-			}
-		}
+	if err := e.checkPolicy(ctx, actionJSON); err != nil {
+		return nil, err
 	}
 
 	// dry-run 模式（executor 未注入）：返回解析的动作 JSON 供调试
@@ -122,6 +109,30 @@ func (e *ComputerUseEngine) ExecuteAction(ctx context.Context, intent string, sc
 		return &types.ToolResult{Success: false, Error: execErr.Error()}, nil //nolint:nilerr
 	}
 	return &types.ToolResult{Success: true, Output: out, TaintLevel: types.TaintHigh}, nil
+}
+
+func (e *ComputerUseEngine) checkPolicy(ctx context.Context, actionJSON []byte) error {
+	if e.policy == nil {
+		return nil
+	}
+	var actionMap map[string]any
+	if err := json.Unmarshal(actionJSON, &actionMap); err != nil {
+		return nil //nolint:nilerr
+	}
+	actionType, ok := actionMap["action"].(string)
+	if !ok {
+		return nil
+	}
+	allowed, pErr := e.policy.IsAuthorized(ctx, "agent", "computer_use", "action:"+actionType,
+		map[string]any{"action": actionType, "target": "lam"})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
+		}
+		return apperr.New(apperr.CodeForbidden, "computer_use denied: "+reason)
+	}
+	return nil
 }
 
 // vlmActionOutput VLM 响应的结构化动作。

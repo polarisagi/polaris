@@ -216,8 +216,8 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	res, err := ca.envelope.Execute(ctx, sandbox.ExecRequest{
 		Principal: sandbox.PrincipalAgent, Kind: sandbox.KindScriptExecute,
 		Resource: "codeact:" + req.Language, TrustTier: types.TrustUntrusted,
-		Tool:       types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated},
-		Input:      []byte("{}"), ScriptPath: tmpFile,
+		Tool:  types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated},
+		Input: []byte("{}"), ScriptPath: tmpFile,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
 	})
 	if err != nil {
@@ -225,8 +225,15 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	}
 
 	exitCode := 0
+	out := res.Output
 	if !res.Success {
 		exitCode = 1
+		if res.Error != "" {
+			if len(out) > 0 {
+				out = append(out, '\n')
+			}
+			out = append(out, []byte(res.Error)...)
+		}
 	}
 
 	// 全链路审计：写入 EventLog（inv_global_07 要求）
@@ -244,7 +251,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	}
 
 	return &CodeActResult{
-		Output:    res.Output,
+		Output:    out,
 		ExitCode:  exitCode,
 		LatencyMs: res.LatencyMs,
 	}, nil

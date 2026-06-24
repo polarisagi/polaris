@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -15,7 +16,7 @@ func (m mockSideEffectChecker) SideEffectPreCheck(ctx context.Context, taskID, a
 }
 
 func TestToolExtra_WithSideEffectChecker(t *testing.T) {
-	reg := NewInMemoryToolRegistry(nil, nil)
+	reg := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, nil, 0, "", nil))
 	reg.WithSideEffectChecker(mockSideEffectChecker{})
 	if reg.blackboard == nil {
 		t.Fatalf("expected blackboard to be set")
@@ -56,20 +57,5 @@ func TestToolExtra_RateLimiter(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	if !rl.Allow() {
 		t.Fatalf("expected allow after refill to succeed")
-	}
-}
-
-func TestToolExtra_toolTrustLevel(t *testing.T) {
-	if toolTrustLevel(types.ToolBuiltin) != 4 {
-		t.Fatalf("expected 4")
-	}
-	if toolTrustLevel(types.ToolMCP) != 2 {
-		t.Fatalf("expected 2")
-	}
-	if toolTrustLevel(types.ToolA2A) != 2 {
-		t.Fatalf("expected 2")
-	}
-	if toolTrustLevel(types.ToolSkill) != 1 {
-		t.Fatalf("expected 1")
 	}
 }

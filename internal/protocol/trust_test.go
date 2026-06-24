@@ -22,25 +22,6 @@ func TestTrustFromSignatureValid(t *testing.T) {
 	}
 }
 
-func TestTrustTier_MaxSandboxTier(t *testing.T) {
-	tests := []struct {
-		tier     types.TrustTier
-		expected int
-	}{
-		{types.TrustSystem, 3},
-		{types.TrustOfficial, 2},
-		{types.TrustCommunity, 1},
-		{types.TrustLocal, 1},
-		{types.TrustUntrusted, 1},
-	}
-
-	for _, tc := range tests {
-		if got := tc.tier.MaxSandboxTier(); got != tc.expected {
-			t.Errorf("MaxSandboxTier(%v) = %v, expected %v", tc.tier, got, tc.expected)
-		}
-	}
-}
-
 func TestTrustTier_TaintLevel(t *testing.T) {
 	tests := []struct {
 		tier     types.TrustTier

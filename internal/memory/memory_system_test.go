@@ -79,14 +79,14 @@ func TestMemorySystemWriteRetrieveForget(t *testing.T) {
 	memSys.Mem().Episodic().Append(ctx, types.Event{
 		ID:        "old1",
 		CreatedAt: time.Now().Add(-40 * 24 * time.Hour), // Older than 30 days
-	})
+	}, types.TaintNone)
 	memSys.Mem().Episodic().Append(ctx, types.Event{
 		ID:        "new1",
 		CreatedAt: time.Now().Add(-1 * 24 * time.Hour), // Newer than 30 days
-	})
+	}, types.TaintNone)
 	memSys.Mem().Episodic().Append(ctx, types.Event{
 		ID: "zero1", // Zero time
-	})
+	}, types.TaintNone)
 
 	removed, err := memSys.Forget(ctx)
 	if err != nil {

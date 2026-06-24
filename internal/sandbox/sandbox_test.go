@@ -75,7 +75,7 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	})
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
 
-	res, err := router.Execute(context.Background(), types.Tool{SandboxTier: 1, Name: "list-files"}, nil, types.TaintNone)
+	res, err := router.Execute(context.Background(), types.Tool{SandboxTier: 1, Name: "list-files", TrustTier: types.TrustSystem}, nil, types.TaintNone)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestSandboxRouter_MCPFallsToInProcessWithoutContainer(t *testing.T) {
 	})
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
 
-	res, err := router.Execute(context.Background(), types.Tool{SandboxTier: 3, Name: "mcp-tool"}, []byte("{}"), types.TaintNone)
+	res, err := router.Execute(context.Background(), types.Tool{SandboxTier: 3, Name: "mcp-tool", TrustTier: types.TrustSystem}, []byte("{}"), types.TaintNone)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,14 +111,15 @@ func TestAssignSandboxTier(t *testing.T) {
 		goos       string
 		wantTier   types.SandboxTier
 		wantErr    error
+		trustTier  types.TrustTier
 	}{
-		{"builtin-read", types.ToolBuiltin, types.CapReadOnly, nil, 1, "linux", types.SandboxInProcess, nil},
-		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxWasm, nil},
-		{"llm-gen", types.ToolLLMGenerated, types.CapReadOnly, nil, 1, "linux", types.SandboxWasm, nil},
-		{"privileged-spawn", types.ToolBuiltin, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil},
-		{"tier0-linux-container", types.ToolBuiltin, types.CapPrivileged, nil, 0, "linux", types.SandboxInProcess, apperr.ErrTier0SandboxLimit},
-		{"tier0-darwin-downgrade", types.ToolBuiltin, types.CapPrivileged, nil, 0, "darwin", types.SandboxInProcess, apperr.ErrTier0SandboxLimit},
-		{"tier1-darwin-no-downgrade", types.ToolBuiltin, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil},
+		{"builtin-read", types.ToolBuiltin, types.CapReadOnly, nil, 1, "linux", types.SandboxInProcess, nil, types.TrustSystem},
+		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxWasm, nil, types.TrustCommunity},
+		{"llm-gen", types.ToolLLMGenerated, types.CapReadOnly, nil, 1, "linux", types.SandboxWasm, nil, types.TrustUntrusted},
+		{"privileged-spawn", types.ToolBuiltin, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil, types.TrustSystem},
+		{"tier0-linux-container", types.ToolBuiltin, types.CapPrivileged, nil, 0, "linux", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier0-darwin-downgrade", types.ToolBuiltin, types.CapPrivileged, nil, 0, "darwin", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier1-darwin-no-downgrade", types.ToolBuiltin, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil, types.TrustSystem},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -126,6 +127,7 @@ func TestAssignSandboxTier(t *testing.T) {
 				Source:      tt.source,
 				Capability:  tt.capability,
 				SideEffects: tt.effects,
+				TrustTier:   tt.trustTier,
 			}
 			got, err := AssignSandboxTier(tool, tt.hwTier, tt.goos)
 			if tt.wantErr != nil {
@@ -236,15 +238,13 @@ func TestSandboxRouter_AnomalyPaths(t *testing.T) {
 		Capability:  types.CapPrivileged,
 		SideEffects: []types.SideEffect{types.SideProcessSpawn},
 		SandboxTier: 3, // -> SandboxContainer
+		TrustTier:   types.TrustSystem,
 	}
 	// On darwin hwTier 1 -> SandboxContainer. But router.container is nil.
-	// Route should fallback to remote or inProcess.
-	provider, err := router.Route(toolContainer)
-	if err != nil {
-		t.Errorf("expected no error routing, got: %v", err)
-	}
-	if provider != inProc {
-		t.Errorf("expected fallback to inProcess, got %v", provider)
+	// Container tier does NOT downgrade, so it should error.
+	_, err = router.RouteByTier(toolContainer.SandboxTier, types.TrustSystem)
+	if err == nil {
+		t.Errorf("expected error routing when container is unavailable, got nil")
 	}
 
 	// Test Kill/Disable methods (should not panic)

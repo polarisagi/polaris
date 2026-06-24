@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -49,7 +49,7 @@ type MCPManager struct {
 	entries          map[string]*mcpEntry
 	sandbox          *sandbox.InProcessSandbox
 	envelope         *sandbox.ExecEnvelope // 用于 CallTool 下沉
-	toolReg          ToolRegistrar // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
+	toolReg          ToolRegistrar         // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
 	httpClient       *http.Client
 	policy           protocol.PolicyGate // 对 process_spawn 的策略检查
 	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
@@ -129,7 +129,7 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	if m.policy != nil {
 		allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "process_spawn", name,
 			map[string]any{
-				"trust_tier":   int(cfg.TrustTier),
+				"trust_tier":   cfg.TrustTier,
 				"transport":    string(cfg.Transport),
 				"sandbox_auto": cfg.SandboxPolicy == "" || cfg.SandboxPolicy == "auto",
 			})

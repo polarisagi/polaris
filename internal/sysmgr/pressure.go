@@ -9,9 +9,9 @@ import (
 type PressureLevel int
 
 const (
-	PressureNormal PressureLevel = iota // 正常：全功能可用
-	PressureHigh                        // 高压：触发降级策略（如缩减上下文、禁用非关键后台任务）
-	PressureCritical                    // 极高：严重过载，仅保留核心心跳与故障恢复机制
+	PressureNormal   PressureLevel = iota // 正常：全功能可用
+	PressureHigh                          // 高压：触发降级策略（如缩减上下文、禁用非关键后台任务）
+	PressureCritical                      // 极高：严重过载，仅保留核心心跳与故障恢复机制
 )
 
 // PressureManager 全局单例，管理系统的认知压力状态。

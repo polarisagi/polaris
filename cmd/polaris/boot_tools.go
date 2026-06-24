@@ -19,8 +19,8 @@ import (
 
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
 
-	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -223,7 +223,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		if payload.SessionID == "" {
 			return nil
 		}
-
 
 		return consolidationPipeline.Run(ctx, payload.SessionID)
 	})

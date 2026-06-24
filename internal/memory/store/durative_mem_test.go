@@ -30,7 +30,7 @@ func TestDurativeMemoryManager(t *testing.T) {
 			ID:        "e1",
 			Payload:   []byte(`{"a": 1}`),
 			CreatedAt: time.Now(),
-		})
+		}, types.TaintNone)
 	}
 
 	err = dm.Consolidate(ctx)

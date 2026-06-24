@@ -5,20 +5,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/internal/sandbox"
 )
 
-type mockPolicy struct{}
-
-func (mockPolicy) IsAuthorized(ctx context.Context, principal, action, resource string, contextData map[string]any) (bool, error) {
-	return true, nil
-}
-func (mockPolicy) Review(ctx context.Context, req types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
-	return types.PolicyReviewResult{Allowed: true}, nil
-}
-
 func TestToolSearch(t *testing.T) {
-	toolReg := NewInMemoryToolRegistry(nil, nil)
+	toolReg := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, nil, 0, "", nil))
 	fn := MakeToolSearchFn(toolReg)
 	ctx := context.Background()
 

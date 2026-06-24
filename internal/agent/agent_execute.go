@@ -925,7 +925,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	// 单节点时保持向后兼容（直接取 output 字节）；多节点时序列化为 {"results":[...]} 结构。
 	raw := aggregateDAGResults(results)
 	a.sCtx.ExecuteResult = truncateExecResult(a.sCtx.SessionID, raw)
-	
+
 	// Inject Taint Warning if any node is highly tainted
 	hasHighTaint := false
 	for _, r := range results {

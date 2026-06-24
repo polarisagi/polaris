@@ -55,9 +55,8 @@ func (m *mockToolExecutor) ExecuteDryRun(_ context.Context, _ types.ToolCallRequ
 	return nil, nil
 }
 
-func (m *mockToolExecutor) Cancel(_ context.Context, _ string) error { return nil }
-
 func (m *mockToolExecutor) RecordAudit(_ context.Context, _ string, _ []byte) error { return nil }
+func (m *mockToolExecutor) Cancel(_ context.Context, _ string) error                { return nil }
 
 // ── writeTempScript ────────────────────────────────────────────────────────
 
@@ -200,7 +199,7 @@ func TestASTChecker_CheckBash_InvalidSyntax(t *testing.T) {
 // ── validateBasic（通过 Execute 覆盖） ─────────────────────────────────────
 
 func TestExecute_EmptyCode(t *testing.T) {
-	ca := NewCodeAct(nil, nil, nil)
+	ca := NewCodeAct(nil, nil)
 	_, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "python",
 		Code:         "",
@@ -212,7 +211,7 @@ func TestExecute_EmptyCode(t *testing.T) {
 }
 
 func TestExecute_UnsupportedLanguage(t *testing.T) {
-	ca := NewCodeAct(nil, nil, nil)
+	ca := NewCodeAct(nil, nil)
 	_, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "ruby",
 		Code:         "puts 'hi'",
@@ -224,7 +223,7 @@ func TestExecute_UnsupportedLanguage(t *testing.T) {
 }
 
 func TestExecute_MissingCapabilityID(t *testing.T) {
-	ca := NewCodeAct(nil, nil, nil)
+	ca := NewCodeAct(nil, nil)
 	_, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
@@ -237,42 +236,46 @@ func TestExecute_MissingCapabilityID(t *testing.T) {
 
 func TestExecute_PolicyDenied(t *testing.T) {
 	gate := &mockPolicyGate{allowed: false}
-	ca := NewCodeAct(nil, gate, nil, WithGovernanceAgent(&mockGovAgent{}))
-	_, err := ca.Execute(context.Background(), CodeActRequest{
+	ca := NewCodeAct(sandbox.NewExecEnvelope(gate, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{}, WithGovernanceAgent(&mockGovAgent{}))
+	res, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
 		CapabilityID: "cap-1",
 	})
-	if err == nil {
-		t.Error("expected error when policy denies, got nil")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 1 || !strings.Contains(string(res.Output), "policy denied") {
+		t.Errorf("expected policy denied in output, got exit=%d output=%q", res.ExitCode, res.Output)
 	}
 }
 
 func TestExecute_NilPolicyGate_FailClosed(t *testing.T) {
 	// policy gate 为 nil → fail-closed
-	ca := NewCodeAct(nil, nil, nil, WithGovernanceAgent(&mockGovAgent{}))
+	ca := NewCodeAct(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{}, WithGovernanceAgent(&mockGovAgent{}))
 	_, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
 		CapabilityID: "cap-1",
 	})
-	if err == nil {
-		t.Error("expected fail-closed error when policy gate is nil, got nil")
+	if err == nil || !strings.Contains(err.Error(), "policy gate not initialized") {
+		t.Errorf("expected fail-closed error, got %v", err)
 	}
 }
 
 func TestExecute_SandboxLevelTooLow(t *testing.T) {
 	// sandbox level=2 < 需求 L3 → 拒绝
 	gate := &mockPolicyGate{allowed: true}
-	sbx := &mockSandbox{level: 2}
-	ca := NewCodeAct(sbx, gate, nil, WithGovernanceAgent(&mockGovAgent{}))
+	router := sandbox.NewSandboxRouter(nil, nil, nil, "linux", 0)
+	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
+	ca := NewCodeAct(envelope, &mockToolExecutor{}, WithGovernanceAgent(&mockGovAgent{}))
 	_, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
 		CapabilityID: "cap-1",
 	})
-	if err == nil {
-		t.Error("expected error for sandbox level < L3, got nil")
+	if err == nil || !strings.Contains(err.Error(), "isolation unavailable") {
+		t.Errorf("expected isolation error, got %v", err)
 	}
 }
 
@@ -282,8 +285,10 @@ func TestExecute_Success(t *testing.T) {
 		level:  3,
 		result: &types.ToolResult{Output: []byte("hello"), Success: true, LatencyMs: 10},
 	}
+	router := sandbox.NewSandboxRouter(nil, nil, sbx, "linux", 0)
+	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
 	exec := &mockToolExecutor{}
-	ca := NewCodeAct(sbx, gate, exec, WithGovernanceAgent(&mockGovAgent{}))
+	ca := NewCodeAct(envelope, exec, WithGovernanceAgent(&mockGovAgent{}))
 	res, err := ca.Execute(context.Background(), CodeActRequest{
 		Language:     "python",
 		Code:         "print('hello')",

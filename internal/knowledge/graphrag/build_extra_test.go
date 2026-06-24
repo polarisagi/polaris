@@ -13,10 +13,10 @@ type mockSemanticMemory struct {
 	protocol.SemanticMemory
 }
 
-func (m *mockSemanticMemory) UpsertFact(ctx context.Context, e types.Entity) error {
+func (m *mockSemanticMemory) UpsertFact(ctx context.Context, e types.Entity, taint types.TaintLevel) error {
 	return nil
 }
-func (m *mockSemanticMemory) UpsertRelation(ctx context.Context, r types.Relation) error {
+func (m *mockSemanticMemory) UpsertRelation(ctx context.Context, r types.Relation, taint types.TaintLevel) error {
 	return nil
 }
 

@@ -35,7 +35,7 @@ func TestConsolidationPipeline(t *testing.T) {
 			Type:      "tool_call",
 			Payload:   []byte(`{"tool_name": "test_tool", "success": true}`),
 			CreatedAt: time.Now(),
-		})
+		}, types.TaintNone)
 	}
 
 	err = pipe.Run(ctx, "s1")

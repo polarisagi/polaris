@@ -61,10 +61,10 @@ type ExecResult struct {
 }
 
 type ExecEnvelope struct {
-	policy      protocol.PolicyGate
-	router      *SandboxRouter
-	hwTier      int
-	goos        string
+	policy        protocol.PolicyGate
+	router        *SandboxRouter
+	hwTier        int
+	goos          string
 	tokenVerifier TokenVerifier // Boot 注入，打破依赖环
 }
 
@@ -108,7 +108,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	// Step 3: Capability Token（Privileged 强制；走 boot 注入的统一校验，语义同 tool.go）
 	if req.Tool.Capability >= types.CapPrivileged {
 		if req.CapToken == nil || e.tokenVerifier == nil || e.tokenVerifier.Verify(req.CapToken) != nil {
-			return &ExecResult{Success: false,
+			return &ExecResult{Success: false, //nolint:nilerr
 				Error:     "exec_envelope: privileged action requires valid capability token",
 				LatencyMs: time.Since(start).Milliseconds(), TaintLevel: req.TaintLevel}, nil
 		}

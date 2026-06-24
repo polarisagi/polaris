@@ -109,7 +109,7 @@ func TestMCPManager_CallTool_PolicyNil(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when policy is nil")
 	}
-	if !strings.Contains(err.Error(), "policy gate not initialized") {
+	if !strings.Contains(err.Error(), "envelope not initialized") {
 		t.Fatalf("expected fail-closed policy error, got: %v", err)
 	}
 }
