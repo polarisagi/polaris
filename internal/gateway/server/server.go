@@ -47,7 +47,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
-	"github.com/polarisagi/polaris/internal/memory/store"
+
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
@@ -63,7 +63,7 @@ import (
 type Server struct {
 	addr           string
 	srv            *http.Server
-	agent          protocol.AgentController
+	agentPool      chat.AgentPool
 	blackboard     protocol.Blackboard
 	hitlGateway    protocol.HITL
 	db             protocol.SQLQuerier
@@ -224,13 +224,13 @@ func (s *Server) SetLogStore(ls *LogStore) { s.logStore = ls }
 func (s *Server) SetEvalRunner(r protocol.EvalRunner) { s.evalRunner = r }
 
 // buildToolSchemas 收集全部可用工具 schema，用于注入 InferRequest.Tools。
-func NewServer(addr string, dataDir string, agent protocol.AgentController, bb protocol.Blackboard, hitlGateway protocol.HITL, db protocol.SQLQuerier, registry *llm.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
+func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, db protocol.SQLQuerier, registry *llm.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
 	tDir := filepath.Join(dataDir, "sessions")
 	go chat.PruneTranscripts(tDir, 30) // 启动时异步清理 30 天前的 transcript
 
 	s := &Server{
 		addr:             addr,
-		agent:            agent,
+		agentPool:        agentPool,
 		blackboard:       bb,
 		hitlGateway:      hitlGateway,
 		db:               db,
@@ -276,16 +276,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	// 保存基础模板，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 内容累积
 	s.baseSystemPromptTpl = sysTmpl
 
-	if agent != nil && agent.Memory() != nil {
-		if ic, ok := agent.Memory().Working().Immutable().(*store.ImmutableCore); ok {
-			ic.SystemPromptTemplate = sysTmpl
-			if goal, hasGoal := prefs["global_goal"]; hasGoal {
-				ic.GlobalGoal = goal
-			} else if legacyGoal, hasLegacy := prefs["system_prompt"]; hasLegacy {
-				ic.GlobalGoal = legacyGoal
-			}
-		}
-	}
+	// global agent memory setup is removed as agent is now per-session
 
 	// 注入 embedded FS 和运行时配置目录到 memory 包（三层提示词加载的 Layer 0/1）
 	// 必须在 LoadSoulMD / DefaultIdentity 之前完成
@@ -338,7 +329,7 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 		ChatRepo:              s.chatRepo,
 		ProviderRepo:          s.providerRepo,
 		SystemRepo:            s.systemRepo,
-		Agent:                 agent,
+		AgentPool:             agentPool,
 		Blackboard:            bb,
 		Compressor:            s.compressor,
 		SlashRouter:           chat.NewSlashCommandRouter(s.compressor, s.chatRepo, sseWriteFn),
@@ -898,7 +889,13 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 
 	if s.blackboard == nil {
 		// Blackboard 未注入时退化：直接注入 Agent Intent，返回兼容响应
-		s.agent.SetTaskIntent([]byte(req.Input))
+		if s.agentPool != nil {
+			agent, release, err := s.agentPool.Acquire(r.Context(), "default")
+			if err == nil {
+				agent.SetTaskIntent([]byte(req.Input))
+				release()
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"task_id": "",
@@ -1045,14 +1042,10 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 			IdempotencyKey: "interrupt:" + taskID + ":" + req.Action,
 		}); err != nil {
 			slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call", "err", err)
-			if s.agent != nil {
-				s.agent.Interrupt(interruptReq)
-			}
 		}
-	} else if s.agent != nil {
+	} else {
 		// 单进程降级路径：outboxWriter 未注入时直接调用（Tier-0/开发环境）。
-		slog.Info("handleAgentInterrupt: outboxWriter not set, using direct call")
-		s.agent.Interrupt(interruptReq)
+		slog.Info("handleAgentInterrupt: outboxWriter not set, unable to direct call")
 	}
 
 	if s.auditTrail != nil {
@@ -1164,11 +1157,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	agentState := ""
 	agentID := ""
 	agentConfig := map[string]any{}
-	if s.agent != nil {
-		agentID = s.agent.AgentID()
-		agentState = agentStateString(s.agent.CurrentState())
-		agentConfig = s.agent.ConfigInfo()
-	}
+	// Global agent status removed
 
 	// KillFullStop = 3；PolarisKillswitchStage 由 main.go KillSwitch 回调写入
 	sealed := metrics.GlobalKillswitchStage.Load() >= 3

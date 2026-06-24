@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -81,28 +82,47 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) (
 		topK = 10
 	}
 
-	// FTS5 路径（始终执行）
-	ftsResults, err := hr.searchFTS(ctx, query.Text, topK*3) // 宽召回 3×TopK
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "fts search failed", err)
-	}
+	var wg sync.WaitGroup
+	var ftsErr error
+	var ftsResults, vecResults, graphResults []Chunk
 
-	// 向量路径（Tier 1+）
-	var vecResults []Chunk
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		res, err := hr.searchFTS(ctx, query.Text, topK*3)
+		if err != nil {
+			ftsErr = err
+			return
+		}
+		ftsResults = res
+	}()
+
 	if hr.embedder != nil {
-		vr, vecErr := hr.searchVector(ctx, query.Text, topK*3)
-		if vecErr == nil {
-			vecResults = vr
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			vr, err := hr.searchVector(ctx, query.Text, topK*3)
+			if err == nil {
+				vecResults = vr
+			}
+		}()
 	}
 
-	// 图遍历路径（Graph weight=0.1，M10 §2.2）
-	var graphResults []Chunk
 	if hr.graph != nil {
-		gr, grErr := hr.graph.TraverseChunks(ctx, query.Text, topK*3)
-		if grErr == nil {
-			graphResults = gr
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			gr, err := hr.graph.TraverseChunks(ctx, query.Text, topK*3)
+			if err == nil {
+				graphResults = gr
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if ftsErr != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "fts search failed", ftsErr)
 	}
 
 	// RRF 三路融合（有 vector 或 graph 时才融合）

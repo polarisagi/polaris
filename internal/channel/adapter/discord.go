@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -136,7 +138,7 @@ func DiscordConnect( //nolint:gocyclo
 	json.Unmarshal(p.D, &hello) //nolint:errcheck
 
 	// 心跳 goroutine
-	go func() {
+	concurrent.SafeGo(heartbeatCtx, "adapter_heartbeat", func(_ context.Context) {
 		jitter := time.Duration(rand.IntN(hello.HeartbeatInterval)) * time.Millisecond
 		select {
 		case <-heartbeatCtx.Done():
@@ -162,7 +164,7 @@ func DiscordConnect( //nolint:gocyclo
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 
 	if sessionID == "" {
 		identD, _ := json.Marshal(map[string]any{

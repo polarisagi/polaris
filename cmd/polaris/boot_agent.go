@@ -62,6 +62,9 @@ type AgentBundle struct {
 	// M9 Self-Improvement
 	M9Engine *si.Engine
 
+	// AgentPool for per-session web agents
+	AgentPool *sysagent.Pool
+
 	// Supervisor Tree（Workers 已注册；由 run() 调用 Start()）
 	Supervisor *supervisor.Supervisor
 
@@ -184,11 +187,53 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agent.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
 	}
 
-	if prefs, err := tb.SysRepo.ListPreferences(ctx); err == nil {
+	prefs, err := tb.SysRepo.ListPreferences(ctx)
+	if err == nil {
 		agent.SetPreferences(prefs)
 	} else {
 		slog.Warn("polaris: failed to load preferences on startup", "err", err)
 	}
+
+	maxConcurrent := sb.Cfg.System.MaxAgents
+	if maxConcurrent <= 0 {
+		maxConcurrent = 4
+	}
+
+	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
+		a := sysagent.NewAgent(sessionID, taskRepo, nil, sb.Router)
+		a.SetExtQuerier(sb.Store.DB())
+		a.Config.MaxReplan = sb.Cfg.Thresholds.M4Kernel.MaxReplanAttempts
+		a.Config.DefaultBudget = sb.Cfg.Thresholds.M4Kernel.DefaultBudget
+		a.Config.MaxSteps = sb.Cfg.Thresholds.M4Kernel.MaxSteps
+		a.Config.IdleTimeoutSec = sb.Cfg.Thresholds.M4Kernel.SuspendIdleThresholdMin * 60
+		a.InjectHITL(tb.HITLGateway)
+		a.InjectToolRegistry(tb.ToolReg)
+		a.InjectOutboxWriter(sb.Outbox)
+		a.SetAssembler(agentctx.NewAssembler(epAdapter, knowAdapter))
+		a.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
+			whisperChan := a.GetWhisperChan()
+			if whisperChan == nil {
+				return
+			}
+			pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan)
+			pool.Run(ctx)
+		})
+		a.InjectExtensionActivator(&extensionActivatorAdapter{inner: activator})
+		a.InjectMemory(mb.Mem)
+		if mb.Mem != nil {
+			a.SetMemoryInjector(mb.Mem)
+		}
+		a.SetLAMEngine(lamEngine)
+		sc := surprise.NewSurpriseCalculator(nil)
+		a.SetSurpriseCalc(sc)
+		if kb != nil && kb.KnowledgeBase != nil {
+			a.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
+		}
+		if prefs != nil {
+			a.SetPreferences(prefs)
+		}
+		return a
+	}, maxConcurrent)
 
 	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
 		Name:   "agent-0",
@@ -302,6 +347,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	reflexionBridge := reflexion.NewReflexionBridge(reflexionEngine)
 	idleDetector := curriculum.NewIdleDetector()
 	curriculumGen := curriculum.NewAutoCurriculumGenerator(idleDetector, mb.FallacyPool, mb.Heuristics)
+	curriculumGen.WithFitnessEval(curriculum.NewSQLFitnessEvaluator(sb.Store.DB()))
 	curriculumBridge := reflexion.NewCurriculumBridge(curriculumGen, blackboard)
 	rollout := optimizer.NewProgressiveRollout()
 	rolloutBridge := reflexion.NewRolloutBridge(rollout)
@@ -346,6 +392,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Agent:         agent,
 		DAGExec:       dagExec,
 		M9Engine:      m9Engine,
+		AgentPool:     agentPool,
 		Supervisor:    sv,
 		ReaperStop:    reaperStop,
 	}, nil

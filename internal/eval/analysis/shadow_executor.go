@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 type ShadowDiff struct {
@@ -46,14 +47,14 @@ func (s *ShadowExecutor) Compare(ctx context.Context, input []byte) (*ShadowDiff
 	baseCh := make(chan result, 1)
 	candCh := make(chan result, 1)
 
-	go func() {
+	concurrent.SafeGo(ctx, "shadow_executor_baseline", func(ctx context.Context) {
 		out, _, err := s.baseline.Run(ctx, input)
 		baseCh <- result{out, err}
-	}()
-	go func() {
+	})
+	concurrent.SafeGo(ctx, "shadow_executor_candidate", func(ctx context.Context) {
 		out, _, err := s.candidate.Run(ctx, input)
 		candCh <- result{out, err}
-	}()
+	})
 
 	var baseRes, candRes result
 	var baseOk, candOk bool

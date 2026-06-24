@@ -311,6 +311,16 @@ func (si *SurpriseIndex) IsStale() bool {
 	return time.Since(si.staleness).Seconds() > 120
 }
 
+// InjectFaultSignal raises the SurpriseIndex forcibly when an OS-level fault is detected.
+func (si *SurpriseIndex) InjectFaultSignal(severity float64) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	si.lastValue += severity
+	if si.lastValue > 1.0 {
+		si.lastValue = 1.0
+	}
+}
+
 // DecisionLog records a single routing decision for offline analysis.
 type DecisionLog struct {
 	Timestamp     time.Time `json:"timestamp"`

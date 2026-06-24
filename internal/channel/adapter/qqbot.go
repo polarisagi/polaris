@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -137,7 +139,7 @@ func qqbotConnect( //nolint:gocyclo
 	}
 	_ = json.Unmarshal(hello.D, &helloD)
 
-	go func() {
+	concurrent.SafeGo(heartbeatCtx, "adapter_heartbeat", func(_ context.Context) {
 		jitter := time.Duration(rand.IntN(helloD.HeartbeatInterval)) * time.Millisecond
 		select {
 		case <-heartbeatCtx.Done():
@@ -161,7 +163,7 @@ func qqbotConnect( //nolint:gocyclo
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 
 	if sessionID == "" {
 		identD, _ := json.Marshal(map[string]any{

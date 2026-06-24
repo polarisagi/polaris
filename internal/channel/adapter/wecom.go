@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -80,7 +82,7 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 		return conn.WriteJSON(v)
 	}
 
-	go func() {
+	concurrent.SafeGo(ctx, "adapter_heartbeat", func(_ context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
@@ -105,7 +107,7 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 				}
 			}
 		}
-	}()
+	})
 
 	for {
 		select {

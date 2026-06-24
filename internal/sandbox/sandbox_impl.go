@@ -3,12 +3,14 @@ package sandbox
 import (
 	"github.com/polarisagi/polaris/internal/observability/trace"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -350,6 +352,9 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.To
 	start := time.Now()
 	out, err := cmd.Output()
 	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
+		}
 		return &types.ToolResult{
 			Success:   false,
 			Error:     err.Error(),
@@ -378,6 +383,9 @@ func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir stri
 		cmd.SysProcAttr = attrs
 	}
 	if err := cmd.Run(); err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
+		}
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox: RunHook %q", scriptPath), err)
 	}
 	return nil
@@ -454,6 +462,9 @@ func (s *ContainerSandbox) runNativeScript(ctx context.Context, spec SandboxSpec
 	out, runErr := cmd.Output()
 	latency := time.Since(start).Milliseconds()
 	if runErr != nil {
+		if errors.Is(runErr, fs.ErrPermission) {
+			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
+		}
 		// cmd.Output() 在非零退出码时返回 *exec.ExitError，Output 字段含 stderr
 		exitOut := out
 		var ee *exec.ExitError

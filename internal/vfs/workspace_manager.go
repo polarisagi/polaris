@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,6 +16,7 @@ type WorkspaceManager struct {
 	rootDir   string // ~/.polarisagi/polaris/workspaces
 	maxSize   int64  // Tier 0 = 500MB
 	manifests map[string]*WorkspaceManifest
+	gcCh      chan string // Background GC queue
 }
 
 // NewWorkspaceManager 创建 WorkspaceManager，rootDir 不存在时自动创建。
@@ -24,9 +26,19 @@ func NewWorkspaceManager(rootDir string, maxSize int64) *WorkspaceManager {
 		rootDir:   rootDir,
 		maxSize:   maxSize,
 		manifests: make(map[string]*WorkspaceManifest),
+		gcCh:      make(chan string, 1000),
 	}
 	wm.rebuildManifests()
+	go wm.gcWorker()
 	return wm
+}
+
+func (wm *WorkspaceManager) gcWorker() {
+	for path := range wm.gcCh {
+		_ = os.RemoveAll(path)
+		// Sleep briefly to reduce I/O pressure on disk during background cleanup
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // rebuildManifests 扫描 rootDir 重建 manifests，避免重启后 quota/GC 失效。
@@ -156,7 +168,16 @@ func (wm *WorkspaceManager) GC(now int64, activeTaskIDs []string) {
 			continue
 		}
 		dir := filepath.Join(wm.rootDir, key)
-		_ = os.RemoveAll(dir)
+		tombPath := dir + ".tombstone." + fmt.Sprint(now)
+		if err := os.Rename(dir, tombPath); err == nil {
+			select {
+			case wm.gcCh <- tombPath:
+			default:
+				_ = os.RemoveAll(tombPath) // queue full, delete synchronously
+			}
+		} else {
+			_ = os.RemoveAll(dir) // rename failed, fallback to direct delete
+		}
 		delete(wm.manifests, key)
 	}
 }

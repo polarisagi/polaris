@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -81,7 +83,7 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
-	go func() {
+	concurrent.SafeGo(heartbeatCtx, "adapter_heartbeat", func(_ context.Context) {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -92,7 +94,7 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 				conn.WriteJSON(map[string]string{"biz_type": "ping"}) //nolint:errcheck
 			}
 		}
-	}()
+	})
 
 	for {
 		if ctx.Err() != nil {

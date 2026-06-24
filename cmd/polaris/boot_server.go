@@ -35,7 +35,7 @@ import (
 func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) { //nolint:gocyclo
 	addr := fmt.Sprintf("%s:%d", sb.Cfg.Interface.Host, sb.Cfg.Interface.Port)
 	apiRateLimiter := rate.NewLimiter(rate.Limit(50), 100)
-	httpServer := server.NewServer(addr, sb.DataDir, ab.Agent, ab.Blackboard, tb.HITLGateway,
+	httpServer := server.NewServer(addr, sb.DataDir, ab.AgentPool, ab.Blackboard, tb.HITLGateway,
 		sb.Store.DB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.TBR, apiRateLimiter)
 	httpServer.SetAuditTrail(sb.AuditTrail)
 	httpServer.SetLogStore(sb.LogStore)

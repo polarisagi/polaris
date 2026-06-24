@@ -13,6 +13,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 type SandboxExecutor interface {
@@ -57,20 +58,21 @@ func (p *PlannerPool) Run(ctx context.Context) {
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(id int) {
+		id := i
+		concurrent.SafeGo(ctx, fmt.Sprintf("planner_worker_%d", id), func(ctx context.Context) {
 			defer wg.Done()
 			if p.taskType == "code_act" {
 				p.workerEngineA(ctx, id, resultChan)
 			} else {
 				p.workerEngineB(ctx, id, resultChan)
 			}
-		}(i)
+		})
 	}
 
-	go func() {
+	concurrent.SafeGo(ctx, "planner_waiter", func(_ context.Context) {
 		wg.Wait()
 		close(resultChan)
-	}()
+	})
 
 	// 收集所有结果，选得分最高的推送
 	var best workerResult

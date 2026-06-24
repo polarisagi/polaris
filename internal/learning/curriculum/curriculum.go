@@ -55,6 +55,8 @@ type AutoCurriculumGenerator struct {
 	mu          sync.Mutex
 	failCounts  map[string]int
 	frozenUntil map[string]time.Time
+
+	fitnessEval *SQLFitnessEvaluator // 可 nil；nil 时跳过 SQL 预筛
 }
 
 // NewAutoCurriculumGenerator 创建课程生成器。
@@ -72,6 +74,12 @@ func NewAutoCurriculumGenerator(
 		failCounts:   make(map[string]int),
 		frozenUntil:  make(map[string]time.Time),
 	}
+}
+
+// WithFitnessEval 注入 SQL 适应度预筛器。
+func (ag *AutoCurriculumGenerator) WithFitnessEval(fe *SQLFitnessEvaluator) *AutoCurriculumGenerator {
+	ag.fitnessEval = fe
+	return ag
 }
 
 // InjectLLMProvider 注入 LLM Provider（Tier1+）。
@@ -330,6 +338,17 @@ func (ag *AutoCurriculumGenerator) generateDescriptionsLLM(skill string, limit i
 // 任一阶段拒绝 → 返回 false。
 func (ag *AutoCurriculumGenerator) passSafetyAudit(ctx context.Context, sample *CurriculumSample) bool {
 	desc := sample.TaskDescription
+
+	// SQL 适应度预筛：history 充足的技能直接淘汰低质量样本，无需 LLM 调用
+	if ag.fitnessEval != nil {
+		// 从 desc 中提取 skill_id（约定：desc 格式为 "skill:<id>:..." 或直接用 desc 哈希）
+		// 当前阶段：用 desc 本身作为 skill_id 查询（无匹配时 EvaluateFitness 返回 -1）
+		if fitness := ag.fitnessEval.EvaluateFitness(ctx, desc); fitness >= 0 && fitness < 0.5 {
+			slog.Debug("curriculum: sql fitness pre-filter rejected sample",
+				"fitness", fitness, "skill_id", desc[:min(len(desc), 32)])
+			return false
+		}
+	}
 
 	// (a) TaintGate：任务描述仅允许 TaintLow 写入 instruction 槽
 	if err := ag.taintGate.CheckSlotAssignment(taint.SlotInstruction, 1 /* TaintLow */); err != nil {

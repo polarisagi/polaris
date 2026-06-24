@@ -135,13 +135,25 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 	isFirstTurn := len(history) == 0
 
+	var agentCtrl protocol.AgentController
+	if s.AgentPool != nil {
+		var release func()
+		var err error
+		agentCtrl, release, err = s.AgentPool.Acquire(ctx, sessionID)
+		if err != nil {
+			s.writeSSEError(w, flusher, "agent_pool_error", "failed to acquire agent: "+err.Error(), sessionID, err)
+			return
+		}
+		defer release()
+	}
+
 	if len(history) > 0 {
-		history = s.InjectSystemPrompt(ctx, history)
+		history = s.InjectSystemPrompt(ctx, agentCtrl, history)
 	}
 	// [新增] 将用户 input 注入 Agent FSM（非阻塞）
-	if s.Agent != nil {
-		s.Agent.SetTaskIntent([]byte(req.Input))
-		err := s.Agent.SendIntent(types.TriggerIntentReceived)
+	if agentCtrl != nil {
+		agentCtrl.SetTaskIntent([]byte(req.Input))
+		err := agentCtrl.SendIntent(types.TriggerIntentReceived)
 		if err != nil {
 			slog.Warn("server: fsm advance failed or timeout", "err", err)
 		}
@@ -376,8 +388,8 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		}
 
 		// [新增] 读取 SurpriseIndex 决定推理策略
-		if s.Agent != nil {
-			si := s.Agent.SurpriseIndex()
+		if agentCtrl != nil {
+			si := agentCtrl.SurpriseIndex()
 			if si > 0 && si < 0.3 {
 				// FastPath: 减少 maxTokens，禁用 chain-of-thought
 				inferReq.MaxTokens = 1024
@@ -608,8 +620,8 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	})
 
 	// [新增] 推理完成后通知 FSM（非阻塞）
-	if s.Agent != nil {
-		go func() { _ = s.Agent.SendIntent(types.TriggerExecuteDone) }()
+	if agentCtrl != nil {
+		go func() { _ = agentCtrl.SendIntent(types.TriggerExecuteDone) }()
 	}
 
 	writeSSE(w, flusher, "complete", map[string]any{
@@ -618,12 +630,12 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, history []types.Message) []types.Message { //nolint:gocyclo,nestif
-	if s.Agent == nil || s.Agent.Memory() == nil {
+func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message) []types.Message { //nolint:gocyclo,nestif
+	if agentCtrl == nil || agentCtrl.Memory() == nil {
 		return history
 	}
 
-	ic, ok := s.Agent.Memory().Working().Immutable().(*store.ImmutableCore)
+	ic, ok := agentCtrl.Memory().Working().Immutable().(*store.ImmutableCore)
 	if !ok {
 		return history
 	}

@@ -27,6 +27,13 @@ import (
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
+// AgentPool 管理 per-session Agent 生命周期。
+// Acquire 返回该 session 专属 Agent 及 release 回调；调用方 defer release()。
+// 超出容量时 Acquire 阻塞最多 100ms，超时返回 apperr.CodeResourceExhausted。
+type AgentPool interface {
+	Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error)
+}
+
 type SessionCompressor interface {
 	Stats(msgs []apptypes.Message) types.ContextStats
 	ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider) ([]apptypes.Message, types.CompactResult, error)
@@ -37,7 +44,7 @@ type ChatHandler struct {
 	ChatRepo      protocol.ChatRepository
 	ProviderRepo  protocol.ProviderRepository
 	SystemRepo    repo.SystemRepository
-	Agent         protocol.AgentController
+	AgentPool     AgentPool
 	Blackboard    protocol.Blackboard
 	Compressor    *Compressor
 	SlashRouter   *SlashCommandRouter
@@ -75,7 +82,7 @@ func NewChatHandler(
 	chatRepo protocol.ChatRepository,
 	providerRepo protocol.ProviderRepository,
 	systemRepo repo.SystemRepository,
-	agent protocol.AgentController,
+	agentPool AgentPool,
 	bb protocol.Blackboard,
 	compressor *Compressor,
 	transcriptDir string,
@@ -88,7 +95,7 @@ func NewChatHandler(
 		ChatRepo:      chatRepo,
 		ProviderRepo:  providerRepo,
 		SystemRepo:    systemRepo,
-		Agent:         agent,
+		AgentPool:     agentPool,
 		Blackboard:    bb,
 		Compressor:    compressor,
 		SlashRouter:   NewSlashCommandRouter(compressor, chatRepo, writeSSE),

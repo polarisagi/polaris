@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 var ErrBatcherSaturated = apperr.New(apperr.CodeResourceExhausted, "embedding batcher saturated")
@@ -40,7 +41,7 @@ func (b *EmbeddingBatcher) Start(ctx context.Context) {
 		return
 	}
 	b.timer = time.NewTimer(b.batchWindow)
-	go func() {
+	concurrent.SafeGo(ctx, "embedding_batcher_timer", func(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
@@ -51,7 +52,7 @@ func (b *EmbeddingBatcher) Start(ctx context.Context) {
 				b.timer.Reset(b.batchWindow)
 			}
 		}
-	}()
+	})
 }
 
 // flushQueue 在定时器到期时执行，优先 High (最多 80)，用 Low 补齐 (最多 100)。
