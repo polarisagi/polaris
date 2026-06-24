@@ -57,7 +57,19 @@ func (oe *OnDemandExtractor) ExtractAsync(ctx context.Context, events []types.Sc
 			return
 		}
 
-		if err := oe.extractor.upsertSemantic(extractCtx, entities, relations); err != nil {
+		maxTaint := types.TaintNone
+		for _, ev := range unextracted {
+			if pbEv, _ := ev.Event.(*types.Event); pbEv != nil {
+				if pbEv.TaintLevel > maxTaint {
+					maxTaint = pbEv.TaintLevel
+				}
+			}
+		}
+		if maxTaint < types.TaintMedium {
+			maxTaint = types.TaintMedium
+		}
+
+		if err := oe.extractor.upsertSemantic(extractCtx, entities, relations, maxTaint); err != nil {
 			slog.Warn("on_demand_extractor: upsert failed", "err", err)
 		}
 	})

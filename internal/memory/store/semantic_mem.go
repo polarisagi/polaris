@@ -104,11 +104,10 @@ func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, tain
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
 	}
 
-	entity.TaintLevel = types.PropagateTaint(entity.TaintLevel, taint)
+	entity.TaintLevel = types.PropagateTaint(entity.TaintLevel, taint) // only-up
 	if entity.Properties == nil {
 		entity.Properties = make(map[string]any)
 	}
-	entity.Properties["taint_level"] = int(entity.TaintLevel)
 
 	now := time.Now().UnixMilli()
 	propsJSON, _ := json.Marshal(entity.Properties)
@@ -126,8 +125,8 @@ func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, tain
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO semantic_entities
 		    (entity_type, name, properties, version, created_at, updated_at,
-		     source_event_id, status, confidence, source_type, valid_from, valid_until)
-		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+		     source_event_id, status, confidence, source_type, valid_from, valid_until, taint_level)
+		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(entity_type, name) DO UPDATE SET
 		    properties  = excluded.properties,
 		    updated_at  = excluded.updated_at,
@@ -136,10 +135,11 @@ func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, tain
 		    source_type = excluded.source_type,
 		    valid_from  = COALESCE(excluded.valid_from, valid_from),
 		    valid_until = excluded.valid_until,
+		    taint_level = MAX(taint_level, excluded.taint_level),
 		    status      = CASE WHEN status IN ('superseded','expired') THEN status ELSE 'active' END`,
 		entity.Type, entity.Name, string(propsJSON), now, now,
 		nullableInt64(entity.SourceEventID), status, confidence, sourceType,
-		nullableInt64(validFrom), nullableInt64(validUntil),
+		nullableInt64(validFrom), nullableInt64(validUntil), int(entity.TaintLevel),
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
@@ -229,15 +229,16 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation, t
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO semantic_relations
 		    (source_id, target_id, relation_type, weight, properties,
-		     created_at, source_event_id, updated_at, confidence)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     created_at, source_event_id, updated_at, confidence, taint_level)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
-		    weight     = MAX(weight, excluded.weight),
-		    updated_at = excluded.updated_at,
-		    confidence = MAX(confidence, excluded.confidence),
-		    properties = excluded.properties`,
+		    weight      = MAX(weight, excluded.weight),
+		    updated_at  = excluded.updated_at,
+		    confidence  = MAX(confidence, excluded.confidence),
+		    taint_level = MAX(taint_level, excluded.taint_level),
+		    properties  = excluded.properties`,
 		rel.FromDBID, rel.ToDBID, rel.RelationType, weight, nullProps,
-		now, nullableInt64(rel.SourceEventID), now, confidence,
+		now, nullableInt64(rel.SourceEventID), now, confidence, int(rel.TaintLevel),
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertRelation", err)

@@ -106,7 +106,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 	events, err := p.episodic.Query(ctx, types.EpisodicQuery{
 		SessionID:     sessionID,
 		K:             200,
-		MaxTaintLevel: types.TaintNone, // 系统内部，显式 TaintNone
+		MaxTaintLevel: types.TaintHigh, // 允许读取带污点的事件，并在巩固时向上传播
 	})
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "consolidation: query episodic events", err)
@@ -123,8 +123,9 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 		relations = nil
 	}
 
-	// Stage 2 — Upsert Semantic Memory
-	if err := p.upsertSemantic(ctx, entities, relations); err != nil {
+	// Stage 2 — Upsert Semantic Memory (传播污点)
+	maxTaint := computeMaxTaint(events)
+	if err := p.upsertSemantic(ctx, entities, relations, maxTaint); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "consolidation: stage2 upsert", err)
 	}
 
@@ -374,6 +375,7 @@ func (p *ConsolidationPipeline) upsertSemantic(
 	ctx context.Context,
 	entities []*types.Entity,
 	relations []*types.Relation,
+	maxTaint types.TaintLevel,
 ) error {
 	// ephemeralID（llmExtract 分配的内存 ID）→ 数据库自增 DBID
 	ephemeralToDBID := make(map[string]int64, len(entities))
@@ -389,7 +391,7 @@ func (p *ConsolidationPipeline) upsertSemantic(
 			p.supersedeSimilarPreferences(ctx, e.Name)
 		}
 
-		if err := p.semantic.UpsertFact(ctx, *e, types.TaintNone); err != nil {
+		if err := p.semantic.UpsertFact(ctx, *e, maxTaint); err != nil {
 			slog.Warn("consolidation: semantic.UpsertFact failed", "err", err)
 			continue
 		}
@@ -411,7 +413,7 @@ func (p *ConsolidationPipeline) upsertSemantic(
 		if dbid, ok := ephemeralToDBID[r.ToEntityID]; ok {
 			rc.ToDBID = dbid
 		}
-		if err := p.semantic.UpsertRelation(ctx, rc, types.TaintNone); err != nil {
+		if err := p.semantic.UpsertRelation(ctx, rc, maxTaint); err != nil {
 			slog.Warn("consolidation: semantic.UpsertRelation failed", "err", err)
 		}
 	}
@@ -1142,4 +1144,19 @@ func exp(x float64) float64 {
 		result += term
 	}
 	return result
+}
+
+func computeMaxTaint(events []types.ScoredEvent) types.TaintLevel {
+	maxTaint := types.TaintNone
+	for _, ev := range events {
+		if event, _ := ev.Event.(*types.Event); event != nil {
+			if event.TaintLevel > maxTaint {
+				maxTaint = event.TaintLevel
+			}
+		}
+	}
+	if maxTaint < types.TaintMedium {
+		maxTaint = types.TaintMedium
+	}
+	return maxTaint
 }

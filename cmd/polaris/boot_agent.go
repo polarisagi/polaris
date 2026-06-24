@@ -39,6 +39,7 @@ import (
 	"github.com/polarisagi/polaris/internal/swarm/planner"
 	"github.com/polarisagi/polaris/internal/swarm/supervisor"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -112,34 +113,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	reaper := orchestrator.NewReaper(blackboard)
 	go reaper.Run(reaperCtx)
 
-	// 启动认知压力更新协程 (CC-2: GlobalCognitivePressure)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-reaperCtx.Done():
-				return
-			case <-ticker.C:
-				pending, _ := blackboard.CountByStatus(reaperCtx, "pending")
-				running, _ := blackboard.CountByStatus(reaperCtx, "running")
-				activeCount := pending + running
-				maxPrio, _ := blackboard.MaxActivePriority(reaperCtx)
-
-				pressure := activeCount * 10
-				if maxPrio > 0 {
-					pressure += maxPrio * 5
-				}
-				if pressure > 100 {
-					pressure = 100
-				}
-				metrics.SetCognitivePressure(int64(pressure))
-			}
-		}
-	}()
-
 	sched := automation.NewSQLiteScheduler(sb.Store)
-	sched.WithBackgroundGate(&budget.ResourceBudget{})
+	var memGuard *probe.OSMemoryGuard
+	var featGate *probe.FeatureGate
+	if sb.AutoConf != nil {
+		memGuard = sb.AutoConf.Guard
+		featGate = sb.AutoConf.Gate
+	}
+	sched.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
 	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
 
 	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
@@ -244,6 +225,24 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			slog.Info("polaris: ScriptSkillCache + SkillExecutor injected into Agent FastPath")
 		}
 	}
+
+	// ─── [C2.3] Boot 压力 Updater (Cognitive Pressure) ────────────────────────
+	concurrent.SafeGo(ctx, "cognitive-pressure-updater", func(ctx context.Context) {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				active := blackboard.CountByStatus(types.TaskClaimed, types.TaskExecuting)
+				surprise := metrics.GlobalSurpriseIndex().Current()
+				maxPrio := blackboard.MaxActivePriority()
+				p := metrics.ComputeCognitivePressure(active, surprise, maxPrio)
+				metrics.GlobalCognitivePressure().Set(p)
+			}
+		}
+	})
 
 	slog.Info("polaris: agent kernel & DAG executor initialized")
 

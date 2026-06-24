@@ -437,43 +437,38 @@ type AgentCard struct {
 	MaxDepth      int // 0 表示使用全局 MaxSpawnDepth 默认值
 }
 
-func parseTaskStatus(status string) types.TaskStatus {
-	switch status {
-	case "pending":
-		return types.TaskPending
-	case "running", "executing":
-		return types.TaskExecuting
-	case "claimed":
-		return types.TaskClaimed
+// CountByStatus 返回处于任一给定状态的任务数（活跃度信号，只读）。
+// 无参时返回 0。
+func (b *Blackboard) CountByStatus(statuses ...types.TaskStatus) int {
+	if len(statuses) == 0 {
+		return 0
 	}
-	return types.TaskPending
-}
-
-func (b *Blackboard) CountByStatus(ctx context.Context, status string) (int, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-
-	count := 0
-	targetStatus := parseTaskStatus(status)
+	n := 0
 	for _, t := range b.tasks {
-		if t.Status == targetStatus {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func (b *Blackboard) MaxActivePriority(ctx context.Context) (int, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	maxP := 0
-	for _, t := range b.tasks {
-		if t.Status == types.TaskPending || t.Status == types.TaskExecuting || t.Status == types.TaskClaimed {
-			if t.Priority > maxP {
-				maxP = t.Priority
+		for _, s := range statuses {
+			if t.Status == s {
+				n++
+				break
 			}
 		}
 	}
-	return maxP, nil
+	return n
+}
+
+// MaxActivePriority 返回活跃任务（Claimed/Executing）的最高优先级（0=最高）。
+// 无活跃任务返回 3（最低优先级 → weight=0.1 → 认知压力低）。
+func (b *Blackboard) MaxActivePriority() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	best := 3
+	for _, t := range b.tasks {
+		if t.Status == types.TaskClaimed || t.Status == types.TaskExecuting {
+			if t.Priority < best {
+				best = t.Priority
+			}
+		}
+	}
+	return best
 }

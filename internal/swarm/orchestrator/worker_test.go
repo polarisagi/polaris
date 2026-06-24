@@ -84,9 +84,6 @@ func (b *mockBlackboard) BeginCompensation(ctx context.Context, taskID, agentID 
 	return nil
 }
 
-func (b *mockBlackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
-	return nil
-}
 func (b *mockBlackboard) EndCompensation(ctx context.Context, taskID, agentID string) error {
 	return nil
 }
@@ -94,12 +91,12 @@ func (m *mockBlackboard) SideEffectPreCheck(_ context.Context, _, _ string, _ in
 	return nil
 }
 
-func (m *mockBlackboard) CountByStatus(ctx context.Context, status string) (int, error) {
-	return 0, nil
+func (m *mockBlackboard) CountByStatus(statuses ...types.TaskStatus) int {
+	return 0
 }
 
-func (m *mockBlackboard) MaxActivePriority(ctx context.Context) (int, error) {
-	return 0, nil
+func (m *mockBlackboard) MaxActivePriority() int {
+	return 3
 }
 func (b *mockBlackboard) PeekTask(ctx context.Context, taskID string) (*types.TaskSnapshot, error) {
 	return nil, nil

@@ -40,6 +40,7 @@ func NewMockStore() *MockStore {
 			source_type     TEXT    NOT NULL DEFAULT 'llm_extract',
 			valid_from      INTEGER,
 			valid_until     INTEGER,
+			taint_level     INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(entity_type, name)
 		);
 		CREATE TABLE IF NOT EXISTS semantic_relations (
@@ -53,6 +54,7 @@ func NewMockStore() *MockStore {
 			source_event_id INTEGER,
 			updated_at      INTEGER NOT NULL DEFAULT 0,
 			confidence      REAL NOT NULL DEFAULT 1.0,
+			taint_level     INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(source_id, target_id, relation_type)
 		);
 		CREATE TABLE IF NOT EXISTS episodic_events (

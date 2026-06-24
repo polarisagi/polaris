@@ -67,12 +67,12 @@ func (s *stubBlackboard) SideEffectPreCheck(_ context.Context, _, _ string, _ in
 	return nil
 }
 
-func (s *stubBlackboard) CountByStatus(ctx context.Context, status string) (int, error) {
-	return 0, nil
+func (s *stubBlackboard) CountByStatus(statuses ...types.TaskStatus) int {
+	return 0
 }
 
-func (s *stubBlackboard) MaxActivePriority(ctx context.Context) (int, error) {
-	return 0, nil
+func (s *stubBlackboard) MaxActivePriority() int {
+	return 3
 }
 
 func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan types.BlackboardEvent, error) {
@@ -80,10 +80,6 @@ func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan types.BlackboardEv
 	return ch, nil
 }
 func (s *stubBlackboard) UpdateTaskTokens(ctx context.Context, taskID string, promptTokens, completionTokens, cacheRead int, cost float64) error {
-	return nil
-}
-
-func (s *stubBlackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
 	return nil
 }
 

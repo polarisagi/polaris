@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS semantic_entities (
     -- ↑ 事实失效时间（Unix 毫秒）。NULL = 永久有效。
     --   TemporalExpirer 每小时扫描，到期自动置 status='expired'。
 
+    taint_level     INTEGER NOT NULL DEFAULT 0,
+    -- ↑ 污点等级：TaintNone=0 | TaintLow=1 | TaintMedium=2 | TaintHigh=3。
+    --   only-up 语义：ON CONFLICT 时用 MAX(taint_level, excluded.taint_level) 合并，禁止降级。
+    --   外部来源（GraphRAG/用户文档）写入下限：TaintMedium（XR-16 强制）。
+    --   检索过滤：WHERE taint_level <= ?（MaxTaintLevel 上限过滤）。
+
     UNIQUE(entity_type, name)
     -- ↑ 实体类型 + 名称唯一 —— 同一实体多次提取通过 UpsertFact 更新属性。
 );
@@ -109,6 +115,11 @@ CREATE TABLE IF NOT EXISTS semantic_relations (
 
     confidence      REAL    NOT NULL DEFAULT 1.0,
     -- ↑ 关系置信度，写入时继承来源实体 confidence 的较小值。
+
+    taint_level     INTEGER NOT NULL DEFAULT 0,
+    -- ↑ 污点等级：TaintNone=0 | TaintLow=1 | TaintMedium=2 | TaintHigh=3。
+    --   only-up 语义：ON CONFLICT 时用 MAX(taint_level, excluded.taint_level) 合并。
+    --   外部来源局部下限 TaintMedium（XR-16）。
 
     UNIQUE(source_id, target_id, relation_type)
     -- ↑ 同一对实体间同一关系类型唯一 —— 重复提取时 UPDATE weight/updated_at。

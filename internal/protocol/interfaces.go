@@ -251,8 +251,10 @@ type Blackboard interface {
 	// 由 Worker.tryClaimAndExecute 在 AgentKernel.Run 返回后调用。
 	// 幂等：多次调用以最后一次写入为准（覆盖，不累加）。
 	UpdateTaskTokens(ctx context.Context, taskID string, tokensIn, tokensOut, cacheRead int, costUSD float64) error
-	CountByStatus(ctx context.Context, status string) (int, error)
-	MaxActivePriority(ctx context.Context) (int, error)
+	// CountByStatus 返回处于任一给定状态的任务数（活跃度信号，只读）。无参时返回 0。
+	CountByStatus(statuses ...types.TaskStatus) int
+	// MaxActivePriority 返回活跃任务（Claimed/Executing）的最高优先级（0=最高；无活跃任务返回 3=最低）。
+	MaxActivePriority() int
 }
 
 // ============================================================================

@@ -561,7 +561,7 @@ func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompleted
 	}
 	// 通知外环推进 Rollout
 	if e.rollout != nil {
-		go func() {
+		concurrent.SafeGo(ctx, "learning-rollout-advance", func(ctx context.Context) {
 			_ = e.rollout.AdvanceGate(ctx, ev.CandidateID, RolloutStats{
 				BaselineErrorRate:  1.0 - e.cfg.BaselinePassRate,
 				ErrorRate:          1.0 - ev.PassRate,
@@ -569,6 +569,6 @@ func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompleted
 				P95Latency:         ev.P95LatencyMs,
 				BaselineP95Latency: ev.BaselineP95Ms,
 			})
-		}()
+		})
 	}
 }

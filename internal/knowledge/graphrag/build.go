@@ -171,10 +171,25 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 			return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert fact failed", err)
 		}
 
+		// fetch DBID for the concept entity we just created/updated
+		conceptDBEntity, err := p.semanticMem.GetEntity(ctx, "Concept", conceptLabel)
+		if err != nil || conceptDBEntity == nil {
+			continue // skip relations if concept entity resolution failed
+		}
+
 		for _, idx := range cluster {
+			// fetch DBID for the source entity
+			srcEntity := entities[idx]
+			srcDBEntity, err := p.semanticMem.GetEntity(ctx, srcEntity.Type, srcEntity.Name)
+			if err != nil || srcDBEntity == nil {
+				continue // skip relation if source entity resolution failed
+			}
+
 			rel := types.Relation{
-				FromEntityID: entities[idx].ID,
+				FromEntityID: srcEntity.ID,
 				ToEntityID:   conceptEntity.ID,
+				FromDBID:     srcDBEntity.DBID,     // MUST fill
+				ToDBID:       conceptDBEntity.DBID, // MUST fill
 				RelationType: "RELATED_TO",
 				Weight:       1.0,
 				TaintLevel:   maxTaint,

@@ -70,7 +70,7 @@ func (pe *PerMessageExtractor) HandleOutboxRecord(ctx context.Context, payload [
 		return nil //nolint:nilerr // 提取失败非致命
 	}
 
-	if err := pe.pipeline.upsertSemantic(ctx, entities, relations); err != nil {
+	if err := pe.pipeline.upsertSemantic(ctx, entities, relations, types.TaintMedium); err != nil {
 		slog.Warn("per_message_extractor: upsert failed", "session_id", msg.SessionID, "err", err)
 	}
 

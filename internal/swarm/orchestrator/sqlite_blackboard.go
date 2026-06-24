@@ -863,23 +863,52 @@ func (bb *SQLiteBlackboard) Ping(ctx context.Context) error {
 	return bb.db.PingContext(ctx)
 }
 
-func (bb *SQLiteBlackboard) CountByStatus(ctx context.Context, status string) (int, error) {
-	var count int
-	err := bb.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE status = ?", status).Scan(&count)
-	if err != nil {
-		return 0, apperr.Wrap(apperr.CodeInternal, "CountByStatus", err)
+// CountByStatus 返回处于任一给定状态的任务数（活跃度信号，只读）。
+func (bb *SQLiteBlackboard) CountByStatus(statuses ...types.TaskStatus) int {
+	if len(statuses) == 0 {
+		return 0
 	}
-	return count, nil
+	// 将 types.TaskStatus 转为 SQL 存储字符串（与 status* 常量一致）
+	args := make([]any, 0, len(statuses))
+	for _, s := range statuses {
+		var sqlStatus string
+		switch s {
+		case types.TaskPending:
+			sqlStatus = statusPending
+		case types.TaskClaimed:
+			sqlStatus = statusClaimed
+		case types.TaskExecuting:
+			sqlStatus = statusRunning
+		case types.TaskSuspended:
+			sqlStatus = statusSuspended
+		case types.TaskDone:
+			sqlStatus = statusDone
+		case types.TaskFailed:
+			sqlStatus = statusFailed
+		default:
+			sqlStatus = fmt.Sprintf("%d", s)
+		}
+		args = append(args, sqlStatus)
+	}
+	placeholders := "?" + strings.Repeat(",?", len(args)-1)
+	var count int
+	if err := bb.db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM tasks WHERE status IN ("+placeholders+")",
+		args...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
 }
 
-func (bb *SQLiteBlackboard) MaxActivePriority(ctx context.Context) (int, error) {
-	var maxPrio sql.NullInt32
-	err := bb.db.QueryRowContext(ctx, "SELECT MAX(priority) FROM tasks WHERE status IN (?, ?, ?)", statusPending, statusClaimed, statusRunning).Scan(&maxPrio)
-	if err != nil {
-		return 0, apperr.Wrap(apperr.CodeInternal, "MaxActivePriority", err)
+// MaxActivePriority 返回活跃任务（Claimed/Executing）的最高优先级（0=最高）。
+// 无活跃任务返回 3（最低优先级 → 认知压力低）。
+func (bb *SQLiteBlackboard) MaxActivePriority() int {
+	var minPrio sql.NullInt32
+	err := bb.db.QueryRowContext(context.Background(),
+		"SELECT MIN(priority) FROM tasks WHERE status IN (?, ?)",
+		statusClaimed, statusRunning).Scan(&minPrio)
+	if err != nil || !minPrio.Valid {
+		return 3 // 无活跃任务 → 最低优先级权重(0.1) → 认知压力低
 	}
-	if !maxPrio.Valid {
-		return -1, nil
-	}
-	return int(maxPrio.Int32), nil
+	return int(minPrio.Int32)
 }

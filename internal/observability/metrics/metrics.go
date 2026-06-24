@@ -157,6 +157,14 @@ func (tbr *TokenBurnRate) EMA30s() float64 {
 	return tbr.ema30s
 }
 
+// BaselineP95 返回动态学习的 P95 基线速率（token/s）。
+// 供 ResourceBudget.BackgroundPermit 门控后台任务使用（C1.2）。
+func (tbr *TokenBurnRate) BaselineP95() float64 {
+	tbr.mu.RLock()
+	defer tbr.mu.RUnlock()
+	return tbr.baselineP95
+}
+
 func (tbr *TokenBurnRate) CheckThrottle() ThrottleStage {
 	tbr.mu.RLock()
 	defer tbr.mu.RUnlock()
