@@ -58,6 +58,7 @@ type Agent struct {
 	memInjector       MemoryInjector             // NEW: 组装前主动记忆注入
 	codeAct           *codeact.CodeAct           // LLM 代码执行引擎；nil 时 code_act 节点返回错误
 	skillCache        *skillpkg.ScriptSkillCache // 可选；nil 时 FastPath 跳过缓存查询
+	skillExecutor     protocol.SkillExecutor     // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
 }
 
 // MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
@@ -107,6 +108,13 @@ func (a *Agent) SetCodeAct(ca *codeact.CodeAct) { a.codeAct = ca }
 // nil-safe：不注入时 FastPath 退回合成 JSON 路径。
 func (a *Agent) WithSkillCache(sc *skillpkg.ScriptSkillCache) *Agent {
 	a.skillCache = sc
+	return a
+}
+
+// WithSkillExecutor 注入 SkillExecutor，FastPath 缓存命中后实际执行 Python 脚本。
+// 必须与 WithSkillCache 配合使用；单独注入任意一个均不会执行技能。
+func (a *Agent) WithSkillExecutor(se protocol.SkillExecutor) *Agent {
+	a.skillExecutor = se
 	return a
 }
 

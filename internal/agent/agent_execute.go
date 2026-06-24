@@ -116,24 +116,19 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			if a.sCtx.SurpriseIndex > 0 && a.sCtx.SurpriseIndex < 0.3 {
 				// System 1 FastPath：先查技能缓存（M09 Logic Collapse 蒸馏产出）
 				// 命中则直接执行 Python 脚本，绕过 LLM；未命中退回合成 JSON 路径。
-				if a.skillCache != nil && a.sCtx.TaskModel != nil {
+				// 技能缓存命中路径：GetOrSpawn 验证技能在注册表中存在，SkillExecutor 执行 Python 脚本。
+				// 两者均需注入（WithSkillCache + WithSkillExecutor）；任一为 nil 时跳过，退回合成 JSON 路径。
+				if a.skillCache != nil && a.skillExecutor != nil && a.sCtx.TaskModel != nil {
 					skillID := extractTaskType(a.sCtx.TaskModel.Goal)
 					if handle, cacheErr := a.skillCache.GetOrSpawn(ctx, skillID); cacheErr == nil && handle != nil {
-						// 技能缓存命中：执行 Python 脚本
-						// ProcessHandle 不包含执行方法，实际执行通过 ToolRegistry 路由到 M7 Sandbox
+						// ProcessHandle 仅作"已确认可用"令牌，实际执行委托给 SkillExecutor，
+						// 由 M7 ScriptSkillExecutor 完成脚本加载和沙箱执行。
 						runCtx, runCancel := context.WithTimeout(ctx, 200*time.Millisecond)
-						defer runCancel()
-
-						toolName := skillID
-						if !strings.HasPrefix(toolName, "skill:") {
-							toolName = "skill:" + toolName
-						}
-
-						res, runErr := a.toolRegistry.ExecuteTool(runCtx, toolName, []byte(a.sCtx.RawIntentTS.Content()), a.sCtx.GlobalTaintLevel)
-						if runErr == nil && res != nil && res.Success {
-							scriptResult := string(res.Output)
+						output, runErr := a.skillExecutor.ExecuteSkill(runCtx, handle.SkillID, []byte(a.sCtx.RawIntentTS.Content()))
+						runCancel() // 立即释放：超时上下文只覆盖 ExecuteSkill 调用，不扩散到后续异步 goroutine
+						if runErr == nil && len(output) > 0 {
+							scriptResult := string(output)
 							nextState, err = llmEff.OnSuccess(protocol.StateContext{}, []byte(scriptResult))
-
 							metrics.GlobalSkillCacheHitTotal.Add(1) // 可观测：缓存命中计数
 							if a.memory != nil {
 								go func(intentJSON, result string) {
@@ -152,7 +147,6 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 						}
 					}
 				}
-
 				// 技能缓存未命中或不可用：退回合成 JSON 路径（现有行为保持不变）
 				fastResult := `{"Goal":` + a.sCtx.RawIntentTS.MarshalJSONString() + `,"Complexity":0.1}`
 				nextState, err = llmEff.OnSuccess(protocol.StateContext{}, []byte(fastResult))

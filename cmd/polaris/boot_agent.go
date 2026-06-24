@@ -165,12 +165,23 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		return tb.SandboxRouter.Execute(ctx, tool, args, types.TaintNone)
 	}, nil)
 
-	// Inject ScriptSkillCache
+	// 注入 ScriptSkillCache + SkillExecutor，激活 System 1 FastPath 技能命中路径。
+	// 仅在 FeatureLogicCollapse 开启（即 FeatureL3Sandbox 可用）时注入，
+	// 否则技能蒸馏流水线本身未运行，缓存永远为空，注入无意义。
 	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled {
-		if tb.SkillRegistry != nil { // skillRegistry 已在 boot_tools.go 构建
-			skillCache := skill.NewScriptSkillCache(nil, 0, 0, 0)
+		if tb.SkillRegistry != nil && tb.SkillExecutor != nil {
+			// spawnFn：验证技能在注册表中存在后，返回轻量 ProcessHandle 作为"已确认可用"令牌。
+			// ProcessHandle 不持有实际进程；真正的执行由 SkillExecutor.ExecuteSkill 完成。
+			spawnFn := func(ctx context.Context, skillID string) (*skill.ProcessHandle, error) {
+				if _, err := tb.SkillRegistry.Get(ctx, skillID, ""); err != nil {
+					return nil, err
+				}
+				return &skill.ProcessHandle{SkillID: skillID, ReadyAt: time.Now()}, nil
+			}
+			skillCache := skill.NewScriptSkillCache(spawnFn, 5, 10, 30)
 			agent.WithSkillCache(skillCache)
-			slog.Info("polaris: ScriptSkillCache injected into Agent FastPath")
+			agent.WithSkillExecutor(tb.SkillExecutor)
+			slog.Info("polaris: ScriptSkillCache + SkillExecutor injected into Agent FastPath")
 		}
 	}
 

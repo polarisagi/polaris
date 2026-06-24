@@ -49,6 +49,7 @@ type ToolBundle struct {
 	AppRepo          *repo.SQLiteAppRepository
 	InstallMgr       *marketplace.Manager
 	SkillRegistry    protocol.SkillRegistry
+	SkillExecutor    protocol.SkillExecutor   // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
 	NativeCogn       native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
 	RecoveryHandler  *agent.ProviderRecoveryHandler
 }
@@ -195,7 +196,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	loadSkillsToToolRegistry(ctx, sb.Store.DB(), toolReg, inProcSandbox)
 
 	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, nil, nil)
-	_ = skillExecutor
 	slog.Info("polaris: skill library initialized (script-backed)")
 
 	// ─── §6.6 ConsolidationPipeline（M5 §4 四阶段 Episodic→Semantic 蒸馏）──
@@ -264,6 +264,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		AppRepo:          appRepo,
 		InstallMgr:       installMgr,
 		SkillRegistry:    skillRegistry,
+		SkillExecutor:    skillExecutor,
 		NativeCogn:       nativeCogn,
 		RecoveryHandler:  recoveryHandler,
 	}, nil
