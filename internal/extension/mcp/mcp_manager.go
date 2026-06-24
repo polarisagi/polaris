@@ -283,8 +283,10 @@ func (m *MCPManager) LoadFromDB(ctx context.Context, extRepo protocol.ExtensionR
 			WorkDir:    s.WorkDir, // plugin MCP 设为 install_path；独立 MCP 为空（继承父进程 cwd）
 			Timeout:    time.Duration(s.Timeout) * time.Second,
 			ServerName: s.Name,
-			// trust_tier >= 3 (Official/System) → TaintMedium；其余保持 TaintHigh
-			Trusted: s.TrustTier >= 3,
+			// TrustTier 驱动沙箱策略（bwrap 网络隔离）和污点等级（TaintMedium/TaintHigh）。
+			// SandboxPolicy 不设置（""）：applyStdioSandbox 将其视为 "auto"，自动按 TrustTier 决策。
+			TrustTier: s.TrustTier,
+			Trusted:   s.TrustTier >= 3,
 		}
 		// 每个 server 独立 goroutine，避免一个慢连接阻塞其他
 		go func(id, name string, cfg MCPClientConfig) {
@@ -411,6 +413,20 @@ func validateLLMNamePart(s string) error {
 	return nil
 }
 
+// IsValidLLMName 导出版本：检查完整工具名（含前缀）是否满足 ^[a-zA-Z0-9_-]+$。
+// 供 sysadmin.BuildToolSchemas 等外部包做防御性过滤使用。
+func IsValidLLMName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // DynamicConnectRequest 动态连接 MCP server 的参数。
 type DynamicConnectRequest struct {
 	ServerName string // 唯一名称，用于工具名前缀
@@ -423,6 +439,12 @@ type DynamicConnectRequest struct {
 // DynamicConnect 动态连接一个 MCP server 并注册其工具到沙箱。
 // 幂等：同名 server 已连接时直接返回 nil。
 func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectRequest) error {
+	// ServerName 用作工具名前缀（mcp__<ServerName>__<tool>），必须满足 ^[a-zA-Z0-9_-]+$。
+	// Add() 已内置此校验；DynamicConnect 走独立路径，需显式检查。
+	if err := validateLLMNamePart(req.ServerName); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput,
+			fmt.Sprintf("mcp: DynamicConnect server name %q invalid (must match ^[a-zA-Z0-9_-]+$)", req.ServerName), err)
+	}
 	m.mu.Lock()
 	if _, exists := m.entries[req.ServerName]; exists {
 		m.mu.Unlock()
@@ -521,7 +543,9 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 			URL:        strings.ReplaceAll(cfg.URL, "{DATA_DIR}", dataDir),
 			Timeout:    time.Duration(cfg.Timeout) * time.Second,
 			ServerName: cfg.Name,
-			Trusted:    cfg.TrustTier >= 3,
+			// TrustTier 驱动沙箱策略和污点等级；SandboxPolicy 不设置（""=auto）。
+			TrustTier: cfg.TrustTier,
+			Trusted:   cfg.TrustTier >= 3,
 		}
 		for i, a := range cfg.Args {
 			clientCfg.Args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"sync/atomic"
 
 	"net"
 	"net/http"
@@ -80,7 +81,6 @@ type Server struct {
 	transcriptDir  string                                                                         // per-session JSONL transcript 目录
 	hooks          *sysadmin.HookRunner                                                           // Shell Script Hooks（End-User 扩展点）
 	compressor     *chat.Compressor                                                               // 上下文超长自动压缩
-	slashRouter    *chat.SlashCommandRouter                                                       // 斜线命令路由器（/context /compact /clear /help）
 	channelMgr     *channel.Manager                                                               // 所有聊天平台 poller 管理
 	mcpMgr         *mcp.MCPManager                                                                // MCP Server 连接管理
 	toolReg        protocol.ToolRegistry                                                          // builtin tool 元数据
@@ -179,6 +179,9 @@ func (s *Server) SetMCPManager(m *mcp.MCPManager) {
 	if s.pluginHandler != nil {
 		s.pluginHandler.MCPMgr = m
 	}
+	if s.chatHandler != nil {
+		s.chatHandler.MCPMgr = m
+	}
 }
 
 // SetToolRegistry 注入 ToolRegistry（NewServer 之后、Start 之前调用）。
@@ -186,6 +189,9 @@ func (s *Server) SetToolRegistry(r protocol.ToolRegistry) {
 	s.toolReg = r
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.ToolReg = r
+	}
+	if s.chatHandler != nil {
+		s.chatHandler.ToolReg = r
 	}
 }
 
@@ -197,6 +203,9 @@ func (s *Server) SetSkillRegistry(r protocol.SkillRegistry) {
 	}
 	if s.pluginHandler != nil {
 		s.pluginHandler.SkillReg = r
+	}
+	if s.chatHandler != nil {
+		s.chatHandler.SkillReg = r
 	}
 }
 
@@ -302,7 +311,6 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	}
 
 	s.compressor = chat.NewCompressor(db, s.chatRepo, s.hooks, compressorCfg)
-	s.slashRouter = chat.NewSlashCommandRouter(s.compressor, s.chatRepo, nil)
 	s.channelMgr = channel.NewManager(httpClient, func(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {
 		// s.dispatchChannelMessage(context.Background(), channelType, channelID, cfg, msg)
 	}, channel.WithSafeDialer(safeDialer))
@@ -315,10 +323,37 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 		TBR:          tbr,
 		DB:           db,
 	}
+	// sseWriteFn 与 chat.writeSSE 保持完全相同的协议（chat 包内函数未导出，此处镜像实现）
+	sseWriteFn := func(w http.ResponseWriter, f http.Flusher, event string, payload any) {
+		data, _ := json.Marshal(payload)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+		f.Flush()
+	}
+	// STT/TTS 原子指针：启动时持有 nil 引擎，InitSTTEngine/InitTTSEngine 完成后原子替换为真实引擎。
+	// 必须非 nil，否则 .Store()/.Load() 调用时 nil pointer dereference。
+	sttPtr := new(atomic.Pointer[stt.Engine])
+	ttsPtr := new(atomic.Pointer[tts.Engine])
 	s.chatHandler = &chat.ChatHandler{
-		ChatRepo:      s.chatRepo,
-		TranscriptDir: s.transcriptDir,
-		DB:            db,
+		DB:                    db,
+		ChatRepo:              s.chatRepo,
+		ProviderRepo:          s.providerRepo,
+		SystemRepo:            s.systemRepo,
+		Agent:                 agent,
+		Blackboard:            bb,
+		Compressor:            s.compressor,
+		SlashRouter:           chat.NewSlashCommandRouter(s.compressor, s.chatRepo, sseWriteFn),
+		TranscriptDir:         s.transcriptDir,
+		PromptMgr:             s.promptMgr,
+		SoulMDContent:         &s.soulMDContent,
+		Hooks:                 s.hooks,
+		DataDir:               s.dataDir,
+		Registry:              s.registry,
+		ServerPlatform:        s.serverPlatform,
+		BaseSystemPromptTpl:   s.baseSystemPromptTpl,
+		ActivatedSystemPrompt: s.activatedSystemPrompt,
+		STTEngine:             sttPtr,
+		TTSEngine:             ttsPtr,
+		WriteSSE:              sseWriteFn,
 	}
 	s.sysadminHandler = &sysadmin.SysAdminHandler{
 		SystemRepo:     s.systemRepo,
@@ -491,6 +526,8 @@ func NewServer(addr string, dataDir string, agent protocol.AgentController, bb p
 	mux.HandleFunc("POST /v1/plugins/marketplaces", s.pluginHandler.HandleAddMarketplace)
 	mux.HandleFunc("DELETE /v1/plugins/marketplaces/{id}", s.pluginHandler.HandleDeleteMarketplace)
 	mux.HandleFunc("POST /v1/plugins/marketplaces/sync", s.pluginHandler.HandleSyncMarketplaces)
+	// /v1/plugins/sync 是 /v1/plugins/marketplaces/sync 的前端别名（Web UI plugins.js 硬编码路径）
+	mux.HandleFunc("POST /v1/plugins/sync", s.pluginHandler.HandleSyncMarketplaces)
 
 	// OpenAI 兼容端点（允许第三方 OpenAI SDK 客户端直接对接）
 	// mux.HandleFunc("...", s.handleOpenAIChat)
@@ -1067,6 +1104,8 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 
 	resp := types.HITLResponse{
 		OptionKey: req.Action,
+		Approved:  req.Action == "approve",
+		Reason:    req.Comment,
 		UserID:    authCtx.UserID, // M13: 接入鉴权上下文
 	}
 

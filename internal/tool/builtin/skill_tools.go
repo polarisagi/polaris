@@ -42,7 +42,7 @@ func RegisterSkillTools(
 
 func skillSaveTool() types.Tool {
 	return types.Tool{
-		Name: "skill:save",
+		Name: "skill_save",
 		Description: "Save a verified script as a reusable skill. " +
 			"Use this only when you have successfully executed and verified a complex workflow script " +
 			"and want to persist it for future use. The script must be self-contained.",
@@ -92,7 +92,7 @@ func makeSkillSaveFn(skillReg protocol.SkillRegistry) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args skillSaveArgs
 		if err := json.Unmarshal(input, &args); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "skill:save: invalid args", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "skill_save: invalid args", err)
 		}
 
 		skillName := fmt.Sprintf("skill:%s", args.SkillName)
@@ -125,7 +125,7 @@ func makeSkillSaveFn(skillReg protocol.SkillRegistry) sandbox.InProcessFn {
 		}
 
 		if err := skillReg.Register(ctx, meta); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "skill:save: register failed", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "skill_save: register failed", err)
 		}
 
 		return []byte(`{"status":"success", "message":"skill saved to registry"}`), nil
@@ -134,7 +134,7 @@ func makeSkillSaveFn(skillReg protocol.SkillRegistry) sandbox.InProcessFn {
 
 func skillGenerateTool() types.Tool {
 	return types.Tool{
-		Name: "skill:generate",
+		Name: "skill_generate",
 		Description: "Trigger the logic collapse engine to automatically generate a fast-path skill " +
 			"based on recent successful executions. This is an explicit self-improvement signal.",
 		Version:     "1.0.0",
@@ -168,7 +168,7 @@ func makeSkillGenerateFn(outbox protocol.OutboxWriter) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args skillGenerateArgs
 		if err := json.Unmarshal(input, &args); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "skill:generate: invalid args", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "skill_generate: invalid args", err)
 		}
 
 		// 向 M9 引擎发送显式 Logic Collapse 触发信号。

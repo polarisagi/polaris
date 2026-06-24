@@ -43,7 +43,7 @@ func getDummyServerWithInstallMgr(t *testing.T) *PluginHandler {
 
 func TestInternalInstallMCP(t *testing.T) {
 	h := getDummyServerWithInstallMgr(t)
-	_, err := h.internalInstallMCP(context.Background(), "ext1", &protocol.RegistryEntry{}, protocol.PluginInstallRequest{}, "now")
+	_, err := h.internalInstallMCP(context.Background(), "ext1", &protocol.RegistryEntry{}, protocol.PluginInstallRequest{}, "now", false)
 	if err == nil {
 		t.Errorf("expected error due to missing schema")
 	}
@@ -58,7 +58,7 @@ func TestInstallMCPExtension(t *testing.T) {
 
 func TestInternalInstallGeneric(t *testing.T) {
 	h := getDummyServerWithInstallMgr(t)
-	_, err := h.internalInstallGeneric(context.Background(), "ext1", &protocol.RegistryEntry{}, protocol.PluginInstallRequest{}, "now")
+	_, err := h.internalInstallGeneric(context.Background(), "ext1", &protocol.RegistryEntry{}, protocol.PluginInstallRequest{}, "now", false)
 	if err == nil {
 		t.Errorf("expected error due to missing schema")
 	}

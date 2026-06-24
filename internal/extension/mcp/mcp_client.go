@@ -69,12 +69,14 @@ type MCPClientConfig struct {
 	ServerName string            // 用于 TaintPreservingDecoder 溯源
 	Trusted    bool              // true → TaintMedium（白名单）；false → TaintHigh
 	// SandboxPolicy 控制 stdio 进程的 OS 级隔离策略。
-	// "none"（默认）：仅 env 消毒；
-	// "bwrap"：Linux Bubblewrap（网络隔离 + 只读 /）；
-	// "seatbelt"：macOS Apple Seatbelt sandbox-exec；
-	// "auto"：运行时按 OS + TrustTier 自动选择。
+	// ""（未设置）/ "auto"：按 TrustTier + OS 自动决策（默认安全路径，推荐所有调用方使用）；
+	// "none"：唯一的显式退出路径，调用方主动声明不隔离（慎用）；
+	// "bwrap"：强制 Linux Bubblewrap，忽略 TrustTier；
+	// "seatbelt"：强制 macOS sandbox-exec（已废弃，当前为 no-op）。
 	SandboxPolicy string
-	// TrustTier 用于 auto 策略下决定隔离强度（TrustCommunity 强制隔离）。
+	// TrustTier 是沙箱策略和污点等级的统一驱动源（ADR-0016 §2.1）。
+	// 值来自 mcp_servers.trust_tier：0=Unknown, 1=Local, 2=Community, 3=Official, 4=System/Builtin。
+	// TrustTier<=2 → bwrap 断网 + TaintHigh；TrustTier>=3 → 保留网络 + TaintMedium。
 	TrustTier int
 }
 
@@ -136,42 +138,61 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 
 // applyStdioSandbox 根据 SandboxPolicy 和运行平台包装 exec.Cmd，
 // 使 MCP stdio 进程在受限环境中运行。
-// 当平台或工具不可用时降级并记录 Warn，不返回 error（防止 MCP 完全不可用）。
+//
+// 策略语义：
+//   - ""（未设置）/ "auto"：自动决策，根据 TrustTier + OS 选择隔离强度（默认安全路径）
+//   - "none"：唯一的显式退出路径，调用方主动声明不隔离
+//   - "bwrap" / "seatbelt"：强制指定平台沙箱，忽略 TrustTier
+//
+// 自动决策规则（TrustTier 由 mcp_servers.trust_tier 驱动，ADR-0016 §2.1）：
+//   - TrustTier >= 3（Official / System / Builtin）→ 不强制隔离（已通过制品签名验证）
+//   - TrustTier <= 2（Community / Local / Unknown）→ 强制平台沙箱
+//
+// 当平台工具不可用时降级并记录 Warn，不返回 error（防止 MCP 完全不可用）。
 func applyStdioSandbox(cmd *exec.Cmd, cfg MCPClientConfig, goos string) {
 	policy := cfg.SandboxPolicy
-	if policy == "none" || policy == "" {
+
+	// "none" 是唯一的显式退出路径
+	if policy == "none" {
 		return
 	}
-	if policy == "auto" {
-		// TrustCommunity(2) 及以下强制隔离；Official/System 不隔离（性能敏感）
+
+	// "" 与 "auto" 语义等同：均走自动决策，不再静默跳过
+	if policy == "" || policy == "auto" {
+		// Official(3) / System / Builtin(4) 已通过制品签名，不强制 OS 隔离
 		if cfg.TrustTier >= 3 {
 			return
 		}
+		// Community(≤2) / Local / Unknown → 强制平台沙箱
 		switch goos {
 		case "linux":
 			policy = "bwrap"
 		case "darwin":
 			policy = "seatbelt"
 		default:
+			slog.Warn("mcp: no sandbox available on this OS, process runs unsandboxed",
+				"os", goos, "server", cfg.ServerName, "trust_tier", cfg.TrustTier)
 			return
 		}
 	}
 
 	switch policy {
 	case "bwrap":
-		applyBwrapSandbox(cmd)
+		applyBwrapSandbox(cmd, cfg)
 	case "seatbelt":
 		applySeatbeltSandbox(cmd)
 	default:
-		slog.Warn("mcp: unknown sandbox policy, skipping", "policy", policy)
+		slog.Warn("mcp: unknown sandbox policy, skipping",
+			"policy", policy, "server", cfg.ServerName)
 	}
 }
 
 // applyBwrapSandbox 使用 Linux Bubblewrap 包装命令：
-// - 只读绑定系统库目录 + Nix + 用户工具目录（Rust/Node/Python/Go）
-// - 新 network namespace（禁止直接网络访问，强制经由父进程代理）
-// - 独立 PID namespace，父进程退出时子进程自动清理
-func applyBwrapSandbox(cmd *exec.Cmd) {
+//   - 只读绑定系统库目录 + Nix + 用户工具目录（Rust/Node/Python/Go）
+//   - 挂载插件的 WorkDir 以允许其读取自身代码及配置
+//   - 独立 PID namespace，父进程退出时子进程自动清理
+//   - 网络隔离由 TrustTier 驱动：Community(<=2) 断网，Official/System(>=3) 保留网络
+func applyBwrapSandbox(cmd *exec.Cmd, cfg MCPClientConfig) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		slog.Warn("mcp: bwrap not found, stdio process will run unsandboxed", "err", err)
@@ -191,9 +212,22 @@ func applyBwrapSandbox(cmd *exec.Cmd) {
 		"--tmpfs", "/tmp",
 		"--proc", "/proc",
 		"--dev", "/dev",
-		"--unshare-net",     // 禁止直接网络访问
 		"--unshare-pid",     // 独立 PID namespace
 		"--die-with-parent", // 父进程退出时子进程自动清理
+	}
+
+	// 网络隔离：TrustTier 驱动，精细控制，而非全局开关。
+	// Community(≤2) / Local / Unknown → 断网，防止 prompt injection 后的数据外泄。
+	// Official(3) / System / Builtin(4) → 保留网络，这类插件有合法的外部 API 调用需求。
+	// （ADR-0016 §2.1；HE-Rule 2：可验证执行，禁止概率过滤当安全边界）
+	netIsolated := cfg.TrustTier <= 2
+	if netIsolated {
+		args = append(args, "--unshare-net")
+	}
+
+	// 挂载插件工作目录（允许读写，插件经常需要写本地 sqlite 或缓存）
+	if cfg.WorkDir != "" {
+		args = append(args, "--bind-try", cfg.WorkDir, cfg.WorkDir)
 	}
 
 	// 用户级工具目录（--ro-bind-try：目录不存在时跳过，不报错）
@@ -221,28 +255,16 @@ func applyBwrapSandbox(cmd *exec.Cmd) {
 
 	cmd.Path = bwrap
 	cmd.Args = args
-	slog.Info("mcp: stdio process wrapped with bwrap", "cmd", originalArgs[0])
+	slog.Info("mcp: stdio process wrapped with bwrap",
+		"cmd", originalArgs[0], "trust_tier", cfg.TrustTier, "net_isolated", netIsolated)
 }
 
 // applySeatbeltSandbox 使用 macOS sandbox-exec 包装命令：
-// 禁止出站网络连接，只允许读取系统库路径。
+// 由于 sandbox-exec (seatbelt) 已经被 Apple 废弃，且严格的沙箱配置
+// 会导致 Node/Deno/Python 等进程因无法读取自身代码及依赖而崩溃（abort trap），
+// 因此在 macOS 上暂时退化为不执行沙箱隔离，依赖运行时自身的权限控制。
 func applySeatbeltSandbox(cmd *exec.Cmd) {
-	sandboxExec, err := exec.LookPath("sandbox-exec")
-	if err != nil {
-		slog.Warn("mcp: sandbox-exec not found, stdio process will run unsandboxed", "err", err)
-		return
-	}
-	// deny-default profile：允许读系统库，禁止网络、禁止写文件系统
-	profile := `(version 1)
-(deny default)
-(allow file-read* (subpath "/usr") (subpath "/bin") (subpath "/System") (subpath "/Library/Frameworks"))
-(allow file-read* (literal "/dev/null") (literal "/dev/urandom"))
-(allow process-exec*)
-(allow sysctl-read)`
-	originalArgs := append([]string{cmd.Path}, cmd.Args[1:]...)
-	cmd.Path = sandboxExec
-	cmd.Args = append([]string{"sandbox-exec", "-p", profile, "--"}, originalArgs...)
-	slog.Info("mcp: stdio process wrapped with sandbox-exec", "cmd", originalArgs[0])
+	slog.Warn("mcp: macOS sandbox-exec (seatbelt) is too restrictive and causes abort trap. Skipping sandbox.")
 }
 
 // ─── stdio transport ──────────────────────────────────────────────────────────

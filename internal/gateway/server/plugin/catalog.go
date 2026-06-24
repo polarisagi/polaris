@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
+	"github.com/polarisagi/polaris/internal/extension/mcp"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
@@ -267,12 +268,16 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 					if err == nil && resp != nil && resp.Approved {
 						switch entry.Type {
 						case "mcp", "":
-							_, _ = h.internalInstallMCP(bgCtx, extID, &entry, req, now)
+							_, err = h.internalInstallMCP(bgCtx, extID, &entry, req, now, true)
 						default: // skill | plugin | app
-							_, _ = h.internalInstallGeneric(bgCtx, extID, &entry, req, now)
+							_, err = h.internalInstallGeneric(bgCtx, extID, &entry, req, now, true)
 						}
-						h.ClearToolSchemaCache()
-						slog.Info("marketplace: installed extension via HITL", "id", extID, "type", entry.Type)
+						if err != nil {
+							slog.Error("marketplace: failed to install extension after HITL", "id", extID, "err", err)
+						} else {
+							h.ClearToolSchemaCache()
+							slog.Info("marketplace: installed extension via HITL", "id", extID, "type", entry.Type)
+						}
 					}
 				}()
 				w.Header().Set("Content-Type", "application/json")
@@ -296,7 +301,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 }
 
 // installMCPExtension 安装 MCP 类型：写 extension_instances + mcp_servers + 异步启动。
-func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string) (any, error) {
+func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string, bypassAuth bool) (any, error) {
 	cfg := types.MCPServerConfig{
 		Transport: entry.Transport,
 		Command:   entry.Command,
@@ -349,6 +354,7 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 		Publisher:   entry.Publisher,
 		Config:      string(configJSON),
 		RuntimeID:   mcpID,
+		BypassAuth:  bypassAuth,
 	}
 
 	if err := h.InstallMgr.InstallExtension(ctx, installReq); err != nil {
@@ -391,7 +397,7 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 
 func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Request,
 	extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string) {
-	resp, err := h.internalInstallMCP(r.Context(), extID, entry, req, now)
+	resp, err := h.internalInstallMCP(r.Context(), extID, entry, req, now, false)
 	if err != nil {
 		http.Error(w, "mcp_servers insert: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -403,7 +409,7 @@ func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Reque
 
 // installGenericExtension 安装 skill / plugin / app：写 extension_instances。
 // skill/plugin 需异步下载文件并写运行时表（TODO: downloadAndInstall goroutine）。
-func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string) (any, error) {
+func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string, bypassAuth bool) (any, error) {
 	name := cond(req.Name != "", req.Name, entry.Name)
 	url := cond(req.URL != "", req.URL, entry.URL)
 
@@ -432,6 +438,7 @@ func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string
 		Publisher:   entry.Publisher,
 		Config:      string(configJSON),
 		RuntimeID:   "",
+		BypassAuth:  bypassAuth,
 	}
 
 	if err := h.InstallMgr.InstallExtension(ctx, installReq); err != nil {
@@ -456,7 +463,7 @@ func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string
 
 func (h *PluginHandler) installGenericExtension(w http.ResponseWriter, r *http.Request,
 	extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string) {
-	resp, err := h.internalInstallGeneric(r.Context(), extID, entry, req, now)
+	resp, err := h.internalInstallGeneric(r.Context(), extID, entry, req, now, false)
 	if err != nil {
 		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -917,8 +924,14 @@ func (h *PluginHandler) registerOneSkill(ctx context.Context, pluginID, pluginNa
 	if skillSlug == "" {
 		skillSlug = filepath.Base(filepath.Dir(skillMDPath))
 	}
-	// 命名规范：skill:{plugin-name}/{skill-slug}（与 agentskills.io 命名空间一致）
-	fullName := "skill:" + pluginName + "/" + skillSlug
+	// skillSlug 来自文件系统/frontmatter，可能含空格、点、斜杠等非法字符。
+	// 正规化为 ^[a-zA-Z0-9_-]+$，保证 LLM tool name "skill__<pluginName>__<skillSlug>" 合法。
+	// 注：同样正规化 pluginName，防止上游传入含非法字符的插件名。
+	skillSlug = mcp.SanitizeToolNamePart(skillSlug)
+	safePluginName := mcp.SanitizeToolNamePart(pluginName)
+	// 命名规范：skill:{safePluginName}__{skillSlug}
+	// 使用 "__" 而非 "/"：LLM tool name 由 "skill__"+slug 构成，执行路径以 "skill:"+slug 反查 DB。
+	fullName := "skill:" + safePluginName + "__" + skillSlug
 
 	version := fm.Version
 	caps := []string{}

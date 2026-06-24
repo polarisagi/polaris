@@ -74,6 +74,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 						})
 						installReq0.Name = req.Name
 						installReq0.Config = string(configJSON)
+						installReq0.BypassAuth = true
 						_ = h.InstallMgr.InstallExtension(bgCtx, installReq0)
 						slog.Info("plugin_custom: custom skill installed via HITL", "id", extID)
 					}
@@ -165,6 +166,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 						})
 						installReq1.Name = req.Name
 						installReq1.Config = string(configJSON)
+						installReq1.BypassAuth = true
 						_ = h.InstallMgr.InstallExtension(bgCtx, installReq1)
 						slog.Info("plugin_custom: custom plugin installed via HITL", "id", extID)
 					}
@@ -272,6 +274,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 							installReq2.Name = req.Name
 							installReq2.Config = string(configJSON)
 							installReq2.RuntimeID = appID
+							installReq2.BypassAuth = true
 							_ = h.InstallMgr.InstallExtension(bgCtx, installReq2)
 							slog.Info("plugin_custom: custom app installed via HITL", "id", extID)
 						}
@@ -364,15 +367,49 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 	if err := h.InstallMgr.Authorize(r.Context(), installReq3); err != nil { //nolint:nestif
 		if errors.Is(err, marketplace.ErrRequiresApproval) {
 			if h.HITLGateway != nil {
-				_, _ = h.HITLGateway.Prompt(r.Context(), apptypes.HITLPrompt{
-					ID:             extID,
-					CheckpointType: "security_review",
-					PromptText:     "Approve creation for custom mcp: " + req.Name,
-					Options: []apptypes.HITLOption{
-						{Key: "approve", Label: "Approve"},
-						{Key: "deny", Label: "Deny"},
-					},
-				})
+				bgCtx, cancel := context.WithTimeout(protocol.Detach(r.Context()), 30*time.Minute)
+				go func() {
+					defer cancel()
+					resp, err := h.HITLGateway.Prompt(bgCtx, apptypes.HITLPrompt{
+						ID:             extID,
+						CheckpointType: "security_review",
+						PromptText:     "Approve creation for custom mcp: " + req.Name,
+						Options: []apptypes.HITLOption{
+							{Key: "approve", Label: "Approve"},
+							{Key: "deny", Label: "Deny"},
+						},
+					})
+					if err == nil && resp != nil && resp.Approved {
+						argsBytes, _ := json.Marshal(req.Args)
+						envBytes, _ := json.Marshal(req.Env)
+						now := time.Now().UTC().Format(time.RFC3339)
+
+						err := h.ExtRepo.UpsertMCPServer(bgCtx, apptypes.MCPServerRow{
+							ID:        mcpID,
+							Name:      req.Name,
+							Transport: req.Transport,
+							Command:   req.Command,
+							Args:      string(argsBytes),
+							Env:       string(envBytes),
+							URL:       req.URL,
+							Enabled:   true,
+							Timeout:   30,
+							TrustTier: 1,
+							CatalogID: "",
+							CreatedAt: now,
+							UpdatedAt: now,
+						})
+						if err == nil {
+							configJSON, _ := json.Marshal(map[string]any{"url": req.URL})
+							installReq3.Name = req.Name
+							installReq3.Config = string(configJSON)
+							installReq3.RuntimeID = mcpID
+							installReq3.BypassAuth = true
+							_ = h.InstallMgr.InstallExtension(bgCtx, installReq3)
+							slog.Info("plugin_custom: custom mcp installed via HITL", "id", extID)
+						}
+					}
+				}()
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusAccepted)
 				_ = json.NewEncoder(w).Encode(map[string]string{"status": "pending_approval", "id": extID})

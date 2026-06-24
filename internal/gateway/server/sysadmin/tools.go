@@ -5,9 +5,11 @@ import (
 
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -202,6 +204,10 @@ func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema { //nolint:nesti
 	var schemas []types.ToolSchema
 	if h.ToolReg != nil {
 		for _, t := range h.ToolReg.List() {
+			// skill: 前缀项由下方 DB 查询块以 skill__ 前缀统一注入，此处跳过避免重复和非法 LLM 名称（含冒号）。
+			if strings.HasPrefix(t.Name, "skill:") {
+				continue
+			}
 			schemas = append(schemas, types.ToolSchema{
 				Name:        t.Name,
 				Description: t.Description,
@@ -213,43 +219,19 @@ func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema { //nolint:nesti
 		schemas = append(schemas, h.MCPMgr.ListToolSchemas()...)
 	}
 	// script runtime 技能
-	if h.DB != nil { //nolint:nestif
-		rows, err := h.DB.QueryContext(context.Background(),
-			`SELECT name, capabilities FROM skills WHERE runtime='script' AND exec_mode='tool' AND deprecated=0`)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var dbName, capsRaw string
-				if rows.Scan(&dbName, &capsRaw) != nil {
-					continue
-				}
-				slug, ok := strings.CutPrefix(dbName, "skill:")
-				if !ok || slug == "" {
-					continue
-				}
-				var caps []string
-				_ = json.Unmarshal([]byte(capsRaw), &caps)
-				desc := ""
-				for _, c := range caps {
-					if d, ok := strings.CutPrefix(c, "description:"); ok {
-						desc = d
-						break
-					}
-				}
-				schemas = append(schemas, types.ToolSchema{
-					Name:        "skill__" + slug,
-					Description: desc,
-					Parameters: map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"input": map[string]any{"type": "string", "description": "任务描述或输入内容"},
-						},
-						"required": []string{"input"},
-					},
-				})
-			}
+	schemas = append(schemas, h.fetchDBScriptSkillSchemas()...)
+
+	// 防御性最终扫描：过滤掉 function.name 不满足 ^[a-zA-Z0-9_-]+$ 的工具，避免上游任何路径
+	// 遗漏了正规化导致 OpenAI/DeepSeek 等 OpenAI 兼容接口返回 400。
+	valid := schemas[:0]
+	for _, s := range schemas {
+		if mcp.IsValidLLMName(s.Name) {
+			valid = append(valid, s)
+		} else {
+			slog.Warn("BuildToolSchemas: tool name invalid, dropped", "name", s.Name)
 		}
 	}
+	schemas = valid
 
 	h.ToolSchemaMu.Lock()
 	h.ToolSchemaCache = schemas
@@ -262,4 +244,53 @@ func (h *SysAdminHandler) ClearToolSchemaCache() {
 	h.ToolSchemaMu.Lock()
 	h.ToolSchemaCache = nil
 	h.ToolSchemaMu.Unlock()
+}
+
+func (h *SysAdminHandler) fetchDBScriptSkillSchemas() []types.ToolSchema {
+	var schemas []types.ToolSchema
+	if h.DB == nil {
+		return schemas
+	}
+
+	rows, err := h.DB.QueryContext(context.Background(),
+		`SELECT name, capabilities FROM skills WHERE runtime='script' AND exec_mode='tool' AND deprecated=0`)
+	if err != nil {
+		return schemas
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var dbName, capsRaw string
+		if rows.Scan(&dbName, &capsRaw) != nil {
+			continue
+		}
+		slug, ok := strings.CutPrefix(dbName, "skill:")
+		if !ok || slug == "" {
+			continue
+		}
+		// 注意：不对 slug 做字符替换正规化——执行路径（boot_server.go ToolExec）以
+		// "skill:"+slug 反查 DB，若 slug 被改写则找不到原始记录。
+		// 含非法字符的 skill（如含空格）将被下方 IsValidLLMName 过滤器丢弃，不注入 LLM schema。
+		var caps []string
+		_ = json.Unmarshal([]byte(capsRaw), &caps)
+		desc := ""
+		for _, c := range caps {
+			if d, ok := strings.CutPrefix(c, "description:"); ok {
+				desc = d
+				break
+			}
+		}
+		schemas = append(schemas, types.ToolSchema{
+			Name:        "skill__" + slug,
+			Description: desc,
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"input": map[string]any{"type": "string", "description": "任务描述或输入内容"},
+				},
+				"required": []string{"input"},
+			},
+		})
+	}
+	return schemas
 }

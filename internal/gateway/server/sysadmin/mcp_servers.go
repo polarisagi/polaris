@@ -318,16 +318,16 @@ func (h *SysAdminHandler) StartMCPServerCtx(ctx context.Context, c types.MCPServ
 		args[i] = strings.ReplaceAll(a, "{DATA_DIR}", h.DataDir)
 	}
 	cfg := mcp.MCPClientConfig{
-		Transport:     mcp.MCPTransport(c.Transport),
-		Command:       c.Command,
-		Args:          args,
-		Env:           c.Env,
-		URL:           strings.ReplaceAll(c.URL, "{DATA_DIR}", h.DataDir),
-		WorkDir:       c.WorkDir, // plugin MCP = install_path；独立 MCP = ""（继承父进程 cwd）
-		Timeout:       time.Duration(c.Timeout) * time.Second,
-		ServerName:    c.Name,
-		SandboxPolicy: "auto", // 默认根据平台和 TrustTier 自动选择隔离级别
-		TrustTier:     c.TrustTier,
+		Transport:  mcp.MCPTransport(c.Transport),
+		Command:    c.Command,
+		Args:       args,
+		Env:        c.Env,
+		URL:        strings.ReplaceAll(c.URL, "{DATA_DIR}", h.DataDir),
+		WorkDir:    c.WorkDir, // plugin MCP = install_path；独立 MCP = ""（继承父进程 cwd）
+		Timeout:    time.Duration(c.Timeout) * time.Second,
+		ServerName: c.Name,
+		// SandboxPolicy 不设置（""=auto）：applyStdioSandbox 自动按 TrustTier + OS 决策，无需此处硬编码。
+		TrustTier: c.TrustTier,
 	}
 	return h.MCPMgr.Add(ctx, c.ID, c.Name, cfg)
 }

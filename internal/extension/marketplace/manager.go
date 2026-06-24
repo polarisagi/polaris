@@ -50,6 +50,7 @@ type InstallRequest struct {
 	Config      string
 	RuntimeID   string
 	LocalPath   string // 用于本地扩展（如 generated skill）绕过下载直接指定安装路径
+	BypassAuth  bool   // 如果已通过 HITL 审批，则跳过 Authorize 检查
 }
 
 var ErrRequiresApproval = errors.New("installation requires user approval")
@@ -168,8 +169,10 @@ func (m *Manager) AuthorizeAction(ctx context.Context, principal string, action 
 
 // InstallExtension handles the install flow with M11 Cedar-Gate and stores to DB.
 func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) error {
-	if err := m.Authorize(ctx, req); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "Manager.InstallExtension", err)
+	if !req.BypassAuth {
+		if err := m.Authorize(ctx, req); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.InstallExtension", err)
+		}
 	}
 
 	req = normalizeInstallRequest(req)

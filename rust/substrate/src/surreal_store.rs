@@ -250,13 +250,24 @@ pub unsafe extern "C" fn surreal_open(
     };
     let dim = (vec_dim.max(1)) as u32;
 
+    let bk_clone = bk.clone();
+    let path_clone = path.clone();
+
     let result = panic::catch_unwind(move || {
-        STORE.get_or_init(|| {
-            Arc::new(RwLock::new(
-                SurrealStore::new(&bk, &path, dim).expect("failed to init surreal store"),
-            ))
-        });
-        SURREAL_OK
+        let mut err_code = SURREAL_OK;
+        if STORE.get().is_none() {
+            match SurrealStore::new(&bk_clone, &path_clone, dim) {
+                Ok(store) => {
+                    // Ignore if another thread initialized it in the meantime
+                    let _ = STORE.set(Arc::new(RwLock::new(store)));
+                }
+                Err(e) => {
+                    eprintln!("[surreal_store] fatal error: failed to init surreal store: {e}");
+                    err_code = SURREAL_ERR_PANIC;
+                }
+            }
+        }
+        err_code
     });
     result.unwrap_or(SURREAL_ERR_PANIC)
 }
