@@ -1,14 +1,18 @@
 # ADR-0015: Codex 特性集成
 
-**状态**: Accepted（部分章节已被后续 ADR 取代，详见下表）
+**状态**: Accepted（部分章节已被后续 ADR 取代，见下表；其余章节持续有效）
 
-| 章节 | 状态 |
-|------|------|
-| §2.1 Plugin Registry 层定位 | **已被 ADR-0016 取代**——Plugin Catalog 在 M13，非 M7 |
-| §2.3 agentskills.io 适配器路径 | **路径已变更**——应为 `internal/extension/skill/`，非 `internal/extension/skill/` |
-| §2.3 SignatureValid bool 解法 | **已被 ADR-0016 取代**——改用 TrustTier 枚举 |
-| §2.4/2.5/2.6/2.7 | 有效，已落地 |
-| §2.8 不做（P3） | 有效 |
+| 章节 | 状态 | 取代文档 |
+|------|------|---------|
+| §2.1 Plugin Registry 层定位 | **已废弃** | ADR-0016 §2 — Plugin Catalog 在 M13，非 M7 |
+| §2.3 SignatureValid bool 解法 | **已废弃** | ADR-0016 §2.1 — 改用 TrustTier 枚举 |
+| §2.3 agentskills.io 适配器路径 | **路径已变更** | 当前路径为 `internal/extension/skill/`（与原文相同，路径正确） |
+| §2.2 Hook 框架 | **有效** | — |
+| §2.4 Custom Agent YAML | **有效** | — |
+| §2.5 CSV Batch Fan-out | **有效** | — |
+| §2.6 LLM Skill-Creator | **有效** | — |
+| §2.7 Marketplace Integration | **有效** | — |
+| §2.8 不做（P3） | **有效** | — |
 
 **日期**: 2026-05-21  
 **作者**: AI Architect  
@@ -185,3 +189,9 @@ mcp_servers: []
 - [ADR-0008] 三级沙箱 → Hook 执行在 L1（InProc），Plugin MCP 在 L1/L2
 - **[ADR-0016]** 统一信任-扩展模型 → 取代本 ADR §2.1 Plugin 层定位；TrustTier 取代 SignatureValid bool；Plugin Catalog 移至 M13
 - M06 §agentskills 适配, **M13 §Plugin Catalog**（非 M07；见 ADR-0016）, M07 §Hook 框架, M08 §Custom Agent, M08 §CSV fan-out
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-06-25 | 补充章节有效性状态表，明确 §2.1/§2.3 SignatureValid 已被 ADR-0016 取代 |

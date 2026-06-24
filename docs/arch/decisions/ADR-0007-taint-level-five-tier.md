@@ -1,6 +1,6 @@
 # ADR-0007: TaintLevel 五级 + 只升不降 + Sanitizer 受控降级
 
-- **状态**: Accepted（回填）
+- **状态**: Accepted
 - **日期**: 2026-05-16
 - **决策者**: 架构组
 - **相关模块**: M11 / `internal/security/taint/taint.go`
@@ -19,7 +19,15 @@ LLM 输出可能含 prompt injection / 跨语言编码混淆。完全禁止 LLM 
 - 自然传播: `output = max(inputs)`,只升不降
 - 受控降级路径: 模式验证(→None) / LLM 摘要(→Medium 硬地板) / 确定性转换(降一级) / 用户确认(→UserReviewed)
 
-## 被驳与反例守护
+## 后果
+
+- **正向**: 见决策章节
+- **负向**: 暂无已知负向后果
+- **反例守护**:
+  - 未来如有人提议"对 LLM 输出做 keyword/regex 过滤就降到 Low"—本 ADR 拒绝。keyword/regex 是概率过滤,非物理边界
+  - 未来如有人提议"信任度高的 Provider 输出可降为 Low"—本 ADR 拒绝。Provider 信任度不能消除结构化注入风险
+
+## 被驳回的方案
 
 | 方案 | 驳回理由 |
 |------|---------|
@@ -28,6 +36,12 @@ LLM 输出可能含 prompt injection / 跨语言编码混淆。完全禁止 LLM 
 | 任意 Sanitizer 路径自由降级 | 概率过滤会被误用为物理边界 |
 | 单向只升、无降级路径 | 数据永远只升,系统僵化 |
 
-**反例守护**:
-- 未来如有人提议"对 LLM 输出做 keyword/regex 过滤就降到 Low"—本 ADR 拒绝。keyword/regex 是概率过滤,非物理边界
-- 未来如有人提议"信任度高的 Provider 输出可降为 Low"—本 ADR 拒绝。Provider 信任度不能消除结构化注入风险
+## 引用代码
+
+- `internal/security/taint/taint.go`
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-05-16 | 初稿（回填，初始决策早于 ADR 体系建立） |

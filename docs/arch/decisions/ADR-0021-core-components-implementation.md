@@ -3,7 +3,8 @@
 **状态**: 已接受 (Accepted)  
 **日期**: 2026-06-09  
 
-## 背景
+## 上下文
+
 在推进 Polaris AGI 的核心能力时，需要补全四个占位符组件，同时严格遵守 Tier-0 架构的硬件门槛与模块间的隔离纪律（防止循环依赖和超前抽象）。
 
 ## 决策
@@ -25,8 +26,22 @@
    - **解耦逻辑**：`internal/gateway/server/logstream.go` 再也无需直接引用 `*kernel.Agent`。在会话注入 Intent 时异步驱动 FSM 扭转；并且 SSE Stream 可通过 FSM `CurrentState()` 监测生命周期，FastPath 完成后由 SSE 发起 `TriggerExecuteDone` 推演。
 
 ## 后果
-- **正面**：成功串联了四大模块（观测、沙箱、检索、状态机）。消除了模块循环依赖的隐患，并且完全维持 8GB 以下内存的 Tier-0 可观测标准和错误处理策略 (`internal/errors`)。
-- **负面**：`CorpusStats` 状态缓存在内存中存在节点宕机数据丢失的风险；未来在需要持久化或跨节点扩容时，需要进一步与 M2 Storage 接驳（暂作为二阶段改进项）。
+
+- **正向**：成功串联了四大模块（观测、沙箱、检索、状态机）。消除了模块循环依赖的隐患，并且完全维持 8GB 以下内存的 Tier-0 可观测标准和错误处理策略 (`internal/errors`)。
+- **负向**：`CorpusStats` 状态缓存在内存中存在节点宕机数据丢失的风险；未来在需要持久化或跨节点扩容时，需要进一步与 M2 Storage 接驳（暂作为二阶段改进项）。
+- **反例守护**: 未来如有人提议在 L0（`internal/observability/metrics/`）实现完整业务逻辑（如 SurpriseCalculator 的嵌入计算），引用本 ADR 拒绝——L0 必须保持纯净，复杂计算属 L1/L2；未来如有人提议 L1 直接 import L2 包（如 `internal/learning/`），引用本 ADR 拒绝，consumer-side 接口是唯一合法跨层路径。
+
+## 被驳回的方案
+
+| 方案 | 驳回理由 |
+|------|---------|
+| 在 L0 metrics 包实现完整 SurpriseCalculator（含 embedding 计算） | 破坏 L0 纯净性；observability 包不应含业务逻辑，计算逻辑属 L2 |
+| `internal/agent/` 直接 import `internal/learning/` 包 | 产生 L1→L2 非法跨层依赖，违反层级隔离；consumer-side 接口（`SurpriseReader`）是唯一合规跨层路径 |
+| `CorpusStats` 持久化到 SQLite（实时 IDF 分数持久化） | Tier-0 内存约束下持久化开销不合理；CorpusStats 是近实时统计，节点重启后从内存重建代价可接受，列为二阶段改进 |
+
+## 引用代码
+
+- `（待补充）`
 
 ## 修订记录
 
