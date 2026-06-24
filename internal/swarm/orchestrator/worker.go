@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -104,13 +105,12 @@ func (w *Worker) tryClaimAndExecute(ctx context.Context, taskID string) {
 	// 但这需要启动一个内部看门狗来处理 RenewLease。
 
 	done := make(chan struct{})
-	go func() {
-		// 发送初始脉冲
+	concurrent.SafeGo(ctx, "worker.kernel.run", func(ctx context.Context) {
+		// done 必须在 defer 中关闭：SafeGo recover panic 后 defer 依然执行，防止 tryClaimAndExecute 死锁
+		defer close(done)
 		w.kernel.SendIntent(types.TriggerIntentReceived)
-		// 阻塞运行直到 FSM 结束 (COMPLETE 或 FAILED)
 		_ = w.kernel.Run(ctx)
-		close(done)
-	}()
+	})
 
 	// 3. 租约看门狗 (LeaseHeartbeat)
 	ticker := time.NewTicker(15 * time.Second) // 15s heartbeat

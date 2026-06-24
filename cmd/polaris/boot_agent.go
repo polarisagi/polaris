@@ -17,6 +17,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
+	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
@@ -173,6 +174,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		sb.Gate,   // Cedar PolicyGate（deny-by-default）
 	)
 	agent.SetLAMEngine(lamEngine)
+
+	// SurpriseCalculator：接入完整三分量路由（MEMF + Markov + Jaccard）
+	// memf 来自 M9 engine 的 FallacyMemoryPool；boot 阶段可传 nil（Markov 独立积累数据）
+	surpriseCalc := surprise.NewSurpriseCalculator(nil)
+	agent.SetSurpriseCalc(surpriseCalc)
 
 	if kb != nil && kb.KnowledgeBase != nil {
 		agent.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})

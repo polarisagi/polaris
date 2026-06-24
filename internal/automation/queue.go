@@ -17,9 +17,10 @@ import (
 // storedTask 持久化到 KV 的任务快照，附带调度状态与重试计数。
 // Submit 写入 "pending"；Start goroutine 消费时更新为 "running"/"completed"/"failed"。
 type storedTask struct {
-	Task     types.Task `json:"task"`
-	Status   string     `json:"status"`   // pending | running | completed | failed
-	Attempts int        `json:"attempts"` // 已尝试次数
+	Task             types.Task `json:"task"`
+	Status           string     `json:"status"`                      // pending | running | completed | failed
+	Attempts         int        `json:"attempts"`                    // 已尝试次数
+	MissedExecutions int        `json:"missed_executions,omitempty"` // 认知负载压制期间累积的错过次数
 }
 
 // DispatchFn 任务投递回调，由外部 Worker/Orchestrator 注入（M13 §2.1 At-Least-Once）。
@@ -83,6 +84,8 @@ func (s *SQLiteScheduler) Start(ctx context.Context, dispatchFn DispatchFn) {
 }
 
 // scanAndDispatch 扫描一轮 pending/running（可能是崩溃后残留）任务并投递。
+//
+//nolint:gocyclo
 func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn DispatchFn) {
 	prefix := []byte("scheduler:task:")
 	iter, err := s.store.Scan(ctx, prefix)
@@ -113,6 +116,31 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 			_ = s.writeTask(ctx, &st)
 			s.publish(st.Task.ID, types.TaskEvent{TaskID: st.Task.ID, State: "failed"})
 			continue
+		}
+
+		// CC-2 内稳态防抖：高认知负载时累积 miss，焦点解除后仅补偿执行一次
+		taskPriority := st.Task.Priority
+		if taskPriority <= 0 {
+			taskPriority = 2 // 默认后台优先级
+		}
+		if s.gate != nil && taskPriority >= 2 && !s.gate.BackgroundPermit(taskPriority) {
+			// 负载过高：原地累积 missed_executions，不推进到 running
+			st.MissedExecutions++
+			_ = s.writeTask(ctx, &st)
+			slog.Debug("scheduler: task deferred due to cognitive load",
+				"task_id", st.Task.ID,
+				"priority", taskPriority,
+				"missed", st.MissedExecutions,
+			)
+			continue
+		}
+		// 焦点解除：若曾有积压，记录补偿执行日志并清零（只触发一次，不补跑 N 次）
+		if st.MissedExecutions > 0 {
+			slog.Info("scheduler: compensating deferred task",
+				"task_id", st.Task.ID,
+				"missed_executions", st.MissedExecutions,
+			)
+			st.MissedExecutions = 0
 		}
 
 		// CAS：更新为 running（防止多节点重复调度）

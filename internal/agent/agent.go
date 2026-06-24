@@ -62,6 +62,14 @@ type Agent struct {
 	skillExecutor     protocol.SkillExecutor     // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
 	assembler         *agentctx.Assembler        // CC-3 ContextAssembler
 	lamEngine         *lam.ComputerUseEngine     // LAM GUI 自动化引擎（R3）；nil 时跳过 Cedar policy 预检
+	surpriseCalc      SurpriseReader             // 可选；非 nil 时替换 ComputeBasic 基础版路由
+}
+
+// SurpriseReader 读取当前 SurpriseIndex 滑动均值（consumer-side 接口）。
+// 由 learning/surprise.SurpriseCalculator 实现。
+type SurpriseReader interface {
+	SubmitToolSeq(taskID string, toolSeq []string)
+	CurrentSurprise() float64
 }
 
 // MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
@@ -111,6 +119,12 @@ func (a *Agent) SetCodeAct(ca *codeact.CodeAct) { a.codeAct = ca }
 // interceptComputerUse 在 HITL 审批前调用 CheckPolicy 对 GUI 动作做 Cedar 策略预检。
 // nil-safe：未注入时跳过 Cedar 预检，仅走 HITL 审批。
 func (a *Agent) SetLAMEngine(e *lam.ComputerUseEngine) { a.lamEngine = e }
+
+// SetSurpriseCalc 注入完整 SurpriseCalculator，替代 ComputeBasic 基础版路由。
+// nil-safe：不注入时降级为 ComputeBasic。
+func (a *Agent) SetSurpriseCalc(r SurpriseReader) {
+	a.surpriseCalc = r
+}
 
 // WithSkillCache 注入 ScriptSkillCache，启用 FastPath 技能命中路径。
 // nil-safe：不注入时 FastPath 退回合成 JSON 路径。
@@ -427,11 +441,19 @@ func (a *Agent) SetTaskIntent(intent []byte) {
 			goalWords = goalWords[:8]
 		}
 		toolSeq := append([]string{"intent"}, goalWords...)
-		a.sCtx.SurpriseIndex = metrics.GlobalSurpriseIndex().ComputeBasic(
-			context.Background(),
-			nil,
-			toolSeq,
-		)
+		if a.surpriseCalc != nil {
+			// 完整三分量异步计算（MEMF + Markov + Jaccard），CurrentSurprise 返回上一轮滑动均值
+			a.surpriseCalc.SubmitToolSeq(a.sCtx.TaskID, toolSeq)
+			a.sCtx.SurpriseIndex = a.surpriseCalc.CurrentSurprise()
+			// 同步写入 GlobalSurpriseIndex，保持 SelectThinkingMode（transitions.go）读值一致
+			metrics.GlobalSurpriseIndex().SetLastValue(a.sCtx.SurpriseIndex)
+		} else {
+			a.sCtx.SurpriseIndex = metrics.GlobalSurpriseIndex().ComputeBasic(
+				context.Background(),
+				nil,
+				toolSeq,
+			)
+		}
 	}
 }
 

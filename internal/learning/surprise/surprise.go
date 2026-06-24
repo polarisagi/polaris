@@ -134,6 +134,15 @@ func (c *SurpriseCalculator) Submit(req *CalcRequest) bool {
 	}
 }
 
+// SubmitToolSeq 实现了 consumer-side (L1) 定义的 SurpriseReader 接口的提交方法，
+// 内部封装转换为 CalcRequest，打破包依赖循环。
+func (c *SurpriseCalculator) SubmitToolSeq(taskID string, toolSeq []string) {
+	c.Submit(&CalcRequest{
+		TaskID:  taskID,
+		ToolSeq: toolSeq,
+	})
+}
+
 // CurrentSurprise 返回滑动平均 SurpriseIndex，实现 SurpriseReader 接口。
 // 无历史数据时返回默认值 0.5。
 func (c *SurpriseCalculator) CurrentSurprise() float64 {

@@ -2,7 +2,7 @@
 
 > 三环嵌套进化（经验→技能→架构），全无梯度主线（[Tier-0-Limit] 8GB 完整运行）。梯度训练仅 local_only 可选。
 > Go 编排 + Eval 驱动 + Consolidation + 全部自进化逻辑。 [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:37 五路线(CANONICAL) / 2:95 三环嵌套 / 3-bis:197 EvalGenerator / 3:225 五级演化+审批 / 4:255 条件梯度 / 6:279 369(SOFT)降级 / 7:307 依赖
+> **§跳读**: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:37 五路线(CANONICAL) / 2:95 三环嵌套 / 3-bis:198 EvalGenerator / 3:226 五级演化+审批 / 4:256 条件梯度 / 6:280 369(SOFT)降级 / 7:308 依赖
 ## 0-bis. 职责边界
 
 | M9 **是** | M9 **不是** |
@@ -160,7 +160,8 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 4. 同一 SourceSkill 连续 3 次生成的课程任务全部失败 → 临时冻结该技能的课程生成 60 分钟
 5. Curriculum 任务由于 DeepSeek API 成本极低，总成本取消 20% 硬上限，允许在空闲时段全力生成
 6. LLM 生成（当前实现：每技能 `maxPerSkill=3`，总 `maxPerCycle=10`/周期），目标难度 = `currentSurpriseIndex`（传入 `generateDescriptionsLLM`）
-7. 生成后安全审查（四阶段）:
+7. 生成后安全审查（五阶段，含 SQL 预筛，ADR-0029 §G）:
+   (0) **SQL 适应度预筛**（`SQLFitnessEvaluator`，前置于所有其他检查）: 查询 `events` 表 7 天窗口内该技能的执行历史，计算 `fitness = 成功率 × (1 - 平均预测误差)`；样本 ≥ 5 且 fitness < 0.5 → 直接拒绝，不调用 LLM；样本 < 5 或 fitness ≥ 0.5 → 进入后续审查。`SQLFitnessEvaluator` nil-safe，未注入时跳过此步骤。实现见 `internal/learning/curriculum/fitness.go`。
    (a) M11 Taint Gate 扫描任务描述中的注入载荷
    (b) 若含 shell/bash 命令 → 危险模式黑名单拒绝（同原列表）
    (c) M11 SIC Cleaning 检测间接 prompt injection（"忽略指令"/"override"/"你是"/"现在你是" 等角色劫持模式 + 语义越界检测）。检测到 injection → 丢弃任务 + 写 curriculum_injection_blocked 审计事件

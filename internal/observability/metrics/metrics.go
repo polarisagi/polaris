@@ -296,6 +296,14 @@ func (si *SurpriseIndex) Current() float64 {
 	return si.lastValue
 }
 
+// SetLastValue 由外部（SurpriseCalculator）写入计算结果，供 SelectThinkingMode 读取。
+// 线程安全：与 ComputeBasic 使用同一 mu 锁。
+func (si *SurpriseIndex) SetLastValue(v float64) {
+	si.mu.Lock()
+	si.lastValue = v
+	si.mu.Unlock()
+}
+
 func (si *SurpriseIndex) IsStale() bool {
 	si.mu.RLock()
 	defer si.mu.RUnlock()

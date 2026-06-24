@@ -26,6 +26,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -444,10 +445,16 @@ func (g *Gate) IsAuthorized(
 		err     error
 	}
 	ch := make(chan result, 1)
-	go func() {
+	concurrent.SafeGo(ctx, "gate.cedar.evaluate", func(ctx context.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- result{false, apperr.New(apperr.CodeInternal, fmt.Sprintf("policy: panic during evaluate: %v", r))}
+				panic(r)
+			}
+		}()
 		allowed, err := g.evaluate(ctx, principal, action, resource, evalCtx)
 		ch <- result{allowed, err}
-	}()
+	})
 
 	select {
 	case r := <-ch:
