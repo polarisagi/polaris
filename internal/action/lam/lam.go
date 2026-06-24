@@ -46,16 +46,18 @@ type ComputerUseEngine struct {
 	config   LAMConfig
 	provider protocol.Provider
 	executor ExecutorFn // 注入 action.NewComputerUseTool().Execute；nil 时为 dry-run 模式
+	policy   protocol.PolicyGate
 }
 
 // NewComputerUseEngine 构造 ComputerUseEngine。
 // executor 由调用方注入（通常为 action.NewComputerUseTool().Execute），
 // 解耦 lam 子包与 action 父包，便于单元测试注入 mock。
-func NewComputerUseEngine(cfg LAMConfig, provider protocol.Provider, executor ExecutorFn) *ComputerUseEngine {
+func NewComputerUseEngine(cfg LAMConfig, provider protocol.Provider, executor ExecutorFn, policy protocol.PolicyGate) *ComputerUseEngine {
 	return &ComputerUseEngine{
 		config:   cfg,
 		provider: provider,
 		executor: executor,
+		policy:   policy,
 	}
 }
 
@@ -92,16 +94,34 @@ func (e *ComputerUseEngine) ExecuteAction(ctx context.Context, intent string, sc
 		return nil, apperr.Wrap(apperr.CodeInternal, "ComputerUseEngine.ExecuteAction", err)
 	}
 
+	// 解析 actionJSON 以进行权限控制
+	var actionMap map[string]any
+	if err := json.Unmarshal(actionJSON, &actionMap); err == nil {
+		if actionType, ok := actionMap["action"].(string); ok {
+			if e.policy != nil {
+				allowed, pErr := e.policy.IsAuthorized(ctx, "agent", "computer_use", "action:"+actionType,
+					map[string]any{"action": actionType, "target": "lam"})
+				if pErr != nil || !allowed {
+					reason := "policy denied"
+					if pErr != nil {
+						reason = pErr.Error()
+					}
+					return nil, apperr.New(apperr.CodeForbidden, "computer_use denied: "+reason)
+				}
+			}
+		}
+	}
+
 	// dry-run 模式（executor 未注入）：返回解析的动作 JSON 供调试
 	if e.executor == nil {
-		return &types.ToolResult{Success: true, Output: actionJSON}, nil
+		return &types.ToolResult{Success: true, Output: actionJSON, TaintLevel: types.TaintHigh}, nil
 	}
 
 	out, execErr := e.executor(ctx, actionJSON)
 	if execErr != nil {
 		return &types.ToolResult{Success: false, Error: execErr.Error()}, nil //nolint:nilerr
 	}
-	return &types.ToolResult{Success: true, Output: out}, nil
+	return &types.ToolResult{Success: true, Output: out, TaintLevel: types.TaintHigh}, nil
 }
 
 // vlmActionOutput VLM 响应的结构化动作。

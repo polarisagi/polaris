@@ -316,3 +316,13 @@ func generateTokenID() string {
 	}
 	return fmt.Sprintf("%x", b)
 }
+
+// Validate 校验 Capability Token 的合法性，使用注入的校验闭包。
+// 解决包循环依赖问题：由 boot 或 caller 注入 Verify 函数。
+func Validate(tok *Token, toolName string, verifyFn func(*Token) bool) bool {
+	if tok == nil || verifyFn == nil {
+		return false
+	}
+	// 在此处如果后续有绑定 resource 的需求，可以扩展 tok.Claims.Resource 校验
+	return verifyFn(tok)
+}

@@ -9,15 +9,7 @@ import (
 // 返回 (分配的 tier, error)。error 非 nil 时调用方不得执行工具。
 // M07 §4.2: Tier0 上需要 SandboxContainer 的工具返回 ErrTier0SandboxLimit。
 func AssignSandboxTier(tool types.Tool, hwTier int, goos string) (types.SandboxTier, error) {
-	var minTier types.SandboxTier
-	switch tool.Source {
-	case types.ToolBuiltin:
-		minTier = types.SandboxInProcess
-	case types.ToolLLMGenerated, types.ToolMCP, types.ToolA2A:
-		minTier = types.SandboxWasm // 规则 1：L2，非 L3
-	default:
-		minTier = types.SandboxWasm
-	}
+	minTier := tool.TrustTier.SandboxFloor()
 
 	tier := minTier
 	if tool.Capability >= types.CapWriteNetwork && tier < types.SandboxWasm {

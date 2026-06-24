@@ -396,7 +396,7 @@ type ScratchPad interface {
 
 // EpisodicMemory (Mem-L1) — 事件表 + 向量投影。
 type EpisodicMemory interface {
-	Append(ctx context.Context, ev types.Event) error
+	Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error
 	Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error)
 	MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error)
 }
@@ -416,12 +416,12 @@ type EpisodicMemory interface {
 
 // SemanticMemory (Mem-L2) — 文档/实体/关系图。
 type SemanticMemory interface {
-	StoreDocument(ctx context.Context, doc types.Document) error
-	StoreChunks(ctx context.Context, docID string, chunks []types.Chunk) error
+	StoreDocument(ctx context.Context, doc types.Document, taint types.TaintLevel) error
+	StoreChunks(ctx context.Context, docID string, chunks []types.Chunk, taint types.TaintLevel) error
 	GetDocument(ctx context.Context, id string) (*types.Document, error)
 	Archive(ctx context.Context, id string, reason string) error
-	UpsertFact(ctx context.Context, entity types.Entity) error
-	UpsertRelation(ctx context.Context, rel types.Relation) error
+	UpsertFact(ctx context.Context, entity types.Entity, taint types.TaintLevel) error
+	UpsertRelation(ctx context.Context, rel types.Relation, taint types.TaintLevel) error
 	GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error)
 
 	// 生命周期接口 — 信念修正与知识演化（缺口 1）

@@ -24,6 +24,7 @@ import (
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/server"
 	si "github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/sandbox"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -65,8 +66,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		// policyGate：protocol.PolicyGate 接口；security/policy.Gate 通过 IsAuthorized 满足。
 		govAgent, _ := swarmAgents.NewGovernanceAgent(sb.Gate, sb.Store.DB())
 		codeActEngine := codeact.NewCodeAct(
-			tb.ContainerSandbox,
-			sb.Gate,
+			tb.Envelope,
 			nil, // toolExec 审计可选；nil 时跳过 RecordAudit 调用
 			codeact.WithGovernanceAgent(&govAgentAdapter{inner: govAgent}),
 			codeact.WithHITL(tb.HITLGateway),
@@ -171,7 +171,16 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			}
 			return &types.ToolResult{Output: []byte(output)}, nil
 		}
-		return tb.SandboxRouter.Execute(ctx, types.Tool{Name: name}, args, types.TaintNone)
+		res, err := tb.Envelope.Execute(ctx, sandbox.ExecRequest{
+			Principal: sandbox.PrincipalAgent, Kind: sandbox.KindToolExecute,
+			Resource: name, TrustTier: types.TrustUntrusted, Tool: types.Tool{Name: name},
+			Input: args, TaintLevel: types.TaintNone,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &types.ToolResult{Success: res.Success, Output: res.Output, Error: res.Error,
+			LatencyMs: res.LatencyMs, TaintLevel: res.TaintLevel, ImageParts: res.ImageParts}, nil
 	})
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)

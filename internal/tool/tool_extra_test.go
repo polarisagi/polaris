@@ -15,7 +15,7 @@ func (m mockSideEffectChecker) SideEffectPreCheck(ctx context.Context, taskID, a
 }
 
 func TestToolExtra_WithSideEffectChecker(t *testing.T) {
-	reg := NewInMemoryToolRegistry(nil)
+	reg := NewInMemoryToolRegistry(nil, nil)
 	reg.WithSideEffectChecker(mockSideEffectChecker{})
 	if reg.blackboard == nil {
 		t.Fatalf("expected blackboard to be set")

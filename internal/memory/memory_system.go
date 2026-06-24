@@ -69,7 +69,7 @@ func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error
 			Payload:   []byte(entry.Content),
 			CreatedAt: entry.OccurredAt,
 		}
-		return ms.mem.episodic.Append(ctx, ev)
+		return ms.mem.episodic.Append(ctx, ev, types.TaintLevel(entry.TaintLevel))
 	case LayerSemantic:
 		doc := types.Document{
 			ID:         entry.ID,
@@ -77,7 +77,7 @@ func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error
 			SourceType: "semantic",
 			SourceURI:  entry.Content, // 摘要内容存入 SourceURI
 		}
-		return ms.mem.semantic.StoreDocument(ctx, doc)
+		return ms.mem.semantic.StoreDocument(ctx, doc, types.TaintLevel(entry.TaintLevel))
 	default:
 		// LayerProcedural 由 M6 SkillRegistry 管理，此处不处理
 		return nil

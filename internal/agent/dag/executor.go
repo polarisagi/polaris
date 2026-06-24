@@ -84,11 +84,12 @@ type DAGPlan struct {
 
 // NodeResult 记录单个节点的执行结果。
 type NodeResult struct {
-	NodeID    string
-	Output    []byte
-	LatencyMs int64
-	Suspended bool
-	Err       error
+	NodeID     string
+	Output     []byte
+	LatencyMs  int64
+	Suspended  bool
+	Err        error
+	TaintLevel types.TaintLevel
 }
 
 // ─── DAG Executor ───────────────────────────────────────────────────────────
@@ -320,7 +321,7 @@ func (e *DAGExecutor) executeNode(ctx context.Context, node ExecNode) NodeResult
 				if out == nil {
 					out = []byte{}
 				}
-				return NodeResult{NodeID: node.ID, Output: out, Suspended: res.Suspended}
+				return NodeResult{NodeID: node.ID, Output: out, Suspended: res.Suspended, TaintLevel: res.TaintLevel}
 			}
 		} else {
 			lastErr = err

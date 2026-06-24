@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
@@ -47,9 +48,10 @@ type MCPManager struct {
 	mu               sync.RWMutex
 	entries          map[string]*mcpEntry
 	sandbox          *sandbox.InProcessSandbox
+	envelope         *sandbox.ExecEnvelope // 用于 CallTool 下沉
 	toolReg          ToolRegistrar // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
 	httpClient       *http.Client
-	policy           protocol.PolicyGate // 对 CallTool 直接路径执行安全检查
+	policy           protocol.PolicyGate // 对 process_spawn 的策略检查
 	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
 	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
 }
@@ -68,6 +70,13 @@ func NewMCPManager(sbx *sandbox.InProcessSandbox, httpClient *http.Client, polic
 		httpClient: httpClient,
 		policy:     policy,
 	}
+}
+
+// SetEnvelope 注入 Envelope，供 CallTool 直接路径使用。
+func (m *MCPManager) SetEnvelope(env *sandbox.ExecEnvelope) {
+	m.mu.Lock()
+	m.envelope = env
+	m.mu.Unlock()
 }
 
 // SetOnToolsChanged 注册工具集变更回调，异步连接完成后触发。
@@ -115,6 +124,25 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	}
 
 	client := NewMCPClient(cfg, m.httpClient)
+
+	// MCP 进程生成必须经策略审查（与工具调用同等级安全门）
+	if m.policy != nil {
+		allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "process_spawn", name,
+			map[string]any{
+				"trust_tier":   int(cfg.TrustTier),
+				"transport":    string(cfg.Transport),
+				"sandbox_auto": cfg.SandboxPolicy == "" || cfg.SandboxPolicy == "auto",
+			})
+		if pErr != nil || !allowed {
+			reason := "policy denied"
+			if pErr != nil {
+				reason = pErr.Error()
+			}
+			return storeFailed(apperr.New(apperr.CodeForbidden,
+				fmt.Sprintf("mcp_manager: process_spawn denied for %q: %s", name, reason)))
+		}
+	}
+
 	if err := client.Connect(ctx); err != nil {
 		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: connect %q", serverID), err)
 		return storeFailed(wrapped)
@@ -175,37 +203,33 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 		return "", apperr.New(apperr.CodeInternal, "mcp_manager: server not found: "+serverID)
 	}
 
-	// PolicyGate: deny-by-default，与 ToolRegistry 路径保持一致
-	if m.policy == nil {
-		return "", apperr.New(apperr.CodeInternal,
-			"mcp_manager: policy gate not initialized, refusing tool call (fail-closed)")
-	}
-	tl := 2 // MCP Server 信任等级（社区级别）
-	if e.cfg.Trusted {
-		tl = 3 // 白名单 MCP Server 提升信任等级
-	}
-	allowed, pErr := m.policy.IsAuthorized(ctx, "agent", "tool_execute",
-		serverID+":"+toolName,
-		map[string]any{
-			"tool_source": "mcp",
-			"trust_level": tl,
-		})
-	if pErr != nil || !allowed {
-		reason := "policy denied"
-		if pErr != nil {
-			reason = pErr.Error()
-		}
-		return "", apperr.New(apperr.CodeForbidden, fmt.Sprintf("mcp_manager: policy blocked %s: %s", toolName, reason))
+	llmName := MCPToolName(e.name, toolName)
+	argsBytes, _ := json.Marshal(args)
+
+	m.mu.RLock()
+	env := m.envelope
+	m.mu.RUnlock()
+
+	if env == nil {
+		return "", apperr.New(apperr.CodeInternal, "mcp_manager: envelope not initialized")
 	}
 
-	text, _, _, err := e.client.CallToolTainted(ctx, toolName, args)
+	res, err := env.Execute(ctx, sandbox.ExecRequest{
+		Principal:  sandbox.PrincipalAgent,
+		Kind:       sandbox.KindToolExecute,
+		Resource:   llmName,
+		TrustTier:  types.TrustCommunity,
+		Tool:       types.Tool{Name: llmName, Source: types.ToolMCP, TrustTier: types.TrustCommunity},
+		Input:      argsBytes,
+		TaintLevel: types.TaintMedium,
+	})
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "mcp_manager: call tool", err)
 	}
-	if err != nil {
-		return text, apperr.Wrap(apperr.CodeInternal, "MCPManager.CallTool", err)
+	if !res.Success {
+		return "", apperr.New(apperr.CodeInternal, "MCPManager.CallTool failed: "+res.Error)
 	}
-	return text, nil
+	return string(res.Output), nil
 }
 
 // ListServers 返回所有 MCP Server 的运行时状态快照。
@@ -289,13 +313,13 @@ func (m *MCPManager) LoadFromDB(ctx context.Context, extRepo protocol.ExtensionR
 			Trusted:   s.TrustTier >= 3,
 		}
 		// 每个 server 独立 goroutine，避免一个慢连接阻塞其他
-		go func(id, name string, cfg MCPClientConfig) {
+		concurrent.SafeGo(ctx, "mcp_manager_add", func() {
 			connCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
-			if err := m.Add(connCtx, id, name, cfg); err != nil {
-				slog.Error("mcp_manager: load server failed", "id", id, "err", err)
+			if err := m.Add(connCtx, s.ID, s.Name, cfg); err != nil {
+				slog.Error("mcp_manager: load server failed", "id", s.ID, "err", err)
 			}
-		}(s.ID, s.Name, cfg)
+		})
 	}
 }
 
@@ -550,13 +574,13 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 		for i, a := range cfg.Args {
 			clientCfg.Args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
 		}
-		go func() {
+		concurrent.SafeGo(context.Background(), "mcp_manager_update", func() {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			if err := m.Add(bgCtx, id, cfg.Name, clientCfg); err != nil {
 				slog.Warn("mcp: connect server failed after update", "id", id, "err", err)
 			}
-		}()
+		})
 	}
 	return nil
 }

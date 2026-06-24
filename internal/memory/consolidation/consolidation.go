@@ -378,7 +378,7 @@ func (p *ConsolidationPipeline) upsertSemantic(
 			p.supersedeSimilarPreferences(ctx, e.Name)
 		}
 
-		if err := p.semantic.UpsertFact(ctx, *e); err != nil {
+		if err := p.semantic.UpsertFact(ctx, *e, types.TaintNone); err != nil {
 			slog.Warn("consolidation: semantic.UpsertFact failed", "err", err)
 			continue
 		}
@@ -400,7 +400,7 @@ func (p *ConsolidationPipeline) upsertSemantic(
 		if dbid, ok := ephemeralToDBID[r.ToEntityID]; ok {
 			rc.ToDBID = dbid
 		}
-		if err := p.semantic.UpsertRelation(ctx, rc); err != nil {
+		if err := p.semantic.UpsertRelation(ctx, rc, types.TaintNone); err != nil {
 			slog.Warn("consolidation: semantic.UpsertRelation failed", "err", err)
 		}
 	}
@@ -520,7 +520,7 @@ func (p *ConsolidationPipeline) summarizeSession(
 		Title:      "Session summary: " + sessionID,
 		Version:    fmt.Sprintf("%d", time.Now().Unix()),
 	}
-	return p.semantic.StoreDocument(ctx, doc)
+	return p.semantic.StoreDocument(ctx, doc, types.TaintNone)
 }
 
 // buildSummary 调用 LLM 或规则引擎生成摘要文本。

@@ -13,7 +13,7 @@ type mockScriptRunner struct {
 	err      error
 }
 
-func (m *mockScriptRunner) RunScript(ctx context.Context, skillName string, scriptPath string, input []byte) ([]byte, error) {
+func (m *mockScriptRunner) RunScript(ctx context.Context, skillName string, scriptPath string, input []byte, trustTier types.TrustTier) ([]byte, error) {
 	return m.response, m.err
 }
 

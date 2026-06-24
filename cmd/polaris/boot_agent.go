@@ -27,6 +27,8 @@ import (
 	si "github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
+
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/internal/swarm/planner"
@@ -162,7 +164,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			Name:        toolName,
 			SandboxTier: 1,
 		}
-		return tb.SandboxRouter.Execute(ctx, tool, args, types.TaintNone)
+		res, err := tb.Envelope.Execute(ctx, sandbox.ExecRequest{
+			Principal: sandbox.PrincipalAgent, Kind: sandbox.KindToolExecute,
+			Resource: tool.Name, TrustTier: tool.TrustTier, Tool: tool,
+			Input: args, TaintLevel: types.TaintNone,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &types.ToolResult{Success: res.Success, Output: res.Output, Error: res.Error,
+			LatencyMs: res.LatencyMs, TaintLevel: res.TaintLevel, ImageParts: res.ImageParts}, nil
 	}, nil)
 
 	// 注入 ScriptSkillCache + SkillExecutor，激活 System 1 FastPath 技能命中路径。

@@ -45,7 +45,7 @@ func (m *mockProvider) ModelID() string                      { return "mock" }
 // ── ExecuteAction 基础路径 ───────────────────────────────────────────────────
 
 func TestExecuteAction_Disabled(t *testing.T) {
-	e := NewComputerUseEngine(LAMConfig{Enabled: false}, &mockProvider{}, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: false}, &mockProvider{}, nil, nil)
 	result, err := e.ExecuteAction(context.Background(), "click button", &ScreenState{DOM: "<div/>"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -59,7 +59,7 @@ func TestExecuteAction_Disabled(t *testing.T) {
 }
 
 func TestExecuteAction_NilProvider(t *testing.T) {
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, nil, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, nil, nil, nil)
 	_, err := e.ExecuteAction(context.Background(), "click", &ScreenState{DOM: "<div/>"})
 	if err == nil {
 		t.Fatal("nil provider should return error")
@@ -67,7 +67,7 @@ func TestExecuteAction_NilProvider(t *testing.T) {
 }
 
 func TestExecuteAction_NilScreenState(t *testing.T) {
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, &mockProvider{}, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, &mockProvider{}, nil, nil)
 	_, err := e.ExecuteAction(context.Background(), "click", nil)
 	if err == nil {
 		t.Fatal("nil screenState should return error")
@@ -80,7 +80,7 @@ func TestExecuteAction_DryRun_ReturnsActionJSON(t *testing.T) {
 	provider := &mockProvider{
 		responses: []string{`{"action":"left_click","coordinate":[100,200],"reasoning":"button found"}`},
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true, ResolverModel: "mock"}, provider, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true, ResolverModel: "mock"}, provider, nil, nil)
 
 	state := &ScreenState{DOM: "<button id='ok'>OK</button>", Width: 1280, Height: 720}
 	result, err := e.ExecuteAction(context.Background(), "click OK button", state)
@@ -118,7 +118,7 @@ func TestExecuteAction_WithExecutor_Success(t *testing.T) {
 		executed = true
 		return []byte(`{"status":"ok"}`), nil
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, executorFn)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, executorFn, nil)
 
 	result, err := e.ExecuteAction(context.Background(), "take screenshot", &ScreenState{DOM: ""})
 	if err != nil {
@@ -139,7 +139,7 @@ func TestExecuteAction_WithExecutor_Error(t *testing.T) {
 	executorFn := func(_ context.Context, _ []byte) ([]byte, error) {
 		return nil, fmt.Errorf("display not found")
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, executorFn)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, executorFn, nil)
 
 	result, err := e.ExecuteAction(context.Background(), "press enter", &ScreenState{DOM: ""})
 	if err != nil {
@@ -159,7 +159,7 @@ func TestExecuteAction_InvalidVLMResponse(t *testing.T) {
 	provider := &mockProvider{
 		responses: []string{`not-valid-json`},
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil, nil)
 
 	_, err := e.ExecuteAction(context.Background(), "click", &ScreenState{DOM: "<div/>"})
 	if err == nil {
@@ -171,7 +171,7 @@ func TestExecuteAction_EmptyAction(t *testing.T) {
 	provider := &mockProvider{
 		responses: []string{`{"action":""}`},
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil, nil)
 
 	_, err := e.ExecuteAction(context.Background(), "do nothing", &ScreenState{DOM: "<div/>"})
 	if err == nil {
@@ -185,7 +185,7 @@ func TestExecuteAction_VisionPath_SmallScreenshot(t *testing.T) {
 	provider := &mockProvider{
 		responses: []string{`{"action":"mouse_move","coordinate":[50,50]}`},
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil, nil)
 
 	// 1 字节截图 → useVision=true
 	state := &ScreenState{
@@ -207,7 +207,7 @@ func TestExecuteAction_VisionPath_OversizedScreenshot_DegradesToDOM(t *testing.T
 	provider := &mockProvider{
 		responses: []string{`{"action":"type","text":"hello"}`},
 	}
-	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil)
+	e := NewComputerUseEngine(LAMConfig{Enabled: true}, provider, nil, nil)
 
 	// 超出 2MB → useVision=false，降级为 DOM-only
 	oversized := make([]byte, maxScreenshotBytesFull+1)

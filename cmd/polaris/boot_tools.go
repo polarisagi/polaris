@@ -20,6 +20,7 @@ import (
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
 
 	"github.com/polarisagi/polaris/internal/agent"
+	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -27,6 +28,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/agents"
@@ -40,6 +42,7 @@ type ToolBundle struct {
 	ContainerSandbox *sandbox.ContainerSandbox // 可 nil（<Tier1 或 FeatureL3Sandbox 未启用）
 	InProcSandbox    *sandbox.InProcessSandbox
 	SandboxRouter    *sandbox.SandboxRouter
+	Envelope         *sandbox.ExecEnvelope
 	ToolReg          *polartool.InMemoryToolRegistry
 	MCPMgr           *mcp.MCPManager
 	MktClient        *marketplace.MCPMarketplaceClient
@@ -77,14 +80,17 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
 	}
-	slog.Info("polaris: sandbox router initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
+	tokenVerify := func(t *token.Token) bool { return action.GetTokenManager().Verify(t) == nil }
+	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, tokenVerify)
+	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
 
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
 	allowedPaths := []string{sb.DataDir}
-	toolReg := polartool.NewInMemoryToolRegistry(nil)
+	toolReg := polartool.NewInMemoryToolRegistry(envelope)
 	mcpMgr := mcp.NewMCPManager(inProcSandbox, sb.SafeHTTP, sb.Gate)
 	// MCP 工具注册时同步到 InMemoryToolRegistry，Agent Kernel FSM 可发现 MCP 工具
 	mcpMgr.SetToolRegistrar(toolReg)
+	mcpMgr.SetEnvelope(envelope)
 
 	mktClient := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTP)
 
@@ -255,6 +261,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ContainerSandbox: containerSandbox,
 		InProcSandbox:    inProcSandbox,
 		SandboxRouter:    sandboxRouter,
+		Envelope:         envelope,
 		ToolReg:          toolReg,
 		MCPMgr:           mcpMgr,
 		MktClient:        mktClient,

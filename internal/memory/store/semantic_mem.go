@@ -39,7 +39,7 @@ func NewSemanticMem(store protocol.Store, bus IntentSubmitter) *SemanticMem {
 	return &SemanticMem{store: store, bus: bus}
 }
 
-func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document) error {
+func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document, taint types.TaintLevel) error {
 	key := []byte("doc:" + doc.ID)
 	data, err := json.Marshal(doc)
 	if err != nil {
@@ -48,7 +48,7 @@ func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document) er
 	return sm.store.Put(ctx, key, data)
 }
 
-func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []types.Chunk) error {
+func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []types.Chunk, taint types.TaintLevel) error {
 	for _, ch := range chunks {
 		key := []byte("chunk:" + ch.ID)
 		data, err := json.Marshal(ch)
@@ -94,10 +94,10 @@ func (sm *SemanticMem) Archive(ctx context.Context, id string, reason string) er
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.Archive", err)
 	}
 	doc.Archived = true
-	return sm.StoreDocument(ctx, *doc)
+	return sm.StoreDocument(ctx, *doc, types.TaintNone)
 }
 
-func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity) error {
+func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, taint types.TaintLevel) error {
 	db, err := sm.requireDB()
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
@@ -185,7 +185,7 @@ func nullableInt64(v int64) any {
 	return v
 }
 
-func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation) error {
+func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation, taint types.TaintLevel) error {
 	// FromDBID/ToDBID 必须由调用方（upsertSemantic）在 UpsertFact 后填充
 	if rel.FromDBID <= 0 || rel.ToDBID <= 0 {
 		return apperr.New(apperr.CodeInternal,

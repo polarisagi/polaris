@@ -19,10 +19,10 @@ import (
 )
 
 // HookRunner 在受限环境下执行插件 hook 脚本。
-// 接口在调用方定义（AGENTS.md 原则），具体实现由 pkg/action.ContainerSandbox.RunScript 提供。
+// 接口在调用方定义（AGENTS.md 原则），具体实现由 pkg/action.ContainerSandbox.RunHook 提供。
 type HookRunner interface {
-	// RunScript 执行 hookPath 指定的可执行文件， workDir 为工作目录。
-	RunScript(ctx context.Context, hookPath, workDir string) error
+	// RunHook 执行 hookPath 指定的可执行文件， workDir 为工作目录。
+	RunHook(ctx context.Context, hookPath, workDir string) error
 }
 
 // ExtensionInstaller 负责将扩展文件下载到本地并返回安装目录。
@@ -299,7 +299,7 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 						if strings.HasPrefix(filepath.Clean(hookPath), filepath.Clean(inst.InstallPath)) {
 							if m.hookRunner != nil {
 								// 通过注入的沙笼接口执行：具体实现由 ContainerSandbox.RunScript 提供
-								if err := m.hookRunner.RunScript(ctx, hookPath, inst.InstallPath); err != nil {
+								if err := m.hookRunner.RunHook(ctx, hookPath, inst.InstallPath); err != nil {
 									slog.Warn("marketplace: uninstall hook failed", "ext", inst.ID, "err", err)
 								}
 							} else {

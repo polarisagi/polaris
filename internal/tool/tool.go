@@ -6,7 +6,7 @@
 package tool
 
 import (
-	"github.com/polarisagi/polaris/internal/security/token"
+
 
 	"context"
 	"encoding/json"
@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -31,10 +31,9 @@ import (
 type InMemoryToolRegistry struct {
 	mu         sync.RWMutex
 	tools      map[string]types.Tool
-	policy     protocol.PolicyGate
-	limiters   map[string]*rateLimiter // source → limiter
-	sandbox    SandboxExecutor         // 真实执行路径（如果为 nil 则用 stub）
-	blackboard SideEffectChecker       // 可选：TOCTOU 前置校验（M8 Blackboard）
+	envelope   *sandbox.ExecEnvelope
+	limiters   map[string]*rateLimiter
+	blackboard SideEffectChecker
 }
 
 // SideEffectChecker 定义 TOCTOU 校验接口（consumer-side 定义，防包循环）。
@@ -58,11 +57,11 @@ type SandboxExecutor interface {
 var _ protocol.ToolRegistry = (*InMemoryToolRegistry)(nil)
 
 // NewInMemoryToolRegistry 创建工具注册表。
-// policy 为 nil 时 deny-by-default 生效（不允许任何执行）。
-func NewInMemoryToolRegistry(policy protocol.PolicyGate) *InMemoryToolRegistry {
+func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope) *InMemoryToolRegistry {
 	return &InMemoryToolRegistry{
-		tools:  make(map[string]types.Tool),
-		policy: policy,
+		tools:      make(map[string]types.Tool),
+		envelope:   envelope,
+		blackboard: nil,
 		limiters: map[string]*rateLimiter{
 			string(types.ToolBuiltin): newRateLimiter(100), // 100 QPS
 			string(types.ToolMCP):     newRateLimiter(10),  // 10 QPS
@@ -72,11 +71,13 @@ func NewInMemoryToolRegistry(policy protocol.PolicyGate) *InMemoryToolRegistry {
 	}
 }
 
-// SetSandbox 设置工具实际执行器（允许运行时替换，例如单元测试注入 mock）。
-func (r *InMemoryToolRegistry) SetSandbox(sb SandboxExecutor) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sandbox = sb
+// getRateLimiter 获取对应 Source 的限速器。
+func (r *InMemoryToolRegistry) getRateLimiter(source types.ToolSource) *rateLimiter {
+	key := string(source)
+	if _, ok := r.limiters[key]; !ok {
+		return r.limiters[string(types.ToolBuiltin)]
+	}
+	return r.limiters[key]
 }
 
 // Register 注册工具；同名覆盖（热更新 MCP schema 时使用）。
@@ -120,14 +121,13 @@ func (r *InMemoryToolRegistry) List() []types.Tool {
 	return result
 }
 
-// ExecuteTool 执行工具：PolicyGate 五阶段校验 → RateLimit → Sandbox → ToolResult。
 func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 	tool, err := r.Lookup(name)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
 	}
 
-	// 预执行校验 (PolicyGate, RateLimit, JIT Token, DryRun)
+	// 预执行校验 (RateLimit, DryRun)
 	if res, err := r.checkPreExecution(ctx, tool, taintLevel); res != nil || err != nil {
 		if err != nil {
 			return res, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
@@ -135,27 +135,26 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		return res, nil
 	}
 
-	r.mu.RLock()
-	sb := r.sandbox
-	checker := r.blackboard
-	r.mu.RUnlock()
-
-	start := time.Now()
-
-	if sb == nil {
-		// 无注册 Sandbox 时返回原始输入（单元测试居安模式）
-		return &types.ToolResult{
-			Success:    true,
-			Output:     input,
-			LatencyMs:  time.Since(start).Milliseconds(),
-			TaintLevel: taintLevel,
-		}, nil
+	if r.envelope == nil {
+		return nil, apperr.New(apperr.CodeInternal, "tool_registry: envelope is nil")
 	}
 
-	// 真实 Sandbox 执行路径
-	out, execErr := sb.Execute(ctx, name, input, taintLevel)
+	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
+	res, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
+		Principal:  sandbox.PrincipalAgent,
+		Kind:       sandbox.KindToolExecute,
+		Resource:   name,
+		TrustTier:  tool.TrustTier,
+		Tool:       tool,
+		Input:      input,
+		TaintLevel: types.TaintNone, // Envelope 将在执行后计算新的 TaintLevel
+		CPUQuotaMs: int(tool.Timeout.Milliseconds()),
+	})
 
 	// PostCheck: 防止 TOCTOU 导致已取消任务的副作用不被感知（重用 SideEffectPreCheck 接口）
+	r.mu.RLock()
+	checker := r.blackboard
+	r.mu.RUnlock()
 	if checker != nil {
 		type taskCtxKey struct{}
 		type agentCtxKey struct{}
@@ -171,53 +170,21 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}
 
 	if execErr != nil {
-		return &types.ToolResult{ //nolint:nilerr
+		return &types.ToolResult{
 			Success:    false,
 			Error:      execErr.Error(),
-			LatencyMs:  time.Since(start).Milliseconds(),
 			TaintLevel: taintLevel,
 		}, nil
 	}
 	return &types.ToolResult{
 		Success:    true,
-		Output:     out,
-		LatencyMs:  time.Since(start).Milliseconds(),
-		TaintLevel: taintLevel,
+		Output:     res.Output,
+		TaintLevel: res.TaintLevel,
+		ImageParts: res.ImageParts,
 	}, nil
 }
 
-// checkPreExecution 处理 PolicyGate、RateLimiter、Token 及 DryRun 等预检逻辑
 func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-	if r.policy == nil {
-		return &types.ToolResult{
-			Success: false,
-			Error:   "tool_registry: policy gate not initialized, refusing tool call (fail-closed)",
-		}, apperr.New(apperr.CodeInternal, "tool_registry: policy gate not initialized")
-	}
-
-	tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
-	tok, _ := tokenVal.(*token.Token)
-	tokenValid := validateToken(tok, tool.Name)
-
-	allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "tool_execute", tool.Name,
-		map[string]any{
-			"tool_source":            string(tool.Source),
-			"risk_level":             int(tool.RiskLevel),
-			"trust_level":            toolTrustLevel(tool.Source),
-			"capability_token_valid": tokenValid,
-		})
-	if pErr != nil || !allowed {
-		reason := "policy denied"
-		if pErr != nil {
-			reason = pErr.Error()
-		}
-		return &types.ToolResult{
-			Success:    false,
-			Error:      fmt.Sprintf("tool_registry: policy blocked: %s", reason),
-			TaintLevel: taintLevel,
-		}, nil
-	}
-
 	limiterKey := string(tool.Source)
 	if isShellTool(tool) {
 		limiterKey = "shell"
@@ -231,11 +198,6 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 			}, nil
 		}
 	}
-
-	if !tokenValid {
-		return nil, apperr.New(apperr.CodeForbidden, "missing/invalid capability token for tool")
-	}
-
 	if dryRun, ok := ctx.Value(protocol.CtxDryRun{}).(bool); ok && dryRun {
 		// DryRun 模式：拦截所有工具，返回模拟结果；不执行真实副作用
 		sideEffectSummary := "none"
@@ -289,14 +251,6 @@ func isShellTool(t types.Tool) bool {
 	return false
 }
 
-// validateToken 校验 Capability Token 的合法性。
-func validateToken(tok *token.Token, toolName string) bool {
-	if tok == nil {
-		return false
-	}
-	return action.GetTokenManager().Verify(tok) == nil
-}
-
 // isReversible 判断工具副作用是否可逆。
 func isReversible(t types.Tool) bool {
 	if t.Capability >= types.CapWriteNetwork {
@@ -336,18 +290,6 @@ func (rl *rateLimiter) Allow() bool {
 	}
 	// Add(-1) 是原子操作；负值代表本窗口超限，不还回——避免多 goroutine 同时还回导致误放行。
 	return rl.tokens.Add(-1) >= 0
-}
-
-// toolTrustLevel 根据工具来源推导信任等级。
-// ToolBuiltin → 4（系统信任）; ToolMCP/ToolA2A → 2（社区信任）; 其余 → 1
-func toolTrustLevel(source types.ToolSource) int {
-	switch source {
-	case types.ToolBuiltin:
-		return 4
-	case types.ToolMCP, types.ToolA2A:
-		return 2
-	}
-	return 1
 }
 
 // ErrToolNotFound 工具未注册时返回的哨兵错误。

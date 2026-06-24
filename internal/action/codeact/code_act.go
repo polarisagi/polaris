@@ -29,8 +29,7 @@ import (
 // sandbox 字段使用包内 SandboxProvider 接口（Run 签名与 types.SandboxSpec 不同）。
 // LevelChecker 接口仅用于级别断言，由三个沙箱实现通过 Level() 满足。
 type CodeAct struct {
-	sandbox     sandbox.SandboxProvider
-	policyGate  protocol.PolicyGate
+	envelope    *sandbox.ExecEnvelope
 	toolExec    protocol.ToolExecutor
 	govAgent    govAgent        // 可选的安全校验网关 (L1)
 	astChecker  ASTChecker      // L0 AST 检查器
@@ -90,11 +89,10 @@ type CodeActResult struct {
 	LatencyMs int64
 }
 
-func NewCodeAct(sandbox sandbox.SandboxProvider, policyGate protocol.PolicyGate, toolExec protocol.ToolExecutor, opts ...CodeActOption) *CodeAct {
+func NewCodeAct(envelope *sandbox.ExecEnvelope, toolExec protocol.ToolExecutor, opts ...CodeActOption) *CodeAct {
 	ca := &CodeAct{
-		sandbox:    sandbox,
-		policyGate: policyGate,
-		toolExec:   toolExec,
+		envelope: envelope,
+		toolExec: toolExec,
 	}
 	for _, opt := range opts {
 		opt(ca)
@@ -132,33 +130,8 @@ func (ca *CodeAct) validateBasic(req CodeActRequest) error {
 }
 
 func (ca *CodeAct) validatePolicyAndEnv(ctx context.Context, req CodeActRequest) error {
-	if ca.policyGate == nil {
-		return apperr.New(apperr.CodeInternal, "code_act: policy gate not available (fail-closed)")
-	}
-	evalCtx := map[string]any{
-		"source":              "llm_generated",  // 明确标识代码来源为大语言模型生成，触发专门的安全审计规则
-		"capability_token_id": req.CapabilityID, // 强制验证能力令牌，防范越权操作
-		"trust_level":         1,                // 信任等级固定为 1 (Untrusted/Local)，因为是动态生成的代码
-	}
-	allowed, err := ca.policyGate.IsAuthorized(ctx, req.AgentID, "execute_code", "code_act:"+req.Language, evalCtx)
-	if err != nil || !allowed {
-		reason := "policy denied"
-		if err != nil {
-			reason = err.Error()
-		}
-		return apperr.New(apperr.CodeForbidden, "code_act: policy gate denied: "+reason)
-	}
-
-	if ca.sandbox == nil {
-		return apperr.New(apperr.CodeInternal, "code_act: sandbox not available (fail-closed)")
-	}
-	type levelProvider interface{ Level() int }
-	if lp, ok := ca.sandbox.(levelProvider); !ok || lp.Level() < 3 {
-		lvl := 0
-		if lp, ok2 := ca.sandbox.(levelProvider); ok2 {
-			lvl = lp.Level()
-		}
-		return apperr.New(apperr.CodeForbidden, fmt.Sprintf("code_act: sandbox level %d < required L3 (inv_global_07)", lvl))
+	if ca.envelope == nil {
+		return apperr.New(apperr.CodeInternal, "code_act: envelope not available (fail-closed)")
 	}
 	if ca.govAgent == nil {
 		return apperr.New(apperr.CodeInternal,
@@ -240,23 +213,19 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 	}
 	defer os.Remove(tmpFile) // 执行后立即删除，防止敏感代码驻留磁盘
 
-	// ScriptPath 传递脚本路径，由 ContainerSandbox.runNativeScript() 推断解释器并执行。
-	// 旧方案（Input = []byte("python3 /tmp/xxx.py")）的致命缺陷：ContainerSandbox 将
-	// Input 字节流作为 stdin 传给 Firecracker/VZ 二进制，不会当作 shell 命令执行（R1.15）。
-	spec := sandbox.SandboxSpec{
-		ToolName:   "code_act:" + req.Language,
-		ScriptPath: tmpFile,      // 直接告知沙箱脚本路径，解释器由后缀推断
-		Input:      []byte("{}"), // stdin 留空（兼容协议格式，容器后端不使用此值）
-		CPUQuotaMs: 30000,        // 30s 超时
-	}
-
-	result, err := ca.sandbox.Run(ctx, spec)
+	res, err := ca.envelope.Execute(ctx, sandbox.ExecRequest{
+		Principal: sandbox.PrincipalAgent, Kind: sandbox.KindScriptExecute,
+		Resource: "codeact:" + req.Language, TrustTier: types.TrustUntrusted,
+		Tool:       types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated},
+		Input:      []byte("{}"), ScriptPath: tmpFile,
+		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
+	})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: sandbox execution failed", err)
 	}
 
 	exitCode := 0
-	if !result.Success {
+	if !res.Success {
 		exitCode = 1
 	}
 
@@ -269,15 +238,15 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 			"capability_id": req.CapabilityID,
 			"taint_level":   req.TaintLevel,
 			"exit_code":     exitCode,
-			"latency_ms":    result.LatencyMs,
+			"latency_ms":    res.LatencyMs,
 		})
 		_ = ca.toolExec.RecordAudit(ctx, "code_act", auditPayload)
 	}
 
 	return &CodeActResult{
-		Output:    result.Output,
+		Output:    res.Output,
 		ExitCode:  exitCode,
-		LatencyMs: result.LatencyMs,
+		LatencyMs: res.LatencyMs,
 	}, nil
 }
 

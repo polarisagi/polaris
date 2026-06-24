@@ -154,7 +154,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 			TaintLevel: maxTaint,
 		}
 
-		if err := p.semanticMem.UpsertFact(ctx, conceptEntity); err != nil {
+		if err := p.semanticMem.UpsertFact(ctx, conceptEntity, types.TaintNone); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert fact failed", err)
 		}
 
@@ -165,7 +165,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 				RelationType: "RELATED_TO",
 				Weight:       1.0,
 			}
-			if err := p.semanticMem.UpsertRelation(ctx, rel); err != nil {
+			if err := p.semanticMem.UpsertRelation(ctx, rel, types.TaintNone); err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert relation failed", err)
 			}
 		}

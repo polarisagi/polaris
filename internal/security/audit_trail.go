@@ -293,3 +293,13 @@ func mustJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
 }
+
+// RecordAudit 实现 protocol.AuditLogger 接口。
+func (at *AuditTrail) RecordAudit(ctx context.Context, toolName string, payload []byte) error {
+	record := &AuditRecord{
+		ActionType:   "tool_execute",
+		ActionDetail: payload,
+		Timestamp:    time.Now().UnixMicro(),
+	}
+	return at.Record(record)
+}

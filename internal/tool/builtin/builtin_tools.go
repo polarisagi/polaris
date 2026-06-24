@@ -134,8 +134,6 @@ func RegisterBuiltinTools(
 		}
 	}
 
-	// 将 InProcessSandbox 绑定为工具注册表的真实执行器，替代 stub
-	toolReg.SetSandbox(sbx)
 	return nil
 }
 

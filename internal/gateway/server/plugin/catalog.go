@@ -725,8 +725,8 @@ func (h *PluginHandler) downloadAndInstallExtension(ctx context.Context, extID, 
 		if hook, ok := bundle.Hooks["install"]; ok && hook != "" {
 			if hookPath, ok := safeJoin(destDir, hook); ok {
 				if h.ScriptRunner != nil {
-					// ContainerSandbox.RunScript：Linux 下有 PID/NS namespace 隔离
-					if err := h.ScriptRunner.RunScript(ctx, hookPath, destDir); err != nil {
+					// ContainerSandbox.RunHook：Linux 下有 PID/NS namespace 隔离
+					if err := h.ScriptRunner.RunHook(ctx, hookPath, destDir); err != nil {
 						slog.Warn("plugin_catalog: install hook failed", "ext", extID, "err", err)
 					}
 				} else {

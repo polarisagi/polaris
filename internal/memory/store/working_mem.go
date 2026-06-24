@@ -297,7 +297,7 @@ func CompactWorkingMemory(ctx context.Context, cw *ContextWindowImpl, em *Episod
 				TaskID:  "compact",
 				Payload: []byte(m.Content),
 			}
-			_ = em.Append(ctx, ev)
+			_ = em.Append(ctx, ev, types.TaintNone)
 		}
 	}
 	return nil

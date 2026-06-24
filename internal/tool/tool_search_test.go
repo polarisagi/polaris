@@ -18,7 +18,7 @@ func (mockPolicy) Review(ctx context.Context, req types.PolicyReviewRequest) (ty
 }
 
 func TestToolSearch(t *testing.T) {
-	toolReg := NewInMemoryToolRegistry(mockPolicy{})
+	toolReg := NewInMemoryToolRegistry(nil, nil)
 	fn := MakeToolSearchFn(toolReg)
 	ctx := context.Background()
 

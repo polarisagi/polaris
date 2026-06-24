@@ -21,6 +21,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -307,9 +308,11 @@ func (c *MCPClient) connectStdio(ctx context.Context) error {
 	}
 	c.cmd = cmd
 	c.stdin = stdin
-	go c.readLoop(stdout)
+	concurrent.SafeGo(context.Background(), "mcp_client_readloop", func() {
+		c.readLoop(stdout)
+	})
 	// stderr 升级到 Warn 级别：子进程崩溃原因（缺失依赖、Python/Node 错误）在生产日志可见
-	go func() {
+	concurrent.SafeGo(context.Background(), "mcp_client_stderr", func() {
 		sc := bufio.NewScanner(stderr)
 		for sc.Scan() {
 			slog.Warn("mcp: server stderr", "server", c.cfg.ServerName, "line", sc.Text())
@@ -317,7 +320,7 @@ func (c *MCPClient) connectStdio(ctx context.Context) error {
 		if err := sc.Err(); err != nil {
 			slog.Warn("mcp: server stderr scan error", "server", c.cfg.ServerName, "err", err)
 		}
-	}()
+	})
 	return nil
 }
 

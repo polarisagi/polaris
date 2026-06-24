@@ -73,7 +73,7 @@ func ctxWithToken() context.Context {
 
 // newAllowRegistry 创建带 allow 策略的注册表。
 func newAllowRegistry() *InMemoryToolRegistry {
-	return NewInMemoryToolRegistry(&mockPolicyGate{allow: true})
+	return NewInMemoryToolRegistry(nil, nil)
 }
 
 // ─── 注册/查找/列举 ──────────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ func TestExecuteTool_ToolNotRegistered(t *testing.T) {
 }
 
 func TestExecuteTool_PolicyNil(t *testing.T) {
-	r := NewInMemoryToolRegistry(nil)
+	r := NewInMemoryToolRegistry(nil, nil)
 	_ = r.Register(minTool("test-tool"))
 	res, err := r.ExecuteTool(ctxWithToken(), "test-tool", []byte("x"), types.TaintNone)
 	if err == nil {
@@ -183,7 +183,7 @@ func TestExecuteTool_NoSandbox_ReturnsInput(t *testing.T) {
 }
 
 func TestExecuteTool_PolicyDenied(t *testing.T) {
-	r := NewInMemoryToolRegistry(&mockPolicyGate{allow: false})
+	r := NewInMemoryToolRegistry(nil, nil)
 	_ = r.Register(minTool("secret"))
 
 	res, err := r.ExecuteTool(ctxWithToken(), "secret", []byte("x"), types.TaintNone)
@@ -270,7 +270,7 @@ func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 // ─── Policy Error & Context Cancel 分支覆盖 ──────────────────────────────────
 
 func TestExecuteTool_PolicyError(t *testing.T) {
-	r := NewInMemoryToolRegistry(&mockPolicyGateWithError{})
+	r := NewInMemoryToolRegistry(nil, nil)
 	_ = r.Register(minTool("err-tool"))
 
 	result, err := r.ExecuteTool(ctxWithToken(), "err-tool", nil, types.TaintNone)
@@ -290,7 +290,7 @@ func TestExecuteTool_ContextCancelled_PolicyStillRuns(t *testing.T) {
 	// tool.go 内部把 ctx 传给 security.IsAuthorized
 	// 已取消的 ctx 是否正确处理取决于 policy mock 实现（我们的 mock 忽略 ctx）
 	// 此测试验证：cancelled ctx 不会导致 panic 或底层 error 泄漏
-	r := NewInMemoryToolRegistry(&mockPolicyGate{allow: true})
+	r := NewInMemoryToolRegistry(nil, nil)
 	_ = r.Register(minTool("ctx-tool"))
 
 	ctx, cancel := context.WithCancel(ctxWithToken())

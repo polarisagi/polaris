@@ -363,10 +363,10 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.To
 	}, nil
 }
 
-// RunScript 在与 ContainerSandbox 相同的 OS 命名空间隔离下直接执行任意脚本。
+// RunHook 在与 ContainerSandbox 相同的 OS 命名空间隔离下直接执行任意脚本。
 // 适用于插件 uninstall hook 等需要运行任意二进制路径的场景。
 // workDir 为脚本工作目录；超时固定 30s（与 Run 一致）。
-func (s *ContainerSandbox) RunScript(ctx context.Context, scriptPath, workDir string) error {
+func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir string) error {
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -378,9 +378,28 @@ func (s *ContainerSandbox) RunScript(ctx context.Context, scriptPath, workDir st
 		cmd.SysProcAttr = attrs
 	}
 	if err := cmd.Run(); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox: RunScript %q", scriptPath), err)
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox: RunHook %q", scriptPath), err)
 	}
 	return nil
+}
+
+func (s *ContainerSandbox) RunScript(ctx context.Context, skillName, scriptPath string, input []byte, trustTier types.TrustTier) ([]byte, error) {
+	tool := types.Tool{Name: skillName, Source: types.ToolLLMGenerated, TrustTier: trustTier}
+	tier, err := AssignSandboxTier(tool, int(s.hwTier), s.platform)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "skill: tier rejected", err)
+	}
+	res, err := s.Run(ctx, SandboxSpec{
+		ToolName: skillName, Input: input, SandboxTier: tier,
+		ScriptPath: scriptPath, CPUQuotaMs: 30000,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !res.Success {
+		return nil, apperr.New(apperr.CodeInternal, "skill: script failed: "+res.Error)
+	}
+	return res.Output, nil
 }
 
 func buildFirecrackerCmd(ctx context.Context, jailerPath string, spec SandboxSpec) *exec.Cmd {
@@ -548,11 +567,10 @@ func (r *SandboxRouter) WithRemote(remote *RemoteSandbox) *SandboxRouter {
 
 // Route 根据工具属性选择最合适的沙箱，返回 SandboxProvider。
 // 规则与 AssignSandboxTier 保持一致。
-func (r *SandboxRouter) Route(tool types.Tool) (SandboxProvider, error) {
-	tier, err := AssignSandboxTier(tool, r.hwTier, r.goos)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "sandbox tier assignment rejected", err)
-	}
+// RouteByTier 按已算好的 tier 路由。trustTier 用于决定隔离不可用时能否降级。
+// 安全规则：trust < Official 且要求 L2/L3 但对应沙箱不可用 → fail-closed 拒绝，不降级到 L1。
+func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.TrustTier) (SandboxProvider, error) {
+	mustIsolate := trustTier < types.TrustOfficial
 	switch tier {
 	case types.SandboxRemote:
 		if r.remote != nil {
@@ -569,9 +587,10 @@ func (r *SandboxRouter) Route(tool types.Tool) (SandboxProvider, error) {
 		if r.remote != nil {
 			return r.remote, nil
 		}
-		// L2 Wasm 不可用时降级到 InProcess，安全边界下降——必须告警（可观测优先 HE-Rule#1）
-		slog.Warn("sandbox: Wasm L2 不可用，降级到 InProcess L1；L2 隔离边界已丧失",
-			"tool", tool.Name, "wasmtime_nil", r.wasmtime == nil)
+		if mustIsolate {
+			return nil, apperr.New(apperr.CodeForbidden, "sandbox: L2/Wasm required for untrusted code but unavailable; refusing to downgrade")
+		}
+		slog.Warn("sandbox: Wasm 不可用，可信来源降级 InProcess")
 		return r.inProcess, nil
 	case types.SandboxContainer:
 		if r.container != nil {
@@ -580,8 +599,8 @@ func (r *SandboxRouter) Route(tool types.Tool) (SandboxProvider, error) {
 		if r.remote != nil {
 			return r.remote, nil
 		}
-		return r.inProcess, nil
-	default: // SandboxInProcess
+		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L3/Container required but unavailable; refusing to downgrade")
+	default: // InProcess
 		return r.inProcess, nil
 	}
 }
@@ -589,21 +608,18 @@ func (r *SandboxRouter) Route(tool types.Tool) (SandboxProvider, error) {
 // Execute 完整执行路径：Route → Run → ToolResult。
 // SandboxSpec.SandboxTier 使用 AssignSandboxTier 升级后的实际 tier，保证审计信息与执行一致。
 func (r *SandboxRouter) Execute(ctx context.Context, tool types.Tool, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-	actualTier, err := AssignSandboxTier(tool, r.hwTier, r.goos)
+	tier, err := AssignSandboxTier(tool, r.hwTier, r.goos)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "sandbox tier assignment rejected", err)
 	}
-	if r.newWasmDisabled.Load() && actualTier == types.SandboxWasm {
-		return nil, apperr.New(apperr.CodeResourceExhausted, "new Wasm instances are disabled due to memory pressure")
-	}
-	provider, err := r.Route(tool)
+	provider, err := r.RouteByTier(tier, tool.TrustTier)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox route tool %q", tool.Name), err)
 	}
 	spec := SandboxSpec{
 		ToolName:    tool.Name,
 		Input:       input,
-		SandboxTier: actualTier,
+		SandboxTier: tier,
 		Capability:  tool.Capability,
 		SideEffects: tool.SideEffects,
 		CPUQuotaMs:  int(tool.Timeout.Milliseconds()),

@@ -922,6 +922,7 @@ type Tool struct {
 	SideEffects  []SideEffect
 	RiskLevel    RiskLevel
 	SandboxTier  SandboxTier
+	TrustTier    TrustTier
 	Source       ToolSource
 	SourceURI    string
 	UndoFn       string // 补偿工具的名称 (ISSUE-03)

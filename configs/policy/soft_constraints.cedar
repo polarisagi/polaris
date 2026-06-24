@@ -35,3 +35,18 @@ when {
     principal has role && principal.role == "user" &&
     action == Action::"plugin:manage"
 };
+
+// Allow all Agent/User to perform standard execution actions
+permit (
+    principal in [Role::"user", Role::"agent"],
+    action in [
+        Action::"read_file",
+        Action::"execute_code", // legacy support
+        Action::"tool_execute",
+        Action::"hook_execute",
+        Action::"script_execute", // CodeAct and Skill
+        Action::"process_spawn",  // MCP and Shell
+        Action::"computer_use"
+    ],
+    resource
+);

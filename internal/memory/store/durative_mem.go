@@ -234,7 +234,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 			TaskID:  "system",
 			Payload: []byte(fmt.Sprintf(`{"event_id":"%s", "group_id":"%s"}`, evID, groupID)),
 		}
-		_ = dm.episodic.Append(ctx, mappingEv)
+		_ = dm.episodic.Append(ctx, mappingEv, types.TaintNone)
 
 		_ = dm.store.Put(ctx, []byte("group_mapping:"+evID), []byte(groupID))
 	}

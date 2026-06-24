@@ -208,7 +208,7 @@ func TestContainerSandbox_Methods(t *testing.T) {
 	}
 
 	// RunScript
-	_ = sb.RunScript(context.Background(), "echo", "/tmp")
+	_ = sb.RunHook(context.Background(), "echo", "/tmp")
 }
 
 // ─── SandboxRouter Additional Tests ──────────────────────────────────────────

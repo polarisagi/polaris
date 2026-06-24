@@ -71,7 +71,7 @@ func NewEpisodicMemWithCognitive(store protocol.Store, indexer EpisodicIndexer, 
 	}
 }
 
-func (em *EpisodicMem) Append(ctx context.Context, ev types.Event) error {
+func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
 	em.mu.Lock()
 	defer em.mu.Unlock()
 
@@ -219,7 +219,7 @@ func (em *EpisodicMem) Consolidate(ctx context.Context, semantic *SemanticMem) e
 			SourceURI:  summary, // 摘要存入 SourceURI（Document 无 Content 字段）
 		}
 		if semantic != nil {
-			_ = semantic.StoreDocument(ctx, doc)
+			_ = semantic.StoreDocument(ctx, doc, types.TaintNone)
 		}
 	}
 	return nil

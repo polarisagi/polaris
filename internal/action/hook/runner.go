@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -21,10 +22,11 @@ const defaultTimeout = 30 * time.Second
 // 输出通过 Results() 返回，调用方负责 TaintLevel=High 封装。
 type Runner struct {
 	registry *Registry
+	policy   protocol.PolicyGate // nil → deny-by-default
 }
 
-func NewRunner(registry *Registry) *Runner {
-	return &Runner{registry: registry}
+func NewRunner(registry *Registry, policy protocol.PolicyGate) *Runner {
+	return &Runner{registry: registry, policy: policy}
 }
 
 // Fire 触发指定事件，并发执行所有匹配的 handler。
@@ -33,6 +35,18 @@ func (r *Runner) Fire(ctx context.Context, input HookInput) []HookResult {
 	groups := r.registry.Match(input.Event, input.ToolName)
 	if len(groups) == 0 {
 		return nil
+	}
+
+	if r.policy != nil {
+		allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "hook_execute", string(input.Event),
+			map[string]any{"event": string(input.Event), "tool_name": input.ToolName})
+		if pErr != nil || !allowed {
+			reason := "policy denied"
+			if pErr != nil {
+				reason = pErr.Error()
+			}
+			return []HookResult{{Event: input.Event, Err: apperr.New(apperr.CodeForbidden, "hook_execute denied: "+reason)}}
+		}
 	}
 
 	type indexed struct {

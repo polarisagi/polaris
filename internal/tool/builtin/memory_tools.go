@@ -23,7 +23,7 @@ import (
 // SemanticMemWriter 语义记忆写入接口（consumer-side，L1 层内互引禁止）。
 // 与 pkg/cognition/memory.SemanticMemWriter 保持方法签名一致，Go 结构子类型自动满足。
 type SemanticMemWriter interface {
-	UpsertFact(ctx context.Context, entity types.Entity) error
+	UpsertFact(ctx context.Context, entity types.Entity, taint types.TaintLevel) error
 	Archive(ctx context.Context, id string, reason string) error
 	GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error)
 }
@@ -237,7 +237,7 @@ func makeMemoryWriteFn(writer SemanticMemWriter) sandbox.InProcessFn {
 			Properties:  props,
 		}
 
-		if err := writer.UpsertFact(ctx, ent); err != nil {
+		if err := writer.UpsertFact(ctx, ent, types.TaintNone); err != nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_write", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_write: upsert failed", err)
 		}
@@ -335,7 +335,7 @@ func makeMemoryAppendFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		ent.Properties["source_type"] = "user_stated"
 		ent.SyncVersion = time.Now().UnixNano()
 
-		if err := writer.UpsertFact(ctx, *ent); err != nil {
+		if err := writer.UpsertFact(ctx, *ent, types.TaintNone); err != nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_append", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_append: upsert failed", err)
 		}
@@ -451,7 +451,7 @@ func makeMemoryReflectFn(writer SemanticMemWriter) sandbox.InProcessFn {
 			},
 		}
 
-		if err := writer.UpsertFact(ctx, ent); err != nil {
+		if err := writer.UpsertFact(ctx, ent, types.TaintNone); err != nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_reflect", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_reflect: upsert failed", err)
 		}

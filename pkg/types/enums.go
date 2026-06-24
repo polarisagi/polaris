@@ -372,16 +372,15 @@ const (
 	FailureUncontrollable FailureClass = "uncontrollable" // 网络离线、提供商宕机、配额耗尽
 )
 
-// MaxSandboxTier 返回该信任级别允许的最大 Sbx 沙箱级别（1/2/3）。
-// M11 PolicyGate 通过此方法约束工具执行的最大沙箱。
-func (t TrustTier) MaxSandboxTier() int {
+// SandboxFloor 返回该信任级别要求的【最低】沙箱隔离等级（floor，下限）。
+// 信任越低，强制隔离越高。调用方不得降级，取 max(SandboxFloor, 其他底线)。
+// 唯一权威：TrustTier → SandboxTier。Container(L3) 不由信任触发，仅由 Capability/SideEffect 触发。
+func (t TrustTier) SandboxFloor() SandboxTier {
 	switch {
-	case t >= TrustSystem:
-		return 3
-	case t >= TrustOfficial:
-		return 2
-	default:
-		return 1
+	case t >= TrustOfficial: // 3, 4：制品签名/内置，等同完全信任
+		return SandboxInProcess // L1
+	default: // Community(2) / Local(1) / Untrusted(0)
+		return SandboxWasm // L2：无系统调用强隔离，Tier-0 可运行
 	}
 }
 

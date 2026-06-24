@@ -120,7 +120,7 @@ func TestApplyDefaults_SetsTimeout(t *testing.T) {
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 func TestRunner_Fire_NoGroups(t *testing.T) {
-	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}})
+	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, nil)
 	results := r.Fire(context.Background(), HookInput{Event: EventStop})
 	if results != nil {
 		t.Errorf("expected nil results for unregistered event, got %v", results)
@@ -140,7 +140,7 @@ func TestRunner_Fire_EchoCommand(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg)
+	runner := NewRunner(reg, nil)
 	results := runner.Fire(context.Background(), HookInput{
 		Event:     EventPostToolUse,
 		ToolName:  "bash",
@@ -170,7 +170,7 @@ func TestRunner_Fire_NonZeroExit(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg)
+	runner := NewRunner(reg, nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventPreToolUse})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -188,7 +188,7 @@ func TestRunner_Fire_SkipsNonCommandType(t *testing.T) {
 			}},
 		},
 	}
-	runner := NewRunner(reg)
+	runner := NewRunner(reg, nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventSessionStart})
 	if len(results) != 0 {
 		t.Errorf("non-command handler should be skipped, got %d results", len(results))

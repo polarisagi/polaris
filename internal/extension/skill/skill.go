@@ -232,7 +232,8 @@ func (s *SelectorImpl) score(meta types.SkillMeta, hint types.TaskHint) float64 
 
 // ScriptRunner 执行 TypeScript/Python 技能脚本（由 pkg/action.ContainerSandbox 实现，接口注入避免循环依赖）。
 type ScriptRunner interface {
-	RunScript(ctx context.Context, skillName string, scriptPath string, input []byte) ([]byte, error)
+	// trustTier 驱动隔离等级选择（经 AssignSandboxTier）
+	RunScript(ctx context.Context, skillName, scriptPath string, input []byte, trustTier types.TrustTier) ([]byte, error)
 }
 
 // ScriptLoader 从存储层加载技能脚本路径。
@@ -283,7 +284,7 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: script validation", err)
 	}
 
-	return e.runner.RunScript(ctx, skillID, scriptPath, input)
+	return e.runner.RunScript(ctx, skillID, scriptPath, input, meta.Trust)
 }
 
 // ValidateSkill 校验脚本路径合规性。
