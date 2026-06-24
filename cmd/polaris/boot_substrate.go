@@ -299,10 +299,16 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	slog.Info("polaris: audit trail recovered and initialized")
 
 	auditChain := audit.NewAuditChain(store.DB())
+	var auditGuard *probe.OSMemoryGuard
+	var auditGate *probe.FeatureGate
+	if autoConf != nil {
+		auditGuard = autoConf.Guard
+		auditGate = autoConf.Gate
+	}
 	concurrent.SafeGo(ctx, "audit-chain-periodic-verify", func(ctx context.Context) {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
-		resourceBudget := &budget.ResourceBudget{}
+		resourceBudget := budget.NewResourceBudget(tbr, auditGuard, auditGate)
 		for {
 			select {
 			case <-ctx.Done():

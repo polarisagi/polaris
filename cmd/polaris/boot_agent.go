@@ -165,13 +165,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agent.SetMemoryInjector(mb.Mem)
 	}
 
-	// 注入 LAM (R3) 强制依赖 policy gate，即使未完全装配也确保引擎实例化了安全的 gate
-	_ = lam.NewComputerUseEngine(
+	// 注入 LAM (R3)：使用真实 provider + policy gate，并绑定到 Agent（非 dry-run 丢弃）
+	lamEngine := lam.NewComputerUseEngine(
 		lam.LAMConfig{Enabled: true, ResolverModel: "default-vlm"},
-		nil, // provider
-		nil, // executor
-		sb.Gate,
+		sb.Router, // VLM provider（动作解析）
+		nil,       // executor: 当前无 GUI 执行器，dry-run 模式
+		sb.Gate,   // Cedar PolicyGate（deny-by-default）
 	)
+	agent.SetLAMEngine(lamEngine)
 
 	if kb != nil && kb.KnowledgeBase != nil {
 		agent.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
@@ -253,8 +254,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	taskEventCh := make(chan si.TaskCompleteEvent, 64)
 	versionEventCh := make(chan si.VersionChangeEvent, 8)
 
-	// 桥接 Blackboard 事件 → M9 TaskCompleteEvent
-	go func() {
+	// 桥接 Blackboard 事件 → M9 TaskCompleteEvent（XR-14：所有后台 goroutine 必须走 SafeGo）
+	concurrent.SafeGo(ctx, "m9-bb-bridge", func(ctx context.Context) {
 		bbEvents, subErr := blackboard.Subscribe(ctx)
 		if subErr != nil {
 			slog.Warn("polaris: m9 blackboard subscribe failed", "err", subErr)
@@ -289,7 +290,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				}
 			}
 		}
-	}()
+	})
 
 	reflexionEngine := reflexion.NewReflexionEngine(mb.FallacyPool, mb.Heuristics, nil)
 	reflexionBridge := reflexion.NewReflexionBridge(reflexionEngine)
@@ -301,7 +302,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	promptOptimizer := optimizer.NewPromptOptimizer(nil, nil, 0)
 	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
-	m9Engine.WithBackgroundGate(&budget.ResourceBudget{})
+	m9Engine.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
 	m9Engine.SetOptimizer(promptOptimizer)
 
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")

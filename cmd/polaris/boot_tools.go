@@ -214,7 +214,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		mb.CascadeInvalidator,
 		sb.Store.DB(),
 	)
-	consolidationPipeline.WithBackgroundGate(&budget.ResourceBudget{})
+	var consolGuard *probe.OSMemoryGuard
+	var consolGate *probe.FeatureGate
+	if sb.AutoConf != nil {
+		consolGuard = sb.AutoConf.Guard
+		consolGate = sb.AutoConf.Gate
+	}
+	consolidationPipeline.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, consolGuard, consolGate))
 	sb.Outbox.RegisterHandler("memory_consolidate", func(ctx context.Context, rec *store.OutboxRecord) error {
 		var payload struct {
 			SessionID string `json:"session_id"`

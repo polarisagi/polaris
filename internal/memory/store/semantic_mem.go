@@ -256,7 +256,8 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 	            COALESCE(source_event_id, 0), version,
 	            status, COALESCE(superseded_by, 0),
 	            confidence, source_type,
-	            COALESCE(valid_from, 0), COALESCE(valid_until, 0)
+	            COALESCE(valid_from, 0), COALESCE(valid_until, 0),
+	            COALESCE(taint_level, 0)
 	            FROM semantic_entities WHERE entity_type = ? AND name = ?`
 	row := db.QueryRowContext(ctx, q, entityType, name)
 
@@ -268,6 +269,7 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 		&ent.DBID, &ent.Name, &ent.Type, &propertiesJSON, &embeddingBytes,
 		&ent.SourceEventID, &ent.Version, &ent.Status, &ent.SupersededBy,
 		&ent.Confidence, &ent.SourceType, &ent.ValidFrom, &ent.ValidUntil,
+		(*int)(&ent.TaintLevel),
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

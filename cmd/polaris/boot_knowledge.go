@@ -55,7 +55,13 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	var graphPipeline *graphrag.GraphBuildPipeline
 	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureGraphRAGFull) != probe.FeatureDisabled {
 		graphPipeline = graphrag.NewGraphBuildPipeline(graphLLMClient, graphTier, mb.Mem.Semantic())
-		graphPipeline.WithBackgroundGate(&budget.ResourceBudget{})
+		var graphGuard *probe.OSMemoryGuard
+		var graphGate *probe.FeatureGate
+		if sb.AutoConf != nil {
+			graphGuard = sb.AutoConf.Guard
+			graphGate = sb.AutoConf.Gate
+		}
+		graphPipeline.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, graphGuard, graphGate))
 		slog.Info("polaris: knowledge graph pipeline initialized", "tier", graphTier)
 	} else {
 		slog.Info("polaris: GraphRAG pipeline disabled by FeatureGate (<8GB VPS or memory pressure, 1024MB min)")

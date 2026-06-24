@@ -16,6 +16,7 @@ import (
 	skillpkg "github.com/polarisagi/polaris/internal/extension/skill"
 
 	"github.com/polarisagi/polaris/internal/action/codeact"
+	"github.com/polarisagi/polaris/internal/action/lam"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -60,6 +61,7 @@ type Agent struct {
 	skillCache        *skillpkg.ScriptSkillCache // 可选；nil 时 FastPath 跳过缓存查询
 	skillExecutor     protocol.SkillExecutor     // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
 	assembler         *agentctx.Assembler        // CC-3 ContextAssembler
+	lamEngine         *lam.ComputerUseEngine     // LAM GUI 自动化引擎（R3）；nil 时跳过 Cedar policy 预检
 }
 
 // MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
@@ -104,6 +106,11 @@ func (a *Agent) SetMemoryInjector(i MemoryInjector) {
 
 // SetCodeAct 注入 CodeAct 引擎，在 Agent 创建后 kernel 启动前调用。
 func (a *Agent) SetCodeAct(ca *codeact.CodeAct) { a.codeAct = ca }
+
+// SetLAMEngine 注入 LAM ComputerUseEngine（R3）。
+// interceptComputerUse 在 HITL 审批前调用 CheckPolicy 对 GUI 动作做 Cedar 策略预检。
+// nil-safe：未注入时跳过 Cedar 预检，仅走 HITL 审批。
+func (a *Agent) SetLAMEngine(e *lam.ComputerUseEngine) { a.lamEngine = e }
 
 // WithSkillCache 注入 ScriptSkillCache，启用 FastPath 技能命中路径。
 // nil-safe：不注入时 FastPath 退回合成 JSON 路径。

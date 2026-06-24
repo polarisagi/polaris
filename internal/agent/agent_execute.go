@@ -954,6 +954,15 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 	if toolName != "computer_use" && toolName != "browser_use" {
 		return nil
 	}
+
+	// Cedar 策略预检（R3）：deny-by-default，先于 HITL 审批。
+	// LAM engine 为 nil 时跳过（保持与无 LAM 场景兼容）。
+	if a.lamEngine != nil {
+		if pErr := a.lamEngine.CheckPolicy(ctx, args); pErr != nil {
+			return pErr
+		}
+	}
+
 	mode := "auto_review"
 	if a.sCtx.Preferences != nil {
 		if v, ok := a.sCtx.Preferences["computer_use_mode"]; ok && v != "" {

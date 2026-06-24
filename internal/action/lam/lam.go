@@ -111,6 +111,12 @@ func (e *ComputerUseEngine) ExecuteAction(ctx context.Context, intent string, sc
 	return &types.ToolResult{Success: true, Output: out, TaintLevel: types.TaintHigh}, nil
 }
 
+// CheckPolicy 导出 Cedar 策略检查，供 Agent Kernel 在 interceptComputerUse 时调用。
+// 入参 actionJSON 为待执行 GUI 动作的 JSON 字节（与 ExecuteAction 内部格式一致）。
+func (e *ComputerUseEngine) CheckPolicy(ctx context.Context, actionJSON []byte) error {
+	return e.checkPolicy(ctx, actionJSON)
+}
+
 func (e *ComputerUseEngine) checkPolicy(ctx context.Context, actionJSON []byte) error {
 	if e.policy == nil {
 		return apperr.New(apperr.CodeForbidden, "lam: policy gate not initialized (deny-by-default)") // fail-closed，勿 nil 放行
