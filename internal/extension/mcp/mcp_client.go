@@ -308,11 +308,11 @@ func (c *MCPClient) connectStdio(ctx context.Context) error {
 	}
 	c.cmd = cmd
 	c.stdin = stdin
-	concurrent.SafeGo(context.Background(), "mcp_client_readloop", func() {
+	concurrent.SafeGo(context.Background(), "mcp_client_readloop", func(_ context.Context) {
 		c.readLoop(stdout)
 	})
 	// stderr 升级到 Warn 级别：子进程崩溃原因（缺失依赖、Python/Node 错误）在生产日志可见
-	concurrent.SafeGo(context.Background(), "mcp_client_stderr", func() {
+	concurrent.SafeGo(context.Background(), "mcp_client_stderr", func(_ context.Context) {
 		sc := bufio.NewScanner(stderr)
 		for sc.Scan() {
 			slog.Warn("mcp: server stderr", "server", c.cfg.ServerName, "line", sc.Text())

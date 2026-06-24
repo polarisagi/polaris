@@ -313,7 +313,7 @@ func (m *MCPManager) LoadFromDB(ctx context.Context, extRepo protocol.ExtensionR
 			Trusted:   s.TrustTier >= 3,
 		}
 		// 每个 server 独立 goroutine，避免一个慢连接阻塞其他
-		concurrent.SafeGo(ctx, "mcp_manager_add", func() {
+		concurrent.SafeGo(ctx, "mcp_manager_add", func(_ context.Context) {
 			connCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 			if err := m.Add(connCtx, s.ID, s.Name, cfg); err != nil {
@@ -574,7 +574,7 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 		for i, a := range cfg.Args {
 			clientCfg.Args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
 		}
-		concurrent.SafeGo(context.Background(), "mcp_manager_update", func() {
+		concurrent.SafeGo(context.Background(), "mcp_manager_update", func(_ context.Context) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			if err := m.Add(bgCtx, id, cfg.Name, clientCfg); err != nil {
