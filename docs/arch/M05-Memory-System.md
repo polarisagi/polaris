@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:254 L3 Procedural / 6:307 写路径 / 7:319 HybridRetriever / 8:399 EffConn / 9:409 Consolidation / 10:434 Forgetting / 11:451 PromptBuilder / 12:521 Drift / 14:559 496(SOFT)降级 / 15:581 依赖
+> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:256 L3 Procedural / 6:309 写路径 / 7:321 HybridRetriever / 8:401 EffConn / 9:411 Consolidation / 10:436 Forgetting / 11:453 PromptBuilder / 12:523 Drift / 14:561 496(SOFT)降级 / 15:583 依赖
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -230,6 +230,8 @@ DDL 见 `internal/protocol/schema/004_semantic_memory.sql`。图存储使用 [St
 - **Jaccard 近重复检测**（仅 `user_preference` 类型）：`ListActiveEntities` 取同类活跃实体，对新实体名与各实体名分词求 Jaccard 相似度，`> 0.6` 的实体视为矛盾旧观念，调用 `MarkEntitySuperseded` 打标后再 INSERT 新事实
 
 **[接口约束]** SemanticMemory 的事实/关系写入方法必须在 `internal/protocol/interfaces.go` 中声明，实现见 `internal/memory/`；所有写入必经 MutationBus，禁止绕过 M2 单写者约束直接执行 SQL。实体生命周期管理（标记废弃、列举活跃、UserProfile 读写）属于轻量同步读写，走直接 SQL（不经 MutationBus）。Embedding 存 BLOB（float32→float16 量化，量化工具位于 `internal/llm/`）。
+
+**[XR-16 读写对称]** `taint_level` 写路径已有 only-up 语义（ON CONFLICT 用 `MAX(taint_level, excluded.taint_level)`）。`GetEntity` 读路径同步：SELECT 包含 `COALESCE(taint_level, 0)`，Scan 绑定 `ent.TaintLevel`（ADR-0027 BUG-4）。任何绕过此绑定的直读路径视为 XR-16 违规。
 
 ### 4.3 QueryClassifier + RetrievalRouter
 

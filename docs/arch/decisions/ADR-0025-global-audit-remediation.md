@@ -47,3 +47,4 @@
 |------|------|
 | 2026-06-14 | 初稿，Accepted |
 | 2026-06-17 | 移除对不存在文件 GEMINI_PATCH_R21/R22.md 的引用；实施详情已内联于提交记录，专项整改见 docs/upgrade/upgrade-01~05 |
+| 2026-06-25 | Gemini 执行 04-remediation-final-complete.md 后发现 4 项实现缺口（R1/R2/R3/R4 假完成），已修复并归档至 ADR-0027 |

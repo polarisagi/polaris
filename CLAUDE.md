@@ -217,6 +217,7 @@ make check-all    # fmt → lint → test → test-race → rust-lint → rust-t
 - 0020 DeepSeek V4 默认提供商 · 0021 核心机制实现（SurpriseIndex/WasmTester/BM25/FSM）
 - 0022 ThinkingMode 三档路由 · 0023 episodic 写路径双轨制 · 0024 GovernanceAgent 代码安全三层防线
 - 0025 全局架构审查修复（R21）· 0026 Logic Collapse Python+ContainerSandbox 运行时
+- 0027 Gemini 执行后遗留实现缺口修复（BUG-1~4：LAM接入/CC-2零值/SafeGo/taint读路径）
 
 **internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，29 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```

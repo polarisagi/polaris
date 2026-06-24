@@ -2,7 +2,7 @@
 
 > MCP 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:113 注册 / 4:165 三级沙箱(CANONICAL) / 5:300 PolicyGate / 6:355 Capability / 7:372 动作扩展 / 8:505 Usage演化 / 12:546 (SOFT)降级 / 13:564 跨模块契约 / 14:584 Plugin / 15:626 Hook
+> **§跳读**: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:29 MCP双向 / 2:83 A2A / 3:113 注册 / 4:165 三级沙箱(CANONICAL) / 5:300 PolicyGate / 6:355 Capability / 7:372 动作扩展 / 8:507 Usage演化 / 12:548 (SOFT)降级 / 13:566 跨模块契约 / 14:586 Plugin / 15:628 Hook
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -427,7 +427,9 @@ text:       输入文本（可选）
 reasoning:  推理说明（仅日志，不转发 executor）
 ```
 
-**ExecutorFn 注入模式**: `executor ExecutorFn` 由调用方注入（通常 `action.NewComputerUseTool().Execute`），解耦 `internal/action/lam` 与 `internal/action` 父包，防止循环依赖。`executor=nil` → dry-run 模式，返回解析的动作 JSON 供调试。
+**ExecutorFn 注入模式**: `executor ExecutorFn` 由调用方注入（通常 `action.NewComputerUseTool().Execute`），解耦 `internal/action/lam` 与 `internal/action` 父包，防止循环依赖。`executor=nil` → dry-run 模式，返回解析的动作 JSON 供调试。当前 boot 以 `sb.Router` 作为 VLM provider 注入，executor 暂为 nil（dry-run），待 Tier-1+ GUI 执行器接入后填充。
+
+**Agent Kernel 集成**（ADR-0027 BUG-1）: `ComputerUseEngine` 提供导出方法 `CheckPolicy(ctx context.Context, actionJSON []byte) error`，由 `Agent.interceptComputerUse`（`internal/agent/agent_execute.go`）在 HITL 审批**前**调用，实施 Cedar `browser_automate/lam/{allow_net:true}` deny-by-default 预检。Agent struct 持有 `lamEngine *lam.ComputerUseEngine` 字段，boot 通过 `agent.SetLAMEngine(lamEngine)` 注入。`lamEngine==nil` 时跳过 Cedar 预检（nil-safe，兼容无 LAM 场景）。调用顺序：Cedar PolicyGate（快速拒绝）→ HITL 审批（人工确认）。
 
 **LAMConfig**:
 ```

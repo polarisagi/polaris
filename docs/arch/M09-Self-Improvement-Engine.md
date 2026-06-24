@@ -2,7 +2,7 @@
 
 > 三环嵌套进化（经验→技能→架构），全无梯度主线（[Tier-0-Limit] 8GB 完整运行）。梯度训练仅 local_only 可选。
 > Go 编排 + Eval 驱动 + Consolidation + 全部自进化逻辑。 [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:35 五路线(CANONICAL) / 2:93 三环嵌套 / 3-bis:195 EvalGenerator / 3:223 五级演化+审批 / 4:253 条件梯度 / 6:277 369(SOFT)降级 / 7:305 依赖
+> **§跳读**: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:37 五路线(CANONICAL) / 2:95 三环嵌套 / 3-bis:197 EvalGenerator / 3:225 五级演化+审批 / 4:255 条件梯度 / 6:279 369(SOFT)降级 / 7:307 依赖
 ## 0-bis. 职责边界
 
 | M9 **是** | M9 **不是** |
@@ -31,6 +31,8 @@
 ---
 
 **M9 Engine 启动方式**：`m9Engine.Run(ctx)` 通过 Supervisor Tree（`sv.AddWorker("m9-engine", ...)`）启动，享受 OneForOne 崩溃重启保护。`// go m9Engine.Start(ctx)` 裸 goroutine 已注释禁用。
+
+**CC-2 ResourceBudget 接线**（ADR-0027 BUG-2）：`m9Engine.WithBackgroundGate(...)` 必须传入 `budget.NewResourceBudget(sb.TBR, memGuard, featGate)`，禁止传零值 `&budget.ResourceBudget{}`。零值退化为单维认知压力门控，TBR P95 与内存降级等级两个维度失效。`Blackboard→M9` 事件桥 goroutine 须走 `concurrent.SafeGo(ctx, "m9-bb-bridge", ...)` (XR-14，ADR-0027 BUG-3)。
 
 ## 1. 五条无梯度自改进路线（CANONICAL SOURCE）
 
