@@ -176,6 +176,12 @@ func run() error { //nolint:gocyclo
 	_ = httpSrv.Shutdown(shutdownCtx)
 	ab.ReaperStop() // 显式提前停止 Reaper，确保在 dbWriter 排空前释放
 
+	if rep, err := sb.AuditChain.VerifyChain(shutdownCtx, 0); err != nil {
+		slog.Error("audit: chain verify failed on shutdown", "err", err)
+	} else if !rep.Valid {
+		slog.Error("audit: chain integrity broken", "report", rep)
+	}
+
 	select {
 	case <-sb.DBWriterDone:
 	case <-shutdownCtx.Done():

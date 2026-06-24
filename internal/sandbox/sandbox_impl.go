@@ -385,7 +385,7 @@ func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir stri
 
 func (s *ContainerSandbox) RunScript(ctx context.Context, skillName, scriptPath string, input []byte, trustTier types.TrustTier) ([]byte, error) {
 	tool := types.Tool{Name: skillName, Source: types.ToolLLMGenerated, TrustTier: trustTier}
-	tier, err := AssignSandboxTier(tool, int(s.hwTier), s.platform)
+	tier, err := AssignSandboxTier(tool, tool.TrustTier, int(s.hwTier), s.platform)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "skill: tier rejected", err)
 	}
@@ -608,7 +608,7 @@ func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.Trus
 // Execute 完整执行路径：Route → Run → ToolResult。
 // SandboxSpec.SandboxTier 使用 AssignSandboxTier 升级后的实际 tier，保证审计信息与执行一致。
 func (r *SandboxRouter) Execute(ctx context.Context, tool types.Tool, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-	tier, err := AssignSandboxTier(tool, r.hwTier, r.goos)
+	tier, err := AssignSandboxTier(tool, tool.TrustTier, r.hwTier, r.goos)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "sandbox tier assignment rejected", err)
 	}

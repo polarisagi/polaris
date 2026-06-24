@@ -135,3 +135,38 @@ func TestGate_KillSwitchTriggeredOnConsecutiveFailures(t *testing.T) {
 		t.Fatal("KillSwitch must be triggered after 10 consecutive failures")
 	}
 }
+
+func TestGoFallbackPermits_SixActions(t *testing.T) {
+	g := NewGate(nil)
+	ctx := context.Background()
+
+	// tool_execute
+	allow, _ := g.IsAuthorized(ctx, "agent", "tool_execute", "res", map[string]any{"trust_tier": 3})
+	if !allow {
+		t.Error("tool_execute with trust_tier>=3 should be allowed")
+	}
+
+	// process_spawn
+	allow, _ = g.IsAuthorized(ctx, "mcp_mgr", "process_spawn", "res", map[string]any{"trust_tier": 3})
+	if !allow {
+		t.Error("process_spawn with trust_tier>=3 should be allowed")
+	}
+
+	// script_execute
+	allow, _ = g.IsAuthorized(ctx, "agent", "script_execute", "res", map[string]any{"trust_tier": 1})
+	if !allow {
+		t.Error("script_execute with trust_tier>=1 should be allowed")
+	}
+
+	// hook_execute
+	allow, _ = g.IsAuthorized(ctx, "agent", "hook_execute", "res", nil)
+	if !allow {
+		t.Error("hook_execute should be allowed")
+	}
+
+	// browser_automate
+	allow, _ = g.IsAuthorized(ctx, "agent", "browser_automate", "lam", map[string]any{"allow_net": true})
+	if !allow {
+		t.Error("browser_automate lam allow_net=true should be allowed")
+	}
+}

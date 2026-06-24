@@ -26,14 +26,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 
 	"golang.org/x/sync/errgroup"
-
-	"github.com/polarisagi/polaris/internal/sysmgr"
-
-	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 const (
@@ -866,11 +863,23 @@ func (bb *SQLiteBlackboard) Ping(ctx context.Context) error {
 	return bb.db.PingContext(ctx)
 }
 
-// AcquireBackgroundPermit 根据系统认知压力分配后台许可（CC-2: GlobalCognitivePressure）。
-func (bb *SQLiteBlackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
-	level := sysmgr.GetPressureManager().Current()
-	if level == sysmgr.PressureCritical {
-		return apperr.New(apperr.CodeResourceExhausted, "system is under critical pressure, background tasks are denied")
+func (bb *SQLiteBlackboard) CountByStatus(ctx context.Context, status string) (int, error) {
+	var count int
+	err := bb.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE status = ?", status).Scan(&count)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "CountByStatus", err)
 	}
-	return nil
+	return count, nil
+}
+
+func (bb *SQLiteBlackboard) MaxActivePriority(ctx context.Context) (int, error) {
+	var maxPrio sql.NullInt32
+	err := bb.db.QueryRowContext(ctx, "SELECT MAX(priority) FROM tasks WHERE status IN (?, ?, ?)", statusPending, statusClaimed, statusRunning).Scan(&maxPrio)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "MaxActivePriority", err)
+	}
+	if !maxPrio.Valid {
+		return -1, nil
+	}
+	return int(maxPrio.Int32), nil
 }

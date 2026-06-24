@@ -48,8 +48,9 @@ func BuildPerceiveContext( //nolint:gocyclo
 
 	// 1. 查询相关的历史 Episodic 事件
 	query := types.EpisodicQuery{
-		Semantic: "agent task intent",
-		K:        3,
+		Semantic:      "agent task intent",
+		K:             3,
+		MaxTaintLevel: types.TaintHigh,
 	}
 	events, err := memory.Episodic().Query(ctx, query)
 	if err != nil {
@@ -183,8 +184,9 @@ func BuildPlanContext( //nolint:gocyclo
 		queryStr = sCtx.TaskModel.Goal
 	}
 	query := types.EpisodicQuery{
-		Semantic: queryStr,
-		K:        5,
+		Semantic:      queryStr,
+		K:             5,
+		MaxTaintLevel: types.TaintHigh,
 	}
 	events, err := memory.Episodic().Query(ctx, query)
 	if err != nil {

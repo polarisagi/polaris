@@ -36,7 +36,14 @@ type ConsolidationPipeline struct {
 	writeFilter *retrieval.WriteFilter
 	cascadeInv  *retrieval.CascadeInvalidator
 	db          protocol.SQLQuerier
+	gate        backgroundGate
 }
+
+type backgroundGate interface {
+	BackgroundPermit(priority int) bool
+}
+
+func (p *ConsolidationPipeline) WithBackgroundGate(g backgroundGate) { p.gate = g }
 
 // NewConsolidationPipeline 创建压缩管线，episodic 和 semantic 必须非 nil。
 func NewConsolidationPipeline(
@@ -81,6 +88,9 @@ const consolidationTimeout = 5 * time.Minute
 // 约束: version++ 不可变版本 + source_event_id provenance + 信念修正 + Prospective Indexing.
 // 超时: 整体 5 分钟超时（独立于 ctx 父超时），防止 LLM 调用长时间阻塞调度器。
 func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error {
+	if p.gate != nil && !p.gate.BackgroundPermit(2) {
+		return nil // skip if not permitted
+	}
 	if p.episodic == nil || p.semantic == nil {
 		return apperr.New(apperr.CodeInternal, "consolidation: episodic and semantic memory required")
 	}
@@ -94,8 +104,9 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 
 	// 查询该 Session 的所有 Episodic 事件
 	events, err := p.episodic.Query(ctx, types.EpisodicQuery{
-		SessionID: sessionID,
-		K:         200,
+		SessionID:     sessionID,
+		K:             200,
+		MaxTaintLevel: types.TaintNone, // 系统内部，显式 TaintNone
 	})
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "consolidation: query episodic events", err)

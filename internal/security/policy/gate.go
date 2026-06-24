@@ -368,6 +368,62 @@ func (g *Gate) loadBuiltinRules() { //nolint:gocyclo
 				return false
 			},
 		},
+		// ── ExecEnvelope 六路执行：Go 兜底 permit（与 soft_constraints.cedar 等价）──
+		{
+			Name: "tool_execute_permit",
+			MatchFn: func(_, action, _ string, ctx map[string]any) bool {
+				if action != "tool_execute" {
+					return false
+				}
+				// 内置/官方（trust>=3）直放；其余需有效能力令牌（与 Cedar capability 条件等价）
+				if trustTierOf(ctx) >= 3 {
+					return true
+				}
+				valid, _ := ctx["capability_token_valid"].(bool)
+				return valid
+			},
+		},
+		{
+			Name: "process_spawn_permit",
+			MatchFn: func(principal, action, _ string, ctx map[string]any) bool {
+				if action != "process_spawn" || principal != "mcp_mgr" {
+					return false
+				}
+				tt := trustTierOf(ctx)
+				if tt >= 3 {
+					return true
+				}
+				auto, _ := ctx["sandbox_auto"].(bool)
+				return tt == 2 && auto
+			},
+		},
+		{
+			Name: "script_execute_permit",
+			MatchFn: func(_, action, _ string, ctx map[string]any) bool {
+				if action != "script_execute" {
+					return false
+				}
+				if trustTierOf(ctx) >= 1 {
+					return true
+				}
+				src, _ := ctx["tool_source"].(string)
+				return src == "llm_generated" // CodeAct(Untrusted) 显式放行；隔离 L2 + govAgent 为边界
+			},
+		},
+		{
+			Name:    "hook_execute_permit",
+			MatchFn: func(_, action, _ string, _ map[string]any) bool { return action == "hook_execute" },
+		},
+		{
+			Name: "browser_automate_permit",
+			MatchFn: func(_, action, resource string, ctx map[string]any) bool {
+				if action != "browser_automate" || resource != "lam" {
+					return false
+				}
+				net, _ := ctx["allow_net"].(bool)
+				return net
+			},
+		},
 	}
 }
 
@@ -556,6 +612,19 @@ func trustLevel(ctx map[string]any) int {
 		return v
 	}
 	return 0
+}
+
+func trustTierOf(ctx map[string]any) int {
+	switch v := ctx["trust_tier"].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	case types.TrustTier:
+		return int(v)
+	default:
+		return 0 // 缺省 Untrusted（最严）
+	}
 }
 
 // ErrTaintBlockedEgress 实际阻断阈值为 TaintMedium 及以上（>= TaintMedium）。

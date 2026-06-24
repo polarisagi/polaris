@@ -66,6 +66,15 @@ func (s *stubBlackboard) EndCompensation(_ context.Context, _, _ string) error  
 func (s *stubBlackboard) SideEffectPreCheck(_ context.Context, _, _ string, _ int32) error {
 	return nil
 }
+
+func (s *stubBlackboard) CountByStatus(ctx context.Context, status string) (int, error) {
+	return 0, nil
+}
+
+func (s *stubBlackboard) MaxActivePriority(ctx context.Context) (int, error) {
+	return 0, nil
+}
+
 func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan types.BlackboardEvent, error) {
 	ch := make(chan types.BlackboardEvent)
 	return ch, nil

@@ -106,31 +106,28 @@ func (e *ComputerUseEngine) ExecuteAction(ctx context.Context, intent string, sc
 
 	out, execErr := e.executor(ctx, actionJSON)
 	if execErr != nil {
-		return &types.ToolResult{Success: false, Error: execErr.Error()}, nil //nolint:nilerr
+		return &types.ToolResult{Success: false, Error: execErr.Error(), TaintLevel: types.TaintHigh}, nil //nolint:nilerr
 	}
 	return &types.ToolResult{Success: true, Output: out, TaintLevel: types.TaintHigh}, nil
 }
 
 func (e *ComputerUseEngine) checkPolicy(ctx context.Context, actionJSON []byte) error {
 	if e.policy == nil {
-		return nil
+		return apperr.New(apperr.CodeForbidden, "lam: policy gate not initialized (deny-by-default)") // fail-closed，勿 nil 放行
 	}
 	var actionMap map[string]any
 	if err := json.Unmarshal(actionJSON, &actionMap); err != nil {
-		return nil //nolint:nilerr
+		return apperr.Wrap(apperr.CodeInvalidInput, "lam: parse action", err)
 	}
-	actionType, ok := actionMap["action"].(string)
-	if !ok {
-		return nil
-	}
-	allowed, pErr := e.policy.IsAuthorized(ctx, "agent", "computer_use", "action:"+actionType,
-		map[string]any{"action": actionType, "target": "lam"})
+	actionType, _ := actionMap["action"].(string)
+	allowed, pErr := e.policy.IsAuthorized(ctx, "agent", "browser_automate", "lam",
+		map[string]any{"allow_net": true, "action": actionType, "trust_tier": int(types.TrustLocal)})
 	if pErr != nil || !allowed {
 		reason := "policy denied"
 		if pErr != nil {
 			reason = pErr.Error()
 		}
-		return apperr.New(apperr.CodeForbidden, "computer_use denied: "+reason)
+		return apperr.New(apperr.CodeForbidden, "lam: browser_automate denied: "+reason)
 	}
 	return nil
 }

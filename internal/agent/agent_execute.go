@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/internal/action/codeact"
+	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/llm"
@@ -756,8 +757,13 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		}
 		// [2PC Phase 1] 检查是否曾意外崩溃，并预写日志
 		if !isIdempotent { //nolint:nestif
+			maxT := a.sCtx.RawIntentTS.Source.OriginTaintLevel
+			if maxT == types.TaintNone {
+				maxT = types.TaintHigh
+			}
 			query := types.EpisodicQuery{
-				SessionID: a.sCtx.SessionID,
+				SessionID:     a.sCtx.SessionID,
+				MaxTaintLevel: maxT,
 			}
 			events, err := a.memory.Episodic().Query(ctx, query)
 			if err == nil {
@@ -1099,15 +1105,35 @@ func extractTaskType(goal string) string {
 }
 
 func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []types.Message {
-	if a.memInjector == nil || a.sCtx.TaskModel == nil {
-		return msgs
-	}
-	memCtx, err := a.memInjector.InjectRelevantMemory(ctx, a.sCtx.SessionID, a.sCtx.TaskModel.Goal)
-	if err != nil || memCtx == "" {
+	if a.assembler == nil || a.sCtx.TaskModel == nil {
 		return msgs
 	}
 
-	return append([]types.Message{{Role: "system", Content: "Relevant Memory Context:\n" + memCtx}}, msgs...)
+	maxT := a.sCtx.RawIntentTS.Source.OriginTaintLevel
+	if maxT == types.TaintNone {
+		maxT = types.TaintHigh
+	}
+	req := agentctx.AssembleRequest{
+		Query:            a.sCtx.TaskModel.Goal,
+		SessionKey:       a.sCtx.SessionID,
+		MaxTokens:        2000,
+		MaxTaint:         maxT,
+		IncludeKnowledge: true,
+		SurpriseHint:     metrics.GlobalSurpriseIndex().Current(),
+	}
+
+	ac, err := a.assembler.Assemble(ctx, req)
+	if err != nil || len(ac.Items) == 0 {
+		return msgs
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Relevant Context:\n")
+	for _, item := range ac.Items {
+		sb.WriteString(fmt.Sprintf("- [%s] %s\n", item.Source, item.Content))
+	}
+
+	return append([]types.Message{{Role: "system", Content: sb.String()}}, msgs...)
 }
 
 func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {

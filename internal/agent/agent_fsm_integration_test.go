@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -136,8 +137,12 @@ type mockMemoryForIntegration struct {
 	working  *mockWorkingMemForIntegration
 }
 
-func (m *mockMemoryForIntegration) Working() protocol.WorkingMemory       { return m.working }
-func (m *mockMemoryForIntegration) Episodic() protocol.EpisodicMemory     { return m.episodic }
+func (m *mockMemoryForIntegration) Working() protocol.WorkingMemory   { return m.working }
+func (m *mockMemoryForIntegration) Episodic() protocol.EpisodicMemory { return m.episodic }
+func (m *mockMemoryForIntegration) GetMemoryPressure() budget.ResourceBudget {
+	return budget.ResourceBudget{}
+}
+
 func (m *mockMemoryForIntegration) Semantic() protocol.SemanticMemory     { return nil }
 func (m *mockMemoryForIntegration) Procedural() protocol.ProceduralMemory { return nil }
 func (m *mockMemoryForIntegration) Retriever() protocol.HybridRetriever   { return nil }

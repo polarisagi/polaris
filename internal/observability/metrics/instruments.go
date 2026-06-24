@@ -24,6 +24,7 @@ var (
 	InstrBurnStage3Total              metric.Int64Counter
 	InstrLLMCacheHitRate              metric.Float64Histogram // (ISSUE-04)
 	InstrEventBufferDrainTimeoutTotal metric.Int64Counter
+	InstrGoroutinePanicTotal          metric.Int64Counter
 
 	// M7 工具调用 & 沙箱
 	InstrToolCallsTotal metric.Int64Counter
@@ -100,6 +101,10 @@ func initInstruments(meter metric.Meter) {
 	InstrEventBufferDrainTimeoutTotal, _ = meter.Int64Counter(
 		"polaris.eventbuffer.drain_timeout_total",
 		metric.WithDescription("未写入 EventWriteBuffer 因 Stop 超时而丢弃的事件数"),
+	)
+	InstrGoroutinePanicTotal, _ = meter.Int64Counter(
+		"polaris.goroutine_panic_total",
+		metric.WithDescription("SafeGo recover 的 panic 总数"),
 	)
 
 	// 工具调用

@@ -114,6 +114,11 @@ func (fg *FeatureGate) State(f Feature) FeatureState {
 	return FeatureDisabled
 }
 
+// HardwareTier returns the underlying hardware tier.
+func (fg *FeatureGate) HardwareTier() Tier {
+	return fg.probe.Tier
+}
+
 // TotalRAM 返回启动时探测的物理总内存（字节）。
 func (fg *FeatureGate) TotalRAM() uint64 {
 	if fg.probe == nil {

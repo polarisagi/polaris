@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/sysmgr"
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -439,11 +437,43 @@ type AgentCard struct {
 	MaxDepth      int // 0 表示使用全局 MaxSpawnDepth 默认值
 }
 
-// AcquireBackgroundPermit 根据系统认知压力分配后台许可（CC-2: GlobalCognitivePressure）。
-func (b *Blackboard) AcquireBackgroundPermit(ctx context.Context, taskType string) error {
-	level := sysmgr.GetPressureManager().Current()
-	if level == sysmgr.PressureCritical {
-		return apperr.New(apperr.CodeResourceExhausted, "system is under critical pressure, background tasks are denied")
+func parseTaskStatus(status string) types.TaskStatus {
+	switch status {
+	case "pending":
+		return types.TaskPending
+	case "running", "executing":
+		return types.TaskExecuting
+	case "claimed":
+		return types.TaskClaimed
 	}
-	return nil
+	return types.TaskPending
+}
+
+func (b *Blackboard) CountByStatus(ctx context.Context, status string) (int, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	count := 0
+	targetStatus := parseTaskStatus(status)
+	for _, t := range b.tasks {
+		if t.Status == targetStatus {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (b *Blackboard) MaxActivePriority(ctx context.Context) (int, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	maxP := 0
+	for _, t := range b.tasks {
+		if t.Status == types.TaskPending || t.Status == types.TaskExecuting || t.Status == types.TaskClaimed {
+			if t.Priority > maxP {
+				maxP = t.Priority
+			}
+		}
+	}
+	return maxP, nil
 }

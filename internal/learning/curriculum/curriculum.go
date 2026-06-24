@@ -16,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -477,7 +478,7 @@ func (b *BackgroundTaskScheduler) readSurprise() float64 {
 // Start 启动后台守护协程（2 分钟轮询）。
 func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 	// 保持原有：2 分钟 AutoCurriculum 生成（不修改）
-	go func() {
+	concurrent.SafeGo(ctx, "curriculum-auto-generate", func(ctx context.Context) {
 		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -489,11 +490,11 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 				b.generator.Generate(ctx, b.bb, si)
 			}
 		}
-	}()
+	})
 
 	// 新增：7 天 FoundingAnchor 漂移检查（V8-S3）
 	if b.foundingAnchor != nil {
-		go func() {
+		concurrent.SafeGo(ctx, "curriculum-founding-anchor-check", func(ctx context.Context) {
 			ticker := time.NewTicker(7 * 24 * time.Hour)
 			defer ticker.Stop()
 			for {
@@ -504,12 +505,12 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 					b.runFoundingAnchorCheck(ctx)
 				}
 			}
-		}()
+		})
 	}
 
 	// 新增：24 小时 Red Team 常态化探测（V8-S1）
 	if b.redTeam != nil {
-		go func() {
+		concurrent.SafeGo(ctx, "curriculum-red-team-probe", func(ctx context.Context) {
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
 			for {
@@ -522,7 +523,7 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 					}
 				}
 			}
-		}()
+		})
 	}
 }
 

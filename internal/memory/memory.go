@@ -12,6 +12,8 @@ import (
 	memretrieval "github.com/polarisagi/polaris/internal/memory/retrieval"
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
 
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -168,6 +170,21 @@ func (m *MemImpl) StoreStats() (string, error) {
 
 func (m *MemImpl) SetVectorMode(mode int) error {
 	return m.semantic.SetVectorMode(mode)
+}
+
+func (m *MemImpl) GetMemoryPressure() budget.ResourceBudget {
+	var available int
+	isConstrained := false
+	if fg := probe.GlobalFeatureGate(); fg != nil {
+		available = int(fg.GetAvailableMemoryMB())
+		isConstrained = fg.HardwareTier() <= probe.Tier1
+	} else {
+		available = int(probe.ProbeAvailableMemoryMB())
+	}
+	return budget.ResourceBudget{
+		AvailableMB:   available,
+		IsConstrained: isConstrained,
+	}
 }
 
 // ConfigureWorkingMemBudget sets the token budget and episodic memory for WorkingMem paging.

@@ -39,6 +39,13 @@ type SQLiteScheduler struct {
 	mu          sync.RWMutex
 	subscribers map[string]map[chan types.TaskEvent]struct{}
 	invoker     protocol.AgentInvoker
+	gate        backgroundGate
+}
+
+func (s *SQLiteScheduler) WithBackgroundGate(g backgroundGate) {
+	s.mu.Lock()
+	s.gate = g
+	s.mu.Unlock()
 }
 
 var _ protocol.Scheduler = (*SQLiteScheduler)(nil)

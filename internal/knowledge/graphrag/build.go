@@ -26,7 +26,14 @@ type GraphBuildPipeline struct {
 	clusterer         *Clusterer
 	semanticMem       protocol.SemanticMemory
 	fetcher           DocFetcher // optional：nil 时将 docID 本身作为文本占位
+	gate              backgroundGate
 }
+
+type backgroundGate interface {
+	BackgroundPermit(priority int) bool
+}
+
+func (p *GraphBuildPipeline) WithBackgroundGate(g backgroundGate) { p.gate = g }
 
 // NewGraphBuildPipeline 构造知识图谱构建管线。
 // llm 可为 nil（Tier 0 降级正则提取 + 共现关系推断）。
@@ -54,6 +61,9 @@ func (p *GraphBuildPipeline) SetDocFetcher(f DocFetcher) { p.fetcher = f }
 // Phase 3: CrossDocumentLinking → Phase 4: Clustering →
 // Phase 5: ConceptSynthesizer.
 func (p *GraphBuildPipeline) Run(ctx context.Context, docID string) error {
+	if p.gate != nil && !p.gate.BackgroundPermit(3) {
+		return nil
+	}
 	// 获取文档文本（fetcher 注入时从 store 取；否则降级用 docID 占位）
 	docText := docID
 	if p.fetcher != nil {
@@ -145,6 +155,9 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 				maxTaint = entities[idx].TaintLevel
 			}
 		}
+		if maxTaint < types.TaintMedium {
+			maxTaint = types.TaintMedium
+		}
 
 		conceptEntity := types.Entity{
 			ID:         "concept:" + conceptLabel,
@@ -154,7 +167,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 			TaintLevel: maxTaint,
 		}
 
-		if err := p.semanticMem.UpsertFact(ctx, conceptEntity, types.TaintNone); err != nil {
+		if err := p.semanticMem.UpsertFact(ctx, conceptEntity, maxTaint); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert fact failed", err)
 		}
 
@@ -164,8 +177,9 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 				ToEntityID:   conceptEntity.ID,
 				RelationType: "RELATED_TO",
 				Weight:       1.0,
+				TaintLevel:   maxTaint,
 			}
-			if err := p.semanticMem.UpsertRelation(ctx, rel, types.TaintNone); err != nil {
+			if err := p.semanticMem.UpsertRelation(ctx, rel, maxTaint); err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert relation failed", err)
 			}
 		}

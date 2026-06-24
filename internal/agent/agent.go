@@ -59,6 +59,7 @@ type Agent struct {
 	codeAct           *codeact.CodeAct           // LLM 代码执行引擎；nil 时 code_act 节点返回错误
 	skillCache        *skillpkg.ScriptSkillCache // 可选；nil 时 FastPath 跳过缓存查询
 	skillExecutor     protocol.SkillExecutor     // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
+	assembler         *agentctx.Assembler        // CC-3 ContextAssembler
 }
 
 // MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
@@ -116,6 +117,11 @@ func (a *Agent) WithSkillCache(sc *skillpkg.ScriptSkillCache) *Agent {
 func (a *Agent) WithSkillExecutor(se protocol.SkillExecutor) *Agent {
 	a.skillExecutor = se
 	return a
+}
+
+// SetAssembler 注入 ContextAssembler.
+func (a *Agent) SetAssembler(assembler *agentctx.Assembler) {
+	a.assembler = assembler
 }
 
 // BlindZoneDetector 盲区探测器接口，打破 L1 到 L2 的依赖。

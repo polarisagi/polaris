@@ -100,7 +100,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	}
 
 	// Step 2: 沙箱等级（信任 + 工具属性 → tier）
-	actualTier, tierErr := AssignSandboxTier(req.Tool, e.hwTier, e.goos)
+	actualTier, tierErr := AssignSandboxTier(req.Tool, req.TrustTier, e.hwTier, e.goos)
 	if tierErr != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "exec_envelope: sandbox tier rejected", tierErr)
 	}

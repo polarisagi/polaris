@@ -34,6 +34,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/observability"
+	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/internal/security"
@@ -43,6 +44,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/downloader"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // SubstrateBundle 持有 §0.5~§4 所有 L0 基础设施产物。
@@ -60,6 +62,7 @@ type SubstrateBundle struct {
 	// 安全三件套
 	KS         *security.KillSwitch
 	AuditTrail *security.AuditTrail
+	AuditChain *audit.AuditChain
 
 	// 日志：LogFile 需调用方 defer Close（可 nil）
 	LogFile  io.Closer
@@ -98,6 +101,12 @@ type SubstrateBundle struct {
 // bootSubstrate 执行 §0.5~§4 初始化，返回 L0 基础设施 bundle。
 // stop 来自 run() 的 signal.NotifyContext，注入 bundle 供 OTA restart fn 使用。
 func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBundle, error) { //nolint:gocyclo
+	concurrent.SetOnPanic(func() {
+		if metrics.InstrGoroutinePanicTotal != nil {
+			metrics.InstrGoroutinePanicTotal.Add(context.Background(), 1)
+		}
+	})
+
 	// ─── 0.5 内核完整性校验 (L4) ─────────────────────────────────────────────
 	if err := config.VerifyKernelIntegrity(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "CRITICAL: kernel integrity compromised", err)
@@ -288,6 +297,30 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		return nil, err
 	}
 	slog.Info("polaris: audit trail recovered and initialized")
+
+	auditChain := audit.NewAuditChain(store.DB())
+	concurrent.SafeGo(ctx, "audit-chain-periodic-verify", func(ctx context.Context) {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		resourceBudget := &budget.ResourceBudget{}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if resourceBudget.BackgroundPermit(3) {
+					rep, err := auditChain.VerifyChain(ctx, 0)
+					if err != nil {
+						slog.Error("audit: chain verify failed", "err", err)
+					} else if !rep.Valid {
+						slog.Error("audit: chain integrity broken", "report", rep)
+					} else {
+						slog.Info("audit: periodic verify passed")
+					}
+				}
+			}
+		}
+	})
 
 	// ─── 月度成本报告 (M13 §1.1) ─────────────────────────────────────────────
 	automation.StartMonthlyCostReport(ctx, layout.Reports, store.DB())

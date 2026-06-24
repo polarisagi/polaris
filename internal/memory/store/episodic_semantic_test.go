@@ -30,7 +30,8 @@ func TestEpisodicMem(t *testing.T) {
 
 	// Test Query
 	q := types.EpisodicQuery{
-		K: 10,
+		K:             10,
+		MaxTaintLevel: types.TaintHigh,
 	}
 	events, err := mem.Query(ctx, q)
 	if err != nil {

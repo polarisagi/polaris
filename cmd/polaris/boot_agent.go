@@ -8,9 +8,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/action/lam"
+	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
@@ -25,6 +28,8 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/native"
 	"github.com/polarisagi/polaris/internal/extension/skill"
 	si "github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -33,6 +38,7 @@ import (
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/internal/swarm/planner"
 	"github.com/polarisagi/polaris/internal/swarm/supervisor"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -106,7 +112,34 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	reaper := orchestrator.NewReaper(blackboard)
 	go reaper.Run(reaperCtx)
 
+	// 启动认知压力更新协程 (CC-2: GlobalCognitivePressure)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-reaperCtx.Done():
+				return
+			case <-ticker.C:
+				pending, _ := blackboard.CountByStatus(reaperCtx, "pending")
+				running, _ := blackboard.CountByStatus(reaperCtx, "running")
+				activeCount := pending + running
+				maxPrio, _ := blackboard.MaxActivePriority(reaperCtx)
+
+				pressure := activeCount * 10
+				if maxPrio > 0 {
+					pressure += maxPrio * 5
+				}
+				if pressure > 100 {
+					pressure = 100
+				}
+				metrics.SetCognitivePressure(int64(pressure))
+			}
+		}
+	}()
+
 	sched := automation.NewSQLiteScheduler(sb.Store)
+	sched.WithBackgroundGate(&budget.ResourceBudget{})
 	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
 
 	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
@@ -124,6 +157,13 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	agent.InjectHITL(tb.HITLGateway)
 	agent.InjectToolRegistry(tb.ToolReg)
 	agent.InjectOutboxWriter(sb.Outbox)
+
+	epAdapter := &episodicMemAdapter{ep: mb.Mem.Episodic()}
+	var knowAdapter agentctx.KnowledgeRetriever
+	if kb.KnowledgeBase != nil {
+		knowAdapter = &knowledgeAdapter{kb: kb.KnowledgeBase}
+	}
+	agent.SetAssembler(agentctx.NewAssembler(epAdapter, knowAdapter))
 
 	// 注入 PlannerPool 构造器，打破 kernel↔swarm 循环依赖
 	agent.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
@@ -144,6 +184,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agent.SetMemoryInjector(mb.Mem)
 	}
 
+	// 注入 LAM (R3) 强制依赖 policy gate，即使未完全装配也确保引擎实例化了安全的 gate
+	_ = lam.NewComputerUseEngine(
+		lam.LAMConfig{Enabled: true, ResolverModel: "default-vlm"},
+		nil, // provider
+		nil, // executor
+		sb.Gate,
+	)
+
 	if kb != nil && kb.KnowledgeBase != nil {
 		agent.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
 	}
@@ -160,14 +208,15 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}, agent)
 
 	dagExec := agentdag.NewDAGExecutor(func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-		tool := types.Tool{
-			Name:        toolName,
-			SandboxTier: 1,
+		tool, lerr := tb.ToolReg.Lookup(toolName) // 真实元数据：Source/TrustTier/Capability/RiskLevel/SideEffects
+		if lerr != nil {
+			return nil, apperr.Wrap(apperr.CodeNotFound, "dag_exec: tool lookup", lerr) // 未注册 → 显式拒绝，不静默放行
 		}
 		res, err := tb.Envelope.Execute(ctx, sandbox.ExecRequest{
 			Principal: sandbox.PrincipalAgent, Kind: sandbox.KindToolExecute,
 			Resource: tool.Name, TrustTier: tool.TrustTier, Tool: tool,
-			Input: args, TaintLevel: types.TaintNone,
+			Input: args, TaintLevel: taintLevel, // 透传输入污点，勿恒置 TaintNone
+			CPUQuotaMs: int(tool.Timeout.Milliseconds()),
 		})
 		if err != nil {
 			return nil, err
@@ -253,6 +302,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	promptOptimizer := optimizer.NewPromptOptimizer(nil, nil, 0)
 	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
+	m9Engine.WithBackgroundGate(&budget.ResourceBudget{})
 	m9Engine.SetOptimizer(promptOptimizer)
 
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
@@ -303,4 +353,68 @@ func (a *agentInvokerAdapter) InvokeAgent(ctx context.Context, intent string, op
 	a.agent.SetTaskIntent([]byte(intent))
 	err := a.agent.SendIntent(types.TriggerIntentReceived)
 	return a.agent.AgentID(), err
+}
+
+type episodicMemAdapter struct {
+	ep protocol.EpisodicMemory
+}
+
+func (a *episodicMemAdapter) Query(ctx context.Context, q string, maxTaint types.TaintLevel) ([]agentctx.ContextItem, error) {
+	res, err := a.ep.Query(ctx, types.EpisodicQuery{Semantic: q, MaxTaintLevel: maxTaint, K: 10})
+	if err != nil {
+		return nil, err
+	}
+	var items []agentctx.ContextItem
+	for _, r := range res {
+		if ev, ok := r.Event.(*types.Event); ok && ev != nil {
+			content := fmt.Sprintf("[%s] %s: %s", ev.CreatedAt.Format(time.RFC3339), ev.Type, string(ev.Payload))
+			items = append(items, agentctx.ContextItem{
+				Content:   content,
+				Source:    "episodic",
+				Relevance: r.Score,
+				Taint:     ev.TaintLevel,
+			})
+		}
+	}
+	return items, nil
+}
+
+type knowledgeAdapter struct {
+	kb *knowledgepkg.KnowledgeBase
+}
+
+func (a *knowledgeAdapter) Search(ctx context.Context, q string, depth int) ([]agentctx.ContextItem, error) {
+	if a.kb == nil {
+		return nil, nil
+	}
+	topK := 5
+	if depth > 1 {
+		topK = 10
+	}
+	req := knowledgepkg.KnowledgeBaseSearchRequest{
+		Query:    q,
+		TopK:     topK,
+		TaintMax: int(types.TaintHigh),
+	}
+	res, err := a.kb.Search(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]agentctx.ContextItem, 0, len(res))
+	for _, ac := range res {
+		content := ac.Primary.Content
+		if ac.Parent != nil {
+			content = ac.Parent.Content + "\n" + content
+		}
+		items = append(items, agentctx.ContextItem{
+			Content:   content,
+			Source:    "knowledge",
+			Relevance: 1.0,
+			Taint:     types.TaintLevel(ac.Primary.TaintLevel),
+		})
+	}
+	for i := range items {
+		items[i].Relevance = 1.0 / float64(i+1)
+	}
+	return items, nil
 }

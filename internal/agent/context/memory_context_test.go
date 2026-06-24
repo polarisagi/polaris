@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/observability/budget"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -18,8 +19,12 @@ type mockMemory struct {
 	working  *mockWorkingMem
 }
 
-func (m *mockMemory) Working() protocol.WorkingMemory       { return m.working }
-func (m *mockMemory) Episodic() protocol.EpisodicMemory     { return m.episodic }
+func (m *mockMemory) Working() protocol.WorkingMemory   { return m.working }
+func (m *mockMemory) Episodic() protocol.EpisodicMemory { return m.episodic }
+func (m *mockMemory) GetMemoryPressure() budget.ResourceBudget {
+	return budget.ResourceBudget{}
+}
+
 func (m *mockMemory) Semantic() protocol.SemanticMemory     { return nil }
 func (m *mockMemory) Procedural() protocol.ProceduralMemory { return nil }
 func (m *mockMemory) Retriever() protocol.HybridRetriever   { return nil }

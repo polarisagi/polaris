@@ -40,6 +40,7 @@ func NewSemanticMem(store protocol.Store, bus IntentSubmitter) *SemanticMem {
 }
 
 func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document, taint types.TaintLevel) error {
+	doc.Taint = types.PropagateTaint(doc.Taint, taint)
 	key := []byte("doc:" + doc.ID)
 	data, err := json.Marshal(doc)
 	if err != nil {
@@ -102,6 +103,12 @@ func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, tain
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
 	}
+
+	entity.TaintLevel = types.PropagateTaint(entity.TaintLevel, taint)
+	if entity.Properties == nil {
+		entity.Properties = make(map[string]any)
+	}
+	entity.Properties["taint_level"] = int(entity.TaintLevel)
 
 	now := time.Now().UnixMilli()
 	propsJSON, _ := json.Marshal(entity.Properties)
@@ -195,6 +202,12 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation, t
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertRelation", err)
 	}
+
+	rel.TaintLevel = types.PropagateTaint(rel.TaintLevel, taint)
+	if rel.Properties == nil {
+		rel.Properties = make(map[string]any)
+	}
+	rel.Properties["taint_level"] = int(rel.TaintLevel)
 
 	now := time.Now().UnixMilli()
 	weight := rel.Weight

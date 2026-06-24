@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ReflexionEngine 是 AgentHER (Hindsight Experience Replay) 的核心引擎。
@@ -181,7 +182,7 @@ func (re *ReflexionEngine) replaySuccess(
 	trajectory []learning.Step,
 	replanCount int,
 ) (*learning.Reflection, error) {
-	go func() {
+	concurrent.SafeGo(context.Background(), "reflexion-replay-success", func(ctx context.Context) {
 		if re.llmInfer == nil {
 			return
 		}
@@ -197,7 +198,7 @@ Output strictly JSON:
 Trajectory:
 %s`, replanCount, formattedTraj)
 
-		insightJSON, err := re.llmInfer(context.Background(), prompt)
+		insightJSON, err := re.llmInfer(ctx, prompt)
 		if err != nil {
 			return
 		}
@@ -221,13 +222,13 @@ Trajectory:
 		}
 
 		if re.db != nil {
-			_, _ = re.db.ExecContext(context.Background(), `
+			_, _ = re.db.ExecContext(ctx, `
 				INSERT OR IGNORE INTO reflection_memory 
 				  (task_id, reflection_type, content, created_at)
 				VALUES (?, 'success_pattern', ?, ?)
 			`, taskID, insightJSON, time.Now().Unix())
 		}
-	}()
+	})
 
 	return &learning.Reflection{
 		TaskID:    taskID,

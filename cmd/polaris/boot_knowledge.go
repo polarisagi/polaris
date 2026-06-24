@@ -4,15 +4,16 @@
 package main
 
 import (
-	"github.com/polarisagi/polaris/internal/observability/probe"
-
 	"context"
 	"encoding/json"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/probe"
+
 	"github.com/polarisagi/polaris/internal/extension/native"
 	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/store"
 )
@@ -54,6 +55,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	var graphPipeline *graphrag.GraphBuildPipeline
 	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureGraphRAGFull) != probe.FeatureDisabled {
 		graphPipeline = graphrag.NewGraphBuildPipeline(graphLLMClient, graphTier, mb.Mem.Semantic())
+		graphPipeline.WithBackgroundGate(&budget.ResourceBudget{})
 		slog.Info("polaris: knowledge graph pipeline initialized", "tier", graphTier)
 	} else {
 		slog.Info("polaris: GraphRAG pipeline disabled by FeatureGate (<8GB VPS or memory pressure, 1024MB min)")

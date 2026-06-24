@@ -82,8 +82,9 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 
 	// 1. 收集 Evidence Episodic Events
 	events, err := rw.episodic.Query(ctx, types.EpisodicQuery{
-		SessionID: taskID,
-		K:         100,
+		SessionID:     taskID,
+		K:             100,
+		MaxTaintLevel: types.TaintNone, // 系统内部，显式 TaintNone
 	})
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "reflection_worker: query episodic events", err)

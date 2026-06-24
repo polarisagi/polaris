@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -278,7 +279,14 @@ type Engine struct {
 	stagingPipeline StagingPipelineAdapter
 	l4TriggerCh     <-chan Change // admin 主动触发 L4，非自动检测
 	evolutionGate   EvolutionGate // M12: EvolutionGate instance
+	gate            backgroundGate
 }
+
+type backgroundGate interface {
+	BackgroundPermit(priority int) bool
+}
+
+func (e *Engine) WithBackgroundGate(g backgroundGate) { e.gate = g }
 
 // SetSurpriseIndexProvider 注入 SurpriseIndex 读取函数（Tier1+ 从 M3 Metrics 读取）。
 func (e *Engine) SetSurpriseIndexProvider(fn func() float64) { e.surpriseIndexFn = fn }
@@ -413,10 +421,13 @@ func (e *Engine) Run(ctx context.Context) error { //nolint:gocyclo
 
 		// 中环：定时触发 AutoCurriculum
 		case <-midTicker.C:
+			if e.gate != nil && !e.gate.BackgroundPermit(2) {
+				continue // skip 本轮
+			}
 			if e.curriculum != nil {
-				go func() {
+				concurrent.SafeGo(ctx, "learning-curriculum-generate", func(ctx context.Context) {
 					_ = e.curriculum.Generate(ctx, e.currentSurpriseIndex())
-				}()
+				})
 			}
 
 		// L3 策略漂移检测（周期性）
@@ -437,9 +448,9 @@ func (e *Engine) Run(ctx context.Context) error { //nolint:gocyclo
 				return nil
 			}
 			if e.rollout != nil {
-				go func(event VersionChangeEvent) {
-					_ = e.rollout.AdvanceGate(ctx, event.CandidateVersion, event.Stats)
-				}(ev)
+				concurrent.SafeGo(ctx, "learning-rollout-advance", func(ctx context.Context) {
+					_ = e.rollout.AdvanceGate(ctx, ev.CandidateVersion, ev.Stats)
+				})
 			}
 
 		// 外环（新）：EvalCompleted → 更新评分 + 触发 Rollout
@@ -466,7 +477,7 @@ func (e *Engine) detectL3Trigger(ctx context.Context) {
 		return
 	}
 	slog.Warn("L3 strategy drift detected, requesting HITL approval", "surprise_index", si)
-	go func() {
+	concurrent.SafeGo(ctx, "learning-detect-l3", func(ctx context.Context) {
 		resp, err := e.hitlGateway.Prompt(ctx, types.HITLPrompt{
 			ID:             fmt.Sprintf("l3-%d", time.Now().UnixNano()),
 			CheckpointType: "l3_strategy_modify",
@@ -488,7 +499,7 @@ func (e *Engine) detectL3Trigger(ctx context.Context) {
 				slog.Error("L3 staging submit failed", "err", err)
 			}
 		}
-	}()
+	})
 }
 
 // detectL4Trigger 处理管理员主动触发的 L4 源码级架构变更审批。
@@ -501,7 +512,7 @@ func (e *Engine) detectL4Trigger(ctx context.Context, change Change) {
 		return
 	}
 	slog.Info("L4 source architecture change requested", "description", change.Description)
-	go func() {
+	concurrent.SafeGo(ctx, "learning-detect-l4", func(ctx context.Context) {
 		resp, err := e.hitlGateway.Prompt(ctx, types.HITLPrompt{
 			ID:             fmt.Sprintf("l4-%d", time.Now().UnixNano()),
 			CheckpointType: "l4_multi_sig",
@@ -523,7 +534,7 @@ func (e *Engine) detectL4Trigger(ctx context.Context, change Change) {
 				slog.Error("L4 staging submit failed", "err", err)
 			}
 		}
-	}()
+	})
 }
 
 // handleEvalCompleted 处理 Eval 完成事件：更新评分，若达到激活条件则触发 Rollout。

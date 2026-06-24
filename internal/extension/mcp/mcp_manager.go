@@ -102,6 +102,22 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 		return apperr.Wrap(apperr.CodeInvalidInput, fmt.Sprintf("mcp: server name %q invalid (must match ^[a-zA-Z0-9_-]+$)", name), err)
 	}
 
+	if m.policy != nil {
+		allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "process_spawn", name,
+			map[string]any{
+				"trust_tier":   cfg.TrustTier,
+				"transport":    string(cfg.Transport),
+				"sandbox_auto": cfg.SandboxPolicy == "" || cfg.SandboxPolicy == "auto",
+			})
+		if pErr != nil || !allowed {
+			reason := "policy denied"
+			if pErr != nil {
+				reason = pErr.Error()
+			}
+			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("mcp_manager: process_spawn denied for %q: %s", name, reason))
+		}
+	}
+
 	slog.Info("mcp_manager: starting mcp server", "id", serverID, "name", name, "transport", cfg.Transport, "command", cfg.Command)
 
 	m.mu.Lock()
@@ -124,24 +140,6 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 	}
 
 	client := NewMCPClient(cfg, m.httpClient)
-
-	// MCP 进程生成必须经策略审查（与工具调用同等级安全门）
-	if m.policy != nil {
-		allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "process_spawn", name,
-			map[string]any{
-				"trust_tier":   cfg.TrustTier,
-				"transport":    string(cfg.Transport),
-				"sandbox_auto": cfg.SandboxPolicy == "" || cfg.SandboxPolicy == "auto",
-			})
-		if pErr != nil || !allowed {
-			reason := "policy denied"
-			if pErr != nil {
-				reason = pErr.Error()
-			}
-			return storeFailed(apperr.New(apperr.CodeForbidden,
-				fmt.Sprintf("mcp_manager: process_spawn denied for %q: %s", name, reason)))
-		}
-	}
 
 	if err := client.Connect(ctx); err != nil {
 		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: connect %q", serverID), err)

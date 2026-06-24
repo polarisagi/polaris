@@ -129,7 +129,7 @@ func TestAssignSandboxTier(t *testing.T) {
 				SideEffects: tt.effects,
 				TrustTier:   tt.trustTier,
 			}
-			got, err := AssignSandboxTier(tool, tt.hwTier, tt.goos)
+			got, err := AssignSandboxTier(tool, tool.TrustTier, tt.hwTier, tt.goos)
 			if tt.wantErr != nil {
 				if err != tt.wantErr {
 					t.Errorf("expected error %v, got %v", tt.wantErr, err)

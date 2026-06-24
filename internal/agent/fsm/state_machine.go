@@ -549,6 +549,12 @@ func (sm *StateMachine) validateDAG(ctx context.Context, sCtx protocol.StateCont
 }
 
 func (sm *StateMachine) executeDAG(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
+	if mem := sCtx.Mem; mem != nil {
+		pressure := mem.GetMemoryPressure()
+		if pressure.IsConstrained && pressure.AvailableMB < 100 {
+			return types.State("S_EXECUTE_FAIL"), apperr.New(apperr.CodeResourceExhausted, "fsm: memory pressure too high, cannot proceed")
+		}
+	}
 	// executeDAG 是纯函数存根。
 	// 真正的执行在 Agent.runExecuteDAG 中，因为需要访问 a.toolRegistry。
 	// S_EXECUTE 阶段拦截逻辑与 S_VALIDATE 相同，在 executeEffect 中进行。

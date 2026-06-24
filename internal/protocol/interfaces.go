@@ -16,6 +16,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol/pb"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -250,7 +251,8 @@ type Blackboard interface {
 	// 由 Worker.tryClaimAndExecute 在 AgentKernel.Run 返回后调用。
 	// 幂等：多次调用以最后一次写入为准（覆盖，不累加）。
 	UpdateTaskTokens(ctx context.Context, taskID string, tokensIn, tokensOut, cacheRead int, costUSD float64) error
-	AcquireBackgroundPermit(ctx context.Context, taskType string) error
+	CountByStatus(ctx context.Context, status string) (int, error)
+	MaxActivePriority(ctx context.Context) (int, error)
 }
 
 // ============================================================================
@@ -321,6 +323,7 @@ type Memory interface {
 	Reflection() ReflectionMemory // 元认知反思层，M05 §3.4
 	StoreStats() (string, error)
 	SetVectorMode(mode int) error
+	GetMemoryPressure() budget.ResourceBudget
 }
 
 // ReflectionMemory 元认知反思层（Mem-L1.5，插于 Episodic 与 Semantic 之间）。

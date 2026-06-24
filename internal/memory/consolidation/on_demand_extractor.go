@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -42,9 +43,9 @@ func (oe *OnDemandExtractor) ExtractAsync(ctx context.Context, events []types.Sc
 	}
 
 	// 异步执行，不阻塞查询响应
-	go func() {
+	concurrent.SafeGo(context.Background(), "on-demand-extractor", func(ctx context.Context) {
 		// 使用独立超时，不继承查询 ctx（查询可能已结束）
-		extractCtx, cancel := context.WithTimeout(context.Background(), consolidationTimeout)
+		extractCtx, cancel := context.WithTimeout(ctx, consolidationTimeout)
 		defer cancel()
 
 		entities, relations, err := oe.extractor.extractEntitiesAndRelations(
@@ -59,5 +60,5 @@ func (oe *OnDemandExtractor) ExtractAsync(ctx context.Context, events []types.Sc
 		if err := oe.extractor.upsertSemantic(extractCtx, entities, relations); err != nil {
 			slog.Warn("on_demand_extractor: upsert failed", "err", err)
 		}
-	}()
+	})
 }

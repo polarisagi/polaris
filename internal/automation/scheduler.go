@@ -281,13 +281,25 @@ func (c *HITLCheckpoint) AwaitApproval(ctx context.Context) (bool, error) {
 // Scheduler 定时/异步任务调度执行器。
 type Scheduler struct {
 	invoker protocol.AgentInvoker
+	gate    backgroundGate
 }
+
+type backgroundGate interface {
+	BackgroundPermit(priority int) bool
+}
+
+func (s *Scheduler) WithBackgroundGate(g backgroundGate) { s.gate = g }
 
 func NewScheduler(invoker protocol.AgentInvoker) *Scheduler {
 	return &Scheduler{invoker: invoker}
 }
 
 func (s *Scheduler) ExecuteTask(ctx context.Context, task *types.Task) error {
+	if task != nil && task.Priority > 1 {
+		if s.gate != nil && !s.gate.BackgroundPermit(task.Priority) {
+			return nil // 跳过本轮
+		}
+	}
 	if s.invoker != nil && task != nil && task.Type == "agent" {
 		_, err := s.invoker.InvokeAgent(ctx, string(task.Payload))
 		return err

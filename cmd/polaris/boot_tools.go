@@ -7,6 +7,7 @@ package main
 import (
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/memory/consolidation"
+	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
@@ -213,6 +214,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		mb.CascadeInvalidator,
 		sb.Store.DB(),
 	)
+	consolidationPipeline.WithBackgroundGate(&budget.ResourceBudget{})
 	sb.Outbox.RegisterHandler("memory_consolidate", func(ctx context.Context, rec *store.OutboxRecord) error {
 		var payload struct {
 			SessionID string `json:"session_id"`

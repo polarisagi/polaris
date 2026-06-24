@@ -60,7 +60,8 @@ func NewDurativeMemoryManager(episodic protocol.EpisodicMemory, provider protoco
 func (dm *DurativeMemoryManager) Consolidate(ctx context.Context) error {
 	// 获取最近的事件
 	events, err := dm.episodic.Query(ctx, types.EpisodicQuery{
-		K: 1000,
+		K:             1000,
+		MaxTaintLevel: types.TaintNone,
 	})
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "durative_memory: query episodic", err)

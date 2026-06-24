@@ -253,10 +253,9 @@ func (c *ChannelNotifier) Notify(ctx context.Context, msg HITLNotification) erro
 		"timeout_ns", msg.Timeout,
 	)
 	if c.dispatcher == nil {
-		slog.Info("hitl: you can approve this request locally using the following command:",
-			"cmd", fmt.Sprintf("curl -s -X POST http://localhost:28889/v1/approvals/%s/resolve -H 'Content-Type: application/json' -d '{\"action\": \"approve\", \"comment\": \"CLI Auto-approved\"}'", msg.CheckpointID))
-		// 未配置 dispatcher：仅输出日志提示，不返回错误以保持 prompt 挂起等待外部调用
-		return nil
+		// 未配置 dispatcher：通知未送达，返回错误让上层感知（不得静默挂起审批）
+		return apperr.New(apperr.CodeInternal,
+			"hitl: channel dispatcher not configured; notification logged but not delivered")
 	}
 	return c.dispatcher.Dispatch(ctx, msg)
 }

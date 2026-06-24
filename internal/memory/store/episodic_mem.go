@@ -72,6 +72,7 @@ func NewEpisodicMemWithCognitive(store protocol.Store, indexer EpisodicIndexer, 
 }
 
 func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
+	ev.TaintLevel = types.PropagateTaint(ev.TaintLevel, taint) // only-up：取 max，禁降级
 	em.mu.Lock()
 	defer em.mu.Unlock()
 
@@ -130,6 +131,9 @@ func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]type
 	var results []types.ScoredEvent //nolint:prealloc
 	for _, ev := range events {
 		if q.SessionID != "" && ev.TaskID != q.SessionID {
+			continue
+		}
+		if ev.TaintLevel > q.MaxTaintLevel { // 超过请求上限 → 过滤
 			continue
 		}
 		score := 1.0

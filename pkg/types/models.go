@@ -257,10 +257,11 @@ type ReplayReport struct {
 
 // EpisodicQuery 情景记忆检索参数。
 type EpisodicQuery struct {
-	SessionID string
-	Topics    []string
-	Semantic  string // 语义搜索文本
-	K         int
+	SessionID     string
+	Topics        []string
+	Semantic      string // 语义搜索文本
+	K             int
+	MaxTaintLevel TaintLevel // 上限（含）；调用方必须显式设置
 }
 
 // ScoredEvent 情景记忆检索结果（带相关性分数）。
@@ -707,6 +708,7 @@ type Event struct {
 	Payload           []byte        `json:"payload,omitempty"`
 	ReasoningState    []byte        `json:"reasoning_state,omitempty"`
 	EmbedModelVersion string        `json:"embed_model_version,omitempty"`
+	TaintLevel        TaintLevel    `json:"taint_level,omitempty"`
 	CreatedAt         time.Time     `json:"created_at"`
 	TTL               time.Duration `json:"ttl,omitempty"`
 }
