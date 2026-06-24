@@ -31,7 +31,10 @@ type poolEntry struct {
 
 // NewPool 构造 AgentPool。
 // factory 每次为新 sessionID 创建一个完整配置的 Agent（含 SurpriseCalc 等注入）。
-// maxSize：Tier-0 传 4，Tier-1 传 16。
+// maxSize：由 TierParameters.MaxAgents 传入。
+// 实际值来自 configs/defaults.toml（可部署覆盖）：
+// Tier-0 服务器 HT0 = 3，Tier-0 桌面 HT0 = 2，Tier-1 = 16。
+// 权威阈值见 docs/arch/spec/state.yaml §thresholds.max_agents_*_ht0。
 func NewPool(factory func(sessionID string) *Agent, maxSize int) *Pool {
 	p := &Pool{
 		factory:        factory,

@@ -18,7 +18,11 @@
 - `internal/agent/pool.go` 实现：`sync.Map` + 信号量（`chan struct{}`，cap = `TierParams.MaxConcurrentAgents`）。
 - Acquire 超时 100ms → `apperr.CodeResourceExhausted`（拒绝而非等待）。
 - Idle 超过 10 分钟的 session 由低频 GC ticker 回收（`Pool.GC()`，每 5 分钟调用一次）。
-- Tier-0：`MaxConcurrentAgents = 4`，Tier-1：16。
+- 容量由 `TierParameters.MaxAgents` 注入，权威值见 `docs/arch/spec/state.yaml §thresholds`：
+  - Tier-0 服务器 HT0（`max_agents_server_ht0`）= **3**
+  - Tier-0 桌面 HT0（`max_agents_desktop_ht0`）= **2**
+  - Tier-1 = **16**
+- `configs/defaults.toml` 中 `max_agents = 3` 为服务器 HT0 默认值，可按部署环境覆盖。
 
 **不采纳**：每次请求新建 Agent（初始化成本、SurpriseCalc 冷启动）；无状态 Agent + 每次从 DB 加载 session 状态（改动量过大）。
 
@@ -60,8 +64,11 @@
 **现状**：沙箱权限拒绝、符号链接越狱等 OS 事件静默失败，Agent 无从感知越权行为。
 
 **方案**：
-- `metrics.SurpriseIndex` 新增 `InjectFaultSignal(contribution float64)`，EMA 混合（0.3×新值 + 0.7×历史均值），单次贡献上限 0.5，防止单次事件主导路由决策。
-- 在 `vfs/safeOpen`（ELOOP 分支）和 `sandbox/` Execute 的 `fs.ErrPermission` 分支中调用 `InjectFaultSignal(0.3)`。
+- `metrics.SurpriseIndex` 的 `InjectFaultSignal(severity float64)` 采用**加法累积**（`lastValue += severity`），上限 1.0，防止溢出。实现比规划阶段更简单（无 EMA 混合），与 SurpriseIndex 主路径的 EMA 计算互不干扰。
+- 严重度按事件类型分级：
+  - `sandbox/` Execute 的 `fs.ErrPermission` 分支：`InjectFaultSignal(0.8)`（高严重度——沙箱权限拒绝为越权尝试信号）
+  - `vfs/safeOpen` 的 ELOOP（符号链接越狱）分支：`InjectFaultSignal(0.5)`（中严重度——路径越界尝试）
+- 分级注入使路由系统对不同类型 OS 安全事件的敏感度有所区分，而非统一对待。
 - 无 eBPF 依赖，无 root 要求，跨平台可用。
 
 **为什么不用 eBPF**：需要 `CAP_BPF`（Linux 5.8+），macOS 不可用，Docker 默认不开启；与 Tier-0 "2GB VPS 可运行"目标冲突。OS 层错误在 Go 侧已可捕获，直接注入等效且更简单。

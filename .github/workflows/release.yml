@@ -44,41 +44,34 @@ concurrency:
 
 jobs:
   # ───────────────────────────────────────────────
-  # 0. prepare：计算 Rust hash，验证预编译产物存在
-  #    与 build-frontend 并行，无串行开销
+  # 0a. ensure-rust：调用 rust-build.yml（可复用工作流）
+  #     产物已存在时 ~30s 秒跳过；不存在时自动编译发布。
+  #     完全自愈，无需手动触发。
+  # ───────────────────────────────────────────────
+  ensure-rust:
+    name: Ensure Rust Artifacts
+    uses: ./.github/workflows/rust-build.yml
+    permissions:
+      contents: write
+    with:
+      force_rebuild: false
+
+  # ───────────────────────────────────────────────
+  # 0b. prepare：从 ensure-rust 转发 rust_tag / rust_hash
+  #     供下游 package job 使用
   # ───────────────────────────────────────────────
   prepare:
     name: Prepare
+    needs: ensure-rust
     runs-on: ubuntu-latest
     outputs:
-      rust_hash: ${{ steps.hash.outputs.hash }}
-      rust_tag:  ${{ steps.hash.outputs.tag }}
+      rust_hash: ${{ needs.ensure-rust.outputs.rust_hash }}
+      rust_tag:  ${{ needs.ensure-rust.outputs.rust_tag }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Compute Rust substrate tree hash
-        id: hash
+      - name: Echo rust tag
         run: |
-          HASH=$(git rev-parse HEAD:rust/substrate)
-          TAG="rust-substrate-${HASH}"
-          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
-          echo "Rust hash=$HASH"
-
-      - name: Verify prebuilt Rust release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.hash.outputs.tag }}
-        run: |
-          if ! gh release view "$TAG" &>/dev/null 2>&1; then
-            echo "::error::预编译 Rust 产物未找到（tag: $TAG）"
-            echo "::error::请先运行：gh workflow run rust-build.yml"
-            echo "::error::或在 Actions → Build Rust Artifacts → Run workflow 手动触发"
-            exit 1
-          fi
-          echo "✓ Found prebuilt Rust release: $TAG"
+          echo "rust_tag=${{ needs.ensure-rust.outputs.rust_tag }}"
+          echo "rust_hash=${{ needs.ensure-rust.outputs.rust_hash }}"
 
   # ───────────────────────────────────────────────
   # 1. 构建前端

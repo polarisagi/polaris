@@ -20,6 +20,20 @@ on:
         description: '强制重建（忽略已存在的缓存 release）'
         type: boolean
         default: false
+  # 允许 release.yml 通过 workflow_call 直接调用，实现自愈
+  workflow_call:
+    inputs:
+      force_rebuild:
+        description: '强制重建（忽略已存在的缓存 release）'
+        type: boolean
+        default: false
+    outputs:
+      rust_tag:
+        description: "rust/substrate 预编译产物 tag（rust-substrate-<hash>）"
+        value: ${{ jobs.check.outputs.tag }}
+      rust_hash:
+        description: "rust/substrate tree hash"
+        value: ${{ jobs.check.outputs.hash }}
 
 permissions:
   contents: write   # 创建 / 删除 pre-release
@@ -54,7 +68,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.hash.outputs.tag }}
-          FORCE: ${{ github.event.inputs.force_rebuild }}
+          FORCE: ${{ inputs.force_rebuild }}
         run: |
           if [ "$FORCE" = "true" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -295,7 +309,7 @@ jobs:
 
       # 若 force_rebuild，先删除旧 release 再重建
       - name: Delete existing release (force rebuild)
-        if: github.event.inputs.force_rebuild == 'true'
+        if: inputs.force_rebuild == true
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check.outputs.tag }}

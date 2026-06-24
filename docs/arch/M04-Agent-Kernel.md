@@ -46,7 +46,7 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
                                                           ├──Redirect─→ S_PLAN (用户修正意图)
                                                           └──Abort────→ S_FAILED
 ```
-5 主执行态: Perceive / Plan / Validate / Execute / Reflect。2 恢复态: Replan / Rollback。1 中断态: Interrupt。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **12 态**（`state_machine.go` 注册 s_idle ~ s_interrupt 共 12 状态、15 条转移）。
+5 主执行态: Perceive / Plan / Validate / Execute / Reflect。2 恢复态: Replan / Rollback。1 中断态: Interrupt。1 挂起态: Suspended（Suspend-on-Idle 及 provider_exhausted 挂起）。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **12 态**（`state_machine.go` 注册 s_idle ~ s_suspended 共 12 状态、15 条转移）。
 ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel.max_replan_attempts`) 超限 → S_FAILED + `[ESCALATE]`
 
 **`[UserInterrupt]` 协议**（inv_global_08, < 200ms 传播）:
