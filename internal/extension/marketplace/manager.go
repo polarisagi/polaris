@@ -2,8 +2,6 @@ package marketplace
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +14,7 @@ import (
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // HookRunner 在受限环境下执行插件 hook 脚本。
@@ -187,9 +186,7 @@ func (m *Manager) InstallExtension(ctx context.Context, req InstallRequest) erro
 
 func normalizeInstallRequest(req InstallRequest) InstallRequest {
 	if req.ExtensionID == "" {
-		b := make([]byte, 8)
-		_, _ = rand.Read(b)
-		req.ExtensionID = "ext_" + hex.EncodeToString(b)
+		req.ExtensionID = util.GenerateHumanReadableID("ext", req.Name)
 	}
 	if req.Name == "" {
 		req.Name = req.ExtensionID

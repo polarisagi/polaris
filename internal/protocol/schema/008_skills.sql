@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS skills (
     sandbox     INTEGER NOT NULL DEFAULT 1,      -- 1=启用沙箱
     capabilities TEXT   NOT NULL,               -- JSON array
     exec_mode   TEXT    NOT NULL DEFAULT 'tool', -- 'tool' | 'ambient'
+    ambient_priority TEXT NOT NULL DEFAULT 'auto', -- 'always' | 'auto' | 'index_only'
     trust_tier  INTEGER NOT NULL DEFAULT 0,      -- 0-4，见上方说明
     idempotent  INTEGER NOT NULL DEFAULT 0,      -- 1=幂等，允许缓存结果
     benchmarks  TEXT    NOT NULL DEFAULT '{}',   -- JSON: PassRate/AvgLatency 等
@@ -35,3 +36,4 @@ CREATE INDEX IF NOT EXISTS idx_skills_deprecated  ON skills(deprecated);
 CREATE INDEX IF NOT EXISTS idx_skills_risk_level  ON skills(risk_level);
 CREATE INDEX IF NOT EXISTS idx_skills_trust_tier  ON skills(trust_tier);
 CREATE INDEX IF NOT EXISTS idx_skills_plugin_id   ON skills(plugin_id);
+CREATE INDEX IF NOT EXISTS idx_skills_ambient_priority ON skills(ambient_priority);

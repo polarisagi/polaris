@@ -104,7 +104,7 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 	}
 	defer db.Close()
 
-	_, err = db.Exec(`CREATE TABLE skills (name TEXT, instructions TEXT, exec_mode TEXT, deprecated INTEGER, trust_tier INTEGER)`)
+	_, err = db.Exec(`CREATE TABLE skills (name TEXT, description TEXT, instructions TEXT, plugin_id TEXT, exec_mode TEXT, ambient_priority TEXT, deprecated INTEGER, trust_tier INTEGER)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,10 +112,10 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 	srv := &ChatHandler{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
 
 	// 插入两条 ambient skill
-	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill1', 'inst1', 'ambient', 0, 1)`)
-	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill4', 'inst4', 'ambient', 0, 4)`)
+	db.Exec(`INSERT INTO skills (name, description, instructions, plugin_id, exec_mode, ambient_priority, deprecated, trust_tier) VALUES ('skill1', 'desc1', 'inst1', '', 'ambient', 'always', 0, 1)`)
+	db.Exec(`INSERT INTO skills (name, description, instructions, plugin_id, exec_mode, ambient_priority, deprecated, trust_tier) VALUES ('skill4', 'desc4', 'inst4', '', 'ambient', 'always', 0, 4)`)
 
-	result := srv.buildAmbientSkillsSection(context.Background())
+	result := srv.buildAmbientSkillsSection(context.Background(), "")
 	if !strings.Contains(result, "skill4") {
 		t.Fatal("missing skill4")
 	}
@@ -126,19 +126,17 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 	}
 
 	// 插入超长技能组合
-	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill6', ?, 'ambient', 0, 6)`, strings.Repeat("B", 2000))
-	db.Exec(`INSERT INTO skills (name, instructions, exec_mode, deprecated, trust_tier) VALUES ('skill5', ?, 'ambient', 0, 5)`, strings.Repeat("C", 2500))
+	db.Exec(`INSERT INTO skills (name, description, instructions, plugin_id, exec_mode, ambient_priority, deprecated, trust_tier) VALUES ('skill6', 'desc6', ?, '', 'ambient', 'always', 0, 6)`, strings.Repeat("B", 120_000))
+	db.Exec(`INSERT INTO skills (name, description, instructions, plugin_id, exec_mode, ambient_priority, deprecated, trust_tier) VALUES ('skill5', 'desc5', ?, '', 'ambient', 'always', 0, 5)`, strings.Repeat("C", 20_000))
 
-	result2 := srv.buildAmbientSkillsSection(context.Background())
-	if len(result2) > 4100 { //
-
-		// 等有额外开销
+	result2 := srv.buildAmbientSkillsSection(context.Background(), "")
+	if len(result2) > 130_000 {
 		t.Fatalf("result too long: %d", len(result2))
 	}
 	if !strings.Contains(result2, "skill6") {
 		t.Fatal("missing skill6 which has highest tier and fits")
 	}
-	if strings.Contains(result2, "skill5") {
+	if strings.Contains(result2, strings.Repeat("C", 20_000)) {
 		t.Fatal("skill5 should be truncated (dropped entirely)")
 	}
 }

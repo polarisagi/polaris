@@ -8,6 +8,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/memory/consolidation"
 	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
@@ -135,9 +136,21 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if sb.SurrealStore != nil {
 		nativeCogn = nativeCognAdapter{s: sb.SurrealStore}
 	}
+	var nativeEmbedFn native.EmbedFn
+	if sb.Embedder != nil {
+		embedder := sb.Embedder // 捕获引用
+		nativeEmbedFn = func(ctx context.Context, text string) ([]float32, error) {
+			v := embedder.Embed(text)
+			if v == nil {
+				return nil, apperr.New(apperr.CodeInternal, "embed returned nil")
+			}
+			return v, nil
+		}
+	}
+
 	// knowledge_search 依赖 knowledgeBase（L2 §7.6），此处先传 nil，待 bootKnowledge 完成后由
 	// native.RegisterExtensionTool 补注（见 boot_knowledge.go §7.6 末尾）
-	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, extRepo, mktClient, installMgr, hitlGateway, sb.Outbox, nativeCogn, nil, nil); err != nil {
+	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, extRepo, mktClient, installMgr, hitlGateway, sb.Outbox, nativeCogn, nativeEmbedFn, nil); err != nil {
 		slog.Warn("polaris: native extension tool registration partial failure", "err", err)
 	}
 	slog.Info("polaris: builtin tools registered, MCP manager initialized")

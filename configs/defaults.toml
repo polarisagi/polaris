@@ -171,3 +171,14 @@ auto_compact_pct = 95.0
 warn_pct         = 80.0
 # 连续自动压缩但仍超阈值的最大次数；超出后停止自动压缩并显示抖动告警。
 max_thrash_count = 3
+
+# ── 向量化服务（Tier 2 Ambient 匹配 + Extension Catalog 预计算）─────────────────
+# base_url 留空 = 禁用，所有检索降级到 Tier 1（词元重叠 / SQLite LIKE）
+# 示例: base_url = "https://api.deepseek.com/v1", model = "deepseek-embed"
+[embedding]
+base_url  = ""
+model     = ""
+# api_key 留空时读 POLARIS_EMBEDDING_API_KEY 环境变量
+api_key   = ""
+# 余弦相似度阈值，低于此值的技能/扩展不注入
+similarity_threshold = 0.60

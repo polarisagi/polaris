@@ -6,8 +6,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +23,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // GetInstalledCatalogIDs 返回所有已安装的 catalog_id 到 installed_version 的映射。
@@ -224,9 +223,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	extID := "ext_" + hex.EncodeToString(b)
+	extID := util.GenerateHumanReadableID("ext", entry.Name)
 
 	// PolicyGate 是安全门，不允许 nil 跳过（fail-closed）。
 	if h.InstallMgr == nil {
@@ -529,9 +526,7 @@ func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	req.ID = "mp_" + hex.EncodeToString(b)
+	req.ID = util.GenerateHumanReadableID("mp", req.Name)
 	req.IsBuiltin = 0
 	req.TrustTier = 2 // Community
 	req.Enabled = 1
@@ -940,16 +935,17 @@ func (h *PluginHandler) registerOneSkill(ctx context.Context, pluginID, pluginNa
 	}
 
 	meta := apptypes.SkillMeta{
-		Name:         fullName,
-		Version:      version,
-		Runtime:      "script",
-		RiskLevel:    fm.RiskLevel,
-		Sandbox:      sandboxLevel(fm.Sandbox),
-		Capabilities: caps,
-		ExecMode:     fm.ExecMode,
-		Trust:        apptypes.TrustTier(trustTier),
-		Instructions: string(data),
-		PluginID:     pluginID,
+		Name:            fullName,
+		Version:         version,
+		Runtime:         "script",
+		RiskLevel:       fm.RiskLevel,
+		Sandbox:         sandboxLevel(fm.Sandbox),
+		Capabilities:    caps,
+		ExecMode:        fm.ExecMode,
+		AmbientPriority: fm.AmbientPriority,
+		Trust:           apptypes.TrustTier(trustTier),
+		Instructions:    string(data),
+		PluginID:        pluginID,
 	}
 
 	if err := h.SkillReg.Register(ctx, meta); err != nil {

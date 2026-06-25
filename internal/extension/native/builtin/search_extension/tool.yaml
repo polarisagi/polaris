@@ -1,5 +1,18 @@
 name: search_extension
-description: "Search the built-in marketplace catalog and the official online MCP registry for plugins, skills, or MCP servers. Returns a combined list with local results first."
+description: |
+  Search for plugins, skills, or MCP servers that can extend your capabilities.
+  Supports natural language / semantic queries — describe what you want to do, not just exact names.
+  Examples: "send a tweet", "read emails", "analyze spreadsheets", "control browser".
+
+  Use this tool proactively whenever you lack a capability to complete the user's request.
+  Workflow: search_extension → get catalog ID → install_extension.
+
+  Search cascade (automatic, no configuration needed):
+    1. Semantic vector search (natural language understanding)
+    2. BM25 full-text search (keyword matching)
+    3. Graph spreading activation (discover related extensions)
+    4. Local catalog fallback (substring match)
+    5. Online MCP registry (last resort, requires network)
 version: "1.0.0"
 capability: write-network
 risk_level: low
@@ -10,3 +23,4 @@ tags:
   - marketplace
   - extensions
   - search
+  - semantic

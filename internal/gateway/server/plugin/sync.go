@@ -22,14 +22,15 @@ import (
 
 // SkillFrontmatter 是 SKILL.md frontmatter 的完整解析结果（agentskills.io 开放标准字段）。
 type SkillFrontmatter struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Version     string   `yaml:"version"`
-	Tags        []string `yaml:"tags"`
-	ExecMode    string   `yaml:"exec_mode"`  // "tool"（默认）| "ambient"
-	RiskLevel   string   `yaml:"risk_level"` // "low" | "medium" | "high"
-	Sandbox     string   `yaml:"sandbox"`    // "L1" | "L2" | "L3"
-	Capability  string   `yaml:"capability"` // e.g. "read-write"
+	Name            string   `yaml:"name"`
+	Description     string   `yaml:"description"`
+	Version         string   `yaml:"version"`
+	Tags            []string `yaml:"tags"`
+	ExecMode        string   `yaml:"exec_mode"`        // "tool"（默认）| "ambient"
+	AmbientPriority string   `yaml:"ambient_priority"` // "always" | "auto"（默认）| "index_only"
+	RiskLevel       string   `yaml:"risk_level"`       // "low" | "medium" | "high"
+	Sandbox         string   `yaml:"sandbox"`          // "L1" | "L2" | "L3"
+	Capability      string   `yaml:"capability"`       // e.g. "read-write"
 }
 
 // parseFrontmatter 从 SKILL.md 内容中提取 YAML frontmatter 并解析到 SkillFrontmatter。
@@ -53,6 +54,9 @@ func parseFrontmatter(content string) SkillFrontmatter {
 	}
 	if fm.ExecMode == "" {
 		fm.ExecMode = "tool"
+	}
+	if fm.AmbientPriority == "" {
+		fm.AmbientPriority = "auto"
 	}
 	if fm.RiskLevel == "" {
 		fm.RiskLevel = "medium"
@@ -461,6 +465,23 @@ func (h *PluginHandler) insertMarketplaceEntries(ctx context.Context, mp protoco
 	}
 
 	syncedCount, _ := h.ExtRepo.ReplaceMarketplaceCatalog(ctx, mp.ID, rows)
+
+	// 异步触发 FTS + 向量预计算（不阻塞同步主流程）
+	if h.EmbeddingIndexer != nil && syncedCount > 0 {
+		catalogEntries := make([]CatalogEntry, 0, len(rows))
+		for _, r := range rows {
+			catalogEntries = append(catalogEntries, CatalogEntry{
+				ID:          r.ID,
+				Name:        r.Name,
+				Description: r.Description,
+			})
+		}
+		go func() {
+			// 使用后台 context（同步 ctx 可能已取消）
+			h.EmbeddingIndexer.IndexEntries(context.Background(), catalogEntries)
+		}()
+	}
+
 	return syncedCount
 }
 

@@ -18,6 +18,7 @@ type Config struct {
 	System        SystemConfig        `toml:"system"`
 	Download      DownloadConfig      `toml:"download"`
 	Inference     InferenceConfig     `toml:"inference"`
+	Embedding     EmbeddingConfig     `toml:"embedding"`
 	Cognition     CognitionConfig     `toml:"cognition"`
 	Storage       StorageConfig       `toml:"storage"`
 	Observability ObservabilityConfig `toml:"observability"`
@@ -94,6 +95,16 @@ type InferenceConfig struct {
 	Cache             CacheConfig `toml:"cache"`
 	STT               STTConfig   `toml:"stt"`
 	TTS               TTSConfig   `toml:"tts"`
+}
+
+// EmbeddingConfig 向量化服务配置。
+// BaseURL 留空 = 禁用 Tier 2（降级到词元重叠 Tier 1）。
+// 兼容任何 OpenAI /v1/embeddings 兼容端点（DeepSeek-Embed / OpenAI / Jina 等）。
+type EmbeddingConfig struct {
+	BaseURL   string  `toml:"base_url"`             // 例: "https://api.deepseek.com/v1"
+	Model     string  `toml:"model"`                // 例: "deepseek-embed"
+	APIKey    string  `toml:"api_key"`              // 空 → 读 POLARIS_EMBEDDING_API_KEY 环境变量
+	Threshold float64 `toml:"similarity_threshold"` // 余弦阈值，默认 0.60
 }
 
 type STTConfig struct {

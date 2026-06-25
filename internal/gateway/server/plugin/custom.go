@@ -5,8 +5,6 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/types"
 
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -18,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // HandleCreateSkill 用户手动创建 Skill 扩展。
@@ -33,7 +32,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	extID := "ext_" + newHex(8)
+	extID := util.GenerateHumanReadableID("ext", req.Name)
 
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
@@ -124,7 +123,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	extID := "ext_" + newHex(8)
+	extID := util.GenerateHumanReadableID("ext", req.Name)
 
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
@@ -220,7 +219,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	extID := "ext_" + newHex(8)
+	extID := util.GenerateHumanReadableID("ext", req.Name)
 
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
@@ -255,7 +254,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 						},
 					})
 					if err == nil && resp != nil && resp.Approved {
-						appID := "app_" + newHex(8)
+						appID := util.GenerateHumanReadableID("app", req.Name)
 						err := h.ExtRepo.UpsertApp(bgCtx, apptypes.AppRow{
 							ID:          appID,
 							Name:        req.Name,
@@ -291,7 +290,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 写 apps 运行时表（与 MCP→mcp_servers / Skill→skills 的模式一致）
-	appID := "app_" + newHex(8)
+	appID := util.GenerateHumanReadableID("app", req.Name)
 	err := h.ExtRepo.UpsertApp(r.Context(), apptypes.AppRow{
 		ID:          appID,
 		Name:        req.Name,
@@ -344,8 +343,8 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	mcpID := "mcp_" + newHex(8)
-	extID := "ext_" + newHex(8)
+	mcpID := util.GenerateHumanReadableID("mcp", req.Name)
+	extID := util.GenerateHumanReadableID("ext", req.Name)
 
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
@@ -525,7 +524,7 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 	pluginName := filepath.Base(pluginDir) // GeneratePlugin 以 result.Name 为目录名
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	mcpID := "mcp_" + newHex(8)
+	mcpID := util.GenerateHumanReadableID("mcp", installReq.Name)
 	genArgsBytes, _ := json.Marshal(genArgs)
 	genConfigJSON, _ := json.Marshal(map[string]any{
 		"transport":  "stdio",
@@ -586,11 +585,4 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 		"id": extID, "mcp_id": mcpID, "name": pluginName,
 		"type": "mcp", "plugin_dir": pluginDir,
 	})
-}
-
-// newHex 生成 n 字节的随机十六进制字符串。
-func newHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }

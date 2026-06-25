@@ -391,6 +391,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			embedder = llmadapter.NewOllamaEmbeddingAdapter(embedModel, safeHTTPClient)
 			slog.Info("polaris: Ollama embedding registered", "model", embedModel)
 		}
+
 		if autoConf.Gate.State(probe.FeatureQLoRA) != probe.FeatureDisabled {
 			qloraAdapter = llmadapter.NewQLoRAAdapter("", safeHTTPClient)
 			slog.Info("polaris: QLoRA training adapter initialized")
@@ -409,6 +410,27 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 				slog.Info("polaris: large local LLM registered", "model", largeModel)
 			}
 		}
+	}
+
+	// OpenAI-compat Embedding：cfg.Embedding.BaseURL 显式配置时启用。
+	// 独立于 autoConf（autoConf 不可用时配置驱动路径仍生效）。
+	// 优先级低于 FeatureLocalEmbedding（Ollama 已初始化时跳过）。
+	// Tier 0 可运行：无本地 GPU 依赖，仅需云端 API 连通性。
+	if embedder == nil && cfg.Embedding.BaseURL != "" {
+		apiKey := []byte(cfg.Embedding.APIKey)
+		if len(apiKey) == 0 {
+			apiKey = []byte(os.Getenv("POLARIS_EMBEDDING_API_KEY"))
+		}
+		embedder = llmadapter.NewOpenAICompatibleEmbeddingAdapter(
+			cfg.Embedding.BaseURL,
+			cfg.Embedding.Model,
+			apiKey,
+			safeHTTPClient,
+		)
+		slog.Info("polaris: OpenAI-compat embedding registered",
+			"base_url", cfg.Embedding.BaseURL,
+			"model", cfg.Embedding.Model,
+		)
 	}
 
 	router := llm.NewInferenceRouter(reg, dialer)

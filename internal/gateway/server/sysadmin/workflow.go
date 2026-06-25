@@ -534,7 +534,7 @@ func (h *SysAdminHandler) runWorkflowStep(ctx context.Context, sessionID, prompt
 	}
 
 	var history []types.Message
-	history = h.Chat.InjectSystemPrompt(ctx, h.Agent, history)
+	history = h.Chat.InjectSystemPrompt(ctx, h.Agent, history, prompt)
 
 	userMessage := prompt
 	if workingDir != "" {

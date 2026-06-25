@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,14 +11,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// skillEmbedCache 进程内技能文本 → 向量缓存（sha256(text) 为 key）。
+// 技能安装/卸载极低频，进程级 sync.Map 足够，无需落盘。
+// 容量估算：100 技能 × 1536 维 × 4 字节 ≈ 600KB，可忽略。
+var (
+	skillEmbedCacheMu sync.RWMutex
+	skillEmbedCache   = make(map[string][]float32)
 )
 
 func writeSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, payload any) {
@@ -148,7 +160,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if len(history) > 0 {
-		history = s.InjectSystemPrompt(ctx, agentCtrl, history)
+		history = s.InjectSystemPrompt(ctx, agentCtrl, history, req.Input)
 	}
 	// [新增] 将用户 input 注入 Agent FSM（非阻塞）
 	if agentCtrl != nil {
@@ -630,7 +642,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message) []types.Message { //nolint:gocyclo,nestif
+func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message { //nolint:gocyclo,nestif
 	if agentCtrl == nil || agentCtrl.Memory() == nil {
 		return history
 	}
@@ -781,46 +793,152 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 	// Ambient skills 追加到模板（已在上方重置为 baseSystemPromptTpl / activatedPrompt，无累积风险）。
 	// 唯一来源是 skills 表，State-in-DB 原则；插件 ambient skill 在安装时由 registerPluginSkills 写入。
 	if s.DB != nil {
-		ic.SystemPromptTemplate += s.buildAmbientSkillsSection(ctx)
+		ic.SystemPromptTemplate += s.buildAmbientSkillsSection(ctx, userQuery)
 	}
 
 	return ic.PrependToMessages(history)
 }
 
-// buildAmbientSkillsSection 按 trust_tier 降序注入 ambient skill instructions，总字符数不超过 4000。
-// 超限时优先保留 trust_tier 高的，其余截断并记录 WARN 日志。
-func (s *ChatHandler) buildAmbientSkillsSection(ctx context.Context) string {
-	// trust_tier DESC 确保高信任技能优先；4000 字符上限保护上下文窗口
+const (
+	maxFullTextChars   = 128_000 // 全文注入总预算（128K字符 ≈ 32K tokens）
+	relevanceThreshold = 0.05    // 关键词词元重叠阈值（5%）
+)
+
+func relevanceScore(query string, name string, desc string, inst string) float64 {
+	queryLower := strings.ToLower(query)
+	targetText := strings.ToLower(name + " " + desc + " " + inst)
+
+	queryTokens := strings.Fields(queryLower)
+	if len(queryTokens) == 0 {
+		return 0
+	}
+
+	matchCount := 0
+	for _, tk := range queryTokens {
+		if strings.Contains(targetText, tk) {
+			matchCount++
+		}
+	}
+
+	return float64(matchCount) / float64(len(queryTokens))
+}
+
+// skillTextKey 返回技能文本的缓存 key（sha256 hex）。
+func skillTextKey(name, desc, inst string) string {
+	h := sha256.Sum256([]byte(name + "\x00" + desc + "\x00" + inst))
+	return fmt.Sprintf("%x", h)
+}
+
+// cachedSkillEmbed 从缓存读取或调用 Embedder 获取技能向量。
+// 失败时返回 nil（调用方降级 Tier 1）。
+func cachedSkillEmbed(e search.Embedder, name, desc, inst string) []float32 {
+	key := skillTextKey(name, desc, inst)
+	skillEmbedCacheMu.RLock()
+	if v, ok := skillEmbedCache[key]; ok {
+		skillEmbedCacheMu.RUnlock()
+		return v
+	}
+	skillEmbedCacheMu.RUnlock()
+
+	text := name + " " + desc + " " + inst
+	v := e.Embed(text)
+	if v != nil {
+		skillEmbedCacheMu.Lock()
+		skillEmbedCache[key] = v
+		skillEmbedCacheMu.Unlock()
+	}
+	return v
+}
+
+// isSkillRelevant 判断技能是否与用户查询相关。
+// Tier 2（Embedder 可用）：余弦相似度 >= EmbedThreshold。
+// Tier 1（降级）：词元重叠度 >= relevanceThreshold。
+// 任何错误静默降级 Tier 1，不中断聊天主流程。
+func (s *ChatHandler) isSkillRelevant(queryVec []float32, query, name, desc, inst string) bool {
+	if s.Embedder == nil || queryVec == nil {
+		return relevanceScore(query, name, desc, inst) >= relevanceThreshold
+	}
+
+	skillVec := cachedSkillEmbed(s.Embedder, name, desc, inst)
+	if skillVec == nil {
+		return relevanceScore(query, name, desc, inst) >= relevanceThreshold
+	}
+
+	threshold := s.EmbedThreshold
+	if threshold == 0 {
+		threshold = 0.60
+	}
+	return ffi.VecCosineF32(queryVec, skillVec) >= float32(threshold)
+}
+
+// buildAmbientSkillsSection 按 trust_tier 和 ambient_priority 注入 ambient skill instructions
+func (s *ChatHandler) buildAmbientSkillsSection(ctx context.Context, userQuery string) string {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT name, instructions FROM skills
+		`SELECT name, description, instructions, plugin_id, ambient_priority, trust_tier
+         FROM skills
          WHERE exec_mode='ambient' AND deprecated=0
-         ORDER BY trust_tier DESC`)
+         ORDER BY trust_tier DESC,
+                  CASE ambient_priority WHEN 'always' THEN 0 WHEN 'auto' THEN 1 ELSE 2 END ASC`)
 	if err != nil {
 		return ""
 	}
 	defer rows.Close()
 
-	const maxChars = 4000
-	var parts []string
-	total := 0
+	var indexLines []string
+	var fullTextParts []string
+	fullTextBudget := maxFullTextChars
+
+	var queryVec []float32
+	if s.Embedder != nil {
+		queryVec = s.Embedder.Embed(userQuery)
+	}
+
 	for rows.Next() {
-		var name, inst string
-		if rows.Scan(&name, &inst) != nil {
+		var name, desc, inst, pluginID, ambientPriority string
+		var trustTier int
+		if rows.Scan(&name, &desc, &inst, &pluginID, &ambientPriority, &trustTier) != nil {
 			continue
 		}
-		entry := "Ambient Skill: " + name + "\n" + inst
-		if total+len(entry) > maxChars {
-			slog.Warn("ambient skill truncated: char limit reached",
-				"skill", name, "limit", maxChars, "current", total)
-			break
+
+		mcpMark := ""
+		if s.MCPMgr != nil && s.MCPMgr.IsPluginConnected(pluginID) {
+			mcpMark = " [MCP: ✓]"
+		} else if pluginID != "" {
+			mcpMark = " [MCP: ✗]"
 		}
-		parts = append(parts, entry)
-		total += len(entry)
+
+		indexLine := "- " + name + ": " + desc + mcpMark
+		indexLines = append(indexLines, indexLine)
+
+		if ambientPriority == "index_only" {
+			continue
+		}
+
+		if ambientPriority == "auto" {
+			if !s.isSkillRelevant(queryVec, userQuery, name, desc, inst) {
+				continue
+			}
+		}
+
+		if fullTextBudget-len(inst) < 0 {
+			slog.Warn("ambient skill budget exhausted, index-only fallback", "skill", name)
+			continue
+		}
+
+		entry := "### " + name + "\n" + inst
+		fullTextParts = append(fullTextParts, entry)
+		fullTextBudget -= len(entry)
 	}
-	if len(parts) == 0 {
+
+	if len(indexLines) == 0 {
 		return ""
 	}
-	return "\n\n" + strings.Join(parts, "\n\n")
+
+	res := "\n\n## Installed Skills\n" + strings.Join(indexLines, "\n")
+	if len(fullTextParts) > 0 {
+		res += "\n\n## Active Skill Context\n" + strings.Join(fullTextParts, "\n\n")
+	}
+	return res
 }
 
 // SetActivatedSystemPrompt 热更新 M9 激活的系统提示词（goroutine-safe）。

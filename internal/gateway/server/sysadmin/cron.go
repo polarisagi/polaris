@@ -674,7 +674,7 @@ func (h *SysAdminHandler) executeAutomation(ctx context.Context, a *automation, 
 
 		// 构建初始 history
 		var history []types.Message
-		history = h.Chat.InjectSystemPrompt(bgCtx, h.Agent, history)
+		history = h.Chat.InjectSystemPrompt(bgCtx, h.Agent, history, a.Prompt)
 
 		// 追加用户消息，working_dir 非空时注入工作目录上下文
 		userMessage := a.Prompt

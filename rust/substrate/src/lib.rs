@@ -51,7 +51,7 @@ const SUBSTRATE_ABI_MAJOR: u16 = 1;
 /// 1: 新增 surreal_set_worker_threads / surreal_vec_delete / surreal_fts_delete /
 ///    surreal_graph_delete_edges；surreal_stats 扩展四路计数字段；
 ///    HNSW 替换 MTREE；docs 表移除 doc_id 字段（type::thing + record::id()）。
-const SUBSTRATE_ABI_MINOR: u16 = 1;
+const SUBSTRATE_ABI_MINOR: u16 = 2;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
 /// Go 侧用 `(version >> 16) & 0xFFFF` 提取 major。
@@ -537,12 +537,68 @@ mod tests {
     }
 }
 
+#[test]
+fn test_vec_cosine_identical() {
+    let a = [1.0_f32, 0.0, 0.0];
+    let r = unsafe { vec_cosine_f32(a.as_ptr(), 3, a.as_ptr(), 3) };
+    assert!((r - 1.0).abs() < 1e-6, "same vector → cosine=1");
+}
+
+#[test]
+fn test_vec_cosine_orthogonal() {
+    let a = [1.0_f32, 0.0];
+    let b = [0.0_f32, 1.0];
+    let r = unsafe { vec_cosine_f32(a.as_ptr(), 2, b.as_ptr(), 2) };
+    assert!(r.abs() < 1e-6, "orthogonal → cosine≈0");
+}
+
+#[test]
+fn test_vec_cosine_empty_returns_zero() {
+    let r = unsafe { vec_cosine_f32(std::ptr::null(), 0, std::ptr::null(), 0) };
+    assert_eq!(r, 0.0);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // [Storage-SurrealDB-Core] 认知检索轴 FFI
 // 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
 //
 // 功能: KV + HNSW 向量 + 有向图遍历 + BM25 全文检索
-// 后端: surreal-mem（默认，kv-mem，256MB+ 可用，含 VPS）/ surreal-rocksdb（显式，持久化）
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── vec_cosine_f32 ─────────────────────────────────────────────────────────
+// 计算两个 f32 向量的余弦相似度（Rust 编译器在 opt-level=3 下自动 SIMD 向量化）。
+// 参数：ptr + 元素个数（非字节数）；空向量或长度不等返回 0.0。
+// panic 被 catch_unwind 捕获，不越过 FFI 边界。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vec_cosine_f32(
+    a_ptr: *const f32,
+    a_len: usize,
+    b_ptr: *const f32,
+    b_len: usize,
+) -> f32 {
+    std::panic::catch_unwind(|| {
+        if a_ptr.is_null() || b_ptr.is_null() || a_len == 0 || a_len != b_len {
+            return 0.0_f32;
+        }
+        // Safety: 调用方保证 ptr 有效且生命周期覆盖此调用
+        let a = unsafe { std::slice::from_raw_parts(a_ptr, a_len) };
+        let b = unsafe { std::slice::from_raw_parts(b_ptr, b_len) };
+
+        let mut dot = 0.0_f32;
+        let mut na = 0.0_f32;
+        let mut nb = 0.0_f32;
+        // 此循环在 -C opt-level=3 + target-cpu=native 下被 LLVM 自动向量化（AVX2/NEON）
+        for i in 0..a_len {
+            dot += a[i] * b[i];
+            na += a[i] * a[i];
+            nb += b[i] * b[i];
+        }
+        let denom = na.sqrt() * nb.sqrt();
+        if denom == 0.0 { 0.0 } else { dot / denom }
+    })
+    .unwrap_or(0.0_f32)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 
 mod surreal_store;

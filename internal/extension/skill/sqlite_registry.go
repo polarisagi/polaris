@@ -48,8 +48,8 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 	query := `
 		INSERT INTO skills (
 			name, version, runtime, risk_level, sandbox, capabilities, exec_mode,
-			trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			ambient_priority, trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(name) DO UPDATE SET
 			version=excluded.version,
 			runtime=excluded.runtime,
@@ -57,6 +57,7 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 			sandbox=excluded.sandbox,
 			capabilities=excluded.capabilities,
 			exec_mode=excluded.exec_mode,
+			ambient_priority=excluded.ambient_priority,
 			trust_tier=excluded.trust_tier,
 			idempotent=excluded.idempotent,
 			benchmarks=excluded.benchmarks,
@@ -69,7 +70,7 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 	`
 	_, err := r.db.ExecContext(ctx, query,
 		meta.Name, meta.Version, meta.Runtime, meta.RiskLevel, meta.Sandbox,
-		string(capsBytes), meta.ExecMode, int(meta.Trust), meta.Idempotent, string(benchBytes), meta.Instructions, meta.Deprecated,
+		string(capsBytes), meta.ExecMode, meta.AmbientPriority, int(meta.Trust), meta.Idempotent, string(benchBytes), meta.Instructions, meta.Deprecated,
 		string(dependsJSON), string(composesJSON), meta.PluginID,
 	)
 	if err != nil {
@@ -82,7 +83,7 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*types.SkillMeta, error) {
 	// LEFT JOIN extension_instances 获取 marketplace 安装路径；builtin/user 技能 install_path 为空
 	query := `
-		SELECT s.name, s.version, s.runtime, s.risk_level, s.sandbox, s.capabilities, s.exec_mode,
+		SELECT s.name, s.version, s.runtime, s.risk_level, s.sandbox, s.capabilities, s.exec_mode, s.ambient_priority,
 		       s.trust_tier, s.idempotent, s.benchmarks, s.instructions, s.deprecated,
 		       s.depends_on, s.composes_of, s.plugin_id, COALESCE(ei.install_path, '')
 		FROM skills s
@@ -102,7 +103,7 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*ty
 	var trustInt int
 	err := row.Scan(
 		&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
-		&capsRaw, &meta.ExecMode, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
+		&capsRaw, &meta.ExecMode, &meta.AmbientPriority, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
 		&dependsJSON, &composesJSON, &meta.PluginID, &installPath,
 	)
 	if err != nil {
@@ -126,7 +127,7 @@ func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*ty
 
 func (r *SQLiteRegistryImpl) List(ctx context.Context, filter types.SkillFilter) ([]types.SkillMeta, error) {
 	query := `
-		SELECT name, version, runtime, risk_level, sandbox, capabilities, exec_mode,
+		SELECT name, version, runtime, risk_level, sandbox, capabilities, exec_mode, ambient_priority,
 		       trust_tier, idempotent, benchmarks, instructions, deprecated, depends_on, composes_of, plugin_id
 		FROM skills WHERE 1=1
 	`
@@ -149,7 +150,7 @@ func (r *SQLiteRegistryImpl) List(ctx context.Context, filter types.SkillFilter)
 		var trustInt int
 		if err := rows.Scan(
 			&meta.Name, &meta.Version, &meta.Runtime, &meta.RiskLevel, &meta.Sandbox,
-			&capsRaw, &meta.ExecMode, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
+			&capsRaw, &meta.ExecMode, &meta.AmbientPriority, &trustInt, &meta.Idempotent, &benchRaw, &meta.Instructions, &meta.Deprecated,
 			&dependsJSON, &composesJSON, &meta.PluginID,
 		); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRegistryImpl.List", err)

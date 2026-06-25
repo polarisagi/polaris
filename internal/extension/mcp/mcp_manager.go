@@ -63,6 +63,23 @@ func (m *MCPManager) SetSamplingProvider(p protocol.Provider) {
 	m.mu.Unlock()
 }
 
+// IsPluginConnected 判断给定 plugin_id 是否有至少一个已连接的 MCP Server。
+// 用于 buildAmbientSkillsSection 生成目录行的 MCP 状态标注。
+func (m *MCPManager) IsPluginConnected(pluginID string) bool {
+	if pluginID == "" {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	prefix := "plugin_" + pluginID + "_"
+	for id, e := range m.entries {
+		if strings.HasPrefix(id, prefix) && e.errMsg == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func NewMCPManager(sbx *sandbox.InProcessSandbox, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
 	return &MCPManager{
 		entries:    make(map[string]*mcpEntry),

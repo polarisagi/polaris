@@ -48,10 +48,12 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 
+	pluginhandler "github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/types"
 	webui "github.com/polarisagi/polaris/web"
@@ -140,6 +142,26 @@ func (s *Server) SetPluginCreator(pc *extplugin.PluginCreator) {
 		s.pluginHandler.PluginCreator = pc
 	}
 }
+
+// SetEmbedder 注入语义向量化引擎（Tier 2 Ambient 匹配）。
+// nil 时 ChatHandler 自动降级 Tier 1。
+func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
+	if s.chatHandler != nil {
+		s.chatHandler.Embedder = e
+		if threshold > 0 {
+			s.chatHandler.EmbedThreshold = threshold
+		} else {
+			s.chatHandler.EmbedThreshold = 0.60 // 默认阈值
+		}
+	}
+}
+
+func (s *Server) SetEmbeddingIndexer(idx *pluginhandler.EmbeddingIndexer) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.EmbeddingIndexer = idx
+	}
+}
+
 func (s *Server) SetScriptRunner(r marketplace.HookRunner) {
 	s.scriptRunner = r
 	if s.pluginHandler != nil {

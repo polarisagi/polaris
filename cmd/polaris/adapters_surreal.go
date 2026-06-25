@@ -194,3 +194,14 @@ func (a nativeCognAdapter) GraphSpreadingActivation(startIDs []string, maxDepth 
 	}
 	return out, nil
 }
+
+// pluginCognIndexAdapter 将 *store.SurrealDBCoreStore 适配为 plugin.CognitiveIndexer。
+type pluginCognIndexAdapter struct{ s *store.SurrealDBCoreStore }
+
+func (a *pluginCognIndexAdapter) FTSIndex(docID, text string) error {
+	return a.s.FTSIndex(docID, text)
+}
+
+func (a *pluginCognIndexAdapter) VecUpsert(id string, embedding []float32) error {
+	return a.s.VecUpsert(id, embedding)
+}

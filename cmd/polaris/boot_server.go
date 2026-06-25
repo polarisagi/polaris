@@ -23,6 +23,7 @@ import (
 	"github.com/polarisagi/polaris/internal/action/codeact"
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/server"
+	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	si "github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
@@ -41,6 +42,13 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetToolRegistry(tb.ToolReg)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
+	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
+
+	// 设置插件同步向量索引器
+	if sb.SurrealStore != nil {
+		idx := plugin.NewEmbeddingIndexer(&pluginCognIndexAdapter{s: sb.SurrealStore}, sb.Embedder)
+		httpServer.SetEmbeddingIndexer(idx)
+	}
 
 	// ─── Skill 签名密钥 ──────────────────────────────────────────────────────
 	var skillSigningKey []byte

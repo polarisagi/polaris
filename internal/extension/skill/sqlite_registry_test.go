@@ -26,6 +26,7 @@ func TestSQLiteRegistry(t *testing.T) {
 			sandbox TEXT,
 			capabilities TEXT,
 			exec_mode TEXT,
+			ambient_priority TEXT,
 			trust_tier INTEGER,
 			idempotent BOOLEAN,
 			benchmarks TEXT,

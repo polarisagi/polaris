@@ -26,6 +26,9 @@ type PluginHandler struct {
 	SkillReg             protocol.SkillRegistry
 	ScriptRunner         marketplace.HookRunner
 	PluginCreator        *extplugin.PluginCreator
+
+	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
+	EmbeddingIndexer *EmbeddingIndexer
 }
 
 func NewPluginHandler(

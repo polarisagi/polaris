@@ -188,9 +188,9 @@ TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `pol
 
 ## 6. Semantic Cache
 
-### 6.1 EmbeddingBatcher
+### 6.1 EmbeddingBatcher & OpenAICompatibleAdapter
 
-实现见 `internal/llm/`（EmbeddingBatcher）。
+实现见 `internal/llm/`（EmbeddingBatcher, OpenAICompatibleEmbeddingAdapter）。支持通过 OpenAI `/v1/embeddings` 标准接口接入云端/端侧的各种 Semantic Embedding 服务（Tier 2 Embedding）。
 
 双优先级队列：pendingHigh[180]（SurpriseIndex、交互式查询）/ pendingLow[76]（GraphRAG、Consolidation）。batchWindow=10ms，maxBatchSize=100，保留 20% 槽位给 Low 防饥饿。Low >100ms 升 High。背压：High cap 80% → 指数退避（50ms 初始，max 2s）；Low cap 80% → 排队 30ms。
 

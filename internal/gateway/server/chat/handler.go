@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -75,6 +76,13 @@ type ChatHandler struct {
 	STTEngine *atomic.Pointer[stt.Engine]
 	TTSEngine *atomic.Pointer[tts.Engine]
 	WriteSSE  func(http.ResponseWriter, http.Flusher, string, any)
+
+	// Embedder 语义向量化引擎（nil = Tier 1 词元重叠降级）。
+	// 由 boot_server.go 通过 SetEmbedder 注入；聊天主流程不依赖此字段，可安全为 nil。
+	Embedder search.Embedder
+
+	// EmbedThreshold Tier 2 余弦相似度阈值（默认 0.60，由 cfg.Embedding.Threshold 注入）。
+	EmbedThreshold float64
 }
 
 func NewChatHandler(

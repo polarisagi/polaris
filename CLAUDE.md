@@ -211,6 +211,7 @@ make check-all    # fmt → lint → test → test-race → rust-lint → rust-t
 
 **docs/arch/decisions/ 文件清单**（ADR-0001~0026，按需 grep 主题词）：
 - 0001 观测单例 · 0002 Skill 注册合并 · 0003 SQLite modernc · 0004 Tier-0 硬件层 · 0005 purego FFI Cedar
+- 0030 Tier2 Semantic Embedding Upgrade
 - 0006 state.yaml SSoT · 0007 污点五级 · 0008 沙箱三级回退 · 0009 KillSwitch 三阶段 · 0010 SurrealDB 认知存储
 - 0011 CGO→purego · 0012 spec 一致性测试 · 0013 Lint 阶段1 · 0014 对抗审查 Action · 0015 Codex 特性集成
 - 0016 统一信任扩展模型 · 0017 MCP Streamable HTTP · 0018 MCP 污点解码器 · 0019 扩展实例统一安装表
