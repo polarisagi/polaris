@@ -56,7 +56,7 @@ jobs:
           path: |
             rust/substrate/target/release/libsubstrate.so
             rust/substrate/target/release/libsubstrate.a
-          key: rust-ci-x86_64-unknown-linux-gnu-${{ hashFiles('rust/substrate/src/**', 'rust/substrate/Cargo.toml', 'rust/substrate/Cargo.lock') }}
+          key: rust-ci-x86_64-unknown-linux-gnu-${{ hashFiles('rust/substrate/**') }}
 
       - uses: dtolnay/rust-toolchain@stable
         if: steps.rust-final.outputs.cache-hit != 'true'

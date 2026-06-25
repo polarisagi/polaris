@@ -333,4 +333,23 @@ jobs:
             --title "Rust Substrate Artifacts (${HASH:0:8})" \
             --notes "$NOTES" \
             --prerelease \
-            dist/*
+            dist/* || {
+              echo "::warning::Failed to create release. Verifying if it exists and assets are fully uploaded by parallel job..."
+              for i in {1..12}; do
+                if gh release view "$TAG" >/dev/null 2>&1; then
+                  # Release exists, check asset count. Expecting 6 assets.
+                  ASSET_COUNT=$(gh release view "$TAG" --json assets -q '.assets | length' || echo "0")
+                  if [ "$ASSET_COUNT" -eq 6 ]; then
+                    echo "All 6 assets verified."
+                    exit 0
+                  fi
+                  echo "Found $ASSET_COUNT assets. Waiting for parallel job to finish uploading..."
+                else
+                  echo "Release not found yet. Waiting..."
+                fi
+                sleep 5
+              done
+              echo "::error::Timeout waiting for release assets."
+              exit 1
+            }
+
