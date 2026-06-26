@@ -1225,3 +1225,7 @@ func (s *Server) bootMarketplaceInit(ctx context.Context) {
 		}
 	}
 }
+
+func (s *Server) PluginHandler() *plugin.PluginHandler {
+	return s.pluginHandler
+}

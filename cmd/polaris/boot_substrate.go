@@ -33,6 +33,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+	"github.com/polarisagi/polaris/internal/llm/ollamamgr"
 	"github.com/polarisagi/polaris/internal/observability"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -378,32 +379,69 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	var prmAdapter *llmadapter.PRMAdapter
 	var steeringAdapter *llmadapter.SteeringAdapter
 
-	// 1. OpenAI-compat Embedding：用户显式配置外部 API 时绝对优先启用。
-	// 独立于 autoConf，跳过本地 Ollama 尝试，彻底贯彻“用户配置优先”的设计理念。
-	if cfg.Embedding.BaseURL != "" {
+	// 创建动态原子代理，瞬间点亮系统基础功能
+	dynEmbedder := llm.NewDynamicEmbedder()
+	embedder = dynEmbedder
+
+	// 智能判定优先级的核心逻辑
+	targetModel := ""
+	if cfg.Embedding.Model != "" && cfg.Embedding.BaseURL == "" {
+		targetModel = cfg.Embedding.Model
+		slog.Info("polaris: Using explicit local embedding model", "model", targetModel)
+	} else if autoConf != nil && autoConf.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled {
+		targetModel = autoConf.Config.LocalEmbeddingModel
+		if targetModel == "" {
+			targetModel = "nomic-embed-text"
+		}
+		slog.Info("polaris: Using auto-detected local embedding model", "model", targetModel, "dim", autoConf.Config.LocalEmbeddingDim)
+	}
+
+	if targetModel != "" { //nolint:nestif
+		// 1. 全自动免安装与异步自愈逻辑 (Zero-setup background boot)
+		go func() {
+			ctxBg := context.Background()
+			slog.Info("polaris: Starting background Ollama lifecycle manager...")
+			binPath, err := ollamamgr.EnsureOllama(ctxBg)
+			if err != nil {
+				slog.Error("polaris: Failed to install local Ollama", "err", err)
+				return
+			}
+
+			// 确保服务在后台运行
+			_, err = ollamamgr.StartOllama(ctxBg, binPath)
+			if err != nil {
+				slog.Error("polaris: Failed to start local Ollama", "err", err)
+				return
+			}
+
+			if err := ollamamgr.EnsureModel(ctxBg, binPath, targetModel); err != nil {
+				slog.Error("polaris: Failed to pull embedding model", "err", err)
+				return
+			}
+
+			// 一切就绪，热更新引擎
+			adapter := llmadapter.NewOllamaEmbeddingAdapter(targetModel, ollamaHTTPClient)
+			dynEmbedder.Set(adapter)
+			slog.Info("polaris: Dynamic embedding engine is now ACTIVE!", "model", targetModel)
+		}()
+	} else if cfg.Embedding.BaseURL != "" {
+		// 2. 远程 API 绝对兜底逻辑 (只在本地跑不起且强制配置时才用)
 		apiKey := []byte(cfg.Embedding.APIKey)
 		if len(apiKey) == 0 {
 			apiKey = []byte(os.Getenv("POLARIS_EMBEDDING_API_KEY"))
 		}
-		embedder = llmadapter.NewOpenAICompatibleEmbeddingAdapter(
+		adapter := llmadapter.NewOpenAICompatibleEmbeddingAdapter(
 			cfg.Embedding.BaseURL,
 			cfg.Embedding.Model,
 			apiKey,
 			safeHTTPClient,
 		)
-		slog.Info("polaris: OpenAI-compat embedding registered",
+		dynEmbedder.Set(adapter)
+		slog.Info("polaris: Remote OpenAI-compat embedding registered as fallback",
 			"base_url", cfg.Embedding.BaseURL,
 			"model", cfg.Embedding.Model,
 		)
-	} else if cfg.Embedding.Model != "" {
-		// 2. 本地 Ollama Embedding：仅当用户配置了模型，但没有配置 BaseURL 时，显式启用本地 Ollama。
-		// 取消底层的“自动回退”机制，一切以用户的明确配置为准。
-		embedder = llmadapter.NewOllamaEmbeddingAdapter(cfg.Embedding.Model, ollamaHTTPClient)
-		slog.Info("polaris: Ollama embedding registered (explicitly configured)",
-			"model", cfg.Embedding.Model,
-		)
 	}
-	// 3. 如果两者都未配置，则 embedder 保持 nil，系统优雅降级为 Tier 1。
 
 	if autoConf != nil { //nolint:nestif
 		if autoConf.Gate.State(probe.FeatureLocalInference) != probe.FeatureDisabled {

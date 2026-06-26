@@ -4,6 +4,7 @@
 package main
 
 import (
+	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 
 	"context"
@@ -200,6 +201,20 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	}
 	httpServer.InitSTTEngine(ctx, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.STT)
 	httpServer.InitTTSEngine(ctx, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.TTS)
+
+	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
+	if dyn, ok := sb.Embedder.(*llm.DynamicEmbedder); ok {
+		go func() {
+			<-dyn.WaitReady()
+			slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
+			if httpServer.PluginHandler() != nil {
+				_, err := httpServer.PluginHandler().SyncAllMarketplaces(context.Background(), true)
+				if err != nil {
+					slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
+				}
+			}
+		}()
+	}
 
 	if err := httpServer.Start(); err != nil {
 		slog.Error("polaris: failed to start HTTP server", "err", err)
