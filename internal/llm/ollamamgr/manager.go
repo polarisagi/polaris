@@ -1,6 +1,7 @@
 package ollamamgr
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -26,10 +28,16 @@ func ensureBinDir() (string, error) {
 	return dir, nil
 }
 
-// EnsureOllama 下载并安装本地独立的 Ollama。
+// EnsureOllama 下载并安装本地独立的 Ollama，或者使用系统已安装的 Ollama。
 // httpClient 由调用方注入（应为 safeHTTPClient），使下载流量经过 SafeDialer + GithubProxy，
 // 避免绕过 SSRF 过滤（XR-06）并支持代理加速（对中国大陆 GitHub 访问尤为关键）。
 func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) {
+	// 首先检查系统是否已经全局安装了 Ollama
+	if globalPath := findGlobalOllama(); globalPath != "" {
+		slog.Info("polaris: Found global Ollama installation", "path", globalPath)
+		return globalPath, nil
+	}
+
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -38,74 +46,232 @@ func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) 
 		return "", err
 	}
 
+	distDir := filepath.Join(dir, "ollama-dist")
 	binName := "ollama"
 	if runtime.GOOS == "windows" {
 		binName = "ollama.exe"
 	}
-	binPath := filepath.Join(dir, binName)
+	binPath := filepath.Join(distDir, binName)
+	legacyBinPath := filepath.Join(dir, binName)
 
 	// 如果文件已存在且有执行权限，直接返回
 	if info, err := os.Stat(binPath); err == nil && !info.IsDir() {
-		// 基本检查存在即可，可以做更严格的检查
 		return binPath, nil
+	} else if info, err := os.Stat(legacyBinPath); err == nil && !info.IsDir() {
+		return legacyBinPath, nil
 	}
 
 	slog.Info("polaris: Ollama binary not found locally, starting silent download...", "path", binPath)
 
-	// 拼接下载地址 (格式: ollama-linux-amd64 / ollama-darwin)
+	downloadName := getDownloadName()
+	url := fmt.Sprintf("https://github.com/ollama/ollama/releases/latest/download/%s", downloadName)
+
+	tmpArchive := filepath.Join(dir, "ollama-archive.tmp")
+	if err := downloadFile(ctx, httpClient, url, tmpArchive); err != nil {
+		return "", fmt.Errorf("failed to download ollama: %w", err)
+	}
+	defer os.Remove(tmpArchive)
+
+	if err := extractOllamaArchive(downloadName, tmpArchive, distDir); err != nil {
+		return "", err
+	}
+
+	binPath = locateOllamaBinary(distDir, binName, binPath)
+
+	slog.Info("polaris: Ollama binary downloaded and installed successfully", "path", binPath)
+	return binPath, nil
+}
+
+func getDownloadName() string {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
-
-	// 注意各平台特殊处理
 	downloadName := fmt.Sprintf("ollama-%s-%s", goos, goarch)
 	switch goos {
 	case "windows":
-		downloadName += ".exe"
+		downloadName += ".zip"
 	case "darwin":
-		// macOS 官方只发布一个通用 fat binary（同时支持 amd64 和 arm64），文件名为 ollama-darwin。
-		// 不区分 amd64/arm64，否则 arm64 会拼成 ollama-darwin-arm64 导致 404。
-		downloadName = "ollama-darwin"
+		downloadName = "ollama-darwin.tgz"
+	case "linux":
+		downloadName += ".tar.zst"
 	}
+	return downloadName
+}
 
-	url := fmt.Sprintf("https://github.com/ollama/ollama/releases/latest/download/%s", downloadName)
-
+func downloadFile(ctx context.Context, client *http.Client, url, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// 使用注入的 httpClient（含 SafeDialer + GithubProxy），禁止使用 http.DefaultClient
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to download ollama: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("unexpected status code downloading ollama: %d", resp.StatusCode)
+		return fmt.Errorf("unexpected status code downloading ollama: %d", resp.StatusCode)
 	}
 
-	// 先写到临时文件
-	tmpPath := binPath + ".tmp"
-	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	_, err = io.Copy(out, resp.Body)
 	out.Close()
 	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("failed to write ollama binary: %w", err)
+		return fmt.Errorf("failed to write ollama archive: %w", err)
+	}
+	return nil
+}
+
+func extractOllamaArchive(downloadName, tmpArchive, distDir string) error {
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		return err
 	}
 
-	// 重命名
-	if err := os.Rename(tmpPath, binPath); err != nil {
-		return "", fmt.Errorf("failed to install ollama binary: %w", err)
+	slog.Info("polaris: Extracting Ollama archive...", "archive", downloadName)
+	if strings.HasSuffix(downloadName, ".zip") {
+		if err := extractZip(tmpArchive, distDir); err != nil {
+			return fmt.Errorf("failed to extract zip: %w", err)
+		}
+	} else {
+		cmd := exec.Command("tar", "-xf", tmpArchive, "-C", distDir)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to extract archive %s: %w", downloadName, err)
+		}
+	}
+	return nil
+}
+
+func locateOllamaBinary(distDir, binName, defaultBinPath string) string {
+	if _, err := os.Stat(defaultBinPath); os.IsNotExist(err) {
+		subPath := filepath.Join(distDir, "bin", binName)
+		if _, err := os.Stat(subPath); err == nil {
+			return subPath
+		}
+
+		err = filepath.Walk(distDir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && info.Name() == binName {
+				defaultBinPath = path
+			}
+			return nil
+		})
+		if err != nil {
+			slog.Warn("polaris: Error walking directory while locating ollama", "error", err)
+		}
+	}
+	return defaultBinPath
+}
+
+// extractZip 解压 zip 文件到目标目录
+func extractZip(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		fpath := filepath.Join(dest, f.Name)
+		if !strings.HasPrefix(fpath, filepath.Clean(dest)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", fpath)
+		}
+
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(fpath, os.ModePerm); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
+			return err
+		}
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+		_, err = io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// findGlobalOllama 查找系统全局安装的 Ollama
+func findGlobalOllama() string {
+	// 1. 尝试从 PATH 环境变量中查找
+	if p, err := exec.LookPath("ollama"); err == nil {
+		if checkOllamaExecutable(p) {
+			return p
+		}
 	}
 
-	slog.Info("polaris: Ollama binary downloaded and installed successfully", "path", binPath)
-	return binPath, nil
+	// 2. 尝试各个平台的默认安装路径
+	var commonPaths []string
+	home, _ := os.UserHomeDir()
+
+	switch runtime.GOOS {
+	case "darwin":
+		commonPaths = []string{
+			"/usr/local/bin/ollama",
+			"/opt/homebrew/bin/ollama",
+			"/Applications/Ollama.app/Contents/Resources/ollama",
+		}
+	case "windows":
+		commonPaths = []string{
+			filepath.Join(home, "AppData", "Local", "Programs", "Ollama", "ollama.exe"),
+			`C:\Program Files\Ollama\ollama.exe`,
+		}
+	case "linux":
+		commonPaths = []string{
+			"/usr/local/bin/ollama",
+			"/usr/bin/ollama",
+			"/bin/ollama",
+			"/opt/ollama/bin/ollama",
+		}
+	}
+
+	for _, p := range commonPaths {
+		if checkOllamaExecutable(p) {
+			return p
+		}
+	}
+
+	return ""
+}
+
+// checkOllamaExecutable 检查给定的路径是否是一个可用的 ollama 可执行文件
+func checkOllamaExecutable(p string) bool {
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() {
+		return false
+	}
+
+	// 在 Windows 之外的系统上检查执行权限
+	if runtime.GOOS != "windows" && info.Mode()&0111 == 0 {
+		return false
+	}
+
+	// 尝试运行 ollama -v 确认它能正常执行
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, p, "-v")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+
+	return true
 }
 
 // StartOllama 在后台启动 ollama serve
