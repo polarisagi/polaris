@@ -46,12 +46,13 @@ default_provider = "deepseek-v4-flash"
 reasoning_provider = "deepseek-v4-pro"
 structured_output = "grammar"
 # 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION）。
-# 本地 Ollama 路径由 FeatureGate 按内存自动覆盖此值，无需手动修改：
+# 用户如果在下方 [embedding] 配置了外部大模型，此值必须与模型输出维度对应（如 OpenAI/DeepSeek 均为 1536）。
+# 只有在用户未配置外部 API，且 FeatureGate 根据内存自动启用了本地 Ollama 时，此值才会被自动覆盖，无需手动修改：
 #   FeatureMaxEmbedding  （Tier2, ≥12GB free）→ qwen3-embedding:8b   → 4096  MTEB 70.58
 #   FeatureUltraEmbedding（Tier1, ≥6GB  free）→ qwen3-embedding:4b   → 2560  MTEB ~68
 #   FeatureHQEmbedding   （Tier0, ≥3GB  free）→ qwen3-embedding:0.6b → 1024  MTEB 64.33
 #   FeatureLocalEmbedding（Tier0, ≥256MB    ）→ nomic-embed-text     →  768  MTEB ~62
-# 远程 API 路径（所有本地 Embedding 不可用时）：
+# 远程 API 默认路径：
 #   OpenAI text-embedding-3-small / DeepSeek-Embedder → 1536
 embedder_dim = 1536
 
@@ -187,7 +188,11 @@ warn_pct         = 80.0
 max_thrash_count = 3
 
 # ── 向量化服务（Tier 2 Ambient 匹配 + Extension Catalog 预计算）─────────────────
-# base_url 留空 = 禁用，所有检索降级到 Tier 1（词元重叠 / SQLite LIKE）
+# 系统完全遵循“用户配置优先”。只要配置了 base_url，即强制使用该远程模型，绝不会自动拉取本地模型。
+# 只有在 base_url 留空时，系统才可能根据可用内存在后台尝试启动本地 Ollama 作为回退（Fallback）。
+# 若本地模型也不可用，所有检索将优雅降级到 Tier 1（基于关键词的 FTS 搜索）。
+#
+# 提示：首次配置好下方的大模型后，可在系统中触发市场同步（local_only），即可将历史缺少的插件向量全部补齐。
 # 示例: base_url = "https://api.deepseek.com/v1", model = "deepseek-embed"
 [embedding]
 base_url  = ""

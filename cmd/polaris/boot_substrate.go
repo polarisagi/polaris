@@ -377,6 +377,27 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	var qloraAdapter *llmadapter.QLoRAAdapter
 	var prmAdapter *llmadapter.PRMAdapter
 	var steeringAdapter *llmadapter.SteeringAdapter
+
+	// OpenAI-compat Embedding：用户显式配置时绝对优先启用。
+	// 独立于 autoConf，跳过本地 Ollama 尝试，彻底贯彻“用户配置优先”的设计理念。
+	// Tier 0 可运行：无本地 GPU 依赖，仅需云端 API 连通性。
+	if cfg.Embedding.BaseURL != "" {
+		apiKey := []byte(cfg.Embedding.APIKey)
+		if len(apiKey) == 0 {
+			apiKey = []byte(os.Getenv("POLARIS_EMBEDDING_API_KEY"))
+		}
+		embedder = llmadapter.NewOpenAICompatibleEmbeddingAdapter(
+			cfg.Embedding.BaseURL,
+			cfg.Embedding.Model,
+			apiKey,
+			safeHTTPClient,
+		)
+		slog.Info("polaris: OpenAI-compat embedding registered",
+			"base_url", cfg.Embedding.BaseURL,
+			"model", cfg.Embedding.Model,
+		)
+	}
+
 	if autoConf != nil { //nolint:nestif
 		if autoConf.Gate.State(probe.FeatureLocalInference) != probe.FeatureDisabled {
 			localModel := autoConf.Config.LocalModelID
@@ -386,13 +407,15 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, ollamaHTTPClient, tbr))
 			slog.Info("polaris: Ollama local inference registered", "model", localModel)
 		}
-		if autoConf.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled {
+
+		// 仅在用户未显式配置外部 API (embedder == nil) 时，才尝试作为 fallback 初始化本地 Ollama Embedding
+		if embedder == nil && autoConf.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled {
 			embedModel := autoConf.Config.LocalEmbeddingModel
 			if embedModel == "" {
 				embedModel = "nomic-embed-text"
 			}
 			embedder = llmadapter.NewOllamaEmbeddingAdapter(embedModel, ollamaHTTPClient)
-			slog.Info("polaris: Ollama embedding registered",
+			slog.Info("polaris: Ollama embedding registered as fallback",
 				"model", embedModel,
 				"dim", autoConf.Config.LocalEmbeddingDim,
 				"hq", autoConf.Gate.State(probe.FeatureHQEmbedding) != probe.FeatureDisabled,
@@ -417,27 +440,6 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 				slog.Info("polaris: large local LLM registered", "model", largeModel)
 			}
 		}
-	}
-
-	// OpenAI-compat Embedding：cfg.Embedding.BaseURL 显式配置时启用。
-	// 独立于 autoConf（autoConf 不可用时配置驱动路径仍生效）。
-	// 优先级低于 FeatureLocalEmbedding（Ollama 已初始化时跳过）。
-	// Tier 0 可运行：无本地 GPU 依赖，仅需云端 API 连通性。
-	if embedder == nil && cfg.Embedding.BaseURL != "" {
-		apiKey := []byte(cfg.Embedding.APIKey)
-		if len(apiKey) == 0 {
-			apiKey = []byte(os.Getenv("POLARIS_EMBEDDING_API_KEY"))
-		}
-		embedder = llmadapter.NewOpenAICompatibleEmbeddingAdapter(
-			cfg.Embedding.BaseURL,
-			cfg.Embedding.Model,
-			apiKey,
-			safeHTTPClient,
-		)
-		slog.Info("polaris: OpenAI-compat embedding registered",
-			"base_url", cfg.Embedding.BaseURL,
-			"model", cfg.Embedding.Model,
-		)
 	}
 
 	router := llm.NewInferenceRouter(reg, dialer)
