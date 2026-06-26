@@ -137,7 +137,7 @@ func (m *Manager) CheckLatest(ctx context.Context) {
 
 	latest := release.TagName
 	current := m.current
-	hasUpdate := latest != "" && !equalVersions(current, latest) && current != "dev"
+	hasUpdate := latest != "" && !equalVersions(current, latest)
 
 	m.mu.Lock()
 	m.info = VersionInfo{
@@ -517,13 +517,11 @@ func equalVersions(a, b string) bool {
 	return strings.TrimPrefix(a, "v") == strings.TrimPrefix(b, "v")
 }
 
-// semverCompare 比较两个不带 'v' 前缀的语义版本字符串。
-// 返回: -1 表示 a < b；0 表示 a == b；1 表示 a > b。
-// 仅解析 major.minor.patch，忽略预发布后缀。
 func semverCompare(a, b string) int {
-	parse := func(s string) [3]int {
-		// 截断预发布后缀（"-rc.1"、"+build"）
+	parse := func(s string) ([3]int, string) {
+		pre := ""
 		if i := strings.IndexAny(s, "-+"); i >= 0 {
+			pre = s[i:]
 			s = s[:i]
 		}
 		parts := strings.SplitN(s, ".", 3)
@@ -535,9 +533,10 @@ func semverCompare(a, b string) int {
 			v, _ := strconv.Atoi(p)
 			n[i] = v
 		}
-		return n
+		return n, pre
 	}
-	va, vb := parse(a), parse(b)
+	va, prea := parse(a)
+	vb, preb := parse(b)
 	for i := range va {
 		if va[i] < vb[i] {
 			return -1
@@ -546,5 +545,19 @@ func semverCompare(a, b string) int {
 			return 1
 		}
 	}
-	return 0
+
+	if prea == preb {
+		return 0
+	}
+	if prea == "" { // a has no pre, so a is greater
+		return 1
+	}
+	if preb == "" { // b has no pre, so b is greater
+		return -1
+	}
+	// Both have pre, simple string comparison
+	if prea < preb {
+		return -1
+	}
+	return 1
 }

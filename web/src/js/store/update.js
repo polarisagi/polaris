@@ -36,6 +36,13 @@ Alpine.store('update', {
       if (!resp.ok) return
       const d = await resp.json()
       this.current = d.current || ''
+      
+      if (d.latest) {
+        this.latest = d.latest
+        this.hasUpdate = d.has_update || false
+        this.releaseURL = d.release_url || ''
+      }
+
       // 同步后端的更新进度（用户刷新页面时恢复状态）
       if (d.update_status && d.update_status !== 'idle') {
         this.status = d.update_status
@@ -46,7 +53,7 @@ Alpine.store('update', {
 
   // ── 2. 直接调 GitHub API 对比版本（不经过后端，前端承担 rate limit）──────
   async checkGitHub() {
-    if (!this.current || this.current === 'dev') return
+    if (!this.current) return
     try {
       const resp = await fetch(GITHUB_API, {
         headers: { Accept: 'application/vnd.github+json' },
@@ -103,10 +110,29 @@ Alpine.store('update', {
   _isNewer(latest, current) {
     if (!latest || !current) return false
     const strip = s => s.replace(/^v/, '')
-    const parts = s => strip(s).split('.').map(n => parseInt(n, 10) || 0)
-    const [la, lb, lc] = parts(latest)
-    const [ca, cb, cc] = parts(current)
-    return la > ca || (la === ca && lb > cb) || (la === ca && lb === cb && lc > cc)
+    const parse = s => {
+      let pre = ""
+      const m = s.match(/([-\+].+)/)
+      if (m) {
+        pre = m[1]
+        s = s.replace(/([-\+].+)/, '')
+      }
+      return { n: s.split('.').map(n => parseInt(n, 10) || 0), pre }
+    }
+    const a = parse(strip(latest))
+    const b = parse(strip(current))
+    
+    for (let i = 0; i < 3; i++) {
+      const la = a.n[i] || 0
+      const ca = b.n[i] || 0
+      if (la > ca) return true
+      if (la < ca) return false
+    }
+    
+    if (a.pre === b.pre) return false
+    if (!a.pre) return true
+    if (!b.pre) return false
+    return a.pre > b.pre
   },
 
   async init() {

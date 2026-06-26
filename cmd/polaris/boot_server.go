@@ -134,6 +134,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 
 	// ─── OTA 热更新管理器 ─────────────────────────────────────────────────────
 	updMgr := updater.New(Version, CommitHash, BuildDate, sb.SafeHTTP)
+	updMgr.StartBackgroundCheck(ctx, 2*time.Hour)
 	updMgr.SetRestartFn(func() {
 		// syscall.Exec 完全替换进程镜像，Go runtime 不执行任何 defer/finalizer。
 		// 关闭序列（与 graceful shutdown 保持一致）：
