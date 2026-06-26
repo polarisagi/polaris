@@ -633,15 +633,27 @@ func (s *Server) InitSTTEngine(ctx context.Context, dataDir string, gate *probe.
 	// 立即设置 mock 引擎，保证接口可用
 	// if mockEngine...
 
-	// 门控检查
+	// 门控检查：FeatureLocalSTT 是最低档（int8），未开启则无法运行 STT
 	if gate != nil && gate.State(probe.FeatureLocalSTT) == probe.FeatureDisabled {
-		slog.Info("stt: FeatureLocalSTT disabled by FeatureGate, using mock engine")
+		slog.Info("stt: FeatureLocalSTT disabled by FeatureGate (need ≥512MB free), using mock engine")
 		return
+	}
+
+	// 按 FeatureHQSTT 自动选择模型档位：
+	//   HQ 门控开启（≥1GB free）→ float32 SenseVoice（精度优先）
+	//   HQ 门控未开启              → int8 SenseVoice（速度/体积优先）
+	useHQ := gate != nil && gate.State(probe.FeatureHQSTT) != probe.FeatureDisabled
+	modelURL := sttConfig.SenseVoiceModelURL // 默认 float32（HQ）
+	if !useHQ {
+		if sttConfig.SenseVoiceModelURLStd != "" {
+			modelURL = sttConfig.SenseVoiceModelURLStd // int8 标准档
+		}
+		// SenseVoiceModelURLStd 为空（旧配置）则回退到 SenseVoiceModelURL
 	}
 
 	// 异步下载 + 重载：不阻塞启动路径
 	go func() {
-		if err := stt.EnsureAssets(ctx, sttDir, httpClient, sttConfig.SherpaVersion, sttConfig.SenseVoiceModelURL, sttConfig.PunctModelURL); err != nil {
+		if err := stt.EnsureAssets(ctx, sttDir, httpClient, sttConfig.SherpaVersion, modelURL, sttConfig.PunctModelURL); err != nil {
 			slog.Warn("stt: asset download failed, keeping mock engine", "err", err)
 			return
 		}
@@ -653,14 +665,11 @@ func (s *Server) InitSTTEngine(ctx context.Context, dataDir string, gate *probe.
 		}
 
 		modelDir := stt.ModelDir(sttDir)
-		// punctDir := ""
-		// if sttConfig.PunctModelURL != "" {
-		// punctDir = stt.PunctModelDir(sttDir)
-		// }
-		// engine...
-
-		// s.SetSTTEngine(...)
-		slog.Info("stt: real engine active (sherpa-onnx SenseVoice)", "model_dir", modelDir)
+		slog.Info("stt: real engine active (sherpa-onnx SenseVoice)",
+			"model_dir", modelDir,
+			"hq", useHQ,
+			"model_url", modelURL,
+		)
 	}()
 }
 
@@ -669,8 +678,9 @@ func (s *Server) InitSTTEngine(ctx context.Context, dataDir string, gate *probe.
 func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.FeatureGate, httpClient *http.Client, ttsConfig config.TTSConfig) {
 	ttsDir := filepath.Join(dataDir, "models", "kokoro")
 
-	if gate != nil && gate.State(probe.FeatureLocalSTT) == probe.FeatureDisabled {
-		slog.Info("tts: disabled by FeatureGate")
+	// 修复 bug：原代码错误使用 FeatureLocalSTT 门控 TTS，现改为独立的 FeatureLocalTTS。
+	if gate != nil && gate.State(probe.FeatureLocalTTS) == probe.FeatureDisabled {
+		slog.Info("tts: FeatureLocalTTS disabled by FeatureGate (need ≥512MB free)")
 		return
 	}
 

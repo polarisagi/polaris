@@ -45,21 +45,35 @@ github_proxy = "auto"
 default_provider = "deepseek-v4-flash"
 reasoning_provider = "deepseek-v4-pro"
 structured_output = "grammar"
-# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION）
-# OpenAI text-embedding-3-small / DeepSeek-Embedder = 1536；本地轻量模型如 nomic-embed = 768
+# 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION）。
+# 本地 Ollama 路径由 FeatureGate 按内存自动覆盖此值，无需手动修改：
+#   FeatureMaxEmbedding  （Tier2, ≥12GB free）→ qwen3-embedding:8b   → 4096  MTEB 70.58
+#   FeatureUltraEmbedding（Tier1, ≥6GB  free）→ qwen3-embedding:4b   → 2560  MTEB ~68
+#   FeatureHQEmbedding   （Tier0, ≥3GB  free）→ qwen3-embedding:0.6b → 1024  MTEB 64.33
+#   FeatureLocalEmbedding（Tier0, ≥256MB    ）→ nomic-embed-text     →  768  MTEB ~62
+# 远程 API 路径（所有本地 Embedding 不可用时）：
+#   OpenAI text-embedding-3-small / DeepSeek-Embedder → 1536
 embedder_dim = 1536
 
 [inference.cache]
 enabled = true
 backend = "pebble"
 
+# STT 模型由 FeatureGate 按可用内存自动选择档位，无需手动修改：
+#   FeatureHQSTT  （Tier0, ≥1GB  free）→ float32 SenseVoice（~170MB）→ sense_voice_model_url
+#   FeatureLocalSTT（Tier0, ≥512MB free）→ int8    SenseVoice（~87MB） → sense_voice_model_url_std
+#   < 512MB free   → STT 禁用
+# 两档均支持 zh/en/ja/ko/yue 多语种，通过 PunctModel 加标点。
 [inference.stt]
 sherpa_version = "1.13.2"
+# HQ 档：float32 SenseVoice，精度更高（FeatureHQSTT ≥1GB 时自动选择）
 sense_voice_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09.tar.bz2"
+# 标准档：int8 量化 SenseVoice，体积减半（FeatureLocalSTT ≥512MB 时自动选择）
+sense_voice_model_url_std = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09-int8.tar.bz2"
 punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
 
-# 本地 TTS 模型（sherpa-onnx；留空则继续使用 edge-tts 云端 API）
-# 默认选用 Kokoro 中英双语模型（82M，Tier-0 可用）
+# 本地 TTS 由独立门控 FeatureLocalTTS（≥512MB）管理，与 STT 互不干扰。
+# 模型：Kokoro multi-lang v1.1（82MB，zh+en 双语，Tier-0 可用）
 [inference.tts]
 sherpa_version = ""  # 留空复用 inference.stt.sherpa_version
 model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2"

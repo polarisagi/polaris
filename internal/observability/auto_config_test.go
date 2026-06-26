@@ -378,8 +378,8 @@ func TestAutoConfig_FeatureMap_AllFeatures(t *testing.T) {
 	ac := &AutoConfig{Probe: hp, Guard: guard, Gate: fg}
 	ac.computeConfig()
 
-	// 17 features: 包含 FeatureOTelExporter + probe.FeatureDeepRAG
-	expectedFeatures := 17
+	// 22 features: 原 17 + Embedding 阶梯(HQ/Ultra/Max) + STT/TTS 分级(HQSTT/LocalTTS)
+	expectedFeatures := 22
 	if len(ac.Config.Features) != expectedFeatures {
 		t.Errorf("FeatureMap size: got %d, want %d", len(ac.Config.Features), expectedFeatures)
 	}

@@ -29,6 +29,31 @@ const (
 	FeatureActivationSteer Feature = "activation_steer" // M9: Activation Steering (hidden_state injection)
 	FeatureOTelExporter    Feature = "otel_exporter"    // M3: OTel SDK Prometheus exporter（Tier 1+）
 	FeatureDeepRAG         Feature = "deep_rag"         // M10: 三阶段深度 RAG（Tier 0+，≥8GB；依赖 rocksdb 持久化，自动升级后索引可落盘）
+	// Embedding 档位阶梯（优先级递增，内存压力时从高往低降级）：
+	//   FeatureLocalEmbedding  → nomic-embed-text        768-dim  ~512MB  Tier0 ≥256MB
+	//   FeatureHQEmbedding     → qwen3-embedding:0.6b   1024-dim  ~1GB   Tier0 ≥3GB
+	//   FeatureUltraEmbedding  → qwen3-embedding:4b     2560-dim  ~4GB   Tier1 ≥6GB
+	//   FeatureMaxEmbedding    → qwen3-embedding:8b     4096-dim  ~10GB  Tier2 ≥12GB
+	FeatureHQEmbedding    Feature = "hq_embedding"    // M1: qwen3-embedding:0.6b（Tier0, ≥3GB free）
+	FeatureUltraEmbedding Feature = "ultra_embedding" // M1: qwen3-embedding:4b（Tier1, ≥6GB free）
+	FeatureMaxEmbedding   Feature = "max_embedding"   // M1: qwen3-embedding:8b（Tier2, ≥12GB free）
+
+	// STT 档位阶梯（SenseVoice via sherpa-onnx，同一 C struct 路径，仅模型文件与线程数不同）：
+	//   FeatureLocalSTT（≥512MB）→ int8 量化 SenseVoice（~87MB，~200MB 运行时，速度优先）
+	//   FeatureHQSTT（≥1GB）     → float32 SenseVoice（~170MB，~400MB 运行时，精度优先）
+	// 两档均支持 zh/en/ja/ko/yue 多语种。
+	//
+	// 原始 FeatureLocalSTT 门控阈值 128MB 几乎始终开启（不合理），现提升至 512MB：
+	//   ≥512MB 可用 → STT 标准档（int8）
+	//   ≥1GB  可用 → STT HQ 档（float32，更高 WER 精度，自动升档）
+	//   <512MB     → STT 禁用（2GB VPS 下约 400MB 可用，明确禁用）
+	FeatureHQSTT Feature = "hq_stt" // M13: float32 SenseVoice（Tier0, ≥1GB free）
+
+	// TTS 独立门控（之前错误地与 FeatureLocalSTT 共享同一门控）。
+	// 模型：Kokoro multi-lang v1.1（82MB，~200MB 运行时，zh+en 双语）。
+	// 设为独立门控的原因：TTS 可按需禁用（纯 CLI 场景无需语音输出），
+	// 且内存占用独立于 STT（可只开 STT 不开 TTS 以节省内存）。
+	FeatureLocalTTS Feature = "local_tts" // M13: 本地 TTS（Kokoro，Tier0, ≥512MB free）
 )
 
 // FeatureState describes the current availability of a feature.
@@ -56,16 +81,28 @@ var getFeatureRules = sync.OnceValue(func() map[Feature]featureRule {
 	return map[Feature]featureRule{
 		FeatureLocalInference: {MinTier: Tier1, MinMemoryMB: 2048, DegradeMemoryMB: 3072, Priority: 20, OSConstraint: ""},
 		FeatureLocalEmbedding: {MinTier: Tier0, MinMemoryMB: 256, DegradeMemoryMB: 512, Priority: 10, OSConstraint: ""},
-		FeatureLocalSTT:       {MinTier: Tier0, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 12, OSConstraint: ""},
-		FeatureQLoRA:          {MinTier: Tier1, MinMemoryMB: 4096, DegradeMemoryMB: 6144, Priority: 50, OSConstraint: ""},
-		FeaturePRMTraining:    {MinTier: Tier2, MinMemoryMB: 8192, DegradeMemoryMB: 12288, Priority: 60, OSConstraint: ""},
-		FeatureL3Sandbox:      {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 30},
-		FeatureL2Sandbox:      {MinTier: Tier0, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 5},
+		// STT 标准档：int8 SenseVoice（~87MB 模型文件，~200MB 运行时）。
+		// 原始阈值 128MB 在 2GB VPS 上几乎始终满足（不合理），提升至 512MB 保证 OS 有足够余量。
+		FeatureLocalSTT: {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 12, OSConstraint: ""},
+		// STT 高质量档：float32 SenseVoice（~170MB 模型文件，~400MB 运行时，WER 更低）。
+		// 开启时自动替换 int8 模型；内存不足则回退到 FeatureLocalSTT int8 档。
+		FeatureHQSTT: {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 17},
+		// TTS 独立门控：Kokoro multi-lang v1.1（82MB，~200MB 运行时，zh+en 双语）。
+		// 之前错误地与 FeatureLocalSTT 共享门控导致 TTS bug，现分离为独立门控。
+		FeatureLocalTTS:    {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 11},
+		FeatureQLoRA:       {MinTier: Tier1, MinMemoryMB: 4096, DegradeMemoryMB: 6144, Priority: 50, OSConstraint: ""},
+		FeaturePRMTraining: {MinTier: Tier2, MinMemoryMB: 8192, DegradeMemoryMB: 12288, Priority: 60, OSConstraint: ""},
+		FeatureL3Sandbox:   {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 30},
+		FeatureL2Sandbox:   {MinTier: Tier0, MinMemoryMB: 128, DegradeMemoryMB: 256, Priority: 5},
 		// GraphRAGFull/LogicCollapse/DeepRAG 原为 Tier1（基于旧 "rocksdb 需要 ≥16GB" 假设）。
 		// rocksdb 已下放到 ≥8GB 自动开启，三个特性的实际内存门槛仅 1GB 空闲，8GB 余量 ~5GB。
 		FeatureGraphRAGFull:  {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 40},
 		FeatureSurrealDBCore: {MinTier: Tier0, MinMemoryMB: 256, DegradeMemoryMB: 512, Priority: 8},
 		FeatureLargeLocalLLM: {MinTier: Tier2, MinMemoryMB: 6144, DegradeMemoryMB: 8192, Priority: 55},
+		// Embedding 阶梯门控（Priority 越高越先降级，保留低档基础能力）。
+		FeatureHQEmbedding:    {MinTier: Tier0, MinMemoryMB: 3072, DegradeMemoryMB: 4096, Priority: 11},   // 0.6b ~1GB
+		FeatureUltraEmbedding: {MinTier: Tier1, MinMemoryMB: 6144, DegradeMemoryMB: 8192, Priority: 12},   // 4b  ~4GB
+		FeatureMaxEmbedding:   {MinTier: Tier2, MinMemoryMB: 12288, DegradeMemoryMB: 16384, Priority: 13}, // 8b ~10GB
 		// 桶 B — 新增规则
 		FeatureLogicCollapse:   {MinTier: Tier0, MinMemoryMB: 1024, DegradeMemoryMB: 1536, Priority: 42},
 		FeatureComputerUseGUI:  {MinTier: Tier0, MinMemoryMB: 512, DegradeMemoryMB: 768, Priority: 38, OSConstraint: "requires_display"},
@@ -158,7 +195,12 @@ func (fg *FeatureGate) reassessAll() {
 		FeatureL2Sandbox,
 		FeatureSurrealDBCore,
 		FeatureLocalEmbedding,
+		FeatureHQEmbedding, // Embedding 阶梯：门控独立，按内存阈值自动升档
+		FeatureUltraEmbedding,
+		FeatureMaxEmbedding,
 		FeatureLocalSTT,
+		FeatureHQSTT,    // 依赖 FeatureLocalSTT（HQ 档必须在标准档之后评估）
+		FeatureLocalTTS, // TTS 独立于 STT
 		FeatureLocalInference,
 		FeatureWebUI,
 		FeaturePresidioPII,
@@ -305,8 +347,13 @@ func (fg *FeatureGate) DegradationOrder() []Feature {
 		FeatureLocalInference,  // 20: local model
 		FeatureOTelExporter,    // 18: OTel exporter
 		FeatureWebUI,           // 15: Web dashboard
-		FeatureLocalSTT,        // 12: 本地 STT（sherpa-onnx）
-		FeatureLocalEmbedding,  // 10: embedding model
+		FeatureHQSTT,           // 17: float32 SenseVoice（优先降为 int8 标准档，再禁 STT）
+		FeatureMaxEmbedding,    // 13: qwen3-embedding:8b（Tier2 ≥12GB free，先降级）
+		FeatureUltraEmbedding,  // 12: qwen3-embedding:4b（Tier1 ≥6GB free）
+		FeatureLocalSTT,        // 12: int8 SenseVoice（标准 STT，次于 HQ 档降级）
+		FeatureHQEmbedding,     // 11: qwen3-embedding:0.6b（Tier0 ≥3GB free）
+		FeatureLocalTTS,        // 11: Kokoro TTS（与 HQ Embedding 同档降级）
+		FeatureLocalEmbedding,  // 10: nomic-embed-text（基础，最后降级）
 		FeatureSurrealDBCore,   // 8: 认知轴存储，次于 L2Sandbox 降级
 		FeatureL2Sandbox,       // 5: Wasmtime, last to disable
 	}

@@ -392,7 +392,11 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 				embedModel = "nomic-embed-text"
 			}
 			embedder = llmadapter.NewOllamaEmbeddingAdapter(embedModel, ollamaHTTPClient)
-			slog.Info("polaris: Ollama embedding registered", "model", embedModel)
+			slog.Info("polaris: Ollama embedding registered",
+				"model", embedModel,
+				"dim", autoConf.Config.LocalEmbeddingDim,
+				"hq", autoConf.Gate.State(probe.FeatureHQEmbedding) != probe.FeatureDisabled,
+			)
 		}
 
 		if autoConf.Gate.State(probe.FeatureQLoRA) != probe.FeatureDisabled {
@@ -594,6 +598,12 @@ func initSurrealStore(
 	}
 
 	vecDim := cfg.Inference.EmbedderDim
+	// 本地 Ollama Embedding 启用时，向量维度由模型决定（768 或 1024），
+	// 需覆盖 defaults.toml 中针对远程 API 设置的 1536。
+	// LocalEmbeddingDim > 0 表示本地 Embedding 已选定，以其维度为 SurrealDB HNSW DIMENSION 权威值。
+	if autoConf != nil && autoConf.Config.LocalEmbeddingDim > 0 {
+		vecDim = autoConf.Config.LocalEmbeddingDim
+	}
 	if vecDim <= 0 {
 		vecDim = 1536
 	}

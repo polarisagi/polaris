@@ -108,9 +108,13 @@ type EmbeddingConfig struct {
 }
 
 type STTConfig struct {
-	SherpaVersion      string `toml:"sherpa_version"`
+	SherpaVersion string `toml:"sherpa_version"`
+	// SenseVoiceModelURL float32 高质量模型（~170MB，FeatureHQSTT 开启时使用，WER 更低）。
 	SenseVoiceModelURL string `toml:"sense_voice_model_url"`
-	PunctModelURL      string `toml:"punct_model_url"`
+	// SenseVoiceModelURLStd int8 量化标准模型（~87MB，FeatureLocalSTT 开启但 FeatureHQSTT 未开启时使用）。
+	// 空字符串则回退到 SenseVoiceModelURL（向后兼容旧配置）。
+	SenseVoiceModelURLStd string `toml:"sense_voice_model_url_std"`
+	PunctModelURL         string `toml:"punct_model_url"`
 }
 
 // TTSConfig 本地 TTS（sherpa-onnx）模型下载配置。
