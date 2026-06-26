@@ -14,15 +14,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
       - name: Create mock web dist
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v1.64.8
           install-mode: goinstall
@@ -30,8 +30,8 @@ jobs:
   docs-toc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
@@ -47,11 +47,11 @@ jobs:
     outputs:
       rust_unchanged: ${{ steps.rust-final.outputs.cache-hit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Rust final artifact
         id: rust-final
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             rust/substrate/target/release/libsubstrate.so
@@ -71,7 +71,7 @@ jobs:
         run: make rust-build
 
       - name: Upload Rust Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rust-libs
           path: |
@@ -87,7 +87,7 @@ jobs:
       - name: Skip if Rust code unchanged
         if: needs.rust-build.outputs.rust_unchanged == 'true'
         run: echo "Rust code unchanged. Skipping cargo test and fmt."
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.rust-build.outputs.rust_unchanged != 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.rust-build.outputs.rust_unchanged != 'true'
@@ -107,13 +107,13 @@ jobs:
     needs: [rust-build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
       - name: Download Rust Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rust-libs
           path: rust/substrate/target/release
@@ -132,18 +132,18 @@ jobs:
     needs: [rust-build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
       - name: Download Rust Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rust-libs
           path: rust/substrate/target/release
@@ -156,13 +156,13 @@ jobs:
     needs: [lint, test, build, rust, docs-toc]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
       - name: Download Rust Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rust-libs
           path: rust/substrate/target/release

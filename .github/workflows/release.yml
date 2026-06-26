@@ -80,11 +80,11 @@ jobs:
     name: Build Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
@@ -93,7 +93,7 @@ jobs:
       - name: Build UI
         run: make build-ui
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: web/dist
@@ -138,17 +138,17 @@ jobs:
             cargo_target: aarch64-pc-windows-msvc
             binary_suffix: ".exe"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
           cache: true          # 缓存 GOPATH/pkg/mod 和 ~/.cache/go-build
 
       - name: Download Frontend Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: web/dist
@@ -167,7 +167,7 @@ jobs:
         if: matrix.binary_suffix == '.exe'
         run: mv bin/polaris bin/polaris.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: go-${{ matrix.name }}
           path: bin/polaris${{ matrix.binary_suffix }}
@@ -210,10 +210,10 @@ jobs:
             rust_artifact: substrate-windows-arm64.dll
             rust_libname:  substrate.dll
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download Go binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: go-${{ matrix.name }}
           path: bin
@@ -254,7 +254,7 @@ jobs:
           sha256sum ${ARCHIVE_NAME}.${{ matrix.archive_format }} \
             > ${ARCHIVE_NAME}.${{ matrix.archive_format }}.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: polaris-${{ matrix.name }}
           path: polaris-${{ matrix.name }}.*
@@ -268,17 +268,17 @@ jobs:
     needs: [package]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: polaris-*
           path: artifacts
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           generate_release_notes: true

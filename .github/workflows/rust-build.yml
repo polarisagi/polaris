@@ -51,7 +51,7 @@ jobs:
       skip:  ${{ steps.check.outputs.skip }}
       tag:   ${{ steps.hash.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compute rust/substrate tree hash
         id: hash
@@ -90,7 +90,7 @@ jobs:
     if: needs.check.outputs.skip == 'false'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -99,7 +99,7 @@ jobs:
       # 分层缓存：先查最终产物，命中则跳过 cargo build
       - name: Cache final artifact
         id: final-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: rust/substrate/target/x86_64-unknown-linux-gnu/release/libsubstrate.so
           key: rust-artifact-x86_64-unknown-linux-gnu-${{ needs.check.outputs.hash }}
@@ -120,7 +120,7 @@ jobs:
           cp rust/substrate/target/x86_64-unknown-linux-gnu/release/libsubstrate.so \
              dist/libsubstrate-linux-amd64.so
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rust-linux-amd64
           path: dist/libsubstrate-linux-amd64.so
@@ -135,7 +135,7 @@ jobs:
     if: needs.check.outputs.skip == 'false'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -143,7 +143,7 @@ jobs:
 
       - name: Cache final artifact
         id: final-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: rust/substrate/target/aarch64-unknown-linux-gnu/release/libsubstrate.so
           key: rust-artifact-aarch64-unknown-linux-gnu-${{ needs.check.outputs.hash }}
@@ -164,7 +164,7 @@ jobs:
           cp rust/substrate/target/aarch64-unknown-linux-gnu/release/libsubstrate.so \
              dist/libsubstrate-linux-arm64.so
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rust-linux-arm64
           path: dist/libsubstrate-linux-arm64.so
@@ -180,7 +180,7 @@ jobs:
     if: needs.check.outputs.skip == 'false'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -188,7 +188,7 @@ jobs:
 
       - name: Cache final artifacts (darwin dual)
         id: final-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             rust/substrate/target/aarch64-apple-darwin/release/libsubstrate.dylib
@@ -217,7 +217,7 @@ jobs:
           cp rust/substrate/target/x86_64-apple-darwin/release/libsubstrate.dylib \
              dist/libsubstrate-darwin-amd64.dylib
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rust-darwin
           path: dist/
@@ -232,7 +232,7 @@ jobs:
     if: needs.check.outputs.skip == 'false'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Windows Defender 扫描 Rust 编译中间产物极慢，预先排除
       - name: Disable Windows Defender scanning on workspace
@@ -248,7 +248,7 @@ jobs:
 
       - name: Cache final artifacts (windows dual)
         id: final-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             rust/substrate/target/x86_64-pc-windows-msvc/release/substrate.dll
@@ -278,7 +278,7 @@ jobs:
           cp rust/substrate/target/aarch64-pc-windows-msvc/release/substrate.dll \
              dist/substrate-windows-arm64.dll
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rust-windows
           path: dist/
@@ -295,10 +295,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # gh release create 需要 git 上下文
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all platform artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: rust-*
           path: dist
