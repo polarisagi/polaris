@@ -25,8 +25,11 @@ import (
 )
 
 // skillEmbedCache 进程内技能文本 → 向量缓存（sha256(text) 为 key）。
-// 技能安装/卸载极低频，进程级 sync.Map 足够，无需落盘。
-// 容量估算：100 技能 × 1536 维 × 4 字节 ≈ 600KB，可忽略。
+// 技能安装/卸载极低频，进程级 map 足够，无需落盘。
+// 上限 skillEmbedCacheMax 条：超限时随机淘汰（技能数量有限，随机淘汰成本低）。
+// 容量估算：512 × 1536 维 × 4 字节 ≈ 3MB，可接受。
+const skillEmbedCacheMax = 512
+
 var (
 	skillEmbedCacheMu sync.RWMutex
 	skillEmbedCache   = make(map[string][]float32)
@@ -364,7 +367,16 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	// ── 推理（含 tool_use 循环，最多 10 轮）────────────────────────────────
 	writeSSE(w, flusher, "thinking", map[string]string{"content": "..."})
 
+	// 语义工具选择：当工具数 > toolSelectThreshold 且 Embedder 可用时按 query 相似度过滤到 top-K，
+	// 否则退回全量注入。通过接口类型断言实现，不污染 ToolProvider 接口签名。
 	toolSchemas := s.ToolProvider.BuildToolSchemas()
+	if sel, ok := s.ToolProvider.(interface {
+		SelectToolSchemas(string) []types.ToolSchema
+	}); ok {
+		if picked := sel.SelectToolSchemas(req.Input); len(picked) > 0 {
+			toolSchemas = picked
+		}
+	}
 	inferStart := time.Now()
 	var sb strings.Builder
 	var inferErr string
@@ -701,99 +713,26 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 	// volatile 层：当前日期（精确到天，不破坏 prefix cache），会话信息由调用方追加
 	ic.VolatileBlock = "当前日期：" + time.Now().Format("2006-01-02")
 
-	// Built-in tools
+	// Built-in tools — 仅注入工具名列表；描述已由 function schema 传递，避免系统提示词冗余膨胀。
 	if s.ToolReg != nil {
-		var builtin []string
+		var names []string
 		for _, t := range s.ToolReg.List() {
-			builtin = append(builtin, t.Name+" - "+t.Description)
+			names = append(names, t.Name)
 		}
-		ic.BuiltinTools = strings.Join(builtin, "\n")
+		if len(names) > 0 {
+			ic.BuiltinTools = fmt.Sprintf("%d: %s", len(names), strings.Join(names, ", "))
+		}
 	}
 
-	// 插件 + 独立 MCP 感知注入（让 LLM 了解插件维度，区别于工具 schema 层）
-	if s.DB != nil || s.MCPMgr != nil { //nolint:nestif
-		var pluginLines []string
+	// 扩展感知（插件 / MCP / App）— 仅名称 + 连接状态摘要，细节由 BuildToolSchemas() 注入 function schema。
+	ic.InstalledPlugins = s.buildExtensionSummary(ctx)
 
-		// 1. 已安装插件（来自 plugins 表），格式：display_name: description [MCPs: name ✓/✗]
-		if s.DB != nil {
-			plugRows, err := s.DB.QueryContext(ctx,
-				`SELECT id, name, display_name, description, mcp_policy FROM plugins WHERE enabled=1`)
-			if err == nil {
-				defer plugRows.Close()
-
-				// 预取 MCP 连接状态
-				connectedSet := make(map[string]bool)
-				if s.MCPMgr != nil {
-					for _, srv := range s.MCPMgr.ListServers() {
-						connectedSet[srv.ID] = srv.Connected
-					}
-				}
-
-				for plugRows.Next() {
-					var plugID, plugName, displayName, desc, policyJSON string
-					if plugRows.Scan(&plugID, &plugName, &displayName, &desc, &policyJSON) != nil {
-						continue
-					}
-					label := displayName
-					if label == "" {
-						label = plugName
-					}
-
-					var policy map[string]map[string]any
-					_ = json.Unmarshal([]byte(policyJSON), &policy)
-
-					var mcpParts []string
-					for serverName, entry := range policy {
-						enabled := true
-						if v, ok := entry["enabled"].(bool); ok {
-							enabled = v
-						}
-						if !enabled {
-							continue
-						}
-						serverID := "plugin_" + plugID + "_" + serverName
-						scopedName := plugName + "-" + serverName
-						mark := "✗"
-						if connectedSet[serverID] {
-							mark = "✓"
-						}
-						mcpParts = append(mcpParts, scopedName+" "+mark)
-					}
-
-					line := "- " + label + ": " + desc
-					if len(mcpParts) > 0 {
-						line += " [MCPs: " + strings.Join(mcpParts, ", ") + "]"
-					}
-					pluginLines = append(pluginLines, line)
-				}
-			}
-		}
-
-		// 2. 独立 MCP（mcp_servers 表，ID 无 plugin_ 前缀）
-		if s.MCPMgr != nil {
-			var standaloneMCPs []string
-			for _, srv := range s.MCPMgr.ListServers() {
-				if strings.HasPrefix(srv.ID, "plugin_") {
-					continue
-				}
-				mark := "✗"
-				if srv.Connected {
-					mark = "✓"
-				}
-				standaloneMCPs = append(standaloneMCPs, srv.Name+" "+mark)
-			}
-			if len(standaloneMCPs) > 0 {
-				pluginLines = append(pluginLines, "Standalone MCPs: "+strings.Join(standaloneMCPs, ", "))
-			}
-		}
-
-		ic.InstalledPlugins = strings.Join(pluginLines, "\n")
-	}
-
-	// Ambient skills 追加到模板（已在上方重置为 baseSystemPromptTpl / activatedPrompt，无累积风险）。
-	// 唯一来源是 skills 表，State-in-DB 原则；插件 ambient skill 在安装时由 registerPluginSkills 写入。
+	// Ambient skills 写入独立字段，不拼接进 SystemPromptTemplate。
+	// 原因：skill instructions 可能含 {{ }} 语法（代码示例/Jinja/Handlebars），
+	// 若拼入模板字符串会导致 template.Parse() 崩溃，系统提示词退化为报错文本。
+	// PrependToMessages 在模板渲染完成后再追加 AmbientContext，彻底脱离模板解析器。
 	if s.DB != nil {
-		ic.SystemPromptTemplate += s.buildAmbientSkillsSection(ctx, userQuery)
+		ic.AmbientContext = s.buildAmbientSkillsSection(ctx, userQuery)
 	}
 
 	return ic.PrependToMessages(history)
@@ -844,6 +783,13 @@ func cachedSkillEmbed(e search.Embedder, name, desc, inst string) []float32 {
 	v := e.Embed(text)
 	if v != nil {
 		skillEmbedCacheMu.Lock()
+		// 超限时随机淘汰一条（技能数量有界，随机淘汰比 LRU 实现简单且效果相近）
+		if len(skillEmbedCache) >= skillEmbedCacheMax {
+			for k := range skillEmbedCache {
+				delete(skillEmbedCache, k)
+				break
+			}
+		}
 		skillEmbedCache[key] = v
 		skillEmbedCacheMu.Unlock()
 	}
@@ -950,6 +896,123 @@ func (s *ChatHandler) SetActivatedSystemPrompt(taskType, promptText string) {
 	s.ActivatedSystemPromptMu.Lock()
 	s.ActivatedSystemPrompt = promptText
 	s.ActivatedSystemPromptMu.Unlock()
+}
+
+// buildExtensionSummary 构建插件/MCP/App 感知摘要字符串（单行，| 分隔）。
+// 只注入名称和连接状态；详细工具参数由 BuildToolSchemas() 注入 function schema 传递，避免双重注入。
+func (s *ChatHandler) buildExtensionSummary(ctx context.Context) string {
+	var parts []string
+	if s.DB != nil {
+		if plugParts := s.queryPluginSummary(ctx); len(plugParts) > 0 {
+			parts = append(parts, "Plugins: "+strings.Join(plugParts, ", "))
+		}
+		if appParts := s.queryAppSummary(ctx); len(appParts) > 0 {
+			parts = append(parts, "Apps: "+strings.Join(appParts, ", "))
+		}
+	}
+	if s.MCPMgr != nil {
+		if mcpParts := s.standaloneMCPSummary(); len(mcpParts) > 0 {
+			parts = append(parts, "MCPs: "+strings.Join(mcpParts, ", "))
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+// queryPluginSummary 查询已安装插件名称与 MCP 整体连接状态（格式："PluginName(✓)"）。
+// ✓ = 所有 MCP 已连接；~ = 部分连接；✗ = 未连接。
+func (s *ChatHandler) queryPluginSummary(ctx context.Context) []string {
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT id, name, display_name, mcp_policy FROM plugins WHERE enabled=1`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	connectedSet := make(map[string]bool)
+	if s.MCPMgr != nil {
+		for _, srv := range s.MCPMgr.ListServers() {
+			connectedSet[srv.ID] = srv.Connected
+		}
+	}
+
+	var result []string
+	for rows.Next() {
+		var plugID, plugName, displayName, policyJSON string
+		if rows.Scan(&plugID, &plugName, &displayName, &policyJSON) != nil {
+			continue
+		}
+		label := displayName
+		if label == "" {
+			label = plugName
+		}
+
+		var policy map[string]map[string]any
+		_ = json.Unmarshal([]byte(policyJSON), &policy)
+
+		connected, total := 0, 0
+		for serverName, entry := range policy {
+			enabled := true
+			if v, ok := entry["enabled"].(bool); ok {
+				enabled = v
+			}
+			if !enabled {
+				continue
+			}
+			total++
+			if connectedSet["plugin_"+plugID+"_"+serverName] {
+				connected++
+			}
+		}
+
+		mark := "✗"
+		if total > 0 && connected == total {
+			mark = "✓"
+		} else if connected > 0 {
+			mark = "~"
+		}
+		result = append(result, label+"("+mark+")")
+	}
+	return result
+}
+
+// queryAppSummary 查询已启用 App 的显示名称列表。
+func (s *ChatHandler) queryAppSummary(ctx context.Context) []string {
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT display_name, name FROM apps WHERE enabled=1`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var result []string
+	for rows.Next() {
+		var displayName, name string
+		if rows.Scan(&displayName, &name) != nil {
+			continue
+		}
+		label := displayName
+		if label == "" {
+			label = name
+		}
+		result = append(result, label)
+	}
+	return result
+}
+
+// standaloneMCPSummary 返回非插件独立 MCP 服务的名称+连接状态列表。
+func (s *ChatHandler) standaloneMCPSummary() []string {
+	result := make([]string, 0, len(s.MCPMgr.ListServers()))
+	for _, srv := range s.MCPMgr.ListServers() {
+		if strings.HasPrefix(srv.ID, "plugin_") {
+			continue
+		}
+		mark := "✗"
+		if srv.Connected {
+			mark = "✓"
+		}
+		result = append(result, srv.Name+" "+mark)
+	}
+	return result
 }
 
 func loadOperationalDirectives(pm *prompt.Manager) string {

@@ -104,7 +104,7 @@ func TestExtensionActivator_FindAndActivate(t *testing.T) {
 			{ID: "ext_ext_missing", Score: 0.5},
 		},
 	}
-	activator := NewExtensionActivator(repo.NewSQLiteExtensionRepository(db), cog, mcpMgr)
+	activator := NewExtensionActivator(repo.NewSQLiteExtensionRepository(db), cog, mcpMgr, nil)
 
 	hints, err := activator.FindAndActivate(context.Background(), "test goal")
 	if err != nil {
@@ -116,7 +116,7 @@ func TestExtensionActivator_FindAndActivate(t *testing.T) {
 	}
 
 	// Ensure nil cog handles gracefully
-	nilActivator := NewExtensionActivator(repo.NewSQLiteExtensionRepository(db), nil, mcpMgr)
+	nilActivator := NewExtensionActivator(repo.NewSQLiteExtensionRepository(db), nil, mcpMgr, nil)
 	hintsNil, _ := nilActivator.FindAndActivate(context.Background(), "test")
 	if len(hintsNil) != 0 {
 		t.Errorf("expected 0 hints with nil cognitive")
@@ -161,7 +161,7 @@ func TestExtensionActivator_ActivateMCP_NilMgr(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	activator := NewExtensionActivator(repo.NewSQLiteExtensionRepository(db), nil, nil) // mcpMgr = nil
+	activator := NewExtensionActivator(repo.NewSQLiteExtensionRepository(db), nil, nil, nil) // mcpMgr = nil
 	hint, err := activator.activateOne(context.Background(), "ext_2", "snippet")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

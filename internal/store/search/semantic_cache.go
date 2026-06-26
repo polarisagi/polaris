@@ -38,6 +38,9 @@ type CacheStore interface {
 	Delete(keys []string) error
 	// Count 返回当前条目总数。
 	Count() int
+	// ListOldest 按 LastAccess 升序返回最旧的 n 条条目（供跨重启 LRU 淘汰）。
+	// 实现侧：ORDER BY last_access ASC LIMIT n。n<=0 时返回空切片。
+	ListOldest(n int) []*CacheEntry
 }
 
 // Embedder 文本向量化接口（M1 提供）。
@@ -54,9 +57,12 @@ type SemanticCache struct {
 	maxEntries       int     // 默认 10000
 	ttl              time.Duration
 
-	// LRU 追踪：key → lastAccess（store 无 List 能力时在内存维护访问顺序）
-	mu         sync.Mutex
-	accessTime map[string]time.Time
+	// accessTime 进程内热点覆盖：key → 本次进程中的最新 access time。
+	// 重启后为空，evictLRU 自动降级到 store.ListOldest（持久化记录）。
+	// 上限 accessTimeMax 防止内存无限增长；超限时清空并让 store 接管。
+	mu            sync.Mutex
+	accessTime    map[string]time.Time
+	accessTimeMax int // = maxEntries，与 store 容量对齐
 }
 
 // CacheKey 语义缓存查询键（调用方填充请求上下文字段）。
@@ -99,6 +105,7 @@ func NewSemanticCache(
 		maxEntries:       maxEntries,
 		ttl:              ttl,
 		accessTime:       make(map[string]time.Time),
+		accessTimeMax:    maxEntries,
 	}
 }
 
@@ -164,6 +171,11 @@ func (c *SemanticCache) Put(key CacheKey, response, model string) error {
 
 	queryText := strings.Join(key.Messages, "\n")
 	embedding := c.embedder.Embed(queryText)
+	// embedding=nil 说明 Embedder 暂不可用（如 Ollama 未启动），跳过写入。
+	// 写入无向量的 entry 会使该条目永远无法被 FindClosest 命中，静默占用 LRU 槽位。
+	if len(embedding) == 0 {
+		return nil
+	}
 
 	requestHash := c.hashKey(key)
 	entryKey := c.namespace + ":" + requestHash
@@ -215,31 +227,61 @@ func (c *SemanticCache) hashKey(key CacheKey) string {
 }
 
 // evictLRU 淘汰访问时间最旧的 maxEntries/10 个条目。
-// LRU 追踪仅限于本进程生命周期内的访问记录。
+//
+// 双阶段合并策略（解决重启后 accessTime 为空导致驱逐失效的问题）：
+//  1. 从 store.ListOldest 取持久化最老记录（重启后唯一可靠来源）
+//  2. 与进程内 accessTime 合并：内存中有更新记录的条目以内存为准（热点覆盖）
+//  3. 合并后取最旧 evictCount 条删除
+//
+// 同时对 accessTime 做上限检查：超过 accessTimeMax 时清空，
+// 让 store 完全接管，避免内存 map 无限增长。
 func (c *SemanticCache) evictLRU() {
 	evictCount := c.maxEntries / 10
 	if evictCount <= 0 {
 		evictCount = 1
 	}
 
-	c.mu.Lock()
-	// 收集所有已知条目的访问时间，按时间升序排序取最旧的
+	// 阶段一：从 store 取持久化最老记录（fetch 2× 以便合并后有足够候选）
+	storeOldest := c.store.ListOldest(evictCount * 2)
+
+	// 构建合并 map：key → lastAccess（store 持久值作底，内存热点覆盖）
 	type kv struct {
 		key string
 		t   time.Time
 	}
-	items := make([]kv, 0, len(c.accessTime))
+	merged := make(map[string]time.Time, len(storeOldest))
+	for _, e := range storeOldest {
+		merged[e.Key] = e.LastAccess
+	}
+
+	// 阶段二：内存热点覆盖（进程内 access 比 store 记录更新时以内存为准）
+	c.mu.Lock()
 	for k, t := range c.accessTime {
-		items = append(items, kv{k, t})
+		if stored, ok := merged[k]; !ok || t.After(stored) {
+			merged[k] = t
+		}
+	}
+	// accessTime 超限时清空，防止内存无限增长；驱逐后由 store 接管
+	if len(c.accessTime) >= c.accessTimeMax {
+		c.accessTime = make(map[string]time.Time)
 	}
 	c.mu.Unlock()
 
-	if len(items) == 0 {
+	if len(merged) == 0 {
 		return
 	}
 
-	// 简单选择排序取最旧 evictCount 个（条目数有上限，性能可接受）
-	for i := 0; i < evictCount && i < len(items); i++ {
+	// 阶段三：从合并结果中取最旧 evictCount 条（插入排序，条目数有上限）
+	items := make([]kv, 0, len(merged))
+	for k, t := range merged {
+		items = append(items, kv{k, t})
+	}
+	// 部分排序：只需前 evictCount 个最小值，插入排序 O(n*evictCount)，evictCount 通常 ≤ 1000
+	limit := evictCount
+	if limit > len(items) {
+		limit = len(items)
+	}
+	for i := 0; i < limit; i++ {
 		minIdx := i
 		for j := i + 1; j < len(items); j++ {
 			if items[j].t.Before(items[minIdx].t) {
@@ -249,9 +291,9 @@ func (c *SemanticCache) evictLRU() {
 		items[i], items[minIdx] = items[minIdx], items[i]
 	}
 
-	toDelete := make([]string, 0, evictCount)
-	for i := 0; i < evictCount && i < len(items); i++ {
-		toDelete = append(toDelete, items[i].key)
+	toDelete := make([]string, limit)
+	for i := range toDelete {
+		toDelete[i] = items[i].key
 	}
 
 	_ = c.store.Delete(toDelete)

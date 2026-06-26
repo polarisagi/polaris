@@ -26,8 +26,17 @@ func NewDriftDetector(interval int64, threshold float64, embedder search.Embedde
 	}
 }
 
-// AddAnchor 添加锚定样本。
+// maxAnchors 锚定样本上限，防止无限增长。
+const maxAnchors = 200
+
+// AddAnchor 添加锚定样本。超过 maxAnchors 时淘汰最旧的一批（FIFO）。
 func (dd *DriftDetector) AddAnchor(anchor AnchorSample) {
+	if len(dd.anchors) >= maxAnchors {
+		// 淘汰前 20%（FIFO）：ring-buffer 语义，避免 slice 频繁分配
+		drop := maxAnchors / 5
+		copy(dd.anchors, dd.anchors[drop:])
+		dd.anchors = dd.anchors[:len(dd.anchors)-drop]
+	}
 	dd.anchors = append(dd.anchors, anchor)
 }
 
@@ -39,68 +48,79 @@ type AnchorSample struct {
 	Expected  []string
 }
 
+// anchorCosineDist 计算锚点存储向量与当前重新 Embed 向量之间的余弦距离（1 - similarity）。
+// 返回 (dist, ok)；ok=false 表示向量无效或维度不匹配，调用方应跳过该锚点。
+func (dd *DriftDetector) anchorCosineDist(a AnchorSample) (float64, bool) {
+	if dd.embedder == nil || len(a.Embedding) == 0 {
+		return 0, false
+	}
+	qVec := dd.embedder.Embed(a.Query)
+	if len(qVec) == 0 || len(qVec) != len(a.Embedding) {
+		return 0, false
+	}
+	var dot, n1, n2 float64
+	for i := range qVec {
+		v1 := float64(qVec[i])
+		v2 := float64(a.Embedding[i])
+		dot += v1 * v2
+		n1 += v1 * v1
+		n2 += v2 * v2
+	}
+	if n1 <= 0 || n2 <= 0 {
+		return 0, false
+	}
+	return 1.0 - dot/(math.Sqrt(n1)*math.Sqrt(n2)), true
+}
+
+// scoreAnchors 遍历锚点，返回 (cosineDeltaSum, driftedCount, unknownCount, knownCount)。
+func (dd *DriftDetector) scoreAnchors() (cosineDeltaSum float64, driftedCount, unknownCount, knownCount int) {
+	for _, a := range dd.anchors {
+		if len(a.Expected) == 0 {
+			unknownCount++
+			continue
+		}
+		knownCount++
+		dist, ok := dd.anchorCosineDist(a)
+		if !ok {
+			continue
+		}
+		cosineDeltaSum += dist
+		if dist > dd.driftThreshold {
+			driftedCount++ // 该锚点余弦距离超阈值，视为已漂移
+		}
+	}
+	return
+}
+
 // Detect 检测嵌入向量漂移。
-// 1. sampleCount < 5 → 跳过 (标记 unknownCount++)
-// 2. 重新检索 → 计算 Top-5 变化率 + 余弦距离变化
-// 3. changeRate > 0.4 且 cosineDelta > driftThreshold → 记录漂移
+// 1. sampleCount < 5 → 跳过（unknownRatio=1.0，标记告警）
+// 2. 对每个有 Expected 的锚点：重新 Embed → 计算余弦距离（cosineDelta）
+//   - 漂移锚点占比（changeRate）
+//
+// 3. changeRate > 0.4 且 cosineDelta > driftThreshold → NeedsReindex=true
 // 4. unknownRatio > 0.30 → 系统级告警
-func (dd *DriftDetector) Detect() (*DriftReport, error) { //nolint:nestif
+func (dd *DriftDetector) Detect() (*DriftReport, error) {
 	if len(dd.anchors) < 5 {
 		return &DriftReport{UnknownRatio: 1.0, UnknownTaskTypeAlarm: true}, nil
 	}
 
-	// 计算变化率与余弦距离
-	changeRate := 0.0
-	cosineDelta := 0.0
-	unknownCount := 0
+	cosineDeltaSum, driftedCount, unknownCount, knownCount := dd.scoreAnchors()
 
-	for _, a := range dd.anchors { //nolint:nestif
-		if len(a.Expected) == 0 { //nolint:nestif
-			unknownCount++
-		} else {
-			if dd.embedder != nil {
-				qEmbF32 := dd.embedder.Embed(a.Query)
-				if len(qEmbF32) > 0 && len(a.Embedding) == len(qEmbF32) {
-					var dot, n1, n2 float64
-					for i := range qEmbF32 {
-						v1 := float64(qEmbF32[i])
-						v2 := float64(a.Embedding[i])
-						dot += v1 * v2
-						n1 += v1 * v1
-						n2 += v2 * v2
-					}
-					if n1 > 0 && n2 > 0 {
-						sim := dot / (math.Sqrt(n1) * math.Sqrt(n2))
-						cosineDelta += (1.0 - sim)
-					}
-				}
-			}
-			// 计算变化率
-			changeRate += 0.05
-		}
-	}
-
-	known := float64(len(dd.anchors) - unknownCount)
-	if known > 0 {
-		changeRate /= known
-		cosineDelta /= known
+	cosineDelta, changeRate := 0.0, 0.0
+	if knownCount > 0 {
+		cosineDelta = cosineDeltaSum / float64(knownCount)
+		changeRate = float64(driftedCount) / float64(knownCount)
 	}
 
 	report := &DriftReport{
 		UnknownRatio: float64(unknownCount) / float64(len(dd.anchors)),
+		ChangeRate:   changeRate,
+		CosineDelta:  cosineDelta,
+		NeedsReindex: changeRate > 0.4 && cosineDelta > dd.driftThreshold,
 	}
-
-	// 若满足漂移条件则记录漂移
-	if changeRate > 0.4 && cosineDelta > dd.driftThreshold {
-		report.NeedsReindex = true
-	}
-	report.ChangeRate = changeRate
-	report.CosineDelta = cosineDelta
-
 	if report.UnknownRatio > 0.30 {
 		report.UnknownTaskTypeAlarm = true
 	}
-
 	return report, nil
 }
 

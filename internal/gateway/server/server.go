@@ -143,8 +143,8 @@ func (s *Server) SetPluginCreator(pc *extplugin.PluginCreator) {
 	}
 }
 
-// SetEmbedder 注入语义向量化引擎（Tier 2 Ambient 匹配）。
-// nil 时 ChatHandler 自动降级 Tier 1。
+// SetEmbedder 注入语义向量化引擎（Tier 2 Ambient 匹配 + tool schema 语义过滤）。
+// nil 时 ChatHandler/SysAdminHandler 均自动降级 Tier 1（全量 schema 注入）。
 func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
 	if s.chatHandler != nil {
 		s.chatHandler.Embedder = e
@@ -153,6 +153,10 @@ func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
 		} else {
 			s.chatHandler.EmbedThreshold = 0.60 // 默认阈值
 		}
+	}
+	// SysAdminHandler 使用同一 Embedder 做 tool schema 语义过滤（>40 工具时激活）
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Embedder = e
 	}
 }
 

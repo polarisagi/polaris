@@ -132,7 +132,20 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		parts = append(parts, ic.PlatformHint)
 	}
 
-	// 5. volatile — 时间戳 / 会话信息（精确到天，不破坏 prefix cache）
+	// 5. stable — 工具/扩展感知摘要（仅名称，细节由 function schema 传递）
+	if ic.BuiltinTools != "" || ic.InstalledPlugins != "" {
+		var toolParts []string
+		if ic.BuiltinTools != "" {
+			toolParts = append(toolParts, "Built-in tools: "+ic.BuiltinTools)
+		}
+		if ic.InstalledPlugins != "" {
+			toolParts = append(toolParts, "Extensions: "+ic.InstalledPlugins)
+		}
+		toolHint := "You have tools callable via the function-call API.\n" + strings.Join(toolParts, "\n")
+		parts = append(parts, toolHint)
+	}
+
+	// 6. volatile — 时间戳 / 会话信息（精确到天，不破坏 prefix cache）
 	if ic.VolatileBlock != "" {
 		parts = append(parts, ic.VolatileBlock)
 	}
@@ -140,17 +153,40 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 	return strings.Join(parts, "\n\n")
 }
 
+// maxSystemPromptBytes 系统提示词单次渲染的字节数硬性上限（≈8K tokens at 4 chars/token）。
+// 超出部分截断并记录 warn，防止大量插件/工具文本撑爆 LLM context window。
+// ambient skill 全文注入有独立的 maxFullTextChars 预算，两者各自独立保护。
+const maxSystemPromptBytes = 32_000
+
 func (ic *ImmutableCore) PrependToMessages(msgs []types.Message) []types.Message {
 	content := ic.renderSystemPrompt()
 
 	// 去除多余的尾部换行
-	if len(content) > 0 && content[len(content)-1] == '\n' {
-		content = content[:len(content)-1]
-	}
+	content = strings.TrimRight(content, "\n")
 
 	// 如果全部为空，给一个默认提示词
 	if content == "" {
 		content = "你是 Polaris AI Agent。"
+	}
+
+	// 系统提示词硬性截断：防止大量插件/工具文本撑爆 context window（仅限 stable+volatile 层）
+	if len(content) > maxSystemPromptBytes {
+		originalBytes := len(content)
+		truncated := content[:maxSystemPromptBytes]
+		// 截到最后一个完整段落（至少保留前半部分），避免在段中截断
+		if idx := strings.LastIndex(truncated, "\n\n"); idx > maxSystemPromptBytes/2 {
+			truncated = truncated[:idx]
+		}
+		content = truncated + "\n\n[...系统提示词已截断]"
+		slog.Warn("system prompt truncated",
+			"original_bytes", originalBytes, "cap_bytes", maxSystemPromptBytes)
+	}
+
+	// AmbientContext 在模板渲染完成后追加，不经过 Go template 解析器。
+	// 这样 skill instructions 含 {{ }} 时不会破坏模板解析（Bug-fix: template injection）。
+	// AmbientContext 有独立的 maxFullTextChars(128K) 预算，不纳入上方截断逻辑。
+	if ic.AmbientContext != "" {
+		content += ic.AmbientContext
 	}
 
 	return append([]types.Message{{Role: "system", Content: content}}, msgs...)

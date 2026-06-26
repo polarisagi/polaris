@@ -20,6 +20,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -70,6 +71,14 @@ type SysAdminHandler struct {
 	SkillReg         protocol.SkillRegistry
 	SkillSignKey     []byte
 	LastEventOffset  int64
+
+	// Embedder 语义向量化引擎（nil = 禁用 tool schema 语义过滤，全量注入）。
+	// 由 server.SetEmbedder 注入；工具数量超过 toolSelectThreshold 时启用按 query 相似度筛选。
+	Embedder search.Embedder
+
+	// toolEmbedCache 工具描述向量缓存（key=sha256(name+"\x00"+desc)，受 ToolSchemaMu 保护）。
+	// 与 ToolSchemaCache 同步清空：ClearToolSchemaCache 调用时一并置 nil。
+	toolEmbedCache map[string][]float32
 }
 
 func NewSysAdminHandler(

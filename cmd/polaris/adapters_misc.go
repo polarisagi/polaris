@@ -107,7 +107,13 @@ type memEmbedderAdapter struct {
 }
 
 func (a *memEmbedderAdapter) Embed(_ context.Context, text string) ([]float32, error) {
-	return a.e.Embed(text), nil
+	v := a.e.Embed(text)
+	if len(v) == 0 {
+		// search.Embedder 无 error 返回；nil 向量唯一语义是 Embedder 暂不可用（如 Ollama 未启动）。
+		// 转换为 error 让 OnlineReindexer 可区分失败与正常空结果，避免写入零向量污染索引。
+		return nil, apperr.New(apperr.CodeInternal, "embedder returned empty vector")
+	}
+	return v, nil
 }
 
 func (a *memEmbedderAdapter) ModelVersion() string { return a.model }

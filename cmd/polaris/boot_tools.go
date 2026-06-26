@@ -56,6 +56,7 @@ type ToolBundle struct {
 	SkillRegistry    protocol.SkillRegistry
 	SkillExecutor    protocol.SkillExecutor   // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
 	NativeCogn       native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
+	EmbedFn          native.EmbedFn           // 可 nil（Ollama 未启用时；ExtensionActivator 降级为纯 FTS）
 	RecoveryHandler  *agent.ProviderRecoveryHandler
 }
 
@@ -294,6 +295,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		SkillRegistry:    skillRegistry,
 		SkillExecutor:    skillExecutor,
 		NativeCogn:       nativeCogn,
+		EmbedFn:          nativeEmbedFn,
 		RecoveryHandler:  recoveryHandler,
 	}, nil
 }

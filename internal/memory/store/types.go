@@ -35,6 +35,11 @@ type ImmutableCore struct {
 	// 精确到天而非分钟，确保同一天内 prefix cache 不失效。
 	VolatileBlock string `json:"volatile_block,omitempty"`
 
+	// AmbientContext ambient skill 上下文（instructions + 目录索引行）。
+	// 由 buildAmbientSkillsSection 填充，在 renderSystemPrompt 完成后追加到尾部。
+	// 不进入 Go template 解析流程，避免 skill instructions 中的 {{ }} 破坏模板解析。
+	AmbientContext string `json:"ambient_context,omitempty"`
+
 	// CustomInstructions 用户追加的行为指令（stable 层末尾，追加而非覆盖身份）。
 	// 来源：~/.polarisagi/polaris/config/prompts/custom_instructions.md 或 Web UI 编辑。
 	// DB 删除不影响（文件持久化），factory reset 时才清空。

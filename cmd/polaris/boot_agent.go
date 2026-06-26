@@ -161,8 +161,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		pool.Run(ctx)
 	})
 
-	// 构造 ExtensionActivator（需要 db + cognitive + mcpMgr）
-	activator := native.NewExtensionActivator(tb.ExtRepo, tb.NativeCogn, tb.MCPMgr)
+	// 构造 ExtensionActivator（需要 db + cognitive + mcpMgr + embedFn）
+	// embedFn 来自 ToolBundle.EmbedFn（Ollama 本地向量化；nil = 无 VecKNN，降级为纯 FTS）
+	activator := native.NewExtensionActivator(tb.ExtRepo, tb.NativeCogn, tb.MCPMgr, tb.EmbedFn)
 	agent.InjectExtensionActivator(&extensionActivatorAdapter{inner: activator})
 	agent.InjectMemory(mb.Mem)
 	if mb.Mem != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -22,47 +23,59 @@ type ActivatedToolHint struct {
 // ExtensionActivator 按需激活已安装扩展，返回可注入 Prompt 的工具提示。
 // 设计原则：
 //   - cognitive 为 nil 时静默退出（Tier-0 无 SurrealDB 时降级）
+//   - embedFn 为 nil 时退化为纯 FTS（无向量召回）
 //   - 激活失败单条跳过，不中断主流程
 //   - 同一会话内已激活的扩展不重复连接（mcpMgr 内部幂等）
 type ExtensionActivator struct {
 	extRepo   protocol.ExtensionRepository
 	cognitive CognitiveSearcher // SurrealDB 语义检索（来自 extension_manager.go 的接口）
 	mcpMgr    *mcp.MCPManager   // 动态注册 MCP server
+	embedFn   EmbedFn           // 可选：本地向量化函数（nil = 无 VecKNN 路径）
 }
 
-// NewExtensionActivator 构造激活器。cognitive 可为 nil（降级模式）。
-func NewExtensionActivator(extRepo protocol.ExtensionRepository, cognitive CognitiveSearcher, mcpMgr *mcp.MCPManager) *ExtensionActivator {
-	return &ExtensionActivator{extRepo: extRepo, cognitive: cognitive, mcpMgr: mcpMgr}
+// NewExtensionActivator 构造激活器。
+// cognitive/embedFn 均可为 nil（Tier-0 降级模式）。
+func NewExtensionActivator(extRepo protocol.ExtensionRepository, cognitive CognitiveSearcher, mcpMgr *mcp.MCPManager, embedFn EmbedFn) *ExtensionActivator {
+	return &ExtensionActivator{extRepo: extRepo, cognitive: cognitive, mcpMgr: mcpMgr, embedFn: embedFn}
 }
 
 // FindAndActivate 根据任务目标语义搜索已安装扩展，激活后返回工具提示列表。
 // 调用时机：Agent S_REPLAN 分支（遇挫重规划时）。
-// topK：最多激活 3 个扩展，避免 Prompt 膨胀。
+//
+// 搜索策略（FTS + VecKNN RRF 融合）：
+//  1. FTSSearch(goal, 8) — 关键词召回基线（始终执行）
+//  2. embedFn != nil → VecKNN(embed(goal), 8) — 语义向量召回
+//  3. RRF(k=60) 合并两路结果，取 top-3 激活
+//
+// 任一步骤失败时降级：FTS 失败则退出；VecKNN 失败则跳过向量路径。
 func (a *ExtensionActivator) FindAndActivate(ctx context.Context, goal string) ([]ActivatedToolHint, error) {
 	if a.cognitive == nil || goal == "" {
 		return nil, nil
 	}
 
-	// Step 1: SurrealDB FTSSearch — 语义匹配已索引的扩展
-	results, err := a.cognitive.FTSSearch(goal, 5)
+	// Step 1: FTS 基线（始终运行）
+	ftsResults, err := a.cognitive.FTSSearch(goal, 8)
 	if err != nil {
 		slog.Warn("extension_activator: FTSSearch failed", "err", err)
-		return nil, nil // 降级：不中断 replan
+		return nil, nil // FTS 失败：降级退出，不中断 replan
 	}
-	if len(results) == 0 {
+
+	// Step 2: VecKNN 语义召回（embedFn 可用时）
+	vecResults := a.tryVecKNN(ctx, goal)
+
+	// Step 3: RRF 融合（两路均空则退出）
+	merged := rrfMergeActivationResults(ftsResults, vecResults)
+	if len(merged) == 0 {
 		return nil, nil
 	}
 
-	// 取 top-3 extension_id
+	// 激活 top-3（避免 Prompt 膨胀）
 	topN := 3
-	if len(results) < topN {
-		topN = len(results)
+	if len(merged) < topN {
+		topN = len(merged)
 	}
-
 	var hints []ActivatedToolHint
-	for _, r := range results[:topN] {
-		// ScoredResult 结构体仅有 ID 和 Score 字段
-		// ID 形如 "ext_{extensionID}" 或者就是 extensionID
+	for _, r := range merged[:topN] {
 		extID := strings.TrimPrefix(r.ID, "ext_")
 		hint, activateErr := a.activateOne(ctx, extID, "")
 		if activateErr != nil {
@@ -74,6 +87,49 @@ func (a *ExtensionActivator) FindAndActivate(ctx context.Context, goal string) (
 		}
 	}
 	return hints, nil
+}
+
+// tryVecKNN 尝试向量化 goal 并执行 VecKNN 召回；任一步骤失败则返回 nil（降级）。
+func (a *ExtensionActivator) tryVecKNN(ctx context.Context, goal string) []ScoredResult {
+	if a.embedFn == nil {
+		return nil
+	}
+	vec, err := a.embedFn(ctx, goal)
+	if err != nil {
+		slog.Warn("extension_activator: embed failed, skip VecKNN", "err", err)
+		return nil
+	}
+	if len(vec) == 0 {
+		return nil
+	}
+	results, err := a.cognitive.VecKNN(vec, 8)
+	if err != nil {
+		slog.Warn("extension_activator: VecKNN failed, skip", "err", err)
+		return nil
+	}
+	return results
+}
+
+// rrfMergeActivationResults 对 FTS 和 VecKNN 两路结果执行 Reciprocal Rank Fusion（k=60）。
+// 相同 ID 的结果 RRF 分数累加，最终按分数降序返回去重合并列表。
+func rrfMergeActivationResults(fts, vec []ScoredResult) []ScoredResult {
+	const k = 60
+	scores := make(map[string]float64, len(fts)+len(vec))
+	for rank, r := range fts {
+		scores[r.ID] += 1.0 / float64(k+rank+1)
+	}
+	for rank, r := range vec {
+		scores[r.ID] += 1.0 / float64(k+rank+1)
+	}
+	if len(scores) == 0 {
+		return nil
+	}
+	result := make([]ScoredResult, 0, len(scores))
+	for id, s := range scores {
+		result = append(result, ScoredResult{ID: id, Score: s})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Score > result[j].Score })
+	return result
 }
 
 // activateOne 激活单个扩展，返回工具提示。

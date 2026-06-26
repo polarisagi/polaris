@@ -62,6 +62,11 @@ type SafeDialer struct {
 	// nil = 未启用；非 nil = 仅允许 filter(ip)==true 的 IP。
 	localOnlyIPFilter func(net.IP) bool
 
+	// allowLoopback 允许连接 loopback 地址（127.0.0.0/8 与 ::1）。
+	// 仅用于系统级受控本地服务（如 Ollama），跳过该 CIDR 段的 SSRF 阻断。
+	// 不影响其余私有 CIDR（10.x / 172.16.x / 192.168.x 等）仍被拦截。
+	allowLoopback bool
+
 	taintLevel     int
 	allowedDomains []string
 
@@ -104,6 +109,20 @@ func NewSafeHTTPClient(sd *SafeDialer) *http.Client {
 	if sd == nil {
 		sd = NewSafeDialer(0, nil, config.M11PolicyThresholds{})
 	}
+	return newSafeHTTPClientFromDialer(sd)
+}
+
+// NewLoopbackSafeHTTPClient 返回允许连接 loopback（127.x / ::1）的安全 HTTP 客户端。
+// 仅用于系统级受控本地服务（Ollama inference / embedding / QLoRA / PRM / Steering）。
+// 其余私有 CIDR 仍受 SafeDialer SSRF 阻断保护。
+func NewLoopbackSafeHTTPClient(m11 config.M11PolicyThresholds) *http.Client {
+	sd := NewSafeDialer(0, nil, m11)
+	sd.allowLoopback = true
+	return newSafeHTTPClientFromDialer(sd)
+}
+
+// newSafeHTTPClientFromDialer 从已配置的 SafeDialer 构造 http.Client（内部共用逻辑）。
+func newSafeHTTPClientFromDialer(sd *SafeDialer) *http.Client {
 	transport := &http.Transport{
 		DialContext:         sd.DialContext,
 		ForceAttemptHTTP2:   true,
@@ -307,8 +326,13 @@ func (sd *SafeDialer) resolveDNSBypass(ctx context.Context, host string) ([]net.
 
 // containsBlockedCIDR 检查 IP 列表是否命中内网 CIDR 阻断列表。
 // getParsedCIDRs() 内部通过 sync.OnceValue 保证只初始化一次，调用后只读无锁。
+// 当 sd.allowLoopback=true 时，loopback IP（127.x.x.x / ::1）跳过 CIDR 检查——
+// 仅适用于系统级受控本地服务（Ollama），不影响其余私有 CIDR 的拦截。
 func (sd *SafeDialer) containsBlockedCIDR(ips []net.IP) bool {
 	for _, ip := range ips {
+		if sd.allowLoopback && ip.IsLoopback() {
+			continue // 系统级本地服务豁免，跳过此 IP
+		}
 		for _, block := range getParsedCIDRs() {
 			if block.Contains(ip) {
 				return true

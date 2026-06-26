@@ -255,20 +255,32 @@ type HybridResult struct {
 	GraphResults []ScoredFragment
 }
 
-// RRF Fuse 倒数排名融合。
-// 公式: weight / (k + rank + 1), k=60.
-// 三路累加后降序排列。
+// RRFFuse 倒数排名融合。
+// 公式: weight / (k + rank + 1), k=60。三路累加后降序排列。
+// key = Source（优先）或 Content（Source 为空时兜底），保留首次出现的完整字段（Source/Metadata）。
 func RRFFuse(k int, weights map[string]float64, results map[string][]ScoredFragment) []ScoredFragment {
 	scores := make(map[string]float64)
+	frags := make(map[string]ScoredFragment) // key → 首次出现的完整 fragment（保留 Source/Metadata）
+
 	for source, w := range weights {
 		for rank, r := range results[source] {
-			scores[r.Content] += w / float64(k+rank+1)
+			// Source 为空时退化到 Content（兜底），避免不同来源相同内容互相覆盖分数
+			key := r.Source
+			if key == "" {
+				key = r.Content
+			}
+			scores[key] += w / float64(k+rank+1)
+			if _, seen := frags[key]; !seen {
+				frags[key] = r // 首次出现，保留 Source/Metadata 等原始字段
+			}
 		}
 	}
 
-	var fused []ScoredFragment //nolint:prealloc
-	for content, score := range scores {
-		fused = append(fused, ScoredFragment{Content: content, Score: score})
+	fused := make([]ScoredFragment, 0, len(scores))
+	for key, score := range scores {
+		frag := frags[key]
+		frag.Score = score
+		fused = append(fused, frag)
 	}
 
 	// 按分数降序排序

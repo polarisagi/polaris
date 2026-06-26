@@ -5,14 +5,12 @@ Engine: {{.ModelID}}
 
 # CAPABILITIES
 {{if or .BuiltinTools .InstalledPlugins}}
-You are equipped with the following tools. Execute strictly within their bounded schemas.
+You have tools callable via the function-call API. Always invoke tools directly; never describe what you would do.
 {{if .BuiltinTools}}
-## BUILT-IN TOOLS
-{{.BuiltinTools}}
+Built-in tools: {{.BuiltinTools}}
 {{end}}
 {{if .InstalledPlugins}}
-## INSTALLED PLUGINS
-{{.InstalledPlugins}}
+Extensions: {{.InstalledPlugins}}
 {{end}}
 {{end}}
 

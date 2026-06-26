@@ -370,6 +370,9 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	provider.SeedProvidersFromEnv(ctx, repo.NewSQLiteProviderRepository(store.DB()))
 
 	// ─── 4.5~4.9 本地推理适配器（各 FeatureGate 门控）────────────────────────
+	// ollamaHTTPClient 允许访问 loopback（127.x/::1），专用于系统级受控本地服务（Ollama）。
+	// 其余私有 CIDR 仍受 SafeDialer SSRF 阻断；不得用于用户可控的出站请求。
+	ollamaHTTPClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
 	var embedder search.Embedder
 	var qloraAdapter *llmadapter.QLoRAAdapter
 	var prmAdapter *llmadapter.PRMAdapter
@@ -380,7 +383,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			if localModel == "" {
 				localModel = "llama3.2"
 			}
-			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, safeHTTPClient, tbr))
+			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, ollamaHTTPClient, tbr))
 			slog.Info("polaris: Ollama local inference registered", "model", localModel)
 		}
 		if autoConf.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled {
@@ -388,25 +391,25 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			if embedModel == "" {
 				embedModel = "nomic-embed-text"
 			}
-			embedder = llmadapter.NewOllamaEmbeddingAdapter(embedModel, safeHTTPClient)
+			embedder = llmadapter.NewOllamaEmbeddingAdapter(embedModel, ollamaHTTPClient)
 			slog.Info("polaris: Ollama embedding registered", "model", embedModel)
 		}
 
 		if autoConf.Gate.State(probe.FeatureQLoRA) != probe.FeatureDisabled {
-			qloraAdapter = llmadapter.NewQLoRAAdapter("", safeHTTPClient)
+			qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient)
 			slog.Info("polaris: QLoRA training adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeaturePRMTraining) != probe.FeatureDisabled {
-			prmAdapter = llmadapter.NewPRMAdapter("", safeHTTPClient)
+			prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient)
 			slog.Info("polaris: PRM training adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeatureActivationSteer) != probe.FeatureDisabled {
-			steeringAdapter = llmadapter.NewSteeringAdapter("", safeHTTPClient)
+			steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient)
 			slog.Info("polaris: activation steering adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeatureLargeLocalLLM) != probe.FeatureDisabled {
 			if largeModel, ok := probe.TierLocalModel(autoConf.Config.Tier); ok {
-				reg.Register("ollama-large", "Large Local LLM", llmadapter.NewOllamaAdapter(largeModel, safeHTTPClient, tbr))
+				reg.Register("ollama-large", "Large Local LLM", llmadapter.NewOllamaAdapter(largeModel, ollamaHTTPClient, tbr))
 				slog.Info("polaris: large local LLM registered", "model", largeModel)
 			}
 		}

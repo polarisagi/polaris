@@ -110,6 +110,29 @@ func TestSafeDialer_BlockedCIDR(t *testing.T) {
 	}
 }
 
+// TestSafeDialer_AllowLoopback 验证 allowLoopback=true 时 loopback IP 豁免，私有 CIDR 仍被拦截。
+func TestSafeDialer_AllowLoopback(t *testing.T) {
+	sd := NewSafeDialer(0, nil, config.M11PolicyThresholds{})
+	sd.allowLoopback = true
+
+	loopbacks := []string{"127.0.0.1", "127.0.0.2", "::1"}
+	for _, raw := range loopbacks {
+		ip := net.ParseIP(raw)
+		if sd.containsBlockedCIDR([]net.IP{ip}) {
+			t.Errorf("allowLoopback=true: loopback %s should NOT be blocked", raw)
+		}
+	}
+
+	// 私有 CIDR 不受 allowLoopback 影响，仍须拦截
+	privates := []string{"10.0.0.1", "192.168.1.1", "169.254.0.1"}
+	for _, raw := range privates {
+		ip := net.ParseIP(raw)
+		if !sd.containsBlockedCIDR([]net.IP{ip}) {
+			t.Errorf("allowLoopback=true: private %s should still be blocked", raw)
+		}
+	}
+}
+
 // TestSafeDialer_TaintEgressCheck 验证污点出口拦截。
 func TestSafeDialer_TaintEgressCheck(t *testing.T) {
 	sd := NewSafeDialer(0, nil, config.M11PolicyThresholds{})
