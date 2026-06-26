@@ -506,7 +506,7 @@ func (h *SysAdminHandler) verifyTeamsWebhook(w http.ResponseWriter, r *http.Requ
 			return apperr.New(apperr.CodeInvalidInput, "invalid validationToken")
 		}
 		for _, c := range vt {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
 				return apperr.New(apperr.CodeInvalidInput, "invalid validationToken")
 			}
 		}
@@ -567,7 +567,7 @@ func (h *SysAdminHandler) verifySlackWebhook(w http.ResponseWriter, r *http.Requ
 		return apperr.New(apperr.CodeUnauthorized, "slack webhook: invalid signature format")
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(fmt.Sprintf("v0:%s:%s", timestamp, body)))
+	fmt.Fprintf(mac, "v0:%s:%s", timestamp, body)
 	expectedSig := "v0=" + hex.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
 		return apperr.New(apperr.CodeUnauthorized, "slack webhook: signature mismatch")

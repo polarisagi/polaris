@@ -1,125 +1,124 @@
-run:
-  timeout: 5m
-
+version: "2"
 linters:
   enable:
-    # 既有基础 linter（不动）
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gofmt
-    - goimports
+    - depguard
+    - errorlint
+    - gocyclo
     - misspell
+    - nestif
     - nilerr
     - prealloc
     - unconvert
-    # ADR-0013 Phase 1 新增（执行带 1）
-    - depguard      # B1 + R1.7 层依赖方向
-    - errorlint     # R1.2 错误包装（缺 %w / errors.Is/As 错用）
-    - nestif        # R7 嵌套深度
-    - gocyclo       # R7 圈复杂度
-
-linters-settings:
-  goimports:
-    local-prefixes: github.com/polarisagi/polaris
-
-  # ADR-0013: depguard 守护 04-Module-Boundary.md B1 单向依赖
-  # 矩阵: L0 ← L1 ← L2 ← L3；internal/ 与同层（L3 内部）允许互引
-  depguard:
+  settings:
+    depguard:
+      rules:
+        L0_substrate:
+          files:
+            - '**/internal/llm/**'
+            - '**/internal/store/**'
+            - '**/internal/observability/**'
+            - '**/internal/security/**'
+          deny:
+            - pkg: github.com/polarisagi/polaris/internal/agent
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/memory
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/prompt
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/tool
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/sandbox
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/action
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/swarm
+              desc: L0 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/learning
+              desc: L0 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/knowledge
+              desc: L0 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/eval
+              desc: L0 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/gateway
+              desc: L0 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/channel
+              desc: L0 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/cli
+              desc: L0 不可引 L3 (B1 + R1.7)
+        L1_cognition_action:
+          files:
+            - '**/internal/agent/**'
+            - '**/internal/memory/**'
+            - '**/internal/prompt/**'
+            - '**/internal/tool/**'
+            - '**/internal/sandbox/**'
+            - '**/internal/action/**'
+          deny:
+            - pkg: github.com/polarisagi/polaris/internal/swarm
+              desc: L1 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/learning
+              desc: L1 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/knowledge
+              desc: L1 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/eval
+              desc: L1 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/gateway
+              desc: L1 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/channel
+              desc: L1 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/cli
+              desc: L1 不可引 L3 (B1 + R1.7)
+        L2_swarm:
+          files:
+            - '**/internal/swarm/**'
+            - '**/internal/learning/**'
+            - '**/internal/knowledge/**'
+          deny:
+            - pkg: github.com/polarisagi/polaris/internal/eval
+              desc: L2 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/gateway
+              desc: L2 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/channel
+              desc: L2 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/cli
+              desc: L2 不可引 L3 (B1 + R1.7)
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    gocyclo:
+      min-complexity: 15
+    nestif:
+      min-complexity: 5
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      L0_substrate:
-        files:
-          - "**/internal/llm/**"
-          - "**/internal/store/**"
-          - "**/internal/observability/**"
-          - "**/internal/security/**"
-        deny:
-          - pkg: github.com/polarisagi/polaris/internal/agent
-            desc: "L0 不可引 L1 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/memory
-            desc: "L0 不可引 L1 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/prompt
-            desc: "L0 不可引 L1 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/tool
-            desc: "L0 不可引 L1 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/sandbox
-            desc: "L0 不可引 L1 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/action
-            desc: "L0 不可引 L1 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/swarm
-            desc: "L0 不可引 L2 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/learning
-            desc: "L0 不可引 L2 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/knowledge
-            desc: "L0 不可引 L2 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/eval
-            desc: "L0 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/gateway
-            desc: "L0 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/channel
-            desc: "L0 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/cli
-            desc: "L0 不可引 L3 (B1 + R1.7)"
-      L1_cognition_action:
-        files:
-          - "**/internal/agent/**"
-          - "**/internal/memory/**"
-          - "**/internal/prompt/**"
-          - "**/internal/tool/**"
-          - "**/internal/sandbox/**"
-          - "**/internal/action/**"
-        deny:
-          - pkg: github.com/polarisagi/polaris/internal/swarm
-            desc: "L1 不可引 L2 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/learning
-            desc: "L1 不可引 L2 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/knowledge
-            desc: "L1 不可引 L2 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/eval
-            desc: "L1 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/gateway
-            desc: "L1 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/channel
-            desc: "L1 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/cli
-            desc: "L1 不可引 L3 (B1 + R1.7)"
-      L2_swarm:
-        files:
-          - "**/internal/swarm/**"
-          - "**/internal/learning/**"
-          - "**/internal/knowledge/**"
-        deny:
-          - pkg: github.com/polarisagi/polaris/internal/eval
-            desc: "L2 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/gateway
-            desc: "L2 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/channel
-            desc: "L2 不可引 L3 (B1 + R1.7)"
-          - pkg: github.com/polarisagi/polaris/internal/cli
-            desc: "L2 不可引 L3 (B1 + R1.7)"
-
-  errorlint:
-    errorf: true
-    asserts: true
-    comparison: true
-
-  nestif:
-    # R7 嵌套深度 ≤ 3；nestif 用复杂度评分（不是直接深度数）
-    # 起始 5 = 中度宽松，避免初次启用铺红；后续可逐步降至 4
-    min-complexity: 5
-
-  gocyclo:
-    # R7 圈复杂度 ≤ 15；与宪法严格对齐
-    min-complexity: 15
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - errorlint
-        - nestif
-        - gocyclo
+      - linters:
+          - errcheck
+          - errorlint
+          - gocyclo
+          - nestif
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/polarisagi/polaris
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

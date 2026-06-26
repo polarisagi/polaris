@@ -55,10 +55,11 @@ func (se *SequentialExecutor) Execute(ctx context.Context, parentTaskID string, 
 				return ctx.Err()
 			case ev := <-events:
 				if ev.TaskID == task.ID {
-					if ev.Type == "task_completed" {
+					switch ev.Type {
+					case "task_completed":
 						lastResult = ev.Payload
 						completed = true
-					} else if ev.Type == "task_failed" {
+					case "task_failed":
 						return apperr.New(apperr.CodeInternal, fmt.Sprintf("sequential pipeline broken: task %s failed with: %s", task.ID, string(ev.Payload)))
 					}
 				}

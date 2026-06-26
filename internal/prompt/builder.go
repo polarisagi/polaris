@@ -92,7 +92,7 @@ func (b *PromptBuilder) WriteUserInstruction(safe taint.SafeString) {
 
 // Build 输出最终组装完毕可用于 InferRequest 的消息序列。
 func (b *PromptBuilder) Build() []types.Message {
-	var result []types.Message
+	var result []types.Message //nolint:prealloc
 	result = append(result, b.zones[ZoneImmutable]...)
 	result = append(result, b.zones[ZoneMutableSkill]...)
 	result = append(result, b.zones[ZoneTaintedData]...)

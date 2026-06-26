@@ -54,9 +54,10 @@ func TestSSEParser_DeepSeek(t *testing.T) {
 
 	var results []string
 	for ev := range ch {
-		if ev.Type == types.StreamTextDelta {
+		switch ev.Type {
+		case types.StreamTextDelta:
 			results = append(results, ev.Content)
-		} else if ev.Type == types.StreamError {
+		case types.StreamError:
 			t.Fatalf("stream error: %v", ev.Content)
 		}
 	}

@@ -363,9 +363,10 @@ func (m *Manager) removePluginRuntime(ctx context.Context, runtimeID string, rem
 }
 
 func (m *Manager) cleanCatalog(ctx context.Context, origin, catalogID string) {
-	if origin == "user" {
+	switch origin {
+	case "user":
 		_ = m.extRepo.DeleteCatalogEntry(ctx, catalogID)
-	} else if origin == "marketplace" {
+	case "marketplace":
 		isBuiltin, err := m.extRepo.IsCatalogBuiltin(ctx, catalogID)
 		if err == nil && !isBuiltin {
 			_ = m.extRepo.DeleteCatalogEntry(ctx, catalogID)

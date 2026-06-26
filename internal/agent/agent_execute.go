@@ -971,7 +971,8 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 	}
 
 	isDangerous := false
-	if toolName == "computer_use" {
+	switch toolName {
+	case "computer_use":
 		var actionReq struct {
 			Action string `json:"action"`
 		}
@@ -979,7 +980,7 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 		if actionReq.Action == "key" || actionReq.Action == "type" || actionReq.Action == "left_click" || actionReq.Action == "right_click" || actionReq.Action == "double_click" || actionReq.Action == "left_click_drag" {
 			isDangerous = true
 		}
-	} else if toolName == "browser_use" {
+	case "browser_use":
 		var actionReq struct {
 			Action string `json:"action"`
 		}
@@ -1139,7 +1140,7 @@ func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []
 	var sb strings.Builder
 	sb.WriteString("Relevant Context:\n")
 	for _, item := range ac.Items {
-		sb.WriteString(fmt.Sprintf("- [%s] %s\n", item.Source, item.Content))
+		fmt.Fprintf(&sb, "- [%s] %s\n", item.Source, item.Content)
 	}
 
 	return append([]types.Message{{Role: "system", Content: sb.String()}}, msgs...)

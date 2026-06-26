@@ -48,7 +48,6 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 
-	pluginhandler "github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
@@ -160,7 +159,7 @@ func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
 	}
 }
 
-func (s *Server) SetEmbeddingIndexer(idx *pluginhandler.EmbeddingIndexer) {
+func (s *Server) SetEmbeddingIndexer(idx *plugin.EmbeddingIndexer) {
 	if s.pluginHandler != nil {
 		s.pluginHandler.EmbeddingIndexer = idx
 	}

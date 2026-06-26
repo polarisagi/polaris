@@ -143,7 +143,7 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 
 	relDir := "./" + filepath.Base(tmpDir)
 
-	var compileScore float64 = 0.0
+	var compileScore = 0.0
 
 	if p.sandbox != nil {
 		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", relDir}, wd, 30*time.Second)

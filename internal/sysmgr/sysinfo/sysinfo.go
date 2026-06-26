@@ -77,17 +77,17 @@ func GetSystemInfo() *SystemInfo {
 func (i *SystemInfo) FormatMarkdown() string {
 	var sb strings.Builder
 	sb.WriteString("### System Environment\n")
-	sb.WriteString(fmt.Sprintf("- **OS**: %s %s (%s)\n", i.OSName, i.OSVersion, i.Architecture))
-	sb.WriteString(fmt.Sprintf("- **CPU**: %d cores\n", i.CPUCores))
-	sb.WriteString(fmt.Sprintf("- **Memory**: %s GB used / %s GB total\n", i.MemoryUsageGB, i.MemoryTotalGB))
-	sb.WriteString(fmt.Sprintf("- **Disk (/)**: %s GB free\n", i.DiskFreeGB))
+	fmt.Fprintf(&sb, "- **OS**: %s %s (%s)\n", i.OSName, i.OSVersion, i.Architecture)
+	fmt.Fprintf(&sb, "- **CPU**: %d cores\n", i.CPUCores)
+	fmt.Fprintf(&sb, "- **Memory**: %s GB used / %s GB total\n", i.MemoryUsageGB, i.MemoryTotalGB)
+	fmt.Fprintf(&sb, "- **Disk (/)**: %s GB free\n", i.DiskFreeGB)
 	rootStatus := ""
 	if i.IsRoot {
 		rootStatus = " (Root/Admin privileges)"
 	}
-	sb.WriteString(fmt.Sprintf("- **User**: %s%s, Home: %s\n", i.Username, rootStatus, i.HomeDir))
-	sb.WriteString(fmt.Sprintf("- **Locale**: %s\n", i.Locale))
-	sb.WriteString(fmt.Sprintf("- **Timezone**: %s\n", i.Timezone))
+	fmt.Fprintf(&sb, "- **User**: %s%s, Home: %s\n", i.Username, rootStatus, i.HomeDir)
+	fmt.Fprintf(&sb, "- **Locale**: %s\n", i.Locale)
+	fmt.Fprintf(&sb, "- **Timezone**: %s\n", i.Timezone)
 	return sb.String()
 }
 

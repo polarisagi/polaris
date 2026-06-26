@@ -61,7 +61,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 		retrieved.WriteString("Relevant Historical Episodic Memories:\n")
 		for _, e := range events {
 			if pbEv, _ := e.Event.(*types.Event); pbEv != nil {
-				retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload)))
+				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
 			}
 		}
 	}
@@ -75,8 +75,8 @@ func BuildPerceiveContext( //nolint:gocyclo
 		if rerr == nil && len(reflections) > 0 {
 			retrieved.WriteString("Cross-Session Reflections (past experience for similar tasks):\n")
 			for _, r := range reflections {
-				retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n",
-					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision))
+				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n",
+					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
 			}
 		}
 	}
@@ -86,7 +86,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 		select {
 		case w := <-sCtx.WhisperChan:
 			if w.Salience >= 0.5 {
-				retrieved.WriteString(fmt.Sprintf("## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content))
+				fmt.Fprintf(&retrieved, "## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content)
 			}
 		default:
 		}
@@ -98,7 +98,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 		if err == nil && len(ftsResults) > 0 {
 			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {
-				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+				fmt.Fprintf(&retrieved, "- [score=%.2f] %s\n", r.Score, r.Snippet)
 			}
 		}
 	}
@@ -109,7 +109,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 		if err == nil && len(ragResults) > 0 {
 			retrieved.WriteString("Knowledge Base (RAG):\n")
 			for _, r := range ragResults {
-				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content))
+				fmt.Fprintf(&retrieved, "- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content)
 			}
 		}
 	}
@@ -197,7 +197,7 @@ func BuildPlanContext( //nolint:gocyclo
 		retrieved.WriteString("Historical execution experiences for reference:\n")
 		for _, e := range events {
 			if pbEv, _ := e.Event.(*types.Event); pbEv != nil {
-				retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload)))
+				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
 			}
 		}
 	}
@@ -210,8 +210,8 @@ func BuildPlanContext( //nolint:gocyclo
 		if rerr == nil && len(reflections) > 0 {
 			retrieved.WriteString("Cross-Session Reflections (execution patterns for similar tasks):\n")
 			for _, r := range reflections {
-				retrieved.WriteString(fmt.Sprintf("- [%s] %s: %s\n",
-					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision))
+				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n",
+					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
 			}
 		}
 	}
@@ -222,7 +222,7 @@ func BuildPlanContext( //nolint:gocyclo
 		if err == nil && len(ftsResults) > 0 {
 			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {
-				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s\n", r.Score, r.Snippet))
+				fmt.Fprintf(&retrieved, "- [score=%.2f] %s\n", r.Score, r.Snippet)
 			}
 		}
 	}
@@ -232,7 +232,7 @@ func BuildPlanContext( //nolint:gocyclo
 		if err == nil && len(ragResults) > 0 {
 			retrieved.WriteString("Knowledge Base (RAG):\n")
 			for _, r := range ragResults {
-				retrieved.WriteString(fmt.Sprintf("- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content))
+				fmt.Fprintf(&retrieved, "- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content)
 			}
 		}
 	}
@@ -269,10 +269,10 @@ func BuildToolListSection(tools protocol.ToolRegistry) string {
 	var sb strings.Builder
 	sb.WriteString("Available Tools List (The 'action' field of DAG nodes MUST be one of the following names):\n")
 	for _, t := range list {
-		sb.WriteString(fmt.Sprintf("- %s: %s", t.Name, t.Description))
+		fmt.Fprintf(&sb, "- %s: %s", t.Name, t.Description)
 		if t.InputSchema != nil {
 			if schemaBytes, err := json.Marshal(t.InputSchema); err == nil {
-				sb.WriteString(fmt.Sprintf(" (Parameters schema: %s)", string(schemaBytes)))
+				fmt.Fprintf(&sb, " (Parameters schema: %s)", string(schemaBytes))
 			}
 		}
 		sb.WriteByte('\n')

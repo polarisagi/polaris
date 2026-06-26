@@ -138,7 +138,7 @@ func (ms *MemorySystemImpl) InjectRelevantMemory(ctx context.Context, sessionID 
 
 	var sb strings.Builder
 	for _, f := range frags {
-		sb.WriteString(fmt.Sprintf("- %s\n", f.Content))
+		fmt.Fprintf(&sb, "- %s\n", f.Content)
 	}
 	return sb.String(), nil
 }

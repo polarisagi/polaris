@@ -119,11 +119,12 @@ func TestGraphWriter_ConcurrentSingleWriter(t *testing.T) {
 	successCount := 0
 	staleLeaseCount := 0
 	for r := range resultCh {
-		if r.err == nil {
+		switch r.err {
+		case nil:
 			successCount++
-		} else if r.err == store.ErrStaleLease {
+		case store.ErrStaleLease:
 			staleLeaseCount++
-		} else {
+		default:
 			t.Errorf("worker %d: unexpected error: %v", r.workerID, r.err)
 		}
 	}

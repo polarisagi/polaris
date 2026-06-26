@@ -774,7 +774,7 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 		    version=version+1, updated_at=datetime('now')
 		WHERE status IN (?,?) AND task_id IN (%s)`, strings.Join(placeholders, ","))
 
-	args := []any{statusFailed, statusPending, statusClaimed, statusRunning}
+	args := []any{statusFailed, statusPending, statusClaimed, statusRunning} //nolint:prealloc
 	args = append(args, taskIDs...)
 
 	_, _ = bb.db.ExecContext(ctx, query, args...)

@@ -117,7 +117,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 		var conceptLabel string
 		var errLLM error
 		if p.entityExtractor.llmClient != nil { //nolint:nestif
-			var entityNames []string
+			var entityNames []string //nolint:prealloc
 			for _, idx := range cluster {
 				entityNames = append(entityNames, entities[idx].Name)
 			}

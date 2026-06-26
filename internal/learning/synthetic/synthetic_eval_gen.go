@@ -106,11 +106,12 @@ func (g *EvalGenerator) GenerateCases(ctx context.Context, chunks []string) ([]S
 		base.ChunkID = synChunkID(chunk)
 
 		// Stage 2: 按索引奇偶决定是否演化难度（简单分流，避免全量调用 LLM）
-		if i%3 == 1 {
+		switch i % 3 {
+		case 1:
 			if evolved, err := g.evolveReasoning(ctx, chunk, base); err == nil && evolved != nil {
 				base = evolved
 			}
-		} else if i%3 == 2 {
+		case 2:
 			if evolved, err := g.evolveConditioning(ctx, chunk, base); err == nil && evolved != nil {
 				base = evolved
 			}

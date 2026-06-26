@@ -198,9 +198,9 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 
 		if !isImage && !isVideo {
 			// 非图片/视频文件，向提示词中注入挂载信息
-			userPromptBuilder.WriteString(fmt.Sprintf("\n\n[System: 用户挂载了系统附件 %s", att.URI))
+			fmt.Fprintf(&userPromptBuilder, "\n\n[System: 用户挂载了系统附件 %s", att.URI)
 			if att.Name != "" {
-				userPromptBuilder.WriteString(fmt.Sprintf(" (原始文件名: %s)", att.Name))
+				fmt.Fprintf(&userPromptBuilder, " (原始文件名: %s)", att.Name)
 			}
 			userPromptBuilder.WriteString("]")
 			continue
@@ -227,10 +227,8 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 				if name == "" {
 					name = att.URI
 				}
-				userPromptBuilder.WriteString(fmt.Sprintf(
-					"\n\n[System: 视频文件 %s (%.1fMB) 超过内联上限（20MB），未能传递给模型。请使用较小的视频片段。]",
-					name, float64(fi.Size())/(1024*1024),
-				))
+				fmt.Fprintf(&userPromptBuilder, "\n\n[System: 视频文件 %s (%.1fMB) 超过内联上限（20MB），未能传递给模型。请使用较小的视频片段。]",
+					name, float64(fi.Size())/(1024*1024))
 				continue
 			}
 		}

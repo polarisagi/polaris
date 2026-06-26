@@ -592,7 +592,7 @@ func (sm *StateMachine) appendDynamicHints(msgs []types.Message) {
 		sb.WriteString("\n\n## 本次重规划新增可用工具\n")
 		sb.WriteString("以下工具刚刚被激活，你可以在重规划中使用它们：\n")
 		for _, h := range sm.dynamicHints {
-			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", h.ToolName, h.Description))
+			fmt.Fprintf(&sb, "- **%s**: %s\n", h.ToolName, h.Description)
 		}
 		msgs[0].Content += sb.String()
 	}

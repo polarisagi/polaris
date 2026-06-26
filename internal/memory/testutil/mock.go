@@ -143,9 +143,10 @@ func (m *MockStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterator,
 
 func (m *MockStore) BatchWrite(ctx context.Context, ops []types.Op) error {
 	for _, op := range ops {
-		if op.Type == types.OpPut {
+		switch op.Type {
+		case types.OpPut:
 			m.data[string(op.Key)] = op.Value
-		} else if op.Type == types.OpDelete {
+		case types.OpDelete:
 			delete(m.data, string(op.Key))
 		}
 	}

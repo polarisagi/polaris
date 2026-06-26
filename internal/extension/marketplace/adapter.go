@@ -324,10 +324,8 @@ func parsePackageJSON(path, baseID string, mp protocol.Marketplace) (protocol.Re
 		return protocol.RegistryEntry{}, false
 	}
 
-	isMCP := false
-	if strings.Contains(p.Name, "mcp") {
-		isMCP = true
-	}
+	isMCP := strings.Contains(p.Name, "mcp")
+
 	for k := range p.Dependencies {
 		if strings.Contains(k, "modelcontextprotocol") || k == "mcp" {
 			isMCP = true
@@ -389,10 +387,8 @@ func parsePyProjectTOML(path, baseID string, mp protocol.Marketplace) (protocol.
 		return protocol.RegistryEntry{}, false
 	}
 
-	isMCP := false
-	if strings.Contains(p.Project.Name, "mcp") {
-		isMCP = true
-	}
+	isMCP := strings.Contains(p.Project.Name, "mcp")
+
 	for _, dep := range p.Project.Dependencies {
 		if strings.Contains(dep, "mcp") {
 			isMCP = true

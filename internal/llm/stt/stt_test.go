@@ -31,8 +31,8 @@ func TestLibName_Platform(t *testing.T) {
 
 func TestLibDownloadURL_SupportedPlatforms(t *testing.T) {
 	url, err := libDownloadURL("1.13.2")
-	switch {
-	case runtime.GOOS == "darwin", runtime.GOOS == "linux":
+	switch runtime.GOOS {
+	case "darwin", "linux":
 		if err != nil {
 			t.Fatalf("supported platform should not error: %v", err)
 		}

@@ -36,16 +36,6 @@ func (dummyPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) (t
 	return types.PolicyReviewResult{Allowed: true}, nil
 }
 
-type mockPolicy struct{}
-
-func (mockPolicy) IsAuthorized(ctx context.Context, principal, action, resource string, contextData map[string]any) (bool, error) {
-	return true, nil
-}
-
-func (mockPolicy) Review(ctx context.Context, req types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
-	return types.PolicyReviewResult{Allowed: true}, nil
-}
-
 func mockToken(caps []token.CapabilityType) *token.Token {
 	tok, _ := action.GetTokenManager().Mint("agent1", caps, 1, 5*time.Minute, 0)
 	return tok

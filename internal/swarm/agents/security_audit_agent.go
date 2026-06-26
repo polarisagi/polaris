@@ -229,8 +229,8 @@ func (a *SecurityAuditAgent) buildHITLText(result *AuditResult, codeLanguage str
 }
 
 func (a *SecurityAuditAgent) buildHITLTextZh(sb *strings.Builder, result *AuditResult, codeLanguage string, codeLen int) {
-	sb.WriteString(fmt.Sprintf("🔍 安全审查 · %s（%d字节）\n", codeLanguage, codeLen))
-	sb.WriteString(fmt.Sprintf("风险等级：%s\n", riskLabel(result.RiskLevel, "zh")))
+	fmt.Fprintf(sb, "🔍 安全审查 · %s（%d字节）\n", codeLanguage, codeLen)
+	fmt.Fprintf(sb, "风险等级：%s\n", riskLabel(result.RiskLevel, "zh"))
 	if result.Summary != "" {
 		sb.WriteString(result.Summary + "\n")
 	}
@@ -238,13 +238,13 @@ func (a *SecurityAuditAgent) buildHITLTextZh(sb *strings.Builder, result *AuditR
 		if item.Severity == "info" {
 			continue // 仅展示 warning/danger
 		}
-		sb.WriteString(fmt.Sprintf("%s %s：%s\n", severityIcon(item.Severity), item.Category, item.PlainText))
+		fmt.Fprintf(sb, "%s %s：%s\n", severityIcon(item.Severity), item.Category, item.PlainText)
 	}
 }
 
 func (a *SecurityAuditAgent) buildHITLTextEn(sb *strings.Builder, result *AuditResult, codeLanguage string, codeLen int) {
-	sb.WriteString(fmt.Sprintf("🔍 Security Audit · %s (%d bytes)\n", codeLanguage, codeLen))
-	sb.WriteString(fmt.Sprintf("Risk: %s\n", riskLabel(result.RiskLevel, "en")))
+	fmt.Fprintf(sb, "🔍 Security Audit · %s (%d bytes)\n", codeLanguage, codeLen)
+	fmt.Fprintf(sb, "Risk: %s\n", riskLabel(result.RiskLevel, "en"))
 	if result.Summary != "" {
 		sb.WriteString(result.Summary + "\n")
 	}
@@ -252,7 +252,7 @@ func (a *SecurityAuditAgent) buildHITLTextEn(sb *strings.Builder, result *AuditR
 		if item.Severity == "info" {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("%s %s: %s\n", severityIcon(item.Severity), item.Category, item.PlainText))
+		fmt.Fprintf(sb, "%s %s: %s\n", severityIcon(item.Severity), item.Category, item.PlainText)
 	}
 }
 

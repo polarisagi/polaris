@@ -65,7 +65,8 @@ func (mre *MapReduceExecutor) Execute(ctx context.Context, parentTaskID string, 
 				return nil, apperr.New(apperr.CodeInternal, "events channel closed unexpectedly")
 			}
 			if pendingMap[ev.TaskID] {
-				if ev.Type == "task_completed" {
+				switch ev.Type {
+				case "task_completed":
 					// SHA-256 去重：相同 payload 只聚合一次（防止重复 Agent 产出）
 					hash := sha256.Sum256(ev.Payload)
 					hashStr := hex.EncodeToString(hash[:])
@@ -74,7 +75,7 @@ func (mre *MapReduceExecutor) Execute(ctx context.Context, parentTaskID string, 
 						results = append(results, ev.Payload)
 					}
 					delete(pendingMap, ev.TaskID)
-				} else if ev.Type == "task_failed" {
+				case "task_failed":
 					return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("map task %s failed: %s", ev.TaskID, string(ev.Payload)))
 				}
 			}

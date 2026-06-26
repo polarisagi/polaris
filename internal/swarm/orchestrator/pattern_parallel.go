@@ -60,9 +60,10 @@ func (pe *ParallelExecutor) Execute(ctx context.Context, parentTaskID string, su
 					return apperr.New(apperr.CodeInternal, fmt.Sprintf("event channel closed while %d tasks pending", len(pendingMap)))
 				}
 				if ev.TaskID != "" && pendingMap[ev.TaskID] {
-					if ev.Type == "task_completed" {
+					switch ev.Type {
+					case "task_completed":
 						delete(pendingMap, ev.TaskID)
-					} else if ev.Type == "task_failed" {
+					case "task_failed":
 						return apperr.New(apperr.CodeInternal, fmt.Sprintf("parallel task %s failed with: %s", ev.TaskID, string(ev.Payload)))
 					}
 				}

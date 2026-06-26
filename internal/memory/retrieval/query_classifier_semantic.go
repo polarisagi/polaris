@@ -65,7 +65,7 @@ func (s *SemanticQueryClassifier) ClassifyQuerySemantic(ctx context.Context, que
 		return ClassifyQuery(query)
 	}
 
-	var bestType QueryType = QueryTypeUnknown
+	var bestType = QueryTypeUnknown
 	var bestSim float64 = -1
 
 	for qt, pvec := range vecs {

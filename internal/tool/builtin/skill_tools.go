@@ -97,7 +97,7 @@ func makeSkillSaveFn(skillReg protocol.SkillRegistry) sandbox.InProcessFn {
 
 		skillName := fmt.Sprintf("skill:%s", args.SkillName)
 		var newVersion string
-		if args.Version != "" {
+		if args.Version != "" { //nolint:nestif
 			newVersion = args.Version
 		} else {
 			var v int64 = 1

@@ -129,9 +129,10 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 				report.PassCount++
 			} else {
 				report.FailCount++
-				if c.Severity == SeverityP0 {
+				switch c.Severity {
+				case SeverityP0:
 					report.P0Fail++
-				} else if c.Severity == SeverityP1 {
+				case SeverityP1:
 					report.P1Fail++
 				}
 			}

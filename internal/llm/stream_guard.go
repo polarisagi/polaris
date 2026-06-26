@@ -142,15 +142,16 @@ func JSONRepair(data []byte) (*RepairResult, error) { //nolint:gocyclo,nestif
 				inString = false
 			}
 		} else {
-			if c == '"' {
+			switch c {
+			case '"':
 				inString = true
-			} else if c == '{' || c == '[' {
+			case '{', '[':
 				stack = append(stack, c)
-			} else if c == '}' {
+			case '}':
 				if len(stack) > 0 && stack[len(stack)-1] == '{' {
 					stack = stack[:len(stack)-1]
 				}
-			} else if c == ']' {
+			case ']':
 				if len(stack) > 0 && stack[len(stack)-1] == '[' {
 					stack = stack[:len(stack)-1]
 				}
@@ -190,9 +191,10 @@ func JSONRepair(data []byte) (*RepairResult, error) { //nolint:gocyclo,nestif
 
 	// 出栈并闭合
 	for i := len(stack) - 1; i >= 0; i-- {
-		if stack[i] == '{' {
+		switch stack[i] {
+		case '{':
 			res.Repaired = append(res.Repaired, '}')
-		} else if stack[i] == '[' {
+		case '[':
 			res.Repaired = append(res.Repaired, ']')
 		}
 		res.BracketsClosed++

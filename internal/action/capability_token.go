@@ -37,11 +37,12 @@ func opsToCapabilities(ops []TokenOperation) []token.CapabilityType {
 	caps := []token.CapabilityType{}
 	for _, op := range ops {
 		// 简单映射，实际应根据 ToolName 判断
-		if op.ToolName == "run-sh" || op.ToolName == "bash" {
+		switch op.ToolName {
+		case "run-sh", "bash":
 			caps = append(caps, token.CapShell)
-		} else if op.ToolName == "fetch_url" {
+		case "fetch_url":
 			caps = append(caps, token.CapNetwork)
-		} else {
+		default:
 			caps = append(caps, token.CapProcess)
 		}
 	}

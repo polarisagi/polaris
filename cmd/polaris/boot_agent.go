@@ -14,7 +14,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/action/lam"
 	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
-	"github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
 	"github.com/polarisagi/polaris/internal/learning/surprise"
@@ -28,7 +27,7 @@ import (
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/extension/native"
 	"github.com/polarisagi/polaris/internal/extension/skill"
-	si "github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
@@ -60,7 +59,7 @@ type AgentBundle struct {
 	DAGExec *agentdag.DAGExecutor
 
 	// M9 Self-Improvement
-	M9Engine *si.Engine
+	M9Engine *learning.Engine
 
 	// AgentPool for per-session web agents
 	AgentPool *sysagent.Pool
@@ -303,8 +302,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	sched.SetAgentInvoker(&agentInvokerAdapter{agent: agent})
 
 	// ─── §10.3 M9 Self-Improvement Engine ────────────────────────────────────
-	taskEventCh := make(chan si.TaskCompleteEvent, 64)
-	versionEventCh := make(chan si.VersionChangeEvent, 8)
+	taskEventCh := make(chan learning.TaskCompleteEvent, 64)
+	versionEventCh := make(chan learning.VersionChangeEvent, 8)
 
 	// 桥接 Blackboard 事件 → M9 TaskCompleteEvent（XR-14：所有后台 goroutine 必须走 SafeGo）
 	concurrent.SafeGo(ctx, "m9-bb-bridge", func(ctx context.Context) {
@@ -324,7 +323,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				switch ev.Type {
 				case "task_completed":
 					select {
-					case taskEventCh <- si.TaskCompleteEvent{
+					case taskEventCh <- learning.TaskCompleteEvent{
 						TaskID:  ev.TaskID,
 						Success: true,
 					}:
@@ -332,10 +331,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 					}
 				case "task_failed":
 					select {
-					case taskEventCh <- si.TaskCompleteEvent{
+					case taskEventCh <- learning.TaskCompleteEvent{
 						TaskID:  ev.TaskID,
 						Success: false,
-						Failure: si.FailureLogic,
+						Failure: learning.FailureLogic,
 					}:
 					default:
 					}

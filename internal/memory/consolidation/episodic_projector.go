@@ -102,7 +102,7 @@ func encryptField(key []byte, plaintext string) (string, error) {
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "encryptField", err)
 	}
-	nonce := make([]byte, aesgcm.NonceSize())
+	nonce := make([]byte, aesgcm.NonceSize()) //nolint:prealloc
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "encryptField", err)
 	}

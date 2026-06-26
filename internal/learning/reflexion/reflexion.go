@@ -293,7 +293,7 @@ func inferCauseFromTrajectory(trajectory []learning.Step) string {
 }
 
 func extractKeywords(taskType, text string) []string {
-	kw := []string{taskType}
+	kw := []string{taskType} //nolint:prealloc
 	// 简单拆词（生产应使用 NLP 分词或 LLM 提取）
 	words := []string{}
 	current := ""

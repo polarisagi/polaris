@@ -63,9 +63,10 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 		if token == "" {
 			appID, _ := cfg["app_id"].(string)
 			appSecret, _ := cfg["app_secret"].(string)
-			if domain == "" || domain == "feishu" {
+			switch domain {
+			case "", "feishu":
 				domain = cadapter.FeishuOpenBase
-			} else if domain == "lark" {
+			case "lark":
 				domain = cadapter.LarkOpenBase
 			}
 			var tokErr error

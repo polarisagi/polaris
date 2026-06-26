@@ -166,11 +166,12 @@ func TestMutationBus_OptimisticLocking(t *testing.T) {
 	successCount := 0
 	staleLeaseCount := 0
 	for r := range resultCh {
-		if r.err == nil {
+		switch r.err {
+		case nil:
 			successCount++
-		} else if r.err == ErrStaleLease {
+		case ErrStaleLease:
 			staleLeaseCount++
-		} else {
+		default:
 			t.Errorf("Unexpected error from worker %d: %v", r.workerID, r.err)
 		}
 	}

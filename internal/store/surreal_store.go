@@ -115,10 +115,8 @@ func goStringFromPtr(ptr uintptr) string {
 		return ""
 	}
 	var n uintptr
-	for {
-		if *(*byte)(unsafe.Pointer(ptr + n)) == 0 {
-			break
-		}
+	for *(*byte)(unsafe.Pointer(ptr + n)) != 0 {
+
 		n++
 	}
 	if n == 0 {

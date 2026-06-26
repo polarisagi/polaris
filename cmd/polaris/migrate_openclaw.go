@@ -348,19 +348,20 @@ func applyUserData(rep *migrateReport, polarisDir string, overwrite bool) error 
 			if idx := strings.IndexByte(k, '='); idx > 0 {
 				key := k[:idx]
 				val := k[idx+1:]
-				if key == "openai_key" {
+				switch key {
+				case "openai_key":
 					fmt.Fprintf(f, "OPENAI_API_KEY=%s\n", val)
-				} else if key == "anthropic_key" {
+				case "anthropic_key":
 					fmt.Fprintf(f, "ANTHROPIC_API_KEY=%s\n", val)
-				} else if key == "default_provider" {
+				case "default_provider":
 					fmt.Fprintf(f, "POLARIS_PROVIDER=%s\n", val)
-				} else if key == "default_model" {
+				case "default_model":
 					fmt.Fprintf(f, "POLARIS_MODEL=%s\n", val)
-				} else if key == "telegram_token" {
+				case "telegram_token":
 					fmt.Fprintf(f, "TELEGRAM_BOT_TOKEN=%s\n", val)
-				} else if key == "openrouter_key" {
+				case "openrouter_key":
 					fmt.Fprintf(f, "OPENROUTER_API_KEY=%s\n", val)
-				} else if key == "elevenlabs_key" {
+				case "elevenlabs_key":
 					fmt.Fprintf(f, "ELEVENLABS_API_KEY=%s\n", val)
 				}
 			}

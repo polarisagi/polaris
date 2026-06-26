@@ -346,18 +346,19 @@ func (g *Gate) loadBuiltinRules() { //nolint:gocyclo
 				}
 
 				//nolint:nestif
-				if pmode == types.ModeFullAccess {
+				switch pmode {
+				case types.ModeFullAccess:
 					if tl >= 2 {
 						return true
 					}
-				} else if pmode == types.ModeAutoReview {
+				case types.ModeAutoReview:
 					if tl >= 3 {
 						return true
 					}
 					if tl == 2 && approval == "approved" {
 						return true
 					}
-				} else if pmode == types.ModeDefault {
+				case types.ModeDefault:
 					if tl >= 3 {
 						return approval == "approved"
 					}

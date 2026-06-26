@@ -367,10 +367,7 @@ func makeFetchURLFn(dialer protocol.SafeDialer) sandbox.InProcessFn {
 		}
 
 		// 如果超出了限制
-		truncated := false
-		if len(body) == 2*1024*1024 {
-			truncated = true
-		}
+		truncated := len(body) == 2*1024*1024
 
 		contentStr := string(body)
 		contentType := resp.Header.Get("Content-Type")
@@ -1767,7 +1764,7 @@ func stripSQLComments(s string) string {
 	for i < len(s) {
 		if i+1 < len(s) && s[i] == '/' && s[i+1] == '*' {
 			j := i + 2
-			for j+1 < len(s) && !(s[j] == '*' && s[j+1] == '/') {
+			for j+1 < len(s) && (s[j] != '*' || s[j+1] != '/') {
 				j++
 			}
 			if j+1 < len(s) {

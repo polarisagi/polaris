@@ -48,10 +48,7 @@ func (s *WasmtimeSandbox) Run(ctx context.Context, spec sandbox.SandboxSpec) (*t
 	// }
 
 	// 从能力推导是否允许网络出站
-	networkAllowed := false
-	if spec.Capability >= types.CapWriteNetwork {
-		networkAllowed = true
-	}
+	networkAllowed := spec.Capability >= types.CapWriteNetwork
 
 	// 动态计算配额
 	quota := CalculateWasmQuota(spec.SystemTier, spec.TaintLevel)

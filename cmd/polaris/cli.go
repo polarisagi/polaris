@@ -271,9 +271,10 @@ func runInit() error { //nolint:gocyclo
 			// 同步模型角色
 			mUUID, _ := mResult["id"].(string)
 			if mUUID != "" {
-				if role == "default" {
+				switch role {
+				case "default":
 					defaultModelID = mUUID
-				} else if role == "reasoning" {
+				case "reasoning":
 					reasoningModelID = mUUID
 				}
 				rolesPayload := map[string]any{}

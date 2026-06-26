@@ -157,7 +157,7 @@ func raceFastestMirror(ctx context.Context, baseClient *http.Client) string {
 	type result struct{ mirror string }
 	winCh := make(chan result, len(mirrors))
 
-	var transport http.RoundTripper = http.DefaultTransport
+	var transport = http.DefaultTransport
 	if baseClient != nil && baseClient.Transport != nil {
 		transport = baseClient.Transport
 	}

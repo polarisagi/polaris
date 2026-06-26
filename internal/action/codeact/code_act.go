@@ -144,9 +144,10 @@ func (ca *CodeAct) validateAST(req CodeActRequest) error {
 	if ca.astChecker == nil {
 		return nil
 	}
-	if req.Language == "python" {
+	switch req.Language {
+	case "python":
 		return ca.astChecker.CheckPython([]byte(req.Code))
-	} else if req.Language == "bash" {
+	case "bash":
 		return ca.astChecker.CheckBash([]byte(req.Code))
 	}
 	return nil

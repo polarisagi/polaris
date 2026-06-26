@@ -368,10 +368,11 @@ func parseFloat(s string) float64 {
 
 func pfSign(s string, i *int) bool {
 	if *i < len(s) {
-		if s[*i] == '-' {
+		switch s[*i] {
+		case '-':
 			*i++
 			return true
-		} else if s[*i] == '+' {
+		case '+':
 			*i++
 			return false
 		}

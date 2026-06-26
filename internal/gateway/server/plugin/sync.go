@@ -730,10 +730,8 @@ func parsePackageJSONEntry(path, mpDir string, mp protocol.Marketplace) (*protoc
 		return nil, apperr.Wrap(apperr.CodeInternal, "parsePackageJSONEntry", err)
 	}
 
-	isMCP := false
-	if strings.Contains(p.Name, "mcp") {
-		isMCP = true
-	}
+	isMCP := strings.Contains(p.Name, "mcp")
+
 	for k := range p.Dependencies {
 		if strings.Contains(k, "modelcontextprotocol") || k == "mcp" {
 			isMCP = true
@@ -795,10 +793,8 @@ func parsePyProjectTOMLEntry(path, mpDir string, mp protocol.Marketplace) (*prot
 		return nil, apperr.Wrap(apperr.CodeInternal, "parsePyProjectTOMLEntry", err)
 	}
 
-	isMCP := false
-	if strings.Contains(p.Project.Name, "mcp") {
-		isMCP = true
-	}
+	isMCP := strings.Contains(p.Project.Name, "mcp")
+
 	for _, dep := range p.Project.Dependencies {
 		if strings.Contains(dep, "mcp") {
 			isMCP = true
