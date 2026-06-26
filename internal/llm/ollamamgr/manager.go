@@ -55,9 +55,9 @@ func EnsureOllama(ctx context.Context) (string, error) {
 	downloadName := fmt.Sprintf("ollama-%s-%s", goos, goarch)
 	if goos == "windows" {
 		downloadName += ".exe"
-	} else if goos == "darwin" && goarch == "amd64" {
-		// macOS x86 的架构名字可能不同，但现在 ollama 官方 release 似乎没有分得很细，或者统称 darwin
-		// 最新官方包叫 ollama-darwin
+	} else if goos == "darwin" {
+		// macOS 官方只发布一个通用 fat binary（同时支持 amd64 和 arm64），文件名为 ollama-darwin。
+		// 不区分 amd64/arm64，否则 arm64 会拼成 ollama-darwin-arm64 导致 404。
 		downloadName = "ollama-darwin"
 	}
 

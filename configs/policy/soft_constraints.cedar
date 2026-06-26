@@ -36,9 +36,20 @@ when {
     action == Action::"plugin:manage"
 };
 
-// Allow users/agents to perform standard legacy execution actions
+// Allow users to perform standard legacy execution actions
+// 注意: Cedar 不支持 entity uid set literal，每个角色须单独一条规则
 permit (
-    principal in [Role::"user", Role::"agent"],
+    principal in Role::"user",
+    action in [
+        Action::"read_file",
+        Action::"execute_code" // legacy support
+    ],
+    resource
+);
+
+// Allow agents to perform standard legacy execution actions
+permit (
+    principal in Role::"agent",
     action in [
         Action::"read_file",
         Action::"execute_code" // legacy support
