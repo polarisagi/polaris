@@ -137,7 +137,17 @@ func (m *Manager) CheckLatest(ctx context.Context) {
 
 	latest := release.TagName
 	current := m.current
-	hasUpdate := latest != "" && !equalVersions(current, latest)
+
+	var hasUpdate bool
+	if latest != "" {
+		if current == "dev" {
+			hasUpdate = true
+		} else {
+			cur := strings.TrimPrefix(current, "v")
+			tgt := strings.TrimPrefix(latest, "v")
+			hasUpdate = semverCompare(tgt, cur) > 0
+		}
+	}
 
 	m.mu.Lock()
 	m.info = VersionInfo{
