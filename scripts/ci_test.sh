@@ -2,7 +2,7 @@
 # ci_test.sh - 完整的本地 CI 测试验证脚本
 # 该脚本复刻了 GitHub Actions (ci.yml) 中的全套流程，遇到错误不会立即中断，
 # 而是会执行完所有步骤并在最后汇总报错信息，确保在 Push 之前可以本地提前发现所有问题。
-# ./scripts/ci_test.sh
+# bash ./scripts/ci_test.sh > ci_test.log 2>&1
 
 # 获取脚本所在目录的上一级（项目根目录）
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +42,7 @@ run_step "[1/12] 准备环境: 创建 Mock Web dist" "mkdir -p web/dist && touch
 # 确保 golangci-lint 已安装，并加入 PATH 环境变量
 if ! command -v golangci-lint &> /dev/null; then
     echo "未找到 golangci-lint，正在尝试安装..."
-    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
     export PATH=$PATH:$(go env GOPATH)/bin
 fi
 run_step "[2/12] 执行跨平台 Go 静态检查 (macOS/Linux/Windows)" "golangci-lint run ./... && GOOS=linux golangci-lint run ./... && GOOS=windows golangci-lint run ./..."

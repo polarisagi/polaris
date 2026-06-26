@@ -68,11 +68,15 @@ func TestMCPClient_SSE(t *testing.T) {
 			fmt.Fprintf(w, "event: endpoint\ndata: %s/post\n\n", "http://"+r.Host)
 			w.(http.Flusher).Flush()
 
-			// Wait for a message to send
-			msg := <-sseCh
-			fmt.Fprintf(w, "%s", msg)
-			w.(http.Flusher).Flush()
-			return
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case msg := <-sseCh:
+					fmt.Fprintf(w, "%s", msg)
+					w.(http.Flusher).Flush()
+				}
+			}
 		}
 		if strings.HasSuffix(r.URL.Path, "/post") {
 			b, _ := io.ReadAll(r.Body)
@@ -97,8 +101,10 @@ func TestMCPClient_SSE(t *testing.T) {
 		Timeout:   2 * time.Second,
 	}
 	client := NewMCPClient(cfg, ts.Client())
+	defer client.Close()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	err := client.Connect(ctx)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
