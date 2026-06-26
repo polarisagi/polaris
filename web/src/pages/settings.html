@@ -247,7 +247,7 @@
         <div class="card-body p-6">
           <h4 class="font-bold mb-4" x-text="$store.i18n.t('computer_mode_title')"></h4>
           <div class="space-y-3">
-            <label class="flex items-start p-4 rounded-box border cursor-pointer transition-colors" :class="store.mode === 'default' ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-100 hover:bg-base-200'">
+            <label for="add-modal-api-key" class="flex items-start p-4 rounded-box border cursor-pointer transition-colors" :class="store.mode === 'default' ? 'border-primary bg-primary/5' : 'border-base-300 bg-base-100 hover:bg-base-200'">
               <input type="radio" name="settings_computer_mode" value="default" class="radio radio-primary radio-sm mt-1" :checked="store.mode === 'default'" @change="store.setMode('default')">
               <div class="ml-4 flex-1">
                 <div class="flex items-center gap-2 mb-1">
@@ -369,7 +369,7 @@
 
             <!-- API Key（本地厂商隐藏） -->
             <div class="form-control w-full" x-show="!$store.providers.addSelected.is_local">
-              <label class="label">
+              <label for="add-modal-api-key" class="label">
                 <span class="label-text font-bold" x-text="$store.i18n.t('catalog_api_key_label')"></span>
               </label>
               <input id="add-modal-api-key" name="add-modal-api-key" type="password" class="input input-bordered w-full"
@@ -383,7 +383,7 @@
               <summary class="cursor-pointer text-base-content/60 hover:text-base-content select-none" x-text="$store.i18n.t('catalog_advanced')"></summary>
               <div class="space-y-3 mt-3">
                 <div class="form-control w-full">
-                  <label class="label">
+                  <label for="add-modal-name" class="label">
                     <span class="label-text font-bold" x-text="$store.i18n.t('catalog_name_label')"></span>
                     <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_name_hint')"></span>
                   </label>
@@ -391,7 +391,7 @@
                     x-model="$store.providers.addForm.name" :placeholder="$store.providers.addSelected.display_name" />
                 </div>
                 <div class="form-control w-full" x-show="$store.providers.addSelected.default_base_url">
-                  <label class="label">
+                  <label for="add-modal-base-url" class="label">
                     <span class="label-text font-bold" x-text="$store.i18n.t('catalog_base_url_label')"></span>
                     <span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('catalog_base_url_hint')"></span>
                   </label>
@@ -538,7 +538,7 @@
           </template>
 
           <div class="form-control mt-4">
-            <label class="label cursor-pointer justify-start gap-4">
+            <label for="store-providers-form-enabled" class="label cursor-pointer justify-start gap-4">
               <input id="store-providers-form-enabled" name="store-providers-form-enabled" type="checkbox" class="toggle toggle-primary" x-model="$store.providers.form.enabled">
               <span class="label-text font-bold" x-text="$store.i18n.t('providers_enabled')"></span>
             </label>
@@ -577,7 +577,7 @@
               <option value="default" x-text="$store.i18n.t('settings_role_chat')"></option>
               <option value="reasoning" x-text="$store.i18n.t('settings_role_reasoning')"></option>
             </select>
-            <label for="store-providers-modelform-enabled" class="label"><span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_role_unique')"></span></label>
+            <label for="store-providers-modelform-role" class="label"><span class="label-text-alt text-base-content/50" x-text="$store.i18n.t('settings_role_unique')"></span></label>
           </div>
           <div class="form-control mt-4">
             <label class="label cursor-pointer justify-start gap-4">
@@ -655,7 +655,7 @@
           <template x-if="$store.channels.form.type === 'slack'">
             <div class="space-y-4">
               <div class="form-control w-full">
-                <label for="form-field-8" class="label"><span class="label-text font-bold">Bot Token</span></label>
+                <label for="form-field-14" class="label"><span class="label-text font-bold">Bot Token</span></label>
                 <input id="form-field-14" name="form-field-14" type="password" class="input input-bordered w-full" placeholder="xoxb-..." :value="$store.channels.form.config.bot_token || ''" @input="$store.channels.form.config.bot_token = $event.target.value" />
               </div>
               <div class="form-control w-full">
@@ -668,7 +668,7 @@
           <template x-if="$store.channels.form.type === 'discord'">
             <div class="space-y-4">
               <div class="form-control w-full">
-                <label for="form-field-8" class="label"><span class="label-text font-bold">Bot Token</span></label>
+                <label for="form-field-16" class="label"><span class="label-text font-bold">Bot Token</span></label>
                 <input id="form-field-16" name="form-field-16" type="password" class="input input-bordered w-full" placeholder="Discord Bot Token" :value="$store.channels.form.config.bot_token || ''" @input="$store.channels.form.config.bot_token = $event.target.value" />
               </div>
               <div class="form-control w-full">

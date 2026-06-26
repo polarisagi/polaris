@@ -28,7 +28,7 @@
         </div>
 
         <div class="flex gap-2 w-full md:w-auto">
-          <label class="input input-bordered input-sm flex items-center gap-2 w-full md:w-64">
+          <label for="store-plugins-search" class="input input-bordered input-sm flex items-center gap-2 w-full md:w-64">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 opacity-70"><path fill-rule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clip-rule="evenodd" /></svg>
             <input id="store-plugins-search" name="store-plugins-search" type="search" class="grow" :placeholder="$store.plugins.filter === 'marketplace' ? $store.i18n.t('plugins_search_marketplace') : `${$store.i18n.t('plugins_search_prefix')}${$store.plugins.typeLabel($store.plugins.filter)}...`" x-model="$store.plugins.search" />
           </label>
@@ -184,8 +184,8 @@
         <div class="space-y-4">
           <template x-for="[key] in Object.entries($store.plugins.envPending?.envVars || {})" :key="key">
             <div class="form-control w-full">
-              <label for="form-field-1" class="label"><span class="label-text font-bold" x-text="key"></span></label>
-              <input id="form-field-1" name="form-field-1" type="password" class="input input-bordered w-full" :placeholder="`${$store.i18n.t('plugins_placeholder_env')} ${key}`" :value="$store.plugins.envPending?.envVars[key] || ''" @input="if($store.plugins.envPending) $store.plugins.envPending.envVars[key]=$event.target.value" />
+              <label :for="'env-var-' + key" class="label"><span class="label-text font-bold" x-text="key"></span></label>
+              <input :id="'env-var-' + key" :name="'env-var-' + key" type="password" class="input input-bordered w-full" :placeholder="`${$store.i18n.t('plugins_placeholder_env')} ${key}`" :value="$store.plugins.envPending?.envVars[key] || ''" @input="if($store.plugins.envPending) $store.plugins.envPending.envVars[key]=$event.target.value" />
             </div>
           </template>
         </div>
@@ -285,8 +285,8 @@
 
               <template x-if="$store.plugins.createForm.transport === 'sse'">
                 <div class="form-control">
-                  <label for="store-plugins-createform-url" class="label"><span class="label-text font-bold">SSE URL</span></label>
-                  <input id="store-plugins-createform-url" name="store-plugins-createform-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.url" placeholder="https://..." />
+                  <label for="store-plugins-createform-sse-url" class="label"><span class="label-text font-bold">SSE URL</span></label>
+                  <input id="store-plugins-createform-sse-url" name="store-plugins-createform-sse-url" type="text" class="input input-bordered w-full font-mono text-sm" x-model="$store.plugins.createForm.url" placeholder="https://..." />
                 </div>
               </template>
 

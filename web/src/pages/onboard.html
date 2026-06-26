@@ -62,8 +62,8 @@
               </template>
             </div>
             <div class="form-control w-full" x-show="!$store.onboard.catalogSelected.is_local">
-              <label class="label py-1"><span class="label-text font-bold">API Key</span></label>
-              <input type="password" class="input input-bordered w-full" x-model="$store.onboard.catalogAPIKey"
+              <label for="onboard-catalog-api-key" class="label py-1"><span class="label-text font-bold">API Key</span></label>
+              <input id="onboard-catalog-api-key" name="onboard-catalog-api-key" type="password" class="input input-bordered w-full" x-model="$store.onboard.catalogAPIKey"
                 placeholder="sk-..." autocomplete="off" @keydown.enter.prevent="$store.onboard.saveProviderFromCatalog()" />
             </div>
             <div x-show="$store.onboard.catalogSelected.is_local" class="text-xs text-success font-bold" x-text="$store.i18n.t('catalog_local_no_key')"></div>

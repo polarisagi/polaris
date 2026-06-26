@@ -126,7 +126,7 @@
                     <template x-if="msg.toolCalls && msg.toolCalls.length > 0">
                       <div class="mb-4">
                         <div class="collapse collapse-arrow bg-base-100 border border-base-300 shadow-sm text-xs rounded-xl">
-                          <input type="checkbox" />
+                          <input type="checkbox" name="toolcall-collapse" />
                           <div class="collapse-title font-medium flex items-center justify-between py-2 min-h-0">
                             <div class="flex items-center gap-2 text-base-content/80">
                               <span>🛠️</span>
@@ -267,7 +267,7 @@
 
             <div class="flex items-center gap-4 ml-1">
               <!-- Model Badge -->
-              <select class="select select-bordered bg-base-200 select-sm text-xs font-medium rounded-full hover:bg-base-300 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[220px] truncate" x-model="$store.chat.selectedModel">
+              <select name="chat-model-select" class="select select-bordered bg-base-200 select-sm text-xs font-medium rounded-full hover:bg-base-300 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[220px] truncate" x-model="$store.chat.selectedModel">
                 <option value="" x-text="$store.i18n.t('chat_model_default')"></option>
                 <template x-for="m in $store.providers.allModels" :key="m.id">
                   <option :value="m.id" x-text="$store.providers.roleLabel(m.role) + ': ' + (m.name || m.model_id)"></option>
@@ -275,7 +275,7 @@
               </select>
 
               <!-- Reasoning Badge -->
-              <select class="select select-bordered bg-base-200 select-sm text-xs font-medium rounded-full hover:bg-base-300 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[120px] truncate" x-model="$store.chat.reasoningEffort">
+              <select name="chat-reasoning-effort-select" class="select select-bordered bg-base-200 select-sm text-xs font-medium rounded-full hover:bg-base-300 transition-colors focus:outline-none cursor-pointer h-8 min-h-0 max-w-[120px] truncate" x-model="$store.chat.reasoningEffort">
                 <option value="auto" x-text="$store.i18n.t('reasoning_auto')"></option>
                 <option value="low" x-text="$store.i18n.t('reasoning_low')"></option>
                 <option value="medium" x-text="$store.i18n.t('reasoning_medium')"></option>

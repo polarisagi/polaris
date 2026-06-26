@@ -55,9 +55,10 @@ Alpine.store('update', {
   async checkGitHub() {
     if (!this.current) return
     try {
-      const resp = await fetch(GITHUB_API, {
+      // 附加 5 分钟为一个周期的的时间戳，绕过浏览器对 301 重定向的永久缓存
+      const url = `${GITHUB_API}?_t=${Math.floor(Date.now() / 300000)}`
+      const resp = await fetch(url, {
         headers: { Accept: 'application/vnd.github+json' },
-        // 缓存 5 分钟，避免同一页面重复请求
         cache: 'default',
       })
       if (!resp.ok) return
