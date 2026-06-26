@@ -35,7 +35,7 @@ func setupGraphTestDB(t *testing.T) (*sql.DB, func()) {
 		t.Fatal(err)
 	}
 	dbPath := filepath.Join(dir, "graph.db")
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_txlock=immediate")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ var _ protocol.Store = (*SQLiteStore)(nil)
 func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 	// WAL 模式：读写不阻塞，busy_timeout 避免写锁争用
 	dsn := fmt.Sprintf(
-		"file:%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON",
+		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)",
 		path,
 	)
 	db, err := sql.Open("sqlite", dsn)
