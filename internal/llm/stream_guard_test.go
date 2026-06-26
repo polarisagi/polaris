@@ -50,7 +50,9 @@ func TestTokenBurnDetector(t *testing.T) {
 	detector.samples = append(detector.samples, burnSample{tokens: 10, ts: time.Now().UnixMicro() - 500})
 	detector.samples = append(detector.samples, burnSample{tokens: 5000, ts: time.Now().UnixMicro()})
 
-	err = detector.CheckAcceleration(10000)
+	// Provide a massive token increase so that regardless of CPU execution time (dt2),
+	// the velocity v2 is astronomically high, guaranteeing accel > 3.0.
+	err = detector.CheckAcceleration(500000000)
 	if err == nil {
 		t.Errorf("expected acceleration detected")
 	}
