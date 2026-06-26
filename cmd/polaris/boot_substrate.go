@@ -378,9 +378,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	var prmAdapter *llmadapter.PRMAdapter
 	var steeringAdapter *llmadapter.SteeringAdapter
 
-	// OpenAI-compat Embedding：用户显式配置时绝对优先启用。
+	// 1. OpenAI-compat Embedding：用户显式配置外部 API 时绝对优先启用。
 	// 独立于 autoConf，跳过本地 Ollama 尝试，彻底贯彻“用户配置优先”的设计理念。
-	// Tier 0 可运行：无本地 GPU 依赖，仅需云端 API 连通性。
 	if cfg.Embedding.BaseURL != "" {
 		apiKey := []byte(cfg.Embedding.APIKey)
 		if len(apiKey) == 0 {
@@ -396,7 +395,15 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			"base_url", cfg.Embedding.BaseURL,
 			"model", cfg.Embedding.Model,
 		)
+	} else if cfg.Embedding.Model != "" {
+		// 2. 本地 Ollama Embedding：仅当用户配置了模型，但没有配置 BaseURL 时，显式启用本地 Ollama。
+		// 取消底层的“自动回退”机制，一切以用户的明确配置为准。
+		embedder = llmadapter.NewOllamaEmbeddingAdapter(cfg.Embedding.Model, ollamaHTTPClient)
+		slog.Info("polaris: Ollama embedding registered (explicitly configured)",
+			"model", cfg.Embedding.Model,
+		)
 	}
+	// 3. 如果两者都未配置，则 embedder 保持 nil，系统优雅降级为 Tier 1。
 
 	if autoConf != nil { //nolint:nestif
 		if autoConf.Gate.State(probe.FeatureLocalInference) != probe.FeatureDisabled {
@@ -406,20 +413,6 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			}
 			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, ollamaHTTPClient, tbr))
 			slog.Info("polaris: Ollama local inference registered", "model", localModel)
-		}
-
-		// 仅在用户未显式配置外部 API (embedder == nil) 时，才尝试作为 fallback 初始化本地 Ollama Embedding
-		if embedder == nil && autoConf.Gate.State(probe.FeatureLocalEmbedding) != probe.FeatureDisabled {
-			embedModel := autoConf.Config.LocalEmbeddingModel
-			if embedModel == "" {
-				embedModel = "nomic-embed-text"
-			}
-			embedder = llmadapter.NewOllamaEmbeddingAdapter(embedModel, ollamaHTTPClient)
-			slog.Info("polaris: Ollama embedding registered as fallback",
-				"model", embedModel,
-				"dim", autoConf.Config.LocalEmbeddingDim,
-				"hq", autoConf.Gate.State(probe.FeatureHQEmbedding) != probe.FeatureDisabled,
-			)
 		}
 
 		if autoConf.Gate.State(probe.FeatureQLoRA) != probe.FeatureDisabled {
