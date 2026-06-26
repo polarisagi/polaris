@@ -401,7 +401,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		go func() {
 			ctxBg := context.Background()
 			slog.Info("polaris: Starting background Ollama lifecycle manager...")
-			binPath, err := ollamamgr.EnsureOllama(ctxBg)
+			binPath, err := ollamamgr.EnsureOllama(ctxBg, safeHTTPClient)
 			if err != nil {
 				slog.Error("polaris: Failed to install local Ollama", "err", err)
 				return

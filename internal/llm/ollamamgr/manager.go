@@ -26,8 +26,13 @@ func ensureBinDir() (string, error) {
 	return dir, nil
 }
 
-// EnsureOllama 下载并安装本地独立的 Ollama
-func EnsureOllama(ctx context.Context) (string, error) {
+// EnsureOllama 下载并安装本地独立的 Ollama。
+// httpClient 由调用方注入（应为 safeHTTPClient），使下载流量经过 SafeDialer + GithubProxy，
+// 避免绕过 SSRF 过滤（XR-06）并支持代理加速（对中国大陆 GitHub 访问尤为关键）。
+func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	dir, err := ensureBinDir()
 	if err != nil {
 		return "", err
@@ -47,11 +52,11 @@ func EnsureOllama(ctx context.Context) (string, error) {
 
 	slog.Info("polaris: Ollama binary not found locally, starting silent download...", "path", binPath)
 
-	// 拼接下载地址 (格式: ollama-linux-amd64 / ollama-darwin-arm64)
+	// 拼接下载地址 (格式: ollama-linux-amd64 / ollama-darwin)
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 
-	// 注意 windows 的特殊处理
+	// 注意各平台特殊处理
 	downloadName := fmt.Sprintf("ollama-%s-%s", goos, goarch)
 	if goos == "windows" {
 		downloadName += ".exe"
@@ -68,7 +73,8 @@ func EnsureOllama(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	// 使用注入的 httpClient（含 SafeDialer + GithubProxy），禁止使用 http.DefaultClient
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to download ollama: %w", err)
 	}
