@@ -1,10 +1,8 @@
 package tts
 
 import (
-	"bytes"
-	"encoding/binary"
+	"context"
 	"fmt"
-	"math"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -52,7 +50,7 @@ func LoadLibrary(libPath string) error {
 	return nil
 }
 
-// Engine 包装了 TTS 引擎实例
+// Engine 是 Sherpa-ONNX 本地 TTS 引擎（Kokoro 模型），实现 Provider 接口。
 type Engine struct {
 	mu  sync.Mutex
 	tts uintptr
@@ -118,8 +116,8 @@ func NewEngine(modelDir string) (*Engine, error) {
 	return &Engine{tts: tts}, nil
 }
 
-// Generate 生成给定文本的音频（返回 WAV 格式二进制流）
-func (e *Engine) Generate(text string) ([]byte, error) {
+// Generate 实现 Provider 接口，生成给定文本的 WAV 音频（ctx 由 sherpa 同步推理忽略）。
+func (e *Engine) Generate(_ context.Context, text string) ([]byte, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -129,7 +127,7 @@ func (e *Engine) Generate(text string) ([]byte, error) {
 
 	cText := append([]byte(text), 0)
 	textPtr := uintptr(unsafe.Pointer(&cText[0]))
-	// 强制使用 3 (zf_001，即首个高质量中文女声)。之前使用 0 是 af_maple (纯美音)，导致读中文严重老外口音。
+	// 使用 voice 3（zf_001，高质量中文女声）；voice 0 为 af_maple（美音）。
 	audioPtr := OfflineTtsGenerate(e.tts, textPtr, 3, 1.0)
 	runtime.KeepAlive(cText) // 防 GC 在 FFI 调用期间回收 cText 底层内存
 	if audioPtr == 0 {
@@ -150,64 +148,13 @@ func (e *Engine) Generate(text string) ([]byte, error) {
 	return encodeWAV(samples, int(sampleRate))
 }
 
-// Close 销毁引擎实例
-func (e *Engine) Close() {
+// Close 实现 Provider 接口，销毁引擎实例。
+func (e *Engine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.tts != 0 {
 		DestroyOfflineTts(e.tts)
 		e.tts = 0
 	}
-}
-
-// encodeWAV 将 float32 数组转换为单声道 16-bit PCM 的 WAV 文件
-func encodeWAV(samples []float32, sampleRate int) ([]byte, error) {
-	var buf bytes.Buffer
-	numSamples := len(samples)
-	dataSize := numSamples * 2
-	fileSize := 36 + dataSize
-
-	buf.WriteString("RIFF")
-	if err := binary.Write(&buf, binary.LittleEndian, int32(fileSize)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	buf.WriteString("WAVE")
-
-	buf.WriteString("fmt ")
-	if err := binary.Write(&buf, binary.LittleEndian, int32(16)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	if err := binary.Write(&buf, binary.LittleEndian, int16(1)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	if err := binary.Write(&buf, binary.LittleEndian, int16(1)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	if err := binary.Write(&buf, binary.LittleEndian, int32(sampleRate)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	if err := binary.Write(&buf, binary.LittleEndian, int32(sampleRate*2)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	if err := binary.Write(&buf, binary.LittleEndian, int16(2)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-	if err := binary.Write(&buf, binary.LittleEndian, int16(16)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-
-	buf.WriteString("data")
-	if err := binary.Write(&buf, binary.LittleEndian, int32(dataSize)); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-	}
-
-	for _, sample := range samples {
-		// float32 [-1, 1] -> int16 [-32768, 32767]
-		s := int16(math.Max(-32768, math.Min(32767, float64(sample)*32767.0)))
-		if err := binary.Write(&buf, binary.LittleEndian, s); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "encodeWAV", err)
-		}
-	}
-
-	return buf.Bytes(), nil
+	return nil
 }

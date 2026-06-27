@@ -74,7 +74,7 @@ type ChatHandler struct {
 	}
 
 	STTEngine *atomic.Pointer[stt.Engine]
-	TTSEngine *atomic.Pointer[tts.Engine]
+	TTSEngine *atomic.Pointer[tts.ProviderBox]
 	WriteSSE  func(http.ResponseWriter, http.Flusher, string, any)
 
 	// Embedder 语义向量化引擎（nil = Tier 1 词元重叠降级）。
@@ -95,7 +95,7 @@ func NewChatHandler(
 	compressor *Compressor,
 	transcriptDir string,
 	sttEngine *atomic.Pointer[stt.Engine],
-	ttsEngine *atomic.Pointer[tts.Engine],
+	ttsEngine *atomic.Pointer[tts.ProviderBox],
 	writeSSE func(http.ResponseWriter, http.Flusher, string, any),
 ) *ChatHandler {
 	return &ChatHandler{

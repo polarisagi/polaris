@@ -24,13 +24,19 @@ func (h *ChatHandler) SetSTTEngine(engine *stt.Engine) {
 	h.STTEngine.Store(engine)
 }
 
-func (h *ChatHandler) SetTTSEngine(engine *tts.Engine) {
-	h.TTSEngine.Store(engine)
+// SetTTSEngine 原子替换全局 TTS Provider 实例（goroutine-safe）。
+// p == nil 时显式清除（使 Load 返回 nil，HandleAudioSpeech 返回 503）。
+func (h *ChatHandler) SetTTSEngine(p tts.Provider) {
+	if p == nil {
+		h.TTSEngine.Store(nil)
+		return
+	}
+	h.TTSEngine.Store(&tts.ProviderBox{P: p})
 }
 
 func (h *ChatHandler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
-	engine := h.TTSEngine.Load()
-	if engine == nil {
+	box := h.TTSEngine.Load()
+	if box == nil {
 		http.Error(w, "TTS Engine not initialized", http.StatusServiceUnavailable)
 		return
 	}
@@ -47,7 +53,7 @@ func (h *ChatHandler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	wavData, err := engine.Generate(req.Input)
+	wavData, err := box.P.Generate(r.Context(), req.Input)
 	if err != nil {
 		slog.Error("audio: tts generation failed", "err", err)
 		http.Error(w, "internal server error: "+err.Error(), http.StatusInternalServerError)

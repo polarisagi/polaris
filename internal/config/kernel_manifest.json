@@ -51,7 +51,7 @@
   "internal/agent/recovery.go": "87f4f40bc15c64bffcf9643a56d30f680e1d95b335359b170e7fcefadbc5bbdd",
   "internal/agent/step_scorer.go": "16025b90fde2fbcc513a769f4d5b514491228524c6f6e5df0f9d38e748f01ff9",
   "internal/config/build_seal_test.go": "81a9f17e79aa36db864e398f98aad0f407c39790f1850505716f4adf17d5bb29",
-  "internal/config/config.go": "6200bb650cdda607b7631fc066962b928a3401684f679e059ad63efdf85cad5a",
+  "internal/config/config.go": "282b87e72a8127a3df7e7bbf0b4f172b56f1ee320fe39cdafdf687df4b5b042f",
   "internal/config/config_test.go": "40b5720ee581fbad054435a9f32c7a244b6fea062cf5ff4595a2eb7b224ca7e2",
   "internal/config/immutable_constants.go": "dbc384c20f4ac8a9f46176954d8f2d26b7dded3f40b8db10343d17cd0471db6c",
   "internal/config/integrity_check.go": "12a93e58a5adf5bb0ddee5e50e9217e3ad07f2190c3da0985d4c199c79e4e8bc",

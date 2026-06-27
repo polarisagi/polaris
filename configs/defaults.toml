@@ -73,9 +73,21 @@ sense_voice_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download
 sense_voice_model_url_std = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2025-09-09-int8.tar.bz2"
 punct_model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
 
-# 本地 TTS 由独立门控 FeatureLocalTTS（≥512MB）管理，与 STT 互不干扰。
-# 模型：Kokoro multi-lang v1.1（82MB，zh+en 双语，Tier-0 可用）
+# ── TTS 配置 ────────────────────────────────────────────────────────────────
+# provider 三选一：
+#   ""/"sherpa" - 本地 sherpa-onnx Kokoro 模型（离线，≥512MB 门控）
+#   "edge"      - Microsoft Edge TTS WebSocket（免费无密钥，中国大陆可用）
+#   "http"      - 外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理）
 [inference.tts]
+provider = "edge"              # 默认 Edge TTS：免费、无需安装模型、中文质量优秀
+
+# ── edge provider ────────────────────────────────────────────────────────────
+edge_voice = "zh-CN-XiaoxiaoNeural"  # 晓晓（女）；可选 zh-CN-YunxiNeural（云希，男）
+
+# ── http provider ────────────────────────────────────────────────────────────
+http_endpoint = ""   # 填 "http://127.0.0.1:8000/tts" 启用 CosyVoice 2 / Qwen3-TTS
+
+# ── sherpa provider（本地离线，需下载模型，≥512MB 门控）────────────────────────
 sherpa_version = ""  # 留空复用 inference.stt.sherpa_version
 model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2"
 tokens_url = ""

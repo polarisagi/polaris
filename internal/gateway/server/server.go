@@ -348,7 +348,7 @@ func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protoco
 	// STT/TTS 原子指针：启动时持有 nil 引擎，InitSTTEngine/InitTTSEngine 完成后原子替换为真实引擎。
 	// 必须非 nil，否则 .Store()/.Load() 调用时 nil pointer dereference。
 	sttPtr := new(atomic.Pointer[stt.Engine])
-	ttsPtr := new(atomic.Pointer[tts.Engine])
+	ttsPtr := new(atomic.Pointer[tts.ProviderBox])
 	s.chatHandler = &chat.ChatHandler{
 		DB:                    db,
 		ChatRepo:              s.chatRepo,
@@ -672,24 +672,46 @@ func (s *Server) InitSTTEngine(ctx context.Context, dataDir string, gate *probe.
 	}()
 }
 
-// InitTTSEngine 按 FeatureGate 门控初始化 TTS 引擎。
-// 流程与 InitSTTEngine 类似。
+// InitTTSEngine 初始化 TTS Provider 并注入 ChatHandler。
+//
+// 三条路径由 ttsConfig.Provider 决定：
+//   - "edge"    → EdgeProvider（Microsoft Edge TTS WebSocket，无需下载，立即可用）
+//   - "http"    → HTTPProvider（外部 sidecar，如 CosyVoice 2 / Qwen3-TTS）
+//   - ""/"sherpa" → SherpaProvider（sherpa-onnx 本地 Kokoro，异步下载后激活）
 func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.FeatureGate, httpClient *http.Client, ttsConfig config.TTSConfig) {
-	ttsDir := filepath.Join(dataDir, "models", "kokoro")
+	switch ttsConfig.Provider {
+	case "edge":
+		// Edge TTS：免费、无需下载、立即激活，不受 FeatureGate 门控（无内存开销）
+		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice)
+		s.chatHandler.SetTTSEngine(p)
+		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice)
+		return
 
+	case "http":
+		// HTTP sidecar：同样立即激活，连通性由首次调用时发现
+		if ttsConfig.HTTPEndpoint == "" {
+			slog.Warn("tts: provider=http but http_endpoint is empty, TTS disabled")
+			return
+		}
+		p := tts.NewHTTPProvider(ttsConfig.HTTPEndpoint, httpClient)
+		s.chatHandler.SetTTSEngine(p)
+		slog.Info("tts: HTTP sidecar TTS active", "endpoint", ttsConfig.HTTPEndpoint)
+		return
+	}
+
+	// ── Sherpa 本地路径（provider="" 或 "sherpa"）──────────────────────────────
 	// 修复 bug：原代码错误使用 FeatureLocalSTT 门控 TTS，现改为独立的 FeatureLocalTTS。
 	if gate != nil && gate.State(probe.FeatureLocalTTS) == probe.FeatureDisabled {
 		slog.Info("tts: FeatureLocalTTS disabled by FeatureGate (need ≥512MB free)")
 		return
 	}
-
 	if ttsConfig.ModelURL == "" {
-		slog.Info("tts: no model configured, disabled")
+		slog.Info("tts: sherpa provider but model_url is empty, TTS disabled")
 		return
 	}
 
+	ttsDir := filepath.Join(dataDir, "models", "kokoro")
 	go func() {
-		// 复用 stt 的库路径下载逻辑
 		sttDir := filepath.Join(dataDir, "models", "sensevoice")
 		if err := tts.EnsureAssets(ctx, sttDir, ttsDir, httpClient, ttsConfig.SherpaVersion, ttsConfig.ModelURL); err != nil {
 			slog.Warn("tts: asset download failed", "err", err)
@@ -703,10 +725,13 @@ func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.
 		}
 
 		modelDir := tts.ModelDir(ttsDir)
-		// engine...
-
-		// s.SetTTSEngine(...)
-		slog.Info("tts: real engine active (sherpa-onnx Kokoro)", "model_dir", modelDir)
+		engine, err := tts.NewEngine(modelDir)
+		if err != nil {
+			slog.Warn("tts: engine init failed", "err", err)
+			return
+		}
+		s.chatHandler.SetTTSEngine(engine)
+		slog.Info("tts: sherpa-onnx Kokoro active", "model_dir", modelDir)
 	}()
 }
 

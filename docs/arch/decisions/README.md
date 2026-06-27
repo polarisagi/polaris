@@ -62,6 +62,12 @@ ADR 被代码引用时，源文件头部加：
 | 0023 | episodic 写路径双轨制（kv_store 热路径 + OutboxWorker 冷投影） | Accepted | 2026-06-13 |
 | 0024 | GovernanceAgent 代码安全三层防线（AST + 正则 + 单次 ThinkingMax LLM） | Accepted | 2026-06-13 |
 | 0025 | 全局架构审查缺陷修复（R21，17 项 P0/P1/P2 缺陷） | Accepted | 2026-06-14 |
+| 0026 | Logic Collapse Python Skill + ContainerSandbox 运行时 | Accepted | 2026-06-16 |
+| 0027 | Gemini 执行后遗留实现缺口修复（LAM 接入 / CC-2 零值 / SafeGo / taint 读路径） | Accepted | 2026-06-16 |
+| 0028 | Phase 0 P0 Bug 修复（Scheduler 内稳态防抖 / FSM SafeGo / Cedar SafeGo / SurpriseCalculator 接入） | Accepted | 2026-06-17 |
+| 0029 | Phase 1-2 系统加固（AgentPool / VFS 墓碑 / SQL Fitness / SafeGo 全量 / OS Fault 注入） | Accepted | 2026-06-17 |
+| 0030 | Tier-2 语义嵌入升级（Embedding 服务独立 Tier 解锁） | Accepted | 2026-06-20 |
+| 0031 | TTS 三路 Provider 架构（Edge / HTTP / Sherpa），默认 Edge TTS 中文高质量 | Accepted | 2026-06-27 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 

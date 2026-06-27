@@ -117,18 +117,39 @@ type STTConfig struct {
 	PunctModelURL         string `toml:"punct_model_url"`
 }
 
-// TTSConfig 本地 TTS（sherpa-onnx）模型下载配置。
-// 模型文件下载后存放在 data_dir/models/tts/。
+// TTSConfig TTS 引擎配置。支持三种 provider：
+//   - ""/"sherpa" 本地 sherpa-onnx Kokoro 模型（离线，无网络依赖）
+//   - "edge"      Microsoft Edge TTS WebSocket（免费无密钥，中国大陆可用）
+//   - "http"      外部 HTTP sidecar（CosyVoice 2 / Qwen3-TTS 等 GPU 推理服务）
 type TTSConfig struct {
+	// Provider 指定 TTS 引擎类型：""/"sherpa" | "edge" | "http"。
+	// 留空等价于 "sherpa"（向后兼容）。
+	Provider string `toml:"provider"`
+
+	// ── sherpa provider 专属 ─────────────────────────────────────────────────
+
 	// SherpaVersion 与 STT 共用同一 sherpa-onnx 版本（共享动态库）。
 	// 留空时自动复用 llm.stt.sherpa_version。
 	SherpaVersion string `toml:"sherpa_version"`
 	// ModelURL sherpa-onnx TTS 模型 tar.bz2 下载地址（GitHub Releases）。
-	// 留空表示不启用本地 TTS，继续使用 edge-tts 云端 API。
+	// 留空时 sherpa provider 不启动。
 	ModelURL string `toml:"model_url"`
 	// TokensURL 词表文件单独下载地址（部分模型将 tokens.txt 独立发布）。
 	// 留空时假设 model URL 的归档中已包含 tokens.txt。
 	TokensURL string `toml:"tokens_url"`
+
+	// ── edge provider 专属 ──────────────────────────────────────────────────
+
+	// EdgeVoice Microsoft Edge TTS 声线名称。
+	// 留空时默认 zh-CN-XiaoxiaoNeural（晓晓，中文女声，音质最佳）。
+	// 其他优质中文声线：zh-CN-YunxiNeural（云希，男）/ zh-CN-XiaoYiNeural（晓伊）。
+	EdgeVoice string `toml:"edge_voice"`
+
+	// ── http provider 专属 ──────────────────────────────────────────────────
+
+	// HTTPEndpoint 外部 TTS sidecar 的 HTTP 地址，如 "http://127.0.0.1:8000/tts"。
+	// provider="http" 时必填。
+	HTTPEndpoint string `toml:"http_endpoint"`
 }
 
 type CacheConfig struct {

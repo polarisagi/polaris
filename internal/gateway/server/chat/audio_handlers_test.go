@@ -14,7 +14,7 @@ import (
 
 func TestAudioHandlers_EngineNotInitialized(t *testing.T) {
 	h := &ChatHandler{
-		TTSEngine: new(atomic.Pointer[tts.Engine]),
+		TTSEngine: new(atomic.Pointer[tts.ProviderBox]),
 		STTEngine: new(atomic.Pointer[stt.Engine])}
 
 	// Test SetTTSEngine with nil

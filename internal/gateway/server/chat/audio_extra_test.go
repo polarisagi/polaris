@@ -15,7 +15,7 @@ import (
 
 func TestHandleAudioSpeech(t *testing.T) {
 	h := &ChatHandler{
-		TTSEngine: new(atomic.Pointer[tts.Engine]),
+		TTSEngine: new(atomic.Pointer[tts.ProviderBox]),
 		STTEngine: new(atomic.Pointer[stt.Engine])}
 
 	// test without tts engine
@@ -29,7 +29,7 @@ func TestHandleAudioSpeech(t *testing.T) {
 
 func TestHandleAudioTranscriptions(t *testing.T) {
 	h := &ChatHandler{
-		TTSEngine: new(atomic.Pointer[tts.Engine]),
+		TTSEngine: new(atomic.Pointer[tts.ProviderBox]),
 		STTEngine: new(atomic.Pointer[stt.Engine])}
 
 	// Create multipart body
