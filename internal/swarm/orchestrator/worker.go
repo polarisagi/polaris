@@ -82,6 +82,13 @@ func (w *Worker) ListenLoop(ctx context.Context) error {
 }
 
 func (w *Worker) tryClaimAndExecute(ctx context.Context, taskID string) {
+	// 0. Focus Lock: 防止任务雪崩
+	activeCount := w.blackboard.CountByStatus(types.TaskClaimed, types.TaskExecuting)
+	if activeCount >= 50 {
+		slog.Warn("worker: focus lock triggered, dropping new task claim", "agent", w.agentID, "task_id", taskID, "active", activeCount)
+		return
+	}
+
 	// 1. 尝试 CAS 原子认领
 	claimed, err := w.blackboard.ClaimTask(ctx, taskID, w.agentID)
 	if err != nil {

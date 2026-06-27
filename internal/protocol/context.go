@@ -37,3 +37,6 @@ type CtxCapabilityToken struct{}
 
 // CtxDryRun 用于在 context 中指示当前是否为 dry run 模式
 type CtxDryRun struct{}
+
+// CtxIdempotencyKey 用于在 context 中传递幂等键
+type CtxIdempotencyKey struct{}

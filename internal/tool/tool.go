@@ -6,6 +6,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,11 +28,12 @@ import (
 //   - 分源 Rate Limiter（builtin/mcp/shell 独立限速）
 //   - Taint 传播：ExecuteTool 结果继承输入 TaintLevel（max 传播规则）
 type InMemoryToolRegistry struct {
-	mu         sync.RWMutex
-	tools      map[string]types.Tool
-	envelope   *sandbox.ExecEnvelope
-	limiters   map[string]*rateLimiter
-	blackboard SideEffectChecker
+	mu               sync.RWMutex
+	tools            map[string]types.Tool
+	envelope         *sandbox.ExecEnvelope
+	limiters         map[string]*rateLimiter
+	blackboard       SideEffectChecker
+	idempotencyCache map[string]*types.ToolResult
 }
 
 // SideEffectChecker 定义 TOCTOU 校验接口（consumer-side 定义，防包循环）。
@@ -57,9 +59,10 @@ var _ protocol.ToolRegistry = (*InMemoryToolRegistry)(nil)
 // NewInMemoryToolRegistry 创建工具注册表。
 func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope) *InMemoryToolRegistry {
 	return &InMemoryToolRegistry{
-		tools:      make(map[string]types.Tool),
-		envelope:   envelope,
-		blackboard: nil,
+		tools:            make(map[string]types.Tool),
+		envelope:         envelope,
+		blackboard:       nil,
+		idempotencyCache: make(map[string]*types.ToolResult),
 		limiters: map[string]*rateLimiter{
 			string(types.ToolBuiltin): newRateLimiter(100), // 100 QPS
 			string(types.ToolMCP):     newRateLimiter(10),  // 10 QPS
@@ -111,17 +114,26 @@ func (r *InMemoryToolRegistry) List() []types.Tool {
 }
 
 func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	cached, ok, idempotencyKey := r.checkIdempotency(ctx)
+	if ok {
+		return cached, nil
+	}
+
 	tool, err := r.Lookup(name)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
 	}
 
 	// 预执行校验 (RateLimit, DryRun)
-	if res, err := r.checkPreExecution(ctx, tool, taintLevel); res != nil || err != nil {
+	modifiedInput, res, err := r.checkPreExecution(ctx, tool, taintLevel, input)
+	if res != nil || err != nil {
 		if err != nil {
 			return res, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
 		}
 		return res, nil
+	}
+	if modifiedInput != nil {
+		input = modifiedInput
 	}
 
 	if r.envelope == nil {
@@ -129,7 +141,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}
 
 	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
-	res, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
+	execRes, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
 		Principal:  sandbox.PrincipalAgent,
 		Kind:       sandbox.KindToolExecute,
 		Resource:   name,
@@ -165,32 +177,73 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 			TaintLevel: taintLevel,
 		}, nil
 	}
-	return &types.ToolResult{
-		Success:    res.Success,
-		Output:     res.Output,
-		Error:      res.Error,
-		LatencyMs:  res.LatencyMs,
-		TaintLevel: res.TaintLevel,
-		ImageParts: res.ImageParts,
-	}, nil
+
+	finalResult := &types.ToolResult{
+		Success:    execRes.Success,
+		Output:     execRes.Output,
+		Error:      execRes.Error,
+		LatencyMs:  execRes.LatencyMs,
+		TaintLevel: execRes.TaintLevel,
+		ImageParts: execRes.ImageParts,
+	}
+
+	r.cacheIdempotencyResult(idempotencyKey, finalResult)
+
+	return finalResult, nil
 }
 
-func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+func (r *InMemoryToolRegistry) checkIdempotency(ctx context.Context) (*types.ToolResult, bool, string) {
+	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
+		idempotencyKey := string(key)
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+		if cachedResult, exists := r.idempotencyCache[idempotencyKey]; exists {
+			slog.Debug("tool_registry: returning cached result for idempotency key", "key", idempotencyKey)
+			return cachedResult, true, idempotencyKey
+		}
+		return nil, false, idempotencyKey
+	}
+	return nil, false, ""
+}
+
+func (r *InMemoryToolRegistry) cacheIdempotencyResult(key string, result *types.ToolResult) {
+	if key != "" && result.Success {
+		r.mu.Lock()
+		r.idempotencyCache[key] = result
+		r.mu.Unlock()
+	}
+}
+
+func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel, input []byte) ([]byte, *types.ToolResult, error) {
 	limiterKey := string(tool.Source)
 	if isShellTool(tool) {
 		limiterKey = "shell"
 	}
 	if lim, ok := r.limiters[limiterKey]; ok {
 		if !lim.Allow() {
-			return &types.ToolResult{
+			return input, &types.ToolResult{
 				Success:    false,
 				Error:      fmt.Sprintf("tool_registry: rate limit exceeded for source %s", limiterKey),
 				TaintLevel: taintLevel,
 			}, nil
 		}
 	}
+
+	type taskCtxKey struct{}
+	taskID, _ := ctx.Value(taskCtxKey{}).(string)
+
 	if dryRun, ok := ctx.Value(protocol.CtxDryRun{}).(bool); ok && dryRun {
-		// DryRun 模式：拦截所有工具，返回模拟结果；不执行真实副作用
+		// DryRun 模式下，对于具备 FS 写入副作用的工具，将其工作目录重定向到 COW 后缀目录，允许其真实执行
+		// 通过简单的 JSON 字符串替换实现（假设参数包含路径）
+		if taskID != "" && isFileWriteTool(tool) {
+			cowTaskID := taskID + ".cow"
+			// 简单的字符串替换（注意: 强依赖路径结构中包含 /taskID/）
+			modifiedInput := bytes.ReplaceAll(input, []byte("/"+taskID+"/"), []byte("/"+cowTaskID+"/"))
+			slog.Debug("tool_registry: dry_run COW enabled, rewriting workspace path", "tool", tool.Name, "original_task", taskID)
+			return modifiedInput, nil, nil
+		}
+
+		// 其他工具：拦截所有，返回模拟结果；不执行真实副作用
 		sideEffectSummary := "none"
 		if !isReversible(tool) {
 			sideEffectSummary = fmt.Sprintf("would execute %q with side effects: %v", tool.Name, tool.SideEffects)
@@ -200,7 +253,7 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 			"reversible":          isReversible(tool),
 			"side_effect_preview": sideEffectSummary,
 		})
-		return &types.ToolResult{
+		return input, &types.ToolResult{
 			Success:    true,
 			Output:     out,
 			TaintLevel: taintLevel,
@@ -220,7 +273,7 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 		claimedVersion, _ := ctx.Value(versionCtxKey{}).(int32)
 		if taskID != "" {
 			if err := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); err != nil {
-				return &types.ToolResult{
+				return input, &types.ToolResult{
 					Success:    false,
 					Error:      fmt.Sprintf("tool_registry: side-effect pre-check failed: %s", err.Error()),
 					TaintLevel: taintLevel,
@@ -229,7 +282,20 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 		}
 	}
 
-	return nil, nil
+	return input, nil, nil
+}
+
+// isFileWriteTool 判断是否是文件写操作工具
+func isFileWriteTool(t types.Tool) bool {
+	if t.Name == "write_file" || t.Name == "str_replace_editor" || t.Name == "multi_edit_file" || t.Name == "notebook_edit" {
+		return true
+	}
+	for _, se := range t.SideEffects {
+		if se == types.SideFileWrite {
+			return true
+		}
+	}
+	return false
 }
 
 // isShellTool 判断工具是否包含 shell/进程副作用（限速 2 QPS）。

@@ -58,15 +58,16 @@ const (
 
 // ExecNode 是 DAG 中可执行的工具调用节点。
 type ExecNode struct {
-	ID           string
-	ToolName     string
-	Args         []byte
-	TaintLevel   types.TaintLevel    // 从 Context 继承的污染等级
-	DependsOn    []string            // 前驱节点 ID
-	Compensation *CompensationAction // Saga 补偿动作（有副作用节点必填）
-	MaxRetry     int                 // 默认 0（不重试）
-	Timeout      time.Duration       // 0 使用全局默认
-	Status       NodeStatus          // 节点状态
+	ID             string
+	ToolName       string
+	Args           []byte
+	TaintLevel     types.TaintLevel     // 从 Context 继承的污染等级
+	DependsOn      []string             // 前驱节点 ID
+	Compensation   *CompensationAction  // Saga 补偿动作（有副作用节点必填）
+	MaxRetry       int                  // 默认 0（不重试）
+	Timeout        time.Duration        // 0 使用全局默认
+	Status         NodeStatus           // 节点状态
+	IdempotencyKey types.IdempotencyKey // 幂等键
 }
 
 // ExecEdge 是 DAG 中的有向边。
@@ -284,6 +285,10 @@ func (e *DAGExecutor) executeNode(ctx context.Context, node ExecNode) NodeResult
 	}
 	nodeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	if node.IdempotencyKey != "" {
+		nodeCtx = context.WithValue(nodeCtx, protocol.CtxIdempotencyKey{}, node.IdempotencyKey)
+	}
 
 	var lastErr error
 	maxAttempts := node.MaxRetry + 1

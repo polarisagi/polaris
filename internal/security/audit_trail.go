@@ -296,10 +296,23 @@ func mustJSON(v any) []byte {
 
 // RecordAudit 实现 protocol.AuditLogger 接口。
 func (at *AuditTrail) RecordAudit(ctx context.Context, toolName string, payload []byte) error {
+	var meta map[string]any
+	var agentID, sessionID string
+	if err := json.Unmarshal(payload, &meta); err == nil {
+		if a, ok := meta["agent_id"].(string); ok {
+			agentID = a
+		}
+		if s, ok := meta["session_id"].(string); ok {
+			sessionID = s
+		}
+	}
+
 	record := &AuditRecord{
-		ActionType:   "tool_execute",
+		ActionType:   "tool_execute:" + toolName,
 		ActionDetail: payload,
 		Timestamp:    time.Now().UnixMicro(),
+		AgentID:      agentID,
+		SessionID:    sessionID,
 	}
 	return at.Record(record)
 }
