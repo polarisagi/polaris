@@ -192,14 +192,14 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 
 	if h.MCPMgr != nil {
 		mcpRows, err := h.DB.QueryContext(ctx,
-			`SELECT id, name, transport, command, args, env, url, timeout, work_dir
+			`SELECT id, name, transport, command, args, env, url, timeout, work_dir, trust_tier
 			 FROM mcp_servers WHERE plugin_id=? AND enabled=1`, pluginID)
 		if err == nil {
 			for mcpRows.Next() {
 				var c types.MCPServerConfig
 				var argsJSON, envJSON string
 				if mcpRows.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
-					&c.URL, &c.Timeout, &c.WorkDir) == nil {
+					&c.URL, &c.Timeout, &c.WorkDir, &c.TrustTier) == nil {
 					json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 					json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
 					//nolint:errcheck
@@ -267,10 +267,10 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 			var c types.MCPServerConfig
 			var argsJSON, envJSON string
 			row := h.DB.QueryRowContext(r.Context(),
-				`SELECT id, name, transport, command, args, env, url, timeout, work_dir
+				`SELECT id, name, transport, command, args, env, url, timeout, work_dir, trust_tier
 				 FROM mcp_servers WHERE id=?`, serverID)
 			if row.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
-				&c.URL, &c.Timeout, &c.WorkDir) == nil {
+				&c.URL, &c.Timeout, &c.WorkDir, &c.TrustTier) == nil {
 				json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 				json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
 				//nolint:errcheck

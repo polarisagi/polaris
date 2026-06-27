@@ -848,6 +848,7 @@ func (h *PluginHandler) registerPluginMCPServers(ctx context.Context, pluginID, 
 				ID: serverID, Name: scopedName, Transport: transport,
 				Command: def.Command, Args: def.Args, Env: def.Env,
 				URL: def.URL, Timeout: 30, WorkDir: installPath,
+				TrustTier: trustTier,
 			}
 			//nolint:errcheck
 			go h.StartMCPServer(protocol.Detach(ctx), cfg)

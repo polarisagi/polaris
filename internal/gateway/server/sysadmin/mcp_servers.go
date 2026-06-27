@@ -275,8 +275,8 @@ func (h *SysAdminHandler) HandleTestMCPServer(w http.ResponseWriter, r *http.Req
 	var c types.MCPServerConfig
 	var argsJSON, envJSON string
 	row := h.DB.QueryRowContext(r.Context(),
-		`SELECT name, transport, command, args, env, url, timeout FROM mcp_servers WHERE id=?`, id)
-	if err := row.Scan(&c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON, &c.URL, &c.Timeout); err != nil {
+		`SELECT name, transport, command, args, env, url, timeout, trust_tier FROM mcp_servers WHERE id=?`, id)
+	if err := row.Scan(&c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON, &c.URL, &c.Timeout, &c.TrustTier); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

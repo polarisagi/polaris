@@ -72,6 +72,7 @@ func NewExecEnvelope(policy protocol.PolicyGate, router *SandboxRouter, hwTier i
 	return &ExecEnvelope{policy: policy, router: router, hwTier: hwTier, goos: goos, tokenVerifier: verifier}
 }
 
+//nolint:gocyclo
 func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResult, error) {
 	start := time.Now()
 
@@ -79,12 +80,18 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	if e.policy == nil {
 		return nil, apperr.New(apperr.CodeForbidden, "exec_envelope: policy gate not initialized (deny-by-default)")
 	}
+	validToken := false
+	if req.CapToken != nil && e.tokenVerifier != nil {
+		validToken = e.tokenVerifier.Verify(req.CapToken) == nil
+	}
+
 	evalCtx := map[string]any{
-		"trust_tier":  int(req.TrustTier),
-		"risk_level":  int(req.Tool.RiskLevel),
-		"tool_source": string(req.Tool.Source),
-		"kind":        string(req.Kind),
-		"allow_net":   req.AllowNet,
+		"trust_tier":             int(req.TrustTier),
+		"risk_level":             int(req.Tool.RiskLevel),
+		"tool_source":            string(req.Tool.Source),
+		"kind":                   string(req.Kind),
+		"allow_net":              req.AllowNet,
+		"capability_token_valid": validToken,
 	}
 	allowed, pErr := e.policy.IsAuthorized(ctx, req.Principal, string(req.Kind), req.Resource, evalCtx)
 	if pErr != nil || !allowed {
