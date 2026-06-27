@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/sysmgr/downloader"
 )
 
 // ensureBinDir 确保二进制存放目录存在
@@ -67,7 +69,7 @@ func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) 
 	url := fmt.Sprintf("https://github.com/ollama/ollama/releases/latest/download/%s", downloadName)
 
 	tmpArchive := filepath.Join(dir, "ollama-archive.tmp")
-	if err := downloadFile(ctx, httpClient, url, tmpArchive); err != nil {
+	if err := downloader.DownloadFile(ctx, httpClient, url, tmpArchive); err != nil {
 		return "", fmt.Errorf("failed to download ollama: %w", err)
 	}
 	defer os.Remove(tmpArchive)
@@ -95,35 +97,6 @@ func getDownloadName() string {
 		downloadName += ".tar.zst"
 	}
 	return downloadName
-}
-
-func downloadFile(ctx context.Context, client *http.Client, url, dest string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("unexpected status code downloading ollama: %d", resp.StatusCode)
-	}
-
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
-		return err
-	}
-
-	_, err = io.Copy(out, resp.Body)
-	out.Close()
-	if err != nil {
-		return fmt.Errorf("failed to write ollama archive: %w", err)
-	}
-	return nil
 }
 
 func extractOllamaArchive(downloadName, tmpArchive, distDir string) error {
