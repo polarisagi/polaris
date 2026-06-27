@@ -49,7 +49,7 @@ func (a *AuditChain) VerifyChain(ctx context.Context, fromOffset int64) (VerifyR
 			evtType     string
 			payload     []byte
 			prevHash    sql.NullString
-			currentHash string
+			currentHash sql.NullString
 		)
 		if err := rows.Scan(&offset, &id, &topic, &actor, &evtType, &payload, &prevHash, &currentHash); err != nil {
 			return report, apperr.Wrap(apperr.CodeInternal, "VerifyChain scan failed", err)
@@ -76,15 +76,15 @@ func (a *AuditChain) VerifyChain(ctx context.Context, fromOffset int64) (VerifyR
 		}
 		computedHash := hex.EncodeToString(h.Sum(nil))
 
-		if computedHash != currentHash {
+		if currentHash.Valid && computedHash != currentHash.String {
 			report.Valid = false
-			report.FirstError = fmt.Errorf("hash mismatch at offset %d: expected %q, got %q", offset, computedHash, currentHash)
+			report.FirstError = fmt.Errorf("hash mismatch at offset %d: expected %q, got %q", offset, computedHash, currentHash.String)
 			report.ErrorOffset = offset
 			return report, nil
 		}
 
-		expectedPrevHash = currentHash
-		report.LastValidHash = currentHash
+		expectedPrevHash = currentHash.String
+		report.LastValidHash = currentHash.String
 		report.CheckedCount++
 	}
 

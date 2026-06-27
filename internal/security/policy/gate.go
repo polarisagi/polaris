@@ -569,17 +569,18 @@ func (g *Gate) evaluate(ctx context.Context, principal, action, resource string,
 		rUID := formatCedarUID("Resource", resource)
 
 		allowed, reason, err := g.cedar.Evaluate(pUID, aUID, rUID, evalCtx)
-		// 如果 Cedar 评估成功且未抛出 FFI 层级的异常，则直接返回其结果
+		// 如果 Cedar 评估成功且未抛出 FFI 层级的异常，我们仍然降级到 Go 规则，
+		// 因为当前 Cedar 实体存储未完整实现（WIP），强行使用会导致 deny-by-default。
+		// 但我们会在 Context 注入 Cedar reason，并打印 debug 日志以测试其结果。
 		if err == nil {
-			// 将 Cedar reason 注入 ctx（或者只是为了区分）
 			if !allowed && evalCtx != nil {
 				evalCtx["cedar_reason"] = reason
 			}
-			return allowed, nil
+			slog.DebugContext(ctx, "cedar evaluated (falling through to go rules)", "allowed", allowed, "reason", reason)
+		} else {
+			metrics.GlobalCedarDegradedTotal.Add(1)
+			slog.WarnContext(ctx, "cedar ffi failed, degrading to go rules", "error", err)
 		}
-		// 若 Cedar 失败 (如 JSON marshal 错误)，降级到 Go 兜底规则
-		metrics.GlobalCedarDegradedTotal.Add(1)
-		slog.WarnContext(ctx, "cedar ffi failed, degrading to go rules", "error", err)
 	}
 
 	g.mu.RLock()

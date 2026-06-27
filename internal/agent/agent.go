@@ -300,7 +300,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				slog.Warn("kernel: suspend transition failed", "err", err)
 				a.sm.ForceState(types.AgentStateSuspended) // fallback
 			}
-			return ErrIdleTimeout
+			continue
 		case <-ctx.Done():
 			return ctx.Err()
 		}

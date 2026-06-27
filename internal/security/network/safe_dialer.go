@@ -118,7 +118,11 @@ func NewSafeHTTPClient(sd *SafeDialer) *http.Client {
 func NewLoopbackSafeHTTPClient(m11 config.M11PolicyThresholds) *http.Client {
 	sd := NewSafeDialer(0, nil, m11)
 	sd.allowLoopback = true
-	return newSafeHTTPClientFromDialer(sd)
+	c := newSafeHTTPClientFromDialer(sd)
+	if t, ok := c.Transport.(*http.Transport); ok {
+		t.ResponseHeaderTimeout = 120 * time.Second
+	}
+	return c
 }
 
 // newSafeHTTPClientFromDialer 从已配置的 SafeDialer 构造 http.Client（内部共用逻辑）。
