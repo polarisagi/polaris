@@ -204,6 +204,11 @@ func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema { //nolint:nesti
 	h.ToolSchemaMu.RUnlock()
 
 	var schemas []types.ToolSchema
+	// 优先注入 MCPMgr 的工具（其 Parameters 是 map[string]any，避免 []byte 被 base64 编码）
+	if h.MCPMgr != nil {
+		schemas = append(schemas, h.MCPMgr.ListToolSchemas()...)
+	}
+
 	if h.ToolReg != nil {
 		for _, t := range h.ToolReg.List() {
 			// skill: 前缀项由下方 DB 查询块以 skill__ 前缀统一注入，此处跳过避免重复和非法 LLM 名称（含冒号）。
@@ -217,21 +222,22 @@ func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema { //nolint:nesti
 			})
 		}
 	}
-	if h.MCPMgr != nil {
-		schemas = append(schemas, h.MCPMgr.ListToolSchemas()...)
-	}
 	// script runtime 技能
 	schemas = append(schemas, h.fetchDBScriptSkillSchemas()...)
 
-	// 防御性最终扫描：过滤掉 function.name 不满足 ^[a-zA-Z0-9_-]+$ 的工具，避免上游任何路径
-	// 遗漏了正规化导致 OpenAI/DeepSeek 等 OpenAI 兼容接口返回 400。
-	valid := schemas[:0]
+	// 防御性最终扫描与去重：过滤掉不合法的工具名，并确保 ToolNames 唯一（避免 ToolReg 和 MCPMgr 同步导致的重复注入）
+	valid := make([]types.ToolSchema, 0, len(schemas))
+	seen := make(map[string]bool)
 	for _, s := range schemas {
-		if mcp.IsValidLLMName(s.Name) {
-			valid = append(valid, s)
-		} else {
+		if !mcp.IsValidLLMName(s.Name) {
 			slog.Warn("BuildToolSchemas: tool name invalid, dropped", "name", s.Name)
+			continue
 		}
+		if seen[s.Name] {
+			continue
+		}
+		seen[s.Name] = true
+		valid = append(valid, s)
 	}
 	schemas = valid
 
