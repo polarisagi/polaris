@@ -25,10 +25,10 @@
   <!-- Thinking Panel -->
   <div class="mx-auto mt-4 w-full max-w-5xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText" x-cloak>
     <div class="border border-base-300 rounded-[1.25rem] overflow-hidden bg-base-200/50 w-fit max-w-2xl shadow-sm">
-    <div class="flex items-center gap-2 p-2 px-4 cursor-pointer text-base-content/60 text-sm font-medium hover:bg-base-300/50 transition-colors" @click="$store.chat.thinkingOpen = !$store.chat.thinkingOpen">
+    <div class="flex items-center gap-2 p-2 px-4 cursor-pointer text-base-content/60 text-sm font-medium hover:bg-base-300/50 transition-colors" @click="$store.chat.toggleThinking()">
       <span x-show="$store.chat.state === 'THINKING'" class="loading loading-spinner loading-xs"></span>
       <span x-text="$store.chat.state === 'THINKING' ? $store.i18n.t('chat_thinking') : $store.i18n.t('chat_thought')"></span>
-      <svg class="w-4 h-4 ml-auto transition-transform" :class="$store.chat.thinkingOpen ? '' : '-rotate-90'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+      <svg class="w-4 h-4 ml-auto transition-transform" :class="{ '-rotate-90': !$store.chat.thinkingOpen }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
     </div>
     <div class="p-3 px-4 text-base-content/70 italic whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-base-300 text-sm" x-show="$store.chat.thinkingOpen" x-text="$store.chat.thinkingText"></div>
     </div>
@@ -119,10 +119,19 @@
                 
                 <div class="chat-bubble bg-base-200 text-base-content relative group text-left w-fit" 
                      :class="{ 'border-warning border': msg.aborted }"
-                     x-data="{ expanded: false, isLong: false }"
+                     x-data="{ expanded: false, isLong: false, thinkingOpen: false }"
                      x-init="$nextTick(() => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 }); window.addEventListener('resize', () => { if($refs.content) isLong = $refs.content.scrollHeight > $refs.content.clientHeight + 10 })">
                   
-                  <div x-ref="content" class="transition-all duration-300 relative" :class="expanded ? '' : 'max-h-32 overflow-hidden'">
+                  <div x-ref="content" class="transition-all duration-300 relative" :class="{ 'max-h-32 overflow-hidden': !expanded }">
+                    <template x-if="msg.reasoningContent">
+                      <div class="mb-4 border border-base-300 rounded-xl overflow-hidden bg-base-300/30 text-sm shadow-sm">
+                        <div class="flex items-center gap-2 p-2 px-3 cursor-pointer text-base-content/60 font-medium hover:bg-base-300/50 transition-colors" @click="thinkingOpen = !thinkingOpen">
+                          <span x-text="$store.i18n.t('chat_thought') || 'Thought Process'"></span>
+                          <svg class="w-4 h-4 ml-auto transition-transform" :class="{ '-rotate-90': !thinkingOpen }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+                        </div>
+                        <div class="p-3 px-4 text-base-content/70 italic whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-base-300" x-show="thinkingOpen" x-text="msg.reasoningContent"></div>
+                      </div>
+                    </template>
                     <template x-if="msg.toolCalls && msg.toolCalls.length > 0">
                       <div class="mb-4">
                         <div class="collapse collapse-arrow bg-base-100 border border-base-300 shadow-sm text-xs rounded-xl">

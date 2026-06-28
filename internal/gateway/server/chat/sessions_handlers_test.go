@@ -41,6 +41,9 @@ func TestHandleListSessions(t *testing.T) {
 			session_id TEXT,
 			role TEXT,
 			content TEXT,
+			tool_calls TEXT NOT NULL DEFAULT '',
+			file_offset INTEGER NOT NULL DEFAULT 0,
+			file_length INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME
 		);
 		CREATE TABLE IF NOT EXISTS channels (
@@ -57,7 +60,7 @@ func TestHandleListSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &ChatHandler{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
+	h := &ChatHandler{DataDir: t.TempDir(), DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
 
 	req := httptest.NewRequest("GET", "/api/v1/sessions", nil)
 	w := httptest.NewRecorder()

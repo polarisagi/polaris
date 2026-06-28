@@ -486,13 +486,15 @@ type ChatSessionRow struct {
 
 // ChatMessageRow 对应 chat_messages 表一行。
 type ChatMessageRow struct {
-	ID        int64
-	SessionID string
-	Role      string
-	Content   string
-	ToolCalls string
-	CreatedAt string
-	UpdatedAt string
+	ID         int64
+	SessionID  string
+	Role       string
+	Content    string
+	ToolCalls  string
+	FileOffset int64
+	FileLength int64
+	CreatedAt  string
+	UpdatedAt  string
 }
 
 // ProviderRow 对应 providers 表一行。

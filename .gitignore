@@ -99,3 +99,4 @@ web/dist/
 pkg/swarm/orchestrator/test_fanout_out.csv
 internal/swarm/orchestrator/test_fanout_out.csv
 docs/upgrade/
+sessions/

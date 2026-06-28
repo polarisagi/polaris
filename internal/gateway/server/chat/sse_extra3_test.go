@@ -8,7 +8,7 @@ import (
 
 func TestHandleAgentStreamErrors(t *testing.T) {
 	defer func() { recover() }()
-	h := &ChatHandler{}
+	h := &ChatHandler{DataDir: t.TempDir()}
 
 	// Bad JSON
 	req1 := httptest.NewRequest("POST", "/agent/stream", bytes.NewBufferString("invalid json"))

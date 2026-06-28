@@ -33,6 +33,10 @@ Alpine.store('chat', {
     this.ttsEnabled = !this.ttsEnabled;
   },
 
+  toggleThinking() {
+    this.thinkingOpen = !this.thinkingOpen;
+  },
+
   async uploadFile(file) {
     // Generate a local preview dataUrl if it's an image
     let dataUrl = null;
@@ -261,7 +265,7 @@ Alpine.store('chat', {
     const runID = dedupeRunID(this.sessionID || '', input)
 
     // 追加用户消息
-    this.messages.push({ role: 'user', content: input, toolCalls: [], aborted: false })
+    this.messages.push({ role: 'user', content: input, toolCalls: [], aborted: false, reasoningContent: '' })
     this._inputHistory.unshift(input)
     if (this._inputHistory.length > 50) this._inputHistory.pop()
     this._historyIdx = -1
@@ -493,7 +497,7 @@ Alpine.store('chat', {
             }
           } else {
             // 还没有 assistant 消息，先创建占位
-            this.messages.push({ role: 'assistant', content: '', toolCalls: [{ ...this._pendingToolCall }], aborted: false })
+            this.messages.push({ role: 'assistant', content: '', reasoningContent: '', toolCalls: [{ ...this._pendingToolCall }], aborted: false })
           }
           this._pendingToolCall = null
         }
@@ -544,6 +548,7 @@ Alpine.store('chat', {
     this._finalizeMessage(false)
     this.state = 'COMPLETE'
     this.thinkingOpen = false
+    this.thinkingText = ''
     window._activeSseClient = null
     Alpine.store('statusBar').poll()
   },
@@ -559,14 +564,16 @@ Alpine.store('chat', {
 
   _finalizeMessage(aborted = false) {
     const content = sanitizeContent(this.currentTokens)
-    if (!content && !aborted) return
+    const reasoningContent = sanitizeContent(this.thinkingText)
+    if (!content && !aborted && !reasoningContent) return
     // 检查是否已有 assistant 消息（tool_result 路径可能提前创建）
     const last = this.messages[this.messages.length - 1]
     if (last && last.role === 'assistant' && !last.content) {
       last.content = content
+      last.reasoningContent = reasoningContent
       last.aborted = aborted
-    } else if (content || aborted) {
-      this.messages.push({ role: 'assistant', content, toolCalls: [], aborted })
+    } else if (content || aborted || reasoningContent) {
+      this.messages.push({ role: 'assistant', content, reasoningContent, toolCalls: [], aborted })
     }
     
     if (!aborted && content && this.ttsEnabled) {
@@ -619,6 +626,7 @@ Alpine.store('chat', {
       this.messages = (d.messages || []).map(m => ({
         role: m.role,
         content: sanitizeContent(m.content),
+        reasoningContent: sanitizeContent(m.reasoning_content || ''),
         toolCalls: m.tool_calls || [],
         taskDuration: m.task_duration || 0,
         aborted: m.aborted || false,

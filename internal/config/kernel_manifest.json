@@ -126,7 +126,7 @@
   "pkg/types/consts.go": "c9f285f779f39fe55ae7748c246b3a7141b5c98bc54caf26568124408efff2cb",
   "pkg/types/doc.go": "f804ebf3a8c8654cffe185ffb295f09e40d1805b78f20bec3b2156fdcce2e8cb",
   "pkg/types/enums.go": "80b1092358175976fac08116447296cb7e9c96e5f27ac83b50273236eadab13f",
-  "pkg/types/models.go": "67a2f4a36e5b948727281ae6aa8bfe633f9aee589978e3aa0c02e44289c468da",
+  "pkg/types/models.go": "fdfe7d16063fdf6d3466df4f6ab900742c3e384b39751516fbd37b54e9a5e513",
   "pkg/util/id.go": "49b8832752483af3ce47c2a437cdd70cf087ff316af74435e66efdc12500368b",
   "pkg/version/version.go": "70fb5918fb0734553159112557fb38a1ea7638b9c2f1611f1f58e9f7ea60c35a"
 }

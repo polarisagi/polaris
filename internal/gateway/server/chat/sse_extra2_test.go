@@ -7,7 +7,7 @@ import (
 
 func TestHandleAgentStreamExtra(t *testing.T) {
 	defer func() { recover() }()
-	h := &ChatHandler{}
+	h := &ChatHandler{DataDir: t.TempDir()}
 
 	// Test with no POST body
 	req1 := httptest.NewRequest("POST", "/agent/stream", nil)

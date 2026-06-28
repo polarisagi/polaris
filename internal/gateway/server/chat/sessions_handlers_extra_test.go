@@ -40,7 +40,9 @@ func TestSessionsHandlersExtra(t *testing.T) {
 			session_id TEXT,
 			role TEXT,
 			content TEXT,
-			tool_calls TEXT,
+			tool_calls TEXT NOT NULL DEFAULT '',
+			file_offset INTEGER NOT NULL DEFAULT 0,
+			file_length INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME,
 			metadata TEXT
@@ -60,7 +62,7 @@ func TestSessionsHandlersExtra(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &ChatHandler{
+	h := &ChatHandler{DataDir: t.TempDir(),
 		DB:           db,
 		ChatRepo:     repo.NewSQLiteChatRepository(db),
 		ProviderRepo: repo.NewSQLiteProviderRepository(db),

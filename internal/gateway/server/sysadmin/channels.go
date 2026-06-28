@@ -326,7 +326,7 @@ func (h *SysAdminHandler) dispatchChannelMessage(ctx context.Context, channelTyp
 
 	history, _ := h.Chat.LoadMessages(ctx, sessionKey)
 	history = append(history, types.Message{Role: "user", Content: msg.Text})
-	if err := h.Chat.SaveMessage(ctx, sessionKey, "user", msg.Text, "", 0); err != nil {
+	if err := h.Chat.SaveMessage(ctx, sessionKey, "user", msg.Text, "", "", 0); err != nil {
 		slog.Error("channel dispatch: saveMessage user", "err", err)
 	}
 
@@ -413,7 +413,7 @@ func (h *SysAdminHandler) dispatchChannelMessage(ctx context.Context, channelTyp
 	if reply == "" {
 		return
 	}
-	if err := h.Chat.SaveMessage(ctx, sessionKey, "assistant", reply, "", inferLatencyMs); err != nil {
+	if err := h.Chat.SaveMessage(ctx, sessionKey, "assistant", reply, "", "", inferLatencyMs); err != nil {
 		slog.Error("channel dispatch: saveMessage assistant", "err", err)
 	}
 	_ = h.Chat.UpdateSessionTitle(ctx, sessionKey, msg.Text)

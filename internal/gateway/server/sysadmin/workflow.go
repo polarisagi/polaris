@@ -541,7 +541,7 @@ func (h *SysAdminHandler) runWorkflowStep(ctx context.Context, sessionID, prompt
 		userMessage = "[工作目录: " + workingDir + "]\n\n" + prompt
 	}
 	history = append(history, types.Message{Role: "user", Content: userMessage})
-	if err := h.Chat.SaveMessage(ctx, sessionID, "user", userMessage, "", 0); err != nil {
+	if err := h.Chat.SaveMessage(ctx, sessionID, "user", userMessage, "", "", 0); err != nil {
 		slog.Warn("workflow step: saveMessage user failed", "err", err)
 	}
 
@@ -624,7 +624,7 @@ func (h *SysAdminHandler) runWorkflowStep(ctx context.Context, sessionID, prompt
 	}
 
 	reply := sb.String()
-	if err := h.Chat.SaveMessage(ctx, sessionID, "assistant", reply, "", 0); err != nil {
+	if err := h.Chat.SaveMessage(ctx, sessionID, "assistant", reply, "", "", 0); err != nil {
 		slog.Warn("workflow step: saveMessage assistant failed", "err", err)
 	}
 	_ = h.Chat.UpdateSessionTitle(ctx, sessionID, name)

@@ -27,7 +27,7 @@ import (
 type ChatDispatcher interface {
 	EnsureSession(ctx context.Context, sessionID string) error
 	InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message
-	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls string, toolCount int64) error
+	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, toolCount int64) error
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
 	TouchSession(ctx context.Context, sessionID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]types.Message, error)

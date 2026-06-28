@@ -288,7 +288,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	history = append(history, userMsg)
-	if err := s.SaveMessage(ctx, sessionID, "user", finalInput, "", 0); err != nil {
+	if err := s.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
 		slog.Error("server: saveMessage user", "session", sessionID, "err", err)
 	}
 	if tw != nil {
@@ -320,7 +320,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		if cmdResult.Response != "" {
 			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := s.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", 0); err != nil {
+			if err := s.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
 				slog.Error("server: saveMessage slash response", "session", sessionID, "err", err)
 			}
 		}
@@ -614,7 +614,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 			b, _ := json.Marshal(executedToolCalls)
 			tcJson = string(b)
 		}
-		if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, tcJson, inferLatencyMs); err != nil {
+		if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, tcJson, "", inferLatencyMs); err != nil {
 			slog.Error("server: saveMessage assistant", "session", sessionID, "err", err)
 		}
 		if tw != nil {

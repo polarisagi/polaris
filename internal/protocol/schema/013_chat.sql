@@ -11,13 +11,15 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT    NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-    role       TEXT    NOT NULL CHECK(role IN ('user','assistant','system')),
-    content    TEXT    NOT NULL,
-    tool_calls TEXT,
-    created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    updated_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT    NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role        TEXT    NOT NULL CHECK(role IN ('user','assistant','system')),
+    content     TEXT    NOT NULL,
+    tool_calls  TEXT,
+    file_offset INTEGER NOT NULL DEFAULT 0,
+    file_length INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id, id);

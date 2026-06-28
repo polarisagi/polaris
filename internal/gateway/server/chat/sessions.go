@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -97,11 +99,20 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filePath := filepath.Join(h.DataDir, "sessions", sessionID, "transcript.jsonl")
+	f, _ := os.Open(filePath)
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
+
 	type msgRow struct {
-		Role         string          `json:"role"`
-		Content      string          `json:"content"`
-		ToolCalls    json.RawMessage `json:"tool_calls,omitempty"`
-		TaskDuration int64           `json:"task_duration,omitempty"` // in ms
+		Role             string          `json:"role"`
+		Content          string          `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+		TaskDuration     int64           `json:"task_duration,omitempty"` // in ms
 	}
 	msgs := make([]msgRow, 0, len(messages))
 	total := 0
@@ -110,6 +121,12 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 			Role:         row.Role,
 			Content:      row.Content,
 			TaskDuration: parseTaskDuration(row.CreatedAt, row.UpdatedAt),
+		}
+		if reasoning, content, ok := readTranscriptEntry(f, row.FileOffset, row.FileLength); ok {
+			m.ReasoningContent = reasoning
+			if content != "" {
+				m.Content = content
+			}
 		}
 		if row.ToolCalls != "" {
 			m.ToolCalls = json.RawMessage(row.ToolCalls)
@@ -149,6 +166,24 @@ func parseTaskDuration(createdStr, updatedStr string) int64 {
 	return 0
 }
 
+func readTranscriptEntry(f *os.File, offset, length int64) (string, string, bool) {
+	if f == nil || length <= 0 {
+		return "", "", false
+	}
+	b := make([]byte, length)
+	if _, err := f.ReadAt(b, offset); err != nil {
+		return "", "", false
+	}
+	var entry struct {
+		ReasoningContent string `json:"reasoning_content"`
+		Content          string `json:"content"`
+	}
+	if err := json.Unmarshal(b, &entry); err == nil {
+		return entry.ReasoningContent, entry.Content, true
+	}
+	return "", "", false
+}
+
 // DELETE /v1/sessions/{sessionID}
 func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionID")
@@ -176,34 +211,96 @@ func (h *ChatHandler) EnsureSession(ctx context.Context, sessionID string) error
 // 如需多轮图片记忆，需要在 saveMessage 中序列化 Parts 并在此处反序列化还原。
 func (h *ChatHandler) LoadMessages(ctx context.Context, sessionID string) ([]types.Message, error) {
 	rows, err := h.DB.QueryContext(ctx,
-		`SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY id`, sessionID)
+		`SELECT role, content, file_offset, file_length FROM chat_messages WHERE session_id=? ORDER BY id`, sessionID)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "Server.loadMessages", err)
 	}
 	defer rows.Close()
 
+	filePath := filepath.Join(h.DataDir, "sessions", sessionID, "transcript.jsonl")
+	f, _ := os.Open(filePath)
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
+
 	var msgs []types.Message
 	for rows.Next() {
 		var m types.Message
-		if err := rows.Scan(&m.Role, &m.Content); err != nil {
+		var offset, length int64
+		if err := rows.Scan(&m.Role, &m.Content, &offset, &length); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "Server.loadMessages", err)
+		}
+		if reasoning, content, ok := readTranscriptEntry(f, offset, length); ok {
+			m.ReasoningContent = reasoning
+			if content != "" {
+				m.Content = content
+			}
 		}
 		msgs = append(msgs, m)
 	}
 	return msgs, nil
 }
 
-func (h *ChatHandler) SaveMessage(ctx context.Context, sessionID, role, content string, toolCalls string, durationMs int64) error {
+func (h *ChatHandler) SaveMessage(ctx context.Context, sessionID, role, content string, toolCalls string, reasoningContent string, durationMs int64) error {
+	now := time.Now().UTC()
+	createdAt := now.Format(time.RFC3339)
+	if durationMs > 0 {
+		createdAt = now.Add(-time.Duration(durationMs) * time.Millisecond).Format(time.RFC3339)
+	}
+
+	type transcriptEntry struct {
+		Role             string          `json:"role"`
+		Content          string          `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+		CreatedAt        string          `json:"created_at"`
+	}
+	entry := transcriptEntry{
+		Role:             role,
+		Content:          content,
+		ReasoningContent: reasoningContent,
+		CreatedAt:        createdAt,
+	}
+	if toolCalls != "" {
+		entry.ToolCalls = json.RawMessage(toolCalls)
+	}
+	b, _ := json.Marshal(entry)
+	b = append(b, '\n')
+
+	dir := filepath.Join(h.DataDir, "sessions", sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	filePath := filepath.Join(dir, "transcript.jsonl")
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return err
+	}
+	fileOffset := info.Size()
+	_, err = f.Write(b)
+	f.Close()
+	if err != nil {
+		return err
+	}
+
 	row := types.ChatMessageRow{
-		SessionID: sessionID,
-		Role:      role,
-		Content:   content,
-		ToolCalls: toolCalls,
+		SessionID:  sessionID,
+		Role:       role,
+		Content:    content,
+		ToolCalls:  toolCalls,
+		FileOffset: fileOffset,
+		FileLength: int64(len(b)),
 	}
 	if durationMs > 0 {
-		now := time.Now().UTC()
 		row.UpdatedAt = now.Format(time.RFC3339)
-		row.CreatedAt = now.Add(-time.Duration(durationMs) * time.Millisecond).Format(time.RFC3339)
+		row.CreatedAt = createdAt
 	}
 	if err := h.ChatRepo.AppendMessage(ctx, row); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "Server.saveMessage", err)

@@ -682,7 +682,7 @@ func (h *SysAdminHandler) executeAutomation(ctx context.Context, a *automation, 
 			userMessage = "[工作目录: " + a.WorkingDir + "]\n\n" + a.Prompt
 		}
 		history = append(history, types.Message{Role: "user", Content: userMessage})
-		if err := h.Chat.SaveMessage(bgCtx, sessionID, "user", userMessage, "", 0); err != nil {
+		if err := h.Chat.SaveMessage(bgCtx, sessionID, "user", userMessage, "", "", 0); err != nil {
 			slog.Warn("automation: saveMessage user failed", "err", err)
 		}
 
@@ -805,7 +805,7 @@ func (h *SysAdminHandler) executeAutomation(ctx context.Context, a *automation, 
 		reply := sb.String()
 		latencyMs := time.Since(startInfer).Milliseconds()
 
-		if err := h.Chat.SaveMessage(bgCtx, sessionID, "assistant", reply, "", latencyMs); err != nil {
+		if err := h.Chat.SaveMessage(bgCtx, sessionID, "assistant", reply, "", "", latencyMs); err != nil {
 			slog.Warn("automation: saveMessage assistant failed", "err", err)
 		}
 		_ = h.Chat.UpdateSessionTitle(bgCtx, sessionID, a.Name)

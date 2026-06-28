@@ -109,7 +109,7 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := &ChatHandler{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
+	srv := &ChatHandler{DataDir: t.TempDir(), DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
 
 	// 插入两条 ambient skill
 	db.Exec(`INSERT INTO skills (name, description, instructions, plugin_id, exec_mode, ambient_priority, deprecated, trust_tier) VALUES ('skill1', 'desc1', 'inst1', '', 'ambient', 'always', 0, 1)`)

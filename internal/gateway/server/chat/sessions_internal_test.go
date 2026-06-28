@@ -39,7 +39,9 @@ func TestSessionsInternal(t *testing.T) {
 			session_id TEXT,
 			role TEXT,
 			content TEXT,
-			tool_calls TEXT,
+			tool_calls TEXT NOT NULL DEFAULT '',
+			file_offset INTEGER NOT NULL DEFAULT 0,
+			file_length INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME,
 			metadata TEXT
@@ -49,7 +51,7 @@ func TestSessionsInternal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &ChatHandler{
+	h := &ChatHandler{DataDir: t.TempDir(),
 		DB:           db,
 		ChatRepo:     repo.NewSQLiteChatRepository(db),
 		ProviderRepo: repo.NewSQLiteProviderRepository(db),
@@ -61,10 +63,10 @@ func TestSessionsInternal(t *testing.T) {
 	h.EnsureSession(ctx, "sess-1")
 
 	// saveMessage
-	h.SaveMessage(ctx, "sess-1", "user", "hello", "", 0)
+	h.SaveMessage(ctx, "sess-1", "user", "hello", "", "", 0)
 
 	// saveMessage with tool calls
-	h.SaveMessage(ctx, "sess-1", "assistant", "", `{"type":"tool_call"}`, 100)
+	h.SaveMessage(ctx, "sess-1", "assistant", "", `{"type":"tool_call"}`, "", 100)
 
 	// loadMessages
 	msgs, _ := h.LoadMessages(ctx, "sess-1")

@@ -111,7 +111,7 @@ func TestCompressor_Compact(t *testing.T) {
 	}
 	defer db.Close()
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS chat_messages (session_id TEXT, role TEXT, content TEXT)`)
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS chat_messages (session_id TEXT, role TEXT, content TEXT, file_offset INTEGER NOT NULL DEFAULT 0, file_length INTEGER NOT NULL DEFAULT 0)`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,7 +26,9 @@ func TestHandleSessionRecap(t *testing.T) {
 			session_id TEXT    NOT NULL DEFAULT '',
 			role       TEXT    NOT NULL DEFAULT '',
 			content    TEXT    NOT NULL DEFAULT '',
-			tool_calls TEXT    NOT NULL DEFAULT '',
+			tool_calls TEXT NOT NULL DEFAULT '',
+			file_offset INTEGER NOT NULL DEFAULT 0,
+			file_length INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
 			updated_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 		);
@@ -35,7 +37,7 @@ func TestHandleSessionRecap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &ChatHandler{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
+	h := &ChatHandler{DataDir: t.TempDir(), DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
 
 	// Empty session
 	req := httptest.NewRequest("GET", "/v1/sessions/s1/recap", nil)

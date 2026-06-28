@@ -7,7 +7,7 @@ import (
 )
 
 func TestSSEHandlers(t *testing.T) {
-	h := &ChatHandler{}
+	h := &ChatHandler{DataDir: t.TempDir()}
 
 	req := httptest.NewRequest("GET", "/api/v1/agent/stream?session_id=123", nil)
 	w := httptest.NewRecorder()
