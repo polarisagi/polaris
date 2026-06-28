@@ -64,6 +64,7 @@ func LoadExtensionToolMeta(name string) (types.Tool, error) {
 		SandboxTier: mapSandbox(meta.Sandbox),
 		SideEffects: mapSideEffects(meta.SideEffects),
 		Source:      types.ToolBuiltin,
+		TrustTier:   types.TrustSystem,
 	}, nil
 }
 

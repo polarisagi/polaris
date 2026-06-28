@@ -120,7 +120,7 @@ func NewLoopbackSafeHTTPClient(m11 config.M11PolicyThresholds) *http.Client {
 	sd.allowLoopback = true
 	c := newSafeHTTPClientFromDialer(sd)
 	if t, ok := c.Transport.(*http.Transport); ok {
-		t.ResponseHeaderTimeout = 120 * time.Second
+		t.ResponseHeaderTimeout = 300 * time.Second
 	}
 	return c
 }

@@ -17,23 +17,10 @@ import (
 	"github.com/polarisagi/polaris/internal/sysmgr/downloader"
 )
 
-// ensureBinDir 确保二进制存放目录存在
-func ensureBinDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".polaris", "bin")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	return dir, nil
-}
-
 // EnsureOllama 下载并安装本地独立的 Ollama，或者使用系统已安装的 Ollama。
 // httpClient 由调用方注入（应为 safeHTTPClient），使下载流量经过 SafeDialer + GithubProxy，
 // 避免绕过 SSRF 过滤（XR-06）并支持代理加速（对中国大陆 GitHub 访问尤为关键）。
-func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) {
+func EnsureOllama(ctx context.Context, httpClient *http.Client, binDir string) (string, error) {
 	// 首先检查系统是否已经全局安装了 Ollama
 	if globalPath := findGlobalOllama(); globalPath != "" {
 		slog.Info("polaris: Found global Ollama installation", "path", globalPath)
@@ -43,18 +30,14 @@ func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) 
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	dir, err := ensureBinDir()
-	if err != nil {
-		return "", err
-	}
 
-	distDir := filepath.Join(dir, "ollama-dist")
+	distDir := filepath.Join(binDir, "ollama-dist")
 	binName := "ollama"
 	if runtime.GOOS == "windows" {
 		binName = "ollama.exe"
 	}
 	binPath := filepath.Join(distDir, binName)
-	legacyBinPath := filepath.Join(dir, binName)
+	legacyBinPath := filepath.Join(binDir, binName)
 
 	// 如果文件已存在且有执行权限，直接返回
 	if info, err := os.Stat(binPath); err == nil && !info.IsDir() {
@@ -68,7 +51,7 @@ func EnsureOllama(ctx context.Context, httpClient *http.Client) (string, error) 
 	downloadName := getDownloadName()
 	url := fmt.Sprintf("https://github.com/ollama/ollama/releases/latest/download/%s", downloadName)
 
-	tmpArchive := filepath.Join(dir, "ollama-archive.tmp")
+	tmpArchive := filepath.Join(binDir, "ollama-archive.tmp")
 	if err := downloader.DownloadFile(ctx, httpClient, url, tmpArchive); err != nil {
 		return "", fmt.Errorf("failed to download ollama: %w", err)
 	}

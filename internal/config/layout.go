@@ -30,6 +30,7 @@ type DataLayout struct {
 	Cache      string // Root/cache       — HTTP / 推理缓存
 	Hooks      string // Root/hooks       — 用户事件 Hook 脚本
 	Tmp        string // Root/tmp         — 临时下载 / 解压暂存
+	Bin        string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist）
 
 	// 派生路径（从上方字段组合，避免调用方再次拼接）
 	SQLiteDB     string // Data/polaris.db
@@ -67,6 +68,7 @@ func NewDataLayout(root string, overrides DirsConfig) DataLayout {
 	d.Data = pick(overrides.DBDir, filepath.Join(root, "data"))
 	d.Workspace = pick(overrides.WorkspaceDir, filepath.Join(root, "workspace"))
 	d.Models = pick(overrides.ModelsDir, filepath.Join(root, "models"))
+	d.Bin = pick(overrides.BinDir, filepath.Join(root, "bin"))
 
 	// 派生路径从各自父目录计算
 	d.SQLiteDB = filepath.Join(d.Data, "polaris.db")
@@ -105,6 +107,7 @@ func (l DataLayout) MkdirAll() error {
 		l.Cache,
 		l.Hooks,
 		l.Tmp,
+		l.Bin,
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {

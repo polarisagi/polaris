@@ -36,7 +36,7 @@ import (
 //   - forbid-overrides-permit: Forbid 规则无条件优先
 //   - fail-closed: Evaluate 超时（>10ms）或异常 → deny
 //   - 连续 10 次失败 → 触发 KillSwitch Stage 1
-var EvalTimeout = 10 * time.Millisecond
+var EvalTimeout = 500 * time.Millisecond
 
 type Gate struct {
 	mu              sync.RWMutex

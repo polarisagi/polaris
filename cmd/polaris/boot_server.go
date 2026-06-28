@@ -9,11 +9,9 @@ import (
 
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 
@@ -26,7 +24,6 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server"
 	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	si "github.com/polarisagi/polaris/internal/learning"
-	"github.com/polarisagi/polaris/internal/sandbox"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -166,31 +163,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetToolRegistry(tb.ToolReg)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetToolExecutor(func(ctx context.Context, name string, args []byte) (*types.ToolResult, error) {
-		// script runtime 技能：LLM 工具名格式 "skill__{slug}"，内部 DB 名为 "skill:{slug}"
-		if slug, ok := strings.CutPrefix(name, "skill__"); ok {
-			var instructions string
-			_ = sb.Store.DB().QueryRowContext(ctx,
-				`SELECT instructions FROM skills WHERE name=? AND deprecated=0`, "skill:"+slug).Scan(&instructions)
-			var req struct {
-				Input string `json:"input"`
-			}
-			_ = json.Unmarshal(args, &req)
-			output := instructions
-			if req.Input != "" {
-				output += "\n\n---\n\n输入：" + req.Input
-			}
-			return &types.ToolResult{Output: []byte(output)}, nil
-		}
-		res, err := tb.Envelope.Execute(ctx, sandbox.ExecRequest{
-			Principal: sandbox.PrincipalAgent, Kind: sandbox.KindToolExecute,
-			Resource: name, TrustTier: types.TrustUntrusted, Tool: types.Tool{Name: name},
-			Input: args, TaintLevel: types.TaintNone,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &types.ToolResult{Success: res.Success, Output: res.Output, Error: res.Error,
-			LatencyMs: res.LatencyMs, TaintLevel: res.TaintLevel, ImageParts: res.ImageParts}, nil
+		return tb.ToolReg.ExecuteTool(ctx, name, args, types.TaintNone)
 	})
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)

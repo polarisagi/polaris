@@ -85,6 +85,7 @@ type DirsConfig struct {
 	DBDir        string `toml:"db_dir"`        // 覆盖 DataDir/data（数据库文件）
 	WorkspaceDir string `toml:"workspace_dir"` // 覆盖 DataDir/workspace（Agent VFS 沙箱）
 	ModelsDir    string `toml:"models_dir"`    // 覆盖 DataDir/models（AI 模型文件）
+	BinDir       string `toml:"bin_dir"`       // 覆盖 DataDir/bin（二进制依赖等，如 ollama）
 }
 
 type InferenceConfig struct {
