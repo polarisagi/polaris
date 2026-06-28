@@ -227,7 +227,6 @@ func (s *Server) SetSyncSkillFunc(f func(slug, instructions string)) {
 	}
 }
 
-
 // SetSkillRegistry 注入 SkillRegistry（NewServer 之后、Start 之前调用）。
 func (s *Server) SetSkillRegistry(r protocol.SkillRegistry) {
 	s.skillReg = r
