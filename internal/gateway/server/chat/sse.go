@@ -362,15 +362,9 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// 语义工具选择：当工具数 > toolSelectThreshold 且 Embedder 可用时按 query 相似度过滤到 top-K，
-	// 否则退回全量注入。通过接口类型断言实现，不污染 ToolProvider 接口签名。
-	toolSchemas := s.ToolProvider.BuildToolSchemas()
-	if sel, ok := s.ToolProvider.(interface {
-		SelectToolSchemas(string) []types.ToolSchema
-	}); ok {
-		if picked := sel.SelectToolSchemas(req.Input); len(picked) > 0 {
-			toolSchemas = picked
-		}
+	var toolSchemas []types.ToolSchema
+	if s.ToolStage != nil {
+		toolSchemas = s.ToolStage.SelectFor(ctx, req.Input)
 	}
 	inferStart := time.Now()
 	var sb strings.Builder

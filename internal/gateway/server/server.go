@@ -124,6 +124,9 @@ type Server struct {
 	chatHandler      *chat.ChatHandler
 	sysadminHandler  *sysadmin.SysAdminHandler
 	codeActEngine    *codeact.CodeAct // LLM 生成代码执行引擎（可为 nil，降级拒绝）
+	toolStage        interface {
+		SelectFor(ctx context.Context, query string) []types.ToolSchema
+	}
 }
 
 func (s *Server) SetAuditTrail(at *security.AuditTrail)   { s.auditTrail = at }
@@ -224,6 +227,16 @@ func (s *Server) SetCatalog(c catalog.Catalog) {
 	s.catalog = c
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Catalog = c
+	}
+}
+
+// SetToolStage 注入工具阶段
+func (s *Server) SetToolStage(stage interface {
+	SelectFor(ctx context.Context, query string) []types.ToolSchema
+}) {
+	s.toolStage = stage
+	if s.chatHandler != nil {
+		s.chatHandler.ToolStage = stage
 	}
 }
 

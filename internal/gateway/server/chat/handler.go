@@ -52,8 +52,10 @@ type ChatHandler struct {
 	TranscriptDir string
 	PromptMgr     *prompt.Manager
 	SoulMDContent *string
-	ToolProvider  interface {
-		BuildToolSchemas() []apptypes.ToolSchema
+	ToolStage     interface {
+		SelectFor(ctx context.Context, query string) []apptypes.ToolSchema
+	}
+	ToolProvider interface {
 		ExecuteTool(ctx context.Context, name string, args []byte) (*apptypes.ToolResult, error)
 	}
 
@@ -134,8 +136,8 @@ func (h *ChatHandler) GenerateReply(ctx context.Context, req *apptypes.InferRequ
 	}
 
 	var toolSchemas []apptypes.ToolSchema
-	if h.ToolProvider != nil {
-		toolSchemas = h.ToolProvider.BuildToolSchemas()
+	if h.ToolStage != nil {
+		toolSchemas = h.ToolStage.SelectFor(ctx, "")
 	}
 
 	var sb strings.Builder

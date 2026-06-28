@@ -2,15 +2,11 @@ package sysadmin
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -183,115 +179,7 @@ func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema {
 }
 
 func (h *SysAdminHandler) ClearToolSchemaCache() {
-	h.ToolSchemaMu.Lock()
-	h.ToolSchemaCache = nil
-	h.toolEmbedCache = nil // 与 schema 缓存同步清空，确保新工具立即被重新向量化
-	h.ToolSchemaMu.Unlock()
-}
-
-const (
-	// toolSelectThreshold 工具数量超过此阈值时启用语义过滤；低于此值全量注入不会明显浪费 token。
-	toolSelectThreshold = 40
-	// toolSelectTopK 语义过滤后注入 LLM 的最大工具数量。
-	toolSelectTopK = 20
-	// toolEmbedCacheMax 工具描述向量缓存条目上限；超出后随 schema 缓存一同清空。
-	toolEmbedCacheMax = 1024
-)
-
-// SelectToolSchemas 按用户 query 语义相似度选取最相关的 tool schema 子集注入 LLM。
-//
-// 降级条件（满足任一则全量返回）：
-//   - Embedder 未注入（nil）
-//   - 工具总数 ≤ toolSelectThreshold
-//   - query 为空或向量化失败（Ollama 未启动等）
-//
-// 正常路径：余弦相似度排序取 top-K，并记录 debug 日志。
-func (h *SysAdminHandler) SelectToolSchemas(query string) []types.ToolSchema { //nolint:cyclop
-	all := h.BuildToolSchemas()
-	if h.Embedder == nil || len(all) <= toolSelectThreshold || query == "" {
-		return all
+	if h.Catalog != nil {
+		h.Catalog.Invalidate()
 	}
-
-	// 向量化 query（在任何锁外执行，避免 Ollama HTTP 调用持锁阻塞）
-	queryVec := h.Embedder.Embed(query)
-	if len(queryVec) == 0 {
-		// Embedder 暂不可用（Ollama 未启动 / 冷启动），全量降级
-		return all
-	}
-
-	// 为每个 schema 取缓存向量，计算余弦相似度
-	type scored struct {
-		schema types.ToolSchema
-		score  float32
-	}
-	candidates := make([]scored, 0, len(all))
-	for _, s := range all {
-		key := toolEmbedKey(s.Name, s.Description)
-		vec := h.getOrEmbedTool(key, s.Name+" "+s.Description)
-		if len(vec) == 0 {
-			// 向量化失败（罕见）：保留工具，赋予中等分数，防止高频工具被完全丢弃
-			candidates = append(candidates, scored{s, 0.5})
-			continue
-		}
-		candidates = append(candidates, scored{s, ffi.VecCosineF32(queryVec, vec)})
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-
-	topK := toolSelectTopK
-	if topK > len(candidates) {
-		topK = len(candidates)
-	}
-	result := make([]types.ToolSchema, topK)
-	for i := range result {
-		result[i] = candidates[i].schema
-	}
-	slog.Debug("sysadmin: SelectToolSchemas filtered",
-		"total", len(all), "selected", topK, "query_prefix", truncateQueryStr(query, 40))
-	return result
-}
-
-// getOrEmbedTool 返回工具描述向量（读缓存优先；缓存 miss 时调用 Embedder 并回填）。
-// 双检锁：Embedder.Embed 在锁外执行，避免 Ollama HTTP 调用持锁阻塞并发请求。
-func (h *SysAdminHandler) getOrEmbedTool(key, text string) []float32 {
-	h.ToolSchemaMu.RLock()
-	if h.toolEmbedCache != nil {
-		if v, ok := h.toolEmbedCache[key]; ok {
-			h.ToolSchemaMu.RUnlock()
-			return v
-		}
-	}
-	h.ToolSchemaMu.RUnlock()
-
-	// 锁外向量化（可能较慢）
-	v := h.Embedder.Embed(text)
-	if len(v) == 0 {
-		return nil
-	}
-
-	h.ToolSchemaMu.Lock()
-	if h.toolEmbedCache == nil {
-		h.toolEmbedCache = make(map[string][]float32, toolEmbedCacheMax)
-	}
-	if len(h.toolEmbedCache) < toolEmbedCacheMax {
-		h.toolEmbedCache[key] = v
-	}
-	h.ToolSchemaMu.Unlock()
-	return v
-}
-
-// toolEmbedKey 生成工具向量缓存键（sha256(name+"\x00"+desc) 的二进制字符串，直接用作 map key）。
-func toolEmbedKey(name, desc string) string {
-	h := sha256.Sum256([]byte(name + "\x00" + desc))
-	return string(h[:])
-}
-
-// truncateQueryStr 截取字符串前 n 个字节（用于日志，避免过长）。
-func truncateQueryStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

@@ -4,8 +4,10 @@
 package main
 
 import (
+	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/tool/dispatch"
 
 	"context"
 	"crypto/sha256"
@@ -26,7 +28,6 @@ import (
 	si "github.com/polarisagi/polaris/internal/learning"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
@@ -166,10 +167,19 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	}
 	httpServer.SetToolRegistry(tb.ToolReg)
 	httpServer.SetCatalog(tb.Catalog)
+	toolStage := agentctx.NewToolStage(tb.Catalog, sb.Embedder)
+	// (Optional) toolStage.WithCognitiveStore(...) if we had a SurrealDB client in sb
+	httpServer.SetToolStage(toolStage)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
-	httpServer.SetToolExecutor(func(ctx context.Context, name string, args []byte) (*types.ToolResult, error) {
-		return tb.ToolReg.ExecuteTool(ctx, name, args, types.TaintNone)
-	})
+	disp := dispatch.New(tb.Catalog, tb.Envelope, nil, tb.SkillExecutor)
+	disp.Use(
+		dispatch.AuditInterceptor(sb.AuditTrail),
+		dispatch.RateLimitInterceptor(nil),
+		dispatch.TaintInterceptor(),
+		dispatch.IdempotencyInterceptor(),
+		dispatch.DryRunInterceptor(),
+	)
+	httpServer.SetToolExecutor(disp.Execute)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)
 

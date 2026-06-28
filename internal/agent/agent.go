@@ -604,28 +604,20 @@ var (
 
 // refreshInstalledExtensions 从 extension_instances 表动态查询已安装扩展并存入 fsm.StateContext。
 func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
-	if a.extQuerier == nil {
+	if a.catalog == nil {
 		a.sCtx.InstalledExtensionsInfo = ""
 		return
 	}
 
-	rows, err := a.extQuerier.QueryContext(ctx,
-		"SELECT ext_type, name, publisher FROM extension_instances WHERE status = 'installed'")
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-
+	entries := a.catalog.List(ctx, types.TrustUntrusted)
 	var exts []string
-	for rows.Next() {
-		var extType, name, pub string
-		if err := rows.Scan(&extType, &name, &pub); err == nil {
-			exts = append(exts, fmt.Sprintf("- [%s] %s/%s", extType, pub, name))
+	for _, e := range entries {
+		switch e.Source {
+		case types.ToolMCP:
+			exts = append(exts, fmt.Sprintf("- [MCP] %s: %s", e.MCPServerID, e.Name))
+		case types.ToolSkill:
+			exts = append(exts, fmt.Sprintf("- [Skill] %s", e.Name))
 		}
-	}
-
-	if rows.Err() != nil {
-		return
 	}
 
 	if len(exts) > 0 {
