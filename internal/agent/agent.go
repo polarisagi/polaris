@@ -625,6 +625,26 @@ func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
 	} else {
 		a.sCtx.InstalledExtensionsInfo = ""
 	}
+
+	// 动态加载已注册的活跃技能并附加到 ExtensionsInfo，供 LLM 参考（M6 SkillRegistry）
+	sRows, sErr := a.extQuerier.QueryContext(ctx,
+		"SELECT name, instructions FROM skills WHERE deprecated = 0")
+	if sErr == nil {
+		defer sRows.Close()
+		var skills []string
+		for sRows.Next() {
+			var sName, sInstr string
+			if err := sRows.Scan(&sName, &sInstr); err == nil && sInstr != "" {
+				skills = append(skills, fmt.Sprintf("### Skill: %s\n%s\n", sName, sInstr))
+			}
+		}
+		if sRows.Err() == nil && len(skills) > 0 {
+			if a.sCtx.InstalledExtensionsInfo != "" {
+				a.sCtx.InstalledExtensionsInfo += "\n\n"
+			}
+			a.sCtx.InstalledExtensionsInfo += "Available Skills (from installed extensions/plugins):\n" + strings.Join(skills, "\n")
+		}
+	}
 }
 
 // InjectExtensionActivator 注入按需扩展激活器。
