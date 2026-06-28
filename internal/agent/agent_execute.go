@@ -940,7 +940,6 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	}
 	a.sCtx.ExecuteImageParts = imgs
 
-
 	// Inject Taint Warning if any node is highly tainted
 	hasHighTaint := false
 	for _, r := range results {
