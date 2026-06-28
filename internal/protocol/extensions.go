@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -11,6 +13,38 @@ import (
 // ============================================================================
 
 // RegistryEntry 插件目录条目（ADR-0016：Publisher/TrustTier/Type 字段）。
+// ============================================================================
+
+// FindPluginManifest 尝试在插件目录下寻找官方、Claude Code 或 Codex 的 manifest。
+func FindPluginManifest(dir string) (string, error) {
+	candidates := []string{
+		filepath.Join(dir, ".polaris-plugin", "plugin.json"),
+		filepath.Join(dir, ".claude-plugin", "plugin.json"),
+		filepath.Join(dir, ".codex-plugin", "plugin.json"),
+		filepath.Join(dir, "plugin.json"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
+// FindMCPConfig 尝试在插件目录下寻找标准的 MCP 配置文件。
+func FindMCPConfig(dir string) (string, error) {
+	candidates := []string{
+		filepath.Join(dir, ".mcp.json"),
+		filepath.Join(dir, "mcp.json"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
 type RegistryEntry struct {
 	// ID 全局唯一 slug，格式："{publisher}/{name}" 或 "mcp/{name}"
 	ID        string `json:"id" yaml:"id"`

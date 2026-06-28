@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -46,9 +45,11 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (string, 
 		return "", apperr.New(apperr.CodeInvalidInput, "plugin_installer: LocalPath required")
 	}
 
-	// 1. 解析 mcp.json (注意原代码里 runtime_registrar 是读取 mcp.json)
-	// 原代码: cfgPath := filepath.Join(installDir, "mcp.json")
-	cfgPath := filepath.Join(installDir, "mcp.json")
+	// 1. 解析 mcp.json 或 .mcp.json
+	cfgPath, err := protocol.FindMCPConfig(installDir)
+	if err != nil {
+		return installDir, nil //nolint:nilerr // 没有配置，跳过 MCP 注册
+	}
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return installDir, nil //nolint:nilerr

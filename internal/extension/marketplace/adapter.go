@@ -306,13 +306,13 @@ type PackageJSON struct {
 }
 
 func parsePackageJSON(path, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
-	// 已有 .polaris-plugin 目录或 .mcp.json 的 Polaris 原生插件已有正确的 MCP 配置，
+	// 已有配置的 Polaris/Claude/Codex 插件已有正确的 MCP 配置，
 	// 跳过自动推导 npx 命令，避免生成与现有配置冲突的错误条目。
 	dir := filepath.Dir(path)
-	if _, err2 := os.Stat(filepath.Join(dir, ".polaris-plugin")); err2 == nil {
+	if _, err := protocol.FindPluginManifest(dir); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
-	if _, err2 := os.Stat(filepath.Join(dir, ".mcp.json")); err2 == nil {
+	if _, err := protocol.FindMCPConfig(dir); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
 	data, err := os.ReadFile(path)
@@ -368,14 +368,14 @@ type PyProjectTOML struct {
 }
 
 func parsePyProjectTOML(path, baseID string, mp protocol.Marketplace) (protocol.RegistryEntry, bool) {
-	// 已有 .polaris-plugin 目录或 .mcp.json 的 Polaris 原生插件已有正确的 MCP 配置（通常是
+	// 已有配置的原生插件已有正确的 MCP 配置（通常是
 	// uv run src/main.py），跳过自动推导 uvx 命令，避免生成不存在的 PyPI 包条目（uvx <name>
 	// 只适用于真正发布到 PyPI 的独立 MCP 包，不适用于本地插件工程）。
 	dir := filepath.Dir(path)
-	if _, err2 := os.Stat(filepath.Join(dir, ".polaris-plugin")); err2 == nil {
+	if _, err := protocol.FindPluginManifest(dir); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
-	if _, err2 := os.Stat(filepath.Join(dir, ".mcp.json")); err2 == nil {
+	if _, err := protocol.FindMCPConfig(dir); err == nil {
 		return protocol.RegistryEntry{}, false
 	}
 	data, err := os.ReadFile(path)

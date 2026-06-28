@@ -496,8 +496,12 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 		return
 	}
 
-	// 解析 .mcp.json 取得运行时 command/args
-	mcpJSONRaw, err := os.ReadFile(filepath.Join(pluginDir, ".mcp.json"))
+	cfgPath, err := protocol.FindMCPConfig(pluginDir)
+	if err != nil {
+		http.Error(w, "plugin_creator: .mcp.json not found", http.StatusNotFound)
+		return
+	}
+	mcpJSONRaw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		http.Error(w, "plugin_creator: read .mcp.json: "+err.Error(), http.StatusInternalServerError)
 		return

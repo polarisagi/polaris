@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -38,15 +37,15 @@ func (m *MCPInstaller) Install(ctx context.Context, req InstallReq) (string, err
 		return installDir, nil
 	}
 
-	cfgPath := filepath.Join(installDir, "mcp.json")
+	cfgPath, err := protocol.FindMCPConfig(installDir)
+	if err != nil {
+		slog.Warn("mcp_installer: mcp.json not found, skip runtime registration",
+			"inst_id", req.InstID, "dir", installDir)
+		return installDir, nil //nolint:nilerr
+	}
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return installDir, apperr.Wrap(apperr.CodeInternal, "mcp_installer: read mcp.json", err)
-		}
-		slog.Warn("mcp_installer: mcp.json not found, skip runtime registration",
-			"inst_id", req.InstID, "path", cfgPath)
-		return installDir, nil
+		return installDir, apperr.Wrap(apperr.CodeInternal, "mcp_installer: read mcp.json", err)
 	}
 
 	var mcpCfg struct {
