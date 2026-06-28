@@ -200,6 +200,12 @@ func (h *ChatHandler) GenerateReply(ctx context.Context, req *apptypes.InferRequ
 				resultText = "error: " + execErr.Error()
 			} else if result != nil {
 				resultText = string(result.Output)
+				if result.Error != "" {
+					if resultText != "" {
+						resultText += "\n"
+					}
+					resultText += "error: " + result.Error
+				}
 			}
 			toolResultParts = append(toolResultParts, map[string]any{
 				"type": "tool_result", "tool_use_id": toolID, "content": resultText,

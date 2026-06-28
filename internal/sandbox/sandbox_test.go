@@ -114,12 +114,12 @@ func TestAssignSandboxTier(t *testing.T) {
 		trustTier  types.TrustTier
 	}{
 		{"builtin-read", types.ToolBuiltin, types.CapReadOnly, nil, 1, "linux", types.SandboxInProcess, nil, types.TrustSystem},
-		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxWasm, nil, types.TrustCommunity},
+		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxInProcess, nil, types.TrustCommunity},
 		{"llm-gen", types.ToolLLMGenerated, types.CapReadOnly, nil, 1, "linux", types.SandboxWasm, nil, types.TrustUntrusted},
-		{"privileged-spawn", types.ToolBuiltin, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil, types.TrustSystem},
-		{"tier0-linux-container", types.ToolBuiltin, types.CapPrivileged, nil, 0, "linux", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
-		{"tier0-darwin-downgrade", types.ToolBuiltin, types.CapPrivileged, nil, 0, "darwin", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
-		{"tier1-darwin-no-downgrade", types.ToolBuiltin, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil, types.TrustSystem},
+		{"privileged-spawn", types.ToolSkill, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil, types.TrustSystem},
+		{"tier0-linux-container", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier0-darwin-downgrade", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier1-darwin-no-downgrade", types.ToolSkill, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil, types.TrustSystem},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

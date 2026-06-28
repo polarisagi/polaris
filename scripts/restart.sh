@@ -42,31 +42,39 @@ if [[ -f "$LOG_FILE" ]]; then
   fi
 fi
 
-# ── 1. 停止旧进程（仅杀 :PORT 上的进程）──────────────────
+# ── 1. 停止旧进程（不仅杀 :PORT，也确保 ./bin/polaris 进程完全退出）──────────────────
 echo "→ 停止旧进程..."
-# lsof -ti 可能返回多行 PID，必须逐行处理
-OLD_PIDS=$(lsof -ti:"$PORT" 2>/dev/null || true)
+# 获取占用端口的进程以及当前目录下启动的 ./bin/polaris 进程
+get_old_pids() {
+  local pids=""
+  pids+=$(lsof -ti:"$PORT" 2>/dev/null || true)
+  pids+=$'\n'
+  pids+=$(pgrep -f "\./bin/polaris" 2>/dev/null || true)
+  echo "$pids" | grep -v '^$' | sort -u || true
+}
+
+OLD_PIDS=$(get_old_pids)
 if [[ -n "$OLD_PIDS" ]]; then
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
     kill "$pid" 2>/dev/null || true
   done <<< "$OLD_PIDS"
 
-  # 等待所有旧进程退出（最多 5s），超时逐个 kill -9
-  for i in {1..5}; do
+  # 等待所有旧进程退出（最多 10s，应对 CrashReporter 或 RocksDB 慢关闭），超时逐个 kill -9
+  for i in {1..10}; do
     sleep 1
-    STILL_ALIVE=$(lsof -ti:"$PORT" 2>/dev/null || true)
+    STILL_ALIVE=$(get_old_pids)
     if [[ -z "$STILL_ALIVE" ]]; then
       echo "  旧进程已全部退出"
       break
     fi
-    if [[ $i == 5 ]]; then
+    if [[ $i == 10 ]]; then
       echo "  优雅退出超时，强制终止..."
       while IFS= read -r pid; do
         [[ -z "$pid" ]] && continue
         kill -9 "$pid" 2>/dev/null || true
       done <<< "$STILL_ALIVE"
-      sleep 0.5
+      sleep 1
     fi
   done
 fi

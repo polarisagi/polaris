@@ -485,6 +485,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		TBR:           tbr,
 		KS:            ks,
 		AuditTrail:    auditTrail,
+		AuditChain:    auditChain,
 		LogFile:       logFile,
 		LogStore:      logStore,
 		Store:         store,

@@ -549,8 +549,14 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 				resultText = "error: " + execErr.Error()
 			} else if result != nil {
 				resultText = string(result.Output)
+				if result.Error != "" {
+					if resultText != "" {
+						resultText += "\n"
+					}
+					resultText += "error: " + result.Error
+				}
 			}
-			slog.Info("server: tool executed", "name", toolName, "ok", execErr == nil)
+			slog.Info("server: tool executed", "name", toolName, "ok", execErr == nil && (result == nil || result.Error == ""))
 			toolResultParts = append(toolResultParts, map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": toolID,

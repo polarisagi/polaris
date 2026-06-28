@@ -237,7 +237,8 @@ func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 
 	shellTool := types.Tool{
 		Name:        "run-sh",
-		Source:      types.ToolBuiltin,
+		Description: "execute shell command",
+		Source:      types.ToolSkill,
 		TrustTier:   types.TrustSystem,
 		SideEffects: []types.SideEffect{types.SideProcessSpawn},
 	}
