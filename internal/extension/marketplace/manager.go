@@ -49,9 +49,14 @@ type InstallRequest struct {
 
 var ErrRequiresApproval = errors.New("installation requires user approval")
 
+// MCPRuntimeManager MCP 运行时管理的最小接口（消费方定义，防包循环）。
+type MCPRuntimeManager interface {
+	Remove(id string)
+}
+
 type Manager struct {
 	extRepo           protocol.ExtensionRepository
-	mcpMgr            any
+	mcpMgr            MCPRuntimeManager
 	policyGate        protocol.PolicyGate
 	prefsRepo         protocol.PreferencesRepo
 	auditTrail        *security.AuditTrail
@@ -62,7 +67,7 @@ type Manager struct {
 	installFSM *lifecycle.InstallFSM
 }
 
-func NewManager(extRepo protocol.ExtensionRepository, mcpMgr any, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int) *Manager {
+func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int) *Manager {
 	if publisherTrustMap == nil {
 		publisherTrustMap = make(map[string]int)
 	}
@@ -315,11 +320,10 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 }
 
 func (m *Manager) removeRuntime(ctx context.Context, extType, runtimeID, catalogID string) {
-	type mcpRemover interface{ Remove(id string) }
 	switch extType {
 	case "mcp":
-		if remover, ok := m.mcpMgr.(mcpRemover); ok && runtimeID != "" {
-			remover.Remove(runtimeID)
+		if m.mcpMgr != nil && runtimeID != "" {
+			m.mcpMgr.Remove(runtimeID)
 		}
 		_ = m.extRepo.UninstallCleanup(ctx, "", runtimeID, "mcp")
 	case "skill":
@@ -331,8 +335,7 @@ func (m *Manager) removeRuntime(ctx context.Context, extType, runtimeID, catalog
 		if runtimeID == "" {
 			break
 		}
-		remover, _ := m.mcpMgr.(mcpRemover)
-		m.removePluginRuntime(ctx, runtimeID, remover)
+		m.removePluginRuntime(ctx, runtimeID, m.mcpMgr)
 	case "app":
 		if runtimeID != "" {
 			_ = m.extRepo.UninstallCleanup(ctx, "", runtimeID, "app")
@@ -340,7 +343,7 @@ func (m *Manager) removeRuntime(ctx context.Context, extType, runtimeID, catalog
 	}
 }
 
-func (m *Manager) removePluginRuntime(ctx context.Context, runtimeID string, remover interface{ Remove(id string) }) {
+func (m *Manager) removePluginRuntime(ctx context.Context, runtimeID string, remover MCPRuntimeManager) {
 	// 从 mcp_servers 表读取所有子 MCP ID，停止运行时连接
 	if remover != nil {
 		mcpRows, err := m.extRepo.ListMCPServers(ctx)

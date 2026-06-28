@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -245,11 +246,18 @@ type ScriptSkillExecutor struct {
 	registry protocol.SkillRegistry
 	runner   ScriptRunner // nil → 返回输入原文（降级）
 	loader   ScriptLoader // 可选兜底：meta.ScriptPath 不存在时尝试此加载器
+	envelope *sandbox.ExecEnvelope
 }
 
 // NewScriptSkillExecutor 构造执行器。runner 可选（nil 时退化为仅元数据验证）。
 func NewScriptSkillExecutor(reg protocol.SkillRegistry, runner ScriptRunner, loader ScriptLoader) *ScriptSkillExecutor {
 	return &ScriptSkillExecutor{registry: reg, runner: runner, loader: loader}
+}
+
+// WithEnvelope 注入 ExecEnvelope
+func (e *ScriptSkillExecutor) WithEnvelope(env *sandbox.ExecEnvelope) *ScriptSkillExecutor {
+	e.envelope = env
+	return e
 }
 
 // ExecuteSkill 执行 TypeScript/Python 技能脚本。
@@ -282,6 +290,20 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 
 	if err := e.ValidateSkill([]byte(scriptPath)); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: script validation", err)
+	}
+
+	if e.envelope != nil {
+		_, err := e.envelope.Execute(ctx, sandbox.ExecRequest{
+			Principal:  sandbox.PrincipalAgent,
+			Kind:       sandbox.KindScriptExecute,
+			Resource:   meta.Name,
+			TrustTier:  meta.Trust,
+			Tool:       types.Tool{Name: meta.Name, Source: types.ToolSkill, TrustTier: meta.Trust},
+			TaintLevel: types.TaintMedium, // skill 脚本至少具有 Medium Taint
+		})
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeForbidden, "skill_executor: envelope denied", err)
+		}
 	}
 
 	return e.runner.RunScript(ctx, skillID, scriptPath, input, meta.Trust)

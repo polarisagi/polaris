@@ -18,7 +18,8 @@
 - ambient skill 注入上限 4000 字符; 超限按 trust_tier 降序截断
 
 **文件索引**:
-- [标杆] `native/extension_manager.go`: Manager (统一安装入口)
+- [**总入口**] `bus/bus.go`: ExtensionBus (统一扩展总线：安装、激活、卸载。AI 查代码**首选入口**)
+- [标杆] `native/extension_manager.go`: 原生工具 (InstallExtensionFn)
 - [参照] `marketplace/adapter.go`: 多厂商清单解析 (OpenAI/Anthropic/Google→RegistryEntry)
 - [参照] `marketplace/loader.go`: Polaris 原生格式解析
 - [参照] `marketplace/manager.go`: 市场同步 + 安装协调

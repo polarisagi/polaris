@@ -24,6 +24,7 @@ import (
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
+	"github.com/polarisagi/polaris/internal/extension/bus"
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -62,6 +63,8 @@ type ToolBundle struct {
 	EmbedFn          native.EmbedFn           // 可 nil（Ollama 未启用时；ExtensionActivator 降级为纯 FTS）
 	RecoveryHandler  *agent.ProviderRecoveryHandler
 	Catalog          catalog.Catalog // 统一工具目录
+	Activator        *native.ExtensionActivator
+	ExtensionBus     *bus.ExtensionBus
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -301,6 +304,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}()
 	slog.Info("polaris: memory forgetting manager started", "decay_rate", 0.01, "interval_h", 6)
 
+	activator := native.NewExtensionActivator(extRepo, nativeCogn, mcpMgr, nativeEmbedFn)
+	extensionBus := bus.New(installFSM, installMgr, activator, extRepo)
+
 	return &ToolBundle{
 		ContainerSandbox: containerSandbox,
 		InProcSandbox:    inProcSandbox,
@@ -321,6 +327,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		EmbedFn:          nativeEmbedFn,
 		RecoveryHandler:  recoveryHandler,
 		Catalog:          compCatalog,
+		Activator:        activator,
+		ExtensionBus:     extensionBus,
 	}, nil
 }
 

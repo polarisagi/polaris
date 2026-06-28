@@ -11,6 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -138,6 +139,23 @@ func TestManager_AuthorizeAction(t *testing.T) {
 	}
 }
 
+type mockFSMInstaller struct {
+	extType types.ExtType
+	extRepo protocol.ExtensionRepository
+}
+
+func (m *mockFSMInstaller) ExtType() types.ExtType { return m.extType }
+func (m *mockFSMInstaller) Install(ctx context.Context, req lifecycle.InstallReq) (string, error) {
+	_ = m.extRepo.UpdateInstanceStatus(ctx, req.InstID, "installed", "")
+	if req.LocalPath != "" {
+		return req.LocalPath, nil
+	}
+	return "/test/dir", nil
+}
+func (m *mockFSMInstaller) Uninstall(ctx context.Context, req lifecycle.UninstallReq) error {
+	return nil
+}
+
 func TestManager_InstallExtension(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -147,6 +165,7 @@ func TestManager_InstallExtension(t *testing.T) {
 	inst := &mockInstaller{dir: "/test/dir"}
 	extRepo := repo.NewSQLiteExtensionRepository(db)
 	fsm := lifecycle.NewInstallFSM(extRepo)
+	fsm.RegisterInstaller(&mockFSMInstaller{extType: types.ExtType("mcp"), extRepo: extRepo})
 	mgr := NewManager(extRepo, nil, pg, pr, nil, nil).
 		WithInstaller(inst).
 		WithInstallFSM(fsm)
@@ -181,6 +200,7 @@ func TestManager_InstallExtension_LocalPath(t *testing.T) {
 	pg := &mockPolicyGate{allowed: true}
 	extRepo := repo.NewSQLiteExtensionRepository(db)
 	fsm := lifecycle.NewInstallFSM(extRepo)
+	fsm.RegisterInstaller(&mockFSMInstaller{extType: types.ExtType("skill"), extRepo: extRepo})
 	pr := &mockPrefs{}
 	mgr := NewManager(extRepo, nil, pg, pr, nil, nil).
 		WithInstallFSM(fsm)

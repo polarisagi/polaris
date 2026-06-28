@@ -25,7 +25,6 @@ import (
 	"github.com/polarisagi/polaris/internal/automation"
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
-	"github.com/polarisagi/polaris/internal/extension/native"
 	"github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/observability/budget"
@@ -160,10 +159,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		pool.Run(ctx)
 	})
 
-	// 构造 ExtensionActivator（需要 db + cognitive + mcpMgr + embedFn）
 	// embedFn 来自 ToolBundle.EmbedFn（Ollama 本地向量化；nil = 无 VecKNN，降级为纯 FTS）
-	activator := native.NewExtensionActivator(tb.ExtRepo, tb.NativeCogn, tb.MCPMgr, tb.EmbedFn)
-	agent.InjectExtensionActivator(&extensionActivatorAdapter{inner: activator})
+	agent.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
 	agent.InjectMemory(mb.Mem)
 	if mb.Mem != nil {
 		agent.SetMemoryInjector(mb.Mem)
@@ -218,7 +215,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan)
 			pool.Run(ctx)
 		})
-		a.InjectExtensionActivator(&extensionActivatorAdapter{inner: activator})
+		a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
 		a.InjectMemory(mb.Mem)
 		if mb.Mem != nil {
 			a.SetMemoryInjector(mb.Mem)

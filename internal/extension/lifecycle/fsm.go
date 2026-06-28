@@ -2,9 +2,10 @@ package lifecycle
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -28,10 +29,8 @@ func (f *InstallFSM) RegisterInstaller(installer Installer) {
 func (f *InstallFSM) Install(ctx context.Context, req InstallReq, extType types.ExtType) (string, error) {
 	installer, ok := f.installers[extType]
 	if !ok {
-		slog.Warn("InstallFSM: unknown ext_type, marking installed without runtime registration",
-			"ext_type", extType, "inst_id", req.InstID)
-		_ = f.extRepo.UpdateInstanceStatus(ctx, req.InstID, "installed", "")
-		return req.LocalPath, nil
+		return "", apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("install_fsm: no installer registered for ext_type=%q", extType))
 	}
 
 	installDir, err := installer.Install(ctx, req)
