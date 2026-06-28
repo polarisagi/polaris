@@ -396,6 +396,10 @@ func (r *SQLiteExtensionRepository) UninstallCleanup(ctx context.Context, id, ru
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup mcp", err)
 		}
 	case "native", "plugin":
+		_, err = tx.ExecContext(ctx, `DELETE FROM mcp_servers WHERE plugin_id=?`, id)
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup plugin mcp", err)
+		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM skills WHERE plugin_id=?`, id)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UninstallCleanup skills", err)

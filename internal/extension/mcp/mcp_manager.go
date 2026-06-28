@@ -438,6 +438,10 @@ func (m *MCPManager) unregisterTools(serverName string, tools []MCPTool) {
 		if m.toolReg != nil {
 			m.toolReg.Unregister(llmName)
 		}
+		// 同步从 unified catalog 注销
+		if m.catalog != nil {
+			m.catalog.Unregister(llmName)
+		}
 	}
 }
 
