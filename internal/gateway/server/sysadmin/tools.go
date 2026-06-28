@@ -38,6 +38,9 @@ func (h *SysAdminHandler) HandleListTools(w http.ResponseWriter, r *http.Request
 	if h.Catalog != nil {
 		entries := h.Catalog.List(context.Background(), types.TrustUntrusted)
 		for _, e := range entries {
+			if e.Source == types.ToolSkill {
+				continue // 技能已经在单独的面板（/v1/skills）展示，避免在工具列表重复
+			}
 			tools = append(tools, ToolInfo{
 				Name:        e.Name,
 				Description: e.Description,
