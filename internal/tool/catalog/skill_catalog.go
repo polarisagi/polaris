@@ -30,10 +30,7 @@ func (s *SkillCatalog) List(ctx context.Context, minTrust types.TrustTier) []Cat
 	var result []CatalogEntry
 	for _, sk := range skills {
 		if sk.Trust >= minTrust {
-			name := sk.Name
-			if strings.HasPrefix(name, "skill:") {
-				name = strings.TrimPrefix(name, "skill:")
-			}
+			name := strings.TrimPrefix(sk.Name, "skill:")
 			result = append(result, CatalogEntry{
 				Name:        name,
 				Description: "Auto-generated skill wrapper",
