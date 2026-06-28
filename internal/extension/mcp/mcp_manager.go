@@ -233,8 +233,8 @@ func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, ar
 		Principal:  sandbox.PrincipalAgent,
 		Kind:       sandbox.KindToolExecute,
 		Resource:   llmName,
-		TrustTier:  types.TrustCommunity,
-		Tool:       types.Tool{Name: llmName, Source: types.ToolMCP, TrustTier: types.TrustCommunity},
+		TrustTier:  types.TrustTier(e.cfg.TrustTier),
+		Tool:       types.Tool{Name: llmName, Source: types.ToolMCP, TrustTier: types.TrustTier(e.cfg.TrustTier)},
 		Input:      argsBytes,
 		TaintLevel: types.TaintMedium,
 	})
@@ -375,6 +375,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 				InputSchema: t.InputSchema,
 				Source:      types.ToolMCP,
 				RiskLevel:   riskLevel,
+				TrustTier:   types.TrustTier(client.cfg.TrustTier),
 			})
 			if regErr != nil {
 				slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
