@@ -362,9 +362,6 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// ── 推理（含 tool_use 循环，最多 10 轮）────────────────────────────────
-	writeSSE(w, flusher, "thinking", map[string]string{"content": "..."})
-
 	// 语义工具选择：当工具数 > toolSelectThreshold 且 Embedder 可用时按 query 相似度过滤到 top-K，
 	// 否则退回全量注入。通过接口类型断言实现，不污染 ToolProvider 接口签名。
 	toolSchemas := s.ToolProvider.BuildToolSchemas()
@@ -454,7 +451,12 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 				}
 				switch ev.Type {
 				case types.StreamThinking:
-					roundReasoning.WriteString(ev.Content)
+					if ev.Content != "" {
+						if !clientCancelled {
+							writeSSE(w, flusher, "thinking", map[string]string{"content": ev.Content})
+						}
+						roundReasoning.WriteString(ev.Content)
+					}
 				case types.StreamTextDelta:
 					if ev.Content != "" {
 						if !clientCancelled {
