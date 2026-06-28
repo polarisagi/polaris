@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -69,6 +70,28 @@ func (c *CompositeCatalog) rebuild(ctx context.Context, minTrust types.TrustTier
 			result = append(result, e)
 		}
 	}
+
+	// Sort by Source (builtin -> mcp -> skill -> other) then by Name
+	sourceWeight := func(src types.ToolSource) int {
+		switch src {
+		case types.ToolBuiltin:
+			return 1
+		case types.ToolMCP:
+			return 2
+		case types.ToolSkill:
+			return 3
+		default:
+			return 4
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		wi, wj := sourceWeight(result[i].Source), sourceWeight(result[j].Source)
+		if wi != wj {
+			return wi < wj
+		}
+		return result[i].Name < result[j].Name
+	})
+
 	c.mu.Lock()
 	c.cache = result
 	c.mu.Unlock()
