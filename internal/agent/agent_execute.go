@@ -932,6 +932,15 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	raw := aggregateDAGResults(results)
 	a.sCtx.ExecuteResult = truncateExecResult(a.sCtx.SessionID, raw)
 
+	var imgs []types.ImagePart
+	for _, r := range results {
+		if len(r.ImageParts) > 0 {
+			imgs = append(imgs, r.ImageParts...)
+		}
+	}
+	a.sCtx.ExecuteImageParts = imgs
+
+
 	// Inject Taint Warning if any node is highly tainted
 	hasHighTaint := false
 	for _, r := range results {

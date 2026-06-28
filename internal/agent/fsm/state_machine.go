@@ -60,6 +60,7 @@ type StateContext struct {
 	DAGModel             *DAGModel           // S_PLAN 产出
 	Reflection           *ReflectionModel    // S_REFLECT 产出
 	ExecuteResult        []byte
+	ExecuteImageParts    []types.ImagePart
 	MaxReplan            int
 	Timeout              time.Duration
 	StartedAt            time.Time

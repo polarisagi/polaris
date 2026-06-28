@@ -91,6 +91,7 @@ type NodeResult struct {
 	Suspended  bool
 	Err        error
 	TaintLevel types.TaintLevel
+	ImageParts []types.ImagePart
 }
 
 // ─── DAG Executor ───────────────────────────────────────────────────────────
@@ -326,7 +327,7 @@ func (e *DAGExecutor) executeNode(ctx context.Context, node ExecNode) NodeResult
 				if out == nil {
 					out = []byte{}
 				}
-				return NodeResult{NodeID: node.ID, Output: out, Suspended: res.Suspended, TaintLevel: res.TaintLevel}
+				return NodeResult{NodeID: node.ID, Output: out, Suspended: res.Suspended, TaintLevel: res.TaintLevel, ImageParts: res.ImageParts}
 			}
 		} else {
 			lastErr = err

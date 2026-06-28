@@ -298,6 +298,9 @@ func BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.
 			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
 			"execute_result"))
 	}
+	if len(sCtx.ExecuteImageParts) > 0 {
+		b.WriteUserImages(sCtx.ExecuteImageParts)
+	}
 
 	msgs := b.Build()
 

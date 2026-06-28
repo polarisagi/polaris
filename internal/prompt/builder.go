@@ -90,6 +90,21 @@ func (b *PromptBuilder) WriteUserInstruction(safe taint.SafeString) {
 	b.zones[ZoneImmutable] = append(b.zones[ZoneImmutable], safe.IntoMessage("user"))
 }
 
+// WriteUserImages 将图片等媒体块写入 User 角色。
+func (b *PromptBuilder) WriteUserImages(imgs []types.ImagePart) {
+	if len(imgs) == 0 {
+		return
+	}
+	parts := make([]any, 0, len(imgs))
+	for _, img := range imgs {
+		parts = append(parts, img)
+	}
+	b.zones[ZoneTaintedData] = append(b.zones[ZoneTaintedData], types.Message{
+		Role:  "user",
+		Parts: parts,
+	})
+}
+
 // Build 输出最终组装完毕可用于 InferRequest 的消息序列。
 func (b *PromptBuilder) Build() []types.Message {
 	var result []types.Message //nolint:prealloc
