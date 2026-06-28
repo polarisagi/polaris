@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
-
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -50,6 +50,7 @@ type MCPManager struct {
 	sandbox          *sandbox.InProcessSandbox
 	envelope         *sandbox.ExecEnvelope // 用于 CallTool 下沉
 	toolReg          ToolRegistrar         // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
+	catalog          catalog.Catalog       // 新的统一工具目录（仅注册 schema 和 metadata）
 	httpClient       *http.Client
 	policy           protocol.PolicyGate // 对 process_spawn 的策略检查
 	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
@@ -108,6 +109,13 @@ func (m *MCPManager) SetOnToolsChanged(fn func()) {
 func (m *MCPManager) SetToolRegistrar(reg ToolRegistrar) {
 	m.mu.Lock()
 	m.toolReg = reg
+	m.mu.Unlock()
+}
+
+// SetCatalog 注入统一工具目录（替代 SetToolRegistrar 暴露 schema）。
+func (m *MCPManager) SetCatalog(c catalog.Catalog) {
+	m.mu.Lock()
+	m.catalog = c
 	m.mu.Unlock()
 }
 
@@ -363,7 +371,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 		fn := makeMCPToolFn(client, t.Name)
 		// RegisterRich 将 MCP 工具注册到富工具路径（支持 ImageParts 回传）
 		m.sandbox.RegisterRich(llmName, fn, taint)
-		// 同步到 InMemoryToolRegistry，使 Agent Kernel FSM 可发现此工具
+		// 同步到 InMemoryToolRegistry (逐步废弃)
 		if m.toolReg != nil {
 			riskLevel := types.RiskHigh
 			if client.cfg.Trusted {
@@ -381,6 +389,21 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 				slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
 			}
 		}
+
+		// 注册到统一工具目录 Catalog
+		if m.catalog != nil {
+			m.catalog.Register(catalog.CatalogEntry{
+				Name:        llmName,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+				Source:      types.ToolMCP,
+				TrustTier:   types.TrustTier(client.cfg.TrustTier),
+				TaintLevel:  taint,
+				MCPServerID: client.cfg.ServerName,
+				MCPToolName: t.Name,
+			})
+		}
+
 		valid = append(valid, t)
 	}
 	return valid

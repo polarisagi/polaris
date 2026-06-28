@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -113,13 +114,13 @@ type dummyContextBuilder struct{}
 func (d *dummyContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, tools protocol.ToolRegistry, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildToolListSection(tools protocol.ToolRegistry) string { return "" }
+func (d *dummyContextBuilder) BuildToolListSection(cata catalog.Catalog) string { return "" }
 
 // allowPolicyGate 放行所有请求（用于 Agent HappyPath 测试）。
 type allowPolicyGate struct{}

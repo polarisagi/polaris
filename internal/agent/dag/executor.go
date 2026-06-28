@@ -139,6 +139,13 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 		return nil, apperr.Wrap(apperr.CodeInternal, "dag_executor: topology error", err)
 	}
 
+	if taskID != "" {
+		ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, taskID)
+	}
+	if agentID != "" {
+		ctx = context.WithValue(ctx, protocol.CtxAgentIDKey{}, agentID)
+	}
+
 	// 重置运行时状态
 	e.mu.Lock()
 	e.completed = make(map[string][]byte, len(plan.Nodes))
@@ -152,9 +159,11 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 		go e.leaseHeartbeat(hbCtx, taskID, agentID)
 	}
 
-	// 信号量控制并发
-	sem := make(chan struct{}, e.maxConcurrency)
+	return e.runScheduler(ctx, plan)
+}
 
+func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeResult, error) {
+	sem := make(chan struct{}, e.maxConcurrency)
 	var (
 		allResults []NodeResult
 		resultsMu  sync.Mutex
@@ -162,7 +171,6 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 		firstErr   error
 		errMu      sync.Mutex
 	)
-
 	nodeMap := buildNodeMap(plan.Nodes)
 
 	for {

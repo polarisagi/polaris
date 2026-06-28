@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -49,14 +50,6 @@ type mockInstaller struct {
 
 func (m *mockInstaller) Install(ctx context.Context, target any) (string, error) {
 	return m.dir, m.err
-}
-
-type mockRegistrar struct {
-	err error
-}
-
-func (m *mockRegistrar) Register(ctx context.Context, extType, installDir, instID string) error {
-	return m.err
 }
 
 func setupTestDB(t *testing.T) *sql.DB {
@@ -152,11 +145,11 @@ func TestManager_InstallExtension(t *testing.T) {
 	pg := &mockPolicyGate{allowed: true}
 	pr := &mockPrefs{}
 	inst := &mockInstaller{dir: "/test/dir"}
-	reg := &mockRegistrar{}
-
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, pg, pr, nil, nil).
+	extRepo := repo.NewSQLiteExtensionRepository(db)
+	fsm := lifecycle.NewInstallFSM(extRepo)
+	mgr := NewManager(extRepo, nil, pg, pr, nil, nil).
 		WithInstaller(inst).
-		WithRegistrar(reg)
+		WithInstallFSM(fsm)
 
 	ctx := context.Background()
 	req := InstallRequest{
@@ -186,8 +179,11 @@ func TestManager_InstallExtension_LocalPath(t *testing.T) {
 	defer db.Close()
 
 	pg := &mockPolicyGate{allowed: true}
+	extRepo := repo.NewSQLiteExtensionRepository(db)
+	fsm := lifecycle.NewInstallFSM(extRepo)
 	pr := &mockPrefs{}
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, pg, pr, nil, nil)
+	mgr := NewManager(extRepo, nil, pg, pr, nil, nil).
+		WithInstallFSM(fsm)
 
 	ctx := context.Background()
 	req := InstallRequest{

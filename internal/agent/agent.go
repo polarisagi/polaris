@@ -21,6 +21,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/sysmgr/sysinfo"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -43,7 +44,8 @@ type Agent struct {
 	provider          protocol.Provider             // LLM 调用入口（由 M1 提供）
 	policyGate        protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
 	hitl              protocol.HITL                 // 人工审批网关
-	toolRegistry      protocol.ToolRegistry         // 工具注册表（由 M7 提供）
+	toolRegistry      protocol.ToolRegistry         // 工具执行表（由 M7 提供）
+	catalog           catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
 	memory            protocol.Memory               // 四层记忆系统（由 M5 提供）
 	worldModel        WorldModel                    // 认知世界模型，nil 时安全降级
 	prm               *DefaultPRM                   // 可选；nil 时跳过多候选打分
@@ -471,6 +473,12 @@ func (a *Agent) GetTokenUsage() (tokensIn, tokensOut, cacheRead int) {
 // InjectToolRegistry 注入工具注册表（运行时绑定，允许测试注入 mock）。
 func (a *Agent) InjectToolRegistry(tr protocol.ToolRegistry) { a.toolRegistry = tr }
 
+// InjectCatalog 注入工具目录（运行时绑定）。
+func (a *Agent) InjectCatalog(c catalog.Catalog) {
+	a.catalog = c
+	a.sm.SetContextBuilder(&agentContextBuilder{cata: c})
+}
+
 // InjectMemory 注入记忆系统（运行时绑定，允许测试注入 mock）。
 func (a *Agent) InjectMemory(mem protocol.Memory) { a.memory = mem }
 
@@ -632,20 +640,30 @@ func (a *Agent) InjectExtensionActivator(activator fsm.ExtensionActivatorIface) 
 	a.sm.WithExtensionActivator(activator)
 }
 
-type agentContextBuilder struct{}
+type agentContextBuilder struct {
+	cata catalog.Catalog
+}
 
 func (b *agentContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	return agentctx.BuildPerceiveContext(ctx, memory, sCtx, cognitive)
 }
 
-func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, tools protocol.ToolRegistry, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
-	return agentctx.BuildPlanContext(ctx, memory, sCtx, tools, cognitive)
+func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	useCata := cata
+	if useCata == nil {
+		useCata = b.cata
+	}
+	return agentctx.BuildPlanContext(ctx, memory, sCtx, useCata, cognitive)
 }
 
 func (b *agentContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext) ([]types.Message, error) {
 	return agentctx.BuildReflectContext(ctx, memory, sCtx)
 }
 
-func (b *agentContextBuilder) BuildToolListSection(tools protocol.ToolRegistry) string {
-	return agentctx.BuildToolListSection(tools)
+func (b *agentContextBuilder) BuildToolListSection(cata catalog.Catalog) string {
+	useCata := cata
+	if useCata == nil {
+		useCata = b.cata
+	}
+	return agentctx.BuildToolListSection(useCata)
 }

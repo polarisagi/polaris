@@ -54,6 +54,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 	webui "github.com/polarisagi/polaris/web"
 
@@ -77,14 +78,15 @@ type Server struct {
 	automationRepo prepo.AutomationRepository
 	workflowRepo   prepo.WorkflowRepository
 	appRepo        prepo.AppRepository
-	registry       *llm.ProviderRegistry                                                          // 热重载 Provider 注册表
-	httpClient     *http.Client                                                                   // 复用 SafeHTTPClient
-	transcriptDir  string                                                                         // per-session JSONL transcript 目录
-	hooks          *sysadmin.HookRunner                                                           // Shell Script Hooks（End-User 扩展点）
-	compressor     *chat.Compressor                                                               // 上下文超长自动压缩
-	channelMgr     *channel.Manager                                                               // 所有聊天平台 poller 管理
-	mcpMgr         *mcp.MCPManager                                                                // MCP Server 连接管理
-	toolReg        protocol.ToolRegistry                                                          // builtin tool 元数据
+	registry       *llm.ProviderRegistry // 热重载 Provider 注册表
+	httpClient     *http.Client          // 复用 SafeHTTPClient
+	transcriptDir  string                // per-session JSONL transcript 目录
+	hooks          *sysadmin.HookRunner  // Shell Script Hooks（End-User 扩展点）
+	compressor     *chat.Compressor      // 上下文超长自动压缩
+	channelMgr     *channel.Manager      // 所有聊天平台 poller 管理
+	mcpMgr         *mcp.MCPManager       // MCP Server 连接管理
+	toolReg        protocol.ToolRegistry // builtin tool 元数据
+	catalog        catalog.Catalog
 	skillReg       protocol.SkillRegistry                                                         // skill 元数据
 	toolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error) // tool_use 执行器
 	logStore       *LogStore                                                                      // 日志环形缓冲 + SSE 广播
@@ -212,11 +214,16 @@ func (s *Server) SetMCPManager(m *mcp.MCPManager) {
 // SetToolRegistry 注入 ToolRegistry（NewServer 之后、Start 之前调用）。
 func (s *Server) SetToolRegistry(r protocol.ToolRegistry) {
 	s.toolReg = r
-	if s.sysadminHandler != nil {
-		s.sysadminHandler.ToolReg = r
-	}
 	if s.chatHandler != nil {
 		s.chatHandler.ToolReg = r
+	}
+}
+
+// SetCatalog 注入工具目录
+func (s *Server) SetCatalog(c catalog.Catalog) {
+	s.catalog = c
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Catalog = c
 	}
 }
 

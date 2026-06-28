@@ -24,6 +24,7 @@ import (
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
+	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/extension/native"
@@ -36,6 +37,7 @@ import (
 	"github.com/polarisagi/polaris/internal/swarm/agents"
 	polartool "github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
 )
 
@@ -53,12 +55,13 @@ type ToolBundle struct {
 	ExtRepo          *repo.SQLiteExtensionRepository
 	AppRepo          *repo.SQLiteAppRepository
 	InstallMgr       *marketplace.Manager
-	RegAdapter       *runtimeRegistrarAdapter // 运行时注册器适配器
+	InstallFSM       *lifecycle.InstallFSM
 	SkillRegistry    protocol.SkillRegistry
 	SkillExecutor    protocol.SkillExecutor   // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
 	NativeCogn       native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
 	EmbedFn          native.EmbedFn           // 可 nil（Ollama 未启用时；ExtensionActivator 降级为纯 FTS）
 	RecoveryHandler  *agent.ProviderRecoveryHandler
+	Catalog          catalog.Catalog // 统一工具目录
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -90,9 +93,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
 	allowedPaths := []string{sb.DataDir}
 	toolReg := polartool.NewInMemoryToolRegistry(envelope)
+
+	memoryCatalog := catalog.NewMemoryCatalog()
+
 	mcpMgr := mcp.NewMCPManager(inProcSandbox, sb.SafeHTTP, sb.Gate)
 	// MCP 工具注册时同步到 InMemoryToolRegistry，Agent Kernel FSM 可发现 MCP 工具
 	mcpMgr.SetToolRegistrar(toolReg)
+	mcpMgr.SetCatalog(memoryCatalog)
 	mcpMgr.SetEnvelope(envelope)
 
 	mktClient := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTP)
@@ -195,7 +202,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	sb.Outbox.RegisterHandler("episodic", consolidation.EpisodicProjectorHandler(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
 
-	// B4-F4: 热注入 SkillRegistry 到 GapFillWorker
+	// B4-F4: 热注入 SkillRegistry到 GapFillWorker
 	// GapFillWorker 构造函数不接受 skillRegistry，通过 SetSkillRegistry 后注入解耦初始化顺序。
 	gapFillWorker.SetSkillRegistry(skillRegistry)
 	slog.Info("polaris: GapFillWorker.SkillRegistry injected (HE-6 State-in-DB now active)")
@@ -204,20 +211,33 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// ─── [P1-FIX] M13-bis：注入运行时注册器 ──────────────────────────────────
 	// installMgr 在上方创建时 skillRegistry 还未初始化，此处补注入。
-	regAdapter := &runtimeRegistrarAdapter{
-		skillRegistry: skillRegistry,
-		mcpMgr:        mcpMgr,
-		toolReg:       toolReg,
-		inProcSandbox: inProcSandbox,
-		db:            sb.Store.DB(),
-	}
-	installMgr.WithRegistrar(regAdapter)
-	slog.Info("polaris: RuntimeRegistrar injected into marketplace manager")
+	installFSM := lifecycle.NewInstallFSM(extRepo)
+	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr))
+	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry))
+	installFSM.RegisterInstaller(lifecycle.NewSkillInstaller(extRepo, skillRegistry))
+	installFSM.RegisterInstaller(lifecycle.NewAppInstaller(extRepo))
+	installMgr.WithInstallFSM(installFSM)
+	slog.Info("polaris: InstallFSM injected into marketplace manager")
 
 	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry
 	loadSkillsToToolRegistry(ctx, sb.Store.DB(), toolReg, inProcSandbox)
 
 	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, nil, nil)
+	skillReg := skillRegistry
+	skillCatalog := catalog.NewSkillCatalog(skillReg)
+	compCatalog := catalog.NewCompositeCatalog(memoryCatalog, skillCatalog)
+
+	for _, t := range toolReg.List() {
+		// Sync built-in to memoryCatalog
+		memoryCatalog.Register(catalog.CatalogEntry{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  t.InputSchema,
+			Source:      t.Source,
+			TrustTier:   t.TrustTier,
+		})
+	}
+
 	slog.Info("polaris: skill library initialized (script-backed)")
 
 	// ─── §6.6 ConsolidationPipeline（M5 §4 四阶段 Episodic→Semantic 蒸馏）──
@@ -294,12 +314,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExtRepo:          extRepo,
 		AppRepo:          appRepo,
 		InstallMgr:       installMgr,
-		RegAdapter:       regAdapter,
-		SkillRegistry:    skillRegistry,
+		InstallFSM:       installFSM,
+		SkillRegistry:    skillReg,
 		SkillExecutor:    skillExecutor,
 		NativeCogn:       nativeCogn,
 		EmbedFn:          nativeEmbedFn,
 		RecoveryHandler:  recoveryHandler,
+		Catalog:          compCatalog,
 	}, nil
 }
 

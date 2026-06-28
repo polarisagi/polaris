@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -176,10 +177,10 @@ type dummyContextBuilder struct{}
 func (d *dummyContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, tools protocol.ToolRegistry, cognitive CognitiveSearcher) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cata catalog.Catalog, cognitive CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildToolListSection(tools protocol.ToolRegistry) string { return "" }
+func (d *dummyContextBuilder) BuildToolListSection(cata catalog.Catalog) string { return "" }

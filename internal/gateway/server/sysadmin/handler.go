@@ -21,6 +21,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -65,7 +66,7 @@ type SysAdminHandler struct {
 	PromptMgr        *prompt.Manager
 	SoulMDContent    *string
 	Updater          *updater.Manager
-	ToolReg          protocol.ToolRegistry
+	Catalog          catalog.Catalog
 	ToolSchemaCache  []types.ToolSchema
 	ToolSchemaMu     sync.RWMutex
 	SkillReg         protocol.SkillRegistry

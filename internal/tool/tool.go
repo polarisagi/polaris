@@ -157,12 +157,9 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	checker := r.blackboard
 	r.mu.RUnlock()
 	if checker != nil {
-		type taskCtxKey struct{}
-		type agentCtxKey struct{}
-		type versionCtxKey struct{}
-		taskID, _ := ctx.Value(taskCtxKey{}).(string)
-		agentID, _ := ctx.Value(agentCtxKey{}).(string)
-		claimedVersion, _ := ctx.Value(versionCtxKey{}).(int32)
+		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+		agentID, _ := ctx.Value(protocol.CtxAgentIDKey{}).(string)
+		claimedVersion, _ := ctx.Value(protocol.CtxVersionKey{}).(int32)
 		if taskID != "" {
 			if postErr := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); postErr != nil {
 				slog.Warn("tool_registry: post-check failed (TOCTOU race detected after execution)", "task", taskID, "err", postErr)
@@ -229,8 +226,7 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 		}
 	}
 
-	type taskCtxKey struct{}
-	taskID, _ := ctx.Value(taskCtxKey{}).(string)
+	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
 
 	if dryRun, ok := ctx.Value(protocol.CtxDryRun{}).(bool); ok && dryRun {
 		// DryRun 模式下，对于具备 FS 写入副作用的工具，将其工作目录重定向到 COW 后缀目录，允许其真实执行
@@ -265,12 +261,9 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 	checker := r.blackboard
 	r.mu.RUnlock()
 	if checker != nil {
-		type taskCtxKey struct{}
-		type agentCtxKey struct{}
-		type versionCtxKey struct{}
-		taskID, _ := ctx.Value(taskCtxKey{}).(string)
-		agentID, _ := ctx.Value(agentCtxKey{}).(string)
-		claimedVersion, _ := ctx.Value(versionCtxKey{}).(int32)
+		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+		agentID, _ := ctx.Value(protocol.CtxAgentIDKey{}).(string)
+		claimedVersion, _ := ctx.Value(protocol.CtxVersionKey{}).(int32)
 		if taskID != "" {
 			if err := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); err != nil {
 				return input, &types.ToolResult{

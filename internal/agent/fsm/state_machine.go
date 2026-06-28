@@ -221,6 +221,11 @@ func (sm *StateMachine) ReplanCount() int {
 	return sm.replanCount
 }
 
+// SetContextBuilder sets the ContextBuilder for the state machine.
+func (sm *StateMachine) SetContextBuilder(cb ContextBuilder) {
+	sm.cb = cb
+}
+
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。
 // 返回的 effects 由 Agent.Run 消费——LLMFillEffect 调 LLM，DeterministicEffect 直接执行。
 func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigger types.AgentTrigger) ([]protocol.Effect, error) {
@@ -373,7 +378,7 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	if pCtx.Mem != nil {
 		ctx, cancel := sm.bgCtx()
 		defer cancel()
-		if msgs, err := sm.cb.BuildPlanContext(ctx, pCtx.Mem, sCtx, pCtx.Tools, sCtx.Cognitive); err == nil {
+		if msgs, err := sm.cb.BuildPlanContext(ctx, pCtx.Mem, sCtx, nil, sCtx.Cognitive); err == nil {
 			sm.appendDynamicHints(msgs)
 			if sCtx.EpochTracker != nil {
 				sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
@@ -388,7 +393,7 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	}
 
 	tmpl, _ := configs.LoadPromptTemplate("kernel/plan.md", map[string]any{
-		"ToolsSection":      sm.cb.BuildToolListSection(pCtx.Tools),
+		"ToolsSection":      sm.cb.BuildToolListSection(nil),
 		"ExtensionsSection": sCtx.InstalledExtensionsInfo,
 	})
 

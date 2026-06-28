@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/ffi"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -40,33 +39,15 @@ type SkillInfo struct {
 func (h *SysAdminHandler) HandleListTools(w http.ResponseWriter, r *http.Request) {
 	var tools []ToolInfo
 
-	// Builtin tools 来自 ToolRegistry
-	if h.ToolReg != nil {
-		for _, t := range h.ToolReg.List() {
+	if h.Catalog != nil {
+		entries := h.Catalog.List(context.Background(), types.TrustUntrusted)
+		for _, e := range entries {
 			tools = append(tools, ToolInfo{
-				Name:        t.Name,
-				Description: t.Description,
-				Source:      string(t.Source),
-				RiskLevel:   int(t.RiskLevel),
+				Name:        e.Name,
+				Description: e.Description,
+				Source:      string(e.Source),
+				Connected:   true,
 			})
-		}
-	}
-
-	// MCP tools 来自 MCPManager
-	if h.MCPMgr != nil {
-		for _, srv := range h.MCPMgr.ListServers() {
-			source := "mcp"
-			if len(srv.ID) > 7 && srv.ID[:7] == "plugin_" {
-				source = "plugin"
-			}
-			for _, t := range srv.Tools {
-				tools = append(tools, ToolInfo{
-					Name:        h.MCPMgr.MCPToolName(srv.Name, t.Name),
-					Description: t.Description,
-					Source:      source,
-					Connected:   srv.Connected,
-				})
-			}
 		}
 	}
 
@@ -194,58 +175,11 @@ func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "skill installed"}) //nolint:errcheck
 }
 
-func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema { //nolint:nestif
-	h.ToolSchemaMu.RLock()
-	if len(h.ToolSchemaCache) > 0 {
-		cache := h.ToolSchemaCache
-		h.ToolSchemaMu.RUnlock()
-		return cache
+func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema {
+	if h.Catalog != nil {
+		return h.Catalog.Schemas(context.Background(), types.TrustUntrusted)
 	}
-	h.ToolSchemaMu.RUnlock()
-
-	var schemas []types.ToolSchema
-	// 优先注入 MCPMgr 的工具（其 Parameters 是 map[string]any，避免 []byte 被 base64 编码）
-	if h.MCPMgr != nil {
-		schemas = append(schemas, h.MCPMgr.ListToolSchemas()...)
-	}
-
-	if h.ToolReg != nil {
-		for _, t := range h.ToolReg.List() {
-			// skill: 前缀项由下方 DB 查询块以 skill__ 前缀统一注入，此处跳过避免重复和非法 LLM 名称（含冒号）。
-			if strings.HasPrefix(t.Name, "skill:") {
-				continue
-			}
-			schemas = append(schemas, types.ToolSchema{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.InputSchema,
-			})
-		}
-	}
-	// script runtime 技能
-	schemas = append(schemas, h.fetchDBScriptSkillSchemas()...)
-
-	// 防御性最终扫描与去重：过滤掉不合法的工具名，并确保 ToolNames 唯一（避免 ToolReg 和 MCPMgr 同步导致的重复注入）
-	valid := make([]types.ToolSchema, 0, len(schemas))
-	seen := make(map[string]bool)
-	for _, s := range schemas {
-		if !mcp.IsValidLLMName(s.Name) {
-			slog.Warn("BuildToolSchemas: tool name invalid, dropped", "name", s.Name)
-			continue
-		}
-		if seen[s.Name] {
-			continue
-		}
-		seen[s.Name] = true
-		valid = append(valid, s)
-	}
-	schemas = valid
-
-	h.ToolSchemaMu.Lock()
-	h.ToolSchemaCache = schemas
-	h.ToolSchemaMu.Unlock()
-
-	return schemas
+	return nil
 }
 
 func (h *SysAdminHandler) ClearToolSchemaCache() {
@@ -360,53 +294,4 @@ func truncateQueryStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
-}
-
-func (h *SysAdminHandler) fetchDBScriptSkillSchemas() []types.ToolSchema {
-	var schemas []types.ToolSchema
-	if h.DB == nil {
-		return schemas
-	}
-
-	rows, err := h.DB.QueryContext(context.Background(),
-		`SELECT name, capabilities FROM skills WHERE runtime='script' AND exec_mode='tool' AND deprecated=0`)
-	if err != nil {
-		return schemas
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var dbName, capsRaw string
-		if rows.Scan(&dbName, &capsRaw) != nil {
-			continue
-		}
-		slug, ok := strings.CutPrefix(dbName, "skill:")
-		if !ok || slug == "" {
-			continue
-		}
-		// 注意：不对 slug 做字符替换正规化——执行路径（boot_server.go ToolExec）以
-		// "skill:"+slug 反查 DB，若 slug 被改写则找不到原始记录。
-		// 含非法字符的 skill（如含空格）将被下方 IsValidLLMName 过滤器丢弃，不注入 LLM schema。
-		var caps []string
-		_ = json.Unmarshal([]byte(capsRaw), &caps)
-		desc := ""
-		for _, c := range caps {
-			if d, ok := strings.CutPrefix(c, "description:"); ok {
-				desc = d
-				break
-			}
-		}
-		schemas = append(schemas, types.ToolSchema{
-			Name:        "skill__" + slug,
-			Description: desc,
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"input": map[string]any{"type": "string", "description": "任务描述或输入内容"},
-				},
-				"required": []string{"input"},
-			},
-		})
-	}
-	return schemas
 }

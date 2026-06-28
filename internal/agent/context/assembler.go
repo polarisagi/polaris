@@ -3,6 +3,7 @@ package agentctx
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -45,24 +46,39 @@ func NewAssembler(mem MemoryRetriever, know KnowledgeRetriever) *Assembler {
 }
 
 func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (AssembledContext, error) {
-	var allItems []ContextItem
 
-	// 1. Memory Retrieval
-	memItems, err := a.mem.Query(ctx, req.Query, req.MaxTaint)
-	if err == nil {
-		allItems = append(allItems, memItems...)
-	}
+	var (
+		memItems  []ContextItem
+		knowItems []ContextItem
+		wg        sync.WaitGroup
+	)
 
-	// 2. Knowledge Retrieval (Adaptive depth based on SurpriseHint)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if items, err := a.mem.Query(ctx, req.Query, req.MaxTaint); err == nil {
+			memItems = items
+		}
+	}()
+
 	if a.know != nil && req.IncludeKnowledge && req.SurpriseHint >= 0.3 {
-		depth := 1
-		if req.SurpriseHint > 0.6 {
-			depth = 2
-		}
-		if knowItems, err := a.know.Search(ctx, req.Query, depth); err == nil {
-			allItems = append(allItems, knowItems...)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			depth := 1
+			if req.SurpriseHint > 0.6 {
+				depth = 2
+			}
+			if items, err := a.know.Search(ctx, req.Query, depth); err == nil {
+				knowItems = items
+			}
+		}()
 	}
+
+	wg.Wait()
+	allItems := make([]ContextItem, 0, len(memItems)+len(knowItems))
+	allItems = append(allItems, memItems...)
+	allItems = append(allItems, knowItems...)
 
 	// 3. RRF Fusion (k=60)
 	fused := performRRF(allItems)

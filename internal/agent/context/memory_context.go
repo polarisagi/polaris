@@ -13,6 +13,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -148,26 +149,30 @@ func BuildPerceiveContext( //nolint:gocyclo
 // 从 Memory 系统组装生成 DAG 计划所需的 LLM 提示词。
 // tools 为 nil 时跳过工具注入（测试环境）。
 func BuildPlanContext( //nolint:gocyclo
-	ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, tools protocol.ToolRegistry, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
-	instr := "Generate an execution DAG based on the fsm.TaskModel.\n\n"
+	var sysPrompt strings.Builder
+	sysPrompt.WriteString("Generate an execution DAG based on the fsm.TaskModel.\n\n")
 	if sCtx.TaskModel != nil {
 		taskJson, _ := json.Marshal(sCtx.TaskModel)
-		instr += "Parsed fsm.TaskModel:\n" + string(taskJson) + "\n\n"
+		sysPrompt.WriteString("Parsed fsm.TaskModel:\n" + string(taskJson) + "\n\n")
 	}
 	if sCtx.GroundingGap != "" {
-		instr += "Critical Knowledge Gap:\n" + sCtx.GroundingGap + "\n(Please address this gap explicitly in the plan.)\n\n"
+		sysPrompt.WriteString("Critical Knowledge Gap:\n" + sCtx.GroundingGap + "\n(Please address this gap explicitly in the plan.)\n\n")
 	}
 	if sCtx.InstalledExtensionsInfo != "" {
-		instr += sCtx.InstalledExtensionsInfo + "\n\n"
+		sysPrompt.WriteString(sCtx.InstalledExtensionsInfo + "\n\n")
 	}
-	if tools != nil {
-		instr += BuildToolListSection(tools)
+
+	// 5. Build Tools List (M2.c/f)
+	if cata != nil {
+		toolSec := BuildToolListSection(cata)
+		sysPrompt.WriteString(toolSec)
 	}
 
 	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
-		instr, taint.TaintSource{OriginTaintLevel: types.TaintNone}, "plan_system_prompt"))
+		sysPrompt.String(), taint.TaintSource{OriginTaintLevel: types.TaintNone}, "plan_system_prompt"))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext: sanitize instr", err)
 	}
@@ -258,20 +263,21 @@ func BuildPlanContext( //nolint:gocyclo
 
 // BuildToolListSection 将注册表中所有工具格式化为 LLM 可读的工具定义段落。
 // 格式与 DAGNode.Action + DAGNode.Params 字段对齐，便于 LLM 直接引用。
-func BuildToolListSection(tools protocol.ToolRegistry) string {
-	if tools == nil {
+func BuildToolListSection(cata catalog.Catalog) string {
+	if cata == nil {
 		return ""
 	}
-	list := tools.List()
-	if len(list) == 0 {
+	// TrustCommunity 是通常的默认门槛，如果有更高要求可传入不同值
+	schemas := cata.Schemas(context.Background(), types.TrustCommunity)
+	if len(schemas) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("Available Tools List (The 'action' field of DAG nodes MUST be one of the following names):\n")
-	for _, t := range list {
+	for _, t := range schemas {
 		fmt.Fprintf(&sb, "- %s: %s", t.Name, t.Description)
-		if t.InputSchema != nil {
-			if schemaBytes, err := json.Marshal(t.InputSchema); err == nil {
+		if t.Parameters != nil {
+			if schemaBytes, err := json.Marshal(t.Parameters); err == nil {
 				fmt.Fprintf(&sb, " (Parameters schema: %s)", string(schemaBytes))
 			}
 		}

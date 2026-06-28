@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -28,12 +29,6 @@ type HookRunner interface {
 // 调用方注入具体实现（如 MCPMarketplaceClient.Install）。
 type ExtensionInstaller interface {
 	Install(ctx context.Context, target any) (installDir string, err error)
-}
-
-// RuntimeRegistrar 负责将已下载扩展注册到运行时（SkillRegistry / MCPManager）。
-// 调用方按 ext_type 提供实现；nil 时跳过注册（测试 / MVP 场景）。
-type RuntimeRegistrar interface {
-	Register(ctx context.Context, extType, installDir, instID string) error
 }
 
 type InstallRequest struct {
@@ -64,7 +59,7 @@ type Manager struct {
 	// hookRunner 通过 WithHookRunner 注入；nil 时 uninstall hook 降级为 warn+skip
 	hookRunner HookRunner
 	installer  ExtensionInstaller // 新增：文件下载
-	registrar  RuntimeRegistrar   // 新增：运行时注册
+	installFSM *lifecycle.InstallFSM
 }
 
 func NewManager(extRepo protocol.ExtensionRepository, mcpMgr any, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int) *Manager {
@@ -92,8 +87,8 @@ func (m *Manager) WithInstaller(i ExtensionInstaller) *Manager {
 	return m
 }
 
-func (m *Manager) WithRegistrar(r RuntimeRegistrar) *Manager {
-	m.registrar = r
+func (m *Manager) WithInstallFSM(fsm *lifecycle.InstallFSM) *Manager {
+	m.installFSM = fsm
 	return m
 }
 
@@ -226,36 +221,36 @@ func (m *Manager) insertExtensionInstance(ctx context.Context, req InstallReques
 func (m *Manager) postInstallSteps(ctx context.Context, req InstallRequest) error {
 	instID := req.ExtensionID
 
-	// 更新为 status='installed'（若非需下载类型）。
-	if req.ExtType == "mcp" || req.ExtType == "" {
-		err := m.extRepo.UpdateInstanceStatus(ctx, instID, "installed", "")
-		if err != nil {
-			slog.Warn("marketplace: failed to mark extension installed", "id", instID, "err", err)
-		}
-	}
-
 	// 文件下载（若注入了 installer）或使用本地路径
 	var installDir string
 	if req.LocalPath != "" {
 		installDir = req.LocalPath
-		_ = m.extRepo.UpdateInstanceInstallPath(ctx, instID, installDir)
-		_ = m.extRepo.UpdateInstanceStatus(ctx, instID, "installed", "")
 	} else if m.installer != nil && req.Target != nil {
-		_ = m.extRepo.UpdateInstanceStatus(ctx, instID, "downloading", "")
 		dir, dlErr := m.installer.Install(ctx, req.Target)
 		if dlErr != nil {
 			_ = m.extRepo.UpdateInstanceStatus(ctx, instID, "failed", dlErr.Error())
 			return apperr.Wrap(apperr.CodeInternal, "marketplace: download failed", dlErr)
 		}
 		installDir = dir
-		_ = m.extRepo.UpdateInstanceInstallPath(ctx, instID, installDir)
-		_ = m.extRepo.UpdateInstanceStatus(ctx, instID, "installed", "")
 	}
 
-	// 运行时注册（若注入了 registrar）
-	if m.registrar != nil {
-		if regErr := m.registrar.Register(ctx, req.ExtType, installDir, instID); regErr != nil {
-			slog.Warn("marketplace: runtime registration failed", "inst_id", instID, "ext_type", req.ExtType, "err", regErr)
+	if installDir != "" {
+		_ = m.extRepo.UpdateInstanceInstallPath(ctx, instID, installDir)
+	}
+
+	if m.installFSM != nil {
+		reqFSM := lifecycle.InstallReq{
+			InstID:    req.ExtensionID,
+			Name:      req.Name,
+			Publisher: req.Publisher,
+			TrustTier: req.TrustTier,
+			Target:    req.Target,
+			LocalPath: installDir,
+			Config:    req.Config,
+		}
+		_, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType))
+		if err != nil {
+			slog.Warn("marketplace: InstallFSM execution failed", "err", err)
 		}
 	}
 

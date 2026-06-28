@@ -40,3 +40,12 @@ type CtxDryRun struct{}
 
 // CtxIdempotencyKey 用于在 context 中传递幂等键
 type CtxIdempotencyKey struct{}
+
+// CtxTaskIDKey 用于在 context 中传递任务 ID (防止 TOCTOU)
+type CtxTaskIDKey struct{}
+
+// CtxAgentIDKey 用于在 context 中传递 Agent ID (防止 TOCTOU)
+type CtxAgentIDKey struct{}
+
+// CtxVersionKey 用于在 context 中传递乐观锁版本 (防止 TOCTOU)
+type CtxVersionKey struct{}

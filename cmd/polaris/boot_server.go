@@ -39,11 +39,12 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetAuditTrail(sb.AuditTrail)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetToolRegistry(tb.ToolReg)
+	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
-	if tb.RegAdapter != nil {
-		httpServer.SetSyncSkillFunc(tb.RegAdapter.syncSkillToToolRegistry)
-	}
+	httpServer.SetSyncSkillFunc(func(skillName, instructions string) {
+		// Temporarily disabled in Phase 1, Phase 2 UnifiedToolCatalog will replace this.
+	})
 
 	// 设置插件同步向量索引器
 	if sb.SurrealStore != nil {
@@ -164,6 +165,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		httpServer.SetScriptRunner(tb.ContainerSandbox)
 	}
 	httpServer.SetToolRegistry(tb.ToolReg)
+	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetToolExecutor(func(ctx context.Context, name string, args []byte) (*types.ToolResult, error) {
 		return tb.ToolReg.ExecuteTool(ctx, name, args, types.TaintNone)
