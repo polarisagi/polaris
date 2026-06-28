@@ -42,7 +42,7 @@ func (p *PluginInstaller) ExtType() types.ExtType { return types.TypePlugin }
 func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (string, error) {
 	installDir := req.LocalPath
 	if installDir == "" {
-		return "", apperr.New(apperr.CodeInvalidInput, "plugin_installer: LocalPath required")
+		return "", nil // LocalPath 为空，代表可能只是占位注册（例如通过 catalog 异步安装），不实际处理
 	}
 
 	// 1. 解析 mcp.json 或 .mcp.json

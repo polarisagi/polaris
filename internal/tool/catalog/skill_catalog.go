@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"strings"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -29,8 +30,12 @@ func (s *SkillCatalog) List(ctx context.Context, minTrust types.TrustTier) []Cat
 	var result []CatalogEntry
 	for _, sk := range skills {
 		if sk.Trust >= minTrust {
+			name := sk.Name
+			if strings.HasPrefix(name, "skill:") {
+				name = strings.TrimPrefix(name, "skill:")
+			}
 			result = append(result, CatalogEntry{
-				Name:        "skill:" + sk.Name,
+				Name:        name,
 				Description: "Auto-generated skill wrapper",
 				Parameters:  nil, // Typically scripts might have dynamic schemas or none
 				Source:      types.ToolSkill,
