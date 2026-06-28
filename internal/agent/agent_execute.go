@@ -1037,6 +1037,12 @@ func aggregateDAGResults(results []dag.NodeResult) []byte {
 		if results[0].Err != nil {
 			return []byte(`{"error":"` + results[0].Err.Error() + `"}`)
 		}
+		if len(results[0].Output) == 0 {
+			if len(results[0].ImageParts) > 0 {
+				return []byte("[Success (Image Attached)]")
+			}
+			return []byte("[Success (Empty Output)]")
+		}
 		return results[0].Output
 	}
 
@@ -1056,8 +1062,10 @@ func aggregateDAGResults(results []dag.NodeResult) []byte {
 			buf = append(buf, `"}`...)
 		} else if len(r.Output) > 0 {
 			buf = append(buf, r.Output...)
+		} else if len(r.ImageParts) > 0 {
+			buf = append(buf, `"[Success (Image Attached)]"`...)
 		} else {
-			buf = append(buf, `null`...)
+			buf = append(buf, `"[Success (Empty Output)]"`...)
 		}
 		buf = append(buf, '}')
 	}
