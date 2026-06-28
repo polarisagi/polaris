@@ -951,6 +951,9 @@ func (h *PluginHandler) registerOneSkill(ctx context.Context, pluginID, pluginNa
 
 	if err := h.SkillReg.Register(ctx, meta); err != nil {
 		slog.Warn("plugin_catalog: register skill failed", "skill", fullName, "err", err)
+	} else if h.SyncSkillToToolRegistry != nil && fm.ExecMode == "tool" {
+		slug := safePluginName + "__" + skillSlug
+		h.SyncSkillToToolRegistry(slug, string(data))
 	}
 }
 

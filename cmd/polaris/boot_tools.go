@@ -53,6 +53,7 @@ type ToolBundle struct {
 	ExtRepo          *repo.SQLiteExtensionRepository
 	AppRepo          *repo.SQLiteAppRepository
 	InstallMgr       *marketplace.Manager
+	RegAdapter       *runtimeRegistrarAdapter // 运行时注册器适配器
 	SkillRegistry    protocol.SkillRegistry
 	SkillExecutor    protocol.SkillExecutor   // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
 	NativeCogn       native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
@@ -203,13 +204,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// ─── [P1-FIX] M13-bis：注入运行时注册器 ──────────────────────────────────
 	// installMgr 在上方创建时 skillRegistry 还未初始化，此处补注入。
-	installMgr.WithRegistrar(&runtimeRegistrarAdapter{
+	regAdapter := &runtimeRegistrarAdapter{
 		skillRegistry: skillRegistry,
 		mcpMgr:        mcpMgr,
 		toolReg:       toolReg,
 		inProcSandbox: inProcSandbox,
 		db:            sb.Store.DB(),
-	})
+	}
+	installMgr.WithRegistrar(regAdapter)
 	slog.Info("polaris: RuntimeRegistrar injected into marketplace manager")
 
 	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry
@@ -292,6 +294,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExtRepo:          extRepo,
 		AppRepo:          appRepo,
 		InstallMgr:       installMgr,
+		RegAdapter:       regAdapter,
 		SkillRegistry:    skillRegistry,
 		SkillExecutor:    skillExecutor,
 		NativeCogn:       nativeCogn,

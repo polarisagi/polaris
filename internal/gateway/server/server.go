@@ -220,6 +220,14 @@ func (s *Server) SetToolRegistry(r protocol.ToolRegistry) {
 	}
 }
 
+// SetSyncSkillFunc 注入运行时同步技能到 ToolRegistry 的回调函数。
+func (s *Server) SetSyncSkillFunc(f func(slug, instructions string)) {
+	if s.pluginHandler != nil {
+		s.pluginHandler.SyncSkillToToolRegistry = f
+	}
+}
+
+
 // SetSkillRegistry 注入 SkillRegistry（NewServer 之后、Start 之前调用）。
 func (s *Server) SetSkillRegistry(r protocol.SkillRegistry) {
 	s.skillReg = r

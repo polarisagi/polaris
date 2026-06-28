@@ -29,6 +29,9 @@ type PluginHandler struct {
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
+
+	// SyncSkillToToolRegistry 运行时安装插件时，同步自带 skill 到 InMemoryToolRegistry
+	SyncSkillToToolRegistry func(slug, instructions string)
 }
 
 func NewPluginHandler(

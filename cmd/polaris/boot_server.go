@@ -41,6 +41,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetToolRegistry(tb.ToolReg)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
+	if tb.RegAdapter != nil {
+		httpServer.SetSyncSkillFunc(tb.RegAdapter.syncSkillToToolRegistry)
+	}
 
 	// 设置插件同步向量索引器
 	if sb.SurrealStore != nil {
