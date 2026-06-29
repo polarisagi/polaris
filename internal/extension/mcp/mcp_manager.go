@@ -358,6 +358,13 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 	if client.cfg.Trusted {
 		taint = types.TaintMedium
 	}
+
+	// 计算超时时间：默认 5 分钟 (300s)，如果有配置则使用配置值
+	toolTimeout := client.cfg.Timeout
+	if toolTimeout <= 0 {
+		toolTimeout = 5 * time.Minute
+	}
+
 	valid := make([]MCPTool, 0, len(tools))
 	for _, t := range tools {
 		llmName := MCPToolName(serverName, t.Name)
@@ -384,6 +391,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 				Source:      types.ToolMCP,
 				RiskLevel:   riskLevel,
 				TrustTier:   types.TrustTier(client.cfg.TrustTier),
+				Timeout:     toolTimeout,
 			})
 			if regErr != nil {
 				slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
@@ -399,6 +407,7 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 				Source:      types.ToolMCP,
 				TrustTier:   types.TrustTier(client.cfg.TrustTier),
 				TaintLevel:  taint,
+				Timeout:     toolTimeout,
 				MCPServerID: client.cfg.ServerName,
 				MCPToolName: t.Name,
 			})

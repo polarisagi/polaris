@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"time"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -15,6 +16,7 @@ type CatalogEntry struct {
 	Capability  types.CapabilityLevel
 	TrustTier   types.TrustTier
 	TaintLevel  types.TaintLevel
+	Timeout     time.Duration
 	// 执行路由所需元数据
 	MCPServerID string // Source==ToolMCP 时有效
 	MCPToolName string // MCP 协议原始工具名（非 LLM 调用名）

@@ -217,7 +217,7 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (result *t
 
 	quotaMs := spec.CPUQuotaMs
 	if quotaMs == 0 {
-		quotaMs = 5000
+		quotaMs = 300000 // 默认提升至 5 分钟 (300,000ms)，以应对极端长耗时的插件或宏操作
 	}
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(quotaMs)*time.Millisecond)
 	defer cancel()

@@ -88,6 +88,14 @@ func (d *Dispatcher) route(ctx context.Context, entry catalog.CatalogEntry, args
 		TrustTier:  entry.TrustTier,
 		TaintLevel: entry.TaintLevel,
 		Input:      args,
+		CPUQuotaMs: int(entry.Timeout.Milliseconds()),
+		Tool: types.Tool{
+			Name:       entry.Name,
+			Source:     entry.Source,
+			Capability: entry.Capability,
+			TrustTier:  entry.TrustTier,
+			Timeout:    entry.Timeout,
+		},
 	})
 	if err != nil {
 		return nil, err
