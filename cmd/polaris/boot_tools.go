@@ -30,12 +30,12 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/extension/native"
 	"github.com/polarisagi/polaris/internal/extension/skill"
+	"github.com/polarisagi/polaris/internal/knowledge/connector"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
-	"github.com/polarisagi/polaris/internal/swarm/agents"
 	polartool "github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -181,7 +181,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	slog.Info("polaris: ProviderRecoveryHandler registered to outbox for m1_provider_recovered")
 
 	// ─── E5+E6 语义压缩 & 扩展馆员 & Episodic 投影 handlers ─────────────────
-	var llmInfer agents.LLMInferFunc = func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
+	llmInfer := func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
 		if sb.Router != nil {
 			inferOpts := append([]types.InferOption{types.WithModel("reasoning")}, opts...)
 			resp, err := sb.Router.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, inferOpts...)
@@ -192,14 +192,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		}
 		return "", nil
 	}
-	semanticCompressHandler := agents.NewSemanticCompressHandler(sb.Store.DB(), llmInfer, "~/.polarisagi/polaris/data/vfs/")
+	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), consolidation.LLMInferFunc(llmInfer), "~/.polarisagi/polaris/data/vfs/")
 	sb.Outbox.RegisterHandler("semantic_compress", semanticCompressHandler.Handle)
 
-	var extCogn agents.SurrealWriterInterface = dummySurreal{}
+	var extCogn connector.SurrealWriterInterface = dummySurreal{}
 	if sb.SurrealStore != nil {
 		extCogn = &surrealCognAdapter{s: sb.SurrealStore}
 	}
-	extensionLibrarianHandler := agents.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, llmInfer, nil)
+	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, connector.LLMInferFunc(llmInfer), nil)
 	sb.Outbox.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
 
 	sb.Outbox.RegisterHandler("episodic", consolidation.EpisodicProjectorHandler(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey))

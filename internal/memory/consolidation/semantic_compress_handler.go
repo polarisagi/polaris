@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/memory/consolidation/semantic_compress_handler.go。
-
-package agents
+package consolidation
 
 import (
 	"context"
@@ -18,17 +14,21 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// LLMInferFunc LLM 调用函数类型（依赖注入，可 mock）。
+type LLMInferFunc func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error)
 
 // SemanticCompressHandler 将 VFS 中的大型错误堆栈提炼为结构化 JSON，
 // 保护 L0 工作记忆不被原始报错信息淹没。
 type SemanticCompressHandler struct {
 	db       protocol.SQLQuerier
-	llmInfer LLMInferFunc // 复用 agents 包已定义的类型
-	vfsBase  string       // VFS 文件根目录（如 ~/.polarisagi/polaris/data/vfs/）
+	llmInfer LLMInferFunc
+	vfsBase  string // VFS 文件根目录（如 ~/.polarisagi/polaris/data/vfs/）
 }
 
-// NewSemanticCompressHandler 创建语义压缩处理器
+// NewSemanticCompressHandler 创建语义压缩处理器。
 func NewSemanticCompressHandler(db protocol.SQLQuerier, llmInfer LLMInferFunc, vfsBase string) *SemanticCompressHandler {
 	return &SemanticCompressHandler{
 		db:       db,
@@ -37,7 +37,7 @@ func NewSemanticCompressHandler(db protocol.SQLQuerier, llmInfer LLMInferFunc, v
 	}
 }
 
-// Handle 实现 store.OutboxHandler 接口
+// Handle 实现 store.OutboxHandler 接口。
 func (h *SemanticCompressHandler) Handle(ctx context.Context, record *store.OutboxRecord) error {
 	var req struct {
 		VfsID string `json:"vfs_id"`
@@ -110,8 +110,8 @@ func (h *SemanticCompressHandler) Handle(ctx context.Context, record *store.Outb
 	// 更新数据库 meta 和 size
 	jsonPatch := fmt.Sprintf(`{"semantic_compressed":true,"original_size":%d}`, size)
 	_, sqlErr := h.db.ExecContext(ctx, `
-		UPDATE workspace_vfs 
-		SET size = ?, meta = json_patch(COALESCE(meta,'{}'), ?) 
+		UPDATE workspace_vfs
+		SET size = ?, meta = json_patch(COALESCE(meta,'{}'), ?)
 		WHERE id = ?
 	`, newSize, jsonPatch, req.VfsID)
 

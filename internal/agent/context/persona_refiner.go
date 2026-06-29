@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/agent/context/persona_refiner.go。
-
-package agents
+package agentctx
 
 // PersonaRefiner — 用户画像精炼器（M05 §2.3 简化版）
 // 设计决策: 原规范 11 维度对自托管场景过度设计，简化为 5 个实用维度。
@@ -18,9 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
-
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 

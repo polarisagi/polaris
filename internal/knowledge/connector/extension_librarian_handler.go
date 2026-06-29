@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/knowledge/connector/extension_librarian_handler.go。
-
-package agents
+package connector
 
 import (
 	"context"
@@ -17,21 +13,32 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// LLMInferFunc LLM 调用函数类型（依赖注入，可 mock）。
+type LLMInferFunc func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error)
+
+// EmbedFunc 文本向量化函数类型（依赖注入，nil 时跳过）。
+type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
+
+// SurrealWriterInterface SurrealDB 写入最小接口（防止循环依赖）。
+type SurrealWriterInterface interface {
+	FTSIndex(docID, text string) error
+	VecUpsert(id string, embedding []float32) error
+	GraphRelate(fromID, edgeType, toID string, weight float64) error
+}
 
 // ExtensionLibrarianHandler 在扩展安装后，将其能力索引到 SurrealDB 知识图谱。
 // 使 Planner 等智能体能通过语义搜索快速定位最适合的扩展。
 type ExtensionLibrarianHandler struct {
 	db       protocol.SQLQuerier
-	surreal  SurrealWriterInterface // 复用 agents 包已定义的接口
-	llmInfer LLMInferFunc           // 复用 agents 包已定义的类型
-	embedFn  EmbedFunc              // 文本向量化函数（可为 nil，nil 时跳过向量索引）
+	surreal  SurrealWriterInterface
+	llmInfer LLMInferFunc
+	embedFn  EmbedFunc // 文本向量化函数（可为 nil，nil 时跳过向量索引）
 }
 
-// EmbedFunc 文本向量化函数类型（依赖注入，nil 时跳过）
-type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
-
-// NewExtensionLibrarianHandler 创建扩展图书馆员处理器
+// NewExtensionLibrarianHandler 创建扩展图书馆员处理器。
 func NewExtensionLibrarianHandler(
 	db protocol.SQLQuerier,
 	surreal SurrealWriterInterface,
@@ -46,7 +53,7 @@ func NewExtensionLibrarianHandler(
 	}
 }
 
-// Handle 实现 store.OutboxHandler 接口
+// Handle 实现 store.OutboxHandler 接口。
 func (h *ExtensionLibrarianHandler) Handle(ctx context.Context, record *store.OutboxRecord) error {
 	var req struct {
 		ExtensionID string `json:"extension_id"`
@@ -75,7 +82,7 @@ func (h *ExtensionLibrarianHandler) Handle(ctx context.Context, record *store.Ou
 func (h *ExtensionLibrarianHandler) getInstanceInfo(ctx context.Context, extID string) (string, string, string, error) {
 	var name, publisher, installPath, configStr string
 	err := h.db.QueryRowContext(ctx, `
-		SELECT name, publisher, install_path, config 
+		SELECT name, publisher, install_path, config
 		FROM extension_instances WHERE id = ?
 	`, extID).Scan(&name, &publisher, &installPath, &configStr)
 	if err != nil {
@@ -150,8 +157,8 @@ func (h *ExtensionLibrarianHandler) indexAndRelate(ctx context.Context, extID st
 	}
 
 	_, err := h.db.ExecContext(ctx, `
-		UPDATE extension_instances 
-		SET meta = json_patch(COALESCE(meta,'{}'), '{"librarian_indexed":true}') 
+		UPDATE extension_instances
+		SET meta = json_patch(COALESCE(meta,'{}'), '{"librarian_indexed":true}')
 		WHERE id = ?
 	`, extID)
 	if err != nil {

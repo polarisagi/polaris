@@ -35,7 +35,7 @@ import (
 
 // ─── dummySurreal ─────────────────────────────────────────────────────────────
 //
-// SurrealDB 不可用时（<8GB VPS）的空实现占位，实现 agents.SurrealWriterInterface。
+// SurrealDB 不可用时（<8GB VPS）的空实现占位，实现 connector.SurrealWriterInterface。
 type dummySurreal struct{}
 
 func (d dummySurreal) FTSIndex(docID, text string) error {

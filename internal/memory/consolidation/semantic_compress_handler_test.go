@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/memory/consolidation/semantic_compress_handler_test.go。
-
-package agents
+package consolidation
 
 import (
 	"context"
@@ -13,11 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	_ "github.com/mattn/go-sqlite3"
-
-	"github.com/polarisagi/polaris/internal/store"
 )
 
 func TestSemanticCompressHandler(t *testing.T) {
@@ -50,15 +45,11 @@ func TestSemanticCompressHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	llm := func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
+	llm := LLMInferFunc(func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
 		return `{"root_cause": "SegFault", "error_type": "Memory", "suggest_fix": "Fix C", "affected_file": "error.log"}`, nil
-	}
+	})
 
-	llmWrapper := func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
-		return llm(ctx, prompt, opts...)
-	}
-
-	handler := NewSemanticCompressHandler(db, LLMInferFunc(llmWrapper), vfsDir)
+	handler := NewSemanticCompressHandler(db, llm, vfsDir)
 
 	payload, _ := json.Marshal(map[string]string{"vfs_id": "vfs123"})
 	err = handler.Handle(context.Background(), &store.OutboxRecord{Payload: payload})

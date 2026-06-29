@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/knowledge/connector/extension_librarian_handler_test.go。
-
-package agents
+package connector
 
 import (
 	"context"
@@ -12,28 +8,27 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	_ "github.com/mattn/go-sqlite3"
-
-	"github.com/polarisagi/polaris/internal/store"
 )
 
-type mockSurreal struct {
+type mockSurrealLibrarian struct {
 	indexed   map[string]string
 	vectors   map[string][]float32
 	relations []string
 }
 
-func (m *mockSurreal) FTSIndex(id, text string) error {
+func (m *mockSurrealLibrarian) FTSIndex(id, text string) error {
 	m.indexed[id] = text
 	return nil
 }
-func (m *mockSurreal) GraphRelate(from, relation, to string, weight float64) error {
+func (m *mockSurrealLibrarian) GraphRelate(from, relation, to string, weight float64) error {
 	m.relations = append(m.relations, from+"->"+relation+"->"+to)
 	return nil
 }
-func (m *mockSurreal) VecUpsert(id string, vec []float32) error {
+func (m *mockSurrealLibrarian) VecUpsert(id string, vec []float32) error {
 	m.vectors[id] = vec
 	return nil
 }
@@ -70,18 +65,18 @@ func TestExtensionLibrarianHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ms := &mockSurreal{
+	ms := &mockSurrealLibrarian{
 		indexed:   make(map[string]string),
 		vectors:   make(map[string][]float32),
 		relations: make([]string, 0),
 	}
 
-	llm := func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
+	llm := LLMInferFunc(func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
 		return `{"summary": "A test extension", "capabilities": ["cap1", "cap2"]}`, nil
-	}
-	embed := func(ctx context.Context, text string) ([]float32, error) {
+	})
+	embed := EmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
 		return []float32{0.1, 0.2}, nil
-	}
+	})
 
 	handler := NewExtensionLibrarianHandler(db, ms, llm, embed)
 
@@ -101,7 +96,6 @@ func TestExtensionLibrarianHandler(t *testing.T) {
 		t.Errorf("expected 2 relations, got %d", len(ms.relations))
 	}
 
-	// Check DB update
 	var meta string
 	err = db.QueryRow("SELECT meta FROM extension_instances WHERE id = 'ext123'").Scan(&meta)
 	if err != nil {

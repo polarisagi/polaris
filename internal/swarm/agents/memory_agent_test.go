@@ -11,6 +11,28 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// mockSurreal 为测试提供 SurrealWriterInterface 空实现。
+// 原定义在 extension_librarian_handler_test.go（已迁移到 knowledge/connector 包），
+// 此处保留副本供 MemoryAgent 测试使用。
+type mockSurreal struct {
+	indexed   map[string]string
+	vectors   map[string][]float32
+	relations []string
+}
+
+func (m *mockSurreal) FTSIndex(id, text string) error {
+	m.indexed[id] = text
+	return nil
+}
+func (m *mockSurreal) GraphRelate(from, relation, to string, weight float64) error {
+	m.relations = append(m.relations, from+"->"+relation+"->"+to)
+	return nil
+}
+func (m *mockSurreal) VecUpsert(id string, vec []float32) error {
+	m.vectors[id] = vec
+	return nil
+}
+
 func TestMemoryAgent_Distill(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

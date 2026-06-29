@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/agent/context/persona_refiner_test.go。
-
-package agents
+package agentctx
 
 import (
 	"context"
@@ -15,20 +11,20 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-type mockProvider struct{}
+type mockPersonaProvider struct{}
 
-func (m *mockProvider) Infer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+func (m *mockPersonaProvider) Infer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
 	return &types.ProviderResponse{Content: "A detailed user."}, nil
 }
-func (m *mockProvider) StreamInfer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+func (m *mockPersonaProvider) StreamInfer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
 	return nil, nil
 }
-func (m *mockProvider) Tokenizer() protocol.TokenizerAdapter { return nil }
-func (m *mockProvider) Capabilities() types.ProviderCapabilities {
+func (m *mockPersonaProvider) Tokenizer() protocol.TokenizerAdapter { return nil }
+func (m *mockPersonaProvider) Capabilities() types.ProviderCapabilities {
 	return types.ProviderCapabilities{}
 }
-func (m *mockProvider) ModelID() string { return "mock" }
-func (m *mockProvider) Close() error    { return nil }
+func (m *mockPersonaProvider) ModelID() string { return "mock" }
+func (m *mockPersonaProvider) Close() error    { return nil }
 
 func TestPersonaRefiner(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -42,7 +38,7 @@ func TestPersonaRefiner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pr := NewPersonaRefiner(db, &mockProvider{})
+	pr := NewPersonaRefiner(db, &mockPersonaProvider{})
 
 	// Load empty
 	err = pr.Load(context.Background())
