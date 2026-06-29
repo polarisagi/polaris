@@ -50,13 +50,13 @@ internal/
   agent/           核心状态机 (FSM)、生命周期、思考循环
     fsm/           状态机实现（state_machine / transitions / epoch）
     dag/           DAG 执行器与校验器
-    context/       感知上下文（memory_context / pii_vault / whisper）
+    context/       感知上下文（memory_context / pii_vault / whisper / persona_refiner）
   action/          动作执行层（CodeAct / LAM / Hook / 能力令牌）
     codeact/       即时代码执行
     lam/           LAM 动作执行
-    hook/          Hook 框架
+    hook/          Hook 框架（RunScript 脚本执行）
   memory/          记忆系统（Working / Episodic / Semantic / Procedural）
-    consolidation/ 记忆巩固 Worker
+    consolidation/ 记忆巩固 Worker（含 SemanticCompressHandler VFS 语义压缩）
     graph/         世界模型图 + 突触可塑性
     retrieval/     HybridRetriever 多路融合检索
     store/         记忆物理存储后端
@@ -74,7 +74,7 @@ internal/
     planner/       任务规划与分解
     supervisor/    Supervisor Tree
     topology/      三角色默认拓扑（Supervisor/Librarian/Governance）
-    agents/        专用 Agent 实现（governance/security_audit）
+    agents/        常驻 goroutine Agent（governance/security_audit/memory）
   learning/        自进化引擎（三环架构）
     surprise/      SurpriseIndex + 漂移检测
     reflexion/     HER ReflexionEngine + 异步耳语通道
@@ -82,7 +82,7 @@ internal/
     curriculum/    自动课程 + 动态难度校准
   knowledge/       RAG + 知识图谱
     graphrag/      图谱构建管线、图遍历、社区摘要
-    connector/     外部知识源（Obsidian / 同步调度）
+    connector/     外部知识源（Obsidian / 同步调度 / ExtensionLibrarianHandler 扩展索引）
   extension/       扩展注册与运行时
     mcp/           MCP 客户端管理（LoadFromDB / TaintPreservingDecoder）
     plugin/        插件系统
