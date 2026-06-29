@@ -3,12 +3,11 @@ package dispatch
 import (
 	"context"
 
-	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func AuditInterceptor(at *security.AuditTrail) Interceptor {
+func AuditInterceptor(at AuditLogger) Interceptor {
 	return func(ctx context.Context, entry catalog.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
 		// Log before execution
 		// (Assuming at.Log exists or similar, stubbing for now to match interface)

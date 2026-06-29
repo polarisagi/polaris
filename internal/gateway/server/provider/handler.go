@@ -5,7 +5,6 @@ import (
 
 	"net/http"
 
-	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -13,7 +12,7 @@ import (
 type ProviderHandler struct {
 	ProviderRepo protocol.ProviderRepository
 	ExtRepo      protocol.ExtensionRepository
-	Registry     *llm.ProviderRegistry
+	Registry     ProviderRegistry
 	HTTPClient   *http.Client
 	TBR          *metrics.TokenBurnRate
 	DB           protocol.SQLQuerier // loaders and seeds might need DB directly
@@ -22,7 +21,7 @@ type ProviderHandler struct {
 func NewProviderHandler(
 	providerRepo protocol.ProviderRepository,
 	extRepo protocol.ExtensionRepository,
-	registry *llm.ProviderRegistry,
+	registry ProviderRegistry,
 	httpClient *http.Client,
 	tbr *metrics.TokenBurnRate,
 	db protocol.SQLQuerier,

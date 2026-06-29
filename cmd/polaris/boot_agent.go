@@ -173,7 +173,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		nil,       // executor: 当前无 GUI 执行器，dry-run 模式
 		sb.Gate,   // Cedar PolicyGate（deny-by-default）
 	)
-	agent.SetLAMEngine(lamEngine)
+	// 通过 adapter 注入：agent 包依赖 LAMPolicyChecker 接口，不直接持有 *lam.ComputerUseEngine
+	agent.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
 
 	// SurpriseCalculator：接入完整三分量路由（MEMF + Markov + Jaccard）
 	// memf 来自 M9 engine 的 FallacyMemoryPool；boot 阶段可传 nil（Markov 独立积累数据）
@@ -220,7 +221,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		if mb.Mem != nil {
 			a.SetMemoryInjector(mb.Mem)
 		}
-		a.SetLAMEngine(lamEngine)
+		a.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
 		sc := surprise.NewSurpriseCalculator(nil)
 		a.SetSurpriseCalc(sc)
 		if kb != nil && kb.KnowledgeBase != nil {
@@ -269,7 +270,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				return &skill.ProcessHandle{SkillID: skillID, ReadyAt: time.Now()}, nil
 			}
 			skillCache := skill.NewScriptSkillCache(spawnFn, 5, 10, 30)
-			agent.WithSkillCache(skillCache)
+			// 通过 adapter 注入：agent 包依赖 ScriptSkillCache 接口，不直接持有 *skill.ScriptSkillCache
+			agent.WithSkillCache(&skillCacheAdapter{inner: skillCache})
 			agent.WithSkillExecutor(tb.SkillExecutor)
 			slog.Info("polaris: ScriptSkillCache + SkillExecutor injected into Agent FastPath")
 		}

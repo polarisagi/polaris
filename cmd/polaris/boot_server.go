@@ -82,7 +82,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			codeact.WithGovernanceAgent(&govAgentAdapter{inner: govAgent}),
 			codeact.WithHITL(tb.HITLGateway),
 		)
-		ab.Agent.SetCodeAct(codeActEngine)
+		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
+		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})
 		httpServer.SetCodeActEngine(codeActEngine)
 		slog.Info("polaris: CodeAct engine initialized and injected",
 			"sandbox", "L3-container",

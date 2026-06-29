@@ -42,9 +42,7 @@ import (
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	extplugin "github.com/polarisagi/polaris/internal/extension/plugin"
-	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 
@@ -78,13 +76,13 @@ type Server struct {
 	automationRepo prepo.AutomationRepository
 	workflowRepo   prepo.WorkflowRepository
 	appRepo        prepo.AppRepository
-	registry       *llm.ProviderRegistry // 热重载 Provider 注册表
+	registry       LLMRegistry           // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
 	httpClient     *http.Client          // 复用 SafeHTTPClient
 	transcriptDir  string                // per-session JSONL transcript 目录
 	hooks          *sysadmin.HookRunner  // Shell Script Hooks（End-User 扩展点）
 	compressor     *chat.Compressor      // 上下文超长自动压缩
-	channelMgr     *channel.Manager      // 所有聊天平台 poller 管理
-	mcpMgr         *mcp.MCPManager       // MCP Server 连接管理
+	channelMgr     ChannelStarter        // 所有聊天平台 poller 管理（接口）
+	mcpMgr         MCPManager            // MCP Server 连接管理（接口）
 	toolReg        protocol.ToolRegistry // builtin tool 元数据
 	catalog        catalog.Catalog
 	skillReg       protocol.SkillRegistry                                                         // skill 元数据
@@ -92,18 +90,18 @@ type Server struct {
 	logStore       *LogStore                                                                      // 日志环形缓冲 + SSE 广播
 	evalRunner     protocol.EvalRunner                                                            // M12 评测套件
 	dataDir        string                                                                         // 项目统一的数据根目录
-	installMgr     *marketplace.Manager
-	pluginCreator  *extplugin.PluginCreator // LLM 驱动 MCP 插件自动生成（M2 PluginCreator）
-	scriptRunner   marketplace.HookRunner   // install hook 沙箱执行器（ContainerSandbox.RunScript）
+	installMgr     ExtensionInstaller                                                             // 扩展安装/卸载管理器（接口）
+	pluginCreator  *extplugin.PluginCreator                                                       // LLM 驱动 MCP 插件自动生成（M2 PluginCreator）
+	scriptRunner   marketplace.HookRunner                                                         // install hook 沙箱执行器（ContainerSandbox.RunScript）
 	skillSignKey   []byte
 
 	updater *updater.Manager // OTA 自更新管理器（可为 nil）
 
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
-	soulMDContent       string // ~/.polarisagi/polaris/config/SOUL.md 内容
-	serverPlatform      string // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
-	promptMgr           *prompt.Manager
-	baseSystemPromptTpl string // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积
+	soulMDContent       string        // ~/.polarisagi/polaris/config/SOUL.md 内容
+	serverPlatform      string        // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
+	promptMgr           PromptManager // 提示词管理器（接口）
+	baseSystemPromptTpl string        // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积
 
 	// M9 激活的系统提示词（从 DB prompt_versions 表读取，Activate 回调热更新）
 	activatedSystemPrompt string // task_type='general' 的激活版本
@@ -131,7 +129,7 @@ type Server struct {
 
 func (s *Server) SetAuditTrail(at *security.AuditTrail)   { s.auditTrail = at }
 func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) { s.outboxWriter = w }
-func (s *Server) SetInstallManager(m *marketplace.Manager) {
+func (s *Server) SetInstallManager(m ExtensionInstaller) {
 	s.installMgr = m
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.InstallMgr = m
@@ -196,7 +194,7 @@ func (s *Server) SetCodeActEngine(ca *codeact.CodeAct) { s.codeActEngine = ca }
 // SetMCPManager 注入 MCPManager（NewServer 之后、Start 之前调用）。
 // 同时注册缓存失效回调：异步插件 MCP 连接完成时自动清除 toolSchemaCache，
 // 确保 LLM 在下次推理时能看到新工具，而非返回连接前构建的过期缓存。
-func (s *Server) SetMCPManager(m *mcp.MCPManager) {
+func (s *Server) SetMCPManager(m MCPManager) {
 	s.mcpMgr = m
 	m.SetOnToolsChanged(func() {
 		if s.sysadminHandler != nil {
@@ -276,7 +274,7 @@ func (s *Server) SetLogStore(ls *LogStore) { s.logStore = ls }
 func (s *Server) SetEvalRunner(r protocol.EvalRunner) { s.evalRunner = r }
 
 // buildToolSchemas 收集全部可用工具 schema，用于注入 InferRequest.Tools。
-func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, db protocol.SQLQuerier, registry *llm.ProviderRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
+func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, db protocol.SQLQuerier, registry LLMRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
 	tDir := filepath.Join(dataDir, "sessions")
 	go chat.PruneTranscripts(tDir, 30) // 启动时异步清理 30 天前的 transcript
 

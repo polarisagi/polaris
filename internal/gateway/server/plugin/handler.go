@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -17,10 +16,10 @@ type PluginHandler struct {
 	ExtRepo              protocol.ExtensionRepository
 	DB                   protocol.SQLQuerier
 	HTTPClient           *http.Client
-	InstallMgr           *marketplace.Manager
+	InstallMgr           ExtensionInstaller
 	HITLGateway          protocol.HITL
 	ClearToolSchemaCache func()
-	MCPMgr               *mcp.MCPManager
+	MCPMgr               MCPManager
 	DataDir              string
 	StartMCPServer       func(ctx context.Context, cfg types.MCPServerConfig) error
 	SkillReg             protocol.SkillRegistry
@@ -38,10 +37,10 @@ func NewPluginHandler(
 	extRepo protocol.ExtensionRepository,
 	db protocol.SQLQuerier,
 	httpClient *http.Client,
-	installMgr *marketplace.Manager,
+	installMgr ExtensionInstaller,
 	hitlGateway protocol.HITL,
 	clearToolSchemaCache func(),
-	mcpMgr *mcp.MCPManager,
+	mcpMgr MCPManager,
 	dataDir string,
 	startMCPServer func(ctx context.Context, cfg types.MCPServerConfig) error,
 	skillReg protocol.SkillRegistry,

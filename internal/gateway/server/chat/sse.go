@@ -1015,7 +1015,7 @@ func (s *ChatHandler) standaloneMCPSummary() []string {
 	return result
 }
 
-func loadOperationalDirectives(pm *prompt.Manager) string {
+func loadOperationalDirectives(pm PromptManager) string {
 	var opDirectives []string
 
 	if op := pm.ReadPrompt("operational/tool_use.md", ""); op != "" {

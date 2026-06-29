@@ -5,20 +5,13 @@ import (
 
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 
-	"github.com/polarisagi/polaris/internal/prompt"
-
-	"github.com/polarisagi/polaris/internal/extension/marketplace"
-
 	"github.com/polarisagi/polaris/internal/channel/adapter"
-
-	"github.com/polarisagi/polaris/internal/llm"
 
 	"net/http"
 	"sync"
 
 	"context"
 
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -43,7 +36,7 @@ type SysAdminHandler struct {
 	ChannelRepo    repo.ChannelRepository
 	WorkflowRepo   repo.WorkflowRepository
 	Agent          protocol.AgentController
-	MCPMgr         *mcp.MCPManager
+	MCPMgr         MCPManager
 	Hooks          *HookRunner
 	DataDir        string
 	ChatRepo       protocol.ChatRepository
@@ -51,7 +44,7 @@ type SysAdminHandler struct {
 	AppRepo        repo.AppRepository
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
-	Registry       *llm.ProviderRegistry
+	Registry       LLMRegistry
 	HITLGateway    protocol.HITL
 	ToolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	ChannelMgr     interface {
@@ -61,9 +54,9 @@ type SysAdminHandler struct {
 	}
 	TemplateCacheMap *sync.Map
 	HTTPClient       *http.Client
-	InstallMgr       *marketplace.Manager
+	InstallMgr       ExtensionInstaller
 	ExtRepo          protocol.ExtensionRepository
-	PromptMgr        *prompt.Manager
+	PromptMgr        PromptManager
 	SoulMDContent    *string
 	Updater          *updater.Manager
 	Catalog          catalog.Catalog
@@ -81,7 +74,7 @@ func NewSysAdminHandler(
 	channelRepo repo.ChannelRepository,
 	workflowRepo repo.WorkflowRepository,
 	agent protocol.AgentController,
-	mcpMgr *mcp.MCPManager,
+	mcpMgr MCPManager,
 	hooks *HookRunner,
 	dataDir string,
 	chatRepo protocol.ChatRepository,

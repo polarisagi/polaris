@@ -13,10 +13,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
-	skillpkg "github.com/polarisagi/polaris/internal/extension/skill"
 
-	"github.com/polarisagi/polaris/internal/action/codeact"
-	"github.com/polarisagi/polaris/internal/action/lam"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -55,16 +52,16 @@ type Agent struct {
 	whisperSendChan   chan<- protocol.MemoryWhisper // PlannerPool 推送端
 	plannerSpawner    func(ctx context.Context, goal, taskType string, provider protocol.Provider)
 	outboxWriter      protocol.OutboxWriter
-	piiVault          *agentctx.SessionPIIVault  // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
-	extQuerier        protocol.SQLQuerier        // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
-	toolCallRecorder  ToolCallRecorder           // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
-	memInjector       MemoryInjector             // NEW: 组装前主动记忆注入
-	codeAct           *codeact.CodeAct           // LLM 代码执行引擎；nil 时 code_act 节点返回错误
-	skillCache        *skillpkg.ScriptSkillCache // 可选；nil 时 FastPath 跳过缓存查询
-	skillExecutor     protocol.SkillExecutor     // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
-	assembler         *agentctx.Assembler        // CC-3 ContextAssembler
-	lamEngine         *lam.ComputerUseEngine     // LAM GUI 自动化引擎（R3）；nil 时跳过 Cedar policy 预检
-	surpriseCalc      SurpriseReader             // 可选；非 nil 时替换 ComputeBasic 基础版路由
+	piiVault          *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
+	extQuerier        protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
+	toolCallRecorder  ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
+	memInjector       MemoryInjector            // NEW: 组装前主动记忆注入
+	codeAct           CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
+	skillCache        ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
+	skillExecutor     protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
+	assembler         *agentctx.Assembler       // CC-3 ContextAssembler
+	lamEngine         LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
+	surpriseCalc      SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
 }
 
 // SurpriseReader 读取当前 SurpriseIndex 滑动均值（consumer-side 接口）。
@@ -115,12 +112,12 @@ func (a *Agent) SetMemoryInjector(i MemoryInjector) {
 }
 
 // SetCodeAct 注入 CodeAct 引擎，在 Agent 创建后 kernel 启动前调用。
-func (a *Agent) SetCodeAct(ca *codeact.CodeAct) { a.codeAct = ca }
+func (a *Agent) SetCodeAct(ca CodeActEngine) { a.codeAct = ca }
 
-// SetLAMEngine 注入 LAM ComputerUseEngine（R3）。
+// SetLAMEngine 注入 LAM 策略检查器（R3）。
 // interceptComputerUse 在 HITL 审批前调用 CheckPolicy 对 GUI 动作做 Cedar 策略预检。
 // nil-safe：未注入时跳过 Cedar 预检，仅走 HITL 审批。
-func (a *Agent) SetLAMEngine(e *lam.ComputerUseEngine) { a.lamEngine = e }
+func (a *Agent) SetLAMEngine(e LAMPolicyChecker) { a.lamEngine = e }
 
 // SetSurpriseCalc 注入完整 SurpriseCalculator，替代 ComputeBasic 基础版路由。
 // nil-safe：不注入时降级为 ComputeBasic。
@@ -130,7 +127,7 @@ func (a *Agent) SetSurpriseCalc(r SurpriseReader) {
 
 // WithSkillCache 注入 ScriptSkillCache，启用 FastPath 技能命中路径。
 // nil-safe：不注入时 FastPath 退回合成 JSON 路径。
-func (a *Agent) WithSkillCache(sc *skillpkg.ScriptSkillCache) *Agent {
+func (a *Agent) WithSkillCache(sc ScriptSkillCache) *Agent {
 	a.skillCache = sc
 	return a
 }

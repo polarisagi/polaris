@@ -8,14 +8,13 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // LoadProvidersFromDB 从 providers + provider_models 两表 JOIN，
 // 每个启用的 (provider, model) 组合注册一个带角色的 Adapter 到 ProviderRegistry。
-func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, reg *llm.ProviderRegistry, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
+func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, reg ProviderRegistry, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT p.id, p.name, p.type, COALESCE(p.base_url, ''), COALESCE(p.api_key, ''), COALESCE(p.project_id, ''), COALESCE(p.location, ''),
 		       m.id, COALESCE(m.name, ''), m.model_id, m.role

@@ -18,7 +18,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/polarisagi/polaris/internal/action/codeact"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
@@ -711,7 +710,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			if err := json.Unmarshal(args, &codeArgs); err != nil {
 				return nil, apperr.Wrap(apperr.CodeInvalidInput, "code_act: unmarshal args", err)
 			}
-			caResult, err := a.codeAct.Execute(ctx, codeact.CodeActRequest{
+			caResult, err := a.codeAct.Execute(ctx, CodeActRequest{
 				Language:     lang,
 				Code:         codeArgs.Code,
 				CapabilityID: codeArgs.CapabilityID,

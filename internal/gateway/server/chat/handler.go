@@ -1,30 +1,20 @@
 package chat
 
 import (
-	"encoding/json"
-	"strings"
-
-	"github.com/polarisagi/polaris/internal/protocol/repo"
-	"github.com/polarisagi/polaris/internal/store/search"
-	"github.com/polarisagi/polaris/pkg/apperr"
-
-	"github.com/polarisagi/polaris/internal/extension/mcp"
-
-	"github.com/polarisagi/polaris/internal/prompt"
-
-	"sync"
-
-	"github.com/polarisagi/polaris/internal/llm"
-
-	"net/http"
-
 	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -50,7 +40,7 @@ type ChatHandler struct {
 	Compressor    *Compressor
 	SlashRouter   *SlashCommandRouter
 	TranscriptDir string
-	PromptMgr     *prompt.Manager
+	PromptMgr     PromptManager
 	SoulMDContent *string
 	ToolStage     interface {
 		SelectFor(ctx context.Context, query string) []apptypes.ToolSchema
@@ -61,10 +51,10 @@ type ChatHandler struct {
 
 	Hooks                   HookRunner
 	DataDir                 string
-	Registry                *llm.ProviderRegistry
+	Registry                LLMRegistry
 	SkillReg                protocol.SkillRegistry
 	ToolReg                 protocol.ToolRegistry
-	MCPMgr                  *mcp.MCPManager
+	MCPMgr                  MCPManager
 	ServerPlatform          string
 	BaseSystemPromptTpl     string
 	ActivatedSystemPromptMu sync.RWMutex
