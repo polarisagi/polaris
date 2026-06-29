@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/tool"
+	"github.com/polarisagi/polaris/internal/action/hook"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -79,7 +79,7 @@ func (h *HookRunner) exec(event string, env map[string]string, timeout time.Dura
 	}
 
 	ctx := context.Background()
-	exitCode, output, runErr := tool.RunHookScript(ctx, path, buildHookEnv(env), timeout)
+	exitCode, output, runErr := hook.RunScript(ctx, path, buildHookEnv(env), timeout)
 	if runErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			slog.Warn("hook: timeout", "event", event, "timeout", timeout, "err", apperr.New(apperr.CodeInternal, "log event"))

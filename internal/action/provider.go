@@ -34,11 +34,3 @@ type PolicyStoreReader interface {
 	// SavePolicy 持久化策略（PolicyEvolver 演化后写入）。
 	SavePolicy(policy *ToolUsagePolicy) error
 }
-
-// TaintSource action 包对污点来源的消费端接口（供 TaintPreservingDecoder 使用）。
-// 实现：security/taint 包的类型系统，通常直接用 taint.TaintedString。
-// 此接口用于需要动态查询污点等级的场景（如动态扩展注入的工具参数）。
-type TaintSource interface {
-	// TaintOf 返回指定数据源的污点等级（按 session/request 粒度）。
-	TaintOf(sourceID string) types.TaintLevel
-}

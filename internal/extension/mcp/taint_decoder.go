@@ -1,9 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/extension/mcp/taint_decoder.go。
-// 此文件保留仅为 git 历史，不参与编译。
-
-package action
+package mcp
 
 import (
 	"encoding/json"

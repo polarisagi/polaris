@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
@@ -817,7 +816,7 @@ func (c *MCPClient) CallToolTainted(ctx context.Context, name string, arguments 
 	}
 
 	// 污点保护反序列化：遍历 JSON 树，对所有 string 叶子打标
-	dec := action.NewTaintPreservingDecoder(c.cfg.ServerName, c.cfg.Trusted)
+	dec := NewTaintPreservingDecoder(c.cfg.ServerName, c.cfg.Trusted)
 	node := dec.Decode(result, "")
 	maxTaint := node.MaxTaint()
 	if maxTaint < dec.Taint() {

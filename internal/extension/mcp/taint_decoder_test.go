@@ -1,8 +1,4 @@
-//go:build ignore
-
-// 已迁移至 internal/extension/mcp/taint_decoder_test.go。
-
-package action
+package mcp
 
 import (
 	"encoding/json"
@@ -91,9 +87,9 @@ func TestTaintPreservingDecoder_ComplexJSON(t *testing.T) {
 		t.Errorf("expected MaxTaint %v, got %v", types.TaintHigh, node.MaxTaint())
 	}
 
-	strings := node.AllStrings()
+	strs := node.AllStrings()
 	expectedStrings := map[string]bool{"test": true, "a": true, "b": true, "value": true}
-	for _, s := range strings {
+	for _, s := range strs {
 		if !expectedStrings[s] {
 			t.Errorf("unexpected string found: %s", s)
 		}
@@ -117,7 +113,7 @@ func TestTaintPreservingDecoder_EmptyRaw(t *testing.T) {
 		t.Errorf("expected empty string slice, got %v", node.AllStrings())
 	}
 
-	// cover AllStrings logic for nil node
+	// 覆盖 AllStrings nil 节点路径
 	var n *TaintedJSONNode
 	if len(n.AllStrings()) != 0 {
 		t.Errorf("expected empty string slice for nil node")
@@ -141,15 +137,15 @@ func TestTaintedJSONNode_AllStrings_StringNode(t *testing.T) {
 		Kind:   kindString,
 		StrVal: "test",
 	}
-	strings := node.AllStrings()
-	if len(strings) != 1 || strings[0] != "test" {
-		t.Errorf("expected ['test'], got %v", strings)
+	strs := node.AllStrings()
+	if len(strs) != 1 || strs[0] != "test" {
+		t.Errorf("expected ['test'], got %v", strs)
 	}
 }
 
 func TestTaintedJSONNode_WalkDefault(t *testing.T) {
 	decoder := NewTaintPreservingDecoder("s1", true)
-	// pass a channel to force default case in walk
+	// 传入 channel 触发 walk 的 default 分支
 	ch := make(chan int)
 	node := decoder.walk(ch, "$")
 	if node.Kind != kindNull {
