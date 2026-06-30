@@ -36,7 +36,7 @@ MCP Client 消费端: `ConnectExternalMCP(serverCmd)` → CommandTransport/Strea
 
 **Streamable HTTP** 为默认远程传输层；SSE 仅向后兼容（legacy）。决策见 [ADR-0017](./decisions/ADR-0017-mcp-streamable-http-default.md)。
 
-**MCP Transport 污点保护反序列化**：MCP Client 路径强制使用 TaintPreservingDecoder（`internal/action/` + `internal/extension/mcp/`），禁用标准 JSON 直解动态 schema——所有 string 叶子包装为 TaintedString（Source=MCP, Origin=server_name），初始 `[TaintLevel]` 按 M11 §2.4 `[Connector-Taint-Table]` 判定。决策与被驳回方案见 [ADR-0018](./decisions/ADR-0018-mcp-taint-preserving-decoder.md)。
+**MCP Transport 污点保护反序列化**：MCP Client 路径强制使用 TaintPreservingDecoder（`internal/extension/mcp/taint_decoder.go`），禁用标准 JSON 直解动态 schema——所有 string 叶子包装为 TaintedString（Source=MCP, Origin=server_name），初始 `[TaintLevel]` 按 M11 §2.4 `[Connector-Taint-Table]` 判定。决策与被驳回方案见 [ADR-0018](./decisions/ADR-0018-mcp-taint-preserving-decoder.md)。
 
 **MCPManager.CallTool 直接路径安全**：`MCPManager.CallTool` 提供面向外部调用方的直接路由接口。该入口在调用 MCP Client 前强制执行 `PolicyGate.IsAuthorized`（deny-by-default），信任等级根据服务器是否在白名单（Trusted）动态设置。与 `InMemoryToolRegistry.ExecuteTool` 保持一致的安全语义，两条路径均不绕过策略层。
 
