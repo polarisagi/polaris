@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -18,13 +17,13 @@ import (
 // 实现：extension/mcp.MCPManager
 type MCPManager interface {
 	// ListServers 返回所有 MCP 服务器运行时状态。
-	ListServers() []mcp.MCPServerInfo
+	ListServers() []protocol.MCPServerInfo
 	// Add 注册并启动一个新 MCP 服务器连接。
-	Add(ctx context.Context, serverID, name string, cfg mcp.MCPClientConfig) error
+	Add(ctx context.Context, serverID, name string, cfg protocol.MCPClientConfig) error
 	// Remove 注销指定 MCP 服务器连接。
 	Remove(serverID string)
 	// Update 更新 MCP 服务器配置（替换原有连接）。
-	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg mcp.MCPUpdateConfig, dataDir string) error
+	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
 }
 
 // ExtensionInstaller sysadmin 包对扩展安装管理器的消费端接口。

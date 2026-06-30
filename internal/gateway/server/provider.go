@@ -5,7 +5,6 @@ import (
 
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -57,13 +56,13 @@ type ChannelStarter interface {
 // 子 handler 各自声明自己需要的方法子集（见 chat/provider.go 等）。
 type MCPManager interface {
 	// ListServers 返回所有 MCP 服务器运行时状态快照。
-	ListServers() []mcp.MCPServerInfo
+	ListServers() []protocol.MCPServerInfo
 	// Add 连接并注册一个 MCP 服务器（热插拔，工具自动注入 Catalog）。
-	Add(ctx context.Context, serverID, name string, cfg mcp.MCPClientConfig) error
+	Add(ctx context.Context, serverID, name string, cfg protocol.MCPClientConfig) error
 	// Remove 断开并注销一个 MCP 服务器（级联清理工具注册）。
 	Remove(serverID string)
 	// Update 更新 MCP 服务器配置（断开旧连接 → 应用新配置 → 重连）。
-	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg mcp.MCPUpdateConfig, dataDir string) error
+	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
 	// IsPluginConnected 检查指定 Plugin 的 MCP 进程是否在线。
 	IsPluginConnected(pluginID string) bool
 	// SetOnToolsChanged 注册工具集变更回调（插件 MCP 连接完成时触发缓存失效）。

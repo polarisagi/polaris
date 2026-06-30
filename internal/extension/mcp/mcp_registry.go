@@ -1,15 +1,17 @@
 package mcp
 
+import "github.com/polarisagi/polaris/internal/protocol"
+
 // MCP 工具注册与发现。
 // 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §1
 
-// MCPTransport MCP 传输层（统一错误映射）。
-type MCPTransport string
+// MCPTransport protocol.MCPTransport 本地别名，使包内调用无需显式引用 protocol 包。
+type MCPTransport = protocol.MCPTransport
 
 const (
-	MCPStdio          MCPTransport = "stdio"
-	MCPStreamableHTTP MCPTransport = "streamable_http"
-	MCPSSE            MCPTransport = "sse"
+	MCPStdio          = protocol.MCPStdio
+	MCPStreamableHTTP = protocol.MCPStreamableHTTP
+	MCPSSE            = protocol.MCPSSE
 )
 
 // MCPErrorCode 传输层无关的统一错误码。

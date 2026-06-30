@@ -4,29 +4,20 @@ import (
 	"context"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ExtensionFacade extension 包对外统一接口（扩展生命周期 + MCP 连接管理）。
 //
-// 问题背景：
+// 对外暴露：
+//   - 扩展生命周期：Install / Uninstall / Activate / ListInstalled
+//   - MCP 连接管理：ConnectMCP / DisconnectMCP / CallMCPTool / ListMCPServers
 //
-//	当前 extension 包对外暴露了五个独立入口：
-//	  - bus.ExtensionBus（Install/Uninstall/Activate/ListInstalled）
-//	  - mcp.MCPManager（Add/Remove/CallTool/ListServers/ListToolSchemas）
-//	  - marketplace.Manager（授权校验 + 安装流程）
-//	  - lifecycle.InstallFSM（类型路由）
-//	  - native.ExtensionActivator（语义激活）
-//	gateway/server 直接持有 *mcp.MCPManager，任何 MCP 传输层变更都影响 server.go。
+// 所有 MCP 类型均使用 protocol.MCPClientConfig / protocol.MCPServerInfo（canonical SSoT）。
+// 内部 lifecycle FSM / marketplace 授权 / MCP 传输层对调用方透明。
 //
-// 解决方案：
-//   - ExtensionFacade 是 extension 包对外的统一入口接口
-//   - 扩展安装/卸载/激活 + MCP 连接管理全部通过此接口
-//   - 内部 lifecycle FSM / marketplace 授权 / MCP 传输层对外透明
-//
-// @consumer: gateway/server/server.go（替换直接持有 *mcp.MCPManager）
+// @consumer: gateway/server/server.go
 // @producer: extension/bus.ExtensionBus + mcp.MCPManager（由 cli.go/bootstrap 构造注入）
 type ExtensionFacade interface {
 	// --- 扩展生命周期 ---
@@ -48,7 +39,7 @@ type ExtensionFacade interface {
 
 	// ConnectMCP 连接一个 MCP 服务器并注册其工具（热插拔入口）。
 	// serverID 为内部唯一 ID（对应 mcp_servers.id），cfg 来自 extension catalog。
-	ConnectMCP(ctx context.Context, serverID, name string, cfg mcp.MCPClientConfig) error
+	ConnectMCP(ctx context.Context, serverID, name string, cfg protocol.MCPClientConfig) error
 
 	// DisconnectMCP 断开 MCP 服务器连接并注销其工具。
 	DisconnectMCP(serverID string)
@@ -60,7 +51,7 @@ type ExtensionFacade interface {
 	MCPToolSchemas() []types.ToolSchema
 
 	// ListMCPServers 返回所有 MCP 服务器的运行时状态快照。
-	ListMCPServers() []mcp.MCPServerInfo
+	ListMCPServers() []protocol.MCPServerInfo
 
 	// IsPluginConnected 检查指定 Plugin 的 MCP 进程是否在线。
 	IsPluginConnected(pluginID string) bool

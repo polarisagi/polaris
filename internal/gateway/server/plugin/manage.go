@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -59,7 +58,7 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 	}
 	defer rows.Close()
 
-	connectedMCPs := make(map[string]mcp.MCPServerInfo)
+	connectedMCPs := make(map[string]protocol.MCPServerInfo)
 	if h.MCPMgr != nil {
 		for _, srv := range h.MCPMgr.ListServers() {
 			connectedMCPs[srv.ID] = srv

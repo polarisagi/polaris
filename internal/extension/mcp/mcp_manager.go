@@ -18,15 +18,8 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// MCPServerInfo MCP Server 运行时状态快照。
-type MCPServerInfo struct {
-	ID        string
-	Name      string
-	Transport string
-	Connected bool
-	Tools     []MCPTool
-	Error     string
-}
+// MCPServerInfo protocol.MCPServerInfo 本地别名，使包内调用无需显式引用 protocol 包。
+type MCPServerInfo = protocol.MCPServerInfo
 
 type mcpEntry struct {
 	client *MCPClient
@@ -572,18 +565,8 @@ func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectReque
 	return nil
 }
 
-// MCPUpdateConfig 包含 MCP Server 可更新字段。
-type MCPUpdateConfig struct {
-	Name      string
-	Transport string
-	Command   string
-	Args      []string
-	Env       map[string]string
-	URL       string
-	Enabled   bool
-	Timeout   int
-	TrustTier int
-}
+// MCPUpdateConfig protocol.MCPUpdateConfig 本地别名，使包内调用无需显式引用 protocol 包。
+type MCPUpdateConfig = protocol.MCPUpdateConfig
 
 // Update 更新并重启 MCP 连接，同时同步 DB。
 func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg MCPUpdateConfig, dataDir string) error {

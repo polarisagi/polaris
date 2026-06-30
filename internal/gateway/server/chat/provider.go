@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -15,7 +14,7 @@ import (
 // 实现：extension/mcp.MCPManager（满足此接口的方法子集）
 type MCPManager interface {
 	// ListServers 返回所有 MCP 服务器运行时状态（供 SSE 推送连接状态）。
-	ListServers() []mcp.MCPServerInfo
+	ListServers() []protocol.MCPServerInfo
 	// IsPluginConnected 检查指定 Plugin 的 MCP 进程是否在线。
 	IsPluginConnected(pluginID string) bool
 }

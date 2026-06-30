@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
@@ -39,7 +38,7 @@ func (h *SysAdminHandler) HandleListMCPServers(w http.ResponseWriter, r *http.Re
 	}
 	defer rows.Close()
 
-	runtimeMap := map[string]mcp.MCPServerInfo{}
+	runtimeMap := map[string]protocol.MCPServerInfo{}
 	if h.MCPMgr != nil {
 		for _, info := range h.MCPMgr.ListServers() {
 			runtimeMap[info.ID] = info
@@ -194,7 +193,7 @@ func (h *SysAdminHandler) HandleUpdateMCPServer(w http.ResponseWriter, r *http.R
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if h.MCPMgr != nil {
-		updateCfg := mcp.MCPUpdateConfig{
+		updateCfg := protocol.MCPUpdateConfig{
 			Name:      c.Name,
 			Transport: c.Transport,
 			Command:   c.Command,
@@ -317,8 +316,8 @@ func (h *SysAdminHandler) StartMCPServerCtx(ctx context.Context, c types.MCPServ
 	for i, a := range c.Args {
 		args[i] = strings.ReplaceAll(a, "{DATA_DIR}", h.DataDir)
 	}
-	cfg := mcp.MCPClientConfig{
-		Transport:  mcp.MCPTransport(c.Transport),
+	cfg := protocol.MCPClientConfig{
+		Transport:  protocol.MCPTransport(c.Transport),
 		Command:    c.Command,
 		Args:       args,
 		Env:        c.Env,

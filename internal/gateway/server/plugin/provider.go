@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // 本文件声明 plugin 包对外部模块的消费端接口（Consumer-side Interfaces）。
@@ -17,7 +17,7 @@ import (
 // 实现：extension/mcp.MCPManager
 type MCPManager interface {
 	// ListServers 返回所有 MCP 服务器状态（plugin 管理页面展示用）。
-	ListServers() []mcp.MCPServerInfo
+	ListServers() []protocol.MCPServerInfo
 	// Remove 注销一个 MCP 服务器（plugin 卸载时触发）。
 	Remove(serverID string)
 }
