@@ -21,8 +21,6 @@
   "internal/action/lam/streaming_action_bus.go": "b642f874c09fe90fab3c78b8fb798d3aa75fdc2735180c9c5963d568b4e79090",
   "internal/action/lam/streaming_action_bus_test.go": "979175e4c762396e6dba66d2888c856f7ed981aa02ccf9d8df15ac57f6bacab5",
   "internal/action/provider.go": "c5ec0bbe41090a669eaf190d6f4a96b1d26c625b32d030a90fcc7806dcc3ca29",
-  "internal/action/taint_preserving_decoder.go": "67fdc42f3a57638ff8332a278c900e63e2d4fc453437644efb3ec3246745703b",
-  "internal/action/taint_preserving_decoder_test.go": "d04b2aff90963c787d3a52a1ec13ba9ffb686e4bcc27bbc45c12d14fcef4b4c1",
   "internal/action/tool_usage_policy.go": "79e302f45b155eb379af89ca56668ab9c8c4521aa3533ecb7f239566140ce745",
   "internal/action/tool_usage_policy_test.go": "d35b31d24426e32068a1cdf93b805e806f26102ccf210217482f4a27c78d65cf",
   "internal/agent/agent.go": "f3498ab3a0a62c46d11d4bd039c240763949c43fb8d56d82bcd06ec7991d5ef7",
