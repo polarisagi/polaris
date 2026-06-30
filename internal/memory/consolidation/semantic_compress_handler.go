@@ -14,11 +14,10 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// LLMInferFunc LLM 调用函数类型（依赖注入，可 mock）。
-type LLMInferFunc func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error)
+// LLMInferFunc protocol.LLMInferFunc 本地别名，使调用方无需显式类型转换。
+type LLMInferFunc = protocol.LLMInferFunc
 
 // SemanticCompressHandler 将 VFS 中的大型错误堆栈提炼为结构化 JSON，
 // 保护 L0 工作记忆不被原始报错信息淹没。

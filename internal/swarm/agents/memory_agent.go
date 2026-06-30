@@ -11,8 +11,6 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
-	"github.com/polarisagi/polaris/pkg/types"
-
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -43,9 +41,8 @@ type MemoryAgent struct {
 	coldWindowCount int                    // 或超过此轮次视为冷数据，默认 100
 }
 
-// LLMInferFunc LLM 调用函数类型（依赖注入，可 mock）。
-// opts 遵循 types.InferOption 函数选项模式，支持 WithThinkingMode 等。
-type LLMInferFunc func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error)
+// LLMInferFunc protocol.LLMInferFunc 本地别名，使调用方无需显式类型转换。
+type LLMInferFunc = protocol.LLMInferFunc
 
 // SurrealWriterInterface 最小化 SurrealDB 写入接口（防止循环依赖）。
 type SurrealWriterInterface interface {

@@ -192,14 +192,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		}
 		return "", nil
 	}
-	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), consolidation.LLMInferFunc(llmInfer), "~/.polarisagi/polaris/data/vfs/")
+	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), sb.Layout.Workspace)
 	sb.Outbox.RegisterHandler("semantic_compress", semanticCompressHandler.Handle)
 
 	var extCogn connector.SurrealWriterInterface = dummySurreal{}
 	if sb.SurrealStore != nil {
 		extCogn = &surrealCognAdapter{s: sb.SurrealStore}
 	}
-	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, connector.LLMInferFunc(llmInfer), nil)
+	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, protocol.LLMInferFunc(llmInfer), nil)
 	sb.Outbox.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
 
 	sb.Outbox.RegisterHandler("episodic", consolidation.EpisodicProjectorHandler(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey))

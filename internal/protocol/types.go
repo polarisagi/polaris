@@ -1,8 +1,16 @@
 package protocol
 
 import (
+	"context"
+
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// LLMInferFunc 跨模块统一的 LLM 简单推理函数签名。
+// 单 prompt 输入，单 string 输出，options 透传 InferOption 链。
+// 消费方：memory/consolidation、knowledge/connector、swarm/agents。
+// @canonical: 此处为唯一定义，各消费包以 type alias 引用，禁止重复声明。
+type LLMInferFunc func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error)
 
 // ApplyInferOptions 合并选项，返回最终参数。
 func ApplyInferOptions(opts []types.InferOption) types.InferOptions {

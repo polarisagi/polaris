@@ -13,11 +13,10 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// LLMInferFunc LLM 调用函数类型（依赖注入，可 mock）。
-type LLMInferFunc func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error)
+// LLMInferFunc protocol.LLMInferFunc 本地别名，使调用方无需显式类型转换。
+type LLMInferFunc = protocol.LLMInferFunc
 
 // EmbedFunc 文本向量化函数类型（依赖注入，nil 时跳过）。
 type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
