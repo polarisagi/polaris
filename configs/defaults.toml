@@ -172,6 +172,12 @@ network_policy = "block"
 allowed_domains = []
 # Linux bubblewrap 可执行路径，空 = 自动从 PATH 查找。
 bwrap_path = ""
+# Agent 可访问的额外文件系统路径白名单。
+# DataDir（~/.polarisagi/polaris）始终自动包含，无需重复填写。
+# 加入后，read_file / list_dir / glob / grep / bash / git_diff 等所有文件工具均可访问该路径。
+# 示例（取消注释并按需修改）：
+# allowed_paths = ["/home/user/projects", "/tmp"]
+allowed_paths = []
 
 [cognition]
 # SurrealDB 认知存储后端（运行时选择，不影响编译）。

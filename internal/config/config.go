@@ -270,6 +270,12 @@ type SandboxConfig struct {
 	AllowedDomains []string `toml:"allowed_domains"`
 	// BwrapPath Linux 下 bubblewrap 可执行文件路径。空 = 自动 PATH 查找。
 	BwrapPath string `toml:"bwrap_path"`
+	// AllowedPaths Agent 可访问的额外文件系统路径白名单。
+	// DataDir（~/.polarisagi/polaris）始终自动包含，无需重复填写。
+	// 典型用途：将用户项目目录加入白名单，让 Agent 可读写项目文件并在该目录执行命令。
+	// 示例：["/home/user/projects", "/tmp/scratch"]
+	// 注意：bash/run_command 工具的进程沙箱仅允许读写这些路径（OS 级强制隔离）。
+	AllowedPaths []string `toml:"allowed_paths"`
 }
 
 // CompressorConfig 上下文压缩器配置，对齐 Claude Code 百分比阈值模型。
