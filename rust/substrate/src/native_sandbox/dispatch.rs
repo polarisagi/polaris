@@ -7,20 +7,20 @@ use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
 use std::panic;
 
-use super::env::build_sandbox_path;
 use super::engine::{ns_read_cstr, ns_write_cstr, which_tool};
+use super::env::build_sandbox_path;
 use super::types::{
-    NativeSandboxRequest, NativeSandboxResponse, SandboxContextV2, ToolProbeResult,
-    WrapArgvResponseV2, NS_ERR_INTERNAL, NS_ERR_TIMEOUT, NS_ERR_UTF8, NS_OK,
+    NS_ERR_INTERNAL, NS_ERR_TIMEOUT, NS_ERR_UTF8, NS_OK, NativeSandboxRequest,
+    NativeSandboxResponse, SandboxContextV2, ToolProbeResult, WrapArgvResponseV2,
 };
 
 // 平台分发辅助：各平台实现通过 super 访问
-#[cfg(target_os = "macos")]
-use super::seatbelt::{build_wrap_argv_seatbelt, exec_seatbelt, exec_seatbelt_v2};
 #[cfg(target_os = "linux")]
 use super::bwrap::{build_wrap_argv_bwrap, exec_bwrap, exec_bwrap_v2};
 #[cfg(target_os = "windows")]
 use super::fallback::{build_wrap_argv_wsl2, exec_wsl2, exec_wsl2_v2};
+#[cfg(target_os = "macos")]
+use super::seatbelt::{build_wrap_argv_seatbelt, exec_seatbelt, exec_seatbelt_v2};
 
 use super::fallback::{build_wrap_argv_bare, exec_bare, exec_bare_v2};
 
@@ -447,7 +447,6 @@ mod tests {
     use std::ffi::{CStr, CString};
 
     use super::*;
-    use super::super::env::build_sandbox_path;
 
     #[test]
     fn test_probe_tools_serializes() {
@@ -469,8 +468,7 @@ mod tests {
         let mut out_json: *mut c_char = std::ptr::null_mut();
         let mut out_err: *mut c_char = std::ptr::null_mut();
 
-        let code =
-            unsafe { native_sandbox_exec(input_cstr.as_ptr(), &mut out_json, &mut out_err) };
+        let code = unsafe { native_sandbox_exec(input_cstr.as_ptr(), &mut out_json, &mut out_err) };
 
         if !out_err.is_null() {
             let err_msg = unsafe { CStr::from_ptr(out_err).to_str().unwrap_or("") };

@@ -22,11 +22,11 @@ use surrealdb::engine::local::{Db, Mem, RocksDb};
 use surrealdb::types::SurrealValue;
 use tokio::runtime::Runtime;
 
-mod store;
-mod kv;
-mod vector;
-mod graph;
 mod fts;
+mod graph;
+mod kv;
+mod store;
+mod vector;
 
 // ─── FFI 错误码 ────────────────────────────────────────────────────────────────
 pub(super) const SURREAL_OK: c_int = 0;
@@ -219,18 +219,18 @@ mod tests {
     use std::ffi::{CStr, CString};
     use std::os::raw::c_char;
 
-    use super::{bytes_to_hex, SURREAL_OK};
-    use super::store::{surreal_open, surreal_set_worker_threads};
-    use super::kv::{surreal_kv_delete, surreal_kv_get, surreal_kv_put, surreal_kv_scan};
-    use super::vector::{surreal_vec_delete, surreal_vec_knn, surreal_vec_upsert};
+    use super::fts::{
+        surreal_free_buf, surreal_free_string, surreal_fts_delete, surreal_fts_index,
+        surreal_fts_search, surreal_stats,
+    };
     use super::graph::{
         surreal_graph_delete_edges, surreal_graph_relate, surreal_graph_spreading_activation,
         surreal_graph_traverse,
     };
-    use super::fts::{
-        surreal_fts_delete, surreal_fts_index, surreal_fts_search, surreal_free_buf,
-        surreal_free_string, surreal_stats,
-    };
+    use super::kv::{surreal_kv_delete, surreal_kv_get, surreal_kv_put, surreal_kv_scan};
+    use super::store::surreal_open;
+    use super::vector::{surreal_vec_delete, surreal_vec_knn, surreal_vec_upsert};
+    use super::{SURREAL_OK, bytes_to_hex};
 
     unsafe fn read_out_json(out: *mut c_char) -> String {
         unsafe {
@@ -300,8 +300,8 @@ mod tests {
 
             // 3. Graph
             let from = CString::new("nodeA").unwrap();
-            let et   = CString::new("knows").unwrap();
-            let to   = CString::new("nodeB").unwrap();
+            let et = CString::new("knows").unwrap();
+            let to = CString::new("nodeB").unwrap();
             assert_eq!(
                 surreal_graph_relate(from.as_ptr(), et.as_ptr(), to.as_ptr(), 1.0),
                 SURREAL_OK
@@ -312,12 +312,20 @@ mod tests {
                 SURREAL_OK
             );
             let traverse_json = read_out_json(out_json);
-            assert!(traverse_json.contains("nodeB"), "traverse_json was {traverse_json}");
+            assert!(
+                traverse_json.contains("nodeB"),
+                "traverse_json was {traverse_json}"
+            );
 
             let start_ids = CString::new("[\"nodeA\"]").unwrap();
             assert_eq!(
                 surreal_graph_spreading_activation(
-                    start_ids.as_ptr(), 2, 0.8, 0.1, 10, &mut out_json,
+                    start_ids.as_ptr(),
+                    2,
+                    0.8,
+                    0.1,
+                    10,
+                    &mut out_json,
                 ),
                 SURREAL_OK
             );
@@ -330,18 +338,30 @@ mod tests {
 
             // 4. FTS
             let doc_id = CString::new("doc1").unwrap();
-            let text   = CString::new("Hello world surreal").unwrap();
-            assert_eq!(surreal_fts_index(doc_id.as_ptr(), text.as_ptr()), SURREAL_OK);
+            let text = CString::new("Hello world surreal").unwrap();
+            assert_eq!(
+                surreal_fts_index(doc_id.as_ptr(), text.as_ptr()),
+                SURREAL_OK
+            );
             let q = CString::new("world").unwrap();
-            assert_eq!(surreal_fts_search(q.as_ptr(), 10, &mut out_json), SURREAL_OK);
+            assert_eq!(
+                surreal_fts_search(q.as_ptr(), 10, &mut out_json),
+                SURREAL_OK
+            );
             let search_json = read_out_json(out_json);
-            assert!(search_json.contains("doc1"), "search_json was {search_json}");
+            assert!(
+                search_json.contains("doc1"),
+                "search_json was {search_json}"
+            );
             assert_eq!(surreal_fts_delete(doc_id.as_ptr()), SURREAL_OK);
 
             // 5. Stats
             assert_eq!(surreal_stats(&mut out_json), SURREAL_OK);
             let stats_json = read_out_json(out_json);
-            assert!(stats_json.contains("\"ready\":true"), "stats_json was {stats_json}");
+            assert!(
+                stats_json.contains("\"ready\":true"),
+                "stats_json was {stats_json}"
+            );
         }
     }
 }

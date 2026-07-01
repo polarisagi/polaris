@@ -249,19 +249,20 @@ pub(super) fn build_env_v2(
     extra: &[String],
     sandbox_path: &str,
 ) -> Vec<(String, String)> {
-    let effective_preset = preset.unwrap_or_else(|| match caller_type {
+    let effective_preset = preset.unwrap_or(match caller_type {
         "builtin" | "codeact" | "skill" | "hook" => "runtime",
         _ => "minimal",
     });
 
-    let mut result: Vec<(String, String)> = Vec::new();
-    result.push(("PATH".to_string(), sandbox_path.to_string()));
-    result.push((
-        "HOME".to_string(),
-        env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
-    ));
-    result.push(("TMPDIR".to_string(), "/tmp".to_string()));
-    result.push(("TEMP".to_string(), "/tmp".to_string()));
+    let mut result: Vec<(String, String)> = vec![
+        ("PATH".to_string(), sandbox_path.to_string()),
+        (
+            "HOME".to_string(),
+            env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+        ),
+        ("TMPDIR".to_string(), "/tmp".to_string()),
+        ("TEMP".to_string(), "/tmp".to_string()),
+    ];
 
     let passthrough: &[&str] = match effective_preset {
         "minimal" => &["LANG", "LC_ALL", "TZ"],
@@ -323,10 +324,10 @@ pub(super) fn build_env_v2(
     };
 
     for key in passthrough {
-        if let Ok(val) = env::var(key) {
-            if !is_credential_key(key) {
-                result.push((key.to_string(), val));
-            }
+        if let Ok(val) = env::var(key)
+            && !is_credential_key(key)
+        {
+            result.push((key.to_string(), val));
         }
     }
 
