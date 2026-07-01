@@ -7,8 +7,6 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func TestGovernanceAgent_Idempotent(t *testing.T) {
@@ -81,45 +79,4 @@ func TestGovernanceAgent_Run(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	cancel() // should exit loop gracefully
-}
-
-type mockHITLGov struct{}
-
-func (m *mockHITLGov) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HITLResponse, error) {
-	return nil, nil
-}
-func (m *mockHITLGov) Pending(ctx context.Context) ([]types.HITLPrompt, error) { return nil, nil }
-func (m *mockHITLGov) Respond(ctx context.Context, id string, response types.HITLResponse) error {
-	return nil
-}
-
-func mockLLMGov(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
-	return "", nil
-}
-
-func TestGovernanceAgent_ValidateCodeWithAudit(t *testing.T) {
-	ga, _ := NewGovernanceAgent(nil, nil)
-
-	err := ga.ValidateCodeWithAudit(context.Background(), "python", []byte("print('hi')"), nil, "task1", "agent1")
-	if err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
-
-	// with AST error
-	err = ga.ValidateCodeWithAudit(context.Background(), "python", []byte("import subprocess"), nil, "task1", "agent1")
-	if err == nil {
-		t.Errorf("expected error, got nil")
-	}
-
-	// with security agent async trigger
-	hitlMock := &mockHITLGov{}
-	auditAgent := NewSecurityAuditAgent(mockLLMGov, hitlMock, 0, "en")
-	ga.WithSecurityAuditAgent(auditAgent)
-
-	err = ga.ValidateCodeWithAudit(context.Background(), "bash", []byte("echo hi"), nil, "task1", "agent1")
-	if err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
-
-	// async execution should pass without error on main thread
 }

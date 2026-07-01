@@ -25,14 +25,6 @@ func TestNewGovernanceAgent_InitialState(t *testing.T) {
 	}
 }
 
-func TestGovernanceAgent_WithSecurityAuditAgent(t *testing.T) {
-	ga, _ := NewGovernanceAgent(nil, nil)
-	if ga.auditAgent != nil {
-		t.Error("auditAgent should be nil by default")
-	}
-	ga.WithSecurityAuditAgent(nil) // nil 赋值不应 panic
-}
-
 // ── GovernanceAgent.Run ────────────────────────────────────────────────────
 
 func TestGovernanceAgent_Run_StopsOnContextCancel(t *testing.T) {

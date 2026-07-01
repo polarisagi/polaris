@@ -42,15 +42,6 @@ func TestSecurityAuditAgent(t *testing.T) {
 		t.Errorf("expected high risk, got %s", res.RiskLevel)
 	}
 
-	if !agent.hasSignificantRisk(res) {
-		t.Errorf("expected true")
-	}
-
-	// Prompt logic
-	agent.promptUser(ctx, "t1", res, "python", 10)
-	if !hitlMock.prompted {
-		t.Errorf("expected HITL to be prompted")
-	}
 }
 
 func TestParseAuditResult(t *testing.T) {
@@ -84,14 +75,5 @@ func TestSanitizeCode(t *testing.T) {
 	s2 := sanitizeCode(code2)
 	if !strings.Contains(s2, "[SANITIZED]") {
 		t.Errorf("expected injection to be sanitized")
-	}
-}
-
-func TestPromptAuditFailure(t *testing.T) {
-	hitlMock := &mockHITLSec{}
-	agent := NewSecurityAuditAgent(mockLLMSec, hitlMock, 1*time.Second, "en")
-	agent.promptAuditFailure(context.Background(), "t1")
-	if !hitlMock.prompted {
-		t.Errorf("expected HITL to be prompted")
 	}
 }

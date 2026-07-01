@@ -43,9 +43,9 @@ Layer 0/1 为同步物理卡口，任一失败直接阻断代码进入沙箱。L
 
 ## 引用代码
 
-- `internal/swarm/agents/governance_agent.go`（`ValidateCodeWithAudit`，三层调用编排）
-- `internal/swarm/agents/code_validator.go`（Layer 0 AST + Layer 1 正则）
-- `internal/swarm/agents/security_audit_agent.go`（Layer 2 单次 ThinkingMax LLM）
+- `internal/action/codeact/code_act.go`（`validateAST`/`validateL1`/`validateL2`，三层同步调用编排，实际生产路径）
+- `internal/swarm/agents/code_validator.go`（Layer 1 正则规则，被 code_act.go 的 validateL1 通过 govAgent 接口复用）
+- `internal/swarm/agents/security_audit_agent.go`（`ReviewSync`，Layer 2 单次 ThinkingMax LLM，被 code_act.go 的 validateL2 通过 LLMPeerReviewer 接口同步调用）
 - `internal/swarm/agents/memory_agent.go`（`LLMInferFunc` 签名变更）
 - `docs/arch/M07-Tool-Action-Layer.md §7.5`
 
@@ -54,3 +54,4 @@ Layer 0/1 为同步物理卡口，任一失败直接阻断代码进入沙箱。L
 | 日期 | 变更 |
 |------|------|
 | 2026-06-13 | 初稿 |
+| 2026-07-02 | 修订：ValidateCodeWithAudit/AuditAsync 为未接线死代码已删除（生产路径实际是 internal/action/codeact/code_act.go 的 validateAST/validateL1/validateL2 三段同步校验，经审计确认与本 ADR 的三层设计意图一致但独立实现，未复用 GovernanceAgent 编排）；引用代码章节同步更正 |

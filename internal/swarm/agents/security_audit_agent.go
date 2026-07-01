@@ -2,10 +2,8 @@ package agents
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -85,30 +83,6 @@ func (a *SecurityAuditAgent) ReviewSync(ctx context.Context, language string, co
 		}
 	}
 	return "safe", nil
-}
-
-// AuditAsync 异步执行语义审查，不阻塞调用方。
-// 若 Layer 2 发现 warning/danger 级风险，通过 HITL 提示用户审批。
-func (a *SecurityAuditAgent) AuditAsync(ctx context.Context, language string, code []byte, taskID, agentID string) {
-	go func() {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 3*a.timeout)
-		defer cancel()
-
-		result, err := a.audit(auditCtx, language, code)
-		if err != nil {
-			slog.Warn("security_audit: LLM audit failed", "err", err, "task", taskID)
-			a.promptAuditFailure(auditCtx, taskID)
-			return
-		}
-
-		// 仅 info 级别或无风险 → 静默通过
-		if !a.hasSignificantRisk(result) {
-			slog.Info("security_audit: no significant risks", "task", taskID, "lang", language)
-			return
-		}
-
-		a.promptUser(auditCtx, taskID, result, language, len(code))
-	}()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,155 +165,6 @@ func parseAuditResult(raw string) (*AuditResult, error) {
 	return &result, nil
 }
 
-func (a *SecurityAuditAgent) hasSignificantRisk(r *AuditResult) bool {
-	for _, item := range r.RiskItems {
-		if item.Severity == "warning" || item.Severity == "danger" {
-			return true
-		}
-	}
-	return false
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 内部：HITL 用户提示（简洁格式）
-// ─────────────────────────────────────────────────────────────────────────────
-
-func (a *SecurityAuditAgent) promptUser(
-	ctx context.Context, taskID string, result *AuditResult, codeLanguage string, codeLen int,
-) {
-	if a.hitl == nil {
-		return
-	}
-
-	text := a.buildHITLText(result, codeLanguage, codeLen)
-	approveLabel, rejectLabel := "✅ Allow", "❌ Reject"
-	if a.lang == "zh" {
-		approveLabel, rejectLabel = "✅ 允许执行", "❌ 拒绝"
-	}
-
-	p := types.HITLPrompt{
-		ID:             newAuditID(),
-		CheckpointType: "security_audit",
-		PromptText:     text,
-		Options: []types.HITLOption{
-			{Key: "approve", Label: approveLabel},
-			{Key: "reject", Label: rejectLabel},
-		},
-		DeadlineNs: a.hitlDeadlineNs,
-	}
-
-	resp, err := a.hitl.Prompt(ctx, p)
-	if err != nil {
-		slog.Warn("security_audit: HITL failed", "err", err, "task", taskID)
-		return
-	}
-	slog.Info("security_audit: user decision",
-		"key", resp.OptionKey, "user", resp.UserID,
-		"risk", result.RiskLevel, "task", taskID)
-}
-
-// buildHITLText 构建简洁的用户提示文本（6 行以内）。
-func (a *SecurityAuditAgent) buildHITLText(result *AuditResult, codeLanguage string, codeLen int) string {
-	var sb strings.Builder
-
-	if a.lang == "zh" {
-		a.buildHITLTextZh(&sb, result, codeLanguage, codeLen)
-	} else {
-		a.buildHITLTextEn(&sb, result, codeLanguage, codeLen)
-	}
-
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-func (a *SecurityAuditAgent) buildHITLTextZh(sb *strings.Builder, result *AuditResult, codeLanguage string, codeLen int) {
-	fmt.Fprintf(sb, "🔍 安全审查 · %s（%d字节）\n", codeLanguage, codeLen)
-	fmt.Fprintf(sb, "风险等级：%s\n", riskLabel(result.RiskLevel, "zh"))
-	if result.Summary != "" {
-		sb.WriteString(result.Summary + "\n")
-	}
-	for _, item := range result.RiskItems {
-		if item.Severity == "info" {
-			continue // 仅展示 warning/danger
-		}
-		fmt.Fprintf(sb, "%s %s：%s\n", severityIcon(item.Severity), item.Category, item.PlainText)
-	}
-}
-
-func (a *SecurityAuditAgent) buildHITLTextEn(sb *strings.Builder, result *AuditResult, codeLanguage string, codeLen int) {
-	fmt.Fprintf(sb, "🔍 Security Audit · %s (%d bytes)\n", codeLanguage, codeLen)
-	fmt.Fprintf(sb, "Risk: %s\n", riskLabel(result.RiskLevel, "en"))
-	if result.Summary != "" {
-		sb.WriteString(result.Summary + "\n")
-	}
-	for _, item := range result.RiskItems {
-		if item.Severity == "info" {
-			continue
-		}
-		fmt.Fprintf(sb, "%s %s: %s\n", severityIcon(item.Severity), item.Category, item.PlainText)
-	}
-}
-
-func (a *SecurityAuditAgent) promptAuditFailure(ctx context.Context, taskID string) {
-	if a.hitl == nil {
-		return
-	}
-	text, approveLabel, rejectLabel := "", "", ""
-	if a.lang == "zh" {
-		text = "⚠️ AI 审查暂时不可用，基础规则已通过。是否继续执行？"
-		approveLabel, rejectLabel = "继续执行", "取消"
-	} else {
-		text = "⚠️ AI audit unavailable. Basic rules passed. Continue execution?"
-		approveLabel, rejectLabel = "Continue", "Cancel"
-	}
-	p := types.HITLPrompt{
-		ID:             newAuditID(),
-		CheckpointType: "security_audit_failed",
-		PromptText:     text,
-		Options: []types.HITLOption{
-			{Key: "approve", Label: approveLabel},
-			{Key: "reject", Label: rejectLabel},
-		},
-		DeadlineNs: a.hitlDeadlineNs,
-	}
-	_, _ = a.hitl.Prompt(ctx, p)
-}
-
-func riskLabel(level, lang string) string {
-	if lang == "zh" {
-		switch level {
-		case "high":
-			return "🔴 高风险"
-		case "medium":
-			return "🟡 中等"
-		case "low":
-			return "🟢 低风险"
-		default:
-			return "✅ 无明显风险"
-		}
-	}
-	switch level {
-	case "high":
-		return "🔴 High"
-	case "medium":
-		return "🟡 Medium"
-	case "low":
-		return "🟢 Low"
-	default:
-		return "✅ None"
-	}
-}
-
-func severityIcon(s string) string {
-	switch s {
-	case "danger":
-		return "🔴"
-	case "warning":
-		return "🟡"
-	default:
-		return "🔵"
-	}
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Prompt Injection 预处理
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,10 +197,4 @@ func sanitizeCode(code []byte) string {
 		s = "// [SECURITY: injection tokens removed]\n" + s
 	}
 	return s
-}
-
-func newAuditID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("audit_%x", b)
 }
