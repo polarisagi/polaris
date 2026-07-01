@@ -64,6 +64,29 @@ func NewSecurityAuditAgent(llmInfer LLMInferFunc, hitl protocol.HITL, timeout ti
 	}
 }
 
+// ReviewSync 同步执行语义审查，供 CodeAct.LLMPeerReviewer(L2) 在执行前阻塞调用。
+// 与 AuditAsync 共用同一份 audit() 实现（Prompt Injection 消毒 + ThinkingMax 推理 +
+// 结构化风险解析），区别仅在于：CodeAct 的 L2 语义是"执行前必须拿到结论"（TaintHigh
+// 代码等待审查结果，warning 级别再走 HITL 阻塞审批），因此需要同步返回而非
+// fire-and-forget。返回值与 codeact.LLMPeerReviewer 接口对齐："danger"|"warning"|"safe"。
+func (a *SecurityAuditAgent) ReviewSync(ctx context.Context, language string, code []byte) (string, error) {
+	result, err := a.audit(ctx, language, code)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "security_audit: ReviewSync failed", err)
+	}
+	for _, item := range result.RiskItems {
+		if item.Severity == "danger" {
+			return "danger", nil
+		}
+	}
+	for _, item := range result.RiskItems {
+		if item.Severity == "warning" {
+			return "warning", nil
+		}
+	}
+	return "safe", nil
+}
+
 // AuditAsync 异步执行语义审查，不阻塞调用方。
 // 若 Layer 2 发现 warning/danger 级风险，通过 HITL 提示用户审批。
 func (a *SecurityAuditAgent) AuditAsync(ctx context.Context, language string, code []byte, taskID, agentID string) {

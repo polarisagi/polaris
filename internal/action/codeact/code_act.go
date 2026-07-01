@@ -159,7 +159,13 @@ func (ca *CodeAct) validateL1(req CodeActRequest) error {
 }
 
 func (ca *CodeAct) validateL2(ctx context.Context, req CodeActRequest) error {
-	if req.TaintLevel < types.TaintHigh || ca.reviewer == nil {
+	// 注意：不能用 req.TaintLevel 做跳过判断——TaintLevel 来自调用方（LLM tool-call
+	// JSON 参数 / HTTP 请求体，见 agent_execute.go / handler_codeact.go），
+	// 是调用方自报的值，可被伪造成低污点从而绕过 L2。CodeAct 的存在意义就是执行
+	// "LLM 生成的代码"，按定义恒为最高风险（Execute() 内构造 sandbox.ExecRequest
+	// 时已硬编码 TaintLevel:TaintHigh，不受 req.TaintLevel 影响）——L2 语义审查同理，
+	// 只要配置了 reviewer 就必须跑，不能被调用方声明的污点等级绕开。
+	if ca.reviewer == nil {
 		return nil
 	}
 	risk, err := ca.reviewer.Review(ctx, req.Code)

@@ -76,10 +76,19 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		// GovernanceAgent 是 CodeAct 的 L1 代码安全校验网关（必须非 nil）。
 		// policyGate：protocol.PolicyGate 接口；security/policy.Gate 通过 IsAuthorized 满足。
 		govAgent, _ := swarmAgents.NewGovernanceAgent(sb.Gate, sb.Store.DB())
+
+		// L2：SecurityAuditAgent 提供 LLM 语义审查（Prompt Injection 消毒 + ThinkingMax
+		// 推理 + 结构化风险输出）。此前 CodeAct 的 WithASTChecker(L0)/WithPeerReviewer(L2)
+		// 从未在生产环境被调用——三层校验实际上只有 L1(regex) 生效，L0(真实 AST 解析)和
+		// L2(LLM 语义审查+HITL) 形同虚设。这里补齐，使三层审查真正全部生效。
+		auditAgent := swarmAgents.NewSecurityAuditAgent(tb.LLMInfer, tb.HITLGateway, 0, "zh")
+
 		codeActEngine := codeact.NewCodeAct(
 			tb.Envelope,
 			nil, // toolExec 审计可选；nil 时跳过 RecordAudit 调用
 			codeact.WithGovernanceAgent(&govAgentAdapter{inner: govAgent}),
+			codeact.WithASTChecker(&codeact.DefaultASTChecker{}),
+			codeact.WithPeerReviewer(&securityAuditReviewerAdapter{inner: auditAgent}),
 			codeact.WithHITL(tb.HITLGateway),
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
@@ -172,14 +181,10 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	// (Optional) toolStage.WithCognitiveStore(...) if we had a SurrealDB client in sb
 	httpServer.SetToolStage(toolStage)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
-	disp := dispatch.New(tb.Catalog, tb.Envelope, nil, tb.SkillExecutor)
-	disp.Use(
-		dispatch.AuditInterceptor(sb.AuditTrail),
-		dispatch.RateLimitInterceptor(nil),
-		dispatch.TaintInterceptor(),
-		dispatch.IdempotencyInterceptor(),
-		dispatch.DryRunInterceptor(),
-	)
+	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
+	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
+	disp := dispatch.New(tb.Catalog, tb.ToolReg, tb.SkillExecutor)
+	disp.Use(dispatch.AuditInterceptor(sb.AuditTrail))
 	httpServer.SetToolExecutor(disp.Execute)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)

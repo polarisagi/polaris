@@ -80,6 +80,10 @@ type RustSandboxResponse struct {
 	ExitCode      int    `json:"exit_code"`
 	SandboxMethod string `json:"sandbox_method"`
 	MemoryLimited bool   `json:"memory_limited"`
+	// NetIsolated true 表示 network_block 已由 seatbelt/bwrap 真实强制（非未经验证的声明）。
+	// Rust dispatch.rs 已 fail-closed：SandboxMethod 若为降级方法（bare/namespace/wsl2），
+	// 只可能出现在调用方未要求 network_block 的场景，此时 NetIsolated 恒为 false。
+	NetIsolated bool `json:"net_isolated"`
 }
 
 // ─── FFI 字符串辅助 ───────────────────────────────────────────────────────────

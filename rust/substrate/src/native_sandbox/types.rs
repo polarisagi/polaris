@@ -36,6 +36,9 @@ pub(super) struct NativeSandboxResponse {
     pub(super) exit_code: i32,
     pub(super) sandbox_method: String,
     pub(super) memory_limited: bool,
+    /// true = network_block 已由平台原生隔离工具（seatbelt/bwrap）真实强制。
+    /// namespace/bare/wsl2 一律 false（诚实上报，不做未经验证的声明）。
+    pub(super) net_isolated: bool,
 }
 
 /// 工具探测结果（供 Go 侧展示给 LLM 或用于调试）

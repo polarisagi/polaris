@@ -1,51 +1,32 @@
+// interceptors.go 只实现横切关注点（当前仅审计）。
+//
+// PolicyGate / Capability Token / 沙箱分级 / RateLimit / Idempotency 均已是
+// protocol.ToolRegistry.ExecuteTool（internal/tool/tool.go）与
+// protocol.SkillExecutor.ExecuteSkill（internal/extension/skill/skill.go）各自的职责，
+// 不在此处重复实现——重复实现会产生两套互相可能不一致的安全判定，正是本次重构要消除的
+// "两条线"问题本身。曾经存在的 RateLimitInterceptor / IdempotencyInterceptor / DryRunInterceptor
+// 均为空桩（调用 next 直接放行，不做任何事），已删除；不留假装生效的占位代码。
 package dispatch
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// AuditInterceptor 在工具执行后写入审计轨迹（不阻断响应；写入失败仅记录 WARN）。
+// at 为 nil 时该拦截器整体跳过（不影响放行/拒绝语义）。
 func AuditInterceptor(at AuditLogger) Interceptor {
 	return func(ctx context.Context, entry catalog.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
-		// Log before execution
-		// (Assuming at.Log exists or similar, stubbing for now to match interface)
 		res, err := next(ctx, entry, args)
-		return res, err
-	}
-}
-
-func RateLimitInterceptor(limits map[types.ToolSource]int) Interceptor {
-	// Simple stub to match the plan
-	return func(ctx context.Context, entry catalog.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
-		return next(ctx, entry, args)
-	}
-}
-
-func TaintInterceptor() Interceptor {
-	return func(ctx context.Context, entry catalog.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
-		res, err := next(ctx, entry, args)
-		if res != nil {
-			// Ensure taint level is propagated (simplified)
-			if entry.TaintLevel > res.TaintLevel {
-				res.TaintLevel = entry.TaintLevel
-			}
+		if at == nil {
+			return res, err
+		}
+		if auditErr := at.RecordAudit(ctx, entry.Name, args); auditErr != nil {
+			slog.WarnContext(ctx, "dispatch: audit record failed", "tool", entry.Name, "err", auditErr)
 		}
 		return res, err
-	}
-}
-
-func IdempotencyInterceptor() Interceptor {
-	return func(ctx context.Context, entry catalog.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
-		// Cache logic could be implemented here
-		return next(ctx, entry, args)
-	}
-}
-
-func DryRunInterceptor() Interceptor {
-	return func(ctx context.Context, entry catalog.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
-		// DryRun logic
-		return next(ctx, entry, args)
 	}
 }

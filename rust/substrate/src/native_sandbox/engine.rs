@@ -135,6 +135,8 @@ pub(super) fn run_with_timeout(
         exit_code: exit_status.code().unwrap_or(-1),
         sandbox_method: method.to_string(),
         memory_limited,
+        // 默认 false；只有 dispatch 层确认走了 seatbelt/bwrap 真实隔离路径才会覆盖为 true。
+        net_isolated: false,
     })
 }
 

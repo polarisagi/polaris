@@ -188,6 +188,23 @@ func (a *govAgentAdapter) ValidateCode(language string, code []byte, caps map[st
 	return a.inner.ValidateCode(language, code, caps)
 }
 
+// securityAuditReviewerAdapter 将 *agents.SecurityAuditAgent 适配为 codeact 包的
+// LLMPeerReviewer 接口（L2，同步阻塞）。codeact.CodeAct.validateL2 仅在
+// req.TaintLevel>=TaintHigh 时调用，返回 "danger"/"warning" 触发拒绝或 HITL 审批，
+// 这是 CodeAct 执行前唯一的语义级（而非规则/AST）安全审查——LLM 生成代码通过
+// L0(AST)+L1(regex) 静态检查后，真正决定"这段代码想干什么"仍需要 L2。
+type securityAuditReviewerAdapter struct {
+	inner *swarmAgents.SecurityAuditAgent
+}
+
+func (a *securityAuditReviewerAdapter) Review(ctx context.Context, code string) (string, error) {
+	// codeact.CodeActRequest 只允许 "python"|"bash"（validateBasic 强制），
+	// 此处语言信息已在校验链路上游确认，Review 接口本身不携带 language 参数，
+	// 交由 audit prompt 自行从代码内容推断更省事；直接传 "code" 作占位语言标签，
+	// ReviewSync 内部仅用它做审计文案里的语言展示，不影响安全判断。
+	return a.inner.ReviewSync(ctx, "code", []byte(code))
+}
+
 // ─── codeActAdapter ──────────────────────────────────────────────────────────
 // 将 *codeact.CodeAct 适配为 agent.CodeActEngine。
 // 字段映射：agent.CodeActRequest ↔ codeact.CodeActRequest（两者字段相同，防循环 import 而分别定义）。

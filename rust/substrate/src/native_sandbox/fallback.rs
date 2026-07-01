@@ -327,7 +327,9 @@ pub(super) fn build_wrap_argv_wsl2(ctx: &SandboxContextV2) -> Result<WrapArgvRes
         env: vec![],
         env_in_argv: false,
         sandbox_method: "wsl2".to_string(),
-        net_isolated: network_block,
+        // unshare --net 在 WSL2 内核里是否真正生效未经验证（取决于宿主 WSL2 版本），
+        // 诚实上报 false，不做未经验证的隔离声明（HE-Rule 2）。
+        net_isolated: false,
     })
 }
 

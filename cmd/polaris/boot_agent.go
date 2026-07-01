@@ -31,13 +31,11 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/sandbox"
 
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/internal/swarm/planner"
 	"github.com/polarisagi/polaris/internal/swarm/supervisor"
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -238,22 +236,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Skills: []string{"general"},
 	}, agent)
 
+	// 委托 tb.ToolReg.ExecuteTool（未注册工具由其内部 Lookup 显式拒绝，不静默放行），
+	// 与 Dispatcher / Agent 直接 tool_call 共用同一条 PolicyGate→沙箱→执行 链路，不重复构造 ExecRequest。
 	dagExec := agentdag.NewDAGExecutor(func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-		tool, lerr := tb.ToolReg.Lookup(toolName) // 真实元数据：Source/TrustTier/Capability/RiskLevel/SideEffects
-		if lerr != nil {
-			return nil, apperr.Wrap(apperr.CodeNotFound, "dag_exec: tool lookup", lerr) // 未注册 → 显式拒绝，不静默放行
-		}
-		res, err := tb.Envelope.Execute(ctx, sandbox.ExecRequest{
-			Principal: sandbox.PrincipalAgent, Kind: sandbox.KindToolExecute,
-			Resource: tool.Name, TrustTier: tool.TrustTier, Tool: tool,
-			Input: args, TaintLevel: taintLevel, // 透传输入污点，勿恒置 TaintNone
-			CPUQuotaMs: int(tool.Timeout.Milliseconds()),
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &types.ToolResult{Success: res.Success, Output: res.Output, Error: res.Error,
-			LatencyMs: res.LatencyMs, TaintLevel: res.TaintLevel, ImageParts: res.ImageParts}, nil
+		return tb.ToolReg.ExecuteTool(ctx, toolName, args, taintLevel)
 	}, nil)
 
 	// 注入 ScriptSkillCache + SkillExecutor，激活 System 1 FastPath 技能命中路径。

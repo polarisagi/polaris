@@ -65,6 +65,10 @@ type ToolBundle struct {
 	Catalog          catalog.Catalog // 统一工具目录
 	Activator        *native.ExtensionActivator
 	ExtensionBus     *bus.ExtensionBus
+	// LLMInfer 通用 LLM 推理闭包（封装 sb.Router），供 SemanticCompressHandler/
+	// ExtensionLibrarianHandler/CodeAct SecurityAuditAgent(L2) 等多个消费方复用，
+	// 避免每处各自重新实现一份"prompt string → sb.Router.Infer" 的桥接闭包。
+	LLMInfer protocol.LLMInferFunc
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -244,10 +248,22 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	installMgr.WithInstallFSM(installFSM)
 	slog.Info("polaris: InstallFSM injected into marketplace manager")
 
-	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry
-	loadSkillsToToolRegistry(ctx, sb.Store.DB(), toolReg, inProcSandbox)
+	// ScriptSkillExecutor 是技能执行的唯一实现（tool-mode instructions 渲染 / Logic Collapse
+	// 脚本执行均在此完成，见 internal/extension/skill/skill.go）。
+	// runner 注入 ContainerSandbox（Rust bwrap/Seatbelt 统一沙箱，物理隔离由其内部提供）；
+	// Tier0 或 FeatureL3Sandbox 未启用时 containerSandbox 为 nil，ExecuteSkill 内部自动降级为
+	// instructions-only（不执行脚本）。WithPolicy 注入 Cedar Gate，脚本执行前强制走 PolicyGate
+	// 授权检查，deny-by-default。
+	var skillRunner skill.ScriptRunner
+	if containerSandbox != nil {
+		skillRunner = containerSandbox
+	}
+	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, skillRunner, nil).WithPolicy(sb.Gate)
 
-	skillExecutor := skill.NewScriptSkillExecutor(skillRegistry, nil, nil)
+	// 启动时将 DB 中已有 tool-mode skills 批量同步到 InMemoryToolRegistry + InProcessSandbox，
+	// 注册的执行函数委托至 skillExecutor（唯一实现，禁止重复渲染 instructions）。
+	loadSkillsToToolRegistry(ctx, sb.Store.DB(), toolReg, inProcSandbox, skillExecutor)
+
 	skillReg := skillRegistry
 	skillCatalog := catalog.NewSkillCatalog(skillReg)
 	compCatalog := catalog.NewCompositeCatalog(memoryCatalog, skillCatalog)
@@ -351,6 +367,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Catalog:          compCatalog,
 		Activator:        activator,
 		ExtensionBus:     extensionBus,
+		LLMInfer:         protocol.LLMInferFunc(llmInfer),
 	}, nil
 }
 

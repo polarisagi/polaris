@@ -17,6 +17,17 @@ func (m *mockScriptRunner) RunScript(ctx context.Context, skillName string, scri
 	return m.response, m.err
 }
 
+// allowAllPolicyGate 测试用永久放行 PolicyGate（实现 protocol.PolicyGate）。
+type allowAllPolicyGate struct{}
+
+func (allowAllPolicyGate) IsAuthorized(_ context.Context, _, _, _ string, _ map[string]any) (bool, error) {
+	return true, nil
+}
+
+func (allowAllPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
+	return types.PolicyReviewResult{Allowed: true}, nil
+}
+
 type mockScriptLoader struct {
 	path string
 	err  error
@@ -143,7 +154,7 @@ func TestScriptSkillExecutor_ExecuteSkill(t *testing.T) {
 	runner := &mockScriptRunner{response: []byte("success")}
 	loader := &mockScriptLoader{}
 
-	exec := NewScriptSkillExecutor(reg, runner, loader)
+	exec := NewScriptSkillExecutor(reg, runner, loader).WithPolicy(allowAllPolicyGate{})
 	resp, err := exec.ExecuteSkill(ctx, "skill:exec", []byte("input"))
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -157,5 +168,60 @@ func TestScriptSkillExecutor_ExecuteSkill(t *testing.T) {
 	_, err = exec.ExecuteSkill(ctx, "skill:exec", []byte("input"))
 	if err == nil {
 		t.Errorf("expected deprecate error")
+	}
+}
+
+// TestScriptSkillExecutor_ExecuteSkill_NoScriptReturnsInstructions 验证纯 SKILL.md
+// 指令技能（无 ScriptPath）不再回显原始输入，而是返回 instructions 全文，
+// 与 cmd/polaris/skill_loader.go 注册的同名工具语义一致（唯一实现）。
+func TestScriptSkillExecutor_ExecuteSkill_NoScriptReturnsInstructions(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+
+	meta := types.SkillMeta{
+		Name:         "skill:instructiononly",
+		Version:      "1.0",
+		Trust:        types.TrustLocal,
+		Instructions: "请先读取文件再总结要点",
+	}
+	_ = reg.Register(ctx, meta)
+
+	// runner 非 nil 但没有 ScriptPath 可用 → 应落到 instructions 分支，不调用 runner。
+	runner := &mockScriptRunner{response: []byte("should-not-be-called")}
+	exec := NewScriptSkillExecutor(reg, runner, nil).WithPolicy(allowAllPolicyGate{})
+
+	resp, err := exec.ExecuteSkill(ctx, "skill:instructiononly", []byte(`{"input":"目标文件 a.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	got := string(resp)
+	if !strings.Contains(got, "请先读取文件再总结要点") || !strings.Contains(got, "目标文件 a.txt") {
+		t.Errorf("expected instructions + input echo, got: %q", got)
+	}
+	if strings.Contains(got, "should-not-be-called") {
+		t.Errorf("runner must not be invoked when there is no script to run")
+	}
+}
+
+// TestScriptSkillExecutor_ExecuteSkill_FailClosedWithoutPolicy 验证脚本执行前
+// 未配置 PolicyGate 时 fail-closed 拒绝，而不是静默放行执行脚本（R1.14）。
+func TestScriptSkillExecutor_ExecuteSkill_FailClosedWithoutPolicy(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+
+	meta := types.SkillMeta{
+		Name:       "skill:noPolicy",
+		Version:    "1.0",
+		Trust:      types.TrustLocal,
+		ScriptPath: "/path/to/script",
+	}
+	_ = reg.Register(ctx, meta)
+
+	runner := &mockScriptRunner{response: []byte("should-not-run")}
+	exec := NewScriptSkillExecutor(reg, runner, nil) // 未调用 WithPolicy
+
+	_, err := exec.ExecuteSkill(ctx, "skill:noPolicy", []byte("input"))
+	if err == nil {
+		t.Fatalf("expected fail-closed error when policy gate not configured")
 	}
 }

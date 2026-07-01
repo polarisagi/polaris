@@ -3,7 +3,8 @@
 // loadSkillsToToolRegistry：
 //
 //	非致命，单个 skill 失败仅记录 WARN，不阻断启动。
-//	与 runtimeRegistrarAdapter.syncSkillToToolRegistry 保持相同注册语义。
+//	注册的 InProcessFn 委托至 skill.ScriptSkillExecutor.ExecuteSkill（唯一实现），
+//	不在此处重复渲染 instructions / 执行脚本逻辑——避免与 Dispatcher/Agent FastPath 产生第二套实现。
 package main
 
 import (
@@ -43,7 +44,9 @@ func parseDescription(instructions, capsRaw string) string {
 // loadSkillsToToolRegistry 启动时将 DB 中 runtime='script' exec_mode='tool' 的技能
 // 批量同步到 InMemoryToolRegistry 和 InProcessSandbox，
 // 使 Agent Kernel FSM 在系统已安装的技能上具备可发现能力。
-func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolReg *polartool.InMemoryToolRegistry, sbx *sandbox.InProcessSandbox) { //nolint:gocyclo
+// skillExec 非 nil 时，注册的执行函数委托至其 ExecuteSkill（唯一实现：instructions 渲染 /
+// Logic Collapse 脚本执行 / PolicyGate 校验均在 internal/extension/skill.ScriptSkillExecutor 完成）。
+func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolReg *polartool.InMemoryToolRegistry, sbx *sandbox.InProcessSandbox, skillExec protocol.SkillExecutor) { //nolint:gocyclo
 	if db == nil || toolReg == nil || sbx == nil {
 		return
 	}
@@ -69,30 +72,16 @@ func loadSkillsToToolRegistry(ctx context.Context, db protocol.SQLQuerier, toolR
 
 		desc := parseDescription(instructions, capsRaw)
 
-		// 注册 InProcessFn（与 runtimeRegistrarAdapter.syncSkillToToolRegistry 保持一致）
+		// 注册 InProcessFn：委托至 skillExec.ExecuteSkill（唯一实现）。
+		// skillExec 为 nil 时（理论上不应发生，boot_tools.go 始终构造）降级为直接返回启动时快照的 instructions，
+		// 不重新实现 DB 重新加载 / 输入拼接逻辑。
 		capturedSlug := slug
 		capturedInst := instructions
 		sbx.Register(llmName, func(ctx context.Context, input []byte) ([]byte, error) {
-			var dbInst string
-			if db != nil {
-				if err := db.QueryRowContext(ctx,
-					`SELECT instructions FROM skills WHERE name=? AND deprecated=0`, "skill:"+capturedSlug).Scan(&dbInst); err != nil {
-					slog.Debug("skill_loader: reload from db failed or not found", "skill", capturedSlug, "err", err)
-				}
+			if skillExec != nil {
+				return skillExec.ExecuteSkill(ctx, "skill:"+capturedSlug, input)
 			}
-			inst := dbInst
-			if inst == "" {
-				inst = capturedInst
-			}
-			var req struct {
-				Input string `json:"input"`
-			}
-			_ = json.Unmarshal(input, &req)
-			out := inst
-			if req.Input != "" {
-				out += "\n\n---\n\n输入：" + req.Input
-			}
-			return []byte(out), nil
+			return []byte(capturedInst), nil
 		})
 
 		if regErr := toolReg.Register(types.Tool{

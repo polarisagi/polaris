@@ -42,17 +42,22 @@ func (r *WrapBashCmdRunner) RunCmd(ctx context.Context, cfg isandbox.CmdRunnerCf
 		natCfg.NetworkPolicy = NetworkAllow
 	}
 
-	goCmd, rustResp, err := WrapBashCmd(ctx, natCfg)
+	goCmd, rustResp, goMethod, err := WrapBashCmd(ctx, natCfg)
 	if err != nil {
+		// WrapBashCmd 在 network_block 要求无法被真实隔离工具满足时会 fail-closed
+		// 返回 error（CodeForbidden）——此处如实透传，不吞掉降级拒绝转成"内部错误"。
 		return nil, -1, "", apperr.Wrap(apperr.CodeInternal, "cmd_runner: WrapBashCmd failed", err)
 	}
 
-	// Rust FFI 路径：命令已在 Rust 侧执行完毕，直接返回结果。
+	// Rust FFI 路径：命令已在 Rust 侧执行完毕，直接返回结果（sandbox_method 由 Rust 如实上报）。
 	if rustResp != nil {
 		return []byte(rustResp.Output), rustResp.ExitCode, rustResp.SandboxMethod, nil
 	}
 
-	// Go 降级路径：调用方（此处）负责运行 exec.Cmd。
+	// Go 降级路径：调用方（此处）负责运行 exec.Cmd。method 是 WrapBashCmd 探测到的
+	// 真实隔离方式（"seatbelt"/"bwrap"/"wsl2"/"bare"），不再统一贴 "go_native" 标签——
+	// 那个标签会掩盖"到底有没有真隔离"这个下游 native_os_sandbox.go/sandbox_impl.go
+	// 本该校验却从未校验的关键事实。
 	out, runErr := goCmd.CombinedOutput()
 	exitCode := 0
 	if runErr != nil {
@@ -61,10 +66,10 @@ func (r *WrapBashCmdRunner) RunCmd(ctx context.Context, cfg isandbox.CmdRunnerCf
 			// 非零退出码：命令本身失败，不视为 runner 错误，返回 exitCode 让调用方决策。
 			exitCode = ee.ExitCode()
 			// CombinedOutput 已合并 stderr 到 out，此处不额外追加。
-			return out, exitCode, "go_native", nil
+			return out, exitCode, goMethod, nil
 		}
 		// exec 启动失败（如二进制不存在）：视为 runner 级别错误。
-		return nil, -1, "go_native", apperr.Wrap(apperr.CodeInternal, "cmd_runner: exec failed", runErr)
+		return nil, -1, goMethod, apperr.Wrap(apperr.CodeInternal, "cmd_runner: exec failed", runErr)
 	}
-	return out, 0, "go_native", nil
+	return out, 0, goMethod, nil
 }

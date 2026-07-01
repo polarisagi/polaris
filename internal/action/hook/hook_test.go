@@ -3,11 +3,33 @@ package hook
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/sandbox"
 )
+
+// echoRunner 是一个测试用 CmdRunner 实现：通过 bash 裸执行（无沙箱隔离）。
+// 仅用于 hook Runner 单元测试（验证事件匹配/并发/错误处理逻辑），不用于安全测试。
+// 生产环境 Runner 注入的是 WrapBashCmdRunner（走 Rust bwrap/Seatbelt 统一沙箱）。
+type echoRunner struct{}
+
+func (echoRunner) RunCmd(_ context.Context, cfg sandbox.CmdRunnerCfg) ([]byte, int, string, error) {
+	// 直接用 bash 裸执行，仅用于单元测试——绕过沙箱 profile 兼容性问题
+	// （macOS seatbelt deny-default 在不同版本上行为差异较大，不适合在此测试）。
+	cmd := exec.Command("bash", "-c", cfg.Command)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return out, ee.ExitCode(), "test_bare", nil
+		}
+		return nil, -1, "test_bare", err
+	}
+	return out, 0, "test_bare", nil
+}
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 
@@ -120,7 +142,7 @@ func TestApplyDefaults_SetsTimeout(t *testing.T) {
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 func TestRunner_Fire_NoGroups(t *testing.T) {
-	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, nil)
+	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, nil, echoRunner{})
 	results := r.Fire(context.Background(), HookInput{Event: EventStop})
 	if results != nil {
 		t.Errorf("expected nil results for unregistered event, got %v", results)
@@ -140,7 +162,7 @@ func TestRunner_Fire_EchoCommand(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil)
+	runner := NewRunner(reg, nil, echoRunner{})
 	results := runner.Fire(context.Background(), HookInput{
 		Event:     EventPostToolUse,
 		ToolName:  "bash",
@@ -149,6 +171,9 @@ func TestRunner_Fire_EchoCommand(t *testing.T) {
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Err != nil {
+		t.Fatalf("unexpected error: %v", results[0].Err)
 	}
 	if results[0].ExitCode != 0 {
 		t.Errorf("expected exit 0, got %d", results[0].ExitCode)
@@ -170,7 +195,7 @@ func TestRunner_Fire_NonZeroExit(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil)
+	runner := NewRunner(reg, nil, echoRunner{})
 	results := runner.Fire(context.Background(), HookInput{Event: EventPreToolUse})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -188,9 +213,37 @@ func TestRunner_Fire_SkipsNonCommandType(t *testing.T) {
 			}},
 		},
 	}
-	runner := NewRunner(reg, nil)
+	runner := NewRunner(reg, nil, echoRunner{})
 	results := runner.Fire(context.Background(), HookInput{Event: EventSessionStart})
 	if len(results) != 0 {
 		t.Errorf("non-command handler should be skipped, got %d results", len(results))
+	}
+}
+
+// TestRunner_Fire_NilCmdRunner_FailClosed 验证 cmdRunner==nil 时 Runner fail-closed：
+// 不裸跑，直接返回 Forbidden 错误（HE-Rule 2）。
+func TestRunner_Fire_NilCmdRunner_FailClosed(t *testing.T) {
+	reg := &Registry{
+		groups: map[Event][]MatcherGroup{
+			EventPostToolUse: compileMatchers([]MatcherGroup{{
+				Matcher: "",
+				Hooks: []HandlerConfig{{
+					Type:    "command",
+					Command: "echo should-not-run",
+					Timeout: 5 * time.Second,
+				}},
+			}}),
+		},
+	}
+	runner := NewRunner(reg, nil, nil)
+	results := runner.Fire(context.Background(), HookInput{Event: EventPostToolUse})
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Err == nil {
+		t.Fatal("expected fail-closed error when cmdRunner is nil")
+	}
+	if !strings.Contains(results[0].Err.Error(), "fail-closed") {
+		t.Errorf("expected fail-closed in error message, got: %v", results[0].Err)
 	}
 }

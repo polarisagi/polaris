@@ -32,12 +32,31 @@ use super::fallback::exec_namespace_fallback_v2;
 // ─── 平台分发 V1 ──────────────────────────────────────────────────────────────
 
 /// 按当前平台选择沙箱实现，失败时自动降级。
+///
+/// fail-closed 规则（HE-Rule 2：物理断裂 > 概率过滤）：
+/// 调用方以 network_block=true 声明"需要网络隔离"时，若平台原生隔离工具
+/// （seatbelt/bwrap/wsl2）不可用，一律拒绝执行——不静默降级到 bare/namespace，
+/// 因为那些降级路径不提供任何网络隔离，会让"声明了网络隔离"的调用方在
+/// 毫无感知的情况下裸奔。network_block=false 时降级行为不变（兼容 Tier-0）。
 fn dispatch_sandbox(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String> {
+    let network_block = req.network_block.unwrap_or(false);
+
     #[cfg(target_os = "macos")]
     {
         match exec_seatbelt(req) {
-            Ok(r) => return Ok(r),
+            Ok(mut r) => {
+                r.net_isolated = network_block;
+                return Ok(r);
+            }
             Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: sandbox-exec(seatbelt) unavailable ({}); refusing to run with network_block=true \
+                         because the bare fallback provides no network isolation. Install Xcode Command Line Tools, \
+                         or explicitly pass network_block=false to allow degraded (unisolated) execution.",
+                        e
+                    ));
+                }
                 eprintln!(
                     "[native_sandbox] seatbelt failed ({}), falling back to bare",
                     e
@@ -50,8 +69,20 @@ fn dispatch_sandbox(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse,
     #[cfg(target_os = "linux")]
     {
         match exec_bwrap(req) {
-            Ok(r) => return Ok(r),
+            Ok(mut r) => {
+                r.net_isolated = network_block;
+                return Ok(r);
+            }
             Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: bwrap unavailable ({}); refusing to run with network_block=true \
+                         because the namespace fallback provides no network isolation. Install bubblewrap \
+                         (apt-get install bubblewrap), or explicitly pass network_block=false to allow \
+                         degraded (unisolated) execution.",
+                        e
+                    ));
+                }
                 eprintln!(
                     "[native_sandbox] bwrap failed ({}), falling back to namespace",
                     e
@@ -64,17 +95,37 @@ fn dispatch_sandbox(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse,
     #[cfg(target_os = "windows")]
     {
         match exec_wsl2(req) {
+            // WSL2 的 --net unshare 是否真正生效取决于宿主 WSL2 内核配置，未经验证，
+            // 诚实上报 net_isolated=false（与 build_wrap_argv_wsl2 保持一致）。
             Ok(r) => return Ok(r),
             Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: WSL2 unavailable ({}); refusing to run with network_block=true \
+                         because the bare fallback provides no network isolation. Install WSL2 \
+                         (https://aka.ms/wsl2), or explicitly pass network_block=false to allow degraded \
+                         (unisolated) execution.",
+                        e
+                    ));
+                }
                 eprintln!("[native_sandbox] wsl2 failed ({}), falling back to bare", e);
             }
         }
         return exec_bare(req);
     }
 
-    // 其他平台（FreeBSD 等）
+    // 其他平台（FreeBSD 等）：无任何原生隔离工具，network_block=true 时直接拒绝。
     #[allow(unreachable_code)]
-    exec_bare(req)
+    {
+        if network_block {
+            return Err(
+                "sandbox degraded: no native sandbox tool available on this platform; refusing to run \
+                 with network_block=true. Explicitly pass network_block=false to allow degraded \
+                 (unisolated) execution.".to_string(),
+            );
+        }
+        exec_bare(req)
+    }
 }
 
 // ─── 工具探测 ─────────────────────────────────────────────────────────────────
@@ -141,12 +192,35 @@ fn probe_tools() -> ToolProbeResult {
 
 // ─── V2 平台分发 ─────────────────────────────────────────────────────────────
 
+/// V2 同 dispatch_sandbox 的 fail-closed 规则：network_policy != "allow"
+/// （即 "deny" 或 "domain_whitelist"）且原生隔离工具不可用时拒绝执行。
+/// domain_whitelist 在无原生工具时同样必须拒绝——它本身就只是 deny+DNS 近似
+/// 实现（见 bwrap.rs/seatbelt.rs 注释），没有 seatbelt/bwrap 承载时等于零隔离。
 fn dispatch_exec_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxResponse, String> {
+    let network_block = ctx.network_policy.as_deref().unwrap_or("deny") != "allow";
+    // net_isolated 上报口径与 build_wrap_argv_* 对齐：只有纯 "deny" 才算真正隔离；
+    // "domain_whitelist" 本身只是 deny+DNS 近似实现（见 bwrap.rs/seatbelt.rs 注释），
+    // 不管有没有原生工具承载都不应声明为 isolated=true。
+    let net_isolated_claim = ctx.network_policy.as_deref() == Some("deny");
+
     #[cfg(target_os = "macos")]
     {
         match exec_seatbelt_v2(ctx) {
-            Ok(r) => return Ok(r),
-            Err(e) => eprintln!("[native_sandbox_v2] seatbelt failed ({}), fallback bare", e),
+            Ok(mut r) => {
+                // run_with_timeout 默认写 false；此处按 network_policy 回填真实隔离状态。
+                r.net_isolated = net_isolated_claim;
+                return Ok(r);
+            }
+            Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: seatbelt unavailable ({}); refusing network_policy={:?} \
+                         because bare fallback has no network isolation",
+                        e, ctx.network_policy
+                    ));
+                }
+                eprintln!("[native_sandbox_v2] seatbelt failed ({}), fallback bare", e);
+            }
         }
         return exec_bare_v2(ctx);
     }
@@ -154,11 +228,23 @@ fn dispatch_exec_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxResponse, Str
     #[cfg(target_os = "linux")]
     {
         match exec_bwrap_v2(ctx) {
-            Ok(r) => return Ok(r),
-            Err(e) => eprintln!(
-                "[native_sandbox_v2] bwrap failed ({}), fallback namespace",
-                e
-            ),
+            Ok(mut r) => {
+                r.net_isolated = net_isolated_claim;
+                return Ok(r);
+            }
+            Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: bwrap unavailable ({}); refusing network_policy={:?} \
+                         because namespace fallback has no network isolation",
+                        e, ctx.network_policy
+                    ));
+                }
+                eprintln!(
+                    "[native_sandbox_v2] bwrap failed ({}), fallback namespace",
+                    e
+                );
+            }
         }
         return exec_namespace_fallback_v2(ctx);
     }
@@ -167,24 +253,52 @@ fn dispatch_exec_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxResponse, Str
     {
         match exec_wsl2_v2(ctx) {
             Ok(r) => return Ok(r),
-            Err(e) => eprintln!("[native_sandbox_v2] wsl2 failed ({}), fallback bare", e),
+            Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: WSL2 unavailable ({}); refusing network_policy={:?} \
+                         because bare fallback has no network isolation",
+                        e, ctx.network_policy
+                    ));
+                }
+                eprintln!("[native_sandbox_v2] wsl2 failed ({}), fallback bare", e);
+            }
         }
         return exec_bare_v2(ctx);
     }
 
     #[allow(unreachable_code)]
-    exec_bare_v2(ctx)
+    {
+        if network_block {
+            return Err(format!(
+                "sandbox degraded: no native sandbox tool available on this platform; refusing network_policy={:?}",
+                ctx.network_policy
+            ));
+        }
+        exec_bare_v2(ctx)
+    }
 }
 
 fn dispatch_wrap_argv(ctx: &SandboxContextV2) -> Result<WrapArgvResponseV2, String> {
+    let network_block = ctx.network_policy.as_deref().unwrap_or("deny") != "allow";
+
     #[cfg(target_os = "macos")]
     {
         match build_wrap_argv_seatbelt(ctx) {
             Ok(r) => return Ok(r),
-            Err(e) => eprintln!(
-                "[native_sandbox_v2] wrap_argv seatbelt failed ({}), fallback bare",
-                e
-            ),
+            Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: seatbelt unavailable ({}); refusing to build unisolated argv \
+                         for network_policy={:?}",
+                        e, ctx.network_policy
+                    ));
+                }
+                eprintln!(
+                    "[native_sandbox_v2] wrap_argv seatbelt failed ({}), fallback bare",
+                    e
+                );
+            }
         }
         return build_wrap_argv_bare(ctx);
     }
@@ -193,10 +307,19 @@ fn dispatch_wrap_argv(ctx: &SandboxContextV2) -> Result<WrapArgvResponseV2, Stri
     {
         match build_wrap_argv_bwrap(ctx) {
             Ok(r) => return Ok(r),
-            Err(e) => eprintln!(
-                "[native_sandbox_v2] wrap_argv bwrap failed ({}), fallback bare",
-                e
-            ),
+            Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: bwrap unavailable ({}); refusing to build unisolated argv \
+                         for network_policy={:?}",
+                        e, ctx.network_policy
+                    ));
+                }
+                eprintln!(
+                    "[native_sandbox_v2] wrap_argv bwrap failed ({}), fallback bare",
+                    e
+                );
+            }
         }
         return build_wrap_argv_bare(ctx);
     }
@@ -205,16 +328,34 @@ fn dispatch_wrap_argv(ctx: &SandboxContextV2) -> Result<WrapArgvResponseV2, Stri
     {
         match build_wrap_argv_wsl2(ctx) {
             Ok(r) => return Ok(r),
-            Err(e) => eprintln!(
-                "[native_sandbox_v2] wrap_argv wsl2 failed ({}), fallback bare",
-                e
-            ),
+            Err(e) => {
+                if network_block {
+                    return Err(format!(
+                        "sandbox degraded: WSL2 unavailable ({}); refusing to build unisolated argv \
+                         for network_policy={:?}",
+                        e, ctx.network_policy
+                    ));
+                }
+                eprintln!(
+                    "[native_sandbox_v2] wrap_argv wsl2 failed ({}), fallback bare",
+                    e
+                );
+            }
         }
         return build_wrap_argv_bare(ctx);
     }
 
     #[allow(unreachable_code)]
-    build_wrap_argv_bare(ctx)
+    {
+        if network_block {
+            return Err(format!(
+                "sandbox degraded: no native sandbox tool available on this platform; refusing to build \
+                 unisolated argv for network_policy={:?}",
+                ctx.network_policy
+            ));
+        }
+        build_wrap_argv_bare(ctx)
+    }
 }
 
 // ─── 公开 FFI 函数 V1 ─────────────────────────────────────────────────────────

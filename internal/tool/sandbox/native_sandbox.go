@@ -19,6 +19,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // NetworkPolicy 网络访问策略。
@@ -48,38 +50,55 @@ type NativeSandboxCfg struct {
 // 优先调用 Rust FFI 直接执行（无需返回 Cmd），若 Rust 路径不可用则构造 Go exec.Cmd
 // 交由调用方执行。因此返回值分两种情况：
 //
-//	result != nil  → Rust 已执行完毕，Cmd 为 nil（调用方直接使用 result）
-//	result == nil  → 返回 Go exec.Cmd，调用方自行 cmd.CombinedOutput()
+//	result != nil  → Rust 已执行完毕，Cmd 为 nil（调用方直接使用 result，result.SandboxMethod 已如实上报）
+//	result == nil  → 返回 Go exec.Cmd + goMethod（该 Cmd 实际达到的隔离方法：
+//	                 "seatbelt"/"bwrap"/"bare"），调用方自行 cmd.CombinedOutput()
+//	                 并如实上报 goMethod，不再统一贴 "go_native" 掩盖真相。
 //
 // 注意：调用方需检查 result 而非总是用 cmd。
-func WrapBashCmd(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, *RustSandboxResponse, error) {
+//
+// fail-closed 规则（HE-Rule 2：物理断裂 > 概率过滤，与 Rust 侧 dispatch.rs 对齐）：
+// cfg.NetworkPolicy==NetworkBlock 时，若 Rust FFI 和 Go 降级路径都拿不到真实隔离
+// 工具（seatbelt/bwrap），直接返回 error，不静默退化为裸 bash -c——裸执行没有任何
+// 网络隔离，会让"要求断网"的调用方（CodeAct/技能脚本/Hook）在无感知的情况下联网。
+func WrapBashCmd(ctx context.Context, cfg NativeSandboxCfg) (cmd *exec.Cmd, result *RustSandboxResponse, goMethod string, err error) {
 	// ── 优先路径：Rust FFI ────────────────────────────────────────────────
 	timeoutMs := cfg.TimeoutMs
 	if timeoutMs == 0 {
 		timeoutMs = 30_000
 	}
 
-	resp, err := RustSandboxExec(cfg, timeoutMs)
-	if err == nil {
-		return nil, resp, nil
+	resp, rustErr := RustSandboxExec(cfg, timeoutMs)
+	if rustErr == nil {
+		return nil, resp, "", nil
 	}
 
-	// Rust dylib 未加载或不可用 → 降级到 Go 实现，记录警告
+	// Rust 侧已按同一 fail-closed 规则显式拒绝降级（网络隔离要求无法满足）：
+	// 直接透传，不再尝试 Go 降级路径——Go 侧面临的是同一台宿主、同样缺失的
+	// 隔离工具，重复走一遍降级判断只是换个语言得到同一个"拒绝"结论。
+	if strings.Contains(rustErr.Error(), "sandbox degraded") {
+		return nil, nil, "", apperr.Wrap(apperr.CodeForbidden, "native_sandbox: Rust FFI refused degraded execution", rustErr)
+	}
+
+	// Rust dylib 未加载或不可用（非策略拒绝）→ 降级到 Go 实现，记录警告
 	slog.Warn("native_sandbox: Rust FFI unavailable, falling back to Go implementation",
-		"error", err,
+		"error", rustErr,
 		"tip", "run `make rust-build` to build the substrate dylib")
 
 	// ── 降级路径：Go 本地实现 ─────────────────────────────────────────────
-	goCmd, goErr := wrapBashCmdGo(ctx, cfg)
+	goCmd, method, goErr := wrapBashCmdGo(ctx, cfg)
 	if goErr != nil {
-		return nil, nil, goErr
+		return nil, nil, "", goErr
 	}
-	return goCmd, nil, nil
+	return goCmd, nil, method, nil
 }
 
 // wrapBashCmdGo Go 本地沙箱实现（降级路径）。
 // 与 Rust 实现对应：macOS Seatbelt / Linux bwrap / Windows WSL2。
-func wrapBashCmdGo(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
+// 返回值新增 method：Go 侧实际达到的隔离方法（"seatbelt"/"bwrap"/"wsl2"/"bare"），
+// 调用方据此如实上报 sandbox_method，不再统一贴 "go_native" 标签掩盖真相。
+// fail-closed：NetworkPolicy==NetworkBlock 且平台隔离工具不可用时返回 error，不裸跑。
+func wrapBashCmdGo(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, string, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return wrapDarwin(ctx, cfg)
@@ -88,17 +107,27 @@ func wrapBashCmdGo(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error)
 	case "windows":
 		return wrapWindows(ctx, cfg)
 	default:
+		if cfg.NetworkPolicy == NetworkBlock {
+			return nil, "", apperr.New(apperr.CodeForbidden,
+				fmt.Sprintf("native_sandbox: unknown platform %q has no isolation tool; refusing NetworkBlock request (explicitly pass NetworkAllow to allow degraded execution)", runtime.GOOS))
+		}
 		slog.Warn("native_sandbox: unknown platform, no isolation", "goos", runtime.GOOS)
-		return wrapFallback(ctx, cfg)
+		cmd, err := wrapFallback(ctx, cfg)
+		return cmd, "bare", err
 	}
 }
 
 // ── macOS: Seatbelt（sandbox-exec）────────────────────────────────────────────
 
-func wrapDarwin(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
+func wrapDarwin(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, string, error) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
+		if cfg.NetworkPolicy == NetworkBlock {
+			return nil, "", apperr.New(apperr.CodeForbidden,
+				"native_sandbox: sandbox-exec not found on macOS; refusing NetworkBlock request (bare fallback has no network isolation) — install Xcode Command Line Tools or explicitly pass NetworkAllow")
+		}
 		slog.Warn("native_sandbox: sandbox-exec not found on macOS, falling back to minimal isolation")
-		return wrapFallback(ctx, cfg)
+		cmd, err := wrapFallback(ctx, cfg)
+		return cmd, "bare", err
 	}
 	profile := buildSeatbeltProfile(cfg)
 	// 注入 PATH 前缀（sandbox-exec 会清空部分 env，确保工具可找到）
@@ -107,7 +136,7 @@ func wrapDarwin(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "sandbox-exec", "-p", profile, "bash", "-c", fullCmd)
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = cfg.Env
-	return cmd, nil
+	return cmd, "seatbelt", nil
 }
 
 // buildSeatbeltProfile 构建 SBPL 策略（与 Rust 侧 build_seatbelt_profile 对齐）。
@@ -122,6 +151,10 @@ func buildSeatbeltProfile(cfg NativeSandboxCfg) string {
 (allow ipc-posix*)
 (allow mach-lookup)
 (allow mach-register)
+; 继承的 fd（stdout/stderr 管道）写入——不受 subpath 约束的 fd 级操作。
+; 没有这两行，deny default 下任何 sandboxed 命令都无法输出（SIGABRT exit 134）。
+(allow file-write-data)
+(allow file-ioctl)
 ; 系统目录只读（编译器/解释器/标准库/Homebrew）
 (allow file-read*
   (subpath "/usr")
@@ -183,18 +216,24 @@ func sbplEscape(path string) string {
 
 // ── Linux: bubblewrap（bwrap）────────────────────────────────────────────────
 
-func wrapLinux(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
+func wrapLinux(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, string, error) {
 	bwrapPath := cfg.BwrapPath
 	if bwrapPath == "" {
 		var err error
 		bwrapPath, err = exec.LookPath("bwrap")
 		if err != nil {
+			if cfg.NetworkPolicy == NetworkBlock {
+				return nil, "", apperr.New(apperr.CodeForbidden,
+					"native_sandbox: bwrap not found; refusing NetworkBlock request (bare fallback has no network isolation) — install bubblewrap (apt-get install bubblewrap) or explicitly pass NetworkAllow")
+			}
 			slog.Warn("native_sandbox: bwrap not found; install bubblewrap for full sandbox",
 				"tip", "sudo apt-get install bubblewrap")
-			return wrapFallback(ctx, cfg)
+			cmd, err := wrapFallback(ctx, cfg)
+			return cmd, "bare", err
 		}
 	}
-	return wrapWithBwrap(ctx, bwrapPath, cfg)
+	cmd, err := wrapWithBwrap(ctx, bwrapPath, cfg)
+	return cmd, "bwrap", err
 }
 
 func wrapWithBwrap(ctx context.Context, bwrapPath string, cfg NativeSandboxCfg) (*exec.Cmd, error) {
@@ -271,11 +310,16 @@ func wrapWithBwrap(ctx context.Context, bwrapPath string, cfg NativeSandboxCfg) 
 
 // ── Windows: WSL2 ─────────────────────────────────────────────────────────────
 
-func wrapWindows(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
+func wrapWindows(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, string, error) {
 	if _, err := exec.LookPath("wsl.exe"); err != nil {
+		if cfg.NetworkPolicy == NetworkBlock {
+			return nil, "", apperr.New(apperr.CodeForbidden,
+				"native_sandbox: WSL2 not found on Windows; refusing NetworkBlock request (bare fallback has no network isolation) — install WSL2 (https://aka.ms/wsl2) or explicitly pass NetworkAllow")
+		}
 		slog.Warn("native_sandbox: WSL2 not found on Windows, falling back to minimal isolation",
 			"tip", "install WSL2: https://aka.ms/wsl2")
-		return wrapFallback(ctx, cfg)
+		cmd, err := wrapFallback(ctx, cfg)
+		return cmd, "bare", err
 	}
 
 	args := []string{}
@@ -287,6 +331,9 @@ func wrapWindows(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
 		}
 	}
 	if cfg.NetworkPolicy == NetworkBlock {
+		// 与 Rust 侧一致：wsl.exe 存在时仍尝试 unshare --net，但其有效性依赖宿主 WSL2
+		// 内核支持，未经验证——不视为"工具缺失"而 fail-closed，只如实警告 + 上报
+		// method="wsl2"（调用方/上层可自行决定是否将 wsl2 视为不可信隔离）。
 		slog.Warn("native_sandbox: network blocking not enforced inside WSL2; configure Windows Firewall manually")
 	}
 
@@ -296,7 +343,7 @@ func wrapWindows(ctx context.Context, cfg NativeSandboxCfg) (*exec.Cmd, error) {
 	args = append(args, "-e", "bash", "-c", fullCmd)
 
 	cmd := exec.CommandContext(ctx, "wsl.exe", args...)
-	return cmd, nil
+	return cmd, "wsl2", nil
 }
 
 // windowsPathToWSL 将 Windows 路径转为 WSL2 /mnt/ 路径（C:\foo → /mnt/c/foo）。

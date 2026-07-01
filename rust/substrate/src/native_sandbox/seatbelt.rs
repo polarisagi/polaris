@@ -36,6 +36,10 @@ pub(super) fn build_seatbelt_profile(
 (allow ipc-posix*)
 (allow mach-lookup)
 (allow mach-register)
+; 继承的 fd（stdout/stderr 管道）写入——fd 级操作不受 subpath 约束。
+; 没有这两行，deny default 下任何 sandboxed 命令都无法输出（SIGABRT exit 134）。
+(allow file-write-data)
+(allow file-ioctl)
 ; 系统目录只读（编译器/解释器/标准库/Homebrew）
 (allow file-read*
   (subpath "/usr")
@@ -173,6 +177,9 @@ pub(super) fn build_seatbelt_profile_v2(
 (allow ipc-posix*)
 (allow mach-lookup)
 (allow mach-register)
+; 继承的 fd（stdout/stderr 管道）写入——fd 级操作不受 subpath 约束。
+(allow file-write-data)
+(allow file-ioctl)
 (allow file-read*
   (subpath "/usr") (subpath "/bin") (subpath "/sbin")
   (subpath "/System") (subpath "/Library")
