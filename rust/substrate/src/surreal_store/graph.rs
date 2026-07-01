@@ -5,8 +5,8 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 
 use super::{
-    edge_record_key, encode_ids, encode_scored, get_store, write_cstr, ToIdRow, ToIdWeightRow,
-    VecRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK,
+    SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK, ToIdRow,
+    ToIdWeightRow, VecRow, edge_record_key, encode_ids, encode_scored, get_store, write_cstr,
 };
 
 // ─── surreal_graph_relate ─────────────────────────────────────────────────────
@@ -214,8 +214,7 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
                     if transferred_energy >= dormancy_threshold {
                         *next_frontier.entry(edge.to_id.clone()).or_insert(0.0) +=
                             transferred_energy;
-                        *node_energy.entry(edge.to_id.clone()).or_insert(0.0) +=
-                            transferred_energy;
+                        *node_energy.entry(edge.to_id.clone()).or_insert(0.0) += transferred_energy;
                     }
                 }
             }
@@ -293,8 +292,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
             let sql = if et.is_empty() {
                 "SELECT to_id FROM edges WHERE from_id IN $frontier".to_string()
             } else {
-                "SELECT to_id FROM edges WHERE from_id IN $frontier AND edge_type = $et"
-                    .to_string()
+                "SELECT to_id FROM edges WHERE from_id IN $frontier AND edge_type = $et".to_string()
             };
             // 查询出错时返回 SURREAL_ERR_QUERY，不以空结果伪装"无可达节点"
             let next: Vec<String> = match guard.rt.block_on(async {
@@ -321,8 +319,7 @@ pub unsafe extern "C" fn surreal_graph_traverse(
         }
 
         // 排序保证结果确定性
-        let mut result_ids: Vec<String> =
-            visited.into_iter().filter(|id| id != &start).collect();
+        let mut result_ids: Vec<String> = visited.into_iter().filter(|id| id != &start).collect();
         result_ids.sort();
         write_cstr(out_json, &encode_ids(&result_ids));
         SURREAL_OK

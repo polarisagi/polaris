@@ -164,6 +164,8 @@ func (m *MCPManager) SetCatalog(c catalog.Catalog) {
 // Add 连接一个 MCP Server，发现工具并注册到 sandbox。
 // 连接失败时仍写入 tombstone entry（errMsg 非空），使 ListServers 能向 UI 暴露失败原因。
 // name 必须满足 ^[a-zA-Z0-9_-]+$，否则拒绝安装。
+//
+//nolint:gocyclo // 顺序连接/初始化/注册流程，分支不可合并；拆子函数会破坏 storeFailed 闭包语义。
 func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClientConfig) error {
 	if err := validateLLMNamePart(name); err != nil {
 		return apperr.Wrap(apperr.CodeInvalidInput, fmt.Sprintf("mcp: server name %q invalid (must match ^[a-zA-Z0-9_-]+$)", name), err)
@@ -421,8 +423,23 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 		toolTimeout = 5 * time.Minute
 	}
 
+	// 注册前安全扫描（prompt injection 检测）
+	// Deny 级工具直接跳过；HITL/Warn 级仍注册但已记录日志（可后续接入 HITL 网关）
+	scanner := NewToolSecurityScanner()
+	deniedTools := make(map[string]bool)
+	for _, scanResult := range scanner.ScanAll(tools, ScanRiskDeny) {
+		deniedTools[scanResult.ToolName] = true
+		slog.Error("mcp: tool blocked by security scanner",
+			"server", serverName, "tool", scanResult.ToolName, "reasons", scanResult.Reasons)
+	}
+	// HITL 扫描（记录，不阻断）
+	_ = scanner.ScanAll(tools, ScanRiskHITL)
+
 	valid := make([]MCPTool, 0, len(tools))
 	for _, t := range tools {
+		if deniedTools[t.Name] {
+			continue
+		}
 		llmName := MCPToolName(serverName, t.Name)
 		if llmName != MCPToolName(serverName, SanitizeToolNamePart(t.Name)) || t.Name != SanitizeToolNamePart(t.Name) {
 			slog.Warn("mcp: tool name sanitized", "server", serverName, "original", t.Name, "llm_name", llmName)

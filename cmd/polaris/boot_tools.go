@@ -92,7 +92,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	} else {
 		slog.Info("polaris: WasmtimeSandbox (L2) skipped (FeatureL2Sandbox disabled)")
 	}
+	// NativeOSSandbox（L4-native）：Rust bwrap/Seatbelt，无容器运行时依赖。
+	// Tier-0（2GB VPS）上 FeatureL3Sandbox 未启用时作为 CodeAct 脚本执行后端。
+	// 始终初始化（Rust dylib 已随二进制打包），与 FeatureL3Sandbox 门控无关。
+	// 复用 cmdRunner（WrapBashCmdRunner）以规避 internal/sandbox ↔ internal/tool/sandbox 循环 import。
+	nativeOSSandbox := sandbox.NewNativeOSSandbox(cmdRunner)
 	sandboxRouter := sandbox.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, sb.Cfg.System.Tier)
+	sandboxRouter.WithNativeOS(nativeOSSandbox)
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
 	}

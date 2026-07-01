@@ -588,26 +588,30 @@ func sandboxPathAddLinux(add func(string)) {
 	}
 }
 
-// execInSandbox 通过 Rust FFI（或 Go 降级）在沙箱中执行命令。
-// 返回 (output, cmdErr, sandboxMethod, setupErr)。
-// setupErr != nil 表示沙箱初始化失败（非命令执行失败）。
-func execInSandbox(ctx context.Context, cfg toolsb.NativeSandboxCfg) ([]byte, error, string, error) {
-	goCmd, rustResp, wrapErr := toolsb.WrapBashCmd(ctx, cfg)
-	if wrapErr != nil {
-		return nil, nil, "", wrapErr
+// execInSandbox 通过 Rust FFI V2 在沙箱中执行命令。
+// 返回 (output, cmdErr, sandboxMethod, setupErr)：
+//   - setupErr != nil 表示沙箱基础设施失败（dylib 缺失 / JSON 序列化失败）
+//   - cmdErr != nil 表示命令执行失败（非零退出码）
+//
+// V2 统一接口：调用方填 protocol.SandboxContext，env preset / 凭据过滤均在 Rust 侧完成。
+func execInSandbox(_ context.Context, sandboxCtx protocol.SandboxContext) ([]byte, error, string, error) {
+	resp, setupErr := toolsb.RustSandboxExecV2(sandboxCtx, sandboxCtx.TimeoutMs)
+	if setupErr != nil {
+		return nil, nil, "", setupErr
 	}
-	if rustResp != nil {
-		var cmdErr error
-		if rustResp.ExitCode != 0 {
-			cmdErr = apperr.New(apperr.CodeInternal, fmt.Sprintf("exit status %d", rustResp.ExitCode))
-		}
-		return []byte(rustResp.Output), cmdErr, rustResp.SandboxMethod, nil
+	var cmdErr error
+	if resp.ExitCode != 0 {
+		cmdErr = apperr.New(apperr.CodeInternal, fmt.Sprintf("exit status %d", resp.ExitCode))
 	}
-	if goCmd != nil {
-		out, cmdErr := goCmd.CombinedOutput()
-		return out, cmdErr, "go_fallback", nil
+	return []byte(resp.Output), cmdErr, resp.SandboxMethod, nil
+}
+
+// toSandboxNetPolicy 将 V1 toolsb.NetworkPolicy 映射到 V2 protocol.SandboxNetworkPolicy。
+func toSandboxNetPolicy(p toolsb.NetworkPolicy) string {
+	if p == toolsb.NetworkAllow {
+		return protocol.NetPolicyAllow
 	}
-	return nil, nil, "none", nil
+	return protocol.NetPolicyDeny
 }
 
 // execWithoutSandbox 在无沙箱模式下执行 bash 命令（仅 env 清理，无进程隔离）。
@@ -669,17 +673,19 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.Net
 		var sandboxMethod string
 
 		if sandboxEnabled {
-			cfg := toolsb.NativeSandboxCfg{
+			// V2 统一沙箱接口：env preset 在 Rust 侧由 CallerType=builtin 推导，
+			// 凭据过滤由 Rust 侧 CREDENTIAL_STRIP 规则保证（无需 Go 侧 baseEnv() 过滤）。
+			sandboxCtx := protocol.SandboxContext{
+				CallerType:    protocol.CallerBuiltin,
 				Command:       args.Command,
-				WorkDir:       workDir,
+				Workdir:       workDir,
 				AllowedPaths:  allowedPaths,
-				NetworkPolicy: netPolicy,
-				Env:           baseEnv(),
-				BwrapPath:     bwrapPath,
+				NetworkPolicy: toSandboxNetPolicy(netPolicy),
+				BwrapPath:     bwrapPath, // Linux 用户自定义 bwrap 路径（空=自动查找）
 				TimeoutMs:     30_000,
 			}
 			var setupErr error
-			outBytes, execErr, sandboxMethod, setupErr = execInSandbox(execCtx, cfg)
+			outBytes, execErr, sandboxMethod, setupErr = execInSandbox(execCtx, sandboxCtx)
 			if setupErr != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "bash: sandbox wrap failed", setupErr)
 			}
@@ -1393,17 +1399,20 @@ func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy tool
 		var sandboxMethod string
 
 		if sandboxEnabled {
-			cfg := toolsb.NativeSandboxCfg{
+			// V2 统一沙箱接口：构建工具额外需要 GOCACHE/CARGO_HOME/npm_config_cache，
+			// 通过 EnvExtra 显式注入（Rust 侧 credential 过滤后追加）。
+			sandboxCtx := protocol.SandboxContext{
+				CallerType:    protocol.CallerBuiltin,
 				Command:       args.Command,
-				WorkDir:       workDir,
+				Workdir:       workDir,
 				AllowedPaths:  allowedPaths,
-				NetworkPolicy: netPolicy, // 构建工具通常需要网络（下载依赖），由上层配置控制
-				Env:           env,
-				BwrapPath:     bwrapPath,
+				NetworkPolicy: toSandboxNetPolicy(netPolicy), // 构建工具通常需要网络（下载依赖），由上层配置控制
+				EnvExtra:      []string{"GOCACHE=/tmp/gocache", "CARGO_HOME=/tmp/cargo", "npm_config_cache=/tmp/npm"},
+				BwrapPath:     bwrapPath, // Linux 用户自定义 bwrap 路径（空=自动查找）
 				TimeoutMs:     uint64(timeout.Milliseconds()),
 			}
 			var setupErr error
-			outBytes, execErr, sandboxMethod, setupErr = execInSandbox(execCtx, cfg)
+			outBytes, execErr, sandboxMethod, setupErr = execInSandbox(execCtx, sandboxCtx)
 			if setupErr != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "run_command: sandbox wrap failed", setupErr)
 			}

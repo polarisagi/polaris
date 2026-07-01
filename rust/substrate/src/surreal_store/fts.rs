@@ -6,8 +6,8 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 
 use super::{
-    get_store, write_cstr, CountRow, DocScoreRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC,
-    SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK,
+    CountRow, DocScoreRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY,
+    SURREAL_ERR_UTF8, SURREAL_OK, get_store, write_cstr,
 };
 
 // ─── surreal_fts_index ────────────────────────────────────────────────────────
@@ -268,5 +268,3 @@ pub unsafe extern "C" fn surreal_free_buf(ptr: *mut u8, len: usize) {
 /// KV-mem 后端无法显式 purge，no-op 安全；kv-rocksdb 未来可调用 compact_range。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_purge() {}
-
-

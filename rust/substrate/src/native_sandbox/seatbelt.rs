@@ -114,9 +114,7 @@ pub(super) fn sbpl_escape(path: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn exec_seatbelt(
-    req: &NativeSandboxRequest,
-) -> Result<NativeSandboxResponse, String> {
+pub(super) fn exec_seatbelt(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String> {
     let sandbox_exec = which_tool("sandbox-exec")
         .ok_or_else(|| "sandbox-exec not found; macOS version too old?".to_string())?;
 
@@ -252,9 +250,7 @@ pub(super) fn build_seatbelt_profile_v2(
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn exec_seatbelt_v2(
-    ctx: &SandboxContextV2,
-) -> Result<NativeSandboxResponse, String> {
+pub(super) fn exec_seatbelt_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxResponse, String> {
     let sandbox_exec =
         which_tool("sandbox-exec").ok_or_else(|| "sandbox-exec not found".to_string())?;
     let workdir = ctx.workdir.as_deref().unwrap_or("/tmp");

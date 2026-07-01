@@ -27,10 +27,10 @@
 
 #![allow(unused_variables)]
 
-mod types;
-mod env;
-mod engine;
-mod seatbelt;
 mod bwrap;
-mod fallback;
 mod dispatch;
+mod engine;
+mod env;
+mod fallback;
+mod seatbelt;
+mod types;

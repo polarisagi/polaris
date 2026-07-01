@@ -269,9 +269,7 @@ pub(super) fn exec_wsl2_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxRespon
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn build_wrap_argv_wsl2(
-    ctx: &SandboxContextV2,
-) -> Result<WrapArgvResponseV2, String> {
+pub(super) fn build_wrap_argv_wsl2(ctx: &SandboxContextV2) -> Result<WrapArgvResponseV2, String> {
     let wsl = which_tool("wsl.exe").ok_or_else(|| "wsl.exe not found".to_string())?;
     let network_policy = ctx.network_policy.as_deref().unwrap_or("deny");
     let network_block = network_policy != "allow";
@@ -377,9 +375,7 @@ pub(super) fn exec_bare_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxRespon
     run_with_timeout(cmd, timeout_ms, "bare", memory_limited)
 }
 
-pub(super) fn build_wrap_argv_bare(
-    ctx: &SandboxContextV2,
-) -> Result<WrapArgvResponseV2, String> {
+pub(super) fn build_wrap_argv_bare(ctx: &SandboxContextV2) -> Result<WrapArgvResponseV2, String> {
     let caller_type = ctx.caller_type.as_deref().unwrap_or("mcp");
     let sandbox_path = build_sandbox_path();
     let env_vars = build_env_v2(

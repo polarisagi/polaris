@@ -493,12 +493,13 @@ func resolveInterpreter(scriptPath string) (string, error) {
 // ─── SandboxRouter ────────────────────────────────────────────────────────────
 
 // SandboxRouter 根据 SandboxSpec.SandboxTier 路由至对应沙箱实现。
-// 内置工具走 InProcess（直接 Go 调用）；LLM 生成代码/插件走 Container。
+// 内置工具走 InProcess（直接 Go 调用）；LLM 生成代码/插件走 Container/NativeOS。
 // 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.2 三层矩阵
 type SandboxRouter struct {
 	mu              sync.Mutex
 	inProcess       *InProcessSandbox
 	container       *ContainerSandbox
+	nativeOS        *NativeOSSandbox // L4-native：Tier-0 Rust 原生沙箱，无需容器运行时
 	wasmtime        SandboxProvider
 	remote          *RemoteSandbox // L4：可选，Tier-0 OOM 逃生路径
 	goos            string         // "darwin" | "linux" | "windows"
@@ -558,6 +559,13 @@ func (r *SandboxRouter) WithRemote(remote *RemoteSandbox) *SandboxRouter {
 	return r
 }
 
+// WithNativeOS 注入 NativeOSSandbox（Tier-0 Rust 原生沙箱）。返回自身，支持链式调用。
+// 配置后，SandboxNativeOS tier（assign.go Tier-0 + Container 降级路径）路由至此。
+func (r *SandboxRouter) WithNativeOS(nativeOS *NativeOSSandbox) *SandboxRouter {
+	r.nativeOS = nativeOS
+	return r
+}
+
 // Route 根据工具属性选择最合适的沙箱，返回 SandboxProvider。
 // 规则与 AssignSandboxTier 保持一致。
 // RouteByTier 按已算好的 tier 路由。trustTier 用于决定隔离不可用时能否降级。
@@ -565,6 +573,17 @@ func (r *SandboxRouter) WithRemote(remote *RemoteSandbox) *SandboxRouter {
 func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.TrustTier) (SandboxProvider, error) {
 	mustIsolate := trustTier < types.TrustOfficial
 	switch tier {
+	case types.SandboxNativeOS:
+		// Tier-0 fallback：Rust 原生沙箱（无容器运行时依赖）。
+		// assign.go 在 hwTier==0 时将 SandboxContainer 降级为此 tier。
+		if r.nativeOS != nil {
+			return r.nativeOS, nil
+		}
+		// nativeOS 未注入时（测试环境）尝试 container，否则 fail-closed。
+		if r.container != nil {
+			return r.container, nil
+		}
+		return nil, apperr.New(apperr.CodeForbidden, "sandbox: NativeOS required for Tier-0 CodeAct but unavailable; refusing to downgrade")
 	case types.SandboxRemote:
 		if r.remote != nil {
 			return r.remote, nil

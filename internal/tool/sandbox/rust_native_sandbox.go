@@ -20,6 +20,7 @@ import (
 	"github.com/ebitengine/purego"
 
 	sffi "github.com/polarisagi/polaris/internal/ffi"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -29,12 +30,14 @@ var (
 	nativeOnce sync.Once
 	nativeErr  error
 
-	// nativeSandboxExec 执行沙箱命令，返回 JSON 结果。
-	nativeSandboxExec func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
-	// nativeSandboxProbeTools 探测当前系统沙箱能力与语言运行时。
+	// V1 函数指针
+	nativeSandboxExec       func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxProbeTools func(outJSON *uintptr, outErr *uintptr) int32
-	// nativeSandboxFreeString 释放 Rust 分配的 C 字符串。
 	nativeSandboxFreeString func(ptr uintptr)
+
+	// V2 函数指针（新增，向后兼容 V1）
+	nativeSandboxExecV2   func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
+	nativeSandboxWrapArgv func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 )
 
 func bindNativeSandbox() error {
@@ -47,6 +50,12 @@ func bindNativeSandbox() error {
 		purego.RegisterLibFunc(&nativeSandboxExec, lib, "native_sandbox_exec")
 		purego.RegisterLibFunc(&nativeSandboxProbeTools, lib, "native_sandbox_probe_tools")
 		purego.RegisterLibFunc(&nativeSandboxFreeString, lib, "native_sandbox_free_string")
+		// V2（Rust 侧已实现，不存在时 purego 会 panic；用 recover 包裹防启动崩溃）
+		func() {
+			defer func() { recover() }() //nolint:errcheck
+			purego.RegisterLibFunc(&nativeSandboxExecV2, lib, "native_sandbox_exec_v2")
+			purego.RegisterLibFunc(&nativeSandboxWrapArgv, lib, "native_sandbox_wrap_argv")
+		}()
 	})
 	return nativeErr
 }
@@ -157,6 +166,84 @@ func RustSandboxExec(cfg NativeSandboxCfg, timeoutMs uint64) (*RustSandboxRespon
 			fmt.Sprintf("rust_native_sandbox: unmarshal response: %s", jsonStr), err)
 	}
 	return &resp, nil
+}
+
+// ─── V2 公开 API ──────────────────────────────────────────────────────────────
+
+// rustSandboxContextJSON 将 protocol.SandboxContext 序列化为 NUL 终止 JSON 字节切片。
+func rustSandboxContextJSON(ctx protocol.SandboxContext) ([]byte, error) {
+	b, err := json.Marshal(ctx)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rust_native_sandbox_v2: marshal SandboxContext", err)
+	}
+	return goStringToC(string(b)), nil
+}
+
+// RustSandboxExecV2 通过 Rust FFI V2 执行沙箱命令（run-to-completion）。
+// 用于 codeact/skill/hook/builtin 等短生命周期执行。
+func RustSandboxExecV2(ctx protocol.SandboxContext, timeoutMs uint64) (*RustSandboxResponse, error) {
+	if err := bindNativeSandbox(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rust_native_sandbox_v2: dylib not available", err)
+	}
+	if nativeSandboxExecV2 == nil {
+		return nil, apperr.New(apperr.CodeInternal, "rust_native_sandbox_v2: native_sandbox_exec_v2 symbol not found (rebuild dylib)")
+	}
+	if timeoutMs > 0 {
+		ctx.TimeoutMs = timeoutMs
+	}
+	inputCStr, err := rustSandboxContextJSON(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var outJSON, outErr uintptr
+	code := nativeSandboxExecV2(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+
+	errStr := readAndFreeRustStr(outErr)
+	jsonStr := readAndFreeRustStr(outJSON)
+
+	if code < 0 {
+		return nil, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("rust_native_sandbox_v2: exec failed (code=%d): %s", code, errStr))
+	}
+	var resp RustSandboxResponse
+	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal,
+			fmt.Sprintf("rust_native_sandbox_v2: unmarshal response: %s", jsonStr), err)
+	}
+	return &resp, nil
+}
+
+// RustSandboxWrapArgv 通过 Rust FFI 获取沙箱封装后的 argv，不启动进程。
+// 用于 MCP stdio 长进程：调用方用返回的 Executable+Argv 构建 exec.Cmd 并持有管道。
+func RustSandboxWrapArgv(ctx protocol.SandboxContext) (*protocol.WrapArgvResult, error) {
+	if err := bindNativeSandbox(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rust_native_sandbox_v2: dylib not available", err)
+	}
+	if nativeSandboxWrapArgv == nil {
+		return nil, apperr.New(apperr.CodeInternal, "rust_native_sandbox_v2: native_sandbox_wrap_argv symbol not found (rebuild dylib)")
+	}
+	inputCStr, err := rustSandboxContextJSON(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var outJSON, outErr uintptr
+	code := nativeSandboxWrapArgv(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+
+	errStr := readAndFreeRustStr(outErr)
+	jsonStr := readAndFreeRustStr(outJSON)
+
+	if code < 0 {
+		return nil, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("rust_native_sandbox_v2: wrap_argv failed (code=%d): %s", code, errStr))
+	}
+	var result protocol.WrapArgvResult
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal,
+			fmt.Sprintf("rust_native_sandbox_v2: unmarshal WrapArgvResult: %s", jsonStr), err)
+	}
+	return &result, nil
 }
 
 // RustSandboxProbeTools 调用 Rust 探测当前系统沙箱能力和已安装语言运行时。

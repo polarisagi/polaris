@@ -5,8 +5,8 @@ use std::panic;
 use std::slice;
 
 use super::{
-    bytes_to_hex, get_store, hex_to_bytes, write_cstr, KvRow, VRow, SURREAL_ERR_LOCK,
-    SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_NOT_FOUND, SURREAL_OK,
+    KvRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_NOT_FOUND, SURREAL_OK,
+    VRow, bytes_to_hex, get_store, hex_to_bytes, write_cstr,
 };
 
 // ─── surreal_kv_get ───────────────────────────────────────────────────────────

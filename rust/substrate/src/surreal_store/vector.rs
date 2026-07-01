@@ -5,8 +5,8 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 
 use super::{
-    encode_scored, get_store, write_cstr, VecRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC,
-    SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK,
+    SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK, VecRow,
+    encode_scored, get_store, write_cstr,
 };
 
 // ─── surreal_vec_upsert ───────────────────────────────────────────────────────

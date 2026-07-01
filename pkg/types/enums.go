@@ -177,6 +177,11 @@ const (
 	SandboxContainer                        // L3: gVisor / microVM
 	// SandboxRemote 委托给远端 HTTP 执行器，用于 Tier-0 内存受限时外包重计算任务。
 	SandboxRemote
+	// SandboxNativeOS Rust 原生 OS 沙箱（bwrap/Seatbelt）。
+	// Tier-0（2GB VPS）上 SandboxContainer 的 fallback：无需容器运行时，
+	// 直接通过 Rust FFI 调用宿主 OS 隔离原语（Linux=bwrap, macOS=Seatbelt）。
+	// assign.go：SandboxContainer + hwTier==0 → 自动降级为此 tier。
+	SandboxNativeOS
 )
 
 // ToolSource 标识工具的来源类型（影响 TrustTier 和 TaintLevel 传播）。

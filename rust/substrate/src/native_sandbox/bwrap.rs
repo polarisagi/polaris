@@ -21,9 +21,7 @@ use super::types::{
 // ─── Linux bubblewrap V1 ─────────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
-pub(super) fn exec_bwrap(
-    req: &NativeSandboxRequest,
-) -> Result<NativeSandboxResponse, String> {
+pub(super) fn exec_bwrap(req: &NativeSandboxRequest) -> Result<NativeSandboxResponse, String> {
     let bwrap_path = req
         .bwrap_path
         .as_deref()
@@ -313,9 +311,7 @@ pub(super) fn exec_bwrap_v2(ctx: &SandboxContextV2) -> Result<NativeSandboxRespo
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn build_wrap_argv_bwrap(
-    ctx: &SandboxContextV2,
-) -> Result<WrapArgvResponseV2, String> {
+pub(super) fn build_wrap_argv_bwrap(ctx: &SandboxContextV2) -> Result<WrapArgvResponseV2, String> {
     let bwrap_path = ctx
         .bwrap_path
         .as_deref()

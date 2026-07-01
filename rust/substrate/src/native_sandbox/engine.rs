@@ -14,8 +14,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use super::types::NativeSandboxResponse;
 use super::env::path_separator;
+use super::types::NativeSandboxResponse;
 
 // ─── 执行引擎 ─────────────────────────────────────────────────────────────────
 

@@ -576,16 +576,16 @@ type ExtCatalogRow struct {
 
 // MCPServerRow 对应 mcp_servers 表一行。
 type MCPServerRow struct {
-	ID        string
-	Name      string
-	Transport string
-	Command   string
-	Args      string
-	Env       string
-	URL       string
-	Enabled   bool
-	Timeout   int
-	TrustTier int
+	ID              string
+	Name            string
+	Transport       string
+	Command         string
+	Args            string
+	Env             string
+	URL             string
+	Enabled         bool
+	Timeout         int
+	TrustTier       int
 	CatalogID       string
 	PluginID        string
 	WorkDir         string
