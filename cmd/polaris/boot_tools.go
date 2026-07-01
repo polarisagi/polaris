@@ -174,7 +174,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// knowledge_search 依赖 knowledgeBase（L2 §7.6），此处先传 nil，待 bootKnowledge 完成后由
 	// native.RegisterExtensionTool 补注（见 boot_knowledge.go §7.6 末尾）
-	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, mcpMgr, extRepo, mktClient, installMgr, hitlGateway, sb.Outbox, nativeCogn, nativeEmbedFn, nil); err != nil {
+	if err := native.RegisterExtensionTools(inProcSandbox, toolReg, extRepo, mktClient, installMgr, hitlGateway, sb.Outbox, nativeCogn, nativeEmbedFn, nil); err != nil {
 		slog.Warn("polaris: native extension tool registration partial failure", "err", err)
 	}
 	slog.Info("polaris: builtin tools registered, MCP manager initialized")

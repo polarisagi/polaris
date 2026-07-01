@@ -6,20 +6,30 @@ import (
 	"fmt"
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// ToolSandbox 向进程内沙箱注册工具函数的最小接口（consumer-side 定义）。
+// 实现由 internal/sandbox.InProcessSandbox 提供。
+type ToolSandbox interface {
+	Register(toolName string, fn sandbox.InProcessFn)
+}
+
+// ToolMetaRegistry 向工具目录注册工具元数据的最小接口（consumer-side 定义）。
+// 实现由 internal/tool.InMemoryToolRegistry 提供。
+type ToolMetaRegistry interface {
+	Register(tool types.Tool) error
+}
 
 // RegisterExtensionTools 注册原生的 L2 扩展工具。
 // 工具元数据从 builtin/<name>/tool.yaml + schema.json 文件加载。
 // knowledgeSearcher 为 nil 时跳过 knowledge_search 注册（FeatureDeepRAG 未启用时的降级路径）。
 func RegisterExtensionTools(
-	sbx *sandbox.InProcessSandbox,
-	toolReg *tool.InMemoryToolRegistry,
-	mcpManager *mcp.MCPManager,
+	sbx ToolSandbox,
+	toolReg ToolMetaRegistry,
 	extRepo protocol.ExtensionRepository,
 	marketplaceClient *marketplace.MCPMarketplaceClient,
 	installMgr *marketplace.Manager,
@@ -70,8 +80,8 @@ type knowledgeSearchArgs struct {
 // 工具元数据从 embedded builtin/<name>/tool.yaml + schema.json 加载。
 // 用于在主注册之后补注需要延迟依赖的工具（如 knowledge_search 依赖 knowledgeBase）。
 func RegisterExtensionTool(
-	sbx *sandbox.InProcessSandbox,
-	toolReg *tool.InMemoryToolRegistry,
+	sbx ToolSandbox,
+	toolReg ToolMetaRegistry,
 	name string,
 	fn sandbox.InProcessFn,
 ) error {

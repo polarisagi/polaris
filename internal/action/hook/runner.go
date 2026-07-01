@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/classifier"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -89,6 +91,28 @@ func runCommand(ctx context.Context, cfg HandlerConfig, input HookInput) HookRes
 		timeout = defaultTimeout
 	}
 
+	// ── 安全审核：CommandRiskClassifier ─────────────────────────────────────
+	// Hook 命令与 bash/run_command 工具走相同风险分级：DENY→拒绝，HITL/WARN→审计日志。
+	// 事件 hook 是用户配置，但仍需防御 fork bomb / wipe 等破坏性命令。
+	verdict := classifier.Default().Classify(cfg.Command)
+	switch verdict.Level {
+	case classifier.RiskDeny:
+		slog.Error("hook: command DENIED by risk classifier",
+			"event", input.Event, "cmd", cfg.Command, "reason", verdict.Reason)
+		return HookResult{
+			Event:   input.Event,
+			Handler: cfg.Command,
+			Err:     apperr.New(apperr.CodeForbidden, fmt.Sprintf("hook: command denied: %s", verdict.Reason)),
+		}
+	case classifier.RiskHITL:
+		// Phase1: 警告日志 + 继续执行（Phase2 将挂起等待 HITL 审批）
+		slog.Warn("hook: command requires human approval (HITL) — executing in Phase1 mode",
+			"event", input.Event, "cmd", cfg.Command, "reason", verdict.Reason)
+	case classifier.RiskWarn:
+		slog.Warn("hook: elevated-risk command executing",
+			"event", input.Event, "cmd", cfg.Command, "reason", verdict.Reason)
+	}
+
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return HookResult{
@@ -103,11 +127,12 @@ func runCommand(ctx context.Context, cfg HandlerConfig, input HookInput) HookRes
 
 	// shell 执行：sh -c <command>，stdin 传入 JSON payload。
 	// 安全策略：最小 env（PATH 白名单）防止 hook 读宿主进程凭据（R1.15）。
-	// namespace 隔离已移除——hook 是用户自定义命令，需要灵活的文件系统访问；
-	// 安全边界由 Fire() 开头的 PolicyGate 授权检查提供。
+	// 进程隔离由 PolicyGate（授权）+ CommandRiskClassifier（命令风险分级）双重保障。
+	// Rust sandbox（bwrap/Seatbelt）未在此处启用——事件 hook 需访问灵活的文件路径；
+	// bash/run_command 工具通过 WrapBashCmd 统一走 Rust 沙箱。
 	cmd := exec.CommandContext(runCtx, "sh", "-c", cfg.Command)
 	cmd.Stdin = bytes.NewReader(payload)
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"}
+	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

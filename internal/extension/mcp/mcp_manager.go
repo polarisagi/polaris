@@ -36,11 +36,20 @@ type ToolRegistrar interface {
 	Unregister(name string)
 }
 
+// SandboxToolRegistrar 向进程内沙箱注册/注销工具的最小接口（consumer-side 定义，防具体类型耦合）。
+// 实现由 internal/sandbox.InProcessSandbox 提供；接口定义在此（调用方），符合 Go consumer-side 原则。
+type SandboxToolRegistrar interface {
+	Register(toolName string, fn sandbox.InProcessFn)
+	RegisterWithTaint(toolName string, fn sandbox.InProcessFn, taint types.TaintLevel)
+	RegisterRich(toolName string, fn sandbox.InProcessRichFn, taint types.TaintLevel)
+	Unregister(toolName string)
+}
+
 // MCPManager 管理所有 MCP Server 连接，动态注册工具到 InProcessSandbox。
 type MCPManager struct {
 	mu               sync.RWMutex
 	entries          map[string]*mcpEntry
-	sandbox          *sandbox.InProcessSandbox
+	sandbox          SandboxToolRegistrar  // 向进程内沙箱注册工具（接口，实现为 *sandbox.InProcessSandbox）
 	envelope         *sandbox.ExecEnvelope // 用于 CallTool 下沉
 	toolReg          ToolRegistrar         // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
 	catalog          catalog.Catalog       // 新的统一工具目录（仅注册 schema 和 metadata）
@@ -74,7 +83,7 @@ func (m *MCPManager) IsPluginConnected(pluginID string) bool {
 	return false
 }
 
-func NewMCPManager(sbx *sandbox.InProcessSandbox, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
+func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
 	return &MCPManager{
 		entries:    make(map[string]*mcpEntry),
 		sandbox:    sbx,
