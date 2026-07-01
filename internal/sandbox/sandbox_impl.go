@@ -281,17 +281,26 @@ func (s *InProcessSandbox) Execute(ctx context.Context, toolName string, input [
 
 // ─── Tier 3: ContainerSandbox ────────────────────────────────────────────────
 
-// ContainerSandbox 通过 OS 子进程（未来集成 gVisor/Docker）执行特权工具。
-// 当前 MVP 实现：通过 exec.Command 在限制环境中执行二进制。
+// ContainerSandbox 通过 Rust 原生沙箱（bwrap/Seatbelt）执行特权工具。
+// 统一使用 CmdRunner 接口，由 WrapBashCmdRunner 提供 Rust FFI + Go 降级实现。
 // 适用于: types.CapPrivileged / TypeScript 脚本技能 / LLM 生成代码执行
+//
+// 架构决策: 统一 Rust 沙箱，废弃 Linux namespace / Firecracker 路径。
+// 跨平台: macOS=Seatbelt, Linux=bwrap, Windows=WSL2（均通过 CmdRunner 抽象）。
 type ContainerSandbox struct {
 	binPath  string // 沙箱执行器二进制路径（如 /usr/local/bin/polaris-sandbox）
 	platform string
 	hwTier   probe.Tier
+	runner   CmdRunner // Rust FFI + Go 降级命令执行器，启动时注入
 }
 
-func NewContainerSandbox(binPath, platform string, hwTier probe.Tier) *ContainerSandbox {
-	return &ContainerSandbox{binPath: binPath, platform: platform, hwTier: hwTier}
+// NewContainerSandbox 构造 ContainerSandbox。
+// runner 为 nil 时自动使用 NopCmdRunner（测试环境安全降级）。
+func NewContainerSandbox(binPath, platform string, hwTier probe.Tier, runner CmdRunner) *ContainerSandbox {
+	if runner == nil {
+		runner = NopCmdRunner{}
+	}
+	return &ContainerSandbox{binPath: binPath, platform: platform, hwTier: hwTier, runner: runner}
 }
 
 // Level 返回沙箱级别（实现 protocol.SandboxProvider）。
@@ -312,28 +321,13 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.To
 		return s.runNativeScript(execCtx, spec)
 	}
 
-	l3Available, backend := probe.TierSandboxConfig(s.hwTier, s.platform)
-	if !l3Available {
-		return &types.ToolResult{Success: false, Error: "ContainerSandbox: L3 not available on this tier/platform"}, nil
-	}
-
-	var cmd *exec.Cmd
-	switch backend {
-	case "firecracker":
-		cmd = buildFirecrackerCmd(execCtx, s.binPath, spec)
-	case "virtualization_framework":
-		cmd = buildVZCmd(execCtx, s.binPath, spec)
-	case "wsl2":
-		cmd = buildWSL2Cmd(execCtx, s.binPath, spec)
-	case "native":
-		// Tier1 Linux：bwrap + 命名空间隔离（无 Firecracker 基础设施的降级路径）
-		cmd = buildNativeCmd(execCtx, s.binPath, spec)
-	default:
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("ContainerSandbox: unknown backend %q", backend)}, nil
+	// L3 非脚本路径：通过 Rust 沙箱执行 polaris-sandbox 二进制。
+	// Firecracker/VZ/WSL2/native 后端已统一为 CmdRunner（bwrap/Seatbelt）。
+	if s.binPath == "" {
+		return &types.ToolResult{Success: false, Error: "ContainerSandbox: no sandbox binary path configured"}, nil
 	}
 
 	// 始终消毒环境变量，防止父进程凭据泄漏（R1.15）。
-	// DryRunMode 在最小环境基础上再叠加 mock proxy 变量；生产路径用相同最小环境。
 	env := sandboxMinEnv()
 	if spec.DryRunMode {
 		mockTable := make(map[string]MockResponse)
@@ -347,46 +341,58 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.To
 		}
 		_ = proxyAddr
 	}
-	cmd.Env = env
 
+	command := s.binPath + " --tool " + spec.ToolName
 	start := time.Now()
-	out, err := cmd.Output()
-	if err != nil {
-		if errors.Is(err, fs.ErrPermission) {
+	out, exitCode, _, runErr := s.runner.RunCmd(execCtx, CmdRunnerCfg{
+		Command:      command,
+		AllowedPaths: spec.AllowedPaths,
+		Env:          env,
+		NetworkBlock: true,
+		TimeoutMs:    uint64(quotaMs),
+	})
+	latency := time.Since(start).Milliseconds()
+	if runErr != nil {
+		if errors.Is(runErr, fs.ErrPermission) {
 			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
 		}
+		return &types.ToolResult{Success: false, Error: runErr.Error(), LatencyMs: latency}, nil
+	}
+	if exitCode != 0 {
 		return &types.ToolResult{
 			Success:   false,
-			Error:     err.Error(),
-			LatencyMs: time.Since(start).Milliseconds(),
+			Error:     fmt.Sprintf("sandbox binary exited with code %d", exitCode),
+			Output:    out,
+			LatencyMs: latency,
 		}, nil
 	}
-	return &types.ToolResult{
-		Success:   true,
-		Output:    out,
-		LatencyMs: time.Since(start).Milliseconds(),
-	}, nil
+	return &types.ToolResult{Success: true, Output: out, LatencyMs: latency}, nil
 }
 
-// RunHook 在与 ContainerSandbox 相同的 OS 命名空间隔离下直接执行任意脚本。
-// 适用于插件 uninstall hook 等需要运行任意二进制路径的场景。
-// workDir 为脚本工作目录；超时固定 30s（与 Run 一致）。
+// RunHook 通过 Rust 沙箱执行插件 Hook 脚本（如 uninstall hook）。
+// 替代原 Linux namespace 隔离，统一走 bwrap（Linux）/ Seatbelt（macOS）。
+// workDir 为脚本工作目录；超时固定 30s。
 func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir string) error {
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, scriptPath)
-	cmd.Dir = workDir
-	cmd.Env = sandboxMinEnv() // 防止父进程凭据泄漏（R1.15）
-	// Linux: 注入命名空间隔离（与 Run 共用，防止 hook 逃逸宿主 PID/NS 空间）
-	if attrs := containerSandboxSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
-	}
-	if err := cmd.Run(); err != nil {
-		if errors.Is(err, fs.ErrPermission) {
+	out, exitCode, _, runErr := s.runner.RunCmd(execCtx, CmdRunnerCfg{
+		Command:      scriptPath,
+		WorkDir:      workDir,
+		AllowedPaths: []string{workDir},
+		Env:          sandboxMinEnv(), // 防止父进程凭据泄漏（R1.15）
+		NetworkBlock: true,
+		TimeoutMs:    30000,
+	})
+	if runErr != nil {
+		if errors.Is(runErr, fs.ErrPermission) {
 			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
 		}
-		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox: RunHook %q", scriptPath), err)
+		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox: RunHook %q", scriptPath), runErr)
+	}
+	if exitCode != 0 {
+		return apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("sandbox: RunHook %q exited %d: %s", scriptPath, exitCode, string(out)))
 	}
 	return nil
 }
@@ -410,79 +416,55 @@ func (s *ContainerSandbox) RunScript(ctx context.Context, skillName, scriptPath 
 	return res.Output, nil
 }
 
-func buildFirecrackerCmd(ctx context.Context, jailerPath string, spec SandboxSpec) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, jailerPath, "--id", spec.ToolName, "--exec-file", "/usr/local/bin/firecracker")
-	cmd.Stdin = bytes2ReadCloser(spec.Input)
-	if attrs := containerSandboxSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
-	}
-	return cmd
-}
+// buildFirecrackerCmd / buildVZCmd / buildWSL2Cmd / buildNativeCmd 已删除。
+// 统一由 ContainerSandbox.runner（CmdRunner）处理，后端为 Rust bwrap/Seatbelt。
 
-func buildVZCmd(ctx context.Context, vftoolPath string, spec SandboxSpec) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, vftoolPath, "--tool", spec.ToolName)
-	cmd.Stdin = bytes2ReadCloser(spec.Input)
-	return cmd
-}
-
-func buildWSL2Cmd(ctx context.Context, binPath string, spec SandboxSpec) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "wsl.exe", "-e", binPath, "--tool", spec.ToolName)
-	cmd.Stdin = bytes2ReadCloser(spec.Input)
-	return cmd
-}
-
-// buildNativeCmd 使用 bwrap/命名空间隔离执行沙箱工具二进制（Tier1 Linux native 后端）。
-// 复用 polaris-sandbox 二进制，通过 Linux 命名空间隔离代替 Firecracker 提供进程隔离。
-func buildNativeCmd(ctx context.Context, binPath string, spec SandboxSpec) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, binPath, "--tool", spec.ToolName)
-	cmd.Stdin = bytes2ReadCloser(spec.Input)
-	if attrs := containerSandboxSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
-	}
-	return cmd
-}
-
-// runNativeScript 在 OS 原生进程隔离中执行脚本文件（CodeAct + 技能脚本路径）。
+// runNativeScript 通过 Rust 沙箱执行脚本文件（CodeAct + 技能脚本路径）。
 // 解释器由脚本后缀推断：.py → python3, .sh/.bash → bash。
-// Linux 通过 SysProcAttr 注入命名空间隔离，macOS 仅依赖 cmd.Env 消毒。
+// 统一走 CmdRunner（bwrap/Seatbelt），替代原 Linux namespace 隔离。
+// macOS 现在也有 Seatbelt 进程隔离（原来是零隔离）。
 func (s *ContainerSandbox) runNativeScript(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
 	interp, err := resolveInterpreter(spec.ScriptPath)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil //nolint:nilerr // 解释器解析失败作为工具级错误上报，不向调用方传播
 	}
 
-	cmd := exec.CommandContext(ctx, interp, spec.ScriptPath)
-	// 使用生产环境基础变量（含语言运行时路径），不传入凭据（R1.15）
-	cmd.Env = containerBaseEnv()
-	if attrs := containerSandboxSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
+	// 脚本目录加入白名单，确保沙箱可读取脚本本身（bwrap --bind-try 需要路径存在）。
+	scriptDir := filepath.Dir(spec.ScriptPath)
+	allowedPaths := make([]string, 0, len(spec.AllowedPaths)+1)
+	allowedPaths = append(allowedPaths, spec.AllowedPaths...)
+	if scriptDir != "" && scriptDir != "." {
+		allowedPaths = append(allowedPaths, scriptDir)
 	}
 
+	// interp + 空格 + 脚本路径，由 bash -c 解释（WrapBashCmd 统一入口）。
+	command := interp + " " + spec.ScriptPath
+
 	start := time.Now()
-	out, runErr := cmd.Output()
+	out, exitCode, _, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{
+		Command:      command,
+		WorkDir:      scriptDir,
+		AllowedPaths: allowedPaths,
+		Env:          containerBaseEnv(), // 生产环境基础变量，不含凭据（R1.15）
+		NetworkBlock: true,
+		TimeoutMs:    uint64(spec.CPUQuotaMs),
+	})
 	latency := time.Since(start).Milliseconds()
 	if runErr != nil {
 		if errors.Is(runErr, fs.ErrPermission) {
 			metrics.GlobalSurpriseIndex().InjectFaultSignal(0.8)
 		}
-		// cmd.Output() 在非零退出码时返回 *exec.ExitError，Output 字段含 stderr
-		exitOut := out
-		var ee *exec.ExitError
-		if errors.As(runErr, &ee) && len(ee.Stderr) > 0 {
-			exitOut = ee.Stderr
-		}
+		return &types.ToolResult{Success: false, Error: runErr.Error(), LatencyMs: latency}, nil
+	}
+	if exitCode != 0 {
 		return &types.ToolResult{
 			Success:   false,
-			Error:     runErr.Error(),
-			Output:    exitOut,
+			Error:     fmt.Sprintf("script exited with code %d", exitCode),
+			Output:    out,
 			LatencyMs: latency,
 		}, nil
 	}
-	return &types.ToolResult{
-		Success:   true,
-		Output:    out,
-		LatencyMs: latency,
-	}, nil
+	return &types.ToolResult{Success: true, Output: out, LatencyMs: latency}, nil
 }
 
 // resolveInterpreter 从脚本后缀推断解释器绝对路径。

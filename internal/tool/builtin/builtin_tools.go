@@ -30,6 +30,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/classifier"
 	"github.com/polarisagi/polaris/internal/sysmgr/sysinfo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -609,14 +610,13 @@ func execInSandbox(ctx context.Context, cfg toolsb.NativeSandboxCfg) ([]byte, er
 	return nil, nil, "none", nil
 }
 
-// execWithoutSandbox 在无沙箱模式下执行 bash 命令（env 清理 + Linux namespace 保底）。
+// execWithoutSandbox 在无沙箱模式下执行 bash 命令（仅 env 清理，无进程隔离）。
+// 适用于 sandbox.enabled=false 的调试环境；生产路径应走 WrapBashCmd。
+// Linux namespace 隔离已移除——统一由 Rust 沙箱（bwrap/Seatbelt）负责进程边界。
 func execWithoutSandbox(ctx context.Context, command, workDir string, env []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = workDir
 	cmd.Env = env
-	if attrs := sandbox.ContainerSandboxSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
-	}
 	return cmd.CombinedOutput()
 }
 
@@ -630,6 +630,25 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.Net
 			return nil, apperr.New(apperr.CodeInternal, "bash: command is required")
 		}
 
+		// ── 安全审核：CommandRiskClassifier ──────────────────────────────────
+		// DENY → 直接拒绝，不执行。HITL → 当前 Phase1 记录日志 + 执行（Phase2 挂起等待审批）。
+		// WARN → 强化审计日志 + 执行。SAFE → 直接执行。
+		verdict := classifier.Default().Classify(args.Command)
+		switch verdict.Level {
+		case classifier.RiskDeny:
+			slog.Error("bash: command DENIED by risk classifier",
+				"cmd", args.Command, "reason", verdict.Reason)
+			return nil, apperr.New(apperr.CodeForbidden,
+				fmt.Sprintf("bash: command denied: %s", verdict.Reason))
+		case classifier.RiskHITL:
+			// Phase1: 警告日志 + 继续执行（Phase2 将挂起等待 HITL 审批）
+			slog.Warn("bash: command requires human approval (HITL) — executing in Phase1 mode",
+				"cmd", args.Command, "reason", verdict.Reason)
+		case classifier.RiskWarn:
+			slog.Warn("bash: elevated-risk command executing",
+				"cmd", args.Command, "reason", verdict.Reason)
+		}
+
 		workDir := ""
 		if len(allowedPaths) > 0 {
 			workDir = allowedPaths[0]
@@ -638,9 +657,10 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.Net
 		execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		slog.Warn("native_sandbox: executing bash command",
+		slog.Info("bash: executing command",
 			"sandbox_enabled", sandboxEnabled,
 			"network", netPolicy,
+			"risk", verdict.Level.String(),
 			"cmd", args.Command,
 			"dir", workDir)
 
@@ -1334,9 +1354,26 @@ func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy tool
 		execCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
+		// ── 安全审核：CommandRiskClassifier ──────────────────────────────────
+		verdict := classifier.Default().Classify(args.Command)
+		switch verdict.Level {
+		case classifier.RiskDeny:
+			slog.Error("run_command: command DENIED by risk classifier",
+				"cmd", args.Command, "reason", verdict.Reason)
+			return nil, apperr.New(apperr.CodeForbidden,
+				fmt.Sprintf("run_command: command denied: %s", verdict.Reason))
+		case classifier.RiskHITL:
+			slog.Warn("run_command: command requires human approval (HITL) — executing in Phase1 mode",
+				"cmd", args.Command, "reason", verdict.Reason)
+		case classifier.RiskWarn:
+			slog.Warn("run_command: elevated-risk command executing",
+				"cmd", args.Command, "reason", verdict.Reason)
+		}
+
 		slog.Info("run_command: executing",
 			"sandbox_enabled", sandboxEnabled,
 			"network", netPolicy,
+			"risk", verdict.Level.String(),
 			"cmd", args.Command,
 			"dir", workDir)
 

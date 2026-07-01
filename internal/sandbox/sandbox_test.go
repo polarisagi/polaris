@@ -196,7 +196,7 @@ func TestInProcessSandbox_AdditionalMethods(t *testing.T) {
 // ─── ContainerSandbox Tests (Anomaly Paths) ──────────────────────────────────
 
 func TestContainerSandbox_Methods(t *testing.T) {
-	sb := NewContainerSandbox("/usr/local/bin/polaris-sandbox", "darwin", 1)
+	sb := NewContainerSandbox("/usr/local/bin/polaris-sandbox", "darwin", 1, NopCmdRunner{})
 
 	if sb.Level() != int(types.SandboxContainer) {
 		t.Errorf("expected Container level %v, got %v", types.SandboxContainer, sb.Level())

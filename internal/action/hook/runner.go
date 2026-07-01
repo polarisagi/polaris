@@ -101,15 +101,13 @@ func runCommand(ctx context.Context, cfg HandlerConfig, input HookInput) HookRes
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// shell 执行：sh -c <command>，stdin 传入 JSON payload
+	// shell 执行：sh -c <command>，stdin 传入 JSON payload。
+	// 安全策略：最小 env（PATH 白名单）防止 hook 读宿主进程凭据（R1.15）。
+	// namespace 隔离已移除——hook 是用户自定义命令，需要灵活的文件系统访问；
+	// 安全边界由 Fire() 开头的 PolicyGate 授权检查提供。
 	cmd := exec.CommandContext(runCtx, "sh", "-c", cfg.Command)
 	cmd.Stdin = bytes.NewReader(payload)
-	// 最小环境变量隔离：仅保留基本 PATH，防止 hook 脏读宿主进程敖感环境变量
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"}
-	// Linux: 注入 namespace 隔离（与 ContainerSandbox.RunScript 一致）
-	if attrs := hookSysProcAttr(); attrs != nil {
-		cmd.SysProcAttr = attrs
-	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

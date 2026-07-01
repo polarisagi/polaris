@@ -70,10 +70,16 @@ type ToolBundle struct {
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
 func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*ToolBundle, error) { //nolint:gocyclo
 	// ─── §6 Sandbox 路由器 (L1 M7) ──────────────────────────────────────────
+	// CmdRunner：Rust FFI（bwrap/Seatbelt）→ Go 降级路径，跨平台统一执行层。
+	// 替代原 Linux namespace（CLONE_NEWUSER/PID/NS）和 Firecracker/VZ/WSL2 多后端。
+	cmdRunner := toolsb.NewWrapBashCmdRunner()
+
 	var containerSandbox *sandbox.ContainerSandbox
 	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureL3Sandbox) != probe.FeatureDisabled {
-		containerSandbox = sandbox.NewContainerSandbox(sb.AutoConf.Config.L3SandboxBackend, runtime.GOOS, sb.AutoConf.Config.Tier)
-		slog.Info("polaris: L3 container sandbox initialized", "backend", sb.AutoConf.Config.L3SandboxBackend)
+		containerSandbox = sandbox.NewContainerSandbox(sb.AutoConf.Config.L3SandboxBackend, runtime.GOOS, sb.AutoConf.Config.Tier, cmdRunner)
+		slog.Info("polaris: L3 container sandbox initialized (Rust native sandbox)",
+			"backend", "rust_bwrap_seatbelt",
+			"platform", runtime.GOOS)
 	}
 	inProcSandbox := sandbox.NewInProcessSandbox()
 	// B4-F5: WasmtimeSandbox（L2）门控
@@ -94,7 +100,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
 
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
-	allowedPaths := []string{sb.DataDir}
+	// allowedPaths：DataDir 始终包含（Agent 工作区 + DB + 日志）。
+	// sandbox.allowed_paths 追加用户自定义目录（项目路径等）。
+	// 去重防止同一目录被 OS 沙箱重复绑定（bwrap --bind-try 重复无害但浪费）。
+	allowedPaths := deduplicatePaths(append(
+		[]string{sb.DataDir},
+		sb.Cfg.Sandbox.AllowedPaths...,
+	))
 	toolReg := polartool.NewInMemoryToolRegistry(envelope)
 
 	memoryCatalog := catalog.NewMemoryCatalog()
@@ -330,6 +342,23 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Activator:        activator,
 		ExtensionBus:     extensionBus,
 	}, nil
+}
+
+// deduplicatePaths 对路径列表去重（保持原顺序，忽略空串）。
+// 防止 bwrap --bind-try 对同一目录重复绑定（无害但产生警告日志）。
+func deduplicatePaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; !dup {
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 type inlineTokenVerifier struct{}
