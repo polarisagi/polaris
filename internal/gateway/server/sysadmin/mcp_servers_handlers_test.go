@@ -35,6 +35,7 @@ func TestMCPServersHandlers(t *testing.T) {
 			catalog_id TEXT,
 			plugin_id TEXT,
 			work_dir TEXT,
+			requires_network INTEGER,
 			created_at TEXT,
 			updated_at TEXT
 		);

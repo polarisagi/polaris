@@ -2,12 +2,12 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -117,8 +117,9 @@ func TestAssignSandboxTier(t *testing.T) {
 		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxInProcess, nil, types.TrustCommunity},
 		{"llm-gen", types.ToolLLMGenerated, types.CapReadOnly, nil, 1, "linux", types.SandboxWasm, nil, types.TrustUntrusted},
 		{"privileged-spawn", types.ToolSkill, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil, types.TrustSystem},
-		{"tier0-linux-container", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
-		{"tier0-darwin-downgrade", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", types.SandboxInProcess, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		// Tier-0 不再报错：Container 降级为 NativeOS（Rust bwrap/Seatbelt，无容器运行时依赖）。
+		{"tier0-linux-container", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", types.SandboxNativeOS, nil, types.TrustSystem},
+		{"tier0-darwin-downgrade", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", types.SandboxNativeOS, nil, types.TrustSystem},
 		{"tier1-darwin-no-downgrade", types.ToolSkill, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil, types.TrustSystem},
 	}
 	for _, tt := range tests {
@@ -195,8 +196,14 @@ func TestInProcessSandbox_AdditionalMethods(t *testing.T) {
 
 // ─── ContainerSandbox Tests (Anomaly Paths) ──────────────────────────────────
 
+type errorCmdRunner struct{}
+
+func (errorCmdRunner) RunCmd(_ context.Context, _ CmdRunnerCfg) ([]byte, int, string, error) {
+	return nil, 1, "", errors.New("expected test failure")
+}
+
 func TestContainerSandbox_Methods(t *testing.T) {
-	sb := NewContainerSandbox("/usr/local/bin/polaris-sandbox", "darwin", 1, NopCmdRunner{})
+	sb := NewContainerSandbox("/usr/local/bin/polaris-sandbox", "darwin", 1, errorCmdRunner{})
 
 	if sb.Level() != int(types.SandboxContainer) {
 		t.Errorf("expected Container level %v, got %v", types.SandboxContainer, sb.Level())

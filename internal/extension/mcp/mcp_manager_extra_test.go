@@ -34,7 +34,11 @@ func TestMCPManager_AddRemoveUpdate(t *testing.T) {
 		enabled INTEGER,
 		timeout INTEGER,
 		trust_tier INTEGER,
+		catalog_id TEXT,
+		plugin_id TEXT,
 		work_dir TEXT,
+		requires_network INTEGER,
+		created_at TEXT,
 		updated_at TEXT
 	)`)
 	if err != nil {
@@ -42,8 +46,8 @@ func TestMCPManager_AddRemoveUpdate(t *testing.T) {
 	}
 
 	// Insert dummy data
-	_, err = db.Exec(`INSERT INTO mcp_servers (id, name, transport, command, args, env, url, enabled, timeout, trust_tier, work_dir)
-		VALUES ('test-1', 'fake-server', 'streamable_http', '', '[]', '{}', 'http://localhost:9999', 1, 30, 2, '')`)
+	_, err = db.Exec(`INSERT INTO mcp_servers (id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, requires_network)
+		VALUES ('test-1', 'fake-server', 'streamable_http', '', '[]', '{}', 'http://localhost:9999', 1, 30, 2, '', '', '', 0)`)
 	if err != nil {
 		t.Fatalf("failed to insert data: %v", err)
 	}
