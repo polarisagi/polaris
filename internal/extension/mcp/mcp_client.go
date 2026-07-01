@@ -193,11 +193,12 @@ func applyBwrapSandbox(cmd *exec.Cmd, cfg MCPClientConfig) {
 		"--die-with-parent", // 父进程退出时子进程自动清理
 	}
 
-	// 网络隔离：TrustTier 驱动，精细控制，而非全局开关。
-	// Community(≤2) / Local / Unknown → 断网，防止 prompt injection 后的数据外泄。
-	// Official(3) / System / Builtin(4) → 保留网络，这类插件有合法的外部 API 调用需求。
-	// （ADR-0016 §2.1；HE-Rule 2：可验证执行，禁止概率过滤当安全边界）
-	netIsolated := cfg.TrustTier <= 2
+	// 网络隔离策略（ADR-0016 §2.1；HE-Rule 2：可验证执行，禁止概率过滤当安全边界）：
+	//   TrustTier>=3（Official/System/Builtin）→ 信任来源，保留网络访问。
+	//   TrustTier<=2（Community/Local/Unknown）→ 默认断网；
+	//     但若服务器声明了网络需求（RequiresNetwork=true）且用户已审批（NetworkApproved=true），
+	//     则放行网络，允许服务器访问外部 API（如搜索、翻译等有合法需求的社区插件）。
+	netIsolated := cfg.TrustTier <= 2 && !(cfg.RequiresNetwork && cfg.NetworkApproved)
 	if netIsolated {
 		args = append(args, "--unshare-net")
 	}
@@ -233,7 +234,9 @@ func applyBwrapSandbox(cmd *exec.Cmd, cfg MCPClientConfig) {
 	cmd.Path = bwrap
 	cmd.Args = args
 	slog.Info("mcp: stdio process wrapped with bwrap",
-		"cmd", originalArgs[0], "trust_tier", cfg.TrustTier, "net_isolated", netIsolated)
+		"cmd", originalArgs[0], "trust_tier", cfg.TrustTier,
+		"requires_network", cfg.RequiresNetwork, "network_approved", cfg.NetworkApproved,
+		"net_isolated", netIsolated)
 }
 
 // applySeatbeltSandbox 使用 macOS sandbox-exec 包装命令：

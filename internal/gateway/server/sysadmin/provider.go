@@ -24,6 +24,8 @@ type MCPManager interface {
 	Remove(serverID string)
 	// Update 更新 MCP 服务器配置（替换原有连接）。
 	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
+	// ApproveNetworkAccess 设置服务器网络访问审批并重启连接（approved=true 放行网络）。
+	ApproveNetworkAccess(ctx context.Context, serverID string, extRepo protocol.ExtensionRepository, dataDir string, approved bool) error
 }
 
 // ExtensionInstaller sysadmin 包对扩展安装管理器的消费端接口。

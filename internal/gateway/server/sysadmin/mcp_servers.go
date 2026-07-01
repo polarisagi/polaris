@@ -27,7 +27,7 @@ func (h *SysAdminHandler) HandleListMCPServers(w http.ResponseWriter, r *http.Re
 	rows, err := h.DB.QueryContext(r.Context(), `
 		SELECT ms.id, ms.name, ms.transport, ms.command, ms.args, ms.env, ms.url,
 		       ms.enabled, ms.timeout, ms.trust_tier, COALESCE(ms.catalog_id,''),
-		       ms.plugin_id, ms.work_dir, ms.created_at, ms.updated_at,
+		       ms.plugin_id, ms.work_dir, ms.requires_network, ms.created_at, ms.updated_at,
 		       COALESCE(p.display_name, p.name, '') AS plugin_name
 		FROM mcp_servers ms
 		LEFT JOIN plugins p ON ms.plugin_id = p.id
@@ -45,23 +45,48 @@ func (h *SysAdminHandler) HandleListMCPServers(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// 批量读取 preferences 中的网络审批状态（避免 N+1 查询）
+	approvalMap := map[string]string{}
+	if h.SystemRepo != nil {
+		if prefs, err := h.SystemRepo.ListPreferences(r.Context()); err == nil {
+			const prefix = "mcp.net.approved."
+			for k, v := range prefs {
+				if strings.HasPrefix(k, prefix) {
+					approvalMap[k[len(prefix):]] = v
+				}
+			}
+		}
+	}
+
 	list := []*types.MCPServerConfig{}
 	for rows.Next() {
 		c := &types.MCPServerConfig{}
-		var enabled int
+		var enabled, requiresNetworkInt int
 		var argsJSON, envJSON string
 		if err := rows.Scan(&c.ID, &c.Name, &c.Transport, &c.Command, &argsJSON, &envJSON,
 			&c.URL, &enabled, &c.Timeout, &c.TrustTier, &c.CatalogID,
-			&c.PluginID, &c.WorkDir, &c.CreatedAt, &c.UpdatedAt, &c.PluginName); err != nil {
+			&c.PluginID, &c.WorkDir, &requiresNetworkInt, &c.CreatedAt, &c.UpdatedAt, &c.PluginName); err != nil {
 			continue
 		}
 		c.Enabled = enabled == 1
+		c.RequiresNetwork = requiresNetworkInt == 1
 		json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 		json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
 		if info, ok := runtimeMap[c.ID]; ok {
 			c.Connected = info.Connected
 			c.ToolCount = len(info.Tools)
 			c.Error = info.Error
+		}
+		// 填充网络审批状态（仅对 TrustTier<=2 && RequiresNetwork=true 的服务器有意义）
+		if c.RequiresNetwork && c.TrustTier <= 2 {
+			switch approvalMap[c.ID] {
+			case "approved":
+				c.NetworkApprovalStatus = "approved"
+			case "denied":
+				c.NetworkApprovalStatus = "denied"
+			default:
+				c.NetworkApprovalStatus = "pending"
+			}
 		}
 		list = append(list, c)
 	}
@@ -113,21 +138,22 @@ func (h *SysAdminHandler) HandleCreateMCPServer(w http.ResponseWriter, r *http.R
 	envBytes, _ := json.Marshal(c.Env)
 	now := time.Now().UTC().Format(time.RFC3339)
 	err := h.ExtRepo.UpsertMCPServer(r.Context(), apptypes.MCPServerRow{
-		ID:        c.ID,
-		Name:      c.Name,
-		Transport: c.Transport,
-		Command:   c.Command,
-		Args:      string(argsBytes),
-		Env:       string(envBytes),
-		URL:       c.URL,
-		Enabled:   c.Enabled,
-		Timeout:   c.Timeout,
-		TrustTier: c.TrustTier,
-		CatalogID: "",
-		PluginID:  "",
-		WorkDir:   "",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              c.ID,
+		Name:            c.Name,
+		Transport:       c.Transport,
+		Command:         c.Command,
+		Args:            string(argsBytes),
+		Env:             string(envBytes),
+		URL:             c.URL,
+		Enabled:         c.Enabled,
+		Timeout:         c.Timeout,
+		TrustTier:       c.TrustTier,
+		CatalogID:       "",
+		PluginID:        "",
+		WorkDir:         "",
+		RequiresNetwork: c.RequiresNetwork,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	})
 	if err != nil {
 		http.Error(w, "db: "+err.Error(), http.StatusInternalServerError)
@@ -194,15 +220,16 @@ func (h *SysAdminHandler) HandleUpdateMCPServer(w http.ResponseWriter, r *http.R
 
 	if h.MCPMgr != nil {
 		updateCfg := protocol.MCPUpdateConfig{
-			Name:      c.Name,
-			Transport: c.Transport,
-			Command:   c.Command,
-			Args:      c.Args,
-			Env:       c.Env,
-			URL:       c.URL,
-			Enabled:   c.Enabled,
-			Timeout:   c.Timeout,
-			TrustTier: c.TrustTier,
+			Name:            c.Name,
+			Transport:       c.Transport,
+			Command:         c.Command,
+			Args:            c.Args,
+			Env:             c.Env,
+			URL:             c.URL,
+			Enabled:         c.Enabled,
+			Timeout:         c.Timeout,
+			TrustTier:       c.TrustTier,
+			RequiresNetwork: c.RequiresNetwork,
 		}
 		if err := h.MCPMgr.Update(r.Context(), h.ExtRepo, id, updateCfg, h.DataDir); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -210,16 +237,17 @@ func (h *SysAdminHandler) HandleUpdateMCPServer(w http.ResponseWriter, r *http.R
 		}
 	} else {
 		err := h.ExtRepo.UpdateMCPServer(r.Context(), id, map[string]any{
-			"name":       c.Name,
-			"transport":  c.Transport,
-			"command":    c.Command,
-			"args":       string(argsBytes),
-			"env":        string(envBytes),
-			"url":        c.URL,
-			"enabled":    boolToInt(c.Enabled),
-			"timeout":    c.Timeout,
-			"trust_tier": c.TrustTier,
-			"updated_at": now,
+			"name":             c.Name,
+			"transport":        c.Transport,
+			"command":          c.Command,
+			"args":             string(argsBytes),
+			"env":              string(envBytes),
+			"url":              c.URL,
+			"enabled":          boolToInt(c.Enabled),
+			"timeout":          c.Timeout,
+			"trust_tier":       c.TrustTier,
+			"requires_network": boolToInt(c.RequiresNetwork),
+			"updated_at":       now,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -326,9 +354,54 @@ func (h *SysAdminHandler) StartMCPServerCtx(ctx context.Context, c types.MCPServ
 		Timeout:    time.Duration(c.Timeout) * time.Second,
 		ServerName: c.Name,
 		// SandboxPolicy 不设置（""=auto）：applyStdioSandbox 自动按 TrustTier + OS 决策，无需此处硬编码。
-		TrustTier: c.TrustTier,
+		TrustTier:       c.TrustTier,
+		RequiresNetwork: c.RequiresNetwork,
+		// NetworkApproved 由 MCPManager.Add() 内部按 preferences 表动态解析。
 	}
 	return h.MCPMgr.Add(ctx, c.ID, c.Name, cfg)
+}
+
+// HandleMCPNetworkApproval 设置 MCP Server 的网络访问审批决策。
+// PUT /v1/mcp-servers/{serverID}/network-access
+// Body: {"approved": true}  → 放行网络
+// Body: {"approved": false} → 拒绝（恢复断网）
+//
+// 仅对 TrustTier<=2 且 requires_network=true 的服务器有意义。
+// 审批结果持久化到 preferences（mcp.net.approved.<id>）并立即重启 MCP 连接。
+func (h *SysAdminHandler) HandleMCPNetworkApproval(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("serverID")
+
+	var body struct {
+		Approved bool `json:"approved"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if h.MCPMgr == nil {
+		http.Error(w, "mcp manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := h.MCPMgr.ApproveNetworkAccess(r.Context(), id, h.ExtRepo, h.DataDir, body.Approved); err != nil {
+		statusCode := http.StatusInternalServerError
+		http.Error(w, err.Error(), statusCode)
+		return
+	}
+
+	decision := "denied"
+	if body.Approved {
+		decision = "approved"
+	}
+	slog.Info("mcp: network access decision applied", "server_id", id, "decision", decision)
+	h.ClearToolSchemaCache()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+		"status":    "ok",
+		"server_id": id,
+		"decision":  decision,
+	})
 }
 
 func boolToInt(b bool) int {

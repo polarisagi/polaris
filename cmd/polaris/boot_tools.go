@@ -125,6 +125,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	prefsRepo := sysRepo
 	extRepo := repo.NewSQLiteExtensionRepository(sb.Store.DB())
 	appRepo := repo.NewSQLiteAppRepository(sb.Store.DB())
+
+	// 注入网络审批存储：MCPManager 查询 preferences 表以决定 TrustTier<=2 MCP 的网络隔离策略。
+	mcpMgr.SetNetApprovalStore(sysRepo)
+
 	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap)
 	if containerSandbox != nil {
 		installMgr.WithHookRunner(containerSandbox)

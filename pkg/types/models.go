@@ -586,11 +586,12 @@ type MCPServerRow struct {
 	Enabled   bool
 	Timeout   int
 	TrustTier int
-	CatalogID string
-	PluginID  string
-	WorkDir   string
-	CreatedAt string
-	UpdatedAt string
+	CatalogID       string
+	PluginID        string
+	WorkDir         string
+	RequiresNetwork bool
+	CreatedAt       string
+	UpdatedAt       string
 }
 
 // AuditEventRow 审计日志单条记录。

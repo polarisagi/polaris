@@ -56,18 +56,25 @@ type MCPClientConfig struct {
 	// 值来自 mcp_servers.trust_tier：0=Unknown, 1=Local, 2=Community, 3=Official, 4=System/Builtin。
 	// TrustTier<=2 → bwrap 断网 + TaintHigh；TrustTier>=3 → 保留网络 + TaintMedium。
 	TrustTier int
+	// RequiresNetwork 服务器声明需要网络访问（来自 mcp_servers.requires_network）。
+	// TrustTier<=2 时默认断网；声明 true 后用户可通过审批接口放行，审批结果写入 preferences。
+	RequiresNetwork bool
+	// NetworkApproved 由 MCPManager 在 Add() 时按 preferences 表动态解析并写入。
+	// true = 用户已批准该服务器的网络访问请求（仅在 RequiresNetwork=true 时有意义）。
+	NetworkApproved bool
 }
 
 // MCPUpdateConfig MCP Server 可更新字段。
 // @canonical: 此处为唯一定义，extension/mcp 包以 type alias 引用。
 type MCPUpdateConfig struct {
-	Name      string
-	Transport string
-	Command   string
-	Args      []string
-	Env       map[string]string
-	URL       string
-	Enabled   bool
-	Timeout   int
-	TrustTier int
+	Name            string
+	Transport       string
+	Command         string
+	Args            []string
+	Env             map[string]string
+	URL             string
+	Enabled         bool
+	Timeout         int
+	TrustTier       int
+	RequiresNetwork bool
 }

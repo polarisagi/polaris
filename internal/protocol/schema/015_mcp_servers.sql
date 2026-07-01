@@ -25,7 +25,10 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     -- 插件卸载时级联删除，插件禁用/启用时级联 enabled 同步。
     plugin_id   TEXT    NOT NULL DEFAULT '',
     -- stdio 进程工作目录；插件 MCP 设为 install_path，独立 MCP 留空（继承父进程 cwd）。
-    work_dir    TEXT    NOT NULL DEFAULT '',
+    work_dir         TEXT    NOT NULL DEFAULT '',
+    -- 服务器主动声明需要网络访问（TrustTier<=2 默认断网，声明后可由用户审批放行）。
+    -- 0=不需要（默认）；1=需要（待审批或已审批由 preferences 表 mcp.net.approved.<id> 决定）。
+    requires_network INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );

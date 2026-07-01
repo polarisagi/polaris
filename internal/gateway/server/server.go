@@ -545,6 +545,8 @@ func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protoco
 	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}", s.sysadminHandler.HandleUpdateMCPServer)
 	// mux.HandleFunc("...", s.sysadminHandler.HandleRemoveMCPServer)
 	mux.HandleFunc("POST /v1/mcp-servers/{serverID}/test", s.sysadminHandler.HandleTestMCPServer)
+	// 网络访问审批：PUT /v1/mcp-servers/{id}/network-access  body: {"approved": true/false}
+	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}/network-access", s.sysadminHandler.HandleMCPNetworkApproval)
 
 	// 插件目录 API
 	mux.HandleFunc("GET /v1/plugins/catalog", s.pluginHandler.HandleListPluginCatalog)

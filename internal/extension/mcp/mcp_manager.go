@@ -36,6 +36,14 @@ type ToolRegistrar interface {
 	Unregister(name string)
 }
 
+// NetApprovalStore MCP 网络访问审批持久化存储（consumer-side 定义）。
+// 实现由 internal/store/repo.SystemRepository 提供（preferences 表）。
+// key 格式：mcp.net.approved.<server_id>，value："approved" | "denied"；缺失=待审批(pending)。
+type NetApprovalStore interface {
+	GetPreference(ctx context.Context, key string) (string, error)
+	UpsertPreference(ctx context.Context, key, value string) error
+}
+
 // SandboxToolRegistrar 向进程内沙箱注册/注销工具的最小接口（consumer-side 定义，防具体类型耦合）。
 // 实现由 internal/sandbox.InProcessSandbox 提供；接口定义在此（调用方），符合 Go consumer-side 原则。
 type SandboxToolRegistrar interface {
@@ -57,6 +65,38 @@ type MCPManager struct {
 	policy           protocol.PolicyGate // 对 process_spawn 的策略检查
 	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
 	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
+	netApproval      NetApprovalStore    // 网络访问审批持久化；nil 时跳过审批逻辑（安全降级：保持断网）
+}
+
+// SetNetApprovalStore 注入网络访问审批存储（SystemRepo）。
+// 必须在 LoadFromDB / Add 之前调用；nil 表示跳过审批（默认断网）。
+func (m *MCPManager) SetNetApprovalStore(s NetApprovalStore) {
+	m.mu.Lock()
+	m.netApproval = s
+	m.mu.Unlock()
+}
+
+// netApprovalKey 生成 preferences 表的 key（mcp.net.approved.<serverID>）。
+func netApprovalKey(serverID string) string {
+	return "mcp.net.approved." + serverID
+}
+
+// checkNetApproval 查询指定 server 的网络访问审批状态。
+// 返回 true 表示用户已批准；返回 false 表示 denied 或 pending（safe default）。
+func (m *MCPManager) checkNetApproval(ctx context.Context, serverID string) bool {
+	m.mu.RLock()
+	store := m.netApproval
+	m.mu.RUnlock()
+	if store == nil {
+		return false // 无存储则保守断网
+	}
+	val, err := store.GetPreference(ctx, netApprovalKey(serverID))
+	if err != nil {
+		slog.Warn("mcp: failed to read network approval state, defaulting to isolated",
+			"server_id", serverID, "err", err)
+		return false
+	}
+	return val == "approved"
 }
 
 // SetSamplingProvider 注入 LLM Provider，供 MCP sampling 回调使用。
@@ -142,6 +182,18 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 				reason = pErr.Error()
 			}
 			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("mcp_manager: process_spawn denied for %q: %s", name, reason))
+		}
+	}
+
+	// 网络访问审批解析：TrustTier<=2 时 bwrap 默认断网；
+	// 若服务器声明 RequiresNetwork=true，则查询 preferences 表决定是否放行。
+	// 此处修改的是值拷贝（cfg 按值传入），不影响调用方持有的原始配置。
+	if cfg.RequiresNetwork && cfg.TrustTier <= 2 {
+		cfg.NetworkApproved = m.checkNetApproval(ctx, serverID)
+		if !cfg.NetworkApproved {
+			slog.Warn("mcp: server requires network access but approval pending; running with --unshare-net",
+				"server_id", serverID, "server", name,
+				"hint", "POST /v1/mcp-servers/{id}/network-access to approve")
 		}
 	}
 
@@ -334,8 +386,10 @@ func (m *MCPManager) LoadFromDB(ctx context.Context, extRepo protocol.ExtensionR
 			ServerName: s.Name,
 			// TrustTier 驱动沙箱策略（bwrap 网络隔离）和污点等级（TaintMedium/TaintHigh）。
 			// SandboxPolicy 不设置（""）：applyStdioSandbox 将其视为 "auto"，自动按 TrustTier 决策。
-			TrustTier: s.TrustTier,
-			Trusted:   s.TrustTier >= 3,
+			TrustTier:       s.TrustTier,
+			Trusted:         s.TrustTier >= 3,
+			RequiresNetwork: s.RequiresNetwork,
+			// NetworkApproved 由 Add() 内部按 preferences 表动态解析，此处留零值。
 		}
 		// 每个 server 独立 goroutine，避免一个慢连接阻塞其他
 		concurrent.SafeGo(ctx, "mcp_manager_add", func(_ context.Context) {
@@ -574,6 +628,86 @@ func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectReque
 	return nil
 }
 
+// ApproveNetworkAccess 设置服务器的网络访问审批状态并立即重启该 MCP 连接，
+// 使新的网络隔离策略立即生效（approved=true → 放行网络；false → 恢复断网）。
+//
+// 此方法：
+//  1. 将 "approved"/"denied" 写入 preferences 表（持久化）。
+//  2. 从 DB 读取最新配置（含 RequiresNetwork 字段）。
+//  3. Remove + Add 重启连接（与 Update() 的重连模式相同）。
+func (m *MCPManager) ApproveNetworkAccess(ctx context.Context, serverID string, extRepo protocol.ExtensionRepository, dataDir string, approved bool) error {
+	m.mu.RLock()
+	store := m.netApproval
+	m.mu.RUnlock()
+	if store == nil {
+		return apperr.New(apperr.CodeInternal, "mcp: net approval store not configured")
+	}
+
+	// 1. 持久化审批结果
+	decision := "denied"
+	if approved {
+		decision = "approved"
+	}
+	if err := store.UpsertPreference(ctx, netApprovalKey(serverID), decision); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "mcp: persist net approval", err)
+	}
+	slog.Info("mcp: network access decision recorded",
+		"server_id", serverID, "decision", decision)
+
+	// 2. 读取 DB 当前配置（重连时需要完整 row）
+	row, err := extRepo.GetMCPServer(ctx, serverID)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "mcp: get server for reconnect", err)
+	}
+	if row == nil {
+		return apperr.New(apperr.CodeNotFound, "mcp: server not found: "+serverID)
+	}
+	if !row.Enabled {
+		// 服务器当前禁用，仅存储决策，不触发重连
+		return nil
+	}
+
+	// 3. 异步重启连接（与 Update 模式一致，不阻塞当前请求）
+	var args []string
+	var env map[string]string
+	if err := json.Unmarshal([]byte(row.Args), &args); err != nil {
+		args = nil
+	}
+	if err := json.Unmarshal([]byte(row.Env), &env); err != nil {
+		env = nil
+	}
+	for i, a := range args {
+		args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)
+	}
+	transport := row.Transport
+	if transport == "streamable-http" {
+		transport = string(MCPStreamableHTTP)
+	}
+	clientCfg := MCPClientConfig{
+		Transport:       MCPTransport(transport),
+		Command:         row.Command,
+		Args:            args,
+		Env:             env,
+		URL:             strings.ReplaceAll(row.URL, "{DATA_DIR}", dataDir),
+		WorkDir:         row.WorkDir,
+		Timeout:         time.Duration(row.Timeout) * time.Second,
+		ServerName:      row.Name,
+		TrustTier:       row.TrustTier,
+		Trusted:         row.TrustTier >= 3,
+		RequiresNetwork: row.RequiresNetwork,
+		// NetworkApproved 由 Add() 内部重新查询 preferences，此处不预设
+	}
+	m.Remove(serverID)
+	concurrent.SafeGo(context.Background(), "mcp_net_approve_reconnect", func(_ context.Context) {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := m.Add(bgCtx, serverID, row.Name, clientCfg); err != nil {
+			slog.Warn("mcp: reconnect after network approval failed", "server_id", serverID, "err", err)
+		}
+	})
+	return nil
+}
+
 // MCPUpdateConfig protocol.MCPUpdateConfig 本地别名，使包内调用无需显式引用 protocol 包。
 type MCPUpdateConfig = protocol.MCPUpdateConfig
 
@@ -582,16 +716,21 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 	argsBytes, _ := json.Marshal(cfg.Args)
 	envBytes, _ := json.Marshal(cfg.Env)
 
+	requiresNetworkInt := 0
+	if cfg.RequiresNetwork {
+		requiresNetworkInt = 1
+	}
 	fields := map[string]any{
-		"name":       cfg.Name,
-		"transport":  cfg.Transport,
-		"command":    cfg.Command,
-		"args":       string(argsBytes),
-		"env":        string(envBytes),
-		"url":        cfg.URL,
-		"enabled":    cfg.Enabled,
-		"timeout":    cfg.Timeout,
-		"trust_tier": cfg.TrustTier,
+		"name":             cfg.Name,
+		"transport":        cfg.Transport,
+		"command":          cfg.Command,
+		"args":             string(argsBytes),
+		"env":              string(envBytes),
+		"url":              cfg.URL,
+		"enabled":          cfg.Enabled,
+		"timeout":          cfg.Timeout,
+		"trust_tier":       cfg.TrustTier,
+		"requires_network": requiresNetworkInt,
 	}
 
 	if err := extRepo.UpdateMCPServer(ctx, id, fields); err != nil {
@@ -612,8 +751,10 @@ func (m *MCPManager) Update(ctx context.Context, extRepo protocol.ExtensionRepos
 			Timeout:    time.Duration(cfg.Timeout) * time.Second,
 			ServerName: cfg.Name,
 			// TrustTier 驱动沙箱策略和污点等级；SandboxPolicy 不设置（""=auto）。
-			TrustTier: cfg.TrustTier,
-			Trusted:   cfg.TrustTier >= 3,
+			TrustTier:       cfg.TrustTier,
+			Trusted:         cfg.TrustTier >= 3,
+			RequiresNetwork: cfg.RequiresNetwork,
+			// NetworkApproved 由 Add() 内部按 preferences 表动态解析，此处留零值。
 		}
 		for i, a := range cfg.Args {
 			clientCfg.Args[i] = strings.ReplaceAll(a, "{DATA_DIR}", dataDir)

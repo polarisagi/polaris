@@ -297,7 +297,7 @@ func (r *SQLiteExtensionRepository) SeedCatalogEntry(ctx context.Context, row ty
 
 func (r *SQLiteExtensionRepository) ListMCPServers(ctx context.Context) ([]types.MCPServerRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, created_at, updated_at
+		`SELECT id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, requires_network, created_at, updated_at
 		FROM mcp_servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListMCPServers", err)
@@ -307,11 +307,12 @@ func (r *SQLiteExtensionRepository) ListMCPServers(ctx context.Context) ([]types
 	var result []types.MCPServerRow
 	for rows.Next() {
 		var row types.MCPServerRow
-		var enabledInt int
-		if err := rows.Scan(&row.ID, &row.Name, &row.Transport, &row.Command, &row.Args, &row.Env, &row.URL, &enabledInt, &row.Timeout, &row.TrustTier, &row.CatalogID, &row.PluginID, &row.WorkDir, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		var enabledInt, requiresNetworkInt int
+		if err := rows.Scan(&row.ID, &row.Name, &row.Transport, &row.Command, &row.Args, &row.Env, &row.URL, &enabledInt, &row.Timeout, &row.TrustTier, &row.CatalogID, &row.PluginID, &row.WorkDir, &requiresNetworkInt, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListMCPServers scan", err)
 		}
 		row.Enabled = enabledInt == 1
+		row.RequiresNetwork = requiresNetworkInt == 1
 		result = append(result, row)
 	}
 	return result, rows.Err()
@@ -319,11 +320,11 @@ func (r *SQLiteExtensionRepository) ListMCPServers(ctx context.Context) ([]types
 
 func (r *SQLiteExtensionRepository) GetMCPServer(ctx context.Context, id string) (*types.MCPServerRow, error) {
 	var row types.MCPServerRow
-	var enabledInt int
+	var enabledInt, requiresNetworkInt int
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, created_at, updated_at
+		`SELECT id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, requires_network, created_at, updated_at
 		FROM mcp_servers WHERE id=?`, id).Scan(
-		&row.ID, &row.Name, &row.Transport, &row.Command, &row.Args, &row.Env, &row.URL, &enabledInt, &row.Timeout, &row.TrustTier, &row.CatalogID, &row.PluginID, &row.WorkDir, &row.CreatedAt, &row.UpdatedAt)
+		&row.ID, &row.Name, &row.Transport, &row.Command, &row.Args, &row.Env, &row.URL, &enabledInt, &row.Timeout, &row.TrustTier, &row.CatalogID, &row.PluginID, &row.WorkDir, &requiresNetworkInt, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -331,6 +332,7 @@ func (r *SQLiteExtensionRepository) GetMCPServer(ctx context.Context, id string)
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.GetMCPServer", err)
 	}
 	row.Enabled = enabledInt == 1
+	row.RequiresNetwork = requiresNetworkInt == 1
 	return &row, nil
 }
 
@@ -339,14 +341,19 @@ func (r *SQLiteExtensionRepository) UpsertMCPServer(ctx context.Context, row typ
 	if row.Enabled {
 		enabledInt = 1
 	}
+	requiresNetworkInt := 0
+	if row.RequiresNetwork {
+		requiresNetworkInt = 1
+	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO mcp_servers(id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO mcp_servers(id, name, transport, command, args, env, url, enabled, timeout, trust_tier, catalog_id, plugin_id, work_dir, requires_network, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 		  name=excluded.name, transport=excluded.transport, command=excluded.command,
 		  args=excluded.args, env=excluded.env, url=excluded.url, enabled=excluded.enabled,
-		  timeout=excluded.timeout, trust_tier=excluded.trust_tier, work_dir=excluded.work_dir, updated_at=excluded.updated_at`,
-		row.ID, row.Name, row.Transport, row.Command, row.Args, row.Env, row.URL, enabledInt, row.Timeout, row.TrustTier, row.CatalogID, row.PluginID, row.WorkDir, row.CreatedAt, row.UpdatedAt)
+		  timeout=excluded.timeout, trust_tier=excluded.trust_tier, work_dir=excluded.work_dir,
+		  requires_network=excluded.requires_network, updated_at=excluded.updated_at`,
+		row.ID, row.Name, row.Transport, row.Command, row.Args, row.Env, row.URL, enabledInt, row.Timeout, row.TrustTier, row.CatalogID, row.PluginID, row.WorkDir, requiresNetworkInt, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpsertMCPServer", err)
 	}

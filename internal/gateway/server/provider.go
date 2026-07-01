@@ -63,6 +63,8 @@ type MCPManager interface {
 	Remove(serverID string)
 	// Update 更新 MCP 服务器配置（断开旧连接 → 应用新配置 → 重连）。
 	Update(ctx context.Context, extRepo protocol.ExtensionRepository, id string, cfg protocol.MCPUpdateConfig, dataDir string) error
+	// ApproveNetworkAccess 设置服务器网络访问审批并重启连接（approved=true 放行网络）。
+	ApproveNetworkAccess(ctx context.Context, serverID string, extRepo protocol.ExtensionRepository, dataDir string, approved bool) error
 	// IsPluginConnected 检查指定 Plugin 的 MCP 进程是否在线。
 	IsPluginConnected(pluginID string) bool
 	// SetOnToolsChanged 注册工具集变更回调（插件 MCP 连接完成时触发缓存失效）。
