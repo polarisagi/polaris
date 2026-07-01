@@ -100,6 +100,11 @@ func (s *XvfbDisplayServer) SendAction(action any) error {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("xvfb: unsupported action type %q", actType))
 	}
 
+	// 豁免说明：
+	// 此处的 X11 交互工具 (xdotool, xwd, convert) 以及长驻后台进程 (Xvfb) 保留原生 exec.Command 调用，不接入 Rust V2 沙箱。
+	// 原因：Rust V2 沙箱主要用于生命周期明确的单次任务执行。若将此类与长驻后台服务紧密交互、或本身就是长驻进程
+	// 的组件放入隔离沙箱，可能导致资源泄露、僵尸进程（PID namespace 孤儿）或 X11 状态无法清理（socket 挂载问题）。
+	// 且参数均为内部构造的简单坐标指令，无外部 shell 注入风险。
 	cmd := exec.Command("xdotool", args...)
 	// 使用 X11 白名单环境，并将 DISPLAY 覆盖为目标虚拟显示器（R1.15）
 	cmd.Env = sanitizeX11Env(s.displayID)

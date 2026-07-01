@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -21,7 +20,7 @@ import (
 // makeGitDiffFn 返回 git_diff 工具实现。
 // 用 exec.Command 而非 bash，无 shell 注入风险；path 受 allowedPaths 白名单约束。
 // 输出：结构化文件变更列表 + 统计 + 原始 unified diff（上限 1MB）。
-func makeGitDiffFn(allowedPaths []string) sandbox.InProcessFn {
+func makeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args struct {
 			Path   string `json:"path"`   // git 仓库根目录，必须在 allowedPaths 内
@@ -65,15 +64,8 @@ func makeGitDiffFn(allowedPaths []string) sandbox.InProcessFn {
 		defer cancel()
 
 		// 1. 原始 unified diff（上限 1MB）
-		rawCmd := exec.CommandContext(ctx, "git", diffArgs...)
-		rawCmd.Dir = workDir
-		rawOut, err := rawCmd.Output()
+		rawOut, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", diffArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
 		if err != nil {
-			var exitErr *exec.ExitError
-			if ok := isExitError(err, &exitErr); ok {
-				return nil, apperr.New(apperr.CodeInternal,
-					fmt.Sprintf("git_diff: failed: %s", exitErr.Stderr))
-			}
 			return nil, apperr.Wrap(apperr.CodeInternal, "git_diff: exec failed", err)
 		}
 		raw := string(rawOut)
@@ -85,9 +77,7 @@ func makeGitDiffFn(allowedPaths []string) sandbox.InProcessFn {
 
 		// 2. 结构化统计（--numstat 输出：<added>\t<removed>\t<file>）
 		numstatArgs := append([]string{"diff", "--numstat"}, diffArgs[1:]...)
-		numstatCmd := exec.CommandContext(ctx, "git", numstatArgs...)
-		numstatCmd.Dir = workDir
-		numstatOut, _ := numstatCmd.Output()
+		numstatOut, _ := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", numstatArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
 
 		type fileStat struct {
 			Path    string `json:"path"`
@@ -128,7 +118,7 @@ func makeGitDiffFn(allowedPaths []string) sandbox.InProcessFn {
 // makeGitCommitFn 返回 git_commit 工具实现。
 // 依次执行 git add + git commit，返回 commit hash 与 branch 名。
 // 调用方对提交内容负责；此工具仅执行机械操作，不做内容审查。
-func makeGitCommitFn(allowedPaths []string) sandbox.InProcessFn {
+func makeGitCommitFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args struct {
 			Path       string   `json:"path"`        // git 仓库根目录
@@ -168,11 +158,9 @@ func makeGitCommitFn(allowedPaths []string) sandbox.InProcessFn {
 		} else {
 			addArgs = []string{"add", "-A"}
 		}
-		addCmd := exec.CommandContext(ctx, "git", addArgs...)
-		addCmd.Dir = workDir
-		if out, err := addCmd.CombinedOutput(); err != nil {
+		if out, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", addArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath); err != nil {
 			return nil, apperr.New(apperr.CodeInternal,
-				fmt.Sprintf("git_commit: git add failed: %s", out))
+				fmt.Sprintf("git_commit: git add failed: %s", string(out)))
 		}
 
 		// git commit
@@ -180,25 +168,19 @@ func makeGitCommitFn(allowedPaths []string) sandbox.InProcessFn {
 		if args.AllowEmpty {
 			commitArgs = append(commitArgs, "--allow-empty")
 		}
-		commitCmd := exec.CommandContext(ctx, "git", commitArgs...)
-		commitCmd.Dir = workDir
-		if out, err := commitCmd.CombinedOutput(); err != nil {
+		if out, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", commitArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath); err != nil {
 			return nil, apperr.New(apperr.CodeInternal,
-				fmt.Sprintf("git_commit: git commit failed: %s", out))
+				fmt.Sprintf("git_commit: git commit failed: %s", string(out)))
 		}
 
 		// rev-parse HEAD → commit hash
-		hashCmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-		hashCmd.Dir = workDir
-		hashOut, err := hashCmd.Output()
+		hashOut, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", []string{"rev-parse", "HEAD"}, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
 		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "git_commit: rev-parse failed", err)
 		}
 
 		// rev-parse --abbrev-ref HEAD → branch name
-		branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
-		branchCmd.Dir = workDir
-		branchOut, _ := branchCmd.Output()
+		branchOut, _ := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", []string{"rev-parse", "--abbrev-ref", "HEAD"}, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
 
 		return json.Marshal(map[string]any{
 			"hash":    strings.TrimSpace(string(hashOut)),
@@ -256,11 +238,4 @@ func templateRenderFn(_ context.Context, input []byte) ([]byte, error) {
 		"output":    result,
 		"truncated": truncated,
 	})
-}
-
-// ─── 辅助 ─────────────────────────────────────────────────────────────────────
-
-// isExitError 用 errors.As 检测 err 链中是否包含 *exec.ExitError（兼容 wrapped error）。
-func isExitError(err error, out **exec.ExitError) bool {
-	return errors.As(err, out)
 }

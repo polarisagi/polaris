@@ -46,7 +46,7 @@ func RegisterBuiltinTools(
 	allowedPaths []string, // 文件系统路径白名单（read_file/list_dir/write_file 均受限）
 	dialer protocol.SafeDialer,
 	sandboxEnabled bool, // 是否启用平台原生进程沙箱
-	netPolicy toolsb.NetworkPolicy, // bash/run_command 网络访问策略
+	netPolicy protocol.SandboxNetworkPolicy, // bash/run_command 网络访问策略
 	bwrapPath string, // Linux: bwrap 路径（空=自动查找）
 	cfg *config.Config,
 	cronRepo protocol.CronRepository, // cron_* 工具依赖；nil 时不注册这三个工具
@@ -70,8 +70,8 @@ func RegisterBuiltinTools(
 		{"get_datetime", getDatetimeFn},
 		{"csv_parse", csvParseFn},
 		{"diff_text", diffTextFn},
-		{"tts_edge", ExecuteEdgeTTS},
-		{"video_analysis", ExecuteVideoAnalysis},
+		{"video_analysis", makeExecuteVideoAnalysisFn(sandboxEnabled, bwrapPath)},
+		{"tts_edge", makeExecuteEdgeTTSFn(sandboxEnabled, bwrapPath)},
 		{"sys_probe", sysProbeFn},
 		{"str_replace_editor", makeStrReplaceEditorFn(allowedPaths)},
 		{"read_tool_ref", makeReadToolRefFn()},
@@ -83,8 +83,8 @@ func RegisterBuiltinTools(
 		{"notebook_read", makeNotebookReadFn(allowedPaths)},
 		{"notebook_edit", makeNotebookEditFn(allowedPaths)},
 		{"grep", makeGrepFn(allowedPaths)},
-		{"git_diff", makeGitDiffFn(allowedPaths)},
-		{"git_commit", makeGitCommitFn(allowedPaths)},
+		{"git_diff", makeGitDiffFn(allowedPaths, sandboxEnabled, bwrapPath)},
+		{"git_commit", makeGitCommitFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"template_render", templateRenderFn},
 		{"tool_search", tool.MakeToolSearchFn(toolReg)},
 		{"data_query", makeDataQueryFn(allowedPaths)},
@@ -607,8 +607,8 @@ func execInSandbox(_ context.Context, sandboxCtx protocol.SandboxContext) ([]byt
 }
 
 // toSandboxNetPolicy 将 V1 toolsb.NetworkPolicy 映射到 V2 protocol.SandboxNetworkPolicy。
-func toSandboxNetPolicy(p toolsb.NetworkPolicy) string {
-	if p == toolsb.NetworkAllow {
+func toSandboxNetPolicy(p protocol.SandboxNetworkPolicy) string {
+	if p == protocol.NetPolicyAllow {
 		return protocol.NetPolicyAllow
 	}
 	return protocol.NetPolicyDeny
@@ -624,7 +624,7 @@ func execWithoutSandbox(ctx context.Context, command, workDir string, env []stri
 	return cmd.CombinedOutput()
 }
 
-func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.NetworkPolicy, bwrapPath string) sandbox.InProcessFn {
+func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.SandboxNetworkPolicy, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args bashArgs
 		if err := json.Unmarshal(input, &args); err != nil {
@@ -701,7 +701,7 @@ func makeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.Net
 			"exit_code":       0,
 			"sandbox_enabled": sandboxEnabled,
 			"sandbox_method":  sandboxMethod,
-			"network_policy":  string(netPolicy),
+			"network_policy":  netPolicy,
 		}
 		if execErr != nil {
 			result["error"] = execErr.Error()
@@ -1359,7 +1359,7 @@ func parseRunCommandArgs(input []byte, allowedPaths []string) (*runCommandArgs, 
 	return &args, workDir, timeout, nil
 }
 
-func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.NetworkPolicy, bwrapPath string) sandbox.InProcessFn {
+func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.SandboxNetworkPolicy, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		args, workDir, timeout, err := parseRunCommandArgs(input, allowedPaths)
 		if err != nil {

@@ -23,7 +23,7 @@ func TestGitDiff(t *testing.T) {
 
 	exec.Command("sh", "-c", "echo 'hello world' > "+file).Run()
 
-	diffFn := makeGitDiffFn([]string{tmpDir})
+	diffFn := makeGitDiffFn([]string{tmpDir}, false, "")
 	ctx := context.Background()
 
 	// Invalid json
@@ -56,7 +56,7 @@ func TestGitCommit(t *testing.T) {
 	file := filepath.Join(tmpDir, "test.txt")
 	exec.Command("sh", "-c", "echo 'hello' > "+file).Run()
 
-	commitFn := makeGitCommitFn([]string{tmpDir})
+	commitFn := makeGitCommitFn([]string{tmpDir}, false, "")
 	ctx := context.Background()
 
 	args := `{"path": "` + tmpDir + `", "message": "init", "files": ["test.txt"]}`

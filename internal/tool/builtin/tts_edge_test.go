@@ -7,14 +7,14 @@ import (
 )
 
 func TestExecuteEdgeTTS(t *testing.T) {
-	// Test invalid json
-	_, err := ExecuteEdgeTTS(context.Background(), []byte(`{invalid`))
+	fn := makeExecuteEdgeTTSFn(false, "")
+	_, err := fn(context.Background(), []byte("invalid"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
 
 	// Test fallback/mock
-	out, err := ExecuteEdgeTTS(context.Background(), []byte(`{"text": "hello"}`))
+	out, err := fn(context.Background(), []byte(`{"text":"test"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

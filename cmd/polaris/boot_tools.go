@@ -147,7 +147,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,
 		sb.Cfg.Sandbox.Enabled,
-		toolsb.NetworkPolicy(sb.Cfg.Sandbox.NetworkPolicy),
+		sb.Cfg.Sandbox.NetworkPolicy,
 		sb.Cfg.Sandbox.BwrapPath,
 		sb.Cfg,
 		cronRepo,

@@ -7,14 +7,14 @@ import (
 )
 
 func TestExecuteVideoAnalysis(t *testing.T) {
-	// Test invalid json
-	_, err := ExecuteVideoAnalysis(context.Background(), []byte(`{invalid`))
+	fn := makeExecuteVideoAnalysisFn(false, "")
+	_, err := fn(context.Background(), []byte("invalid"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
 
 	// Test fallback/mock
-	out, err := ExecuteVideoAnalysis(context.Background(), []byte(`{"video_uri": "dummy.mp4"}`))
+	out, err := fn(context.Background(), []byte(`{"video_uri":"file://test.mp4"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
