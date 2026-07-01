@@ -1315,40 +1315,49 @@ type runCommandArgs struct {
 	TimeoutS   int    `json:"timeout_s"`
 }
 
+func parseRunCommandArgs(input []byte, allowedPaths []string) (*runCommandArgs, string, time.Duration, error) {
+	var args runCommandArgs
+	if err := json.Unmarshal(input, &args); err != nil {
+		return nil, "", 0, apperr.Wrap(apperr.CodeInternal, "run_command: invalid args", err)
+	}
+	if args.Command == "" {
+		return nil, "", 0, apperr.New(apperr.CodeInternal, "run_command: command is required")
+	}
+
+	// 命令前缀白名单（构建工具，不含 bash/sh 等 shell 解释器）
+	cmdPrefix := strings.SplitN(strings.TrimSpace(args.Command), " ", 2)[0]
+	allowedCmds := map[string]bool{
+		"go": true, "cargo": true, "npm": true, "yarn": true, "pnpm": true,
+		"make": true, "pytest": true, "tsc": true, "python": true, "python3": true,
+		"pip": true, "pip3": true, "node": true, "deno": true, "bun": true,
+	}
+	if !allowedCmds[cmdPrefix] {
+		return nil, "", 0, apperr.New(apperr.CodeForbidden, fmt.Sprintf("run_command: command %q not in whitelist", cmdPrefix))
+	}
+
+	workDir := args.WorkingDir
+	if workDir == "" && len(allowedPaths) > 0 {
+		workDir = allowedPaths[0]
+	}
+	if workDir != "" {
+		if err := checkAllowedPath(workDir, allowedPaths); err != nil {
+			return nil, "", 0, apperr.Wrap(apperr.CodeInternal, "makeRunCommandFn", err)
+		}
+	}
+
+	timeout := time.Duration(args.TimeoutS) * time.Second
+	if timeout <= 0 || timeout > 120*time.Second {
+		timeout = 30 * time.Second
+	}
+
+	return &args, workDir, timeout, nil
+}
+
 func makeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy toolsb.NetworkPolicy, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
-		var args runCommandArgs
-		if err := json.Unmarshal(input, &args); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "run_command: invalid args", err)
-		}
-		if args.Command == "" {
-			return nil, apperr.New(apperr.CodeInternal, "run_command: command is required")
-		}
-
-		// 命令前缀白名单（构建工具，不含 bash/sh 等 shell 解释器）
-		cmdPrefix := strings.SplitN(strings.TrimSpace(args.Command), " ", 2)[0]
-		allowedCmds := map[string]bool{
-			"go": true, "cargo": true, "npm": true, "yarn": true, "pnpm": true,
-			"make": true, "pytest": true, "tsc": true, "python": true, "python3": true,
-			"pip": true, "pip3": true, "node": true, "deno": true, "bun": true,
-		}
-		if !allowedCmds[cmdPrefix] {
-			return nil, apperr.New(apperr.CodeForbidden, fmt.Sprintf("run_command: command %q not in whitelist", cmdPrefix))
-		}
-
-		workDir := args.WorkingDir
-		if workDir == "" && len(allowedPaths) > 0 {
-			workDir = allowedPaths[0]
-		}
-		if workDir != "" {
-			if err := checkAllowedPath(workDir, allowedPaths); err != nil {
-				return nil, apperr.Wrap(apperr.CodeInternal, "makeRunCommandFn", err)
-			}
-		}
-
-		timeout := time.Duration(args.TimeoutS) * time.Second
-		if timeout <= 0 || timeout > 120*time.Second {
-			timeout = 30 * time.Second
+		args, workDir, timeout, err := parseRunCommandArgs(input, allowedPaths)
+		if err != nil {
+			return nil, err
 		}
 
 		execCtx, cancel := context.WithTimeout(ctx, timeout)
