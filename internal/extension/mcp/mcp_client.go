@@ -117,7 +117,7 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 //   - SandboxPolicy=="none" 或 TrustTier>=3 → bare exec（信任来源/显式退出）
 //   - 其他 → 调用 RustSandboxWrapArgv 获取平台沙箱 argv
 //
-// 失败时降级 bare exec 并记录 Warn（不阻断 MCP 启动）。
+// 失败时直接返回 error 拒绝启动（Fail-Closed）。
 // 网络策略：TrustTier<=2 默认 deny；RequiresNetwork+NetworkApproved 时 allow。
 func buildSandboxedMCPCmd(cfg MCPClientConfig) (*exec.Cmd, error) {
 	// 显式退出沙箱 / 可信来源 → bare exec
@@ -152,15 +152,8 @@ func buildSandboxedMCPCmd(cfg MCPClientConfig) (*exec.Cmd, error) {
 
 	result, err := sandboxpkg.RustSandboxWrapArgv(ctx)
 	if err != nil {
-		// 降级：Rust dylib 不可用或无沙箱工具（Warn，不拒绝启动）
-		slog.Warn("mcp: RustSandboxWrapArgv failed, falling back to bare exec",
-			"err", err, "server", cfg.ServerName)
-		cmd := exec.Command(cfg.Command, cfg.Args...) //nolint:gosec
-		if cfg.WorkDir != "" {
-			cmd.Dir = cfg.WorkDir
-		}
-		cmd.Env = sanitizeParentEnv()
-		return cmd, nil
+		return nil, apperr.Wrap(apperr.CodeInternal,
+			fmt.Sprintf("mcp: sandbox wrap failed for server %q, refusing to start unsandboxed (fail-closed)", cfg.ServerName), err)
 	}
 
 	cmd := exec.Command(result.Executable, result.Argv...) //nolint:gosec
