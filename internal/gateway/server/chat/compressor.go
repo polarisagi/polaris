@@ -88,6 +88,8 @@ type Compressor struct {
 	mu            sync.Mutex
 	lastCompactAt time.Time
 	thrashedCount int // 连续压缩后仍超阈值的次数
+
+	offloader ToolRefOffloader
 }
 
 func NewCompressor(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hooks *sysadmin.HookRunner, cfg config.CompressorConfig) *Compressor {
@@ -117,6 +119,11 @@ func NewCompressor(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hoo
 		maxThrashCount: maxThrashCount,
 		tailTokens:     defaultTailTokens,
 	}
+}
+
+// SetToolRefOffloader 注入符号化卸载器
+func (c *Compressor) SetToolRefOffloader(offloader ToolRefOffloader) {
+	c.offloader = offloader
 }
 
 // roughTokens 估算消息列表的 token 数（字符数 / charsPerToken）。
@@ -182,22 +189,22 @@ func (c *Compressor) NeedsCompact(msgs []apptypes.Message) bool {
 
 // Compact 自动触发路径：超过阈值时压缩对话历史。
 // 若未达阈值、处于 thrashing 状态或 hook 阻塞，返回原消息序列（Skipped=true）。
-func (c *Compressor) Compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider) ([]apptypes.Message, types.CompactResult, error) {
-	return c.compact(ctx, sessionID, msgs, provider, false)
+func (c *Compressor) Compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+	return c.compact(ctx, sessionID, msgs, provider, false, mem)
 }
 
 // ForceCompact 用户主动触发路径：跳过阈值检查，强制压缩，并重置 thrashing 计数。
 // 若消息不足以分段（tail 已覆盖全部），返回 Skipped=true。
-func (c *Compressor) ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider) ([]apptypes.Message, types.CompactResult, error) {
+func (c *Compressor) ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	// 用户手动触发：重置 thrashing 状态，给自动压缩一次新的机会
 	c.mu.Lock()
 	c.thrashedCount = 0
 	c.mu.Unlock()
-	return c.compact(ctx, sessionID, msgs, provider, true)
+	return c.compact(ctx, sessionID, msgs, provider, true, mem)
 }
 
 // compact 核心压缩逻辑。force=true 跳过 NeedsCompact 阈值检查。
-func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool) ([]apptypes.Message, types.CompactResult, error) {
+func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	tokensBefore := roughTokens(msgs)
 	skip := types.CompactResult{TokensBefore: tokensBefore, Skipped: true}
 
@@ -220,11 +227,17 @@ func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []appty
 		return msgs, skip, nil
 	}
 
+	middle = offloadLargeToolResults(ctx, sessionID, middle, c.offloader)
+
 	summaryBudget := calcSummaryBudget(middle)
 	summary, err := c.summarize(ctx, middle, summaryBudget, provider)
 	if err != nil {
 		slog.Warn("compressor: summarize failed, skipping compact", "session", sessionID, "err", err)
 		return msgs, skip, nil
+	}
+
+	if mem != nil {
+		summary = injectTaskCanvas(mem.RenderTaskCanvas(), summary)
 	}
 
 	summaryMsg := apptypes.Message{
@@ -373,3 +386,37 @@ func (c *Compressor) persistCompacted(ctx context.Context, sessionID string, sum
 //  2. 未写 workspace_vfs 表，SemanticCompressHandler 按 vfs_id 查表必然落空；
 //  3. 原文被替换为存根后无 read_tool_ref 可回读，聊天历史不可逆损毁。
 // 正确实现需注入 VFS Offloader + OutboxWriter（见 M05 §6 Symbolic Offloading），另行排期。
+
+// injectTaskCanvas 按 M05 §11.3 Stage 3 格式将 TaskMermaidCanvas 渲染结果注入摘要。
+// mmd 为空字符串时原样返回 summary（跳过注入）。
+func injectTaskCanvas(mmd, summary string) string {
+	if mmd == "" {
+		return summary
+	}
+	return "## Task State (node_id → read_tool_ref)\n" + mmd + "\n## Summary\n" + summary
+}
+
+const toolOffloadThreshold = 10 * 1024 // 10KB，对齐 M05 §11.3 Stage 1 描述
+
+// offloadLargeToolResults 将 middle 中超限的 tool 角色消息卸载到 offloader，
+// 原地替换为可回读存根。offloader 为 nil 或单条卸载失败时保留原文，不阻断压缩流程。
+func offloadLargeToolResults(ctx context.Context, sessionID string, middle []apptypes.Message, offloader ToolRefOffloader) []apptypes.Message {
+	if offloader == nil {
+		return middle
+	}
+	out := make([]apptypes.Message, len(middle))
+	copy(out, middle)
+	for i, m := range out {
+		if m.Role != "tool" || len(m.Content) <= toolOffloadThreshold {
+			continue
+		}
+		id, err := offloader.Offload(ctx, sessionID, []byte(m.Content))
+		if err != nil {
+			slog.Warn("compressor: tool ref offload failed, keeping original", "session", sessionID, "err", err)
+			continue // 失败兜底：保留原文，绝不允许丢数据
+		}
+		out[i].Content = fmt.Sprintf("[offloaded: %d bytes → read_tool_ref(task_id=\"%s\", id=\"%s\")]",
+			len(m.Content), sessionID, id)
+	}
+	return out
+}

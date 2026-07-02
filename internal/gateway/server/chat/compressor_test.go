@@ -134,7 +134,7 @@ func TestCompressor_Compact(t *testing.T) {
 		},
 	}
 
-	newMsgs, res, err := c.Compact(context.Background(), "sess1", msgs, mp)
+	newMsgs, res, err := c.Compact(context.Background(), "sess1", msgs, mp, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestCompressor_Compact(t *testing.T) {
 	}
 
 	// Force compact
-	_, _, _ = c.ForceCompact(context.Background(), "sess1", msgs, mp)
+	_, _, _ = c.ForceCompact(context.Background(), "sess1", msgs, mp, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,3 +188,34 @@ func (m *mockStreamProvider) Capabilities() types.ProviderCapabilities {
 }
 func (m *mockStreamProvider) MaxConcurrency() int             { return 1 }
 func (m *mockStreamProvider) SupportsModel(model string) bool { return true }
+
+func TestInjectTaskCanvas(t *testing.T) {
+	tests := []struct {
+		name    string
+		mmd     string
+		summary string
+		want    string
+	}{
+		{
+			name:    "empty mmd",
+			mmd:     "",
+			summary: "some summary",
+			want:    "some summary",
+		},
+		{
+			name:    "non-empty mmd",
+			mmd:     "graph LR\n  A-->B",
+			summary: "some summary",
+			want:    "## Task State (node_id → read_tool_ref)\ngraph LR\n  A-->B\n## Summary\nsome summary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := injectTaskCanvas(tt.mmd, tt.summary)
+			if got != tt.want {
+				t.Errorf("injectTaskCanvas() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

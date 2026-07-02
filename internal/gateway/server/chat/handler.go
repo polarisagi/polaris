@@ -26,7 +26,7 @@ type AgentPool interface {
 
 type SessionCompressor interface {
 	Stats(msgs []apptypes.Message) types.ContextStats
-	ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider) ([]apptypes.Message, types.CompactResult, error)
+	ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error)
 }
 
 type ChatHandler struct {

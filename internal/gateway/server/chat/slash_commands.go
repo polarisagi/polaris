@@ -128,7 +128,7 @@ func (r *SlashCommandRouter) handleCompact(
 
 	r.writeSSE(w, flusher, "status", map[string]any{"type": "compacting", "message": "正在压缩上下文..."})
 
-	compacted, res, err := r.compressor.ForceCompact(ctx, sessionID, history, provider)
+	compacted, res, err := r.compressor.ForceCompact(ctx, sessionID, history, provider, nil)
 	if err != nil {
 		msg := fmt.Sprintf("压缩失败: %v", err)
 		slog.Warn("slash /compact: ForceCompact error", "session", sessionID, "err", err)

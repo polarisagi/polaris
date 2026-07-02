@@ -272,6 +272,13 @@ func (s *Server) SetLogStore(ls *LogStore) { s.logStore = ls }
 // SetEvalRunner 注入 M12 评测套件（NewServer 之后、Start 之前调用）。
 func (s *Server) SetEvalRunner(r protocol.EvalRunner) { s.evalRunner = r }
 
+// SetToolRefOffloader 注入 ToolRefOffloader 到 Compressor（NewServer 之后、Start 之前调用）。
+func (s *Server) SetToolRefOffloader(offloader chat.ToolRefOffloader) {
+	if s.compressor != nil {
+		s.compressor.SetToolRefOffloader(offloader)
+	}
+}
+
 // buildToolSchemas 收集全部可用工具 schema，用于注入 InferRequest.Tools。
 func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, db protocol.SQLQuerier, registry LLMRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
 	tDir := filepath.Join(dataDir, "sessions")

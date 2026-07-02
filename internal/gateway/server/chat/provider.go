@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"context"
+
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -51,4 +53,15 @@ type PromptManager interface {
 	ModelSpecificGuidance(modelID string) string
 	// PlatformHintFor 返回指定接入平台的提示词片段。
 	PlatformHintFor(platform string) string
+}
+
+// MemoryFacade chat 包对记忆门面的消费端接口（仅 Stage 3 渲染 Task Canvas 时调用）。
+// 遵循消费端窄接口原则，从 protocol.MemoryFacade 抽取所需方法。
+type MemoryFacade interface {
+	RenderTaskCanvas() string
+}
+
+// ToolRefOffloader 工具输出符号化卸载（M05 §11.3 Stage 1）消费端接口。
+type ToolRefOffloader interface {
+	Offload(ctx context.Context, taskID string, content []byte) (id string, err error)
 }
