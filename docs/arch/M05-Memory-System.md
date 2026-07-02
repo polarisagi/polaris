@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:256 L3 Procedural / 6:309 写路径 / 7:321 HybridRetriever / 8:401 EffConn / 9:411 Consolidation / 10:436 Forgetting / 11:453 PromptBuilder / 12:523 Drift / 14:561 496(SOFT)降级 / 15:583 依赖
+> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:256 L3 Procedural / 6:310 写路径 / 7:322 HybridRetriever / 8:402 EffConn / 9:412 Consolidation / 10:437 Forgetting / 11:454 PromptBuilder / 12:524 Drift / 14:562 496(SOFT)降级 / 15:584 依赖
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -279,8 +279,9 @@ L3 Procedural 技能索引相关 DDL 实质托管于 M2 SurrealKV KV 引擎（`i
 | `memory_search` | `CapReadOnly` | 混合检索（BM25 + vector + graph，`HybridRetriever`），返回最相关事实 |
 | `memory_append` | `CapWriteLocal` | 追加属性到已有实体（`UpsertFact` upsert 语义，不覆盖 description） |
 | `memory_expire` | `CapWriteLocal` | 标记事实失效（`SemanticMemWriter.Archive`），含 reason 审计字段 |
+| `memory_reflect`| `CapWriteLocal` | 记录系统反思、洞察或长期决策到 ReflectionMemory |
 
-所有工具 `SandboxTier = SandboxInProcess`、`RiskLevel = RiskLow`，经 PolicyGate 五阶段后在 InProcessSandbox 执行。
+所有 5 个工具 `SandboxTier = SandboxInProcess`、`RiskLevel = RiskLow`，经 PolicyGate 五阶段后在 InProcessSandbox 执行。
 
 ### 5-bis.3 注册路径
 
@@ -617,3 +618,14 @@ EmbeddingVersionTracker:
 | **D-MEM 多巴胺门控巩固** | arXiv:2603.14597, 2026 | 以 SurpriseIndex 信号作门控，仅 surprise > 阈值的情节事件才晋升语义层，消除冗余写入与 O(N²) 延迟 | `internal/memory/` + `internal/learning/` | P1 |
 | **Path-Constrained Retrieval** | arXiv:2511.18313, 2025 | BFS 遍历限定关系类型白名单（uses/depends_on/extends），防止多跳推理语义漂移 | `internal/store/` (HybridRetriever GraphTraverse) | P2 |
 | **E-mem 多 Agent 情节重建** | arXiv:2601.21714, 2026 | 异构辅助 Agent 维护未压缩情节上下文，token -70%，F1 +54%；当前单节点情节记忆在 swarm 场景是盲点 | `internal/swarm/orchestrator/`（中期） | P3 |
+
+
+## 13. MemoryAgent (Swarm Integration)
+
+The `MemoryAgent` operates as a specialized background worker within the swarm architecture (`internal/swarm/agents/memory_agent.go`). It acts as the "Memory Caretaker" and has three primary responsibilities:
+
+1. **Contextual Whispers (Whisper Channel):** It periodically scans `episodic_events` for recent, unarchived events with high salience (`>=0.7`) that are relevant to the current active goal/blackboard task. It pushes these relevant historical experiences to the active Agent via the `whisperChan` (`protocol.MemoryWhisper`).
+2. **Graph Maintenance (Periodic Prune):** It calls the `SynapticPlasticityManager` and `EdgeWeightManager` to apply decay to unused graph edges and prune relationships that have fallen below the threshold.
+3. **Memory Pressure Relief:** If the system is under extreme memory pressure, it throttles operations and assists in garbage collection strategies.
+
+**Crucially, the MemoryAgent NO LONGER performs duplicate L1->L2 distillation (semantic compression).** All distillation is handled by the `ConsolidationPipeline` triggered by Outbox events.

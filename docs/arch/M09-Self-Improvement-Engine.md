@@ -2,7 +2,7 @@
 
 > 三环嵌套进化（经验→技能→架构），全无梯度主线（[Tier-0-Limit] 8GB 完整运行）。梯度训练仅 local_only 可选。
 > Go 编排 + Eval 驱动 + Consolidation + 全部自进化逻辑。 [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:37 五路线(CANONICAL) / 2:95 三环嵌套 / 3-bis:198 EvalGenerator / 3:226 五级演化+审批 / 4:256 条件梯度 / 6:280 369(SOFT)降级 / 7:308 依赖
+> **§跳读**: 0-bis:6 职责 / 0-ter:20 不变量速查 / 1:37 五路线(CANONICAL) / 2:95 三环嵌套 / 3-bis:201 EvalGenerator / 3:229 五级演化+审批 / 4:259 条件梯度 / 6:283 369(SOFT)降级 / 7:311 依赖
 ## 0-bis. 职责边界
 
 | M9 **是** | M9 **不是** |
@@ -132,9 +132,12 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 每次 Agent 任务完成后自动执行:
 
-任务完成后：成功路径 → HeuristicsMemory 更新 + Logic Collapse 触发（Python 技能蒸馏，ADR-0026）；失败路径 → Reflexion 反思 → MEMF + SurrealDB-Core 写入 + 发布 EventHeuristicGenerated（注入 PromptOptimizer 规避规则）；后续 Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
+任务完成后：
+- **成功路径** → HeuristicsMemory 更新 + Logic Collapse 触发（Python 技能蒸馏，ADR-0026）。
+- **失败路径 (Reflexion Closed-Loop)** → `ReflexionEngine` 触发反思 → 生成 heuristic 发送至 `heuristicCh` 被 Engine 消费 (注入 PromptOptimizer)；同时 `ReflectionWorker` 将反思结果写入 `reflection_memory` (M5 L2)。此反思数据将在下一次任务的 Perceive 阶段被加载入上下文，形成完整闭环。
+- **后续阶段** → Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
 
-> ✅ `Engine.Run()` 已补充 `RecordSuccess` 调用，成功/失败任务均写入 HeuristicsMemory，skillGapAnalysis 数据来源完整。
+> ✅ `Engine.Run()` 已补充 `RecordSuccess` 调用，成功/失败任务均写入 HeuristicsMemory。`ReflexionEngine` 和 `ReflectionWorker` 已完整接入并打通。
 
 **MEMF** (FallacyMemoryPool) / **HeuristicsMemory** 类型和反馈校准/剪枝逻辑见 `internal/learning/`。
 

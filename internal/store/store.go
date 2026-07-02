@@ -484,3 +484,15 @@ func prefixSuccessor(prefix []byte) []byte {
 	}
 	return nil // 前缀全为 0xFF，无上界
 }
+
+func (s *SQLiteStore) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return s.db.ExecContext(ctx, query, args...)
+}
+
+func (s *SQLiteStore) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.db.QueryContext(ctx, query, args...)
+}
+
+func (s *SQLiteStore) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.db.QueryRowContext(ctx, query, args...)
+}
