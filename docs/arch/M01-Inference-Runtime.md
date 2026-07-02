@@ -3,7 +3,7 @@
 > API 优先架构。Provider Router 为核心。本地推理仅隐私/离线备选。
 > Go 实现 | [HE-Rule-1] [HE-Rule-2] [HE-Rule-3] [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
 > [Module-Topology] [Code-Package-Mapping] [Tier-0-Limit] [Tier-1-Limit]
-> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:125 Token预算 / 6:189 SemanticCache / 7:211 Fallback / 8:254 本地推理local_only / 9:281 ModelVersion / 12:288 349(SOFT)降级 / 13:318 依赖
+> **§跳读**: 0:10 职责 / 0-ter:24 不变量速查 / 1:37 默认模型 / 2:43 Provider接口 / 3:49 Adapter / 4:64 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:127 Token预算 / 6:191 SemanticCache / 7:213 Fallback / 8:256 本地推理local_only / 9:285 ModelVersion / 12:292 349(SOFT)降级 / 13:322 依赖
 
 ---
 
@@ -99,7 +99,9 @@ L3 LLM 输出 provider 推荐槽位，由 Route() 确定性函数验证（预算
 
 ### 4.4 ComplexityDeterminer
 
-**[计划中]** — 三层路由（L1规则/L2复杂度/L3 LLM）为设计目标；当前 `internal/llm/` 实现的是**单层 HealthScore 路由**（成功率×0.4 + 延迟×0.3 + 成本×0.2 + 质量×0.1），不含 L2 复杂度打分。多 Provider 按健康分降序选择，失败时 Failover 至次优。**Role Pool 已实现**：支持 `general`/`default`/`reasoning` 三类角色池，调用方可按角色而非全局最优选取 Provider。
+**已废弃并移除**：项目初期曾设计 `determineComplexity`（基于工具数量 + 预估输出 token 给出 1-3 级复杂度评分）作为 L2 路由辅助。但在实际验证中发现，当前的单层 HealthScore 路由 + Role Pool（`general`/`default`/`reasoning`）+ ADR-0022 ThinkingMode 三档设计已完全能覆盖“简单任务便宜模型、复杂任务深度思考”的核心诉求。为避免引入不必要的判断分支和复杂度，`determineComplexity` 及其相关代码已被彻底删除。
+
+注意与 ADR-0022（ThinkingMode 三档路由，`internal/observability/metrics/metrics.go` 的 `SelectThinkingMode`）区分：后者选的是"思考强度"而非"Provider"，两者是并行机制，不能互相替代。
 
 ### 4.5 Route 方法
 
@@ -267,7 +269,9 @@ FallbackExecutor（`internal/llm/`）：仅检查 Provider 可用性并更新 Ci
 
 LocalProvider 通过 llama.cpp FFI 提供本地 GGUF 模型的 `Infer`/`StreamInfer`/`Rerank` 能力：启动时校验文件完整性与内存余量，懒加载模型，通过 `chat template + GBNF grammar` 支持结构化输出；Rerank 复用同进程 llama.cpp `/rerank` 端点，50 文档交叉编码 CPU < 50ms；`EvictKVCache` 在 Control Vector 变更 / 热切换 / Session 重置时清理 KV。
 
-当前实现状态：**[计划中]** — LocalProvider 接口已在 `internal/protocol/interfaces.go` 定义，但 `internal/llm/` 中未见 llama.cpp FFI 桥接实现；本地推理能力待 Tier-3 节点专项激活。
+当前实现状态：**[计划中，确认未开发]** — LocalProvider 接口已在 `internal/protocol/interfaces.go` 定义，但 `internal/llm/`、`internal/ffi/`、`rust/substrate/` 中均未见 llama.cpp FFI 桥接实现（`rust/substrate/src/` 目前只有 `surreal_store`、`native_sandbox`，无推理相关模块）；本地推理能力待 Tier-3 节点专项激活。
+
+**功能性替代（非架构等价）**：`internal/llm/adapter/ollama.go` 通过 HTTP 接入用户本机运行的 Ollama 服务，在 `FeatureLocalInference` 门控下可部分满足"本地推理"的隐私/离线诉求，但架构上是 HTTP 客户端而非同进程 FFI 桥接，不具备本节描述的 KV Cache 复用、GBNF grammar 结构化输出等能力，不能视为 LocalProvider 的完成态。
 
 ### 8.2 生命周期
 
@@ -284,7 +288,7 @@ LocalProvider 通过 llama.cpp FFI 提供本地 GGUF 模型的 `Infer`/`StreamIn
 
 `OnModelUpgrade` 流程：对比行为差异 → 重跑关联技能兼容测试 → 更新 ValidatedOn 与 CompatibilityScore，低于 0.8 时发 WARN。废弃迁移按 CompatibilityScore 分三档（≥0.9 自动 / 0.7-0.9 自动+WARN / <0.7 禁止自动）；连续 3 次 4xx/5xx 自动回退。Embedding 模型废弃时触发 M2 OnlineReindexer 全量重嵌（影子表 → Blue-Green swap）。
 
-**[计划中]** — `ModelVersionRegistry` 当前未在 `internal/llm/` 中落地，Provider Adapter 通过 `resolveXXXModel()` 函数处理废弃模型名到新名称的映射（已实现：Anthropic/OpenAI/DeepSeek 各有 resolve 函数）；完整的版本管理注册表待实现。
+**[计划中，确认未开发]** — `ModelVersionRegistry` 当前未在 `internal/llm/` 中落地，`pkg/types/models.go` 的 `ProviderModelRow` 与 `022_provider_catalog.sql` 仅为静态模型字典，无版本/兼容性评分字段。Provider Adapter 通过 `resolveXXXModel()` 函数处理废弃模型名到新名称的映射（已实现：Anthropic/OpenAI/DeepSeek 各有 resolve 函数），可视为本节功能的简化子集，但不含 `CompatibilityScore`/`ValidatedOn`/`OnModelUpgrade` 兼容性回归流程，完整的版本管理注册表待实现。
 ## 12. 降级与失败模式（5 问全覆盖）
 
 | 故障 | (Q1) 检测 | (Q2) 影响范围 | (Q3) 即时反应 | (Q4) 自动恢复 | (Q5) 人工介入触发 |

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -14,11 +15,17 @@ type CompositeCatalog struct {
 	mu      sync.RWMutex
 	sources []Catalog
 	cache   []CatalogEntry // nil 表示需要重建
+
+	LazyLoadThreshold int
+	Embedder          search.Embedder
+	activeSessions    map[string]map[string]bool // sessionID -> map[toolName]bool
 }
 
 func NewCompositeCatalog(sources ...Catalog) *CompositeCatalog {
 	return &CompositeCatalog{
-		sources: sources,
+		sources:           sources,
+		LazyLoadThreshold: 40, // 默认阈值
+		activeSessions:    make(map[string]map[string]bool),
 	}
 }
 
@@ -140,13 +147,80 @@ func (c *CompositeCatalog) Invalidate() {
 
 func (c *CompositeCatalog) Schemas(ctx context.Context, minTrust types.TrustTier) []types.ToolSchema {
 	entries := c.List(ctx, minTrust)
-	schemas := make([]types.ToolSchema, len(entries))
-	for i, e := range entries {
-		schemas[i] = types.ToolSchema{
+	threshold := c.LazyLoadThreshold
+	if threshold <= 0 {
+		threshold = 40
+	}
+
+	shouldLazyLoad := len(entries) > threshold && c.Embedder != nil
+
+	sessionID := ""
+	if sid, ok := ctx.Value("session_id").(string); ok {
+		sessionID = sid
+	}
+
+	c.mu.RLock()
+	activeMap := c.activeSessions[sessionID]
+	c.mu.RUnlock()
+
+	var schemas []types.ToolSchema
+	for _, e := range entries {
+		isActive := activeMap != nil && activeMap[e.Name]
+		// 懒加载模式下，只返回 TrustTier == 4 (core builtin tools) 或者被当前 session 激活的工具
+		if shouldLazyLoad && e.TrustTier < 4 && !isActive {
+			continue
+		}
+		schemas = append(schemas, types.ToolSchema{
 			Name:        e.Name,
 			Description: e.Description,
 			Parameters:  e.Parameters,
-		}
+		})
 	}
+
+	if shouldLazyLoad {
+		schemas = append(schemas, types.ToolSchema{
+			Name:        "search_tools",
+			Description: "Search for available tools dynamically based on a query.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Semantic query to find relevant tools",
+					},
+				},
+				"required": []string{"query"},
+			},
+		})
+	}
+
 	return schemas
+}
+
+// ActivateTool activates a dynamically discovered tool for the specified session.
+func (c *CompositeCatalog) ActivateTool(sessionID string, toolName string) {
+	if sessionID == "" || toolName == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeSessions == nil {
+		c.activeSessions = make(map[string]map[string]bool)
+	}
+	if c.activeSessions[sessionID] == nil {
+		c.activeSessions[sessionID] = make(map[string]bool)
+	}
+	c.activeSessions[sessionID][toolName] = true
+}
+
+// CleanupSession cleans up activated tools when a session ends to prevent memory leaks.
+func (c *CompositeCatalog) CleanupSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeSessions != nil {
+		delete(c.activeSessions, sessionID)
+	}
 }

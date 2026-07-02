@@ -5,6 +5,10 @@
 package main
 
 import (
+	"path/filepath"
+
+	polartool "github.com/polarisagi/polaris/internal/tool"
+
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/memory/consolidation"
 	"github.com/polarisagi/polaris/internal/observability/budget"
@@ -37,7 +41,6 @@ import (
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
-	polartool "github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
@@ -289,6 +292,15 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	skillReg := skillRegistry
 	skillCatalog := catalog.NewSkillCatalog(skillReg)
 	compCatalog := catalog.NewCompositeCatalog(memoryCatalog, skillCatalog)
+	if meta, err := polartool.LoadBuiltinToolMeta("tool_search"); err == nil {
+		inProcSandbox.Register(meta.Name, polartool.MakeToolSearchFn(compCatalog, sb.Embedder))
+		_ = toolReg.Register(meta)
+	} else {
+		slog.Warn("polaris: failed to load tool_search meta", "err", err)
+	}
+
+	compCatalog.Embedder = sb.Embedder
+	compCatalog.LazyLoadThreshold = sb.Cfg.Thresholds.M13Interface.LazyLoadToolThreshold
 
 	for _, t := range toolReg.List() {
 		// Sync built-in to memoryCatalog
@@ -348,6 +360,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 	forgettingMgr := consolidation.NewForgettingManager(sb.Store, cogn, 0.01)
 	coldArchiver := consolidation.NewColdArchiver(sb.Store)
+
+	coldDBDir := filepath.Join(sb.DataDir, "cold")
+	eventArchiver := consolidation.NewEventArchiver(sb.Store.DB(), sb.Cfg.Thresholds.M2Storage.EventlogWarmDays, coldDBDir)
 	go func() {
 		forgettingTicker := time.NewTicker(6 * time.Hour)
 		defer forgettingTicker.Stop()
@@ -361,6 +376,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 				}
 				if err := coldArchiver.PhysicalCompact(); err != nil {
 					slog.Warn("polaris: cold archiver compact failed", "err", err)
+				}
+				if err := eventArchiver.Archive(context.Background()); err != nil {
+					slog.Warn("polaris: event archiver failed", "err", err)
 				}
 			}
 		}

@@ -337,6 +337,14 @@ type InferenceRouter struct {
 	client       *http.Client
 	outboxWriter protocol.OutboxWriter
 	eventWriter  protocol.EventWriter
+	governor     LLMGovernor
+}
+
+// LLMGovernor 用于限流 LLM 请求 (P0-3)
+type LLMGovernor interface {
+	AdmitLLM(priority int) (bool, int)
+	WaitForLLMCapacity(ctx context.Context) error
+	ReleaseLLM()
 }
 
 type RouterOption func(*InferenceRouter)
@@ -344,6 +352,12 @@ type RouterOption func(*InferenceRouter)
 func WithEventWriter(w protocol.EventWriter) RouterOption {
 	return func(ir *InferenceRouter) {
 		ir.eventWriter = w
+	}
+}
+
+func WithGovernor(gov LLMGovernor) RouterOption {
+	return func(ir *InferenceRouter) {
+		ir.governor = gov
 	}
 }
 
@@ -420,6 +434,15 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 	if entry == nil {
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", ErrAllProvidersFailed)
 	}
+
+	// 并发限流 (P0-3)
+	if err := ir.acquireLLMCapacity(ctx); err != nil {
+		return nil, err
+	}
+	if ir.governor != nil {
+		defer ir.governor.ReleaseLLM()
+	}
+
 	start := time.Now()
 	resp, err := entry.provider.Infer(ctx, msgs, opts...)
 	ms := float64(time.Since(start).Milliseconds())
@@ -501,6 +524,12 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	if entry == nil {
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", ErrAllProvidersFailed)
 	}
+
+	// 并发限流 (P0-3)
+	if err := ir.acquireLLMCapacity(ctx); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 	ch, err := entry.provider.StreamInfer(ctx, msgs, opts...)
 	entry.recordLatency(float64(time.Since(start).Milliseconds()))
@@ -530,6 +559,9 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 	out := make(chan types.StreamEvent)
 	go func() {
 		defer close(out)
+		if ir.governor != nil {
+			defer ir.governor.ReleaseLLM()
+		}
 		start := time.Now()
 		var inputTokens, outputTokens int
 		interrupted := false
@@ -804,4 +836,23 @@ func (t *SimpleTokenizer) EstimateRequestTokens(req *types.InferRequest) int {
 		}
 	}
 	return total + 3
+}
+
+func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
+	if ir.governor == nil {
+		return nil
+	}
+	admitted, _ := ir.governor.AdmitLLM(1)
+	if admitted {
+		return nil
+	}
+	err := ir.governor.WaitForLLMCapacity(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: timeout waiting for LLM capacity", err)
+	}
+	admitted, _ = ir.governor.AdmitLLM(1)
+	if !admitted {
+		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: failed to acquire LLM capacity", nil)
+	}
+	return nil
 }

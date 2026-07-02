@@ -48,6 +48,7 @@ import (
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
+	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
@@ -304,8 +305,12 @@ func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protoco
 		// db 必须是 *sql.DB 才能初始化 Repository 层；传入其他类型时快速失败，避免空指针 panic 延迟暴露。
 		panic(fmt.Sprintf("NewServer: db 必须为 *sql.DB，实际收到 %T", db))
 	}
+	vault, err := credential.NewVault()
+	if err != nil {
+		panic(fmt.Sprintf("NewServer: 初始化 credential vault 失败: %v", err))
+	}
 	s.chatRepo = repo.NewSQLiteChatRepository(sqlDB)
-	s.providerRepo = repo.NewSQLiteProviderRepository(sqlDB)
+	s.providerRepo = repo.NewSQLiteProviderRepository(sqlDB).WithVault(vault)
 	s.extRepo = repo.NewSQLiteExtensionRepository(sqlDB)
 	s.budgetRepo = repo.NewSQLiteBudgetRepository(sqlDB)
 	s.systemRepo = repo.NewSQLiteSystemRepository(sqlDB)

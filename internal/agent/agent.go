@@ -162,15 +162,6 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 	ctx, cancel := context.WithCancel(context.Background())
 	wCh := make(chan protocol.MemoryWhisper, 4) // 缓冲 4 条，防 PlannerPool 阻塞
 	tracker := fsm.NewEpochTracker()
-	// 挂载漂移告警：记录到 slog，供 M3 指标下游消费
-	metrics.GlobalPerformanceDrift().OnDrift = func(alert metrics.DriftAlert) {
-		slog.Warn("kernel: performance drift detected",
-			"current_rate", alert.CurrentRate,
-			"baseline_rate", alert.BaselineRate,
-			"relative_drop", alert.RelativeDrop,
-			"window_size", alert.WindowSize)
-	}
-
 	return &Agent{
 		ID:       id,
 		taskRepo: taskRepo,

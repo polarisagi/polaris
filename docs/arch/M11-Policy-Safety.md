@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:225 Cedar / 4:291 KillSwitch / 5:357 隐私 / 6:418 SSRF / 6.5:446 Factuality / 7:462 审计 / 8:486 多Agent宪法 / 9:513 威胁监控 / 13:527 降级 / 14:559 跨模块契约
+> **§跳读**: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:86 Taint / 3:225 Cedar / 4:291 KillSwitch / 5:357 隐私 / 6:415 SSRF / 6.5:446 Factuality / 7:459 审计 / 8:483 多Agent宪法 / 9:510 威胁监控 / 13:524 降级 / 14:556 跨模块契约
 
 ---
 
@@ -379,28 +379,25 @@ SessionPIIVault（实现：`internal/agent/context/pii_vault.go`）:
   SecureZero(ctx, taskID) → DELETE FROM preferences WHERE key LIKE `pii_vault:{taskID}:%`
 
   当前边界：PII 字段直接存入 preferences 表（持久化），TTL 1h 自动过期。
-  Token 映射（OpaqueToken/SecureUnredact）、VFS blob 路径、MutationBus 落盘均为计划中功能，暂未实现。
+  **✅ VFS blob 路径存储与 MutationBus 落盘均已实现**：VFS blob 路径存储（`internal/vfs/provider.go` 的 `BlobStore`）和 MutationBus 落盘（`internal/protocol/schema/002_outbox.sql` + M2 §2.3 DatabaseWriter）均已作为通用基础设施完整实现，只是不是本节 PII 场景专属——它们是全系统共用的存储层能力，PII 侧目前没有走这两条路径。真正未实现的只有 **OpaqueToken**（把 PII 替换为占位符 token、按需换回原文的令牌化方案）；`SecureUnredact` 的语义已经由本节的 `SessionPIIVault.RestoreFromSnapshot`（AES-256-GCM 加解密）等价满足，不需要额外做 OpaqueToken 才能达到"按需还原"的效果，除非确有场景要求"占位符落盘、原文永不落盘"这种更强的隔离级别。
 
-### 5.2 Credential Vault [CredentialVault] 【计划中，未实现】
+### 5.2 Credential Vault [CredentialVault] 【已实现】
 
-> 当前实现：各 Adapter 通过注入的 `credentialFn() []byte` 获取 API Key（见 M1 §3）。OS Keychain 抽象层（SecretBackend）尚未实现。以下为设计规格，待实现时参考。
+> 架构变更（2026-07-03）：为了彻底解决 Headless、Docker 等无 GUI 环境的兼容性问题，废除了原定的 OS Keychain 复杂抽象，统一采用基于文件/环境变量的主密钥 AES-256-GCM 加密方案。
 
-计划接口:
-  Get(key) → ([]byte, error)，使用后调用方清零
-  Set(key, value) → error
-  Delete(key) → error（幂等）
-
-计划平台适配: macOS Keychain / Linux libsecret / Windows Credential Manager / age-encrypted file fallback
+实现机制 (`internal/security/credential/vault.go`):
+  - **透明加解密**：`SQLiteProviderRepository` 在读写 `providers` 表（api_key 列）时，通过依赖注入的 Vault 实例自动完成 `Encrypt`/`Decrypt`。
+  - **Ciphertext 识别**：密文统一附加 `v1:` 前缀，提供对旧版明文的后向兼容与无缝迁移能力。
+  - **接口契约**：不再对外暴露原生 Get/Set/Delete 密钥接口，而是提供 `Encrypt(plaintext)` 和 `Decrypt(cryptoText)` 原语。
 
 **persistent_key 轮换**:
   触发: `polaris vault rotate-master-key`
-  流程: 后台分批解密旧 HMAC/Workspace/pii_vault_blob → 新 key 重加密（pii_vault_blob 扫描 tasks 表非 null，逐条 MutationBus 原子更新）→ 双 key 共存窗口（新写新 key，读 new→old fallback）→ 旧 key 销毁
+  流程: 读取旧密钥初始化 OldVault，生成新密钥初始化 NewVault；遍历 `providers` 表执行 `Decrypt(old) -> Encrypt(new)` 并更新；最后原子替换 `vault.key` 文件。
 
-**冷启动决策树**:
-  - GUI 桌面 → OS Keychain（首次弹窗授权）
-  - headless Linux → age-encrypted file，password 从 stdin 或 `POLARIS_VAULT_PASSPHRASE`（启动期立即清零）
-  - Docker → 挂载 secrets volume / docker secret
-  - 首次 password: `polaris vault init` 交互式引导
+**冷启动主密钥（Master Key）决策树**:
+  1. 优先读取 `POLARIS_VAULT_PASSPHRASE` 环境变量（SHA-256 派生 32 字节）。
+  2. 其次读取 `~/.polarisagi/polaris/vault.key`（0600 权限）。
+  3. 如果均不存在，自动生成高熵随机密钥并存入 `vault.key`。
 
 ### 5.3 local_only 网络沙箱三层防御
 

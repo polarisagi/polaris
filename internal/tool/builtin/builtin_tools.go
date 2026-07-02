@@ -87,7 +87,6 @@ func RegisterBuiltinTools(
 		{"git_diff", makeGitDiffFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"git_commit", makeGitCommitFn(allowedPaths, sandboxEnabled, bwrapPath)},
 		{"template_render", templateRenderFn},
-		{"tool_search", tool.MakeToolSearchFn(toolReg)},
 		{"data_query", makeDataQueryFn(allowedPaths)},
 	}
 

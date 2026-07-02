@@ -35,6 +35,7 @@ type CodeAct struct {
 	astChecker  ASTChecker      // L0 AST 检查器
 	reviewer    LLMPeerReviewer // L2 LLM 同行评审
 	hitlGateway protocol.HITL   // HITL 网关（处理警告级别）
+	maxCodeSize int             // 强制的最大代码字节数（inv_global_07）
 }
 
 type govAgent interface {
@@ -69,6 +70,13 @@ func WithPeerReviewer(reviewer LLMPeerReviewer) CodeActOption {
 func WithHITL(gw protocol.HITL) CodeActOption {
 	return func(c *CodeAct) {
 		c.hitlGateway = gw
+	}
+}
+
+// WithMaxCodeSize 注入强制的最大代码尺寸上限
+func WithMaxCodeSize(bytes int) CodeActOption {
+	return func(c *CodeAct) {
+		c.maxCodeSize = bytes
 	}
 }
 
@@ -125,6 +133,9 @@ func (ca *CodeAct) validateBasic(req CodeActRequest) error {
 	}
 	if req.CapabilityID == "" {
 		return apperr.New(apperr.CodeForbidden, "code_act: capability_id required (inv_global_07)")
+	}
+	if ca.maxCodeSize > 0 && len(req.Code) > ca.maxCodeSize {
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("code_act: code size %d bytes exceeds maximum limit of %d bytes", len(req.Code), ca.maxCodeSize))
 	}
 	return nil
 }

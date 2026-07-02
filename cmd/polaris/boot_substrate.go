@@ -169,6 +169,19 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			"system is sealed (.fullstop exists in "+dataDir+"); remove the file to restart")
 	}
 	ks := security.NewKillSwitch(dataDir, tbr)
+	metrics.GlobalPerformanceDrift().RegisterListener(func(alert metrics.DriftAlert) {
+		slog.Warn("polaris: performance drift detected",
+			"level", alert.Level(),
+			"current_rate", alert.CurrentRate,
+			"baseline_rate", alert.BaselineRate,
+			"relative_drop", alert.RelativeDrop,
+			"window_size", alert.WindowSize)
+		if alert.Level() == metrics.DriftLevelCritical {
+			slog.Error("polaris: critical performance drift! Triggering KillSwitch FullStop")
+			ks.ManualFullStop("performance_drift", "Critical performance drift detected")
+		}
+	})
+
 	ks.StateChangeCallback = func(newState security.KillState, _ string) {
 		metrics.GlobalKillswitchStage.Store(int32(newState))
 	}
@@ -473,7 +486,11 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		}
 	}
 
-	router := llm.NewInferenceRouter(reg, dialer)
+	gov := automation.NewResourceGovernor(cfg.System.MaxAgents, cfg.System.ResourceGovernor)
+	if maxLLM := cfg.Thresholds.M13Interface.MaxConcurrentLLMCalls; maxLLM > 0 {
+		gov.WithMaxConcurrentLLM(maxLLM)
+	}
+	router := llm.NewInferenceRouter(reg, dialer, llm.WithGovernor(gov))
 	slog.Info("polaris: inference router initialized")
 
 	committed = true

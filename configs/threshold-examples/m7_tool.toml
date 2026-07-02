@@ -6,3 +6,4 @@
 'script.max_memory_mb' = 256
 'script.max_wallclock_s' = 60
 'dryrun.protect_window_seconds' = 60
+max_code_size_bytes = 16384

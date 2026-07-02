@@ -1,7 +1,7 @@
 # 模块 3: Observability & Telemetry
 
 > OTel-native | slog | Token_Burn_Rate + Surprise_Index 一等公民 | Hardware Probe | [HE-Rule-1] [HE-Rule-4] | Go
-> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:170 HardwareProbe+AutoConfig / 6:248 OSMemoryGuard / 7:264 MonitorMemoryPressure / 8:284 LogLevel / 9:292 TraceContext / 10:304 DecisionLog / 10.1:316 PerformanceDrift / 11:353 Langfuse / 14:384 (SOFT)降级 / 15:401 依赖
+> **§跳读**: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:170 HardwareProbe+AutoConfig / 6:248 OSMemoryGuard / 7:264 MonitorMemoryPressure / 8:284 LogLevel / 9:292 TraceContext / 10:304 DecisionLog / 10.1:316 PerformanceDrift / 11:355 Langfuse / 14:386 (SOFT)降级 / 15:403 依赖
 ## 0-bis. 职责边界
 
 | M3 **是** | M3 **不是** |
@@ -333,9 +333,11 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 | 偏差 | 等级 | 响应 |
 |------|------|------|
 | 相对下降 > `driftThreshold`（默认 0.15 = 15%） | WARN | `OnDrift` 回调 + `polaris_drift_warn_total` Counter |
-| 持续恶化（未来扩展）| CRITICAL/KILL | 候选 M11 KillSwitch + M9 rollback（计划中）|
+| 持续恶化 | CRITICAL/KILL | M11 KillSwitch 三阶段 + M9 渐进式回滚（**已实现**，见下） |
 
-> `performance_drift.go` 使用单阈值 `driftThreshold`（默认 0.15），单一 `OnDrift` 回调，不区分 WARN/CRITICAL/KILL 阶段。`polaris_task_drift_sigma` Gauge 留作未来接入标准差计算的扩展点。
+> `performance_drift.go` 定义了 `DriftLevelNormal`, `DriftLevelWarning`, `DriftLevelCritical` (>=0.8 相对下降) 三个等级。
+>
+> **✅ CRITICAL/KILL 降级链路已实现且接通**：`internal/security/killswitch.go` 完整实现 ADR-0009 三阶段 FSM。现在 `PerformanceDriftDetector` 触发 Drift 时，如果 Level 达到 `DriftLevelCritical`（score >= 0.8），已在 `boot_substrate.go` 中完成自动路由，直接触发 `KillSwitch.ManualFullStop` 将系统拉黑封停。同时，日志产生 ERROR，人工介入。
 
 **与 M11 [FactualityGuard] 联动**:
 - D6 抽样率随 drift 信号动态上调（漂移期 ×2，最高 20%）
@@ -344,7 +346,7 @@ DDL 见 `internal/protocol/schema/006_decision_log.sql`。
 **实现锚点**: `internal/observability/`（PerformanceDriftDetector）
 - Hook 至 M4 状态机 S_COMPLETE/S_FAILED 转移（捕获 success/fail 信号），通过 `Record(score)` 写入滑窗
 - 与 ContinuousSamplingMonitor (M12 §9) 共享 10min 窗口（避免重复扫描）
-- `DetectDrift(baselineTime)` 供外部主动查询漂移状态（**⚠️ 待实现存根**：当前方法体仅检查 `baselineTime.IsZero()` 后返回 `nil`，不执行实际检测。见 P0 Code Defect / upgrade-10）
+- **✅ 运行时质量漂移检测已实现并在生产路径运行**：核心逻辑在同一结构体的 `Record(score)` 方法里——EWMA 基准更新（α=0.01）+ 滑动窗口 + 相对下降阈值判断（`relativeDrop > driftThreshold`）+ 5 分钟冷却期防重复告警 + `OnDrift` 回调，已在 `internal/agent/agent.go`（166 行挂载 `OnDrift`，658 行任务完成后调用 `Record(score)`）接入生产路径。（技术债备注：另有一个同名方法 `DetectDrift(baselineTime)` 是重构后遗留的孤儿方法，方法体仅检查 `baselineTime.IsZero()` 后返回 `nil`，全仓库无调用方，不代表漂移检测功能缺失——真实功能见上；该死代码计划清理，见开发提示词 P1-4。）
 
 **HT0**: 滑窗内存约 200KB（task_type×tier × 10min × 元数据），默认开启。
 

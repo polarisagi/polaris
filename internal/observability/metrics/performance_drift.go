@@ -22,7 +22,7 @@ type PerformanceDriftDetector struct {
 	baseline       float64 // 历史基准通过率（EWMA α=0.01 更新）
 	driftThreshold float64 // 相对下降阈值（默认 0.15 = 15%）
 	lastDriftAt    time.Time
-	OnDrift        func(DriftAlert) // 漂移告警回调（可为 nil）
+	listeners      []func(DriftAlert) // 漂移告警回调列表
 }
 
 // DriftAlert 漂移告警数据。
@@ -32,6 +32,26 @@ type DriftAlert struct {
 	BaselineRate float64 // 历史基准通过率
 	RelativeDrop float64 // 相对下降幅度 = (baseline - current) / baseline
 	WindowSize   int
+}
+
+// DriftLevel 漂移严重等级。
+type DriftLevel string
+
+const (
+	DriftLevelNormal   DriftLevel = "NORMAL"
+	DriftLevelWarning  DriftLevel = "WARNING"
+	DriftLevelCritical DriftLevel = "CRITICAL"
+)
+
+// Level 根据 RelativeDrop 计算漂移等级。
+func (a DriftAlert) Level() DriftLevel {
+	if a.RelativeDrop >= 0.8 {
+		return DriftLevelCritical
+	}
+	if a.RelativeDrop >= 0.15 {
+		return DriftLevelWarning
+	}
+	return DriftLevelNormal
 }
 
 // NewPerformanceDriftDetector 创建漂移检测器。
@@ -50,6 +70,13 @@ func NewPerformanceDriftDetector(windowSize int, baseline float64) *PerformanceD
 		baseline:       baseline,
 		driftThreshold: 0.15,
 	}
+}
+
+// RegisterListener 注册漂移告警回调函数。
+func (d *PerformanceDriftDetector) RegisterListener(f func(DriftAlert)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.listeners = append(d.listeners, f)
 }
 
 // Record 记录一次任务评分（1.0=成功，0.0=失败）。
@@ -80,14 +107,17 @@ func (d *PerformanceDriftDetector) Record(score float64) {
 				return
 			}
 			d.lastDriftAt = time.Now()
-			if d.OnDrift != nil {
-				d.OnDrift(DriftAlert{
+			if len(d.listeners) > 0 {
+				alert := DriftAlert{
 					DetectedAt:   d.lastDriftAt,
 					CurrentRate:  current,
 					BaselineRate: d.baseline,
 					RelativeDrop: relativeDrop,
 					WindowSize:   len(d.window),
-				})
+				}
+				for _, f := range d.listeners {
+					f(alert)
+				}
 			}
 		}
 	}

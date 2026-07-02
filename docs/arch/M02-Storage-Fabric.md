@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-> **§跳读**: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:28 接口层 / 2:52 EventLog / 2.6:167 tasks表 / 3:175 容量 / 4:210 Workspace / 5:254 SchemaManager / 6:266 Reindexer / 7:280 Go↔Rust FFI / 8:304 连接池 / 9:312 多写者 / 10:323 引擎速查 / 11:340 四层记忆映射 / 15:346 428(SOFT)降级 / 16:358 依赖
+> **§跳读**: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:28 接口层 / 2:52 EventLog / 2.6:167 tasks表 / 3:176 容量 / 4:213 Workspace / 5:257 SchemaManager / 6:269 Reindexer / 7:283 Go↔Rust FFI / 8:307 连接池 / 9:315 多写者 / 10:326 引擎速查 / 11:343 四层记忆映射 / 15:349 428(SOFT)降级 / 16:361 依赖
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）
@@ -60,10 +60,11 @@ DDL 和索引定义见 `internal/protocol/schema/001_events.sql`。
 关键设计决策:
 - 序列化: Protobuf（Schema 演化，Go↔Rust 同 .proto 生成，~60-80% 体积缩减）
 - ID: ULID（时间有序，UUID v4 破坏时间局部性）
-- Offset: AUTOINCREMENT（NTP 漂移/时钟回退免疫）
-- M5 `episodic_events` 为此表的派生投影表（记忆检索优化），通过 `idempotency_key` 关联
+	- Offset: AUTOINCREMENT（NTP 漂移/时钟回退免疫）
+	- M5 `episodic_events` 为此表的派生投影表（记忆检索优化），通过 `idempotency_key` 关联
+	- **冷热分离**：EventArchiver 随 ConsolidationWorker 定期将超过 `EventlogWarmDays`（默认 30 天）的事件物理迁移至 `data/cold/events_archive.db`。采用 SQLite `ATTACH DATABASE` 原生零 CGO 方案（闭环内部流转），保证迁移原子性与高可用。
 
-接口: Read(ctx, fromOffset, maxBatch) → (events, error) | Subscribe(ctx, fromOffset) → (chan Event, error)
+	接口: Read(ctx, fromOffset, maxBatch) → (events, error) | Subscribe(ctx, fromOffset) → (chan Event, error)
 
 ### 2.2 EventWriteBuffer — MPSC 批量写入缓冲
 
@@ -201,9 +202,11 @@ D3 (紧急) 触发: 磁盘使用率 >90% → 淘汰已归档→Parquet 的 Cold 
 | 索引 + 临时 | ~40 | ~100 | 向量索引 + FTS5 + 迁移备份 |
 | **EventLog 合计** | **~310** | **~750** | 占 M2 总预算 310MB (HT0 steady) 的主体 |
 
-### 3.4 归档实现接口【计划中，未实现】
+### 3.4 归档实现接口【计划中，确认未实现】
 
 EventLog Archiver 设计为 M2 后台周期性 Worker：按 `created_at < now - 30d` 批量导出 → Parquet（zstd 压缩）→ `data/cold/events/{year}/{month}/` → sha256 防重复 → 原始行删除（需 ESCAPE 审批）。Tier 0 默认禁用，由 M3 OSMemoryGuard 磁盘水位信号激活。
+
+代码确认：`internal/memory/consolidation/consolidation.go` 中的 `ColdArchiver` 只做 `forgettable:*` 墓碑扫描 → 物理 Delete 原事件 key → `PRAGMA incremental_vacuum`，全仓库无 Parquet/Zstd/DuckDB 相关依赖或代码，本节描述的导出仍是纯设计。**注意不要与 M5 §10.2 混淆**：M5 记忆遗忘的"冷归档"用的是 archive-prefix 键 + tombstone + VACUUM 这套更简化的策略，且已经完整实现并与代码一致——那是记忆层面的遗忘机制，不是本节 EventLog 层的 Parquet 导出，两者职责不同，不能相互替代。
 
 ---
 

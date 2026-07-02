@@ -8,6 +8,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -15,7 +16,8 @@ import (
 // 操作 providers + provider_models 表。
 // @arch: docs/upgrade/repo-interface-migration.md §3.2
 type SQLiteProviderRepository struct {
-	db *sql.DB
+	db    *sql.DB
+	vault *credential.Vault
 }
 
 var _ protocol.ProviderRepository = (*SQLiteProviderRepository)(nil)
@@ -23,6 +25,34 @@ var _ protocol.ProviderRepository = (*SQLiteProviderRepository)(nil)
 // NewSQLiteProviderRepository 创建 SQLiteProviderRepository。
 func NewSQLiteProviderRepository(db *sql.DB) *SQLiteProviderRepository {
 	return &SQLiteProviderRepository{db: db}
+}
+
+// WithVault injects the credential vault for encrypting/decrypting API Keys.
+func (r *SQLiteProviderRepository) WithVault(vault *credential.Vault) *SQLiteProviderRepository {
+	r.vault = vault
+	return r
+}
+
+func (r *SQLiteProviderRepository) encrypt(s string) string {
+	if r.vault == nil || s == "" {
+		return s
+	}
+	enc, err := r.vault.Encrypt(s)
+	if err != nil {
+		return s
+	}
+	return enc
+}
+
+func (r *SQLiteProviderRepository) decrypt(s string) string {
+	if r.vault == nil || s == "" {
+		return s
+	}
+	dec, err := r.vault.Decrypt(s)
+	if err != nil {
+		return s
+	}
+	return dec
 }
 
 // UpsertProvider 插入或更新 provider 记录。
@@ -35,7 +65,7 @@ func (r *SQLiteProviderRepository) UpsertProvider(ctx context.Context, row types
 		  api_key=excluded.api_key, project_id=excluded.project_id, location=excluded.location,
 		  sa_key_json=excluded.sa_key_json, enabled=excluded.enabled,
 		  catalog_id=excluded.catalog_id, updated_at=excluded.updated_at`,
-		row.ID, row.Name, row.Type, row.BaseURL, row.APIKey, row.ProjectID, row.Location,
+		row.ID, row.Name, row.Type, row.BaseURL, r.encrypt(row.APIKey), row.ProjectID, row.Location,
 		row.SAKeyJSON, row.Enabled, row.CatalogID, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.UpsertProvider", err)
@@ -58,6 +88,7 @@ func (r *SQLiteProviderRepository) GetProvider(ctx context.Context, id string) (
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.GetProvider", err)
 	}
+	row.APIKey = r.decrypt(row.APIKey)
 	row.Enabled = enabledInt == 1
 	return row, nil
 }
@@ -79,6 +110,7 @@ func (r *SQLiteProviderRepository) ListProviders(ctx context.Context) ([]types.P
 			&row.Location, &row.SAKeyJSON, &enabledInt, &row.CatalogID, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListProviders scan", err)
 		}
+		row.APIKey = r.decrypt(row.APIKey)
 		row.Enabled = enabledInt == 1
 		result = append(result, row)
 	}
@@ -198,7 +230,7 @@ func (r *SQLiteProviderRepository) SeedIfEmpty(ctx context.Context, rows []types
 		_, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO providers(id, name, type, base_url, api_key, project_id, location, sa_key_json, enabled, catalog_id, created_at, updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			row.ID, row.Name, row.Type, row.BaseURL, row.APIKey, row.ProjectID, row.Location,
+			row.ID, row.Name, row.Type, row.BaseURL, r.encrypt(row.APIKey), row.ProjectID, row.Location,
 			row.SAKeyJSON, row.Enabled, row.CatalogID, row.CreatedAt, row.UpdatedAt)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.SeedIfEmpty insert provider", err)
@@ -234,7 +266,7 @@ func (r *SQLiteProviderRepository) SeedFromEnv(ctx context.Context, p types.Prov
 		`INSERT OR IGNORE INTO providers
 			(id, name, type, base_url, api_key, project_id, location, sa_key_json, enabled, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, '', '', '', ?, ?, ?)`,
-		p.ID, p.Name, p.Type, p.BaseURL, p.APIKey, enabled, p.CreatedAt, p.UpdatedAt)
+		p.ID, p.Name, p.Type, p.BaseURL, r.encrypt(p.APIKey), enabled, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
@@ -245,7 +277,7 @@ func (r *SQLiteProviderRepository) SeedFromEnv(ctx context.Context, p types.Prov
 func (r *SQLiteProviderRepository) UpdateProviderAPIKey(ctx context.Context, id, apiKey, updatedAt string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE providers SET api_key=?, updated_at=? WHERE id=?`,
-		apiKey, updatedAt, id)
+		r.encrypt(apiKey), updatedAt, id)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
@@ -276,7 +308,7 @@ func (r *SQLiteProviderRepository) CreateProvider(ctx context.Context, p types.P
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO providers(id, name, type, base_url, api_key, project_id, location, sa_key_json, enabled, catalog_id, created_at, updated_at)
 		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		p.ID, p.Name, p.Type, p.BaseURL, p.APIKey, p.ProjectID, p.Location, p.SAKeyJSON, enabled, p.CatalogID, p.CreatedAt, p.UpdatedAt)
+		p.ID, p.Name, p.Type, p.BaseURL, r.encrypt(p.APIKey), p.ProjectID, p.Location, p.SAKeyJSON, enabled, p.CatalogID, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
@@ -292,7 +324,7 @@ func (r *SQLiteProviderRepository) UpdateProvider(ctx context.Context, id string
 		`UPDATE providers SET
 		 name=?, type=?, base_url=?, api_key=?, project_id=?, location=?, sa_key_json=?, enabled=?, catalog_id=?, updated_at=?
 		 WHERE id=?`,
-		p.Name, p.Type, p.BaseURL, p.APIKey, p.ProjectID, p.Location, p.SAKeyJSON, enabled, p.CatalogID, p.UpdatedAt, id)
+		p.Name, p.Type, p.BaseURL, r.encrypt(p.APIKey), p.ProjectID, p.Location, p.SAKeyJSON, enabled, p.CatalogID, p.UpdatedAt, id)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}

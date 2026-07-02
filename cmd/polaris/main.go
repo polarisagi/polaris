@@ -58,6 +58,8 @@ func run() error { //nolint:gocyclo
 			if len(os.Args) > 2 && os.Args[2] == "process-staging" {
 				return runProcessStaging()
 			}
+		case "vault":
+			return runVaultCmd(os.Args[2:])
 		}
 	}
 

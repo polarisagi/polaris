@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/tool/catalog"
 )
 
 func TestToolSearch(t *testing.T) {
-	toolReg := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, nil, 0, "", nil))
-	fn := MakeToolSearchFn(toolReg)
+	memCat := catalog.NewMemoryCatalog()
+	compCat := catalog.NewCompositeCatalog(memCat)
+	fn := MakeToolSearchFn(compCat, nil)
 	ctx := context.Background()
 
 	// invalid json

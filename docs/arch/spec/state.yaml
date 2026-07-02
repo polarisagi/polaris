@@ -907,6 +907,7 @@ thresholds:
     rate_limit_mcp_qps: 10
     rate_limit_shell_qps: 2
     dryrun_protect_window_seconds: 60
+    max_code_size_bytes: 16384
     output_taint_defaults:
       builtin_fs_read: low
       mcp_any: high
@@ -1058,6 +1059,8 @@ thresholds:
     worker_background: 2         # toml:"worker.background"
     worker_eval: 1               # toml:"worker.eval"
     worker_cron: 1               # toml:"worker.cron"
+    max_concurrent_llm_calls: 4  # toml:"max_concurrent_llm_calls"
+    lazy_load_tool_threshold: 40 # toml:"lazy_load_tool_threshold"
     hitl_default_deadline_min_urgent: 5
     hitl_default_deadline_min_normal: 60
     hitl_default_deadline_min_long: 1440

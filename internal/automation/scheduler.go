@@ -139,7 +139,12 @@ type ResourceGovernor struct {
 	cond          *sync.Cond
 	maxConcurrent int
 	inFlight      int
-	cfg           config.ResourceGovernorConfig
+
+	// LLM 专属并发限流 (P0-3)
+	maxConcurrentLLMCalls int
+	llmInFlight           int
+
+	cfg config.ResourceGovernorConfig
 
 	awake int32
 
@@ -168,6 +173,15 @@ func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *
 		cpuProbeFn: cpu.Usage,
 	}
 	rg.cond = sync.NewCond(&rg.mu)
+	return rg
+}
+
+// WithMaxConcurrentLLM 注入 LLM 的并发上限
+func (rg *ResourceGovernor) WithMaxConcurrentLLM(n int) *ResourceGovernor {
+	rg.maxConcurrentLLMCalls = n
+	if rg.maxConcurrentLLMCalls == 0 {
+		rg.maxConcurrentLLMCalls = 4 // 默认 fallback
+	}
 	return rg
 }
 
@@ -252,6 +266,72 @@ func (rg *ResourceGovernor) WaitForCapacity(ctx context.Context) error {
 func (rg *ResourceGovernor) Release() {
 	rg.mu.Lock()
 	rg.inFlight--
+	rg.cond.Signal()
+	rg.mu.Unlock()
+}
+
+// AdmitLLM 专门为 LLM 请求分配并发额度，结合基础降级判断
+func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+
+	freeMemMB := rg.memProbeFn()
+	cpuUsage := rg.cpuProbeFn()
+	degradeLevel := 0
+
+	if freeMemMB < int64(rg.cfg.MemL1FreeMB) || cpuUsage > rg.cfg.CPUL1Pct {
+		degradeLevel = 1
+	}
+	if freeMemMB < int64(rg.cfg.MemL2FreeMB) || cpuUsage > rg.cfg.CPUL2Pct {
+		degradeLevel = 2
+	}
+
+	if freeMemMB < int64(rg.cfg.MemL3FreeMB) && priority != 0 {
+		return false, 3
+	}
+	if freeMemMB < int64(rg.cfg.MemL3FreeMB) {
+		degradeLevel = 3
+	}
+	if (cpuUsage > rg.cfg.CPUL1Pct || freeMemMB < int64(rg.cfg.MemL2FreeMB)) && priority != 0 {
+		return false, 2
+	}
+
+	// 检查 LLM 并发上限
+	if rg.maxConcurrentLLMCalls > 0 && rg.llmInFlight >= rg.maxConcurrentLLMCalls {
+		return false, degradeLevel
+	}
+
+	rg.llmInFlight++
+	return true, degradeLevel
+}
+
+// WaitForLLMCapacity 阻塞直到 LLM 容量释放或上下文取消
+func (rg *ResourceGovernor) WaitForLLMCapacity(ctx context.Context) error {
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			rg.cond.Broadcast()
+		case <-stop:
+		}
+	}()
+	defer close(stop)
+
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+	for rg.maxConcurrentLLMCalls > 0 && rg.llmInFlight >= rg.maxConcurrentLLMCalls {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		rg.cond.Wait()
+	}
+	return ctx.Err()
+}
+
+// ReleaseLLM 释放 LLM 的并发额度
+func (rg *ResourceGovernor) ReleaseLLM() {
+	rg.mu.Lock()
+	rg.llmInFlight--
 	rg.cond.Signal()
 	rg.mu.Unlock()
 }

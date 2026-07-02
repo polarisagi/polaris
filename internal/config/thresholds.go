@@ -93,6 +93,7 @@ type M7ToolThresholds struct {
 	MaxScriptMemoryMB          int  `toml:"script.max_memory_mb"`          // 256
 	MaxScriptWallclockS        int  `toml:"script.max_wallclock_s"`        // 60
 	DryRunProtectWindowSeconds int  `toml:"dryrun.protect_window_seconds"` // 60
+	MaxCodeSizeBytes           int  `toml:"max_code_size_bytes"`           // 16384
 }
 
 type M8OrchestratorThresholds struct {
@@ -158,6 +159,8 @@ type M13InterfaceThresholds struct {
 	WorkerBackground               int `toml:"worker.background"`                 // 2
 	WorkerEval                     int `toml:"worker.eval"`                       // 1
 	WorkerCron                     int `toml:"worker.cron"`                       // 1
+	MaxConcurrentLLMCalls          int `toml:"max_concurrent_llm_calls"`          // 4
+	LazyLoadToolThreshold          int `toml:"lazy_load_tool_threshold"`          // 40
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
@@ -231,6 +234,7 @@ func DefaultThresholds() Thresholds {
 			MaxScriptMemoryMB:          256,
 			MaxScriptWallclockS:        60,
 			DryRunProtectWindowSeconds: 60,
+			MaxCodeSizeBytes:           16384,
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,
@@ -285,6 +289,8 @@ func DefaultThresholds() Thresholds {
 			WorkerBackground:               2,
 			WorkerEval:                     1,
 			WorkerCron:                     1,
+			MaxConcurrentLLMCalls:          4,
+			LazyLoadToolThreshold:          40,
 		},
 	}
 }
