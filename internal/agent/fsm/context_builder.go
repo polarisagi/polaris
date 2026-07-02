@@ -34,8 +34,8 @@ type KnowledgeSearcher interface {
 // ContextBuilder 接口由使用状态机的客户端（如 agent）实现，
 // 用于在状态机执行时注入 Prompt 上下文组装能力。
 type ContextBuilder interface {
-	BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error)
-	BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cata catalog.Catalog, cognitive CognitiveSearcher) ([]types.Message, error)
-	BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]types.Message, error)
+	BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error)
+	BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, cata catalog.Catalog, cognitive CognitiveSearcher) ([]types.Message, error)
+	BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext) ([]types.Message, error)
 	BuildToolListSection(cata catalog.Catalog) string
 }

@@ -18,7 +18,7 @@ type dummyAgent struct {
 }
 
 func (d *dummyAgent) SetPreferences(m map[string]string) {}
-func (d *dummyAgent) Memory() protocol.Memory            { return nil }
+func (d *dummyAgent) Memory() protocol.MemoryFacade      { return nil }
 
 func TestHandlePreferences(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")

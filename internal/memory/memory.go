@@ -43,7 +43,7 @@ type MemorySystem interface {
 	Retrieve(ctx context.Context, query *RetrievalQuery) ([]MemoryEntry, error)
 	Consolidate(ctx context.Context) error
 	Forget(ctx context.Context) (int, error)
-	Mem() protocol.Memory // 返回四层 facade
+	Mem() protocol.MemorySystem // 返回四层 facade
 }
 
 // RetrievalQuery supports hybrid search across all layers.
@@ -204,7 +204,7 @@ func (m *MemImpl) InjectSkillRegistry(sr protocol.SkillRegistry) {
 
 // 编译期接口合规验证
 var (
-	_ protocol.Memory           = (*MemImpl)(nil)
+	_ protocol.MemorySystem     = (*MemImpl)(nil)
 	_ protocol.WorkingMemory    = (*memstore.WorkingMem)(nil)
 	_ protocol.EpisodicMemory   = (*memstore.EpisodicMem)(nil)
 	_ protocol.SemanticMemory   = (*memstore.SemanticMem)(nil)
@@ -219,7 +219,7 @@ var (
 // ImmutableCore 不可变核心区（永不裁剪）。
 
 // ============================================================================
-// MemImpl — protocol.Memory 的四层具体实现
+// MemImpl — protocol.MemorySystem 的四层具体实现
 // ============================================================================
 
 type MemImpl struct {

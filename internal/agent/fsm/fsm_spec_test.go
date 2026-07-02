@@ -174,13 +174,13 @@ func TestFSM_Spec(t *testing.T) {
 
 type dummyContextBuilder struct{}
 
-func (d *dummyContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext, cata catalog.Catalog, cognitive CognitiveSearcher) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, cata catalog.Catalog, cognitive CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *StateContext) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext) ([]types.Message, error) {
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildToolListSection(cata catalog.Catalog) string { return "" }

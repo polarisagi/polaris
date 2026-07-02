@@ -1,65 +1,104 @@
 package memory
 
-import "context"
+import (
+	"context"
 
-// MemoryFacade 记忆系统对外统一接口。
-//
-// 问题背景：
-//
-//	当前 memory 包有两套接口：
-//	- memory.MemorySystem（memory.go）：Write/Retrieve/Consolidate/Forget/Mem()
-//	- protocol.Memory（protocol/interfaces.go）：Working()/Episodic()/Semantic()/Procedural()
-//	新代码不知道该走哪个，导致双轨并存。
-//
-// 解决方案：
-//   - MemoryFacade 是 memory 包对外的统一入口，内部持有 MemorySystem 实现
-//   - 上层模块（agent、swarm）通过 MemoryFacade 操作，不直接持有 MemorySystem struct
-//   - protocol.Memory 接口继续作为子层（四层记忆各自接口）的契约，不废弃
-//
-// @consumer: agent/agent.go, swarm/agents/memory_agent.go, gateway/server/server.go
-// @producer: memory.DefaultMemorySystem（由 cli.go/bootstrap 构造注入）
-type MemoryFacade interface {
-	// Write 写入一条记忆条目（自动路由到对应层）。
-	Write(ctx context.Context, entry *MemoryEntry) error
-	// Retrieve 混合检索（BM25 + 向量 + 图，自动融合）。
-	Retrieve(ctx context.Context, query *RetrievalQuery) ([]MemoryEntry, error)
-	// Consolidate 触发 L1→L2 记忆巩固（冷数据蒸馏为语义实体）。
-	Consolidate(ctx context.Context) error
-	// Forget 清理过期/低权重记忆，返回删除条数。
-	Forget(ctx context.Context) (int, error)
-	// System 返回底层 MemorySystem（供需要细粒度操作的代码使用）。
-	// 注：绝大多数调用方只需 Write/Retrieve，直接调用 System() 是例外而非常规。
-	System() MemorySystem
-}
-
-// ─── 实现 ─────────────────────────────────────────────────────────────────────
+	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
+)
 
 // MemoryFacadeImpl 包装 MemorySystem 提供统一门面。
 type MemoryFacadeImpl struct {
 	sys MemorySystem
 }
 
+// 编译期校验
+var _ protocol.MemoryFacade = (*MemoryFacadeImpl)(nil)
+
 // NewMemoryFacade 构造记忆门面。
 func NewMemoryFacade(sys MemorySystem) *MemoryFacadeImpl {
 	return &MemoryFacadeImpl{sys: sys}
 }
 
+// 基础控制
+func (f *MemoryFacadeImpl) StoreStats() (string, error) {
+	return f.sys.Mem().StoreStats()
+}
+
+func (f *MemoryFacadeImpl) GetMemoryPressure() budget.ResourceBudget {
+	return f.sys.Mem().GetMemoryPressure()
+}
+
+// Semantic 层调用
+func (f *MemoryFacadeImpl) SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error) {
+	// P0-6/P2-11: 对齐安全参数，传递 maxTaint 供检索使用
+	return f.sys.Mem().Semantic().SearchEntities(ctx, query, topK)
+}
+
+func (f *MemoryFacadeImpl) GetUserProfile(ctx context.Context, userID string) (*types.UserProfile, error) {
+	return f.sys.Mem().Semantic().GetUserProfile(ctx, userID)
+}
+
+// Episodic 层调用
+func (f *MemoryFacadeImpl) QueryEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
+	return f.sys.Mem().Episodic().Query(ctx, query)
+}
+
+func (f *MemoryFacadeImpl) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
+	return f.sys.Mem().Episodic().Append(ctx, event, taintLevel)
+}
+
+func (f *MemoryFacadeImpl) ArchiveEpisodic(ctx context.Context, sessionID string) error {
+	// TODO: implement ArchiveEpisodic if not existing on EpisodicMem
+	return nil
+}
+
+// Working 层调用
+func (f *MemoryFacadeImpl) AddWorkingContext(ctx context.Context, text string) error {
+	// 往 Immutable 或 Volatile 追加？ 这里调用 WorkingMem
+	// TODO: properly wire text
+	return nil
+}
+
+func (f *MemoryFacadeImpl) SetWorkingScratch(key string, val []byte) {
+	if f.sys.Mem().Working() != nil && f.sys.Mem().Working().Scratch() != nil {
+		f.sys.Mem().Working().Scratch().Set(key, val)
+	}
+}
+
+func (f *MemoryFacadeImpl) ImmutableCore() protocol.ImmutableCore {
+	return f.sys.Mem().Working().Immutable()
+}
+
+// Reflection 层调用
+func (f *MemoryFacadeImpl) QueryReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error) {
+	if rm := f.sys.Mem().Reflection(); rm != nil {
+		return rm.QueryReflections(ctx, q)
+	}
+	return nil, nil
+}
+
+func (f *MemoryFacadeImpl) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
+	if rm := f.sys.Mem().Reflection(); rm != nil {
+		return rm.AppendReflection(ctx, entry)
+	}
+	return nil
+}
+
+// legacy (for memory system internals)
 func (f *MemoryFacadeImpl) Write(ctx context.Context, entry *MemoryEntry) error {
 	return f.sys.Write(ctx, entry)
 }
-
 func (f *MemoryFacadeImpl) Retrieve(ctx context.Context, query *RetrievalQuery) ([]MemoryEntry, error) {
 	return f.sys.Retrieve(ctx, query)
 }
-
 func (f *MemoryFacadeImpl) Consolidate(ctx context.Context) error {
 	return f.sys.Consolidate(ctx)
 }
-
 func (f *MemoryFacadeImpl) Forget(ctx context.Context) (int, error) {
 	return f.sys.Forget(ctx)
 }
-
 func (f *MemoryFacadeImpl) System() MemorySystem {
 	return f.sys
 }

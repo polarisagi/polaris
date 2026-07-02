@@ -43,7 +43,7 @@ type Agent struct {
 	hitl              protocol.HITL                 // 人工审批网关
 	toolRegistry      protocol.ToolRegistry         // 工具执行表（由 M7 提供）
 	catalog           catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
-	memory            protocol.Memory               // 四层记忆系统（由 M5 提供）
+	memory            protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
 	worldModel        WorldModel                    // 认知世界模型，nil 时安全降级
 	prm               *DefaultPRM                   // 可选；nil 时跳过多候选打分
 	blindZoneDetector BlindZoneDetector             // 可选；nil 时跳过盲区检查
@@ -62,6 +62,7 @@ type Agent struct {
 	assembler         *agentctx.Assembler       // CC-3 ContextAssembler
 	lamEngine         LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
 	surpriseCalc      SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
+	terminalCallback  func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
 }
 
 // SurpriseReader 读取当前 SurpriseIndex 滑动均值（consumer-side 接口）。
@@ -269,23 +270,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			// 终态检查
 			current := a.sm.Current()
 			if current == types.AgentStateComplete || current == types.AgentStateFailed {
-				// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）
-				trace.RecordTaskOutcome(ctx, current == types.AgentStateComplete)
-
-				// 接入运行时质量漂移检测（M03 §10.1）
-				score := 1.0
-				if current == types.AgentStateFailed {
-					score = 0.0
-				}
-				metrics.GlobalPerformanceDrift().Record(score)
-
-				// M4 §8：终态 PII 清零——SecureZero 删除 DB 快照，防止 PII 留存（M11 HE-Rule-2）
-				if a.piiVault != nil && a.sCtx.TaskID != "" {
-					if zeroErr := a.piiVault.SecureZero(ctx, a.sCtx.TaskID); zeroErr != nil {
-						slog.WarnContext(ctx, "agent: pii secure zero failed", "task_id", a.sCtx.TaskID, "err", zeroErr)
-					}
-				}
-
+				a.handleTerminalState(ctx, current)
 				return nil
 			}
 
@@ -477,7 +462,7 @@ func (a *Agent) InjectCatalog(c catalog.Catalog) {
 }
 
 // InjectMemory 注入记忆系统（运行时绑定，允许测试注入 mock）。
-func (a *Agent) InjectMemory(mem protocol.Memory) { a.memory = mem }
+func (a *Agent) InjectMemory(mem protocol.MemoryFacade) { a.memory = mem }
 
 // SetCognitiveSearcher 注入 L2 语义记忆检索器
 func (a *Agent) SetCognitiveSearcher(cs fsm.CognitiveSearcher) {
@@ -490,7 +475,7 @@ func (a *Agent) SetKnowledgeSearcher(ks fsm.KnowledgeSearcher) {
 }
 
 // Memory 返回 Agent 挂载的物理记忆实例
-func (a *Agent) Memory() protocol.Memory { return a.memory }
+func (a *Agent) Memory() protocol.MemoryFacade { return a.memory }
 
 // SetPreferences 注入用户配置偏好（如 computer_use_mode）。
 func (a *Agent) SetPreferences(prefs map[string]string) {
@@ -633,11 +618,11 @@ type agentContextBuilder struct {
 	cata catalog.Catalog
 }
 
-func (b *agentContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+func (b *agentContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	return agentctx.BuildPerceiveContext(ctx, memory, sCtx, cognitive)
 }
 
-func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	useCata := cata
 	if useCata == nil {
 		useCata = b.cata
@@ -645,7 +630,7 @@ func (b *agentContextBuilder) BuildPlanContext(ctx context.Context, memory proto
 	return agentctx.BuildPlanContext(ctx, memory, sCtx, useCata, cognitive)
 }
 
-func (b *agentContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext) ([]types.Message, error) {
+func (b *agentContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	return agentctx.BuildReflectContext(ctx, memory, sCtx)
 }
 
@@ -655,4 +640,32 @@ func (b *agentContextBuilder) BuildToolListSection(cata catalog.Catalog) string 
 		useCata = b.cata
 	}
 	return agentctx.BuildToolListSection(useCata)
+}
+
+func (a *Agent) InjectTerminalCallback(cb func(ctx context.Context, taskID, taskType string, replanCount int, success bool)) {
+	a.terminalCallback = cb
+}
+
+func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
+	// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）
+	trace.RecordTaskOutcome(ctx, current == types.AgentStateComplete)
+
+	// 接入运行时质量漂移检测（M03 §10.1）
+	score := 1.0
+	if current == types.AgentStateFailed {
+		score = 0.0
+	}
+	metrics.GlobalPerformanceDrift().Record(score)
+
+	// M4 §8：终态 PII 清零——SecureZero 删除 DB 快照，防止 PII 留存（M11 HE-Rule-2）
+	if a.piiVault != nil && a.sCtx.TaskID != "" {
+		if zeroErr := a.piiVault.SecureZero(ctx, a.sCtx.TaskID); zeroErr != nil {
+			slog.WarnContext(ctx, "agent: pii secure zero failed", "task_id", a.sCtx.TaskID, "err", zeroErr)
+		}
+	}
+
+	// 触发 Terminal Callback (P1-2 Learning 闭环)
+	if a.terminalCallback != nil {
+		a.terminalCallback(ctx, a.sCtx.TaskID, "", 0, current == types.AgentStateComplete)
+	}
 }

@@ -36,6 +36,7 @@ func RegisterMemoryTools(
 	toolReg *tool.InMemoryToolRegistry,
 	semanticWriter SemanticMemWriter,
 	retriever protocol.HybridRetriever,
+	reflection protocol.ReflectionMemory,
 ) error {
 	type entry struct {
 		tool types.Tool
@@ -47,7 +48,7 @@ func RegisterMemoryTools(
 		{tool: memorySearchTool(), fn: makeMemorySearchFn(retriever)},
 		{tool: memoryAppendTool(), fn: makeMemoryAppendFn(semanticWriter)},
 		{tool: memoryExpireTool(), fn: makeMemoryExpireFn(semanticWriter)},
-		{tool: memoryReflectTool(), fn: makeMemoryReflectFn(semanticWriter)},
+		{tool: memoryReflectTool(), fn: makeMemoryReflectFn(reflection)},
 	}
 
 	for _, e := range entries {
@@ -235,7 +236,7 @@ func makeMemoryWriteFn(writer SemanticMemWriter) sandbox.InProcessFn {
 			ID:          "ent_" + args.Name,
 			Name:        args.Name,
 			Type:        args.EntityType,
-			TaintLevel:  types.TaintLow,
+			TaintLevel:  types.TaintMedium,
 			SyncVersion: time.Now().UnixNano(),
 			Confidence:  1.0,
 			Properties:  props,
@@ -258,6 +259,7 @@ func makeMemoryWriteFn(writer SemanticMemWriter) sandbox.InProcessFn {
 type memorySearchArgs struct {
 	Query string `json:"query"`
 	Limit int    `json:"limit,omitempty"`
+	Layer string `json:"layer,omitempty"`
 }
 
 func makeMemorySearchFn(retriever protocol.HybridRetriever) sandbox.InProcessFn {
@@ -284,7 +286,11 @@ func makeMemorySearchFn(retriever protocol.HybridRetriever) sandbox.InProcessFn 
 			GraphWeight:  0.2,
 		}
 
-		results, err := retriever.Search(ctx, args.Query, types.SearchScope{Type: "memory"}, cfg)
+		scope := types.SearchScope{Type: "memory"}
+		if args.Layer != "" {
+			scope.Type = args.Layer
+		}
+		results, err := retriever.Search(ctx, args.Query, scope, cfg)
 		if err != nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_search", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_search: search failed", err)
@@ -325,7 +331,7 @@ func makeMemoryAppendFn(writer SemanticMemWriter) sandbox.InProcessFn {
 				ID:          "ent_" + args.Name,
 				Name:        args.Name,
 				Type:        args.EntityType,
-				TaintLevel:  types.TaintLow,
+				TaintLevel:  types.TaintMedium,
 				Confidence:  1.0,
 				SyncVersion: time.Now().UnixNano(),
 				Properties:  make(map[string]any),
@@ -434,7 +440,7 @@ type memoryReflectArgs struct {
 	Decision string `json:"decision"`
 }
 
-func makeMemoryReflectFn(writer SemanticMemWriter) sandbox.InProcessFn {
+func makeMemoryReflectFn(reflection protocol.ReflectionMemory) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args memoryReflectArgs
 		if err := json.Unmarshal(input, &args); err != nil {
@@ -442,23 +448,21 @@ func makeMemoryReflectFn(writer SemanticMemWriter) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_reflect: invalid args", err)
 		}
 
-		ent := types.Entity{
-			ID:          fmt.Sprintf("ref_%d", time.Now().UnixNano()), // 纳秒精度避免同秒内 ID 碰撞
-			Name:        args.Topic,
-			Type:        "Reflection",
-			TaintLevel:  types.TaintLow,
-			Confidence:  1.0,
-			SyncVersion: time.Now().UnixNano(),
-			Properties: map[string]any{
-				"insight":     args.Insight,
-				"decision":    args.Decision,
-				"source_type": "agent_reflection",
-			},
-		}
-
-		if err := writer.UpsertFact(ctx, ent, types.TaintNone); err != nil {
+		if reflection != nil {
+			entry := types.ReflectionEntry{
+				ID:        fmt.Sprintf("ref_%d", time.Now().UnixNano()),
+				Strategy:  args.Topic + ": " + args.Insight,
+				Decision:  args.Decision,
+				CreatedAt: time.Now(),
+			}
+			err := reflection.AppendReflection(ctx, entry)
+			if err != nil {
+				metrics.RecordMemoryToolCall(ctx, "memory_reflect", false)
+				return nil, apperr.Wrap(apperr.CodeInternal, "memory_reflect: append failed", err)
+			}
+		} else {
 			metrics.RecordMemoryToolCall(ctx, "memory_reflect", false)
-			return nil, apperr.Wrap(apperr.CodeInternal, "memory_reflect: upsert failed", err)
+			return nil, apperr.New(apperr.CodeInternal, "memory_reflect: reflection memory unavailable")
 		}
 
 		metrics.RecordMemoryToolCall(ctx, "memory_reflect", true)

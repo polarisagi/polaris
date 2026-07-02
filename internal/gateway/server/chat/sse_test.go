@@ -40,7 +40,7 @@ func (m *mockAgentController) SurpriseIndex() float64 {
 	return m.siValue
 }
 
-func (m *mockAgentController) Memory() protocol.Memory {
+func (m *mockAgentController) Memory() protocol.MemoryFacade {
 	return nil
 }
 

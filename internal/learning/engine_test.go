@@ -96,7 +96,7 @@ func TestEngine_Run_CancelCtx(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- e.Run(ctx) }()
+	go func() { errCh <- e.Start(ctx) }()
 
 	cancel()
 	select {
@@ -118,7 +118,7 @@ func TestEngine_Run_FailedTask_TriggersReflect(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = e.Run(ctx) }()
+	go func() { _ = e.Start(ctx) }()
 
 	taskCh <- TaskCompleteEvent{
 		TaskID:  "t1",
@@ -149,7 +149,7 @@ func TestEngine_Run_SuccessTask_NoReflect(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	go func() { _ = e.Run(ctx) }()
+	go func() { _ = e.Start(ctx) }()
 
 	taskCh <- TaskCompleteEvent{
 		TaskID:  "t2",
@@ -173,7 +173,7 @@ func TestEngine_Run_VersionEvent_TriggersRollout(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = e.Run(ctx) }()
+	go func() { _ = e.Start(ctx) }()
 
 	verCh <- VersionChangeEvent{
 		CandidateVersion: "v0.2.0",
@@ -204,7 +204,7 @@ func TestEngine_Run_MidLoop_TriggersCurriculum(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = e.Run(ctx) }()
+	go func() { _ = e.Start(ctx) }()
 
 	// 30ms ticker，400ms 内应触发至少 2 次（最坏情况 60ms << 400ms margin 充裕）
 	deadline := time.Now().Add(400 * time.Millisecond)

@@ -666,7 +666,7 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 		return history
 	}
 
-	ic, ok := agentCtrl.Memory().Working().Immutable().(*store.ImmutableCore)
+	ic, ok := agentCtrl.Memory().ImmutableCore().(*store.ImmutableCore)
 	if !ok {
 		return history
 	}
@@ -680,7 +680,7 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 	ic.CustomInstructions = s.PromptMgr.ReadPrompt("custom_instructions.md", "")
 
 	// 用户画像（P0-2：消费 default 用户画像）
-	if p, err := agentCtrl.Memory().Semantic().GetUserProfile(ctx, "default"); err == nil && p != nil {
+	if p, err := agentCtrl.Memory().GetUserProfile(ctx, "default"); err == nil && p != nil {
 		var summary []string
 		for _, sf := range p.StableFacts {
 			summary = append(summary, "- "+fmt.Sprint(sf))

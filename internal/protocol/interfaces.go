@@ -160,7 +160,7 @@ type StateContext struct {
 	AgentID              string
 	SessionID            string
 	MaxTaintLevel        types.TaintLevel // 继承自上下文请求的最高污点等级 (Taint Washing Fix)
-	Mem                  Memory
+	Mem                  MemoryFacade
 	Tools                ToolRegistry
 	Provider             Provider
 	Policy               PolicyGate
@@ -315,8 +315,8 @@ type SafeDialer interface {
 // @arch: docs/arch/M05-Memory-System.md
 // ============================================================================
 
-// Memory 是四层记忆的统一 facade（Mem-L0..L3 + 元认知反思层）。
-type Memory interface {
+// MemorySystem 是四层记忆的具体子系统集合。保留作为协议契约供内部使用。
+type MemorySystem interface {
 	Working() WorkingMemory
 	Episodic() EpisodicMemory
 	Semantic() SemanticMemory
@@ -326,6 +326,31 @@ type Memory interface {
 	StoreStats() (string, error)
 	SetVectorMode(mode int) error
 	GetMemoryPressure() budget.ResourceBudget
+}
+
+// MemoryFacade 记忆系统对外统一门面，屏蔽底层架构，供 Agent / Server 侧直接调用。
+type MemoryFacade interface {
+	// 基础控制
+	StoreStats() (string, error)
+	GetMemoryPressure() budget.ResourceBudget
+
+	// Semantic 层调用
+	SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error)
+	GetUserProfile(ctx context.Context, userID string) (*types.UserProfile, error)
+
+	// Episodic 层调用
+	QueryEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error)
+	AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error
+	ArchiveEpisodic(ctx context.Context, sessionID string) error
+
+	// Working 层调用
+	AddWorkingContext(ctx context.Context, text string) error
+	SetWorkingScratch(key string, val []byte)
+	ImmutableCore() ImmutableCore // 返回 *store.ImmutableCore 或其他不可变核心
+
+	// Reflection 层调用
+	QueryReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error)
+	AppendReflection(ctx context.Context, entry types.ReflectionEntry) error
 }
 
 // ReflectionMemory 元认知反思层（Mem-L1.5，插于 Episodic 与 Semantic 之间）。
@@ -608,7 +633,7 @@ type AgentController interface {
 	SetTaskIntent(intent []byte)
 	SendIntent(trigger types.AgentTrigger) error
 	SurpriseIndex() float64
-	Memory() Memory
+	Memory() MemoryFacade
 	Interrupt(req types.InterruptRequest)
 	SetPreferences(map[string]string)
 	CurrentState() types.AgentState
@@ -856,6 +881,7 @@ type CognitiveSearcher interface {
 	VecDelete(id string) error
 	VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error)
 	FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error)
+	GraphRelate(fromID, edgeType, toID string, weight float64) error
 }
 
 // AgentInvoker 用于触发 Agent 会话。

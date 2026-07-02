@@ -36,7 +36,7 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 	// Hot reload preference in Agent
 	h.Agent.SetPreferences(map[string]string{key: req.Value})
 	if h.Agent.Memory() != nil {
-		if ic, ok := h.Agent.Memory().Working().Immutable().(*store.ImmutableCore); ok {
+		if ic, ok := h.Agent.Memory().ImmutableCore().(*store.ImmutableCore); ok {
 			switch key {
 			case "system_prompt", "global_goal":
 				ic.GlobalGoal = req.Value

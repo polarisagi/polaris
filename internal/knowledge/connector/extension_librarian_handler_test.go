@@ -33,6 +33,15 @@ func (m *mockSurrealLibrarian) VecUpsert(id string, vec []float32) error {
 	return nil
 }
 
+func (m *mockSurrealLibrarian) FTSDelete(docID string) error { return nil }
+func (m *mockSurrealLibrarian) VecDelete(id string) error    { return nil }
+func (m *mockSurrealLibrarian) VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error) {
+	return nil, nil
+}
+func (m *mockSurrealLibrarian) FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error) {
+	return nil, nil
+}
+
 func TestExtensionLibrarianHandler(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

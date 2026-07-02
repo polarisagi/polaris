@@ -111,13 +111,13 @@ func TestAgent_ReplanExhausted(t *testing.T) {
 
 type dummyContextBuilder struct{}
 
-func (d *dummyContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext) ([]types.Message, error) {
+func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildToolListSection(cata catalog.Catalog) string { return "" }
@@ -138,18 +138,40 @@ type mockMemoryForIntegration struct {
 	working  *mockWorkingMemForIntegration
 }
 
-func (m *mockMemoryForIntegration) Working() protocol.WorkingMemory   { return m.working }
-func (m *mockMemoryForIntegration) Episodic() protocol.EpisodicMemory { return m.episodic }
 func (m *mockMemoryForIntegration) GetMemoryPressure() budget.ResourceBudget {
 	return budget.ResourceBudget{}
 }
 
-func (m *mockMemoryForIntegration) Semantic() protocol.SemanticMemory     { return nil }
-func (m *mockMemoryForIntegration) Procedural() protocol.ProceduralMemory { return nil }
-func (m *mockMemoryForIntegration) Retriever() protocol.HybridRetriever   { return nil }
-func (m *mockMemoryForIntegration) Reflection() protocol.ReflectionMemory { return nil }
-func (m *mockMemoryForIntegration) StoreStats() (string, error)           { return "{}", nil }
-func (m *mockMemoryForIntegration) SetVectorMode(mode int) error          { return nil }
+func (m *mockMemoryForIntegration) StoreStats() (string, error) { return "{}", nil }
+
+func (m *mockMemoryForIntegration) SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error) {
+	return nil, nil
+}
+func (m *mockMemoryForIntegration) GetUserProfile(ctx context.Context, userID string) (*types.UserProfile, error) {
+	return nil, nil
+}
+func (m *mockMemoryForIntegration) QueryEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
+	return m.episodic.Query(ctx, query)
+}
+func (m *mockMemoryForIntegration) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
+	return m.episodic.Append(ctx, event, taintLevel)
+}
+func (m *mockMemoryForIntegration) ArchiveEpisodic(ctx context.Context, sessionID string) error {
+	return nil
+}
+func (m *mockMemoryForIntegration) AddWorkingContext(ctx context.Context, text string) error {
+	return nil
+}
+func (m *mockMemoryForIntegration) SetWorkingScratch(key string, val []byte) {}
+func (m *mockMemoryForIntegration) ImmutableCore() protocol.ImmutableCore {
+	return m.working.Immutable()
+}
+func (m *mockMemoryForIntegration) QueryReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error) {
+	return nil, nil
+}
+func (m *mockMemoryForIntegration) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
+	return nil
+}
 
 type mockEpisodicMemForIntegration struct {
 	events []types.Event

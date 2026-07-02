@@ -32,7 +32,7 @@ type MemorySystem interface {
 	Retrieve(ctx context.Context, query *RetrievalQuery) ([]MemoryEntry, error)
 	Consolidate(ctx context.Context) error
 	Forget(ctx context.Context) (int, error)
-	Mem() protocol.Memory // 返回四层 facade
+	Mem() protocol.MemorySystem // 返回四层 facade
 }
 
 // RetrievalQuery supports hybrid search across all layers.

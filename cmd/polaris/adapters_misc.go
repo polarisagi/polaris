@@ -47,6 +47,18 @@ func (d dummySurreal) VecUpsert(id string, embedding []float32) error {
 func (d dummySurreal) GraphRelate(fromID, edgeType, toID string, weight float64) error {
 	return apperr.New(apperr.CodeInternal, "SurrealDB not available")
 }
+func (d dummySurreal) FTSDelete(docID string) error {
+	return apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
+func (d dummySurreal) VecDelete(id string) error {
+	return apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
+func (d dummySurreal) VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error) {
+	return nil, apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
+func (d dummySurreal) FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error) {
+	return nil, apperr.New(apperr.CodeInternal, "SurrealDB not available")
+}
 
 // ─── evalAgentAdapter ─────────────────────────────────────────────────────────
 //

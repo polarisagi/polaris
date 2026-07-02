@@ -254,7 +254,7 @@ type Engine struct {
 	rollout    RolloutAdvancer
 
 	// 事件通道（由外部订阅者推入，Engine 消费）
-	taskEvents    <-chan TaskCompleteEvent
+	taskEvents    chan TaskCompleteEvent
 	versionEvents <-chan VersionChangeEvent
 
 	// 新增：M9 自改善闭环事件通道
@@ -332,7 +332,7 @@ func NewEngine(
 	reflector Reflector,
 	curriculum CurriculumGenerator,
 	rollout RolloutAdvancer,
-	taskEvents <-chan TaskCompleteEvent,
+	taskEvents chan TaskCompleteEvent,
 	versionEvents <-chan VersionChangeEvent,
 ) *Engine {
 	if cfg == nil {
@@ -362,7 +362,7 @@ func NewEngine(
 // L2 (SkillGeneration) 由 LogicCollapseMonitor 在 RecordSuccess 时异步触发。
 // L3 (StrategyModify)  策略漂移检测 → HITLGateway.Prompt → 人工审批 → SubmitCandidate
 // L4 (SourceArchitecture) 多签名审批门控 → SubmitCandidate
-func (e *Engine) Run(ctx context.Context) error { //nolint:gocyclo
+func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 	midTicker := time.NewTicker(e.cfg.MidLoopInterval)
 	defer midTicker.Stop()
 
@@ -571,4 +571,36 @@ func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompleted
 			})
 		})
 	}
+}
+
+func (e *Engine) ReportOutcome(ctx context.Context, taskID string, result *TaskResult) error {
+
+	ev := TaskCompleteEvent{
+		TaskID:   taskID,
+		TaskType: "default", // Need to get task type if possible
+		Success:  result.FailureClass == "",
+		Failure:  result.FailureClass,
+		Output:   result.Output,
+	}
+	select {
+	case e.taskEvents <- ev:
+	default:
+	}
+	return nil
+}
+
+func (e *Engine) SurpriseIndex() float64 {
+	return e.currentSurpriseIndex()
+}
+
+func (e *Engine) TriggerCurriculum(ctx context.Context) error {
+	if e.curriculum != nil {
+		return e.curriculum.Generate(ctx, e.currentSurpriseIndex())
+	}
+	return nil
+}
+
+func (e *Engine) Stop(ctx context.Context) error {
+	// Engine shuts down when ctx passed to Start is canceled
+	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/security/taint"
+
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 
@@ -19,18 +21,34 @@ type mockMemory struct {
 	working  *mockWorkingMem
 }
 
-func (m *mockMemory) Working() protocol.WorkingMemory   { return m.working }
-func (m *mockMemory) Episodic() protocol.EpisodicMemory { return m.episodic }
 func (m *mockMemory) GetMemoryPressure() budget.ResourceBudget {
 	return budget.ResourceBudget{}
 }
 
-func (m *mockMemory) Semantic() protocol.SemanticMemory     { return nil }
-func (m *mockMemory) Procedural() protocol.ProceduralMemory { return nil }
-func (m *mockMemory) Retriever() protocol.HybridRetriever   { return nil }
-func (m *mockMemory) Reflection() protocol.ReflectionMemory { return nil }
-func (m *mockMemory) StoreStats() (string, error)           { return "{}", nil }
-func (m *mockMemory) SetVectorMode(mode int) error          { return nil }
+func (m *mockMemory) StoreStats() (string, error) { return "{}", nil }
+
+func (m *mockMemory) SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error) {
+	return nil, nil
+}
+func (m *mockMemory) GetUserProfile(ctx context.Context, userID string) (*types.UserProfile, error) {
+	return nil, nil
+}
+func (m *mockMemory) QueryEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
+	return m.episodic.Query(ctx, query)
+}
+func (m *mockMemory) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
+	return nil
+}
+func (m *mockMemory) ArchiveEpisodic(ctx context.Context, sessionID string) error { return nil }
+func (m *mockMemory) AddWorkingContext(ctx context.Context, text string) error    { return nil }
+func (m *mockMemory) SetWorkingScratch(key string, val []byte)                    {}
+func (m *mockMemory) ImmutableCore() protocol.ImmutableCore                       { return m.working.Immutable() }
+func (m *mockMemory) QueryReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error) {
+	return nil, nil
+}
+func (m *mockMemory) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
+	return nil
+}
 
 type mockEpisodicMem struct {
 	events  []types.Event
@@ -94,8 +112,7 @@ func TestBuildPerceiveContext(t *testing.T) {
 	}
 
 	sCtx := &fsm.StateContext{
-		// S_PERCEIVE 阶段我们不依赖 fsm.StateContext 中的意图字段，
-		// BuildPerceiveContext 会用占位检索词去检索。
+		RawIntentTS: taint.NewTaintedString("migrate database", taint.TaintSource{}, "test"),
 	}
 
 	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
@@ -103,8 +120,13 @@ func TestBuildPerceiveContext(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages (1 immutable, 1 system, 1 user data), got %d", len(msgs))
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages (1 immutable, 1 system, 2 user data), got %d", len(msgs))
+	}
+
+	episodicMem := mem.episodic
+	if len(episodicMem.queries) == 0 || episodicMem.queries[0].Semantic != "migrate database" {
+		t.Fatalf("expected query semantic to be 'migrate database', got %v", episodicMem.queries)
 	}
 
 	if msgs[0].Content != "[Immutable Core Rule: NO HARMFUL ACT]" {
@@ -147,7 +169,9 @@ func TestBuildPerceiveContext_TaintInjection(t *testing.T) {
 		},
 	}
 
-	sCtx := &fsm.StateContext{}
+	sCtx := &fsm.StateContext{
+		RawIntentTS: taint.NewTaintedString("agent task intent", taint.TaintSource{}, "test"),
+	}
 
 	msgs, err := BuildPerceiveContext(context.Background(), mem, sCtx, nil)
 	if err != nil {
@@ -160,7 +184,7 @@ func TestBuildPerceiveContext_TaintInjection(t *testing.T) {
 			sysMsg = m
 		}
 		if m.Role == "user" {
-			userMsg = m
+			userMsg.Content += m.Content + "\n"
 		}
 	}
 

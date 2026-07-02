@@ -18,10 +18,10 @@ import (
 type SessionPIIVault struct {
 	db     protocol.SQLQuerier
 	encKey []byte
-	mem    protocol.Memory
+	mem    protocol.MemoryFacade
 }
 
-func NewSessionPIIVault(db protocol.SQLQuerier, encKey []byte, mem protocol.Memory) *SessionPIIVault {
+func NewSessionPIIVault(db protocol.SQLQuerier, encKey []byte, mem protocol.MemoryFacade) *SessionPIIVault {
 	return &SessionPIIVault{
 		db:     db,
 		encKey: encKey,
@@ -54,7 +54,7 @@ func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string
 	}
 	defer rows.Close()
 
-	if v.mem == nil || v.mem.Working() == nil {
+	if v.mem == nil {
 		return apperr.New(apperr.CodeInternal, "pii_vault: memory not available")
 	}
 
@@ -68,7 +68,7 @@ func (v *SessionPIIVault) RestoreFromSnapshot(ctx context.Context, taskID string
 			continue
 		}
 		field := strings.TrimPrefix(k, fmt.Sprintf("pii_vault:%s:", taskID))
-		v.mem.Working().Scratch().Set(field, []byte(decVal))
+		v.mem.SetWorkingScratch(field, []byte(decVal))
 	}
 	return nil
 }

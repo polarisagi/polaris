@@ -177,7 +177,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	if mb.Mem != nil {
 		if semMem, ok := mb.Mem.Semantic().(*memstore.SemanticMem); ok && semMem != nil {
-			if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, semMem, mb.Mem.Retriever()); err != nil {
+			if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, semMem, mb.Mem.Retriever(), mb.Mem.Reflection()); err != nil {
 				slog.Warn("polaris: memory tool registration failed", "err", err)
 			}
 		}
@@ -234,7 +234,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), sb.Layout.Workspace)
 	sb.Outbox.RegisterHandler(protocol.TopicSemanticCompress, semanticCompressHandler.Handle)
 
-	var extCogn connector.SurrealWriterInterface = dummySurreal{}
+	var extCogn protocol.CognitiveSearcher = dummySurreal{}
 	if sb.SurrealStore != nil {
 		extCogn = &surrealCognAdapter{s: sb.SurrealStore}
 	}

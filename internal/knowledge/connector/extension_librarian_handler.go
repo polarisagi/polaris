@@ -21,18 +21,11 @@ type LLMInferFunc = protocol.LLMInferFunc
 // EmbedFunc 文本向量化函数类型（依赖注入，nil 时跳过）。
 type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
 
-// SurrealWriterInterface SurrealDB 写入最小接口（防止循环依赖）。
-type SurrealWriterInterface interface {
-	FTSIndex(docID, text string) error
-	VecUpsert(id string, embedding []float32) error
-	GraphRelate(fromID, edgeType, toID string, weight float64) error
-}
-
 // ExtensionLibrarianHandler 在扩展安装后，将其能力索引到 SurrealDB 知识图谱。
 // 使 Planner 等智能体能通过语义搜索快速定位最适合的扩展。
 type ExtensionLibrarianHandler struct {
 	db       protocol.SQLQuerier
-	surreal  SurrealWriterInterface
+	surreal  protocol.CognitiveSearcher
 	llmInfer LLMInferFunc
 	embedFn  EmbedFunc // 文本向量化函数（可为 nil，nil 时跳过向量索引）
 }
@@ -40,7 +33,7 @@ type ExtensionLibrarianHandler struct {
 // NewExtensionLibrarianHandler 创建扩展图书馆员处理器。
 func NewExtensionLibrarianHandler(
 	db protocol.SQLQuerier,
-	surreal SurrealWriterInterface,
+	surreal protocol.CognitiveSearcher,
 	llmInfer LLMInferFunc,
 	embedFn EmbedFunc,
 ) *ExtensionLibrarianHandler {

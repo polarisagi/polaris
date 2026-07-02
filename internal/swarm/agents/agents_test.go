@@ -167,18 +167,12 @@ func TestValidateCode_BashSafe(t *testing.T) {
 
 func TestNewMemoryAgent_FieldDefaults(t *testing.T) {
 	pressure := &atomic.Int32{}
-	ma := NewMemoryAgent(nil, nil, nil, nil, nil, pressure)
+	ma := NewMemoryAgent(nil, nil, nil, pressure)
 	if ma == nil {
 		t.Fatal("expected non-nil MemoryAgent")
 	}
-	if ma.distillInterval != 60*time.Second {
-		t.Errorf("distillInterval: got %v, want 60s", ma.distillInterval)
-	}
-	if ma.coldWindowAge != 30*time.Minute {
-		t.Errorf("coldWindowAge: got %v, want 30m", ma.coldWindowAge)
-	}
-	if ma.coldWindowCount != 100 {
-		t.Errorf("coldWindowCount: got %d, want 100", ma.coldWindowCount)
+	if ma.scanInterval != 60*time.Second {
+		t.Errorf("scanInterval: got %v, want 60s", ma.scanInterval)
 	}
 }
 
@@ -186,9 +180,8 @@ func TestNewMemoryAgent_FieldDefaults(t *testing.T) {
 
 func TestMemoryAgent_Run_StopsOnContextCancel(t *testing.T) {
 	pressure := &atomic.Int32{}
-	// distillInterval 设短以加速测试
-	ma := NewMemoryAgent(nil, nil, nil, nil, nil, pressure)
-	ma.distillInterval = 50 * time.Millisecond
+	ma := NewMemoryAgent(nil, nil, nil, pressure)
+	ma.scanInterval = 50 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -209,8 +202,8 @@ func TestMemoryAgent_Run_SkipsDistillUnderMemPressure(t *testing.T) {
 	pressure := &atomic.Int32{}
 	pressure.Store(int32(MemPressureCritical)) // 高内存压力
 
-	ma := NewMemoryAgent(nil, nil, nil, nil, nil, pressure)
-	ma.distillInterval = 50 * time.Millisecond
+	ma := NewMemoryAgent(nil, nil, nil, pressure)
+	ma.scanInterval = 50 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

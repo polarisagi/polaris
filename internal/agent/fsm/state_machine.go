@@ -527,7 +527,7 @@ func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte
 				Payload:   []byte(`{"learning":` + fmt.Sprintf("%q", learning) + `}`),
 				CreatedAt: time.Now(),
 			}
-			if err := sCtx.Mem.Episodic().Append(ctx, event, types.TaintNone); err != nil {
+			if err := sCtx.Mem.AppendEpisodicEvent(ctx, event, types.TaintNone); err != nil {
 				slog.Warn("reflect: failed to write learning to episodic memory",
 					"session_id", sCtx.SessionID, "err", err)
 			}

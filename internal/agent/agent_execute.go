@@ -740,7 +740,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				SessionID:     a.sCtx.SessionID,
 				MaxTaintLevel: maxT,
 			}
-			events, err := a.memory.Episodic().Query(ctx, query)
+			events, err := a.memory.QueryEpisodicEvents(ctx, query)
 			if err == nil {
 				hasPending := false
 				hasDone := false
@@ -1141,7 +1141,7 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 	if a.memory == nil {
 		return
 	}
-	_ = a.memory.Episodic().Append(ctx, ev, types.TaintNone)
+	_ = a.memory.AppendEpisodicEvent(ctx, ev, types.TaintNone)
 
 	if a.outboxWriter == nil {
 		return

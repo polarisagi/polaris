@@ -106,10 +106,16 @@ type mockCognitiveForgetting struct {
 }
 
 func (m *mockCognitiveForgetting) FTSIndex(docID, text string) error { return nil }
+
 func (m *mockCognitiveForgetting) FTSDelete(docID string) error {
 	m.deletedFTS = append(m.deletedFTS, docID)
 	return nil
 }
+
+func (m *mockCognitiveForgetting) GraphRelate(fromID, edgeType, toID string, weight float64) error {
+	return nil
+}
+
 func (m *mockCognitiveForgetting) VecUpsert(id string, embedding []float32) error { return nil }
 func (m *mockCognitiveForgetting) VecDelete(id string) error {
 	m.deletedVec = append(m.deletedVec, id)

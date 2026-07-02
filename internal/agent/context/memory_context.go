@@ -26,7 +26,7 @@ import (
 // 从 EpisodicMemory、ReflectionMemory 与 WorkingMemory 组装感知阶段所需的 LLM 提示词。
 // M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
 func BuildPerceiveContext( //nolint:gocyclo
-	ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
 	// 1. 可信系统指令（基础模板 + 扩展信息）
@@ -47,29 +47,32 @@ func BuildPerceiveContext( //nolint:gocyclo
 
 	var retrieved strings.Builder
 
-	// 1. 查询相关的历史 Episodic 事件
-	query := types.EpisodicQuery{
-		Semantic:      "agent task intent",
-		K:             3,
-		MaxTaintLevel: types.TaintHigh,
-	}
-	events, err := memory.Episodic().Query(ctx, query)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
-	}
+	intent := sCtx.RawIntentTS.Content()
+	if intent != "" {
+		// 1. 查询相关的历史 Episodic 事件
+		query := types.EpisodicQuery{
+			Semantic:      intent,
+			K:             3,
+			MaxTaintLevel: types.TaintHigh,
+		}
+		events, err := memory.QueryEpisodicEvents(ctx, query)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
+		}
 
-	if len(events) > 0 {
-		retrieved.WriteString("Relevant Historical Episodic Memories:\n")
-		for _, e := range events {
-			if pbEv, _ := e.Event.(*types.Event); pbEv != nil {
-				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
+		if len(events) > 0 {
+			retrieved.WriteString("Relevant Historical Episodic Memories:\n")
+			for _, e := range events {
+				if pbEv, _ := e.Event.(*types.Event); pbEv != nil {
+					fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
+				}
 			}
 		}
 	}
 
 	// 2. 跨会话 Reflection 召回
-	if rm := memory.Reflection(); rm != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
-		reflections, rerr := rm.QueryReflections(ctx, types.ReflectionQuery{
+	if sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
+		reflections, rerr := memory.QueryReflections(ctx, types.ReflectionQuery{
 			Topic: sCtx.TaskModel.Goal,
 			K:     3,
 		})
@@ -94,18 +97,16 @@ func BuildPerceiveContext( //nolint:gocyclo
 	}
 
 	// 3.5 用户画像（P0-2：消费 default 用户画像）
-	if memory.Semantic() != nil {
-		if p, err := memory.Semantic().GetUserProfile(ctx, "default"); err == nil && p != nil {
-			var summary []string
-			for _, sf := range p.StableFacts {
-				summary = append(summary, "- "+fmt.Sprint(sf))
-			}
-			for _, bp := range p.BehavioralPatterns {
-				summary = append(summary, "- "+fmt.Sprint(bp))
-			}
-			if len(summary) > 0 {
-				retrieved.WriteString("## User Profile (Context)\n" + strings.Join(summary, "\n") + "\n")
-			}
+	if p, err := memory.GetUserProfile(ctx, "default"); err == nil && p != nil {
+		var summary []string
+		for _, sf := range p.StableFacts {
+			summary = append(summary, "- "+fmt.Sprint(sf))
+		}
+		for _, bp := range p.BehavioralPatterns {
+			summary = append(summary, "- "+fmt.Sprint(bp))
+		}
+		if len(summary) > 0 {
+			retrieved.WriteString("## User Profile (Context)\n" + strings.Join(summary, "\n") + "\n")
 		}
 	}
 
@@ -154,8 +155,8 @@ func BuildPerceiveContext( //nolint:gocyclo
 
 	msgs := b.Build()
 
-	if wm := memory.Working(); wm != nil {
-		msgs = wm.Immutable().PrependToMessages(msgs)
+	if memory != nil {
+		msgs = memory.ImmutableCore().PrependToMessages(msgs)
 	}
 
 	return msgs, nil
@@ -165,7 +166,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 // 从 Memory 系统组装生成 DAG 计划所需的 LLM 提示词。
 // tools 为 nil 时跳过工具注入（测试环境）。
 func BuildPlanContext( //nolint:gocyclo
-	ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
+	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
 	var sysPrompt strings.Builder
@@ -209,7 +210,7 @@ func BuildPlanContext( //nolint:gocyclo
 		K:             5,
 		MaxTaintLevel: types.TaintHigh,
 	}
-	events, err := memory.Episodic().Query(ctx, query)
+	events, err := memory.QueryEpisodicEvents(ctx, query)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
 	}
@@ -223,8 +224,8 @@ func BuildPlanContext( //nolint:gocyclo
 		}
 	}
 
-	if rm := memory.Reflection(); rm != nil && queryStr != "" {
-		reflections, rerr := rm.QueryReflections(ctx, types.ReflectionQuery{
+	if memory != nil && queryStr != "" {
+		reflections, rerr := memory.QueryReflections(ctx, types.ReflectionQuery{
 			Topic: queryStr,
 			K:     3,
 		})
@@ -270,8 +271,8 @@ func BuildPlanContext( //nolint:gocyclo
 
 	msgs := b.Build()
 
-	if wm := memory.Working(); wm != nil {
-		msgs = wm.Immutable().PrependToMessages(msgs)
+	if memory != nil {
+		msgs = memory.ImmutableCore().PrependToMessages(msgs)
 	}
 
 	return msgs, nil
@@ -303,7 +304,7 @@ func BuildToolListSection(cata catalog.Catalog) string {
 	return sb.String()
 }
 
-func BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.StateContext) ([]types.Message, error) {
+func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
 	instr := "Reflect on the execution result and evaluate the completion of the goal.\n\n"
@@ -327,8 +328,8 @@ func BuildReflectContext(ctx context.Context, memory protocol.Memory, sCtx *fsm.
 	msgs := b.Build()
 
 	if memory != nil {
-		if wm := memory.Working(); wm != nil {
-			msgs = wm.Immutable().PrependToMessages(msgs)
+		if memory != nil {
+			msgs = memory.ImmutableCore().PrependToMessages(msgs)
 		}
 	}
 

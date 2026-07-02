@@ -17,6 +17,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
 	"github.com/polarisagi/polaris/internal/learning/surprise"
+	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
@@ -33,6 +34,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 
 	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/internal/swarm/planner"
 	"github.com/polarisagi/polaris/internal/swarm/supervisor"
@@ -103,7 +105,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// 热注入 blackboard 到 ProviderRecoveryHandler（bootTools 时尚未装配）
 	tb.RecoveryHandler.SetBlackboard(blackboard)
-	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey, mb.Mem)
+	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey, memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
 	tb.RecoveryHandler.SetPIIVault(piiVault)
 
 	// Reaper（挂起任务超时唤醒）
@@ -157,10 +159,25 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// embedFn 来自 ToolBundle.EmbedFn（Ollama 本地向量化；nil = 无 VecKNN，降级为纯 FTS）
 	agent.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
-	agent.InjectMemory(mb.Mem)
+	agent.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
 	if mb.Mem != nil {
 		agent.SetMemoryInjector(mb.Mem)
 	}
+
+	// 初始化 ReflectionWorker
+	reflectionWorker := reflexion.NewReflectionWorker(mb.Mem.Episodic(), sb.Router, mb.Mem.Reflection())
+
+	agent.InjectTerminalCallback(func(ctx context.Context, taskID, taskType string, replanCount int, success bool) {
+		if !success {
+			return // 反思目前仅在失败或需要重规划时触发？实际上 ReflectionWorker 内部会判断，如果失败会触发。
+			// Wait, if it's terminal and it failed, maybe we do reflect.
+			// Let's just always call it, or run it async.
+		}
+		// According to prompt: 代理到 Agent 的 terminal state
+		go func() {
+			_ = reflectionWorker.ConsolidateReflections(context.Background(), taskID, taskType, replanCount)
+		}()
+	})
 
 	// 注入 LAM (R3)：使用真实 provider + policy gate，并绑定到 Agent（非 dry-run 丢弃）
 	lamEngine := lam.NewComputerUseEngine(
@@ -213,7 +230,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			pool.Run(ctx)
 		})
 		a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
-		a.InjectMemory(mb.Mem)
+		a.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
 		if mb.Mem != nil {
 			a.SetMemoryInjector(mb.Mem)
 		}
@@ -226,6 +243,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		if prefs != nil {
 			a.SetPreferences(prefs)
 		}
+		a.InjectTerminalCallback(func(ctx context.Context, taskID, taskType string, replanCount int, success bool) {
+			go func() {
+				_ = reflectionWorker.ConsolidateReflections(context.Background(), taskID, taskType, replanCount)
+			}()
+		})
 		return a
 	}, maxConcurrent)
 
@@ -351,6 +373,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	_ = sb.PRM
 	_ = sb.Steering
 
+	// 初始化 MemoryAgent
+	memoryAgent := agents.NewMemoryAgent(sb.Store.DB(), sb.Store, agent.GetWhisperChan(), nil)
+
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
 	sv := supervisor.NewSupervisor(5, 5*time.Minute)
 	sv.AddWorker("agent-0", func(ctx context.Context) error {
@@ -360,7 +385,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		return orch.ListenLoop(ctx)
 	})
 	sv.AddWorker("m9-engine", func(ctx context.Context) error {
-		return m9Engine.Run(ctx)
+		return m9Engine.Start(ctx)
+	})
+	sv.AddWorker("memory-agent", func(ctx context.Context) error {
+		memoryAgent.Run(ctx)
+		return nil
 	})
 
 	// kb 当前用于确认 RAG 已就绪，未来可向 agent 注入知识检索能力

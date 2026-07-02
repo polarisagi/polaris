@@ -22,6 +22,10 @@ type MemorySystemImpl struct {
 }
 
 // NewMemorySystem 创建 MemorySystem facade。
+func NewMemorySystemFromMemImpl(mem *MemImpl) *MemorySystemImpl {
+	return &MemorySystemImpl{mem: mem}
+}
+
 func NewMemorySystem(store protocol.Store) *MemorySystemImpl {
 	return &MemorySystemImpl{mem: NewMemImpl(store)}
 }
@@ -32,7 +36,7 @@ func NewMemorySystemWithGraph(store protocol.Store, graph protocol.GraphTraverse
 }
 
 // Mem 返回底层四层 facade。
-func (ms *MemorySystemImpl) Mem() protocol.Memory { return ms.mem }
+func (ms *MemorySystemImpl) Mem() protocol.MemorySystem { return ms.mem }
 
 // Write 将 MemoryEntry 路由到对应记忆层。
 func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error {
