@@ -65,7 +65,7 @@ run_step "[10/12] 验证多架构交叉编译 (Linux, Windows, macOS)" "GOOS=lin
 
 run_step "[11/12] 验证生成的配置是否最新" "make gen-threshold-examples && git diff --exit-code configs/threshold-examples/"
 
-run_step "[12/12] 验证 Eval Harness Gate" "go run ./cmd/polaris eval --ci-gate"
+run_step "[12/12] 验证 Eval Harness Gate" "POLARIS_DATA_DIR=$(mktemp -d) go run ./cmd/polaris eval --ci-gate"
 
 echo ""
 echo "======================================"
