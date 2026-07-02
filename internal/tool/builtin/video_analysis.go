@@ -45,8 +45,16 @@ func makeExecuteVideoAnalysisFn(sandboxEnabled bool, bwrapPath string) sandbox.I
 			fpsArg := fmt.Sprintf("fps=1/%d", req.IntervalSec)
 			outPattern := filepath.Join(tmpDir, "%04d.jpg")
 
+			// 路径白名单收紧到 tmpDir（帧输出目录）；VideoURI 若为本地路径需额外放行其所在目录，
+			// 否则 ffmpeg 读不到输入文件。远程 URL 才放行网络，本地路径不需要、也不应该联网。
+			isRemote := strings.HasPrefix(req.VideoURI, "http://") || strings.HasPrefix(req.VideoURI, "https://")
+			allowedPaths := []string{tmpDir}
+			if !isRemote && req.VideoURI != "" {
+				allowedPaths = append(allowedPaths, filepath.Dir(req.VideoURI))
+			}
+
 			ffmpegArgs := []string{"-i", req.VideoURI, "-vf", fpsArg, outPattern}
-			_, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "ffmpeg", ffmpegArgs, "/", []string{"/"}, false, 60000, sandboxEnabled, bwrapPath)
+			_, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "ffmpeg", ffmpegArgs, tmpDir, allowedPaths, isRemote, 60000, sandboxEnabled, bwrapPath)
 
 			if err == nil {
 				entries, _ := os.ReadDir(tmpDir)

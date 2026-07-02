@@ -66,7 +66,11 @@ func makeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string)
 		// 1. 原始 unified diff（上限 1MB）
 		rawOut, err := runSandboxedArgv(ctx, protocol.CallerBuiltin, "git", diffArgs, workDir, []string{workDir}, false, 30000, sandboxEnabled, bwrapPath)
 		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "git_diff: exec failed", err)
+			// runSandboxedArgv 底层沙箱把 stdout/stderr 合并返回，rawOut 里就是 git 的
+			// 具体报错文本（如 "not a git repository"），带出来而不是只报一个空洞的
+			// "exit status N"，否则调用方排障时看不出失败原因。
+			return nil, apperr.Wrap(apperr.CodeInternal,
+				fmt.Sprintf("git_diff: failed: %s", strings.TrimSpace(string(rawOut))), err)
 		}
 		raw := string(rawOut)
 		truncated := false
