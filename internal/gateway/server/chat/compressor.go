@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"os"
+
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 
 	"github.com/polarisagi/polaris/internal/gateway/types"
@@ -218,6 +220,33 @@ func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []appty
 	if len(middle) == 0 {
 		// tail 已覆盖全部消息，无法进一步压缩
 		return msgs, skip, nil
+	}
+
+	// Stage 1: tool output pre-pruning
+	for i := range msgs {
+		msg := &msgs[i]
+		if msg.Role != "tool" && msg.Role != "user" {
+			continue
+		}
+		// Try to parse tool_result
+		if strings.Contains(msg.Content, "<tool_result") || msg.Role == "tool" {
+			if len(msg.Content) > 4000 && c.db != nil {
+				// Offload
+				id := fmt.Sprintf("tr_%s_%d", sessionID, time.Now().UnixNano())
+				// Assume vfsBase is stored in sysadmin/vfs logic, but we can just use "vfs" folder in CWD or pass via env
+				// Actually, we shouldn't rely on vfsBase if it's not provided.
+				// But we need to write to VFS. Let's just create "vfs" dir in CWD for now.
+				_ = os.MkdirAll("vfs", 0755)
+				fullPath := "vfs/" + id
+				if err := os.WriteFile(fullPath, []byte(msg.Content), 0644); err == nil {
+					msg.Content = fmt.Sprintf("[tool output too long, offloaded to %s]", id)
+					ev, _ := protocol.NewOutboxEvent(protocol.TopicSemanticCompress, "compress", map[string]string{"vfs_id": id}, "semantic_compress:error_stack:"+id)
+
+					q := "INSERT INTO outbox (target_engine, operation, scope, payload, idempotency_key, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)"
+					_, _ = c.db.ExecContext(ctx, q, ev.TargetEngine, ev.Operation, "error_stack", ev.Payload, ev.IdempotencyKey, time.Now().UnixMilli())
+				}
+			}
+		}
 	}
 
 	summaryBudget := calcSummaryBudget(middle)

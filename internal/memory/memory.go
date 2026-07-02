@@ -133,11 +133,11 @@ func NewMemImplFull(store protocol.Store, graph protocol.GraphTraverser, cogniti
 		sqlRefl := memstore.NewSQLReflectionMem(db)
 		m.reflection = sqlRefl
 		m.working = memstore.NewWorkingMemWithDB(db)
-		m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, nil, sqlRefl, cognitive, m.semantic)
+		m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, memstore.NewDurativeMemoryManager(m.episodic, nil, store), sqlRefl, cognitive, m.semantic)
 		return m
 	}
 	m.reflection = memstore.NewReflectionMem(store)
-	m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, nil, nil, cognitive, m.semantic)
+	m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, memstore.NewDurativeMemoryManager(m.episodic, nil, store), nil, cognitive, m.semantic)
 	return m
 }
 
@@ -152,7 +152,7 @@ func NewMemImplWithDB(store protocol.Store, db protocol.SQLQuerier) *MemImpl {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
 		m.reflection = sqlRefl
 		m.working = memstore.NewWorkingMemWithDB(db)
-		m.retriever = memretrieval.NewHybridRetrieverFull(store, nil, nil, sqlRefl)
+		m.retriever = memretrieval.NewHybridRetrieverFull(store, nil, memstore.NewDurativeMemoryManager(m.episodic, nil, store), sqlRefl)
 	}
 	return m
 }

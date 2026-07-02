@@ -180,7 +180,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 
 	// 第 5 路（temporal 查询激活）：DurativeMemory 持续性记忆簇
 	var durativeResults []types.ScoredFragment
-	if scope.Type == "memory" && hr.durative != nil && ClassifyQuery(query) == QueryTypeTemporal {
+	if scope.Type == "memory" && hr.durative != nil && GlobalSemanticClassifier.ClassifyQuerySemantic(ctx, query, hr.embedder) == QueryTypeTemporal {
 		groups := hr.durative.RetrieveGroups(ctx, query, 5)
 		for _, g := range groups {
 			content := g.Label + ": " + g.Summary

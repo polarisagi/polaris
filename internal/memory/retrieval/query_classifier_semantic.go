@@ -15,6 +15,8 @@ type SemanticQueryClassifier struct {
 }
 
 // NewSemanticQueryClassifier 创建一个语义分类器
+var GlobalSemanticClassifier = NewSemanticQueryClassifier()
+
 func NewSemanticQueryClassifier() *SemanticQueryClassifier {
 	return &SemanticQueryClassifier{}
 }

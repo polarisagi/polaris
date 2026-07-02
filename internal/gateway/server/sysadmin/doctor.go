@@ -1,6 +1,7 @@
 package sysadmin
 
 import (
+	"github.com/polarisagi/polaris/internal/memory/graph"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -103,4 +104,13 @@ func (h *SysAdminHandler) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 		"ok":     allOK,
 		"checks": checks,
 	})
+}
+
+func (h *SysAdminHandler) HandleGetMMDCanvas(w http.ResponseWriter, r *http.Request) {
+	canvas := graph.NewTaskMermaidCanvas()
+	// Currently it might be empty if we just instantiate it, but we expose the endpoint.
+	// We can hook it up later.
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(canvas.Render()))
 }
