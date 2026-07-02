@@ -148,8 +148,9 @@ func TestMCPClient_Dispatch_ServerRequest(t *testing.T) {
 
 func TestMCPClient_ConnectStdio(t *testing.T) {
 	cfg := MCPClientConfig{
-		Transport: MCPStdio,
-		Command:   "/bin/cat",
+		Transport:     MCPStdio,
+		Command:       "/bin/cat",
+		SandboxPolicy: "none",
 	}
 	client := NewMCPClient(cfg, nil)
 	err := client.Connect(context.Background())
