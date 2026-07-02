@@ -333,8 +333,11 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	})
 	slog.Info("polaris: per-message extractor registered")
 
-	// ─── §6.7 ForgettingManager（M5 §5 TTL 30d + Q-Learning 效用衰减 0.01/day）
-	forgettingMgr := consolidation.NewForgettingManager(sb.Store, 0.01)
+	var cogn protocol.CognitiveSearcher
+	if sb.SurrealStore != nil {
+		cogn = &surrealCognAdapter{s: sb.SurrealStore}
+	}
+	forgettingMgr := consolidation.NewForgettingManager(sb.Store, cogn, 0.01)
 	coldArchiver := consolidation.NewColdArchiver(sb.Store)
 	go func() {
 		forgettingTicker := time.NewTicker(6 * time.Hour)

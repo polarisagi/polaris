@@ -2,12 +2,12 @@ package consolidation
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/memory/testutil"
-
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -64,7 +64,7 @@ func TestConsolidationPipeline(t *testing.T) {
 	}
 
 	// Test ForgettingManager
-	fm := NewForgettingManager(store, 0.01)
+	fm := NewForgettingManager(store, nil, 0.01)
 	fm.qLearner.Update("state", 1.0)
 
 	_ = store.Put(ctx, []byte("events:e100"), []byte(`{"id":"e100","topic":"memory","salience":0.01,"occurred_at":0}`))
@@ -98,4 +98,43 @@ func (m *mockSkillRegistry) Get(ctx context.Context, name string, version string
 func (m *mockSkillRegistry) Delete(ctx context.Context, name string) error { return nil }
 func (m *mockSkillRegistry) Deprecate(ctx context.Context, name string, alternative string, reason string) error {
 	return nil
+}
+
+type mockCognitiveForgetting struct {
+	deletedFTS []string
+	deletedVec []string
+}
+
+func (m *mockCognitiveForgetting) FTSIndex(docID, text string) error { return nil }
+func (m *mockCognitiveForgetting) FTSDelete(docID string) error {
+	m.deletedFTS = append(m.deletedFTS, docID)
+	return nil
+}
+func (m *mockCognitiveForgetting) VecUpsert(id string, embedding []float32) error { return nil }
+func (m *mockCognitiveForgetting) VecDelete(id string) error {
+	m.deletedVec = append(m.deletedVec, id)
+	return nil
+}
+func (m *mockCognitiveForgetting) VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error) {
+	return nil, nil
+}
+func (m *mockCognitiveForgetting) FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error) {
+	return nil, nil
+}
+
+func TestForgettingManager_DecayAndArchive(t *testing.T) {
+	mockStore := testutil.NewMockStore()
+	mockCogn := &mockCognitiveForgetting{}
+
+	fm := NewForgettingManager(mockStore, mockCogn, 0.01)
+
+	// test UpdateDecay value
+	// ageHours = 24 * 35 = 840
+	// salience = 0.5
+	// decay = 0.5 * exp(-0.01 * 840 / 24) = 0.5 * exp(-0.35)
+	decay := fm.UpdateDecay(0.5, 24*35)
+	expected := 0.5 * math.Exp(-0.35)
+	if math.Abs(decay-expected) > 1e-9 {
+		t.Fatalf("decay mismatch: got %v, expected %v", decay, expected)
+	}
 }

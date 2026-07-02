@@ -209,3 +209,6 @@ func (a *pluginCognIndexAdapter) FTSIndex(docID, text string) error {
 func (a *pluginCognIndexAdapter) VecUpsert(id string, embedding []float32) error {
 	return a.s.VecUpsert(id, embedding)
 }
+func (a *surrealCognAdapter) VecDelete(id string) error {
+	return a.s.VecDelete(id)
+}

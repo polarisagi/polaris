@@ -1,6 +1,8 @@
 package consolidation
 
 import (
+	"math"
+
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 
 	"context"
@@ -909,6 +911,7 @@ func (p *ConsolidationPipeline) ruleSynthesizeProfile(
 // store 用于持久化操作（扫描事件、写入归档标记）。
 type ForgettingManager struct {
 	store             protocol.Store
+	cognitive         protocol.CognitiveSearcher
 	decayRate         float64 // 0.01/日
 	salienceThreshold float64
 	qLearner          *QLearner
@@ -916,9 +919,10 @@ type ForgettingManager struct {
 }
 
 // NewForgettingManager 创建遗忘管理器，注入 Store 依赖。
-func NewForgettingManager(store protocol.Store, decayRate float64) *ForgettingManager {
+func NewForgettingManager(store protocol.Store, cognitive protocol.CognitiveSearcher, decayRate float64) *ForgettingManager {
 	return &ForgettingManager{
 		store:             store,
+		cognitive:         cognitive,
 		decayRate:         decayRate,
 		salienceThreshold: 0.15,
 		qLearner:          NewQLearner(0.1, 0.9),
@@ -929,7 +933,7 @@ func NewForgettingManager(store protocol.Store, decayRate float64) *ForgettingMa
 // UpdateDecay 更新衰减权重。
 // ageHours = now - timestamp; DecayWeight = salience × exp(-decayRate × ageHours/24).
 func (fm *ForgettingManager) UpdateDecay(salience float64, ageHours float64) float64 {
-	decay := salience * exp(-fm.decayRate*ageHours/24.0)
+	decay := salience * math.Exp(-fm.decayRate*ageHours/24.0)
 	return decay
 }
 
@@ -951,27 +955,70 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 }
 
 func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQLQuerier) error {
-	rows, err := db.QueryContext(ctx, "SELECT id, salience, occurred_at FROM events WHERE topic IN ('memory.openclaw', 'memory')")
+	rows, err := db.QueryContext(ctx, "SELECT id, salience, occurred_at, event_uuid FROM episodic_events WHERE archived = 0 AND salience < 1.0")
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "ForgettingManager.cleanupWithSQL", err)
 	}
 	defer rows.Close()
 
+	var toUpdate []struct {
+		ID          int64
+		DecayWeight float64
+	}
+	var toArchive []struct {
+		ID        int64
+		EventUUID string
+	}
+
+	now := time.Now().UnixMilli()
 	for rows.Next() {
-		var id string
+		var id int64
 		var salience float64
 		var occurredAt int64
-		if err := rows.Scan(&id, &salience, &occurredAt); err != nil {
+		var eventUUID string
+		if err := rows.Scan(&id, &salience, &occurredAt, &eventUUID); err != nil {
 			continue
 		}
 
-		ageHours := float64(time.Now().UnixMilli()-occurredAt) / 3600000.0
+		ageHours := float64(now-occurredAt) / 3600000.0
 		decayWeight := fm.UpdateDecay(salience, ageHours)
 
 		if decayWeight < fm.salienceThreshold {
-			fm.processForgettableItem(ctx, id, decayWeight, ageHours)
+			if ageHours > 30*24 {
+				toArchive = append(toArchive, struct {
+					ID        int64
+					EventUUID string
+				}{id, eventUUID})
+			} else {
+				toUpdate = append(toUpdate, struct {
+					ID          int64
+					DecayWeight float64
+				}{id, decayWeight})
+			}
 		}
 	}
+	rows.Close()
+
+	for _, item := range toUpdate {
+		_, err := db.ExecContext(ctx, "UPDATE episodic_events SET decay_weight=? WHERE id=?", item.DecayWeight, item.ID)
+		if err != nil {
+			slog.Warn("ForgettingManager.cleanupWithSQL: update decay_weight failed", "id", item.ID, "err", err)
+		}
+	}
+
+	for _, item := range toArchive {
+		// archived=1 + archive_offset 填充
+		_, err := db.ExecContext(ctx, "UPDATE episodic_events SET archived=1, archive_offset=? WHERE id=?", now, item.ID)
+		if err != nil {
+			slog.Warn("ForgettingManager.cleanupWithSQL: archive failed", "id", item.ID, "err", err)
+		}
+		// 同步 cognitive.FTSDelete/VecDelete
+		if fm.cognitive != nil && item.EventUUID != "" {
+			_ = fm.cognitive.FTSDelete("ep_" + item.EventUUID)
+			_ = fm.cognitive.VecDelete("ep_" + item.EventUUID)
+		}
+	}
+
 	return nil
 }
 
@@ -1012,21 +1059,6 @@ func (fm *ForgettingManager) cleanupWithKV(ctx context.Context) error {
 		return apperr.Wrap(apperr.CodeInternal, "PeriodicCleanup: 迭代失败", iter.Err())
 	}
 	return nil
-}
-
-func (fm *ForgettingManager) processForgettableItem(ctx context.Context, id string, decayWeight float64, ageHours float64) {
-	tombstoneKey := fmt.Appendf(nil, "forgettable:%s", id)
-	tombstoneVal := fmt.Appendf(nil, `{"id":"%s","decay_weight":%.4f,"marked_at":%d}`, id, decayWeight, time.Now().UnixMilli())
-	_ = fm.store.Put(ctx, tombstoneKey, tombstoneVal)
-
-	if ageHours > 30*24 {
-		if val, getErr := fm.store.Get(ctx, fmt.Appendf(nil, "events:%s", id)); getErr == nil {
-			archiveKey := fmt.Appendf(nil, "archive:episodic:%s", id)
-			_ = fm.store.Put(ctx, archiveKey, val)
-			_ = fm.store.Delete(ctx, fmt.Appendf(nil, "events:%s", id))
-			_ = fm.store.Delete(ctx, tombstoneKey)
-		}
-	}
 }
 
 func (fm *ForgettingManager) processForgettableItemKV(ctx context.Context, id string, decayWeight float64, ageHours float64, key, val []byte) {
@@ -1124,26 +1156,13 @@ func (ca *ColdArchiver) PhysicalCompact() error {
 	}
 
 	// 对支持 SQL 的引擎触发 VACUUM——通过 Txn 内的 Raw SQL 能力
-	if ca.store.Capabilities().SupportsSQL {
-		_ = ca.store.Txn(ctx, func(tx protocol.Transaction) error {
-			// 尝试在 Txn 内执行 VACUUM-like 操作（引擎特定）
-			// SQLite 引擎可通过额外接口执行；纯 KV 引擎忽略
-			return nil
-		})
+	if sqlStore, ok := ca.store.(protocol.SQLQuerier); ok {
+		// SQLite 引擎可通过额外接口执行
+		_, _ = sqlStore.ExecContext(ctx, "PRAGMA incremental_vacuum(256)")
 	}
 
 	_ = deleted
 	return nil
-}
-
-func exp(x float64) float64 {
-	result := 1.0
-	term := 1.0
-	for i := 1; i < 20; i++ {
-		term *= x / float64(i)
-		result += term
-	}
-	return result
 }
 
 func computeMaxTaint(events []types.ScoredEvent) types.TaintLevel {

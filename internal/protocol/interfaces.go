@@ -853,6 +853,7 @@ type CognitiveSearcher interface {
 	FTSIndex(docID, text string) error
 	FTSDelete(docID string) error
 	VecUpsert(id string, embedding []float32) error
+	VecDelete(id string) error
 	VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error)
 	FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error)
 }
