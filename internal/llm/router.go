@@ -13,7 +13,6 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/trace"
 
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -379,16 +378,11 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts 
 		if ir.outboxWriter == nil {
 			return
 		}
-		payload, _ := json.Marshal(map[string]string{
+		ev, _ := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "provider_recovery", map[string]string{
 			"event_type":    "m4_provider_recovery",
 			"provider_name": providerName,
-		})
-		_ = ir.outboxWriter.Write(context.Background(), protocol.OutboxEntry{
-			TargetEngine:   "agent_kernel",
-			Operation:      "provider_recovery",
-			Payload:        payload,
-			IdempotencyKey: "recovery:" + providerName + ":" + strconv.FormatInt(time.Now().Unix(), 10),
-		})
+		}, "recovery:"+providerName+":"+strconv.FormatInt(time.Now().Unix(), 10))
+		_ = ir.outboxWriter.Write(context.Background(), ev)
 	})
 	return ir
 }

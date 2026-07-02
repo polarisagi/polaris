@@ -177,17 +177,13 @@ func makeSkillGenerateFn(outbox protocol.OutboxWriter) sandbox.InProcessFn {
 		// OutboxWorker 将此事件路由到 GapFillWorker（m9_capability_gap handler）。
 		// outbox 为 nil 时（LogicCollapse 功能未激活），降级为 no-op。
 		if outbox != nil {
-			payload, _ := json.Marshal(map[string]string{
+			ev, _ := protocol.NewOutboxEvent(protocol.TopicLogicCollapse, "trigger", map[string]string{
 				"task_type": args.TaskType,
 				"reasoning": args.Reasoning,
 				"trigger":   "agent_explicit",
-			})
-			if err := outbox.Write(ctx, protocol.OutboxEntry{
-				TargetEngine: "m9_logic_collapse",
-				Operation:    "trigger",
-				Scope:        args.TaskType,
-				Payload:      payload,
-			}); err != nil {
+			}, "")
+			ev.Scope = args.TaskType
+			if err := outbox.Write(ctx, ev); err != nil {
 				// 非致命：outbox 写入失败不阻断工具响应
 				return []byte(fmt.Sprintf(`{"status":"queued_with_warning","message":"signal sent but outbox write failed: %s"}`, err.Error())), nil
 			}

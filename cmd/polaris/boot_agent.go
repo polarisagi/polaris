@@ -97,10 +97,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				_ = blackboard.ResumeFromSuspended(ctx, id)
 			}
 		}
-		_ = sb.Outbox.Write(ctx, protocol.OutboxEntry{
-			Operation: "killswitch_recovery",
-			Payload:   []byte(`{"status": "recovered"}`),
-		})
+		ev, _ := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery", map[string]string{"status": "recovered"}, "")
+		_ = sb.Outbox.Write(ctx, ev)
 	})
 
 	// 热注入 blackboard 到 ProviderRecoveryHandler（bootTools 时尚未装配）

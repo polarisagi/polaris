@@ -17,6 +17,7 @@ import (
 )
 
 var ErrVersionStale = errors.New("outbox: version stale")
+var ErrUnknownTargetEngine = errors.New("outbox: unknown target engine")
 
 // OutboxWorker — 跨引擎投递 Worker。
 // 消费 M2 outbox 表，将投影写入目标引擎（[Storage-SQLite] / [Storage-SurrealDB-Core]）。
@@ -248,6 +249,13 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		return nil
 	}
 
+	if errors.Is(err, ErrUnknownTargetEngine) {
+		_, _ = w.db.ExecContext(ctx,
+			"UPDATE outbox SET status='dead', processed_at=?, error=? WHERE id=?",
+			now, err.Error(), record.ID)
+		return nil
+	}
+
 	newAttempts := record.Attempts + 1
 	if newAttempts >= w.maxRetries || record.CrashRecoveryCount >= 3 {
 		_, _ = w.db.ExecContext(ctx,
@@ -309,7 +317,9 @@ func (w *OutboxWorker) Process(ctx context.Context, record *OutboxRecord) error 
 
 	handler, ok := w.handlers[record.TargetEngine]
 	if !ok {
-		return nil
+		metrics.GlobalOutboxDeadLetterTotal.Add(1)
+		slog.Error("outbox: unknown target engine, marking dead", "engine", record.TargetEngine, "id", record.ID)
+		return ErrUnknownTargetEngine
 	}
 	return handler(ctx, record)
 }

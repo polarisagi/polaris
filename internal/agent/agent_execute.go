@@ -361,19 +361,14 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				CreatedAt: time.Now(),
 			})
 			if a.outboxWriter != nil {
-				evPayload, _ := json.Marshal(types.Event{
+				ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 					ID:        eventID,
 					Type:      "task_perceived",
 					TaskID:    a.sCtx.SessionID,
 					Payload:   []byte(content),
 					CreatedAt: time.Now(),
-				})
-				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
-					TargetEngine:   "episodic",
-					Operation:      "project",
-					Payload:        evPayload,
-					IdempotencyKey: a.sCtx.SessionID + ":perceive:" + a.sCtx.AgentID,
-				})
+				}, a.sCtx.SessionID+":perceive:"+a.sCtx.AgentID)
+				_ = a.outboxWriter.Write(ctx, ev)
 			}
 		}
 
@@ -399,19 +394,14 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				CreatedAt: time.Now(),
 			})
 			if a.outboxWriter != nil {
-				evPayload, _ := json.Marshal(types.Event{
+				ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 					ID:        eventID,
 					Type:      "plan_generated",
 					TaskID:    a.sCtx.SessionID,
 					Payload:   []byte(content),
 					CreatedAt: time.Now(),
-				})
-				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
-					TargetEngine:   "episodic",
-					Operation:      "project",
-					Payload:        evPayload,
-					IdempotencyKey: a.sCtx.SessionID + ":plan:" + a.sCtx.AgentID,
-				})
+				}, a.sCtx.SessionID+":plan:"+a.sCtx.AgentID)
+				_ = a.outboxWriter.Write(ctx, ev)
 			}
 		}
 
@@ -432,28 +422,19 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				CreatedAt: time.Now(),
 			})
 			if a.outboxWriter != nil {
-				evPayload, _ := json.Marshal(types.Event{
+				ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 					ID:        eventID,
 					Type:      "reflection_completed",
 					TaskID:    a.sCtx.SessionID,
 					Payload:   []byte(content),
 					CreatedAt: time.Now(),
-				})
-				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
-					TargetEngine:   "episodic",
-					Operation:      "project",
-					Payload:        evPayload,
-					IdempotencyKey: a.sCtx.SessionID + ":reflect:" + a.sCtx.AgentID,
-				})
+				}, a.sCtx.SessionID+":reflect:"+a.sCtx.AgentID)
+				_ = a.outboxWriter.Write(ctx, ev)
 			}
 			// 触发 Episodic → Semantic 4 阶段记忆蒸馏（ConsolidationPipeline，M5 §4）
 			if a.outboxWriter != nil && a.sCtx.SessionID != "" {
-				consolidatePayload, _ := json.Marshal(map[string]string{"session_id": a.sCtx.SessionID})
-				_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
-					Operation:      "memory_consolidate",
-					Payload:        consolidatePayload,
-					IdempotencyKey: a.sCtx.SessionID + ":consolidate",
-				})
+				ev, _ := protocol.NewOutboxEvent(protocol.TopicMemoryConsolidate, "memory_consolidate", map[string]string{"session_id": a.sCtx.SessionID}, a.sCtx.SessionID+":consolidate")
+				_ = a.outboxWriter.Write(ctx, ev)
 			}
 		}
 	} else {
@@ -493,19 +474,14 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 					CreatedAt: time.Now(),
 				})
 				if a.outboxWriter != nil {
-					evPayload, _ := json.Marshal(types.Event{
+					ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 						ID:        eventID,
 						Type:      "execution_completed",
 						TaskID:    a.sCtx.SessionID,
 						Payload:   a.sCtx.ExecuteResult,
 						CreatedAt: time.Now(),
-					})
-					_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
-						TargetEngine:   "episodic",
-						Operation:      "project",
-						Payload:        evPayload,
-						IdempotencyKey: a.sCtx.SessionID + ":exec:" + a.sCtx.AgentID,
-					})
+					}, a.sCtx.SessionID+":exec:"+a.sCtx.AgentID)
+					_ = a.outboxWriter.Write(ctx, ev)
 				}
 			}
 			// 业务执行失败会触发 ExecuteFail，同样不抛出以免阻断状态机
@@ -1177,16 +1153,11 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 		if sessionID == "" && a.sCtx != nil {
 			sessionID = a.sCtx.SessionID
 		}
-		payload, _ := json.Marshal(map[string]any{
+		outboxEv, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicExtract, "episodic_extract", map[string]any{
 			"session_id": sessionID,
 			"event_type": string(ev.Type),
 			"content":    string(ev.Payload),
-		})
-		_ = a.outboxWriter.Write(ctx, protocol.OutboxEntry{
-			TargetEngine:   "memory",
-			Operation:      "episodic_extract",
-			Payload:        payload,
-			IdempotencyKey: ev.ID + ":extract",
-		})
+		}, ev.ID+":extract")
+		_ = a.outboxWriter.Write(ctx, outboxEv)
 	}
 }

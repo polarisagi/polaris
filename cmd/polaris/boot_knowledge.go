@@ -9,6 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/protocol"
 
 	"github.com/polarisagi/polaris/internal/extension/native"
 	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
@@ -67,7 +68,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		slog.Info("polaris: GraphRAG pipeline disabled by FeatureGate (<8GB VPS or memory pressure, 1024MB min)")
 	}
 	if graphPipeline != nil {
-		sb.Outbox.RegisterHandler("graph_build", func(ctx context.Context, rec *store.OutboxRecord) error {
+		sb.Outbox.RegisterHandler(protocol.TopicGraphBuild, func(ctx context.Context, rec *store.OutboxRecord) error {
 			var payload struct {
 				DocID string `json:"doc_id"`
 			}

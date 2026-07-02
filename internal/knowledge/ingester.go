@@ -180,11 +180,8 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 
 	// 异步触发 GraphBuild（Outbox 解耦）
 	if p.outboxWriter != nil {
-		payload, _ := json.Marshal(map[string]string{"doc_id": doc.Ref.URI})
-		_ = p.outboxWriter.Write(ctx, protocol.OutboxEntry{
-			TargetEngine: graphrag.EventTypeRAGDocIngested,
-			Payload:      payload,
-		})
+		ev, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "", map[string]string{"doc_id": doc.Ref.URI}, "")
+		_ = p.outboxWriter.Write(ctx, ev)
 	}
 
 	return tree, nil

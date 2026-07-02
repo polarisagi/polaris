@@ -258,13 +258,9 @@ func prunePartsToolOutputs(parts []any, maxBytes int, offloader ToolRefOffloader
 				if err := offloader.Offload(id, rawData); err == nil {
 					// 若卸载的内容疑似为错误堆栈（启发式检测），触发语义压缩
 					if outboxWriter != nil && looksLikeErrorStack(rawData) {
-						_ = outboxWriter.Write(context.Background(), protocol.OutboxEntry{
-							TargetEngine:   "semantic_compress",
-							Operation:      "compress",
-							Scope:          "error_stack",
-							Payload:        []byte(`{"vfs_id":"` + id + `"}`),
-							IdempotencyKey: "semantic_compress:error_stack:" + id,
-						})
+						ev, _ := protocol.NewOutboxEvent(protocol.TopicSemanticCompress, "compress", map[string]string{"vfs_id": id}, "semantic_compress:error_stack:"+id)
+						ev.Scope = "error_stack"
+						_ = outboxWriter.Write(context.Background(), ev)
 					}
 				}
 			}

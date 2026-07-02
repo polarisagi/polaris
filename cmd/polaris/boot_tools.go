@@ -208,13 +208,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// ─── GapFillWorker（M9 能力缺口探测，OutboxWorker handler）────────────
 	gapFillWorker := curriculum.NewGapFillWorker(sb.Store.DB(), sb.Router, toolReg)
-	sb.Outbox.RegisterHandler("m9_capability_gap", gapFillWorker.HandleOutbox)
+	sb.Outbox.RegisterHandler(protocol.TopicCapabilityGap, gapFillWorker.HandleOutbox)
 	slog.Info("polaris: GapFillWorker registered to outbox for m9_capability_gap")
 
 	// ─── M1 CircuitBreaker 恢复 handler ─────────────────────────────────────
 	// vault/board 暂为 nil（启动时尚未装配），由 bootAgent 通过 SetBlackboard/SetPIIVault 热注入。
 	recoveryHandler := agent.NewProviderRecoveryHandler(nil, nil)
-	sb.Outbox.RegisterHandler("m1_provider_recovered", func(ctx context.Context, rec *store.OutboxRecord) error {
+	sb.Outbox.RegisterHandler(protocol.TopicProviderRecovered, func(ctx context.Context, rec *store.OutboxRecord) error {
 		return recoveryHandler.Handle(ctx, rec.Payload)
 	})
 	slog.Info("polaris: ProviderRecoveryHandler registered to outbox for m1_provider_recovered")
@@ -232,16 +232,16 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		return "", nil
 	}
 	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), sb.Layout.Workspace)
-	sb.Outbox.RegisterHandler("semantic_compress", semanticCompressHandler.Handle)
+	sb.Outbox.RegisterHandler(protocol.TopicSemanticCompress, semanticCompressHandler.Handle)
 
 	var extCogn connector.SurrealWriterInterface = dummySurreal{}
 	if sb.SurrealStore != nil {
 		extCogn = &surrealCognAdapter{s: sb.SurrealStore}
 	}
 	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, protocol.LLMInferFunc(llmInfer), nil)
-	sb.Outbox.RegisterHandler("extension_librarian", extensionLibrarianHandler.Handle)
+	sb.Outbox.RegisterHandler(protocol.TopicExtensionLibrarian, extensionLibrarianHandler.Handle)
 
-	sb.Outbox.RegisterHandler("episodic", consolidation.EpisodicProjectorHandler(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey))
+	sb.Outbox.RegisterHandler(protocol.TopicEpisodicProject, consolidation.EpisodicProjectorHandler(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
 
 	// B4-F4: 热注入 SkillRegistry到 GapFillWorker
@@ -311,7 +311,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		consolGate = sb.AutoConf.Gate
 	}
 	consolidationPipeline.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, consolGuard, consolGate))
-	sb.Outbox.RegisterHandler("memory_consolidate", func(ctx context.Context, rec *store.OutboxRecord) error {
+	sb.Outbox.RegisterHandler(protocol.TopicMemoryConsolidate, func(ctx context.Context, rec *store.OutboxRecord) error {
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}
@@ -328,7 +328,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// §6.8 PerMessageExtractor（每条消息立即提取实体，M5 准实时路径）──────────
 	perMsgExtractor := consolidation.NewPerMessageExtractor(consolidationPipeline)
-	sb.Outbox.RegisterHandler("episodic_extract", func(ctx context.Context, rec *store.OutboxRecord) error {
+	sb.Outbox.RegisterHandler(protocol.TopicEpisodicExtract, func(ctx context.Context, rec *store.OutboxRecord) error {
 		return perMsgExtractor.HandleOutboxRecord(ctx, rec.Payload)
 	})
 	slog.Info("polaris: per-message extractor registered")

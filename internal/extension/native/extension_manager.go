@@ -358,13 +358,9 @@ func MakeExtensionInstallFn(extRepo protocol.ExtensionRepository, client *market
 
 		// 投递 Outbox 任务给 ExtensionLibrarian 异步处理
 		if outboxWriter != nil {
-			_ = outboxWriter.Write(ctx, protocol.OutboxEntry{
-				TargetEngine:   "extension_librarian",
-				Operation:      "index_extension",
-				Scope:          "extension:" + args.ID,
-				Payload:        []byte(`{"extension_id":"` + args.ID + `"}`),
-				IdempotencyKey: "index_ext_" + args.ID,
-			})
+			ev, _ := protocol.NewOutboxEvent(protocol.TopicExtensionLibrarian, "index_extension", map[string]string{"extension_id": args.ID}, "index_ext_"+args.ID)
+			ev.Scope = "extension:" + args.ID
+			_ = outboxWriter.Write(ctx, ev)
 		}
 
 		result := map[string]string{

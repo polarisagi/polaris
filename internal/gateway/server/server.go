@@ -1117,17 +1117,12 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	if s.outboxWriter != nil {
 		// 异步路由：写入 Outbox，由 OutboxWorker 分发到目标 Agent 进程。
 		// OutboxWorker 需注册 operation="agent_interrupt" 的处理器（见 pkg/substrate/storage/outbox_worker.go）。
-		payload, _ := json.Marshal(map[string]any{
+		ev, _ := protocol.NewOutboxEvent(protocol.TopicAgentInterrupt, "agent_interrupt", map[string]any{
 			"task_id": taskID,
 			"request": interruptReq,
-		})
-		if err := s.outboxWriter.Write(r.Context(), protocol.OutboxEntry{
-			TargetEngine:   "agent",
-			Operation:      "agent_interrupt",
-			Scope:          taskID,
-			Payload:        payload,
-			IdempotencyKey: "interrupt:" + taskID + ":" + req.Action,
-		}); err != nil {
+		}, "interrupt:"+taskID+":"+req.Action)
+		ev.Scope = taskID
+		if err := s.outboxWriter.Write(r.Context(), ev); err != nil {
 			slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call", "err", err)
 		}
 	} else {

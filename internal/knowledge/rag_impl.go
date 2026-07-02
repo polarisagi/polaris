@@ -113,22 +113,12 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 	}
 
 	if p.outboxWriter != nil {
-		evPayload, _ := json.Marshal(map[string]string{"doc_id": docNode.ID})
 		// 触发 LLM 摘要生成
-		_ = p.outboxWriter.Write(ctx, protocol.OutboxEntry{
-			TargetEngine:   graphrag.EventTypeRAGDocSummaryNeeded,
-			Operation:      "generate",
-			Payload:        evPayload,
-			IdempotencyKey: "summary:" + docNode.ID,
-		})
+		ev1, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID}, "summary:"+docNode.ID)
+		_ = p.outboxWriter.Write(ctx, ev1)
 		// 触发知识图谱构建（GraphBuildOutboxHandler 监听此事件）
-		graphPayload, _ := json.Marshal(map[string]string{"doc_id": docNode.ID})
-		_ = p.outboxWriter.Write(ctx, protocol.OutboxEntry{
-			TargetEngine:   graphrag.EventTypeRAGDocIngested,
-			Operation:      "graph_build",
-			Payload:        graphPayload,
-			IdempotencyKey: "graph:" + docNode.ID,
-		})
+		ev2, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
+		_ = p.outboxWriter.Write(ctx, ev2)
 	} else {
 		go p.buildSummaryTree(context.Background(), docNode, db)
 	}
