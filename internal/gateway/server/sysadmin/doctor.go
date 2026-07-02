@@ -1,12 +1,13 @@
 package sysadmin
 
 import (
-	"github.com/polarisagi/polaris/internal/memory/graph"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"runtime"
+
+	"github.com/polarisagi/polaris/internal/memory/graph"
 )
 
 // GET /v1/doctor
@@ -112,5 +113,5 @@ func (h *SysAdminHandler) HandleGetMMDCanvas(w http.ResponseWriter, r *http.Requ
 	// We can hook it up later.
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(canvas.Render()))
+	_, _ = w.Write([]byte(canvas.Render()))
 }

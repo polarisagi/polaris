@@ -140,15 +140,24 @@ pub unsafe extern "C" fn surreal_fts_search(
             }
         };
 
-        let sanitized: Vec<DocScoreRow> = rows.iter().map(|r| {
-            let score = if r.score.is_nan() || r.score.is_infinite() {
-                eprintln!("[surreal_fts_search] invalid score {} for doc_id {}, setting to 0.0", r.score, r.doc_id);
-                0.0
-            } else {
-                r.score
-            };
-            DocScoreRow { doc_id: r.doc_id.clone(), score }
-        }).collect();
+        let sanitized: Vec<DocScoreRow> = rows
+            .iter()
+            .map(|r| {
+                let score = if r.score.is_nan() || r.score.is_infinite() {
+                    eprintln!(
+                        "[surreal_fts_search] invalid score {} for doc_id {}, setting to 0.0",
+                        r.score, r.doc_id
+                    );
+                    0.0
+                } else {
+                    r.score
+                };
+                DocScoreRow {
+                    doc_id: r.doc_id.clone(),
+                    score,
+                }
+            })
+            .collect();
         let json = serde_json::to_string(&sanitized).unwrap_or_else(|_| "[]".to_string());
         write_cstr(out_json, &json);
         SURREAL_OK

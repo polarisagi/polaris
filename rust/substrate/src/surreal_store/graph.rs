@@ -10,9 +10,10 @@ struct EdgeRow {
     to_id: String,
     weight: f64,
 }
-use super::{SurrealValue, 
-    SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK, ToIdRow,
-    ToIdWeightRow, VecRow, edge_record_key, encode_ids, encode_scored, get_store, write_cstr,
+use super::{
+    SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK,
+    SurrealValue, ToIdRow, ToIdWeightRow, VecRow, edge_record_key, encode_ids, encode_scored,
+    get_store, write_cstr,
 };
 
 // ─── surreal_graph_relate ─────────────────────────────────────────────────────

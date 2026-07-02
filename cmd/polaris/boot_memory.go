@@ -79,36 +79,7 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 	_ = probe.FeatureLocalEmbedding
 
 	// ─── G-1: SurrealDB mem 后端 boot 重放器 ─────────────────────────────────
-	if sb.SurrealStore != nil {
-		shouldReplay := false
-
-		statsJSON, err := sb.SurrealStore.Stats()
-		if err == nil {
-			var stats map[string]interface{}
-			if err := json.Unmarshal([]byte(statsJSON), &stats); err == nil {
-				backend, _ := stats["backend"].(string)
-				docCountF, _ := stats["fts_docs"].(float64)
-
-				if backend == "mem" {
-					shouldReplay = true
-				} else if docCountF == 0 {
-					var episodicCount int
-					if err := sb.Store.DB().QueryRow("SELECT COUNT(*) FROM episodic_events").Scan(&episodicCount); err == nil && episodicCount > 0 {
-						shouldReplay = true
-					}
-				}
-			}
-		} else {
-			slog.Warn("polaris: failed to get SurrealStore stats for replayer check", "err", err)
-		}
-
-		if shouldReplay {
-			replayer := retrieval.NewCognitiveReplayer(sb.Store.DB(), &surrealCognAdapter{s: sb.SurrealStore})
-			if err := replayer.Start(ctx); err != nil {
-				slog.Error("polaris: failed to start CognitiveReplayer", "err", err)
-			}
-		}
-	}
+	startCognitiveReplayerIfNeeded(ctx, sb)
 	// ───────────────────────────────────────────────────────────────────────
 
 	return &MemoryBundle{
@@ -177,4 +148,40 @@ func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 		}
 	}()
 	slog.Info("polaris: temporal expirer started", "interval", "1h")
+}
+
+func startCognitiveReplayerIfNeeded(ctx context.Context, sb *SubstrateBundle) {
+	if sb.SurrealStore == nil {
+		return
+	}
+
+	statsJSON, err := sb.SurrealStore.Stats()
+	if err != nil {
+		slog.Warn("polaris: failed to get SurrealStore stats for replayer check", "err", err)
+		return
+	}
+
+	var stats map[string]interface{}
+	if err := json.Unmarshal([]byte(statsJSON), &stats); err != nil {
+		return
+	}
+
+	backend, _ := stats["backend"].(string)
+	docCountF, _ := stats["fts_docs"].(float64)
+
+	shouldReplay := (backend == "mem")
+	if !shouldReplay && docCountF == 0 {
+		var episodicCount int
+		if err := sb.Store.DB().QueryRow("SELECT COUNT(*) FROM episodic_events").Scan(&episodicCount); err == nil && episodicCount > 0 {
+			shouldReplay = true
+		}
+	}
+
+	if shouldReplay {
+		slog.Info("polaris: starting cognitive replayer for surrogate index recovery")
+		replayer := retrieval.NewCognitiveReplayer(sb.Store.DB(), &surrealCognAdapter{s: sb.SurrealStore})
+		if err := replayer.Start(ctx); err != nil {
+			slog.Error("polaris: failed to start CognitiveReplayer", "err", err)
+		}
+	}
 }

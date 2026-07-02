@@ -180,15 +180,24 @@ pub(super) fn hex_to_bytes(s: &str) -> Vec<u8> {
 }
 
 pub(super) fn encode_scored(results: &[VecRow]) -> String {
-    let sanitized: Vec<VecRow> = results.iter().map(|r| {
-        let score = if r.score.is_nan() || r.score.is_infinite() {
-            eprintln!("surreal_store: invalid score {} for id {}, setting to 0.0", r.score, r.id);
-            0.0
-        } else {
-            r.score
-        };
-        VecRow { id: r.id.clone(), score }
-    }).collect();
+    let sanitized: Vec<VecRow> = results
+        .iter()
+        .map(|r| {
+            let score = if r.score.is_nan() || r.score.is_infinite() {
+                eprintln!(
+                    "surreal_store: invalid score {} for id {}, setting to 0.0",
+                    r.score, r.id
+                );
+                0.0
+            } else {
+                r.score
+            };
+            VecRow {
+                id: r.id.clone(),
+                score,
+            }
+        })
+        .collect();
     serde_json::to_string(&sanitized).unwrap_or_else(|_| "[]".to_string())
 }
 

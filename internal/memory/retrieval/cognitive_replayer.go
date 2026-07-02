@@ -69,15 +69,15 @@ func (cr *CognitiveReplayer) replayEpisodic(ctx context.Context) error {
 				rows.Close()
 				return err
 			}
-			
+
 			// According to schema, IDs are integers. We need to prefix them.
-			eventID := fmt.Sprintf("evt_%d", id) 
-			
+			eventID := fmt.Sprintf("evt_%d", id)
+
 			// FTSIndex
 			if err := cr.cognitive.FTSIndex(eventID, content); err != nil {
 				slog.WarnContext(ctx, "cognitive replayer: failed to index episodic FTS", "id", eventID, "err", err)
 			}
-			
+
 			// Vector
 			if len(embBlob) > 0 {
 				vec := DecodeFloat16(embBlob)
@@ -119,10 +119,10 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 				rows.Close()
 				return err
 			}
-			
+
 			docID := "sement_" + entityType + "_" + name
 			text := name + " " + description
-			
+
 			// FTSIndex
 			if err := cr.cognitive.FTSIndex(docID, text); err != nil {
 				slog.WarnContext(ctx, "cognitive replayer: failed to index semantic FTS", "id", docID, "err", err)
@@ -162,7 +162,7 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 				rows.Close()
 				return err
 			}
-			
+
 			if err := cr.cognitive.GraphRelate(from, rel, to, weight); err != nil {
 				slog.WarnContext(ctx, "cognitive replayer: failed to index graph edge", "from", from, "to", to, "err", err)
 			}
