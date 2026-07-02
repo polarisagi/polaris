@@ -23,13 +23,6 @@ type IntentSubmitter interface {
 	Submit(ctx context.Context, intent *pb.MutationIntent) error
 }
 
-// SemanticMemWriter 定义供工具调用修改语义记忆的接口（防循环依赖）。
-type SemanticMemWriter interface {
-	UpsertFact(ctx context.Context, entity types.Entity) error
-	Archive(ctx context.Context, id string, reason string) error
-	GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error)
-}
-
 // ============================================================================
 // SemanticMemory (L2) — 文档/实体存储
 // ============================================================================
@@ -533,7 +526,8 @@ func NewProceduralMem(skills protocol.SkillRegistry) *ProceduralMem {
 
 func (p *ProceduralMem) SetSkills(s protocol.SkillRegistry) { p.skills = s }
 
-// 插入到 semantic_mem.go 中
+// SearchEntities 按关键词检索活跃语义实体（第 6 路检索的数据源）。
+// SQL LIKE 宽召回（上限 100 条）→ Go 侧 BM25 精排 → 截断 limit。
 func (sm *SemanticMem) SearchEntities(ctx context.Context, query string, limit int) ([]types.Entity, error) {
 	db, err := sm.requireDB()
 	if err != nil {

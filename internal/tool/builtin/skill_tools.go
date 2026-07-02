@@ -173,11 +173,14 @@ func makeSkillGenerateFn(outbox protocol.OutboxWriter) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "skill_generate: invalid args", err)
 		}
 
-		// 向 M9 引擎发送显式 Logic Collapse 触发信号。
-		// OutboxWorker 将此事件路由到 GapFillWorker（m9_capability_gap handler）。
+		// 向 M9 引擎发送显式技能合成触发信号。
+		// 路由到 TopicCapabilityGap——GapFillWorker 是当前唯一注册的技能合成消费者
+		// （TopicLogicCollapse 无 handler 会直接落死信，见 outbox_worker.Process）。
+		// error 字段格式 "tool not found: <name>" 匹配 GapFillWorker.extractMissingTool 解析规则。
 		// outbox 为 nil 时（LogicCollapse 功能未激活），降级为 no-op。
 		if outbox != nil {
-			ev, _ := protocol.NewOutboxEvent(protocol.TopicLogicCollapse, "trigger", map[string]string{
+			ev, _ := protocol.NewOutboxEvent(protocol.TopicCapabilityGap, "trigger", map[string]string{
+				"error":     "tool not found: " + args.TaskType,
 				"task_type": args.TaskType,
 				"reasoning": args.Reasoning,
 				"trigger":   "agent_explicit",

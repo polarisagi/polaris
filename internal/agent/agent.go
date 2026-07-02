@@ -664,8 +664,15 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 		}
 	}
 
-	// 触发 Terminal Callback (P1-2 Learning 闭环)
+	// 触发 Terminal Callback (P1-2 Learning 闭环)。
+	// 传 SessionID 而非 TaskID：ReflectionWorker 以此为键检索 episodic 事件
+	// （事件写入时 TaskID 字段填的是 SessionID，见 executeEffect）。
+	// ReplanCount 取状态机真实计数，供 MinReplanCount 门控。
 	if a.terminalCallback != nil {
-		a.terminalCallback(ctx, a.sCtx.TaskID, "", 0, current == types.AgentStateComplete)
+		sessionID := a.sCtx.SessionID
+		if sessionID == "" {
+			sessionID = a.sCtx.TaskID
+		}
+		a.terminalCallback(ctx, sessionID, "general", a.sm.ReplanCount(), current == types.AgentStateComplete)
 	}
 }

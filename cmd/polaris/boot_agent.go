@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 
+	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
@@ -164,19 +166,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agent.SetMemoryInjector(mb.Mem)
 	}
 
-	// 初始化 ReflectionWorker
+	// ReflectionWorker：任务终态触发元认知反思，写入 reflection_memory（M05 §3.4）。
+	// 门控在 Worker 内部：失败任务无条件反思；成功任务按 MinReplanCount + 白名单过滤。
 	reflectionWorker := reflexion.NewReflectionWorker(mb.Mem.Episodic(), sb.Router, mb.Mem.Reflection())
 
-	agent.InjectTerminalCallback(func(ctx context.Context, taskID, taskType string, replanCount int, success bool) {
-		if !success {
-			return // 反思目前仅在失败或需要重规划时触发？实际上 ReflectionWorker 内部会判断，如果失败会触发。
-			// Wait, if it's terminal and it failed, maybe we do reflect.
-			// Let's just always call it, or run it async.
-		}
-		// According to prompt: 代理到 Agent 的 terminal state
-		go func() {
-			_ = reflectionWorker.ConsolidateReflections(context.Background(), taskID, taskType, replanCount)
-		}()
+	agent.InjectTerminalCallback(func(_ context.Context, taskID, taskType string, replanCount int, success bool) {
+		concurrent.SafeGo(ctx, "reflection-worker", func(gctx context.Context) {
+			if err := reflectionWorker.ConsolidateReflections(gctx, taskID, taskType, replanCount, success); err != nil {
+				slog.Debug("polaris: reflection consolidation skipped", "task", taskID, "err", err)
+			}
+		})
 	})
 
 	// 注入 LAM (R3)：使用真实 provider + policy gate，并绑定到 Agent（非 dry-run 丢弃）
@@ -189,9 +188,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 通过 adapter 注入：agent 包依赖 LAMPolicyChecker 接口，不直接持有 *lam.ComputerUseEngine
 	agent.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
 
-	// SurpriseCalculator：接入完整三分量路由（MEMF + Markov + Jaccard）
-	// memf 来自 M9 engine 的 FallacyMemoryPool；boot 阶段可传 nil（Markov 独立积累数据）
-	surpriseCalc := surprise.NewSurpriseCalculator(nil)
+	// SurpriseCalculator：接入完整三分量路由（MEMF + Markov + Jaccard）。
+	// MEMF 分量直接消费 MemoryBundle 的 FallacyMemoryPool（boot 阶段已就绪，无需传 nil）。
+	surpriseCalc := surprise.NewSurpriseCalculator(mb.FallacyPool)
 	agent.SetSurpriseCalc(surpriseCalc)
 
 	if kb != nil && kb.KnowledgeBase != nil {
@@ -235,7 +234,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			a.SetMemoryInjector(mb.Mem)
 		}
 		a.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
-		sc := surprise.NewSurpriseCalculator(nil)
+		sc := surprise.NewSurpriseCalculator(mb.FallacyPool)
 		a.SetSurpriseCalc(sc)
 		if kb != nil && kb.KnowledgeBase != nil {
 			a.SetKnowledgeSearcher(&fsmKnowledgeAdapter{kb: kb.KnowledgeBase})
@@ -243,10 +242,12 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		if prefs != nil {
 			a.SetPreferences(prefs)
 		}
-		a.InjectTerminalCallback(func(ctx context.Context, taskID, taskType string, replanCount int, success bool) {
-			go func() {
-				_ = reflectionWorker.ConsolidateReflections(context.Background(), taskID, taskType, replanCount)
-			}()
+		a.InjectTerminalCallback(func(_ context.Context, taskID, taskType string, replanCount int, success bool) {
+			concurrent.SafeGo(ctx, "reflection-worker-pool", func(gctx context.Context) {
+				if err := reflectionWorker.ConsolidateReflections(gctx, taskID, taskType, replanCount, success); err != nil {
+					slog.Debug("polaris: reflection consolidation skipped", "task", taskID, "err", err)
+				}
+			})
 		})
 		return a
 	}, maxConcurrent)
@@ -348,7 +349,17 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		}
 	})
 
-	reflexionEngine := reflexion.NewReflexionEngine(mb.FallacyPool, mb.Heuristics, nil)
+	// ReflexionEngine：注入真实 LLM 推理（nil 时恒走规则 fallback，反思质量退化）
+	// 与 AgentHER 依赖（db + SurrealDB 写入，replaySuccess 成功纠偏轨迹回写技能库）。
+	reflexionEngine := reflexion.NewReflexionEngine(mb.FallacyPool, mb.Heuristics, tb.LLMInfer)
+	if sb.SurrealStore != nil {
+		reflexionEngine.InjectDependencies(sb.Store.DB(), &surrealCognAdapter{s: sb.SurrealStore})
+	} else {
+		reflexionEngine.InjectDependencies(sb.Store.DB(), nil)
+	}
+	// 启发式闭环通道：ReflexionEngine 产出 → learning.Engine 内环消费（M9 §2.1 闭环关键路径）。
+	heuristicCh := make(chan types.HeuristicGeneratedPayload, 32)
+	reflexionEngine.SetHeuristicChannel(heuristicCh)
 	reflexionBridge := reflexion.NewReflexionBridge(reflexionEngine)
 	idleDetector := curriculum.NewIdleDetector()
 	curriculumGen := curriculum.NewAutoCurriculumGenerator(idleDetector, mb.FallacyPool, mb.Heuristics)
@@ -361,6 +372,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
 	m9Engine.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
 	m9Engine.SetOptimizer(promptOptimizer)
+	// M9 闭环接线（P1-2）：内环消费 Reflexion 启发式事件；SurpriseIndex 读 M3 权威值；
+	// L3/L4 演化审批走 HITL 网关。
+	m9Engine.SetHeuristicEvents(heuristicCh)
+	m9Engine.SetSurpriseIndexProvider(func() float64 { return metrics.GlobalSurpriseIndex().Current() })
+	m9Engine.SetHITLGateway(tb.HITLGateway)
 
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
 
@@ -375,6 +391,21 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// 初始化 MemoryAgent
 	memoryAgent := agents.NewMemoryAgent(sb.Store.DB(), sb.Store, agent.GetWhisperChan(), nil)
+
+	// TopicAgentInterrupt handler：gateway 写入的中断请求路由到 Agent Kernel。
+	// 当前进程内单 kernel（agent-0）+ Pool 共存，Pool 内会话由 gateway 直连路径覆盖，
+	// 此 handler 保证 outbox 异步路径不落死信（P0-1：禁止无 handler 的生产者）。
+	sb.Outbox.RegisterHandler(protocol.TopicAgentInterrupt, func(_ context.Context, rec *store.OutboxRecord) error {
+		var payload struct {
+			TaskID  string                 `json:"task_id"`
+			Request types.InterruptRequest `json:"request"`
+		}
+		if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+			return nil //nolint:nilerr // malformed payload 跳过，避免 OutboxWorker 无限重试
+		}
+		agent.Interrupt(payload.Request)
+		return nil
+	})
 
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
 	sv := supervisor.NewSupervisor(5, 5*time.Minute)

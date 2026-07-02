@@ -98,7 +98,7 @@ func TestReflectionWorker(t *testing.T) {
 			TaskTypeWhitelist: []string{"test"},
 			MinReplanCount:    3,
 		})
-		err := rw.ConsolidateReflections(ctx, "task1", "other", 2)
+		err := rw.ConsolidateReflections(ctx, "task1", "other", 2, true)
 		if err != nil {
 			t.Errorf("Expected nil error")
 		}
@@ -111,7 +111,7 @@ func TestReflectionWorker(t *testing.T) {
 			},
 		}
 		rw := NewReflectionWorker(mem, nil, nil)
-		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0)
+		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0, true)
 		if err != nil {
 			t.Errorf("Expected nil error")
 		}
@@ -148,7 +148,7 @@ func TestReflectionWorker(t *testing.T) {
 		}
 
 		rw := NewReflectionWorker(mem, prov, refMem)
-		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0)
+		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0, true)
 		if err != nil {
 			t.Errorf("ConsolidateReflections failed: %v", err)
 		}
@@ -174,7 +174,7 @@ func TestReflectionWorker(t *testing.T) {
 		}
 
 		rw := NewReflectionWorker(mem, prov, nil)
-		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0)
+		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0, true)
 		if err == nil {
 			t.Errorf("Expected JSON parse error")
 		}

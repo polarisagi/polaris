@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/memory/util"
@@ -26,11 +27,30 @@ type HybridRetrieverImpl struct {
 	embedder      Embedder                     // P0：稠密向量检索
 	cognitive     protocol.CognitiveSearcher   // Tier1+：SurrealDB FTS+HNSW，nil 时降级 Tier0
 	semantic      protocol.SemanticMemory      // P0-2：第 6 路（semantic_entities）
+	classifier    *SemanticQueryClassifier     // 查询意图分类（temporal 激活第 5 路）；实例持有，禁全局
 }
 
-// InjectEmbedder 注入 M1 Embedding 接口，激活向量检索路径
+// InjectEmbedder 注入 M1 Embedding 接口，激活向量检索路径。
+// 同时异步预热语义查询分类器原型向量（失败自动降级 Tier-0 关键词路径）。
 func (hr *HybridRetrieverImpl) InjectEmbedder(e Embedder) {
 	hr.embedder = e
+	cls := hr.queryClassifier()
+	if e != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			// 原型初始化失败不致命：ClassifyQuerySemantic 内部自动降级关键词分类
+			_ = cls.InitPrototypes(ctx, e)
+		}()
+	}
+}
+
+// queryClassifier 返回分类器实例（惰性构造；原型未初始化时内部自动走 Tier-0 降级）。
+func (hr *HybridRetrieverImpl) queryClassifier() *SemanticQueryClassifier {
+	if hr.classifier == nil {
+		hr.classifier = NewSemanticQueryClassifier()
+	}
+	return hr.classifier
 }
 
 func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
@@ -180,7 +200,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 
 	// 第 5 路（temporal 查询激活）：DurativeMemory 持续性记忆簇
 	var durativeResults []types.ScoredFragment
-	if scope.Type == "memory" && hr.durative != nil && GlobalSemanticClassifier.ClassifyQuerySemantic(ctx, query, hr.embedder) == QueryTypeTemporal {
+	if scope.Type == "memory" && hr.durative != nil && hr.queryClassifier().ClassifyQuerySemantic(ctx, query, hr.embedder) == QueryTypeTemporal {
 		groups := hr.durative.RetrieveGroups(ctx, query, 5)
 		for _, g := range groups {
 			content := g.Label + ": " + g.Summary
@@ -242,9 +262,10 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		}
 	}
 
-	// 第 6 路（P0-2）：Semantic Entities 召回
+	// 第 6 路（P0-2）：Semantic Entities 召回。
+	// scope "semantic"（memory_search layer=semantic）时同样生效——事实类记忆是该 layer 的主体。
 	var semanticResults []types.ScoredFragment
-	if scope.Type == "memory" && hr.semantic != nil {
+	if (scope.Type == "memory" || scope.Type == "semantic") && hr.semantic != nil {
 		semanticResults = hr.searchSemanticEntities(ctx, query)
 	}
 

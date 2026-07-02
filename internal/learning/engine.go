@@ -573,11 +573,17 @@ func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompleted
 	}
 }
 
-func (e *Engine) ReportOutcome(ctx context.Context, taskID string, result *TaskResult) error {
+// 编译期验证 Engine 实现 LearningFacade（对外统一门面，P1-2）。
+var _ LearningFacade = (*Engine)(nil)
 
+// ReportOutcome 上报任务结果到内环事件通道（非阻塞：通道满时丢弃，后台尽力而为）。
+func (e *Engine) ReportOutcome(_ context.Context, taskID string, result *TaskResult) error {
+	if result == nil {
+		return nil
+	}
 	ev := TaskCompleteEvent{
 		TaskID:   taskID,
-		TaskType: "default", // Need to get task type if possible
+		TaskType: "general", // 调用方暂无任务类型上下文，与 Agent 终态回调口径一致
 		Success:  result.FailureClass == "",
 		Failure:  result.FailureClass,
 		Output:   result.Output,

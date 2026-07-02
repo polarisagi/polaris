@@ -19,8 +19,6 @@ import (
 	"runtime"
 	"time"
 
-	memstore "github.com/polarisagi/polaris/internal/memory/store"
-
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/action/hook"
 	"github.com/polarisagi/polaris/internal/agent"
@@ -176,10 +174,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 
 	if mb.Mem != nil {
-		if semMem, ok := mb.Mem.Semantic().(*memstore.SemanticMem); ok && semMem != nil {
-			if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, semMem, mb.Mem.Retriever(), mb.Mem.Reflection()); err != nil {
-				slog.Warn("polaris: memory tool registration failed", "err", err)
-			}
+		// U-1：builtin.SemanticMemWriter 是 protocol.SemanticMemory 的方法子集，
+		// 接口值结构子类型自动满足，直接传接口，禁止具体类型断言（P1-4 规则 3）。
+		if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, mb.Mem.Semantic(), mb.Mem.Retriever(), mb.Mem.Reflection()); err != nil {
+			slog.Warn("polaris: memory tool registration failed", "err", err)
 		}
 	}
 

@@ -123,6 +123,11 @@ func memorySearchTool() types.Tool {
 					"description": "Max results to return (default 5, max 20)",
 					"default":     5,
 				},
+				"layer": map[string]any{
+					"type":        "string",
+					"description": "Memory layer to search: 'memory' (episodic + facts, default) | 'semantic' (stored facts and documents only)",
+					"default":     "memory",
+				},
 			},
 			"required": []string{"query"},
 		},

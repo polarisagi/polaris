@@ -14,9 +14,8 @@ type SemanticQueryClassifier struct {
 	vecs map[QueryType][]float32
 }
 
-// NewSemanticQueryClassifier 创建一个语义分类器
-var GlobalSemanticClassifier = NewSemanticQueryClassifier()
-
+// NewSemanticQueryClassifier 创建一个语义分类器。
+// 实例由 HybridRetrieverImpl 持有（internal/ 禁全局可变变量，ADR-0001 豁免仅限 metrics）。
 func NewSemanticQueryClassifier() *SemanticQueryClassifier {
 	return &SemanticQueryClassifier{}
 }

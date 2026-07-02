@@ -25,6 +25,7 @@ type MemoryAgent struct {
 	memPressure   *atomic.Int32
 	scanInterval  time.Duration
 	edgeWeightMgr *graph.EdgeWeightManager
+	lastSeenID    int64 // 高水位标记：只推送新增事件，防止同批事件每轮重复刷爆耳语通道
 }
 
 func NewMemoryAgent(db protocol.SQLQuerier, store protocol.Store, whisperChan chan<- MemoryWhisper, memPressure *atomic.Int32) *MemoryAgent {
@@ -63,12 +64,14 @@ func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
 	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// occurred_at 可为 NULL（schema/003），用 timestamp 兜底避免 Scan 失败静默丢行。
+	// id > lastSeenID 高水位过滤：每个事件最多推送一次。
 	rows, err := ma.db.QueryContext(scanCtx, `
-		SELECT id, session_id, content, salience, occurred_at 
+		SELECT id, session_id, content, salience, COALESCE(occurred_at, timestamp)
 		FROM episodic_events
-		WHERE archived = 0 AND salience >= 0.7
-		ORDER BY occurred_at DESC LIMIT 20
-	`)
+		WHERE archived = 0 AND salience >= 0.7 AND id > ?
+		ORDER BY id ASC LIMIT 20
+	`, ma.lastSeenID)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MemoryAgent.scan", err)
 	}
@@ -79,19 +82,23 @@ func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
 		var sessionID, content string
 		var salience float64
 		var occurredAt int64
-		if err := rows.Scan(&id, &sessionID, &content, &salience, &occurredAt); err == nil {
-			if ma.whisperChan == nil {
-				continue
-			}
-			select {
-			case ma.whisperChan <- MemoryWhisper{
-				Source:   "memory_agent",
-				Salience: salience,
-				Content:  fmt.Sprintf("[ID:%d] %s", id, content),
-			}:
-			default:
-				// Channel full, skip
-			}
+		if err := rows.Scan(&id, &sessionID, &content, &salience, &occurredAt); err != nil {
+			continue
+		}
+		if id > ma.lastSeenID {
+			ma.lastSeenID = id
+		}
+		if ma.whisperChan == nil {
+			continue
+		}
+		select {
+		case ma.whisperChan <- MemoryWhisper{
+			Source:   "memory_agent",
+			Salience: salience,
+			Content:  fmt.Sprintf("[ID:%d] %s", id, content),
+		}:
+		default:
+			// 通道满：丢弃（耳语是尽力而为的辅助信号，不阻塞主流程）
 		}
 	}
 	return nil

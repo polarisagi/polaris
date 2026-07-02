@@ -72,11 +72,12 @@ func NewReflectionWorkerWithConfig(episodic protocol.EpisodicMemory, provider pr
 }
 
 // ConsolidateReflections 在任务终态触发。
+// success=false 的任务无条件反思（失败是最有价值的反思素材）；
+// success=true 时按白名单 + 重规划次数门控（避免平凡成功任务浪费 LLM token）。
 //
 //nolint:gocyclo
-func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID string, taskType string, replanCount int) error {
-	// 按配置白名单过滤：白名单外且重规划次数不足则跳过
-	if replanCount < rw.cfg.MinReplanCount && !rw.isWhitelisted(taskType) {
+func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID string, taskType string, replanCount int, success bool) error {
+	if success && replanCount < rw.cfg.MinReplanCount && !rw.isWhitelisted(taskType) {
 		return nil
 	}
 

@@ -1,8 +1,6 @@
 package chat
 
 import (
-	"os"
-
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 
 	"github.com/polarisagi/polaris/internal/gateway/types"
@@ -222,9 +220,6 @@ func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []appty
 		return msgs, skip, nil
 	}
 
-	// Stage 1: tool output pre-pruning
-	c.prePruneMessages(ctx, sessionID, msgs)
-
 	summaryBudget := calcSummaryBudget(middle)
 	summary, err := c.summarize(ctx, middle, summaryBudget, provider)
 	if err != nil {
@@ -372,27 +367,9 @@ func (c *Compressor) persistCompacted(ctx context.Context, sessionID string, sum
 	return c.chatRepo.ReplaceSessionMessages(ctx, sessionID, msgs)
 }
 
-func (c *Compressor) prePruneMessages(ctx context.Context, sessionID string, msgs []apptypes.Message) {
-	for i := range msgs {
-		msg := &msgs[i]
-		if msg.Role != "tool" && msg.Role != "user" {
-			continue
-		}
-		// Try to parse tool_result
-		if strings.Contains(msg.Content, "<tool_result") || msg.Role == "tool" {
-			if len(msg.Content) > 4000 && c.db != nil {
-				// Offload
-				id := fmt.Sprintf("tr_%s_%d", sessionID, time.Now().UnixNano())
-				_ = os.MkdirAll("vfs", 0755)
-				fullPath := "vfs/" + id
-				if err := os.WriteFile(fullPath, []byte(msg.Content), 0644); err == nil {
-					msg.Content = fmt.Sprintf("[tool output too long, offloaded to %s]", id)
-					ev, _ := protocol.NewOutboxEvent(protocol.TopicSemanticCompress, "compress", map[string]string{"vfs_id": id}, "semantic_compress:error_stack:"+id)
-
-					q := "INSERT INTO outbox (target_engine, operation, scope, payload, idempotency_key, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)"
-					_, _ = c.db.ExecContext(ctx, q, ev.TargetEngine, ev.Operation, "error_stack", ev.Payload, ev.IdempotencyKey, time.Now().UnixMilli())
-				}
-			}
-		}
-	}
-}
+// 注：工具输出预裁剪（Symbolic Offloading）暂未在 chat 压缩路径实现。
+// 原 Gemini 实现存在三处致命缺陷已被移除：
+//  1. 写 CWD 相对路径 "vfs/"，绕过 internal/vfs 工作区隔离；
+//  2. 未写 workspace_vfs 表，SemanticCompressHandler 按 vfs_id 查表必然落空；
+//  3. 原文被替换为存根后无 read_tool_ref 可回读，聊天历史不可逆损毁。
+// 正确实现需注入 VFS Offloader + OutboxWriter（见 M05 §6 Symbolic Offloading），另行排期。

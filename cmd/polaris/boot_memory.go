@@ -166,13 +166,16 @@ func startCognitiveReplayerIfNeeded(ctx context.Context, sb *SubstrateBundle) {
 		return
 	}
 
-	backend, _ := stats["backend"].(string)
-	docCountF, _ := stats["fts_docs"].(float64)
+	// 键名与 Rust surreal_stats 返回的 JSON 对齐（doc_count，见 fts.rs surreal_stats）。
+	// 注意 backend 字段恒为 "surreal"（不区分 mem/rocksdb），不能作为判据；
+	// 统一判据：认知轴 FTS 为空 && SQLite 真相源非空 → 需要重放
+	// （覆盖 kv-mem 重启丢失与 rocksdb 空库两种场景，FTSIndex 为幂等 UPSERT，重放安全）。
+	docCountF, _ := stats["doc_count"].(float64)
 
-	shouldReplay := (backend == "mem")
-	if !shouldReplay && docCountF == 0 {
+	shouldReplay := false
+	if docCountF == 0 {
 		var episodicCount int
-		if err := sb.Store.DB().QueryRow("SELECT COUNT(*) FROM episodic_events").Scan(&episodicCount); err == nil && episodicCount > 0 {
+		if err := sb.Store.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM episodic_events").Scan(&episodicCount); err == nil && episodicCount > 0 {
 			shouldReplay = true
 		}
 	}
