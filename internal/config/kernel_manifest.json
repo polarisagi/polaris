@@ -21,7 +21,7 @@
   "internal/action/provider.go": "c5ec0bbe41090a669eaf190d6f4a96b1d26c625b32d030a90fcc7806dcc3ca29",
   "internal/action/tool_usage_policy.go": "79e302f45b155eb379af89ca56668ab9c8c4521aa3533ecb7f239566140ce745",
   "internal/action/tool_usage_policy_test.go": "d35b31d24426e32068a1cdf93b805e806f26102ccf210217482f4a27c78d65cf",
-  "internal/agent/agent.go": "f0d84836c56f19e98bb719490075113bf9d4b74c473869df1422cdd1a4f11f63",
+  "internal/agent/agent.go": "89ed730274e1d5bd5ce910b869f2471ebf645bc1e44e4e8f1aeca06f6893b9af",
   "internal/agent/agent_execute.go": "b2b6164d5a8d82bd318096c0daaaffb9733c4dcebf030fd408c56f63e38c3a8a",
   "internal/agent/agent_fsm_integration_test.go": "fca9aedc1ea473b12e49db5d2e2128d0c463d36ce91f945b0581c2abddd8b908",
   "internal/agent/budget.go": "3d30422f4625b3148eae96c1a9eebe2e236878dbf7aba28f23c67a4395a81713",

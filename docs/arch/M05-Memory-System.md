@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:256 L3 Procedural / 6:310 写路径 / 7:322 HybridRetriever / 8:402 EffConn / 9:412 Consolidation / 10:437 Forgetting / 11:454 PromptBuilder / 12:524 Drift / 14:562 496(SOFT)降级 / 15:584 依赖
+> **§跳读**: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:256 L3 Procedural / 6:313 写路径 / 7:325 HybridRetriever / 8:405 EffConn / 9:415 Consolidation / 10:440 Forgetting / 11:457 PromptBuilder / 12:527 Drift / 14:565 496(SOFT)降级 / 15:587 依赖
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -277,6 +277,9 @@ L3 Procedural 技能索引相关 DDL 实质托管于 M2 SurrealKV KV 引擎（`i
 |--------|------------|------|
 | `memory_write` | `CapWriteLocal` | 写入/覆盖一条语义事实（`SemanticMemWriter.UpsertFact`），支持 `valid_until` 过期时长 |
 | `memory_search` | `CapReadOnly` | 混合检索（BM25 + vector + graph，`HybridRetriever`），返回最相关事实 |
+| `memory_append` | `CapWriteLocal` | 追加内容到已有的记忆实体 |
+| `memory_expire` | `CapWriteLocal` | 手动使某条实体过期（清理或标注废弃） |
+| `memory_reflect`| `CapWriteLocal` | 将经验和反思总结写入 protocol.ReflectionMemory 以供后续任务检索使用 |
 | `memory_append` | `CapWriteLocal` | 追加属性到已有实体（`UpsertFact` upsert 语义，不覆盖 description） |
 | `memory_expire` | `CapWriteLocal` | 标记事实失效（`SemanticMemWriter.Archive`），含 reason 审计字段 |
 | `memory_reflect`| `CapWriteLocal` | 记录系统反思、洞察或长期决策到 ReflectionMemory |
