@@ -15,6 +15,10 @@ import "context"
 
 // CmdRunnerCfg 单次原生命令执行配置。
 type CmdRunnerCfg struct {
+	// CallerType 驱动 Rust V2 沙箱的 env_preset 推导（"codeact"|"skill"|"hook"|"builtin"|...），
+	// 对应 protocol.SandboxCallerType。仅影响环境变量丰富度这一便利性策略，不影响
+	// NetworkBlock/AllowedPaths 等真正的隔离边界（那些字段本来就显式设置，不受此字段影响）。
+	CallerType string
 	// Command 待执行的 shell 命令（由 bash -c 解释）。
 	Command string
 	// WorkDir 工作目录；空 = 继承调用方当前目录。

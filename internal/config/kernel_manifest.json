@@ -1,7 +1,7 @@
 {
   "internal/action/capability_token.go": "aa9b1fd02bc25900679f1af88c15d83862fe399de8d2ad6a5319519128f27f4d",
   "internal/action/capability_token_test.go": "8c2eab753411bbf0ec72a670524f3b8f7322b2552b1db8572d10e01a6bd5ad3f",
-  "internal/action/codeact/code_act.go": "1f2fe59ddc088e4578207e388a721c845ba213079f69e2b6785469e5ba710d7f",
+  "internal/action/codeact/code_act.go": "d70cab2ae4d1e3087af3baf9d53eb8b6ccfdffca7e63c9c5712ca606e5f6a3bb",
   "internal/action/codeact/code_act_checker.go": "1802df1463ffc5479c35831e262dc992f2908b4c402f31f30aa7234a6a0eba1f",
   "internal/action/codeact/codeact_test.go": "a8ea92383c37ede6b9a9ea69a9036e79f08e303a18466752f3b306412c37b882",
   "internal/action/doc.go": "f15e0e8e082d2f941558ac138e877dd13defd26c1b60774bb5feff6ff7a418dd",
@@ -15,7 +15,7 @@
   "internal/action/inv_test.go": "331c835882ebf70b1f8fafb8f8c736fff35186b6dea9a0768fb2348fe31e000c",
   "internal/action/lam/continuous_action.go": "432fd032fbd2b98793e67c88ce55e6d3ea9a7acd031b70e817a83391316a8e8c",
   "internal/action/lam/continuous_action_test.go": "37b87407409714382824730b4f5659d92058ae12d76bca35da34ba74ad23b0ec",
-  "internal/action/lam/display_server_xvfb.go": "d9bb190c437bc7a057b40d39da9b2ab069daa4ee42e3ad24f2cd4423283191ac",
+  "internal/action/lam/display_server_xvfb.go": "92c847a86bfb541a7f4a91063d23fa68263969c7e8c7e46028af2dcddf4e40ba",
   "internal/action/lam/lam.go": "ffa056b668116a2241e3e7b72b5ae62d2d26bc25f6257219b348c078b14e19b8",
   "internal/action/lam/lam_test.go": "648de61999aef933975f734b2c414381202a58301b6671f7dc55d95323fa15e9",
   "internal/action/lam/streaming_action_bus.go": "b642f874c09fe90fab3c78b8fb798d3aa75fdc2735180c9c5963d568b4e79090",

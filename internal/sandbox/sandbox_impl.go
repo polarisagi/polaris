@@ -345,6 +345,8 @@ func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.To
 	command := s.binPath + " --tool " + spec.ToolName
 	start := time.Now()
 	out, exitCode, _, runErr := s.runner.RunCmd(execCtx, CmdRunnerCfg{
+		// 这是 privileged 路径，语义上最贴近 builtin（启发式默认值，仅影响 env 丰富度）
+		CallerType:   "builtin",
 		Command:      command,
 		AllowedPaths: spec.AllowedPaths,
 		Env:          env,
@@ -377,6 +379,7 @@ func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir stri
 	defer cancel()
 
 	out, exitCode, _, runErr := s.runner.RunCmd(execCtx, CmdRunnerCfg{
+		CallerType:   "hook",
 		Command:      scriptPath,
 		WorkDir:      workDir,
 		AllowedPaths: []string{workDir},
@@ -440,8 +443,15 @@ func (s *ContainerSandbox) runNativeScript(ctx context.Context, spec SandboxSpec
 	// interp + 空格 + 脚本路径，由 bash -c 解释（WrapBashCmd 统一入口）。
 	command := interp + " " + spec.ScriptPath
 
+	// 区分 CodeAct 和 Skill
+	callerType := "skill"
+	if strings.HasPrefix(spec.ToolName, "codeact:") {
+		callerType = "codeact"
+	}
+
 	start := time.Now()
 	out, exitCode, _, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{
+		CallerType:   callerType,
 		Command:      command,
 		WorkDir:      scriptDir,
 		AllowedPaths: allowedPaths,

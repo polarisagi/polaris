@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 func TestBuiltinTools_Todo(t *testing.T) {
@@ -97,7 +97,7 @@ func TestBuiltinTools_StrReplace(t *testing.T) {
 
 func TestBuiltinTools_Bash(t *testing.T) {
 	tmpDir := t.TempDir()
-	bashFn := makeBashFn([]string{tmpDir}, false, toolsb.NetworkAllow, "")
+	bashFn := makeBashFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "")
 	ctx := context.Background()
 
 	args := `{"command": "echo hello"}`
@@ -111,7 +111,7 @@ func TestBuiltinTools_Bash(t *testing.T) {
 
 func TestBuiltinTools_RunCommand(t *testing.T) {
 	tmpDir := t.TempDir()
-	runFn := makeRunCommandFn([]string{tmpDir}, false, toolsb.NetworkAllow, "")
+	runFn := makeRunCommandFn([]string{tmpDir}, false, protocol.NetPolicyAllow, "")
 	ctx := context.Background()
 
 	args := `{"command": "echo hello"}`
