@@ -102,10 +102,13 @@ impl SurrealStore {
 
         rt.block_on(async {
             match db.query(&ddl).await {
-                Ok(_) => {}
-                Err(e) => eprintln!("[surreal_store] DDL error (non-fatal): {e}"),
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    eprintln!("[surreal_store] DDL error (fatal): {e}");
+                    Err(Box::new(e) as Box<dyn std::error::Error>)
+                }
             }
-        });
+        })?;
 
         Ok(SurrealStore { db, rt })
     }
@@ -126,7 +129,7 @@ pub(super) struct VRow {
     pub(super) v: String,
 }
 
-#[derive(Debug, SurrealValue)]
+#[derive(Debug, SurrealValue, serde::Serialize)]
 pub(super) struct VecRow {
     pub(super) id: String,
     pub(super) score: f64,
@@ -143,8 +146,9 @@ pub(super) struct ToIdWeightRow {
     pub(super) weight: f64,
 }
 
-#[derive(Debug, SurrealValue)]
+#[derive(Debug, SurrealValue, serde::Serialize)]
 pub(super) struct DocScoreRow {
+    #[serde(rename = "id")]
     pub(super) doc_id: String,
     pub(super) score: f64,
 }
@@ -176,29 +180,20 @@ pub(super) fn hex_to_bytes(s: &str) -> Vec<u8> {
 }
 
 pub(super) fn encode_scored(results: &[VecRow]) -> String {
-    let mut out = String::from("[");
-    for (i, r) in results.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        let id = r.id.replace('"', "\\\"");
-        out.push_str(&format!("{{\"id\":\"{id}\",\"score\":{}}}", r.score));
-    }
-    out.push(']');
-    out
+    let sanitized: Vec<VecRow> = results.iter().map(|r| {
+        let score = if r.score.is_nan() || r.score.is_infinite() {
+            eprintln!("surreal_store: invalid score {} for id {}, setting to 0.0", r.score, r.id);
+            0.0
+        } else {
+            r.score
+        };
+        VecRow { id: r.id.clone(), score }
+    }).collect();
+    serde_json::to_string(&sanitized).unwrap_or_else(|_| "[]".to_string())
 }
 
 pub(super) fn encode_ids(ids: &[String]) -> String {
-    let mut out = String::from("[");
-    for (i, id) in ids.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        let escaped = id.replace('"', "\\\"");
-        out.push_str(&format!("\"{escaped}\""));
-    }
-    out.push(']');
-    out
+    serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_string())
 }
 
 pub(super) fn get_store() -> Option<Arc<RwLock<SurrealStore>>> {

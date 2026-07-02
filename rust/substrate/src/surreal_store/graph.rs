@@ -4,7 +4,13 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::panic;
 
-use super::{
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+struct EdgeRow {
+    from_id: String,
+    to_id: String,
+    weight: f64,
+}
+use super::{SurrealValue, 
     SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8, SURREAL_OK, ToIdRow,
     ToIdWeightRow, VecRow, edge_record_key, encode_ids, encode_scored, get_store, write_cstr,
 };
@@ -183,38 +189,58 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
             let mut next_frontier: std::collections::HashMap<String, f64> =
                 std::collections::HashMap::new();
 
+            let active_nodes: Vec<String> = frontier
+                .iter()
+                .filter(|(_, e)| *e >= dormancy_threshold)
+                .map(|(id, _)| id.clone())
+                .collect();
+            if active_nodes.is_empty() {
+                break;
+            }
+
+            let sql = "SELECT from_id, to_id, weight FROM edges WHERE from_id IN $nodes";
+            let all_edges: Vec<EdgeRow> = match guard.rt.block_on(async {
+                let mut resp = guard.db.query(sql).bind(("nodes", active_nodes)).await?;
+                resp.take(0)
+            }) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("[surreal_graph_spreading_activation] query error: {e}");
+                    return SURREAL_ERR_QUERY;
+                }
+            };
+
+            let mut edges_by_from: std::collections::HashMap<String, Vec<ToIdWeightRow>> =
+                std::collections::HashMap::new();
+            for edge in all_edges {
+                edges_by_from
+                    .entry(edge.from_id)
+                    .or_default()
+                    .push(ToIdWeightRow {
+                        to_id: edge.to_id,
+                        weight: edge.weight,
+                    });
+            }
+
             for (curr_node, curr_energy) in frontier {
                 if curr_energy < dormancy_threshold {
                     continue;
                 }
-
-                let sql = format!(
-                    "SELECT to_id, weight FROM edges WHERE from_id = $curr \
-                     ORDER BY weight DESC LIMIT {fan_out_limit}"
-                );
-
-                // 查询出错时返回 SURREAL_ERR_QUERY，不以空邻居伪装"无出边"
-                let neighbors: Vec<ToIdWeightRow> = match guard.rt.block_on(async {
-                    let mut resp = guard
-                        .db
-                        .query(&sql)
-                        .bind(("curr", curr_node.clone()))
-                        .await?;
-                    resp.take(0)
-                }) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        eprintln!("[surreal_graph_spreading_activation] query error: {e}");
-                        return SURREAL_ERR_QUERY;
-                    }
-                };
-
-                for edge in neighbors {
-                    let transferred_energy = curr_energy * edge.weight * energy_decay;
-                    if transferred_energy >= dormancy_threshold {
-                        *next_frontier.entry(edge.to_id.clone()).or_insert(0.0) +=
-                            transferred_energy;
-                        *node_energy.entry(edge.to_id.clone()).or_insert(0.0) += transferred_energy;
+                if let Some(mut neighbors) = edges_by_from.remove(&curr_node) {
+                    neighbors.sort_by(|a, b| {
+                        b.weight
+                            .partial_cmp(&a.weight)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    neighbors.truncate(fan_out_limit);
+                    for edge in neighbors {
+                        let transferred_energy = curr_energy * edge.weight * energy_decay;
+                        if transferred_energy >= dormancy_threshold {
+                            *next_frontier.entry(edge.to_id.clone()).or_insert(0.0) +=
+                                transferred_energy;
+                            *node_energy.entry(edge.to_id.clone()).or_insert(0.0) +=
+                                transferred_energy;
+                        }
                     }
                 }
             }

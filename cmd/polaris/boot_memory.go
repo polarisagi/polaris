@@ -4,6 +4,8 @@
 package main
 
 import (
+	"encoding/json"
+
 	"github.com/polarisagi/polaris/internal/observability/probe"
 
 	"context"
@@ -75,6 +77,39 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 
 	// 抑制未使用的 observability 引用（FeatureGate 在 autoConf 路径中已消费）
 	_ = probe.FeatureLocalEmbedding
+
+	// ─── G-1: SurrealDB mem 后端 boot 重放器 ─────────────────────────────────
+	if sb.SurrealStore != nil {
+		shouldReplay := false
+
+		statsJSON, err := sb.SurrealStore.Stats()
+		if err == nil {
+			var stats map[string]interface{}
+			if err := json.Unmarshal([]byte(statsJSON), &stats); err == nil {
+				backend, _ := stats["backend"].(string)
+				docCountF, _ := stats["fts_docs"].(float64)
+
+				if backend == "mem" {
+					shouldReplay = true
+				} else if docCountF == 0 {
+					var episodicCount int
+					if err := sb.Store.DB().QueryRow("SELECT COUNT(*) FROM episodic_events").Scan(&episodicCount); err == nil && episodicCount > 0 {
+						shouldReplay = true
+					}
+				}
+			}
+		} else {
+			slog.Warn("polaris: failed to get SurrealStore stats for replayer check", "err", err)
+		}
+
+		if shouldReplay {
+			replayer := retrieval.NewCognitiveReplayer(sb.Store.DB(), &surrealCognAdapter{s: sb.SurrealStore})
+			if err := replayer.Start(ctx); err != nil {
+				slog.Error("polaris: failed to start CognitiveReplayer", "err", err)
+			}
+		}
+	}
+	// ───────────────────────────────────────────────────────────────────────
 
 	return &MemoryBundle{
 		Mem:                mem,
