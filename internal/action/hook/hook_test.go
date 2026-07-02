@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // echoRunner 是一个测试用 CmdRunner 实现：通过 bash 裸执行（无沙箱隔离）。
 // 仅用于 hook Runner 单元测试（验证事件匹配/并发/错误处理逻辑），不用于安全测试。
-// 生产环境 Runner 注入的是 WrapBashCmdRunner（走 Rust bwrap/Seatbelt 统一沙箱）。
+// 生产环境走 ExecEnvelope → SandboxRouter → ContainerSandbox/NativeOSSandbox → 真实
+// WrapBashCmdRunner（Rust bwrap/Seatbelt 统一沙箱）。
 type echoRunner struct{}
 
 func (echoRunner) RunCmd(_ context.Context, cfg sandbox.CmdRunnerCfg) ([]byte, int, string, error) {
@@ -29,6 +31,30 @@ func (echoRunner) RunCmd(_ context.Context, cfg sandbox.CmdRunnerCfg) ([]byte, i
 		return nil, -1, "test_bare", err
 	}
 	return out, 0, "test_bare", nil
+}
+
+// allowAllPolicyGate 测试用 PolicyGate：始终 allow，仅验证 Runner 自身逻辑。
+type allowAllPolicyGate struct{}
+
+func (allowAllPolicyGate) IsAuthorized(context.Context, string, string, string, map[string]any) (bool, error) {
+	return true, nil
+}
+
+func (allowAllPolicyGate) Review(context.Context, types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
+	return types.PolicyReviewResult{}, nil
+}
+
+// newTestEnvelope 构造一个真实 ExecEnvelope，底层用 echoRunner 裸执行（无沙箱隔离，
+// 仅用于测试 Runner 的匹配/并发/错误处理逻辑，不测试沙箱隔离本身）。
+// SandboxRouter 收到 SideProcessSpawn 会路由到 Container tier；Tier=0（测试传参）时
+// AssignSandboxTier 会进一步降级到 NativeOS，故同时注入 container 和 nativeOS 两个 provider。
+func newTestEnvelope(t *testing.T) *sandbox.ExecEnvelope {
+	t.Helper()
+	containerSbx := sandbox.NewContainerSandbox("", "linux", 0, echoRunner{})
+	nativeOSSbx := sandbox.NewNativeOSSandbox(echoRunner{})
+	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), containerSbx, nil, "linux", 0)
+	router.WithNativeOS(nativeOSSbx)
+	return sandbox.NewExecEnvelope(allowAllPolicyGate{}, router, 0, "linux", nil)
 }
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -142,7 +168,7 @@ func TestApplyDefaults_SetsTimeout(t *testing.T) {
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 func TestRunner_Fire_NoGroups(t *testing.T) {
-	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, nil, echoRunner{})
+	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, nil, newTestEnvelope(t), nil)
 	results := r.Fire(context.Background(), HookInput{Event: EventStop})
 	if results != nil {
 		t.Errorf("expected nil results for unregistered event, got %v", results)
@@ -162,7 +188,7 @@ func TestRunner_Fire_EchoCommand(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, echoRunner{})
+	runner := NewRunner(reg, nil, newTestEnvelope(t), nil)
 	results := runner.Fire(context.Background(), HookInput{
 		Event:     EventPostToolUse,
 		ToolName:  "bash",
@@ -195,7 +221,7 @@ func TestRunner_Fire_NonZeroExit(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, echoRunner{})
+	runner := NewRunner(reg, nil, newTestEnvelope(t), nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventPreToolUse})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -213,16 +239,16 @@ func TestRunner_Fire_SkipsNonCommandType(t *testing.T) {
 			}},
 		},
 	}
-	runner := NewRunner(reg, nil, echoRunner{})
+	runner := NewRunner(reg, nil, newTestEnvelope(t), nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventSessionStart})
 	if len(results) != 0 {
 		t.Errorf("non-command handler should be skipped, got %d results", len(results))
 	}
 }
 
-// TestRunner_Fire_NilCmdRunner_FailClosed 验证 cmdRunner==nil 时 Runner fail-closed：
+// TestRunner_Fire_NilEnvelope_FailClosed 验证 envelope==nil 时 Runner fail-closed：
 // 不裸跑，直接返回 Forbidden 错误（HE-Rule 2）。
-func TestRunner_Fire_NilCmdRunner_FailClosed(t *testing.T) {
+func TestRunner_Fire_NilEnvelope_FailClosed(t *testing.T) {
 	reg := &Registry{
 		groups: map[Event][]MatcherGroup{
 			EventPostToolUse: compileMatchers([]MatcherGroup{{
@@ -235,15 +261,62 @@ func TestRunner_Fire_NilCmdRunner_FailClosed(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, nil)
+	runner := NewRunner(reg, nil, nil, nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventPostToolUse})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if results[0].Err == nil {
-		t.Fatal("expected fail-closed error when cmdRunner is nil")
+		t.Fatal("expected fail-closed error when envelope is nil")
 	}
 	if !strings.Contains(results[0].Err.Error(), "fail-closed") {
 		t.Errorf("expected fail-closed in error message, got: %v", results[0].Err)
 	}
+}
+
+// ── HookFirer（sandbox.HookFirer 接口实现）───────────────────────────────────
+
+func TestRunner_FirePreToolUse_BlocksOnNonZeroExit(t *testing.T) {
+	reg := &Registry{
+		groups: map[Event][]MatcherGroup{
+			EventPreToolUse: compileMatchers([]MatcherGroup{{
+				Hooks: []HandlerConfig{{Type: "command", Command: "echo blocked-reason; exit 1", Timeout: 5 * time.Second}},
+			}}),
+		},
+	}
+	runner := NewRunner(reg, nil, newTestEnvelope(t), nil)
+	blocked, reason := runner.FirePreToolUse(context.Background(), "bash", nil, "sess-1")
+	if !blocked {
+		t.Fatal("expected blocked=true when hook exits non-zero")
+	}
+	if !strings.Contains(reason, "blocked-reason") {
+		t.Errorf("expected reason to contain hook stdout, got %q", reason)
+	}
+}
+
+func TestRunner_FirePreToolUse_AllowsOnZeroExit(t *testing.T) {
+	reg := &Registry{
+		groups: map[Event][]MatcherGroup{
+			EventPreToolUse: compileMatchers([]MatcherGroup{{
+				Hooks: []HandlerConfig{{Type: "command", Command: "echo ok", Timeout: 5 * time.Second}},
+			}}),
+		},
+	}
+	runner := NewRunner(reg, nil, newTestEnvelope(t), nil)
+	blocked, _ := runner.FirePreToolUse(context.Background(), "bash", nil, "sess-1")
+	if blocked {
+		t.Fatal("expected blocked=false when hook exits 0")
+	}
+}
+
+func TestRunner_FirePostToolUse_NoPanic(t *testing.T) {
+	reg := &Registry{
+		groups: map[Event][]MatcherGroup{
+			EventPostToolUse: compileMatchers([]MatcherGroup{{
+				Hooks: []HandlerConfig{{Type: "command", Command: "echo done", Timeout: 5 * time.Second}},
+			}}),
+		},
+	}
+	runner := NewRunner(reg, nil, newTestEnvelope(t), nil)
+	runner.FirePostToolUse(context.Background(), "bash", nil, "tool output", "sess-1")
 }

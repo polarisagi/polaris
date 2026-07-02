@@ -642,6 +642,13 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		"POLARIS_SESSION_ID": sessionID,
 		"POLARIS_CHANNEL":    "web",
 	})
+	// turn.stop hook（对应 ADR-0015 §2.2 Codex Stop 事件语义：Agent 完成本轮回复回到空闲）。
+	// 与 message.after 触发点一致但语义独立（Stop 关注"FSM 回到 idle"，message.after 关注
+	// "回复已发出"），保留两个事件名以便未来分化，见 00-Global-Dictionary.md §[ShellHooks]。
+	s.Hooks.Fire("turn.stop", map[string]string{
+		"POLARIS_SESSION_ID": sessionID,
+		"POLARIS_CHANNEL":    "web",
+	})
 
 	// [新增] 推理完成后通知 FSM（非阻塞）
 	if agentCtrl != nil {

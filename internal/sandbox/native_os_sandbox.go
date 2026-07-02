@@ -47,17 +47,46 @@ func NewNativeOSSandbox(runner CmdRunner) *NativeOSSandbox {
 }
 
 // Run 实现 SandboxProvider 接口。
-// 仅支持 ScriptPath 非空的脚本执行路径（CodeAct Python/Bash）；
-// 其余路径返回不支持错误，避免静默降级。
+// 支持 ScriptPath（CodeAct/Skill 脚本文件）或 Command（Hook 引擎任意 shell 命令）两种路径；
+// 二者均为空时返回不支持错误，避免静默降级。
 func (s *NativeOSSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
-	if spec.ScriptPath == "" {
-		// NativeOSSandbox 专为脚本执行设计；非脚本工具调用不应路由至此。
-		return &types.ToolResult{
-			Success: false,
-			Error:   "NativeOSSandbox: ScriptPath required — non-script tool calls must use InProcessSandbox",
-		}, nil
+	if spec.ScriptPath != "" {
+		return s.runScript(ctx, spec)
 	}
-	return s.runScript(ctx, spec)
+	if spec.Command != "" {
+		return s.runRawCommand(ctx, spec)
+	}
+	// NativeOSSandbox 专为脚本/命令执行设计；纯 ToolName 分发的工具调用不应路由至此。
+	return &types.ToolResult{
+		Success: false,
+		Error:   "NativeOSSandbox: ScriptPath or Command required — non-script tool calls must use InProcessSandbox",
+	}, nil
+}
+
+// runRawCommand 通过 CmdRunner 执行任意 shell 命令字符串（bash -c 语义），Tier-0 版本。
+// 供 Hook 引擎在 2GB VPS（无容器运行时）上执行 hooks.yaml 配置的命令。
+func (s *NativeOSSandbox) runRawCommand(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
+	quotaMs := uint64(spec.CPUQuotaMs)
+	if quotaMs == 0 {
+		quotaMs = 30000
+	}
+	start := time.Now()
+	out, exitCode, _, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{
+		CallerType:   "hook",
+		Command:      spec.Command,
+		AllowedPaths: spec.AllowedPaths,
+		Env:          append(containerBaseEnv(), spec.ExtraEnv...),
+		NetworkBlock: true,
+		TimeoutMs:    quotaMs,
+	})
+	latency := time.Since(start).Milliseconds()
+	if runErr != nil {
+		return &types.ToolResult{Success: false, Error: runErr.Error(), LatencyMs: latency}, nil //nolint:nilerr
+	}
+	if exitCode != 0 {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("command exited with code %d", exitCode), Output: out, LatencyMs: latency}, nil
+	}
+	return &types.ToolResult{Success: true, Output: out, LatencyMs: latency}, nil
 }
 
 // runScript 通过 CmdRunner（→ Rust bwrap/Seatbelt）执行脚本文件。
@@ -86,13 +115,22 @@ func (s *NativeOSSandbox) runScript(ctx context.Context, spec SandboxSpec) (*typ
 		quotaMs = 30000
 	}
 
+	callerType := "skill"
+	switch {
+	case strings.HasPrefix(spec.ToolName, "codeact:"):
+		callerType = "codeact"
+	case strings.HasPrefix(spec.ToolName, "hook:"):
+		callerType = "hook"
+	}
+
 	start := time.Now()
 	out, exitCode, method, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{
+		CallerType:   callerType,
 		Command:      interp + " " + spec.ScriptPath,
 		WorkDir:      scriptDir,
 		AllowedPaths: allowedPaths,
-		Env:          containerBaseEnv(), // 语言运行时变量，不含凭据（R1.15）
-		NetworkBlock: true,               // CodeAct 生成代码默认断网
+		Env:          append(containerBaseEnv(), spec.ExtraEnv...), // 语言运行时变量，不含凭据（R1.15）+ 调用方追加变量
+		NetworkBlock: true,                                         // CodeAct 生成代码 / Hook 脚本默认断网
 		TimeoutMs:    quotaMs,
 	})
 	latency := time.Since(start).Milliseconds()

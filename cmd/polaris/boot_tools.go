@@ -22,6 +22,7 @@ import (
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
 
 	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/action/hook"
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
 	"github.com/polarisagi/polaris/internal/extension/bus"
@@ -108,6 +109,18 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, &inlineTokenVerifier{})
 	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
+
+	// PreToolUse/PostToolUse Hook 引擎（ADR-0015 §2.2）：从 ~/.polarisagi/polaris/hooks/hooks.yaml
+	// （用户级）+ .polaris/hooks/hooks.yaml（项目级）加载，接入 ExecEnvelope 统一入口。
+	// 配置缺失/为空不报错（ADR-0006 确定性降级）；YAML 语法错误则降级为空 Registry，不阻塞启动。
+	hookRegistry, hookLoadErr := hook.LoadDefault()
+	if hookLoadErr != nil {
+		slog.Warn("polaris: hooks.yaml load failed, PreToolUse/PostToolUse hooks disabled this run", "err", hookLoadErr)
+		hookRegistry, _ = hook.Load() // 空路径列表 → 空 Registry，Match 恒返回 nil
+	}
+	hookRunner := hook.NewRunner(hookRegistry, sb.Gate, envelope, nil)
+	envelope.SetHookFirer(hookRunner)
+	slog.Info("polaris: PreToolUse/PostToolUse hook engine wired into ExecEnvelope")
 
 	// ─── §6.3 内置工具注册 & MCP Manager ────────────────────────────────────
 	// allowedPaths：DataDir 始终包含（Agent 工作区 + DB + 日志）。

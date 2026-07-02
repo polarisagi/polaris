@@ -426,6 +426,13 @@ func (h *SysAdminHandler) dispatchChannelMessage(ctx context.Context, channelTyp
 		"POLARIS_USER_ID":    msg.UserID,
 		"POLARIS_CHAT_ID":    msg.ChatID,
 	})
+	// turn.stop hook：见 chat/sse.go 同名注释（ADR-0015 §2.2 Codex Stop 事件语义）。
+	h.Hooks.Fire("turn.stop", map[string]string{
+		"POLARIS_SESSION_ID": sessionKey,
+		"POLARIS_CHANNEL":    channelType,
+		"POLARIS_USER_ID":    msg.UserID,
+		"POLARIS_CHAT_ID":    msg.ChatID,
+	})
 
 	h.ChannelMgr.SendReply(ctx, channelType, channelID, cfg, msg, reply)
 }
