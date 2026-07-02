@@ -88,14 +88,15 @@ my-plugin/
 
 **决策**: 在 `internal/action/hook/` 实现 ShellHook 执行引擎，从 `~/.polarisagi/polaris/hooks/hooks.yaml` 加载配置。
 
-**Hook 事件映射**:
-| 事件 | 触发点 | 模块 |
-|---|---|---|
-| `SessionStart` | Gateway 建连 | M13 |
-| `PreToolUse` | sandbox 执行前 | M7 |
-| `PostToolUse` | sandbox 执行后 | M7 |
-| `UserPromptSubmit` | 消息入队 | M13 |
-| `Stop` | FSM → S_IDLE | M4 |
+**Hook 事件映射**（2026-07-02 修订：仅 PreToolUse/PostToolUse 在本引擎实现，其余 3 个与
+ShellHooks 既有事件重叠，改由 ShellHooks 承担，见修订记录）：
+| 事件 | 触发点 | 模块 | 现状 |
+|---|---|---|---|
+| `SessionStart` | Gateway 建连 | M13 | 未在本引擎实现，由 ShellHooks `gateway.startup`/`session.new` 承担 |
+| `PreToolUse` | `ExecEnvelope.Execute` Step 1.5 | M7 | 已接入生产 |
+| `PostToolUse` | `ExecEnvelope.Execute` Step 5 后 | M7 | 已接入生产 |
+| `UserPromptSubmit` | 消息入队 | M13 | 未在本引擎实现，由 ShellHooks `message.before` 承担 |
+| `Stop` | FSM → S_IDLE | M4 | 未在本引擎实现，由 ShellHooks `turn.stop` 承担 |
 
 **挑战 B**（安全边界）: Codex Hook 允许外部脚本任意修改 Agent 行为，违反 HE-Rule-2（可验证执行）。
 
@@ -186,7 +187,7 @@ mcp_servers: []
 
 - [ADR-0002] Skill Registry 合并 → 本 ADR Plugin/Skill 适配依赖其决策
 - [ADR-0005] purego FFI Cedar → prefix_rule 不引入，理由援引本 ADR
-- [ADR-0008] 三级沙箱 → Hook 执行在 L1（InProc），Plugin MCP 在 L1/L2
+- [ADR-0008] 三级沙箱 → Hook 执行经 `sandbox.CmdRunner`（`CallerType="hook"`）路由至 Rust V2 统一沙箱（Container 级隔离，与 `bash` 工具同一物理实现），非 L1 InProc；Plugin MCP 在 L1/L2
 - **[ADR-0016]** 统一信任-扩展模型 → 取代本 ADR §2.1 Plugin 层定位；TrustTier 取代 SignatureValid bool；Plugin Catalog 移至 M13
 - M06 §agentskills 适配, **M13 §Plugin Catalog**（非 M07；见 ADR-0016）, M07 §Hook 框架, M08 §Custom Agent, M08 §CSV fan-out
 
@@ -195,3 +196,5 @@ mcp_servers: []
 | 日期 | 变更 |
 |------|------|
 | 2026-06-25 | 补充章节有效性状态表，明确 §2.1/§2.3 SignatureValid 已被 ADR-0016 取代 |
+| 2026-07-02 | §2.2 Hook 框架安全加固：`internal/action/hook/runner.go` 执行路径从独立 `exec.CommandContext` 裸跑改为经 `sandbox.CmdRunner`（`CallerType="hook"`）调用 Rust V2 统一沙箱，`cmdRunner==nil` fail-closed。同时审计确认：本节 5 事件引擎（`hook.Runner`/`Registry`/`hooks.yaml`）当前生产代码零调用点，未接入 Agent 主循环；系统实际生效的 End-User 生命周期扩展机制是另一套独立系统 `internal/gateway/server/sysadmin/hooks.go` 的 `HookRunner`（`[ShellHooks]`，事件集/配置格式均不同，裸 exec 无沙箱，设计如此非缺陷）。详见 M07 §15 |
+| 2026-07-02（同日二次修订） | 用户明确要求接入生产、且要求与安全/沙箱模块结合，评估后**范围收窄为 PreToolUse/PostToolUse**（SessionStart/UserPromptSubmit/Stop 与 ShellHooks 既有事件高度重叠，不重复实现；Stop 由 ShellHooks 新增 `turn.stop` 事件承接，见 `00-Global-Dictionary.md` §[ShellHooks]）。接入点：`ExecEnvelope.Execute` 新增 `HookFirer` 接口（`internal/sandbox/envelope.go`，consumer-side 定义防依赖环）+ Step 1.5 PreToolUse（veto-only，不推翻 PolicyGate 的 allow）+ Step 5 后 PostToolUse（fire-and-forget）。Hook 自身执行同步改为经 `ExecEnvelope.Execute`（`Kind=KindHookExecute`）而非直接调 `CmdRunner`，获得与其他执行类型一致的沙箱分级/Capability Token/Taint only-up；为此在 `SandboxSpec`/`ExecRequest` 新增 `Command`/`ExtraEnv` 字段（`ContainerSandbox`/`NativeOSSandbox` 新增 `runRawCommand` 分支，与既有 `ScriptPath` 分支并列，供任意 shell 命令字符串执行，Tier-0 同样支持）。新增 `HookInput` 序列化前 PII 脱敏（`guard.PIIDetector.Redact`，脱敏失败 fail-closed）——此前引擎零调用点时未暴露的缺口，接入真实工具调用参数后成为实际风险面。生产构造见 `cmd/polaris/boot_tools.go`。详见 M07 §15 |
