@@ -1,12 +1,14 @@
 // Package tool — rust_native_sandbox.go
 //
-// Go→Rust FFI 桥接：通过 purego 调用 rust/substrate native_sandbox_exec。
+// Go→Rust FFI 桥接：通过 purego 调用 rust/substrate 的 V2 沙箱导出函数
+// （native_sandbox_exec_v2 / native_sandbox_wrap_argv / native_sandbox_probe_tools）。
 // 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.2，ADR-0011
 //
 // 设计原则：
 //   - 此文件是 Go 层的薄封装，不含任何平台特定逻辑（平台逻辑全在 Rust）
-//   - 调用方透明：与旧 Go native_sandbox 的接口保持一致（NativeSandboxCfg）
-//   - Rust 不可用时 fail-closed（返回 error），由 WrapBashCmd 决策降级策略
+//   - Go 侧统一走 V2（CmdRunner 已于 2026-07-02 从 V1 迁移完毕，见 cmd_runner_adapter.go）；
+//     Rust 侧仍保留 V1 FFI 导出（native_sandbox_exec）供未来场景复用，但 Go 侧不再绑定
+//   - Rust 不可用（dylib 缺失/符号未找到）时 fail-closed（返回 error），无 Go 侧降级路径
 //   - 通过 sync.Once + ffi.Load() 懒加载，与 Cedar/Surreal 共享同一 dylib 句柄
 
 package sandbox
@@ -30,12 +32,10 @@ var (
 	nativeOnce sync.Once
 	nativeErr  error
 
-	// V1 函数指针
-	nativeSandboxExec       func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxProbeTools func(outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxFreeString func(ptr uintptr)
 
-	// V2 函数指针（新增，向后兼容 V1）
+	// V2 函数指针（Go 侧唯一执行路径，CmdRunner 已全量迁移，不再绑定 V1 native_sandbox_exec）
 	nativeSandboxExecV2   func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxWrapArgv func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 )
@@ -47,7 +47,6 @@ func bindNativeSandbox() error {
 			nativeErr = err
 			return
 		}
-		purego.RegisterLibFunc(&nativeSandboxExec, lib, "native_sandbox_exec")
 		purego.RegisterLibFunc(&nativeSandboxProbeTools, lib, "native_sandbox_probe_tools")
 		purego.RegisterLibFunc(&nativeSandboxFreeString, lib, "native_sandbox_free_string")
 		// V2（Rust 侧已实现，不存在时 purego 会 panic；用 recover 包裹防启动崩溃）
