@@ -15,7 +15,7 @@
 **三级 Sandbox 抽象 + Tier-0 平台特化降级。**
 
 三级完整定义见 [00-Dict §5](../00-Global-Dictionary.md):
-- **L1 原生层**（Go function / 平台原生子进程）: 高性能运行层。包含进程内受限执行（如 str_replace_editor）与挂载平台原生沙箱组件（如 bash/run_command 挂载 bubblewrap/seatbelt），仅限核心系统内置工具
+- **L1 原生层**（Go function / 平台原生子进程）: 高性能运行层。包含进程内受限执行（如 str_replace_editor）与调用统一的 Rust V2 沙箱抽象执行进程级命令（如 bash/run_command 挂载 bubblewrap/seatbelt）。所有进程执行强制使用 `argv` 模式防注入，且遵循 **Fail-Closed 原则**（当隔离组件缺失时直接返回失败，移除过往向无沙箱原生 `exec` 降级的静默敞口），仅限核心系统内置工具。
 - **L2 Rust 脚本沙箱**（wasmtime_engine.rs FFI）: deny-by-default，用于 Wasm 二进制执行；Logic Collapse Python 技能改走 L3（ADR-0026）；内置工具直接信任，不走 L2
 - **L3 平台原生 microVM**（统一 SandboxProvider 接口，调用方平台无感）:
   - **Linux**: Firecracker (~125MB/VM, 需硬件 KVM)；KVM 不可用 → gVisor (runsc) 用户态内核
