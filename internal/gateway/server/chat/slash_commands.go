@@ -60,6 +60,7 @@ func (r *SlashCommandRouter) Dispatch(
 	history []types.Message,
 	provider protocol.Provider,
 	w http.ResponseWriter, flusher http.Flusher,
+	mem MemoryFacade,
 ) CommandResult {
 	cmd, _, ok := parseSlashCommand(input)
 	if !ok {
@@ -71,7 +72,7 @@ func (r *SlashCommandRouter) Dispatch(
 		resp := r.handleContext(sessionID, history, w, flusher)
 		return CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
 	case "/compact":
-		resp, updated := r.handleCompact(ctx, sessionID, history, provider, w, flusher)
+		resp, updated := r.handleCompact(ctx, sessionID, history, provider, w, flusher, mem)
 		return CommandResult{Handled: true, Response: resp, UpdatedHistory: updated}
 	case "/clear":
 		resp, updated := r.handleClear(ctx, sessionID, history, w, flusher)
@@ -119,6 +120,7 @@ func (r *SlashCommandRouter) handleCompact(
 	history []types.Message,
 	provider protocol.Provider,
 	w http.ResponseWriter, flusher http.Flusher,
+	mem MemoryFacade,
 ) (string, []types.Message) {
 	if provider == nil {
 		msg := "无法压缩：未配置 LLM 厂商（压缩需要 LLM 生成摘要）"
@@ -128,7 +130,7 @@ func (r *SlashCommandRouter) handleCompact(
 
 	r.writeSSE(w, flusher, "status", map[string]any{"type": "compacting", "message": "正在压缩上下文..."})
 
-	compacted, res, err := r.compressor.ForceCompact(ctx, sessionID, history, provider, nil)
+	compacted, res, err := r.compressor.ForceCompact(ctx, sessionID, history, provider, mem)
 	if err != nil {
 		msg := fmt.Sprintf("压缩失败: %v", err)
 		slog.Warn("slash /compact: ForceCompact error", "session", sessionID, "err", err)

@@ -72,7 +72,7 @@ func testHistory() []types.Message {
 func TestDispatch_NotSlashCommand(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
 	history := testHistory()
-	result := router.Dispatch(context.Background(), "普通消息", "s1", history, nil, rec, flusher)
+	result := router.Dispatch(context.Background(), "普通消息", "s1", history, nil, rec, flusher, nil)
 	if result.Handled {
 		t.Fatal("普通消息不应被 Dispatch 处理")
 	}
@@ -80,7 +80,7 @@ func TestDispatch_NotSlashCommand(t *testing.T) {
 
 func TestDispatch_Help(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
-	result := router.Dispatch(context.Background(), "/help", "s1", testHistory(), nil, rec, flusher)
+	result := router.Dispatch(context.Background(), "/help", "s1", testHistory(), nil, rec, flusher, nil)
 	if !result.Handled {
 		t.Fatal("/help 应被处理")
 	}
@@ -98,7 +98,7 @@ func TestDispatch_Help(t *testing.T) {
 func TestDispatch_Context(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
 	history := testHistory()
-	result := router.Dispatch(context.Background(), "/context", "sess-42", history, nil, rec, flusher)
+	result := router.Dispatch(context.Background(), "/context", "sess-42", history, nil, rec, flusher, nil)
 	if !result.Handled {
 		t.Fatal("/context 应被处理")
 	}
@@ -113,7 +113,7 @@ func TestDispatch_Context(t *testing.T) {
 func TestDispatch_Clear(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
 	history := testHistory()
-	result := router.Dispatch(context.Background(), "/clear", "s1", history, nil, rec, flusher)
+	result := router.Dispatch(context.Background(), "/clear", "s1", history, nil, rec, flusher, nil)
 	if !result.Handled {
 		t.Fatal("/clear 应被处理")
 	}
@@ -127,7 +127,7 @@ func TestDispatch_Clear(t *testing.T) {
 
 func TestDispatch_CompactNoProvider(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
-	result := router.Dispatch(context.Background(), "/compact", "s1", testHistory(), nil, rec, flusher)
+	result := router.Dispatch(context.Background(), "/compact", "s1", testHistory(), nil, rec, flusher, nil)
 	if !result.Handled {
 		t.Fatal("/compact 应被处理（即使无 provider）")
 	}
@@ -138,7 +138,7 @@ func TestDispatch_CompactNoProvider(t *testing.T) {
 
 func TestDispatch_UnknownCommand(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
-	result := router.Dispatch(context.Background(), "/unknowncmd", "s1", testHistory(), nil, rec, flusher)
+	result := router.Dispatch(context.Background(), "/unknowncmd", "s1", testHistory(), nil, rec, flusher, nil)
 	if !result.Handled {
 		t.Fatal("未知斜线命令应被拦截（Handled=true）")
 	}

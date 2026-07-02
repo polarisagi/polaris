@@ -1,6 +1,10 @@
 package memory
 
-import "context"
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/vfs"
+)
 
 // 本文件声明 memory 包对外部模块的消费端接口（Consumer-side Interfaces）。
 // 设计原则（参照 polaris-agent internal/memory/provider.go）：
@@ -42,4 +46,20 @@ type KNNResult struct {
 // LLMSummarizer memory 包对 LLM 摘要能力的消费端接口（L1→L2 巩固时使用）。
 type LLMSummarizer interface {
 	Summarize(ctx context.Context, text string, maxTokens int) (string, error)
+}
+
+// WorkspaceProvider memory 包对任务隔离工作区目录管理的消费端接口（M05 §11.3 Stage 1）。
+// 由 vfs.WorkspaceManager 实现；ToolRefOffloader 只持有本接口，不持有具体
+// *vfs.WorkspaceManager struct（模块边界 R3：消费端只引用窄接口，不 import 具体
+// stateful 实现）。方法签名中的 vfs.WorkspaceFile 是纯数据 DTO（零方法），
+// 与 STTTranscriber.Transcribe 引用 stt.Result 是同一类允许的例外，不算破例。
+type WorkspaceProvider interface {
+	// Create 为 taskID 创建隔离工作区目录，幂等，返回绝对路径。
+	Create(taskID string) (string, error)
+	// GetRootDir 返回工作区根目录（用于拼接相对路径）。
+	GetRootDir() string
+	// RegisterFile 登记文件到 taskID 的 manifest，供 quota/GC 感知。
+	RegisterFile(taskID string, f vfs.WorkspaceFile)
+	// CheckQuota 写入前检查配额，超限返回 vfs.ErrWorkspaceQuotaExhausted。
+	CheckQuota(pendingWrite int64) error
 }

@@ -315,7 +315,16 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// ── 斜线命令拦截（短路 LLM 推理）────────────────────────────────────────
-	if cmdResult := s.SlashRouter.Dispatch(ctx, finalInput, sessionID, history, p, w, flusher); cmdResult.Handled {
+	// /compact 走与自动压缩相同的 Stage 3 TaskMermaidCanvas 注入路径（M05 §11.3）：
+	// agentCtrl 此处已解析（152 行），避免 SlashCommandRouter 构造期无法获取 per-session
+	// memory facade 的问题。
+	var slashMem MemoryFacade
+	if agentCtrl != nil {
+		if mf := agentCtrl.Memory(); mf != nil {
+			slashMem = mf
+		}
+	}
+	if cmdResult := s.SlashRouter.Dispatch(ctx, finalInput, sessionID, history, p, w, flusher, slashMem); cmdResult.Handled {
 		if cmdResult.Response != "" {
 			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
