@@ -62,18 +62,6 @@ func bindNativeSandbox() error {
 
 // ─── 输入/输出结构体（与 Rust 侧镜像，json 序列化）─────────────────────────
 
-// rustSandboxRequest 与 Rust NativeSandboxRequest 字段对齐。
-type rustSandboxRequest struct {
-	Command      string   `json:"command"`
-	Workdir      string   `json:"workdir,omitempty"`
-	AllowedPaths []string `json:"allowed_paths,omitempty"`
-	NetworkBlock bool     `json:"network_block"`
-	EnvExtra     []string `json:"env_extra,omitempty"`
-	TimeoutMs    uint64   `json:"timeout_ms,omitempty"`
-	BwrapPath    string   `json:"bwrap_path,omitempty"`
-	MaxMemoryMB  uint64   `json:"max_memory_mb,omitempty"`
-}
-
 // RustSandboxResponse 与 Rust NativeSandboxResponse 字段对齐。
 type RustSandboxResponse struct {
 	Output        string `json:"output"`
@@ -114,62 +102,6 @@ func readAndFreeRustStr(ptr uintptr) string {
 	s := string(unsafe.Slice((*byte)(unsafe.Pointer(ptr)), n))
 	nativeSandboxFreeString(ptr)
 	return s
-}
-
-// ─── 公开 API ─────────────────────────────────────────────────────────────────
-
-// RustSandboxExec 通过 Rust FFI 执行沙箱命令。
-// cfg 使用与 Go native_sandbox 相同的 NativeSandboxCfg 结构，调用方无感知切换。
-func RustSandboxExec(cfg NativeSandboxCfg, timeoutMs uint64) (*RustSandboxResponse, error) {
-	if err := bindNativeSandbox(); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal,
-			"rust_native_sandbox: dylib not available", err)
-	}
-
-	netBlock := cfg.NetworkPolicy == NetworkBlock
-
-	req := rustSandboxRequest{
-		Command:      cfg.Command,
-		Workdir:      cfg.WorkDir,
-		AllowedPaths: cfg.AllowedPaths,
-		NetworkBlock: netBlock,
-		EnvExtra:     cfg.Env,
-		TimeoutMs:    timeoutMs,
-		BwrapPath:    cfg.BwrapPath,
-		MaxMemoryMB:  cfg.MaxMemoryMB,
-	}
-
-	inputJSON, err := json.Marshal(req)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "rust_native_sandbox: marshal request", err)
-	}
-
-	// NUL-terminate 供 Rust CStr::from_ptr
-	inputCStr := goStringToC(string(inputJSON))
-
-	var outJSON uintptr
-	var outErr uintptr
-
-	code := nativeSandboxExec(
-		uintptr(unsafe.Pointer(&inputCStr[0])),
-		&outJSON,
-		&outErr,
-	)
-
-	errStr := readAndFreeRustStr(outErr)
-	jsonStr := readAndFreeRustStr(outJSON)
-
-	if code < 0 {
-		return nil, apperr.New(apperr.CodeInternal,
-			fmt.Sprintf("rust_native_sandbox: exec failed (code=%d): %s", code, errStr))
-	}
-
-	var resp RustSandboxResponse
-	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal,
-			fmt.Sprintf("rust_native_sandbox: unmarshal response: %s", jsonStr), err)
-	}
-	return &resp, nil
 }
 
 // ─── V2 公开 API ──────────────────────────────────────────────────────────────
