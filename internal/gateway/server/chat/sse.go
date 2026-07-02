@@ -679,6 +679,20 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 	// 用户自定义追加指令（~/.polarisagi/polaris/config/prompts/custom_instructions.md）
 	ic.CustomInstructions = s.PromptMgr.ReadPrompt("custom_instructions.md", "")
 
+	// 用户画像（P0-2：消费 default 用户画像）
+	if p, err := agentCtrl.Memory().Semantic().GetUserProfile(ctx, "default"); err == nil && p != nil {
+		var summary []string
+		for _, sf := range p.StableFacts {
+			summary = append(summary, "- "+fmt.Sprint(sf))
+		}
+		for _, bp := range p.BehavioralPatterns {
+			summary = append(summary, "- "+fmt.Sprint(bp))
+		}
+		if len(summary) > 0 {
+			ic.UserProfile = "## User Profile (Context)\n" + strings.Join(summary, "\n")
+		}
+	}
+
 	// M9 激活的系统提示词优先覆盖（general taskType）
 	// 三层组装时 SystemPromptTemplate 非空则全量走模板渲染，跳过 stable 层组装
 	s.ActivatedSystemPromptMu.RLock()

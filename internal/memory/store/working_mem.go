@@ -145,6 +145,16 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 		parts = append(parts, toolHint)
 	}
 
+	// 5.5 stable — 用户画像 (L3 摘要)
+	if ic.UserProfile != "" {
+		parts = append(parts, ic.UserProfile)
+	}
+
+	// 5.6 stable — 操作指令 (Memory Hygiene 等)
+	if ic.OperationalDirectives != "" {
+		parts = append(parts, ic.OperationalDirectives)
+	}
+
 	// 6. volatile — 时间戳 / 会话信息（精确到天，不破坏 prefix cache）
 	if ic.VolatileBlock != "" {
 		parts = append(parts, ic.VolatileBlock)

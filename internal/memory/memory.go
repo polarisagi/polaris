@@ -126,18 +126,18 @@ func NewMemImplFull(store protocol.Store, graph protocol.GraphTraverser, cogniti
 	m := &MemImpl{
 		working:    memstore.NewWorkingMem(),
 		episodic:   memstore.NewEpisodicMemWithCognitive(store, indexer, cognitive),
-		semantic:   memstore.NewSemanticMem(store, nil),
+		semantic:   memstore.NewSemanticMemWithCognitive(store, nil, cognitive),
 		procedural: procedural,
 	}
 	if db != nil {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
 		m.reflection = sqlRefl
 		m.working = memstore.NewWorkingMemWithDB(db)
-		m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, nil, sqlRefl, cognitive)
+		m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, nil, sqlRefl, cognitive, m.semantic)
 		return m
 	}
 	m.reflection = memstore.NewReflectionMem(store)
-	m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, nil, nil, cognitive)
+	m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, nil, nil, cognitive, m.semantic)
 	return m
 }
 
@@ -163,6 +163,11 @@ func (m *MemImpl) Semantic() protocol.SemanticMemory     { return m.semantic }
 func (m *MemImpl) Procedural() protocol.ProceduralMemory { return m.procedural }
 func (m *MemImpl) Retriever() protocol.HybridRetriever   { return m.retriever }
 func (m *MemImpl) Reflection() protocol.ReflectionMemory { return m.reflection }
+
+// InjectEmbedder 激活向量检索路径（委托给内部 retriever，外部不感知具体类型）。
+func (m *MemImpl) InjectEmbedder(e memretrieval.Embedder) {
+	m.retriever.InjectEmbedder(e)
+}
 
 func (m *MemImpl) StoreStats() (string, error) {
 	return m.semantic.StoreStats()

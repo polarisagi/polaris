@@ -3,11 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math"
+	"sort"
 	"strconv"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/memory/util"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/pb"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -31,12 +35,17 @@ type SemanticMemWriter interface {
 // ============================================================================
 
 type SemanticMem struct {
-	store protocol.Store
-	bus   IntentSubmitter
+	store     protocol.Store
+	bus       IntentSubmitter
+	cognitive protocol.CognitiveSearcher
 }
 
 func NewSemanticMem(store protocol.Store, bus IntentSubmitter) *SemanticMem {
 	return &SemanticMem{store: store, bus: bus}
+}
+
+func NewSemanticMemWithCognitive(store protocol.Store, bus IntentSubmitter, cognitive protocol.CognitiveSearcher) *SemanticMem {
+	return &SemanticMem{store: store, bus: bus, cognitive: cognitive}
 }
 
 func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document, taint types.TaintLevel) error {
@@ -95,7 +104,8 @@ func (sm *SemanticMem) Archive(ctx context.Context, id string, reason string) er
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.Archive", err)
 	}
 	doc.Archived = true
-	return sm.StoreDocument(ctx, *doc, types.TaintNone)
+	err = sm.StoreDocument(ctx, *doc, types.TaintNone)
+	return err
 }
 
 func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, taint types.TaintLevel) error {
@@ -144,6 +154,20 @@ func (sm *SemanticMem) UpsertFact(ctx context.Context, entity types.Entity, tain
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertFact", err)
 	}
+
+	if sm.cognitive != nil {
+		desc, _ := entity.Properties["description"].(string)
+		text := entity.Name
+		if desc != "" {
+			text += " " + desc
+		} else {
+			if b, err := json.Marshal(entity.Properties); err == nil {
+				text += " " + string(b)
+			}
+		}
+		_ = sm.cognitive.FTSIndex("sement_"+entity.Type+"_"+entity.Name, text)
+	}
+
 	return nil
 }
 
@@ -282,6 +306,52 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 	if len(propertiesJSON) > 0 {
 		_ = json.Unmarshal(propertiesJSON, &ent.Properties)
 	}
+	if len(embeddingBytes) > 0 {
+		ent.Embedding = bytesToFloat32s(embeddingBytes)
+	}
+	return &ent, nil
+}
+
+// GetEntityByID 根据数据库主键加载实体（内部维护用）。
+func (sm *SemanticMem) GetEntityByID(ctx context.Context, id int64) (*types.Entity, error) {
+	db, err := sm.requireDB()
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetEntityByID", err)
+	}
+
+	const q = `SELECT id, name, entity_type, properties, embedding,
+	            COALESCE(source_event_id, 0), version,
+	            status, COALESCE(superseded_by, 0),
+	            confidence, source_type,
+	            COALESCE(valid_from, 0), COALESCE(valid_until, 0),
+	            COALESCE(taint_level, 0)
+	            FROM semantic_entities WHERE id = ?`
+	row := db.QueryRowContext(ctx, q, id)
+
+	var ent types.Entity
+	var propertiesJSON []byte
+	var embeddingBytes []byte
+
+	err = row.Scan(
+		&ent.DBID, &ent.Name, &ent.Type, &propertiesJSON, &embeddingBytes,
+		&ent.SourceEventID, &ent.Version, &ent.Status, &ent.SupersededBy,
+		&ent.Confidence, &ent.SourceType, &ent.ValidFrom, &ent.ValidUntil,
+		(*int)(&ent.TaintLevel),
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperr.New(apperr.CodeNotFound, "Entity not found by ID")
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetEntityByID", err)
+	}
+
+	ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+	if len(propertiesJSON) > 0 {
+		_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+	}
+	if len(embeddingBytes) > 0 {
+		ent.Embedding = bytesToFloat32s(embeddingBytes)
+	}
 	return &ent, nil
 }
 
@@ -346,6 +416,13 @@ func (sm *SemanticMem) MarkEntitySuperseded(ctx context.Context, oldDBID int64, 
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.MarkEntitySuperseded", err)
 	}
+
+	if sm.cognitive != nil {
+		if oldEnt, err := sm.GetEntityByID(ctx, oldDBID); err == nil {
+			_ = sm.cognitive.FTSDelete("sement_" + oldEnt.Type + "_" + oldEnt.Name)
+		}
+	}
+
 	return nil
 }
 
@@ -455,3 +532,91 @@ func NewProceduralMem(skills protocol.SkillRegistry) *ProceduralMem {
 }
 
 func (p *ProceduralMem) SetSkills(s protocol.SkillRegistry) { p.skills = s }
+
+// 插入到 semantic_mem.go 中
+func (sm *SemanticMem) SearchEntities(ctx context.Context, query string, limit int) ([]types.Entity, error) {
+	db, err := sm.requireDB()
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.SearchEntities", err)
+	}
+
+	likeQ := "%" + query + "%"
+	const sqlQ = `SELECT id, name, entity_type, properties, embedding,
+	            COALESCE(source_event_id, 0), version,
+	            status, COALESCE(superseded_by, 0),
+	            confidence, source_type,
+	            COALESCE(valid_from, 0), COALESCE(valid_until, 0),
+	            COALESCE(taint_level, 0)
+	            FROM semantic_entities 
+	            WHERE status='active' AND (name LIKE ? OR properties LIKE ?)
+	            LIMIT 100` // 取100条再 bm25
+
+	rows, err := db.QueryContext(ctx, sqlQ, likeQ, likeQ)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.SearchEntities", err)
+	}
+	defer rows.Close()
+
+	var results []types.Entity
+	for rows.Next() {
+		var ent types.Entity
+		var propertiesJSON []byte
+		var embeddingBytes []byte
+
+		err = rows.Scan(
+			&ent.DBID, &ent.Name, &ent.Type, &propertiesJSON, &embeddingBytes,
+			&ent.SourceEventID, &ent.Version, &ent.Status, &ent.SupersededBy,
+			&ent.Confidence, &ent.SourceType, &ent.ValidFrom, &ent.ValidUntil,
+			(*int)(&ent.TaintLevel),
+		)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.SearchEntities", err)
+		}
+		ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+		if len(propertiesJSON) > 0 {
+			_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+		}
+		if len(embeddingBytes) > 0 {
+			ent.Embedding = bytesToFloat32s(embeddingBytes)
+		}
+		results = append(results, ent)
+	}
+
+	// bm25 排序
+	type scoredEnt struct {
+		ent   types.Entity
+		score float64
+	}
+	var scored []scoredEnt
+	for _, e := range results {
+		var propStr string
+		if b, err := json.Marshal(e.Properties); err == nil {
+			propStr = string(b)
+		}
+		text := e.Name + " " + propStr
+		s := util.Bm25Score(query, text)
+		scored = append(scored, scoredEnt{ent: e, score: s})
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+	if len(scored) > limit && limit > 0 {
+		scored = scored[:limit]
+	}
+	out := make([]types.Entity, len(scored))
+	for i, v := range scored {
+		out[i] = v.ent
+	}
+	return out, nil
+}
+
+func bytesToFloat32s(b []byte) []float32 {
+	if len(b) == 0 || len(b)%4 != 0 {
+		return nil
+	}
+	res := make([]float32, len(b)/4)
+	for i := 0; i < len(res); i++ {
+		res[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4 : i*4+4]))
+	}
+	return res
+}

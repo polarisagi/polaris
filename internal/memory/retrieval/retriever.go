@@ -25,6 +25,7 @@ type HybridRetrieverImpl struct {
 	reflectionMem protocol.ReflectionMemory    // 第 4 路：SQL 实现优先，nil 时降级 KV 扫描
 	embedder      Embedder                     // P0：稠密向量检索
 	cognitive     protocol.CognitiveSearcher   // Tier1+：SurrealDB FTS+HNSW，nil 时降级 Tier0
+	semantic      protocol.SemanticMemory      // P0-2：第 6 路（semantic_entities）
 }
 
 // InjectEmbedder 注入 M1 Embedding 接口，激活向量检索路径
@@ -55,8 +56,8 @@ func NewHybridRetrieverFull(store protocol.Store, graph protocol.GraphTraverser,
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB FTS+HNSW 路径的全功能 HybridRetriever（Tier1+）。
 // cognitive 注入后：BM25 路径走 SurrealDB BM25 FTS；向量路径走 SurrealDB HNSW KNN。
 // cognitive == nil 时自动降级为 Tier0（纯 Go BM25 + SQLite BLOB 余弦）。
-func NewHybridRetrieverWithCognitive(store protocol.Store, graph protocol.GraphTraverser, durative *store.DurativeMemoryManager, reflectionMem protocol.ReflectionMemory, cognitive protocol.CognitiveSearcher) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative, reflectionMem: reflectionMem, cognitive: cognitive}
+func NewHybridRetrieverWithCognitive(store protocol.Store, graph protocol.GraphTraverser, durative *store.DurativeMemoryManager, reflectionMem protocol.ReflectionMemory, cognitive protocol.CognitiveSearcher, semantic protocol.SemanticMemory) *HybridRetrieverImpl {
+	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative, reflectionMem: reflectionMem, cognitive: cognitive, semantic: semantic}
 }
 
 func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) { //nolint:gocyclo,nestif
@@ -241,6 +242,31 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		}
 	}
 
+	// 第 6 路（P0-2）：Semantic Entities 召回
+	var semanticResults []types.ScoredFragment
+	if scope.Type == "memory" && hr.semantic != nil {
+		entities, err := hr.semantic.SearchEntities(ctx, query, 20)
+		if err == nil {
+			for _, ent := range entities {
+				var propStr string
+				if b, merr := json.Marshal(ent.Properties); merr == nil {
+					propStr = string(b)
+				}
+				content := ent.Name + " " + propStr
+				if s := util.Bm25Score(query, content); s > 0 {
+					src := ent.ID
+					semanticResults = append(semanticResults, types.ScoredFragment{
+						Content:      content,
+						Score:        s,
+						Source:       src,
+						EvidenceType: types.EvidenceFTSKeyword,
+						TaintLevel:   ent.TaintLevel,
+					})
+				}
+			}
+		}
+	}
+
 	// Stage 1c — Graph 路径（Tier1+）：Spreading Activation 多种子能量扩散
 	// 设计决策：用 SA 替代原 BFS + 硬编码衰减系数。
 	//   - 取 BM25 Top-3 作为种子，比单节点覆盖更广
@@ -309,12 +335,26 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 			}
 		}
 	}
-	addRRF(bm25Results, 1.0)
-	addRRF(simhashResults, 0.8)     // Simhash 路径权重略低于 BM25
-	addRRF(vectorResults, 0.6)      // Vector 稠密向量召回
-	addRRF(graphResults, 0.6)       // Graph 路径（Tier1+，仅有图时生效）
+	bw := config.BM25Weight
+	if bw <= 0 {
+		bw = 1.0
+	}
+	vw := config.VectorWeight
+	if vw <= 0 {
+		vw = 0.6
+	}
+	gw := config.GraphWeight
+	if gw <= 0 {
+		gw = 0.6
+	}
+
+	addRRF(bm25Results, bw)
+	addRRF(simhashResults, bw*0.8)  // Simhash 路径权重基于 BM25 缩放
+	addRRF(vectorResults, vw)       // Vector 稠密向量召回
+	addRRF(graphResults, gw)        // Graph 路径（Tier1+，仅有图时生效）
 	addRRF(reflectionResults, 0.15) // 第 4 路：跨会话 ReflectionMem（M05 §7）
 	addRRF(durativeResults, 0.3)    // 第 5 路：DurativeMemory（temporal 查询激活）
+	addRRF(semanticResults, 0.9)    // 第 6 路：Semantic Entities（事实类记忆，权重较高）
 
 	// Stage 3 — 汇总 + BM25 精排（按 RRF 分降序即等效精排）
 	var merged []types.ScoredFragment //nolint:prealloc

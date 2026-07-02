@@ -432,6 +432,7 @@ type SemanticMemory interface {
 
 	// 生命周期接口 — 信念修正与知识演化（缺口 1）
 	ListActiveEntities(ctx context.Context, entityType string, limit int) ([]types.Entity, error)
+	SearchEntities(ctx context.Context, query string, limit int) ([]types.Entity, error)
 	MarkEntitySuperseded(ctx context.Context, oldDBID int64, newDBID int64) error
 
 	// 用户画像接口 — L3 Persona 合成与查询（缺口 3）
@@ -850,6 +851,7 @@ type GraphTraverser interface {
 // nil 时自动降级 Tier0 路径（纯 Go BM25 + SQLite BLOB 内存余弦）。
 type CognitiveSearcher interface {
 	FTSIndex(docID, text string) error
+	FTSDelete(docID string) error
 	VecUpsert(id string, embedding []float32) error
 	VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error)
 	FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error)

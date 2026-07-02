@@ -45,6 +45,10 @@ type ImmutableCore struct {
 	// DB 删除不影响（文件持久化），factory reset 时才清空。
 	CustomInstructions string `json:"custom_instructions,omitempty"`
 
+	// UserProfile L3 用户画像摘要（StableFacts + 高频 BehavioralPatterns）。
+	// 在 sse.go 和 agentctx.BuildPerceiveContext 组装。
+	UserProfile string `json:"user_profile,omitempty"`
+
 	// OperationalDirectives 高级操作指令集合（含 Tool-Use, Task Completion 等）。
 	OperationalDirectives string `json:"operational_directives,omitempty"`
 }

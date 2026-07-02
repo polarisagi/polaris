@@ -27,6 +27,10 @@ func (a *surrealCognAdapter) FTSIndex(docID, text string) error {
 	return a.s.FTSIndex(docID, text)
 }
 
+func (a *surrealCognAdapter) FTSDelete(docID string) error {
+	return a.s.FTSDelete(docID)
+}
+
 func (a *surrealCognAdapter) VecUpsert(id string, embedding []float32) error {
 	return a.s.VecUpsert(id, embedding)
 }

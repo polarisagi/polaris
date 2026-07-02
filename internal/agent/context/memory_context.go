@@ -93,6 +93,22 @@ func BuildPerceiveContext( //nolint:gocyclo
 		}
 	}
 
+	// 3.5 用户画像（P0-2：消费 default 用户画像）
+	if memory.Semantic() != nil {
+		if p, err := memory.Semantic().GetUserProfile(ctx, "default"); err == nil && p != nil {
+			var summary []string
+			for _, sf := range p.StableFacts {
+				summary = append(summary, "- "+fmt.Sprint(sf))
+			}
+			for _, bp := range p.BehavioralPatterns {
+				summary = append(summary, "- "+fmt.Sprint(bp))
+			}
+			if len(summary) > 0 {
+				retrieved.WriteString("## User Profile (Context)\n" + strings.Join(summary, "\n") + "\n")
+			}
+		}
+	}
+
 	// 4. L2 语义记忆
 	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
 		ftsResults, err := cognitive.FTSSearch(sCtx.TaskModel.Goal, 5)

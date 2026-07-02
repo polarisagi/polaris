@@ -42,6 +42,16 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 		slog.Info("polaris: memory initialized in fallback mode (SQLite-only, SurrealDB disabled, <8GB VPS)")
 	}
 
+	// 统一注入 Embedder 激活向量检索路径（P0-3 修复）
+	if sb.Embedder != nil {
+		embedModelName := "nomic-embed-text"
+		if sb.AutoConf != nil && sb.AutoConf.Config.LocalEmbeddingModel != "" {
+			embedModelName = sb.AutoConf.Config.LocalEmbeddingModel
+		}
+		mem.InjectEmbedder(&memEmbedderAdapter{e: sb.Embedder, model: embedModelName})
+		slog.Info("polaris: vector retrieval path activated")
+	}
+
 	// ─── §4.10.5 OnlineReindexer（后台异步 Embedding 版本漂移修复）──────────
 	// embedder 非 nil 时才启动（FeatureLocalEmbedding 已开启），否则 Tier0 走纯 BM25。
 	if sb.Embedder != nil {
