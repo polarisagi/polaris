@@ -6,8 +6,6 @@
   "internal/action/codeact/codeact_test.go": "a8ea92383c37ede6b9a9ea69a9036e79f08e303a18466752f3b306412c37b882",
   "internal/action/doc.go": "f15e0e8e082d2f941558ac138e877dd13defd26c1b60774bb5feff6ff7a418dd",
   "internal/action/hook/hook.go": "653234d9265dcdeeffb4ceccb56b0d920f5cd98b160622a079166cb10908fe0e",
-  "internal/action/hook/hook_linux.go": "21a05a7622ac024c6c5615eebb770f6672980611972af8a1624a547e851edddc",
-  "internal/action/hook/hook_other.go": "64da964a00feb03e64928a3e829f20bdd54daaa63e3aa7423697ffd75953d1c4",
   "internal/action/hook/hook_test.go": "69d00b26a8453c62f1d7c6ac6d75e133a7507aafdac5e5ce05981a3b6666b2fb",
   "internal/action/hook/registry.go": "39ab8adb7a4ea80883a97373cdb3e4c91b338f4e88685f45698b4bb3c55ac5c4",
   "internal/action/hook/runner.go": "eb76374fe18af0bf4f3516472df2fc7a137bb3507e129c19f429cef8fe6cddcc",

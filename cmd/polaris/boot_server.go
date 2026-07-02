@@ -81,7 +81,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		// 推理 + 结构化风险输出）。此前 CodeAct 的 WithASTChecker(L0)/WithPeerReviewer(L2)
 		// 从未在生产环境被调用——三层校验实际上只有 L1(regex) 生效，L0(真实 AST 解析)和
 		// L2(LLM 语义审查+HITL) 形同虚设。这里补齐，使三层审查真正全部生效。
-		auditAgent := swarmAgents.NewSecurityAuditAgent(tb.LLMInfer, tb.HITLGateway, 0, "zh")
+		// hitl/timeout 参数已随 AuditAsync 死代码一并删除（2026-07-02）：SecurityAuditAgent
+		// 现在只提供同步 ReviewSync，HITL 审批统一由下面 codeact.WithHITL(tb.HITLGateway) 处理。
+		auditAgent := swarmAgents.NewSecurityAuditAgent(tb.LLMInfer, "zh")
 
 		codeActEngine := codeact.NewCodeAct(
 			tb.Envelope,

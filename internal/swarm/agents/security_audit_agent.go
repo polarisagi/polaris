@@ -7,9 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -18,16 +16,15 @@ import (
 //
 // 职责：
 //  1. 对通过 Layer 1 规则检查的代码进行 LLM 语义审查
-//  2. 将技术风险翻译为用户语言（中文/英文）的简洁说明
-//  3. 通过 HITL 通道提交用户审批
+//  2. 输出结构化风险等级（danger/warning/safe），供调用方（CodeAct L2）决策
 //
-// 线程安全：AuditAsync 在独立 goroutine 中运行，不共享可变状态。
+// 生产路径：ReviewSync 供 codeact.CodeAct.validateL2 同步阻塞调用。HITL 审批由调用方
+// （CodeAct 自身的 hitlGateway）处理，本 Agent 不持有 HITL 引用——2026-07-02 删除了
+// 未接线的 AuditAsync 异步审查路径及其专属 HITL 提示逻辑（promptUser/buildHITLText 等），
+// 那条路径在生产代码里零调用点，且与 ADR-0024 要求的"L2 结论必须同步到达"相矛盾。
 type SecurityAuditAgent struct {
-	llmInfer       LLMInferFunc  // 依赖注入，可 mock
-	hitl           protocol.HITL // 人工审批网关
-	timeout        time.Duration // 单次 LLM 调用超时
-	hitlDeadlineNs int64         // HITL 等待用户响应上限（纳秒）
-	lang           string        // 输出语言："zh"（中文）| "en"（英文）
+	llmInfer LLMInferFunc // 依赖注入，可 mock
+	lang     string       // 输出语言："zh"（中文）| "en"（英文）
 }
 
 // AuditResult LLM 结构化审查输出。
@@ -46,19 +43,13 @@ type RiskItem struct {
 
 // NewSecurityAuditAgent 构造审查 Agent。
 // lang：从 protocol.StateContext.Preferences["language"] 读取，空值默认 "zh"。
-func NewSecurityAuditAgent(llmInfer LLMInferFunc, hitl protocol.HITL, timeout time.Duration, lang string) *SecurityAuditAgent {
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
+func NewSecurityAuditAgent(llmInfer LLMInferFunc, lang string) *SecurityAuditAgent {
 	if lang == "" {
 		lang = "zh"
 	}
 	return &SecurityAuditAgent{
-		llmInfer:       llmInfer,
-		hitl:           hitl,
-		timeout:        timeout,
-		hitlDeadlineNs: int64(10 * time.Minute),
-		lang:           lang,
+		llmInfer: llmInfer,
+		lang:     lang,
 	}
 }
 
