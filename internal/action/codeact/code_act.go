@@ -250,7 +250,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req CodeActRequest) (*CodeActRes
 			"agent_id":      req.AgentID,
 			"language":      req.Language,
 			"capability_id": req.CapabilityID,
-			"taint_level":   req.TaintLevel,
+			"taint_level":   types.TaintHigh, // 与 Execute() 内 sandbox.ExecRequest 的强制值保持一致，
 			"exit_code":     exitCode,
 			"latency_ms":    res.LatencyMs,
 		})
