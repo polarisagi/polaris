@@ -38,11 +38,10 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/polarisagi/polaris/configs"
-	"github.com/polarisagi/polaris/internal/action/codeact"
+	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
-	extplugin "github.com/polarisagi/polaris/internal/extension/plugin"
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 
@@ -91,7 +90,7 @@ type Server struct {
 	evalRunner     protocol.EvalRunner                                                            // M12 评测套件
 	dataDir        string                                                                         // 项目统一的数据根目录
 	installMgr     ExtensionInstaller                                                             // 扩展安装/卸载管理器（接口）
-	pluginCreator  *extplugin.PluginCreator                                                       // LLM 驱动 MCP 插件自动生成（M2 PluginCreator）
+	pluginCreator  plugin.PluginGenerator                                                         // LLM 驱动 MCP 插件自动生成（M2 PluginCreator，消费端接口）
 	scriptRunner   marketplace.HookRunner                                                         // install hook 沙箱执行器（ContainerSandbox.RunScript）
 	skillSignKey   []byte
 
@@ -121,7 +120,7 @@ type Server struct {
 	pluginHandler    *plugin.PluginHandler
 	chatHandler      *chat.ChatHandler
 	sysadminHandler  *sysadmin.SysAdminHandler
-	codeActEngine    *codeact.CodeAct // LLM 生成代码执行引擎（可为 nil，降级拒绝）
+	codeActEngine    action.ActionFacade // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
 	toolStage        interface {
 		SelectFor(ctx context.Context, query string) []types.ToolSchema
 	}
@@ -138,7 +137,7 @@ func (s *Server) SetInstallManager(m ExtensionInstaller) {
 		s.pluginHandler.InstallMgr = m
 	}
 }
-func (s *Server) SetPluginCreator(pc *extplugin.PluginCreator) {
+func (s *Server) SetPluginCreator(pc plugin.PluginGenerator) {
 	s.pluginCreator = pc
 	if s.pluginHandler != nil {
 		s.pluginHandler.PluginCreator = pc
@@ -187,9 +186,9 @@ func (s *Server) SetUpdater(u *updater.Manager) {
 	}
 }
 
-// SetCodeActEngine 注入 CodeAct 执行引擎。在 NewServer 之后、Serve 之前调用。
-// ca 为 nil 时 POST /v1/agent/codeact 返回 503。
-func (s *Server) SetCodeActEngine(ca *codeact.CodeAct) { s.codeActEngine = ca }
+// SetCodeActEngine 注入 CodeAct 执行引擎门面（action.ActionFacade）。在 NewServer 之后、Serve 之前调用。
+// af 为 nil 时 POST /v1/agent/codeact 返回 503。
+func (s *Server) SetCodeActEngine(af action.ActionFacade) { s.codeActEngine = af }
 
 // SetMCPManager 注入 MCPManager（NewServer 之后、Start 之前调用）。
 // 同时注册缓存失效回调：异步插件 MCP 连接完成时自动清除 toolSchemaCache，
@@ -372,7 +371,7 @@ func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protoco
 	}
 	// STT/TTS 原子指针：启动时持有 nil 引擎，InitSTTEngine/InitTTSEngine 完成后原子替换为真实引擎。
 	// 必须非 nil，否则 .Store()/.Load() 调用时 nil pointer dereference。
-	sttPtr := new(atomic.Pointer[stt.Engine])
+	sttPtr := new(atomic.Pointer[chat.STTEngineBox])
 	ttsPtr := new(atomic.Pointer[tts.ProviderBox])
 	s.chatHandler = &chat.ChatHandler{
 		DB:                    db,
@@ -435,7 +434,8 @@ func NewServer(addr string, dataDir string, agentPool chat.AgentPool, bb protoco
 	mux.HandleFunc("POST /v1/agent/codeact", s.handleCodeAct)
 	mux.HandleFunc("POST /v1/agent/stream", s.chatHandler.HandleAgentStream)
 	mux.HandleFunc("GET /v1/agent/tasks/{taskID}", s.handleGetAgentTask)
-	mux.HandleFunc("POST /v1/agent/{taskID}/interrupt", s.handleAgentInterrupt) // inv_global_08 <200ms
+	mux.HandleFunc("POST /v1/agent/{taskID}/interrupt", s.handleAgentInterrupt)      // inv_global_08 <200ms
+	mux.HandleFunc("GET /v1/agent/mmd-canvas", s.sysadminHandler.HandleGetMMDCanvas) // M05 §11.3 TaskMermaidCanvas 只读展示
 	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
 	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
 

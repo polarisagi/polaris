@@ -29,7 +29,7 @@ type codeActHTTPResponse struct {
 // handleCodeAct POST /v1/agent/codeact
 // 同步执行 LLM 生成代码（强制 Sbx-L3），返回标准输出。
 func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
-	if s.codeActEngine == nil {
+	if s.codeActEngine == nil || !s.codeActEngine.CodeActAvailable() {
 		http.Error(w, `{"error":"codeact engine not initialized"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -44,7 +44,7 @@ func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.codeActEngine.Execute(r.Context(), codeact.CodeActRequest{
+	result, err := s.codeActEngine.ExecuteCode(r.Context(), codeact.CodeActRequest{
 		Language:     req.Language,
 		Code:         req.Code,
 		CapabilityID: req.CapabilityID,

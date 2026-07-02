@@ -167,7 +167,7 @@ func TestValidateCode_BashSafe(t *testing.T) {
 
 func TestNewMemoryAgent_FieldDefaults(t *testing.T) {
 	pressure := &atomic.Int32{}
-	ma := NewMemoryAgent(nil, nil, nil, pressure)
+	ma := NewMemoryAgent(nil, nil, pressure)
 	if ma == nil {
 		t.Fatal("expected non-nil MemoryAgent")
 	}
@@ -180,7 +180,7 @@ func TestNewMemoryAgent_FieldDefaults(t *testing.T) {
 
 func TestMemoryAgent_Run_StopsOnContextCancel(t *testing.T) {
 	pressure := &atomic.Int32{}
-	ma := NewMemoryAgent(nil, nil, nil, pressure)
+	ma := NewMemoryAgent(nil, nil, pressure)
 	ma.scanInterval = 50 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -202,7 +202,7 @@ func TestMemoryAgent_Run_SkipsDistillUnderMemPressure(t *testing.T) {
 	pressure := &atomic.Int32{}
 	pressure.Store(int32(MemPressureCritical)) // 高内存压力
 
-	ma := NewMemoryAgent(nil, nil, nil, pressure)
+	ma := NewMemoryAgent(nil, nil, pressure)
 	ma.scanInterval = 50 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

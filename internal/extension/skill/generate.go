@@ -27,8 +27,11 @@ import (
 // ─── 常量与错误 ──────────────────────────────────────────────────────────────
 
 const (
-	MinSuccessCount     = 50  // 编译前安全闸门: 最少成功次数（对外导出，M9 复用）
-	MinSemanticVariance = 0.1 // 最小语义方差（低于此 → 多样性不足 → 拒绝，对外导出）
+	// MinSuccessCount / MinSemanticVariance 权威定义已上移至 protocol.MinSkillSuccessCount /
+	// protocol.MinSkillSemanticVariance（M04 §B2，供 extension/skill 与 learning 共享）。
+	// 此处保留同名常量作为包内简写，值恒等于 protocol 定义。
+	MinSuccessCount     = protocol.MinSkillSuccessCount
+	MinSemanticVariance = protocol.MinSkillSemanticVariance
 
 	compileMinFreeMemMB = 80 // CompileGate: 最小剩余内存(MB)
 )
@@ -50,61 +53,22 @@ var (
 const staleTrajectoryDays = 30
 
 // ─── 核心类型 ─────────────────────────────────────────────────────────────────
+//
+// CollapseTrajectory / CollapseToolCall / CollapseEntity / CompileRequest /
+// CompileResult / LLMCodeGenerator 权威定义已上移至 internal/protocol/skill_compile.go
+// （M04 §B2：跨模块共享类型须在 internal/protocol/ 定义，internal/learning 消费方
+// 不再直接 import 本包）。此处仅保留类型别名，包内代码与外部既有引用不受影响。
 
-// CollapseTrajectory 传递给编译器的轨迹数据。
-type CollapseTrajectory struct {
-	SkillID           string
-	GoalDescription   string
-	ToolCalls         []CollapseToolCall
-	InputSchema       map[string]string // param_name → TypeScript 类型
-	OutputSchema      map[string]string
-	RiskLevel         string // low / medium / high
-	SuccessCount      int
-	SemanticVariance  float64
-	CompletedAt       int64            // unix seconds
-	Entities          []CollapseEntity // 用于 Freshness Check
-	SemanticClusterID string
-	TaintLevel        int // 0=None, 1=Low, 2=Medium, 3+=High
-}
-
-// CollapseToolCall 工具调用类型签名（DataStripping 后无参数值）。
-type CollapseToolCall struct {
-	ToolName   string
-	Args       map[string]string // key → 类型字符串
-	OutputType string
-	OrderIndex int
-}
-
-// CollapseEntity 轨迹中的实体（用于时效性检查）。
-type CollapseEntity struct {
-	Type  string
-	Value string
-}
-
-// CompileRequest 编译请求。
-type CompileRequest struct {
-	Trajectory     *CollapseTrajectory
-	EvalGatePassed bool
-	SigningKey     []byte
-	WorkDir        string
-}
-
-// CompileResult 编译结果（TypeScript 脚本）。
-type CompileResult struct {
-	ScriptSource []byte // TypeScript 源码
-	ScriptHash   string // SHA-256 hex
-	Signature    string
-	RiskLevel    string
-	SandboxTier  int
-	SkillMeta    types.SkillMeta
-}
+type CollapseTrajectory = protocol.CollapseTrajectory
+type CollapseToolCall = protocol.CollapseToolCall
+type CollapseEntity = protocol.CollapseEntity
+type CompileRequest = protocol.CompileRequest
+type CompileResult = protocol.CompileResult
 
 // ─── 接口 ─────────────────────────────────────────────────────────────────────
 
 // LLMCodeGenerator LLM 代码生成接口（TypeScript 技能）。
-type LLMCodeGenerator interface {
-	GenerateImpl(ctx context.Context, traj *CollapseTrajectory) ([]byte, error)
-}
+type LLMCodeGenerator = protocol.LLMCodeGenerator
 
 // FreshnessChecker 检查轨迹实体新鲜度。
 // 实现方应查询语义记忆，判断轨迹引用的实体是否仍然有效。

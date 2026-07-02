@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	extplugin "github.com/polarisagi/polaris/internal/extension/plugin"
-
 	"context"
 	"net/http"
 
@@ -24,7 +22,7 @@ type PluginHandler struct {
 	StartMCPServer       func(ctx context.Context, cfg types.MCPServerConfig) error
 	SkillReg             protocol.SkillRegistry
 	ScriptRunner         marketplace.HookRunner
-	PluginCreator        *extplugin.PluginCreator
+	PluginCreator        PluginGenerator
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
 	EmbeddingIndexer *EmbeddingIndexer
@@ -45,7 +43,7 @@ func NewPluginHandler(
 	startMCPServer func(ctx context.Context, cfg types.MCPServerConfig) error,
 	skillReg protocol.SkillRegistry,
 	scriptRunner marketplace.HookRunner,
-	pluginCreator *extplugin.PluginCreator,
+	pluginCreator PluginGenerator,
 ) *PluginHandler {
 	return &PluginHandler{
 		ExtRepo:              extRepo,

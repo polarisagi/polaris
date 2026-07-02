@@ -49,6 +49,14 @@ func (m *mockMemory) QueryReflections(ctx context.Context, q types.ReflectionQue
 func (m *mockMemory) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
 	return nil
 }
+func (m *mockMemory) ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	return nil, nil
+}
+func (m *mockMemory) PruneMemoryGraph(ctx context.Context) error { return nil }
+func (m *mockMemory) TrackToolCall(toolUseID, toolName string)   {}
+func (m *mockMemory) TrackToolResult(toolUseID string, success bool, summary string) {
+}
+func (m *mockMemory) RenderTaskCanvas() string { return "" }
 
 type mockEpisodicMem struct {
 	events  []types.Event
@@ -62,6 +70,10 @@ func (m *mockEpisodicMem) Append(ctx context.Context, ev types.Event, taint type
 
 func (m *mockEpisodicMem) MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error) {
 	return 0, nil
+}
+
+func (m *mockEpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	return nil, nil
 }
 
 func (m *mockEpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) {
@@ -93,6 +105,10 @@ func (m *mockImmutableCore) Load(ctx context.Context, userID, sessionID string) 
 
 func (m *mockImmutableCore) PrependToMessages(msgs []types.Message) []types.Message {
 	return append([]types.Message{{Role: "system", Content: "[Immutable Core Rule: NO HARMFUL ACT]"}}, msgs...)
+}
+
+func (m *mockImmutableCore) Fields() *protocol.ImmutableCoreFields {
+	return &protocol.ImmutableCoreFields{}
 }
 
 func TestBuildPerceiveContext(t *testing.T) {

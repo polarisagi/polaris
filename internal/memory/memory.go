@@ -70,6 +70,7 @@ func NewMemImpl(store protocol.Store) *MemImpl {
 		procedural: procedural,
 		retriever:  memretrieval.NewHybridRetriever(store),
 		reflection: memstore.NewReflectionMem(store),
+		taskCanvas: memgraph.NewTaskMermaidCanvas(),
 	}
 }
 
@@ -85,6 +86,7 @@ func NewMemImplWithGraph(store protocol.Store, graph protocol.GraphTraverser) *M
 		procedural: procedural,
 		retriever:  memretrieval.NewHybridRetrieverWithGraph(store, graph),
 		reflection: memstore.NewReflectionMem(store),
+		taskCanvas: memgraph.NewTaskMermaidCanvas(),
 	}
 }
 
@@ -128,6 +130,7 @@ func NewMemImplFull(store protocol.Store, graph protocol.GraphTraverser, cogniti
 		episodic:   memstore.NewEpisodicMemWithCognitive(store, indexer, cognitive),
 		semantic:   memstore.NewSemanticMemWithCognitive(store, nil, cognitive),
 		procedural: procedural,
+		taskCanvas: memgraph.NewTaskMermaidCanvas(),
 	}
 	if db != nil {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
@@ -202,6 +205,23 @@ func (m *MemImpl) InjectSkillRegistry(sr protocol.SkillRegistry) {
 	m.procedural.SetSkills(sr)
 }
 
+// TrackToolCall 记录一次工具调用开始（M05 §11.3 TaskMermaidCanvas），创建 pending 节点。
+// taskCanvas 保证由构造器初始化，非 nil。
+func (m *MemImpl) TrackToolCall(toolUseID, toolName string) {
+	m.taskCanvas.TrackToolCall(toolUseID, toolName)
+}
+
+// TrackToolResult 将 pending 节点转为已完成节点（成功/失败），追加到画布并自动连边。
+func (m *MemImpl) TrackToolResult(toolUseID string, success bool, summary string) {
+	m.taskCanvas.TrackToolResult(toolUseID, success, summary)
+}
+
+// RenderTaskCanvas 生成当前任务的 Mermaid graph LR 文本，供 gateway 只读展示。
+// 空画布（尚无工具调用）返回空字符串。
+func (m *MemImpl) RenderTaskCanvas() string {
+	return m.taskCanvas.Render()
+}
+
 // 编译期接口合规验证
 var (
 	_ protocol.MemorySystem     = (*MemImpl)(nil)
@@ -229,6 +249,9 @@ type MemImpl struct {
 	procedural *memstore.ProceduralMem
 	retriever  *memretrieval.HybridRetrieverImpl
 	reflection protocol.ReflectionMemory // KV 实现或 SQL 实现，由构造器决定
+
+	// taskCanvas 当前任务的工具调用符号化画布（M05 §11.3），跨 agent/gateway 共享单实例。
+	taskCanvas *memgraph.TaskMermaidCanvas
 }
 
 const (

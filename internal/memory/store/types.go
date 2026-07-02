@@ -5,59 +5,30 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// ImmutableCore 永不裁剪的核心区（M05 §2.2），写入经 M9 staging + M11 闸控。
+// 可写字段集合内嵌 protocol.ImmutableCoreFields（M04 §B2 跨模块共享类型），
+// 外部消费方（gateway）经 protocol.ImmutableCore.Fields() 读写，不再需要
+// 类型断言到本具体类型。字段级注释见 protocol/immutable_core.go。
 type ImmutableCore struct {
-	AgentName            string            `json:"agent_name"`
-	AgentRole            string            `json:"agent_role"`
-	ModelID              string            `json:"model_id"`
-	BuiltinTools         string            `json:"builtin_tools"`
-	InstalledPlugins     string            `json:"installed_plugins"`
-	UserPreferences      map[string]string `json:"user_preferences"`
-	GlobalGoal           string            `json:"global_goal"`
-	SystemPromptTemplate string            `json:"system_prompt_template"`
+	protocol.ImmutableCoreFields
+}
 
-	// 三层系统提示词组装字段（stable + volatile）
-
-	// SoulMDContent 用户自定义身份文件内容（~/.polarisagi/polaris/config/SOUL.md）。
-	// 非空时替换 DefaultPolarisIdentity 作为 stable 层首段。
-	SoulMDContent string `json:"soul_md_content,omitempty"`
-
-	// ModelGuidance 模型专属工具调用引导，由 M13 Interface 层按 ModelID 注入到 stable 层。
-	ModelGuidance string `json:"model_guidance,omitempty"`
-
-	// PlatformHint 平台感知提示词，由 M13 Interface 层按接入平台注入到 stable 层末尾。
-	// 取值来自 memory.PlatformHints 映射（cli/webui/api/cron）。
-	PlatformHint string `json:"platform_hint,omitempty"`
-
-	// VolatileBlock 易变信息区（时间戳/会话 ID/模型信息），每轮刷新。
-	// 精确到天而非分钟，确保同一天内 prefix cache 不失效。
-	VolatileBlock string `json:"volatile_block,omitempty"`
-
-	// AmbientContext ambient skill 上下文（instructions + 目录索引行）。
-	// 由 buildAmbientSkillsSection 填充，在 renderSystemPrompt 完成后追加到尾部。
-	// 不进入 Go template 解析流程，避免 skill instructions 中的 {{ }} 破坏模板解析。
-	AmbientContext string `json:"ambient_context,omitempty"`
-
-	// CustomInstructions 用户追加的行为指令（stable 层末尾，追加而非覆盖身份）。
-	// 来源：~/.polarisagi/polaris/config/prompts/custom_instructions.md 或 Web UI 编辑。
-	// DB 删除不影响（文件持久化），factory reset 时才清空。
-	CustomInstructions string `json:"custom_instructions,omitempty"`
-
-	// UserProfile L3 用户画像摘要（StableFacts + 高频 BehavioralPatterns）。
-	// 在 sse.go 和 agentctx.BuildPerceiveContext 组装。
-	UserProfile string `json:"user_profile,omitempty"`
-
-	// OperationalDirectives 高级操作指令集合（含 Tool-Use, Task Completion 等）。
-	OperationalDirectives string `json:"operational_directives,omitempty"`
+// Fields 返回可写字段集合指针，实现 protocol.ImmutableCore.Fields()。
+func (ic *ImmutableCore) Fields() *protocol.ImmutableCoreFields {
+	return &ic.ImmutableCoreFields
 }
 
 func NewImmutableCore() *ImmutableCore {
 	return &ImmutableCore{
-		AgentName:       "Polaris (北极星)", // default name
-		AgentRole:       "一个开源自托管 AI Agent",
-		UserPreferences: make(map[string]string),
+		ImmutableCoreFields: protocol.ImmutableCoreFields{
+			AgentName:       "Polaris (北极星)", // default name
+			AgentRole:       "一个开源自托管 AI Agent",
+			UserPreferences: make(map[string]string),
+		},
 	}
 }
 

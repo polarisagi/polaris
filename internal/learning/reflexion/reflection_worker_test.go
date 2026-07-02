@@ -26,6 +26,9 @@ func (m *MockEpisodicMemory) Query(ctx context.Context, query types.EpisodicQuer
 func (m *MockEpisodicMemory) MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error) {
 	return 0, nil
 }
+func (m *MockEpisodicMemory) ScanHighSalience(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	return nil, nil
+}
 
 // MockProvider for testing
 type MockProvider struct {

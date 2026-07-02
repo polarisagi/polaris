@@ -389,8 +389,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	_ = sb.PRM
 	_ = sb.Steering
 
-	// 初始化 MemoryAgent
-	memoryAgent := agents.NewMemoryAgent(sb.Store.DB(), sb.Store, agent.GetWhisperChan(), nil)
+	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 M04 §B2）
+	memoryFacadeForAgent := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
+	memoryAgent := agents.NewMemoryAgent(memoryFacadeForAgent, agent.GetWhisperChan(), nil)
 
 	// TopicAgentInterrupt handler：gateway 写入的中断请求路由到 Agent Kernel。
 	// 当前进程内单 kernel（agent-0）+ Pool 共存，Pool 内会话由 gateway 直连路径覆盖，

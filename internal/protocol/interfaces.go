@@ -326,6 +326,13 @@ type MemorySystem interface {
 	StoreStats() (string, error)
 	SetVectorMode(mode int) error
 	GetMemoryPressure() budget.ResourceBudget
+
+	// TaskMermaidCanvas（M05 §11.3）：工具调用符号化画布，跨 Agent/Gateway 共享的
+	// 当前任务执行状态追踪。TrackToolCall/TrackToolResult 由 agent 工具执行闭环调用，
+	// RenderTaskCanvas 供 gateway 只读展示（GET /v1/agent/mmd-canvas）。
+	TrackToolCall(toolUseID, toolName string)
+	TrackToolResult(toolUseID string, success bool, summary string)
+	RenderTaskCanvas() string
 }
 
 // MemoryFacade 记忆系统对外统一门面，屏蔽底层架构，供 Agent / Server 侧直接调用。
@@ -351,6 +358,17 @@ type MemoryFacade interface {
 	// Reflection 层调用
 	QueryReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error)
 	AppendReflection(ctx context.Context, entry types.ReflectionEntry) error
+
+	// 后台维护调用（供 swarm.MemoryAgent 等常驻 goroutine 使用，替代直接 import internal/memory/graph、
+	// internal/memory/store 或裸 SQL，见 docs/specs/04-Module-Boundary.md §B2）
+	ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error)
+	PruneMemoryGraph(ctx context.Context) error
+
+	// TaskMermaidCanvas（M05 §11.3）：agent 工具执行闭环调用 TrackToolCall/TrackToolResult
+	// 记录当前任务的工具调用轨迹，gateway（GET /v1/agent/mmd-canvas）经 RenderTaskCanvas 只读展示。
+	TrackToolCall(toolUseID, toolName string)
+	TrackToolResult(toolUseID string, success bool, summary string)
+	RenderTaskCanvas() string
 }
 
 // ReflectionMemory 元认知反思层（Mem-L1.5，插于 Episodic 与 Semantic 之间）。
@@ -403,6 +421,9 @@ type NotesStore interface {
 // ImmutableCore — 永不裁剪的核心区，写入经 M9 staging + M11 闸控。
 type ImmutableCore interface {
 	Load(ctx context.Context, userID string, sessionID string) (types.ImmutableCoreView, error)
+	// Fields 返回可写字段集合（ImmutableCoreFields）指针，供 gateway 等消费方组装系统提示词。
+	// 取代此前 `.(*store.ImmutableCore)` 类型断言（M04 §B2）。
+	Fields() *ImmutableCoreFields
 	PrependToMessages(msgs []types.Message) []types.Message
 }
 
@@ -430,6 +451,9 @@ type EpisodicMemory interface {
 	Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error
 	Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error)
 	MarkCold(ctx context.Context, sessionID string, before time.Time) (int, error)
+	// ScanHighSalience 按显著性阈值 + 高水位标记扫描物化表 episodic_events。
+	// 供后台维护 Agent（如 swarm.MemoryAgent）生成耳语提示，替代绕过本接口的裸 SQL。
+	ScanHighSalience(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error)
 }
 
 // 语义搜索文本

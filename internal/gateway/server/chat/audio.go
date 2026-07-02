@@ -15,13 +15,13 @@ import (
 
 	"github.com/polarisagi/polaris/internal/tool/builtin"
 
-	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 )
 
 // SetSTTEngine 原子替换全局 STT 引擎实例（goroutine-safe）。
-func (h *ChatHandler) SetSTTEngine(engine *stt.Engine) {
-	h.STTEngine.Store(engine)
+// engine 为 nil 时显式清除（使 Load 后 E 字段为 nil，HandleAudioTranscriptions 返回 503）。
+func (h *ChatHandler) SetSTTEngine(engine STTTranscriber) {
+	h.STTEngine.Store(&STTEngineBox{E: engine})
 }
 
 // SetTTSEngine 原子替换全局 TTS Provider 实例（goroutine-safe）。
@@ -71,11 +71,12 @@ func (h *ChatHandler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) 
 // 路由: POST /v1/audio/transcriptions
 func (h *ChatHandler) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Request) {
 	// 原子 Load，与 SetSTTEngine 的 Store 不存在 data race
-	engine := h.STTEngine.Load()
-	if engine == nil {
+	box := h.STTEngine.Load()
+	if box == nil || box.E == nil {
 		http.Error(w, "STT Engine not initialized", http.StatusServiceUnavailable)
 		return
 	}
+	engine := box.E
 
 	// 解析 multipart，获取 audio 文件 (通常是 webm 格式)
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 最大 10MB

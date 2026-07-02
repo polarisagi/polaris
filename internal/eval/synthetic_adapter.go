@@ -5,17 +5,18 @@ import (
 
 	"fmt"
 
-	"github.com/polarisagi/polaris/internal/learning/synthetic"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
-// SyntheticCaseToEvalCase 将 L2 SyntheticCase 转换为评测套件所需的 harness.EvalCase。
+// SyntheticCaseToEvalCase 将 L2 SyntheticCase（internal/protocol.SyntheticCase）转换为
+// 评测套件所需的 harness.EvalCase。
 //
 // 强制上限 P2：自动生成的用例不得触发 P0/P1 阻断逻辑。
 // 只有人工标注的 incident 用例（via analysis.IncidentToEvalConverter）才能携带 P0。
 //
 // 调用方：M9 SelfImprovement 离线批处理写入评测套件时调用；
 // 不在 RunSuite 热路径中使用。
-func SyntheticCaseToEvalCase(s synthetic.SyntheticCase) harness.EvalCase {
+func SyntheticCaseToEvalCase(s protocol.SyntheticCase) harness.EvalCase {
 	sev := harness.Severity(s.Severity)
 	if sev == "" || sev == harness.SeverityP0 || sev == harness.SeverityP1 {
 		sev = harness.SeverityP2

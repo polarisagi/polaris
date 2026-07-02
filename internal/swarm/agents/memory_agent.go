@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/memory/graph"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -19,22 +18,23 @@ type OutboxWriterInterface interface {
 	Write(ctx context.Context, entry protocol.OutboxEntry) error
 }
 
+// MemoryAgent 常驻 goroutine：周期扫描高显著性情景事件生成耳语提示，并驱动记忆图谱边权重维护。
+// 统一经 protocol.MemoryFacade 访问记忆子系统，禁止直接 import internal/memory/graph 或裸 SQL
+// 查询 episodic_events（M04 §B2 跨模块通信通道）。
 type MemoryAgent struct {
-	db            protocol.SQLQuerier
-	whisperChan   chan<- MemoryWhisper
-	memPressure   *atomic.Int32
-	scanInterval  time.Duration
-	edgeWeightMgr *graph.EdgeWeightManager
-	lastSeenID    int64 // 高水位标记：只推送新增事件，防止同批事件每轮重复刷爆耳语通道
+	mem          protocol.MemoryFacade
+	whisperChan  chan<- MemoryWhisper
+	memPressure  *atomic.Int32
+	scanInterval time.Duration
+	lastSeenID   int64 // 高水位标记：只推送新增事件，防止同批事件每轮重复刷爆耳语通道
 }
 
-func NewMemoryAgent(db protocol.SQLQuerier, store protocol.Store, whisperChan chan<- MemoryWhisper, memPressure *atomic.Int32) *MemoryAgent {
+func NewMemoryAgent(mem protocol.MemoryFacade, whisperChan chan<- MemoryWhisper, memPressure *atomic.Int32) *MemoryAgent {
 	return &MemoryAgent{
-		db:            db,
-		whisperChan:   whisperChan,
-		memPressure:   memPressure,
-		scanInterval:  60 * time.Second,
-		edgeWeightMgr: graph.NewEdgeWeightManager(store),
+		mem:          mem,
+		whisperChan:  whisperChan,
+		memPressure:  memPressure,
+		scanInterval: 60 * time.Second,
 	}
 }
 
@@ -53,40 +53,31 @@ func (ma *MemoryAgent) Run(ctx context.Context) {
 			if err := ma.scanHighSalienceEvents(ctx); err != nil {
 				slog.Error("memory_agent: scan failed", "err", err)
 			}
-			if err := ma.edgeWeightMgr.PeriodicPrune(ctx); err != nil {
-				slog.Error("memory_agent: prune failed", "err", err)
+			if ma.mem != nil {
+				if err := ma.mem.PruneMemoryGraph(ctx); err != nil {
+					slog.Error("memory_agent: prune failed", "err", err)
+				}
 			}
 		}
 	}
 }
 
 func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
+	if ma.mem == nil {
+		return nil
+	}
 	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// occurred_at 可为 NULL（schema/003），用 timestamp 兜底避免 Scan 失败静默丢行。
 	// id > lastSeenID 高水位过滤：每个事件最多推送一次。
-	rows, err := ma.db.QueryContext(scanCtx, `
-		SELECT id, session_id, content, salience, COALESCE(occurred_at, timestamp)
-		FROM episodic_events
-		WHERE archived = 0 AND salience >= 0.7 AND id > ?
-		ORDER BY id ASC LIMIT 20
-	`, ma.lastSeenID)
+	events, err := ma.mem.ScanHighSalienceEvents(scanCtx, ma.lastSeenID, 0.7, 20)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "MemoryAgent.scan", err)
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var id int64
-		var sessionID, content string
-		var salience float64
-		var occurredAt int64
-		if err := rows.Scan(&id, &sessionID, &content, &salience, &occurredAt); err != nil {
-			continue
-		}
-		if id > ma.lastSeenID {
-			ma.lastSeenID = id
+	for _, e := range events {
+		if e.ID > ma.lastSeenID {
+			ma.lastSeenID = e.ID
 		}
 		if ma.whisperChan == nil {
 			continue
@@ -94,8 +85,8 @@ func (ma *MemoryAgent) scanHighSalienceEvents(ctx context.Context) error {
 		select {
 		case ma.whisperChan <- MemoryWhisper{
 			Source:   "memory_agent",
-			Salience: salience,
-			Content:  fmt.Sprintf("[ID:%d] %s", id, content),
+			Salience: e.Salience,
+			Content:  fmt.Sprintf("[ID:%d] %s", e.ID, e.Content),
 		}:
 		default:
 			// 通道满：丢弃（耳语是尽力而为的辅助信号，不阻塞主流程）

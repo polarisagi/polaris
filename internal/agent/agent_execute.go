@@ -630,7 +630,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	var callCount atomic.Int32
 
 	// 将 ToolRegistry.ExecuteTool 绑定为 dag.DAGExecutor 的工具执行函数
-	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	toolExecFnInner := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 		tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
 		if token, ok := tokenVal.(*token.Token); ok && token != nil {
 			max := int32(token.Claims.MaxCallsPerTask)
@@ -861,6 +861,22 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		return res, nil
 	}
 
+	// toolExecFn 包一层 TaskMermaidCanvas 追踪（M05 §11.3）：工具调用开始/结束均记录到
+	// 当前任务的符号化画布，供 gateway GET /v1/agent/mmd-canvas 只读展示。
+	// 独立包装而非侵入 toolExecFnInner 内部多处 return，避免遗漏分支。
+	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+		toolUseID := uuid.New().String()
+		if a.memory != nil {
+			a.memory.TrackToolCall(toolUseID, toolName)
+		}
+		res, err := toolExecFnInner(ctx, toolName, args, taintLevel)
+		if a.memory != nil {
+			success := err == nil && res != nil && res.Success
+			a.memory.TrackToolResult(toolUseID, success, canvasResultSummary(res, err))
+		}
+		return res, err
+	}
+
 	executor := dag.NewDAGExecutor(toolExecFn, nil) // leaseRenew 由 M8 注入，MVP 传 nil
 	results, err := executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)
 
@@ -930,6 +946,24 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 	go func() { _ = a.SendIntent(types.TriggerExecuteDone) }()
 	return nil
+}
+
+// canvasResultSummary 为 TaskMermaidCanvas 节点提取简短摘要（M05 §11.3）。
+// TaskMermaidCanvas.truncateLabel 会进一步截断，这里只需给出优先级最高的信息。
+func canvasResultSummary(res *types.ToolResult, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	if res == nil {
+		return ""
+	}
+	if !res.Success {
+		if res.Error != "" {
+			return res.Error
+		}
+		return "failed"
+	}
+	return string(res.Output)
 }
 
 //nolint:gocyclo // MVP intercept logic

@@ -3,7 +3,6 @@ package chat
 import (
 	"sync/atomic"
 
-	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 
 	"bytes"
@@ -15,7 +14,7 @@ import (
 func TestAudioHandlers_EngineNotInitialized(t *testing.T) {
 	h := &ChatHandler{DataDir: t.TempDir(),
 		TTSEngine: new(atomic.Pointer[tts.ProviderBox]),
-		STTEngine: new(atomic.Pointer[stt.Engine])}
+		STTEngine: new(atomic.Pointer[STTEngineBox])}
 
 	// Test SetTTSEngine with nil
 	h.SetTTSEngine(nil)

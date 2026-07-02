@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -26,6 +27,19 @@ type LLMRegistry interface {
 	PickProviderName(role string) string
 	// PickProviderByRecordID 按 provider_models.id 精确选取（用户手动指定模型时调用）。
 	PickProviderByRecordID(mID string) protocol.Provider
+}
+
+// STTTranscriber chat 包对语音识别引擎的消费端接口（仅 chat/audio.go 实际调用的方法）。
+// 实现：llm/stt.Engine（Sherpa-ONNX FFI 桥接，唯一实现）。
+type STTTranscriber interface {
+	// Transcribe 将 PCM 采样点转写为文本。
+	Transcribe(samples []float32, sampleRate int) (stt.Result, error)
+}
+
+// STTEngineBox 装箱 STTTranscriber 接口值，配合 atomic.Pointer 使用
+// （规避 atomic.Pointer 要求同一具体类型的限制，与 tts.ProviderBox 同一模式）。
+type STTEngineBox struct {
+	E STTTranscriber
 }
 
 // PromptManager chat 包对提示词管理器的消费端接口（仅 chat/sse.go 实际调用的方法）。

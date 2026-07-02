@@ -3,8 +3,6 @@ package sysadmin
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/polarisagi/polaris/internal/memory/store"
 )
 
 func (h *SysAdminHandler) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +34,8 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 	// Hot reload preference in Agent
 	h.Agent.SetPreferences(map[string]string{key: req.Value})
 	if h.Agent.Memory() != nil {
-		if ic, ok := h.Agent.Memory().ImmutableCore().(*store.ImmutableCore); ok {
+		if core := h.Agent.Memory().ImmutableCore(); core != nil {
+			ic := core.Fields()
 			switch key {
 			case "system_prompt", "global_goal":
 				ic.GlobalGoal = req.Value

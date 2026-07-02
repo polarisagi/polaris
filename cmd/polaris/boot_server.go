@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/action/codeact"
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/server"
@@ -95,7 +96,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
 		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})
-		httpServer.SetCodeActEngine(codeActEngine)
+		// gateway 侧同样只依赖 action.ActionFacade 接口，不直接持有 *codeact.CodeAct（M04 §B2）
+		httpServer.SetCodeActEngine(action.NewActionFacade(codeActEngine))
 		slog.Info("polaris: CodeAct engine initialized and injected",
 			"sandbox", "L3-container",
 			"backend", sb.AutoConf.Config.L3SandboxBackend,

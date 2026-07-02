@@ -172,6 +172,14 @@ func (m *mockMemoryForIntegration) QueryReflections(ctx context.Context, q types
 func (m *mockMemoryForIntegration) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
 	return nil
 }
+func (m *mockMemoryForIntegration) ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	return nil, nil
+}
+func (m *mockMemoryForIntegration) PruneMemoryGraph(ctx context.Context) error { return nil }
+func (m *mockMemoryForIntegration) TrackToolCall(toolUseID, toolName string)   {}
+func (m *mockMemoryForIntegration) TrackToolResult(toolUseID string, success bool, summary string) {
+}
+func (m *mockMemoryForIntegration) RenderTaskCanvas() string { return "" }
 
 type mockEpisodicMemForIntegration struct {
 	events []types.Event
@@ -185,6 +193,9 @@ func (m *mockEpisodicMemForIntegration) MarkCold(ctx context.Context, sessionID 
 	return 0, nil
 }
 func (m *mockEpisodicMemForIntegration) Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) {
+	return nil, nil
+}
+func (m *mockEpisodicMemForIntegration) ScanHighSalience(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
 	return nil, nil
 }
 
@@ -204,6 +215,9 @@ func (m *mockImmutableCoreForIntegration) Load(ctx context.Context, userID, sess
 }
 func (m *mockImmutableCoreForIntegration) PrependToMessages(msgs []types.Message) []types.Message {
 	return append([]types.Message{{Role: "system", Content: "[Immutable Core Rule: NO HARMFUL ACT]"}}, msgs...)
+}
+func (m *mockImmutableCoreForIntegration) Fields() *protocol.ImmutableCoreFields {
+	return &protocol.ImmutableCoreFields{}
 }
 
 func TestAgent_MemoryIntegration_HappyPath(t *testing.T) {

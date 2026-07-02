@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	memgraph "github.com/polarisagi/polaris/internal/memory/graph"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -12,6 +13,9 @@ import (
 // MemoryFacadeImpl 包装 MemorySystem 提供统一门面。
 type MemoryFacadeImpl struct {
 	sys MemorySystem
+	// edgeMgr 图谱边权重维护器，仅 NewMemoryFacadeWithStore 构造时非 nil。
+	// nil 时 PruneMemoryGraph 静默跳过（Tier0 无周期维护场景）。
+	edgeMgr *memgraph.EdgeWeightManager
 }
 
 // 编译期校验
@@ -20,6 +24,17 @@ var _ protocol.MemoryFacade = (*MemoryFacadeImpl)(nil)
 // NewMemoryFacade 构造记忆门面。
 func NewMemoryFacade(sys MemorySystem) *MemoryFacadeImpl {
 	return &MemoryFacadeImpl{sys: sys}
+}
+
+// NewMemoryFacadeWithStore 构造带图谱周期维护能力的记忆门面。
+// 供需要驱动 PruneMemoryGraph 的调用方使用（如 swarm.MemoryAgent 常驻 goroutine），
+// 避免该调用方直接 import internal/memory/graph 构造 EdgeWeightManager（M04 §B2）。
+func NewMemoryFacadeWithStore(sys MemorySystem, store protocol.Store) *MemoryFacadeImpl {
+	f := &MemoryFacadeImpl{sys: sys}
+	if store != nil {
+		f.edgeMgr = memgraph.NewEdgeWeightManager(store)
+	}
+	return f
 }
 
 // 基础控制
@@ -100,6 +115,35 @@ func (f *MemoryFacadeImpl) AppendReflection(ctx context.Context, entry types.Ref
 		return rm.AppendReflection(ctx, entry)
 	}
 	return nil
+}
+
+// 后台维护调用（swarm.MemoryAgent 等常驻 goroutine 通过本门面驱动，见 protocol.MemoryFacade）
+func (f *MemoryFacadeImpl) ScanHighSalienceEvents(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	ep := f.sys.Mem().Episodic()
+	if ep == nil {
+		return nil, nil
+	}
+	return ep.ScanHighSalience(ctx, sinceID, minSalience, limit)
+}
+
+func (f *MemoryFacadeImpl) PruneMemoryGraph(ctx context.Context) error {
+	if f.edgeMgr == nil {
+		return nil
+	}
+	return f.edgeMgr.PeriodicPrune(ctx)
+}
+
+// TaskMermaidCanvas 调用（M05 §11.3），委托给底层 MemorySystem 共享单实例。
+func (f *MemoryFacadeImpl) TrackToolCall(toolUseID, toolName string) {
+	f.sys.Mem().TrackToolCall(toolUseID, toolName)
+}
+
+func (f *MemoryFacadeImpl) TrackToolResult(toolUseID string, success bool, summary string) {
+	f.sys.Mem().TrackToolResult(toolUseID, success, summary)
+}
+
+func (f *MemoryFacadeImpl) RenderTaskCanvas() string {
+	return f.sys.Mem().RenderTaskCanvas()
 }
 
 // legacy (for memory system internals)

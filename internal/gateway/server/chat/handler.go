@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/gateway/types"
-	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
@@ -65,7 +64,7 @@ type ChatHandler struct {
 		Unsubscribe(chan any)
 	}
 
-	STTEngine *atomic.Pointer[stt.Engine]
+	STTEngine *atomic.Pointer[STTEngineBox]
 	TTSEngine *atomic.Pointer[tts.ProviderBox]
 	WriteSSE  func(http.ResponseWriter, http.Flusher, string, any)
 
@@ -86,7 +85,7 @@ func NewChatHandler(
 	bb protocol.Blackboard,
 	compressor *Compressor,
 	transcriptDir string,
-	sttEngine *atomic.Pointer[stt.Engine],
+	sttEngine *atomic.Pointer[STTEngineBox],
 	ttsEngine *atomic.Pointer[tts.ProviderBox],
 	writeSSE func(http.ResponseWriter, http.Flusher, string, any),
 ) *ChatHandler {

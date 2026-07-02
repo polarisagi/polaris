@@ -14,48 +14,32 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
-// CaseSeverity 合成用例严重等级字符串（与 governance/eval.Severity 语义对齐，不引 L3）。
-type CaseSeverity = string
-
-// 合成用例严重等级常量。合成路径最高只能标 P2 —— P0/P1 只允许人工 incident 用例。
-const (
-	CaseSeverityP0 CaseSeverity = "P0" // 合成路径禁止使用：仅定义供比较
-	CaseSeverityP1 CaseSeverity = "P1" // 合成路径禁止使用：仅定义供比较
-	CaseSeverityP2 CaseSeverity = "P2" // 自动生成用例的上限等级
-)
-
-// QuestionType 问题类型分类（对齐 RAGAS / Giskard RAGET）。
-type QuestionType string
+// CaseSeverity / QuestionType / DifficultyLevel / SyntheticCase 权威定义已上移至
+// internal/protocol/synthetic_case.go（M04 §B2：跨模块共享类型须在 internal/protocol/
+// 定义，internal/eval 消费方不再直接 import 本包）。此处仅保留别名。
+type CaseSeverity = protocol.CaseSeverity
+type QuestionType = protocol.QuestionType
+type DifficultyLevel = protocol.DifficultyLevel
+type SyntheticCase = protocol.SyntheticCase
 
 const (
-	QTypeFactual        QuestionType = "factual"        // 单跳，答案在单一 chunk
-	QTypeMultiHop       QuestionType = "multi_hop"      // 需跨 2-3 chunk 聚合
-	QTypeAbstractive    QuestionType = "abstractive"    // 需归纳/比较多文档
-	QTypeCounterfactual QuestionType = "counterfactual" // 反事实，答案在语料中被否定
+	CaseSeverityP0 = protocol.CaseSeverityP0 // 合成路径禁止使用：仅定义供比较
+	CaseSeverityP1 = protocol.CaseSeverityP1 // 合成路径禁止使用：仅定义供比较
+	CaseSeverityP2 = protocol.CaseSeverityP2 // 自动生成用例的上限等级
 )
-
-// DifficultyLevel 难度分级。
-type DifficultyLevel string
 
 const (
-	DiffEasy   DifficultyLevel = "easy"   // 单跳，答案为连续 span
-	DiffMedium DifficultyLevel = "medium" // 多跳或条件推理
-	DiffHard   DifficultyLevel = "hard"   // 反事实 / 干扰项 / 抽象归纳
+	QTypeFactual        = protocol.QTypeFactual        // 单跳，答案在单一 chunk
+	QTypeMultiHop       = protocol.QTypeMultiHop       // 需跨 2-3 chunk 聚合
+	QTypeAbstractive    = protocol.QTypeAbstractive    // 需归纳/比较多文档
+	QTypeCounterfactual = protocol.QTypeCounterfactual // 反事实，答案在语料中被否定
 )
 
-// SyntheticCase 合成评测用例，比 EvalCase 携带更多生成元数据。
-// 注入评测套件时由 pkg/governance/eval.SyntheticCaseToEvalCase 做适配（L3 侧，避免 L2→L3 依赖）。
-type SyntheticCase struct {
-	ID              string          `json:"id"`
-	Question        string          `json:"question"`
-	GroundTruth     string          `json:"ground_truth"`
-	ChunkID         string          `json:"chunk_id"` // 来源 chunk 哈希
-	Type            QuestionType    `json:"type"`
-	Difficulty      DifficultyLevel `json:"difficulty"`
-	ContextBound    bool            `json:"context_bound"`               // 仅凭 chunk 可回答（防污染）
-	Severity        CaseSeverity    `json:"severity,omitempty"`          // P0/P1/P2；空默认 P2
-	NeedsHumanAudit bool            `json:"needs_human_audit,omitempty"` // 高风险用例标记
-}
+const (
+	DiffEasy   = protocol.DiffEasy   // 单跳，答案为连续 span
+	DiffMedium = protocol.DiffMedium // 多跳或条件推理
+	DiffHard   = protocol.DiffHard   // 反事实 / 干扰项 / 抽象归纳
+)
 
 // EvalGenerator 从知识库 chunks 生成合成评测用例。
 // 实现 RAGAS Evolution 三阶段：Simple → Reasoning/Conditioning → Groundedness 验证。

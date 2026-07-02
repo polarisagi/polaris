@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-
-	"github.com/polarisagi/polaris/internal/memory/graph"
 )
 
 // GET /v1/doctor
@@ -107,11 +105,17 @@ func (h *SysAdminHandler) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GET /v1/agent/mmd-canvas
+// 只读展示当前任务的 TaskMermaidCanvas（M05 §11.3 工具调用符号化画布）。
+// 画布由 agent 工具执行闭环（agent_execute.go toolExecFn）实时写入，
+// 本 handler 仅通过 protocol.MemoryFacade 读取渲染结果，不持有画布状态。
 func (h *SysAdminHandler) HandleGetMMDCanvas(w http.ResponseWriter, r *http.Request) {
-	canvas := graph.NewTaskMermaidCanvas()
-	// Currently it might be empty if we just instantiate it, but we expose the endpoint.
-	// We can hook it up later.
-	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if h.Agent == nil || h.Agent.Memory() == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("agent memory not available"))
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(canvas.Render()))
+	_, _ = w.Write([]byte(h.Agent.Memory().RenderTaskCanvas()))
 }

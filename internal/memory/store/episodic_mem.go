@@ -282,6 +282,44 @@ func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before ti
 	return int(affected), nil
 }
 
+// ScanHighSalience 扫描 episodic_events 物化表中的高显著性事件（archived=0 且 salience >= 阈值）。
+// sinceID 为高水位标记，只返回 id > sinceID 的事件，按 id 升序、limit 截断。
+// 供后台维护 Agent（swarm.MemoryAgent）生成耳语提示，取代其对本包的直接 SQL 访问。
+// store 未实现 protocol.SQLQuerier（无 SQLite 后端）时静默返回空结果。
+func (em *EpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, minSalience float64, limit int) ([]types.SalienceEvent, error) {
+	if em.store == nil {
+		return nil, nil
+	}
+	sqlStore, ok := em.store.(protocol.SQLQuerier)
+	if !ok {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := sqlStore.QueryContext(ctx, `
+		SELECT id, session_id, content, salience, COALESCE(occurred_at, timestamp)
+		FROM episodic_events
+		WHERE archived = 0 AND salience >= ? AND id > ?
+		ORDER BY id ASC LIMIT ?
+	`, minSalience, sinceID, limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "episodic_mem: scan high salience failed", err)
+	}
+	defer rows.Close()
+
+	var results []types.SalienceEvent //nolint:prealloc
+	for rows.Next() {
+		var e types.SalienceEvent
+		if scanErr := rows.Scan(&e.ID, &e.SessionID, &e.Content, &e.Salience, &e.OccurredAt); scanErr != nil {
+			continue
+		}
+		results = append(results, e)
+	}
+	return results, nil
+}
+
 // truncateEpisodicPayload 将超限 Payload 落盘，返回含 log_ref 占位符的截断版本。
 // 落盘路径：~/.polarisagi/polaris/logs/events/<id>.bin
 // 返回内容：前 512 字节（BM25 可用）+ log_ref JSON 片段

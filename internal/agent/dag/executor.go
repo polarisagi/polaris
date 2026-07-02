@@ -28,47 +28,30 @@ import (
 )
 
 // ─── DAG 数据模型 ────────────────────────────────────────────────────────────
+//
+// CompensationAction / NodeStatus / ExecNode 权威定义已上移至
+// internal/protocol/dag_node.go（M04 §B2：跨模块共享类型须在 internal/protocol/
+// 定义，internal/swarm/planner 消费方不再直接 import 本包）。此处仅保留别名。
 
-// CompensationAction 描述一个节点失败后的 Saga 逆序补偿动作。
-// write_local / write_network 节点必须声明此字段，否则 DAG 校验拒绝。
-type CompensationAction struct {
-	ToolName   string
-	Args       []byte
-	TaintLevel types.TaintLevel
-}
+type CompensationAction = protocol.CompensationAction
+type NodeStatus = protocol.NodeStatus
+type ExecNode = protocol.ExecNode
 
-// EdgePolarity 描述 DAG 边的语义。
+const (
+	NodePending   = protocol.NodePending
+	NodeRunning   = protocol.NodeRunning
+	NodeCompleted = protocol.NodeCompleted
+	NodeFailed    = protocol.NodeFailed
+	NodeSkipped   = protocol.NodeSkipped // 因上游失败而跳过
+)
+
+// EdgePolarity 描述 DAG 边的语义（仅 agent/dag 包内使用，无需上移）。
 type EdgePolarity int
 
 const (
 	EdgeData     EdgePolarity = iota // 数据依赖：上游产出作为下游输入
 	EdgeSequence                     // 纯时序约束（无数据传递）
 )
-
-// NodeStatus 定义节点执行状态。
-type NodeStatus int
-
-const (
-	NodePending NodeStatus = iota
-	NodeRunning
-	NodeCompleted
-	NodeFailed
-	NodeSkipped // 因上游失败而跳过
-)
-
-// ExecNode 是 DAG 中可执行的工具调用节点。
-type ExecNode struct {
-	ID             string
-	ToolName       string
-	Args           []byte
-	TaintLevel     types.TaintLevel     // 从 Context 继承的污染等级
-	DependsOn      []string             // 前驱节点 ID
-	Compensation   *CompensationAction  // Saga 补偿动作（有副作用节点必填）
-	MaxRetry       int                  // 默认 0（不重试）
-	Timeout        time.Duration        // 0 使用全局默认
-	Status         NodeStatus           // 节点状态
-	IdempotencyKey types.IdempotencyKey // 幂等键
-}
 
 // ExecEdge 是 DAG 中的有向边。
 type ExecEdge struct {

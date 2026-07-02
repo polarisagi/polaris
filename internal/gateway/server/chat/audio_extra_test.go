@@ -3,7 +3,6 @@ package chat
 import (
 	"sync/atomic"
 
-	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 
 	"bytes"
@@ -16,7 +15,7 @@ import (
 func TestHandleAudioSpeech(t *testing.T) {
 	h := &ChatHandler{DataDir: t.TempDir(),
 		TTSEngine: new(atomic.Pointer[tts.ProviderBox]),
-		STTEngine: new(atomic.Pointer[stt.Engine])}
+		STTEngine: new(atomic.Pointer[STTEngineBox])}
 
 	// test without tts engine
 	req := httptest.NewRequest("POST", "/api/v1/audio/speech", bytes.NewBufferString(`{"input":"hello"}`))
@@ -30,7 +29,7 @@ func TestHandleAudioSpeech(t *testing.T) {
 func TestHandleAudioTranscriptions(t *testing.T) {
 	h := &ChatHandler{DataDir: t.TempDir(),
 		TTSEngine: new(atomic.Pointer[tts.ProviderBox]),
-		STTEngine: new(atomic.Pointer[stt.Engine])}
+		STTEngine: new(atomic.Pointer[STTEngineBox])}
 
 	// Create multipart body
 	body := &bytes.Buffer{}

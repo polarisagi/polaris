@@ -17,7 +17,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/ffi"
-	"github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -666,10 +665,11 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 		return history
 	}
 
-	ic, ok := agentCtrl.Memory().ImmutableCore().(*store.ImmutableCore)
-	if !ok {
+	core := agentCtrl.Memory().ImmutableCore()
+	if core == nil {
 		return history
 	}
+	ic := core.Fields()
 
 	// ── stable 层：身份 / 用户自定义指令 / 模型引导 / 平台提示 ────────────
 
@@ -756,7 +756,7 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 		ic.AmbientContext = s.buildAmbientSkillsSection(ctx, userQuery)
 	}
 
-	return ic.PrependToMessages(history)
+	return core.PrependToMessages(history)
 }
 
 const (

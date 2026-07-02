@@ -12,7 +12,6 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
-	"github.com/polarisagi/polaris/internal/memory/graph" //nolint:staticcheck
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -89,16 +88,7 @@ func (m *FallacyMemoryPool) FeedbackCalibrate(ctx context.Context, recordID stri
 		Success:  success,
 	})
 	m.Calibrator.Calibrate()
-	// Use the midpoint of currentLow and currentHigh as the representative SurpriseIndex threshold
-	threshold := (m.Calibrator.CurrentLow + m.Calibrator.CurrentHigh) / 2
-	if threshold == 0 {
-		threshold = 0.45 // default midpoint of [0.3, 0.6]
-	}
 	m.mu.Unlock()
-
-	// 移除硬编码 0.5，使用动态调整后的 SurpriseIndex
-	spm := &graph.SynapticPlasticityManager{}
-	spm.FeedbackCalibrate([]string{recordID}, nil, make(map[string]float64), threshold)
 
 	var delta float64
 	if success {

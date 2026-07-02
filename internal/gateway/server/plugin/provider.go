@@ -22,6 +22,13 @@ type MCPManager interface {
 	Remove(serverID string)
 }
 
+// PluginGenerator plugin 包对 LLM 驱动插件自动生成器的消费端接口。
+// 实现：extension/plugin.PluginCreator
+type PluginGenerator interface {
+	// GeneratePlugin 依据自然语言 intent 调用 LLM 生成 MCP 插件代码，返回生成目录。
+	GeneratePlugin(ctx context.Context, intent string, trustTier int) (string, error)
+}
+
 // ExtensionInstaller plugin 包对扩展安装管理器的消费端接口。
 // 实现：extension/marketplace.Manager
 type ExtensionInstaller interface {

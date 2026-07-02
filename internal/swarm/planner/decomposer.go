@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -39,9 +38,9 @@ func NewTaskDecomposer(provider protocol.Provider) *TaskDecomposer {
 	return &TaskDecomposer{provider: provider}
 }
 
-// Decompose 将 goal 分解为 []dag.ExecNode，最多 8 个子任务。
+// Decompose 将 goal 分解为 []protocol.ExecNode，最多 8 个子任务。
 // 分解失败时返回单节点 fallback（不报错），保证调用方始终拿到可执行计划。
-func (d *TaskDecomposer) Decompose(ctx context.Context, goal string) ([]dag.ExecNode, error) {
+func (d *TaskDecomposer) Decompose(ctx context.Context, goal string) ([]protocol.ExecNode, error) {
 	if d.provider == nil {
 		return d.fallbackSingleNode(goal), nil
 	}
@@ -59,7 +58,7 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, goal string) ([]dag.Exec
 }
 
 // decomposeLLM 调用 LLM，强制返回 JSON 数组格式。
-func (d *TaskDecomposer) decomposeLLM(ctx context.Context, goal string) ([]dag.ExecNode, error) {
+func (d *TaskDecomposer) decomposeLLM(ctx context.Context, goal string) ([]protocol.ExecNode, error) {
 	systemPrompt := `You are a task decomposition engine. 
 Given a high-level goal, break it into at most 8 concrete sub-tasks.
 Return ONLY a JSON object with a "tasks" array. Each task must have:
@@ -95,8 +94,8 @@ Ensure no circular dependencies. Output ONLY valid JSON, no markdown.`
 	return d.mapToExecNodes(decomp.Tasks)
 }
 
-// mapToExecNodes 将 []subTask 映射为 []dag.ExecNode。
-func (d *TaskDecomposer) mapToExecNodes(tasks []subTask) ([]dag.ExecNode, error) {
+// mapToExecNodes 将 []subTask 映射为 []protocol.ExecNode。
+func (d *TaskDecomposer) mapToExecNodes(tasks []subTask) ([]protocol.ExecNode, error) {
 	if len(tasks) == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "task_decomposer: LLM returned empty task list")
 	}
@@ -105,7 +104,7 @@ func (d *TaskDecomposer) mapToExecNodes(tasks []subTask) ([]dag.ExecNode, error)
 		tasks = tasks[:8]
 	}
 
-	nodes := make([]dag.ExecNode, 0, len(tasks))
+	nodes := make([]protocol.ExecNode, 0, len(tasks))
 	for _, t := range tasks {
 		toolName := t.ToolName
 		if toolName == "" {
@@ -126,7 +125,7 @@ func (d *TaskDecomposer) mapToExecNodes(tasks []subTask) ([]dag.ExecNode, error)
 			})
 		}
 
-		nodes = append(nodes, dag.ExecNode{
+		nodes = append(nodes, protocol.ExecNode{
 			ID:        t.ID,
 			ToolName:  toolName,
 			Args:      argsBytes,
@@ -138,9 +137,9 @@ func (d *TaskDecomposer) mapToExecNodes(tasks []subTask) ([]dag.ExecNode, error)
 }
 
 // fallbackSingleNode 分解失败时返回包裹原始 goal 的单节点 DAG。
-func (d *TaskDecomposer) fallbackSingleNode(goal string) []dag.ExecNode {
+func (d *TaskDecomposer) fallbackSingleNode(goal string) []protocol.ExecNode {
 	args, _ := json.Marshal(map[string]string{"goal": goal})
-	return []dag.ExecNode{
+	return []protocol.ExecNode{
 		{
 			ID:        "t1",
 			ToolName:  "agent:run",

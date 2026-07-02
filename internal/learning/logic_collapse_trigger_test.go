@@ -7,15 +7,15 @@ import (
 
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 
-	extskill "github.com/polarisagi/polaris/internal/extension/skill"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // mockTrajectoryCompiler 编译成功，直接返回固定 CompileResult。
 type mockTrajectoryCompiler struct {
-	compileFn func(ctx context.Context, req *extskill.CompileRequest) (*extskill.CompileResult, error)
+	compileFn func(ctx context.Context, req *protocol.CompileRequest) (*protocol.CompileResult, error)
 }
 
-func (m *mockTrajectoryCompiler) Compile(ctx context.Context, req *extskill.CompileRequest) (*extskill.CompileResult, error) {
+func (m *mockTrajectoryCompiler) Compile(ctx context.Context, req *protocol.CompileRequest) (*protocol.CompileResult, error) {
 	return m.compileFn(ctx, req)
 }
 
@@ -50,8 +50,8 @@ func TestLogicCollapseMonitor_TriggerCollapse_SubmitStaging(t *testing.T) {
 	}
 
 	mockCompiler := &mockTrajectoryCompiler{
-		compileFn: func(_ context.Context, _ *extskill.CompileRequest) (*extskill.CompileResult, error) {
-			return &extskill.CompileResult{
+		compileFn: func(_ context.Context, _ *protocol.CompileRequest) (*protocol.CompileResult, error) {
+			return &protocol.CompileResult{
 				ScriptHash:  "abc123",
 				RiskLevel:   "low",
 				SandboxTier: 3,
@@ -62,7 +62,7 @@ func TestLogicCollapseMonitor_TriggerCollapse_SubmitStaging(t *testing.T) {
 	monitor := NewLogicCollapseMonitor(mockCompiler, nil, nil, nil, nil, t.TempDir())
 	monitor.WithStagingPipeline(mockPipeline)
 
-	traj := &extskill.CollapseTrajectory{
+	traj := &protocol.CollapseTrajectory{
 		SkillID:      "test_skill",
 		SuccessCount: 60,
 		RiskLevel:    "low",
@@ -83,8 +83,8 @@ func TestLogicCollapseMonitor_TriggerCollapse_SubmitStaging(t *testing.T) {
 // TestLogicCollapseMonitor_TriggerCollapse_NilPipeline_NoError 验证 nil Pipeline 时不 panic。
 func TestLogicCollapseMonitor_TriggerCollapse_NilPipeline_NoError(t *testing.T) {
 	mockCompiler := &mockTrajectoryCompiler{
-		compileFn: func(_ context.Context, _ *extskill.CompileRequest) (*extskill.CompileResult, error) {
-			return &extskill.CompileResult{
+		compileFn: func(_ context.Context, _ *protocol.CompileRequest) (*protocol.CompileResult, error) {
+			return &protocol.CompileResult{
 				ScriptHash:  "abc",
 				RiskLevel:   "low",
 				SandboxTier: 1,
@@ -94,7 +94,7 @@ func TestLogicCollapseMonitor_TriggerCollapse_NilPipeline_NoError(t *testing.T) 
 	monitor := NewLogicCollapseMonitor(mockCompiler, nil, nil, nil, nil, t.TempDir())
 	// stagingPipeline 未注入（nil）
 
-	traj := &extskill.CollapseTrajectory{
+	traj := &protocol.CollapseTrajectory{
 		SkillID:      "skill_x",
 		SuccessCount: 60,
 		RiskLevel:    "low",

@@ -23,15 +23,16 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
-	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // ─── 接口约定 ─────────────────────────────────────────────────────────────────
 
-// TrajectoryCompiler 是 extskill.LogicCollapseCompiler 的抽象（防止 test 时需要构建完整编译器）。
+// TrajectoryCompiler 是 extension/skill.LogicCollapseCompiler 的消费端抽象（防止 test 时需要
+// 构建完整编译器）。请求/结果类型使用 protocol.CompileRequest/CompileResult（M04 §B2），
+// learning 包不直接 import internal/extension/skill。
 type TrajectoryCompiler interface {
-	Compile(ctx context.Context, req *extskill.CompileRequest) (*extskill.CompileResult, error)
+	Compile(ctx context.Context, req *protocol.CompileRequest) (*protocol.CompileResult, error)
 }
 
 // HITLNotifier 高风险技能 HITL 通知（由 M13 Interface 实现）。
@@ -113,7 +114,7 @@ func (ts *TrajectoryStats) ReadyToCollapse() bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	if ts.SuccessCount < extskill.MinSuccessCount {
+	if ts.SuccessCount < protocol.MinSkillSuccessCount {
 		return false
 	}
 	if ts.lastTriggerAt.IsZero() {
@@ -137,7 +138,7 @@ type LogicCollapseMonitor struct {
 	mu         sync.RWMutex
 	stats      map[string]*TrajectoryStats // skillID → stats
 	compiler   TrajectoryCompiler
-	codeGen    extskill.LLMCodeGenerator
+	codeGen    protocol.LLMCodeGenerator
 	registry   protocol.SkillRegistry
 	hitl       HITLNotifier // nil → 高风险技能跳过（仅 WARN 日志）
 	signingKey []byte
@@ -151,7 +152,7 @@ type LogicCollapseMonitor struct {
 // NewLogicCollapseMonitor 创建监控器。
 func NewLogicCollapseMonitor(
 	compiler TrajectoryCompiler,
-	codeGen extskill.LLMCodeGenerator,
+	codeGen protocol.LLMCodeGenerator,
 	registry protocol.SkillRegistry,
 	hitl HITLNotifier,
 	signingKey []byte,
@@ -179,7 +180,7 @@ func (m *LogicCollapseMonitor) WithStagingPipeline(sp optimizer.StagingPipeline)
 // 若达到触发条件，异步启动 Logic Collapse 编译（不阻塞调用链）。
 func (m *LogicCollapseMonitor) RecordSuccess(
 	ctx context.Context,
-	traj *extskill.CollapseTrajectory,
+	traj *protocol.CollapseTrajectory,
 	embedding []float32,
 ) {
 	m.mu.Lock()
@@ -197,7 +198,7 @@ func (m *LogicCollapseMonitor) RecordSuccess(
 	if !stats.ReadyToCollapse() {
 		return
 	}
-	if variance < extskill.MinSemanticVariance {
+	if variance < protocol.MinSkillSemanticVariance {
 		slog.Warn("logic_collapse: semantic_variance too low — needs_more_diversity",
 			"skill_id", traj.SkillID,
 			"variance", variance,
@@ -213,7 +214,7 @@ func (m *LogicCollapseMonitor) RecordSuccess(
 }
 
 // triggerCollapse 执行 Eval Gate 检查 + 编译触发（异步运行）。
-func (m *LogicCollapseMonitor) triggerCollapse(ctx context.Context, traj *extskill.CollapseTrajectory, variance float64) {
+func (m *LogicCollapseMonitor) triggerCollapse(ctx context.Context, traj *protocol.CollapseTrajectory, variance float64) {
 	// 1. 高风险技能 → HITL Gateway [ESCALATE]
 	if traj.RiskLevel == "high" {
 		if m.hitl != nil {
@@ -239,7 +240,7 @@ func (m *LogicCollapseMonitor) triggerCollapse(ctx context.Context, traj *extski
 	}
 
 	// 3. 构建 CompileRequest
-	req := &extskill.CompileRequest{
+	req := &protocol.CompileRequest{
 		Trajectory:     traj,
 		EvalGatePassed: true,
 		SigningKey:     m.signingKey,
@@ -294,12 +295,12 @@ func (m *LogicCollapseMonitor) triggerCollapse(ctx context.Context, traj *extski
 
 // runEvalGate 简化版自动 Eval Gate（生产中替换为 M12 Eval Harness 调用）。
 // 当前仅检查技能是否已注册（避免空编译），实际应执行 5 条黄金测试用例。
-func (m *LogicCollapseMonitor) runEvalGate(_ context.Context, traj *extskill.CollapseTrajectory) bool {
+func (m *LogicCollapseMonitor) runEvalGate(_ context.Context, traj *protocol.CollapseTrajectory) bool {
 	// Day-0 冷启动分级阈值:
 	// (a) 黄金用例=0 且成功≥50 → Auto-Eval-Bootstrapping（当前简化：允许通过）
 	// (b) 用例<5 → 降低阈值（当前简化：允许通过）
 	// 生产实现需调用 M12 EvalRunner 执行 L4 LLM-as-Judge 深度审查
-	return traj.SuccessCount >= extskill.MinSuccessCount
+	return traj.SuccessCount >= protocol.MinSkillSuccessCount
 }
 
 // GetStats 返回技能的轨迹统计（主要用于测试）。
@@ -317,12 +318,12 @@ type defaultLLMCodeGenerator struct {
 }
 
 // NewDefaultLLMCodeGenerator 创建默认 LLM 代码生成器。
-func NewDefaultLLMCodeGenerator(provider protocol.Provider) extskill.LLMCodeGenerator {
+func NewDefaultLLMCodeGenerator(provider protocol.Provider) protocol.LLMCodeGenerator {
 	return &defaultLLMCodeGenerator{provider: provider}
 }
 
 // GenerateImpl 将脱敏轨迹发送给 LLM 生成 Python 技能脚本（src/skill.py，ContainerSandbox 执行）。
-func (g *defaultLLMCodeGenerator) GenerateImpl(ctx context.Context, traj *extskill.CollapseTrajectory) ([]byte, error) {
+func (g *defaultLLMCodeGenerator) GenerateImpl(ctx context.Context, traj *protocol.CollapseTrajectory) ([]byte, error) {
 	if g.provider == nil {
 		return nil, apperr.New(apperr.CodeInternal, "logic_collapse: LLM provider is nil")
 	}
@@ -383,7 +384,7 @@ The script must implement the deterministic equivalent of this tool call sequenc
 }
 
 // buildToolCallsDescription 将工具调用类型签名格式化为 LLM 可读的描述。
-func buildToolCallsDescription(calls []extskill.CollapseToolCall) string {
+func buildToolCallsDescription(calls []protocol.CollapseToolCall) string {
 	if len(calls) == 0 {
 		return "(none)"
 	}
