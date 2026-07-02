@@ -245,26 +245,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	// 第 6 路（P0-2）：Semantic Entities 召回
 	var semanticResults []types.ScoredFragment
 	if scope.Type == "memory" && hr.semantic != nil {
-		entities, err := hr.semantic.SearchEntities(ctx, query, 20)
-		if err == nil {
-			for _, ent := range entities {
-				var propStr string
-				if b, merr := json.Marshal(ent.Properties); merr == nil {
-					propStr = string(b)
-				}
-				content := ent.Name + " " + propStr
-				if s := util.Bm25Score(query, content); s > 0 {
-					src := ent.ID
-					semanticResults = append(semanticResults, types.ScoredFragment{
-						Content:      content,
-						Score:        s,
-						Source:       src,
-						EvidenceType: types.EvidenceFTSKeyword,
-						TaintLevel:   ent.TaintLevel,
-					})
-				}
-			}
-		}
+		semanticResults = hr.searchSemanticEntities(ctx, query)
 	}
 
 	// Stage 1c — Graph 路径（Tier1+）：Spreading Activation 多种子能量扩散
@@ -473,4 +454,29 @@ func (hr *HybridRetrieverImpl) searchCognitiveFTS(ctx context.Context, query str
 		}
 	}
 	return results
+}
+
+func (hr *HybridRetrieverImpl) searchSemanticEntities(ctx context.Context, query string) []types.ScoredFragment {
+	var semanticResults []types.ScoredFragment
+	entities, err := hr.semantic.SearchEntities(ctx, query, 20)
+	if err == nil {
+		for _, ent := range entities {
+			var propStr string
+			if b, merr := json.Marshal(ent.Properties); merr == nil {
+				propStr = string(b)
+			}
+			content := ent.Name + " " + propStr
+			if s := util.Bm25Score(query, content); s > 0 {
+				src := ent.ID
+				semanticResults = append(semanticResults, types.ScoredFragment{
+					Content:      content,
+					Score:        s,
+					Source:       src,
+					EvidenceType: types.EvidenceFTSKeyword,
+					TaintLevel:   ent.TaintLevel,
+				})
+			}
+		}
+	}
+	return semanticResults
 }

@@ -54,64 +54,14 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 
 	// ─── §4.10.5 OnlineReindexer（后台异步 Embedding 版本漂移修复）──────────
 	// embedder 非 nil 时才启动（FeatureLocalEmbedding 已开启），否则 Tier0 走纯 BM25。
-	if sb.Embedder != nil {
-		embedModelName := "nomic-embed-text"
-		if sb.AutoConf != nil && sb.AutoConf.Config.LocalEmbeddingModel != "" {
-			embedModelName = sb.AutoConf.Config.LocalEmbeddingModel
-		}
-		var onlineReindexer *retrieval.OnlineReindexer
-		if sb.SurrealStore != nil {
-			onlineReindexer = retrieval.NewOnlineReindexerWithCognitive(
-				sb.Store.DB(),
-				&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
-				&surrealCognAdapter{s: sb.SurrealStore},
-			)
-		} else {
-			onlineReindexer = retrieval.NewOnlineReindexer(
-				sb.Store.DB(),
-				&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
-			)
-		}
-		go func() {
-			reindexTicker := time.NewTicker(5 * time.Minute)
-			defer reindexTicker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-reindexTicker.C:
-					if _, _, err := onlineReindexer.Run(ctx); err != nil {
-						slog.Warn("polaris: online reindexer failed", "err", err)
-					}
-				}
-			}
-		}()
-		slog.Info("polaris: online reindexer started", "model", embedModelName, "interval", "5m")
-	}
+	startOnlineReindexer(ctx, sb)
 
 	// ─── §4.10.6 CascadeInvalidator（belief revision 后级联失效，M5 §6）────
 	cascadeInvalidator := retrieval.NewCascadeInvalidator(sb.Store.DB())
 	slog.Info("polaris: cascade invalidator initialized")
 
 	// ─── §4.10.7 TemporalExpirer（定期过期 valid_until 到期的语义实体，每小时）
-	temporalExpirer := graph.NewTemporalExpirer(sb.Store.DB())
-	go func() {
-		expireTicker := time.NewTicker(1 * time.Hour)
-		defer expireTicker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-expireTicker.C:
-				if expired, err := temporalExpirer.ExpireStale(ctx); err != nil {
-					slog.Warn("polaris: temporal expirer failed", "err", err)
-				} else if expired > 0 {
-					slog.Info("polaris: temporal expirer: expired entities", "count", expired)
-				}
-			}
-		}
-	}()
-	slog.Info("polaris: temporal expirer started", "interval", "1h")
+	startTemporalExpirer(ctx, sb)
 	slog.Info("polaris: inference router and memory initialized")
 
 	// ─── §5 WriteFilter（LLM 驱动写入前价值评估，MemReader 2604.07877）───────
@@ -133,4 +83,63 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 		FallacyPool:        fallacyPool,
 		Heuristics:         heuristics,
 	}, nil
+}
+
+func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) {
+	if sb.Embedder == nil {
+		return
+	}
+	embedModelName := "nomic-embed-text"
+	if sb.AutoConf != nil && sb.AutoConf.Config.LocalEmbeddingModel != "" {
+		embedModelName = sb.AutoConf.Config.LocalEmbeddingModel
+	}
+	var onlineReindexer *retrieval.OnlineReindexer
+	if sb.SurrealStore != nil {
+		onlineReindexer = retrieval.NewOnlineReindexerWithCognitive(
+			sb.Store.DB(),
+			&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
+			&surrealCognAdapter{s: sb.SurrealStore},
+		)
+	} else {
+		onlineReindexer = retrieval.NewOnlineReindexer(
+			sb.Store.DB(),
+			&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
+		)
+	}
+	go func() {
+		reindexTicker := time.NewTicker(5 * time.Minute)
+		defer reindexTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-reindexTicker.C:
+				if _, _, err := onlineReindexer.Run(ctx); err != nil {
+					slog.Warn("polaris: online reindexer failed", "err", err)
+				}
+			}
+		}
+	}()
+	slog.Info("polaris: online reindexer started", "model", embedModelName, "interval", "5m")
+}
+
+func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
+	temporalExpirer := graph.NewTemporalExpirer(sb.Store.DB())
+	go func() {
+		expireTicker := time.NewTicker(1 * time.Hour)
+		defer expireTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-expireTicker.C:
+				if expired, err := temporalExpirer.ExpireStale(ctx); err != nil {
+					slog.Warn("polaris: temporal expirer failed", "err", err)
+				} else if expired > 0 {
+					slog.Info("polaris: temporal expirer: expired entities", "count", expired)
+				}
+			}
+		}
+	}()
+	slog.Info("polaris: temporal expirer started", "interval", "1h")
 }
