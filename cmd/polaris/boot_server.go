@@ -192,6 +192,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetToolExecutor(disp.Execute)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)
+	httpServer.SetToolRefOffloader(tb.ToolRefOffloader)
 
 	// ─── §11.5 STT/TTS 引擎初始化（FeatureLocalSTT 门控，异步下载，不阻塞启动）
 	var sttGate *probe.FeatureGate

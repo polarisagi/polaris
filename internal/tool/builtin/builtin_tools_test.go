@@ -1,6 +1,8 @@
 package builtin
 
 import (
+	"fmt"
+
 	"github.com/polarisagi/polaris/internal/security/token"
 
 	"context"
@@ -45,7 +47,7 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox()
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil)) // 无 PolicyGate，只测工具逻辑
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, ""); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -75,7 +77,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox()
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, ""); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -98,7 +100,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox()
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, ""); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -135,7 +137,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox()
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
-	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, ""); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -168,7 +170,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox()
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, ""); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
@@ -197,9 +199,57 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
 	sbx := sandbox.NewInProcessSandbox()
 	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
-	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil); err != nil {
+	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, ""); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
 
 	t.Skip("Skipping network test to avoid flakiness")
+}
+
+func TestMakeReadToolRefFn(t *testing.T) {
+	vfsRoot := t.TempDir()
+	fn := makeReadToolRefFn(vfsRoot)
+	ctx := context.Background()
+
+	// 1. Invalid args
+	_, err := fn(ctx, []byte(`{"id": "123"}`)) // missing task_id
+	if err == nil {
+		t.Errorf("expected error for missing task_id")
+	}
+
+	// 2. Setup mock data
+	taskID := "task-789"
+	id := "mock-uuid"
+	toolRefsDir := filepath.Join(vfsRoot, taskID, "tool_refs")
+	if err := os.MkdirAll(toolRefsDir, 0700); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	content := "some large tool output"
+	filePath := filepath.Join(toolRefsDir, id+".log")
+	if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	// 3. Successful read
+	validArgs := fmt.Sprintf(`{"task_id": "%s", "id": "%s"}`, taskID, id)
+	out, err := fn(ctx, []byte(validArgs))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != content {
+		t.Errorf("content mismatch, got %q, want %q", string(out), content)
+	}
+
+	// 4. Path traversal prevention
+	badArgs := fmt.Sprintf(`{"task_id": "%s", "id": "../../../../etc/passwd"}`, taskID)
+	_, err = fn(ctx, []byte(badArgs))
+	if err == nil {
+		t.Errorf("expected error for missing file or traversal")
+	}
+
+	badTaskArgs := `{"task_id": "../system", "id": "123"}`
+	_, err = fn(ctx, []byte(badTaskArgs))
+	if err == nil {
+		t.Errorf("expected error for path traversal in task_id")
+	}
 }

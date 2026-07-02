@@ -29,7 +29,9 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/extension/native"
 	"github.com/polarisagi/polaris/internal/extension/skill"
+	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
+	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/token"
@@ -39,6 +41,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
+	"github.com/polarisagi/polaris/internal/vfs"
 )
 
 // ToolBundle 持有 §6~§6.8 所有工具层产物。
@@ -57,7 +60,8 @@ type ToolBundle struct {
 	InstallMgr       *marketplace.Manager
 	InstallFSM       *lifecycle.InstallFSM
 	SkillRegistry    protocol.SkillRegistry
-	SkillExecutor    protocol.SkillExecutor   // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
+	SkillExecutor    protocol.SkillExecutor // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
+	ToolRefOffloader chat.ToolRefOffloader
 	NativeCogn       native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
 	EmbedFn          native.EmbedFn           // 可 nil（Ollama 未启用时；ExtensionActivator 降级为纯 FTS）
 	RecoveryHandler  *agent.ProviderRecoveryHandler
@@ -162,6 +166,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		sb.Cfg.Sandbox.BwrapPath,
 		sb.Cfg,
 		cronRepo,
+		sb.Layout.Workspace,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}
@@ -229,6 +234,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		}
 		return "", nil
 	}
+
+	// 初始化 WorkspaceManager 与 ToolRefOffloader
+	const workspaceMaxSize = 500 * 1024 * 1024 // Tier0 quota，来源：internal/vfs/workspace_manager.go §Tier0=500MB
+	vfsWM := vfs.NewWorkspaceManager(sb.Layout.Workspace, workspaceMaxSize)
+	toolRefOffloader := memory.NewToolRefOffloader(sb.Store.DB(), vfsWM)
+
 	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), sb.Layout.Workspace)
 	sb.Outbox.RegisterHandler(protocol.TopicSemanticCompress, semanticCompressHandler.Handle)
 
@@ -382,6 +393,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Activator:        activator,
 		ExtensionBus:     extensionBus,
 		LLMInfer:         protocol.LLMInferFunc(llmInfer),
+		ToolRefOffloader: toolRefOffloader,
 	}, nil
 }
 

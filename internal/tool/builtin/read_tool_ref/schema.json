@@ -1,10 +1,14 @@
 {
   "type": "object",
   "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "The task ID."
+    },
     "id": {
       "type": "string",
       "description": "The ID of the offloaded tool output."
     }
   },
-  "required": ["id"]
+  "required": ["task_id", "id"]
 }

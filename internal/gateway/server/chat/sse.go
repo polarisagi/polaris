@@ -350,12 +350,12 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	// 自动压缩：非 thrashing 状态 + 超过 autoCompactPct 阈值 → 静默压缩后继续推理
 	if !ctxStats.Thrashing && s.Compressor.NeedsCompact(history) {
 		writeSSE(w, flusher, "status", map[string]any{"type": "compacting", "message": "正在压缩上下文..."})
-		
+
 		var mem protocol.MemoryFacade
 		if agentCtrl != nil {
 			mem = agentCtrl.Memory()
 		}
-		
+
 		if compacted, res, err := s.Compressor.Compact(ctx, sessionID, history, p, mem); err == nil && !res.Skipped {
 			history = compacted
 			writeSSE(w, flusher, "status", map[string]any{

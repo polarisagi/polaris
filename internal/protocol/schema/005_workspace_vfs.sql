@@ -19,3 +19,13 @@ CREATE TABLE IF NOT EXISTS sys_config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS workspace_vfs (
+    id         TEXT PRIMARY KEY,       -- offload 生成的 UUID，即 read_tool_ref(id) 的 id
+    task_id    TEXT NOT NULL,          -- 归属的 session/task，用于 GC 与隔离审计
+    file_path  TEXT NOT NULL,          -- 相对 Layout.Workspace 的相对路径，如 "{taskID}/{id}.log"
+    size       INTEGER NOT NULL,       -- 字节数，SemanticCompressHandler 会更新此列
+    meta       TEXT,                   -- JSON 元数据，SemanticCompressHandler 用 json_patch 追加
+    created_at INTEGER NOT NULL        -- Unix 秒
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_vfs_task ON workspace_vfs(task_id);

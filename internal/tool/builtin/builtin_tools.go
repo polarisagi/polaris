@@ -50,6 +50,7 @@ func RegisterBuiltinTools(
 	bwrapPath string, // Linux: bwrap 路径（空=自动查找）
 	cfg *config.Config,
 	cronRepo protocol.CronRepository, // cron_* 工具依赖；nil 时不注册这三个工具
+	vfsRoot string, // WorkspaceManager 的根目录
 ) error {
 	// todoMu 保护 todo 文件的并发读写，防止多 Agent 同时写入导致数据丢失。
 	// 与 makeTodoWriteFn / makeTodoReadFn 共享，通过参数传递而非全局变量。
@@ -74,7 +75,7 @@ func RegisterBuiltinTools(
 		{"tts_edge", makeExecuteEdgeTTSFn(sandboxEnabled, bwrapPath)},
 		{"sys_probe", sysProbeFn},
 		{"str_replace_editor", makeStrReplaceEditorFn(allowedPaths)},
-		{"read_tool_ref", makeReadToolRefFn()},
+		{"read_tool_ref", makeReadToolRefFn(vfsRoot)},
 		{"glob", makeGlobFn(allowedPaths)},
 		{"web_search", makeWebSearchFn(cfg, dialer)},
 		{"todo_write", makeTodoWriteFn(allowedPaths, todoMu)},
@@ -167,27 +168,34 @@ func makeReadFileFn(allowedPaths []string) sandbox.InProcessFn {
 // ─── read_tool_ref ────────────────────────────────────────────────────────────
 
 type readToolRefArgs struct {
-	ID string `json:"id"`
+	TaskID string `json:"task_id"`
+	ID     string `json:"id"`
 }
 
-func makeReadToolRefFn() sandbox.InProcessFn {
+func makeReadToolRefFn(vfsRoot string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var args readToolRefArgs
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "read_tool_ref: invalid args", err)
 		}
-		if args.ID == "" {
-			return nil, apperr.New(apperr.CodeInternal, "read_tool_ref: id is required")
+		if args.TaskID == "" || args.ID == "" {
+			return nil, apperr.New(apperr.CodeInternal, "read_tool_ref: task_id and id are required")
 		}
 
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "read_tool_ref: home dir not found", err)
+		if vfsRoot == "" {
+			return nil, apperr.New(apperr.CodeInternal, "read_tool_ref: vfsRoot not configured")
 		}
 
 		// Security: prevent path traversal
+		cleanTaskID := filepath.Clean(args.TaskID)
 		cleanID := filepath.Base(args.ID)
-		path := filepath.Join(home, ".polarisagi", "polaris", "data", "tool_refs", cleanID+".log")
+
+		// Ensure cleanTaskID doesn't escape vfsRoot
+		if filepath.IsAbs(cleanTaskID) || cleanTaskID == ".." || len(cleanTaskID) > 2 && cleanTaskID[:3] == "../" {
+			return nil, apperr.New(apperr.CodeForbidden, "read_tool_ref: invalid task_id path")
+		}
+
+		path := filepath.Join(vfsRoot, cleanTaskID, "tool_refs", cleanID+".log")
 
 		data, err := os.ReadFile(path)
 		if err != nil {

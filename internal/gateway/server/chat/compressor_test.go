@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"errors"
+
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 
 	"context"
@@ -217,5 +219,63 @@ func TestInjectTaskCanvas(t *testing.T) {
 				t.Errorf("injectTaskCanvas() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+type mockToolRefOffloader struct {
+	fail bool
+	id   string
+}
+
+func (m *mockToolRefOffloader) Offload(ctx context.Context, taskID string, content []byte) (string, error) {
+	if m.fail {
+		return "", errors.New("forced error")
+	}
+	return m.id, nil
+}
+
+func TestOffloadLargeToolResults(t *testing.T) {
+	ctx := context.Background()
+	sessionID := "test-session"
+
+	// Create a tool message exactly at threshold
+	thresholdContent := strings.Repeat("a", toolOffloadThreshold)
+
+	// Create a large tool message
+	largeContent := strings.Repeat("b", toolOffloadThreshold+1)
+
+	msgs := []types.Message{
+		{Role: "user", Content: largeContent},     // Large but not a tool, should not be offloaded
+		{Role: "tool", Content: thresholdContent}, // Tool but not large enough, should not be offloaded
+		{Role: "tool", Content: largeContent},     // Large tool, should be offloaded
+	}
+
+	// 1. Test nil offloader (should do nothing)
+	out := offloadLargeToolResults(ctx, sessionID, msgs, nil)
+	if len(out) != 3 || out[2].Content != largeContent {
+		t.Fatalf("expected nil offloader to not change messages")
+	}
+
+	// 2. Test offload failure (should keep original)
+	failingOffloader := &mockToolRefOffloader{fail: true}
+	out = offloadLargeToolResults(ctx, sessionID, msgs, failingOffloader)
+	if len(out) != 3 || out[2].Content != largeContent {
+		t.Fatalf("expected failing offload to keep original")
+	}
+
+	// 3. Test successful offload
+	successOffloader := &mockToolRefOffloader{id: "mock-id-123"}
+	out = offloadLargeToolResults(ctx, sessionID, msgs, successOffloader)
+
+	if out[0].Content != largeContent {
+		t.Errorf("user message should not be offloaded")
+	}
+	if out[1].Content != thresholdContent {
+		t.Errorf("small tool message should not be offloaded")
+	}
+
+	expectedStub := "[offloaded: 10241 bytes → read_tool_ref(task_id=\"test-session\", id=\"mock-id-123\")]"
+	if out[2].Content != expectedStub {
+		t.Errorf("large tool message offload mismatch, got %q, want %q", out[2].Content, expectedStub)
 	}
 }
