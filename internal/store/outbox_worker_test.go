@@ -204,7 +204,7 @@ func TestProcess_NoHandler(t *testing.T) {
 	defer db.Close()
 	w := NewOutboxWorker(db, 5, 3)
 	record := &OutboxRecord{ID: 1, TargetEngine: "unknown_engine", CrashRecoveryCount: 0}
-	
+
 	if err := w.Process(context.Background(), record); !errors.Is(err, ErrUnknownTargetEngine) {
 		t.Fatalf("expected ErrUnknownTargetEngine, got: %v", err)
 	}

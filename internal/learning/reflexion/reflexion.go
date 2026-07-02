@@ -31,7 +31,7 @@ type ReflexionEngine struct {
 	memf       *optimizer.FallacyMemoryPool
 	heuristics *optimizer.HeuristicsMemory
 	// llmInfer 允许调用方注入真实的 LLM 推理函数；nil 则使用 MVP 规则引擎。
-	llmInfer func(ctx context.Context, prompt string) (string, error)
+	llmInfer protocol.LLMInferFunc
 	// heuristicCh 非 nil 时，步骤3完成后将 AvoidRule 发布给 learning.Engine 内环。
 	heuristicCh chan<- types.HeuristicGeneratedPayload
 	// db 和 surreal 用于回写 AgentHER 轨迹
@@ -49,7 +49,7 @@ type SurrealWriter interface {
 func NewReflexionEngine(
 	memf *optimizer.FallacyMemoryPool,
 	heuristics *optimizer.HeuristicsMemory,
-	llmInfer func(ctx context.Context, prompt string) (string, error),
+	llmInfer protocol.LLMInferFunc,
 ) *ReflexionEngine {
 	return &ReflexionEngine{
 		memf:       memf,

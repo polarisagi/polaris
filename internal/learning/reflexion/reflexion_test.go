@@ -2,6 +2,7 @@ package reflexion
 
 import (
 	"github.com/polarisagi/polaris/internal/learning"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"context"
@@ -104,9 +105,9 @@ func TestReflexionEngine(t *testing.T) {
 	memf := optimizer.NewFallacyMemoryPool(db)
 	heuristics := &optimizer.HeuristicsMemory{DB: db}
 
-	llmInferFunc := func(ctx context.Context, prompt string) (string, error) {
+	llmInferFunc := protocol.LLMInferFunc(func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
 		return "Mocked reason from LLM.", nil
-	}
+	})
 
 	engine := NewReflexionEngine(memf, heuristics, llmInferFunc)
 
@@ -125,9 +126,9 @@ func TestReflexionEngine(t *testing.T) {
 			{Index: 2, Action: "act2", Result: "res2", Success: true},
 		}
 		// Uses custom LLM infer for replaySuccess JSON
-		engine.llmInfer = func(ctx context.Context, prompt string) (string, error) {
+		engine.llmInfer = protocol.LLMInferFunc(func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
 			return `{"insight": "Try act2 instead of act1", "tags": ["test"]}`, nil
-		}
+		})
 
 		ref, err := engine.Reflect(ctx, "task1", "type1", result, traj, 1)
 		if err != nil {

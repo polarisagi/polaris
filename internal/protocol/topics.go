@@ -1,9 +1,11 @@
 package protocol
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // TopicXxx Outbox 事件主题。OutboxWorker 按 OutboxEntry.TargetEngine 路由，
@@ -42,3 +44,19 @@ func NewOutboxEvent(topic, op string, payload any, idemKey string) (OutboxEntry,
 		IdempotencyKey: idemKey,
 	}, nil
 }
+
+// InferOptions 控制 LLM 推理行为。
+type InferOptions struct {
+	Temperature float32
+	MaxTokens   int
+	StopWords   []string
+}
+
+// ModelResponse 封装 LLM 响应。
+type ModelResponse struct {
+	Content string
+	Tokens  int
+}
+
+// ContextPredictFunc 提供上下文连续性预测能力。
+type ContextPredictFunc func(ctx context.Context, events []types.Event) (float64, error)
