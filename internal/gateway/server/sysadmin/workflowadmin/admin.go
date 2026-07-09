@@ -7,6 +7,7 @@ package workflowadmin
 
 import (
 	"context"
+	"sync"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
@@ -24,11 +25,11 @@ type ChatDispatcher interface {
 
 // WorkflowAdmin 承载 workflow CRUD + cron 触发 + 顺序执行引擎。
 type WorkflowAdmin struct {
-	DB           protocol.SQLQuerier
-	WorkflowRepo repo.WorkflowRepository
-	Registry     protocol.LLMRegistry
-	Chat         ChatDispatcher
-	Agent        protocol.AgentController
+	DB               protocol.SQLQuerier
+	WorkflowRepo     repo.WorkflowRepository
+	AgentPool        protocol.AgentPool
+	Chat             ChatDispatcher
+	TemplateCacheMap *sync.Map
 
 	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	BuildToolSchemas func() []types.ToolSchema
@@ -37,19 +38,18 @@ type WorkflowAdmin struct {
 // NewWorkflowAdmin 构造 WorkflowAdmin。
 func NewWorkflowAdmin(
 	db protocol.SQLQuerier,
-	workflowRepo repo.WorkflowRepository,
-	registry protocol.LLMRegistry,
+	r repo.WorkflowRepository,
+	agentPool protocol.AgentPool,
 	chat ChatDispatcher,
-	agent protocol.AgentController,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	buildToolSchemas func() []types.ToolSchema,
 ) *WorkflowAdmin {
 	return &WorkflowAdmin{
 		DB:               db,
-		WorkflowRepo:     workflowRepo,
-		Registry:         registry,
+		WorkflowRepo:     r,
+		AgentPool:        agentPool,
 		Chat:             chat,
-		Agent:            agent,
+		TemplateCacheMap: &sync.Map{},
 		ToolExec:         toolExec,
 		BuildToolSchemas: buildToolSchemas,
 	}

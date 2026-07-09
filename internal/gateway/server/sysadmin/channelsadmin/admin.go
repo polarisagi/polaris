@@ -8,6 +8,7 @@ package channelsadmin
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -48,13 +49,15 @@ type WebhookAutomationTrigger interface {
 
 // ChannelsAdmin 承载 channels CRUD + webhook 接收/验签 + 消息分发。
 type ChannelsAdmin struct {
-	DB          protocol.SQLQuerier
-	ChannelRepo repo.ChannelRepository
-	ChannelMgr  ChannelMgr
-	Registry    protocol.LLMRegistry
-	Chat        ChatDispatcher
-	Hooks       HookFirer
-	Cron        WebhookAutomationTrigger
+	DB               protocol.SQLQuerier
+	ChannelRepo      repo.ChannelRepository
+	ChannelMgr       ChannelMgr
+	Registry         protocol.LLMRegistry
+	Chat             ChatDispatcher
+	AgentPool        protocol.AgentPool
+	Hooks            HookFirer
+	Cron             WebhookAutomationTrigger
+	TemplateCacheMap *sync.Map
 
 	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	BuildToolSchemas func() []types.ToolSchema
@@ -69,6 +72,7 @@ func NewChannelsAdmin(
 	chat ChatDispatcher,
 	hooks HookFirer,
 	cron WebhookAutomationTrigger,
+	agentPool protocol.AgentPool,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	buildToolSchemas func() []types.ToolSchema,
 ) *ChannelsAdmin {
@@ -78,8 +82,10 @@ func NewChannelsAdmin(
 		ChannelMgr:       channelMgr,
 		Registry:         registry,
 		Chat:             chat,
+		AgentPool:        agentPool,
 		Hooks:            hooks,
 		Cron:             cron,
+		TemplateCacheMap: &sync.Map{},
 		ToolExec:         toolExec,
 		BuildToolSchemas: buildToolSchemas,
 	}

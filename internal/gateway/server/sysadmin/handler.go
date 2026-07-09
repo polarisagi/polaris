@@ -85,7 +85,7 @@ type Dependencies struct {
 	BudgetRepo     repo.BudgetRepository
 	ChannelRepo    repo.ChannelRepository
 	WorkflowRepo   repo.WorkflowRepository
-	Agent          protocol.AgentController
+	AgentPool      protocol.AgentPool
 	MCPMgr         MCPManager
 	Hooks          *HookRunner
 	DataDir        string
@@ -124,7 +124,6 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		BudgetRepo:     deps.BudgetRepo,
 		ChannelRepo:    deps.ChannelRepo,
 		WorkflowRepo:   deps.WorkflowRepo,
-		Agent:          deps.Agent,
 		MCPMgr:         deps.MCPMgr,
 		Hooks:          deps.Hooks,
 		DataDir:        deps.DataDir,
@@ -147,9 +146,8 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 	h.Workflow = workflowadmin.NewWorkflowAdmin(
 		deps.DB,
 		deps.WorkflowRepo,
-		deps.Registry,
+		deps.AgentPool,
 		deps.Chat,
-		deps.Agent,
 		nil,
 		h.BuildToolSchemas,
 	)
@@ -163,7 +161,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 	// 必须在此处一次性接好。
 	h.Cron = cronadmin.NewCronAdmin(
 		deps.DB,
-		deps.Agent,
+		deps.AgentPool,
 		deps.AutomationRepo,
 		deps.Chat,
 		deps.ChannelMgr,
@@ -186,6 +184,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.Chat,
 		deps.Hooks,
 		h.Cron,
+		deps.AgentPool,
 		nil,
 		h.BuildToolSchemas,
 	)

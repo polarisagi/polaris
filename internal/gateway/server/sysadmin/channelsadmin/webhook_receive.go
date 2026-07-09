@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -145,87 +144,19 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		slog.Error("channel dispatch: saveMessage user", "err", err)
 	}
 
-	toolSchemas := h.BuildToolSchemas()
-	var sb strings.Builder
-	const maxToolRounds = 10
-	startInfer := time.Now()
-	for range maxToolRounds {
-		//nolint:bare-infer // 历史代码暂留，后续重构替换
-		ch, err := p.StreamInfer(ctx, history,
-			types.WithMaxTokens(2048),
-			types.WithTemperature(0.7),
-			types.WithTools(toolSchemas),
-		)
-		if err != nil {
-			slog.Error("channel dispatch: StreamInfer", "channel", channelID, "err", err)
-			return
-		}
-
-		var roundText strings.Builder
-		var toolCalls []map[string]json.RawMessage
-		for ev := range ch {
-			switch ev.Type {
-			case types.StreamTextDelta:
-				if ev.Content != "" {
-					roundText.WriteString(ev.Content)
-					sb.WriteString(ev.Content)
-				}
-			case types.StreamToolCall:
-				var call map[string]json.RawMessage
-				if json.Unmarshal([]byte(ev.Content), &call) == nil {
-					toolCalls = append(toolCalls, call)
-				}
-			}
-		}
-
-		// 无 tool_call → 推理结束
-		if len(toolCalls) == 0 || h.ToolExec == nil {
-			break
-		}
-
-		// 构造 assistant message (含 tool_use parts) + user message (tool_result parts)
-		assistantParts := make([]any, 0, 1+len(toolCalls))
-		if roundText.Len() > 0 {
-			assistantParts = assistantParts[0:0] // Reset to reuse slice
-			assistantParts = append(assistantParts, map[string]any{"type": "text", "text": roundText.String()})
-		}
-		toolResultParts := make([]any, 0, len(toolCalls))
-		for _, tc := range toolCalls {
-			var toolID, toolName string
-			var inputRaw json.RawMessage
-			if b, ok := tc["id"]; ok {
-				json.Unmarshal(b, &toolID) //nolint:errcheck
-			}
-			if b, ok := tc["name"]; ok {
-				json.Unmarshal(b, &toolName) //nolint:errcheck
-			}
-			if b, ok := tc["input"]; ok {
-				inputRaw = b
-			}
-			assistantParts = append(assistantParts, map[string]any{
-				"type": "tool_use", "id": toolID, "name": toolName, "input": inputRaw,
-			})
-
-			result, execErr := h.ToolExec(ctx, toolName, inputRaw)
-			var resultText string
-			if execErr != nil {
-				resultText = "error: " + execErr.Error()
-			} else if result != nil {
-				resultText = string(result.Output)
-			}
-			slog.Info("channel dispatch: tool executed", "name", toolName, "ok", execErr == nil)
-			toolResultParts = append(toolResultParts, map[string]any{
-				"type": "tool_result", "tool_use_id": toolID, "content": resultText,
-			})
-		}
-		history = append(history,
-			types.Message{Role: "assistant", Parts: assistantParts},
-			types.Message{Role: "user", Parts: toolResultParts},
-		)
+	intent := types.Intent{
+		Query: msg.Text,
 	}
-	inferLatencyMs := time.Since(startInfer).Milliseconds()
 
-	reply := sb.String()
+	res, err := h.AgentPool.AcquireHeadless(ctx, intent)
+	if err != nil {
+		slog.Error("channel dispatch: AcquireHeadless failed", "channel", channelID, "err", err)
+		return
+	}
+
+	reply := res.Output
+	inferLatencyMs := res.LatencyMs
+
 	if reply == "" {
 		return
 	}

@@ -7,8 +7,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/polarisagi/polaris/internal/config"
-	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
 
@@ -80,7 +78,7 @@ func TestWorkflowInternal(t *testing.T) {
 
 	h := &WorkflowAdmin{
 		DB:           db,
-		Registry:     llm.NewProviderRegistry(config.M1RouterThresholds{}),
+		AgentPool:    nil, // tests do not execute actual agent workflows
 		WorkflowRepo: repo.NewSQLiteWorkflowRepository(db),
 	}
 

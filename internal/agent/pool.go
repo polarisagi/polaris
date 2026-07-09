@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // Pool 管理 per-session Agent 实例，容量受 maxSize 限制。
@@ -81,6 +84,46 @@ func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentCon
 		p.sem <- struct{}{} // 归还令牌
 	}
 	return agent, release, nil
+}
+
+// AcquireHeadless 供 Cron/Workflow/Webhook 等非交互式触发方注入 Intent 并同步获取最终结果，
+// 内部完整复用 Agent Kernel 的 FSM/DAG/安全 Gate/Reflection/Replan 能力。
+func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
+	sessionID := "headless-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%x", time.Now().UnixNano())
+	agent, release, err := p.Acquire(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	opt := &types.HeadlessOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	intentBytes, _ := json.Marshal(intent)
+	agent.SetTaskIntent(intentBytes)
+
+	stream := agent.SubscribeStream(ctx)
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to send intent", err)
+	}
+
+	start := time.Now()
+	var finalOutput string
+	for ev := range stream {
+		if ev.Type == types.AgentStreamEventError {
+			return nil, apperr.New(apperr.CodeInternal, ev.Content)
+		}
+		if ev.Type == types.AgentStreamEventToken {
+			finalOutput += ev.Content
+		}
+	}
+
+	return &types.AgentResult{
+		Output:    finalOutput,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
 }
 
 // GC 清理 idle 超时的 session，应由外部低频 ticker 调用（如每 5 分钟）。

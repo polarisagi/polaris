@@ -40,7 +40,7 @@ type HITLGateway interface {
 
 type CronAdmin struct {
 	DB               protocol.SQLQuerier
-	Agent            protocol.AgentController
+	AgentPool        protocol.AgentPool
 	AutomationRepo   repo.AutomationRepository
 	Chat             ChatDispatcher
 	ChannelMgr       ChannelManager
@@ -58,7 +58,7 @@ type CronAdmin struct {
 
 func NewCronAdmin(
 	db protocol.SQLQuerier,
-	agent protocol.AgentController,
+	agentPool protocol.AgentPool,
 	automationRepo repo.AutomationRepository,
 	chat ChatDispatcher,
 	channelMgr ChannelManager,
@@ -73,7 +73,7 @@ func NewCronAdmin(
 ) *CronAdmin {
 	return &CronAdmin{
 		DB:                 db,
-		Agent:              agent,
+		AgentPool:          agentPool,
 		AutomationRepo:     automationRepo,
 		Chat:               chat,
 		ChannelMgr:         channelMgr,

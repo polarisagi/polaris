@@ -100,6 +100,9 @@ AgentController interface {
 // 超出容量时 Acquire 阻塞最多 100ms，超时返回 apperr.CodeResourceExhausted。
 type AgentPool interface {
 	Acquire(ctx context.Context, sessionID string) (AgentController, func(), error)
+	// AcquireHeadless 供 Cron/Workflow/Webhook 等非交互式触发方注入 Intent 并同步获取最终结果，
+	// 内部完整复用 Agent Kernel 的 FSM/DAG/安全 Gate/Reflection/Replan 能力。
+	AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error)
 }
 
 type

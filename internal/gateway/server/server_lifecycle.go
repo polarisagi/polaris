@@ -172,6 +172,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		Chat:           s.chatHandler,
 		ChannelMgr:     s.channelMgr,
 		HITLGateway:    hitlGateway,
+		AgentPool:      s.agentPool,
 	})
 	s.pluginHandler = plugin.NewPluginHandler(plugin.Dependencies{
 		ExtRepo:              s.extRepo,

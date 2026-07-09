@@ -163,55 +163,17 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			ca.updateAutomationStats(a.ID, status, errMsg, finishedAt)
 		}()
 
-		// 准备 Provider
-		p := ca.Registry.PickProvider("default")
-		if p == nil {
-			p = ca.Registry.PickProvider("general")
-		}
-		if p == nil {
-			status = "error"
-			errMsg = "no provider available"
-			slog.Warn("automation: no provider available", "id", a.ID)
-			return
-		}
-
-		if err := ca.Chat.EnsureSession(bgCtx, sessionID); err != nil {
-			status = "error"
-			errMsg = "ensure session failed: " + err.Error()
-			return
-		}
-
-		// 构建初始 history
-		var history []types.Message
-		history = ca.Chat.InjectSystemPrompt(bgCtx, ca.Agent, history, a.Prompt)
-
-		// 追加用户消息，working_dir 非空时注入工作目录上下文
+		// 准备 Intent
 		userMessage := a.Prompt
 		if a.WorkingDir != "" {
 			userMessage = "[工作目录: " + a.WorkingDir + "]\n\n" + a.Prompt
 		}
-		history = append(history, types.Message{Role: "user", Content: userMessage})
-		if err := ca.Chat.SaveMessage(bgCtx, sessionID, "user", userMessage, "", "", 0); err != nil {
-			slog.Warn("automation: saveMessage user failed", "err", err)
+
+		intent := types.Intent{
+			Query:      userMessage,
+			WorkingDir: a.WorkingDir,
 		}
 
-		// 获取可用工具
-		toolSchemas := ca.BuildToolSchemas()
-
-		// 执行推理
-		req := &types.InferRequest{
-			Messages:        history,
-			MaxTokens:       4096,
-			Temperature:     0.7,
-			Tools:           toolSchemas,
-			ReasoningEffort: ParseReasoningEffort(a.ReasoningEffort),
-		}
-
-		startInfer := time.Now()
-		var sb strings.Builder
-		const maxToolRounds = 10
-
-		// 在 tool round 循环开始前（run_id 已生成、status 写为 "running" 之后）：
 		if ca.HITLGateway != nil && a.RequiresHITL {
 			// 更新状态为 suspended，等待审批
 			_ = ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", "", 0)
@@ -223,7 +185,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 				PromptText:     fmt.Sprintf("自动化任务 [%s] 即将执行，触发方式: %s", a.Name, trigger),
 				RiskLevel:      a.RiskLevel,
 				DeadlineNs:     time.Now().Add(10 * time.Minute).UnixNano(),
-				TaintLevel:     types.TaintLevel(a.SandboxLevel), // map SandboxLevel to TaintLevel approximately or 0
+				TaintLevel:     types.TaintLevel(a.SandboxLevel),
 			}
 
 			resp, hitlErr := ca.HITLGateway.Prompt(bgCtx, prompt)
@@ -241,79 +203,15 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			_ = ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "running")
 		}
 
-		for range maxToolRounds {
-			//nolint:bare-infer // 历史代码暂留，后续重构替换
-			ch, err := p.StreamInfer(bgCtx, req.Messages)
-			if err != nil {
-				status = "error"
-				errMsg = "infer failed: " + err.Error()
-				return
-			}
-
-			var roundText strings.Builder
-			var toolCalls []map[string]json.RawMessage
-
-			for ev := range ch {
-				switch ev.Type {
-				case types.StreamTextDelta:
-					if ev.Content != "" {
-						roundText.WriteString(ev.Content)
-						sb.WriteString(ev.Content)
-					}
-				case types.StreamToolCall:
-					var call map[string]json.RawMessage
-					if json.Unmarshal([]byte(ev.Content), &call) == nil {
-						toolCalls = append(toolCalls, call)
-					}
-				}
-			}
-
-			if len(toolCalls) == 0 || ca.ToolExec == nil {
-				break
-			}
-
-			assistantParts := make([]any, 0, 1+len(toolCalls))
-			if roundText.Len() > 0 {
-				assistantParts = append(assistantParts, map[string]any{"type": "text", "text": roundText.String()})
-			}
-			toolResultParts := make([]any, 0, len(toolCalls))
-
-			for _, tc := range toolCalls {
-				var toolID, toolName string
-				var inputRaw json.RawMessage
-				if b, ok := tc["id"]; ok {
-					json.Unmarshal(b, &toolID) //nolint:errcheck
-				}
-				if b, ok := tc["name"]; ok {
-					json.Unmarshal(b, &toolName) //nolint:errcheck
-				}
-				if b, ok := tc["input"]; ok {
-					inputRaw = b
-				}
-				assistantParts = append(assistantParts, map[string]any{
-					"type": "tool_use", "id": toolID, "name": toolName, "input": inputRaw,
-				})
-
-				result, execErr := ca.ToolExec(bgCtx, toolName, inputRaw)
-				var resultText string
-				if execErr != nil {
-					resultText = "error: " + execErr.Error()
-				} else if result != nil {
-					resultText = string(result.Output)
-				}
-				slog.Info("automation: tool executed", "name", toolName, "ok", execErr == nil)
-				toolResultParts = append(toolResultParts, map[string]any{
-					"type": "tool_result", "tool_use_id": toolID, "content": resultText,
-				})
-			}
-			req.Messages = append(req.Messages,
-				types.Message{Role: "assistant", Parts: assistantParts},
-				types.Message{Role: "user", Parts: toolResultParts},
-			)
+		res, err := ca.AgentPool.AcquireHeadless(bgCtx, intent)
+		if err != nil {
+			status = "error"
+			errMsg = "agent headless execution failed: " + err.Error()
+			return
 		}
 
-		reply := sb.String()
-		latencyMs := time.Since(startInfer).Milliseconds()
+		reply := res.Output
+		latencyMs := res.LatencyMs
 
 		if err := ca.Chat.SaveMessage(bgCtx, sessionID, "assistant", reply, "", "", latencyMs); err != nil {
 			slog.Warn("automation: saveMessage assistant failed", "err", err)
