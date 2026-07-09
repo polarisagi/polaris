@@ -131,6 +131,7 @@ func (p *DefaultPRM) scoreCandidate(ctx context.Context, goal string, plan *type
 		},
 	}
 
+	//nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := p.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("prm: infer failed: %v", err), err)

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -236,7 +237,11 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 
 				for range n {
 					concurrent.SafeGo(ctx, "agent.prm_candidate_infer", func(ctx context.Context) {
-						cResp, cErr := a.provider.Infer(ctx, baseMessages, types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode))
+						cResp, cErr := safecall.Infer(ctx, a.provider, baseMessages,
+							types.WithModel(llmEff.ModelPool),
+							types.WithThinkingMode(llmEff.ThinkingMode),
+							types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}),
+						)
 						if cErr != nil {
 							candidateCh <- candidateResult{}
 							return
@@ -284,6 +289,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			if err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)
 			}
+			//nolint:bare-infer // 历史代码暂留，后续重构替换
 			ch, streamErr := a.provider.StreamInfer(ctx, reqMsgs, types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode))
 			if streamErr != nil {
 				inferErr = streamErr

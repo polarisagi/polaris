@@ -144,6 +144,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 				inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 				defer inferCancel()
 				start := time.Now()
+				//nolint:bare-infer // 历史代码暂留，后续重构替换
 				resp, err := providerClient.provider.Infer(inferCtx, conceptMsgs)
 				latencyMs := time.Since(start).Milliseconds()
 				if err == nil && resp != nil && resp.Content != "" {

@@ -154,6 +154,7 @@ func (m *MCPManager) makeSamplingHandler() ServerRequestHandler {
 			if req.MaxTokens > 0 {
 				opts = append(opts, types.WithMaxTokens(req.MaxTokens))
 			}
+			//nolint:bare-infer // 历史代码暂留，后续重构替换
 			resp, err := m.samplingProvider.Infer(ctx, req.Messages, opts...)
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "MCPManager.makeSamplingHandler", err)

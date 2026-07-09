@@ -221,6 +221,7 @@ func (e *ComputerUseEngine) resolveAction(ctx context.Context, intent string, st
 	// P-1：每次 LLM 调用自持超时（90s），不信任上层 ctx 一定带 deadline（A-05）。
 	inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer inferCancel()
+	//nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := e.provider.Infer(inferCtx, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("lam: VLM resolve action: %v", err), err)

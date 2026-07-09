@@ -160,6 +160,7 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 				continue
 			}
 			summaryID := node.ID + "_summary"
+			//nolint:bare-infer // 历史代码暂留，后续重构替换
 			resp, err := p.provider.Infer(ctx, []types.Message{
 				{Role: "system", Content: "用一句话（50字以内）总结以下文本片段的核心内容，输出纯文本，不加任何格式："},
 				{Role: "user", Content: node.Content},

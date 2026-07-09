@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
@@ -168,7 +169,7 @@ func (qp *QueryPlanner) Plan(ctx context.Context, query string) ([]SubQuery, err
 		return []SubQuery{{Text: query, Weight: 1.0}}, nil
 	}
 
-	resp, err := qp.provider.Infer(ctx, []types.Message{
+	resp, err := safecall.Infer(ctx, qp.provider, []types.Message{
 		{Role: "system", Content: `将用户查询分解为 2-5 个独立子查询以提升检索覆盖度。
 严格按以下 JSON 格式输出，不加任何额外文字：
 [{"text":"子查询1","scope":"","weight":0.6},{"text":"子查询2","scope":"","weight":0.4}]

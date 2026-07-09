@@ -150,6 +150,7 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 	const maxToolRounds = 10
 	startInfer := time.Now()
 	for range maxToolRounds {
+		//nolint:bare-infer // 历史代码暂留，后续重构替换
 		ch, err := p.StreamInfer(ctx, history,
 			types.WithMaxTokens(2048),
 			types.WithTemperature(0.7),

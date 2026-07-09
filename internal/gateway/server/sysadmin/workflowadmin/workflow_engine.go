@@ -163,6 +163,7 @@ func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, 
 	const maxToolRounds = 10
 
 	for range maxToolRounds {
+		//nolint:bare-infer // 历史代码暂留，后续重构替换
 		ch, err := p.StreamInfer(ctx, req.Messages)
 		if err != nil {
 			return "", apperr.Wrap(apperr.CodeInternal, "infer", err)

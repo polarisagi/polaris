@@ -242,6 +242,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 		}
 
 		for range maxToolRounds {
+			//nolint:bare-infer // 历史代码暂留，后续重构替换
 			ch, err := p.StreamInfer(bgCtx, req.Messages)
 			if err != nil {
 				status = "error"

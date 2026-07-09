@@ -87,6 +87,7 @@ func (s *stepScorer) runPRM(ctx context.Context, stepSummary string) (float64, b
 		{Role: "system", Content: "你是步骤质量评分器。只输出 +1、0 或 -1 三者之一，不要任何其它文字。"},
 		{Role: "user", Content: stepSummary},
 	}
+	//nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := s.prm.Infer(cctx, msgs,
 		types.WithMaxTokens(4),
 		types.WithResponseFormat(&types.ResponseFormat{Type: "gbnf", Grammar: prmGrammar}),

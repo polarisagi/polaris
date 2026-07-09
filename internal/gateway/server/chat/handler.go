@@ -184,6 +184,7 @@ func (h *ChatHandler) GenerateReply(ctx context.Context, req *apptypes.InferRequ
 	var sb strings.Builder
 	const maxToolRounds = 10
 	for range maxToolRounds {
+		//nolint:bare-infer // 历史代码暂留，后续重构替换
 		ch, err := p.StreamInfer(ctx, history,
 			apptypes.WithMaxTokens(2048),
 			apptypes.WithTemperature(0.7),

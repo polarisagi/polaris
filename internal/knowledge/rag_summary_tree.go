@@ -75,6 +75,7 @@ func (p *DefaultIngestionPipeline) fetchLeafChunks(ctx context.Context, db proto
 func (p *DefaultIngestionPipeline) summarizeText(ctx context.Context, prompt string, maxTokens int) string {
 	sCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	//nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := p.provider.Infer(sCtx, []types.Message{{Role: "user", Content: prompt}},
 		types.WithMaxTokens(maxTokens))
 	if err != nil || resp == nil {

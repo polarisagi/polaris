@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -59,25 +61,22 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, goal string) ([]protocol
 
 // decomposeLLM 调用 LLM，强制返回 JSON 数组格式。
 func (d *TaskDecomposer) decomposeLLM(ctx context.Context, goal string) ([]protocol.ExecNode, error) {
-	systemPrompt := `You are a task decomposition engine. 
-Given a high-level goal, break it into at most 8 concrete sub-tasks.
-Return ONLY a JSON object with a "tasks" array. Each task must have:
-  - id: unique short string ("t1", "t2", ...)
-  - name: short title
-  - description: what to do
-  - tool_name: tool to call (e.g. "builtin:web_search", "builtin:file_write", "agent:run")
-  - args: JSON object with tool arguments (use {"goal": description} for agent:run)
-  - depends_on: array of task ids that must complete first (empty if none)
-Ensure no circular dependencies. Output ONLY valid JSON, no markdown.`
+	systemPrompt, err := templates.Render("decomposer.tmpl", nil)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "task_decomposer: render template failed", err)
+	}
 
 	userPrompt := fmt.Sprintf("Decompose this goal into sub-tasks:\n%s", goal)
 
-	resp, err := d.provider.Infer(ctx, []types.Message{
+	resp, err := safecall.Infer(ctx, d.provider, []types.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
 	}, types.WithMaxTokens(1024))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "task_decomposer: LLM infer failed", err)
+	}
+	if resp == nil {
+		return nil, apperr.New(apperr.CodeInternal, "task_decomposer: empty response")
 	}
 
 	content := strings.TrimSpace(resp.Content)

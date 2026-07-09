@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -118,7 +119,7 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		Model:       "reasoning",
 	}
 
-	resp, err := p.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil || len(resp.Content) == 0 {
 		return
 	}
@@ -229,7 +230,7 @@ func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultCha
 			Model:       "reasoning",
 		}
 
-		resp, err := p.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+		resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 		if err == nil && resp != nil && len(resp.Content) > 0 {
 			resultChan <- workerResult{
 				score:   0.9,

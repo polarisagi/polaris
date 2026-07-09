@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -72,7 +73,7 @@ Output ONLY valid JSON. No markdown formatting or extra text.`, name, descriptio
 		},
 	}
 
-	resp, err := g.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, g.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, types.Tool{}, apperr.Wrap(apperr.CodeInternal, "llm infer failed", err)
 	}

@@ -21,19 +21,21 @@ type Thresholds struct {
 }
 
 type M1RouterThresholds struct {
-	CircuitBreakerFailureCount    int     `toml:"circuit_breaker.failure_count"`       // 5
-	CircuitBreakerCooldownSeconds int     `toml:"circuit_breaker.cooldown_seconds"`    // 10
-	CircuitBreakerHalfOpenMax     int     `toml:"circuit_breaker.half_open_max"`       // 1
-	PreFlightCostTolerancePct     int     `toml:"pre_flight.cost_tolerance_pct"`       // 15
-	TimeoutDialSeconds            int     `toml:"timeout.dial_seconds"`                // 3
-	TimeoutTLSSeconds             int     `toml:"timeout.tls_seconds"`                 // 5
-	TimeoutResponseHeaderSeconds  int     `toml:"timeout.response_header_seconds"`     // 30
-	TimeoutTotalSeconds           int     `toml:"timeout.total_seconds"`               // 120
-	MaxStreamBufferKB             int     `toml:"stream.max_buffer_kb"`                // 256
-	L1TargetHitRate               float64 `toml:"l1.target_hit_rate"`                  // 0.90
-	SemanticCacheMaxEntries       int     `toml:"semantic_cache.max_entries"`          // 10000
-	SemanticCacheSimilarity       float64 `toml:"semantic_cache.similarity_threshold"` // 0.95
-	SemanticCacheTTLHours         int     `toml:"semantic_cache.ttl_hours"`            // 24
+	CircuitBreakerFailureCount    int     `toml:"circuit_breaker.failure_count"`        // 5
+	CircuitBreakerCooldownSeconds int     `toml:"circuit_breaker.cooldown_seconds"`     // 10
+	CircuitBreakerHalfOpenMax     int     `toml:"circuit_breaker.half_open_max"`        // 1
+	SafecallInferTimeoutSeconds   int     `toml:"safecall_infer_timeout_seconds"`       // 15
+	SafecallStreamIdleTimeoutSec  int     `toml:"safecall_stream_idle_timeout_seconds"` // 60
+	PreFlightCostTolerancePct     int     `toml:"pre_flight.cost_tolerance_pct"`        // 15
+	TimeoutDialSeconds            int     `toml:"timeout.dial_seconds"`                 // 3
+	TimeoutTLSSeconds             int     `toml:"timeout.tls_seconds"`                  // 5
+	TimeoutResponseHeaderSeconds  int     `toml:"timeout.response_header_seconds"`      // 30
+	TimeoutTotalSeconds           int     `toml:"timeout.total_seconds"`                // 120
+	MaxStreamBufferKB             int     `toml:"stream.max_buffer_kb"`                 // 256
+	L1TargetHitRate               float64 `toml:"l1.target_hit_rate"`                   // 0.90
+	SemanticCacheMaxEntries       int     `toml:"semantic_cache.max_entries"`           // 10000
+	SemanticCacheSimilarity       float64 `toml:"semantic_cache.similarity_threshold"`  // 0.95
+	SemanticCacheTTLHours         int     `toml:"semantic_cache.ttl_hours"`             // 24
 }
 
 type M2StorageThresholds struct {
@@ -184,6 +186,8 @@ func DefaultThresholds() Thresholds {
 			CircuitBreakerFailureCount:    5,
 			CircuitBreakerCooldownSeconds: 10,
 			CircuitBreakerHalfOpenMax:     1,
+			SafecallInferTimeoutSeconds:   15,
+			SafecallStreamIdleTimeoutSec:  60,
 			PreFlightCostTolerancePct:     15,
 			TimeoutDialSeconds:            3,
 			TimeoutTLSSeconds:             5,

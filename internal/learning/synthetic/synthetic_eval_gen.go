@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -262,7 +263,7 @@ func (g *EvalGenerator) validateGroundedness(ctx context.Context, chunk string, 
 // ── 内部工具 ─────────────────────────────────────────────────────────────────
 
 func (g *EvalGenerator) infer(ctx context.Context, prompt string, schema map[string]any) ([]byte, error) {
-	resp, err := g.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}},
+	resp, err := safecall.Infer(ctx, g.provider, []types.Message{{Role: "user", Content: prompt}},
 		types.WithModel("deepseek-chat"), // budget 层：批量生成无需推理能力
 		types.WithMaxTokens(512),
 		types.WithResponseFormat(&types.ResponseFormat{
