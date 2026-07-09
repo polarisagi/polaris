@@ -64,6 +64,7 @@ test:
 
 lint:
 	golangci-lint run ./...
+	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./...
 
 clean:
 	rm -rf bin/ bin/lib
