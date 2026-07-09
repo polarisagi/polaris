@@ -32,19 +32,22 @@ type Transition struct {
 
 // StateMachine 管理 Agent 状态生命周期。
 type StateMachine struct {
-	cb            ContextBuilder
-	current       types.AgentState
-	transitions   map[types.AgentState]map[types.AgentTrigger]Transition // state → trigger → transition
-	history       []types.AgentState
-	replanCount   int
-	eventSeq      int64 // 单调递增事件序列号，用于生成确定性 Event ID（replay key）
-	startedAt     time.Time
-	interruptFrom types.AgentState // S_INTERRUPT 时记录被中断的原状态（Resume 路径用）
-	mu            sync.Mutex
-	hintsMu       sync.Mutex
-	activator     ExtensionActivatorIface
-	dynamicHints  []ExtActivatedHint
+	cb                         ContextBuilder
+	current                    types.AgentState
+	transitions                map[types.AgentState]map[types.AgentTrigger]Transition // state → trigger → transition
+	history                    []types.AgentState
+	replanCount                int
+	eventSeq                   int64 // 单调递增事件序列号，用于生成确定性 Event ID（replay key）
+	startedAt                  time.Time
+	interruptFrom              types.AgentState // S_INTERRUPT 时记录被中断的原状态（Resume 路径用）
+	mu                         sync.Mutex
+	hintsMu                    sync.Mutex
+	activator                  ExtensionActivatorIface
+	dynamicHints               []ExtActivatedHint
+	replanExtActivationTimeout time.Duration // S_REPLAN 扩展激活 Effect 超时上限，见 WithReplanExtensionActivationTimeout
 }
+
+const defaultReplanExtActivationTimeout = 3 * time.Second // replanExtActivationTimeout 未被注入时的兜底值
 
 // StateContext 穿越状态机各转移的共享上下文（与 protocol.StateContext 互补）。
 type StateContext struct {
@@ -174,11 +177,12 @@ type ReflectionModel struct {
 
 func NewStateMachine(cb ContextBuilder) *StateMachine {
 	sm := &StateMachine{
-		cb:          cb,
-		current:     types.AgentStateIdle,
-		transitions: make(map[types.AgentState]map[types.AgentTrigger]Transition),
-		history:     make([]types.AgentState, 0),
-		startedAt:   time.Now(),
+		cb:                         cb,
+		current:                    types.AgentStateIdle,
+		transitions:                make(map[types.AgentState]map[types.AgentTrigger]Transition),
+		history:                    make([]types.AgentState, 0),
+		startedAt:                  time.Now(),
+		replanExtActivationTimeout: defaultReplanExtActivationTimeout,
 	}
 	sm.registerTransitions()
 	return sm
@@ -307,11 +311,8 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 			slog.Debug("kernel: returning deterministic effect for extension activation", "goal", goalToActivate)
 			eff := protocol.DeterministicEffect{
 				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
-					// 设置超时，避免激活过程卡死导致状态机阻塞
-					// 这里假设超时时间从配置项中获取，默认 3 秒 (来自 state.yaml: replan_extension_activation_s)
-					timeout := 3 * time.Second
-
-					actCtx, cancel := context.WithTimeout(effCtx, timeout)
+					// 超时值来自 state.yaml §thresholds replan_extension_activation_s（启动时注入）。
+					actCtx, cancel := context.WithTimeout(effCtx, sm.replanExtActivationTimeout)
 					defer cancel()
 
 					hints, hintErr := sm.activator.FindAndActivate(actCtx, goalToActivate)

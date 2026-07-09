@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 
@@ -116,6 +117,12 @@ func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
 // InjectExtensionActivator 注入按需扩展激活器。
 func (a *Agent) InjectExtensionActivator(activator fsm.ExtensionActivatorIface) {
 	a.sm.WithExtensionActivator(activator)
+}
+
+// InjectReplanExtensionActivationTimeout 注入 S_REPLAN 扩展激活 Effect 的超时上限
+// （state.yaml §thresholds replan_extension_activation_s）。
+func (a *Agent) InjectReplanExtensionActivationTimeout(d time.Duration) {
+	a.sm.WithReplanExtensionActivationTimeout(d)
 }
 
 type agentContextBuilder struct {

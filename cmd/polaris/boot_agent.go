@@ -113,6 +113,9 @@ func buildAgent(
 		pool.Run(ctx)
 	})
 	a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
+	a.InjectReplanExtensionActivationTimeout(
+		time.Duration(sb.Cfg.Thresholds.M4Kernel.ReplanExtensionActivationSecs) * time.Second,
+	)
 	a.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
 	if mb.Mem != nil {
 		a.SetMemoryInjector(mb.Mem)

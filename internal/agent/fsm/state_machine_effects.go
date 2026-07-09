@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -87,6 +88,16 @@ func (sm *StateMachine) appendDynamicHints(msgs []types.Message) {
 // WithExtensionActivator 注入按需扩展激活器（可选，启动时由上层 wire）。
 func (sm *StateMachine) WithExtensionActivator(a ExtensionActivatorIface) {
 	sm.activator = a
+}
+
+// WithReplanExtensionActivationTimeout 注入 S_REPLAN 扩展激活 Effect 的超时上限
+// （state.yaml §thresholds replan_extension_activation_s，由启动装配层注入）。
+// d<=0 时保留构造函数设置的安全默认值，不允许被配置成"无超时"。
+func (sm *StateMachine) WithReplanExtensionActivationTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	sm.replanExtActivationTimeout = d
 }
 
 func (sm *StateMachine) shouldActivateExtensions(sCtx *StateContext) (goal string, should bool) {
