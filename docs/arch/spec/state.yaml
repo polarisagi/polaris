@@ -847,6 +847,8 @@ thresholds:
     intent_channel_buffer: 16
     context_window_compress_pct: 0.80
     step_default_timeout_seconds: 60
+    replan_extension_activation_s: 3
+    surprise_hint_threshold: 0.6
     plan_dag_max_nodes: 50
     plan_dag_max_depth: 10
     max_concurrent_nodes: 4

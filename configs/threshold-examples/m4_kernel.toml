@@ -12,3 +12,5 @@ suspend_idle_threshold_minutes = 5
 'world_model.skip_threshold' = 0.8
 'snapshot.interval_steps' = 1000
 'snapshot.retention_count' = 5
+replan_extension_activation_s = 0
+surprise_hint_threshold = 0.0

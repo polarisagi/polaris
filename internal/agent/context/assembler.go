@@ -9,11 +9,12 @@ import (
 )
 
 type AssembleRequest struct {
-	Query, SessionKey string
-	MaxTokens         int
-	MaxTaint          types.TaintLevel // 系统敏感=TaintNone
-	IncludeKnowledge  bool
-	SurpriseHint      float64 // GlobalSurpriseIndex().Current()
+	Query, SessionKey     string
+	MaxTokens             int
+	MaxTaint              types.TaintLevel // 系统敏感=TaintNone
+	IncludeKnowledge      bool
+	SurpriseHint          float64 // GlobalSurpriseIndex().Current()
+	SurpriseHintThreshold float64
 }
 
 type ContextItem struct {
@@ -68,7 +69,7 @@ func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (Assemble
 		go func() {
 			defer wg.Done()
 			depth := 1
-			if req.SurpriseHint > 0.6 {
+			if req.SurpriseHint > req.SurpriseHintThreshold {
 				depth = 2
 			}
 			if items, err := a.know.Search(ctx, req.Query, depth); err == nil {

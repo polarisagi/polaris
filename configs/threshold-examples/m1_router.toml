@@ -4,6 +4,8 @@
 'circuit_breaker.failure_count' = 5
 'circuit_breaker.cooldown_seconds' = 10
 'circuit_breaker.half_open_max' = 1
+safecall_infer_timeout_seconds = 15
+safecall_stream_idle_timeout_seconds = 60
 'pre_flight.cost_tolerance_pct' = 15
 'timeout.dial_seconds' = 3
 'timeout.tls_seconds' = 5

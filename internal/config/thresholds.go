@@ -62,17 +62,19 @@ type M3ObservabilityThresholds struct {
 }
 
 type M4KernelThresholds struct {
-	MaxReplanAttempts       int     `toml:"max_replan_attempts"`            // 3
-	DefaultBudget           int     `toml:"default_budget"`                 // 50000
-	MaxSteps                int     `toml:"max_steps"`                      // 10
-	Tier0MaxConcurrent      int     `toml:"tier0_max_concurrent"`           // 4 — 同 max_concurrent_nodes
-	SuspendIdleThresholdMin int     `toml:"suspend_idle_threshold_minutes"` // 5
-	PlanDAGMaxNodes         int     `toml:"plan_dag.max_nodes"`             // 50
-	PlanDAGMaxDepth         int     `toml:"plan_dag.max_depth"`             // 10
-	L3WatchdogMaxPerHour    int     `toml:"l3_watchdog.max_per_hour"`       // 10
-	WorldModelSkipThreshold float64 `toml:"world_model.skip_threshold"`     // 0.8
-	SnapshotIntervalSteps   int     `toml:"snapshot.interval_steps"`        // 1000
-	SnapshotRetentionCount  int     `toml:"snapshot.retention_count"`       // 5
+	MaxReplanAttempts             int     `toml:"max_replan_attempts"`            // 3
+	DefaultBudget                 int     `toml:"default_budget"`                 // 50000
+	MaxSteps                      int     `toml:"max_steps"`                      // 10
+	Tier0MaxConcurrent            int     `toml:"tier0_max_concurrent"`           // 4 — 同 max_concurrent_nodes
+	SuspendIdleThresholdMin       int     `toml:"suspend_idle_threshold_minutes"` // 5
+	PlanDAGMaxNodes               int     `toml:"plan_dag.max_nodes"`             // 50
+	PlanDAGMaxDepth               int     `toml:"plan_dag.max_depth"`             // 10
+	L3WatchdogMaxPerHour          int     `toml:"l3_watchdog.max_per_hour"`       // 10
+	WorldModelSkipThreshold       float64 `toml:"world_model.skip_threshold"`     // 0.8
+	SnapshotIntervalSteps         int     `toml:"snapshot.interval_steps"`        // 1000
+	SnapshotRetentionCount        int     `toml:"snapshot.retention_count"`       // 5
+	ReplanExtensionActivationSecs int     `toml:"replan_extension_activation_s"`  // 3
+	SurpriseHintThreshold         float64 `toml:"surprise_hint_threshold"`        // 0.6
 }
 
 type M5MemoryThresholds struct {
