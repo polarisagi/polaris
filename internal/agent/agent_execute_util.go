@@ -224,12 +224,13 @@ func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []
 		maxT = types.TaintHigh
 	}
 	req := agentctx.AssembleRequest{
-		Query:            a.sCtx.TaskModel.Goal,
-		SessionKey:       a.sCtx.SessionID,
-		MaxTokens:        2000,
-		MaxTaint:         maxT,
-		IncludeKnowledge: true,
-		SurpriseHint:     metrics.GlobalSurpriseIndex().Current(),
+		Query:                 a.sCtx.TaskModel.Goal,
+		SessionKey:            a.sCtx.SessionID,
+		MaxTokens:             2000,
+		MaxTaint:              maxT,
+		IncludeKnowledge:      true,
+		SurpriseHint:          metrics.GlobalSurpriseIndex().Current(),
+		SurpriseHintThreshold: a.Config.SurpriseHintThreshold,
 	}
 
 	ac, err := a.assembler.Assemble(ctx, req)

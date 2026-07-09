@@ -80,7 +80,8 @@ type AgentConfig struct {
 	// SystemTier 对应硬件层级（0=Tier0/8GB, 1+=Tier1+）。
 	// L3 LLM 看门狗仅在 SystemTier >= 1 时激活。
 	// 由 M3 HardwareProbe 探测结果注入。
-	SystemTier int
+	SystemTier            int
+	SurpriseHintThreshold float64
 }
 
 func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGate, provider protocol.Provider) *Agent {

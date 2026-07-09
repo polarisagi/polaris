@@ -99,6 +99,7 @@ func buildAgent(
 	a.Config.DefaultBudget = sb.Cfg.Thresholds.M4Kernel.DefaultBudget
 	a.Config.MaxSteps = sb.Cfg.Thresholds.M4Kernel.MaxSteps
 	a.Config.IdleTimeoutSec = sb.Cfg.Thresholds.M4Kernel.SuspendIdleThresholdMin * 60
+	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolRegistry(tb.ToolReg)
 	a.InjectOutboxWriter(sb.Outbox)
