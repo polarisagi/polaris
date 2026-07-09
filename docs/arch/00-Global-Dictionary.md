@@ -495,7 +495,7 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
 - `[HeuristicsMemory]`: 成功启发式库。`task_type → []Heuristic`，检索时注入 prompt 引导。定义见 M9 §2.1。
 - `[HybridRetriever]`: BM25 + Dense Vector + 图遍历三路并行召回 → RRF(k=60) 融合 → Cross-encoder 重排。M5 和 M10 共享 `internal/store/` 底层引擎，检索范围和配置参数各自独立。
 - `[RRF]`: 倒数排名融合 (Reciprocal Rank Fusion)。公式: `weight / (k + rank + 1)`, k=60。多路检索结果归一化融合算法。
-- `[ProgressiveRollout]`: 渐进式发布。Gate 1 Shadow 阶段以 1% 流量观测（不面用户）；Gate 3 Canary 阶梯为 5%→25%→50%→100%，每步驻留 24h。M9 决策阶段推进，M13 TrafficSplitter 执行分发，M12 ShadowExecutor 对比评估（⚠️ 2026-07-07 复核确认 ShadowExecutor 未实现，见 M12 §4/§8，Gate 1 对比能力当前不可用）。权威定义见 M09 §2.3。
+- `[ProgressiveRollout]`: 渐进式发布。Gate 1 Shadow 阶段以 1% 流量观测（不面用户）；Gate 3 Canary 阶梯为 5%→25%→50%→100%，每步驻留 24h。M9 决策阶段推进，M13 TrafficSplitter 执行分发，M12 ShadowExecutor 对比评估（⚠️ 2026-07-09 复核确认 ShadowExecutor 未实现，见 M12 §4/§8，Gate 1 对比能力当前不可用）。权威定义见 M09 §2.3。
 - `[GEPA]`: 遗传-Pareto 反射式进化 (Genetic-Pareto-Evolutionary-Algorithm)。PromptOptimizer 三融合算法之一，种群 8 × 5 代 Pareto 前沿搜索。定义见 M9 §1.1。
 - `[MemAPO]`: 双记忆跨任务复用 Prompt 优化。PromptOptimizer 三融合算法之二。
 - `[ContraPrompt]`: 对比轨迹 Prompt 优化。PromptOptimizer 三融合算法之三。
