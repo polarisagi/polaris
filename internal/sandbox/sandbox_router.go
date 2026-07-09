@@ -87,9 +87,9 @@ func (r *SandboxRouter) WithNativeOS(nativeOS *NativeOSSandbox) *SandboxRouter {
 	return r
 }
 
-// Route 根据工具属性选择最合适的沙箱，返回 SandboxProvider。
+// RouteByTier 根据已算好的 tier 路由，返回 SandboxProvider。
 // 规则与 AssignSandboxTier 保持一致。
-// RouteByTier 按已算好的 tier 路由。trustTier 用于决定隔离不可用时能否降级。
+// trustTier 用于决定隔离不可用时能否降级。
 // 安全规则：trust < Official 且要求 L2/L3 但对应沙箱不可用 → fail-closed 拒绝，不降级到 L1。
 func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.TrustTier) (SandboxProvider, error) {
 	mustIsolate := trustTier < types.TrustOfficial

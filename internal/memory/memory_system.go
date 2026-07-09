@@ -21,7 +21,7 @@ type MemorySystemImpl struct {
 	mem *MemImpl
 }
 
-// NewMemorySystem 创建 MemorySystem facade。
+// NewMemorySystemFromMemImpl 创建 MemorySystem facade。
 func NewMemorySystemFromMemImpl(mem *MemImpl) *MemorySystemImpl {
 	return &MemorySystemImpl{mem: mem}
 }
