@@ -226,6 +226,7 @@ func DiscordConnect( //nolint:gocyclo
 				if botID != "" && dmsg.Author.ID == botID {
 					continue
 				}
+				//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 				go host.OnMessage("discord", channelID, cfg, Message{
 					Text: dmsg.Content, ChatID: dmsg.ChannelID, UserID: dmsg.Author.ID,
 

@@ -73,6 +73,7 @@ func NewMockProxy(mockTable map[string]MockResponse) (*MockProxy, string, error)
 	mp.caCertFile = f.Name()
 
 	mp.server = &http.Server{Handler: mp}
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() { _ = mp.server.Serve(ln) }()
 	return mp, ln.Addr().String(), nil
 }

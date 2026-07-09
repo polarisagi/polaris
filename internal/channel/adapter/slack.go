@@ -100,6 +100,7 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 				localCfg[k] = v
 			}
 			localCfg["bot_token"] = botToken
+			//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 			go host.OnMessage("slack", channelID, localCfg, Message{
 				Text: payload.Event.Text, ChatID: payload.Event.Channel, UserID: payload.Event.User,
 

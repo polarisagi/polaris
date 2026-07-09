@@ -46,6 +46,7 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 	}
 
 	// 异步下载 + 重载：不阻塞启动路径
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		if err := stt.EnsureAssets(ctx, sttDir, httpClient, sttConfig.SherpaVersion, modelURL, sttConfig.PunctModelURL); err != nil {
 			slog.Warn("stt: asset download failed, keeping mock engine", "err", err)
@@ -112,6 +113,7 @@ func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 	}
 
 	ttsDir := filepath.Join(dataDir, "models", "kokoro")
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		sttDir := filepath.Join(dataDir, "models", "sensevoice")
 		if err := tts.EnsureAssets(ctx, sttDir, ttsDir, httpClient, ttsConfig.SherpaVersion, ttsConfig.ModelURL); err != nil {

@@ -237,6 +237,7 @@ func qqbotConnect( //nolint:gocyclo
 				localCfg["_qqbot_token"] = "QQBot " + accessToken
 				localCfg["_qqbot_msg_id"] = msg.ID
 				localCfg["_qqbot_msg_type"] = p.T
+				//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 				go host.OnMessage("qqbot", channelID, localCfg, Message{
 					Text: msg.Content, ChatID: chatID, UserID: msg.Author.ID,
 

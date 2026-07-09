@@ -70,6 +70,7 @@ func run() error { //nolint:gocyclo
 	var ks *security.KillSwitch
 	sigintCh := make(chan os.Signal, 8)
 	signal.Notify(sigintCh, syscall.SIGINT)
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		for range sigintCh {
 			if ks != nil {
@@ -147,6 +148,7 @@ func run() error { //nolint:gocyclo
 	if err != nil {
 		return err
 	}
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go tb.MCPMgr.RestoreServersFromDB(ctx, tb.ExtRepo, sb.DataDir)
 
 	// ─── §12 启动摘要 ────────────────────────────────────────────────────────

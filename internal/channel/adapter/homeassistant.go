@@ -206,6 +206,7 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 		}
 		text := fmt.Sprintf("[HA] %s (%s): %s", friendlyName, entityID, stateDesc)
 
+		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go host.OnMessage("homeassistant", channelID, cfg, Message{
 			Text: text, ChatID: channelID, UserID: "homeassistant",
 

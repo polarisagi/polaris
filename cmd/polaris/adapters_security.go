@@ -32,6 +32,7 @@ func (a *hitlNotifierAdapter) NotifyHITL(_ context.Context, skillID, reason stri
 		DeadlineNs:     time.Now().Add(24 * time.Hour).UnixNano(),
 	}
 	// 异步发起：不阻塞 triggerCollapse，HITL 审批结果由 M13 Interface 侧处理
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		bCtx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 		defer cancel()

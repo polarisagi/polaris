@@ -93,6 +93,7 @@ func mattermostConnect(ctx context.Context, host PollerHost, channelID, mmURL, t
 		if len(allowedUsers) > 0 && !allowedUsers[post.UserID] {
 			continue
 		}
+		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go host.OnMessage("mattermost", channelID, cfg, Message{
 			Text: post.Message, ChatID: post.ChannelID, UserID: post.UserID,
 

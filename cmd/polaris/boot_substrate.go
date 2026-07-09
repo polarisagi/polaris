@@ -209,6 +209,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 
 	// ─── 0.6 TBR 心跳 goroutine ─────────────────────────────────────────────
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
@@ -223,6 +224,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}()
 
 	// ─── 0.7 内存压力监控（每 5s 轮询，驱动 FeatureGate 运行时降级）──────────
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go autoConf.RunMemoryWatcher(ctx)
 	slog.Info("polaris: memory pressure monitor started", "poll_interval_s", 5)
 
@@ -286,6 +288,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// ─── 2.8 DatabaseWriter（AI 核心数据单写者）────────────────────────────
 	dbWriter := sysstore.NewDatabaseWriter(store.DB(), nil)
 	dbWriterDoneCh := make(chan struct{})
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		dbWriter.Run(ctx)
 		close(dbWriterDoneCh)
@@ -404,6 +407,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	if targetModel != "" { //nolint:nestif
 		// 1. 全自动免安装与异步自愈逻辑 (Zero-setup background boot)
+		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go func() {
 			ctxBg := context.Background()
 			slog.Info("polaris: Starting background Ollama lifecycle manager...")

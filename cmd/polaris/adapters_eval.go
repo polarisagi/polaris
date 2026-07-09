@@ -22,6 +22,7 @@ func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []str
 	a.agent.SetTaskIntent(input)
 
 	errCh := make(chan error, 1)
+	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		errCh <- a.agent.Run(ctx)
 	}()
