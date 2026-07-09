@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -75,14 +76,15 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 					"from", em.From, "channel", channelID, "auth_results", em.AuthResults)
 				continue
 			}
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go host.OnMessage("email", channelID, cfg, Message{
-				Text:       em.Body,
-				ChatID:     em.From,
-				UserID:     em.From,
-				ReplyToken: em.MessageID,
+			concurrent.SafeGo(ctx, "channel_adapter.email.on_message", func(context.Context) {
+				host.OnMessage("email", channelID, cfg, Message{
+					Text:       em.Body,
+					ChatID:     em.From,
+					UserID:     em.From,
+					ReplyToken: em.MessageID,
 
-				TaintLevel: types.TaintHigh,
+					TaintLevel: types.TaintHigh,
+				})
 			})
 		}
 	}

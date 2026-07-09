@@ -16,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 func main() {
@@ -70,14 +71,13 @@ func run() error { //nolint:gocyclo
 	var ks *security.KillSwitch
 	sigintCh := make(chan os.Signal, 8)
 	signal.Notify(sigintCh, syscall.SIGINT)
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "main.sigint_watcher", func(ctx context.Context) {
 		for range sigintCh {
 			if ks != nil {
 				ks.OnSIGINT()
 			}
 		}
-	}()
+	})
 
 	// ─── §0.5~§4 L0 基础设施 ────────────────────────────────────────────────
 	sb, err := bootSubstrate(ctx, stop)
@@ -148,8 +148,9 @@ func run() error { //nolint:gocyclo
 	if err != nil {
 		return err
 	}
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go tb.MCPMgr.RestoreServersFromDB(ctx, tb.ExtRepo, sb.DataDir)
+	concurrent.SafeGo(ctx, "main.mcp_restore_servers", func(ctx context.Context) {
+		tb.MCPMgr.RestoreServersFromDB(ctx, tb.ExtRepo, sb.DataDir)
+	})
 
 	// ─── §12 启动摘要 ────────────────────────────────────────────────────────
 	printStartupSummary(sb.Cfg, sb.Gate, sb.Router, mb.Mem, kb.Ingester, kb.Retriever,

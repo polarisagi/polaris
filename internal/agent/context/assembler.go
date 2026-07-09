@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -55,18 +56,16 @@ func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (Assemble
 	)
 
 	wg.Add(1)
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "assembler.query_memory", func(ctx context.Context) {
 		defer wg.Done()
 		if items, err := a.mem.Query(ctx, req.Query, req.MaxTaint); err == nil {
 			memItems = items
 		}
-	}()
+	})
 
 	if a.know != nil && req.IncludeKnowledge && req.SurpriseHint >= 0.3 {
 		wg.Add(1)
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go func() {
+		concurrent.SafeGo(ctx, "assembler.query_knowledge", func(ctx context.Context) {
 			defer wg.Done()
 			depth := 1
 			if req.SurpriseHint > req.SurpriseHintThreshold {
@@ -75,7 +74,7 @@ func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (Assemble
 			if items, err := a.know.Search(ctx, req.Query, depth); err == nil {
 				knowItems = items
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

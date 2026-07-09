@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -100,11 +101,12 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 				localCfg[k] = v
 			}
 			localCfg["bot_token"] = botToken
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go host.OnMessage("slack", channelID, localCfg, Message{
-				Text: payload.Event.Text, ChatID: payload.Event.Channel, UserID: payload.Event.User,
+			concurrent.SafeGo(ctx, "channel_adapter.slack.on_message", func(context.Context) {
+				host.OnMessage("slack", channelID, localCfg, Message{
+					Text: payload.Event.Text, ChatID: payload.Event.Channel, UserID: payload.Event.User,
 
-				TaintLevel: types.TaintHigh,
+					TaintLevel: types.TaintHigh,
+				})
 			})
 		case "interactive":
 			if envelopeID != "" {

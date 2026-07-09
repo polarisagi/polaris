@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -80,8 +81,9 @@ func RunTelegramPoller(ctx context.Context, host PollerHost, poller *telegramPol
 
 				TaintLevel: types.TaintHigh,
 			}
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go host.OnMessage("telegram", channelID, cfg, msg)
+			concurrent.SafeGo(ctx, "channel_adapter.telegram.on_message", func(context.Context) {
+				host.OnMessage("telegram", channelID, cfg, msg)
+			})
 		}
 	}
 }

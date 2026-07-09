@@ -6,6 +6,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ============================================================================
@@ -30,13 +31,12 @@ func (hr *HybridRetrieverImpl) InjectEmbedder(e Embedder) {
 	hr.embedder = e
 	cls := hr.queryClassifier()
 	if e != nil {
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		concurrent.SafeGo(context.Background(), "retriever.init_prototypes", func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			// 原型初始化失败不致命：ClassifyQuerySemantic 内部自动降级关键词分类
 			_ = cls.InitPrototypes(ctx, e)
-		}()
+		})
 	}
 }
 

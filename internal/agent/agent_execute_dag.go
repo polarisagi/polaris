@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -71,8 +72,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}
 
 			if a.plannerSpawner != nil {
-				//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-				go a.plannerSpawner(ctx, goal, taskType, a.provider)
+				concurrent.SafeGo(ctx, "agent.planner_spawner", func(ctx context.Context) {
+					a.plannerSpawner(ctx, goal, taskType, a.provider)
+				})
 			}
 
 			// 发送挂起意图

@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ─── memEmbedderAdapter ───────────────────────────────────────────────────────
@@ -42,12 +43,13 @@ func (a *memEmbedderAdapter) ModelVersion() string { return a.model }
 type collapseRecorderAdapter struct{ m *si.LogicCollapseMonitor }
 
 func (a *collapseRecorderAdapter) RecordToolSuccess(ctx context.Context, toolName string) {
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go a.m.RecordSuccess(context.WithoutCancel(ctx), &extskill.CollapseTrajectory{
-		SkillID:     toolName,
-		CompletedAt: time.Now().Unix(),
-		TaintLevel:  0,
-	}, nil)
+	concurrent.SafeGo(context.WithoutCancel(ctx), "adapters_memory.RecordSuccess", func(ctx context.Context) {
+		a.m.RecordSuccess(ctx, &extskill.CollapseTrajectory{
+			SkillID:     toolName,
+			CompletedAt: time.Now().Unix(),
+			TaintLevel:  0,
+		}, nil)
+	})
 }
 
 // 确保 memory 包被引用（编译器 unused import 检查）

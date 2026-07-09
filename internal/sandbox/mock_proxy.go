@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // MockProxy 是 MCTS 试运行期间的本地 HTTP 代理服务器。
@@ -73,8 +74,9 @@ func NewMockProxy(mockTable map[string]MockResponse) (*MockProxy, string, error)
 	mp.caCertFile = f.Name()
 
 	mp.server = &http.Server{Handler: mp}
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() { _ = mp.server.Serve(ln) }()
+	concurrent.SafeGo(context.Background(), "mock_proxy.serve", func(context.Context) {
+		_ = mp.server.Serve(ln)
+	})
 	return mp, ln.Addr().String(), nil
 }
 

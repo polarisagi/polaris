@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -198,8 +199,9 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	// 不得反向操控主流程）；异步执行避免给工具调用返回路径叠加 Hook 延迟。
 	if e.hookFirer != nil && req.Kind != KindHookExecute {
 		firer, resource, toolIn, out := e.hookFirer, req.Resource, hookToolInput(req), string(toolResult.Output)
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go firer.FirePostToolUse(context.WithoutCancel(ctx), resource, toolIn, out, "")
+		concurrent.SafeGo(context.WithoutCancel(ctx), "envelope.fire_post_tool_use", func(ctx context.Context) {
+			firer.FirePostToolUse(ctx, resource, toolIn, out, "")
+		})
 	}
 
 	return &ExecResult{

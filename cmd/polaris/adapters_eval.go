@@ -7,6 +7,7 @@ import (
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
 	"github.com/polarisagi/polaris/internal/eval/regression"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -22,10 +23,9 @@ func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []str
 	a.agent.SetTaskIntent(input)
 
 	errCh := make(chan error, 1)
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "adapters_eval.agent_run", func(ctx context.Context) {
 		errCh <- a.agent.Run(ctx)
-	}()
+	})
 
 	_ = a.agent.SendIntent(types.TriggerIntentReceived)
 

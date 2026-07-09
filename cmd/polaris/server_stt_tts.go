@@ -13,6 +13,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // InitSTTEngine 按 FeatureGate 门控初始化 STT 引擎。
@@ -46,8 +47,7 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 	}
 
 	// 异步下载 + 重载：不阻塞启动路径
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "server_stt_tts.stt_download", func(ctx context.Context) {
 		if err := stt.EnsureAssets(ctx, sttDir, httpClient, sttConfig.SherpaVersion, modelURL, sttConfig.PunctModelURL); err != nil {
 			slog.Warn("stt: asset download failed, keeping mock engine", "err", err)
 			return
@@ -71,7 +71,7 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 			"hq", useHQ,
 			"model_url", modelURL,
 		)
-	}()
+	})
 }
 
 // InitTTSEngine 初始化 TTS Provider 并注入 ChatHandler。
@@ -113,8 +113,7 @@ func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 	}
 
 	ttsDir := filepath.Join(dataDir, "models", "kokoro")
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "server_stt_tts.tts_download", func(ctx context.Context) {
 		sttDir := filepath.Join(dataDir, "models", "sensevoice")
 		if err := tts.EnsureAssets(ctx, sttDir, ttsDir, httpClient, ttsConfig.SherpaVersion, ttsConfig.ModelURL); err != nil {
 			slog.Warn("tts: asset download failed", "err", err)
@@ -135,7 +134,7 @@ func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 		}
 		s.SetTTSProvider(&ttsAdapter{inner: engine})
 		slog.Info("tts: sherpa-onnx Kokoro active", "model_dir", modelDir)
-	}()
+	})
 }
 
 // sttAdapter 将 llm/stt.Engine 适配为 chat.STTTranscriber

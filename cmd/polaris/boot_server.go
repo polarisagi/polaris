@@ -42,6 +42,7 @@ import (
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
@@ -299,17 +300,16 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
 	if dyn, ok := sb.Embedder.(*llm.DynamicEmbedder); ok {
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go func() {
+		concurrent.SafeGo(context.Background(), "boot_server.vector_backfill", func(ctx context.Context) {
 			<-dyn.WaitReady()
 			slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
 			if httpServer.PluginHandler() != nil {
-				_, err := httpServer.PluginHandler().SyncAllMarketplaces(context.Background(), true)
+				_, err := httpServer.PluginHandler().SyncAllMarketplaces(ctx, true)
 				if err != nil {
 					slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
 				}
 			}
-		}()
+		})
 	}
 
 	if err := httpServer.Start(); err != nil {

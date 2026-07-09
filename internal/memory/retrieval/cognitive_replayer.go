@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 type CognitiveReplayer struct {
@@ -24,8 +25,9 @@ func NewCognitiveReplayer(db protocol.SQLQuerier, cognitive protocol.CognitiveSe
 }
 
 func (cr *CognitiveReplayer) Start(ctx context.Context) error {
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go cr.replay(ctx)
+	concurrent.SafeGo(ctx, "cognitive_replayer.replay", func(ctx context.Context) {
+		cr.replay(ctx)
+	})
 	return nil
 }
 

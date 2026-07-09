@@ -19,6 +19,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ─── 接口约定 ─────────────────────────────────────────────────────────────────
@@ -205,8 +206,9 @@ func (m *LogicCollapseMonitor) RecordSuccess(
 	stats.MarkTriggered()
 
 	// 异步触发编译（L1 优先级后台任务）
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go m.triggerCollapse(context.Background(), traj, variance)
+	concurrent.SafeGo(context.Background(), "logic_collapse.trigger_collapse", func(ctx context.Context) {
+		m.triggerCollapse(ctx, traj, variance)
+	})
 }
 
 // triggerCollapse 执行 Eval Gate 检查 + 编译触发（异步运行）。

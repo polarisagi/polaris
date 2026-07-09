@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -71,11 +72,12 @@ func RunMatrixPoller(ctx context.Context, host PollerHost, channelID, homeserver
 			if len(allowedRooms) > 0 && !allowedRooms[ev.RoomID] {
 				continue
 			}
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go host.OnMessage("matrix", channelID, cfg, Message{
-				Text: ev.Content.Body, ChatID: ev.RoomID, UserID: ev.Sender,
+			concurrent.SafeGo(ctx, "channel_adapter.matrix.on_message", func(context.Context) {
+				host.OnMessage("matrix", channelID, cfg, Message{
+					Text: ev.Content.Body, ChatID: ev.RoomID, UserID: ev.Sender,
 
-				TaintLevel: types.TaintHigh,
+					TaintLevel: types.TaintHigh,
+				})
 			})
 		}
 	}

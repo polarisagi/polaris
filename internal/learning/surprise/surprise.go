@@ -6,6 +6,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // SurpriseIndex — System 1/2 路由信号计算。
@@ -106,8 +107,9 @@ func NewSurpriseCalculatorWith(memf *optimizer.FallacyMemoryPool, layerBThreshol
 		cancel:          cancel,
 	}
 	for range 4 {
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go c.workerLoop(ctx)
+		concurrent.SafeGo(ctx, "surprise_calculator.worker_loop", func(ctx context.Context) {
+			c.workerLoop(ctx)
+		})
 	}
 	return c
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 func (c *MCPClient) dispatch(resp *mcpRPCResponse) {
@@ -22,8 +23,9 @@ func (c *MCPClient) dispatch(resp *mcpRPCResponse) {
 		handler := c.serverReqHandler
 		c.mu.Unlock()
 		if !inPending {
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go c.handleServerRequest(resp.Method, *resp.ID, resp.Params, handler)
+			concurrent.SafeGo(context.Background(), "mcp_client.handle_server_request", func(context.Context) {
+				c.handleServerRequest(resp.Method, *resp.ID, resp.Params, handler)
+			})
 			return
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"context"
 	"log/slog"
@@ -139,8 +140,7 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 			&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
 		)
 	}
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "boot_memory.reindex_ticker", func(ctx context.Context) {
 		reindexTicker := time.NewTicker(5 * time.Minute)
 		defer reindexTicker.Stop()
 		for {
@@ -153,15 +153,14 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 				}
 			}
 		}
-	}()
+	})
 	slog.Info("polaris: online reindexer started", "model", embedModelName, "interval", "5m")
 	return onlineReindexer.Run
 }
 
 func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 	temporalExpirer := graph.NewTemporalExpirer(sb.Store.DB())
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "boot_memory.temporal_expirer", func(ctx context.Context) {
 		expireTicker := time.NewTicker(1 * time.Hour)
 		defer expireTicker.Stop()
 		for {
@@ -176,7 +175,7 @@ func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 				}
 			}
 		}
-	}()
+	})
 	slog.Info("polaris: temporal expirer started", "interval", "1h")
 }
 

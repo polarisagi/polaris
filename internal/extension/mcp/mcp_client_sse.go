@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ─── SSE transport ────────────────────────────────────────────────────────────
@@ -35,8 +36,9 @@ func (c *MCPClient) connectSSE(ctx context.Context) error {
 	}
 
 	endpointCh := make(chan string, 1)
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go c.readSSE(resp.Body, endpointCh)
+	concurrent.SafeGo(ctx, "mcp_client.read_sse", func(context.Context) {
+		c.readSSE(resp.Body, endpointCh)
+	})
 
 	select {
 	case postURL := <-endpointCh:

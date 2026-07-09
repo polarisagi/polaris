@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/automation/hitl"
 	swarmAgents "github.com/polarisagi/polaris/internal/swarm/agents"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -32,15 +33,14 @@ func (a *hitlNotifierAdapter) NotifyHITL(_ context.Context, skillID, reason stri
 		DeadlineNs:     time.Now().Add(24 * time.Hour).UnixNano(),
 	}
 	// 异步发起：不阻塞 triggerCollapse，HITL 审批结果由 M13 Interface 侧处理
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
-		bCtx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	concurrent.SafeGo(context.Background(), "adapters_security.hitl_notify", func(ctx context.Context) {
+		bCtx, cancel := context.WithTimeout(ctx, 24*time.Hour)
 		defer cancel()
 		if _, err := a.gateway.Prompt(bCtx, p); err != nil {
 			slog.Warn("hitl_notifier: HITL prompt failed",
 				"skill_id", skillID, "checkpoint_id", p.ID, "err", err)
 		}
-	}()
+	})
 	return nil
 }
 

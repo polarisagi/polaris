@@ -13,6 +13,7 @@ import (
 	"github.com/polarisagi/polaris/internal/memory/consolidation"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
@@ -403,8 +404,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			sb.Cfg.Thresholds.M2Storage.EventlogHotRowLimit,
 			sb.Cfg.Thresholds.M2Storage.EventlogHotSizeMB,
 		)
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "boot_tools.memory_forgetting", func(ctx context.Context) {
 		forgettingTicker := time.NewTicker(6 * time.Hour)
 		defer forgettingTicker.Stop()
 		for {
@@ -423,7 +423,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 				}
 			}
 		}
-	}()
+	})
 	slog.Info("polaris: memory forgetting manager started", "decay_rate", 0.01, "interval_h", 6)
 
 	activator := native.NewExtensionActivator(extRepo, nativeCogn, mcpMgr, nativeEmbedFn)

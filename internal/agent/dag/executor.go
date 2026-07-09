@@ -19,6 +19,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -134,8 +135,9 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
 	if e.leaseRenew != nil && taskID != "" {
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go e.leaseHeartbeat(hbCtx, taskID, agentID)
+		concurrent.SafeGo(hbCtx, "dag_executor.lease_heartbeat", func(ctx context.Context) {
+			e.leaseHeartbeat(ctx, taskID, agentID)
+		})
 	}
 
 	return e.runScheduler(ctx, plan)
@@ -180,8 +182,7 @@ func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeRe
 
 			wg.Add(1)
 			n := node // 捕获副本
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go func() {
+			concurrent.SafeGo(ctx, "dag_executor.execute_node", func(ctx context.Context) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -223,7 +224,7 @@ func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeRe
 					e.executedUndo = append([]CompensationAction{comp}, e.executedUndo...)
 				}
 				e.mu.Unlock()
-			}()
+			})
 		}
 		wg.Wait()
 

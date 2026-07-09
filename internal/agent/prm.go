@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -66,14 +67,13 @@ func (p *DefaultPRM) SelectBest(ctx context.Context, goal string, complexity flo
 	ch := make(chan result, len(candidates))
 
 	for i, c := range candidates {
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go func(i int, c *types.DAGModel) {
+		concurrent.SafeGo(ctx, "prm.score_candidate", func(ctx context.Context) {
 			score, err := p.scoreCandidate(ctx, goal, c)
 			if err != nil {
 				score = 0 // 打分失败降为最低，不阻断其他候选
 			}
 			ch <- result{idx: i, score: score}
-		}(i, c)
+		})
 	}
 
 	best := candidates[0]

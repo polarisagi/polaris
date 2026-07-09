@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -206,11 +207,12 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 		}
 		text := fmt.Sprintf("[HA] %s (%s): %s", friendlyName, entityID, stateDesc)
 
-		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-		go host.OnMessage("homeassistant", channelID, cfg, Message{
-			Text: text, ChatID: channelID, UserID: "homeassistant",
+		concurrent.SafeGo(ctx, "channel_adapter.homeassistant.on_message", func(context.Context) {
+			host.OnMessage("homeassistant", channelID, cfg, Message{
+				Text: text, ChatID: channelID, UserID: "homeassistant",
 
-			TaintLevel: types.TaintHigh,
+				TaintLevel: types.TaintHigh,
+			})
 		})
 	}
 }

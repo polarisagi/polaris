@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/security/classifier"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -123,20 +124,19 @@ func (r *Runner) Fire(ctx context.Context, input HookInput) []HookResult {
 				continue
 			}
 			wg.Add(1)
-			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-			go func(i int, handler HandlerConfig) {
+			i, handler := idx, h
+			concurrent.SafeGo(ctx, "hook_runner.run_command", func(ctx context.Context) {
 				defer wg.Done()
 				ch <- indexed{i, r.runCommand(ctx, handler, input)}
-			}(idx, h)
+			})
 			idx++
 		}
 	}
 
-	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
-	go func() {
+	concurrent.SafeGo(ctx, "hook_runner.wait_close", func(context.Context) {
 		wg.Wait()
 		close(ch)
-	}()
+	})
 
 	for item := range ch {
 		results = append(results, item.res)
