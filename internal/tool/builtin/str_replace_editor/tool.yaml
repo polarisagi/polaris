@@ -1,0 +1,12 @@
+name: str_replace_editor
+description: "Precise file editing tool. Can create, view, modify (via exact string replacement), or undo modifications for a file."
+version: "1.0.0"
+capability: write-local
+risk_level: medium
+sandbox: in-process
+side_effects:
+  - file-write
+tags:
+  - filesystem
+  - edit
+  - replace

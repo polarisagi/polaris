@@ -1,0 +1,56 @@
+[package]
+name = "substrate"
+version = "0.3.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Polaris — Rust performance-critical path (FFI/sidecar)"
+
+[features]
+default = []
+# tier1: 本地推理路径（llama.cpp FFI，P3-1）。硬依赖 Tier-1（16GB+）硬件，
+# Tier-0 默认构建不启用，避免拖累最低 2GB VPS 二进制体积与编译时间。
+# 对应 Makefile rust-build-tier1 / build-tier1（Go 侧 -tags tier1 目前为占位，
+# Go 层通过运行时 purego 符号探测+recover 优雅降级，无需 Go build tag 强绑定，
+# 与 native_sandbox/surreal_store/cedar_ffi 现有 FFI 模式保持一致）。
+tier1 = ["dep:llama-cpp-2", "dep:encoding_rs"]
+# tier1-metal: macOS Metal GPU 加速（在 tier1 基础上追加，非独立可用）。
+tier1-metal = ["tier1", "llama-cpp-2/metal"]
+# tier1-cuda: NVIDIA CUDA GPU 加速（在 tier1 基础上追加，非独立可用）。
+tier1-cuda = ["tier1", "llama-cpp-2/cuda"]
+
+[dependencies]
+# Embedding computation (SIMD)
+bytemuck = "1"
+# Zero-copy serialization for Go<->Rust vector transfer
+capnp = "0.26.0"
+cedar-policy = "4.11.2"
+surrealdb = { version = "3", features = ["kv-mem", "kv-rocksdb"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+wasmtime = { version = "46.0.1", features = ["component-model"] }
+wasmtime-wasi = "46.0.1"
+once_cell = "1.21"
+anyhow = "1.0.103"
+bytes = "1.12.0"
+# 本地推理（P3-1，tier1 门控，见 [features]）。common 特性开启 GBNF grammar
+# 采样与 llama.cpp 内置 sampler chain（该 crate 默认已含 common，此处显式声明
+# 以固定 API 面，防止上游默认特性集变更导致隐式行为漂移）。
+llama-cpp-2 = { version = "0.1", optional = true, default-features = false, features = [
+    "common",
+] }
+# llama-cpp-2 token_to_piece 的 Decoder 参数类型来自 encoding_rs（llama-cpp-2 的
+# 传递依赖，未对外重导出），本 crate 需直接引用其 UTF_8 解码器，故显式声明。
+encoding_rs = { version = "0.8", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[profile.release]
+opt-level = "z"  # Optimize for size
+lto = true       # Enable Link Time Optimization
+codegen-units = 1 # Maximize size optimization across the crate
+strip = true     # Strip symbols from binary

@@ -1,0 +1,10 @@
+{
+  "title": "tool_search",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "搜索词，大小写不敏感，匹配工具名称或描述（空=返回全量列表）"
+    }
+  }
+}

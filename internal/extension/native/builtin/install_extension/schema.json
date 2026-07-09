@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "install_extension",
+  "description": "Download and install an extension (plugin, skill, or MCP server) by its catalog ID. Use search_extension to find the ID first.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique catalog ID of the extension to install. Obtain this from search_extension results."
+    }
+  },
+  "required": ["id"]
+}

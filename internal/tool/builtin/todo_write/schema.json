@@ -1,0 +1,1 @@
+{"title": "todo_write", "type": "object", "properties": {"todos": {"type": "array", "items": {"type": "string"}, "description": "The list of todo items."}}, "required": ["todos"]}

@@ -1,0 +1,11 @@
+{
+  "title": "cron_delete",
+  "type": "object",
+  "required": ["id"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "定时任务 ID（由 cron_list 或 cron_create 返回）"
+    }
+  }
+}

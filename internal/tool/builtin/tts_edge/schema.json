@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tts_edge",
+  "description": "Convert text to speech using Edge TTS and return a base64-encoded audio data URI (audio/mp3).",
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "The text to synthesize into speech."
+    },
+    "voice": {
+      "type": "string",
+      "default": "en-US-AriaNeural",
+      "description": "Edge TTS voice name (e.g. 'en-US-AriaNeural', 'zh-CN-XiaoxiaoNeural'). Defaults to en-US-AriaNeural."
+    },
+    "rate": {
+      "type": "string",
+      "default": "+0%",
+      "description": "Speech rate adjustment relative to default (e.g. '+20%' for faster, '-10%' for slower)."
+    }
+  },
+  "required": ["text"]
+}

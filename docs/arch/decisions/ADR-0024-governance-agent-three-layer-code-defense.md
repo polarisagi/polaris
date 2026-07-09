@@ -1,0 +1,60 @@
+# ADR-0024: GovernanceAgent 代码安全三层防线（AST + 正则 + 单次 ThinkingMax LLM）
+
+- **状态**: Accepted
+- **日期**: 2026-06-13
+- **决策者**: 架构组
+- **相关模块**: M07 (Tool/Action), M11 (Policy/Safety), internal/swarm/agents
+
+## 上下文
+
+LLM 生成代码（CodeAct / LLMGenerated Wasm）在进入沙箱前需经代码安全审查。原有 `SecurityAuditAgent` 实现采用三路 goroutine 并发（`perspectives = ["security", "integrity", "reliability"]`）+ 各调一次 LLM + `mergeVotes()` 投票聚合的"ensemble"架构。该方案存在以下问题：
+
+1. 三路 LLM 调用成本为单次 3 倍，但聚合收益有限——三路调用使用相同 prompt 基础，输出高度相关，多数情况下 3 票一致
+2. `LLMInferFunc` 类型定义缺少 `opts ...protocol.InferOption` 参数，无法传递 `ThinkingMax` 等高级选项，导致 SecurityAudit 无法使用推理增强
+3. 原有仅靠正则捕获危险包导入存在绕过风险。静态 AST/import 扫描（Layer 0）已落地为 `DefaultASTChecker`，从根本上阻断危险包导入（`os/exec`/`syscall`/`unsafe`）。
+
+## 决策
+
+**建立三层串行防线，将审查从"三路 LLM 投票"改为"同步静态卡口 + 单次 ThinkingMax LLM 深度审计"。**
+
+| 层 | 性质 | 机制 | 失败结果 |
+|----|------|------|---------|
+| Layer 0 | 同步卡口，<5ms | Go AST 解析 + import 路径白名单扫描，拦截危险包导入 | 硬拒绝，不进 L1 |
+| Layer 1 | 同步卡口，<1ms | 正则规则集（`code_validator.go`），邻近匹配距离 ≤200 字节防跨行误报（废弃 `(?s)` 全文匹配） | 硬拒绝，不进 L2 |
+| Layer 2 | 异步，独立 goroutine | 单次 LLM 调用 + `ThinkingMax`，`SecurityAuditAgent` 出具结构化安全报告 | 高风险拒绝执行 |
+
+Layer 0/1 为同步物理卡口，任一失败直接阻断代码进入沙箱。Layer 2 在 L0/L1 通过后并发启动，审计结论必须在沙箱执行前到达（超时 fail-closed）。
+
+同步更新 `LLMInferFunc` 签名为 `func(ctx context.Context, prompt string, opts ...protocol.InferOption) (string, error)`，向后兼容已有调用方。
+
+## 后果
+
+- **正向**: 三路 LLM 调用降为一路，成本降 67%；ThinkingMax 的推理深度显著优于三路无 thinking 调用投票；Layer 0 AST 卡口从根本上阻断危险 import，不依赖正则的字符串匹配
+- **负向**: Layer 2 为单点——若 ThinkingMax 调用超时，当前策略为 fail-closed（拒绝执行），可能影响合法代码的执行流程
+- **反例守护**: 未来若有人提议"恢复多视角 ensemble 投票"，引用本 ADR 拒绝——单次 ThinkingMax 的推理质量已优于三次无 thinking 投票聚合，且成本更低；若需提升准确率，应优化 Layer 0/1 规则而非增加 LLM 调用次数
+
+## 被驳回的方案
+
+| 方案 | 驳回理由 |
+|------|---------|
+| 三路 LLM ensemble（原方案） | 成本 3×，收益边际低；无法传递 ThinkingMax；规则命中率不高于单次 ThinkingMax |
+| 仅依赖 Cedar 策略（M11 Layer 2 forbid） | Cedar 规则为语义级权限控制，不能替代代码内容的静态安全扫描 |
+| 仅正则，不加 AST | 正则无法可靠识别语言构造（注释内的 import 字符串、字符串拼接混淆等），AST 解析是唯一可靠的结构性检查 |
+
+## 引用代码
+
+- `internal/action/codeact/code_act.go`（`validateAST`/`validateL1`/`validateL2`，三层同步调用编排，实际生产路径）
+- `internal/action/codeact/code_act_checker.go`（**Layer 0 实现**：`DefaultASTChecker`，Python 侧用 `github.com/go-python/gpython/{ast,parser,py}` 生成真实 AST 并 `ast.Walk` 遍历 `Import`/`Call` 节点、追踪 `import os as o` 式别名绕过；Bash 侧用 `mvdan.cc/sh/v3/syntax` 生成语法树并 `syntax.Walk` 遍历 `CallExpr` 节点识别 `eval`/`exec`/`source`/`rm -rf`；另有字符串预检作为 AST 静态分析盲区（`ctypes`/`importlib`/`/dev/tcp` 等动态导入路径）的补充二重防线）
+- `cmd/polaris/boot_server.go`（`codeact.WithASTChecker(&codeact.DefaultASTChecker{})`，Layer 0 生产启动装配点，证明非测试专用死代码）
+- `internal/swarm/agents/code_validator.go`（Layer 1 正则规则，被 code_act.go 的 validateL1 通过 govAgent 接口复用；Layer 1 按设计本就是正则卡口，不构成缺口）
+- `internal/swarm/agents/security_audit_agent.go`（`ReviewSync`，Layer 2 单次 ThinkingMax LLM，被 code_act.go 的 validateL2 通过 LLMPeerReviewer 接口同步调用）
+- `internal/swarm/agents/memory_agent.go`（`LLMInferFunc` 签名变更）
+- `docs/arch/M07-Tool-Action-Layer.md §7.5`
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-06-13 | 初稿 |
+| 2026-07-02 | 修订：ValidateCodeWithAudit/AuditAsync 为未接线死代码已删除（生产路径实际是 internal/action/codeact/code_act.go 的 validateAST/validateL1/validateL2 三段同步校验，经审计确认与本 ADR 的三层设计意图一致但独立实现，未复用 GovernanceAgent 编排）；引用代码章节同步更正 |
+| 2026-07-03 | 复核确认：Layer 0 静态 AST/import 扫描**已实现**（`internal/action/codeact/code_act_checker.go` `DefaultASTChecker`，gpython AST + mvdan.cc/sh 语法树双语言解析，非正则），并已在 `cmd/polaris/boot_server.go` 接入生产启动路径；"上下文"第 3 点、"引用代码"章节同步更正，"决策"表格与"后果"正向描述与代码现状一致，无需改写 |

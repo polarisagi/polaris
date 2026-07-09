@@ -1,0 +1,10 @@
+# Example threshold overrides for m5_memory.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'episodic.ttl_days' = 30
+'consolidation.interval_ms' = 60000
+'core.immutable_max' = 100
+'core.memory_block_max_kb' = 2
+'core.memory_total_max_kb' = 8
+'rrf.k' = 60
+'graph.max_depth' = 3

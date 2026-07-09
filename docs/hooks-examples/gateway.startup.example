@@ -1,0 +1,11 @@
+#!/bin/sh
+# 示例：启动时从远端同步 memory 文件
+# 安装：cp gateway.startup.example ~/.polaris/hooks/gateway.startup && chmod +x ~/.polaris/hooks/gateway.startup
+
+MEMORY_DIR="$POLARIS_WORKSPACE/memory"
+mkdir -p "$MEMORY_DIR"
+
+# 从远端拉取最新 memory（示例：rsync / rclone / git pull）
+# rsync -az user@nas:/backup/polaris/memory/ "$MEMORY_DIR/"
+
+echo "polaris started at $(date)" >> "$POLARIS_WORKSPACE/startup.log"

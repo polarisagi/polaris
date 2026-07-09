@@ -1,0 +1,7 @@
+# Example threshold overrides for m12_eval.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'judge.single_confidence' = 0.9
+'shadow.sample_rate' = 0.01
+'shadow.pass_rate_threshold' = 0.95
+'shadow.min_samples' = 10

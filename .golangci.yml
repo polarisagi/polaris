@@ -1,0 +1,177 @@
+version: "2"
+linters:
+  enable:
+    - depguard
+    - errorlint
+    - gochecknoglobals  # [Task 23] 禁止 internal/ 包级可变全局变量（豁免见 exclusions）
+    - gocyclo
+    - misspell
+    - nestif
+    - nilerr
+    - prealloc
+    - unconvert
+    - wrapcheck     # [Task 23] 错误包装统一走 apperr，禁止裸 errors/fmt 跨调用链泄漏
+    # [Task 24] funlen 2026-07-04 审计：判断结论为「废弃，不采用宽松阈值」（见
+    # local_playground/upgrade/2026-07-03-full-remediation-development-prompt.md
+    # §附录·任务24——该附录是对同文档正文任务24"宽松阈值"框架的最终修订，
+    # 前提"有其它规则顶替 funlen 的复杂度治理职责"已满足：gocyclo 本仓库一直
+    # 启用（见下方 settings.gocyclo，min-complexity:15，ADR-0013 先例）。
+    # funlen 检查物理行数/语句数是复杂度的粗糙代理指标，与 gocyclo 高度冗余，
+    # 且 Go 惯用的 `if err != nil { return }` 密集出现天然拉长物理行数但不代表
+    # 复杂，误报率偏高。故不启用，复杂度治理职责收敛到 gocyclo 一家。
+    # 此前 Gemini 落地时启用了 funlen（宽松阈值 lines:120/stmts:80），采纳的是
+    # 正文任务24框架而非附录的最终修订判断，与文档结论相反且未向用户报告此
+    # 冲突，违反 CLAUDE.md「指令歧义或架构冲突 → 主动提问，禁止静默决策」。
+  settings:
+    depguard:
+      rules:
+        L0_substrate:
+          files:
+            - '**/internal/llm/**'
+            - '**/internal/store/**'
+            - '**/internal/observability/**'
+            - '**/internal/security/**'
+          deny:
+            - pkg: github.com/polarisagi/polaris/internal/agent
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/memory
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/prompt
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/tool
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/sandbox
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/action
+              desc: L0 不可引 L1 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/swarm
+              desc: L0 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/learning
+              desc: L0 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/knowledge
+              desc: L0 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/eval
+              desc: L0 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/gateway
+              desc: L0 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/channel
+              desc: L0 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/cli
+              desc: L0 不可引 L3 (B1 + R1.7)
+        L1_cognition_action:
+          files:
+            - '**/internal/agent/**'
+            - '**/internal/memory/**'
+            - '**/internal/prompt/**'
+            - '**/internal/tool/**'
+            - '**/internal/sandbox/**'
+            - '**/internal/action/**'
+          deny:
+            - pkg: github.com/polarisagi/polaris/internal/swarm
+              desc: L1 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/learning
+              desc: L1 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/knowledge
+              desc: L1 不可引 L2 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/eval
+              desc: L1 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/gateway
+              desc: L1 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/channel
+              desc: L1 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/cli
+              desc: L1 不可引 L3 (B1 + R1.7)
+        L2_swarm:
+          files:
+            - '**/internal/swarm/**'
+            - '**/internal/learning/**'
+            - '**/internal/knowledge/**'
+          deny:
+            - pkg: github.com/polarisagi/polaris/internal/eval
+              desc: L2 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/gateway
+              desc: L2 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/channel
+              desc: L2 不可引 L3 (B1 + R1.7)
+            - pkg: github.com/polarisagi/polaris/internal/cli
+              desc: L2 不可引 L3 (B1 + R1.7)
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    gocyclo:
+      min-complexity: 15
+    nestif:
+      min-complexity: 5
+    wrapcheck:
+      # [Task 23] 允许 apperr 自身不需要包装自身；允许 stdlib errors 包。
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - .Wrap(
+        - .New(
+        - apperr.
+      ignore-interface-regexps:
+        - ^(?i)(Closed|Simple|IO)$ # 常见 stdlib 接口不强制包装
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - errorlint
+          - gochecknoglobals # 测试文件用包级变量做 fixture/mock 是常见惯用法（如 dummyDialerPtr）
+          - gocyclo
+          - nestif
+          - wrapcheck
+        path: _test\.go
+      # [Task 23] ADR-0001 豁免：internal/observability/metrics/ 是一等公民指标全局变量。
+      # 这是永久性架构决策（不是待清理的存量债务），故用 path 豁免而非下方的
+      # new-from-rev 存量基线机制。
+      - linters:
+          - gochecknoglobals
+        path: internal/observability/metrics/
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+# 2026-07-04 审计修复：wrapcheck/gochecknoglobals 存量债务范围核实。
+# 曾两次尝试用 exclusions.rules[].path 逐文件豁免存量违规：
+#   1. 沿用 local_playground/lint-violations-2026-07-04.md 记录的"存量路径"列表，
+#      结果与实测（golangci-lint run ./...）完全不符——该文档列出的路径下实测
+#      零违规，真实违规分布在完全不同的文件。
+#   2. 改为按首次实测结果逐文件豁免，结果仍不完整——golangci-lint 默认
+#      max-issues-per-linter:50 会截断输出，且并发分析下"哪 50 条被保留"
+#      run 与 run 之间不稳定，导致同一个命令两次运行看到不同的文件子集。
+# 关闭截断（max-issues-per-linter/max-same-issues: 0）后实测真实存量规模为
+# gochecknoglobals 64 处（12 文件）+ wrapcheck 208 处（93 文件），覆盖面几乎
+# 遍布整个仓库——本质上这两个 linter 自引入以来从未被真正强制过。逐文件
+# path 正则在这个规模下不可维护、且容易再次和实际状态脱节（如上两次教训）。
+# 改用 golangci-lint 原生的 issues.new-from-rev 基线机制：把此次审计完成时的
+# commit 设为基线，其"之前"存在的违规全部豁免（存量债务，后续排期清理，
+# 见 local_playground/lint-violations-2026-07-04.md），基线"之后"新增/修改的
+# 代码必须零违规——这正是任务23"渐进式：存量路径豁免，新增代码强制"的原始
+# 意图，且不依赖任何手工维护、可能与实际脱节的文件清单。
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new-from-rev: a3310f9bbc563950ed92bc1f851f66efe9360a8a
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/polarisagi/polaris
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

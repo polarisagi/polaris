@@ -1,0 +1,26 @@
+{
+  "_comment": "R1.3 ratchet baseline — 只增不减（除非真正清理）。以下文件因架构/语言约束无法消除包级 var，永久豁免。2026-07-07 复核重写：旧版本里 pkg/action|substrate|cognition 系列路径对应的文件在仓库重构后已不存在（长期没有真正生效，见 local_playground/reports/code-quality-remediation-verification-20260707.md），本次按当前 internal/ 四层布局真实路径重新核对全部条目；同时把检查范围从只覆盖 pkg/ 扩大到覆盖 internal/，故新增了若干此前从未被扫描到的合法豁免项。",
+  "_permanent_reason": {
+    "ffi_bindings":     "purego FFI 函数指针必须包级绑定（ADR-0011）",
+    "wasm_abi":         "WASM ABI 要求 retain map / activeHandler 包级可用（ADR-0008）",
+    "otel_instruments": "OTel SDK metric.* 接口在 Init() 前为 nil，Init 后只写一次；ADR-0001 架构决策",
+    "rust_sandbox":     "Rust FFI 沙箱函数指针需包级注册（ADR-0008/0011）",
+    "sdk_hooks":        "Skill SDK 注册表由运行时动态注入，无法注入式替换",
+    "version_info":     "Go build ldflags -X 要求使用包级别变量注入",
+    "static_table":     "编译期常量查找表，Go 无 const 数组/结构体语法，只能用 var 表达；声明后只读不再修改"
+  },
+  "pkg/version/version.go":                        true,
+  "internal/config/config.go":                      true,
+  "internal/ffi/dylib.go":                          true,
+  "internal/ffi/llama.go":                          true,
+  "internal/ffi/vec_ops.go":                        true,
+  "internal/llm/stt/sherpa.go":                     true,
+  "internal/llm/tts/sherpa.go":                     true,
+  "internal/observability/metrics/instruments.go":  true,
+  "internal/security/policy/cedar_ffi.go":          true,
+  "internal/store/surreal_store.go":                true,
+  "internal/tool/sandbox/rust_native_sandbox.go":   true,
+  "internal/tool/sandbox/rust_wasmtime_sandbox.go": true,
+  "internal/extension/skill/sdk/sdk.go":            true,
+  "internal/llm/modelregistry/registry.go":         true
+}

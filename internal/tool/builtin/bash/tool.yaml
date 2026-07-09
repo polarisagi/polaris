@@ -1,0 +1,13 @@
+name: bash
+description: "Execute a bash command in a sandboxed environment. Restricted to allowed working directories. Use for shell operations, scripting, and CLI tools."
+version: "1.0.0"
+capability: write-local
+risk_level: high
+sandbox: container
+side_effects:
+  - file-write
+  - process-spawn
+tags:
+  - shell
+  - exec
+  - cli

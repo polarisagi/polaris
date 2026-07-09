@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="nord">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polaris</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>⭐</text></svg>" />
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body class="bg-base-100 text-base-content antialiased h-screen overflow-hidden">
+<div class="drawer drawer-end h-full" x-data>
+  <input id="logs-drawer" type="checkbox" class="drawer-toggle" x-model="$store.logs.drawerOpen" />
+  <div class="drawer-content flex flex-col h-full min-h-0">
+    <div id="app" class="flex flex-1 w-full h-full min-h-0">
+
+  <!-- ── 侧边栏 ────────────────────────────────────── -->
+  <aside id="sidebar" class="w-64 bg-base-200/50 border-r border-base-300 flex flex-col flex-shrink-0">
+    <div class="p-6 pb-2">
+      <div class="flex flex-row items-center gap-2">
+        <h1 class="text-xl font-bold tracking-widest text-primary flex items-center gap-2">
+          ⭐ Polaris
+        </h1>
+      </div>
+      <p class="text-[10px] text-base-content/70 mt-1 uppercase tracking-widest font-semibold">AI Agent Harness</p>
+    </div>
+
+    <!-- Menu -->
+    <ul class="menu p-4 gap-1 flex-1 text-sm font-medium text-base-content/80">
+      <li>
+        <a :class="{'active': $store.nav.page === 'chat'}" @click.prevent="$store.chat.newSession(); $store.nav.navigate('chat')" href="/">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 21a9 9 0 0 1-9-9 9 9 0 0 1 9-9c1.65 0 3.2.45 4.5 1.22" />
+            <path d="M18.5 4.5a2.121 2.121 0 0 1 3 3L13 16l-4 1 1-4 8.5-8.5z" />
+          </svg>
+          <span x-text="$store.i18n.t('chat_new')"></span>
+        </a>
+      </li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'search'}" @click.prevent="$store.nav.navigate('search')" href="/search">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+          <span x-text="$store.i18n.t('nav_search')"></span>
+        </a>
+      </li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'sessions'}" @click.prevent="$store.nav.navigate('sessions'); $store.sessions.load()" href="/sessions">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155"/></svg>
+          <span x-text="$store.i18n.t('nav_sessions')"></span>
+        </a>
+      </li>
+      <li class="my-2"><div class="divider m-0 h-1"></div></li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'plugins'}" @click.prevent="$store.nav.navigate('plugins')" href="/plugins">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.25 6.087c0-.355.186-.676.401-.959.221-.29.349-.634.349-1.003 0-1.036-1.007-1.875-2.25-1.875s-2.25.84-2.25 1.875c0 .369.128.713.349 1.003.215.283.401.604.401.959v0a.64.64 0 0 1-.657.643 48.39 48.39 0 0 1-4.163-.3c.186 1.613.293 3.25.315 4.907a.656.656 0 0 1-.658.663v0c-.355 0-.676-.186-.959-.401a1.647 1.647 0 0 0-1.003-.349c-1.036 0-1.875 1.007-1.875 2.25s.84 2.25 1.875 2.25c.369 0 .713-.128 1.003-.349.283-.215.604-.401.959-.401v0c.31 0 .555.26.532.57a48.039 48.039 0 0 1-.642 5.056c1.518.19 3.058.309 4.616.354a.64.64 0 0 0 .657-.643v0c0-.355-.186-.676-.401-.959a1.647 1.647 0 0 1-.349-1.003c0-1.035 1.008-1.875 2.25-1.875 1.243 0 2.25.84 2.25 1.875 0 .369-.128.713-.349 1.003-.215.283-.4.604-.4.959v0c0 .333.277.599.61.58a48.1 48.1 0 0 0 5.427-.63 48.05 48.05 0 0 0 .582-4.717.532.532 0 0 0-.533-.57v0c-.355 0-.676.186-.959.401-.29.221-.634.349-1.003.349-1.035 0-1.875-1.007-1.875-2.25s.84-2.25 1.875-2.25c.37 0 .713.128 1.003.349.283.215.604.401.959.401v0a.656.656 0 0 0 .658-.663 48.422 48.422 0 0 0-.37-5.36c-1.886.342-3.81.574-5.766.689a.578.578 0 0 1-.61-.58v0Z"/></svg>
+          <span x-text="$store.i18n.t('nav_plugins')"></span>
+        </a>
+      </li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'automation'}" @click.prevent="$store.nav.navigate('automation')" href="/automation">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+          <span x-text="$store.i18n.t('nav_automation')"></span>
+          <span x-show="$store.approvals.list.length > 0" x-text="$store.approvals.list.length" class="badge badge-error badge-sm"></span>
+        </a>
+      </li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'monitor'}" @click.prevent="$store.nav.navigate('monitor')" href="/monitor">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"/></svg>
+          <span x-text="$store.i18n.t('nav_monitor')"></span>
+        </a>
+      </li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'settings'}" @click.prevent="$store.nav.navigate('settings')" href="/settings">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"/></svg>
+          <span x-text="$store.i18n.t('nav_settings')"></span>
+        </a>
+      </li>
+      <li>
+        <a :class="{'active': $store.nav.page === 'eval'}" @click.prevent="$store.nav.navigate('eval')" href="/eval">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+          <span x-text="$store.i18n.t('nav_eval')"></span>
+        </a>
+      </li>
+    </ul>
+
+    <!-- Bottom settings -->
+    <ul class="menu p-4 border-t border-base-300 gap-1 flex-shrink-0 text-sm font-medium text-base-content/80"
+         x-data="{
+           themes: ['nord','light','dark','corporate'],
+           themeLabels: { nord:'❄️', light:'☀️', dark:'🌙', corporate:'🏢' },
+           curTheme: localStorage.getItem('polaris_theme') || 'nord',
+           cycleTheme() {
+             const idx = (this.themes.indexOf(this.curTheme) + 1) % this.themes.length;
+             this.curTheme = this.themes[idx];
+             window.applyTheme(this.curTheme);
+             document.documentElement.setAttribute('data-theme', this.curTheme);
+           }
+         }"
+         x-init="document.documentElement.setAttribute('data-theme', curTheme)">
+      <li>
+        <a @click.prevent="cycleTheme()" href="#" class="flex items-center gap-2">
+          <span x-text="themeLabels[curTheme]" class="w-5 text-center"></span>
+          <span x-text="$store.i18n.t('theme_' + curTheme) || curTheme"></span>
+        </a>
+      </li>
+      <li>
+        <a @click.prevent="$store.i18n.setLang($store.i18n.lang === 'zh' ? 'en' : 'zh')" href="#" class="flex items-center gap-2">
+          <span class="w-5 text-center">🌐</span>
+          <span x-text="$store.i18n.lang === 'zh' ? 'English' : '中文'"></span>
+        </a>
+      </li>
+    </ul>
+
+    <!-- ── 底部版本信息与更新 ────────────────────────── -->
+    <div class="px-4 pb-4 flex flex-col gap-2 shrink-0">
+      <!-- 始终显示的版本号 -->
+      <div class="flex items-center gap-2 text-xs text-base-content/50 px-4 font-mono">
+        <span x-text="$store.i18n.lang === 'zh' ? '版本号' : 'Version'"></span>
+        <span x-text="$store.update.current || 'dev'" x-cloak></span>
+      </div>
+      
+      <!-- 热更新 (如果有新版本或者出错) -->
+      <div x-show="$store.update.hasUpdate || $store.update.status === 'error'"
+           x-cloak
+           class="rounded-lg p-3 text-xs flex flex-col gap-3 mt-1"
+           :class="$store.update.status === 'error' ? 'bg-error/10 text-error' : 'bg-info/10 text-info'">
+        <div class="flex items-center justify-between">
+          <span class="font-bold flex items-center gap-1">
+            <svg x-show="$store.update.status !== 'error'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            <svg x-show="$store.update.status === 'error'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            <span x-text="$store.update.status === 'error' ? ($store.i18n.lang === 'zh' ? '更新失败' : 'Update Failed') : ($store.i18n.lang === 'zh' ? '发现新版本' : 'New Version')"></span>
+          </span>
+          <span x-show="$store.update.status !== 'error'" class="font-mono font-bold" x-text="$store.update.latest"></span>
+        </div>
+        
+        <div x-show="$store.update.status === 'error'" class="opacity-90 break-words" x-text="$store.update.error"></div>
+        
+        <div class="flex items-center justify-between">
+          <a x-show="$store.update.releaseURL && $store.update.status !== 'error'"
+             :href="$store.update.releaseURL" target="_blank" rel="noopener"
+             class="underline opacity-80 hover:opacity-100" x-text="$store.i18n.lang === 'zh' ? '查看日志' : 'Changelog'"></a>
+          <span x-show="!$store.update.releaseURL || $store.update.status === 'error'"></span>
+
+          <button @click="$store.update.status === 'error' ? ($store.update.hasUpdate = false, $store.update.status = 'idle', $store.update.error = '') : $store.update.triggerUpdate()"
+                  :disabled="$store.update.busy"
+                  class="btn btn-xs" :class="$store.update.status === 'error' ? 'btn-ghost' : 'btn-info'">
+            <span x-show="!$store.update.busy" x-text="$store.update.status === 'error' ? ($store.i18n.lang === 'zh' ? '关闭' : 'Close') : ($store.i18n.lang === 'zh' ? '立即更新' : 'Update Now')"></span>
+            <span x-show="$store.update.busy" class="flex items-center gap-1">
+              <span class="loading loading-spinner loading-xs"></span>
+              <span x-text="$store.update.statusLabel"></span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── 主内容区 ──────────────────────────────────── -->
+  <main class="flex-1 flex flex-col min-w-0 bg-base-100 relative">
+    
+    <!-- ── 顶部状态栏 ────────────────────────── -->
+    <header class="navbar min-h-12 h-14 bg-base-100/80 backdrop-blur border-b border-base-300 px-4 text-xs font-mono text-base-content/70 flex gap-4 shrink-0 z-10"
+            :class="$store.statusBar.sealed ? 'bg-error text-error-content border-error' : ''">
+      <!-- Sealed 模式 -->
+      <div x-show="$store.statusBar.sealed" x-cloak class="font-bold tracking-widest text-sm">
+        ⚠ SEALED — 服务器已封印，所有操作暂停。请联系管理员解封。
+      </div>
+
+      <!-- 正常模式 -->
+      <div x-show="!$store.statusBar.sealed" class="flex items-center gap-3 w-full">
+        <div class="flex items-center gap-2">
+          <div class="w-2 h-2 rounded-full" :class="$store.statusBar.connected ? 'bg-success shadow-[0_0_8px_rgba(0,255,0,0.5)]' : 'bg-error'"></div>
+          <span x-text="$store.statusBar.connected ? $store.i18n.t('status_conn_ok') : $store.i18n.t('status_conn_fail')"></span>
+        </div>
+        <div class="divider divider-horizontal mx-0"></div>
+        <span x-text="$store.statusBar.modelID || '未知模型'"></span>
+        
+        <template x-if="$store.statusBar.sessionID">
+          <div class="flex items-center gap-3">
+            <div class="divider divider-horizontal mx-0"></div>
+            <span x-text="`session: ${$store.statusBar.sessionID.slice(0,12)}`"></span>
+          </div>
+        </template>
+        
+        <div class="divider divider-horizontal mx-0"></div>
+        <div class="flex items-center gap-2">
+          <span x-text="`tokens: ${$store.statusBar.tokenUsed.toLocaleString()} / ${$store.statusBar.tokenLimit.toLocaleString()}`"></span>
+          <span x-show="$store.statusBar.tokenBadge" class="badge badge-xs" :class="$store.statusBar.tokenBadge?.cls" x-text="$store.statusBar.tokenBadge?.label"></span>
+        </div>
+        
+        <div class="divider divider-horizontal mx-0"></div>
+        <span x-text="`mem: ${$store.statusBar.memoryMB}MB`"></span>
+        
+        <span class="ml-auto font-bold" x-text="`¥${$store.statusBar.costCNY.toFixed(4)}`"></span>
+      </div>
+    </header>
+
+
+    <!-- Content pages -->
+    <div id="content" class="flex-1 overflow-hidden relative flex flex-col">
+      <page-fragment src="/pages/chat.html"></page-fragment>
+      <page-fragment src="/pages/sessions.html"></page-fragment>
+      <page-fragment src="/pages/search.html"></page-fragment>
+      <page-fragment src="/pages/eval.html"></page-fragment>
+      <page-fragment src="/pages/monitor.html"></page-fragment>
+      <page-fragment src="/pages/settings.html"></page-fragment>
+      <page-fragment src="/pages/plugins.html"></page-fragment>
+      <page-fragment src="/pages/skills.html"></page-fragment>
+      <page-fragment src="/pages/automation.html"></page-fragment>
+    </div>
+  </main>
+</div><!-- /#app -->
+</div><!-- /drawer-content -->
+
+<div class="drawer-side z-[360]">
+  <label for="logs-drawer" aria-label="close drawer" class="drawer-overlay" @click="$store.logs.closeDrawer()"></label>
+  <div class="w-[480px] max-w-[95vw] h-full bg-base-100 border-l border-base-300 flex flex-col shadow-2xl">
+    <div class="flex items-center justify-between p-4 border-b border-base-300">
+      <div class="flex items-center gap-3">
+        <span class="font-bold" x-text="$store.i18n.t('logs_title')"></span>
+        <span x-show="$store.logs.connected" class="badge badge-success badge-sm badge-outline">LIVE</span>
+        <span x-show="!$store.logs.connected" class="badge badge-ghost badge-sm badge-outline" x-text="$store.i18n.t('status_conn_fail')"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="store-logs-levelfilter" name="store-logs-levelfilter" class="select select-bordered select-xs" x-model="$store.logs.levelFilter" @change="$store.logs.setLevel($store.logs.levelFilter)">
+          <option value="" x-text="$store.i18n.t('logs_filter_all', '全部')"></option>
+          <option value="debug">DEBUG+</option>
+          <option value="info">INFO+</option>
+          <option value="warn">WARN+</option>
+          <option value="error">ERROR</option>
+        </select>
+        <button class="btn btn-ghost btn-xs" @click="$store.logs.clear()" x-text="$store.i18n.t('logs_clear')"></button>
+        <button class="btn btn-ghost btn-xs btn-square" @click="$store.logs.closeDrawer()">✕</button>
+      </div>
+    </div>
+    <div id="log-entries-drawer" class="flex-1 overflow-y-auto font-mono text-[11px] p-3 space-y-1" x-ref="logEntries">
+      <div x-show="$store.logs.entries.length === 0" class="text-center py-8 text-base-content/70">暂无日志</div>
+      <template x-for="(e, idx) in $store.logs.entries" :key="idx">
+        <div class="flex gap-2 border-b border-base-200/50 pb-1"
+             :class="{'text-error': e.level==='error', 'text-warning': e.level==='warn'}">
+          <span class="text-base-content/60 shrink-0 mt-[1px]" x-text="e.ts"></span>
+          <span class="shrink-0 font-bold w-10 mt-[1px]"
+                :class="{'text-error': e.level==='error', 'text-warning': e.level==='warn', 'text-base-content/60': e.level==='debug', 'text-success': !['error','warn','debug'].includes(e.level)}"
+                x-text="(e.level || 'info').toUpperCase()"></span>
+          <span class="flex-1 break-all" x-text="e.message || e.msg || ''"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+</div><!-- /drawer -->
+
+<!-- ── 浮动日志抽屉触发按钮 ─────────────────────────────────────────── -->
+<button class="btn btn-circle shadow-lg fixed bottom-6 right-6 z-50 border-base-300" x-data @click="$store.logs.openDrawer()"
+        :class="{ 'btn-primary': $store.logs.drawerOpen, 'bg-base-100 text-base-content': !$store.logs.drawerOpen }"
+        :title="$store.i18n.t('nav_logs')">
+  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z"/>
+  </svg>
+  <span x-show="$store.logs.entries.length > 0 && !$store.logs.drawerOpen" class="badge badge-success badge-xs absolute top-0 right-0"></span>
+</button>
+
+<!-- Toast Container -->
+<div class="toast toast-bottom toast-end z-[1000]" x-data>
+  <template x-for="t in $store.toast.items" :key="t.id">
+    <div class="alert shadow-lg" :class="t.type === 'ok' ? 'alert-success text-success-content' : t.type === 'warn' ? 'alert-warning text-warning-content' : 'alert-error text-error-content'">
+      <span x-text="t.type === 'ok' ? '✓' : t.type === 'warn' ? '⚠' : '✕'" class="font-bold"></span>
+      <span x-text="t.message"></span>
+    </div>
+  </template>
+</div>
+
+<page-fragment src="/pages/onboard.html"></page-fragment>
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

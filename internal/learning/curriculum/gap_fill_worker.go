@@ -1,0 +1,109 @@
+package curriculum
+
+import (
+	"github.com/polarisagi/polaris/internal/learning/synthetic"
+
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+// GapFillWorker 监听 m9_capability_gap Outbox 事件，执行能力补全。
+// 架构文档: docs/arch/M09-Self-Improvement-Engine.md
+type GapFillWorker struct {
+	db       protocol.SQLQuerier
+	provider protocol.Provider
+	registry protocol.ToolRegistry
+	skillReg protocol.SkillRegistry // 合成技能持久化目标（HE-6 State-in-DB）；nil 时仅生成不持久化
+}
+
+// SetSkillRegistry 注入持久化目标，允许在 GapFillWorker 构造后热注入
+// （boot 顺序约束：skillRegistry 在 gapFillWorker 之后才初始化）。
+func (w *GapFillWorker) SetSkillRegistry(reg protocol.SkillRegistry) {
+	w.skillReg = reg
+}
+
+func NewGapFillWorker(db protocol.SQLQuerier, provider protocol.Provider, registry protocol.ToolRegistry) *GapFillWorker {
+	return &GapFillWorker{
+		db:       db,
+		provider: provider,
+		registry: registry,
+	}
+}
+
+// HandleOutbox 实现了 store.OutboxHandler，消费 m9_capability_gap 事件。
+func (w *GapFillWorker) HandleOutbox(ctx context.Context, record *store.OutboxRecord) error {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(record.Payload, &payload); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to parse gap payload", err)
+	}
+
+	missingTool := w.extractMissingTool(payload.Error)
+	if missingTool == "unknown" || missingTool == "" {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("cannot extract tool name from error: %s", payload.Error))
+	}
+
+	// 1. 初始化 gap log 记录
+	gapID := uuid.New().String()
+	if _, err := w.db.ExecContext(ctx, `
+		INSERT INTO capability_gap_log (id, session_id, task_id, required_tool, description, status, trust_tier, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, gapID, "unknown", "unknown", missingTool, "Triggered via Outbox", "synthesizing", 1, time.Now().UnixMilli(), time.Now().UnixMilli()); err != nil {
+		slog.Warn("curriculum: gap fill worker db write failed", "err", err)
+	}
+
+	// 2. 本地合成
+	err := w.synthesizeSkill(ctx, missingTool)
+
+	status := "resolved"
+	if err != nil {
+		status = "failed"
+	}
+
+	// 3. 更新状态
+	if _, err := w.db.ExecContext(ctx, `
+		UPDATE capability_gap_log SET status = ?, updated_at = ? WHERE id = ?
+	`, status, time.Now().UnixMilli(), gapID); err != nil {
+		slog.Warn("curriculum: gap fill worker db write failed", "err", err)
+	}
+
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.HandleOutbox", err)
+	}
+	return nil
+}
+
+func (w *GapFillWorker) extractMissingTool(errStr string) string {
+	// e.g. "tool not found: xyz" or "tool \"xyz\" not found"
+	re := regexp.MustCompile(`tool (?:not found: |")?([^"\s:]+)"?`)
+	matches := re.FindStringSubmatch(errStr)
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+	return "unknown"
+}
+
+func (w *GapFillWorker) synthesizeSkill(ctx context.Context, toolName string) error {
+	// w.skillReg nil 时降级：技能仍生成（供即时工具调用），但不持久化（Tier-0 降级场景）。
+	gen := synthetic.NewSyntheticSkillGen(w.provider, w.skillReg)
+	skill, err := gen.Generate(ctx, toolName, "Auto-synthesized skill for "+toolName)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)
+	}
+	if w.registry != nil {
+		_ = w.registry.Register(skill)
+	}
+	return nil
+}

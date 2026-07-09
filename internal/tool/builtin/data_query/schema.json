@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "data_query",
+  "description": "Run a read-only SQL SELECT query against a SQLite database and return result rows.",
+  "type": "object",
+  "properties": {
+    "query":    { "type": "string",  "description": "SQL SELECT statement to execute. Only read queries are permitted." },
+    "database": { "type": "string",  "description": "Path to the SQLite database file. Must be in allowed sources." },
+    "params":   { "type": "array",   "description": "Positional query parameters (? placeholders) to bind safely." },
+    "max_rows": { "type": "integer", "default": 1000, "description": "Maximum number of rows to return (default 1000)." }
+  },
+  "required": ["query", "database"]
+}

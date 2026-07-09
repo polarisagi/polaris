@@ -1,0 +1,82 @@
+# trusted-publishers.yaml — 官方受信发布者白名单（ADR-0016 §2.1）
+#
+# trust_tier 映射：
+#   4 = System   — Polaris 内置，不可卸载
+#   3 = Official — 三大 AI 平台 + 核心生态官方组织
+#   2 = Community— 高质量开源社区（需用户主动安装）
+#   1 = Local    — 本地 HMAC 签名，未经外部认证
+#   0 = Untrusted— 未知来源，沙箱最高隔离
+#
+# approval_mode:
+#   auto   — 工具调用无需弹窗确认（等同内置权限）
+#   prompt — 每次工具调用需用户确认
+#
+# 白名单由 Polaris 维护，publisher 无法自行提升 trust_tier。
+
+publishers:
+
+  # ── AI 平台三巨头（TrustOfficial, approval=auto）────────────────────────
+  - id: anthropic
+    display_name: Anthropic
+    homepage: https://www.anthropic.com
+    trust_tier: 3
+    approval_mode: auto
+    description: Claude 模型开发商，MCP 协议主要推动者
+
+  - id: openai
+    display_name: OpenAI
+    homepage: https://openai.com
+    trust_tier: 3
+    approval_mode: auto
+    description: GPT / Codex / DALL-E 开发商，agentskills.io 标准提出者
+
+  - id: google
+    display_name: Google DeepMind
+    homepage: https://deepmind.google
+    trust_tier: 3
+    approval_mode: auto
+    description: Gemini / Bard 开发商，Google Workspace AI 集成
+
+  # ── MCP 生态核心（TrustOfficial, approval=auto）──────────────────────────
+  - id: modelcontextprotocol
+    display_name: Model Context Protocol
+    homepage: https://modelcontextprotocol.io
+    trust_tier: 3
+    approval_mode: auto
+    description: MCP 协议官方组织，维护参考实现 servers
+
+  # ── 核心基础设施平台（TrustOfficial, approval=auto）──────────────────────
+  - id: github
+    display_name: GitHub
+    homepage: https://github.com
+    trust_tier: 3
+    approval_mode: auto
+    description: 代码托管平台，GitHub MCP Server 官方维护者
+
+  - id: microsoft
+    display_name: Microsoft
+    homepage: https://microsoft.com
+    trust_tier: 3
+    approval_mode: auto
+    description: Playwright / VS Code 开发商，Azure AI 平台
+
+  - id: figma
+    display_name: Figma
+    homepage: https://www.figma.com
+    trust_tier: 3
+    approval_mode: auto
+    description: 设计工具平台，官方 MCP Server 维护者
+
+  # ── 社区优质发布者（TrustCommunity, approval=prompt）────────────────────
+  # 社区条目示例，实际由用户通过 Plugin Registry 安装时动态添加
+  # - id: community-example
+  #   display_name: Community Example
+  #   trust_tier: 2
+  #   approval_mode: prompt
+  
+  - id: polarisagi
+    display_name: Polaris Official
+    homepage: https://github.com/polarisagi
+    trust_tier: 3
+    approval_mode: auto
+    description: Official publisher for Polaris builtin extensions

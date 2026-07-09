@@ -1,0 +1,7 @@
+# Example threshold overrides for m3_observability.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'memory.caution_mb' = 1536
+'memory.warning_mb' = 1024
+'memory.critical_mb' = 512
+'baseline.p95' = 200

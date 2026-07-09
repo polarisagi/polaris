@@ -1,0 +1,235 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// CallTool 直接路由调用指定的 MCP 工具。
+// 执行 PolicyGate 校验（与 InMemoryToolRegistry.ExecuteTool 语义一致）。
+func (m *MCPManager) CallTool(ctx context.Context, serverID, toolName string, args map[string]any) (string, error) {
+	m.mu.RLock()
+	e, ok := m.entries[serverID]
+	m.mu.RUnlock()
+	if !ok {
+		return "", apperr.New(apperr.CodeInternal, "mcp_manager: server not found: "+serverID)
+	}
+
+	llmName := MCPToolName(e.name, toolName)
+	argsBytes, _ := json.Marshal(args)
+
+	m.mu.RLock()
+	env := m.envelope
+	m.mu.RUnlock()
+
+	if env == nil {
+		return "", apperr.New(apperr.CodeInternal, "mcp_manager: envelope not initialized")
+	}
+
+	res, err := env.Execute(ctx, sandbox.ExecRequest{
+		Principal:  sandbox.PrincipalAgent,
+		Kind:       sandbox.KindToolExecute,
+		Resource:   llmName,
+		TrustTier:  types.TrustTier(e.cfg.TrustTier),
+		Tool:       types.Tool{Name: llmName, Source: types.ToolMCP, TrustTier: types.TrustTier(e.cfg.TrustTier)},
+		Input:      argsBytes,
+		TaintLevel: types.TaintMedium,
+	})
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "mcp_manager: call tool", err)
+	}
+	if !res.Success {
+		return "", apperr.New(apperr.CodeInternal, "MCPManager.CallTool failed: "+res.Error)
+	}
+	return string(res.Output), nil
+}
+
+// registerTools 注册合法的 MCP 工具到 sandbox，返回实际注册成功的工具子集。
+// 服务器名（serverName）在 Add() 中已经过 validateLLMNamePart 校验，此处信任。
+// 工具名来自外部 MCP 服务器，不可控：非法字符静默替换并记录警告；超长则跳过。
+func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools []MCPTool) []MCPTool {
+	// 确定此 server 的污点等级：白名单 → TaintMedium；其余 → TaintHigh
+	taint := types.TaintHigh
+	if client.cfg.Trusted {
+		taint = types.TaintMedium
+	}
+
+	// 计算超时时间：默认 5 分钟 (300s)，如果有配置则使用配置值
+	toolTimeout := client.cfg.Timeout
+	if toolTimeout <= 0 {
+		toolTimeout = 5 * time.Minute
+	}
+
+	// 注册前安全扫描（prompt injection 检测）
+	// Deny 级工具直接跳过；HITL/Warn 级仍注册但已记录日志（可后续接入 HITL 网关）
+	scanner := NewToolSecurityScanner()
+	deniedTools := make(map[string]bool)
+	for _, scanResult := range scanner.ScanAll(tools, ScanRiskDeny) {
+		deniedTools[scanResult.ToolName] = true
+		slog.Error("mcp: tool blocked by security scanner",
+			"server", serverName, "tool", scanResult.ToolName, "reasons", scanResult.Reasons)
+	}
+	// HITL 扫描（记录，不阻断）
+	_ = scanner.ScanAll(tools, ScanRiskHITL)
+
+	valid := make([]MCPTool, 0, len(tools))
+	for _, t := range tools {
+		if deniedTools[t.Name] {
+			continue
+		}
+		llmName := MCPToolName(serverName, t.Name)
+		if llmName != MCPToolName(serverName, SanitizeToolNamePart(t.Name)) || t.Name != SanitizeToolNamePart(t.Name) {
+			slog.Warn("mcp: tool name sanitized", "server", serverName, "original", t.Name, "llm_name", llmName)
+		}
+		if len(llmName) > maxLLMToolNameLen {
+			slog.Warn("mcp: tool LLM name too long, skipped", "server", serverName, "tool", t.Name, "llm_name", llmName, "max", maxLLMToolNameLen)
+			continue
+		}
+		fn := makeMCPToolFn(client, t.Name)
+		// RegisterRich 将 MCP 工具注册到富工具路径（支持 ImageParts 回传）
+		m.sandbox.RegisterRich(llmName, fn, taint)
+		// 同步到 InMemoryToolRegistry (逐步废弃)
+		if m.toolReg != nil {
+			riskLevel := types.RiskHigh
+			if client.cfg.Trusted {
+				riskLevel = types.RiskMedium
+			}
+			regErr := m.toolReg.Register(types.Tool{
+				Name:        llmName,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+				Source:      types.ToolMCP,
+				RiskLevel:   riskLevel,
+				TrustTier:   types.TrustTier(client.cfg.TrustTier),
+				Timeout:     toolTimeout,
+			})
+			if regErr != nil {
+				slog.Warn("mcp: failed to sync tool to InMemoryToolRegistry", "server", serverName, "tool", llmName, "err", regErr)
+			}
+		}
+
+		// 注册到统一工具目录 Catalog
+		if m.catalog != nil {
+			m.catalog.Register(protocol.CatalogEntry{
+				Name:        llmName,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+				Source:      types.ToolMCP,
+				TrustTier:   types.TrustTier(client.cfg.TrustTier),
+				TaintLevel:  taint,
+				Timeout:     toolTimeout,
+				MCPServerID: client.cfg.ServerName,
+				MCPToolName: t.Name,
+			})
+		}
+
+		valid = append(valid, t)
+	}
+	return valid
+}
+
+// makeMCPToolFn 创建调用 MCP 工具的富执行函数。
+// 返回完整 ToolResult（含 ImageParts），使用 CallToolTainted 进行污点保护反序列化（M07 §1 安全要求）。
+func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
+	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+		var args map[string]any
+		if len(spec.Input) > 0 {
+			json.Unmarshal(spec.Input, &args) //nolint:errcheck
+		}
+		// CallToolTainted 内部执行 TaintPreservingDecoder，taint 通过 RegisterRich 传递
+		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "makeMCPToolFn", err)
+		}
+		return &types.ToolResult{
+			Success:    true,
+			Output:     []byte(text),
+			ImageParts: imgs, // MCP type="image" content block 解析结果
+		}, nil
+	}
+}
+
+func (m *MCPManager) unregisterTools(serverName string, tools []MCPTool) {
+	for _, t := range tools {
+		llmName := MCPToolName(serverName, t.Name)
+		m.sandbox.Unregister(llmName)
+		// 同步从 InMemoryToolRegistry 注销，保持可发现性状态一致
+		if m.toolReg != nil {
+			m.toolReg.Unregister(llmName)
+		}
+		// 同步从 unified catalog 注销
+		if m.catalog != nil {
+			m.catalog.Unregister(llmName)
+		}
+	}
+}
+
+// MCPToolName 生成 LLM 工具名，格式：mcp__<serverName>__<toolName>。
+// serverName 由调用方（Add）保证合法；toolName 来自外部，经 SanitizeToolNamePart 处理。
+func (m *MCPManager) MCPToolName(serverName, toolName string) string {
+	return MCPToolName(serverName, toolName)
+}
+
+func MCPToolName(serverName, toolName string) string {
+	return "mcp__" + serverName + "__" + SanitizeToolNamePart(toolName)
+}
+
+// SanitizeToolNamePart 将外部工具名中不符合 ^[a-zA-Z0-9_-]+$ 的字符替换为下划线。
+// 仅用于来自外部 MCP 服务器的工具名；用户配置的服务器名走 validateLLMNamePart 硬校验。
+func SanitizeToolNamePart(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, s)
+}
+
+// validateLLMNamePart 校验字符串是否满足 OpenAI 工具名规范 ^[a-zA-Z0-9_-]+$。
+// 用于用户可控的名称（MCP server name、skill name），非法则快速失败。
+func validateLLMNamePart(s string) error {
+	if s == "" {
+		return apperr.New(apperr.CodeInvalidInput, "name must not be empty")
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("char %q not in ^[a-zA-Z0-9_-]+$", r))
+		}
+	}
+	return nil
+}
+
+// IsValidLLMName 导出版本：检查完整工具名（含前缀）是否满足 ^[a-zA-Z0-9_-]+$。
+// 供 sysadmin.BuildToolSchemas 等外部包做防御性过滤使用。
+func IsValidLLMName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// DynamicConnectRequest 动态连接 MCP server 的参数。
+type DynamicConnectRequest struct {
+	ServerName string // 唯一名称，用于工具名前缀
+	Transport  string // "stdio" | "sse" | "http"
+	Command    string // stdio 模式：可执行文件路径
+	Args       []string
+	URL        string // sse/http 模式：端点 URL
+}
+
+// DynamicConnect 动态连接一个 MCP server 并注册其工具到沙箱。
+// 幂等：同名 server 已连接时直接返回 nil。

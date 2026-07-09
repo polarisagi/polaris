@@ -1,0 +1,9 @@
+# Example threshold overrides for m7_tool.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'sandbox.default_level' = 3
+'sandbox.dry_run_enabled' = true
+'script.max_memory_mb' = 256
+'script.max_wallclock_s' = 60
+'dryrun.protect_window_seconds' = 60
+max_code_size_bytes = 16384

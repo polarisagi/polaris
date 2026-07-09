@@ -1,0 +1,191 @@
+name: CI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_NET_RETRY: 3
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 —— golangci-lint issues.new-from-rev 需完整历史定位基线
+      # commit a3310f9b；浅克隆（默认 depth:1）导致该 rev 不在本地历史中，
+      # new-from-rev 静默失效，存量 gochecknoglobals 违规全部当作"新增"上报。
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  docs-toc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: docs/arch §跳读 行号一致性
+        run: make docs-check
+      - name: docs/arch 禁 Go 代码块 / 完整签名 (#9)
+        run: make docs-lint
+
+  # 单次编译 Rust，产物通过 artifact 传递给下游 job
+  # 最终产物缓存：如果 Rust 源码无变化，直接跳过工具链安装和编译
+  rust-build:
+    runs-on: ubuntu-latest
+    outputs:
+      rust_unchanged: ${{ steps.rust-final.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache Rust final artifact
+        id: rust-final
+        uses: actions/cache@v6
+        with:
+          path: |
+            rust/substrate/target/release/libsubstrate.so
+            rust/substrate/target/release/libsubstrate.a
+          key: rust-ci-x86_64-unknown-linux-gnu-${{ hashFiles('rust/substrate/**') }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.rust-final.outputs.cache-hit != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+      - name: Build Rust Substrate
+        if: steps.rust-final.outputs.cache-hit != 'true'
+        run: make rust-build
+
+      - name: Upload Rust Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-libs
+          path: |
+            rust/substrate/target/release/libsubstrate.so
+            rust/substrate/target/release/libsubstrate.a
+          retention-days: 1
+
+  # cargo test + fmt check 复用同一缓存（编译产物已被 rust-build 预热）
+  rust:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip if Rust code unchanged
+        if: needs.rust-build.outputs.rust_unchanged == 'true'
+        run: echo "Rust code unchanged. Skipping cargo test and fmt."
+      - uses: actions/checkout@v7
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+          save-if: false
+      - run: cargo test --manifest-path rust/substrate/Cargo.toml
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+      - run: cargo fmt --manifest-path rust/substrate/Cargo.toml --check
+        if: needs.rust-build.outputs.rust_unchanged != 'true'
+
+  test:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: spec consistency (state.yaml SSoT)
+        run: go test -run "^TestSpec" ./internal/protocol/... -v
+      - name: Go tests
+        env:
+          # 告知 Go 链接器 Rust .so 位置
+          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/substrate/target/release
+        run: go test ./internal/... -v -race -coverprofile=coverage.out
+      - run: go tool cover -func=coverage.out
+
+  build:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Build
+        env:
+          SKIP_RUST_BUILD: 1
+        run: make build
+
+  eval-gate:
+    needs: [lint, test, build, rust, docs-toc]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Download Rust Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-libs
+          path: rust/substrate/target/release
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Copy Rust libs
+        run: |
+          mkdir -p bin/lib
+          cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
+      - name: Eval Gate (Adaptive)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$DEEPSEEK_API_KEY" ] || [ -n "$OPENAI_API_KEY" ]; then
+            echo "::notice::Detected API Key. Running real eval --ci-gate..."
+            go run ./cmd/polaris eval --ci-gate
+          else
+            echo "::warning::跳过 Eval 门控：未检测到 DEEPSEEK_API_KEY 或 OPENAI_API_KEY Secret。系统能力防退化验证已被降级。请在仓库 Settings -> Secrets 中配置。"
+            echo "Skipped."
+          fi

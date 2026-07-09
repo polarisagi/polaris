@@ -1,0 +1,15 @@
+# Example threshold overrides for m8_orchestrator.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'lease.ttl_seconds' = 60
+'heartbeat.seconds' = 15
+'heartbeat.jitter' = 5
+'reaper.scan_interval_ms' = 1000
+'agents.max_desktop' = 2
+'agents.max_server' = 3
+'supervisor.restart_max_in_window' = 3
+'supervisor.restart_window_seconds' = 60
+'supervisor.backoff_initial_ms' = 200
+'supervisor.backoff_max_seconds' = 60
+'compensation.timeout_seconds' = 300
+'compensation.poll_seconds' = 5

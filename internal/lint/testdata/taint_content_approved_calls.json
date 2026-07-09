@@ -1,0 +1,3 @@
+{
+  "_comment": "Test_inv_TaintContentCallAudit .Content() 调用审计白名单。\n格式：'相对路径:行号'。每新增一处 .Content() 调用须在此处登记并说明原因，否则 CI 失败。\n清理方向：新增语义方法（Fields/MarshalJSONString/AppendToMap/IntoMessage）将字符串提取收拢至 policy 豁免域，禁止在 kernel 层出现裸 .Content() 调用。"
+}

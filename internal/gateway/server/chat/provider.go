@@ -1,0 +1,82 @@
+package chat
+
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+)
+
+// 本文件声明 chat 包对外部模块的消费端接口（Consumer-side Interfaces）。
+// 方法集以 chat/handler.go + chat/sse.go 实际调用点为准。
+//
+// @consumer: chat/handler.go（字段类型），chat/sse.go（调用点）
+// @producer: 具体实现由 gateway/server.go（Server.SetMCPManager 等）注入
+
+// MCPManager chat 包对 MCP 管理器的消费端接口（仅 chat 实际调用的方法）。
+// 实现：extension/mcp.MCPManager（满足此接口的方法子集）
+type MCPManager interface {
+	// ListServers 返回所有 MCP 服务器运行时状态（供 SSE 推送连接状态）。
+	ListServers() []protocol.MCPServerInfo
+	// IsPluginConnected 检查指定 Plugin 的 MCP 进程是否在线。
+	IsPluginConnected(pluginID string) bool
+}
+
+// LLMRegistry chat 包对 LLM Provider 注册表的消费端接口。
+// 实现：llm.ProviderRegistry
+type LLMRegistry interface {
+	PickProvider(role string) protocol.Provider
+	PickProviderName(role string) string
+	// PickProviderByRecordID 按 provider_models.id 精确选取（用户手动指定模型时调用）。
+	PickProviderByRecordID(mID string) protocol.Provider
+}
+
+// STTTranscriber chat 包对语音识别引擎的消费端接口（仅 chat/audio.go 实际调用的方法）。
+// 实现：llm/stt.Engine（Sherpa-ONNX FFI 桥接，唯一实现）。
+type STTTranscriber interface {
+	// Transcribe 将 PCM 采样点转写为文本。
+	Transcribe(samples []float32, sampleRate int) (STTResult, error)
+}
+
+// STTEngineBox 装箱 STTTranscriber 接口值，配合 atomic.Pointer 使用
+// （规避 atomic.Pointer 要求同一具体类型的限制，与 tts.ProviderBox 同一模式）。
+type STTEngineBox struct {
+	E STTTranscriber
+}
+
+// PromptManager chat 包对提示词管理器的消费端接口（仅 chat/sse.go 实际调用的方法）。
+// 实现：prompt.Manager
+type PromptManager interface {
+	// ReadPrompt 读取指定提示词（优先用户覆盖，回退内置）。
+	ReadPrompt(name, fallback string) string
+	// ModelSpecificGuidance 返回 modelID 对应的模型专属引导文本。
+	ModelSpecificGuidance(modelID string) string
+	// PlatformHintFor 返回指定接入平台的提示词片段。
+	PlatformHintFor(platform string) string
+}
+
+// MemoryFacade chat 包对记忆门面的消费端接口（仅 Stage 3 渲染 Task Canvas 时调用）。
+// 遵循消费端窄接口原则，从 protocol.MemoryFacade 抽取所需方法。
+type MemoryFacade interface {
+	RenderTaskCanvas() string
+}
+
+// ToolRefOffloader 工具输出符号化卸载（M05 §11.3 Stage 1）消费端接口。
+type ToolRefOffloader interface {
+	Offload(ctx context.Context, taskID string, content []byte) (id string, err error)
+}
+
+// TTSProvider Chat包对 TTS 引擎的消费端接口。
+type TTSProvider interface {
+	Generate(ctx context.Context, text string) ([]byte, error)
+}
+
+// TTSProviderBox 包装 TTSProvider
+type TTSProviderBox struct {
+	P TTSProvider
+}
+
+// STTResult STT 识别结果。
+type STTResult struct {
+	Text     string `json:"text"`
+	Language string `json:"language,omitempty"`
+}

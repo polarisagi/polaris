@@ -1,0 +1,307 @@
+// Package storage — SurrealDBCoreStore purego 桥接。
+// 历史: 原 cgo 实现已按 ADR-0011 Phase 3 迁移到 purego。
+// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
+//
+// SurrealDBCoreStore — [Storage-SurrealDB-Core] 认知检索轴的 Go 封装。
+// 实现 protocol.Store + 扩展接口（VectorStore / GraphStore / FTSStore）。
+//
+// 后端选择: surreal-rocksdb（默认，持久化，≥4GB 机器）/ surreal-mem（低内存降级，kv-mem）。
+// 降级规则由 boot_substrate.go initSurrealStore 按 TotalRAM 自动决定：<2GB 完全跳过，2-4GB 降为 mem。
+// kv-mem 进程重启后数据丢失；持久化由 SQLite Outbox 投影负责（M02 §2.5）。
+package store
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"runtime"
+	"sync"
+	"unsafe"
+
+	"github.com/ebitengine/purego"
+
+	sffi "github.com/polarisagi/polaris/internal/ffi"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+)
+
+// ─── purego FFI 函数指针（懒绑定，sync.Once 幂等）─────────────────────────────
+
+var (
+	surrealOnce sync.Once
+	surrealErr  error
+
+	surrealSetWorkerThreads         func(n int32) int32
+	surrealOpen                     func(backend string, dbPath string, vecDim int32) int32
+	surrealKvGet                    func(key *byte, keyLen uintptr, outVal *uintptr, outLen *uintptr) int32
+	surrealKvPut                    func(key *byte, keyLen uintptr, val *byte, valLen uintptr) int32
+	surrealKvDelete                 func(key *byte, keyLen uintptr) int32
+	surrealKvScan                   func(prefix *byte, prefixLen uintptr, outJSON *uintptr) int32
+	surrealVecUpsert                func(id string, embed *float32, dim uintptr) int32
+	surrealVecDelete                func(id string) int32
+	surrealVecKnn                   func(query *float32, dim uintptr, k uintptr, outJSON *uintptr) int32
+	surrealGraphRelate              func(fromPtr *byte, fromLen uintptr, etPtr *byte, etLen uintptr, toPtr *byte, toLen uintptr, weightBits uintptr) int32                                    //nolint:gochecknoglobals
+	surrealGraphDeleteEdges         func(fromPtr *byte, fromLen uintptr, etPtr *byte, etLen uintptr) int32                                                                                    //nolint:gochecknoglobals
+	surrealGraphTraverse            func(startPtr *byte, startLen uintptr, etPtr *byte, etLen uintptr, maxDepth uintptr, outJSON *uintptr) int32                                              //nolint:gochecknoglobals
+	surrealGraphSpreadingActivation func(idsPtr *byte, idsLen uintptr, maxDepth uintptr, energyDecayBits uintptr, dormancyThresholdBits uintptr, fanOutLimit uintptr, outJSON *uintptr) int32 //nolint:gochecknoglobals
+	surrealFTSIndex                 func(docID, text string) int32
+	surrealFTSDelete                func(docID string) int32
+	surrealFTSSearch                func(query string, k uintptr, outJSON *uintptr) int32
+	surrealFreeString               func(ptr uintptr)
+	surrealFreeBuf                  func(ptr uintptr, length uintptr)
+	surrealVecSetMode               func(mode int32) int32
+	surrealStats                    func(outJSON *uintptr) int32
+	surrealPurge                    func()
+)
+
+func bindSurreal() error {
+	surrealOnce.Do(func() {
+		lib, err := sffi.Load()
+		if err != nil {
+			surrealErr = err
+			return
+		}
+		// ABI_MINOR=1 新增：surreal_set_worker_threads / vec_delete / fts_delete / graph_delete_edges
+		purego.RegisterLibFunc(&surrealSetWorkerThreads, lib, "surreal_set_worker_threads")
+		purego.RegisterLibFunc(&surrealOpen, lib, "surreal_open")
+		purego.RegisterLibFunc(&surrealKvGet, lib, "surreal_kv_get")
+		purego.RegisterLibFunc(&surrealKvPut, lib, "surreal_kv_put")
+		purego.RegisterLibFunc(&surrealKvDelete, lib, "surreal_kv_delete")
+		purego.RegisterLibFunc(&surrealKvScan, lib, "surreal_kv_scan")
+		purego.RegisterLibFunc(&surrealVecUpsert, lib, "surreal_vec_upsert")
+		purego.RegisterLibFunc(&surrealVecDelete, lib, "surreal_vec_delete")
+		purego.RegisterLibFunc(&surrealVecKnn, lib, "surreal_vec_knn")
+		purego.RegisterLibFunc(&surrealGraphRelate, lib, "surreal_graph_relate")
+		purego.RegisterLibFunc(&surrealGraphDeleteEdges, lib, "surreal_graph_delete_edges")
+		purego.RegisterLibFunc(&surrealGraphTraverse, lib, "surreal_graph_traverse")
+		purego.RegisterLibFunc(&surrealGraphSpreadingActivation, lib, "surreal_graph_spreading_activation")
+		purego.RegisterLibFunc(&surrealFTSIndex, lib, "surreal_fts_index")
+		purego.RegisterLibFunc(&surrealFTSDelete, lib, "surreal_fts_delete")
+		purego.RegisterLibFunc(&surrealFTSSearch, lib, "surreal_fts_search")
+		purego.RegisterLibFunc(&surrealFreeString, lib, "surreal_free_string")
+		purego.RegisterLibFunc(&surrealFreeBuf, lib, "surreal_free_buf")
+		purego.RegisterLibFunc(&surrealVecSetMode, lib, "surreal_vec_set_mode")
+		purego.RegisterLibFunc(&surrealStats, lib, "surreal_stats")
+		purego.RegisterLibFunc(&surrealPurge, lib, "surreal_purge")
+	})
+	return surrealErr
+}
+
+// ─── FFI 辅助 ─────────────────────────────────────────────────────────────────
+
+// bytePtrOrNil 返回 []byte 首字节指针；空 slice 返回 nil（Rust 侧 from_raw_parts(nil, 0) 安全）。
+func bytePtrOrNil(b []byte) *byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return &b[0]
+}
+
+// strToBytes 将 string 转为 []byte（NUL-free），返回 ptr+len 供 FFI 使用。
+// 调用方必须在 FFI 调用结束后执行 runtime.KeepAlive(返回的 []byte)。
+func strToBytes(s string) ([]byte, *byte, uintptr) {
+	if len(s) == 0 {
+		var dummy byte
+		return nil, &dummy, 0
+	}
+	b := []byte(s)
+	return b, &b[0], uintptr(len(b))
+}
+
+// readCStringAndFree 拷贝 NUL-terminated C 字符串到 Go string，立即调用 surreal_free_string 归还。
+func readCStringAndFree(ptr uintptr) string {
+	if ptr == 0 {
+		return ""
+	}
+	s := goStringFromPtr(ptr)
+	surrealFreeString(ptr)
+	return s
+}
+
+func goStringFromPtr(ptr uintptr) string {
+	if ptr == 0 {
+		return ""
+	}
+	var n uintptr
+	for *(*byte)(unsafe.Pointer(ptr + n)) != 0 {
+
+		n++
+	}
+	if n == 0 {
+		return ""
+	}
+	out := make([]byte, n)
+	src := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), n)
+	copy(out, src)
+	return string(out)
+}
+
+// readBytesAndFree 拷贝 Rust 分配的字节段到 Go []byte，立即调用 surreal_free_buf 归还。
+// ADR-0011 风险段强调"立即拷贝 + 立即归还"模式以杜绝 use-after-free。
+func readBytesAndFree(ptr uintptr, n uintptr) []byte {
+	if ptr == 0 || n == 0 {
+		return nil
+	}
+	out := make([]byte, n)
+	src := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), n)
+	copy(out, src)
+	surrealFreeBuf(ptr, n)
+	return out
+}
+
+// ─── SurrealDBCoreStore ───────────────────────────────────────────────────────
+
+// SurrealDBCoreStore 实现 protocol.Store，通过 purego 调用 Rust SurrealCore FFI。
+// 认知检索轴：KV + HNSW 向量近邻（SurrealDB MTREE 原生）+ 有向图遍历 + BM25 全文检索。
+type SurrealDBCoreStore struct{}
+
+var _ protocol.Store = (*SurrealDBCoreStore)(nil)
+
+// OpenSurrealDBCore 初始化全局 SurrealCoreStore（幂等）。
+// backend: "mem"（默认，256MB+ 可用，含 VPS）或 "rocksdb"（持久化，dbPath 不可为空）。
+// vecDim: HNSW 向量维度，需与嵌入模型一致（典型值 1536 或 768）。
+// workerThreads: Tokio 运行时线程数；<= 0 表示 auto（min(CPU, 4)），VPS 建议传 2。
+func OpenSurrealDBCore(backend, dbPath string, vecDim, workerThreads int) (*SurrealDBCoreStore, error) {
+	if err := bindSurreal(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "surreal load lib", err)
+	}
+	// 在 surreal_open 前设置线程数（只在首次初始化时生效）
+	surrealSetWorkerThreads(int32(workerThreads))
+	if rc := surrealOpen(backend, dbPath, int32(vecDim)); rc != 0 {
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_open failed: code %d", rc))
+	}
+	return &SurrealDBCoreStore{}, nil
+}
+
+// ─── protocol.Store 实现 ──────────────────────────────────────────────────────
+
+// Get 读取 KV 值；键不存在返回 apperr.ErrNotFound。
+func (s *SurrealDBCoreStore) Get(_ context.Context, key []byte) ([]byte, error) {
+	var outVal uintptr
+	var outLen uintptr
+	rc := surrealKvGet(bytePtrOrNil(key), uintptr(len(key)), &outVal, &outLen)
+	runtime.KeepAlive(key)
+	switch rc {
+	case 0:
+		return readBytesAndFree(outVal, outLen), nil
+	case 1:
+		return nil, apperr.ErrNotFound
+	default:
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_kv_get: code %d", rc))
+	}
+}
+
+// Put 写入键值对。
+func (s *SurrealDBCoreStore) Put(_ context.Context, key, value []byte) error {
+	rc := surrealKvPut(bytePtrOrNil(key), uintptr(len(key)), bytePtrOrNil(value), uintptr(len(value)))
+	runtime.KeepAlive(key)
+	runtime.KeepAlive(value)
+	if rc != 0 {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_kv_put: code %d", rc))
+	}
+	return nil
+}
+
+// Delete 删除键。
+func (s *SurrealDBCoreStore) Delete(_ context.Context, key []byte) error {
+	rc := surrealKvDelete(bytePtrOrNil(key), uintptr(len(key)))
+	runtime.KeepAlive(key)
+	if rc != 0 {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_kv_delete: code %d", rc))
+	}
+	return nil
+}
+
+// Scan 返回前缀扫描迭代器。
+func (s *SurrealDBCoreStore) Scan(_ context.Context, prefix []byte) (protocol.Iterator, error) {
+	var outJSON uintptr
+	rc := surrealKvScan(bytePtrOrNil(prefix), uintptr(len(prefix)), &outJSON)
+	runtime.KeepAlive(prefix)
+	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_kv_scan: code %d", rc))
+	}
+	jsonStr := readCStringAndFree(outJSON)
+	pairs, err := parseKVPairsJSON(jsonStr)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "surreal scan parse", err)
+	}
+	return &surrealIterator{pairs: pairs, pos: -1}, nil
+}
+
+// BatchWrite 批量写入；MVP 无原子保证（内存 KV 无事务）。
+func (s *SurrealDBCoreStore) BatchWrite(ctx context.Context, ops []types.Op) error {
+	for _, op := range ops {
+		switch op.Type {
+		case types.OpPut:
+			if err := s.Put(ctx, op.Key, op.Value); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "SurrealDBCoreStore.BatchWrite", err)
+			}
+		case types.OpDelete:
+			if err := s.Delete(ctx, op.Key); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "SurrealDBCoreStore.BatchWrite", err)
+			}
+		}
+	}
+	return nil
+}
+
+// Txn 伪事务：串行执行 fn，内存 KV 无回滚能力（MVP 限制）。
+func (s *SurrealDBCoreStore) Txn(_ context.Context, fn func(tx protocol.Transaction) error) error {
+	return fn(&surrealTx{store: s})
+}
+
+func (s *SurrealDBCoreStore) Capabilities() types.StoreCapabilities {
+	return types.StoreCapabilities{
+		SupportsSQL:      false,
+		SupportsVector:   true,
+		SupportsGraph:    true,
+		SupportsFullText: true,
+		Engine:           "surreal-core-ffi/hnsw",
+	}
+}
+
+func (s *SurrealDBCoreStore) Close() error { return nil }
+
+// Purge 释放 SurrealDB 所有内存数据（kv + vec + graph + fts），
+// 供 OSMemoryGuard DegradationCritical 回调调用，快速腾出内存。
+// 认知轴数据丢失；SurrealDB 会在下次写入时重建（mem backend）
+// 或从 rocksdb 重新加载（rocksdb backend）。
+func (s *SurrealDBCoreStore) Purge() error {
+	// 通知 Rust 侧释放所有认知轴内存（kv + vec + graph + fts）。
+	// Rust surreal_purge() 是 no-op 安全：FFI 未加载时函数指针为 nil。
+	// 执行后 SurrealDB 内存引用清空；mem 后端数据丢失（可接受，OSMemoryGuard
+	// DegradationCritical 触发时已判定认知轴数据可牺牲）；
+	// rocksdb 后端数据持久化，重新 Open 可恢复。
+	SurrealPurge() // 调用已注册的 FFI：surreal_purge()
+	slog.Warn("surreal_store: Purge called — cognitive axis data cleared for memory pressure relief")
+	return nil
+}
+
+// VecSetMode 设置向量存储模式（0: 精确搜索, 1: 近似搜索等，根据 Rust 端定义）。
+func (s *SurrealDBCoreStore) VecSetMode(mode int) error {
+	rc := surrealVecSetMode(int32(mode))
+	if rc != 0 {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_vec_set_mode: code %d", rc))
+	}
+	return nil
+}
+
+// Stats 返回存储后端的诊断统计信息（JSON）。
+func (s *SurrealDBCoreStore) Stats() (string, error) {
+	var outJSON uintptr
+	rc := surrealStats(&outJSON)
+	if rc != 0 {
+		if outJSON != 0 {
+			surrealFreeString(outJSON)
+		}
+		return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("surreal_stats: code %d", rc))
+	}
+	return readCStringAndFree(outJSON), nil
+}
+
+// 扩展接口（向量 / 图 / 全文）见 surreal_store_ext.go（R7 拆分）。
+// surrealTx / surrealIterator / JSON 解析辅助 / SurrealPurge 见 surreal_store_helpers.go（R7 拆分）。

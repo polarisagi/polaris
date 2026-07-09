@@ -1,0 +1,12 @@
+{
+  "_comment": "Test_inv_NoFFIOutsideFfiPkg 豁免列表（L0 受控 FFI 边界）。\n每条豁免须对应唯一的 Rust dylib 绑定目标；禁止以'历史原因'为由新增。\n清理方向：所有 FFI 绑定均为 purego 语言约束，长期有效，不应删除。",
+  "pkg/substrate/ffi/dlopen_unix.go": true,
+  "pkg/substrate/ffi/dylib.go": true,
+  "pkg/action/tool/rust_native_sandbox.go": true,
+  "pkg/action/tool/rust_wasmtime_sandbox.go": true,
+  "pkg/substrate/inference/stt/dlopen_unix.go": true,
+  "pkg/substrate/inference/stt/sherpa.go": true,
+  "pkg/substrate/inference/tts/sherpa.go": true,
+  "pkg/substrate/policy/cedar_ffi.go": true,
+  "pkg/substrate/storage/surreal_store.go": true
+}

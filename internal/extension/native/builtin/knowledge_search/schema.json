@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge_search",
+  "description": "在本地知识库中执行三阶段 RAG 检索（BM25 + 向量 + GraphRAG），返回与查询相关的文档段落及其上下文。",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "检索查询文本。支持自然语言问题或关键词。Tier-0+（≥8GB）会自动拆分为子查询。"
+    },
+    "top_k": {
+      "type": "integer",
+      "description": "返回的最多段落数量（默认 5，最大 20）。",
+      "default": 5,
+      "minimum": 1,
+      "maximum": 20
+    },
+    "doc_scope": {
+      "type": "string",
+      "description": "限定检索范围的文档 ID，空字符串表示全局检索。"
+    }
+  },
+  "required": ["query"]
+}

@@ -1,0 +1,2 @@
+name: glob
+description: Recursively search for files using glob patterns (e.g. **/*.go)

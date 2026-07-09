@@ -1,0 +1,16 @@
+# Example threshold overrides for m1_router.toml
+# To use, copy this file to ~/.polarisagi/polaris/config/ or point POLARIS_THRESHOLDS_DIR to this directory.
+
+'circuit_breaker.failure_count' = 5
+'circuit_breaker.cooldown_seconds' = 10
+'circuit_breaker.half_open_max' = 1
+'pre_flight.cost_tolerance_pct' = 15
+'timeout.dial_seconds' = 3
+'timeout.tls_seconds' = 5
+'timeout.response_header_seconds' = 30
+'timeout.total_seconds' = 120
+'stream.max_buffer_kb' = 256
+'l1.target_hit_rate' = 0.9
+'semantic_cache.max_entries' = 10000
+'semantic_cache.similarity_threshold' = 0.95
+'semantic_cache.ttl_hours' = 24
