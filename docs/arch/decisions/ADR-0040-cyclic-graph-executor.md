@@ -1,4 +1,4 @@
-# ADR 0039: 受控循环图执行器 (CyclicGraphExecutor)
+# ADR-0040: 受控循环图执行器 (CyclicGraphExecutor)
 
 ## 1. Context
 目前在 `internal/agent/pattern` 下支持 Micro-DAG 和 `PatternDAGExecutor`。这些执行器主要是基于有向无环图 (DAG) 的静态流转，限制了复杂逻辑（如多轮尝试、分页抓取、错误重试循环）。
