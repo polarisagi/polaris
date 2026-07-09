@@ -44,7 +44,7 @@ func Test_inv_NoBareLLMInfer(t *testing.T) {
 					if strings.HasPrefix(strings.TrimSpace(line), "//") || strings.Contains(line, "safecall.Infer") || strings.Contains(line, "safecall.StreamInfer") {
 						continue
 					}
-					if i > 0 && strings.Contains(lines[i-1], "nolint:bare-infer") {
+					if i > 0 && strings.Contains(lines[i-1], "custom-nolint:bare-infer") {
 						continue
 					}
 					t.Errorf("VIOLATED: %s:%d %s (禁止裸调用 provider.Infer/StreamInfer，请使用 internal/llm/safecall)", path, i+1, strings.TrimSpace(line))

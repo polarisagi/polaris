@@ -84,7 +84,7 @@ func (h *SummaryGenOutboxHandler) generateSummary(ctx context.Context, docID str
 	// P-1：每次 LLM 调用自持超时（90s），不信任 Outbox 调度上下文一定带 deadline（A-05）。
 	inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer inferCancel()
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := h.provider.Infer(inferCtx, inferMsgs)
 	if err != nil {
 		// LLM 调用失败多为瞬时（限流/超时/厂商故障），可重试。

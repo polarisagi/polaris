@@ -403,7 +403,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			sb.Cfg.Thresholds.M2Storage.EventlogHotRowLimit,
 			sb.Cfg.Thresholds.M2Storage.EventlogHotSizeMB,
 		)
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		forgettingTicker := time.NewTicker(6 * time.Hour)
 		defer forgettingTicker.Stop()

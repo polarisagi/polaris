@@ -126,7 +126,7 @@ func (fg *FactualityGuard) semanticJudge(ctx context.Context, content, contextDo
 		MaxTokens:   64,
 		Temperature: 0,
 	}
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := fg.llmProvider.Infer(judgeCtx, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
 		// L3 Judge 不可用：计数告警，不阻断（FactualityUncertain）

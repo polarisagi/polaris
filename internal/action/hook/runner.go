@@ -123,7 +123,7 @@ func (r *Runner) Fire(ctx context.Context, input HookInput) []HookResult {
 				continue
 			}
 			wg.Add(1)
-			//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 			go func(i int, handler HandlerConfig) {
 				defer wg.Done()
 				ch <- indexed{i, r.runCommand(ctx, handler, input)}
@@ -132,7 +132,7 @@ func (r *Runner) Fire(ctx context.Context, input HookInput) []HookResult {
 		}
 	}
 
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		wg.Wait()
 		close(ch)

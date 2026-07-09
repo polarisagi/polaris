@@ -54,7 +54,7 @@ func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (Assemble
 	)
 
 	wg.Add(1)
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		defer wg.Done()
 		if items, err := a.mem.Query(ctx, req.Query, req.MaxTaint); err == nil {
@@ -64,7 +64,7 @@ func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (Assemble
 
 	if a.know != nil && req.IncludeKnowledge && req.SurpriseHint >= 0.3 {
 		wg.Add(1)
-		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go func() {
 			defer wg.Done()
 			depth := 1

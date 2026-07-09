@@ -71,7 +71,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}
 
 			if a.plannerSpawner != nil {
-				//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+				//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 				go a.plannerSpawner(ctx, goal, taskType, a.provider)
 			}
 

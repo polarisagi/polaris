@@ -299,7 +299,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
 	if dyn, ok := sb.Embedder.(*llm.DynamicEmbedder); ok {
-		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go func() {
 			<-dyn.WaitReady()
 			slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")

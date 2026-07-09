@@ -30,7 +30,7 @@ func (hr *HybridRetrieverImpl) InjectEmbedder(e Embedder) {
 	hr.embedder = e
 	cls := hr.queryClassifier()
 	if e != nil {
-		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()

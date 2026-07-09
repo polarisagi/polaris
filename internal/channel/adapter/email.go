@@ -75,7 +75,7 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 					"from", em.From, "channel", channelID, "auth_results", em.AuthResults)
 				continue
 			}
-			//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 			go host.OnMessage("email", channelID, cfg, Message{
 				Text:       em.Body,
 				ChatID:     em.From,

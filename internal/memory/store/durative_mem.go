@@ -180,7 +180,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 		}
 	}
 
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := dm.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "DurativeMemoryManager.processCluster", err)

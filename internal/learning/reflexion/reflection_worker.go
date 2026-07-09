@@ -130,7 +130,7 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 		sb.String(),
 	)
 
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := rw.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "ReflectionWorker.ConsolidateReflections", err)

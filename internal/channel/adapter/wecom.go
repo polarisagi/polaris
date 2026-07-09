@@ -151,7 +151,7 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 			if chatID == "" {
 				chatID = userID
 			}
-			//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 			go host.OnMessage("wecom", channelID, cfg, Message{
 				Text: content, ChatID: chatID, UserID: userID,
 

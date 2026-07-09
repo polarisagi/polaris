@@ -312,7 +312,7 @@ func (ag *AutoCurriculumGenerator) generateDescriptionsLLM(skill string, limit i
 		MaxTokens:   256,
 		Temperature: 0.8,
 	}
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := ag.llmProvider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
 		return nil

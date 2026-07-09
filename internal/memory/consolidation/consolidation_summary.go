@@ -66,7 +66,7 @@ func (p *ConsolidationPipeline) buildSummary(
 				"Focus on: what was accomplished, what tools were used, and key outcomes.\n\n%s",
 			text,
 		)
-		//nolint:bare-infer // 历史代码暂留，后续重构替换
+		//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 		resp, err := p.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
 		if err == nil && resp != nil {
 			return strings.TrimSpace(resp.Content)

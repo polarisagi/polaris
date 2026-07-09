@@ -160,7 +160,7 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 		Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Role: "assistant"}}},
 	})
 
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	ch, err := p.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
 		slog.Error("openai_compat: StreamInfer failed", "err", err)
@@ -210,7 +210,7 @@ func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Re
 
 	// 使用 StreamInfer 逐 chunk 收集完整内容（与流式路径复用同一 Provider 实现）
 	ctx := r.Context()
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	ch, err := p.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, truncate(err.Error(), 200)), http.StatusInternalServerError)

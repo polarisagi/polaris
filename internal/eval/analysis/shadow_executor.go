@@ -158,7 +158,7 @@ func (e *ShadowExecutor) processSingleSample(ctx context.Context, s sampleData, 
 	}
 
 	inferCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	shadowResp, err := e.llmProvider.Infer(inferCtx, eventPayload.Request.Messages, candidateOpts...)
 	cancel()
 
@@ -272,7 +272,7 @@ func (e *ShadowExecutor) scoreShadow(ctx context.Context, req *types.InferReques
 	tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := e.llmProvider.Infer(tCtx, msgs)
 	if err != nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "shadow judge failed", err)

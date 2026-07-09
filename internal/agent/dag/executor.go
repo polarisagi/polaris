@@ -134,7 +134,7 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
 	if e.leaseRenew != nil && taskID != "" {
-		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go e.leaseHeartbeat(hbCtx, taskID, agentID)
 	}
 
@@ -180,7 +180,7 @@ func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeRe
 
 			wg.Add(1)
 			n := node // 捕获副本
-			//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 			go func() {
 				defer wg.Done()
 				sem <- struct{}{}

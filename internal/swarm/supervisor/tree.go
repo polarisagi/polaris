@@ -81,7 +81,7 @@ func (s *Supervisor) Start() {
 
 	for _, w := range s.workers {
 		s.wg.Add(1)
-		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go s.runWorker(w)
 	}
 }

@@ -102,7 +102,7 @@ func (f *WriteFilter) llmEvaluate(
 		truncate(content, 500),
 	)
 
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := f.provider.Infer(ctx,
 		[]types.Message{{Role: "user", Content: prompt}},
 		types.WithMaxTokens(64),

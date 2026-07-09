@@ -139,7 +139,7 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 			&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
 		)
 	}
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		reindexTicker := time.NewTicker(5 * time.Minute)
 		defer reindexTicker.Stop()
@@ -160,7 +160,7 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 
 func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 	temporalExpirer := graph.NewTemporalExpirer(sb.Store.DB())
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go func() {
 		expireTicker := time.NewTicker(1 * time.Hour)
 		defer expireTicker.Stop()

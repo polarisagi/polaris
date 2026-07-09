@@ -205,7 +205,7 @@ func (m *LogicCollapseMonitor) RecordSuccess(
 	stats.MarkTriggered()
 
 	// 异步触发编译（L1 优先级后台任务）
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go m.triggerCollapse(context.Background(), traj, variance)
 }
 

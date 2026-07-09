@@ -36,14 +36,14 @@ func Test_inv_NoBareGoroutine(t *testing.T) {
 
 				if !isSafeGo {
 					pos := fset.Position(goStmt.Pos())
-					// 检查注释是否包含 //nolint:bare-goroutine (在 go 语句上方 3 行内)
+					// 检查注释是否包含 //custom-nolint:bare-goroutine (在 go 语句上方 3 行内)
 					hasNolint := false
 					for _, cg := range f.Comments {
 						for _, c := range cg.List {
 							cPos := fset.Position(c.Pos())
 							// 注释在 goStmt 之前，且行距 <= 3
 							if cPos.Line <= pos.Line && pos.Line-cPos.Line <= 3 {
-								if strings.Contains(c.Text, "//nolint:bare-goroutine") {
+								if strings.Contains(c.Text, "//custom-nolint:bare-goroutine") {
 									hasNolint = true
 									break
 								}
@@ -58,7 +58,7 @@ func Test_inv_NoBareGoroutine(t *testing.T) {
 						violations = append(violations, violation{
 							relPath: relPath,
 							line:    pos.Line,
-							detail:  "裸 goroutine 调用违反约定，请使用 concurrent.SafeGo(ctx, name, fn) 包裹，或添加 //nolint:bare-goroutine 注释说明理由",
+							detail:  "裸 goroutine 调用违反约定，请使用 concurrent.SafeGo(ctx, name, fn) 包裹，或添加 //custom-nolint:bare-goroutine 注释说明理由",
 						})
 					}
 				}

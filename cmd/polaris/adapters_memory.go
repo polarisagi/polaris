@@ -42,7 +42,7 @@ func (a *memEmbedderAdapter) ModelVersion() string { return a.model }
 type collapseRecorderAdapter struct{ m *si.LogicCollapseMonitor }
 
 func (a *collapseRecorderAdapter) RecordToolSuccess(ctx context.Context, toolName string) {
-	//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+	//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 	go a.m.RecordSuccess(context.WithoutCancel(ctx), &extskill.CollapseTrajectory{
 		SkillID:     toolName,
 		CompletedAt: time.Now().Unix(),

@@ -101,7 +101,7 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 			if chatID == "" {
 				chatID = evData.SenderID
 			}
-			//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+			//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 			go host.OnMessage("dingtalk", channelID, cfg, Message{
 				Text: text, ChatID: chatID, UserID: evData.SenderID, ReplyToken: evData.SessionWebhook,
 

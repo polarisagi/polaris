@@ -71,7 +71,7 @@ func (p *ConsolidationPipeline) llmExtract(
 			"\n\nSession log:\n%s",
 		text,
 	)
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	resp, err := p.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(1024))
 	if err != nil {
 		return p.ruleExtract(sessionID, text)

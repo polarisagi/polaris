@@ -151,7 +151,7 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 		}
 		localCfg["_feishu_token"] = token
 		localCfg["_feishu_domain"] = domain
-		//nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
+		//custom-nolint:bare-goroutine // 历史代码暂留，需结合上下文梳理 ctx 传递链路，后续重构替换
 		go host.OnMessage("feishu", channelID, localCfg, Message{
 			Text: text, ChatID: event.Event.Message.ChatID, UserID: event.Event.Sender.SenderID.OpenID,
 

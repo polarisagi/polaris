@@ -59,7 +59,7 @@ func (c *Compressor) summarize(ctx context.Context, msgs []apptypes.Message, max
 		Temperature: 0.3,
 	}
 
-	//nolint:bare-infer // 历史代码暂留，后续重构替换
+	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
 	ch, err := provider.StreamInfer(ctx, inferReq.Messages)
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "Compressor.summarize", err)
