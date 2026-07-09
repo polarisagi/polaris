@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -84,8 +85,7 @@ func (h *SummaryGenOutboxHandler) generateSummary(ctx context.Context, docID str
 	// P-1：每次 LLM 调用自持超时（90s），不信任 Outbox 调度上下文一定带 deadline（A-05）。
 	inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer inferCancel()
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := h.provider.Infer(inferCtx, inferMsgs)
+	resp, err := safecall.Infer(inferCtx, h.provider, inferMsgs)
 	if err != nil {
 		// LLM 调用失败多为瞬时（限流/超时/厂商故障），可重试。
 		return apperr.Wrap(apperr.CodeInternal, "summary_gen: llm infer", err)

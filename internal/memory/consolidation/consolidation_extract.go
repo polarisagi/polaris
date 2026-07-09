@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -71,8 +72,7 @@ func (p *ConsolidationPipeline) llmExtract(
 			"\n\nSession log:\n%s",
 		text,
 	)
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := p.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(1024))
+	resp, err := safecall.Infer(ctx, p.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(1024))
 	if err != nil {
 		return p.ruleExtract(sessionID, text)
 	}

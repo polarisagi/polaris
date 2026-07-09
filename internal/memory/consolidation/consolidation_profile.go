@@ -7,6 +7,7 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -126,8 +127,7 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 		currentJSON, sb.String(),
 	)
 
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := p.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
+	resp, err := safecall.Infer(ctx, p.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
 	if err != nil || resp == nil {
 		p.ruleSynthesizeProfile(events, out)
 		return

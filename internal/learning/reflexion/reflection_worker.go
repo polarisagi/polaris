@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -130,8 +131,7 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 		sb.String(),
 	)
 
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := rw.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
+	resp, err := safecall.Infer(ctx, rw.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "ReflectionWorker.ConsolidateReflections", err)
 	}

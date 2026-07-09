@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -144,8 +145,7 @@ func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []
 				inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 				defer inferCancel()
 				start := time.Now()
-				//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-				resp, err := providerClient.provider.Infer(inferCtx, conceptMsgs)
+				resp, err := safecall.Infer(inferCtx, providerClient.provider, conceptMsgs)
 				latencyMs := time.Since(start).Milliseconds()
 				if err == nil && resp != nil && resp.Content != "" {
 					conceptLabel = strings.Split(strings.TrimSpace(resp.Content), "\n")[0]

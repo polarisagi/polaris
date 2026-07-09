@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/store/search"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -160,8 +161,7 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 				continue
 			}
 			summaryID := node.ID + "_summary"
-			//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-			resp, err := p.provider.Infer(ctx, []types.Message{
+			resp, err := safecall.Infer(ctx, p.provider, []types.Message{
 				{Role: "system", Content: "用一句话（50字以内）总结以下文本片段的核心内容，输出纯文本，不加任何格式："},
 				{Role: "user", Content: node.Content},
 			}, types.WithModel("standard"))

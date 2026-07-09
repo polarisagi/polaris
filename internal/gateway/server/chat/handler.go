@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -177,8 +178,7 @@ func (h *ChatHandler) GenerateReply(ctx context.Context, req *apptypes.InferRequ
 	var sb strings.Builder
 	const maxToolRounds = 10
 	for range maxToolRounds {
-		//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-		ch, err := p.StreamInfer(ctx, history,
+		ch, err := safecall.StreamInfer(ctx, p, history,
 			apptypes.WithMaxTokens(2048),
 			apptypes.WithTemperature(0.7),
 			apptypes.WithTools(toolSchemas),

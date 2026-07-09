@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -75,8 +76,7 @@ func (p *DefaultIngestionPipeline) fetchLeafChunks(ctx context.Context, db proto
 func (p *DefaultIngestionPipeline) summarizeText(ctx context.Context, prompt string, maxTokens int) string {
 	sCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := p.provider.Infer(sCtx, []types.Message{{Role: "user", Content: prompt}},
+	resp, err := safecall.Infer(sCtx, p.provider, []types.Message{{Role: "user", Content: prompt}},
 		types.WithMaxTokens(maxTokens))
 	if err != nil || resp == nil {
 		return ""

@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 )
@@ -83,8 +84,7 @@ func (pc *ProviderLLMClient) ExtractEntities(ctx context.Context, text string) (
 	if pc.model != "" {
 		req.Model = pc.model
 	}
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := pc.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LLM entity extraction failed: %v", err), err)
 	}
@@ -112,8 +112,7 @@ func (pc *ProviderLLMClient) ExtractRelations(ctx context.Context, entities []*E
 	if pc.model != "" {
 		req.Model = pc.model
 	}
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := pc.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LLM relation extraction failed: %v", err), err)
 	}

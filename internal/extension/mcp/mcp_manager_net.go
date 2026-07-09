@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -154,8 +155,7 @@ func (m *MCPManager) makeSamplingHandler() ServerRequestHandler {
 			if req.MaxTokens > 0 {
 				opts = append(opts, types.WithMaxTokens(req.MaxTokens))
 			}
-			//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-			resp, err := m.samplingProvider.Infer(ctx, req.Messages, opts...)
+			resp, err := safecall.Infer(ctx, m.samplingProvider, req.Messages, opts...)
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "MCPManager.makeSamplingHandler", err)
 			}

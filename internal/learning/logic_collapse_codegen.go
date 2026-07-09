@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -71,8 +72,7 @@ The script must implement the deterministic equivalent of this tool call sequenc
 		},
 	}
 
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := g.provider.Infer(ctx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, g.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "LLM inference failed", err)
 	}

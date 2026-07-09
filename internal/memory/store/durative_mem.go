@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/memory/util"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -180,8 +181,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 		}
 	}
 
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := dm.provider.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
+	resp, err := safecall.Infer(ctx, dm.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "DurativeMemoryManager.processCluster", err)
 	}

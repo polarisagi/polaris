@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -29,8 +30,7 @@ func (ag *AutoCurriculumGenerator) llmJudgeSafe(ctx context.Context, desc string
 		MaxTokens:   8,
 		Temperature: 0,
 	}
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := ag.llmProvider.Infer(judgeCtx, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(judgeCtx, ag.llmProvider, req.Messages, types.WithMaxTokens(req.MaxTokens))
 	if err != nil || resp == nil {
 		slog.Warn("curriculum: llm_judge_safe error, fail-closed",
 			"err", err,

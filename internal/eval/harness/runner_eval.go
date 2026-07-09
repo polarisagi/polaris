@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -105,8 +106,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 			}
 		}
 
-		//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-		resp, llmErr := r.llmProvider.Infer(tCtx, msgs, inferOpts...)
+		resp, llmErr := safecall.Infer(tCtx, r.llmProvider, msgs, inferOpts...)
 		if llmErr != nil {
 			slog.Warn("l4_judge: LLM 调用失败", "case_id", c.ID, "error", llmErr)
 			// P0 用例 fail-safe；其他用例沿用字符串检查结果
@@ -149,8 +149,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		// 双 Judge 仅对 P0 用例强制执行（非随机采样）
 		needsSecondJudge := c.Severity == SeverityP0
 		if needsSecondJudge {
-			//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-			resp2, err2 := r.llmProvider.Infer(tCtx, msgs, inferOpts...)
+			resp2, err2 := safecall.Infer(tCtx, r.llmProvider, msgs, inferOpts...)
 			if err2 == nil && resp2 != nil {
 				rawJSON2 := extractJSON(resp2.Content)
 				var judgeResult2 struct {

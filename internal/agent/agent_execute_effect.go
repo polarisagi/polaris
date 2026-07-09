@@ -289,8 +289,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			if err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)
 			}
-			//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-			ch, streamErr := a.provider.StreamInfer(ctx, reqMsgs, types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode))
+			ch, streamErr := safecall.StreamInfer(ctx, a.provider, reqMsgs, types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode))
 			if streamErr != nil {
 				inferErr = streamErr
 			} else {

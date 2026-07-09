@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
@@ -59,8 +60,7 @@ func (c *Compressor) summarize(ctx context.Context, msgs []apptypes.Message, max
 		Temperature: 0.3,
 	}
 
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	ch, err := provider.StreamInfer(ctx, inferReq.Messages)
+	ch, err := safecall.StreamInfer(ctx, provider, inferReq.Messages)
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "Compressor.summarize", err)
 	}

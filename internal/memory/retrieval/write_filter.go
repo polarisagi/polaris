@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/memory/store"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -102,8 +103,7 @@ func (f *WriteFilter) llmEvaluate(
 		truncate(content, 500),
 	)
 
-	//custom-nolint:bare-infer // 历史代码暂留，后续重构替换
-	resp, err := f.provider.Infer(ctx,
+	resp, err := safecall.Infer(ctx, f.provider,
 		[]types.Message{{Role: "user", Content: prompt}},
 		types.WithMaxTokens(64),
 	)
