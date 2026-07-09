@@ -82,3 +82,19 @@ LocalProbeResult struct {
 	PeakRSSBytes    uint64 // 本进程峰值常驻内存（ru_maxrss）
 	UsedMemoryBytes uint64 // 系统当前已用内存（TotalRAM - AvailableRAM）
 }
+
+// @consumer: internal/gateway/server (字段类型), server/chat, server/plugin, server/sysadmin
+// LLMRegistry server 包对 LLM Provider 注册表的消费端接口（超集）。
+// 实现：llm.ProviderRegistry
+type LLMRegistry interface {
+	// PickProvider 按角色选取最优 Provider（返回 nil 表示无可用 Provider）。
+	PickProvider(role string) Provider
+	// PickProviderName 按角色返回最优 Provider 的注册名（用于日志/遥测）。
+	PickProviderName(role string) string
+	// PickProviderByRecordID 按 provider_models.id 精确选取（用户手动选模型时调用）。
+	PickProviderByRecordID(mID string) Provider
+	// UnregisterAll 清空所有已注册 Provider（DB 热重载前调用）。
+	UnregisterAll()
+	// RegisterWithRole 注册一个 Provider，绑定路由角色。
+	RegisterWithRole(name, displayName, role string, p Provider)
+}

@@ -21,15 +21,6 @@ type MCPManager interface {
 	IsPluginConnected(pluginID string) bool
 }
 
-// LLMRegistry chat 包对 LLM Provider 注册表的消费端接口。
-// 实现：llm.ProviderRegistry
-type LLMRegistry interface {
-	PickProvider(role string) protocol.Provider
-	PickProviderName(role string) string
-	// PickProviderByRecordID 按 provider_models.id 精确选取（用户手动指定模型时调用）。
-	PickProviderByRecordID(mID string) protocol.Provider
-}
-
 // STTTranscriber chat 包对语音识别引擎的消费端接口（仅 chat/audio.go 实际调用的方法）。
 // 实现：llm/stt.Engine（Sherpa-ONNX FFI 桥接，唯一实现）。
 type STTTranscriber interface {

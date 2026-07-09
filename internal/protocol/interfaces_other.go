@@ -42,3 +42,8 @@ HITL interface {
 	Respond(ctx context.Context, checkpointID string, response types.HITLResponse) error
 	Pending(ctx context.Context) ([]types.HITLPrompt, error)
 }
+
+// ChannelDispatcher 真实通知发送接口（Slack/Email/Desktop 实现此接口）
+type ChannelDispatcher interface {
+	Dispatch(ctx context.Context, msg types.HITLNotification) error
+}

@@ -22,16 +22,11 @@ type ChatDispatcher interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
 }
 
-// LLMRegistry workflowadmin 消费方视角的最小 Provider 选择接口。
-type LLMRegistry interface {
-	PickProvider(role string) protocol.Provider
-}
-
 // WorkflowAdmin 承载 workflow CRUD + cron 触发 + 顺序执行引擎。
 type WorkflowAdmin struct {
 	DB           protocol.SQLQuerier
 	WorkflowRepo repo.WorkflowRepository
-	Registry     LLMRegistry
+	Registry     protocol.LLMRegistry
 	Chat         ChatDispatcher
 	Agent        protocol.AgentController
 
@@ -43,7 +38,7 @@ type WorkflowAdmin struct {
 func NewWorkflowAdmin(
 	db protocol.SQLQuerier,
 	workflowRepo repo.WorkflowRepository,
-	registry LLMRegistry,
+	registry protocol.LLMRegistry,
 	chat ChatDispatcher,
 	agent protocol.AgentController,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),

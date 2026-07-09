@@ -38,10 +38,6 @@ type HITLGateway interface {
 	Prompt(ctx context.Context, p types.HITLPrompt) (*types.HITLResponse, error)
 }
 
-type LLMRegistry interface {
-	PickProvider(role string) protocol.Provider
-}
-
 type CronAdmin struct {
 	DB               protocol.SQLQuerier
 	Agent            protocol.AgentController
@@ -50,7 +46,7 @@ type CronAdmin struct {
 	ChannelMgr       ChannelManager
 	HITLGateway      HITLGateway
 	HTTPClient       *http.Client
-	Registry         LLMRegistry
+	Registry         protocol.LLMRegistry
 	TemplateCacheMap *sync.Map
 	LastEventOffset  int64
 
@@ -68,7 +64,7 @@ func NewCronAdmin(
 	channelMgr ChannelManager,
 	hitlGateway HITLGateway,
 	httpClient *http.Client,
-	registry LLMRegistry,
+	registry protocol.LLMRegistry,
 	templateCacheMap *sync.Map,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	newWorktreeManager func(workingDir, worktreeRoot string) WorktreeManager,

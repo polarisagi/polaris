@@ -97,12 +97,6 @@ type Relation struct {
 	TaintLevel int            `json:"taint_level"`
 }
 
-// HybridRetriever runs BM25 + Dense + Graph Traversal, fused via Reciprocal Rank Fusion.
-// 架构文档: docs/arch/M10-Knowledge-RAG.md §2.1
-type HybridRetriever interface {
-	Search(ctx context.Context, query *SearchQuery) ([]Chunk, error)
-}
-
 type SearchQuery struct {
 	Text      string    `json:"text"`
 	Embedding []float64 `json:"embedding,omitempty"`

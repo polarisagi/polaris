@@ -94,6 +94,14 @@ AgentController interface {
 	SubscribeStream(ctx context.Context) <-chan types.AgentStreamEvent
 }
 
+// @consumer internal/gateway/server/chat
+// AgentPool 管理 per-session Agent 生命周期。
+// Acquire 返回该 session 专属 Agent 及 release 回调；调用方 defer release()。
+// 超出容量时 Acquire 阻塞最多 100ms，超时返回 apperr.CodeResourceExhausted。
+type AgentPool interface {
+	Acquire(ctx context.Context, sessionID string) (AgentController, func(), error)
+}
+
 type
 
 // AgentInvoker 用于触发 Agent 会话。

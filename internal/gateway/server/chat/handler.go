@@ -17,13 +17,6 @@ import (
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
-// AgentPool 管理 per-session Agent 生命周期。
-// Acquire 返回该 session 专属 Agent 及 release 回调；调用方 defer release()。
-// 超出容量时 Acquire 阻塞最多 100ms，超时返回 apperr.CodeResourceExhausted。
-type AgentPool interface {
-	Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error)
-}
-
 type SessionCompressor interface {
 	Stats(msgs []apptypes.Message) types.ContextStats
 	ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error)
@@ -34,7 +27,7 @@ type ChatHandler struct {
 	ChatRepo      protocol.ChatRepository
 	ProviderRepo  protocol.ProviderRepository
 	SystemRepo    repo.SystemRepository
-	AgentPool     AgentPool
+	AgentPool     protocol.AgentPool
 	Blackboard    protocol.Blackboard
 	Compressor    *Compressor
 	SlashRouter   *SlashCommandRouter
@@ -50,7 +43,7 @@ type ChatHandler struct {
 
 	Hooks                   HookRunner
 	DataDir                 string
-	Registry                LLMRegistry
+	Registry                protocol.LLMRegistry
 	SkillReg                protocol.SkillRegistry
 	ToolReg                 protocol.ToolRegistry
 	MCPMgr                  MCPManager
@@ -95,7 +88,7 @@ type Dependencies struct {
 	ChatRepo              protocol.ChatRepository
 	ProviderRepo          protocol.ProviderRepository
 	SystemRepo            repo.SystemRepository
-	AgentPool             AgentPool
+	AgentPool             protocol.AgentPool
 	Blackboard            protocol.Blackboard
 	Compressor            *Compressor
 	TranscriptDir         string
@@ -103,7 +96,7 @@ type Dependencies struct {
 	SoulMDContent         *string
 	Hooks                 HookRunner
 	DataDir               string
-	Registry              LLMRegistry
+	Registry              protocol.LLMRegistry
 	ServerPlatform        string
 	BaseSystemPromptTpl   string
 	ActivatedSystemPrompt string

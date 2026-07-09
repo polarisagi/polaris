@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/pkg/types"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -103,10 +105,7 @@ func TestHybridRetrieverImpl_Search(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	results, err := retriever.Search(context.Background(), &SearchQuery{
-		Text: "yellow",
-		TopK: 10,
-	})
+	results, err := retriever.Search(context.Background(), "yellow", types.SearchScope{}, types.RetrievalConfig{FinalTopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

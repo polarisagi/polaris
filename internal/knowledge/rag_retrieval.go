@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
@@ -35,39 +36,41 @@ func (r *DefaultHybridRetriever) Engine() *search.HybridSearchEngine {
 	return r.engine
 }
 
-func (r *DefaultHybridRetriever) Search(ctx context.Context, query *SearchQuery) ([]Chunk, error) {
-	if query == nil || query.Text == "" {
+func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
+	if query == "" {
 		return nil, apperr.New(apperr.CodeInvalidInput, "empty query")
 	}
 
-	config := search.RetrievalConfig{
+	searchConfig := search.RetrievalConfig{
 		BM25Weight:   0.3,
 		VectorWeight: 0.6,
 		GraphWeight:  0.1,
 		RRFK:         60,
 		OversampleN:  3,
 		RerankTopM:   50,
-		FinalTopK:    query.TopK,
+		FinalTopK:    config.FinalTopK,
 		Reranker:     r.reranker,
 	}
-	if config.FinalTopK <= 0 {
-		config.FinalTopK = 5
+	if searchConfig.FinalTopK <= 0 {
+		searchConfig.FinalTopK = 5
 	}
 
-	fragments, err := r.engine.Search(ctx, query.Text, []byte("chunk:"), config)
+	fragments, err := r.engine.Search(ctx, query, []byte("chunk:"), searchConfig)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "DefaultHybridRetriever.Search", err)
 	}
 
-	var finalResults []Chunk //nolint:prealloc
+	var results []types.ScoredFragment
 	for _, f := range fragments {
-		finalResults = append(finalResults, Chunk{
-			ID:      f.Source,
-			Content: f.Content,
+		results = append(results, types.ScoredFragment{
+			Content:    f.Content,
+			Score:      f.Score,
+			Source:     f.Source,
+			Metadata:   f.Metadata,
+			TaintLevel: parseTaintLevel(f.Metadata["taint_level"]),
 		})
 	}
-
-	return finalResults, nil
+	return results, nil
 }
 
 // ContextExpander 将 LeafChunk 扩展为 AugmentedContext（父块 + 前后兄弟块）。
@@ -191,7 +194,7 @@ weight 之和必须为 1.0，scope 为空表示全局检索。`},
 // <8GB VPS（FeatureDeepRAG disabled）：HybridRetriever → ContextExpander
 // Tier 0+（≥8GB，FeatureDeepRAG enabled）：QueryPlanner → StructuredNavigator → HybridRetriever → ContextExpander
 type KnowledgeBase struct {
-	retriever   HybridRetriever
+	retriever   protocol.HybridRetriever
 	expander    *ContextExpander
 	navigator   *StructuredNavigator      // nil when FeatureDeepRAG disabled (<8GB VPS)
 	planner     *QueryPlanner             // nil when FeatureDeepRAG disabled (<8GB VPS)
@@ -202,7 +205,7 @@ type KnowledgeBase struct {
 }
 
 func NewKnowledgeBase(
-	retriever HybridRetriever,
+	retriever protocol.HybridRetriever,
 	expander *ContextExpander,
 	navigator *StructuredNavigator, // 传 nil 时自动降级（<8GB VPS 或 FeatureDeepRAG 未启用）
 	planner *QueryPlanner, // 传 nil 时自动降级
@@ -248,19 +251,26 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 				scope = docID
 			}
 		}
-		sq := &SearchQuery{
-			Text:     sub.Text,
-			TopK:     req.TopK,
-			DocScope: scope,
+		scopeConfig := types.SearchScope{
+			Type:    "document_tree",
+			Subtree: scope,
 		}
-		chunks, err := kb.retriever.Search(ctx, sq)
+		chunks, err := kb.retriever.Search(ctx, sub.Text, scopeConfig, types.RetrievalConfig{FinalTopK: req.TopK})
 		if err != nil {
 			continue
 		}
 		for _, c := range chunks {
-			if _, dup := seen[c.ID]; !dup {
-				seen[c.ID] = struct{}{}
-				allChunks = append(allChunks, c)
+			if _, dup := seen[c.Source]; !dup {
+				seen[c.Source] = struct{}{}
+				chunk := Chunk{
+					ID:          c.Source,
+					DocID:       c.Source,
+					Content:     c.Content,
+					TaintLevel:  int(c.TaintLevel),
+					TaintSource: c.Metadata["taint_source"],
+					SourceURI:   c.Source,
+				}
+				allChunks = append(allChunks, chunk)
 			}
 		}
 	}
@@ -275,4 +285,15 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 		return nil, nil
 	}
 	return kb.expander.Expand(ctx, allChunks)
+}
+
+func parseTaintLevel(s string) types.TaintLevel {
+	if s == "" {
+		return 0
+	}
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return types.TaintLevel(i)
 }

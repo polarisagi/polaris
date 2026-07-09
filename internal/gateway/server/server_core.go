@@ -32,7 +32,7 @@ type Server struct {
 	addr           string
 	srv            *http.Server
 	isReady        atomic.Bool
-	agentPool      chat.AgentPool
+	agentPool      protocol.AgentPool
 	blackboard     protocol.Blackboard
 	hitlGateway    protocol.HITL
 	db             protocol.SQLQuerier
@@ -45,7 +45,7 @@ type Server struct {
 	automationRepo prepo.AutomationRepository
 	workflowRepo   prepo.WorkflowRepository
 	appRepo        prepo.AppRepository
-	registry       LLMRegistry           // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
+	registry       protocol.LLMRegistry  // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
 	httpClient     *http.Client          // 复用 SafeHTTPClient
 	transcriptDir  string                // per-session JSONL transcript 目录
 	hooks          *sysadmin.HookRunner  // Shell Script Hooks（End-User 扩展点）

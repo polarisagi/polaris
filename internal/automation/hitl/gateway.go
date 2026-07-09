@@ -17,17 +17,9 @@ import (
 
 // GatewayImpl 实现了 protocol.HITL，管理人机交互网关 [ESCALATE]。
 // 架构文档: docs/arch/M13-Interface-Scheduler.md §2.4
-type HITLNotification struct {
-	CheckpointID string
-	TaskID       string
-	Description  string
-	Risk         string
-	Timeout      int64
-	ReviewURL    string
-}
 
 type Notifier interface {
-	Notify(ctx context.Context, msg HITLNotification) error
+	Notify(ctx context.Context, msg types.HITLNotification) error
 }
 
 type GatewayImpl struct {
@@ -135,7 +127,7 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	}
 	if g.notifier != nil {
 		concurrent.SafeGo(context.Background(), "automation.hitl.notify", func(ctx context.Context) {
-			_ = g.notifier.Notify(ctx, HITLNotification{
+			_ = g.notifier.Notify(ctx, types.HITLNotification{
 				CheckpointID: p.ID,
 				// TaskID 此前硬编码为空字符串，Slack/Email 通知里永远看不出是哪个
 				// Agent 发起的审批；HITLPrompt 补齐 AgentID 字段后一并带上
@@ -311,14 +303,9 @@ func (g *GatewayImpl) Pending(ctx context.Context) ([]types.HITLPrompt, error) {
 	return prompts, nil
 }
 
-// ChannelDispatcher 真实通知发送接口（Slack/Email/Desktop 实现此接口）
-type ChannelDispatcher interface {
-	Dispatch(ctx context.Context, msg HITLNotification) error
-}
-
 // ChannelNotifier 适配器实现
 type ChannelNotifier struct {
-	dispatcher ChannelDispatcher // nil 表示未配置
+	dispatcher protocol.ChannelDispatcher // nil 表示未配置
 }
 
 func NewChannelNotifier() *ChannelNotifier {
@@ -326,11 +313,11 @@ func NewChannelNotifier() *ChannelNotifier {
 }
 
 // SetDispatcher 注入具体通知 dispatcher（Slack/Email/Desktop）
-func (c *ChannelNotifier) SetDispatcher(d ChannelDispatcher) {
+func (c *ChannelNotifier) SetDispatcher(d protocol.ChannelDispatcher) {
 	c.dispatcher = d
 }
 
-func (c *ChannelNotifier) Notify(ctx context.Context, msg HITLNotification) error {
+func (c *ChannelNotifier) Notify(ctx context.Context, msg types.HITLNotification) error {
 	slog.Warn("hitl: approval required",
 		"checkpoint_id", msg.CheckpointID,
 		"task_id", msg.TaskID,
@@ -365,7 +352,7 @@ func (g *GatewayImpl) BroadcastTainted(ctx context.Context, event string, taintL
 		return nil
 	}
 
-	return g.notifier.Notify(ctx, HITLNotification{
+	return g.notifier.Notify(ctx, types.HITLNotification{
 		CheckpointID: fmt.Sprintf("taint_%s_%d", event, time.Now().UnixNano()),
 		TaskID:       event,
 		Description:  fmt.Sprintf("Taint level %d broadcast: %s", int(taintLevel), event),

@@ -37,13 +37,6 @@ type ExtensionInstaller interface {
 	InstallExtension(ctx context.Context, req protocol.ExtensionInstallRequest) error
 }
 
-// LLMRegistry sysadmin 包对 LLM Provider 注册表的消费端接口。
-// 实现：llm.ProviderRegistry
-type LLMRegistry interface {
-	// PickProvider 按角色名选取最优 Provider（default / general 等）。
-	PickProvider(role string) protocol.Provider
-}
-
 // PromptManager sysadmin 包对提示词管理器的消费端接口。
 // 实现：prompt.Manager
 type PromptManager interface {

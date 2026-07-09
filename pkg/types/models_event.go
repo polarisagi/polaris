@@ -1,6 +1,8 @@
 package types
 
-import "time"
+import (
+	"time"
+)
 
 type
 
@@ -11,6 +13,17 @@ BlackboardEvent struct {
 	AgentID   string
 	Payload   []byte
 	Timestamp int64
+	Err       error
+}
+
+// HITLNotification 待发送的人工审批通知消息。
+type HITLNotification struct {
+	CheckpointID string
+	TaskID       string
+	Description  string
+	Risk         string
+	Timeout      int64
+	ReviewURL    string
 }
 
 type

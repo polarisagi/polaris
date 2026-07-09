@@ -24,11 +24,6 @@ type ChatDispatcher interface {
 	ListMessages(ctx context.Context, sessionID string) ([]types.Message, error)
 }
 
-// LLMRegistry channelsadmin 消费方视角的最小 Provider 选择接口。
-type LLMRegistry interface {
-	PickProvider(role string) protocol.Provider
-}
-
 // HookFirer channelsadmin 消费方视角的最小 Hook 触发接口
 // （sysadmin.HookRunner 的子集，结构性满足，避免 channelsadmin → sysadmin 的
 // 反向 import 造成包循环）。
@@ -56,7 +51,7 @@ type ChannelsAdmin struct {
 	DB          protocol.SQLQuerier
 	ChannelRepo repo.ChannelRepository
 	ChannelMgr  ChannelMgr
-	Registry    LLMRegistry
+	Registry    protocol.LLMRegistry
 	Chat        ChatDispatcher
 	Hooks       HookFirer
 	Cron        WebhookAutomationTrigger
@@ -70,7 +65,7 @@ func NewChannelsAdmin(
 	db protocol.SQLQuerier,
 	channelRepo repo.ChannelRepository,
 	channelMgr ChannelMgr,
-	registry LLMRegistry,
+	registry protocol.LLMRegistry,
 	chat ChatDispatcher,
 	hooks HookFirer,
 	cron WebhookAutomationTrigger,

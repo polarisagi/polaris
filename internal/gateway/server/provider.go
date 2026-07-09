@@ -17,24 +17,6 @@ import (
 // @consumer: server.go（字段类型），server/chat, server/plugin, server/sysadmin（共享超集）
 // @producer: 各具体模块由 cmd/polaris/boot_server.go 注入
 
-// LLMRegistry server 包对 LLM Provider 注册表的消费端接口（超集）。
-// 实现：llm.ProviderRegistry
-// 注：server.go 将同一 registry 同时传给 provider.ProviderHandler（需 Register*）
-//
-//	和 chat.ChatHandler（需 PickProviderByRecordID），因此 server 层超集包含所有方法。
-type LLMRegistry interface {
-	// PickProvider 按角色选取最优 Provider（返回 nil 表示无可用 Provider）。
-	PickProvider(role string) protocol.Provider
-	// PickProviderName 按角色返回最优 Provider 的注册名（用于日志/遥测）。
-	PickProviderName(role string) string
-	// PickProviderByRecordID 按 provider_models.id 精确选取（用户手动选模型时调用）。
-	PickProviderByRecordID(mID string) protocol.Provider
-	// UnregisterAll 清空所有已注册 Provider（DB 热重载前调用）。
-	UnregisterAll()
-	// RegisterWithRole 注册一个 Provider，绑定路由角色。
-	RegisterWithRole(name, displayName, role string, p protocol.Provider)
-}
-
 // ChannelStarter server 包对聊天平台管理器的消费端接口（超集）。
 // 实现：channel.Manager
 // server.go 将同一实例分别用于启动/停止（RestoreChannelsFromDB/StopAll）

@@ -45,7 +45,7 @@ type HybridRetrieverImpl struct {
 	reranker  protocol.Reranker        // optional，Cross-encoder reranking
 }
 
-var _ HybridRetriever = (*HybridRetrieverImpl)(nil)
+var _ protocol.HybridRetriever = (*HybridRetrieverImpl)(nil)
 
 func (hr *HybridRetrieverImpl) SetReranker(r protocol.Reranker) {
 	hr.reranker = r
@@ -72,12 +72,11 @@ func NewHybridRetrieverWithGraph(db protocol.SQLQuerier, embedder VectorEmbedder
 }
 
 // Search 执行混合检索。
-// TopK ≤ 0 时默认返回 10 条。
-func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) ([]Chunk, error) {
-	if query == nil || query.Text == "" {
+func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
+	if query == "" {
 		return nil, nil
 	}
-	topK := query.TopK
+	topK := config.FinalTopK
 	if topK <= 0 {
 		topK = 10
 	}
@@ -89,7 +88,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) (
 	wg.Add(1)
 	concurrent.SafeGo(ctx, "knowledge.retriever.search_fts", func(ctx context.Context) {
 		defer wg.Done()
-		res, err := hr.searchFTS(ctx, query.Text, topK*3)
+		res, err := hr.searchFTS(ctx, query, topK*3)
 		if err != nil {
 			ftsErr = err
 			return
@@ -101,7 +100,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) (
 		wg.Add(1)
 		concurrent.SafeGo(ctx, "knowledge.retriever.search_vector", func(ctx context.Context) {
 			defer wg.Done()
-			vr, err := hr.searchVector(ctx, query.Text, topK*3)
+			vr, err := hr.searchVector(ctx, query, topK*3)
 			if err == nil {
 				vecResults = vr
 			}
@@ -112,7 +111,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) (
 		wg.Add(1)
 		concurrent.SafeGo(ctx, "knowledge.retriever.search_graph", func(ctx context.Context) {
 			defer wg.Done()
-			gr, err := hr.graph.TraverseChunks(ctx, query.Text, topK*3)
+			gr, err := hr.graph.TraverseChunks(ctx, query, topK*3)
 			if err == nil {
 				graphResults = gr
 			}
@@ -134,13 +133,22 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query *SearchQuery) (
 	}
 
 	if hr.reranker != nil && len(finalResults) > 0 {
-		finalResults = hr.applyReranker(ctx, query.Text, finalResults)
+		finalResults = hr.applyReranker(ctx, query, finalResults)
 	}
 
 	if len(finalResults) > topK {
 		finalResults = finalResults[:topK]
 	}
-	return finalResults, nil
+
+	scored := make([]types.ScoredFragment, len(finalResults))
+	for i, c := range finalResults {
+		scored[i] = types.ScoredFragment{
+			Content:    c.Content,
+			Source:     c.SourceURI,
+			TaintLevel: types.TaintLevel(c.TaintLevel),
+		}
+	}
+	return scored, nil
 }
 
 func (hr *HybridRetrieverImpl) applyReranker(ctx context.Context, queryText string, results []Chunk) []Chunk {

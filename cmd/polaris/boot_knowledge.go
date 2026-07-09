@@ -24,7 +24,7 @@ import (
 // KnowledgeBundle 持有 §7~§7.7 所有知识 RAG 产物。
 type KnowledgeBundle struct {
 	Ingester      *knowledgepkg.DefaultIngestionPipeline
-	Retriever     knowledgepkg.HybridRetriever
+	Retriever     protocol.HybridRetriever
 	KnowledgeBase *knowledgepkg.KnowledgeBase
 }
 
@@ -40,7 +40,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		slog.Info("polaris: ApproximateColBERTReranker enabled (FeatureDeepRAG)")
 	}
 
-	var retriever knowledgepkg.HybridRetriever
+	var retriever protocol.HybridRetriever
 	if sb.SurrealStore != nil { //nolint:nestif // 原因：启动期组合根（composition root）按 Tier 装配双检索栈 + ColBERT 重排 + CorpusStats 持久化，属一次性初始化分支树而非热路径业务逻辑，拆分为多个私有函数收益有限且会打散启动顺序的可读性，参考 internal/automation/hitl/gateway.go Prompt() 的既有豁免先例。
 		// Tier0+(≥8GB)：SQLite FTS5 + SurrealDB HNSW 双路检索
 		var knowledgeEmb knowledgepkg.VectorEmbedder

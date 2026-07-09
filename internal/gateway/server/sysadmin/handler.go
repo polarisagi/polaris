@@ -48,7 +48,7 @@ type SysAdminHandler struct {
 	AppRepo        repo.AppRepository
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
-	Registry       LLMRegistry
+	Registry       protocol.LLMRegistry
 	HITLGateway    protocol.HITL
 	ToolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	ChannelMgr     interface {
@@ -95,7 +95,7 @@ type Dependencies struct {
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Chat           ChatDispatcher
-	Registry       LLMRegistry
+	Registry       protocol.LLMRegistry
 	HTTPClient     *http.Client
 	ExtRepo        protocol.ExtensionRepository
 	// HITLGateway 2026-07-07 补齐：此前 NewSysAdminHandler 未接收该依赖，
