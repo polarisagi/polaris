@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -305,18 +304,43 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 		sm.current = t.To
 
 		if needActivate {
-			concurrent.SafeGo(ctx, "ExtensionActivator", func(ctx context.Context) {
-				hints, hintErr := sm.activator.FindAndActivate(ctx, goalToActivate)
-				if hintErr != nil || len(hints) == 0 {
-					return
-				}
-				sm.hintsMu.Lock()
-				sm.dynamicHints = hints
-				sm.hintsMu.Unlock()
-				slog.Info("extension_activator: activated extensions for replan",
-					"count", len(hints),
-					"goal", goalToActivate)
-			})
+			slog.Debug("kernel: returning deterministic effect for extension activation", "goal", goalToActivate)
+			eff := protocol.DeterministicEffect{
+				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
+					// 设置超时，避免激活过程卡死导致状态机阻塞
+					// 这里假设超时时间从配置项中获取，默认 3 秒 (来自 state.yaml: replan_extension_activation_s)
+					timeout := 3 * time.Second
+
+					actCtx, cancel := context.WithTimeout(effCtx, timeout)
+					defer cancel()
+
+					hints, hintErr := sm.activator.FindAndActivate(actCtx, goalToActivate)
+					if hintErr != nil {
+						slog.Warn("extension_activator: failed to activate extensions for replan", "err", hintErr)
+						// 即使激活失败，也降级继续进行 Replan，不阻塞业务主流程
+					} else if len(hints) > 0 {
+						// 写入动态 hints。由于目前这里是在单线程（Dispatch 后）串行执行 DeterministicEffect，
+						// 理论上无并发冲突。但为保险起见，保留 hintsMu 锁，防止外部读冲突。
+						sm.hintsMu.Lock()
+						sm.dynamicHints = hints
+						sm.hintsMu.Unlock()
+						slog.Info("extension_activator: activated extensions for replan",
+							"count", len(hints),
+							"goal", goalToActivate)
+					}
+					// 激活任务完成后，自动触发 TriggerReplanDone 转移到 S_PLAN
+					return "S_REPLAN_DONE", nil
+				},
+			}
+			effects = append(effects, eff)
+		} else {
+			// 如果不需要激活，则直接返回一个空 effect 立即触发 ReplanDone
+			eff := protocol.DeterministicEffect{
+				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
+					return "S_REPLAN_DONE", nil
+				},
+			}
+			effects = append(effects, eff)
 		}
 		return effects, nil
 	}
