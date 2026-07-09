@@ -1,6 +1,8 @@
 package sysadmin
 
 import (
+	"time"
+
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/insightsadmin"
@@ -57,6 +59,7 @@ type SysAdminHandler struct {
 		Stop(channelID string)
 		ExtractMessage(channelType string, body []byte, r *http.Request) adapter.Message
 	}
+	StreamIdleTimeout  time.Duration
 	TemplateCacheMap   *sync.Map
 	HTTPClient         *http.Client
 	InstallMgr         ExtensionInstaller
@@ -98,17 +101,14 @@ type Dependencies struct {
 	Registry       protocol.LLMRegistry
 	HTTPClient     *http.Client
 	ExtRepo        protocol.ExtensionRepository
-	// HITLGateway 2026-07-07 补齐：此前 NewSysAdminHandler 未接收该依赖，
-	// cronadmin.CronAdmin.HITLGateway 永远是 nil，导致 RequiresHITL=true 的
-	// automation 静默跳过审批直接执行（见 cron_runner.go:207 的 nil check，
-	// 有判空不会 panic，但审批形同虚设）。
-	HITLGateway protocol.HITL
-	ChannelMgr  interface {
+	HITLGateway    protocol.HITL
+	ChannelMgr     interface {
 		SendReply(ctx context.Context, channelID string, replyTo string, options map[string]any, srcMsg adapter.Message, replyText string)
 		Start(channelType, channelID string, cfg map[string]any)
 		Stop(channelID string)
 		ExtractMessage(channelType string, body []byte, r *http.Request) adapter.Message
 	}
+	StreamIdleTimeout time.Duration
 }
 
 // NewSysAdminHandler 故意不做构造函数级 fail-closed nil 强制校验——本包已有
@@ -119,26 +119,27 @@ type Dependencies struct {
 // goroutine（已修复为 concurrent.SafeGo），非构造函数。
 func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 	h := &SysAdminHandler{
-		DB:             deps.DB,
-		SystemRepo:     deps.SystemRepo,
-		BudgetRepo:     deps.BudgetRepo,
-		ChannelRepo:    deps.ChannelRepo,
-		WorkflowRepo:   deps.WorkflowRepo,
-		MCPMgr:         deps.MCPMgr,
-		Hooks:          deps.Hooks,
-		DataDir:        deps.DataDir,
-		ChatRepo:       deps.ChatRepo,
-		ProviderRepo:   deps.ProviderRepo,
-		AppRepo:        deps.AppRepo,
-		ServerAddr:     deps.ServerAddr,
-		AutomationRepo: deps.AutomationRepo,
-		Chat:           deps.Chat,
-		Registry:       deps.Registry,
-		HTTPClient:     deps.HTTPClient,
-		ExtRepo:        deps.ExtRepo,
-		HITLGateway:    deps.HITLGateway,
-		ChannelMgr:     deps.ChannelMgr,
-		Insights:       insightsadmin.NewInsightsAdmin(deps.DB),
+		DB:                deps.DB,
+		SystemRepo:        deps.SystemRepo,
+		BudgetRepo:        deps.BudgetRepo,
+		ChannelRepo:       deps.ChannelRepo,
+		WorkflowRepo:      deps.WorkflowRepo,
+		MCPMgr:            deps.MCPMgr,
+		Hooks:             deps.Hooks,
+		DataDir:           deps.DataDir,
+		ChatRepo:          deps.ChatRepo,
+		ProviderRepo:      deps.ProviderRepo,
+		AppRepo:           deps.AppRepo,
+		ServerAddr:        deps.ServerAddr,
+		AutomationRepo:    deps.AutomationRepo,
+		Chat:              deps.Chat,
+		Registry:          deps.Registry,
+		HTTPClient:        deps.HTTPClient,
+		ExtRepo:           deps.ExtRepo,
+		HITLGateway:       deps.HITLGateway,
+		ChannelMgr:        deps.ChannelMgr,
+		StreamIdleTimeout: deps.StreamIdleTimeout,
+		Insights:          insightsadmin.NewInsightsAdmin(deps.DB),
 	}
 	// 2026-07-07 R7 瘦身：workflow.go（原 730 行）拆为独立 workflowadmin 子包
 	// （沿用 cronadmin/insightsadmin 模式）。CronTickWorkflows 回调改指向

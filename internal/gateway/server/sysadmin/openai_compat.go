@@ -173,7 +173,15 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 		return
 	}
 
+	idleTimeout := h.StreamIdleTimeout
+	if idleTimeout == 0 {
+		idleTimeout = 60 * time.Second
+	}
+	timer := time.NewTimer(idleTimeout)
+	defer timer.Stop()
+
 	for {
+		timer.Reset(idleTimeout)
 		select {
 		case ev, ok := <-ch:
 			if !ok {
@@ -198,6 +206,16 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 					Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: " + ev.Content + "]"}}},
 				})
 			}
+		case <-timer.C:
+			// 响应流超时，提前结束
+			stop := "timeout"
+			h.writeOAIChunk(w, flusher, oaiChunk{
+				ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+				Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: stream timeout]"}, FinishReason: &stop}},
+			})
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
 		case <-ctx.Done():
 			return
 		}

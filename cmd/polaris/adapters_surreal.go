@@ -63,37 +63,6 @@ func (a *surrealCognAdapter) FTSSearch(query string, k int) ([]types.CognitiveSe
 	return out, nil
 }
 
-// ─── knowledgeCognAdapter ─────────────────────────────────────────────────────
-//
-// 将 *store.SurrealDBCoreStore 适配为 knowledge.CognitiveSearcher。
-// 返回类型 store.ScoredID → knowledgepkg.CognitiveSearchResult（两个包独立定义）。
-// TODO(BUG-5): 与 surrealCognAdapter 合并，将 CognitiveSearchResult 统一到 internal/protocol。
-type knowledgeCognAdapter struct{ s *store.SurrealDBCoreStore }
-
-func (a *knowledgeCognAdapter) VecKNN(query []float32, k int) ([]knowledgepkg.CognitiveSearchResult, error) {
-	hits, err := a.s.VecKNN(query, k)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]knowledgepkg.CognitiveSearchResult, len(hits))
-	for i, h := range hits {
-		out[i] = knowledgepkg.CognitiveSearchResult{ID: h.ID, Score: h.Score}
-	}
-	return out, nil
-}
-
-func (a *knowledgeCognAdapter) FTSSearch(query string, k int) ([]knowledgepkg.CognitiveSearchResult, error) {
-	hits, err := a.s.FTSSearch(query, k)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]knowledgepkg.CognitiveSearchResult, len(hits))
-	for i, h := range hits {
-		out[i] = knowledgepkg.CognitiveSearchResult{ID: h.ID, Score: h.Score}
-	}
-	return out, nil
-}
-
 // ─── knowledgeEmbedderAdapter ─────────────────────────────────────────────────
 //
 // 将 search.Embedder 适配为 knowledge.VectorEmbedder。

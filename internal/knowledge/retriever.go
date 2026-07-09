@@ -21,16 +21,11 @@ type VectorEmbedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
-// CognitiveSearchResult 认知检索结果（consumer-side）。
-type CognitiveSearchResult struct {
-	ID    string
-	Score float64
-}
-
-// CognitiveSearcher consumer-side 接口：SurrealDB FTS + HNSW 向量检索（Tier1+）。
+// CognitiveSearcher M10 知识专属的认知搜索引擎（Consumer-side）。
+// 用于 HybridRetrieverImpl.Search 并发支路调用。
 type CognitiveSearcher interface {
-	VecKNN(query []float32, k int) ([]CognitiveSearchResult, error)
-	FTSSearch(query string, k int) ([]CognitiveSearchResult, error)
+	VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error)
+	FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error)
 }
 
 // HybridRetrieverImpl 实现 HybridRetriever。
@@ -233,7 +228,9 @@ func (hr *HybridRetrieverImpl) searchVector(ctx context.Context, queryText strin
 	return hr.searchVectorFallback(ctx, queryEmbed, limit)
 }
 
-func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []CognitiveSearchResult) ([]Chunk, error) {
+// fetchCognitiveHits 从 cognitive search hits (含有 ID 和 Score) 还原完整的 chunk。
+// 因为 SurrealDB 层只返回了 ID，我们需要再回到 StorageRouter 查出 Document 和 Chunk 数据。
+func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []types.CognitiveSearchResult) ([]Chunk, error) {
 	var results []Chunk
 	for _, h := range hits {
 		var chunk Chunk
