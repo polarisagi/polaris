@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"embed"
 	"text/template"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 //go:embed *.tmpl
@@ -13,11 +15,11 @@ var FS embed.FS
 func Render(name string, data any) (string, error) {
 	tmpl, err := template.ParseFS(FS, name)
 	if err != nil {
-		return "", err
+		return "", apperr.Wrap(apperr.CodeInternal, "failed to parse template", err)
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", err
+		return "", apperr.Wrap(apperr.CodeInternal, "failed to execute template", err)
 	}
 	return buf.String(), nil
 }

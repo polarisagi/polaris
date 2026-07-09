@@ -1,7 +1,6 @@
 package lint_test
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"strings"
@@ -59,7 +58,7 @@ func Test_inv_NoBareGoroutine(t *testing.T) {
 						violations = append(violations, violation{
 							relPath: relPath,
 							line:    pos.Line,
-							detail:  fmt.Sprintf("裸 goroutine 调用违反约定，请使用 concurrent.SafeGo(ctx, name, fn) 包裹，或添加 //nolint:bare-goroutine 注释说明理由"),
+							detail:  "裸 goroutine 调用违反约定，请使用 concurrent.SafeGo(ctx, name, fn) 包裹，或添加 //nolint:bare-goroutine 注释说明理由",
 						})
 					}
 				}

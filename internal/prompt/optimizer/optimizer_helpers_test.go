@@ -2,11 +2,11 @@ package optimizer
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -18,7 +18,7 @@ type MockTestProvider struct {
 
 func (m *MockTestProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
 	if m.Fail {
-		return nil, errors.New("provider failed")
+		return nil, apperr.New(apperr.CodeInternal, "provider failed")
 	}
 	if len(msgs) > 0 {
 		m.CapturedPrompt = msgs[0].Content

@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -79,7 +80,9 @@ func StreamInfer(ctx context.Context, provider protocol.Provider, msgs []types.M
 		defer span.End()
 		defer close(outChan)
 		if metrics.InstrLLMLatencyMs != nil {
-			defer metrics.InstrLLMLatencyMs.Record(ctx, float64(time.Since(start).Milliseconds()), metric.WithAttributes(attribute.String("model", provider.ModelID())))
+			defer func() {
+				metrics.InstrLLMLatencyMs.Record(ctx, float64(time.Since(start).Milliseconds()), metric.WithAttributes(attribute.String("model", provider.ModelID())))
+			}()
 		}
 
 		idleTimeout := time.Duration(timeoutSec) * time.Second

@@ -3,6 +3,7 @@ linters:
   enable:
     - depguard
     - errorlint
+    - forbidigo
     - gochecknoglobals  # [Task 23] 禁止 internal/ 包级可变全局变量（豁免见 exclusions）
     - gocyclo
     - misspell
@@ -99,6 +100,12 @@ linters:
       errorf: true
       asserts: true
       comparison: true
+    forbidigo:
+      forbid:
+        - pattern: "^fmt\\.Errorf$"
+          msg: "禁止使用裸 fmt.Errorf，请使用 apperr.Wrap"
+        - pattern: "^errors\\.New$"
+          msg: "禁止使用裸 errors.New，请使用 apperr.New"
     gocyclo:
       min-complexity: 15
     nestif:
@@ -160,7 +167,7 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  new-from-rev: a3310f9bbc563950ed92bc1f851f66efe9360a8a
+  new-from-rev: f1c8205
 formatters:
   enable:
     - gofmt

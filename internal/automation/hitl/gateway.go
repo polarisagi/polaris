@@ -352,11 +352,15 @@ func (g *GatewayImpl) BroadcastTainted(ctx context.Context, event string, taintL
 		return nil
 	}
 
-	return g.notifier.Notify(ctx, types.HITLNotification{
+	err := g.notifier.Notify(ctx, types.HITLNotification{
 		CheckpointID: fmt.Sprintf("taint_%s_%d", event, time.Now().UnixNano()),
 		TaskID:       event,
 		Description:  fmt.Sprintf("Taint level %d broadcast: %s", int(taintLevel), event),
 		Risk:         fmt.Sprintf("taint_level_%d", int(taintLevel)),
 		Timeout:      int64(30 * time.Second),
 	})
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to broadcast taint via hitl notifier", err)
+	}
+	return nil
 }
