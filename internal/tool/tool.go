@@ -195,6 +195,11 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		if taskID != "" {
 			if postErr := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); postErr != nil {
 				slog.Warn("tool_registry: post-check failed (TOCTOU race detected after execution)", "task", taskID, "err", postErr)
+				return &types.ToolResult{
+					Success:    false,
+					Error:      "task reclaimed or revoked during execution (TOCTOU)",
+					TaintLevel: taintLevel,
+				}, apperr.New(apperr.CodeConflict, "tool_registry: side effect occurred after task was reclaimed/revoked")
 			}
 		}
 	}

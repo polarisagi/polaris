@@ -207,6 +207,8 @@ func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeRe
 							e.pruneDownstream(ctx, n.ID, plan)
 							e.DegradedReplan = true
 							firstErr = protocol.ErrAllProvidersFailed
+						} else if apperr.IsCode(result.Err, apperr.CodeConflict) {
+							firstErr = result.Err
 						} else {
 							firstErr = apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("node %s failed", n.ID), result.Err)
 						}

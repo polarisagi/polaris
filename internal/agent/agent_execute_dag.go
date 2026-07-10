@@ -356,6 +356,11 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			return nil
 		}
 
+		if apperr.IsCode(err, apperr.CodeConflict) {
+			a.asyncIntent(types.TriggerExecuteFail)
+			return err // Return directly for TOCTOU
+		}
+
 		// 执行失败 → 触发 S_ROLLBACK
 		a.asyncIntent(types.TriggerExecuteFail)
 		return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)

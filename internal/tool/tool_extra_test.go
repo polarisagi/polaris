@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -57,5 +59,51 @@ func TestToolExtra_RateLimiter(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	if !rl.Allow() {
 		t.Fatalf("expected allow after refill to succeed")
+	}
+}
+
+type mockFailingSideEffectChecker struct {
+	calls int
+}
+
+func (m *mockFailingSideEffectChecker) SideEffectPreCheck(ctx context.Context, taskID, agentID string, claimedVersion int32) error {
+	m.calls++
+	if m.calls >= 2 {
+		return apperr.New(apperr.CodeConflict, "mock TOCTOU error")
+	}
+	return nil
+}
+
+func TestExecuteTool_TOCTOU_PostCheck(t *testing.T) {
+	sbx := sandbox.NewInProcessSandbox()
+	router := sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0)
+	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil)
+	r := NewInMemoryToolRegistry(envelope)
+	r.WithSideEffectChecker(&mockFailingSideEffectChecker{})
+
+	_ = r.Register(minTool("toctou-tool"))
+	sbx.Register("toctou-tool", func(_ context.Context, _ []byte) ([]byte, error) {
+		return []byte("done"), nil
+	})
+
+	ctx := context.WithValue(ctxWithToken(), protocol.CtxTaskIDKey{}, "task-123")
+	// Also set IdempotencyKey so we can check it's not cached
+	ctx = context.WithValue(ctx, protocol.CtxIdempotencyKey{}, types.IdempotencyKey("idemp-key-1"))
+
+	res, err := r.ExecuteTool(ctx, "toctou-tool", []byte("data"), types.TaintNone)
+	if err == nil {
+		t.Fatal("expected error from TOCTOU post-check")
+	}
+	if !apperr.IsCode(err, apperr.CodeConflict) {
+		t.Fatalf("expected CodeConflict, got %v", err)
+	}
+	if res.Success {
+		t.Fatal("expected Success=false on TOCTOU error")
+	}
+
+	// Verify not cached in idempotency cache
+	cached, ok := r.idempotencyCache.get("idemp-key-1")
+	if ok || cached != nil {
+		t.Fatal("expected failed result not to be cached")
 	}
 }
