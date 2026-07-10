@@ -246,6 +246,27 @@ type SandboxConfig struct {
 	// 示例：["/home/user/projects", "/tmp/scratch"]
 	// 注意：bash/run_command 工具的进程沙箱仅允许读写这些路径（OS 级强制隔离）。
 	AllowedPaths []string `toml:"allowed_paths"`
+	// Remote 远端云沙箱（Sbx-L4）配置，见 RemoteSandboxConfig。
+	Remote RemoteSandboxConfig `toml:"remote"`
+}
+
+// RemoteSandboxConfig 远端云沙箱（Sbx-L4）配置。可选能力，非硬依赖（[Tier-0-Limit]）。
+// 用途：Tier-0 本地无法启动 L3 容器沙箱（内存不足）或需要更高计算力/隔离度时
+// （如 Python 数据科学类 Skill），将工具执行委托给远端 HTTP 执行器（自托管 VPS、
+// E2B、Modal、Daytona 等任意兼容端点）。涉及代码/数据离开本机发往第三方服务，
+// 默认关闭，需运营者显式配置 Endpoint 后启用。
+// 架构文档: docs/arch/00-Global-Dictionary.md §0 Sbx-L4；docs/arch/M07-Tool-Action-Layer.md §4.4。
+type RemoteSandboxConfig struct {
+	// Enabled 是否启用远端沙箱委托。默认 false。
+	Enabled bool `toml:"enabled"`
+	// Endpoint 远端执行器根 URL，如 "https://executor.example.com"。Enabled=true 时必填，
+	// 为空则跳过初始化并记录 Warn（fail-closed，不阻塞启动）。
+	Endpoint string `toml:"endpoint"`
+	// AuthToken Bearer 认证令牌。空 → 读 POLARIS_REMOTE_SANDBOX_TOKEN 环境变量
+	// （避免密钥明文写入配置文件，对齐 EmbeddingConfig.APIKey 先例）。
+	AuthToken string `toml:"auth_token"`
+	// TimeoutSec 单次调用超时秒数。0 = 默认 300s（对应重计算场景）。
+	TimeoutSec int `toml:"timeout_sec"`
 }
 
 // CompressorConfig 上下文压缩器配置，对齐 Claude Code 百分比阈值模型。

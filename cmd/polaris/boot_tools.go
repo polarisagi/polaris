@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"runtime"
 	"time"
 
@@ -117,6 +118,27 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	nativeOSSandbox := sandbox.NewNativeOSSandbox(cmdRunner)
 	sandboxRouter := sandbox.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, sb.Cfg.System.Tier)
 	sandboxRouter.WithNativeOS(nativeOSSandbox)
+	// RemoteSandbox（Sbx-L4，可选非硬依赖，[Tier-0-Limit]）：仅在运营者显式配置
+	// endpoint 并开启 enabled 时注入；未配置时 r.remote 保持 nil，SandboxRemote/
+	// SandboxContainer 路由请求按 sandbox_router.go 既有 fallback 链降级，不阻塞启动。
+	if sb.Cfg.Sandbox.Remote.Enabled {
+		if sb.Cfg.Sandbox.Remote.Endpoint == "" {
+			slog.Warn("polaris: remote sandbox (Sbx-L4) enabled but endpoint empty, skipping init")
+		} else {
+			authToken := sb.Cfg.Sandbox.Remote.AuthToken
+			if authToken == "" {
+				authToken = os.Getenv("POLARIS_REMOTE_SANDBOX_TOKEN")
+			}
+			remoteSandbox := sandbox.NewRemoteSandbox(
+				sb.Cfg.Sandbox.Remote.Endpoint,
+				authToken,
+				sb.Cfg.Sandbox.Remote.TimeoutSec,
+				nil, // nil → NewRemoteSandbox 内部使用 network.NewSafeHTTPClient（XR-06 出站网络安全要求）
+			)
+			sandboxRouter.WithRemote(remoteSandbox)
+			slog.Info("polaris: remote sandbox (Sbx-L4) initialized", "endpoint", sb.Cfg.Sandbox.Remote.Endpoint)
+		}
+	}
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
 	}

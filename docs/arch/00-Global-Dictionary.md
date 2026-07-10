@@ -14,7 +14,7 @@
 |------|------|--------|------|
 | 架构层次 | `Arch-L` | Arch-L0 / L1 / L2 / L3 | 基础设施 / 认知 / 协同 / 治理 |
 | 记忆层 | `Mem-L` | Mem-L0 / L1 / L2 / L3 | Working / Episodic / Semantic / Procedural |
-| 沙箱级 | `Sbx-L` | Sbx-L1 / L2 / L3 | InProc / Wasmtime / microVM |
+| 沙箱级 | `Sbx-L` | Sbx-L1 / L2 / L3 / L4 | InProc / Wasmtime / gVisor·microVM / Remote（远端 HTTP 执行器，`RemoteSandboxConfig`，可选非硬依赖，见 [Tier-0-Limit]）。L4-native 为 Tier-0 无容器运行时下 L3 的同级替代（Rust bwrap/Seatbelt，`NativeOSSandbox`），非独立编号 |
 | 演化级 | `Evo-L` | Evo-L0..L4 | 配置 / prompt / skill / 策略 / 源码 |
 | Hardware Tier | `HT` | HT0..HT3 | 8 / 16 / 24 / 64 GB |
 | Task Priority | `Priority-` | 0..3 | 用户交互 / 前台辅助 / 后台优化 / 最低 |

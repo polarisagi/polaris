@@ -249,8 +249,13 @@ func (c *LogicCollapseCompiler) Compile(ctx context.Context, req *CompileRequest
 
 // detectObfuscatedRisk 检测混淆绕过模式（正则多模式）。
 // 覆盖：eval/Function构造器调用、动态属性拼接访问、base64解码执行、import()动态模块。
-var (
-	riskPatterns = []*regexp.Regexp{
+// R1.3：sync.OnceValue 懒加载封装，禁止包级可变变量（GR-4-001 修复，对齐下方 getPIIRegex 先例）。
+//
+// new-from-rev 基线（f1c8205）存在而被豁免，此处为等价重构，显式豁免以保持一致
+//
+//nolint:gochecknoglobals // sync.OnceValue 懒加载只读正则，无可变状态；getPIIRegex 因先于
+var riskPatterns = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
 		regexp.MustCompile(`\beval\s*\(`),
 		regexp.MustCompile(`\bexec\s*\(`),
 		regexp.MustCompile(`import\s+os\b`),
@@ -258,10 +263,10 @@ var (
 		regexp.MustCompile(`__import__\s*\(`),
 		regexp.MustCompile(`getattr\s*\(`),
 	}
-)
+})
 
 func detectObfuscatedRisk(src string) bool {
-	for _, re := range riskPatterns {
+	for _, re := range riskPatterns() {
 		if re.MatchString(src) {
 			return true
 		}

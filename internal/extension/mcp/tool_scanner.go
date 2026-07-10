@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // ScanRisk 工具安全扫描风险等级。
@@ -40,54 +41,74 @@ type ToolScanResult struct {
 
 // ─── 注入模式正则 ─────────────────────────────────────────────────────────────
 
-// injectionPatternsDeny 命中则直接 Deny（典型攻击载荷）
-var injectionPatternsDeny = []*regexp.Regexp{
-	// 直接指令覆盖模式
-	regexp.MustCompile(`(?i)ignore\s+(all\s+)?previous\s+instructions?`),
-	regexp.MustCompile(`(?i)disregard\s+(all\s+)?previous\s+instructions?`),
-	regexp.MustCompile(`(?i)forget\s+(all\s+)?previous\s+instructions?`),
-	regexp.MustCompile(`(?i)override\s+(all\s+)?instructions?`),
-	// 系统提示重置
-	regexp.MustCompile(`(?i)(new|updated?)\s+system\s+prompt`),
-	regexp.MustCompile(`(?i)\[\[?SYSTEM\]?\]`),
-	regexp.MustCompile(`(?i)<\|system\|>`),
-	// 越权执行指令
-	regexp.MustCompile(`(?i)you\s+are\s+now\s+(a\s+)?(?:DAN|jailbreak|uncensored)`),
-	// 凭据窃取模式
-	regexp.MustCompile(`(?i)(send|exfiltrate|steal|leak|upload)\s+(api\s+key|password|secret|token|credential)`),
-	// 编码混淆（Base64 注入）
-	regexp.MustCompile(`(?i)base64\s*decode\s+and\s+(execute|run|eval)`),
-}
+// injectionPatternsDeny 命中则直接 Deny（典型攻击载荷）。
+// R1.3：包级可变变量禁用于 internal/，用 sync.OnceValue 封装为懒加载只读函数
+// （对齐 internal/knowledge/graphrag/entity.go 先例，GR-4-001 修复）。
+//
+// new-from-rev 基线（f1c8205）存在而被豁免，此处为等价重构，显式豁免以保持一致
+//
+//nolint:gochecknoglobals // sync.OnceValue 懒加载只读正则，无可变状态；entity.go 同类声明因先于
+var injectionPatternsDeny = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		// 直接指令覆盖模式
+		regexp.MustCompile(`(?i)ignore\s+(all\s+)?previous\s+instructions?`),
+		regexp.MustCompile(`(?i)disregard\s+(all\s+)?previous\s+instructions?`),
+		regexp.MustCompile(`(?i)forget\s+(all\s+)?previous\s+instructions?`),
+		regexp.MustCompile(`(?i)override\s+(all\s+)?instructions?`),
+		// 系统提示重置
+		regexp.MustCompile(`(?i)(new|updated?)\s+system\s+prompt`),
+		regexp.MustCompile(`(?i)\[\[?SYSTEM\]?\]`),
+		regexp.MustCompile(`(?i)<\|system\|>`),
+		// 越权执行指令
+		regexp.MustCompile(`(?i)you\s+are\s+now\s+(a\s+)?(?:DAN|jailbreak|uncensored)`),
+		// 凭据窃取模式
+		regexp.MustCompile(`(?i)(send|exfiltrate|steal|leak|upload)\s+(api\s+key|password|secret|token|credential)`),
+		// 编码混淆（Base64 注入）
+		regexp.MustCompile(`(?i)base64\s*decode\s+and\s+(execute|run|eval)`),
+	}
+})
 
 // injectionPatternsHITL 命中则 HITL（需人工审核）
-var injectionPatternsHITL = []*regexp.Regexp{
-	// 模拟合法工具
-	regexp.MustCompile(`(?i)pretend\s+(you\s+are|to\s+be)`),
-	regexp.MustCompile(`(?i)act\s+as\s+(if\s+)?you\s+(are|were)`),
-	// 隐藏行为声明
-	regexp.MustCompile(`(?i)without\s+(telling|informing|notifying)\s+(the\s+)?(user|human)`),
-	regexp.MustCompile(`(?i)secretly\s+(execute|run|perform|call)`),
-	regexp.MustCompile(`(?i)in\s+the\s+background\s+(?:also|additionally|secretly)`),
-	// 多步注入触发
-	regexp.MustCompile(`(?i)when\s+(you\s+)?(?:see|receive|read)\s+.*\s+(?:execute|run|call)`),
-}
+//
+//nolint:gochecknoglobals // 同上 injectionPatternsDeny 豁免理由
+var injectionPatternsHITL = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		// 模拟合法工具
+		regexp.MustCompile(`(?i)pretend\s+(you\s+are|to\s+be)`),
+		regexp.MustCompile(`(?i)act\s+as\s+(if\s+)?you\s+(are|were)`),
+		// 隐藏行为声明
+		regexp.MustCompile(`(?i)without\s+(telling|informing|notifying)\s+(the\s+)?(user|human)`),
+		regexp.MustCompile(`(?i)secretly\s+(execute|run|perform|call)`),
+		regexp.MustCompile(`(?i)in\s+the\s+background\s+(?:also|additionally|secretly)`),
+		// 多步注入触发
+		regexp.MustCompile(`(?i)when\s+(you\s+)?(?:see|receive|read)\s+.*\s+(?:execute|run|call)`),
+	}
+})
 
 // injectionPatternsWarn 命中则 Warn（可疑但常见于合法工具）
-var injectionPatternsWarn = []*regexp.Regexp{
-	// 注入相关词汇（低信号，需结合上下文）
-	regexp.MustCompile(`(?i)\beval\s*\(`),
-	regexp.MustCompile(`(?i)\bexec\s*\(`),
-	regexp.MustCompile(`(?i)subprocess\.(?:run|call|Popen)`),
-	// 过度权限声明
-	regexp.MustCompile(`(?i)has\s+(full\s+)?access\s+to\s+(all|any|your)\s+(files?|data|system)`),
-}
+//
+//nolint:gochecknoglobals // 同上 injectionPatternsDeny 豁免理由
+var injectionPatternsWarn = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		// 注入相关词汇（低信号，需结合上下文）
+		regexp.MustCompile(`(?i)\beval\s*\(`),
+		regexp.MustCompile(`(?i)\bexec\s*\(`),
+		regexp.MustCompile(`(?i)subprocess\.(?:run|call|Popen)`),
+		// 过度权限声明
+		regexp.MustCompile(`(?i)has\s+(full\s+)?access\s+to\s+(all|any|your)\s+(files?|data|system)`),
+	}
+})
 
 // suspiciousNamePatterns 工具名本身的可疑模式
-var suspiciousNamePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)^__`),                          // 双下划线前缀（系统级伪装）
-	regexp.MustCompile(`(?i)(system|root|admin)_override`), // 权限提升名称
-	regexp.MustCompile(`(?i)bypass_`),                      // 绕过类名称
-}
+//
+//nolint:gochecknoglobals // 同上 injectionPatternsDeny 豁免理由
+var suspiciousNamePatterns = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^__`),                          // 双下划线前缀（系统级伪装）
+		regexp.MustCompile(`(?i)(system|root|admin)_override`), // 权限提升名称
+		regexp.MustCompile(`(?i)bypass_`),                      // 绕过类名称
+	}
+})
 
 // ─── 扫描器 ───────────────────────────────────────────────────────────────────
 
@@ -154,7 +175,7 @@ func extractSchemaTexts(rawSchema json.RawMessage) []string {
 
 // scanNamePatterns 检测工具名的可疑模式（如双下划线前缀、bypass_ 等）。
 func scanNamePatterns(r *ToolScanResult) {
-	for _, pat := range suspiciousNamePatterns {
+	for _, pat := range suspiciousNamePatterns() {
 		if pat.MatchString(r.ToolName) {
 			r.Reasons = append(r.Reasons, "suspicious tool name pattern: "+pat.String())
 			if r.Risk < ScanRiskWarn {
@@ -166,7 +187,7 @@ func scanNamePatterns(r *ToolScanResult) {
 
 // scanDenyPatterns 检测极高风险注入模式（命中直接 Deny）。
 func scanDenyPatterns(r *ToolScanResult, combined string) {
-	for _, pat := range injectionPatternsDeny {
+	for _, pat := range injectionPatternsDeny() {
 		if pat.MatchString(combined) {
 			r.Reasons = append(r.Reasons, "injection deny pattern: "+pat.String())
 			r.Risk = ScanRiskDeny
@@ -176,7 +197,7 @@ func scanDenyPatterns(r *ToolScanResult, combined string) {
 
 // scanHITLPatterns 检测高风险模式（命中需人工审核）。
 func scanHITLPatterns(r *ToolScanResult, combined string) {
-	for _, pat := range injectionPatternsHITL {
+	for _, pat := range injectionPatternsHITL() {
 		if pat.MatchString(combined) {
 			r.Reasons = append(r.Reasons, "injection HITL pattern: "+pat.String())
 			if r.Risk < ScanRiskHITL {
@@ -188,7 +209,7 @@ func scanHITLPatterns(r *ToolScanResult, combined string) {
 
 // scanWarnPatterns 检测可疑模式（命中记录警告，不阻断）。
 func scanWarnPatterns(r *ToolScanResult, combined string) {
-	for _, pat := range injectionPatternsWarn {
+	for _, pat := range injectionPatternsWarn() {
 		if pat.MatchString(combined) {
 			r.Reasons = append(r.Reasons, "suspicious pattern: "+pat.String())
 			if r.Risk < ScanRiskWarn {

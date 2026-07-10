@@ -28,8 +28,19 @@ func TestDefaultsTOML_Coverage(t *testing.T) {
 		// 可以在此处添加预期不在 defaults.toml 中的字段
 	}
 
-	checkStructCoverage(t, reflect.TypeOf(SystemConfig{}), parsed["system"], whitelist, "system")
-	checkStructCoverage(t, reflect.TypeOf(SandboxConfig{}), parsed["sandbox"], whitelist, "sandbox")
+	// 遍历顶层 Config 的每个子模块字段（而非手工列举 2-3 个结构体），
+	// 防止未来任何模块新增配置字段时再次遗漏同步 defaults.toml（GR-2-002 教训：
+	// 此前仅检查 System/Sandbox 两个结构体，导致 Policy.CedarEnforceMode 新增
+	// 字段未同步到 defaults.toml 却无测试能发现）。
+	cfgType := reflect.TypeOf(Config{})
+	for i := 0; i < cfgType.NumField(); i++ {
+		field := cfgType.Field(i)
+		tag := field.Tag.Get("toml")
+		if tag == "" || tag == "-" {
+			continue // Thresholds 等显式声明不落盘的字段跳过
+		}
+		checkStructCoverage(t, field.Type, parsed[tag], whitelist, tag)
+	}
 }
 
 func checkStructCoverage(t *testing.T, typ reflect.Type, data any, whitelist map[string]bool, prefix string) {

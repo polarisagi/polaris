@@ -302,6 +302,26 @@ L3PolicyMonitor goroutine (每个 L3 sandbox 一个):
 - (c) 毫秒级阻断，闭合 etag 变更到下一次 I/O 之间的策略逃逸窗口（最长 4min CapToken TTL 窗口）
 - (d) L3 不可用时（Tier 0 全平台 / 平台 microVM 不可用）→ L3PolicyMonitor 不实例化
 
+### 4.8 Remote Sandbox（Sbx-L4，可选非硬依赖）
+
+> 实现: `internal/sandbox/remote_sandbox.go`（`RemoteSandbox`）+ `internal/sandbox/sandbox_router.go`（`WithRemote`/`RouteByTier`）
+> 配置: `internal/config/config_types.go`（`RemoteSandboxConfig`，`[sandbox.remote]`）
+> 装配: `cmd/polaris/boot_tools.go` §6（`sb.Cfg.Sandbox.Remote.Enabled` 为 true 且 `Endpoint` 非空时注入）
+
+**用途**: Tier-0（2GB VPS）主机无法启动 L3 容器/microVM 沙箱（内存不足），或需要更高计算力/隔离度的场景（如 Python 数据科学类 Skill 本地无力承载）时，将工具执行**委托**给远端 HTTP 执行器（自托管 VPS、E2B、Modal、Daytona 等任意兼容端点），作为 L3 不可用时的可选降级路径。遵循 `docs/arch/00-Global-Dictionary.md [Tier-0-Limit]`："超出能力通过硬件门控解锁，不作硬依赖"——本能力走**显式配置门控**（而非硬件探测门控）：默认关闭（`enabled=false`），运营者需显式配置 `endpoint` 后启用，因为涉及用户代码/数据离开本机发往第三方服务，属于成本/隐私权衡而非纯硬件能力问题。
+
+**路由优先级**（`sandbox_router.go RouteByTier`）:
+- 工具显式声明 `sandbox: remote`（`tool.yaml` → `types.SandboxRemote`）→ 优先路由至 `RemoteSandbox`；未注入（`r.remote == nil`，即未在配置中启用）时不阻断——按既有 fallback 链降级至 Wasmtime → Container → （不可信来源）fail-closed 拒绝。
+- `SandboxContainer`（L3）请求在本地 `ContainerSandbox` 不可用时，若 `RemoteSandbox` 已注入，则降级路由至远端执行（`RouteByTier` `case types.SandboxContainer`）。
+
+**安全约束**:
+- 出站 HTTP 经 `network.NewSafeHTTPClient`（XR-06 SafeDialer 出口约束），非旁路直连。
+- `AuthToken` 走 Bearer 认证；配置文件留空时读取 `POLARIS_REMOTE_SANDBOX_TOKEN` 环境变量，避免密钥明文落盘（对齐 `EmbeddingConfig.APIKey` 先例）。
+- 远端返回体读取上限 32MB（`io.LimitReader`），防止响应体膨胀攻击。
+- **不改变信任边界**：`RemoteSandbox` 仍受 `AssignSandboxTier`/Cedar/CapabilityToken 前置校验约束，只是执行载体从本地进程/VM 换成远端 HTTP 端点；`mustIsolate`（`trustTier < TrustOfficial`）语义不变。
+
+**已知限制**（非本轮范围，供未来评估）：远端执行器侧的沙箱强度由第三方保证，Polaris 侧无法验证其物理隔离边界（HE-Rule-2 "可验证执行"在此退化为对第三方的信任假设，而非物理/密码学可验证）；成本计量与配额尚未接入 `internal/observability/budget`。
+
 ---
 
 ## 5. Policy Gate

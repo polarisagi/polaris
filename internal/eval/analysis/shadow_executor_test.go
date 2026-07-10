@@ -313,3 +313,54 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		}
 	})
 }
+
+// TestShadowExecutor_ScoreShadow_SchemaValidation 验证 GR-5-003 修复：scoreShadow
+// 对 Judge LLM 返回的 JSON 做字段存在性校验，缺字段时 fail-closed 返回 false，
+// 而不是把畸形响应的零值当作合法评分静默放行。
+func TestShadowExecutor_ScoreShadow_SchemaValidation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	req := &types.InferRequest{Messages: []types.Message{{Role: "user", Content: "hi"}}}
+	baseline := &types.InferResponse{Content: "baseline"}
+	shadow := &types.ProviderResponse{Content: "shadow"}
+
+	t.Run("缺少reason字段_fail_closed", func(t *testing.T) {
+		provider := &mockProvider{judgeResp: &types.ProviderResponse{Content: `{"passed":true}`}}
+		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+
+		passed, err := exec.scoreShadow(context.Background(), req, baseline, shadow)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if passed {
+			t.Error("schema 缺字段应 fail-closed 返回 passed=false，而不是把 passed:true 当合法结果放行")
+		}
+	})
+
+	t.Run("json语法错误_fail_closed", func(t *testing.T) {
+		provider := &mockProvider{judgeResp: &types.ProviderResponse{Content: `not json at all`}}
+		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+
+		passed, err := exec.scoreShadow(context.Background(), req, baseline, shadow)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if passed {
+			t.Error("json 语法错误应 fail-closed 返回 passed=false")
+		}
+	})
+
+	t.Run("字段完整_正常通过", func(t *testing.T) {
+		provider := &mockProvider{judgeResp: &types.ProviderResponse{Content: `{"passed":true,"reason":"ok"}`}}
+		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+
+		passed, err := exec.scoreShadow(context.Background(), req, baseline, shadow)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !passed {
+			t.Error("字段完整且 passed:true 时应正常通过")
+		}
+	})
+}

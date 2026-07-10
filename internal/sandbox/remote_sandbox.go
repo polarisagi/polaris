@@ -16,12 +16,14 @@ import (
 )
 
 // ============================================================================
-// Remote Sandbox（L4）
+// Remote Sandbox（Sbx-L4，可选非硬依赖，见 docs/arch/00-Global-Dictionary.md §0）
 // 参照: hermes-agent Modal/Daytona/Vercel terminal backend
-// 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.4（待补）
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §4.8
+// 配置/装配: internal/config/config_types.go RemoteSandboxConfig；
+//            cmd/polaris/boot_tools.go §6（sb.Cfg.Sandbox.Remote.Enabled 门控）
 //
-// 用途：Tier-0 本地内存不足时，将重计算任务 HTTP 委托给远端执行器。
-// 远端可以是自托管 VPS、AWS Lambda、Modal、Daytona 等任意 HTTP 端点。
+// 用途：Tier-0 本地内存不足或 L3 容器沙箱不可用时，将重计算/高隔离度任务 HTTP
+// 委托给远端执行器。远端可以是自托管 VPS、AWS Lambda、Modal、Daytona 等任意 HTTP 端点。
 //
 // 安全约束：出站 HTTP 需经 SafeDialer（XR-06）。
 // ============================================================================

@@ -375,4 +375,176 @@ func TestStateMachine_InvalidTrigger(t *testing.T) {
 	}
 }
 
+// TestStateMachine_InterruptStashAndResume_GD03 复现并验证 GD-03 死锁修复：
+// S_INTERRUPT 期间收到未注册的业务 trigger（如已在途的异步 LLM 回调 TriggerPlanDone）
+// 必须被暂存而非报错丢弃，Resume 后必须自动重投递，驱动状态机继续推进，
+// 而不是永久停留在 interruptFrom 状态等待一个已经丢失的事件。
+func TestStateMachine_InterruptStashAndResume_GD03(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{AgentID: "test-interrupt", MaxReplan: 3}
+	ctx := context.Background()
+
+	dispatched := make(chan types.AgentTrigger, 10)
+	sm.SetIntentDispatcher(func(tr types.AgentTrigger) { dispatched <- tr })
+
+	steps := []types.AgentTrigger{
+		types.TriggerIntentReceived,
+		types.TriggerPerceiveDone,
+	}
+	for _, trig := range steps {
+		if _, err := sm.Dispatch(ctx, sCtx, trig); err != nil {
+			t.Fatalf("step %v: %v", trig, err)
+		}
+	}
+	if sm.Current() != types.AgentStatePlan {
+		t.Fatalf("期望到达 S_PLAN, 实际 %v", sm.Current())
+	}
+
+	// 中断：切换到 S_INTERRUPT
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerInterruptReceived); err != nil {
+		t.Fatalf("interrupt receive: %v", err)
+	}
+	if sm.Current() != types.AgentStateInterrupt {
+		t.Fatalf("期望 S_INTERRUPT, 实际 %v", sm.Current())
+	}
+
+	// 中断期间，此前发起的异步 LLM 调用才返回并投递 TriggerPlanDone——
+	// 修复前：Dispatch 会返回 "no transition" 错误，事件被整体丢弃。
+	// 修复后：应静默暂存（不报错、不改变当前状态）。
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerPlanDone); err != nil {
+		t.Fatalf("S_INTERRUPT 期间的未预期 trigger 应被暂存而非报错: %v", err)
+	}
+	if sm.Current() != types.AgentStateInterrupt {
+		t.Fatalf("暂存期间状态不应改变, 实际 %v", sm.Current())
+	}
+
+	// 恢复：应回到中断前的 S_PLAN，并自动异步重投递暂存的 TriggerPlanDone
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerInterruptResume); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if sm.Current() != types.AgentStatePlan {
+		t.Fatalf("恢复后应回到 S_PLAN, 实际 %v", sm.Current())
+	}
+
+	select {
+	case tr := <-dispatched:
+		if tr != types.TriggerPlanDone {
+			t.Fatalf("期望重投递 TriggerPlanDone, 实际 %v", tr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时：暂存的 TriggerPlanDone 未被自动重新投递——死锁修复未生效")
+	}
+
+	// 模拟 Agent.Run 事件循环消费重投递的事件，驱动状态机继续推进（证明不再死锁）。
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerPlanDone); err != nil {
+		t.Fatalf("重投递事件的 Dispatch 失败: %v", err)
+	}
+	if sm.Current() != types.AgentStateValidate {
+		t.Fatalf("重投递事件处理后应推进到 S_VALIDATE, 实际 %v", sm.Current())
+	}
+}
+
+// TestStateMachine_InterruptAbort_DiscardsStashedTriggers 验证 Abort 路径下
+// 暂存队列被清空丢弃，且不会异步重投递任何事件（任务已判定放弃）。
+func TestStateMachine_InterruptAbort_DiscardsStashedTriggers(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{AgentID: "test-abort", MaxReplan: 3}
+	ctx := context.Background()
+
+	dispatched := make(chan types.AgentTrigger, 10)
+	sm.SetIntentDispatcher(func(tr types.AgentTrigger) { dispatched <- tr })
+
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerIntentReceived); err != nil {
+		t.Fatalf("step 1: %v", err)
+	}
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerPerceiveDone); err != nil {
+		t.Fatalf("step 2: %v", err)
+	}
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerInterruptReceived); err != nil {
+		t.Fatalf("interrupt receive: %v", err)
+	}
+
+	// 暂存一个事件
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerPlanDone); err != nil {
+		t.Fatalf("stash: %v", err)
+	}
+
+	if _, err := sm.Dispatch(ctx, sCtx, types.TriggerInterruptAbort); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if sm.Current() != types.AgentStateFailed {
+		t.Fatalf("期望 S_FAILED, 实际 %v", sm.Current())
+	}
+
+	select {
+	case tr := <-dispatched:
+		t.Fatalf("Abort 后不应重投递任何暂存事件，但收到 %v", tr)
+	case <-time.After(200 * time.Millisecond):
+		// 期望超时：确认没有重投递
+	}
+}
+
+// mockSlowActivator 模拟耗时的扩展激活（语义检索/MCP 握手），用于验证 GD-04 修复：
+// S_REPLAN 的扩展激活不得阻塞 Dispatch/主事件循环。
+type mockSlowActivator struct {
+	delay time.Duration
+	hints []ExtActivatedHint
+}
+
+func (m *mockSlowActivator) FindAndActivate(ctx context.Context, goal string) ([]ExtActivatedHint, error) {
+	select {
+	case <-time.After(m.delay):
+		return m.hints, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// TestStateMachine_ReplanExtensionActivation_NonBlocking_GD04 验证扩展激活异步化：
+// 即使 FindAndActivate 耗时较长，Dispatch 本身必须立即返回，不能阻塞主事件循环
+// （修复前：同步执行在 DeterministicEffect.Fn 内部，会占用 Agent.Run 的唯一 goroutine）。
+func TestStateMachine_ReplanExtensionActivation_NonBlocking_GD04(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{AgentID: "test-gd04", MaxReplan: 3, TaskModel: &TaskModel{Goal: "test goal"}}
+	ctx := context.Background()
+
+	dispatched := make(chan types.AgentTrigger, 4)
+	sm.SetIntentDispatcher(func(tr types.AgentTrigger) { dispatched <- tr })
+	sm.WithExtensionActivator(&mockSlowActivator{delay: 300 * time.Millisecond})
+
+	steps := []types.AgentTrigger{
+		types.TriggerIntentReceived,
+		types.TriggerPerceiveDone,
+		types.TriggerPlanDone,
+	}
+	for _, trig := range steps {
+		if _, err := sm.Dispatch(ctx, sCtx, trig); err != nil {
+			t.Fatalf("step %v: %v", trig, err)
+		}
+	}
+
+	start := time.Now()
+	// 第一次 ValidateFail → replanCount 0→1，满足 shouldActivateExtensions 触发条件
+	_, err := sm.Dispatch(ctx, sCtx, types.TriggerValidateFail)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("S_VALIDATE → S_REPLAN: %v", err)
+	}
+	if sm.Current() != types.AgentStateReplan {
+		t.Fatalf("期望 S_REPLAN, 实际 %v", sm.Current())
+	}
+	if elapsed >= 100*time.Millisecond {
+		t.Fatalf("Dispatch 不应被 300ms 的扩展激活阻塞，实际耗时 %v", elapsed)
+	}
+
+	select {
+	case tr := <-dispatched:
+		if tr != types.TriggerReplanDone {
+			t.Fatalf("期望激活完成后投递 TriggerReplanDone, 实际 %v", tr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时：异步扩展激活完成后未投递 TriggerReplanDone")
+	}
+}
+
 // mockToolRegistry 放行所有工具调用，返回空输出（用于 Agent E2E 测试）。

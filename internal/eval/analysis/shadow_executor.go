@@ -292,11 +292,29 @@ func (e *ShadowExecutor) scoreShadow(ctx context.Context, req *types.InferReques
 		return false, apperr.Wrap(apperr.CodeInternal, "shadow judge failed", err)
 	}
 
+	// GR-5-003 修复：LLM 输出必须先做字段存在性校验，再反序列化，避免"schema 缺字段"
+	// 与"json 语法错误"两类完全不同的异常被静默混同为同一种降级行为（详见 judge_schema.go
+	// ValidateJudgeResultSchema 的同源设计；此处字段集不同——仅 passed/reason 两项，
+	// 不能直接复用 harness.ValidateJudgeResultSchema，因其强制要求 relevance/accuracy/
+	// safety/completeness 四个 l4_judge 专属字段，会把本函数的合法响应误判为缺字段）。
+	rawJSON := extractJSON(resp.Content)
+	var probe map[string]any
+	if jsonErr := json.Unmarshal([]byte(rawJSON), &probe); jsonErr != nil {
+		slog.Warn("shadow_judge: json 语法错误", "raw", resp.Content, "err", jsonErr)
+		return false, nil
+	}
+	for _, key := range []string{"passed", "reason"} {
+		if _, ok := probe[key]; !ok {
+			slog.Warn("shadow_judge: schema 缺字段，视为不通过（fail-closed）", "missing_key", key, "raw", resp.Content)
+			return false, nil
+		}
+	}
+
 	var res struct {
 		Passed bool   `json:"passed"`
 		Reason string `json:"reason"`
 	}
-	if err := json.Unmarshal([]byte(extractJSON(resp.Content)), &res); err != nil {
+	if err := json.Unmarshal([]byte(rawJSON), &res); err != nil {
 		return false, nil
 	}
 

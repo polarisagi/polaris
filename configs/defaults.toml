@@ -103,6 +103,11 @@ sherpa_version = ""  # 留空复用 inference.stt.sherpa_version
 model_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2"
 tokens_url = ""
 
+[storage]
+# Tier0 SQLite 内存余弦向量扫描的最大行数上限，防止全表扫描导致 OOM（见 docs/specs/09-LLM-Agent-Production.md A-14）。
+# <=0 时代码内回退默认值 500（internal/config/config.go），此处显式声明保持配置可发现性。
+tier0_vector_scan_limit = 500
+
 [storage.engines]
 relational = "sqlite"
 vector = "sqlite-vec"
@@ -158,6 +163,10 @@ graphrag = "microsoft"
 [policy]
 engine = "cedar"
 default_block = true
+# Cedar 裁决生效模式："shadow"（默认，仅记录不裁决）/ "deny"（Cedar 明确拒绝强制生效，Go 规则仅兜底 allow）/
+# "full"（完全生效）。Cedar 实体存储尚未完整实现前，"deny" 是推荐的生产配置——既杜绝 Cedar 拒绝被静默旁路，
+# 又不会因实体存储不完整而误伤合法 allow 请求。
+cedar_enforce_mode = "shadow"
 # Cedar 策略文件路径覆盖（空 = 使用二进制内置 embed 默认策略，无需修改）。
 # 运营商如需自定义策略，将 Cedar 文件放到指定路径后重启进程即可，无需重新编译。
 # 示例：hard_constraints_path = "/etc/polaris/policy/hard_constraints.cedar"
@@ -176,6 +185,12 @@ http = true
 grpc = false
 websocket = false
 
+[security]
+# Tier 3（≥64GB）本地大模型专用的出站网络彻底隔离模式：为真时启用 NetworkSandbox
+# （loopback-only + LocalProvider 内存预算守卫），fail-closed，任一环节失败阻止启动。
+# 见 docs/arch/M11-Policy-Safety.md §5 local_only 模式。Tier 0/1/2 不应开启（无本地模型）。
+local_only_mode = false
+
 [sandbox]
 # 是否启用平台原生进程隔离（macOS Seatbelt / Linux bubblewrap / Windows WSL2）。
 # false = 仅 env 清理 + workDir，用于调试或受信任环境。
@@ -190,6 +205,19 @@ bwrap_path = ""
 # 示例（取消注释并按需修改）：
 # allowed_paths = ["/home/user/projects", "/tmp"]
 allowed_paths = []
+
+[sandbox.remote]
+# 远端云沙箱（Sbx-L4）：Tier-0 本地无法启动 L3 容器沙箱或需要更高计算力/隔离度时
+# （如 Python 数据科学类 Skill），将工具执行委托给远端 HTTP 执行器（自托管 VPS、
+# E2B、Modal、Daytona 等任意兼容端点）。涉及代码/数据离开本机发往第三方服务，
+# 默认关闭，需显式配置 endpoint 后启用（[Tier-0-Limit]：可选能力，非硬依赖）。
+enabled = false
+# 远端执行器根 URL，如 "https://executor.example.com"。enabled=true 时必填。
+endpoint = ""
+# Bearer 认证令牌。留空则读取 POLARIS_REMOTE_SANDBOX_TOKEN 环境变量（避免密钥明文落盘）。
+auth_token = ""
+# 单次调用超时秒数。0 = 默认 300s（对应重计算场景）。
+timeout_sec = 0
 
 [cognition]
 # SurrealDB 认知存储后端（运行时选择，不影响编译）。
