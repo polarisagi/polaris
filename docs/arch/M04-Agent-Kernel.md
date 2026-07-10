@@ -98,6 +98,8 @@ Agent 以 goroutine 形式运行，空闲时挂起释放资源。核心状态机
 
 Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状态机 → 处理 LLM 和工具返回的 events → 空闲超过 SuspendIdleThreshold (`spec/state.yaml §m4_kernel.suspend_idle_threshold_minutes`) 自动 checkpoint 到 SurrealDB-Core KV（Key-Value，键值） 后释放 goroutine。HITL 等待期间通过 M2 EventLog Subscribe 监听 ApprovalResolved 事件（非 Go channel，防止进程崩溃丢失审批）。
 
+**咨询式挂起（提案）**：`AskHuman` 特权工具扩展本节 Suspend 语义，新增 `SuspendReason=awaiting_user_input`，复用同一 Suspend/Resume 路径处理"信息缺失需澄清"场景（不新增独立错误类型/独立挂起态）。设计草案见 [ADR-0042](./decisions/ADR-0042-hitl-askhuman-consultation.md)（Proposed，未实现）。
+
 内存效率: 活跃 Agent 约消耗 1MB（含 buffer 和栈），休眠 Agent 仅保留约 100 字节的 checkpoint 元数据。Tier 0 硬上限 2 个活跃 Agent。
 
 ---

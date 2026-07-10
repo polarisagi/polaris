@@ -73,9 +73,13 @@ ADR 被代码引用时，源文件头部加：
 | 0034 | ~~Tree-sitter CGO 例外授权~~ | Superseded → ADR-0011 | 2026-07-04 |
 | 0035 | ~~时序记忆检索 + Jaccard 信念修正~~ | Superseded → ADR-0033 | 2026-07-09 |
 | 0036 | ~~核心工作记忆区（ZoneCoreMemory）~~ | Superseded → ADR-0033 | 2026-07-09 |
-| 0037 | — | 未分配/未使用 | — |
+| 0037 | PatternDAG Orchestration（跨 Agent Macro-DAG 编排模式9） | Accepted | 2026-07-09 |
 | 0038 | ~~影子执行器设计与异步回放选型~~ | Superseded → ADR-0029 | 2026-07-09 |
 | 0039 | Gateway 控制权移交 FSM（废除 MVP 直通模式）| Accepted | 2026-07-08 |
+| 0040 | ~~受控循环图执行器（CyclicGraphExecutor）~~ | Superseded → ADR-0041 | 2026-07-11 |
+| 0041 | StateGraphExecutor（显式状态图编排，GD-8-001，编排模式10） | Accepted | 2026-07-11 |
+| 0042 | HITL AskUser 咨询闭环（AskHuman 特权工具） | Proposed（未实现） | 2026-07-11 |
+| 0043 | Generative UI SSE 集成（结构化组件渲染） | Proposed（未实现） | 2026-07-11 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 

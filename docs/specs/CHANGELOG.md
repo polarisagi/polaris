@@ -4,6 +4,20 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-07-11（docs/specs 全量审查：清理两份误入的设计草案）
+
+**问题**：`08-HITL-AskUser.md`/`09-Generative-UI.md` 与既有 `08-Doc-Hygiene.md`/`09-LLM-Agent-Production.md` 编号冲突；`INDEX.md` 加载策略表从未登记两文件（实际未被 AI 主动加载）；`CHANGELOG.md` 无引入记录；正文是 what/why 设计提案文体（散文式"动机与目标"引入 + 完整 Go struct/JSON/HTML 伪代码），与 specs 目录 how/constraints 生成约束文体不符（见 `INDEX.md` arch↔specs 定位表）；全仓库 grep 确认 `AskHuman`/`ClarificationRequest`/`ui_component`/`render_chart` 等零实现、零 ADR。
+
+**处置（按用户选定方案：迁移至 docs/arch/ 并建 ADR）**：
+
+- `docs/specs/08-HITL-AskUser.md`（删除）| 内容基于现有代码重新核校后迁至 `decisions/ADR-0042-hitl-askhuman-consultation.md`：原草案假设的 `ClarificationRequest`/`ErrSuspendForInput` 独立类型体系与实际代码（`types.HITLPrompt`/`types.HITLResponse`、`FSM.SuspendReason` 已有 `capability_gap`/`provider_exhausted` 先例）不符，已修正为复用现有机制（新增 `CheckpointType=clarification_request` + `SuspendReason=awaiting_user_input` + `HITLResponse.Payload` 字段，走 B5.2 破坏性变更流程）
+- `docs/specs/09-Generative-UI.md`（删除）| 内容基于现有代码重新核校后迁至 `decisions/ADR-0043-generative-ui-sse.md`：确认前端 Alpine.js + marked 假设成立，但补充核出原方案假设的 DOMPurify 依赖当前不存在（`web/package.json` 未列），列为实现前置事项；渲染工具落点明确为 `protocol.ToolRegistry.ExecuteTool`（`SandboxTier=InProcess`，对齐 `memory_tools.go` 先例）
+- `docs/arch/M04-Agent-Kernel.md §2` | 插入一句话 why-do + ADR-0042 锚点（H5 决策迁移规则）
+- `docs/arch/M13-Interface-Scheduler.md §2.4` `§8.3`（新增 §8.3.4）| 插入一句话 why-do + 对应 ADR 锚点
+- 两份 ADR 状态均标记 `Proposed（未实现，设计草案）`，不代表已落地
+
+**附带发现（未处理，超出本次范围）**：`M04-Agent-Kernel.md`/`M13-Interface-Scheduler.md` 头部 `§跳读` 行号索引与实际 `##` 标题行号已存在大幅漂移（远超本次编辑新增的 3~5 行），且 M04 出现两个重号 `## 13.` 标题（`降级与失败模式` / `跨模块契约`）；`make docs-sync`/`docs-check` 依赖本地 Go 工具链，本次环境不可用，需用户本地跑一次全量同步。
+
 ## 2026-07-11（Gemini 升级批次复核修复 + Backlog-2/3 开发）
 
 **Gemini P0~P2 升级提交复核，修复 5 处遗漏（均属"已声明但未接线/未覆盖"类）**：
