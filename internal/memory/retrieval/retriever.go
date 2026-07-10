@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -240,12 +241,18 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		}
 		if nodes, err := hr.graph.SpreadingActivation(seedIDs, saMaxDepth, saEnergyDecay, saDormancyThreshold, saFanOutLimit); err == nil {
 			for _, n := range nodes {
-				content := n.ID
+				var content string
 				if raw, kvErr := hr.store.Get(ctx, []byte("episodic:"+n.ID)); kvErr == nil {
 					var ev types.Event
 					if jsonErr := json.Unmarshal(raw, &ev); jsonErr == nil {
 						content = string(ev.Payload)
+					} else {
+						slog.Debug("polaris: skipping graph node due to json unmarshal error", "node_id", n.ID, "err", jsonErr)
+						continue
 					}
+				} else {
+					slog.Debug("polaris: skipping graph node due to kv missing", "node_id", n.ID, "err", kvErr)
+					continue
 				}
 				graphResults = append(graphResults, types.ScoredFragment{
 					Content:      content,
