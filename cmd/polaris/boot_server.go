@@ -43,6 +43,13 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
+var (
+	// 用于单元测试注入 mock
+	execFunc = syscall.Exec
+	exitFunc = os.Exit
+	loadProvidersFunc = LoadProvidersFromDB
+)
+
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
 // 返回 *server.Server，调用方 run() 负责 Shutdown。
 func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) { //nolint:gocyclo
@@ -90,7 +97,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SeedBuiltinConfig(mpData, regData)
 	httpServer.SetReloadProviders(func() {
-		_ = LoadProvidersFromDB(context.Background(), sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR)
+		if err := loadProvidersFunc(context.Background(), sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR); err != nil {
+			slog.Error("polaris: failed to hot-reload providers", "err", err)
+		}
 	})
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
@@ -242,23 +251,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	updMgr := updater.New(Version, CommitHash, BuildDate, sb.SafeHTTP)
 	updMgr.StartBackgroundCheck(ctx, 2*time.Hour)
 	updMgr.SetRestartFn(func() {
-		// syscall.Exec 完全替换进程镜像，Go runtime 不执行任何 defer/finalizer。
-		// 关闭序列（与 graceful shutdown 保持一致）：
-		//   1. stop()         — 取消主 ctx，dbWriter.Run() flush 残余批次并退出
-		//   2. <-dbWriterDone — 确认 DatabaseWriter goroutine 完全退出
-		//   3. store.Close()  — SQLite WAL checkpoint + 清理 .db-wal / .db-shm
-		exe, _ := os.Executable()
-		slog.Info("polaris: initiating graceful db shutdown before exec-restart")
-		sb.Stop()
-		select {
-		case <-sb.DBWriterDone:
-		case <-time.After(5 * time.Second):
-			slog.Warn("polaris: dbWriter flush timeout during hot-restart, proceeding anyway")
-		}
-		_ = sb.Store.Close()
-		slog.Info("polaris: exec-restarting with new binary", "path", exe)
-		_ = syscall.Exec(exe, os.Args, os.Environ())
-		os.Exit(0)
+		performHotRestart(sb)
 	})
 	httpServer.SetUpdater(updMgr)
 
@@ -273,7 +266,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SeedBuiltinConfig(mpData, regData)
 	httpServer.SetReloadProviders(func() {
-		_ = LoadProvidersFromDB(context.Background(), sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR)
+		if err := loadProvidersFunc(context.Background(), sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR); err != nil {
+			slog.Error("polaris: failed to hot-reload providers", "err", err)
+		}
 	})
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
 	toolStage := agentctx.NewToolStage(tb.Catalog, sb.Embedder)
@@ -318,4 +313,36 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	}
 
 	return httpServer, nil
+}
+
+func performHotRestart(sb *SubstrateBundle) {
+	// syscall.Exec 完全替换进程镜像，Go runtime 不执行任何 defer/finalizer。
+	// 关闭序列（与 graceful shutdown 保持一致）：
+	//   1. stop()         — 取消主 ctx，dbWriter.Run() flush 残余批次并退出
+	//   2. <-dbWriterDone — 确认 DatabaseWriter goroutine 完全退出
+	//   3. store.Close()  — SQLite WAL checkpoint + 清理 .db-wal / .db-shm
+	exe, _ := os.Executable()
+	slog.Info("polaris: initiating graceful db shutdown before exec-restart")
+	
+	if sb != nil {
+		sb.Stop()
+		if sb.DBWriterDone != nil {
+			select {
+			case <-sb.DBWriterDone:
+			case <-time.After(5 * time.Second):
+				slog.Warn("polaris: dbWriter flush timeout during hot-restart, proceeding anyway")
+			}
+		}
+		if sb.Store != nil {
+			_ = sb.Store.Close()
+		}
+	}
+
+	slog.Info("polaris: exec-restarting with new binary", "path", exe)
+	if err := execFunc(exe, os.Args, os.Environ()); err != nil {
+		slog.Error("polaris: hot-restart failed to exec new binary", "exe", exe, "args", os.Args, "err", err)
+		exitFunc(1)
+		return
+	}
+	exitFunc(0)
 }

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -111,32 +112,50 @@ func (b *Bootstrapper) ListenAndServe(ctx context.Context) {
 
 // gracefulShutdown 执行四阶关停流水线。
 func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
+	var shutdownErrors []error
+
 	// Phase 1：停流——熔断外部感知，停止接收新请求
-	for _, mod := range b.modules {
+	for name, mod := range b.modules {
 		if s, ok := mod.(Stage1Stopper); ok {
-			_ = s.StopIngress(ctx)
+			if err := s.StopIngress(ctx); err != nil {
+				slog.Warn("bootstrap: StopIngress failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.StopIngress: %w", name, err))
+			}
 		}
 	}
 
 	// Phase 2：排干——等待已接受的任务/队列处理完毕
-	for _, mod := range b.modules {
+	for name, mod := range b.modules {
 		if d, ok := mod.(Stage2Drainer); ok {
-			_ = d.Drain(ctx)
+			if err := d.Drain(ctx); err != nil {
+				slog.Warn("bootstrap: Drain failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.Drain: %w", name, err))
+			}
 		}
 	}
 
 	// Phase 3：刷盘——WAL Checkpoint，确保数据落盘
-	for _, mod := range b.modules {
+	for name, mod := range b.modules {
 		if f, ok := mod.(Stage3Flusher); ok {
-			_ = f.Flush(ctx)
+			if err := f.Flush(ctx); err != nil {
+				slog.Warn("bootstrap: Flush failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.Flush: %w", name, err))
+			}
 		}
 	}
 
 	// Phase 4：灭火——释放 DB 句柄、VFS 游标、子进程
-	for _, mod := range b.modules {
+	for name, mod := range b.modules {
 		if c, ok := mod.(Stage4Closer); ok {
-			_ = c.Close(ctx)
+			if err := c.Close(ctx); err != nil {
+				slog.Warn("bootstrap: Close failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.Close: %w", name, err))
+			}
 		}
+	}
+
+	if len(shutdownErrors) > 0 {
+		slog.Error("bootstrap: graceful shutdown completed with errors", "errors", shutdownErrors)
 	}
 }
 
