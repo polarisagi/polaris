@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -105,7 +104,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) 
 			})
 		case types.StreamError:
 			if inferErr == nil {
-				inferErr = errors.New(ev.Content)
+				inferErr = apperr.New(apperr.CodeProviderExhausted, ev.Content)
 			}
 		}
 		if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
