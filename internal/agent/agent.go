@@ -88,7 +88,7 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 	ctx, cancel := context.WithCancel(context.Background())
 	wCh := make(chan protocol.MemoryWhisper, 4) // 缓冲 4 条，防 PlannerPool 阻塞
 	tracker := fsm.NewEpochTracker()
-	return &Agent{
+	agent := &Agent{
 		ID:       id,
 		taskRepo: taskRepo,
 		intent:   make(chan types.AgentTrigger, 10),
@@ -109,6 +109,8 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 		whisperSendChan: wCh,
 		streamSubs:      make(map[uint64]chan types.AgentStreamEvent),
 	}
+	agent.sm.SetIntentDispatcher(agent.asyncIntent)
+	return agent
 }
 
 // WorldModel 定义了认知模型所需的知识接地感知接口。

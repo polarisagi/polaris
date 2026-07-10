@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -44,10 +45,15 @@ type StateMachine struct {
 	hintsMu                    sync.Mutex
 	activator                  ExtensionActivatorIface
 	dynamicHints               []ExtActivatedHint
-	replanExtActivationTimeout time.Duration // S_REPLAN 扩展激活 Effect 超时上限，见 WithReplanExtensionActivationTimeout
+	replanExtActivationTimeout time.Duration        // S_REPLAN 扩展激活 Effect 超时上限，见 WithReplanExtensionActivationTimeout
+	stashedTriggers            []types.AgentTrigger // P0-5: 暂存中断期间的事件
+	intentDispatcher           func(types.AgentTrigger)
 }
 
-const defaultReplanExtActivationTimeout = 3 * time.Second // replanExtActivationTimeout 未被注入时的兜底值
+const (
+	defaultReplanExtActivationTimeout = 3 * time.Second // replanExtActivationTimeout 未被注入时的兜底值
+	maxStashedTriggers                = 50
+)
 
 // StateContext 穿越状态机各转移的共享上下文（与 protocol.StateContext 互补）。
 type StateContext struct {
@@ -183,6 +189,7 @@ func NewStateMachine(cb ContextBuilder) *StateMachine {
 		history:                    make([]types.AgentState, 0),
 		startedAt:                  time.Now(),
 		replanExtActivationTimeout: defaultReplanExtActivationTimeout,
+		stashedTriggers:            make([]types.AgentTrigger, 0),
 	}
 	sm.registerTransitions()
 	return sm
@@ -234,6 +241,12 @@ func (sm *StateMachine) SetContextBuilder(cb ContextBuilder) {
 	sm.cb = cb
 }
 
+func (sm *StateMachine) SetIntentDispatcher(dispatcher func(types.AgentTrigger)) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.intentDispatcher = dispatcher
+}
+
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。
 // 返回的 effects 由 Agent.Run 消费——LLMFillEffect 调 LLM，DeterministicEffect 直接执行。
 func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigger types.AgentTrigger) ([]protocol.Effect, error) {
@@ -259,10 +272,36 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 		case types.TriggerInterruptResume:
 			sm.history = append(sm.history, current)
 			sm.current = sm.interruptFrom
+
+			if len(sm.stashedTriggers) > 0 {
+				toRequeue := make([]types.AgentTrigger, len(sm.stashedTriggers))
+				copy(toRequeue, sm.stashedTriggers)
+				sm.stashedTriggers = sm.stashedTriggers[:0]
+				if sm.intentDispatcher != nil {
+					concurrent.SafeGo(context.Background(), "fsm.requeue_stashed", func(ctx context.Context) {
+						for _, tr := range toRequeue {
+							sm.intentDispatcher(tr)
+						}
+					})
+				}
+			}
 			return nil, nil
 		case types.TriggerInterruptAbort:
 			sm.history = append(sm.history, current)
 			sm.current = types.AgentStateFailed
+			if len(sm.stashedTriggers) > 0 {
+				slog.Info("fsm: discarding stashed triggers due to abort", "count", len(sm.stashedTriggers))
+				sm.stashedTriggers = sm.stashedTriggers[:0]
+			}
+			return nil, nil
+		default:
+			// P0-5: S_INTERRUPT 状态下收到非预期的 trigger 时，暂存到 stashedTriggers
+			if len(sm.stashedTriggers) >= maxStashedTriggers {
+				slog.Error("fsm: stashed triggers exceeded max capacity, dropping oldest", "max", maxStashedTriggers)
+				sm.stashedTriggers = sm.stashedTriggers[1:]
+			}
+			sm.stashedTriggers = append(sm.stashedTriggers, trigger)
+			slog.Debug("fsm: stashed trigger during S_INTERRUPT", "trigger", trigger)
 			return nil, nil
 		}
 	}
@@ -309,19 +348,16 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 
 		if needActivate {
 			slog.Debug("kernel: returning deterministic effect for extension activation", "goal", goalToActivate)
-			eff := protocol.DeterministicEffect{
-				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
-					// 超时值来自 state.yaml §thresholds replan_extension_activation_s（启动时注入）。
-					actCtx, cancel := context.WithTimeout(effCtx, sm.replanExtActivationTimeout)
+
+			if sm.intentDispatcher != nil {
+				concurrent.SafeGo(context.Background(), "fsm.replan_extension_activation", func(actCtx context.Context) {
+					actCtx, cancel := context.WithTimeout(actCtx, sm.replanExtActivationTimeout)
 					defer cancel()
 
 					hints, hintErr := sm.activator.FindAndActivate(actCtx, goalToActivate)
 					if hintErr != nil {
 						slog.Warn("extension_activator: failed to activate extensions for replan", "err", hintErr)
-						// 即使激活失败，也降级继续进行 Replan，不阻塞业务主流程
 					} else if len(hints) > 0 {
-						// 写入动态 hints。由于目前这里是在单线程（Dispatch 后）串行执行 DeterministicEffect，
-						// 理论上无并发冲突。但为保险起见，保留 hintsMu 锁，防止外部读冲突。
 						sm.hintsMu.Lock()
 						sm.dynamicHints = hints
 						sm.hintsMu.Unlock()
@@ -329,8 +365,26 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 							"count", len(hints),
 							"goal", goalToActivate)
 					}
-					// 激活任务完成后，自动触发 TriggerReplanDone 转移到 S_PLAN
-					return "S_REPLAN_DONE", nil
+					sm.intentDispatcher(types.TriggerReplanDone)
+				})
+			} else {
+				// fallback to sync if no dispatcher (should not happen in prod)
+				actCtx, cancel := context.WithTimeout(ctx, sm.replanExtActivationTimeout)
+				defer cancel()
+				hints, hintErr := sm.activator.FindAndActivate(actCtx, goalToActivate)
+				if hintErr == nil && len(hints) > 0 {
+					sm.hintsMu.Lock()
+					sm.dynamicHints = hints
+					sm.hintsMu.Unlock()
+				}
+			}
+
+			eff := protocol.DeterministicEffect{
+				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
+					if sm.intentDispatcher == nil {
+						return "S_REPLAN_DONE", nil
+					}
+					return "", nil
 				},
 			}
 			effects = append(effects, eff)
@@ -370,6 +424,7 @@ func (sm *StateMachine) Reset() {
 	sm.history = sm.history[:0]
 	sm.replanCount = 0
 	sm.startedAt = time.Now()
+	sm.stashedTriggers = sm.stashedTriggers[:0]
 }
 
 func (sm *StateMachine) add(t Transition) {
