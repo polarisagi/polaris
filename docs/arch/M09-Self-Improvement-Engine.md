@@ -177,18 +177,17 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 ### 2.3 外环: 架构演化（周/月级）
 
-**六阶段发布门控**（`rollout.go` 实际实现）：
-1. **Stage 0 Offline**: Eval Harness 离线回归，Welch's t-test p<0.05
-2. **Stage 1 Canary 1%**: Shadow 观察
-3. **Stage 2 Canary 5%**
-4. **Stage 3 Canary 25%**
-5. **Stage 4 Full 100%**: 旧版本保留 7 天
-6. **Stage 5 Committed**: 永久切换
+**四级 Gate + Canary 阶梯发布门控**（`internal/prompt/optimizer/rollout.go` `RolloutGate` 枚举 + `rollout_store.go` `SQLiteRolloutStore` 实际实现）：
+1. **Gate 1 EvalRegression**: `SubmitCandidate` 提交后立即进入本 Gate；Eval Harness 离线回归通过（`RecordEvalScore`）即视为满足，等待 Gate 2 影子确认。
+2. **Gate 2 ShadowExecution**: `ShadowExecutor` 周期性回放候选（`internal/eval/analysis/shadow_executor.go`，5 分钟周期，`cmd/polaris/boot_agent.go` 启动），从 `events` 表按游标增量抓取历史 `llm_call`，用候选配置重新推理并与基线响应对比打分；通过率 ≥ `M12Eval.ShadowPassRateThreshold` → `ConfirmShadow` 推进至 Gate 3，否则 `Rollback`。
+3. **Gate 3 CanaryRollout**: `AdvanceGate` 按 `canarySteps=[1,5,25,50,100]` 逐级推进灰度流量，每步 24h 驻留门槛。
+4. **Gate 4 FullRollout**: 100% 流量，`RolloutStatusCommitted`。
 
-> 每步 24h 驻留；error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback。CanaryPercent 合法值：`1, 5, 25, 50, 100`。
+> 硬停止条件全局适用：error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback（`ProgressiveRollout.CheckHardStop`）。
 
+**候选真正生效的唯一入口**：`ConfirmShadow` 成功后，通过注入的 `promptActivator`（同包窄接口，由 `*optimizer.PromptVersionStore` 实现）回调 `Activate`，读取 `SubmitCandidate` 时随 `AgentVersionSnapshot`（`TaskType`/`BaselineScore` 字段）落盘的 `rollout_states.metadata` 完成激活。`handleEvalCompleted` 本身**不再**在 Eval 通过时直接调用 `Activate`——2026-07-10 之前的实现在此处同步激活，导致 Gate 2/3 对 GEPA 候选完全不构成门禁（详见 ADR-0029 §K 修订记录）。
 
-实现见 `internal/learning/`（ProgressiveRollout / SQLiteRolloutStore）。Gate 0→1 自动进入 Shadow，Eval 结果不达标自动 Rollback；Gate 1→2 影子观测通过后进入 Canary 阶梯推进；硬停止条件全局适用于所有 Gate。M13 TrafficSplitter 按 canary 百分比分发流量。
+**单一状态源**：`m9Engine`（GEPA 候选路径）与 `LogicCollapseMonitor`（L2/L3/L4 候选路径）共用同一个 `SQLiteRolloutStore` 实例，由 `cmd/polaris/boot_agent.go` 构造并通过 `AgentBundle.RolloutStore` 传递给 `boot_server.go`——此前两者各自持有互不相干的状态（`m9Engine` 曾注入无 DB 持久化的纯内存版本），已统一。M13 TrafficSplitter 按 Gate 3 的 canary 百分比分发流量。
 
 ### 2.4 Cross-Module Co-Evolution [Module-Topology] [Blackboard]
 
@@ -246,8 +245,8 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 | **L0** | 配置调整 (路由权重/超时/模型选择/[SurpriseIndex]分位) | 全自动 | telemetry 监控 | 即时 | ✅ 已实现 |
 | **L1** | Prompt/Heuristic/system prompt/路由判据 | 全自动 | Eval Harness | 即时 | ✅ 已实现 |
 | **L2** | 新技能生成 (Skill Library 新条目) | 半自动 | 沙箱 + Eval + HMAC-SHA256 签名 | 即时 | ✅ 已实现（LogicCollapseMonitor + StagingPipeline；`logic_collapse_trigger.go`） |
-| **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 | ✅ 已实现（HITL（Human-in-the-loop，人机协同） 触发路径；`detectL3Trigger`） |
-| **L4** | 源码/架构修改 (Go/Rust) | 严格审批 | 形式化验证 + Red Team + 多签 | git revert | ✅ 已实现（管理员触发 + multi-sig HITL；`detectL4Trigger`） |
+| **L3** | 策略修改 / LoRA 适配器 | 需审批 | Shadow + Canary + 多签 | 分钟级 | ✅ 已实现（HITL（Human-in-the-loop，人机协同） 触发路径；`detectL3Trigger`。2026-07-10 前 `Engine.SetStagingPipeline` 在生产启动代码中从未被调用，HITL 审批通过后的 `SubmitCandidate` 静默丢弃；已随 §2.3 的单一状态源修复接通） |
+| **L4** | 源码/架构修改 (Go/Rust) | 严格审批 | 形式化验证 + Red Team + 多签 | git revert | ✅ 已实现（管理员触发 + multi-sig HITL；`detectL4Trigger`，同上 SubmitCandidate 接通修复） |
 
 **L4 不可变内核** — `0400` + CI merge-block + pre-receive hook 三重保护:
 
@@ -314,6 +313,7 @@ QLoRA/PRM（Process Reward Model，过程奖励模型）/ActivationSteering 的 
 | # | 严重级 | 文件 | 函数 | 问题描述 | 修复提交 |
 |---|--------|------|------|---------|---------|
 | 1 | P1 | `internal/learning/` | DynamicDifficultyCalibrator | 历史条数在 20–50 区间时，窗口切片计算出负索引触发 panic；分母以总长除以窗口计数导致成功率低估，误触发难度下调 | 40917d8 |
+| 2 | P0 | `internal/learning/engine_ops.go` | handleEvalCompleted | Eval(Gate 1) 一通过就同步调用 `versionStore.Activate`，Gate 2(Shadow)/Gate 3(Canary) 对 GEPA 候选完全不构成门禁；根因链还包括 `m9Engine` 注入的 rollout 无 DB 持久化、`SetStagingPipeline`/`SetVersionStore` 从未在生产启动代码中调用、`promptOptimizer` 以 `(nil,nil,0)` 构造 | c1af5b5 |
 
 ---
 
@@ -355,6 +355,8 @@ QLoRA/PRM（Process Reward Model，过程奖励模型）/ActivationSteering 的 
 | L4 SourceArchitecture（管理员触发 multi-sig） | ✅ 已实现 | `detectL4Trigger`：`l4TriggerCh` 管理员信号 → HITL `l4_multi_sig` → Staging |
 | CurriculumGenerator 接口绑定 | ✅ 已修复 | 通过 Adapter 适配器对齐接口签名 |
 | FastPath 跳过 Intent Vector 记录 | ✅ 已修复 | FastPath 合成感知结果后，异步调用 `memStore.RecordIntentVector`（source="fastpath_synthetic"），确保所有路径均写入 Intent 记录供后续 BM25/语义检索使用 |
+| Gate 2 ShadowExecution（ShadowExecutor） | ✅ 已实现（2026-07-10 恢复接入） | `internal/eval/analysis/shadow_executor.go`；`boot_agent.go` 5 分钟周期触发器发现 Gate 2 候选并回放，此前实现完整但缺顶层触发器，反复被误判死代码删除 |
+| M9Engine ↔ SQLiteRolloutStore 接线 | ✅ 已修复（2026-07-10） | `SetStagingPipeline`/`SetVersionStore` 此前从未在生产启动代码中调用；`m9Engine` 的 rollout 曾是无 DB 持久化的纯内存对象；现与 LogicCollapseMonitor 共用同一份真实状态 |
 
 ### 引入计划
 
