@@ -31,7 +31,7 @@ type SystemConfig struct {
 	DataDir              string                 `toml:"data_dir"`
 	Dirs                 DirsConfig             `toml:"dirs"`
 	ResourceGovernor     ResourceGovernorConfig `toml:"resource_governor"`
-	DataEncryptionKey    []byte                 `toml:"data_encryption_key"`
+	DataEncryptionKey    string                 `toml:"data_encryption_key"`
 	EgressAllowedDomains []string               `toml:"egress_allowed_domains"`
 }
 

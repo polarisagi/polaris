@@ -184,7 +184,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// 热注入 blackboard 到 ProviderRecoveryHandler（bootTools 时尚未装配）
 	tb.RecoveryHandler.SetBlackboard(blackboard)
-	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), sb.Cfg.System.DataEncryptionKey, memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
+	piiVault := agentctx.NewSessionPIIVault(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey), memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
 	tb.RecoveryHandler.SetPIIVault(piiVault)
 
 	// Reaper（挂起任务超时唤醒）

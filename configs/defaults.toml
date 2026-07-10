@@ -6,6 +6,16 @@ tier = 0
 max_agents = 3
 go_memlimit_mb = 150
 data_dir = "~/.polarisagi/polaris"
+data_encryption_key = "" # 留空或配置外部 KMS，不要硬编码明文密钥
+egress_allowed_domains = [] # 出站域名白名单（仅开启网络隔离时生效，空 = 允许所有）
+
+[system.resource_governor]
+# 资源控制阈值，低于指定阈值时触发对应降级保护
+mem_l1_free_mb = 2048 # L1 警告：停止拉起新 Agent
+mem_l2_free_mb = 1024 # L2 阻塞：挂起所有后台任务
+mem_l3_free_mb = 512  # L3 濒死：强杀耗存最大的子进程
+cpu_l1_pct = 80.0     # CPU 阈值：降低后台任务优先级
+cpu_l2_pct = 95.0     # CPU 阈值：限制并发请求
 
 # 运行时目录布局（从 data_dir 自动派生，无需手动设置）：
 #   data_dir/data/        — 数据库文件（polaris.db, surreal.db）
@@ -28,6 +38,7 @@ logs_dir      = ""   # 示例："/var/log/polarisagi" — 中央日志盘
 db_dir        = ""   # 示例："/mnt/nvme/polarisagi/data" — 高速 NVMe
 workspace_dir = ""   # 示例："/tmp/polarisagi/workspace" — tmpfs 沙箱
 models_dir    = ""   # 示例："/mnt/data/models" — 大容量模型盘
+bin_dir       = ""   # 示例："/opt/polarisagi/bin" — 二进制依赖存放目录
 
 # ── 下载配置 ────────────────────────────────────────────────────────────────
 [download]
@@ -171,8 +182,6 @@ websocket = false
 enabled        = true
 # 网络访问策略："block"（默认，对齐 Claude Code）或 "allow"。
 network_policy = "block"
-# 出站域名白名单，仅 network_policy="allow" 时有意义（macOS 支持，Linux 暂不支持细粒度）。
-allowed_domains = []
 # Linux bubblewrap 可执行路径，空 = 自动从 PATH 查找。
 bwrap_path = ""
 # Agent 可访问的额外文件系统路径白名单。
