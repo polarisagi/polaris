@@ -63,6 +63,26 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		}
 	}
 
+	// Level3Trajectory: 轨迹规则评估
+	//nolint:nestif
+	if c.Level == Level3Trajectory {
+		var trace *TrajectoryTrace
+		if traceRaw, ok := c.Input["trace"].(map[string]any); ok {
+			trace, _ = ParseTrace(traceRaw)
+		}
+
+		if trace != nil {
+			rules, err := ParseRules(c.Expected)
+			if err == nil && rules != nil {
+				judge := NewTrajectoryJudge()
+				if ok, reason := judge.Evaluate(ctx, trace, rules); !ok {
+					slog.DebugContext(ctx, "trajectory judge failed", "case", c.ID, "reason", reason)
+					return false, false
+				}
+			}
+		}
+	}
+
 	// Level4LLMJudge：LLM 语义评判路径
 	// 若无注入 Provider 则静默跳过（退化为已通过的字符串检查结果）
 	if c.Level == Level4LLMJudge && r.llmProvider != nil { //nolint:nestif
