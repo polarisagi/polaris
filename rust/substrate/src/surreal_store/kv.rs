@@ -23,9 +23,10 @@ pub unsafe extern "C" fn surreal_kv_get(
     out_val: *mut *mut u8,
     out_len: *mut usize,
 ) -> c_int {
-    let key_owned = unsafe { slice::from_raw_parts(key, key_len) }.to_vec();
-    let key_hex = bytes_to_hex(&key_owned);
     let result = panic::catch_unwind(|| {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
+        let key_owned = unsafe { slice::from_raw_parts(key, key_len) }.to_vec();
+        let key_hex = bytes_to_hex(&key_owned);
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -99,9 +100,10 @@ pub unsafe extern "C" fn surreal_kv_put(
     val: *const u8,
     val_len: usize,
 ) -> c_int {
-    let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
-    let v = bytes_to_hex(unsafe { slice::from_raw_parts(val, val_len) });
     let result = panic::catch_unwind(|| {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
+        let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
+        let v = bytes_to_hex(unsafe { slice::from_raw_parts(val, val_len) });
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -135,8 +137,9 @@ pub unsafe extern "C" fn surreal_kv_put(
 /// key 须为 key_len 字节长的有效内存地址。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_int {
-    let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
     let result = panic::catch_unwind(|| {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
+        let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -175,13 +178,14 @@ pub unsafe extern "C" fn surreal_kv_scan(
     prefix_len: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    let prefix_owned = if prefix_len == 0 {
-        vec![]
-    } else {
-        unsafe { slice::from_raw_parts(prefix, prefix_len) }.to_vec()
-    };
-    let prefix_hex = bytes_to_hex(&prefix_owned);
     let result = panic::catch_unwind(|| {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
+        let prefix_owned = if prefix_len == 0 {
+            vec![]
+        } else {
+            unsafe { slice::from_raw_parts(prefix, prefix_len) }.to_vec()
+        };
+        let prefix_hex = bytes_to_hex(&prefix_owned);
         let Some(store_arc) = get_store() else {
             write_cstr(out_json, "[]");
             return SURREAL_OK;

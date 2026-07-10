@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -152,7 +153,7 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 		localCfg["_feishu_token"] = token
 		localCfg["_feishu_domain"] = domain
 		concurrent.SafeGo(ctx, "channel_adapter.feishu.on_message", func(context.Context) {
-			host.OnMessage("feishu", channelID, localCfg, Message{
+			host.OnMessage("feishu", channelID, localCfg, protocol.ChannelMessage{
 				Text: text, ChatID: event.Event.Message.ChatID, UserID: event.Event.Sender.SenderID.OpenID,
 
 				TaintLevel: types.TaintHigh,

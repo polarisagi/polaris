@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sync"
 
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -35,10 +34,10 @@ type HookFirer interface {
 
 // ChannelMgr channelsadmin 消费方视角的最小平台管理接口。
 type ChannelMgr interface {
-	SendReply(ctx context.Context, channelID string, replyTo string, options map[string]any, srcMsg cadapter.Message, replyText string)
+	protocol.ChannelFacade
 	Start(channelType, channelID string, cfg map[string]any)
 	Stop(channelID string)
-	ExtractMessage(channelType string, body []byte, r *http.Request) cadapter.Message
+	ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage
 }
 
 // WebhookAutomationTrigger 桥接到 cronadmin 的 webhook 触发型 automation

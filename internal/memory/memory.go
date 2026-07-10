@@ -37,16 +37,6 @@ type MemoryEntry struct {
 	EmbedModelVersion string         `json:"embed_model_version"` // inv_M5_03: 跨版本检索触发 OnlineReindexer
 }
 
-// MemorySystem is the four-layer memory manager.
-type MemorySystem interface {
-	Write(ctx context.Context, entry *MemoryEntry) error
-	// List 按 RetrievalQuery 条件读多条记录（R2.2：读多条 → List，禁用 Retrieve）。
-	List(ctx context.Context, query *RetrievalQuery) ([]MemoryEntry, error)
-	Consolidate(ctx context.Context) error
-	Forget(ctx context.Context) (int, error)
-	Mem() protocol.MemorySystem // 返回四层 facade
-}
-
 // RetrievalQuery supports hybrid search across all layers.
 type RetrievalQuery struct {
 	Text      string    `json:"text"`

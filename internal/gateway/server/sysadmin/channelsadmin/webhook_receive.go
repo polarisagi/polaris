@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -75,7 +74,7 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 }
 
 // dispatchChannelMessage 推理 + 发回平台。被 webhook handler 和各平台 poller 共用。
-func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType, channelID string, cfg map[string]any, msg cadapter.Message) { //nolint:gocyclo
+func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) { //nolint:gocyclo
 
 	// Telegram allowed_user_ids 白名单过滤
 	if channelType == "telegram" && msg.UserID != "" { //nolint:nestif
@@ -181,5 +180,5 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		"POLARIS_CHAT_ID":    msg.ChatID,
 	})
 
-	h.ChannelMgr.SendReply(ctx, channelType, channelID, cfg, msg, reply)
+	_ = h.ChannelMgr.SendReply(ctx, channelType, channelID, cfg, msg, reply)
 }

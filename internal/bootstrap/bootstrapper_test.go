@@ -2,27 +2,46 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"testing"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-type mockFailingModule struct{}
+type mockFailingModule struct {
+	failPhase int
+	stopped   bool
+	closed    bool
+}
 
 func (m *mockFailingModule) Init(deps *DependencyMap) error { return nil }
 func (m *mockFailingModule) Ready() bool                    { return true }
 func (m *mockFailingModule) Dependencies() []string         { return nil }
 
 func (m *mockFailingModule) StopIngress(ctx context.Context) error {
-	return errors.New("StopIngress error")
+	m.stopped = true
+	if m.failPhase == 1 {
+		return apperr.New(apperr.CodeInternal, "StopIngress error")
+	}
+	return nil
 }
 func (m *mockFailingModule) Drain(ctx context.Context) error {
-	return errors.New("Drain error")
+	if m.failPhase == 2 {
+		return apperr.New(apperr.CodeInternal, "Drain error")
+	}
+	return nil
 }
 func (m *mockFailingModule) Flush(ctx context.Context) error {
-	return errors.New("Flush error")
+	if m.failPhase == 3 {
+		return apperr.New(apperr.CodeInternal, "Flush error")
+	}
+	return nil
 }
 func (m *mockFailingModule) Close(ctx context.Context) error {
-	return errors.New("Close error")
+	m.closed = true
+	if m.failPhase == 4 {
+		return apperr.New(apperr.CodeInternal, "Close error")
+	}
+	return nil
 }
 
 func TestGracefulShutdown_WithErrors(t *testing.T) {

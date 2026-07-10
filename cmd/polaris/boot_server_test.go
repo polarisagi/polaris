@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 func TestPerformHotRestart_ExecFailure(t *testing.T) {
@@ -26,7 +26,7 @@ func TestPerformHotRestart_ExecFailure(t *testing.T) {
 	execCalled := false
 	execFunc = func(argv0 string, argv []string, envv []string) error {
 		execCalled = true
-		return errors.New("simulated exec failure")
+		return apperr.New(apperr.CodeInternal, "simulated exec failure")
 	}
 
 	exitCode := -1
@@ -54,7 +54,7 @@ func TestReloadProvidersCallback_LogError(t *testing.T) {
 	slog.SetDefault(logger)
 
 	loadProvidersFunc = func(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg provider.ProviderRegistry, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
-		return errors.New("simulated load error")
+		return apperr.New(apperr.CodeInternal, "simulated load error")
 	}
 
 	cb := func() {

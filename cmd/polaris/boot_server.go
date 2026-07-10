@@ -10,7 +10,6 @@ import (
 	"github.com/polarisagi/polaris/internal/agent"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/channel"
-	"github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/prompt"
@@ -45,9 +44,9 @@ import (
 
 var (
 	// 用于单元测试注入 mock
-	execFunc = syscall.Exec
-	exitFunc = os.Exit
-	loadProvidersFunc = LoadProvidersFromDB
+	execFunc          = syscall.Exec        //nolint:gochecknoglobals
+	exitFunc          = os.Exit             //nolint:gochecknoglobals
+	loadProvidersFunc = LoadProvidersFromDB //nolint:gochecknoglobals
 )
 
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
@@ -88,7 +87,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		sb.Store.DB(), sb.Store.ReadDB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.Cfg.Agent, sb.TBR, apiRateLimiter)
 	promptMgr := prompt.NewManager(filepath.Join(sb.DataDir, "config"), configs.FS)
 	httpServer.SetPromptManager(promptMgr)
-	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg adapter.Message) {}, channel.WithSafeDialer(sb.Dialer))
+	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}, channel.WithSafeDialer(sb.Dialer))
 	httpServer.SetChannelStarter(channelMgr)
 
 	httpServer.SetAuditTrail(sb.AuditTrail)
@@ -323,7 +322,7 @@ func performHotRestart(sb *SubstrateBundle) {
 	//   3. store.Close()  — SQLite WAL checkpoint + 清理 .db-wal / .db-shm
 	exe, _ := os.Executable()
 	slog.Info("polaris: initiating graceful db shutdown before exec-restart")
-	
+
 	if sb != nil {
 		sb.Stop()
 		if sb.DBWriterDone != nil {

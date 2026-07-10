@@ -1,14 +1,13 @@
 package channel
 
 import (
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
-
 	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
 
+	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -176,7 +175,7 @@ func (m *Manager) RestoreChannelsFromDB(db protocol.SQLQuerier) {
 }
 
 func (m *Manager) HTTPClient() *http.Client { return m.httpClient }
-func (m *Manager) OnMessage(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {
+func (m *Manager) OnMessage(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {
 	m.onMessage(channelType, channelID, cfg, msg)
 }
 func (m *Manager) RegisterPoller(channelID string, cancel context.CancelFunc) {
@@ -185,6 +184,6 @@ func (m *Manager) RegisterPoller(channelID string, cancel context.CancelFunc) {
 func (m *Manager) SafeDialer() protocol.SafeDialer { return m.safeDialer }
 
 // ExtractMessage delegates to the standalone ExtractMessage function.
-func (m *Manager) ExtractMessage(channelType string, body []byte, r *http.Request) cadapter.Message {
+func (m *Manager) ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage {
 	return ExtractMessage(channelType, body, r)
 }

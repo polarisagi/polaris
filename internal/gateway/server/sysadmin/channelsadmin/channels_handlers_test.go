@@ -1,8 +1,7 @@
 package channelsadmin
 
 import (
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
-
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 
 	"bytes"
@@ -45,7 +44,7 @@ func TestChannelsHandlers(t *testing.T) {
 	h := &ChannelsAdmin{
 		DB:          db,
 		ChannelRepo: repo.NewSQLiteChannelRepository(db),
-		ChannelMgr:  channel.NewManager(http.DefaultClient, func(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {}),
+		ChannelMgr:  channel.NewManager(http.DefaultClient, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}),
 	}
 
 	// List

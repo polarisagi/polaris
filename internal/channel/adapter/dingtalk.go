@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -103,7 +104,7 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 				chatID = evData.SenderID
 			}
 			concurrent.SafeGo(ctx, "channel_adapter.dingtalk.on_message", func(context.Context) {
-				host.OnMessage("dingtalk", channelID, cfg, Message{
+				host.OnMessage("dingtalk", channelID, cfg, protocol.ChannelMessage{
 					Text: text, ChatID: chatID, UserID: evData.SenderID, ReplyToken: evData.SessionWebhook,
 
 					TaintLevel: types.TaintHigh,

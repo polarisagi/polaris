@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -38,11 +40,26 @@ type ScriptSkillExecutor struct {
 	// 该名字从未注册进 InProcessSandbox，必然 "unknown tool" 出错——两次执行、两条判定逻辑，
 	// 正是本次重构要消除的重复实现。
 	policy protocol.PolicyGate
+
+	// P1-8：幂等缓存与限流，与 InMemoryToolRegistry 保持能力对等。
+	// PII 令牌还原：Skill 脚本的输入来自 Agent planning 层，不经过 LLM 对话的
+	// PII 令牌化路径（令牌化仅发生在 M11 对话过滤器对 LLM 消息的处理中），
+	// 因此 Skill 输入不含 ⟦PII:xxxx⟧ 令牌，无需 PIITokenVault.RestoreForTask。
+	// 若未来 Skill 输入路径扩展到可能携带对话内容，需在此补充 tokenVault 注入。
+	mu               sync.Mutex
+	idempotencyCache *skillLRUCache    // 幂等缓存：LRU 上限 200 条 + TTL 5min
+	skillLimiter     *skillRateLimiter // Skill 执行限速：默认 20 QPS
 }
 
 // NewScriptSkillExecutor 构造执行器。runner 可选（nil 时退化为仅元数据验证）。
 func NewScriptSkillExecutor(reg protocol.SkillRegistry, runner ScriptRunner, loader ScriptLoader) *ScriptSkillExecutor {
-	return &ScriptSkillExecutor{registry: reg, runner: runner, loader: loader}
+	return &ScriptSkillExecutor{
+		registry:         reg,
+		runner:           runner,
+		loader:           loader,
+		idempotencyCache: newSkillLRUCache(200, 5*time.Minute),
+		skillLimiter:     newSkillRateLimiter(20),
+	}
 }
 
 // WithPolicy 注入 Cedar PolicyGate（M11），脚本执行前的唯一权限判定入口。
@@ -59,6 +76,21 @@ func (e *ScriptSkillExecutor) WithPolicy(gate protocol.PolicyGate) *ScriptSkillE
 // 无脚本可执行时（纯 SKILL.md 指令技能，或 runner 未注入）: 返回 instructions 全文供 LLM 读取执行，
 // 与 cmd/polaris/skill_loader.go 注册进 InProcessSandbox 的同名工具保持完全一致的语义（唯一实现，禁止重复）。
 func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error) {
+	// P1-8 幂等缓存检查：与 InMemoryToolRegistry.checkIdempotency 行为对齐
+	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
+		e.mu.Lock()
+		if cached, exists := e.idempotencyCache.get(string(key)); exists {
+			e.mu.Unlock()
+			return cached, nil
+		}
+		e.mu.Unlock()
+	}
+
+	// P1-8 限流：Skill 执行速率上限 20 QPS
+	if !e.skillLimiter.Allow() {
+		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("skill_executor: rate limit exceeded for skill %s", skillID))
+	}
+
 	meta, err := e.registry.Get(ctx, skillID, "")
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: registry.Get", err)
@@ -105,6 +137,14 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: run script", err)
 	}
+
+	// P1-8 幂等缓存写入：成功结果按 key 缓存，下次同 key 命中直接返回
+	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
+		e.mu.Lock()
+		e.idempotencyCache.set(string(key), out)
+		e.mu.Unlock()
+	}
+
 	return out, nil
 }
 

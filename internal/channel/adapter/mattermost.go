@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -95,7 +96,7 @@ func mattermostConnect(ctx context.Context, host PollerHost, channelID, mmURL, t
 			continue
 		}
 		concurrent.SafeGo(ctx, "channel_adapter.mattermost.on_message", func(context.Context) {
-			host.OnMessage("mattermost", channelID, cfg, Message{
+			host.OnMessage("mattermost", channelID, cfg, protocol.ChannelMessage{
 				Text: post.Message, ChatID: post.ChannelID, UserID: post.UserID,
 
 				TaintLevel: types.TaintHigh,

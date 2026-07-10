@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
@@ -145,15 +146,12 @@ func (p *ConsolidationPipeline) llmExtract(
 	return entities, relations, nil
 }
 
-// ruleExtract 规则回退：正则模式 + 共现关系推断。
-func (p *ConsolidationPipeline) ruleExtract(
-	_ string, // sessionID 用于 ID 前缀，通过 now 时间戳区分即可
-	text string,
-) ([]*types.Entity, []*types.Relation, error) {
-	now := time.Now().UnixNano()
-	var entities []*types.Entity
-
-	patterns := []struct {
+//nolint:gochecknoglobals
+var getEntityExtractPatterns = sync.OnceValue(func() []struct {
+	re      *regexp.Regexp
+	entType string
+} {
+	return []struct {
 		re      *regexp.Regexp
 		entType string
 	}{
@@ -163,6 +161,17 @@ func (p *ConsolidationPipeline) ruleExtract(
 		{regexp.MustCompile(`https?://[^\s"'>]+`), "url"},                    // URL
 		{regexp.MustCompile(`\b([A-Z]{2,}(?:_[A-Z]+)*)\b`), "constant"},      // 常量/枚举
 	}
+})
+
+// ruleExtract 规则回退：正则模式 + 共现关系推断。
+func (p *ConsolidationPipeline) ruleExtract(
+	_ string, // sessionID 用于 ID 前缀，通过 now 时间戳区分即可
+	text string,
+) ([]*types.Entity, []*types.Relation, error) {
+	now := time.Now().UnixNano()
+	var entities []*types.Entity
+
+	patterns := getEntityExtractPatterns()
 
 	seen := make(map[string]bool)
 	for i, pat := range patterns {

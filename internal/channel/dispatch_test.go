@@ -1,12 +1,12 @@
 package channel
 
 import (
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
-
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 func TestManager_SendReply_Coverage(t *testing.T) {
@@ -16,12 +16,11 @@ func TestManager_SendReply_Coverage(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	mgr := NewManager(ts.Client(), func(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {})
+	mgr := NewManager(ts.Client(), func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {})
 	ctx := context.Background()
-	msg := cadapter.Message{ChatID: "123", ReplyToken: "token"}
+	msg := protocol.ChannelMessage{ChatID: "c1", ReplyToken: "r1"}
 	text := "hello"
 
-	// test missing configs
 	mgr.SendReply(ctx, "telegram", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "discord", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "slack", "ch1", map[string]any{}, msg, text)
@@ -29,7 +28,7 @@ func TestManager_SendReply_Coverage(t *testing.T) {
 	mgr.SendReply(ctx, "line", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "qqbot", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "whatsapp", "ch1", map[string]any{}, msg, text)
-	mgr.SendReply(ctx, "dingtalk", "ch1", map[string]any{}, cadapter.Message{}, text) // missing ReplyToken
+	mgr.SendReply(ctx, "dingtalk", "ch1", map[string]any{}, protocol.ChannelMessage{}, text) // missing ReplyToken
 	mgr.SendReply(ctx, "mattermost", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "email", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "matrix", "ch1", map[string]any{}, msg, text)
@@ -39,7 +38,7 @@ func TestManager_SendReply_Coverage(t *testing.T) {
 	mgr.SendReply(ctx, "teams", "ch1", map[string]any{}, msg, text)
 	mgr.SendReply(ctx, "unknown", "ch1", map[string]any{}, msg, text)
 
-	// test valid basic ones that don't need token fetches or complex handshakes or the server mock is enough
+	// test valid path for telegram
 	mgr.SendReply(ctx, "telegram", "ch1", map[string]any{"bot_token": "valid_token"}, msg, text)
 	// Some functions directly construct urls or use the client, we just need them to run to get coverage.
 }

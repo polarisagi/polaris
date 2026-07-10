@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -102,7 +103,7 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 			}
 			localCfg["bot_token"] = botToken
 			concurrent.SafeGo(ctx, "channel_adapter.slack.on_message", func(context.Context) {
-				host.OnMessage("slack", channelID, localCfg, Message{
+				host.OnMessage("slack", channelID, localCfg, protocol.ChannelMessage{
 					Text: payload.Event.Text, ChatID: payload.Event.Channel, UserID: payload.Event.User,
 
 					TaintLevel: types.TaintHigh,

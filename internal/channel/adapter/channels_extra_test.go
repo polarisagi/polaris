@@ -11,10 +11,11 @@ import (
 
 type mockPollerHost struct{}
 
-func (m *mockPollerHost) HTTPClient() *http.Client                                                 { return http.DefaultClient }
-func (m *mockPollerHost) OnMessage(channelType, channelID string, cfg map[string]any, msg Message) {}
-func (m *mockPollerHost) RegisterPoller(channelID string, cancel context.CancelFunc)               {}
-func (m *mockPollerHost) SafeDialer() protocol.SafeDialer                                          { return nil }
+func (m *mockPollerHost) HTTPClient() *http.Client { return http.DefaultClient }
+func (m *mockPollerHost) OnMessage(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {
+}
+func (m *mockPollerHost) RegisterPoller(channelID string, cancel context.CancelFunc) {}
+func (m *mockPollerHost) SafeDialer() protocol.SafeDialer                            { return nil }
 func TestPollers_Coverage(t *testing.T) {
 	host := &mockPollerHost{}
 	ctx, cancel := context.WithCancel(context.Background())

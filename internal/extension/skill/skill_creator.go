@@ -160,9 +160,10 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 	return pluginDir, nil
 }
 
+var jsonExtractRegex = regexp.MustCompile(`(?s)\{.*\}`)
+
 func extractJSON(input string) string {
-	re := regexp.MustCompile(`(?s)\{.*\}`)
-	match := re.FindString(input)
+	match := jsonExtractRegex.FindString(input)
 	if match != "" {
 		return match
 	}

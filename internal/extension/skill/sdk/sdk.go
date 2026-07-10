@@ -16,10 +16,12 @@ import (
 
 // retain 持有所有由 polaris_malloc 分配的字节切片，防止 GC 回收。
 // key 为切片起始地址（uint32 截断自 uintptr），与宿主侧线性内存偏移一致。
+//
 //nolint:gochecknoglobals // Wasm 模块实例隔离，单线程运行，允许全局状态
 var retain = map[uint32][]byte{}
 
 // activeHandler 由 Register 设置，run 调用时执行。
+//
 //nolint:gochecknoglobals // 见上
 var activeHandler func(input []byte) ([]byte, error)
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -77,7 +78,7 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 				continue
 			}
 			concurrent.SafeGo(ctx, "channel_adapter.email.on_message", func(context.Context) {
-				host.OnMessage("email", channelID, cfg, Message{
+				host.OnMessage("email", channelID, cfg, protocol.ChannelMessage{
 					Text:       em.Body,
 					ChatID:     em.From,
 					UserID:     em.From,

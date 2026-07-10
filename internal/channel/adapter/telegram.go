@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -74,7 +75,7 @@ func RunTelegramPoller(ctx context.Context, host PollerHost, poller *telegramPol
 			if upd.Message == nil || upd.Message.Text == "" {
 				continue
 			}
-			msg := Message{
+			msg := protocol.ChannelMessage{
 				Text:   upd.Message.Text,
 				ChatID: fmt.Sprintf("%d", upd.Message.Chat.ID),
 				UserID: fmt.Sprintf("%d", upd.Message.From.ID),

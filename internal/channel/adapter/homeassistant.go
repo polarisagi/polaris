@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -208,7 +209,7 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 		text := fmt.Sprintf("[HA] %s (%s): %s", friendlyName, entityID, stateDesc)
 
 		concurrent.SafeGo(ctx, "channel_adapter.homeassistant.on_message", func(context.Context) {
-			host.OnMessage("homeassistant", channelID, cfg, Message{
+			host.OnMessage("homeassistant", channelID, cfg, protocol.ChannelMessage{
 				Text: text, ChatID: channelID, UserID: "homeassistant",
 
 				TaintLevel: types.TaintHigh,

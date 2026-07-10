@@ -20,15 +20,16 @@ use super::{
 /// doc_id/text 须为有效 NUL-terminated UTF-8 C 字符串。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c_char) -> c_int {
-    let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
-    let body = match unsafe { CStr::from_ptr(text) }.to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
     let result = panic::catch_unwind(move || {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
+        let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
+        let body = match unsafe { CStr::from_ptr(text) }.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
         let Some(store_arc) = get_store() else {
             return SURREAL_OK;
         };

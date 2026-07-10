@@ -37,20 +37,21 @@ pub unsafe extern "C" fn surreal_graph_relate(
         "[Rust] surreal_graph_relate called with from_len={}, et_len={}, to_len={}",
         from_len, et_len, to_len
     );
-    let weight = f64::from_bits(weight_bits);
-    let from = match unsafe { crate::slice_to_str(from_ptr, from_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
-    let et = match unsafe { crate::slice_to_str(et_ptr, et_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
-    let to = match unsafe { crate::slice_to_str(to_ptr, to_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
     let result = panic::catch_unwind(move || {
+        let weight = f64::from_bits(weight_bits);
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
+        let from = match unsafe { crate::slice_to_str(from_ptr, from_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
+        let et = match unsafe { crate::slice_to_str(et_ptr, et_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
+        let to = match unsafe { crate::slice_to_str(to_ptr, to_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
         let Some(store_arc) = get_store() else {
             return SURREAL_OK;
         };

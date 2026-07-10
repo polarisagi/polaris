@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -238,7 +239,7 @@ func qqbotConnect( //nolint:gocyclo
 				localCfg["_qqbot_msg_id"] = msg.ID
 				localCfg["_qqbot_msg_type"] = p.T
 				concurrent.SafeGo(ctx, "channel_adapter.qqbot.on_message", func(context.Context) {
-					host.OnMessage("qqbot", channelID, localCfg, Message{
+					host.OnMessage("qqbot", channelID, localCfg, protocol.ChannelMessage{
 						Text: msg.Content, ChatID: chatID, UserID: msg.Author.ID,
 
 						TaintLevel: types.TaintHigh,

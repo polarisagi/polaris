@@ -19,12 +19,6 @@ import (
 // maxScreenshotBytesFull Tier 1+ vision 路径截图上限（超出则降级 DOM-only）。
 const maxScreenshotBytesFull = 2 * 1024 * 1024 // 2MB
 
-// LargeActionModel 将自然语言意图转为 GUI 动作并执行。
-// 调用路径：intent + ScreenState → VLM → computerUseArgs JSON → executor
-type LargeActionModel interface {
-	ExecuteAction(ctx context.Context, intent string, screenState *ScreenState) (*types.ToolResult, error)
-}
-
 // ScreenState 屏幕多模态状态表示。
 type ScreenState struct {
 	ScreenshotBytes []byte // 原始 PNG 图像；超出 maxScreenshotBytesFull 时 VLM 路径自动降级为 DOM-only

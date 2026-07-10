@@ -3,7 +3,7 @@ package channel
 import (
 	"context"
 
-	"github.com/polarisagi/polaris/internal/channel/adapter"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // ChannelFacade 聊天平台适配器模块对外统一接口。
@@ -32,7 +32,7 @@ type ChannelFacade interface {
 	StopAll()
 
 	// Send 向指定渠道发送消息（支持文本/图片/Markdown）。
-	Send(ctx context.Context, channelID string, msg adapter.Message) error
+	Send(ctx context.Context, channelID string, msg protocol.ChannelMessage) error
 
 	// ActiveChannels 返回当前活跃的渠道 ID 列表。
 	ActiveChannels() []string

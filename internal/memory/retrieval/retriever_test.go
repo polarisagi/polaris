@@ -2,10 +2,10 @@ package retrieval
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -61,7 +61,7 @@ func TestHybridRetriever_GraphNodeSkip(t *testing.T) {
 	ctx := context.Background()
 
 	// Test case 1: kvErr != nil
-	store1 := &fakeStore{getErr: errors.New("kv missing")}
+	store1 := &fakeStore{getErr: apperr.New(apperr.CodeInternal, "kv missing")}
 	graph1 := &fakeGraph{nodes: []types.ScoredNode{{ID: "node1", Score: 1.0}}}
 	hr1 := NewHybridRetrieverWithGraph(store1, graph1)
 

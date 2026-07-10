@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -82,7 +83,7 @@ func signalReceiveSSE(ctx context.Context, host PollerHost, channelID, apiURL, a
 			chatID = dm.GroupInfo.GroupID
 		}
 		concurrent.SafeGo(ctx, "channel_adapter.signal.on_message", func(context.Context) {
-			host.OnMessage("signal", channelID, cfg, Message{
+			host.OnMessage("signal", channelID, cfg, protocol.ChannelMessage{
 				Text: dm.Message, ChatID: chatID, UserID: env.Envelope.SourceNumber,
 
 				TaintLevel: types.TaintHigh,

@@ -1,8 +1,8 @@
 package channelsadmin
 
 import (
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/internal/protocol"
 
 	"bytes"
 	"context"
@@ -95,5 +95,5 @@ func TestDispatchChannelMessage(t *testing.T) {
 	reg := llm.NewProviderRegistry(config.M1RouterThresholds{})
 	fromConfig := &ChannelsAdmin{DB: db, Registry: reg}
 
-	fromConfig.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, cadapter.Message{})
+	fromConfig.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, protocol.ChannelMessage{})
 }

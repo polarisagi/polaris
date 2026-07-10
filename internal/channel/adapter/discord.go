@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -227,7 +228,7 @@ func DiscordConnect( //nolint:gocyclo
 					continue
 				}
 				concurrent.SafeGo(ctx, "channel_adapter.discord.on_message", func(context.Context) {
-					host.OnMessage("discord", channelID, cfg, Message{
+					host.OnMessage("discord", channelID, cfg, protocol.ChannelMessage{
 						Text: dmsg.Content, ChatID: dmsg.ChannelID, UserID: dmsg.Author.ID,
 
 						TaintLevel: types.TaintHigh,

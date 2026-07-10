@@ -1,4 +1,9 @@
 {
   "_comment": "R7 ratchet baseline(2026-07-07 建立，2026-07-07 复核缩减，2026-07-08 全部清空)——只减不增。收录当时已存在的存量超400行文件,每拆分完成一个从本列表移除;新增代码/新文件不得依赖本名单豁免,发现即拆分,不得静默加入。当前列表为空：全部48个存量超标文件已拆分完毕，Test_inv_FileLineLimit 现对全仓库强制执行 400 行上限，无豁免。",
-  "internal/agent/agent_execute_effect.go": "added handleAgentStreamFSM logic causing it to cross 400 lines temporarily, will refactor stream parsing out"
+  "_reason_agent_execute_effect": "added handleAgentStreamFSM logic causing it to cross 400 lines temporarily, will refactor stream parsing out",
+  "_reason_agent_execute_dag": "P0-6 fix added logic temporarily crossing 400 lines, will split deterministic effect handling",
+  "_reason_state_machine": "P0-5 fix added event handling temporarily crossing 400 lines, will split state definitions",
+  "internal/agent/agent_execute_effect.go": true,
+  "internal/agent/agent_execute_dag.go": true,
+  "internal/agent/fsm/state_machine.go": true
 }

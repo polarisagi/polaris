@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"sync"
 
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -30,8 +29,8 @@ type ChatDispatcher interface {
 	UpdateSessionTitle(ctx context.Context, sessionID string, title string) error
 }
 
-type ChannelManager interface {
-	SendReply(ctx context.Context, channelID string, replyTo string, options map[string]any, srcMsg cadapter.Message, replyText string)
+type ChannelMgr interface {
+	protocol.ChannelFacade
 }
 
 type HITLGateway interface {
@@ -43,7 +42,7 @@ type CronAdmin struct {
 	AgentPool        protocol.AgentPool
 	AutomationRepo   repo.AutomationRepository
 	Chat             ChatDispatcher
-	ChannelMgr       ChannelManager
+	ChannelMgr       ChannelMgr
 	HITLGateway      HITLGateway
 	HTTPClient       *http.Client
 	Registry         protocol.LLMRegistry
@@ -61,7 +60,7 @@ func NewCronAdmin(
 	agentPool protocol.AgentPool,
 	automationRepo repo.AutomationRepository,
 	chat ChatDispatcher,
-	channelMgr ChannelManager,
+	channelMgr ChannelMgr,
 	hitlGateway HITLGateway,
 	httpClient *http.Client,
 	registry protocol.LLMRegistry,

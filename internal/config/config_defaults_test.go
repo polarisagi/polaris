@@ -33,7 +33,7 @@ func TestDefaultsTOML_Coverage(t *testing.T) {
 }
 
 func checkStructCoverage(t *testing.T, typ reflect.Type, data any, whitelist map[string]bool, prefix string) {
-	if typ.Kind() == reflect.Ptr {
+	if typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -73,7 +74,7 @@ func RunMatrixPoller(ctx context.Context, host PollerHost, channelID, homeserver
 				continue
 			}
 			concurrent.SafeGo(ctx, "channel_adapter.matrix.on_message", func(context.Context) {
-				host.OnMessage("matrix", channelID, cfg, Message{
+				host.OnMessage("matrix", channelID, cfg, protocol.ChannelMessage{
 					Text: ev.Content.Body, ChatID: ev.RoomID, UserID: ev.Sender,
 
 					TaintLevel: types.TaintHigh,

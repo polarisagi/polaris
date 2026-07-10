@@ -16,34 +16,34 @@ import (
 // MemorySystem Facade — Write/Retrieve/Consolidate/Forget
 // ============================================================================
 
-// MemorySystemImpl 实现 MemorySystem 接口，作为四层记忆的统一入口。
+// MemorySystemImpl 实现 protocol.MemorySystem 接口，作为四层记忆的统一入口。
 type MemorySystemImpl struct {
-	mem *MemImpl
+	*MemImpl
 }
 
 // NewMemorySystemFromMemImpl 创建 MemorySystem facade。
 func NewMemorySystemFromMemImpl(mem *MemImpl) *MemorySystemImpl {
-	return &MemorySystemImpl{mem: mem}
+	return &MemorySystemImpl{MemImpl: mem}
 }
 
 func NewMemorySystem(store protocol.Store) *MemorySystemImpl {
-	return &MemorySystemImpl{mem: NewMemImpl(store)}
+	return &MemorySystemImpl{MemImpl: NewMemImpl(store)}
 }
 
 // NewMemorySystemWithGraph 创建含 SurrealDB 图路径的 MemorySystem facade（Tier1+）。
 func NewMemorySystemWithGraph(store protocol.Store, graph protocol.GraphTraverser) *MemorySystemImpl {
-	return &MemorySystemImpl{mem: NewMemImplWithGraph(store, graph)}
+	return &MemorySystemImpl{MemImpl: NewMemImplWithGraph(store, graph)}
 }
 
 // Mem 返回底层四层 facade。
-func (ms *MemorySystemImpl) Mem() protocol.MemorySystem { return ms.mem }
+func (ms *MemorySystemImpl) Mem() protocol.MemorySystem { return ms.MemImpl }
 
 // Write 将 MemoryEntry 路由到对应记忆层。
 func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error {
 	switch entry.Layer {
 	case LayerWorking:
 		// Working Memory 仅写 ContextWindow（无持久化，热路径）
-		ms.mem.working.ContextWindow().Append(types.Message{
+		ms.working.ContextWindow().Append(types.Message{
 			Role:    "assistant",
 			Content: entry.Content,
 		})
@@ -73,7 +73,11 @@ func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error
 			Payload:   []byte(entry.Content),
 			CreatedAt: entry.OccurredAt,
 		}
-		return ms.mem.episodic.Append(ctx, ev, types.TaintLevel(entry.TaintLevel))
+		err := ms.episodic.Append(ctx, ev, types.TaintLevel(entry.TaintLevel))
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Write: episodic.Append", err)
+		}
+		return nil
 	case LayerSemantic:
 		doc := types.Document{
 			ID:         entry.ID,
@@ -81,7 +85,11 @@ func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error
 			SourceType: "semantic",
 			SourceURI:  entry.Content, // 摘要内容存入 SourceURI
 		}
-		return ms.mem.semantic.StoreDocument(ctx, doc, types.TaintLevel(entry.TaintLevel))
+		err := ms.semantic.StoreDocument(ctx, doc, types.TaintLevel(entry.TaintLevel))
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Write: semantic.StoreDocument", err)
+		}
+		return nil
 	default:
 		// LayerProcedural 由 M6 SkillRegistry 管理，此处不处理
 		return nil
@@ -97,7 +105,7 @@ func (ms *MemorySystemImpl) List(ctx context.Context, q *RetrievalQuery) ([]Memo
 	config := types.RetrievalConfig{
 		FinalTopK: q.TopK,
 	}
-	frags, err := ms.mem.retriever.Search(ctx, q.Text, scope, config)
+	frags, err := ms.retriever.Search(ctx, q.Text, scope, config)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Retrieve", err)
 	}
@@ -131,7 +139,7 @@ func (ms *MemorySystemImpl) InjectRelevantMemory(ctx context.Context, sessionID 
 		VectorWeight: 0.5,
 		GraphWeight:  0.2,
 	}
-	frags, err := ms.mem.retriever.Search(ctx, query, types.SearchScope{Type: "memory"}, cfg)
+	frags, err := ms.retriever.Search(ctx, query, types.SearchScope{Type: "memory"}, cfg)
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.InjectRelevantMemory", err)
 	}
@@ -149,13 +157,21 @@ func (ms *MemorySystemImpl) InjectRelevantMemory(ctx context.Context, sessionID 
 
 // Consolidate 触发 Episodic → Semantic 记忆蒸馏。
 func (ms *MemorySystemImpl) Consolidate(ctx context.Context) error {
-	return ms.mem.episodic.Consolidate(ctx, ms.mem.semantic)
+	err := ms.episodic.Consolidate(ctx, ms.semantic)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Consolidate", err)
+	}
+	return nil
 }
 
 // Forget 驱逐超期低质量 Episodic 事件（TTL > 30 天）。
 func (ms *MemorySystemImpl) Forget(ctx context.Context) (int, error) {
-	return ms.mem.episodic.Forget(ctx)
+	n, err := ms.episodic.Forget(ctx)
+	if err != nil {
+		return n, apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Forget", err)
+	}
+	return n, nil
 }
 
-// 编译期验证 MemorySystemImpl 实现 MemorySystem 接口
-var _ MemorySystem = (*MemorySystemImpl)(nil)
+// 编译期验证 MemorySystemImpl 实现 protocol.MemorySystem 接口
+var _ protocol.MemorySystem = (*MemorySystemImpl)(nil)

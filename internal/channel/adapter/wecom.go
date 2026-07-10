@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -152,7 +153,7 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 				chatID = userID
 			}
 			concurrent.SafeGo(ctx, "channel_adapter.wecom.on_message", func(context.Context) {
-				host.OnMessage("wecom", channelID, cfg, Message{
+				host.OnMessage("wecom", channelID, cfg, protocol.ChannelMessage{
 					Text: content, ChatID: chatID, UserID: userID,
 
 					TaintLevel: types.TaintHigh,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -31,8 +30,8 @@ type ChannelStarter interface {
 	// Stop 停止指定平台 poller（频道禁用/删除时调用）。
 	Stop(channelID string)
 	// SendReply 向指定频道回复消息（sysadmin 工作流响应时调用）。
-	SendReply(ctx context.Context, channelType, channelID string, cfg map[string]any, msg cadapter.Message, text string)
-	ExtractMessage(channelType string, body []byte, req *http.Request) cadapter.Message
+	protocol.ChannelFacade
+	ExtractMessage(channelType string, body []byte, req *http.Request) protocol.ChannelMessage
 }
 
 // MCPManager server 包对 MCP 服务器管理器的消费端接口（超集，覆盖所有子 handler 调用点）。

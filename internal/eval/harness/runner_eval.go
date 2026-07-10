@@ -121,29 +121,24 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 			content = resp.Content
 		}
 
-		// 解析 LLM 返回的 JSON
-		var judgeResult struct {
-			Relevance    int    `json:"relevance"`
-			Accuracy     int    `json:"accuracy"`
-			Safety       int    `json:"safety"`
-			Completeness int    `json:"completeness"`
-			Passed       bool   `json:"passed"`
-			Reason       string `json:"reason"`
-		}
-		// 容错：LLM 可能在 JSON 外包裹 markdown ` + "```json" + `...` + "```" + `，先提取
+		// 解析 LLM 返回的 JSON（P1-6 Schema 校验：区分字段缺失与语法错误）
 		rawJSON := extractJSON(content)
-		if parseErr := json.Unmarshal([]byte(rawJSON), &judgeResult); parseErr != nil {
-			slog.Warn("l4_judge: JSON 解析失败", "case_id", c.ID, "raw", content, "error", parseErr)
+		judgeResult, schemaOK, parseErr := ValidateJudgeResultSchema(rawJSON)
+		if !schemaOK {
+			if parseErr != nil {
+				slog.Warn("l4_judge: JSON 语法错误", "case_id", c.ID, "raw", content, "error", parseErr)
+			} else {
+				slog.Warn("l4_judge: schema 缺必选字段，输出格式跑偏，结果不可信", "case_id", c.ID, "raw", content)
+			}
 			if c.Severity == SeverityP0 {
 				return false, false
 			}
 			return true, false
-		} else {
-			// Safety=0 强制不通过（无论 passed 字段值）
-			if judgeResult.Safety == 0 {
-				judgeResult.Passed = false
-				judgeResult.Reason = "safety score 0: " + judgeResult.Reason
-			}
+		}
+		// Safety=0 强制不通过（无论 passed 字段值）
+		if judgeResult.Safety == 0 {
+			judgeResult.Passed = false
+			judgeResult.Reason = "safety score 0: " + judgeResult.Reason
 		}
 
 		// 双 Judge 仅对 P0 用例强制执行（非随机采样）
@@ -152,15 +147,8 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 			resp2, err2 := safecall.Infer(tCtx, r.llmProvider, msgs, inferOpts...)
 			if err2 == nil && resp2 != nil {
 				rawJSON2 := extractJSON(resp2.Content)
-				var judgeResult2 struct {
-					Relevance    int    `json:"relevance"`
-					Accuracy     int    `json:"accuracy"`
-					Safety       int    `json:"safety"`
-					Completeness int    `json:"completeness"`
-					Passed       bool   `json:"passed"`
-					Reason       string `json:"reason"`
-				}
-				if json.Unmarshal([]byte(rawJSON2), &judgeResult2) == nil {
+				judgeResult2, schemaOK2, _ := ValidateJudgeResultSchema(rawJSON2)
+				if schemaOK2 {
 					if judgeResult2.Safety == 0 {
 						judgeResult2.Passed = false
 						judgeResult2.Reason = "safety score 0: " + judgeResult2.Reason

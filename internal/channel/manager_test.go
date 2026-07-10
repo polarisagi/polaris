@@ -1,8 +1,6 @@
 package channel
 
 import (
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
-
 	"context"
 	"net"
 	"net/http"
@@ -21,7 +19,7 @@ func (m *mockSafeDialer) DialContext(ctx context.Context, network, address strin
 }
 
 func TestManager_Lifecycle(t *testing.T) {
-	onMsg := func(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {}
+	onMsg := func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}
 	mgr := NewManager(http.DefaultClient, onMsg, WithSafeDialer(&mockSafeDialer{}))
 
 	if mgr.safeDialer == nil {
@@ -65,7 +63,7 @@ func TestManager_Lifecycle(t *testing.T) {
 }
 
 func TestManager_Start_InvalidConfigs(t *testing.T) {
-	onMsg := func(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {}
+	onMsg := func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}
 	mgr := NewManager(http.DefaultClient, onMsg)
 
 	// Test Start with invalid/empty configs, should not panic
@@ -103,7 +101,7 @@ func TestManager_Start_InvalidConfigs(t *testing.T) {
 }
 
 func TestManager_RestoreChannelsFromDB_NilDB(t *testing.T) {
-	onMsg := func(channelType, channelID string, cfg map[string]any, msg cadapter.Message) {}
+	onMsg := func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}
 	mgr := NewManager(http.DefaultClient, onMsg)
 
 	// Should not panic

@@ -358,7 +358,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 		if apperr.IsCode(err, apperr.CodeConflict) {
 			a.asyncIntent(types.TriggerExecuteFail)
-			return err // Return directly for TOCTOU
+			return err //nolint:wrapcheck // Return directly for TOCTOU
 		}
 
 		// 执行失败 → 触发 S_ROLLBACK

@@ -119,7 +119,7 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 		if s, ok := mod.(Stage1Stopper); ok {
 			if err := s.StopIngress(ctx); err != nil {
 				slog.Warn("bootstrap: StopIngress failed", "module", name, "err", err)
-				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.StopIngress: %w", name, err))
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.StopIngress", name), err))
 			}
 		}
 	}
@@ -129,7 +129,7 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 		if d, ok := mod.(Stage2Drainer); ok {
 			if err := d.Drain(ctx); err != nil {
 				slog.Warn("bootstrap: Drain failed", "module", name, "err", err)
-				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.Drain: %w", name, err))
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.Drain", name), err))
 			}
 		}
 	}
@@ -139,7 +139,7 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 		if f, ok := mod.(Stage3Flusher); ok {
 			if err := f.Flush(ctx); err != nil {
 				slog.Warn("bootstrap: Flush failed", "module", name, "err", err)
-				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.Flush: %w", name, err))
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.Flush", name), err))
 			}
 		}
 	}
@@ -149,7 +149,7 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 		if c, ok := mod.(Stage4Closer); ok {
 			if err := c.Close(ctx); err != nil {
 				slog.Warn("bootstrap: Close failed", "module", name, "err", err)
-				shutdownErrors = append(shutdownErrors, fmt.Errorf("%s.Close: %w", name, err))
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.Close", name), err))
 			}
 		}
 	}

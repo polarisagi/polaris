@@ -12,8 +12,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 
-	"github.com/polarisagi/polaris/internal/channel/adapter"
-
 	"net/http"
 	"sync"
 
@@ -54,10 +52,10 @@ type SysAdminHandler struct {
 	HITLGateway    protocol.HITL
 	ToolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	ChannelMgr     interface {
-		SendReply(ctx context.Context, channelID string, replyTo string, options map[string]any, srcMsg adapter.Message, replyText string)
+		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
 		Stop(channelID string)
-		ExtractMessage(channelType string, body []byte, r *http.Request) adapter.Message
+		ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage
 	}
 	StreamIdleTimeout  time.Duration
 	TemplateCacheMap   *sync.Map
@@ -103,10 +101,10 @@ type Dependencies struct {
 	ExtRepo        protocol.ExtensionRepository
 	HITLGateway    protocol.HITL
 	ChannelMgr     interface {
-		SendReply(ctx context.Context, channelID string, replyTo string, options map[string]any, srcMsg adapter.Message, replyText string)
+		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
 		Stop(channelID string)
-		ExtractMessage(channelType string, body []byte, r *http.Request) adapter.Message
+		ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage
 	}
 	StreamIdleTimeout time.Duration
 }

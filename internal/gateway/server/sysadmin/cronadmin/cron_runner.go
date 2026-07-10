@@ -1,9 +1,8 @@
 package cronadmin
 
 import (
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
-
-	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 
 	"context"
 	"encoding/json"
@@ -236,7 +235,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 				Scan(&chType, &cfgJSON); qErr == nil {
 				var cfg map[string]any
 				_ = json.Unmarshal([]byte(cfgJSON), &cfg)
-				ca.ChannelMgr.SendReply(bgCtx, chType, chID, cfg, cadapter.Message{ChatID: ""}, reply)
+				_ = ca.ChannelMgr.SendReply(bgCtx, chType, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply)
 			} else {
 				slog.Warn("automation: channel not found for result_action",
 					"automation_id", a.ID, "channel_id", chID, "err", qErr)
