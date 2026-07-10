@@ -40,15 +40,24 @@ import (
 //   - 连续 10 次失败 → 触发 KillSwitch Stage 1
 const defaultEvalTimeout = 500 * time.Millisecond
 
+type CedarEnforceMode int
+
+const (
+	CedarShadow      CedarEnforceMode = iota // 0: 仅记录不裁决
+	CedarEnforceDeny                         // 1: 仅强制执行 deny
+	CedarEnforceFull                         // 2: 完全生效
+)
+
 type Gate struct {
-	mu              sync.RWMutex
-	forbidRules     []ForbidRule
-	permitRules     []PermitRule
-	consecutiveFail atomic.Int64
-	onKillSwitch    func()       // 连续失败 10 次时触发
-	cedarLeaks      atomic.Int64 // 累计 Cedar FFI goroutine 泄漏数
-	cedar           *CedarEngine // Rust FFI 引擎
-	evalTimeout     time.Duration
+	mu               sync.RWMutex
+	cedarEnforceMode CedarEnforceMode
+	forbidRules      []ForbidRule
+	permitRules      []PermitRule
+	consecutiveFail  atomic.Int64
+	onKillSwitch     func()       // 连续失败 10 次时触发
+	cedarLeaks       atomic.Int64 // 累计 Cedar FFI goroutine 泄漏数
+	cedar            *CedarEngine // Rust FFI 引擎
+	evalTimeout      time.Duration
 }
 
 var _ protocol.PolicyGate = (*Gate)(nil)
@@ -70,11 +79,18 @@ type PermitRule struct {
 // onKillSwitch 在连续 10 次评估失败时调用（可为 nil）。
 func NewGate(onKillSwitch func()) *Gate {
 	g := &Gate{
-		onKillSwitch: onKillSwitch,
-		cedar:        NewCedarEngine(),
-		evalTimeout:  defaultEvalTimeout,
+		onKillSwitch:     onKillSwitch,
+		cedar:            NewCedarEngine(),
+		evalTimeout:      defaultEvalTimeout,
+		cedarEnforceMode: CedarShadow, // default
 	}
 	g.loadBuiltinRules()
+	return g
+}
+
+// WithCedarEnforceMode sets the enforcement mode for Cedar policies.
+func (g *Gate) WithCedarEnforceMode(mode CedarEnforceMode) *Gate {
+	g.cedarEnforceMode = mode
 	return g
 }
 
@@ -236,7 +252,9 @@ func (g *Gate) AddPermitRule(r PermitRule) {
 func (g *Gate) evaluate(ctx context.Context, principal, action, resource string, evalCtx map[string]any) (bool, error) {
 	// Step 0: 如果 Cedar 引擎加载了策略，优先通过 Rust FFI 评估
 	if g.cedar != nil && g.cedar.PolicyCount() > 0 {
-		g.evaluateCedar(ctx, principal, action, resource, evalCtx)
+		if handled, allowed, err := g.evaluateCedar(ctx, principal, action, resource, evalCtx); handled || err != nil {
+			return allowed, err
+		}
 	}
 
 	g.mu.RLock()
@@ -271,7 +289,7 @@ func (g *Gate) recordFailure() {
 // 与 SafeDialer.TaintEgressCheck 采用同一阈值，两层一致——见 M11 §6。
 var ErrTaintBlockedEgress = apperr.New(apperr.CodeInternal, "policy: taint egress blocked (TaintMedium+ data cannot exit without sanitization)")
 
-func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource string, evalCtx map[string]any) {
+func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource string, evalCtx map[string]any) (bool, bool, error) {
 	pUID := formatCedarUID("Principal", principal)
 	aUID := formatCedarUID("Action", action)
 	rUID := formatCedarUID("Resource", resource)
@@ -282,22 +300,19 @@ func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource st
 		timeoutMs = 10 // 兜底 10ms（Go 侧永不向 Rust 请求"0=无限等待"语义，安全边界考虑）
 	}
 	allowed, reason, err := g.cedar.Evaluate(pUID, aUID, rUID, evalCtx, timeoutMs)
-	// 如果 Cedar 评估成功且未抛出 FFI 层级的异常，我们仍然降级到 Go 规则，
-	// 因为当前 Cedar 实体存储未完整实现（WIP），强行使用会导致 deny-by-default。
-	// 但我们会在 Context 注入 Cedar reason，并打印 debug 日志以测试其结果。
-	//
-	// 2026-07-04 审计修复：此前 err（含 Rust 侧真实超时）被完全丢弃、只记一条
-	// WarnContext 日志，导致 IsAuthorized() 里依赖 err 字符串匹配"timeout"来
-	// 驱动的 cedarLeaks 计数器 + KillSwitch 联动逻辑永远是死代码（evaluate()
-	// 从不向上传播这个 error）。现在直接在此处（真正拿到 FFI 错误的地方）驱动
-	// 这套可观测性逻辑，不再依赖不可达的间接路径；Cedar 的 allow/deny 决策本身
-	// 仍不覆盖 Go 规则的最终裁决（WIP 限制未变，这不是本次修复的范围）。
+
 	if err == nil {
 		if !allowed && evalCtx != nil {
 			evalCtx["cedar_reason"] = reason
 		}
+
+		if !allowed && g.cedarEnforceMode >= CedarEnforceDeny {
+			slog.DebugContext(ctx, "cedar evaluated deny (enforced)", "reason", reason)
+			return true, false, nil
+		}
+
 		slog.DebugContext(ctx, "cedar evaluated (falling through to go rules)", "allowed", allowed, "reason", reason)
-		return
+		return false, false, nil
 	}
 
 	metrics.GlobalCedarDegradedTotal.Add(1)
@@ -310,4 +325,5 @@ func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource st
 	} else {
 		slog.WarnContext(ctx, "cedar ffi failed, degrading to go rules", "error", err)
 	}
+	return false, false, nil
 }

@@ -348,6 +348,15 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			"note", "wire hitlGateway.Notify here after gateway initialization",
 		)
 	})
+
+	switch strings.ToLower(cfg.Policy.CedarEnforceMode) {
+	case "full":
+		gate.WithCedarEnforceMode(policy.CedarEnforceFull)
+	case "deny":
+		gate.WithCedarEnforceMode(policy.CedarEnforceDeny)
+	default:
+		gate.WithCedarEnforceMode(policy.CedarShadow)
+	}
 	// 加载 Cedar 策略：优先使用 configs/ embed 内置策略；若配置了覆盖路径，从磁盘加载。
 	// Cedar 加载失败不阻断启动——evaluate() 已有 Go 规则兜底。
 	if cedarErr := loadGateCedarPolicies(gate, cfg.Policy); cedarErr != nil {

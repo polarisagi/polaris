@@ -23,6 +23,8 @@
 | R1.15 | MCP 子进程继承完整父环境 | `cmd.Env = os.Environ()` 不过滤，将宿主 `*_KEY/_TOKEN/_SECRET/_PASSWORD` 等密钥类环境变量传入 MCP stdio 子进程 | 统一调用 `sanitizeParentEnv()`，仅保留运行时必要变量并叠加显式配置的 `MCPClientConfig.Env` |
 | R1.16 | 持有 DB 连接期间发起阻塞式外部调用 | `tx, _ := db.BeginTx(...); resp, _ := provider.Infer(...); tx.Commit()` 或 `rows, _ := db.QueryContext(...); for rows.Next() { provider.Infer(...) }` 未关闭 `Rows`/未提交 `Tx` 前调用 LLM 推理、网络请求等耗时不确定的外部调用，SQLite 连接池有限（`internal/store/store.go` writer `MaxOpenConns=1`）时会连带卡死其他读写请求 | 先读完数据 / `rows.Close()` / `tx.Commit()`（或 `Rollback()`）释放连接，再在无连接持有的上下文中发起外部调用；必要时拆分为"读事务 → 无锁调用外部 → 写事务" |
 
+> **R1.4 例外澄清**（2026-07-10 补充，源于 Gemini 审核报告 GR-3-004 复核）：M7（`internal/tool/`、`internal/action/`）的核心接口（`Tool`/`CapabilityLevel`/`ToolRegistry`/`Catalog` 等）允许定义在实现方包内，前提是消费方为**明确的单向上游层**（如 M4 `internal/agent/` 通过 Go interface 消费，见 `docs/arch/00-Global-Dictionary.md §7`）。该例外**不适用于**没有任何真实消费方的接口声明——此类接口视为死代码，必须删除而非以"R1.4 例外"为由保留。新增 producer-side interface 前必须先 grep 确认消费方存在且位于允许的上游层，否则一律按 R1.4 反模式处理并归口至 `internal/protocol/`。
+
 ## R2 命名规范字典
 
 > 同一概念全仓库唯一词根。违反视为 R1 反模式扩展。同一文件中常量用 `const ( ... )` 块分组，不加 `=` 对齐空格。

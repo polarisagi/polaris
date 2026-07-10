@@ -183,3 +183,31 @@ func TestGate_NoGoroutineLeak(t *testing.T) {
 		t.Fatalf("goroutine leak detected: initial %d, final %d", initialCount, finalCount)
 	}
 }
+
+func TestGate_CedarEnforceDeny(t *testing.T) {
+	g := NewGate(nil).WithCedarEnforceMode(CedarEnforceDeny)
+	err := g.SyncCedarPolicies(`permit(principal, action, resource) when { principal == Principal::"admin" };`)
+	if err != nil {
+		t.Skip("Cedar FFI not available, skipping test")
+	}
+
+	// Add a Go permit rule for "guest"
+	g.AddPermitRule(PermitRule{
+		Name: "test_permit_guest",
+		MatchFn: func(principal, action, _ string, _ map[string]any) bool {
+			return principal == "guest"
+		},
+	})
+
+	ctx := context.Background()
+
+	// In Shadow mode, this would be allowed because Go rules permit it.
+	// In EnforceDeny mode, Cedar deny should override Go rules and return false immediately.
+	allowed, err := g.IsAuthorized(ctx, "guest", "read", "data", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Fatal("expected CedarEnforceDeny to propagate deny and override Go permit rules")
+	}
+}

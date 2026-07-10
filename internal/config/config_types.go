@@ -199,8 +199,9 @@ type RAGConfig struct {
 }
 
 type PolicyConfig struct {
-	Engine       string `toml:"engine"`
-	DefaultBlock bool   `toml:"default_block"`
+	Engine           string `toml:"engine"`
+	DefaultBlock     bool   `toml:"default_block"`
+	CedarEnforceMode string `toml:"cedar_enforce_mode"` // "shadow" (default), "deny", "full"
 	// HardConstraintsPath 硬约束 Cedar 策略文件的磁盘路径；空 = 使用二进制内置 embed 默认策略。
 	// 设置后在进程启动时从磁盘加载，支持不重新编译替换策略（运营商自定义场景）。
 	HardConstraintsPath string `toml:"hard_constraints_path"`
