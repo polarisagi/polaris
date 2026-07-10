@@ -65,6 +65,27 @@ func (s *PromptVersionStore) GetActive(ctx context.Context, taskType string) (*P
 	return v, nil
 }
 
+// GetByID 按 ID 获取指定候选版本；不存在时返回 nil, nil。
+// 供 ShadowExecutor 周期触发器按 candidateVersion 解析出对应的 Prompt 文本覆盖。
+func (s *PromptVersionStore) GetByID(ctx context.Context, id string) (*PromptVersion, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, version, task_type, prompt_text, score, cost, source, parent_version, is_active
+		FROM prompt_versions
+		WHERE id = ?
+	`, id)
+	v := &PromptVersion{}
+	var isActive int
+	err := row.Scan(&v.ID, &v.Version, &v.TaskType, &v.Prompt, &v.Score, &v.Cost, &v.Source, &v.ParentVer, &isActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "prompt_version_store: get by id failed", err)
+	}
+	v.Active = isActive == 1
+	return v, nil
+}
+
 // UpdateScore 更新候选版本的 Eval 评分。
 func (s *PromptVersionStore) UpdateScore(ctx context.Context, id string, score float64) error {
 	res, err := s.db.ExecContext(ctx,

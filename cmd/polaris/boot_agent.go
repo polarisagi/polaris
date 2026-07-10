@@ -27,6 +27,7 @@ import (
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	agentdag "github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/automation"
+	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/eval/regression"
@@ -64,7 +65,8 @@ type AgentBundle struct {
 	DAGExec *agentdag.DAGExecutor
 
 	// M9 Self-Improvement
-	M9Engine *learning.Engine
+	M9Engine     *learning.Engine
+	RolloutStore *optimizer.SQLiteRolloutStore // 与 M9Engine 共用；nil 时 M9 Staging/Shadow 门禁禁用
 
 	// AgentPool for per-session web agents
 	AgentPool *sysagent.Pool
@@ -375,10 +377,27 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	curriculumGen := curriculum.NewAutoCurriculumGenerator(idleDetector, mb.FallacyPool, mb.Heuristics)
 	curriculumGen.WithFitnessEval(curriculum.NewSQLFitnessEvaluator(sb.Store.DB()))
 	curriculumBridge := reflexion.NewCurriculumBridge(curriculumGen, blackboard)
-	rollout := optimizer.NewProgressiveRollout()
-	rolloutBridge := reflexion.NewRolloutBridge(rollout)
+	// 2026-07-10 审计补齐：此前 rollout 是纯内存 optimizer.NewProgressiveRollout()（无 DB
+	// 持久化），promptOptimizer 以 (nil, nil, 0) 构造（无 provider/无 versionStore），
+	// Engine.stagingPipeline/versionStore 也从未被 Set 过——M9 GEPA 候选评分、激活、
+	// Shadow/Canary 门禁在生产环境实际上从未真正运转。现改为：versionStore/rolloutStore
+	// 均为真实 DB 支撑实例，rolloutStore 同时服务 M9Engine 和下方 LogicCollapseMonitor
+	// （原各自独立构造两份，互不相干），ConfirmShadow 通过后经 promptActivator 回调激活
+	// Prompt 候选（见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0029 §K）。
+	versionStore := optimizer.NewPromptVersionStore(sb.Store.DB())
+	var (
+		rolloutStore  *optimizer.SQLiteRolloutStore
+		rolloutBridge learning.RolloutAdvancer
+	)
+	if rs, rsErr := optimizer.NewSQLiteRolloutStore(sb.Store.DB()); rsErr != nil {
+		slog.Warn("polaris: failed to init SQLiteRolloutStore, M9 staging/shadow gating disabled", "err", rsErr)
+	} else {
+		rs.WithPromptActivator(versionStore)
+		rolloutStore = rs
+		rolloutBridge = reflexion.NewRolloutBridge(rs)
+	}
 
-	promptOptimizer := optimizer.NewPromptOptimizer(nil, nil, 0)
+	promptOptimizer := optimizer.NewPromptOptimizerWithDB(sb.Router, versionStore, sb.Store.DB(), 0)
 	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
 	// 2026-07-04 审计补齐（任务5）：SetDB 此前从未在生产启动代码中被调用，
 	// 导致 learning_cursors 持久化/幂等去重整套机制在 e.db==nil 短路下形同虚设
@@ -386,6 +405,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	m9Engine.SetDB(sb.Store.DB())
 	m9Engine.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
 	m9Engine.SetOptimizer(promptOptimizer)
+	m9Engine.SetVersionStore(versionStore)
+	if rolloutStore != nil {
+		m9Engine.SetStagingPipeline(rolloutStore)
+	}
 	// M9 闭环接线（P1-2）：内环消费 Reflexion 启发式事件；SurpriseIndex 读 M3 权威值；
 	// L3/L4 演化审批走 HITL 网关。
 	m9Engine.SetHeuristicEvents(heuristicCh)
@@ -393,6 +416,46 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	m9Engine.SetHITLGateway(tb.HITLGateway)
 
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
+
+	// ─── M12 §8 ShadowExecutor：Gate 2(Shadow) 周期回放触发器 ──────────────────
+	// 2026-07-10 恢复接线：此前实现完整、测试完整但从未被实例化（详见
+	// local_playground 会话记录），Gate 2 对 GEPA 候选完全不构成门禁。现周期性
+	// 发现 rollout_states 中停留在 Gate 2 的候选，回放历史流量并对比评分，
+	// 通过则调用 ConfirmShadow 推进到 Gate 3，不通过则 Rollback。
+	if rolloutStore != nil {
+		shadowExec := analysis.NewShadowExecutor(
+			sb.Store.DB(),
+			sb.Router,
+			repo.NewSQLiteMockResponseCache(sb.Store.DB()),
+			evalStore,
+			rolloutStore,
+		)
+		concurrent.SafeGo(ctx, "shadow-executor-replay", func(ctx context.Context) {
+			// 5 分钟周期，与 boot_knowledge.go corpus-stats-flush 同量级；ADR-0029 §K
+			// 认定"分钟级延迟"对离线质量回归验证可接受，非实时链路无需更短周期。
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					versions, err := rolloutStore.ListPendingShadow(ctx)
+					if err != nil {
+						slog.Warn("shadow_executor: list pending shadow failed", "err", err)
+						continue
+					}
+					for _, v := range versions {
+						systemPromptOverride, opts := resolveShadowCandidateOpts(ctx, versionStore, v)
+						if err := shadowExec.RunReplayBatch(ctx, v, systemPromptOverride, opts); err != nil {
+							slog.Warn("shadow_executor: replay batch failed", "version", v, "err", err)
+						}
+					}
+				}
+			}
+		})
+		slog.Info("polaris: ShadowExecutor periodic replay trigger started (5min interval)")
+	}
 
 	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)
 	bgTaskScheduler.Start(ctx)
@@ -497,10 +560,28 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Agent:         agent,
 		DAGExec:       dagExec,
 		M9Engine:      m9Engine,
+		RolloutStore:  rolloutStore,
 		AgentPool:     agentPool,
 		Supervisor:    sv,
 		ReaperStop:    reaperStop,
 	}, nil
+}
+
+// resolveShadowCandidateOpts 为 ShadowExecutor 回放解析候选版本的覆盖参数。
+// 候选来自 M9 GEPA/PromptOptimizer（handleEvalCompleted 提交，version == prompt_versions.id）
+// 时能查到真实 prompt_text，作为 system 消息覆盖返回；候选来自 L3/L4 HITL 审批路径时
+// prompt_versions 无对应行（那两条路径提交的 AgentVersionSnapshot 目前只携带描述性文字，
+// 没有可结构化的覆盖参数），返回空覆盖——诚实地不构造，避免影子对比在无意义覆盖下
+// 产生"必过"的假阳性（详见本次会话对 candidateOpts 来源的讨论）。
+func resolveShadowCandidateOpts(ctx context.Context, versionStore *optimizer.PromptVersionStore, version string) (string, []types.InferOption) {
+	if versionStore == nil {
+		return "", nil
+	}
+	pv, err := versionStore.GetByID(ctx, version)
+	if err != nil || pv == nil || pv.Prompt == "" {
+		return "", nil
+	}
+	return pv.Prompt, nil
 }
 
 // notionTokenPrefKey preferences 表中存放 NotionConnector token 密文的 key。

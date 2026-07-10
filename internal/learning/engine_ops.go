@@ -85,39 +85,45 @@ func (e *Engine) detectL4Trigger(ctx context.Context, change Change) {
 	})
 }
 
-// handleEvalCompleted 处理 Eval 完成事件：更新评分，若达到激活条件则触发 Rollout。
-// 设计：score ≥ baselinePassRate × 1.05 且 !BlockDeploy → 激活候选版本 → AdvanceGate。
+// handleEvalCompleted 处理 Eval 完成事件：更新评分，达标后提交 Staging 进入 Gate 2(Shadow)。
+// 设计：score ≥ baselinePassRate × 1.05 且 !BlockDeploy → SubmitCandidate + RecordEvalScore。
+//
+// 注意：此处不再直接调用 versionStore.Activate。候选 Prompt 的真正激活推迟到
+// ShadowExecutor 完成影子回放并调用 SQLiteRolloutStore.ConfirmShadow 之后，由
+// ConfirmShadow 内部回调 promptActivator.Activate 触发（见 rollout_store.go）。
+// 旧实现在此处 Eval 一过就同步 Activate，Gate 2/3 形同虚设，见 ADR-0029 §K。
 func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompletedPayload) {
 	if ev.CandidateID == "" || ev.BlockDeploy {
-		return // 基线评测或安全否决，不激活
+		return // 基线评测或安全否决，不提交
 	}
 	if e.versionStore == nil {
 		return
 	}
-	// 更新候选版本的 Eval 分数
+	// 更新候选版本的 Eval 分数（prompt_versions.score，Activate 时读取校验）
 	if err := e.versionStore.UpdateScore(ctx, ev.CandidateID, ev.PassRate); err != nil {
 		return
 	}
-	// 超过激活阈值（基线 × 1.05）才触发激活与 Rollout
+	// 超过激活阈值（基线 × 1.05）才提交 Staging
 	threshold := e.cfg.BaselinePassRate * 1.05
 	if ev.PassRate < threshold {
 		return
 	}
-	// 激活候选（taskType 暂从 suite 字段近似，实际应由上层传入）
-	if err := e.versionStore.Activate(ctx, ev.Suite, ev.CandidateID, e.cfg.BaselinePassRate); err != nil {
+	if e.stagingPipeline == nil {
 		return
 	}
-	// 通知外环推进 Rollout
-	if e.rollout != nil {
-		concurrent.SafeGo(ctx, "learning-rollout-advance", func(ctx context.Context) {
-			_ = e.rollout.AdvanceGate(ctx, ev.CandidateID, RolloutStats{
-				BaselineErrorRate:  1.0 - e.cfg.BaselinePassRate,
-				ErrorRate:          1.0 - ev.PassRate,
-				SafetyViolations:   ev.SafetyViolations,
-				P95Latency:         ev.P95LatencyMs,
-				BaselineP95Latency: ev.BaselineP95Ms,
-			})
-		})
+	// 提交候选进入 Gate 1（Eval，随即被 SubmitCandidate 置为 Gate 2/Shadow 等待回放）。
+	// taskType 暂从 suite 字段近似，实际应由上层传入；随 metadata 落盘供 ConfirmShadow 读回。
+	if err := e.stagingPipeline.SubmitCandidate(ctx, &optimizer.AgentVersionSnapshot{
+		Version:       ev.CandidateID,
+		TaskType:      ev.Suite,
+		BaselineScore: e.cfg.BaselinePassRate,
+		CreatedAt:     time.Now().Unix(),
+	}); err != nil {
+		slog.Error("M9 staging submit failed", "candidate", ev.CandidateID, "err", err)
+		return
+	}
+	if err := e.stagingPipeline.RecordEvalScore(ctx, ev.CandidateID, ev.PassRate, e.cfg.BaselinePassRate); err != nil {
+		slog.Error("M9 staging record eval score failed", "candidate", ev.CandidateID, "err", err)
 	}
 }
 

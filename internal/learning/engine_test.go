@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -232,13 +233,33 @@ func TestEngine_DefaultConfig(t *testing.T) {
 	}
 }
 
-func TestEngine_handleEvalCompleted_SafetyStats(t *testing.T) {
+// TestEngine_handleEvalCompleted_SubmitsToStaging 验证 2026-07-10 后的新行为：
+// Eval 达标后提交 Staging 进入 Gate 2(Shadow)，不再直接调用 rollout.AdvanceGate
+// 或 versionStore.Activate——真正的激活推迟到 ShadowExecutor 确认之后
+// （见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0029 §K）。
+func TestEngine_handleEvalCompleted_SubmitsToStaging(t *testing.T) {
 	cfg := DefaultEngineConfig()
 	cfg.BaselinePassRate = 0.8
 
 	ro := &mockRollout{}
 	e, _, _ := newTestEngine(cfg, &mockReflector{}, &mockCurriculum{}, ro)
 	e.SetVersionStore(&mockVersionStore{})
+
+	var submitted *optimizer.AgentVersionSnapshot
+	var recordCalls atomic.Int32
+	var recordedPassRate float64
+	sp := &mockStagingPipeline{
+		submitFn: func(_ context.Context, snap *optimizer.AgentVersionSnapshot) error {
+			submitted = snap
+			return nil
+		},
+		recordFn: func(_ context.Context, _ string, passRate, _ float64) error {
+			recordedPassRate = passRate
+			recordCalls.Add(1)
+			return nil
+		},
+	}
+	e.SetStagingPipeline(sp)
 
 	ctx := context.Background()
 	e.handleEvalCompleted(ctx, types.EvalCompletedPayload{
@@ -250,22 +271,28 @@ func TestEngine_handleEvalCompleted_SafetyStats(t *testing.T) {
 		BaselineP95Ms:    100,
 	})
 
-	time.Sleep(50 * time.Millisecond)
-
-	if ro.calls.Load() == 0 {
-		t.Fatal("expected AdvanceGate to be called")
+	if submitted == nil {
+		t.Fatal("expected SubmitCandidate to be called")
+	}
+	if submitted.Version != "cand-safe" {
+		t.Errorf("expected Version=cand-safe, got %v", submitted.Version)
+	}
+	if submitted.TaskType != "validation" {
+		t.Errorf("expected TaskType=validation, got %v", submitted.TaskType)
+	}
+	if submitted.BaselineScore != 0.8 {
+		t.Errorf("expected BaselineScore=0.8, got %v", submitted.BaselineScore)
+	}
+	if recordCalls.Load() == 0 {
+		t.Fatal("expected RecordEvalScore to be called")
+	}
+	if recordedPassRate != 0.9 {
+		t.Errorf("expected recorded passRate=0.9, got %v", recordedPassRate)
 	}
 
-	if ro.lastStats.SafetyViolations != 1 {
-		t.Errorf("expected SafetyViolations=1, got %v", ro.lastStats.SafetyViolations)
-	}
-	if ro.lastStats.P95Latency != 150 {
-		t.Errorf("expected P95Latency=150, got %v", ro.lastStats.P95Latency)
-	}
-
-	// mock CheckHardStop behavior to verify rule logic
-	isHardStop := ro.lastStats.SafetyViolations > 0 || ro.lastStats.P95Latency > ro.lastStats.BaselineP95Latency*1.4
-	if !isHardStop {
-		t.Error("expected CheckHardStop to evaluate to true for SafetyViolations>0")
+	// 新设计下 Eval 通过不再同步触发 AdvanceGate（该调用推迟到 ConfirmShadow 之后
+	// 由 versionEvents 通路或 ConfirmShadow 内部处理），此处应保持未调用。
+	if ro.calls.Load() != 0 {
+		t.Errorf("expected AdvanceGate NOT to be called synchronously from handleEvalCompleted, got %d calls", ro.calls.Load())
 	}
 }

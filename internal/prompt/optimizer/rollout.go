@@ -43,6 +43,12 @@ type AgentVersionSnapshot struct {
 	SkillSnapshotID string
 	ModelID         string
 	CreatedAt       int64
+
+	// TaskType/BaselineScore：Gate 2(Shadow) 确认通过后用于回调
+	// PromptVersionStore.Activate(ctx, TaskType, Version, BaselineScore)。
+	// 随 SubmitCandidate 一并序列化进 rollout_states.metadata，ConfirmShadow 时读回。
+	TaskType      string
+	BaselineScore float64
 }
 
 // StagingPipeline 定义 M9 Staging 流水线行为。
@@ -54,6 +60,9 @@ type StagingPipeline interface {
 	AdvanceGate(ctx context.Context, version string, stats RolloutStats) (*RolloutState, error)
 	Rollback(ctx context.Context, version string, reason string) error
 	GetState(ctx context.Context, version string) (*RolloutState, error)
+	// ListPendingShadow 返回当前停留在 Gate 2(Shadow)、状态为 running 的候选版本号。
+	// 供 ShadowExecutor 周期性触发器发现待回放的候选（M12 §8）。
+	ListPendingShadow(ctx context.Context) ([]string, error)
 }
 
 // ProgressiveRollout 维护渐进式推进规则。

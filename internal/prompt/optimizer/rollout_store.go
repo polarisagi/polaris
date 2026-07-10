@@ -6,11 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
+
+// promptActivator 是 ConfirmShadow 通过后激活候选 Prompt 的窄接口。
+// 由 *PromptVersionStore 实现（同包，见 version_store.go），避免直接持有具体类型
+// 造成 SQLiteRolloutStore 在无 Prompt 场景（纯 L3/L4 候选）下的强依赖。
+type promptActivator interface {
+	Activate(ctx context.Context, taskType, id string, baselineScore float64) error
+}
 
 // SQLiteRolloutStore 实现 StagingPipeline 接口，State-in-DB。
 // 架构文档: docs/arch/M09-Self-Improvement-Engine.md §2.3
@@ -38,8 +46,9 @@ CREATE TABLE IF NOT EXISTS rollout_states (
 
 // SQLiteRolloutStore 持久化渐进发布状态。
 type SQLiteRolloutStore struct {
-	db      protocol.SQLQuerier
-	rollout *ProgressiveRollout
+	db              protocol.SQLQuerier
+	rollout         *ProgressiveRollout
+	promptActivator promptActivator // 可选：Gate 2(Shadow) 确认通过后回调激活 Prompt 候选
 }
 
 // NewSQLiteRolloutStore 创建 RolloutStore 并确保表存在。
@@ -51,6 +60,13 @@ func NewSQLiteRolloutStore(db protocol.SQLQuerier) (*SQLiteRolloutStore, error) 
 		db:      db,
 		rollout: NewProgressiveRollout(),
 	}, nil
+}
+
+// WithPromptActivator 注入 Prompt 激活回调（*PromptVersionStore）。
+// 未注入时 ConfirmShadow 仅推进 Gate 状态，不激活任何 Prompt（纯 L3/L4 候选场景）。
+func (s *SQLiteRolloutStore) WithPromptActivator(a promptActivator) *SQLiteRolloutStore {
+	s.promptActivator = a
+	return s
 }
 
 // SubmitCandidate 提交新候选版本，直接进入 Gate 1 Shadow（1% 流量），状态 pending。
@@ -93,7 +109,10 @@ func (s *SQLiteRolloutStore) RecordEvalScore(ctx context.Context, version string
 }
 
 // ConfirmShadow 确认影子执行结果正常，允许从 Gate 1 推进到 Gate 2（Canary 5%）。
-// 由影子执行监控组件在 shadow_ok 条件满足后调用。
+// 由影子执行监控组件（ShadowExecutor）在 shadow_ok 条件满足后调用。
+// Gate 推进成功后，若已注入 promptActivator，进一步激活对应 Prompt 候选——这是
+// M9 自进化真正生效的唯一入口，取代此前 handleEvalCompleted 内 Eval 一过就同步
+// Activate、绕过 Shadow 验证的旧路径（见 docs/arch/decisions/ADR-0029 §K）。
 func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) error {
 	state, err := s.GetState(ctx, version)
 	if err != nil {
@@ -102,6 +121,13 @@ func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) 
 	if state.CurrentGate != GateShadowExecution {
 		return nil
 	}
+
+	var metaStr string
+	if scanErr := s.db.QueryRowContext(ctx,
+		`SELECT metadata FROM rollout_states WHERE version = ?`, version).Scan(&metaStr); scanErr != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ConfirmShadow: read metadata", scanErr)
+	}
+
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE rollout_states
@@ -111,7 +137,42 @@ func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) 
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ConfirmShadow", err)
 	}
+
+	if s.promptActivator != nil {
+		var snap AgentVersionSnapshot
+		if jsonErr := json.Unmarshal([]byte(metaStr), &snap); jsonErr == nil && snap.TaskType != "" {
+			if actErr := s.promptActivator.Activate(ctx, snap.TaskType, version, snap.BaselineScore); actErr != nil {
+				// Shadow 已确认通过，Gate 状态已推进；激活失败不回滚 Gate（避免重复触发
+				// Shadow 回放），仅记录日志留待下次人工核查或候选自然被后续版本覆盖。
+				slog.Warn("rollout_store: prompt activation after shadow confirm failed", "version", version, "err", actErr)
+			}
+		}
+	}
 	return nil
+}
+
+// ListPendingShadow 返回当前停留在 Gate 2(Shadow)、状态为 running 的候选版本号。
+func (s *SQLiteRolloutStore) ListPendingShadow(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version FROM rollout_states WHERE current_gate = ? AND status = 'running'`,
+		GateShadowExecution)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ListPendingShadow", err)
+	}
+	defer rows.Close()
+
+	var versions []string
+	for rows.Next() {
+		var v string
+		if scanErr := rows.Scan(&v); scanErr != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ListPendingShadow: scan", scanErr)
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteRolloutStore.ListPendingShadow: rows", err)
+	}
+	return versions, nil
 }
 
 // AdvanceGate 根据当前指标推进或触发硬停止。

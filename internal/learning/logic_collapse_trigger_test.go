@@ -19,15 +19,19 @@ func (m *mockTrajectoryCompiler) Compile(ctx context.Context, req *protocol.Comp
 	return m.compileFn(ctx, req)
 }
 
-// mockStagingPipeline 记录 SubmitCandidate 调用。
+// mockStagingPipeline 记录 SubmitCandidate/RecordEvalScore 调用。
 type mockStagingPipeline struct {
 	submitFn func(ctx context.Context, snap *optimizer.AgentVersionSnapshot) error
+	recordFn func(ctx context.Context, version string, passRate, baselinePassRate float64) error
 }
 
 func (m *mockStagingPipeline) SubmitCandidate(ctx context.Context, snap *optimizer.AgentVersionSnapshot) error {
 	return m.submitFn(ctx, snap)
 }
-func (m *mockStagingPipeline) RecordEvalScore(_ context.Context, _ string, _, _ float64) error {
+func (m *mockStagingPipeline) RecordEvalScore(ctx context.Context, version string, passRate, baselinePassRate float64) error {
+	if m.recordFn != nil {
+		return m.recordFn(ctx, version, passRate, baselinePassRate)
+	}
 	return nil
 }
 func (m *mockStagingPipeline) ConfirmShadow(_ context.Context, _ string) error { return nil }
@@ -38,6 +42,7 @@ func (m *mockStagingPipeline) Rollback(_ context.Context, _ string, _ string) er
 func (m *mockStagingPipeline) GetState(_ context.Context, _ string) (*optimizer.RolloutState, error) {
 	return nil, nil
 }
+func (m *mockStagingPipeline) ListPendingShadow(_ context.Context) ([]string, error) { return nil, nil }
 
 // TestLogicCollapseMonitor_TriggerCollapse_SubmitStaging 验证编译成功后提交 Staging 候选。
 func TestLogicCollapseMonitor_TriggerCollapse_SubmitStaging(t *testing.T) {

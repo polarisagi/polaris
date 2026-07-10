@@ -139,11 +139,15 @@ type HeuristicsWriter interface {
 	RecordSuccess(taskID, taskType string)
 }
 
-// StagingPipelineAdapter L3/L4 审批通过后提交候选版本的解耦接口。
-// 由 pkg/swarm.optimizer.StagingPipeline 实现；self_improve 包通过接口解耦，防循环引用。
-// 注：optimizer.AgentVersionSnapshot 定义在 rollout.go，此接口签名与 optimizer.StagingPipeline.SubmitCandidate 对齐。
+// StagingPipelineAdapter L3/L4 审批通过、以及 Eval(Gate1) 通过后提交候选版本的解耦接口。
+// 由 optimizer.SQLiteRolloutStore 实现；self_improve 包通过接口解耦，防循环引用。
+// 注：optimizer.AgentVersionSnapshot 定义在 rollout.go，此接口签名与 optimizer.StagingPipeline 对齐。
 type StagingPipelineAdapter interface {
 	SubmitCandidate(ctx context.Context, snap *optimizer.AgentVersionSnapshot) error
+	// RecordEvalScore 记录 Gate 1(Eval) 评分，候选进入 Gate 2(Shadow) 等待 ShadowExecutor 确认。
+	// 真正的 Prompt 激活推迟到 ConfirmShadow 通过之后（见 optimizer.SQLiteRolloutStore.ConfirmShadow），
+	// 不在此处/handleEvalCompleted 内直接调用 versionStore.Activate（ADR-0029 §K）。
+	RecordEvalScore(ctx context.Context, version string, passRate float64, baselinePassRate float64) error
 }
 
 // =============================================================================

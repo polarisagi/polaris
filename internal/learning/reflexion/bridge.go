@@ -74,14 +74,17 @@ func (b *CurriculumBridge) Generate(ctx context.Context, surpriseIndex float64) 
 	return nil
 }
 
-// RolloutBridge 将 *optimizer.ProgressiveRollout 适配为 learning.learning.RolloutAdvancer。
-// AdvanceGate 检查硬停止条件，触发时返回错误阻止推进。
+// RolloutBridge 将 *optimizer.SQLiteRolloutStore 适配为 learning.learning.RolloutAdvancer。
+// 2026-07-10 前曾包装无 DB 持久化的 *optimizer.ProgressiveRollout，AdvanceGate 只做
+// 内存硬停止检查、不持久化任何 Gate 状态，导致 M9 版本推进与 rollout_states 表完全脱节
+// （ShadowExecutor/ConfirmShadow 读到的状态永远不会被这条路径更新）。现改为包装真实的
+// SQLiteRolloutStore，AdvanceGate 落库，与 L3/L4 SubmitCandidate 共用同一份状态。
 type RolloutBridge struct {
-	rollout *optimizer.ProgressiveRollout
+	store *optimizer.SQLiteRolloutStore
 }
 
-func NewRolloutBridge(r *optimizer.ProgressiveRollout) *RolloutBridge {
-	return &RolloutBridge{rollout: r}
+func NewRolloutBridge(s *optimizer.SQLiteRolloutStore) *RolloutBridge {
+	return &RolloutBridge{store: s}
 }
 
 var _ learning.RolloutAdvancer = (*RolloutBridge)(nil)
@@ -95,9 +98,14 @@ func (b *RolloutBridge) AdvanceGate(ctx context.Context, version string, stats l
 		SafetyViolations:     stats.SafetyViolations,
 		SurpriseIndexDegrade: stats.SurpriseIndexDegrade,
 	}
-	if b.rollout.CheckHardStop(swarmStats) {
+	state, err := b.store.AdvanceGate(ctx, version, swarmStats)
+	if err != nil {
+		slog.Warn("swarm: rollout advance failed", "version", version, "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "RolloutBridge.AdvanceGate", err)
+	}
+	if state != nil && state.Status == optimizer.RolloutStatusRolledBack {
 		slog.Warn("swarm: rollout hard stop triggered", "version", version,
-			"error_rate", stats.ErrorRate, "safety_violations", stats.SafetyViolations, "err", apperr.New(apperr.CodeInternal, "log event"))
+			"error_rate", stats.ErrorRate, "safety_violations", stats.SafetyViolations)
 		return apperr.New(apperr.CodeInternal, "rollout hard stop: safety or metrics regression")
 	}
 	slog.Info("swarm: rollout gate advanced", "version", version)

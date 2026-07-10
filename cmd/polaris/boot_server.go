@@ -27,8 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
-
 	"golang.org/x/time/rate"
 
 	"github.com/polarisagi/polaris/internal/action"
@@ -186,12 +184,14 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			skillSigningKey,
 			sb.Layout.Workspace,
 		)
-		rolloutStore, rolloutStoreErr := optimizer.NewSQLiteRolloutStore(sb.Store.DB())
-		if rolloutStoreErr != nil {
-			slog.Warn("polaris: failed to init SQLiteRolloutStore, L2 staging disabled", "err", rolloutStoreErr)
+		// 2026-07-10：复用 bootAgent 构造的 ab.RolloutStore（与 M9Engine 共用同一份
+		// rollout_states 状态），此前这里各自 new 一份 SQLiteRolloutStore，
+		// 与 M9Engine 的候选状态互不相干，Gate 推进对不上号。
+		if ab.RolloutStore != nil {
+			collapseMonitor.WithStagingPipeline(ab.RolloutStore)
+			slog.Info("polaris: StagingPipeline (shared with M9Engine) injected into LogicCollapseMonitor")
 		} else {
-			collapseMonitor.WithStagingPipeline(rolloutStore)
-			slog.Info("polaris: StagingPipeline injected into LogicCollapseMonitor")
+			slog.Warn("polaris: RolloutStore unavailable, LogicCollapseMonitor L2 staging disabled")
 		}
 		ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
 		slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel",

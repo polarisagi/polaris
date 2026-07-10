@@ -99,8 +99,8 @@ M9 自进化候选（`skill` / `lora` / `prompt` / `config` / `source_patch` / `
 Stage 1: candidate_emit       (M9 worker 产出 → staging 表)
 Stage 2: schema_validate      (M11 静态校验 + signature 验证 + sensitive_pattern_filter)
 Stage 3: initial_eval         (M12 黄金集 baseline vs candidate)
-Stage 4: replay_shadow        (M12 历史 trajectory 重放对比；⚠️ 依赖的 ShadowExecutor 2026-07-09 复核确认未实现,见 M12 §4/§8)
-Stage 5: mirror_shadow        (M12 实时影子流量副本,Evo-L3+；⚠️ 同上,依赖组件未实现)
+Stage 4: replay_shadow        (M12 历史 trajectory 重放对比；✅ 依赖的 ShadowExecutor 2026-07-10 恢复实现并接入,见 M12 §4/§8)
+Stage 5: mirror_shadow        (M12 实时影子流量副本,Evo-L3+；⚠️ 未实现——ADR-0029 §K 明确不采纳"实时流量镜像"方案,选定异步 EventLog 回放（即 Stage 4），Evo-L3+ 候选目前仅走 Stage 4)
 Stage 6: canary_rollout       (M11 流量比例渐进升,HITL（Human-In-The-Loop，人在回路） 可介入)
 Stage 7: full_promotion       (写生产 + audit hash chain)
 ```
