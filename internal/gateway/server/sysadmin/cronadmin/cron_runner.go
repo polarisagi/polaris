@@ -179,13 +179,21 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			_ = ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", "", 0)
 			_ = ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "suspended")
 
+			var taintLevel types.TaintLevel
+			switch trigger {
+			case "webhook":
+				taintLevel = types.TaintHigh
+			default:
+				taintLevel = types.TaintLow
+			}
+
 			prompt := types.HITLPrompt{
 				ID:             "automation:" + runID,
 				CheckpointType: "automation_pre_run",
 				PromptText:     fmt.Sprintf("自动化任务 [%s] 即将执行，触发方式: %s", a.Name, trigger),
 				RiskLevel:      a.RiskLevel,
 				DeadlineNs:     time.Now().Add(10 * time.Minute).UnixNano(),
-				TaintLevel:     types.TaintLevel(a.SandboxLevel),
+				TaintLevel:     taintLevel,
 			}
 
 			resp, hitlErr := ca.HITLGateway.Prompt(bgCtx, prompt)
