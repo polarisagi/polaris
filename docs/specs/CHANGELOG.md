@@ -4,6 +4,33 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-07-11（Gemini 升级批次复核修复 + Backlog-2/3 开发）
+
+**Gemini P0~P2 升级提交复核，修复 5 处遗漏（均属"已声明但未接线/未覆盖"类）**：
+
+- `configs/defaults.toml` | 补 `[policy] cedar_enforce_mode`、`[storage] tier0_vector_scan_limit`、整个 `[security]` 段——Gemini/此前批次新增了配置结构体字段，但未同步 TOML 模板，`config_defaults_test.go` 的覆盖检查此前只按结构体名手工枚举、未递归全字段，一并改为反射遍历 `Config{}` 全部顶层字段
+- `internal/agent/fsm/state_machine_test.go` | 补齐 P0-5/P0-6（中断入队 stash-queue、扩展激活非阻塞）修复的回归测试，避免相关代码日后被无测试覆盖地改坏
+- `internal/eval/analysis/shadow_executor.go` | 补全 `scoreShadow` 的 schema 校验（passed/reason 两字段 fail-closed），Gemini 提交只做了一半
+- `internal/extension/mcp/tool_scanner.go` `internal/extension/skill/generate.go` | GR-4-001（正则包级变量改 `sync.OnceValue` 懒加载）Gemini 改到了不相关文件，回填至实际目标文件，并按 `new-from-rev` 基线机制加 `nolint:gochecknoglobals` 豁免（对齐 `entity.go`/`getPIIRegex` 既有先例）
+
+**Backlog-2 Remote Sandbox（Sbx-L4）接线**：
+
+- `internal/config/config_types.go` | 新增 `RemoteSandboxConfig`（`[sandbox.remote]`，默认关闭）
+- `cmd/polaris/boot_tools.go` | 条件装配 `sandbox.NewRemoteSandbox` + `sandboxRouter.WithRemote`——此前 `RemoteSandbox`/路由 fallback 逻辑已实现但从未在启动时注入，`WithRemote` 从未被调用
+- `docs/arch/00-Global-Dictionary.md` §0 | `Sbx-L` 前缀补 L4 定义
+- `docs/arch/M07-Tool-Action-Layer.md` | 新增 §4.8，修正 `remote_sandbox.go` 内引用的失效锚点（原写§4.4「待补」，该号段实际已是 WASI 权限矩阵）
+
+**Backlog-3 StateGraph 编排（GD-8-001）**：
+
+- `internal/protocol/dag_node.go` | `WorkflowEdgeSpec` 新增 `Condition`（声明式字段比较，非脚本引擎）、`WorkflowNodeSpec` 新增 `MaxVisits`/`IsEntry`，均 `omitempty` 向后兼容，`PatternDAGExecutor` 忽略新字段
+- `internal/swarm/orchestrator/pattern_state_graph.go`（新建）| 新增编排模式10 `StateGraphExecutor`：在 `PatternDAGExecutor` 之上泛化支持条件路由+有界循环，仍复用 Blackboard 作持久化任务队列/事件总线，不替换其 CAS/Lease/Reaper 机制
+- `pkg/graph/state_graph.go`（新建）| `ValidateStateGraphTopology`：允许环，但要求引用完整性/至少一个合法入口/全局访问预算硬上限（终止性由运行时硬计数器保证，非拓扑分析猜测）
+- `internal/swarm/orchestrator/sqlite_blackboard.go` | 顺带修复 `CompleteTask` 广播事件遗漏 `Payload` 字段的既有 bug（与同级 `FailTask` 的 `Payload:errBytes` 模式不一致，此前导致下游条件边求值/上游产出传递恒为空）
+- `docs/arch/M08-Multi-Agent-Orchestrator.md` | 编排模式表新增第10行，新增 §3-quinquies
+- `docs/arch/decisions/ADR-0041-state-graph-orchestration.md`（新建）| 决策记录，含"为何不做完全替换 Blackboard"的评估结论
+- `docs/arch/decisions/ADR-0040-cyclic-graph-executor.md` | 标记 Superseded by ADR-0041（此前未落地的同类设计草案，落点/机制与实际实现不一致）
+- `docs/arch/INDEX.md` §0 | 新增症状9（Blackboard 事件 Payload 遗漏类根因）
+
 ## 2026-07-09（规范全量审查：P0 笔误修正 + P1 信息对齐 + P2 轻量清理）
 
 **规范审查触发，修复 8 处历史遗留问题**：
