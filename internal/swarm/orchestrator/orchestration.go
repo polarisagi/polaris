@@ -15,4 +15,5 @@ const (
 	ModeReflection                          // 执行→审查→改进
 	ModeSwarm                               // 去中心化handoff
 	ModePatternDAG                          // 跨 Agent 强类型 DAG
+	ModeStateGraph                          // 条件路由 + 有界循环状态图（GD-8-001）
 )

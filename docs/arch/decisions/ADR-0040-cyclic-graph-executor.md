@@ -34,3 +34,13 @@ thresholds:
 - **Positive**: 极大地扩展了工具链的能力组合，能够支持自动化任务（如 auto-heal, auto-pagination）。
 - **Negative**: 会增加系统运行时内存消耗，并在调试轨迹追踪（Trace）上带来一定复杂性（同一个节点会存在不同 Iteration 下的多次快照）。
 - **Mitigation**: 限制回溯层的最大深度，并在 UI/Trace 日志中强制附加 `IterationIndex` 标签。
+
+## 4. Status (状态)
+
+**Superseded by ADR-0041**（2026-07-11）。本文档为未落地的设计草案（无实现、无 code 引用），实际开发时发现与本文档的关键前提不符：
+
+1. `PatternDAGExecutor` 实际位于 `internal/swarm/orchestrator/`（跨 Agent Macro-DAG，基于 SQLiteBlackboard），而非本文档 Context 所述的 `internal/agent/pattern`（该路径不存在，与单 Agent 内部 Micro-DAG `internal/agent/dag/` 也不同一）——本文档对现状的描述本身已过时/有误，据此设计的执行器选址不成立。
+2. 用户需求（GD-8-001，见 `local_playground/upgrade/04-设计增强与Backlog.md`）明确针对**跨 Agent 编排**场景（"显式状态图编排替代 Blackboard"），落点应在 `internal/swarm/orchestrator`，与本文档设想的落点不一致。
+3. 实际实现（`StateGraphExecutor`）采用了不同的具体机制：以 `WorkflowEdgeSpec.Condition`（声明式字段比较）表达条件路由，而非本文档的 `EdgeType: BackEdge` 显式边类型；以 `WorkflowNodeSpec.MaxVisits`（节点级、随图规范一起声明）表达有界循环，而非 `state.yaml` 全局 `cyclic_graph_max_iterations` 阈值——两者解决同一问题（有界循环 + 条件路由），但本文档的具体设计未被采纳。
+
+保留本文档作为历史设计草案存档（Won't-Do 决策依据之一），详见 ADR-0041 §"与 ADR-0040 的关系"。

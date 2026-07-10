@@ -343,6 +343,12 @@ func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID st
 		Type:    "task_completed",
 		TaskID:  taskID,
 		AgentID: agentID,
+		// Payload 携带任务结果字节，对齐 FailTask 的 Payload:errBytes 既有模式
+		// （此前遗漏，导致 PatternDAGExecutor/StateGraphExecutor 等消费方读到的
+		// ev.Payload 恒为空——GD-8-001 StateGraph 条件边求值发现，见 M08 §3-quinquies）。
+		// DB 侧不落盘完整 result（tasks 表无独立 result 列，与 FailTask 的 errBytes
+		// 处理方式一致），仅通过广播事件传递给订阅方。
+		Payload: result,
 	})
 	return nil
 }

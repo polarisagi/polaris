@@ -76,15 +76,54 @@ type WorkflowNodeSpec struct {
 	IntentTemplate string              `json:"intent_template"` // 任务模板，支持上下文注入
 	MaxRetry       int                 `json:"max_retry"`
 	Compensation   *CompensationAction `json:"compensation,omitempty"`
+	// MaxVisits 节点在一次 StateGraph 执行中允许被（重复）触发的最大次数（GD-8-001，
+	// 编排模式10 StateGraphExecutor 专用；PatternDAGExecutor/编排模式9 忽略此字段）。
+	// 0 或 1 = 至多执行一次，语义与既有 DAG 完全等价（向后兼容）；>1 允许被循环边
+	// 重复触达，由 StateGraphExecutor 以硬计数器强制上限（HE-Rule-2：物理熔断，
+	// 而非依赖拓扑分析"猜测"是否可能死循环）。与 Compensation 同时声明（>1 且非
+	// nil Compensation）视为非法配置，StateGraphExecutor 校验阶段拒绝——多次执行的
+	// 节点的 Saga 逆序补偿语义未定义。
+	MaxVisits int `json:"max_visits,omitempty"`
+	// IsEntry 显式声明本节点为状态图执行入口（GD-8-001 StateGraph 专用）。
+	// 纯粹以入度=0 判定入口在存在循环边时会失效——参与循环反馈的节点（如
+	// "executor"）通常同时被外部入口和循环边指向，入度恒 > 0，但仍应在执行开始
+	// 时被首批触发。显式标记避免"入度分析"这类隐式推断在环图场景下静默失效。
+	// 入度=0 的节点无需显式标记（仍按入口处理，向后兼容既有 DAG 语义）。
+	IsEntry bool `json:"is_entry,omitempty"`
+}
+
+// EdgeConditionOp 边条件比较操作符（GD-8-001 StateGraph 条件边）。
+type EdgeConditionOp string
+
+const (
+	// CondEquals 上游节点输出 JSON 中 Field 字段值（字符串化后）等于 Value。
+	CondEquals EdgeConditionOp = "eq"
+	// CondNotEquals 同上，取反。
+	CondNotEquals EdgeConditionOp = "ne"
+)
+
+// EdgeCondition 声明式边条件（GD-8-001，编排模式10 StateGraphExecutor 专用）。
+// HE-Rule-2（可验证执行）：条件求值仅支持声明式字段比较，禁止内嵌脚本/表达式
+// 引擎作为条件求值器（避免把"可验证执行"退化为"运行任意代码决定控制流"）。
+// nil Condition = 无条件边，等价于既有 WorkflowEdgeSpec 静态依赖语义（向后兼容）。
+type EdgeCondition struct {
+	Field string          `json:"field"` // 上游节点输出 JSON 顶层字段名
+	Op    EdgeConditionOp `json:"op"`    // 比较操作符
+	Value string          `json:"value"` // 期望值（上游字段值经 fmt.Sprintf("%v", ...) 归一化后比较）
 }
 
 // WorkflowEdgeSpec 表示工作流节点间的依赖。
 type WorkflowEdgeSpec struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+	// Condition 非 nil 时，仅当上游（From）节点输出满足该条件才触发本边（GD-8-001
+	// StateGraph 专用；PatternDAGExecutor/编排模式9 忽略此字段，视为无条件边）。
+	Condition *EdgeCondition `json:"condition,omitempty"`
 }
 
 // WorkflowGraphSpec 定义跨 Agent 的强类型 DAG 编排图。
+// 编排模式9（PatternDAGExecutor）要求严格无环；编排模式10（StateGraphExecutor）
+// 允许通过 Condition + MaxVisits 表达的有界循环，两者共用本结构体（M08 §3-quinquies）。
 type WorkflowGraphSpec struct {
 	Nodes []WorkflowNodeSpec `json:"nodes"`
 	Edges []WorkflowEdgeSpec `json:"edges"`
