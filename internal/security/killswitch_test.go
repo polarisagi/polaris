@@ -147,7 +147,8 @@ func TestKillSwitch_CheckKILLSWITCHFile_TriggersFullStop(t *testing.T) {
 }
 
 func TestKillSwitch_ManualRecover_ResetsState(t *testing.T) {
-	ks := NewKillSwitch(t.TempDir(), nil)
+	dir := t.TempDir()
+	ks := NewKillSwitch(dir, nil)
 	ks.ManualFullStop("admin", "test")
 
 	recovered := false
@@ -155,12 +156,36 @@ func TestKillSwitch_ManualRecover_ResetsState(t *testing.T) {
 		recovered = true
 	})
 
-	ks.ManualRecover(context.Background(), "admin", "recover")
+	err := ks.ManualRecover(context.Background(), "admin", "recover")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
 	if ks.IsFullStopped() {
 		t.Error("Expected not FullStopped after ManualRecover")
 	}
 	if !recovered {
 		t.Error("Expected OnRecovery callback to be called")
+	}
+	if IsFullStopFilePresent(dir) {
+		t.Error("Expected .fullstop file to be deleted")
+	}
+}
+
+func TestKillSwitch_ManualRecover_FailsToDelete(t *testing.T) {
+	dir := t.TempDir()
+	ks := NewKillSwitch(dir, nil)
+	ks.ManualFullStop("admin", "test")
+
+	// Make the directory read-only so file deletion fails
+	os.Chmod(dir, 0500)
+	defer os.Chmod(dir, 0700)
+
+	err := ks.ManualRecover(context.Background(), "admin", "recover")
+	if err == nil {
+		t.Error("Expected error when deleting .fullstop fails")
+	}
+	if !ks.IsFullStopped() {
+		t.Error("Expected to remain FullStopped when deletion fails")
 	}
 }
 
