@@ -117,12 +117,16 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 			"redirect": req.Redirect,
 			"reason":   req.Reason,
 		})
-		_ = s.auditTrail.Record(&security.AuditRecord{
+		if err := s.auditTrail.Record(&security.AuditRecord{
 			ActionType:   "interrupt",
 			ActionDetail: detail,
 			AgentID:      authCtx.UserID,
 			Timestamp:    time.Now().UnixMicro(),
-		})
+		}); err != nil {
+			// 审计写入失败不阻断中断请求主流程（用户中断意图已通过上方 outbox/直调路径生效），
+			// 但必须留痕，避免"审计系统失效却无人发现"（同 doc03 §3.2 LogAudit 原则）。
+			slog.Error("handleAgentInterrupt: audit record failed", "task_id", taskID, "err", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -12,14 +12,6 @@ import (
 //   - 外部包实现这些接口并在构造时注入
 //   - 接口名以 "Provider" 或 "Broker" 结尾，语义清晰
 
-// VFSProvider memory 包对 VFS 的消费端接口（Blob 读写）。
-// 由 vfs.WorkspaceManager 实现，在 vfs/provider.go 中的 BlobStore 接口与此等价。
-// 在 memory 包内单独定义，防止循环 import vfs 包。
-type VFSProvider interface {
-	WriteBlob(data []byte) (ref string, err error)
-	ReadBlob(ctx context.Context, ref string) ([]byte, error)
-}
-
 // EmbedProvider memory 包对向量化引擎的消费端接口。
 // 由 llm.DynamicEmbedder 实现，供 semantic/episodic 存储层使用。
 type EmbedProvider interface {
