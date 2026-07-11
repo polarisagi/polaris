@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,8 +12,14 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// mockStore 实现了 protocol.Store，用于单元测试
+// mockStore 实现了 protocol.Store，用于单元测试。
+// 加锁保护（同 internal/automation/hitl/hitl_test.go 既有 mockStore 模式）：
+// TestSQLiteScheduler_NotifyTaskTerminal_BackgroundFailure 等测试会连续两次
+// 调用 scanAndDispatch，第一次内部经 SafeGo 派生的后台 goroutine 回写任务状态
+// 与测试主 goroutine 发起的第二次 Scan 之间没有 happens-before 关系，裸 map
+// 读写在 `go test -race` 下会被正确判定为数据竞争。
 type mockStore struct {
+	mu   sync.RWMutex
 	data map[string][]byte
 }
 
@@ -21,6 +28,8 @@ func newMockStore() *mockStore {
 }
 
 func (m *mockStore) Get(ctx context.Context, key []byte) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if val, ok := m.data[string(key)]; ok {
 		return val, nil
 	}
@@ -28,16 +37,22 @@ func (m *mockStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 }
 
 func (m *mockStore) Put(ctx context.Context, key, value []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.data[string(key)] = value
 	return nil
 }
 
 func (m *mockStore) Delete(ctx context.Context, key []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.data, string(key))
 	return nil
 }
 
 func (m *mockStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterator, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var keys []string
 	for k := range m.data {
 		if strings.HasPrefix(k, string(prefix)) {
@@ -52,6 +67,8 @@ func (m *mockStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterator,
 }
 
 func (m *mockStore) BatchWrite(ctx context.Context, ops []types.Op) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, op := range ops {
 		if op.Type == types.OpPut {
 			m.data[string(op.Key)] = op.Value
@@ -77,6 +94,8 @@ type mockTxn struct {
 }
 
 func (txn *mockTxn) Get(key []byte) ([]byte, error) {
+	txn.store.mu.RLock()
+	defer txn.store.mu.RUnlock()
 	if val, ok := txn.store.data[string(key)]; ok {
 		return val, nil
 	}
@@ -84,11 +103,15 @@ func (txn *mockTxn) Get(key []byte) ([]byte, error) {
 }
 
 func (txn *mockTxn) Put(key, value []byte) error {
+	txn.store.mu.Lock()
+	defer txn.store.mu.Unlock()
 	txn.store.data[string(key)] = value
 	return nil
 }
 
 func (txn *mockTxn) Delete(key []byte) error {
+	txn.store.mu.Lock()
+	defer txn.store.mu.Unlock()
 	delete(txn.store.data, string(key))
 	return nil
 }
@@ -117,6 +140,8 @@ func (it *mockIterator) Key() []byte {
 
 func (it *mockIterator) Value() []byte {
 	if it.index >= 0 && it.index < len(it.keys) {
+		it.store.mu.RLock()
+		defer it.store.mu.RUnlock()
 		return it.store.data[it.keys[it.index]]
 	}
 	return nil
