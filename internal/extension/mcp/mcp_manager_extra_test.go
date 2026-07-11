@@ -14,7 +14,7 @@ import (
 )
 
 func TestMCPManager_AddRemoveUpdate(t *testing.T) {
-	mgr := NewMCPManager(nil, http.DefaultClient, nil)
+	mgr := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
 
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

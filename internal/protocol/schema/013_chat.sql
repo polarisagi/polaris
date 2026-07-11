@@ -13,9 +13,10 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 CREATE TABLE IF NOT EXISTS chat_messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  TEXT    NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-    role        TEXT    NOT NULL CHECK(role IN ('user','assistant','system')),
-    content     TEXT    NOT NULL,
-    tool_calls  TEXT,
+    role              TEXT    NOT NULL CHECK(role IN ('user','assistant','system')),
+    content           TEXT    NOT NULL,
+    reasoning_content TEXT    NOT NULL DEFAULT '',
+    tool_calls        TEXT,
     file_offset INTEGER NOT NULL DEFAULT 0,
     file_length INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),

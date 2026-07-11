@@ -15,6 +15,7 @@ import (
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/sysinfo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -64,6 +65,13 @@ type Agent struct {
 	tokenVault        *guard.PIITokenVault // PII OpaqueToken 会话级可逆令牌库
 	piiDetector       *guard.PIIDetector   // PII 检测与脱敏器
 
+	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine
+	// 向主循环传递重定向意图字符串，避免直接写 sCtx.RawIntentTS 的数据竞争。
+	// 缓冲大小为 1：如果主循环尚未消费上一个 redirect，新的 Redirect 会覆盖
+	// （select default 分支静默丢弃旧值），与 S_INTERRUPT 语义一致——只有最后
+	// 一次 Redirect 有效，历史意图在被挂起时就已失效。
+	pendingRedirectCh chan string
+
 	// [UP-06] 流式事件订阅者注册表：每个订阅者持独立缓冲通道。
 	// 为什么不用单一共享 channel：共享通道无法区分轮次，斜杠命令短路后
 	// 残留事件会污染下一轮订阅者，且并发请求会互相偷取 token。
@@ -100,14 +108,15 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 			WhisperChan:    wCh,
 			EpochTracker:   tracker,
 		},
-		ctx:             ctx,
-		cancel:          cancel,
-		taintGate:       taintGate,
-		provider:        provider,
-		scorer:          newStepScorer(provider),
-		whisperChan:     wCh,
-		whisperSendChan: wCh,
-		streamSubs:      make(map[uint64]chan types.AgentStreamEvent),
+		ctx:               ctx,
+		cancel:            cancel,
+		taintGate:         taintGate,
+		provider:          provider,
+		scorer:            newStepScorer(provider),
+		whisperChan:       wCh,
+		whisperSendChan:   wCh,
+		streamSubs:        make(map[uint64]chan types.AgentStreamEvent),
+		pendingRedirectCh: make(chan string, 1),
 	}
 	agent.sm.SetIntentDispatcher(agent.asyncIntent)
 	return agent
@@ -165,6 +174,22 @@ func (a *Agent) Run(ctx context.Context) error {
 				return apperr.New(apperr.CodeInternal,
 					fmt.Sprintf("MAX_STEPS_EXCEEDED: steps %d > limit %d",
 						a.sCtx.StepsUsed, a.sCtx.MaxStepsLimit))
+			}
+
+			// GR-4-004: 消费 pendingRedirectCh——如果有 InterruptRedirect 请求在途，
+			// 在主循环单线程内安全地写入 sCtx.RawIntentTS（避免外部 goroutine 直接写的数据竞争）。
+			if trigger == types.TriggerInterruptReceived {
+				select {
+				case redirect := <-a.pendingRedirectCh:
+					if redirect != "" {
+						a.sCtx.RawIntentTS = taint.NewTaintedString(
+							redirect,
+							taint.TaintSource{OriginTaintLevel: types.TaintHigh},
+							"user_interrupt_redirect",
+						)
+					}
+				default:
+				}
 			}
 
 			effects, err := a.sm.Dispatch(ctx, a.sCtx, trigger)

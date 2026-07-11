@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -93,23 +94,73 @@ func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQL
 	}
 	rows.Close()
 
+	txDB, hasTx := db.(interface {
+		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	})
+
 	for _, item := range toUpdate {
-		_, err := db.ExecContext(ctx, "UPDATE episodic_events SET decay_weight=? WHERE id=?", item.DecayWeight, item.ID)
+		if !hasTx {
+			_, err := db.ExecContext(ctx, "UPDATE episodic_events SET decay_weight=? WHERE id=?", item.DecayWeight, item.ID)
+			if err != nil {
+				slog.Warn("ForgettingManager.cleanupWithSQL: update decay_weight failed", "id", item.ID, "err", err)
+			}
+			continue
+		}
+
+		tx, err := txDB.BeginTx(ctx, nil)
 		if err != nil {
-			slog.Warn("ForgettingManager.cleanupWithSQL: update decay_weight failed", "id", item.ID, "err", err)
+			slog.Warn("ForgettingManager.cleanupWithSQL: begin tx failed", "id", item.ID, "err", err)
+			continue
+		}
+
+		_, err = tx.ExecContext(ctx, "UPDATE episodic_events SET decay_weight=? WHERE id=?", item.DecayWeight, item.ID)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, "INSERT INTO episodic_events_change_log(event_id, operation, payload, occurred_at) VALUES (?, 'UPDATE', ?, ?)", item.ID, fmt.Sprintf(`{"decay_weight":%f}`, item.DecayWeight), time.Now().UnixMilli())
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			slog.Warn("ForgettingManager.cleanupWithSQL: update decay_weight tx failed", "id", item.ID, "err", err)
+		} else {
+			_ = tx.Commit()
 		}
 	}
 
 	for _, item := range toArchive {
-		// archived=1 + archive_offset 填充
-		_, err := db.ExecContext(ctx, "UPDATE episodic_events SET archived=1, archive_offset=? WHERE id=?", now, item.ID)
-		if err != nil {
-			slog.Warn("ForgettingManager.cleanupWithSQL: archive failed", "id", item.ID, "err", err)
+		if !hasTx {
+			// archived=1 + archive_offset 填充
+			_, err := db.ExecContext(ctx, "UPDATE episodic_events SET archived=1, archive_offset=? WHERE id=?", now, item.ID)
+			if err != nil {
+				slog.Warn("ForgettingManager.cleanupWithSQL: archive failed", "id", item.ID, "err", err)
+			}
+			// 同步 cognitive.FTSDelete/VecDelete
+			if fm.cognitive != nil && item.EventUUID != "" {
+				_ = fm.cognitive.FTSDelete("ep_" + item.EventUUID)
+				_ = fm.cognitive.VecDelete("ep_" + item.EventUUID)
+			}
+			continue
 		}
-		// 同步 cognitive.FTSDelete/VecDelete
-		if fm.cognitive != nil && item.EventUUID != "" {
-			_ = fm.cognitive.FTSDelete("ep_" + item.EventUUID)
-			_ = fm.cognitive.VecDelete("ep_" + item.EventUUID)
+
+		tx, err := txDB.BeginTx(ctx, nil)
+		if err != nil {
+			slog.Warn("ForgettingManager.cleanupWithSQL: begin tx failed for archive", "id", item.ID, "err", err)
+			continue
+		}
+
+		_, err = tx.ExecContext(ctx, "UPDATE episodic_events SET archived=1, archive_offset=? WHERE id=?", now, item.ID)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, "INSERT INTO episodic_events_change_log(event_id, operation, payload, occurred_at) VALUES (?, 'ARCHIVE', '{}', ?)", item.ID, time.Now().UnixMilli())
+		}
+
+		if err != nil {
+			_ = tx.Rollback()
+			slog.Warn("ForgettingManager.cleanupWithSQL: archive tx failed", "id", item.ID, "err", err)
+		} else {
+			_ = tx.Commit()
+			// 同步 cognitive.FTSDelete/VecDelete
+			if fm.cognitive != nil && item.EventUUID != "" {
+				_ = fm.cognitive.FTSDelete("ep_" + item.EventUUID)
+				_ = fm.cognitive.VecDelete("ep_" + item.EventUUID)
+			}
 		}
 	}
 

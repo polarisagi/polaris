@@ -115,9 +115,6 @@ type StateContext struct {
 	// 认知状态
 	SurpriseIndex float64
 
-	// 用户中断（S_INTERRUPT 相关，inv_global_08）
-	InterruptReq *types.InterruptRequest
-
 	// ReasoningState 跨轮次持久化的推理状态（M04 §7.1 + M05 §3.1）。
 	// S_REFLECT 阶段产出，下轮 S_PERCEIVE 时注入 ContextWindow。
 	ReasoningState []byte
@@ -368,15 +365,13 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 					sm.intentDispatcher(types.TriggerReplanDone)
 				})
 			} else {
-				// fallback to sync if no dispatcher (should not happen in prod)
-				actCtx, cancel := context.WithTimeout(ctx, sm.replanExtActivationTimeout)
-				defer cancel()
-				hints, hintErr := sm.activator.FindAndActivate(actCtx, goalToActivate)
-				if hintErr == nil && len(hints) > 0 {
-					sm.hintsMu.Lock()
-					sm.dynamicHints = hints
-					sm.hintsMu.Unlock()
-				}
+				// GR-4-003 修复：移除持锁期间的同步 IO fallback。
+				// 原 fallback 分支在 sm.mu.Lock() 作用域内同步调用 FindAndActivate（含语义检索/IO），
+				// 会阀塞其他并发 Dispatch 调用直至完成或超时，违反 HE-5（FSM 锁内禁止 IO）。
+				// intentDispatcher 为 nil 是配置错误（生产环境组装一定会注入），需显式暴露而不是静默降级。
+				slog.Error("fsm: intentDispatcher not configured, cannot activate extension for replan — this is a configuration error",
+					"goal", goalToActivate)
+				// 不做扩展激活，也不推进 ReplanDone——上层调用方有 timeout 保护。
 			}
 
 			eff := protocol.DeterministicEffect{

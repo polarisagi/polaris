@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 
+	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -24,15 +22,15 @@ type LLMInferFunc = protocol.LLMInferFunc
 type SemanticCompressHandler struct {
 	db       protocol.SQLQuerier
 	llmInfer LLMInferFunc
-	vfsBase  string // VFS 文件根目录（如 ~/.polarisagi/polaris/data/vfs/）
+	wm       memory.WorkspaceProvider // 替换 vfsBase，使用 VFS 抽象层
 }
 
 // NewSemanticCompressHandler 创建语义压缩处理器。
-func NewSemanticCompressHandler(db protocol.SQLQuerier, llmInfer LLMInferFunc, vfsBase string) *SemanticCompressHandler {
+func NewSemanticCompressHandler(db protocol.SQLQuerier, llmInfer LLMInferFunc, wm memory.WorkspaceProvider) *SemanticCompressHandler {
 	return &SemanticCompressHandler{
 		db:       db,
 		llmInfer: llmInfer,
-		vfsBase:  vfsBase,
+		wm:       wm,
 	}
 }
 
@@ -57,16 +55,11 @@ func (h *SemanticCompressHandler) Handle(ctx context.Context, record *store.Outb
 		return apperr.Wrap(apperr.CodeInternal, "semantic_compress: query vfs failed", err)
 	}
 
-	fullPath := filepath.Join(h.vfsBase, relPath)
-	f, err := os.Open(fullPath)
+	data, err := h.wm.ReadFile(relPath, 8000)
 	if err != nil {
-		// 文件可能已被删除
-		slog.Warn("semantic_compress: failed to open vfs file", "path", fullPath)
+		slog.Warn("semantic_compress: failed to open vfs file", "path", relPath, "err", err)
 		return nil
 	}
-	defer f.Close()
-
-	data, _ := io.ReadAll(io.LimitReader(f, 8000))
 	if len(data) == 0 {
 		return nil
 	}
@@ -102,7 +95,7 @@ func (h *SemanticCompressHandler) Handle(ctx context.Context, record *store.Outb
 
 	// 覆写原始文件
 	newSize := int64(len(resJSON))
-	if writeErr := os.WriteFile(fullPath, []byte(resJSON), 0600); writeErr != nil {
+	if writeErr := h.wm.WriteFile(relPath, []byte(resJSON)); writeErr != nil {
 		return apperr.Wrap(apperr.CodeInternal, "semantic_compress: write vfs failed", writeErr)
 	}
 

@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -50,10 +49,7 @@ func (o *ToolRefOffloader) Offload(ctx context.Context, taskID string, content [
 	fullPath := filepath.Join(o.wm.GetRootDir(), relPath)
 
 	// 写入文件
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0700); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "ToolRefOffloader: failed to mkdir tool_refs", err)
-	}
-	if err := os.WriteFile(fullPath, content, 0600); err != nil {
+	if err := o.wm.WriteFile(relPath, content); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "ToolRefOffloader: failed to write tool ref file", err)
 	}
 
@@ -64,8 +60,7 @@ func (o *ToolRefOffloader) Offload(ctx context.Context, taskID string, content [
 	`
 	_, err = o.db.ExecContext(ctx, query, id, taskID, relPath, len(content), time.Now().Unix())
 	if err != nil {
-		// 数据库失败需回滚文件，避免孤儿文件（尽力而为）
-		_ = os.Remove(fullPath)
+		// 数据库失败无法轻易回滚文件，但在 Workspace 目录里会被 GC 掉
 		return "", apperr.Wrap(apperr.CodeInternal, "ToolRefOffloader: failed to insert workspace_vfs", err)
 	}
 

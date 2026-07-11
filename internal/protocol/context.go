@@ -53,3 +53,6 @@ type CtxVersionKey struct{}
 // CtxTaintLevelKey 用于在 context 中向进程内工具传递当前调用的污点等级
 // （UP-03：core_memory_edit 等需要按写入时污点落库的工具消费；只升不降由消费方保证）。
 type CtxTaintLevelKey struct{}
+
+// CtxAnomalyFilterKey 用于在 context 中传递 AnomalyDistanceFilter 实例 (按会话隔离)
+type CtxAnomalyFilterKey struct{}

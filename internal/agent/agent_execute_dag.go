@@ -400,6 +400,20 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		a.sCtx.ExecuteResult = append(a.sCtx.ExecuteResult, warning...)
 	}
 
+	// GR-4-002 修复：DAG 节点级污点同步抬升 GlobalTaintLevel（只升不降）。
+	// 原实现只拼警告文本（LLM 可能忽略），未同步 GlobalTaintLevel，导致
+	// agent_lifecycle.go 中 toProtocolCtx 计算 MaxTaintLevel 时完全不包含
+	// DAG 执行结果的真实污点——Cedar 策略/Reflect 阶段基于错误的污点判断。
+	maxNodeTaint := types.TaintNone
+	for _, r := range results {
+		if r.TaintLevel > maxNodeTaint {
+			maxNodeTaint = r.TaintLevel
+		}
+	}
+	if maxNodeTaint > a.sCtx.GlobalTaintLevel {
+		a.sCtx.GlobalTaintLevel = maxNodeTaint
+	}
+
 	a.asyncIntent(types.TriggerExecuteDone)
 	return nil
 }

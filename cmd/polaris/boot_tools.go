@@ -291,7 +291,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	vfsWM := vfs.NewWorkspaceManager(sb.Layout.Workspace, workspaceMaxSize)
 	toolRefOffloader := memory.NewToolRefOffloader(sb.Store.DB(), vfsWM)
 
-	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), sb.Layout.Workspace)
+	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), vfsWM)
 	sb.Outbox.RegisterHandler(protocol.TopicSemanticCompress, semanticCompressHandler.Handle)
 
 	var extCogn protocol.CognitiveSearcher = dummySurreal{}
@@ -379,6 +379,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		mb.Mem.Semantic(),
 		skillRegistry,
 		sb.Router,
+		consolidation.NewDefaultSummarizer(sb.Router, sb.PromptMgr),
 		mb.WriteFilter,
 		mb.CascadeInvalidator,
 		sb.Store.DB(),

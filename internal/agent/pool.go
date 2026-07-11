@@ -81,6 +81,13 @@ func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentCon
 		entry.refs--
 		entry.lastUsed = time.Now()
 		p.mu.Unlock()
+
+		// [GD-13-002] 归还池前防御性中止：若任务未达终态，则静默下发 Abort，防止无感空跑
+		curr := agent.sm.Current()
+		if curr != types.AgentStateComplete && curr != types.AgentStateFailed {
+			agent.Interrupt(types.InterruptRequest{Action: types.InterruptAbort})
+		}
+
 		p.sem <- struct{}{} // 归还令牌
 	}
 	return agent, release, nil

@@ -36,10 +36,11 @@ func TestSessionsHandlersExtra(t *testing.T) {
 			task_duration_ms INTEGER
 		);
 		CREATE TABLE IF NOT EXISTS chat_messages (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT,
 			role TEXT,
 			content TEXT,
+			reasoning_content TEXT NOT NULL DEFAULT '',
 			tool_calls TEXT NOT NULL DEFAULT '',
 			file_offset INTEGER NOT NULL DEFAULT 0,
 			file_length INTEGER NOT NULL DEFAULT 0,
@@ -56,7 +57,7 @@ func TestSessionsHandlersExtra(t *testing.T) {
 			created_at DATETIME
 		);
 		INSERT INTO chat_sessions (id, title, status, metadata, task_type, created_at, updated_at) VALUES ('session-1', 'Test', 'active', '{}', 'chat', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-		INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) VALUES ('msg-1', 'session-1', 'user', 'hello', '{}', CURRENT_TIMESTAMP);
+		INSERT INTO chat_messages (session_id, role, content, metadata, created_at) VALUES ('session-1', 'user', 'hello', '{}', CURRENT_TIMESTAMP);
 	`)
 	if err != nil {
 		t.Fatal(err)

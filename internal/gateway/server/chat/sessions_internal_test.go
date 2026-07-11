@@ -35,10 +35,11 @@ func TestSessionsInternal(t *testing.T) {
 			task_duration_ms INTEGER
 		);
 		CREATE TABLE IF NOT EXISTS chat_messages (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT,
 			role TEXT,
 			content TEXT,
+			reasoning_content TEXT NOT NULL DEFAULT '',
 			tool_calls TEXT NOT NULL DEFAULT '',
 			file_offset INTEGER NOT NULL DEFAULT 0,
 			file_length INTEGER NOT NULL DEFAULT 0,

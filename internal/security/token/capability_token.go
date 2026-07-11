@@ -70,6 +70,9 @@ type TokenManager struct {
 	mu      sync.RWMutex
 	revoked map[string]struct{}
 	revokeQ []string // 用于 LRU FIFO 淘汰
+
+	// 已签发列表：仅用于通过 ID 进行无状态回源查找（内存缓存）
+	issued map[string]*Token
 }
 
 // NewTokenManager 创建一个新的令牌管理器，自动生成临时密钥对。
@@ -83,6 +86,7 @@ func NewTokenManager() (*TokenManager, error) {
 		pubKey:  pub,
 		privKey: priv,
 		revoked: make(map[string]struct{}),
+		issued:  make(map[string]*Token),
 	}, nil
 }
 
@@ -116,7 +120,13 @@ func (tm *TokenManager) Mint(agentID string, caps []CapabilityType, sandboxTier 
 	}
 
 	sig := ed25519.Sign(tm.privKey, payload)
-	return &Token{Claims: claims, Signature: sig}, nil
+	tok := &Token{Claims: claims, Signature: sig}
+
+	tm.mu.Lock()
+	tm.issued[tokenID] = tok
+	tm.mu.Unlock()
+
+	return tok, nil
 }
 
 // Verify 验证令牌的签名有效性、过期状态及撤销状态。
@@ -243,7 +253,24 @@ func (tm *TokenManager) Delegate(parent *Token, agentID string, caps []Capabilit
 		return nil, apperr.Wrap(apperr.CodeInternal, "capability_token: marshal delegate claims", err)
 	}
 	sig := ed25519.Sign(tm.privKey, payload)
-	return &Token{Claims: claims, Signature: sig}, nil
+	tok := &Token{Claims: claims, Signature: sig}
+
+	tm.mu.Lock()
+	tm.issued[tokenID] = tok
+	tm.mu.Unlock()
+
+	return tok, nil
+}
+
+// Lookup 通过 tokenID 查找已签发的完整 Token（无状态回源）。
+// 如果系统重启导致内存清空，将返回 Not Found，触发调用方重新申请或拦截执行。
+func (tm *TokenManager) Lookup(tokenID string) (*Token, error) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	if tok, ok := tm.issued[tokenID]; ok {
+		return tok, nil
+	}
+	return nil, apperr.New(apperr.CodeNotFound, "capability_token: token not found")
 }
 
 // ValidateDelegation 验证 child 确实是从 parent 合法派生的子令牌（M11 §3.1）：

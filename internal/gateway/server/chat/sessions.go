@@ -3,8 +3,6 @@ package chat
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -90,14 +88,6 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(h.DataDir, "sessions", sessionID, "transcript.jsonl")
-	f, _ := os.Open(filePath)
-	defer func() {
-		if f != nil {
-			f.Close()
-		}
-	}()
-
 	type msgRow struct {
 		Role             string          `json:"role"`
 		Content          string          `json:"content"`
@@ -109,15 +99,10 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 	total := 0
 	for _, row := range messages {
 		m := msgRow{
-			Role:         row.Role,
-			Content:      row.Content,
-			TaskDuration: parseTaskDuration(row.CreatedAt, row.UpdatedAt),
-		}
-		if reasoning, content, ok := readTranscriptEntry(f, row.FileOffset, row.FileLength); ok {
-			m.ReasoningContent = reasoning
-			if content != "" {
-				m.Content = content
-			}
+			Role:             row.Role,
+			Content:          row.Content,
+			ReasoningContent: row.ReasoningContent,
+			TaskDuration:     parseTaskDuration(row.CreatedAt, row.UpdatedAt),
 		}
 		if row.ToolCalls != "" {
 			m.ToolCalls = json.RawMessage(row.ToolCalls)
@@ -155,24 +140,6 @@ func parseTaskDuration(createdStr, updatedStr string) int64 {
 		return tU.Sub(tC).Milliseconds()
 	}
 	return 0
-}
-
-func readTranscriptEntry(f *os.File, offset, length int64) (string, string, bool) {
-	if f == nil || length <= 0 {
-		return "", "", false
-	}
-	b := make([]byte, length)
-	if _, err := f.ReadAt(b, offset); err != nil {
-		return "", "", false
-	}
-	var entry struct {
-		ReasoningContent string `json:"reasoning_content"`
-		Content          string `json:"content"`
-	}
-	if err := json.Unmarshal(b, &entry); err == nil {
-		return entry.ReasoningContent, entry.Content, true
-	}
-	return "", "", false
 }
 
 // DELETE /v1/sessions/{sessionID}

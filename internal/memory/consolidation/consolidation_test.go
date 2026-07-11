@@ -20,7 +20,7 @@ func TestConsolidationPipeline(t *testing.T) {
 	skills := &mockSkillRegistry{}
 	provider := &testutil.MockProvider{Resp: `{"entities":[{"name":"abc","type":"concept"}],"relations":[]}`}
 
-	pipe := NewConsolidationPipeline(episodic, semantic, skills, provider)
+	pipe := NewConsolidationPipeline(episodic, semantic, skills, provider, nil)
 
 	// Test Run on empty
 	err := pipe.Run(ctx, "s1")
@@ -52,7 +52,7 @@ func TestConsolidationPipeline(t *testing.T) {
 
 	// Test ruleExtract fallback
 	provider.Fail = true
-	pipe2 := NewConsolidationPipeline(episodic, semantic, skills, provider)
+	pipe2 := NewConsolidationPipeline(episodic, semantic, skills, provider, nil)
 	err = pipe2.Run(ctx, "s1")
 	if err != nil {
 		t.Fatal(err)

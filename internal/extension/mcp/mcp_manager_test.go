@@ -30,7 +30,7 @@ func (d *dummySamplingProvider) ModelID() string                      { return "
 func (d *dummySamplingProvider) Close() error                         { return nil }
 
 func TestMakeSamplingHandler(t *testing.T) {
-	mgr := NewMCPManager(nil, nil, nil)
+	mgr := NewMCPManager(nil, nil, &mockPolicyGate{})
 	mgr.SetSamplingProvider(&dummySamplingProvider{content: "dummy resp"})
 
 	handler := mgr.makeSamplingHandler()
@@ -65,4 +65,13 @@ func TestMakeSamplingHandler(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error for unknown method")
 	}
+}
+
+type mockPolicyGate struct{}
+
+func (m *mockPolicyGate) IsAuthorized(ctx context.Context, principal, action, resource string, context map[string]any) (bool, error) {
+	return true, nil
+}
+func (m *mockPolicyGate) Review(ctx context.Context, req types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
+	return types.PolicyReviewResult{Allowed: true}, nil
 }

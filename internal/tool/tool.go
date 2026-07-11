@@ -37,6 +37,7 @@ type InMemoryToolRegistry struct {
 	// 上限 1000 是 state.yaml §m7_tool.idempotency_cache_max 的默认值。
 	idempotencyCache *lruCache
 	tokenVault       *guard.PIITokenVault // 可选注入（M11 §5.4 PII 令牌化）；nil 时行为与改造前完全一致
+	hitl             protocol.HITL        // HITL 网关 (人工审批)
 }
 
 // WithTokenVault 注入 PIITokenVault（可选，2026-07-04 审计修复：此前定义了完整
@@ -60,6 +61,14 @@ func (r *InMemoryToolRegistry) WithSideEffectChecker(c SideEffectChecker) *InMem
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.blackboard = c
+	return r
+}
+
+// WithHITL 注入 HITL 人工审批网关。
+func (r *InMemoryToolRegistry) WithHITL(hitl protocol.HITL) *InMemoryToolRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.hitl = hitl
 	return r
 }
 
@@ -142,7 +151,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	modifiedInput, res, err := r.checkPreExecution(ctx, tool, taintLevel, input)
 	if res != nil || err != nil {
 		if err != nil {
-			return res, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
 		}
 		return res, nil
 	}
@@ -170,6 +179,11 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 			return nil, apperr.Wrap(apperr.CodeInternal, "tool_registry: PII token restore failed, fail-closed", restoreErr)
 		}
 		execInput = []byte(restored)
+	}
+
+	// Anomaly Distance Filter Check (M11 §2.2)
+	if err := r.checkAnomaly(ctx, name, execInput); err != nil {
+		return nil, err
 	}
 
 	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
@@ -204,6 +218,19 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		}
 	}
 
+	var piiRestoreErr error
+	if vault != nil {
+		execErr, piiRestoreErr = r.restoreOutputs(ctx, vault, execErr, execRes)
+	}
+
+	if piiRestoreErr != nil {
+		return &types.ToolResult{
+			Success:    false,
+			Error:      "tool_registry: output PII restore failed (fail-closed)",
+			TaintLevel: taintLevel,
+		}, piiRestoreErr
+	}
+
 	if execErr != nil {
 		return &types.ToolResult{ //nolint:nilerr
 			Success:    false,
@@ -224,24 +251,6 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	r.cacheIdempotencyResult(idempotencyKey, finalResult)
 
 	return finalResult, nil
-}
-
-func (r *InMemoryToolRegistry) checkIdempotency(ctx context.Context) (*types.ToolResult, bool, string) {
-	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
-		idempotencyKey := string(key)
-		if cachedResult, exists := r.idempotencyCache.get(idempotencyKey); exists {
-			slog.Debug("tool_registry: returning cached result for idempotency key", "key", idempotencyKey)
-			return cachedResult, true, idempotencyKey
-		}
-		return nil, false, idempotencyKey
-	}
-	return nil, false, ""
-}
-
-func (r *InMemoryToolRegistry) cacheIdempotencyResult(key string, result *types.ToolResult) {
-	if key != "" && result.Success {
-		r.idempotencyCache.set(key, result)
-	}
 }
 
 func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel, input []byte) ([]byte, *types.ToolResult, error) {
@@ -313,3 +322,72 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 
 // isFileWriteTool/isShellTool/isReversible、lruCache、rateLimiter、
 // ErrToolNotFound 见 tool_helpers.go（R7 拆分）。
+
+func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, execInput []byte) error {
+	f, ok := ctx.Value(protocol.CtxAnomalyFilterKey{}).(*guard.AnomalyDistanceFilter)
+	if !ok {
+		return nil
+	}
+	features := []float64{float64(len(execInput))}
+	_, chkErr := f.Check(name, features)
+	if chkErr == nil {
+		return nil
+	}
+
+	r.mu.RLock()
+	hitlGw := r.hitl
+	r.mu.RUnlock()
+
+	if hitlGw == nil {
+		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: anomaly detected but no HITL gateway configured", chkErr)
+	}
+
+	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	resp, promptErr := hitlGw.Prompt(ctx, types.HITLPrompt{
+		ID:             taskID,
+		CheckpointType: "anomaly_escalation",
+		PromptText:     fmt.Sprintf("Tool %q anomalous behavior detected. Approve execution?", name),
+		Options: []types.HITLOption{
+			{Key: "approve", Label: "Approve"},
+			{Key: "deny", Label: "Deny"},
+		},
+	})
+	if promptErr != nil {
+		return apperr.Wrap(apperr.CodeInternal, "tool_registry: HITL prompt failed", promptErr)
+	}
+	if resp == nil || !resp.Approved {
+		return apperr.New(apperr.CodeForbidden, "tool_registry: execution blocked by anomaly filter (HITL denied)")
+	}
+	slog.Info("tool_registry: HITL approved anomalous execution", "tool", name, "taskID", taskID)
+	f.Record(name, features)
+	return nil
+}
+
+func (r *InMemoryToolRegistry) restoreOutputs(ctx context.Context, vault *guard.PIITokenVault, execErr error, execRes *sandbox.ExecResult) (error, error) {
+	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	if execErr != nil {
+		restored, err := vault.RestoreForTask(taskID, execErr.Error())
+		if err != nil {
+			return execErr, apperr.Wrap(apperr.CodeInternal, "tool_registry: restore execErr failed", err)
+		}
+		return apperr.New(apperr.CodeInternal, restored), nil
+	}
+	if execRes == nil {
+		return nil, nil
+	}
+	if len(execRes.Output) > 0 {
+		restored, err := vault.RestoreForTask(taskID, string(execRes.Output))
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "tool_registry: restore execRes.Output failed", err)
+		}
+		execRes.Output = []byte(restored)
+	}
+	if execRes.Error != "" {
+		restored, err := vault.RestoreForTask(taskID, execRes.Error)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "tool_registry: restore execRes.Error failed", err)
+		}
+		execRes.Error = restored
+	}
+	return nil, nil
+}

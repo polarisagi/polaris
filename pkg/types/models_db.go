@@ -16,15 +16,16 @@ type
 
 // ChatMessageRow 对应 chat_messages 表一行。
 ChatMessageRow struct {
-	ID         int64
-	SessionID  string
-	Role       string
-	Content    string
-	ToolCalls  string
-	FileOffset int64
-	FileLength int64
-	CreatedAt  string
-	UpdatedAt  string
+	ID               int64
+	SessionID        string
+	Role             string
+	Content          string
+	ReasoningContent string
+	ToolCalls        string
+	FileOffset       int64
+	FileLength       int64
+	CreatedAt        string
+	UpdatedAt        string
 }
 
 type

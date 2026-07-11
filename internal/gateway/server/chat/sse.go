@@ -9,10 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
-
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -284,13 +282,6 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		"POLARIS_CHANNEL":    "web",
 	})
 
-	// [新增] 推理完成后通知 FSM（非阻塞）
-	if agentCtrl != nil {
-		concurrent.SafeGo(ctx, "gateway.chat.send_intent_execute_done", func(context.Context) {
-			_ = agentCtrl.SendIntent(types.TriggerExecuteDone)
-		})
-	}
-
 	WriteSSE(w, flusher, "complete", map[string]any{
 		"session_id":  sessionID,
 		"duration_ms": inferLatencyMs,
@@ -348,6 +339,10 @@ func (s *ChatHandler) handleAgentStreamFSM(
 				WriteSSE(w, flusher, "status", map[string]any{"type": "info", "message": ev.Content})
 			}
 		case <-ctx.Done():
+			// [GD-13-002] 客户端断连时通知 Agent Kernel 强制中止，避免后台无感空跑
+			if agentCtrl != nil {
+				agentCtrl.Interrupt(types.InterruptRequest{Action: types.InterruptAbort})
+			}
 			return reply.String(), ctx.Err().Error(), true
 		}
 	}

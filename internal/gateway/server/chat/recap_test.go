@@ -26,6 +26,7 @@ func TestHandleSessionRecap(t *testing.T) {
 			session_id TEXT    NOT NULL DEFAULT '',
 			role       TEXT    NOT NULL DEFAULT '',
 			content    TEXT    NOT NULL DEFAULT '',
+			reasoning_content TEXT NOT NULL DEFAULT '',
 			tool_calls TEXT NOT NULL DEFAULT '',
 			file_offset INTEGER NOT NULL DEFAULT 0,
 			file_length INTEGER NOT NULL DEFAULT 0,

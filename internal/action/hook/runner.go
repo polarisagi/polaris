@@ -44,6 +44,9 @@ type Runner struct {
 // 跳过了沙箱分级/Capability Token/Taint 传播三步，与 envelope.go"单一权威入口"的声明矛盾。
 // piiDetector 为 nil 时自动使用 guard.NewPIIDetector()（Tier 0 纯正则，无外部依赖）。
 func NewRunner(registry *Registry, policy protocol.PolicyGate, envelope *sandbox.ExecEnvelope, piiDetector *guard.PIIDetector, piiDesens *guard.PIIDesensitizer) *Runner {
+	if policy == nil {
+		panic("hook: policy gate not configured (fail-closed)")
+	}
 	if piiDetector == nil {
 		piiDetector = guard.NewPIIDetector()
 	}
@@ -97,16 +100,17 @@ func (r *Runner) Fire(ctx context.Context, input HookInput) []HookResult {
 		return nil
 	}
 
-	if r.policy != nil {
-		allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "hook_execute", string(input.Event),
-			map[string]any{"event": string(input.Event), "tool_name": input.ToolName})
-		if pErr != nil || !allowed {
-			reason := "policy denied"
-			if pErr != nil {
-				reason = pErr.Error()
-			}
-			return []HookResult{{Event: input.Event, Err: apperr.New(apperr.CodeForbidden, "hook_execute denied: "+reason)}}
+	if r.policy == nil {
+		return []HookResult{{Event: input.Event, Err: apperr.New(apperr.CodeInternal, "hook_execute: policy gate not configured (fail-closed)")}}
+	}
+	allowed, pErr := r.policy.IsAuthorized(ctx, "agent", "hook_execute", string(input.Event),
+		map[string]any{"event": string(input.Event), "tool_name": input.ToolName})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
 		}
+		return []HookResult{{Event: input.Event, Err: apperr.New(apperr.CodeForbidden, "hook_execute denied: "+reason)}}
 	}
 
 	type indexed struct {

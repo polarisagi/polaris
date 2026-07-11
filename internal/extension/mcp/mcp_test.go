@@ -79,7 +79,7 @@ func TestValidateLLMNamePart_Invalid(t *testing.T) {
 // ── MCPManager (no-network paths) ────────────────────────────────────────────
 
 func TestMCPManager_ListServers_Empty(t *testing.T) {
-	m := NewMCPManager(nil, nil, nil)
+	m := NewMCPManager(nil, nil, &mockPolicyGate{})
 	servers := m.ListServers()
 	if len(servers) != 0 {
 		t.Errorf("new manager should have 0 servers, got %d", len(servers))
@@ -87,7 +87,7 @@ func TestMCPManager_ListServers_Empty(t *testing.T) {
 }
 
 func TestMCPManager_ListToolSchemas_Empty(t *testing.T) {
-	m := NewMCPManager(nil, nil, nil)
+	m := NewMCPManager(nil, nil, &mockPolicyGate{})
 	schemas := m.ListToolSchemas()
 	if len(schemas) != 0 {
 		t.Errorf("new manager should have 0 tool schemas, got %d", len(schemas))
@@ -95,7 +95,7 @@ func TestMCPManager_ListToolSchemas_Empty(t *testing.T) {
 }
 
 func TestMCPManager_CallTool_ServerNotFound(t *testing.T) {
-	m := NewMCPManager(nil, nil, nil)
+	m := NewMCPManager(nil, nil, &mockPolicyGate{})
 	_, err := m.CallTool(context.Background(), "nonexistent-server", "some_tool", nil)
 	if err == nil {
 		t.Fatal("calling tool on non-existent server should return error")
@@ -103,7 +103,7 @@ func TestMCPManager_CallTool_ServerNotFound(t *testing.T) {
 }
 
 func TestMCPManager_CallTool_PolicyNil(t *testing.T) {
-	m := NewMCPManager(nil, nil, nil)
+	m := NewMCPManager(nil, nil, &mockPolicyGate{})
 	m.entries["fake-server"] = &mcpEntry{}
 	_, err := m.CallTool(context.Background(), "fake-server", "some_tool", nil)
 	if err == nil {
@@ -115,7 +115,7 @@ func TestMCPManager_CallTool_PolicyNil(t *testing.T) {
 }
 
 func TestMCPManager_Remove_NonExistent_NoOp(t *testing.T) {
-	m := NewMCPManager(nil, nil, nil)
+	m := NewMCPManager(nil, nil, &mockPolicyGate{})
 	// Remove on non-existent ID should not panic
 	m.Remove("ghost-id")
 	if len(m.ListServers()) != 0 {

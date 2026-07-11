@@ -94,7 +94,7 @@ func TestExtensionActivator_FindAndActivate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mcpMgr := mcp.NewMCPManager(nil, http.DefaultClient, nil)
+	mcpMgr := mcp.NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
 	cog := &mockCognitiveSearcher{
 		results: []ScoredResult{
 			{ID: "ext_ext_1", Score: 0.9},

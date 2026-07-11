@@ -40,6 +40,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/ollamamgr"
 	"github.com/polarisagi/polaris/internal/observability"
 	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/internal/security"
@@ -55,10 +56,11 @@ import (
 // 向所有上层 boot 函数传递，避免大量参数列表。
 type SubstrateBundle struct {
 	// 配置与数据目录
-	Cfg     *config.Config
-	DataDir string
-	Layout  config.DataLayout
-	Vault   *credential.Vault
+	Cfg       *config.Config
+	DataDir   string
+	Layout    config.DataLayout
+	Vault     *credential.Vault
+	PromptMgr *prompt.Manager
 
 	// 硬件探针与可观测性（AutoConf 可 nil，Tier0 降级）
 	AutoConf *observability.AutoConfig
@@ -194,6 +196,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	ks.StateChangeCallback = func(newState security.KillState, _ string) {
 		metrics.GlobalKillswitchStage.Store(int32(newState))
 	}
+
+	promptMgr := prompt.NewManager(filepath.Join(cfgPath, ".."), configs.FS)
 
 	// ─── 0.4 日志初始化 ──────────────────────────────────────────────────────
 	logFile := observability.SetupLogger(dataDir)
@@ -526,6 +530,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		AuditChain:    auditChain,
 		LogFile:       logFile,
 		LogStore:      logStore,
+		PromptMgr:     promptMgr,
 		Store:         store,
 		SurrealStore:  surrealStore,
 		StorageRouter: storageRouter,

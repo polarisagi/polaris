@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/internal/vfs"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -49,7 +50,8 @@ func TestSemanticCompressHandler(t *testing.T) {
 		return `{"root_cause": "SegFault", "error_type": "Memory", "suggest_fix": "Fix C", "affected_file": "error.log"}`, nil
 	})
 
-	handler := NewSemanticCompressHandler(db, llm, vfsDir)
+	wm := vfs.NewWorkspaceManager(vfsDir, 1024*1024)
+	handler := NewSemanticCompressHandler(db, llm, wm)
 
 	payload, _ := json.Marshal(map[string]string{"vfs_id": "vfs123"})
 	err = handler.Handle(context.Background(), &store.OutboxRecord{Payload: payload})

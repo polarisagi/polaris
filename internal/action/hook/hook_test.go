@@ -9,9 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// mockPolicyGate is a test stub satisfying protocol.PolicyGate.
+type mockPolicyGate struct {
+	allowed bool
+}
+
+func (m *mockPolicyGate) IsAuthorized(_ context.Context, _, _, _ string, _ map[string]any) (bool, error) {
+	return m.allowed, nil
+}
+func (m *mockPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
+	return types.PolicyReviewResult{Allowed: m.allowed}, nil
+}
+
+var _ protocol.PolicyGate = (*mockPolicyGate)(nil)
 
 // echoRunner 是一个测试用 CmdRunner 实现：通过 bash 裸执行（无沙箱隔离）。
 // 仅用于 hook Runner 单元测试（验证事件匹配/并发/错误处理逻辑），不用于安全测试。
@@ -168,7 +183,7 @@ func TestApplyDefaults_SetsTimeout(t *testing.T) {
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 func TestRunner_Fire_NoGroups(t *testing.T) {
-	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, nil, newTestEnvelope(t), nil, nil)
+	r := NewRunner(&Registry{groups: map[Event][]MatcherGroup{}}, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	results := r.Fire(context.Background(), HookInput{Event: EventStop})
 	if results != nil {
 		t.Errorf("expected nil results for unregistered event, got %v", results)
@@ -188,7 +203,7 @@ func TestRunner_Fire_EchoCommand(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, newTestEnvelope(t), nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	results := runner.Fire(context.Background(), HookInput{
 		Event:     EventPostToolUse,
 		ToolName:  "bash",
@@ -221,7 +236,7 @@ func TestRunner_Fire_NonZeroExit(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, newTestEnvelope(t), nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventPreToolUse})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -239,7 +254,7 @@ func TestRunner_Fire_SkipsNonCommandType(t *testing.T) {
 			}},
 		},
 	}
-	runner := NewRunner(reg, nil, newTestEnvelope(t), nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventSessionStart})
 	if len(results) != 0 {
 		t.Errorf("non-command handler should be skipped, got %d results", len(results))
@@ -261,7 +276,7 @@ func TestRunner_Fire_NilEnvelope_FailClosed(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, nil, nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, nil, nil, nil)
 	results := runner.Fire(context.Background(), HookInput{Event: EventPostToolUse})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -284,7 +299,7 @@ func TestRunner_FirePreToolUse_BlocksOnNonZeroExit(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, newTestEnvelope(t), nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	blocked, reason := runner.FirePreToolUse(context.Background(), "bash", nil, "sess-1")
 	if !blocked {
 		t.Fatal("expected blocked=true when hook exits non-zero")
@@ -302,7 +317,7 @@ func TestRunner_FirePreToolUse_AllowsOnZeroExit(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, newTestEnvelope(t), nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	blocked, _ := runner.FirePreToolUse(context.Background(), "bash", nil, "sess-1")
 	if blocked {
 		t.Fatal("expected blocked=false when hook exits 0")
@@ -317,6 +332,6 @@ func TestRunner_FirePostToolUse_NoPanic(t *testing.T) {
 			}}),
 		},
 	}
-	runner := NewRunner(reg, nil, newTestEnvelope(t), nil, nil)
+	runner := NewRunner(reg, &mockPolicyGate{allowed: true}, newTestEnvelope(t), nil, nil)
 	runner.FirePostToolUse(context.Background(), "bash", nil, "tool output", "sess-1")
 }

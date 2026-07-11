@@ -4,15 +4,12 @@
 package main
 
 import (
-	"path/filepath"
-
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/agent"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
-	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/store/repo"
@@ -85,8 +82,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 
 	httpServer := server.NewServer(addr, sb.DataDir, ab.AgentPool, ab.Blackboard, tb.HITLGateway,
 		sb.Store.DB(), sb.Store.ReadDB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.Cfg.Agent, sb.TBR, apiRateLimiter)
-	promptMgr := prompt.NewManager(filepath.Join(sb.DataDir, "config"), configs.FS)
-	httpServer.SetPromptManager(promptMgr)
+	httpServer.SetPromptManager(sb.PromptMgr)
 	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}, channel.WithSafeDialer(sb.Dialer))
 	httpServer.SetChannelStarter(channelMgr)
 
@@ -154,6 +150,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			codeact.WithHITL(tb.HITLGateway),
 			codeact.WithMaxCodeSize(sb.Cfg.Thresholds.M7Tool.MaxCodeSizeBytes),
 			codeact.WithPIIGuard(tb.PIIDetector, tb.PIIDesensitizer),
+			codeact.WithTokenManager(action.GetTokenManager()),
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
 		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})

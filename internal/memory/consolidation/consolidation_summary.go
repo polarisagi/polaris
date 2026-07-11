@@ -3,10 +3,10 @@ package consolidation
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -61,15 +61,13 @@ func (p *ConsolidationPipeline) buildSummary(
 	}
 	text := sb.String()
 
-	if p.provider != nil {
-		prompt := fmt.Sprintf(
-			"Summarize the following AI agent session in 3-5 concise sentences. "+
-				"Focus on: what was accomplished, what tools were used, and key outcomes.\n\n%s",
-			text,
-		)
-		resp, err := safecall.Infer(ctx, p.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(256))
-		if err == nil && resp != nil {
-			return strings.TrimSpace(resp.Content)
+	if p.summarizer != nil {
+		summary, err := p.summarizer.Summarize(ctx, text, 256)
+		if err == nil && summary != "" {
+			return summary
+		}
+		if err != nil {
+			slog.Warn("consolidation_summary: LLM inference failed, falling back to rule-based summary", "err", err)
 		}
 	}
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -28,6 +29,7 @@ type ConsolidationPipeline struct {
 	semantic     protocol.SemanticMemory
 	skills       protocol.SkillRegistry
 	provider     protocol.Provider
+	summarizer   memory.LLMSummarizer
 	writeFilter  *retrieval.WriteFilter
 	cascadeInv   *retrieval.CascadeInvalidator
 	db           protocol.SQLQuerier
@@ -53,12 +55,14 @@ func NewConsolidationPipeline(
 	semantic protocol.SemanticMemory,
 	skills protocol.SkillRegistry,
 	provider protocol.Provider,
+	summarizer memory.LLMSummarizer,
 ) *ConsolidationPipeline {
 	return &ConsolidationPipeline{
-		episodic: episodic,
-		semantic: semantic,
-		skills:   skills,
-		provider: provider,
+		episodic:   episodic,
+		semantic:   semantic,
+		skills:     skills,
+		provider:   provider,
+		summarizer: summarizer,
 	}
 }
 
@@ -68,6 +72,7 @@ func NewConsolidationPipelineFull(
 	s protocol.SemanticMemory,
 	skills protocol.SkillRegistry,
 	provider protocol.Provider,
+	summarizer memory.LLMSummarizer,
 	wf *retrieval.WriteFilter,
 	ci *retrieval.CascadeInvalidator,
 	db protocol.SQLQuerier,
@@ -77,6 +82,7 @@ func NewConsolidationPipelineFull(
 		semantic:    s,
 		skills:      skills,
 		provider:    provider,
+		summarizer:  summarizer,
 		writeFilter: wf,
 		cascadeInv:  ci,
 		db:          db,

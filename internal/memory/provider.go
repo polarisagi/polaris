@@ -62,4 +62,8 @@ type WorkspaceProvider interface {
 	RegisterFile(taskID string, f vfs.WorkspaceFile)
 	// CheckQuota 写入前检查配额，超限返回 vfs.ErrWorkspaceQuotaExhausted。
 	CheckQuota(pendingWrite int64) error
+	// WriteFile 将 data 写入相对路径 relPath（基于 RootDir），自动创建父目录。
+	WriteFile(relPath string, data []byte) error
+	// ReadFile 从相对路径 relPath 读取文件，最多读取 limit 字节。如果 limit <= 0，读取全部。
+	ReadFile(relPath string, limit int64) ([]byte, error)
 }

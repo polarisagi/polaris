@@ -13,7 +13,6 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -65,17 +64,29 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 
 // Interrupt 向 Agent 发送中断请求（非阻塞，inv_global_08 <200ms SLO）。
 // Resume → 恢复原状态；Redirect → 更新意图后恢复（重新规划）；Abort → S_FAILED。
+//
+// GR-4-004 修复：本方法由外部 goroutine 调用，与 Agent.Run() 主循环并发运行。
+// 原实现直接写 a.sCtx.InterruptReq 和 a.sCtx.RawIntentTS，存在数据竞争：
+//   - InterruptReq 是死字段（全仓库仅此一处写，从未被任何代码读取），直接删除。
+//   - RawIntentTS 改为通过 pendingRedirectCh（容量 1）传递给主循环在单线程内安全写入。
+//
+// channel 发送用 select/default：如果主循环还未消费上一条 redirect，则新值覆盖
+// （丢弃旧值后重新放入），保证最后一次 Redirect 意图生效。
 func (a *Agent) Interrupt(req types.InterruptRequest) {
-	a.sCtx.InterruptReq = &req
 	switch req.Action {
 	case types.InterruptRedirect:
-		// 更新意图，Resume 后从当前状态重新规划
+		// 将重定向意图字符串投递到 channel，由主循环在单线程内安全写入 sCtx.RawIntentTS。
 		if req.Redirect != "" {
-			a.sCtx.RawIntentTS = taint.NewTaintedString(
-				req.Redirect,
-				taint.TaintSource{OriginTaintLevel: types.TaintHigh},
-				"user_interrupt_redirect",
-			)
+			select {
+			case a.pendingRedirectCh <- req.Redirect:
+			default:
+				// channel 已满（上一条 redirect 未消费），弹出旧值放入新值
+				select {
+				case <-a.pendingRedirectCh:
+				default:
+				}
+				a.pendingRedirectCh <- req.Redirect
+			}
 		}
 		_ = a.SendIntent(types.TriggerInterruptReceived)
 		// 注入到 S_INTERRUPT 后立即 Resume（Redirect = 新意图的 Resume）

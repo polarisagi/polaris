@@ -9,6 +9,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -39,10 +40,16 @@ type CodeAct struct {
 	maxCodeSize  int                    // 强制的最大代码字节数（inv_global_07）
 	desensitizer *guard.PIIDesensitizer // PII 脱敏器
 	detector     *guard.PIIDetector     // PII 检测器
+	tokenMgr     tokenManager           // Capability Token 管理器
 }
 
 type govAgent interface {
 	ValidateCode(language string, code []byte, caps map[string]bool) error
+}
+
+type tokenManager interface {
+	Lookup(tokenID string) (*token.Token, error)
+	Verify(tok *token.Token) error
 }
 
 // CodeActOption 定义初始化选项
@@ -88,6 +95,13 @@ func WithPIIGuard(detector *guard.PIIDetector, desensitizer *guard.PIIDesensitiz
 	return func(c *CodeAct) {
 		c.detector = detector
 		c.desensitizer = desensitizer
+	}
+}
+
+// WithTokenManager 注入 Capability Token 管理器
+func WithTokenManager(mgr tokenManager) CodeActOption {
+	return func(c *CodeAct) {
+		c.tokenMgr = mgr
 	}
 }
 
@@ -144,6 +158,18 @@ func (ca *CodeAct) validatePolicyAndEnv(ctx context.Context, req protocol.CodeAc
 		return apperr.New(apperr.CodeInternal,
 			"code_act: governance agent not initialized, refusing code execution (fail-closed)")
 	}
+	if ca.tokenMgr == nil {
+		return apperr.New(apperr.CodeInternal, "code_act: token manager not initialized (fail-closed)")
+	}
+
+	tok, err := ca.tokenMgr.Lookup(req.CapabilityID)
+	if err != nil {
+		return apperr.New(apperr.CodeForbidden, "code_act: invalid capability token")
+	}
+	if verifyErr := ca.tokenMgr.Verify(tok); verifyErr != nil {
+		return apperr.New(apperr.CodeForbidden, "code_act: capability token verification failed")
+	}
+
 	return nil
 }
 
@@ -227,11 +253,14 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	}
 	defer os.Remove(tmpFile) // 执行后立即删除，防止敏感代码驻留磁盘
 
+	tok, _ := ca.tokenMgr.Lookup(req.CapabilityID)
+
 	res, err := ca.envelope.Execute(ctx, sandbox.ExecRequest{
 		Principal: sandbox.PrincipalAgent, Kind: sandbox.KindScriptExecute,
 		Resource: "codeact:" + req.Language, TrustTier: types.TrustUntrusted,
 		Tool:  types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated},
 		Input: []byte("{}"), ScriptPath: tmpFile,
+		CapToken:   tok,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
 	})
 	if err != nil {

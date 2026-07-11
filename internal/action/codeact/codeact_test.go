@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -46,6 +47,27 @@ type mockGovAgent struct {
 func (m *mockGovAgent) ValidateCode(_ string, _ []byte, _ map[string]bool) error {
 	return m.err
 }
+
+// mockTokenManager satisfies the tokenManager interface used by CodeAct.
+type mockTokenManager struct {
+	tok *token.Token
+	err error
+}
+
+func (m *mockTokenManager) Lookup(_ string) (*token.Token, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.tok != nil {
+		return m.tok, nil
+	}
+	return &token.Token{}, nil
+}
+
+func (m *mockTokenManager) Verify(_ *token.Token) error { return m.err }
+
+// defaultMockTokenManager returns a token manager that always succeeds.
+func defaultMockTokenManager() *mockTokenManager { return &mockTokenManager{} }
 
 type mockToolExecutor struct{}
 
@@ -238,7 +260,10 @@ func TestExecute_MissingCapabilityID(t *testing.T) {
 
 func TestExecute_PolicyDenied(t *testing.T) {
 	gate := &mockPolicyGate{allowed: false}
-	ca := NewCodeAct(sandbox.NewExecEnvelope(gate, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{}, WithGovernanceAgent(&mockGovAgent{}))
+	ca := NewCodeAct(sandbox.NewExecEnvelope(gate, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
 	res, err := ca.Execute(context.Background(), protocol.CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
@@ -253,8 +278,12 @@ func TestExecute_PolicyDenied(t *testing.T) {
 }
 
 func TestExecute_NilPolicyGate_FailClosed(t *testing.T) {
-	// policy gate 为 nil → fail-closed
-	ca := NewCodeAct(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{}, WithGovernanceAgent(&mockGovAgent{}))
+	// policy gate 为 nil → fail-closed (envelope 中的 gate 为 nil)
+	// token manager 照常注入（只测 policy gate 缺失路径）
+	ca := NewCodeAct(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
 	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
@@ -270,7 +299,10 @@ func TestExecute_SandboxLevelTooLow(t *testing.T) {
 	gate := &mockPolicyGate{allowed: true}
 	router := sandbox.NewSandboxRouter(nil, nil, nil, "linux", 0)
 	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
-	ca := NewCodeAct(envelope, &mockToolExecutor{}, WithGovernanceAgent(&mockGovAgent{}))
+	ca := NewCodeAct(envelope, &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
 	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
 		Language:     "python",
 		Code:         "x=1",
@@ -290,7 +322,10 @@ func TestExecute_Success(t *testing.T) {
 	router := sandbox.NewSandboxRouter(nil, nil, sbx, "linux", 0)
 	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
 	exec := &mockToolExecutor{}
-	ca := NewCodeAct(envelope, exec, WithGovernanceAgent(&mockGovAgent{}))
+	ca := NewCodeAct(envelope, exec,
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
 	res, err := ca.Execute(context.Background(), protocol.CodeActRequest{
 		Language:     "python",
 		Code:         "print('hello')",

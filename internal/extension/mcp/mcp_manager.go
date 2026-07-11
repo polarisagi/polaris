@@ -83,6 +83,9 @@ func (m *MCPManager) IsPluginConnected(pluginID string) bool {
 }
 
 func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
+	if policy == nil {
+		panic("mcp_manager: policy gate not configured (fail-closed)")
+	}
 	return &MCPManager{
 		entries:    make(map[string]*mcpEntry),
 		sandbox:    sbx,
@@ -130,20 +133,21 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 		return apperr.Wrap(apperr.CodeInvalidInput, fmt.Sprintf("mcp: server name %q invalid (must match ^[a-zA-Z0-9_-]+$)", name), err)
 	}
 
-	if m.policy != nil {
-		allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "process_spawn", name,
-			map[string]any{
-				"trust_tier":   cfg.TrustTier,
-				"transport":    string(cfg.Transport),
-				"sandbox_auto": cfg.SandboxPolicy == "" || cfg.SandboxPolicy == "auto",
-			})
-		if pErr != nil || !allowed {
-			reason := "policy denied"
-			if pErr != nil {
-				reason = pErr.Error()
-			}
-			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("mcp_manager: process_spawn denied for %q: %s", name, reason))
+	if m.policy == nil {
+		return apperr.New(apperr.CodeInternal, "mcp_mgr: policy gate not configured (fail-closed)")
+	}
+	allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "process_spawn", name,
+		map[string]any{
+			"trust_tier":   cfg.TrustTier,
+			"transport":    string(cfg.Transport),
+			"sandbox_auto": cfg.SandboxPolicy == "" || cfg.SandboxPolicy == "auto",
+		})
+	if pErr != nil || !allowed {
+		reason := "policy denied"
+		if pErr != nil {
+			reason = pErr.Error()
 		}
+		return apperr.New(apperr.CodeForbidden, fmt.Sprintf("mcp_manager: process_spawn denied for %q: %s", name, reason))
 	}
 
 	// 网络访问审批解析：TrustTier<=2 时 bwrap 默认断网；
