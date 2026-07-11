@@ -46,6 +46,11 @@ encoding_rs = { version = "0.8", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[dev-dependencies]
+# 仅测试用：内联把 WAT 文本编译为 WASM 字节码，构造 wasmtime_execute 墙钟超时
+# 测试用的死循环模块，无需外部 wasm32-wasip1 工具链或预置 .wasm 定件（Batch11 GR-7.1）。
+wat = "1.252.0"
+
 [lib]
 crate-type = ["staticlib", "cdylib"]
 

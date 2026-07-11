@@ -28,6 +28,67 @@ fn policy_store() -> Arc<RwLock<PolicySet>> {
         .clone()
 }
 
+// ─── 有界锁获取（GR-7.2） ────────────────────────────────────────────────────────
+//
+// cedar_evaluate 原先各自内联实现"try_read + 自旋 1ms + timeout_ms deadline"，
+// 而 cedar_load_policies/cedar_policy_count 直接调用标准库 RwLock::write()/
+// read()——一旦发生锁竞争（例如另一线程长时间持有写锁），这两个 FFI 调用会
+// 无限期阻塞对应的 Go 宿主 goroutine。此处把 cedar_evaluate 验证过的模式抽成
+// 共享辅助函数，三者统一锁获取策略。timeout_ms == 0 约定为"不设超时"
+// （与既有 cedar_evaluate/Go 侧 cedar_ffi.go 调用惯例一致）。
+
+/// acquire_read_with_timeout/acquire_write_with_timeout 的失败原因。
+enum LockAcquireError {
+    /// 在 timeout_ms 内未能取到锁。
+    Timeout,
+    /// 锁已中毒（持有者 panic）。
+    Poisoned,
+}
+
+fn acquire_read_with_timeout<T>(
+    lock: &RwLock<T>,
+    timeout_ms: u64,
+) -> Result<std::sync::RwLockReadGuard<'_, T>, LockAcquireError> {
+    if timeout_ms == 0 {
+        return lock.read().map_err(|_| LockAcquireError::Poisoned);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        match lock.try_read() {
+            Ok(g) => return Ok(g),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(LockAcquireError::Timeout);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(LockAcquireError::Poisoned),
+        }
+    }
+}
+
+fn acquire_write_with_timeout<T>(
+    lock: &RwLock<T>,
+    timeout_ms: u64,
+) -> Result<std::sync::RwLockWriteGuard<'_, T>, LockAcquireError> {
+    if timeout_ms == 0 {
+        return lock.write().map_err(|_| LockAcquireError::Poisoned);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        match lock.try_write() {
+            Ok(g) => return Ok(g),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(LockAcquireError::Timeout);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(LockAcquireError::Poisoned),
+        }
+    }
+}
+
 // ─── FFI 错误码 ────────────────────────────────────────────────────────────────
 
 /// 评估结果
@@ -51,7 +112,13 @@ const CEDAR_ERR_TIMEOUT: c_int = -5; // 评估超时
 // 改错误码语义" 明确列出的"改函数签名"情形——purego 按位置绑定参数，
 // 旧版 Go 调用方以 8 参数调用新版 9 参数的 dylib 会造成参数错位/未定义行为，
 // 必须靠 major 不匹配 panic 的 fail-fast 机制拦截，不能只标记为 minor。
-const SUBSTRATE_ABI_MAJOR: u16 = 2;
+//
+// 由 2→3（Batch11 GR-7.1/GR-7.2 修复）：
+//   - wasmtime_execute 新增 timeout_ms: u64 参数（epoch interruption 墙钟超时）
+//   - cedar_load_policies 新增 timeout_ms: u64 参数
+//   - cedar_policy_count 新增 timeout_ms: u64 参数（原为零参数）
+// 三者均属于"改函数签名"，同一批修复合并为一次 major 递增。
+const SUBSTRATE_ABI_MAJOR: u16 = 3;
 
 /// ABI 次版本号：加法变更时递增。
 /// 1: 新增 surreal_set_worker_threads / surreal_vec_delete / surreal_fts_delete /
@@ -74,6 +141,7 @@ pub extern "C" fn substrate_abi_version() -> u32 {
 /// 从 Cedar 策略文本（NUL-terminated UTF-8）加载/替换全局 PolicySet。
 /// 返回 0 表示成功，负数表示错误（错误详情通过 out_err 返回）。
 /// out_err 由 Rust 分配，调用方须调用 cedar_free_bytes 释放。
+/// timeout_ms == 0 表示不设超时（阻塞等待写锁，仅建议在能确认无竞争的场景使用）。
 ///
 /// # Safety
 /// policies_text 必须是有效的 NUL-terminated C 字符串，caller 负责生命周期。
@@ -81,6 +149,7 @@ pub extern "C" fn substrate_abi_version() -> u32 {
 pub unsafe extern "C" fn cedar_load_policies(
     policies_ptr: *const u8,
     policies_len: usize,
+    timeout_ms: u64,
     out_err_ptr: *mut *const u8,
     out_err_len: *mut usize,
 ) -> c_int {
@@ -108,13 +177,16 @@ pub unsafe extern "C" fn cedar_load_policies(
                 }
             };
 
-            // 写入全局 PolicyStore
+            // 写入全局 PolicyStore（GR-7.2：与 cedar_evaluate 共享同一套有界锁获取策略）
             let store = policy_store();
-            // 显式绑定 write guard，防止临时值在 match 结束前 drop（E0597）
-            let mut guard = match store.write() {
+            let mut guard = match acquire_write_with_timeout(&store, timeout_ms) {
                 Ok(g) => g,
-                Err(e) => {
-                    write_bytes(out_err_ptr, out_err_len, &format!("lock poisoned: {e}"));
+                Err(LockAcquireError::Timeout) => {
+                    write_bytes(out_err_ptr, out_err_len, "timeout");
+                    return CEDAR_ERR_TIMEOUT;
+                }
+                Err(LockAcquireError::Poisoned) => {
+                    write_bytes(out_err_ptr, out_err_len, "lock poisoned");
                     return CEDAR_ERR_INTERNAL;
                 }
             };
@@ -253,35 +325,20 @@ pub unsafe extern "C" fn cedar_evaluate(
             // 成，高频热路径下既有线程创建开销又存在锁泄漏风险（HE-5：FSM 热路径不宜每次
             // spawn）。改为同步评估：唯一可能阻塞的是与 cedar_load_policies 写锁竞争时的取锁，
             // 故仅对"取读锁"施加 timeout 预算，评估本身在当前线程直接完成。
+            //
+            // GR-7.2：与 cedar_load_policies/cedar_policy_count 共享同一套有界锁获取
+            // 策略（acquire_read_with_timeout），timeout_ms == 0 约定为"不设超时"
+            // （与 Go 侧 cedar_ffi.go 调用惯例一致）。
             let store = policy_store();
-
-            // timeout_ms == 0 约定为"不设超时"（与 Go 侧 cedar_ffi.go 调用惯例一致）。
-            let guard = if timeout_ms == 0 {
-                match store.read() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        write_bytes(out_reason_ptr, out_reason_len, "lock poisoned");
-                        return CEDAR_ERR_INTERNAL;
-                    }
+            let guard = match acquire_read_with_timeout(&store, timeout_ms) {
+                Ok(g) => g,
+                Err(LockAcquireError::Timeout) => {
+                    write_bytes(out_reason_ptr, out_reason_len, "timeout");
+                    return CEDAR_ERR_TIMEOUT;
                 }
-            } else {
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-                loop {
-                    match store.try_read() {
-                        Ok(g) => break g,
-                        Err(std::sync::TryLockError::WouldBlock) => {
-                            if std::time::Instant::now() >= deadline {
-                                write_bytes(out_reason_ptr, out_reason_len, "timeout");
-                                return CEDAR_ERR_TIMEOUT;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(1));
-                        }
-                        Err(std::sync::TryLockError::Poisoned(_)) => {
-                            write_bytes(out_reason_ptr, out_reason_len, "lock poisoned");
-                            return CEDAR_ERR_INTERNAL;
-                        }
-                    }
+                Err(LockAcquireError::Poisoned) => {
+                    write_bytes(out_reason_ptr, out_reason_len, "lock poisoned");
+                    return CEDAR_ERR_INTERNAL;
                 }
             };
 
@@ -311,16 +368,18 @@ pub unsafe extern "C" fn cedar_evaluate(
 
 /// 返回当前 PolicySet 中的策略数量。
 /// 用于健康检查和热更新验证。
+/// timeout_ms == 0 表示不设超时（阻塞等待读锁）。返回负数表示错误：
+/// CEDAR_ERR_TIMEOUT(-5) 为取锁超时，CEDAR_ERR_INTERNAL(-3) 为锁中毒/panic。
+/// GR-7.2：与 cedar_evaluate/cedar_load_policies 共享同一套有界锁获取策略。
 #[unsafe(no_mangle)]
-pub extern "C" fn cedar_policy_count() -> c_int {
+pub extern "C" fn cedar_policy_count(timeout_ms: u64) -> c_int {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let store = policy_store();
-        let guard = match store.read() {
+        let guard = match acquire_read_with_timeout(&store, timeout_ms) {
             Ok(g) => g,
-            Err(_) => return -1,
+            Err(LockAcquireError::Timeout) => return CEDAR_ERR_TIMEOUT,
+            Err(LockAcquireError::Poisoned) => return CEDAR_ERR_INTERNAL,
         };
-        // 显式绑定避免临时 guard 在 match 结束时 drop（E0597）
-
         guard.policies().count() as c_int
     }))
     .unwrap_or(CEDAR_ERR_INTERNAL)
@@ -387,6 +446,7 @@ mod tests {
             cedar_load_policies(
                 empty_ps.as_ptr(),
                 empty_ps.len(),
+                100,
                 &mut reset_err_ptr,
                 &mut reset_err_len,
             )
@@ -435,6 +495,7 @@ mod tests {
             cedar_load_policies(
                 policies.as_ptr(),
                 policies.len(),
+                100,
                 &mut err_ptr,
                 &mut err_len,
             )
@@ -495,6 +556,7 @@ mod tests {
             cedar_load_policies(
                 policies.as_ptr(),
                 policies.len(),
+                100,
                 &mut err_ptr,
                 &mut err_len,
             )
@@ -534,11 +596,12 @@ mod tests {
         let empty = b"";
         let mut err_ptr: *const u8 = std::ptr::null();
         let mut err_len: usize = 0;
-        let _ =
-            unsafe { cedar_load_policies(empty.as_ptr(), empty.len(), &mut err_ptr, &mut err_len) };
+        let _ = unsafe {
+            cedar_load_policies(empty.as_ptr(), empty.len(), 100, &mut err_ptr, &mut err_len)
+        };
         unsafe { cedar_free_bytes(err_ptr as *mut u8, err_len) };
 
-        assert_eq!(cedar_policy_count(), 0);
+        assert_eq!(cedar_policy_count(100), 0);
     }
 
     #[test]
@@ -602,6 +665,53 @@ mod tests {
         assert!(
             result >= 0,
             "0ms timeout means no timeout, should return allow (0) or deny (1)"
+        );
+    }
+
+    // GR-7.2 验收：模拟锁竞争场景，验证 acquire_write_with_timeout 在 timeout_ms
+    // 内取不到锁时返回 Timeout 错误而不是死等。直接测试 lock.rs 共享辅助函数、
+    // 使用独立的本地 RwLock（不涉及全局 POLICY_STORE），避免与其它并行 cedar
+    // 测试共享状态而 flaky。
+    #[test]
+    fn test_acquire_write_with_timeout_returns_timeout_on_contention() {
+        let lock: RwLock<i32> = RwLock::new(0);
+        // 持有读锁不释放，模拟"另一线程长时间持有锁"的竞争场景
+        let _held = lock.read().unwrap();
+
+        let start = std::time::Instant::now();
+        let result = acquire_write_with_timeout(&lock, 100);
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(result, Err(LockAcquireError::Timeout)),
+            "expected Timeout error under contention"
+        );
+        // 应在略高于 100ms 的合理范围内返回，而不是无限期阻塞。
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "acquire_write_with_timeout did not time out promptly: {:?}",
+            elapsed
+        );
+    }
+
+    // 对称验证 acquire_read_with_timeout：写锁持有期间，读锁获取也应超时返回。
+    #[test]
+    fn test_acquire_read_with_timeout_returns_timeout_on_contention() {
+        let lock: RwLock<i32> = RwLock::new(0);
+        let _held = lock.write().unwrap();
+
+        let start = std::time::Instant::now();
+        let result = acquire_read_with_timeout(&lock, 100);
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(result, Err(LockAcquireError::Timeout)),
+            "expected Timeout error under contention"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "acquire_read_with_timeout did not time out promptly: {:?}",
+            elapsed
         );
     }
 }

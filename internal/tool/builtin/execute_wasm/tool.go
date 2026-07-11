@@ -20,6 +20,9 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 			Network   bool   `json:"network_allowed"`
 			MaxPages  int    `json:"max_pages"`
 			Workspace string `json:"workspace"`
+			// TimeoutMs 墙钟超时预算（毫秒）；<=0 时 WasmtimeExecute 使用默认值
+			// 5000ms（Batch11 GR-7.1，此前该 FFI 调用完全没有超时预算传参）。
+			TimeoutMs int `json:"timeout_ms"`
 		}
 		if err := json.Unmarshal(spec.Input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid json", err)
@@ -37,6 +40,7 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 
 		// 这里实际依赖 toolsb.WasmtimeExecute FFI，如果是在纯 Go 层我们假设其内部处理了隔离
 		outJSON, err := toolsb.WasmtimeExecute(
+			ctx,
 			[]byte(args.Code),
 			args.Input,
 			cleanWorkspace,
@@ -44,6 +48,7 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 			args.Network,
 			quota.Fuel,
 			10*1024*1024,
+			args.TimeoutMs,
 		)
 
 		if err != nil {

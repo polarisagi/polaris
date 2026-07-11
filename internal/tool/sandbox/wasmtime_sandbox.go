@@ -42,10 +42,10 @@ func (s *WasmtimeSandbox) Run(ctx context.Context, spec sandbox.SandboxSpec) (*t
 
 	start := time.Now()
 
-	// quotaMs := spec.CPUQuotaMs
-	// if quotaMs == 0 {
-	// 	quotaMs = 5000
-	// }
+	// CPUQuotaMs 作为 WasmtimeExecute 的墙钟超时预算（Batch11 GR-7.1，此前
+	// 该字段在此处一直被注释掉、从未真正传给 FFI 调用——是"意图已写下但未
+	// 接线"的死代码，WasmtimeExecute 内部对 <=0 有默认值兜底，此处补上）。
+	quotaMs := spec.CPUQuotaMs
 
 	// 从能力推导是否允许网络出站
 	networkAllowed := spec.Capability >= types.CapWriteNetwork
@@ -55,6 +55,7 @@ func (s *WasmtimeSandbox) Run(ctx context.Context, spec sandbox.SandboxSpec) (*t
 
 	// 执行 FFI 调用
 	outJSON, execErr := WasmtimeExecute(
+		ctx,
 		spec.ScriptBytes,
 		string(spec.Input),
 		s.workspaceDir,
@@ -62,6 +63,7 @@ func (s *WasmtimeSandbox) Run(ctx context.Context, spec sandbox.SandboxSpec) (*t
 		networkAllowed,
 		quota.Fuel,
 		10*1024*1024,
+		quotaMs,
 	)
 
 	latency := time.Since(start).Milliseconds()

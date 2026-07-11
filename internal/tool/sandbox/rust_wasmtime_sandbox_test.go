@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,7 +44,7 @@ func main() {
 		t.Fatalf("WasmtimeInit failed: %v", err)
 	}
 
-	outJSON, err := WasmtimeExecute(wasmBytes, "{}", "", 256, false, 100_000_000, 0)
+	outJSON, err := WasmtimeExecute(context.Background(), wasmBytes, "{}", "", 256, false, 100_000_000, 0, 5000)
 	if err != nil {
 		t.Fatalf("WasmtimeExecute failed: %v", err)
 	}

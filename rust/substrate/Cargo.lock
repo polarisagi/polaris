@@ -5034,6 +5034,7 @@ dependencies = [
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
+ "wat",
 ]
 
 [[package]]

@@ -39,10 +39,15 @@ run_step() {
 
 run_step "[1/12] 准备环境: 创建 Mock Web dist" "mkdir -p web/dist && touch web/dist/index.html"
 
-# 确保 golangci-lint 已安装，并加入 PATH 环境变量
+# 确保 golangci-lint 已安装，并加入 PATH 环境变量。
+# 版本锁定为 v2.12.2，与 .github/workflows/ci.yml 的 golangci-lint-action
+# `version: v2.12.2` 保持单一数据源一致——此前用 @latest 会导致本地
+# ci_test.sh 与实际 CI 使用不同版本，规则集变更时本地校验结果与 CI 不一致
+# 却难以定位原因（GR-7.3）。
+GOLANGCI_LINT_VERSION="v2.12.2"
 if ! command -v golangci-lint &> /dev/null; then
-    echo "未找到 golangci-lint，正在尝试安装..."
-    go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+    echo "未找到 golangci-lint，正在安装 ${GOLANGCI_LINT_VERSION}..."
+    go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
     export PATH=$PATH:$(go env GOPATH)/bin
 fi
 run_step "[2/12] 执行跨平台 Go 静态检查 (macOS/Linux/Windows)" "golangci-lint run ./... && GOOS=linux golangci-lint run ./... && GOOS=windows golangci-lint run ./..."

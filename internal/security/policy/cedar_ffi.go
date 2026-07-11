@@ -27,9 +27,9 @@ var (
 	cedarOnce sync.Once
 	cedarErr  error
 
-	cedarLoadPolicies func(ptr uintptr, length uintptr, outErrPtr *uintptr, outErrLen *uintptr) int32
+	cedarLoadPolicies func(ptr uintptr, length uintptr, timeoutMs uint64, outErrPtr *uintptr, outErrLen *uintptr) int32 //nolint:gochecknoglobals // purego 绑定函数指针，sync.Once 幂等懒绑定，架构性必需（同包 cedarEvaluate/cedarFreeBytes 同类声明先例）
 	cedarEvaluate     func(pPtr, pLen, aPtr, aLen, rPtr, rLen, ctxPtr, ctxLen uintptr, timeoutMs uint64, outPtr *uintptr, outLen *uintptr) int32
-	cedarPolicyCount  func() int32
+	cedarPolicyCount  func(timeoutMs uint64) int32 //nolint:gochecknoglobals // 同上
 	cedarFreeBytes    func(ptr uintptr, length uintptr)
 )
 
@@ -82,6 +82,12 @@ func NewCedarEngine() *CedarEngine {
 	return &CedarEngine{}
 }
 
+// cedarAdminOpTimeoutMs 是 SyncPolicies/PolicyCount 这类低频管理操作的取锁超时
+// 预算（GR-7.2）。二者不在 FSM 决策热路径上（不同于 cedar_evaluate 的 10ms 级
+// 严格预算），给一个宽松但有界的值，与 internal/sandbox.SandboxSpec.CPUQuotaMs
+// "0 = 默认 5000ms" 的既有仓库惯例保持一致量级。
+const cedarAdminOpTimeoutMs uint64 = 5000
+
 // SyncPolicies 加载 Cedar 策略集合（替换全局 PolicyStore）。
 func (e *CedarEngine) SyncPolicies(policies string) error {
 	if err := bindCedar(); err != nil {
@@ -89,7 +95,7 @@ func (e *CedarEngine) SyncPolicies(policies string) error {
 	}
 	bPolicies, pPtr, pLen := strToBytes(policies)
 	var outErrPtr, outErrLen uintptr
-	rc := cedarLoadPolicies(pPtr, pLen, &outErrPtr, &outErrLen)
+	rc := cedarLoadPolicies(pPtr, pLen, cedarAdminOpTimeoutMs, &outErrPtr, &outErrLen)
 	runtime.KeepAlive(bPolicies)
 	msg := readBytesAndFree(outErrPtr, outErrLen)
 	if rc != 0 {
@@ -152,10 +158,19 @@ func (e *CedarEngine) Evaluate(principal, action, resource string, ctx map[strin
 	}
 }
 
-// PolicyCount 返回当前加载的策略数量。加载失败时返回 0。
+// PolicyCount 返回当前加载的策略数量。加载/取锁失败（含超时）时返回 0。
+//
+// GR-7.2 修复：此前直接 `return int(cedarPolicyCount())`，未检查负数错误码——
+// cedar_policy_count 原实现在锁中毒时返回 -1，会被这里悄悄当成"策略数为 -1"
+// 返回给调用方，而不是按文档承诺的"失败时返回 0"降级。现在锁获取新增超时
+// （CEDAR_ERR_TIMEOUT=-5）之后这个漏判会更容易触发，一并修正。
 func (e *CedarEngine) PolicyCount() int {
 	if err := bindCedar(); err != nil {
 		return 0
 	}
-	return int(cedarPolicyCount())
+	rc := cedarPolicyCount(cedarAdminOpTimeoutMs)
+	if rc < 0 {
+		return 0
+	}
+	return int(rc)
 }
