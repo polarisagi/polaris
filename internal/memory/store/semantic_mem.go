@@ -47,7 +47,12 @@ func (sm *SemanticMem) StoreDocument(ctx context.Context, doc types.Document, ta
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreDocument", err)
 	}
-	return sm.store.Put(ctx, key, data)
+	if err := sm.store.Put(ctx, key, data); err != nil {
+		// 修复裸 error 泄漏（R1 禁止）：存储层写入失败归类为 CodeStorageUnavailable，
+		// 与序列化失败（CodeInternal）区分，供上层熔断逻辑识别（GD-13-003）。
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "SemanticMem.StoreDocument", err)
+	}
+	return nil
 }
 
 func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []types.Chunk, taint types.TaintLevel) error {
@@ -58,7 +63,7 @@ func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []t
 			return apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreChunks", err)
 		}
 		if err := sm.store.Put(ctx, key, data); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreChunks", err)
+			return apperr.Wrap(apperr.CodeStorageUnavailable, "SemanticMem.StoreChunks", err)
 		}
 	}
 	return nil

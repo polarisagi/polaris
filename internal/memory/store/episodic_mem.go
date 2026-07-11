@@ -87,7 +87,9 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.T
 		return apperr.Wrap(apperr.CodeInternal, "EpisodicMem.Append", err)
 	}
 	if err := em.store.Put(ctx, key, data); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "EpisodicMem.Append", err)
+		// 存储层写入失败（非序列化失败）单独归类为 CodeStorageUnavailable，
+		// 供 Agent.writeEpisodicWithExtract 识别为熔断信号（GD-13-003）。
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "EpisodicMem.Append", err)
 	}
 
 	// 容量门控：超过 maxEvents 时 FIFO 淘汰最旧内存条目（SQLite 侧不受影响）
