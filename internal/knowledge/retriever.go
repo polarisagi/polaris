@@ -148,10 +148,15 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		finalResults = finalResults[:topK]
 	}
 
-	// bitsByID 记录每个 chunk ID 命中的检索路径（GR-1-003/Batch8 ExplainBits 归因修复）。
-	// rrfThreeWay 融合后原始来源信息即丢失，必须在融合前的三路原始结果上标记；
-	// 这里用 ID 反查而非改造 Chunk 结构体，因为 ExplainBits 是检索期概念，不属于
-	// graphrag.Chunk 这个跨包共享的文档域类型（避免污染无关调用方）。
+	bitsByID := explainBitsByChunkID(ftsResults, vecResults, graphResults)
+	return toScoredFragments(ctx, finalResults, bitsByID), nil
+}
+
+// explainBitsByChunkID 记录每个 chunk ID 命中的检索路径（GR-1-003/Batch8 ExplainBits 归因修复）。
+// rrfThreeWay 融合后原始来源信息即丢失，必须在融合前的三路原始结果上标记；这里用 ID
+// 反查而非改造 Chunk 结构体，因为 ExplainBits 是检索期概念，不属于 graphrag.Chunk 这个
+// 跨包共享的文档域类型（避免污染无关调用方）。从 Search 中拆出以控制圈复杂度（R7 gocyclo）。
+func explainBitsByChunkID(ftsResults, vecResults, graphResults []Chunk) map[string]uint8 {
 	bitsByID := make(map[string]uint8, len(ftsResults)+len(vecResults)+len(graphResults))
 	for _, c := range ftsResults {
 		bitsByID[c.ID] |= types.BitBM25
@@ -162,7 +167,11 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	for _, c := range graphResults {
 		bitsByID[c.ID] |= types.BitGraph
 	}
+	return bitsByID
+}
 
+// toScoredFragments 将最终 Chunk 结果转换为 ScoredFragment，并上报每条结果的 ExplainBits 归因指标。
+func toScoredFragments(ctx context.Context, finalResults []Chunk, bitsByID map[string]uint8) []types.ScoredFragment {
 	scored := make([]types.ScoredFragment, len(finalResults))
 	for i, c := range finalResults {
 		bits := bitsByID[c.ID]
@@ -174,7 +183,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 			ExplainBits: bits,
 		}
 	}
-	return scored, nil
+	return scored
 }
 
 func (hr *HybridRetrieverImpl) applyReranker(ctx context.Context, queryText string, results []Chunk) []Chunk {

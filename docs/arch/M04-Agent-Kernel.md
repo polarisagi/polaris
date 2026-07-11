@@ -3,7 +3,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`
-<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 状态机 / 2:86 Suspend-on-Idle / 3:98 S_VALIDATE / 4:134 DAG（Directed Acyclic Graph，有向无环图） / 5:203 System1/2 / 6:227 WorldModel / 7:238 推理预算 / 8:293 CrashRecovery / 12:338 (SOFT)降级 / 13:364 跨模块契约 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:38 状态机 / 2:93 Suspend-on-Idle / 3:107 S_VALIDATE / 4:156 DAG（Directed Acyclic Graph，有向无环图） / 5:236 System1/2 / 6:260 WorldModel / 7:271 推理预算 / 8:330 CrashRecovery / 12:376 已知Bug修复记录 / 13:384 (SOFT)降级 / 14:402 跨模块契约 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -399,7 +399,7 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 与 OSMemoryGuard 协同: ResourceGovernor.Admit() 在 Agent 启动前校验可用内存 + CPU。OSMemoryGuard 触发 L3 临界 → 仅保留当前执行中的 Agent，禁止新唤醒。
 
 
-## 13. 跨模块契约
+## 14. 跨模块契约
 
 > 接口签名权威源在 `internal/protocol/interfaces.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
 
@@ -423,6 +423,6 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 
 ---
 
-## 14. 默认参数
+## 15. 默认参数
 
 完整阈值与重评触发条件: `spec/state.yaml §thresholds.m4_kernel`。

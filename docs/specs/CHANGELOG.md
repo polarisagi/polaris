@@ -190,7 +190,7 @@ commit 28c0915
 
 **架构文档一致性修复（本会话 commit 1dfa428）**：
 
-- `M04-Agent-Kernel.md §13` | Schema 引用 `003_tasks` → `007_tasks`
+- `M04-Agent-Kernel.md §14`（原 §13，见下方本轮修复条目：13 号重号已消除）| Schema 引用 `003_tasks` → `007_tasks`
 - `M09-Self-Improvement-Engine.md` | EvalGenerator `## 3.` → `## 3-bis.`（消除与主 §3 的重号）；同步更新 §跳读
 - `M02-Storage-Fabric.md §16` | DDL 总量 21 份 → 25 份，范围扩至 028_apps
 - `AGENTS.md` | DDL 清单补入 022~024/028，计数 20→25 张表

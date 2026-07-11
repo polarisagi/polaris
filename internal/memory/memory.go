@@ -48,10 +48,6 @@ type RetrievalQuery struct {
 	MaxTaint  int       `json:"max_taint,omitempty"`
 }
 
-// ============================================================================
-// ImmutableCore — 写入经 M9 staging + M11 闸控
-// ============================================================================
-
 func NewMemImpl(store protocol.Store) *MemImpl {
 	procedural := memstore.NewProceduralMem(nil)
 	return &MemImpl{
@@ -226,8 +222,6 @@ var (
 
 // 四层记忆类型定义。
 // 架构文档: docs/arch/05-Memory-System-深度选型.md §1-5
-
-// ImmutableCore 不可变核心区（永不裁剪）。
 
 // ============================================================================
 // MemImpl — protocol.MemorySystem 的四层具体实现

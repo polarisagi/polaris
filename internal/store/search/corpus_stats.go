@@ -89,7 +89,10 @@ func (cs *CorpusStats) RestoreStatsFromDB(ctx context.Context, db interface {
 		}
 	}
 	cs.dirty = false
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "CorpusStats.RestoreStatsFromDB: rows iteration", err)
+	}
+	return nil
 }
 
 // FlushTo 将内存中 dirty 的统计增量写入 corpus_stats（Task 18）。

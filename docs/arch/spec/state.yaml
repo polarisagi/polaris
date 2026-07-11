@@ -1060,11 +1060,14 @@ thresholds:
       - regression_threshold_fail_ratio: ["false_reject_rate"]
 
   resource_governor:
-    # 配置结构体: internal/config/thresholds.go ResourceGovernorConfig
+    # 配置结构体: internal/config/config_types.go ResourceGovernorConfig
     # 全局适用：触发资源降级的 OS 空闲内存阈值（Tier-0 默认值）
     mem_l1_free_mb: 1024   # ≥1GB free: 正常运行
     mem_l2_free_mb: 512    # ≥512MB free: 限制新任务接入
     mem_l3_free_mb: 256    # ≥256MB free: 紧急暂停，拒绝所有新任务
+    # CPU 占用阈值（toml:"cpu_l1_pct"/"cpu_l2_pct"）；默认值取自 configs/defaults.toml
+    cpu_l1_pct: 80.0        # CPU 占用 ≥80%: 降低后台任务优先级
+    cpu_l2_pct: 95.0        # CPU 占用 ≥95%: 限制并发请求
     re_eval_when:
       - mem_l*_free_mb: ["oom_guard_log P99 触发率 > 1%"]
 

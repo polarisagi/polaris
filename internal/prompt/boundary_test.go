@@ -1,9 +1,10 @@
 package prompt_test
 
 import (
-	"github.com/polarisagi/polaris/internal/prompt"
 	"strings"
 	"testing"
+
+	"github.com/polarisagi/polaris/internal/prompt"
 )
 
 func TestNewRandomBoundary(t *testing.T) {

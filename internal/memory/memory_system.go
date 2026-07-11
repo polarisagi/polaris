@@ -2,8 +2,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -123,37 +121,23 @@ func (ms *MemorySystemImpl) List(ctx context.Context, q *RetrievalQuery) ([]Memo
 }
 
 // FlushTrigger 供 Kernel 主动触发归档/固化。
+//
+// 当前实现说明：working/episodic/semantic/procedural 四层存储的写入路径均为
+// 同步落盘（每次 Add/Write 直接写 protocol.Store，无内存缓冲队列），因此本方法
+// 目前是安全的 no-op——调用时刻不存在"尚未落盘的脏数据"。已逐个核实
+// EpisodicMem.Append（episodic_mem.go）、SemanticMem.StoreDocument/StoreChunks/
+// UpsertFact/UpsertRelation（semantic_mem.go）均为同步 store.Put/ExecContext 调用；
+// WorkingMem 本身不持有 protocol.Store（纯内存，或经 NotesStore/CoreMemory 同步写
+// SQL）；ProceduralMem 无独立写路径，持久化委托给 protocol.SkillRegistry。
+// 若未来引入写缓冲/批量提交机制，必须在此处补上真实的 flush 逻辑，
+// 且引入前必须先确认调用方（Kernel/FSM）依赖 nil 返回值代表"已确认落盘"
+// 这一契约不会被破坏。
 func (ms *MemorySystemImpl) FlushTrigger(ctx context.Context) error {
 	return nil
 }
 
-// InjectRelevantMemory 提取与 query 相关的高价值实体与文档片段，组装为上下文供 LLM 注入。
-func (ms *MemorySystemImpl) InjectRelevantMemory(ctx context.Context, sessionID string, query string) (string, error) {
-	if query == "" {
-		return "", nil
-	}
-	cfg := types.RetrievalConfig{
-		FinalTopK:    10,
-		RerankTopM:   30,
-		BM25Weight:   0.3,
-		VectorWeight: 0.5,
-		GraphWeight:  0.2,
-	}
-	frags, err := ms.retriever.Search(ctx, query, types.SearchScope{Type: "memory"}, cfg)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.InjectRelevantMemory", err)
-	}
-
-	if len(frags) == 0 {
-		return "", nil
-	}
-
-	var sb strings.Builder
-	for _, f := range frags {
-		fmt.Fprintf(&sb, "- %s\n", f.Content)
-	}
-	return sb.String(), nil
-}
+// InjectRelevantMemory 由内嵌的 *MemImpl 通过方法提升（method promotion）提供，
+// 此前这里有一份逐行相同的重复实现（仅错误信息前缀不同），已删除（GR-5-002）。
 
 // Consolidate 触发 Episodic → Semantic 记忆蒸馏。
 func (ms *MemorySystemImpl) Consolidate(ctx context.Context) error {
