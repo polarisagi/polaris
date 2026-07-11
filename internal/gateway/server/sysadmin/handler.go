@@ -62,7 +62,7 @@ type SysAdminHandler struct {
 	HTTPClient         *http.Client
 	InstallMgr         ExtensionInstaller
 	ExtRepo            protocol.ExtensionRepository
-	PromptMgr          PromptManager
+	PromptMgr          protocol.PromptFacade
 	SoulMDContent      *string
 	Updater            *updater.Manager
 	Catalog            ToolCatalog

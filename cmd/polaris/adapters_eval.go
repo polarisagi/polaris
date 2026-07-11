@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
 	"github.com/polarisagi/polaris/internal/eval/regression"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -48,7 +48,7 @@ type regressionDetectorAdapter struct {
 func (a *regressionDetectorAdapter) DetectRegression(ctx context.Context, checkpointType string) (*hitl.RegressionReport, error) {
 	r, err := a.inner.DetectRegression(ctx, checkpointType)
 	if err != nil {
-		return nil, fmt.Errorf("detect regression: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "detect regression", err)
 	}
 	return &hitl.RegressionReport{
 		Markdown: r.Markdown,

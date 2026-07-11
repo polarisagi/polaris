@@ -13,7 +13,6 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/store/repo"
-	"github.com/polarisagi/polaris/internal/tool/dispatch"
 
 	"context"
 	"crypto/sha256"
@@ -274,10 +273,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
 	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。
-	disp := dispatch.New(tb.Catalog, tb.ToolReg, tb.SkillExecutor)
-	disp.Use(dispatch.SchemaValidateInterceptor())
-	disp.Use(dispatch.AuditInterceptor(sb.AuditTrail))
-	httpServer.SetToolExecutor(disp.Execute)
+	httpServer.SetToolExecutor(tb.Dispatcher.Execute)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)
 	httpServer.SetToolRefOffloader(tb.ToolRefOffloader)

@@ -59,7 +59,7 @@ var cliDict = map[string][2]string{
 	"init_p_key":     {"  API Key", "  API Key"},
 	"init_p_saving":  {"  正在保存厂商配置...", "  Saving provider config..."},
 	"init_p_saved":   {" ✓", " ✓"},
-	"init_p_fail":    {"保存失败: %w", "Failed to save: %w"},
+	"init_p_fail":    {"保存失败", "Failed to save"},
 	"init_test_q":    {"  测试连接？", "  Test connection?"},
 	"init_testing":   {"  正在测试...", "  Testing..."},
 	"init_test_ok":   {" ✓ %s", " ✓ %s"},
@@ -100,7 +100,7 @@ var cliDict = map[string][2]string{
 	"chat_h_clr":     {"  /clear     清屏", "  /clear     Clear screen"},
 	"chat_h_quit":    {"  /quit      退出", "  /quit      Exit"},
 	"chat_agent":     {"Agent: ", "Agent: "},
-	"chat_conn_fail": {"连接失败: %v", "Connection failed: %v"},
+	"chat_conn_fail": {"连接失败", "Connection failed"},
 	"chat_think":     {"[思考中...]", "[Thinking...]"},
 
 	"sess_none":     {"  暂无历史会话", "  No chat history"},

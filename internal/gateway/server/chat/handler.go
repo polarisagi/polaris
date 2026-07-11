@@ -33,7 +33,7 @@ type ChatHandler struct {
 	Compressor    *Compressor
 	SlashRouter   *SlashCommandRouter
 	TranscriptDir string
-	PromptMgr     PromptManager
+	PromptMgr     protocol.PromptFacade
 	SoulMDContent *string
 	ToolStage     interface {
 		SelectFor(ctx context.Context, query string) []apptypes.ToolSchema
@@ -93,7 +93,7 @@ type Dependencies struct {
 	Blackboard            protocol.Blackboard
 	Compressor            *Compressor
 	TranscriptDir         string
-	PromptMgr             PromptManager
+	PromptMgr             protocol.PromptFacade
 	SoulMDContent         *string
 	Hooks                 HookRunner
 	DataDir               string

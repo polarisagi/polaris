@@ -64,7 +64,7 @@ StateContext struct {
 	SessionID            string
 	MaxTaintLevel        types.TaintLevel // 继承自上下文请求的最高污点等级 (Taint Washing Fix)
 	Mem                  MemoryFacade
-	Tools                ToolRegistry
+	Tools                AgentToolExecutor
 	Provider             Provider
 	Policy               PolicyGate
 	Preferences          map[string]string // 从 DB 加载的用户偏好配置

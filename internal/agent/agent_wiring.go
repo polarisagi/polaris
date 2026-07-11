@@ -236,8 +236,8 @@ func (a *Agent) GetTokenUsage() (tokensIn, tokensOut, cacheRead int) {
 	return a.sCtx.TokensInput, a.sCtx.TokensOutput, a.sCtx.TokensCacheRead
 }
 
-// InjectToolRegistry 注入工具注册表（运行时绑定，允许测试注入 mock）。
-func (a *Agent) InjectToolRegistry(tr protocol.ToolRegistry) { a.toolRegistry = tr }
+// InjectToolExecutor 注入工具执行器（运行时绑定，允许测试注入 mock）。
+func (a *Agent) InjectToolExecutor(te protocol.AgentToolExecutor) { a.toolRegistry = te }
 
 // InjectCatalog 注入工具目录（运行时绑定）。
 func (a *Agent) InjectCatalog(c catalog.Catalog) {

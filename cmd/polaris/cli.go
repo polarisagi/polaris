@@ -57,11 +57,11 @@ func cliCheckServer() error {
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Get(cliServerURL() + "/healthz")
 	if err != nil {
-		return fmt.Errorf(t("err_server_down"), cliServerURL())
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, fmt.Sprintf(t("err_server_down"), cliServerURL()), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf(t("err_health"), resp.StatusCode)
+		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf(t("err_health"), resp.StatusCode))
 	}
 	return nil
 }
@@ -107,7 +107,7 @@ func cliRequest(method, path string, body any, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -221,7 +221,7 @@ func runInit() error { //nolint:gocyclo
 		"name": name, "type": pType, "base_url": baseURL, "api_key": apiKey, "enabled": true,
 	}, &provResult); err != nil {
 		fmt.Println()
-		return fmt.Errorf(t("init_p_fail"), err)
+		return apperr.Wrap(apperr.CodeInternal, t("init_p_fail"), err)
 	}
 	providerID, _ := provResult["id"].(string)
 	fmt.Println(clr(ansiOk, t("init_p_saved")))
@@ -466,13 +466,13 @@ func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
 	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf(t("chat_conn_fail"), err)
+		return "", apperr.Wrap(apperr.CodeNetworkUnavailable, t("chat_conn_fail"), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return "", apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 	}
 
 	var newSID string
@@ -517,7 +517,7 @@ func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
 					Message string `json:"message"`
 				}
 				if json.Unmarshal([]byte(data), &errEvt) == nil {
-					return newSID, fmt.Errorf("%s", errEvt.Message)
+					return newSID, apperr.New(apperr.CodeInternal, errEvt.Message)
 				}
 			}
 			evType = ""
@@ -657,7 +657,7 @@ func runExport(args []string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("export: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("export: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 	}
 
 	f, err := os.Create(outFile)
@@ -681,7 +681,7 @@ func runExport(args []string) error {
 //	polaris import <infile>
 func runImport(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: polaris import <backup-file.jsonl>")
+		return apperr.New(apperr.CodeInvalidInput, "usage: polaris import <backup-file.jsonl>")
 	}
 	if err := cliCheckServer(); err != nil {
 		fmt.Fprintln(os.Stderr, clr(ansiError, "✗ "+err.Error()))
@@ -707,7 +707,7 @@ func runImport(args []string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("import: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("import: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 	}
 	var result map[string]any
 	json.NewDecoder(resp.Body).Decode(&result) //nolint:errcheck
@@ -744,12 +744,12 @@ func runConfigCmd(args []string) error {
 			return runBudgetGet()
 		case "set":
 			if len(args) < 3 {
-				return fmt.Errorf("用法: polaris config budget set <金额USD>")
+				return apperr.New(apperr.CodeInvalidInput, "用法: polaris config budget set <金额USD>")
 			}
 			return runBudgetSet(args[2])
 		}
 	}
-	return fmt.Errorf("未知子命令: polaris config %s", strings.Join(args, " "))
+	return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("未知子命令: polaris config %s", strings.Join(args, " ")))
 }
 
 func runBudgetGet() error {
@@ -769,7 +769,7 @@ func runBudgetGet() error {
 func runBudgetSet(amountStr string) error {
 	amount := 0.0
 	if _, err := fmt.Sscanf(amountStr, "%f", &amount); err != nil || amount < 0 {
-		return fmt.Errorf("无效金额: %q（请输入非负数，如 10.00）", amountStr)
+		return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("无效金额: %q（请输入非负数，如 10.00）", amountStr))
 	}
 	var result map[string]any
 	if err := cliPost("/v1/config/budget", map[string]any{"monthly_usd": amount}, &result); err != nil {

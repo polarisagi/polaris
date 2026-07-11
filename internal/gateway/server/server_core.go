@@ -67,10 +67,10 @@ type Server struct {
 	updater *updater.Manager // OTA 自更新管理器（可为 nil）
 
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
-	soulMDContent       string        // ~/.polarisagi/polaris/config/SOUL.md 内容
-	serverPlatform      string        // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
-	promptMgr           PromptManager // 提示词管理器（接口）
-	baseSystemPromptTpl string        // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积
+	soulMDContent       string                // ~/.polarisagi/polaris/config/SOUL.md 内容
+	serverPlatform      string                // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
+	promptMgr           protocol.PromptFacade // 提示词管理器（接口）
+	baseSystemPromptTpl string                // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积
 
 	// M9 激活的系统提示词（从 DB prompt_versions 表读取，Activate 回调热更新）
 	activatedSystemPrompt string // task_type='general' 的激活版本
@@ -277,7 +277,7 @@ func (s *Server) PluginHandler() *plugin.PluginHandler {
 	return s.pluginHandler
 }
 
-func (s *Server) SetPromptManager(mgr PromptManager) {
+func (s *Server) SetPromptManager(mgr protocol.PromptFacade) {
 	s.promptMgr = mgr
 	s.soulMDContent = s.promptMgr.GetSoulMD()
 

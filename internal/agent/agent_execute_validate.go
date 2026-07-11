@@ -35,7 +35,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		// 若所有节点均为 TaintNone（FastPath/空 DAG），网关自然跳过（< TaintMedium）。
 		ActiveTaintLevel: maxNodeTaintLevel(plan),
 		PolicyGate:       a.policyGate,
-		ToolRegistry:     a.toolRegistry, // 用于 isReadOnlyTool 动态查询工具 Capability
+		ToolExecutor:     a.toolRegistry, // 用于 isReadOnlyTool 动态查询工具 Capability
 		AgentID:          a.sCtx.AgentID,
 		SessionID:        a.sCtx.SessionID,
 		SystemTier:       a.Config.SystemTier, // 由 M3 HardwareProbe 探测后通过 AgentConfig.SystemTier 注入

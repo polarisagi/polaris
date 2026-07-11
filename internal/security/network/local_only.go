@@ -252,6 +252,12 @@ func (ns *NetworkSandbox) StartupCheck() error {
 	}
 
 	// loopback-only 网络连通性探测（Dialer.Control 拒绝非 loopback）
+	//
+	// XR-06 豁免说明：本次拨号刻意不经过 SafeDialer。StartupCheck 的目的是验证
+	// OS 层网络隔离（namespace/seccomp/cgroup 等）本身是否生效，若改用 SafeDialer，
+	// 其 Dialer.Control 会在应用层直接拦截非 loopback 连接，导致无论 OS 隔离是否
+	// 真正生效，本探测都会"误报成功"（永远拒绝），使这道独立防线的自检失去意义。
+	// 因此此处的裸拨号是有意为之的例外，不是遗漏。
 	conn, err := net.DialTimeout("tcp", "8.8.8.8:53", 3*time.Second)
 	if err == nil {
 		conn.Close()

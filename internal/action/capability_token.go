@@ -2,6 +2,7 @@ package action
 
 import (
 	"github.com/polarisagi/polaris/internal/security/token"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"sync"
 	"time"
@@ -106,15 +107,20 @@ func ValidateDelegation(parentToken *token.Token, parentDepth int, agentID, sess
 	return getTokenManager().Delegate(parentToken, agentID, effectiveCaps, targetSandboxTier, 5*time.Minute)
 }
 
+// 哨兵错误统一改用 pkg/apperr（GR-Batch4 capability_token 修复）：原生 &TokenError{...}
+// 未接入 apperr 体系会导致令牌提权/越权失败时 Trace 栈丢失上游上下文（apperr.CodeOf/IsCode
+// 无法识别）。这里直接把哨兵变量本身的类型换成 *apperr.Error，而不是在每个 return 处再包一层
+// apperr.Wrap——因为 ValidateDelegation/NewJITToken 直接 `return nil, ErrXxx` 返回这些哨兵，
+// 现有调用方（含 inv_test.go 的 errors.Is(err, ErrMaxDelegationDepth) 和
+// capability_token_test.go 的 err != ErrSandboxTierEscalation 严格等值比较）依赖的是"哨兵值
+// 本身被原样返回"，若在返回处再包一层 apperr.Wrap 会产生新对象，破坏这些既有比较语义；
+// 直接让哨兵本身就是 *apperr.Error，两种比较方式（identity / errors.Is）均不受影响，
+// 同时 apperr.IsCode(err, ...) 也能正确识别。
 var (
-	ErrTokenExpired           = &TokenError{"token expired"}
-	ErrTokenInvalid           = &TokenError{"token invalid"}
-	ErrMaxDelegationDepth     = &TokenError{"max delegation depth exceeded"}
-	ErrPolicyRevoked          = &TokenError{"policy revoked during execution"}
-	ErrCapabilityInsufficient = &TokenError{"capability intersection is empty"}
-	ErrSandboxTierEscalation  = &TokenError{"sandbox tier escalation is forbidden"}
+	ErrTokenExpired           = apperr.New(apperr.CodeUnauthorized, "token expired")
+	ErrTokenInvalid           = apperr.New(apperr.CodeUnauthorized, "token invalid")
+	ErrMaxDelegationDepth     = apperr.New(apperr.CodeResourceExhausted, "max delegation depth exceeded")
+	ErrPolicyRevoked          = apperr.New(apperr.CodeForbidden, "policy revoked during execution")
+	ErrCapabilityInsufficient = apperr.New(apperr.CodeForbidden, "capability intersection is empty")
+	ErrSandboxTierEscalation  = apperr.New(apperr.CodeForbidden, "sandbox tier escalation is forbidden")
 )
-
-type TokenError struct{ msg string }
-
-func (e *TokenError) Error() string { return e.msg }

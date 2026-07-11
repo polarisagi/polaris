@@ -247,11 +247,11 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 	}
 
 	if errors.Is(err, ErrVersionStale) {
-		_, _ = w.db.ExecContext(ctx,
+		_, execErr := w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='skipped', processed_at=? WHERE id=?",
 			now, record.ID)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
+		if execErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark skipped failed", execErr)
 		}
 		return nil
 	}

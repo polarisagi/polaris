@@ -40,7 +40,7 @@ type Agent struct {
 	provider          protocol.Provider             // LLM 调用入口（由 M1 提供）
 	policyGate        protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
 	hitl              protocol.HITL                 // 人工审批网关
-	toolRegistry      protocol.ToolRegistry         // 工具执行表（由 M7 提供）
+	toolRegistry      protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
 	catalog           catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
 	memory            protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
 	worldModel        WorldModel                    // 认知世界模型，nil 时安全降级

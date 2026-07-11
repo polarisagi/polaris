@@ -16,6 +16,16 @@ import "context"
 // 物理相邻，不改变任何签名/逻辑。
 // ============================================================================
 
+// KillState 紧急停止状态。
+type KillState int
+
+const (
+	KillNormal   KillState = iota // 正常，没有任何限制
+	KillThrottle                  // 降级，停止产生新请求，允许进行中请求完成
+	KillPause                     // 暂停，中止并保存进行中请求的状态，可恢复
+	KillFullStop                  // 全停，立即中止所有请求并丢弃状态
+)
+
 // TaintLevel 全系统污点置信度枚举（全局字典: docs/arch/00-Global-Dictionary.md §4）。
 // 传播规则: output = max(所有输入的 TaintLevel)，只升不降。
 type TaintLevel int

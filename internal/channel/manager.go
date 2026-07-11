@@ -168,7 +168,10 @@ func (m *Manager) RestoreChannelsFromDB(db protocol.SQLQuerier) {
 			continue
 		}
 		var cfg map[string]any
-		_ = json.Unmarshal([]byte(cfgJSON), &cfg)
+		if err := json.Unmarshal([]byte(cfgJSON), &cfg); err != nil {
+			slog.Warn("channel manager: restore config unmarshal failed, skip channel", "id", id, "type", chType, "err", err)
+			continue
+		}
 		m.Start(id, chType, cfg)
 		slog.Info("channels: poller started", "id", id, "type", chType)
 	}

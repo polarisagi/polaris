@@ -90,7 +90,7 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 		_ = keyBytes
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows error: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "rows error", err)
 	}
 	return nil
 }

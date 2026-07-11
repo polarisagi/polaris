@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,6 +29,8 @@ type Manager struct {
 	configDir         string
 	embeddedPromptsFS fs.FS
 }
+
+var _ protocol.PromptFacade = (*Manager)(nil)
 
 // NewManager 构造 Manager。
 func NewManager(configDir string, embeddedPromptsFS fs.FS) *Manager {
@@ -172,4 +175,9 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+// Optimize 异步优化指定 task_type 的 system prompt（Eval Harness 反馈驱动）。
+func (pm *Manager) Optimize(ctx context.Context, taskType string) error {
+	return apperr.New(apperr.CodeInternal, "prompt: Optimize not yet implemented in Manager")
 }

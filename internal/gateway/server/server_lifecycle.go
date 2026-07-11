@@ -92,7 +92,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 
 	// 注入内置的 yaml 配置作为种子数据到数据库（SSoT 架构）
 
-	// 系统提示词模板的初始化将推迟到 SetPromptManager 阶段，
+	// 系统提示词模板的初始化将推迟到 Setprotocol.PromptFacade 阶段，
 	// 以便使用 promptMgr 提供的内嵌文件系统能力，避免模块循环依赖。
 
 	// global agent memory setup is removed as agent is now per-session
@@ -100,7 +100,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 	// 注入 embedded FS 和运行时配置目录到 memory 包（三层提示词加载的 Layer 0/1）
 	// 必须在 LoadSoulMD / DefaultIdentity 之前完成
 	// 注入 embedded FS 和运行时配置目录到 memory 包（三层提示词加载的 Layer 0/1）
-	// 改为通过 SetPromptManager 注入
+	// 改为通过 Setprotocol.PromptFacade 注入
 	//
 	//
 	//

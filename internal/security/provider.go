@@ -1,6 +1,10 @@
 package security
 
-import "context"
+import (
+	"context"
+
+	"github.com/polarisagi/polaris/pkg/types"
+)
 
 // 本文件声明 security 包对外部模块的消费端接口（Consumer-side Interfaces）。
 //
@@ -32,7 +36,7 @@ type AuditRepo interface {
 // nil 时静默（单元测试/最小化部署场景）。
 type KillSwitchMetrics interface {
 	// RecordStateTransition 记录 KillSwitch 状态转移（Normal→Throttle→Pause→FullStop）。
-	RecordStateTransition(from, to KillState)
+	RecordStateTransition(from, to types.KillState)
 	// IncrErrorCount 递增错误计数器（用于阈值触发可视化）。
 	IncrErrorCount()
 }
