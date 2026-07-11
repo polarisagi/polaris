@@ -501,6 +501,7 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
 - `[MemAPO]`: 双记忆跨任务复用 Prompt 优化。PromptOptimizer 三融合算法之二。
 - `[ContraPrompt]`: 对比轨迹 Prompt 优化。PromptOptimizer 三融合算法之三。
 - `[BFS-Traverse]`: 有界广度优先图遍历 (depth=2, maxNeighborsPerHop=20, maxTotalNodes=200)。关联发现模式使用 [Spreading-Activation]。
+- `[CascadeInvalidator]`: 级联失效器。区别于 [BFS-Traverse]（检索时的关联发现）——是 Entity 被 `superseded` 后触发的**写路径**图遍历：`ExclusiveWriter` 闭合旧事实后，沿 `semantic_relations`（含 `derived_from` 派生血缘关系）用单条 SQLite `WITH RECURSIVE` CTE 扩散 2 跳（`maxCascadeHops`），命中实体标记 `pending_review` 而非直接改写，交由后续复核。决策见 GD-14-001。定义见 M5 §9。
 - `[Spreading-Activation]`: 扩散激活图遍历。
   - 种子实体 energy=1.0
   - 每轮 ×edge.weight 传播
@@ -535,8 +536,9 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
   - 运行时抽样 5%（可配）经 [CitationValidator] + 数值一致性检查。
   - 检测到 hallucination → 标记 `TaintLevel` 强制升至 [Taint-Medium] + 触发 LLM-as-Judge 二次裁决。完整定义见 M11 §X。
 - `[CitationValidator]`: 引用核验器。M10 RAG 输出强制附带 `chunk_id` 引用；FactualityGuard 抽样验证引用 chunk 真实包含输出主张。定义见 M10 §4.X。
-- `[CodeAct]`: 即时代码执行行动空间。区别于 [Logic-Collapse]（沉淀型脚本技能）与 LLM 生成脚本（走 staging 流水线）——CodeAct 是**单次 ad-hoc 代码 + 立即执行**。
-  - 强制 [Sandbox-L3]（HT0 不可用）+ Capability Token + Audit。定义见 M7 §X。
+- `[CodeAct]`: 即时代码执行行动空间。区别于 [Logic-Collapse]（沉淀型脚本技能）与 LLM 生成脚本（走 staging 流水线）——CodeAct 是**单次 ad-hoc 代码 + 立即执行**，不写入 Skill Library。
+  - 强制 [Sandbox-L3]（HT0 不可用）+ Capability Token + Audit。定义见 M7 §7.4。
+  - `StatefulSession`（GD-4-002，默认关闭）：显式开启后，同一 SessionID 的多次调用间通过 pickle（python）/`declare -p`（bash）快照文件延续变量状态；每次调用仍是独立的一次性 L3 沙箱进程，不是常驻 Kernel，安全边界不变。
 - `[Memory-Write-Tool]`: LLM 主动写记忆工具集。【防退化】（依据 GD-8-004 结论，属领先设计，删除或弱化需 ADR）。区别于被动记忆积累（Agent 轮次结束后 outbox 异步落盘）——是 LLM **在推理中即时调用工具、主动写入语义记忆**的能力。
   - 包含 4 个内置工具：`memory_write`（写入/覆盖事实）、`memory_search`（混合检索）、`memory_append`（追加属性）、`memory_expire`（标记失效）。
   - 实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)`。写入底层对接 `SemanticMemWriter.UpsertFact/Archive`；检索对接 `HybridRetriever`。

@@ -497,6 +497,8 @@ Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需
 ### 7.4 `[CodeAct]` — 即时代码执行行动空间
 
 > 对齐 2024 CodeAct (Wang et al.) / OpenInterpreter / SWE-agent。区别于 [Logic-Collapse]（沉淀型 Python 技能，走 staging 流水线后写入 Skill Library）——CodeAct 是 **ad-hoc 一次性代码 + 立即执行**，不沉淀。共用 ContainerSandbox 执行路径，运行时依赖一致。
+>
+> "不沉淀"指的是不写入 Skill Library、不参与 Staging/Eval Gate——每次调用仍是全新的一次性沙箱进程，这一点 GD-4-002 之后依然成立。但 `StatefulSession=true`（可选，默认关闭）时，同一 SessionID 的连续多次调用之间可以延续变量状态，详见下方"REPL 状态保持"小节，读者不应再假设 CodeAct 各次调用之间必然完全无关联。
 
 **用途**: M4 S_EXECUTE 可选行为空间。当任务需要"组合多个工具 + 中间计算 + 条件分支"时，LLM 直接生成 Python/JS 代码片段，由 M7 执行——比多次 tool_call 更紧凑、组合性更强。
 
@@ -510,6 +512,8 @@ Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需
 **`Execute` 已实现并接线**（`internal/action/codeact/code_act.go`）：语言校验（python|bash）→ CapabilityID 非空检查 → Cedar 策略评估（fail-closed）→ sandbox.Level()≥3 断言 → 构造 SandboxSpec 调用 sandbox.Run → 返回 CodeActResult。`boot_server.go` 在 `FeatureL3Sandbox` 启用时构造引擎，注入 `agent.SetCodeAct()` 和 `httpServer.SetCodeActEngine()`（Batch 3+4 完成）。
 
 16KB 代码大小限制已实现（配置为 `MaxCodeSizeBytes`，默认 16384，`internal/action/codeact/code_act.go` 构造时通过 `WithMaxCodeSize` 传入强制阻断）。Post-Execution PII Redact 章节改为：✅ 已实现，复用任务 20 的脱敏工具类。Taint 检查已在 `Execute` 流程中通过 Cedar 策略评估 + `sandbox.Level()≥3` 断言间接覆盖污点等级门控（见上一段"已实现并接线"），不属于本条遗留缺口。
+
+**REPL 状态保持**（GD-4-002 已实现，`internal/action/codeact/code_act_stateful.go`）：`CodeActRequest.StatefulSession` 为 true 且携带 SessionID 时，实际写入沙箱执行的脚本会在用户代码前后被注入固定的样板代码——Python 用 pickle 把执行后的 `globals()` 快照写入按 SessionID 命名的状态文件，下次同 SessionID 调用时先加载回填；Bash 用 `declare -p` 导出变量、下次调用时 `source` 回来。这不是常驻进程/Jupyter Kernel（那类方案的进程生命周期管理、内存占用核算、Tier 分级门控被评估为工作量较大，留作独立 Feature，未在本次范围内实现）——每次调用依然是 §7.4 顶部约束的全新一次性 L3 容器进程，`inv_global_07` 的沙箱与审计边界不变；L0 AST / L1 GovernanceAgent / L2 LLM 同行评审三层安全检查作用于用户原始代码，早于样板代码注入，不受影响。SessionID 经路径净化后才用于状态文件命名，防路径穿越。默认关闭（`StatefulSession=false`），不影响未选用此特性的既有调用方行为。
 
 **与 Logic Collapse Python 技能的区别**:
 
