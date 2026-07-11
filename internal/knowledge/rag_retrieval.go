@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
@@ -14,6 +15,21 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// recordExplainBits 按位图上报每一路命中的检索来源指标（Batch8 ExplainBits 归因修复）。
+// internal/knowledge 的三路召回固定为 BM25/Vector/Graph，不涉及
+// Simhash/Reflection/Durative/Semantic（那几路是 internal/memory/retrieval 独有的召回策略）。
+func recordExplainBits(ctx context.Context, bits uint8) {
+	if bits&types.BitBM25 != 0 {
+		metrics.RecordExplainBit(ctx, "BM25")
+	}
+	if bits&types.BitVector != 0 {
+		metrics.RecordExplainBit(ctx, "Vector")
+	}
+	if bits&types.BitGraph != 0 {
+		metrics.RecordExplainBit(ctx, "Graph")
+	}
+}
 
 // DefaultHybridRetriever 实现了 HybridRetriever
 type DefaultHybridRetriever struct {
@@ -62,12 +78,14 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope
 
 	var results []types.ScoredFragment
 	for _, f := range fragments {
+		recordExplainBits(ctx, f.ExplainBits)
 		results = append(results, types.ScoredFragment{
-			Content:    f.Content,
-			Score:      f.Score,
-			Source:     f.Source,
-			Metadata:   f.Metadata,
-			TaintLevel: parseTaintLevel(f.Metadata["taint_level"]),
+			Content:     f.Content,
+			Score:       f.Score,
+			Source:      f.Source,
+			Metadata:    f.Metadata,
+			TaintLevel:  parseTaintLevel(f.Metadata["taint_level"]),
+			ExplainBits: f.ExplainBits,
 		})
 	}
 	return results, nil

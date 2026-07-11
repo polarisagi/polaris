@@ -2,6 +2,22 @@ package types
 
 import "time"
 
+// ExplainBits 检索路径位掩码常量（唯一权威源）。internal/memory/retrieval 与
+// internal/store/search 均引用这套常量，避免同一位定义在多个包内各自重复声明
+// （Batch8 ExplainBits 归因修复：internal/knowledge 此前完全没有填充 ExplainBits，
+// 修复时发现该位图之前只在 internal/memory/retrieval 包内私有定义，上提到这里
+// 供跨层复用，同时 internal/store/search 处于比 internal/memory 更低的层次，
+// 不能反向 import internal/memory/retrieval）。
+const (
+	BitBM25       uint8 = 1 << 0
+	BitSimhash    uint8 = 1 << 1
+	BitVector     uint8 = 1 << 2
+	BitGraph      uint8 = 1 << 3
+	BitReflection uint8 = 1 << 4
+	BitDurative   uint8 = 1 << 5
+	BitSemantic   uint8 = 1 << 6
+)
+
 type
 
 // SearchScope 限定检索范围（memory 层或 document_tree 层）。

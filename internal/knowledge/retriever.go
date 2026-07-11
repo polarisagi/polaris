@@ -148,12 +148,30 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		finalResults = finalResults[:topK]
 	}
 
+	// bitsByID 记录每个 chunk ID 命中的检索路径（GR-1-003/Batch8 ExplainBits 归因修复）。
+	// rrfThreeWay 融合后原始来源信息即丢失，必须在融合前的三路原始结果上标记；
+	// 这里用 ID 反查而非改造 Chunk 结构体，因为 ExplainBits 是检索期概念，不属于
+	// graphrag.Chunk 这个跨包共享的文档域类型（避免污染无关调用方）。
+	bitsByID := make(map[string]uint8, len(ftsResults)+len(vecResults)+len(graphResults))
+	for _, c := range ftsResults {
+		bitsByID[c.ID] |= types.BitBM25
+	}
+	for _, c := range vecResults {
+		bitsByID[c.ID] |= types.BitVector
+	}
+	for _, c := range graphResults {
+		bitsByID[c.ID] |= types.BitGraph
+	}
+
 	scored := make([]types.ScoredFragment, len(finalResults))
 	for i, c := range finalResults {
+		bits := bitsByID[c.ID]
+		recordExplainBits(ctx, bits)
 		scored[i] = types.ScoredFragment{
-			Content:    c.Content,
-			Source:     c.SourceURI,
-			TaintLevel: types.TaintLevel(c.TaintLevel),
+			Content:     c.Content,
+			Source:      c.SourceURI,
+			TaintLevel:  types.TaintLevel(c.TaintLevel),
+			ExplainBits: bits,
 		}
 	}
 	return scored, nil
