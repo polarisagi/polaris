@@ -20,7 +20,8 @@ import (
 // ─── git_diff ─────────────────────────────────────────────────────────────────
 
 // MakeGitDiffFn 返回 git_diff 工具实现。
-// 用 exec.Command 而非 bash，无 shell 注入风险；path 受 allowedPaths 白名单约束。
+// 使用 bash.RunSandboxedArgv 以 argv 形式传参（非 bash -c 拼接字符串），
+// 无 shell 注入风险；path 受 allowedPaths 白名单约束。
 // 输出：结构化文件变更列表 + 统计 + 原始 unified diff（上限 1MB）。
 func MakeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {

@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:39 L0 Working / 3:116 L1 Episodic / 4:214 L2 Semantic / 5:256 L3 Procedural / 6:313 写路径 / 7:325 HybridRetriever / 8:405 EffConn / 9:415 Consolidation / 10:440 Forgetting / 11:457 PromptBuilder / 12:527 Drift / 14:565 496(SOFT)降级 / 15:587 依赖 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:119 L1 Episodic / 4:219 L2 Semantic / 5:261 L3 Procedural / 6:315 写路径 / 7:327 HybridRetriever / 8:413 EffConn / 9:423 Consolidation / 10:458 Forgetting / 11:475 PromptBuilder / 12:545 Drift / 14:583 496(SOFT)降级 / 15:607 依赖 -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）

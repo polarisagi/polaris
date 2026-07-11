@@ -73,7 +73,11 @@ func (d *Dispatcher) Lookup(name string) (types.Tool, error) {
 	if d.toolReg == nil {
 		return types.Tool{}, apperr.New(apperr.CodeInternal, "dispatch: tool registry not configured")
 	}
-	return d.toolReg.Lookup(name)
+	tool, err := d.toolReg.Lookup(name)
+	if err != nil {
+		return types.Tool{}, apperr.Wrap(apperr.CodeInternal, "Dispatcher.Lookup", err)
+	}
+	return tool, nil
 }
 
 func (d *Dispatcher) runChain(ctx context.Context, entry protocol.CatalogEntry, args []byte) (*types.ToolResult, error) {

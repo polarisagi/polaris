@@ -7,11 +7,10 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
-
-import "github.com/polarisagi/polaris/internal/protocol"
 
 // PolicyEvaluator 安全门面对 Cedar 策略引擎的消费端接口。
 // 由 security/policy.Gate 实现，此处定义防止 facade.go 循环 import policy 子包。
