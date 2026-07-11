@@ -1,0 +1,12 @@
+name: get_task_result
+description: "Poll the status/result of an async MCP tool task started by an *_async tool call. Returns status=pending|done|failed."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - mcp
+  - async
+  - utility

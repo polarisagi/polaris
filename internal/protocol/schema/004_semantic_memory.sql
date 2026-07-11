@@ -95,7 +95,11 @@ CREATE TABLE IF NOT EXISTS semantic_relations (
 
     relation_type   TEXT NOT NULL,
     -- ↑ 关系类型。'USES' | 'DEPENDS_ON' | 'IMPLEMENTS' | 'CONTAINS' | 'RELATED_TO' |
-    --   'BEFORE' | 'AFTER' | 'USER_PREFERENCE'。
+    --   'BEFORE' | 'AFTER' | 'USER_PREFERENCE' | 'derived_from'。
+    --   'derived_from'（GD-14-001）：实体是另一实体的推论/派生结论（区别于运行时/配置
+    --   依赖的 'DEPENDS_ON'），由 M5 ConsolidationPipeline 实体抽取阶段的 LLM 标注
+    --   （internal/prompt/templates/entity_extraction.tmpl），供 CascadeInvalidator
+    --   级联失效遍历时识别真实派生血缘链路。
 
     weight          REAL DEFAULT 1.0,
     -- ↑ 关系权重 0.0-1.0。M5 Spreading Activation 扩散激活时作为传播系数。

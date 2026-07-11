@@ -11,12 +11,13 @@ import (
 
 // codeActHTTPRequest POST /v1/agent/codeact 请求体。
 type codeActHTTPRequest struct {
-	Language     string           `json:"language"`      // "python" | "bash"
-	Code         string           `json:"code"`          // LLM 生成的代码
-	CapabilityID string           `json:"capability_id"` // 能力令牌 ID（必填）
-	SessionID    string           `json:"session_id"`
-	AgentID      string           `json:"agent_id"`
-	TaintLevel   types.TaintLevel `json:"taint_level"`
+	Language        string           `json:"language"`      // "python" | "bash"
+	Code            string           `json:"code"`          // LLM 生成的代码
+	CapabilityID    string           `json:"capability_id"` // 能力令牌 ID（必填）
+	SessionID       string           `json:"session_id"`
+	AgentID         string           `json:"agent_id"`
+	TaintLevel      types.TaintLevel `json:"taint_level"`
+	StatefulSession bool             `json:"stateful_session"` // GD-4-002：跨调用 REPL 状态保持
 }
 
 // codeActHTTPResponse POST /v1/agent/codeact 响应体。
@@ -45,12 +46,13 @@ func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.codeActEngine.ExecuteCode(r.Context(), protocol.CodeActRequest{
-		Language:     req.Language,
-		Code:         req.Code,
-		CapabilityID: req.CapabilityID,
-		SessionID:    req.SessionID,
-		AgentID:      req.AgentID,
-		TaintLevel:   req.TaintLevel,
+		Language:        req.Language,
+		Code:            req.Code,
+		CapabilityID:    req.CapabilityID,
+		SessionID:       req.SessionID,
+		AgentID:         req.AgentID,
+		TaintLevel:      req.TaintLevel,
+		StatefulSession: req.StatefulSession,
 	})
 	if err != nil {
 		code := apperr.CodeOf(err)

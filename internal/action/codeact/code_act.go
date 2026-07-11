@@ -41,6 +41,7 @@ type CodeAct struct {
 	desensitizer *guard.PIIDesensitizer // PII 脱敏器
 	detector     *guard.PIIDetector     // PII 检测器
 	tokenMgr     tokenManager           // Capability Token 管理器
+	stateDir     string                 // GD-4-002: REPL 状态快照根目录；空值时 StatefulSession 请求静默降级为一次性执行
 }
 
 type govAgent interface {
@@ -244,10 +245,18 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	}
 
 	// 构造沙箱运行规格
+	// GD-4-002: StatefulSession=true 时在真正执行的脚本首尾注入状态快照样板
+	// （不改变 req.Code 本身，L0/L1/L2 审查已在上面 validateExecuteRequest 中
+	// 针对原始 req.Code 完成，此处只影响实际执行的字节，不影响审查范围）。
+	execCode, err := ca.buildExecutableScript(req)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: build executable script failed", err)
+	}
+
 	// 安全策略：LLM 生成代码写入临时文件执行，禁止通过 -c 参数拼接（shell 注入向量）。
 	// 原 `python3 -c <code>` 方式存在注入风险：代码中的引号/反斜杠可逃逸 shell 边界。
 	// 临时文件路径使用随机后缀，避免路径预测攻击。
-	tmpFile, err := writeTempScript(req.Language, req.Code)
+	tmpFile, err := writeTempScript(req.Language, execCode)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: write temp script failed", err)
 	}

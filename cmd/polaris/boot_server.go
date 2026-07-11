@@ -151,6 +151,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			codeact.WithMaxCodeSize(sb.Cfg.Thresholds.M7Tool.MaxCodeSizeBytes),
 			codeact.WithPIIGuard(tb.PIIDetector, tb.PIIDesensitizer),
 			codeact.WithTokenManager(action.GetTokenManager()),
+			codeact.WithStateDir(sb.Layout.Workspace), // GD-4-002: REPL 状态快照根目录
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
 		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})

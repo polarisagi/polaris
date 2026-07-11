@@ -132,6 +132,31 @@ func (m *MCPManager) registerTools(serverName string, client *MCPClient, tools [
 			})
 		}
 
+		// GD-08-001: 注册对应的异步变体（M13-bis §8.4），LLM 对预估耗时较长的调用
+		// 可主动选择 *_async 变体立即拿回 task_id，再用 get_task_result 轮询，
+		// 避免同步阻塞。异步变体名超长时静默跳过（不影响同步变体本身可用性）。
+		asyncLLMName := llmName + asyncToolSuffix
+		if len(asyncLLMName) <= maxLLMToolNameLen {
+			asyncFn := makeMCPToolAsyncFn(m, client, t.Name)
+			m.sandbox.RegisterRich(asyncLLMName, asyncFn, taint)
+			if m.catalog != nil {
+				m.catalog.Register(protocol.CatalogEntry{
+					Name: asyncLLMName,
+					Description: "[async variant] " + t.Description +
+						" Returns {task_id, status:pending} immediately; poll with get_task_result.",
+					Parameters:  t.InputSchema,
+					Source:      types.ToolMCP,
+					TrustTier:   types.TrustTier(client.cfg.TrustTier),
+					TaintLevel:  taint,
+					Timeout:     toolTimeout,
+					MCPServerID: client.cfg.ServerName,
+					MCPToolName: t.Name,
+				})
+			}
+		} else {
+			slog.Warn("mcp: async tool LLM name too long, async variant skipped", "server", serverName, "tool", t.Name, "llm_name", asyncLLMName, "max", maxLLMToolNameLen)
+		}
+
 		valid = append(valid, t)
 	}
 	return valid
@@ -160,6 +185,27 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 	}
 }
 
+// asyncToolSuffix 异步变体的 LLM 工具名后缀（GD-08-001，M13-bis §8.4）。
+const asyncToolSuffix = "_async"
+
+// makeMCPToolAsyncFn 创建 MCP 工具的异步变体执行函数：立即返回
+// {"task_id":"...","status":"pending"}，不等待实际 MCP 调用完成。
+// 真正的调用结果通过 m.runAsyncCall 派生的后台 goroutine 写入 tasks_cache，
+// LLM 侧用 get_task_result 工具轮询。
+func makeMCPToolAsyncFn(m *MCPManager, client *MCPClient, mcpName string) sandbox.InProcessRichFn {
+	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+		var args map[string]any
+		if len(spec.Input) > 0 {
+			if err := json.Unmarshal(spec.Input, &args); err != nil {
+				return nil, apperr.New(apperr.CodeInvalidInput, "mcp: invalid tool input JSON: "+err.Error())
+			}
+		}
+		taskID := m.runAsyncCall(ctx, client, mcpName, args)
+		out, _ := json.Marshal(map[string]string{"task_id": taskID, "status": string(AsyncTaskPending)}) //nolint:errchkjson // 固定字段结构体，Marshal 不会失败
+		return &types.ToolResult{Success: true, Output: out}, nil
+	}
+}
+
 func (m *MCPManager) unregisterTools(serverName string, tools []MCPTool) {
 	for _, t := range tools {
 		llmName := MCPToolName(serverName, t.Name)
@@ -171,6 +217,13 @@ func (m *MCPManager) unregisterTools(serverName string, tools []MCPTool) {
 		// 同步从 unified catalog 注销
 		if m.catalog != nil {
 			m.catalog.Unregister(llmName)
+		}
+
+		// GD-08-001: 同步注销异步变体
+		asyncLLMName := llmName + asyncToolSuffix
+		m.sandbox.Unregister(asyncLLMName)
+		if m.catalog != nil {
+			m.catalog.Unregister(asyncLLMName)
 		}
 	}
 }
