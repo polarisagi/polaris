@@ -11,7 +11,9 @@ import (
 // channel 包（各平台适配器）需要以下外部能力：
 //   1. ChatRepo     — 持久化聊天消息（读取历史上下文）
 //   2. AgentInfer   — 将用户消息转发给 Agent 推理
-//   3. AuthChecker  — 检查发送方是否有权限使用该渠道
+//
+// （原第 3 项 AuthChecker/ChannelAuthChecker 已于 2026-07-12 移除，见下方说明——
+// 渠道权限检查目前无真实调用需求，未接线，按死代码清理，不臆造实现。）
 //
 // @consumer: channel/manager.go, channel/dispatch.go
 // @producer: 各具体模块由 cli.go/bootstrap 注入
@@ -35,9 +37,8 @@ type AgentInfer interface {
 	HandleMessage(ctx context.Context, sessionID, userID, text string, taint types.TaintLevel, reply func(string) error)
 }
 
-// ChannelAuthChecker channel 包对权限检查的消费端接口。
-// 实现：security.SecurityFacade（IsAuthorized）
-type ChannelAuthChecker interface {
-	// IsChannelAllowed 检查指定用户是否允许通过该渠道发送消息。
-	IsChannelAllowed(ctx context.Context, userID, channelType string) (bool, error)
-}
+// 2026-07-12 移除 ChannelAuthChecker（原声称"实现：security.SecurityFacade
+// （IsAuthorized）"）：方法签名 IsChannelAllowed(ctx, userID, channelType) (bool, error)
+// 与 SecurityFacade.IsAuthorized(ctx, principal, action, resource, ctxData) (bool, error)
+// 并不匹配，全仓库零消费方、零实现，文档声称的实现关系不成立，按死代码清理
+// （与本次一并删除的 protocol.SecurityFacade/security.SecurityFacadeImpl 同批发现）。

@@ -386,7 +386,7 @@ approval:
 - `SecureZero(ctx, taskID)` → `DELETE FROM preferences WHERE key LIKE 'pii_vault:{taskID}:%'`
 
   当前边界：PII 字段直接存入 preferences 表（持久化），TTL 1h 自动过期。
-  **✅ VFS blob 路径存储与 MutationBus 落盘均已实现**：VFS blob 路径存储（`internal/vfs/provider.go` 的 `BlobStore`）和 MutationBus 落盘（`internal/protocol/schema/002_outbox.sql` + M2 §2.3 DatabaseWriter）均已作为通用基础设施完整实现，只是不是本节 PII 场景专属——它们是全系统共用的存储层能力，PII 侧目前没有走这两条路径。
+  **文档纠正（原"VFS blob 路径存储已实现"为失实表述，已核实并移除死代码）**：此前本节声称 `internal/vfs/provider.go` 的 `BlobStore`（content-addressed `vfs://<hash>` blob 存储）"已作为通用基础设施完整实现"——经代码核实，该接口自始至终没有任何 producer 实现（`vfs.WorkspaceManager` 只有路径寻址的 `WriteFile`/`ReadFile`，没有 `WriteBlob`/`ReadBlob`），且全仓库零消费方，属于纯文档漂移（接口写了、代码从未做）。已删除 `protocol.BlobStore`/`COWProvider`/`VFSFacade`（`internal/protocol/interfaces_vfs.go`）与重复的 `memory.VFSProvider` 定义，不臆造实现（CLAUDE.md 禁止超前抽象）。MutationBus 落盘（`internal/protocol/schema/002_outbox.sql` + M2 §2.3 DatabaseWriter）核实属实、确已实现，与本条无关，PII 侧目前也未走这条路径。PII 字段当前用 AES-256-GCM 加密直接落 `preferences` 表 + TTL 1h 自动过期，规模和生命周期均可控，暂无 blob 存储的现实需求；若未来出现真实需求（如需要存储大体积 PII 相关附件）再按需设计，不预先搭好用不到的接口。
 
   **OpaqueToken 与 SessionPIIVault 的语义边界**：二者是强度不同的两套方案，不能互相等价代替：
   - **OpaqueToken**（把 PII 在进入 LLM prompt 前替换为占位符 token、模型只见占位符、事后按需把占位符换回原文、原文全程不落盘）——✅ **已完全闭环实现**。

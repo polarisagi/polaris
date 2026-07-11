@@ -17,7 +17,11 @@ import (
 // @producer: 各具体模块由 cli.go/bootstrap 注入
 
 // ExtensionPolicyGate extension 包对安全策略检查的消费端接口。
-// 实现：security.PolicyEvaluator（Cedar 三层防线，deny-by-default）
+// 预期由 Cedar 策略引擎（`internal/security/policy.Gate`，deny-by-default）实现，
+// 签名（`AllowInstall(ctx, principal, extType, trustTier) bool`）与
+// `security/policy.Gate.IsAuthorized(ctx, principal, action, resource, ctxData) (bool, error)`
+// 不一致，当前全仓库零消费方、零实现——本次审查核实为未接线的消费端接口占位，
+// 不在本次范围内处理（非 doc02 迁移点名对象），如实标注避免误导。
 // 禁止：extension 直接 import security（防止 extension→security 循环）
 type ExtensionPolicyGate interface {
 	// AllowInstall 检查指定主体（principal）是否有权安装该扩展类型。

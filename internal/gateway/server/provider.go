@@ -6,6 +6,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security"
 )
 
 // 本文件声明 gateway/server 包对外部模块的消费端接口（Consumer-side Interfaces）。
@@ -105,4 +106,14 @@ type OTAUpdater interface {
 type CodeActEngine interface {
 	ExecuteCode(ctx context.Context, req protocol.CodeActRequest) (*protocol.CodeActResult, error)
 	CodeActAvailable() bool
+}
+
+// AuditRecorder server 包对审计写入能力的消费端接口。
+// 实现：security.AuditTrail（哈希链审计日志，internal/security/audit_trail.go）。
+// 2026-07-12 补齐：Phase 3 迁移当时遗漏了本字段，server.go 一直持有具体
+// *security.AuditTrail struct，本次一并纳入窄接口（R1.4）。
+// security.AuditRecord 是纯数据 DTO（零方法），依既有例外（同 ChannelMessage/
+// CodeActRequest 等 protocol DTO 直接引用）允许消费端方法签名直接引用其类型。
+type AuditRecorder interface {
+	Record(record *security.AuditRecord) error
 }

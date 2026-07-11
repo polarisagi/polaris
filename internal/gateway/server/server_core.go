@@ -21,7 +21,6 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -84,7 +83,7 @@ type Server struct {
 
 	rateLimiter      *rate.Limiter
 	interruptLimiter *RateLimitManager
-	auditTrail       *security.AuditTrail
+	auditTrail       AuditRecorder
 	outboxWriter     protocol.OutboxWriter // Interrupt 异步路由（nil 时降级为进程内直调）
 	providerHandler  *provider.ProviderHandler
 	pluginHandler    *plugin.PluginHandler
@@ -96,7 +95,7 @@ type Server struct {
 	}
 }
 
-func (s *Server) SetAuditTrail(at *security.AuditTrail)   { s.auditTrail = at }
+func (s *Server) SetAuditTrail(at AuditRecorder)          { s.auditTrail = at }
 func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) { s.outboxWriter = w }
 
 func (s *Server) SetInstallManager(m ExtensionInstaller) {
