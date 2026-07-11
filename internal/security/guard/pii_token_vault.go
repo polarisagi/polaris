@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -136,6 +138,55 @@ func (v *PIITokenVault) Restore(text string) (string, error) {
 // Restore 之前做低成本预判（避免每次工具调用都无条件加锁扫描）。
 func (v *PIITokenVault) HasTokens(text string) bool {
 	return tokenPattern.MatchString(text)
+}
+
+// TokenizeKnownValues 是 RestoreForTask 的反方向操作：扫描 text，把其中出现的、
+// 已在指定 taskID 命名空间登记过的"真实值"重新替换回对应的 ⟦PII:xxxx⟧ 令牌。
+//
+// 使用场景（2026-07-11 复核修复 GR-6-005）：工具执行前 execInput 已被 RestoreForTask
+// 还原为真实值传给沙箱/下游进程，如果该工具的 Error/Output 把入参原样回显（例如
+// CLI 参数校验失败时把命令行打印进 stderr），真实 PII 会经由 ExecuteTool 的返回值
+// 泄漏给上游（LLM 上下文/审计日志）。此前的实现误用 RestoreForTask（token→真实值）
+// 处理输出，对已经是真实值的文本是纯粹的 no-op，起不到任何脱敏作用。
+// TokenizeKnownValues 才是这里需要的方向：真实值→token。
+//
+// 只替换本次任务命名空间内已知的原始值，不做全局扫描（避免误伤其他任务/其他
+// 请求中恰好相同的普通文本，以及避免跨任务的信息串扰）。按原始值长度降序替换，
+// 防止短值是长值子串时的部分替换错位。
+func (v *PIITokenVault) TokenizeKnownValues(taskID string, text string) string {
+	if text == "" {
+		return text
+	}
+	v.mu.RLock()
+	taskTokens, ok := v.tokens[taskID]
+	if !ok || len(taskTokens) == 0 {
+		v.mu.RUnlock()
+		return text
+	}
+	// 复制一份 value→token 反向映射，尽快释放锁，不在持锁期间做字符串替换。
+	reverse := make(map[string]string, len(taskTokens))
+	originals := make([]string, 0, len(taskTokens))
+	for tok, original := range taskTokens {
+		if original == "" {
+			continue
+		}
+		reverse[original] = tok
+		originals = append(originals, original)
+	}
+	v.mu.RUnlock()
+
+	if len(originals) == 0 {
+		return text
+	}
+	sort.Slice(originals, func(i, j int) bool { return len(originals[i]) > len(originals[j]) })
+
+	result := text
+	for _, original := range originals {
+		if strings.Contains(result, original) {
+			result = strings.ReplaceAll(result, original, reverse[original])
+		}
+	}
+	return result
 }
 
 // Clear 清空全局共享表的映射。

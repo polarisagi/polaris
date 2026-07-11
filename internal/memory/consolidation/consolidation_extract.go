@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -43,7 +43,7 @@ func (p *ConsolidationPipeline) extractEntitiesAndRelations(
 		text = text[:8000]
 	}
 
-	if p.provider != nil {
+	if p.summarizer != nil {
 		return p.llmExtract(ctx, sessionID, text)
 	}
 	return p.ruleExtract(sessionID, text)
@@ -64,22 +64,18 @@ func (p *ConsolidationPipeline) llmExtract(
 		}
 	}
 
-	prompt := fmt.Sprintf(
-		"Analyze the following AI agent session log and extract:\n"+
-			"1. Named entities (type MUST be one of: user_preference, constraint, temporary_conclusion, entity)\n"+
-			"2. Relations between entities (type MUST be one of: depends_on, configures, conflicts_with, relates_to)\n\n"+
-			"Return ONLY valid JSON in this format:\n"+
-			`{"entities":[{"name":"...","type":"...","confidence":0.9}],"relations":[{"from":"...","to":"...","type":"...","confidence":0.8}]}`+
-			"\n\nSession log:\n%s",
-		text,
-	)
-	resp, err := safecall.Infer(ctx, p.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(1024))
+	promptText, err := templates.Render("entity_extraction.tmpl", map[string]any{"Text": text})
+	if err != nil {
+		slog.Warn("consolidation: render entity_extraction template failed, fallback to rule extract", "err", err)
+		return p.ruleExtract(sessionID, text)
+	}
+	respContent, err := p.summarizer.InferRaw(ctx, promptText, 1024)
 	if err != nil {
 		return p.ruleExtract(sessionID, text)
 	}
 
 	// 解析 JSON
-	content := strings.TrimSpace(resp.Content)
+	content := strings.TrimSpace(respContent)
 	// 去掉可能的 markdown 包裹
 	if idx := strings.Index(content, "{"); idx > 0 {
 		content = content[idx:]
