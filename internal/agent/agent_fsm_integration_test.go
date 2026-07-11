@@ -194,9 +194,15 @@ func (m *mockMemoryForIntegration) RenderTaskCanvas() string { return "" }
 
 type mockEpisodicMemForIntegration struct {
 	events []types.Event
+	// failWith 非 nil 时 Append 直接返回该错误，不追加事件——
+	// 用于模拟存储层持久化失败（GD-13-003 FSM 熔断测试）。
+	failWith error
 }
 
 func (m *mockEpisodicMemForIntegration) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
+	if m.failWith != nil {
+		return m.failWith
+	}
 	m.events = append(m.events, ev)
 	return nil
 }

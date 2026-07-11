@@ -251,7 +251,10 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 	if a.memory == nil {
 		return
 	}
-	_ = a.memory.AppendEpisodicEvent(ctx, ev, types.TaintNone)
+	if err := a.memory.AppendEpisodicEvent(ctx, ev, types.TaintNone); err != nil {
+		a.handleMemoryPersistenceFailure(ctx, err, ev)
+		return
+	}
 
 	if a.outboxWriter == nil {
 		return
@@ -270,6 +273,59 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 		}, ev.ID+":extract")
 		_ = a.outboxWriter.Write(ctx, outboxEv)
 	}
+}
+
+// handleMemoryPersistenceFailure 处理 Episodic 写入失败（GD-13-003 FSM 熔断）。
+//
+// HE-6（State-in-DB）：Episodic 事件是 Agent 状态外化的核心路径之一，Reflect/Replan
+// 等后续决策均依赖历史事件序列。持久化失败若被静默吞掉（旧实现 `_ = a.memory.
+// AppendEpisodicEvent(...)`），会导致 Agent 在残缺状态上继续决策而不自知——违反
+// HE-1（可观测优先）与 HE-6。
+//
+// 只对存储层不可用（CodeStorageUnavailable）熔断；序列化失败等其他 CodeInternal
+// 错误只记录日志不熔断，避免偶发的单条事件构造失败误杀整条执行链路。
+//
+// 熔断机制复用 agent_execute_dag.go capability_gap 先例，不新增 FSM 转换规则、
+// 不新增挂起态类型（HE-3 可组合原语 + ADR-0042 先例）：
+//  1. 设置 sCtx.SuspendReason，供 HITL/运维侧观测挂起原因；
+//  2. 经 outbox 异步投递 m9_storage_degraded 事件，供运维告警/自动恢复 Worker 消费；
+//  3. 调用 a.asyncIntent(TriggerInterruptReceived) —— 该 trigger 在
+//     fsm/state_machine.go Dispatch() 中作为状态无关的全局处理（见该文件 S_INTERRUPT
+//     通用处理分支），可从任意非终态直接进入 S_INTERRUPT，无需在 transitions.go
+//     注册表中新增专用转换规则。
+func (a *Agent) handleMemoryPersistenceFailure(ctx context.Context, err error, ev types.Event) {
+	if !isMemoryPersistenceFailure(err) {
+		slog.Error("writeEpisodicWithExtract: episodic 写入失败（非存储层故障，不熔断）",
+			"error", err, "event_type", ev.Type, "task_id", ev.TaskID)
+		return
+	}
+
+	slog.Error("writeEpisodicWithExtract: 检测到存储层持久化失败，触发 FSM 熔断",
+		"error", err, "event_type", ev.Type, "task_id", ev.TaskID)
+
+	if a.sCtx != nil {
+		a.sCtx.SuspendReason = "memory_persistence_failure"
+	}
+
+	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
+		payloadBytes, _ := json.Marshal(map[string]string{
+			"error":      err.Error(),
+			"event_type": string(ev.Type),
+			"task_id":    ev.TaskID,
+		})
+		_, _ = sqlRepo.ExecContext(ctx, `
+			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, time.Now().UnixMilli(), "m9_storage_degraded", "upsert", "memory_persistence_failure",
+			payloadBytes, uuid.New().String(), "pending")
+	}
+
+	a.asyncIntent(types.TriggerInterruptReceived)
+}
+
+// isMemoryPersistenceFailure 判断错误是否为存储层不可用（而非序列化等其他内部错误）。
+func isMemoryPersistenceFailure(err error) bool {
+	return apperr.IsCode(err, apperr.CodeStorageUnavailable)
 }
 
 // withTaskScopeCtx 把当前会话标识注入 ctx，供 tokenizeMessagesForLLM 写令牌、
