@@ -50,6 +50,8 @@ func RegisterMemoryTools(
 		{tool: memoryExpireTool(), fn: MakeMemoryExpireFn(semanticWriter)},
 		{tool: memoryReflectTool(), fn: MakeMemoryReflectFn(reflection)},
 		{tool: coreMemoryEditTool(), fn: MakeCoreMemoryEditFn(coreMemory)},
+		{tool: memoryPageOutTool(), fn: MakeMemoryPageOutFn(coreMemory, semanticWriter)},
+		{tool: memoryPageInTool(), fn: MakeMemoryPageInFn(coreMemory, semanticWriter)},
 	}
 
 	for _, e := range entries {
@@ -205,6 +207,70 @@ func memoryExpireTool() types.Tool {
 				},
 			},
 			"required": []string{"name"},
+		},
+	}
+}
+
+// memoryPageOutTool / memoryPageInTool（GD-14-002 最小实现）：
+// 上下文主动置换。Core Memory 是每轮 Prompt 都会注入的稀缺资源（M5Memory
+// CoreMemoryTotalMaxKB 硬顶），长程任务容易被非核心内容（如已处理完的某个
+// 子任务详情）占满。这两个工具允许 Agent 自主判断"当前哪些内容不再需要
+// 每轮可见，但未来可能还要用到"，主动把它从 Core Memory 移出到长期语义
+// 记忆（page_out，仍可通过 memory_search / memory_page_in 找回），需要时
+// 再取回注入（page_in）。是否调用、何时调用完全由 LLM 自主决定——Go 侧不
+// 设强制阈值触发（那是既有的 ForgettingManager/consolidation 全局回收机制，
+// 与本工具是两回事，见任务书 8 §8.5 步骤 3 的设计原则）。
+func memoryPageOutTool() types.Tool {
+	return types.Tool{
+		Name: "memory_page_out",
+		Description: "Page out a core memory block you no longer need visible in every prompt turn " +
+			"(e.g. details of a sub-task you've already finished), while keeping it durably retrievable " +
+			"later via memory_search or memory_page_in. Use this when you notice context pressure " +
+			"(long-running task, core memory getting crowded) and want to free up space without losing " +
+			"the information permanently.",
+		Version:     "1.0.0",
+		Source:      types.ToolBuiltin,
+		TrustTier:   types.TrustSystem,
+		Capability:  types.CapWriteLocal,
+		RiskLevel:   types.RiskLow,
+		SandboxTier: types.SandboxInProcess,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"block_key": map[string]any{
+					"type":        "string",
+					"description": "The core memory block key to page out (same key used with core_memory_edit).",
+				},
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "Optional: why this content is being paged out (audit trail).",
+				},
+			},
+			"required": []string{"block_key"},
+		},
+	}
+}
+
+func memoryPageInTool() types.Tool {
+	return types.Tool{
+		Name: "memory_page_in",
+		Description: "Page a previously paged-out core memory block back into every-prompt visibility. " +
+			"Use this when you determine that a previously deprioritized piece of context is relevant again.",
+		Version:     "1.0.0",
+		Source:      types.ToolBuiltin,
+		TrustTier:   types.TrustSystem,
+		Capability:  types.CapWriteLocal,
+		RiskLevel:   types.RiskLow,
+		SandboxTier: types.SandboxInProcess,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"block_key": map[string]any{
+					"type":        "string",
+					"description": "The core memory block key to page back in (must have been paged out previously).",
+				},
+			},
+			"required": []string{"block_key"},
 		},
 	}
 }

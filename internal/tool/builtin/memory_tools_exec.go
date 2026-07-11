@@ -224,6 +224,129 @@ func MakeMemoryExpireFn(writer SemanticMemWriter) sandbox.InProcessFn {
 	}
 }
 
+// pagedMemoryEntityType / pagedMemoryEntityName：memory_page_out 把 Core Memory
+// 内容归档为语义记忆实体时使用的类型与命名规则，memory_page_in 用同一规则
+// 查回。以 sessionID+blockKey 复合键，避免不同会话的同名 block_key 互相覆盖。
+const pagedMemoryEntityType = "PagedCoreMemory"
+
+func pagedMemoryEntityName(sessionID, blockKey string) string {
+	return "paged:" + sessionID + ":" + blockKey
+}
+
+type memoryPageOutArgs struct {
+	BlockKey string `json:"block_key"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// MakeMemoryPageOutFn 见 memory_tools.go memoryPageOutTool 的设计说明（GD-14-002）。
+func MakeMemoryPageOutFn(coreMemory protocol.CoreMemory, writer SemanticMemWriter) sandbox.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args memoryPageOutArgs
+		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_out", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_out: invalid args", err)
+		}
+		if args.BlockKey == "" {
+			return nil, apperr.New(apperr.CodeInternal, "memory_page_out: block_key is required")
+		}
+		if coreMemory == nil || writer == nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_out", false)
+			return nil, apperr.New(apperr.CodeInternal, "memory_page_out: memory unavailable")
+		}
+
+		c := extractCoreMemoryContext(ctx)
+
+		block, err := coreMemory.Get(ctx, c.AgentID, c.SessionID, args.BlockKey)
+		if err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_out", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_out: get block failed", err)
+		}
+		if block == nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_out", false)
+			b, _ := json.Marshal(map[string]string{"status": "not_found", "block_key": args.BlockKey})
+			return b, nil
+		}
+
+		taintLevel := block.TaintLevel
+		if c.TaintLevel > taintLevel {
+			taintLevel = c.TaintLevel // 只升不降（ADR-0007）
+		}
+		entityName := pagedMemoryEntityName(c.SessionID, args.BlockKey)
+		ent := types.Entity{
+			ID:          "ent_" + entityName,
+			Name:        entityName,
+			Type:        pagedMemoryEntityType,
+			TaintLevel:  taintLevel,
+			Confidence:  1.0,
+			SyncVersion: time.Now().UnixNano(),
+			Properties: map[string]any{
+				"block_key":    args.BlockKey,
+				"session_id":   c.SessionID,
+				"content":      block.Content,
+				"reason":       args.Reason,
+				"paged_out_at": time.Now().Format(time.RFC3339),
+			},
+		}
+		// 先落盘到长期语义记忆，成功后才删除 Core Memory 块——保证任一步失败时
+		// 内容不会两处都不存在（宁可重复保留，不可丢失）。
+		if err := writer.UpsertFact(ctx, ent, types.TaintNone); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_out", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_out: archive to semantic memory failed", err)
+		}
+		if err := coreMemory.Delete(ctx, c.AgentID, c.SessionID, args.BlockKey); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_out", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_out: delete core block failed", err)
+		}
+
+		metrics.RecordMemoryToolCall(ctx, "memory_page_out", true)
+		b, _ := json.Marshal(map[string]string{"status": "success", "block_key": args.BlockKey})
+		return b, nil
+	}
+}
+
+type memoryPageInArgs struct {
+	BlockKey string `json:"block_key"`
+}
+
+// MakeMemoryPageInFn 见 memory_tools.go memoryPageInTool 的设计说明（GD-14-002）。
+func MakeMemoryPageInFn(coreMemory protocol.CoreMemory, writer SemanticMemWriter) sandbox.InProcessFn {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var args memoryPageInArgs
+		if err := json.Unmarshal(input, &args); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_in", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_in: invalid args", err)
+		}
+		if args.BlockKey == "" {
+			return nil, apperr.New(apperr.CodeInternal, "memory_page_in: block_key is required")
+		}
+		if coreMemory == nil || writer == nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_in", false)
+			return nil, apperr.New(apperr.CodeInternal, "memory_page_in: memory unavailable")
+		}
+
+		c := extractCoreMemoryContext(ctx)
+		entityName := pagedMemoryEntityName(c.SessionID, args.BlockKey)
+
+		// GetEntity 找不到时软失败（未曾 page_out 是正常场景，不是错误）。
+		ent, _ := writer.GetEntity(ctx, pagedMemoryEntityType, entityName)
+		if ent == nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_in", false)
+			b, _ := json.Marshal(map[string]string{"status": "not_found", "block_key": args.BlockKey})
+			return b, nil
+		}
+
+		content, _ := ent.Properties["content"].(string)
+		if err := coreMemory.Set(ctx, c.AgentID, c.SessionID, args.BlockKey, content, ent.TaintLevel); err != nil {
+			metrics.RecordMemoryToolCall(ctx, "memory_page_in", false)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_in: restore core block failed", err)
+		}
+
+		metrics.RecordMemoryToolCall(ctx, "memory_page_in", true)
+		b, _ := json.Marshal(map[string]string{"status": "success", "block_key": args.BlockKey})
+		return b, nil
+	}
+}
+
 type memoryReflectArgs struct {
 	Topic    string `json:"topic"`
 	Insight  string `json:"insight"`
