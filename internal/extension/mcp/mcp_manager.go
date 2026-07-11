@@ -63,6 +63,7 @@ type MCPManager struct {
 	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
 	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
 	netApproval      NetApprovalStore    // 网络访问审批持久化；nil 时跳过审批逻辑（安全降级：保持断网）
+	asyncTasks       *asyncTaskCache     // GD-08-001: CallToolAsync 的 tasks_cache（内存，TTL=300s）
 }
 
 // IsPluginConnected 判断给定 plugin_id 是否有至少一个已连接的 MCP Server。
@@ -86,12 +87,15 @@ func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy pro
 	if policy == nil {
 		panic("mcp_manager: policy gate not configured (fail-closed)")
 	}
-	return &MCPManager{
+	m := &MCPManager{
 		entries:    make(map[string]*mcpEntry),
 		sandbox:    sbx,
 		httpClient: httpClient,
 		policy:     policy,
+		asyncTasks: newAsyncTaskCache(),
 	}
+	m.startAsyncTaskSweeper()
+	return m
 }
 
 // SetEnvelope 注入 Envelope，供 CallTool 直接路径使用。

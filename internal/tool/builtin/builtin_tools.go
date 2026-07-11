@@ -19,6 +19,7 @@ import (
 	"github.com/polarisagi/polaris/internal/tool/builtin/execute_wasm"
 	"github.com/polarisagi/polaris/internal/tool/builtin/fetch_url"
 	"github.com/polarisagi/polaris/internal/tool/builtin/get_datetime"
+	"github.com/polarisagi/polaris/internal/tool/builtin/get_task_result"
 	"github.com/polarisagi/polaris/internal/tool/builtin/glob"
 	"github.com/polarisagi/polaris/internal/tool/builtin/grep"
 	"github.com/polarisagi/polaris/internal/tool/builtin/list_dir"
@@ -51,6 +52,7 @@ func RegisterBuiltinTools(
 	cfg *config.Config,
 	cronRepo protocol.CronRepository, // cron_* 工具依赖；nil 时不注册这三个工具
 	vfsRoot string, // WorkspaceManager 的根目录
+	asyncTaskProvider get_task_result.AsyncTaskProvider, // get_task_result 工具依赖（GD-08-001）；nil 时该工具始终降级返回 expired_or_not_found
 ) error {
 	// todoMu 保护 todo 文件的并发读写，防止多 Agent 同时写入导致数据丢失。
 	// 与 todo_write.MakeTodoWriteFn / todo_read.MakeTodoReadFn 共享，通过参数传递而非全局变量。
@@ -120,6 +122,7 @@ func RegisterBuiltinTools(
 		fn   sandbox.InProcessRichFn
 	}{
 		{"execute_wasm", execute_wasm.MakeExecuteWasmFn(allowedPaths)},
+		{"get_task_result", get_task_result.MakeGetTaskResultFn(asyncTaskProvider)},
 	}
 
 	for _, d := range richDefs {

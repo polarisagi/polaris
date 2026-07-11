@@ -36,6 +36,8 @@ type CodeActRequest struct {
 	SessionID    string
 	AgentID      string
 	TaintLevel   types.TaintLevel
+	// StatefulSession 见 action/protocol.CodeActRequest 同名字段注释（GD-4-002）。
+	StatefulSession bool
 }
 
 // CodeActResult agent 包本地定义的代码执行结果。

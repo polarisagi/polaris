@@ -11,7 +11,14 @@ import (
 )
 
 // CascadeInvalidator 当实体被 superseded/expired 时，级联标记相关实体为 'pending_review'。
-// 实现：BFS 图遍历（semantic_relations），最大深度 2 跳，防止全图扩散。
+// 实现：SQLite 递归 CTE 沿 semantic_relations 图遍历，最大深度 maxCascadeHops 跳，
+// 防止全图扩散（GD-14-001 复核增强：原实现是 Go 侧多轮 BFS 循环，每跳一次 DB 往返；
+// 现改为单条 WITH RECURSIVE 查询——递归项的 hop 列既是结果字段也是终止条件，
+// 无论图中是否存在环，递归严格在 maxCascadeHops 轮内终止，语义与原 BFS 等价，
+// 仅执行路径从 N 次往返收敛为 1 次）。
+// relation_type 覆盖所有类型，含 'derived_from'（GD-14-001 新增，entity_extraction.tmpl
+// 现在允许 LLM 显式标注"派生推论"关系，与既有 depends_on/configures/conflicts_with/
+// relates_to 并列，语义更精确地覆盖"基础信念变更时其派生推论应连带失效"这一原始诉求）。
 // 触发：ConsolidationPipeline.upsertSemantic 完成 belief revision 后调用。
 type CascadeInvalidator struct {
 	db protocol.SQLQuerier
@@ -25,30 +32,39 @@ func NewCascadeInvalidator(db protocol.SQLQuerier) *CascadeInvalidator {
 // maxCascadeHops 最大扩散跳数，防止全图扫描。
 const maxCascadeHops = 2
 
+// cascadeCTEQuery 从种子实体 entityID 出发，沿 semantic_relations 双向边递归遍历，
+// 最多 maxCascadeHops 跳。
+//
+// path 列记录本条路径已访问过的全部节点（'|id1|id2|...|' 分隔），递归项用
+// instr(path, '|nbr|')=0 排除"沿刚走过的边折返回父节点/祖先节点"——SQLite 的
+// WITH RECURSIVE 每轮只能看到上一轮新增的行（frontier-only 语义），没有 path
+// 列的话，双向边会在下一跳把邻居重新展开回种子/祖先自身（TestCascadeInvalidator_
+// CycleDoesNotHang / _TwoHopChain 曾复现此问题）。
+// hop 列同时充当结果字段与递归终止条件：WHERE cascade.hop < ? 保证无论图是否
+// 有环，递归轮数都严格有界，不会无限展开。
+const cascadeCTEQuery = `
+WITH RECURSIVE cascade(id, hop, path) AS (
+    SELECT CAST(? AS INTEGER) AS id, 0 AS hop, '|' || CAST(? AS TEXT) || '|' AS path
+    UNION ALL
+    SELECT n.nbr, cascade.hop + 1, cascade.path || n.nbr || '|'
+    FROM cascade
+    JOIN (
+        SELECT source_id AS node, target_id AS nbr FROM semantic_relations
+        UNION ALL
+        SELECT target_id AS node, source_id AS nbr FROM semantic_relations
+    ) n ON n.node = cascade.id
+    WHERE cascade.hop < ?
+      AND instr(cascade.path, '|' || n.nbr || '|') = 0
+)
+SELECT DISTINCT id FROM cascade WHERE hop > 0 AND id != 0`
+
 // Invalidate 对已被 superseded 的实体 entityID 执行级联失效，最多扩散 maxCascadeHops 跳。
 // 返回实际标记为 pending_review 的实体 ID 列表。
 func (ci *CascadeInvalidator) Invalidate(ctx context.Context, entityID int64) ([]int64, error) {
-	visited := map[int64]bool{entityID: true}
-	frontier := []int64{entityID}
-	var pendingReview []int64
-
-	for hop := 0; hop < maxCascadeHops && len(frontier) > 0; hop++ {
-		neighbors, err := ci.queryNeighbors(ctx, frontier)
-		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "cascade_invalidator: query neighbors", err)
-		}
-
-		var nextFrontier []int64
-		for _, n := range neighbors {
-			if !visited[n] {
-				visited[n] = true
-				nextFrontier = append(nextFrontier, n)
-				pendingReview = append(pendingReview, n)
-			}
-		}
-		frontier = nextFrontier
+	pendingReview, err := ci.queryCascade(ctx, entityID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "cascade_invalidator: query cascade", err)
 	}
-
 	if len(pendingReview) == 0 {
 		return nil, nil
 	}
@@ -68,46 +84,27 @@ func (ci *CascadeInvalidator) Invalidate(ctx context.Context, entityID int64) ([
 	return pendingReview, nil
 }
 
-// queryNeighbors 查询实体的一阶相邻实体（双向边）。
-func (ci *CascadeInvalidator) queryNeighbors(ctx context.Context, ids []int64) ([]int64, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-
-	// 构造 IN 子句（小批量，最多 maxCascadeHops 跳×关系数，不会过大）
-	placeholders := make([]any, 0, len(ids)*2)
-	inClause := ""
-	for i, id := range ids {
-		if i > 0 {
-			inClause += ","
-		}
-		inClause += "?"
-		placeholders = append(placeholders, id)
-	}
-
-	query := fmt.Sprintf(
-		`SELECT DISTINCT target_id FROM semantic_relations WHERE source_id IN (%s) AND target_id != 0
-         UNION
-         SELECT DISTINCT source_id FROM semantic_relations WHERE target_id IN (%s) AND source_id != 0`,
-		inClause, inClause,
-	)
-	allArgs := append(placeholders, placeholders...)
-
-	rows, err := ci.db.QueryContext(ctx, query, allArgs...)
+// queryCascade 执行 cascadeCTEQuery，返回种子实体 maxCascadeHops 跳以内的所有相邻实体
+// （不含种子自身，即 hop=0 的行被 WHERE hop > 0 排除）。
+func (ci *CascadeInvalidator) queryCascade(ctx context.Context, entityID int64) ([]int64, error) {
+	rows, err := ci.db.QueryContext(ctx, cascadeCTEQuery, entityID, entityID, maxCascadeHops)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "cascade_invalidator: query context", err)
 	}
 	defer rows.Close()
 
-	var neighbors []int64
+	var ids []int64
 	for rows.Next() {
-		var n int64
-		if err := rows.Scan(&n); err != nil {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "cascade_invalidator: scan row", err)
 		}
-		neighbors = append(neighbors, n)
+		ids = append(ids, id)
 	}
-	return neighbors, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "cascade_invalidator: rows iteration", err)
+	}
+	return ids, nil
 }
 
 // markPendingReview 批量更新 status='pending_review'（仅对 status='active' 的实体）。

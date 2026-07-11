@@ -50,12 +50,13 @@ type codeActAdapter struct {
 
 func (a *codeActAdapter) Execute(ctx context.Context, req agent.CodeActRequest) (*agent.CodeActResult, error) {
 	result, err := a.inner.Execute(ctx, protocol.CodeActRequest{
-		Language:     req.Language,
-		Code:         req.Code,
-		CapabilityID: req.CapabilityID,
-		SessionID:    req.SessionID,
-		AgentID:      req.AgentID,
-		TaintLevel:   req.TaintLevel,
+		Language:        req.Language,
+		Code:            req.Code,
+		CapabilityID:    req.CapabilityID,
+		SessionID:       req.SessionID,
+		AgentID:         req.AgentID,
+		TaintLevel:      req.TaintLevel,
+		StatefulSession: req.StatefulSession,
 	})
 	if err != nil {
 		return nil, err //nolint:wrapcheck

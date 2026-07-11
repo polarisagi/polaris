@@ -217,6 +217,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		sb.Cfg,
 		cronRepo,
 		sb.Layout.Workspace,
+		&mcpAsyncTaskAdapter{inner: mcpMgr},
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

@@ -95,20 +95,22 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			lang := strings.TrimPrefix(toolName, "code_act:")
 			// Args JSON 应包含 {"code":"...","capability_id":"..."}
 			var codeArgs struct {
-				Code         string           `json:"code"`
-				CapabilityID string           `json:"capability_id"`
-				TaintLevel   types.TaintLevel `json:"taint_level"`
+				Code            string           `json:"code"`
+				CapabilityID    string           `json:"capability_id"`
+				TaintLevel      types.TaintLevel `json:"taint_level"`
+				StatefulSession bool             `json:"stateful_session"` // GD-4-002
 			}
 			if err := json.Unmarshal(args, &codeArgs); err != nil {
 				return nil, apperr.Wrap(apperr.CodeInvalidInput, "code_act: unmarshal args", err)
 			}
 			caResult, err := a.codeAct.Execute(ctx, CodeActRequest{
-				Language:     lang,
-				Code:         codeArgs.Code,
-				CapabilityID: codeArgs.CapabilityID,
-				SessionID:    a.sCtx.SessionID,
-				AgentID:      a.ID,
-				TaintLevel:   codeArgs.TaintLevel,
+				Language:        lang,
+				Code:            codeArgs.Code,
+				CapabilityID:    codeArgs.CapabilityID,
+				SessionID:       a.sCtx.SessionID,
+				AgentID:         a.ID,
+				TaintLevel:      codeArgs.TaintLevel,
+				StatefulSession: codeArgs.StatefulSession,
 			})
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "code_act: execute failed", err)

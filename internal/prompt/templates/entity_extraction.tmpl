@@ -1,6 +1,11 @@
 Analyze the following AI agent session log and extract:
 1. Named entities (type MUST be one of: user_preference, constraint, temporary_conclusion, entity)
-2. Relations between entities (type MUST be one of: depends_on, configures, conflicts_with, relates_to)
+2. Relations between entities (type MUST be one of: depends_on, configures, conflicts_with, relates_to, derived_from)
+
+Use "derived_from" specifically when one entity is an inference/conclusion drawn FROM another
+(e.g. a summary derived from raw facts, a decision derived from a preference) — this is distinct
+from "depends_on" (a runtime/configuration dependency). Tag derivation relations precisely: they
+drive cascade invalidation when the source entity is later revised.
 
 Return ONLY valid JSON in this format:
 {"entities":[{"name":"...","type":"...","confidence":0.9}],"relations":[{"from":"...","to":"...","type":"...","confidence":0.8}]}
