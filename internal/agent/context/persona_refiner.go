@@ -10,11 +10,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/prompt"
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -149,15 +152,33 @@ func (pr *PersonaRefiner) RefineAtSessionEnd(ctx context.Context, msgs []types.M
 		sb.WriteByte('\n')
 	}
 
-	prompt := "Based on the following conversation, describe the user's key characteristics in 1-2 sentences. Focus on communication style, expertise level, and preferences. Output ONLY the description.\n\n" + sb.String()
+	// Prompt 统一走 internal/prompt/templates 管理（A-12 修复）；转录文本（sb.String()）
+	// 来自用户/助手真实对话内容，非完全可信，用 prompt.NewRandomBoundary() 生成的随机
+	// 边界符包裹，防止其中夹带的类指令文本被 LLM 误当作系统指令执行。
+	boundaryStart, boundaryEnd := prompt.NewRandomBoundary()
+	userPrompt, tmplErr := templates.Render("persona_refine.tmpl", map[string]string{
+		"BoundaryStart": boundaryStart,
+		"BoundaryEnd":   boundaryEnd,
+		"Transcript":    sb.String(),
+	})
+	if tmplErr != nil {
+		return nil //nolint:nilerr // 模板渲染失败不阻断会话结束流程，同 LLM 失败处理方式
+	}
 
-	resp, err := safecall.Infer(ctx, pr.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(200))
+	resp, err := safecall.Infer(ctx, pr.provider, []types.Message{{Role: "user", Content: userPrompt}}, types.WithMaxTokens(200))
 	if err != nil {
 		return nil //nolint:nilerr // LLM 失败不阻断会话结束流程
 	}
 
+	// A-01 修复：LLM 返回空/纯空白内容时保留旧值，不用空字符串静默覆盖已有画像摘要。
+	summary := strings.TrimSpace(resp.Content)
+	if summary == "" {
+		slog.Warn("persona refiner: empty LLM response, keep previous interaction summary")
+		return nil
+	}
+
 	pr.mu.Lock()
-	pr.profile.InteractionSummary = strings.TrimSpace(resp.Content)
+	pr.profile.InteractionSummary = summary
 	pr.mu.Unlock()
 	return nil
 }
