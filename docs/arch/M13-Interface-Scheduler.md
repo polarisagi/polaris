@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:300 对内调度 / 3:418 MCP / 6:436 (SOFT)降级 / 7:461 跨模块契约 / 8:478 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:300 对内调度 / 3:420 MCP / 6:438 (SOFT)降级 / 7:463 跨模块契约 / 8:480 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -331,6 +331,8 @@ FeatureGate: `FeatureWebUI` 控制是否注册 `/` 路由。关闭时仅 REST AP
 TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatchFn)` 启动后台扫描 goroutine，每 5s 扫 `scheduler:task:` 前缀，CAS（Compare-And-Swap，比较并交换） 更新 storedTask.Status: pending → running → completed/failed；崩溃重启后自动重试直至 MaxAttempts）。幂等键 = Task.IdempotencyKey。
 
 **Agent 任务直通**（`protocol.AgentInvoker`）：当 `task.Type == "agent"` 时，扫描循环优先调用 `AgentInvoker.InvokeAgent(ctx, string(task.Payload))` 而非 `dispatchFn`。通过 `SQLiteScheduler.SetAgentInvoker` 注入（`boot_agent.go` 启动时绑定 `agentInvokerAdapter`）。未注入或任务类型非 "agent" 时回落 `dispatchFn`。接口定义见 `internal/protocol/interfaces.go`。
+
+**终态通知投递（GD-13-001，最小实现）**：`SQLiteScheduler.notifyTaskTerminal` 在任务进入终态（重试耗尽的失败 / 成功完成，`Pool=="intent_handler"` 的交互式任务除外——用户已通过 SSE 实时可见，无需外发通知）时，向注入的 `protocol.OutboxWriter` 写入一条 `protocol.TopicNotification="notification"` 事件。消费端为新增的 `internal/automation/notify.Dispatcher`（复用既有 `internal/store/outbox_worker.go` `OutboxWorker` 消费框架及其指数退避重试，未新建独立总线）：反序列化 `NotificationEvent` payload，从 `PreferenceReader`（`016_preferences` 表）读取用户配置的 Webhook URL，HTTP POST 投递；payload 畸形或未配置 Webhook 视为软跳过（非错误，不重试），非 2xx 响应或网络错误返回 error 交由 `OutboxWorker` 既有重试机制处理。IM/邮件渠道复用 `internal/channel` 留待后续迭代，本轮只做 Webhook 一种。
 
 ### 2.2 定时任务
 

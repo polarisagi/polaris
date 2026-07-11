@@ -1,7 +1,7 @@
 # 模块 8: Multi-Agent Orchestrator
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 黑板+CAS(核心) / 2:106 Supervisor / 2-bis:125 常驻角色Agent / 3:142 编排模式 / 3-bis:172 SwarmRouter / 3-ter:210 PipelineOrchestrator / 4:281 AgentCard / 5:295 Task分解 / 8:304 拓扑自演化 / 10:319 (SOFT)降级 / 11:338 跨模块契约 / 11.2:318 已知实现缺口 / 12:376 Custom Agent / 13:414 CSV Fan-out -->
+<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 黑板+CAS(核心) / 2:106 Supervisor / 2-bis:125 常驻角色Agent / 3:142 编排模式 / 3-bis:172 SwarmRouter / 3-ter:210 PipelineOrchestrator / 4:281 AgentCard / 5:295 Task分解 / 8:304 拓扑自演化 / 10:319 (SOFT)降级 / 11:338 跨模块契约 / 11.2:318 已知实现缺口 / 12:378 Custom Agent / 13:416 CSV Fan-out -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
@@ -356,6 +356,8 @@ TopologyFitness 评估维度：成功率、平均延迟、平均 token 成本、
 **结论：不需要 SharedMemoryBus。**
 
 inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所有子 Agent 共享同一 SQLite 数据库，`episodic_events`/`semantic_memory`/`reflection_memory` 等表天然跨 Agent 可见。Agent 间知识传递通过 Blackboard `Result` payload + 各 Agent 读取 EventLog 实现。引入独立的 SharedMemoryBus 会引入额外同步开销并与 MutationBus 产生写路径重叠，违反单写者原则（HE-Rule-6）。
+
+**GD-14-001 补充（多 Agent 协同任务共享记忆命名空间，最小实现）**：以上结论不变——新增的 Namespace 机制不是新总线，而是在既有 EpisodicMem 分区键（`ev.TaskID != q.SessionID`）上做的一层"可选联合"。`TaskEntry.Namespace`（DDL `007_tasks.sql` 新增 `namespace` 列）由任务发布方指定（CSV Fan-out 为同批任务统一赋值 `jobID`）；`SQLiteBlackboard.PeekTask` 与内存版 `Blackboard.PeekTask` 在返回的 `TaskSnapshot` 中携带该字段；`Worker.tryClaimAndExecute` 认领任务后调用新增的 `AgentKernel.SetMemoryNamespace(ns)` 注入子 Agent；子 Agent 写 Episodic 事件时以 NamespaceID 替代 SessionID 作为分区键（`Agent.memoryPartitionKey()`），使同一批协同子任务的 4 类核心写入（感知/计划/反思/执行完成）互相可见。2PC 幂等检查与 FastPath 缓存不参与替换，仍用 SessionID，保持崩溃恢复语义不变。详见 M5 §3.1。
 
 ---
 
