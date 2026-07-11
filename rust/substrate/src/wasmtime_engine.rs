@@ -86,11 +86,13 @@ impl EngineState {
         // 人为延长 Engine 生命周期（wasmtime 官方文档对 increment_epoch 的
         // 推荐用法）；Engine 被回收后 upgrade() 返回 None，线程自行退出。
         let weak = engine.weak();
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_millis(EPOCH_TICK_MS));
-            match weak.upgrade() {
-                Some(e) => e.increment_epoch(),
-                None => break,
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(EPOCH_TICK_MS));
+                match weak.upgrade() {
+                    Some(e) => e.increment_epoch(),
+                    None => break,
+                }
             }
         });
 
@@ -468,13 +470,13 @@ mod tests {
                 wasm.len(),
                 input.as_ptr(),
                 std::ptr::null(),
-                16,             // max_pages
-                u64::MAX / 2,   // max_fuel：刻意给到近乎无限，确保先触发的是
-                                // epoch 墙钟而非 fuel 耗尽，测试的才是本次要
-                                // 验证的机制
-                0,              // network_allowed
-                1024,           // max_output_bytes
-                200,            // timeout_ms：200ms
+                16,           // max_pages
+                u64::MAX / 2, // max_fuel：刻意给到近乎无限，确保先触发的是
+                // epoch 墙钟而非 fuel 耗尽，测试的才是本次要
+                // 验证的机制
+                0,    // network_allowed
+                1024, // max_output_bytes
+                200,  // timeout_ms：200ms
                 &mut out_json,
                 &mut out_json_len,
                 &mut out_err,
