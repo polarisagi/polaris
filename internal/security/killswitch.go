@@ -14,27 +14,18 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // KillSwitch — 三阶段紧急停止协议。
 // 架构文档: docs/arch/M11-Policy-Safety.md §4
-
-// KillState 紧急停止状态。
-type KillState int
-
-const (
-	KillNormal   KillState = iota
-	KillThrottle           // Stage 1: 降级 Tier1, max_steps=3, 禁止写
-	KillPause              // Stage 2: 停止新任务, 保留状态, 通知
-	KillFullStop           // Stage 3: 停止所有 goroutine, 写入 kill event
-)
 
 // KillSwitch 三阶段 FSM。
 // Stage 1 THROTTLE: [TokenBurnRate] > 2x baseline, 连续错误 > 5
 // Stage 2 PAUSE: Stage 1 持续 > 10min, 安全违规, 不可逆操作被尝试
 // Stage 3 FULLSTOP: Stage 2 未在 15min 内审批, 致命安全违规, 管理员手动
 type KillSwitch struct {
-	state  KillState
+	state  types.KillState
 	reason string
 	actor  string
 
@@ -51,7 +42,7 @@ type KillSwitch struct {
 
 	// StateChangeCallback 在 KillSwitch 状态变迁时回调，供 M3 Observability 更新
 	// polaris_killswitch_stage Prometheus Gauge。非 nil 即启用。
-	StateChangeCallback func(newState KillState, reason string)
+	StateChangeCallback func(newState types.KillState, reason string)
 
 	// TripleCtrlCGuard 状态
 	mu          sync.Mutex
@@ -65,7 +56,7 @@ type KillSwitch struct {
 }
 
 // GetState 返回当前 KillSwitch 阶段的线程安全快照，供 M4/M8/M13 读 gauge 降级响应。
-func (ks *KillSwitch) GetState() KillState {
+func (ks *KillSwitch) GetState() types.KillState {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	return ks.state
@@ -73,7 +64,7 @@ func (ks *KillSwitch) GetState() KillState {
 
 func NewKillSwitch(dataDir string, tbr *metrics.TokenBurnRate) *KillSwitch {
 	return &KillSwitch{
-		state:          KillNormal,
+		state:          types.KillNormal,
 		reason:         "System OK",
 		actor:          "system",
 		stateEnteredAt: time.Now(),
@@ -91,31 +82,31 @@ func IsFullStopFilePresent(dataDir string) bool {
 }
 
 // CheckAndAct 按优先级检查触发条件并执行状态转移（持锁）。
-func (ks *KillSwitch) CheckAndAct() KillState {
+func (ks *KillSwitch) CheckAndAct() types.KillState {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	return ks.checkAndActLocked()
 }
 
 // checkAndActLocked 在 mu 已持有时执行状态检查与转移（内部使用）。
-func (ks *KillSwitch) checkAndActLocked() KillState {
+func (ks *KillSwitch) checkAndActLocked() types.KillState {
 	if ks.shouldFullStopLocked() {
-		if ks.state != KillFullStop {
-			ks.transitionLocked(KillFullStop, "triggered full stop conditions")
+		if ks.state != types.KillFullStop {
+			ks.transitionLocked(types.KillFullStop, "triggered full stop conditions")
 		}
-		return KillFullStop
+		return types.KillFullStop
 	}
 	if ks.shouldPauseLocked() {
-		if ks.state < KillPause {
-			ks.transitionLocked(KillPause, "triggered pause conditions")
+		if ks.state < types.KillPause {
+			ks.transitionLocked(types.KillPause, "triggered pause conditions")
 		}
-		return KillPause
+		return types.KillPause
 	}
 	if ks.shouldThrottleLocked() {
-		if ks.state < KillThrottle {
-			ks.transitionLocked(KillThrottle, "triggered throttle conditions")
+		if ks.state < types.KillThrottle {
+			ks.transitionLocked(types.KillThrottle, "triggered throttle conditions")
 		}
-		return KillThrottle
+		return types.KillThrottle
 	}
 	return ks.state
 }
@@ -123,7 +114,7 @@ func (ks *KillSwitch) checkAndActLocked() KillState {
 // triggerFullStop 触发 FullStop，调用 transitionLocked（须在 mu 持有时调用）。
 func (ks *KillSwitch) triggerFullStop(actor, reason string) error {
 	ks.actor = actor
-	ks.transitionLocked(KillFullStop, reason)
+	ks.transitionLocked(types.KillFullStop, reason)
 	return nil
 }
 
@@ -131,7 +122,7 @@ func (ks *KillSwitch) triggerFullStop(actor, reason string) error {
 func (ks *KillSwitch) IsSealed() bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	return ks.state == KillFullStop
+	return ks.state == types.KillFullStop
 }
 
 func (ks *KillSwitch) shouldThrottleLocked() bool {
@@ -147,7 +138,7 @@ func (ks *KillSwitch) shouldPauseLocked() bool {
 	if ks.monitors.safetyViolations > 0 || ks.monitors.irreversibleAttempts > 0 {
 		return true
 	}
-	if ks.state == KillThrottle && time.Since(ks.stateEnteredAt) > 10*time.Minute {
+	if ks.state == types.KillThrottle && time.Since(ks.stateEnteredAt) > 10*time.Minute {
 		return true
 	}
 	return false
@@ -158,7 +149,7 @@ func (ks *KillSwitch) shouldFullStopLocked() bool {
 	if ks.monitors.fatalViolations > 0 {
 		return true
 	}
-	if ks.state == KillPause && time.Since(ks.stateEnteredAt) > 15*time.Minute {
+	if ks.state == types.KillPause && time.Since(ks.stateEnteredAt) > 15*time.Minute {
 		return true
 	}
 	if ks.tbr != nil && ks.tbr.CheckThrottle() >= metrics.ThrottleStage3 {
@@ -170,12 +161,12 @@ func (ks *KillSwitch) shouldFullStopLocked() bool {
 
 // transitionLocked 执行状态转移，须在 mu 持有时调用。
 // 回调与通知在锁内执行；writeFullStopFile 涉及系统调用，可接受短暂锁持有。
-func (ks *KillSwitch) transitionLocked(s KillState, reason string) {
+func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) {
 	ks.state = s
 	ks.reason = reason
 	ks.stateEnteredAt = time.Now()
 
-	if s == KillFullStop {
+	if s == types.KillFullStop {
 		ks.writeFullStopFile(reason)
 	}
 
@@ -241,7 +232,7 @@ func (ks *KillSwitch) ManualFullStop(actor, reason string) {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	ks.actor = actor
-	ks.transitionLocked(KillFullStop, reason)
+	ks.transitionLocked(types.KillFullStop, reason)
 }
 
 // Notifier 通知接口（Slack/Email/PagerDuty）。
@@ -304,7 +295,7 @@ func (ks *KillSwitch) CheckKILLSWITCHFile() {
 func (ks *KillSwitch) IsFullStopped() bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	return ks.state == KillFullStop
+	return ks.state == types.KillFullStop
 }
 
 // OnRecovery 注册恢复回调
@@ -335,7 +326,7 @@ func (ks *KillSwitch) removeFullStopFile() error {
 // ManualRecover 线程安全地手动触发恢复（解除封印）。
 func (ks *KillSwitch) ManualRecover(ctx context.Context, actor, reason string) error {
 	ks.mu.Lock()
-	wasSealed := ks.state == KillFullStop
+	wasSealed := ks.state == types.KillFullStop
 
 	if wasSealed {
 		if err := ks.removeFullStopFile(); err != nil {
@@ -350,7 +341,7 @@ func (ks *KillSwitch) ManualRecover(ctx context.Context, actor, reason string) e
 	ks.monitors.safetyViolations = 0
 	ks.monitors.fatalViolations = 0
 	ks.monitors.irreversibleAttempts = 0
-	ks.transitionLocked(KillNormal, reason)
+	ks.transitionLocked(types.KillNormal, reason)
 	cb := ks.recoveryCallback
 	ks.mu.Unlock()
 

@@ -14,14 +14,15 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-type mockToolRegistry struct{}
+type mockToolExecutor struct {
+	ExecuteWithTaintCalled bool
+}
 
-func (r *mockToolRegistry) Register(_ types.Tool) error { return nil }
-func (r *mockToolRegistry) Lookup(name string) (types.Tool, error) {
+func (r *mockToolExecutor) Lookup(name string) (types.Tool, error) {
 	return types.Tool{Name: name, Source: types.ToolBuiltin, Capability: types.CapReadOnly}, nil
 }
-func (r *mockToolRegistry) List() []types.Tool { return nil }
-func (r *mockToolRegistry) ExecuteTool(_ context.Context, name string, _ []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+func (r *mockToolExecutor) ExecuteWithTaint(_ context.Context, name string, _ []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	r.ExecuteWithTaintCalled = true
 	return &types.ToolResult{Success: true, Output: []byte(`{"ok":true}`)}, nil
 }
 
@@ -30,8 +31,9 @@ func TestAgent_HappyPath(t *testing.T) {
 	agent.InjectProvider(&mockProvider{})
 	// 注入 allow-all PolicyGate，使 L1-Policy 通过
 	agent.InjectPolicyGate(&allowPolicyGate{})
-	// 注入 mockToolRegistry，使 S_EXECUTE 工具调用也通过
-	agent.InjectToolRegistry(&mockToolRegistry{})
+	// 注入 mockToolExecutor，使 S_EXECUTE 工具调用也通过
+	mockExec := &mockToolExecutor{}
+	agent.InjectToolExecutor(mockExec)
 	// 注入合法 fsm.DAGModel，使 L0/L1 通过后 ValidateOk 被推送
 	agent.sCtx.DAGModel = &fsm.DAGModel{
 		Nodes: []dag.ExecNode{{ID: "n1", ToolName: "read_file"}},
@@ -55,6 +57,10 @@ func TestAgent_HappyPath(t *testing.T) {
 		// 校验终态
 		if agent.StateMachine().Current() != types.AgentStateComplete {
 			t.Errorf("expected state Complete, got %v", agent.StateMachine().Current())
+		}
+		// 验证 ExecuteWithTaint 被正确调用一次
+		if !mockExec.ExecuteWithTaintCalled {
+			t.Fatalf("expected ExecuteWithTaint to be called")
 		}
 
 		// 校验历史链路
@@ -229,7 +235,7 @@ func TestAgent_MemoryIntegration_HappyPath(t *testing.T) {
 	agent := NewAgentWithDefaults("test-mem-agent")
 	agent.InjectProvider(&mockProvider{})
 	agent.InjectPolicyGate(&allowPolicyGate{})
-	agent.InjectToolRegistry(&mockToolRegistry{})
+	agent.InjectToolExecutor(&mockToolExecutor{})
 
 	mem := &mockMemoryForIntegration{
 		episodic: &mockEpisodicMemForIntegration{},

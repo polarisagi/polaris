@@ -76,7 +76,7 @@ func TestParseTestScore_AllFail(t *testing.T) {
 
 func TestNewPlannerPool(t *testing.T) {
 	ch := make(chan protocol.MemoryWhisper, 1)
-	pool := NewPlannerPool("fix bug", "code_act", nil, ch)
+	pool := NewPlannerPool("fix bug", "code_act", nil, ch, nil)
 	if pool == nil {
 		t.Fatal("expected non-nil pool")
 	}
@@ -95,7 +95,7 @@ func TestNewPlannerPool(t *testing.T) {
 
 func TestPlannerPool_Run_NilWhisperChan(t *testing.T) {
 	// nil whisperChan → 立即返回，不阻塞
-	pool := NewPlannerPool("goal", "plan", nil, nil)
+	pool := NewPlannerPool("goal", "plan", nil, nil, nil)
 	done := make(chan struct{})
 	go func() {
 		pool.Run(context.Background())
@@ -111,7 +111,7 @@ func TestPlannerPool_Run_NilWhisperChan(t *testing.T) {
 func TestPlannerPool_Run_NilProvider_FallbackEngineB(t *testing.T) {
 	// taskType != "code_act" → workerEngineB；provider nil 时走 fallback content
 	ch := make(chan protocol.MemoryWhisper, 10)
-	pool := NewPlannerPool("plan something", "plan", nil, ch)
+	pool := NewPlannerPool("plan something", "plan", nil, ch, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pool.Run(ctx)
@@ -124,7 +124,7 @@ func TestPlannerPool_Run_MockProvider_EngineB(t *testing.T) {
 	// 有 provider 响应时，whisper 应被推送且 Source 正确
 	prov := &mockProvider{resp: &types.ProviderResponse{Content: "detailed plan"}}
 	ch := make(chan protocol.MemoryWhisper, 10)
-	pool := NewPlannerPool("refactor", "plan", prov, ch)
+	pool := NewPlannerPool("refactor", "plan", prov, ch, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pool.Run(ctx)
@@ -145,7 +145,7 @@ func TestPlannerPool_Run_BestScoreWins(t *testing.T) {
 	// 三个 worker 中只要有一个返回高分，最终应是高分内容
 	prov := &mockProvider{resp: &types.ProviderResponse{Content: "best plan"}}
 	ch := make(chan protocol.MemoryWhisper, 10)
-	pool := NewPlannerPool("goal", "plan", prov, ch)
+	pool := NewPlannerPool("goal", "plan", prov, ch, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pool.Run(ctx)

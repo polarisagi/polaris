@@ -44,7 +44,7 @@ func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateCon
 	for i := len(sCtx.SagaLog) - 1; i >= 0; i-- {
 		step := sCtx.SagaLog[i]
 		if step.UndoFn != "" && sCtx.Tools != nil {
-			_, err := sCtx.Tools.ExecuteTool(ctx, step.UndoFn, step.Args, sCtx.MaxTaintLevel)
+			_, err := sCtx.Tools.ExecuteWithTaint(ctx, step.UndoFn, step.Args, sCtx.MaxTaintLevel)
 			if err != nil {
 				slog.Warn("Saga rollback failed for step", "node_id", step.NodeID, "tool", step.UndoFn, "err", err)
 				if firstErr == nil {

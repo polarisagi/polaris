@@ -24,9 +24,9 @@ type DAGValidationContext struct {
 	ActiveTaintLevel types.TaintLevel
 	// PolicyGate 是 Cedar 策略引擎的 Go 接口（L1 确定性 Cedar 校验）。
 	PolicyGate protocol.PolicyGate
-	// ToolRegistry 用于 L1_taint 校验中动态判断工具的只读属性（替代硬编码白名单）。
+	// ToolExecutor 用于 L1_taint 校验中动态判断工具的只读属性（替代硬编码白名单）。
 	// 为 nil 时退化为内置白名单兜底。
-	ToolRegistry protocol.ToolRegistry
+	ToolExecutor protocol.AgentToolExecutor
 	// AgentID 用于 PolicyGate.Review 中的 principal 字段。
 	AgentID string
 	// SessionID 用于审计事件的关联查询。
@@ -159,7 +159,7 @@ func validateTaintGate(vCtx *DAGValidationContext) error {
 				}
 			}
 			// SanitizeToSafe 正确拒绝——检查工具是否只读；非只读则阻断
-			if !isReadOnlyTool(node.ToolName, vCtx.ToolRegistry) {
+			if !isReadOnlyTool(node.ToolName, vCtx.ToolExecutor) {
 				return &DAGValidationError{
 					Layer:  "L1_taint",
 					NodeID: node.ID,
@@ -169,7 +169,7 @@ func validateTaintGate(vCtx *DAGValidationContext) error {
 		} else {
 			// TaintMedium：仅拦截 write_network（外发请求）；read_only / write_local 允许通过
 			// 依据：M04 §3 Layer A——中等可信度数据不应驱动网络外发，但本地操作可接受
-			if isWriteNetworkTool(node.ToolName, vCtx.ToolRegistry) {
+			if isWriteNetworkTool(node.ToolName, vCtx.ToolExecutor) {
 				return &DAGValidationError{
 					Layer:  "L1_taint",
 					NodeID: node.ID,
@@ -183,7 +183,7 @@ func validateTaintGate(vCtx *DAGValidationContext) error {
 
 // isWriteNetworkTool 判断工具是否会触发网络外发（CapWriteNetwork 或以上）。
 // 优先查询 ToolRegistry；未注册或 registry 为 nil 时使用内置黑名单（fail-closed）。
-func isWriteNetworkTool(toolName string, registry protocol.ToolRegistry) bool {
+func isWriteNetworkTool(toolName string, registry protocol.AgentToolExecutor) bool {
 	if registry != nil {
 		if t, err := registry.Lookup(toolName); err == nil {
 			return t.Capability >= types.CapWriteNetwork
@@ -203,7 +203,7 @@ func isWriteNetworkTool(toolName string, registry protocol.ToolRegistry) bool {
 // isReadOnlyTool 判断工具是否为纯读操作（不写入外部状态）。
 // 优先查询 ToolRegistry 的 Capability 字段（动态，覆盖所有注册工具）。
 // registry 为 nil 或工具未找到时退化到内置白名单（防止新工具被误放行）。
-func isReadOnlyTool(toolName string, registry protocol.ToolRegistry) bool {
+func isReadOnlyTool(toolName string, registry protocol.AgentToolExecutor) bool {
 	if registry != nil {
 		if t, err := registry.Lookup(toolName); err == nil {
 			return t.Capability <= types.CapReadOnly

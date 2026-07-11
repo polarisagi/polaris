@@ -16,7 +16,6 @@ import (
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -79,12 +78,12 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 		// 1.5 KillSwitch Check
 		stage := metrics.GlobalKillswitchStage.Load()
 		switch stage {
-		case int32(security.KillFullStop):
+		case int32(types.KillFullStop):
 			a.sm.ForceState(types.AgentStateFailed)
 			return apperr.New(apperr.CodeInternal, "killswitch: stage=FullStop, refusing new inference")
-		case int32(security.KillPause):
+		case int32(types.KillPause):
 			return apperr.New(apperr.CodeInternal, "killswitch: stage=Pause, suspending task")
-		case int32(security.KillThrottle):
+		case int32(types.KillThrottle):
 			// Stage 1 降级：收紧步骤预算至 3，标记禁用网络写工具（M03 §5 ThrottlePolicy）。
 			if a.sCtx.MaxStepsLimit == 0 || a.sCtx.MaxStepsLimit > 3 {
 				a.sCtx.MaxStepsLimit = 3

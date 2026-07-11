@@ -6,13 +6,11 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-type
-
 // Blackboard 是多 Agent 协调黑板。
 // 所有 Agent 间通信走 schema event（禁止 P2P 自然语言），自然语言仅作 payload content。
 // 常量: DefaultLeaseTTL=60s, HeartbeatInterval=15s(±5s jitter), ReaperScanInterval=1s。
 // 优先级: 0=用户交互, 1=前台辅助, 2=后台优化, 3=Auto-Curriculum。
-Blackboard interface {
+type Blackboard interface {
 	PostTask(ctx context.Context, task *types.TaskEntry) error
 	PostBatch(ctx context.Context, tasks []*types.TaskEntry) error
 	ClaimTask(ctx context.Context, taskID, agentID string) (bool, error)
@@ -37,11 +35,9 @@ Blackboard interface {
 	MaxActivePriority() int
 }
 
-type
-
 // Scheduler 是任务调度器。
 // CAS 抢占: UPDATE tasks SET state='running', worker_id=? WHERE id=? AND state='pending'
-Scheduler interface {
+type Scheduler interface {
 	Submit(ctx context.Context, task types.Task) (string, error)
 	Get(ctx context.Context, id string) (*types.Task, error)
 	Cancel(ctx context.Context, id string) error

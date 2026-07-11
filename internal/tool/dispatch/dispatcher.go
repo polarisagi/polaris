@@ -54,6 +54,28 @@ func (d *Dispatcher) Execute(ctx context.Context, name string, args []byte) (*ty
 	return d.runChain(ctx, entry, args)
 }
 
+// ExecuteWithTaint 与 Execute 走同一条拦截器链（SchemaValidate → Audit → route），
+// 区别在于允许调用方（Agent Kernel）传入运行时动态计算出的污点级别，
+// 与 catalog 静态声明的 TaintLevel 取 only-up（只升不降，遵循 HE-7 污点传播不变量）。
+func (d *Dispatcher) ExecuteWithTaint(ctx context.Context, name string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	entry, ok := d.catalog.Lookup(name)
+	if !ok {
+		return nil, apperr.New(apperr.CodeNotFound, "dispatch: tool not found: "+name)
+	}
+	if taintLevel > entry.TaintLevel {
+		entry.TaintLevel = taintLevel
+	}
+	return d.runChain(ctx, entry, args)
+}
+
+// Lookup 供 Agent Kernel 等调用方查询工具元数据。
+func (d *Dispatcher) Lookup(name string) (types.Tool, error) {
+	if d.toolReg == nil {
+		return types.Tool{}, apperr.New(apperr.CodeInternal, "dispatch: tool registry not configured")
+	}
+	return d.toolReg.Lookup(name)
+}
+
 func (d *Dispatcher) runChain(ctx context.Context, entry protocol.CatalogEntry, args []byte) (*types.ToolResult, error) {
 	idx := 0
 	var next ExecFn

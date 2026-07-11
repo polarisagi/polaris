@@ -9,7 +9,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -45,6 +44,7 @@ import (
 	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/internal/swarm/planner"
 	"github.com/polarisagi/polaris/internal/swarm/supervisor"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -103,7 +103,7 @@ func buildAgent(
 	a.Config.IdleTimeoutSec = sb.Cfg.Thresholds.M4Kernel.SuspendIdleThresholdMin * 60
 	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
-	a.InjectToolRegistry(tb.ToolReg)
+	a.InjectToolExecutor(tb.Dispatcher)
 	a.InjectOutboxWriter(sb.Outbox)
 	a.SetAssembler(agentctx.NewAssembler(epAdapter, knowAdapter))
 	a.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
@@ -111,7 +111,9 @@ func buildAgent(
 		if whisperChan == nil {
 			return
 		}
-		pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan)
+		// tb.Dispatcher 同时满足 planner.ToolLookup（Lookup(name) (types.Tool, error)），
+		// 使 TaskDecomposer 能对 LLM 生成的 tool_name 做白名单校验（GR-7-002）。
+		pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan, tb.Dispatcher)
 		pool.Run(ctx)
 	})
 	a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
@@ -259,10 +261,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Skills: []string{"general"},
 	}, agent)
 
-	// 委托 tb.ToolReg.ExecuteTool（未注册工具由其内部 Lookup 显式拒绝，不静默放行），
+	// 委托 tb.Dispatcher.ExecuteWithTaint（未注册工具由其内部 Lookup 显式拒绝，不静默放行），
 	// 与 Dispatcher / Agent 直接 tool_call 共用同一条 PolicyGate→沙箱→执行 链路，不重复构造 ExecRequest。
 	dagExec := agentdag.NewDAGExecutor(func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-		return tb.ToolReg.ExecuteTool(ctx, toolName, args, taintLevel)
+		return tb.Dispatcher.ExecuteWithTaint(ctx, toolName, args, taintLevel)
 	}, nil)
 
 	// 注入 ScriptSkillCache + SkillExecutor，激活 System 1 FastPath 技能命中路径。
@@ -599,12 +601,12 @@ const notionTokenPrefKey = "connector_secret:notion_token"
 func resolveNotionToken(ctx context.Context, sysRepo *repo.SQLiteSystemRepository, vault *credential.Vault) (string, error) {
 	encrypted, err := sysRepo.GetPreference(ctx, notionTokenPrefKey)
 	if err != nil {
-		return "", fmt.Errorf("read notion token from preferences: %w", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "read notion token from preferences", err)
 	}
 	if encrypted != "" {
 		token, decErr := vault.Decrypt(encrypted)
 		if decErr != nil {
-			return "", fmt.Errorf("decrypt notion token: %w", decErr)
+			return "", apperr.Wrap(apperr.CodeInternal, "decrypt notion token", decErr)
 		}
 		if token != "" {
 			return token, nil
@@ -613,12 +615,12 @@ func resolveNotionToken(ctx context.Context, sysRepo *repo.SQLiteSystemRepositor
 
 	token := os.Getenv("NOTION_TOKEN")
 	if token == "" {
-		return "", fmt.Errorf("NOTION_TOKEN not set and no vault-stored token found")
+		return "", apperr.New(apperr.CodeNotFound, "NOTION_TOKEN not set and no vault-stored token found")
 	}
 
 	encToken, encErr := vault.Encrypt(token)
 	if encErr != nil {
-		return "", fmt.Errorf("encrypt notion token: %w", encErr)
+		return "", apperr.Wrap(apperr.CodeInternal, "encrypt notion token", encErr)
 	}
 	if err := sysRepo.UpsertPreference(ctx, notionTokenPrefKey, encToken); err != nil {
 		// 落盘失败不阻断本次调用——下次调用会再次读取 env 兜底，仅退化为

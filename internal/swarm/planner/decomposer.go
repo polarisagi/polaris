@@ -29,15 +29,28 @@ type decompositionResponse struct {
 	Tasks []subTask `json:"tasks"`
 }
 
+// ToolLookup 是 TaskDecomposer 校验 LLM 生成的 tool_name 是否合法所需的最小依赖
+// （消费方定义，符合 R1.4）。由 dispatch.Dispatcher 满足（Dispatcher.Lookup 签名与此一致）。
+type ToolLookup interface {
+	Lookup(name string) (types.Tool, error)
+}
+
+// agentRunSentinel 是 decomposer.tmpl 里约定的特殊 tool_name，代表"递归调用子 Agent
+// 处理该子任务"，不是 ToolRegistry 里注册的真实工具，白名单校验必须放行这个哨兵值。
+const agentRunSentinel = "agent:run"
+
 // TaskDecomposer 将高层目标分解为可执行的 DAG 节点列表。
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §8.2 Planner
 type TaskDecomposer struct {
 	provider protocol.Provider
+	// toolLookup 用于校验 LLM 生成的 tool_name 是否在工具目录中注册（GR-7-002 修复）。
+	// 可为 nil（测试/未接入工具目录场景），此时跳过白名单校验，行为与修复前一致。
+	toolLookup ToolLookup
 }
 
-// NewTaskDecomposer 构造分解器。
-func NewTaskDecomposer(provider protocol.Provider) *TaskDecomposer {
-	return &TaskDecomposer{provider: provider}
+// NewTaskDecomposer 构造分解器。toolLookup 可传 nil（跳过白名单校验）。
+func NewTaskDecomposer(provider protocol.Provider, toolLookup ToolLookup) *TaskDecomposer {
+	return &TaskDecomposer{provider: provider, toolLookup: toolLookup}
 }
 
 // Decompose 将 goal 分解为 []protocol.ExecNode，最多 8 个子任务。
@@ -107,7 +120,17 @@ func (d *TaskDecomposer) mapToExecNodes(tasks []subTask) ([]protocol.ExecNode, e
 	for _, t := range tasks {
 		toolName := t.ToolName
 		if toolName == "" {
-			toolName = "agent:run"
+			toolName = agentRunSentinel
+		}
+
+		// 白名单校验（GR-7-002）：LLM 生成的 tool_name 若不在工具目录中注册，
+		// 在规划阶段就拦截，不放到 DAG 执行阶段才失败。agentRunSentinel 是
+		// decomposer.tmpl 约定的特殊值（递归子 Agent），不经过工具目录，豁免校验。
+		if d.toolLookup != nil && toolName != agentRunSentinel {
+			if _, err := d.toolLookup.Lookup(toolName); err != nil {
+				return nil, apperr.New(apperr.CodeInvalidInput,
+					"task_decomposer: LLM produced unregistered tool name: "+toolName)
+			}
 		}
 
 		// 将 args 序列化为 JSON bytes

@@ -50,6 +50,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // SubstrateBundle 持有 §0.5~§4 所有 L0 基础设施产物。
@@ -60,7 +61,7 @@ type SubstrateBundle struct {
 	DataDir   string
 	Layout    config.DataLayout
 	Vault     *credential.Vault
-	PromptMgr *prompt.Manager
+	PromptMgr protocol.PromptFacade
 
 	// 硬件探针与可观测性（AutoConf 可 nil，Tier0 降级）
 	AutoConf *observability.AutoConfig
@@ -193,7 +194,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		}
 	})
 
-	ks.StateChangeCallback = func(newState security.KillState, _ string) {
+	ks.StateChangeCallback = func(newState types.KillState, _ string) {
 		metrics.GlobalKillswitchStage.Store(int32(newState))
 	}
 
@@ -617,7 +618,7 @@ func loadGateCedarPolicies(gate *policy.Gate, cfg config.PolicyConfig) error {
 
 	combined := hard + "\n\n" + soft + "\n\n" + memory
 	if err := gate.SyncCedarPolicies(combined); err != nil {
-		return fmt.Errorf("sync cedar policies failed: %w", err)
+		return apperr.Wrap(apperr.CodeInternal, "sync cedar policies failed", err)
 	}
 	return nil
 }

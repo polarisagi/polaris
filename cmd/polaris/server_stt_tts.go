@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -144,11 +144,11 @@ type sttAdapter struct {
 
 func (a *sttAdapter) Transcribe(samples []float32, sampleRate int) (chat.STTResult, error) {
 	if a.inner == nil {
-		return chat.STTResult{}, fmt.Errorf("stt engine not initialized")
+		return chat.STTResult{}, apperr.New(apperr.CodeUnimplemented, "stt engine not initialized")
 	}
 	res, err := a.inner.Transcribe(samples, sampleRate)
 	if err != nil {
-		return chat.STTResult{}, fmt.Errorf("transcribe failed: %w", err)
+		return chat.STTResult{}, apperr.Wrap(apperr.CodeInternal, "transcribe failed", err)
 	}
 	return chat.STTResult{
 		Text: res.Text,
@@ -166,11 +166,11 @@ type ttsAdapter struct {
 
 func (a *ttsAdapter) Generate(ctx context.Context, text string) ([]byte, error) {
 	if a.inner == nil {
-		return nil, fmt.Errorf("tts provider not initialized")
+		return nil, apperr.New(apperr.CodeUnimplemented, "tts provider not initialized")
 	}
 	res, err := a.inner.Generate(ctx, text)
 	if err != nil {
-		return nil, fmt.Errorf("generate failed: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "generate failed", err)
 	}
 	return res, nil
 }

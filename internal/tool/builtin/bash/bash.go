@@ -128,6 +128,11 @@ func ExecInSandbox(_ context.Context, sandboxCtx protocol.SandboxContext) ([]byt
 	return []byte(resp.Output), cmdErr, resp.SandboxMethod, nil
 }
 
+// ExecWithoutSandbox 在沙箱已被上游显式禁用（sandboxEnabled==false）时的最后防线执行路径。
+// XR-10 豁免说明：这是 RunSandboxedArgv/ExecInSandbox 不可用时的降级分支本身（调用方已经
+// 决定跳过沙箱），因此这里不能再次委托沙箱包装（会形成递归降级/无意义包装）；安全性由
+// 调用方负责（env 清理 + workDir 限制 + Linux namespace 隔离，见调用点 bash.go:93 注释），
+// 本函数只做裸执行。
 func ExecWithoutSandbox(ctx context.Context, command, workDir string, env []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = workDir

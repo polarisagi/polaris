@@ -78,7 +78,9 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 			if report.P0Fail > 0 {
 				slog.Warn("hitl_gateway: P0 regression failed, auto-denying patch", "checkpoint", p.ID)
 				resp := types.HITLResponse{Approved: false, Reason: "auto_denied_p0_regression_failed"}
-				_ = g.Respond(context.Background(), p.ID, resp)
+				if err := g.Respond(context.Background(), p.ID, resp); err != nil {
+					slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
+				}
 				return &resp, nil
 			}
 
@@ -127,7 +129,7 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	}
 	if g.notifier != nil {
 		concurrent.SafeGo(context.Background(), "automation.hitl.notify", func(ctx context.Context) {
-			_ = g.notifier.Notify(ctx, types.HITLNotification{
+			if err := g.notifier.Notify(ctx, types.HITLNotification{
 				CheckpointID: p.ID,
 				// TaskID 此前硬编码为空字符串，Slack/Email 通知里永远看不出是哪个
 				// Agent 发起的审批；HITLPrompt 补齐 AgentID 字段后一并带上
@@ -137,7 +139,9 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 				Risk:        p.CheckpointType,
 				Timeout:     p.DeadlineNs,
 				ReviewURL:   "/v1/hitl/review?id=" + p.ID,
-			})
+			}); err != nil {
+				slog.Error("hitl gateway: notify failed", "checkpoint", p.ID, "err", err)
+			}
 		})
 	}
 
@@ -161,11 +165,15 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 		switch action {
 		case "auto_approve":
 			resp := types.HITLResponse{Approved: true, Reason: "auto_approved_on_timeout"}
-			_ = g.Respond(context.Background(), p.ID, resp)
+			if err := g.Respond(context.Background(), p.ID, resp); err != nil {
+				slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
+			}
 			return &resp, nil
 		case "auto_deny":
 			resp := types.HITLResponse{Approved: false, Reason: "auto_denied_on_timeout"}
-			_ = g.Respond(context.Background(), p.ID, resp)
+			if err := g.Respond(context.Background(), p.ID, resp); err != nil {
+				slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
+			}
 			return &resp, nil
 		default: // "kill_pause" 或未配置
 			return nil, ctx.Err()

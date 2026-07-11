@@ -43,7 +43,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 	var callCount atomic.Int32
 
-	// 将 ToolRegistry.ExecuteTool 绑定为 dag.DAGExecutor 的工具执行函数
+	// 将 AgentToolExecutor.ExecuteWithTaint 绑定为 dag.DAGExecutor 的工具执行函数
 	toolExecFnInner := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 		tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
 		if token, ok := tokenVal.(*token.Token); ok && token != nil {
@@ -224,7 +224,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		}
 
 		start := time.Now()
-		res, err := a.toolRegistry.ExecuteTool(ctx, toolName, args, taintLevel)
+		res, err := a.toolRegistry.ExecuteWithTaint(ctx, toolName, args, taintLevel)
 		latencyMs := time.Since(start).Milliseconds()
 
 		// Adaptive Max-Steps: 为每次工具调用打分，低分时收紧步骤预算

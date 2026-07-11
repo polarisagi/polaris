@@ -14,6 +14,7 @@ import (
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -119,7 +120,7 @@ type episodicMemAdapter struct {
 func (a *episodicMemAdapter) Query(ctx context.Context, q string, maxTaint types.TaintLevel) ([]agentctx.ContextItem, error) {
 	res, err := a.ep.Query(ctx, types.EpisodicQuery{Semantic: q, MaxTaintLevel: maxTaint, K: 10})
 	if err != nil {
-		return nil, fmt.Errorf("query episodic memory: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "query episodic memory", err)
 	}
 	var items []agentctx.ContextItem
 	for _, r := range res {
@@ -157,7 +158,7 @@ func (a *knowledgeAdapter) Search(ctx context.Context, q string, depth int) ([]a
 	}
 	res, err := a.kb.Search(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("search knowledge base: %w", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "search knowledge base", err)
 	}
 	items := make([]agentctx.ContextItem, 0, len(res))
 	for _, ac := range res {

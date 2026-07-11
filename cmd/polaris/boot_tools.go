@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	polartool "github.com/polarisagi/polaris/internal/tool"
+	"github.com/polarisagi/polaris/internal/tool/dispatch"
 
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/memory/consolidation"
@@ -83,7 +84,8 @@ type ToolBundle struct {
 	// LLMInfer 通用 LLM 推理闭包（封装 sb.Router），供 SemanticCompressHandler/
 	// ExtensionLibrarianHandler/CodeAct SecurityAuditAgent(L2) 等多个消费方复用，
 	// 避免每处各自重新实现一份"prompt string → sb.Router.Infer" 的桥接闭包。
-	LLMInfer protocol.LLMInferFunc
+	LLMInfer   protocol.LLMInferFunc
+	Dispatcher *dispatch.Dispatcher
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -452,6 +454,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	activator := native.NewExtensionActivator(extRepo, nativeCogn, mcpMgr, nativeEmbedFn)
 	extensionBus := bus.New(installFSM, installMgr, activator, extRepo)
 
+	disp := dispatch.New(compCatalog, toolReg, skillExecutor)
+	disp.Use(dispatch.SchemaValidateInterceptor())
+	disp.Use(dispatch.AuditInterceptor(sb.AuditTrail))
+
 	return &ToolBundle{
 		ContainerSandbox:      containerSandbox,
 		InProcSandbox:         inProcSandbox,
@@ -481,6 +487,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Activator:             activator,
 		ExtensionBus:          extensionBus,
 		LLMInfer:              protocol.LLMInferFunc(llmInfer),
+		Dispatcher:            disp,
 	}, nil
 }
 

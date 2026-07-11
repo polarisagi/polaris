@@ -31,14 +31,14 @@ type PlannerPool struct {
 	decomposer  *TaskDecomposer
 }
 
-// NewPlannerPool 创建 PlannerPool。
-func NewPlannerPool(goal, taskType string, provider protocol.Provider, whisperChan chan<- protocol.MemoryWhisper) *PlannerPool {
+// NewPlannerPool 创建 PlannerPool。toolLookup 可传 nil（decomposer 跳过白名单校验）。
+func NewPlannerPool(goal, taskType string, provider protocol.Provider, whisperChan chan<- protocol.MemoryWhisper, toolLookup ToolLookup) *PlannerPool {
 	return &PlannerPool{
 		goal:        goal,
 		taskType:    taskType,
 		whisperChan: whisperChan,
 		provider:    provider,
-		decomposer:  NewTaskDecomposer(provider), // 自动注入
+		decomposer:  NewTaskDecomposer(provider, toolLookup), // 自动注入
 	}
 }
 
@@ -246,8 +246,10 @@ func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultCha
 	}
 }
 
-// DefaultSpawner 是用于注入到 kernel 的默认构造器函数
+// DefaultSpawner 是用于注入到 kernel 的默认构造器函数。
+// 不接入工具目录（toolLookup=nil），decomposer 跳过白名单校验——生产环境的真实
+// spawner 由 cmd/polaris/boot_agent.go 构造并传入 tb.Dispatcher，见其注入点注释。
 func DefaultSpawner(ctx context.Context, goal, taskType string, provider protocol.Provider, whisperChan chan<- protocol.MemoryWhisper) {
-	pool := NewPlannerPool(goal, taskType, provider, whisperChan)
+	pool := NewPlannerPool(goal, taskType, provider, whisperChan, nil)
 	pool.Run(ctx)
 }

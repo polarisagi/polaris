@@ -3,6 +3,7 @@ package learning
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -180,7 +181,9 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 							Output:       event.Output,
 						}
 						if e.reflector != nil {
-							_, _ = e.reflector.Reflect(sgCtx, event.TaskID, event.TaskType, result, nil, 0)
+							if _, err := e.reflector.Reflect(sgCtx, event.TaskID, event.TaskType, result, nil, 0); err != nil {
+								slog.Warn("learning engine: reflect failed", "task_id", event.TaskID, "err", err)
+							}
 						}
 					})
 				default:
@@ -218,7 +221,9 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 			}
 			if e.curriculum != nil {
 				concurrent.SafeGo(ctx, "learning-curriculum-generate", func(ctx context.Context) {
-					_ = e.curriculum.Generate(ctx, e.currentSurpriseIndex())
+					if err := e.curriculum.Generate(ctx, e.currentSurpriseIndex()); err != nil {
+						slog.Warn("learning engine: curriculum generate failed", "err", err)
+					}
 				})
 			}
 
@@ -248,7 +253,9 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 			}
 			if e.rollout != nil {
 				concurrent.SafeGo(ctx, "learning-rollout-advance", func(ctx context.Context) {
-					_ = e.rollout.AdvanceGate(ctx, ev.CandidateVersion, ev.Stats)
+					if err := e.rollout.AdvanceGate(ctx, ev.CandidateVersion, ev.Stats); err != nil {
+						slog.Warn("learning engine: rollout advance gate failed", "candidate", ev.CandidateVersion, "err", err)
+					}
 				})
 			}
 

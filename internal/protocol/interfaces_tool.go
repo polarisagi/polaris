@@ -36,3 +36,14 @@ ToolExecutor interface {
 	// RecordAudit 写入工具调用的全链路审计记录。
 	RecordAudit(ctx context.Context, toolName string, payload []byte) error
 }
+
+type
+
+// AgentToolExecutor 是 Agent Kernel 依赖的工具执行入口（消费方定义，符合 R1.4）。
+// 由 dispatch.Dispatcher 实现，确保 Agent 与 HTTP 网关走同一条拦截器链
+// （SchemaValidateInterceptor + AuditInterceptor），不再存在"网关有审计、
+// Agent 自主调用无审计"的双路径分裂问题。
+AgentToolExecutor interface {
+	ExecuteWithTaint(ctx context.Context, name string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error)
+	Lookup(name string) (types.Tool, error)
+}

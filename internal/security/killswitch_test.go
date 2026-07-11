@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func TestKillSwitch_InitialState_IsRunning(t *testing.T) {
 	ks := NewKillSwitch("", nil)
-	if state := ks.GetState(); state != KillNormal {
-		t.Errorf("Expected Initial State to be %v, got %v", KillNormal, state)
+	if state := ks.GetState(); state != types.KillNormal {
+		t.Errorf("Expected Initial State to be %v, got %v", types.KillNormal, state)
 	}
 	if ks.IsSealed() {
 		t.Error("Expected IsSealed to be false")
@@ -23,8 +25,8 @@ func TestKillSwitch_InitialState_IsRunning(t *testing.T) {
 func TestKillSwitch_CheckAndAct_NoPressure_StaysRunning(t *testing.T) {
 	ks := NewKillSwitch("", nil)
 	state := ks.CheckAndAct()
-	if state != KillNormal {
-		t.Errorf("Expected state to be KillNormal, got %v", state)
+	if state != types.KillNormal {
+		t.Errorf("Expected state to be types.KillNormal, got %v", state)
 	}
 }
 
@@ -36,8 +38,8 @@ func TestKillSwitch_ShouldThrottle_HighTokenRate(t *testing.T) {
 	}
 
 	state := ks.CheckAndAct()
-	if state != KillThrottle {
-		t.Errorf("Expected KillThrottle, got %v", state)
+	if state != types.KillThrottle {
+		t.Errorf("Expected types.KillThrottle, got %v", state)
 	}
 }
 
@@ -48,8 +50,8 @@ func TestKillSwitch_ShouldPause_VeryHighRate(t *testing.T) {
 	ks.ReportSafetyViolation(false)
 
 	state := ks.CheckAndAct()
-	if state != KillPause {
-		t.Errorf("Expected KillPause, got %v", state)
+	if state != types.KillPause {
+		t.Errorf("Expected types.KillPause, got %v", state)
 	}
 }
 
@@ -60,8 +62,8 @@ func TestKillSwitch_ShouldFullStop_ExceedsLimit(t *testing.T) {
 	ks.ReportSafetyViolation(true)
 
 	state := ks.CheckAndAct()
-	if state != KillFullStop {
-		t.Errorf("Expected KillFullStop, got %v", state)
+	if state != types.KillFullStop {
+		t.Errorf("Expected types.KillFullStop, got %v", state)
 	}
 }
 
@@ -73,20 +75,20 @@ func TestKillSwitch_TransitionLocked_MonotonicallyIncreases(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		ks.ReportError()
 	}
-	if state := ks.GetState(); state != KillThrottle {
-		t.Errorf("Expected KillThrottle, got %v", state)
+	if state := ks.GetState(); state != types.KillThrottle {
+		t.Errorf("Expected types.KillThrottle, got %v", state)
 	}
 
 	// Trigger Pause
 	ks.ReportSafetyViolation(false)
-	if state := ks.GetState(); state != KillPause {
-		t.Errorf("Expected KillPause, got %v", state)
+	if state := ks.GetState(); state != types.KillPause {
+		t.Errorf("Expected types.KillPause, got %v", state)
 	}
 
 	// Trigger FullStop
 	ks.ReportSafetyViolation(true)
-	if state := ks.GetState(); state != KillFullStop {
-		t.Errorf("Expected KillFullStop, got %v", state)
+	if state := ks.GetState(); state != types.KillFullStop {
+		t.Errorf("Expected types.KillFullStop, got %v", state)
 	}
 }
 
@@ -192,7 +194,7 @@ func TestKillSwitch_ManualRecover_FailsToDelete(t *testing.T) {
 func TestKillSwitch_ReportIrreversibleAttempt_TriggersPause(t *testing.T) {
 	ks := NewKillSwitch("", nil)
 	ks.ReportIrreversibleAttempt()
-	if state := ks.GetState(); state != KillPause {
-		t.Errorf("Expected KillPause, got %v", state)
+	if state := ks.GetState(); state != types.KillPause {
+		t.Errorf("Expected types.KillPause, got %v", state)
 	}
 }

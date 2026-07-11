@@ -8,7 +8,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/memory"
-	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -17,10 +16,10 @@ import (
 // DefaultSummarizer 实现了 memory.LLMSummarizer，用于将会话事件压缩为摘要。
 type DefaultSummarizer struct {
 	provider  protocol.Provider
-	promptMgr *prompt.Manager
+	promptMgr protocol.PromptFacade
 }
 
-func NewDefaultSummarizer(provider protocol.Provider, promptMgr *prompt.Manager) memory.LLMSummarizer {
+func NewDefaultSummarizer(provider protocol.Provider, promptMgr protocol.PromptFacade) memory.LLMSummarizer {
 	return &DefaultSummarizer{
 		provider:  provider,
 		promptMgr: promptMgr,

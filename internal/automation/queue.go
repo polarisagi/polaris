@@ -124,7 +124,9 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 		if st.Attempts >= maxAttempts {
 			// 超出重试次数，标记 failed 并通知
 			st.Status = "failed"
-			_ = s.writeTask(ctx, &st)
+			if err := s.writeTask(ctx, &st); err != nil {
+				slog.Error("scheduler: persist failed task state error", "task_id", st.Task.ID, "err", err)
+			}
 			s.publish(st.Task.ID, types.TaskEvent{TaskID: st.Task.ID, State: "failed"})
 			continue
 		}
@@ -137,7 +139,9 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 		if s.gate != nil && taskPriority >= 2 && !s.gate.BackgroundPermit(taskPriority) {
 			// 负载过高：原地累积 missed_executions，不推进到 running
 			st.MissedExecutions++
-			_ = s.writeTask(ctx, &st)
+			if err := s.writeTask(ctx, &st); err != nil {
+				slog.Error("scheduler: persist deferred task state error", "task_id", st.Task.ID, "err", err)
+			}
 			slog.Debug("scheduler: task deferred due to cognitive load",
 				"task_id", st.Task.ID,
 				"priority", taskPriority,
@@ -176,13 +180,17 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 
 			if dispErr == nil {
 				st.Status = "completed"
-				_ = s.writeTask(ctx, &st)
+				if err := s.writeTask(ctx, &st); err != nil {
+					slog.Error("scheduler: persist completed task state error", "task_id", st.Task.ID, "err", err)
+				}
 				s.publish(st.Task.ID, types.TaskEvent{TaskID: st.Task.ID, State: "completed"})
 			} else {
 				// 失败回写为 pending，下轮扫描重试
 				slog.Warn("scheduler: dispatch failed, will retry", "task_id", st.Task.ID, "attempts", st.Attempts, "err", dispErr)
 				st.Status = "pending"
-				_ = s.writeTask(ctx, &st)
+				if err := s.writeTask(ctx, &st); err != nil {
+					slog.Error("scheduler: persist retry task state error", "task_id", st.Task.ID, "err", err)
+				}
 			}
 		})
 	}
