@@ -50,6 +50,10 @@ var (
 	// [F-09] Retrieval Explain Bits
 	InstrRetrievalExplainBitsTotal metric.Int64Counter
 
+	// [GR-1-003] M10 Rerank 可观测性：RAG 链路中最耗时的重排步骤此前完全无埋点。
+	InstrRerankLatencyMs  metric.Float64Histogram // Rerank 单次调用耗时（ms）
+	InstrRerankCallsTotal metric.Int64Counter     // Rerank 调用计数 (label: outcome: success/fallback/timeout)
+
 	// [UP-05] Shadow Executor
 	InstrShadowReplayTotal  metric.Int64Counter
 	InstrShadowSkippedTotal metric.Int64Counter
@@ -212,6 +216,17 @@ func initInstruments(meter metric.Meter) {
 		metric.WithDescription("FFI 调用失败次数 (label: ffi_target)"),
 	)
 
+	// [GR-1-003] Rerank 指标：调用延迟 + 结果计数，排查 RAG 重排步骤性能瓶颈与降级频率。
+	InstrRerankLatencyMs, _ = meter.Float64Histogram(
+		"polaris.rerank.call_latency_ms",
+		metric.WithDescription("Reranker 单次调用延迟（ms）(label: outcome)"),
+		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2000),
+	)
+	InstrRerankCallsTotal, _ = meter.Int64Counter(
+		"polaris.rerank.calls_total",
+		metric.WithDescription("Reranker 调用计数 (label: outcome: success/fallback/timeout)"),
+	)
+
 	InstrShadowReplayTotal, _ = meter.Int64Counter(
 		"polaris.shadow.replay_total",
 		metric.WithDescription("Shadow replay batches total"),
@@ -322,6 +337,19 @@ func RecordEmbeddingCall(ctx context.Context, provider, model string, latencyMs 
 	if err != nil && InstrEmbeddingErrorTotal != nil {
 		InstrEmbeddingErrorTotal.Add(ctx, 1,
 			metric.WithAttributes(AttrProvider(provider), AttrModel(model)))
+	}
+}
+
+// RecordRerankCall 记录一次 Reranker 调用的延迟与结果分类。
+// outcome 建议取值：success（正常完成重排）/ fallback（超时或 panic 后降级为透传原始
+// 顺序，见 search.SafeRerank）/ timeout（专指超时降级，若调用方能区分超时与 panic 可细化）。
+// InstrRerankLatencyMs 为 nil 时静默跳过（Tier-0 无 OTel 场景）。
+func RecordRerankCall(ctx context.Context, outcome string, latencyMs float64) {
+	if InstrRerankLatencyMs != nil {
+		InstrRerankLatencyMs.Record(ctx, latencyMs, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
+	if InstrRerankCallsTotal != nil {
+		InstrRerankCallsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 	}
 }
 

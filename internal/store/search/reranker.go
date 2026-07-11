@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -98,13 +99,15 @@ func NewApproximateColBERTReranker(embedder Embedder, window int) *ApproximateCo
 }
 
 // Rerank 对 docs 按 MaxSim 分数降序重排，返回新切片（不修改输入）。
-func (r *ApproximateColBERTReranker) Rerank(_ context.Context, query string, docs []ScoredFragment) []ScoredFragment {
+func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, docs []ScoredFragment) []ScoredFragment {
+	start := time.Now()
 	if len(docs) == 0 || r.embedder == nil {
 		return docs
 	}
 
 	qVecs := r.tokenVecs(query)
 	if len(qVecs) == 0 {
+		metrics.RecordRerankCall(ctx, "fallback", float64(time.Since(start).Milliseconds()))
 		return docs
 	}
 
@@ -123,6 +126,7 @@ func (r *ApproximateColBERTReranker) Rerank(_ context.Context, query string, doc
 		frag.Score = s.score // 用 MaxSim 分数替换 RRF 分数
 		out[i] = frag
 	}
+	metrics.RecordRerankCall(ctx, "success", float64(time.Since(start).Milliseconds()))
 	return out
 }
 
@@ -166,6 +170,7 @@ func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFrag
 	if s.inner == nil || len(docs) == 0 {
 		return docs
 	}
+	start := time.Now()
 	rerankCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -182,9 +187,11 @@ func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFrag
 
 	select {
 	case out := <-resultChan:
+		metrics.RecordRerankCall(ctx, "success", float64(time.Since(start).Milliseconds()))
 		return out
 	case <-rerankCtx.Done():
 		slog.Warn("search: reranker timed out, falling back to original order", "timeout", s.timeout)
+		metrics.RecordRerankCall(ctx, "timeout", float64(time.Since(start).Milliseconds()))
 		return docs
 	}
 }

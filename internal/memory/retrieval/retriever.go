@@ -14,14 +14,17 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// 位常量重导出自 pkg/types（唯一权威源，Batch8 ExplainBits 归因修复时上提，
+// 见 pkg/types/models_memory.go 注释）。保留这些别名是为了不必改动本文件内
+// 已有的所有 BitXxx 引用点。
 const (
-	BitBM25       uint8 = 1 << 0
-	BitSimhash    uint8 = 1 << 1
-	BitVector     uint8 = 1 << 2
-	BitGraph      uint8 = 1 << 3
-	BitReflection uint8 = 1 << 4
-	BitDurative   uint8 = 1 << 5
-	BitSemantic   uint8 = 1 << 6
+	BitBM25       = types.BitBM25
+	BitSimhash    = types.BitSimhash
+	BitVector     = types.BitVector
+	BitGraph      = types.BitGraph
+	BitReflection = types.BitReflection
+	BitDurative   = types.BitDurative
+	BitSemantic   = types.BitSemantic
 )
 
 // ============================================================================
