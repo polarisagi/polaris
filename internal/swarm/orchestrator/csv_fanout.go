@@ -92,6 +92,10 @@ func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob)
 			Type:     "csv_fanout_row",
 			Priority: 5,
 			Intent:   []byte(instruction),
+			// GD-14-001：同一 CSV fanout job 下的所有行共享同一记忆命名空间
+			// （namespace = jobID），使处理不同行的 Worker Agent 能检索到彼此
+			// 写入的记忆片段（如跨行发现的共性规律）；不同 job 之间天然隔离。
+			Namespace: jobID,
 		}
 		entries = append(entries, entry)
 		results[i] = RowResult{

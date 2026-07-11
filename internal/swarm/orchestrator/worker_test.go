@@ -10,10 +10,11 @@ import (
 )
 
 type mockAgentKernel struct {
-	id     string
-	state  types.AgentState
-	result []byte
-	ch     chan struct{}
+	id        string
+	state     types.AgentState
+	result    []byte
+	ch        chan struct{}
+	namespace string // 记录最后一次 SetMemoryNamespace 调用的值（GD-14-001 测试断言用）
 }
 
 func (m *mockAgentKernel) GetID() string { return m.id }
@@ -29,6 +30,7 @@ func (m *mockAgentKernel) SendIntent(trigger types.AgentTrigger) {
 func (m *mockAgentKernel) GetState() types.AgentState     { return m.state }
 func (m *mockAgentKernel) SetTaskID(id string)            {}
 func (m *mockAgentKernel) SetTaskIntent(intent []byte)    {}
+func (m *mockAgentKernel) SetMemoryNamespace(ns string)   { m.namespace = ns }
 func (m *mockAgentKernel) GetExecuteResult() []byte       { return m.result }
 func (m *mockAgentKernel) GetTokenUsage() (int, int, int) { return 0, 0, 0 }
 
@@ -99,7 +101,13 @@ func (m *mockBlackboard) MaxActivePriority() int {
 	return 3
 }
 func (b *mockBlackboard) PeekTask(ctx context.Context, taskID string) (*types.TaskSnapshot, error) {
-	return nil, nil
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry, ok := b.tasks[taskID]
+	if !ok {
+		return nil, nil
+	}
+	return &types.TaskSnapshot{ID: entry.ID, Status: entry.Status, Namespace: entry.Namespace}, nil
 }
 func (b *mockBlackboard) Subscribe(ctx context.Context) (<-chan types.BlackboardEvent, error) {
 	return b.events, nil
@@ -216,4 +224,77 @@ func TestWorker_ListenLoop_Push(t *testing.T) {
 		t.Errorf("expected task to be claimed by agent-push")
 	}
 	bb.mu.Unlock()
+}
+
+// TestWorker_TryClaimAndExecute_PropagatesNamespace 验证 GD-14-001 Worker 端
+// 布线：认领任务后，Worker 读取 TaskEntry.Namespace（经 PeekTask 透传）并注入
+// AgentKernel.SetMemoryNamespace，使协同任务下的 Worker Agent 能感知共享命名空间。
+func TestWorker_TryClaimAndExecute_PropagatesNamespace(t *testing.T) {
+	bb := &mockBlackboard{
+		tasks:  make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 10),
+	}
+
+	entry := &types.TaskEntry{ID: "task-ns-1", Namespace: "swarm-ns-shared"}
+	entry.Status = types.TaskPending
+	bb.tasks["task-ns-1"] = entry
+
+	kernel := &mockAgentKernel{
+		id:    "agent-ns",
+		state: types.AgentStateIdle,
+		ch:    make(chan struct{}),
+	}
+
+	worker := NewWorker("agent-ns", bb, kernel)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = worker.ListenLoop(ctx)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	worker.TaskPushChan <- "task-ns-1"
+	time.Sleep(50 * time.Millisecond)
+
+	if kernel.namespace != "swarm-ns-shared" {
+		t.Errorf("expected kernel.SetMemoryNamespace(%q), got %q", "swarm-ns-shared", kernel.namespace)
+	}
+}
+
+// TestWorker_TryClaimAndExecute_NoNamespace 验证未设置 Namespace 的任务
+// （单 Agent 场景，绝大多数任务）不会误注入命名空间——默认行为不变。
+func TestWorker_TryClaimAndExecute_NoNamespace(t *testing.T) {
+	bb := &mockBlackboard{
+		tasks:  make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 10),
+	}
+
+	entry := &types.TaskEntry{ID: "task-no-ns"}
+	entry.Status = types.TaskPending
+	bb.tasks["task-no-ns"] = entry
+
+	kernel := &mockAgentKernel{
+		id:    "agent-no-ns",
+		state: types.AgentStateIdle,
+		ch:    make(chan struct{}),
+	}
+
+	worker := NewWorker("agent-no-ns", bb, kernel)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = worker.ListenLoop(ctx)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	worker.TaskPushChan <- "task-no-ns"
+	time.Sleep(50 * time.Millisecond)
+
+	if kernel.namespace != "" {
+		t.Errorf("expected empty namespace for task without Namespace set, got %q", kernel.namespace)
+	}
 }

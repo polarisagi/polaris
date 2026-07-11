@@ -119,9 +119,10 @@ func (b *Blackboard) PeekTask(ctx context.Context, taskID string) (*types.TaskSn
 		return nil, nil
 	}
 	return &types.TaskSnapshot{
-		ID:     entry.ID,
-		Status: entry.Status,
-		Result: entry.Result,
+		ID:        entry.ID,
+		Status:    entry.Status,
+		Result:    entry.Result,
+		Namespace: entry.Namespace,
 	}, nil
 }
 
