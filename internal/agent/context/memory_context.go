@@ -32,6 +32,9 @@ func BuildPerceiveContext( //nolint:gocyclo
 	if sCtx.InstalledExtensionsInfo != "" {
 		instr += sCtx.InstalledExtensionsInfo + "\n\n"
 	}
+	if hint := contextPressureHint(sCtx); hint != "" {
+		instr += hint + "\n\n"
+	}
 	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
 		instr, taint.TaintSource{OriginTaintLevel: types.TaintNone}, "perceive_system_prompt"))
 	if err != nil {
@@ -184,6 +187,9 @@ func BuildPlanContext( //nolint:gocyclo
 	}
 	if sCtx.InstalledExtensionsInfo != "" {
 		sysPrompt.WriteString(sCtx.InstalledExtensionsInfo + "\n\n")
+	}
+	if hint := contextPressureHint(sCtx); hint != "" {
+		sysPrompt.WriteString(hint + "\n\n")
 	}
 
 	// 5. Build Tools List (M2.c/f)
