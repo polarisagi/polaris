@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -183,13 +184,19 @@ func (e *ComputerUseEngine) resolveAction(ctx context.Context, intent string, st
 		}
 	}
 
+	// Prompt 统一走 internal/prompt/templates 管理（A-12 修复）；系统提示词为纯静态
+	// 文本，不拼接任何不可信输入，不需要边界符防护。
+	systemPrompt, tmplErr := templates.Render("lam_gui_resolver_system.tmpl", nil)
+	if tmplErr != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "lam: render resolver system prompt", tmplErr)
+	}
+
 	req := &types.InferRequest{
 		Model: e.config.ResolverModel,
 		Messages: []types.Message{
 			{
-				Role: "system",
-				Content: "你是 GUI 自动化助手。根据 DOM 结构和用户意图，选择最合适的 GUI 动作。" +
-					"以 JSON 格式输出动作，不要输出任何其他内容。",
+				Role:    "system",
+				Content: systemPrompt,
 			},
 			userMsg,
 		},

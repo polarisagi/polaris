@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/agent/dag"
+	"github.com/polarisagi/polaris/internal/prompt"
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -71,14 +73,30 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		}
 
 		if len(dangerous) > 0 {
-			prompt := "Review the following tool executions for security risks:\n" + strings.Join(dangerous, "\n") + "\n\nIf it's dangerous, reply with 'DENY: <reason>'. Otherwise reply 'ALLOW'."
+			// Prompt 统一走 internal/prompt/templates 管理（A-12 修复），且 dangerous
+			// 列表（来自 DAG 节点 ToolName/Args，可能间接受 LLM 分解结果影响，非完全可信）
+			// 用 prompt.NewRandomBoundary() 生成的随机边界符包裹，防止边界逃逸注入
+			// （与 GR-7-001 SecurityAuditAgent 的修复采用同一套防御模式）。
+			boundaryStart, boundaryEnd := prompt.NewRandomBoundary()
+			userPrompt, tmplErr := templates.Render("l3_watchdog_review.tmpl", map[string]string{
+				"BoundaryStart": boundaryStart,
+				"BoundaryEnd":   boundaryEnd,
+				"DangerousList": strings.Join(dangerous, "\n"),
+			})
+			if tmplErr != nil {
+				return apperr.Wrap(apperr.CodeInternal, "s_validate: render l3 watchdog prompt", tmplErr)
+			}
+			systemPrompt, tmplErr := templates.Render("l3_watchdog_system.tmpl", nil)
+			if tmplErr != nil {
+				return apperr.Wrap(apperr.CodeInternal, "s_validate: render l3 watchdog system prompt", tmplErr)
+			}
 
 			llmEff := protocol.LLMFillEffect{
 				SchemaRef: "l3_watchdog",
 				PromptFn: func(pCtx protocol.StateContext) []types.Message {
 					return []types.Message{
-						{Role: "system", Content: "You are a strict security watchdog."},
-						{Role: "user", Content: prompt},
+						{Role: "system", Content: systemPrompt},
+						{Role: "user", Content: userPrompt},
 					}
 				},
 				OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
