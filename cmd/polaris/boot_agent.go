@@ -26,6 +26,7 @@ import (
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	agentdag "github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/automation"
+	"github.com/polarisagi/polaris/internal/automation/notify"
 	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
@@ -204,6 +205,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		featGate = sb.AutoConf.Gate
 	}
 	sched.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, memGuard, featGate))
+	// GD-13-001：后台/自动化任务终态通知投递——写入端（消费端见下方 TopicNotification handler）。
+	sched.WithOutboxWriter(sb.Outbox)
 	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
 
 	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
@@ -489,6 +492,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agent.Interrupt(payload.Request)
 		return nil
 	})
+
+	// GD-13-001：后台/自动化任务终态通知投递——消费端。Webhook URL/开关读取
+	// preferences 表（notification_webhook_url/notification_enabled），
+	// 复用现有 SystemRepository，不新增 schema。
+	sb.Outbox.RegisterHandler(protocol.TopicNotification, notify.NewDispatcher(tb.SysRepo).Handle)
 
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
 	sv := supervisor.NewSupervisor(5, 5*time.Minute)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/automation/notify"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -46,12 +47,57 @@ type SQLiteScheduler struct {
 	subscribers map[string]map[chan types.TaskEvent]struct{}
 	invoker     protocol.AgentInvoker
 	gate        backgroundGate
+	outbox      protocol.OutboxWriter // 可选；nil 时跳过通知投递（GD-13-001）
 }
 
 func (s *SQLiteScheduler) WithBackgroundGate(g backgroundGate) {
 	s.mu.Lock()
 	s.gate = g
 	s.mu.Unlock()
+}
+
+// WithOutboxWriter 注入 Outbox 写入器，用于任务终态时投递通知事件
+// （GD-13-001，见 internal/automation/notify 包）。nil 时跳过通知（默认行为不变）。
+func (s *SQLiteScheduler) WithOutboxWriter(w protocol.OutboxWriter) {
+	s.mu.Lock()
+	s.outbox = w
+	s.mu.Unlock()
+}
+
+// notifyTaskTerminal 在后台/自动化任务（Pool != "intent_handler"）到达终态时
+// 写入一条 Outbox 通知事件，由 internal/automation/notify.Dispatcher 消费投递。
+//
+// 判定依据（GD-13-001 最小实现范围）：用户交互式任务（Pool=="intent_handler"，
+// types.Task.Pool 文档："0=最高(用户交互)"）已经通过 SSE 实时可见，不需要重复
+// 通知；只对真正的后台/自动化/长程任务（background/cron/eval/ingest）发通知，
+// 不做更复杂的"用户是否在线"判断（该判断留给用户在通知偏好里选择"从不通知"）。
+//
+// 单条通知写入失败只记录日志，不影响任务本身的终态持久化（通知是旁路能力，
+// 不应该让核心调度语义依赖它）。
+func (s *SQLiteScheduler) notifyTaskTerminal(ctx context.Context, task types.Task, success bool, errMsg string) {
+	s.mu.RLock()
+	ob := s.outbox
+	s.mu.RUnlock()
+	if ob == nil || task.Pool == "intent_handler" {
+		return
+	}
+
+	ev := notify.NotificationEvent{
+		TaskID:    task.ID,
+		TaskType:  task.Type,
+		Pool:      task.Pool,
+		Success:   success,
+		Error:     errMsg,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	entry, err := protocol.NewOutboxEvent(protocol.TopicNotification, "notify", ev, "notify:"+task.ID)
+	if err != nil {
+		slog.Error("scheduler: build notification outbox event failed", "task_id", task.ID, "err", err)
+		return
+	}
+	if err := ob.Write(ctx, entry); err != nil {
+		slog.Error("scheduler: write notification outbox event failed", "task_id", task.ID, "err", err)
+	}
 }
 
 var _ protocol.Scheduler = (*SQLiteScheduler)(nil)
@@ -128,6 +174,7 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 				slog.Error("scheduler: persist failed task state error", "task_id", st.Task.ID, "err", err)
 			}
 			s.publish(st.Task.ID, types.TaskEvent{TaskID: st.Task.ID, State: "failed"})
+			s.notifyTaskTerminal(ctx, st.Task, false, "max attempts exceeded")
 			continue
 		}
 
@@ -184,6 +231,7 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 					slog.Error("scheduler: persist completed task state error", "task_id", st.Task.ID, "err", err)
 				}
 				s.publish(st.Task.ID, types.TaskEvent{TaskID: st.Task.ID, State: "completed"})
+				s.notifyTaskTerminal(ctx, taskCopy, true, "")
 			} else {
 				// 失败回写为 pending，下轮扫描重试
 				slog.Warn("scheduler: dispatch failed, will retry", "task_id", st.Task.ID, "attempts", st.Attempts, "err", dispErr)
