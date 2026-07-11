@@ -30,7 +30,10 @@ import (
 // 升级 ABI 同步修改：rust/substrate/src/lib.rs SUBSTRATE_ABI_MAJOR + 此常量。
 // 2026-07-04 由 1→2：cedar_evaluate 新增 timeout_ms 参数（改函数签名，见
 // rust/substrate/src/lib.rs SUBSTRATE_ABI_MAJOR 处注释）。
-const ExpectedABIMajor uint16 = 2
+// 由 2→3（Batch11 GR-7.1/GR-7.2 修复）：wasmtime_execute 新增 timeout_ms 参数、
+// cedar_load_policies 新增 timeout_ms 参数、cedar_policy_count 新增 timeout_ms
+// 参数（原为零参数），三者均改函数签名，见 lib.rs SUBSTRATE_ABI_MAJOR 处注释。
+const ExpectedABIMajor uint16 = 3
 const ExpectedABIMinor uint16 = 3
 
 var (

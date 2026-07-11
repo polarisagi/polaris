@@ -3,8 +3,36 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
+use std::thread;
+use std::time::Duration;
 use wasmtime::*;
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+
+// ─── Wall-clock 超时（epoch interruption） ─────────────────────────────────────
+//
+// 背景（Batch11 GR-7.1）：`store.set_fuel` 的 fuel 机制只对 WASM 指令执行计量，
+// host 侧网络 IO 等待期间不执行 WASM 指令、不消耗 fuel。若 network_allowed=1 的
+// 模块发起一个永远不返回的网络请求，宿主线程会无界阻塞。
+//
+// epoch interruption 在 WASM 生成代码的函数入口/循环回边处检查独立于 fuel 的
+// 墙钟 deadline，可靠覆盖"CPU-bound 死循环绕过 fuel"场景（已有 Rust 测试覆盖，
+// 见文件末尾 test_epoch_interruption_stops_infinite_loop）。
+//
+// 但 epoch 检查点只在 WASM 生成代码边界触发，无法打断已经陷入阻塞态 host 系统调用
+// （如 network_allowed=1 时挂起的 TCP connect/read）的执行线程——这是 wasmtime
+// 官方文档明确的已知限制，而不是本实现的疏漏。这类场景的最终兜底防线在 Go 侧
+// 调用方（internal/tool/sandbox/rust_wasmtime_sandbox.go），通过
+// context.WithTimeout + 独立 goroutine + select 保证宿主 goroutine 不会无界
+// 阻塞，代价是极端情况下可能牺牲一次 OS 线程（该线程随 Rust 侧调用最终返回/
+// 进程退出而回收，不会无限累积）。
+const EPOCH_TICK_MS: u64 = 50;
+
+// Wasm 执行墙钟超时默认值：与 internal/sandbox/sandbox_impl.go SandboxSpec.CPUQuotaMs
+// 的既有仓库约定"0 = 默认 5000ms"保持一致（native_os_sandbox.go/sandbox_container.go
+// 均遵循该默认值），timeout_ms<=0 时启用。Go 侧调用方应显式传入
+// spec.CPUQuotaMs（见 internal/tool/sandbox/wasmtime_sandbox.go），此值仅作
+// 兜底，防止遗漏传参的调用方退化为无界等待。
+const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 
 // ─── FFI 错误码 ────────────────────────────────────────────────────────────────
 const WASMTIME_OK: c_int = 0;
@@ -48,8 +76,24 @@ impl EngineState {
         let mut config = Config::new();
         config.wasm_component_model(true); // 开启 Component Model
         config.consume_fuel(true); // 开启燃料计费，用于大模型代码防死循环
+        config.epoch_interruption(true); // 墙钟超时，见上方 EPOCH_TICK_MS 注释
 
         let engine = Engine::new(&config)?;
+
+        // 全局 epoch ticker：每 EPOCH_TICK_MS 对 Engine 递增一次 epoch 计数，
+        // 各 Store 通过 set_epoch_deadline(N) 独立设定"N 个 tick 后触发中断"的
+        // 相对 deadline。用 Engine::weak 而非强引用持有，避免 ticker 线程
+        // 人为延长 Engine 生命周期（wasmtime 官方文档对 increment_epoch 的
+        // 推荐用法）；Engine 被回收后 upgrade() 返回 None，线程自行退出。
+        let weak = engine.weak();
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_millis(EPOCH_TICK_MS));
+            match weak.upgrade() {
+                Some(e) => e.increment_epoch(),
+                None => break,
+            }
+        });
+
         Ok(Self { engine })
     }
 }
@@ -178,6 +222,7 @@ pub unsafe extern "C" fn wasmtime_execute(
     max_fuel: u64,
     network_allowed: c_int,
     max_output_bytes: c_int,
+    timeout_ms: u64,
     out_json: *mut *mut u8,
     out_json_len: *mut usize,
     out_err: *mut *mut c_char,
@@ -280,6 +325,15 @@ pub unsafe extern "C" fn wasmtime_execute(
                 return WASMTIME_ERR_INTERNAL;
             }
 
+            // 墙钟超时设定（epoch interruption，独立于 fuel，见文件头注释）
+            let effective_timeout_ms = if timeout_ms > 0 {
+                timeout_ms
+            } else {
+                DEFAULT_TIMEOUT_MS
+            };
+            let deadline_ticks = effective_timeout_ms.div_ceil(EPOCH_TICK_MS).max(1);
+            store.set_epoch_deadline(deadline_ticks);
+
             let instance = match linker.instantiate(&mut store, &module) {
                 Ok(i) => i,
                 Err(e) => {
@@ -314,7 +368,25 @@ pub unsafe extern "C" fn wasmtime_execute(
                         return WASMTIME_ERR_EXECUTE;
                     }
                     None => {
-                        write_err(out_err, &format!("Execution error: {}", e));
+                        // 单独识别 epoch interruption 触发的 wall-clock 超时 trap，
+                        // 便于 Go 侧日志/排障区分"执行超时"与其它执行错误
+                        // （Batch11 GR-7.1）。
+                        let is_timeout = e.chain().any(|cause| {
+                            cause
+                                .downcast_ref::<wasmtime::Trap>()
+                                .is_some_and(|t| *t == wasmtime::Trap::Interrupt)
+                        });
+                        if is_timeout {
+                            write_err(
+                                out_err,
+                                &format!(
+                                    "Execution error: wall-clock timeout after {}ms (epoch interruption)",
+                                    effective_timeout_ms
+                                ),
+                            );
+                        } else {
+                            write_err(out_err, &format!("Execution error: {}", e));
+                        }
                         return WASMTIME_ERR_EXECUTE;
                     }
                 }
@@ -344,5 +416,103 @@ pub unsafe extern "C" fn wasmtime_execute(
                 WASMTIME_ERR_INTERNAL
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    // 构造一个 _start 导出、函数体为无限循环、不依赖任何 WASI 导入的极简 WASM
+    // 模块，内联从 WAT 文本编译（wat crate，仅 dev-dependency），避免依赖外部
+    // wasm32-wasip1 工具链或预置 .wasm 测试定件。
+    fn infinite_loop_wasm() -> Vec<u8> {
+        let wat = r#"
+            (module
+              (func $start (loop $l (br $l)))
+              (export "_start" (func $start))
+              (memory (export "memory") 1)
+            )
+        "#;
+        wat::parse_str(wat).expect("failed to compile test WAT module")
+    }
+
+    /// 验证 epoch interruption 能在预期时间内打断 CPU-bound 死循环（不涉及
+    /// host 网络调用的场景），而不是无限挂起——这是 wall-clock 超时能可靠覆盖
+    /// 的场景。network_allowed=1 时挂起的阻塞网络 syscall 场景不在本测试覆盖
+    /// 范围内（epoch 检查点无法打断已阻塞的 host 系统调用，见文件头注释），
+    /// 该场景的最终兜底防线在 Go 侧调用方的 context.WithTimeout 包装。
+    #[test]
+    fn test_epoch_interruption_stops_infinite_loop() {
+        // 确保 Engine 已初始化（幂等，可能已被同进程其它测试触发过初始化）。
+        let mut init_err: *mut c_char = std::ptr::null_mut();
+        unsafe {
+            wasmtime_init(&mut init_err as *mut *mut c_char);
+            if !init_err.is_null() {
+                wasmtime_free_string(init_err);
+            }
+        }
+
+        let wasm = infinite_loop_wasm();
+        let input = CString::new("{}").unwrap();
+
+        let mut out_json: *mut u8 = std::ptr::null_mut();
+        let mut out_json_len: usize = 0;
+        let mut out_err: *mut c_char = std::ptr::null_mut();
+
+        let started = std::time::Instant::now();
+        let rc = unsafe {
+            wasmtime_execute(
+                wasm.as_ptr(),
+                wasm.len(),
+                input.as_ptr(),
+                std::ptr::null(),
+                16,             // max_pages
+                u64::MAX / 2,   // max_fuel：刻意给到近乎无限，确保先触发的是
+                                // epoch 墙钟而非 fuel 耗尽，测试的才是本次要
+                                // 验证的机制
+                0,              // network_allowed
+                1024,           // max_output_bytes
+                200,            // timeout_ms：200ms
+                &mut out_json,
+                &mut out_json_len,
+                &mut out_err,
+            )
+        };
+        let elapsed = started.elapsed();
+
+        let err_msg = unsafe {
+            if out_err.is_null() {
+                String::new()
+            } else {
+                let s = std::ffi::CStr::from_ptr(out_err)
+                    .to_string_lossy()
+                    .into_owned();
+                wasmtime_free_string(out_err);
+                s
+            }
+        };
+        if !out_json.is_null() {
+            unsafe { wasmtime_free_bytes(out_json, out_json_len) };
+        }
+
+        assert_eq!(
+            rc, WASMTIME_ERR_EXECUTE,
+            "expected execute error (wall-clock timeout), got rc={} err={}",
+            rc, err_msg
+        );
+        assert!(
+            err_msg.contains("timeout") || err_msg.contains("epoch"),
+            "expected wall-clock timeout error message, got: {}",
+            err_msg
+        );
+        // 应在远小于"无限循环"的时间内返回；给 5x timeout_ms 的宽松上限覆盖
+        // CI 环境调度抖动，同时足以证明不是无界挂起。
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "epoch interruption did not fire within expected wall-clock bound: {:?}",
+            elapsed
+        );
     }
 }

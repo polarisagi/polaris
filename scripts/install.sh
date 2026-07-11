@@ -218,7 +218,43 @@ fi
 # ── 3. 校验 & 解压 ────────────────────────────────────────────────────────────
 msg "📦 正在校验并解压..." "📦 Verifying and extracting..."
 
-# 验证归档完整性（不依赖 sha256sum 命令，跨平台兼容性更好）
+# 3a. SHA-256 完整性校验（GR-7.4）：release.yml package job 为每个归档同步
+# 生成并发布 <archive>.sha256（sha256sum 标准格式 "<hash>  <filename>"），
+# 从与归档成功下载的同一来源（$URL，保留 for 循环退出时的最后取值）下载
+# 对应的 .sha256 文件比对，防止下载源被中间人替换/投毒后仅凭 tar 结构校验
+# 无法识破（只要是合法 tar.gz 格式即可通过 tar -tzf）。
+#
+# 沿用既有约束"不依赖 sha256sum 命令，跨平台兼容性更好"：改用 openssl dgst
+# -sha256（macOS/Linux 均预装）计算本地哈希，而不是引入平台相关的 sha256sum。
+TMP_SHA_FILE="${TMP_ARCHIVE}.sha256"
+rm -f "$TMP_SHA_FILE"
+if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${URL}.sha256"; then
+    msg "❌ 无法下载校验和文件 (${URL}.sha256)，出于供应链安全考虑已中止安装。" \
+        "❌ Failed to download checksum file (${URL}.sha256); aborting install for supply-chain safety."
+    rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
+    exit 1
+fi
+
+if ! command -v openssl >/dev/null 2>&1; then
+    msg "❌ 未找到 openssl，无法校验下载包完整性，已中止安装。请安装 openssl 后重试。" \
+        "❌ openssl not found; cannot verify package integrity. Aborting install. Please install openssl and retry."
+    rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
+    exit 1
+fi
+
+EXPECTED_SHA=$(awk '{print $1}' "$TMP_SHA_FILE")
+ACTUAL_SHA=$(openssl dgst -sha256 "$TMP_ARCHIVE" | awk '{print $NF}')
+rm -f "$TMP_SHA_FILE"
+
+if [ -z "$EXPECTED_SHA" ] || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+    msg "❌ 下载的安装包校验和不匹配，可能遭遇中间人篡改，安装已中止。" \
+        "❌ Downloaded package checksum mismatch; possible tampering detected. Installation aborted."
+    rm -f "$TMP_ARCHIVE"
+    exit 1
+fi
+msg "✅ 校验和匹配，归档完整性已确认。" "✅ Checksum verified, archive integrity confirmed."
+
+# 3b. 归档结构校验（哈希校验通过后的第二道检查，双重保险）
 if ! tar -tzf "$TMP_ARCHIVE" > /dev/null 2>&1; then
     msg "❌ 归档文件损坏，已删除，请重新运行安装脚本。" \
         "❌ Archive corrupted, deleted. Re-run the install script."
