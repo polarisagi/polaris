@@ -4,6 +4,18 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-07-12（同步任务书08 §8.1/§8.3/§8.4/§8.5 四项实现到架构文档）
+
+对 commit `d65862b`（GD-13-001 通知投递）/ `ec76e1b`（GD-13-003 内存持久化熔断）/ `86b787a`（GD-14-001 多 Agent 共享记忆命名空间）/ `3d5d036`（GD-14-002 上下文分页）做架构文档核实与总结性更新，均为对已落地代码的文字补充，不含伪代码：
+
+- `docs/arch/M04-Agent-Kernel.md` §2 | 插入 GD-13-003 段落：说明"写失败"实为同步 error 而非静默丢失，真正新增的只是 `isMemoryPersistenceFailure` 判定 + `TriggerInterruptReceived` 熔断路由，未新增状态机转换规则
+- `docs/arch/M13-Interface-Scheduler.md` §2.1 | 插入 GD-13-001 段落：终态通知复用 `OutboxWorker` 消费框架 + 既有指数退避重试，`Pool=="intent_handler"` 交互式任务排除在外，本轮仅实现 Webhook 一种渠道
+- `docs/arch/M05-Memory-System.md` §2（新增 §2.4）+ §3.1 | GD-14-002 分页置换设计（`memory_page_out`/`memory_page_in` 先归档后删除的顺序、`contextPressureHint` 仅暴露信号不强制触发）；GD-14-001 NamespaceID 分区机制（复用既有 `ev.TaskID != q.SessionID` 分区键 + `types.TaskEntry.Namespace` 字段，仅 4 类协同写入参与替换，2PC/FastPath 显式排除）
+- `docs/arch/M08-Multi-Agent-Orchestrator.md` §11.1 | 补充 GD-14-001 段落：明确 Namespace 不是新总线，只是既有分区键上的可选联合，`PeekTask`→`SetMemoryNamespace`→`memoryPartitionKey` 的传播链路
+- `docs/arch/00-Global-Dictionary.md` | `[Blackboard]` 词条补充 `TaskEntry.Namespace`；`[CoreMemory]` 词条补充分页置换工具
+
+**附带核实**：四项改动均已通过 `go build ./... && go vet ./... && gofmt -l . && go test ./internal/... ./pkg/... ./cmd/...` 与 `make lint`（0 issues），详见对应 commit message。
+
 ## 2026-07-11（docs/specs 全量审查：清理两份误入的设计草案）
 
 **问题**：`08-HITL-AskUser.md`/`09-Generative-UI.md` 与既有 `08-Doc-Hygiene.md`/`09-LLM-Agent-Production.md` 编号冲突；`INDEX.md` 加载策略表从未登记两文件（实际未被 AI 主动加载）；`CHANGELOG.md` 无引入记录；正文是 what/why 设计提案文体（散文式"动机与目标"引入 + 完整 Go struct/JSON/HTML 伪代码），与 specs 目录 how/constraints 生成约束文体不符（见 `INDEX.md` arch↔specs 定位表）；全仓库 grep 确认 `AskHuman`/`ClarificationRequest`/`ui_component`/`render_chart` 等零实现、零 ADR。

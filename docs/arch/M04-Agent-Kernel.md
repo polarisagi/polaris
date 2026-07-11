@@ -3,7 +3,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`
-<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:38 状态机 / 2:93 Suspend-on-Idle / 3:107 S_VALIDATE / 4:156 DAG（Directed Acyclic Graph，有向无环图） / 5:236 System1/2 / 6:260 WorldModel / 7:271 推理预算 / 8:330 CrashRecovery / 12:376 已知Bug修复记录 / 13:384 (SOFT)降级 / 14:402 跨模块契约 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:38 状态机 / 2:93 Suspend-on-Idle / 3:109 S_VALIDATE / 4:158 DAG（Directed Acyclic Graph，有向无环图） / 5:238 System1/2 / 6:262 WorldModel / 7:273 推理预算 / 8:332 CrashRecovery / 12:378 已知Bug修复记录 / 13:386 (SOFT)降级 / 14:404 跨模块契约 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -99,6 +99,8 @@ Agent 以 goroutine 形式运行，空闲时挂起释放资源。核心状态机
 Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状态机 → 处理 LLM 和工具返回的 events → 空闲超过 SuspendIdleThreshold (`spec/state.yaml §m4_kernel.suspend_idle_threshold_minutes`) 自动 checkpoint 到 SurrealDB-Core KV（Key-Value，键值） 后释放 goroutine。HITL 等待期间通过 M2 EventLog Subscribe 监听 ApprovalResolved 事件（非 Go channel，防止进程崩溃丢失审批）。
 
 **咨询式挂起（提案）**：`AskHuman` 特权工具扩展本节 Suspend 语义，新增 `SuspendReason=awaiting_user_input`，复用同一 Suspend/Resume 路径处理"信息缺失需澄清"场景（不新增独立错误类型/独立挂起态）。设计草案见 [ADR-0042](./decisions/ADR-0042-hitl-askhuman-consultation.md)（Proposed，未实现）。
+
+**内存持久化失败熔断（GD-13-003，收窄范围后实现）**：四层存储写入路径均为同步落盘，"写失败"以同步 error 直接从 `AppendEpisodicEvent` 等方法返回，不存在原报告描述的"底层 I/O 拒绝导致静默丢失"；真正缺失的只是"收到失败后 FSM 是否转 Suspended"这一层决策。`internal/agent/agent_execute_util.go` 的 `writeEpisodicWithExtract` 捕获写入错误，`isMemoryPersistenceFailure` 用 `apperr.IsCode(err, apperr.CodeStorageUnavailable)` 判定是否为存储层故障（与业务校验错误等不应熔断的错误类型区分）；命中后 `handleMemoryPersistenceFailure` 设置 `StateContext.SuspendReason="memory_persistence_failure"`、写入一条 `m9_storage_degraded` outbox 记录（供后续告警/自愈消费），并调用 `asyncIntent(types.TriggerInterruptReceived)`——复用 FSM `Dispatch()` 中早于 transitions 表检查的全局中断处理器，路由至 `AgentStateInterrupt`（不同于本节 Suspend 语义的 `AgentStateSuspended`，两者是不同的状态/触发对，未新增状态机转换规则）。
 
 内存效率: 活跃 Agent 约消耗 1MB（含 buffer 和栈），休眠 Agent 仅保留约 100 字节的 checkpoint 元数据。Tier 0 硬上限 2 个活跃 Agent。
 
