@@ -9,7 +9,13 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// mockAgentKernel 的 state/result/namespace 由 Worker 所在的后台 goroutine
+// 写入（tryClaimAndExecute → Run/SetMemoryNamespace），测试主 goroutine 通过
+// time.Sleep 等待后直接读取——两者之间没有 happens-before 关系，`go test -race`
+// 会正确报告数据竞争（先前用裸字段读写，仅靠 sleep "凑巧不出错"）。
+// 用 mu 统一保护，语义与 mockBlackboard 已有的锁模式保持一致。
 type mockAgentKernel struct {
+	mu        sync.Mutex
 	id        string
 	state     types.AgentState
 	result    []byte
@@ -20,19 +26,40 @@ type mockAgentKernel struct {
 func (m *mockAgentKernel) GetID() string { return m.id }
 func (m *mockAgentKernel) Run(ctx context.Context) error {
 	<-m.ch // block until triggered
+	m.mu.Lock()
 	m.state = types.AgentStateComplete
 	m.result = []byte(`{"status":"ok"}`)
+	m.mu.Unlock()
 	return nil
 }
 func (m *mockAgentKernel) SendIntent(trigger types.AgentTrigger) {
 	close(m.ch) // trigger the run
 }
-func (m *mockAgentKernel) GetState() types.AgentState     { return m.state }
-func (m *mockAgentKernel) SetTaskID(id string)            {}
-func (m *mockAgentKernel) SetTaskIntent(intent []byte)    {}
-func (m *mockAgentKernel) SetMemoryNamespace(ns string)   { m.namespace = ns }
-func (m *mockAgentKernel) GetExecuteResult() []byte       { return m.result }
+func (m *mockAgentKernel) GetState() types.AgentState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state
+}
+func (m *mockAgentKernel) SetTaskID(id string)         {}
+func (m *mockAgentKernel) SetTaskIntent(intent []byte) {}
+func (m *mockAgentKernel) SetMemoryNamespace(ns string) {
+	m.mu.Lock()
+	m.namespace = ns
+	m.mu.Unlock()
+}
+func (m *mockAgentKernel) GetExecuteResult() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.result
+}
 func (m *mockAgentKernel) GetTokenUsage() (int, int, int) { return 0, 0, 0 }
+
+// namespaceForTest 供测试断言读取 namespace，避免直接访问裸字段触发竞争。
+func (m *mockAgentKernel) namespaceForTest() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.namespace
+}
 
 type mockBlackboard struct {
 	mu     sync.Mutex
@@ -258,8 +285,8 @@ func TestWorker_TryClaimAndExecute_PropagatesNamespace(t *testing.T) {
 	worker.TaskPushChan <- "task-ns-1"
 	time.Sleep(50 * time.Millisecond)
 
-	if kernel.namespace != "swarm-ns-shared" {
-		t.Errorf("expected kernel.SetMemoryNamespace(%q), got %q", "swarm-ns-shared", kernel.namespace)
+	if got := kernel.namespaceForTest(); got != "swarm-ns-shared" {
+		t.Errorf("expected kernel.SetMemoryNamespace(%q), got %q", "swarm-ns-shared", got)
 	}
 }
 
@@ -294,7 +321,7 @@ func TestWorker_TryClaimAndExecute_NoNamespace(t *testing.T) {
 	worker.TaskPushChan <- "task-no-ns"
 	time.Sleep(50 * time.Millisecond)
 
-	if kernel.namespace != "" {
-		t.Errorf("expected empty namespace for task without Namespace set, got %q", kernel.namespace)
+	if got := kernel.namespaceForTest(); got != "" {
+		t.Errorf("expected empty namespace for task without Namespace set, got %q", got)
 	}
 }
