@@ -35,6 +35,7 @@ func setupPatternBlackboard(t *testing.T) *SQLiteBlackboard {
 			suspend_reason TEXT,
 			error TEXT,
 			version INTEGER DEFAULT 0,
+			namespace TEXT,
 			created_at DATETIME DEFAULT (datetime('now')),
 			updated_at DATETIME DEFAULT (datetime('now'))
 		)

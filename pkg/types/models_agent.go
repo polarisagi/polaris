@@ -19,6 +19,9 @@ TaskSnapshot struct {
 	ID     string
 	Status TaskStatus
 	Result []byte
+	// Namespace 协同任务共享记忆命名空间（GD-14-001），透传自 TaskEntry.Namespace，
+	// 供 Worker 在派发前注入 AgentKernel.SetMemoryNamespace。空值 = 不共享。
+	Namespace string
 }
 
 type

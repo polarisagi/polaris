@@ -174,6 +174,33 @@ func (a *Agent) SetTaskID(id string) {
 	}
 }
 
+// SetMemoryNamespace 由 Worker 在调用 Run() 前注入协同任务共享记忆命名空间
+// （GD-14-001，对应 types.TaskEntry.Namespace）。ns 为空表示不共享，等同于
+// 引入本机制前的默认行为。
+func (a *Agent) SetMemoryNamespace(ns string) {
+	a.sCtx.NamespaceID = ns
+}
+
+// memoryPartitionKey 返回 episodic 记忆写入应使用的分区键：设置了协同命名空间时
+// 返回 NamespaceID（使同命名空间下的多个 Agent 共享记忆），否则返回 SessionID
+// （默认行为，与引入 GD-14-001 前完全一致）。
+//
+// 仅用于"可协作类"记忆事件（task_perceived/plan_generated/reflection_completed/
+// execution_completed）——2PC 幂等性日志（EventActionPending/EventActionDone，
+// agent_execute_dag.go）与 FastPath 意图缓存（agent_execute_effect.go）故意不
+// 使用本方法，继续按 SessionID 严格隔离：前者是本 Agent 自身崩溃恢复用的私有
+// 记账，与其他协作 Agent 共享会造成幂等性判断误判（跨 Agent 的同名工具调用
+// 被误判为"已执行"），不属于"协作记忆共享"的语义范围。
+func (a *Agent) memoryPartitionKey() string {
+	if a.sCtx != nil && a.sCtx.NamespaceID != "" {
+		return a.sCtx.NamespaceID
+	}
+	if a.sCtx == nil {
+		return ""
+	}
+	return a.sCtx.SessionID
+}
+
 // SetTaskIntent 设置任务意图（供 M8 Orchestrator 注入黑板任务信息）。
 func (a *Agent) SetTaskIntent(intent []byte) {
 	intentStr := string(intent)

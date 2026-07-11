@@ -52,6 +52,7 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 			a.writeEpisodicWithExtract(ctx, types.Event{
 				ID:        eventID,
 				Type:      "execution_completed",
+				TaskID:    a.memoryPartitionKey(), // GD-14-001：命名空间内共享，未设置时等于 SessionID
 				Payload:   a.sCtx.ExecuteResult,
 				CreatedAt: time.Now(),
 			})
@@ -59,7 +60,7 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 				ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 					ID:        eventID,
 					Type:      "execution_completed",
-					TaskID:    a.sCtx.SessionID,
+					TaskID:    a.memoryPartitionKey(),
 					Payload:   a.sCtx.ExecuteResult,
 					CreatedAt: time.Now(),
 				}, a.sCtx.SessionID+":exec:"+a.sCtx.AgentID)
@@ -151,6 +152,7 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 		a.writeEpisodicWithExtract(ctx, types.Event{
 			ID:        eventID,
 			Type:      "task_perceived",
+			TaskID:    a.memoryPartitionKey(),
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
 		})
@@ -158,7 +160,7 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 				ID:        eventID,
 				Type:      "task_perceived",
-				TaskID:    a.sCtx.SessionID,
+				TaskID:    a.memoryPartitionKey(),
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			}, a.sCtx.SessionID+":perceive:"+a.sCtx.AgentID)
@@ -184,6 +186,7 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 		a.writeEpisodicWithExtract(ctx, types.Event{
 			ID:        eventID,
 			Type:      "plan_generated",
+			TaskID:    a.memoryPartitionKey(),
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
 		})
@@ -191,7 +194,7 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 				ID:        eventID,
 				Type:      "plan_generated",
-				TaskID:    a.sCtx.SessionID,
+				TaskID:    a.memoryPartitionKey(),
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			}, a.sCtx.SessionID+":plan:"+a.sCtx.AgentID)
@@ -212,6 +215,7 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 		a.writeEpisodicWithExtract(ctx, types.Event{
 			ID:        eventID,
 			Type:      "reflection_completed",
+			TaskID:    a.memoryPartitionKey(),
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
 		})
@@ -219,7 +223,7 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
 				ID:        eventID,
 				Type:      "reflection_completed",
-				TaskID:    a.sCtx.SessionID,
+				TaskID:    a.memoryPartitionKey(),
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			}, a.sCtx.SessionID+":reflect:"+a.sCtx.AgentID)

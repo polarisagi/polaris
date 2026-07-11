@@ -33,6 +33,7 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			max_retries INTEGER DEFAULT 3,
 			provider_suspended_count INTEGER DEFAULT 0,
 			error TEXT,
+			namespace TEXT,
 			created_at DATETIME,
 			updated_at DATETIME
 		);
@@ -208,5 +209,63 @@ func TestSQLiteBlackboard(t *testing.T) {
 	_ = db.QueryRow(`SELECT status FROM tasks WHERE task_id='task-2'`).Scan(&status)
 	if status != "pending" {
 		t.Errorf("expected task-2 to be reverted to pending, got %s", status)
+	}
+}
+
+// TestSQLiteBlackboard_NamespacePersistence 验证 GD-14-001：TaskEntry.Namespace
+// 经 PostTask/PostBatch 落盘后，PeekTask 能正确透传回 TaskSnapshot.Namespace，
+// 供 Worker 读取后注入 AgentKernel.SetMemoryNamespace。
+func TestSQLiteBlackboard_NamespacePersistence(t *testing.T) {
+	db, err := newMockSQLiteDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	bb := NewSQLiteBlackboard(db)
+	ctx := context.Background()
+
+	// PostTask 单条：带命名空间
+	nsTask := &types.TaskEntry{ID: "ns-task-1", Type: "worker", Namespace: "swarm-ns-A"}
+	if err := bb.PostTask(ctx, nsTask); err != nil {
+		t.Fatalf("PostTask failed: %v", err)
+	}
+	snap, err := bb.PeekTask(ctx, "ns-task-1")
+	if err != nil {
+		t.Fatalf("PeekTask failed: %v", err)
+	}
+	if snap == nil || snap.Namespace != "swarm-ns-A" {
+		t.Fatalf("expected Namespace=swarm-ns-A, got %+v", snap)
+	}
+
+	// PostTask：未设置 Namespace 的任务，PeekTask 应返回空字符串（默认行为不变）。
+	plainTask := &types.TaskEntry{ID: "plain-task-1", Type: "worker"}
+	if err := bb.PostTask(ctx, plainTask); err != nil {
+		t.Fatalf("PostTask (plain) failed: %v", err)
+	}
+	plainSnap, err := bb.PeekTask(ctx, "plain-task-1")
+	if err != nil {
+		t.Fatalf("PeekTask (plain) failed: %v", err)
+	}
+	if plainSnap == nil || plainSnap.Namespace != "" {
+		t.Fatalf("expected empty Namespace for plain task, got %+v", plainSnap)
+	}
+
+	// PostBatch：批量任务共享同一命名空间（CSV fanout 场景）。
+	batch := []*types.TaskEntry{
+		{ID: "ns-batch-1", Type: "worker", Namespace: "swarm-ns-B"},
+		{ID: "ns-batch-2", Type: "worker", Namespace: "swarm-ns-B"},
+	}
+	if err := bb.PostBatch(ctx, batch); err != nil {
+		t.Fatalf("PostBatch failed: %v", err)
+	}
+	for _, id := range []string{"ns-batch-1", "ns-batch-2"} {
+		s, err := bb.PeekTask(ctx, id)
+		if err != nil {
+			t.Fatalf("PeekTask(%s) failed: %v", id, err)
+		}
+		if s == nil || s.Namespace != "swarm-ns-B" {
+			t.Errorf("expected %s Namespace=swarm-ns-B, got %+v", id, s)
+		}
 	}
 }

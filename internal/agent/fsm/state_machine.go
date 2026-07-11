@@ -57,9 +57,17 @@ const (
 
 // StateContext 穿越状态机各转移的共享上下文（与 protocol.StateContext 互补）。
 type StateContext struct {
-	AgentID              string
-	SessionID            string
-	TaskID               string              // 当前认领的 Blackboard task_id；由 Worker 在 Run() 前通过 SetTaskID() 注入
+	AgentID   string
+	SessionID string
+	TaskID    string // 当前认领的 Blackboard task_id；由 Worker 在 Run() 前通过 SetTaskID() 注入
+	// NamespaceID 协同任务共享记忆命名空间（GD-14-001，见 docs/arch/decisions ADR）。
+	// 空值 = 不共享，行为与引入本字段前完全一致。非空时，episodic 写入的分区键
+	// （复用现有 types.Event.TaskID / types.EpisodicQuery.SessionID 字段承载，
+	// 见 internal/memory/store/episodic_mem.go Query() 的 ev.TaskID==q.SessionID
+	// 过滤逻辑）改用 NamespaceID 而非 SessionID，使同一 Namespace 下的多个 Worker
+	// Agent 能检索到彼此写入的记忆片段；不同 Namespace 之间仍然隔离。
+	// 由 Worker 在 Run() 前通过 SetMemoryNamespace() 注入（对应 types.TaskEntry.Namespace）。
+	NamespaceID          string
 	RawIntentTS          taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
 	TaskModel            *TaskModel          // S_PERCEIVE 产出
 	DAGModel             *DAGModel           // S_PLAN 产出

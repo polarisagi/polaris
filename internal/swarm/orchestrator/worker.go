@@ -21,6 +21,9 @@ type AgentKernel interface {
 	GetState() types.AgentState
 	SetTaskID(id string)
 	SetTaskIntent(intent []byte)
+	// SetMemoryNamespace 注入协同任务共享记忆命名空间（GD-14-001，对应
+	// types.TaskEntry.Namespace）。空字符串表示不共享，与引入本机制前行为一致。
+	SetMemoryNamespace(ns string)
 	GetExecuteResult() []byte
 	SendIntent(trigger types.AgentTrigger)
 	// GetTokenUsage 返回本轮 Run 的分项 token 消耗（Gap-A, HE-Rule-1）。
@@ -106,6 +109,15 @@ func (w *Worker) tryClaimAndExecute(ctx context.Context, taskID string) {
 	// 2. 将任务注入 AgentKernel
 	w.kernel.SetTaskID(taskID)
 	w.kernel.SetTaskIntent([]byte(fmt.Sprintf("Handle task: %s", taskID)))
+
+	// GD-14-001：读取 TaskEntry.Namespace 并注入 Agent 共享记忆命名空间。
+	// PeekTask 失败或 Namespace 为空时按不共享处理（默认行为不变），单独失败
+	// 不阻断任务执行——命名空间共享是记忆检索的增强能力，不是执行的前置条件。
+	if snap, err := w.blackboard.PeekTask(ctx, taskID); err == nil && snap != nil {
+		w.kernel.SetMemoryNamespace(snap.Namespace)
+	} else {
+		w.kernel.SetMemoryNamespace("")
+	}
 
 	// 为了不阻塞 ListenLoop（防止错过心跳或其他事件），我们新起一个 goroutine 跑 Kernel，
 	// 或者直接在当前阻塞，取决于并发度要求。M8 架构建议 Agent 是单线程专注模型。

@@ -146,9 +146,9 @@ func (bb *SQLiteBlackboard) PostTask(ctx context.Context, task *types.TaskEntry)
 	defer func() { _ = tx.Rollback() }()
 
 	result, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, created_at, updated_at)
-		VALUES(?,?,?,?,0,datetime('now'),datetime('now'))`,
-		task.ID, task.Type, statusPending, task.Priority,
+		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, created_at, updated_at)
+		VALUES(?,?,?,?,0,?,datetime('now'),datetime('now'))`,
+		task.ID, task.Type, statusPending, task.Priority, task.Namespace,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostTask", err)
@@ -181,8 +181,8 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*types.TaskEn
 	}()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, created_at, updated_at)
-		VALUES(?,?,?,?,0,datetime('now'),datetime('now'))`)
+		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, created_at, updated_at)
+		VALUES(?,?,?,?,0,?,datetime('now'),datetime('now'))`)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
 	}
@@ -195,7 +195,7 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*types.TaskEn
 				fmt.Sprintf("blackboard.PostBatch: SpawnDepth %d exceeds max %d for agent %q",
 					task.SpawnDepth, maxDepth, task.Type))
 		}
-		result, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority)
+		result, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority, task.Namespace)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
 		}
