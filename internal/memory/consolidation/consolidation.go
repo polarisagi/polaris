@@ -20,15 +20,20 @@ import (
 // 触发: 主题转换 shift → 立即触发 | eventCount ≥ 50 → 触发 | sessionClosed → 强制触发.
 //
 // 依赖注入:
-//   - episodic: 读取待压缩的 Episodic 事件
-//   - semantic: 写入提取出的实体/关系/摘要
-//   - skills:   Stage 4 Logic Collapse 注册新 Skill（nil 时跳过）
-//   - provider: LLM 提取实体/摘要（nil 时走规则 fallback）
+//   - episodic:   读取待压缩的 Episodic 事件
+//   - semantic:   写入提取出的实体/关系/摘要
+//   - skills:     Stage 4 Logic Collapse 注册新 Skill（nil 时跳过）
+//   - summarizer: LLM 提取实体/摘要/画像合成（nil 时走规则 fallback）
+//
+// 2026-07-11 复核修复（GR-5-005）：移除此前直接持有的 protocol.Provider 字段。
+// internal/memory/CLAUDE.md 明令 memory 包 [MUST NOT] 持有 LLM Provider 的具体
+// 实现引用，必须通过注入的 LLMSummarizer 接口调用。此前只有 buildSummary 一处
+// 迁移到了 summarizer，extractEntitiesAndRelations/synthesizeUserProfile 仍在
+// 直接用 provider——这是同一根因在同一文件里遗漏的两处，一并收口到 summarizer。
 type ConsolidationPipeline struct {
 	episodic     protocol.EpisodicMemory
 	semantic     protocol.SemanticMemory
 	skills       protocol.SkillRegistry
-	provider     protocol.Provider
 	summarizer   memory.LLMSummarizer
 	writeFilter  *retrieval.WriteFilter
 	cascadeInv   *retrieval.CascadeInvalidator
@@ -54,14 +59,12 @@ func NewConsolidationPipeline(
 	episodic protocol.EpisodicMemory,
 	semantic protocol.SemanticMemory,
 	skills protocol.SkillRegistry,
-	provider protocol.Provider,
 	summarizer memory.LLMSummarizer,
 ) *ConsolidationPipeline {
 	return &ConsolidationPipeline{
 		episodic:   episodic,
 		semantic:   semantic,
 		skills:     skills,
-		provider:   provider,
 		summarizer: summarizer,
 	}
 }
@@ -71,7 +74,6 @@ func NewConsolidationPipelineFull(
 	e protocol.EpisodicMemory,
 	s protocol.SemanticMemory,
 	skills protocol.SkillRegistry,
-	provider protocol.Provider,
 	summarizer memory.LLMSummarizer,
 	wf *retrieval.WriteFilter,
 	ci *retrieval.CascadeInvalidator,
@@ -81,7 +83,6 @@ func NewConsolidationPipelineFull(
 		episodic:    e,
 		semantic:    s,
 		skills:      skills,
-		provider:    provider,
 		summarizer:  summarizer,
 		writeFilter: wf,
 		cascadeInv:  ci,
@@ -192,7 +193,7 @@ func (p *ConsolidationPipeline) MarkColdEpisodicEvents(ctx context.Context, sess
 // ─── Stage 1 ─────────────────────────────────────────────────────────────────
 
 // extractEntitiesAndRelations 从 Episodic 事件中提取实体与关系。
-// 主路径: LLM 提取（provider 非 nil）。回退: 正则/共现规则。
+// 主路径: LLM 提取（summarizer 非 nil）。回退: 正则/共现规则。
 func computeMaxTaint(events []types.ScoredEvent) types.TaintLevel {
 	maxTaint := types.TaintNone
 	for _, ev := range events {

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
@@ -246,6 +247,17 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 							candidateCh <- candidateResult{}
 							return
 						}
+						// GR-4-005 复核修复：PRM 候选路径此前只传 json_object 格式提示，
+						// 无 Schema 约束，字段类型错误的候选会被 json.Unmarshal 静默解析成
+						// 带零值字段的“看似合法”的 DAGModel。加一层结构校验，未通过的候选
+						// 按原有语义直接作废（不占用 candidates 切片，不影响 PRM 选优）。
+						if schemaErr := schemavalidate.Validate(llmEff.SchemaRef, []byte(cResp.Content)); schemaErr != nil {
+							metrics.GlobalSchemaValidationFailureTotal.Add(1)
+							slog.Warn("agent: PRM candidate failed schema validation, discarding",
+								"schema_ref", llmEff.SchemaRef, "err", schemaErr)
+							candidateCh <- candidateResult{}
+							return
+						}
 						var plan types.DAGModel
 						if jsonErr := json.Unmarshal([]byte(cResp.Content), &plan); jsonErr != nil {
 							candidateCh <- candidateResult{}
@@ -357,6 +369,21 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				// 保存 reasoning_content 供下轮消息历史回传（BUG-04 fix）
 				if resp.ReasoningContent != "" {
 					a.sCtx.LastReasoningContent = resp.ReasoningContent
+				}
+
+				// GR-4-005 复核修复：仅做可观测性埋点，不在此处改变控制流。
+				// 原本考虑过在这里校验失败时直接短路到 OnFailure，但 OnSuccess 的具体实现
+				// （fsm.parsePlanOnSuccess / onReflectSuccess）本身已经内建了"unmarshal 失败
+				// 时复用上一轮缓存 DAGModel，缓存也没有才判定为硬失败"的降级语义（S_PLAN /
+				// S_REFLECT 的既有测试直接依赖这个行为）。在这里短路会绕开那套已经调好的降级
+				// 逻辑，属于用一个新问题替换旧问题。真正的校验强制在各 OnSuccess 内部就近实现
+				// （见 fsm.parsePlanOnSuccess / onReflectSuccess），与既有的 unmarshal 失败分支
+				// 合并处理，保证只有一套"内容不可用"的判定与降级路径。这里只负责让运维能看到
+				// 校验失败发生过，不代表内容一定被拒绝。
+				if schemaErr := schemavalidate.Validate(llmEff.SchemaRef, []byte(resp.Content)); schemaErr != nil {
+					metrics.GlobalSchemaValidationFailureTotal.Add(1)
+					slog.Warn("agent: LLMFillEffect response failed schema validation (see OnSuccess for actual degradation handling)",
+						"schema_ref", llmEff.SchemaRef, "state", a.sm.Current(), "err", schemaErr)
 				}
 				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), []byte(resp.Content))
 			}

@@ -1,0 +1,44 @@
+{
+  "plan_dag": {
+    "type": "object",
+    "required": ["nodes", "edges"],
+    "properties": {
+      "nodes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "action"],
+          "properties": {
+            "id": { "type": "string" },
+            "action": { "type": "string" }
+          }
+        }
+      },
+      "edges": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "string" },
+            "to": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "reflect_result": {
+    "type": "object",
+    "properties": {
+      "GoalAchieved": { "type": "boolean" },
+      "Errors": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "Learnings": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  }
+}

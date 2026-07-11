@@ -1,0 +1,9 @@
+Analyze the following AI agent session log and extract:
+1. Named entities (type MUST be one of: user_preference, constraint, temporary_conclusion, entity)
+2. Relations between entities (type MUST be one of: depends_on, configures, conflicts_with, relates_to)
+
+Return ONLY valid JSON in this format:
+{"entities":[{"name":"...","type":"...","confidence":0.9}],"relations":[{"from":"...","to":"...","type":"...","confidence":0.8}]}
+
+Session log:
+{{.Text}}

@@ -3,11 +3,10 @@ package consolidation
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -71,7 +70,7 @@ func (p *ConsolidationPipeline) synthesizeUserProfile(
 		maps.Copy(profile.StableFacts, current.StableFacts)
 	}
 
-	if p.provider != nil {
+	if p.summarizer != nil {
 		p.llmSynthesizeProfile(ctx, current, events, &profile)
 	} else {
 		p.ruleSynthesizeProfile(events, &profile)
@@ -120,20 +119,22 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 		}
 	}
 
-	prompt := fmt.Sprintf(
-		"Based on these agent session events, update the user profile. "+
-			"Return ONLY valid JSON with keys: stable_facts (object), recent_activity (string array ≤10 items), behavioral_patterns (object).\n\n"+
-			"Current profile: %s\n\nNew events:\n%s",
-		currentJSON, sb.String(),
-	)
-
-	resp, err := safecall.Infer(ctx, p.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
-	if err != nil || resp == nil {
+	promptText, err := templates.Render("user_profile_synthesis.tmpl", map[string]any{
+		"CurrentJSON": currentJSON,
+		"Events":      sb.String(),
+	})
+	if err != nil {
 		p.ruleSynthesizeProfile(events, out)
 		return
 	}
 
-	content := strings.TrimSpace(resp.Content)
+	respContent, err := p.summarizer.InferRaw(ctx, promptText, 512)
+	if err != nil {
+		p.ruleSynthesizeProfile(events, out)
+		return
+	}
+
+	content := strings.TrimSpace(respContent)
 	if idx := strings.Index(content, "{"); idx > 0 {
 		content = content[idx:]
 	}

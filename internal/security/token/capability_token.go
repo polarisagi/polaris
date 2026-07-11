@@ -71,9 +71,17 @@ type TokenManager struct {
 	revoked map[string]struct{}
 	revokeQ []string // 用于 LRU FIFO 淘汰
 
-	// 已签发列表：仅用于通过 ID 进行无状态回源查找（内存缓存）
-	issued map[string]*Token
+	// 已签发列表：仅用于通过 ID 进行无状态回源查找（内存缓存）。
+	// 2026-07-11 复核修复：原实现只 Mint/Delegate 时写入，从未清理，任何持续签发
+	// 短寿命 token 的调用方（如 CodeAct 每次执行都 Lookup 一次已签发 token）会导致
+	// 该 map 无界增长——是一个真实的内存泄漏/DoS 面，不是理论风险。仿照 revoked/
+	// revokeQ 的 FIFO 上限模式加界，并在 Lookup 命中过期 token 时惰性清理。
+	issued  map[string]*Token
+	issuedQ []string // 用于 issued 的 FIFO 淘汰，容量同 maxRevokedCap
 }
+
+// maxIssuedCap issued 缓存 FIFO 上限，防止无界增长（与 maxRevokedCap 保持一致量级）。
+const maxIssuedCap = 1000
 
 // NewTokenManager 创建一个新的令牌管理器，自动生成临时密钥对。
 // 生产环境应替换为从 OS Keychain 确定性派生的密钥（persistent_key）。
@@ -122,11 +130,23 @@ func (tm *TokenManager) Mint(agentID string, caps []CapabilityType, sandboxTier 
 	sig := ed25519.Sign(tm.privKey, payload)
 	tok := &Token{Claims: claims, Signature: sig}
 
-	tm.mu.Lock()
-	tm.issued[tokenID] = tok
-	tm.mu.Unlock()
+	tm.recordIssued(tokenID, tok)
 
 	return tok, nil
+}
+
+// recordIssued 将新签发/委派的 token 计入 issued 缓存，超出 maxIssuedCap 时
+// FIFO 淘汰最旧条目（与 Revoke 的 revokeQ 模式一致），避免无界内存增长。
+func (tm *TokenManager) recordIssued(tokenID string, tok *Token) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if len(tm.issuedQ) >= maxIssuedCap {
+		oldest := tm.issuedQ[0]
+		tm.issuedQ = tm.issuedQ[1:]
+		delete(tm.issued, oldest)
+	}
+	tm.issued[tokenID] = tok
+	tm.issuedQ = append(tm.issuedQ, tokenID)
 }
 
 // Verify 验证令牌的签名有效性、过期状态及撤销状态。
@@ -255,22 +275,28 @@ func (tm *TokenManager) Delegate(parent *Token, agentID string, caps []Capabilit
 	sig := ed25519.Sign(tm.privKey, payload)
 	tok := &Token{Claims: claims, Signature: sig}
 
-	tm.mu.Lock()
-	tm.issued[tokenID] = tok
-	tm.mu.Unlock()
+	tm.recordIssued(tokenID, tok)
 
 	return tok, nil
 }
 
 // Lookup 通过 tokenID 查找已签发的完整 Token（无状态回源）。
-// 如果系统重启导致内存清空，将返回 Not Found，触发调用方重新申请或拦截执行。
+// 如果系统重启导致内存清空，或 token 已因 FIFO 容量淘汰/过期被清理，将返回
+// Not Found，触发调用方重新申请或拦截执行（fail-closed，不做静默降级）。
 func (tm *TokenManager) Lookup(tokenID string) (*Token, error) {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-	if tok, ok := tm.issued[tokenID]; ok {
-		return tok, nil
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tok, ok := tm.issued[tokenID]
+	if !ok {
+		return nil, apperr.New(apperr.CodeNotFound, "capability_token: token not found")
 	}
-	return nil, apperr.New(apperr.CodeNotFound, "capability_token: token not found")
+	// 惰性清理：命中已过期 token 时顺手从缓存移除，减轻长期运行下的内存占用，
+	// 不依赖 FIFO 上限单独兜底。不影响返回语义——过期判断仍以 Verify 为准。
+	if time.Now().Unix() > tok.Claims.ExpiresAt {
+		delete(tm.issued, tokenID)
+		return nil, apperr.New(apperr.CodeNotFound, "capability_token: token not found")
+	}
+	return tok, nil
 }
 
 // ValidateDelegation 验证 child 确实是从 parent 合法派生的子令牌（M11 §3.1）：

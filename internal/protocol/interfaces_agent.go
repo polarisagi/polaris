@@ -37,7 +37,7 @@ type
 // LLMFillEffect LLM 协处理器副作用——重放时从 EventLog 录像取响应。
 // PromptFn 必须是纯函数（同 StateContext → 同 prompt 字节，par_inv_03）。
 LLMFillEffect struct {
-	SchemaRef      string                                                    // → spec/schemas.json
+	SchemaRef      string                                                    // → internal/agent/schemavalidate/schemas.json（GR-4-005 复核修复，2026-07-11）
 	PromptFn       func(sCtx StateContext) []types.Message                   // 纯函数
 	OnSuccess      func(sCtx StateContext, fill []byte) (types.State, error) // LLM 产出 → 下一状态
 	OnFailure      func(sCtx StateContext, err error) (types.State, error)   // LLM 失败 → 错误状态

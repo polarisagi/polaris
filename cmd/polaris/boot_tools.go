@@ -378,7 +378,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		mb.Mem.Episodic(),
 		mb.Mem.Semantic(),
 		skillRegistry,
-		sb.Router,
 		consolidation.NewDefaultSummarizer(sb.Router, sb.PromptMgr),
 		mb.WriteFilter,
 		mb.CascadeInvalidator,

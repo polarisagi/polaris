@@ -52,3 +52,19 @@ func (s *DefaultSummarizer) Summarize(ctx context.Context, text string, maxToken
 	}
 	return "", apperr.Wrap(apperr.CodeInternal, "failed to infer session summary", err)
 }
+
+// InferRaw 透传调用方已渲染好的 prompt，返回 LLM 原始文本响应（去首尾空白）。
+// 供实体抽取 / 用户画像合成等自定义 prompt 结构场景使用，见 memory.LLMSummarizer 注释。
+func (s *DefaultSummarizer) InferRaw(ctx context.Context, prompt string, maxTokens int) (string, error) {
+	if s.provider == nil {
+		return "", nil
+	}
+	resp, err := safecall.Infer(ctx, s.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(maxTokens))
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "failed to infer", err)
+	}
+	if resp == nil {
+		return "", apperr.New(apperr.CodeInternal, "nil response from provider")
+	}
+	return strings.TrimSpace(resp.Content), nil
+}

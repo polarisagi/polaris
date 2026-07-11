@@ -9,8 +9,27 @@ import (
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 	memstore "github.com/polarisagi/polaris/internal/memory/store"
 	"github.com/polarisagi/polaris/internal/memory/testutil"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// mockSummarizer 是 memory.LLMSummarizer 的测试替身，直接包一层 testutil.MockProvider
+// 的固定响应/失败开关，用于验证 ConsolidationPipeline 的 LLM 主路径与规则 fallback。
+type mockSummarizer struct {
+	resp string
+	fail bool
+}
+
+func (m *mockSummarizer) Summarize(ctx context.Context, text string, maxTokens int) (string, error) {
+	return m.InferRaw(ctx, text, maxTokens)
+}
+
+func (m *mockSummarizer) InferRaw(ctx context.Context, prompt string, maxTokens int) (string, error) {
+	if m.fail {
+		return "", apperr.New(apperr.CodeInternal, "mock summarizer failure")
+	}
+	return m.resp, nil
+}
 
 func TestConsolidationPipeline(t *testing.T) {
 	ctx := context.Background()
@@ -18,9 +37,9 @@ func TestConsolidationPipeline(t *testing.T) {
 	semantic := memstore.NewSemanticMem(store, &testutil.MockIntentSubmitter{})
 	episodic := memstore.NewEpisodicMem(store)
 	skills := &mockSkillRegistry{}
-	provider := &testutil.MockProvider{Resp: `{"entities":[{"name":"abc","type":"concept"}],"relations":[]}`}
+	summarizer := &mockSummarizer{resp: `{"entities":[{"name":"abc","type":"concept"}],"relations":[]}`}
 
-	pipe := NewConsolidationPipeline(episodic, semantic, skills, provider, nil)
+	pipe := NewConsolidationPipeline(episodic, semantic, skills, summarizer)
 
 	// Test Run on empty
 	err := pipe.Run(ctx, "s1")
@@ -51,8 +70,8 @@ func TestConsolidationPipeline(t *testing.T) {
 	}
 
 	// Test ruleExtract fallback
-	provider.Fail = true
-	pipe2 := NewConsolidationPipeline(episodic, semantic, skills, provider, nil)
+	summarizer.fail = true
+	pipe2 := NewConsolidationPipeline(episodic, semantic, skills, summarizer)
 	err = pipe2.Run(ctx, "s1")
 	if err != nil {
 		t.Fatal(err)

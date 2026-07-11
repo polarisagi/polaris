@@ -5,23 +5,42 @@ import (
 
 	"context"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/agent/dag"
+	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // parsePlanOnSuccess 将 LLM 返回的 DAG JSON 解析为 DAGModel 并写入 sCtx，消除 S_PLAN / S_REPLAN 重复逻辑。
+//
+// GR-4-005 复核修复：在 json.Unmarshal 之外新增 schemavalidate.Validate("plan_dag", ...)
+// 结构校验，与"unmarshal 失败"合并进同一个降级分支——原实现只在 JSON 语法错误时
+// 触发"复用上一轮缓存 DAGModel"的降级，但 json.Unmarshal 对语法合法、字段缺失/类型
+// 兼容的输入（如节点对象缺 action 字段）不会报错，只会把该字段静默置零值，产出一个
+// "看起来解析成功但语义不完整"的 DAGModel，直接进入 S_VALIDATE/S_EXECUTE 才在更下游
+// 报出难以定位根因的错误（如 tool_name="" 导致工具查找失败）。二者现在走同一条判定：
+// 只要内容不满足最低可用标准，就统一按"本轮 LLM 输出不可用"处理，不区分是语法错误
+// 还是结构缺陷——调用方（S_PLAN/S_REPLAN 的既有降级测试）依赖的正是这一套统一语义，
+// 不能只加校验不接入降级路径，也不能绕开降级路径直接判失败。
 func parsePlanOnSuccess(sCtx *StateContext, pCtx protocol.StateContext, content []byte) (types.State, error) {
 	var protocolPlan types.DAGModel
-	if err := json.Unmarshal(content, &protocolPlan); err != nil {
-		// LLM 输出无效 JSON，但已有预设/缓存的 DAGModel 时保留并继续。
-		// 生产语义: 优先重用上一轮缓存计划，避免无效 LLM 输出导致立即重规划。
+	unmarshalErr := json.Unmarshal(content, &protocolPlan)
+	reason := unmarshalErr
+	if unmarshalErr == nil {
+		reason = schemavalidate.Validate("plan_dag", content)
+	}
+	if reason != nil {
+		// LLM 输出无效 JSON 或结构不完整（语法合法但缺必填字段/类型不符），但已有
+		// 预设/缓存的 DAGModel 时保留并继续。生产语义: 优先重用上一轮缓存计划，
+		// 避免无效 LLM 输出导致立即重规划。
 		if sCtx.DAGModel != nil {
+			slog.Warn("fsm: plan_dag content invalid, reusing cached DAGModel", "err", reason)
 			return "S_PLAN_DONE", nil
 		}
-		return "S_PLAN_FAILED", apperr.Wrap(apperr.CodeInternal, "failed to unmarshal DAGModel", err)
+		return "S_PLAN_FAILED", apperr.Wrap(apperr.CodeInternal, "failed to unmarshal/validate DAGModel", reason)
 	}
 
 	dependsMap := make(map[string][]string)

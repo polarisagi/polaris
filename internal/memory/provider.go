@@ -43,9 +43,19 @@ type KNNResult struct {
 	Score float64
 }
 
-// LLMSummarizer memory 包对 LLM 摘要能力的消费端接口（L1→L2 巩固时使用）。
+// LLMSummarizer memory 包对 LLM 摘要/结构化推理能力的消费端接口（L1→L2 巩固时使用）。
+//
+// 2026-07-11 复核扩展：新增 InferRaw，供实体抽取（Stage 1）、用户画像合成
+// （Stage 3.5）等需要自定义 prompt 结构（而非固定的"总结这段文本"模板）的调用方
+// 使用，取代此前 consolidation_extract.go / consolidation_profile.go 直接持有
+// protocol.Provider 并调用 safecall.Infer 的做法——那样等于绕开了本接口存在的
+// 意义（internal/memory/CLAUDE.md 明令 memory 包 [MUST NOT] 持有 LLM Provider
+// 的具体实现引用）。Summarize 和 InferRaw 的区别仅在于 prompt 是否由实现方渲染：
+// Summarize 内部套用固定模板，InferRaw 直接透传调用方已经渲染好的完整 prompt。
 type LLMSummarizer interface {
 	Summarize(ctx context.Context, text string, maxTokens int) (string, error)
+	// InferRaw 对外发送一段已渲染完成的 prompt，返回 LLM 原始文本响应（不做后处理/截断）。
+	InferRaw(ctx context.Context, prompt string, maxTokens int) (string, error)
 }
 
 // WorkspaceProvider memory 包对任务隔离工作区目录管理的消费端接口（M05 §11.3 Stage 1）。

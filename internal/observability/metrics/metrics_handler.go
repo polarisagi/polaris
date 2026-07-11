@@ -111,6 +111,12 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			metric.WithDescription("与创始行为锚点的综合漂移评分 [0,1]"),
 		)
 
+		// GR-4-005 复核修复：LLMFillEffect.SchemaRef 结构校验失败累计次数。
+		schemaValidationFailureGauge, _ := meter.Float64ObservableGauge(
+			"polaris.agent.schema_validation_failure_total",
+			metric.WithDescription("LLMFillEffect 响应未通过 SchemaRef 结构校验的累计次数"),
+		)
+
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
@@ -136,9 +142,10 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 
 			o.ObserveFloat64(blindZoneGauge, float64(GlobalBlindZoneRoutingTotal.Load()))
 			o.ObserveFloat64(anchorDriftGauge, GetFoundingAnchorDriftScore())
+			o.ObserveFloat64(schemaValidationFailureGauge, float64(GlobalSchemaValidationFailureTotal.Load()))
 
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge)
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge)
 
 		h := promhttp.Handler()
 		otelHandlerPtr.Store(&h)
