@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/prompt/templates"
+
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
@@ -72,10 +74,16 @@ func (h *SummaryGenOutboxHandler) generateSummary(ctx context.Context, docID str
 
 	// A-12：System Prompt 与用户数据严格分离，避免拼接注入风险。
 	// System 消息固定角色定义；User 消息携带待摘要的原始文档内容（可能含外部数据）。
+	sysPrompt, err := templates.Render("graphrag_doc_summary.tmpl", nil)
+	if err != nil {
+		slog.WarnContext(ctx, "summary_gen: render system prompt failed, fallback to default", "error", err)
+		sysPrompt = "你是文档摘要助手。请根据用户提供的文档片段，生成一个简洁的文档级摘要，不超过200个token，只输出摘要内容。"
+	}
+
 	inferMsgs := []types.Message{
 		{
 			Role:    "system",
-			Content: "你是文档摘要助手。请根据用户提供的文档片段，生成一个简洁的文档级摘要，不超过200个token，只输出摘要内容。",
+			Content: sysPrompt,
 		},
 		{
 			Role:    "user",

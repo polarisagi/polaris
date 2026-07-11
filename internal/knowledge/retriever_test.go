@@ -97,22 +97,22 @@ func TestRRFThreeWay(t *testing.T) {
 }
 
 func TestHybridRetrieverConstructors(t *testing.T) {
-	hr := NewHybridRetriever(nil)
+	hr := NewHybridRetriever(nil, 0)
 	if hr == nil {
 		t.Errorf("NewHybridRetriever returned nil")
 	}
 
-	hr2 := NewHybridRetrieverWithEmbedder(nil, nil)
+	hr2 := NewHybridRetrieverWithEmbedder(nil, nil, 0)
 	if hr2 == nil {
 		t.Errorf("NewHybridRetrieverWithEmbedder returned nil")
 	}
 
-	hr3 := NewHybridRetrieverWithCognitive(nil, nil, nil)
+	hr3 := NewHybridRetrieverWithCognitive(nil, nil, nil, 0)
 	if hr3 == nil {
 		t.Errorf("NewHybridRetrieverWithCognitive returned nil")
 	}
 
-	hr4 := NewHybridRetrieverWithGraph(nil, nil, nil, nil)
+	hr4 := NewHybridRetrieverWithGraph(nil, nil, nil, nil, 0)
 	if hr4 == nil {
 		t.Errorf("NewHybridRetrieverWithGraph returned nil")
 	}

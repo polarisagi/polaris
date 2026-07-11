@@ -143,7 +143,9 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
 		var args map[string]any
 		if len(spec.Input) > 0 {
-			json.Unmarshal(spec.Input, &args) //nolint:errcheck
+			if err := json.Unmarshal(spec.Input, &args); err != nil {
+				return nil, apperr.New(apperr.CodeInvalidInput, "mcp: invalid tool input JSON: "+err.Error())
+			}
 		}
 		// CallToolTainted 内部执行 TaintPreservingDecoder，taint 通过 RegisterRich 传递
 		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)

@@ -33,11 +33,12 @@ type CognitiveSearcher interface {
 //   - Tier 0 (embedder=nil): FTS5 BM25 单路，按 rank 排序。
 //   - Tier 1+ (embedder 非 nil): FTS5 + Dense Vector 双路 RRF 融合。
 type HybridRetrieverImpl struct {
-	db        protocol.SQLQuerier
-	embedder  VectorEmbedder           // optional，nil = FTS5 only
-	cognitive CognitiveSearcher        // optional，Tier 1+ SurrealDB HNSW
-	graph     *graphrag.GraphTraverser // optional，Tier 0+ 图遍历（M10 §2.6）
-	reranker  protocol.Reranker        // optional，Cross-encoder reranking
+	db           protocol.SQLQuerier
+	embedder     VectorEmbedder           // optional，nil = FTS5 only
+	cognitive    CognitiveSearcher        // optional，Tier 1+ SurrealDB HNSW
+	graph        *graphrag.GraphTraverser // optional，Tier 0+ 图遍历（M10 §2.6）
+	reranker     protocol.Reranker        // optional，Cross-encoder reranking
+	vecScanLimit int                      // Tier0VectorScanLimit
 }
 
 var _ protocol.HybridRetriever = (*HybridRetrieverImpl)(nil)
@@ -47,23 +48,35 @@ func (hr *HybridRetrieverImpl) SetReranker(r protocol.Reranker) {
 }
 
 // NewHybridRetriever 创建 FTS5-only 检索器（Tier 0）。
-func NewHybridRetriever(db protocol.SQLQuerier) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{db: db}
+func NewHybridRetriever(db protocol.SQLQuerier, vecScanLimit int) *HybridRetrieverImpl {
+	if vecScanLimit <= 0 {
+		vecScanLimit = 500
+	}
+	return &HybridRetrieverImpl{db: db, vecScanLimit: vecScanLimit}
 }
 
 // NewHybridRetrieverWithEmbedder 创建含密集向量路径的检索器（Tier 1+）。
-func NewHybridRetrieverWithEmbedder(db protocol.SQLQuerier, embedder VectorEmbedder) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{db: db, embedder: embedder}
+func NewHybridRetrieverWithEmbedder(db protocol.SQLQuerier, embedder VectorEmbedder, vecScanLimit int) *HybridRetrieverImpl {
+	if vecScanLimit <= 0 {
+		vecScanLimit = 500
+	}
+	return &HybridRetrieverImpl{db: db, embedder: embedder, vecScanLimit: vecScanLimit}
 }
 
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
-func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive}
+func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, vecScanLimit int) *HybridRetrieverImpl {
+	if vecScanLimit <= 0 {
+		vecScanLimit = 500
+	}
+	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive, vecScanLimit: vecScanLimit}
 }
 
 // NewHybridRetrieverWithGraph 创建含 GraphTraverser 的全功能 HybridRetriever。
-func NewHybridRetrieverWithGraph(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, graph *graphrag.GraphTraverser) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive, graph: graph}
+func NewHybridRetrieverWithGraph(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, graph *graphrag.GraphTraverser, vecScanLimit int) *HybridRetrieverImpl {
+	if vecScanLimit <= 0 {
+		vecScanLimit = 500
+	}
+	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive, graph: graph, vecScanLimit: vecScanLimit}
 }
 
 // Search 执行混合检索。
@@ -256,13 +269,12 @@ func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []ty
 func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEmbed []float32, limit int) ([]Chunk, error) {
 
 	// Tier 0 降级：读取所有有 embedding 的 chunk（线性扫描）
-	// 注意: 5000 行上限为 Tier-0 内存预算约束，后续考虑配置化
 	rows, err := hr.db.QueryContext(ctx, `
 		SELECT id, doc_id, content, taint_level, taint_source, embedding
 		FROM rag_chunks
 		WHERE embedding IS NOT NULL AND embedding != '' AND deleted_at IS NULL
-		LIMIT 5000
-	`)
+		LIMIT ?
+	`, hr.vecScanLimit)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: vector scan failed", err)
 	}

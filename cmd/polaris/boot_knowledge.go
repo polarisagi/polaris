@@ -47,7 +47,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		if sb.Embedder != nil {
 			knowledgeEmb = &knowledgeEmbedderAdapter{e: sb.Embedder}
 		}
-		retriever = knowledgepkg.NewHybridRetrieverWithCognitive(sb.Store.DB(), knowledgeEmb, &surrealCognAdapter{s: sb.SurrealStore})
+		retriever = knowledgepkg.NewHybridRetrieverWithCognitive(sb.Store.DB(), knowledgeEmb, &surrealCognAdapter{s: sb.SurrealStore}, sb.Cfg.Storage.Tier0VectorScanLimit)
 		// SurrealDB 路径使用 protocol.Reranker 接口（含 error 返回），通过
 		// colbertRerankerAdapter 适配同一个 colbertReranker 实例，两条检索栈
 		// 共用一套重排逻辑，不重复实例化 Embedder 调用链。

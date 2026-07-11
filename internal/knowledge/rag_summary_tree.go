@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -103,8 +104,12 @@ func (p *DefaultIngestionPipeline) generateSummaryLevels(ctx context.Context, db
 
 	// L1 段落级摘要（每个 leaf chunk → ≤30 tokens 关键句）
 	for i, leaf := range leaves {
-		prompt := fmt.Sprintf("用一句话（≤30个token）总结以下段落的核心信息：\n%s", leaf.content)
-		summary := p.summarizeText(ctx, prompt, 60)
+		promptContent, err := templates.Render("rag_summary_level1.tmpl", map[string]any{"Text": leaf.content})
+		if err != nil {
+			slog.WarnContext(ctx, "failed to render level1 summary template", "error", err)
+			promptContent = fmt.Sprintf("用一句话（≤30个token）总结以下段落的核心信息：\n%s", leaf.content)
+		}
+		summary := p.summarizeText(ctx, promptContent, 60)
 		p.insertSummaryChunk(ctx, db, docNode.ID, srcTaint, now, fmt.Sprintf("para_summary_%s_%d", docNode.ID, i), summary, "para_summary", i)
 	}
 
@@ -117,9 +122,13 @@ func (p *DefaultIngestionPipeline) generateSummaryLevels(ctx context.Context, db
 		for k, lc := range group {
 			combined[k] = lc.content
 		}
-		prompt := fmt.Sprintf("将以下段落内容总结为约100个token的章节摘要：\n%s",
-			strings.Join(combined, "\n\n"))
-		summary := p.summarizeText(ctx, prompt, 150)
+		combinedStr := strings.Join(combined, "\n\n")
+		promptContent, err := templates.Render("rag_summary_level2.tmpl", map[string]any{"Text": combinedStr})
+		if err != nil {
+			slog.WarnContext(ctx, "failed to render level2 summary template", "error", err)
+			promptContent = fmt.Sprintf("将以下段落内容总结为约100个token的章节摘要：\n%s", combinedStr)
+		}
+		summary := p.summarizeText(ctx, promptContent, 150)
 		p.insertSummaryChunk(ctx, db, docNode.ID, srcTaint, now, fmt.Sprintf("chap_summary_%s_%d", docNode.ID, gi/groupSize), summary, "chap_summary", gi/groupSize)
 	}
 
@@ -132,7 +141,11 @@ func (p *DefaultIngestionPipeline) generateSummaryLevels(ctx context.Context, db
 	if len(joined) > 8000 { // 避免超长 prompt
 		joined = joined[:8000] + "…"
 	}
-	prompt := fmt.Sprintf("请生成一个不超过200个token的文档级摘要：\n%s", joined)
-	docSummary := p.summarizeText(ctx, prompt, 300)
+	promptContent, err := templates.Render("rag_summary_level3.tmpl", map[string]any{"Text": joined})
+	if err != nil {
+		slog.WarnContext(ctx, "failed to render level3 summary template", "error", err)
+		promptContent = fmt.Sprintf("请生成一个不超过200个token的文档级摘要：\n%s", joined)
+	}
+	docSummary := p.summarizeText(ctx, promptContent, 300)
 	p.insertSummaryChunk(ctx, db, docNode.ID, srcTaint, now, fmt.Sprintf("doc_summary_%s", docNode.ID), docSummary, "doc_summary", -1)
 }
