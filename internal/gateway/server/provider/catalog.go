@@ -12,6 +12,8 @@ import (
 
 	"net/http"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // CatalogProvider sys_providers 字典条目（只读）。
@@ -41,7 +43,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		`SELECT id, display_name, provider_type, default_base_url, is_local, display_order
 		   FROM sys_providers ORDER BY display_order`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -52,7 +54,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		p := &CatalogProvider{Models: []CatalogModel{}}
 		var isLocal int
 		if err := rows.Scan(&p.ID, &p.DisplayName, &p.ProviderType, &p.DefaultBaseURL, &isLocal, &p.DisplayOrder); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 			return
 		}
 		p.IsLocal = isLocal == 1
@@ -60,7 +62,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		order = append(order, p.ID)
 	}
 	if err := rows.Err(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -68,7 +70,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		`SELECT id, catalog_provider_id, model_id, display_name, recommended_role, display_order
 		   FROM sys_provider_models ORDER BY catalog_provider_id, display_order`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	defer mrows.Close()
@@ -76,7 +78,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		m := CatalogModel{}
 		var provID string
 		if err := mrows.Scan(&m.ID, &provID, &m.ModelID, &m.DisplayName, &m.RecommendedRole, &m.DisplayOrder); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 			return
 		}
 		if p, ok := provMap[provID]; ok {
@@ -84,7 +86,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		}
 	}
 	if err := mrows.Err(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -135,7 +137,7 @@ func getFallbackGeneralModel(models []catalogModelRow) catalogModelRow {
 func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter, r *http.Request) {
 	var req fromCatalogRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	if req.CatalogID == "" {
@@ -194,14 +196,14 @@ func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter,
 		UpdatedAt: now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
 	// 查模型字典（recommended_role 直接映射到 provider_models.role，零翻译）
 	catalogModels, hasGeneral, err := h.fetchCatalogModels(r.Context(), req.CatalogID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -28,7 +30,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 		Entrypoint  string `json:"entrypoint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	extID := util.GenerateHumanReadableID("ext", req.Name)
@@ -83,7 +85,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		http.Error(w, err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
 		return
 	}
 
@@ -95,7 +97,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 	installReq0.Name = req.Name
 	installReq0.Config = string(configJSON)
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq0); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -119,7 +121,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 		Intent      string `json:"intent"` // LLM 驱动生成：描述插件意图，留空则走 manifest_url 模式
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	extID := util.GenerateHumanReadableID("ext", req.Name)
@@ -175,7 +177,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
-		http.Error(w, err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
 		return
 	}
 
@@ -195,7 +197,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 	installReq1.Name = req.Name
 	installReq1.Config = string(configJSON)
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq1); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

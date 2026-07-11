@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -202,6 +203,7 @@ func LlamaLoad(req LlamaLoadRequest) (result *LlamaLoadResponse, err error) {
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferLoad(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+	runtime.KeepAlive(inputCStr)
 	errStr := llamaReadAndFreeStr(outErr)
 	jsonStr := llamaReadAndFreeStr(outJSON)
 	if code < 0 {
@@ -244,6 +246,7 @@ func LlamaGenerate(req LlamaGenerateRequest) (result *LlamaGenerateResponse, err
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferGenerate(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+	runtime.KeepAlive(inputCStr)
 	errStr := llamaReadAndFreeStr(outErr)
 	jsonStr := llamaReadAndFreeStr(outJSON)
 	if code < 0 {
@@ -270,6 +273,7 @@ func LlamaEmbed(req LlamaEmbedRequest) (result *LlamaEmbedResponse, err error) {
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferEmbed(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+	runtime.KeepAlive(inputCStr)
 	errStr := llamaReadAndFreeStr(outErr)
 	jsonStr := llamaReadAndFreeStr(outJSON)
 	if code < 0 {
@@ -296,6 +300,7 @@ func LlamaRerank(req LlamaRerankRequest) (result *LlamaRerankResponse, err error
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferRerank(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+	runtime.KeepAlive(inputCStr)
 	errStr := llamaReadAndFreeStr(outErr)
 	jsonStr := llamaReadAndFreeStr(outJSON)
 	if code < 0 {

@@ -123,7 +123,7 @@ func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Reque
 }
 
 // internalInstallGeneric 安装 skill / plugin / app：写 extension_instances。
-// skill/plugin 需异步下载文件并写运行时表（TODO: downloadAndInstall goroutine）。
+// skill/plugin 通过 downloadAndInstallExtension 异步下载并写运行时表。
 func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string, bypassAuth bool) (any, error) {
 	name := cond(req.Name != "", req.Name, entry.Name)
 	url := cond(req.URL != "", req.URL, entry.URL)

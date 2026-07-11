@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -174,7 +176,7 @@ func (h *PluginHandler) HandleSyncMarketplaces(w http.ResponseWriter, r *http.Re
 	syncedCount, err := h.SyncAllMarketplaces(r.Context(), localOnly)
 	if err != nil {
 		slog.Error("polaris-server: manual sync marketplaces failed", "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	slog.Info("polaris-server: manual sync marketplaces finished", "synced_count", syncedCount)

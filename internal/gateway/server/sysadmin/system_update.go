@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 )
 
@@ -76,7 +78,7 @@ func (h *SysAdminHandler) HandleTriggerUpdate(w http.ResponseWriter, r *http.Req
 	}
 
 	if err := h.Updater.TriggerUpdate(r.Context(), body.Version); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "update_started", "version": body.Version})

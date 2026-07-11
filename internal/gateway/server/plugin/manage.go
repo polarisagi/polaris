@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -54,7 +56,7 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 		        trust_tier, mcp_policy, install_path, catalog_id, created_at, updated_at
 		 FROM plugins ORDER BY created_at DESC`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -122,7 +124,7 @@ func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Reques
 		MCPPolicy map[string]map[string]any `json:"mcp_policy"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
@@ -152,7 +154,7 @@ func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.ExtRepo.UpdatePluginStatus(r.Context(), pluginID, newEnabled, newMCPPolicy, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -227,7 +229,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 		principal = "user"
 	}
 	if err := h.InstallMgr.AuthorizeAction(r.Context(), principal, "plugin:manage", nil); err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
 		return
 	}
 
@@ -242,7 +244,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
@@ -257,7 +259,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 
 	err := h.ExtRepo.UpdatePluginMCPServerEnabled(r.Context(), pluginID, serverID, boolToInt(req.Enabled), now)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 

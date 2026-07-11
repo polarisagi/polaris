@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
@@ -28,7 +30,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 		URL         string `json:"url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -98,7 +100,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		http.Error(w, err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
 		return
 	}
 
@@ -152,7 +154,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 		URL       string            `json:"url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -228,7 +230,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		http.Error(w, err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
 		return
 	}
 

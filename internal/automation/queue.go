@@ -100,14 +100,18 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 		slog.Warn("scheduler: scan pending tasks failed", "err", err)
 		return
 	}
-	defer iter.Close()
-
+	var stList []storedTask
 	for iter.Next() {
 		val := iter.Value()
 		var st storedTask
 		if err := json.Unmarshal(val, &st); err != nil {
 			continue
 		}
+		stList = append(stList, st)
+	}
+	iter.Close() // 显式关闭迭代器，释放读事务锁，避免下面写更新时死锁
+
+	for _, st := range stList {
 
 		maxAttempts := st.Task.MaxAttempts
 		if maxAttempts <= 0 {

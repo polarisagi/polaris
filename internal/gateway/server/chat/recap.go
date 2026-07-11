@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // GET /v1/sessions/{sessionID}/recap
@@ -15,7 +17,7 @@ func (h *ChatHandler) HandleSessionRecap(w http.ResponseWriter, r *http.Request)
 
 	rawMsgs, err := h.ChatRepo.ListMessages(ctx, sessionID, 0)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 

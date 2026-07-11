@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -102,7 +104,7 @@ func (h *ProviderHandler) listProviders(db protocol.SQLQuerier) ([]*ProviderConf
 func (h *ProviderHandler) HandleListProviders(w http.ResponseWriter, r *http.Request) {
 	list, err := h.listProviders(h.DB)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	if list == nil {
@@ -126,7 +128,7 @@ func (h *ProviderHandler) HandleListProviders(w http.ResponseWriter, r *http.Req
 func (h *ProviderHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	var p ProviderConfig
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	if p.ID == "" {
@@ -149,7 +151,7 @@ func (h *ProviderHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Re
 		UpdatedAt: now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	p.Models = []ProviderModel{}
@@ -164,7 +166,7 @@ func (h *ProviderHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Re
 	id := r.PathValue("providerID")
 	var p ProviderConfig
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	p.ID = id
@@ -181,7 +183,7 @@ func (h *ProviderHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Re
 		UpdatedAt: now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	p.UpdatedAt = now
@@ -194,7 +196,7 @@ func (h *ProviderHandler) HandleDeleteProvider(w http.ResponseWriter, r *http.Re
 	id := r.PathValue("providerID")
 	err := h.ProviderRepo.DeleteProvider(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	h.reloadProviders()

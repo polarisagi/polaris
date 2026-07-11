@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // ─── 会话 CRUD HTTP 处理器 ──────────────────────────────────────────────────
@@ -26,7 +28,7 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 
 	sessions, err := h.ChatRepo.ListSessions(r.Context(), 200)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -84,7 +86,7 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 
 	messages, err := h.ChatRepo.ListMessages(r.Context(), sessionID, 100000)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -146,7 +148,7 @@ func parseTaskDuration(createdStr, updatedStr string) int64 {
 func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionID")
 	if err := h.ChatRepo.DeleteSession(r.Context(), sessionID); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

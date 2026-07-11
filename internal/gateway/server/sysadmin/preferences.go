@@ -3,12 +3,14 @@ package sysadmin
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 func (h *SysAdminHandler) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
 	prefs, err := h.SystemRepo.ListPreferences(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -21,13 +23,13 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
 	err := h.SystemRepo.UpsertPreference(r.Context(), key, req.Value)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 

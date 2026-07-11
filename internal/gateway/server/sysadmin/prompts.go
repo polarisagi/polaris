@@ -3,6 +3,8 @@ package sysadmin
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // allowedUserPrompts 用户可通过 API 编辑的提示词文件名白名单。
@@ -84,7 +86,7 @@ func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	if len(req.Value) > 32*1024 {

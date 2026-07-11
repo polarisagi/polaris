@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -29,7 +31,7 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 		LEFT JOIN plugins p ON ms.plugin_id = p.id
 		ORDER BY ms.created_at`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -99,7 +101,7 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 	}
 	var c types.MCPServerConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
@@ -122,7 +124,7 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -179,7 +181,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 		if err == nil {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		}
 		return
 	}
@@ -189,7 +191,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 	}
 	var c types.MCPServerConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
@@ -232,7 +234,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 			RequiresNetwork: c.RequiresNetwork,
 		}
 		if err := h.MCPMgr.Update(r.Context(), h.ExtRepo, id, updateCfg, h.DataDir); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 			return
 		}
 	} else {
@@ -250,7 +252,7 @@ func (h *MCPAdmin) HandleUpdateMCPServer(w http.ResponseWriter, r *http.Request)
 			"updated_at":       now,
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 			return
 		}
 	}
@@ -272,7 +274,7 @@ func (h *MCPAdmin) HandleDeleteMCPServer(w http.ResponseWriter, r *http.Request)
 		if err == nil {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		}
 		return
 	}
@@ -284,7 +286,7 @@ func (h *MCPAdmin) HandleDeleteMCPServer(w http.ResponseWriter, r *http.Request)
 		h.MCPMgr.Remove(id)
 	}
 	if err := h.ExtRepo.DeleteMCPServer(r.Context(), id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	if h.ClearToolSchemaCache != nil {

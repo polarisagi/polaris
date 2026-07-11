@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -75,7 +77,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 
 	var req protocol.PluginInstallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	if req.CatalogID == "" {
@@ -179,7 +181,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 				return
 			}
 		}
-		http.Error(w, err.Error(), http.StatusForbidden)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
 		return
 	}
 
@@ -206,9 +208,9 @@ func (h *PluginHandler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Req
 	err := h.InstallMgr.UninstallExtension(r.Context(), catalogID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not installed") {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusNotFound)
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		}
 		return
 	}
@@ -245,7 +247,7 @@ func (h *PluginHandler) HandleListMarketplaces(w http.ResponseWriter, r *http.Re
 func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Request) {
 	var req protocol.Marketplace
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -261,7 +263,7 @@ func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Requ
 
 	err := h.ExtRepo.CreateMarketplace(r.Context(), req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -274,7 +276,7 @@ func (h *PluginHandler) HandleDeleteMarketplace(w http.ResponseWriter, r *http.R
 	id := r.PathValue("id")
 	deleted, err := h.ExtRepo.DeleteMarketplace(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	if !deleted {

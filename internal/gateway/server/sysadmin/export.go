@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // ── Trajectory 导出（自演化训练数据生成）─────────────────────────────────────
@@ -90,7 +92,7 @@ func (h *SysAdminHandler) HandleExportTrajectories(w http.ResponseWriter, r *htt
 
 	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()

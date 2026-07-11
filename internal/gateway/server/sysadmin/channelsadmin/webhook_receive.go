@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -50,7 +52,7 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 
 	if err := h.verifyWebhookSource(w, r, channelType, cfg, body); err != nil {
 		slog.Warn("webhook verification failed", "channel", channelID, "err", err)
-		http.Error(w, err.Error(), apperr.HTTPStatus(apperr.CodeOf(err)))
+		httputil.RespondError(w, "Internal Server Error", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 

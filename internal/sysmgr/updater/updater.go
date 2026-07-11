@@ -77,7 +77,10 @@ func New(currentVersion, commitHash, buildDate string, client *http.Client) *Man
 		buildDate:    buildDate,
 		client:       client,
 		executableFn: os.Executable,
-		exitFn:       func(code int) { panic(fmt.Sprintf("updater_restart_requested_with_code_%d", code)) },
+		exitFn: func(code int) {
+			slog.Warn("updater: restart requested, exiting", "code", code)
+			os.Exit(code)
+		},
 		info: VersionInfo{
 			Current:      currentVersion,
 			CommitHash:   commitHash,

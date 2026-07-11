@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -51,8 +53,7 @@ func (l *UserLocale) IsMainlandChina() bool {
 //  3. 若 GeoIP 全部失败，降级为根据时区推断国家
 //
 // httpClient 应传入调用方管理的 HTTP 客户端；传 nil 使用 http.DefaultClient。
-// 注意：为避免 SafeDialer 的 SSRF 限制干扰外部公共 API 的访问，
-// 建议传入基于 http.DefaultTransport 的客户端。
+// 注意：为了满足全局安全策略，如果未传入客户端，内部会构造带有特定域名白名单的 SafeDialer 客户端，而不是使用 http.DefaultClient。
 func Detect(ctx context.Context, httpClient *http.Client) *UserLocale {
 	tz := readSystemTimezone()
 
@@ -82,7 +83,9 @@ const geoIPTimeout = 5 * time.Second
 func probeGeoIP(ctx context.Context, baseClient *http.Client) (country string, ok bool) {
 	client := baseClient
 	if client == nil {
-		client = &http.Client{Timeout: geoIPTimeout}
+		sd := network.NewSafeDialer(0, []string{"ipinfo.io", "1.1.1.1", "api.ip.sb"}, config.M11PolicyThresholds{})
+		client = network.NewSafeHTTPClient(sd)
+		client.Timeout = geoIPTimeout
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, geoIPTimeout)

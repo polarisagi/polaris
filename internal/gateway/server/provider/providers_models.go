@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -22,7 +24,7 @@ func (h *ProviderHandler) HandleListModels(w http.ResponseWriter, r *http.Reques
 	providerID := r.PathValue("providerID")
 	rows, err := h.ProviderRepo.ListModels(r.Context(), providerID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	models := make([]ProviderModel, 0, len(rows))
@@ -46,7 +48,7 @@ func (h *ProviderHandler) HandleCreateModel(w http.ResponseWriter, r *http.Reque
 	providerID := r.PathValue("providerID")
 	var m ProviderModel
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	m.ProviderID = providerID
@@ -77,7 +79,7 @@ func (h *ProviderHandler) HandleCreateModel(w http.ResponseWriter, r *http.Reque
 		UpdatedAt:  now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	m.CreatedAt, m.UpdatedAt = now, now
@@ -92,7 +94,7 @@ func (h *ProviderHandler) HandleUpdateModel(w http.ResponseWriter, r *http.Reque
 	modelID := r.PathValue("modelID")
 	var m ProviderModel
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	m.ID = modelID
@@ -117,7 +119,7 @@ func (h *ProviderHandler) HandleUpdateModel(w http.ResponseWriter, r *http.Reque
 		UpdatedAt:  now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	m.UpdatedAt = now
@@ -131,7 +133,7 @@ func (h *ProviderHandler) HandleDeleteModel(w http.ResponseWriter, r *http.Reque
 	modelID := r.PathValue("modelID")
 	err := h.ProviderRepo.DeleteModel(r.Context(), modelID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	h.reloadProviders()
@@ -173,7 +175,7 @@ func (h *ProviderHandler) HandleSetModelRoles(w http.ResponseWriter, r *http.Req
 		ReasoningModelID string `json:"reasoning_model_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	_ = h.ProviderRepo.ClearModelRoles(r.Context(), []string{"default", "reasoning"}, "")

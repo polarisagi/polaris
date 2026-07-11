@@ -4,6 +4,7 @@ package action
 
 import (
 	"fmt"
+	"regexp"
 	"sync"
 ) // ToolUsagePolicy 描述工具的最优参数建议和适用场景。
 // 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §8.2
@@ -169,11 +170,20 @@ func (e *PolicyEvolver) evolvePolicy(toolName string, hist []ToolOutcome) {
 	}
 }
 
+var (
+	uuidRegex = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	ipRegex   = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	timeRegex = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`)
+)
+
 func (e *PolicyEvolver) extractFailurePattern(toolName string, outcome ToolOutcome) {
-	// 简单解析 Error 类型
+	// 解析并规范化 Error 类型（过滤掉 UUID、IP、时间戳等动态数据）
 	errType := "Unknown"
 	if len(outcome.Error) > 0 {
-		errType = outcome.Error // 简单地将错误信息本身作为 ErrorType（实际应通过正则/关键字分析）
+		errType = outcome.Error
+		errType = uuidRegex.ReplaceAllString(errType, "<UUID>")
+		errType = ipRegex.ReplaceAllString(errType, "<IP>")
+		errType = timeRegex.ReplaceAllString(errType, "<TIME>")
 	}
 
 	// 生成签名

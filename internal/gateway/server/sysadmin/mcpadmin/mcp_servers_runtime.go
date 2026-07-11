@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -111,7 +113,7 @@ func (h *MCPAdmin) HandleMCPNetworkApproval(w http.ResponseWriter, r *http.Reque
 
 	if err := h.MCPMgr.ApproveNetworkAccess(r.Context(), id, h.ExtRepo, h.DataDir, body.Approved); err != nil {
 		statusCode := http.StatusInternalServerError
-		http.Error(w, err.Error(), statusCode)
+		httputil.RespondError(w, "Internal Server Error", err, statusCode)
 		return
 	}
 

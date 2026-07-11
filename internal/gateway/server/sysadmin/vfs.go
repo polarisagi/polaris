@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/google/uuid"
 )
 
@@ -55,7 +57,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 	// 限制上传大小 (e.g., 100MB)
 	r.Body = http.MaxBytesReader(w, r.Body, 100<<20)
 	if err := r.ParseMultipartForm(100 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 

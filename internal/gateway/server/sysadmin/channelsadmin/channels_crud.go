@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 )
 
@@ -27,7 +29,7 @@ func (h *ChannelsAdmin) HandleListChannels(w http.ResponseWriter, r *http.Reques
 	rows, err := h.DB.QueryContext(r.Context(),
 		`SELECT id,name,type,enabled,config_json,webhook_secret,created_at,updated_at FROM channels ORDER BY created_at`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -56,7 +58,7 @@ func (h *ChannelsAdmin) HandleListChannels(w http.ResponseWriter, r *http.Reques
 func (h *ChannelsAdmin) HandleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	var c ChannelConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	if c.ID == "" {
@@ -83,7 +85,7 @@ func (h *ChannelsAdmin) HandleCreateChannel(w http.ResponseWriter, r *http.Reque
 		UpdatedAt:     now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -103,7 +105,7 @@ func (h *ChannelsAdmin) HandleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	id := r.PathValue("channelID")
 	var c ChannelConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 	cfgBytes, _ := json.Marshal(c.Config)
@@ -118,7 +120,7 @@ func (h *ChannelsAdmin) HandleUpdateChannel(w http.ResponseWriter, r *http.Reque
 		UpdatedAt:  now,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	if !updated {
@@ -143,7 +145,7 @@ func (h *ChannelsAdmin) HandleDeleteChannel(w http.ResponseWriter, r *http.Reque
 	h.ChannelMgr.Stop(id)
 	err := h.ChannelRepo.DeleteChannel(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

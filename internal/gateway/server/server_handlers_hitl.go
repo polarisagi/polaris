@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
+
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -29,7 +31,7 @@ func (s *Server) handleGetPendingApprovals(w http.ResponseWriter, r *http.Reques
 
 	pending, err := s.hitlGateway.Pending(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -81,7 +83,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		Reason   string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
@@ -149,7 +151,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 		Comment string `json:"comment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
 
@@ -164,7 +166,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 
 	err := s.hitlGateway.Respond(r.Context(), approvalID, resp)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 

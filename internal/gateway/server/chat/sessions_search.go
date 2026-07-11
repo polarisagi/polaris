@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // ============================================================================
@@ -32,7 +34,7 @@ func (h *ChatHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	// FTS5 搜索：按会话分组，每会话取最多 3 条匹配；结果按 rank 排序
 	messages, err := h.ChatRepo.SearchMessages(r.Context(), q, 100)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -106,7 +108,7 @@ func (h *ChatHandler) HandleGetSessionContext(w http.ResponseWriter, r *http.Req
 
 	history, err := h.ListMessages(r.Context(), sessionID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
 
