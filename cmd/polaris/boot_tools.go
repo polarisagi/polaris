@@ -86,6 +86,10 @@ type ToolBundle struct {
 	// 避免每处各自重新实现一份"prompt string → sb.Router.Infer" 的桥接闭包。
 	LLMInfer   protocol.LLMInferFunc
 	Dispatcher *dispatch.Dispatcher
+	// VFSWorkspace 供 boot_server.go 注入 CodeAct（临时脚本落盘，批次4 XR-11
+	// 复核修复）等下游需要 VFS 隔离边界的消费方；bootTools 早于 bootServer 执行，
+	// 构造顺序天然满足依赖。
+	VFSWorkspace *vfs.WorkspaceManager
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -294,6 +298,13 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	vfsWM := vfs.NewWorkspaceManager(sb.Layout.Workspace, workspaceMaxSize)
 	toolRefOffloader := memory.NewToolRefOffloader(sb.Store.DB(), vfsWM)
 
+	// GR-5-001 补线：bootMemory 早于 bootTools 执行（vfsWM 尚不存在），episodic
+	// 层超限 Payload 落盘的 BlobOverflowWriter 此前从未真正接线。bootTools 已经
+	// 持有 mb（bootMemory 的产物）作为参数，vfsWM 一旦构造完成即可原地补上，
+	// 无需为此单独调整 bootSubstrate/bootMemory/bootTools 的既有执行顺序。
+	mb.Mem.SetEpisodicBlobOverflowWriter(vfsWM)
+	slog.Info("polaris: episodic BlobOverflowWriter wired to VFS workspace manager (GR-5-001)")
+
 	semanticCompressHandler := consolidation.NewSemanticCompressHandler(sb.Store.DB(), protocol.LLMInferFunc(llmInfer), vfsWM)
 	sb.Outbox.RegisterHandler(protocol.TopicSemanticCompress, semanticCompressHandler.Handle)
 
@@ -488,6 +499,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		ExtensionBus:          extensionBus,
 		LLMInfer:              protocol.LLMInferFunc(llmInfer),
 		Dispatcher:            disp,
+		VFSWorkspace:          vfsWM,
 	}, nil
 }
 

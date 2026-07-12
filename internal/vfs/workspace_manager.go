@@ -47,6 +47,21 @@ func NewWorkspaceManager(rootDir string, maxSize int64) *WorkspaceManager {
 	concurrent.SafeGo(context.Background(), "vfs.tombstone.gc", func(_ context.Context) {
 		wm.gcWorker()
 	})
+	// ephemeral 脚本孤儿巡检：进程崩溃/panic 导致 StageEphemeralFile 返回的
+	// cleanup() 未被调用时的兜底回收，独立于 7 天周期的 GC()（后者面向持久
+	// taskID 工作区，粒度太粗，不适合"预期秒级生命周期"的临时脚本）。
+	concurrent.SafeGo(context.Background(), "vfs.ephemeral.sweep", func(ctx context.Context) {
+		ticker := time.NewTicker(ephemeralSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				wm.SweepEphemeralOrphans(int64(ephemeralOrphanMaxAge.Seconds()))
+			}
+		}
+	})
 	return wm
 }
 
@@ -57,6 +72,14 @@ func (wm *WorkspaceManager) gcWorker() {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// createdAtMarkerFile 每个任务工作区目录下记录真实创建时间的隐藏标记文件
+// （D-B6-03 修复）。原实现在进程重启后通过 rebuildManifests 用目录 ModTime
+// 兜底 CreatedAt，而 ModTime 会被后续任意一次文件写入刷新，导致同一目录的
+// GC 存活期在"进程不重启"（以创建时间计 7 天）与"进程重启"（以 ModTime
+// 归零重计 7 天）两种情况下不一致——重启后可能人为延长任务工作区寿命，
+// 或反过来因 ModTime 早于真实创建时间（罕见但可能）过早回收。
+const createdAtMarkerFile = ".wm_created_at"
 
 // rebuildManifests 扫描 rootDir 重建 manifests，避免重启后 quota/GC 失效。
 // 仅在构造时调用（单线程），无需加锁，但调用后初始化 totalSize 原子计数器。
@@ -78,7 +101,7 @@ func (wm *WorkspaceManager) rebuildManifests() {
 			if err != nil {
 				return err
 			}
-			if info.IsDir() {
+			if info.IsDir() || info.Name() == createdAtMarkerFile {
 				return nil
 			}
 			totalSize += info.Size()
@@ -88,9 +111,13 @@ func (wm *WorkspaceManager) rebuildManifests() {
 			})
 			return nil
 		})
-		var createdAt int64
-		if info, _ := e.Info(); info != nil {
-			createdAt = info.ModTime().Unix()
+		// 优先读取持久化的真实创建时间标记；缺失时（如升级前已存在的旧目录）
+		// 回退 ModTime 作为近似值，与修复前行为兼容。
+		createdAt := readCreatedAtMarker(dir)
+		if createdAt == 0 {
+			if info, _ := e.Info(); info != nil {
+				createdAt = info.ModTime().Unix()
+			}
 		}
 		wm.manifests[taskID] = &WorkspaceManifest{
 			TaskID:    taskID,
@@ -102,6 +129,24 @@ func (wm *WorkspaceManager) rebuildManifests() {
 	}
 	// 一次性初始化 totalSize 原子计数器（rebuildManifests 只在构造时调用）
 	atomic.StoreInt64(&wm.totalSize, total)
+}
+
+// writeCreatedAtMarker 在任务目录下写入创建时间标记（仅 Create() 首次创建时调用）。
+func writeCreatedAtMarker(dir string, unixSec int64) {
+	_ = os.WriteFile(filepath.Join(dir, createdAtMarkerFile), []byte(fmt.Sprint(unixSec)), 0o600)
+}
+
+// readCreatedAtMarker 读取任务目录下的创建时间标记；不存在或解析失败返回 0。
+func readCreatedAtMarker(dir string) int64 {
+	data, err := os.ReadFile(filepath.Join(dir, createdAtMarkerFile))
+	if err != nil {
+		return 0
+	}
+	var v int64
+	if _, err := fmt.Sscanf(string(data), "%d", &v); err != nil {
+		return 0
+	}
+	return v
 }
 
 // GetRootDir 返回工作区根目录。
@@ -144,14 +189,20 @@ func (wm *WorkspaceManager) Create(taskID string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.Create", err)
 	}
+	createdAt := time.Now().Unix()
+	writeCreatedAtMarker(dir, createdAt) // D-B6-03：持久化真实创建时间，供重启后 rebuildManifests 读取
 	wm.manifests[key] = &WorkspaceManifest{
 		TaskID:    taskID,
-		CreatedAt: time.Now().Unix(),
+		CreatedAt: createdAt,
 	}
 	return dir, nil
 }
 
-// RegisterFile 将文件记录到工作区 manifest，供 CheckQuota 和 GC 使用。
+// RegisterFile 将文件记录到工作区 manifest，供 GC 使用。
+// 注意：不再重复累加 wm.totalSize 全局原子计数器——该计数器的配额份额已在
+// CheckQuota（预占式）阶段原子占用，此处重复累加会导致同一次写入被计两次
+// 配额（D-B6-01 修复的一部分）。manifest 级 m.TotalSize 仍照常累加，供
+// GC/巡检等按任务维度统计使用。
 func (wm *WorkspaceManager) RegisterFile(taskID string, f WorkspaceFile) {
 	key := filepath.Base(filepath.Clean(taskID))
 
@@ -164,19 +215,27 @@ func (wm *WorkspaceManager) RegisterFile(taskID string, f WorkspaceFile) {
 	m.Files = append(m.Files, f)
 	m.TotalSize += f.Size
 	wm.mu.Unlock()
-
-	// totalSize 原子更新（在锁外进行，atomic 操作无需 mu 保护）
-	atomic.AddInt64(&wm.totalSize, f.Size)
 }
 
-// CheckQuota 写入前检查配额（O(1) 查询，GR-6-003 修复）。
-// workspace_write 前 du 累积占用量 + 待写入 > maxSize → ErrQuotaExhausted
+// CheckQuota 配额预占式检查（D-B6-01 修复：原实现仅读取快照，Check 通过后到
+// RegisterFile 实际登记之间存在 TOCTOU 窗口，并发写入可无限突破 maxSize 硬限制）。
+// 通过即代表已原子占用 pendingWrite 份额；调用方后续必须且只能二选一：
+//  1. 写入成功 → 正常调用 RegisterFile 登记文件（不再重复占用配额）；
+//  2. 写入失败/放弃 → 必须调用 ReleaseQuota(pendingWrite) 归还预占份额，
+//     否则配额会永久泄漏。
 func (wm *WorkspaceManager) CheckQuota(pendingWrite int64) error {
-	total := atomic.LoadInt64(&wm.totalSize)
-	if total+pendingWrite > wm.maxSize {
+	total := atomic.AddInt64(&wm.totalSize, pendingWrite)
+	if total > wm.maxSize {
+		atomic.AddInt64(&wm.totalSize, -pendingWrite) // 回滚预占
 		return ErrWorkspaceQuotaExhausted
 	}
 	return nil
+}
+
+// ReleaseQuota 归还 CheckQuota 预占但最终未通过 RegisterFile 登记的配额份额
+// （写入失败/中途放弃场景下调用方必须调用，防止预占配额永久泄漏）。
+func (wm *WorkspaceManager) ReleaseQuota(n int64) {
+	atomic.AddInt64(&wm.totalSize, -n)
 }
 
 // WriteFile 将 data 写入相对路径 relPath（基于 RootDir），自动创建父目录。

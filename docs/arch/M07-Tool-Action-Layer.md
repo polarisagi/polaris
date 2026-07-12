@@ -522,7 +522,7 @@ Security: StreamingActionBus不绕过Capability——mouse_delta/key_sequence需
 | 沉淀 | 否（一次性） | 是（写入 Skill Library，HE-6） |
 | Staging 流水线 | 不走 | 完整 7 阶段（ValidatePython + Eval Gate + 签名）|
 | Sandbox | L3 ContainerSandbox（共用） | L3 ContainerSandbox（共用） |
-| 执行路径 | `writeTempScript` → sandbox.Run | SkillRegistry 读 skill.py → sandbox.Run |
+| 执行路径 | `stageScript`（VFS `StageEphemeralFile`，未接入 VFS 时降级 `writeTempScript`）→ sandbox.Run | SkillRegistry 读 skill.py → sandbox.Run |
 | 用途 | 即时复杂组合 | 高频可复用模式（零 LLM System 1）|
 | 触发 | M4 显式选择 | M9 自动后台触发（≥50 成功轨迹）|
 | HT0 可用 | 否（L3 依赖）| 否（L3 + FeatureLogicCollapse 双门控）|

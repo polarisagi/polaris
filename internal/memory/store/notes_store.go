@@ -220,7 +220,12 @@ func (s *InMemNotesStore) Get(_ context.Context, key string) (*types.Note, error
 	if n.ExpiresAt != nil && time.Now().After(*n.ExpiresAt) {
 		return nil, nil
 	}
+	// 深拷贝 Tags：*n 浅拷贝仍与内部 map 存储的 *Note 共享底层数组，调用方
+	// 修改返回值的 Tags 会直接污染内部缓存（GR-5-003）。
 	cp := *n
+	if n.Tags != nil {
+		cp.Tags = append([]string(nil), n.Tags...)
+	}
 	return &cp, nil
 }
 
@@ -247,11 +252,17 @@ func (s *InMemNotesStore) Set(_ context.Context, key, content string, tags []str
 		v = existing.Version + 1
 	}
 	exp := time.Now().Add(7 * 24 * time.Hour)
+	// 深拷贝调用方传入的 tags：直接持有调用方切片会导致调用方后续复用/修改
+	// 该切片时反向污染内部存储（GR-5-003 同类问题的写入方向）。
+	var tagsCopy []string
+	if tags != nil {
+		tagsCopy = append([]string(nil), tags...)
+	}
 	s.notes[key] = &types.Note{
 		Key:       key,
 		Content:   content,
 		Version:   v,
-		Tags:      tags,
+		Tags:      tagsCopy,
 		UpdatedAt: time.Now(),
 		ExpiresAt: &exp,
 	}
@@ -286,7 +297,11 @@ func (s *InMemNotesStore) List(_ context.Context, tag string) ([]types.Note, err
 				continue
 			}
 		}
-		result = append(result, *n)
+		cp := *n
+		if n.Tags != nil {
+			cp.Tags = append([]string(nil), n.Tags...)
+		}
+		result = append(result, cp)
 	}
 	return result, nil
 }

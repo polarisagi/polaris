@@ -30,14 +30,18 @@ func NewToolRefOffloader(db protocol.SQLQuerier, wm WorkspaceProvider) *ToolRefO
 // Offload 将 content 写入 taskID 的隔离工作区 tool_refs/ 子目录，
 // 登记 workspace_vfs 行，返回可被 read_tool_ref(task_id, id) 读回的 id。
 func (o *ToolRefOffloader) Offload(ctx context.Context, taskID string, content []byte) (string, error) {
-	// 0. 配额检查：拒绝超过 Tier0 工作区配额的写入，防止工具输出无限增长打满磁盘。
-	if err := o.wm.CheckQuota(int64(len(content))); err != nil {
+	// 0. 配额检查（预占式，D-B6-01）：拒绝超过 Tier0 工作区配额的写入，防止工具
+	// 输出无限增长打满磁盘。通过后本次调用的任何失败路径都必须 ReleaseQuota
+	// 归还预占份额，否则配额会永久泄漏。
+	size := int64(len(content))
+	if err := o.wm.CheckQuota(size); err != nil {
 		return "", apperr.Wrap(apperr.CodeResourceExhausted, "ToolRefOffloader: workspace quota exceeded", err)
 	}
 
 	// 1. 获取任务隔离目录（经 WorkspaceManager 保证不越权）
 	_, err := o.wm.Create(taskID)
 	if err != nil {
+		o.wm.ReleaseQuota(size)
 		return "", apperr.Wrap(apperr.CodeInternal, "ToolRefOffloader: failed to create workspace dir", err)
 	}
 
@@ -50,6 +54,7 @@ func (o *ToolRefOffloader) Offload(ctx context.Context, taskID string, content [
 
 	// 写入文件
 	if err := o.wm.WriteFile(relPath, content); err != nil {
+		o.wm.ReleaseQuota(size)
 		return "", apperr.Wrap(apperr.CodeInternal, "ToolRefOffloader: failed to write tool ref file", err)
 	}
 
@@ -60,7 +65,9 @@ func (o *ToolRefOffloader) Offload(ctx context.Context, taskID string, content [
 	`
 	_, err = o.db.ExecContext(ctx, query, id, taskID, relPath, len(content), time.Now().Unix())
 	if err != nil {
-		// 数据库失败无法轻易回滚文件，但在 Workspace 目录里会被 GC 掉
+		// 数据库失败无法轻易回滚文件，但在 Workspace 目录里会被 GC 掉；
+		// 文件确已写入磁盘占用了实际空间，因此不 ReleaseQuota——按 GC 迟早
+		// 回收该孤儿文件时再通过 GC 路径归还，避免配额与磁盘实际占用不一致。
 		return "", apperr.Wrap(apperr.CodeInternal, "ToolRefOffloader: failed to insert workspace_vfs", err)
 	}
 

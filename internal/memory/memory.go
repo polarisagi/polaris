@@ -21,16 +21,15 @@ import (
 // Layer classifies memory into four levels per the 2026 consensus.
 type Layer string
 
-// TaintLevel values for memory entries. Must match security.TaintLevel and types.TaintLevel.
-
 // MemoryEntry is a unit of retrievable memory.
 type MemoryEntry struct {
-	ID                string         `json:"id"`
-	Layer             Layer          `json:"layer"`
-	Content           string         `json:"content"`
-	Embedding         []float64      `json:"embedding,omitempty"`
-	EmbedDim          int            `json:"embed_dim,omitempty"`
-	OccurredAt        time.Time      `json:"occurred_at"`
+	ID         string    `json:"id"`
+	Layer      Layer     `json:"layer"`
+	Content    string    `json:"content"`
+	Embedding  []float64 `json:"embedding,omitempty"`
+	EmbedDim   int       `json:"embed_dim,omitempty"`
+	OccurredAt time.Time `json:"occurred_at"`
+	// TaintLevel 取值必须与 security.TaintLevel / types.TaintLevel 保持一致语义。
 	TaintLevel        int            `json:"taint_level"`
 	TaintSource       string         `json:"taint_source,omitempty"`
 	Meta              map[string]any `json:"meta,omitempty"`
@@ -190,6 +189,15 @@ func (m *MemImpl) ConfigureWorkingMemBudget(budget int) {
 
 func (m *MemImpl) InjectSkillRegistry(sr protocol.SkillRegistry) {
 	m.procedural.SetSkills(sr)
+}
+
+// SetEpisodicBlobOverflowWriter 转发注入 episodic 层超限 Payload 落盘目标
+// （通常为 *vfs.WorkspaceManager，实现 memstore.BlobOverflowWriter）。
+// GR-5-001 补线：bootMemory 早于 bootTools 执行，构造 MemImpl 时 VFS 尚未就绪，
+// 因此不在构造函数内完成注入，改由 bootTools 拿到 vfsWM 后经此方法原地补上
+// （bootTools 本就以 *MemoryBundle 为入参，无需调整既有启动阶段执行顺序）。
+func (m *MemImpl) SetEpisodicBlobOverflowWriter(w memstore.BlobOverflowWriter) {
+	m.episodic.SetBlobOverflowWriter(w)
 }
 
 // TrackToolCall 记录一次工具调用开始（M05 §11.3 TaskMermaidCanvas），创建 pending 节点。

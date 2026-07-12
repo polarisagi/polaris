@@ -31,17 +31,18 @@ import (
 // sandbox 字段使用包内 SandboxProvider 接口（Run 签名与 types.SandboxSpec 不同）。
 // LevelChecker 接口仅用于级别断言，由三个沙箱实现通过 Level() 满足。
 type CodeAct struct {
-	envelope     *sandbox.ExecEnvelope
-	toolExec     protocol.ToolExecutor
-	govAgent     govAgent               // 可选的安全校验网关 (L1)
-	astChecker   ASTChecker             // L0 AST 检查器
-	reviewer     LLMPeerReviewer        // L2 LLM 同行评审
-	hitlGateway  protocol.HITL          // HITL 网关（处理警告级别）
-	maxCodeSize  int                    // 强制的最大代码字节数（inv_global_07）
-	desensitizer *guard.PIIDesensitizer // PII 脱敏器
-	detector     *guard.PIIDetector     // PII 检测器
-	tokenMgr     tokenManager           // Capability Token 管理器
-	stateDir     string                 // GD-4-002: REPL 状态快照根目录；空值时 StatefulSession 请求静默降级为一次性执行
+	envelope       *sandbox.ExecEnvelope
+	toolExec       protocol.ToolExecutor
+	govAgent       govAgent               // 可选的安全校验网关 (L1)
+	astChecker     ASTChecker             // L0 AST 检查器
+	reviewer       LLMPeerReviewer        // L2 LLM 同行评审
+	hitlGateway    protocol.HITL          // HITL 网关（处理警告级别）
+	maxCodeSize    int                    // 强制的最大代码字节数（inv_global_07）
+	desensitizer   *guard.PIIDesensitizer // PII 脱敏器
+	detector       *guard.PIIDetector     // PII 检测器
+	tokenMgr       tokenManager           // Capability Token 管理器
+	stateDir       string                 // GD-4-002: REPL 状态快照根目录；空值时 StatefulSession 请求静默降级为一次性执行
+	stagingBackend ScriptStagingBackend   // 批次4 XR-11 修复：临时脚本落盘目标；nil 时降级为 os.CreateTemp（见 code_act_script_staging.go）
 }
 
 type govAgent interface {
@@ -255,12 +256,14 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 
 	// 安全策略：LLM 生成代码写入临时文件执行，禁止通过 -c 参数拼接（shell 注入向量）。
 	// 原 `python3 -c <code>` 方式存在注入风险：代码中的引号/反斜杠可逃逸 shell 边界。
-	// 临时文件路径使用随机后缀，避免路径预测攻击。
-	tmpFile, err := writeTempScript(req.Language, execCode)
+	// 临时文件路径使用随机后缀，避免路径预测攻击。stageScript 优先落盘至 VFS
+	// 隔离边界内（ca.stagingBackend 非 nil 时），未注入时降级为系统 /tmp（批次4
+	// XR-11 finding 复核修复，见 code_act_script_staging.go）。
+	tmpFile, cleanupScript, err := ca.stageScript(req, execCode)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: write temp script failed", err)
 	}
-	defer os.Remove(tmpFile) // 执行后立即删除，防止敏感代码驻留磁盘
+	defer cleanupScript() // 执行后立即删除，防止敏感代码驻留磁盘
 
 	tok, _ := ca.tokenMgr.Lookup(req.CapabilityID)
 
