@@ -211,3 +211,64 @@ func TestGate_CedarEnforceDeny(t *testing.T) {
 		t.Fatal("expected CedarEnforceDeny to propagate deny and override Go permit rules")
 	}
 }
+
+// TestGate_CedarEnforceDeny_AllowFallsThroughToGoRules 验证 EnforceDeny 模式下
+// Cedar 的 Allow 决定不是终裁——仍需 Go permitRules 独立命中才放行（GD-2-001
+// 修复后三档语义之一：迁移期对"放权"更谨慎，只信任 Cedar 的新增 Deny）。
+func TestGate_CedarEnforceDeny_AllowFallsThroughToGoRules(t *testing.T) {
+	g := NewGate(nil).WithCedarEnforceMode(CedarEnforceDeny)
+	err := g.SyncCedarPolicies(`permit(principal, action, resource) when { principal == Principal::"admin" };`)
+	if err != nil {
+		t.Skip("Cedar FFI not available, skipping test")
+	}
+	ctx := context.Background()
+
+	// Cedar 对 admin 的请求评估为 Allow，但 EnforceDeny 模式下不采信 Cedar 的
+	// Allow，Go 侧又没有对应的 permitRule 命中 → 应当 deny。
+	allowed, err := g.IsAuthorized(ctx, "admin", "read", "data", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Fatal("expected CedarEnforceDeny to NOT trust Cedar's Allow, only its Deny")
+	}
+}
+
+// TestGate_CedarEnforceFull_AllowIsAuthoritative 验证 GD-2-001 修复：EnforceFull
+// （"完全生效"）模式下 Cedar 的 Allow 决定必须直接终裁，不再回退 Go permitRules
+// 独立判定——否则 Cedar Layer 3 Permit 白名单形同虚设，Full 与 Deny 两档行为
+// 完全无法区分。
+func TestGate_CedarEnforceFull_AllowIsAuthoritative(t *testing.T) {
+	g := NewGate(nil).WithCedarEnforceMode(CedarEnforceFull)
+	err := g.SyncCedarPolicies(`permit(principal, action, resource) when { principal == Principal::"admin" };`)
+	if err != nil {
+		t.Skip("Cedar FFI not available, skipping test")
+	}
+	ctx := context.Background()
+
+	// Go 侧刻意不注册任何能匹配 "admin"/"read" 的 permitRule；若 Full 模式仍
+	// 回退 Go 规则，此处会被误判为 deny。
+	allowed, err := g.IsAuthorized(ctx, "admin", "read", "data", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !allowed {
+		t.Fatal("expected CedarEnforceFull to trust Cedar's Allow directly, without falling through to Go rules")
+	}
+
+	// 未被 Cedar 策略覆盖的 principal → Cedar 评估为 Deny，Full 模式下同样应
+	// 直接终裁为 deny，即便 Go 侧存在会独立放行的 permitRule。
+	g.AddPermitRule(PermitRule{
+		Name: "test_permit_guest",
+		MatchFn: func(principal, _, _ string, _ map[string]any) bool {
+			return principal == "guest"
+		},
+	})
+	allowed, err = g.IsAuthorized(ctx, "guest", "read", "data", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Fatal("expected CedarEnforceFull to trust Cedar's Deny directly, overriding Go permit rules")
+	}
+}
