@@ -62,8 +62,12 @@ type WorkspaceProvider interface {
 	GetRootDir() string
 	// RegisterFile 登记文件到 taskID 的 manifest，供 quota/GC 感知。
 	RegisterFile(taskID string, f vfs.WorkspaceFile)
-	// CheckQuota 写入前检查配额，超限返回 vfs.ErrWorkspaceQuotaExhausted。
+	// CheckQuota 预占式检查配额，通过即代表已占用 pendingWrite 份额；超限返回
+	// vfs.ErrWorkspaceQuotaExhausted（未占用）。通过后若最终未 RegisterFile，
+	// 调用方必须调用 ReleaseQuota 归还，否则配额永久泄漏（D-B6-01）。
 	CheckQuota(pendingWrite int64) error
+	// ReleaseQuota 归还 CheckQuota 预占但未通过 RegisterFile 登记的配额份额。
+	ReleaseQuota(n int64)
 	// WriteFile 将 data 写入相对路径 relPath（基于 RootDir），自动创建父目录。
 	WriteFile(relPath string, data []byte) error
 	// ReadFile 从相对路径 relPath 读取文件，最多读取 limit 字节。如果 limit <= 0，读取全部。

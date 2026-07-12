@@ -3,10 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +36,7 @@ type EpisodicMem struct {
 	indexer   EpisodicIndexer            // Tier1+：图索引器，nil 时跳过
 	cognitive protocol.CognitiveSearcher // Tier1+：SurrealDB FTS 索引写入，nil 时跳过
 	maxEvents int                        // 内存事件容量上限，0 表示不限制
+	vfsWriter BlobOverflowWriter         // 可选注入；nil 时降级（见 episodic_mem_overflow.go）
 }
 
 func NewEpisodicMem(store protocol.Store) *EpisodicMem {
@@ -78,7 +76,7 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.T
 
 	// Payload 门控：超限落盘 + log_ref 替换
 	if len(ev.Payload) > maxEpisodicPayloadBytes {
-		ev.Payload = truncateEpisodicPayload(ev.ID, ev.Payload)
+		ev.Payload = em.truncateEpisodicPayload(ev.ID, ev.Payload)
 	}
 
 	key := []byte("episodic:" + ev.ID)
@@ -156,7 +154,17 @@ func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]type
 		if q.Semantic != "" && !strings.Contains(payload, q.Semantic) {
 			continue
 		}
+		// 深拷贝 Payload/ReasoningState：ev 来自 em.events 内部切片浅拷贝
+		// （Query 顶部 copy(events, em.events)），[]byte 字段仍与内部缓存共享
+		// 底层数组。调用方若修改返回的 Event.Payload，会直接污染内部缓存并
+		// 引发并发数据竞争（GR-5-002）。
 		evCopy := ev
+		if ev.Payload != nil {
+			evCopy.Payload = append([]byte(nil), ev.Payload...)
+		}
+		if ev.ReasoningState != nil {
+			evCopy.ReasoningState = append([]byte(nil), ev.ReasoningState...)
+		}
 		results = append(results, types.ScoredEvent{Event: &evCopy, Score: score})
 	}
 
@@ -320,26 +328,6 @@ func (em *EpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, minS
 		results = append(results, e)
 	}
 	return results, nil
-}
-
-// truncateEpisodicPayload 将超限 Payload 落盘，返回含 log_ref 占位符的截断版本。
-// 落盘路径：~/.polarisagi/polaris/logs/events/<id>.bin
-// 返回内容：前 512 字节（BM25 可用）+ log_ref JSON 片段
-func truncateEpisodicPayload(eventID string, raw []byte) []byte {
-	logDir := filepath.Join(os.ExpandEnv("$HOME"), ".polarisagi", "polaris", "logs", "events")
-	if err := os.MkdirAll(logDir, 0700); err == nil {
-		_ = os.WriteFile(filepath.Join(logDir, eventID+".bin"), raw, 0600)
-	}
-
-	preview := raw
-	if len(preview) > 512 {
-		preview = preview[:512]
-	}
-	ref := fmt.Sprintf(
-		`{"log_ref":%q,"bytes":%d,"preview":%s}`,
-		eventID, len(raw), string(preview),
-	)
-	return []byte(ref)
 }
 
 func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, error) {
