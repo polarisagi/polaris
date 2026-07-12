@@ -156,5 +156,20 @@ func (b *PromptBuilder) WriteComputerUsePolicy(mode string, anyAppEnabled, chrom
 	})
 }
 
+// WriteToolHints 将工具自进化闭环（action.PolicyEvolver）产出的 <tool-hints> XML
+// 块写入 ZoneImmutable。内容 100% 由系统内部工具调用统计生成（非用户/外部输入），
+// 与 WriteComputerUsePolicy 同属"内部可信策略文本"，故直接进 ZoneImmutable，不走
+// SafeString/taint 清洗路径（该路径服务于外部可能不可信的输入）。hint 为空时不写入
+// （PolicyEvolver.BuildSystemHintBlock 冷启动/无数据时返回空串，调用方不应注入噪声）。
+func (b *PromptBuilder) WriteToolHints(hint string) {
+	if hint == "" {
+		return
+	}
+	b.zones[ZoneImmutable] = append(b.zones[ZoneImmutable], types.Message{
+		Role:    "system",
+		Content: hint,
+	})
+}
+
 // DefaultPolarisIdentityFallback 是极简兜底文本。
 const DefaultPolarisIdentityFallback = "你是 Polaris，一个开源自托管 AI Agent。你直接高效，有工具时立即调用。"

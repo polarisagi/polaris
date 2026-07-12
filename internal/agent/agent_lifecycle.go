@@ -136,6 +136,12 @@ func (a *Agent) InjectReplanExtensionActivationTimeout(d time.Duration) {
 	a.sm.WithReplanExtensionActivationTimeout(d)
 }
 
+// InjectToolHintProvider 注入工具自进化闭环提示提供方（可选，见
+// fsm.ToolHintProvider；2026-07-12 unwired-code-audit 补齐 PolicyEvolver 接线）。
+func (a *Agent) InjectToolHintProvider(p fsm.ToolHintProvider) {
+	a.sm.WithToolHintProvider(p)
+}
+
 type agentContextBuilder struct {
 	cata catalog.Catalog
 }

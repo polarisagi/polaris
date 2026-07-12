@@ -85,9 +85,37 @@ func (sm *StateMachine) appendDynamicHints(msgs []types.Message) {
 	}
 }
 
+// appendToolHints 将 ToolHintProvider 产出的 <tool-hints> 块追加到 msgs[0]（与
+// appendDynamicHints 的注入方式一致），供有记忆系统（BuildPlanContext）分支复用——
+// 该分支绕过 PromptBuilder 直接返回消息数组，故不能走 WriteToolHints。
+func (sm *StateMachine) appendToolHints(msgs []types.Message) {
+	if sm.toolHintProvider == nil || len(msgs) == 0 {
+		return
+	}
+	hint := sm.toolHintProvider.BuildSystemHintBlock()
+	if hint == "" {
+		return
+	}
+	msgs[0].Content += "\n\n" + hint
+}
+
 // WithExtensionActivator 注入按需扩展激活器（可选，启动时由上层 wire）。
 func (sm *StateMachine) WithExtensionActivator(a ExtensionActivatorIface) {
 	sm.activator = a
+}
+
+// ToolHintProvider 消费方接口（防止包循环，定义在调用方）：由工具自进化闭环
+// （如 action.PolicyEvolver）实现，供 S_PLAN 阶段读取最新的工具使用提示
+// （成功率过低场景标注/慢工具超时建议/重复失败模式缓解建议）并注入 System
+// Prompt（2026-07-12 unwired-code-audit 补齐：PolicyEvolver 完整实现但读写两端
+// 此前均未接入，见 internal/action/tool_usage_policy.go 文档注释）。
+type ToolHintProvider interface {
+	BuildSystemHintBlock() string
+}
+
+// WithToolHintProvider 注入工具使用提示提供方（可选，启动时由上层 wire）。
+func (sm *StateMachine) WithToolHintProvider(p ToolHintProvider) {
+	sm.toolHintProvider = p
 }
 
 // WithReplanExtensionActivationTimeout 注入 S_REPLAN 扩展激活 Effect 的超时上限

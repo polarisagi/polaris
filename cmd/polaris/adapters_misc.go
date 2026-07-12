@@ -1,9 +1,28 @@
 package main
 
 import (
+	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// ─── policyEvolverOutcomeAdapter ────────────────────────────────────────────
+//
+// 桥接 polartool.ToolOutcomeRecorder（consumer-side 接口，定义在
+// internal/tool，防止其反向依赖 internal/action）→ action.PolicyEvolver.
+// RecordOutcome（2026-07-12 unwired-code-audit 补齐工具自进化闭环写侧）。
+type policyEvolverOutcomeAdapter struct {
+	pe *action.PolicyEvolver
+}
+
+func (a *policyEvolverOutcomeAdapter) RecordToolOutcome(toolName string, success bool, latencyMs int64, errMsg string) {
+	a.pe.RecordOutcome(action.ToolOutcome{
+		ToolName:  toolName,
+		Success:   success,
+		LatencyMs: latencyMs,
+		Error:     errMsg,
+	})
+}
 
 // ─── dummySurreal ─────────────────────────────────────────────────────────────
 //

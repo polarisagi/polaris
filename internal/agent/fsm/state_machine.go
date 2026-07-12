@@ -44,6 +44,7 @@ type StateMachine struct {
 	hintsMu                    sync.Mutex
 	activator                  ExtensionActivatorIface
 	dynamicHints               []ExtActivatedHint
+	toolHintProvider           ToolHintProvider
 	replanExtActivationTimeout time.Duration        // S_REPLAN 扩展激活 Effect 超时上限，见 WithReplanExtensionActivationTimeout
 	stashedTriggers            []types.AgentTrigger // P0-5: 暂存中断期间的事件
 	intentDispatcher           func(types.AgentTrigger)
