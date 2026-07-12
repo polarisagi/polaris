@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -30,24 +31,24 @@ func (sd *SafeDialer) TaintEgressCheck(taintLevels []types.TaintLevel) error {
 }
 
 // Capability 出口强制检查。
-type dialerCapability int
+type Capability int
 
 const (
-	capReadOnly     dialerCapability = iota // 仅 GET/HEAD
-	capWriteLocal                           // 仅内网 POST/PUT
-	capWriteNetwork                         // 全网络
+	CapNetworkRead       Capability = iota // 仅 GET/HEAD
+	CapNetworkWriteLocal                   // 仅内网 POST/PUT
+	CapNetworkWrite                        // 全网络
 )
 
 // CheckCapability Phase 0: Capability Token 出口强制。
-func CheckCapability(cap dialerCapability, method string) error {
+func CheckCapability(cap Capability, method string) error {
 	switch cap {
-	case capReadOnly:
+	case CapNetworkRead:
 		if !isReadOnlyHTTP(method) {
 			return &ErrCapabilityWriteBlocked{Method: method}
 		}
-	case capWriteLocal:
+	case CapNetworkWriteLocal:
 		// 调用方负责在 DialContext 中校验 IP 为内网地址
-	case capWriteNetwork:
+	case CapNetworkWrite:
 		// 放行，后续 Phase 1-4 保护
 	}
 	return nil
@@ -56,6 +57,34 @@ func CheckCapability(cap dialerCapability, method string) error {
 func isReadOnlyHTTP(method string) bool {
 	m := strings.ToUpper(method)
 	return m == "GET" || m == "HEAD" || m == "OPTIONS"
+}
+
+// CapabilityRoundTripper 包装 http.RoundTripper 增加能力校验。
+type CapabilityRoundTripper struct {
+	inner http.RoundTripper
+	cap   Capability
+}
+
+func (c *CapabilityRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := CheckCapability(c.cap, req.Method); err != nil {
+		return nil, err
+	}
+	res, err := c.inner.RoundTrip(req)
+	if err != nil {
+		return res, apperr.Wrap(apperr.CodeInternal, "network capability check failed in inner round tripper", err)
+	}
+	return res, nil
+}
+
+// WrapCapability 将 CapabilityRoundTripper 包装到现有的 RoundTripper 上。
+func WrapCapability(inner http.RoundTripper, cap Capability) http.RoundTripper {
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
+	return &CapabilityRoundTripper{
+		inner: inner,
+		cap:   cap,
+	}
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

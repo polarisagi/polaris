@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/store/repo"
 
@@ -306,6 +307,11 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			}
 		})
 	}
+
+	// Task 7: SystemPromptGuard
+	systemPromptGuard := guard.NewSystemPromptGuard(15)
+	// TODO: Inject SystemPromptGuard into SSE/Headless response interceptor
+	_ = systemPromptGuard // occupy variable
 
 	if err := httpServer.Start(); err != nil {
 		slog.Error("polaris: failed to start HTTP server", "err", err)

@@ -5,7 +5,9 @@ import (
 
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -369,6 +372,23 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		if apperr.IsCode(err, apperr.CodeConflict) {
 			a.asyncIntent(types.TriggerExecuteFail)
 			return err //nolint:wrapcheck // Return directly for TOCTOU
+		}
+
+		if errors.Is(err, policy.ErrTaintBlockedEgress) && a.hitl != nil {
+			slog.Info("agent: taint egress blocked, requesting HITL exemption", "session_id", a.sCtx.SessionID)
+			hitlResp, hitlErr := a.hitl.Prompt(ctx, types.HITLPrompt{
+				ID:             fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
+				AgentID:        a.sCtx.AgentID,
+				CheckpointType: "data_exfiltration",
+				PromptText:     fmt.Sprintf("Taint egress blocked (TaintMedium+). Error: %v. Approve to mint TaintExemptionToken.", err),
+				TaintLevel:     types.TaintMedium,
+				DeadlineNs:     time.Now().Add(10 * time.Minute).UnixNano(),
+			})
+			if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
+				// Token minted by hitl.Respond. Will retry on next plan/exec.
+				a.asyncIntent(types.TriggerExecuteFail)
+				return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: taint exemption granted, please retry", err)
+			}
 		}
 
 		// 执行失败 → 触发 S_ROLLBACK

@@ -48,6 +48,13 @@ type StateMachine struct {
 	replanExtActivationTimeout time.Duration        // S_REPLAN 扩展激活 Effect 超时上限，见 WithReplanExtensionActivationTimeout
 	stashedTriggers            []types.AgentTrigger // P0-5: 暂存中断期间的事件
 	intentDispatcher           func(types.AgentTrigger)
+	sessionEventWriter         SessionEventWriter
+}
+
+// SessionEventWriter records events to the session trajectory store.
+type SessionEventWriter interface {
+	WriteStateTransEvent(sessionID string, stateType string)
+	WriteLLMCallEvent(sessionID string, request, response map[string]any)
 }
 
 const (
@@ -254,6 +261,23 @@ func (sm *StateMachine) SetIntentDispatcher(dispatcher func(types.AgentTrigger))
 	sm.intentDispatcher = dispatcher
 }
 
+// SetSessionEventWriter sets the event writer for recording trajectory events.
+func (sm *StateMachine) SetSessionEventWriter(writer SessionEventWriter) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.sessionEventWriter = writer
+}
+
+// WriteLLMCallEvent records an LLM call to the trajectory.
+func (sm *StateMachine) WriteLLMCallEvent(sessionID string, request, response map[string]any) {
+	sm.mu.Lock()
+	writer := sm.sessionEventWriter
+	sm.mu.Unlock()
+	if writer != nil {
+		writer.WriteLLMCallEvent(sessionID, request, response)
+	}
+}
+
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。
 // 返回的 effects 由 Agent.Run 消费——LLMFillEffect 调 LLM，DeterministicEffect 直接执行。
 func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigger types.AgentTrigger) ([]protocol.Effect, error) {
@@ -409,6 +433,10 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 	sm.history = append(sm.history, current)
 	sm.current = t.To
 
+	if sm.sessionEventWriter != nil {
+		sm.sessionEventWriter.WriteStateTransEvent(sCtx.SessionID, fmt.Sprintf("%d", t.To))
+	}
+
 	return effects, nil
 }
 
@@ -457,4 +485,11 @@ func (sm *StateMachine) ForceState(state types.AgentState) {
 	defer sm.mu.Unlock()
 	sm.history = append(sm.history, sm.current)
 	sm.current = state
+
+	if sm.sessionEventWriter != nil {
+		// Note: We don't have StateContext here directly, but normally this is a fail safe
+		// State trans event might lack session ID here unless passed, so we skip it for ForceState,
+		// or we would need to change ForceState signature. Since it's for fatal exceptions,
+		// skipping trajectory logging is acceptable.
+	}
 }

@@ -4,9 +4,10 @@ import (
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
+
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -20,24 +21,22 @@ func (m *mockStorePut) Put(ctx context.Context, key []byte, value []byte) error 
 	return nil
 }
 
-func TestRedTeamProtocol(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/run", func(w http.ResponseWriter, r *http.Request) {
-		probeID := r.Header.Get("X-RedTeam-Probe-ID")
-		if probeID == "rt_l1_prompt_injection" {
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("blocked"))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+type mockAgentPool struct {
+	protocol.AgentPool
+	err error
+}
 
+func (m *mockAgentPool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
+	return nil, m.err
+}
+
+func TestRedTeamProtocol(t *testing.T) {
 	rtp := NewRedTeamProtocol(harness.NewSQLiteEvalStore(&mockStorePut{}, nil))
-	rtp.SetAgentURL(ts.URL)
-	rtp.httpClient = ts.Client()
+
+	// Create a mock AgentPool that rejects the prompt injection probe
+	rtp.SetAgentPool(&mockAgentPool{
+		err: apperr.New(apperr.CodeForbidden, "blocked by taint gate"),
+	})
 
 	findings := rtp.RunSuite(context.Background())
 	if len(findings) == 0 {
@@ -82,7 +81,7 @@ func TestRedTeamProtocol_NoAgentURL(t *testing.T) {
 	if findings[0].Passed {
 		t.Errorf("expected to fail if no agent url")
 	}
-	if findings[0].ActualBehavior != "probe_skipped: agent_url_not_configured" {
+	if findings[0].ActualBehavior != "probe_skipped: agent_pool_not_configured" {
 		t.Errorf("unexpected behavior: %s", findings[0].ActualBehavior)
 	}
 }

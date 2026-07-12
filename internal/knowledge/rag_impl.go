@@ -314,3 +314,10 @@ func splitIntoLeaves(text string, maxRunes int) []string {
 	}
 	return leaves
 }
+
+// GetRecentChunks returns a list of recent chunks.
+// Task 4: SyntheticEvalGen Pipeline integration hook.
+func (p *DefaultIngestionPipeline) GetRecentChunks(ctx context.Context, limit int) ([]string, error) {
+	// 按照任务要求，不需要真查 DB，返回一个写死的一条 Chunk 的 slice
+	return []string{"This is a mocked recent chunk for SyntheticEvalGen pipeline test."}, nil
+}

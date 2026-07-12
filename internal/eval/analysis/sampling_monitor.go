@@ -121,6 +121,17 @@ func (m *ContinuousSamplingMonitor) CheckDegradation() (bool, *DegradationAlert)
 	return true, alert
 }
 
+// GetL3Threshold 返回触发 M11 全局降级的 L3 阈值。
+// Task 5: SamplingMonitor 批次级别打通。
+func (m *ContinuousSamplingMonitor) GetL3Threshold() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.baselineAvg == 0 {
+		return 0.0 // 暂无基线
+	}
+	return m.baselineAvg * degradationThreshold
+}
+
 // SyncSevenDaySnapshot 从 eval 存储加载 7 天前的通过率快照。
 // 应在 Monitor 启动时调用一次，之后每 24h 刷新。
 func (m *ContinuousSamplingMonitor) SyncSevenDaySnapshot(ctx context.Context, store *harness.SQLiteEvalStore) error {

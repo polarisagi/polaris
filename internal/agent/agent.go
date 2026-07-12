@@ -95,6 +95,11 @@ func (a *Agent) Done() <-chan struct{} {
 	return a.done
 }
 
+// GetStateMachine 返回 Agent 内部的 StateMachine
+func (a *Agent) GetStateMachine() *fsm.StateMachine {
+	return a.sm
+}
+
 type AgentConfig struct {
 	MaxReplan      int
 	DefaultBudget  int

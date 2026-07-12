@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
 	"github.com/polarisagi/polaris/internal/learning/surprise"
+	"github.com/polarisagi/polaris/internal/learning/synthetic"
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 
@@ -26,6 +28,7 @@ import (
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/automation"
 	"github.com/polarisagi/polaris/internal/automation/notify"
+	"github.com/polarisagi/polaris/internal/eval"
 	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
@@ -143,6 +146,10 @@ func buildAgent(
 	if prefs != nil {
 		a.SetPreferences(prefs)
 	}
+
+	// Inject trajectory store event writer for state trans and LLM call recording (Task 1)
+	a.GetStateMachine().SetSessionEventWriter(newStoreEventWriter(sb.Store))
+
 	a.InjectTerminalCallback(func(_ context.Context, taskID, taskType string, replanCount int, success bool) {
 		concurrent.SafeGo(bgCtx, "reflection-worker-"+sessionID, func(gctx context.Context) {
 			if err := reflectionWorker.ConsolidateReflections(gctx, taskID, taskType, replanCount, success); err != nil {
@@ -161,6 +168,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	evalStore := harness.NewSQLiteEvalStore(sb.Store, evalAccessEngine)
 	evalRunner := harness.NewRunner(sb.Store, evalStore)
 
+	// Task 5: ContinuousSamplingMonitor 联动
+	samplingMonitor := analysis.NewContinuousSamplingMonitor(nil)
+	samplingMonitor.Start(ctx)
+	evalRunner.InjectL3ThresholdProvider(samplingMonitor)
+
 	// [Task 21] Setup LightweightRegressionDetector and inject into HITLGateway
 	if tb.HITLGateway != nil {
 		l3Detector := regression.NewLightweightRegressionDetector(sb.Store.DB())
@@ -168,7 +180,44 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		tb.HITLGateway.SetL3RegressionDeps(evalRunner, &regressionDetectorAdapter{inner: l3Detector}, cooldown)
 	}
 
-	slog.Info("polaris: eval harness initialized")
+	// Task 4: SyntheticEvalGen Pipeline
+	evalGen := synthetic.NewEvalGenerator(true, sb.Router)
+	concurrent.SafeGo(ctx, "synthetic-eval-gen", func(ctx context.Context) {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				chunks, err := kb.Ingester.GetRecentChunks(ctx, 100)
+				if err != nil || len(chunks) == 0 {
+					continue
+				}
+				cases, err := evalGen.GenerateCases(ctx, chunks)
+				if err != nil {
+					slog.Warn("synthetic eval gen failed", "err", err)
+					continue
+				}
+				for _, c := range cases {
+					evalCase := harness.EvalCase{
+						ID:                  c.ID,
+						Name:                "Synthetic Case: " + c.Question,
+						Description:         fmt.Sprintf("Type: %s, Diff: %s", c.Type, c.Difficulty),
+						Input:               map[string]any{"question": c.Question},
+						Expected:            map[string]any{"answer": c.GroundTruth},
+						Level:               harness.Level4LLMJudge,
+						Severity:            harness.SeverityP2,
+						BehaviorType:        harness.BehaviorSemanticQuality,
+						FalsifiabilityScore: 0.8,
+					}
+					if err := evalStore.PutCase(ctx, "synthetic", "auto_gen", evalCase); err != nil {
+						slog.Warn("failed to put synthetic eval case", "id", c.ID, "err", err)
+					}
+				}
+			}
+		}
+	})
 
 	// ─── §9 Blackboard & Scheduler (L2 M8 + L3 M13) ─────────────────────────
 	blackboard := orchestrator.NewSQLiteBlackboard(sb.Store.DB())
@@ -486,6 +535,13 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)
+	bgTaskScheduler.InjectImmuneGateway(NewImmuneGateway())
+
+	// Task 3: Wire up RedTeamProtocol
+	rtp := eval.NewRedTeamProtocol(evalStore)
+	rtp.SetAgentPool(agentPool)
+	bgTaskScheduler.InjectRedTeamProtocol(rtp)
+
 	bgTaskScheduler.Start(ctx)
 	slog.Info("polaris: AutoCurriculumGenerator background scheduler started")
 

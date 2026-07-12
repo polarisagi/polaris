@@ -370,6 +370,10 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 					a.sCtx.LastReasoningContent = resp.ReasoningContent
 				}
 
+				reqMap := map[string]any{"messages": reqMsgs, "model": llmEff.ModelPool, "thinking_mode": llmEff.ThinkingMode}
+				respMap := map[string]any{"content": resp.Content, "reasoning_content": resp.ReasoningContent, "usage": resp.Usage}
+				a.sm.WriteLLMCallEvent(a.sCtx.SessionID, reqMap, respMap)
+
 				// GR-4-005 复核修复：仅做可观测性埋点，不在此处改变控制流。
 				// 原本考虑过在这里校验失败时直接短路到 OnFailure，但 OnSuccess 的具体实现
 				// （fsm.parsePlanOnSuccess / onReflectSuccess）本身已经内建了"unmarshal 失败
