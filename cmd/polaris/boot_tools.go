@@ -352,7 +352,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	installFSM := lifecycle.NewInstallFSM(extRepo)
 	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr).WithRegistry(knowledgeConnRegistry))
 	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry))
-	installFSM.RegisterInstaller(lifecycle.NewSkillInstaller(extRepo, skillRegistry))
+	installFSM.RegisterInstaller(lifecycle.NewSkillInstaller(extRepo, skillRegistry).WithValidators(
+		&skillStaticAnalyzerAdapter{inner: &skill.StaticAnalyzer{}},
+		&skill.RiskAssessor{}, // 方法签名与 lifecycle.ScriptRiskAssessor 结构一致，无需适配器
+	))
 	installFSM.RegisterInstaller(lifecycle.NewAppInstaller(extRepo))
 	installMgr.WithInstallFSM(installFSM)
 	slog.Info("polaris: InstallFSM injected into marketplace manager")

@@ -128,17 +128,40 @@ type StaticAnalyzer struct{}
 
 // Analyze 静态分析 impl.go。
 // 基于文本模式匹配扫描禁止的导入和包引用（MVP 简化版，Tier 1+ 升级为 go/ast 完整分析）。
+//
+// 模式覆盖 Go/Python/JS-TS 三类当前实际产生技能脚本的语言（2026-07-12
+// unwired-code-audit 补齐 SkillInstaller 接线时发现：本管线最初只有 Go 语法
+// 模式，但 LogicCollapse 生成 Python、Marketplace 安装的社区技能是 TS/JS，
+// 原始模式集对这两类实际目标语言形同虚设——纯字符串子串匹配代价低，一次性
+// 补齐三语言不引入额外依赖或性能负担）。
 func (sa *StaticAnalyzer) Analyze(code []byte) (*AnalyzeResult, error) {
 	result := &AnalyzeResult{Passed: true}
 	codeStr := string(code)
 
 	// 禁止的导入模式
 	forbiddenImports := []string{
+		// Go
 		`"os/exec"`,
 		`"net/http"`,
 		`"unsafe"`,
 		`"C"`, // CGO
 		`"syscall"`,
+		// Python
+		`import os`,
+		`import subprocess`,
+		`import socket`,
+		`import ctypes`,
+		`from os import`,
+		`from subprocess import`,
+		// Node.js / TypeScript
+		`require('child_process')`,
+		`require("child_process")`,
+		`from 'child_process'`,
+		`from "child_process"`,
+		`require('fs')`,
+		`require("fs")`,
+		`from 'fs'`,
+		`from "fs"`,
 	}
 	for _, fi := range forbiddenImports {
 		if strings.Contains(codeStr, fi) {
@@ -148,10 +171,23 @@ func (sa *StaticAnalyzer) Analyze(code []byte) (*AnalyzeResult, error) {
 
 	// 禁止的包调用模式（即使用别名导入也检测）
 	forbiddenCalls := []string{
+		// Go
 		"exec.Command",
 		"http.Get",
 		"http.Post",
 		"unsafe.Pointer",
+		// Python
+		"subprocess.run",
+		"subprocess.Popen",
+		"os.system",
+		"os.popen",
+		"eval(",
+		"exec(",
+		// Node.js / TypeScript
+		"child_process.exec",
+		"child_process.spawn",
+		"process.binding",
+		"new Function(",
 	}
 	for _, fc := range forbiddenCalls {
 		if strings.Contains(codeStr, fc) {
@@ -238,6 +274,7 @@ type RiskAssessor struct{}
 
 // Assess 根据代码内容评估风险级别和推荐沙箱层级。
 // 返回 (riskLevel: 0=low, 1=medium, 2=high; sandboxTier: 1=InProc, 3=Container).
+// 模式覆盖 Go/Python/JS-TS（理由同 StaticAnalyzer.Analyze 头部注释）。
 func (ra *RiskAssessor) Assess(code []byte) (riskLevel int, sandboxTier int) {
 	codeStr := string(code)
 
@@ -245,16 +282,27 @@ func (ra *RiskAssessor) Assess(code []byte) (riskLevel int, sandboxTier int) {
 	hasFSWrite := strings.Contains(codeStr, "WriteFile") ||
 		strings.Contains(codeStr, "os.Create") ||
 		strings.Contains(codeStr, "os.OpenFile") ||
-		strings.Contains(codeStr, "ioutil.WriteFile")
+		strings.Contains(codeStr, "ioutil.WriteFile") ||
+		strings.Contains(codeStr, "fs.writeFile") ||
+		strings.Contains(codeStr, "fs.writeFileSync") ||
+		strings.Contains(codeStr, "open(") // Python open() 读写两用，宁可偏保守判定
 
 	// 检测网络请求 → high
 	hasNetwork := strings.Contains(codeStr, "http.") ||
 		strings.Contains(codeStr, "net.Dial") ||
-		strings.Contains(codeStr, "grpc.Dial")
+		strings.Contains(codeStr, "grpc.Dial") ||
+		strings.Contains(codeStr, "fetch(") ||
+		strings.Contains(codeStr, "XMLHttpRequest") ||
+		strings.Contains(codeStr, "requests.get") ||
+		strings.Contains(codeStr, "requests.post") ||
+		strings.Contains(codeStr, "urllib.request")
 
 	// 检测 shell 执行 → high (需最高隔离)
 	hasShell := strings.Contains(codeStr, "exec.Command") ||
-		strings.Contains(codeStr, "os/exec")
+		strings.Contains(codeStr, "os/exec") ||
+		strings.Contains(codeStr, "subprocess.") ||
+		strings.Contains(codeStr, "os.system") ||
+		strings.Contains(codeStr, "child_process")
 
 	// 风险级别判定
 	switch {
