@@ -80,7 +80,10 @@ type ToolBundle struct {
 	RecoveryHandler       *agent.ProviderRecoveryHandler
 	Catalog               catalog.Catalog // 统一工具目录
 	Activator             *native.ExtensionActivator
-	ExtensionBus          *bus.ExtensionBus
+	// PolicyEvolver 工具自进化闭环（2026-07-12 补齐接线）：bootAgent 经
+	// fsm.ToolHintProvider 消费其 BuildSystemHintBlock() 注入 System Prompt。
+	PolicyEvolver *action.PolicyEvolver
+	ExtensionBus  *bus.ExtensionBus
 	// LLMInfer 通用 LLM 推理闭包（封装 sb.Router），供 SemanticCompressHandler/
 	// ExtensionLibrarianHandler/CodeAct SecurityAuditAgent(L2) 等多个消费方复用，
 	// 避免每处各自重新实现一份"prompt string → sb.Router.Infer" 的桥接闭包。
@@ -189,6 +192,15 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	))
 	toolReg := polartool.NewInMemoryToolRegistry(envelope)
 	toolReg.WithTokenVault(piiVault)
+
+	// 工具自进化闭环（2026-07-12 unwired-code-audit 补齐）：PolicyEvolver 此前
+	// 完整实现（滑动窗口成功率统计 + 失败模式识别）但从未被构造，ExecuteTool
+	// 结果也从未上报——闭环两端均是死代码。policyEvolverOutcomeAdapter 桥接
+	// polartool.ToolOutcomeRecorder（consumer-side 接口，防 internal/tool 反向
+	// 依赖 internal/action）→ PolicyEvolver.RecordOutcome；读侧（BuildSystemHintBlock）
+	// 由 bootAgent 经 fsm.ToolHintProvider 直接结构化满足（方法签名一致，无需适配器）。
+	policyEvolver := action.NewPolicyEvolver(0, 0)
+	toolReg.WithOutcomeRecorder(&policyEvolverOutcomeAdapter{pe: policyEvolver})
 
 	memoryCatalog := catalog.NewMemoryCatalog()
 
@@ -496,6 +508,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		RecoveryHandler:       recoveryHandler,
 		Catalog:               compCatalog,
 		Activator:             activator,
+		PolicyEvolver:         policyEvolver,
 		ExtensionBus:          extensionBus,
 		LLMInfer:              protocol.LLMInferFunc(llmInfer),
 		Dispatcher:            disp,

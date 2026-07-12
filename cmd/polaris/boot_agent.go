@@ -124,6 +124,9 @@ func buildAgent(
 		pool.Run(ctx)
 	})
 	a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})
+	if tb.PolicyEvolver != nil {
+		a.InjectToolHintProvider(tb.PolicyEvolver)
+	}
 	a.InjectReplanExtensionActivationTimeout(
 		time.Duration(sb.Cfg.Thresholds.M4Kernel.ReplanExtensionActivationSecs) * time.Second,
 	)

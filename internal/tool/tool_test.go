@@ -211,6 +211,79 @@ func TestExecuteTool_SandboxSuccess(t *testing.T) {
 	}
 }
 
+// mockOutcomeRecorder 记录 ExecuteTool 上报的调用结果，供验证 PolicyEvolver 接线
+// （2026-07-12 unwired-code-audit 补齐：ExecuteTool 结果此前从未上报给任何观察者）。
+type mockOutcomeRecorder struct {
+	calls []recordedOutcome
+}
+
+type recordedOutcome struct {
+	toolName  string
+	success   bool
+	latencyMs int64
+	errMsg    string
+}
+
+func (m *mockOutcomeRecorder) RecordToolOutcome(toolName string, success bool, latencyMs int64, errMsg string) {
+	m.calls = append(m.calls, recordedOutcome{toolName: toolName, success: success, latencyMs: latencyMs, errMsg: errMsg})
+}
+
+func TestExecuteTool_ReportsOutcomeOnSuccess(t *testing.T) {
+	r, sbx := newAllowRegistry()
+	_ = r.Register(minTool("ok"))
+	sbx.Register("ok", func(_ context.Context, _ []byte) ([]byte, error) {
+		return []byte("world"), nil
+	})
+	rec := &mockOutcomeRecorder{}
+	r.WithOutcomeRecorder(rec)
+
+	if _, err := r.ExecuteTool(ctxWithToken(), "ok", []byte("hello"), types.TaintNone); err != nil {
+		t.Fatalf("意外 error: %v", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("期望上报 1 次调用结果，实际 %d", len(rec.calls))
+	}
+	if rec.calls[0].toolName != "ok" || !rec.calls[0].success {
+		t.Fatalf("上报内容不符预期: %+v", rec.calls[0])
+	}
+}
+
+func TestExecuteTool_ReportsOutcomeOnSandboxError(t *testing.T) {
+	r, sbx := newAllowRegistry()
+	_ = r.Register(minTool("boom"))
+	sbx.Register("boom", func(_ context.Context, _ []byte) ([]byte, error) {
+		return nil, apperr.New(apperr.CodeInternal, "sandbox kaboom")
+	})
+	rec := &mockOutcomeRecorder{}
+	r.WithOutcomeRecorder(rec)
+
+	if _, err := r.ExecuteTool(ctxWithToken(), "boom", []byte("x"), types.TaintNone); err != nil {
+		t.Fatalf("sandbox 错误不应作为函数 error 返回，实际: %v", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("期望上报 1 次调用结果，实际 %d", len(rec.calls))
+	}
+	if rec.calls[0].success {
+		t.Fatal("sandbox 报错时上报的 success 应为 false")
+	}
+	if rec.calls[0].errMsg == "" {
+		t.Fatal("sandbox 报错时上报的 errMsg 不应为空")
+	}
+}
+
+func TestExecuteTool_NilOutcomeRecorder_NoPanic(t *testing.T) {
+	// 未注入 outcomeRecorder 是默认状态（生产环境改造前的行为），必须保持零开销
+	// 且不 panic——回归 reportOutcome 的 nil 防御。
+	r, sbx := newAllowRegistry()
+	_ = r.Register(minTool("ok"))
+	sbx.Register("ok", func(_ context.Context, _ []byte) ([]byte, error) {
+		return []byte("world"), nil
+	})
+	if _, err := r.ExecuteTool(ctxWithToken(), "ok", []byte("hello"), types.TaintNone); err != nil {
+		t.Fatalf("意外 error: %v", err)
+	}
+}
+
 func TestExecuteTool_TaintPropagation(t *testing.T) {
 	r, sbx := newAllowRegistry()
 	taintTool := minTool("tainted")

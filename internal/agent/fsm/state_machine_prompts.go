@@ -73,6 +73,7 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		defer cancel()
 		if msgs, err := sm.cb.BuildPlanContext(ctx, pCtx.Mem, sCtx, nil, sCtx.Cognitive); err == nil {
 			sm.appendDynamicHints(msgs)
+			sm.appendToolHints(msgs)
 			if sCtx.EpochTracker != nil {
 				sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 			}
@@ -124,6 +125,10 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		}
 	}
 	b.WriteComputerUsePolicy(mode, anyAppEnabled, chromeEnabled)
+
+	if sm.toolHintProvider != nil {
+		b.WriteToolHints(sm.toolHintProvider.BuildSystemHintBlock())
+	}
 
 	if sCtx.TaskModel != nil {
 		goalTS := taint.NewTaintedString(
