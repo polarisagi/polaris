@@ -125,6 +125,16 @@ func (ks *KillSwitch) IsSealed() bool {
 	return ks.state == types.KillFullStop
 }
 
+// Allowed 返回当前系统是否允许启动新的 Agent 执行 / 后台任务。
+// 实现 agent.KillSwitchGate / automation.BackgroundGate 等消费端接口（HE-3）。
+// Pause/FullStop 阶段返回 false（拒绝新工作）；Normal/Throttle 阶段仍放行
+// （Throttle 仅表示降级，由各消费方自行限流，语义见 types.KillState 定义）。
+func (ks *KillSwitch) Allowed() bool {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	return ks.state < types.KillPause
+}
+
 func (ks *KillSwitch) shouldThrottleLocked() bool {
 	// 读 TokenBurnRate（metrics.TokenBurnRate 是唯一真相源，inference 适配器写入它）
 	if ks.tbr != nil && ks.tbr.CheckThrottle() >= metrics.ThrottleStage1 {
