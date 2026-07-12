@@ -4,6 +4,19 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-07-12（StateGraphExecutor 首个生产接入：workflow DAG 并行 + 失败重试）
+
+响应"分析 StateGraphExecutor 该接入哪个模块并实际接入，系统最优/功能强大/性能最优"的要求，选定 WebUI 工作流自动化功能作为接入点（此前是不经 Blackboard 的朴素顺序 for 循环）。实现过程中额外发现并修复两个此前未暴露的真实缺陷（因全仓库此前没有真实生产 Worker 消费任一 `Pattern*Executor` 投递的任务）：
+
+- `internal/swarm/orchestrator/pattern_state_graph.go` | 补齐扇入 AND-Join 记账：原实现对无条件边是"任一前驱完成即触发"OR 语义，多前驱 DAG 场景会误触发；新增 `requiredPreds`/`arrivedPreds` + `arriveJoin`，仅对无条件非自环边生效，条件边/自环边 OR 语义不变
+- `internal/swarm/orchestrator/sqlite_blackboard.go` + `007_tasks.sql` | 补齐 `PostTask`/`PostBatch` 从未持久化 `TaskEntry.Intent` 的缺陷（新增 `intent` 列）；`types.TaskSnapshot` 新增 `Intent`/`Type` 字段，`PeekTask` 一并读回
+- `internal/gateway/server/sysadmin/workflowadmin/` | 新增 `workflow_graph.go`（`buildGraphSpec`：`depends_on` 为 seq 索引字符串，非步骤 id——id 每次保存都重新生成，不稳定）+ `workflow_step_worker.go`（自订阅 Blackboard 认领执行，业务失败走 `CompleteTask` 而非 `FailTask` 把重试交给声明式自环条件边）；`029_workflows.sql` 新增 `max_retries` 列 + `workflows.type` 列首次被消费
+- `internal/gateway/server/server_lifecycle.go` | Worker `ListenLoop` 随 `Start()`/`Shutdown()` 生命周期管理
+- `web/src/pages/automation.html` + `web/src/js/store/workflow.js` + `i18n.js` | 工作流编辑器新增执行模式（chain/dag）选择器 + 每步骤依赖勾选（仅 dag 模式）+ 失败重试次数输入
+- `docs/arch/M08-Multi-Agent-Orchestrator.md` §3-quinquies-a/b/c | 新增三段分别说明 AND-Join 修复、Blackboard Intent 持久化修复、workflow 接入设计
+
+**附带核实**：`go build ./...`、`golangci-lint run ./...`（含 wasip1 子集）、`go test ./...`（0 FAIL）、`npm run build`（web/ 构建通过）均已验证。
+
 ## 2026-07-12（同步 8 项架构决策复核实现到架构文档）
 
 对 commit `226654d`（Cedar Permit 三档语义修正）/ `618b0b5`（CodeAct VFS 化 + 配额预占）/ `fecc215`（会话持久化可靠性 + AgentPool Run() 补齐）/ `4d72c93`（Jaccard 分支级联失效补齐）/ `3185c43`（EdgeCondition 声明式算子扩展）做架构文档核实与总结性更新，均为对已落地代码的文字补充，不含伪代码：

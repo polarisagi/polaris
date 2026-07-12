@@ -295,6 +295,16 @@
           <span class="label-text" x-text="$store.i18n.t('wf_field_enabled')"></span>
         </div>
 
+        <!-- 执行模式：chain（顺序）| dag（并行，支持依赖 + 失败重试） -->
+        <div class="form-control">
+          <label for="auto-id-automation-wftype" class="label"><span class="label-text font-medium" x-text="$store.i18n.t('wf_field_type')"></span></label>
+          <select id="auto-id-automation-wftype" class="select select-bordered" x-model="$store.workflow.form.type">
+            <option value="chain" x-text="$store.i18n.t('wf_type_chain')"></option>
+            <option value="dag" x-text="$store.i18n.t('wf_type_dag')"></option>
+          </select>
+          <p class="text-xs text-base-content/60 mt-1" x-text="$store.i18n.t('wf_type_hint')"></p>
+        </div>
+
         <!-- 步骤编辑器 -->
         <div>
           <div class="flex justify-between items-center mb-3">
@@ -356,6 +366,29 @@
                   <div class="form-control flex-row items-end gap-2 pb-1">
                     <input type="checkbox" name="step-input-prev" class="checkbox checkbox-sm checkbox-primary" x-model="step.input_from_prev">
                     <span class="label-text text-xs" x-text="$store.i18n.t('wf_step_input_prev')"></span>
+                  </div>
+                </div>
+
+                <!-- 失败重试次数：chain/dag 均生效（附加自环条件边） -->
+                <div class="form-control mt-3 max-w-[200px]">
+                  <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_max_retries')"></span></label>
+                  <input type="number" min="0" max="10" class="input input-sm input-bordered" x-model.number="step.max_retries">
+                </div>
+
+                <!-- 依赖步骤：仅并行 DAG 模式生效 -->
+                <div class="form-control mt-3" x-show="$store.workflow.form.type === 'dag'">
+                  <label class="label pb-1"><span class="label-text text-xs" x-text="$store.i18n.t('wf_step_depends_on')"></span></label>
+                  <div class="flex flex-wrap gap-2">
+                    <template x-for="(other, oIdx) in $store.workflow.form.steps" :key="oIdx">
+                      <label class="btn btn-xs" :class="(step.depends_on || []).includes(String(oIdx)) ? 'btn-primary' : 'btn-outline'"
+                        x-show="oIdx !== idx">
+                        <input type="checkbox" class="hidden"
+                          :checked="(step.depends_on || []).includes(String(oIdx))"
+                          @change="$store.workflow.toggleDepend(step, oIdx)">
+                        <span x-text="other.name || ('步骤 ' + (oIdx + 1))"></span>
+                      </label>
+                    </template>
+                    <span class="text-xs text-base-content/50 self-center" x-show="!(step.depends_on || []).length" x-text="$store.i18n.t('wf_step_depends_on_none')"></span>
                   </div>
                 </div>
               </div>

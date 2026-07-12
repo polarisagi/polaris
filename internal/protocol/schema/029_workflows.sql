@@ -37,6 +37,17 @@ CREATE INDEX IF NOT EXISTS idx_wf_next_run ON workflows(next_run_at) WHERE next_
 -- seq 0-based，保证有序；UNIQUE(workflow_id, seq) 防重排冲突。
 -- automation_id 为空时使用内联 prompt；非空时以 automation 配置为准（prompt 忽略）。
 -- input_from_prev=1 时，执行引擎将上一步 reply 截断至 2000 字符注入为本步上下文前缀。
+-- 2026-07-12：depends_on/capability_type/max_retries 接入 StateGraphExecutor（编排
+-- 模式10）执行引擎（workflow_graph.go buildGraphSpec）：仅 workflows.type='dag' 时
+-- 生效——depends_on 非空构造真实 DAG 并行边（AND-Join，等待全部声明前驱完成）；
+-- depends_on 为空是真正的并行入口。type='chain'（默认）时完全忽略 depends_on，
+-- 按 seq 合成顺序链（向后兼容既有语义）。depends_on 的 JSON 数组元素是**0-based
+-- seq 索引的字符串**（如 '["0","2"]'），不是步骤 id——因为 CreateWorkflowWithSteps/
+-- UpdateWorkflowWithSteps 每次保存都会为全部步骤重新生成 id（整表先删后插），id
+-- 在两次保存之间不稳定，无法作为前端可持久引用的依赖锚点，seq 索引才是稳定引用。
+-- max_retries>0 的步骤额外附加自环条件边实现失败重试。compensation_* 与
+-- MaxVisits>1（即 max_retries>0）互斥（StateGraphExecutor 校验阶段拒绝，Saga
+-- 逆序补偿语义在多次执行节点上未定义），故同一步骤不得同时配置两者。
 
 CREATE TABLE IF NOT EXISTS workflow_steps (
     id               TEXT    PRIMARY KEY,               -- "ws_{8字节hex}"
@@ -52,6 +63,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     capability_type  TEXT    NOT NULL DEFAULT '',       -- 对应 Agent capability_type
     compensation_tool TEXT   NOT NULL DEFAULT '',       -- 补偿工具名称
     compensation_args TEXT   NOT NULL DEFAULT '',       -- 补偿参数 (JSON)
+    max_retries      INTEGER NOT NULL DEFAULT 0,        -- 失败重试次数（StateGraphExecutor 自环边 MaxVisits=1+此值）
     UNIQUE(workflow_id, seq)
 );
 

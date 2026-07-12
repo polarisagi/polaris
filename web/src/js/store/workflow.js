@@ -29,12 +29,21 @@ function emptyStep() {
     reasoning_effort: 'medium',
     working_dir: '',
     input_from_prev: true,
+    // depends_on: 0-based Seq 索引字符串数组（如 ["0","2"]），只在 form.type==='dag'
+    // 时生效（见后端 workflow_graph.go buildGraphSpec 注释：步骤 id 每次保存都会
+    // 重新生成，Seq 索引才是稳定的前端引用锚点）。
+    depends_on: [],
+    // max_retries: 失败重试次数，附加自环条件边（status==error 时重试）。
+    max_retries: 0,
   }
 }
 
 function emptyForm() {
   return {
     id: '',
+    // type: 'chain'（默认，忽略 depends_on，按顺序执行）| 'dag'（如实按 depends_on
+    // 并行执行，支持多依赖等待全部完成）。
+    type: 'chain',
     name: '',
     description: '',
     trigger_type: 'manual',
@@ -90,6 +99,7 @@ Alpine.store('workflow', {
       const d = await r.json()
       this.form = {
         id:           d.workflow.id,
+        type:         d.workflow.type || 'chain',
         name:         d.workflow.name,
         description:  d.workflow.description,
         trigger_type: d.workflow.trigger_type,
@@ -103,6 +113,8 @@ Alpine.store('workflow', {
           reasoning_effort: st.reasoning_effort || 'medium',
           working_dir:      st.working_dir,
           input_from_prev:  st.input_from_prev,
+          depends_on:       st.depends_on || [],
+          max_retries:      st.max_retries || 0,
         })),
       }
       if (this.form.steps.length === 0) this.form.steps.push(emptyStep())
@@ -115,9 +127,17 @@ Alpine.store('workflow', {
     this.form.steps.push(emptyStep())
   },
 
+  // removeStep/moveStep 需要同步修正其余步骤的 depends_on（Seq 索引字符串数组）
+  // ——否则删除/挪动步骤后，别的步骤里保存的索引引用会错位指向别的步骤（DAG 模式
+  // 下会静默产生错误的依赖关系，见后端 buildGraphSpec 对 depends_on 的索引契约）。
   removeStep(idx) {
     if (this.form.steps.length <= 1) return
     this.form.steps.splice(idx, 1)
+    this.form.steps.forEach(st => {
+      st.depends_on = (st.depends_on || [])
+        .filter(d => Number(d) !== idx)
+        .map(d => (Number(d) > idx ? String(Number(d) - 1) : d))
+    })
   },
 
   moveStep(idx, dir) {
@@ -125,6 +145,23 @@ Alpine.store('workflow', {
     const target = idx + dir
     if (target < 0 || target >= steps.length) return
     ;[steps[idx], steps[target]] = [steps[target], steps[idx]]
+    const swap = d => {
+      const n = Number(d)
+      if (n === idx) return String(target)
+      if (n === target) return String(idx)
+      return d
+    }
+    steps.forEach(st => { st.depends_on = (st.depends_on || []).map(swap) })
+  },
+
+  // toggleDepend 供依赖勾选 UI 使用：切换 step.depends_on 中是否包含 depIdx
+  // （字符串形式的 Seq 索引）。
+  toggleDepend(step, depIdx) {
+    const key = String(depIdx)
+    if (!step.depends_on) step.depends_on = []
+    const i = step.depends_on.indexOf(key)
+    if (i >= 0) step.depends_on.splice(i, 1)
+    else step.depends_on.push(key)
   },
 
   async save() {
@@ -138,6 +175,7 @@ Alpine.store('workflow', {
       return
     }
     const body = {
+      type:          this.form.type,
       name:          this.form.name,
       description:   this.form.description,
       trigger_type:  this.form.trigger_type,

@@ -16,7 +16,7 @@ import (
 
 func (h *WorkflowAdmin) HandleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(), `
-		SELECT w.id, w.name, w.description, w.trigger_type, w.cron_schedule, w.enabled,
+		SELECT w.id, w.type, w.name, w.description, w.trigger_type, w.cron_schedule, w.enabled,
 		       COALESCE(sc.cnt, 0),
 		       w.last_run_at, w.next_run_at, w.run_count,
 		       w.last_run_status, w.last_run_error, w.created_at, w.updated_at
@@ -35,7 +35,7 @@ func (h *WorkflowAdmin) HandleListWorkflows(w http.ResponseWriter, r *http.Reque
 		var wf workflow
 		var enabledInt int
 		if err := rows.Scan(
-			&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
+			&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 			&wf.StepsCount,
 			&wf.LastRunAt, &wf.NextRunAt, &wf.RunCount,
 			&wf.LastRunStatus, &wf.LastRunError, &wf.CreatedAt, &wf.UpdatedAt,
@@ -60,11 +60,11 @@ func (h *WorkflowAdmin) HandleGetWorkflow(w http.ResponseWriter, r *http.Request
 	var wf workflow
 	var enabledInt int
 	err := h.DB.QueryRowContext(r.Context(), `
-		SELECT id, name, description, trigger_type, cron_schedule, enabled,
+		SELECT id, type, name, description, trigger_type, cron_schedule, enabled,
 		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
 		       created_at, updated_at
 		FROM workflows WHERE id=?`, wfID).Scan(
-		&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
+		&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 		&wf.LastRunAt, &wf.NextRunAt, &wf.RunCount, &wf.LastRunStatus, &wf.LastRunError,
 		&wf.CreatedAt, &wf.UpdatedAt,
 	)
@@ -87,6 +87,7 @@ func (h *WorkflowAdmin) HandleGetWorkflow(w http.ResponseWriter, r *http.Request
 
 func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		Type         string         `json:"type"`
 		Name         string         `json:"name"`
 		Description  string         `json:"description"`
 		TriggerType  string         `json:"trigger_type"`
@@ -96,6 +97,13 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		return
+	}
+	if req.Type == "" {
+		req.Type = "chain"
+	}
+	if req.Type != "chain" && req.Type != "dag" {
+		http.Error(w, "type must be 'chain' or 'dag'", http.StatusBadRequest)
 		return
 	}
 	if strings.TrimSpace(req.Name) == "" {
@@ -124,6 +132,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 
 	wfRow := repo.WorkflowRow{
 		ID:           id,
+		Type:         req.Type,
 		Name:         req.Name,
 		Description:  req.Description,
 		TriggerType:  req.TriggerType,
@@ -134,6 +143,11 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 		UpdatedAt:    now,
 	}
 
+	if err := validateStepRetryCompensation(req.Steps); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	stepRows := make([]repo.WorkflowStepRow, 0, len(req.Steps))
 	for i, st := range req.Steps {
 		effort := st.ReasoningEffort
@@ -141,15 +155,20 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 			effort = "medium"
 		}
 		stepRows = append(stepRows, repo.WorkflowStepRow{
-			ID:              newWorkflowStepID(),
-			WorkflowID:      id,
-			Seq:             i,
-			Name:            st.Name,
-			AutomationID:    st.AutomationID,
-			Prompt:          st.Prompt,
-			ReasoningEffort: effort,
-			WorkingDir:      st.WorkingDir,
-			InputFromPrev:   st.InputFromPrev,
+			ID:               newWorkflowStepID(),
+			WorkflowID:       id,
+			Seq:              i,
+			Name:             st.Name,
+			AutomationID:     st.AutomationID,
+			Prompt:           st.Prompt,
+			ReasoningEffort:  effort,
+			WorkingDir:       st.WorkingDir,
+			InputFromPrev:    st.InputFromPrev,
+			DependsOn:        st.DependsOn,
+			CapabilityType:   st.CapabilityType,
+			CompensationTool: st.CompensationTool,
+			CompensationArgs: st.CompensationArgs,
+			MaxRetries:       st.MaxRetries,
 		})
 	}
 
@@ -170,6 +189,7 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 	wfID := r.PathValue("id")
 
 	var req struct {
+		Type         *string        `json:"type"`
 		Name         *string        `json:"name"`
 		Description  *string        `json:"description"`
 		TriggerType  *string        `json:"trigger_type"`
@@ -185,15 +205,22 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 	var cur workflow
 	var enabledInt int
 	if err := h.DB.QueryRowContext(r.Context(), `
-		SELECT id, name, description, trigger_type, cron_schedule, enabled
+		SELECT id, type, name, description, trigger_type, cron_schedule, enabled
 		FROM workflows WHERE id=?`, wfID).Scan(
-		&cur.ID, &cur.Name, &cur.Description, &cur.TriggerType, &cur.CronSchedule, &enabledInt,
+		&cur.ID, &cur.Type, &cur.Name, &cur.Description, &cur.TriggerType, &cur.CronSchedule, &enabledInt,
 	); err != nil {
 		http.Error(w, "workflow not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
 	cur.Enabled = enabledInt == 1
 
+	if req.Type != nil {
+		if *req.Type != "chain" && *req.Type != "dag" {
+			http.Error(w, "type must be 'chain' or 'dag'", http.StatusBadRequest)
+			return
+		}
+		cur.Type = *req.Type
+	}
 	if req.Name != nil {
 		cur.Name = *req.Name
 	}
@@ -218,6 +245,7 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 
 	wfRow := repo.WorkflowRow{
 		ID:           wfID,
+		Type:         cur.Type,
 		Name:         cur.Name,
 		Description:  cur.Description,
 		TriggerType:  cur.TriggerType,
@@ -225,6 +253,13 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 		Enabled:      cur.Enabled,
 		NextRunAt:    nextRun,
 		UpdatedAt:    now,
+	}
+
+	if req.Steps != nil {
+		if err := validateStepRetryCompensation(req.Steps); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	var stepRows []repo.WorkflowStepRow
@@ -236,15 +271,20 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 				effort = "medium"
 			}
 			stepRows = append(stepRows, repo.WorkflowStepRow{
-				ID:              newWorkflowStepID(),
-				WorkflowID:      wfID,
-				Seq:             i,
-				Name:            st.Name,
-				AutomationID:    st.AutomationID,
-				Prompt:          st.Prompt,
-				ReasoningEffort: effort,
-				WorkingDir:      st.WorkingDir,
-				InputFromPrev:   st.InputFromPrev,
+				ID:               newWorkflowStepID(),
+				WorkflowID:       wfID,
+				Seq:              i,
+				Name:             st.Name,
+				AutomationID:     st.AutomationID,
+				Prompt:           st.Prompt,
+				ReasoningEffort:  effort,
+				WorkingDir:       st.WorkingDir,
+				InputFromPrev:    st.InputFromPrev,
+				DependsOn:        st.DependsOn,
+				CapabilityType:   st.CapabilityType,
+				CompensationTool: st.CompensationTool,
+				CompensationArgs: st.CompensationArgs,
+				MaxRetries:       st.MaxRetries,
 			})
 		}
 	}
@@ -278,9 +318,9 @@ func (h *WorkflowAdmin) HandleTriggerWorkflow(w http.ResponseWriter, r *http.Req
 	var wf workflow
 	var enabledInt int
 	if err := h.DB.QueryRowContext(r.Context(), `
-		SELECT id, name, description, trigger_type, cron_schedule, enabled
+		SELECT id, type, name, description, trigger_type, cron_schedule, enabled
 		FROM workflows WHERE id=?`, wfID).Scan(
-		&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
+		&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 	); err != nil {
 		http.Error(w, "workflow not found", http.StatusNotFound)
 		return

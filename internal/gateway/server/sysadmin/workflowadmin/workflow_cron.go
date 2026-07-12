@@ -2,10 +2,12 @@ package workflowadmin
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -17,7 +19,7 @@ import (
 func (h *WorkflowAdmin) CronTickWorkflows(ctx context.Context) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := h.DB.QueryContext(ctx, `
-		SELECT id, name, description, trigger_type, cron_schedule, enabled
+		SELECT id, type, name, description, trigger_type, cron_schedule, enabled
 		FROM workflows
 		WHERE enabled=1
 		  AND circuit_open=0
@@ -37,7 +39,7 @@ func (h *WorkflowAdmin) CronTickWorkflows(ctx context.Context) {
 		var wf workflow
 		var enabledInt int
 		if err := rows.Scan(
-			&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
+			&wf.ID, &wf.Type, &wf.Name, &wf.Description, &wf.TriggerType, &wf.CronSchedule, &enabledInt,
 		); err != nil {
 			continue
 		}
@@ -77,7 +79,9 @@ func (h *WorkflowAdmin) applyAutomationOverride(ctx context.Context, automationI
 func (h *WorkflowAdmin) loadWorkflowSteps(ctx context.Context, wfID string) []workflowStep {
 	rows, err := h.DB.QueryContext(ctx, `
 		SELECT id, workflow_id, seq, name, automation_id, prompt,
-		       reasoning_effort, working_dir, input_from_prev
+		       reasoning_effort, working_dir, input_from_prev,
+		       depends_on, capability_type, compensation_tool,
+		       compensation_args, max_retries
 		FROM workflow_steps WHERE workflow_id=? ORDER BY seq ASC`, wfID)
 	if err != nil {
 		return nil
@@ -88,16 +92,49 @@ func (h *WorkflowAdmin) loadWorkflowSteps(ctx context.Context, wfID string) []wo
 	for rows.Next() {
 		var st workflowStep
 		var inputInt int
+		var dependsOnJSON string
 		if err := rows.Scan(
 			&st.ID, &st.WorkflowID, &st.Seq, &st.Name, &st.AutomationID, &st.Prompt,
 			&st.ReasoningEffort, &st.WorkingDir, &inputInt,
+			&dependsOnJSON, &st.CapabilityType, &st.CompensationTool,
+			&st.CompensationArgs, &st.MaxRetries,
 		); err != nil {
 			continue
 		}
 		st.InputFromPrev = inputInt == 1
+		// 解析失败（脏数据/手工改库）按"无依赖"降级，由 buildGraphSpec 合成顺序链
+		// 兜底，而非中止整个 workflow 加载（fail-closed 但不是 fail-hard）。
+		_ = json.Unmarshal([]byte(dependsOnJSON), &st.DependsOn)
 		steps = append(steps, st)
 	}
 	return steps
+}
+
+// loadWorkflowStepByID 按 step ID 加载单行（RunStepWorkerLoop 认领任务后按
+// state_graph_node_id 定位步骤配置用，见 workflow_step_worker.go）。
+// 未找到返回 (nil, nil)（与 sql.ErrNoRows 区分：调用方按 nil 判断"步骤已被删除/
+// 脏数据"这一基础设施级故障，走 FailTask fail-fast，而非当作可重试的业务失败）。
+func (h *WorkflowAdmin) loadWorkflowStepByID(ctx context.Context, stepID string) (*workflowStep, error) {
+	var st workflowStep
+	var inputInt int
+	var dependsOnJSON string
+	err := h.DB.QueryRowContext(ctx, `
+		SELECT id, workflow_id, seq, name, automation_id, prompt,
+		       reasoning_effort, working_dir, input_from_prev,
+		       depends_on, capability_type, compensation_tool,
+		       compensation_args, max_retries
+		FROM workflow_steps WHERE id=?`, stepID).Scan(
+		&st.ID, &st.WorkflowID, &st.Seq, &st.Name, &st.AutomationID, &st.Prompt,
+		&st.ReasoningEffort, &st.WorkingDir, &inputInt,
+		&dependsOnJSON, &st.CapabilityType, &st.CompensationTool,
+		&st.CompensationArgs, &st.MaxRetries,
+	)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "load workflow_step by id", err)
+	}
+	st.InputFromPrev = inputInt == 1
+	_ = json.Unmarshal([]byte(dependsOnJSON), &st.DependsOn)
+	return &st, nil
 }
 
 // updateWorkflowStats 更新 workflows 统计字段 + 电路断路器。

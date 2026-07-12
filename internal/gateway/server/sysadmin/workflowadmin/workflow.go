@@ -12,7 +12,9 @@ import (
 // ─── 数据模型 ─────────────────────────────────────────────────────────────────
 
 type workflow struct {
-	ID            string `json:"id"`
+	ID string `json:"id"`
+	// Type 'chain'（默认）| 'dag'，见 repo.WorkflowRow.Type 注释。
+	Type          string `json:"type"`
 	Name          string `json:"name"`
 	Description   string `json:"description"`
 	TriggerType   string `json:"trigger_type"`
@@ -38,6 +40,15 @@ type workflowStep struct {
 	ReasoningEffort string `json:"reasoning_effort"`
 	WorkingDir      string `json:"working_dir"`
 	InputFromPrev   bool   `json:"input_from_prev"`
+
+	// DependsOn 为空时按 Seq 合成顺序链（向后兼容）；非空时表达真实 DAG 依赖，
+	// 由 buildGraphSpec（workflow_graph.go）转换为 StateGraphExecutor 的无条件边。
+	DependsOn        []string `json:"depends_on"`
+	CapabilityType   string   `json:"capability_type"`
+	CompensationTool string   `json:"compensation_tool"`
+	CompensationArgs string   `json:"compensation_args"`
+	// MaxRetries>0 时附加失败重试自环边；与 CompensationTool 非空互斥。
+	MaxRetries int `json:"max_retries"`
 }
 
 type workflowRun struct {

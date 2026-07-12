@@ -20,6 +20,7 @@ func TestWorkflowHandlersExtra(t *testing.T) {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS workflows (
 			id TEXT PRIMARY KEY,
+			type TEXT DEFAULT 'chain',
 			name TEXT,
 			description TEXT,
 			trigger_type TEXT,

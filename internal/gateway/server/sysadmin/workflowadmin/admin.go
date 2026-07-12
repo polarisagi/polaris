@@ -11,6 +11,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -23,13 +24,17 @@ type ChatDispatcher interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
 }
 
-// WorkflowAdmin 承载 workflow CRUD + cron 触发 + 顺序执行引擎。
+// WorkflowAdmin 承载 workflow CRUD + cron 触发 + StateGraphExecutor 执行引擎
+// （2026-07-12：由顺序 for 循环改为图执行，见 workflow_graph.go/workflow_engine.go）。
 type WorkflowAdmin struct {
 	DB               protocol.SQLQuerier
 	WorkflowRepo     repo.WorkflowRepository
 	AgentPool        protocol.AgentPool
 	Chat             ChatDispatcher
 	TemplateCacheMap *sync.Map
+	// Blackboard StateGraphExecutor 的任务队列/事件总线，同时供 RunStepWorkerLoop
+	// 自订阅认领本包投递的 workflow_step 任务（workflow_step_worker.go）。
+	Blackboard *orchestrator.SQLiteBlackboard
 
 	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	BuildToolSchemas func() []types.ToolSchema
@@ -41,6 +46,7 @@ func NewWorkflowAdmin(
 	r repo.WorkflowRepository,
 	agentPool protocol.AgentPool,
 	chat ChatDispatcher,
+	bb *orchestrator.SQLiteBlackboard,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	buildToolSchemas func() []types.ToolSchema,
 ) *WorkflowAdmin {
@@ -50,6 +56,7 @@ func NewWorkflowAdmin(
 		AgentPool:        agentPool,
 		Chat:             chat,
 		TemplateCacheMap: &sync.Map{},
+		Blackboard:       bb,
 		ToolExec:         toolExec,
 		BuildToolSchemas: buildToolSchemas,
 	}

@@ -34,6 +34,7 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			provider_suspended_count INTEGER DEFAULT 0,
 			error TEXT,
 			namespace TEXT,
+			intent BLOB,
 			created_at DATETIME,
 			updated_at DATETIME
 		);

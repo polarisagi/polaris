@@ -36,6 +36,7 @@ func setupPatternBlackboard(t *testing.T) *SQLiteBlackboard {
 			error TEXT,
 			version INTEGER DEFAULT 0,
 			namespace TEXT,
+			intent BLOB,
 			created_at DATETIME DEFAULT (datetime('now')),
 			updated_at DATETIME DEFAULT (datetime('now'))
 		)

@@ -78,7 +78,9 @@ func (bb *SQLiteBlackboard) SideEffectPreCheck(ctx context.Context, taskID, agen
 func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types.TaskSnapshot, error) {
 	var statusStr string
 	var namespace sql.NullString
-	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace FROM tasks WHERE task_id=?", taskID).Scan(&statusStr, &namespace)
+	var intent []byte
+	var taskType string
+	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, session_id FROM tasks WHERE task_id=?", taskID).Scan(&statusStr, &namespace, &intent, &taskType)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -108,6 +110,8 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 		ID:        taskID,
 		Status:    status,
 		Namespace: namespace.String,
+		Intent:    intent,
+		Type:      taskType,
 	}, nil
 }
 

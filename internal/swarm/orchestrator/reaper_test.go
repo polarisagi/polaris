@@ -37,6 +37,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			retry_count INTEGER DEFAULT 0,
 			max_retries INTEGER DEFAULT 3,
 			namespace TEXT,
+			intent BLOB,
 			created_at DATETIME,
 			updated_at DATETIME
 		)
