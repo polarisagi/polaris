@@ -25,27 +25,29 @@ import (
 //   - projectID 非空 → GEAP 企业端点 (aiplatform.googleapis.com)
 //   - projectID 为空 → Gemini Developer API (generativelanguage.googleapis.com)
 type GoogleAgentPlatformAdapter struct {
-	model        string
-	projectID    string
-	location     string
-	credentialFn func() []byte
-	client       *http.Client
-	caps         types.ProviderCapabilities
-	tbr          *metrics.TokenBurnRate
+	model     string
+	projectID string
+	location  string
+	credPool  *llmparent.CredentialPool
+	client    *http.Client
+	caps      types.ProviderCapabilities
+	tbr       *metrics.TokenBurnRate
 }
 
 var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
 
-func NewGoogleAgentPlatformAdapter(model, projectID, location string, credFn func() []byte, client *http.Client, tbr *metrics.TokenBurnRate) *GoogleAgentPlatformAdapter {
+// credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
+// llmparent.NewSingleCredentialPool(key) 构造。
+func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate) *GoogleAgentPlatformAdapter {
 	if client == nil {
 		client = defaultHTTPClient()
 	}
 	return &GoogleAgentPlatformAdapter{
-		model:        model,
-		projectID:    projectID,
-		location:     location,
-		credentialFn: credFn,
-		client:       client,
+		model:     model,
+		projectID: projectID,
+		location:  location,
+		credPool:  credPool,
+		client:    client,
 		caps: types.ProviderCapabilities{
 			SupportsStreaming: true,
 			SupportsTools:     true,
@@ -92,7 +94,11 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
-	apiKey := a.credentialFn()
+	cred := a.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "GoogleAgentPlatformAdapter.Infer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 	defer llmparent.ClearBytes(apiKey)
 
 	endpoint := appendKey(a.buildEndpoint(false), string(apiKey))
@@ -104,14 +110,18 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
+		cred.RecordResult(err)
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
-		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+		callErr := apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+		cred.RecordResult(callErr)
+		return nil, callErr
 	}
+	cred.RecordResult(nil)
 
 	var out struct {
 		Candidates []struct {
@@ -195,7 +205,11 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
-	apiKey := a.credentialFn()
+	cred := a.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "GoogleAgentPlatformAdapter.StreamInfer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 
 	endpoint := appendKey(a.buildEndpoint(true), string(apiKey))
 	llmparent.ClearBytes(apiKey)
@@ -212,6 +226,7 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
+		cred.RecordResult(err)
 		cancel()
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
@@ -219,8 +234,11 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		httpResp.Body.Close()
 		cancel()
-		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+		callErr := apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
+		cred.RecordResult(callErr)
+		return nil, callErr
 	}
+	cred.RecordResult(nil)
 
 	ch := make(chan types.StreamEvent, 64)
 	// [SafeGo] SSE 解码：畸形响应触发 panic 此前会直接崩进程；defer 链在 panic

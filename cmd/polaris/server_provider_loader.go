@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/polarisagi/polaris/internal/llm"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
@@ -48,15 +50,11 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 			}
 		}
 
-		// 将 key 转为 []byte 一次，避免多次分配；SQL 行扫描后 apiKeyStr 字符串本身
-		// 仍在堆上，但 keyBytes 在 for 循环结束后可被 GC 回收，生命周期更短。
-		// credFn 每次返回副本（Adapter 使用后应由其调用方及时 GC）。
-		keyBytes := []byte(apiKeyStr)
-		credFn := func() []byte {
-			cp := make([]byte, len(keyBytes))
-			copy(cp, keyBytes)
-			return cp
-		}
+		// 2026-07-12 P1 修复：api_key 列支持按行存放多个 Key（每行一个），
+		// 构造 CredentialPool 实现同一 Provider 记录下的多 Key 轮换 + 失败自动冷却
+		// （401/402/429 等触发 PooledCredential.RecordResult 冷却，不再是"单 Key
+		// 失效即整个 Provider 不可用"）。单 Key 场景行为与旧版 credPool 完全等价。
+		credPool := llm.NewCredentialPool(splitAPIKeys(apiKeyStr), llm.StrategyRoundRobin)
 
 		suffix := mID
 		if len(mID) > 8 {
@@ -73,24 +71,36 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 
 		switch typ {
 		case "openai_compat":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL, modelID, credFn, httpClient, tbr))
+			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr))
 		case "anthropic":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewAnthropicAdapter(modelID, credFn, httpClient, tbr))
+			reg.RegisterWithRole(name, displayName, role, llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr))
 		case "google_agent_platform":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credFn, httpClient, tbr))
+			reg.RegisterWithRole(name, displayName, role, llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr))
 		case "ollama":
 			if baseURL == "" {
 				baseURL = "http://localhost:11434"
 			}
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL+"/v1", modelID, credFn, httpClient, tbr))
+			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL+"/v1", modelID, credPool, httpClient, tbr))
 		}
-		// 提示 GC：keyBytes 在 credFn 捕获后不再需要单独持有
-		// 注意：credFn 的闭包已持有 keyBytes 引用，此行不改变内存安全性，
-		// 仅文档意图：keyBytes 本变量在此之后不再被直接使用。
-		_ = keyBytes
 	}
 	if err := rows.Err(); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "rows error", err)
 	}
 	return nil
+}
+
+// splitAPIKeys 将 providers.api_key 列解析为凭证列表：按行分隔，去除首尾空白，
+// 丢弃空行。单 key（无换行）场景与旧版行为完全一致；多行则启用 CredentialPool
+// 轮换 + 失败冷却（P1 2026-07-12）。DB 列本身不变更 schema，纯文本约定即可支持
+// 多 Key，避免上线前就引入新表/新增管理 API 的额外风险。
+func splitAPIKeys(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	keys := make([]string, 0, len(lines))
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			keys = append(keys, l)
+		}
+	}
+	return keys
 }

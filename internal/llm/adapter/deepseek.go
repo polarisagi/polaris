@@ -16,7 +16,7 @@ import (
 
 // DeepSeekAdapter 实现 protocol.Provider，对接 DeepSeek 官方 API (兼容 OpenAI 格式)。
 type DeepSeekAdapter struct {
-	credentialFn func() []byte
+	credPool     *llmparent.CredentialPool
 	client       *OpenAICompatibleClient
 	capabilities types.ProviderCapabilities
 	modelID      string // 通过配置注入，默认 "deepseek-v4-flash"
@@ -26,7 +26,9 @@ type DeepSeekAdapter struct {
 // NewDeepSeekAdapter 构造 DeepSeek 适配器。
 // modelID 传 "" 时默认使用 "deepseek-v4-flash"（V4 Flash，低成本推理）；
 // 传 "deepseek-v4-pro" 时启用 1M context 上限。
-func NewDeepSeekAdapter(credFn func() []byte, httpClient *http.Client, modelID string, tbr *metrics.TokenBurnRate) *DeepSeekAdapter {
+// credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
+// llmparent.NewSingleCredentialPool(key) 构造。
+func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Client, modelID string, tbr *metrics.TokenBurnRate) *DeepSeekAdapter {
 	if httpClient == nil {
 		httpClient = defaultHTTPClient()
 	}
@@ -45,9 +47,9 @@ func NewDeepSeekAdapter(credFn func() []byte, httpClient *http.Client, modelID s
 	}
 
 	return &DeepSeekAdapter{
-		credentialFn: credFn,
-		client:       c,
-		modelID:      modelID,
+		credPool: credPool,
+		client:   c,
+		modelID:  modelID,
 		capabilities: types.ProviderCapabilities{
 			SupportsStreaming: true,
 			SupportsTools:     true,
@@ -95,12 +97,17 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []types.Message, opts 
 		ReasoningEffort: options.ReasoningEffort,
 	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
-	apiKey := d.credentialFn()
+	cred := d.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "DeepSeekAdapter.Infer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 	defer llmparent.ClearBytes(apiKey)
 
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
 	resp, err := d.client.SendRequest(ctx, apiKey, apiReq)
+	cred.RecordResult(err)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.Infer", err)
 	}
@@ -168,13 +175,20 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 		ReasoningEffort: options.ReasoningEffort,
 	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
-	apiKey := d.credentialFn()
+	cred := d.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "DeepSeekAdapter.StreamInfer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 	defer llmparent.ClearBytes(apiKey)
 
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
 	tok := llmparent.NewTiktokenTokenizer("deepseek-v4")
 	rawCh, err := d.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
+	// 建连/握手阶段的结果先行回报；建连成功后逐块解码期间的错误（rawCh 内部）
+	// 属于流中断，现有设计未对单块错误做凭证级分类，维持原有粒度不扩大改动范围。
+	cred.RecordResult(err)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.StreamInfer", err)
 	}

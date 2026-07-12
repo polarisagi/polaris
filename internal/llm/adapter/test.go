@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -20,7 +21,7 @@ func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestAdapters_Infer(t *testing.T) {
-	credFn := func() []byte { return []byte("test-key") }
+	credPool := llmparent.NewSingleCredentialPool("test-key")
 	msgs := []types.Message{
 		{Role: "user", Content: "Hi"},
 	}
@@ -60,7 +61,7 @@ func TestAdapters_Infer(t *testing.T) {
 			},
 		}
 
-		adapter := NewOpenAIAdapter("https://api.openai.com/v1", "gpt-4-turbo", credFn, client, nil)
+		adapter := NewOpenAIAdapter("https://api.openai.com/v1", "gpt-4-turbo", credPool, client, nil)
 		if adapter.ModelID() != "gpt-4-turbo" {
 			t.Errorf("expected gpt-4-turbo, got %s", adapter.ModelID())
 		}
@@ -104,7 +105,7 @@ func TestAdapters_Infer(t *testing.T) {
 			},
 		}
 
-		adapter := NewAnthropicAdapter("claude-3-opus-20240229", credFn, client, nil)
+		adapter := NewAnthropicAdapter("claude-3-opus-20240229", credPool, client, nil)
 		resp, err := adapter.Infer(context.Background(), msgs)
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
@@ -145,7 +146,7 @@ func TestAdapters_Infer(t *testing.T) {
 			},
 		}
 
-		adapter := NewDeepSeekAdapter(credFn, client, "deepseek-reasoner", nil)
+		adapter := NewDeepSeekAdapter(credPool, client, "deepseek-reasoner", nil)
 		resp, err := adapter.Infer(context.Background(), msgs)
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
@@ -232,7 +233,7 @@ func TestAdapters_Infer(t *testing.T) {
 			},
 		}
 
-		adapter := NewGoogleAgentPlatformAdapter("gemini-1.5-pro", "", "", credFn, client, nil)
+		adapter := NewGoogleAgentPlatformAdapter("gemini-1.5-pro", "", "", credPool, client, nil)
 		resp, err := adapter.Infer(context.Background(), msgs)
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)

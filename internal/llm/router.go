@@ -4,6 +4,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/trace"
 
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -136,6 +137,16 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer", err)
 		}
 
+		// ErrorClassifier 接入（P1 2026-07-12）：此前任何错误一律 failover 到下一个
+		// provider，包括请求格式错误/永久认证失效/策略拦截这类换 provider 也无法
+		// 恢复的错误——既浪费时延，也可能把同一个畸形请求打到每一家 vendor。
+		// Retryable=false 且 ShouldFallback=false 是 Classify() 对这类错误的明确信号。
+		if ce := ClassifyWithProvider(err, entry.name); !ce.Retryable && !ce.ShouldFallback {
+			slog.Warn("inference_router: non-retryable error, skip failover",
+				"provider", entry.name, "reason", ce.Reason, "err", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer: non-retryable ("+string(ce.Reason)+")", err)
+		}
+
 		return ir.failover(ctx, msgs, opts, req, entry.name)
 	}
 
@@ -208,10 +219,16 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.StreamInfer", err)
 		}
 
+		if ce := ClassifyWithProvider(err, entry.name); !ce.Retryable && !ce.ShouldFallback {
+			slog.Warn("inference_router: non-retryable stream error, skip failover",
+				"provider", entry.name, "reason", ce.Reason, "err", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.StreamInfer: non-retryable ("+string(ce.Reason)+")", err)
+		}
+
 		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
 	}
 
-	return ir.wrapStreamChannel(ctx, ch), nil
+	return ir.wrapStreamChannel(ctx, ch, req, entry.name), nil
 }
 
 // wrapStreamChannel / streamFailover 见 router_stream.go（R7 拆分）。
