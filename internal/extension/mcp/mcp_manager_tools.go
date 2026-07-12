@@ -172,8 +172,12 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 				return nil, apperr.New(apperr.CodeInvalidInput, "mcp: invalid tool input JSON: "+err.Error())
 			}
 		}
-		// CallToolTainted 内部执行 TaintPreservingDecoder，taint 通过 RegisterRich 传递
-		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)
+		// CallToolTainted 内部执行 TaintPreservingDecoder 对响应逐叶打标取最高值；
+		// RegisterRich 的 taint 参数是注册时的静态服务器级污点（供策略预判），
+		// 与此处按次调用实际测得的污点是两回事，此前被 `_` 丢弃，导致
+		// agent_execute_dag.go 的 GlobalTaintLevel/hasHighTaint 逻辑对 MCP 工具结果
+		// 永远视为 TaintNone——外部/不可信响应内容完全没有参与污点升级判断。
+		text, imgs, taintLevel, err := client.CallToolTainted(ctx, mcpName, args)
 		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeMCPToolFn", err)
 		}
@@ -181,6 +185,7 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 			Success:    true,
 			Output:     []byte(text),
 			ImageParts: imgs, // MCP type="image" content block 解析结果
+			TaintLevel: taintLevel,
 		}, nil
 	}
 }

@@ -12,15 +12,16 @@ import (
 // fakeProvider 是 AsyncTaskProvider 的纯内存测试实现，不依赖 internal/extension/mcp，
 // 用于独立验证 get_task_result 工具对 pending/done/failed/not-found 四种状态的处理。
 type fakeProvider struct {
-	status string
-	text   string
-	errMsg string
-	images []types.ImagePart
-	found  bool
+	status     string
+	text       string
+	errMsg     string
+	images     []types.ImagePart
+	taintLevel types.TaintLevel
+	found      bool
 }
 
-func (f *fakeProvider) GetAsyncTaskResult(_ string) (status, text, errMsg string, images []types.ImagePart, found bool) {
-	return f.status, f.text, f.errMsg, f.images, f.found
+func (f *fakeProvider) GetAsyncTaskResult(_ string) (status, text, errMsg string, images []types.ImagePart, taintLevel types.TaintLevel, found bool) {
+	return f.status, f.text, f.errMsg, f.images, f.taintLevel, f.found
 }
 
 func TestGetTaskResultFn_NilProvider(t *testing.T) {
@@ -74,7 +75,7 @@ func TestGetTaskResultFn_Pending(t *testing.T) {
 }
 
 func TestGetTaskResultFn_Done(t *testing.T) {
-	fn := MakeGetTaskResultFn(&fakeProvider{found: true, status: "done", text: "hello world"})
+	fn := MakeGetTaskResultFn(&fakeProvider{found: true, status: "done", text: "hello world", taintLevel: types.TaintHigh})
 	res, err := fn(context.Background(), sandbox.SandboxSpec{Input: []byte(`{"task_id":"t1"}`)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -83,6 +84,11 @@ func TestGetTaskResultFn_Done(t *testing.T) {
 	_ = json.Unmarshal(res.Output, &out)
 	if out["status"] != "done" || out["result"] != "hello world" {
 		t.Errorf("unexpected output: %+v", out)
+	}
+	// 回归测试：异步 MCP 任务实际测得的污点等级必须回传到 ToolResult.TaintLevel，
+	// 否则 agent_execute_dag.go 的 GlobalTaintLevel 抬升逻辑会漏掉异步工具结果。
+	if res.TaintLevel != types.TaintHigh {
+		t.Errorf("expected TaintLevel to propagate from provider, got %v", res.TaintLevel)
 	}
 }
 

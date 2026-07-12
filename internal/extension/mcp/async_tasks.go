@@ -26,13 +26,18 @@ const (
 const asyncTaskTTL = 300 * time.Second
 
 // AsyncTaskResult 异步任务当前状态快照；Status=pending 时 Text/Images/Error 均为零值。
+//
+// TaintLevel 由 CallToolTainted（TaintPreservingDecoder 对响应 JSON 逐叶打标后取最高值）
+// 计算得出，Status=done 时有效；此前曾被 runAsyncCall 用 `_` 丢弃，导致异步 MCP 工具结果
+// 永远无法参与 agent_execute_dag.go 的 GlobalTaintLevel 抬升（GR-4-002 同款漏洞的异步变体）。
 type AsyncTaskResult struct {
-	TaskID    string
-	Status    AsyncTaskStatus
-	Text      string
-	Images    []types.ImagePart
-	Error     string
-	ExpiresAt time.Time
+	TaskID     string
+	Status     AsyncTaskStatus
+	Text       string
+	Images     []types.ImagePart
+	Error      string
+	TaintLevel types.TaintLevel
+	ExpiresAt  time.Time
 }
 
 // asyncTaskCache tasks_cache 的具体实现：内存 map（task_id → result），TTL=300s，
@@ -136,7 +141,7 @@ func (m *MCPManager) runAsyncCall(ctx context.Context, client *MCPClient, mcpNam
 	// 结束当前请求的 ctx），但仍需继承 TraceID 等身份信息，用 protocol.Detach。
 	bgCtx := protocol.Detach(ctx)
 	concurrent.SafeGo(bgCtx, "mcp.async_task_run", func(ctx context.Context) {
-		text, imgs, _, err := client.CallToolTainted(ctx, mcpName, args)
+		text, imgs, taintLevel, err := client.CallToolTainted(ctx, mcpName, args)
 		if err != nil {
 			m.asyncTasks.put(&AsyncTaskResult{
 				TaskID:    taskID,
@@ -147,11 +152,12 @@ func (m *MCPManager) runAsyncCall(ctx context.Context, client *MCPClient, mcpNam
 			return
 		}
 		m.asyncTasks.put(&AsyncTaskResult{
-			TaskID:    taskID,
-			Status:    AsyncTaskDone,
-			Text:      text,
-			Images:    imgs,
-			ExpiresAt: time.Now().Add(asyncTaskTTL),
+			TaskID:     taskID,
+			Status:     AsyncTaskDone,
+			Text:       text,
+			Images:     imgs,
+			TaintLevel: taintLevel,
+			ExpiresAt:  time.Now().Add(asyncTaskTTL),
 		})
 	})
 
