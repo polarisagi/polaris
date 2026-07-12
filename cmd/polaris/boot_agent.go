@@ -270,6 +270,15 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		agentPool.WithKillSwitchGate(sb.KS)
 	}
 
+	// 通用兜底 Blackboard 任务消费者（2026-07-12 unwired-code-audit 复查补齐）：
+	// M8 Orchestrator 的中心化按类型下推机制在生产环境从未被激活（RegisterWorker
+	// 零调用），导致 handleAgentQuery/ProviderRecoveryHandler 兜底分支/
+	// AutoCurriculumGenerator 发布的任务发布后无人认领，静默进入黑洞直至饥饿
+	// reaper 强制失败。此处接入 DefaultTaskWorker，复用同日已验证的
+	// workflowadmin.RunStepWorkerLoop"自订阅+CAS"模式，排除已有专用 Worker
+	// 处理的 "workflow_step" 类型，其余任务一律走 AgentPool.AcquireHeadless。
+	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool, "workflow_step")
+
 	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
 		Name:   "agent-0",
 		Skills: []string{"general"},
@@ -514,8 +523,15 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	sv.AddWorker("agent-0", func(ctx context.Context) error {
 		return agent.Run(ctx)
 	})
-	sv.AddWorker("orchestrator", func(ctx context.Context) error {
-		return orch.ListenLoop(ctx)
+	// orch.ListenLoop 不再注册为 Supervisor Worker：其内部 dispatchPendingTasks
+	// 在生产环境下 100% 无法成功派发任务（RegisterWorker 从未调用、agent-0 的
+	// Skills=["general"] 与真实任务类型永远不匹配），继续运行只会造成资源浪费，
+	// 且一旦命中匹配任务会与下方 default-task-worker 产生 CAS 竞争后又无处执行，
+	// 白白让任务多等一轮 60s 租约超时。任务派发已由 default-task-worker 承接
+	// （见上方 DefaultTaskWorker 注入注释）。orch/agentRegistry 保留供
+	// AgentBundle.Orch/AgentRegistry 与未来可能的能力路由复用。
+	sv.AddWorker("default-task-worker", func(ctx context.Context) error {
+		return defaultTaskWorker.RunLoop(ctx)
 	})
 	sv.AddWorker("m9-engine", func(ctx context.Context) error {
 		return m9Engine.Start(ctx)
