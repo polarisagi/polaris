@@ -24,6 +24,13 @@ const (
 	// 消费端见 internal/automation/notify.Dispatcher。
 	TopicNotification = "notification"
 
+	// TopicChatMessagePersistRetry 聊天消息持久化的 outbox 兜底重试通道
+	// （GD-13-004 复核修复）。ChatHandler.SaveMessage 的同步直写重试耗尽后，
+	// 投递到此主题异步兜底，避免瞬时/持久写入故障导致 chat_messages 永久丢失
+	// 一轮已经流式展示给用户的回复。消费端见
+	// internal/gateway/server/chat.ChatMessagePersistHandler。
+	TopicChatMessagePersistRetry = "chat_message_persist_retry"
+
 	// 沿用 RAG 主题
 	TopicGraphBuild = "graph_build"
 )

@@ -2,19 +2,15 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
-	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/store/search"
-	"github.com/polarisagi/polaris/pkg/apperr"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -35,12 +31,6 @@ type ChatHandler struct {
 	TranscriptDir string
 	PromptMgr     protocol.PromptFacade
 	SoulMDContent *string
-	ToolStage     interface {
-		SelectFor(ctx context.Context, query string) []apptypes.ToolSchema
-	}
-	ToolProvider interface {
-		ExecuteTool(ctx context.Context, name string, args []byte) (*apptypes.ToolResult, error)
-	}
 
 	Hooks                   HookRunner
 	DataDir                 string
@@ -82,6 +72,11 @@ type ChatHandler struct {
 	// 消息预处理入口（见 sse.go）。
 	ContextRefExpander *authcontext.ContextRefExpander
 	EnableFSMChatPath  bool
+
+	// OutboxWriter 供 SaveMessage 在直写 chat_messages 重试耗尽后做异步兜底
+	// 投递（GD-13-004 复核修复，见 chat_message_persist_handler.go）。nil 时
+	// SaveMessage 降级为仅记录错误日志（与修复前行为一致）。
+	OutboxWriter protocol.OutboxWriter
 }
 
 type Dependencies struct {
@@ -106,6 +101,7 @@ type Dependencies struct {
 	WriteSSE              func(http.ResponseWriter, http.Flusher, string, any)
 	ContextRefExpander    *authcontext.ContextRefExpander
 	EnableFSMChatPath     bool
+	OutboxWriter          protocol.OutboxWriter
 }
 
 // NewChatHandler 故意不做构造函数级 fail-closed nil 强制校验（2026-07-08 复核
@@ -147,6 +143,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		WriteSSE:              deps.WriteSSE,
 		ContextRefExpander:    deps.ContextRefExpander,
 		EnableFSMChatPath:     deps.EnableFSMChatPath,
+		OutboxWriter:          deps.OutboxWriter,
 		skillEmbedCache:       make(map[string][]float32),
 	}
 }
@@ -156,110 +153,21 @@ type HookRunner interface {
 	FireBefore(event string, env map[string]string) (blocked bool, reason string)
 }
 
-func (h *ChatHandler) GenerateReply(ctx context.Context, req *apptypes.InferRequest, sessionID string) (string, error) { //nolint:gocyclo
-	history, err := h.ListMessages(ctx, sessionID)
-	if err != nil {
-		return "", err
-	}
-
-	p := h.Registry.PickProvider("default")
-	if p == nil {
-		p = h.Registry.PickProvider("general")
-	}
-	if p == nil {
-		return "", apperr.New(apperr.CodeInternal, "no provider available")
-	}
-
-	var toolSchemas []apptypes.ToolSchema
-	if h.ToolStage != nil {
-		toolSchemas = h.ToolStage.SelectFor(ctx, "")
-	}
-
-	var sb strings.Builder
-	const maxToolRounds = 10
-	for range maxToolRounds {
-		ch, err := safecall.StreamInfer(ctx, p, history,
-			apptypes.WithMaxTokens(2048),
-			apptypes.WithTemperature(0.7),
-			apptypes.WithTools(toolSchemas),
-		)
-		if err != nil {
-			return "", err
-		}
-
-		var roundText strings.Builder
-		var toolCalls []map[string]json.RawMessage
-		for ev := range ch {
-			switch ev.Type {
-			case apptypes.StreamTextDelta:
-				if ev.Content != "" {
-					roundText.WriteString(ev.Content)
-					sb.WriteString(ev.Content)
-				}
-			case apptypes.StreamToolCall:
-				var call map[string]json.RawMessage
-				if json.Unmarshal([]byte(ev.Content), &call) == nil {
-					toolCalls = append(toolCalls, call)
-				}
-			}
-		}
-
-		if len(toolCalls) == 0 || h.ToolProvider == nil {
-			break
-		}
-
-		assistantParts := make([]any, 0, 1+len(toolCalls))
-		if roundText.Len() > 0 {
-			assistantParts = append(assistantParts, map[string]any{"type": "text", "text": roundText.String()})
-		}
-		toolResultParts := make([]any, 0, len(toolCalls))
-		for _, tc := range toolCalls {
-			var toolID, toolName string
-			var inputRaw json.RawMessage
-			if b, ok := tc["id"]; ok {
-				json.Unmarshal(b, &toolID) //nolint:errcheck
-			}
-			if b, ok := tc["name"]; ok {
-				json.Unmarshal(b, &toolName) //nolint:errcheck
-			}
-			if b, ok := tc["input"]; ok {
-				inputRaw = b
-			}
-			assistantParts = append(assistantParts, map[string]any{
-				"type": "tool_use", "id": toolID, "name": toolName, "input": inputRaw,
-			})
-
-			result, execErr := h.ToolProvider.ExecuteTool(ctx, toolName, inputRaw)
-			var resultText string
-			if execErr != nil {
-				resultText = "error: " + execErr.Error()
-			} else if result != nil {
-				resultText = string(result.Output)
-				if result.Error != "" {
-					if resultText != "" {
-						resultText += "\n"
-					}
-					resultText += "error: " + result.Error
-				}
-			}
-			toolResultParts = append(toolResultParts, map[string]any{
-				"type": "tool_result", "tool_use_id": toolID, "content": resultText,
-			})
-		}
-		history = append(history,
-			apptypes.Message{Role: "assistant", Parts: assistantParts},
-			apptypes.Message{Role: "user", Parts: toolResultParts},
-		)
-	}
-
-	return sb.String(), nil
-}
-
-func (h *ChatHandler) RunPostProcessors(ctx context.Context, sessionID, reply string) {
-	if reply == "" {
-		return
-	}
-	_ = h.SaveMessage(ctx, sessionID, "assistant", reply, "", "", 0)
-	_ = h.UpdateSessionTitle(ctx, sessionID, reply)
-	_ = h.TouchSession(ctx, sessionID) // error logged inside
-}
+// GenerateReply / RunPostProcessors 已删除（2026-07-12，Batch 9 B-5/G-2 修复）：
+// 绕过 AgentController/FSM 在网关层直接开 for-loop 做 LLM 推理 + 工具执行，
+// 破坏 HE-5（状态机持控制流）与 R1.9（禁止 LLM 自由流转）；全仓库零引用的死
+// 代码，唯一风险是被误调用。真实聊天流程见 sse.go handleAgentStreamFSM，
+// 经 AgentController.SendIntent 由 FSM 驱动。ChatDispatcher 接口同步移除
+// 对应方法声明（sysadmin/handler.go）。
+//
+// ChatHandler.ToolStage / ToolProvider 字段级联移除（2026-07-12 复核）：二者是
+// GenerateReply/RunPostProcessors 遗留的注入点（分别用于工具语义筛选与直接工具
+// 执行），随宿主函数一并删除后成为纯写入无读取的孤儿字段——repo 全文 grep
+// 确认 ChatHandler.ToolStage/.ToolProvider 与 Server.toolStage 在整条注入链
+// （boot_server.go agentctx.NewToolStage → Server.SetToolStage → ChatHandler.
+// ToolStage；server_lifecycle.go → ChatHandler.ToolProvider）上无任何读取方。
+// 现整链一并移除（Server.toolStage 字段 + SetToolStage 方法 + 两处装配调用），
+// 而非仅移除字段声明留下悬空 setter。agentctx.ToolStage 类型本身（语义化工具
+// 筛选能力，internal/agent/context/tool_stage.go）予以保留：它是自包含的独立
+// 能力单元，未来若 PRM/FSM 路径需要工具语义筛选可直接复用，不属于本次死代码
+// 清理范围。

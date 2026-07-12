@@ -158,7 +158,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 
 	// ── 斜线命令拦截（短路 LLM 推理）────────────────────────────────────────
 	// /compact 走与自动压缩相同的 Stage 3 TaskMermaidCanvas 注入路径（M05 §11.3）：
-	// agentCtrl 此处已解析（152 行），避免 SlashCommandRouter 构造期无法获取 per-session
+	// agentCtrl 此处已解析（105 行），避免 SlashCommandRouter 构造期无法获取 per-session
 	// memory facade 的问题。
 	var slashMem MemoryFacade
 	if agentCtrl != nil {
@@ -230,6 +230,17 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 	reply, inferErr, aborted = s.handleAgentStreamFSM(ctx, w, flusher, sessionID, agentCtrl, req.Input)
 	if aborted {
+		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。
+		// 原实现直接 return，reply 中已流式产出的 assistant 内容从未落盘，
+		// 造成 UI 侧 chat 历史与 Agent 侧 EventLog 记忆流不同步（"幽灵消息"）。
+		// 这里尽力保存已产出内容（若有），ctx 已取消，用独立的短超时 context。
+		if reply != "" {
+			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
+				slog.Error("server: saveMessage assistant (aborted turn)", "session", sessionID, "err", err)
+			}
+			saveCancel()
+		}
 		return
 	}
 	inferLatencyMs := time.Since(inferStart).Milliseconds()

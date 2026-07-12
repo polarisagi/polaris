@@ -17,6 +17,8 @@
 
 **不采纳**：每次请求新建 Agent（初始化成本、SurpriseCalc 冷启动）；无状态 Agent + 每次从 DB 加载 session 状态（改动量过大）。
 
+**2026-07-12 复核发现并修复的真实缺口**：本节原实现从未启动 per-session Agent 的 `Run()` 事件循环——`Pool.Acquire` 仅调用 `factory(sessionID)` 构造 `Agent`，除 Supervisor Tree 对单例 `agent-0` 的 `sv.AddWorker`（`cmd/polaris/boot_agent.go`）外，全仓库没有任何位置为 Pool 管理的 Agent 启动 `Run()`。`SendIntent` 写入的是带缓冲 channel（cap=10），短期内不会报超时错误，掩盖了 FSM 从未真正推进状态的事实；`internal/agent` 此前也没有 `pool_test.go`，AgentPool 端到端链路从未被测试覆盖，是该缺口长期未被发现的原因。修复：`newPoolEntry`（`internal/agent/pool.go`）在构造 Agent 后立即以其自身生命周期 ctx（`NewAgent` 内部创建，`Shutdown()`/`ContextCancel()` 复用同一 cancel）通过 `concurrent.SafeGo` 启动常驻 `Run()` goroutine；配套修复 `GC()`——回收 idle entry 时必须调用 `agent.Shutdown()`，否则 Suspend-on-Idle 循环会在 Suspended 状态持续阻塞，从"FSM 从未运行"变成新的 goroutine 永久泄漏。测试见 `internal/agent/pool_test.go`（`TestPool_Acquire_StartsKernelRunLoop` 等，完全通过 `AgentController` 接口驱动，不手动调用 `Run()`，若回归到修复前的状态会超时失败）。
+
 ### F — VFS 墓碑机制 + O_NOFOLLOW
 
 **问题**：工作区删除直接 `os.RemoveAll(dir)`，外部进程持有 fd 时产生僵尸；路径前缀检查可被符号链接绕过。

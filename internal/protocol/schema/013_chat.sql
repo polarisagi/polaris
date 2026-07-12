@@ -19,11 +19,19 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     tool_calls        TEXT,
     file_offset INTEGER NOT NULL DEFAULT 0,
     file_length INTEGER NOT NULL DEFAULT 0,
+    -- dedupe_key: SaveMessage 每次调用生成的稳定幂等键（GD-13-004 复核修复）。
+    -- 直接同步写入失败重试耗尽后，会通过 outbox 异步兜底重投（见
+    -- TopicChatMessagePersistRetry / ChatMessagePersistHandler），OutboxWorker
+    -- 按 at-least-once 语义可能多次调用该 handler；dedupe_key 唯一索引保证
+    -- AppendMessageIdempotent 的 INSERT OR IGNORE 不会因重投产生重复消息行。
+    -- 允许 NULL（历史行/未走该路径的行），SQLite UNIQUE 索引视多个 NULL 互不冲突。
+    dedupe_key  TEXT,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_msg_dedupe_key ON chat_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
 
 -- FTS5 全文检索（content= 模式，实体内容读取走 chat_messages）
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

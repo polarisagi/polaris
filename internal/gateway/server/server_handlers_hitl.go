@@ -105,9 +105,24 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		if err := s.outboxWriter.Write(r.Context(), ev); err != nil {
 			slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call", "err", err)
 		}
+	} else if s.agentPool != nil {
+		// 单进程降级路径修复（2026-07-12）：此前该分支的注释声称"直接调用"，
+		// 实际实现只打一行 INFO 日志——outboxWriter 此前从未在 cmd/polaris 启动
+		// 流程中被注入（SetOutboxWriter 从未被调用，见 server_core.go 修复），
+		// 意味着本端点在生产环境下恒定静默丢弃中断请求，客户端点击"中止/恢复/
+		// 重定向"实际上什么都不会发生。现在真正实现直接调用：与 sse.go
+		// handleAgentStreamFSM 客户端断连分支（ctx.Done() → agentCtrl.Interrupt）
+		// 使用同一条路径——经 AgentPool.Acquire 取得目标会话的 AgentController
+		// 后直接调用 Interrupt，用完立即 release。
+		agentCtrl, release, acqErr := s.agentPool.Acquire(r.Context(), taskID)
+		if acqErr != nil {
+			slog.Error("handleAgentInterrupt: direct-call fallback failed to acquire agent controller", "task_id", taskID, "err", acqErr)
+		} else {
+			agentCtrl.Interrupt(interruptReq)
+			release()
+		}
 	} else {
-		// 单进程降级路径：outboxWriter 未注入时直接调用（Tier-0/开发环境）。
-		slog.Info("handleAgentInterrupt: outboxWriter not set, unable to direct call")
+		slog.Warn("handleAgentInterrupt: neither outboxWriter nor agentPool available, interrupt request dropped", "task_id", taskID)
 	}
 
 	if s.auditTrail != nil {
