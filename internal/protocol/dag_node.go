@@ -100,16 +100,45 @@ const (
 	CondEquals EdgeConditionOp = "eq"
 	// CondNotEquals 同上，取反。
 	CondNotEquals EdgeConditionOp = "ne"
+	// CondGreaterThan/CondLessThan/CondGreaterOrEqual/CondLessOrEqual（GD-14-002 复核扩展）：
+	// Field/Value 均按 float64 解析后比较；任一侧无法解析为数字时 fail-closed（返回 false），
+	// 与既有"字段缺失/JSON 解析失败 fail-closed"原则一致（宁可漏触发，不误触发）。
+	CondGreaterThan    EdgeConditionOp = "gt"
+	CondLessThan       EdgeConditionOp = "lt"
+	CondGreaterOrEqual EdgeConditionOp = "ge"
+	CondLessOrEqual    EdgeConditionOp = "le"
+	// CondContains Field 字段值（字符串化后）包含 Value 子串。
+	CondContains EdgeConditionOp = "contains"
+	// CondExists Field 字段在上游输出 JSON 中存在（不比较值，Value 被忽略）。
+	CondExists EdgeConditionOp = "exists"
 )
 
-// EdgeCondition 声明式边条件（GD-8-001，编排模式10 StateGraphExecutor 专用）。
-// HE-Rule-2（可验证执行）：条件求值仅支持声明式字段比较，禁止内嵌脚本/表达式
-// 引擎作为条件求值器（避免把"可验证执行"退化为"运行任意代码决定控制流"）。
+// EdgeCondition 声明式边条件（GD-8-001 初版 + GD-14-002 复核扩展，编排模式10
+// StateGraphExecutor 专用）。
+//
+// HE-Rule-2（可验证执行）边界：GD-14-002 原始 finding 建议引入 CEL 表达式引擎，
+// 经复核确认 ADR-0041 已就此做出明确否决（禁止脚本/表达式引擎作为条件求值器，
+// 避免"可验证执行"退化为"运行任意代码决定控制流"）——该决策维持不变，本次扩展
+// 不引入表达式解析器，仅在原有 Field/Op/Value 声明式模型上：
+//  1. 新增数值比较算子（gt/lt/ge/le）与子串/存在性算子（contains/exists）；
+//  2. 新增 And/Or 结构化复合条件（子条件静态嵌套，非运行时解析的自由语法）。
+//
+// 二者与既有 eq/ne 同属"预定义、可枚举、可静态分析"的声明式比较，不具备变量绑定、
+// 函数调用、控制流等表达式引擎的核心特征，因此不改变 HE-Rule-2 合规边界。
+//
+// And/Or 与 Field/Op/Value 互斥：非 nil 时优先生效（And 优先于 Or），Field/Op/Value
+// 被忽略。三者皆为空视为无条件（恒真），保持 nil Condition 语义一致。
 // nil Condition = 无条件边，等价于既有 WorkflowEdgeSpec 静态依赖语义（向后兼容）。
 type EdgeCondition struct {
 	Field string          `json:"field"` // 上游节点输出 JSON 顶层字段名
 	Op    EdgeConditionOp `json:"op"`    // 比较操作符
 	Value string          `json:"value"` // 期望值（上游字段值经 fmt.Sprintf("%v", ...) 归一化后比较）
+
+	// And/Or 结构化复合条件（GD-14-002 复核扩展）：全部/任一子条件为真时本条件为真。
+	// 与顶层 Field/Op/Value 互斥（见上方类型注释），支持递归嵌套表达任意深度的
+	// 布尔组合，但节点数量受 JSON 反序列化的自然大小限制约束，不存在无界递归风险。
+	And []*EdgeCondition `json:"and,omitempty"`
+	Or  []*EdgeCondition `json:"or,omitempty"`
 }
 
 // WorkflowEdgeSpec 表示工作流节点间的依赖。

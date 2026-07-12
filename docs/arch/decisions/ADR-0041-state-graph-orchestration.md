@@ -52,8 +52,23 @@
 
 - **正向影响**：补齐 GD-8-001 的实际能力缺口（条件路由 + 有界循环），且不触碰 Blackboard 底层机制，风险面局限于新增文件 + `WorkflowGraphSpec` 的向后兼容扩展（新增字段全部 `omitempty`，`PatternDAGExecutor` 忽略新字段，现有调用方零改动）。副带修复了一个影响 `PatternDAGExecutor` 上游产出传递的既有 Bug。
 - **负向影响**：`WorkflowGraphSpec` 现在同时承载"严格 DAG"（编排模式9）与"有界状态图"（编排模式10）两种语义，调用方需明确按哪种模式构造图（`Condition`/`MaxVisits`/`IsEntry` 对 `PatternDAGExecutor` 无意义，混用可能造成误解）。`StateGraphExecutor` 暂不支持 Saga 补偿（见决策5），需要补偿的重型副作用节点仍应使用 `PatternDAGExecutor`。
-- **已知限制**（非本轮范围）：条件求值仅支持顶层字段字符串比较，不支持嵌套字段/数值比较/逻辑组合（AND/OR）；`StateGraphMaxTotalVisitBudget` 为硬编码常量，未提供运营者可调配置项。
+- **已知限制**（GD-14-002 已复核并部分解决，见下方 Addendum）：条件求值仅支持顶层字段比较，不支持嵌套路径/数组遍历；`StateGraphMaxTotalVisitBudget` 为硬编码常量，未提供运营者可调配置项。
 
 ## 4. Status (状态)
 
 **Accepted**（2026-07-11）。实现见 `internal/swarm/orchestrator/pattern_state_graph.go` + `pkg/graph/state_graph.go` + `internal/protocol/dag_node.go`；测试见 `internal/swarm/orchestrator/pattern_state_graph_test.go` + `pkg/graph/state_graph_test.go`；`make lint`/`make test` 全绿。
+
+## 5. Addendum：GD-14-002 CEL 表达式引擎复核（2026-07-12）
+
+外部复核报告（GD-14-002）针对本 ADR §3 "已知限制"提出建议：接入 CEL（Common Expression Language）表达式引擎作为 `EdgeCondition` 求值器，以解决"仅支持顶层字段字符串比较"的表达力缺口。
+
+**复核结论：维持 §2 决策2 对"脚本/表达式引擎"的否决，不接入 CEL 或任何表达式引擎。** 理由不变：HE-Rule-2（可验证执行）要求条件求值路径保持可静态枚举、可验证，脚本/表达式引擎（无论是否图灵完备）都会把"声明式比较"的求值面从"预定义算子集合"变为"运行时解析任意语法"，审查与形式化验证的确定性随之下降，与 Cedar（`internal/security/policy`）等既有策略引擎"声明式优先"的架构基调不一致。GD-14-002 指出的表达力缺口是真实的，但脚本引擎不是唯一解法。
+
+**采用的替代方案**：在 `EdgeCondition` 现有 `Field`/`Op`/`Value` 声明式模型上做增量扩展（`internal/protocol/dag_node.go` + `internal/swarm/orchestrator/pattern_state_graph.go`）：
+
+1. 算子集合从 `eq`/`ne` 扩展为 `eq`/`ne`/`gt`/`lt`/`ge`/`le`/`contains`/`exists`——覆盖 GD-14-002 报告中引用的"数值阈值路由""子串匹配"等典型场景；数值算子按 `float64` 解析两侧值，任一侧非数字 fail-closed（与既有"字段缺失/JSON 解析失败 fail-closed"原则一致）。
+2. 新增 `And`/`Or []*EdgeCondition` 结构化递归复合，覆盖"逻辑组合"缺口，与顶层 `Field/Op/Value` 互斥。
+
+两者仍是预定义、可枚举、可静态分析的声明式扩展，不引入变量绑定/函数调用/自由语法，因此不改变本 ADR 的 HE-Rule-2 合规边界——是"扩展已有声明式模型的表达力"，而非"引入表达式引擎"。§3 已知限制中"数值比较/逻辑组合（AND/OR）"缺口已解决；"嵌套字段/数组遍历"（如 `a.b.c` 路径或数组下标）超出本次范围，留待后续按实际需求评估（若需要，优先考虑扩展 `Field` 支持点分路径解析，而非引入表达式引擎）。
+
+实现见上述两文件；测试见 `internal/swarm/orchestrator/edge_condition_test.go`（新增，覆盖新增算子 + And/Or 递归 + fail-closed 场景）；`go build ./...`/`golangci-lint run`/`go test ./internal/swarm/orchestrator/...` 全绿。
