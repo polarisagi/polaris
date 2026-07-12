@@ -22,7 +22,7 @@ type input struct {
 // adapter（main 包不受层级限制）包装 *mcp.MCPManager.GetAsyncTaskResult 提供，
 // 返回值拆成基础类型，本包无需引用 mcp 包的任何具体类型。
 type AsyncTaskProvider interface {
-	GetAsyncTaskResult(taskID string) (status, text, errMsg string, images []types.ImagePart, found bool)
+	GetAsyncTaskResult(taskID string) (status, text, errMsg string, images []types.ImagePart, taintLevel types.TaintLevel, found bool)
 }
 
 // MakeGetTaskResultFn 创建 get_task_result 工具执行函数。
@@ -43,7 +43,7 @@ func MakeGetTaskResultFn(provider AsyncTaskProvider) sandbox.InProcessRichFn {
 		if provider == nil {
 			return notFoundResult()
 		}
-		status, text, errMsg, images, found := provider.GetAsyncTaskResult(in.TaskID)
+		status, text, errMsg, images, taintLevel, found := provider.GetAsyncTaskResult(in.TaskID)
 		if !found {
 			return notFoundResult()
 		}
@@ -54,7 +54,11 @@ func MakeGetTaskResultFn(provider AsyncTaskProvider) sandbox.InProcessRichFn {
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "get_task_result: marshal done result", err)
 			}
-			return &types.ToolResult{Success: true, Output: out, ImageParts: images}, nil
+			// taintLevel 来自异步任务实际执行时 CallToolTainted 测得的污点等级，
+			// 必须回传给 ToolResult.TaintLevel，否则 agent_execute_dag.go 的
+			// GlobalTaintLevel 抬升逻辑会漏掉所有异步 MCP 工具结果（同步路径已在
+			// makeMCPToolFn 修复，此处是其异步对应物）。
+			return &types.ToolResult{Success: true, Output: out, ImageParts: images, TaintLevel: taintLevel}, nil
 		case "failed":
 			out, err := json.Marshal(map[string]string{"status": status, "error": errMsg})
 			if err != nil {

@@ -12,10 +12,10 @@ type mcpAsyncTaskAdapter struct {
 	inner *mcp.MCPManager
 }
 
-func (a *mcpAsyncTaskAdapter) GetAsyncTaskResult(taskID string) (status, text, errMsg string, images []types.ImagePart, found bool) {
+func (a *mcpAsyncTaskAdapter) GetAsyncTaskResult(taskID string) (status, text, errMsg string, images []types.ImagePart, taintLevel types.TaintLevel, found bool) {
 	result, ok := a.inner.GetAsyncTaskResult(taskID)
 	if !ok {
-		return "", "", "", nil, false
+		return "", "", "", nil, types.TaintNone, false
 	}
-	return string(result.Status), result.Text, result.Error, result.Images, true
+	return string(result.Status), result.Text, result.Error, result.Images, result.TaintLevel, true
 }
