@@ -264,6 +264,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
 		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx)
 	}, maxConcurrent)
+	// KillSwitch 三阶段熔断（ADR-0009）接入：Pause/FullStop 阶段拒绝新 Agent 执行，
+	// Agent 内核异常退出上报错误计数（Acquire/AcquireHeadless 是全部触发路径的唯一收敛点）。
+	if sb.KS != nil {
+		agentPool.WithKillSwitchGate(sb.KS)
+	}
 
 	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
 		Name:   "agent-0",

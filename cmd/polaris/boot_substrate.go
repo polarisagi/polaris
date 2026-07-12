@@ -346,12 +346,18 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	automation.StartMonthlyCostReport(ctx, layout.Reports, store.DB())
 
 	// ─── 3. 策略引擎 (L0 PolicyGate) ────────────────────────────────────────
+	// onKillSwitch: Cedar 评估连续失败 10 次 / FFI 超时累计 5 次触发（gate.go recordFailure/
+	// evaluateCedar）。[2026-07-12 修复] 此前仅记录日志、未做任何实际动作——策略引擎本身持续
+	// 故障（fail-closed 语义要求此时应收紧而非静默降级）从未真正驱动 KillSwitch Stage 1
+	// 熔断（ks 在此处已构造，见上方 §0.35）。HITL 网关通知仍是已知缺口，留待网关初始化后
+	// 补充（真正的通知投递需要 hitlGateway 实例，此处保留待办而非假装已完成）。
 	gate := policy.NewGate(func() {
 		slog.Error("polaris: POLICY GATE HITL TRIGGERED — human review required",
 			"component", "policy_gate",
 			"action", "hitl_callback",
-			"note", "wire hitlGateway.Notify here after gateway initialization",
+			"note", "TODO: wire hitlGateway.Notify here after gateway initialization",
 		)
+		ks.ReportError()
 	})
 
 	switch strings.ToLower(cfg.Policy.CedarEnforceMode) {

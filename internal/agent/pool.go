@@ -14,6 +14,24 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// KillSwitchGate agent 包对系统级三阶段熔断状态的消费端接口（HE-3：接口在调用方定义）。
+// 实现：security.KillSwitch（通过 Pool.WithKillSwitchGate 注入，nil 时不做任何熔断检查，
+// 行为与注入前完全一致，保证既有测试无需构造该依赖）。
+//
+// [2026-07-12 补上的真实缺口] 此前 KillSwitch 三阶段熔断（ADR-0009）仅在启动时
+// 检查 .fullstop 文件、构造对象、更新 Prometheus gauge，其 CheckAndAct/ReportError/
+// ReportSafetyViolation/IsSealed 等状态转移与查询方法在全仓库零调用——熔断升级到
+// Pause/FullStop 后，运行中的进程不会拒绝任何新 Agent 执行请求，只有下次重启才会
+// 被 .fullstop 文件挡住。AgentPool.Acquire/AcquireHeadless 是全部交互式与
+// Cron/Workflow/Webhook headless 触发路径的唯一收敛入口（ADR-0039 Gateway 控制权
+// 移交 FSM 之后），在此处做一次性检查即可覆盖全部路径，无需在各 handler 分别判断。
+type KillSwitchGate interface {
+	// Allowed 返回当前是否允许启动新的 Agent 执行；Pause/FullStop 阶段返回 false。
+	Allowed() bool
+	// ReportError 上报一次 Agent 内核异常退出，供三阶段熔断累计错误计数判定。
+	ReportError()
+}
+
 // Pool 管理 per-session Agent 实例，容量受 maxSize 限制。
 // 超容量时 Acquire 等待至多 acquireTimeout 后返回 CodeResourceExhausted。
 // idle 超过 idleTimeout 的 Agent 实例被自动回收（Close 调用）。
@@ -26,6 +44,15 @@ type Pool struct {
 	mu       sync.Mutex
 	sessions map[string]*poolEntry
 	sem      chan struct{}
+	killGate KillSwitchGate
+}
+
+// WithKillSwitchGate 注入 KillSwitch 熔断门（可选，nil 安全）。
+// 调用方：cmd/polaris/boot_agent.go，注入 sb.KS（*security.KillSwitch）。
+func (p *Pool) WithKillSwitchGate(g KillSwitchGate) {
+	p.mu.Lock()
+	p.killGate = g
+	p.mu.Unlock()
 }
 
 type poolEntry struct {
@@ -81,6 +108,9 @@ func (p *Pool) newPoolEntry(sessionID string) *poolEntry {
 	concurrent.SafeGo(ag.ctx, "agent-pool.kernel."+sessionID, func(ctx context.Context) {
 		if err := ag.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("agent pool: kernel Run() exited with error", "session", sessionID, "err", err)
+			if p.killGate != nil {
+				p.killGate.ReportError()
+			}
 		}
 	})
 	return &poolEntry{agent: ag}
@@ -88,6 +118,13 @@ func (p *Pool) newPoolEntry(sessionID string) *poolEntry {
 
 // Acquire 返回 sessionID 对应的 Agent 及释放回调。
 func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
+	// KillSwitch 熔断检查：Pause/FullStop 阶段拒绝启动任何新 Agent 执行
+	// （进行中的 Agent 不受影响，语义对齐 KillPause 注释"中止并保存进行中请求的状态"——
+	// 由 KillSwitch 状态变迁时的上层编排负责，此处只负责"不再开新的"）。
+	if p.killGate != nil && !p.killGate.Allowed() {
+		return nil, nil, apperr.New(apperr.CodeInternal, "agent pool: system sealed by killswitch, rejecting new agent execution")
+	}
+
 	// 等待容量令牌
 	acquireCtx, cancel := context.WithTimeout(ctx, p.acquireTimeout)
 	defer cancel()
@@ -179,6 +216,9 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	var finalOutput string
 	for ev := range stream {
 		if ev.Type == types.AgentStreamEventError {
+			if p.killGate != nil {
+				p.killGate.ReportError()
+			}
 			return nil, apperr.New(apperr.CodeInternal, ev.Content)
 		}
 		if ev.Type == types.AgentStreamEventToken {
