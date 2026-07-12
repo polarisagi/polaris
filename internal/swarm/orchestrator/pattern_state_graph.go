@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -242,18 +244,41 @@ func (r *stateGraphRun) tryPostNode(ctx context.Context, node protocol.WorkflowN
 }
 
 // evalEdgeCondition 声明式条件求值。nil = 无条件边，恒真。
-// HE-Rule-2：仅支持声明式字段比较，禁止内嵌脚本/表达式引擎（避免"可验证执行"
-// 退化为"运行任意代码决定控制流"）。无法解析上游输出或字段缺失时 fail-closed
-// （宁可漏触发下游边，也不在未验证的输出上误触发）。
+// HE-Rule-2：仅支持声明式字段比较 + 结构化 And/Or 复合（GD-14-002 复核扩展见
+// protocol.EdgeCondition 类型注释），禁止内嵌脚本/表达式引擎（避免"可验证执行"
+// 退化为"运行任意代码决定控制流"，ADR-0041 已就引入 CEL 的原始 finding 做出否决，
+// 维持不变）。无法解析上游输出或字段缺失时 fail-closed（宁可漏触发下游边，也不在
+// 未验证的输出上误触发）。JSON 反序列化本身在 Execute 主循环中每条边仅执行一次，
+// 不存在重复解析开销问题。
 func evalEdgeCondition(cond *protocol.EdgeCondition, upstreamOutput []byte) bool {
 	if cond == nil {
 		return true
 	}
+	if len(cond.And) > 0 {
+		for _, sub := range cond.And {
+			if !evalEdgeCondition(sub, upstreamOutput) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(cond.Or) > 0 {
+		for _, sub := range cond.Or {
+			if evalEdgeCondition(sub, upstreamOutput) {
+				return true
+			}
+		}
+		return false
+	}
+
 	var m map[string]any
 	if err := json.Unmarshal(upstreamOutput, &m); err != nil {
 		return false
 	}
 	val, ok := m[cond.Field]
+	if cond.Op == protocol.CondExists {
+		return ok
+	}
 	if !ok {
 		return false
 	}
@@ -263,6 +288,33 @@ func evalEdgeCondition(cond *protocol.EdgeCondition, upstreamOutput []byte) bool
 		return valStr == cond.Value
 	case protocol.CondNotEquals:
 		return valStr != cond.Value
+	case protocol.CondContains:
+		return strings.Contains(valStr, cond.Value)
+	case protocol.CondGreaterThan, protocol.CondLessThan, protocol.CondGreaterOrEqual, protocol.CondLessOrEqual:
+		return evalNumericCondition(cond.Op, valStr, cond.Value)
+	default:
+		return false
+	}
+}
+
+// evalNumericCondition 对 gt/lt/ge/le 算子做数值比较：两侧均需可解析为 float64，
+// 否则 fail-closed（返回 false）——与"字段缺失/JSON 解析失败"同一条 fail-closed
+// 原则，避免对非数字字段做隐式类型转换后产生误判。
+func evalNumericCondition(op protocol.EdgeConditionOp, valStr, target string) bool {
+	got, err1 := strconv.ParseFloat(valStr, 64)
+	want, err2 := strconv.ParseFloat(target, 64)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	switch op {
+	case protocol.CondGreaterThan:
+		return got > want
+	case protocol.CondLessThan:
+		return got < want
+	case protocol.CondGreaterOrEqual:
+		return got >= want
+	case protocol.CondLessOrEqual:
+		return got <= want
 	default:
 		return false
 	}
