@@ -73,13 +73,24 @@ func (p *DefaultIngestionPipeline) fetchLeafChunks(ctx context.Context, db proto
 }
 
 // summarizeText 对 prompt 发起一次 LLM 推理并返回裁剪后的文本，失败时返回空串
-// （调用方按空串跳过写入，不视为致命错误）。
+// （调用方按空串跳过写入，不视为致命错误；但会记录 WARN 日志，避免静默失败
+// 导致 rag_chunks 出现无内容的"幽灵摘要"却无任何可观测线索，见批次 8 H2）。
+// summaryInferSem 限制单个 pipeline 实例上同时在途的摘要 Infer 调用数（H1），
+// 避免多篇文档并发摄入时对 Provider 产生无界并发请求。
 func (p *DefaultIngestionPipeline) summarizeText(ctx context.Context, prompt string, maxTokens int) string {
+	select {
+	case p.summaryInferSem <- struct{}{}:
+		defer func() { <-p.summaryInferSem }()
+	case <-ctx.Done():
+		return ""
+	}
+
 	sCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	resp, err := safecall.Infer(sCtx, p.provider, []types.Message{{Role: "user", Content: prompt}},
 		types.WithMaxTokens(maxTokens))
 	if err != nil || resp == nil {
+		slog.WarnContext(ctx, "rag_impl: summary Infer failed, skipping this summary level", "error", err)
 		return ""
 	}
 	return strings.TrimSpace(resp.Content)

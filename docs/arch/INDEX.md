@@ -31,7 +31,7 @@
 - **症状特征**：重启后插件市场/插件目录页面短暂为空，过一两分钟自己又有了。
 - **归类模块**：M13-bis
 - **根因类别**：1) 启动期后台全量同步尚未跑完（约 1~2 分钟）；2) 多个 polaris 进程共用同一个 `~/.polarisagi/polaris/data/polaris.db`（如 launchd 常驻实例 + 本地测试构建同时跑）。
-- **排查起点**：`cmd/polaris/server.go` `bootMarketplaceInit`；`scripts/restart.sh` 的 `POLARIS_DATA_DIR` 隔离机制。
+- **排查起点**：`internal/gateway/server/server_init.go` `bootMarketplaceInit`；`scripts/restart.sh` 的 `POLARIS_DATA_DIR` 隔离机制。
 
 ### 症状 5：怀疑外部阻塞式调用导致卡死
 - **症状特征**：怀疑"持有 DB 连接/Tx/未关闭 Rows 期间发起阻塞式外部调用（LLM/网络）"导致卡死。
@@ -109,13 +109,13 @@ HTTP/SSE、HITLGateway、ResourceGovernor、TaskQueue、Web UI 规约（Alpine.j
 
 | 任务类型 | 必读组合 | 总 tok |
 |----------|----------|--------|
-| 修改存储 / EventLog / DDL（Data Definition Language，数据定义语言） | `00` + `M02` + `state.yaml`(§Storage) | ~80K |
-| 修改 Agent 状态机 / Saga | `00` + `M04` + `state.yaml`(§Kernel) | ~80K |
+| 修改存储 / EventLog / DDL（Data Definition Language，数据定义语言） | `00` + `M02` + `state.yaml`(§outbox) | ~80K |
+| 修改 Agent 状态机 / Saga | `00` + `M04` + `state.yaml`(§par) | ~80K |
 | 修改记忆 / 上下文组装 | `00` + `M05` | ~56K |
 | 修改 RAG / 知识图谱 | `00` + `M10` (+ `M05` 如涉混合检索) | ~50~83K |
 | 修改工具 / 沙箱 / MCP | `00` + `M07` (+ `M11` 如涉策略边界) | ~63~107K |
-| 修改策略 / 安全 / Taint | `00` + `M11` + `state.yaml`(§Safety) | ~120K |
-| 修改可观测 / 指标 | `00` + `M03` + `state.yaml`(§Metrics) | ~75K |
+| 修改策略 / 安全 / Taint | `00` + `M11` + `state.yaml`(§taint) | ~120K |
+| 修改可观测 / 指标 | `00` + `M03` + `state.yaml`(§signals) | ~75K |
 | 修改 Provider 路由 / Model Pool | `00` + `M01` | ~44K |
 | 修改技能 / Logic Collapse | `00` + `M06` (+ `M09` 如涉蒸馏) | ~48~75K |
 | 修改 Orchestrator / Blackboard | `00` + `M08` (+ `M04` 如涉认领协议) | ~42~71K |

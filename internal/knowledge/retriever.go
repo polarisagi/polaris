@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -81,6 +82,10 @@ func NewHybridRetrieverWithGraph(db protocol.SQLQuerier, embedder VectorEmbedder
 
 // Search 执行混合检索。
 func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
+	tracer := trace.NewTracer()
+	span, ctx := tracer.StartSpan(ctx, trace.SpanMemoryOp, "Knowledge.Search")
+	defer tracer.EndSpan(span)
+
 	if query == "" {
 		return nil, nil
 	}

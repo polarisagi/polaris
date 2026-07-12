@@ -78,6 +78,18 @@ type Agent struct {
 	streamSubsMu sync.Mutex
 	streamSubs   map[uint64]chan types.AgentStreamEvent
 	streamSubSeq uint64
+
+	// [GD-13-006] done 在 Run() 返回时关闭，供 Pool.release() 等待内核真正
+	// 退出（清理完资源、停止消费 a.intent）后再归还容量令牌，避免 Interrupt
+	// 只是异步投递了中止信号、内核尚未退出时就把同一 session 交给新请求，
+	// 造成并发访问同一 Agent 内部状态的竞态。
+	done     chan struct{}
+	doneOnce sync.Once
+}
+
+// Done 返回一个在 Run() 循环真正退出时关闭的 channel。
+func (a *Agent) Done() <-chan struct{} {
+	return a.done
 }
 
 type AgentConfig struct {
@@ -117,6 +129,7 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 		whisperSendChan:   wCh,
 		streamSubs:        make(map[uint64]chan types.AgentStreamEvent),
 		pendingRedirectCh: make(chan string, 1),
+		done:              make(chan struct{}),
 	}
 	agent.sm.SetIntentDispatcher(agent.asyncIntent)
 	return agent
@@ -148,6 +161,11 @@ func NewAgentWithDefaults(id string) *Agent {
 //
 //nolint:gocyclo
 func (a *Agent) Run(ctx context.Context) error {
+	// [GD-13-006] Run() 循环退出（无论正常终态、超步熔断还是 ctx 取消）时关闭
+	// done，通知 Pool.release() 内核已真正停止，可以安全归还容量令牌。
+	// doneOnce 防止理论上的重复调用导致 close 已关闭 channel 而 panic。
+	defer a.doneOnce.Do(func() { close(a.done) })
+
 	// 从 AgentConfig 初始化步骤预算（仅在首次 Run 时设置，支持外部注入覆盖）
 	if a.Config.MaxSteps > 0 && a.sCtx.MaxStepsLimit == 0 {
 		a.sCtx.MaxStepsLimit = a.Config.MaxSteps

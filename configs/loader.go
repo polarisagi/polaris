@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"text/template"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // LoadPromptTemplate loads a template from the embedded FS and executes it with the given data.
@@ -14,12 +16,12 @@ func LoadPromptTemplate(name string, data any) (string, error) {
 
 	content, err := FS.ReadFile(fullPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read prompt template %q: %w", fullPath, err)
+		return "", apperr.Wrap(apperr.CodeNotFound, fmt.Sprintf("failed to read prompt template %q", fullPath), err)
 	}
 
 	tmpl, err := template.New(name).Parse(string(content))
 	if err != nil {
-		return "", fmt.Errorf("failed to parse prompt template %q: %w", fullPath, err)
+		return "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to parse prompt template %q", fullPath), err)
 	}
 
 	if data == nil {
@@ -30,7 +32,7 @@ func LoadPromptTemplate(name string, data any) (string, error) {
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute prompt template %q: %w", fullPath, err)
+		return "", apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to execute prompt template %q", fullPath), err)
 	}
 
 	return buf.String(), nil

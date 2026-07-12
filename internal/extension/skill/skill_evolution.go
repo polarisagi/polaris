@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // evolutionCooldown 同一技能两次触发 Logic Collapse 重编译之间的最短间隔。
@@ -118,7 +119,7 @@ func (m *SkillEvolutionMonitor) gatherSkillStats(ctx context.Context) (map[strin
 			name = payload.Name
 		}
 		// 我们只关注 skill
-		if !strings.HasPrefix(name, "skill:") && !strings.HasPrefix(name, "auto_") {
+		if !strings.HasPrefix(name, types.SkillPrefix) && !strings.HasPrefix(name, "auto_") {
 			continue
 		}
 		if _, ok := skillStats[name]; !ok {

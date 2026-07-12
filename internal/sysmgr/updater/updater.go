@@ -114,11 +114,15 @@ func (m *Manager) CheckLatest(ctx context.Context) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	c := m.client
-	if c == nil {
-		c = &http.Client{Timeout: 10 * time.Second}
+	// GR-10-002 修复：禁止在 client 未注入时静默降级为裸 http.Client（绕过 M11
+	// SafeDialer，违反 XR-06 全部出站连接强制走 SafeDialer.DialContext 的红线）。
+	// 生产路径由 boot_server.go 注入 sb.SafeHTTP，此处 fail-closed 而非兜底放行。
+	if m.client == nil {
+		slog.Warn("updater: no SafeDialer-backed HTTP client configured, skipping version check (fail-closed, XR-06)")
+		m.setIdle()
+		return
 	}
-	resp, err := c.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		slog.Warn("updater: version check failed", "err", err)
 		m.setIdle()

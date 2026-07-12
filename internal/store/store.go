@@ -134,7 +134,16 @@ func (s *SQLiteStore) runMigrations() error { //nolint:gocyclo
 		return apperr.Wrap(apperr.CodeInternal, "create schema_versions", err)
 	}
 
-	// kv_store 通用键值表（Store 接口的物理底层）
+	// kv_store 通用键值表（Store 接口的物理底层）。
+	//
+	// GR-1-001 复核结论：该建表语句与 schema_versions 一样保留硬编码在 Go 内，
+	// 不迁移至 internal/protocol/schema/（不同于其余业务表）。原因：
+	// OpenSQLite(path, nil) 是本包显式支持并测试覆盖的"无 schema 目录"轻量
+	// KV-only 模式（见 store_test.go 全部用例），runMigrations 在 schemaFS==nil
+	// 时提前 return（下方），若把 kv_store 迁移到 schema 文件，该模式下
+	// kv_store 表将不再被创建，导致 Store.Get/Put/Delete/Scan 全部失败于
+	// "no such table"。kv_store 与 schema_versions 同属两个跳过 SSoT 目录、
+	// 必须在迁移系统自身可用之前/之外就绪的基础设施表，此为已核实的合理例外。
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS kv_store (
 		key        BLOB PRIMARY KEY,
 		value      BLOB NOT NULL,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -15,24 +16,37 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
+// summaryInferConcurrency 单个 DefaultIngestionPipeline 实例上，摘要树生成
+// （buildSummaryTree/generateSummaryLevels）允许同时在途的 provider.Infer
+// 调用数上限（批次 8 H1 修复）。Ingest 为每篇文档摘要生成单独开一个
+// concurrent.SafeGo 后台 goroutine，多篇文档并发摄入时若不加限制，会对
+// LLM Provider 产生无界并发调用，构成潜在的重试风暴/限流雪崩风险。
+const summaryInferConcurrency = 3
+
 // DefaultIngestionPipeline 实现了 IngestionPipeline，负责分块与打标污染等级
 type DefaultIngestionPipeline struct {
-	router       *store.StorageRouter
-	provider     protocol.Provider
-	outboxWriter protocol.OutboxWriter // 可选；nil 时降级为 goroutine
-	searchEngine *search.HybridSearchEngine
+	router          *store.StorageRouter
+	provider        protocol.Provider
+	outboxWriter    protocol.OutboxWriter // 可选；nil 时降级为 goroutine
+	searchEngine    *search.HybridSearchEngine
+	summaryInferSem chan struct{} // 限制并发摘要 Infer 调用数（H1）
 }
 
 func NewDefaultIngestionPipeline(router *store.StorageRouter, provider protocol.Provider, outboxWriter protocol.OutboxWriter, searchEngine *search.HybridSearchEngine) *DefaultIngestionPipeline {
 	return &DefaultIngestionPipeline{
-		router:       router,
-		provider:     provider,
-		outboxWriter: outboxWriter,
-		searchEngine: searchEngine,
+		router:          router,
+		provider:        provider,
+		outboxWriter:    outboxWriter,
+		searchEngine:    searchEngine,
+		summaryInferSem: make(chan struct{}, summaryInferConcurrency),
 	}
 }
 
 func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, initialTaint int) (*DocTree, error) {
+	tracer := trace.NewTracer()
+	span, ctx := tracer.StartSpan(ctx, trace.SpanMemoryOp, "Knowledge.Ingest")
+	defer tracer.EndSpan(span)
+
 	if doc == nil {
 		return nil, apperr.New(apperr.CodeInvalidInput, "document is nil")
 	}

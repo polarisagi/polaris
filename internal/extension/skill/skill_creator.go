@@ -146,7 +146,7 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 
 	if c.registry != nil {
 		meta := types.SkillMeta{
-			Name:      "skill:" + result.Name,
+			Name:      types.SkillPrefix + result.Name,
 			Version:   "1.0.0",
 			ExecMode:  result.ExecMode,
 			Trust:     types.TrustLocal,

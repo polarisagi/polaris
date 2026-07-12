@@ -26,17 +26,23 @@ type SandboxRouter struct {
 	goos            string         // "darwin" | "linux" | "windows"
 	hwTier          int            // 0 = Tier 0 (8GB) 主线
 	newWasmDisabled atomic.Bool
-	activeWasm      map[string]context.CancelFunc
+	// activeExecs 追踪所有正在执行的沙箱任务的取消函数，覆盖 Wasm/Container/
+	// NativeOS/InProcess/Remote 全部 tier（D-B6-04 修复：原 activeWasm 从未在
+	// Execute() 中被写入，Kill* 方法长期是空 map 上的 no-op，且命名/注释均
+	// 仅覆盖 Wasm，Container/NativeOS 完全脱离追踪，OOM 压力下无法强制回收）。
+	// 统一在 Execute() 单一执行入口处注册/注销，覆盖所有 tier。
+	activeExecs map[string]context.CancelFunc
+	execSeq     atomic.Uint64
 }
 
 func NewSandboxRouter(inProcess *InProcessSandbox, container *ContainerSandbox, wasmtime SandboxProvider, goos string, hwTier int) *SandboxRouter {
 	return &SandboxRouter{
-		inProcess:  inProcess,
-		container:  container,
-		wasmtime:   wasmtime,
-		goos:       goos,
-		hwTier:     hwTier,
-		activeWasm: make(map[string]context.CancelFunc),
+		inProcess:   inProcess,
+		container:   container,
+		wasmtime:    wasmtime,
+		goos:        goos,
+		hwTier:      hwTier,
+		activeExecs: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -45,30 +51,32 @@ func (r *SandboxRouter) DisableNewInstances(disable bool) {
 	r.newWasmDisabled.Store(disable)
 }
 
-// KillIdleSandboxes 回收空闲的 WasmSandbox 实例（OSMemoryGuard L2 级调用）。
-// 当前设计无长期驻留的空闲沙箱进程（InProcess/Wasm 均为请求粒度），清理计数器统计即可。
+// KillIdleSandboxes 回收正在执行的沙箱任务（OSMemoryGuard L2 级调用）。
+// 覆盖 Wasm/Container/NativeOS/InProcess/Remote 全部 tier（D-B6-04）。
 func (r *SandboxRouter) KillIdleSandboxes(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	count := int64(len(r.activeWasm))
-	for k, cancel := range r.activeWasm {
+	count := int64(len(r.activeExecs))
+	for k, cancel := range r.activeExecs {
 		cancel()
-		delete(r.activeWasm, k)
+		delete(r.activeExecs, k)
 	}
 	if count > 0 {
-		slog.InfoContext(ctx, "sandbox: killed idle wasm instances", "count", count)
+		slog.InfoContext(ctx, "sandbox: killed idle sandbox executions", "count", count)
 	}
 }
 
 // KillAllNonCritical 回收全部非关键沙箱（OSMemoryGuard L3 临界内存压力调用）。
-// 强制终止所有已知的 WasmSandbox + ContainerSandbox 实例，优先级低于 InProcess。
+// 强制终止所有已知的正在执行的沙箱任务，覆盖 Wasm/Container/NativeOS/
+// InProcess/Remote 全部 tier（D-B6-04：原实现仅追踪 Wasm 且从未真正写入过
+// 追踪表，Container/NativeOS 长期是防御盲区）。
 func (r *SandboxRouter) KillAllNonCritical(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	count := int64(len(r.activeWasm))
-	for k, cancel := range r.activeWasm {
+	count := int64(len(r.activeExecs))
+	for k, cancel := range r.activeExecs {
 		cancel()
-		delete(r.activeWasm, k)
+		delete(r.activeExecs, k)
 	}
 	slog.WarnContext(ctx, "sandbox: killed all non-critical sandboxes (L3 memory pressure)", "count", count)
 }
@@ -159,7 +167,24 @@ func (r *SandboxRouter) Execute(ctx context.Context, tool types.Tool, input []by
 		SystemTier:  r.hwTier,
 		TaintLevel:  taintLevel,
 	}
-	res, err := provider.Run(ctx, spec)
+
+	// D-B6-04：统一注册可取消 context，供 KillIdleSandboxes/KillAllNonCritical
+	// 在 OOM 压力下强制终止在执行的沙箱任务。Execute 是所有 tier（Wasm/
+	// Container/NativeOS/InProcess/Remote）唯一的执行入口，在此处单点注册
+	// 即可覆盖全部 tier，无需侵入各 SandboxProvider 具体实现。
+	execCtx, cancel := context.WithCancel(ctx)
+	key := fmt.Sprintf("%s-%d", tool.Name, r.execSeq.Add(1))
+	r.mu.Lock()
+	r.activeExecs[key] = cancel
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.activeExecs, key)
+		r.mu.Unlock()
+		cancel()
+	}()
+
+	res, err := provider.Run(execCtx, spec)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox run tool %q", tool.Name), err)
 	}
