@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,14 @@ type RunnerImpl struct {
 	// evalSeqCounter：EvalCompletedPayload 单调递增序号（2026-07-04 审计补齐，
 	// 供 learning_cursors 幂等去重使用）。
 	evalSeqCounter atomic.Int64
+
+	// l3ThresholdProvider 供 M11 批次级别全局降级判定。
+	l3ThresholdProvider L3ThresholdProvider
+}
+
+// L3ThresholdProvider 接口定义，解耦对 analysis.ContinuousSamplingMonitor 的依赖。
+type L3ThresholdProvider interface {
+	GetL3Threshold() float64
 }
 
 type EvalAgent interface {
@@ -57,6 +66,11 @@ func (r *RunnerImpl) SetEvalChannel(ch chan<- types.EvalCompletedPayload) {
 
 func (r *RunnerImpl) InjectAgent(agent EvalAgent) {
 	r.agent = agent
+}
+
+// InjectL3ThresholdProvider 注入 L3 阈值提供者
+func (r *RunnerImpl) InjectL3ThresholdProvider(p L3ThresholdProvider) {
+	r.l3ThresholdProvider = p
 }
 
 // InjectProvider 注入 LLM Provider，供 Level4LLMJudge 用例进行语义评判。
@@ -180,6 +194,19 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 		}:
 		default:
 			// 信道满，丢弃（M9 外环尽力而为，不阻断 Eval 主流程）
+		}
+	}
+
+	// Task 5: 批次级别判断，如果 PassRate 低于 L3Threshold，触发全局兜底
+	if report != nil && r.l3ThresholdProvider != nil {
+		total := report.TotalCases
+		if total <= 0 {
+			total = 1
+		}
+		passRate := float64(report.PassCount) / float64(total)
+		threshold := r.l3ThresholdProvider.GetL3Threshold()
+		if threshold > 0 && passRate < threshold {
+			slog.Warn("M11 Global Fallback Triggered", "pass_rate", passRate, "threshold", threshold)
 		}
 	}
 

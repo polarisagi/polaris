@@ -35,10 +35,11 @@ type InMemoryToolRegistry struct {
 	blackboard SideEffectChecker
 	// idempotencyCache 幂等缓存：LRU 上限 1000 条 + TTL 5min 双控。
 	// 上限 1000 是 state.yaml §m7_tool.idempotency_cache_max 的默认值。
-	idempotencyCache *lruCache
-	tokenVault       *guard.PIITokenVault // 可选注入（M11 §5.4 PII 令牌化）；nil 时行为与改造前完全一致
-	hitl             protocol.HITL        // HITL 网关 (人工审批)
-	outcomeRecorder  ToolOutcomeRecorder  // 可选注入，工具自进化闭环（见 WithOutcomeRecorder）
+	idempotencyCache   *lruCache
+	tokenVault         *guard.PIITokenVault // 可选注入（M11 §5.4 PII 令牌化）；nil 时行为与改造前完全一致
+	hitl               protocol.HITL        // HITL 网关 (人工审批)
+	outcomeRecorder    ToolOutcomeRecorder
+	sessionEventWriter SessionEventWriter
 }
 
 // ToolOutcomeRecorder/WithOutcomeRecorder/reportOutcome 见 tool_outcome.go（R7 拆分）。
@@ -228,7 +229,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	}
 
 	if execErr != nil {
-		r.reportOutcome(name, false, 0, execErr.Error())
+		r.reportOutcome(name, false, 0, execErr.Error(), ctx, execInput, nil)
 		return &types.ToolResult{ //nolint:nilerr
 			Success:    false,
 			Error:      execErr.Error(),
@@ -245,7 +246,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		ImageParts: execRes.ImageParts,
 	}
 
-	r.reportOutcome(name, finalResult.Success, finalResult.LatencyMs, finalResult.Error)
+	r.reportOutcome(name, finalResult.Success, finalResult.LatencyMs, finalResult.Error, ctx, execInput, finalResult)
 	r.cacheIdempotencyResult(idempotencyKey, finalResult)
 
 	return finalResult, nil

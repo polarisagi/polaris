@@ -44,6 +44,9 @@ type CtxIdempotencyKey struct{}
 // CtxTaskIDKey 用于在 context 中传递任务 ID (防止 TOCTOU)
 type CtxTaskIDKey struct{}
 
+// CtxSessionIDKey 用于在 context 中传递 Session ID
+type CtxSessionIDKey struct{}
+
 // CtxAgentIDKey 用于在 context 中传递 Agent ID (防止 TOCTOU)
 type CtxAgentIDKey struct{}
 

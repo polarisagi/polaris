@@ -258,9 +258,17 @@ func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response
 		data, err := g.store.Get(ctx, key)
 		if err == nil {
 			var p types.HITLPrompt
-			if json.Unmarshal(data, &p) == nil && p.EligibleApproveTime > 0 {
-				if time.Now().Unix() < p.EligibleApproveTime {
-					return apperr.New(apperr.CodeForbidden, "hitl_gateway: mandatory cooldown active, please carefully read the shadow regression report before approving")
+			if json.Unmarshal(data, &p) == nil {
+				if p.EligibleApproveTime > 0 {
+					if time.Now().Unix() < p.EligibleApproveTime {
+						return apperr.New(apperr.CodeForbidden, "hitl_gateway: mandatory cooldown active, please carefully read the shadow regression report before approving")
+					}
+				}
+
+				// Task 8: Mint TaintExemptionToken on human approval
+				if p.TaintLevel > 0 {
+					slog.Info("hitl_gateway: minting TaintExemptionToken for approved high-taint operation", "checkpoint", checkpointID)
+					// TODO(Task 8): Insert token into vault or blackboard
 				}
 			}
 		}

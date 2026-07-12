@@ -193,6 +193,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	toolReg := polartool.NewInMemoryToolRegistry(envelope)
 	toolReg.WithTokenVault(piiVault)
 
+	// Inject trajectory store event writer for tool call recording (Task 1)
+	toolReg.WithSessionEventWriter(newStoreEventWriter(sb.Store))
+
 	// 工具自进化闭环（2026-07-12 unwired-code-audit 补齐）：PolicyEvolver 此前
 	// 完整实现（滑动窗口成功率统计 + 失败模式识别）但从未被构造，ExecuteTool
 	// 结果也从未上报——闭环两端均是死代码。policyEvolverOutcomeAdapter 桥接

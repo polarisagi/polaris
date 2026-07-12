@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -25,11 +26,13 @@ func MakeFetchURLFn(dialer protocol.SafeDialer) sandbox.InProcessFn {
 			return nil, apperr.New(apperr.CodeInternal, "fetch_url: SafeDialer is required (XR-06 violation prevented)")
 		}
 
+		transport := &http.Transport{
+			DialContext: dialer.DialContext,
+		}
+
 		client := &http.Client{
-			Transport: &http.Transport{
-				DialContext: dialer.DialContext,
-			},
-			Timeout: 30 * time.Second,
+			Transport: network.WrapCapability(transport, network.CapNetworkRead),
+			Timeout:   30 * time.Second,
 		}
 
 		var args fetchURLArgs

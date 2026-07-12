@@ -54,10 +54,20 @@ func (ag *AutoCurriculumGenerator) llmJudgeSafe(ctx context.Context, desc string
 func (ag *AutoCurriculumGenerator) isFrozen(skill string) bool {
 	ag.mu.Lock()
 	defer ag.mu.Unlock()
+	if ag.globalFreeze {
+		return true
+	}
 	if t, ok := ag.frozenUntil[skill]; ok && time.Now().Before(t) {
 		return true
 	}
 	return false
+}
+
+// SetGlobalFreeze sets the global freeze state.
+func (ag *AutoCurriculumGenerator) SetGlobalFreeze(frozen bool) {
+	ag.mu.Lock()
+	defer ag.mu.Unlock()
+	ag.globalFreeze = frozen
 }
 
 // FoundingAnchorMeta 提供创始行为锚点元数据（解耦依赖）。
@@ -82,6 +92,11 @@ type BackgroundTaskScheduler struct {
 	redTeam         RedTeamRunner                  // 可选；nil 时跳过 24h 红队探测
 	trajectoryStore protocol.TrajectoryStoreReader // 可 nil，nil 时无法执行漂移检测
 	auditLogger     protocol.AuditLogger           // 可 nil，nil 时降级为 slog.Error
+	immuneGateway   immuneGatewayInterface
+}
+
+type immuneGatewayInterface interface {
+	Scan(ctx context.Context, agentID string, scanType string) (any, error)
 }
 
 // SurpriseReader 读取当前系统 SurpriseIndex。
@@ -113,6 +128,11 @@ func (b *BackgroundTaskScheduler) InjectSurpriseReader(r SurpriseReader) {
 func (b *BackgroundTaskScheduler) InjectFoundingAnchor(anchor FoundingAnchorMeta, dataDir string) {
 	b.foundingAnchor = anchor
 	b.anchorDataDir = dataDir
+}
+
+// InjectImmuneGateway 注入免疫网关。
+func (b *BackgroundTaskScheduler) InjectImmuneGateway(gateway immuneGatewayInterface) {
+	b.immuneGateway = gateway
 }
 
 // InjectRedTeamProtocol 注入 Red Team 协议（可选）。
@@ -147,7 +167,7 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 	})
 
 	// 新增：7 天 FoundingAnchor 漂移检查（V8-S3）
-	if b.foundingAnchor != nil {
+	if b.immuneGateway != nil {
 		concurrent.SafeGo(ctx, "curriculum-founding-anchor-check", func(ctx context.Context) {
 			ticker := time.NewTicker(7 * 24 * time.Hour)
 			defer ticker.Stop()
@@ -156,7 +176,13 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					b.runFoundingAnchorCheck(ctx)
+					// Delegate checking to M9 ImmuneGateway
+					res, err := b.immuneGateway.Scan(ctx, "system", "founding_anchor")
+					if err == nil && res != nil {
+						if frozen, ok := res.(bool); ok && frozen {
+							b.generator.SetGlobalFreeze(true)
+						}
+					}
 				}
 			}
 		})
@@ -178,42 +204,6 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 				}
 			}
 		})
-	}
-}
-
-// runFoundingAnchorCheck 执行周度创始锚点漂移检查。
-func (b *BackgroundTaskScheduler) runFoundingAnchorCheck(ctx context.Context) {
-	if b.foundingAnchor == nil {
-		return
-	}
-
-	if b.trajectoryStore == nil {
-		slog.Warn("founding anchor check skipped: trajectoryStore is nil")
-		return
-	}
-
-	trajectories, err := b.trajectoryStore.GetRecent(ctx, 100)
-	if err != nil {
-		if b.auditLogger != nil {
-			_ = b.auditLogger.Log(ctx, "anchor_check_failed", map[string]any{"error": err.Error()})
-		} else {
-			slog.Error("founding anchor check failed to read trajectories", "err", err)
-		}
-		return
-	}
-
-	driftScore := b.foundingAnchor.CompareWithAnchor(trajectories)
-
-	if b.auditLogger != nil {
-		_ = b.auditLogger.Log(ctx, "anchor_drift_checked", map[string]any{
-			"drift_score":      driftScore,
-			"trajectory_count": len(trajectories),
-		})
-	} else {
-		slog.Info("founding anchor check completed",
-			"drift_score", driftScore,
-			"trajectory_count", len(trajectories),
-		)
 	}
 }
 

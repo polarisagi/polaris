@@ -53,9 +53,10 @@ type AutoCurriculumGenerator struct {
 	bb protocol.Blackboard
 
 	// 连续失败冻结记录: sourceSkill → (failCount, frozenUntil)
-	mu          sync.Mutex
-	failCounts  map[string]int
-	frozenUntil map[string]time.Time
+	mu           sync.Mutex
+	failCounts   map[string]int
+	frozenUntil  map[string]time.Time
+	globalFreeze bool
 
 	fitnessEval *SQLFitnessEvaluator // 可 nil；nil 时跳过 SQL 预筛
 }
