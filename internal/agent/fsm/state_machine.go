@@ -486,10 +486,4 @@ func (sm *StateMachine) ForceState(state types.AgentState) {
 	sm.history = append(sm.history, sm.current)
 	sm.current = state
 
-	if sm.sessionEventWriter != nil {
-		// Note: We don't have StateContext here directly, but normally this is a fail safe
-		// State trans event might lack session ID here unless passed, so we skip it for ForceState,
-		// or we would need to change ForceState signature. Since it's for fatal exceptions,
-		// skipping trajectory logging is acceptable.
-	}
 }
