@@ -14,47 +14,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// DAGValidationContext 承载 S_VALIDATE 四层校验所需的输入。
-// 架构文档: docs/arch/M04-Agent-Kernel.md §4
-type DAGValidationContext struct {
-	// Plan 是 S_PLAN 阶段 LLM 产出的 DAG。
-	Plan *DAGPlan
-	// ActiveTaintLevel 是当前会话上下文中传播而来的最高污点等级（Layer A 规则）。
-	// 计算规则: max(所有输入 TaintLevel) —— 只升不降。
-	ActiveTaintLevel types.TaintLevel
-	// PolicyGate 是 Cedar 策略引擎的 Go 接口（L1 确定性 Cedar 校验）。
-	PolicyGate protocol.PolicyGate
-	// ToolExecutor 用于 L1_taint 校验中动态判断工具的只读属性（替代硬编码白名单）。
-	// 为 nil 时退化为内置白名单兜底。
-	ToolExecutor protocol.AgentToolExecutor
-	// AgentID 用于 PolicyGate.Review 中的 principal 字段。
-	AgentID string
-	// SessionID 用于审计事件的关联查询。
-	SessionID string
-	// SystemTier 系统环境配置级别 (0: 8GB 弱计算节点, 1+: 强计算节点)
-	SystemTier int
-	// Provider 用于 L3 看门狗调用。
-	Provider protocol.Provider
-	// MonthlySpendUSD 当前估算 USD 消耗（由 BudgetManager.EstimatedSpendUSD() 填充）。
-	// [Task 11] 供 Cedar budget_cap 规则中的 monthly_spend_usd 使用。
-	MonthlySpendUSD float64
-	// MonthlyBudgetUSD 来自配置项，0 = 不限额。
-	MonthlyBudgetUSD float64
-}
-
-// DAGValidationError 包装 S_VALIDATE 失败的结构化错误。
-type DAGValidationError struct {
-	Layer  string // "L0" | "L1_taint" | "L1_policy" | "L2_heuristic" | "L3_llm"
-	NodeID string // 首个违规节点 ID（空表示全局失败）
-	Reason string
-}
-
-func (e *DAGValidationError) Error() string {
-	if e.NodeID != "" {
-		return fmt.Sprintf("validate [%s] node=%s: %s", e.Layer, e.NodeID, e.Reason)
-	}
-	return fmt.Sprintf("validate [%s]: %s", e.Layer, e.Reason)
-}
+// DAGValidationContext / DAGValidationError 权威定义已上移至
+// internal/protocol/dag_validation.go（2026-07-12 随 internal/execute 模块化
+// 迁出：agent 包不再直接 import 本包，通过 agent/provider.go 声明的 DAGValidator
+// 消费端接口消费，字段/方法与本包不再重复维护，此处仅保留别名保证向后兼容）。
+type DAGValidationContext = protocol.DAGValidationContext
+type DAGValidationError = protocol.DAGValidationError
 
 // ValidateDAG 是 S_VALIDATE 阶段的核心入口，串行执行多道防线。
 //

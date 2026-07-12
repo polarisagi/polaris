@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -20,7 +19,8 @@ import (
 )
 
 // runExecuteDAG 是 Agent 层面的 DAG 执行入口。
-// 从 a.sCtx.DAGModel 构建 dag.DAGPlan，通过 dag.DAGExecutor 按拓扑序并发执行工具，
+// 从 a.sCtx.DAGModel 构建 protocol.DAGPlan，通过 a.dagRunner（execute/dag.Runner，
+// 2026-07-12 随 internal/execute 模块化改为消费端接口注入）按拓扑序并发执行工具，
 // 结果写入 a.sCtx.ExecuteResult。
 // 任意节点失败 → 推送 TriggerExecuteFail（触发 S_ROLLBACK 和 Saga 补偿）。
 func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
@@ -36,14 +36,22 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		return apperr.New(apperr.CodeInternal, "runExecuteDAG: toolRegistry is nil (fail-closed)")
 	}
 
-	plan := &dag.DAGPlan{
+	plan := &protocol.DAGPlan{
 		Nodes: a.sCtx.DAGModel.Nodes,
 		Edges: a.sCtx.DAGModel.Edges,
 	}
 
+	if a.dagRunner == nil {
+		// fail-closed: 无 DAG 执行引擎时拒绝执行（2026-07-12 execute/dag 迁出后新增，
+		// 与上方 toolRegistry==nil 分支同一 fail-closed 原则；NewAgentWithDefaults/
+		// buildAgent 均默认注入，理论上不会命中，仅作防御）。
+		a.asyncIntent(types.TriggerExecuteFail)
+		return apperr.New(apperr.CodeInternal, "runExecuteDAG: dagRunner is nil (fail-closed)")
+	}
+
 	var callCount atomic.Int32
 
-	// 将 AgentToolExecutor.ExecuteWithTaint 绑定为 dag.DAGExecutor 的工具执行函数
+	// 将 AgentToolExecutor.ExecuteWithTaint 绑定为 a.dagRunner 的工具执行函数
 	toolExecFnInner := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 		tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
 		if token, ok := tokenVal.(*token.Token); ok && token != nil {
@@ -330,10 +338,10 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		return res, err
 	}
 
-	executor := dag.NewDAGExecutor(toolExecFn, nil) // leaseRenew 由 M8 注入，MVP 传 nil
-	results, err := executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)
+	// leaseRenew 由 M8 注入，MVP 传 nil
+	results, degradedReplan, err := a.dagRunner.Run(ctx, plan, toolExecFn, nil, a.sCtx.SessionID, a.sCtx.AgentID)
 
-	if executor.DegradedReplan {
+	if degradedReplan {
 		a.sCtx.DegradedReplan = true
 	}
 

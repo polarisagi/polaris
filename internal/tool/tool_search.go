@@ -151,7 +151,7 @@ func (m *toolSearchMatcher) sortedTop(limit int) []scoredTool {
 }
 
 // sessionIDFromCtx 提取激活作用域 ID——以 TaskID 作为激活作用域：
-// `internal/agent/dag/executor.go` 的 Execute() 已经把 taskID 通过
+// `internal/execute/dag/executor.go` 的 Execute() 已经把 taskID 通过
 // protocol.CtxTaskIDKey 注入 ctx 并向下传递到每个节点的工具调用，是本仓库
 // 唯一真正被生产路径注入的会话级标识（原先用裸字符串 "session_id" 查
 // ctx.Value，但全仓库没有任何地方真正写入这个 key，导致 ActivateTool 从未

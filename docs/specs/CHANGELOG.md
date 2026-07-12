@@ -4,6 +4,19 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-07-12（新建 internal/execute 模块，收敛单/多 Agent 执行引擎，ADR-0046）
+
+响应"是否该重新引入 Executor 模块"的提问，调研 2026 年 Planner-Executor 分离行业实践后判断：不采纳"规划一并并入"，但采纳"单/多 Agent 执行引擎物理归拢"。
+
+- `internal/agent/dag/` → `internal/execute/dag/`（git mv，package 名不变）| FSM 核心（`fsm/state_machine.go`、`fsm/transitions.go`、`agent_execute_*.go`）此前直接 import 同目录子包，迁出后按 `agent/provider.go` 既有消费端接口模式改造：新增 `DAGRunner`/`DAGValidator` 接口 + `DAGToolExecutorFn`/`DAGLeaseRenewFn` 桥接函数类型（刻意用匿名函数类型避免与 execute/dag 相互 import）；`execute/dag/runner.go` 新增无状态 `Runner`/`Validator` 适配器；`agent.go` 的 `NewAgentWithDefaults` 保留对 execute/dag 的直接 import 作为测试默认值例外，生产路径由 `cmd/polaris/boot_agent.go` 的 `buildAgent` 显式注入（覆盖 agent-0 与 AgentPool 派生的所有实例）
+- `internal/swarm/orchestrator/` → `internal/execute/orchestrator/`（git mv，仅 6 处组装根引用，纯路径重命名，无接口改造）
+- `internal/protocol/dag_node.go` + 新增 `dag_validation.go` | 迁移中发现并修复遗留死代码：`DAGPlan`/`ExecEdge`/`EdgePolarity` 此前已在 protocol 定义却从未被 `agent/dag` 引用（`agent/dag` 保留了独立重复定义）；本次改为正确的类型别名，`NodeResult`/`DAGValidationContext`/`DAGValidationError` 一并上移
+- `internal/config/immutable_constants.go` | `ImmutableKernelPackages()` 注释与实际返回值长期不一致的问题一并修正；新增 `internal/execute/dag/` 进白名单（承接 L1 TaintGate/PolicyGate 校验，随迁移保留 L4 保护，不扩大到未受保护过的 `internal/execute/orchestrator/`）
+- `internal/execute/CLAUDE.md`（新增）+ `internal/swarm/CLAUDE.md` + `internal/agent/CLAUDE.md` | 模块权力边界随物理迁移同步更新
+- `docs/arch/decisions/ADR-0046-execute-module.md`（新增）+ `M04-Agent-Kernel.md` + `M08-Multi-Agent-Orchestrator.md` + 根 `CLAUDE.md` 项目结构树 + `docs/arch/INDEX.md` §0 症状9 | 记录决策依据与现状同步
+
+**附带核实**：`go build ./...`、`go test ./internal/agent/... ./internal/execute/... ./internal/protocol/... ./cmd/polaris/...`、`go test ./internal/config/...` 均通过；全量 `make lint`/`go test ./...` 见下一条提交前核实记录。
+
 ## 2026-07-12（StateGraphExecutor 首个生产接入：workflow DAG 并行 + 失败重试）
 
 响应"分析 StateGraphExecutor 该接入哪个模块并实际接入，系统最优/功能强大/性能最优"的要求，选定 WebUI 工作流自动化功能作为接入点（此前是不经 Blackboard 的朴素顺序 for 循环）。实现过程中额外发现并修复两个此前未暴露的真实缺陷（因全仓库此前没有真实生产 Worker 消费任一 `Pattern*Executor` 投递的任务）：

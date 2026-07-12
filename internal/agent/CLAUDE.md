@@ -5,9 +5,15 @@
 
 ## 模块定位
 
-Agent 核心状态机（Arch-L2）。驱动 FSM 状态转移、思考循环（DAG 执行）、
+Agent 核心状态机（Arch-L2）。驱动 FSM 状态转移、思考循环的控制流、
 上下文感知（MemoryFacade 检索）。LLM 是协处理器，Go FSM 是主控制流。
 禁止 `while True: call LLM` 范式。
+
+DAG 的具体执行（拓扑调度/并发/Saga 补偿）与 S_VALIDATE 四层校验管线 2026-07-12
+已物理迁出至 `internal/execute/dag`（详见 `internal/execute/CLAUDE.md`、
+ADR-0046）：agent 不再直接持有执行引擎实现，只经 `agent/provider.go` 声明的
+`DAGRunner`/`DAGValidator` 消费端接口驱动它，FSM 本身仍是决定"何时进入
+S_EXECUTE/S_VALIDATE"的唯一控制流。
 
 ## 权力边界 [MUST]
 
@@ -19,7 +25,11 @@ Agent 核心状态机（Arch-L2）。驱动 FSM 状态转移、思考循环（DA
 
 ### 禁止 [MUST NOT]
 - **[MUST NOT]** 直接 import `internal/action/codeact`、`internal/action/lam`、
-  `internal/extension/skill` 等具体实现包（必须通过 `agent/provider.go` 中声明的接口）
+  `internal/extension/skill`、`internal/execute/dag` 等具体实现包（必须通过
+  `agent/provider.go` 中声明的接口）。唯一例外：`agent.go` 的
+  `NewAgentWithDefaults`（测试/开发默认构造器）直接 import `internal/execute/dag`
+  以注入默认的无状态 Runner/Validator，生产路径仍由 `cmd/polaris/boot_agent.go`
+  显式注入覆盖，该例外范围严格限定于这一个函数，理由见其函数注释。
 - **[MUST NOT]** 直接 import `internal/memory` 具体实现（通过 MemoryFacade 接口）
 - **[MUST NOT]** 直接调用 LLM API（必须通过注入的 `protocol.Provider` 接口）
 - **[MUST NOT]** 在状态机转移函数中执行阻塞 I/O（FSM 转移必须是非阻塞的，

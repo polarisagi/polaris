@@ -8,12 +8,23 @@ import (
 
 // DAG 可执行节点跨模块契约（M04 §5.3, M08 §8.2）。
 //
-// producer: internal/agent/dag（DAGExecutor 具体调度实现，类型别名于此）
-// consumer: internal/swarm/planner（TaskDecomposer 分解目标为节点列表）
+// producer: internal/execute/dag（DAGExecutor 具体调度实现，类型别名于此；
+//           2026-07-12 随 internal/execute 模块化从 internal/agent/dag 迁出）
+// consumer: internal/swarm/planner（TaskDecomposer 分解目标为节点列表）、
+//           internal/agent/fsm（DAGModel 填槽产出）
 //
 // ExecNode 此前以 internal/agent/dag.ExecNode 具体类型由 internal/swarm/planner
-// 直接 import 消费，违反 M04 §B2。现收敛至此，agent/dag 与 swarm/planner 均引用
-// 本文件定义，agent/dag 不再是唯一权威源但保留同名别名保证向后兼容。
+// 直接 import 消费，违反 M04 §B2。现收敛至此，execute/dag 与 swarm/planner 均引用
+// 本文件定义，execute/dag 不再是唯一权威源但保留同名别名保证向后兼容。
+//
+// DAGPlan/ExecEdge/EdgePolarity 此前存在遗留缺陷：本文件已定义这三个类型，但
+// execute/dag（原 agent/dag）内部保留了独立的同名重复定义（未按 ExecNode 的
+// 方式收敛为类型别名），导致本文件这三个类型定义长期处于零引用的死代码状态
+// （2026-07-12 排查确认）。本次随 internal/execute 迁移一并修复：execute/dag
+// 改为对本文件类型做别名（见 execute/dag/executor.go），此处恢复为唯一权威源。
+// NodeResult/DAGValidationContext/DAGValidationError 见 dag_validation.go（同一
+// 迁移中新增，原为 agent/dag 包内非跨模块类型，因 execute/dag 物理迁出成为独立
+// 模块后按 HE-3 收敛至此）。
 
 // NodeStatus 定义节点执行状态。
 type NodeStatus int

@@ -9,9 +9,9 @@ import (
 	"context"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
-	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 

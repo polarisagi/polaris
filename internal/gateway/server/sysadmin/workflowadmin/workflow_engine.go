@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
-	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"

@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -100,4 +102,50 @@ type WorldModelUpdater interface {
 	Update(ctx context.Context, toolName string, result *types.ToolResult) error
 	// CheckBlindZone 检查任务描述是否落入已知盲区（返回命中的盲区描述）。
 	CheckBlindZone(ctx context.Context, taskDesc string) ([]string, error)
+}
+
+// ─── DAG 执行引擎消费端接口（2026-07-12 随 internal/execute 模块化新增）───────
+//
+// internal/agent/dag 物理迁出为 internal/execute/dag 顶层模块前，FSM 思考循环
+// （fsm/state_machine.go、agent_execute_dag.go 等）直接 import 同目录子包，
+// 不算跨模块依赖。迁出后按本文件既有模式收敛为消费端接口：agent 不再直接
+// import internal/execute/dag，具体实现（execute/dag.Runner/Validator）由
+// cmd/polaris/boot_agent.go 构造并通过 InjectDAGRunner/InjectDAGValidator 注入。
+//
+// DAGToolExecutorFn/DAGLeaseRenewFn 是本地具名类型，仅供调用方（agent_execute_dag.go）
+// 声明局部变量时使用，便于阅读。DAGRunner 接口方法本身必须使用与之底层结构相同的
+// 匿名函数类型声明参数——Go 接口方法签名比较要求类型"完全相同"，具名类型与匿名类型
+// 即使底层结构一致也不相同；若接口方法直接用 DAGToolExecutorFn 具名类型，
+// execute/dag.Runner.Run（其参数为匿名函数类型，见 execute/dag/runner.go）将无法
+// 结构化满足本接口，届时只能靠 execute/dag 反向 import agent 包类型来对齐签名，
+// 这会把执行引擎耦合回它服务的认知核心，方向颠倒。故接口方法签名保持匿名函数类型。
+
+// DAGToolExecutorFn 单次工具调用签名，与 execute/dag.ToolExecutorFn 结构一致。
+type DAGToolExecutorFn func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error)
+
+// DAGLeaseRenewFn 任务租约续期签名，与 execute/dag.LeaseRenewFn 结构一致。
+type DAGLeaseRenewFn func(ctx context.Context, taskID, agentID string, ttl time.Duration) error
+
+// DAGRunner Agent 对单 Agent 内工具链 DAG 执行引擎的消费端接口。
+// 实现：execute/dag.Runner（无状态，cmd/polaris/boot_agent.go 构造后注入）
+// 禁止：agent 直接 import internal/execute/dag
+type DAGRunner interface {
+	// Run 执行一次完整 DAG 计划，返回节点结果、是否触发降级重规划、错误。
+	// toolExec/leaseRenew 刻意使用匿名函数类型（见上），调用方可直接传入
+	// DAGToolExecutorFn/DAGLeaseRenewFn 类型的值（赋值兼容，二者底层结构相同）。
+	Run(
+		ctx context.Context,
+		plan *protocol.DAGPlan,
+		toolExec func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error),
+		leaseRenew func(ctx context.Context, taskID, agentID string, ttl time.Duration) error,
+		taskID, agentID string,
+	) (results []protocol.NodeResult, degradedReplan bool, err error)
+}
+
+// DAGValidator Agent 对 S_VALIDATE 四层校验管线的消费端接口。
+// 实现：execute/dag.Validator（无状态，cmd/polaris/boot_agent.go 构造后注入）
+// 禁止：agent 直接 import internal/execute/dag
+type DAGValidator interface {
+	// Validate 执行 L0 拓扑/L1 Taint/L1 Policy/L2 Heuristic/L3 LLM 看门狗校验。
+	Validate(ctx context.Context, vCtx *protocol.DAGValidationContext) error
 }

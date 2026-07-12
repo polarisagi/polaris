@@ -9,7 +9,6 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -173,10 +172,12 @@ type TaskModel struct {
 }
 
 // DAGModel LLM 填槽产出——可执行的有向无环图。
-// 权威类型 dag.ExecNode/dag.ExecEdge 定义见同包 dag_executor.go。
+// 权威类型 protocol.ExecNode/protocol.ExecEdge 定义见 internal/protocol/dag_node.go
+// （2026-07-12 随 internal/execute 模块化，fsm 包不再直接 import execute/dag，
+// 改为直接引用 protocol 共享类型，二者本就是同一底层类型的别名，无行为变化）。
 type DAGModel struct {
-	Nodes []dag.ExecNode
-	Edges []dag.ExecEdge
+	Nodes []protocol.ExecNode
+	Edges []protocol.ExecEdge
 }
 
 // ReflectionModel LLM 填槽产出——执行后反思。

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/prompt/templates"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -18,15 +17,15 @@ import (
 // 与 S_EXECUTE 状态的 runExecuteDAG（工具调用/2PC/Saga）职责边界清晰，
 // 拆分不改变任何逻辑，仅为职责边界物理隔离。
 func (a *Agent) runValidateDAG(ctx context.Context) error {
-	var plan *dag.DAGPlan
+	var plan *protocol.DAGPlan
 	if a.sCtx.DAGModel != nil {
-		plan = &dag.DAGPlan{
+		plan = &protocol.DAGPlan{
 			Nodes: a.sCtx.DAGModel.Nodes,
 			Edges: a.sCtx.DAGModel.Edges,
 		}
 	}
 
-	vCtx := &dag.DAGValidationContext{
+	vCtx := &protocol.DAGValidationContext{
 		Plan: plan,
 		// ActiveTaintLevel 取 DAGModel 所有节点的最高 TaintLevel（PropagateTaint 语义）。
 		// 依据: ADR-0007 自然传播规则——output = max(inputs)，只升不降。
@@ -50,7 +49,14 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		vCtx.MonthlyBudgetUSD = a.sCtx.MonthlyBudgetUSDConfig
 	}
 
-	if err := dag.ValidateDAG(ctx, vCtx); err != nil {
+	if a.dagValidator == nil {
+		// fail-closed: 无校验引擎时拒绝（2026-07-12 execute/dag 迁出后新增；
+		// NewAgentWithDefaults/buildAgent 均默认注入，理论上不会命中，仅作防御）。
+		a.asyncIntent(types.TriggerValidateFail)
+		return apperr.New(apperr.CodeInternal, "runValidateDAG: dagValidator is nil (fail-closed)")
+	}
+
+	if err := a.dagValidator.Validate(ctx, vCtx); err != nil {
 		// 校验失败→ 异步推送 TriggerValidateFail 以面向 FSM 的 S_REPLAN
 		a.asyncIntent(types.TriggerValidateFail)
 		// 返回非致命 error 提示调用方失败原因，但不能让 Run 循环崩溃

@@ -1,9 +1,15 @@
 # 模块 4: Agent Kernel
 
+> 2026-07-12：DAG 执行器（DAGExecutor）与 S_VALIDATE 四层校验管线的物理实现已从
+> `internal/agent/dag` 迁出至 `internal/execute/dag`（详见 ADR-0046、
+> `internal/execute/CLAUDE.md`）。FSM 通过 `agent/provider.go` 的
+> `DAGRunner`/`DAGValidator` 消费端接口驱动，本文档描述的 DAG 语义/校验流程不变，
+> 仅物理归属调整；FSM 仍是决定何时进入 S_EXECUTE/S_VALIDATE 的唯一控制流。
+
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
-> **实现语言**：Go/Rust | **代码位置**：`internal/agent/`
-<!-- §跳读: 0-bis:7 职责 / 0-ter:20 不变量速查 / 1:38 状态机 / 2:93 Suspend-on-Idle / 3:109 S_VALIDATE / 4:158 DAG（Directed Acyclic Graph，有向无环图） / 5:238 System1/2 / 6:262 WorldModel / 7:273 推理预算 / 8:332 CrashRecovery / 12:378 已知Bug修复记录 / 13:386 (SOFT)降级 / 14:404 跨模块契约 -->
+> **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
+<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 2:99 Suspend-on-Idle / 3:115 S_VALIDATE / 4:164 DAG（Directed Acyclic Graph，有向无环图） / 5:244 System1/2 / 6:268 WorldModel / 7:279 推理预算 / 8:338 CrashRecovery / 12:384 已知Bug修复记录 / 13:392 (SOFT)降级 / 14:410 跨模块契约 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |

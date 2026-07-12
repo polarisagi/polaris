@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -113,7 +112,7 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 
 // aggregateDAGResults 将多节点执行结果聚合为统一 JSON 格式。
 // 单节点直接返回 output；多节点序列化为 {"results":[{id,output},...]}.
-func aggregateDAGResults(results []dag.NodeResult) []byte {
+func aggregateDAGResults(results []protocol.NodeResult) []byte {
 	if len(results) == 0 {
 		return []byte("{}")
 	}
@@ -185,10 +184,10 @@ func truncateExecResult(sessionID string, raw []byte) []byte {
 	return []byte(ref)
 }
 
-// maxNodeTaintLevel 计算 dag.DAGPlan 中所有节点的最高污点等级。
+// maxNodeTaintLevel 计算 protocol.DAGPlan 中所有节点的最高污点等级。
 // 实现 ADR-0007 PropagateTaint 语义：output = max(inputs)，只升不降。
 // plan 为 nil 或无节点时返回 TaintNone（validateTaintGate 自动跳过）。
-func maxNodeTaintLevel(plan *dag.DAGPlan) types.TaintLevel {
+func maxNodeTaintLevel(plan *protocol.DAGPlan) types.TaintLevel {
 	if plan == nil {
 		return types.TaintNone
 	}
@@ -329,14 +328,14 @@ func isMemoryPersistenceFailure(err error) bool {
 }
 
 // withTaskScopeCtx 把当前会话标识注入 ctx，供 tokenizeMessagesForLLM 写令牌、
-// internal/tool/tool.go ExecuteTool 与 dag/executor.go DAGExecutor.Execute 还原令牌时
+// internal/tool/tool.go ExecuteTool 与 execute/dag/executor.go DAGExecutor.Execute 还原令牌时
 // 使用同一 taskID 命名空间（M11 §5.1 PII OpaqueToken 任务级隔离）。
 //
 // 必须使用 a.sCtx.SessionID，不能用 a.sCtx.TaskID——二者是不同字段：TaskID 是
 // 当前认领的 Blackboard task_id，由 Worker 在每次 Run() 前通过 SetTaskID() 注入，
 // 会随会话内认领的任务变化；SessionID 贯穿整个 Agent 会话生命周期不变，且是仓库
 // 既有惯例里传给 protocol.CtxTaskIDKey 的值（见 fsm/state_machine.go §422-423
-// 注释、agent_execute.go 里 executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)
+// 注释、agent_execute_dag.go 里 a.dagRunner.Run(ctx, plan, toolExecFn, nil, a.sCtx.SessionID, a.sCtx.AgentID)
 // 调用点）。写入令牌与还原令牌若使用不同字段，会导致同一次调用链前后用不上同一个
 // taskID 命名空间，隔离和清理都会失效。
 //

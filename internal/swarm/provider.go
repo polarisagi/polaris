@@ -13,7 +13,7 @@ import (
 //   2. LLMInfer     — Orchestrator 做决策时调用 LLM 推理（规划/分配）
 //   3. EvalMetrics  — Swarm 层指标上报
 //
-// @consumer: swarm/orchestrator, swarm/planner, swarm/supervisor
+// @consumer: execute/orchestrator（外部模块）、swarm/planner、swarm/supervisor
 // @producer: 各具体模块由 cli.go/bootstrap 注入
 
 // OutboxWriter swarm 包对异步事件队列的消费端接口。
