@@ -76,6 +76,9 @@ type Server struct {
 
 	// Cron runner 生命周期控制
 	cronCancel context.CancelFunc
+	// workflowStepWorkerCancel workflow_step 自订阅 Worker 生命周期控制（2026-07-12
+	// StateGraphExecutor workflow 接入，见 server_lifecycle.go Start/Shutdown）。
+	workflowStepWorkerCancel context.CancelFunc
 
 	tbr *metrics.TokenBurnRate
 

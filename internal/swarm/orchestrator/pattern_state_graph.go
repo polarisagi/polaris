@@ -10,7 +10,11 @@ package orchestrator
 // "条件路由 + 循环反馈"（如验证节点失败 → 路由回执行节点重试，达到上限后终止）。
 // StateGraphExecutor 在 PatternDAGExecutor 之上泛化支持：
 //  1. 条件边（WorkflowEdgeSpec.Condition）：仅当上游节点输出满足声明式条件才触发；
-//  2. 有界循环（WorkflowNodeSpec.MaxVisits）：节点可被重复触达，由硬计数器强制上限。
+//  2. 有界循环（WorkflowNodeSpec.MaxVisits）：节点可被重复触达，由硬计数器强制上限；
+//  3. 扇入 AND-Join（2026-07-12 workflow DAG 并行接入时补齐）：无条件边（Condition==nil
+//     且 From!=To）语义上表达"硬依赖"，多条这类边汇入同一节点时按 AND 语义——等待全部
+//     声明的前驱均完成才触发一次，而非任一前驱完成即触发（区别于条件边/自环边的
+//     "任一满足即触发"OR 语义，后者用于路由分支与重试循环，语义上不表达"依赖"）。
 //
 // 不变量：仍复用 Blackboard 作为持久化任务队列/事件总线（bb.PostTask/bb.Subscribe），
 // 不替换、不新增独立状态存储，符合 HE-Rule-6（State-in-DB）与 HE-Rule-3（跨模块走
@@ -55,6 +59,13 @@ type stateGraphRun struct {
 	visits       map[string]int
 	inFlight     map[string]string // nodeID -> taskID
 	totalPosted  int
+
+	// requiredPreds/arrivedPreds 承载扇入 AND-Join 记账（仅统计 Condition==nil 且
+	// From!=To 的"硬依赖"边）：node -> 前驱节点 ID 集合。arrivedPreds 记录本轮已到达
+	// 的前驱，len(arrived) >= len(required) 时才触发一次 tryPostNode，与既有条件边/
+	// 自环边"任一满足立即触发"的 OR 语义互不干扰（后者不计入此记账）。
+	requiredPreds map[string]map[string]bool
+	arrivedPreds  map[string]map[string]bool
 }
 
 // Execute 接收状态图规范并调度执行，直至所有已触发节点完成且无新触发产生，
@@ -64,19 +75,21 @@ func (se *StateGraphExecutor) Execute(ctx context.Context, parentTaskID string, 
 		return nil
 	}
 
-	nodeMap, outEdges, maxVisits, err := se.initializeStateGraph(&spec)
+	nodeMap, outEdges, maxVisits, requiredPreds, err := se.initializeStateGraph(&spec)
 	if err != nil {
 		return err
 	}
 
 	run := &stateGraphRun{
-		se:           se,
-		parentTaskID: parentTaskID,
-		nodeMap:      nodeMap,
-		outEdges:     outEdges,
-		maxVisits:    maxVisits,
-		visits:       make(map[string]int),
-		inFlight:     make(map[string]string),
+		se:            se,
+		parentTaskID:  parentTaskID,
+		nodeMap:       nodeMap,
+		outEdges:      outEdges,
+		maxVisits:     maxVisits,
+		visits:        make(map[string]int),
+		inFlight:      make(map[string]string),
+		requiredPreds: requiredPreds,
+		arrivedPreds:  make(map[string]map[string]bool, len(requiredPreds)),
 	}
 
 	events, err := se.bb.Subscribe(ctx)
@@ -142,6 +155,14 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 			if !evalEdgeCondition(edge.Condition, ev.Payload) {
 				continue
 			}
+			// 硬依赖边（无条件 + 非自环）走 AND-Join 记账：等待该目标节点声明的全部
+			// 前驱都到达才触发一次；条件边/自环边（路由分支、重试循环）维持既有
+			// "任一满足立即触发"OR 语义，不受此记账影响。
+			if edge.Condition == nil && edge.From != edge.To {
+				if !r.arriveJoin(edge.To, edge.From) {
+					continue
+				}
+			}
 			if err := r.tryPostNode(ctx, r.nodeMap[edge.To], ev.Payload); err != nil {
 				return err
 			}
@@ -154,11 +175,34 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 	}
 }
 
-// initializeStateGraph 校验拓扑并构建正向邻接表 + 节点索引 + effectiveMaxVisits。
+// arriveJoin 记录 fromNode 对 toNode 的一次硬依赖到达，返回该目标节点是否已集齐
+// 全部声明的前驱（首次集齐返回 true 触发一次 tryPostNode；此前/此后重复到达均返回
+// false，避免重复触发——tryPostNode 自身的 inFlight/visits 门控作为第二重保险）。
+func (r *stateGraphRun) arriveJoin(toNode, fromNode string) bool {
+	required := r.requiredPreds[toNode]
+	if len(required) <= 1 {
+		// 单前驱（或无前驱记账，理论上不会出现在此分支）等价于既有立即触发语义。
+		return true
+	}
+	arrived := r.arrivedPreds[toNode]
+	if arrived == nil {
+		arrived = make(map[string]bool, len(required))
+		r.arrivedPreds[toNode] = arrived
+	}
+	if arrived[fromNode] {
+		return false // 同一前驱重复到达（理论上不应发生，防御性去重）
+	}
+	arrived[fromNode] = true
+	return len(arrived) >= len(required)
+}
+
+// initializeStateGraph 校验拓扑并构建正向邻接表 + 节点索引 + effectiveMaxVisits +
+// 硬依赖前驱集合（AND-Join 记账用）。
 func (se *StateGraphExecutor) initializeStateGraph(spec *protocol.WorkflowGraphSpec) (
 	map[string]protocol.WorkflowNodeSpec,
 	map[string][]protocol.WorkflowEdgeSpec,
 	map[string]int,
+	map[string]map[string]bool,
 	error,
 ) {
 	nodes := make([]string, 0, len(spec.Nodes))
@@ -174,23 +218,33 @@ func (se *StateGraphExecutor) initializeStateGraph(spec *protocol.WorkflowGraphS
 		// 多次执行的节点的 Saga 逆序补偿语义未定义，校验阶段拒绝而非静默忽略
 		// Compensation（HE-Rule-2：fail-closed，不做"看起来能跑"的隐式行为）。
 		if n.MaxVisits > 1 && n.Compensation != nil {
-			return nil, nil, nil, apperr.New(apperr.CodeInvalidInput,
+			return nil, nil, nil, nil, apperr.New(apperr.CodeInvalidInput,
 				fmt.Sprintf("state graph node %s: MaxVisits>1 与 Compensation 同时声明不支持（补偿逆序语义未定义）", n.ID))
 		}
 	}
 
 	edgePairs := make([][2]string, 0, len(spec.Edges))
 	outEdges := make(map[string][]protocol.WorkflowEdgeSpec, len(spec.Nodes))
+	// requiredPreds：仅统计无条件（Condition==nil）且非自环（From!=To）的"硬依赖"边，
+	// 用于 AND-Join 记账（arriveJoin）。条件边/自环边不计入——它们表达路由分支或
+	// 重试循环，语义上是"任一满足即触发"，不是"依赖"。
+	requiredPreds := make(map[string]map[string]bool, len(spec.Nodes))
 	for _, e := range spec.Edges {
 		edgePairs = append(edgePairs, [2]string{e.From, e.To})
 		outEdges[e.From] = append(outEdges[e.From], e)
+		if e.Condition == nil && e.From != e.To {
+			if requiredPreds[e.To] == nil {
+				requiredPreds[e.To] = make(map[string]bool, 2)
+			}
+			requiredPreds[e.To][e.From] = true
+		}
 	}
 
 	if err := graph.ValidateStateGraphTopology(nodes, edgePairs, maxVisits, isEntry); err != nil {
-		return nil, nil, nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid state graph topology", err)
+		return nil, nil, nil, nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid state graph topology", err)
 	}
 
-	return nodeMap, outEdges, maxVisits, nil
+	return nodeMap, outEdges, maxVisits, requiredPreds, nil
 }
 
 // tryPostNode 若节点未超过 effectiveMaxVisits 且全局预算未耗尽，则投递一次任务。

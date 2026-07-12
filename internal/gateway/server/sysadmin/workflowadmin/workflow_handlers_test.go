@@ -22,6 +22,7 @@ func TestWorkflowHandlers(t *testing.T) {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS workflows (
 			id TEXT PRIMARY KEY,
+			type TEXT DEFAULT 'chain',
 			name TEXT,
 			description TEXT,
 			trigger_type TEXT,
@@ -46,6 +47,11 @@ func TestWorkflowHandlers(t *testing.T) {
 			reasoning_effort TEXT,
 			working_dir TEXT,
 			input_from_prev INTEGER,
+			depends_on TEXT DEFAULT '[]',
+			capability_type TEXT DEFAULT '',
+			compensation_tool TEXT DEFAULT '',
+			compensation_args TEXT DEFAULT '',
+			max_retries INTEGER DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME
 		);

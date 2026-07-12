@@ -10,6 +10,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     session_id               TEXT    NOT NULL,
     status                   TEXT    NOT NULL,
     priority                 INTEGER NOT NULL DEFAULT 1,
+    -- intent: TaskEntry.Intent 的持久化落点（2026-07-12 补齐）。此前 PostTask 仅写
+    -- task_id/session_id/status/priority/version/namespace，Intent 字段虽由各
+    -- Pattern*Executor（tryPostNode 等）填充，却从未落盘、也不出现在 task_posted
+    -- 事件 payload 中——Worker 认领任务后无法得知任务的实际意图内容，此前无真实
+    -- 生产 Worker 消费这些编排任务（PatternDAGExecutor/StateGraphExecutor 等均无
+    -- 生产调用点）才未暴露。workflow 集成 StateGraphExecutor 需要 Worker 读回
+    -- state_graph_node_id/template 等字段，此列为该链路补齐的必要前提。
+    intent                   BLOB,
     claimed_by               TEXT,
     claimed_at               TEXT,
     expires_at               TEXT,

@@ -188,7 +188,7 @@
   "pkg/types/enums_swarm.go": "7fd81e3346ab70f2402d618506a010357eec19d3a8b9a3d92486d573a649b2b4",
   "pkg/types/enums_tool.go": "36c6ecd2c40a47932adcd5ce373c8963470708d8d47bd7c541e4a3d88ed6f0d1",
   "pkg/types/ext_type.go": "ec72cfa7496c7f2306e783b884ed268107e4d926640d0f64f7c08f7d5e274119",
-  "pkg/types/models_agent.go": "1a8905aabfae980388be9016f0f5cfc83cd0efe9e96c42bed1f0b59697c5a16a",
+  "pkg/types/models_agent.go": "e34ebdc312d1dad9e31950d3677ae572959124860258a63c9938fa2d48ff85c8",
   "pkg/types/models_db.go": "ea432f879b86f369b671711f31b4d44da548d62a33ad95f947dc20b6d58324cb",
   "pkg/types/models_eval.go": "7a17f3f64babaccefa016ac896fce32f1bb7933ce1451052e2d77c97f9692ae3",
   "pkg/types/models_event.go": "d2585083835f6c9d79a5e803605bb216b0494de16b4257aa3d186f7de1bff2e3",

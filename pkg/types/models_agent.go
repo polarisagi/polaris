@@ -22,6 +22,15 @@ TaskSnapshot struct {
 	// Namespace 协同任务共享记忆命名空间（GD-14-001），透传自 TaskEntry.Namespace，
 	// 供 Worker 在派发前注入 AgentKernel.SetMemoryNamespace。空值 = 不共享。
 	Namespace string
+	// Intent 透传自 TaskEntry.Intent（2026-07-12 补齐持久化，见 007_tasks.sql intent
+	// 列注释）。Worker 认领任务后通过 PeekTask 读回本字段还原任务实际意图内容
+	// （如 StateGraphExecutor tryPostNode 编码的 state_graph_node_id/template）。
+	Intent []byte
+	// Type 透传自 TaskEntry.Type（持久化于 tasks.session_id 列，既有实现约定，
+	// 见 sqlite_blackboard.go PostTask 注释）。自订阅式 Worker（不依赖 Orchestrator
+	// 中心化按类型下推）需要在 ClaimTask 之前先用本字段判断任务是否属于自己的
+	// 能力类型，避免误认领其他能力类型的任务（2026-07-12 workflow 集成补齐）。
+	Type string
 }
 
 type

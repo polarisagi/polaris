@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 
 	"context"
 	"database/sql"
@@ -158,21 +159,28 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		EnableFSMChatPath:     agentCfg.EnableFSMChatPath,
 	})
 	s.sysadminHandler = sysadmin.NewSysAdminHandler(sysadmin.Dependencies{
-		SystemRepo:        s.systemRepo,
-		BudgetRepo:        s.budgetRepo,
-		WorkflowRepo:      s.workflowRepo,
-		ExtRepo:           s.extRepo,
-		ChannelRepo:       s.channelRepo,
-		AutomationRepo:    s.automationRepo,
-		AppRepo:           s.appRepo,
-		Registry:          s.registry,
-		HTTPClient:        httpClient,
-		DataDir:           s.dataDir,
-		DB:                db,
-		Chat:              s.chatHandler,
-		ChannelMgr:        s.channelMgr,
-		HITLGateway:       hitlGateway,
-		AgentPool:         s.agentPool,
+		SystemRepo:     s.systemRepo,
+		BudgetRepo:     s.budgetRepo,
+		WorkflowRepo:   s.workflowRepo,
+		ExtRepo:        s.extRepo,
+		ChannelRepo:    s.channelRepo,
+		AutomationRepo: s.automationRepo,
+		AppRepo:        s.appRepo,
+		Registry:       s.registry,
+		HTTPClient:     httpClient,
+		DataDir:        s.dataDir,
+		DB:             db,
+		Chat:           s.chatHandler,
+		ChannelMgr:     s.channelMgr,
+		HITLGateway:    hitlGateway,
+		AgentPool:      s.agentPool,
+		// 类型断言而非直接透传：NewServer 只接受 protocol.Blackboard 接口（见 bb 形参），
+		// sysadmin/workflowadmin 需要具体类型 *orchestrator.SQLiteBlackboard 才能构造
+		// StateGraphExecutor（NewStateGraphExecutor 签名要求具体类型，非接口）。生产环境
+		// 唯一构造点 orchestrator.NewSQLiteBlackboard（boot_agent.go）恒满足此断言；
+		// 非该类型时退化为 nil（双返回值形式，不 panic），RunStepWorkerLoop 对 nil
+		// Blackboard 有显式判空处理。
+		Blackboard:        blackboardConcrete(bb),
 		StreamIdleTimeout: time.Duration(config.DefaultThresholds().M1Router.SafecallStreamIdleTimeoutSec) * time.Second,
 	})
 	s.pluginHandler = plugin.NewPluginHandler(plugin.Dependencies{
@@ -210,6 +218,13 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 	return s
 }
 
+// blackboardConcrete 从 protocol.Blackboard 接口安全还原具体类型
+// *orchestrator.SQLiteBlackboard（双返回值断言，非该类型时返回 nil 而非 panic）。
+func blackboardConcrete(bb protocol.Blackboard) *orchestrator.SQLiteBlackboard {
+	concrete, _ := bb.(*orchestrator.SQLiteBlackboard)
+	return concrete
+}
+
 // Start 非阻塞启动服务器。
 func (s *Server) Start() error {
 	slog.Info("polaris-server: starting", "addr", s.addr)
@@ -243,6 +258,20 @@ func (s *Server) Start() error {
 		s.sysadminHandler.Cron.StartCronRunner(cronCtx)
 	}
 
+	// workflow_step 自订阅 Worker（2026-07-12 StateGraphExecutor workflow 接入）：
+	// Blackboard 为 nil 时（如 protocol.Blackboard 具体实现非 *orchestrator.
+	// SQLiteBlackboard 的边缘场景）静默跳过，不阻塞服务器启动——workflow 触发接口
+	// 仍可用，只是任务会持续 Pending 直至 Worker 可用（fail-closed 但不 fail-hard）。
+	if s.sysadminHandler != nil && s.sysadminHandler.Workflow != nil && s.sysadminHandler.Workflow.Blackboard != nil {
+		var workflowWorkerCtx context.Context
+		workflowWorkerCtx, s.workflowStepWorkerCancel = context.WithCancel(context.Background())
+		concurrent.SafeGo(workflowWorkerCtx, "gateway.sysadmin.workflow_step_worker", func(ctx context.Context) {
+			if err := s.sysadminHandler.Workflow.RunStepWorkerLoop(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("workflow step worker: ListenLoop exited with error", "err", err)
+			}
+		})
+	}
+
 	concurrent.SafeGo(context.Background(), "gateway.server.boot_marketplace_init", func(ctx context.Context) {
 		s.bootMarketplaceInit(ctx)
 	})
@@ -268,6 +297,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// 停止 Cron runner（释放已排队任务 goroutine，拒绝新触发）
 	if s.cronCancel != nil {
 		s.cronCancel()
+	}
+	if s.workflowStepWorkerCancel != nil {
+		s.workflowStepWorkerCancel()
 	}
 	s.channelMgr.StopAll()
 	if s.srv != nil {

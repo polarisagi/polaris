@@ -69,6 +69,12 @@
 - **根因类别**：Agent 实例已构造但没有任何 goroutine 消费其 intent channel——`a.intent` 带缓冲（cap=10），短期内写入不报错，掩盖了 FSM 从未被驱动的事实；构造点忘记为该实例启动 `Run()` 事件循环。
 - **排查起点**：确认该 Agent 实例的构造点是否有配套的 `concurrent.SafeGo(..., func(ctx) { agent.Run(ctx) })`；历史真实案例见 `ADR-0029` §E Addendum（`internal/agent/pool.go` `newPoolEntry` 此前遗漏）。
 
+### 症状 11：Worker 认领任务后 PeekTask 读不回任务意图内容
+- **症状特征**：`PostTask` 时通过 `TaskEntry.Intent` 传入的意图数据（如编排执行器编码的节点 ID/模板），Worker `ClaimTask` 之后调用 `PeekTask` 却读不到——`Intent` 字段恒为空。
+- **归类模块**：M08
+- **根因类别**：`SQLiteBlackboard.PostTask`/`PostBatch` 的 INSERT 语句从未写入 `intent` 列（`tasks` 表此前也没有这一列），`TaskEntry.Intent` 在写路径上被静默丢弃；`task_posted` 事件同样不携带 payload。此前未暴露是因为没有真实生产 Worker 消费过 `Pattern*Executor` 投递的任务。
+- **排查起点**：确认 `007_tasks.sql` 是否有 `intent` 列 + `sqlite_blackboard.go` PostTask/PostBatch 的 INSERT 字段列表是否包含 `task.Intent`；真实案例见 `ADR-0041` §6 Addendum（workflow 接入 StateGraphExecutor 时发现，2026-07-12）。
+
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。
 - 相似症状优先合并成一项（用"/"列举变体），不要为每个变体开新项。

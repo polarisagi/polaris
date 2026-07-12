@@ -19,6 +19,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -48,6 +49,7 @@ type SysAdminHandler struct {
 	AutomationRepo repo.AutomationRepository
 	Registry       protocol.LLMRegistry
 	HITLGateway    protocol.HITL
+	Blackboard     *orchestrator.SQLiteBlackboard
 	ToolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	ChannelMgr     interface {
 		protocol.ChannelFacade
@@ -98,6 +100,7 @@ type Dependencies struct {
 	HTTPClient     *http.Client
 	ExtRepo        protocol.ExtensionRepository
 	HITLGateway    protocol.HITL
+	Blackboard     *orchestrator.SQLiteBlackboard
 	ChannelMgr     interface {
 		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
@@ -145,6 +148,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.WorkflowRepo,
 		deps.AgentPool,
 		deps.Chat,
+		deps.Blackboard,
 		nil,
 		h.BuildToolSchemas,
 	)

@@ -72,3 +72,11 @@
 两者仍是预定义、可枚举、可静态分析的声明式扩展，不引入变量绑定/函数调用/自由语法，因此不改变本 ADR 的 HE-Rule-2 合规边界——是"扩展已有声明式模型的表达力"，而非"引入表达式引擎"。§3 已知限制中"数值比较/逻辑组合（AND/OR）"缺口已解决；"嵌套字段/数组遍历"（如 `a.b.c` 路径或数组下标）超出本次范围，留待后续按实际需求评估（若需要，优先考虑扩展 `Field` 支持点分路径解析，而非引入表达式引擎）。
 
 实现见上述两文件；测试见 `internal/swarm/orchestrator/edge_condition_test.go`（新增，覆盖新增算子 + And/Or 递归 + fail-closed 场景）；`go build ./...`/`golangci-lint run`/`go test ./internal/swarm/orchestrator/...` 全绿。
+
+## 6. Addendum：首个生产接入发现扇入 OR/AND 语义缺口（2026-07-12）
+
+`StateGraphExecutor` 落地以来一直没有真实生产调用点（`NewStateGraphExecutor`/`NewPatternDAGExecutor`/`NewSequentialExecutor`/`NewParallelExecutor`/`NewMapReduceExecutor` 全仓库范围内仅出现在各自单元测试中），在把它接入 WebUI 工作流自动化（`internal/gateway/server/sysadmin/workflowadmin`，DAG 并行执行 + 失败重试）时，发现 `handleEvent` 对无条件边采用"任一前驱完成即触发"的 OR 语义——多前驱扇入（真实 DAG 的 join 场景）会在只有一个前驱完成时就误触发下游节点，不满足"等待全部依赖完成"的直觉语义。这不是本次改动引入的回归，而是此前从未被任何真实多前驱场景触达过的既有缺口（既有测试全部是单前驱链路/条件分支）。
+
+修复方案：仅对无条件（`Condition==nil`）且非自环（`From!=To`）的边新增 `requiredPreds`/`arrivedPreds` 记账（AND-Join），条件边（路由分支）与自环边（§3-quinquies 循环反馈/失败重试）维持原有"任一满足立即触发"OR 语义不变——三者语义本就不同，不应用同一套触发规则：条件边表达"路由选择"，自环表达"同节点重试"，只有无条件多前驱边才表达"依赖"。详见 `docs/arch/M08-Multi-Agent-Orchestrator.md` §3-quinquies-a；测试见 `TestStateGraphExecutor_ANDJoinWaitsForAllParents`。
+
+同一次接入还发现并修复了 Blackboard 层更基础的缺陷：`SQLiteBlackboard.PostTask`/`PostBatch` 从未持久化 `TaskEntry.Intent`（`tasks` 表此前无 `intent` 列），任何真实 Worker 认领任务后都读不回任务意图内容——同样是因为此前没有真实 Worker 消费过这条链路才未暴露。详见 M08 §3-quinquies-b。
