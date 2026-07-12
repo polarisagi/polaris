@@ -306,13 +306,33 @@ func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource st
 			evalCtx["cedar_reason"] = reason
 		}
 
-		if !allowed && g.cedarEnforceMode >= CedarEnforceDeny {
+		// GD-2-001 修复：此前无论 cedarEnforceMode 取何值，Cedar 的 Allow 结果
+		// 恒不作为终裁——只有 Deny 分支会在 EnforceDeny/EnforceFull 下立即返回，
+		// Allow 分支永远 "falls through to go rules"，导致配置为 CedarEnforceFull
+		// （"完全生效"）时与 CedarEnforceDeny 行为完全等价：Cedar Layer 3 Permit
+		// 规则从未真正授予过任何权限，必须由 Go 兜底 permitRules 独立再次命中
+		// 才能放行，Cedar 白名单形同虚设。这与双轨实现的设计意图矛盾——
+		// configs/policy/soft_constraints.cedar（Layer 3）在 Cedar FFI 可用时
+		// 应当是权威源，Go 规则只是 FFI 不可用时的降级兜底（本函数外层
+		// `g.cedar != nil && g.cedar.PolicyCount() > 0` 已保证走到这里时 Cedar
+		// 确实已加载策略）。
+		//
+		// 三档语义现在真正区分：
+		//   - CedarEnforceFull : Cedar 结果（Allow 与 Deny）均直接终裁，不回退 Go 规则。
+		//   - CedarEnforceDeny : 仅 Cedar 的 Deny 立即生效（新增 Forbid 可灰度先行）；
+		//     Cedar 的 Allow 仍回退 Go permitRules 独立判定（迁移期放权更谨慎）。
+		//   - CedarShadow      : 只记录，不影响终裁，始终回退 Go 规则。
+		switch {
+		case g.cedarEnforceMode == CedarEnforceFull:
+			slog.DebugContext(ctx, "cedar evaluated (full enforce, authoritative)", "allowed", allowed, "reason", reason)
+			return true, allowed, nil
+		case !allowed && g.cedarEnforceMode == CedarEnforceDeny:
 			slog.DebugContext(ctx, "cedar evaluated deny (enforced)", "reason", reason)
 			return true, false, nil
+		default:
+			slog.DebugContext(ctx, "cedar evaluated (falling through to go rules)", "allowed", allowed, "reason", reason)
+			return false, false, nil
 		}
-
-		slog.DebugContext(ctx, "cedar evaluated (falling through to go rules)", "allowed", allowed, "reason", reason)
-		return false, false, nil
 	}
 
 	metrics.GlobalCedarDegradedTotal.Add(1)
