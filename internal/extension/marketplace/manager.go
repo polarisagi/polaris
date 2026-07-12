@@ -131,7 +131,7 @@ func (m *Manager) Authorize(ctx context.Context, req protocol.ExtensionInstallRe
 // AuthorizeAction authorizes arbitrary actions (e.g., "plugin:manage").
 func (m *Manager) AuthorizeAction(ctx context.Context, principal string, action string, target any) error {
 	if m.policyGate == nil {
-		return nil
+		return apperr.New(apperr.CodeInternal, "policy gate not configured (fail-closed)")
 	}
 	reviewReq := types.PolicyReviewRequest{
 		Principal: principal,

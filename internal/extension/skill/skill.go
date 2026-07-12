@@ -22,7 +22,7 @@ import (
 // ============================================================================
 
 // RegistryImpl 直接以 types.SkillMeta 为存储单元。
-// 强制约束: meta.Name 必须以 "skill:" 为前缀。
+// 强制约束: meta.Name 必须以 types.SkillPrefix 为前缀。
 // 重名注册 → name collision 错误，记录审计事件。
 type RegistryImpl struct {
 	skills map[string]*types.SkillMeta // name → meta
@@ -51,7 +51,7 @@ func (r *RegistryImpl) Register(ctx context.Context, meta types.SkillMeta) error
 	if meta.Trust < types.TrustLocal {
 		return errCosignVerifyFailed
 	}
-	if !strings.HasPrefix(meta.Name, "skill:") {
+	if !strings.HasPrefix(meta.Name, types.SkillPrefix) {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("skill name error: got %s", meta.Name), errInvalidSkillName)
 	}
 

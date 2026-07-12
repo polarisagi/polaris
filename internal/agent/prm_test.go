@@ -47,8 +47,28 @@ func (m *mockProvider) Infer(_ context.Context, msgs []types.Message, _ ...types
 	return &types.ProviderResponse{Content: "mock_success"}, nil
 }
 
-func (m *mockProvider) StreamInfer(_ context.Context, _ []types.Message, _ ...types.InferOption) (<-chan types.StreamEvent, error) {
-	ch := make(chan types.StreamEvent)
+// StreamInfer 委托给 Infer 复用同一套响应选择逻辑，将结果包装为单帧
+// StreamTextDelta 事件后关闭 channel。此前直接返回空 channel，doStreamInfer
+// 据此拼出的 resp.Content 恒为空串——onPerceiveSuccess 等 OnSuccess 回调新增的
+// "空 LLM 输出必须走失败路径"检查（A-01/P-2）修复后，暴露出该 mock 与 Infer
+// 路径行为不一致（TestAgent_HappyPath 等用例实际全程走 StreamInfer，从未验证过
+// 非空内容路径）。修复 mock 而非放宽状态机检查：真实 Provider 的流式/非流式
+// 响应内容理应一致，此前的空 channel 是测试替身的缺陷，不是应保留的行为。
+func (m *mockProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	// 此处 m.Infer 是 mockProvider 自身方法（测试替身内部复用响应选择逻辑），
+	// 并非绕过 safecall 直调真实 Provider，Test_inv_NoBareLLMInfer 的检测对象
+	// 是生产代码路径，误伤此处的测试 mock 自调用。 custom-nolint:bare-infer
+	resp, err := m.Infer(ctx, msgs, opts...)
+	ch := make(chan types.StreamEvent, 1)
+	if err != nil {
+		// StreamInfer 自身返回 nil error 是有意为之：真实流式 Provider 将推理错误
+		// 通过 StreamError 事件帧传递（见 doStreamInfer 消费逻辑），而非作为函数
+		// 返回值——channel 建立成功，错误在流内异步出现。
+		ch <- types.StreamEvent{Type: types.StreamError, Content: err.Error()}
+		close(ch)
+		return ch, nil //nolint:nilerr
+	}
+	ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: resp.Content, Usage: resp.Usage}
 	close(ch)
 	return ch, nil
 }

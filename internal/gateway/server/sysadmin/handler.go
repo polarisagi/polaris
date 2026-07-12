@@ -29,8 +29,6 @@ type ChatDispatcher interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
 	TouchSession(ctx context.Context, sessionID string) error
 	ListMessages(ctx context.Context, sessionID string) ([]types.Message, error)
-	GenerateReply(ctx context.Context, req *types.InferRequest, sessionID string) (string, error)
-	RunPostProcessors(ctx context.Context, sessionID, reply string)
 }
 type SysAdminHandler struct {
 	Chat           ChatDispatcher

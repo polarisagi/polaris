@@ -1,6 +1,7 @@
 package fsm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -51,6 +52,13 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 }
 
 func (sm *StateMachine) onPerceiveSuccess(sCtx protocol.StateContext, fill []byte) (types.State, error) {
+	// 空 LLM 输出不得静默当作成功：fill 是下游 Plan/Execute 阶段感知上下文的
+	// 唯一来源，空内容意味着模型未产出有效结果（内容过滤/超时截断/Provider
+	// 异常返回空 completion），必须走与 onPerceiveFailure 相同的熔断路径，
+	// 而非让下游继续消费空上下文（A-01/P-2：LLM 输出零兜底）。
+	if len(bytes.TrimSpace(fill)) == 0 {
+		return types.State("S_PERCEIVE_FAILED"), apperr.New(apperr.CodeInternal, "perceive: LLM returned empty content")
+	}
 	return types.State("S_PERCEIVE_DONE"), nil
 }
 

@@ -24,13 +24,21 @@ const semanticMatchThreshold = 0.3
 // 与 M13-bis-Extension-Registry.md §4 的 `LIMIT 10` 设计一致。
 const toolSearchMaxResults = 10
 
+// toolEmbeddingCacheMaxEntries 缓存条目上限（D-B6-02 修复：原实现无淘汰机制，
+// 长期运行下动态注册/注销工具、MCP server 工具、LLM 生成技能会导致 byKey
+// 无界增长，Tier-0 内存受限场景下构成缓慢内存泄漏）。超限后按插入顺序淘汰
+// 最旧条目（FIFO，简化版 LRU，与 tool_helpers.go 的 lruCache 风格一致）。
+const toolEmbeddingCacheMaxEntries = 1000
+
 // toolEmbeddingCache 缓存工具描述的向量，避免每次 search_tools 调用都重新
 // embed 全部候选（懒加载场景下工具总数可能上百个）。以工具名为 key，
-// 描述文本变化极罕见（仅扩展升级时），不做失效逻辑，最坏情况下命中过期
-// 描述向量，语义相关性略有偏差但不影响正确性。
+// 描述文本变化极罕见（仅扩展升级时），不做基于内容变化的失效逻辑，最坏情况
+// 下命中过期描述向量，语义相关性略有偏差但不影响正确性；条目数量本身通过
+// FIFO 淘汰上限约束（防止无界增长）。
 type toolEmbeddingCache struct {
 	mu    sync.Mutex
 	byKey map[string][]float32
+	order []string // 插入顺序，用于超限时 FIFO 淘汰
 }
 
 func newToolEmbeddingCache() *toolEmbeddingCache {
@@ -52,7 +60,15 @@ func (c *toolEmbeddingCache) getOrEmbed(embedder search.Embedder, entry protocol
 	emb := embedder.Embed(text)
 
 	c.mu.Lock()
+	if _, exists := c.byKey[entry.Name]; !exists {
+		c.order = append(c.order, entry.Name)
+	}
 	c.byKey[entry.Name] = emb
+	for len(c.order) > toolEmbeddingCacheMaxEntries {
+		oldest := c.order[0]
+		c.order = c.order[1:]
+		delete(c.byKey, oldest)
+	}
 	c.mu.Unlock()
 	return emb
 }

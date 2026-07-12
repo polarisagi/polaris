@@ -66,4 +66,5 @@ const (
 	ToolSkill        ToolSource = "skill"
 	ToolA2A          ToolSource = "a2a"
 	ToolLLMGenerated ToolSource = "llm_generated"
+	SkillPrefix                 = string(ToolSkill) + ":"
 )

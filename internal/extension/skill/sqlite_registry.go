@@ -30,7 +30,7 @@ func (r *SQLiteRegistryImpl) Register(ctx context.Context, meta types.SkillMeta)
 	if meta.Trust < types.TrustLocal {
 		return errCosignVerifyFailed
 	}
-	if !strings.HasPrefix(meta.Name, "skill:") {
+	if !strings.HasPrefix(meta.Name, types.SkillPrefix) {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("skill name error: got %s", meta.Name), errInvalidSkillName)
 	}
 

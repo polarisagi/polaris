@@ -7,17 +7,13 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-type
-
 // EventLogger 定义了将事件安全、串行写入 M2 events 表的契约。
-EventLogger interface {
+type EventLogger interface {
 	AppendEvent(ctx context.Context, ev *pb.Event) error
 }
 
-type
-
 // DecisionLogger 定义了将架构决策写入 M3 decision_log 表的契约。
-DecisionLogger interface {
+type DecisionLogger interface {
 	AppendDecision(ctx context.Context, entry *types.DecisionLogEntry) error
 }
 
