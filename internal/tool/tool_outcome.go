@@ -49,24 +49,30 @@ func (r *InMemoryToolRegistry) reportOutcome(toolName string, success bool, late
 	r.mu.RUnlock()
 
 	if sessionWriter != nil && ctx != nil {
-		sessionID, _ := ctx.Value(protocol.CtxSessionIDKey{}).(string)
-		if sessionID == "" {
-			sessionID, _ = ctx.Value(protocol.CtxTaskIDKey{}).(string)
-		}
-		if sessionID != "" {
-			var inMap map[string]any
-			_ = json.Unmarshal(input, &inMap)
-			var outMap map[string]any
-			if res != nil {
-				_ = json.Unmarshal([]byte(res.Output), &outMap)
-			} else if errMsg != "" {
-				outMap = map[string]any{"error": errMsg}
-			}
-			sessionWriter.WriteToolCallEvent(sessionID, toolName, inMap, outMap)
-		}
+		writeToolCallOutcome(ctx, sessionWriter, toolName, input, res, errMsg)
 	}
 
 	if rec != nil {
 		rec.RecordToolOutcome(toolName, success, latencyMs, errMsg)
 	}
+}
+
+func writeToolCallOutcome(ctx context.Context, sessionWriter SessionEventWriter, toolName string, input []byte, res *types.ToolResult, errMsg string) {
+	sm_sessionID, _ := ctx.Value(protocol.CtxSessionIDKey{}).(string)
+	if sm_sessionID == "" {
+		sm_sessionID, _ = ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	}
+	if sm_sessionID == "" {
+		return
+	}
+
+	var inMap map[string]any
+	_ = json.Unmarshal(input, &inMap)
+	var outMap map[string]any
+	if res != nil {
+		_ = json.Unmarshal(res.Output, &outMap)
+	} else if errMsg != "" {
+		outMap = map[string]any{"error": errMsg}
+	}
+	sessionWriter.WriteToolCallEvent(sm_sessionID, toolName, inMap, outMap)
 }
