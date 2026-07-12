@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/execute/dag"
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/catalog"

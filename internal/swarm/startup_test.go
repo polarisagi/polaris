@@ -8,7 +8,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 )
 
 type mockPinger struct {

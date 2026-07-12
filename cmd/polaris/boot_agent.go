@@ -24,13 +24,13 @@ import (
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
-	agentdag "github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/automation"
 	"github.com/polarisagi/polaris/internal/automation/notify"
 	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/eval/regression"
+	agentdag "github.com/polarisagi/polaris/internal/execute/dag"
 	"github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/learning"
 	"github.com/polarisagi/polaris/internal/observability/budget"
@@ -39,10 +39,10 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/swarm/agents"
-	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 	"github.com/polarisagi/polaris/internal/swarm/planner"
 	"github.com/polarisagi/polaris/internal/swarm/supervisor"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -106,6 +106,12 @@ func buildAgent(
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
 	a.InjectOutboxWriter(sb.Outbox)
+	// execute/dag.Runner/Validator 均无状态，buildAgent 同时服务 agent-0 与
+	// AgentPool 每次动态创建的 per-session Agent，此处注入而非仅在 agent-0
+	// 构造后追加，确保所有 Agent 实例（含 Pool 派生）都能跑通 S_EXECUTE/
+	// S_VALIDATE（2026-07-12 随 internal/execute 模块化新增，见 provider.go）。
+	a.InjectDAGRunner(agentdag.NewRunner())
+	a.InjectDAGValidator(agentdag.NewValidator())
 	a.SetAssembler(agentctx.NewAssembler(epAdapter, knowAdapter))
 	a.InjectPlannerSpawner(func(ctx context.Context, goal, taskType string, provider protocol.Provider) {
 		whisperChan := a.GetWhisperChan()

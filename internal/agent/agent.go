@@ -13,6 +13,7 @@ import (
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
+	"github.com/polarisagi/polaris/internal/execute/dag"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -64,6 +65,8 @@ type Agent struct {
 	terminalCallback  func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
 	tokenVault        *guard.PIITokenVault // PII OpaqueToken 会话级可逆令牌库
 	piiDetector       *guard.PIIDetector   // PII 检测与脱敏器
+	dagRunner         DAGRunner            // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
+	dagValidator      DAGValidator         // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
 
 	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine
 	// 向主循环传递重定向意图字符串，避免直接写 sCtx.RawIntentTS 的数据竞争。
@@ -152,8 +155,20 @@ func NewAgentWithPolicyGate(id string, taintGate TaintGate, provider protocol.Pr
 	return a
 }
 
+// NewAgentWithDefaults 构造带默认依赖的 Agent，主要供测试/开发场景使用。
+//
+// dagRunner/dagValidator 默认注入 execute/dag.Runner/Validator（唯二在此处直接
+// import internal/execute/dag 的位置，其余 agent 包代码一律通过 provider.go 的
+// DAGRunner/DAGValidator 接口消费）。二者均为无状态适配器（零字段），此处构造
+// 纯粹是为了让 NewAgentWithDefaults 保持"开箱即可跑通完整 FSM S_EXECUTE/
+// S_VALIDATE 路径"的既有约定（历史上 dag 是 agent 同目录子包，测试从不需要
+// 显式注入）；生产路径 cmd/polaris/boot_agent.go 的 buildAgent 会显式调用
+// InjectDAGRunner/InjectDAGValidator 覆盖此处默认值，语义不变。
 func NewAgentWithDefaults(id string) *Agent {
-	return NewAgent(id, nil, &defaultTaintGate{threshold: 2}, nil)
+	a := NewAgent(id, nil, &defaultTaintGate{threshold: 2}, nil)
+	a.dagRunner = dag.NewRunner()
+	a.dagValidator = dag.NewValidator()
+	return a
 }
 
 // Run 启动 Agent 事件循环（Suspend-on-Idle）。

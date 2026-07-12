@@ -150,7 +150,7 @@ func (c *CompositeCatalog) Invalidate() {
 //
 // TaskID 激活作用域必须与写入端一致：internal/tool/tool_search.go 的
 // search_tools 执行路径（经 ExecuteTool → DAG 节点执行，protocol.CtxTaskIDKey
-// 由 internal/agent/dag/executor.go 注入）和本方法的读取路径统一使用
+// 由 internal/execute/dag/executor.go 注入）和本方法的读取路径统一使用
 // sCtx.SessionID 作为 TaskID 来源（agent_execute.go 的
 // executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)）。
 // 提示词构建阶段的调用方（internal/agent/context/memory_context.go

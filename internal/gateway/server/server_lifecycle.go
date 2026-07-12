@@ -7,9 +7,9 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
-	"github.com/polarisagi/polaris/internal/swarm/orchestrator"
 
 	"context"
 	"database/sql"

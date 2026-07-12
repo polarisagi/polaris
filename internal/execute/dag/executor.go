@@ -1,5 +1,9 @@
-// Package kernel 实现 M4 Agent Kernel 的 DAG 执行器与 Saga 补偿逻辑。
+// Package dag 实现 M4 Agent Kernel 的 DAG 执行器与 Saga 补偿逻辑。
 // 架构文档: docs/arch/M04-Agent-Kernel.md §5.3, §5.4
+// 2026-07-12 随 internal/execute 模块化从 internal/agent/dag 物理迁出（原
+// 包注释误写"Package kernel"，与实际 `package dag` 不符，一并修正）。
+// 迁出后 internal/agent 不再直接 import 本包，改为通过 agent/provider.go
+// 声明的 DAGRunner/DAGValidator 消费端接口消费（见 internal/execute/dag/runner.go）。
 //
 // 核心流程：
 //  1. findReadyNodes: DependsOn ⊆ completedSet → 就绪节点（字典序排序）
@@ -25,13 +29,22 @@ import (
 
 // ─── DAG 数据模型 ────────────────────────────────────────────────────────────
 //
-// CompensationAction / NodeStatus / ExecNode 权威定义已上移至
-// internal/protocol/dag_node.go（M04 §B2：跨模块共享类型须在 internal/protocol/
-// 定义，internal/swarm/planner 消费方不再直接 import 本包）。此处仅保留别名。
+// CompensationAction / NodeStatus / ExecNode / EdgePolarity / ExecEdge / DAGPlan
+// 权威定义均在 internal/protocol/dag_node.go（M04 §B2：跨模块共享类型须在
+// internal/protocol/ 定义，internal/swarm/planner、internal/agent/fsm 等消费方
+// 不再直接 import 本包）。此处仅保留别名。
+//
+// NodeResult 权威定义在 internal/protocol/dag_validation.go（2026-07-12 随
+// internal/execute 模块化补齐，此前 EdgePolarity/ExecEdge/DAGPlan 虽已在
+// protocol 定义却未被本包引用，属遗留死代码，本次一并修复）。
 
 type CompensationAction = protocol.CompensationAction
 type NodeStatus = protocol.NodeStatus
 type ExecNode = protocol.ExecNode
+type EdgePolarity = protocol.EdgePolarity
+type ExecEdge = protocol.ExecEdge
+type DAGPlan = protocol.DAGPlan
+type NodeResult = protocol.NodeResult
 
 const (
 	NodePending   = protocol.NodePending
@@ -39,39 +52,10 @@ const (
 	NodeCompleted = protocol.NodeCompleted
 	NodeFailed    = protocol.NodeFailed
 	NodeSkipped   = protocol.NodeSkipped // 因上游失败而跳过
+
+	EdgeData     = protocol.EdgeData     // 数据依赖：上游产出作为下游输入
+	EdgeSequence = protocol.EdgeSequence // 纯时序约束（无数据传递）
 )
-
-// EdgePolarity 描述 DAG 边的语义（仅 agent/dag 包内使用，无需上移）。
-type EdgePolarity int
-
-const (
-	EdgeData     EdgePolarity = iota // 数据依赖：上游产出作为下游输入
-	EdgeSequence                     // 纯时序约束（无数据传递）
-)
-
-// ExecEdge 是 DAG 中的有向边。
-type ExecEdge struct {
-	From     string
-	To       string
-	Polarity EdgePolarity
-}
-
-// DAGPlan 是完整的可执行 DAG 计划。
-type DAGPlan struct {
-	Nodes []ExecNode
-	Edges []ExecEdge
-}
-
-// NodeResult 记录单个节点的执行结果。
-type NodeResult struct {
-	NodeID     string
-	Output     []byte
-	LatencyMs  int64
-	Suspended  bool
-	Err        error
-	TaintLevel types.TaintLevel
-	ImageParts []types.ImagePart
-}
 
 // ─── DAG Executor ───────────────────────────────────────────────────────────
 

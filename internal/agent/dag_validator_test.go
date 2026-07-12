@@ -7,7 +7,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
+	"github.com/polarisagi/polaris/internal/execute/dag"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/polarisagi/polaris/internal/agent/dag"
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -48,10 +47,10 @@ func parsePlanOnSuccess(sCtx *StateContext, pCtx protocol.StateContext, content 
 		dependsMap[e.To] = append(dependsMap[e.To], e.From)
 	}
 
-	execNodes := make([]dag.ExecNode, len(protocolPlan.Nodes))
+	execNodes := make([]protocol.ExecNode, len(protocolPlan.Nodes))
 	for i, n := range protocolPlan.Nodes {
 		argsBytes, _ := json.Marshal(n.Params)
-		execNodes[i] = dag.ExecNode{
+		execNodes[i] = protocol.ExecNode{
 			ID:         n.ID,
 			ToolName:   n.Action,
 			Args:       argsBytes,
@@ -59,9 +58,9 @@ func parsePlanOnSuccess(sCtx *StateContext, pCtx protocol.StateContext, content 
 			TaintLevel: pCtx.MaxTaintLevel,
 		}
 	}
-	execEdges := make([]dag.ExecEdge, len(protocolPlan.Edges))
+	execEdges := make([]protocol.ExecEdge, len(protocolPlan.Edges))
 	for i, e := range protocolPlan.Edges {
-		execEdges[i] = dag.ExecEdge{From: e.From, To: e.To}
+		execEdges[i] = protocol.ExecEdge{From: e.From, To: e.To}
 	}
 
 	sCtx.DAGModel = &DAGModel{

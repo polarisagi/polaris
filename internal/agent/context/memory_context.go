@@ -194,7 +194,7 @@ func BuildPlanContext( //nolint:gocyclo
 
 	// 5. Build Tools List (M2.c/f)
 	if cata != nil {
-		// TaskID 激活作用域必须与 internal/agent/dag/executor.go 的 Execute()
+		// TaskID 激活作用域必须与 internal/execute/dag/executor.go 的 Execute()
 		// 注入值一致——生产路径用 a.sCtx.SessionID 作为 taskID（见 agent_execute.go
 		// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)），此处保持同源。
 		toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, sCtx.SessionID)
