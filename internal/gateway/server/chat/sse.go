@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -309,6 +310,12 @@ func (s *ChatHandler) handleAgentStreamFSM(
 	agentCtrl protocol.AgentController,
 	input string,
 ) (string, string, bool) {
+	// [W-2-A] 接入 SystemPromptGuard
+	systemPromptGuard := guard.NewSystemPromptGuard(0)
+	s.ActivatedSystemPromptMu.RLock()
+	systemPromptGuard.AddFragment(s.ActivatedSystemPrompt)
+	s.ActivatedSystemPromptMu.RUnlock()
+
 	// 先订阅后触发：订阅通道就绪前 FSM 不会开始产出，消除早期事件丢失竞态。
 	ch := agentCtrl.SubscribeStream(ctx)
 
@@ -333,6 +340,11 @@ func (s *ChatHandler) handleAgentStreamFSM(
 			case types.AgentStreamEventThinking:
 				WriteSSE(w, flusher, "reasoning", map[string]any{"content": ev.Content})
 			case types.AgentStreamEventToken:
+				cleaned, err := systemPromptGuard.Scan(ev.Content, true)
+				if err != nil {
+					slog.Warn("server: system prompt leak detected", "session_id", sessionID, "err", err)
+				}
+				ev.Content = cleaned
 				WriteSSE(w, flusher, "token", map[string]any{"content": ev.Content})
 				reply.WriteString(ev.Content)
 			case types.AgentStreamEventToolCall:

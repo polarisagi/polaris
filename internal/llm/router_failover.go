@@ -82,21 +82,19 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 			ir.recordFailoverMetrics(ctx, chosen, resp, start)
 			return resp, nil
 		}
-		if ce := ClassifyWithProvider(err, chosen.name); !ce.Retryable && !ce.ShouldFallback {
+		ce := ClassifyWithProvider(err, chosen.name)
+		if !ce.Retryable && !ce.ShouldFallback {
 			slog.Warn("inference_router: non-retryable error during failover, aborting remaining attempts",
 				"provider", chosen.name, "reason", ce.Reason, "err", err, "tried", len(skipped)+1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.failover: non-retryable ("+string(ce.Reason)+")", err)
+		}
+		if ce.Retryable && ce.Class == ClassRateLimit {
+			time.Sleep(DefaultBackoff().DelayWithState(len(skipped), nil))
 		}
 		skipped[chosen.name] = struct{}{}
 		slog.Warn("inference_router: failover attempt failed, trying next",
 			"provider", chosen.name, "err", err, "tried", len(skipped))
 	}
-}
-
-//nolint:unused // 保留字段：迁移前即无调用方（原文件 new-from-rev 豁免掩盖），非本次拆分引入，不在本次改动范围内删除
-func (ir *InferenceRouter) findBestProviderLocked(req *types.InferRequest, skip string) *providerEntry {
-	skipped := map[string]struct{}{skip: {}}
-	return ir.findBestProviderLockedMultiSkip(req, skipped)
 }
 
 func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferRequest, skipped map[string]struct{}) *providerEntry {

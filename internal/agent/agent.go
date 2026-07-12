@@ -153,13 +153,6 @@ func (a *Agent) InjectWorldModel(wm WorldModel) {
 	a.worldModel = wm
 }
 
-// NewAgentWithPolicyGate 创建带策略引擎的 Agent（主要用于生产环境）。
-func NewAgentWithPolicyGate(id string, taintGate TaintGate, provider protocol.Provider, policyGate protocol.PolicyGate) *Agent {
-	a := NewAgent(id, nil, taintGate, provider)
-	a.policyGate = policyGate
-	return a
-}
-
 // NewAgentWithDefaults 构造带默认依赖的 Agent，主要供测试/开发场景使用。
 //
 // dagRunner/dagValidator 默认注入 execute/dag.Runner/Validator（唯二在此处直接

@@ -32,6 +32,10 @@ type RunnerImpl struct {
 
 	// l3ThresholdProvider 供 M11 批次级别全局降级判定。
 	l3ThresholdProvider L3ThresholdProvider
+
+	recorder *TrajectoryRecorderImpl
+	rd       *RegressionDetector
+	replayer *TrajectoryReplayerImpl
 }
 
 // L3ThresholdProvider 接口定义，解耦对 analysis.ContinuousSamplingMonitor 的依赖。
@@ -50,6 +54,9 @@ func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore) *RunnerImpl {
 		store:      store,
 		evalStore:  evalStore,
 		activeRuns: make(map[string]context.CancelFunc),
+		recorder:   NewTrajectoryRecorder(store),
+		rd:         &RegressionDetector{},
+		replayer:   NewTrajectoryReplayer(),
 	}
 }
 
@@ -178,6 +185,22 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 		p0PassRate := 1.0
 		if report.P0Count > 0 {
 			p0PassRate = float64(report.P0Count-report.P0Fail) / float64(report.P0Count)
+		}
+
+		// [W-5-C] TrajectoryRecorder 接入
+		if r.recorder != nil {
+			if trace, err := r.recorder.Record(ctx, runID); err == nil {
+				slog.Debug("trajectory recorded", "run_id", runID, "states", len(trace.StateTrans))
+			}
+		}
+
+		// [W-5-D] RegressionDetector 接入
+		if r.rd != nil {
+			current := &RunMetrics{TaskSuccessRate: passRate}
+			baseline := &RunMetrics{TaskSuccessRate: 1.0} // Mock baseline
+			if verdict := r.rd.Check(baseline, current); verdict != nil {
+				slog.Warn("regression detected", "metric", verdict.Metric, "current", verdict.Current)
+			}
 		}
 
 		select {

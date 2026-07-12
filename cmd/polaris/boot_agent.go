@@ -14,6 +14,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
 
 	"github.com/polarisagi/polaris/internal/action/lam"
@@ -200,17 +201,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 					continue
 				}
 				for _, c := range cases {
-					evalCase := harness.EvalCase{
-						ID:                  c.ID,
-						Name:                "Synthetic Case: " + c.Question,
-						Description:         fmt.Sprintf("Type: %s, Diff: %s", c.Type, c.Difficulty),
-						Input:               map[string]any{"question": c.Question},
-						Expected:            map[string]any{"answer": c.GroundTruth},
-						Level:               harness.Level4LLMJudge,
-						Severity:            harness.SeverityP2,
-						BehaviorType:        harness.BehaviorSemanticQuality,
-						FalsifiabilityScore: 0.8,
-					}
+					// [W-5-H] SyntheticCaseToEvalCase 接入
+					evalCase := eval.SyntheticCaseToEvalCase(c)
 					if err := evalStore.PutCase(ctx, "synthetic", "auto_gen", evalCase); err != nil {
 						slog.Warn("failed to put synthetic eval case", "id", c.ID, "err", err)
 					}
@@ -489,10 +481,53 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// M9 闭环接线（P1-2）：内环消费 Reflexion 启发式事件；SurpriseIndex 读 M3 权威值；
 	// L3/L4 演化审批走 HITL 网关。
 	m9Engine.SetHeuristicEvents(heuristicCh)
+	// [W-1-A] 接入 EvalEvents
+	evalEventCh := make(chan types.EvalCompletedPayload, 16)
+	evalRunner.SetEvalChannel(evalEventCh)
+	m9Engine.SetEvalEvents((<-chan types.EvalCompletedPayload)(evalEventCh))
+
+	// [W-5-I] 接入 SetL4TriggerChannel
+	l4Ch := make(chan learning.Change, 4)
+	m9Engine.SetL4TriggerChannel(l4Ch)
+	// 在 Admin 路由中若需触发，可通过全局/其他方式引用 l4Ch。暂不接 admin 路由。
+
 	m9Engine.SetSurpriseIndexProvider(func() float64 { return metrics.GlobalSurpriseIndex().Current() })
 	m9Engine.SetHITLGateway(tb.HITLGateway)
-
+	
+	// [W-5-F/G] MetaEvalSentinel 和 IncidentToEvalConverter 接入
+	m9Engine.SetMetaEvalSentinel(analysis.NewMetaEvalSentinel(evalStore))
+	m9Engine.SetIncidentToEvalConverter(analysis.NewIncidentToEvalConverter(evalStore, piiVault))
+	
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
+
+	// [W-5-B] 接入 FoundingAnchor 周期漂移检测
+	concurrent.SafeGo(bgCtx, "founding-anchor-drift-detector", func(ctx context.Context) {
+		anchor, _, _ := eval.LoadOrCreate(sb.DataDir, nil, nil)
+		if anchor == nil {
+			return // Not enough trajectories to create anchor yet
+		}
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				var recentTrajectories []harness.TrajectoryTrace // TODO: Provide real trajectories
+				if len(recentTrajectories) == 0 {
+					continue
+				}
+				fp := eval.ComputeFingerprint(recentTrajectories)
+				report, _ := eval.CompareWithAnchor(anchor, fp)
+				if sb.DriftMonitor != nil {
+					sb.DriftMonitor.SetScore(report.OverallDriftScore)
+				}
+				if report.ShouldFreeze && m9Engine != nil {
+					m9Engine.TriggerCurriculum(ctx)
+				}
+			}
+		}
+	})
 
 	// ─── M12 §8 ShadowExecutor：Gate 2(Shadow) 周期回放触发器 ──────────────────
 	// 2026-07-10 恢复接线：此前实现完整、测试完整但从未被实例化（详见
@@ -536,6 +571,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)
 	bgTaskScheduler.InjectImmuneGateway(NewImmuneGateway())
+	// [W-1-B] 接入 SurpriseReader
+	bgTaskScheduler.InjectSurpriseReader(&simpleSurpriseReader{})
 
 	// Task 3: Wire up RedTeamProtocol
 	rtp := eval.NewRedTeamProtocol(evalStore)
@@ -579,6 +616,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
 	sv := supervisor.NewSupervisor(5, 5*time.Minute)
+	// [W-3] 接入 SyncScheduler
+	knowledgePipeline := knowledge.NewPipeline(sb.Store.DB(), nil, sb.Outbox, nil)
+	for _, conn := range tb.KnowledgeConnRegistry.GetAll() {
+		c := conn
+		syncScheduler := connector.NewSyncScheduler(c, knowledgePipeline, 0)
+		sv.AddWorker(fmt.Sprintf("sync-scheduler-%s", c.Name()), func(ctx context.Context) error {
+			return syncScheduler.Start(ctx)
+		})
+	}
+
 	sv.AddWorker("agent-0", func(ctx context.Context) error {
 		return agent.Run(ctx)
 	})
@@ -722,4 +769,11 @@ func resolveNotionToken(ctx context.Context, sysRepo *repo.SQLiteSystemRepositor
 		slog.Warn("polaris: failed to persist encrypted notion token, will re-read env next time", "err", err)
 	}
 	return token, nil
+}
+
+// simpleSurpriseReader 实现 curriculum.SurpriseReader 接口，读取全局意外度
+type simpleSurpriseReader struct{}
+
+func (r *simpleSurpriseReader) CurrentSurprise() float64 {
+	return metrics.GlobalSurpriseIndex().Current()
 }

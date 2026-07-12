@@ -17,6 +17,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -234,10 +235,14 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 // 2. 若 SurpriseIndex >= 0.3，则使用 ThinkingHigh (Moderate risk)
 // 3. 否则默认 ThinkingDisabled
 func SelectThinkingMode(replanCount int, maxTaint types.TaintLevel, surpriseIndex float64) types.ThinkingMode {
-	if replanCount > 0 || maxTaint >= types.TaintHigh || surpriseIndex > 0.6 {
+	if replanCount > 0 || maxTaint >= types.TaintHigh {
 		return types.ThinkingMax
 	}
-	if surpriseIndex >= 0.3 {
+	route := surprise.Route(surpriseIndex)
+	if route == 2 {
+		return types.ThinkingMax
+	}
+	if route == 15 {
 		return types.ThinkingHigh
 	}
 	return types.ThinkingDisabled
