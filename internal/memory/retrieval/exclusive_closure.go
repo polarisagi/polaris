@@ -51,27 +51,16 @@ func (w *ExclusiveWriter) handleExistingEntity(ctx context.Context, existing *ty
 	if existing.Status != "" && existing.Status != "active" {
 		return
 	}
-	_ = w.semantic.MarkEntitySuperseded(ctx, existing.DBID, 0)
-	if existing.DBID <= 0 {
-		return
-	}
-	if w.cascadeInv != nil {
-		affected, err := w.cascadeInv.Invalidate(ctx, existing.DBID)
-		if err != nil {
-			slog.Warn("cascade invalidation failed", "entity_id", existing.DBID, "err", err)
-		} else if len(affected) > 0 {
-			slog.Info("cascade invalidation triggered", "source", existing.DBID, "affected_count", len(affected))
-		}
-	}
-	if w.db != nil {
-		_, _ = w.db.ExecContext(ctx,
-			`INSERT INTO episodic_events_change_log(session_id, changed_at, change_type, affected_count)
-			 VALUES ('belief_revision', ?, 'superseded', 1)`,
-			time.Now().UnixMilli())
-	}
+	w.supersedeAndCascade(ctx, existing.DBID)
 }
 
 // supersedeSimilarPreferences 将与 newName Jaccard > 0.6 的活跃 user_preference 标记 superseded。
+//
+// GD-14-001 复核修复：此前仅调用 MarkEntitySuperseded，未触发级联失效——与精确碰撞
+// 分支（handleExistingEntity）行为不一致，导致依赖"被 Jaccard 判定为同一偏好旧版本"
+// 的派生实体（如基于该偏好推导出的下游建议）永远不会进入 pending_review 复核队列，
+// 属于同一个 belief revision 语义下的静默遗漏。现改为与精确碰撞分支共用
+// supersedeAndCascade，保证两条 superseded 路径的下游一致性。
 func (w *ExclusiveWriter) supersedeSimilarPreferences(ctx context.Context, newName string) {
 	// AsOf 传入 0 代表当前时间
 	actives, err := w.semantic.ListActiveEntities(ctx, "user_preference", 30, 0)
@@ -83,8 +72,32 @@ func (w *ExclusiveWriter) supersedeSimilarPreferences(ctx context.Context, newNa
 			continue // 精确碰撞已在调用方处理
 		}
 		if JaccardSimilarity(act.Name, newName) > 0.6 {
-			_ = w.semantic.MarkEntitySuperseded(ctx, act.DBID, 0)
+			w.supersedeAndCascade(ctx, act.DBID)
 		}
+	}
+}
+
+// supersedeAndCascade 标记实体为 superseded，并（若已注入 CascadeInvalidator）触发级联失效
+// 与审计留痕。精确碰撞（handleExistingEntity）与 Jaccard 近似碰撞
+// （supersedeSimilarPreferences）共用此逻辑，确保两条 belief revision 路径的下游行为一致。
+func (w *ExclusiveWriter) supersedeAndCascade(ctx context.Context, dbID int64) {
+	_ = w.semantic.MarkEntitySuperseded(ctx, dbID, 0)
+	if dbID <= 0 {
+		return
+	}
+	if w.cascadeInv != nil {
+		affected, err := w.cascadeInv.Invalidate(ctx, dbID)
+		if err != nil {
+			slog.Warn("cascade invalidation failed", "entity_id", dbID, "err", err)
+		} else if len(affected) > 0 {
+			slog.Info("cascade invalidation triggered", "source", dbID, "affected_count", len(affected))
+		}
+	}
+	if w.db != nil {
+		_, _ = w.db.ExecContext(ctx,
+			`INSERT INTO episodic_events_change_log(session_id, changed_at, change_type, affected_count)
+			 VALUES ('belief_revision', ?, 'superseded', 1)`,
+			time.Now().UnixMilli())
 	}
 }
 
