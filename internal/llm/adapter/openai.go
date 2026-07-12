@@ -18,18 +18,20 @@ import (
 // OpenAIAdapter 实现 protocol.Provider，对接官方 OpenAI 或任何严格兼容 OpenAI API 的服务。
 // 复用了 client.go 中通用的 OpenAICompatibleClient。
 type OpenAIAdapter struct {
-	model        string
-	credentialFn func() []byte
-	client       *OpenAICompatibleClient
-	caps         types.ProviderCapabilities
-	tbr          *metrics.TokenBurnRate
+	model    string
+	credPool *llmparent.CredentialPool
+	client   *OpenAICompatibleClient
+	caps     types.ProviderCapabilities
+	tbr      *metrics.TokenBurnRate
 }
 
 var _ protocol.Provider = (*OpenAIAdapter)(nil)
 
 // NewOpenAIAdapter 初始化一个 OpenAI 适配器。
 // baseURL 默认为 "https://api.openai.com/v1"（如果传入空串）。
-func NewOpenAIAdapter(baseURL, model string, credFn func() []byte, client *http.Client, tbr *metrics.TokenBurnRate) *OpenAIAdapter {
+// credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
+// llmparent.NewSingleCredentialPool(key) 构造。
+func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate) *OpenAIAdapter {
 	if client == nil {
 		client = defaultHTTPClient()
 	}
@@ -44,9 +46,9 @@ func NewOpenAIAdapter(baseURL, model string, credFn func() []byte, client *http.
 	}
 
 	return &OpenAIAdapter{
-		model:        model,
-		credentialFn: credFn,
-		client:       c,
+		model:    model,
+		credPool: credPool,
+		client:   c,
 		caps: types.ProviderCapabilities{
 			SupportsStreaming: true,
 			SupportsTools:     true,
@@ -99,10 +101,15 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 		apiReq.Model = resolveOpenAIModel(req.Model)
 	}
 
-	apiKey := a.credentialFn()
+	cred := a.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "OpenAIAdapter.Infer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 	defer llmparent.ClearBytes(apiKey)
 
 	resp, err := a.client.SendRequest(ctx, apiKey, apiReq)
+	cred.RecordResult(err)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.Infer", err)
 	}
@@ -173,11 +180,16 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 		apiReq.Model = resolveOpenAIModel(req.Model)
 	}
 
-	apiKey := a.credentialFn()
+	cred := a.credPool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "OpenAIAdapter.StreamInfer: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 	defer llmparent.ClearBytes(apiKey)
 
 	tok := llmparent.NewTiktokenTokenizer(a.model)
 	rawCh, err := a.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
+	cred.RecordResult(err)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.StreamInfer", err)
 	}

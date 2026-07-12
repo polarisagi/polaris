@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -299,13 +300,22 @@ func resolveAnthropicModel(requested string) string {
 }
 
 // keyInjectRT injects the API key safely during the HTTP round trip.
+//
+// pool 取代原先的静态 keyFn func() []byte（2026-07-12 P1 修复）：每次 RoundTrip
+// 从 CredentialPool 挑选一个可用凭证，注入后立即清零，并把本次调用的结果（含 HTTP
+// 状态码）回报给该凭证——多 Key 场景下单个 Key 401/429/402 只会把它自己冷却，
+// 不会拖垮整个 Provider（此前 credFn 是构造期固定的单 Key 闭包，无法感知失败/轮换）。
 type keyInjectRT struct {
 	inner http.RoundTripper
-	keyFn func() []byte
+	pool  *llmparent.CredentialPool
 }
 
 func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
-	apiKey := rt.keyFn()
+	cred := rt.pool.Pick()
+	if cred == nil {
+		return nil, apperr.New(apperr.CodeResourceExhausted, "keyInjectRT: no available credential (all keys cooling down)")
+	}
+	apiKey := cred.CredFn()()
 	// 直接用 []byte 构造 canonical header value，避免 string() 产生不可清零副本。
 	// http.Header 内部会 clone string，但此处我们在 RoundTrip 返回后立即
 	// 删除 header 引用，将泄漏窗口收窄到单次 TCP write。
@@ -314,7 +324,16 @@ func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Del("x-api-key")  // 立即清除 header map 引用
 	llmparent.ClearBytes(apiKey) // 清零原始 key 字节
 	if err != nil {
+		cred.RecordResult(err)
 		return resp, apperr.Wrap(apperr.CodeInternal, "keyInjectRT.RoundTrip", err)
+	}
+	// 传输层成功但 HTTP 状态码非 200 时（401/402/429 等）也要回报，供 Classify()
+	// 从合成的 "anthropic: HTTP {code}" 错误串中提取状态码并决定是否冷却本凭证；
+	// 真正面向调用方的完整错误串仍由 Infer/StreamInfer 按响应体二次构造。
+	if resp != nil && resp.StatusCode != 200 {
+		cred.RecordResult(apperr.New(apperr.CodeInternal, fmt.Sprintf("anthropic: HTTP %d", resp.StatusCode)))
+	} else {
+		cred.RecordResult(nil)
 	}
 	return resp, nil
 }

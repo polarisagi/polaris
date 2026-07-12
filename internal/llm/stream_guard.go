@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 )
@@ -34,6 +35,28 @@ func (g *StreamBudgetGuard) GetMaxBufferSize() int {
 // TokenBudget token 预算。
 type TokenBudget struct {
 	remaining int
+}
+
+// NewTokenBudget 以初始配额创建 TokenBudget（P1 2026-07-12 接入 router_stream.go
+// 时补充的构造函数——此前只有测试内直接构造 &TokenBudget{remaining: N}，生产侧
+// 无法在不感知内部字段的前提下使用）。
+// initial<=0 视为"无预算上限"（如调用方未指定 MaxTokens），此时只依赖
+// TokenBurnDetector 的加速度检测兜底，不会触发 L3 预算耗尽硬阻断。
+func NewTokenBudget(initial int) *TokenBudget {
+	if initial <= 0 {
+		initial = math.MaxInt32
+	}
+	return &TokenBudget{remaining: initial}
+}
+
+// Consume 从预算中扣除 n 个 token（允许降到 0 以下，GuardChunk 只关心 <=0）。
+func (b *TokenBudget) Consume(n int) {
+	b.remaining -= n
+}
+
+// Remaining 返回当前剩余配额，供日志/监控展示。
+func (b *TokenBudget) Remaining() int {
+	return b.remaining
 }
 
 // TokenBurnDetector 基于加速度的 burn rate 检测。
