@@ -63,6 +63,12 @@
 - **根因类别**：某个状态转换方法的 `broadcast` 调用忘了把参数写进 `BlackboardEvent.Payload` 字段（对照同类兄弟方法，如 `FailTask` 有 `Payload: errBytes`，遗漏方法却没有）。
 - **排查起点**：`internal/swarm/orchestrator/sqlite_blackboard.go` 里对比 `CompleteTask`/`FailTask`/`SuspendTask` 等同类状态转换方法的 `bb.broadcast(...)` 字面量，看是否每个都对齐设置了 `Payload`；真实案例见 ADR-0041 §2 第6点（`CompleteTask` 此前遗漏）。
 
+### 症状 10：AgentPool 会话 SendIntent 后 FSM 无任何响应/流式无输出
+- **症状特征**：走 `AgentPool.Acquire` 的 per-session 请求，`SendIntent` 本身不报错，但 `SubscribeStream`/`CurrentState()` 永远不变化，像是石沉大海。
+- **归类模块**：M04
+- **根因类别**：Agent 实例已构造但没有任何 goroutine 消费其 intent channel——`a.intent` 带缓冲（cap=10），短期内写入不报错，掩盖了 FSM 从未被驱动的事实；构造点忘记为该实例启动 `Run()` 事件循环。
+- **排查起点**：确认该 Agent 实例的构造点是否有配套的 `concurrent.SafeGo(..., func(ctx) { agent.Run(ctx) })`；历史真实案例见 `ADR-0029` §E Addendum（`internal/agent/pool.go` `newPoolEntry` 此前遗漏）。
+
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。
 - 相似症状优先合并成一项（用"/"列举变体），不要为每个变体开新项。

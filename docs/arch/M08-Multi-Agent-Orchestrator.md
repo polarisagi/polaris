@@ -1,7 +1,7 @@
 # 模块 8: Multi-Agent Orchestrator
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 黑板+CAS(核心) / 2:106 Supervisor / 2-bis:125 常驻角色Agent / 3:142 编排模式 / 3-bis:172 SwarmRouter / 3-ter:210 PipelineOrchestrator / 4:281 AgentCard / 5:295 Task分解 / 8:304 拓扑自演化 / 10:319 (SOFT)降级 / 11:338 跨模块契约 / 11.2:318 已知实现缺口 / 12:378 Custom Agent / 13:416 CSV Fan-out -->
+<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 黑板+CAS(核心) / 2:106 Supervisor / 2-bis:125 常驻角色Agent / 3:142 编排模式 / 3-bis:172 SwarmRouter / 3-ter:210 PipelineOrchestrator / 4:283 AgentCard / 5:297 Task分解 / 8:306 拓扑自演化 / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:318 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
