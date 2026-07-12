@@ -4,6 +4,22 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-07-12（同步 8 项架构决策复核实现到架构文档）
+
+对 commit `226654d`（Cedar Permit 三档语义修正）/ `618b0b5`（CodeAct VFS 化 + 配额预占）/ `fecc215`（会话持久化可靠性 + AgentPool Run() 补齐）/ `4d72c93`（Jaccard 分支级联失效补齐）/ `3185c43`（EdgeCondition 声明式算子扩展）做架构文档核实与总结性更新，均为对已落地代码的文字补充，不含伪代码：
+
+- `docs/arch/M04-Agent-Kernel.md` | AgentPool 段落补充：`Pool.Acquire` 为每个新建 Agent 启动常驻 `Run()` 循环、`GC()` 回收时调用 `Shutdown()`（此前二者均缺失）
+- `docs/arch/M05-Memory-System.md` §4.2/Stage 2 | Jaccard 近似碰撞分支现与精确名称冲突分支共用同一级联失效触发路径（此前 Jaccard 分支不触发 `CascadeInvalidator`）
+- `docs/arch/M07-Tool-Action-Layer.md` | CodeAct 执行路径对比表更新：临时脚本改经 `ScriptStagingBackend`（VFS 隔离工作区），未注入时降级为原系统临时目录
+- `docs/arch/M08-Multi-Agent-Orchestrator.md` §3-quinquies | `EdgeCondition` 算子集合从 `eq`/`ne` 扩展为含 `gt`/`lt`/`ge`/`le`/`contains`/`exists` + 结构化 `And`/`Or` 复合，仍为声明式扩展、未引入表达式引擎
+- `docs/arch/M13-Interface-Scheduler.md` | 移除对已废弃 `ChatHandler.ToolStage` 环节的引用（该字段随孤儿注入点级联清理）
+- `docs/arch/INDEX.md` §0 | 新增症状10：AgentPool `SendIntent` 无响应 → 排查 `Run()` 是否启动
+- `docs/arch/decisions/ADR-0029-phase1-2-system-hardening.md` §E / `ADR-0041-state-graph-orchestration.md` | 各补充 Addendum 记录本轮复核发现的真实缺口与修复方案
+
+**附带核实**：全部改动均已通过 `gofmt -l .`、`go build ./...`、`golangci-lint run ./...`（含 wasip1 子集）、`go test ./...`（100 包 ok，0 FAIL）验证，详见对应 commit message。
+
+**遗留问题（未在本轮处理）**：项目中并存至少两套独立编号的复核发现 ID 序列，均使用 `GD-13-*`/`GD-14-*` 前缀但指向完全不同的 finding（例如 `GD-14-001`/`GD-14-002` 在 `ADR-0033`/`M05 §2.4`/`00-Global-Dictionary.md` 等既有文档中分别指"多 Agent 共享记忆命名空间"/"上下文分页"，而本轮新增的 `internal/memory/retrieval`、`internal/swarm/orchestrator` 相关注释与提交沿用同名 ID 指向"级联失效 Jaccard 分支"/"EdgeCondition 声明式扩展"）。两套编号均已随各自代码落地，本次未重新编号，避免在未确认权威来源前引入更大范围的误改；建议后续复核时对两份复核报告的 ID 命名空间做一次性协调。
+
 ## 2026-07-12（同步任务书08 §8.1/§8.3/§8.4/§8.5 四项实现到架构文档）
 
 对 commit `d65862b`（GD-13-001 通知投递）/ `ec76e1b`（GD-13-003 内存持久化熔断）/ `86b787a`（GD-14-001 多 Agent 共享记忆命名空间）/ `3d5d036`（GD-14-002 上下文分页）做架构文档核实与总结性更新，均为对已落地代码的文字补充，不含伪代码：

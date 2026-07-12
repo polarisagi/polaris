@@ -255,7 +255,7 @@ RouteReasoning:
 2. 未命中或 si>=0.3 → 调用 `M6.SkillSelector.SelectTopK(intent, K=5)` 选取候选工具/技能描述（**Tool Selection > Tool Design**：避免把全部工具列表塞给 LLM 导致选择崩溃）→ buildMessages → `providerRouter.Route`
 3. buildMessages: ImmutableCore + GoalDescription + DAG 上下文 + SkillSelector 选取的 top-K 工具描述
 
-**AgentPool（ADR-0029 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）而非单个 `AgentController`。每个 sessionID 对应独立 `Agent` 实例，容量由 `TierParams.MaxConcurrentAgents` 限制（Tier-0: 4）；超容量时 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。Idle 超过 10 分钟的 session 由 `Pool.GC()` 低频回收。
+**AgentPool（ADR-0029 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）而非单个 `AgentController`。每个 sessionID 对应独立 `Agent` 实例，容量由 `TierParams.MaxConcurrentAgents` 限制（Tier-0: 4）；超容量时 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。Idle 超过 10 分钟的 session 由 `Pool.GC()` 低频回收。每个新建 Agent 实例由 `Pool.Acquire` 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（消费其内部 intent channel），语义与 Supervisor 对单例 `agent-0` 的启动方式一致；`GC()` 回收 idle session 时对应调用 `Shutdown()` 停止该循环（详见 ADR-0029 Addendum，2026-07-12 复核修复：此前该循环从未启动，per-session 会话 FSM 实际不会推进状态）。
 
 ---
 
