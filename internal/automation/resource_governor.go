@@ -338,19 +338,3 @@ func (rg *ResourceGovernor) ReleaseLLM() {
 	rg.cond.Signal()
 	rg.mu.Unlock()
 }
-
-// HITLCheckpoint HITL 审批点（供 CronJob 注入审批等待）。
-// 正式 HITL 接口见 internal/protocol/interfaces.go:HITL。
-type HITLCheckpoint struct {
-	CheckpointID string
-	Timeout      time.Duration
-}
-
-func (c *HITLCheckpoint) AwaitApproval(ctx context.Context) (bool, error) {
-	select {
-	case <-ctx.Done():
-		return false, ctx.Err()
-	case <-time.After(c.Timeout):
-		return false, apperr.New(apperr.CodeTimeout, "hitl: approval timeout") // 超时视为拒绝
-	}
-}
