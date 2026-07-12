@@ -26,6 +26,10 @@ ChatMessageRow struct {
 	FileLength       int64
 	CreatedAt        string
 	UpdatedAt        string
+	// DedupeKey 幂等键（GD-13-004 复核修复）：SaveMessage 每次调用生成，
+	// AppendMessageIdempotent 据此做 INSERT OR IGNORE，供 outbox 重试兜底路径
+	// 使用；直接同步写入路径可留空（历史行为不变）。
+	DedupeKey string
 }
 
 type

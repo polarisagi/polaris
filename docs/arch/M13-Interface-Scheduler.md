@@ -253,7 +253,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 
 #### 1.2.7 消息预处理：引用展开（ContextRefExpander）
 
-`internal/gateway/authcontext/contextref.go`（`ContextRefExpander`）—— 在 SSE 管道最早阶段（`sse.go` 请求基础校验后、`SlashCommandRouter.Dispatch` 前）对用户输入中的 `@file`/`@url`/`git:` 引用做展开替换，展开结果写回 `req.Input` 后再进入斜线命令、Compressor、ToolStage 等后续环节。单条引用展开失败记入 `report.Skipped` 并 `slog.Warn`，不阻断请求；`ContextRefExpander` 为 nil（未注入 HTTPClient）时整段预处理跳过，退化为不做引用展开。
+`internal/gateway/authcontext/contextref.go`（`ContextRefExpander`）—— 在 SSE 管道最早阶段（`sse.go` 请求基础校验后、`SlashCommandRouter.Dispatch` 前）对用户输入中的 `@file`/`@url`/`git:` 引用做展开替换，展开结果写回 `req.Input` 后再进入斜线命令、Compressor 等后续环节（2026-07-12 复核：原文列举的 ToolStage 环节实为从未接入聊天管道的孤儿注入点，`ChatHandler.ToolStage` 字段已随复核级联移除；语义化工具筛选能力仍保留在 `internal/agent/context/tool_stage.go`，供未来 PRM/FSM 路径按需接入）。单条引用展开失败记入 `report.Skipped` 并 `slog.Warn`，不阻断请求；`ContextRefExpander` 为 nil（未注入 HTTPClient）时整段预处理跳过，退化为不做引用展开。
 
 #### 1.2.8 斜线命令系统（SlashCommandRouter）
 

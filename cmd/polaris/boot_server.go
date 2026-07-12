@@ -6,7 +6,6 @@ package main
 import (
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/agent"
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
@@ -29,6 +28,7 @@ import (
 	autopkg "github.com/polarisagi/polaris/internal/automation"
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/server"
+	"github.com/polarisagi/polaris/internal/gateway/server/chat"
 	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 	si "github.com/polarisagi/polaris/internal/learning"
@@ -86,6 +86,15 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetChannelStarter(channelMgr)
 
 	httpServer.SetAuditTrail(sb.AuditTrail)
+	// 2026-07-12 修复：此前从未调用，s.outboxWriter 恒为 nil，导致
+	// handleAgentInterrupt 的 Interrupt 异步路由 + ChatHandler.SaveMessage 的
+	// 持久化重试兜底（GD-13-004 复核修复）均无法生效。Outbox 本身已在
+	// bootSubstrate 阶段构造完毕（sb.Outbox），此处补齐注入。
+	httpServer.SetOutboxWriter(sb.Outbox)
+	// SQLiteChatRepository 是无状态的 *sql.DB 薄封装，这里另建一个实例指向同一
+	// 底层连接给 handler 专用，无需从 Server 内部暴露其私有 chatRepo 字段。
+	sb.Outbox.RegisterHandler(protocol.TopicChatMessagePersistRetry,
+		chat.NewChatMessagePersistHandler(repo.NewSQLiteChatRepository(sb.Store.DB())).Handle)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetToolRegistry(tb.ToolReg)
 	httpServer.SetCatalog(tb.Catalog)
@@ -150,7 +159,8 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			codeact.WithMaxCodeSize(sb.Cfg.Thresholds.M7Tool.MaxCodeSizeBytes),
 			codeact.WithPIIGuard(tb.PIIDetector, tb.PIIDesensitizer),
 			codeact.WithTokenManager(action.GetTokenManager()),
-			codeact.WithStateDir(sb.Layout.Workspace), // GD-4-002: REPL 状态快照根目录
+			codeact.WithStateDir(sb.Layout.Workspace),         // GD-4-002: REPL 状态快照根目录
+			codeact.WithScriptStagingBackend(tb.VFSWorkspace), // 批次4 XR-11 复核修复：临时脚本落盘迁移至 VFS 隔离边界
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
 		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})
@@ -267,9 +277,6 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		}
 	})
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
-	toolStage := agentctx.NewToolStage(tb.Catalog, sb.Embedder)
-	// (Optional) toolStage.WithCognitiveStore(...) if we had a SurrealDB client in sb
-	httpServer.SetToolStage(toolStage)
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	// Dispatcher 统一路由至 tb.ToolReg.ExecuteTool（builtin/mcp/native）或 tb.SkillExecutor（skill），
 	// 与 Agent Kernel 使用的同一条 PolicyGate→沙箱→执行 链路，不再单独持有 envelope 副本。

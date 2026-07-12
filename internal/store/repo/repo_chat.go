@@ -105,14 +105,50 @@ func (r *SQLiteChatRepository) DeleteSession(ctx context.Context, id string) err
 	return nil
 }
 
-// AppendMessage 追加一条消息
+// AppendMessage 追加一条消息。
+//
+// 修复：原实现的 INSERT 语句恒定使用 strftime('now') 作为 created_at/updated_at，
+// 完全忽略调用方传入的 row.CreatedAt/row.UpdatedAt——ChatHandler.SaveMessage
+// 为还原"回复实际耗时"特意回算了 created_at（now - durationMs），但因这里从未
+// 使用这两个字段，回算逻辑此前是死代码，chat_messages.created_at 永远等于写入
+// 时刻而非推理起始时刻。现在用 COALESCE + NULLIF 判空字符串回退 strftime(now)：
+// 调用方未设置（如 durationMs<=0 场景）时保持原有写入即当前时间行为，
+// 非空时采用调用方回算值。
 func (r *SQLiteChatRepository) AppendMessage(ctx context.Context, row types.ChatMessageRow) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO chat_messages(session_id, role, content, reasoning_content, tool_calls, file_offset, file_length, created_at, updated_at) 
-		VALUES(?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
-		row.SessionID, row.Role, row.Content, row.ReasoningContent, row.ToolCalls, row.FileOffset, row.FileLength)
-	if err != nil {
+	if err := r.appendMessage(ctx, "INSERT", row); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.AppendMessage", err)
+	}
+	return nil
+}
+
+// AppendMessageIdempotent 与 AppendMessage 相同，但使用 INSERT OR IGNORE 并要求
+// row.DedupeKey 非空（GD-13-004 复核修复：outbox 重试兜底路径专用，OutboxWorker
+// at-least-once 语义下可能对同一条记录多次调用 handler，dedupe_key 唯一索引
+// 保证重复调用不会插入重复消息行）。
+func (r *SQLiteChatRepository) AppendMessageIdempotent(ctx context.Context, row types.ChatMessageRow) error {
+	if row.DedupeKey == "" {
+		return apperr.New(apperr.CodeInvalidInput, "SQLiteChatRepository.AppendMessageIdempotent: dedupe_key required")
+	}
+	if err := r.appendMessage(ctx, "INSERT OR IGNORE", row); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.AppendMessageIdempotent", err)
+	}
+	return nil
+}
+
+func (r *SQLiteChatRepository) appendMessage(ctx context.Context, verb string, row types.ChatMessageRow) error {
+	var dedupeKey any
+	if row.DedupeKey != "" {
+		dedupeKey = row.DedupeKey
+	}
+	_, err := r.db.ExecContext(ctx,
+		verb+` INTO chat_messages(session_id, role, content, reasoning_content, tool_calls, file_offset, file_length, dedupe_key, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,
+			COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%SZ','now')))`,
+		row.SessionID, row.Role, row.Content, row.ReasoningContent, row.ToolCalls, row.FileOffset, row.FileLength, dedupeKey,
+		row.CreatedAt, row.UpdatedAt)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.appendMessage", err)
 	}
 	return nil
 }

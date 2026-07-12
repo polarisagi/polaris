@@ -90,13 +90,22 @@ type Server struct {
 	chatHandler      *chat.ChatHandler
 	sysadminHandler  *sysadmin.SysAdminHandler
 	codeActEngine    CodeActEngine // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
-	toolStage        interface {
-		SelectFor(ctx context.Context, query string) []types.ToolSchema
-	}
 }
 
-func (s *Server) SetAuditTrail(at AuditRecorder)          { s.auditTrail = at }
-func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) { s.outboxWriter = w }
+func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
+
+// SetOutboxWriter 注入 Outbox 写入器。此前该 setter 在 cmd/polaris 启动流程中
+// 从未被调用过——s.outboxWriter 恒为 nil，导致 handleAgentInterrupt 的
+// Interrupt 异步路由（server_handlers_hitl.go）永远退化为"outboxWriter 未注入，
+// 无法直调"分支（2026-07-12 复核发现，boot_server.go 现已补上调用）。
+// 同时转发给 chatHandler.OutboxWriter，供 SaveMessage 的持久化重试兜底使用
+// （GD-13-004 复核修复）——二者共用同一个 Outbox 实例，无需重复注入。
+func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) {
+	s.outboxWriter = w
+	if s.chatHandler != nil {
+		s.chatHandler.OutboxWriter = w
+	}
+}
 
 func (s *Server) SetInstallManager(m ExtensionInstaller) {
 	s.installMgr = m
@@ -208,16 +217,6 @@ func (s *Server) SetCatalog(c catalog.Catalog) {
 	s.catalog = c
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Catalog = c
-	}
-}
-
-// SetToolStage 注入工具阶段
-func (s *Server) SetToolStage(stage interface {
-	SelectFor(ctx context.Context, query string) []types.ToolSchema
-}) {
-	s.toolStage = stage
-	if s.chatHandler != nil {
-		s.chatHandler.ToolStage = stage
 	}
 }
 

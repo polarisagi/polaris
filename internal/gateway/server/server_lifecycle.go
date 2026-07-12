@@ -184,8 +184,6 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		ClearToolSchemaCache: s.sysadminHandler.ClearToolSchemaCache,
 		StartMCPServer:       s.sysadminHandler.MCP.StartMCPServerCtx,
 	})
-	s.chatHandler.ToolProvider = s.sysadminHandler
-
 	mux := http.NewServeMux()
 
 	s.registerRoutes(mux)

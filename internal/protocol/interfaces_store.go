@@ -105,6 +105,10 @@ ChatRepository interface {
 
 	// Messages
 	AppendMessage(ctx context.Context, row types.ChatMessageRow) error
+	// AppendMessageIdempotent 与 AppendMessage 语义相同，但要求 row.DedupeKey
+	// 非空并据此做 INSERT OR IGNORE（GD-13-004 复核修复：outbox 重试兜底路径
+	// 专用，供 ChatMessagePersistHandler 在 at-least-once 重投下避免重复插入）。
+	AppendMessageIdempotent(ctx context.Context, row types.ChatMessageRow) error
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]types.ChatMessageRow, error)
 	SearchMessages(ctx context.Context, query string, limit int) ([]types.ChatMessageRow, error)
 
