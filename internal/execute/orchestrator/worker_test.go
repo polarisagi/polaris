@@ -134,7 +134,7 @@ func (b *mockBlackboard) PeekTask(ctx context.Context, taskID string) (*types.Ta
 	if !ok {
 		return nil, nil
 	}
-	return &types.TaskSnapshot{ID: entry.ID, Status: entry.Status, Namespace: entry.Namespace}, nil
+	return &types.TaskSnapshot{ID: entry.ID, Status: entry.Status, Namespace: entry.Namespace, Type: entry.Type, Intent: entry.Intent}, nil
 }
 func (b *mockBlackboard) Subscribe(ctx context.Context) (<-chan types.BlackboardEvent, error) {
 	return b.events, nil
