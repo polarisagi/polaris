@@ -21,42 +21,6 @@ import (
 // （R7 拆分自 middleware.go）。限流/失败计数/日志响应包装见 middleware.go。
 // ============================================================================
 
-// adminWritePaths 是无 API Key 时仅限 localhost 访问的高权限端点前缀集。
-// 覆盖所有写入/删除操作，防止 CORS-* + 无认证组合被局域网页面利用。
-//
-//nolint:unused
-func adminWritePaths() []string {
-	return []string{
-		"POST /v1/mcp-servers",
-		"PUT /v1/mcp-servers",
-		"DELETE /v1/mcp-servers",
-		"POST /v1/plugins/install",
-		"DELETE /v1/plugins/",
-		"POST /v1/plugins/create",
-		"POST /v1/mcp/create",
-		"POST /v1/skills/create",
-		"POST /v1/apps/create",
-		"POST /v1/providers",
-		"PUT /v1/providers",
-		"DELETE /v1/providers",
-		// OTA 更新：特权操作，无 API Key 时仅限 localhost 访问
-		"POST /v1/system/update",
-	}
-}
-
-// isAdminWrite 判断当前请求是否属于高权限写操作。
-//
-//nolint:unused
-func isAdminWrite(method, path string) bool {
-	key := method + " " + path
-	for _, prefix := range adminWritePaths() {
-		if strings.HasPrefix(key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // isLoopback 判断 IP 是否为回环地址（127.x / ::1）。
 func isLoopback(ip string) bool {
 	// 去掉方括号（IPv6 格式）

@@ -355,9 +355,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	installFSM := lifecycle.NewInstallFSM(extRepo)
 	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr).WithRegistry(knowledgeConnRegistry))
 	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry))
+	// [W-2-B] 接入 SkillValidationPipeline
+	signingKey := []byte(sb.Cfg.System.DataEncryptionKey)
+	pipeline := skill.NewSkillValidationPipeline(signingKey, &scriptExecutorAdapter{sbx: containerSandbox})
 	installFSM.RegisterInstaller(lifecycle.NewSkillInstaller(extRepo, skillRegistry).WithValidators(
-		&skillStaticAnalyzerAdapter{inner: &skill.StaticAnalyzer{}},
-		&skill.RiskAssessor{}, // 方法签名与 lifecycle.ScriptRiskAssessor 结构一致，无需适配器
+		&pipelineValidatorAdapter{pipeline: pipeline},
+		&pipelineValidatorAdapter{pipeline: pipeline},
 	))
 	installFSM.RegisterInstaller(lifecycle.NewAppInstaller(extRepo))
 	installMgr.WithInstallFSM(installFSM)
@@ -544,3 +547,47 @@ type inlineTokenVerifier struct{}
 func (v *inlineTokenVerifier) Verify(t *token.Token) error { return action.GetTokenManager().Verify(t) }
 
 var _ sandbox.TokenVerifier = (*inlineTokenVerifier)(nil)
+
+type scriptExecutorAdapter struct {
+	sbx *sandbox.ContainerSandbox
+}
+
+func (a *scriptExecutorAdapter) ExecuteTest(ctx context.Context, scriptBytes []byte, input []byte) ([]byte, error) {
+	if a.sbx == nil {
+		return nil, apperr.New(apperr.CodeInternal, "container sandbox not available")
+	}
+	tmpFile, err := os.CreateTemp("", "skill_test_*.js")
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to create temp file for test skill", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(scriptBytes); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to write test skill script", err)
+	}
+	tmpFile.Close()
+	res, err := a.sbx.RunScript(ctx, "test_skill", tmpFile.Name(), input, types.TrustCommunity)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to run test skill script", err)
+	}
+	return res, nil
+}
+
+type pipelineValidatorAdapter struct {
+	pipeline *skill.SkillValidationPipeline
+}
+
+func (a *pipelineValidatorAdapter) Analyze(code []byte) (bool, []string, error) {
+	res, err := a.pipeline.Validate(code, 0)
+	if err != nil {
+		return false, nil, apperr.Wrap(apperr.CodeInternal, "pipeline validation failed", err)
+	}
+	return res.Passed, nil, nil
+}
+
+func (a *pipelineValidatorAdapter) Assess(code []byte) (int, int) {
+	res, err := a.pipeline.Validate(code, 0)
+	if err != nil {
+		return 1, 3 // default to medium/3 on error
+	}
+	return res.RiskLevel, res.SandboxTier
+}

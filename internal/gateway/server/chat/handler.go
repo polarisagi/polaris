@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/store/search"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
@@ -77,6 +78,8 @@ type ChatHandler struct {
 	// 投递（GD-13-004 复核修复，见 chat_message_persist_handler.go）。nil 时
 	// SaveMessage 降级为仅记录错误日志（与修复前行为一致）。
 	OutboxWriter protocol.OutboxWriter
+	// [W-2-C] 接入 TaintTracker，用于在收到用户输入时标记请求污染等级
+	TaintTracker *taint.TaintTracker
 }
 
 type Dependencies struct {
@@ -102,6 +105,7 @@ type Dependencies struct {
 	ContextRefExpander    *authcontext.ContextRefExpander
 	EnableFSMChatPath     bool
 	OutboxWriter          protocol.OutboxWriter
+	TaintTracker          *taint.TaintTracker
 }
 
 // NewChatHandler 故意不做构造函数级 fail-closed nil 强制校验（2026-07-08 复核
@@ -144,6 +148,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		ContextRefExpander:    deps.ContextRefExpander,
 		EnableFSMChatPath:     deps.EnableFSMChatPath,
 		OutboxWriter:          deps.OutboxWriter,
+		TaintTracker:          deps.TaintTracker,
 		skillEmbedCache:       make(map[string][]float32),
 	}
 }

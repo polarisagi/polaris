@@ -139,6 +139,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/mcp-servers", s.sysadminHandler.MCP.HandleCreateMCPServer)
 	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}", s.sysadminHandler.MCP.HandleUpdateMCPServer)
 	mux.HandleFunc("DELETE /v1/mcp-servers/{serverID}", s.sysadminHandler.MCP.HandleDeleteMCPServer)
+	
+	// [W-6-E] AgentProfile 接入
+	mux.HandleFunc("GET /v1/admin/profiles", s.sysadminHandler.HandleListAgentProfiles)
 	mux.HandleFunc("POST /v1/mcp-servers/{serverID}/test", s.sysadminHandler.MCP.HandleTestMCPServer)
 	// 网络访问审批：PUT /v1/mcp-servers/{id}/network-access  body: {"approved": true/false}
 	mux.HandleFunc("PUT /v1/mcp-servers/{serverID}/network-access", s.sysadminHandler.MCP.HandleMCPNetworkApproval)

@@ -245,6 +245,16 @@ func (r *RunnerImpl) RunReplay(ctx context.Context, sessionID string) (*types.Re
 		return nil, apperr.Wrap(apperr.CodeInternal, "eval_runner: replay iteration failed", iter.Err())
 	}
 
+	// [W-5-E] TrajectoryReplayer 接入
+	if r.replayer != nil && r.recorder != nil {
+		if trace, err := r.recorder.Record(ctx, sessionID); err == nil {
+			if res, err := r.replayer.Replay(ctx, trace); err == nil && !res.Passed {
+				report.Consistent = false
+				slog.Warn("replay divergent via TrajectoryReplayer", "session", sessionID, "error", res.Error)
+			}
+		}
+	}
+
 	return report, nil
 }
 

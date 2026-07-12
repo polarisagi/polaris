@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"context"
 	"database/sql"
@@ -157,6 +158,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		WriteSSE:              chat.WriteSSE,
 		ContextRefExpander:    authcontext.NewContextRefExpander(httpClient),
 		EnableFSMChatPath:     agentCfg.EnableFSMChatPath,
+		TaintTracker:          taint.NewTaintTracker(), // [W-2-C] 接入 TaintTracker
 	})
 	s.sysadminHandler = sysadmin.NewSysAdminHandler(sysadmin.Dependencies{
 		SystemRepo:     s.systemRepo,

@@ -66,6 +66,7 @@ type SubstrateBundle struct {
 	// 硬件探针与可观测性（AutoConf 可 nil，Tier0 降级）
 	AutoConf *observability.AutoConfig
 	TBR      *metrics.TokenBurnRate
+	DriftMonitor *eval.DriftMonitor
 
 	// 安全三件套
 	KS         *security.KillSwitch
@@ -174,6 +175,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 	driftMonitor := eval.NewDriftMonitor()
 	metrics.SetFoundingAnchorDriftScorer(driftMonitor.GetScore)
+	sb.DriftMonitor = driftMonitor
 
 	// ─── 0.35 KillSwitch ────────────────────────────────────────────────────
 	if security.IsFullStopFilePresent(dataDir) {

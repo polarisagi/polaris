@@ -67,7 +67,13 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 					}
 					guard.sessionBudget.Consume(tokens)
 					if gErr := guard.GuardChunk(ctx, tokens); gErr != nil {
+						slog.Warn("stream budget exceeded", "remaining", guard.sessionBudget.Remaining(), "window", guard.burnDetector.GetWindow())
 						ir.abortStream(ctx, out, providerName, gErr)
+						return
+					}
+					if accumulatedBytes > guard.GetMaxBufferSize() {
+						slog.Warn("stream size exceeded", "limit", guard.GetMaxBufferSize())
+						ir.abortStream(ctx, out, providerName, ErrResponseTooLarge)
 						return
 					}
 					if szErr := TrackStreamCost(ctx, accumulatedBytes, providerName); szErr != nil {
@@ -125,10 +131,14 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 			return ir.wrapStreamChannel(ctx, ch, req, chosen.name), nil
 		}
 
-		if ce := ClassifyWithProvider(err, chosen.name); !ce.Retryable && !ce.ShouldFallback {
+		ce := ClassifyWithProvider(err, chosen.name)
+		if !ce.Retryable && !ce.ShouldFallback {
 			slog.Warn("inference_router: non-retryable stream error during failover, aborting remaining attempts",
 				"provider", chosen.name, "reason", ce.Reason, "err", err, "tried", len(skipped)+1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamFailover: non-retryable ("+string(ce.Reason)+")", err)
+		}
+		if ce.Retryable && ce.Class == ClassRateLimit {
+			time.Sleep(DefaultBackoff().DelayWithState(len(skipped), nil))
 		}
 
 		skipped[chosen.name] = struct{}{}

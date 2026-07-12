@@ -106,15 +106,6 @@ func TestIsLoopback(t *testing.T) {
 	}
 }
 
-func TestIsAdminWrite(t *testing.T) {
-	if !isAdminWrite("POST", "/v1/plugins/install") {
-		t.Errorf("expected true")
-	}
-	if isAdminWrite("GET", "/v1/plugins/install") {
-		t.Errorf("expected false")
-	}
-}
-
 func TestLoggingResponseWriter(t *testing.T) {
 	w := httptest.NewRecorder()
 	lrw := NewLoggingResponseWriter(w)

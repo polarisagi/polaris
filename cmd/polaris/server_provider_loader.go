@@ -74,6 +74,8 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr))
 		case "anthropic":
 			reg.RegisterWithRole(name, displayName, role, llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr))
+		case "deepseek":
+			reg.RegisterWithRole(name, displayName, role, llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr))
 		case "google_agent_platform":
 			reg.RegisterWithRole(name, displayName, role, llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr))
 		case "ollama":

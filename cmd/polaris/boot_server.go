@@ -210,6 +210,10 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 			slog.Warn("polaris: RolloutStore unavailable, LogicCollapseMonitor L2 staging disabled")
 		}
 		ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
+		// [W-1-C] 接入 HeuristicsWriter
+		if ab.M9Engine != nil {
+			ab.M9Engine.SetHeuristicsWriter(newCollapseMonitorAdapter(collapseMonitor))
+		}
 		slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel",
 			"feature", probe.FeatureLogicCollapse,
 			"tier", collapseCompilerTier,
@@ -351,4 +355,19 @@ func performHotRestart(sb *SubstrateBundle) {
 		return
 	}
 	exitFunc(0)
+}
+
+type collapseMonitorAdapter struct {
+	monitor *si.LogicCollapseMonitor
+}
+
+func newCollapseMonitorAdapter(m *si.LogicCollapseMonitor) *collapseMonitorAdapter {
+	return &collapseMonitorAdapter{monitor: m}
+}
+
+func (a *collapseMonitorAdapter) RecordSuccess(taskID, taskType string) {
+	traj := &protocol.CollapseTrajectory{
+		SkillID: taskType,
+	}
+	a.monitor.RecordSuccess(context.Background(), traj, nil)
 }
