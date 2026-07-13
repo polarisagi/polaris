@@ -75,6 +75,14 @@ type M4KernelThresholds struct {
 	SnapshotRetentionCount        int     `toml:"snapshot.retention_count"`       // 5
 	ReplanExtensionActivationSecs int     `toml:"replan_extension_activation_s"`  // 3
 	SurpriseHintThreshold         float64 `toml:"surprise_hint_threshold"`        // 0.6
+
+	// PRM（ProcessRewardModel）S_PLAN 候选 DAG 选优，见 docs/arch/M04-Agent-Kernel.md §4.6。
+	// 默认关闭须显式开启（文档原文）：并发多候选打分会成倍增加 token 消耗，Operator 需明确知情后开启。
+	PRMEnabled        bool    `toml:"prm.enabled"`         // false
+	PRMComplexityGate float64 `toml:"prm.complexity_gate"` // 0.5 — 任务复杂度低于此值直接跳过，零额外开销
+	PRMMaxCandidates  int     `toml:"prm.max_candidates"`  // 3 — 文档: "研究数据显示 3 候选 ROI 最优"
+	PRMMinThreshold   float64 `toml:"prm.min_threshold"`   // 0.4 — 全部候选低于此分数时兜底取第一个候选
+	PRMScorerModel    string  `toml:"prm.scorer_model"`    // "" — 留空则沿用 Provider 默认路由，不强制指定 budget-tier 模型名
 }
 
 type M5MemoryThresholds struct {
@@ -236,6 +244,11 @@ func DefaultThresholds() Thresholds {
 			SnapshotRetentionCount:        5,
 			ReplanExtensionActivationSecs: 3,
 			SurpriseHintThreshold:         0.6,
+			PRMEnabled:                    false,
+			PRMComplexityGate:             0.5,
+			PRMMaxCandidates:              3,
+			PRMMinThreshold:               0.4,
+			PRMScorerModel:                "",
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:       30,

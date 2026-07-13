@@ -114,25 +114,29 @@ func (p *DefaultPRM) scoreCandidate(ctx context.Context, goal string, plan *type
 		goal, planToText(plan),
 	)
 
-	req := &types.InferRequest{
-		Model:       p.config.ScorerModel,
-		Messages:    []types.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   128,
-		Temperature: 0, // 打分需要确定性
-		ResponseFormat: &types.ResponseFormat{
-			Type: "json_schema",
-			JSONSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"score":  map[string]any{"type": "number", "minimum": 0, "maximum": 1},
-					"reason": map[string]any{"type": "string"},
-				},
-				"required": []string{"score", "reason"},
+	responseFormat := &types.ResponseFormat{
+		Type: "json_schema",
+		JSONSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"score":  map[string]any{"type": "number", "minimum": 0, "maximum": 1},
+				"reason": map[string]any{"type": "string"},
 			},
+			"required": []string{"score", "reason"},
 		},
 	}
 
-	resp, err := safecall.Infer(ctx, p.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	messages := []types.Message{{Role: "user", Content: prompt}}
+	opts := []types.InferOption{
+		types.WithMaxTokens(128),
+		types.WithTemperature(0), // 打分需要确定性
+		types.WithResponseFormat(responseFormat),
+	}
+	if p.config.ScorerModel != "" {
+		opts = append(opts, types.WithModel(p.config.ScorerModel))
+	}
+
+	resp, err := safecall.Infer(ctx, p.provider, messages, opts...)
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("prm: infer failed: %v", err), err)
 	}
