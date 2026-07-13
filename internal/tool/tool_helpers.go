@@ -39,6 +39,18 @@ func isShellTool(t types.Tool) bool {
 	return false
 }
 
+// hasNetworkEgressSideEffect 判断工具是否声明 SideNetworkCall 副作用
+// （tool.yaml side_effects: [network-call]）——出口污点检查（M04 §3）只对
+// 这类工具的入参生效，纯本地/只读工具不受影响。
+func hasNetworkEgressSideEffect(t types.Tool) bool {
+	for _, se := range t.SideEffects {
+		if se == types.SideNetworkCall {
+			return true
+		}
+	}
+	return false
+}
+
 // isReversible 判断工具副作用是否可逆。
 func isReversible(t types.Tool) bool {
 	if t.Capability >= types.CapWriteNetwork {

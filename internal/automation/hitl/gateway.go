@@ -10,10 +10,15 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// taintExemptionTokenTTL 豁免令牌有效期，与 HITLPrompt 10 分钟审批窗口的量级
+// 一致——豁免只覆盖"审批后立即重试"这一次，不做成长期免检通行证。
+const taintExemptionTokenTTL = 10 * time.Minute
 
 // GatewayImpl 实现了 protocol.HITL，管理人机交互网关 [ESCALATE]。
 // 架构文档: docs/arch/M13-Interface-Scheduler.md §2.4
@@ -36,6 +41,19 @@ type GatewayImpl struct {
 	evalRunner protocol.EvalRunner
 	regression RegressionDetector
 	l3Cooldown time.Duration
+
+	// exemptionVault 存放 M04 §3 TaintBlocked→HITL 审批→颁发豁免令牌 转义路径
+	// 铸造出的 TaintExemptionToken，供 tool.InMemoryToolRegistry 下一次执行
+	// 同一 Agent 的工具调用时查询。nil（未注入）时 Respond 跳过铸造，行为与
+	// 改造前完全一致（此前只有一行 TODO 注释，从不真正铸造）。
+	exemptionVault *token.ExemptionVault
+}
+
+// SetExemptionVault 注入豁免令牌存储（可选，与
+// tool.InMemoryToolRegistry.WithExemptionVault 指向同一个实例，
+// cmd/polaris/boot_tools.go 组装根构造）。
+func (g *GatewayImpl) SetExemptionVault(v *token.ExemptionVault) {
+	g.exemptionVault = v
 }
 
 var _ protocol.HITL = (*GatewayImpl)(nil)
@@ -265,10 +283,32 @@ func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response
 					}
 				}
 
-				// Task 8: Mint TaintExemptionToken on human approval
-				if p.TaintLevel > 0 {
-					slog.Info("hitl_gateway: minting TaintExemptionToken for approved high-taint operation", "checkpoint", checkpointID)
-					// TODO(Task 8): Insert token into vault or blackboard
+				// Task 8（2026-07-14 补齐）: Mint TaintExemptionToken on human approval。
+				// 此前只有日志 + TODO 注释，令牌从未真正铸造——即便 tool 层的出口污点
+				// 检查触发了 HITL 审批且人工批准，下一次重试仍会撞上同一个拦截，
+				// M04 §3 转义路径整体形同虚设。
+				//
+				// fail-closed 而非 best-effort：ExemptionFieldContent 为空（可能是
+				// 发起侧未能从错误链取出被拦截数据，或该 checkpoint 根本不是出口污点
+				// 转义场景）或未注入 exemptionVault 时，明确跳过铸造并记录原因，
+				// 不铸造一个内容为空、Valid() 对任意 data 都可能误判通过的令牌。
+				switch {
+				case p.TaintLevel <= 0:
+					// 非出口污点转义场景（其余 HITL checkpoint 类型），无需铸造。
+				case len(p.ExemptionFieldContent) == 0:
+					slog.Warn("hitl_gateway: approved high-taint checkpoint has empty ExemptionFieldContent, skipping token mint (fail-closed)",
+						"checkpoint", checkpointID, "checkpoint_type", p.CheckpointType)
+				case g.exemptionVault == nil:
+					slog.Warn("hitl_gateway: exemptionVault not configured, TaintExemptionToken minted but not stored, next retry will not find it",
+						"checkpoint", checkpointID)
+				case p.AgentID == "":
+					slog.Warn("hitl_gateway: approved high-taint checkpoint has empty AgentID, cannot key exemption vault, skipping mint (fail-closed)",
+						"checkpoint", checkpointID)
+				default:
+					tok := token.NewTaintExemptionToken(p.ExemptionFieldContent, taintExemptionTokenTTL, response.UserID)
+					g.exemptionVault.Store(p.AgentID, tok)
+					slog.Info("hitl_gateway: minted and stored TaintExemptionToken for approved high-taint operation",
+						"checkpoint", checkpointID, "agent_id", p.AgentID, "summary", tok.Summary())
 				}
 			}
 		}

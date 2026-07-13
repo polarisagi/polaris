@@ -389,13 +389,25 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 		if errors.Is(err, policy.ErrTaintBlockedEgress) && a.hitl != nil {
 			slog.Info("agent: taint egress blocked, requesting HITL exemption", "session_id", a.sCtx.SessionID)
+			// 2026-07-14 补齐：从错误链里取出被拦截的原始字节（*policy.TaintEgressBlockedError，
+			// 由 tool.InMemoryToolRegistry.checkPreExecution → CheckEgressWithExemption 产出），
+			// 随 HITLPrompt 一并送审——GatewayImpl.Respond 铸造 TaintExemptionToken 时必须对
+			// 精确匹配的字节内容计算哈希，不能用下面这行人类可读摘要代替。取不到（理论上不会
+			// 发生，因为触发条件就是这个错误类型）时留空，Respond 侧会因内容为空而跳过铸造，
+			// fail-closed，不铸造一个内容为空、可通配任意豁免检查的令牌。
+			var blockedErr *policy.TaintEgressBlockedError
+			var exemptionContent []byte
+			if errors.As(err, &blockedErr) {
+				exemptionContent = blockedErr.Data
+			}
 			hitlResp, hitlErr := a.hitl.Prompt(ctx, types.HITLPrompt{
-				ID:             fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
-				AgentID:        a.sCtx.AgentID,
-				CheckpointType: "data_exfiltration",
-				PromptText:     fmt.Sprintf("Taint egress blocked (TaintMedium+). Error: %v. Approve to mint TaintExemptionToken.", err),
-				TaintLevel:     types.TaintMedium,
-				DeadlineNs:     time.Now().Add(10 * time.Minute).UnixNano(),
+				ID:                    fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
+				AgentID:               a.sCtx.AgentID,
+				CheckpointType:        "data_exfiltration",
+				PromptText:            fmt.Sprintf("Taint egress blocked (TaintMedium+). Error: %v. Approve to mint TaintExemptionToken.", err),
+				TaintLevel:            types.TaintMedium,
+				DeadlineNs:            time.Now().Add(10 * time.Minute).UnixNano(),
+				ExemptionFieldContent: exemptionContent,
 			})
 			if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
 				// Token minted by hitl.Respond. Will retry on next plan/exec.
