@@ -24,17 +24,6 @@ const (
 	ThinkingMax ThinkingMode = "max"
 )
 
-// ReasoningEffort 跨厂商推理深度枚举（TTC）。
-// 各适配器映射: OpenAI→"low"/"medium"/"high", DeepSeek→token_budget, Claude→budget_tokens。
-type ReasoningEffort int
-
-const (
-	ReasoningEffortNone   ReasoningEffort = iota // 禁用扩展思考，走 System 1
-	ReasoningEffortLow                           // 轻量推理（~1K tokens），System 1.5
-	ReasoningEffortMedium                        // 标准推理（~8K tokens），System 2 基础
-	ReasoningEffortHigh                          // 深度推理（~32K tokens），System 2 完整
-)
-
 // StreamEventType 定义 LLM 流式输出的事件类型。
 type StreamEventType int
 

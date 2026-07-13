@@ -17,7 +17,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/configs"
-	"github.com/polarisagi/polaris/pkg/types"
 
 	"gopkg.in/yaml.v3"
 )
@@ -120,20 +119,6 @@ const (
 // 即可推送到 origin。现固定要求：commit（带 --author 署名）→ 若配置了 HITLGateway，
 // 展示 diff 摘要请求人工批准 → 批准后才 push → push 成功后尝试创建 PR（非致命）。
 // 未获批准时，改动保留在本地分支的 commit 中（不 push），由人工后续处理。
-func ParseReasoningEffort(e string) types.ReasoningEffort {
-	switch e {
-	case "low":
-		return types.ReasoningEffortLow
-	case "medium":
-		return types.ReasoningEffortMedium
-	case "high":
-		return types.ReasoningEffortHigh
-	case "ultra":
-		return types.ReasoningEffortHigh // ultra map to high
-	default:
-		return types.ReasoningEffortMedium
-	}
-}
 
 // ─── Cron 表达式解析（简化版，支持标准5字段格式 + @daily/@weekly 别名）────────
 

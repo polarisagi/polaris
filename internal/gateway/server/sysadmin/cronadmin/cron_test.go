@@ -3,29 +3,7 @@ package cronadmin
 import (
 	"testing"
 	"time"
-
-	"github.com/polarisagi/polaris/pkg/types"
 )
-
-func TestParseReasoningEffort(t *testing.T) {
-	cases := []struct {
-		in  string
-		out types.ReasoningEffort
-	}{
-		{"low", types.ReasoningEffortLow},
-		{"medium", types.ReasoningEffortMedium},
-		{"high", types.ReasoningEffortHigh},
-		{"ultra", types.ReasoningEffortHigh},
-		{"unknown", types.ReasoningEffortMedium},
-		{"", types.ReasoningEffortMedium},
-	}
-
-	for _, c := range cases {
-		if res := ParseReasoningEffort(c.in); res != c.out {
-			t.Errorf("ParseReasoningEffort(%q) = %v, expected %v", c.in, res, c.out)
-		}
-	}
-}
 
 func TestParseCronField(t *testing.T) {
 	step, fixed := parseCronField("*")
