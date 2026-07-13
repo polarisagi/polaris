@@ -20,6 +20,19 @@ type promptActivator interface {
 	Activate(ctx context.Context, taskType, id string, baselineScore float64) error
 }
 
+// MetaAuditReader 是 AdvanceGate 推进 Gate2+ 前查询 V8-S2 Meta-Eval 审计结论的
+// 消费方窄接口（HE-3：接口由调用方定义）。由 *harness.SQLiteEvalStore 结构性满足
+// （见 internal/eval/harness/store.go:LatestMetaAudit），无需适配器。
+//
+// 之所以只读一份"最新结论"而不是让 AdvanceGate 自己触发审计：审计计算必须由持有
+// meta_auditor 私钥的人工/CI 动作触发（见 analysis.MetaEvalSentinel.RunAndRecord
+// 文档），AdvanceGate 作为自动化热路径不能、也不应该越权触发这次计算——它只能
+// 消费已经产生的结论，这正是 V8-Principle"外部锚点不能被自动化机制替换"在
+// rollout 侧的落地方式。
+type MetaAuditReader interface {
+	LatestMetaAudit(ctx context.Context) (passed bool, computedAt time.Time, ok bool, err error)
+}
+
 // SQLiteRolloutStore 实现 StagingPipeline 接口，State-in-DB。
 // 架构文档: docs/arch/M09-Self-Improvement-Engine.md §2.3
 //
@@ -49,6 +62,11 @@ type SQLiteRolloutStore struct {
 	db              protocol.SQLQuerier
 	rollout         *ProgressiveRollout
 	promptActivator promptActivator // 可选：Gate 2(Shadow) 确认通过后回调激活 Prompt 候选
+
+	// V8-S2 Meta-Eval 前置检查（可选，默认关闭见 WithMetaAudit 文档）。
+	metaAuditReader      MetaAuditReader
+	metaAuditMaxAge      time.Duration
+	metaAuditGateEnabled bool
 }
 
 // NewSQLiteRolloutStore 创建 RolloutStore 并确保表存在。
@@ -66,6 +84,17 @@ func NewSQLiteRolloutStore(db protocol.SQLQuerier) (*SQLiteRolloutStore, error) 
 // 未注入时 ConfirmShadow 仅推进 Gate 状态，不激活任何 Prompt（纯 L3/L4 候选场景）。
 func (s *SQLiteRolloutStore) WithPromptActivator(a promptActivator) *SQLiteRolloutStore {
 	s.promptActivator = a
+	return s
+}
+
+// WithMetaAudit 注入 V8-S2 Meta-Eval 前置检查（可选）。enabled=false 时
+// AdvanceGate 完全跳过这项检查（配置默认值，见 M12EvalThresholds.MetaAuditGateEnabled
+// 文档：新功能需运维显式开启，避免既有部署因从未生成过 meta_audit 记录而被
+// 永久卡在 Gate2）。maxAge 为审计结论的新鲜度窗口，超过视为 stale。
+func (s *SQLiteRolloutStore) WithMetaAudit(reader MetaAuditReader, maxAge time.Duration, enabled bool) *SQLiteRolloutStore {
+	s.metaAuditReader = reader
+	s.metaAuditMaxAge = maxAge
+	s.metaAuditGateEnabled = enabled
 	return s
 }
 
@@ -201,6 +230,25 @@ func (s *SQLiteRolloutStore) AdvanceGate(ctx context.Context, version string, st
 	// Gate 1 Shadow：由 ConfirmShadow 推进到 Gate 2，此处跳过
 	if state.CurrentGate <= GateShadowExecution {
 		return state, nil
+	}
+
+	// V8-S2 Meta-Eval 前置检查（M09-Self-Improvement-Engine.md："建议在 M9 L3/L4
+	// Rollout 前调用"）——只读已持久化的最新审计结论，不在此处触发计算（见
+	// MetaAuditReader 文档）。fail-closed：结论缺失/未通过/过期，一律停在当前
+	// Gate 不推进，也不 Rollback（可能只是运维还没跑审计，不代表候选本身有问题，
+	// 不应对候选做出否定性判断）。
+	if s.metaAuditGateEnabled && s.metaAuditReader != nil {
+		passed, computedAt, ok, maErr := s.metaAuditReader.LatestMetaAudit(ctx)
+		if maErr != nil {
+			slog.Warn("rollout_store: meta_audit check errored, holding at current gate (V8-S2 fail-closed)",
+				"version", version, "err", maErr)
+			return state, nil
+		}
+		if !ok || !passed || time.Since(computedAt) > s.metaAuditMaxAge {
+			slog.Warn("rollout_store: meta_audit missing/failed/stale, holding at current gate (V8-S2 fail-closed)",
+				"version", version, "recorded", ok, "passed", passed, "computed_at", computedAt, "max_age", s.metaAuditMaxAge)
+			return state, nil
+		}
 	}
 
 	// Gate 2+：稳定期检查（24h）

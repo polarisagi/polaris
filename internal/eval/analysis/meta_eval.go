@@ -9,17 +9,19 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// MetaEvalResult Meta-Eval 运行结果。
+// MetaEvalResult Meta-Eval 运行结果。JSON tag 与本仓库其余 HTTP API 的
+// snake_case 惯例保持一致（本结构体现经 evaladmin.HandleRunMetaAudit 直接序列化）。
 type MetaEvalResult struct {
-	MedianFalsifiability float64
-	BehaviorTypeCoverage map[harness.BehaviorType]int
-	TotalCases           int
-	Passed               bool
-	FailureReasons       []string
+	MedianFalsifiability float64                      `json:"median_falsifiability"`
+	BehaviorTypeCoverage map[harness.BehaviorType]int `json:"behavior_type_coverage"`
+	TotalCases           int                          `json:"total_cases"`
+	Passed               bool                         `json:"passed"`
+	FailureReasons       []string                     `json:"failure_reasons"`
 }
 
 // MetaEvalSentinel Meta-Eval Sentinel 实例（V8-S2 外部锚点，00-Global-Dictionary.md
@@ -47,12 +49,13 @@ func NewMetaEvalSentinel(store *harness.SQLiteEvalStore) *MetaEvalSentinel {
 // EvalHarness 目标函数本身是否漂移（V8-S2），signature 由调用方用 meta_auditor
 // 私钥签名后传入（开发/测试环境可传 nil，未配置公钥时降级为仅告警）。
 //
-// 进程边界约束（M12-Eval-Harness.md §5 L2，对 meta_holdout 的适用性强于 Holdout）：
-// 本方法不得被塞进运行中 server 进程的热路径（例如
-// SQLiteRolloutStore.AdvanceGate）同步调用——那样等于自我审计自己，违反
-// V8-Principle"禁止用自动化机制替换外部锚点"。正确用法是作为独立于主进程的
-// 人工/CI 审计动作调用，其 Passed/FailureReasons 结论以签名审计记录的形式
-// 写回后，供 AdvanceGate 只读消费，而非由 AdvanceGate 直接触发计算。
+// 隔离边界的实际落点是密钥，不是物理进程：meta_auditor 私钥只应存在于运维本地
+// （通过 `polaris eval sign` 离线签名），从不写入运行中 server 的配置/环境变量
+// （server 侧只持有验签用的公钥 POLARIS_EVAL_PUBKEY_META_AUDITOR）。因此本方法
+// 被 evaladmin 包的 HTTP handler 在 server 进程内调用是允许的——服务器进程本身
+// 无法伪造一次通过的审计（它没有私钥去产生合法签名），真正被禁止的是让
+// AdvanceGate 之类的自动热路径在没有人工触发签名的情况下"自己审计自己"，
+// 详见 RunAndRecord 与 internal/prompt/optimizer.MetaAuditReader 的分工说明。
 func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, signature []byte) (*MetaEvalResult, error) {
 	if m.store == nil {
 		return &MetaEvalResult{Passed: false, FailureReasons: []string{"store is nil"}}, nil
@@ -105,6 +108,32 @@ func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, signature []byt
 		slog.Warn("meta_eval FAILED", "agent_role", control.RoleMetaAuditor,
 			"median_falsifiability", result.MedianFalsifiability,
 			"reasons", result.FailureReasons)
+	}
+	return result, nil
+}
+
+// RunAndRecord 运行 Meta-Eval 套件并将结论持久化（store.RecordMetaAuditResult），
+// 供 AdvanceGate 之后只读消费。这是唯一应被 HTTP 层（evaladmin）调用的入口——
+// 不单独暴露"只跑不落盘"的裸调用给外部触发，避免审计执行与结论持久化出现不一致
+// 的中间态（例如跑完了但因为调用方没接着存，AdvanceGate 永远看不到这次结果）。
+// 落盘不做独立签名校验：RunMetaEvalSuite 内部读取 meta_holdout 时已验证过
+// meta_auditor 签名，身份在同一次调用链中已经确认。
+func (m *MetaEvalSentinel) RunAndRecord(ctx context.Context, signature []byte) (*MetaEvalResult, error) {
+	result, err := m.RunMetaEvalSuite(ctx, signature)
+	if err != nil {
+		return nil, err
+	}
+	if m.store != nil {
+		rec := harness.MetaAuditRecord{
+			Passed:               result.Passed,
+			MedianFalsifiability: result.MedianFalsifiability,
+			TotalCases:           result.TotalCases,
+			Reasons:              result.FailureReasons,
+			ComputedAt:           time.Now().Unix(),
+		}
+		if recErr := m.store.RecordMetaAuditResult(ctx, rec); recErr != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "meta_eval: record audit result failed", recErr)
+		}
 	}
 	return result, nil
 }

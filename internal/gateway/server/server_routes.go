@@ -56,8 +56,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// mux.HandleFunc("...", s.handleSetPrompt)
 	// mux.HandleFunc("...", s.handleResetPrompt)
 
-	// M12 评测 API
-	// mux.HandleFunc("...", s.handleEvalRun)
+	// M12 评测 API — V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区）运维接口，
+	// 见 internal/gateway/server/sysadmin/evaladmin。均要求 meta_auditor 签名
+	// （GET 状态查询除外），签名由运维本地 `polaris eval sign` 离线生成。
+	mux.HandleFunc("POST /v1/eval/meta-holdout/cases", s.sysadminHandler.Eval.HandleAddMetaHoldoutCase)
+	mux.HandleFunc("POST /v1/eval/meta-audit", s.sysadminHandler.Eval.HandleRunMetaAudit)
+	mux.HandleFunc("GET /v1/eval/meta-audit", s.sysadminHandler.Eval.HandleGetMetaAuditStatus)
 
 	// 会话历史 API
 	mux.HandleFunc("GET /v1/sessions", s.chatHandler.HandleListSessions)

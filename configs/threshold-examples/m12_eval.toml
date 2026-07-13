@@ -5,3 +5,5 @@
 'shadow.sample_rate' = 0.01
 'shadow.pass_rate_threshold' = 0.95
 'shadow.min_samples' = 10
+'meta_audit.gate_enabled' = false
+'meta_audit.max_age_hours' = 168

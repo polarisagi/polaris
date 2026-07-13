@@ -325,6 +325,8 @@ func (s *Server) SetLogStore(ls *LogStore) { s.logStore = ls }
 // SetEvalRunner 注入 M12 评测套件（NewServer 之后、Start 之前调用）。
 func (s *Server) SetEvalRunner(r protocol.EvalRunner) { s.evalRunner = r }
 
+// SetEvalAdmin 见 server_setters_eval.go（R7 拆分：server_core.go 逼近 400 行上限）。
+
 // SetToolRefOffloader 注入 ToolRefOffloader 到 Compressor（NewServer 之后、Start 之前调用）。
 func (s *Server) SetToolRefOffloader(offloader chat.ToolRefOffloader) {
 	if s.compressor != nil {

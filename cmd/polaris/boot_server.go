@@ -297,6 +297,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetToolExecutor(tb.Dispatcher.Execute)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetEvalRunner(ab.EvalRunner)
+	// V8-S2 Meta-Eval Sentinel 运维接口（POST /v1/eval/meta-holdout/cases,
+	// POST|GET /v1/eval/meta-audit），见 evaladmin 包文档。
+	httpServer.SetEvalAdmin(ab.EvalStore, ab.MetaEvalSentinel)
 	httpServer.SetToolRefOffloader(tb.ToolRefOffloader)
 
 	// ─── §11.5 STT/TTS 引擎初始化（FeatureLocalSTT 门控，异步下载，不阻塞启动）

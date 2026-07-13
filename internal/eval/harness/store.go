@@ -71,6 +71,20 @@ func (s *SQLiteEvalStore) GetMetaHoldoutCases(ctx context.Context, agentRole str
 	return s.scanCasesByPrefix(ctx, "eval:case:meta_holdout:"+agentRole+":")
 }
 
+// PutMetaHoldoutCase 写入一条 meta_holdout 分区用例，要求 control.RoleMetaAuditor
+// 签名。这是 meta_holdout 唯一合法的写入路径——不同于 PutCase（供内部可信管线
+// 直接调用，本身不做鉴权），本方法面向可能被 HTTP 层暴露的场景，必须携带有效
+// 签名，否则任何持有 *SQLiteEvalStore 引用的调用方都能绕过隔离直接写入。
+func (s *SQLiteEvalStore) PutMetaHoldoutCase(ctx context.Context, c EvalCase, signature []byte) error {
+	if err := verifyEvalSignature(control.RoleMetaAuditor, control.PartitionMetaHoldout, signature); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.PutMetaHoldoutCase", err)
+	}
+	if err := s.engine.CheckAccess(control.RoleMetaAuditor, control.PartitionMetaHoldout); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.PutMetaHoldoutCase", err)
+	}
+	return s.PutCase(ctx, control.PartitionMetaHoldout, control.RoleMetaAuditor, c)
+}
+
 // PutCase 保存一个新的 EvalCase 到指定分区 (training 或 validation)。
 func (s *SQLiteEvalStore) PutCase(ctx context.Context, partition, agentRole string, c EvalCase) error {
 	validPartitions := map[string]bool{
@@ -161,6 +175,55 @@ func (s *SQLiteEvalStore) GetPassRateAvgSince(ctx context.Context, since time.Ti
 		return 0, nil
 	}
 	return totalPassRate / float64(count), nil
+}
+
+// MetaAuditRecord 是 V8-S2 Meta-Eval Sentinel 单次审计结论的持久化记录。
+// 只保留"最新一次"结论（key 固定为 "eval:meta_audit:latest"，非按版本/时间累积）——
+// MetaEvalSentinel 审计的是 EvalHarness 目标函数本身是否漂移，这是一个全局属性，
+// 不像 Training/Validation 那样需要按 candidate 版本区分。
+type MetaAuditRecord struct {
+	Passed               bool
+	MedianFalsifiability float64
+	TotalCases           int
+	Reasons              []string
+	ComputedAt           int64 // unix 秒
+}
+
+const metaAuditLatestKey = "eval:meta_audit:latest"
+
+// RecordMetaAuditResult 持久化最新一次 Meta-Eval 审计结论，供 AdvanceGate 只读消费。
+// 不做独立签名校验——调用方（MetaEvalSentinel.RunAndRecord）在写入前已通过
+// GetMetaHoldoutCases 的签名校验成功读取过 meta_holdout，身份已在同一次调用链中
+// 验证过，无需重复校验。
+func (s *SQLiteEvalStore) RecordMetaAuditResult(ctx context.Context, rec MetaAuditRecord) error {
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.RecordMetaAuditResult", err)
+	}
+	if err := s.store.Put(ctx, []byte(metaAuditLatestKey), data); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.RecordMetaAuditResult: store put failed", err)
+	}
+	return nil
+}
+
+// LatestMetaAudit 读取最新一次 Meta-Eval 审计结论。ok=false 表示从未审计过
+// （尚未配置/运行过 meta_holdout 审计流程）。本方法故意不做签名校验——返回的只是
+// pass/fail 摘要，不暴露 meta_holdout 原始用例数据，供 AdvanceGate/运维状态查询
+// 等进程内场景自由调用；结构上满足 internal/prompt/optimizer.MetaAuditReader
+// 消费方接口（HE-3：接口由调用方定义），无需适配器。
+func (s *SQLiteEvalStore) LatestMetaAudit(ctx context.Context) (passed bool, computedAt time.Time, ok bool, err error) {
+	val, getErr := s.store.Get(ctx, []byte(metaAuditLatestKey))
+	if getErr != nil {
+		return false, time.Time{}, false, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.LatestMetaAudit", getErr)
+	}
+	if val == nil {
+		return false, time.Time{}, false, nil
+	}
+	var rec MetaAuditRecord
+	if jsonErr := json.Unmarshal(val, &rec); jsonErr != nil {
+		return false, time.Time{}, false, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.LatestMetaAudit: unmarshal", jsonErr)
+	}
+	return rec.Passed, time.Unix(rec.ComputedAt, 0), true, nil
 }
 
 // verifyEvalSignature 校验 agentRole 对 payload 的 Ed25519 签名。
