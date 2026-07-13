@@ -9,10 +9,28 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// headlessPromptGuard 供 AcquireHeadless（Cron/Workflow/Webhook 触发路径的唯一
+// 收敛入口）扫描 finalOutput，堵住 M11 §2.2 六阶段出站防护流水线此前完全未覆盖
+// 的一段——SSE 交互路径（gateway/server/chat/sse.go）早已接入 SystemPromptGuard，
+// 但 headless 路径此前从未调用，Cron/Workflow/Webhook 触发的响应对系统提示词
+// 逐字泄露（OWASP LLM07）完全不设防。headless 场景不像 SSE 有逐会话的 M9 GEPA
+// 激活提示词可注册，只注册内核阶段模板（guard.KernelPromptFragments，见该函数
+// 注释）——这是"系统提示词"的静态主体，覆盖面已经是此前的从 0 到有。
+// 用 sync.OnceValue 构造单例：SystemPromptGuard 本身线程安全（Scan/AddFragment
+// 均有锁），跨请求复用避免每次 AcquireHeadless 都重新注册相同的静态片段。
+var headlessPromptGuard = sync.OnceValue(func() *guard.SystemPromptGuard { //nolint:gochecknoglobals // sync.OnceValue 懒加载单例，SystemPromptGuard 内部自带锁，无外部可变状态
+	g := guard.NewSystemPromptGuard(0)
+	for _, frag := range guard.KernelPromptFragments() {
+		g.AddFragment(frag)
+	}
+	return g
+})
 
 // KillSwitchGate agent 包对系统级三阶段熔断状态的消费端接口（HE-3：接口在调用方定义）。
 // 实现：security.KillSwitch（通过 Pool.WithKillSwitchGate 注入，nil 时不做任何熔断检查，
@@ -224,6 +242,15 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 		if ev.Type == types.AgentStreamEventToken {
 			finalOutput += ev.Content
 		}
+	}
+
+	// [W-2-B] SystemPromptGuard：headless 路径一次性扫描完整 finalOutput（不像
+	// SSE 逐 chunk 扫描那样需要处理跨 chunk 边界问题——这里已经是拼接完成的
+	// 全量文本），redact=true 净化后继续返回，不中断 Cron/Workflow/Webhook 自动化。
+	if cleaned, scanErr := headlessPromptGuard().Scan(finalOutput, true); scanErr == nil {
+		finalOutput = cleaned
+	} else {
+		slog.Warn("agent pool: system prompt guard scan failed on headless output", "session", sessionID, "err", scanErr)
 	}
 
 	return &types.AgentResult{

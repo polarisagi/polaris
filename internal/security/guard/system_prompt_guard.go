@@ -1,9 +1,11 @@
 package guard
 
 import (
+	"log/slog"
 	"strings"
 	"sync"
 
+	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -36,6 +38,33 @@ func NewSystemPromptGuard(tokenThreshold int) *SystemPromptGuard {
 	}
 	return &SystemPromptGuard{tokenThreshold: tokenThreshold}
 }
+
+// KernelPromptFragments 返回 FSM 内核阶段模板（perceive.md/plan.md/reflect.md）的
+// 原始文本（未渲染占位符，LoadPromptTemplate(name, nil) 只解析不执行），供调用方
+// 注册进 SystemPromptGuard——这是"系统提示词"真正的主体，覆盖 S_PERCEIVE/S_PLAN/
+// S_REFLECT 全部 LLM 调用，与调用方各自可能持有的动态提示词（如 M9 GEPA 激活提示词）
+// 是两类不同来源，应一起注册。SSE 交互路径（gateway/server/chat/sse.go）与
+// headless 路径（agent.Pool.AcquireHeadless）共用此函数，避免各自维护一份模板名单
+// 与缓存逻辑（此前只有 SSE 路径注册了动态提示词，headless 路径完全未接入，是
+// M11 §2.2 六阶段出站防护流水线里真正未覆盖的那一段——OWASP LLM07 防护对
+// Cron/Workflow/Webhook 触发的响应完全不设防）。
+// 用 sync.OnceValue 懒加载 + 进程级缓存，避免每次调用都重复读 embed FS；模板
+// 占位符（{{ToolsSection}} 等）不影响窗口匹配——detectAndRedact 按 tokenThreshold
+// 连续词窗口比对，静态指令文本片段仍可命中。
+var KernelPromptFragments = sync.OnceValue(func() []string { //nolint:gochecknoglobals // sync.OnceValue 懒加载只读片段缓存，无可变状态；跨包共享单一加载逻辑（见上方注释）
+	names := []string{"kernel/perceive.md", "kernel/plan.md", "kernel/reflect.md"}
+	frags := make([]string, 0, len(names))
+	for _, name := range names {
+		raw, err := configs.LoadPromptTemplate(name, nil)
+		if err != nil {
+			slog.Warn("guard: failed to load kernel prompt template for SystemPromptGuard fragment registration",
+				"template", name, "err", err)
+			continue
+		}
+		frags = append(frags, raw)
+	}
+	return frags
+})
 
 // AddFragment 向系统提示池注册一段系统提示文本。
 // 启动时由 M4 Agent.Run 将 systemPrompt 内容注册进来。
