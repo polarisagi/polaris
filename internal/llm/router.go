@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -17,11 +18,12 @@ import (
 // InferenceRouter 实现 protocol.Provider，对上层透明地完成多厂商路由。
 // 架构文档: docs/arch/M01-Inference-Runtime.md §4
 type InferenceRouter struct {
-	registry     *ProviderRegistry
-	rateTracker  *RateLimitTracker
-	client       *http.Client
-	outboxWriter protocol.OutboxWriter
-	governor     LLMGovernor
+	registry      *ProviderRegistry
+	rateTracker   *RateLimitTracker
+	client        *http.Client
+	outboxWriter  protocol.OutboxWriter
+	governor      LLMGovernor
+	semanticCache *search.SemanticCache
 }
 
 // LLMGovernor 用于限流 LLM 请求 (P0-3)
@@ -36,6 +38,12 @@ type RouterOption func(*InferenceRouter)
 func WithGovernor(gov LLMGovernor) RouterOption {
 	return func(ir *InferenceRouter) {
 		ir.governor = gov
+	}
+}
+
+func WithSemanticCache(cache *search.SemanticCache) RouterOption {
+	return func(ir *InferenceRouter) {
+		ir.semanticCache = cache
 	}
 }
 
@@ -106,6 +114,33 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 	}
 
 	normalizeInferRequest(req)
+
+	var ckey search.CacheKey
+	var useCache bool
+	if ir.semanticCache != nil && options.CacheHints != nil {
+		msgStrs := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			msgStrs = append(msgStrs, m.Role+":"+m.Content)
+		}
+		ckey = search.CacheKey{
+			ContextHintFingerprint: options.CacheHints.ContextHintFingerprint,
+			ActiveControlLabels:    options.CacheHints.ActiveControlLabels,
+			TaskType:               options.CacheHints.TaskType,
+			Messages:               msgStrs,
+		}
+		if respStr, hit := ir.semanticCache.Get(ckey); hit {
+			return &types.ProviderResponse{
+				Content: respStr,
+				Usage: types.Usage{
+					CacheHitTokens: req.MaxTokens, // Approximation as we don't have exact token count here
+				},
+				Model:        "semantic_cache",
+				FinishReason: "stop",
+			}, nil
+		}
+		useCache = true
+	}
+
 	entry := ir.registry.best(req)
 	if entry == nil {
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed)
@@ -169,6 +204,10 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		// 不存在观测缺口。ADR-0029 §H 曾计划将此处的裸 goroutine 迁移到 SafeGo 并
 		// 改经 event_buffer.go 批处理，但该 EventWriteBuffer 已确认零接线并删除，
 		// 原计划的落地目标已不存在，遂一并清理。
+
+		if useCache && len(resp.ToolCalls) == 0 {
+			_ = ir.semanticCache.Put(ckey, resp.Content, resp.Model)
+		}
 	}
 	return resp, nil
 }

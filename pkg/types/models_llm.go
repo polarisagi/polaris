@@ -145,6 +145,18 @@ InferOptions struct {
 	TopP            float64
 	ReasoningEffort ReasoningEffort
 	ThinkingBudget  int
+	CacheHints      *SemanticCacheHints
+}
+
+type
+
+// SemanticCacheHints 语义缓存键值元数据。
+SemanticCacheHints struct {
+	Namespace              string
+	SystemPromptHash       string
+	ContextHintFingerprint string
+	ActiveControlLabels    []string
+	TaskType               string
 }
 
 type
@@ -167,4 +179,9 @@ ProviderResponse struct {
 // WithResponseFormat 设置响应格式
 func WithResponseFormat(fmt *ResponseFormat) InferOption {
 	return func(o *InferOptions) { o.ResponseFormat = fmt }
+}
+
+// WithSemanticCacheHints 设置语义缓存提示
+func WithSemanticCacheHints(hints *SemanticCacheHints) InferOption {
+	return func(o *InferOptions) { o.CacheHints = hints }
 }
