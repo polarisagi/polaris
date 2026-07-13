@@ -310,8 +310,13 @@ func (s *ChatHandler) handleAgentStreamFSM(
 	agentCtrl protocol.AgentController,
 	input string,
 ) (string, string, bool) {
-	// [W-2-A] 接入 SystemPromptGuard
+	// [W-2-A] 接入 SystemPromptGuard——同时注册 FSM 内核阶段模板（静态指令主体）
+	// 与 ActivatedSystemPrompt（M9 GEPA 动态激活提示词，可能为空），覆盖两类
+	// "系统提示词"来源，不只挡后者。
 	systemPromptGuard := guard.NewSystemPromptGuard(0)
+	for _, frag := range guard.KernelPromptFragments() {
+		systemPromptGuard.AddFragment(frag)
+	}
 	s.ActivatedSystemPromptMu.RLock()
 	systemPromptGuard.AddFragment(s.ActivatedSystemPrompt)
 	s.ActivatedSystemPromptMu.RUnlock()
