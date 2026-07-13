@@ -32,12 +32,25 @@ const (
 	PartitionTraining   = "training"
 	PartitionValidation = "validation"
 	PartitionHoldout    = "holdout"
+
+	// PartitionMetaHoldout 是比 Holdout 隔离级别更高的专属分区（V8-S2 Meta-Eval
+	// Sentinel 使用），密钥与 Holdout 分离——审计"EvalHarness 目标函数是否漂移"
+	// 这件事本身，不能用被审计对象也能触达的数据。不属于 DataSplitter 的四来源
+	// 自动路由范围：只能由持有 RoleMetaAuditor 私钥的人工/CI 流程显式写入，
+	// 禁止 SourceSynthetic/SourceIncident/SourceShadow 自动流入（00-Global-
+	// Dictionary.md §V8-Principle："禁止用自动化机制替换外部锚点"）。
+	PartitionMetaHoldout = "meta_holdout"
 )
 
 // AgentRole 标识调用方身份（M12 §5 L1）。
 const (
 	RoleM9Optimizer = "m9_optimizer" // M9 自演化引擎
 	RoleCIGate      = "ci_gate"      // CI/Canary 进程外运行器
+
+	// RoleMetaAuditor 是 meta_holdout 分区的唯一合法调用方身份（V8-S2）。
+	// 私钥仅由仓库维护者持有，不得出现在运行中 server 进程的环境变量/配置里；
+	// M9(m9_optimizer)/ci_gate 均不在 meta_holdout 的访问白名单内。
+	RoleMetaAuditor = "meta_auditor"
 )
 
 // sigReplayWindowSec 是 Ed25519 请求签名允许的最大时钟偏差（秒）。
@@ -123,6 +136,9 @@ func NewEngine(pubKeys map[string]ed25519.PublicKey) *Engine {
 			},
 			RoleCIGate: {
 				PartitionHoldout: {},
+			},
+			RoleMetaAuditor: {
+				PartitionMetaHoldout: {},
 			},
 		},
 	}

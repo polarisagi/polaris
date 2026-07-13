@@ -22,8 +22,8 @@ func (m *mockSQLiteStore) Scan(ctx context.Context, prefix []byte) (protocol.Ite
 func TestMetaEvalSentinel(t *testing.T) {
 	s := NewMetaEvalSentinel(harness.NewSQLiteEvalStore(&mockSQLiteStore{}, control.NewEngine(nil)))
 
-	// Empty store should fail
-	res, err := s.RunMetaEvalSuite(context.Background(), "m9_optimizer")
+	// Empty store should fail. signature=nil + 未注册 meta_auditor 公钥 → 开发模式仅告警放行。
+	res, err := s.RunMetaEvalSuite(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestMetaEvalSentinel(t *testing.T) {
 	s.store = harness.NewSQLiteEvalStore(store, control.NewEngine(nil))
 
 	// We only have 1 of each behavior type, but min required is 3, so it should fail
-	res, err = s.RunMetaEvalSuite(context.Background(), "m9_optimizer")
+	res, err = s.RunMetaEvalSuite(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +53,36 @@ func TestMetaEvalSentinel(t *testing.T) {
 	if res.MedianFalsifiability != 0.8 {
 		t.Errorf("expected 0.8 median falsifiability, got %v", res.MedianFalsifiability)
 	}
+}
+
+// TestMetaEvalSentinel_ReadsMetaHoldoutNotValidation [V8-S2]
+//
+// 回归防护：曾经的 bug 是 RunMetaEvalSuite 误读 validation 分区（M9 可访问），
+// 而不是隔离级别更高的 meta_holdout 分区。用记录 Scan 前缀的 mock 断言实际扫描
+// key 落在 "eval:case:meta_holdout:" 命名空间下，且调用身份为 control.RoleMetaAuditor
+// （而不是 "eval:case:validation:"/RoleM9Optimizer）。
+func TestMetaEvalSentinel_ReadsMetaHoldoutNotValidation(t *testing.T) {
+	prefixStore := &prefixCapturingStore{}
+	s := NewMetaEvalSentinel(harness.NewSQLiteEvalStore(prefixStore, control.NewEngine(nil)))
+
+	if _, err := s.RunMetaEvalSuite(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	wantPrefix := "eval:case:meta_holdout:" + control.RoleMetaAuditor + ":"
+	if prefixStore.gotPrefix != wantPrefix {
+		t.Errorf("expected scan prefix %q, got %q (meta_eval must not read validation/holdout)", wantPrefix, prefixStore.gotPrefix)
+	}
+}
+
+type prefixCapturingStore struct {
+	protocol.Store
+	gotPrefix string
+}
+
+func (p *prefixCapturingStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterator, error) {
+	p.gotPrefix = string(prefix)
+	return &mockIterator{}, nil
 }
 
 func TestMedianF64(t *testing.T) {
