@@ -18,7 +18,10 @@
 - ambient skill 注入上限 4000 字符; 超限按 trust_tier 降序截断
 
 **文件索引**:
-- [**总入口**] `bus/bus.go`: ExtensionBus (统一扩展总线：安装、激活、卸载。AI 查代码**首选入口**)
+- [**总入口**] `marketplace/manager.go`: `Manager.InstallExtension`（唯一安装网关，见上方硬约束1；
+  2026-07-13 deadcode 复核确认 `bus/bus.go` 的 `ExtensionBus`/`ExtensionFacade` 从未被任何调用方
+  使用——全部真实调用点均直接走本文件，与本文档§硬约束1、`M13-bis-Extension-Registry.md §6`
+  描述一致——已删除，AI 查代码请以此为准，不要再找 bus/facade）
 - [标杆] `native/extension_manager.go`: 原生工具 (InstallExtensionFn)
 - [参照] `marketplace/adapter.go`: 多厂商清单解析 (OpenAI/Anthropic/Google→RegistryEntry)
 - [参照] `marketplace/loader.go`: Polaris 原生格式解析
