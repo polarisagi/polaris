@@ -114,8 +114,10 @@ func (c *DefaultChunker) Chunk(content, sourceType string) []string {
 	case "md", "markdown":
 		strategy = &MarkdownChunker{} // Fix from GoldmarkChunker
 	case "pdf":
-		// 如果没有 PDFChunker，回退到 PlainTextChunker
-		strategy = &PlainTextChunker{}
+		// PDFChunker（parsers.go，pdfcpu 提取正文）解析失败/空文本时自身已降级为
+		// PlainTextChunker，此处无需再判空回退（deadcode 复核 2026-07-13 发现原路由
+		// 从未接入 PDFChunker，PDF 文档实际一直被当作原始字节做纯文本分块）。
+		strategy = &PDFChunker{}
 	case "go", "py", "python", "js", "ts", "javascript", "typescript", "java", "cpp", "c", "rs", "rust":
 		strategy = &CodeChunker{}
 	default:
