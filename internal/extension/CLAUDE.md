@@ -23,8 +23,11 @@
   使用——全部真实调用点均直接走本文件，与本文档§硬约束1、`M13-bis-Extension-Registry.md §6`
   描述一致——已删除，AI 查代码请以此为准，不要再找 bus/facade）
 - [标杆] `native/extension_manager.go`: 原生工具 (InstallExtensionFn)
-- [参照] `marketplace/adapter.go`: 多厂商清单解析 (OpenAI/Anthropic/Google→RegistryEntry)
-- [参照] `marketplace/loader.go`: Polaris 原生格式解析
+- [参照] `marketplace/adapter.go`: 多厂商清单解析 (OpenAI/Anthropic/Google→RegistryEntry)；
+  mcp.json 解析 (loadMCPConfig/parseFlatMCPConfig) 亦收敛于此（2026-07-13 deadcode 复核：
+  原 `marketplace/loader.go` 的 SKILL.md 解析/Registry 内存注册表/GetPlugin Codex 插件树
+  确认零生产调用点已删除——native 格式 Skill 由 `skill/skill_creator.go` 直接构造
+  types.SkillMeta，不经该解析器回读；安装状态 SSoT 见下方 manager.go，不依赖内存 Registry）
 - [参照] `marketplace/manager.go`: 市场同步 + 安装协调
 - [参照] `mcp/mcp_manager.go`: MCP 进程连接管理
 - [参照] `mcp/env.go`: sanitizeParentEnv (MCP 子进程环境净化)

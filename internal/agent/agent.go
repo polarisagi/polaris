@@ -63,10 +63,10 @@ type Agent struct {
 	lamEngine         LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
 	surpriseCalc      SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
 	terminalCallback  func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
-	tokenVault        *guard.PIITokenVault // PII OpaqueToken 会话级可逆令牌库
-	piiDetector       *guard.PIIDetector   // PII 检测与脱敏器
-	dagRunner         DAGRunner            // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
-	dagValidator      DAGValidator         // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
+	tokenVault        *guard.PIITokenVault     // PII OpaqueToken 会话级可逆令牌库
+	piiDetector       *guard.PIIDetector       // PII 检测与脱敏器
+	dagRunner         DAGRunner                // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
+	dagValidator      DAGValidator             // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
 	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 
 	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine

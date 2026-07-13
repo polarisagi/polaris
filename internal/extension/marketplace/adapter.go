@@ -9,8 +9,11 @@ package marketplace
 //   - Anthropic .claude-plugin/plugin.json（Claude 原生 Bundle）
 //   - Google    skills.yaml / agent-manifest.yaml
 //
-// Polaris 原生格式（SKILL.md / plugin.json / mcp.json）由 loader.go 负责，
-// 此文件不重复处理，避免 discoverMarketplaceEntries Walk 产生重复条目。
+// mcp.json 解析（loadMCPConfig/parseFlatMCPConfig）见本文件末尾——原属 loader.go，
+// 该文件其余部分（SKILL.md 解析 / Registry 内存注册表 / Codex 插件树 GetPlugin）
+// 2026-07-13 deadcode 复核确认零生产调用点已删除，唯独 loadMCPConfig 被本文件
+// GetMCPConfig 使用（生产调用方：gateway/server/plugin/catalog_download.go），
+// 故随 GetMCPConfig 一并保留、迁移至此。
 
 import (
 	"encoding/json"
@@ -22,6 +25,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ParseManifestDir 探测 dir 中所有已知的外部厂商清单格式并返回 RegistryEntry 列表。
@@ -240,3 +244,55 @@ func parseAppJSON(dir, baseID string, mp protocol.Marketplace) []protocol.Regist
 // parseGoogleYAML（Google Agent Skills）、PackageJSON/parsePackageJSON、
 // PyProjectTOML/parsePyProjectTOML（npm/PyPI 依赖启发式推导）见
 // adapter_heuristic.go（R7 拆分）。
+
+// ─── mcp.json 解析（原 loader.go，随 GetMCPConfig 迁移保留）───────────────────
+
+// loadMCPConfig 读取并解析 .mcp.json：优先 mcpServers（驼峰）/mcp_servers（下划线）
+// 键，两者皆空时降级尝试扁平格式（server_name 直接作为根键，见 parseFlatMCPConfig）。
+func loadMCPConfig(path string) (*protocol.MCPConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "loadMCPConfig", err)
+	}
+	var c protocol.MCPConfig
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "loadMCPConfig", err)
+	}
+	if c.MCPServers == nil {
+		c.MCPServers = make(map[string]protocol.MCPServerDef)
+	}
+	for k, v := range c.MCPServersSnake {
+		c.MCPServers[k] = v
+	}
+
+	if len(c.MCPServers) == 0 {
+		if flat := parseFlatMCPConfig(data); flat != nil {
+			c.MCPServers = flat
+		}
+	}
+	return &c, nil
+}
+
+// parseFlatMCPConfig 兼容"根对象直接是 server_name → def 映射"的扁平格式
+// （无 mcpServers/mcp_servers 包裹层）。
+func parseFlatMCPConfig(data []byte) map[string]protocol.MCPServerDef {
+	var flat map[string]protocol.MCPServerDef
+	if json.Unmarshal(data, &flat) != nil {
+		return nil
+	}
+	// 过滤掉 JSON 根对象中非 MCPServerDef 的字段（如 "mcpServers" 本身为空时）
+	filtered := make(map[string]protocol.MCPServerDef, len(flat))
+	for k, v := range flat {
+		if k == "mcpServers" || k == "mcp_servers" {
+			continue // 标准 key，不视为服务器名
+		}
+		// 有效的服务器定义：必须有 command（stdio）或 url（HTTP/SSE）
+		if v.Command != "" || v.URL != "" {
+			filtered[k] = v
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return nil
+}

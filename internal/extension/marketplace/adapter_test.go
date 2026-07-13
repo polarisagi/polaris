@@ -8,6 +8,62 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
+// TestGetMCPConfig 原属 loader_test.go（随 loadMCPConfig 2026-07-13 deadcode
+// 复核一并迁移至 adapter.go，见该文件迁移说明）。
+func TestGetMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("Normal", func(t *testing.T) {
+		path := filepath.Join(dir, "mcp1.json")
+		content := `{
+			"mcpServers": {
+				"server1": {"command": "cmd1"}
+			}
+		}`
+		os.WriteFile(path, []byte(content), 0644)
+		cfg, err := loadMCPConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.MCPServers) != 1 || cfg.MCPServers["server1"].Command != "cmd1" {
+			t.Errorf("unexpected config: %+v", cfg.MCPServers)
+		}
+	})
+
+	t.Run("Snake", func(t *testing.T) {
+		path := filepath.Join(dir, "mcp2.json")
+		content := `{
+			"mcp_servers": {
+				"server2": {"command": "cmd2"}
+			}
+		}`
+		os.WriteFile(path, []byte(content), 0644)
+		cfg, err := loadMCPConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.MCPServers) != 1 || cfg.MCPServers["server2"].Command != "cmd2" {
+			t.Errorf("unexpected config: %+v", cfg.MCPServers)
+		}
+	})
+
+	t.Run("Flat", func(t *testing.T) {
+		path := filepath.Join(dir, "mcp3.json")
+		content := `{
+			"server3": {"command": "cmd3"},
+			"server4": {"url": "http://loc"}
+		}`
+		os.WriteFile(path, []byte(content), 0644)
+		cfg, err := loadMCPConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.MCPServers) != 2 || cfg.MCPServers["server3"].Command != "cmd3" {
+			t.Errorf("unexpected config: %+v", cfg.MCPServers)
+		}
+	})
+}
+
 func TestParseManifestDir_AIPlugin(t *testing.T) {
 	dir := t.TempDir()
 	content := `{
