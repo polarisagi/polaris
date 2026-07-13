@@ -66,14 +66,13 @@ func (a *OllamaAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 		opt(options)
 	}
 	req := &types.InferRequest{
-		Messages:        msgs,
-		Model:           options.Model,
-		MaxTokens:       options.MaxTokens,
-		Tools:           options.Tools,
-		ThinkingMode:    options.ThinkingMode,
-		Temperature:     options.Temperature,
-		ResponseFormat:  options.ResponseFormat,
-		ReasoningEffort: options.ReasoningEffort,
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
 	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = a.model
@@ -114,14 +113,13 @@ func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 		opt(options)
 	}
 	req := &types.InferRequest{
-		Messages:        msgs,
-		Model:           options.Model,
-		MaxTokens:       options.MaxTokens,
-		Tools:           options.Tools,
-		ThinkingMode:    options.ThinkingMode,
-		Temperature:     options.Temperature,
-		ResponseFormat:  options.ResponseFormat,
-		ReasoningEffort: options.ReasoningEffort,
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
 	}
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = a.model

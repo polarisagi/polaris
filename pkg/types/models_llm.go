@@ -51,16 +51,15 @@ ImagePart struct {
 	Detail    string // "low" | "high" | "auto"，空串等同 "auto"
 }
 type InferRequest struct {
-	Model           string
-	Messages        []Message
-	Tools           []ToolSchema
-	MaxTokens       int
-	Temperature     float64
-	Thinking        *ThinkingConfig
-	ResponseFormat  *ResponseFormat // 支持强制 JSON Schema / GBNF 等结构化约束
-	ReasoningEffort ReasoningEffort
-	ThinkingMode    ThinkingMode // TTC 推理深度控制（None=不传，High=最大扩展思考）
-	ThinkingBudget  int
+	Model          string
+	Messages       []Message
+	Tools          []ToolSchema
+	MaxTokens      int
+	Temperature    float64
+	Thinking       *ThinkingConfig
+	ResponseFormat *ResponseFormat // 支持强制 JSON Schema / GBNF 等结构化约束
+	ThinkingMode   ThinkingMode    // TTC 推理深度控制（None=不传，High=最大扩展思考）
+	ThinkingBudget int
 }
 
 func (req *InferRequest) HasImageParts() bool {
@@ -136,16 +135,15 @@ type
 
 // InferOptions Provider 调用的可选参数集合。
 InferOptions struct {
-	ThinkingMode    ThinkingMode // 默认 ThinkingDisabled
-	MaxTokens       int          // 0 = 使用模型默认值
-	Model           string
-	Tools           []ToolSchema
-	ResponseFormat  *ResponseFormat
-	Temperature     float64
-	TopP            float64
-	ReasoningEffort ReasoningEffort
-	ThinkingBudget  int
-	CacheHints      *SemanticCacheHints
+	ThinkingMode   ThinkingMode // 默认 ThinkingDisabled
+	MaxTokens      int          // 0 = 使用模型默认值
+	Model          string
+	Tools          []ToolSchema
+	ResponseFormat *ResponseFormat
+	Temperature    float64
+	TopP           float64
+	ThinkingBudget int
+	CacheHints     *SemanticCacheHints
 }
 
 type

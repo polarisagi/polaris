@@ -14,7 +14,6 @@ func TestInferOptions(t *testing.T) {
 		types.WithModel("test-model"),
 		types.WithTemperature(0.5),
 		types.WithTopP(0.9),
-		types.WithReasoningEffort(types.ReasoningEffortMedium),
 	})
 
 	if opts.ThinkingMode != "fast" {
@@ -34,9 +33,6 @@ func TestInferOptions(t *testing.T) {
 	}
 	if opts.TopP != 0.9 {
 		t.Errorf("Expected 0.9, got %v", opts.TopP)
-	}
-	if opts.ReasoningEffort != types.ReasoningEffortMedium {
-		t.Errorf("Expected medium, got %v", opts.ReasoningEffort)
 	}
 }
 

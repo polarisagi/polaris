@@ -81,14 +81,13 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 		opt(options)
 	}
 	req := &types.InferRequest{
-		Messages:        msgs,
-		Model:           options.Model,
-		MaxTokens:       options.MaxTokens,
-		Tools:           options.Tools,
-		ThinkingMode:    options.ThinkingMode,
-		Temperature:     options.Temperature,
-		ResponseFormat:  options.ResponseFormat,
-		ReasoningEffort: options.ReasoningEffort,
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
 	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {
@@ -192,14 +191,13 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 		opt(options)
 	}
 	req := &types.InferRequest{
-		Messages:        msgs,
-		Model:           options.Model,
-		MaxTokens:       options.MaxTokens,
-		Tools:           options.Tools,
-		ThinkingMode:    options.ThinkingMode,
-		Temperature:     options.Temperature,
-		ResponseFormat:  options.ResponseFormat,
-		ReasoningEffort: options.ReasoningEffort,
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
 	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {

@@ -186,8 +186,3 @@ func WithTemperature(temp float64) InferOption {
 func WithTopP(topP float64) InferOption {
 	return func(o *InferOptions) { o.TopP = topP }
 }
-
-// WithReasoningEffort 设置思考深度
-func WithReasoningEffort(effort ReasoningEffort) InferOption {
-	return func(o *InferOptions) { o.ReasoningEffort = effort }
-}

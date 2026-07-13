@@ -117,15 +117,14 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 		opt(options)
 	}
 	req := &types.InferRequest{
-		Messages:        msgs,
-		Model:           options.Model,
-		MaxTokens:       options.MaxTokens,
-		Tools:           options.Tools,
-		ThinkingMode:    options.ThinkingMode,
-		Temperature:     options.Temperature,
-		ResponseFormat:  options.ResponseFormat,
-		ReasoningEffort: options.ReasoningEffort,
-		ThinkingBudget:  options.ThinkingBudget,
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
+		ThinkingBudget: options.ThinkingBudget,
 	}
 	body, err := a.buildAnthropicRequest(req, false)
 	if err != nil {
@@ -227,15 +226,14 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 		opt(options)
 	}
 	req := &types.InferRequest{
-		Messages:        msgs,
-		Model:           options.Model,
-		MaxTokens:       options.MaxTokens,
-		Tools:           options.Tools,
-		ThinkingMode:    options.ThinkingMode,
-		Temperature:     options.Temperature,
-		ResponseFormat:  options.ResponseFormat,
-		ReasoningEffort: options.ReasoningEffort,
-		ThinkingBudget:  options.ThinkingBudget,
+		Messages:       msgs,
+		Model:          options.Model,
+		MaxTokens:      options.MaxTokens,
+		Tools:          options.Tools,
+		ThinkingMode:   options.ThinkingMode,
+		Temperature:    options.Temperature,
+		ResponseFormat: options.ResponseFormat,
+		ThinkingBudget: options.ThinkingBudget,
 	}
 	body, err := a.buildAnthropicRequest(req, true)
 	if err != nil {

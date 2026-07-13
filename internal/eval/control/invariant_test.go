@@ -35,9 +35,8 @@ func TestInvariant5_SeparationOfConcerns(t *testing.T) {
 	t.Run("M4_M1_InferRequest_InferResponse", func(t *testing.T) {
 		// 构造 InferRequest，验证关键字段存在
 		req := &types.InferRequest{
-			Messages:        []types.Message{{Role: "user", Content: "test"}},
-			MaxTokens:       1024,
-			ReasoningEffort: types.ReasoningEffortMedium,
+			Messages:  []types.Message{{Role: "user", Content: "test"}},
+			MaxTokens: 1024,
 		}
 		if len(req.Messages) == 0 {
 			t.Error("[HE-Rule-5] InferRequest.Messages 字段缺失")
@@ -45,7 +44,6 @@ func TestInvariant5_SeparationOfConcerns(t *testing.T) {
 		if req.MaxTokens == 0 {
 			t.Error("[HE-Rule-5] InferRequest.MaxTokens 字段缺失")
 		}
-		_ = req.ReasoningEffort
 
 		// InferResponse 字段完整性
 		resp := &types.InferResponse{
