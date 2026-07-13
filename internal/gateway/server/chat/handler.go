@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -56,6 +57,11 @@ type ChatHandler struct {
 	// Embedder 语义向量化引擎（nil = Tier 1 词元重叠降级）。
 	// 由 boot_server.go 通过 SetEmbedder 注入；聊天主流程不依赖此字段，可安全为 nil。
 	Embedder search.Embedder
+
+	// PersonaRefiner 用户画像精炼器（M05 §2.3），与 internal/agent 共享同一进程级
+	// 单例。由 boot_server.go 通过 Server.SetPersonaRefiner 注入；nil 时
+	// InjectSystemPrompt 跳过用户偏好画像注入（与 Embedder 同一防御风格）。
+	PersonaRefiner *agentctx.PersonaRefiner
 
 	// EmbedThreshold Tier 2 余弦相似度阈值（默认 0.60，由 cfg.Embedding.Threshold 注入）。
 	EmbedThreshold float64

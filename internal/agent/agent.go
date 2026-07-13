@@ -67,6 +67,7 @@ type Agent struct {
 	piiDetector       *guard.PIIDetector   // PII 检测与脱敏器
 	dagRunner         DAGRunner            // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
 	dagValidator      DAGValidator         // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
+	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 
 	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine
 	// 向主循环传递重定向意图字符串，避免直接写 sCtx.RawIntentTS 的数据竞争。
