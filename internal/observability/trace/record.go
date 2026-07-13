@@ -126,12 +126,6 @@ func RecordTaskOutcome(_ context.Context, success bool) {
 
 // ── 运行态控制 ─────────────────────────────────────────────────────────────
 
-// SetActiveAgents 设置当前活跃 Agent 数量（驱动 polaris_agents_active Gauge）。
-// 调用方: pkg/swarm/orchestrator 或 M8 调度层，在 Agent 启动/终止时调用。
-func SetActiveAgents(count int) {
-	metrics.ActiveAgentsCount.Store(int64(count))
-}
-
 // SandboxTierLabel 将 types.SandboxTier 常量转为受控 label 字符串。
 // 供 sandbox_impl.go 调用，避免在调用方引入字符串魔法值。
 func SandboxTierLabel(tier int) string {

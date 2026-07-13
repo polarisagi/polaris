@@ -20,7 +20,7 @@ MemorySystem interface {
 	Reflection() ReflectionMemory // 元认知反思层，M05 §3.4
 	StoreStats() (string, error)
 	SetVectorMode(mode int) error
-	GetMemoryPressure() budget.ResourceBudget
+	GetMemoryPressure() *budget.ResourceBudget
 
 	// TaskMermaidCanvas（M05 §11.3）：工具调用符号化画布，跨 Agent/Gateway 共享的
 	// 当前任务执行状态追踪。TrackToolCall/TrackToolResult 由 agent 工具执行闭环调用，
@@ -36,7 +36,7 @@ type
 MemoryFacade interface {
 	// 基础控制
 	StoreStats() (string, error)
-	GetMemoryPressure() budget.ResourceBudget
+	GetMemoryPressure() *budget.ResourceBudget
 
 	// Semantic 层调用
 	SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error)

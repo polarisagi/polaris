@@ -43,7 +43,7 @@ func (f *MemoryFacadeImpl) StoreStats() (string, error) {
 	return f.sys.Mem().StoreStats()
 }
 
-func (f *MemoryFacadeImpl) GetMemoryPressure() budget.ResourceBudget {
+func (f *MemoryFacadeImpl) GetMemoryPressure() *budget.ResourceBudget {
 	return f.sys.Mem().GetMemoryPressure()
 }
 

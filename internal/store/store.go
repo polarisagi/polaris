@@ -106,6 +106,18 @@ func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 		db.Close()
 		return nil, apperr.Wrap(apperr.CodeInternal, "schema migration", err)
 	}
+
+	sm := NewSchemaManager(db, nil) // no Go migrations yet
+	if err := sm.ApplyMigrations(); err != nil {
+		if recErr := sm.Recover(); recErr != nil {
+			if readDB != db {
+				readDB.Close()
+			}
+			db.Close()
+			return nil, apperr.Wrap(apperr.CodeInternal, "schema recovery", recErr)
+		}
+	}
+
 	return s, nil
 }
 

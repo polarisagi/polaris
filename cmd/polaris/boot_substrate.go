@@ -64,8 +64,8 @@ type SubstrateBundle struct {
 	PromptMgr protocol.PromptFacade
 
 	// 硬件探针与可观测性（AutoConf 可 nil，Tier0 降级）
-	AutoConf *observability.AutoConfig
-	TBR      *metrics.TokenBurnRate
+	AutoConf     *observability.AutoConfig
+	TBR          *metrics.TokenBurnRate
 	DriftMonitor *eval.DriftMonitor
 
 	// 安全三件套
@@ -175,7 +175,6 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 	driftMonitor := eval.NewDriftMonitor()
 	metrics.SetFoundingAnchorDriftScorer(driftMonitor.GetScore)
-	sb.DriftMonitor = driftMonitor
 
 	// ─── 0.35 KillSwitch ────────────────────────────────────────────────────
 	if security.IsFullStopFilePresent(dataDir) {
@@ -543,6 +542,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		Store:         store,
 		SurrealStore:  surrealStore,
 		StorageRouter: storageRouter,
+		DriftMonitor:  driftMonitor,
 		Outbox:        outboxWorker,
 		DBWriter:      dbWriter,
 		DBWriterDone:  dbWriterDoneCh,

@@ -354,24 +354,6 @@ func TestJSONNestedInt64_MissingNested(t *testing.T) {
 	}
 }
 
-// ── jsonStr ───────────────────────────────────────────────────────────────────
-
-func TestJSONStr_Valid(t *testing.T) {
-	m := map[string]json.RawMessage{
-		"name": json.RawMessage(`"Alice"`),
-	}
-	if got := jsonStr(m, "name"); got != "Alice" {
-		t.Errorf("expected 'Alice', got %q", got)
-	}
-}
-
-func TestJSONStr_MissingKey(t *testing.T) {
-	m := map[string]json.RawMessage{}
-	if got := jsonStr(m, "missing"); got != "" {
-		t.Errorf("missing key should return empty string, got %q", got)
-	}
-}
-
 // ── NewManager ────────────────────────────────────────────────────────────────
 
 func TestNewManager_NotNil(t *testing.T) {

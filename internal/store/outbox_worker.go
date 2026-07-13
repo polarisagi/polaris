@@ -3,8 +3,6 @@
 package store
 
 import (
-	"github.com/polarisagi/polaris/internal/observability/metrics"
-
 	"context"
 	"database/sql"
 	"errors"
@@ -13,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"

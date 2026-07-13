@@ -21,8 +21,8 @@ type mockMemory struct {
 	working  *mockWorkingMem
 }
 
-func (m *mockMemory) GetMemoryPressure() budget.ResourceBudget {
-	return budget.ResourceBudget{}
+func (m *mockMemory) GetMemoryPressure() *budget.ResourceBudget {
+	return &budget.ResourceBudget{}
 }
 
 func (m *mockMemory) StoreStats() (string, error) { return "{}", nil }

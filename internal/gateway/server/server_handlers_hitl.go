@@ -193,36 +193,6 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// agentStateString 把 Agent FSM 的 types.AgentState 映射成 WebUI 展示用的小写字符串。
-func agentStateString(s types.AgentState) string {
-	switch s {
-	case types.AgentStateIdle:
-		return "idle"
-	case types.AgentStatePerceive:
-		return "perceive"
-	case types.AgentStatePlan:
-		return "plan"
-	case types.AgentStateValidate:
-		return "validate"
-	case types.AgentStateExecute:
-		return "execute"
-	case types.AgentStateReflect:
-		return "reflect"
-	case types.AgentStateReplan:
-		return "replan"
-	case types.AgentStateRollback:
-		return "rollback"
-	case types.AgentStateComplete:
-		return "complete"
-	case types.AgentStateFailed:
-		return "failed"
-	case types.AgentStateInterrupt:
-		return "interrupt"
-	default:
-		return "unknown"
-	}
-}
-
 // handleStatus 返回 WebUI statusBar 所需的运行时指标快照。
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var memStats runtime.MemStats

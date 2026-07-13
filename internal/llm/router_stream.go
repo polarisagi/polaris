@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -25,7 +26,7 @@ import (
 // 之前完全没有单流级别的硬阻断，系统级 TokenBurnRate gauge 只能事后观测，不能
 // 提前掐断。req.MaxTokens 作为本次流的预算上限（<=0 视为无预算上限，只做加速度
 // 检测）；burnDetector 用 5s 窗口检测 token 输出加速度异常（3 倍以上 → 硬阻断）。
-func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan types.StreamEvent, req *types.InferRequest, providerName string) <-chan types.StreamEvent {
+func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan types.StreamEvent, req *types.InferRequest, providerName string) <-chan types.StreamEvent { //nolint:gocyclo
 	out := make(chan types.StreamEvent)
 	maxBufBytes := ir.registry.cfg.MaxStreamBufferKB * 1024
 	if maxBufBytes <= 0 {
@@ -137,7 +138,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 				"provider", chosen.name, "reason", ce.Reason, "err", err, "tried", len(skipped)+1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamFailover: non-retryable ("+string(ce.Reason)+")", err)
 		}
-		if ce.Retryable && ce.Class == ClassRateLimit {
+		if ce.Retryable && ce.Reason == ReasonRateLimit {
 			time.Sleep(DefaultBackoff().DelayWithState(len(skipped), nil))
 		}
 

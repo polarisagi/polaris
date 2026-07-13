@@ -251,13 +251,3 @@ func jsonNestedInt64(m map[string]any, nested, key string) string {
 	}
 	return strconv.FormatInt(int64(f), 10)
 }
-
-// jsonStr 从 map[string]json.RawMessage 提取字符串字段。
-func jsonStr(m map[string]json.RawMessage, key string) string {
-	if v, ok := m[key]; ok {
-		var s string
-		_ = json.Unmarshal(v, &s)
-		return s
-	}
-	return ""
-}

@@ -135,36 +135,12 @@ HITLOption struct {
 	Label string
 }
 
-type
-
 // HITLResponse 用户对 HITL 审批的响应。
-HITLResponse struct {
+type HITLResponse struct {
 	OptionKey string
 	UserID    string
 	Approved  bool
 	Reason    string
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var buf [12]byte
-	pos := len(buf)
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	for i > 0 {
-		pos--
-		buf[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }
 
 // WithThinkingMode 设置思考模式。

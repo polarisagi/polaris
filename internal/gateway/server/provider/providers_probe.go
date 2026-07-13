@@ -115,14 +115,6 @@ func probeProvider(ctx context.Context, client *http.Client, typ, baseURL, apiKe
 	return false, "未知厂商类型"
 }
 
-//nolint:unused
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 func (h *ProviderHandler) reloadProviders() {
 	if h.Registry == nil || h.DB == nil {
 		return
