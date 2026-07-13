@@ -13,6 +13,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -35,8 +36,12 @@ func MakeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) sandbox.InP
 			return nil, apperr.New(apperr.CodeInternal, "web_search: query exceeds 500 chars")
 		}
 
+		// CapNetworkRead：web_search 只发起 DuckDuckGo HTML GET 请求，与 fetch_url.go
+		// 保持一致的读写能力分级出口检查（此前只有 fetch_url 接了 WrapCapability，
+		// web_search 用裸 http.Transport 完全绕过 CheckCapability，是纵深防御的缺口——
+		// 即便当前代码硬编码 GET，未接检查意味着未来误加 POST/PUT 调用不会被拦截）。
 		client := &http.Client{
-			Transport: &http.Transport{DialContext: dialer.DialContext},
+			Transport: network.WrapCapability(&http.Transport{DialContext: dialer.DialContext}, network.CapNetworkRead),
 			Timeout:   30 * time.Second,
 		}
 

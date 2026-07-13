@@ -71,7 +71,11 @@ func (c *CapabilityRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 	}
 	res, err := c.inner.RoundTrip(req)
 	if err != nil {
-		return res, apperr.Wrap(apperr.CodeInternal, "network capability check failed in inner round tripper", err)
+		// 走到这里说明 Capability 检查已通过（上面已 return），这是内层 RoundTripper
+		// 自身的传输失败（DNS/连接/TLS 等），与能力校验无关——错误信息不应写成
+		// "capability check failed" 误导排障（此前的措辞会让正常网络故障被误判为
+		// 安全拦截）。
+		return res, apperr.Wrap(apperr.CodeInternal, "CapabilityRoundTripper: inner round tripper transport failed", err)
 	}
 	return res, nil
 }
