@@ -146,8 +146,8 @@ type mockMemoryForIntegration struct {
 	working  *mockWorkingMemForIntegration
 }
 
-func (m *mockMemoryForIntegration) GetMemoryPressure() budget.ResourceBudget {
-	return budget.ResourceBudget{}
+func (m *mockMemoryForIntegration) GetMemoryPressure() *budget.ResourceBudget {
+	return &budget.ResourceBudget{}
 }
 
 func (m *mockMemoryForIntegration) StoreStats() (string, error) { return "{}", nil }

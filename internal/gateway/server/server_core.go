@@ -13,6 +13,8 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+
 	"context"
 	"sync/atomic"
 
@@ -33,6 +35,12 @@ type Server struct {
 	isReady        atomic.Bool
 	agentPool      protocol.AgentPool
 	blackboard     protocol.Blackboard
+	pipelineOrch   *orchestrator.PipelineOrchestrator
+	patternDAGExec *orchestrator.PatternDAGExecutor
+	mapReduceExec  *orchestrator.MapReduceExecutor
+	parallelExec   *orchestrator.ParallelExecutor
+	sequentialExec *orchestrator.SequentialExecutor
+	swarmCoord     *orchestrator.SwarmCoordinator
 	hitlGateway    protocol.HITL
 	db             protocol.SQLQuerier
 	chatRepo       protocol.ChatRepository
@@ -107,6 +115,48 @@ func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) {
 	s.outboxWriter = w
 	if s.chatHandler != nil {
 		s.chatHandler.OutboxWriter = w
+	}
+}
+
+func (s *Server) SetPipelineOrchestrator(po *orchestrator.PipelineOrchestrator) {
+	s.pipelineOrch = po
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.PipelineOrch = po
+	}
+}
+
+func (s *Server) SetPatternDAGExecutor(pe *orchestrator.PatternDAGExecutor) {
+	s.patternDAGExec = pe
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.PatternDAGExec = pe
+	}
+}
+
+func (s *Server) SetMapReduceExecutor(me *orchestrator.MapReduceExecutor) {
+	s.mapReduceExec = me
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.MapReduceExec = me
+	}
+}
+
+func (s *Server) SetParallelExecutor(pe *orchestrator.ParallelExecutor) {
+	s.parallelExec = pe
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.ParallelExec = pe
+	}
+}
+
+func (s *Server) SetSequentialExecutor(se *orchestrator.SequentialExecutor) {
+	s.sequentialExec = se
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.SequentialExec = se
+	}
+}
+
+func (s *Server) SetSwarmCoordinator(sc *orchestrator.SwarmCoordinator) {
+	s.swarmCoord = sc
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.SwarmCoord = sc
 	}
 }
 

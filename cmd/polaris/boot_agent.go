@@ -24,6 +24,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/synthetic"
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/security/guard"
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
@@ -60,10 +61,16 @@ type AgentBundle struct {
 	EvalRunner *harness.RunnerImpl // 具体类型：InjectAgent/RunSuite 定义在 *RunnerImpl 上
 
 	// Blackboard & Scheduler
-	Blackboard    *orchestrator.SQLiteBlackboard
-	Sched         *automation.SQLiteScheduler
-	AgentRegistry *orchestrator.AgentRegistry
-	Orch          *orchestrator.Orchestrator
+	Blackboard     *orchestrator.SQLiteBlackboard
+	Sched          *automation.SQLiteScheduler
+	AgentRegistry  *orchestrator.AgentRegistry
+	Orch           *orchestrator.Orchestrator
+	PipelineOrch   *orchestrator.PipelineOrchestrator
+	PatternDAGExec *orchestrator.PatternDAGExecutor
+	MapReduceExec  *orchestrator.MapReduceExecutor
+	ParallelExec   *orchestrator.ParallelExecutor
+	SequentialExec *orchestrator.SequentialExecutor
+	SwarmCoord     *orchestrator.SwarmCoordinator
 
 	// Agent Kernel & DAG Executor
 	Agent   *sysagent.Agent
@@ -163,6 +170,18 @@ func buildAgent(
 
 // bootAgent 执行 §8~§10.5 初始化，返回 Agent 层 bundle。
 // Supervisor.Start() 故意留在 run() 中调用，以确保 defer Supervisor.Stop() 先行注册。
+type piiScrubberAdapter struct {
+	detector *guard.PIIDetector
+}
+
+func (p *piiScrubberAdapter) Scrub(text string) string {
+	if p.detector == nil {
+		return text
+	}
+	res, _, _ := p.detector.Redact(context.Background(), text)
+	return res
+}
+
 func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, kb *KnowledgeBundle) (*AgentBundle, error) { //nolint:gocyclo
 	// ─── §8 Eval Harness (L3 M12) ────────────────────────────────────────────
 	evalAccessEngine := control.NewEngine(nil)
@@ -262,6 +281,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
 	agentRegistry := orchestrator.NewAgentRegistry()
 	orch := orchestrator.NewOrchestrator(blackboard, agentRegistry, sb.Cfg.System.MaxAgents)
+
+	diagLogger := &diagLoggerAdapter{}
+	pipelineOrch := orchestrator.NewPipelineOrchestrator(blackboard, tb.HITLGateway, diagLogger, 100*time.Millisecond, 3, 1800)
+	patternDAGExec := orchestrator.NewPatternDAGExecutor(blackboard, pipelineOrch)
+	mapReduceExec := orchestrator.NewMapReduceExecutor(blackboard, 10*time.Minute)
+	parallelExec := orchestrator.NewParallelExecutor(blackboard)
+	sequentialExec := orchestrator.NewSequentialExecutor(blackboard, 5*time.Minute)
+	swarmCoord := orchestrator.NewSwarmCoordinator(blackboard)
 
 	// ─── §10 Agent Kernel (L1 M4) ────────────────────────────────────────────
 	taskRepo := repo.NewSQLiteTaskReadRepository(sb.Store.DB())
@@ -493,15 +520,20 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	m9Engine.SetSurpriseIndexProvider(func() float64 { return metrics.GlobalSurpriseIndex().Current() })
 	m9Engine.SetHITLGateway(tb.HITLGateway)
-	
-	// [W-5-F/G] MetaEvalSentinel 和 IncidentToEvalConverter 接入
-	m9Engine.SetMetaEvalSentinel(analysis.NewMetaEvalSentinel(evalStore))
-	m9Engine.SetIncidentToEvalConverter(analysis.NewIncidentToEvalConverter(evalStore, piiVault))
-	
+
+	converter := analysis.NewIncidentToEvalConverter(evalStore, &piiScrubberAdapter{detector: tb.PIIDetector})
+	m9Engine.SetIncidentConverter(func(ctx context.Context, payload []byte) (string, error) {
+		caseData, err := converter.Convert(ctx, payload)
+		if err != nil || caseData == nil {
+			return "", apperr.Wrap(apperr.CodeInternal, "failed to convert incident", err)
+		}
+		return caseData.ID, nil
+	})
+
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
 
 	// [W-5-B] 接入 FoundingAnchor 周期漂移检测
-	concurrent.SafeGo(bgCtx, "founding-anchor-drift-detector", func(ctx context.Context) {
+	concurrent.SafeGo(ctx, "founding-anchor-drift-detector", func(ctx context.Context) {
 		anchor, _, _ := eval.LoadOrCreate(sb.DataDir, nil, nil)
 		if anchor == nil {
 			return // Not enough trajectories to create anchor yet
@@ -518,12 +550,12 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 					continue
 				}
 				fp := eval.ComputeFingerprint(recentTrajectories)
-				report, _ := eval.CompareWithAnchor(anchor, fp)
+				report := eval.CompareWithAnchor(anchor, fp)
 				if sb.DriftMonitor != nil {
 					sb.DriftMonitor.SetScore(report.OverallDriftScore)
 				}
 				if report.ShouldFreeze && m9Engine != nil {
-					m9Engine.TriggerCurriculum(ctx)
+					_ = m9Engine.TriggerCurriculum(ctx)
 				}
 			}
 		}
@@ -695,18 +727,24 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	return &AgentBundle{
-		EvalRunner:    evalRunner,
-		Blackboard:    blackboard,
-		Sched:         sched,
-		AgentRegistry: agentRegistry,
-		Orch:          orch,
-		Agent:         agent,
-		DAGExec:       dagExec,
-		M9Engine:      m9Engine,
-		RolloutStore:  rolloutStore,
-		AgentPool:     agentPool,
-		Supervisor:    sv,
-		ReaperStop:    reaperStop,
+		EvalRunner:     evalRunner,
+		Blackboard:     blackboard,
+		Sched:          sched,
+		AgentRegistry:  agentRegistry,
+		Orch:           orch,
+		PipelineOrch:   pipelineOrch,
+		PatternDAGExec: patternDAGExec,
+		MapReduceExec:  mapReduceExec,
+		ParallelExec:   parallelExec,
+		SequentialExec: sequentialExec,
+		SwarmCoord:     swarmCoord,
+		Agent:          agent,
+		DAGExec:        dagExec,
+		M9Engine:       m9Engine,
+		RolloutStore:   rolloutStore,
+		AgentPool:      agentPool,
+		Supervisor:     sv,
+		ReaperStop:     reaperStop,
 	}, nil
 }
 

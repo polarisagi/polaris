@@ -98,6 +98,12 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		chat.NewChatMessagePersistHandler(repo.NewSQLiteChatRepository(sb.Store.DB())).Handle)
 	httpServer.SetLogStore(sb.LogStore)
 	httpServer.SetToolRegistry(tb.ToolReg)
+	httpServer.SetPipelineOrchestrator(ab.PipelineOrch)
+	httpServer.SetPatternDAGExecutor(ab.PatternDAGExec)
+	httpServer.SetMapReduceExecutor(ab.MapReduceExec)
+	httpServer.SetParallelExecutor(ab.ParallelExec)
+	httpServer.SetSequentialExecutor(ab.SequentialExec)
+	httpServer.SetSwarmCoordinator(ab.SwarmCoord)
 	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SeedBuiltinConfig(mpData, regData)
 	httpServer.SetReloadProviders(func() {

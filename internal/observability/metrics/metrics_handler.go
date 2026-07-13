@@ -17,7 +17,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"github.com/polarisagi/polaris/internal/config"
-	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -238,11 +237,20 @@ func SelectThinkingMode(replanCount int, maxTaint types.TaintLevel, surpriseInde
 	if replanCount > 0 || maxTaint >= types.TaintHigh {
 		return types.ThinkingMax
 	}
-	route := surprise.Route(surpriseIndex)
-	if route == 2 {
+	low, high := 0.30, 0.60
+	if cfg := config.Get(); cfg != nil {
+		t := cfg.Thresholds.M9SelfImprove
+		if t.SurpriseRouteLowThreshold > 0 {
+			low = t.SurpriseRouteLowThreshold
+		}
+		if t.SurpriseRouteHighThreshold > 0 {
+			high = t.SurpriseRouteHighThreshold
+		}
+	}
+	if surpriseIndex >= high {
 		return types.ThinkingMax
 	}
-	if route == 15 {
+	if surpriseIndex >= low {
 		return types.ThinkingHigh
 	}
 	return types.ThinkingDisabled

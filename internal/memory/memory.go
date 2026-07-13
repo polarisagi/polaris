@@ -166,7 +166,7 @@ func (m *MemImpl) SetVectorMode(mode int) error {
 	return m.semantic.SetVectorMode(mode)
 }
 
-func (m *MemImpl) GetMemoryPressure() budget.ResourceBudget {
+func (m *MemImpl) GetMemoryPressure() *budget.ResourceBudget {
 	var available int
 	isConstrained := false
 	if fg := probe.GlobalFeatureGate(); fg != nil {
@@ -175,7 +175,7 @@ func (m *MemImpl) GetMemoryPressure() budget.ResourceBudget {
 	} else {
 		available = int(probe.ProbeAvailableMemoryMB())
 	}
-	return budget.ResourceBudget{
+	return &budget.ResourceBudget{
 		AvailableMB:   available,
 		IsConstrained: isConstrained,
 	}

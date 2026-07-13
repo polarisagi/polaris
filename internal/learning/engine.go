@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -50,9 +49,8 @@ type Engine struct {
 	l4TriggerCh     <-chan Change // admin 主动触发 L4，非自动检测
 	evolutionGate   EvolutionGate // M12: EvolutionGate instance
 	gate            backgroundGate
-	
-	metaEvalSentinel      *analysis.MetaEvalSentinel
-	incidentEvalConverter *analysis.IncidentToEvalConverter
+
+	incidentConverter func(ctx context.Context, payload []byte) (string, error)
 
 	db *sql.DB // DB for cursor persistence
 
@@ -90,11 +88,11 @@ func (e *Engine) SetOptimizer(opt PromptOptimizerAdapter) { e.optimizer = opt }
 func (e *Engine) SetVersionStore(vs VersionStoreAdapter) { e.versionStore = vs }
 
 // SetHeuristicsWriter 注入 HeuristicsWriter（可选；nil 时内环跳过成功轨迹写入，P1-4）。
-func (e *Engine) SetStagingPipeline(s StagingPipelineAdapter) { e.stagingPipeline = s }
 func (e *Engine) SetHeuristicsWriter(hw HeuristicsWriter) { e.heuristicsWriter = hw }
 
-func (e *Engine) SetMetaEvalSentinel(s *analysis.MetaEvalSentinel) { e.metaEvalSentinel = s }
-func (e *Engine) SetIncidentToEvalConverter(c *analysis.IncidentToEvalConverter) { e.incidentEvalConverter = c }
+func (e *Engine) SetIncidentConverter(fn func(ctx context.Context, payload []byte) (string, error)) {
+	e.incidentConverter = fn
+}
 
 func (e *Engine) SetHeuristicEvents(ch <-chan types.HeuristicGeneratedPayload) {
 	e.heuristicEvents = ch
@@ -222,13 +220,13 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 			if e.optimizer != nil && ev.AvoidRule != "" {
 				e.optimizer.AddAvoidRule(ev.TaskType, ev.AvoidRule)
 			}
-			
+
 			// [W-5-G] IncidentToEvalConverter 接入
 			// High-severity incident fallback -> convert to eval case
-			if e.incidentEvalConverter != nil && strings.Contains(ev.Heuristic, "high-severity") {
+			if e.incidentConverter != nil && strings.Contains(ev.Heuristic, "high-severity") {
 				payload, _ := json.Marshal(ev)
-				if caseData, err := e.incidentEvalConverter.Convert(ctx, payload); err == nil && caseData != nil {
-					slog.Info("incident converted to eval case", "id", caseData.ID)
+				if id, err := e.incidentConverter(ctx, payload); err == nil && id != "" {
+					slog.Info("incident converted to eval case", "id", id)
 				}
 			}
 

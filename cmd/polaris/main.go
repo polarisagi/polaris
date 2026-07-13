@@ -60,6 +60,8 @@ func run() error { //nolint:gocyclo
 			}
 		case "vault":
 			return runVaultCmd(os.Args[2:])
+		case "csv-fanout":
+			return runCSVFanoutCmd(os.Args[2:])
 		}
 	}
 

@@ -10,16 +10,6 @@ func TestServerBuilderMethods(t *testing.T) {
 	s.SetInstallManager(nil)
 	s.SetOutboxWriter(nil)
 	s.SetAuditTrail(nil)
-
-	if agentStateString(1) != "perceive" {
-		t.Errorf("expected perceive")
-	}
-	if agentStateString(0) != "idle" {
-		t.Errorf("expected idle")
-	}
-	if agentStateString(2) != "plan" {
-		t.Errorf("expected plan")
-	}
 }
 
 func TestServerSetters(t *testing.T) {

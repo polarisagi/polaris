@@ -1,13 +1,12 @@
 package types
 
 import (
+	"strconv"
 	"time"
 )
 
-type
-
 // BlackboardEvent 黑板事件通知（Subscribe 订阅时返回）。
-BlackboardEvent struct {
+type BlackboardEvent struct {
 	Type      string
 	TaskID    string
 	AgentID   string
@@ -64,10 +63,8 @@ IdempotencyKey string
 
 // BuildIdempotencyKey 按规范格式构建幂等键。
 func BuildIdempotencyKey(engine, entityType, entityID, operation string, version int) IdempotencyKey {
-	return IdempotencyKey(engine + ":" + entityType + ":" + entityID + ":" + operation + ":" + itoa(version))
+	return IdempotencyKey(engine + ":" + entityType + ":" + entityID + ":" + operation + ":" + strconv.Itoa(version))
 }
-
-type
 
 // OutboxEvent is a row in the outbox table — the single source of truth for
 // all async projections (graph build, vector index, skill deploy, event dispatch).
@@ -79,7 +76,7 @@ type
 // Worker polling uses: SELECT * FROM outbox WHERE id > :cursor AND committed_at > :last_scan
 // The committed_at guard handles the case where an uncommitted row causes
 // AUTOINCREMENT to skip a value before commit.
-OutboxEvent struct {
+type OutboxEvent struct {
 	ID          int64        `json:"id"`         // AUTOINCREMENT, monotonic
 	EventID     string       `json:"event_id"`   // logical Event.ID
 	EventType   string       `json:"event_type"` // "graph_build" | "vector_index" | "skill_deploy"

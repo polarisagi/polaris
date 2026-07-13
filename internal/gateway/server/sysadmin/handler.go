@@ -50,6 +50,12 @@ type SysAdminHandler struct {
 	Registry       protocol.LLMRegistry
 	HITLGateway    protocol.HITL
 	Blackboard     *orchestrator.SQLiteBlackboard
+	PipelineOrch   *orchestrator.PipelineOrchestrator
+	PatternDAGExec *orchestrator.PatternDAGExecutor
+	MapReduceExec  *orchestrator.MapReduceExecutor
+	ParallelExec   *orchestrator.ParallelExecutor
+	SequentialExec *orchestrator.SequentialExecutor
+	SwarmCoord     *orchestrator.SwarmCoordinator
 	ToolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	ChannelMgr     interface {
 		protocol.ChannelFacade
@@ -101,6 +107,12 @@ type Dependencies struct {
 	ExtRepo        protocol.ExtensionRepository
 	HITLGateway    protocol.HITL
 	Blackboard     *orchestrator.SQLiteBlackboard
+	PipelineOrch   *orchestrator.PipelineOrchestrator
+	PatternDAGExec *orchestrator.PatternDAGExecutor
+	MapReduceExec  *orchestrator.MapReduceExecutor
+	ParallelExec   *orchestrator.ParallelExecutor
+	SequentialExec *orchestrator.SequentialExecutor
+	SwarmCoord     *orchestrator.SwarmCoordinator
 	ChannelMgr     interface {
 		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
@@ -136,6 +148,12 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		HTTPClient:        deps.HTTPClient,
 		ExtRepo:           deps.ExtRepo,
 		HITLGateway:       deps.HITLGateway,
+		PipelineOrch:      deps.PipelineOrch,
+		PatternDAGExec:    deps.PatternDAGExec,
+		MapReduceExec:     deps.MapReduceExec,
+		ParallelExec:      deps.ParallelExec,
+		SequentialExec:    deps.SequentialExec,
+		SwarmCoord:        deps.SwarmCoord,
 		ChannelMgr:        deps.ChannelMgr,
 		StreamIdleTimeout: deps.StreamIdleTimeout,
 		Insights:          insightsadmin.NewInsightsAdmin(deps.DB),

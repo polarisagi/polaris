@@ -88,7 +88,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 				"provider", chosen.name, "reason", ce.Reason, "err", err, "tried", len(skipped)+1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.failover: non-retryable ("+string(ce.Reason)+")", err)
 		}
-		if ce.Retryable && ce.Class == ClassRateLimit {
+		if ce.Retryable && ce.Reason == ReasonRateLimit {
 			time.Sleep(DefaultBackoff().DelayWithState(len(skipped), nil))
 		}
 		skipped[chosen.name] = struct{}{}
