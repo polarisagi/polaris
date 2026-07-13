@@ -20,7 +20,7 @@
 - 编号: inv_M7_01 | 不变量: 所有工具（含 builtin）必须经 Capability Token 验证——禁止后门路径 | 验证方式: CI（Continuous Integration，持续集成） `no_backdoor_lint`
 - 编号: inv_M7_02 | 不变量: MCP 获取内容默认 taint=high——trusted_sources 白名单例外 | 验证方式: M11 Connector-Taint-Table
 - 编号: inv_M7_03 | 不变量: 沙箱选择不可被调用方手动覆盖——`AssignSandboxTier()` 由 M11 PolicyGate 决定 | 验证方式: 代码审计
-- 编号: inv_M7_04 | 不变量: Capability Token 委托链最大深度 3——权限只能收缩不可放大 | 验证方式: M7 §4.6 ValidateDelegation
+- 编号: inv_M7_04 | 不变量: Agent 任务派生深度最大 3 | 验证方式: M8 `orchestrator.MaxSpawnDepth`（见 M7 §4.6-bis，原 Capability Token 委托链机制已于 2026-07-14 移除，此不变量现由 M8 覆盖）
 - 编号: inv_M7_05 | 不变量: 不可逆操作（write_network/privileged）执行前须 DryRun + HITL（Human-in-the-loop，人机协同） | 验证方式: M7 §5.3 Shadow Sink + §5.4 DryRunMode
 - 编号: inv_M7_06 | 不变量: 所有出站连接强制经 M11 SafeDialer.DialContext——禁止裸 net.Dial/grpc.Dial/http.Get | 验证方式: CI `safe_dialer_lint`
 
@@ -264,18 +264,26 @@ Syscall 防逃逸: Go 堆缓冲区（严禁线性内存切片）→ 独立 gorou
 
 5. **每次 <=64KB**，追加模式
 
-### 4.6 Capability 委托链
+### 4.6 Capability Token 委托链（已移除，2026-07-14）
 
-委托链两层实现：
-- `policy.TokenManager.Delegate(parent, agentID, caps, ttl)` — 协议层：能力取交集、TTL/2 衰减、`DelegatedFrom` 携带父 TokenID；
-- `action.ValidateDelegation(parentToken, depth, agentID, ...)` — 业务层：深度≥3 → ErrMaxDelegationDepth，effectiveCaps = intersect；
-- `policy.TokenManager.ValidateDelegation(parent, child)` — 验证 `child.DelegatedFrom==parent.TokenID`、caps ⊆ parent.caps、ExpiresAt ≤ parent.ExpiresAt、SandboxTier 不降级。
-规则摘要：
-- 规则1 权限收缩: child.Caps ⊆ parent.Caps；交集为空 → ErrForbidden
-- 规则2 沙箱单调: child.SandboxTier >= parent.SandboxTier（L2→L1拒绝）
-- 规则3 溯源: DelegatedFrom 链。业务层 DerivationDepth>=3 → 拒绝
-- 规则4 TTL 衰减: child.ExpiresAt ≤ parent.ExpiresAt，Delegate 默认 TTL = 父剩余 / 2
-- 规则5 MCP隔离: MCP Client 子进程在调用方沙箱上下文启动（继承 WASI 权限+Capability 约束）
+`action.ValidateDelegation`/`action.intersectCapabilities`（业务层）与
+`policy.TokenManager.Delegate`/`policy.TokenManager.ValidateDelegation`
+（协议层，Token 携带 `DelegatedFrom` 溯源）曾设计为"子 Agent 请求比父级更受限的
+子 Token"跨层委托机制，但 deadcode 全程序可达性分析确认：`NewJITToken` 唯一生产
+调用点（`agent_execute_dag.go`）固定 `depth=0` 单层铸造，委托链场景从未被触发；
+polaris 实际的多 Agent 任务派生深度限制诉求已由 `internal/execute/orchestrator`
+的 `MaxSpawnDepth=3`（`PostTask`/`PostBatch` 前置校验，见 §4.6-bis）独立覆盖，
+两套机制长期并存无必要，遂删除此处四个函数及其唯一依赖的测试。**若未来出现真实
+的跨 Agent Capability 降权委托场景**（而非当前"每个子任务重新走 S_PLAN→JIT 铸造
+depth=0 Token"的模式），应重新设计而非恢复本节描述的旧实现——旧实现的
+`effectiveCapability = min(caller, target)` 交集语义与 MaxSpawnDepth 的深度计数
+语义解决的是两个不同问题，不建议简单拼接。
+
+### 4.6-bis Agent 任务派生深度限制（现行机制）
+
+`internal/execute/orchestrator.Blackboard.PostTask`/`PostBatch` 校验
+`task.SpawnDepth`，超过 `MaxSpawnDepth=3` 直接返回 `ErrSpawnDepthExceeded`
+（纯任务派生深度计数器，不涉及 Capability 交集/沙箱单调等 Token 语义）。
 
 运行时策略重检: Host Function I/O前比对Cedar policy etag与Wasm实例化时policy_etag_at_start。etag变更→重调[Cedar-Gate] Review→FORBID返回ErrPolicyRevoked。etag比对O(1)，仅变更时触发完整评估。
 
@@ -403,7 +411,8 @@ DryRun结果→[EventLog]（tool.dry_run_result），Reflexion回顾。
   - 策略: 比对 Cedar-Gate etag；变更则 PolicyGate.Review 重评——允许 → 新 Token + 更新 etag；FORBID → 取消沙箱 + 审计 `token_renewal_policy_revoked` (CRITICAL)
 默认 MaxRenewals=5 次（30min 窗口）。长程覆盖: compile=10 次/60min, crawl=8 次/48min, index=8 次/48min。
 
-**委托链溯源**: 每 Token 记录 ParentID，最大深度 3。effectiveCapability = min(caller, target)——权限只缩不放。
+**任务派生深度**: Capability Token 委托链溯源机制已移除（见 §4.6），当前深度限制
+由 M8 `orchestrator.MaxSpawnDepth=3` 在任务派生（非 Token 铸造）层面强制。
 
 ---
 

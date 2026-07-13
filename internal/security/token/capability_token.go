@@ -51,7 +51,6 @@ type TokenClaims struct {
 	IssuedAt        int64            `json:"iat"`
 	ExpiresAt       int64            `json:"exp"`
 	MaxCallsPerTask int              `json:"max_calls_per_task,omitempty"` // 0 = 无限制
-	DelegatedFrom   string           `json:"delegated_from,omitempty"`     // 父令牌 TokenID，空 = 根令牌
 }
 
 // Token 是签发后的完整令牌。
@@ -213,73 +212,6 @@ func (tm *TokenManager) HasCap(tok *Token, cap CapabilityType) (bool, error) {
 	return false, nil
 }
 
-// Delegate 从父令牌派生子令牌（能力衰减原则，M11 §3.1）：
-//   - 能力集：caps ∩ parent.Caps（子不可超出父授权范围）
-//   - TTL：min(父剩余 TTL / 2, 请求 TTL)（每层委派缩短有效期）
-//   - SandboxTier：继承父值（只升不降）
-//   - MaxCallsPerTask：继承父值（0=无限制时同步）
-func (tm *TokenManager) Delegate(parent *Token, agentID string, caps []CapabilityType, targetSandboxTier int, ttl time.Duration) (*Token, error) {
-	if err := tm.Verify(parent); err != nil {
-		return nil, apperr.Wrap(apperr.CodeUnauthorized, "capability_token: delegate parent invalid", err)
-	}
-	if agentID == "" {
-		return nil, apperr.New(apperr.CodeInvalidInput, "capability_token: delegate agentID required")
-	}
-
-	// 沙箱单调：如果目标小于父级，至少维持父级
-	if targetSandboxTier < parent.Claims.SandboxTier {
-		targetSandboxTier = parent.Claims.SandboxTier
-	}
-
-	// 能力衰减：取交集
-	parentCapSet := make(map[CapabilityType]struct{}, len(parent.Claims.Caps))
-	for _, c := range parent.Claims.Caps {
-		parentCapSet[c] = struct{}{}
-	}
-	var delegatedCaps []CapabilityType
-	for _, c := range caps {
-		if _, ok := parentCapSet[c]; ok {
-			delegatedCaps = append(delegatedCaps, c)
-		}
-	}
-	if len(delegatedCaps) == 0 {
-		return nil, apperr.New(apperr.CodeForbidden, "capability_token: no capabilities in intersection with parent")
-	}
-
-	// TTL 衰减：最多取父剩余时间的一半
-	remaining := time.Duration(parent.Claims.ExpiresAt-time.Now().Unix()) * time.Second
-	maxTTL := remaining / 2
-	if ttl <= 0 || ttl > maxTTL {
-		ttl = maxTTL
-	}
-	if ttl <= 0 {
-		return nil, apperr.New(apperr.CodeUnauthorized, "capability_token: parent token nearly expired, delegation refused")
-	}
-
-	tokenID := generateTokenID()
-	claims := TokenClaims{
-		TokenID:         tokenID,
-		AgentID:         agentID,
-		Caps:            delegatedCaps,
-		SandboxTier:     targetSandboxTier,
-		IssuedAt:        time.Now().Unix(),
-		ExpiresAt:       time.Now().Add(ttl).Unix(),
-		MaxCallsPerTask: parent.Claims.MaxCallsPerTask,
-		DelegatedFrom:   parent.Claims.TokenID,
-	}
-
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "capability_token: marshal delegate claims", err)
-	}
-	sig := ed25519.Sign(tm.privKey, payload)
-	tok := &Token{Claims: claims, Signature: sig}
-
-	tm.recordIssued(tokenID, tok)
-
-	return tok, nil
-}
-
 // Lookup 通过 tokenID 查找已签发的完整 Token（无状态回源）。
 // 如果系统重启导致内存清空，或 token 已因 FIFO 容量淘汰/过期被清理，将返回
 // Not Found，触发调用方重新申请或拦截执行（fail-closed，不做静默降级）。
@@ -297,48 +229,6 @@ func (tm *TokenManager) Lookup(tokenID string) (*Token, error) {
 		return nil, apperr.New(apperr.CodeNotFound, "capability_token: token not found")
 	}
 	return tok, nil
-}
-
-// ValidateDelegation 验证 child 确实是从 parent 合法派生的子令牌（M11 §3.1）：
-//  1. parent 和 child 签名均合法、均未过期未撤销
-//  2. child.DelegatedFrom == parent.TokenID
-//  3. child.Caps ⊆ parent.Caps（子不可超出父授权范围）
-//  4. child.ExpiresAt ≤ parent.ExpiresAt（子生命周期不超过父）
-//  5. child.SandboxTier ≥ parent.SandboxTier（沙箱级别只升不降）
-func (tm *TokenManager) ValidateDelegation(parent, child *Token) error {
-	if err := tm.Verify(parent); err != nil {
-		return apperr.Wrap(apperr.CodeUnauthorized, "capability_token: delegation parent invalid", err)
-	}
-	if err := tm.Verify(child); err != nil {
-		return apperr.Wrap(apperr.CodeUnauthorized, "capability_token: delegation child invalid", err)
-	}
-
-	if child.Claims.DelegatedFrom != parent.Claims.TokenID {
-		return apperr.New(apperr.CodeUnauthorized,
-			fmt.Sprintf("capability_token: child.DelegatedFrom=%q != parent.TokenID=%q",
-				child.Claims.DelegatedFrom, parent.Claims.TokenID))
-	}
-
-	parentCapSet := make(map[CapabilityType]struct{}, len(parent.Claims.Caps))
-	for _, c := range parent.Claims.Caps {
-		parentCapSet[c] = struct{}{}
-	}
-	for _, c := range child.Claims.Caps {
-		if _, ok := parentCapSet[c]; !ok {
-			return apperr.New(apperr.CodeForbidden,
-				fmt.Sprintf("capability_token: child capability %q not in parent scope", c))
-		}
-	}
-
-	if child.Claims.ExpiresAt > parent.Claims.ExpiresAt {
-		return apperr.New(apperr.CodeForbidden, "capability_token: child expiry exceeds parent expiry")
-	}
-
-	if child.Claims.SandboxTier < parent.Claims.SandboxTier {
-		return apperr.New(apperr.CodeForbidden, "capability_token: child sandbox tier is less restrictive than parent")
-	}
-
-	return nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
