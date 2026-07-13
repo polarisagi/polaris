@@ -97,7 +97,13 @@ type SubstrateBundle struct {
 	// 推理层
 	InfReg   *llm.ProviderRegistry
 	Router   *llm.InferenceRouter
-	Embedder search.Embedder // 可 nil（FeatureLocalEmbedding 未启用）
+	Embedder search.Embedder // 可 nil（FeatureLocalEmbedding 未启用）；实际类型为 *search.SyncBatcherAdapter，
+	// 请求经 EmbeddingBatcher 自动合批后再调用 DynEmbedder，供 Router/Knowledge/Memory/Tool 等高频调用方使用。
+	// DynEmbedder 底层动态原子代理（Set() 热替换真实引擎，WaitReady() 首次就绪信号）。
+	// Embedder 字段自 EmbeddingBatcher 接线后已不再直接持有 *llm.DynamicEmbedder，下游若需要
+	// WaitReady() 信号或真批量 EmbedBatch()（如 boot_server.go §11.6 回填触发器、插件目录预计算器），
+	// 须直接使用本字段而非对 Embedder 做类型断言。恒非 nil（bootSubstrate 无条件构造）。
+	DynEmbedder *llm.DynamicEmbedder
 
 	// 训练适配器（门控，M9 流水线消费；当前作占位）
 	QLoRA    *llmadapter.QLoRAAdapter
@@ -411,12 +417,12 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// 创建动态原子代理，瞬间点亮系统基础功能
 	dynEmbedder := llm.NewDynamicEmbedder()
 
-	embedFn := func(ctx context.Context, texts []string, model string) ([][]float32, error) {
-		res := make([][]float32, len(texts))
-		for i, t := range texts {
-			res[i] = dynEmbedder.Embed(t)
-		}
-		return res, nil
+	// 透传给 dynEmbedder.EmbedBatch：若当前挂载的真实引擎（Ollama/OpenAI 兼容适配器）
+	// 支持批量 API，则一次 HTTP 往返处理整个批次；否则内部自动降级为逐条 Embed。
+	// 之前这里手写 for 循环逐条调用 dynEmbedder.Embed，导致 EmbeddingBatcher 攒批之后
+	// 仍是 N 次串行调用，白白丢失了批处理收益。
+	embedFn := func(ctx context.Context, texts []string, _ string) ([][]float32, error) {
+		return dynEmbedder.EmbedBatch(ctx, texts)
 	}
 	batcher := search.NewEmbeddingBatcher(10*time.Millisecond, 100, embedFn)
 	batcher.Start(context.Background())
@@ -583,6 +589,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		InfReg:        reg,
 		Router:        router,
 		Embedder:      embedder,
+		DynEmbedder:   dynEmbedder,
 		QLoRA:         qloraAdapter,
 		PRM:           prmAdapter,
 		Steering:      steeringAdapter,

@@ -7,7 +7,6 @@ import (
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/channel"
-	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
@@ -119,8 +118,11 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	})
 
 	// 设置插件同步向量索引器
+	// 传 sb.DynEmbedder（而非 sb.Embedder）：EmbeddingIndexer.IndexEntries 对多条目做真批量
+	// EmbedBatch，需要底层引擎的批量接口；sb.Embedder 是 SyncBatcherAdapter（单条合批语义），
+	// 类型断言拿不到 EmbedBatch，只会退化为逐条调用。
 	if sb.SurrealStore != nil {
-		idx := plugin.NewEmbeddingIndexer(&pluginCognIndexAdapter{s: sb.SurrealStore}, sb.Embedder)
+		idx := plugin.NewEmbeddingIndexer(&pluginCognIndexAdapter{s: sb.SurrealStore}, sb.DynEmbedder)
 		httpServer.SetEmbeddingIndexer(idx)
 	}
 
@@ -305,9 +307,12 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.TTS)
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
-	if dyn, ok := sb.Embedder.(*llm.DynamicEmbedder); ok {
+	// sb.Embedder 经 EmbeddingBatcher 合批接线后已是 *search.SyncBatcherAdapter，
+	// 不再是 *llm.DynamicEmbedder，类型断言拿不到 WaitReady()；改用 sb.DynEmbedder
+	// （详见 boot_substrate.go SubstrateBundle 字段注释）。
+	if sb.DynEmbedder != nil {
 		concurrent.SafeGo(context.Background(), "boot_server.vector_backfill", func(ctx context.Context) {
-			<-dyn.WaitReady()
+			<-sb.DynEmbedder.WaitReady()
 			slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
 			if httpServer.PluginHandler() != nil {
 				_, err := httpServer.PluginHandler().SyncAllMarketplaces(ctx, true)
