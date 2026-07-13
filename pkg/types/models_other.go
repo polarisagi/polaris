@@ -125,6 +125,13 @@ HITLPrompt struct {
 	// checkpoint（扩展安装审查/L3-L4 自改进晋升/自动化预执行等）必须忽略此字段，
 	// 不得让设备操控偏好影响与之无关的信任/合规判断（M13 §2.4 权限模式联动）。
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
+	// ExemptionFieldContent 是 M04 §3 TaintBlocked→HITL 审批→颁发豁免令牌 转义
+	// 路径专用字段：CheckpointType=="data_exfiltration" 时携带被拦截的原始字节
+	// （由 policy.TaintEgressBlockedError.Data 提取），供审批通过后
+	// automation/hitl.GatewayImpl.Respond 铸造 TaintExemptionToken——豁免令牌的
+	// 哈希必须精确匹配被拦截的内容，不能用 PromptText 的人类可读摘要代替。
+	// 非该转义场景的 HITLPrompt 一律留空。
+	ExemptionFieldContent []byte `json:"exemption_field_content,omitempty"`
 }
 
 type

@@ -191,6 +191,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	toolReg := polartool.NewInMemoryToolRegistry(envelope)
 	toolReg.WithTokenVault(piiVault)
 
+	// M04 §3 出口污点检查 + HITL 豁免转义（2026-07-14 补齐，见 hitlGateway 构造处
+	// SetExemptionVault 的配套注入）：sb.Gate 满足 polartool.TaintEgressChecker
+	// 接口（CheckEgressWithExemption 方法），exemptionVault 是铸造/查询豁免令牌
+	// 的唯一共享存储，两处必须指向同一个实例。
+	exemptionVault := token.NewExemptionVault()
+	toolReg.WithTaintEgressChecker(sb.Gate)
+	toolReg.WithExemptionVault(exemptionVault)
+
 	// Inject trajectory store event writer for tool call recording (Task 1)
 	toolReg.WithSessionEventWriter(newStoreEventWriter(sb.Store))
 
@@ -215,6 +223,10 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	hitlGateway := hitl.NewGateway(sb.Store)
 	hitlGateway.SetNotifier(hitl.NewChannelNotifier())
+	// 与上方 toolReg.WithExemptionVault 共享同一个 exemptionVault 实例：
+	// 铸造方（hitlGateway.Respond 审批通过时）与查询方（toolReg 下一次
+	// ExecuteTool 出口污点检查）必须读写同一份存储。
+	hitlGateway.SetExemptionVault(exemptionVault)
 	sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
 	prefsRepo := sysRepo
 	extRepo := repo.NewSQLiteExtensionRepository(sb.Store.DB())

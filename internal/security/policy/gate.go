@@ -223,16 +223,28 @@ func (g *Gate) TaintEgressCheck(levels ...types.TaintLevel) error {
 
 // CheckEgressWithExemption 出口污点检查，支持 HITL 放行令牌。
 // token 为 nil 时退化为 CheckEgress（无放行通道）。
-func (g *Gate) CheckEgressWithExemption(data []byte, taintLevel types.TaintLevel, token *token.TaintExemptionToken) error {
+// 拦截时返回的错误是 *TaintEgressBlockedError（携带被拦截的原始 data，供上游
+// M04 §3 转义路径铸造 TaintExemptionToken 时使用——豁免令牌的哈希必须精确匹配
+// 被拦截的字节内容，不能用人类可读摘要代替），其 Unwrap() 仍指向
+// ErrTaintBlockedEgress，errors.Is(err, ErrTaintBlockedEgress) 不受影响。
+func (g *Gate) CheckEgressWithExemption(data []byte, taintLevel types.TaintLevel, tok *token.TaintExemptionToken) error {
 	if taintLevel < types.TaintMedium {
 		return nil
 	}
 	// HITL 放行：令牌有效则放行，并记录审计事件
-	if token != nil && token.Valid(data) {
+	if tok != nil && tok.Valid(data) {
 		return nil // 已放行，审计由调用方通过 EventLog 记录 token.Summary()
 	}
-	return ErrTaintBlockedEgress
+	return &TaintEgressBlockedError{Data: data}
 }
+
+// TaintEgressBlockedError 包裹 ErrTaintBlockedEgress 并携带被拦截的原始数据。
+type TaintEgressBlockedError struct {
+	Data []byte
+}
+
+func (e *TaintEgressBlockedError) Error() string { return ErrTaintBlockedEgress.Error() }
+func (e *TaintEgressBlockedError) Unwrap() error { return ErrTaintBlockedEgress }
 
 // AddForbidRule 热更新添加 Forbid 规则（仅限 Layer 3 策略热更新；Layer 1/2 内置规则不可删除）。
 func (g *Gate) AddForbidRule(r ForbidRule) {
