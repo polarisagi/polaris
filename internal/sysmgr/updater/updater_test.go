@@ -6,28 +6,6 @@ import (
 	"time"
 )
 
-// ── equalVersions ──────────────────────────────────────────────────────────
-
-func TestEqualVersions(t *testing.T) {
-	cases := []struct {
-		a, b string
-		want bool
-	}{
-		{"v1.7.6", "v1.7.6", true},
-		{"v1.7.6", "1.7.6", true}, // v 前缀不对等价
-		{"1.7.6", "v1.7.6", true},
-		{"1.7.6", "1.7.6", true},
-		{"v1.7.6", "v1.7.7", false},
-		{"v1.0.0", "v1.7.6", false},
-		{"dev", "v1.0.0", false},
-	}
-	for _, tc := range cases {
-		if got := equalVersions(tc.a, tc.b); got != tc.want {
-			t.Errorf("equalVersions(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
-		}
-	}
-}
-
 // ── New / GetVersionInfo ───────────────────────────────────────────────────
 
 func TestNew_FieldsCorrect(t *testing.T) {

@@ -151,6 +151,9 @@ func (m *Manager) CheckLatest(ctx context.Context) {
 		} else {
 			cur := strings.TrimPrefix(current, "v")
 			tgt := strings.TrimPrefix(latest, "v")
+			// semverCompare(tgt, cur) > 0 已隐含正确处理相等版本（返回 0/false），
+			// 无需额外的相等性短路判断；此前存在的 equalVersions 辅助函数与此重复
+			// 且零调用点，2026-07-13 deadcode 复核确认删除。
 			hasUpdate = semverCompare(tgt, cur) > 0
 		}
 	}
@@ -313,8 +316,4 @@ func (m *Manager) setIdle() {
 		m.info.UpdateStatus = StatusIdle
 	}
 	m.mu.Unlock()
-}
-
-func equalVersions(a, b string) bool {
-	return strings.TrimPrefix(a, "v") == strings.TrimPrefix(b, "v")
 }

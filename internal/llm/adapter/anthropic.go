@@ -125,6 +125,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 		Temperature:     options.Temperature,
 		ResponseFormat:  options.ResponseFormat,
 		ReasoningEffort: options.ReasoningEffort,
+		ThinkingBudget:  options.ThinkingBudget,
 	}
 	body, err := a.buildAnthropicRequest(req, false)
 	if err != nil {
@@ -234,6 +235,7 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 		Temperature:     options.Temperature,
 		ResponseFormat:  options.ResponseFormat,
 		ReasoningEffort: options.ReasoningEffort,
+		ThinkingBudget:  options.ThinkingBudget,
 	}
 	body, err := a.buildAnthropicRequest(req, true)
 	if err != nil {

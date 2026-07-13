@@ -239,21 +239,31 @@ func (wm *WorkspaceManager) ReleaseQuota(n int64) {
 }
 
 // WriteFile 将 data 写入相对路径 relPath（基于 RootDir），自动创建父目录。
+// 用 SafeOpenFile（O_NOFOLLOW，见 vfs_unix.go）替代 os.WriteFile：relPath 段来自
+// Agent/工具产出，若工作区内已存在指向沙箱外的符号链接，裸 os.WriteFile 会跟随
+// 写入任意宿主路径（2026-07-13 deadcode 复核发现 SafeOpen/SafeOpenFile 已实现
+// 但从未被本文件的真实读写路径调用，是防护形同虚设的静默缺口）。
 func (wm *WorkspaceManager) WriteFile(relPath string, data []byte) error {
 	fullPath := filepath.Join(wm.rootDir, relPath)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0700); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.WriteFile: failed to mkdir", err)
 	}
-	if err := os.WriteFile(fullPath, data, 0600); err != nil {
+	f, err := SafeOpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.WriteFile: failed to open file", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.WriteFile: failed to write file", err)
 	}
 	return nil
 }
 
 // ReadFile 从相对路径 relPath 读取文件，最多读取 limit 字节。如果 limit <= 0，读取全部。
+// 用 SafeOpen（O_NOFOLLOW）替代 os.Open，理由同上 WriteFile 注释。
 func (wm *WorkspaceManager) ReadFile(relPath string, limit int64) ([]byte, error) {
 	fullPath := filepath.Join(wm.rootDir, relPath)
-	f, err := os.Open(fullPath)
+	f, err := SafeOpen(fullPath)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeNotFound, "WorkspaceManager.ReadFile: failed to open file", err)
 	}
