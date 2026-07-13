@@ -86,6 +86,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) 
 	var reasoning strings.Builder
 	var usage types.Usage
 	var inferErr error
+	var toolCalls []types.InferToolCall
 
 	for ev := range ch {
 		switch ev.Type {
@@ -102,6 +103,27 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) 
 				Type:       types.AgentStreamEventToken,
 				Content:    ev.Content,
 				TaintLevel: a.sCtx.GlobalTaintLevel,
+			})
+		case types.StreamToolCall:
+			// adapter 侧（stream.go/anthropic_request.go/google_request.go）已把
+			// 原生 tool_use/tool_calls 事件统一打包为 {"id","name","input"} JSON，
+			// 这里是全链路中第一个真正消费 StreamToolCall 的地方——此前该事件类型
+			// 只被产出、从未被读取，原生 function-calling 通路因此实际死管线。
+			var tc struct {
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			}
+			if jsonErr := json.Unmarshal([]byte(ev.Content), &tc); jsonErr != nil {
+				slog.Warn("agent: doStreamInfer failed to parse StreamToolCall payload, skipping", "err", jsonErr)
+				continue
+			}
+			toolCalls = append(toolCalls, types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input})
+			a.publishStreamEvent(types.AgentStreamEvent{
+				Type:       types.AgentStreamEventToolCall,
+				TaintLevel: a.sCtx.GlobalTaintLevel,
+				ToolName:   tc.Name,
+				ToolInput:  tc.Input,
 			})
 		case types.StreamError:
 			if inferErr == nil {
@@ -121,6 +143,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) 
 	return &types.ProviderResponse{
 		Content:          content.String(),
 		ReasoningContent: reasoning.String(),
+		ToolCalls:        toolCalls,
 		Usage:            usage,
 	}, nil
 }

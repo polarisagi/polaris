@@ -21,6 +21,36 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// toolCallsToDAGJSON 将 LLM 原生 tool_calls 响应转换为 plan_dag Schema 期望的
+// DAGModel JSON——复用既有 DAG 校验（S_VALIDATE 四层）与执行（toolExecFnInner）
+// 管线，而不是为原生 function-calling 另建一条旁路执行路径，避免"DAG JSON DSL"
+// 与"原生 tool_calls"两套工具选择语义长期并存分叉。多个并行 tool_calls 之间不
+// 生成 Edges（视为独立可并行节点，与原生 API "parallel tool calls" 的设计意图
+// 一致；DAG 执行器对无依赖节点的并行调度是既有行为，不是本次新引入的语义）。
+func toolCallsToDAGJSON(calls []types.InferToolCall) ([]byte, error) {
+	nodes := make([]types.DAGNode, 0, len(calls))
+	for i, c := range calls {
+		var params map[string]any
+		if len(c.Input) > 0 {
+			if err := json.Unmarshal(c.Input, &params); err != nil {
+				return nil, apperr.Wrap(apperr.CodeInternal, "toolCallsToDAGJSON: unmarshal tool call input", err)
+			}
+		}
+		id := c.ID
+		if id == "" {
+			id = fmt.Sprintf("n%d", i)
+		}
+		nodes = append(nodes, types.DAGNode{ID: id, Action: c.Name, Params: params})
+	}
+	// plan_dag Schema 要求 edges 字段为 array 类型且必填（schemavalidate/schemas.json），
+	// 空切片而非 nil——nil 会被 json.Marshal 序列化为 null，触发 type:"array" 校验失败。
+	out, err := json.Marshal(types.DAGModel{Nodes: nodes, Edges: []types.DAGEdge{}})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "toolCallsToDAGJSON: marshal DAGModel", err)
+	}
+	return out, nil
+}
+
 func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error { //nolint:gocyclo
 	ctx = a.withTaskScopeCtx(ctx)
 
@@ -300,7 +330,20 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			if err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)
 			}
-			ch, streamErr := safecall.StreamInfer(ctx, a.provider, reqMsgs, types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode))
+			inferOpts := []types.InferOption{types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode)}
+			// 原生 LLM function-calling 并行通路（2026-07-14）：仅在 S_PLAN 阶段、且
+			// 工具目录非空时附加 Tools——resp.ToolCalls 非空时由下方 toolCallsToDAGJSON
+			// 转换为 DAGModel JSON 再喂给既有 OnSuccess，两条通路收敛到同一张 DAG 上，
+			// 不新增第二条执行路径。TaskID 注入方式与 promptPlan 里 BuildToolListSection
+			// 保持一致（懒加载工具激活作用域需要同一个 TaskID，否则上一轮 search_tools
+			// 激活的工具在本轮 Schemas() 重建时对不上，见 catalog/composite.go）。
+			if a.sm.Current() == types.AgentStatePlan && a.catalog != nil {
+				toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+				if schemas := a.catalog.Schemas(toolCtx, types.TrustCommunity); len(schemas) > 0 {
+					inferOpts = append(inferOpts, types.WithTools(schemas))
+				}
+			}
+			ch, streamErr := safecall.StreamInfer(ctx, a.provider, reqMsgs, inferOpts...)
 			if streamErr != nil {
 				inferErr = streamErr
 			} else {
@@ -371,8 +414,21 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				}
 
 				reqMap := map[string]any{"messages": reqMsgs, "model": llmEff.ModelPool, "thinking_mode": llmEff.ThinkingMode}
-				respMap := map[string]any{"content": resp.Content, "reasoning_content": resp.ReasoningContent, "usage": resp.Usage}
+				respMap := map[string]any{"content": resp.Content, "reasoning_content": resp.ReasoningContent, "usage": resp.Usage, "tool_calls": resp.ToolCalls}
 				a.sm.WriteLLMCallEvent(a.sCtx.SessionID, reqMap, respMap)
+
+				// 原生 tool_calls 非空时（S_PLAN 阶段 Provider 选择走原生 function-calling
+				// 而非文本 JSON DSL），转换为 DAGModel JSON 顶替 resp.Content 喂给下面的
+				// schema 校验 + OnSuccess，两条通路在此收敛，不改变 OnSuccess 内部任何逻辑。
+				fillContent := []byte(resp.Content)
+				if len(resp.ToolCalls) > 0 && a.sm.Current() == types.AgentStatePlan {
+					if dagJSON, convErr := toolCallsToDAGJSON(resp.ToolCalls); convErr == nil {
+						fillContent = dagJSON
+					} else {
+						slog.Warn("agent: failed to convert native tool_calls to DAGModel JSON, falling back to resp.Content",
+							"session_id", a.sCtx.SessionID, "err", convErr)
+					}
+				}
 
 				// GR-4-005 复核修复：仅做可观测性埋点，不在此处改变控制流。
 				// 原本考虑过在这里校验失败时直接短路到 OnFailure，但 OnSuccess 的具体实现
@@ -383,12 +439,12 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				// （见 fsm.parsePlanOnSuccess / onReflectSuccess），与既有的 unmarshal 失败分支
 				// 合并处理，保证只有一套"内容不可用"的判定与降级路径。这里只负责让运维能看到
 				// 校验失败发生过，不代表内容一定被拒绝。
-				if schemaErr := schemavalidate.Validate(llmEff.SchemaRef, []byte(resp.Content)); schemaErr != nil {
+				if schemaErr := schemavalidate.Validate(llmEff.SchemaRef, fillContent); schemaErr != nil {
 					metrics.GlobalSchemaValidationFailureTotal.Add(1)
 					slog.Warn("agent: LLMFillEffect response failed schema validation (see OnSuccess for actual degradation handling)",
 						"schema_ref", llmEff.SchemaRef, "state", a.sm.Current(), "err", schemaErr)
 				}
-				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), []byte(resp.Content))
+				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), fillContent)
 			}
 		}
 
