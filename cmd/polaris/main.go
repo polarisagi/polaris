@@ -63,7 +63,13 @@ func run() error { //nolint:gocyclo
 		case "csv-fanout":
 			return runCSVFanoutCmd(os.Args[2:])
 		case "eval":
-			return runEvalCmd(os.Args[2:])
+			// "polaris eval --ci-gate" 是既有的 §10.8 CI 门禁入口，需要完整启动序列
+			// （真实 EvalRunner，而非本 CLI 子命令组的纯 HTTP 客户端 runEvalCmd），
+			// 不在此拦截，落到 switch 之外走下方完整 boot 流程；其余 polaris eval
+			// 子命令（genkey/sign/meta-holdout/meta-audit）才归 runEvalCmd 处理。
+			if len(os.Args) <= 2 || os.Args[2] != "--ci-gate" {
+				return runEvalCmd(os.Args[2:])
+			}
 		}
 	}
 
