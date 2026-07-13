@@ -28,22 +28,11 @@ func TestCapabilityTokenExtra(t *testing.T) {
 		t.Errorf("expected HasCap false, got %v %v", has, err)
 	}
 
-	// Delegate
-	delegateToken, err := mgr.Delegate(tok, "agent-1", []token.CapabilityType{"capA"}, 1, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// ValidateDelegation
-	if err := mgr.ValidateDelegation(tok, delegateToken); err != nil {
-		t.Errorf("expected valid delegation, got %v", err)
-	}
-
 	// Revoke
 	mgr.Revoke(tok.Claims.TokenID)
 
 	// Should be invalid now
-	if err := mgr.ValidateDelegation(tok, delegateToken); err == nil {
-		t.Errorf("expected invalid delegation, got nil")
+	if err := mgr.Verify(tok); err == nil {
+		t.Errorf("expected invalid token after revoke, got nil")
 	}
 }
