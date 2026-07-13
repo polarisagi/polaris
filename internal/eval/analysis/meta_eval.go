@@ -2,6 +2,7 @@
 package analysis
 
 import (
+	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/eval/harness"
 
 	"context"
@@ -21,10 +22,13 @@ type MetaEvalResult struct {
 	FailureReasons       []string
 }
 
-// MetaEvalSentinel Meta-Eval Sentinel 实例。
+// MetaEvalSentinel Meta-Eval Sentinel 实例（V8-S2 外部锚点，00-Global-Dictionary.md
+// §V8-Principle）。审计对象是 EvalHarness 自身的目标函数是否漂移，因此其数据源
+// （meta_holdout 分区）必须与被审计的 Training/Validation/Holdout 三层完全隔离，
+// 详见 control.PartitionMetaHoldout 注释。
 type MetaEvalSentinel struct {
 	store                   *harness.SQLiteEvalStore
-	FalsifiabilityFloor     float64 // Holdout 中位 FalsifiabilityScore 最低值，默认 0.6
+	FalsifiabilityFloor     float64 // meta_holdout 中位 FalsifiabilityScore 最低值，默认 0.6
 	MinBehaviorTypeCoverage int     // 每种 harness.BehaviorType 至少需要的用例数，默认 3
 }
 
@@ -37,16 +41,25 @@ func NewMetaEvalSentinel(store *harness.SQLiteEvalStore) *MetaEvalSentinel {
 	}
 }
 
-// RunMetaEvalSuite 运行 Meta-Eval 套件。
-// agentRole: 要审计的 Holdout partition 的 agentRole（通常 "default"）。
-// 建议在 M9 L3/L4 Rollout 前调用（rollout.go 触发点）。
-func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, agentRole string) (*MetaEvalResult, error) {
+// RunMetaEvalSuite 运行 Meta-Eval 套件，读取 meta_holdout 分区（非 validation）。
+//
+// 调用身份固定为 control.RoleMetaAuditor——这不是"审计某个 agentRole"，而是审计
+// EvalHarness 目标函数本身是否漂移（V8-S2），signature 由调用方用 meta_auditor
+// 私钥签名后传入（开发/测试环境可传 nil，未配置公钥时降级为仅告警）。
+//
+// 进程边界约束（M12-Eval-Harness.md §5 L2，对 meta_holdout 的适用性强于 Holdout）：
+// 本方法不得被塞进运行中 server 进程的热路径（例如
+// SQLiteRolloutStore.AdvanceGate）同步调用——那样等于自我审计自己，违反
+// V8-Principle"禁止用自动化机制替换外部锚点"。正确用法是作为独立于主进程的
+// 人工/CI 审计动作调用，其 Passed/FailureReasons 结论以签名审计记录的形式
+// 写回后，供 AdvanceGate 只读消费，而非由 AdvanceGate 直接触发计算。
+func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, signature []byte) (*MetaEvalResult, error) {
 	if m.store == nil {
 		return &MetaEvalResult{Passed: false, FailureReasons: []string{"store is nil"}}, nil
 	}
-	cases, err := m.store.GetValidationCases(ctx, agentRole, nil) // nil sig = 开发模式
+	cases, err := m.store.GetMetaHoldoutCases(ctx, control.RoleMetaAuditor, signature)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "meta_eval: load validation cases failed", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "meta_eval: load meta_holdout cases failed", err)
 	}
 
 	result := &MetaEvalResult{
@@ -57,7 +70,7 @@ func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, agentRole strin
 
 	if len(cases) == 0 {
 		result.Passed = false
-		result.FailureReasons = append(result.FailureReasons, "holdout set is empty")
+		result.FailureReasons = append(result.FailureReasons, "meta_holdout set is empty")
 		return result, nil
 	}
 
@@ -89,7 +102,7 @@ func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, agentRole strin
 	}
 
 	if !result.Passed {
-		slog.Warn("meta_eval FAILED", "agent_role", agentRole,
+		slog.Warn("meta_eval FAILED", "agent_role", control.RoleMetaAuditor,
 			"median_falsifiability", result.MedianFalsifiability,
 			"reasons", result.FailureReasons)
 	}

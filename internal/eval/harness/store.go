@@ -54,13 +54,30 @@ func (s *SQLiteEvalStore) GetValidationCases(ctx context.Context, agentRole stri
 	return s.scanCasesByPrefix(ctx, "eval:case:validation:"+agentRole+":")
 }
 
+// GetMetaHoldoutCases 获取 V8-S2 Meta-Eval Sentinel 专属分区的评测用例。
+//
+// 注意：本方法故意不在 protocol.EvalAPI 接口中暴露——该接口是"暴露给自进化引擎
+// (M9) 的只读数据接口"，而 meta_holdout 存在的唯一意义就是不能被 M9 触达
+// （00-Global-Dictionary.md §V8-Principle）。调用方必须以 control.RoleMetaAuditor
+// 身份签名，且该角色私钥不应出现在运行中 server 进程里——合法调用方只应是脱离
+// 主进程的人工/CI 审计流程，通过本方法的具体类型直接引用（而非走 EvalAPI）。
+func (s *SQLiteEvalStore) GetMetaHoldoutCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
+	if err := verifyEvalSignature(agentRole, control.PartitionMetaHoldout, signature); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetMetaHoldoutCases", err)
+	}
+	if err := s.engine.CheckAccess(agentRole, control.PartitionMetaHoldout); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetMetaHoldoutCases", err)
+	}
+	return s.scanCasesByPrefix(ctx, "eval:case:meta_holdout:"+agentRole+":")
+}
+
 // PutCase 保存一个新的 EvalCase 到指定分区 (training 或 validation)。
 func (s *SQLiteEvalStore) PutCase(ctx context.Context, partition, agentRole string, c EvalCase) error {
 	validPartitions := map[string]bool{
-		"training":       true,
-		"validation":     true,
-		"pending_review": true,
-		"meta_holdout":   true, // V8-S2: Meta-Eval 专属分区，密钥与 Holdout 分离
+		control.PartitionTraining:    true,
+		control.PartitionValidation:  true,
+		"pending_review":             true,
+		control.PartitionMetaHoldout: true, // V8-S2: Meta-Eval 专属分区，密钥与 Holdout 分离
 	}
 	if !validPartitions[partition] {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("eval_store: invalid partition %s", partition))
