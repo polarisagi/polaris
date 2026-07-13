@@ -5,6 +5,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/evaladmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/insightsadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/mcpadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/workflowadmin"
@@ -84,6 +85,10 @@ type SysAdminHandler struct {
 	Workflow *workflowadmin.WorkflowAdmin
 	Channels *channelsadmin.ChannelsAdmin
 	MCP      *mcpadmin.MCPAdmin
+	// Eval 与其余子结构体不同：不在 NewSysAdminHandler 内构造（EvalStore/
+	// MetaEvalSentinel 来自 AgentBundle，boot_agent.go 晚于本构造函数运行），
+	// 采用与 ToolExec/InstallMgr 相同的"先 nil、Server.SetEvalAdmin 后置回填"模式。
+	Eval *evaladmin.EvalAdmin
 }
 
 type Dependencies struct {
@@ -157,6 +162,11 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		ChannelMgr:        deps.ChannelMgr,
 		StreamIdleTimeout: deps.StreamIdleTimeout,
 		Insights:          insightsadmin.NewInsightsAdmin(deps.DB),
+		// Store/Sentinel 均先 nil 构造（此时 AgentBundle 尚未构建），Server.SetEvalAdmin
+		// 后置回填时对本对象的字段做原地赋值而非替换整个指针——server_routes.go 注册路由
+		// 时捕获的是 h.Eval 这个指针本身，必须保持稳定，否则回填对已注册路由不可见
+		// （与 mcpadmin.InstallMgr"先nil、SetInstallManager 原地回填"是同一模式）。
+		Eval: evaladmin.NewEvalAdmin(nil, nil),
 	}
 	// 2026-07-07 R7 瘦身：workflow.go（原 730 行）拆为独立 workflowadmin 子包
 	// （沿用 cronadmin/insightsadmin 模式）。CronTickWorkflows 回调改指向

@@ -59,6 +59,10 @@ import (
 type AgentBundle struct {
 	// Eval Harness
 	EvalRunner *harness.RunnerImpl // 具体类型：InjectAgent/RunSuite 定义在 *RunnerImpl 上
+	// EvalStore/MetaEvalSentinel 供 boot_server.go 的 httpServer.SetEvalAdmin 使用
+	// （V8-S2 meta_holdout 运维接口，见 internal/gateway/server/sysadmin/evaladmin）。
+	EvalStore        *harness.SQLiteEvalStore
+	MetaEvalSentinel *analysis.MetaEvalSentinel
 
 	// Blackboard & Scheduler
 	Blackboard     *orchestrator.SQLiteBlackboard
@@ -209,6 +213,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	evalAccessEngine := control.NewEngine(nil)
 	evalStore := harness.NewSQLiteEvalStore(sb.Store, evalAccessEngine)
 	evalRunner := harness.NewRunner(sb.Store, evalStore)
+	// V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区审计，见 00-Global-Dictionary.md
+	// §V8-Principle + internal/eval/analysis/meta_eval.go）。仅构造，不在此处调用——
+	// 调用入口是 evaladmin 的 HTTP handler（httpServer.SetEvalAdmin，boot_server.go），
+	// 需要 meta_auditor 签名才能真正读取 meta_holdout/触发审计。
+	metaEvalSentinel := analysis.NewMetaEvalSentinel(evalStore)
 
 	// Task 5: ContinuousSamplingMonitor 联动
 	samplingMonitor := analysis.NewContinuousSamplingMonitor(nil)
@@ -517,6 +526,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Warn("polaris: failed to init SQLiteRolloutStore, M9 staging/shadow gating disabled", "err", rsErr)
 	} else {
 		rs.WithPromptActivator(versionStore)
+		// V8-S2 前置检查：默认关闭（M12EvalThresholds.MetaAuditGateEnabled），需运维
+		// 显式开启——避免既有部署因从未生成过 meta_audit 记录而被永久卡在 Gate2。
+		// evalStore 结构性满足 optimizer.MetaAuditReader（LatestMetaAudit 方法），无需适配器。
+		maCfg := sb.Cfg.Thresholds.M12Eval
+		rs.WithMetaAudit(evalStore, time.Duration(maCfg.MetaAuditMaxAgeHours)*time.Hour, maCfg.MetaAuditGateEnabled)
 		rolloutStore = rs
 		rolloutBridge = reflexion.NewRolloutBridge(rs)
 	}
@@ -755,25 +769,27 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	return &AgentBundle{
-		EvalRunner:     evalRunner,
-		Blackboard:     blackboard,
-		Sched:          sched,
-		AgentRegistry:  agentRegistry,
-		Orch:           orch,
-		PipelineOrch:   pipelineOrch,
-		PatternDAGExec: patternDAGExec,
-		MapReduceExec:  mapReduceExec,
-		ParallelExec:   parallelExec,
-		SequentialExec: sequentialExec,
-		SwarmCoord:     swarmCoord,
-		Agent:          agent,
-		DAGExec:        dagExec,
-		M9Engine:       m9Engine,
-		RolloutStore:   rolloutStore,
-		AgentPool:      agentPool,
-		Supervisor:     sv,
-		ReaperStop:     reaperStop,
-		PersonaRefiner: personaRefiner,
+		EvalRunner:       evalRunner,
+		EvalStore:        evalStore,
+		MetaEvalSentinel: metaEvalSentinel,
+		Blackboard:       blackboard,
+		Sched:            sched,
+		AgentRegistry:    agentRegistry,
+		Orch:             orch,
+		PipelineOrch:     pipelineOrch,
+		PatternDAGExec:   patternDAGExec,
+		MapReduceExec:    mapReduceExec,
+		ParallelExec:     parallelExec,
+		SequentialExec:   sequentialExec,
+		SwarmCoord:       swarmCoord,
+		Agent:            agent,
+		DAGExec:          dagExec,
+		M9Engine:         m9Engine,
+		RolloutStore:     rolloutStore,
+		AgentPool:        agentPool,
+		Supervisor:       sv,
+		ReaperStop:       reaperStop,
+		PersonaRefiner:   personaRefiner,
 	}, nil
 }
 

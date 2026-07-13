@@ -169,6 +169,13 @@ type M12EvalThresholds struct {
 	ShadowSampleRate        float64 `toml:"shadow.sample_rate"`         // 0.01
 	ShadowPassRateThreshold float64 `toml:"shadow.pass_rate_threshold"` // 0.95
 	ShadowMinSamples        int     `toml:"shadow.min_samples"`         // 10
+
+	// V8-S2 Meta-Eval Sentinel（meta_holdout 审计，见 internal/eval/analysis/meta_eval.go）。
+	// MetaAuditGateEnabled 默认 false：这是新功能，需要运维先生成 meta_auditor 密钥对
+	// 并至少成功运行过一次 `polaris eval meta-audit run` 才有意义；默认开启会让所有
+	// 既有部署（从未跑过 meta_audit）永久卡在 Gate2 无法推进 Canary，属于不必要的破坏性变更。
+	MetaAuditGateEnabled bool `toml:"meta_audit.gate_enabled"`  // false
+	MetaAuditMaxAgeHours int  `toml:"meta_audit.max_age_hours"` // 168 (7天)——超过此新鲜度 AdvanceGate 视为 stale，fail-closed 停在当前 Gate
 }
 
 type M13InterfaceThresholds struct {
@@ -322,6 +329,8 @@ func DefaultThresholds() Thresholds {
 			ShadowSampleRate:        0.01,
 			ShadowPassRateThreshold: 0.95,
 			ShadowMinSamples:        10,
+			MetaAuditGateEnabled:    false,
+			MetaAuditMaxAgeHours:    168,
 		},
 		M13Interface: M13InterfaceThresholds{
 			ReadTimeoutSeconds:             10,

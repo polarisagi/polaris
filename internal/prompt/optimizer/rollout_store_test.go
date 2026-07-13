@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -163,5 +164,127 @@ func TestListPendingShadow(t *testing.T) {
 	}
 	if got["rolled-back-1"] {
 		t.Errorf("rolled-back-1 is rolled back, should not be listed: %v", versions)
+	}
+}
+
+// ── V8-S2 Meta-Eval 前置检查（WithMetaAudit / AdvanceGate）──────────────────────
+
+// fakeMetaAuditReader 是测试专用的 MetaAuditReader 实现，可编排任意返回值组合。
+type fakeMetaAuditReader struct {
+	passed     bool
+	computedAt time.Time
+	ok         bool
+	err        error
+}
+
+func (f *fakeMetaAuditReader) LatestMetaAudit(context.Context) (bool, time.Time, bool, error) {
+	return f.passed, f.computedAt, f.ok, f.err
+}
+
+// backdateLastAdvanced 直接改写 last_advanced_at，绕开真实等待，模拟"24h 稳定期已过"。
+func backdateLastAdvanced(t *testing.T, db *sql.DB, version string, ago time.Duration) {
+	t.Helper()
+	past := time.Now().Add(-ago).Unix()
+	if _, err := db.Exec(`UPDATE rollout_states SET last_advanced_at = ? WHERE version = ?`, past, version); err != nil {
+		t.Fatalf("backdateLastAdvanced: %v", err)
+	}
+}
+
+// advanceToCanaryGate2 让候选一路推进到 Gate2(Shadow 确认后的 Canary 5%)，
+// 供后续 AdvanceGate 测试作为共同起点。
+func advanceToCanaryGate2(t *testing.T, ctx context.Context, rs *SQLiteRolloutStore, version string) {
+	t.Helper()
+	if err := rs.SubmitCandidate(ctx, &AgentVersionSnapshot{Version: version}); err != nil {
+		t.Fatalf("SubmitCandidate: %v", err)
+	}
+	if err := rs.ConfirmShadow(ctx, version); err != nil {
+		t.Fatalf("ConfirmShadow: %v", err)
+	}
+}
+
+// TestAdvanceGate_MetaAuditDisabled_SkipsCheckEntirely 验证默认关闭
+// （MetaAuditGateEnabled=false，或未调用 WithMetaAudit）时 AdvanceGate 完全不受
+// meta_audit 结论影响——这是配置默认值的核心保证：不应因为新功能而破坏既有部署。
+func TestAdvanceGate_MetaAuditDisabled_SkipsCheckEntirely(t *testing.T) {
+	db := newRolloutTestDB(t)
+	ctx := context.Background()
+	rs, err := NewSQLiteRolloutStore(db)
+	if err != nil {
+		t.Fatalf("NewSQLiteRolloutStore: %v", err)
+	}
+	advanceToCanaryGate2(t, ctx, rs, "v-disabled")
+	backdateLastAdvanced(t, db, "v-disabled", 25*time.Hour)
+
+	// 未调用 WithMetaAudit：metaAuditReader 为 nil，metaAuditGateEnabled 为 false zero value。
+	state, err := rs.AdvanceGate(ctx, "v-disabled", RolloutStats{})
+	if err != nil {
+		t.Fatalf("AdvanceGate: %v", err)
+	}
+	if state.CurrentGate != GateCanaryRollout+1 {
+		t.Errorf("expected gate to advance past Gate2 when meta_audit gating disabled, got gate=%d", state.CurrentGate)
+	}
+}
+
+// TestAdvanceGate_MetaAuditEnabled_HoldsWhenMissingFailedOrStale 验证启用后，
+// 结论缺失/未通过/过期三种情况均 fail-closed：停在当前 Gate，不推进、不回滚。
+func TestAdvanceGate_MetaAuditEnabled_HoldsWhenMissingFailedOrStale(t *testing.T) {
+	cases := []struct {
+		name   string
+		reader *fakeMetaAuditReader
+	}{
+		{"never_audited", &fakeMetaAuditReader{ok: false}},
+		{"audited_but_failed", &fakeMetaAuditReader{ok: true, passed: false, computedAt: time.Now()}},
+		{"audited_passed_but_stale", &fakeMetaAuditReader{ok: true, passed: true, computedAt: time.Now().Add(-200 * time.Hour)}},
+		{"reader_errored", &fakeMetaAuditReader{err: context.DeadlineExceeded}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newRolloutTestDB(t)
+			ctx := context.Background()
+			rs, err := NewSQLiteRolloutStore(db)
+			if err != nil {
+				t.Fatalf("NewSQLiteRolloutStore: %v", err)
+			}
+			rs.WithMetaAudit(tc.reader, 168*time.Hour, true)
+			advanceToCanaryGate2(t, ctx, rs, "v-hold")
+			backdateLastAdvanced(t, db, "v-hold", 25*time.Hour)
+
+			state, err := rs.AdvanceGate(ctx, "v-hold", RolloutStats{})
+			if err != nil {
+				t.Fatalf("AdvanceGate: %v", err)
+			}
+			if state.CurrentGate != GateCanaryRollout {
+				t.Errorf("expected gate to stay at GateCanaryRollout(2) (fail-closed), got gate=%d", state.CurrentGate)
+			}
+			if state.Status == RolloutStatusRolledBack {
+				t.Error("meta_audit failure must not trigger Rollback (may just be unaudited yet, not a candidate defect)")
+			}
+		})
+	}
+}
+
+// TestAdvanceGate_MetaAuditEnabled_AdvancesWhenFreshAndPassed 验证启用后，
+// 结论存在、通过、且在新鲜度窗口内时，Gate 正常按 canarySteps 推进。
+func TestAdvanceGate_MetaAuditEnabled_AdvancesWhenFreshAndPassed(t *testing.T) {
+	db := newRolloutTestDB(t)
+	ctx := context.Background()
+	rs, err := NewSQLiteRolloutStore(db)
+	if err != nil {
+		t.Fatalf("NewSQLiteRolloutStore: %v", err)
+	}
+	reader := &fakeMetaAuditReader{ok: true, passed: true, computedAt: time.Now()}
+	rs.WithMetaAudit(reader, 168*time.Hour, true)
+	advanceToCanaryGate2(t, ctx, rs, "v-fresh")
+	backdateLastAdvanced(t, db, "v-fresh", 25*time.Hour)
+
+	state, err := rs.AdvanceGate(ctx, "v-fresh", RolloutStats{})
+	if err != nil {
+		t.Fatalf("AdvanceGate: %v", err)
+	}
+	if state.CurrentGate != GateCanaryRollout+1 {
+		t.Errorf("expected gate to advance past Gate2 when meta_audit passed and fresh, got gate=%d", state.CurrentGate)
+	}
+	if state.CanaryPercent != 25 {
+		t.Errorf("expected canary_percent=25 (next step after 5), got %d", state.CanaryPercent)
 	}
 }
