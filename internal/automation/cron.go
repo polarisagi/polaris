@@ -2,10 +2,8 @@ package automation
 
 import (
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -134,112 +132,4 @@ func (cs *CronSchedule) NextAfter(from time.Time) time.Time {
 		candidate = candidate.Add(time.Minute)
 	}
 	return time.Time{}
-}
-
-// ─── CronEvalCache ─────────────────────────────────────────────────────────────
-
-// CronEvalCache 按 tz\0expr 双键缓存 cron 下次执行时间。
-type CronEvalCache struct {
-	mu    sync.Mutex
-	items map[string]time.Time
-}
-
-// NewCronEvalCache 创建缓存。
-func NewCronEvalCache() *CronEvalCache {
-	return &CronEvalCache{items: make(map[string]time.Time)}
-}
-
-func (c *CronEvalCache) key(tz, expr string) string {
-	return tz + "\x00" + expr
-}
-
-// Next 从缓存查询（命中直接返回），未命中则解析并缓存。
-func (c *CronEvalCache) Next(expr, tz string, from time.Time) (time.Time, error) {
-	if tz == "" {
-		tz = "UTC"
-	}
-	k := c.key(tz, expr)
-
-	c.mu.Lock()
-	next, ok := c.items[k]
-	c.mu.Unlock()
-	if ok && !next.IsZero() && next.After(from) {
-		return next, nil
-	}
-
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return time.Time{}, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("cron: bad timezone %q: %v", tz, err), err)
-	}
-
-	sched, err := ParseCron(expr)
-	if err != nil {
-		return time.Time{}, apperr.Wrap(apperr.CodeInternal, "CronEvalCache.Next", err)
-	}
-
-	fromLocal := from.In(loc)
-	nextLocal := sched.NextAfter(fromLocal)
-	if nextLocal.IsZero() {
-		c.mu.Lock()
-		c.items[k] = time.Time{} // 缓存"无匹配"
-		c.mu.Unlock()
-		return time.Time{}, nil
-	}
-
-	nextUTC := nextLocal.In(time.UTC)
-	c.mu.Lock()
-	c.items[k] = nextUTC
-	c.mu.Unlock()
-	return nextUTC, nil
-}
-
-// ─── CronRunner ────────────────────────────────────────────────────────────────
-
-const defaultErrorThreshold = 5 // 连续失败次数超限后自动禁用
-
-// CronRunner Cron 任务执行器，处理时区转换、抖动延迟和失败隔离。
-type CronRunner struct {
-	errorThreshold int
-	errors         map[string]int // taskID → consecutive errors
-	mu             sync.Mutex
-}
-
-// NewCronRunner 创建执行器。
-func NewCronRunner() *CronRunner {
-	return &CronRunner{
-		errorThreshold: defaultErrorThreshold,
-		errors:         make(map[string]int),
-	}
-}
-
-// StaggerDelay 根据 StaggerMs 返回 [0, StaggerMs) 的随机延迟。
-func StaggerDelay(staggerMs int) time.Duration {
-	if staggerMs <= 0 {
-		return 0
-	}
-	return time.Duration(rand.Intn(staggerMs)) * time.Millisecond
-}
-
-// ReportError 上报执行失败。返回是否已超阈值（应禁用）。
-func (cr *CronRunner) ReportError(taskID string) (thresholdReached bool) {
-	cr.mu.Lock()
-	cr.errors[taskID]++
-	count := cr.errors[taskID]
-	cr.mu.Unlock()
-	return count >= cr.errorThreshold
-}
-
-// ReportSuccess 重置错误计数。
-func (cr *CronRunner) ReportSuccess(taskID string) {
-	cr.mu.Lock()
-	delete(cr.errors, taskID)
-	cr.mu.Unlock()
-}
-
-// Disabled 检查任务是否已被禁用（DisabledAt != nil && 未过期）。
-func Disabled(task *ScheduledTask) bool {
-	if task.DisabledAt == nil {
-		return false
-	}
-	return task.DisabledAt.Before(time.Now()) || task.DisabledAt.Equal(time.Now())
 }

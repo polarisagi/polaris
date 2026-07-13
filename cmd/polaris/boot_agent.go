@@ -282,8 +282,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	agentRegistry := orchestrator.NewAgentRegistry()
 	orch := orchestrator.NewOrchestrator(blackboard, agentRegistry, sb.Cfg.System.MaxAgents)
 
-	diagLogger := &diagLoggerAdapter{}
-	pipelineOrch := orchestrator.NewPipelineOrchestrator(blackboard, tb.HITLGateway, diagLogger, 100*time.Millisecond, 3, 1800)
+	pipelineOrch := orchestrator.NewPipelineOrchestrator(blackboard, tb.HITLGateway, sb.DecisionLog, 100*time.Millisecond, 3, 1800)
 	patternDAGExec := orchestrator.NewPatternDAGExecutor(blackboard, pipelineOrch)
 	mapReduceExec := orchestrator.NewMapReduceExecutor(blackboard, 10*time.Minute)
 	parallelExec := orchestrator.NewParallelExecutor(blackboard)
