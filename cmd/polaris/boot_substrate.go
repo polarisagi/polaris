@@ -410,7 +410,17 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	// 创建动态原子代理，瞬间点亮系统基础功能
 	dynEmbedder := llm.NewDynamicEmbedder()
-	embedder = dynEmbedder
+
+	embedFn := func(ctx context.Context, texts []string, model string) ([][]float32, error) {
+		res := make([][]float32, len(texts))
+		for i, t := range texts {
+			res[i] = dynEmbedder.Embed(t)
+		}
+		return res, nil
+	}
+	batcher := search.NewEmbeddingBatcher(10*time.Millisecond, 100, embedFn)
+	batcher.Start(context.Background())
+	embedder = search.NewSyncBatcherAdapter(batcher)
 
 	// 智能判定优先级的核心逻辑
 	targetModel := ""
@@ -523,7 +533,26 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	if maxLLM := cfg.Thresholds.M13Interface.MaxConcurrentLLMCalls; maxLLM > 0 {
 		gov.WithMaxConcurrentLLM(maxLLM)
 	}
-	router := llm.NewInferenceRouter(reg, dialer, llm.WithGovernor(gov))
+
+	var semanticCache *search.SemanticCache
+	if surrealStore != nil {
+		cacheStore := search.NewSurrealCacheStore(store, surrealStore)
+		semanticCache = search.NewSemanticCache(
+			cacheStore,
+			embedder,
+			"default", // namespace
+			"",        // systemPromptHash (empty for default init, actual request keys have their own)
+			cfg.Thresholds.M1Router.SemanticCacheSimilarity,
+			cfg.Thresholds.M1Router.SemanticCacheMaxEntries,
+			time.Duration(cfg.Thresholds.M1Router.SemanticCacheTTLHours)*time.Hour,
+		)
+	}
+
+	routerOpts := []llm.RouterOption{llm.WithGovernor(gov)}
+	if semanticCache != nil {
+		routerOpts = append(routerOpts, llm.WithSemanticCache(semanticCache))
+	}
+	router := llm.NewInferenceRouter(reg, dialer, routerOpts...)
 	slog.Info("polaris: inference router initialized")
 
 	committed = true
