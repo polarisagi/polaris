@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:300 对内调度 / 3:420 MCP / 6:438 (SOFT)降级 / 7:463 跨模块契约 / 8:480 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:306 对内调度 / 3:426 MCP / 6:444 (SOFT)降级 / 7:469 跨模块契约 / 8:486 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -155,6 +155,12 @@ PUT    /v1/automations/{id}               更新（patch 语义）
 DELETE /v1/automations/{id}               删除（含执行历史）
 GET    /v1/automations/{id}/runs          执行历史（limit 默认 20）
 POST   /v1/automations/{id}/trigger       手动立即触发
+
+─── 编排与协同 (Orchestration Admin) ─────────────────
+POST   /v1/admin/tasks/pattern-mapreduce  派发 MapReduce 执行图
+POST   /v1/admin/tasks/pattern-parallel   派发 Parallel 执行图
+POST   /v1/admin/tasks/pattern-sequential 派发 Sequential 执行图
+POST   /v1/admin/tasks/pattern-swarm      派发 Swarm 协调执行图
 
 ─── HITL 审批 ──────────────────────────────────────────
 GET  /v1/approvals/pending                 [ESCALATE] 待审批列表
