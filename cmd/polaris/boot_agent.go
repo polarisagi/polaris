@@ -138,6 +138,18 @@ func buildAgent(
 	if tb.PolicyEvolver != nil {
 		a.InjectToolHintProvider(tb.PolicyEvolver)
 	}
+	// PRM（S_PLAN 候选 DAG 选优，docs/arch/M04-Agent-Kernel.md §4.6）：默认关闭，
+	// 需 Operator 在 configs 显式打开 m4_kernel.prm.enabled（2026-07-13 deadcode
+	// 复核发现完整实现但从未接线：agent.NewDefaultPRM/InjectPRM 此前零调用点）。
+	if sb.Cfg.Thresholds.M4Kernel.PRMEnabled {
+		a.InjectPRM(sysagent.NewDefaultPRM(sysagent.PRMConfig{
+			Enabled:        true,
+			ScorerModel:    sb.Cfg.Thresholds.M4Kernel.PRMScorerModel,
+			MinThreshold:   sb.Cfg.Thresholds.M4Kernel.PRMMinThreshold,
+			MaxCandidates:  sb.Cfg.Thresholds.M4Kernel.PRMMaxCandidates,
+			ComplexityGate: sb.Cfg.Thresholds.M4Kernel.PRMComplexityGate,
+		}, sb.Router))
+	}
 	a.InjectReplanExtensionActivationTimeout(
 		time.Duration(sb.Cfg.Thresholds.M4Kernel.ReplanExtensionActivationSecs) * time.Second,
 	)

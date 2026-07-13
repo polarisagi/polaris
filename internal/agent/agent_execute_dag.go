@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/policy"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -104,20 +105,32 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 					"agent: codeAct engine not injected; cannot execute code_act node")
 			}
 			lang := strings.TrimPrefix(toolName, "code_act:")
-			// Args JSON 应包含 {"code":"...","capability_id":"..."}
+			// Args JSON 只应包含 {"code":"...","stateful_session":...}——capability_id
+			// 字段仍解析但已废弃采信，见下方 JIT Mint 说明。
 			var codeArgs struct {
 				Code            string           `json:"code"`
-				CapabilityID    string           `json:"capability_id"`
+				CapabilityID    string           `json:"capability_id"` // 已废弃：不再采信，见下方 JIT Mint
 				TaintLevel      types.TaintLevel `json:"taint_level"`
 				StatefulSession bool             `json:"stateful_session"` // GD-4-002
 			}
 			if err := json.Unmarshal(args, &codeArgs); err != nil {
 				return nil, apperr.Wrap(apperr.CodeInvalidInput, "code_act: unmarshal args", err)
 			}
+			// JIT 铸造 Capability Token（M04 §4.6 / action.NewJITToken 文档注释：
+			// "LLM决定调用→不签发Token(仅ToolIntent)→Gate1-5通过→JIT Mint Token"）。
+			// 本节点已通过 S_VALIDATE 四层校验，禁止直接采信 LLM tool-call 参数中的
+			// capability_id（可伪造/越权），此处铸造一次性 Token 立即传给沙箱执行入口：
+			// depth=0（顶层铸造非委托），sandboxTier=3 对应 ContainerSandbox/Sbx-L3
+			// （docs/arch/M07-Tool-Action-Layer.md §7.4 inv_global_07 "强制 Sbx-L3"）。
+			jitTok, err := action.NewJITToken(a.ID, a.sCtx.SessionID,
+				[]action.TokenOperation{{ToolName: lang, MaxCalls: 1}}, 0, 3)
+			if err != nil {
+				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: JIT token mint failed", err)
+			}
 			caResult, err := a.codeAct.Execute(ctx, CodeActRequest{
 				Language:        lang,
 				Code:            codeArgs.Code,
-				CapabilityID:    codeArgs.CapabilityID,
+				CapabilityID:    jitTok.Claims.TokenID,
 				SessionID:       a.sCtx.SessionID,
 				AgentID:         a.ID,
 				TaintLevel:      codeArgs.TaintLevel,
