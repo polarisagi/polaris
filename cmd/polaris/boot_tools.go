@@ -30,7 +30,6 @@ import (
 	"github.com/polarisagi/polaris/internal/action/hook"
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
-	"github.com/polarisagi/polaris/internal/extension/bus"
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/extension/mcp"
@@ -83,7 +82,6 @@ type ToolBundle struct {
 	// PolicyEvolver 工具自进化闭环（2026-07-12 补齐接线）：bootAgent 经
 	// fsm.ToolHintProvider 消费其 BuildSystemHintBlock() 注入 System Prompt。
 	PolicyEvolver *action.PolicyEvolver
-	ExtensionBus  *bus.ExtensionBus
 	// LLMInfer 通用 LLM 推理闭包（封装 sb.Router），供 SemanticCompressHandler/
 	// ExtensionLibrarianHandler/CodeAct SecurityAuditAgent(L2) 等多个消费方复用，
 	// 避免每处各自重新实现一份"prompt string → sb.Router.Infer" 的桥接闭包。
@@ -484,7 +482,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	slog.Info("polaris: memory forgetting manager started", "decay_rate", 0.01, "interval_h", 6)
 
 	activator := native.NewExtensionActivator(extRepo, nativeCogn, mcpMgr, nativeEmbedFn)
-	extensionBus := bus.New(installFSM, installMgr, activator, extRepo)
 
 	disp := dispatch.New(compCatalog, toolReg, skillExecutor)
 	disp.Use(dispatch.SchemaValidateInterceptor())
@@ -518,7 +515,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Catalog:               compCatalog,
 		Activator:             activator,
 		PolicyEvolver:         policyEvolver,
-		ExtensionBus:          extensionBus,
 		LLMInfer:              protocol.LLMInferFunc(llmInfer),
 		Dispatcher:            disp,
 		VFSWorkspace:          vfsWM,
