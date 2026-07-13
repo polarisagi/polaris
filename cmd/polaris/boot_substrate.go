@@ -84,6 +84,7 @@ type SubstrateBundle struct {
 	Outbox        *sysstore.OutboxWorker
 	DBWriter      *sysstore.DatabaseWriter
 	DBWriterDone  <-chan struct{}
+	DecisionLog   *audit.SQLiteDecisionLog // M3/M7 决策审计日志，注入给 PipelineOrchestrator
 
 	// 策略引擎
 	Gate     *policy.Gate
@@ -300,8 +301,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	})
 	eventLog := audit.NewSQLiteEventLog(dbWriter)
 	decisionLog := audit.NewSQLiteDecisionLog(dbWriter)
-	_ = eventLog    // 待 M4 Agent Kernel 注入
-	_ = decisionLog // 待 M3 观测层注入
+	_ = eventLog // 待 M4 Agent Kernel 注入
 	slog.Info("polaris: mutation bus (database writer) started")
 
 	// ─── 2.9 AuditTrail ──────────────────────────────────────────────────────
@@ -543,6 +543,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		SurrealStore:  surrealStore,
 		StorageRouter: storageRouter,
 		DriftMonitor:  driftMonitor,
+		DecisionLog:   decisionLog,
 		Outbox:        outboxWorker,
 		DBWriter:      dbWriter,
 		DBWriterDone:  dbWriterDoneCh,
