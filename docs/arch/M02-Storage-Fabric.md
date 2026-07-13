@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:167 tasks表 / 3:203 容量 / 4:252 Workspace / 5:294 SchemaManager / 6:306 Reindexer / 7:320 Go↔Rust FFI / 8:344 连接池 / 9:359 多写者 / 10:372 引擎速查 / 11:389 四层记忆映射 / 15:397 428(SOFT)降级 / 16:411 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:167 tasks表 / 3:203 容量 / 4:252 Workspace / 5:294 SchemaManager / 6:308 Reindexer / 7:322 Go↔Rust FFI / 8:346 连接池 / 9:361 多写者 / 10:374 引擎速查 / 11:391 四层记忆映射 / 15:399 428(SOFT)降级 / 16:413 依赖 -->
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）
@@ -295,7 +295,9 @@ BEFORE DELETE trigger 自动递减引用计数，引用归零入队 GC。4KB 硬
 
 **当前阶段（上线前）**：Schema 变更直接修改 `internal/protocol/schema/NNN_*.sql` 原始 DDL 文件，删库重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。禁止以 ALTER TABLE/ADD COLUMN 补丁文件打补丁。
 
-**上线后**：新增编号迁移文件（ALTER TABLE / 数据迁移），由 `internal/store/`（SchemaManager）负责：按版本升序执行，每条迁移在独立事务内运行（失败自动回滚），前后向 `sys_config` 写入状态标记（idle / in_progress / completed）。崩溃恢复：启动时检测到 `in_progress` 则拒绝启动，要求操作员重置后重启。`internal/store/schema_manager.go` 的 `SchemaManager` 骨架（含事务/回滚/崩溃恢复逻辑）已提前实现，尚未接入启动流程（符合当前"上线前"阶段策略），留待进入"上线后"阶段时启用。
+**上线后**：新增编号迁移文件（ALTER TABLE / 数据迁移），由 `internal/store/`（SchemaManager）负责：按版本升序执行，每条迁移在独立事务内运行（失败自动回滚），前后向 `sys_config` 写入状态标记（idle / in_progress / completed）。崩溃恢复：启动时检测到 `in_progress` 则拒绝启动，要求操作员重置后重启。
+
+> 2026-07-13 更新：`SchemaManager` 的骨架逻辑已正式接入 `store.OpenSQLite` 的启动流程。当前虽然暂无纯 Go 的跨版本合并逻辑或增量迁移配置，但框架底座的注入与版本恢复机制已全面生效，为进入"上线后"阶段做好了准备。
 
 **兼容策略**：新字段一律 NULLABLE 或有 DEFAULT；降级不执行 Down，旧代码忽略新列。
 

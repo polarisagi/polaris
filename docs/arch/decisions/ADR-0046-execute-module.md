@@ -1,7 +1,7 @@
 # ADR-0046: 新建 internal/execute 模块，收敛单/多 Agent 执行引擎
 
-- **状态**: Accepted
-- **日期**: 2026-07-12
+- **状态**: Implemented
+- **日期**: 2026-07-13
 - **决策者**: MrLaoLiAI
 - **相关模块**: M04 / M08 / `internal/agent`（原 `internal/agent/dag`）/ `internal/swarm`（原 `internal/swarm/orchestrator`）/ `internal/execute`（新）
 
@@ -90,3 +90,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-07-12 | 初稿，记录 internal/execute 模块化决策与迁移范围 |
+| 2026-07-13 | 状态更新为 Implemented，新增的模式执行器（MapReduce等）已全线接入 sysadmin API |
