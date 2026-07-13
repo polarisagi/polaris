@@ -103,6 +103,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetParallelExecutor(ab.ParallelExec)
 	httpServer.SetSequentialExecutor(ab.SequentialExec)
 	httpServer.SetSwarmCoordinator(ab.SwarmCoord)
+	httpServer.SetPersonaRefiner(ab.PersonaRefiner)
 	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SeedBuiltinConfig(mpData, regData)
 	httpServer.SetReloadProviders(func() {

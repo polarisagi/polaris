@@ -83,6 +83,11 @@ type AgentBundle struct {
 	// AgentPool for per-session web agents
 	AgentPool *sysagent.Pool
 
+	// PersonaRefiner 用户画像精炼器（M05 §2.3），跨 agent-0/AgentPool/ChatHandler
+	// 共享同一进程级单例；boot_server.go 通过 Server.SetPersonaRefiner 注入 ChatHandler
+	// 用于系统提示词组装（消费端见 chat/system_prompt.go）。
+	PersonaRefiner *agentctx.PersonaRefiner
+
 	// Supervisor Tree（Workers 已注册；由 run() 调用 Start()）
 	Supervisor *supervisor.Supervisor
 
@@ -106,6 +111,7 @@ func buildAgent(
 	reflectionWorker *reflexion.ReflectionWorker,
 	prefs map[string]string,
 	bgCtx context.Context,
+	personaRefiner *agentctx.PersonaRefiner,
 ) *sysagent.Agent {
 	a := sysagent.NewAgent(sessionID, taskRepo, nil, sb.Router)
 	a.SetExtQuerier(sb.Store.DB())
@@ -177,6 +183,10 @@ func buildAgent(
 			}
 		})
 	})
+	// PersonaRefiner（M05 §2.3）：agent-0 与 AgentPool 派生 Agent 共享同一进程级
+	// 单例（2026-07-13 deadcode 复核发现完整实现但从未接线：NewPersonaRefiner/
+	// Load/RefineAtSessionEnd/Save/ToUserPreferences 此前零生产调用点）。
+	a.InjectPersonaRefiner(personaRefiner)
 	return a
 }
 
@@ -336,7 +346,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Warn("polaris: failed to load preferences on startup", "err", err)
 	}
 
-	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx)
+	// PersonaRefiner（M05 §2.3）：单进程单例，Load() 一次性从 preferences 表加载
+	// 冷启动画像；provider 用 sb.Router 供 RefineAtSessionEnd 生成 InteractionSummary。
+	personaRefiner := agentctx.NewPersonaRefiner(sb.Store.DB(), sb.Router)
+	if err := personaRefiner.Load(ctx); err != nil {
+		slog.Warn("polaris: persona refiner load failed, using defaults", "err", err)
+	}
+
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner)
 
 	maxConcurrent := sb.Cfg.System.MaxAgents
 	if maxConcurrent <= 0 {
@@ -344,7 +361,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
-		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx)
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner)
 	}, maxConcurrent)
 	// KillSwitch 三阶段熔断（ADR-0009）接入：Pause/FullStop 阶段拒绝新 Agent 执行，
 	// Agent 内核异常退出上报错误计数（Acquire/AcquireHeadless 是全部触发路径的唯一收敛点）。
@@ -756,6 +773,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		AgentPool:      agentPool,
 		Supervisor:     sv,
 		ReaperStop:     reaperStop,
+		PersonaRefiner: personaRefiner,
 	}, nil
 }
 

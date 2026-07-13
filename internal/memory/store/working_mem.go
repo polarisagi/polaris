@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"text/template"
@@ -160,6 +162,23 @@ func (ic *ImmutableCore) renderSystemPrompt() string {
 	// 5.6 stable — 操作指令 (Memory Hygiene 等)
 	if ic.OperationalDirectives != "" {
 		parts = append(parts, ic.OperationalDirectives)
+	}
+
+	// 5.7 stable — 用户显式偏好画像（PersonaRefiner，M05 §2.3；与 5.5 UserProfile
+	// 互补，见 chat/system_prompt.go 写入侧注释）。map 迭代顺序不确定，排序后拼接
+	// 保证同一画像状态下渲染结果确定，避免打乱 LLM provider 的 prompt prefix cache。
+	if len(ic.UserPreferences) > 0 {
+		keys := make([]string, 0, len(ic.UserPreferences))
+		for k := range ic.UserPreferences {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		lines := make([]string, 0, len(keys)+1)
+		lines = append(lines, "## User Preferences")
+		for _, k := range keys {
+			lines = append(lines, fmt.Sprintf("- %s: %s", k, ic.UserPreferences[k]))
+		}
+		parts = append(parts, strings.Join(lines, "\n"))
 	}
 
 	// 6. volatile — 时间戳 / 会话信息（精确到天，不破坏 prefix cache）

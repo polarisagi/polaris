@@ -48,7 +48,10 @@ func TestImmutableCore(t *testing.T) {
 	ic.PlatformHint = "hint"
 	ic.VolatileBlock = "volatile"
 	res = ic.renderSystemPrompt()
-	if res != "soul\n\nguide\n\ncustom\n\nhint\n\nvolatile" {
+	// UserPreferences["theme"]="dark" 由本函数开头设置（用于 Load() 断言），
+	// §5.7 补齐渲染后必然出现在 stable 层组装结果中，一并断言。
+	want := "soul\n\nguide\n\ncustom\n\nhint\n\n## User Preferences\n- theme: dark\n\nvolatile"
+	if res != want {
 		t.Fatalf("parts assembly failed: %s", res)
 	}
 

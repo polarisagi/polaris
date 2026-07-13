@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -186,6 +187,47 @@ func (a *Agent) InjectTerminalCallback(cb func(ctx context.Context, taskID, task
 	a.terminalCallback = cb
 }
 
+// InjectPersonaRefiner 注入用户画像精炼器（M05 §2.3）。跨 Agent 实例共享同一
+// 进程级单例（profile_key 固定 "default"，单用户自托管场景无隔离需求），
+// 由 boot 阶段 Load() 一次后传入。nil 时 handleTerminalState 跳过画像更新。
+func (a *Agent) InjectPersonaRefiner(pr *agentctx.PersonaRefiner) {
+	a.personaRefiner = pr
+}
+
+// refinePersonaAsync 是 PersonaRefiner 会话结束 hook（M05 §2.3）：Agent Kernel
+// 无逐条聊天记录概念（S_PERCEIVE/S_PLAN 走 Episodic 语义检索，非线性 transcript），
+// 故用本次任务的原始意图 + 终态摘要构造最小代表性转录，供 LLM 摘要
+// InteractionSummary。异步执行：RefineAtSessionEnd 含一次 LLM 调用，不阻塞
+// handleTerminalState 主流程；内部已对 LLM 失败/空响应做 fail-soft（保留旧值），
+// 此处无需再处理错误，仅记录 Warn。
+func (a *Agent) refinePersonaAsync(ctx context.Context, current types.AgentState) {
+	if a.personaRefiner == nil {
+		return
+	}
+	intentText := a.sCtx.RawIntentTS.Content()
+	if intentText == "" {
+		return
+	}
+	outcome := "task failed"
+	if current == types.AgentStateComplete {
+		outcome = "task completed successfully"
+	}
+	msgs := []types.Message{
+		{Role: "user", Content: intentText},
+		{Role: "assistant", Content: fmt.Sprintf("[%s, replan_count=%d]", outcome, a.sm.ReplanCount())},
+	}
+	pr := a.personaRefiner
+	concurrent.SafeGo(ctx, "agent.persona_refine", func(gctx context.Context) {
+		if err := pr.RefineAtSessionEnd(gctx, msgs); err != nil {
+			slog.Warn("persona refiner: refine at session end failed", "err", err)
+			return
+		}
+		if err := pr.Save(gctx); err != nil {
+			slog.Warn("persona refiner: save failed", "err", err)
+		}
+	})
+}
+
 func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:    types.AgentStreamEventStatus,
@@ -215,6 +257,8 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 	if a.tokenVault != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
 		a.tokenVault.ClearTask(a.sCtx.SessionID)
 	}
+
+	a.refinePersonaAsync(ctx, current)
 
 	// 触发 Terminal Callback (P1-2 Learning 闭环)。
 	// 传 SessionID 而非 TaskID：ReflectionWorker 以此为键检索 episodic 事件

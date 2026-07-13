@@ -51,6 +51,22 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 		}
 	}
 
+	// 用户显式偏好画像（PersonaRefiner，M05 §2.3）：与上方 Stage3.5 UserProfile
+	// 互补——UserProfile 是从 Episodic 事件自动合成的行为事实，PersonaRefiner 是
+	// 结构化偏好维度（language_pref/response_style/output_format/expertise）+
+	// 会话结束 LLM 摘要，二者数据来源与更新频率不同，分别写入 ImmutableCore 不同
+	// 字段（2026-07-13 deadcode 复核：ToUserPreferences 此前构造了返回值但从未
+	// 被任何调用方使用，ic.UserPreferences 也从未在 renderSystemPrompt 中渲染，
+	// 见 working_mem.go §5.7 补齐）。
+	if s.PersonaRefiner != nil {
+		if ic.UserPreferences == nil {
+			ic.UserPreferences = make(map[string]string)
+		}
+		for _, p := range s.PersonaRefiner.ToUserPreferences() {
+			ic.UserPreferences[p.Dimension] = p.PreferenceText
+		}
+	}
+
 	// M9 激活的系统提示词优先覆盖（general taskType）
 	// 三层组装时 SystemPromptTemplate 非空则全量走模板渲染，跳过 stable 层组装
 	s.ActivatedSystemPromptMu.RLock()
