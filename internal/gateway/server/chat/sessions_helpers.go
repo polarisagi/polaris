@@ -155,6 +155,26 @@ retryLoop:
 	return apperr.Wrap(apperr.CodeInternal, "Server.saveMessage", lastErr)
 }
 
+// SampleAndScoreReply 在一轮 assistant 回复持久化之后调用，按 1% 概率异步
+// 触发 LLM Judge 打分并回灌 ContinuousSamplingMonitor（M12 §9 连续采样监控，
+// 2026-07-14 补齐写侧）。h.SamplingMonitor 为 nil（未注入/测试场景）时安全
+// 跳过。打分用的 Provider 复用 Registry.PickProvider("default")/("general")
+// 兜底链——与 system_prompt.go InjectSystemPrompt 同一取 Provider 方式，不
+// 单独为打分引入新的 Provider 解析路径。
+//
+// 4 个生产 assistant 回复落点（sse.go 交互式 SSE / webhook_receive.go /
+// cron_runner.go / workflow_engine.go）均已接入本方法，覆盖全部生产回复流量。
+func (h *ChatHandler) SampleAndScoreReply(sessionID, query, response string) {
+	if h.SamplingMonitor == nil || h.Registry == nil {
+		return
+	}
+	p := h.Registry.PickProvider("default")
+	if p == nil {
+		p = h.Registry.PickProvider("general")
+	}
+	h.SamplingMonitor.MaybeSampleAndScore(p, sessionID, query, response)
+}
+
 // newMessageDedupeKey 生成消息幂等键：会话/角色前缀便于人工排查 + 随机后缀
 // 保证唯一性（熵池耗尽时降级为纳秒时间戳，与 newSessionID 一致的降级策略）。
 func newMessageDedupeKey(sessionID, role string) string {

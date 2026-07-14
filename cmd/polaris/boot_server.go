@@ -104,6 +104,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetSequentialExecutor(ab.SequentialExec)
 	httpServer.SetSwarmCoordinator(ab.SwarmCoord)
 	httpServer.SetPersonaRefiner(ab.PersonaRefiner)
+	// 2026-07-14 补齐：ContinuousSamplingMonitor 写侧（RecordSample）此前零
+	// 生产调用点，见 boot_agent.go 构造处注释 + sampling_scorer.go。
+	httpServer.SetSamplingMonitor(ab.SamplingMonitor)
 	httpServer.SetCatalog(tb.Catalog)
 	httpServer.SeedBuiltinConfig(mpData, regData)
 	httpServer.SetReloadProviders(func() {

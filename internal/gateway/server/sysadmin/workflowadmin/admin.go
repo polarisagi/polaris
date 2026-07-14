@@ -22,6 +22,9 @@ type ChatDispatcher interface {
 	InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message
 	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, toolCount int64) error
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
+	// SampleAndScoreReply 见 chat.ChatHandler 同名方法（M12 §9 连续采样监控
+	// 写侧，2026-07-14 补齐）。
+	SampleAndScoreReply(sessionID, query, response string)
 }
 
 // WorkflowAdmin 承载 workflow CRUD + cron 触发 + StateGraphExecutor 执行引擎

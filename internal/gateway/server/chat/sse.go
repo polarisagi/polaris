@@ -266,6 +266,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs); err != nil {
 			slog.Error("server: saveMessage assistant", "session", sessionID, "err", err)
 		}
+		s.SampleAndScoreReply(sessionID, req.Input, reply)
 		if tw != nil {
 			tw.WriteTurn("assistant", reply, inferLatencyMs, 0)
 		}
