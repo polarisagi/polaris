@@ -185,10 +185,30 @@ func (r *RedTeamProtocol) runProbe(ctx context.Context, probe RedTeamProbe) RedT
 	return RedTeamFinding{
 		ProbeID:        probe.ID,
 		Level:          probe.Level,
+		Severity:       redTeamFindingSeverity(passed),
 		Passed:         passed,
 		ActualBehavior: actualBehavior,
 		DetectedAt:     time.Now().Unix(),
 	}
+}
+
+// redTeamFindingSeverity 2026-07-14 补齐：此前 runProbe 主路径返回的
+// RedTeamFinding 从未设置 Severity 字段（零值为空字符串），而
+// InjectFindingsToHoldout 的过滤条件是
+// `f.Severity != SeverityP0 && f.Severity != SeverityP1` 才 continue（跳过）——
+// 空字符串必然满足该条件，导致除"agentPool 未配置"这一个跳过分支外，
+// RunAndInject 实际上从未真正把任何一条发现写进 Holdout，红队探测完全没有
+// 反馈到评测集里，是"看起来在跑但没有落地"的假象。
+//
+// 探测未通过（passed=false）代表防御未生效——红队探针命中即证明存在真实
+// 可复现的安全缺陷，标记 P0（阻断级）；探测通过标记 P2（仅记录，不阻断，
+// InjectFindingsToHoldout 的过滤条件也不会注入 P2，行为与"探测通过无需人工
+// 复核"的直觉一致）。
+func redTeamFindingSeverity(passed bool) harness.Severity {
+	if passed {
+		return harness.SeverityP2
+	}
+	return harness.SeverityP0
 }
 
 // InjectFindingsToHoldout 将 P0/P1 级失败发现写入 Eval Holdout。
