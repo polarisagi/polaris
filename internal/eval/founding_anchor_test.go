@@ -97,6 +97,21 @@ func TestFoundingAnchor(t *testing.T) {
 		if !VerifySignature(anchor, pub) {
 			t.Errorf("signature verification failed")
 		}
+
+		// 2026-07-14 回归防护：篡改锚点内容后签名必须校验失败——这是
+		// cmd/polaris/boot_agent.go founding-anchor-drift-detector 的
+		// verifyOrDiscard 依赖的安全属性（磁盘直改绕过签名重算时必须被检出）。
+		tampered := *anchor
+		tampered.Fingerprint.OutputLenP50 = anchor.Fingerprint.OutputLenP50 + 999
+		if VerifySignature(&tampered, pub) {
+			t.Errorf("expected verification to fail for tampered fingerprint")
+		}
+
+		// 错误公钥同样必须校验失败。
+		wrongPub, _, _ := ed25519.GenerateKey(nil)
+		if VerifySignature(anchor, wrongPub) {
+			t.Errorf("expected verification to fail for mismatched public key")
+		}
 	})
 
 	t.Run("GlobalDriftScore", func(t *testing.T) {
