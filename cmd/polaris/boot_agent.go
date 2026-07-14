@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -214,6 +216,31 @@ func (p *piiScrubberAdapter) Scrub(text string) string {
 	}
 	res, _, _ := p.detector.Redact(context.Background(), text)
 	return res
+}
+
+// loadFoundingAnchorSigningKey 从 POLARIS_FOUNDING_ANCHOR_PRIVKEY（base64
+// Ed25519 私钥，见 internal/eval/founding_anchor.go FoundingAnchor.Signature
+// 文档注释）加载签名私钥；公钥由私钥派生（Ed25519 无需独立存储公钥）。
+// 未配置或格式无效时返回 (nil, nil)——对齐 VerifySignature 文档注释的
+// "pubKey 为 nil 时开发模式放行"：未部署签名密钥的场景（本地开发/单机部署）
+// 不强制要求锚点签名，与 LoadOrCreate/VerifySignature 现有的 nil 语义一致。
+func loadFoundingAnchorSigningKey() (ed25519.PrivateKey, ed25519.PublicKey) {
+	raw := os.Getenv("POLARIS_FOUNDING_ANCHOR_PRIVKEY")
+	if raw == "" {
+		return nil, nil
+	}
+	priv, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(priv) != ed25519.PrivateKeySize {
+		slog.Warn("polaris: POLARIS_FOUNDING_ANCHOR_PRIVKEY set but invalid (expected base64 Ed25519 private key), founding_anchor signing disabled")
+		return nil, nil
+	}
+	privKey := ed25519.PrivateKey(priv)
+	pubKey, ok := privKey.Public().(ed25519.PublicKey)
+	if !ok {
+		slog.Warn("polaris: failed to derive public key from POLARIS_FOUNDING_ANCHOR_PRIVKEY, founding_anchor signing disabled")
+		return nil, nil
+	}
+	return privKey, pubKey
 }
 
 func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, kb *KnowledgeBundle) (*AgentBundle, error) { //nolint:gocyclo
@@ -619,7 +646,28 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			return traces
 		}
 
-		anchor, _, err := eval.LoadOrCreate(sb.DataDir, nil, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+		// 2026-07-14 补齐：VerifySignature 此前全仓零调用点——LoadOrCreate 恒传
+		// nil privKey，锚点从未签名，也就没有加载时校验篡改的意义。现按
+		// founding_anchor.go 既有文档注释（"环境变量: POLARIS_FOUNDING_ANCHOR_
+		// PRIVKEY（base64 Ed25519 私钥）"）接入：私钥仅用于运行时自动签名新建的
+		// 锚点，未配置时保持 §L215 注释所述"开发模式放行"（不签名/不校验）。
+		privKey, pubKey := loadFoundingAnchorSigningKey()
+		verifyOrDiscard := func(anchor *eval.FoundingAnchor) *eval.FoundingAnchor {
+			if anchor == nil || pubKey == nil {
+				return anchor
+			}
+			if !eval.VerifySignature(anchor, pubKey) {
+				// 签名校验失败 = 锚点文件已被篡改（磁盘直改跳过了签名重算）。
+				// 不信任、不覆盖、不冒用——按"锚点尚未创建"降级处理，下个 tick
+				// 重新加载会读到同一份文件再次失败，持续告警而非静默接受。
+				slog.Error("CRITICAL: founding_anchor signature verification failed, discarding as tampered", "path", sb.DataDir)
+				return nil
+			}
+			return anchor
+		}
+
+		anchor, _, err := eval.LoadOrCreate(sb.DataDir, privKey, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+		anchor = verifyOrDiscard(anchor)
 		if err != nil || anchor == nil {
 			slog.Info("polaris: founding_anchor not yet created (insufficient trajectory history), will retry each drift-check tick", "err", err)
 		}
@@ -631,8 +679,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				return
 			case <-ticker.C:
 				if anchor == nil {
-					// 锚点尚未创建：每 24h 重试一次，积累到 MinTasksForAnchor 后自动创建。
-					anchor, _, err = eval.LoadOrCreate(sb.DataDir, nil, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+					// 锚点尚未创建（或此前被判定为篡改）：每 24h 重试一次。
+					anchor, _, err = eval.LoadOrCreate(sb.DataDir, privKey, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+					anchor = verifyOrDiscard(anchor)
 					if err != nil || anchor == nil {
 						continue
 					}
