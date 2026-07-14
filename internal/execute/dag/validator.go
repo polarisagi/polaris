@@ -10,7 +10,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -96,7 +95,13 @@ func ValidateDAG(ctx context.Context, vCtx *DAGValidationContext) (err error) {
 //   - TaintHigh:   拦截所有非 read_only 工具（SanitizeToSafe 必须先失败才表明数据未降级）。
 //     意外放行（SanitizeToSafe 返回 nil）视为安全逻辑错误，主动拒绝。
 //
-// 完整的字段级降级逻辑（SanitizeBySchema + tool_call schema 双向校验）由 M7 工具调用层处理。
+// 字段级降级（2026-07-14 补齐，M11 §2.5）：拦截前对每个节点独立尝试两条降级路径
+// （均不改变"仍处高位时"的原有拦截行为，只新增放行分支）：
+//  1. SanitizeBySchema —— 工具声明的 InputSchema 对所有字符串字段有 format/pattern/
+//     enum/const 约束时，node.Args 视为结构化数据而非自由文本注入载体，允许降一级
+//     （硬顶 TaintMedium）。
+//  2. SanitizeByUserReview —— vCtx.ReviewChecker（复用 ExemptionVault）持有对该
+//     node.Args 内容哈希匹配的 HITL 已批准豁免时，标记为 TaintUserReviewed 放行。
 func validateTaintGate(vCtx *DAGValidationContext) error {
 	// TaintNone / TaintLow 不触发 TaintGate
 	if vCtx.ActiveTaintLevel < types.TaintMedium {
@@ -104,47 +109,16 @@ func validateTaintGate(vCtx *DAGValidationContext) error {
 	}
 
 	for _, node := range vCtx.Plan.Nodes {
-		if vCtx.ActiveTaintLevel >= types.TaintHigh {
-			// TaintHigh：尝试 SanitizeToSafe；若意外通过则主动拒绝（安全逻辑保险）
-			ts := taint.NewTaintedString(
-				string(node.Args),
-				taint.TaintSource{
-					Module:           "m4_validate",
-					EntityID:         node.ID,
-					OriginTaintLevel: vCtx.ActiveTaintLevel,
-				},
-				"dag_node_args",
-			)
-			if _, err := taint.SanitizeToSafe(ts); err == nil {
-				// TaintHigh 数据不应通过 SanitizeToSafe——视为安全逻辑错误
-				return &DAGValidationError{
-					Layer:  "L1_taint",
-					NodeID: node.ID,
-					Reason: "unexpected: TaintHigh args passed SanitizeToSafe without sanitization",
-				}
-			}
-			// SanitizeToSafe 正确拒绝——检查工具是否只读；非只读则阻断
-			if !isReadOnlyTool(node.ToolName, vCtx.ToolExecutor) {
-				return &DAGValidationError{
-					Layer:  "L1_taint",
-					NodeID: node.ID,
-					Reason: fmt.Sprintf("TaintHigh args blocked: tool %q is not read-only, requires schema sanitization before execution", node.ToolName),
-				}
-			}
-		} else {
-			// TaintMedium：仅拦截 write_network（外发请求）；read_only / write_local 允许通过
-			// 依据：M04 §3 Layer A——中等可信度数据不应驱动网络外发，但本地操作可接受
-			if isWriteNetworkTool(node.ToolName, vCtx.ToolExecutor) {
-				return &DAGValidationError{
-					Layer:  "L1_taint",
-					NodeID: node.ID,
-					Reason: fmt.Sprintf("TaintMedium args blocked: tool %q performs network write, requires sanitization to TaintLow first", node.ToolName),
-				}
-			}
+		if err := validateNodeTaint(vCtx, node); err != nil {
+			return err
 		}
 	}
 	return nil
 }
+
+// validateNodeTaint / attemptSchemaDowngrade / attemptUserReviewDowngrade /
+// hasStrictSchema / normalizeSchemaMap / schemaNodeIsStrict 见 taint_downgrade.go
+// （R7 文件行数治理拆分：本文件专注四层校验管线骨架，字段级降级逻辑独立成文件）。
 
 // isWriteNetworkTool 判断工具是否会触发网络外发（CapWriteNetwork 或以上）。
 // 优先查询 ToolRegistry；未注册或 registry 为 nil 时使用内置黑名单（fail-closed）。

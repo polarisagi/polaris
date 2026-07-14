@@ -40,6 +40,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		AgentID:          a.sCtx.AgentID,
 		SessionID:        a.sCtx.SessionID,
 		SystemTier:       a.Config.SystemTier, // 由 M3 HardwareProbe 探测后通过 AgentConfig.SystemTier 注入
+		ReviewChecker:    a.taintReviewChecker,
 	}
 
 	// [Task 11] 向 PolicyGate 填充 monthly_spend_usd 供 Cedar budget_cap 规则使用。

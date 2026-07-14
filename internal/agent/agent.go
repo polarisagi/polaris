@@ -29,45 +29,46 @@ import (
 
 // Agent 是系统核心执行单元——一个 goroutine，空闲时挂起。
 type Agent struct {
-	ID                string
-	taskRepo          protocol.TaskReadRepository
-	intent            chan types.AgentTrigger
-	sm                *fsm.StateMachine
-	sCtx              *fsm.StateContext
-	Config            AgentConfig
-	ctx               context.Context
-	cancel            context.CancelFunc
-	taintGate         TaintGate
-	provider          protocol.Provider             // LLM 调用入口（由 M1 提供）
-	policyGate        protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
-	hitl              protocol.HITL                 // 人工审批网关
-	toolRegistry      protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
-	catalog           catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
-	memory            protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
-	worldModel        WorldModel                    // 认知世界模型，nil 时安全降级
-	prm               *DefaultPRM                   // 可选；nil 时跳过多候选打分
-	blindZoneDetector BlindZoneDetector             // 可选；nil 时跳过盲区检查
-	scorer            *stepScorer                   // Adaptive Max-Steps 打分器
-	whisperChan       <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
-	whisperSendChan   chan<- protocol.MemoryWhisper // PlannerPool 推送端
-	plannerSpawner    func(ctx context.Context, goal, taskType string, provider protocol.Provider)
-	outboxWriter      protocol.OutboxWriter
-	piiVault          *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
-	extQuerier        protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
-	toolCallRecorder  ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
-	memInjector       MemoryInjector            // NEW: 组装前主动记忆注入
-	codeAct           CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
-	skillCache        ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
-	skillExecutor     protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
-	assembler         *agentctx.Assembler       // CC-3 ContextAssembler
-	lamEngine         LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
-	surpriseCalc      SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
-	terminalCallback  func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
-	tokenVault        *guard.PIITokenVault     // PII OpaqueToken 会话级可逆令牌库
-	piiDetector       *guard.PIIDetector       // PII 检测与脱敏器
-	dagRunner         DAGRunner                // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
-	dagValidator      DAGValidator             // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
-	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
+	ID                 string
+	taskRepo           protocol.TaskReadRepository
+	intent             chan types.AgentTrigger
+	sm                 *fsm.StateMachine
+	sCtx               *fsm.StateContext
+	Config             AgentConfig
+	ctx                context.Context
+	cancel             context.CancelFunc
+	taintGate          TaintGate
+	provider           protocol.Provider             // LLM 调用入口（由 M1 提供）
+	policyGate         protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
+	hitl               protocol.HITL                 // 人工审批网关
+	taintReviewChecker protocol.TaintReviewChecker   // S_VALIDATE TaintGate 人工复核豁免查询（M11 §2.5）；nil 时跳过
+	toolRegistry       protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
+	catalog            catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
+	memory             protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
+	worldModel         WorldModel                    // 认知世界模型，nil 时安全降级
+	prm                *DefaultPRM                   // 可选；nil 时跳过多候选打分
+	blindZoneDetector  BlindZoneDetector             // 可选；nil 时跳过盲区检查
+	scorer             *stepScorer                   // Adaptive Max-Steps 打分器
+	whisperChan        <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
+	whisperSendChan    chan<- protocol.MemoryWhisper // PlannerPool 推送端
+	plannerSpawner     func(ctx context.Context, goal, taskType string, provider protocol.Provider)
+	outboxWriter       protocol.OutboxWriter
+	piiVault           *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
+	extQuerier         protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
+	toolCallRecorder   ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
+	memInjector        MemoryInjector            // NEW: 组装前主动记忆注入
+	codeAct            CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
+	skillCache         ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
+	skillExecutor      protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
+	assembler          *agentctx.Assembler       // CC-3 ContextAssembler
+	lamEngine          LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
+	surpriseCalc       SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
+	terminalCallback   func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
+	tokenVault         *guard.PIITokenVault     // PII OpaqueToken 会话级可逆令牌库
+	piiDetector        *guard.PIIDetector       // PII 检测与脱敏器
+	dagRunner          DAGRunner                // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
+	dagValidator       DAGValidator             // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
+	personaRefiner     *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 
 	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine
 	// 向主循环传递重定向意图字符串，避免直接写 sCtx.RawIntentTS 的数据竞争。

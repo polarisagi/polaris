@@ -53,6 +53,18 @@ type DAGValidationContext struct {
 	MonthlySpendUSD float64
 	// MonthlyBudgetUSD 来自配置项，0 = 不限额。
 	MonthlyBudgetUSD float64
+	// ReviewChecker 供 L1_taint 校验查询 HITL 已批准的人工复核豁免（M11 §2.5
+	// SanitizeByUserReview 触发点）。nil 时该降级路径不生效（fail-closed，不影响
+	// 既有 SanitizeBySchema/纯拦截行为）。消费方: internal/execute/dag.validateTaintGate；
+	// 生产方: internal/security/token.ExemptionVault（2026-07-14 复用 Task 8 已建的
+	// HITL 豁免令牌基础设施，而非另建一套人工复核存储）。
+	ReviewChecker TaintReviewChecker
+}
+
+// TaintReviewChecker 判断某 AgentID 是否持有对指定内容有效的人工复核豁免
+// （接口在调用方 internal/execute/dag 定义所在的共享契约包，HE-3）。
+type TaintReviewChecker interface {
+	IsReviewed(agentID string, content []byte) bool
 }
 
 // DAGValidationError 包装 S_VALIDATE 失败的结构化错误。

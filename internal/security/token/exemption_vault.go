@@ -54,3 +54,13 @@ func (v *ExemptionVault) Lookup(agentID string) *TaintExemptionToken {
 	}
 	return tok
 }
+
+// IsReviewed 实现 protocol.TaintReviewChecker：判断某 AgentID 当前是否持有对
+// 指定 content 内容哈希匹配、未过期的豁免令牌（2026-07-14 新增，供
+// internal/execute/dag.validateTaintGate 的 SanitizeByUserReview 触发点复用——
+// M04 §3 HITL 审批→颁发豁免令牌这条转义路径此前只服务网络出口检查
+// [checkTaintEgress]，S_VALIDATE 阶段的 TaintHigh 阻断同样需要"人工已复核"
+// 判据来源，复用同一份 Vault 而非另建一套存储，避免审批语义割裂）。
+func (v *ExemptionVault) IsReviewed(agentID string, content []byte) bool {
+	return v.Lookup(agentID).Valid(content)
+}

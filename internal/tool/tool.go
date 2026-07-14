@@ -45,32 +45,8 @@ type InMemoryToolRegistry struct {
 	exemptionVault     *token.ExemptionVault // 可选注入（HITL 豁免令牌存储）
 }
 
-// TaintEgressChecker 出口污点检查接口（consumer-side 定义，防止 internal/tool
-// 反向依赖 internal/security/policy 具体实现；policy.Gate 满足此接口）。
-type TaintEgressChecker interface {
-	CheckEgressWithExemption(data []byte, taintLevel types.TaintLevel, tok *token.TaintExemptionToken) error
-}
-
-// WithTaintEgressChecker 注入出口污点检查器（可选，2026-07-14 补齐：
-// policy.Gate.CheckEgressWithExemption 此前完整实现+有测试，但全仓库零生产
-// 调用点——agent_execute_dag.go 捕获的 policy.ErrTaintBlockedEgress 分支因此
-// 从未真正触发过。注入后，ExecuteTool 对声明 SideNetworkCall 副作用且入参
-// TaintLevel>=TaintMedium 的工具强制检查，未持有效豁免令牌时拒绝执行）。
-func (r *InMemoryToolRegistry) WithTaintEgressChecker(c TaintEgressChecker) *InMemoryToolRegistry {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.taintEgressChecker = c
-	return r
-}
-
-// WithExemptionVault 注入 HITL 豁免令牌存储（可选，与 WithTaintEgressChecker
-// 配套注入；nil 时出口污点检查永远查不到豁免令牌，等价于只挡不放）。
-func (r *InMemoryToolRegistry) WithExemptionVault(v *token.ExemptionVault) *InMemoryToolRegistry {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.exemptionVault = v
-	return r
-}
+// TaintEgressChecker/WithTaintEgressChecker/WithExemptionVault/checkTaintEgress
+// 见 tool_taint_egress.go（R7 拆分）。
 
 // ToolOutcomeRecorder/WithOutcomeRecorder/reportOutcome 见 tool_outcome.go（R7 拆分）。
 
@@ -282,30 +258,6 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	return finalResult, nil
 }
 
-// checkTaintEgress 出口污点检查（M04 §3 + M11 §2.3/§6，2026-07-14 补齐）：具备
-// SideNetworkCall 副作用的工具，若本次调用入参 TaintLevel >= TaintMedium（含
-// URL/查询参数本身由上游被污染内容衍生的场景，防 prompt-injection 诱导
-// exfiltration），必须持有匹配的 HITL 豁免令牌才能放行——否则拒绝，返回的错误
-// 经 apperr.Wrap 后仍可通过 errors.Is(err, policy.ErrTaintBlockedEgress) 命中
-// （*policy.TaintEgressBlockedError.Unwrap() 指向该哨兵），由上游 runExecuteDAG
-// 捕获后发起 HITL 转义审批。r.taintEgressChecker 为 nil（未注入）时跳过，行为
-// 与改造前完全一致。
-func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel, input []byte) error {
-	if r.taintEgressChecker == nil || taintLevel < types.TaintMedium || !hasNetworkEgressSideEffect(tool) {
-		return nil
-	}
-	var exemption *token.TaintExemptionToken
-	if r.exemptionVault != nil {
-		if agentID, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && agentID != "" {
-			exemption = r.exemptionVault.Lookup(agentID)
-		}
-	}
-	if err := r.taintEgressChecker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {
-		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: taint egress blocked", err)
-	}
-	return nil
-}
-
 func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel, input []byte) ([]byte, *types.ToolResult, error) {
 	if err := r.checkTaintEgress(ctx, tool, taintLevel, input); err != nil {
 		return input, nil, err
@@ -420,32 +372,4 @@ func (r *InMemoryToolRegistry) checkAnomaly(ctx context.Context, name string, ex
 	return nil
 }
 
-// redactOutputsForPII 是 checkPreExecution 之前 vault.RestoreForTask 的反方向操作
-// （2026-07-11 复核修复 GR-6-005）。
-//
-// execInput 在真正执行前已被还原为真实 PII 明文传给沙箱/下游工具；如果工具的
-// Error/Output 把入参原样回显（例如 CLI 参数校验失败时把命令行打印进 stderr），
-// 真实 PII 会经由 ExecuteTool 的返回值泄漏。此前的实现在这里误用了 RestoreForTask
-// （token→真实值），而 execErr/execRes 此时已经是真实值而非 token，扫描不到任何
-// ⟦PII:xxxx⟧ 模式，等价于 no-op，完全没有起到脱敏效果。
-//
-// 正确方向是 vault.TokenizeKnownValues（真实值→token），扫描输出中是否包含本次
-// 任务命名空间内已知的真实 PII 值并替换回 token，该操作不会失败（找不到匹配就
-// 原样返回），因此本函数不再需要返回 error。
-func (r *InMemoryToolRegistry) redactOutputsForPII(ctx context.Context, vault *guard.PIITokenVault, execErr error, execRes *sandbox.ExecResult) error {
-	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
-	if execErr != nil {
-		redacted := vault.TokenizeKnownValues(taskID, execErr.Error())
-		return apperr.New(apperr.CodeInternal, redacted)
-	}
-	if execRes == nil {
-		return nil
-	}
-	if len(execRes.Output) > 0 {
-		execRes.Output = []byte(vault.TokenizeKnownValues(taskID, string(execRes.Output)))
-	}
-	if execRes.Error != "" {
-		execRes.Error = vault.TokenizeKnownValues(taskID, execRes.Error)
-	}
-	return nil
-}
+// redactOutputsForPII 见 tool_pii.go（R7 拆分）。

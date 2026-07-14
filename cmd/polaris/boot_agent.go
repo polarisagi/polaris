@@ -126,6 +126,9 @@ func buildAgent(
 	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
+	// S_VALIDATE TaintGate 人工复核豁免（M11 §2.5 SanitizeByUserReview，2026-07-14）：
+	// 与 tb.ToolReg 的出口污点检查共享同一个 ExemptionVault 实例。
+	a.InjectTaintReviewChecker(tb.ExemptionVault)
 	a.InjectOutboxWriter(sb.Outbox)
 	// execute/dag.Runner/Validator 均无状态，buildAgent 同时服务 agent-0 与
 	// AgentPool 每次动态创建的 per-session Agent，此处注入而非仅在 agent-0

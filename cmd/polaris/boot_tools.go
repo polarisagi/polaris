@@ -91,6 +91,10 @@ type ToolBundle struct {
 	// 复核修复）等下游需要 VFS 隔离边界的消费方；bootTools 早于 bootServer 执行，
 	// 构造顺序天然满足依赖。
 	VFSWorkspace *vfs.WorkspaceManager
+	// ExemptionVault HITL 豁免令牌共享存储（2026-07-14）：与 toolReg 出口污点检查、
+	// hitlGateway 铸造端共享同一实例；boot_agent.go buildAgent 额外注入 Agent 作为
+	// S_VALIDATE TaintGate 的 TaintReviewChecker（M11 §2.5 SanitizeByUserReview）。
+	ExemptionVault *token.ExemptionVault
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -530,6 +534,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		LLMInfer:              protocol.LLMInferFunc(llmInfer),
 		Dispatcher:            disp,
 		VFSWorkspace:          vfsWM,
+		ExemptionVault:        exemptionVault,
 	}, nil
 }
 
