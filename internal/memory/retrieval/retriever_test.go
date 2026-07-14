@@ -63,7 +63,7 @@ func TestHybridRetriever_GraphNodeSkip(t *testing.T) {
 	// Test case 1: kvErr != nil
 	store1 := &fakeStore{getErr: apperr.New(apperr.CodeInternal, "kv missing")}
 	graph1 := &fakeGraph{nodes: []types.ScoredNode{{ID: "node1", Score: 1.0}}}
-	hr1 := NewHybridRetrieverWithGraph(store1, graph1)
+	hr1 := NewHybridRetrieverFull(store1, graph1, nil, nil)
 
 	res1, _ := hr1.Search(ctx, "query", types.SearchScope{Type: "memory"}, types.RetrievalConfig{})
 	for _, r := range res1 {
@@ -75,7 +75,7 @@ func TestHybridRetriever_GraphNodeSkip(t *testing.T) {
 	// Test case 2: jsonErr != nil
 	store2 := &fakeStore{getVal: []byte("invalid json")}
 	graph2 := &fakeGraph{nodes: []types.ScoredNode{{ID: "node2", Score: 1.0}}}
-	hr2 := NewHybridRetrieverWithGraph(store2, graph2)
+	hr2 := NewHybridRetrieverFull(store2, graph2, nil, nil)
 
 	res2, _ := hr2.Search(ctx, "query", types.SearchScope{Type: "memory"}, types.RetrievalConfig{})
 	for _, r := range res2 {

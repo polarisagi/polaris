@@ -73,7 +73,12 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 		case "openai_compat":
 			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr))
 		case "anthropic":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr))
+			// WithAnthropicPromptCaching：向 system prompt + 最后一个 tool + 最近
+			// 2 条非 system 消息注入 cache_control:{type:"ephemeral"} 断点，命中时
+			// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
+			// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现
+			// 但从未有调用方传入该 Option，一直处于未激活状态。
+			reg.RegisterWithRole(name, displayName, role, llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching()))
 		case "deepseek":
 			reg.RegisterWithRole(name, displayName, role, llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr))
 		case "google_agent_platform":

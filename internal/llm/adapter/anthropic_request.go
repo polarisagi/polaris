@@ -241,12 +241,28 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 				inputJSON := toolInputBuf.String()
 				if inputJSON == "" {
 					inputJSON = "{}"
+				} else if !json.Valid([]byte(inputJSON)) {
+					// 流被截断导致 tool_use 的 input_json_delta 拼接结果不是合法
+					// JSON：json.RawMessage 校验会使下方 json.Marshal 静默失败
+					// （payload=nil），StreamToolCall 事件内容凭空丢失。用
+					// JSONRepair 栈式修复尽力抢救已收到的参数片段。
+					if repaired, repairErr := llmparent.JSONRepair([]byte(inputJSON)); repairErr == nil && json.Valid(repaired.Repaired) {
+						inputJSON = string(repaired.Repaired)
+					} else {
+						inputJSON = "{}"
+					}
 				}
-				payload, _ := json.Marshal(map[string]any{
+				payload, err := json.Marshal(map[string]any{
 					"id":    toolID,
 					"name":  toolName,
 					"input": json.RawMessage(inputJSON),
 				})
+				if err != nil {
+					ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}
+					inToolBlock = false
+					inThinkingBlock = false
+					continue
+				}
 				ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}
 				inToolBlock = false
 			}

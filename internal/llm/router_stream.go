@@ -127,6 +127,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 				fn(name)
 			}
 		})
+		ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
 
 		if err == nil {
 			return ir.wrapStreamChannel(ctx, ch, req, chosen.name), nil

@@ -81,6 +81,11 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 	} else {
 		slog.Info("polaris: model version registry initialized (seeded from resolveXXXModel() static mappings)")
 	}
+	// Registry.RecordCallResult 此前虽已完整实现（连续失败计数 + FindPredecessor
+	// 回退建议），但路由层从未持有过 Registry 实例，数据一直是空的。
+	if sb.Router != nil {
+		sb.Router.InjectModelRegistry(modelReg)
+	}
 
 	// ─── §4.10.6 CascadeInvalidator（belief revision 后级联失效，M5 §6）────
 	cascadeInvalidator := retrieval.NewCascadeInvalidator(sb.Store.DB())

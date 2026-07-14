@@ -52,15 +52,11 @@ func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
 	return &HybridRetrieverImpl{store: store}
 }
 
-// NewHybridRetrieverWithGraph 创建含图路径的 HybridRetriever（Tier1+）。
-func NewHybridRetrieverWithGraph(store protocol.Store, graph protocol.GraphTraverser) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{store: store, graph: graph}
-}
-
-// NewHybridRetrieverWithDurative 创建含 DurativeMemory 第 5 路的 HybridRetriever。
-func NewHybridRetrieverWithDurative(store protocol.Store, graph protocol.GraphTraverser, durative *store.DurativeMemoryManager) *HybridRetrieverImpl {
-	return &HybridRetrieverImpl{store: store, graph: graph, durative: durative}
-}
+// 2026-07-14（ADR-0051）：NewHybridRetrieverWithGraph/NewHybridRetrieverWithDurative
+// 删除——graph-without-durative/durative-without-reflectionMem 是幽灵 Tier 档位：
+// graph 与 cognitive/durative 同源自 sb.SurrealStore，实际启动分级逻辑中不存在
+// "只有 graph 没有其余能力"的组合，全仓零调用点。生产唯一使用 NewHybridRetriever
+// （基础）/NewHybridRetrieverFull/NewHybridRetrieverWithCognitive。
 
 // NewHybridRetrieverFull 创建全路径 HybridRetriever（Graph + Durative + ReflectionMem）。
 // reflectionMem 非 nil 时第 4 路走 SQL 查询；nil 时降级到 KV 前缀扫描（兼容旧部署）。

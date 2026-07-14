@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -121,18 +120,10 @@ func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 	return s, nil
 }
 
-// OpenSQLiteFromDir 便捷函数——以文件系统路径字符串打开数据库。
-// 等同于 OpenSQLite(dbPath, os.DirFS(schemaDir).(fs.ReadDirFS))。
-// 适用于 main 入口等无法传递 embed.FS 的场景。
-func OpenSQLiteFromDir(dbPath, schemaDirPath string) (*SQLiteStore, error) {
-	dirFS := os.DirFS(schemaDirPath)
-	rfs, ok := dirFS.(fs.ReadDirFS)
-	if !ok {
-		// go 1.16+ os.DirFS 始终实现 ReadDirFS，此分支仅作防御
-		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("os.DirFS(%s) does not implement fs.ReadDirFS", schemaDirPath))
-	}
-	return OpenSQLite(dbPath, rfs)
-}
+// 2026-07-14（ADR-0051）：OpenSQLiteFromDir 删除——CHANGELOG（2026-05-23"初始化
+// 链路重构"）记载 cmd/polaris/main.go 已从相对路径 OpenSQLiteFromDir 改为
+// embed.FS OpenSQLite（消灭已安装二进制启动失败），本函数是被主动替换掉的旧
+// 实现，全仓（含测试）零调用点。
 
 // runMigrations 按文件名数字前缀升序执行尚未应用的 *.sql 迁移文件。
 // 每个文件对应一个版本号（前三位数字）；每次迁移单独事务，崩溃恢复安全。

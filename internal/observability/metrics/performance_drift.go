@@ -160,10 +160,6 @@ func GlobalPerformanceDrift() *PerformanceDriftDetector {
 	return getGlobalPerformanceDrift()
 }
 
-// DetectDrift 校验基线时间戳
-func (d *PerformanceDriftDetector) DetectDrift(baselineTime time.Time) error {
-	if baselineTime.IsZero() {
-		return nil
-	}
-	return nil
-}
+// 2026-07-14（ADR-0051）：DetectDrift 删除——实现是死逻辑桩（无论输入什么都恒返回
+// nil，未做任何"校验"，与注释矛盾）。真正的漂移检测逻辑在 Record() 内通过
+// EWMA + listener 回调实现，接入一个不做事的函数没有意义。

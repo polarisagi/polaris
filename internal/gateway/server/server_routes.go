@@ -62,6 +62,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/eval/meta-holdout/cases", s.sysadminHandler.Eval.HandleAddMetaHoldoutCase)
 	mux.HandleFunc("POST /v1/eval/meta-audit", s.sysadminHandler.Eval.HandleRunMetaAudit)
 	mux.HandleFunc("GET /v1/eval/meta-audit", s.sysadminHandler.Eval.HandleGetMetaAuditStatus)
+	// handleEvalRun：boot_server.go 已通过 SetEvalRunner 注入 ab.EvalRunner，但此前
+	// 从未注册为路由（server_handlers.go 上带 //nolint:unused 标记），触发 M12
+	// 评测套件的 REST 入口一直不可达，只能靠内部代码直接调用 EvalRunner。
+	mux.HandleFunc("POST /v1/eval/run", s.handleEvalRun)
 
 	// 会话历史 API
 	mux.HandleFunc("GET /v1/sessions", s.chatHandler.HandleListSessions)

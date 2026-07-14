@@ -24,14 +24,11 @@ func NewMemorySystemFromMemImpl(mem *MemImpl) *MemorySystemImpl {
 	return &MemorySystemImpl{MemImpl: mem}
 }
 
-func NewMemorySystem(store protocol.Store) *MemorySystemImpl {
-	return &MemorySystemImpl{MemImpl: NewMemImpl(store)}
-}
-
-// NewMemorySystemWithGraph 创建含 SurrealDB 图路径的 MemorySystem facade（Tier1+）。
-func NewMemorySystemWithGraph(store protocol.Store, graph protocol.GraphTraverser) *MemorySystemImpl {
-	return &MemorySystemImpl{MemImpl: NewMemImplWithGraph(store, graph)}
-}
+// 2026-07-14（ADR-0051）：NewMemorySystem/NewMemorySystemWithGraph 删除——全仓
+// 零调用点，boot_agent.go 唯一使用 NewMemorySystemFromMemImpl 包装已由
+// NewMemImplWithDB/NewMemImplFull 构造好的 *MemImpl；本函数是从未被采纳的平行
+// 构造路径（NewMemorySystemWithGraph 调用的 NewMemImplWithGraph 本身也是
+// 同批删除的幽灵 Tier 档位，见 memory.go）。
 
 // Mem 返回底层四层 facade。
 func (ms *MemorySystemImpl) Mem() protocol.MemorySystem { return ms.MemImpl }

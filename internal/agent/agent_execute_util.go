@@ -344,7 +344,12 @@ func isMemoryPersistenceFailure(err error) bool {
 // taskID 兜底（等价于 legacy Tokenize/Resolve/Restore 路径）。
 func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 	if a.sCtx != nil && a.sCtx.SessionID != "" {
-		return context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+		ctx = context.WithValue(ctx, protocol.CtxTaskIDKey{}, a.sCtx.SessionID)
+	}
+	// anomalyFilter 恒非 nil（NewAgent 默认构造，见 agent.go），随任务域 ctx 一并
+	// 注入，供 internal/tool/tool.go checkAnomaly 读取（ADR-0051 关联接线）。
+	if a.anomalyFilter != nil {
+		ctx = context.WithValue(ctx, protocol.CtxAnomalyFilterKey{}, a.anomalyFilter)
 	}
 	return ctx
 }

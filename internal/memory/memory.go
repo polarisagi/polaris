@@ -60,21 +60,11 @@ func NewMemImpl(store protocol.Store) *MemImpl {
 	}
 }
 
-// NewMemImplWithGraph 创建含 SurrealDB 图遍历路径的 MemImpl（Tier1+）。
-// graph 注入后：episodic 事件写入时自动建立图谱边；检索时激活 BM25+Simhash+Graph 三路融合。
-func NewMemImplWithGraph(store protocol.Store, graph protocol.GraphTraverser) *MemImpl {
-	indexer := memgraph.NewEpisodicGraphIndexer(graph)
-	procedural := memstore.NewProceduralMem(nil)
-	return &MemImpl{
-		working:    memstore.NewWorkingMem(),
-		episodic:   memstore.NewEpisodicMemWithGraph(store, indexer),
-		semantic:   memstore.NewSemanticMem(store, nil),
-		procedural: procedural,
-		retriever:  memretrieval.NewHybridRetrieverWithGraph(store, graph),
-		reflection: memstore.NewReflectionMem(store),
-		taskCanvas: memgraph.NewTaskMermaidCanvas(),
-	}
-}
+// 2026-07-14（ADR-0051）：NewMemImplWithGraph 删除——全仓零调用点。
+// "只有 graph 没有 cognitive/db" 是幽灵 Tier 档位：graph 与 cognitive 同源自
+// sb.SurrealStore，实际启动分级逻辑中二者总是同时具备或同时缺失，不存在只解锁
+// graph 的中间状态。生产唯一使用 NewMemImpl（Tier0 基础）/NewMemImplWithDB
+// （Tier0+SQL）/NewMemImplFull（Tier1+，graph+cognitive+db 同时注入）。
 
 // InjectRelevantMemory 提取与 query 相关的高价值实体与文档片段，组装为上下文供 LLM 注入。
 func (m *MemImpl) InjectRelevantMemory(ctx context.Context, sessionID string, query string) (string, error) {
@@ -121,7 +111,12 @@ func NewMemImplFull(store protocol.Store, graph protocol.GraphTraverser, cogniti
 	if db != nil {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
 		m.reflection = sqlRefl
-		m.working = memstore.NewWorkingMemWithDB(db)
+		// NewWorkingMemWithBudget（≥8GB SurrealDB 全路径，32000 token 预算）：
+		// 此前用 NewWorkingMemWithDB 不设 tokenBudget，AppendAndPage 的自动换页
+		// 分支（超预算时压缩到 EpisodicMem）永远不触发，working memory 只能无界
+		// 增长直到调用方自行处理，2026-07-14（ADR-0051 关联接线）激活真实的
+		// 溢出保护。
+		m.working = memstore.NewWorkingMemWithBudget(db, m.episodic, 32000)
 		m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, memstore.NewDurativeMemoryManager(m.episodic, nil, store), sqlRefl, cognitive, m.semantic)
 		return m
 	}
@@ -140,7 +135,9 @@ func NewMemImplWithDB(store protocol.Store, db protocol.SQLQuerier) *MemImpl {
 	if db != nil {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
 		m.reflection = sqlRefl
-		m.working = memstore.NewWorkingMemWithDB(db)
+		// NewWorkingMemWithBudget（<8GB 降级路径，8000 token 预算，见函数doc）：
+		// 同上激活 working memory 溢出保护（ADR-0051 关联接线）。
+		m.working = memstore.NewWorkingMemWithBudget(db, m.episodic, 8000)
 		m.retriever = memretrieval.NewHybridRetrieverFull(store, nil, memstore.NewDurativeMemoryManager(m.episodic, nil, store), sqlRefl)
 	}
 	return m

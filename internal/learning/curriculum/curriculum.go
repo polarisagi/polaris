@@ -49,9 +49,6 @@ type AutoCurriculumGenerator struct {
 	sicCleaner   *guard.SICCleaner
 	llmProvider  protocol.Provider // Tier1+：LLM 描述生成 + safety judge；nil 时降级模板
 
-	// bb 由 WithBlackboard 注入，供 GenerateForEngine 适配方法使用（P1-5）。
-	bb protocol.Blackboard
-
 	// 连续失败冻结记录: sourceSkill → (failCount, frozenUntil)
 	mu           sync.Mutex
 	failCounts   map[string]int
@@ -89,37 +86,11 @@ func (ag *AutoCurriculumGenerator) InjectLLMProvider(p protocol.Provider) {
 	ag.llmProvider = p
 }
 
-// WithBlackboard 注入 Blackboard，供 CurriculumGeneratorAdapter 使用（P1-5）。
-// 返回自身支持链式调用。
-func (ag *AutoCurriculumGenerator) WithBlackboard(bb protocol.Blackboard) *AutoCurriculumGenerator {
-	ag.bb = bb
-	return ag
-}
-
-// CurriculumGeneratorAdapter 将 AutoCurriculumGenerator 适配为
-// learning.CurriculumGenerator 接口（P1-5）。
-//
-// 原因：AutoCurriculumGenerator.Generate 签名为 (ctx, bb, surpriseIndex) []*CurriculumSample，
-// 与接口要求的 (ctx, surpriseIndex) error 不兼容。采用适配器而非修改原方法，
-// 保持 BackgroundTaskScheduler 调用路径不变（最小改动原则）。
-type CurriculumGeneratorAdapter struct {
-	gen *AutoCurriculumGenerator
-}
-
-// NewCurriculumGeneratorAdapter 创建适配器；gen 必须已通过 WithBlackboard 注入 bb。
-func NewCurriculumGeneratorAdapter(gen *AutoCurriculumGenerator) *CurriculumGeneratorAdapter {
-	return &CurriculumGeneratorAdapter{gen: gen}
-}
-
-// Generate 实现 learning.CurriculumGenerator 接口。
-// bb 为空时静默跳过（Tier-0 降级：不因 Blackboard 缺失阻断 Engine 启动）。
-func (a *CurriculumGeneratorAdapter) Generate(ctx context.Context, surpriseIndex float64) error {
-	if a.gen.bb == nil {
-		return nil
-	}
-	a.gen.Generate(ctx, a.gen.bb, surpriseIndex)
-	return nil
-}
+// 2026-07-14（ADR-0051）：WithBlackboard/CurriculumGeneratorAdapter/
+// NewCurriculumGeneratorAdapter/(*CurriculumGeneratorAdapter).Generate 删除——
+// 全仓生产零调用点。boot_agent.go:557 唯一使用 reflexion.NewCurriculumBridge
+// （bb 通过构造函数直接传入，而非本适配器依赖的 WithBlackboard 注入字段），
+// 是从未被采纳的平行 learning.CurriculumGenerator 适配路径。
 
 // IdleDetector 空闲检测器（可用内存 > 阈值 + Goroutine 数量适中）。
 type IdleDetector struct {

@@ -141,8 +141,7 @@ func HTTPStatus(code Code) int {
 	}
 }
 
-// Is 委托标准库 errors.Is，供 errors.Is(err, target) 调用链使用。
-// 保留此包级函数，方便不导入 "errors" 的调用方使用。
-func Is(err, target error) bool {
-	return errors.Is(err, target)
-}
+// 2026-07-14（ADR-0051）：包级 Is 删除——纯委托 errors.Is(err, target)，全仓
+// （含测试）零调用点；包头文档注释列出的官方推荐用法（New/Wrap/IsCode/CodeOf/
+// HTTPStatus）本就不包含它，是无附加值的冗余包装（不同于 (*Error).Is 方法本身，
+// 后者是 errors.Is 识别 *apperr.Error 的必要多态钩子，被间接大量使用，予以保留）。

@@ -14,7 +14,7 @@ func TestMemorySystemWriteRetrieveForget(t *testing.T) {
 	ctx := context.Background()
 
 	dbStore := testutil.NewMockStore()
-	memSys := NewMemorySystemWithGraph(dbStore, &testutil.MockGraphTraverser{})
+	memSys := NewMemorySystemFromMemImpl(NewMemImpl(dbStore))
 
 	// Test Write Working
 	err := memSys.Write(ctx, &MemoryEntry{

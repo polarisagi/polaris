@@ -140,6 +140,21 @@ func (b *BackgroundTaskScheduler) readSurprise() float64 {
 	return 0.5
 }
 
+// audit 记录调度器安全相关事件（FoundingAnchor 冻结触发 / 红队探测失败等）。
+// auditLogger 非 nil 时写入审计链（可追溯、可审计取证）；nil 时按字段注释既定
+// 设计降级为 slog.Error（可观测但不可追溯）。
+// 2026-07-14（ADR-0051 关联接线）：auditLogger 此前虽已可注入，但从未被任何方法
+// 实际读取过——本函数是该字段的首个消费方。
+func (b *BackgroundTaskScheduler) audit(ctx context.Context, action string, meta map[string]any) {
+	if b.auditLogger != nil {
+		if err := b.auditLogger.Log(ctx, action, meta); err != nil {
+			slog.Error("curriculum: audit log write failed", "action", action, "err", err)
+		}
+		return
+	}
+	slog.Error("curriculum: security event (no audit logger configured)", "action", action, "meta", meta)
+}
+
 // Start 启动后台守护协程（2 分钟轮询）。
 func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 	// 保持原有：2 分钟 AutoCurriculum 生成（不修改）
@@ -172,6 +187,9 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 					if err == nil && res != nil {
 						if frozen, ok := res.(bool); ok && frozen {
 							b.generator.SetGlobalFreeze(true)
+							b.audit(ctx, "curriculum_founding_anchor_freeze", map[string]any{
+								"reason": "founding_anchor drift scan flagged system for freeze",
+							})
 						}
 					}
 				}
@@ -190,7 +208,9 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 					return
 				case <-ticker.C:
 					if err := b.redTeam.RunAndInject(ctx); err != nil {
-						slog.Error("red team: run and inject failed", "err", err)
+						b.audit(ctx, "curriculum_red_team_probe_failed", map[string]any{
+							"err": err.Error(),
+						})
 					}
 				}
 			}

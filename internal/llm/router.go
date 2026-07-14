@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/llm/modelregistry"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -24,6 +25,7 @@ type InferenceRouter struct {
 	outboxWriter  protocol.OutboxWriter
 	governor      LLMGovernor
 	semanticCache *search.SemanticCache
+	modelRegistry *modelregistry.Registry
 }
 
 // LLMGovernor 用于限流 LLM 请求 (P0-3)
@@ -47,8 +49,41 @@ func WithSemanticCache(cache *search.SemanticCache) RouterOption {
 	}
 }
 
+// recordModelCallResult 把一次 Provider 调用结果同步给 ModelVersionRegistry
+// （2026-07-14 ADR-0051 关联接线：Registry.RecordCallResult 此前已完整实现连续
+// 失败计数 + FindPredecessor 回退建议，但路由层从未持有 Registry 实例、从未
+// 调用过它，数据一直是空的）。modelRegistry 为 nil（未注入）时整体是 no-op。
+// shouldRollback=true 时目前只做可观测日志：路由的 Provider 选择由
+// ProviderRegistry.best()/entry.recordOutcome 的健康度评分驱动，动态把某个
+// entry 背后的具体 modelID 热替换为 rollbackToModelID 需要改造
+// ProviderRegistry 条目结构本身，属于更大的设计变更，不在本次接线范围内；
+// 先把追踪数据和建议接上，让 sysadmin/运维可观测到，后续如需自动执行回退
+// 再单独设计执行路径。
+func (ir *InferenceRouter) recordModelCallResult(ctx context.Context, providerName, modelID string, success bool) {
+	if ir.modelRegistry == nil || modelID == "" {
+		return
+	}
+	shouldRollback, rollbackTo, err := ir.modelRegistry.RecordCallResult(ctx, providerName, modelID, success)
+	if err != nil {
+		slog.Warn("inference_router: RecordCallResult failed", "provider", providerName, "model", modelID, "err", err)
+		return
+	}
+	if shouldRollback {
+		slog.Warn("inference_router: model consecutive failures reached rollback threshold",
+			"provider", providerName, "model", modelID, "suggested_rollback_to", rollbackTo)
+	}
+}
+
 func (ir *InferenceRouter) InjectOutboxWriter(w protocol.OutboxWriter) {
 	ir.outboxWriter = w
+}
+
+// InjectModelRegistry 启动期后置注入 ModelVersionRegistry（modelReg 的构造依赖
+// sb.Store.DB()，在 boot_memory.go 中晚于 router 本身构造完成，故提供 Inject*
+// 形式而非要求 boot_substrate.go 在构造 router 时就持有它，与 InjectOutboxWriter
+// 的既有模式一致）。
+func (ir *InferenceRouter) InjectModelRegistry(reg *modelregistry.Registry) {
+	ir.modelRegistry = reg
 }
 
 var _ protocol.Provider = (*InferenceRouter)(nil)
@@ -97,10 +132,15 @@ func (ir *InferenceRouter) ModelID() string {
 
 // Infer 路由单次请求到最优 Provider，失败时 failover 至次优。
 func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
-	options := &types.InferOptions{}
-	for _, opt := range opts {
-		opt(options)
-	}
+	// 2026-07-14（ADR-0051 关联接线）：改用 protocol.ApplyInferOptions 复用统一实现，
+	// 消除与该函数重复的内联 for-range opt(options) 循环（此前 router.go 内两处、
+	// protocol.ApplyInferOptions 一处，三份同构代码）。行为等价：
+	// ApplyInferOptions 显式给 ThinkingMode 填充 types.ThinkingDisabled 默认值，
+	// 而非零值 ""；两者在全部消费方（adapter/*.go）的判断条件
+	// `req.ThinkingMode != "" && req.ThinkingMode != types.ThinkingDisabled` 下
+	// 完全等价，不改变实际路由行为。
+	appliedOpts := protocol.ApplyInferOptions(opts)
+	options := &appliedOpts
 	req := &types.InferRequest{
 		Messages:       msgs,
 		Model:          options.Model,
@@ -165,6 +205,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 			fn(name)
 		}
 	})
+	ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
 	if err != nil {
 		if ctx.Err() != nil {
 
@@ -213,10 +254,15 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 
 // StreamInfer 路由流式请求，内嵌延迟记录与 Failover。
 func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
-	options := &types.InferOptions{}
-	for _, opt := range opts {
-		opt(options)
-	}
+	// 2026-07-14（ADR-0051 关联接线）：改用 protocol.ApplyInferOptions 复用统一实现，
+	// 消除与该函数重复的内联 for-range opt(options) 循环（此前 router.go 内两处、
+	// protocol.ApplyInferOptions 一处，三份同构代码）。行为等价：
+	// ApplyInferOptions 显式给 ThinkingMode 填充 types.ThinkingDisabled 默认值，
+	// 而非零值 ""；两者在全部消费方（adapter/*.go）的判断条件
+	// `req.ThinkingMode != "" && req.ThinkingMode != types.ThinkingDisabled` 下
+	// 完全等价，不改变实际路由行为。
+	appliedOpts := protocol.ApplyInferOptions(opts)
+	options := &appliedOpts
 	req := &types.InferRequest{
 		Messages:       msgs,
 		Model:          options.Model,
@@ -250,6 +296,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 			fn(name)
 		}
 	})
+	ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
 	if err != nil {
 		if ctx.Err() != nil {
 

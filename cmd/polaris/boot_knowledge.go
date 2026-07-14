@@ -166,7 +166,9 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		if sb.AutoConf != nil {
 			kbGate = sb.AutoConf.Gate
 		}
-		knowledgeBase = knowledgepkg.NewKnowledgeBase(retriever, expander, navigator, planner, nil, kbGate)
+		// KnowledgeConflictArbiter：此前恒传 nil，KnowledgeBase.Search 的冲突仲裁
+		// 分支永久跳过（ADR-0051 关联接线）；构造函数零依赖，直接激活。
+		knowledgeBase = knowledgepkg.NewKnowledgeBase(retriever, expander, navigator, planner, knowledgepkg.NewKnowledgeConflictArbiter(), kbGate)
 	}
 
 	// 将 knowledgeBase 注册为 "knowledge_search" builtin 工具（M10 §2.5）

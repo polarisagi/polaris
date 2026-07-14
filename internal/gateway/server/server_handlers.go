@@ -83,8 +83,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleEvalRun 触发 M12 评测套件执行并返回报告。
 // POST /v1/eval/run  body: {"suite":"training"|"validation"}
-//
-//nolint:unused
+// 2026-07-14（ADR-0051 关联接线）：路由注册见 server_routes.go。
 func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
 	if s.evalRunner == nil {
 		http.Error(w, "eval runner not available", http.StatusServiceUnavailable)

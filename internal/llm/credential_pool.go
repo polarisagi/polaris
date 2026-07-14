@@ -77,13 +77,25 @@ func (c *PooledCredential) Available() bool {
 }
 
 // CredFn 返回与 adapter 构造函数兼容的 func() []byte。
-// 每次调用累计 requestCount，adapter 侧仍应 defer clearString(&local) 清零局部拷贝。
+// 每次调用累计 requestCount，adapter 侧 defer ClearBytes(local) 清零局部拷贝。
+//
+// 2026-07-14（ADR-0051 关联修复）：必须返回 c.key 的拷贝而非原始切片。此前直接
+// `return c.key` 把池内长驻凭证的底层数组暴露给调用方，adapter 侧的
+// `defer llmparent.ClearBytes(apiKey)`（本为清理"局部拷贝"，本函数注释也如此
+// 承诺）实际清零的是同一块内存——第一次 Infer() 调用结束后，池中该凭证即被
+// 永久清零，后续所有复用同一 credPool 的调用都会用全零字节发起请求（对
+// Authorization header 类 provider 静默发出无效凭证；对 Google 这种把 key 直接
+// 拼进 URL 查询串的 provider 会在 url.Parse 阶段直接报 "invalid control
+// character in URL"）。此前该分支的回归测试因所在文件命名为 test.go 而非
+// *_test.go，从未被 go test 实际执行，问题一直休眠未被发现。
 func (c *PooledCredential) CredFn() func() []byte {
 	return func() []byte {
 		c.mu.Lock()
 		c.requestCount++
+		keyCopy := make([]byte, len(c.key))
+		copy(keyCopy, c.key)
 		c.mu.Unlock()
-		return c.key
+		return keyCopy
 	}
 }
 
@@ -231,8 +243,10 @@ func (p *CredentialPool) CredFn() func() []byte {
 		}
 		c.mu.Lock()
 		c.requestCount++
+		keyCopy := make([]byte, len(c.key))
+		copy(keyCopy, c.key)
 		c.mu.Unlock()
-		return c.key
+		return keyCopy
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -199,12 +200,27 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, apiKey [
 					argsStr := s.arguments.String()
 					if argsStr == "" {
 						argsStr = "{}"
+					} else if !json.Valid([]byte(argsStr)) {
+						// 流被截断（如 finish_reason=length 提前收敛）导致 tool_call
+						// 参数 JSON 不完整：json.RawMessage 校验会使下方 json.Marshal
+						// 静默失败（payload=nil），整个 StreamToolCall 事件的内容凭空丢失，
+						// 上游拿到的是空字符串而非报错。用 JSONRepair 栈式修复尽力抢救
+						// 已收到的参数片段，而不是任由这条工具调用整体消失。
+						if repaired, repairErr := llmparent.JSONRepair([]byte(argsStr)); repairErr == nil && json.Valid(repaired.Repaired) {
+							argsStr = string(repaired.Repaired)
+						} else {
+							argsStr = "{}"
+						}
 					}
-					payload, _ := json.Marshal(map[string]any{
+					payload, err := json.Marshal(map[string]any{
 						"id":    s.id,
 						"name":  s.name,
 						"input": json.RawMessage(argsStr),
 					})
+					if err != nil {
+						ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}
+						continue
+					}
 					ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}
 				}
 				// 清空，支持同一流中多轮（理论上不会，但防御性清空）

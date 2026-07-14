@@ -37,147 +37,17 @@ func (m *mockScriptLoader) LoadScriptPath(skillID string) (string, error) {
 	return m.path, m.err
 }
 
-func TestRegistryImpl_RegisterAndGet(t *testing.T) {
-	reg := NewRegistry()
-	ctx := context.Background()
-
-	meta := types.SkillMeta{
-		Name:    "skill:test",
-		Version: "1.0",
-		Trust:   types.TrustLocal,
-	}
-
-	if err := reg.Register(ctx, meta); err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-
-	got, err := reg.Get(ctx, "skill:test", "1.0")
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if got.Name != "skill:test" {
-		t.Errorf("expected skill:test")
-	}
-
-	// Collision
-	if err := reg.Register(ctx, meta); err == nil {
-		t.Errorf("expected collision err")
-	}
-
-	// Invalid name
-	meta.Name = "invalid-name"
-	if err := reg.Register(ctx, meta); err == nil {
-		t.Errorf("expected name error")
-	}
-
-	// Invalid trust
-	meta.Name = "skill:untrusted"
-	meta.Trust = 0
-	if err := reg.Register(ctx, meta); err == nil {
-		t.Errorf("expected trust error")
-	}
-}
-
-// TestRegistryImpl_UpgradeMarksReverseDependencies 验证内存版 RegistryImpl
-// 在技能升级（同名不同版本）时会对其反向依赖方（DependsOn/ComposesOf 引用了
-// 被升级技能的其他技能）标记 NeedsCompatCheck=true，与 SQLiteRegistryImpl 的
-// markReverseDependenciesCompatCheck 语义对齐（回归此前两个实现行为不一致的问题）。
-func TestRegistryImpl_UpgradeMarksReverseDependencies(t *testing.T) {
-	reg := NewRegistry()
-	ctx := context.Background()
-
-	base := types.SkillMeta{Name: "skill:base", Version: "1.0", Trust: types.TrustLocal}
-	if err := reg.Register(ctx, base); err != nil {
-		t.Fatalf("register base: %v", err)
-	}
-
-	dependent := types.SkillMeta{
-		Name: "skill:dependent", Version: "1.0", Trust: types.TrustLocal,
-		DependsOn: []string{"skill:base"},
-	}
-	if err := reg.Register(ctx, dependent); err != nil {
-		t.Fatalf("register dependent: %v", err)
-	}
-
-	transitive := types.SkillMeta{
-		Name: "skill:transitive", Version: "1.0", Trust: types.TrustLocal,
-		ComposesOf: []string{"skill:dependent"},
-	}
-	if err := reg.Register(ctx, transitive); err != nil {
-		t.Fatalf("register transitive: %v", err)
-	}
-
-	// 同名不同版本 = 升级，不应报 collision 错误。
-	upgraded := types.SkillMeta{Name: "skill:base", Version: "2.0", Trust: types.TrustLocal}
-	if err := reg.Register(ctx, upgraded); err != nil {
-		t.Fatalf("upgrade should succeed, got err: %v", err)
-	}
-
-	got, err := reg.Get(ctx, "skill:base", "")
-	if err != nil {
-		t.Fatalf("get base: %v", err)
-	}
-	if got.Version != "2.0" {
-		t.Errorf("expected upgraded version 2.0, got %s", got.Version)
-	}
-
-	dep, err := reg.Get(ctx, "skill:dependent", "")
-	if err != nil {
-		t.Fatalf("get dependent: %v", err)
-	}
-	if !dep.NeedsCompatCheck {
-		t.Errorf("expected skill:dependent.NeedsCompatCheck=true after skill:base upgrade")
-	}
-
-	trans, err := reg.Get(ctx, "skill:transitive", "")
-	if err != nil {
-		t.Fatalf("get transitive: %v", err)
-	}
-	if !trans.NeedsCompatCheck {
-		t.Errorf("expected skill:transitive.NeedsCompatCheck=true (transitive via skill:dependent) after skill:base upgrade")
-	}
-}
-
-func TestRegistryImpl_DeprecateAndList(t *testing.T) {
-	reg := NewRegistry()
-	ctx := context.Background()
-
-	meta1 := types.SkillMeta{Name: "skill:test1", Version: "1.0", Trust: types.TrustLocal, Capabilities: []string{"write"}}
-	meta2 := types.SkillMeta{Name: "skill:test2", Version: "1.0", Trust: types.TrustLocal, Capabilities: []string{"read"}}
-
-	_ = reg.Register(ctx, meta1)
-	_ = reg.Register(ctx, meta2)
-
-	// List
-	list, _ := reg.List(ctx, types.SkillFilter{})
-	if len(list) != 2 {
-		t.Errorf("expected 2")
-	}
-
-	list, _ = reg.List(ctx, types.SkillFilter{Capabilities: []string{"write"}})
-	if len(list) != 1 {
-		t.Errorf("expected 1")
-	}
-
-	// Deprecate
-	_ = reg.Deprecate(ctx, "skill:test1", "", "old")
-	list, _ = reg.List(ctx, types.SkillFilter{IncludeDeprecated: false})
-	if len(list) != 1 {
-		t.Errorf("expected 1 after deprecation")
-	}
-	list, _ = reg.List(ctx, types.SkillFilter{IncludeDeprecated: true})
-	if len(list) != 2 {
-		t.Errorf("expected 2 with IncludeDeprecated")
-	}
-
-	logs := reg.AuditLog()
-	if len(logs) != 1 || !strings.Contains(logs[0], "deprecate skill:test1") {
-		t.Errorf("expected audit log")
-	}
-}
+// 2026-07-14（ADR-0051）：内存版 RegistryImpl 专属测试
+// （TestRegistryImpl_RegisterAndGet/_UpgradeMarksReverseDependencies/
+// _DeprecateAndList）随 RegistryImpl 一并删除——Register/Get/collision/
+// 升级反向依赖标记/List(IncludeDeprecated)/AuditLog 的等价覆盖已移植到
+// sqlite_registry_test.go（TestSQLiteRegistry/
+// TestSQLiteRegistry_UpgradeMarksReverseDependencies/
+// TestSQLiteRegistry_ListIncludeDeprecated），针对当前唯一生产实现
+// SQLiteRegistryImpl，而非已删除的内存测试替身。
 
 func TestSelectorImpl_Select(t *testing.T) {
-	reg := NewRegistry()
+	reg := newTestSQLiteRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.Register(ctx, types.SkillMeta{Name: "skill:cap1", Capabilities: []string{"cap1"}, Trust: types.TrustLocal, RiskLevel: "low", Benchmarks: types.SkillBenchmarks{PassRate: 0.9}})
@@ -200,19 +70,23 @@ func TestSelectorImpl_Select(t *testing.T) {
 }
 
 func TestScriptSkillExecutor_ExecuteSkill(t *testing.T) {
-	reg := NewRegistry()
+	reg := newTestSQLiteRegistry(t)
 	ctx := context.Background()
 
 	meta := types.SkillMeta{
-		Name:       "skill:exec",
-		Version:    "1.0",
-		Trust:      types.TrustLocal,
-		ScriptPath: "/path/to/script",
+		Name:    "skill:exec",
+		Version: "1.0",
+		Trust:   types.TrustLocal,
 	}
 	_ = reg.Register(ctx, meta)
 
+	// SQLiteRegistryImpl.Get 只从 extension_instances.install_path 派生
+	// ScriptPath（marketplace 安装路径），Register 不落盘裸 meta.ScriptPath
+	// 字段（2026-07-14 由内存版 RegistryImpl 切换到 SQLiteRegistryImpl 后的真实
+	// 行为差异，ADR-0051）。本用例走文件系统兜底加载器（loader.LoadScriptPath）
+	// 这条生产同样支持的路径来提供脚本路径。
 	runner := &mockScriptRunner{response: []byte("success")}
-	loader := &mockScriptLoader{}
+	loader := &mockScriptLoader{path: "/path/to/script"}
 
 	exec := NewScriptSkillExecutor(reg, runner, loader).WithPolicy(allowAllPolicyGate{})
 	resp, err := exec.ExecuteSkill(ctx, "skill:exec", []byte("input"))
@@ -235,7 +109,7 @@ func TestScriptSkillExecutor_ExecuteSkill(t *testing.T) {
 // 指令技能（无 ScriptPath）不再回显原始输入，而是返回 instructions 全文，
 // 与 cmd/polaris/skill_loader.go 注册的同名工具语义一致（唯一实现）。
 func TestScriptSkillExecutor_ExecuteSkill_NoScriptReturnsInstructions(t *testing.T) {
-	reg := NewRegistry()
+	reg := newTestSQLiteRegistry(t)
 	ctx := context.Background()
 
 	meta := types.SkillMeta{
@@ -266,21 +140,31 @@ func TestScriptSkillExecutor_ExecuteSkill_NoScriptReturnsInstructions(t *testing
 // TestScriptSkillExecutor_ExecuteSkill_FailClosedWithoutPolicy 验证脚本执行前
 // 未配置 PolicyGate 时 fail-closed 拒绝，而不是静默放行执行脚本（R1.14）。
 func TestScriptSkillExecutor_ExecuteSkill_FailClosedWithoutPolicy(t *testing.T) {
-	reg := NewRegistry()
+	reg := newTestSQLiteRegistry(t)
 	ctx := context.Background()
 
 	meta := types.SkillMeta{
-		Name:       "skill:noPolicy",
-		Version:    "1.0",
-		Trust:      types.TrustLocal,
-		ScriptPath: "/path/to/script",
+		Name:    "skill:noPolicy",
+		Version: "1.0",
+		Trust:   types.TrustLocal,
 	}
 	_ = reg.Register(ctx, meta)
+
+	// SQLiteRegistryImpl.Get 只从 extension_instances.install_path 派生
+	// ScriptPath（Register 不落盘裸 meta.ScriptPath 字段，ADR-0051），本用例
+	// 直接写入 extension_instances 模拟 marketplace 安装路径，使 scriptPath
+	// 非空从而真正触达下方待测的 fail-closed 分支。
+	_, err := reg.db.ExecContext(ctx,
+		"INSERT INTO extension_instances (runtime_id, ext_type, install_path) VALUES (?, 'skill', ?)",
+		"skill:noPolicy", "/path/to")
+	if err != nil {
+		t.Fatalf("seed extension_instances: %v", err)
+	}
 
 	runner := &mockScriptRunner{response: []byte("should-not-run")}
 	exec := NewScriptSkillExecutor(reg, runner, nil) // 未调用 WithPolicy
 
-	_, err := exec.ExecuteSkill(ctx, "skill:noPolicy", []byte("input"))
+	_, err = exec.ExecuteSkill(ctx, "skill:noPolicy", []byte("input"))
 	if err == nil {
 		t.Fatalf("expected fail-closed error when policy gate not configured")
 	}

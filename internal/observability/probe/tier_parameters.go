@@ -49,47 +49,6 @@ type TierParameters struct {
 // computeTierParameters selects tier-appropriate numeric defaults.
 // 所有参数最终值可被 config.toml 覆盖。
 
-// Param returns a tier parameter value by name. Used by module code at init time.
-// Returns 0 if the parameter name is not recognized.
-func (p *TierParameters) Param(name string) int { //nolint:gocyclo
-	switch name {
-	case "max_concurrent_dag_nodes":
-		return p.MaxConcurrentDAGNodes
-	case "max_agents":
-		return p.MaxAgents
-	case "max_replan_attempts":
-		return p.MaxReplanAttempts
-	case "mem_l0_cache_mb":
-		return p.MemL0CacheMB
-	case "graph_max_depth":
-		return p.GraphMaxDepth
-	case "script_worker_max":
-		return p.ScriptWorkerMax
-	case "max_stream_buffer_kb":
-		return p.MaxStreamBufferKB
-	case "pipeline_concurrency":
-		return p.PipelineConcurrency
-	case "graphrag_llm_daily_budget":
-		return p.GraphRAGLLMDailyBudget
-	case "graphrag_max_entities":
-		return p.GraphRAGMaxEntities
-	case "regression_budget_min":
-		return p.RegressionBudgetMin
-	case "pool_intent_handler":
-		return p.PoolIntentHandler
-	case "pool_ingest":
-		return p.PoolIngest
-	case "pool_background":
-		return p.PoolBackground
-	case "pool_eval":
-		return p.PoolEval
-	case "pool_cron":
-		return p.PoolCron
-	case "max_blackboard_pending":
-		return p.MaxBlackboardPending
-	case "max_coordination_token":
-		return p.MaxCoordinationToken
-	default:
-		return 0
-	}
-}
+// 2026-07-14（ADR-0051）：Param（字符串键间接访问）删除——全仓生产代码
+// （auto_config_tiers.go 等）均通过结构体字段直读（如 p.ScriptWorkerMax），
+// 从未通过字符串键间接访问，是被字段直读完全取代的冗余索引器。

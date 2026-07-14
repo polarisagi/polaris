@@ -11,49 +11,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// ─── DynamicDifficultyCalibrator ─────────────────────────────────────────────
-
-func TestDifficultyCalibrator_ColdStart(t *testing.T) {
-	ddc := newCalibrator()
-	// < 20 样本 → canonical [0.3, 0.6]
-	ddc.Calibrate()
-	low, high := ddc.Thresholds()
-	if low != 0.3 || high != 0.6 {
-		t.Errorf("cold start want [0.3, 0.6], got [%.2f, %.2f]", low, high)
-	}
-}
-
-func TestDifficultyCalibrator_AdjustUp(t *testing.T) {
-	ddc := newCalibrator()
-	// 注入 50 条高成功率样本
-	for i := 0; i < 50; i++ {
-		ddc.AddSample(DifficultySample{TaskType: "t", SurpriseIndex: 0.5, Success: true})
-	}
-	ddc.Calibrate()
-	_, high := ddc.Thresholds()
-	if high > 0.85 {
-		t.Errorf("hard cap 0.85 violated, got high=%.2f", high)
-	}
-	if high <= 0.6 {
-		t.Errorf("expected high to increase above 0.6 with successRate=1.0, got %.2f", high)
-	}
-}
-
-func TestDifficultyCalibrator_AdjustDown(t *testing.T) {
-	ddc := newCalibrator()
-	// 注入 50 条全失败样本
-	for i := 0; i < 50; i++ {
-		ddc.AddSample(DifficultySample{TaskType: "t", SurpriseIndex: 0.5, Success: false})
-	}
-	ddc.Calibrate()
-	low, _ := ddc.Thresholds()
-	if low < 0.1 {
-		t.Errorf("floor 0.1 violated, got low=%.2f", low)
-	}
-	if low >= 0.3 {
-		t.Errorf("expected low to decrease below 0.3 with successRate=0, got %.2f", low)
-	}
-}
+// 2026-07-14（ADR-0051）：DynamicDifficultyCalibrator/CoEvolutionCoordinator/
+// AutoConfigOptimizer 整体删除（calibrator.go）——全仓生产零调用点，是与
+// internal/prompt/optimizer/memf.go 同名但独立、从未被采纳的平行实现（该包
+// 真正使用的动态难度校准是 memf.go 自己的 DynamicDifficultyCalibrator）。原
+// TestDifficultyCalibrator_ColdStart/_AdjustUp/_AdjustDown 随之删除。
 
 // ─── Curriculum 安全审查 ───────────────────────────────────────────────────────
 
@@ -185,10 +147,6 @@ func TestPromptOptimizer_ScoreDescending(t *testing.T) {
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-
-func newCalibrator() *DynamicDifficultyCalibrator {
-	return NewDifficultyCalibrator(0.6, 0.05)
-}
 
 func newMemDB(t *testing.T) *sql.DB {
 	t.Helper()

@@ -48,21 +48,13 @@ func (hr *HybridRetrieverImpl) SetReranker(r protocol.Reranker) {
 	hr.reranker = r
 }
 
-// NewHybridRetriever 创建 FTS5-only 检索器（Tier 0）。
-func NewHybridRetriever(db protocol.SQLQuerier, vecScanLimit int) *HybridRetrieverImpl {
-	if vecScanLimit <= 0 {
-		vecScanLimit = 500
-	}
-	return &HybridRetrieverImpl{db: db, vecScanLimit: vecScanLimit}
-}
-
-// NewHybridRetrieverWithEmbedder 创建含密集向量路径的检索器（Tier 1+）。
-func NewHybridRetrieverWithEmbedder(db protocol.SQLQuerier, embedder VectorEmbedder, vecScanLimit int) *HybridRetrieverImpl {
-	if vecScanLimit <= 0 {
-		vecScanLimit = 500
-	}
-	return &HybridRetrieverImpl{db: db, embedder: embedder, vecScanLimit: vecScanLimit}
-}
+// 2026-07-14（ADR-0051）：NewHybridRetriever/NewHybridRetrieverWithEmbedder/
+// NewHybridRetrieverWithGraph 删除——boot_knowledge.go 生产两条检索栈装配路径
+// （SurrealStore≠nil 用 WithCognitive；SurrealStore==nil 用
+// NewDefaultHybridRetriever/StorageRouter）都不经过本类型的这 3 个平行构造函数，
+// hr.graph 字段在生产中永远为 nil（无任何调用点为其注入值），graph 检索分支
+// 结构上不可达。embedder/cognitive/graph 均可传 nil 走对应降级路径，
+// NewHybridRetrieverWithCognitive 是本类型唯一生产构造入口。
 
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
 func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, vecScanLimit int) *HybridRetrieverImpl {
@@ -70,14 +62,6 @@ func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbe
 		vecScanLimit = 500
 	}
 	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive, vecScanLimit: vecScanLimit}
-}
-
-// NewHybridRetrieverWithGraph 创建含 GraphTraverser 的全功能 HybridRetriever。
-func NewHybridRetrieverWithGraph(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, graph *graphrag.GraphTraverser, vecScanLimit int) *HybridRetrieverImpl {
-	if vecScanLimit <= 0 {
-		vecScanLimit = 500
-	}
-	return &HybridRetrieverImpl{db: db, embedder: embedder, cognitive: cognitive, graph: graph, vecScanLimit: vecScanLimit}
 }
 
 // Search 执行混合检索。

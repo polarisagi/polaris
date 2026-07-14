@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/extension/mcp"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -177,11 +178,25 @@ func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Requ
 }
 
 // BuildToolSchemas 收集全部可用工具 schema，用于注入 InferRequest.Tools。
+// 2026-07-14（ADR-0051 关联接线）：用 mcp.IsValidLLMName 防御性过滤名称非法
+// （不满足 ^[a-zA-Z0-9_-]+$）的条目——MCP server/skill 名称部分来自用户/第三方
+// 配置，不受本仓库命名约束，若原样传给要求 function name 满足该正则的
+// Provider（如 OpenAI function calling）会导致整次请求被拒绝。此前
+// mcp.IsValidLLMName 虽已导出并注明"供 sysadmin.BuildToolSchemas 等外部包
+// 防御性过滤使用"，但从未被实际调用过。
 func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema {
-	if h.Catalog != nil {
-		return h.Catalog.Schemas(context.Background(), types.TrustUntrusted)
+	if h.Catalog == nil {
+		return nil
 	}
-	return nil
+	schemas := h.Catalog.Schemas(context.Background(), types.TrustUntrusted)
+	filtered := make([]types.ToolSchema, 0, len(schemas))
+	for _, s := range schemas {
+		if !mcp.IsValidLLMName(s.Name) {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	return filtered
 }
 
 func (h *SysAdminHandler) ClearToolSchemaCache() {

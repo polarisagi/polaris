@@ -39,7 +39,7 @@ func TestConsolidationPipeline(t *testing.T) {
 	skills := &mockSkillRegistry{}
 	summarizer := &mockSummarizer{resp: `{"entities":[{"name":"abc","type":"concept"}],"relations":[]}`}
 
-	pipe := NewConsolidationPipeline(episodic, semantic, skills, summarizer)
+	pipe := NewConsolidationPipelineFull(episodic, semantic, skills, summarizer, nil, nil, nil)
 
 	// Test Run on empty
 	err := pipe.Run(ctx, "s1")
@@ -71,7 +71,7 @@ func TestConsolidationPipeline(t *testing.T) {
 
 	// Test ruleExtract fallback
 	summarizer.fail = true
-	pipe2 := NewConsolidationPipeline(episodic, semantic, skills, summarizer)
+	pipe2 := NewConsolidationPipelineFull(episodic, semantic, skills, summarizer, nil, nil, nil)
 	err = pipe2.Run(ctx, "s1")
 	if err != nil {
 		t.Fatal(err)

@@ -19,7 +19,7 @@ import (
 // TaskID"场景下的行为，这正是命名空间共享得以成立的底层机制。
 func TestEpisodicMem_NamespaceSharing(t *testing.T) {
 	store := testutil.NewMockStore()
-	mem := NewEpisodicMemWithGraph(store, nil)
+	mem := NewEpisodicMem(store)
 	ctx := context.Background()
 
 	const sharedNamespace = "swarm-task-42"
@@ -107,7 +107,7 @@ func TestEpisodicMem_NamespaceSharing(t *testing.T) {
 // MaxTaintLevel 过滤掉。
 func TestEpisodicMem_NamespaceSharing_TaintStillEnforced(t *testing.T) {
 	store := testutil.NewMockStore()
-	mem := NewEpisodicMemWithGraph(store, nil)
+	mem := NewEpisodicMem(store)
 	ctx := context.Background()
 
 	const ns = "swarm-task-taint"
