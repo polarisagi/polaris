@@ -176,6 +176,7 @@ func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, 
 	if err := h.Chat.SaveMessage(ctx, sessionID, "assistant", reply, "", "", 0); err != nil {
 		slog.Warn("workflow step: saveMessage assistant failed", "err", err)
 	}
+	h.Chat.SampleAndScoreReply(sessionID, userMessage, reply)
 	_ = h.Chat.UpdateSessionTitle(ctx, sessionID, name)
 	return reply, nil
 }

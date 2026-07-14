@@ -164,6 +164,7 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 	if err := h.Chat.SaveMessage(ctx, sessionKey, "assistant", reply, "", "", inferLatencyMs); err != nil {
 		slog.Error("channel dispatch: saveMessage assistant", "err", err)
 	}
+	h.Chat.SampleAndScoreReply(sessionKey, msg.Text, reply)
 	_ = h.Chat.UpdateSessionTitle(ctx, sessionKey, msg.Text)
 	_ = h.Chat.TouchSession(ctx, sessionKey)
 

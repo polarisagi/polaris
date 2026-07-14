@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
+	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -86,6 +87,13 @@ type ChatHandler struct {
 	OutboxWriter protocol.OutboxWriter
 	// [W-2-C] 接入 TaintTracker，用于在收到用户输入时标记请求污染等级
 	TaintTracker *taint.TaintTracker
+
+	// SamplingMonitor 连续采样退化监控（M12 §9）。由 boot_server.go 通过
+	// Server.SetSamplingMonitor 注入，与 Embedder/PersonaRefiner 同一注入
+	// 风格（构造时未知，跨模块单例，nil 时安全跳过）。非 nil 时，
+	// SampleAndScoreReply 在每轮 assistant 回复后按 1% 概率异步触发 LLM
+	// Judge 打分并回灌 RecordSample。
+	SamplingMonitor *analysis.ContinuousSamplingMonitor
 }
 
 type Dependencies struct {

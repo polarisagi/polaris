@@ -92,6 +92,11 @@ type AgentBundle struct {
 	// 用于系统提示词组装（消费端见 chat/system_prompt.go）。
 	PersonaRefiner *agentctx.PersonaRefiner
 
+	// SamplingMonitor 连续采样退化监控（M12 §9），boot_server.go 通过
+	// Server.SetSamplingMonitor 注入 ChatHandler，供生产回复流量 1% 抽样
+	// + LLM Judge 打分回灌 RecordSample（见 sampling_scorer.go）。
+	SamplingMonitor *analysis.ContinuousSamplingMonitor
+
 	// Supervisor Tree（Workers 已注册；由 run() 调用 Start()）
 	Supervisor *supervisor.Supervisor
 
@@ -222,7 +227,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 需要 meta_auditor 签名才能真正读取 meta_holdout/触发审计。
 	metaEvalSentinel := analysis.NewMetaEvalSentinel(evalStore)
 
-	// Task 5: ContinuousSamplingMonitor 联动
+	// ContinuousSamplingMonitor：读侧（GetL3Threshold）与后台检测循环
+	// （Start）在此处联动；写侧（RecordSample）2026-07-14 补齐——通过
+	// AgentBundle.SamplingMonitor 传给 boot_server.go 的
+	// Server.SetSamplingMonitor 注入 ChatHandler，由生产回复路径按 1%
+	// 概率触发 LLM Judge 打分回灌（sampling_scorer.go）。onDegradation
+	// 回调仍为 nil：M9 autoRollback 触发链需要 dummyImmuneGateway 之外的
+	// 真实免疫网关实现，属独立待设计项（见 polaris-m9-immune-system-dormant
+	// memory），此处不强行接入伪回调。
 	samplingMonitor := analysis.NewContinuousSamplingMonitor(nil)
 	samplingMonitor.Start(ctx)
 	evalRunner.InjectL3ThresholdProvider(samplingMonitor)
@@ -828,6 +840,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Supervisor:       sv,
 		ReaperStop:       reaperStop,
 		PersonaRefiner:   personaRefiner,
+		SamplingMonitor:  samplingMonitor,
 	}, nil
 }
 

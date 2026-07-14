@@ -31,6 +31,9 @@ type ChatDispatcher interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error
 	TouchSession(ctx context.Context, sessionID string) error
 	ListMessages(ctx context.Context, sessionID string) ([]types.Message, error)
+	// SampleAndScoreReply 见 chat.ChatHandler 同名方法（M12 §9 连续采样监控
+	// 写侧，2026-07-14 补齐）。
+	SampleAndScoreReply(sessionID, query, response string)
 }
 type SysAdminHandler struct {
 	Chat           ChatDispatcher

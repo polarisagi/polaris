@@ -223,6 +223,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 		if err := ca.Chat.SaveMessage(bgCtx, sessionID, "assistant", reply, "", "", latencyMs); err != nil {
 			slog.Warn("automation: saveMessage assistant failed", "err", err)
 		}
+		ca.Chat.SampleAndScoreReply(sessionID, userMessage, reply)
 		_ = ca.Chat.UpdateSessionTitle(bgCtx, sessionID, a.Name)
 
 		// 处理 result_action
