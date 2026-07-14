@@ -139,6 +139,12 @@ func (a *Agent) InjectPolicyGate(pg protocol.PolicyGate) { a.policyGate = pg }
 // InjectHITL 注入人工审批网关。
 func (a *Agent) InjectHITL(hitl protocol.HITL) { a.hitl = hitl }
 
+// InjectTaintReviewChecker 注入 S_VALIDATE 阶段 TaintGate 的人工复核豁免查询器
+// （M11 §2.5 SanitizeByUserReview 触发点，2026-07-14 新增；复用
+// internal/security/token.ExemptionVault，与 tool.go 出口污点检查共享同一实例）。
+// nil 时该降级路径不生效，不影响既有拦截行为（fail-closed）。
+func (a *Agent) InjectTaintReviewChecker(c protocol.TaintReviewChecker) { a.taintReviewChecker = c }
+
 // InjectWhisperChan 注入耳语接收通道（由顶层 wire 调用，可 nil）。
 func (a *Agent) InjectWhisperChan(ch <-chan protocol.MemoryWhisper) {
 	a.whisperChan = ch

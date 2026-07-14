@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -27,7 +28,34 @@ func (p *ConsolidationPipeline) summarizeSession(
 		Title:      "Session summary: " + sessionID,
 		Version:    fmt.Sprintf("%d", time.Now().Unix()),
 	}
-	return p.semantic.StoreDocument(ctx, doc, types.TaintNone) //nolint:wrapcheck
+	return p.semantic.StoreDocument(ctx, doc, summaryTaintLevel(events)) //nolint:wrapcheck
+}
+
+// summaryTaintLevel 计算摘要文档应携带的 TaintLevel（2026-07-14 补齐，M11 §2.5
+// SanitizeBySummarization 触发点）。此前硬编码 types.TaintNone，无论被摘要的
+// events 是否携带外部/用户输入内容——LLM 摘要可能吸收/复述被摘要事件中的注入
+// 内容，一律标记为全信任（TaintNone）等同于让 SanitizeBySummarization 的存在
+// 意义落空。
+//
+// 规则：被摘要事件全部 TaintNone（纯系统内部生成，无外部输入）时摘要保持
+// TaintNone，无需人为拉高；一旦存在任何非 TaintNone 来源事件，按 M11 §2.5 强制
+// 标记 TaintMedium 硬地板（SanitizeBySummarization 对任意起始 Level 的结果恒为
+// TaintMedium）。source="compaction" 享受 M4 Layer A 豁免——不参与
+// ActiveContext.TaintLevel 计算，读侧现状见 memory_context.go FTSSearch 分支
+// （L2 检索结果当前未纳入 GlobalTaintLevel，与文档描述的豁免语义天然一致）。
+func summaryTaintLevel(events []types.ScoredEvent) types.TaintLevel {
+	var maxLevel types.TaintLevel
+	for _, se := range events {
+		if e, ok := se.Event.(*types.Event); ok && e != nil && e.TaintLevel > maxLevel {
+			maxLevel = e.TaintLevel
+		}
+	}
+	if maxLevel == types.TaintNone {
+		return types.TaintNone
+	}
+	downgraded := taint.SanitizeBySummarization(taint.NewTaintedString(
+		"", taint.TaintSource{OriginTaintLevel: maxLevel}, "consolidation_summary"))
+	return downgraded.Source.OriginTaintLevel
 }
 
 // buildSummary 调用 LLM 或规则引擎生成摘要文本。
