@@ -9,7 +9,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
-<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 2:99 Suspend-on-Idle / 3:115 S_VALIDATE / 4:164 DAG（Directed Acyclic Graph，有向无环图） / 5:244 System1/2 / 6:268 WorldModel / 7:279 推理预算 / 8:338 CrashRecovery / 12:384 已知Bug修复记录 / 13:392 (SOFT)降级 / 14:410 跨模块契约 -->
+<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 2:99 Suspend-on-Idle / 3:115 S_VALIDATE / 4:164 DAG（Directed Acyclic Graph，有向无环图） / 5:246 System1/2 / 6:270 WorldModel / 7:281 推理预算 / 8:340 CrashRecovery / 12:386 已知Bug修复记录 / 13:395 (SOFT)降级 / 14:413 跨模块契约 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -182,6 +182,8 @@ LLMWatchdog (L3, 仅 RiskPrivileged): 使用 DeepSeek 输出 ALLOW/DENY，不设
 ### 4.2 数据模型
 
 DAGNode/DAGEdge/EdgePolarity/RetryPolicy/Compensation 类型定义见 `internal/agent/`（旧版 `internal/agent/` 顶层文件已标记 Deprecated）。
+
+**DAGModel 两种产出来源，收敛为同一表示**：S_PLAN 阶段 LLM 产出工具调用有两条输入形态——① 文本 JSON DSL（LLM 直接输出符合 plan_dag Schema 的 JSON 文本）；② Provider 原生 `tool_calls` 结构化字段（`types.WithTools` 随工具目录非空自动附加，`doStreamInfer` 消费 adapter 侧 `StreamToolCall` 流式事件累积为 `ProviderResponse.ToolCalls`，经 `toolCallsToDAGJSON` 转换为等价的 DAGModel JSON）。两条输入形态在此收敛为同一个 DAGModel，下游 S_VALIDATE 四层校验与 DAG Executor 不感知来源差异，不存在第二条并行执行路径（2026-07-14，见 §12 Bug 记录 + `internal/agent/agent_execute_effect.go`）。
 
 ### 4.3 DAG Executor
 
@@ -386,6 +388,7 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 | 级别 | 文件 | 函数 | 问题描述 | 修复 | Commit |
 |------|------|------|---------|------|--------|
 | P1 | `internal/memory/` (synaptic_plasticity) | 衰减指数计算 | 自定义幂函数将指数截断为整数，导致近期访问边被过度修剪 | 改用标准库 `math.Pow` | 4d7682f |
+| P1 | `internal/agent/agent_execute_effect.go` | doStreamInfer | `InferOptions.Tools`（`types.WithTools`）全仓零消费——各 Provider adapter 的原生 `tool_calls` 流式事件（`StreamToolCall`，`stream.go`/`anthropic_request.go`/`google_request.go`）早已产出，唯独消费端从未接收，S_PLAN 只能靠 LLM 输出文本 JSON DSL 一条路径产出 DAGModel | 新增 StreamToolCall 分支累积 `ProviderResponse.ToolCalls`；`toolCallsToDAGJSON` 把原生 tool_calls 转换为 plan_dag Schema 期望的 DAGModel JSON——与文本 JSON DSL 路径在此收敛为同一 DAGModel 表示，复用既有 S_VALIDATE 四层校验 + DAG Executor，不新建第二条执行路径 | b99b9cf |
 
 ---
 

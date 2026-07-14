@@ -80,6 +80,9 @@ ADR 被代码引用时，源文件头部加：
 | 0041 | StateGraphExecutor（显式状态图编排，GD-8-001，编排模式10） | Accepted | 2026-07-11 |
 | 0042 | HITL AskUser 咨询闭环（AskHuman 特权工具） | Proposed（未实现） | 2026-07-11 |
 | 0043 | Generative UI SSE 集成（结构化组件渲染） | Proposed（未实现） | 2026-07-11 |
+| 0047 | taint_sanitizer 二级降级接入 S_VALIDATE，复用 ExemptionVault 而非新建存储 | Accepted（已执行） | 2026-07-14 |
+| 0048 | ContinuousSamplingMonitor 写侧接入生产流量，1% 抽样 + LLM Judge 打分 | Accepted（已执行） | 2026-07-14 |
+| 0049 | 修复 sCtx.SessionID 从未赋值的根因 Bug（founding_anchor 生产接线前置条件） | Accepted（已执行） | 2026-07-14 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 
