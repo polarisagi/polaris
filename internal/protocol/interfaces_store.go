@@ -55,13 +55,6 @@ StoreExtVector interface {
 
 type
 
-// TrajectoryStoreReader 提供近期行为轨迹的读取能力。
-TrajectoryStoreReader interface {
-	GetRecent(ctx context.Context, n int) ([]types.Trajectory, error)
-}
-
-type
-
 // AuditLogger 提供审计日志记录能力。
 AuditLogger interface {
 	Log(ctx context.Context, action string, meta map[string]any) error
