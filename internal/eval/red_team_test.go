@@ -31,7 +31,8 @@ func (m *mockAgentPool) AcquireHeadless(ctx context.Context, intent types.Intent
 }
 
 func TestRedTeamProtocol(t *testing.T) {
-	rtp := NewRedTeamProtocol(harness.NewSQLiteEvalStore(&mockStorePut{}, nil))
+	mockStore := &mockStorePut{}
+	rtp := NewRedTeamProtocol(harness.NewSQLiteEvalStore(mockStore, nil))
 
 	// Create a mock AgentPool that rejects the prompt injection probe
 	rtp.SetAgentPool(&mockAgentPool{
@@ -69,9 +70,30 @@ func TestRedTeamProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 2026-07-14 回归防护：此前 runProbe 主路径从未设置 Severity 字段（零值
+	// 空字符串），InjectFindingsToHoldout 的过滤条件 `Severity != P0 && != P1`
+	// 对空字符串恒为 true，导致所有失败发现被静默跳过、从未真正写入 Holdout。
+	// injectionFinding.Passed == false（探测被拦截，见上方逻辑推演）应被判定
+	// 为 SeverityP0 并触发至少一次 store.Put，证明发现真正落库而非被过滤丢弃。
+	if injectionFinding.Severity != harness.SeverityP0 {
+		t.Errorf("expected failed probe finding to carry SeverityP0, got %q", injectionFinding.Severity)
+	}
+	if len(mockStore.putKeys) == 0 {
+		t.Error("expected InjectFindingsToHoldout to have written at least one case, got zero Put calls")
+	}
+
 	err = rtp.RunAndInject(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRedTeamFindingSeverity(t *testing.T) {
+	if got := redTeamFindingSeverity(true); got != harness.SeverityP2 {
+		t.Errorf("passed probe: expected SeverityP2, got %q", got)
+	}
+	if got := redTeamFindingSeverity(false); got != harness.SeverityP0 {
+		t.Errorf("failed probe: expected SeverityP0, got %q", got)
 	}
 }
 
