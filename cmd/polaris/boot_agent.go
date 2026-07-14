@@ -70,7 +70,6 @@ type AgentBundle struct {
 	Blackboard     *orchestrator.SQLiteBlackboard
 	Sched          *automation.SQLiteScheduler
 	AgentRegistry  *orchestrator.AgentRegistry
-	Orch           *orchestrator.Orchestrator
 	PipelineOrch   *orchestrator.PipelineOrchestrator
 	PatternDAGExec *orchestrator.PatternDAGExecutor
 	MapReduceExec  *orchestrator.MapReduceExecutor
@@ -352,8 +351,12 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	slog.Info("polaris: blackboard, scheduler, HITL gateway initialized")
 
 	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
+	// 2026-07-14：中心化 Orchestrator（RegisterWorker/dispatchPendingTasks）已删除
+	// ——生产环境从未调用 RegisterWorker，任务派发实际由下方 default-task-worker
+	// 承接的"自订阅 Blackboard + CAS 认领"模式完成（见 ADR-0050）。AgentRegistry
+	// 仍需保留并注入 SQLiteBlackboard，用于 PostTask 时的 SpawnDepth 校验。
 	agentRegistry := orchestrator.NewAgentRegistry()
-	orch := orchestrator.NewOrchestrator(blackboard, agentRegistry, sb.Cfg.System.MaxAgents)
+	blackboard.SetRegistry(agentRegistry)
 
 	pipelineOrch := orchestrator.NewPipelineOrchestrator(blackboard, tb.HITLGateway, sb.DecisionLog, 100*time.Millisecond, 3, 1800)
 	patternDAGExec := orchestrator.NewPatternDAGExecutor(blackboard, pipelineOrch)
@@ -802,13 +805,12 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	sv.AddWorker("agent-0", func(ctx context.Context) error {
 		return agent.Run(ctx)
 	})
-	// orch.ListenLoop 不再注册为 Supervisor Worker：其内部 dispatchPendingTasks
-	// 在生产环境下 100% 无法成功派发任务（RegisterWorker 从未调用、agent-0 的
-	// Skills=["general"] 与真实任务类型永远不匹配），继续运行只会造成资源浪费，
-	// 且一旦命中匹配任务会与下方 default-task-worker 产生 CAS 竞争后又无处执行，
-	// 白白让任务多等一轮 60s 租约超时。任务派发已由 default-task-worker 承接
-	// （见上方 DefaultTaskWorker 注入注释）。orch/agentRegistry 保留供
-	// AgentBundle.Orch/AgentRegistry 与未来可能的能力路由复用。
+	// 中心化 Orchestrator.ListenLoop 已删除（2026-07-14，ADR-0050）：其
+	// dispatchPendingTasks 在生产环境下 100% 无法成功派发任务（RegisterWorker
+	// 从未调用、agent-0 的 Skills=["general"] 与真实任务类型永远不匹配），
+	// 任务派发完全由下方 default-task-worker 的"自订阅 Blackboard + CAS 认领"
+	// 承接（见上方 DefaultTaskWorker 注入注释）。agentRegistry 仍保留，供
+	// SQLiteBlackboard SpawnDepth 校验使用（见上方 SetRegistry 调用）。
 	sv.AddWorker("default-task-worker", func(ctx context.Context) error {
 		return defaultTaskWorker.RunLoop(ctx)
 	})
@@ -874,7 +876,6 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		Blackboard:       blackboard,
 		Sched:            sched,
 		AgentRegistry:    agentRegistry,
-		Orch:             orch,
 		PipelineOrch:     pipelineOrch,
 		PatternDAGExec:   patternDAGExec,
 		MapReduceExec:    mapReduceExec,

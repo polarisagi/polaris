@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func TestCSVFanoutJob(t *testing.T) {
@@ -30,7 +32,10 @@ func TestCSVFanoutJob(t *testing.T) {
 		MaxConcurrency: 2,
 	}
 
-	b := newTestBlackboard()
+	b := &mockBlackboard{
+		tasks:  make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 100),
+	}
 	res, err := RunCSVFanout(ctx, b, job)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)

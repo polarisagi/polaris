@@ -1,8 +1,6 @@
 package orchestrator
 
 import (
-	"math"
-	"sort"
 	"sync"
 	"time"
 
@@ -10,6 +8,10 @@ import (
 )
 
 // AgentRegistry 负责 Agent 的注册与能力发现。
+// 2026-07-14：FindBestAgent（负载加权评分选主）随中心化 Orchestrator 一并删除
+// （生产环境 RegisterWorker 从未调用，评分逻辑零消费者，见 ADR-0050）。
+// AgentRegistry 本体保留：SQLiteBlackboard.SetRegistry 用它做 SpawnDepth 校验
+// （真实生产依赖），agent-0 也在启动时注册进来。
 type AgentRegistry struct {
 	mu     sync.RWMutex
 	agents map[string]*AgentHandle
@@ -72,88 +74,25 @@ func (r *AgentRegistry) Get(id string) (*AgentHandle, bool) {
 	return handle, ok
 }
 
-// FindBestAgent 根据所需能力寻找最适合处理任务的 Agent。
-// Phase 1: 硬过滤 (DeclaresCapabilities >= RequiredCapabilities)
-// Phase 2: 加权降序 (Laplace 成功率 + 负载率)
-func (r *AgentRegistry) FindBestAgent(requiredCapabilities []string, currentLoads map[string]int, attemptStats map[string]AgentStats) (*AgentHandle, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	type candidate struct {
-		id     string
-		handle *AgentHandle
-		score  float64
-	}
-
-	var candidates []candidate //nolint:prealloc
-
-	for id, handle := range r.agents {
-		if handle.Status != "active" {
-			continue
-		}
-
-		// Phase 1: 硬过滤
-		if !containsAll(handle.Card.Skills, requiredCapabilities) {
-			continue
-		}
-
-		// Phase 2: 打分
-		stats := attemptStats[id]
-		successCount := float64(stats.SuccessCount)
-		attemptCount := float64(stats.AttemptCount)
-
-		// Laplace 平滑
-		prior := 0.5
-		priorStrength := 2.0
-		// 通用 prior=0.5/str=2, 专精型若技能数较少可赋予更高先验(如0.3/str=6)，此处统一按通用算
-		laplaceSuccRate := (successCount + prior*priorStrength) / (attemptCount + priorStrength)
-
-		load := float64(currentLoads[id])
-		if load < 0 {
-			load = 0
-		}
-		loadFactor := 1.0 / math.Max(load, 1.0)
-
-		// score = 0.6 * LaplaceSuccRate + 0.4 * LoadFactor
-		score := 0.6*laplaceSuccRate + 0.4*loadFactor
-
-		candidates = append(candidates, candidate{
-			id:     id,
-			handle: handle,
-			score:  score,
-		})
-	}
-
-	if len(candidates) == 0 {
-		return nil, apperr.New(apperr.CodeNotFound, "no suitable agent found")
-	}
-
-	// 降序排列
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-
-	return candidates[0].handle, nil
+// AgentHandle Agent 句柄。
+type AgentHandle struct {
+	Card         AgentCard
+	Handle       any // 本地 chan 或远程 A2A gRPC
+	RegisteredAt int64
+	Status       string // active | inactive | unreachable
 }
 
-// AgentStats 用于记录 Agent 的成功和尝试次数。
-type AgentStats struct {
-	SuccessCount int
-	AttemptCount int
-}
-
-func containsAll(declared, required []string) bool {
-	if len(required) == 0 {
-		return true
-	}
-	declMap := make(map[string]bool)
-	for _, req := range declared {
-		declMap[req] = true
-	}
-	for _, req := range required {
-		if !declMap[req] {
-			return false
-		}
-	}
-	return true
+// AgentCard Agent 能力声明（A2A v0.3 兼容）。
+type AgentCard struct {
+	Name          string
+	Version       string
+	Description   string
+	Skills        []string
+	Tools         []string
+	Models        []string
+	MaxConcurrent int
+	TrustLevel    int
+	SandboxTier   int
+	Endpoint      string
+	MaxDepth      int // 0 表示使用全局 MaxSpawnDepth 默认值
 }

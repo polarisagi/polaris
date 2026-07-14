@@ -2,7 +2,7 @@
 
 > MCP（Model Context Protocol，模型上下文协议） 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:166 三级沙箱(CANONICAL) / 5:335 PolicyGate / 6:394 Capability / 7:419 动作扩展 / 8:560 Usage演化 / 12:601 (SOFT)降级 / 13:619 跨模块契约 / 14:639 Plugin / 15:681 Hook -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:166 三级沙箱(CANONICAL) / 5:337 PolicyGate / 6:396 Capability / 7:421 动作扩展 / 8:562 Usage演化 / 12:603 (SOFT)降级 / 13:621 跨模块契约 / 14:641 Plugin / 15:683 Hook -->
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -281,9 +281,11 @@ depth=0 Token"的模式），应重新设计而非恢复本节描述的旧实现
 
 ### 4.6-bis Agent 任务派生深度限制（现行机制）
 
-`internal/execute/orchestrator.Blackboard.PostTask`/`PostBatch` 校验
+`internal/execute/orchestrator.SQLiteBlackboard.PostTask`/`PostBatch` 校验
 `task.SpawnDepth`，超过 `MaxSpawnDepth=3` 直接返回 `ErrSpawnDepthExceeded`
 （纯任务派生深度计数器，不涉及 Capability 交集/沙箱单调等 Token 语义）。
+2026-07-14：内存版 `Blackboard`（曾与 SQLiteBlackboard 并存的实现）已删除，
+SQLiteBlackboard 是唯一生产实现，见 ADR-0050。
 
 运行时策略重检: Host Function I/O前比对Cedar policy etag与Wasm实例化时policy_etag_at_start。etag变更→重调[Cedar-Gate] Review→FORBID返回ErrPolicyRevoked。etag比对O(1)，仅变更时触发完整评估。
 
