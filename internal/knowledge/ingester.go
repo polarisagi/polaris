@@ -202,9 +202,38 @@ func (p *PipelineImpl) Delete(ctx context.Context, uri string) error {
 	return nil
 }
 
-// GetRecentChunks returns a list of recent chunks.
-// Task 4: SyntheticEvalGen Pipeline integration hook.
+// GetRecentChunks 返回最近写入的 limit 条 rag_chunks 内容（SyntheticEvalGen
+// Pipeline 数据源，cmd/polaris/boot_agent.go "synthetic-eval-gen" 每小时轮询）。
+//
+// 2026-07-14 补齐：此前硬编码返回同一条写死字符串（注释"不需要真查 DB"），
+// 导致该小时级任务每次调用 LLM 合成用例时输入永远是同一句占位文本——
+// GenerateCases/SyntheticCaseToEvalCase/PutCase 下游三段管线本身都是真实实现
+// （见 internal/learning/synthetic/synthetic_eval_gen.go 三阶段 RAGAS 蒸馏 +
+// internal/eval/synthetic_adapter.go 字段映射），唯独数据源是假的——每小时
+// 消耗一次真实 LLM 调用配额，产出的合成用例却与知识库实际内容无关，是
+// "下游全真实、上游全虚假"的隐蔽缺口。
 func (p *PipelineImpl) GetRecentChunks(ctx context.Context, limit int) ([]string, error) {
-	// 按照任务要求，不需要真查 DB，返回一个写死的一条 Chunk 的 slice
-	return []string{"This is a mocked recent chunk for SyntheticEvalGen pipeline test."}, nil
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT content FROM rag_chunks WHERE deleted_at IS NULL AND content != '' ORDER BY created_at DESC LIMIT ?`,
+		limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "ingester: GetRecentChunks query failed", err)
+	}
+	defer rows.Close()
+
+	chunks := make([]string, 0, limit)
+	for rows.Next() {
+		var content string
+		if scanErr := rows.Scan(&content); scanErr != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "ingester: GetRecentChunks scan failed", scanErr)
+		}
+		chunks = append(chunks, content)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "ingester: GetRecentChunks rows iteration failed", rowsErr)
+	}
+	return chunks, nil
 }

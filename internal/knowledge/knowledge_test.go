@@ -87,6 +87,48 @@ func TestPipelineImpl_Ingest(t *testing.T) {
 	}
 }
 
+// TestPipelineImpl_GetRecentChunks 2026-07-14 回归防护：此前硬编码返回同一条
+// 写死字符串，忽略真实 rag_chunks 内容与 limit 参数。验证改为真查 DB 后能
+// 正确读取最近写入的内容、遵守 limit、跳过软删除行、且不返回自身写死的占位句。
+func TestPipelineImpl_GetRecentChunks(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	pipeline := NewPipeline(db, nil, nil, nil)
+
+	doc := &Document{
+		Ref: DocumentRef{URI: "doc1", Title: "Test", ContentHash: "hash1"},
+		Raw: []byte("Alpha chunk\n\nBeta chunk\n\nGamma chunk"),
+	}
+	if _, err := pipeline.Ingest(context.Background(), doc, TaintLow); err != nil {
+		t.Fatalf("ingest failed: %v", err)
+	}
+
+	chunks, err := pipeline.GetRecentChunks(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("GetRecentChunks failed: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected limit=2 to be respected, got %d chunks", len(chunks))
+	}
+	for _, c := range chunks {
+		if strings.Contains(c, "mocked recent chunk") {
+			t.Errorf("GetRecentChunks must not return the old hardcoded placeholder, got %q", c)
+		}
+	}
+
+	// 软删除后不应再被返回。
+	if _, err := db.Exec("UPDATE rag_chunks SET deleted_at = 1"); err != nil {
+		t.Fatalf("failed to soft-delete chunks: %v", err)
+	}
+	chunks, err = pipeline.GetRecentChunks(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetRecentChunks after soft-delete failed: %v", err)
+	}
+	if len(chunks) != 0 {
+		t.Errorf("expected 0 chunks after soft-delete, got %d", len(chunks))
+	}
+}
+
 func TestHybridRetrieverImpl_Search(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
