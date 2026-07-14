@@ -124,7 +124,22 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 		intent:   make(chan types.AgentTrigger, 10),
 		sm:       fsm.NewStateMachine(&agentContextBuilder{}),
 		sCtx: &fsm.StateContext{
-			AgentID:        id,
+			AgentID: id,
+			// SessionID 2026-07-14 补齐：此前从未赋值，导致 sCtx.SessionID 在生产环境
+			// 全程为空字符串——WriteStateTransEvent/WriteLLMCallEvent/WriteToolCallEvent
+			// （internal/agent/fsm/state_machine.go、agent_execute_effect.go、
+			// internal/tool/tool_outcome.go）全部以 sCtx.SessionID 为 key 前缀写入
+			// events:session:{id}: ，空 ID 导致所有并发 Agent 会话的事件塌缩进同一个
+			// events:session:: 桶，读侧 harness.TrajectoryRecorder.Record(ctx, sessionID)
+			// 按真实 sessionID 查询永远查不到数据（M9 founding_anchor 漂移检测的根因
+			// 之一）。id 与 chat_sessions.id 是同一取值来源（cmd/polaris/boot_agent.go
+			// buildAgent(sessionID, ...) → NewAgent(sessionID, ...)，且
+			// gateway/server/chat/sessions_helpers.go 用同一 sessionID 建 chat_sessions
+			// 行），复用为 SessionID 不引入新的 ID 命名空间。
+			// 附带激活此前因 SessionID=="" 而跳过的分支：tokenVault.ClearTask、
+			// memory-consolidate outbox 事件、withTaskScopeCtx 的 ctx 任务域注入、
+			// PII 快照 session_id 字段——均为待激活的既有防御逻辑，非新增副作用。
+			SessionID:      id,
 			MaxReplan:      3,
 			SysEnvSnapshot: sysinfo.GetSystemInfo().FormatMarkdown(),
 			WhisperChan:    wCh,

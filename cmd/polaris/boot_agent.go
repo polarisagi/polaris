@@ -577,11 +577,39 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	slog.Info("polaris: M9 self-improvement engine + PromptOptimizer initialized")
 
-	// [W-5-B] 接入 FoundingAnchor 周期漂移检测
+	// [W-5-B] 接入 FoundingAnchor 周期漂移检测（2026-07-14 补齐真实轨迹来源）：
+	// 此前 recentTrajectories 恒为空 slice（TODO 占位），根因是 sCtx.SessionID
+	// 从未被赋值（见 internal/agent/agent.go NewAgent 同批修复），
+	// events:session:{id}: 事件流按真实 sessionID 查询永远为空。现改为经
+	// ChatRepository.ListSessions 取最近活跃会话 ID，逐个调用
+	// harness.TrajectoryRecorder.Record 聚合出真实 TrajectoryTrace。
 	concurrent.SafeGo(ctx, "founding-anchor-drift-detector", func(ctx context.Context) {
-		anchor, _, _ := eval.LoadOrCreate(sb.DataDir, nil, nil)
-		if anchor == nil {
-			return // Not enough trajectories to create anchor yet
+		const (
+			anchorCreationSessionLimit = 200 // 创建锚点需 eval.MinTasksForAnchor=100 条轨迹，留冗余
+			driftCheckSessionLimit     = 50  // 周期漂移检查取近期窗口，不需要全量历史
+		)
+		chatRepo := repo.NewSQLiteChatRepository(sb.Store.DB())
+		recorder := harness.NewTrajectoryRecorder(sb.Store)
+		gatherRecentTrajectories := func(ctx context.Context, limit int) []harness.TrajectoryTrace {
+			sessions, err := chatRepo.ListSessions(ctx, limit)
+			if err != nil {
+				slog.Warn("founding_anchor: list recent chat sessions failed", "err", err)
+				return nil
+			}
+			traces := make([]harness.TrajectoryTrace, 0, len(sessions))
+			for _, s := range sessions {
+				trace, recErr := recorder.Record(ctx, s.ID)
+				if recErr != nil || trace == nil {
+					continue
+				}
+				traces = append(traces, *trace)
+			}
+			return traces
+		}
+
+		anchor, _, err := eval.LoadOrCreate(sb.DataDir, nil, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+		if err != nil || anchor == nil {
+			slog.Info("polaris: founding_anchor not yet created (insufficient trajectory history), will retry each drift-check tick", "err", err)
 		}
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
@@ -590,7 +618,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				var recentTrajectories []harness.TrajectoryTrace // TODO: Provide real trajectories
+				if anchor == nil {
+					// 锚点尚未创建：每 24h 重试一次，积累到 MinTasksForAnchor 后自动创建。
+					anchor, _, err = eval.LoadOrCreate(sb.DataDir, nil, gatherRecentTrajectories(ctx, anchorCreationSessionLimit))
+					if err != nil || anchor == nil {
+						continue
+					}
+				}
+				recentTrajectories := gatherRecentTrajectories(ctx, driftCheckSessionLimit)
 				if len(recentTrajectories) == 0 {
 					continue
 				}

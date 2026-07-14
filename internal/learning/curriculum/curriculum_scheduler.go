@@ -70,29 +70,31 @@ func (ag *AutoCurriculumGenerator) SetGlobalFreeze(frozen bool) {
 	ag.globalFreeze = frozen
 }
 
-// FoundingAnchorMeta 提供创始行为锚点元数据（解耦依赖）。
-type FoundingAnchorMeta interface {
-	GetCreatedAt() int64
-	GetTaskCount() int
-	CompareWithAnchor(trajectories []types.Trajectory) float64
-}
-
 // RedTeamRunner 执行红队演练并注入到 Holdout 评估集（解耦依赖）。
 type RedTeamRunner interface {
 	RunAndInject(ctx context.Context) error
 }
 
 // BackgroundTaskScheduler 后台调度器。
+//
+// 2026-07-14 删除 foundingAnchor/trajectoryStore 字段 + FoundingAnchorMeta 接口 +
+// InjectFoundingAnchor/InjectTrajectoryStore 方法：deadcode 复核确认三者在全仓库
+// 范围内从未被 Inject（生产/测试均无调用点），且 FoundingAnchorMeta 声明的
+// CompareWithAnchor(trajectories []types.Trajectory) float64 与
+// eval.CompareWithAnchor(anchor *FoundingAnchor, fingerprint BehaviorFingerprint)
+// DriftReport 参数/返回类型完全不匹配，eval.FoundingAnchor 结构性无法满足此接口——
+// 是一次从未跑通过的半成品设计，非"忘了注入"的简单遗漏。真正生效的 FoundingAnchor
+// 漂移检测走 cmd/polaris/boot_agent.go 的 founding-anchor-drift-detector goroutine，
+// 直接调用 eval.LoadOrCreate/ComputeFingerprint/CompareWithAnchor，不经过本调度器。
+// eval.FoundingAnchor.GetCreatedAt/GetTaskCount 两个仅为满足本接口而存在的方法
+// 一并删除（internal/eval/founding_anchor.go）。
 type BackgroundTaskScheduler struct {
-	generator       *AutoCurriculumGenerator
-	bb              protocol.Blackboard
-	surpriseReader  SurpriseReader
-	foundingAnchor  FoundingAnchorMeta             // 可选；nil 时跳过周度漂移检查
-	anchorDataDir   string                         // ~/.polarisagi/polaris/
-	redTeam         RedTeamRunner                  // 可选；nil 时跳过 24h 红队探测
-	trajectoryStore protocol.TrajectoryStoreReader // 可 nil，nil 时无法执行漂移检测
-	auditLogger     protocol.AuditLogger           // 可 nil，nil 时降级为 slog.Error
-	immuneGateway   immuneGatewayInterface
+	generator      *AutoCurriculumGenerator
+	bb             protocol.Blackboard
+	surpriseReader SurpriseReader
+	redTeam        RedTeamRunner        // 可选；nil 时跳过 24h 红队探测
+	auditLogger    protocol.AuditLogger // 可 nil，nil 时降级为 slog.Error
+	immuneGateway  immuneGatewayInterface
 }
 
 type immuneGatewayInterface interface {
@@ -109,11 +111,6 @@ func NewBackgroundTaskScheduler(gen *AutoCurriculumGenerator, bb protocol.Blackb
 	return &BackgroundTaskScheduler{generator: gen, bb: bb}
 }
 
-// InjectTrajectoryStore 注入近期行为轨迹读取器。
-func (b *BackgroundTaskScheduler) InjectTrajectoryStore(store protocol.TrajectoryStoreReader) {
-	b.trajectoryStore = store
-}
-
 // InjectAuditLogger 注入审计日志记录器。
 func (b *BackgroundTaskScheduler) InjectAuditLogger(logger protocol.AuditLogger) {
 	b.auditLogger = logger
@@ -122,12 +119,6 @@ func (b *BackgroundTaskScheduler) InjectAuditLogger(logger protocol.AuditLogger)
 // InjectSurpriseReader 注入 SurpriseIndex 读取器（可选——nil 时使用 0.5 默认值）。
 func (b *BackgroundTaskScheduler) InjectSurpriseReader(r SurpriseReader) {
 	b.surpriseReader = r
-}
-
-// InjectFoundingAnchor 注入创始行为锚点（可选）。
-func (b *BackgroundTaskScheduler) InjectFoundingAnchor(anchor FoundingAnchorMeta, dataDir string) {
-	b.foundingAnchor = anchor
-	b.anchorDataDir = dataDir
 }
 
 // InjectImmuneGateway 注入免疫网关。

@@ -307,9 +307,3 @@ func computePercentiles(data []int, pcts ...int) (int, int, int) {
 	}
 	return get(pcts[0]), get(pcts[1]), get(pcts[2])
 }
-
-// GetCreatedAt 返回创建时间（用于实现 swarm 包的接口，解耦依赖）。
-func (a *FoundingAnchor) GetCreatedAt() int64 { return a.CreatedAt }
-
-// GetTaskCount 返回创建时的任务数（用于实现 swarm 包的接口，解耦依赖）。
-func (a *FoundingAnchor) GetTaskCount() int { return a.TaskCount }
