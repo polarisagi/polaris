@@ -344,9 +344,9 @@ func TestClassify(t *testing.T) {
 			if ce.ShouldFallback != tc.wantFallback {
 				t.Errorf("ShouldFallback: got %v, want %v", ce.ShouldFallback, tc.wantFallback)
 			}
-			if tc.wantTierInt != 0 && ce.FallbackTierInt() != tc.wantTierInt {
-				t.Errorf("FallbackTierInt: got %d, want %d", ce.FallbackTierInt(), tc.wantTierInt)
-			}
+			// 2026-07-14（ADR-0051）：ClassifiedError.FallbackTierInt 已删除（全仓零
+			// 生产调用点），wantTierInt 断言随之移除；字段本身保留在表格用例中
+			// 不产生编译错误（未使用的 struct 字段合法），故无需逐条清理测试数据。
 		})
 	}
 }

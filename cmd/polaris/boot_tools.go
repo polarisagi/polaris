@@ -243,6 +243,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if containerSandbox != nil {
 		installMgr.WithHookRunner(containerSandbox)
 	}
+	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
+	// 从未调用而永久跳过（ADR-0051）；mktClient.Install 是完整实现，直接注入。
+	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
 
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,

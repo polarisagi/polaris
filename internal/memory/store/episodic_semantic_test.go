@@ -12,7 +12,7 @@ import (
 
 func TestEpisodicMem(t *testing.T) {
 	store := testutil.NewMockStore()
-	mem := NewEpisodicMemWithGraph(store, nil)
+	mem := NewEpisodicMem(store)
 
 	ctx := context.Background()
 

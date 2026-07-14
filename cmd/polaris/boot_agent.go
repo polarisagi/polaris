@@ -746,6 +746,12 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)
+	// InjectAuditLogger：sb.AuditTrail 实现的是 dispatch.AuditLogger
+	// （RecordAudit(ctx, toolName, payload)），不满足 protocol.AuditLogger
+	// （Log(ctx, action, meta)）；用 auditTrailLogAdapter 桥接（boot_agent.go 同文件
+	// 内定义），把调度器的 action/meta 形式审计事件转换为 AuditTrail.RecordAudit
+	// 所需的 toolName/payload 形式，两者语义等价（都是"记录一条带元数据的审计事件"）。
+	bgTaskScheduler.InjectAuditLogger(auditTrailLogAdapter{at: sb.AuditTrail})
 	bgTaskScheduler.InjectImmuneGateway(NewImmuneGateway())
 	// [W-1-B] 接入 SurpriseReader
 	bgTaskScheduler.InjectSurpriseReader(&simpleSurpriseReader{})
@@ -960,4 +966,33 @@ type simpleSurpriseReader struct{}
 
 func (r *simpleSurpriseReader) CurrentSurprise() float64 {
 	return metrics.GlobalSurpriseIndex().Current()
+}
+
+// auditTrailLogAdapter 把 dispatch.AuditLogger 形状的
+// RecordAudit(ctx, toolName, payload []byte) 桥接为 protocol.AuditLogger 形状的
+// Log(ctx, action string, meta map[string]any)，供
+// curriculum.BackgroundTaskScheduler.InjectAuditLogger 使用。
+//
+// 2026-07-14（ADR-0051 关联接线）：*security.AuditTrail 只实现了前者（其文档注释
+// "实现 protocol.AuditLogger 接口" 是过时表述，已一并订正），全仓库不存在
+// protocol.AuditLogger 的直接实现，导致该接口的唯一消费方
+// BackgroundTaskScheduler 此前无法注入任何真实审计后端。两个接口语义等价
+// （都是"记录一条带元数据的审计事件"），仅参数形状不同，故用适配器桥接而非
+// 改动 AuditTrail 本身的公开签名（AuditTrail.RecordAudit 同时也是
+// dispatch.AuditInterceptor 的既有依赖，不能破坏性变更）。
+type auditTrailLogAdapter struct {
+	at interface {
+		RecordAudit(ctx context.Context, toolName string, payload []byte) error
+	}
+}
+
+func (a auditTrailLogAdapter) Log(ctx context.Context, action string, meta map[string]any) error {
+	payload, err := json.Marshal(meta)
+	if err != nil {
+		payload = []byte("{}")
+	}
+	if err := a.at.RecordAudit(ctx, action, payload); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "auditTrailLogAdapter.Log", err)
+	}
+	return nil
 }

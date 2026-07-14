@@ -252,6 +252,18 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		ImageParts: execRes.ImageParts,
 	}
 
+	// 用成功执行的调用训练 AnomalyDistanceFilter 的正常分布基线（M11 §2.2）。
+	// 不训练就没有 checkAnomaly 赖以判断的历史分布——filter 会永远停留在
+	// "样本不足 bypass" 分支，Check() 恒返回 (TaintMedium, nil) 从不拦截
+	// （ADR-0051 关联接线：此前 Record 全仓库零调用点，即便注入了 filter 实例
+	// 也不会真正检测到任何异常）。只用成功样本训练，避免把失败/异常调用本身
+	// 污染进"正常"基线。
+	if finalResult.Success {
+		if f, ok := ctx.Value(protocol.CtxAnomalyFilterKey{}).(*guard.AnomalyDistanceFilter); ok {
+			f.Record(name, []float64{float64(len(execInput))})
+		}
+	}
+
 	r.reportOutcome(name, finalResult.Success, finalResult.LatencyMs, finalResult.Error, ctx, execInput, finalResult)
 	r.cacheIdempotencyResult(idempotencyKey, finalResult)
 

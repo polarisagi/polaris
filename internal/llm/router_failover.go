@@ -78,6 +78,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 				fn(name)
 			}
 		})
+		ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
 		if err == nil && resp != nil {
 			ir.recordFailoverMetrics(ctx, chosen, resp, start)
 			return resp, nil

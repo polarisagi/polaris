@@ -96,25 +96,14 @@ func TestRRFThreeWay(t *testing.T) {
 	}
 }
 
+// 2026-07-14（ADR-0051）：NewHybridRetriever/NewHybridRetrieverWithEmbedder/
+// NewHybridRetrieverWithGraph 三个构造函数随之删除——boot_knowledge.go 生产唯一
+// 使用 NewHybridRetrieverWithCognitive（embedder/cognitive/graph 可传 nil 降级），
+// 其余 3 个是从未被启动分级逻辑采纳的平行构造路径。
 func TestHybridRetrieverConstructors(t *testing.T) {
-	hr := NewHybridRetriever(nil, 0)
-	if hr == nil {
-		t.Errorf("NewHybridRetriever returned nil")
-	}
-
-	hr2 := NewHybridRetrieverWithEmbedder(nil, nil, 0)
-	if hr2 == nil {
-		t.Errorf("NewHybridRetrieverWithEmbedder returned nil")
-	}
-
 	hr3 := NewHybridRetrieverWithCognitive(nil, nil, nil, 0)
 	if hr3 == nil {
 		t.Errorf("NewHybridRetrieverWithCognitive returned nil")
-	}
-
-	hr4 := NewHybridRetrieverWithGraph(nil, nil, nil, nil, 0)
-	if hr4 == nil {
-		t.Errorf("NewHybridRetrieverWithGraph returned nil")
 	}
 }
 

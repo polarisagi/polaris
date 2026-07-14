@@ -352,22 +352,8 @@ func TestTierParameters_AllTiers(t *testing.T) {
 	}
 }
 
-func TestTierParameters_ParamLookup(t *testing.T) {
-	var p probe.TierParameters
-	hp := probe.NewHardwareProbe(16*1024*1024*1024, 8*1024*1024*1024)
-	ac := &AutoConfig{Probe: hp}
-	ac.computeTierParameters(&p)
-
-	if v := p.Param("max_concurrent_dag_nodes"); v != 8 {
-		t.Errorf("max_concurrent_dag_nodes: got %d, want 8", v)
-	}
-	if v := p.Param("script_worker_max"); v != 8 {
-		t.Errorf("script_worker_max: got %d, want 8", v)
-	}
-	if v := p.Param("nonexistent"); v != 0 {
-		t.Errorf("nonexistent: got %d, want 0", v)
-	}
-}
+// 2026-07-14（ADR-0051）：TierParameters.Param 已删除（全仓零生产调用点，字段
+// 直接读取即可），TestTierParameters_ParamLookup 随之删除。
 
 func TestAutoConfig_FeatureMap_AllFeatures(t *testing.T) {
 	hp := probe.NewHardwareProbe(32*1024*1024*1024, 16*1024*1024*1024)

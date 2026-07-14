@@ -47,15 +47,10 @@ func NewEpisodicMem(store protocol.Store) *EpisodicMem {
 	}
 }
 
-// NewEpisodicMemWithGraph 创建含图索引的 EpisodicMem（Tier1+）。
-func NewEpisodicMemWithGraph(store protocol.Store, indexer EpisodicIndexer) *EpisodicMem {
-	return &EpisodicMem{
-		store:     store,
-		events:    make([]types.Event, 0, 256),
-		indexer:   indexer,
-		maxEvents: maxEpisodicEvents,
-	}
-}
+// 2026-07-14（ADR-0051）：NewEpisodicMemWithGraph 删除——全仓零生产调用点。
+// 唯一调用方 NewMemImplWithGraph 已同批删除（graph-without-cognitive 是幽灵
+// Tier 档位，见 memory.go）。生产唯一使用 NewEpisodicMem（Tier0）/
+// NewEpisodicMemWithCognitive（Tier1+，indexer+cognitive 同时注入）。
 
 // NewEpisodicMemWithCognitive 创建含 SurrealDB FTS 索引路径的 EpisodicMem（Tier1+）。
 // 每次 Append 同步写入 SurrealDB FTS 倒排索引；VecUpsert 由 OnlineReindexer 异步完成。

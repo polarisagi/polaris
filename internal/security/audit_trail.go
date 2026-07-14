@@ -294,7 +294,11 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-// RecordAudit 实现 protocol.AuditLogger 接口。
+// RecordAudit 实现 dispatch.AuditLogger 接口（internal/tool/dispatch）。
+// 2026-07-14 订正：此前注释误写"实现 protocol.AuditLogger 接口"——两者是不同
+// 签名的接口（protocol.AuditLogger 是 Log(ctx, action, meta)），AuditTrail 从未
+// 实现过 protocol.AuditLogger；该接口现通过 cmd/polaris 的
+// auditTrailLogAdapter 桥接使用，AuditTrail 本身签名不变。
 func (at *AuditTrail) RecordAudit(ctx context.Context, toolName string, payload []byte) error {
 	var meta map[string]any
 	var agentID, sessionID string

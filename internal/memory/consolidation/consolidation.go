@@ -55,19 +55,9 @@ func (p *ConsolidationPipeline) WithBackgroundGate(g backgroundGate) { p.gate = 
 func (p *ConsolidationPipeline) WithSkillEvolver(e SkillEvolver)     { p.skillEvolver = e }
 
 // NewConsolidationPipeline 创建压缩管线，episodic 和 semantic 必须非 nil。
-func NewConsolidationPipeline(
-	episodic protocol.EpisodicMemory,
-	semantic protocol.SemanticMemory,
-	skills protocol.SkillRegistry,
-	summarizer memory.LLMSummarizer,
-) *ConsolidationPipeline {
-	return &ConsolidationPipeline{
-		episodic:   episodic,
-		semantic:   semantic,
-		skills:     skills,
-		summarizer: summarizer,
-	}
-}
+// 2026-07-14（ADR-0051）：基础版 NewConsolidationPipeline 删除——全仓生产零调用点，
+// boot_tools.go:426 唯一使用 NewConsolidationPipelineFull（writeFilter/cascadeInv/db
+// 可传 nil 降级），是从未被采纳的平行构造路径。
 
 // NewConsolidationPipelineFull 创建完整的固化流水线。
 func NewConsolidationPipelineFull(

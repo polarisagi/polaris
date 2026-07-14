@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -57,20 +56,7 @@ func (r *Reaper) Run(ctx context.Context) {
 	}
 }
 
-// SupervisorEpoch 启动时 [Storage-SQLite] sys_config 原子递增 orchestrator_epoch。
-// Worker 拉取式: SideEffectPreCheck 时读 epoch (O(1), <0.1ms)。
-// 不一致 → GracefulTermination + 重注册。
-type SupervisorEpoch struct {
-	// epoch 必须 64 位对齐，使用 atomic 操作防止并发竞争（P1-3）。
-	epoch int64
-}
-
-// Get 原子读取当前 epoch。
-func (se *SupervisorEpoch) Get() int64 {
-	return atomic.LoadInt64(&se.epoch)
-}
-
-// Increment 原子递增 epoch；并发安全（P1-3：原 se.epoch++ 为非原子操作）。
-func (se *SupervisorEpoch) Increment() {
-	atomic.AddInt64(&se.epoch, 1)
-}
+// 2026-07-14（ADR-0051）：SupervisorEpoch 删除——ADR-0050 淘汰的中心化
+// Orchestrator "Worker 拉取式读 epoch 校验"设计的孤儿残留，全仓零调用点。
+// 当前并发控制走 claimed_by/claimed_at/expires_at 租约认领模型
+// （sqlite_blackboard_reaper.go），与本类型描述的机制无关。

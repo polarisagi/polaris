@@ -64,27 +64,10 @@ type ClassifiedError struct {
 	ShouldFallback         bool // 换模型（非换 provider）
 }
 
-// IsAuth 报告错误是否属于认证类（瞬时或永久）。
-func (e ClassifiedError) IsAuth() bool {
-	return e.Reason == ReasonAuth || e.Reason == ReasonAuthPermanent
-}
-
-// FallbackTierInt 将 Reason 映射到 substrate.FallbackTier 的整型值。
-// 返回 int 以避免 inference → substrate 循环引用。
-// 对应值：0=Primary 1=Secondary 2=Tertiary 3=Graceful 4=Escalate。
-func (e ClassifiedError) FallbackTierInt() int {
-	switch e.Reason {
-	case ReasonRateLimit, ReasonAuth, ReasonBilling, ReasonServerError:
-		return 1 // Secondary：换备选凭证/provider 立即重试
-	case ReasonTimeout, ReasonContextOverflow, ReasonPayloadTooLarge,
-		ReasonOverloaded, ReasonLlamaCppGrammar, ReasonImageTooLarge:
-		return 2 // Tertiary：本地处理（压缩/缩图/退避）后重试同 provider
-	case ReasonAuthPermanent, ReasonFormatError, ReasonProviderPolicyBlocked:
-		return 4 // Escalate：不可恢复，向上报告
-	default: // ModelNotFound, ThinkingSignature, LongContextTier, OAuthForbidden, Unknown
-		return 3 // Graceful：换模型或带退避重试
-	}
-}
+// 2026-07-14（ADR-0051）：IsAuth/FallbackTierInt 删除——与"调用方直接读布尔字段，
+// 不 switch Reason"的设计原则相悖；FallbackTierInt 映射的目标类型
+// substrate.FallbackTier 全仓库不存在，是未完成的过度设计，生产路由决策
+// （router_failover.go）已用更简单的布尔判断完全覆盖同等语义。
 
 // Classify 从 error 提取 FailReason 和恢复提示。
 //

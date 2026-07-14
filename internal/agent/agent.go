@@ -64,11 +64,12 @@ type Agent struct {
 	lamEngine          LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
 	surpriseCalc       SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
 	terminalCallback   func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
-	tokenVault         *guard.PIITokenVault     // PII OpaqueToken 会话级可逆令牌库
-	piiDetector        *guard.PIIDetector       // PII 检测与脱敏器
-	dagRunner          DAGRunner                // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
-	dagValidator       DAGValidator             // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
-	personaRefiner     *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
+	tokenVault         *guard.PIITokenVault         // PII OpaqueToken 会话级可逆令牌库
+	piiDetector        *guard.PIIDetector           // PII 检测与脱敏器
+	dagRunner          DAGRunner                    // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
+	dagValidator       DAGValidator                 // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
+	personaRefiner     *agentctx.PersonaRefiner     // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
+	anomalyFilter      *guard.AnomalyDistanceFilter // OWASP LLM08 输入异常检测（M11 §2.2），按会话隔离；NewAgent 默认构造
 
 	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine
 	// 向主循环传递重定向意图字符串，避免直接写 sCtx.RawIntentTS 的数据竞争。
@@ -155,6 +156,13 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 		streamSubs:        make(map[uint64]chan types.AgentStreamEvent),
 		pendingRedirectCh: make(chan string, 1),
 		done:              make(chan struct{}),
+		// anomalyFilter 2026-07-14 补齐（ADR-0051 关联接线）：读侧
+		// internal/tool/tool.go checkAnomaly 此前已完整实现（从 ctx 取
+		// *guard.AnomalyDistanceFilter，检测越界后经 HITL 网关升级审批），但没有
+		// 任何调用方构造过该 filter 并写入 ctx，OWASP LLM08 输入异常检测在生产
+		// 环境从未真正生效（checkAnomaly 的 ok 断言恒为 false，静默直接放行）。
+		// 每个 Agent（= 每个会话）持有独立实例，与其 docstring "按会话隔离"一致。
+		anomalyFilter: guard.NewAnomalyDistanceFilter(0),
 	}
 	agent.sm.SetIntentDispatcher(agent.asyncIntent)
 	return agent

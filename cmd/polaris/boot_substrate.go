@@ -219,6 +219,10 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			"ram_mb", autoConf.Config.TotalRAMMB,
 			"cpu_cores", autoConf.Config.CPUCores,
 		)
+		// AutoConfig.Summary() 此前已完整实现（tier/ram/cpu/provider/local_model/
+		// qlora/l3_sandbox/script_workers/storage 一行摘要），但从未被任何调用方
+		// 消费，启动日志一直只有上面这 3 个字段的精简版本。
+		slog.Info(autoConf.Summary())
 	}
 
 	// ─── 0.6 TBR 心跳 goroutine ─────────────────────────────────────────────
