@@ -90,6 +90,7 @@ ADR 被代码引用时，源文件头部加：
 | 0058 | SICCleaner LLM 检测器接线 | Accepted（已执行） | 2026-07-22 |
 | 0059 | Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移） | Accepted（已执行） | 2026-07-22 |
 | 0060 | M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取 | Accepted（已执行） | 2026-07-22 |
+| 0061 | 2026-07-22 deadcode 复核（47 项，1 项新发现 GoldmarkChunker 已删除，2 项待产品决策） | Accepted（部分已执行） | 2026-07-22 |
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 
