@@ -31,6 +31,8 @@ func (h *ChannelsAdmin) verifyWebhookSource(w http.ResponseWriter, r *http.Reque
 		return h.verifySlackWebhook(w, r, cfg, body)
 	case "discord":
 		return h.verifyDiscordWebhook(w, r, cfg, body)
+	case "feishu":
+		return h.verifyFeishuWebhook(w, r, cfg, body)
 	default:
 		if secret, _ := cfg["webhook_secret"].(string); secret != "" {
 			// 通用 HMAC-SHA256 验证（X-Hub-Signature-256 header）
@@ -178,6 +180,59 @@ func (h *ChannelsAdmin) verifyDiscordWebhook(w http.ResponseWriter, r *http.Requ
 	msg = append(msg, body...)
 	if !ed25519.Verify(pubKey, msg, sig) {
 		return apperr.New(apperr.CodeUnauthorized, "discord webhook: signature verification failed")
+	}
+	return nil
+}
+
+// verifyFeishuWebhook 校验飞书（Lark）事件订阅回调。2026-07-21 deadcode 审查发现
+// FeishuVerifyWebhookSignature 早已实现却从未被任何 case 分支调用——此前 default
+// 分支强制要求 cfg["webhook_secret"]（飞书表单从不写入这个字段），导致飞书 webhook
+// 100% fail-closed 拒绝，是可用性缺口而非安全漏洞（详见 2026-07-21 deadcode 审查报告）。
+//
+// 飞书事件订阅有两种模式，仅完整支持第一种，第二种显式拒绝而非静默放行未解密内容：
+//  1. 仅配置 Verification Token（无 Encrypt Key）：明文 JSON，body.token 与配置比对；
+//     internal/channel/message.go 的 extractFeishuWebhook 也只认这种明文事件结构。
+//  2. 配置了 Encrypt Key：body 为 AES-256-CBC 密文，需要先解密才能得到明文事件
+//     JSON——解密器全仓库未实现，extractFeishuWebhook 收到密文也无法解析消息内容，
+//     此时校验通过也没有意义；因此签名校验后仍 fail-closed 返回 UNIMPLEMENTED，
+//     而不是伪装成"已支持"。
+func (h *ChannelsAdmin) verifyFeishuWebhook(w http.ResponseWriter, r *http.Request, cfg map[string]any, body []byte) error {
+	// 飞书 URL 校验握手：{"type":"url_verification","challenge":"...","token":"..."}
+	var probe struct {
+		Type      string `json:"type"`
+		Challenge string `json:"challenge"`
+		Token     string `json:"token"`
+	}
+	if json.Unmarshal(body, &probe) == nil && probe.Type == "url_verification" {
+		verifyToken, _ := cfg["verification_token"].(string)
+		if verifyToken != "" && probe.Token != verifyToken {
+			return apperr.New(apperr.CodeUnauthorized, "feishu webhook: verification_token mismatch (url_verification)")
+		}
+		resp, _ := json.Marshal(map[string]string{"challenge": probe.Challenge})
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(resp) //nolint:errcheck
+		return apperr.New(apperr.CodeOK, "feishu url_verification handled")
+	}
+
+	if encryptKey, _ := cfg["encrypt_key"].(string); encryptKey != "" {
+		ts := r.Header.Get("X-Lark-Request-Timestamp")
+		nonce := r.Header.Get("X-Lark-Request-Nonce")
+		sig := r.Header.Get("X-Lark-Signature")
+		if !cadapter.FeishuVerifyWebhookSignature(ts, nonce, encryptKey, string(body), sig) {
+			return apperr.New(apperr.CodeUnauthorized, "feishu webhook: signature mismatch")
+		}
+		return apperr.New(apperr.CodeUnimplemented, "feishu webhook: encrypt_key 加密模式的事件体解密尚未实现，暂不支持（请改用仅 Verification Token 模式）")
+	}
+
+	verifyToken, _ := cfg["verification_token"].(string)
+	if verifyToken == "" {
+		return apperr.New(apperr.CodeUnauthorized, "feishu webhook: verification_token not configured") // fail-closed
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.Token != verifyToken {
+		return apperr.New(apperr.CodeUnauthorized, "feishu webhook: token mismatch")
 	}
 	return nil
 }

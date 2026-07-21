@@ -92,13 +92,13 @@ ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel
 - S_PERCEIVE/S_VALIDATE/S_REFLECT/S_REPLAN: derivedTimeout = upstream_budget - elapsed, 安全地板 30s
 - S_IDLE/S_COMPLETE/S_FAILED/S_ROLLBACK: 终端/等待态, 无超时
 
-ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1 FatalStreamAbort / M1 JSON Repair 失败 / S_PLAN 拓扑失败。ReplanCount > MaxReplanAttempts → `TriggerReplanExhausted → S_FAILED` → `[ESCALATE]`。S_FAILED 为终态——不进入 S_ROLLBACK，不触发回滚补偿。任务移交 M13 HITL 人工决策。FSM 实现见 `internal/agent/`（FallbackFSM）；`go build -tags use_flowy` 启用 flowy 增强版。
+ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1 FatalStreamAbort / M1 JSON Repair 失败 / S_PLAN 拓扑失败。ReplanCount > MaxReplanAttempts → `TriggerReplanExhausted → S_FAILED` → `[ESCALATE]`。S_FAILED 为终态——不进入 S_ROLLBACK，不触发回滚补偿。任务移交 M13 HITL 人工决策。FSM 实现见 `internal/agent/fsm/state_machine.go`（`StateMachine`，唯一生产实现；此前文档提及的 `FallbackFSM`/`use_flowy` build tag 从未落地，2026-07-21 deadcode 审查确认零调用后已删除）。
 
 ---
 
 ## 2. Suspend-on-Idle Actor
 
-Agent 以 goroutine 形式运行，空闲时挂起释放资源。核心状态机与 FSM 实现见 `internal/agent/`（StateMachine / FallbackFSM）。
+Agent 以 goroutine 形式运行，空闲时挂起释放资源。核心状态机与 FSM 实现见 `internal/agent/`（StateMachine）。
 
 **EpochTracker（上下文指纹隔离）**: `internal/agent/fsm/epoch.go` 实现 `epochTracker`，对每次 LLM 调用前的消息序列计算 SHA-256 全量指纹。指纹变化时 epoch 原子自增，防止陈旧上下文被重复使用。调用方（`state_machine.go`）通过比较 `StateContext.ContextEpoch` 判断上下文是否失效，无需深度比较消息内容。并发安全（`atomic.Int64` + `atomic.Value`）。
 

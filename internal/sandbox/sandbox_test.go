@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -144,19 +143,6 @@ func TestAssignSandboxTier(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestNoopReadCloser(t *testing.T) {
-	r := bytes2ReadCloser([]byte("hello world"))
-	buf := make([]byte, 5)
-	n, _ := r.Read(buf)
-	if n != 5 || string(buf) != "hello" {
-		t.Fatalf("expected 'hello', got %q", buf)
-	}
-	n2, _ := r.Read(buf)
-	if n2 != 5 || !strings.HasPrefix(string(buf), " worl") {
-		t.Fatalf("expected ' worl', got %q", buf)
 	}
 }
 

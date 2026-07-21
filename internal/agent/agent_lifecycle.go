@@ -228,6 +228,33 @@ func (a *Agent) refinePersonaAsync(ctx context.Context, current types.AgentState
 	})
 }
 
+// archiveEpisodicAsync 是 ConsolidationPipeline 文档顶部注释描述的
+// "sessionClosed → 强制触发" 会话关闭钩子（2026-07-21 deadcode 审查补齐）：
+// protocol.MemoryFacade.ArchiveEpisodic 此前在接口和实现（facade.go）里都完整
+// 存在，却从未被任何生产调用方触发——语义是"把该会话截至当前时刻的全部
+// Episodic 事件标记为冷数据"，与 ConsolidationPipeline.MarkColdEpisodicEvents
+// 的滑动 1 小时窗口互补而非重复：后者服务仍在进行的长会话（由 Run() 在每次
+// S_REFLECT 完成时调用），前者服务会话终态时的一次性全量归档。异步执行，
+// 失败仅记录 Warn（该标记只影响后续检索排序，不是正确性关键路径）。
+func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
+	if a.memory == nil {
+		return
+	}
+	sessionID := a.sCtx.SessionID
+	if sessionID == "" {
+		sessionID = a.sCtx.TaskID
+	}
+	if sessionID == "" {
+		return
+	}
+	mem := a.memory
+	concurrent.SafeGo(ctx, "agent.archive_episodic", func(gctx context.Context) {
+		if err := mem.ArchiveEpisodic(gctx, sessionID); err != nil {
+			slog.Warn("agent: archive episodic on session close failed", "err", err)
+		}
+	})
+}
+
 func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentState) {
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:    types.AgentStreamEventStatus,
@@ -259,6 +286,7 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 	}
 
 	a.refinePersonaAsync(ctx, current)
+	a.archiveEpisodicAsync(ctx)
 
 	// 触发 Terminal Callback (P1-2 Learning 闭环)。
 	// 传 SessionID 而非 TaskID：ReflectionWorker 以此为键检索 episodic 事件

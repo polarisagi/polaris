@@ -155,6 +155,23 @@ func (m *MemImpl) InjectEmbedder(e memretrieval.Embedder) {
 	m.retriever.InjectEmbedder(e)
 }
 
+// InjectDriftDetector 注入 M05 §12.3 漂移检测器（委托给内部 retriever），
+// 激活 Search() 内的 anchor 采样。sampleRate<=0 或 dd==nil 时等效未启用。
+// dd 参数类型为 memretrieval.DriftAnchorRecorder（消费方本地接口，HE-3）：
+// L1（internal/memory）禁止 import L2（internal/learning），调用方以
+// *surprise.DriftDetector 实例传入即可（其 RecordAnchor 方法签名与此精确匹配）。
+func (m *MemImpl) InjectDriftDetector(dd memretrieval.DriftAnchorRecorder, sampleRate float64) {
+	m.retriever.InjectDriftDetector(dd, sampleRate)
+}
+
+// InjectDriftRegistry 注入漂移降级状态注册表（委托给内部 retriever），
+// 激活按 task_type 降级 VectorWeight 的判断。r 参数类型为
+// memretrieval.DriftGate（消费方本地接口），调用方以
+// *surprise.DriftDowngradeRegistry 实例传入即可。
+func (m *MemImpl) InjectDriftRegistry(r memretrieval.DriftGate) {
+	m.retriever.InjectDriftRegistry(r)
+}
+
 func (m *MemImpl) StoreStats() (string, error) {
 	return m.semantic.StoreStats()
 }

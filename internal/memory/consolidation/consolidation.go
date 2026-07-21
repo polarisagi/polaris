@@ -114,6 +114,16 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 		return nil
 	}
 
+	// C2 短程记忆降维滑动窗口（2026-07-21 deadcode 审查补齐）：Run() 本身已由
+	// S_REFLECT 完成后的 TopicMemoryConsolidate outbox 事件按 per-reflect 节奏
+	// 触发（见 boot_tools.go §6.6），天然对应本文件顶部注释"eventCount≥50→触发"
+	// 语义的实际驱动周期；MarkColdEpisodicEvents 此前从未被这条既有触发链路调用，
+	// 长会话里 1 小时前的事件永远不会被打上 cold 标签。非阻断：失败不影响
+	// 主蒸馏流程（该标记只影响后续检索排序，不是正确性关键路径）。
+	if err := p.MarkColdEpisodicEvents(ctx, sessionID); err != nil {
+		slog.Warn("consolidation: mark cold episodic events failed", "err", err)
+	}
+
 	return p.executeStages(ctx, sessionID, events)
 }
 

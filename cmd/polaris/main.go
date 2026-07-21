@@ -62,6 +62,10 @@ func run() error { //nolint:gocyclo
 			return runVaultCmd(os.Args[2:])
 		case "csv-fanout":
 			return runCSVFanoutCmd(os.Args[2:])
+		case "allowlist":
+			return runAllowlistCmd(os.Args[2:])
+		case "skill":
+			return runSkillCmd(os.Args[2:])
 		case "eval":
 			// "polaris eval --ci-gate" 是既有的 §10.8 CI 门禁入口，需要完整启动序列
 			// （真实 EvalRunner，而非本 CLI 子命令组的纯 HTTP 客户端 runEvalCmd），
@@ -136,6 +140,12 @@ func run() error { //nolint:gocyclo
 		slog.Error("polaris-server: failed to load providers from db", "error", err)
 	}
 
+	// ─── §10.75 M04 §8 崩溃恢复回放 ──────────────────────────────────────────
+	// 必须在此处（Provider 已就绪、HTTP 服务尚未开始对外服务）串行执行完毕：
+	// 全局 protocol.ReplayMode 标志是进程级而非会话级，此窗口内不存在其他
+	// 并发会话与其读取冲突（见 boot_crash_recovery.go 文件头注释）。
+	recoverCrashedSessions(ctx, sb, ab)
+
 	// ─── §10.8 Eval Harness CI Gate ─────────────────────────────────────────
 	if len(os.Args) > 2 && os.Args[1] == "eval" && os.Args[2] == "--ci-gate" {
 		slog.Info("polaris: running eval --ci-gate validation suite")
@@ -154,7 +164,7 @@ func run() error { //nolint:gocyclo
 	}
 
 	// ─── §11 M13 Interface Server ────────────────────────────────────────────
-	httpSrv, err := bootServer(ctx, sb, tb, ab)
+	httpSrv, err := bootServer(ctx, sb, mb, tb, ab)
 	if err != nil {
 		return err
 	}

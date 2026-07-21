@@ -326,6 +326,11 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 		{
 			reqMsgs := llmEff.PromptFn(a.toProtocolCtx())
 			reqMsgs = a.injectMemoryToMsgs(ctx, reqMsgs)
+			// M04 §7 热路径上下文窗口压缩（ADR-0060）：单次 LLM 调用的 reqMsgs
+			// 实际大小检测，与上面第 1 步的任务级累计预算检测是互补的两个维度
+			// （见 agent_context_compaction.go 顶部注释），必须在 PII tokenize
+			// 之前压缩——压缩后消息更少，tokenize 扫描量也相应减少。
+			reqMsgs = a.hotPathCompactIfNeeded(ctx, reqMsgs)
 			reqMsgs, err = a.tokenizeMessagesForLLM(ctx, reqMsgs)
 			if err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)
@@ -343,11 +348,26 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 					inferOpts = append(inferOpts, types.WithTools(schemas))
 				}
 			}
-			ch, streamErr := safecall.StreamInfer(ctx, a.provider, reqMsgs, inferOpts...)
-			if streamErr != nil {
-				inferErr = streamErr
+			// [M04 §8 崩溃恢复回放] 全局回放模式下优先按顺序消费注入的历史 LLM
+			// 调用录像，不发起真实 Provider 调用（g_inv_08 零 LLM 重放约束）。
+			// 队列耗尽的瞬间立即翻转全局 ReplayMode=false 并落入真实调用分支——
+			// 见 replayCalls 字段注释：本 Agent 之后仍需推进时必须能发起真实调用，
+			// 崩溃恢复驱动器严格串行处理各会话，此刻退出回放不影响并发安全。
+			if protocol.IsReplaying() && a.replayIdx < len(a.replayCalls) {
+				call := a.replayCalls[a.replayIdx]
+				a.replayIdx++
+				if a.replayIdx >= len(a.replayCalls) {
+					protocol.SetReplayMode(false)
+				}
+				resp = reconstructReplayResponse(call.Response)
+				inferErr = nil
 			} else {
-				resp, inferErr = a.doStreamInfer(ctx, ch)
+				ch, streamErr := safecall.StreamInfer(ctx, a.provider, reqMsgs, inferOpts...)
+				if streamErr != nil {
+					inferErr = streamErr
+				} else {
+					resp, inferErr = a.doStreamInfer(ctx, ch)
+				}
 			}
 
 			if inferErr != nil {
@@ -413,9 +433,13 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 					a.sCtx.LastReasoningContent = resp.ReasoningContent
 				}
 
-				reqMap := map[string]any{"messages": reqMsgs, "model": llmEff.ModelPool, "thinking_mode": llmEff.ThinkingMode}
-				respMap := map[string]any{"content": resp.Content, "reasoning_content": resp.ReasoningContent, "usage": resp.Usage, "tool_calls": resp.ToolCalls}
-				a.sm.WriteLLMCallEvent(a.sCtx.SessionID, reqMap, respMap)
+				// 回放模式下该记录本就来自既有 EventLog，重写只会造成重复条目，
+				// 与其余 3 处 IsReplaying 物理短路点（2PC/memory-write/outbox）同一语义。
+				if !protocol.IsReplaying() {
+					reqMap := map[string]any{"messages": reqMsgs, "model": llmEff.ModelPool, "thinking_mode": llmEff.ThinkingMode}
+					respMap := map[string]any{"content": resp.Content, "reasoning_content": resp.ReasoningContent, "usage": resp.Usage, "tool_calls": resp.ToolCalls}
+					a.sm.WriteLLMCallEvent(a.sCtx.SessionID, reqMap, respMap)
+				}
 
 				// 原生 tool_calls 非空时（S_PLAN 阶段 Provider 选择走原生 function-calling
 				// 而非文本 JSON DSL），转换为 DAGModel JSON 顶替 resp.Content 喂给下面的

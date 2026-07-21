@@ -19,6 +19,8 @@ import (
 	"github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
 
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+
 	"github.com/polarisagi/polaris/internal/action/lam"
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
@@ -123,7 +125,7 @@ func buildAgent(
 	bgCtx context.Context,
 	personaRefiner *agentctx.PersonaRefiner,
 ) *sysagent.Agent {
-	a := sysagent.NewAgent(sessionID, taskRepo, nil, sb.Router)
+	a := sysagent.NewAgent(sessionID, taskRepo, sb.Router)
 	a.SetExtQuerier(sb.Store.DB())
 	a.Config.MaxReplan = sb.Cfg.Thresholds.M4Kernel.MaxReplanAttempts
 	a.Config.DefaultBudget = sb.Cfg.Thresholds.M4Kernel.DefaultBudget
@@ -132,6 +134,9 @@ func buildAgent(
 	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
+	// BlindZoneDetector（V8-S4）：2026-07-21 deadcode 审查发现构造+注入点均从未被调用，
+	// 见 boot_memory.go 的 BlindZoneDetector 字段注释。
+	a.InjectBlindZoneDetector(mb.BlindZoneDetector)
 	// S_VALIDATE TaintGate 人工复核豁免（M11 §2.5 SanitizeByUserReview，2026-07-14）：
 	// 与 tb.ToolReg 的出口污点检查共享同一个 ExemptionVault 实例。
 	a.InjectTaintReviewChecker(tb.ExemptionVault)
@@ -188,6 +193,13 @@ func buildAgent(
 
 	// Inject trajectory store event writer for state trans and LLM call recording (Task 1)
 	a.GetStateMachine().SetSessionEventWriter(newStoreEventWriter(sb.Store))
+	// M04 §8 崩溃恢复：注入 KV Store 供 Run() 写入/清除 in-flight 崩溃检测标记
+	// （见 internal/agent/agent.go markInFlight/clearInFlight + boot_crash_recovery.go）。
+	a.InjectEventStore(sb.Store)
+	// M04 §7 热路径上下文窗口压缩 Stage 1（ADR-0060）：与网关 Compressor
+	// （boot_server.go SetToolRefOffloader）共用同一个 ToolRefOffloader 实例，
+	// 两条压缩路径落盘到同一份 workspace_vfs 索引，read_tool_ref 均可回读。
+	a.InjectToolRefOffloader(tb.ToolRefOffloader)
 
 	a.InjectTerminalCallback(func(_ context.Context, taskID, taskType string, replanCount int, success bool) {
 		concurrent.SafeGo(bgCtx, "reflection-worker-"+sessionID, func(gctx context.Context) {
@@ -322,7 +334,15 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				_ = blackboard.ResumeFromSuspended(ctx, id)
 			}
 		}
-		ev, _ := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery", map[string]string{"status": "recovered"}, "")
+		// 幂等键必须真正唯一（2026-07-22 一致性审查修复）：outbox.idempotency_key
+		// 是 UNIQUE 约束列，空字符串在同一部署生命周期内只有第一次
+		// killswitch_recovery 能成功写入，之后每次真实恢复事件都会因约束冲突
+		// 静默丢弃（Write 错误被 `_ =` 丢弃）——不是"缺少幂等保护"这么轻的问题，
+		// 是"真实事件被悄悄吞掉"。此处无重试语义（同步调用一次），用纳秒时间戳
+		// 保证每次真实恢复都能独立落盘，不臆测"版本/序号"等这里并不存在的业务概念。
+		ev, _ := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery",
+			map[string]string{"status": "recovered"},
+			fmt.Sprintf("killswitch_recovery:%d", time.Now().UnixNano()))
 		_ = sb.Outbox.Write(ctx, ev)
 	})
 
@@ -373,7 +393,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	if kb.KnowledgeBase != nil {
 		knowAdapter = &knowledgeAdapter{kb: kb.KnowledgeBase}
 	}
-	reflectionWorker := reflexion.NewReflectionWorker(mb.Mem.Episodic(), sb.Router, mb.Mem.Reflection())
+	// NewReflectionWorkerWithConfig 2026-07-21 deadcode 审查补齐：此前该构造函数
+	// 有完整实现+测试（白名单覆盖/MinReplanCount 触发行为），但生产侧从未有配置
+	// 来源，只能走 NewReflectionWorker 的硬编码默认值。M5Memory.Reflection* 字段
+	// 新增，零值时 NewReflectionWorkerWithConfig 内部回退到与旧默认值相同的值，
+	// 行为不变，只是获得了可覆盖能力。
+	reflectionWorker := reflexion.NewReflectionWorkerWithConfig(mb.Mem.Episodic(), sb.Router, mb.Mem.Reflection(),
+		reflexion.ReflectionConfig{
+			TaskTypeWhitelist: sb.Cfg.Thresholds.M5Memory.ReflectionTaskTypeWhitelist,
+			MinReplanCount:    sb.Cfg.Thresholds.M5Memory.ReflectionMinReplanCount,
+		})
 
 	var ds lam.DisplayServer
 	switch {
@@ -764,10 +793,26 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	bgTaskScheduler.Start(ctx)
 	slog.Info("polaris: AutoCurriculumGenerator background scheduler started")
 
-	// 训练适配器使用记录（避免 unused 编译错误；后续 M9 流水线消费）
-	_ = sb.QLoRA
-	_ = sb.PRM
-	_ = sb.Steering
+	// ─── M09 §4 条件梯度训练：样本采集 + 批次触发（2026-07-21 deadcode 审查
+	// 补齐）。sb.QLoRA/sb.PRM 为 nil 时（对应 FeatureGate 未启用）跳过构造，
+	// 避免"nil 具体类型包进非 nil interface"经典陷阱——TrainingSampleCollector.Add
+	// 的 nil-safe 检查判断的是 interface 本身是否为 nil，若此处无条件传入
+	// (*llmadapter.QLoRAAdapter)(nil) 会得到非 nil 的 TrainingAdapter interface，
+	// 判空会误判为"已注入"进而在 Train() 处 panic。
+	//   - QLoRA 样本来自 reflexion.ReflexionEngine.replaySuccess（"经 replan 后
+	//     成功"的纠偏轨迹）。
+	//   - PRM 样本来自 sampling_scorer.go 的 M12 §9 生产流量抽样 LLM Judge 打分
+	//     （[0,1] 质量分作为 Reward）。
+	if sb.QLoRA != nil {
+		qloraCollector := llmadapter.NewTrainingSampleCollector("qlora", sb.QLoRA, sb.Cfg.Thresholds.M9SelfImprove.QLoRATrainBatchSize)
+		reflexionEngine.InjectQLoRACollector(qloraCollector)
+		slog.Info("polaris: QLoRA training sample collector wired", "batch_size", sb.Cfg.Thresholds.M9SelfImprove.QLoRATrainBatchSize)
+	}
+	if sb.PRM != nil {
+		prmCollector := llmadapter.NewTrainingSampleCollector("prm", sb.PRM, sb.Cfg.Thresholds.M9SelfImprove.PRMTrainBatchSize)
+		samplingMonitor.InjectPRMCollector(prmCollector)
+		slog.Info("polaris: PRM training sample collector wired", "batch_size", sb.Cfg.Thresholds.M9SelfImprove.PRMTrainBatchSize)
+	}
 
 	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 M04 §B2）
 	memoryFacadeForAgent := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)

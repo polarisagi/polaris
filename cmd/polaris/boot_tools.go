@@ -374,7 +374,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry))
 	// [W-2-B] 接入 SkillValidationPipeline
 	signingKey := []byte(sb.Cfg.System.DataEncryptionKey)
-	pipeline := skill.NewSkillValidationPipeline(signingKey, &scriptExecutorAdapter{sbx: containerSandbox})
+	// WithMaxCodeSize 2026-07-21 deadcode 审查修复：该 Option 从未被传入，
+	// maxCodeSize 恒为零值导致 Validate() 内的大小校验被跳过（技能代码尺寸完全不设限）。
+	// 复用 codeact 侧已有的同一份配置阈值（boot_server.go 的 M7Tool.MaxCodeSizeBytes,
+	// 默认 16384），而非发明一个新阈值。
+	pipeline := skill.NewSkillValidationPipeline(signingKey, &scriptExecutorAdapter{sbx: containerSandbox},
+		skill.WithMaxCodeSize(sb.Cfg.Thresholds.M7Tool.MaxCodeSizeBytes))
 	installFSM.RegisterInstaller(lifecycle.NewSkillInstaller(extRepo, skillRegistry).WithValidators(
 		&pipelineValidatorAdapter{pipeline: pipeline},
 		&pipelineValidatorAdapter{pipeline: pipeline},

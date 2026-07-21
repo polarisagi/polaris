@@ -44,11 +44,6 @@ func NewWriteFilter(provider protocol.Provider) *WriteFilter {
 	}
 }
 
-// NewWriteFilterWithThreshold 允许覆盖阈值（测试/运维专用）。
-func NewWriteFilterWithThreshold(provider protocol.Provider, threshold float64) *WriteFilter {
-	return &WriteFilter{provider: provider, writeThreshold: threshold}
-}
-
 // EvalResult 评估结果。
 type EvalResult struct {
 	Value      float64 // 0.0-1.0

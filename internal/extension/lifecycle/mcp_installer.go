@@ -87,17 +87,24 @@ func (m *MCPInstaller) Install(ctx context.Context, req InstallReq) (string, err
 		return installDir, apperr.Wrap(apperr.CodeInternal, "mcp_installer", addErr)
 	}
 
-	// 检查是否声明了知识源能力
-	for _, cap := range mcpCfg.Capabilities {
-		if cap == "knowledge-source" {
-			// [硬拦截] connector.MCPKnowledgeConnector 的 List/Fetch/Watch 目前均为
-			// CodeUnimplemented 桩实现（MCP resources/list、resources/read 尚未接入
-			// 真实 mcp.MCPClient，见 mcp_connector.go 顶部注释）。若在此处注册，
-			// SyncScheduler 会持续调度该 connector 并永久收到 CodeUnimplemented，
-			// 陷入指数退避空转（永不成功也永不放弃）。在功能补齐前直接拒绝注册，
-			// 比"注册后静默空转"更符合 fail-fast——用户能立即看到日志，而不是
-			// 误以为知识源已生效但实际从未真正同步过任何文档。
-			slog.Warn("mcp_installer: knowledge-source capability declared but connector implementation is a stub (List/Fetch/Watch unimplemented), skipping registration to avoid permanent retry spin",
+	// 检查是否声明了知识源能力（2026-07-21 deadcode 审查补齐：
+	// connector.MCPKnowledgeConnector.List/Fetch 此前是 CodeUnimplemented 桩实现，
+	// 曾在此处硬拦截避免 SyncScheduler 对空转桩代码指数退避重试；现已接入真实
+	// mcp.MCPClient.ResourcesList/ResourcesRead RPC 调用，可以正常注册）。
+	if m.registry != nil {
+		for _, cap := range mcpCfg.Capabilities {
+			if cap != "knowledge-source" {
+				continue
+			}
+			rawClient := m.mcpConn.GetClient(req.InstID)
+			knowledgeClient, ok := rawClient.(connector.MCPClient)
+			if !ok {
+				slog.Warn("mcp_installer: knowledge-source capability declared but client does not support resources/list+resources/read, skipping registration",
+					"inst_id", req.InstID, "name", name)
+				continue
+			}
+			m.registry.Register(connector.NewMCPKnowledgeConnector(req.InstID, name, knowledgeClient))
+			slog.Info("mcp_installer: knowledge-source MCP server registered with SyncScheduler",
 				"inst_id", req.InstID, "name", name)
 		}
 	}
@@ -108,6 +115,11 @@ func (m *MCPInstaller) Install(ctx context.Context, req InstallReq) (string, err
 }
 
 func (m *MCPInstaller) Uninstall(ctx context.Context, req UninstallReq) error {
+	// 与上面新增的知识源连接器注册对称：卸载时一并摘除，避免 SyncScheduler
+	// 继续调度一个客户端已被拆除的 connector（2026-07-21 随 List/Fetch 接入一并修复）。
+	if m.registry != nil {
+		m.registry.Unregister(req.InstID)
+	}
 	_ = m.extRepo.UninstallCleanup(ctx, "", req.RuntimeID, "mcp")
 	return nil
 }

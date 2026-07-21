@@ -40,6 +40,14 @@ func (dd *DriftDetector) AddAnchor(anchor AnchorSample) {
 	dd.anchors = append(dd.anchors, anchor)
 }
 
+// RecordAnchor 以原始参数追加锚点，语义与 AddAnchor(AnchorSample{...}) 完全一致。
+// 供 internal/memory/retrieval（L1）以消费方定义的接口方法名调用（HE-3：接口
+// 在调用方定义）——L1 不允许 import L2 的 internal/learning/surprise，
+// 消费方本地声明一个只含此方法签名的接口，本方法的方法名与签名需与之精确匹配。
+func (dd *DriftDetector) RecordAnchor(taskType, query string, embedding []float32, expected []string) {
+	dd.AddAnchor(AnchorSample{TaskType: taskType, Query: query, Embedding: embedding, Expected: expected})
+}
+
 // AnchorSample 锚定样本。
 type AnchorSample struct {
 	TaskType  string
@@ -74,7 +82,16 @@ func (dd *DriftDetector) anchorCosineDist(a AnchorSample) (float64, bool) {
 
 // scoreAnchors 遍历锚点，返回 (cosineDeltaSum, driftedCount, unknownCount, knownCount)。
 func (dd *DriftDetector) scoreAnchors() (cosineDeltaSum float64, driftedCount, unknownCount, knownCount int) {
+	return dd.scoreAnchorsFiltered("")
+}
+
+// scoreAnchorsFiltered 与 scoreAnchors 逻辑一致，taskType 非空时只统计该 task_type 的锚点。
+// 供 DetectByTaskType 按 task_type 分组复用同一套评分逻辑（避免重复实现）。
+func (dd *DriftDetector) scoreAnchorsFiltered(taskType string) (cosineDeltaSum float64, driftedCount, unknownCount, knownCount int) {
 	for _, a := range dd.anchors {
+		if taskType != "" && a.TaskType != taskType {
+			continue
+		}
 		if len(a.Expected) == 0 {
 			unknownCount++
 			continue
@@ -122,6 +139,46 @@ func (dd *DriftDetector) Detect() (*DriftReport, error) {
 		report.UnknownTaskTypeAlarm = true
 	}
 	return report, nil
+}
+
+// DetectByTaskType 按 task_type 分组检测漂移。
+// M05 §12.3 降级表要求"该 task_type 降级纯 BM25，其余不受影响"——原 Detect()
+// 只做全局聚合，AnchorSample.TaskType 字段从未被读取过（2026-07-21 deadcode
+// 审查发现的设计缺口）。本方法复用 scoreAnchorsFiltered 按组重新评分，
+// 判定阈值与 Detect() 保持一致（changeRate>0.4 且 cosineDelta>threshold）。
+// 样本数 <5 的组跳过（不产出降级信号，避免小样本噪声误判）。
+func (dd *DriftDetector) DetectByTaskType() map[string]*DriftReport {
+	byType := make(map[string][]AnchorSample)
+	for _, a := range dd.anchors {
+		if a.TaskType == "" {
+			continue
+		}
+		byType[a.TaskType] = append(byType[a.TaskType], a)
+	}
+
+	reports := make(map[string]*DriftReport, len(byType))
+	for taskType, anchors := range byType {
+		if len(anchors) < 5 {
+			continue
+		}
+		cosineDeltaSum, driftedCount, unknownCount, knownCount := dd.scoreAnchorsFiltered(taskType)
+		cosineDelta, changeRate := 0.0, 0.0
+		if knownCount > 0 {
+			cosineDelta = cosineDeltaSum / float64(knownCount)
+			changeRate = float64(driftedCount) / float64(knownCount)
+		}
+		report := &DriftReport{
+			UnknownRatio: float64(unknownCount) / float64(len(anchors)),
+			ChangeRate:   changeRate,
+			CosineDelta:  cosineDelta,
+			NeedsReindex: changeRate > 0.4 && cosineDelta > dd.driftThreshold,
+		}
+		if report.UnknownRatio > 0.30 {
+			report.UnknownTaskTypeAlarm = true
+		}
+		reports[taskType] = report
+	}
+	return reports
 }
 
 // DriftReport 漂移检测报告。

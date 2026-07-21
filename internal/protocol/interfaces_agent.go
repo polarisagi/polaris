@@ -92,6 +92,13 @@ AgentController interface {
 	SetMonthlyBudgetUSD(budget float64)
 	// SubscribeStream 订阅 FSM 事件流，用于向 SSE 客户端回推流式响应 (UP-06)。
 	SubscribeStream(ctx context.Context) <-chan types.AgentStreamEvent
+	// InjectReplayData 注入崩溃恢复回放用的历史 LLM 调用队列（M04 §8）。
+	// 仅供 boot 阶段崩溃恢复驱动器（cmd/polaris）在 SetTaskIntent/SendIntent
+	// 之前调用；正常交互式/headless 路径不调用此方法。注入后，若全局
+	// protocol.IsReplaying()==true，executeEffect 的 LLMFillEffect 主路径优先
+	// 按顺序消费队列而非发起真实 Provider 调用；队列耗尽时自动切回真实调用
+	// 并关闭全局 ReplayMode（见 internal/agent/agent_execute_effect.go 消费点）。
+	InjectReplayData(calls []ReplayLLMCall)
 }
 
 // @consumer internal/gateway/server/chat

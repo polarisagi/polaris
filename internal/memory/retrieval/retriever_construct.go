@@ -9,6 +9,23 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
+// DriftAnchorRecorder/DriftGate — 消费方（本包，L1）本地声明的漂移编排接口
+// （HE-3：接口在调用方定义）。架构分层 R1.7 禁止 internal/memory（L1）反向
+// import internal/learning（L2），故不直接引用 *surprise.DriftDetector/
+// *surprise.DriftDowngradeRegistry 具体类型；cmd/polaris 组合根构造具体实例后，
+// 以满足这两个接口的方式注入（*surprise.DriftDetector.RecordAnchor 与
+// *surprise.DriftDowngradeRegistry.IsDowngraded 方法签名与此精确匹配）。
+
+// DriftAnchorRecorder 漂移检测 anchor 采样接口。
+type DriftAnchorRecorder interface {
+	RecordAnchor(taskType, query string, embedding []float32, expected []string)
+}
+
+// DriftGate 漂移降级状态查询接口。
+type DriftGate interface {
+	IsDowngraded(taskType string) bool
+}
+
 // ============================================================================
 // HybridRetriever — 结构体定义、构造函数与分类器注入（R7 拆分自 retriever.go）
 // Search 主检索逻辑见 retriever.go；辅助检索函数见 retriever_helpers.go。
@@ -23,6 +40,26 @@ type HybridRetrieverImpl struct {
 	cognitive     protocol.CognitiveSearcher   // Tier1+：SurrealDB FTS+HNSW，nil 时降级 Tier0
 	semantic      protocol.SemanticMemory      // P0-2：第 6 路（semantic_entities）
 	classifier    *SemanticQueryClassifier     // 查询意图分类（temporal 激活第 5 路）；实例持有，禁全局
+
+	// driftDetector/driftRegistry — M05 §12.3 Embedding 漂移响应编排（2026-07-21
+	// deadcode 审查补齐）。两者均为可选注入，nil 时 Search 完全跳过漂移采样/
+	// 降级判断，行为与接入前一致（fail-open，不影响现有检索路径）。
+	driftDetector   DriftAnchorRecorder
+	driftRegistry   DriftGate
+	driftSampleRate float64 // M5MemoryThresholds.DriftAnchorSampleRate，0 时等效未注入
+}
+
+// InjectDriftDetector 注入漂移检测器与采样率，激活 Search() 内的 anchor 采样。
+// 未注入（dd==nil）或 sampleRate<=0 时 Search 不做任何漂移相关行为（nil-safe）。
+func (hr *HybridRetrieverImpl) InjectDriftDetector(dd DriftAnchorRecorder, sampleRate float64) {
+	hr.driftDetector = dd
+	hr.driftSampleRate = sampleRate
+}
+
+// InjectDriftRegistry 注入降级状态注册表，激活 Search() 内按 task_type 降级
+// VectorWeight 的判断。未注入时 Search 不做任何降级（nil-safe）。
+func (hr *HybridRetrieverImpl) InjectDriftRegistry(r DriftGate) {
+	hr.driftRegistry = r
 }
 
 // InjectEmbedder 注入 M1 Embedding 接口，激活向量检索路径。

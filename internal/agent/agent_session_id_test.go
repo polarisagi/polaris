@@ -7,7 +7,7 @@ import "testing"
 // 空字符串 key 前缀（生产环境唯一影响面）。修复后应等于传入的 id（与
 // chat_sessions.id / AgentID 同源），供 WriteStateTransEvent 等写路径使用。
 func TestNewAgent_SessionIDPopulated(t *testing.T) {
-	a := NewAgent("session-xyz", nil, nil, nil)
+	a := NewAgent("session-xyz", nil, nil)
 	if a.sCtx.SessionID != "session-xyz" {
 		t.Errorf("expected sCtx.SessionID = %q, got %q", "session-xyz", a.sCtx.SessionID)
 	}

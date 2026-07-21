@@ -117,6 +117,16 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			metric.WithDescription("LLMFillEffect 响应未通过 SchemaRef 结构校验的累计次数"),
 		)
 
+		// PerformanceDrift（M03 §10.1，2026-07-21 deadcode 审查补齐 gauge 暴露，见 legacyMetricsHandler 同名注释）
+		perfDriftPassRateGauge, _ := meter.Float64ObservableGauge(
+			"polaris.performance_drift.pass_rate",
+			metric.WithDescription("Current windowed task success pass rate"),
+		)
+		perfDriftBaselineGauge, _ := meter.Float64ObservableGauge(
+			"polaris.performance_drift.baseline",
+			metric.WithDescription("Performance drift detector baseline pass rate"),
+		)
+
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
@@ -144,8 +154,12 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(anchorDriftGauge, GetFoundingAnchorDriftScore())
 			o.ObserveFloat64(schemaValidationFailureGauge, float64(GlobalSchemaValidationFailureTotal.Load()))
 
+			pd := GlobalPerformanceDrift()
+			o.ObserveFloat64(perfDriftPassRateGauge, pd.CurrentPassRate())
+			o.ObserveFloat64(perfDriftBaselineGauge, pd.Baseline())
+
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge)
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge)
 
 		h := promhttp.Handler()
 		otelHandlerPtr.Store(&h)
@@ -225,6 +239,20 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_outbox_dead_letter_total Total number of outbox messages dead\n")
 		fmt.Fprintf(w, "# TYPE polaris_outbox_dead_letter_total counter\n")
 		fmt.Fprintf(w, "polaris_outbox_dead_letter_total %d\n", dl)
+
+		// ── PerformanceDrift（M03 §10.1，2026-07-21 deadcode 审查补齐 gauge 暴露）──
+		// 检测器本体（Record/RegisterListener→KillSwitch）此前已生产接入
+		// （agent_lifecycle.go Record、boot_substrate.go RegisterListener），
+		// 但 CurrentPassRate/Baseline 两个只读访问器从未暴露到 /metrics，
+		// 与 SurpriseIndex/TokenBurnRate 等一等公民信号的可观测标准不一致。
+		pd := GlobalPerformanceDrift()
+		fmt.Fprintf(w, "# HELP polaris_performance_drift_pass_rate Current windowed task success pass rate\n")
+		fmt.Fprintf(w, "# TYPE polaris_performance_drift_pass_rate gauge\n")
+		fmt.Fprintf(w, "polaris_performance_drift_pass_rate %g\n", pd.CurrentPassRate())
+
+		fmt.Fprintf(w, "# HELP polaris_performance_drift_baseline Performance drift detector baseline pass rate\n")
+		fmt.Fprintf(w, "# TYPE polaris_performance_drift_baseline gauge\n")
+		fmt.Fprintf(w, "polaris_performance_drift_baseline %g\n", pd.Baseline())
 	})
 }
 

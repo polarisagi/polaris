@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -184,7 +185,7 @@ func TestSplitMessages_TailCoversAll(t *testing.T) {
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
 	}
-	middle, tail := splitMessages(msgs, 1000)
+	middle, tail := compact.SplitMessages(msgs, 1000)
 	if len(middle) != 0 {
 		t.Errorf("middle len=%d want 0", len(middle))
 	}
@@ -200,7 +201,7 @@ func TestSplitMessages_LargeHistory(t *testing.T) {
 		msgs = append(msgs, types.Message{Role: "user", Content: repeat("x", 40)})
 	}
 	// tailTokens=20 token = 5 条消息
-	middle, tail := splitMessages(msgs, 20)
+	middle, tail := compact.SplitMessages(msgs, 20)
 	if len(tail) == 0 {
 		t.Fatal("tail 不应为空")
 	}

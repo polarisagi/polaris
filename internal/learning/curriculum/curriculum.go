@@ -13,7 +13,6 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -46,7 +45,6 @@ type AutoCurriculumGenerator struct {
 	memf         *optimizer.FallacyMemoryPool
 	heuristics   *optimizer.HeuristicsMemory
 	taintGate    *taint.TaintGate
-	sicCleaner   *guard.SICCleaner
 	llmProvider  protocol.Provider // Tier1+：LLM 描述生成 + safety judge；nil 时降级模板
 
 	// 连续失败冻结记录: sourceSkill → (failCount, frozenUntil)
@@ -69,7 +67,6 @@ func NewAutoCurriculumGenerator(
 		memf:         memf,
 		heuristics:   heuristics,
 		taintGate:    &taint.TaintGate{},
-		sicCleaner:   guard.NewSICCleaner(),
 		failCounts:   make(map[string]int),
 		frozenUntil:  make(map[string]time.Time),
 	}
@@ -336,12 +333,14 @@ func (ag *AutoCurriculumGenerator) passSafetyAudit(ctx context.Context, sample *
 		}
 	}
 
-	// (c) SIC 指令清洗：检测间接 prompt injection
-	if ag.sicCleaner != nil {
-		if _, err := ag.sicCleaner.CleanInstructions(ctx, desc); err != nil {
-			// ErrUncleanableContent → 拒绝
-			return false
-		}
+	// (c) SIC 指令清洗：检测间接 prompt injection。llmProvider 就绪时（Tier1+）
+	// 使用 LLM 检测器识别自然语言变体的注入尝试（不止关键词命中）；Tier0 降级
+	// 到内置正则规则。与下面 (d) llmJudgeSafe 是不同维度的信号——injection 关注
+	// "这段文本是否试图操纵*后续消费它的* LLM 的系统指令"，llmJudgeSafe 关注
+	// "这个任务本身的内容是否有害"，两者不冗余（见 ADR-0058）。
+	if _, err := ag.sicCleaner().CleanInstructions(ctx, desc); err != nil {
+		// ErrUncleanableContent / 检测器故障 → fail-closed 拒绝
+		return false
 	}
 
 	// (d) LLM-as-Judge（Tier1+：调用 LLM 做 safety judge；Tier0 pass-through）

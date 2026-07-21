@@ -184,6 +184,15 @@ rust/substrate/   R**docs/arch/decisions/ 文件清单**（ADR-0001~0050，0032 
 - 0043 Generative UI SSE 集成 · 0044 M7 模块边界拆分暂缓 · 0045 保留五级污点传播 · 0046 execute 模块化（单/多 Agent 执行引擎收敛）
 - 0047 taint_sanitizer 二级降级接入 S_VALIDATE（复用 ExemptionVault）· 0048 ContinuousSamplingMonitor 生产流量 1% LLM Judge 采样 · 0049 sCtx.SessionID 根因 Bug 修复
 - 0050 删除中心化 Orchestrator/Worker/内存 Blackboard 与 SwarmRouter/CapabilityRegistry/TopologyEvolverService（自订阅 CAS 认领胜出）
+- 0051 跨模块死代码清理与悬空接线收尾 Phase1-4 · 0052 2026-07-21 deadcode 审查（15 项新 DEFER）
+- 0053 ADR-0051 遗留 11 项 DEFER 复核（1 项 WIRE：MCPKnowledgeConnector；1 项理由订正：WithSemanticCacheHints）
+- 0054 DriftDetector 漂移响应编排器接线（DetectByTaskType/RecordAnchor/DriftDowngradeRegistry/DriftOrchestrator）+ EmbeddingVersionTracker 范围订正（需先扩展 CognitiveSearcher 接口，独立 DEFER）
+- 0055 `/steer` 激活引导命令面接线（list/import/set/deactivate/delete）；calibrate-layer 与成功率自动停用标注为独立未实现项
+- 0056 QLoRA/PRM 训练样本采集+批次触发（QLoRA←reflexion 纠偏轨迹，PRM←M12 §9 Judge 打分；TrainingSampleCollector 共用）
+- 0057 崩溃恢复回放驱动器（M04 §8：in-flight 标记 + TrajectoryRecorder 录像回放，仅 Perceive/Plan/Reflect 末态自动恢复，S_EXECUTE 等保守跳过）
+- 0058 SICCleaner LLM 检测器接线（AutoCurriculumGenerator 复用既有 llmProvider，与 llmJudgeSafe 不同维度信号不合并）
+- 0059 Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移；7 处退化键修复，含多轮对话 perceive/plan/exec/reflect 投影+consolidate+语义抽取从第二轮起静默丢失的根因修复）
+- 0060 M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取（新建 internal/memory/compact，网关 Compressor 重构为委托调用；软触发只 Stage1 卸载不调 LLM，硬触发追加 Stage2/3）
 - 错误统一 `pkg/apperr`（`apperr.New/Wrap`；禁裸 `errors.New`/`fmt.Errorf` 泄漏调用链）
 - `internal/` 禁全局可变变量（并发安全 + 测试隔离；ADR-0001 豁免仅限 observability/metrics 一等公民指标）
 - 跨模块走 `internal/protocol/` 结构化事件（禁字符串隐式耦合）
@@ -239,6 +248,15 @@ rust/substrate/   R**docs/arch/decisions/ 文件清单**（ADR-0001~0050，0032 
 - 0043 Generative UI SSE 集成 · 0044 M7 模块边界拆分暂缓 · 0045 保留五级污点传播 · 0046 execute 模块化（单/多 Agent 执行引擎收敛）
 - 0047 taint_sanitizer 二级降级接入 S_VALIDATE（复用 ExemptionVault）· 0048 ContinuousSamplingMonitor 生产流量 1% LLM Judge 采样 · 0049 sCtx.SessionID 根因 Bug 修复
 - 0050 删除中心化 Orchestrator/Worker/内存 Blackboard 与 SwarmRouter/CapabilityRegistry/TopologyEvolverService（自订阅 CAS 认领胜出）
+- 0051 跨模块死代码清理与悬空接线收尾 Phase1-4 · 0052 2026-07-21 deadcode 审查（15 项新 DEFER）
+- 0053 ADR-0051 遗留 11 项 DEFER 复核（1 项 WIRE：MCPKnowledgeConnector；1 项理由订正：WithSemanticCacheHints）
+- 0054 DriftDetector 漂移响应编排器接线（DetectByTaskType/RecordAnchor/DriftDowngradeRegistry/DriftOrchestrator）+ EmbeddingVersionTracker 范围订正（需先扩展 CognitiveSearcher 接口，独立 DEFER）
+- 0055 `/steer` 激活引导命令面接线（list/import/set/deactivate/delete）；calibrate-layer 与成功率自动停用标注为独立未实现项
+- 0056 QLoRA/PRM 训练样本采集+批次触发（QLoRA←reflexion 纠偏轨迹，PRM←M12 §9 Judge 打分；TrainingSampleCollector 共用）
+- 0057 崩溃恢复回放驱动器（M04 §8：in-flight 标记 + TrajectoryRecorder 录像回放，仅 Perceive/Plan/Reflect 末态自动恢复，S_EXECUTE 等保守跳过）
+- 0058 SICCleaner LLM 检测器接线（AutoCurriculumGenerator 复用既有 llmProvider，与 llmJudgeSafe 不同维度信号不合并）
+- 0059 Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移；7 处退化键修复，含多轮对话 perceive/plan/exec/reflect 投影+consolidate+语义抽取从第二轮起静默丢失的根因修复）
+- 0060 M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取（新建 internal/memory/compact，网关 Compressor 重构为委托调用；软触发只 Stage1 卸载不调 LLM，硬触发追加 Stage2/3）
 
 **internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，31 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```

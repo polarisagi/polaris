@@ -346,37 +346,9 @@ func (si *SurpriseIndex) InjectFaultSignal(severity float64) {
 	}
 }
 
-// DecisionLog records a single routing decision for offline analysis.
-type DecisionLog struct {
-	Timestamp     time.Time `json:"timestamp"`
-	Route         string    `json:"route"`
-	SurpriseIndex float64   `json:"surprise_index"`
-	Provider      string    `json:"provider"`
-	Reason        string    `json:"reason"`
-}
-
-type DecisionLogStore interface {
-	Append(ctx context.Context, log DecisionLog) error
-}
-
-type DecisionLogger struct {
-	mu    sync.Mutex
-	store DecisionLogStore
-}
-
-// NewDecisionLogger 创建新的决策日志记录器。
-func NewDecisionLogger(store DecisionLogStore) *DecisionLogger {
-	return &DecisionLogger{
-		store: store,
-	}
-}
-
-// Log 记录一条决策日志。
-func (dl *DecisionLogger) Log(ctx context.Context, log DecisionLog) error {
-	dl.mu.Lock()
-	defer dl.mu.Unlock()
-	if dl.store == nil {
-		return nil
-	}
-	return dl.store.Append(ctx, log)
-}
+// 2026-07-21 deadcode 审查：此前这里有一套完全独立、零调用的 DecisionLog/
+// DecisionLogStore/DecisionLogger 平行实现，与 internal/store/audit/decisionlog.go
+// 的 SQLiteDecisionLog（实现 protocol.DecisionLogger 接口，被
+// internal/execute/orchestrator/pipeline.go 实际注入生产使用）撞名但完全无关联，
+// docs/arch/M03-Observability.md 曾引用的正是本文件这套未接线版本——已删除，
+// 文档同步订正为指向 SQLiteDecisionLog。

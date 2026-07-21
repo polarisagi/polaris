@@ -17,9 +17,6 @@ import (
 // RecordCallResult 建议调用方自动回退到旧模型。
 const consecutiveErrorRollbackThreshold = 3
 
-// compatibilityWarnThreshold 兼容性评分低于此值时 OnModelUpgrade 记录 WARN。
-const compatibilityWarnThreshold = 0.8
-
 // MigrationDecision 三档自动迁移策略结果。
 type MigrationDecision int
 
@@ -168,10 +165,26 @@ func (r *Registry) OnModelUpgrade(ctx context.Context, provider, modelID string,
 	}
 
 	entry.UpdatedAt = time.Now().Unix()
-	if entry.CompatibilityScore < compatibilityWarnThreshold {
-		slog.Warn("polaris: model compatibility score below threshold",
+	// DecideMigration 2026-07-21 deadcode 审查补齐：此前只有一道 ad-hoc 的
+	// score<0.8 单档 WARN，三档迁移策略（M01 §9：>=0.9 自动 / 0.7-0.9 自动+WARN /
+	// <0.7 禁止自动）从未被真正用于任何决策，只是文档描述的纯函数从未被调用。
+	// 注意：这里只做可观测日志，不执行自动切换——路由层把某个 ProviderRegistry
+	// 条目背后的 modelID 热替换为继任模型需要改造条目结构本身（见 router.go
+	// recordModelCallResult 同类说明），是更大的设计变更，此处不强行代为决定。
+	decision := DecideMigration(entry.CompatibilityScore)
+	switch decision {
+	case MigrationManualOnly:
+		slog.Warn("polaris: model compatibility score requires manual migration decision",
 			"provider", provider, "model", modelID, "score", entry.CompatibilityScore,
-			"threshold", compatibilityWarnThreshold)
+			"migration_decision", decision.String())
+	case MigrationAutoWithWarn:
+		slog.Warn("polaris: model compatibility score allows auto-migration with caution",
+			"provider", provider, "model", modelID, "score", entry.CompatibilityScore,
+			"migration_decision", decision.String())
+	case MigrationAuto:
+		slog.Info("polaris: model compatibility score allows unattended auto-migration",
+			"provider", provider, "model", modelID, "score", entry.CompatibilityScore,
+			"migration_decision", decision.String())
 	}
 	return r.repo.Upsert(ctx, entry)
 }
@@ -189,6 +202,12 @@ func (r *Registry) DeprecateModel(ctx context.Context, provider, modelID, succes
 	if err := r.repo.Upsert(ctx, entry); err != nil {
 		return err
 	}
+
+	// 记录本次废弃在当前 CompatibilityScore 下的迁移策略档位，供 sysadmin/运维
+	// 判断该继任模型切换是否需要人工确认（同 OnModelUpgrade 的 DecideMigration 用法）。
+	slog.Info("polaris: model deprecated",
+		"provider", provider, "model", modelID, "successor", successorModelID,
+		"score", entry.CompatibilityScore, "migration_decision", DecideMigration(entry.CompatibilityScore).String())
 
 	if r.reindexTrigger != nil && hasEmbeddingCapability(entry) {
 		if triggerErr := r.reindexTrigger(ctx, provider, modelID); triggerErr != nil {
