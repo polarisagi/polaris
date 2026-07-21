@@ -1,8 +1,6 @@
 package chat
 
 import (
-	"errors"
-
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
 
 	"context"
@@ -18,16 +16,9 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func TestCompressor_RoughTokens(t *testing.T) {
-	msgs := []types.Message{
-		{Content: "1234"},     // 4 chars = 1 token
-		{Content: "12345678"}, // 8 chars = 2 tokens
-	}
-	toks := roughTokens(msgs)
-	if toks != 3 {
-		t.Errorf("expected 3, got %d", toks)
-	}
-}
+// TestCompressor_RoughTokens/SplitMessages/BuildTranscript/CalcSummaryBudget/
+// InjectTaskCanvas/OffloadLargeToolResults 2026-07-22 迁移至
+// internal/memory/compact/compact_test.go（随算法本体一并迁移，断言不变）。
 
 func TestCompressor_NeedsCompact(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -48,61 +39,6 @@ func TestCompressor_NeedsCompact(t *testing.T) {
 	largeContent := strings.Repeat("a", 1000*4)
 	if !c.NeedsCompact([]types.Message{{Content: largeContent}}) {
 		t.Errorf("expected true for large msg")
-	}
-}
-
-func TestCompressor_SplitMessages(t *testing.T) {
-	msgs := []types.Message{
-		{Content: strings.Repeat("a", 4000)}, // msg 0
-		{Content: strings.Repeat("b", 4000)}, // msg 1
-		{Content: strings.Repeat("c", 4000)}, // msg 2
-	}
-	// Total 12000 chars. tailTokens=2000 => 8000 chars.
-	// So tail needs 8000 chars.
-	// msg 2 is 4000. msg 1 + msg 2 = 8000.
-	// So msg 0 goes to middle, msg 1 and msg 2 go to tail.
-	middle, tail := splitMessages(msgs, 2000)
-	if len(middle) != 1 || len(tail) != 2 {
-		t.Errorf("expected 1 middle, 2 tail, got %d, %d", len(middle), len(tail))
-	}
-	if middle[0].Content[0] != 'a' {
-		t.Errorf("wrong middle")
-	}
-}
-
-func TestCompressor_BuildTranscript(t *testing.T) {
-	msgs := []types.Message{
-		{Role: "user", Content: "hello"},
-	}
-	ts := buildTranscript(msgs)
-	if !strings.Contains(ts, "[user]: hello") {
-		t.Errorf("wrong transcript: %s", ts)
-	}
-
-	large := []types.Message{
-		{Role: "user", Content: strings.Repeat("a", 10000)},
-	}
-	ts2 := buildTranscript(large)
-	if !strings.Contains(ts2, "(truncated)") {
-		t.Errorf("expected truncation")
-	}
-}
-
-func TestCompressor_CalcSummaryBudget(t *testing.T) {
-	msgs := []types.Message{
-		{Content: strings.Repeat("a", 40000)}, // 10000 tokens
-	}
-	// budget: 10000 * 0.20 = 2000
-	budget := calcSummaryBudget(msgs)
-	if budget != 2000 {
-		t.Errorf("expected 2000, got %d", budget)
-	}
-
-	small := []types.Message{
-		{Content: "short"},
-	}
-	if calcSummaryBudget(small) != minSummaryTokens {
-		t.Errorf("expected %d for small", minSummaryTokens)
 	}
 }
 
@@ -190,92 +126,3 @@ func (m *mockStreamProvider) Capabilities() types.ProviderCapabilities {
 }
 func (m *mockStreamProvider) MaxConcurrency() int             { return 1 }
 func (m *mockStreamProvider) SupportsModel(model string) bool { return true }
-
-func TestInjectTaskCanvas(t *testing.T) {
-	tests := []struct {
-		name    string
-		mmd     string
-		summary string
-		want    string
-	}{
-		{
-			name:    "empty mmd",
-			mmd:     "",
-			summary: "some summary",
-			want:    "some summary",
-		},
-		{
-			name:    "non-empty mmd",
-			mmd:     "graph LR\n  A-->B",
-			summary: "some summary",
-			want:    "## Task State (node_id → read_tool_ref)\ngraph LR\n  A-->B\n## Summary\nsome summary",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := injectTaskCanvas(tt.mmd, tt.summary)
-			if got != tt.want {
-				t.Errorf("injectTaskCanvas() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-type mockToolRefOffloader struct {
-	fail bool
-	id   string
-}
-
-func (m *mockToolRefOffloader) Offload(ctx context.Context, taskID string, content []byte) (string, error) {
-	if m.fail {
-		return "", errors.New("forced error")
-	}
-	return m.id, nil
-}
-
-func TestOffloadLargeToolResults(t *testing.T) {
-	ctx := context.Background()
-	sessionID := "test-session"
-
-	// Create a tool message exactly at threshold
-	thresholdContent := strings.Repeat("a", toolOffloadThreshold)
-
-	// Create a large tool message
-	largeContent := strings.Repeat("b", toolOffloadThreshold+1)
-
-	msgs := []types.Message{
-		{Role: "user", Content: largeContent},     // Large but not a tool, should not be offloaded
-		{Role: "tool", Content: thresholdContent}, // Tool but not large enough, should not be offloaded
-		{Role: "tool", Content: largeContent},     // Large tool, should be offloaded
-	}
-
-	// 1. Test nil offloader (should do nothing)
-	out := offloadLargeToolResults(ctx, sessionID, msgs, nil)
-	if len(out) != 3 || out[2].Content != largeContent {
-		t.Fatalf("expected nil offloader to not change messages")
-	}
-
-	// 2. Test offload failure (should keep original)
-	failingOffloader := &mockToolRefOffloader{fail: true}
-	out = offloadLargeToolResults(ctx, sessionID, msgs, failingOffloader)
-	if len(out) != 3 || out[2].Content != largeContent {
-		t.Fatalf("expected failing offload to keep original")
-	}
-
-	// 3. Test successful offload
-	successOffloader := &mockToolRefOffloader{id: "mock-id-123"}
-	out = offloadLargeToolResults(ctx, sessionID, msgs, successOffloader)
-
-	if out[0].Content != largeContent {
-		t.Errorf("user message should not be offloaded")
-	}
-	if out[1].Content != thresholdContent {
-		t.Errorf("small tool message should not be offloaded")
-	}
-
-	expectedStub := "[offloaded: 10241 bytes → read_tool_ref(task_id=\"test-session\", id=\"mock-id-123\")]"
-	if out[2].Content != expectedStub {
-		t.Errorf("large tool message offload mismatch, got %q, want %q", out[2].Content, expectedStub)
-	}
-}

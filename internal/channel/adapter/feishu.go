@@ -3,7 +3,6 @@ package adapter
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -245,20 +244,4 @@ func FeishuVerifyWebhookSignature(timestamp, nonce, encryptKey, rawBody, signatu
 	h := sha256.Sum256([]byte(data))
 	computed := hex.EncodeToString(h[:])
 	return computed == signature
-}
-
-// feishuGetAccessTokenForWebhook 仅供 webhook 模式回复时获取 token。
-//
-//nolint:unused
-func feishuGetAccessTokenForWebhook(ctx context.Context, client *http.Client, domain, appID, appSecret string) (string, error) {
-	return FeishuGetTenantToken(ctx, client, domain, appID, appSecret)
-}
-
-// feishuHMACVerify 备用 HMAC 验证（未来按需使用）。
-//
-//nolint:unused
-func feishuHMACVerify(key, data, sig string) bool {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(data))
-	return hex.EncodeToString(mac.Sum(nil)) == sig
 }

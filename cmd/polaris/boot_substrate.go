@@ -109,6 +109,9 @@ type SubstrateBundle struct {
 	QLoRA    *llmadapter.QLoRAAdapter
 	PRM      *llmadapter.PRMAdapter
 	Steering *llmadapter.SteeringAdapter
+	// CVStore 激活引导控制向量注册表（M09 §1.3 /steer 命令面，2026-07-21 补齐），
+	// 与 Steering 同步构造（非 nil 当且仅当 Steering 非 nil）。
+	CVStore *llmadapter.ControlVectorStore
 
 	// OTA restart fn 捕获：取消主 ctx + 等待 dbWriter + 关闭 store
 	Stop context.CancelFunc
@@ -417,6 +420,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	var qloraAdapter *llmadapter.QLoRAAdapter
 	var prmAdapter *llmadapter.PRMAdapter
 	var steeringAdapter *llmadapter.SteeringAdapter
+	var cvStore *llmadapter.ControlVectorStore
 
 	// 创建动态原子代理，瞬间点亮系统基础功能
 	dynEmbedder := llm.NewDynamicEmbedder()
@@ -522,6 +526,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		}
 		if autoConf.Gate.State(probe.FeatureActivationSteer) != probe.FeatureDisabled {
 			steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient)
+			cvStore = llmadapter.NewControlVectorStore()
 			slog.Info("polaris: activation steering adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeatureLargeLocalLLM) != probe.FeatureDisabled {
@@ -597,6 +602,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		QLoRA:         qloraAdapter,
 		PRM:           prmAdapter,
 		Steering:      steeringAdapter,
+		CVStore:       cvStore,
 		Stop:          stop,
 		Vault:         vault,
 	}, nil

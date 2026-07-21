@@ -5,7 +5,7 @@
 > **实现语言**：Go　|　**代码位置**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:160 Token预算 / 6:236 SemanticCache / 7:272 Fallback / 8:336 本地推理local_only / 9:389 ModelVersion / 12:426 349(SOFT)降级 / 13:461 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:160 Token预算 / 6:236 SemanticCache / 7:285 Fallback / 8:349 本地推理local_only / 9:402 ModelVersion / 12:439 349(SOFT)降级 / 13:474 依赖 -->
 
 ---
 
@@ -255,10 +255,23 @@ TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `pol
 
 ### 6.2 SemanticCache
 
-实现见 `internal/store/`（`SemanticCache`，含 `CacheStore` 接口和 LRU 淘汰逻辑）。
+实现见 `internal/store/search/semantic_cache.go`（`SemanticCache`，含 `CacheStore` 接口和 LRU 淘汰逻辑）。
 
-**`[向量索引后端待激活]`**：
-`CacheStore` 接口依赖向量索引后端（设计为 SurrealDB-Core HNSW）提供 `FindClosest`。当 `store=nil` 时所有操作为安全空操作，不参与推理路由。Get/Put/LRU 淘汰逻辑已完整实现，等向量后端接入后即可启用。
+**`[2026-07-21 订正]`**：本节此前写的"向量索引后端待激活/store=nil 时安全空操作"已过期——
+`internal/store/search/surreal_cache_store.go` 的 `SurrealCacheStore`（SurrealDB-Core HNSW）
+是完整实现，`cmd/polaris/boot_substrate.go` 在 `surrealStore != nil` 时已构造真实
+`cacheStore` 并通过 `llm.WithSemanticCache` 注入 `InferenceRouter`；`store=nil` 只在
+SurrealDB 未启用时才发生，属正常降级，不是"待激活"状态。
+
+**真正未接入的缺口**：`types.WithSemanticCacheHints(...)`（构造 `ContextHintFingerprint`/
+`ActiveControlLabels`/`TaskType`）全仓库生产侧零调用点——`InferenceRouter.Infer`（非流式）
+的 Get/Put 逻辑因此永远不会真正执行；且该逻辑只存在于 `Infer`，`StreamInfer`（主对话轮
+实际走的路径，`router_stream.go`）完全没有等价的缓存查询/写入分支，即使补齐
+`WithSemanticCacheHints` 调用点，主对话仍不会被缓存命中。`ContextHintFingerprint` 所需的
+SHA-256 指纹其实已经在 `internal/agent/fsm/epoch.go`（`epochTracker.check`）里逐条计算，
+但只返回 epoch 计数器、丢弃了指纹字符串本身，`sCtx.ContextEpoch` 写入后也无任何读取方——
+是同一个"生产者/消费者都存在、中间没有真正接线"的模式，接入需要给 `StreamInfer` 补一条
+对称的缓存命中/写入分支（含如何在流式通道里返回一次性缓存内容），非一行接线。
 
 **缓存三重匹配**：RequestHash + Namespace + SystemPromptHash。
 `hashRequest` 计算公式：`SHA-256(Namespace + SystemPromptHash + ContextHint.Fingerprint + ActiveControlVectorLabels + TaskType + MessageContents)`。

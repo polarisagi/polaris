@@ -5,12 +5,73 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/memory/util"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// taintForSource 根据数据来源前缀推断污点等级（ADR-0007）。
+// episodic / durative_group = TaintHigh（原始用户输入域）；
+// reflection / chunk 及其余 = TaintMedium（LLM 摘要输出地板）。
+func taintForSource(source string) types.TaintLevel {
+	if strings.HasPrefix(source, "episodic:") || strings.HasPrefix(source, "durative_group:") {
+		return types.TaintHigh
+	}
+	return types.TaintMedium
+}
+
+// recordExplainBitMetrics 记录最终合并结果的 ExplainBits 归因指标（R7 拆分自 retriever.go Search）。
+func recordExplainBitMetrics(ctx context.Context, merged []types.ScoredFragment) {
+	for _, frag := range merged {
+		if frag.ExplainBits&BitBM25 != 0 {
+			metrics.RecordExplainBit(ctx, "BM25")
+		}
+		if frag.ExplainBits&BitSimhash != 0 {
+			metrics.RecordExplainBit(ctx, "Simhash")
+		}
+		if frag.ExplainBits&BitVector != 0 {
+			metrics.RecordExplainBit(ctx, "Vector")
+		}
+		if frag.ExplainBits&BitGraph != 0 {
+			metrics.RecordExplainBit(ctx, "Graph")
+		}
+		if frag.ExplainBits&BitReflection != 0 {
+			metrics.RecordExplainBit(ctx, "Reflection")
+		}
+		if frag.ExplainBits&BitDurative != 0 {
+			metrics.RecordExplainBit(ctx, "Durative")
+		}
+		if frag.ExplainBits&BitSemantic != 0 {
+			metrics.RecordExplainBit(ctx, "Semantic")
+		}
+	}
+}
+
+// sampleDriftAnchor M05 §12.3 漂移检测 anchor 采样（R7 拆分自 retriever.go Search）。
+// 自参照基线：Expected 取本次检索的 Top-5 结果 Source 标识，而非外部标注的绝对
+// 真值——漂移定义为"当前检索结果相对历史自身基线的显著偏离"，而非"结果是否
+// 绝对正确"。仅在有查询向量、有 task_type、且命中采样率时记录，避免每次
+// Search 都产生额外开销（Embed 已在 Stage 0.5 完成，这里只是复用已算好的
+// queryF32，不额外调用 Embedder）。
+func (hr *HybridRetrieverImpl) sampleDriftAnchor(taskType, query string, queryF32 []float32, merged []types.ScoredFragment) {
+	if hr.driftDetector == nil || queryF32 == nil || taskType == "" || hr.driftSampleRate <= 0 {
+		return
+	}
+	if rand.Float64() >= hr.driftSampleRate {
+		return
+	}
+	expected := make([]string, 0, 5)
+	for i := 0; i < len(merged) && i < 5; i++ {
+		expected = append(expected, merged[i].Source)
+	}
+	if len(expected) > 0 {
+		hr.driftDetector.RecordAnchor(taskType, query, queryF32, expected)
+	}
+}
 
 // ============================================================================
 // HybridRetriever 辅助检索函数（R7 拆分自 retriever.go）：

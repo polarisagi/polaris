@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -24,6 +25,7 @@ func builtinSlashCommands() []slashCommandMeta {
 		{"/context", "显示当前上下文 token 使用量与压缩统计"},
 		{"/compact", "立即压缩上下文（无论是否达到阈值）"},
 		{"/clear", "清空当前会话历史（保留系统提示词）"},
+		{"/steer", "激活引导管理（list/import/set/deactivate/delete，Tier1+ 专属，见 handleSteer）"},
 		{"/help", "显示所有可用斜线命令"},
 	}
 }
@@ -45,10 +47,23 @@ type SlashCommandRouter struct {
 	compressor SessionCompressor
 	chatRepo   protocol.ChatRepository
 	WriteSSE   func(http.ResponseWriter, http.Flusher, string, any)
+
+	// steering/cvStore — M09 §1.3 Activation Steering 命令面（2026-07-21 deadcode
+	// 审查补齐）。均可为 nil（FeatureActivationSteer 未启用/Tier<1 时），/steer
+	// 命令 nil-safe 降级为提示信息，不影响其余命令。由 Server.SetSteering
+	// 在 boot_server.go 中注入（与 Embedder/PersonaRefiner 同一注入风格）。
+	steering *llmadapter.SteeringAdapter
+	cvStore  *llmadapter.ControlVectorStore
 }
 
 func NewSlashCommandRouter(compressor SessionCompressor, chatRepo protocol.ChatRepository, WriteSSE func(http.ResponseWriter, http.Flusher, string, any)) *SlashCommandRouter {
 	return &SlashCommandRouter{compressor: compressor, chatRepo: chatRepo, WriteSSE: WriteSSE}
+}
+
+// SetSteering 注入激活引导适配器与控制向量注册表（可选，nil-safe）。
+func (r *SlashCommandRouter) SetSteering(steering *llmadapter.SteeringAdapter, cvStore *llmadapter.ControlVectorStore) {
+	r.steering = steering
+	r.cvStore = cvStore
 }
 
 // Dispatch 若 input 为斜线命令则执行并返回 CommandResult（Handled=true）。
@@ -62,7 +77,7 @@ func (r *SlashCommandRouter) Dispatch(
 	w http.ResponseWriter, flusher http.Flusher,
 	mem MemoryFacade,
 ) CommandResult {
-	cmd, _, ok := parseSlashCommand(input)
+	cmd, args, ok := parseSlashCommand(input)
 	if !ok {
 		return CommandResult{Handled: false, UpdatedHistory: history}
 	}
@@ -77,6 +92,9 @@ func (r *SlashCommandRouter) Dispatch(
 	case "/clear":
 		resp, updated := r.handleClear(ctx, sessionID, history, w, flusher)
 		return CommandResult{Handled: true, Response: resp, UpdatedHistory: updated}
+	case "/steer":
+		resp := r.handleSteer(ctx, args, sessionID, w, flusher)
+		return CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
 	case "/help":
 		resp := r.handleHelp(w, flusher)
 		return CommandResult{Handled: true, Response: resp, UpdatedHistory: history}

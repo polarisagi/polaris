@@ -74,8 +74,6 @@ func TestPollers_Coverage(t *testing.T) {
 	_ = WhatsappSendMessage(ctx, http.DefaultClient, "phone", "token", "to", "text")
 
 	_ = FeishuVerifyWebhookSignature("ts", "nonce", "key", "body", "sig")
-	_, _ = feishuGetAccessTokenForWebhook(ctx, http.DefaultClient, "domain", "appID", "secret")
-	_ = feishuHMACVerify("key", "data", "sig")
 	_, _ = feishuGetWSEndpoint(ctx, http.DefaultClient, "domain", "appID", "token")
 
 	// Create mock server

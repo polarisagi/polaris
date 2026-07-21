@@ -22,11 +22,13 @@ import (
 // NetworkSandbox local_only 网络隔离策略。
 // 三层防御:
 // L1 主力 — OS 级沙箱（macOS sandbox-exec / Linux Landlock / Windows WFP）
-// L2 纵深 — Go 层 RoundTripper 替换 no-op + DefaultResolver 覆写 NXDOMAIN
+// L2 纵深 — Enable() 内联改写 http.DefaultTransport.DialContext 直接拒绝 + DefaultResolver 覆写 NXDOMAIN
+// （2026-07-21 deadcode 审查：此前此处还有一个从未被 Enable() 实际使用的
+// NoopTransport/goTransport 字段雏形，RoundTrip 签名甚至不满足 http.RoundTripper
+// 接口，已删除；真正生效的 L2 防线一直是下面 Enable() 里的内联 DialContext 改写）
 // L3 兜底 — Dialer.Control 拒绝非 loopback IP + SafeDialer 注入
 type NetworkSandbox struct {
 	osSandbox     *OSNetworkSandbox
-	goTransport   *NoopTransport
 	dnsResolver   *LoopbackResolver
 	allowlist     *Allowlist
 	safeDialer    *SafeDialer
@@ -60,18 +62,6 @@ func (s *OSNetworkSandbox) Enable() error {
 	s.enabled = true
 	return nil
 }
-
-// NoopTransport 替换 http.DefaultTransport 为 no-op（所有 HTTP 请求直接拒绝）。
-type NoopTransport struct{}
-
-// RoundTrip 拒绝所有 HTTP 请求。
-func (t *NoopTransport) RoundTrip(req *httpRequest) (*httpResponse, error) {
-	return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("local_only: network disabled — HTTP request to %s blocked", req.URL))
-}
-
-// httpRequest/httpResponse 避免循环依赖的最小定义。
-type httpRequest struct{ URL string }
-type httpResponse struct{}
 
 // LoopbackResolver DNS 解析器覆写。
 // 非 localhost/.local 域名 → 返回 NXDOMAIN。
@@ -112,14 +102,15 @@ type Allowlist struct {
 	mu      sync.RWMutex
 }
 
-// AllowlistEntry 白名单条目。
+// AllowlistEntry 白名单条目。TOML tag 对应
+// local_only_network_allowlist.toml 里的 [[entry]] 字段（见 ListSignedAllowlistEntries）。
 type AllowlistEntry struct {
-	Domain         string
-	CIDR           string
-	Port           int
-	Protocol       string
-	DNSSECRequired bool
-	RateLimit      int
+	Domain         string `toml:"domain"`
+	CIDR           string `toml:"cidr"`
+	Port           int    `toml:"port"`
+	Protocol       string `toml:"protocol"`
+	DNSSECRequired bool   `toml:"dnssec_required"`
+	RateLimit      int    `toml:"rate_limit"`
 }
 
 // NewAllowlist 创建白名单。maxSize 由 HardwareTier 决定。
@@ -157,7 +148,6 @@ func (al *Allowlist) IsAllowed(host string, port int) bool {
 func NewNetworkSandbox(maxAllowlistSize int) *NetworkSandbox {
 	return &NetworkSandbox{
 		osSandbox:   NewOSNetworkSandbox(),
-		goTransport: &NoopTransport{},
 		dnsResolver: NewLoopbackResolver(),
 		allowlist:   NewAllowlist(maxAllowlistSize),
 	}
@@ -166,6 +156,27 @@ func NewNetworkSandbox(maxAllowlistSize int) *NetworkSandbox {
 // SetSafeDialer 绑定 SafeDialer 以注入 Dialer.Control。
 func (ns *NetworkSandbox) SetSafeDialer(sd *SafeDialer) {
 	ns.safeDialer = sd
+}
+
+// InitAllowlistFromFile 加载并验证签名的 local_only 白名单文件（2026-07-21 deadcode
+// 审查补齐：此前 Allowlist.Add/.IsAllowed 构造后从未被填充/查询）。path 不存在时
+// 视为"未配置白名单"（返回 nil，不报错，local_only 仍全阻断，行为不变）；path
+// 存在但签名缺失/校验失败/pubKeyB64 未配置 → fail-closed 返回 error，调用方
+// （boot_server.go）必须以此拒绝启动 local_only 模式，绝不能静默降级为裸信任。
+func (ns *NetworkSandbox) InitAllowlistFromFile(path, pubKeyB64 string) error {
+	entries, err := ListSignedAllowlistEntries(path, pubKeyB64)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := ns.allowlist.Add(e); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "local_only allowlist: apply entry failed", err)
+		}
+	}
+	if len(entries) > 0 {
+		slog.Info("polaris: local_only allowlist loaded", "entries", len(entries))
+	}
+	return nil
 }
 
 // SetLocalProvider 绑定本地推理 Provider（M1 LocalAdapter），供 StartupCheck 的
@@ -211,16 +222,21 @@ func (ns *NetworkSandbox) Enable() error {
 		ns.safeDialer.SetLocalOnlyFilter(func(ip net.IP) bool {
 			return ip.IsLoopback()
 		})
+		// Allowlist 豁免（2026-07-21 deadcode 审查补齐）：DialContext 在解析 DNS 前
+		// 就持有原始 host/port（IsAllowed 按 domain+port 精确匹配），dialerControl
+		// 只拿得到已解析 IP，无法做 domain 匹配，所以豁免判断必须发生在 DialContext
+		// 层——直接把 Allowlist.IsAllowed 方法值注入即可，无需额外包一层。
+		// 作用范围说明：sd 是本进程共享的 SafeDialer 实例，此豁免按 host:port 精确
+		// 生效（Ed25519 签名 + Tier3 上限 5 条），不是"仅 M10 Connector"这种按调用方
+		// 身份区分的豁免——目前代码库里没有任何按子系统标记出站请求来源的机制，
+		// 强行伪造一个会比不做更危险。窄化到"运营显式签名批准的具体域名:端口"已经
+		// 是可验证的安全边界（HE-2），未来若需要严格按子系统限定，需要额外的
+		// context 标记传递机制，属于更大的设计变更。
+		ns.safeDialer.SetLocalOnlyAllowlistCheck(ns.allowlist.IsAllowed)
 	}
 
 	ns.enabled = true
 	return nil
-}
-
-// IsLoopbackIP 检查 IP 是否为 loopback。
-// 支持 IPv4 (127.0.0.0/8) 和 IPv6 (::1)。
-func IsLoopbackIP(ip net.IP) bool {
-	return ip.IsLoopback()
 }
 
 // StartupCheck local_only 启动期自检 (fail-closed)。

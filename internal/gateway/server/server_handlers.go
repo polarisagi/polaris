@@ -143,6 +143,14 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// IntentTaint 2026-07-21 deadcode 审查发现的 HE-2 缺口修复：middleware_auth.go
+	// 已按 clientType 算出 TaintMedium(本地)/TaintHigh(外部 api 调用) 并写入
+	// ctx（types.TaintLevel.InjectToContext），但 types.TaintLevelFromContext 全仓库
+	// 零调用——此处此前硬编码 TaintMedium，等于让 gateway 已算出的按客户端类型区分
+	// 的污点级别静默丢失（外部 api 调用本该按 TaintHigh 处理）。取 ctx 中的值与
+	// TaintMedium 的较大者，兜底 ctx 未经过该中间件时不降级到 TaintNone。
+	taintLevel := types.PropagateTaint(types.TaintLevelFromContext(r.Context()), types.TaintMedium)
+
 	now := time.Now().UnixMilli()
 	task := &types.TaskEntry{
 		ID:          "task-" + uuid.NewString(),
@@ -150,7 +158,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		Priority:    0,
 		Status:      types.TaskPending,
 		Intent:      []byte(req.Input),
-		IntentTaint: types.TaintMedium, // 外部用户输入，中等置信度
+		IntentTaint: taintLevel,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}

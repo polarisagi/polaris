@@ -47,10 +47,13 @@ var (
 
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
 // 返回 *server.Server，调用方 run() 负责 Shutdown。
-func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) { //nolint:gocyclo
+func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) { //nolint:gocyclo
 	if sb.Cfg.Security.LocalOnlyMode {
 		slog.Info("polaris: initializing local_only network sandbox")
-		ns := network.NewNetworkSandbox(100) // maxAllowlistSize = 100
+		// maxAllowlistSize=5：M11-Policy-Safety.md §5.3 明确规定 Tier3 local_only
+		// 白名单上限 5 条（此前恒为 100，因为 Allowlist.Add 从未被真正调用过，
+		// 上限值本身没有约束意义；2026-07-21 deadcode 审查补齐加载器时一并订正）。
+		ns := network.NewNetworkSandbox(5)
 		ns.SetSafeDialer(sb.Dialer)
 		// 补充接线（2026-07-04 审计）：SetLocalProvider 此前从未被调用，导致
 		// StartupCheck() 里的 Tier3 本地模型内存预算守卫（checkLocalModelMemoryBudget）
@@ -58,6 +61,13 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 		provider, hasProvider := sb.InfReg.Get("llama-local")
 		if lp, ok := provider.(protocol.LocalProvider); hasProvider && ok {
 			ns.SetLocalProvider(lp)
+		}
+		// Allowlist 加载（2026-07-21 deadcode 审查补齐）：配套 Ed25519 签名 TOML
+		// 加载器此前从未实现，Allowlist.Add/.IsAllowed 构造后从未被填充/查询。
+		// 文件不存在时 InitAllowlistFromFile 返回 nil（未配置白名单，local_only 仍
+		// 全阻断，行为不变）；文件存在但签名缺失/校验失败 → fail-closed 拒绝启动。
+		if err := ns.InitAllowlistFromFile(sb.Layout.LocalOnlyAllowlistFile, os.Getenv("POLARIS_LOCAL_ONLY_ALLOWLIST_PUBKEY")); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "local_only allowlist load failed", err)
 		}
 		// 顺序修复（2026-07-04 审计）：StartupCheck() 的 loopback-only 连通性自检
 		// 前提是沙箱防护已生效（探测 8.8.8.8:53 应该被拒绝才算通过）。若先于
@@ -82,6 +92,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer := server.NewServer(addr, sb.DataDir, ab.AgentPool, ab.Blackboard, tb.HITLGateway,
 		sb.Store.DB(), sb.Store.ReadDB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.Cfg.Agent, sb.TBR, apiRateLimiter)
 	httpServer.SetPromptManager(sb.PromptMgr)
+	// ModelVersionRegistry 运营触发入口（P3-2，2026-07-21 deadcode 审查补齐）：
+	// mb.ModelRegistry 早于本函数在 bootMemory 阶段构造完毕，此处仅补一次注入。
+	httpServer.SetModelRegistry(mb.ModelRegistry)
 	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}, channel.WithSafeDialer(sb.Dialer))
 	httpServer.SetChannelStarter(channelMgr)
 
@@ -117,6 +130,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, tb *ToolBundle, ab *Ag
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
+	// M09 §1.3 /steer 命令面（2026-07-21 deadcode 审查补齐）：sb.Steering/sb.CVStore
+	// 均可为 nil（FeatureActivationSteer 未启用），SetSteering/handleSteer 全链 nil-safe。
+	httpServer.SetSteering(sb.Steering, sb.CVStore)
 	httpServer.SetSyncSkillFunc(func(skillName, instructions string) {
 		// Temporarily disabled in Phase 1, Phase 2 UnifiedToolCatalog will replace this.
 	})

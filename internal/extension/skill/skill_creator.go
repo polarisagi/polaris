@@ -10,7 +10,6 @@ import (
 
 	"time"
 
-	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -22,16 +21,26 @@ type LLMClient interface {
 	Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 }
 
+// ExtensionInstaller 是 SkillCreator 唯一需要的安装能力（消费方定义接口，
+// HE-3/R1.4：接口在调用方定义），只声明本文件实际调用的 InstallExtension 一个
+// 方法。2026-07-21 deadcode 审查补齐触发入口时，把此前要求的具体类型
+// *marketplace.Manager 收窄为接口——sysadmin.SysAdminHandler.InstallMgr 早已是
+// 结构上兼容的接口（额外多一个 Authorize 方法），无需在调用方再构造一个
+// *marketplace.Manager 实例就能直接复用同一个已经完成安装策略校验的依赖。
+type ExtensionInstaller interface {
+	InstallExtension(ctx context.Context, req protocol.ExtensionInstallRequest) error
+}
+
 // SkillCreator defines the auto-generation workflow for skills based on Codex templates.
 type SkillCreator struct {
 	llm        LLMClient
 	baseDir    string // e.g. ~/.polarisagi/polaris/plugins/user/
-	installMgr *marketplace.Manager
+	installMgr ExtensionInstaller
 	registry   protocol.SkillRegistry
 }
 
 // NewSkillCreator initializes a new creator for auto-generating skills.
-func NewSkillCreator(llm LLMClient, baseDir string, installMgr *marketplace.Manager, registry protocol.SkillRegistry) *SkillCreator {
+func NewSkillCreator(llm LLMClient, baseDir string, installMgr ExtensionInstaller, registry protocol.SkillRegistry) *SkillCreator {
 	return &SkillCreator{
 		llm:        llm,
 		baseDir:    baseDir,

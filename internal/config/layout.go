@@ -38,6 +38,11 @@ type DataLayout struct {
 	AuditArchive string // Audit/archive
 	ConfigPrompt string // Config/prompts
 	SkillSignKey string // Config/skill_signing.key
+
+	// LocalOnlyAllowlistFile local_only 网络白名单配置文件（M11 §5.3）。
+	// 运营用 `polaris allowlist genkey/sign` 离线生成配套 <file>.sig 签名，
+	// 加载见 internal/security/network.ListSignedAllowlistEntries（Ed25519 验签，fail-closed）。
+	LocalOnlyAllowlistFile string // Config/local_only_network_allowlist.toml
 }
 
 // NewDataLayout 返回以 root 为根的完整 DataLayout。
@@ -76,6 +81,7 @@ func NewDataLayout(root string, overrides DirsConfig) DataLayout {
 	d.AuditArchive = filepath.Join(d.Audit, "archive")
 	d.ConfigPrompt = filepath.Join(d.Config, "prompts")
 	d.SkillSignKey = filepath.Join(d.Config, "skill_signing.key")
+	d.LocalOnlyAllowlistFile = filepath.Join(d.Config, "local_only_network_allowlist.toml")
 	return d
 }
 

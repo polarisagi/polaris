@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -179,12 +180,20 @@ func MakeSkillGenerateFn(outbox protocol.OutboxWriter) sandbox.InProcessFn {
 		// error 字段格式 "tool not found: <name>" 匹配 GapFillWorker.extractMissingTool 解析规则。
 		// outbox 为 nil 时（LogicCollapse 功能未激活），降级为 no-op。
 		if outbox != nil {
+			// 幂等键必须真正唯一（2026-07-22 一致性审查修复）：outbox.idempotency_key
+			// 是 UNIQUE 约束列，空字符串会导致同一部署生命周期内只有*全局第一次*
+			// 显式技能合成触发能成功写入——此后任何 task_type 的后续触发都会撞
+			// UNIQUE 约束（虽然此处确有检查 err 并回传告警，不是完全静默，但真实
+			// 技能合成信号从第二次起就再也没有到达过 GapFillWorker）。用
+			// task_type + 纳秒时间戳：前者保留可追溯性，后者保证每次真实触发都
+			// 不会与历史记录冲突。
+			idemKey := fmt.Sprintf("skillgap:%s:%d", args.TaskType, time.Now().UnixNano())
 			ev, _ := protocol.NewOutboxEvent(protocol.TopicCapabilityGap, "trigger", map[string]string{
 				"error":     "tool not found: " + args.TaskType,
 				"task_type": args.TaskType,
 				"reasoning": args.Reasoning,
 				"trigger":   "agent_explicit",
-			}, "")
+			}, idemKey)
 			ev.Scope = args.TaskType
 			if err := outbox.Write(ctx, ev); err != nil {
 				// 非致命：outbox 写入失败不阻断工具响应

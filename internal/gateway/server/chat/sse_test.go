@@ -66,6 +66,10 @@ func (m *mockAgentController) SubscribeStream(ctx context.Context) <-chan types.
 	return nil
 }
 
+// InjectReplayData 测试桩：M04 §8 崩溃恢复回放在 AgentController 接口新增
+// 该方法后，测试用 mock 需同步实现以满足接口断言，无需真实回放逻辑。
+func (m *mockAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) {}
+
 // Test_SSE_AgentFSM_Injection 验证 AgentController 接口及桩代码的非阻塞行为。
 func Test_SSE_AgentFSM_Injection(t *testing.T) {
 	agent := &mockAgentController{

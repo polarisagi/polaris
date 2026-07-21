@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
+	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -201,16 +202,14 @@ func maxNodeTaintLevel(plan *protocol.DAGPlan) types.TaintLevel {
 }
 
 // extractTaskType 从任务目标字符串提取规范化任务类型键。
-// 与 swarm.ExtractTaskType 保持一致，避免 L1 到 L2 的依赖。
+// 2026-07-21 deadcode 审查去重：此前与 optimizer.ExtractTaskType 是逐字节相同的
+// 平行实现，注释所称"避免 L1 到 L2 的依赖"已过期——internal/prompt/optimizer 现属
+// L1（与 internal/agent 同层，非 L2），且 optimizer 不反向依赖 agent，无循环风险。
+// optimizer.ExtractTaskType 有 internal/eval/control 的 V8-S4 确定性不变量测试覆盖，
+// 是两者中被正式验证的一份，故改为委托，消除漂移风险（两份实现未来可能各自被
+// 修改而不同步，是比重复代码本身更大的隐患）。
 func extractTaskType(goal string) string {
-	words := strings.Fields(strings.ToLower(goal))
-	if len(words) == 0 {
-		return "unknown"
-	}
-	if len(words) > 3 {
-		words = words[:3]
-	}
-	return strings.Join(words, "_")
+	return optimizer.ExtractTaskType(goal)
 }
 
 func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []types.Message {
@@ -265,11 +264,23 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 		if sessionID == "" && a.sCtx != nil {
 			sessionID = a.sCtx.SessionID
 		}
+		// 幂等键不能只用 ev.ID（2026-07-22 一致性审查修复）：ev.ID 由
+		// fsm.StateMachine.NextEventID 生成，形如 "{sessionID}:{seq}:{eventType}"，
+		// 其中 seq（sm.eventSeq）是*每个 Agent 实例*的私有计数器——按设计
+		// （见 NextEventID 文档："同 session+seq → 同 ID，不依赖 wall clock"，
+		// 满足 inv_M4_02 崩溃恢复重放确定性要求）在新建 Agent 实例时重置为 0。
+		// Pool.Acquire 对同一 sessionID 的每一轮新对话都会在上一轮终态后构造
+		// 全新 Agent 实例，因此不同轮次的 seq 序列会重复，ev.ID 本身也会重复
+		// ——若直接拿 ev.ID 做 outbox 幂等键后缀，第二轮起会撞
+		// idempotency_key UNIQUE 约束，导致 TopicEpisodicExtract 语义抽取
+		// 触发从第二轮起被静默丢弃。这里刻意不改 NextEventID/ev.ID 本身
+		// （那是重放确定性的必要不变量），只在 outbox 键这一层追加
+		// outboxUniqueSuffix()：本调用同步执行一次、无重试语义，足以解决。
 		outboxEv, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicExtract, "episodic_extract", map[string]any{
 			"session_id": sessionID,
 			"event_type": string(ev.Type),
 			"content":    string(ev.Payload),
-		}, ev.ID+":extract")
+		}, ev.ID+":extract:"+outboxUniqueSuffix())
 		_ = a.outboxWriter.Write(ctx, outboxEv)
 	}
 }

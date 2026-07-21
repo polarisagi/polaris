@@ -111,13 +111,54 @@ func (bm *BudgetManager) SelectBudget(taskType string, surpriseIndex float64, is
 	return BudgetAdaptive
 }
 
-// ContextWindowManager 上下文窗口管理器。
+// defaultContextWindowMaxTokens M04 §7 规定的 M4 热路径上下文窗口容量。
+const defaultContextWindowMaxTokens = 90000
+
+const (
+	contextWindowSoftTrigger = 0.70
+	contextWindowHardTrigger = 0.90
+)
+
+// ContextWindowManager 上下文窗口管理器（M04-Agent-Kernel.md §7 热路径压缩）。
 // maxTokens=90000. >70%→salience 排序压缩; >90%→语义结构感知逐出.
+//
+// 2026-07-22 一致性审查修复（ADR-0052 DEFER 项闭环，见 ADR-0060）：此前本
+// 类型从未被构造、currentUsage 从未被赋值，NeedsCompaction 恒定基于零值
+// 计算——M4 主循环的 50/75/100% 三级检测（agent_execute_effect.go）只做
+// [BUDGET_CONSTRAINT] 提示注入与 100% 硬熔断任务失败，从不做实际压缩。
+// 现由 Agent.hotPathCompactIfNeeded（agent_context_compaction.go）在每次
+// LLMFillEffect 组装完 reqMsgs 后驱动：更新 currentUsage → 调用
+// NeedsCompaction → 触发 internal/memory/compact 的共享 Stage1/2/3 压缩
+// 算法（与 M5/网关 SessionCompressor 复用同一套算法，不重复实现）。
 type ContextWindowManager struct {
 	maxTokens    int // 90000
 	currentUsage int
 	softTrigger  float64 // 0.70
 	hardTrigger  float64 // 0.90
+}
+
+// NewContextWindowManager 创建带默认阈值（0.70/0.90）的上下文窗口管理器。
+// maxTokens<=0 时使用 M04 §7 默认值 90000。
+func NewContextWindowManager(maxTokens int) *ContextWindowManager {
+	if maxTokens <= 0 {
+		maxTokens = defaultContextWindowMaxTokens
+	}
+	return &ContextWindowManager{
+		maxTokens:   maxTokens,
+		softTrigger: contextWindowSoftTrigger,
+		hardTrigger: contextWindowHardTrigger,
+	}
+}
+
+// SetCurrentUsage 更新当前已用 token 数（每次组装完 reqMsgs 后由调用方刷新）。
+// Agent 主循环单 goroutine 串行执行，无需加锁（与 sCtx 其余字段一致的并发假设）。
+func (cwm *ContextWindowManager) SetCurrentUsage(tokens int) {
+	cwm.currentUsage = tokens
+}
+
+// MaxTokens 返回本管理器的上下文窗口容量（供压缩预算计算复用同一上限）。
+func (cwm *ContextWindowManager) MaxTokens() int {
+	return cwm.maxTokens
 }
 
 // NeedsCompaction 判断是否需要压缩。

@@ -93,6 +93,21 @@ type M5MemoryThresholds struct {
 	CoreMemoryTotalMaxKB  int `toml:"core.memory_total_max_kb"`  // 8
 	RRFK                  int `toml:"rrf.k"`                     // 60 — M5/M10 共享
 	GraphMaxDepth         int `toml:"graph.max_depth"`           // 3
+	// ReflectionTaskTypeWhitelist/ReflectionMinReplanCount — §3.4 ReflectionWorker
+	// 触发策略（2026-07-21 deadcode 审查补齐，此前 reflexion.NewReflectionWorkerWithConfig
+	// 有完整实现+测试但生产侧无配置来源，一直只能走硬编码默认值）。
+	ReflectionTaskTypeWhitelist []string `toml:"reflection.task_type_whitelist"` // ["complex_reasoning","coding","research","debug","analysis"]
+	ReflectionMinReplanCount    int      `toml:"reflection.min_replan_count"`    // 2
+	// DriftCheckIntervalHours/DriftThreshold/DriftAnchorSampleRate — §12.3
+	// DriftDetector 漂移响应编排器配置（2026-07-21 deadcode 审查补齐，此前
+	// DriftDetector/EmbeddingVersionTracker 全套实现完整但零生产调用点，缺整条
+	// "周期性喂 anchor → Detect() → 按 task_type 降级 BM25 → Blue-Green 重嵌"编排链）。
+	DriftCheckIntervalHours int     `toml:"drift.check_interval_hours"` // 168 (7d)
+	DriftThreshold          float64 `toml:"drift.threshold"`            // 0.05
+	// DriftAnchorSampleRate 每次 HybridRetriever.Search 命中后采样为新 anchor 的概率
+	// （自参照基线：Expected 取采样当下的 Top-5 结果，而非外部标注的绝对真值——
+	// 漂移定义为"当前检索结果相对历史自身基线的显著偏离"）。
+	DriftAnchorSampleRate float64 `toml:"drift.anchor_sample_rate"` // 0.02
 }
 
 type M6SkillThresholds struct {
@@ -143,6 +158,19 @@ type M9SelfImproveThresholds struct {
 	// SurpriseIndex 双通道路由阈值（System 1 / 混合 / System 2）
 	SurpriseRouteLowThreshold  float64 `toml:"surprise_route.low_threshold"`  // 0.30
 	SurpriseRouteHighThreshold float64 `toml:"surprise_route.high_threshold"` // 0.60
+
+	// QLoRATrainBatchSize/PRMTrainBatchSize — 条件梯度训练批次触发阈值
+	// （M09-Self-Improvement-Engine.md §4；2026-07-21 deadcode 审查补齐上游
+	// 样本采集+触发流水线）。累积样本数达到该值时异步触发一次
+	// QLoRAAdapter.Train/PRMAdapter.Train，随后清空缓冲区重新累积。文档本身
+	// 未给出具体数值（§4 只定义了 Tier 门控与请求体形状），此处为提议的默认值：
+	// 64 是 LoRA/PRM 小批次微调的常见量级下限，同时不会让样本在真实使用频率下
+	// 长期不触发（QLoRA 样本来自 replaySuccess 的"经 replan 后成功"轨迹，属低频
+	// 事件；PRM 样本来自 M12 §9 的 1% 生产流量抽样评分，属更低频事件——两者
+	// 都可能需要相当长时间才累积到批次量，这是"后台慢速自演化"特性本身的一部分，
+	// 非本实现的缺陷）。
+	QLoRATrainBatchSize int `toml:"qlora.train_batch_size"` // 64
+	PRMTrainBatchSize   int `toml:"prm.train_batch_size"`   // 64
 }
 
 type M10KnowledgeThresholds struct {
@@ -265,6 +293,13 @@ func DefaultThresholds() Thresholds {
 			CoreMemoryTotalMaxKB:  8,
 			RRFK:                  60,
 			GraphMaxDepth:         3,
+			ReflectionTaskTypeWhitelist: []string{
+				"complex_reasoning", "coding", "research", "debug", "analysis",
+			},
+			ReflectionMinReplanCount: 2,
+			DriftCheckIntervalHours:  168,
+			DriftThreshold:           0.05,
+			DriftAnchorSampleRate:    0.02,
 		},
 		M6Skill: M6SkillThresholds{
 			GoldCacheSize:                  5,
@@ -308,6 +343,8 @@ func DefaultThresholds() Thresholds {
 			CanaryDwellPerStepHoursHT0:     1,
 			SurpriseRouteLowThreshold:      0.30,
 			SurpriseRouteHighThreshold:     0.60,
+			QLoRATrainBatchSize:            64,
+			PRMTrainBatchSize:              64,
 		},
 		M10Knowledge: M10KnowledgeThresholds{
 			RAGFinalTopK:        5,

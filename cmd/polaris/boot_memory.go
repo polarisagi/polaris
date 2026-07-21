@@ -18,6 +18,7 @@ import (
 	"github.com/polarisagi/polaris/internal/memory/graph"
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 
+	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/llm/modelregistry"
 	"github.com/polarisagi/polaris/internal/memory"
 	storerepo "github.com/polarisagi/polaris/internal/store/repo"
@@ -30,6 +31,12 @@ type MemoryBundle struct {
 	WriteFilter        *retrieval.WriteFilter
 	FallacyPool        *optimizer.FallacyMemoryPool
 	Heuristics         *optimizer.HeuristicsMemory
+	// BlindZoneDetector V8-S4 认知盲区探测器；同一实例同时注入 FallacyPool
+	// （MarkResolved 侧）与每个 Agent（RecordProduction/IsBlindZone 侧）。
+	// 2026-07-21 deadcode 审查发现：NewBlindZoneDetector/InjectBlindZoneDetector
+	// 两条注入点此前从未被任何生产代码调用，boot_memory.go 只建了 fallacyPool/
+	// heuristics 却漏了这一步（S_PLAN 生产盲区强制 System2 路由从未真正生效）。
+	BlindZoneDetector *optimizer.BlindZoneDetector
 	// ModelRegistry P3-2 ModelVersionRegistry：模型版本/废弃/兼容性评分管理。
 	ModelRegistry *modelregistry.Registry
 }
@@ -62,6 +69,23 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 	// ─── §4.10.5 OnlineReindexer（后台异步 Embedding 版本漂移修复）──────────
 	// embedder 非 nil 时才启动（FeatureLocalEmbedding 已开启），否则 Tier0 走纯 BM25。
 	reindexNow := startOnlineReindexer(ctx, sb)
+
+	// ─── §12.3 DriftDetector 漂移响应编排器（2026-07-21 deadcode 审查补齐）───
+	// embedder 未启用时整套编排跳过：anchor 需要重新 Embed 查询才能算余弦距离，
+	// 纯 BM25 部署（<8GB VPS 降级）本就不存在"向量空间漂移"这个问题域。
+	if sb.Embedder != nil {
+		th := sb.Cfg.Thresholds.M5Memory
+		driftDetector := surprise.NewDriftDetector(int64(th.DriftCheckIntervalHours), th.DriftThreshold, sb.Embedder)
+		driftRegistry := surprise.NewDriftDowngradeRegistry()
+		mem.InjectDriftDetector(driftDetector, th.DriftAnchorSampleRate)
+		mem.InjectDriftRegistry(driftRegistry)
+		orchestrator := surprise.NewDriftOrchestrator(
+			driftDetector, driftRegistry, reindexNow,
+			time.Duration(th.DriftCheckIntervalHours)*time.Hour,
+		)
+		orchestrator.Start(ctx)
+		slog.Info("polaris: drift detector orchestrator wired", "check_interval_hours", th.DriftCheckIntervalHours)
+	}
 
 	// ─── §9 P3-2 ModelVersionRegistry（模型版本/废弃/兼容性评分管理）────────
 	// reindexNow 为 nil 时（Embedder 未启用）DeprecateModel 跳过重嵌唤醒，
@@ -102,6 +126,8 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 	// ─── §5.x MEMF + 启发式记忆（M9 内环基础）──────────────────────────────
 	fallacyPool := optimizer.NewFallacyMemoryPool(sb.Store.DB())
 	heuristics := optimizer.NewHeuristicsMemory(sb.Store.DB())
+	blindZoneDetector := optimizer.NewBlindZoneDetector(sb.Store.DB())
+	fallacyPool.InjectBlindZoneDetector(blindZoneDetector)
 	slog.Info("polaris: MEMF and heuristics memory initialized")
 
 	// 抑制未使用的 observability 引用（FeatureGate 在 autoConf 路径中已消费）
@@ -117,6 +143,7 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 		WriteFilter:        writeFilter,
 		FallacyPool:        fallacyPool,
 		Heuristics:         heuristics,
+		BlindZoneDetector:  blindZoneDetector,
 		ModelRegistry:      modelReg,
 	}, nil
 }

@@ -122,6 +122,57 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]MCPTool, error) {
 	return resp.Tools, nil
 }
 
+// MCPResource 表示 MCP resources/list 返回的一条资源引用（MCP 2025-11-25 规范
+// §Resources/ListResources）。2026-07-21 deadcode 审查补齐：此前
+// knowledge/connector.MCPKnowledgeConnector.List/Fetch 是自承的桩实现，本方法
+// 是缺失的真实桥接——与既有 ListTools/CallTool 同一 c.call() RPC 调用方式，
+// 只是换了 MCP 协议里"资源"能力对应的方法名。
+type MCPResource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
+// ResourcesList 查询服务端资源列表（MCP resources/list）。
+func (c *MCPClient) ResourcesList(ctx context.Context) ([]MCPResource, error) {
+	result, err := c.call(ctx, "resources/list", nil)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "mcp: resources/list", err)
+	}
+	var resp struct {
+		Resources []MCPResource `json:"resources"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: resources/list parse: %v", err), err)
+	}
+	return resp.Resources, nil
+}
+
+// MCPResourceContent 表示 resources/read 返回的单条内容块。MCP spec 里文本资源
+// 用 text 字段，二进制资源用 blob 字段（base64），两者互斥。
+type MCPResourceContent struct {
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
+}
+
+// ResourcesRead 读取指定 URI 的资源内容（MCP resources/read）。
+func (c *MCPClient) ResourcesRead(ctx context.Context, uri string) ([]MCPResourceContent, error) {
+	result, err := c.call(ctx, "resources/read", map[string]any{"uri": uri})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: resources/read %q", uri), err)
+	}
+	var resp struct {
+		Contents []MCPResourceContent `json:"contents"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp: resources/read parse: %v", err), err)
+	}
+	return resp.Contents, nil
+}
+
 // CallTool 调用指定工具并返回文本和图片结果。
 func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, error) {
 	result, err := c.call(ctx, "tools/call", map[string]any{

@@ -39,6 +39,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/providers/{providerID}/models/{modelID}", s.providerHandler.HandleUpdateModel)
 	mux.HandleFunc("DELETE /v1/providers/{providerID}/models/{modelID}", s.providerHandler.HandleDeleteModel)
 
+	// ModelVersionRegistry 运营触发入口（P3-2，M01 §9；2026-07-21 deadcode 审查补齐）
+	mux.HandleFunc("POST /v1/providers/{providerID}/models/{modelID}/upgrade", s.providerHandler.HandleModelUpgrade)
+	mux.HandleFunc("POST /v1/providers/{providerID}/models/{modelID}/deprecate", s.providerHandler.HandleModelDeprecate)
+
 	// 模型角色配置 API（对话模型 / 推理模型）
 	mux.HandleFunc("GET /v1/config/model-roles", s.providerHandler.HandleGetModelRoles)
 	mux.HandleFunc("PUT /v1/config/model-roles", s.providerHandler.HandleSetModelRoles)
@@ -136,6 +140,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tools/{name}/execute", s.sysadminHandler.HandleExecuteTool)
 	mux.HandleFunc("GET /v1/skills", s.sysadminHandler.HandleListSkills)
 	mux.HandleFunc("POST /v1/skills/install", s.sysadminHandler.HandleInstallSkill)
+	// 用户意图驱动的技能生成入口（P3-2 SkillCreator，2026-07-21 deadcode 审查补齐）
+	mux.HandleFunc("POST /v1/skills/create", s.sysadminHandler.HandleCreateSkill)
 
 	// MCP Server 管理 API
 	mux.HandleFunc("GET /v1/mcp-servers", s.sysadminHandler.MCP.HandleListMCPServers)

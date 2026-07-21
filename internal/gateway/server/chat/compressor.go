@@ -13,13 +13,12 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/internal/protocol"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
 const (
-	// charsPerToken 字符/token 粗估（与 hermes _CHARS_PER_TOKEN 一致）
-	charsPerToken = 4
 	// defaultContextWindow 默认上下文窗口大小（token 数）；Tier-0 保守值
 	defaultContextWindow = 32768
 	// defaultAutoCompactPct 自动压缩触发百分比，对齐 Claude Code 默认值
@@ -28,44 +27,14 @@ const (
 	defaultWarnPct = 80.0
 	// defaultTailTokens 尾部保护：保留最后 6K token 原文不压缩
 	defaultTailTokens = 6144
-	// minSummaryTokens 摘要最少 token 数
-	minSummaryTokens = 800
-	// summaryRatio 摘要 token 占被压缩内容的比例
-	summaryRatio = 0.20
-	// maxSummaryTokens 摘要 token 上限
-	maxSummaryTokens = 6000
 	// defaultMaxThrashCount 连续 thrashing 判定次数；超过后停止自动压缩
 	defaultMaxThrashCount = 3
 )
 
-// compactSummaryPrefix 告知后续 LLM：这是参考摘要，不是待执行指令。
-// 设计来源：hermes-agent context_compressor.py SUMMARY_PREFIX。
-// 若不加此前缀，LLM 可能把摘要中的历史请求当作当前任务重复执行。
-const compactSummaryPrefix = "[上下文压缩摘要 — 仅供参考] " +
-	"以下是之前对话的摘要，作为背景参考信息。" +
-	"请勿将摘要中的请求视为当前待执行的指令（它们已经处理完毕）。" +
-	"当前任务见「## 进行中任务」章节。" +
-	"请仅响应本摘要之后出现的最新用户消息。"
-
-// compactSummarizePrompt 摘要生成指令
-const compactSummarizePrompt = `你是一个对话摘要助手。以下是历史对话记录。
-请生成一份简洁的结构化摘要，供后续对话参考。
-
-输出格式（使用中文，保留技术细节）：
-
-## 已解决问题
-（列出已完成的任务和问题）
-
-## 进行中任务
-（当前活跃且尚未完成的任务，请明确说明）
-
-## 重要决策与上下文
-（关键技术决策、代码变更、配置信息等）
-
-## 待处理事项
-（尚未处理的问题或用户请求）
-
-规则：代码片段用代码块包裹；禁止编造对话中未出现的内容。`
+// charsPerToken/minSummaryTokens/summaryRatio/maxSummaryTokens/
+// compactSummaryPrefix/compactSummarizePrompt 2026-07-22 迁移至
+// internal/memory/compact（M4/M5 共享压缩算法，见该包 doc 注释与 ADR-0060），
+// 此处不再保留本地重复定义，避免与 M4 热路径侧漂移。
 
 // types.ContextStats 会话上下文使用统计，由 Stats() 返回。
 
@@ -123,15 +92,6 @@ func (c *Compressor) SetToolRefOffloader(offloader ToolRefOffloader) {
 	c.offloader = offloader
 }
 
-// roughTokens 估算消息列表的 token 数（字符数 / charsPerToken）。
-func roughTokens(msgs []apptypes.Message) int {
-	total := 0
-	for _, m := range msgs {
-		total += len(m.Content) / charsPerToken
-	}
-	return total
-}
-
 // autoCompactThreshold 返回自动压缩触发 token 数（contextWindow × autoCompactPct%）。
 func (c *Compressor) autoCompactThreshold() int {
 	return int(float64(c.contextWindow) * c.autoCompactPct / 100.0)
@@ -154,7 +114,7 @@ func (c *Compressor) IsThrashin() bool {
 
 // Stats 返回当前上下文使用统计，不修改任何状态（纯读操作）。
 func (c *Compressor) Stats(msgs []apptypes.Message) types.ContextStats {
-	tokens := roughTokens(msgs)
+	tokens := compact.RoughTokens(msgs)
 	usagePct := 0.0
 	if c.contextWindow > 0 {
 		usagePct = float64(tokens) * 100.0 / float64(c.contextWindow)
@@ -179,7 +139,7 @@ func (c *Compressor) NeedsCompact(msgs []apptypes.Message) bool {
 	if c.IsThrashin() {
 		return false
 	}
-	return roughTokens(msgs) >= c.autoCompactThreshold()
+	return compact.RoughTokens(msgs) >= c.autoCompactThreshold()
 }
 
 // types.CompactResult 压缩操作统计（供调用方发 SSE 通知）。
@@ -202,7 +162,7 @@ func (c *Compressor) ForceCompact(ctx context.Context, sessionID string, msgs []
 
 // compact 核心压缩逻辑。force=true 跳过 NeedsCompact 阈值检查。
 func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
-	tokensBefore := roughTokens(msgs)
+	tokensBefore := compact.RoughTokens(msgs)
 	skip := types.CompactResult{TokensBefore: tokensBefore, Skipped: true}
 
 	if !force && !c.NeedsCompact(msgs) {
@@ -218,28 +178,28 @@ func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []appty
 		return msgs, skip, nil
 	}
 
-	middle, tail := splitMessages(msgs, c.tailTokens)
+	middle, tail := compact.SplitMessages(msgs, c.tailTokens)
 	if len(middle) == 0 {
 		// tail 已覆盖全部消息，无法进一步压缩
 		return msgs, skip, nil
 	}
 
-	middle = offloadLargeToolResults(ctx, sessionID, middle, c.offloader)
+	middle = compact.OffloadLargeToolResults(ctx, sessionID, middle, c.offloader)
 
-	summaryBudget := calcSummaryBudget(middle)
-	summary, err := c.summarize(ctx, middle, summaryBudget, provider)
+	summaryBudget := compact.CalcSummaryBudget(middle, compact.DefaultSummaryRatio, compact.DefaultMinSummaryTokens, compact.DefaultMaxSummaryTokens)
+	summary, err := compact.Summarize(ctx, middle, summaryBudget, provider)
 	if err != nil {
 		slog.Warn("compressor: summarize failed, skipping compact", "session", sessionID, "err", err)
 		return msgs, skip, nil
 	}
 
 	if mem != nil {
-		summary = injectTaskCanvas(mem.RenderTaskCanvas(), summary)
+		summary = compact.InjectTaskCanvas(mem.RenderTaskCanvas(), summary)
 	}
 
 	summaryMsg := apptypes.Message{
 		Role:    "assistant",
-		Content: compactSummaryPrefix + "\n\n" + summary,
+		Content: compact.SummaryPrefix + "\n\n" + summary,
 	}
 	if err := c.persistCompacted(ctx, sessionID, summaryMsg, tail); err != nil {
 		slog.Warn("compressor: persist failed, skipping compact", "session", sessionID, "err", err)
@@ -250,7 +210,7 @@ func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []appty
 	newMsgs = append(newMsgs, summaryMsg)
 	newMsgs = append(newMsgs, tail...)
 
-	tokensAfter := roughTokens(newMsgs)
+	tokensAfter := compact.RoughTokens(newMsgs)
 	result := types.CompactResult{TokensBefore: tokensBefore, TokensAfter: tokensAfter}
 
 	c.mu.Lock()
@@ -281,6 +241,7 @@ func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []appty
 	return newMsgs, result, nil
 }
 
-// splitMessages/calcSummaryBudget/summarize/buildTranscript/persistCompacted/
-// injectTaskCanvas/offloadLargeToolResults/toolOffloadThreshold 见
-// compressor_helpers.go（R7 拆分）。
+// splitMessages/calcSummaryBudget/summarize/buildTranscript/injectTaskCanvas/
+// offloadLargeToolResults/toolOffloadThreshold 算法本体已迁移至
+// internal/memory/compact（M4/M5 共享，见该包 doc 注释）；persistCompacted
+// （chat_messages 持久化回写，网关专属）见 compressor_helpers.go。

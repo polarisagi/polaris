@@ -127,41 +127,12 @@ func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompleted
 	}
 }
 
-// ReportOutcome 上报任务结果到内环事件通道（非阻塞：通道满时丢弃，后台尽力而为）。
-func (e *Engine) ReportOutcome(_ context.Context, taskID string, result *TaskResult) error {
-	if result == nil {
-		return nil
-	}
-	ev := TaskCompleteEvent{
-		Seq:      e.taskSeqCounter.Add(1),
-		TaskID:   taskID,
-		TaskType: "general", // 调用方暂无任务类型上下文，与 Agent 终态回调口径一致
-		Success:  result.FailureClass == "",
-		Failure:  result.FailureClass,
-		Output:   result.Output,
-	}
-	select {
-	case e.taskEvents <- ev:
-	default:
-	}
-	return nil
-}
-
-func (e *Engine) SurpriseIndex() float64 {
-	return e.currentSurpriseIndex()
-}
-
 func (e *Engine) TriggerCurriculum(ctx context.Context) error {
 	if e.curriculum != nil {
 		if err := e.curriculum.Generate(ctx, e.currentSurpriseIndex()); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "Engine.TriggerCurriculum", err)
 		}
 	}
-	return nil
-}
-
-func (e *Engine) Stop(ctx context.Context) error {
-	// Engine shuts down when ctx passed to Start is canceled
 	return nil
 }
 

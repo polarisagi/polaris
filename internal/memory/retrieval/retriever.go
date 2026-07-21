@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sort"
-	"strings"
 
 	"github.com/polarisagi/polaris/internal/memory/util"
-	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -46,6 +45,10 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 			queryF32 = qVec
 		}
 	}
+
+	// Stage 0.6 — 计算 task_type（M05 §12.3 漂移降级判断用；不写回 RetrievalConfig，
+	// 内部计算内部消费，避免改动调用方签名，见 ADR-0053 设计讨论）。
+	taskType := optimizer.ExtractTaskType(query)
 
 	// Stage 1 — 并行宽召回（BM25 + Simhash + Graph 三路）
 	var bm25Results []types.ScoredFragment
@@ -309,6 +312,12 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	if vw <= 0 {
 		vw = 0.6
 	}
+	// M05 §12.3 降级表：Embedding DriftDetector 检测到漂移 → 该 task_type 降级
+	// 纯 BM25，其余 task_type 不受影响。Blue-Green 重嵌完成后 DriftOrchestrator
+	// 清除降级标记，此处自动恢复正常权重（无需额外代码路径）。
+	if hr.driftRegistry != nil && hr.driftRegistry.IsDowngraded(taskType) {
+		vw = 0
+	}
 	gw := config.GraphWeight
 	if gw <= 0 {
 		gw = 0.6
@@ -346,39 +355,10 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	}
 
 	// 记录最终合并结果的位图指标
-	for _, frag := range merged {
-		if frag.ExplainBits&BitBM25 != 0 {
-			metrics.RecordExplainBit(ctx, "BM25")
-		}
-		if frag.ExplainBits&BitSimhash != 0 {
-			metrics.RecordExplainBit(ctx, "Simhash")
-		}
-		if frag.ExplainBits&BitVector != 0 {
-			metrics.RecordExplainBit(ctx, "Vector")
-		}
-		if frag.ExplainBits&BitGraph != 0 {
-			metrics.RecordExplainBit(ctx, "Graph")
-		}
-		if frag.ExplainBits&BitReflection != 0 {
-			metrics.RecordExplainBit(ctx, "Reflection")
-		}
-		if frag.ExplainBits&BitDurative != 0 {
-			metrics.RecordExplainBit(ctx, "Durative")
-		}
-		if frag.ExplainBits&BitSemantic != 0 {
-			metrics.RecordExplainBit(ctx, "Semantic")
-		}
-	}
+	recordExplainBitMetrics(ctx, merged)
+
+	// Stage 5 — 漂移检测 anchor 采样（M05 §12.3，见 retriever_helpers.go sampleDriftAnchor）
+	hr.sampleDriftAnchor(taskType, query, queryF32, merged)
 
 	return merged, nil
-}
-
-// taintForSource 根据数据来源前缀推断污点等级（ADR-0007）。
-// episodic / durative_group = TaintHigh（原始用户输入域）；
-// reflection / chunk 及其余 = TaintMedium（LLM 摘要输出地板）。
-func taintForSource(source string) types.TaintLevel {
-	if strings.HasPrefix(source, "episodic:") || strings.HasPrefix(source, "durative_group:") {
-		return types.TaintHigh
-	}
-	return types.TaintMedium
 }

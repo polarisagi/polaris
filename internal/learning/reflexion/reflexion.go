@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -43,6 +44,16 @@ type ReflexionEngine struct {
 	// heuristicSeqCounter：HeuristicGeneratedPayload 单调递增序号（2026-07-04
 	// 审计补齐，供 learning_cursors 幂等去重使用）。
 	heuristicSeqCounter atomic.Int64
+
+	// qloraCollector M09 §4 条件梯度训练样本采集器（2026-07-21 deadcode 审查
+	// 补齐）。nil 时（FeatureQLoRA 未启用）replaySuccess 跳过样本采集，不影响
+	// 既有反思/技能库写入流程。
+	qloraCollector *llmadapter.TrainingSampleCollector
+}
+
+// InjectQLoRACollector 注入 QLoRA 训练样本采集器（可选，nil-safe）。
+func (re *ReflexionEngine) InjectQLoRACollector(c *llmadapter.TrainingSampleCollector) {
+	re.qloraCollector = c
 }
 
 // SurrealWriter defines the subset of SurrealDB operations needed.
@@ -189,6 +200,14 @@ func (re *ReflexionEngine) replaySuccess(
 	trajectory []learning.Step,
 	replanCount int,
 ) (*learning.Reflection, error) {
+	// QLoRA 样本采集：与下方 LLM insight 提炼相互独立，即便 insight 生成失败
+	// 也不影响样本入队（轨迹本身在调用前已确定，不依赖本次 LLM 调用结果）。
+	if re.qloraCollector != nil {
+		if sample, ok := buildQLoRASample(trajectory); ok {
+			re.qloraCollector.Add(sample)
+		}
+	}
+
 	concurrent.SafeGo(context.Background(), "reflexion-replay-success", func(ctx context.Context) {
 		if re.llmInfer == nil {
 			return
@@ -266,6 +285,30 @@ Trajectory:
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+// buildQLoRASample 将"经 replan 后成功"的轨迹转换为 QLoRA SFT 样本。
+// 约定（本次接线新增的显式设计决策，非文档规定）：Prompt = 最终成功步骤之前
+// 的完整轨迹上下文（犯错→探索的过程，Completion 前的"因"）；Completion =
+// 最终成功步骤的 Result（"果"）。单步即成功（无前置上下文）时退化为用该步骤
+// 的 Action 作为 Prompt。调用方（replaySuccess）已保证 trajectory 非空且最后
+// 一步 Success=true（Reflect 的调用前置条件），此处仍做防御性二次检查。
+func buildQLoRASample(trajectory []learning.Step) (llmadapter.TrainingSample, bool) {
+	if len(trajectory) == 0 {
+		return llmadapter.TrainingSample{}, false
+	}
+	last := trajectory[len(trajectory)-1]
+	if !last.Success || last.Result == "" {
+		return llmadapter.TrainingSample{}, false
+	}
+	prompt := formatTrajectory(trajectory[:len(trajectory)-1])
+	if prompt == "" {
+		prompt = last.Action
+	}
+	if prompt == "" {
+		return llmadapter.TrainingSample{}, false
+	}
+	return llmadapter.TrainingSample{Prompt: prompt, Completion: last.Result}, true
+}
 
 func formatTrajectory(traj []learning.Step) string {
 	var out string

@@ -57,8 +57,23 @@ func (n *TaintedJSONNode) MaxTaint() types.TaintLevel {
 	return max
 }
 
-// AllStrings 深度优先收集所有 string 叶子的内容。
-// 供 Spotlighting 围栏标记和 TaintTracker 打标使用。
+// AllStrings 深度优先收集所有 string 叶子的内容（不含各叶子独立的 TaintLevel，
+// 仅返回裸字符串——如需叶子级污点信息，需改造返回类型或另建方法）。
+//
+// 2026-07-22 一致性审查订正：此前注释声称"供 Spotlighting 围栏标记和
+// TaintTracker 打标使用"，经排查两个真实调用点均不成立——生产路径
+// `MCPClient.CallToolTainted`（mcp_client_protocol.go）只消费 `node.MaxTaint()`
+// 取整棵树的最高污点值，作为该次工具调用返回内容整体的单一 TaintLevel；
+// `security/taint.Spotlighting(ts TaintedString)` 操作的是单个扁平化
+// TaintedString 整体加围栏，而非按 JSON 叶子逐个加边界；`TaintTracker.Track`
+// 签名为 (id, level) 单值对，同样不消费本方法返回的裸字符串列表。
+// 即：MCP 响应的污点保护实际通过"整棵树取最高污点值→作用于扁平化整体
+// 内容"这一保守（只会过度标记不会漏标）方式落地，已满足 ADR-0018/M11 §2.1
+// 在 MCP 边界闭合污点丢失缺口的安全要求；叶子级粒度传播到最终 prompt
+// 装配阶段目前既无消费方也无支撑设计（M07/M11 均未规定需要按字段选择性
+// 加围栏），属于当前架构下真实不存在的需求而非遗漏，故 AllStrings 本身
+// 保留为已测试的纯函数工具方法，不臆造新的粒度化污点传播管线
+// （R1：禁止无依据发明业务/安全语义）。当前仅被本文件同目录测试调用。
 func (n *TaintedJSONNode) AllStrings() []string {
 	if n == nil {
 		return nil

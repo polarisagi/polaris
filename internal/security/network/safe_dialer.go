@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -59,6 +60,15 @@ type SafeDialer struct {
 	// localOnlyIPFilter local_only 模式下的 IP 过滤函数。
 	// nil = 未启用；非 nil = 仅允许 filter(ip)==true 的 IP。
 	localOnlyIPFilter func(net.IP) bool
+
+	// localOnlyAllowlistCheck local_only 模式下按 domain+port 的白名单豁免检查
+	// （2026-07-21 deadcode 审查补齐，M11 §5.3）。nil = 未启用（未开 local_only
+	// 或白名单为空）。非 nil 且 check(host, port)==true 时，DialContext 跳过
+	// localOnlyIPFilter（本次连接不受"仅 loopback"限制），但仍完整执行 Phase
+	// 1-3.5 的 SSRF/TOCTOU 检查——白名单只豁免"local_only 非 loopback 拒绝"这
+	// 一条规则，不豁免其余任何安全检查。由 NetworkSandbox.Enable() 注入
+	// ns.allowlist.IsAllowed（domain+port 精确匹配，Ed25519 签名 + Tier3 上限 5 条）。
+	localOnlyAllowlistCheck func(host string, port int) bool
 
 	// allowLoopback 允许连接 loopback 地址（127.0.0.0/8 与 ::1）。
 	// 仅用于系统级受控本地服务（如 Ollama），跳过该 CIDR 段的 SSRF 阻断。
@@ -205,9 +215,22 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	// Phase 4: 依次尝试 ips2 中的 IP，实现类似标准库的 Happy Eyeballs 故障回退
+	//
+	// local_only 白名单豁免必须在这里（DialContext 层）判断，而不是 dialerControl
+	// 里：dialerControl 只拿得到 Phase 1-3 已解析完的 IP，做不了 domain+port 匹配；
+	// 这里仍持有本次调用最原始的 host/port。命中白名单时把 Control 设为 nil，
+	// 只豁免"local_only 非 loopback 拒绝"这一条规则，上面 Phase 1-3.5 的 SSRF/
+	// TOCTOU 检查对白名单条目同样完整生效，不受影响。
+	control := sd.dialerControl
+	if sd.localOnlyAllowlistCheck != nil {
+		portInt, convErr := strconv.Atoi(port)
+		if convErr == nil && sd.localOnlyAllowlistCheck(host, portInt) {
+			control = nil
+		}
+	}
 	dialer := &net.Dialer{
 		Timeout: 10 * time.Second,
-		Control: sd.dialerControl, // 注入 Control 回调（local_only 时拒绝非 loopback）
+		Control: control,
 	}
 	var lastErr error
 	for _, ip := range ips2 {
@@ -288,6 +311,12 @@ func (sd *SafeDialer) InjectGRPCDialer(opts interface {
 // 由 NetworkSandbox.Enable() 调用。
 func (sd *SafeDialer) SetLocalOnlyFilter(filter func(net.IP) bool) {
 	sd.localOnlyIPFilter = filter
+}
+
+// SetLocalOnlyAllowlistCheck 注入 local_only 白名单豁免检查（domain+port 精确
+// 匹配）。由 NetworkSandbox.Enable() 调用，见该方法文档说明作用范围与边界。
+func (sd *SafeDialer) SetLocalOnlyAllowlistCheck(check func(host string, port int) bool) {
+	sd.localOnlyAllowlistCheck = check
 }
 
 // resolveDNS 解析 DNS（缓存 + TTL）。

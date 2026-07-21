@@ -307,7 +307,7 @@ SQLite decision_log 表 append-only [Storage-SQLite] [HE-Rule-6] [MutationBus]
 
 DDL（Data Definition Language，数据定义语言） 见 `internal/protocol/schema/006_decision_log.sql`。
 
-实现见 `internal/observability/metrics/metrics.go` (DecisionLogger)。Log() 将单条路由决策写入 decision_log 表（append-only, [MutationBus] 串行写）。Analyze() 对 session 内决策做聚合分析，返回路由分布和按 Tier 分层的平均延迟。
+实现见 `internal/store/audit/decisionlog.go` (`SQLiteDecisionLog`，实现 `protocol.DecisionLogger`，被 `internal/execute/orchestrator/pipeline.go` 注入生产使用)。`AppendDecision()` 将单条路由决策经 [MutationBus] 串行写入 decision_log 表（append-only）。（2026-07-21 deadcode 审查订正：此前本节指向 `metrics.go` 里一套同名但零调用的平行实现，已删除；聚合分析 Analyze() 从未实现，非现有能力。）
 
 ---
 

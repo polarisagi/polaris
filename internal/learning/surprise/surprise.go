@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -32,29 +31,6 @@ func (si *SurpriseIndex) Compute() float64 {
 	return 0.4*si.EmbeddingSurprise +
 		0.35*si.ToolSequenceSurprise +
 		0.25*si.MEMFMatchSurprise
-}
-
-// Route 根据 SurpriseIndex 选择执行路径，阈值从配置读取。
-// low < 0.30 → System 1（快速缓存路由）；low~high → 混合；high+ → System 2（完整推理）。
-func Route(si float64) int {
-	low, high := 0.30, 0.60
-	if cfg := config.Get(); cfg != nil {
-		t := cfg.Thresholds.M9SelfImprove
-		if t.SurpriseRouteLowThreshold > 0 {
-			low = t.SurpriseRouteLowThreshold
-		}
-		if t.SurpriseRouteHighThreshold > 0 {
-			high = t.SurpriseRouteHighThreshold
-		}
-	}
-	switch {
-	case si < low:
-		return 1
-	case si < high:
-		return 15
-	default:
-		return 2
-	}
 }
 
 // SurpriseCalculator 异步计算器 (BoundedWorkQueue + LoadShedder)

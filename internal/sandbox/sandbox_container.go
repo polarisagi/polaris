@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
@@ -282,24 +281,3 @@ func resolveInterpreter(scriptPath string) (string, error) {
 			fmt.Sprintf("sandbox: unsupported script extension %q", filepath.Ext(scriptPath)))
 	}
 }
-
-// bytes2ReadCloser 将 []byte 封装为 io.ReadCloser（供 ContainerSandbox stdin 使用）。
-func bytes2ReadCloser(b []byte) *noopReadCloser {
-	return &noopReadCloser{data: b, pos: 0}
-}
-
-type noopReadCloser struct {
-	data []byte
-	pos  int
-}
-
-func (r *noopReadCloser) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
-}
-
-func (r *noopReadCloser) Close() error { return nil }

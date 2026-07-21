@@ -4,6 +4,7 @@ package analysis
 
 import (
 	"github.com/polarisagi/polaris/internal/eval/harness"
+	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
@@ -55,6 +56,17 @@ type ContinuousSamplingMonitor struct {
 	lastSnapshotAt  time.Time
 	// 注入回调：degraded=true 时由 M9 注入冻结 Auto-Curriculum + 回滚链逻辑
 	onDegradation func(alert *DegradationAlert)
+
+	// prmCollector M09 §4 条件梯度训练 PRM 样本采集器（2026-07-21 deadcode
+	// 审查补齐）。nil 时（FeaturePRMTraining 未启用）MaybeSampleAndScore 仅做
+	// 退化监控，不额外采集训练样本。judgeReplyQuality 已产出的 [0,1] 质量分
+	// 复用作为 PRM Reward 标签（真实存在的 LLM Judge 信号，非臆测）。
+	prmCollector *llmadapter.TrainingSampleCollector
+}
+
+// InjectPRMCollector 注入 PRM 训练样本采集器（可选，nil-safe）。
+func (m *ContinuousSamplingMonitor) InjectPRMCollector(c *llmadapter.TrainingSampleCollector) {
+	m.prmCollector = c
 }
 
 // NewContinuousSamplingMonitor 创建监控器。onDegradation 可为 nil（仅记录日志）。

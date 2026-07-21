@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"time"
 
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -184,9 +185,16 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 		}
 	}
 
-	// 异步触发 GraphBuild（Outbox 解耦）
+	// 异步触发 GraphBuild（Outbox 解耦）。
+	// 幂等键必须真正唯一（2026-07-22 一致性审查修复）：outbox.idempotency_key
+	// 是 UNIQUE 约束列，空字符串会导致同一部署生命周期内只有*全局第一份*
+	// 被摄入的文档能成功写入这条 outbox 记录——此后每一份新文档的 GraphBuild
+	// 触发都会因约束冲突被静默丢弃（`_ =` 吞掉了 Write 的错误返回值），知识图谱
+	// 构建实际上从第二份文档起就从未真正触发过。用文档 URI + 纳秒时间戳：
+	// 前者保留可读性/可追溯性，后者保证每次真实摄入都不会与历史记录冲突。
 	if p.outboxWriter != nil {
-		ev, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "", map[string]string{"doc_id": doc.Ref.URI}, "")
+		idemKey := fmt.Sprintf("ragdoc:%s:%d", doc.Ref.URI, time.Now().UnixNano())
+		ev, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "", map[string]string{"doc_id": doc.Ref.URI}, idemKey)
 		_ = p.outboxWriter.Write(ctx, ev)
 	}
 

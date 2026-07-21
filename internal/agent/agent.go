@@ -14,6 +14,7 @@ import (
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/execute/dag"
+	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -37,7 +38,6 @@ type Agent struct {
 	Config             AgentConfig
 	ctx                context.Context
 	cancel             context.CancelFunc
-	taintGate          TaintGate
 	provider           protocol.Provider             // LLM 调用入口（由 M1 提供）
 	policyGate         protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
 	hitl               protocol.HITL                 // 人工审批网关
@@ -70,6 +70,31 @@ type Agent struct {
 	dagValidator       DAGValidator                 // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
 	personaRefiner     *agentctx.PersonaRefiner     // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 	anomalyFilter      *guard.AnomalyDistanceFilter // OWASP LLM08 输入异常检测（M11 §2.2），按会话隔离；NewAgent 默认构造
+
+	// cwm M04 §7 热路径上下文窗口管理（见 budget.go ContextWindowManager 与
+	// agent_context_compaction.go）；NewAgent 默认构造（90000 token），可经
+	// InjectContextWindowManager 覆盖。toolOffloader 为 Stage 1 大 tool_result
+	// 卸载依赖，nil 时该阶段静默跳过（与网关 Compressor 的 nil-offloader 语义一致）。
+	cwm           *ContextWindowManager
+	toolOffloader compact.Offloader
+
+	// [M04 §8 崩溃恢复回放] replayCalls/replayIdx 由 InjectReplayData 注入
+	// （仅供 cmd/polaris 崩溃恢复驱动器调用），executeEffect 的 LLMFillEffect
+	// 主路径在 protocol.IsReplaying()==true 时优先按顺序消费，不发起真实
+	// Provider 调用。队列耗尽的那一刻由消费点负责翻转全局 ReplayMode=false
+	// （见 agent_execute_effect.go），而不是等 Run() 结束才翻转——本 Agent
+	// 之后若还需要继续推进（真实崩溃点晚于最后一条录像），必须立刻恢复真实
+	// 调用能力；这是安全的，因为崩溃恢复驱动器严格串行处理各会话，串行窗口
+	// 内不存在其他并发会话依赖同一全局标志的读取。
+	replayCalls []protocol.ReplayLLMCall
+	replayIdx   int
+
+	// [M04 §8 崩溃检测] eventStore 非 nil 时，Run() 在处理循环期间于 KV store
+	// 写入 "inflight:session:{id}" 标记，正常退出（终态/ctx取消/idle超时后的
+	// suspend）时清除；若进程崩溃，标记残留，供 boot 阶段崩溃恢复驱动器扫描
+	// 判定"哪些会话在崩溃前正处于某一轮处理中"。nil 时（未注入，如测试场景）
+	// 完全跳过，行为与注入前一致。
+	eventStore protocol.Store
 
 	// [GR-4-004] pendingRedirectCh 用于安全地从外部 Interrupt goroutine
 	// 向主循环传递重定向意图字符串，避免直接写 sCtx.RawIntentTS 的数据竞争。
@@ -115,7 +140,7 @@ type AgentConfig struct {
 	SurpriseHintThreshold float64
 }
 
-func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGate, provider protocol.Provider) *Agent {
+func NewAgent(id string, taskRepo protocol.TaskReadRepository, provider protocol.Provider) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	wCh := make(chan protocol.MemoryWhisper, 4) // 缓冲 4 条，防 PlannerPool 阻塞
 	tracker := fsm.NewEpochTracker()
@@ -148,7 +173,6 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 		},
 		ctx:               ctx,
 		cancel:            cancel,
-		taintGate:         taintGate,
 		provider:          provider,
 		scorer:            newStepScorer(provider),
 		whisperChan:       wCh,
@@ -163,6 +187,7 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, taintGate TaintGa
 		// 环境从未真正生效（checkAnomaly 的 ok 断言恒为 false，静默直接放行）。
 		// 每个 Agent（= 每个会话）持有独立实例，与其 docstring "按会话隔离"一致。
 		anomalyFilter: guard.NewAnomalyDistanceFilter(0),
+		cwm:           NewContextWindowManager(0),
 	}
 	agent.sm.SetIntentDispatcher(agent.asyncIntent)
 	return agent
@@ -178,6 +203,51 @@ func (a *Agent) InjectWorldModel(wm WorldModel) {
 	a.worldModel = wm
 }
 
+// InjectReplayData 见 protocol.AgentController 接口注释（M04 §8 崩溃恢复回放）。
+func (a *Agent) InjectReplayData(calls []protocol.ReplayLLMCall) {
+	a.replayCalls = calls
+	a.replayIdx = 0
+}
+
+// InjectEventStore 注入 KV Store，供 Run() 写入/清除崩溃检测用的 in-flight
+// 标记（见 eventStore 字段注释）。可选注入，nil 时崩溃检测能力静默跳过。
+func (a *Agent) InjectEventStore(store protocol.Store) {
+	a.eventStore = store
+}
+
+// inFlightKey 返回本会话的崩溃检测 in-flight 标记 KV key。
+func (a *Agent) inFlightKey() []byte {
+	return []byte("inflight:session:" + a.sCtx.SessionID)
+}
+
+// markInFlight 在 Run() 循环开始处理时写入 in-flight 标记。
+func (a *Agent) markInFlight(ctx context.Context) {
+	if a.eventStore == nil || a.sCtx.SessionID == "" {
+		return
+	}
+	putCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := a.eventStore.Put(putCtx, a.inFlightKey(), []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+		slog.Warn("agent: failed to write in-flight crash-detection marker", "session", a.sCtx.SessionID, "err", err)
+	}
+}
+
+// clearInFlight 在 Run() 循环退出（无论正常终态、超步熔断还是 ctx 取消）时
+// 清除 in-flight 标记——干净退出的会话不应被崩溃恢复驱动器误判为崩溃。
+// 用 context.Background() 而非调用方 ctx：Run() 退出路径常见于 ctx 已取消
+// 的场景（如 Reaper 主动 Cancel），若沿用同一个已取消 ctx，清除操作会立即
+// 失败，标记残留反而制造误报。
+func (a *Agent) clearInFlight() {
+	if a.eventStore == nil || a.sCtx.SessionID == "" {
+		return
+	}
+	delCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := a.eventStore.Delete(delCtx, a.inFlightKey()); err != nil {
+		slog.Warn("agent: failed to clear in-flight crash-detection marker", "session", a.sCtx.SessionID, "err", err)
+	}
+}
+
 // NewAgentWithDefaults 构造带默认依赖的 Agent，主要供测试/开发场景使用。
 //
 // dagRunner/dagValidator 默认注入 execute/dag.Runner/Validator（唯二在此处直接
@@ -188,7 +258,7 @@ func (a *Agent) InjectWorldModel(wm WorldModel) {
 // 显式注入）；生产路径 cmd/polaris/boot_agent.go 的 buildAgent 会显式调用
 // InjectDAGRunner/InjectDAGValidator 覆盖此处默认值，语义不变。
 func NewAgentWithDefaults(id string) *Agent {
-	a := NewAgent(id, nil, &defaultTaintGate{threshold: 2}, nil)
+	a := NewAgent(id, nil, nil)
 	a.dagRunner = dag.NewRunner()
 	a.dagValidator = dag.NewValidator()
 	return a
@@ -203,6 +273,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	// done，通知 Pool.release() 内核已真正停止，可以安全归还容量令牌。
 	// doneOnce 防止理论上的重复调用导致 close 已关闭 channel 而 panic。
 	defer a.doneOnce.Do(func() { close(a.done) })
+
+	// [M04 §8 崩溃检测] 标记本会话当前有一个 Run() 生命周期在处理中；
+	// 无论后续走哪条退出路径都会清除（含正常终态/超步熔断/ctx 取消）。
+	// 若进程在两者之间崩溃，标记残留，供 boot 阶段崩溃恢复驱动器识别。
+	a.markInFlight(ctx)
+	defer a.clearInFlight()
 
 	// 从 AgentConfig 初始化步骤预算（仅在首次 Run 时设置，支持外部注入覆盖）
 	if a.Config.MaxSteps > 0 && a.sCtx.MaxStepsLimit == 0 {
@@ -290,25 +366,6 @@ func (a *Agent) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-}
-
-// ============================================================================
-// TaintGate
-// ============================================================================
-
-type TaintGate interface {
-	IsClean(level int) bool
-	Gate(level int) error
-}
-
-type defaultTaintGate struct{ threshold int }
-
-func (g *defaultTaintGate) IsClean(level int) bool { return level < g.threshold }
-func (g *defaultTaintGate) Gate(level int) error {
-	if level >= g.threshold {
-		return apperr.ErrTaintViolation
-	}
-	return nil
 }
 
 // ============================================================================
