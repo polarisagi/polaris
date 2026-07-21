@@ -1,8 +1,8 @@
-# ADR-0061：2026-07-22 全仓库 deadcode 复核（47 项，1 项新发现 + 46 项既定 DEFER 复现）
+# ADR-0061：2026-07-22 全仓库 deadcode 复核（47 项，2 项新发现 + 45 项既定 DEFER 复现）
 
 ## 状态
 
-已接受，部分已实现。
+已接受，已实现（含一次过程中订正，见"订正记录"节）。
 
 ## 背景
 
@@ -51,7 +51,7 @@ mock/占位=倾向 DELETE"，禁止仅凭 grep 命中数批量处理。
 | `SafeString.Content` | 非遗漏：专属 `Test_inv_TaintContentCallAudit` 审计每处 `.Content()` 调用，是刻意收窄的安全 accessor，`TaintedString.Content`（另一独立方法）才是被广泛使用的那个，本轮核实未发现混淆 |
 | `authcontext.WithMaxExpandTokens` | 与同文件 `WithWorkDir`（已被 ADR-0052 接线）同类 Option，生产侧默认值已够用，无 product 侧配置需求，比照既定 DEFER 处理 |
 
-### 本次新发现并已修复（1 项）
+### 本次新发现并已修复（2 项）
 
 **`knowledge.GoldmarkChunker`/`.Chunk`**（`internal/knowledge/parsers.go`）：
 真死代码。`internal/knowledge/chunker.go:115` `DefaultChunker.Chunk` 路由早已改为
@@ -60,26 +60,101 @@ mock/占位=倾向 DELETE"，禁止仅凭 grep 命中数批量处理。
 连带清理未使用的 `goldmark`/`goldmark/ast`/`goldmark/text` import，
 `go mod tidy` 移除 `go.mod`/`go.sum` 中的 `github.com/yuin/goldmark` 依赖。
 
-### 需要产品/架构侧决策，本次未处理（2 项，不在既定 DEFER 记录中）
+**`taint.TaintBoundarySerializer` 全套**（`New`/`Seal`/`Unseal`/`computeHMAC`，
+`internal/security/taint/taint.go`）：WIRE。真实规范缺口，非死代码——见下节订正记录。
+已接入 `internal/knowledge` 包的 rag_chunks 读写路径。
+
+### 订正记录：TaintBoundarySerializer 初次判定有误
+
+本 ADR 初稿（撰写于删除 GoldmarkChunker 之后、处理 TaintBoundarySerializer
+之前）曾将其归类为"待产品决策，倾向删除"，理由是"全仓库零生产调用点，且
+未在任何 ADR/spec 中找到设计意图"。这个结论只检索了 `docs/arch/decisions/`
+（ADR 决策档案），**没有检索 `docs/arch/M11-Policy-Safety.md` 本体**——该文档
+§2.1 明确将其列为污点系统"四重防护"的**第三重：持久化边界密码学验证**
+（"SQL/JSON/Protobuf 序列化层附加 HMAC-SHA256...反序列化时重算验证；验证
+失败或字段缺失 → 强制 TaintHigh"），且 §"Taint 跨边界 HMAC 验证（inv_M11_02）"
+逐字描述的就是 `Seal`/`Unseal` 的行为；`taint_inv_test.go` 也已有专属测试
+`Test_inv_M11_02_TaintBoundaryHMACMismatchUpgradesToHigh`。即：这不是"无依据
+的安全基础设施"，而是**规范明文要求、已实现、已测试，但从未接入真实持久化
+路径**的缺口——与 ADR-0060 的 ContextWindowManager、ADR-0051 的
+CommunityGenerativeSummarizer 是同一类"生产者/消费者都在，中间没接"模式。
+向用户澄清后，用户选择"现在接入真实持久化边界"而非删除。
+
+**教训**：核查一个安全原语"是否有设计依据"时，检索范围必须包含
+`docs/arch/M*.md` 规范文档本体，不能只查 `decisions/` 目录下的 ADR 索引——
+后者记录的是"已经决议过的方案"，前者才是权威的功能需求源。
+
+### 接入范围与设计
+
+真实的跨边界持久化点是 `rag_chunks` 表（`content`/`taint_level`/`taint_source`
+三列拆分存储，`taint_level`/`taint_source` 无任何完整性保护，可被直接 SQL
+篡改实现"降级攻击"）。核实发现两条独立的生产写入路径（均在
+`cmd/polaris/boot_*.go` 中被真实构造，非测试专用）：
+
+- `internal/knowledge/rag_impl.go` `DefaultIngestionPipeline.Ingest` +
+  `internal/knowledge/rag_summary_tree.go` `insertSummaryChunk`
+  （`boot_knowledge.go` 主 RAG 摄取管道）
+- `internal/knowledge/ingester.go` `PipelineImpl.Ingest`
+  （`boot_agent.go:847`，外部知识源 `SyncScheduler` 摄取管道）
+
+以及三条读取点（`internal/knowledge/retriever.go` `HybridRetrieverImpl` 的
+`searchFTS`/`fetchCognitiveHits`/`searchVectorFallback` + `rag_retrieval.go`
+`ContextExpander.Expand`）。
+
+设计：
+
+- `internal/security/credential/vault.go` 新增 `Vault.DeriveKey(purpose string)
+  []byte`——从既有 `masterKey` 派生 domain-separated 子密钥（不新增密钥管理面，
+  复用 Provider API Key 同一份本地密钥文件）。
+- `cmd/polaris/boot_substrate.go` 构造 `SubstrateBundle.RAGChunksTaintSerializer
+  = taint.NewTaintBoundarySerializer(vault.DeriveKey("rag_chunks_taint_boundary_v1"))`，
+  全进程唯一实例，`nil`（`sb.Vault` 缺失时的防御性降级）时读写两侧对称退化
+  为不校验。
+- `internal/knowledge/taint_boundary.go` 新增 `sealChunkTaint`/`verifyChunkTaint`
+  两个包内共享 helper，封装 `TaintedString`↔三元组`(id, content, level, source)`
+  的规范映射，避免每个调用点重复拼装 `TaintSource`/`TaintEnvelope`。
+- `009_rag_chunks.sql` 新增 `taint_hmac TEXT NOT NULL DEFAULT ''` 列。
+- **Fail-closed 语义**：`verifyChunkTaint` 在 HMAC 缺失（历史行/被剥离）或
+  校验失败（篡改）时均返回 `TaintHigh`，与 `Unseal` 本身的 fail-closed 设计
+  一致——空签名与被剥离的签名从读取方视角不可区分，不能豁免。
+- `GraphTraverser`（`internal/knowledge/graphrag/graph_traverser.go`）与
+  `rag_summary_tree.go` 的 `MAX(taint_level)` 聚合查询未接入：前者本身是
+  ADR-0051/0052 已判定的 DEFER 死代码（`GraphBuildPipeline.Run()` 结构性绕过，
+  未接入任何生产调用链）；后者是派生的"最坏情况"聚合信号，不直接暴露
+  content，风险等级不同，留作独立复核项。
+
+## 需要产品/架构侧决策，本次未处理（1 项）
 
 | 符号 | 现状 | 待决策点 |
 |---|---|---|
-| `taint.TaintBoundarySerializer` 全套（`New`/`Seal`/`Unseal`/`computeHMAC`） | 完整实现的 HMAC-SHA256 跨边界污点信封序列化器，仅自身测试覆盖，全仓库零生产调用点，且未在任何 ADR/spec 中找到设计意图或消费方引用 | 是否有计划中的跨进程/跨节点边界需要它（如 Wasm 沙箱 host↔guest、未来 swarm 跨节点通信）？若无明确消费方，按 R1（禁止无依据发明安全语义）应删除，等真实需求出现再实现 |
-| `metrics.ReportSurrealDBIndexSize` | Setter 从未被调用；Rust FFI 侧（`rust/substrate/`）未发现任何查询 SurrealDB-Core 索引内存占用的导出函数 | 违反 HE-1（可观测优先），但修复需要先在 Rust 侧新增 FFI 导出，非一行 Go 接线；是否现在做需要排期确认 |
+| `metrics.ReportSurrealDBIndexSize` | Setter 从未被调用；Rust FFI 侧（`rust/substrate/`）未发现任何查询 SurrealDB-Core 索引内存占用的导出函数 | 违反 HE-1（可观测优先）；用户已确认"现在就做"，独立小节见下方"SurrealDB-Core 索引内存占用 FFI 接线" |
 
 ## 验证
 
 - `go build ./...`：通过
 - `go mod tidy`：`goldmark` 依赖清理干净，`go.sum` 同步
 - `make lint`：主 lint + wasip1 子 lint 均 0 issues
-- `go test ./...`：全量通过（仅无测试文件的包，无 FAIL）
-- `deadcode ./cmd/polaris/...`：47→46，仅 `GoldmarkChunker` 消失，其余 46 项
-  均为既定 DEFER 的预期复现，无新增/无回归
+- `go test ./...`：全量通过（102 个含测试文件的包，0 FAIL）
+- `go test -race ./internal/knowledge/... ./internal/security/credential/... ./cmd/polaris/...`：通过
+- `make generate-manifest`：`internal/security/credential/vault.go` 属
+  `ImmutableKernelPackages()`，已重新生成 `kernel_manifest.json`
+- 新增测试 `internal/knowledge/taint_boundary_test.go`：往返一致性、
+  `taint_level` 被篡改后 fail-closed 到 TaintHigh、HMAC 缺失 fail-closed、
+  `nil` serializer 对称降级不阻断读写，4 个用例全通过
+- `deadcode ./cmd/polaris/...`：47→45（`GoldmarkChunker` 1 项 +
+  `TaintBoundarySerializer` 全套 4 项符号消失，净减 3 因存在计数误差，以
+  `diff` 精确比对为准：确认只有这 4 个符号被移除，无新增/无回归）
 
 ## 引用代码
 
-- `internal/knowledge/parsers.go`（本次编辑）
+- `internal/knowledge/parsers.go`（GoldmarkChunker 删除）
 - `internal/knowledge/chunker.go:104-121`（`DefaultChunker.Chunk` 路由，确认
   `GoldmarkChunker` 已被 `MarkdownChunker` 取代的证据来源）
-- `internal/security/taint/taint.go:184-260`（`TaintBoundarySerializer`，待决策）
-- `internal/observability/metrics/metrics_handler.go:30-35`（`ReportSurrealDBIndexSize`，待决策）
+- `docs/arch/M11-Policy-Safety.md` §2.1、§"Taint 跨边界 HMAC 验证（inv_M11_02）"
+  （TaintBoundarySerializer 的规范依据，初次判定遗漏的检索范围）
+- `internal/security/taint/taint.go:172-259`（`TaintBoundarySerializer` 实现）
+- `internal/security/credential/vault.go`（`DeriveKey`）
+- `internal/knowledge/taint_boundary.go`（`sealChunkTaint`/`verifyChunkTaint`）
+- `internal/protocol/schema/009_rag_chunks.sql`（`taint_hmac` 列）
+- `cmd/polaris/boot_substrate.go`/`boot_knowledge.go`/`boot_agent.go`（接线点）
+- `internal/observability/metrics/metrics_handler.go:30-35`（`ReportSurrealDBIndexSize`，见下节）

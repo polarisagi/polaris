@@ -64,6 +64,9 @@ type Chunk struct {
 	ParentChunkID string    `json:"parent_chunk_id,omitempty"`
 	TaintLevel    int       `json:"taint_level"`
 	TaintSource   string    `json:"taint_source,omitempty"`
+	// TaintHMAC 是跨边界密码学验证签名（inv_M11_02，见 009_rag_chunks.sql taint_hmac
+	// 列注释），仅 knowledge 包内部读写路径使用，非本类型对外契约的一部分。
+	TaintHMAC string `json:"-"`
 	// inv_M10_03 lineage metadata — DDL NOT NULL，跨版本溯源必填
 	SourceURI         string `json:"source_uri"`
 	DocVersion        string `json:"doc_version"`

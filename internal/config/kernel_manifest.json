@@ -132,7 +132,7 @@
   "internal/security/classifier/classifier.go": "8819951f3deb1364ef40c778717d4b4c68d50dc73da06e2f7f65fbee156b08e4",
   "internal/security/classifier/classifier_test.go": "4294cc36b401238250a29ee5db00d65165f533e794edfd13d08997561a7b2fd8",
   "internal/security/classifier/rules.go": "340215c4e777e8189840fc59ece0039643f4922aa8b7344fe8e78f5c9f4181e2",
-  "internal/security/credential/vault.go": "5182a319b4c816b0cc62761330d6721f43759f3b70129a24a425eddf047b44fa",
+  "internal/security/credential/vault.go": "7feb87ace50115ef69e09d0792611a76f4250f170f474b9fa0820595d6d30033",
   "internal/security/credential/vault_test.go": "8947719ceb3e8a59dce6328cf5b88a115e5101cb331572d60d104a05e6c840f8",
   "internal/security/guard/anomaly_distance_filter.go": "108f1d0c4798bfd136748202ea3287ef6fe45681d12fc3cc532f8fdb0f6d71c4",
   "internal/security/guard/anomaly_distance_filter_test.go": "18b0f823dc19b6df8913e4c99ad712fe831145a2a38d63fd45ccf85af367fc33",

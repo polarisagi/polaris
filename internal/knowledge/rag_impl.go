@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -25,20 +26,22 @@ const summaryInferConcurrency = 3
 
 // DefaultIngestionPipeline 实现了 IngestionPipeline，负责分块与打标污染等级
 type DefaultIngestionPipeline struct {
-	router          *store.StorageRouter
-	provider        protocol.Provider
-	outboxWriter    protocol.OutboxWriter // 可选；nil 时降级为 goroutine
-	searchEngine    *search.HybridSearchEngine
-	summaryInferSem chan struct{} // 限制并发摘要 Infer 调用数（H1）
+	router             *store.StorageRouter
+	provider           protocol.Provider
+	outboxWriter       protocol.OutboxWriter // 可选；nil 时降级为 goroutine
+	searchEngine       *search.HybridSearchEngine
+	summaryInferSem    chan struct{}                  // 限制并发摘要 Infer 调用数（H1）
+	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不计算/校验 taint_hmac（inv_M11_02）
 }
 
-func NewDefaultIngestionPipeline(router *store.StorageRouter, provider protocol.Provider, outboxWriter protocol.OutboxWriter, searchEngine *search.HybridSearchEngine) *DefaultIngestionPipeline {
+func NewDefaultIngestionPipeline(router *store.StorageRouter, provider protocol.Provider, outboxWriter protocol.OutboxWriter, searchEngine *search.HybridSearchEngine, boundarySerializer *taint.TaintBoundarySerializer) *DefaultIngestionPipeline {
 	return &DefaultIngestionPipeline{
-		router:          router,
-		provider:        provider,
-		outboxWriter:    outboxWriter,
-		searchEngine:    searchEngine,
-		summaryInferSem: make(chan struct{}, summaryInferConcurrency),
+		router:             router,
+		provider:           provider,
+		outboxWriter:       outboxWriter,
+		searchEngine:       searchEngine,
+		summaryInferSem:    make(chan struct{}, summaryInferConcurrency),
+		boundarySerializer: boundarySerializer,
 	}
 }
 
@@ -104,17 +107,18 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT OR REPLACE INTO rag_chunks
-			(id, doc_id, content, taint_level, taint_source, source_uri, doc_version,
+			(id, doc_id, content, taint_level, taint_source, taint_hmac, source_uri, doc_version,
 			 chunk_seq, content_hash, embed_model_version, chunk_type, chunk_index)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: prepare stmt", err)
 	}
 	defer stmt.Close()
 
 	for i, c := range chunks {
+		hmacHex := sealChunkTaint(p.boundarySerializer, c.ID, c.Content, c.TaintLevel, c.TaintSource)
 		if _, err := stmt.ExecContext(ctx,
-			c.ID, c.DocID, c.Content, c.TaintLevel, c.TaintSource,
+			c.ID, c.DocID, c.Content, c.TaintLevel, c.TaintSource, hmacHex,
 			c.SourceURI, c.DocVersion, i, c.ContentHash, "", c.ChunkType, c.ChunkIndex,
 		); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: insert chunk", err)

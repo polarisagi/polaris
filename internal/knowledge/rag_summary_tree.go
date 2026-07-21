@@ -101,10 +101,11 @@ func (p *DefaultIngestionPipeline) insertSummaryChunk(ctx context.Context, db pr
 	if content == "" {
 		return
 	}
+	hmacHex := sealChunkTaint(p.boundarySerializer, id, content, srcTaint, "auto_summary")
 	if _, err := db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO rag_chunks (id, doc_id, content, taint_level, taint_source, chunk_type, chunk_index, created_at)
-         VALUES (?,?,?,?,?,?,?,?)`,
-		id, docID, content, srcTaint, "auto_summary", chunkType, idx, now); err != nil {
+		`INSERT OR REPLACE INTO rag_chunks (id, doc_id, content, taint_level, taint_source, taint_hmac, chunk_type, chunk_index, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+		id, docID, content, srcTaint, "auto_summary", hmacHex, chunkType, idx, now); err != nil {
 		slog.WarnContext(ctx, "rag_impl: db write failed", "error", err)
 	}
 }

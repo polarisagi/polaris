@@ -25,6 +25,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			content              TEXT NOT NULL,
 			taint_level          INTEGER NOT NULL DEFAULT 1,
 			taint_source         TEXT,
+			taint_hmac           TEXT NOT NULL DEFAULT '',
 			source_uri           TEXT NOT NULL DEFAULT '',
 			doc_version          TEXT NOT NULL DEFAULT '',
 			chunk_seq            INTEGER NOT NULL DEFAULT 0,
@@ -54,7 +55,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 func TestPipelineImpl_Ingest(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, nil, nil)
+	pipeline := NewPipeline(db, nil, nil, nil, nil)
 
 	doc := &Document{
 		Ref: DocumentRef{
@@ -93,7 +94,7 @@ func TestPipelineImpl_Ingest(t *testing.T) {
 func TestPipelineImpl_GetRecentChunks(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, nil, nil)
+	pipeline := NewPipeline(db, nil, nil, nil, nil)
 
 	doc := &Document{
 		Ref: DocumentRef{URI: "doc1", Title: "Test", ContentHash: "hash1"},
@@ -132,7 +133,7 @@ func TestPipelineImpl_GetRecentChunks(t *testing.T) {
 func TestHybridRetrieverImpl_Search(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, nil, nil)
+	pipeline := NewPipeline(db, nil, nil, nil, nil)
 	retriever := NewHybridRetrieverWithCognitive(db, nil, nil, 0)
 
 	doc := &Document{
