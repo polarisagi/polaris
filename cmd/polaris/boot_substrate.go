@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
 
@@ -62,6 +63,13 @@ type SubstrateBundle struct {
 	Layout    config.DataLayout
 	Vault     *credential.Vault
 	PromptMgr protocol.PromptFacade
+
+	// RAGChunksTaintSerializer 是 rag_chunks 表跨 SQL 持久化边界的 HMAC-SHA256
+	// 校验器（M11-Policy-Safety.md §2.1 第三重防护，inv_M11_02）。key 从 Vault
+	// masterKey 派生（domain-separated subkey，用途标识见 ragChunksTaintHMACPurpose），
+	// Vault 缺失时为 nil（此时 knowledge 包各写/读点退化为不校验，见
+	// sealChunkTaint/verifyChunkTaint 的 nil-serializer 分支）。
+	RAGChunksTaintSerializer *taint.TaintBoundarySerializer
 
 	// 硬件探针与可观测性（AutoConf 可 nil，Tier0 降级）
 	AutoConf     *observability.AutoConfig
@@ -164,6 +172,12 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "credential.NewVaultInDir", err)
 	}
+	// ragChunksTaintHMACPurpose 是从 vault masterKey 派生 rag_chunks 跨边界
+	// HMAC 密钥的用途标识（inv_M11_02，见 009_rag_chunks.sql taint_hmac 列注释）。
+	// 修改此常量等价于密钥轮换——历史行 taint_hmac 全部校验失败，读取时降级为
+	// TaintHigh（fail-closed，仅信任等级重置，非数据丢失）。
+	const ragChunksTaintHMACPurpose = "rag_chunks_taint_boundary_v1"
+	ragChunksTaintSerializer := taint.NewTaintBoundarySerializer(vault.DeriveKey(ragChunksTaintHMACPurpose))
 
 	// ─── 0.3.5 Thresholds 覆盖加载 ──────────────────────────────────────────
 	thresholds, err := config.GetThresholds(dataDir)
@@ -572,39 +586,40 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	committed = true
 	return &SubstrateBundle{
-		Cfg:           cfg,
-		DataDir:       dataDir,
-		Layout:        layout,
-		AutoConf:      autoConf,
-		TBR:           tbr,
-		KS:            ks,
-		AuditTrail:    auditTrail,
-		AuditChain:    auditChain,
-		LogFile:       logFile,
-		LogStore:      logStore,
-		PromptMgr:     promptMgr,
-		Store:         store,
-		SurrealStore:  surrealStore,
-		StorageRouter: storageRouter,
-		DriftMonitor:  driftMonitor,
-		DecisionLog:   decisionLog,
-		Outbox:        outboxWorker,
-		DBWriter:      dbWriter,
-		DBWriterDone:  dbWriterDoneCh,
-		Gate:          gate,
-		TrustMap:      publisherTrustMap,
-		Dialer:        dialer,
-		SafeHTTP:      safeHTTPClient,
-		InfReg:        reg,
-		Router:        router,
-		Embedder:      embedder,
-		DynEmbedder:   dynEmbedder,
-		QLoRA:         qloraAdapter,
-		PRM:           prmAdapter,
-		Steering:      steeringAdapter,
-		CVStore:       cvStore,
-		Stop:          stop,
-		Vault:         vault,
+		Cfg:                      cfg,
+		DataDir:                  dataDir,
+		Layout:                   layout,
+		AutoConf:                 autoConf,
+		TBR:                      tbr,
+		KS:                       ks,
+		AuditTrail:               auditTrail,
+		AuditChain:               auditChain,
+		LogFile:                  logFile,
+		LogStore:                 logStore,
+		PromptMgr:                promptMgr,
+		Store:                    store,
+		SurrealStore:             surrealStore,
+		StorageRouter:            storageRouter,
+		DriftMonitor:             driftMonitor,
+		DecisionLog:              decisionLog,
+		Outbox:                   outboxWorker,
+		DBWriter:                 dbWriter,
+		DBWriterDone:             dbWriterDoneCh,
+		Gate:                     gate,
+		TrustMap:                 publisherTrustMap,
+		Dialer:                   dialer,
+		SafeHTTP:                 safeHTTPClient,
+		InfReg:                   reg,
+		Router:                   router,
+		Embedder:                 embedder,
+		DynEmbedder:              dynEmbedder,
+		QLoRA:                    qloraAdapter,
+		PRM:                      prmAdapter,
+		Steering:                 steeringAdapter,
+		CVStore:                  cvStore,
+		Stop:                     stop,
+		Vault:                    vault,
+		RAGChunksTaintSerializer: ragChunksTaintSerializer,
 	}, nil
 }
 

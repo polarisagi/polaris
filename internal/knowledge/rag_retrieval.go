@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -94,11 +95,18 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope
 // ContextExpander 将 LeafChunk 扩展为 AugmentedContext（父块 + 前后兄弟块）。
 // 全 Tier 均启用，仅执行 DB 查询，无 LLM 调用。
 type ContextExpander struct {
-	router *store.StorageRouter
+	router             *store.StorageRouter
+	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不校验 taint_hmac（inv_M11_02）
 }
 
 func NewContextExpander(router *store.StorageRouter) *ContextExpander {
 	return &ContextExpander{router: router}
+}
+
+// SetBoundarySerializer 注入跨边界 HMAC 校验器（inv_M11_02），与
+// HybridRetrieverImpl.SetBoundarySerializer 同一模式的启动期热注入 setter。
+func (ce *ContextExpander) SetBoundarySerializer(ser *taint.TaintBoundarySerializer) {
+	ce.boundarySerializer = ser
 }
 
 // Expand 给定一组 LeafChunk，返回带上下文的 AugmentedContext 列表。
@@ -115,16 +123,17 @@ func (ce *ContextExpander) Expand(ctx context.Context, chunks []Chunk) ([]Augmen
 
 		// 查父块（同 DocID，ChunkType='parent'，section_path 前缀匹配）
 		row := db.QueryRowContext(ctx,
-			`SELECT id, doc_id, content, section_path, taint_level, taint_source, source_uri, doc_version
+			`SELECT id, doc_id, content, section_path, taint_level, taint_source, taint_hmac, source_uri, doc_version
              FROM rag_chunks WHERE doc_id=? AND chunk_type='parent' AND id != ? AND deleted_at IS NULL LIMIT 1`,
 			leaf.DocID, leaf.ID)
 		var parent Chunk
-		var sectionPath string
+		var sectionPath, taintHMAC string
 		if err := row.Scan(&parent.ID, &parent.DocID, &parent.Content,
-			&sectionPath, &parent.TaintLevel, &parent.TaintSource,
+			&sectionPath, &parent.TaintLevel, &parent.TaintSource, &taintHMAC,
 			&parent.SourceURI, &parent.DocVersion); err == nil {
 			// 反序列化 SectionPath（存储为逗号分隔字符串）
 			parent.SectionPath = strings.Split(sectionPath, ",")
+			parent.TaintLevel = verifyChunkTaint(ce.boundarySerializer, parent.ID, parent.Content, parent.TaintLevel, parent.TaintSource, taintHMAC)
 			aug.Parent = &parent
 		}
 

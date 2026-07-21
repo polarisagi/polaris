@@ -163,3 +163,11 @@ func NewVaultWithKey(key []byte) (*Vault, error) {
 	copy(k, key[:32])
 	return &Vault{masterKey: k}, nil
 }
+
+// DeriveKey 从 masterKey 派生一个用途隔离的 32 字节子密钥（sha256(masterKey || purpose)）。
+// 用于 masterKey 之外的其他密码学用途（如 taint.TaintBoundarySerializer 的 HMAC 密钥），
+// 避免跨用途复用同一把密钥（domain separation），同时不需要单独管理一份密钥文件。
+func (v *Vault) DeriveKey(purpose string) []byte {
+	h := sha256.Sum256(append(append([]byte{}, v.masterKey...), []byte(purpose)...))
+	return h[:]
+}

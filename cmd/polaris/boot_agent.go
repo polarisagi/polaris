@@ -844,7 +844,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
 	sv := supervisor.NewSupervisor(5, 5*time.Minute)
 	// [W-3] 接入 SyncScheduler
-	knowledgePipeline := knowledge.NewPipeline(sb.Store.DB(), nil, sb.Outbox, nil)
+	knowledgePipeline := knowledge.NewPipeline(sb.Store.DB(), nil, sb.Outbox, nil, sb.RAGChunksTaintSerializer)
 	for _, conn := range tb.KnowledgeConnRegistry.GetAll() {
 		c := conn
 		syncScheduler := connector.NewSyncScheduler(c, knowledgePipeline, 0)

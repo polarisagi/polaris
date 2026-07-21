@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content            TEXT    NOT NULL,
     taint_level        INTEGER NOT NULL DEFAULT 1,
     taint_source       TEXT,
+    -- 跨边界密码学验证（M11-Policy-Safety.md §2.1 第三重防护，inv_M11_02）：
+    -- HMAC-SHA256(content+taint_level+taint_source)，写入时由 TaintBoundarySerializer.Seal
+    -- 计算，读取时 Unseal 重新计算比对；不匹配或缺失（''）视为篡改/不可验证，
+    -- taint_level 强制降级读取为 TaintHigh（fail-closed）。
+    taint_hmac         TEXT    NOT NULL DEFAULT '',
     -- lineage metadata（inv_M10_03）
     source_uri         TEXT    NOT NULL DEFAULT '',
     doc_version        TEXT    NOT NULL DEFAULT '',

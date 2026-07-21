@@ -30,6 +30,10 @@ type KnowledgeBundle struct {
 
 // bootKnowledge 执行 §7~§7.7 初始化，返回知识 RAG bundle。
 func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle) (*KnowledgeBundle, error) { //nolint:gocyclo
+	// ragTaintSerializer 跨边界 HMAC 校验器（inv_M11_02），构造于 boot_substrate.go
+	// （sb.RAGChunksTaintSerializer，由 sb.Vault 派生），可 nil（sb.Vault 缺失时）。
+	ragTaintSerializer := sb.RAGChunksTaintSerializer
+
 	// ─── §7 Knowledge RAG (L2 M10) ───────────────────────────────────────────
 	// ApproximateColBERTReranker（2026-07-04 审计补齐，任务2）：按 FeatureDeepRAG
 	// 门控启用，复用 sb.Embedder。包一层 SafeRerank 提供超时+panic 保护。
@@ -55,6 +59,9 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 			if hri, ok := retriever.(*knowledgepkg.HybridRetrieverImpl); ok {
 				hri.SetReranker(&colbertRerankerAdapter{inner: colbertReranker})
 			}
+		}
+		if hri, ok := retriever.(*knowledgepkg.HybridRetrieverImpl); ok {
+			hri.SetBoundarySerializer(ragTaintSerializer)
 		}
 		slog.Info("polaris: knowledge RAG initialized (FTS5 + SurrealDB HNSW, Tier0+/≥8GB)")
 	} else {
@@ -96,7 +103,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	if dr, ok := retriever.(*knowledgepkg.DefaultHybridRetriever); ok {
 		searchEngine = dr.Engine()
 	}
-	ingester := knowledgepkg.NewDefaultIngestionPipeline(sb.StorageRouter, sb.Router, sb.Outbox, searchEngine)
+	ingester := knowledgepkg.NewDefaultIngestionPipeline(sb.StorageRouter, sb.Router, sb.Outbox, searchEngine, ragTaintSerializer)
 
 	// ─── §7.5 知识图谱构建管线（GraphBuildPipeline，M10 §2.7）────────────────
 	var graphLLMClient graphrag.LLMClient
@@ -149,6 +156,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	var knowledgeBase *knowledgepkg.KnowledgeBase
 	{
 		expander := knowledgepkg.NewContextExpander(sb.StorageRouter)
+		expander.SetBoundarySerializer(ragTaintSerializer)
 		var navigator *knowledgepkg.StructuredNavigator
 		var planner *knowledgepkg.QueryPlanner
 		if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureDeepRAG) != probe.FeatureDisabled {

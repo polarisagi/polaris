@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/store/search"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -28,16 +29,17 @@ func simpleHash(s string) uint64 {
 // 生产实现: 将文本分块落盘到 SQLite rag_chunks 表（FTS5 支持），
 // 同时将 DocTree 元数据持久化到 rag_docs 表（JSON 序列化）。
 type PipelineImpl struct {
-	db           protocol.SQLQuerier
-	provider     protocol.Provider
-	outboxWriter protocol.OutboxWriter
-	searchEngine *search.HybridSearchEngine
+	db                 protocol.SQLQuerier
+	provider           protocol.Provider
+	outboxWriter       protocol.OutboxWriter
+	searchEngine       *search.HybridSearchEngine
+	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不计算/校验 taint_hmac（inv_M11_02）
 }
 
 var _ IngestionPipeline = (*PipelineImpl)(nil)
 
 // NewPipeline 创建 PipelineImpl，并确保 rag_docs 表存在。
-func NewPipeline(db protocol.SQLQuerier, provider protocol.Provider, outboxWriter protocol.OutboxWriter, searchEngine *search.HybridSearchEngine) *PipelineImpl {
+func NewPipeline(db protocol.SQLQuerier, provider protocol.Provider, outboxWriter protocol.OutboxWriter, searchEngine *search.HybridSearchEngine, boundarySerializer *taint.TaintBoundarySerializer) *PipelineImpl {
 	// CREATE TABLE IF NOT EXISTS，幂等；上线前阶段可随主 schema 建表
 	_, _ = db.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS rag_docs (
@@ -50,7 +52,7 @@ func NewPipeline(db protocol.SQLQuerier, provider protocol.Provider, outboxWrite
 			updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	return &PipelineImpl{db: db, provider: provider, outboxWriter: outboxWriter, searchEngine: searchEngine}
+	return &PipelineImpl{db: db, provider: provider, outboxWriter: outboxWriter, searchEngine: searchEngine, boundarySerializer: boundarySerializer}
 }
 
 // Ingest 将文档转换为 Chunk 并持久化。
@@ -105,21 +107,24 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 			Content: part,
 		})
 
-		// 持久化 Chunk 到 SQLite rag_chunks 表（含 inv_M10_03 lineage 字段）
+		// 持久化 Chunk 到 SQLite rag_chunks 表（含 inv_M10_03 lineage 字段 +
+		// inv_M11_02 跨边界 HMAC 签名）
+		hmacHex := sealChunkTaint(p.boundarySerializer, chunkID, part, initialTaint, "")
 		_, err := p.db.ExecContext(ctx, `
-			INSERT INTO rag_chunks (id, doc_id, content, taint_level, taint_source,
+			INSERT INTO rag_chunks (id, doc_id, content, taint_level, taint_source, taint_hmac,
 				source_uri, doc_version, chunk_seq, content_hash, embed_model_version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
 			ON CONFLICT(id) DO UPDATE SET
 				content=excluded.content,
 				taint_level=excluded.taint_level,
 				taint_source=excluded.taint_source,
+				taint_hmac=excluded.taint_hmac,
 				source_uri=excluded.source_uri,
 				doc_version=excluded.doc_version,
 				chunk_seq=excluded.chunk_seq,
 				content_hash=excluded.content_hash,
 				created_at=CURRENT_TIMESTAMP
-		`, chunkID, doc.Ref.URI, part, initialTaint, "",
+		`, chunkID, doc.Ref.URI, part, initialTaint, "", hmacHex,
 			doc.Ref.URI, doc.Ref.ContentHash, i, contentHash)
 		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "ingester: insert chunk failed", err)
@@ -170,15 +175,17 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 				continue
 			}
 			summaryHash := fmt.Sprintf("%x", simpleHash(resp.Content))
+			summaryHMAC := sealChunkTaint(p.boundarySerializer, summaryID, resp.Content, initialTaint, "llm_summary")
 			if _, err := p.db.ExecContext(ctx, `
-				INSERT INTO rag_chunks (id, doc_id, content, taint_level, taint_source,
+				INSERT INTO rag_chunks (id, doc_id, content, taint_level, taint_source, taint_hmac,
 					source_uri, doc_version, chunk_seq, content_hash, embed_model_version, chunk_type)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'summary')
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'summary')
 				ON CONFLICT(id) DO UPDATE SET
 					content=excluded.content,
 					content_hash=excluded.content_hash,
+					taint_hmac=excluded.taint_hmac,
 					created_at=CURRENT_TIMESTAMP
-			`, summaryID, doc.Ref.URI, resp.Content, initialTaint, "llm_summary",
+			`, summaryID, doc.Ref.URI, resp.Content, initialTaint, "llm_summary", summaryHMAC,
 				doc.Ref.URI, doc.Ref.ContentHash, -1, summaryHash); err != nil {
 				slog.WarnContext(ctx, "knowledge_ingester: db write failed", "error", err)
 			}

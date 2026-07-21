@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -34,18 +35,26 @@ type CognitiveSearcher interface {
 //   - Tier 0 (embedder=nil): FTS5 BM25 单路，按 rank 排序。
 //   - Tier 1+ (embedder 非 nil): FTS5 + Dense Vector 双路 RRF 融合。
 type HybridRetrieverImpl struct {
-	db           protocol.SQLQuerier
-	embedder     VectorEmbedder           // optional，nil = FTS5 only
-	cognitive    CognitiveSearcher        // optional，Tier 1+ SurrealDB HNSW
-	graph        *graphrag.GraphTraverser // optional，Tier 0+ 图遍历（M10 §2.6）
-	reranker     protocol.Reranker        // optional，Cross-encoder reranking
-	vecScanLimit int                      // Tier0VectorScanLimit
+	db                 protocol.SQLQuerier
+	embedder           VectorEmbedder                 // optional，nil = FTS5 only
+	cognitive          CognitiveSearcher              // optional，Tier 1+ SurrealDB HNSW
+	graph              *graphrag.GraphTraverser       // optional，Tier 0+ 图遍历（M10 §2.6）
+	reranker           protocol.Reranker              // optional，Cross-encoder reranking
+	vecScanLimit       int                            // Tier0VectorScanLimit
+	boundarySerializer *taint.TaintBoundarySerializer // 可选；nil 时不校验 taint_hmac（inv_M11_02）
 }
 
 var _ protocol.HybridRetriever = (*HybridRetrieverImpl)(nil)
 
 func (hr *HybridRetrieverImpl) SetReranker(r protocol.Reranker) {
 	hr.reranker = r
+}
+
+// SetBoundarySerializer 注入跨边界 HMAC 校验器（inv_M11_02）。与 SetReranker
+// 同为启动期热注入 setter：boot_knowledge.go 组合根按 Tier 装配检索栈时，
+// TaintBoundarySerializer 由 sb.Vault 派生，构造顺序上晚于 retriever 本身。
+func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySerializer) {
+	hr.boundarySerializer = ser
 }
 
 // 2026-07-14（ADR-0051）：NewHybridRetriever/NewHybridRetrieverWithEmbedder/
@@ -203,7 +212,7 @@ func (hr *HybridRetrieverImpl) applyReranker(ctx context.Context, queryText stri
 // searchFTS 使用 FTS5 BM25 检索，返回 limit 条结果。
 func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, limit int) ([]Chunk, error) {
 	sqlQuery := `
-		SELECT rc.id, rc.doc_id, rc.content, rc.taint_level, rc.taint_source
+		SELECT rc.id, rc.doc_id, rc.content, rc.taint_level, rc.taint_source, rc.taint_hmac
 		FROM rag_chunks rc
 		WHERE rc.rowid IN (
 			SELECT rowid FROM rag_chunks_fts
@@ -221,13 +230,14 @@ func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, 
 	var results []Chunk
 	for rows.Next() {
 		var chunk Chunk
-		var taintSource sql.NullString
-		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource); err != nil {
+		var taintSource, taintHMAC sql.NullString
+		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "failed to scan fts row", err)
 		}
 		if taintSource.Valid {
 			chunk.TaintSource = taintSource.String
 		}
+		chunk.TaintLevel = verifyChunkTaint(hr.boundarySerializer, chunk.ID, chunk.Content, chunk.TaintLevel, chunk.TaintSource, taintHMAC.String)
 		results = append(results, chunk)
 	}
 	return results, rows.Err()
@@ -263,18 +273,19 @@ func (hr *HybridRetrieverImpl) fetchCognitiveHits(ctx context.Context, hits []ty
 	var results []Chunk
 	for _, h := range hits {
 		var chunk Chunk
-		var taintSource sql.NullString
+		var taintSource, taintHMAC sql.NullString
 		// BUG-3 修复：SELECT 补全全部 lineage 字段，确保 inv_M10_03 溯源完整性不变量
 		err := hr.db.QueryRowContext(ctx, `
-			SELECT id, doc_id, content, taint_level, taint_source,
+			SELECT id, doc_id, content, taint_level, taint_source, taint_hmac,
 			       source_uri, doc_version, chunk_seq, content_hash, embed_model_version
 			FROM rag_chunks WHERE id = ? AND deleted_at IS NULL`, h.ID).
-			Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource,
+			Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC,
 				&chunk.SourceURI, &chunk.DocVersion, &chunk.ChunkSeq, &chunk.ContentHash, &chunk.EmbedModelVersion)
 		if err == nil {
 			if taintSource.Valid {
 				chunk.TaintSource = taintSource.String
 			}
+			chunk.TaintLevel = verifyChunkTaint(hr.boundarySerializer, chunk.ID, chunk.Content, chunk.TaintLevel, chunk.TaintSource, taintHMAC.String)
 			results = append(results, chunk)
 		}
 	}
@@ -286,7 +297,7 @@ func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEm
 
 	// Tier 0 降级：读取所有有 embedding 的 chunk（线性扫描）
 	rows, err := hr.db.QueryContext(ctx, `
-		SELECT id, doc_id, content, taint_level, taint_source, embedding
+		SELECT id, doc_id, content, taint_level, taint_source, taint_hmac, embedding
 		FROM rag_chunks
 		WHERE embedding IS NOT NULL AND embedding != '' AND deleted_at IS NULL
 		LIMIT ?
@@ -309,14 +320,15 @@ func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEm
 		default:
 		}
 		var chunk Chunk
-		var taintSource sql.NullString
+		var taintSource, taintHMAC sql.NullString
 		var embJSON sql.NullString
-		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &embJSON); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC, &embJSON); err != nil {
 			continue
 		}
 		if taintSource.Valid {
 			chunk.TaintSource = taintSource.String
 		}
+		chunk.TaintLevel = verifyChunkTaint(hr.boundarySerializer, chunk.ID, chunk.Content, chunk.TaintLevel, chunk.TaintSource, taintHMAC.String)
 		if !embJSON.Valid || embJSON.String == "" {
 			continue
 		}

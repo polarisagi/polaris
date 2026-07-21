@@ -70,7 +70,7 @@ func TestKnowledgeBase_Search(t *testing.T) {
 }
 
 func TestChunkDocument(t *testing.T) {
-	pipeline := NewDefaultIngestionPipeline(nil, nil, nil, nil)
+	pipeline := NewDefaultIngestionPipeline(nil, nil, nil, nil, nil)
 
 	// Test normal case
 	chunks := pipeline.chunkDocument("Sentence one. Sentence two.\n\nParagraph two.", "doc1", 0, DocumentRef{})
@@ -115,7 +115,7 @@ func TestContextExpander_Hit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	_, _ = db.Exec(`CREATE TABLE rag_chunks (id TEXT, doc_id TEXT, content TEXT, section_path TEXT, taint_level INTEGER, taint_source TEXT, source_uri TEXT, doc_version TEXT, chunk_type TEXT, deleted_at DATETIME)`)
+	_, _ = db.Exec(`CREATE TABLE rag_chunks (id TEXT, doc_id TEXT, content TEXT, section_path TEXT, taint_level INTEGER, taint_source TEXT, taint_hmac TEXT DEFAULT '', source_uri TEXT, doc_version TEXT, chunk_type TEXT, deleted_at DATETIME)`)
 	_, _ = db.Exec(`INSERT INTO rag_chunks (id, doc_id, content, section_path, chunk_type) VALUES ('c1', 'd1', 'hello', 'root,c1', 'parent')`)
 
 	router := store.NewStorageRouter(&mockSqliteStore{Store: nil}, nil)
