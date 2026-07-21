@@ -543,7 +543,7 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
   - 包含 4 个内置工具：`memory_write`（写入/覆盖事实）、`memory_search`（混合检索）、`memory_append`（追加属性）、`memory_expire`（标记失效）。
   - 实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)`。写入底层对接 `SemanticMemWriter.UpsertFact/Archive`；检索对接 `HybridRetriever`。
   - 全部 `SandboxTier=InProcess`、`RiskLevel=Low`，走 PolicyGate 五阶段。定义见 M5 §5-bis，工具层描述见 M7 §3.1。
-- `[CoreMemory]`: 核心工作记忆区。Agent 显式可编辑、持久化、带硬上限的核心状态区。属于 Working Memory，通过 `ZoneCoreMemory` 注入 Prompt，支持通过 `core_memory_edit` 工具（支持 `set/append/delete`）显式管理。用于维护角色约束、长程任务状态等。定义见 ADR-0036。分页置换（GD-14-002，M5 §2.4）：`memory_page_out`/`memory_page_in` 工具允许 LLM 自主把暂不需要每轮可见的块置换到 L2 Semantic Memory（仍可 `memory_search`/`memory_page_in` 找回），不新增独立回收机制，与 Forgetting 的全局被动清理正交。
+- `[CoreMemory]`: 核心工作记忆区。Agent 显式可编辑、持久化、带硬上限的核心状态区。属于 Working Memory，通过 `ZoneCoreMemory` 注入 Prompt，支持通过 `core_memory_edit` 工具（支持 `set/append/delete`）显式管理。用于维护角色约束、长程任务状态等。定义见 ADR-0033 §决策二。分页置换（GD-14-002，M5 §2.4）：`memory_page_out`/`memory_page_in` 工具允许 LLM 自主把暂不需要每轮可见的块置换到 L2 Semantic Memory（仍可 `memory_search`/`memory_page_in` 找回），不新增独立回收机制，与 Forgetting 的全局被动清理正交。
 
 ## §9-quinquies 中断与漂移
 

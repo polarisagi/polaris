@@ -175,7 +175,7 @@ func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFrag
 	defer cancel()
 
 	resultChan := make(chan []ScoredFragment, 1)
-	// 使用 SafeGo 封装：统一 panic 计数到 PanicTotal 指标（ADR-0028/0029），
+	// 使用 SafeGo 封装：统一 panic 计数到 PanicTotal 指标（ADR-0025/0029），
 	// 超时或 panic 时由后续 select 的 rerankCtx.Done() 分支执行降级返回。
 	concurrent.SafeGo(rerankCtx, "search.SafeRerank", func(_ context.Context) {
 		result := s.inner.Rerank(rerankCtx, query, docs)

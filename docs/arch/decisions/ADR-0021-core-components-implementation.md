@@ -10,7 +10,7 @@
 ## 决策
 
 1. **SurpriseIndex 的单例与状态收敛 (L0)**
-   - **实现机制**：在 `internal/observability/metrics/metrics.go` 实现 `SurpriseIndex` 的基础版本。计算过程结合了基于 `embedding` 的 Cosine 距离（采用 EMA 平滑）以及基于 `toolSeq` 的 Jaccard 距离。（注：在 ADR-0028 修复后，`SurpriseCalculator` 接管了主路径 cosine 计算，`ComputeBasic` 保留为 L0 备用路径）
+   - **实现机制**：在 `internal/observability/metrics/metrics.go` 实现 `SurpriseIndex` 的基础版本。计算过程结合了基于 `embedding` 的 Cosine 距离（采用 EMA 平滑）以及基于 `toolSeq` 的 Jaccard 距离。（注：在 ADR-0025 BUG-D 修复后，`SurpriseCalculator` 接管了主路径 cosine 计算，`ComputeBasic` 保留为 L0 备用路径）
    - **并发设计**：使用 `sync.RWMutex` 确保该单例在高并发情况下的读写安全。这不仅满足了可观测的一等公民诉求，同时也提供了 S_PERCEIVE 阶段无思考触发 (FastPath) 的路由基础。
 
 2. **ScriptTester 与沙箱能力下沉 (L1 -> L0 接口)**
@@ -55,4 +55,4 @@
 | 2026-06-13 | WasmTester/WasmExecutor → ScriptTester/ScriptExecutor（与 skill_pipeline.go 实际命名对齐） |
 | 2026-06-17 | 修正文件路径：skill_pipeline.go → internal/extension/skill/skill_pipeline.go；hybrid_retrieve.go → internal/store/search/hybrid_retrieve.go |
 | 2026-07-03 | 代码引用复核补全 |
-| 2026-07-09 | 补充说明：ADR-0028 BUG-D 修复后，`SurpriseCalculator`（L2 learning 层）已接管主路径 cosine 计算，`ComputeBasic` 保留为 L0 备用路径 |
+| 2026-07-09 | 补充说明：ADR-0025 BUG-D 修复后，`SurpriseCalculator`（L2 learning 层）已接管主路径 cosine 计算，`ComputeBasic` 保留为 L0 备用路径 |

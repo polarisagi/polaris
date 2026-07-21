@@ -24,9 +24,9 @@
 
 因此本 ADR 的决策是：**新增编排模式10 `StateGraphExecutor`，在 `PatternDAGExecutor` 之上泛化支持条件边与有界循环，Blackboard 角色不变（仍是持久化任务队列/事件总线）**。这既满足 GD-8-001 的实际能力诉求（条件路由 + 循环反馈），也不违反"暂不推荐大改"的原始审慎判断——两者并不矛盾：大改的是"新增一个模式"，未大改的是"不动 Blackboard 底层机制"。
 
-### 与 ADR-0040 的关系
+### 与 ADR-0040 的关系（原文档已删除，摘要存档于此）
 
-`ADR-0040-cyclic-graph-executor.md` 是一份此前未落地的设计草案（`CyclicGraphExecutor`），提出了几乎同一目标但路径/机制不同的方案（详见该文档 §4 Status）。本 ADR **取代**该草案：解决同一问题（有界循环 + 条件路由），但落点在 `internal/swarm/orchestrator`（跨 Agent 编排层，与 `PatternDAGExecutor` 同级）而非该草案设想的 `internal/agent/pattern`（该路径实际不存在），机制上以节点级 `MaxVisits` + 边级 `Condition` 取代该草案的全局 `state.yaml` 阈值 + 显式 `BackEdge` 类型。
+`ADR-0040-cyclic-graph-executor.md`（`CyclicGraphExecutor`）是一份此前未落地的设计草案，提出了几乎同一目标但路径/机制不同的方案，2026-07-11 被本 ADR 取代后标记 Superseded；2026-07-22 综合清理时确认该草案无实现、无代码引用，正文已并入本节，原文件删除。本 ADR **取代**该草案：解决同一问题（有界循环 + 条件路由），但落点在 `internal/swarm/orchestrator`（跨 Agent 编排层，与 `PatternDAGExecutor` 同级）而非该草案设想的 `internal/agent/pattern`（该路径实际不存在），机制上以节点级 `MaxVisits` + 边级 `Condition` 取代该草案的全局 `state.yaml` 阈值 + 显式 `BackEdge` 类型。
 
 ## 2. Decision (决策)
 

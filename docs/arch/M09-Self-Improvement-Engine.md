@@ -32,7 +32,7 @@
 
 **M9 Engine 启动方式**：`m9Engine.Run(ctx)` 通过 Supervisor Tree（`sv.AddWorker("m9-engine", ...)`）启动，享受 OneForOne 崩溃重启保护。`// go m9Engine.Start(ctx)` 裸 goroutine 已注释禁用。
 
-**CC-2 ResourceBudget 接线**（ADR-0027（Architecture Decision Record，架构决策记录） BUG-2）：`m9Engine.WithBackgroundGate(...)` 必须传入 `budget.NewResourceBudget(sb.TBR, memGuard, featGate)`，禁止传零值 `&budget.ResourceBudget{}`。零值退化为单维认知压力门控，TBR P95 与内存降级等级两个维度失效。`Blackboard→M9` 事件桥 goroutine 须走 `concurrent.SafeGo(ctx, "m9-bb-bridge", ...)` (XR-14，ADR-0027 BUG-3)。
+**CC-2 ResourceBudget 接线**（ADR-0025（Architecture Decision Record，架构决策记录） BUG-2）：`m9Engine.WithBackgroundGate(...)` 必须传入 `budget.NewResourceBudget(sb.TBR, memGuard, featGate)`，禁止传零值 `&budget.ResourceBudget{}`。零值退化为单维认知压力门控，TBR P95 与内存降级等级两个维度失效。`Blackboard→M9` 事件桥 goroutine 须走 `concurrent.SafeGo(ctx, "m9-bb-bridge", ...)` (XR-14，ADR-0025 BUG-3)。
 
 ## 1. 五条无梯度自改进路线（CANONICAL SOURCE）
 
