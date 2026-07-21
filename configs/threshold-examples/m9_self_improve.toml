@@ -10,3 +10,5 @@
 'canary.dwell_per_step_hours_ht0' = 1
 'surprise_route.low_threshold' = 0.3
 'surprise_route.high_threshold' = 0.6
+'qlora.train_batch_size' = 64
+'prm.train_batch_size' = 64

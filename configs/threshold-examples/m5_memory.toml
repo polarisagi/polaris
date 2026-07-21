@@ -8,3 +8,8 @@
 'core.memory_total_max_kb' = 8
 'rrf.k' = 60
 'graph.max_depth' = 3
+'reflection.task_type_whitelist' = ['complex_reasoning', 'coding', 'research', 'debug', 'analysis']
+'reflection.min_replan_count' = 2
+'drift.check_interval_hours' = 168
+'drift.threshold' = 0.05
+'drift.anchor_sample_rate' = 0.02
