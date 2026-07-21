@@ -244,7 +244,7 @@ DDL 见 `internal/protocol/schema/004_semantic_memory.sql`。图存储使用 [St
 
 **[接口约束]** SemanticMemory 的事实/关系写入方法必须在 `internal/protocol/interfaces.go` 中声明，实现见 `internal/memory/`；所有写入必经 MutationBus，禁止绕过 M2 单写者约束直接执行 SQL。实体生命周期管理（标记废弃、列举活跃、UserProfile 读写）属于轻量同步读写，走直接 SQL（不经 MutationBus）。Embedding 存 BLOB（float32→float16 量化，量化工具位于 `internal/llm/`）。
 
-**[XR-16 读写对称]** `taint_level` 写路径已有 only-up 语义（ON CONFLICT 用 `MAX(taint_level, excluded.taint_level)`）。`GetEntity` 读路径同步：SELECT 包含 `COALESCE(taint_level, 0)`，Scan 绑定 `ent.TaintLevel`（ADR-0027（Architecture Decision Record，架构决策记录） BUG-4）。任何绕过此绑定的直读路径视为 XR-16 违规。
+**[XR-16 读写对称]** `taint_level` 写路径已有 only-up 语义（ON CONFLICT 用 `MAX(taint_level, excluded.taint_level)`）。`GetEntity` 读路径同步：SELECT 包含 `COALESCE(taint_level, 0)`，Scan 绑定 `ent.TaintLevel`（ADR-0025（Architecture Decision Record，架构决策记录） BUG-4）。任何绕过此绑定的直读路径视为 XR-16 违规。
 
 ### 4.3 QueryClassifier + RetrievalRouter
 

@@ -94,7 +94,7 @@ M1 Embedder 模型切换致维度变更时，禁止全量同步重嵌 (`[Tier-0-
 | 类型 | 叶节点 | 父节点 | 特殊处理 | 实现状态 |
 |------|--------|--------|---------|---------|
 | Markdown | 按段落,~256 tokens,语义断点 | 完整段落+章节路径+前文 | 表格保留schema,代码块保留语言 | ✅ MarkdownChunker（标题边界） |
-| 代码 | 按 func/class 边界 | 完整函数体+文件/包路径 | import block 独立索引 | ✅ CodeChunker；tree-sitter AST 已实现。CGO 依赖为 ADR-0011（Architecture Decision Record，架构决策记录） 的受限例外，理由与边界见 `docs/arch/decisions/ADR-0034-tree-sitter-cgo-exception.md`；`chunker_cgo.go`（`//go:build cgo`）/`chunker_nocgo.go`（`//go:build !cgo`）双实现分流，`CGO_ENABLED=0` 交叉编译自动降级为字符串匹配 fallback；`go.mod` 须用 `CGO_ENABLED=1 go mod tidy` 维护，避免 `go-tree-sitter` 被误标 `// indirect`；`chunker_treesitter_test.go` 含嵌套注释内 `func ` 字样的差异化回归测试（验证 fallback 会切错、tree-sitter 切分正确） |
+| 代码 | 按 func/class 边界 | 完整函数体+文件/包路径 | import block 独立索引 | ✅ CodeChunker；tree-sitter AST 已实现。CGO 依赖为 ADR-0011（Architecture Decision Record，架构决策记录） 的受限例外，理由与边界见 ADR-0011 §受限例外：Tree-sitter CGO 依赖；`chunker_cgo.go`（`//go:build cgo`）/`chunker_nocgo.go`（`//go:build !cgo`）双实现分流，`CGO_ENABLED=0` 交叉编译自动降级为字符串匹配 fallback；`go.mod` 须用 `CGO_ENABLED=1 go mod tidy` 维护，避免 `go-tree-sitter` 被误标 `// indirect`；`chunker_treesitter_test.go` 含嵌套注释内 `func ` 字样的差异化回归测试（验证 fallback 会切错、tree-sitter 切分正确） |
 | PDF | 布局感知段落+表格单独提 | 完整段落+章节标题+页码 | 图片提取alt text | 🟡 `internal/knowledge/parsers.go` `PDFChunker` 已用 pdfcpu（`api.ExtractContent`）做文本提取并接入 `DefaultChunker` 的 `case "pdf"` 路由，但提取后仍交给 `PlainTextChunker` 处理，表格/标题结构等版式感知（layout-aware）尚未实现 |
 | Web | main content 段落,~256 tokens | 完整section/article | 去除导航/广告/页脚 | ✅ PlainTextChunker（双换行边界） |
 | 对话 | 按turn切分 | 前后2turn完整上下文 | 标注speaker | ✅ PlainTextChunker |
@@ -160,7 +160,7 @@ EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `inter
 
 触发: 文档摄入后, Ingester 通过 Outbox 写 graph_build_task。GraphBuildWorker 由 M2 全局 Outbox Worker 消费（注册于 handler 映射，见 §3.2），不独立开启内部轮询 goroutine。Phase 1-5 完整流程见代码。
 
-**CC-2 ResourceBudget 接线**（ADR-0027 BUG-2）：`graphPipeline.WithBackgroundGate(...)` 须传 `budget.NewResourceBudget(sb.TBR, graphGuard, graphGate)`（从 `sb.AutoConf` nil-safe 提取）；禁止传零值 `&budget.ResourceBudget{}`，否则内存降级与 TBR P95 两个维度失效，图重建任务在系统高压时无法被正确抑制。
+**CC-2 ResourceBudget 接线**（ADR-0025 BUG-2）：`graphPipeline.WithBackgroundGate(...)` 须传 `budget.NewResourceBudget(sb.TBR, graphGuard, graphGate)`（从 `sb.AutoConf` nil-safe 提取）；禁止传零值 `&budget.ResourceBudget{}`，否则内存降级与 TBR P95 两个维度失效，图重建任务在系统高压时无法被正确抑制。
 
 **DocFetcher 注入**: `EntityExtractor.Extract` 接收文档文本（非 docID），调用方通过 `GraphBuildPipeline.SetDocFetcher(DocFetcher)` 注入内容获取器；未注入时降级为以 docID 字符串作为占位文本执行规则提取。LLM 路径通过 `ProviderLLMClient` 适配，规则路径为词典匹配+正则模式。
 

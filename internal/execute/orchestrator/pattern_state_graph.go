@@ -3,7 +3,7 @@ package orchestrator
 // StateGraphExecutor 显式状态图编排引擎（编排模式10，GD-8-001）。
 //
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3-quinquies
-// 决策记录: docs/arch/decisions/ADR-0040-state-graph-orchestration.md
+// 决策记录: docs/arch/decisions/ADR-0041-state-graph-orchestration.md
 //
 // 设计动机：PatternDAGExecutor（编排模式9）已将执行控制流从"Blackboard 去中心化
 // 认领"收敛为"显式拓扑驱动"，但要求严格无环、静态依赖，无法表达 LangGraph 式

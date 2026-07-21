@@ -6,7 +6,7 @@
 // 设计依据:
 //   - HE-Rule 2（可验证执行，物理断裂 > 概率过滤）
 //   - ADR-0011（purego FFI 零 CGO）
-//   - ADR-0028（Tier-0 P0 修复：SandboxNativeOS 替代 ErrTier0SandboxLimit）
+//   - ADR-0025（Tier-0 P0 修复：SandboxNativeOS 替代 ErrTier0SandboxLimit）
 //
 // 循环 import 规避：
 //   - internal/tool/sandbox（FFI 绑定层）反向引用 internal/sandbox（接口层）。
