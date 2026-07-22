@@ -97,6 +97,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetInferenceRouter(sb.Router)
 	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}, channel.WithSafeDialer(sb.Dialer))
 	httpServer.SetChannelStarter(channelMgr)
+	if ca := httpServer.ChannelsAdmin(); ca != nil {
+		channelMgr.SetMessageHandler(ca.DispatchChannelMessage)
+	}
 
 	httpServer.SetAuditTrail(sb.AuditTrail)
 	// 2026-07-12 修复：此前从未调用，s.outboxWriter 恒为 nil，导致

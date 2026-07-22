@@ -75,6 +75,14 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// DispatchChannelMessage 导出入口，供 channel.Manager 作为 poller 入站处理器接线。
+func (h *ChannelsAdmin) DispatchChannelMessage(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {
+	// 复用 goroutine-per-message 模型，与 Webhook 入口保持一致并避免阻塞 poller 长连接
+	concurrent.SafeGo(context.Background(), "gateway.sysadmin.dispatch_channel_message", func(ctx context.Context) {
+		h.dispatchChannelMessage(ctx, channelType, channelID, cfg, msg)
+	})
+}
+
 // dispatchChannelMessage 推理 + 发回平台。被 webhook handler 和各平台 poller 共用。
 func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) { //nolint:gocyclo
 
