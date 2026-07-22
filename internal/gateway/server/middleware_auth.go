@@ -32,6 +32,7 @@ func isLoopback(ip string) bool {
 // healthPathSet 是精确豁免鉴权的健康/指标端点白名单。
 // [P1修复] 原 HasSuffix("z") 匹配过宽（任何以 z 结尾的路径均被豁免），
 // 改为显式白名单，防止类似 /v1/providers/fuzz 等路径意外跳过鉴权。
+//
 //nolint:gochecknoglobals
 var healthPathSet = map[string]struct{}{
 	"/healthz": {},
