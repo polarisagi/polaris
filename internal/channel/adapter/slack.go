@@ -171,3 +171,54 @@ func jsonStr(m map[string]json.RawMessage, key string) string {
 	}
 	return ""
 }
+
+func init() { Register(&SlackAdapter{}) }
+
+type SlackAdapter struct{}
+
+func (a *SlackAdapter) Type() string { return "slack" }
+
+func (a *SlackAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw map[string]any
+	if json.Unmarshal(body, &raw) != nil {
+		return protocol.ChannelMessage{}
+	}
+	if ev, ok := raw["event"].(map[string]any); ok {
+		text, _ := ev["text"].(string)
+		chatID, _ := ev["channel"].(string)
+		userID, _ := ev["user"].(string)
+		botID, _ := ev["bot_id"].(string)
+		if botID != "" {
+			return protocol.ChannelMessage{}
+		}
+		return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
+	}
+	return protocol.ChannelMessage{}
+}
+
+func (a *SlackAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	botToken, _ := cfg["bot_token"].(string)
+	if botToken == "" {
+		slog.Warn("slack: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := SlackSendMessage(ctx, host.HTTPClient(), botToken, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "slack", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "slack: send message", err)
+	}
+	return nil
+}
+
+func (a *SlackAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	botToken, _ := cfg["bot_token"].(string)
+	appToken, _ := cfg["app_token"].(string)
+	if botToken == "" || appToken == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.slack."+channelID, func(ctx context.Context) {
+		RunSlackPoller(ctx, host, channelID, botToken, appToken, cfg)
+	})
+	return true
+}
