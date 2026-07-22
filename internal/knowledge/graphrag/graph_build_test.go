@@ -164,7 +164,7 @@ func TestGraphWriter_Disambiguation(t *testing.T) {
 	lc := &mockLeaseChecker{}
 	dw := store.NewDatabaseWriter(db, lc)
 
-	gw := NewGraphWriter(dw, fetcher)
+	gw := &GraphWriter{bus: dw, fetcher: fetcher}
 
 	ctx := context.Background()
 

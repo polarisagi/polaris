@@ -42,10 +42,3 @@ type SkillMeta struct {
 	// NeedsCompatCheck indicates reverse dependencies need compatibility testing
 	NeedsCompatCheck bool
 }
-type Skill struct {
-	Name      string
-	Version   int64
-	Signature []byte
-	Content   string
-	Trust     TrustTier
-}

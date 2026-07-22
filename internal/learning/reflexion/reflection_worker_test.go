@@ -73,7 +73,7 @@ func TestReflectionWorker(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Whitelisted_TaskType", func(t *testing.T) {
-		rw := NewReflectionWorker(nil, nil, nil)
+		rw := NewReflectionWorkerWithConfig(nil, nil, nil, ReflectionConfig{})
 		if !rw.isWhitelisted("coding") {
 			t.Errorf("Expected coding to be whitelisted")
 		}
@@ -113,7 +113,7 @@ func TestReflectionWorker(t *testing.T) {
 				return nil, nil
 			},
 		}
-		rw := NewReflectionWorker(mem, nil, nil)
+		rw := NewReflectionWorkerWithConfig(mem, nil, nil, ReflectionConfig{})
 		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0, true)
 		if err != nil {
 			t.Errorf("Expected nil error")
@@ -150,7 +150,7 @@ func TestReflectionWorker(t *testing.T) {
 			},
 		}
 
-		rw := NewReflectionWorker(mem, prov, refMem)
+		rw := NewReflectionWorkerWithConfig(mem, prov, refMem, ReflectionConfig{})
 		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0, true)
 		if err != nil {
 			t.Errorf("ConsolidateReflections failed: %v", err)
@@ -176,7 +176,7 @@ func TestReflectionWorker(t *testing.T) {
 			},
 		}
 
-		rw := NewReflectionWorker(mem, prov, nil)
+		rw := NewReflectionWorkerWithConfig(mem, prov, nil, ReflectionConfig{})
 		err := rw.ConsolidateReflections(ctx, "task1", "coding", 0, true)
 		if err == nil {
 			t.Errorf("Expected JSON parse error")

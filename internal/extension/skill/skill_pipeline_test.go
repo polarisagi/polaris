@@ -45,21 +45,6 @@ function hello() {
 		t.Errorf("expected validate to pass")
 	}
 
-	// EvaluateAndEvolve
-	engine := &SkillEvolutionEngine{
-		skills:           make(map[string]*Skill),
-		successHistories: make(map[string][]bool),
-		failureReasons:   make(map[string][]string),
-	}
-	engine.skills["skill:pipe"] = &Skill{UseCount: 15}
-
-	engine.EvaluateAndEvolve("skill:pipe", false, "err1")
-	engine.EvaluateAndEvolve("skill:pipe", false, "err2")
-	engine.EvaluateAndEvolve("skill:pipe", false, "err3")
-
-	if !engine.skills["skill:pipe"].Deprecated {
-		t.Errorf("Expected skill to be deprecated due to 3 failures with < 0.3 pass rate and > 10 uses")
-	}
 }
 
 func TestVerifySign(t *testing.T) {

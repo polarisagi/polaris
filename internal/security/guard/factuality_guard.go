@@ -2,7 +2,6 @@ package guard
 
 import (
 	"github.com/polarisagi/polaris/internal/llm/safecall"
-	"github.com/polarisagi/polaris/internal/security/policy"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -211,27 +209,6 @@ func (fg *FactualityGuard) emitFail(layer, content, reason string) {
 		Content:     summary,
 		Reason:      reason,
 	})
-}
-
-// AddToGate 将 D6 FactualityGuard 注册为 PolicyGate 的 Permit 前置检查钩子。
-// 在 gate 评估通过后由调用方在 LLM 输出路径上插入 FactualityGuard.Verify。
-// 直接调用 gate.AddForbidRule 添加内容核验失败的阻断规则。
-func (fg *FactualityGuard) AddToGate(gate *policy.Gate) error {
-	if gate == nil {
-		return apperr.New(apperr.CodeInternal, "factuality_guard: gate is nil")
-	}
-	gate.AddForbidRule(policy.ForbidRule{
-		Name:   "factuality_check_failed",
-		Reason: "D6 FactualityGuard 核验失败：内容真实性不通过（引用/数值/语义）",
-		MatchFn: func(_, action, _ string, ctx map[string]any) bool {
-			if action != "emit_response" {
-				return false
-			}
-			failed, _ := ctx["factuality_failed"].(bool)
-			return failed
-		},
-	})
-	return nil
 }
 
 // truncate 截断字符串到最多 maxRunes 个字符。

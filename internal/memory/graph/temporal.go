@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -40,38 +39,4 @@ func (te *TemporalExpirer) ExpireStale(ctx context.Context) (int64, error) {
 		return 0, apperr.Wrap(apperr.CodeInternal, "temporal_expirer: rows affected", err)
 	}
 	return affected, nil
-}
-
-// SetValidWindow 为实体设置有效时间窗（写入时调用）。
-// duration == 0 表示永久有效（valid_until = NULL）。
-func SetValidWindow(validFromMs int64, duration time.Duration) (validFrom, validUntil int64) {
-	validFrom = validFromMs
-	if duration <= 0 {
-		return validFrom, 0 // 0 代表 NULL
-	}
-	return validFrom, validFromMs + duration.Milliseconds()
-}
-
-// IsValidAt 检查时间戳是否在有效窗内（用于内存过滤，无需数据库）。
-func IsValidAt(validFrom, validUntil int64, nowMs int64) bool {
-	if validFrom > 0 && nowMs < validFrom {
-		return false
-	}
-	if validUntil > 0 && nowMs > validUntil {
-		return false
-	}
-	return true
-}
-
-// FormatValidWindow 调试用格式化。
-func FormatValidWindow(validFrom, validUntil int64) string {
-	from := "always"
-	if validFrom > 0 {
-		from = time.UnixMilli(validFrom).Format(time.RFC3339)
-	}
-	until := "forever"
-	if validUntil > 0 {
-		until = time.UnixMilli(validUntil).Format(time.RFC3339)
-	}
-	return fmt.Sprintf("[%s → %s]", from, until)
 }

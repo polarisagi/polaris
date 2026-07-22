@@ -53,11 +53,6 @@ type GraphTraverser struct {
 	db protocol.SQLQuerier
 }
 
-// NewGraphTraverser 创建图遍历器。
-func NewGraphTraverser(db protocol.SQLQuerier) *GraphTraverser {
-	return &GraphTraverser{db: db}
-}
-
 // TraverseChunks 以 queryText 匹配种子实体，BFS 扩散（depth=2），
 // 收集关联 rag_chunks，返回评分 Chunk 列表（按 BFS 深度衰减评分）。
 //

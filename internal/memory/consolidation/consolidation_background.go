@@ -20,8 +20,8 @@ func NewForgettingManager(store protocol.Store, cognitive protocol.CognitiveSear
 		cognitive:         cognitive,
 		decayRate:         decayRate,
 		salienceThreshold: 0.15,
-		qLearner:          NewQLearner(0.1, 0.9),
-		archiver:          NewColdArchiver(store),
+
+		archiver: NewColdArchiver(store),
 	}
 }
 
@@ -217,27 +217,6 @@ func (fm *ForgettingManager) processForgettableItemKV(ctx context.Context, id st
 		_ = fm.store.Delete(ctx, key)
 		_ = fm.store.Delete(ctx, tombstoneKey)
 	}
-}
-
-// QLearner Q-Learning 熵门控效用衰减。
-// 用于自适应调整 salienceThreshold——高熵环境下更积极遗忘。
-type QLearner struct {
-	states map[string]float64
-	alpha  float64 // 学习率
-	gamma  float64 // 折扣因子
-}
-
-func NewQLearner(alpha, gamma float64) *QLearner {
-	return &QLearner{
-		states: make(map[string]float64),
-		alpha:  alpha,
-		gamma:  gamma,
-	}
-}
-
-// Update 更新状态值。
-func (ql *QLearner) Update(state string, reward float64) {
-	ql.states[state] += ql.alpha * (reward - ql.states[state])
 }
 
 // ColdArchiver 冷归档器。

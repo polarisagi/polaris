@@ -45,15 +45,6 @@ type ReflectionWorker struct {
 	cfg        ReflectionConfig
 }
 
-func NewReflectionWorker(episodic protocol.EpisodicMemory, provider protocol.Provider, reflection protocol.ReflectionMemory) *ReflectionWorker {
-	return &ReflectionWorker{
-		episodic:   episodic,
-		provider:   provider,
-		reflection: reflection,
-		cfg:        defaultReflectionConfig(),
-	}
-}
-
 // NewReflectionWorkerWithConfig 创建可配置触发策略的 ReflectionWorker。
 func NewReflectionWorkerWithConfig(episodic protocol.EpisodicMemory, provider protocol.Provider, reflection protocol.ReflectionMemory, cfg ReflectionConfig) *ReflectionWorker {
 	def := defaultReflectionConfig()

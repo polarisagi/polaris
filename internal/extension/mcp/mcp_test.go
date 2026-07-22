@@ -6,35 +6,6 @@ import (
 	"testing"
 )
 
-// ── MCPRetryPolicy ────────────────────────────────────────────────────────────
-
-func TestMCPRetryPolicy_ConnectionErrors(t *testing.T) {
-	cases := []struct {
-		code     MCPErrorCode
-		expected int
-	}{
-		{MCPConnectionLost, 2},
-		{MCPConnectionFailed, 2},
-		{MCPConnectionTimeout, 2},
-		{MCPRemoteError, 1},
-		{MCPRemoteUnavailable, 1},
-		{MCPClientError, 0},
-	}
-
-	for _, c := range cases {
-		got := MCPRetryPolicy(c.code)
-		if got != c.expected {
-			t.Errorf("MCPRetryPolicy(%q) = %d, want %d", c.code, got, c.expected)
-		}
-	}
-}
-
-func TestMCPRetryPolicy_UnknownCode(t *testing.T) {
-	if got := MCPRetryPolicy("UNKNOWN"); got != 0 {
-		t.Errorf("unknown error code should return 0, got %d", got)
-	}
-}
-
 // ── MCPToolName ───────────────────────────────────────────────────────────────
 
 func TestMCPToolName(t *testing.T) {

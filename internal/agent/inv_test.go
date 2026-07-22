@@ -64,7 +64,6 @@ func Test_inv_M4_03_PromptBuilderDeterminism(t *testing.T) {
 		b := protocol.NewPromptBuilder()
 		b.WriteInstruction(safe)
 		b.WriteSystemEnvironment("OS: linux | Arch: amd64")
-		b.WriteUserInstruction(safe)
 		return b.Build()
 	}
 

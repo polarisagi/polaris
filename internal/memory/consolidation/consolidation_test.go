@@ -85,7 +85,6 @@ func TestConsolidationPipeline(t *testing.T) {
 
 	// Test ForgettingManager
 	fm := NewForgettingManager(store, nil, 0.01)
-	fm.qLearner.Update("state", 1.0)
 
 	_ = store.Put(ctx, []byte("events:e100"), []byte(`{"id":"e100","topic":"memory","salience":0.01,"occurred_at":0}`))
 	err = fm.PeriodicCleanup()

@@ -23,7 +23,7 @@ func TestGraphWriter_UpsertEntity(t *testing.T) {
 	// }
 
 	// Test Upsert without fetcher
-	gw := NewGraphWriter((*store.DatabaseWriter)(nil), nil)
+	gw := &GraphWriter{bus: (*store.DatabaseWriter)(nil), fetcher: nil}
 	_ = gw // just to use it
 	// We need to bypass the type restriction. In production, this requires proper initialization of DatabaseWriter
 	// Instead, let's just write tests for ProviderLLMClient

@@ -241,6 +241,6 @@ type ForgettingManager struct {
 	cognitive         protocol.CognitiveSearcher
 	decayRate         float64 // 0.01/日
 	salienceThreshold float64
-	qLearner          *QLearner
-	archiver          *ColdArchiver
+
+	archiver *ColdArchiver
 }

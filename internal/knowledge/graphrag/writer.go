@@ -23,10 +23,6 @@ type GraphWriter struct {
 	fetcher EntityFetcher
 }
 
-func NewGraphWriter(bus *store.DatabaseWriter, fetcher EntityFetcher) *GraphWriter {
-	return &GraphWriter{bus: bus, fetcher: fetcher}
-}
-
 // UpsertEntity 提交实体写入意图。写入前通过余弦相似度消歧，LWW 语义保留 version 较高者。
 func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 	if gw.fetcher != nil {
