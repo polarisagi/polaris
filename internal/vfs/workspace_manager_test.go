@@ -128,3 +128,37 @@ func TestWorkspaceManager_SweepEphemeralOrphans(t *testing.T) {
 		t.Fatalf("expected quota released after sweep, got totalSize=%d", wm.totalSize)
 	}
 }
+
+func TestWorkspaceManager_PathTraversal(t *testing.T) {
+	root := t.TempDir()
+	wm := NewWorkspaceManager(root, 1<<30)
+
+	tests := []struct {
+		name    string
+		relPath string
+		wantErr bool
+	}{
+		{"Normal relative path", "a/b/c.txt", false},
+		{"Empty path", "", true},
+		{"Absolute path", "/etc/passwd", true},
+		{"Simple traversal", "../passwd", true},
+		{"Hidden traversal", "a/../../passwd", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := wm.WriteFile(tt.relPath, []byte("test"))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("WriteFile(%q) error = %v, wantErr %v", tt.relPath, err, tt.wantErr)
+			}
+			_, err = wm.ReadFile(tt.relPath, -1)
+			if (err != nil) != tt.wantErr {
+				// ReadFile may return CodeNotFound if WriteFile failed, which is expected.
+				// However, the traversal check itself should fail with InvalidInput.
+				if tt.wantErr && !strings.Contains(err.Error(), "InvalidInput") {
+					t.Errorf("ReadFile(%q) error = %v, expected traversal rejection", tt.relPath, err)
+				}
+			}
+		})
+	}
+}
