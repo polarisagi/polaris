@@ -383,7 +383,6 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		slog.Error("polaris: POLICY GATE HITL TRIGGERED — human review required",
 			"component", "policy_gate",
 			"action", "hitl_callback",
-			"note", "TODO: wire hitlGateway.Notify here after gateway initialization",
 		)
 		ks.ReportError()
 	})

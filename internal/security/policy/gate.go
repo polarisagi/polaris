@@ -102,6 +102,13 @@ func (g *Gate) WithEvalTimeout(d time.Duration) *Gate {
 	return g
 }
 
+// SetOnKillSwitch 允许在构造后覆盖 onKillSwitch 毁调（用于解决启动期循环依赖，如等待 HITL 网关就绪后注入）。
+func (g *Gate) SetOnKillSwitch(fn func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.onKillSwitch = fn
+}
+
 // SyncCedarPolicies 加载 Cedar 策略到 Rust FFI 引擎（替换全部已有策略）。
 func (g *Gate) SyncCedarPolicies(policies string) error {
 	if g.cedar != nil {
@@ -292,8 +299,13 @@ func (g *Gate) evaluate(ctx context.Context, principal, action, resource string,
 
 func (g *Gate) recordFailure() {
 	n := g.consecutiveFail.Add(1)
-	if n >= 10 && g.onKillSwitch != nil {
-		g.onKillSwitch()
+	if n >= 10 {
+		g.mu.RLock()
+		onKS := g.onKillSwitch
+		g.mu.RUnlock()
+		if onKS != nil {
+			onKS()
+		}
 	}
 }
 

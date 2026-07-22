@@ -231,7 +231,13 @@ func runWasmtimeExecuteFFI(wasmBytes []byte, inputJSON string, workspaceDir stri
 	jsonBytes := readAndFreeWasmtimeBytes(outJSON, outJSONLen)
 
 	if rc != 0 {
-		return wasmtimeExecResult{"", apperr.New(apperr.CodeInternal, fmt.Sprintf("wasmtime_execute failed (code %d): %s", rc, errStr))}
+		code := apperr.CodeInternal
+		// -2: WASMTIME_ERR_COMPILE (编译错误)
+		// -3: WASMTIME_ERR_EXECUTE (运行时 panic、timeout 等 guest 侧错误)
+		if rc == -2 || rc == -3 {
+			code = apperr.CodeInvalidInput
+		}
+		return wasmtimeExecResult{"", apperr.New(code, fmt.Sprintf("wasmtime_execute failed (code %d): %s", rc, errStr))}
 	}
 
 	return wasmtimeExecResult{string(jsonBytes), nil}
