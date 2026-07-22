@@ -51,6 +51,7 @@ mock/占位=倾向 DELETE"，禁止仅凭 grep 命中数批量处理。
 | `IncidentToEvalConverter.ReviewAndPromote` | 既有 memory 记录：M12 §6 HITL 人工审核 API 入口刻意 deferred |
 | `SafeString.Content` | 非遗漏：专属 `Test_inv_TaintContentCallAudit` 审计每处 `.Content()` 调用，是刻意收窄的安全 accessor，`TaintedString.Content`（另一独立方法）才是被广泛使用的那个，本轮核实未发现混淆 |
 | `authcontext.WithMaxExpandTokens` | 与同文件 `WithWorkDir`（已被 ADR-0052 接线）同类 Option，生产侧默认值已够用，无 product 侧配置需求，比照既定 DEFER 处理 |
+| `ffi.LlamaEmbed`/`LlamaRerank` | ADR-0051/0053，Tier1 本地推理模型选型仍需产品侧决策，非工程可单方拍板；本表初稿遗漏此行，2026-07-22 复查时补录（见"复查记录"节） |
 
 ### 本次新发现并已修复（3 项）
 
@@ -179,6 +180,20 @@ CommunityGenerativeSummarizer 是同一类"生产者/消费者都在，中间没
   -- -D warnings`：0 warnings
 - 追加一轮 `go build ./...`/`go vet ./...`/`make lint`/`go test ./...`
   （102 包全通过，0 FAIL）：确认 `boot_memory.go` 改动无回归
+
+### 复查记录：LlamaEmbed/LlamaRerank 表格遗漏（2026-07-22 追加）
+
+用户复跑 `deadcode ./cmd/polaris/...` 后列表仍有 44 项，逐一比对发现
+`internal/ffi/llama.go` 的 `LlamaEmbed`/`LlamaRerank` 未出现在本 ADR 上方
+DEFER 表格中（原稿撰写时的遗漏，非新回归）。核查 `docs/arch/decisions/`
+确认 ADR-0051 §（`LlamaEmbed`/`LlamaRerank` → "DEFER（沿用既有结论）"，
+"前序会话已明确标记为需要用户/产品侧输入的选型决策，非单方工程判断可拍板"）
+与 ADR-0053（同一结论"沿用"）均已收录此项，`docs/arch/M01-Inference-Runtime.md`
+亦确认其架构角色（`LocalAdapter` Tier1 本地推理，`internal/ffi/llama.go`
+purego 懒绑定 → `rust/substrate/src/llama_infer/`，`tier1` Cargo feature
+门控）——即待决策的是"默认本地 Embedding/Rerank 模型选型"，不是代码本身有
+问题。已补录表格行，本 ADR 记录的 46 项 DEFER 数字口径不变，仅补全表格
+完整性。
 
 ## 引用代码
 
