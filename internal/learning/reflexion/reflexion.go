@@ -210,7 +210,10 @@ func (re *ReflexionEngine) replaySuccess(
 		}
 	}
 
-	concurrent.SafeGo(context.Background(), "reflexion-replay-success", func(ctx context.Context) {
+	// GR-7-002: 补齐超时上界（默认 5 分钟），防挂起
+	bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	concurrent.SafeGo(bgCtx, "reflexion-replay-success", func(ctx context.Context) {
+		defer cancel()
 		if re.llmInfer == nil {
 			return
 		}
