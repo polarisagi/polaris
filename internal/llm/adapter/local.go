@@ -54,8 +54,8 @@ func (a *LocalAdapter) Capabilities() types.ProviderCapabilities { return a.caps
 func (a *LocalAdapter) Tokenizer() protocol.TokenizerAdapter     { return &llmparent.SimpleTokenizer{} }
 
 // LoadModel 实现 protocol.LocalProvider。
-func (a *LocalAdapter) LoadModel(_ context.Context, modelPath string, opts protocol.LocalModelOptions) error {
-	resp, err := ffi.LlamaLoad(ffi.LlamaLoadRequest{
+func (a *LocalAdapter) LoadModel(ctx context.Context, modelPath string, opts protocol.LocalModelOptions) error {
+	resp, err := ffi.LlamaLoad(ctx, ffi.LlamaLoadRequest{
 		ModelPath:  modelPath,
 		NCtx:       opts.NCtx,
 		NGPULayers: opts.NGPULayers,
@@ -72,8 +72,8 @@ func (a *LocalAdapter) LoadModel(_ context.Context, modelPath string, opts proto
 }
 
 // UnloadModel 实现 protocol.LocalProvider。
-func (a *LocalAdapter) UnloadModel(_ context.Context) error {
-	if err := ffi.LlamaUnload(); err != nil {
+func (a *LocalAdapter) UnloadModel(ctx context.Context) error {
+	if err := ffi.LlamaUnload(ctx); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "local adapter: unload model", err)
 	}
 	a.modelID = "local:unloaded"
@@ -81,16 +81,16 @@ func (a *LocalAdapter) UnloadModel(_ context.Context) error {
 }
 
 // EvictKVCache 实现 protocol.LocalProvider。
-func (a *LocalAdapter) EvictKVCache(_ context.Context) error {
-	if err := ffi.LlamaEvictKVCache(); err != nil {
+func (a *LocalAdapter) EvictKVCache(ctx context.Context) error {
+	if err := ffi.LlamaEvictKVCache(ctx); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "local adapter: evict kv cache", err)
 	}
 	return nil
 }
 
 // LocalStatus 实现 protocol.LocalProvider。
-func (a *LocalAdapter) LocalStatus(_ context.Context) (protocol.LocalModelStatus, error) {
-	s, err := ffi.LlamaStatus()
+func (a *LocalAdapter) LocalStatus(ctx context.Context) (protocol.LocalModelStatus, error) {
+	s, err := ffi.LlamaStatus(ctx)
 	if err != nil {
 		return protocol.LocalModelStatus{}, apperr.Wrap(apperr.CodeInternal, "local adapter: status", err)
 	}
@@ -135,7 +135,7 @@ func toLocalMessages(msgs []types.Message) []ffi.LlamaChatMessage {
 	return out
 }
 
-func (a *LocalAdapter) Infer(_ context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+func (a *LocalAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
 	options := &types.InferOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -149,7 +149,7 @@ func (a *LocalAdapter) Infer(_ context.Context, msgs []types.Message, opts ...ty
 	if options.ResponseFormat != nil && options.ResponseFormat.Type == "gbnf" {
 		req.Grammar = options.ResponseFormat.Grammar
 	}
-	resp, err := ffi.LlamaGenerate(req)
+	resp, err := ffi.LlamaGenerate(ctx, req)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "local adapter: infer", err)
 	}

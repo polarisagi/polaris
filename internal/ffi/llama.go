@@ -38,10 +38,8 @@ const llamaFFITarget = "llama"
 // recordLlamaFFICall 记录一次 llama_infer_* FFI 调用的延迟与失败情况。
 // 2026-07-04 审计修复（Task 14）：InstrFFILatencyMs/InstrFFIErrorTotal 此前已定义
 // 但本文件（本地推理唯一的高频 FFI 调用路径）从未记录过，FFI 健康度不可观测。
-// 各导出函数无 context.Context 入参（历史签名），此处用 context.Background()
-// 仅作 OTel API 要求的占位符，不影响调用取消语义。
-func recordLlamaFFICall(start time.Time, err error) {
-	metrics.RecordFFICall(context.Background(), llamaFFITarget, float64(time.Since(start).Milliseconds()), err)
+func recordLlamaFFICall(ctx context.Context, start time.Time, err error) {
+	metrics.RecordFFICall(ctx, llamaFFITarget, float64(time.Since(start).Milliseconds()), err)
 }
 
 // ─── purego 函数指针（懒绑定）────────────────────────────────────────────────
@@ -191,9 +189,9 @@ type LlamaStatusResponse struct {
 // ─── 公开 API ─────────────────────────────────────────────────────────────
 
 // LlamaLoad 加载/热切换本地 GGUF 模型（单槽位，覆盖式替换旧模型）。
-func LlamaLoad(req LlamaLoadRequest) (result *LlamaLoadResponse, err error) {
+func LlamaLoad(ctx context.Context, req LlamaLoadRequest) (result *LlamaLoadResponse, err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "llama_infer_load: dylib/符号不可用", err)
 	}
@@ -218,9 +216,9 @@ func LlamaLoad(req LlamaLoadRequest) (result *LlamaLoadResponse, err error) {
 }
 
 // LlamaUnload 卸载当前模型，释放所有资源。未加载时是幂等 no-op。
-func LlamaUnload() (err error) {
+func LlamaUnload(ctx context.Context) (err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "llama_infer_unload: dylib/符号不可用", err)
 	}
@@ -234,9 +232,9 @@ func LlamaUnload() (err error) {
 }
 
 // LlamaGenerate 对话生成（chat template + sampler chain + 可选 GBNF grammar）。
-func LlamaGenerate(req LlamaGenerateRequest) (result *LlamaGenerateResponse, err error) {
+func LlamaGenerate(ctx context.Context, req LlamaGenerateRequest) (result *LlamaGenerateResponse, err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "llama_infer_generate: dylib/符号不可用", err)
 	}
@@ -261,9 +259,9 @@ func LlamaGenerate(req LlamaGenerateRequest) (result *LlamaGenerateResponse, err
 }
 
 // LlamaEmbed 批量文本嵌入（Mean pooling）。
-func LlamaEmbed(req LlamaEmbedRequest) (result *LlamaEmbedResponse, err error) {
+func LlamaEmbed(ctx context.Context, req LlamaEmbedRequest) (result *LlamaEmbedResponse, err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "llama_infer_embed: dylib/符号不可用", err)
 	}
@@ -287,10 +285,10 @@ func LlamaEmbed(req LlamaEmbedRequest) (result *LlamaEmbedResponse, err error) {
 	return &resp, nil
 }
 
-// LlamaRerank 查询-文档相关性打分（双塔嵌入余弦相似度，见 Rust 侧注释）。
-func LlamaRerank(req LlamaRerankRequest) (result *LlamaRerankResponse, err error) {
+// LlamaRerank 重排打分。
+func LlamaRerank(ctx context.Context, req LlamaRerankRequest) (result *LlamaRerankResponse, err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "llama_infer_rerank: dylib/符号不可用", err)
 	}
@@ -314,10 +312,10 @@ func LlamaRerank(req LlamaRerankRequest) (result *LlamaRerankResponse, err error
 	return &resp, nil
 }
 
-// LlamaEvictKVCache 清空当前常驻生成上下文的 KV cache（会话切换/内存回收场景）。
-func LlamaEvictKVCache() (err error) {
+// LlamaEvictKVCache 强制清空 KV Cache。
+func LlamaEvictKVCache(ctx context.Context) (err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "llama_infer_evict_kv_cache: dylib/符号不可用", err)
 	}
@@ -331,10 +329,10 @@ func LlamaEvictKVCache() (err error) {
 	return nil
 }
 
-// LlamaStatus 查询当前加载状态。
-func LlamaStatus() (result *LlamaStatusResponse, err error) {
+// LlamaStatus 获取当前引擎与模型状态（内存、负载、KV 碎片率等）。
+func LlamaStatus(ctx context.Context) (result *LlamaStatusResponse, err error) {
 	start := time.Now()
-	defer func() { recordLlamaFFICall(start, err) }()
+	defer func() { recordLlamaFFICall(ctx, start, err) }()
 	if err := bindLlamaInfer(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "llama_infer_status: dylib/符号不可用", err)
 	}
