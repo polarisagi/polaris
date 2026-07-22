@@ -78,13 +78,7 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "homeassistant":
-		haURL, _ := cfg["url"].(string)
-		haToken, _ := cfg["token"].(string)
-		if haURL != "" && haToken != "" {
-			m.startHomeAssistantPoller(channelID, haURL, haToken, cfg)
-		}
-		// line / whatsapp / sms / teams / webhook：纯 webhook 模式，无需 poller
+	// line / whatsapp / sms / teams / webhook：纯 webhook 模式，无需 poller
 	}
 }
 
@@ -130,7 +124,6 @@ func (m *Manager) OnMessage(channelType, channelID string, cfg map[string]any, m
 		(*h)(channelType, channelID, cfg, msg)
 	}
 }
-
 
 // RegisterPoller ...
 func (m *Manager) RegisterPoller(channelID string, cancel context.CancelFunc) {
