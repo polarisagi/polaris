@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -18,7 +19,7 @@ type Manager struct {
 	wecomSends sync.Map // channelID → chan wecomMsg
 	httpClient *http.Client
 	safeDialer protocol.SafeDialer // IMAP/SMTP 等 raw-TCP 通道的 SSRF 防护拨号器
-	onMessage  cadapter.MessageHandler
+	onMessage  atomic.Pointer[cadapter.MessageHandler]
 }
 
 // NewManager 创建 Manager，httpClient 用于各平台 HTTP 调用，onMessage 是消息分发回调。
@@ -26,8 +27,8 @@ func NewManager(httpClient *http.Client, onMessage cadapter.MessageHandler, opts
 	m := &Manager{
 		pollers:    make(map[string]context.CancelFunc),
 		httpClient: httpClient,
-		onMessage:  onMessage,
 	}
+	m.onMessage.Store(&onMessage)
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -72,6 +73,11 @@ func (m *Manager) StopAll() {
 
 // Start 按平台类型分发 poller 启动。
 func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //nolint:gocyclo
+	if a, ok := cadapter.Lookup(channelType); ok {
+		a.StartPoller(m, channelID, cfg)
+		return
+	}
+
 	switch channelType {
 	case "telegram":
 		token, _ := cfg["bot_token"].(string)
@@ -178,9 +184,36 @@ func (m *Manager) RestoreChannelsFromDB(db protocol.SQLQuerier) {
 }
 
 func (m *Manager) HTTPClient() *http.Client { return m.httpClient }
-func (m *Manager) OnMessage(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {
-	m.onMessage(channelType, channelID, cfg, msg)
+
+// SetMessageHandler 晚绑定入站消息处理器（poller 回调最终落点）。
+// boot 阶段 channelMgr 先于 ChannelsAdmin 构造，故用 setter 而非构造参数注入。
+func (m *Manager) SetMessageHandler(h cadapter.MessageHandler) {
+	m.onMessage.Store(&h)
 }
+
+// OnMessage 处理 poller 轮询到的消息。
+func (m *Manager) OnMessage(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {
+	if h := m.onMessage.Load(); h != nil && *h != nil {
+		(*h)(channelType, channelID, cfg, msg)
+	}
+}
+
+// WecomEnqueue 将 wecom 回复投递到 Manager 持有的发送通道；非 wecom 适配器不调用。
+func (m *Manager) WecomEnqueue(channelID string, msg cadapter.WecomSendMsg) bool {
+	if v, ok := m.wecomSends.Load(channelID); ok {
+		if ch, ok := v.(chan cadapter.WecomSendMsg); ok {
+			select {
+			case ch <- msg:
+				return true
+			default:
+				slog.Warn("wecom: send channel full", "channel", channelID)
+			}
+		}
+	}
+	return false
+}
+
+// RegisterPoller ...
 func (m *Manager) RegisterPoller(channelID string, cancel context.CancelFunc) {
 	m.registerPoller(channelID, cancel)
 }
