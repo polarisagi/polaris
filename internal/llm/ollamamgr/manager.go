@@ -234,7 +234,11 @@ func checkOllamaExecutable(p string) bool {
 }
 
 // StartOllama 在后台启动 ollama serve
-func StartOllama(ctx context.Context, binPath string) (*exec.Cmd, error) {
+func StartOllama(ctx context.Context, httpClient *http.Client, binPath string) (*exec.Cmd, error) {
+	if httpClient == nil {
+		return nil, apperr.New(apperr.CodeInternal, "ollamamgr: httpClient is required for StartOllama")
+	}
+
 	slog.Info("polaris: Starting local Ollama engine in background...")
 	cmd := exec.CommandContext(ctx, binPath, "serve")
 
@@ -247,10 +251,9 @@ func StartOllama(ctx context.Context, binPath string) (*exec.Cmd, error) {
 	}
 
 	// 轮询等待端口启动
-	client := &http.Client{Timeout: 2 * time.Second}
 	ready := false
 	for i := 0; i < 30; i++ { // 等待最多 30 秒
-		resp, err := client.Get("http://localhost:11434/")
+		resp, err := httpClient.Get("http://localhost:11434/")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
