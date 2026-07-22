@@ -206,7 +206,10 @@ func (m *LogicCollapseMonitor) RecordSuccess(
 	stats.MarkTriggered()
 
 	// 异步触发编译（L1 优先级后台任务）
-	concurrent.SafeGo(context.Background(), "logic_collapse.trigger_collapse", func(ctx context.Context) {
+	// GR-7-001: 补齐超时上界（默认 10 分钟），防挂起
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	concurrent.SafeGo(bgCtx, "logic_collapse.trigger_collapse", func(ctx context.Context) {
+		defer cancel()
 		m.triggerCollapse(ctx, traj, variance)
 	})
 }
