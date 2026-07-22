@@ -135,7 +135,7 @@ func (e *ShadowExecutor) RunReplayBatch(ctx context.Context, candidateVersion st
 
 	slog.Info("shadow_executor: batch complete", "version", candidateVersion, "pass_rate", passRate, "evaluated", rm.Evaluated)
 
-	// 如果通过率 >= 0.95，推送 ConfirmShadow 信号
+	// 如果通过率达到阈值 ShadowPassRateThreshold，推送 ConfirmShadow 信号
 	if passRate >= e.thresholds.M12Eval.ShadowPassRateThreshold {
 		if err := e.staging.ConfirmShadow(ctx, candidateVersion); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "shadow_executor: confirm shadow", err)
@@ -262,7 +262,7 @@ func (e *ShadowExecutor) sampled(offset int64) bool {
 }
 
 func computeOperationHash(method, body string) string {
-	// SHA256(method+url+body前1KB)
+	// SHA256(method+body前1KB)
 	data := method + body
 	if len(data) > 1024 {
 		data = data[:1024]
