@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -238,13 +239,28 @@ func (wm *WorkspaceManager) ReleaseQuota(n int64) {
 	atomic.AddInt64(&wm.totalSize, -n)
 }
 
+func resolveWithinRoot(rootDir, relPath string) (string, error) {
+	if relPath == "" || filepath.IsAbs(relPath) {
+		return "", apperr.New(apperr.CodeInvalidInput, "path must be a non-empty relative path")
+	}
+	fullPath := filepath.Join(rootDir, relPath)
+	rel, err := filepath.Rel(rootDir, fullPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", apperr.New(apperr.CodeInvalidInput, "path traversal detected")
+	}
+	return fullPath, nil
+}
+
 // WriteFile 将 data 写入相对路径 relPath（基于 RootDir），自动创建父目录。
 // 用 SafeOpenFile（O_NOFOLLOW，见 vfs_unix.go）替代 os.WriteFile：relPath 段来自
 // Agent/工具产出，若工作区内已存在指向沙箱外的符号链接，裸 os.WriteFile 会跟随
 // 写入任意宿主路径（2026-07-13 deadcode 复核发现 SafeOpen/SafeOpenFile 已实现
 // 但从未被本文件的真实读写路径调用，是防护形同虚设的静默缺口）。
 func (wm *WorkspaceManager) WriteFile(relPath string, data []byte) error {
-	fullPath := filepath.Join(wm.rootDir, relPath)
+	fullPath, err := resolveWithinRoot(wm.rootDir, relPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "WorkspaceManager.WriteFile", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0700); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.WriteFile: failed to mkdir", err)
 	}
@@ -262,7 +278,10 @@ func (wm *WorkspaceManager) WriteFile(relPath string, data []byte) error {
 // ReadFile 从相对路径 relPath 读取文件，最多读取 limit 字节。如果 limit <= 0，读取全部。
 // 用 SafeOpen（O_NOFOLLOW）替代 os.Open，理由同上 WriteFile 注释。
 func (wm *WorkspaceManager) ReadFile(relPath string, limit int64) ([]byte, error) {
-	fullPath := filepath.Join(wm.rootDir, relPath)
+	fullPath, err := resolveWithinRoot(wm.rootDir, relPath)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "WorkspaceManager.ReadFile", err)
+	}
 	f, err := SafeOpen(fullPath)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeNotFound, "WorkspaceManager.ReadFile: failed to open file", err)
