@@ -327,3 +327,49 @@ func QqbotSendMessage(ctx context.Context, client *http.Client, token, msgType, 
 	}
 	return nil
 }
+
+func init() { Register(&QQBotAdapter{}) }
+
+type QQBotAdapter struct{}
+
+func (a *QQBotAdapter) Type() string { return "qqbot" }
+
+func (a *QQBotAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw map[string]any
+	if json.Unmarshal(body, &raw) != nil {
+		return protocol.ChannelMessage{}
+	}
+	text, _ := raw["content"].(string)
+	channelID, _ := raw["channel_id"].(string)
+	author, _ := raw["author"].(map[string]any)
+	userID, _ := author["id"].(string)
+	return protocol.ChannelMessage{Text: text, ChatID: channelID, UserID: userID, TaintLevel: types.TaintHigh}
+}
+
+func (a *QQBotAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	token, _ := cfg["_qqbot_token"].(string)
+	msgType, _ := cfg["_qqbot_msg_type"].(string)
+	if token == "" {
+		slog.Warn("qqbot: access token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := QqbotSendMessage(ctx, host.HTTPClient(), token, msgType, msg.ChatID, text, cfg); err != nil {
+		slog.Error("channels: send reply failed", "type", "qqbot", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "qqbot: send message", err)
+	}
+	return nil
+}
+
+func (a *QQBotAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	appID, _ := cfg["app_id"].(string)
+	clientSecret, _ := cfg["client_secret"].(string)
+	if appID == "" || clientSecret == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.qqbot."+channelID, func(ctx context.Context) {
+		RunQQBotPoller(ctx, host, channelID, appID, clientSecret, cfg)
+	})
+	return true
+}

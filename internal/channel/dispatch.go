@@ -18,18 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "qqbot":
-		token, _ := cfg["_qqbot_token"].(string)
-		msgType, _ := cfg["_qqbot_msg_type"].(string)
-		if token == "" {
-			slog.Warn("qqbot: access token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.QqbotSendMessage(ctx, m.httpClient, token, msgType, msg.ChatID, text, cfg); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "qqbot: send message", err)
-		}
-
 	case "whatsapp":
 		phoneNumberID, _ := cfg["phone_number_id"].(string)
 		accessToken, _ := cfg["access_token"].(string)

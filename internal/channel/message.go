@@ -18,8 +18,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "qqbot":
-		return extractQQBotWebhook(body)
 	case "whatsapp":
 		return extractWhatsAppWebhook(body)
 	case "sms":
@@ -38,17 +36,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 
 
 
-func extractQQBotWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	text, _ := raw["content"].(string)
-	channelID, _ := raw["channel_id"].(string)
-	author, _ := raw["author"].(map[string]any)
-	userID, _ := author["id"].(string)
-	return protocol.ChannelMessage{Text: text, ChatID: channelID, UserID: userID, TaintLevel: types.TaintHigh}
-}
 
 func extractWhatsAppWebhook(body []byte) protocol.ChannelMessage {
 	var raw map[string]any

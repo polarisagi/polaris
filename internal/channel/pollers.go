@@ -49,13 +49,6 @@ func (m *Manager) startMattermostPoller(channelID, mmURL, token string, cfg map[
 	})
 }
 
-func (m *Manager) startQQBotPoller(channelID, appID, clientSecret string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.qqbot."+channelID, func(ctx context.Context) {
-		cadapter.RunQQBotPoller(ctx, m, channelID, appID, clientSecret, cfg)
-	})
-}
 
 func (m *Manager) startSignalPoller(channelID, apiURL, account string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())
