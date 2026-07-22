@@ -193,7 +193,11 @@ func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
 
 	snap, err := s.blackboard.PeekTask(r.Context(), taskID)
 	if err != nil {
-		slog.Warn("handleGetAgentTask: PeekTask failed", "task_id", taskID, "error", err)
+		slog.Error("handleGetAgentTask: PeekTask system error", "task_id", taskID, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if snap == nil {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
