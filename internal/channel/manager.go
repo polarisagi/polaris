@@ -78,12 +78,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "mattermost":
-		mmURL, _ := cfg["url"].(string)
-		token, _ := cfg["token"].(string)
-		if mmURL != "" && token != "" {
-			m.startMattermostPoller(channelID, mmURL, token, cfg)
-		}
 	case "email":
 		imapHost, _ := cfg["imap_host"].(string)
 		address, _ := cfg["address"].(string)

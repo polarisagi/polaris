@@ -31,13 +31,6 @@ func (m *Manager) startMatrixPoller(channelID, homeserver, accessToken string, c
 	})
 }
 
-func (m *Manager) startMattermostPoller(channelID, mmURL, token string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.mattermost."+channelID, func(ctx context.Context) {
-		cadapter.RunMattermostPoller(ctx, m, channelID, mmURL, token, cfg)
-	})
-}
 
 func (m *Manager) startSignalPoller(channelID, apiURL, account string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())
