@@ -123,7 +123,7 @@ func TestLoggingResponseWriter(t *testing.T) {
 }
 
 func TestHealthPaths(t *testing.T) {
-	paths := healthPaths()
+	paths := healthPathSet
 	if _, ok := paths["/healthz"]; !ok {
 		t.Errorf("expected /healthz")
 	}
