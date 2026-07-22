@@ -91,6 +91,7 @@ ADR 被代码引用时，源文件头部加：
 | 0059 | Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移） | Accepted（已执行） | 2026-07-22 |
 | 0060 | M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取 | Accepted（已执行） | 2026-07-22 |
 | 0061 | 2026-07-22 deadcode 复核（47 项，1 项新发现 GoldmarkChunker 已删除，2 项待产品决策） | Accepted（部分已执行） | 2026-07-22 |
+| 0062 | deadcode 44 项 DEFER 最终结清（删除为主 + 门控白名单；C2 AddToGate 复核确认删除正确，taint_sanitizer 复核恢复；Tier1 本地默认选型 Qwen3-0.6B 对） | Accepted（已执行） | 2026-07-22 |
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 
