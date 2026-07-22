@@ -79,12 +79,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "qqbot":
-		appID, _ := cfg["app_id"].(string)
-		clientSecret, _ := cfg["client_secret"].(string)
-		if appID != "" && clientSecret != "" {
-			m.startQQBotPoller(channelID, appID, clientSecret, cfg)
-		}
 	case "dingtalk":
 		clientID, _ := cfg["client_id"].(string)
 		clientSecret, _ := cfg["client_secret"].(string)

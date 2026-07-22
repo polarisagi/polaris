@@ -11,19 +11,6 @@ import (
 
 
 
-// ── extractQQBotWebhook ───────────────────────────────────────────────────────
-
-func TestExtractQQBotWebhook_Valid(t *testing.T) {
-	body := `{"content":"/hello","channel_id":"ch1","author":{"id":"u1"}}`
-	msg := extractQQBotWebhook([]byte(body))
-	if msg.Text != "/hello" {
-		t.Errorf("expected '/hello', got %q", msg.Text)
-	}
-	if msg.ChatID != "ch1" {
-		t.Errorf("expected chatID='ch1', got %q", msg.ChatID)
-	}
-}
-
 // ── extractWhatsAppWebhook ────────────────────────────────────────────────────
 
 func TestExtractWhatsAppWebhook_Valid(t *testing.T) {
