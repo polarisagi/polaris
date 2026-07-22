@@ -212,3 +212,46 @@ func (s *MatrixSender) SendMessage(ctx context.Context, client *http.Client, hom
 type MatrixSender struct {
 	txnCounter atomic.Int64
 }
+
+func init() { Register(&MatrixAdapter{}) }
+
+type MatrixAdapter struct {
+	MatrixSender
+}
+
+func (a *MatrixAdapter) Type() string { return "matrix" }
+
+func (a *MatrixAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{} // Uses stream poller
+}
+
+func (a *MatrixAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	homeserver, _ := cfg["homeserver"].(string)
+	accessToken, _ := cfg["access_token"].(string)
+	if homeserver == "" || accessToken == "" {
+		slog.Warn("matrix: homeserver or access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := a.SendMessage(ctx, host.HTTPClient(), homeserver, accessToken, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "matrix", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "matrix: send message", err)
+	}
+	return nil
+}
+
+func (a *MatrixAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	homeserver, _ := cfg["homeserver"].(string)
+	accessToken, _ := cfg["access_token"].(string)
+	username, _ := cfg["username"].(string)
+	password, _ := cfg["password"].(string)
+
+	if homeserver == "" || (accessToken == "" && (username == "" || password == "")) {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.matrix."+channelID, func(ctx context.Context) {
+		RunMatrixPoller(ctx, host, channelID, homeserver, accessToken, cfg)
+	})
+	return true
+}

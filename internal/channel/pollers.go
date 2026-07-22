@@ -16,13 +16,6 @@ func (m *Manager) startHomeAssistantPoller(channelID, haURL, haToken string, cfg
 	})
 }
 
-func (m *Manager) startMatrixPoller(channelID, homeserver, accessToken string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.matrix."+channelID, func(ctx context.Context) {
-		cadapter.RunMatrixPoller(ctx, m, channelID, homeserver, accessToken, cfg)
-	})
-}
 
 
 func (m *Manager) startSignalPoller(channelID, apiURL, account string, cfg map[string]any) {
