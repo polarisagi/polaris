@@ -166,3 +166,4 @@ DriftDetector 编排链符合——`Detect`/`AddAnchor`/`AnchorSample` 均已按
 | 日期 | 变更 |
 |------|------|
 | 2026-07-21 | 初稿：DriftDetector 编排链接线完成；EmbeddingVersionTracker 订正为独立 DEFER（需先扩展 CognitiveSearcher 接口） |
+| 2026-07-22 | `EmbeddingVersionTracker`（含 `Update`/`EmbeddingStats`）在 ADR-0062 deadcode 最终结清中删除——`CognitiveSearcher` 版本自省接口仍缺、零消费侧，接受删除待未来跨版本检索立项时重建（见 ADR-0062） |

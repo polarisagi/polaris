@@ -175,7 +175,7 @@
   "internal/security/taint/taint_injection_test.go": "88c7f34e1f71c4eea8ba7a92de8e385eea4120a6baa81e5c0aba14643dce4210",
   "internal/security/taint/taint_inv_test.go": "fd25e49dda65e902e46662fc2573041fd5f307da13018592f43a9cd5965d8b44",
   "internal/security/taint/taint_property_test.go": "0195c8e9b231036835d1ef8ccb6c9efe90faae18fa92a085010b8910b4295f53",
-  "internal/security/taint/taint_sanitizer.go": "0182e7e879dcc2f5a1e8297015912aec7e8f054e4890b46f70ad56bcf7da5322",
+  "internal/security/taint/taint_sanitizer.go": "0d7fa3ba3f6ac231b4dfae728919afe2926cccae48c8612575b00d65cb634a23",
   "internal/security/taint/taint_test.go": "88301fdbfeacaff74ea490a92e17e6f4ecfe5dd2de55195ef850473513c6d639",
   "internal/security/testutil_test.go": "edabd7ac1e391fdebf8f67eadaf45c12265ceb78dc420aad27d245a451a28806",
   "internal/security/token/capability_token.go": "3b82fe669f493c685ceb2ca2de75e355b6037f6acb1287b61b3753576e93c72a",

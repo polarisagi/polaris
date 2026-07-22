@@ -12,3 +12,4 @@ internal/swarm/planner/pool.go: unreachable func: DefaultSpawner # 根因一(测
 pkg/types/models_event.go: unreachable func: BuildIdempotencyKey # 根因一(测试假阳性)，ADR-0059/ADR-0062
 internal/ffi/llama.go: unreachable func: LlamaEmbed # 门控假阳性，tier1 默认不可达，ADR-0062
 internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 默认不可达，ADR-0062
+internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0047 刻意保留不接入，ADR-0062 恢复
