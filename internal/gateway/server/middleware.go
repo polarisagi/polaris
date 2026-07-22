@@ -240,5 +240,5 @@ func (lrw *LoggingResponseWriter) Flush() {
 	}
 }
 
-// 鉴权中间件（adminWritePaths/isAdminWrite/isLoopback/healthPaths/checkAuth/
+// 鉴权中间件（adminWritePaths/isAdminWrite/isLoopback/healthPathSet/checkAuth/
 // withMiddleware）见 middleware_auth.go（R7 拆分）。

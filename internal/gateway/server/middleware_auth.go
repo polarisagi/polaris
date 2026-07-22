@@ -29,15 +29,14 @@ func isLoopback(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
-// healthPaths 是精确豁免鉴权的健康/指标端点白名单。
+// healthPathSet 是精确豁免鉴权的健康/指标端点白名单。
 // [P1修复] 原 HasSuffix("z") 匹配过宽（任何以 z 结尾的路径均被豁免），
 // 改为显式白名单，防止类似 /v1/providers/fuzz 等路径意外跳过鉴权。
-func healthPaths() map[string]struct{} {
-	return map[string]struct{}{
-		"/healthz": {},
-		"/readyz":  {},
-		"/metrics": {},
-	}
+//nolint:gochecknoglobals
+var healthPathSet = map[string]struct{}{
+	"/healthz": {},
+	"/readyz":  {},
+	"/metrics": {},
 }
 
 // checkAuth 执行 API Key 校验和匿名写保护，返回注入了身份的 context。
@@ -51,7 +50,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 	traceID := "req_" + hex.EncodeToString(b)
 
 	// 健康/指标端点始终放行（无需鉴权）
-	if _, isHealth := healthPaths()[r.URL.Path]; isHealth {
+	if _, isHealth := healthPathSet[r.URL.Path]; isHealth {
 		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "unknown", TraceID: traceID}), true
 	}
 
