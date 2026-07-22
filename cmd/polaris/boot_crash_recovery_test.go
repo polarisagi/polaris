@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"golang.org/x/sync/errgroup"
+	_ "modernc.org/sqlite"
 
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"

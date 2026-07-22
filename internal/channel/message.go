@@ -1,6 +1,7 @@
 package channel
 
 import (
+	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -9,8 +10,13 @@ import (
 	"strconv"
 )
 
-// ExtractMessage 从各平台 webhook payload 中提取消息内容。
+// ExtractMessage 将各平台的 webhook payload 统一映射为系统内 ChannelMessage。
+// 这是与各平台 API 对接的入站适配层。
 func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.ChannelMessage {
+	if a, ok := cadapter.Lookup(channelType); ok {
+		return a.Extract(body, r)
+	}
+
 	switch channelType {
 	case "telegram":
 		return extractTelegramWebhook(body)

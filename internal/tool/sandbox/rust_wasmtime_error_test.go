@@ -2,8 +2,8 @@ package sandbox
 
 import (
 	"context"
-	"testing"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"testing"
 )
 
 func TestWasmtimeExecute_ErrorMapping(t *testing.T) {

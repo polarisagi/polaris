@@ -61,14 +61,14 @@ func (allowAllPolicyGate) Review(context.Context, types.PolicyReviewRequest) (ty
 
 // newTestEnvelope 构造一个真实 ExecEnvelope，底层用 echoRunner 裸执行（无沙箱隔离，
 // 仅用于测试 Runner 的匹配/并发/错误处理逻辑，不测试沙箱隔离本身）。
-// SandboxRouter 收到 SideProcessSpawn 会路由到 Container tier；Tier=0（测试传参）时
-// AssignSandboxTier 会进一步降级到 NativeOS，故同时注入 container 和 nativeOS 两个 provider。
+// SandboxRouter 收到 SideProcessSpawn 会路由到 Container tier；这里指定 hwTier=2
+// 以避开 V-1 (Tier0 拒绝 Container) 限制，确保测试能执行 echoRunner 桩代码。
 func newTestEnvelope(t *testing.T) *sandbox.ExecEnvelope {
 	t.Helper()
 	containerSbx := sandbox.NewContainerSandbox("", "linux", 0, echoRunner{})
 	nativeOSSbx := sandbox.NewNativeOSSandbox(echoRunner{})
-	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), containerSbx, nil, "linux", 0)
-	router.WithNativeOS(nativeOSSbx)
+	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), containerSbx, nil, "linux", 2)
+	router.SetNativeOSFallback(nativeOSSbx)
 	return sandbox.NewExecEnvelope(allowAllPolicyGate{}, router, 0, "linux", nil)
 }
 
