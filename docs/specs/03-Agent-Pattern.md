@@ -6,7 +6,7 @@
 
 所有涉及 LLM 调用的路径都必须是 Go 状态机的某个步骤，不存在独立的 `callLLMAndWait`。
 
-FSM 11 态核心流转（S_IDLE 为空闲等待态，S_INTERRUPT 可从任意活跃态触发，详见 M04 §1）：
+FSM 12 态核心流转（S_IDLE 为空闲等待态，S_INTERRUPT 可从任意活跃态触发，S_SUSPENDED 为空闲挂起态，详见 M04 §1）：
 
 ```
 s_perceive → s_plan → s_validate → s_execute → s_reflect → s_complete

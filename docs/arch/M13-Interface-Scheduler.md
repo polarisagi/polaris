@@ -284,7 +284,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 
 ### 1.4 Web UI
 
-> 实现规约已迁出为独立文档，见 §8 / M13-Interface-WebUI.md。
+> Web UI 实现规约详见本文 §8（ServeWebUI 小节）。
 
 ServeWebUI:
 - `DEV_MODE=1` → 反向代理 Vite dev server (`:5173`)
