@@ -7,8 +7,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-
-
 func (m *Manager) startEmailPoller(channelID string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.registerPoller(channelID, cancel)
@@ -16,7 +14,6 @@ func (m *Manager) startEmailPoller(channelID string, cfg map[string]any) {
 		cadapter.RunEmailPoller(ctx, m, channelID, cfg)
 	})
 }
-
 
 func (m *Manager) startHomeAssistantPoller(channelID, haURL, haToken string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -42,26 +39,10 @@ func (m *Manager) startMattermostPoller(channelID, mmURL, token string, cfg map[
 	})
 }
 
-
 func (m *Manager) startSignalPoller(channelID, apiURL, account string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.registerPoller(channelID, cancel)
 	concurrent.SafeGo(ctx, "poller.signal."+channelID, func(ctx context.Context) {
 		cadapter.RunSignalPoller(ctx, m, channelID, apiURL, account, cfg)
-	})
-}
-
-
-
-func (m *Manager) startWeComPoller(channelID, botID, secret string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-
-	sendCh := make(chan cadapter.WecomSendMsg, 32)
-	m.wecomSends.Store(channelID, sendCh)
-
-	concurrent.SafeGo(ctx, "poller.wecom."+channelID, func(ctx context.Context) {
-		defer m.wecomSends.Delete(channelID)
-		cadapter.RunWeComPoller(ctx, m, channelID, botID, secret, cfg, sendCh)
 	})
 }

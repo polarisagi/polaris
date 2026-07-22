@@ -16,7 +16,6 @@ import (
 type Manager struct {
 	mu         sync.Mutex
 	pollers    map[string]context.CancelFunc
-	wecomSends sync.Map // channelID → chan wecomMsg
 	httpClient *http.Client
 	safeDialer protocol.SafeDialer // IMAP/SMTP 等 raw-TCP 通道的 SSRF 防护拨号器
 	onMessage  atomic.Pointer[cadapter.MessageHandler]
@@ -79,12 +78,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "wecom":
-		botID, _ := cfg["bot_id"].(string)
-		secret, _ := cfg["secret"].(string)
-		if botID != "" && secret != "" {
-			m.startWeComPoller(channelID, botID, secret, cfg)
-		}
 	case "mattermost":
 		mmURL, _ := cfg["url"].(string)
 		token, _ := cfg["token"].(string)
@@ -163,20 +156,6 @@ func (m *Manager) OnMessage(channelType, channelID string, cfg map[string]any, m
 	}
 }
 
-// WecomEnqueue 将 wecom 回复投递到 Manager 持有的发送通道；非 wecom 适配器不调用。
-func (m *Manager) WecomEnqueue(channelID string, msg cadapter.WecomSendMsg) bool {
-	if v, ok := m.wecomSends.Load(channelID); ok {
-		if ch, ok := v.(chan cadapter.WecomSendMsg); ok {
-			select {
-			case ch <- msg:
-				return true
-			default:
-				slog.Warn("wecom: send channel full", "channel", channelID)
-			}
-		}
-	}
-	return false
-}
 
 // RegisterPoller ...
 func (m *Manager) RegisterPoller(channelID string, cancel context.CancelFunc) {
