@@ -15,6 +15,8 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// extractEntitiesAndRelations 从 Episodic 事件中提取实体与关系。
+// 主路径: LLM 提取（summarizer 非 nil）。回退: 正则/共现规则。
 func (p *ConsolidationPipeline) extractEntitiesAndRelations(
 	ctx context.Context,
 	sessionID string,
@@ -259,5 +261,3 @@ func (p *ConsolidationPipeline) upsertSemantic(
 }
 
 // ─── Stage 3 ─────────────────────────────────────────────────────────────────
-
-// summarizeSession 为会话生成 3-5 句摘要，写入 store.SemanticMemory 作为 compaction 文档。

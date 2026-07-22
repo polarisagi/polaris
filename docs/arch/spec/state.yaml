@@ -1048,6 +1048,8 @@ thresholds:
     judge_single_confidence: 0.90
     shadow_sample_rate: 0.01
     shadow_pass_rate_threshold: 0.95
+    eval_llm_judge_timeout_sec: 15
+    shadow_infer_timeout_sec: 30
     shadow_min_samples: 10
     embedding_similarity_pass: 0.85
     snapshot_retention_per_suite_24h: 7

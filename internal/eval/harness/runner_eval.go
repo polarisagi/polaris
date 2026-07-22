@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/eval/util"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -112,8 +113,12 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 			{Role: "user", Content: judgeUserPrompt},
 		}
 
-		// 15 秒超时，避免 eval 阻塞主流程
-		tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		timeoutSec := r.thresholds.M12Eval.EvalLLMJudgeTimeoutSec
+		if timeoutSec == 0 {
+			timeoutSec = 15
+		}
+		// 15 秒（默认）超时，避免 eval 阻塞主流程
+		tCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		defer cancel()
 
 		var inferOpts []types.InferOption
@@ -142,7 +147,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		}
 
 		// 解析 LLM 返回的 JSON（P1-6 Schema 校验：区分字段缺失与语法错误）
-		rawJSON := extractJSON(content)
+		rawJSON := util.ExtractJSON(content)
 		judgeResult, schemaOK, parseErr := ValidateJudgeResultSchema(rawJSON)
 		if !schemaOK {
 			if parseErr != nil {
@@ -166,7 +171,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		if needsSecondJudge {
 			resp2, err2 := safecall.Infer(tCtx, r.llmProvider, msgs, inferOpts...)
 			if err2 == nil && resp2 != nil {
-				rawJSON2 := extractJSON(resp2.Content)
+				rawJSON2 := util.ExtractJSON(resp2.Content)
 				judgeResult2, schemaOK2, _ := ValidateJudgeResultSchema(rawJSON2)
 				if schemaOK2 {
 					if judgeResult2.Safety == 0 {
@@ -284,18 +289,4 @@ func (r *RunnerImpl) RunWithContext(ctx context.Context, runID string, fn func(c
 	}()
 
 	return fn(ctx)
-}
-
-// extractJSON 从 LLM 响应中提取第一个 JSON 对象。
-// LLM 有时在 JSON 外包裹 markdown 代码块（` + "```json" + ` ... ` + "```" + `），此函数做容错处理。
-func extractJSON(s string) string {
-	s = strings.TrimSpace(s)
-	// 去除 markdown 代码块包裹
-	if idx := strings.Index(s, "{"); idx >= 0 {
-		s = s[idx:]
-	}
-	if idx := strings.LastIndex(s, "}"); idx >= 0 {
-		s = s[:idx+1]
-	}
-	return s
 }

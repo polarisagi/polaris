@@ -7,7 +7,9 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/eval/control"
+	"github.com/polarisagi/polaris/internal/eval/util"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -39,7 +41,7 @@ func TestRunner(t *testing.T) {
 	ms := &mockSQLiteStore{vals: [][]byte{[]byte(c1), []byte(c2), []byte(c3)}}
 	evalStore := NewSQLiteEvalStore(ms, control.NewEngine(nil))
 
-	runner := NewRunner(ms, evalStore)
+	runner := NewRunner(ms, evalStore, config.DefaultThresholds())
 
 	ch := make(chan types.EvalCompletedPayload, 1)
 	runner.SetEvalChannel(ch)
@@ -82,7 +84,7 @@ func TestRunner(t *testing.T) {
 }
 
 func TestExtractJSON(t *testing.T) {
-	s := extractJSON("```json\n{\"a\":1}\n```")
+	s := util.ExtractJSON("```json\n{\"a\":1}\n```")
 	if s != `{"a":1}` {
 		t.Errorf("expected json object, got %s", s)
 	}

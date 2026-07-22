@@ -42,7 +42,7 @@ func TestValidateJudgeResultSchema_JsonSyntaxError(t *testing.T) {
 }
 
 func TestValidateJudgeResultSchema_EmptyInput(t *testing.T) {
-	// extractJSON 对空字符串返回 "{}"，此处直接测 ValidateJudgeResultSchema("{}") schema缺字段
+	// util.ExtractJSON 对空字符串返回 "{}"，此处直接测 ValidateJudgeResultSchema("{}") schema缺字段
 	_, ok, err := ValidateJudgeResultSchema("{}")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
