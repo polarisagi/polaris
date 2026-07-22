@@ -1,8 +1,9 @@
-# ADR-0061：2026-07-22 全仓库 deadcode 复核（47 项，2 项新发现 + 45 项既定 DEFER 复现）
+# ADR-0061：2026-07-22 全仓库 deadcode 复核（47 项，3 项新发现 + 44 项既定 DEFER 复现）
 
 ## 状态
 
-已接受，已实现（含一次过程中订正，见"订正记录"节）。
+已接受，已实现（含一次过程中订正，见"订正记录"节；`ReportSurrealDBIndexSize`
+FFI 接线已于同日追加完成，不再有遗留决策项）。
 
 ## 背景
 
@@ -51,7 +52,7 @@ mock/占位=倾向 DELETE"，禁止仅凭 grep 命中数批量处理。
 | `SafeString.Content` | 非遗漏：专属 `Test_inv_TaintContentCallAudit` 审计每处 `.Content()` 调用，是刻意收窄的安全 accessor，`TaintedString.Content`（另一独立方法）才是被广泛使用的那个，本轮核实未发现混淆 |
 | `authcontext.WithMaxExpandTokens` | 与同文件 `WithWorkDir`（已被 ADR-0052 接线）同类 Option，生产侧默认值已够用，无 product 侧配置需求，比照既定 DEFER 处理 |
 
-### 本次新发现并已修复（2 项）
+### 本次新发现并已修复（3 项）
 
 **`knowledge.GoldmarkChunker`/`.Chunk`**（`internal/knowledge/parsers.go`）：
 真死代码。`internal/knowledge/chunker.go:115` `DefaultChunker.Chunk` 路由早已改为
@@ -63,6 +64,12 @@ mock/占位=倾向 DELETE"，禁止仅凭 grep 命中数批量处理。
 **`taint.TaintBoundarySerializer` 全套**（`New`/`Seal`/`Unseal`/`computeHMAC`，
 `internal/security/taint/taint.go`）：WIRE。真实规范缺口，非死代码——见下节订正记录。
 已接入 `internal/knowledge` 包的 rag_chunks 读写路径。
+
+**`metrics.ReportSurrealDBIndexSize`**（`internal/observability/metrics/metrics_handler.go`）：
+WIRE。违反 HE-1（可观测优先）——`polaris_surrealdb_index_size_mb` Gauge 的
+Setter 存在但从未被任何调用方触发，恒为零值；根因是 Rust FFI 侧
+（`rust/substrate/`）此前未导出任何查询 SurrealDB-Core 索引内存占用的接口。
+用户确认"现在就做"，已接入，见下节"SurrealDB-Core 索引内存占用接线"。
 
 ### 订正记录：TaintBoundarySerializer 初次判定有误
 
@@ -123,11 +130,31 @@ CommunityGenerativeSummarizer 是同一类"生产者/消费者都在，中间没
   未接入任何生产调用链）；后者是派生的"最坏情况"聚合信号，不直接暴露
   content，风险等级不同，留作独立复核项。
 
-## 需要产品/架构侧决策，本次未处理（1 项）
+### SurrealDB-Core 索引内存占用接线
 
-| 符号 | 现状 | 待决策点 |
-|---|---|---|
-| `metrics.ReportSurrealDBIndexSize` | Setter 从未被调用；Rust FFI 侧（`rust/substrate/`）未发现任何查询 SurrealDB-Core 索引内存占用的导出函数 | 违反 HE-1（可观测优先）；用户已确认"现在就做"，独立小节见下方"SurrealDB-Core 索引内存占用 FFI 接线" |
+`surrealdb` crate（`rust/substrate/` 依赖的 `surrealdb-core`）未暴露原生内存
+自省 API，无法物理测量 HNSW/BM25/图索引实际占用字节数。设计为**粗粒度估算**
+而非精确测量：
+
+- `SurrealStore`（`mod.rs`）新增 `vec_dim: u32` 字段——`surreal_open` 时保存
+  HNSW 建索引使用的向量维度；DDL 建完索引后无法从 `surrealdb` 反查该值，
+  故在 Rust 侧结构体里保留一份。
+- `surreal_stats`（`fts.rs`）在既有 `kv_count`/`vec_count`/`doc_count`/
+  `edge_count` 基础上，追加三个经验估算常量：
+  `HNSW_OVERHEAD_BYTES_PER_NODE=128`、`FTS_OVERHEAD_BYTES_PER_DOC=200`、
+  `GRAPH_OVERHEAD_BYTES_PER_EDGE=96`，计算
+  `index_size_mb = (vec_count*(vec_dim*4+128) + doc_count*200 +
+  edge_count*96) / 1MB`，写入既有 `surreal_stats` JSON 输出（新增字段，
+  不新建 FFI 符号，复用 Go 侧已有的 `SurrealStore.Stats()` 绑定）。
+- Go 侧新增 `startSurrealIndexSizeReporter`（`cmd/polaris/boot_memory.go`）：
+  60s 周期 `concurrent.SafeGo` goroutine，调用 `Stats()` 解析
+  `index_size_mb` 并上报到 `metrics.ReportSurrealDBIndexSize`；启动时立即
+  上报一次，不等第一个 tick（避免 `/metrics` 长期显示 0）。接入
+  `bootMemory` 启动链路，紧随 `startCognitiveReplayerIfNeeded` 之后。
+
+**已知限制**：估算值不含 kv 主表本身的存储占用，仅覆盖三类索引结构；三个
+`OVERHEAD_BYTES_PER_*` 常量为工程经验值，非从 SurrealDB-Core 源码实测得出，
+后续如需更精确的数值应通过压测校准或等待上游暴露原生统计接口替换。
 
 ## 验证
 
@@ -143,7 +170,15 @@ CommunityGenerativeSummarizer 是同一类"生产者/消费者都在，中间没
   `nil` serializer 对称降级不阻断读写，4 个用例全通过
 - `deadcode ./cmd/polaris/...`：47→45（`GoldmarkChunker` 1 项 +
   `TaintBoundarySerializer` 全套 4 项符号消失，净减 3 因存在计数误差，以
-  `diff` 精确比对为准：确认只有这 4 个符号被移除，无新增/无回归）
+  `diff` 精确比对为准：确认只有这 4 个符号被移除，无新增/无回归）；
+  `ReportSurrealDBIndexSize` 接线后复查同样不再出现在 unreachable 列表中
+- `cargo test --lib surreal_store --manifest-path rust/substrate/Cargo.toml`：
+  2 passed（含 `test_surreal_store_all_features`，覆盖 `surreal_stats` 新增
+  的 `index_size_mb` 字段不破坏既有断言）
+- `cargo clippy --all-targets --manifest-path rust/substrate/Cargo.toml
+  -- -D warnings`：0 warnings
+- 追加一轮 `go build ./...`/`go vet ./...`/`make lint`/`go test ./...`
+  （102 包全通过，0 FAIL）：确认 `boot_memory.go` 改动无回归
 
 ## 引用代码
 
@@ -157,4 +192,7 @@ CommunityGenerativeSummarizer 是同一类"生产者/消费者都在，中间没
 - `internal/knowledge/taint_boundary.go`（`sealChunkTaint`/`verifyChunkTaint`）
 - `internal/protocol/schema/009_rag_chunks.sql`（`taint_hmac` 列）
 - `cmd/polaris/boot_substrate.go`/`boot_knowledge.go`/`boot_agent.go`（接线点）
-- `internal/observability/metrics/metrics_handler.go:30-35`（`ReportSurrealDBIndexSize`，见下节）
+- `internal/observability/metrics/metrics_handler.go:30-35`（`ReportSurrealDBIndexSize` 定义）
+- `rust/substrate/src/surreal_store/mod.rs`（`SurrealStore.vec_dim`）
+- `rust/substrate/src/surreal_store/fts.rs`（`surreal_stats` 的 `index_size_mb` 估算）
+- `cmd/polaris/boot_memory.go`（`startSurrealIndexSizeReporter`，接入 `bootMemory`）
