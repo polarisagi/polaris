@@ -9,28 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
-
-// TrainingSample 单条训练样本（QLoRA / PRM 共用）。
-type TrainingSample struct {
-	Prompt     string  `json:"prompt"`
-	Completion string  `json:"completion"`
-	Reward     float64 `json:"reward,omitempty"` // PRM 专用
-}
-
-// TrainingResult 训练任务结果。
-type TrainingResult struct {
-	JobID   string  `json:"job_id"`
-	Loss    float64 `json:"loss"`
-	Step    int     `json:"step"`
-	Adapter string  `json:"adapter_path,omitempty"` // QLoRA adapter 路径
-}
-
-// TrainingAdapter 通用训练 HTTP 适配器接口（HTTP Adapter 模式）。
-type TrainingAdapter interface {
-	Train(ctx context.Context, samples []TrainingSample) (*TrainingResult, error)
-}
 
 // ─── QLoRA 适配器 ─────────────────────────────────────────────────────────────
 
@@ -51,7 +32,7 @@ func NewQLoRAAdapter(endpoint string, httpClient *http.Client) *QLoRAAdapter {
 	return &QLoRAAdapter{endpoint: endpoint, client: httpClient}
 }
 
-func (a *QLoRAAdapter) Train(ctx context.Context, samples []TrainingSample) (*TrainingResult, error) {
+func (a *QLoRAAdapter) Train(ctx context.Context, samples []protocol.TrainingSample) (*protocol.TrainingResult, error) {
 	if len(samples) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidInput, "no training samples")
 	}
@@ -87,7 +68,7 @@ func NewPRMAdapter(endpoint string, httpClient *http.Client) *PRMAdapter {
 	return &PRMAdapter{endpoint: endpoint, client: httpClient}
 }
 
-func (a *PRMAdapter) Train(ctx context.Context, samples []TrainingSample) (*TrainingResult, error) {
+func (a *PRMAdapter) Train(ctx context.Context, samples []protocol.TrainingSample) (*protocol.TrainingResult, error) {
 	if len(samples) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidInput, "no training samples")
 	}
@@ -105,7 +86,7 @@ func (a *PRMAdapter) Train(ctx context.Context, samples []TrainingSample) (*Trai
 }
 
 // postJSON 公共 JSON POST 辅助。
-func postJSON(ctx context.Context, client *http.Client, endpoint string, body []byte) (*TrainingResult, error) {
+func postJSON(ctx context.Context, client *http.Client, endpoint string, body []byte) (*protocol.TrainingResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "build http req", err)
@@ -123,7 +104,7 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, body []
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("training service error %d: %s", resp.StatusCode, raw))
 	}
 
-	var result TrainingResult
+	var result protocol.TrainingResult
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "decode training resp", err)
 	}

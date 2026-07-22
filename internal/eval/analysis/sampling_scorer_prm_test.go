@@ -7,19 +7,20 @@ import (
 	"time"
 
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 type fakePRMAdapter struct {
 	mu      sync.Mutex
-	batches [][]llmadapter.TrainingSample
+	batches [][]protocol.TrainingSample
 }
 
-func (f *fakePRMAdapter) Train(ctx context.Context, samples []llmadapter.TrainingSample) (*llmadapter.TrainingResult, error) {
+func (f *fakePRMAdapter) Train(ctx context.Context, samples []protocol.TrainingSample) (*protocol.TrainingResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.batches = append(f.batches, samples)
-	return &llmadapter.TrainingResult{JobID: "job"}, nil
+	return &protocol.TrainingResult{JobID: "job_prm"}, nil
 }
 
 func (f *fakePRMAdapter) count() int {
@@ -28,7 +29,7 @@ func (f *fakePRMAdapter) count() int {
 	return len(f.batches)
 }
 
-func (f *fakePRMAdapter) lastBatch() []llmadapter.TrainingSample {
+func (f *fakePRMAdapter) lastBatch() []protocol.TrainingSample {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.batches) == 0 {

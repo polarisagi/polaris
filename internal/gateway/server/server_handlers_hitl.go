@@ -126,12 +126,16 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.auditTrail != nil {
-		detail, _ := json.Marshal(map[string]any{
+		detail, err := json.Marshal(map[string]any{
 			"task_id":  taskID,
 			"action":   req.Action,
 			"redirect": req.Redirect,
 			"reason":   req.Reason,
 		})
+		if err != nil {
+			slog.Error("handleAgentInterrupt: failed to marshal audit detail", "err", err)
+			detail = []byte(`{"error":"marshal_failed"}`)
+		}
 		if err := s.auditTrail.Record(&security.AuditRecord{
 			ActionType:   "interrupt",
 			ActionDetail: detail,

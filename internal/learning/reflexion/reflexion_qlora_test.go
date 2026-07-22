@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/learning"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 func TestBuildQLoRASample_ValidTrajectory(t *testing.T) {
@@ -62,15 +63,15 @@ func TestBuildQLoRASample_RejectsEmptyOrFailingTrajectory(t *testing.T) {
 type fakeQLoRAAdapter struct {
 	mu      sync.Mutex
 	calls   int
-	samples []llmadapter.TrainingSample
+	samples []protocol.TrainingSample
 }
 
-func (f *fakeQLoRAAdapter) Train(ctx context.Context, samples []llmadapter.TrainingSample) (*llmadapter.TrainingResult, error) {
+func (f *fakeQLoRAAdapter) Train(ctx context.Context, samples []protocol.TrainingSample) (*protocol.TrainingResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	f.samples = samples
-	return &llmadapter.TrainingResult{JobID: "job"}, nil
+	f.samples = append(f.samples, samples...)
+	return &protocol.TrainingResult{JobID: "job"}, nil
 }
 
 func (f *fakeQLoRAAdapter) getCalls() int {

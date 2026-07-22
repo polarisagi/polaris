@@ -98,3 +98,23 @@ type LLMRegistry interface {
 	// RegisterWithRole 注册一个 Provider，绑定路由角色。
 	RegisterWithRole(name, displayName, role string, p Provider)
 }
+
+// TrainingSample 单条训练样本（QLoRA / PRM 共用）。
+type TrainingSample struct {
+	Prompt     string  `json:"prompt"`
+	Completion string  `json:"completion"`
+	Reward     float64 `json:"reward,omitempty"` // PRM 专用
+}
+
+// TrainingResult 训练任务结果。
+type TrainingResult struct {
+	JobID   string  `json:"job_id"`
+	Loss    float64 `json:"loss"`
+	Step    int     `json:"step"`
+	Adapter string  `json:"adapter_path,omitempty"` // QLoRA adapter 路径
+}
+
+// TrainingAdapter 通用训练 HTTP 适配器接口（HTTP Adapter 模式）。
+type TrainingAdapter interface {
+	Train(ctx context.Context, samples []TrainingSample) (*TrainingResult, error)
+}

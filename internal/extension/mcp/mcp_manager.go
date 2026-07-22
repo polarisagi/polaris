@@ -239,7 +239,7 @@ func (m *MCPManager) Remove(serverID string) {
 	}
 }
 
-func (m *MCPManager) GetClient(serverID string) interface{} {
+func (m *MCPManager) GetClient(serverID string) protocol.MCPClient {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if e, ok := m.entries[serverID]; ok {

@@ -23,7 +23,10 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 			slog.Warn("telegram: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
 			return nil
 		}
-		payload, _ := json.Marshal(map[string]any{"chat_id": msg.ChatID, "text": text})
+		payload, err := json.Marshal(map[string]any{"chat_id": msg.ChatID, "text": text})
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "telegram: marshal payload", err)
+		}
 		url := "https://api.telegram.org/bot" + token + "/sendMessage"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
@@ -37,8 +40,12 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-			slog.Warn("telegram: sendMessage non-200", "status", resp.StatusCode, "body", string(b), "err", apperr.New(apperr.CodeInternal, "log event"))
+			b, ioErr := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+			if ioErr != nil {
+				slog.Warn("telegram: read non-200 body failed", "status", resp.StatusCode, "err", ioErr)
+			} else {
+				slog.Warn("telegram: sendMessage non-200", "status", resp.StatusCode, "body", string(b), "err", apperr.New(apperr.CodeInternal, "log event"))
+			}
 		}
 
 	case "discord":

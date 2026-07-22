@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -127,12 +128,7 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]MCPTool, error) {
 // knowledge/connector.MCPKnowledgeConnector.List/Fetch 是自承的桩实现，本方法
 // 是缺失的真实桥接——与既有 ListTools/CallTool 同一 c.call() RPC 调用方式，
 // 只是换了 MCP 协议里"资源"能力对应的方法名。
-type MCPResource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MIMEType    string `json:"mimeType,omitempty"`
-}
+type MCPResource = protocol.MCPResource
 
 // ResourcesList 查询服务端资源列表（MCP resources/list）。
 func (c *MCPClient) ResourcesList(ctx context.Context) ([]MCPResource, error) {
@@ -151,12 +147,7 @@ func (c *MCPClient) ResourcesList(ctx context.Context) ([]MCPResource, error) {
 
 // MCPResourceContent 表示 resources/read 返回的单条内容块。MCP spec 里文本资源
 // 用 text 字段，二进制资源用 blob 字段（base64），两者互斥。
-type MCPResourceContent struct {
-	URI      string `json:"uri"`
-	MIMEType string `json:"mimeType,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Blob     string `json:"blob,omitempty"`
-}
+type MCPResourceContent = protocol.MCPResourceContent
 
 // ResourcesRead 读取指定 URI 的资源内容（MCP resources/read）。
 func (c *MCPClient) ResourcesRead(ctx context.Context, uri string) ([]MCPResourceContent, error) {

@@ -297,22 +297,40 @@ Trajectory:
 // 最终成功步骤的 Result（"果"）。单步即成功（无前置上下文）时退化为用该步骤
 // 的 Action 作为 Prompt。调用方（replaySuccess）已保证 trajectory 非空且最后
 // 一步 Success=true（Reflect 的调用前置条件），此处仍做防御性二次检查。
-func buildQLoRASample(trajectory []learning.Step) (llmadapter.TrainingSample, bool) {
+func buildQLoRASample(trajectory []learning.Step) (protocol.TrainingSample, bool) {
 	if len(trajectory) == 0 {
-		return llmadapter.TrainingSample{}, false
+		return protocol.TrainingSample{}, false
 	}
 	last := trajectory[len(trajectory)-1]
 	if !last.Success || last.Result == "" {
-		return llmadapter.TrainingSample{}, false
+		return protocol.TrainingSample{}, false
 	}
 	prompt := formatTrajectory(trajectory[:len(trajectory)-1])
 	if prompt == "" {
 		prompt = last.Action
 	}
 	if prompt == "" {
-		return llmadapter.TrainingSample{}, false
+		return protocol.TrainingSample{}, false
 	}
-	return llmadapter.TrainingSample{Prompt: prompt, Completion: last.Result}, true
+	return protocol.TrainingSample{Prompt: prompt, Completion: last.Result}, true
+}
+
+// formatQLoRASample 将原始失败上下文 + 成功 replan 转换为指令微调样本。
+func formatQLoRASample(originalReq string, failTraj []byte, successfulReplan string) protocol.TrainingSample {
+	// QLoRA 期待的 Prompt：原请求 + 导致失败的初步尝试
+	prompt := fmt.Sprintf("User Request: %s\nFailed Trajectory: %s\n\nCorrect Replan:", originalReq, failTraj)
+	return protocol.TrainingSample{
+		Prompt:     prompt,
+		Completion: successfulReplan,
+	}
+}
+
+// formatPositiveSample 提取纯正确轨迹（Zero-shot 成功）。
+func formatPositiveSample(originalReq string, successfulTraj string) protocol.TrainingSample {
+	return protocol.TrainingSample{
+		Prompt:     originalReq,
+		Completion: successfulTraj,
+	}
 }
 
 func formatTrajectory(traj []learning.Step) string {

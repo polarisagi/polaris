@@ -474,7 +474,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			}
 
 			// Ensure service runs in background with a client that allows loopback polling
-			loopbackClient := network.NewLoopbackSafeHTTPClient(cfg.Security.M11)
+			loopbackClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
 			_, err = ollamamgr.StartOllama(ctxBg, loopbackClient, binPath)
 			if err != nil {
 				slog.Error("polaris: Failed to start local Ollama", "err", err)
