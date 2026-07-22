@@ -211,8 +211,9 @@ type PolicyConfig struct {
 }
 
 type EvalConfig struct {
-	CIGate       bool `toml:"ci_gate"`
-	ShadowDeploy bool `toml:"shadow_deploy"`
+	CIGate         bool     `toml:"ci_gate"`
+	ShadowDeploy   bool     `toml:"shadow_deploy"`
+	SafetyKeywords []string `toml:"safety_keywords"`
 }
 
 type InterfaceConfig struct {

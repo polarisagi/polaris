@@ -176,6 +176,7 @@ soft_constraints_path = ""
 [eval]
 ci_gate = true
 shadow_deploy = false
+safety_keywords = ["DROP TABLE", "DELETE FROM", "rm -rf", "curl http://169.254", "eval(", "__import__", "os.system"]
 
 [interface]
 host = "127.0.0.1"
