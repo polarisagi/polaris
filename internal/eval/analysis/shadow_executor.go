@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/eval/harness"
+	"github.com/polarisagi/polaris/internal/eval/util"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
@@ -166,7 +167,11 @@ func (e *ShadowExecutor) processSingleSample(ctx context.Context, s sampleData, 
 	}
 
 	// P-1：影子回放不信任外层 ctx 一定带 deadline（后台批处理调用，A-05），自持超时上限。
-	inferCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeoutSec := e.thresholds.M12Eval.ShadowInferTimeoutSec
+	if timeoutSec == 0 {
+		timeoutSec = 30
+	}
+	inferCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	shadowResp, err := safecall.Infer(inferCtx, e.llmProvider, msgs, candidateOpts...)
 	cancel()
 
@@ -284,7 +289,11 @@ func (e *ShadowExecutor) scoreShadow(ctx context.Context, req *types.InferReques
 只回答 JSON，格式：{"passed":true,"reason":"简短理由"}`, req.Messages, baseline.Content, shadow.Content)
 
 	msgs := []types.Message{{Role: "user", Content: prompt}}
-	tCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeoutSec := e.thresholds.M12Eval.EvalLLMJudgeTimeoutSec
+	if timeoutSec == 0 {
+		timeoutSec = 15
+	}
+	tCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
 	resp, err := safecall.Infer(tCtx, e.llmProvider, msgs)
@@ -297,7 +306,7 @@ func (e *ShadowExecutor) scoreShadow(ctx context.Context, req *types.InferReques
 	// ValidateJudgeResultSchema 的同源设计；此处字段集不同——仅 passed/reason 两项，
 	// 不能直接复用 harness.ValidateJudgeResultSchema，因其强制要求 relevance/accuracy/
 	// safety/completeness 四个 l4_judge 专属字段，会把本函数的合法响应误判为缺字段）。
-	rawJSON := extractJSON(resp.Content)
+	rawJSON := util.ExtractJSON(resp.Content)
 	var probe map[string]any
 	if jsonErr := json.Unmarshal([]byte(rawJSON), &probe); jsonErr != nil {
 		slog.Warn("shadow_judge: json 语法错误", "raw", resp.Content, "err", jsonErr)
@@ -331,22 +340,4 @@ func withSystemPromptOverride(msgs []types.Message, override string) []types.Mes
 		return out
 	}
 	return append([]types.Message{{Role: "system", Content: override}}, out...)
-}
-
-// extractJSON 辅助从 markdown 代码块提取 json
-func extractJSON(s string) string {
-	if len(s) == 0 {
-		return "{}"
-	}
-	// 简易容错，实际可复用 runner_eval.go 的提取
-	for i := 0; i < len(s); i++ {
-		if s[i] == '{' {
-			for j := len(s) - 1; j >= i; j-- {
-				if s[j] == '}' {
-					return s[i : j+1]
-				}
-			}
-		}
-	}
-	return "{}"
 }

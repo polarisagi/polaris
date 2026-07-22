@@ -197,6 +197,8 @@ type M12EvalThresholds struct {
 	ShadowSampleRate        float64 `toml:"shadow.sample_rate"`         // 0.01
 	ShadowPassRateThreshold float64 `toml:"shadow.pass_rate_threshold"` // 0.95
 	ShadowMinSamples        int     `toml:"shadow.min_samples"`         // 10
+	EvalLLMJudgeTimeoutSec  int     `toml:"eval_llm_judge_timeout_sec"` // 15
+	ShadowInferTimeoutSec   int     `toml:"shadow_infer_timeout_sec"`   // 30
 
 	// V8-S2 Meta-Eval Sentinel（meta_holdout 审计，见 internal/eval/analysis/meta_eval.go）。
 	// MetaAuditGateEnabled 默认 false：这是新功能，需要运维先生成 meta_auditor 密钥对
@@ -366,6 +368,8 @@ func DefaultThresholds() Thresholds {
 			ShadowSampleRate:        0.01,
 			ShadowPassRateThreshold: 0.95,
 			ShadowMinSamples:        10,
+			EvalLLMJudgeTimeoutSec:  15,
+			ShadowInferTimeoutSec:   30,
 			MetaAuditGateEnabled:    false,
 			MetaAuditMaxAgeHours:    168,
 		},

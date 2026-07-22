@@ -192,8 +192,7 @@ func (p *ConsolidationPipeline) MarkColdEpisodicEvents(ctx context.Context, sess
 
 // ─── Stage 1 ─────────────────────────────────────────────────────────────────
 
-// extractEntitiesAndRelations 从 Episodic 事件中提取实体与关系。
-// 主路径: LLM 提取（summarizer 非 nil）。回退: 正则/共现规则。
+// computeMaxTaint 计算事件集合中的最大污点等级。
 func computeMaxTaint(events []types.ScoredEvent) types.TaintLevel {
 	maxTaint := types.TaintNone
 	for _, ev := range events {

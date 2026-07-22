@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// summarizeSession 为会话生成 3-5 句摘要，写入 store.SemanticMemory 作为 compaction 文档。
 func (p *ConsolidationPipeline) summarizeSession(
 	ctx context.Context,
 	sessionID string,
@@ -120,6 +121,3 @@ func (p *ConsolidationPipeline) buildSummary(
 }
 
 // ─── Stage 4 ─────────────────────────────────────────────────────────────────
-
-// updateSkills 从成功的工具调用事件中提炼并注册技能（Logic Collapse）。
-// 触发条件: 同一 tool_name 在 session 中成功调用 ≥ 3 次。

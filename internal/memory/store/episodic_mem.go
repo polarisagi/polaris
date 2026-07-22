@@ -24,11 +24,11 @@ const maxEpisodicEvents = 2000
 // 保留前 512 字节作为 BM25 可搜索摘要。
 const maxEpisodicPayloadBytes = 8192
 
-// EpisodicMem (L1) — 事件表 + 向量投影。
 type EpisodicIndexer interface {
 	Index(ctx context.Context, ev types.Event)
 }
 
+// EpisodicMem (L1) — 事件表 + 向量投影。
 type EpisodicMem struct {
 	store     protocol.Store
 	events    []types.Event

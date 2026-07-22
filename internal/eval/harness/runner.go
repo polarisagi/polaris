@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/eval/control"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -32,6 +33,7 @@ type RunnerImpl struct {
 
 	// l3ThresholdProvider 供 M11 批次级别全局降级判定。
 	l3ThresholdProvider L3ThresholdProvider
+	thresholds          config.Thresholds
 
 	recorder *TrajectoryRecorderImpl
 	rd       *RegressionDetector
@@ -49,11 +51,12 @@ type EvalAgent interface {
 
 var _ protocol.EvalRunner = (*RunnerImpl)(nil)
 
-func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore) *RunnerImpl {
+func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore, thresholds config.Thresholds) *RunnerImpl {
 	return &RunnerImpl{
 		store:      store,
 		evalStore:  evalStore,
 		activeRuns: make(map[string]context.CancelFunc),
+		thresholds: thresholds,
 		recorder:   NewTrajectoryRecorder(store),
 		rd:         &RegressionDetector{},
 		replayer:   NewTrajectoryReplayer(),

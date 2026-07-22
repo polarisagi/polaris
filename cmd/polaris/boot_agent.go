@@ -258,7 +258,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ─── §8 Eval Harness (L3 M12) ────────────────────────────────────────────
 	evalAccessEngine := control.NewEngine(nil)
 	evalStore := harness.NewSQLiteEvalStore(sb.Store, evalAccessEngine)
-	evalRunner := harness.NewRunner(sb.Store, evalStore)
+	evalRunner := harness.NewRunner(sb.Store, evalStore, sb.Cfg.Thresholds)
 	// V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区审计，见 00-Global-Dictionary.md
 	// §V8-Principle + internal/eval/analysis/meta_eval.go）。仅构造，不在此处调用——
 	// 调用入口是 evaladmin 的 HTTP handler（httpServer.SetEvalAdmin，boot_server.go），

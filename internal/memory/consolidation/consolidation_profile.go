@@ -11,6 +11,13 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// synthesizeUserProfile 从 Episodic 事件合成用户画像（L3 Persona）。
+//
+// 触发策略: events ≥ 10 且距上次合成 > 50 事件（由 LastEventTS 间接判断）。
+// 来源: supermemory User Profile + TencentDB L3 Persona 收敛方案。
+//
+// LLM 路径: provider 非 nil → 用 100 token prompt 让 LLM 归纳 JSON。
+// 规则 fallback: provider 为 nil → 统计工具频率 + 收集近期摘要。
 func (p *ConsolidationPipeline) synthesizeUserProfile(
 	ctx context.Context,
 	events []types.ScoredEvent,
