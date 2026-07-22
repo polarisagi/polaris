@@ -315,6 +315,33 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	return ir.wrapStreamChannel(ctx, ch, req, entry.name), nil
 }
 
+// StreamInferWithTarget 直接使用指定 Provider 发起推理，并复用本 Router 的 governance (AdmitLLM) 与 metrics，绕过 failover 机制。
+func (ir *InferenceRouter) StreamInferWithTarget(ctx context.Context, p protocol.Provider, providerName string, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	appliedOpts := protocol.ApplyInferOptions(opts)
+	req := &types.InferRequest{
+		Messages:       msgs,
+		Model:          appliedOpts.Model,
+		MaxTokens:      appliedOpts.MaxTokens,
+		Tools:          appliedOpts.Tools,
+		ThinkingMode:   appliedOpts.ThinkingMode,
+		Temperature:    appliedOpts.Temperature,
+		ResponseFormat: appliedOpts.ResponseFormat,
+		ThinkingBudget: appliedOpts.ThinkingBudget,
+	}
+	normalizeInferRequest(req)
+
+	if err := ir.acquireLLMCapacity(ctx); err != nil {
+		return nil, err
+	}
+
+	ch, err := p.StreamInfer(ctx, msgs, opts...)
+	ir.recordModelCallResult(ctx, providerName, p.ModelID(), err == nil)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "StreamInferWithTarget", err)
+	}
+	return ir.wrapStreamChannel(ctx, ch, req, providerName), nil
+}
+
 // wrapStreamChannel / streamFailover 见 router_stream.go（R7 拆分）。
 // Capabilities / Tokenizer / failover / findBestProviderLocked* / recordFailoverMetrics /
 // ClearBytes / max64 / acquireLLMCapacity 见 router_failover.go（R7 拆分）。

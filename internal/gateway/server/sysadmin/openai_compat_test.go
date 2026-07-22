@@ -40,6 +40,7 @@ func (m *mockStreamProvider) Capabilities() types.ProviderCapabilities {
 }
 func (m *mockStreamProvider) MaxConcurrency() int             { return 1 }
 func (m *mockStreamProvider) SupportsModel(model string) bool { return true }
+func (m *mockStreamProvider) ModelID() string                 { return "test-model" }
 
 func TestOpenAIChat_Sync(t *testing.T) {
 	registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
@@ -50,7 +51,8 @@ func TestOpenAIChat_Sync(t *testing.T) {
 		},
 	})
 
-	h := &SysAdminHandler{Registry: registry}
+	router := llm.NewInferenceRouter(registry, nil)
+	h := &SysAdminHandler{Registry: registry, Router: router}
 
 	reqBody := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
@@ -81,7 +83,8 @@ func TestOpenAIChat_Stream(t *testing.T) {
 		},
 	})
 
-	h := &SysAdminHandler{Registry: registry}
+	router := llm.NewInferenceRouter(registry, nil)
+	h := &SysAdminHandler{Registry: registry, Router: router}
 
 	reqBody := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
@@ -101,7 +104,8 @@ func TestOpenAIChat_Stream(t *testing.T) {
 
 func TestOpenAIChat_Errors(t *testing.T) {
 	registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
-	h := &SysAdminHandler{Registry: registry}
+	router := llm.NewInferenceRouter(registry, nil)
+	h := &SysAdminHandler{Registry: registry, Router: router}
 
 	// Invalid JSON
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(`{invalid`))

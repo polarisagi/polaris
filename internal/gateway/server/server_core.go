@@ -370,6 +370,12 @@ func (s *Server) SetChannelStarter(mgr ChannelStarter) {
 	s.channelMgr = mgr
 }
 
+func (s *Server) SetInferenceRouter(router protocol.Provider) {
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Router = router
+	}
+}
+
 func (s *Server) SetSTTProvider(provider chat.STTTranscriber) {
 	if s.chatHandler != nil {
 		s.chatHandler.SetSTTEngine(provider)
