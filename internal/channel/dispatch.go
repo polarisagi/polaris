@@ -18,16 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "dingtalk":
-		if msg.ReplyToken == "" {
-			slog.Warn("dingtalk: sessionWebhook missing, cannot reply", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.DingTalkSendMessage(ctx, m.httpClient, msg.ReplyToken, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "dingtalk: send message", err)
-		}
-
 	case "wecom":
 		if v, ok := m.wecomSends.Load(channelID); ok {
 			if ch, ok := v.(chan cadapter.WecomSendMsg); ok {

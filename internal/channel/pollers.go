@@ -7,13 +7,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-func (m *Manager) startDingTalkPoller(channelID, clientID, clientSecret string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.dingtalk."+channelID, func(ctx context.Context) {
-		cadapter.RunDingTalkPoller(ctx, m, channelID, clientID, clientSecret, cfg)
-	})
-}
 
 
 func (m *Manager) startEmailPoller(channelID string, cfg map[string]any) {
