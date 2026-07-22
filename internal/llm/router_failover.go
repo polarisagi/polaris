@@ -159,11 +159,11 @@ func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
 	}
 	err := ir.governor.WaitForLLMCapacity(ctx)
 	if err != nil {
-		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: timeout waiting for LLM capacity", err)
+		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: timeout waiting for LLM capacity", err).WithRetryAfter(10)
 	}
 	admitted, _ = ir.governor.AdmitLLM(1)
 	if !admitted {
-		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: failed to acquire LLM capacity", nil)
+		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: failed to acquire LLM capacity", nil).WithRetryAfter(10)
 	}
 	return nil
 }
