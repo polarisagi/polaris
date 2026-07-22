@@ -79,12 +79,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "dingtalk":
-		clientID, _ := cfg["client_id"].(string)
-		clientSecret, _ := cfg["client_secret"].(string)
-		if clientID != "" && clientSecret != "" {
-			m.startDingTalkPoller(channelID, clientID, clientSecret, cfg)
-		}
 	case "wecom":
 		botID, _ := cfg["bot_id"].(string)
 		secret, _ := cfg["secret"].(string)

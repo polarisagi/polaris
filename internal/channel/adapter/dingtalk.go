@@ -178,3 +178,39 @@ type dingTalkEventData struct {
 		Content string `json:"content"`
 	} `json:"text"`
 }
+
+func init() { Register(&DingTalkAdapter{}) }
+
+type DingTalkAdapter struct{}
+
+func (a *DingTalkAdapter) Type() string { return "dingtalk" }
+
+func (a *DingTalkAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{} // Uses stream poller
+}
+
+func (a *DingTalkAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	if msg.ReplyToken == "" {
+		slog.Warn("dingtalk: sessionWebhook missing, cannot reply", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := DingTalkSendMessage(ctx, host.HTTPClient(), msg.ReplyToken, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "dingtalk", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "dingtalk: send message", err)
+	}
+	return nil
+}
+
+func (a *DingTalkAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	clientID, _ := cfg["client_id"].(string)
+	clientSecret, _ := cfg["client_secret"].(string)
+	if clientID == "" || clientSecret == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.dingtalk."+channelID, func(ctx context.Context) {
+		RunDingTalkPoller(ctx, host, channelID, clientID, clientSecret, cfg)
+	})
+	return true
+}
