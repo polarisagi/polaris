@@ -130,3 +130,41 @@ type signalDataMessage struct {
 type signalGroupInfo struct {
 	GroupID string `json:"groupId"`
 }
+
+func init() { Register(&SignalAdapter{}) }
+
+type SignalAdapter struct{}
+
+func (a *SignalAdapter) Type() string { return "signal" }
+
+func (a *SignalAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{} // Uses stream poller
+}
+
+func (a *SignalAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	apiURL, _ := cfg["api_url"].(string)
+	account, _ := cfg["account"].(string)
+	if apiURL == "" || account == "" {
+		slog.Warn("signal: api_url or account missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := SignalSendMessage(ctx, host.HTTPClient(), apiURL, account, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "signal", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "signal: send message", err)
+	}
+	return nil
+}
+
+func (a *SignalAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	apiURL, _ := cfg["api_url"].(string)
+	account, _ := cfg["account"].(string)
+	if apiURL == "" || account == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.signal."+channelID, func(ctx context.Context) {
+		RunSignalPoller(ctx, host, channelID, apiURL, account, cfg)
+	})
+	return true
+}

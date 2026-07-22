@@ -19,18 +19,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "signal":
-		apiURL, _ := cfg["api_url"].(string)
-		account, _ := cfg["account"].(string)
-		if apiURL == "" || account == "" {
-			slog.Warn("signal: api_url or account missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.SignalSendMessage(ctx, m.httpClient, apiURL, account, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "signal: send message", err)
-		}
-
 	case "homeassistant":
 		haURL, _ := cfg["url"].(string)
 		haToken, _ := cfg["token"].(string)
