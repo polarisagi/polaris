@@ -19,18 +19,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "homeassistant":
-		haURL, _ := cfg["url"].(string)
-		haToken, _ := cfg["token"].(string)
-		if haURL == "" || haToken == "" {
-			slog.Warn("homeassistant: url or token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.HaSendPersistentNotification(ctx, m.httpClient, haURL, haToken, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "homeassistant: send notification", err)
-		}
-
 	case "sms":
 		accountSID, _ := cfg["account_sid"].(string)
 		authToken, _ := cfg["auth_token"].(string)

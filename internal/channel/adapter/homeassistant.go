@@ -242,3 +242,41 @@ func HaSendPersistentNotification(ctx context.Context, client *http.Client, haUR
 	}
 	return nil
 }
+
+func init() { Register(&HomeAssistantAdapter{}) }
+
+type HomeAssistantAdapter struct{}
+
+func (a *HomeAssistantAdapter) Type() string { return "homeassistant" }
+
+func (a *HomeAssistantAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{} // Uses stream poller
+}
+
+func (a *HomeAssistantAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	haURL, _ := cfg["url"].(string)
+	haToken, _ := cfg["token"].(string)
+	if haURL == "" || haToken == "" {
+		slog.Warn("homeassistant: url or token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := HaSendPersistentNotification(ctx, host.HTTPClient(), haURL, haToken, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "homeassistant", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "homeassistant: send message", err)
+	}
+	return nil
+}
+
+func (a *HomeAssistantAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	haURL, _ := cfg["url"].(string)
+	haToken, _ := cfg["token"].(string)
+	if haURL == "" || haToken == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.homeassistant."+channelID, func(ctx context.Context) {
+		RunHomeAssistantPoller(ctx, host, channelID, haURL, haToken, cfg)
+	})
+	return true
+}
