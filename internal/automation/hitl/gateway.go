@@ -323,7 +323,9 @@ func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response
 	// 2. 持久化归档记录 (audit)
 	archiveKey := []byte(fmt.Sprintf("hitl:archive:%s:%d", checkpointID, time.Now().UnixNano()))
 	archiveData, _ := json.Marshal(response)
-	_ = g.store.Put(ctx, archiveKey, archiveData)
+	if errArchive := g.store.Put(ctx, archiveKey, archiveData); errArchive != nil {
+		slog.Warn("hitl_gateway: archive record failed", "checkpoint", checkpointID, "err", errArchive)
+	}
 
 	// 3. 通知等待中的任务
 	g.mu.Lock()

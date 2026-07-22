@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -111,12 +112,14 @@ func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob)
 
 	// 写 EventLog: csv_job_row_posted（一条聚合，避免单行 N 条爆日志）
 	if job.EventLog != nil {
-		_ = job.EventLog.Append(ctx, types.Event{
+		if errEvent := job.EventLog.Append(ctx, types.Event{
 			ID:      jobID + "_posted",
 			Type:    types.EventType("csv_job_row_posted"),
 			TaskID:  jobID,
 			Payload: []byte(fmt.Sprintf(`{"job_id":%q,"total":%d}`, jobID, len(rows))),
-		})
+		}); errEvent != nil {
+			slog.Warn("csv_fanout: append job_posted event failed", "jobID", jobID, "err", errEvent)
+		}
 	}
 
 	// 并发等待所有 Task 完成（简化版：轮询 Blackboard 状态）
@@ -165,12 +168,14 @@ func RunCSVFanout(ctx context.Context, bb protocol.Blackboard, job CSVFanoutJob)
 				if taskErr != nil {
 					evType = "csv_job_row_error"
 				}
-				_ = job.EventLog.Append(ctx, types.Event{
+				if errEvent := job.EventLog.Append(ctx, types.Event{
 					ID:      e.ID + "_result",
 					Type:    types.EventType(evType),
 					TaskID:  jobID,
 					Payload: []byte(fmt.Sprintf(`{"row_id":%q,"status":%q}`, e.ID, results[idx].Status)),
-				})
+				}); errEvent != nil {
+					slog.Warn("csv_fanout: append job_row event failed", "rowID", e.ID, "err", errEvent)
+				}
 			}
 		})
 	}

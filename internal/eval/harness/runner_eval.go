@@ -21,7 +21,11 @@ import (
 // ============================================================================
 
 func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, safetyFail bool) { //nolint:gocyclo,nestif
-	inputBytes, _ := json.Marshal(c.Input)
+	inputBytes, err := json.Marshal(c.Input)
+	if err != nil {
+		slog.Error("runner_eval: marshal EvalCase input failed", "case_id", c.ID, "err", apperr.Wrap(apperr.CodeInvalidInput, "marshal input", err))
+		return false, false
+	}
 
 	var output []byte
 	var toolNames []string
@@ -69,7 +73,11 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 	if c.Level == Level3Trajectory {
 		var trace *TrajectoryTrace
 		if traceRaw, ok := c.Input["trace"].(map[string]any); ok {
-			trace, _ = ParseTrace(traceRaw)
+			var errParse error
+			trace, errParse = ParseTrace(traceRaw)
+			if errParse != nil {
+				slog.Warn("runner_eval: parse trace failed", "case_id", c.ID, "err", errParse)
+			}
 		}
 
 		if trace != nil {
