@@ -155,8 +155,12 @@ func (e *ShadowExecutor) processSingleSample(ctx context.Context, s sampleData, 
 		Request  *types.InferRequest  `json:"request"`
 		Response *types.InferResponse `json:"response"`
 	}
-	// Request 为 nil（历史事件缺字段/格式演进）时跳过，防止空指针崩溃。
-	if err := json.Unmarshal(s.Payload, &eventPayload); err != nil || eventPayload.Request == nil {
+	if err := json.Unmarshal(s.Payload, &eventPayload); err != nil {
+		slog.Warn("shadow_executor: payload decode failed", "offset", s.Offset, "error", err)
+		rm.Skipped++
+		return
+	}
+	if eventPayload.Request == nil {
 		rm.Skipped++
 		return
 	}

@@ -20,8 +20,7 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 			Network   bool   `json:"network_allowed"`
 			MaxPages  int    `json:"max_pages"`
 			Workspace string `json:"workspace"`
-			// TimeoutMs 墙钟超时预算（毫秒）；<=0 时 WasmtimeExecute 使用默认值
-			// 5000ms（Batch11 GR-7.1，此前该 FFI 调用完全没有超时预算传参）。
+			// TimeoutMs 墙钟超时预算（毫秒）；<=0 时 WasmtimeExecute 使用默认值 5000ms。
 			TimeoutMs int `json:"timeout_ms"`
 		}
 		if err := json.Unmarshal(spec.Input, &args); err != nil {

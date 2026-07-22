@@ -11,6 +11,7 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -249,11 +250,14 @@ func TestRecoverOneSession_SafeState_DrivesAgentWithReplayData(t *testing.T) {
 	recorder := harness.NewTrajectoryRecorder(kv)
 
 	protocol.SetReplayMode(false) // 确保初始状态干净
-	done := make(chan struct{})
-	go func() {
+
+	eg, _ := errgroup.WithContext(ctx)
+	eg.Go(func() error {
 		recoverOneSession(ctx, db, pool, recorder, "sess-safe")
-		close(done)
-	}()
+		return nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- eg.Wait() }() //nolint:gocritic // 等待 errgroup 而非业务协程
 
 	select {
 	case <-done:
