@@ -126,7 +126,10 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.blackboard == nil {
-		// Blackboard 未注入时退化：直接注入 Agent Intent，返回兼容响应
+		// Blackboard 未注入时退化：直接注入 Agent Intent，返回兼容响应。
+		// 污点说明（GR-09-003 复核）：SetTaskIntent 内部固定以 TaintHigh 包装 intent
+		// （agent_wiring.go RawIntentTS），本降级路径不存在污点丢失/降级——反而比正规
+		// 路径按 clientType 计算的 Medium/High 更保守，故无需在此再传污点级别。
 		if s.agentPool != nil {
 			agent, release, err := s.agentPool.Acquire(r.Context(), "default")
 			if err == nil {
