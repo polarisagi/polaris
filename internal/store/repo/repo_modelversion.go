@@ -25,7 +25,12 @@ const modelVersionSelectCols = `id, provider, model_id, version, deprecated, suc
 	prompt_template, tool_call_style, max_context, capabilities, validated_on,
 	compatibility_score, consecutive_errors, updated_at`
 
-func scanModelVersionEntry(scanner interface{ Scan(dest ...any) error }) (*repo.ModelVersionEntry, error) {
+// rowScanner 抽象 *sql.Row / *sql.Rows 共有的 Scan 方法，避免匿名接口（R-lint）。
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanModelVersionEntry(scanner rowScanner) (*repo.ModelVersionEntry, error) {
 	var e repo.ModelVersionEntry
 	var deprecated int
 	if err := scanner.Scan(
