@@ -13,22 +13,11 @@ import (
 // SendReply 将 Agent 回复发回各聊天平台。
 func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
 	if a, ok := cadapter.Lookup(channelType); ok {
+		cfg["_channel_id"] = channelID
 		return a.Send(ctx, m, cfg, msg, text)
 	}
 
 	switch channelType {
-
-	case "wecom":
-		if v, ok := m.wecomSends.Load(channelID); ok {
-			if ch, ok := v.(chan cadapter.WecomSendMsg); ok {
-				select {
-				case ch <- cadapter.WecomSendMsg{ChatID: msg.ChatID, Text: text}:
-				default:
-					slog.Warn("wecom: send channel full", "channel", channelID, "err", apperr.New(apperr.CodeInternal, "log event"))
-				}
-			}
-		}
-		return nil
 
 	case "mattermost":
 		mmURL, _ := cfg["url"].(string)

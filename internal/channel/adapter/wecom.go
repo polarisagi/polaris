@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -161,4 +162,49 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 			})
 		}
 	}
+}
+
+func init() { Register(&WecomAdapter{}) }
+
+type WecomAdapter struct {
+	wecomSends sync.Map
+}
+
+func (a *WecomAdapter) Type() string { return "wecom" }
+
+func (a *WecomAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{}
+}
+
+func (a *WecomAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	channelID, _ := cfg["_channel_id"].(string)
+	if channelID == "" {
+		return apperr.New(apperr.CodeInternal, "wecom: missing _channel_id in cfg")
+	}
+	if v, ok := a.wecomSends.Load(channelID); ok {
+		if ch, ok := v.(chan WecomSendMsg); ok {
+			select {
+			case ch <- WecomSendMsg{ChatID: msg.ChatID, Text: text}:
+			default:
+				slog.Warn("wecom: send channel full", "channel", channelID, "err", apperr.New(apperr.CodeInternal, "log event"))
+			}
+		}
+	}
+	return nil
+}
+
+func (a *WecomAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	botID, _ := cfg["bot_id"].(string)
+	secret, _ := cfg["secret"].(string)
+	if botID == "" || secret == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	sendCh := make(chan WecomSendMsg, 100)
+	a.wecomSends.Store(channelID, sendCh)
+	concurrent.SafeGo(ctx, "poller.wecom."+channelID, func(ctx context.Context) {
+		RunWeComPoller(ctx, host, channelID, botID, secret, cfg, sendCh)
+	})
+	return true
 }

@@ -10,8 +10,6 @@ import (
 // 复用既有 PollerHost（HTTPClient/OnMessage/RegisterPoller/SafeDialer）并扩展 Send 侧能力。
 type Host interface {
 	PollerHost
-	// WecomEnqueue 将 wecom 回复投递到 Manager 持有的发送通道；非 wecom 适配器不调用。
-	WecomEnqueue(channelID string, msg WecomSendMsg) bool
 }
 
 // Adapter 是单个聊天平台的统一契约。实现放在各平台 <platform>.go，并在 init() 中 Register。
