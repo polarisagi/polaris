@@ -99,7 +99,7 @@ func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, arch
 
 	c := m.client
 	if c == nil {
-		c = &http.Client{Timeout: 30 * time.Second}
+		return apperr.New(apperr.CodeInternal, "updater: safe http client not injected")
 	}
 
 	var data []byte
