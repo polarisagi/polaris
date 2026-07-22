@@ -95,6 +95,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	// ModelVersionRegistry 运营触发入口（P3-2，2026-07-21 deadcode 审查补齐）：
 	// mb.ModelRegistry 早于本函数在 bootMemory 阶段构造完毕，此处仅补一次注入。
 	httpServer.SetModelRegistry(mb.ModelRegistry)
+	httpServer.SetInferenceRouter(sb.Router)
 	channelMgr := channel.NewManager(sb.SafeHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {}, channel.WithSafeDialer(sb.Dialer))
 	httpServer.SetChannelStarter(channelMgr)
 

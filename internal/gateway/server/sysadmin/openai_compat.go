@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -161,9 +161,15 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 		Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Role: "assistant"}}},
 	})
 
-	ch, err := safecall.StreamInfer(ctx, p, inferReq.Messages)
+	router, ok := h.Router.(*llm.InferenceRouter)
+	if !ok {
+		http.Error(w, "internal server error: inference router missing", http.StatusInternalServerError)
+		return
+	}
+
+	ch, err := router.StreamInferWithTarget(ctx, p, "openai-compat", inferReq.Messages)
 	if err != nil {
-		slog.Error("openai_compat: StreamInfer failed", "err", err)
+		slog.Error("openai compat stream infer failed", "err", err)
 		h.writeOAIChunk(w, flusher, oaiChunk{
 			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
 			Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: " + truncate(err.Error(), 100) + "]"}}},
@@ -228,8 +234,15 @@ func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Re
 
 	// 使用 StreamInfer 逐 chunk 收集完整内容（与流式路径复用同一 Provider 实现）
 	ctx := r.Context()
-	ch, err := safecall.StreamInfer(ctx, p, inferReq.Messages)
+	router, ok := h.Router.(*llm.InferenceRouter)
+	if !ok {
+		http.Error(w, "internal server error: inference router missing", http.StatusInternalServerError)
+		return
+	}
+
+	ch, err := router.StreamInferWithTarget(ctx, p, "openai-compat", inferReq.Messages)
 	if err != nil {
+		slog.Error("openai compat sync infer failed", "err", err)
 		http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, truncate(err.Error(), 200)), http.StatusInternalServerError)
 		return
 	}

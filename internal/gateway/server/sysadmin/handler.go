@@ -52,6 +52,7 @@ type SysAdminHandler struct {
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Registry       protocol.LLMRegistry
+	Router         protocol.Provider
 	HITLGateway    protocol.HITL
 	Blackboard     *orchestrator.SQLiteBlackboard
 	PipelineOrch   *orchestrator.PipelineOrchestrator
@@ -111,6 +112,7 @@ type Dependencies struct {
 	AutomationRepo repo.AutomationRepository
 	Chat           ChatDispatcher
 	Registry       protocol.LLMRegistry
+	Router         protocol.Provider
 	HTTPClient     *http.Client
 	ExtRepo        protocol.ExtensionRepository
 	HITLGateway    protocol.HITL
@@ -153,6 +155,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		AutomationRepo:    deps.AutomationRepo,
 		Chat:              deps.Chat,
 		Registry:          deps.Registry,
+		Router:            deps.Router,
 		HTTPClient:        deps.HTTPClient,
 		ExtRepo:           deps.ExtRepo,
 		HITLGateway:       deps.HITLGateway,

@@ -10,8 +10,11 @@ import (
 )
 
 func TestOpenAICompatHandlers(t *testing.T) {
+	registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
+	router := llm.NewInferenceRouter(registry, nil)
 	h := &SysAdminHandler{
-		Registry: llm.NewProviderRegistry(config.M1RouterThresholds{}),
+		Registry: registry,
+		Router:   router,
 	}
 
 	body := `{"model": "test-model", "messages": [{"role": "user", "content": "hello"}], "stream": true}`
