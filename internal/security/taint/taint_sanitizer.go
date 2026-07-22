@@ -137,19 +137,3 @@ func SanitizeToSafe(ts TaintedString) (SafeString, error) {
 
 	return SafeString{content: ts.content}, nil
 }
-
-// SanitizeByDeterministicTransform 经纯函数变换后降级。
-// 适用场景：格式化、哈希、截断等确定性操作，输出无 LLM 衍生内容。
-// 结果: data.Level = min(Level-1, TaintMedium)
-func SanitizeByDeterministicTransform(ts TaintedString, transformName string) TaintedString {
-	newLevel := ts.Source.OriginTaintLevel - 1
-	if newLevel > types.TaintMedium {
-		newLevel = types.TaintMedium
-	}
-	if newLevel < types.TaintNone {
-		newLevel = types.TaintNone
-	}
-	ts.Source.OriginTaintLevel = newLevel
-	ts.Source.Module = "deterministic:" + transformName
-	return ts
-}

@@ -30,7 +30,7 @@ func TestIsSensitivePath(t *testing.T) {
 }
 
 func TestContextRefExpander_Expand(t *testing.T) {
-	exp := NewContextRefExpander(http.DefaultClient, WithMaxExpandTokens(100))
+	exp := NewContextRefExpander(http.DefaultClient)
 
 	// Simple skip case
 	text := `@file:".ssh/id_rsa"`

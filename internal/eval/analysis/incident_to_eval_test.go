@@ -80,27 +80,4 @@ func TestIncidentToEvalConverter_Integration(t *testing.T) {
 		t.Errorf("expected case to be in pending_review partition")
 	}
 
-	// Now promote
-	err = converter.ReviewAndPromote(ctx, c.ID, "admin", "incident", harness.SeverityP1)
-	if err != nil {
-		t.Fatalf("unexpected error promoting: %v", err)
-	}
-
-	// Verify oldKey deleted
-	if _, ok := mStore.data[oldKey]; ok {
-		t.Errorf("expected case to be removed from pending_review")
-	}
-
-	// Verify case is in validation with new severity
-	newKey := "eval:case:validation:incident:" + c.ID
-	newVal, ok := mStore.data[newKey]
-	if !ok {
-		t.Errorf("expected case to be in validation partition")
-	}
-
-	var newC harness.EvalCase
-	_ = json.Unmarshal(newVal, &newC)
-	if newC.Severity != harness.SeverityP1 {
-		t.Errorf("expected severity P1, got %v", newC.Severity)
-	}
 }

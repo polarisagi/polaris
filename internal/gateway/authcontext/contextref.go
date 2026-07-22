@@ -70,11 +70,6 @@ func NewContextRefExpander(client *http.Client, opts ...func(*ContextRefExpander
 	return e
 }
 
-// WithMaxExpandTokens 设置展开 token 上限。
-func WithMaxExpandTokens(n int) func(*ContextRefExpander) {
-	return func(e *ContextRefExpander) { e.maxExpandTokens = n }
-}
-
 // WithWorkDir 设置文件读取的基准目录。
 func WithWorkDir(dir string) func(*ContextRefExpander) {
 	return func(e *ContextRefExpander) { e.workDir = dir }

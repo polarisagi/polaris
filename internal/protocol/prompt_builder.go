@@ -1,9 +1,7 @@
 package protocol
 
 import (
-	"crypto/ed25519"
 	"fmt"
-	"log/slog"
 
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -43,40 +41,6 @@ func (b *PromptBuilder) WriteSystemEnvironment(snapshot string) {
 	})
 }
 
-// WriteSkillContext 将技能上下文写入 ZoneMutableSkill 区。
-func (b *PromptBuilder) WriteSkillContext(skillVersions *map[string]int64, skill types.Skill, pubKey ed25519.PublicKey) {
-	// 2. 先验 Ed25519 签名
-	if !ed25519.Verify(pubKey, []byte(skill.Content), skill.Signature) {
-		slog.Warn("prompt_builder_mutable_skill_integrity_failed", "skill", skill.Name)
-		content := "[UNTRUSTED SKILL - SIGNATURE INVALID]\n" + skill.Content
-		ts := taint.NewTaintedString(content, taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "skill_integrity_check")
-		b.WriteUserData(ts)
-		return
-	}
-
-	// 3. 版本单调检查
-	if *skillVersions == nil {
-		*skillVersions = make(map[string]int64)
-	}
-	lastVer, exists := (*skillVersions)[skill.Name]
-	if exists && skill.Version < lastVer {
-		slog.Warn("WriteSkillContext: version rollback detected, rejecting skill", "skill", skill.Name, "version", skill.Version, "last", lastVer)
-		return
-	}
-	(*skillVersions)[skill.Name] = skill.Version
-
-	// 4. TrustLevel 标记
-	content := skill.Content
-	if skill.Trust < types.TrustOfficial {
-		content = "[UNTRUSTED]\n" + content
-	}
-
-	b.zones[ZoneMutableSkill] = append(b.zones[ZoneMutableSkill], types.Message{
-		Role:    "system",
-		Content: content,
-	})
-}
-
 // WriteCoreMemory 将核心工作记忆写入 ZoneCoreMemory 区。
 func (b *PromptBuilder) WriteCoreMemory(blocks []types.CoreMemoryBlock) {
 	for _, block := range blocks {
@@ -99,12 +63,6 @@ func (b *PromptBuilder) WriteUserData(ts taint.TaintedString) {
 		Role:    "user",
 		Content: taint.Spotlighting(ts),
 	})
-}
-
-// WriteUserInstruction 允许将 SafeString 写入 User 角色。
-// 用于某些特定场景下需要由 User 发起但内容确认为系统硬编码的安全指令。
-func (b *PromptBuilder) WriteUserInstruction(safe taint.SafeString) {
-	b.zones[ZoneImmutable] = append(b.zones[ZoneImmutable], safe.IntoMessage("user"))
 }
 
 // WriteUserImages 将图片等媒体块写入 User 角色。

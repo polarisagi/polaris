@@ -178,8 +178,3 @@ ProviderResponse struct {
 func WithResponseFormat(fmt *ResponseFormat) InferOption {
 	return func(o *InferOptions) { o.ResponseFormat = fmt }
 }
-
-// WithSemanticCacheHints 设置语义缓存提示
-func WithSemanticCacheHints(hints *SemanticCacheHints) InferOption {
-	return func(o *InferOptions) { o.CacheHints = hints }
-}

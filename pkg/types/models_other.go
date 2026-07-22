@@ -155,11 +155,6 @@ func WithThinkingMode(mode ThinkingMode) InferOption {
 	return func(o *InferOptions) { o.ThinkingMode = mode }
 }
 
-// WithThinkingBudget 设置扩展思考的 token 预算
-func WithThinkingBudget(budget int) InferOption {
-	return func(o *InferOptions) { o.ThinkingBudget = budget }
-}
-
 // WithMaxTokens 设置最大输出 token 数。
 func WithMaxTokens(n int) InferOption {
 	return func(o *InferOptions) { o.MaxTokens = n }

@@ -9,7 +9,6 @@ import (
 func TestInferOptions(t *testing.T) {
 	opts := ApplyInferOptions([]types.InferOption{
 		types.WithThinkingMode("fast"),
-		types.WithThinkingBudget(100),
 		types.WithMaxTokens(200),
 		types.WithModel("test-model"),
 		types.WithTemperature(0.5),
@@ -18,9 +17,6 @@ func TestInferOptions(t *testing.T) {
 
 	if opts.ThinkingMode != "fast" {
 		t.Errorf("Expected fast, got %s", opts.ThinkingMode)
-	}
-	if opts.ThinkingBudget != 100 {
-		t.Errorf("Expected 100, got %d", opts.ThinkingBudget)
 	}
 	if opts.MaxTokens != 200 {
 		t.Errorf("Expected 200, got %d", opts.MaxTokens)

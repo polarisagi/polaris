@@ -350,5 +350,11 @@ func (s *Signer) Verify(code []byte, signature string) bool {
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
-// SkillEvolutionEngine（递归演化 + 四级废弃）、SkillDeprecationLevel、
-// ErrPipelineTaintedTrajectory/ErrSkillCompileFailed 见 skill_pipeline_evolution.go（R7 拆分）。
+var (
+	ErrPipelineTaintedTrajectory = &SkillPipelineError{"tainted trajectory rejected"}
+	ErrSkillCompileFailed        = &SkillPipelineError{"skill compilation failed"}
+)
+
+type SkillPipelineError struct{ msg string }
+
+func (e *SkillPipelineError) Error() string { return e.msg }

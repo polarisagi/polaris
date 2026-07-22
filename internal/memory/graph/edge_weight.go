@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ============================================================================
@@ -70,35 +69,4 @@ func (ewm *EdgeWeightManager) PeriodicPrune(ctx context.Context) error {
 	// 执行 DELETE-only 的边删除
 	// 这里仅做桩实现
 	return nil
-}
-
-// EvidenceSubgraphExtractor 提取相关实体子图。
-type EvidenceSubgraphExtractor struct {
-	graphDB  protocol.Store
-	maxDepth int
-	maxNodes int
-	alpha    float64
-}
-
-func NewEvidenceSubgraphExtractor(store protocol.Store) *EvidenceSubgraphExtractor {
-	return &EvidenceSubgraphExtractor{
-		graphDB:  store,
-		maxDepth: 2,
-		maxNodes: 50,
-		alpha:    0.85,
-	}
-}
-
-// Extract 执行有界 BFS 和 Personalized PageRank。
-func (ese *EvidenceSubgraphExtractor) Extract(ctx context.Context, seedEntityIDs []string) (string, error) {
-	if len(seedEntityIDs) == 0 {
-		return "", apperr.New(apperr.CodeInternal, "no seed entities provided")
-	}
-
-	// mock implementation
-	result := "Knowledge Graph Context:\n"
-	for _, id := range seedEntityIDs {
-		result += "- [Concept] " + id + ": extracted sub-graph.\n"
-	}
-	return result, nil
 }

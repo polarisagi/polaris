@@ -62,7 +62,7 @@ func setupTraverserTestDB(t *testing.T) *sql.DB {
 func TestGraphTraverser_TraverseChunks(t *testing.T) {
 	db := setupTraverserTestDB(t)
 	defer db.Close()
-	gt := NewGraphTraverser(db)
+	gt := &GraphTraverser{db: db}
 	chunks, err := gt.TraverseChunks(context.Background(), "GraphRAG", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

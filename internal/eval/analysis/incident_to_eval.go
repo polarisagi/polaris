@@ -72,22 +72,3 @@ func (c *IncidentToEvalConverter) Convert(ctx context.Context, incidentJSON []by
 
 	return evalCase, nil
 }
-
-// ReviewAndPromote Phase 2 专家标注：将 pending_review 中的 case 经人工确认后迁移至 validation。
-// reviewer: 审批人标识（审计用）；adjustedSeverity 允许专家降级（P0→P1/P2）。
-// agentRole 必须与 PutCase 写入时的 agentRole 一致（例如 IncidentToEvalConverter.Convert 写入的是 "incident"）。
-// 此方法需要在 API 层暴露给人工审核界面（M12 §6 HITL 入口）。
-func (c *IncidentToEvalConverter) ReviewAndPromote(ctx context.Context, caseID, reviewer, agentRole string, adjustedSeverity harness.Severity) error {
-	if reviewer == "" {
-		return apperr.New(apperr.CodeInternal, "reviewer is required for Phase 2 annotation")
-	}
-	if c.store == nil {
-		return apperr.New(apperr.CodeInternal, "store is nil")
-	}
-	// 1. 从 pending_review 读取 case
-	// 2. 更新 harness.Severity（专家可降级，但不可升级超过 P0）
-	// 3. 写入 validation 分区
-	// 4. 记录审计事件（ reviewer、timestamp、adjustedSeverity 可由审计组件或者上层处理）
-	// 5. 从 pending_review 删除
-	return c.store.PromotePendingCase(ctx, caseID, "pending_review", "validation", reviewer, agentRole, adjustedSeverity)
-}

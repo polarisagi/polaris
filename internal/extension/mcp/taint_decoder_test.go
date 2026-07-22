@@ -86,18 +86,6 @@ func TestTaintPreservingDecoder_ComplexJSON(t *testing.T) {
 	if node.MaxTaint() != types.TaintHigh {
 		t.Errorf("expected MaxTaint %v, got %v", types.TaintHigh, node.MaxTaint())
 	}
-
-	strs := node.AllStrings()
-	expectedStrings := map[string]bool{"test": true, "a": true, "b": true, "value": true}
-	for _, s := range strs {
-		if !expectedStrings[s] {
-			t.Errorf("unexpected string found: %s", s)
-		}
-		delete(expectedStrings, s)
-	}
-	if len(expectedStrings) > 0 {
-		t.Errorf("missing strings: %v", expectedStrings)
-	}
 }
 
 func TestTaintPreservingDecoder_EmptyRaw(t *testing.T) {
@@ -108,15 +96,6 @@ func TestTaintPreservingDecoder_EmptyRaw(t *testing.T) {
 	}
 	if node.MaxTaint() != types.TaintNone {
 		t.Errorf("expected TaintNone, got %v", node.MaxTaint())
-	}
-	if len(node.AllStrings()) != 0 {
-		t.Errorf("expected empty string slice, got %v", node.AllStrings())
-	}
-
-	// 覆盖 AllStrings nil 节点路径
-	var n *TaintedJSONNode
-	if len(n.AllStrings()) != 0 {
-		t.Errorf("expected empty string slice for nil node")
 	}
 }
 
@@ -129,17 +108,6 @@ func TestTaintPreservingDecoder_Taint(t *testing.T) {
 	decoder2 := NewTaintPreservingDecoder("s2", false)
 	if decoder2.Taint() != types.TaintHigh {
 		t.Errorf("expected TaintHigh, got %v", decoder2.Taint())
-	}
-}
-
-func TestTaintedJSONNode_AllStrings_StringNode(t *testing.T) {
-	node := &TaintedJSONNode{
-		Kind:   kindString,
-		StrVal: "test",
-	}
-	strs := node.AllStrings()
-	if len(strs) != 1 || strs[0] != "test" {
-		t.Errorf("expected ['test'], got %v", strs)
 	}
 }
 

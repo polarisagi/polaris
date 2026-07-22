@@ -14,33 +14,6 @@ const (
 	MCPSSE            = protocol.MCPSSE
 )
 
-// MCPErrorCode 传输层无关的统一错误码。
-type MCPErrorCode string
-
-const (
-	MCPConnectionLost    MCPErrorCode = "CONNECTION_LOST"
-	MCPConnectionTimeout MCPErrorCode = "CONNECTION_TIMEOUT"
-	MCPConnectionFailed  MCPErrorCode = "CONNECTION_FAILED"
-	MCPRemoteError       MCPErrorCode = "REMOTE_ERROR"
-	MCPRemoteUnavailable MCPErrorCode = "REMOTE_UNAVAILABLE"
-	MCPClientError       MCPErrorCode = "CLIENT_ERROR"
-)
-
-// MCPRetryPolicy MCP 重试策略。
-// CONNECTION_LOST/FAILED/TIMEOUT → 2次指数退避
-// CLIENT_ERROR → 0
-// REMOTE_ERROR/UNAVAILABLE → 1次
-func MCPRetryPolicy(code MCPErrorCode) int {
-	switch code {
-	case MCPConnectionLost, MCPConnectionFailed, MCPConnectionTimeout:
-		return 2
-	case MCPRemoteError, MCPRemoteUnavailable:
-		return 1
-	default:
-		return 0
-	}
-}
-
 // MCPServerConfig MCP Server 连接配置。
 type MCPServerConfig struct {
 	Name        string
