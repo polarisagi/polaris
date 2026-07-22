@@ -18,7 +18,7 @@
 //     一致地把 unsafe 集中在薄薄一层、并用注释标注不变量。
 
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70,6 +70,7 @@ struct ModelHolder {
 unsafe impl Send for ModelHolder {}
 
 static STATE: Mutex<Option<ModelHolder>> = Mutex::new(None);
+static ABORT_FLAG: AtomicBool = AtomicBool::new(false);
 
 fn lock_state() -> Result<MutexGuard<'static, Option<ModelHolder>>, String> {
     STATE.lock().map_err(|_| {
@@ -128,6 +129,8 @@ pub struct LoadModelResponse {
 
 pub fn load_model(req: LoadModelRequest) -> Result<LoadModelResponse, String> {
     let be = backend()?;
+
+    ABORT_FLAG.store(false, Ordering::Relaxed);
 
     // 若已有模型常驻，先完整卸载（热切换语义：单槽位）。
     {
@@ -197,6 +200,7 @@ pub fn load_model(req: LoadModelRequest) -> Result<LoadModelResponse, String> {
 }
 
 pub fn unload_model() -> Result<(), String> {
+    ABORT_FLAG.store(true, Ordering::Relaxed);
     let mut guard = lock_state()?;
     if let Some(holder) = guard.take() {
         unload(holder);
@@ -285,6 +289,7 @@ pub struct GenerateResponse {
 pub fn generate(req: GenerateRequest) -> Result<GenerateResponse, String> {
     // 仅确保后端已初始化（生成复用持久化 gen_ctx，无需再次持有 backend 引用）。
     backend()?;
+    ABORT_FLAG.store(false, Ordering::Relaxed);
     let mut guard = lock_state()?;
     let holder = guard
         .as_mut()
@@ -366,6 +371,11 @@ pub fn generate(req: GenerateRequest) -> Result<GenerateResponse, String> {
     let mut finish_reason = "length".to_string();
 
     for _ in 0..max_tokens {
+        if ABORT_FLAG.load(Ordering::Relaxed) {
+            finish_reason = "abort".to_string();
+            break;
+        }
+
         let last_idx = batch.n_tokens() - 1;
         let token = sampler.sample(&holder.gen_ctx, last_idx);
         sampler.accept(token);
