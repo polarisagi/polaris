@@ -78,13 +78,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "email":
-		imapHost, _ := cfg["imap_host"].(string)
-		address, _ := cfg["address"].(string)
-		password, _ := cfg["password"].(string)
-		if imapHost != "" && address != "" && password != "" {
-			m.startEmailPoller(channelID, cfg)
-		}
 	case "matrix":
 		homeserver, _ := cfg["homeserver"].(string)
 		accessToken, _ := cfg["access_token"].(string)

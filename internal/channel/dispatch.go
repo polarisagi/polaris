@@ -18,25 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 	}
 
 	switch channelType {
-
-	case "email":
-		smtpHost, _ := cfg["smtp_host"].(string)
-		smtpPort, _ := cfg["smtp_port"].(string)
-		address, _ := cfg["address"].(string)
-		password, _ := cfg["password"].(string)
-		if smtpPort == "" {
-			smtpPort = "587"
-		}
-		if smtpHost == "" || address == "" || password == "" {
-			slog.Warn("email: smtp config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.EmailSendMessage(smtpHost, smtpPort, address, password, msg.ChatID, "Re: [Polaris]", text); err != nil {
-			slog.Error("email: send failed", "to", msg.ChatID, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "email: send failed", err)
-		}
-		return nil
-
 	case "matrix":
 		homeserver, _ := cfg["homeserver"].(string)
 		accessToken, _ := cfg["access_token"].(string)
