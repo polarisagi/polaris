@@ -19,7 +19,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use llama_cpp_2::context::LlamaContext;
@@ -55,13 +55,12 @@ fn backend() -> Result<&'static LlamaBackend, String> {
 struct ModelHolder {
     // 字段本身声明顺序不承载析构语义（我们不用自动 Drop，见 unload()），
     // 但保留 gen_ctx 在前，提醒读者其生命周期先于 model_ptr 结束。
+    // 仅保留计算路径实际读取的字段：gen_ctx/model_ptr 供推理，n_ctx 供 generate 的
+    // prompt 长度校验。其余展示型元数据（path/n_gpu_layers/n_ctx_train/n_embd）已下沉到
+    // STATUS 只读镜像（见 ADR-0063），不在此重复持有，避免双份状态漂移与死字段。
     gen_ctx: LlamaContext<'static>,
     model_ptr: *mut LlamaModel,
-    path: String,
     n_ctx: u32,
-    n_gpu_layers: u32,
-    n_ctx_train: u32,
-    n_embd: i32,
 }
 
 // Safety: ModelHolder 的所有访问都经由 STATE: Mutex<Option<ModelHolder>> 序列化，
@@ -71,6 +70,32 @@ unsafe impl Send for ModelHolder {}
 
 static STATE: Mutex<Option<ModelHolder>> = Mutex::new(None);
 static ABORT_FLAG: AtomicBool = AtomicBool::new(false);
+
+// STATUS 是 STATE 的只读镜像快照（控制面/计算面分离，见 WO-10/ADR-0063）：
+// generate() 在长循环期间独占 STATE 计算锁，若 status() 也走 STATE 会被阻塞数十秒、
+// 形成推理期监控盲区。status() 需要的字段（loaded/path/n_ctx 等）在模型加载后即固定不变，
+// 故用独立 RwLock 缓存一份；generate()/evict 全程不触碰 STATUS，status() 读锁与推理无竞争。
+// 写点仅两处（均在 STATE 锁保护下发生）：加载成功后写入、卸载时清空——保证与 STATE 不漂移。
+static STATUS: RwLock<Option<StatusSnapshot>> = RwLock::new(None);
+
+// StatusSnapshot 仅承载 status() 返回所需的加载后不变字段。
+#[derive(Clone)]
+struct StatusSnapshot {
+    path: String,
+    n_ctx: u32,
+    n_ctx_train: u32,
+    n_embd: i32,
+    n_gpu_layers: u32,
+}
+
+// set_status_snapshot 更新 STATUS 镜像；仅由持有 STATE 锁的 load/unload 调用。
+// RwLock 中毒（前次写者 panic）时静默跳过——status() 会读到旧值，属可接受降级，
+// 不因监控镜像故障阻断主流程。
+fn set_status_snapshot(snap: Option<StatusSnapshot>) {
+    if let Ok(mut w) = STATUS.write() {
+        *w = snap;
+    }
+}
 
 fn lock_state() -> Result<MutexGuard<'static, Option<ModelHolder>>, String> {
     STATE.lock().map_err(|_| {
@@ -133,10 +158,12 @@ pub fn load_model(req: LoadModelRequest) -> Result<LoadModelResponse, String> {
     ABORT_FLAG.store(false, Ordering::Relaxed);
 
     // 若已有模型常驻，先完整卸载（热切换语义：单槽位）。
+    // 同步清空只读镜像：若后续加载中途失败，status() 不应再报旧模型 loaded。
     {
         let mut guard = lock_state()?;
         if let Some(old) = guard.take() {
             unload(old);
+            set_status_snapshot(None);
         }
     }
 
@@ -180,15 +207,19 @@ pub fn load_model(req: LoadModelRequest) -> Result<LoadModelResponse, String> {
     let holder = ModelHolder {
         gen_ctx,
         model_ptr,
-        path: req.model_path.clone(),
         n_ctx: n_ctx_req,
-        n_gpu_layers: req.n_gpu_layers,
-        n_ctx_train,
-        n_embd,
     };
 
     let mut guard = lock_state()?;
     *guard = Some(holder);
+    // 同步更新只读镜像（仍在 STATE 锁内，保证快照与 STATE 一致）。
+    set_status_snapshot(Some(StatusSnapshot {
+        path: req.model_path.clone(),
+        n_ctx: n_ctx_req,
+        n_ctx_train,
+        n_embd,
+        n_gpu_layers: req.n_gpu_layers,
+    }));
 
     Ok(LoadModelResponse {
         ok: true,
@@ -205,6 +236,8 @@ pub fn unload_model() -> Result<(), String> {
     if let Some(holder) = guard.take() {
         unload(holder);
     }
+    // 清空只读镜像（仍在 STATE 锁内）。
+    set_status_snapshot(None);
     Ok(())
 }
 
@@ -229,16 +262,18 @@ pub struct StatusResponse {
     pub n_gpu_layers: u32,
 }
 
+// status() 读只读镜像 STATUS 而非 STATE：即使 generate() 正持 STATE 计算锁做长推理，
+// 监控查询也不被阻塞（WO-10/ADR-0063 控制面/计算面分离）。RwLock 中毒时退化为 not-loaded。
 pub fn status() -> Result<StatusResponse, String> {
-    let guard = lock_state()?;
-    Ok(match guard.as_ref() {
-        Some(h) => StatusResponse {
+    let snap = STATUS.read().ok().and_then(|g| g.clone());
+    Ok(match snap {
+        Some(s) => StatusResponse {
             loaded: true,
-            path: h.path.clone(),
-            n_ctx: h.n_ctx,
-            n_ctx_train: h.n_ctx_train,
-            n_embd: h.n_embd,
-            n_gpu_layers: h.n_gpu_layers,
+            path: s.path,
+            n_ctx: s.n_ctx,
+            n_ctx_train: s.n_ctx_train,
+            n_embd: s.n_embd,
+            n_gpu_layers: s.n_gpu_layers,
         },
         None => StatusResponse {
             loaded: false,
