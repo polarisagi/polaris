@@ -170,12 +170,14 @@ func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 	if at.repo != nil {
 		payload := mustJSON(epochEnd)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
+		if err := at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
 			ID:     epochEnd.EventID,
 			Actor:  "system",
 			Action: "system",
 			Meta:   string(payload),
-		})
+		}); err != nil {
+			slog.Error("audit_trail: append epoch marker failed", "event", epochEnd.EventID, "err", err)
+		}
 		cancel()
 	}
 
@@ -209,12 +211,14 @@ func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 	if at.repo != nil {
 		payload := mustJSON(epochStart)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
+		if err := at.repo.AppendAuditEvent(ctx, types.AuditEventRow{
 			ID:     epochStart.EventID,
 			Actor:  "system",
 			Action: "system",
 			Meta:   string(payload),
-		})
+		}); err != nil {
+			slog.Error("audit_trail: append epoch marker failed", "event", epochStart.EventID, "err", err)
+		}
 		cancel()
 	}
 
