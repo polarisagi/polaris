@@ -22,5 +22,6 @@
   "internal/tool/sandbox/rust_native_sandbox.go":   true,
   "internal/tool/sandbox/rust_wasmtime_sandbox.go": true,
   "internal/extension/skill/sdk/sdk.go":            true,
-  "internal/llm/modelregistry/registry.go":         true
+  "internal/llm/modelregistry/registry.go":         true,
+  "internal/gateway/server/middleware_auth.go":     true
 }

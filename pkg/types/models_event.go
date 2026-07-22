@@ -21,8 +21,9 @@ type HITLNotification struct {
 	TaskID       string
 	Description  string
 	Risk         string
-	Timeout      int64
-	ReviewURL    string
+	// 绝对截止时间（Unix 纳秒），0 表示无截止
+	DeadlineNs int64
+	ReviewURL  string
 }
 
 type
