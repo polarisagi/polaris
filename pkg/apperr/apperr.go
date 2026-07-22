@@ -53,9 +53,16 @@ const (
 // Error 是 Polaris 统一应用错误类型。
 // Code 用于程序化路由，Message 用于日志，Cause 用于链式溯源。
 type Error struct {
-	Code    Code
-	Message string
-	Cause   error
+	Code       Code
+	Message    string
+	Cause      error
+	RetryAfter int // 可选，建议的重试间隔（秒），用于自动转换为 Retry-After HTTP 头
+}
+
+// WithRetryAfter 设置重试建议间隔并返回自身。
+func (e *Error) WithRetryAfter(seconds int) *Error {
+	e.RetryAfter = seconds
+	return e
 }
 
 func (e *Error) Error() string {
@@ -111,7 +118,12 @@ func CodeOf(err error) Code {
 // HTTPStatus 将 Code 映射到对应的 HTTP 状态码。
 // 供 gateway 层统一调用，避免各 handler 手写魔法数字。
 //
-//	http.Error(w, err.Error(), apperr.HTTPStatus(apperr.CodeOf(err)))
+//	if err != nil {
+//		if ae, ok := err.(*apperr.Error); ok && ae.RetryAfter > 0 {
+//			w.Header().Set("Retry-After", strconv.Itoa(ae.RetryAfter))
+//		}
+//		http.Error(w, err.Error(), apperr.HTTPStatus(apperr.CodeOf(err)))
+//	}
 func HTTPStatus(code Code) int {
 	switch code {
 	case CodeOK:

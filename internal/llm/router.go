@@ -182,7 +182,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 
 	entry := ir.registry.best(req)
 	if entry == nil {
-		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed)
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}
 
 	if err := ir.acquireLLMCapacity(ctx); err != nil {
@@ -277,7 +277,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	normalizeInferRequest(req)
 	entry := ir.registry.best(req)
 	if entry == nil {
-		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed)
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}
 
 	if err := ir.acquireLLMCapacity(ctx); err != nil {
