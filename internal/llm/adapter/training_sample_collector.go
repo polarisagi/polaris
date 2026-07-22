@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/protocol"
+
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -26,15 +28,15 @@ import (
 // 内存增长。
 type TrainingSampleCollector struct {
 	mu        sync.Mutex
-	samples   []TrainingSample
-	adapter   TrainingAdapter
+	samples   []protocol.TrainingSample
+	adapter   protocol.TrainingAdapter
 	batchSize int
 	name      string // 日志标识（"qlora"/"prm"）
 }
 
 // NewTrainingSampleCollector 创建采集器。a 为 nil 时 Add 直接跳过（nil-safe，
 // 对应 FeatureQLoRA/FeaturePRMTraining 未启用场景）。batchSize<=0 时使用默认 64。
-func NewTrainingSampleCollector(name string, a TrainingAdapter, batchSize int) *TrainingSampleCollector {
+func NewTrainingSampleCollector(name string, a protocol.TrainingAdapter, batchSize int) *TrainingSampleCollector {
 	if batchSize <= 0 {
 		batchSize = 64
 	}
@@ -43,13 +45,13 @@ func NewTrainingSampleCollector(name string, a TrainingAdapter, batchSize int) *
 
 // Add 追加一条样本；达到 batchSize 时异步触发一次训练并清空缓冲区。
 // c 为 nil 或未注入 adapter 时安全跳过，调用方无需先判空。
-func (c *TrainingSampleCollector) Add(sample TrainingSample) {
+func (c *TrainingSampleCollector) Add(sample protocol.TrainingSample) {
 	if c == nil || c.adapter == nil {
 		return
 	}
 	c.mu.Lock()
 	c.samples = append(c.samples, sample)
-	var batch []TrainingSample
+	var batch []protocol.TrainingSample
 	if len(c.samples) >= c.batchSize {
 		batch = c.samples
 		c.samples = nil

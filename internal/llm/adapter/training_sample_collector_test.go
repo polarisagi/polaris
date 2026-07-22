@@ -5,20 +5,22 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 type fakeTrainingAdapter struct {
 	mu      sync.Mutex
-	batches [][]TrainingSample
+	batches [][]protocol.TrainingSample
 }
 
-func (f *fakeTrainingAdapter) Train(ctx context.Context, samples []TrainingSample) (*TrainingResult, error) {
+func (f *fakeTrainingAdapter) Train(ctx context.Context, samples []protocol.TrainingSample) (*protocol.TrainingResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	batch := make([]TrainingSample, len(samples))
+	batch := make([]protocol.TrainingSample, len(samples))
 	copy(batch, samples)
 	f.batches = append(f.batches, batch)
-	return &TrainingResult{JobID: "job"}, nil
+	return &protocol.TrainingResult{JobID: "job"}, nil
 }
 
 func (f *fakeTrainingAdapter) batchCount() int {
@@ -31,8 +33,8 @@ func TestTrainingSampleCollector_TriggersAtBatchSize(t *testing.T) {
 	fake := &fakeTrainingAdapter{}
 	c := NewTrainingSampleCollector("test", fake, 3)
 
-	c.Add(TrainingSample{Prompt: "p1", Completion: "c1"})
-	c.Add(TrainingSample{Prompt: "p2", Completion: "c2"})
+	c.Add(protocol.TrainingSample{Prompt: "p1", Completion: "c1"})
+	c.Add(protocol.TrainingSample{Prompt: "p2", Completion: "c2"})
 	if fake.batchCount() != 0 {
 		t.Fatal("expected no training trigger before batch size reached")
 	}
@@ -40,7 +42,7 @@ func TestTrainingSampleCollector_TriggersAtBatchSize(t *testing.T) {
 		t.Errorf("expected 2 pending samples, got %d", got)
 	}
 
-	c.Add(TrainingSample{Prompt: "p3", Completion: "c3"})
+	c.Add(protocol.TrainingSample{Prompt: "p3", Completion: "c3"})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for fake.batchCount() == 0 && time.Now().Before(deadline) {
@@ -56,13 +58,13 @@ func TestTrainingSampleCollector_TriggersAtBatchSize(t *testing.T) {
 
 func TestTrainingSampleCollector_NilSafe(t *testing.T) {
 	var c *TrainingSampleCollector
-	c.Add(TrainingSample{Prompt: "p", Completion: "c"}) // 不应 panic
+	c.Add(protocol.TrainingSample{Prompt: "p", Completion: "c"}) // 不应 panic
 	if got := c.Pending(); got != 0 {
 		t.Errorf("expected 0 pending for nil collector, got %d", got)
 	}
 
 	c2 := NewTrainingSampleCollector("test", nil, 1)
-	c2.Add(TrainingSample{Prompt: "p", Completion: "c"}) // adapter=nil，不应 panic
+	c2.Add(protocol.TrainingSample{Prompt: "p", Completion: "c"}) // adapter=nil，不应 panic
 }
 
 func TestNewTrainingSampleCollector_DefaultBatchSize(t *testing.T) {

@@ -1,8 +1,11 @@
 package protocol
 
 import (
+	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // MCPTransport MCP 传输层枚举。
@@ -77,4 +80,38 @@ type MCPUpdateConfig struct {
 	Timeout         int
 	TrustTier       int
 	RequiresNetwork bool
+}
+
+// MCPResource 表示 MCP resources/list 返回的一条资源引用。
+type MCPResource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
+// MCPResourceContent 表示 resources/read 返回的单条内容块。
+type MCPResourceContent struct {
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
+}
+
+// MCPClient 表示 MCP 客户端的通用接口。
+type MCPClient interface {
+	// Initialize 执行 MCP 初始化握手，校验服务器返回的协议版本。
+	Initialize(ctx context.Context) error
+	// ListTools 查询服务端工具列表。
+	ListTools(ctx context.Context) ([]MCPTool, error)
+	// ResourcesList 查询服务端资源列表。
+	ResourcesList(ctx context.Context) ([]MCPResource, error)
+	// ResourcesRead 读取指定 URI 的资源内容。
+	ResourcesRead(ctx context.Context, uri string) ([]MCPResourceContent, error)
+	// CallTool 调用指定工具并返回文本和图片结果。
+	CallTool(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, error)
+	// CallToolTainted 调用指定工具并返回文本、图片结果及污点标签。
+	CallToolTainted(ctx context.Context, name string, arguments map[string]any) (string, []types.ImagePart, types.TaintLevel, error)
+	// Close 关闭客户端连接。
+	Close()
 }

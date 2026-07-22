@@ -15,7 +15,7 @@ import (
 // MCPConnector 接口用于插件安装时异步注册 MCP Server。
 type MCPConnector interface {
 	Add(ctx context.Context, serverID, name string, cfg mcp.MCPClientConfig) error
-	GetClient(serverID string) interface{} // returns *mcp.MCPClient but using interface{} to avoid circular dep if needed, or use a new mcp.Client interface
+	GetClient(serverID string) protocol.MCPClient // returns protocol.MCPClient avoiding circular deps
 }
 
 // PluginInstaller 处理 plugin 类型：

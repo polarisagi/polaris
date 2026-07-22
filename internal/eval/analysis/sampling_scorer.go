@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -53,7 +52,7 @@ func (m *ContinuousSamplingMonitor) MaybeSampleAndScore(provider protocol.Provid
 		}
 		m.RecordSample(score)
 		if m.prmCollector != nil {
-			m.prmCollector.Add(llmadapter.TrainingSample{Prompt: query, Completion: response, Reward: score})
+			m.prmCollector.Add(protocol.TrainingSample{Prompt: query, Completion: response, Reward: score})
 		}
 	})
 }
