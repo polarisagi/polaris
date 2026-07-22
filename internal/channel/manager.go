@@ -79,11 +79,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "telegram":
-		token, _ := cfg["bot_token"].(string)
-		if token != "" {
-			m.startTelegramPoller(channelID, token, cfg)
-		}
 	case "discord":
 		token, _ := cfg["bot_token"].(string)
 		if token != "" {

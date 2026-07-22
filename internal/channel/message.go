@@ -18,8 +18,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "telegram":
-		return extractTelegramWebhook(body)
 	case "discord":
 		return extractDiscordWebhook(body)
 	case "slack":
@@ -42,20 +40,7 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	return protocol.ChannelMessage{}
 }
 
-func extractTelegramWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	msg, ok := raw["message"].(map[string]any)
-	if !ok {
-		return protocol.ChannelMessage{}
-	}
-	text, _ := msg["text"].(string)
-	chatID := jsonNestedInt64(msg, "chat", "id")
-	userID := jsonNestedInt64(msg, "from", "id")
-	return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
-}
+
 
 func extractDiscordWebhook(body []byte) protocol.ChannelMessage {
 	var raw map[string]any

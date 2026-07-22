@@ -66,9 +66,7 @@ func (allowAllPolicyGate) Review(context.Context, types.PolicyReviewRequest) (ty
 func newTestEnvelope(t *testing.T) *sandbox.ExecEnvelope {
 	t.Helper()
 	containerSbx := sandbox.NewContainerSandbox("", "linux", 0, echoRunner{})
-	nativeOSSbx := sandbox.NewNativeOSSandbox(echoRunner{})
 	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), containerSbx, nil, "linux", 2)
-	router.SetNativeOSFallback(nativeOSSbx)
 	return sandbox.NewExecEnvelope(allowAllPolicyGate{}, router, 0, "linux", nil)
 }
 

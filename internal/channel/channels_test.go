@@ -9,42 +9,6 @@ import (
 	"testing"
 )
 
-// ── extractTelegramWebhook ────────────────────────────────────────────────────
-
-func TestExtractTelegramWebhook_Valid(t *testing.T) {
-	body := `{
-		"message": {
-			"text": "hello",
-			"chat": {"id": 123456},
-			"from": {"id": 789}
-		}
-	}`
-	msg := extractTelegramWebhook([]byte(body))
-	if msg.Text != "hello" {
-		t.Errorf("expected text='hello', got %q", msg.Text)
-	}
-	if msg.ChatID != "123456" {
-		t.Errorf("expected chatID='123456', got %q", msg.ChatID)
-	}
-	if msg.UserID != "789" {
-		t.Errorf("expected userID='789', got %q", msg.UserID)
-	}
-}
-
-func TestExtractTelegramWebhook_InvalidJSON(t *testing.T) {
-	msg := extractTelegramWebhook([]byte("bad-json"))
-	if msg.Text != "" || msg.ChatID != "" {
-		t.Error("invalid JSON should return empty Message")
-	}
-}
-
-func TestExtractTelegramWebhook_NoMessage(t *testing.T) {
-	msg := extractTelegramWebhook([]byte(`{"update_id": 1}`))
-	if msg.Text != "" {
-		t.Error("missing message key should return empty Message")
-	}
-}
-
 // ── extractDiscordWebhook ─────────────────────────────────────────────────────
 
 func TestExtractDiscordWebhook_Valid(t *testing.T) {

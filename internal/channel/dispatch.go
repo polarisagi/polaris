@@ -4,12 +4,8 @@ import (
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
 
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"log/slog"
-	"net/http"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -21,36 +17,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 	}
 
 	switch channelType {
-	case "telegram":
-		token, _ := cfg["bot_token"].(string)
-		if token == "" {
-			slog.Warn("telegram: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		payload, err := json.Marshal(map[string]any{"chat_id": msg.ChatID, "text": text})
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "telegram: marshal payload", err)
-		}
-		url := "https://api.telegram.org/bot" + token + "/sendMessage"
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "telegram: new request", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := m.httpClient.Do(req)
-		if err != nil {
-			slog.Error("telegram: sendMessage", "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "telegram: sendMessage", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			b, ioErr := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-			if ioErr != nil {
-				slog.Warn("telegram: read non-200 body failed", "status", resp.StatusCode, "err", ioErr)
-			} else {
-				slog.Warn("telegram: sendMessage non-200", "status", resp.StatusCode, "body", string(b), "err", apperr.New(apperr.CodeInternal, "log event"))
-			}
-		}
 
 	case "discord":
 		token, _ := cfg["bot_token"].(string)

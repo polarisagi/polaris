@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -127,4 +128,84 @@ func tgDeleteWebhook(ctx context.Context, client *http.Client, token string) {
 		return
 	}
 	resp.Body.Close()
+}
+
+func init() { Register(&TelegramAdapter{}) }
+
+type TelegramAdapter struct{}
+
+func (a *TelegramAdapter) Type() string { return "telegram" }
+
+func (a *TelegramAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw map[string]any
+	if json.Unmarshal(body, &raw) != nil {
+		return protocol.ChannelMessage{}
+	}
+	msg, ok := raw["message"].(map[string]any)
+	if !ok {
+		return protocol.ChannelMessage{}
+	}
+	text, _ := msg["text"].(string)
+
+	var chatID, userID string
+	if chat, ok := msg["chat"].(map[string]any); ok {
+		if id, ok := chat["id"].(float64); ok {
+			chatID = fmt.Sprintf("%d", int64(id))
+		}
+	}
+	if from, ok := msg["from"].(map[string]any); ok {
+		if id, ok := from["id"].(float64); ok {
+			userID = fmt.Sprintf("%d", int64(id))
+		}
+	}
+	return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
+}
+
+func (a *TelegramAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	token, _ := cfg["bot_token"].(string)
+	if token == "" {
+		slog.Warn("telegram: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{"chat_id": msg.ChatID, "text": text})
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "telegram: marshal payload", err)
+	}
+	url := "https://api.telegram.org/bot" + token + "/sendMessage"
+	importBytes := []byte{} // force bytes import
+	_ = importBytes
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload)) // will need 'bytes' imported
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "telegram: new request", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := host.HTTPClient().Do(req)
+	if err != nil {
+		slog.Error("telegram: sendMessage", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "telegram: sendMessage", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, ioErr := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		if ioErr != nil {
+			slog.Warn("telegram: read non-200 body failed", "status", resp.StatusCode, "err", ioErr)
+		} else {
+			slog.Warn("telegram: sendMessage non-200", "status", resp.StatusCode, "body", string(b), "err", apperr.New(apperr.CodeInternal, "log event"))
+		}
+	}
+	return nil
+}
+
+func (a *TelegramAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	token, _ := cfg["bot_token"].(string)
+	if token == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	poller := NewTelegramPoller()
+	concurrent.SafeGo(ctx, "poller.telegram."+channelID, func(ctx context.Context) {
+		RunTelegramPoller(ctx, host, poller, channelID, token, cfg)
+	})
+	return true
 }
