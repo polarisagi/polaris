@@ -168,9 +168,21 @@ pub unsafe extern "C" fn surreal_fts_search(
 
 // ─── surreal_stats ─────────────────────────────────────────────────────────────
 
+// index_size_mb 估算系数（HNSW/BM25/图索引均未通过 surrealdb 的 embedded 引擎
+// 抽象暴露精确的 per-index 内存分配统计，kv-mem 后端更是纯内存运行时无
+// 文件系统落点可供估算，故采用"行数 × 保守单位开销"的粗粒度估算，而非
+// 声称物理精确值——供 polaris_surrealdb_index_size_mb 这类观测性 Gauge 使用，
+// 目的是提供一个非零、量级正确的趋势信号，不是精确计费依据。
+/// HNSW 每节点开销：DDL `M 8` 双向邻接表 2*M 条边引用（8 字节/引用）≈128B
+const HNSW_OVERHEAD_BYTES_PER_NODE: u64 = 128;
+/// BM25 倒排索引每文档开销粗估（词项 posting + 统计字段）
+const FTS_OVERHEAD_BYTES_PER_DOC: u64 = 200;
+/// 图边索引每条记录开销粗估（from_id/edge_type/to_id 字符串引用 + weight + 索引项）
+const GRAPH_OVERHEAD_BYTES_PER_EDGE: u64 = 96;
+
 /// 返回当前后端状态 JSON（须 surreal_free_string 释放）。
-/// JSON: {"backend":"surreal","ready":true,"kv_count":N,"vec_count":N,"doc_count":N,"edge_count":N}
-/// 未初始化时：{"backend":"none","ready":false}
+/// JSON: {"backend":"surreal","ready":true,"kv_count":N,"vec_count":N,"doc_count":N,"edge_count":N,"index_size_mb":N}
+/// index_size_mb 为粗粒度估算（见上方常量注释），未初始化时：{"backend":"none","ready":false}
 #[unsafe(no_mangle)]
 pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
     let result = panic::catch_unwind(|| {
@@ -226,8 +238,18 @@ pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
             (kv, vec, doc, edge)
         });
 
+        // index_size_mb 仅覆盖 HNSW（向量）+ BM25（全文）+ 图三类专用索引，
+        // 不含 kv 表本身（与 polaris_surrealdb_index_size_mb 指标 HELP 文本
+        // "HNSW + BM25 + 图索引总内存占用"的口径保持一致）。
+        let vec_bytes =
+            (vec_count.max(0) as u64) * ((guard.vec_dim as u64) * 4 + HNSW_OVERHEAD_BYTES_PER_NODE);
+        let fts_bytes = (doc_count.max(0) as u64) * FTS_OVERHEAD_BYTES_PER_DOC;
+        let graph_bytes = (edge_count.max(0) as u64) * GRAPH_OVERHEAD_BYTES_PER_EDGE;
+        let index_size_mb =
+            (vec_bytes + fts_bytes + graph_bytes) as f64 / (1024.0 * 1024.0);
+
         let json = format!(
-            r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count}}}"#
+            r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count},"index_size_mb":{index_size_mb:.3}}}"#
         );
         write_cstr(out_json, &json);
         SURREAL_OK

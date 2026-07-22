@@ -46,6 +46,9 @@ pub(super) static WORKER_THREADS: AtomicU32 = AtomicU32::new(0);
 pub(super) struct SurrealStore {
     pub(super) db: Surreal<Db>,
     pub(super) rt: Runtime,
+    /// HNSW 向量维度（surreal_open 传入），供 surreal_stats 估算索引内存占用
+    /// 使用，DDL 建索引后无法从 surrealdb 反查，故在此保留一份。
+    pub(super) vec_dim: u32,
 }
 
 impl SurrealStore {
@@ -110,7 +113,7 @@ impl SurrealStore {
             }
         })?;
 
-        Ok(SurrealStore { db, rt })
+        Ok(SurrealStore { db, rt, vec_dim })
     }
 }
 

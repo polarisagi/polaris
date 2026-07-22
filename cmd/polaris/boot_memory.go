@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
@@ -137,6 +138,10 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 	startCognitiveReplayerIfNeeded(ctx, sb)
 	// ───────────────────────────────────────────────────────────────────────
 
+	// ─── polaris_surrealdb_index_size_mb 周期上报（HE-Rule-1）───────────────
+	startSurrealIndexSizeReporter(ctx, sb)
+	// ───────────────────────────────────────────────────────────────────────
+
 	return &MemoryBundle{
 		Mem:                mem,
 		CascadeInvalidator: cascadeInvalidator,
@@ -209,6 +214,48 @@ func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 		}
 	})
 	slog.Info("polaris: temporal expirer started", "interval", "1h")
+}
+
+// startSurrealIndexSizeReporter 周期性调用 SurrealStore.Stats() 读取
+// index_size_mb（HNSW+BM25+图索引的粗粒度估算，见 rust/substrate/src/
+// surreal_store/fts.rs surreal_stats 的常量注释），上报到
+// polaris_surrealdb_index_size_mb Gauge（HE-Rule-1 一等公民可观测性）。
+// 此前该 Gauge 的 Setter（metrics.ReportSurrealDBIndexSize）从未被任何调用方
+// 触发，恒为零值，本函数是唯一的生产者。
+func startSurrealIndexSizeReporter(ctx context.Context, sb *SubstrateBundle) {
+	if sb.SurrealStore == nil {
+		return
+	}
+	const reportInterval = 60 * time.Second
+	concurrent.SafeGo(ctx, "boot_memory.surreal_index_size_reporter", func(ctx context.Context) {
+		ticker := time.NewTicker(reportInterval)
+		defer ticker.Stop()
+		reportOnce := func() {
+			statsJSON, err := sb.SurrealStore.Stats()
+			if err != nil {
+				slog.Warn("polaris: surreal_index_size_reporter: Stats() failed", "err", err)
+				return
+			}
+			var stats struct {
+				IndexSizeMB float64 `json:"index_size_mb"`
+			}
+			if err := json.Unmarshal([]byte(statsJSON), &stats); err != nil {
+				slog.Warn("polaris: surreal_index_size_reporter: unmarshal stats failed", "err", err)
+				return
+			}
+			metrics.ReportSurrealDBIndexSize(int64(stats.IndexSizeMB))
+		}
+		reportOnce() // 启动时立即上报一次，不等第一个 tick（避免 /metrics 长期显示 0）
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reportOnce()
+			}
+		}
+	})
+	slog.Info("polaris: surreal index size reporter started", "interval", reportInterval.String())
 }
 
 func startCognitiveReplayerIfNeeded(ctx context.Context, sb *SubstrateBundle) {
