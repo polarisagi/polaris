@@ -18,8 +18,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "line":
-		return extractLineWebhook(body)
 	case "qqbot":
 		return extractQQBotWebhook(body)
 	case "whatsapp":
@@ -39,37 +37,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 
 
 
-func extractLineWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	events, _ := raw["events"].([]any)
-	if len(events) == 0 {
-		return protocol.ChannelMessage{}
-	}
-	ev, _ := events[0].(map[string]any)
-	evType, _ := ev["type"].(string)
-	if evType != "message" {
-		return protocol.ChannelMessage{}
-	}
-	msgObj, _ := ev["message"].(map[string]any)
-	msgType, _ := msgObj["type"].(string)
-	if msgType != "text" {
-		return protocol.ChannelMessage{}
-	}
-	text, _ := msgObj["text"].(string)
-	src, _ := ev["source"].(map[string]any)
-	chatID := ""
-	if groupID, ok := src["groupId"].(string); ok && groupID != "" {
-		chatID = groupID
-	} else if userID, ok := src["userId"].(string); ok {
-		chatID = userID
-	}
-	replyToken, _ := ev["replyToken"].(string)
-	userID, _ := src["userId"].(string)
-	return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, ReplyToken: replyToken, TaintLevel: types.TaintHigh}
-}
 
 func extractQQBotWebhook(body []byte) protocol.ChannelMessage {
 	var raw map[string]any
