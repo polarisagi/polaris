@@ -19,18 +19,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "mattermost":
-		mmURL, _ := cfg["url"].(string)
-		token, _ := cfg["token"].(string)
-		if mmURL == "" || token == "" {
-			slog.Warn("mattermost: url or token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.MattermostSendMessage(ctx, m.httpClient, mmURL, token, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "mattermost: send message", err)
-		}
-
 	case "email":
 		smtpHost, _ := cfg["smtp_host"].(string)
 		smtpPort, _ := cfg["smtp_port"].(string)

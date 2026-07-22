@@ -137,3 +137,41 @@ type mmPost struct {
 	UserID    string `json:"user_id"`
 	Message   string `json:"message"`
 }
+
+func init() { Register(&MattermostAdapter{}) }
+
+type MattermostAdapter struct{}
+
+func (a *MattermostAdapter) Type() string { return "mattermost" }
+
+func (a *MattermostAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{} // Uses stream poller
+}
+
+func (a *MattermostAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	mmURL, _ := cfg["url"].(string)
+	token, _ := cfg["token"].(string)
+	if mmURL == "" || token == "" {
+		slog.Warn("mattermost: url or token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := MattermostSendMessage(ctx, host.HTTPClient(), mmURL, token, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "mattermost", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "mattermost: send message", err)
+	}
+	return nil
+}
+
+func (a *MattermostAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	mmURL, _ := cfg["url"].(string)
+	token, _ := cfg["token"].(string)
+	if mmURL == "" || token == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.mattermost."+channelID, func(ctx context.Context) {
+		RunMattermostPoller(ctx, host, channelID, mmURL, token, cfg)
+	})
+	return true
+}
