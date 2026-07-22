@@ -35,7 +35,7 @@ func (c *ChannelNotifier) Notify(ctx context.Context, msg types.HITLNotification
 		"description", msg.Description,
 		"risk", msg.Risk,
 		"review_url", msg.ReviewURL,
-		"timeout_ns", msg.Timeout,
+		"deadline_ns", msg.DeadlineNs,
 	)
 	if c.dispatcher == nil {
 		// 未配置 dispatcher：通知未送达，返回错误让上层感知（不得静默挂起审批）
@@ -71,7 +71,7 @@ func (g *GatewayImpl) BroadcastTainted(ctx context.Context, event string, taintL
 		TaskID:       event,
 		Description:  fmt.Sprintf("Taint level %d broadcast: %s", int(taintLevel), event),
 		Risk:         fmt.Sprintf("taint_level_%d", int(taintLevel)),
-		Timeout:      int64(30 * time.Second),
+		DeadlineNs:   time.Now().UnixNano() + int64(30*time.Second),
 	})
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "failed to broadcast taint via hitl notifier", err)

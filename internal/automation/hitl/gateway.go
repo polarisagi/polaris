@@ -155,7 +155,7 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 				TaskID:      p.AgentID,
 				Description: p.PromptText,
 				Risk:        p.CheckpointType,
-				Timeout:     p.DeadlineNs,
+				DeadlineNs:  p.DeadlineNs,
 				ReviewURL:   "/v1/hitl/review?id=" + p.ID,
 			}); err != nil {
 				slog.Error("hitl gateway: notify failed", "checkpoint", p.ID, "err", err)
