@@ -78,12 +78,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "matrix":
-		homeserver, _ := cfg["homeserver"].(string)
-		accessToken, _ := cfg["access_token"].(string)
-		if homeserver != "" {
-			m.startMatrixPoller(channelID, homeserver, accessToken, cfg)
-		}
 	case "signal":
 		apiURL, _ := cfg["api_url"].(string)
 		account, _ := cfg["account"].(string)

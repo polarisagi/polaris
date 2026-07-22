@@ -18,17 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 	}
 
 	switch channelType {
-	case "matrix":
-		homeserver, _ := cfg["homeserver"].(string)
-		accessToken, _ := cfg["access_token"].(string)
-		if homeserver == "" || accessToken == "" {
-			slog.Warn("matrix: homeserver or access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := (&cadapter.MatrixSender{}).SendMessage(ctx, m.httpClient, homeserver, accessToken, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "matrix: send message", err)
-		}
 
 	case "signal":
 		apiURL, _ := cfg["api_url"].(string)
