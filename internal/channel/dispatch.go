@@ -18,18 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "whatsapp":
-		phoneNumberID, _ := cfg["phone_number_id"].(string)
-		accessToken, _ := cfg["access_token"].(string)
-		if phoneNumberID == "" || accessToken == "" {
-			slog.Warn("whatsapp: phone_number_id or access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.WhatsappSendMessage(ctx, m.httpClient, phoneNumberID, accessToken, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "whatsapp: send message", err)
-		}
-
 	case "dingtalk":
 		if msg.ReplyToken == "" {
 			slog.Warn("dingtalk: sessionWebhook missing, cannot reply", "err", apperr.New(apperr.CodeInternal, "log event"))

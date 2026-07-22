@@ -11,61 +11,6 @@ import (
 
 
 
-// ── extractWhatsAppWebhook ────────────────────────────────────────────────────
-
-func TestExtractWhatsAppWebhook_Valid(t *testing.T) {
-	payload := map[string]any{
-		"entry": []any{
-			map[string]any{
-				"changes": []any{
-					map[string]any{
-						"value": map[string]any{
-							"messages": []any{
-								map[string]any{
-									"type": "text",
-									"text": map[string]any{"body": "wa message"},
-									"from": "+1234",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	msg := extractWhatsAppWebhook(body)
-	if msg.Text != "wa message" {
-		t.Errorf("expected 'wa message', got %q", msg.Text)
-	}
-	if msg.ChatID != "+1234" {
-		t.Errorf("expected chatID='+1234', got %q", msg.ChatID)
-	}
-}
-
-func TestExtractWhatsAppWebhook_NonTextType(t *testing.T) {
-	payload := map[string]any{
-		"entry": []any{
-			map[string]any{
-				"changes": []any{
-					map[string]any{
-						"value": map[string]any{
-							"messages": []any{
-								map[string]any{"type": "image"},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	msg := extractWhatsAppWebhook(body)
-	if msg.Text != "" {
-		t.Error("non-text type should return empty Message")
-	}
-}
-
 // ── extractTwilioWebhook ──────────────────────────────────────────────────────
 
 func TestExtractTwilioWebhook_Valid(t *testing.T) {

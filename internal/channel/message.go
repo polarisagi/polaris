@@ -18,8 +18,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "whatsapp":
-		return extractWhatsAppWebhook(body)
 	case "sms":
 		return extractTwilioWebhook(r)
 	case "teams":
@@ -35,38 +33,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 
 
 
-
-
-func extractWhatsAppWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	entry, _ := raw["entry"].([]any)
-	if len(entry) == 0 {
-		return protocol.ChannelMessage{}
-	}
-	e, _ := entry[0].(map[string]any)
-	changes, _ := e["changes"].([]any)
-	if len(changes) == 0 {
-		return protocol.ChannelMessage{}
-	}
-	ch, _ := changes[0].(map[string]any)
-	value, _ := ch["value"].(map[string]any)
-	messages, _ := value["messages"].([]any)
-	if len(messages) == 0 {
-		return protocol.ChannelMessage{}
-	}
-	m, _ := messages[0].(map[string]any)
-	msgType, _ := m["type"].(string)
-	if msgType != "text" {
-		return protocol.ChannelMessage{}
-	}
-	textObj, _ := m["text"].(map[string]any)
-	text, _ := textObj["body"].(string)
-	from, _ := m["from"].(string)
-	return protocol.ChannelMessage{Text: text, ChatID: from, UserID: from, TaintLevel: types.TaintHigh}
-}
 
 // extractTwilioWebhook 解析 Twilio 入站 SMS（application/x-www-form-urlencoded）。
 func extractTwilioWebhook(r *http.Request) protocol.ChannelMessage {
