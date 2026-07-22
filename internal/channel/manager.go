@@ -78,12 +78,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "signal":
-		apiURL, _ := cfg["api_url"].(string)
-		account, _ := cfg["account"].(string)
-		if apiURL != "" && account != "" {
-			m.startSignalPoller(channelID, apiURL, account, cfg)
-		}
 	case "homeassistant":
 		haURL, _ := cfg["url"].(string)
 		haToken, _ := cfg["token"].(string)
