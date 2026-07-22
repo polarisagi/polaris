@@ -1,0 +1,14 @@
+internal/agent/agent.go: unreachable func: NewAgentWithDefaults # 根因一(测试假阳性)，ADR-0046/ADR-0062
+internal/downloader/http.go: unreachable func: Get # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/downloader/http.go: unreachable func: DownloadExtractTarGz # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/downloader/proxy.go: unreachable func: ResolveURL # 根因一(测试假阳性)，ADR-0062
+internal/downloader/proxy.go: unreachable func: ProxyStatus # 根因一(测试假阳性)，ADR-0062
+internal/llm/credential_pool.go: unreachable func: NewSingleCredentialPool # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/security/credential/vault.go: unreachable func: NewVault # 根因一(测试假阳性)，ADR-0062
+internal/security/taint/taint.go: unreachable func: SafeString.Content # 根因一(测试假阳性)，ADR-0062
+internal/store/search/reranker.go: unreachable func: NilReranker.Rerank # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/swarm/supervisor/tree.go: unreachable func: Supervisor.Wait # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/swarm/planner/pool.go: unreachable func: DefaultSpawner # 根因一(测试假阳性)，ADR-0062
+pkg/types/models_event.go: unreachable func: BuildIdempotencyKey # 根因一(测试假阳性)，ADR-0059/ADR-0062
+internal/ffi/llama.go: unreachable func: LlamaEmbed # 门控假阳性，tier1 默认不可达，ADR-0062
+internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 默认不可达，ADR-0062
