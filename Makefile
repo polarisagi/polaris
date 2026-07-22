@@ -46,7 +46,7 @@ build-release: generate-manifest rust-build
 	@cp $(CARGO_TARGET_DIR)/libsubstrate.so bin/lib/ 2>/dev/null || true
 	@cp $(CARGO_TARGET_DIR)/substrate.dll bin/lib/ 2>/dev/null || true
 	$(GO) build -ldflags="$(LDFLAGS)" -o bin/$(BINARY) ./cmd/polaris
-	sha256sum bin/$(BINARY) | awk '{print $$1}' > bin/$(BINARY).sha256
+	openssl dgst -sha256 bin/$(BINARY) | awk '{print $$NF}' > bin/$(BINARY).sha256
 	@echo "==> 封印文件: bin/$(BINARY).sha256"
 
 
