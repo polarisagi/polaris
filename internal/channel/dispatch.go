@@ -18,23 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "line":
-		accessToken, _ := cfg["channel_access_token"].(string)
-		if accessToken == "" {
-			slog.Warn("line: channel_access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		var err error
-		if msg.ReplyToken != "" {
-			err = cadapter.LineSendMessage(ctx, m.httpClient, accessToken, msg.ReplyToken, text)
-		} else {
-			err = cadapter.LinePushMessage(ctx, m.httpClient, accessToken, msg.ChatID, text)
-		}
-		if err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "line: send message", err)
-		}
-
 	case "qqbot":
 		token, _ := cfg["_qqbot_token"].(string)
 		msgType, _ := cfg["_qqbot_msg_type"].(string)

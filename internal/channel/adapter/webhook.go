@@ -3,9 +3,6 @@ package adapter
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,68 +10,6 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
-
-// LINE
-
-func LineSendMessage(ctx context.Context, client *http.Client, accessToken, replyToken, text string) error {
-	body, _ := json.Marshal(map[string]any{
-		"replyToken": replyToken,
-		"messages":   []map[string]string{{"type": "text", "text": text}},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.line.me/v2/bot/message/reply", bytes.NewReader(body))
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "LineSendMessage", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := client.Do(req)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "LineSendMessage", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-		return apperr.New(apperr.CodeInternal, fmt.Sprintf("line replyMessage %d: %s", resp.StatusCode, b))
-	}
-	return nil
-}
-
-func LinePushMessage(ctx context.Context, client *http.Client, accessToken, to, text string) error {
-	body, _ := json.Marshal(map[string]any{
-		"to":       to,
-		"messages": []map[string]string{{"type": "text", "text": text}},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.line.me/v2/bot/message/push", bytes.NewReader(body))
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "LinePushMessage", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := client.Do(req)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "LinePushMessage", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-		return apperr.New(apperr.CodeInternal, fmt.Sprintf("line pushMessage %d: %s", resp.StatusCode, b))
-	}
-	return nil
-}
-
-// LineVerifySignature 验证 LINE webhook HMAC-SHA256 签名（base64 encoded）。
-func LineVerifySignature(channelSecret, body, signatureHeader string) bool {
-	if channelSecret == "" {
-		// 未配置 channel_secret：无法验证，拒绝（fail-closed）
-		return false
-	}
-	mac := hmac.New(sha256.New, []byte(channelSecret))
-	mac.Write([]byte(body))
-	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	return hmac.Equal([]byte(expected), []byte(signatureHeader))
-}
 
 // WhatsApp
 

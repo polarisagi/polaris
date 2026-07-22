@@ -10,40 +10,6 @@ import (
 )
 
 
-// ── extractLineWebhook ────────────────────────────────────────────────────────
-
-func TestExtractLineWebhook_Valid(t *testing.T) {
-	body := `{
-		"events": [{
-			"type": "message",
-			"message": {"type": "text", "text": "line msg"},
-			"source": {"userId": "U1"},
-			"replyToken": "token123"
-		}]
-	}`
-	msg := extractLineWebhook([]byte(body))
-	if msg.Text != "line msg" {
-		t.Errorf("expected 'line msg', got %q", msg.Text)
-	}
-	if msg.ReplyToken != "token123" {
-		t.Errorf("expected replyToken='token123', got %q", msg.ReplyToken)
-	}
-}
-
-func TestExtractLineWebhook_NonMessageEvent(t *testing.T) {
-	body := `{"events":[{"type":"follow","source":{"userId":"U1"}}]}`
-	msg := extractLineWebhook([]byte(body))
-	if msg.Text != "" {
-		t.Error("non-message event should return empty Message")
-	}
-}
-
-func TestExtractLineWebhook_EmptyEvents(t *testing.T) {
-	msg := extractLineWebhook([]byte(`{"events":[]}`))
-	if msg.Text != "" {
-		t.Error("empty events should return empty Message")
-	}
-}
 
 // ── extractQQBotWebhook ───────────────────────────────────────────────────────
 
