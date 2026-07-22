@@ -245,8 +245,7 @@ pub extern "C" fn surreal_stats(out_json: *mut *mut c_char) -> c_int {
             (vec_count.max(0) as u64) * ((guard.vec_dim as u64) * 4 + HNSW_OVERHEAD_BYTES_PER_NODE);
         let fts_bytes = (doc_count.max(0) as u64) * FTS_OVERHEAD_BYTES_PER_DOC;
         let graph_bytes = (edge_count.max(0) as u64) * GRAPH_OVERHEAD_BYTES_PER_EDGE;
-        let index_size_mb =
-            (vec_bytes + fts_bytes + graph_bytes) as f64 / (1024.0 * 1024.0);
+        let index_size_mb = (vec_bytes + fts_bytes + graph_bytes) as f64 / (1024.0 * 1024.0);
 
         let json = format!(
             r#"{{"backend":"surreal","ready":true,"kv_count":{kv_count},"vec_count":{vec_count},"doc_count":{doc_count},"edge_count":{edge_count},"index_size_mb":{index_size_mb:.3}}}"#
