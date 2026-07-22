@@ -1,0 +1,6 @@
+# xr06 lint allowlist
+# Files/functions in this list are explicitly exempted from the XR-06 SafeDialer requirement.
+# Each entry MUST have an associated ADR justifying the exemption.
+
+# Justification: ADR-0071
+internal/downloader/proxy.go
