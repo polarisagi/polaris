@@ -64,6 +64,10 @@ func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySer
 // hr.graph 字段在生产中永远为 nil（无任何调用点为其注入值），graph 检索分支
 // 结构上不可达。embedder/cognitive/graph 均可传 nil 走对应降级路径，
 // NewHybridRetrieverWithCognitive 是本类型唯一生产构造入口。
+//
+// V-5（2026-07-23 核实）：graph 字段保留——ADR-0051 §4 判定为 DEFER（图遍历是
+// 规划中待接线能力，graphrag.GraphTraverser 有真实实现；将来在 boot_knowledge.go
+// 注入 GraphTraverser 即可激活，不需要改动本文件）。deadcode-allowlist 已登记。
 
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
 func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, vecScanLimit int) *HybridRetrieverImpl {

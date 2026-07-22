@@ -231,6 +231,18 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 铸造方（hitlGateway.Respond 审批通过时）与查询方（toolReg 下一次
 	// ExecuteTool 出口污点检查）必须读写同一份存储。
 	hitlGateway.SetExemptionVault(exemptionVault)
+
+	// V-4 核实：解决启动期循环依赖，在 hitlGateway 初始化后通过 SetOnKillSwitch
+	// 注入回 boot_substrate 阶段已实例化的 sb.Gate。
+	sb.Gate.SetOnKillSwitch(func() {
+		slog.Error("polaris: POLICY GATE HITL TRIGGERED — human review required",
+			"component", "policy_gate",
+			"action", "hitl_callback",
+		)
+		// 使用 adapters_security.go 中的 hitlNotifierAdapter 进行适配调用
+		_ = (&hitlNotifierAdapter{gateway: hitlGateway}).NotifyHITL(context.Background(), "policy_gate", "Cedar evaluation failed continuously")
+		sb.KS.ReportError()
+	})
 	sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
 	prefsRepo := sysRepo
 	extRepo := repo.NewSQLiteExtensionRepository(sb.Store.DB())

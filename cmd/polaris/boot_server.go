@@ -9,7 +9,6 @@ import (
 	"github.com/polarisagi/polaris/internal/channel"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/store/repo"
 
@@ -348,9 +347,9 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	}
 
 	// Task 7: SystemPromptGuard
-	systemPromptGuard := guard.NewSystemPromptGuard(15)
-	// TODO: Inject SystemPromptGuard into SSE/Headless response interceptor
-	_ = systemPromptGuard // occupy variable
+	// V-3 核实：SystemPromptGuard 已在内部组件级完成拦截器接线，无需在 boot 层全局注入。
+	// - SSE 交互路径：已在 internal/gateway/server/chat/sse.go 接入
+	// - Headless 路径：已在 internal/agent/pool.go 接入
 
 	if err := httpServer.Start(); err != nil {
 		slog.Error("polaris: failed to start HTTP server", "err", err)
