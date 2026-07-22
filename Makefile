@@ -105,7 +105,7 @@ tidy:
 	$(GO) mod tidy
 
 benchmark-routing:
-	npx promptfoo@latest eval --config testdata/benchmark/routing/providers.yaml --output /tmp/polaris-benchmark-results.json
+	npx -y promptfoo@latest eval --config testdata/benchmark/routing/providers.yaml --output /tmp/polaris-benchmark-results.json
 	$(GO) run ./cmd/polaris benchmark-routing /tmp/polaris-benchmark-results.json
 
 
