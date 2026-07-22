@@ -24,13 +24,6 @@ func (m *Manager) startEmailPoller(channelID string, cfg map[string]any) {
 	})
 }
 
-func (m *Manager) startFeishuPoller(channelID, appID, appSecret string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.feishu."+channelID, func(ctx context.Context) {
-		cadapter.RunFeishuPoller(ctx, m, channelID, appID, appSecret, cfg)
-	})
-}
 
 func (m *Manager) startHomeAssistantPoller(channelID, haURL, haToken string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())

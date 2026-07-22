@@ -79,13 +79,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "feishu":
-		appID, _ := cfg["app_id"].(string)
-		appSecret, _ := cfg["app_secret"].(string)
-		mode, _ := cfg["connection_mode"].(string)
-		if appID != "" && appSecret != "" && mode != "webhook" {
-			m.startFeishuPoller(channelID, appID, appSecret, cfg)
-		}
 	case "qqbot":
 		appID, _ := cfg["app_id"].(string)
 		clientSecret, _ := cfg["client_secret"].(string)

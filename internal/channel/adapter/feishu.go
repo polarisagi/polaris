@@ -245,3 +245,77 @@ func FeishuVerifyWebhookSignature(timestamp, nonce, encryptKey, rawBody, signatu
 	computed := hex.EncodeToString(h[:])
 	return computed == signature
 }
+
+func init() { Register(&FeishuAdapter{}) }
+
+type FeishuAdapter struct{}
+
+func (a *FeishuAdapter) Type() string { return "feishu" }
+
+func (a *FeishuAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw map[string]any
+	if json.Unmarshal(body, &raw) != nil {
+		return protocol.ChannelMessage{}
+	}
+	if ev, ok := raw["event"].(map[string]any); ok { //nolint:nestif
+		if m, ok := ev["message"].(map[string]any); ok {
+			if content, ok := m["content"].(string); ok {
+				var c map[string]any
+				if json.Unmarshal([]byte(content), &c) == nil {
+					text, _ := c["text"].(string)
+					chatID, _ := m["chat_id"].(string)
+					senderMap, _ := ev["sender"].(map[string]any)
+					senderID, _ := senderMap["sender_id"].(map[string]any)
+					openID, _ := senderID["open_id"].(string)
+					return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: openID, TaintLevel: types.TaintHigh}
+				}
+			}
+		}
+	}
+	return protocol.ChannelMessage{}
+}
+
+func (a *FeishuAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	token, _ := cfg["_feishu_token"].(string)
+	domain, _ := cfg["_feishu_domain"].(string)
+	if token == "" || domain == "" {
+		appID, _ := cfg["app_id"].(string)
+		appSecret, _ := cfg["app_secret"].(string)
+		dom, _ := cfg["domain"].(string)
+		if dom == "lark" {
+			domain = LarkOpenBase
+		} else {
+			domain = FeishuOpenBase
+		}
+		if appID == "" || appSecret == "" {
+			slog.Warn("feishu: app_id or app_secret missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+			return nil
+		}
+		t, err := FeishuGetTenantToken(ctx, host.HTTPClient(), domain, appID, appSecret)
+		if err != nil {
+			slog.Error("channels: send reply failed (feishu token)", "err", err)
+			return apperr.Wrap(apperr.CodeInternal, "feishu: get token", err)
+		}
+		token = t
+	}
+	if err := FeishuSendMessage(ctx, host.HTTPClient(), domain, token, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "feishu", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "feishu: send message", err)
+	}
+	return nil
+}
+
+func (a *FeishuAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	appID, _ := cfg["app_id"].(string)
+	appSecret, _ := cfg["app_secret"].(string)
+	mode, _ := cfg["connection_mode"].(string)
+	if appID == "" || appSecret == "" || mode == "webhook" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.feishu."+channelID, func(ctx context.Context) {
+		RunFeishuPoller(ctx, host, channelID, appID, appSecret, cfg)
+	})
+	return true
+}
