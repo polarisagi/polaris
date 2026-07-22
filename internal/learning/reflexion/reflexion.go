@@ -150,7 +150,7 @@ func (re *ReflexionEngine) Reflect(
 		kwJSON, _ := json.Marshal(extractKeywords(taskType, cause))
 		_ = kwJSON
 		recordID := fmt.Sprintf("memf_%s_%d", taskID, time.Now().UnixNano())
-		_ = re.memf.AddRecord(ctx, &optimizer.FallacyRecord{
+		if errMemf := re.memf.AddRecord(ctx, &optimizer.FallacyRecord{
 			ID:               recordID,
 			TaskType:         taskType,
 			FailureType:      string(result.FailureClass),
@@ -159,7 +159,9 @@ func (re *ReflexionEngine) Reflect(
 			OccurrenceCount:  1,
 			NodeQualityScore: 0.5,
 			CreatedAt:        time.Now().Unix(),
-		})
+		}); errMemf != nil {
+			slog.Warn("reflexion: add memf record failed", "recordID", recordID, "err", errMemf)
+		}
 		ref.MEMFRecordID = recordID
 	}
 
