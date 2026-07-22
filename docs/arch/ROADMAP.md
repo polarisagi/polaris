@@ -52,7 +52,7 @@
   - OTel（OpenTelemetry） + TokenBurnRate + SurpriseIndex + AutoConfig + FeatureGate
   - Cedar Policy + TaintTracking + AuditTrail + PIIDetector（Tier0 正则 + Tier1+ Presidio 门控）
 - **L1 cognition/action**: 
-  - Agent FSM（Finite State Machine，有限状态机）（10 态）+ DAG（Directed Acyclic Graph，有向无环图） Executor + PromptBuilder + 四层记忆 + Consolidation
+  - Agent FSM（Finite State Machine，有限状态机）（12 态）+ DAG（Directed Acyclic Graph，有向无环图） Executor + PromptBuilder + 四层记忆 + Consolidation
   - Rust 脚本沙箱 + MCP（Model Context Protocol，模型上下文协议） Client/Manager + CapabilityToken + CodeAct + LAM + Computer Use（Darwin/Linux/Windows）+ Skill Pipeline
 - **L2 swarm**: 
   - Blackboard（SQLite）+ CAS（Compare-And-Swap，比较并交换） 协调 + Reaper + Supervisor Tree

@@ -228,7 +228,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 ## 3-quater. PatternDAGExecutor（编排模式 9）
 
 > 实现: `internal/execute/orchestrator/pattern_dag.go`
-> 架构记录: `docs/arch/ADR-0037-pattern-dag-orchestration.md`
+> 架构记录: `docs/arch/decisions/ADR-0037-pattern-dag-orchestration.md`
 
 在跨 Agent 边界（Macro-DAG）的场景下，除了简单的串行与分片归并，常常需要复杂的有向无环图调度（如 A 输出给 B/C，B/C 完成后 D 归并）。
 
