@@ -259,3 +259,51 @@ func DiscordSendMessage(ctx context.Context, client *http.Client, token, channel
 	}
 	return nil
 }
+
+func init() { Register(&DiscordAdapter{}) }
+
+type DiscordAdapter struct{}
+
+func (a *DiscordAdapter) Type() string { return "discord" }
+
+func (a *DiscordAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw map[string]any
+	if json.Unmarshal(body, &raw) != nil {
+		return protocol.ChannelMessage{}
+	}
+	text, _ := raw["content"].(string)
+	channelID, _ := raw["channel_id"].(string)
+	author, _ := raw["author"].(map[string]any)
+	userID, _ := author["id"].(string)
+	bot, _ := author["bot"].(bool)
+	if bot {
+		return protocol.ChannelMessage{}
+	}
+	return protocol.ChannelMessage{Text: text, ChatID: channelID, UserID: userID, TaintLevel: types.TaintHigh}
+}
+
+func (a *DiscordAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	token, _ := cfg["bot_token"].(string)
+	if token == "" {
+		slog.Warn("discord: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := DiscordSendMessage(ctx, host.HTTPClient(), token, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "discord", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "channels: send discord", err)
+	}
+	return nil
+}
+
+func (a *DiscordAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	token, _ := cfg["bot_token"].(string)
+	if token == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.discord."+channelID, func(ctx context.Context) {
+		RunDiscordPoller(ctx, host, channelID, token, cfg)
+	})
+	return true
+}

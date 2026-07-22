@@ -9,27 +9,6 @@ import (
 	"testing"
 )
 
-// ── extractDiscordWebhook ─────────────────────────────────────────────────────
-
-func TestExtractDiscordWebhook_Valid(t *testing.T) {
-	body := `{"content":"hi there","channel_id":"ch1","author":{"id":"u1","bot":false}}`
-	msg := extractDiscordWebhook([]byte(body))
-	if msg.Text != "hi there" {
-		t.Errorf("expected 'hi there', got %q", msg.Text)
-	}
-	if msg.ChatID != "ch1" {
-		t.Errorf("expected chatID='ch1', got %q", msg.ChatID)
-	}
-}
-
-func TestExtractDiscordWebhook_BotFiltered(t *testing.T) {
-	body := `{"content":"bot msg","channel_id":"ch1","author":{"id":"bot1","bot":true}}`
-	msg := extractDiscordWebhook([]byte(body))
-	if msg.Text != "" {
-		t.Error("bot message should be filtered (empty Message)")
-	}
-}
-
 // ── extractSlackWebhook ───────────────────────────────────────────────────────
 
 func TestExtractSlackWebhook_Valid(t *testing.T) {

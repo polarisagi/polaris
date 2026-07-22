@@ -15,13 +15,6 @@ func (m *Manager) startDingTalkPoller(channelID, clientID, clientSecret string, 
 	})
 }
 
-func (m *Manager) startDiscordPoller(channelID, token string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.discord."+channelID, func(ctx context.Context) {
-		cadapter.RunDiscordPoller(ctx, m, channelID, token, cfg)
-	})
-}
 
 func (m *Manager) startEmailPoller(channelID string, cfg map[string]any) {
 	ctx, cancel := context.WithCancel(context.Background())
