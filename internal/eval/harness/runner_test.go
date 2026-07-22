@@ -41,7 +41,7 @@ func TestRunner(t *testing.T) {
 	ms := &mockSQLiteStore{vals: [][]byte{[]byte(c1), []byte(c2), []byte(c3)}}
 	evalStore := NewSQLiteEvalStore(ms, control.NewEngine(nil))
 
-	runner := NewRunner(ms, evalStore, config.DefaultThresholds())
+	runner := NewRunner(ms, evalStore, config.DefaultThresholds(), config.EvalConfig{})
 
 	ch := make(chan types.EvalCompletedPayload, 1)
 	runner.SetEvalChannel(ch)

@@ -31,9 +31,9 @@ type RunnerImpl struct {
 	// 供 learning_cursors 幂等去重使用）。
 	evalSeqCounter atomic.Int64
 
-	// l3ThresholdProvider 供 M11 批次级别全局降级判定。
 	l3ThresholdProvider L3ThresholdProvider
 	thresholds          config.Thresholds
+	evalCfg             config.EvalConfig
 
 	recorder *TrajectoryRecorderImpl
 	rd       *RegressionDetector
@@ -51,12 +51,13 @@ type EvalAgent interface {
 
 var _ protocol.EvalRunner = (*RunnerImpl)(nil)
 
-func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore, thresholds config.Thresholds) *RunnerImpl {
+func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore, thresholds config.Thresholds, evalCfg config.EvalConfig) *RunnerImpl {
 	return &RunnerImpl{
 		store:      store,
 		evalStore:  evalStore,
 		activeRuns: make(map[string]context.CancelFunc),
 		thresholds: thresholds,
+		evalCfg:    evalCfg,
 		recorder:   NewTrajectoryRecorder(store),
 		rd:         &RegressionDetector{},
 		replayer:   NewTrajectoryReplayer(),
