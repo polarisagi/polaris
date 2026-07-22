@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/smtp"
 	"strings"
 	"time"
@@ -267,4 +268,48 @@ func emailAuthPassed(authResults string) bool {
 	spfPass := strings.Contains(lower, "spf=pass")
 	dkimPass := strings.Contains(lower, "dkim=pass")
 	return spfPass || dkimPass
+}
+
+func init() { Register(&EmailAdapter{}) }
+
+type EmailAdapter struct{}
+
+func (a *EmailAdapter) Type() string { return "email" }
+
+func (a *EmailAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	return protocol.ChannelMessage{} // Uses stream poller
+}
+
+func (a *EmailAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	smtpHost, _ := cfg["smtp_host"].(string)
+	smtpPort, _ := cfg["smtp_port"].(string)
+	address, _ := cfg["address"].(string)
+	password, _ := cfg["password"].(string)
+	if smtpPort == "" {
+		smtpPort = "587"
+	}
+	if smtpHost == "" || address == "" || password == "" {
+		slog.Warn("email: smtp config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := EmailSendMessage(smtpHost, smtpPort, address, password, msg.ChatID, "Re: [Polaris]", text); err != nil {
+		slog.Error("email: send failed", "to", msg.ChatID, "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "email: send failed", err)
+	}
+	return nil
+}
+
+func (a *EmailAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	imapHost, _ := cfg["imap_host"].(string)
+	address, _ := cfg["address"].(string)
+	password, _ := cfg["password"].(string)
+	if imapHost == "" || address == "" || password == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	host.RegisterPoller(channelID, cancel)
+	concurrent.SafeGo(ctx, "poller.email."+channelID, func(ctx context.Context) {
+		RunEmailPoller(ctx, host, channelID, cfg)
+	})
+	return true
 }
