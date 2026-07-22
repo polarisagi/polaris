@@ -18,33 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "feishu":
-		token, _ := cfg["_feishu_token"].(string)
-		domain, _ := cfg["_feishu_domain"].(string)
-		if token == "" {
-			appID, _ := cfg["app_id"].(string)
-			appSecret, _ := cfg["app_secret"].(string)
-			switch domain {
-			case "", "feishu":
-				domain = cadapter.FeishuOpenBase
-			case "lark":
-				domain = cadapter.LarkOpenBase
-			}
-			var tokErr error
-			token, tokErr = cadapter.FeishuGetTenantToken(ctx, m.httpClient, domain, appID, appSecret)
-			if tokErr != nil {
-				slog.Error("feishu: get token for reply", "err", tokErr)
-				return apperr.Wrap(apperr.CodeInternal, "feishu: get token", tokErr)
-			}
-		}
-		if domain == "" {
-			domain = cadapter.FeishuOpenBase
-		}
-		if err := cadapter.FeishuSendMessage(ctx, m.httpClient, domain, token, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "feishu: send message", err)
-		}
-
 	case "line":
 		accessToken, _ := cfg["channel_access_token"].(string)
 		if accessToken == "" {

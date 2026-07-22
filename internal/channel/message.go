@@ -18,8 +18,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "feishu":
-		return extractFeishuWebhook(body)
 	case "line":
 		return extractLineWebhook(body)
 	case "qqbot":
@@ -40,28 +38,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 
 
 
-func extractFeishuWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	if ev, ok := raw["event"].(map[string]any); ok { //nolint:nestif
-		if m, ok := ev["message"].(map[string]any); ok {
-			if content, ok := m["content"].(string); ok {
-				var c map[string]any
-				if json.Unmarshal([]byte(content), &c) == nil {
-					text, _ := c["text"].(string)
-					chatID, _ := m["chat_id"].(string)
-					senderMap, _ := ev["sender"].(map[string]any)
-					senderID, _ := senderMap["sender_id"].(map[string]any)
-					openID, _ := senderID["open_id"].(string)
-					return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: openID, TaintLevel: types.TaintHigh}
-				}
-			}
-		}
-	}
-	return protocol.ChannelMessage{}
-}
 
 func extractLineWebhook(body []byte) protocol.ChannelMessage {
 	var raw map[string]any

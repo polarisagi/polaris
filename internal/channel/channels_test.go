@@ -10,36 +10,6 @@ import (
 )
 
 
-// ── extractFeishuWebhook ──────────────────────────────────────────────────────
-
-func TestExtractFeishuWebhook_Valid(t *testing.T) {
-	content, _ := json.Marshal(map[string]string{"text": "feishu text"})
-	payload := map[string]any{
-		"event": map[string]any{
-			"message": map[string]any{
-				"content": string(content),
-				"chat_id": "oc_abc",
-			},
-			"sender": map[string]any{
-				"sender_id": map[string]any{
-					"open_id": "ou_xyz",
-				},
-			},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	msg := extractFeishuWebhook(body)
-	if msg.Text != "feishu text" {
-		t.Errorf("expected 'feishu text', got %q", msg.Text)
-	}
-	if msg.ChatID != "oc_abc" {
-		t.Errorf("expected chatID='oc_abc', got %q", msg.ChatID)
-	}
-	if msg.UserID != "ou_xyz" {
-		t.Errorf("expected userID='ou_xyz', got %q", msg.UserID)
-	}
-}
-
 // ── extractLineWebhook ────────────────────────────────────────────────────────
 
 func TestExtractLineWebhook_Valid(t *testing.T) {
