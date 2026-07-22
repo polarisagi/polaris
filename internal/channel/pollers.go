@@ -72,13 +72,6 @@ func (m *Manager) startSignalPoller(channelID, apiURL, account string, cfg map[s
 	})
 }
 
-func (m *Manager) startSlackPoller(channelID, botToken, appToken string, cfg map[string]any) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.registerPoller(channelID, cancel)
-	concurrent.SafeGo(ctx, "poller.slack."+channelID, func(ctx context.Context) {
-		cadapter.RunSlackPoller(ctx, m, channelID, botToken, appToken, cfg)
-	})
-}
 
 
 func (m *Manager) startWeComPoller(channelID, botID, secret string, cfg map[string]any) {

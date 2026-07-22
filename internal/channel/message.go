@@ -18,8 +18,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "slack":
-		return extractSlackWebhook(body)
 	case "feishu":
 		return extractFeishuWebhook(body)
 	case "line":
@@ -41,23 +39,6 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 
 
 
-func extractSlackWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	if ev, ok := raw["event"].(map[string]any); ok {
-		text, _ := ev["text"].(string)
-		chatID, _ := ev["channel"].(string)
-		userID, _ := ev["user"].(string)
-		botID, _ := ev["bot_id"].(string)
-		if botID != "" {
-			return protocol.ChannelMessage{}
-		}
-		return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
-	}
-	return protocol.ChannelMessage{}
-}
 
 func extractFeishuWebhook(body []byte) protocol.ChannelMessage {
 	var raw map[string]any

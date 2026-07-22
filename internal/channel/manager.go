@@ -79,12 +79,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 	}
 
 	switch channelType {
-	case "slack":
-		botToken, _ := cfg["bot_token"].(string)
-		appToken, _ := cfg["app_token"].(string)
-		if botToken != "" && appToken != "" {
-			m.startSlackPoller(channelID, botToken, appToken, cfg)
-		}
 	case "feishu":
 		appID, _ := cfg["app_id"].(string)
 		appSecret, _ := cfg["app_secret"].(string)

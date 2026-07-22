@@ -18,17 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "slack":
-		botToken, _ := cfg["bot_token"].(string)
-		if botToken == "" {
-			slog.Warn("slack: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.SlackSendMessage(ctx, m.httpClient, botToken, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "slack: send message", err)
-		}
-
 	case "feishu":
 		token, _ := cfg["_feishu_token"].(string)
 		domain, _ := cfg["_feishu_domain"].(string)

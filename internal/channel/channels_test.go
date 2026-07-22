@@ -9,34 +9,6 @@ import (
 	"testing"
 )
 
-// ── extractSlackWebhook ───────────────────────────────────────────────────────
-
-func TestExtractSlackWebhook_Valid(t *testing.T) {
-	body := `{"event":{"text":"slack text","channel":"C1","user":"U1"}}`
-	msg := extractSlackWebhook([]byte(body))
-	if msg.Text != "slack text" {
-		t.Errorf("expected 'slack text', got %q", msg.Text)
-	}
-	if msg.ChatID != "C1" {
-		t.Errorf("expected chatID='C1', got %q", msg.ChatID)
-	}
-}
-
-func TestExtractSlackWebhook_BotIDFiltered(t *testing.T) {
-	body := `{"event":{"text":"bot","channel":"C1","user":"U1","bot_id":"BBOT"}}`
-	msg := extractSlackWebhook([]byte(body))
-	if msg.Text != "" {
-		t.Error("slack bot_id should be filtered")
-	}
-}
-
-func TestExtractSlackWebhook_NoEvent(t *testing.T) {
-	body := `{"type":"url_verification","challenge":"xyz"}`
-	msg := extractSlackWebhook([]byte(body))
-	if msg.Text != "" {
-		t.Error("no event key should return empty Message")
-	}
-}
 
 // ── extractFeishuWebhook ──────────────────────────────────────────────────────
 
