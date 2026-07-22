@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
@@ -105,6 +106,14 @@ type Server struct {
 }
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
+
+// ChannelsAdmin 返回底层管理的 ChannelsAdmin，供 boot 阶段获取并给 channelMgr 绑定 handler
+func (s *Server) ChannelsAdmin() *channelsadmin.ChannelsAdmin {
+	if s.sysadminHandler != nil {
+		return s.sysadminHandler.Channels
+	}
+	return nil
+}
 
 // SetOutboxWriter 注入 Outbox 写入器。此前该 setter 在 cmd/polaris 启动流程中
 // 从未被调用过——s.outboxWriter 恒为 nil，导致 handleAgentInterrupt 的
