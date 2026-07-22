@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint gen-threshold-examples generate-manifest build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny check-all
+.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint gen-threshold-examples generate-manifest build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode check-all
 
 GO := go
 CARGO := cargo
@@ -119,6 +119,21 @@ all: tidy fmt lint test build gen-threshold-examples
 
 # ─── 质量保障扩展 ─────────────────────────────────────────────────────────────
 
+# deadcode: 死代码检查
+deadcode:
+	@$(GO) run golang.org/x/tools/cmd/deadcode@latest ./cmd/polaris/... > .deadcode.out || true
+	@sed 's/:[0-9]*:[0-9]*:/:/g' .deadcode.out > .deadcode_clean.out
+	@sed 's/ *#.*//' scripts/deadcode-allowlist.txt > .allowlist_clean.tmp
+	@grep -vF -f .allowlist_clean.tmp .deadcode_clean.out > .deadcode_diff.out || true
+	@if [ -s .deadcode_diff.out ]; then \
+		echo "FAIL: Deadcode found:"; \
+		cat .deadcode_diff.out; \
+		rm .deadcode.out .deadcode_clean.out .deadcode_diff.out .allowlist_clean.tmp; \
+		exit 1; \
+	fi
+	@rm .deadcode.out .deadcode_clean.out .deadcode_diff.out .allowlist_clean.tmp
+	@echo "deadcode ok"
+
 # test-race: 对并发密集路径运行 Go race detector
 # 覆盖范围: Agent FSM / Worker Pool / MutationBus / 群体编排
 # 为何不跑全量: race detector 慢 5-10x，仅针对并发高发区
@@ -161,5 +176,5 @@ rust-deny:
 	$(CARGO) deny --manifest-path rust/substrate/Cargo.toml check
 
 # check-all: 完整质量门禁（CI 用）
-# 顺序: fmt → lint → test → test-race → rust-lint → rust-test → rust-deny
-check-all: fmt lint test test-race rust-lint rust-test rust-deny
+# 顺序: fmt → lint → test → test-race → rust-lint → rust-test → rust-deny → deadcode
+check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode
