@@ -268,10 +268,15 @@ func (bb *SQLiteBlackboard) ClaimTask(ctx context.Context, taskID, agentID strin
 	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_claimed", taskID); err != nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask: write event", err)
 	}
+	// A16: 读取 PostTask 时落盘的 trace_id/span_id，随广播事件透传给认领方
+	// 认领方可用 trace.ContextWithRemoteSpan(ctx, ev.TraceID, ev.SpanID) 恢复 trace 连续性
+	var claimTraceID, claimSpanID string
+	_ = tx.QueryRowContext(ctx, "SELECT COALESCE(trace_id,''), COALESCE(span_id,'') FROM tasks WHERE task_id=?", taskID).
+		Scan(&claimTraceID, &claimSpanID)
 	if err := tx.Commit(); err != nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask: commit", err)
 	}
-	bb.broadcast(types.BlackboardEvent{Type: "task_claimed", TaskID: taskID, AgentID: agentID})
+	bb.broadcast(types.BlackboardEvent{Type: "task_claimed", TaskID: taskID, AgentID: agentID, TraceID: claimTraceID, SpanID: claimSpanID})
 	return true, nil
 }
 
