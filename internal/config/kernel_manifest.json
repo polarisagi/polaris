@@ -47,7 +47,7 @@
   "internal/agent/context/context_pressure.go": "2e1a0d7b793c1c7b26e4166df941ff3f1e9b13a702c4b2fd758dfb2b427374bb",
   "internal/agent/context/context_pressure_test.go": "abd0383dfe9dbfe02d5a8b363628a8ea27de0266490f9ce38c137c82fbde4593",
   "internal/agent/context/memory_context.go": "d0636ba6139b7ae28b82cec70f91c71679241e72e61de9294c9c563521b1de83",
-  "internal/agent/context/memory_context_test.go": "33ce311a8bcb98f8d2b63178fcccfb00641f1677221d5b850e4c42d0e77e4d82",
+  "internal/agent/context/memory_context_test.go": "15bdf925f5c3a609ebfa763d3000fc1737b61723bdf445c4ce04ba21fdc33101",
   "internal/agent/context/persona_refiner.go": "cd2b0449051ae9c36f63e68e0a5a2eee52757e1f857ae4b62b8826137fe6793e",
   "internal/agent/context/persona_refiner_test.go": "4b8fe076eb202df1d57b451304da92e400f7bad6464c4d83f3f63f21673d9fdc",
   "internal/agent/context/pii_vault.go": "32f657aa690b302cfd739d0cc9de4a6cac539cc0491b835c3d3070340f9ac5c9",
