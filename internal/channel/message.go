@@ -18,36 +18,12 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "sms":
-		return extractTwilioWebhook(r)
 	case "teams":
 		return extractTeamsWebhook(body)
 	case "webhook":
 		return extractGenericWebhook(body)
 	}
 	return protocol.ChannelMessage{}
-}
-
-
-
-
-
-
-
-// extractTwilioWebhook 解析 Twilio 入站 SMS（application/x-www-form-urlencoded）。
-func extractTwilioWebhook(r *http.Request) protocol.ChannelMessage {
-	if r == nil {
-		return protocol.ChannelMessage{}
-	}
-	if err := r.ParseForm(); err != nil {
-		return protocol.ChannelMessage{}
-	}
-	text := r.FormValue("Body")
-	from := r.FormValue("From")
-	if text == "" || from == "" {
-		return protocol.ChannelMessage{}
-	}
-	return protocol.ChannelMessage{Text: text, ChatID: from, UserID: from, TaintLevel: types.TaintHigh}
 }
 
 // extractTeamsWebhook 解析 MS Teams / MS Graph 变更通知。

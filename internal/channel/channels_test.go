@@ -3,45 +3,8 @@ package channel
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strings"
 	"testing"
 )
-
-
-
-// ── extractTwilioWebhook ──────────────────────────────────────────────────────
-
-func TestExtractTwilioWebhook_Valid(t *testing.T) {
-	form := url.Values{"Body": {"hello sms"}, "From": {"+9876"}}
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	msg := extractTwilioWebhook(req)
-	if msg.Text != "hello sms" {
-		t.Errorf("expected 'hello sms', got %q", msg.Text)
-	}
-	if msg.ChatID != "+9876" {
-		t.Errorf("expected chatID='+9876', got %q", msg.ChatID)
-	}
-}
-
-func TestExtractTwilioWebhook_NilRequest(t *testing.T) {
-	msg := extractTwilioWebhook(nil)
-	if msg.Text != "" {
-		t.Error("nil request should return empty Message")
-	}
-}
-
-func TestExtractTwilioWebhook_MissingFields(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Body=hello"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	msg := extractTwilioWebhook(req)
-	if msg.Text != "" {
-		t.Error("missing From should return empty Message")
-	}
-}
 
 // ── extractTeamsWebhook ───────────────────────────────────────────────────────
 
