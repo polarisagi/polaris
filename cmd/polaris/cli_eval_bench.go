@@ -37,36 +37,32 @@ func runEvalBenchCmd(args []string) error {
 
 	fmt.Printf("加载了 %d 条来自 %s 的测试用例\n", len(cases), *suite)
 
-	// 这里构造 Runner 的依赖极其复杂，因为需要 agent 实例。
-	// 为了“离线可行”，需要构造一个轻量级的 Runner 或传入现有的配置。
-	// 本例根据设计要求仅做 CLI 框架注册。实际 Run 需要完整的 Agent 环境，
-	// 如果强行在这里构造全套环境会非常庞大，故使用伪造实现进行验证。
-
-	// TODO: 连接实际的 RunnerImpl 运行
-	// runner := harness.NewRunner(...)
-	// result := runner.Run(ctx, cases)
-
-	// Mock implementation for the test framework placeholder
-	var passes int
-	for _, c := range cases {
-		fmt.Printf("执行用例 %s...\n", c.ID)
-		passes++
-	}
-
+	// ADR-0068 决策原文："评测的实际执行仍然统一走现有的 RunnerImpl 机制"——
+	// 但 RunnerImpl.RunSuite 依赖完整的 protocol.Store / SQLiteEvalStore / Agent
+	// 运行环境，与本命令期望的"离线、无需启动完整 Agent 环境"用法不兼容，接线
+	// 属于独立工作量，本轮不实现。
+	//
+	// 此前版本在此处对每条用例无条件计数为 pass 并写入报告——这是伪造的验证结果
+	// （违反 HE-2 可验证执行：不允许编造未发生的执行）。宁可诚实报告"未执行"，
+	// 也不能让报告 JSON 看起来像是真实跑过 Agent 的 100% 通过率。
 	report := map[string]any{
-		"suite": *suite,
-		"total": len(cases),
-		"pass":  passes,
+		"suite":    *suite,
+		"total":    len(cases),
+		"executed": false,
+		"note":     "本命令目前仅验证数据集加载/转换，尚未接入 RunnerImpl 实际执行；不产出 pass/fail 结果",
 	}
 
 	if *outPath != "" {
-		b, _ := json.MarshalIndent(report, "", "  ")
+		b, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "failed to marshal report", err)
+		}
 		if err := os.WriteFile(*outPath, b, 0644); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "failed to write report", err)
 		}
-		fmt.Printf("报告已写入 %s\n", *outPath)
+		fmt.Printf("报告已写入 %s（仅数据集加载校验，未执行评测）\n", *outPath)
 	} else {
-		fmt.Printf("基准测试完成: 总计 %d，通过 %d\n", len(cases), passes)
+		fmt.Printf("数据集加载校验完成: 总计 %d 条用例；执行环节尚未接入 RunnerImpl\n", len(cases))
 	}
 
 	return nil

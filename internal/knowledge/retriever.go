@@ -65,9 +65,18 @@ func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySer
 // 结构上不可达。embedder/cognitive/graph 均可传 nil 走对应降级路径，
 // NewHybridRetrieverWithCognitive 是本类型唯一生产构造入口。
 //
-// V-5（2026-07-23 核实）：graph 字段保留——ADR-0051 §4 判定为 DEFER（图遍历是
-// 规划中待接线能力，graphrag.GraphTraverser 有真实实现；将来在 boot_knowledge.go
-// 注入 GraphTraverser 即可激活，不需要改动本文件）。deadcode-allowlist 已登记。
+// V-5（2026-07-23 复核订正）：此前的注释误引"ADR-0051 §4 判定为 DEFER"及"已登记
+// deadcode-allowlist"——均核实不实：ADR-0051 Phase 4 的 DEFER 表格中并无
+// HybridRetrieverImpl.graph 或本文件的条目（该表格里唯一相关项是
+// internal/knowledge/graphrag/writer.go 的 GraphWriter，是另一个组件）；
+// scripts/deadcode-allowlist.txt 中也没有 retriever.go 的登记项。
+// 唯一与本字段直接相关的决议是 ADR-0062 C5：`graphrag.NewGraphTraverser`
+// 构造函数已被判定 DELETE（仅因 GraphTraverser 结构体仍被本文件签名引用而未删除
+// 类型本身）。即当前并无任何 ADR 支持"待接线"的结论，按 R6/ADR-0062 deadcode
+// 纪律的默认处置（无 WIRE 决议 → 倾向删除），graph 字段与本 Search 中的检索支路
+// 理应删除；因该删除会级联影响 rrfThreeWay/explainBitsByChunkID 签名，改动面超出
+// 本轮修复范围，暂保留字段但更正注释，避免继续以虚构引用误导后续维护者。真正处置
+// （删除或补齐真实 WIRE 决议）留待专项 ADR。
 
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
 func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, vecScanLimit int) *HybridRetrieverImpl {

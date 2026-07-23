@@ -11,11 +11,12 @@ Accepted
 
 ## Decision
 
-### 1. 引入 Channel 适配器接口与注册表 (A-1)
+### 1. 引入 Channel 适配器接口与单例查表 (A-1)
 - 引入 `adapter.Adapter` 接口，定义 `Type()`, `Extract()`, `Send()`, `StartPoller()` 方法。
-- 引入 `adapter.Host` 接口，扩展现有的 `PollerHost` 并增加 `WecomEnqueue()` 能力。
-- 采用进程内全局注册表（`map[string]Adapter`）配合 `init()` 函数自注册模式。
-- `Manager` 的 `Start`, `ExtractMessage`, `SendReply` 改为查表委派。
+- 引入 `adapter.Host` 接口，直接复用现有的 `PollerHost`（wecom 的发送通道改为 `WecomAdapter` 自身持有的 `sync.Map` 字段，不再需要 Host 额外扩展方法）。
+- `GetAdapter(channelType) (Adapter, bool)` 收敛为 `adapter.go` 内一处 `switch`，每个平台返回各自的 `sync.OnceValue` 惰性单例（而非每次调用新建实例）。
+  - 2026-07-23 复核订正：最初采用"包级全局 `map[string]Adapter` + 各平台 `init()` 自注册"方案，但该方案与本项目 `internal/` 禁止全局可变变量的红线（`Test_inv_NoGlobalVar`）直接冲突；执行过程中一度为绕开该检查退化为无状态 factory-style `switch`（每次 `GetAdapter` 都 `return &WecomAdapter{}, true` 构造全新实例），导致 `WecomAdapter.wecomSends`/`MatrixAdapter.txnCounter` 这类必须跨 `StartPoller`→`Send` 调用持久的实例状态被静默清空——wecom 回复因此完全丢失、matrix 消息可能因事务 ID 重复被服务端去重。复核时改为 `sync.OnceValue` 单例（该模式是 `Test_inv_NoGlobalVar` 的既定豁免类别，语义为"惰性只读单次计算"），同时解决了合规与状态持久两个问题。
+- `Manager` 的 `Start`, `ExtractMessage`, `SendReply` 改为查表委派（三处巨型 `switch` 全部消除，只剩 `adapter.go` 内这一处按平台名分派的 `switch`）。
 - **平滑迁移策略**：为保证系统稳定，采用逐个平台迁移，使用原 `switch` 作为未查到表项的 fallback。全部平台迁移完成并测试通过后，再移除 `switch` 结构。
 
 ### 2. 补全 Poller 入站消息处理器接线 (A-2)
@@ -24,6 +25,6 @@ Accepted
 - 在 `boot_server.go` 初始化 `ChannelsAdmin` 后，立即调用 `channelMgr.SetMessageHandler()` 完成接线。
 
 ## Consequences
-- **解耦与扩展性**：未来新增聊天平台（如微信、Line等）仅需实现 `Adapter` 接口并注册，无需再触碰核心 `Manager` 代码，符合 OCP。
+- **解耦与扩展性**：`Manager`/`dispatch.go`/`message.go` 三处巨型 `switch` 已消除，未来新增聊天平台只需新增该平台自己的 `<platform>.go` 文件实现 `Adapter` 接口，并在 `adapter.go` 的 `GetAdapter` 里补一个 `case` 分支（受限于本项目禁全局可变变量的约束，无法做到零改动的完全自注册，但改动范围已从"三处巨型 switch"收敛到"一处按平台名分派的 switch"）。
 - **安全性与稳定性**：逐步迁移策略最大程度降低了重构引入的回归风险。
 - **数据完整性**：修复了 Poller 模式下消息丢失的重大缺陷，确保了所有渠道对话的多轮上下文都被正确落盘和推理。

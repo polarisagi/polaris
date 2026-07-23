@@ -288,6 +288,54 @@ func Test_inv_M1_01_NoRawHTTPCalls(t *testing.T) {
 	}
 }
 
+// ─── inv_XR06 ─────────────────────────────────────────────────────────────────
+
+// Test_inv_XR06_DownloaderNoRawTransport 验证 internal/downloader/ 下不存在裸
+// http.DefaultTransport / http.DefaultClient 引用（绕过 M11 SafeDialer 的 SSRF
+// 防护）。豁免列表由 testdata/xr06_raw_transport_exempt.json 管理——每条豁免必须
+// 有对应 ADR（见 ADR-0071）。
+//
+// 扫描范围刻意限定在 internal/downloader/（而非全量 internal/），因为
+// internal/security/network/ 下对 http.DefaultTransport 的引用是 SafeDialer/
+// NetworkGuard 自身实现（改写全局默认值以做纵深防御），并非绕过；将其纳入本规则
+// 需要另立豁免语义，超出 ADR-0071 的既定范围，留待专项处理。
+func Test_inv_XR06_DownloaderNoRawTransport(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "xr06_raw_transport_exempt.json")
+
+	forbiddenHTTPSelectors := map[string]bool{
+		"DefaultTransport": true,
+		"DefaultClient":    true,
+	}
+
+	var violations []violation
+	walkGoFilesUnder(t, root, filepath.Join("internal", "downloader"), exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok || pkgIdent.Name != "http" {
+				return true
+			}
+			if forbiddenHTTPSelectors[sel.Sel.Name] {
+				pos := fset.Position(sel.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  fmt.Sprintf("http.%s — 裸 HTTP 出口，绕过 M11 SafeDialer（XR-06），未登记豁免须改用注入的 SafeDialer client", sel.Sel.Name),
+				})
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_XR06 VIOLATED: %s", v)
+	}
+}
+
 // ─── inv_M11_05 / inv_M7_06 ──────────────────────────────────────────────────
 
 // Test_inv_M11_05_NoRawNetDial 验证 pkg/ 中无裸 net.Dial / net.DialContext 调用。

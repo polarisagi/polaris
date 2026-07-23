@@ -207,6 +207,48 @@ func (r *SQLiteAutomationRepository) ListEventAutomations(ctx context.Context) (
 	return result, nil
 }
 
+// ListWebhookAutomations 返回指定 channelID 上配置为 webhook 触发的 automations
+// （GD-9-001 复核修复：cron_templates_handlers.go TriggerWebhookAutomations 此前
+// 直连 SQL；WHERE 条件与原查询保持一致，不新增 circuit_open 过滤以免改变既有行为）。
+func (r *SQLiteAutomationRepository) ListWebhookAutomations(ctx context.Context, channelID string) ([]repo.AutomationRow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
+		       working_dir, env_type, reasoning_effort, result_action,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
+		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
+		       created_at, updated_at, event_filter
+		FROM automations
+		WHERE enabled=1
+		  AND (trigger_type='webhook' OR trigger_type='both')
+		  AND channel_id=?
+		  AND last_run_status != 'running'`, channelID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListWebhookAutomations", err)
+	}
+	defer rows.Close()
+
+	var result []repo.AutomationRow
+	for rows.Next() {
+		var row repo.AutomationRow
+		var enabledInt, hitlInt int
+		if err := rows.Scan(
+			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
+			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel,
+			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
+			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListWebhookAutomations scan", err)
+		}
+		row.Enabled = enabledInt == 1
+		row.RequiresHITL = hitlInt == 1
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rows iteration error", err)
+	}
+	return result, nil
+}
+
 func (r *SQLiteAutomationRepository) UpdateAutomationStatus(ctx context.Context, id, lastRunStatus string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE automations SET last_run_status=? WHERE id=?`, lastRunStatus, id)
 	if err != nil {
@@ -291,7 +333,10 @@ func (r *SQLiteAutomationRepository) ListRunsByAutomationID(ctx context.Context,
 }
 
 func (r *SQLiteAutomationRepository) TimeoutRuns(ctx context.Context, startedBefore string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status='timeout', error='execution timeout' WHERE status='running' AND started_at < ?`, startedBefore)
+	// 复核修复：017_automations.sql 的 automation_runs 表从未有过 error 列（仅
+	// error_msg），此处引用不存在的列此前会导致每次调用都以 SQL 错误失败，卡在
+	// running 状态的执行记录永远不会被标记为 timeout。改用真实存在的 error_msg。
+	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status='timeout', error_msg='execution timeout' WHERE status='running' AND started_at < ?`, startedBefore)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.TimeoutRuns", err)
 	}

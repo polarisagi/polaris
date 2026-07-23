@@ -170,9 +170,7 @@ func (a *TelegramAdapter) Send(ctx context.Context, host Host, cfg map[string]an
 		return apperr.Wrap(apperr.CodeInternal, "telegram: marshal payload", err)
 	}
 	url := "https://api.telegram.org/bot" + token + "/sendMessage"
-	importBytes := []byte{} // force bytes import
-	_ = importBytes
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload)) // will need 'bytes' imported
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "telegram: new request", err)
 	}

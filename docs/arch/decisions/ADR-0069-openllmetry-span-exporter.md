@@ -22,3 +22,8 @@ Accepted
 
 **负面影响**：
 - 异步导出如果在高并发极端场景下，可能导致 Goroutine 的突发增加。不过由于 M11 层有并发限制以及 SafeDialer 的兜底，整体风险可控。
+
+**2026-07-23 复核订正**：
+1. `EndSpan` 最初用裸 `go func` + `//custom-nolint:bare-goroutine` 逃逸豁免实现异步导出，理由是"trace export 不需要 SafeGo 管理"——该理由不成立：SafeGo 的价值是 panic 恢复，一个默认关闭的可选导出器一旦内部 panic（如导出器实现 bug）会直接拖垮整个进程，与"绝不阻塞/绝不影响主链路"的决策原文相悖。已改为 `concurrent.SafeGo`。
+2. 决策点 2 要求的 `trace_exporter_errors_total` 指标此前只有一行注释"这里本可以上报指标"，从未真正实现。已补齐为 `metrics.GlobalTraceExporterErrorsTotal`。
+3. **本 ADR 标注为 Accepted，但截至本次复核，`OTLPHTTPExporter`/`SpanExporter` 除单元测试外未被任何启动路径（boot_*.go）或配置项调用/注册**——即当前自托管用户实际上*无法*启用该导出能力（决策点 4 "仅在配置显式指定时启用"所依赖的配置项与 `NoopExporter` 默认值均不存在）。`trace.NewTracer()` 目前仅在 `internal/knowledge/rag_impl.go`、`internal/knowledge/retriever.go` 两处按调用临时构造，互相独立、均未注册任何 exporter。补齐配置项 + boot 期 SafeDialer 化 `http.Client` 注入属于独立工作量（涉及 `internal/config` 结构体变更即触发 `make gen-threshold-examples` 的强制流程与统一 Tracer 单例的架构决策），本轮不展开，留待后续 ADR/任务跟进，此处仅订正状态描述避免误导。

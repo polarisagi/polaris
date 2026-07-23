@@ -65,34 +65,17 @@ func (ca *CronAdmin) HandleListAutomationTemplates(w http.ResponseWriter, r *htt
 // ─── Webhook 触发 ──────────────────────────────────────────────────────────────
 
 func (ca *CronAdmin) TriggerWebhookAutomations(ctx context.Context, channelID, text string) {
-	rows, err := ca.DB.QueryContext(ctx, `
-		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
-		       working_dir, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json
-		FROM automations
-		WHERE enabled=1
-		  AND (trigger_type='webhook' OR trigger_type='both')
-		  AND channel_id=?
-		  AND last_run_status != 'running'`,
-		channelID)
+	// GD-9-001 复核修复：改走 AutomationRepo.ListWebhookAutomations，不再由
+	// Gateway 层直接拼接执行 SQL。
+	rows, err := ca.AutomationRepo.ListWebhookAutomations(ctx, channelID)
 	if err != nil {
 		return
 	}
-	defer rows.Close()
 
-	var due []automation
-	for rows.Next() {
-		var a automation
-		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Prompt, &a.TriggerType, &a.CronSchedule, &a.ChannelID,
-			&a.WorkingDir, &a.ReasoningEffort, &a.ResultAction,
-			&a.SandboxLevel, &a.CedarRulesJSON,
-		); err != nil {
-			continue
-		}
-		due = append(due, a)
+	due := make([]automation, 0, len(rows))
+	for _, row := range rows {
+		due = append(due, automationFromRow(row))
 	}
-	rows.Close()
 
 	for i := range due {
 		a := &due[i]

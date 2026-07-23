@@ -93,6 +93,14 @@ ADR 被代码引用时，源文件头部加：
 | 0061 | 2026-07-22 deadcode 复核（47 项，1 项新发现 GoldmarkChunker 已删除，2 项待产品决策） | Accepted（部分已执行） | 2026-07-22 |
 | 0062 | deadcode 44 项 DEFER 最终结清（删除为主 + 门控白名单；C2 AddToGate 复核确认删除正确，taint_sanitizer 复核恢复；Tier1 本地默认选型 Qwen3-0.6B 对） | Accepted（已执行） | 2026-07-22 |
 | 0063 | llama_infer 控制面/计算面分离（ABORT_FLAG 协作式取消 + status 无锁只读镜像 STATUS；不改单槽位串行推理取舍） | Accepted（已执行） | 2026-07-22 |
+| 0064 | Channel 适配器注册表重构（A-1，sync.OnceValue 单例查表）+ 统一入站分发接线（A-2） | Accepted（已执行） | 2026-07-23 |
+| 0065 | S_REPLAN 扩展激活重试与降级标记（A-3） | Accepted（已执行，回填） | 2026-07-23 |
+| 0066 | Gateway 直连 SQL 下沉 Repository（A-4）+ EgressGateway 收紧默认白名单（A-6） | Accepted（已执行，回填） | 2026-07-23 |
+| 0067 | Gateway God Class 拆分（ChatOrchestrator，A-5） | Proposed（设计阶段，未实施） | 2026-07-23 |
+| 0068 | 开放基准适配器架构（τ-bench/Terminal-Bench，F-1） | Accepted（已执行） | 2026-07-23 |
+| 0069 | OpenLLMetry 轨迹导出器架构（F-2） | Accepted（导出器已实现，未接入 boot/config） | 2026-07-23 |
+| 0070 | MCP Agent-to-Agent (A2A) 协同架构（F-3） | Proposed（战略方向，未落码） | 2026-07-23 |
+| 0071 | downloader 出站公网豁免 XR-06（proxy.go） | Accepted（已执行） | 2026-07-23 |
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 

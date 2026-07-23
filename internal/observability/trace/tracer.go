@@ -6,6 +6,9 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // SpanKind mirrors the gen_ai.* semantic convention.
@@ -81,15 +84,21 @@ func (t *Tracer) EndSpan(span *Span) {
 		"duration_ms", span.EndTime.Sub(span.StartTime).Milliseconds(),
 	)
 	for _, e := range t.exporters {
-		//custom-nolint:bare-goroutine trace export doesn't need to be managed by SafeGo
-		go func(s *Span, exporter SpanExporter) {
+		// ADR-0069 R2：导出必须异步、尽力而为，绝不阻塞调用方热路径；且不得因导出器
+		// 内部 panic 拖垮整个进程——此前版本用裸 go 语句 + //custom-nolint 逃逸豁免，
+		// 理由是"trace export 不需要 SafeGo 管理"，但该理由站不住脚：SafeGo 的核心价值
+		// 是 panic 恢复而非"重要性分级"，一个默认关闭的可选可观测性导出器一旦 panic
+		// 反而会拖垮本应无关的主进程，属于本末倒置，复核改为 concurrent.SafeGo。
+		exporter := e
+		s := span
+		concurrent.SafeGo(context.Background(), "trace_exporter.export_span", func(_ context.Context) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := exporter.ExportSpan(ctx, s); err != nil {
 				t.logger.Warn("failed to export span", "err", err, "trace_id", s.TraceID)
-				// Here we could also emit a metric: trace_exporter_errors_total
+				metrics.GlobalTraceExporterErrorsTotal.Add(1)
 			}
-		}(span, e)
+		})
 	}
 }
 

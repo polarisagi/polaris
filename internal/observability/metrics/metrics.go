@@ -31,8 +31,13 @@ var (
 	// GlobalBlindZoneRoutingTotal 因 BlindZone 检测强制升级为 System2 的累计次数（V8-S4）。
 	GlobalBlindZoneRoutingTotal atomic.Int64
 
-	// GlobalReplanExtActivationDegradedTotal tracks degraded extension activations during S_REPLAN.
+	// GlobalReplanExtActivationDegradedTotal S_REPLAN 阶段扩展激活重试耗尽后降级的累计次数（A-3）。
 	GlobalReplanExtActivationDegradedTotal atomic.Int64
+
+	// GlobalTraceExporterErrorsTotal SpanExporter.ExportSpan 失败的累计次数（ADR-0069）。
+	// trace.Tracer.EndSpan 异步导出失败时写入；导出是尽力而为语义，失败不影响主链路，
+	// 仅通过该指标供运维观测导出健康度。
+	GlobalTraceExporterErrorsTotal atomic.Int64
 )
 
 // foundingAnchorDriftScorePtr 以 atomic.Pointer 持有漂移评分注入函数，避免包级可变 var。

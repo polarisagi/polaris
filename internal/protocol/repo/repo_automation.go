@@ -48,6 +48,10 @@ type AutomationRepository interface {
 	ListAutomations(ctx context.Context) ([]AutomationRow, error)
 	ListDueAutomations(ctx context.Context, nowRFC3339 string) ([]AutomationRow, error)
 	ListEventAutomations(ctx context.Context) ([]AutomationRow, error)
+	// ListWebhookAutomations 返回指定 channelID 上配置为 webhook 触发的 automations
+	// （GD-9-001 复核修复：cron_templates_handlers.go TriggerWebhookAutomations
+	// 此前直连 SQL，收敛到本方法）。
+	ListWebhookAutomations(ctx context.Context, channelID string) ([]AutomationRow, error)
 
 	UpdateAutomationStatus(ctx context.Context, id, lastRunStatus string) error
 	UpdateAutomationStatusAndSchedule(ctx context.Context, id, lastRunStatus, lastRunAt, nextRunAt string) error
