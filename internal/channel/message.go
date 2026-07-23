@@ -3,9 +3,7 @@ package channel
 import (
 	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/types"
 
-	"encoding/json"
 	"net/http"
 	"strconv"
 )
@@ -16,23 +14,7 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	if a, ok := cadapter.Lookup(channelType); ok {
 		return a.Extract(body, r)
 	}
-
-	switch channelType {
-	case "webhook":
-		return extractGenericWebhook(body)
-	}
 	return protocol.ChannelMessage{}
-}
-
-
-
-func extractGenericWebhook(body []byte) protocol.ChannelMessage {
-	var raw map[string]any
-	if json.Unmarshal(body, &raw) != nil {
-		return protocol.ChannelMessage{}
-	}
-	text, _ := raw["content"].(string)
-	return protocol.ChannelMessage{Text: text, ChatID: "webhook", TaintLevel: types.TaintHigh}
 }
 
 // jsonNestedInt64 从嵌套 map 提取 float64 ID 字段并转字符串。

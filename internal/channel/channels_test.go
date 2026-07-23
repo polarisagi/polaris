@@ -5,18 +5,6 @@ import (
 	"testing"
 )
 
-// ── extractGenericWebhook ─────────────────────────────────────────────────────
-
-func TestExtractGenericWebhook_Valid(t *testing.T) {
-	msg := extractGenericWebhook([]byte(`{"content":"generic text"}`))
-	if msg.Text != "generic text" {
-		t.Errorf("expected 'generic text', got %q", msg.Text)
-	}
-	if msg.ChatID != "webhook" {
-		t.Errorf("expected chatID='webhook', got %q", msg.ChatID)
-	}
-}
-
 // ── ExtractMessage dispatcher ─────────────────────────────────────────────────
 
 func TestExtractMessage_Telegram(t *testing.T) {
