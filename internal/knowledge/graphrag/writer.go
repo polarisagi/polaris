@@ -43,23 +43,8 @@ func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 	}
 
 	// B2: 同样检查 semantic_entities 侧是否存在同名同类型高相似度实体
-	if gw.semanticDB != nil {
-		var existingEmbedding []byte
-		var existingVersion int64
-		var dbid int64
-		err := gw.semanticDB.QueryRowContext(ctx, "SELECT id, embedding, version FROM semantic_entities WHERE entity_type = ? AND name = ?", e.Type, e.Name).Scan(&dbid, &existingEmbedding, &existingVersion)
-		if err == nil && len(existingEmbedding) > 0 {
-			embFloats := bytesToFloat32s(existingEmbedding)
-			sim := CosineSimilarity(embFloats, e.Embedding)
-			if sim > 0.95 && e.SyncVersion <= existingVersion {
-				return nil
-			}
-			// Update existing entity in semantic_entities if it exists but version is higher or sim is low
-			_, _ = gw.semanticDB.ExecContext(ctx, `UPDATE semantic_entities SET embedding = ?, version = ?, source_type = 'graphrag_ingest', updated_at = strftime('%s','now')*1000 WHERE id = ?`, float32sToBytes(e.Embedding), e.SyncVersion, dbid)
-		} else {
-			// Insert new entity into semantic_entities
-			_, _ = gw.semanticDB.ExecContext(ctx, `INSERT INTO semantic_entities (entity_type, name, properties, embedding, version, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'graphrag_ingest', strftime('%s','now')*1000, strftime('%s','now')*1000)`, e.Type, e.Name, "{}", float32sToBytes(e.Embedding), e.SyncVersion)
-		}
+	if skip := gw.upsertToSemanticDB(ctx, e); skip {
+		return nil
 	}
 
 	intent := &store.MutationIntent{
@@ -70,6 +55,31 @@ func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 		ClaimedVersion: e.SyncVersion,
 	}
 	return gw.bus.Submit(ctx, intent)
+}
+
+// upsertToSemanticDB 向 semantic_entities 写入 graphrag_ingest 来源的实体。
+// 返回 true 表示已被高相似度低版本实体去重跳过（调用方应跳过后续写入）。
+func (gw *GraphWriter) upsertToSemanticDB(ctx context.Context, e *Entity) (skip bool) {
+	if gw.semanticDB == nil {
+		return false
+	}
+	var existingEmbedding []byte
+	var existingVersion int64
+	var dbid int64
+	err := gw.semanticDB.QueryRowContext(ctx, "SELECT id, embedding, version FROM semantic_entities WHERE entity_type = ? AND name = ?", e.Type, e.Name).Scan(&dbid, &existingEmbedding, &existingVersion)
+	if err == nil && len(existingEmbedding) > 0 {
+		embFloats := bytesToFloat32s(existingEmbedding)
+		sim := CosineSimilarity(embFloats, e.Embedding)
+		if sim > 0.95 && e.SyncVersion <= existingVersion {
+			return true // 高相似度低版本：跳过
+		}
+		// Update existing entity in semantic_entities if it exists but version is higher or sim is low
+		_, _ = gw.semanticDB.ExecContext(ctx, `UPDATE semantic_entities SET embedding = ?, version = ?, source_type = 'graphrag_ingest', updated_at = strftime('%s','now')*1000 WHERE id = ?`, float32sToBytes(e.Embedding), e.SyncVersion, dbid)
+	} else {
+		// Insert new entity into semantic_entities
+		_, _ = gw.semanticDB.ExecContext(ctx, `INSERT INTO semantic_entities (entity_type, name, properties, embedding, version, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'graphrag_ingest', strftime('%s','now')*1000, strftime('%s','now')*1000)`, e.Type, e.Name, "{}", float32sToBytes(e.Embedding), e.SyncVersion)
+	}
+	return false
 }
 
 func float32sToBytes(f []float32) []byte {

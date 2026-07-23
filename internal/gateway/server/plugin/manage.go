@@ -310,9 +310,9 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 
 	var installedVersion, catalogID, catalogVersion string
 	err := h.DB.QueryRowContext(r.Context(),
-		`SELECT i.installed_version, i.catalog_id, c.version 
-		 FROM extension_instances i 
-		 LEFT JOIN extension_catalog c ON i.catalog_id = c.id 
+		`SELECT i.installed_version, i.catalog_id, COALESCE(c.version,'')
+		 FROM extension_instances i
+		 LEFT JOIN extension_catalog c ON i.catalog_id = c.id
 		 WHERE i.id=?`, pluginID).Scan(&installedVersion, &catalogID, &catalogVersion)
 
 	if err != nil {
