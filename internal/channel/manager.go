@@ -77,9 +77,6 @@ func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //n
 		return
 	}
 
-	switch channelType {
-	// line / whatsapp / sms / teams / webhook：纯 webhook 模式，无需 poller
-	}
 }
 
 // RestoreChannelsFromDB 从数据库加载所有的频道配置（如 Discord/Telegram Token 等）并拉起 polling 协程。

@@ -14,12 +14,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 		cfg["_channel_id"] = channelID
 		return a.Send(ctx, m, cfg, msg, text)
 	}
-
-	switch channelType {
-
-	default:
-		slog.Warn("channels: SendReply not implemented for channel type", "type", channelType)
-	}
-
+	slog.Warn("channels: SendReply not implemented for channel type", "type", channelType)
 	return nil
 }
