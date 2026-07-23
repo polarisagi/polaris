@@ -2,21 +2,31 @@ package channel
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
-func TestManager_SendReply_Coverage(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true}`))
-	}))
-	defer ts.Close()
+type mockRoundTripperFunc func(req *http.Request) *http.Response
 
-	mgr := NewManager(ts.Client(), func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {})
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
+
+func TestManager_SendReply_Coverage(t *testing.T) {
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			}
+		}),
+	}
+
+	mgr := NewManager(clientHTTP, func(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {})
 	ctx := context.Background()
 	msg := protocol.ChannelMessage{ChatID: "c1", ReplyToken: "r1"}
 	text := "hello"

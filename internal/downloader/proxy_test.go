@@ -2,8 +2,9 @@ package downloader
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -61,21 +62,29 @@ func TestProxyStatus_AfterConfigure(t *testing.T) {
 }
 
 func TestHeadOK_ServerReturns200(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
-	if !headOK(context.Background(), ts.Client(), ts.URL) {
+	if !headOK(context.Background(), clientHTTP, "http://dummy") {
 		t.Errorf("expected true")
 	}
 }
 
 func TestHeadOK_ServerReturns500(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
 	// Wait, our implementation of headOK does not check status code!
 	// It just returns true if it gets a response.
@@ -83,7 +92,7 @@ func TestHeadOK_ServerReturns500(t *testing.T) {
 	// resp, err := client.Do(req)
 	// if err != nil { return false }
 	// return true
-	if !headOK(context.Background(), ts.Client(), ts.URL) {
+	if !headOK(context.Background(), clientHTTP, "http://dummy") {
 		t.Errorf("expected true even for 500, because err is nil")
 	}
 }

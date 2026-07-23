@@ -9,8 +9,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func init() { Register(&WebhookAdapter{}) }
-
 type WebhookAdapter struct{}
 
 func (a *WebhookAdapter) Type() string { return "webhook" }

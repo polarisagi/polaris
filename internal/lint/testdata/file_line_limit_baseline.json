@@ -6,5 +6,7 @@
   "internal/agent/agent_execute_effect.go": true,
   "internal/agent/agent_execute_dag.go": true,
   "internal/agent/fsm/state_machine.go": true,
-  "internal/learning/reflexion/reflexion.go": true
+  "internal/learning/reflexion/reflexion.go": true,
+  "internal/gateway/server/server_core.go": true,
+  "internal/config/thresholds.go": true
 }

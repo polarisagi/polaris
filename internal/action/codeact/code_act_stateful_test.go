@@ -119,6 +119,9 @@ func TestStatefulSession_RoundTrip_Python(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available in test environment")
 	}
+	if err := exec.Command("python3", "-c", "import encodings").Run(); err != nil {
+		t.Skip("python3 available but broken (e.g. missing encodings module) in test environment")
+	}
 
 	ca := &CodeAct{stateDir: t.TempDir()}
 	sessionID := "roundtrip-session"

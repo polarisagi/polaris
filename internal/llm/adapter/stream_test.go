@@ -2,8 +2,8 @@ package adapter
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,32 +12,33 @@ import (
 
 func TestSSEParser_DeepSeek(t *testing.T) {
 	// 模拟 DeepSeek 返回的 SSE 流
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-
-		flusher, _ := w.(http.Flusher)
-
-		// 写入块 1
-		w.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"},\"finish_reason\":null}]}\n\n"))
-		flusher.Flush()
-		time.Sleep(10 * time.Millisecond)
-
-		// 写入块 2
-		w.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"world!\"},\"finish_reason\":\"stop\"}]}\n\n"))
-		flusher.Flush()
-		time.Sleep(10 * time.Millisecond)
-
-		// 写入 DONE
-		w.Write([]byte("data: [DONE]\n\n"))
-		flusher.Flush()
-	}))
-	defer mockServer.Close()
-
 	client := &OpenAICompatibleClient{
-		BaseURL:    mockServer.URL, // 替换以使用 mock
-		APIKey:     "test-key",
-		HTTPClient: mockServer.Client(),
+		BaseURL: "http://dummy", // 替换以使用 mock
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+				pr, pw := io.Pipe()
+				go func() {
+					// 写入块 1
+					pw.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"},\"finish_reason\":null}]}\n\n"))
+					time.Sleep(10 * time.Millisecond)
+
+					// 写入块 2
+					pw.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"world!\"},\"finish_reason\":\"stop\"}]}\n\n"))
+					time.Sleep(10 * time.Millisecond)
+
+					// 写入 DONE
+					pw.Write([]byte("data: [DONE]\n\n"))
+					pw.Close()
+				}()
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       pr,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				}
+			}),
+		},
 	}
 
 	req := &types.InferRequest{

@@ -22,18 +22,18 @@ func NewSQLiteAutomationRepository(db protocol.SQLQuerier) *SQLiteAutomationRepo
 
 func (r *SQLiteAutomationRepository) CreateAutomation(ctx context.Context, row repo.AutomationRow) error {
 	_, err := r.db.ExecContext(ctx, `
-			INSERT INTO automations(
-				id, name, prompt, trigger_type, cron_schedule, channel_id,
-				working_dir, env_type, reasoning_effort, result_action,
-				sandbox_level, cedar_rules_json, enabled,
-				requires_hitl, risk_level,
-				next_run_at, created_at, updated_at, event_filter
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		INSERT INTO automations (
+			id, name, prompt, trigger_type, cron_schedule, channel_id,
+			working_dir, env_type, reasoning_effort, result_action,
+			sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
+			last_run_at, next_run_at, run_count, last_run_status, last_run_error,
+			created_at, updated_at, event_filter
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.ID, row.Name, row.Prompt, row.TriggerType, row.CronSchedule, row.ChannelID,
 		row.WorkingDir, row.EnvType, row.ReasoningEffort, row.ResultAction,
-		row.SandboxLevel, row.CedarRulesJSON, row.Enabled,
-		row.RequiresHITL, row.RiskLevel,
-		row.NextRunAt, row.CreatedAt, row.UpdatedAt, row.EventFilter)
+		row.SandboxLevel, row.CedarRulesJSON, row.Enabled, row.RequiresHITL, row.RiskLevel,
+		row.LastRunAt, row.NextRunAt, row.RunCount, row.LastRunStatus, row.LastRunError,
+		row.CreatedAt, row.UpdatedAt, row.EventFilter)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.CreateAutomation", err)
 	}
@@ -74,13 +74,15 @@ func (r *SQLiteAutomationRepository) GetAutomation(ctx context.Context, id strin
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled,
-		       requires_hitl, risk_level, next_run_at, last_run_status, created_at, updated_at, event_filter
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
+		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
+		       created_at, updated_at, event_filter
 		FROM automations WHERE id=?`, id).Scan(
 		&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 		&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-		&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt,
-		&hitlInt, &row.RiskLevel, &row.NextRunAt, &row.LastRunStatus, &row.CreatedAt, &row.UpdatedAt, &row.EventFilter)
+		&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel,
+		&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
+		&row.CreatedAt, &row.UpdatedAt, &row.EventFilter)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -96,8 +98,9 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
 		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled,
-		       requires_hitl, risk_level, next_run_at, last_run_status, created_at, updated_at, event_filter
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
+		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
+		       created_at, updated_at, event_filter
 		FROM automations ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListAutomations", err)
@@ -111,8 +114,9 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 		if err := rows.Scan(
 			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
 			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
-			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt,
-			&hitlInt, &row.RiskLevel, &row.NextRunAt, &row.LastRunStatus, &row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel,
+			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
+			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListAutomations scan", err)
 		}
 		row.Enabled = enabledInt == 1
@@ -120,6 +124,87 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+func (r *SQLiteAutomationRepository) ListDueAutomations(ctx context.Context, nowRFC3339 string) ([]repo.AutomationRow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
+		       working_dir, env_type, reasoning_effort, result_action,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
+		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
+		       created_at, updated_at, event_filter
+		FROM automations
+		WHERE enabled=1
+		  AND circuit_open=0
+		  AND (trigger_type='cron' OR trigger_type='both')
+		  AND cron_schedule != ''
+		  AND (next_run_at = '' OR next_run_at <= ?)
+		  AND last_run_status != 'running'`, nowRFC3339)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListDueAutomations", err)
+	}
+	defer rows.Close()
+
+	var result []repo.AutomationRow
+	for rows.Next() {
+		var row repo.AutomationRow
+		var enabledInt, hitlInt int
+		if err := rows.Scan(
+			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
+			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel,
+			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
+			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListDueAutomations scan", err)
+		}
+		row.Enabled = enabledInt == 1
+		row.RequiresHITL = hitlInt == 1
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rows iteration error", err)
+	}
+	return result, nil
+}
+
+func (r *SQLiteAutomationRepository) ListEventAutomations(ctx context.Context) ([]repo.AutomationRow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
+		       working_dir, env_type, reasoning_effort, result_action,
+		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
+		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
+		       created_at, updated_at, event_filter
+		FROM automations
+		WHERE enabled=1
+		  AND circuit_open=0
+		  AND (trigger_type='event' OR trigger_type='both')
+		  AND event_filter != '' AND event_filter != '{}'
+		  AND last_run_status != 'running'`)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListEventAutomations", err)
+	}
+	defer rows.Close()
+
+	var result []repo.AutomationRow
+	for rows.Next() {
+		var row repo.AutomationRow
+		var enabledInt, hitlInt int
+		if err := rows.Scan(
+			&row.ID, &row.Name, &row.Prompt, &row.TriggerType, &row.CronSchedule, &row.ChannelID,
+			&row.WorkingDir, &row.EnvType, &row.ReasoningEffort, &row.ResultAction,
+			&row.SandboxLevel, &row.CedarRulesJSON, &enabledInt, &hitlInt, &row.RiskLevel,
+			&row.LastRunAt, &row.NextRunAt, &row.RunCount, &row.LastRunStatus, &row.LastRunError,
+			&row.CreatedAt, &row.UpdatedAt, &row.EventFilter); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListEventAutomations scan", err)
+		}
+		row.Enabled = enabledInt == 1
+		row.RequiresHITL = hitlInt == 1
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rows iteration error", err)
+	}
+	return result, nil
 }
 
 func (r *SQLiteAutomationRepository) UpdateAutomationStatus(ctx context.Context, id, lastRunStatus string) error {
@@ -143,8 +228,8 @@ func (r *SQLiteAutomationRepository) UpdateAutomationStatusAndSchedule(ctx conte
 
 func (r *SQLiteAutomationRepository) CreateRun(ctx context.Context, row repo.AutomationRunRow) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO automation_runs (id, automation_id, status, error, started_at)
-		VALUES (?, ?, ?, ?, ?)`, row.ID, row.AutomationID, row.Status, row.Error, row.StartedAt)
+		INSERT INTO automation_runs (id, automation_id, trigger, status, session_id, started_at, finished_at, error_msg, prompt_snapshot)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, row.ID, row.AutomationID, row.Trigger, row.Status, row.SessionID, row.StartedAt, row.FinishedAt, row.ErrorMsg, row.PromptSnapshot)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.CreateRun", err)
 	}
@@ -174,6 +259,35 @@ func (r *SQLiteAutomationRepository) DeleteRunsByAutomationID(ctx context.Contex
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.DeleteRunsByAutomationID", err)
 	}
 	return nil
+}
+
+func (r *SQLiteAutomationRepository) ListRunsByAutomationID(ctx context.Context, automationID string, limit int) ([]repo.AutomationRunRow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, automation_id, trigger, status, session_id,
+		       started_at, finished_at, error_msg, prompt_snapshot
+		FROM automation_runs
+		WHERE automation_id=?
+		ORDER BY started_at DESC LIMIT ?`, automationID, limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListRunsByAutomationID", err)
+	}
+	defer rows.Close()
+
+	var list []repo.AutomationRunRow
+	for rows.Next() {
+		var run repo.AutomationRunRow
+		if err := rows.Scan(
+			&run.ID, &run.AutomationID, &run.Trigger, &run.Status, &run.SessionID,
+			&run.StartedAt, &run.FinishedAt, &run.ErrorMsg, &run.PromptSnapshot,
+		); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListRunsByAutomationID scan", err)
+		}
+		list = append(list, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "rows iteration error", err)
+	}
+	return list, nil
 }
 
 func (r *SQLiteAutomationRepository) TimeoutRuns(ctx context.Context, startedBefore string) error {

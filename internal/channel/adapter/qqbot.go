@@ -328,8 +328,6 @@ func QqbotSendMessage(ctx context.Context, client *http.Client, token, msgType, 
 	return nil
 }
 
-func init() { Register(&QQBotAdapter{}) }
-
 type QQBotAdapter struct{}
 
 func (a *QQBotAdapter) Type() string { return "qqbot" }

@@ -32,7 +32,8 @@ type Span struct {
 
 // Tracer is the minimal tracing abstraction for agent operations.
 type Tracer struct {
-	logger *slog.Logger
+	logger    *slog.Logger
+	exporters []SpanExporter
 }
 
 func NewTracer() *Tracer {
@@ -41,6 +42,10 @@ func NewTracer() *Tracer {
 			Level: slog.LevelInfo,
 		})),
 	}
+}
+
+func (t *Tracer) RegisterExporter(e SpanExporter) {
+	t.exporters = append(t.exporters, e)
 }
 
 // StartSpan starts a new span. 若 ctx 中已有父 Span，则传播 TraceID 并设置 ParentID，
@@ -75,6 +80,17 @@ func (t *Tracer) EndSpan(span *Span) {
 		"span_id", span.SpanID,
 		"duration_ms", span.EndTime.Sub(span.StartTime).Milliseconds(),
 	)
+	for _, e := range t.exporters {
+		//custom-nolint:bare-goroutine trace export doesn't need to be managed by SafeGo
+		go func(s *Span, exporter SpanExporter) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := exporter.ExportSpan(ctx, s); err != nil {
+				t.logger.Warn("failed to export span", "err", err, "trace_id", s.TraceID)
+				// Here we could also emit a metric: trace_exporter_errors_total
+			}
+		}(span, e)
+	}
 }
 
 type ctxKey struct{ name string }

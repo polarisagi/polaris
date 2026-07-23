@@ -28,17 +28,14 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 	channelType := r.PathValue("channelType")
 	channelID := r.PathValue("channelID")
 
-	var cfgJSON, secret string
-	var enabled int
-	row := h.DB.QueryRowContext(r.Context(),
-		`SELECT config_json,webhook_secret,enabled FROM channels WHERE id=? AND type=?`, channelID, channelType)
-	if err := row.Scan(&cfgJSON, &secret, &enabled); err != nil || enabled == 0 {
+	chRow, err := h.ChannelRepo.GetChannel(r.Context(), channelID)
+	if err != nil || chRow == nil || chRow.Type != channelType || !chRow.Enabled {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	var cfg map[string]any
-	json.Unmarshal([]byte(cfgJSON), &cfg) //nolint:errcheck
+	json.Unmarshal([]byte(chRow.ConfigJSON), &cfg) //nolint:errcheck
 
 	// [P1修复] webhook body 读取缺少大小限制，恶意方可发送超大 payload 耗尽内存。
 	// 限制为 4MB：足够容纳所有平台的 webhook 消息，远低于 VFS 上传的 100MB。

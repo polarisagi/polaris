@@ -85,8 +85,6 @@ func TeamsSendMessage(ctx context.Context, client *http.Client, accessToken, cha
 	return nil
 }
 
-func init() { Register(&TeamsAdapter{}) }
-
 type TeamsAdapter struct{}
 
 func (a *TeamsAdapter) Type() string { return "teams" }

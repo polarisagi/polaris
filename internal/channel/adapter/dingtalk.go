@@ -179,8 +179,6 @@ type dingTalkEventData struct {
 	} `json:"text"`
 }
 
-func init() { Register(&DingTalkAdapter{}) }
-
 type DingTalkAdapter struct{}
 
 func (a *DingTalkAdapter) Type() string { return "dingtalk" }

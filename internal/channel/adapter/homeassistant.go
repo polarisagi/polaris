@@ -243,8 +243,6 @@ func HaSendPersistentNotification(ctx context.Context, client *http.Client, haUR
 	return nil
 }
 
-func init() { Register(&HomeAssistantAdapter{}) }
-
 type HomeAssistantAdapter struct{}
 
 func (a *HomeAssistantAdapter) Type() string { return "homeassistant" }

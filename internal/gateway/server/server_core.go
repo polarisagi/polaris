@@ -52,6 +52,8 @@ type Server struct {
 	systemRepo     prepo.SystemRepository
 	channelRepo    prepo.ChannelRepository
 	automationRepo prepo.AutomationRepository
+	eventRepo      prepo.EventRepository
+	cronRepo       protocol.CronRepository
 	workflowRepo   prepo.WorkflowRepository
 	appRepo        prepo.AppRepository
 	registry       protocol.LLMRegistry  // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）

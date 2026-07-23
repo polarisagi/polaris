@@ -1,9 +1,10 @@
 package locale
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -62,15 +63,18 @@ func TestReadSystemTimezone(t *testing.T) {
 
 func TestProbeGeoIP_MockSuccess(t *testing.T) {
 	// 模拟 ipinfo.io 返回 "US"
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("US\n"))
-	}))
-	defer ts.Close()
+	client := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString("US\n")),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
 	// 直接调用内部函数，用 mock server 验证解析逻辑
 	// （正式场景用 Detect()）
-	client := ts.Client()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -107,6 +111,12 @@ func TestDetect_SourceValues(t *testing.T) {
 	if !strings.Contains("geoip timezone unknown", result.Source) {
 		t.Errorf("unexpected source: %s", result.Source)
 	}
+}
+
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
 }
 
 // rejectTransport 拒绝所有 HTTP 请求，用于强制 GeoIP 探测失败。

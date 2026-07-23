@@ -270,8 +270,6 @@ func emailAuthPassed(authResults string) bool {
 	return spfPass || dkimPass
 }
 
-func init() { Register(&EmailAdapter{}) }
-
 type EmailAdapter struct{}
 
 func (a *EmailAdapter) Type() string { return "email" }

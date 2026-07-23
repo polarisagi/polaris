@@ -14,16 +14,12 @@ import (
 
 // GET /v1/sessions
 func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
-	// 先查 channels（单连接 SQLite：两个 rows 不能同时持有连接）
+	// 先查 channels
 	channelTypes := map[string]string{}
-	if chRows, err := h.DB.QueryContext(r.Context(), `SELECT id, type FROM channels`); err == nil {
-		for chRows.Next() {
-			var id, t string
-			if chRows.Scan(&id, &t) == nil {
-				channelTypes[id] = t
-			}
+	if chRows, err := h.ChannelRepo.ListChannels(r.Context()); err == nil {
+		for _, ch := range chRows {
+			channelTypes[ch.ID] = ch.Type
 		}
-		chRows.Close()
 	}
 
 	sessions, err := h.ChatRepo.ListSessions(r.Context(), 200)

@@ -17,24 +17,27 @@ type AutomationRow struct {
 	CedarRulesJSON  string
 	Enabled         bool
 	RequiresHITL    bool
-	RiskLevel       string
+	RiskLevel       int
+	LastRunAt       string
 	NextRunAt       string
+	RunCount        int
 	LastRunStatus   string
+	LastRunError    string
 	CreatedAt       string
 	UpdatedAt       string
 	EventFilter     string
 }
 
 type AutomationRunRow struct {
-	ID           string
-	AutomationID string
-	Status       string
-	Error        string
-	StartedAt    string
-	CompletedAt  string
-	DurationMs   int64
-	LogFile      string
-	ArtifactURI  string
+	ID             string
+	AutomationID   string
+	Trigger        string
+	Status         string
+	SessionID      string
+	StartedAt      string
+	FinishedAt     string
+	ErrorMsg       string
+	PromptSnapshot string
 }
 
 type AutomationRepository interface {
@@ -43,6 +46,8 @@ type AutomationRepository interface {
 	DeleteAutomation(ctx context.Context, id string) error
 	GetAutomation(ctx context.Context, id string) (*AutomationRow, error)
 	ListAutomations(ctx context.Context) ([]AutomationRow, error)
+	ListDueAutomations(ctx context.Context, nowRFC3339 string) ([]AutomationRow, error)
+	ListEventAutomations(ctx context.Context) ([]AutomationRow, error)
 
 	UpdateAutomationStatus(ctx context.Context, id, lastRunStatus string) error
 	UpdateAutomationStatusAndSchedule(ctx context.Context, id, lastRunStatus, lastRunAt, nextRunAt string) error
@@ -51,5 +56,6 @@ type AutomationRepository interface {
 	CreateRun(ctx context.Context, row AutomationRunRow) error
 	UpdateRunStatus(ctx context.Context, id, status, errorMsg, completedAt string, durationMs int64) error
 	DeleteRunsByAutomationID(ctx context.Context, automationID string) error
+	ListRunsByAutomationID(ctx context.Context, automationID string, limit int) ([]AutomationRunRow, error)
 	TimeoutRuns(ctx context.Context, startedBefore string) error
 }

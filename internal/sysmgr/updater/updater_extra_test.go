@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 func TestManager_CheckLatest(t *testing.T) {
@@ -25,20 +27,10 @@ func TestManager_CheckLatest(t *testing.T) {
 		})
 	})
 
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	// Redirect github API
-	// Unfortunately, CheckLatest hardcodes the URL. We can't easily mock it without
-	// setting up a custom transport in the client.
-
 	// A mock transport
-	client := server.Client()
+	client := &http.Client{}
 	client.Transport = &mockTransport{
-		rt: client.Transport,
-		urlMap: map[string]string{
-			"https://api.github.com/repos/polarisagi/polaris/releases/latest": server.URL + "/repos/polarisagi/polaris/releases/latest",
-		},
+		handler: mux,
 	}
 
 	m := New("v1.0.0", "abc", "2024", client)
@@ -54,17 +46,16 @@ func TestManager_CheckLatest(t *testing.T) {
 }
 
 type mockTransport struct {
-	rt     http.RoundTripper
-	urlMap map[string]string
+	handler http.Handler
 }
 
 func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if mapped, ok := m.urlMap[req.URL.String()]; ok {
-		req2, _ := http.NewRequestWithContext(req.Context(), req.Method, mapped, req.Body)
-		req2.Header = req.Header
-		return m.rt.RoundTrip(req2)
+	if m.handler != nil {
+		rec := httptest.NewRecorder()
+		m.handler.ServeHTTP(rec, req)
+		return rec.Result(), nil
 	}
-	return m.rt.RoundTrip(req)
+	return nil, apperr.New(apperr.CodeInternal, "unhandled request")
 }
 
 func TestManager_StartBackgroundCheck(t *testing.T) {
@@ -78,15 +69,9 @@ func TestManager_StartBackgroundCheck(t *testing.T) {
 		})
 	})
 
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	client := server.Client()
+	client := &http.Client{}
 	client.Transport = &mockTransport{
-		rt: client.Transport,
-		urlMap: map[string]string{
-			"https://api.github.com/repos/polarisagi/polaris/releases/latest": server.URL + "/repos/polarisagi/polaris/releases/latest",
-		},
+		handler: mux,
 	}
 
 	m := New("v1.0.0", "abc", "2024", client)
@@ -130,15 +115,9 @@ func TestManager_VerifyChecksum(t *testing.T) {
 		fmt.Fprintf(w, "%s  polaris-test.tar.gz\n", checksum)
 	})
 
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	client := server.Client()
+	client := &http.Client{}
 	client.Transport = &mockTransport{
-		rt: client.Transport,
-		urlMap: map[string]string{
-			"https://github.com/polarisagi/polaris/releases/download/v1.7.6/polaris-test.tar.gz.sha256": server.URL + checksumsURL,
-		},
+		handler: mux,
 	}
 
 	m := New("v1.0.0", "abc", "2024", client)
@@ -243,8 +222,7 @@ func TestManager_doUpdate_ErrorPath(t *testing.T) {
 
 	client := &http.Client{
 		Transport: &mockTransport{
-			rt:     http.DefaultTransport,
-			urlMap: map[string]string{},
+			handler: nil,
 		},
 	}
 	m.client = client

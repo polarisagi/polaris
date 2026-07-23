@@ -59,6 +59,10 @@ type M3ObservabilityThresholds struct {
 	MemWarningMB  int64 `toml:"memory.warning_mb"`  // 1024 (1.0GB)
 	MemCriticalMB int64 `toml:"memory.critical_mb"` // 512
 	BaselineP95   int64 `toml:"baseline.p95"`       // 200
+	TraceExport   struct {
+		Enabled  bool   `toml:"enabled"`
+		Endpoint string `toml:"endpoint"`
+	} `toml:"trace_export"`
 }
 
 type M4KernelThresholds struct {
@@ -266,6 +270,13 @@ func DefaultThresholds() Thresholds {
 			MemWarningMB:  1024,
 			MemCriticalMB: 512,
 			BaselineP95:   200,
+			TraceExport: struct {
+				Enabled  bool   `toml:"enabled"`
+				Endpoint string `toml:"endpoint"`
+			}{
+				Enabled:  false,
+				Endpoint: "",
+			},
 		},
 		M4Kernel: M4KernelThresholds{
 			MaxReplanAttempts:             3,

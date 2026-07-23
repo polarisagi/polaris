@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -116,9 +117,9 @@ func TestAssignSandboxTier(t *testing.T) {
 		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxInProcess, nil, types.TrustCommunity},
 		{"llm-gen", types.ToolLLMGenerated, types.CapReadOnly, nil, 1, "linux", types.SandboxWasm, nil, types.TrustUntrusted},
 		{"privileged-spawn", types.ToolSkill, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil, types.TrustSystem},
-		// Tier-0 不再报错：Container 降级为 NativeOS（Rust bwrap/Seatbelt，无容器运行时依赖）。
-		{"tier0-linux-container", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", types.SandboxNativeOS, nil, types.TrustSystem},
-		{"tier0-darwin-downgrade", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", types.SandboxNativeOS, nil, types.TrustSystem},
+		// Tier-0 无容器运行时：根据 M07 §4.2，全平台拒绝，返回 ErrTier0SandboxLimit。
+		{"tier0-linux-container", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", 0, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier0-darwin-downgrade", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", 0, apperr.ErrTier0SandboxLimit, types.TrustSystem},
 		{"tier1-darwin-no-downgrade", types.ToolSkill, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil, types.TrustSystem},
 	}
 	for _, tt := range tests {

@@ -4,7 +4,6 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,33 +13,39 @@ import (
 )
 
 func (ca *CronAdmin) HandleListAutomations(w http.ResponseWriter, r *http.Request) {
-	rows, err := ca.DB.QueryContext(r.Context(), `
-		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
-		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level,
-		       last_run_at, next_run_at, run_count, last_run_status, last_run_error,
-		       created_at, updated_at, event_filter
-		FROM automations ORDER BY created_at DESC`)
+	rows, err := ca.AutomationRepo.ListAutomations(r.Context())
 	if err != nil {
 		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	var list []automation
-	for rows.Next() {
-		var a automation
-		var enabledInt int
-		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Prompt, &a.TriggerType, &a.CronSchedule, &a.ChannelID,
-			&a.WorkingDir, &a.EnvType, &a.ReasoningEffort, &a.ResultAction,
-			&a.SandboxLevel, &a.CedarRulesJSON, &enabledInt, &a.RequiresHITL, &a.RiskLevel,
-			&a.LastRunAt, &a.NextRunAt, &a.RunCount, &a.LastRunStatus, &a.LastRunError,
-			&a.CreatedAt, &a.UpdatedAt, &a.EventFilter,
-		); err != nil {
-			continue
+	for _, row := range rows {
+		a := automation{
+			ID:              row.ID,
+			Name:            row.Name,
+			Prompt:          row.Prompt,
+			TriggerType:     row.TriggerType,
+			CronSchedule:    row.CronSchedule,
+			ChannelID:       row.ChannelID,
+			WorkingDir:      row.WorkingDir,
+			EnvType:         row.EnvType,
+			ReasoningEffort: row.ReasoningEffort,
+			ResultAction:    row.ResultAction,
+			SandboxLevel:    row.SandboxLevel,
+			CedarRulesJSON:  row.CedarRulesJSON,
+			Enabled:         row.Enabled,
+			RequiresHITL:    row.RequiresHITL,
+			RiskLevel:       row.RiskLevel,
+			LastRunAt:       row.LastRunAt,
+			NextRunAt:       row.NextRunAt,
+			RunCount:        row.RunCount,
+			LastRunStatus:   row.LastRunStatus,
+			LastRunError:    row.LastRunError,
+			CreatedAt:       row.CreatedAt,
+			UpdatedAt:       row.UpdatedAt,
+			EventFilter:     row.EventFilter,
 		}
-		a.Enabled = enabledInt == 1
 		list = append(list, a)
 	}
 	if list == nil {
@@ -124,7 +129,7 @@ func (ca *CronAdmin) HandleCreateAutomation(w http.ResponseWriter, r *http.Reque
 		CedarRulesJSON:  req.CedarRulesJSON,
 		Enabled:         enabled,
 		RequiresHITL:    req.RequiresHITL,
-		RiskLevel:       fmt.Sprintf("%d", req.RiskLevel),
+		RiskLevel:       req.RiskLevel,
 		NextRunAt:       nextRun,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -166,21 +171,28 @@ func (ca *CronAdmin) HandleUpdateAutomation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var j automation
-	var enabledInt int
-	err := ca.DB.QueryRowContext(r.Context(), `
-		SELECT id, name, prompt, trigger_type, cron_schedule, channel_id,
-		       working_dir, env_type, reasoning_effort, result_action,
-		       sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level, event_filter
-		FROM automations WHERE id=?`, jobID).
-		Scan(&j.ID, &j.Name, &j.Prompt, &j.TriggerType, &j.CronSchedule, &j.ChannelID,
-			&j.WorkingDir, &j.EnvType, &j.ReasoningEffort, &j.ResultAction,
-			&j.SandboxLevel, &j.CedarRulesJSON, &enabledInt, &j.RequiresHITL, &j.RiskLevel, &j.EventFilter)
-	if err != nil {
+	row, err := ca.AutomationRepo.GetAutomation(r.Context(), jobID)
+	if err != nil || row == nil {
 		http.Error(w, "automation not found", http.StatusNotFound)
 		return
 	}
-	j.Enabled = enabledInt == 1
+	var j automation
+	j.ID = row.ID
+	j.Name = row.Name
+	j.Prompt = row.Prompt
+	j.TriggerType = row.TriggerType
+	j.CronSchedule = row.CronSchedule
+	j.ChannelID = row.ChannelID
+	j.WorkingDir = row.WorkingDir
+	j.EnvType = row.EnvType
+	j.ReasoningEffort = row.ReasoningEffort
+	j.ResultAction = row.ResultAction
+	j.SandboxLevel = row.SandboxLevel
+	j.CedarRulesJSON = row.CedarRulesJSON
+	j.Enabled = row.Enabled
+	j.RequiresHITL = row.RequiresHITL
+	j.RiskLevel = row.RiskLevel
+	j.EventFilter = row.EventFilter
 
 	if req.Name != nil {
 		j.Name = *req.Name
@@ -246,7 +258,7 @@ func (ca *CronAdmin) HandleUpdateAutomation(w http.ResponseWriter, r *http.Reque
 		CedarRulesJSON:  j.CedarRulesJSON,
 		Enabled:         j.Enabled,
 		RequiresHITL:    j.RequiresHITL,
-		RiskLevel:       fmt.Sprintf("%d", j.RiskLevel),
+		RiskLevel:       j.RiskLevel,
 		NextRunAt:       nextRun,
 		UpdatedAt:       now,
 		EventFilter:     j.EventFilter,
@@ -282,26 +294,24 @@ func (ca *CronAdmin) HandleListAutomationRuns(w http.ResponseWriter, r *http.Req
 		limit = v
 	}
 
-	rows, err := ca.DB.QueryContext(r.Context(), `
-		SELECT id, automation_id, trigger, status, session_id,
-		       started_at, finished_at, error_msg, prompt_snapshot
-		FROM automation_runs
-		WHERE automation_id=?
-		ORDER BY started_at DESC LIMIT ?`, jobID, limit)
+	rows, err := ca.AutomationRepo.ListRunsByAutomationID(r.Context(), jobID, limit)
 	if err != nil {
 		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	var list []automationRun
-	for rows.Next() {
-		var run automationRun
-		if err := rows.Scan(
-			&run.ID, &run.AutomationID, &run.Trigger, &run.Status, &run.SessionID,
-			&run.StartedAt, &run.FinishedAt, &run.ErrorMsg, &run.PromptSnapshot,
-		); err != nil {
-			continue
+	for _, row := range rows {
+		run := automationRun{
+			ID:             row.ID,
+			AutomationID:   row.AutomationID,
+			Trigger:        row.Trigger,
+			Status:         row.Status,
+			SessionID:      row.SessionID,
+			StartedAt:      row.StartedAt,
+			FinishedAt:     row.FinishedAt,
+			ErrorMsg:       row.ErrorMsg,
+			PromptSnapshot: row.PromptSnapshot,
 		}
 		list = append(list, run)
 	}
@@ -317,18 +327,24 @@ func (ca *CronAdmin) HandleListAutomationRuns(w http.ResponseWriter, r *http.Req
 func (ca *CronAdmin) HandleTriggerAutomation(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
 
-	var a automation
-	var enabledInt int
-	if err := ca.DB.QueryRowContext(r.Context(), `
-			SELECT id, name, prompt, working_dir, env_type, reasoning_effort,
-			       result_action, sandbox_level, cedar_rules_json, enabled, requires_hitl, risk_level
-			FROM automations WHERE id=?`, jobID).
-		Scan(&a.ID, &a.Name, &a.Prompt, &a.WorkingDir, &a.EnvType, &a.ReasoningEffort,
-			&a.ResultAction, &a.SandboxLevel, &a.CedarRulesJSON, &enabledInt, &a.RequiresHITL, &a.RiskLevel); err != nil {
+	row, err := ca.AutomationRepo.GetAutomation(r.Context(), jobID)
+	if err != nil || row == nil {
 		http.Error(w, "automation not found", http.StatusNotFound)
 		return
 	}
-	a.Enabled = enabledInt == 1
+	var a automation
+	a.ID = row.ID
+	a.Name = row.Name
+	a.Prompt = row.Prompt
+	a.WorkingDir = row.WorkingDir
+	a.EnvType = row.EnvType
+	a.ReasoningEffort = row.ReasoningEffort
+	a.ResultAction = row.ResultAction
+	a.SandboxLevel = row.SandboxLevel
+	a.CedarRulesJSON = row.CedarRulesJSON
+	a.Enabled = row.Enabled
+	a.RequiresHITL = row.RequiresHITL
+	a.RiskLevel = row.RiskLevel
 	if !a.Enabled {
 		http.Error(w, "automation is disabled", http.StatusConflict)
 		return

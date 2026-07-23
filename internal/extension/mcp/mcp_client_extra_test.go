@@ -6,39 +6,52 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
+
 func TestMCPClient_CallToolTainted(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		b, _ := io.ReadAll(r.Body)
-		var req mcpRPCRequest
-		json.Unmarshal(b, &req)
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			resp := mcpRPCResponse{
+				JSONRPC: "2.0",
+			}
+			// Simulate receiving a JSON-RPC request and getting its ID
+			if req.Body != nil {
+				b, _ := io.ReadAll(req.Body)
+				var mcpReq mcpRPCRequest
+				if json.Unmarshal(b, &mcpReq) == nil {
+					resp.ID = mcpReq.ID
+					if mcpReq.Method == "tools/call" {
+						resp.Result = json.RawMessage(`{"content":[{"type":"text","text":"tainted output"}],"isError":false}`)
+					}
+				}
+			}
 
-		resp := mcpRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-		}
-		if req.Method == "tools/call" {
-			resp.Result = json.RawMessage(`{"content":[{"type":"text","text":"tainted output"}],"isError":false}`)
-		}
-
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
+			b, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(b))),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
 	cfg := MCPClientConfig{
 		Transport: MCPStreamableHTTP,
-		URL:       ts.URL,
+		URL:       "http://dummy",
 		Timeout:   2 * time.Second,
 		Trusted:   false,
 	}
-	client := NewMCPClient(cfg, ts.Client())
+	client := NewMCPClient(cfg, clientHTTP)
 
 	ctx := context.Background()
 	text, imgs, maxTaint, err := client.CallToolTainted(ctx, "my_tool", map[string]any{"arg": "val"})
@@ -59,48 +72,55 @@ func TestMCPClient_CallToolTainted(t *testing.T) {
 
 func TestMCPClient_SSE(t *testing.T) {
 	var sseCh chan string
+	sseCh = make(chan string, 1)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/sse") {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(http.StatusOK)
-			// Send endpoint event
-			fmt.Fprintf(w, "event: endpoint\ndata: %s/post\n\n", "http://"+r.Host)
-			w.(http.Flusher).Flush()
-
-			for {
-				select {
-				case <-r.Context().Done():
-					return
-				case msg := <-sseCh:
-					fmt.Fprintf(w, "%s", msg)
-					w.(http.Flusher).Flush()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			if strings.HasSuffix(req.URL.Path, "/sse") {
+				pr, pw := io.Pipe()
+				go func() {
+					fmt.Fprintf(pw, "event: endpoint\ndata: %s/post\n\n", "http://"+req.Host)
+					for {
+						select {
+						case <-req.Context().Done():
+							pw.Close()
+							return
+						case msg := <-sseCh:
+							fmt.Fprintf(pw, "%s", msg)
+						}
+					}
+				}()
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       pr,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 				}
 			}
-		}
-		if strings.HasSuffix(r.URL.Path, "/post") {
-			b, _ := io.ReadAll(r.Body)
-			var req mcpRPCRequest
-			json.Unmarshal(b, &req)
+			if strings.HasSuffix(req.URL.Path, "/post") {
+				b, _ := io.ReadAll(req.Body)
+				var mcpReq mcpRPCRequest
+				json.Unmarshal(b, &mcpReq)
 
-			// push an event to the sse stream to complete the RPC call
-			respJSON := fmt.Sprintf(`{"jsonrpc":"2.0", "id":%d, "result":{"tools":[]}}`, *req.ID)
-			sseCh <- fmt.Sprintf("event: message\ndata: %s\n\n", respJSON)
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer ts.Close()
-
-	sseCh = make(chan string, 1)
+				respJSON := fmt.Sprintf(`{"jsonrpc":"2.0", "id":%d, "result":{"tools":[]}}`, *mcpReq.ID)
+				sseCh <- fmt.Sprintf("event: message\ndata: %s\n\n", respJSON)
+				return &http.Response{
+					StatusCode: http.StatusAccepted,
+					Body:       io.NopCloser(strings.NewReader("")),
+				}
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
 	cfg := MCPClientConfig{
 		Transport: MCPSSE,
-		URL:       ts.URL,
+		URL:       "http://dummy",
 		Timeout:   2 * time.Second,
 	}
-	client := NewMCPClient(cfg, ts.Client())
+	client := NewMCPClient(cfg, clientHTTP)
 	defer client.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,29 +190,36 @@ func TestMCPClient_ConnectStdio(t *testing.T) {
 }
 
 func TestMCPClient_CallTool(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		b, _ := io.ReadAll(r.Body)
-		var req mcpRPCRequest
-		json.Unmarshal(b, &req)
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			resp := mcpRPCResponse{
+				JSONRPC: "2.0",
+			}
+			if req.Body != nil {
+				b, _ := io.ReadAll(req.Body)
+				var mcpReq mcpRPCRequest
+				if json.Unmarshal(b, &mcpReq) == nil {
+					resp.ID = mcpReq.ID
+					if mcpReq.Method == "tools/call" {
+						resp.Result = json.RawMessage(`{"content":[{"type":"text","text":"normal output"}],"isError":false}`)
+					}
+				}
+			}
 
-		resp := mcpRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-		}
-		if req.Method == "tools/call" {
-			resp.Result = json.RawMessage(`{"content":[{"type":"text","text":"normal output"}],"isError":false}`)
-		}
-
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
+			b, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(b))),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
 	cfg := MCPClientConfig{
 		Transport: MCPStreamableHTTP,
-		URL:       ts.URL,
+		URL:       "http://dummy",
 	}
-	client := NewMCPClient(cfg, ts.Client())
+	client := NewMCPClient(cfg, clientHTTP)
 
 	text, imgs, err := client.CallTool(context.Background(), "my_tool", nil)
 	if err != nil {

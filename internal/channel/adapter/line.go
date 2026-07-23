@@ -17,8 +17,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func init() { Register(&LineAdapter{}) }
-
 type LineAdapter struct{}
 
 func (a *LineAdapter) Type() string { return "line" }

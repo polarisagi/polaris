@@ -3,14 +3,21 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 )
+
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
 
 func TestDispatch_Steer_NotConfigured(t *testing.T) {
 	router, rec, flusher := newTestRouter(t)
@@ -79,22 +86,34 @@ func TestDispatch_Steer_ImportListDelete(t *testing.T) {
 
 func TestDispatch_Steer_SetAndDeactivate(t *testing.T) {
 	var gotSteer, gotDelete bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		switch req.Method {
-		case http.MethodPost:
-			gotSteer = true
-			json.NewEncoder(w).Encode(llmadapter.SteerResponse{Applied: true, Layer: 12})
-		case http.MethodDelete:
-			gotDelete = true
-			w.WriteHeader(http.StatusOK)
-		}
-	}))
-	defer srv.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			switch req.Method {
+			case http.MethodPost:
+				gotSteer = true
+				b, _ := json.Marshal(llmadapter.SteerResponse{Applied: true, Layer: 12})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(b))),
+				}
+			case http.MethodDelete:
+				gotDelete = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("")),
+				}
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
 	router, rec, flusher := newTestRouter(t)
 	cvStore := llmadapter.NewControlVectorStore()
 	cvStore.Import("polite", []float32{0.1, 0.2}, 12)
-	router.SetSteering(llmadapter.NewSteeringAdapter(srv.URL, srv.Client()), cvStore)
+	router.SetSteering(llmadapter.NewSteeringAdapter("http://dummy", clientHTTP), cvStore)
 
 	res := router.Dispatch(context.Background(), "/steer set polite 15", "s1", testHistory(), nil, rec, flusher, nil)
 	if !gotSteer {

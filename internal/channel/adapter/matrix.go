@@ -213,8 +213,6 @@ type MatrixSender struct {
 	txnCounter atomic.Int64
 }
 
-func init() { Register(&MatrixAdapter{}) }
-
 type MatrixAdapter struct {
 	MatrixSender
 }

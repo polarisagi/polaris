@@ -3,6 +3,7 @@ package channelsadmin
 import (
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/repo"
 
 	"bytes"
 	"context"
@@ -31,15 +32,18 @@ func TestChannels_WebhookReceive(t *testing.T) {
 			type TEXT,
 			config_json TEXT,
 			webhook_secret TEXT,
-			enabled INTEGER
+			enabled INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME
 		);
-		INSERT INTO channels (id, name, type, config_json, webhook_secret, enabled) VALUES ('ch1', 'test channel', 'slack', '{"signing_secret": "test_secret"}', '', 1);
+		INSERT INTO channels (id, name, type, config_json, webhook_secret, enabled, created_at, updated_at) VALUES ('ch1', 'test channel', 'slack', '{"signing_secret": "test_secret"}', '', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 	`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	h := &ChannelsAdmin{DB: db}
+	h.ChannelRepo = repo.NewSQLiteChannelRepository(db)
 	h.Cron = &cronadmin.CronAdmin{DB: db}
 
 	// 1. Missing channel ID

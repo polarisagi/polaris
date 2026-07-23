@@ -89,6 +89,8 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 	s.systemRepo = repo.NewSQLiteSystemRepository(rwDB)
 	s.channelRepo = repo.NewSQLiteChannelRepository(rwDB)
 	s.automationRepo = repo.NewSQLiteAutomationRepository(rwDB)
+	s.eventRepo = repo.NewSQLiteEventRepository(rwDB)
+	s.cronRepo = repo.NewSQLiteCronRepository(rwDB)
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(rwDB)
 	s.appRepo = repo.NewSQLiteAppRepository(rwDB)
 
@@ -139,6 +141,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 	s.chatHandler = chat.NewChatHandler(chat.Dependencies{
 		DB:                    db,
 		ChatRepo:              s.chatRepo,
+		ChannelRepo:           s.channelRepo,
 		ProviderRepo:          s.providerRepo,
 		SystemRepo:            s.systemRepo,
 		AgentPool:             agentPool,
@@ -170,6 +173,8 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		ExtRepo:        s.extRepo,
 		ChannelRepo:    s.channelRepo,
 		AutomationRepo: s.automationRepo,
+		EventRepo:      s.eventRepo,
+		CronRepo:       s.cronRepo,
 		AppRepo:        s.appRepo,
 		Registry:       s.registry,
 		HTTPClient:     httpClient,

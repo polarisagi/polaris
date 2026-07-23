@@ -314,25 +314,6 @@ func buildQLoRASample(trajectory []learning.Step) (protocol.TrainingSample, bool
 	}
 	return protocol.TrainingSample{Prompt: prompt, Completion: last.Result}, true
 }
-
-// formatQLoRASample 将原始失败上下文 + 成功 replan 转换为指令微调样本。
-func formatQLoRASample(originalReq string, failTraj []byte, successfulReplan string) protocol.TrainingSample {
-	// QLoRA 期待的 Prompt：原请求 + 导致失败的初步尝试
-	prompt := fmt.Sprintf("User Request: %s\nFailed Trajectory: %s\n\nCorrect Replan:", originalReq, failTraj)
-	return protocol.TrainingSample{
-		Prompt:     prompt,
-		Completion: successfulReplan,
-	}
-}
-
-// formatPositiveSample 提取纯正确轨迹（Zero-shot 成功）。
-func formatPositiveSample(originalReq string, successfulTraj string) protocol.TrainingSample {
-	return protocol.TrainingSample{
-		Prompt:     originalReq,
-		Completion: successfulTraj,
-	}
-}
-
 func formatTrajectory(traj []learning.Step) string {
 	var out string
 	for _, s := range traj {
