@@ -180,6 +180,7 @@ SemanticMemory interface {
 	ListActiveEntities(ctx context.Context, entityType string, limit int, asOf int64) ([]types.Entity, error)
 	SearchEntities(ctx context.Context, query string, limit int, asOf int64) ([]types.Entity, error)
 	MarkEntitySuperseded(ctx context.Context, oldDBID int64, newDBID int64) error
+	MarkEntityExpired(ctx context.Context, entityType, name, reason string) error
 
 	// 用户画像接口 — L3 Persona 合成与查询（缺口 3）
 	UpsertUserProfile(ctx context.Context, profile types.UserProfile) error

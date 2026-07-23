@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -120,6 +121,9 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 
 	bgCtx, cancel := context.WithTimeout(context.Background(), defaultTaskExecTimeout)
 	defer cancel()
+
+	// A16: 恢复跨 goroutine trace 连贯性
+	bgCtx = trace.ContextWithRemoteSpan(bgCtx, snap.TraceID, snap.SpanID)
 
 	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt})
 	if err != nil {

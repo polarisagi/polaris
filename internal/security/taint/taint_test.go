@@ -14,8 +14,8 @@ func TestTaintedString(t *testing.T) {
 	}
 	ts := NewTaintedString("malicious input", source, "user_input")
 
-	if ts.Content() != "malicious input" {
-		t.Errorf("expected malicious input, got %s", ts.Content())
+	if ts.UnsafeContent() != "malicious input" {
+		t.Errorf("expected malicious input, got %s", ts.UnsafeContent())
 	}
 	if ts.Level() != types.TaintHigh {
 		t.Errorf("expected TaintHigh, got %v", ts.Level())

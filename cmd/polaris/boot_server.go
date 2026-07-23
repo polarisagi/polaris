@@ -91,6 +91,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer := server.NewServer(addr, sb.DataDir, ab.AgentPool, ab.Blackboard, tb.HITLGateway,
 		sb.Store.DB(), sb.Store.ReadDB(), sb.InfReg, sb.SafeHTTP, sb.Dialer, sb.Cfg.Compressor, sb.Cfg.Agent, sb.TBR, apiRateLimiter)
 	httpServer.SetPromptManager(sb.PromptMgr)
+	httpServer.SetKillSwitch(sb.KS)
 	// ModelVersionRegistry 运营触发入口（P3-2，2026-07-21 deadcode 审查补齐）：
 	// mb.ModelRegistry 早于本函数在 bootMemory 阶段构造完毕，此处仅补一次注入。
 	httpServer.SetModelRegistry(mb.ModelRegistry)

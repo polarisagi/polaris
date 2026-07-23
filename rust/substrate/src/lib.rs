@@ -138,13 +138,13 @@ pub extern "C" fn substrate_abi_version() -> u32 {
 
 // ─── cedar_load_policies ───────────────────────────────────────────────────────
 
-/// 从 Cedar 策略文本（NUL-terminated UTF-8）加载/替换全局 PolicySet。
+/// 从 Cedar 策略文本（ptr+len 风格 UTF-8 字符串（无 NUL 结尾要求））加载/替换全局 PolicySet。
 /// 返回 0 表示成功，负数表示错误（错误详情通过 out_err 返回）。
 /// out_err 由 Rust 分配，调用方须调用 cedar_free_bytes 释放。
 /// timeout_ms == 0 表示不设超时（阻塞等待写锁，仅建议在能确认无竞争的场景使用）。
 ///
 /// # Safety
-/// policies_text 必须是有效的 NUL-terminated C 字符串，caller 负责生命周期。
+/// policies_ptr 必须是有效的 ptr+len 风格 UTF-8 字符串（无 NUL 结尾要求），caller 负责生命周期。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cedar_load_policies(
     policies_ptr: *const u8,
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn cedar_load_policies(
 // ─── cedar_evaluate ────────────────────────────────────────────────────────────
 
 /// 评估单次策略请求。
-/// 参数均为 NUL-terminated UTF-8 C 字符串:
+/// 参数均为 ptr+len 风格 UTF-8 字符串（无 NUL 结尾要求）:
 ///   principal: Cedar EntityUID 格式，例如 `Agent::"agent-42"`
 ///   action:    Cedar EntityUID 格式，例如 `Action::"infer"`
 ///   resource:  Cedar EntityUID 格式，例如 `Resource::"llm_api"`
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn cedar_load_policies(
 /// out_reason 由 Rust 分配，调用方须调用 cedar_free_bytes 释放。
 ///
 /// # Safety
-/// 所有 *const c_char 参数须为有效 NUL-terminated C 字符串。
+/// 所有 *const c_char 参数须为有效 ptr+len 风格 UTF-8 字符串（无 NUL 结尾要求）。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cedar_evaluate(
     principal_ptr: *const u8,
@@ -387,6 +387,7 @@ pub extern "C" fn cedar_policy_count(timeout_ms: u64) -> c_int {
 
 // ─── cedar_free_bytes ──────────────────────────────────────────────────────────
 
+// SAFETY: Caller must ensure ptr is valid for len bytes...
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cedar_free_bytes(ptr: *mut u8, len: usize) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -748,6 +749,7 @@ fn test_vec_cosine_empty_returns_zero() {
 // 计算两个 f32 向量的余弦相似度（Rust 编译器在 opt-level=3 下自动 SIMD 向量化）。
 // 参数：ptr + 元素个数（非字节数）；空向量或长度不等返回 0.0。
 // panic 被 catch_unwind 捕获，不越过 FFI 边界。
+// SAFETY: Caller must ensure ptr is valid for len bytes...
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vec_cosine_f32(
     a_ptr: *const f32,

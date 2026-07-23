@@ -80,7 +80,9 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 	var namespace sql.NullString
 	var intent []byte
 	var taskType string
-	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, session_id FROM tasks WHERE task_id=?", taskID).Scan(&statusStr, &namespace, &intent, &taskType)
+	var traceID, spanID sql.NullString
+	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, session_id, trace_id, span_id FROM tasks WHERE task_id=?", taskID).
+		Scan(&statusStr, &namespace, &intent, &taskType, &traceID, &spanID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -112,6 +114,8 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 		Namespace: namespace.String,
 		Intent:    intent,
 		Type:      taskType,
+		TraceID:   traceID.String,
+		SpanID:    spanID.String,
 	}, nil
 }
 

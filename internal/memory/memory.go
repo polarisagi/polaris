@@ -242,8 +242,8 @@ var (
 	_ protocol.ReflectionMemory = (*memstore.ReflectionMem)(nil)
 )
 
-// 四层记忆类型定义。
-// 架构文档: docs/arch/05-Memory-System-深度选型.md §1-5
+// Package memory 实现了 Polaris 四层记忆系统 (Working/Core/Episodic/Procedural)。
+// 架构设计详见 docs/arch/M05-Memory-System.md §1-5
 
 // ============================================================================
 // MemImpl — protocol.MemorySystem 的四层具体实现

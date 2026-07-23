@@ -144,6 +144,19 @@ func DetachedWithLink(parent context.Context) context.Context {
 	return ctx
 }
 
+// ContextWithRemoteSpan returns a context carrying a reconstructed span,
+// enabling trace continuation across process or goroutine boundaries.
+func ContextWithRemoteSpan(ctx context.Context, traceID, spanID string) context.Context {
+	if traceID == "" || spanID == "" {
+		return ctx
+	}
+	span := &Span{
+		TraceID: traceID,
+		SpanID:  spanID,
+	}
+	return context.WithValue(ctx, ctxKey{name: "observability_span"}, span)
+}
+
 // spanIDCounter 防止同纳秒内生成重复 SpanID/TraceID。
 var spanIDCounter atomic.Int64
 

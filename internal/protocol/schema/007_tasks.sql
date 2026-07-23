@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- namespace: 协同任务共享记忆命名空间（GD-14-001），同一 namespace 下的多个
     -- Worker Agent 可检索到彼此写入的 episodic 记忆片段；空值 = 不共享
     namespace                TEXT,
+    trace_id                 TEXT,
+    span_id                  TEXT,
     -- Token 记账（Gap-A: per-task observability，HE-Rule-1）
     -- tokens_input/output: 本任务累计 LLM 输入/输出 token 数
     -- tokens_cache_read: Anthropic prompt cache 命中 token 数（缓存命中比输入便宜 10x）

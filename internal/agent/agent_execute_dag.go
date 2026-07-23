@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/policy"
@@ -84,8 +85,8 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}
 
 			if a.plannerSpawner != nil {
-				concurrent.SafeGo(ctx, "agent.planner_spawner", func(ctx context.Context) {
-					a.plannerSpawner(ctx, goal, taskType, a.provider)
+				concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.planner_spawner", func(gctx context.Context) {
+					a.plannerSpawner(gctx, goal, taskType, a.provider)
 				})
 			}
 

@@ -46,6 +46,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
+	"github.com/polarisagi/polaris/internal/tool/builtin/memory_prune"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
 	"github.com/polarisagi/polaris/internal/vfs"
@@ -286,6 +287,21 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, exclusiveWriter, mb.Mem.Semantic(), mb.Mem.Retriever(), mb.Mem.Reflection(), mb.Mem.Working().CoreMemory()); err != nil {
 			slog.Warn("polaris: memory tool registration failed", "err", err)
 		}
+		
+		memoryPrune := memory_prune.NewMemoryPruneTool(mb.Mem.Semantic())
+		if err := toolReg.Register(memoryPrune.Spec()); err != nil {
+			slog.Warn("polaris: memory_prune tool registration failed", "err", err)
+		}
+		inProcSandbox.Register("memory_prune", func(ctx context.Context, input []byte) ([]byte, error) {
+			res, err := memoryPrune.Execute(ctx, input)
+			if err != nil {
+				return nil, err
+			}
+			if res.Error != "" {
+				return nil, apperr.New(apperr.CodeInternal, res.Error)
+			}
+			return res.Output, nil
+		})
 	}
 
 	var nativeCogn native.CognitiveSearcher

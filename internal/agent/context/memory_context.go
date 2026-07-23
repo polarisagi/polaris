@@ -54,8 +54,8 @@ func BuildPerceiveContext( //nolint:gocyclo
 
 	var retrieved strings.Builder
 
-	intent := sCtx.RawIntentTS.Content()
-	if intent != "" {
+	intent := sCtx.RawIntentTS.UnsafeContent()
+	if sCtx.TaskID != "" && intent != "" {
 		// 1. 查询相关的历史 Episodic 事件
 		query := types.EpisodicQuery{
 			Semantic:      intent,

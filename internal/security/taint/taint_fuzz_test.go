@@ -64,7 +64,7 @@ func FuzzNewTaintedString(f *testing.F) {
 
 		ts := NewTaintedString(content, src, origin)
 
-		if ts.Content() != content {
+		if ts.UnsafeContent() != content {
 			t.Errorf("content mismatch")
 		}
 		if ts.Level() != level {

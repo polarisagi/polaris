@@ -204,7 +204,7 @@ func (a *Agent) refinePersonaAsync(ctx context.Context, current types.AgentState
 	if a.personaRefiner == nil {
 		return
 	}
-	intentText := a.sCtx.RawIntentTS.Content()
+	intentText := a.sCtx.RawIntentTS.UnsafeContent()
 	if intentText == "" {
 		return
 	}
@@ -217,7 +217,7 @@ func (a *Agent) refinePersonaAsync(ctx context.Context, current types.AgentState
 		{Role: "assistant", Content: fmt.Sprintf("[%s, replan_count=%d]", outcome, a.sm.ReplanCount())},
 	}
 	pr := a.personaRefiner
-	concurrent.SafeGo(ctx, "agent.persona_refine", func(gctx context.Context) {
+	concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.persona_refine", func(gctx context.Context) {
 		if err := pr.RefineAtSessionEnd(gctx, msgs); err != nil {
 			slog.Warn("persona refiner: refine at session end failed", "err", err)
 			return
@@ -248,7 +248,7 @@ func (a *Agent) archiveEpisodicAsync(ctx context.Context) {
 		return
 	}
 	mem := a.memory
-	concurrent.SafeGo(ctx, "agent.archive_episodic", func(gctx context.Context) {
+	concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.archive_episodic", func(gctx context.Context) {
 		if err := mem.ArchiveEpisodic(gctx, sessionID); err != nil {
 			slog.Warn("agent: archive episodic on session close failed", "err", err)
 		}

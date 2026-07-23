@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 
@@ -63,7 +64,9 @@ func (c *TrainingSampleCollector) Add(sample protocol.TrainingSample) {
 	}
 	name, trainer := c.name, c.adapter
 	concurrent.SafeGo(context.Background(), name+"-train-trigger", func(ctx context.Context) {
-		if _, err := trainer.Train(ctx, batch); err != nil {
+		gctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if _, err := trainer.Train(gctx, batch); err != nil {
 			slog.Warn(name+": training trigger failed", "err", err, "batch_size", len(batch))
 		}
 	})

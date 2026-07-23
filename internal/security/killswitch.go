@@ -84,38 +84,43 @@ func IsFullStopFilePresent(dataDir string) bool {
 // CheckAndAct 按优先级检查触发条件并执行状态转移（持锁）。
 func (ks *KillSwitch) CheckAndAct() types.KillState {
 	ks.mu.Lock()
-	defer ks.mu.Unlock()
-	return ks.checkAndActLocked()
+	state, needsWrite, reason := ks.checkAndActLocked()
+	ks.mu.Unlock()
+	if needsWrite {
+		ks.writeFullStopFile(reason)
+	}
+	return state
 }
 
 // checkAndActLocked 在 mu 已持有时执行状态检查与转移（内部使用）。
-func (ks *KillSwitch) checkAndActLocked() types.KillState {
+func (ks *KillSwitch) checkAndActLocked() (types.KillState, bool, string) {
 	if ks.shouldFullStopLocked() {
 		if ks.state != types.KillFullStop {
-			ks.transitionLocked(types.KillFullStop, "triggered full stop conditions")
+			needs := ks.transitionLocked(types.KillFullStop, "triggered full stop conditions")
+			return types.KillFullStop, needs, "triggered full stop conditions"
 		}
-		return types.KillFullStop
+		return types.KillFullStop, false, ""
 	}
 	if ks.shouldPauseLocked() {
 		if ks.state < types.KillPause {
 			ks.transitionLocked(types.KillPause, "triggered pause conditions")
 		}
-		return types.KillPause
+		return types.KillPause, false, ""
 	}
 	if ks.shouldThrottleLocked() {
 		if ks.state < types.KillThrottle {
 			ks.transitionLocked(types.KillThrottle, "triggered throttle conditions")
 		}
-		return types.KillThrottle
+		return types.KillThrottle, false, ""
 	}
-	return ks.state
+	return ks.state, false, ""
 }
 
 // triggerFullStop 触发 FullStop，调用 transitionLocked（须在 mu 持有时调用）。
-func (ks *KillSwitch) triggerFullStop(actor, reason string) error {
+func (ks *KillSwitch) triggerFullStop(actor, reason string) (bool, string) {
 	ks.actor = actor
-	ks.transitionLocked(types.KillFullStop, reason)
-	return nil
+	needs := ks.transitionLocked(types.KillFullStop, reason)
+	return needs, reason
 }
 
 // IsSealed 返回当前是否处于封印（FullStop）状态（持锁读）。
@@ -170,15 +175,13 @@ func (ks *KillSwitch) shouldFullStopLocked() bool {
 }
 
 // transitionLocked 执行状态转移，须在 mu 持有时调用。
-// 回调与通知在锁内执行；writeFullStopFile 涉及系统调用，可接受短暂锁持有。
-func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) {
+// 返回 needsFullStop(bool)，若为 true 调用方须在解锁后调用 writeFullStopFile。
+func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) bool {
 	ks.state = s
 	ks.reason = reason
 	ks.stateEnteredAt = time.Now()
 
-	if s == types.KillFullStop {
-		ks.writeFullStopFile(reason)
-	}
+	needsFullStop := s == types.KillFullStop
 
 	if ks.StateChangeCallback != nil {
 		ks.StateChangeCallback(s, reason)
@@ -186,6 +189,8 @@ func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) {
 	for _, n := range ks.notifiers {
 		_ = n.Send("CRITICAL", "KillSwitch Transition", reason)
 	}
+	
+	return needsFullStop
 }
 
 func (ks *KillSwitch) writeFullStopFile(reason string) {
@@ -212,37 +217,49 @@ func (ks *KillSwitch) writeFullStopFile(reason string) {
 // ReportError 线程安全地递增错误计数并检查状态转移。
 func (ks *KillSwitch) ReportError() {
 	ks.mu.Lock()
-	defer ks.mu.Unlock()
 	ks.monitors.errorCounter++
-	ks.checkAndActLocked()
+	_, needsWrite, reason := ks.checkAndActLocked()
+	ks.mu.Unlock()
+	if needsWrite {
+		ks.writeFullStopFile(reason)
+	}
 }
 
 // ReportSafetyViolation 线程安全地记录安全违规并检查状态转移。
 func (ks *KillSwitch) ReportSafetyViolation(fatal bool) {
 	ks.mu.Lock()
-	defer ks.mu.Unlock()
 	if fatal {
 		ks.monitors.fatalViolations++
 	} else {
 		ks.monitors.safetyViolations++
 	}
-	ks.checkAndActLocked()
+	_, needsWrite, reason := ks.checkAndActLocked()
+	ks.mu.Unlock()
+	if needsWrite {
+		ks.writeFullStopFile(reason)
+	}
 }
 
 // ReportIrreversibleAttempt 线程安全地记录不可逆操作尝试并检查状态转移。
 func (ks *KillSwitch) ReportIrreversibleAttempt() {
 	ks.mu.Lock()
-	defer ks.mu.Unlock()
 	ks.monitors.irreversibleAttempts++
-	ks.checkAndActLocked()
+	_, needsWrite, reason := ks.checkAndActLocked()
+	ks.mu.Unlock()
+	if needsWrite {
+		ks.writeFullStopFile(reason)
+	}
 }
 
 // ManualFullStop 线程安全地手动触发 FullStop。
 func (ks *KillSwitch) ManualFullStop(actor, reason string) {
 	ks.mu.Lock()
-	defer ks.mu.Unlock()
 	ks.actor = actor
-	ks.transitionLocked(types.KillFullStop, reason)
+	needs := ks.transitionLocked(types.KillFullStop, reason)
+	ks.mu.Unlock()
+	if needs {
+		ks.writeFullStopFile(reason)
+	}
 }
 
 // Notifier 通知接口（Slack/Email/PagerDuty）。
@@ -257,7 +274,6 @@ type Notifier interface {
 // 调用方：main.go 的 signal.Notify 处理器。
 func (ks *KillSwitch) OnSIGINT() {
 	ks.mu.Lock()
-	defer ks.mu.Unlock()
 
 	now := time.Now()
 	// 清除 3s 窗口外的旧记录
@@ -270,10 +286,18 @@ func (ks *KillSwitch) OnSIGINT() {
 	recent = append(recent, now)
 	ks.sigintTimes = recent
 
+	var needsWrite bool
+	var reason string
 	if len(ks.sigintTimes) >= 3 {
 		ks.reason = "triple SIGINT within 3s window"
 		ks.actor = "user"
-		_ = ks.triggerFullStop("user", "triple SIGINT within 3s window")
+		needsWrite, reason = ks.triggerFullStop("user", "triple SIGINT within 3s window")
+	}
+	
+	ks.mu.Unlock()
+	
+	if needsWrite {
+		ks.writeFullStopFile(reason)
 	}
 }
 
@@ -295,9 +319,12 @@ func (ks *KillSwitch) CheckKILLSWITCHFile() {
 	if _, err := os.Stat(killFile); err == nil {
 		// 文件存在 → 触发 FullStop（持锁）
 		ks.mu.Lock()
-		defer ks.mu.Unlock()
 		ks.actor = "operator"
-		_ = ks.triggerFullStop("operator", "KILLSWITCH file detected at "+killFile)
+		needsWrite, reason := ks.triggerFullStop("operator", "KILLSWITCH file detected at "+killFile)
+		ks.mu.Unlock()
+		if needsWrite {
+			ks.writeFullStopFile(reason)
+		}
 	}
 }
 
@@ -359,4 +386,9 @@ func (ks *KillSwitch) ManualRecover(ctx context.Context, actor, reason string) e
 		cb(ctx)
 	}
 	return nil
+}
+
+// Unseal 是最高权限的管理端点调用的解封方法，等价于 ManualRecover
+func (ks *KillSwitch) Unseal(ctx context.Context, actor, reason string) error {
+	return ks.ManualRecover(ctx, actor, reason)
 }

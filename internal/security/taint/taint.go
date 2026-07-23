@@ -48,9 +48,9 @@ func NewTaintedString(content string, source TaintSource, origin string) Tainted
 	}
 }
 
-// Content 获取受污染的原始内容。
+// UnsafeContent 获取受污染的原始内容。
 // 注意：只应在明确不需要安全清洗的场景下使用此方法（如：写入数据库、发送到受限沙箱的数据槽）。
-func (ts TaintedString) Content() string {
+func (ts TaintedString) UnsafeContent() string {
 	return ts.content
 }
 

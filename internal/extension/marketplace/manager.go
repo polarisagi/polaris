@@ -278,8 +278,7 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 						// 路径防穿越：禁止逃逸出 installPath
 						cleanHook := filepath.Clean(hookPath)
 						cleanBase := filepath.Clean(inst.InstallPath)
-						rel, relErr := filepath.Rel(cleanBase, cleanHook)
-						if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+						if strings.HasPrefix(cleanHook, cleanBase+string(filepath.Separator)) || cleanHook == cleanBase {
 							if m.hookRunner != nil {
 								// 通过注入的沙笼接口执行：具体实现由 ContainerSandbox.RunScript 提供
 								if err := m.hookRunner.RunHook(ctx, hookPath, inst.InstallPath); err != nil {
