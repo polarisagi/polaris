@@ -263,16 +263,21 @@ func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before ti
 	if affected >= 0 { // affected >= 0 保证 SQL 步骤已执行
 		em.mu.Lock()
 		filtered := em.events[:0]
+		var toDelete []string
 		for _, ev := range em.events {
 			if !ev.CreatedAt.IsZero() && ev.CreatedAt.Before(before) && ev.TaskID == sessionID {
-				// 从 KV 删除该事件（best-effort，失败不阻断）
-				_ = em.store.Delete(context.Background(), []byte("episodic:"+ev.ID))
+				toDelete = append(toDelete, ev.ID)
 			} else {
 				filtered = append(filtered, ev)
 			}
 		}
 		em.events = filtered
 		em.mu.Unlock()
+
+		for _, id := range toDelete {
+			// 从 KV 删除该事件（best-effort，失败不阻断）
+			_ = em.store.Delete(ctx, []byte("episodic:"+id))
+		}
 	}
 
 	if affected > 0 {
@@ -354,20 +359,23 @@ func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, 
 }
 
 func (em *EpisodicMem) Forget(ctx context.Context) (int, error) {
-	em.mu.Lock()
-	defer em.mu.Unlock()
-
 	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	
+	em.mu.Lock()
 	var kept []types.Event
-	removed := 0
+	var toDelete []string
 	for _, ev := range em.events {
 		if !ev.CreatedAt.IsZero() && ev.CreatedAt.Before(cutoff) {
-			_ = em.store.Delete(ctx, []byte("episodic:"+ev.ID))
-			removed++
+			toDelete = append(toDelete, ev.ID)
 		} else {
 			kept = append(kept, ev)
 		}
 	}
 	em.events = kept
-	return removed, nil
+	em.mu.Unlock()
+
+	for _, id := range toDelete {
+		_ = em.store.Delete(ctx, []byte("episodic:"+id))
+	}
+	return len(toDelete), nil
 }
