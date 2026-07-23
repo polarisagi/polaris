@@ -35,6 +35,24 @@ func TestRegistry_RegisteredAdapters(t *testing.T) {
 	}
 }
 
+// TestRegistry_ReturnsSingletonInstance 防止 GetAdapter 退化为每次调用新建实例的
+// 工厂函数（曾发生过的回归：WecomAdapter.wecomSends / MatrixAdapter.txnCounter 是
+// 跨 StartPoller→Send 调用必须持久的实例状态，工厂模式会导致 Send 读到的永远是
+// 空状态，wecom 回复静默丢失）。GetAdapter 必须对同一 channelType 始终返回同一个
+// 已注册单例。
+func TestRegistry_ReturnsSingletonInstance(t *testing.T) {
+	for _, name := range []string{"wecom", "matrix", "telegram"} {
+		a1, ok1 := cadapter.GetAdapter(name)
+		a2, ok2 := cadapter.GetAdapter(name)
+		if !ok1 || !ok2 {
+			t.Fatalf("adapter %q should be registered", name)
+		}
+		if a1 != a2 {
+			t.Errorf("GetAdapter(%q) returned different instances across calls — adapter state (e.g. wecomSends/txnCounter) will not persist between StartPoller and Send", name)
+		}
+	}
+}
+
 func TestExtractMessage_Unknown(t *testing.T) {
 	msg := ExtractMessage("unknown_platform", []byte(`{}`), nil)
 	if msg.Text != "" || msg.ChatID != "" {

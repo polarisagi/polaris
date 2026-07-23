@@ -81,10 +81,24 @@ func TestTriggerWebhookAutomations(t *testing.T) {
 	}
 	defer db.Close()
 	h := &ChannelsAdmin{DB: db}
-	h.Cron = &cronadmin.CronAdmin{DB: db}
+	// GD-9-001 复核修复后 TriggerWebhookAutomations 改走 AutomationRepo，
+	// 未注入会 nil pointer panic——补齐依赖，schema 对齐 017_automations.sql。
+	// h.Cron 静态类型是 WebhookAutomationTrigger 接口，须先在具体类型上设好字段
+	// 再赋值给接口字段（接口变量无法直接访问具体类型的字段）。
+	cron := &cronadmin.CronAdmin{DB: db, AutomationRepo: repo.NewSQLiteAutomationRepository(db)}
+	h.Cron = cron
 
-	// Create table
-	_, _ = db.Exec(`CREATE TABLE automations (id TEXT, name TEXT, prompt TEXT, trigger_type TEXT, cron_schedule TEXT, channel_id TEXT, working_dir TEXT, reasoning_effort TEXT, result_action TEXT, sandbox_level INTEGER, cedar_rules_json TEXT, enabled INTEGER, last_run_status TEXT);`)
+	// Create table（完整对齐 internal/protocol/schema/017_automations.sql，
+	// 否则 ListWebhookAutomations 的 SELECT 会因缺列报错）。
+	_, _ = db.Exec(`CREATE TABLE automations (
+		id TEXT PRIMARY KEY, name TEXT, prompt TEXT, trigger_type TEXT, cron_schedule TEXT,
+		event_filter TEXT, channel_id TEXT, working_dir TEXT, env_type TEXT,
+		reasoning_effort TEXT, result_action TEXT, sandbox_level INTEGER, cedar_rules_json TEXT,
+		enabled INTEGER, requires_hitl INTEGER, risk_level INTEGER,
+		last_run_at TEXT, next_run_at TEXT, run_count INTEGER, last_run_status TEXT, last_run_error TEXT,
+		failure_count INTEGER, circuit_open INTEGER, circuit_opened_at TEXT,
+		created_at TEXT, updated_at TEXT
+	);`)
 
 	h.Cron.TriggerWebhookAutomations(context.Background(), "ch1", "{}")
 }

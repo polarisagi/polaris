@@ -17,11 +17,11 @@
 我们决定**免除** `internal/downloader/proxy.go` 针对静态公共域名探测使用 `SafeDialer` 的强制要求。
 为实现这一点，我们采取以下措施：
 1. 记录本 ADR 以在架构和安全层面正式豁免该逻辑。
-2. 在 `scripts/xr06-allowlist.txt` 中登记 `internal/downloader/proxy.go`，使 CI lint 扫描网络红线 (XR-06) 时显式放行该文件内的特定用法。
-3. 严格限制该豁免仅适用于写死的公共外部域名，任何包含用户输入或动态拼接的 URL 仍必须受 `SafeDialer` 约束。
+2. 新增 CI 门控 `internal/lint.Test_inv_XR06_DownloaderNoRawTransport`，扫描 `internal/downloader/` 下裸 `http.DefaultTransport`/`http.DefaultClient` 引用；在 `internal/lint/testdata/xr06_raw_transport_exempt.json` 中登记 `internal/downloader/proxy.go` 为唯一豁免项，使该豁免真正被 CI 强制而非仅存在于文档层面。
+3. 严格限制该豁免仅适用于写死的公共外部域名，任何包含用户输入或动态拼接的 URL 仍必须受 `SafeDialer` 约束；新增豁免须先修订本 ADR。
 
 ## 后果
-- **正面**：避免了 `SafeDialer` 核心组件因引入非关键特性的复杂修改而可能产生的潜在安全旁路。保持了本地部署代理功能的完整性。
+- **正面**：避免了 `SafeDialer` 核心组件因引入非关键特性的复杂修改而可能产生的潜在安全旁路。保持了本地部署代理功能的完整性。豁免边界由 CI 门控（`xr06_raw_transport_exempt.json`）而非纯文档承诺兜底，任何未登记文件新增裸 Transport 引用会直接编译期失败。
 - **负面**：增加了特例，需要在未来的审计和代码变动中持续确保 `proxy.go` 中没有新的、用户可控的请求利用此豁免。
 
 ## 参考

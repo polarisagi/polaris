@@ -5,8 +5,39 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
+
+// automationFromRow 将 repo.AutomationRow 转换为本包内部使用的 automation 结构体，
+// 与 cron_handlers.go HandleListAutomations 的既有转换保持同一套字段映射。
+func automationFromRow(row repo.AutomationRow) automation {
+	return automation{
+		ID:              row.ID,
+		Name:            row.Name,
+		Prompt:          row.Prompt,
+		TriggerType:     row.TriggerType,
+		CronSchedule:    row.CronSchedule,
+		ChannelID:       row.ChannelID,
+		WorkingDir:      row.WorkingDir,
+		EnvType:         row.EnvType,
+		ReasoningEffort: row.ReasoningEffort,
+		ResultAction:    row.ResultAction,
+		SandboxLevel:    row.SandboxLevel,
+		CedarRulesJSON:  row.CedarRulesJSON,
+		Enabled:         row.Enabled,
+		RequiresHITL:    row.RequiresHITL,
+		RiskLevel:       row.RiskLevel,
+		LastRunAt:       row.LastRunAt,
+		NextRunAt:       row.NextRunAt,
+		RunCount:        row.RunCount,
+		LastRunStatus:   row.LastRunStatus,
+		LastRunError:    row.LastRunError,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+		EventFilter:     row.EventFilter,
+	}
+}
 
 // StartCronRunner 从 cron_runner.go 拆出（R7 文件行数治理，2026-07-07）：
 // 本文件只负责"何时触发"的调度轮询（cron 时间到达 / 内部事件到达），
@@ -43,37 +74,18 @@ func (ca *CronAdmin) StartCronRunner(ctx context.Context) {
 //nolint:unused
 func (ca *CronAdmin) cronTick(ctx context.Context) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	rows, err := ca.DB.QueryContext(ctx, `
-			SELECT id, name, prompt, trigger_type, cron_schedule,
-			       working_dir, env_type, reasoning_effort, result_action, sandbox_level, cedar_rules_json,
-			       requires_hitl, risk_level
-			FROM automations
-		WHERE enabled=1
-		  AND circuit_open=0
-		  AND (trigger_type='cron' OR trigger_type='both')
-		  AND cron_schedule != ''
-		  AND (next_run_at = '' OR next_run_at <= ?)
-		  AND last_run_status != 'running'`,
-		now)
+	// GD-9-001 复核修复：改走 AutomationRepo.ListDueAutomations，不再由 Gateway
+	// 层直接拼接执行 SQL（R1.1 ctrl→svc→dao 分层）。
+	rows, err := ca.AutomationRepo.ListDueAutomations(ctx, now)
 	if err != nil {
 		slog.Warn("cronTick: query failed", "err", err)
 		return
 	}
-	defer rows.Close()
 
-	var due []automation
-	for rows.Next() {
-		var a automation
-		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Prompt, &a.TriggerType, &a.CronSchedule,
-			&a.WorkingDir, &a.EnvType, &a.ReasoningEffort, &a.ResultAction, &a.SandboxLevel, &a.CedarRulesJSON,
-			&a.RequiresHITL, &a.RiskLevel,
-		); err != nil {
-			continue
-		}
-		due = append(due, a)
+	due := make([]automation, 0, len(rows))
+	for _, row := range rows {
+		due = append(due, automationFromRow(row))
 	}
-	rows.Close()
 
 	for i := range due {
 		a := &due[i]
@@ -88,75 +100,39 @@ func (ca *CronAdmin) cronTick(ctx context.Context) {
 //
 //nolint:unused
 func (ca *CronAdmin) eventTick(ctx context.Context) {
-	// 提取当前增量事件 (since lastEventOffset)
-	rows, err := ca.DB.QueryContext(ctx, `
-		SELECT offset, topic, type, payload
-		FROM events
-		WHERE offset > ? ORDER BY offset ASC
-	`, ca.LastEventOffset)
+	// GD-9-001 复核修复：提取当前增量事件 (since lastEventOffset)，改走
+	// EventRepo.ListEventsSince，不再由 Gateway 层直接拼接执行 SQL。
+	eventRows, err := ca.EventRepo.ListEventsSince(ctx, ca.LastEventOffset)
 	if err != nil {
 		slog.Warn("eventTick: query events failed", "err", err)
 		return
 	}
-	defer rows.Close()
 
-	var events []struct {
-		Offset  int64
-		Topic   string
-		Type    string
-		Payload string
-	}
+	events := make([]repo.EventRow, 0, len(eventRows))
 	maxOffset := ca.LastEventOffset
-	for rows.Next() {
-		var ev struct {
-			Offset  int64
-			Topic   string
-			Type    string
-			Payload string
-		}
-		if err := rows.Scan(&ev.Offset, &ev.Topic, &ev.Type, &ev.Payload); err == nil {
-			events = append(events, ev)
-			if ev.Offset > maxOffset {
-				maxOffset = ev.Offset
-			}
+	for _, ev := range eventRows {
+		events = append(events, ev)
+		if ev.Offset > maxOffset {
+			maxOffset = ev.Offset
 		}
 	}
-	rows.Close()
 
 	if len(events) == 0 {
 		return
 	}
 
-	// 查找配置为 event 触发的 automations
-	aRows, err := ca.DB.QueryContext(ctx, `
-			SELECT id, name, prompt, trigger_type, cron_schedule,
-			       working_dir, env_type, reasoning_effort, result_action, sandbox_level, cedar_rules_json, event_filter,
-			       requires_hitl, risk_level
-			FROM automations
-		WHERE enabled=1
-		  AND circuit_open=0
-		  AND (trigger_type='event' OR trigger_type='both')
-		  AND event_filter != '' AND event_filter != '{}'
-		  AND last_run_status != 'running'
-	`)
+	// 查找配置为 event 触发的 automations（GD-9-001 复核修复：改走
+	// AutomationRepo.ListEventAutomations）。
+	autoRows, err := ca.AutomationRepo.ListEventAutomations(ctx)
 	if err != nil {
 		slog.Warn("eventTick: query automations failed", "err", err)
 		return
 	}
-	defer aRows.Close()
 
-	var autos []automation
-	for aRows.Next() {
-		var a automation
-		if err := aRows.Scan(
-			&a.ID, &a.Name, &a.Prompt, &a.TriggerType, &a.CronSchedule,
-			&a.WorkingDir, &a.EnvType, &a.ReasoningEffort, &a.ResultAction, &a.SandboxLevel, &a.CedarRulesJSON, &a.EventFilter,
-			&a.RequiresHITL, &a.RiskLevel,
-		); err == nil {
-			autos = append(autos, a)
-		}
+	autos := make([]automation, 0, len(autoRows))
+	for _, row := range autoRows {
+		autos = append(autos, automationFromRow(row))
 	}
-	aRows.Close()
 
 	for _, ev := range events {
 		for i := range autos {

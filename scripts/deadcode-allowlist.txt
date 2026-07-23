@@ -13,3 +13,8 @@ pkg/types/models_event.go: unreachable func: BuildIdempotencyKey # 根因一(测
 internal/ffi/llama.go: unreachable func: LlamaEmbed # 门控假阳性，tier1 默认不可达，ADR-0062
 internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 默认不可达，ADR-0062
 internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0047 刻意保留不接入，ADR-0062 恢复
+internal/channel/message.go: unreachable func: jsonNestedInt64 # 根因一(测试假阳性)，仅被 channels_test.go 调用
+internal/observability/trace/otlp_exporter.go: unreachable func: NewOTLPHTTPExporter # ADR-0069 OpenLLMetry 导出器，功能完整且有单测，但尚未接入任何 boot 路径/配置项，2026-07-23 复核订正保留待后续任务补齐 config 与 boot 接线
+internal/observability/trace/otlp_exporter.go: unreachable func: OTLPHTTPExporter.ExportSpan # 同上，ADR-0069
+internal/observability/trace/otlp_exporter.go: unreachable func: OTLPHTTPExporter.Shutdown # 同上，ADR-0069
+internal/observability/trace/tracer.go: unreachable func: Tracer.RegisterExporter # 同上，ADR-0069，导出器注册入口，等待 boot 接线后由启动路径调用
