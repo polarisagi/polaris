@@ -5,3 +5,7 @@
 'memory.warning_mb' = 1024
 'memory.critical_mb' = 512
 'baseline.p95' = 200
+
+[trace_export]
+enabled = false
+endpoint = ''
