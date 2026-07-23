@@ -18,44 +18,13 @@ func ExtractMessage(channelType string, body []byte, r *http.Request) protocol.C
 	}
 
 	switch channelType {
-	case "teams":
-		return extractTeamsWebhook(body)
 	case "webhook":
 		return extractGenericWebhook(body)
 	}
 	return protocol.ChannelMessage{}
 }
 
-// extractTeamsWebhook 解析 MS Teams / MS Graph 变更通知。
-func extractTeamsWebhook(body []byte) protocol.ChannelMessage {
-	var raw struct {
-		Value []struct {
-			ResourceData struct {
-				Body struct {
-					Content string `json:"content"`
-				} `json:"body"`
-				From struct {
-					User struct {
-						ID          string `json:"id"`
-						DisplayName string `json:"displayName"`
-					} `json:"user"`
-				} `json:"from"`
-				ChatID string `json:"chatId"`
-			} `json:"resourceData"`
-		} `json:"value"`
-	}
-	if json.Unmarshal(body, &raw) != nil || len(raw.Value) == 0 {
-		return protocol.ChannelMessage{}
-	}
-	rd := raw.Value[0].ResourceData
-	text := rd.Body.Content
-	chatID := rd.ChatID
-	userID := rd.From.User.ID
-	if text == "" || chatID == "" {
-		return protocol.ChannelMessage{}
-	}
-	return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
-}
+
 
 func extractGenericWebhook(body []byte) protocol.ChannelMessage {
 	var raw map[string]any

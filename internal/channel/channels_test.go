@@ -1,41 +1,9 @@
 package channel
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 )
-
-// ── extractTeamsWebhook ───────────────────────────────────────────────────────
-
-func TestExtractTeamsWebhook_Valid(t *testing.T) {
-	payload := map[string]any{
-		"value": []any{
-			map[string]any{
-				"resourceData": map[string]any{
-					"body":   map[string]any{"content": "teams text"},
-					"from":   map[string]any{"user": map[string]any{"id": "u1", "displayName": "Alice"}},
-					"chatId": "chat1",
-				},
-			},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	msg := extractTeamsWebhook(body)
-	if msg.Text != "teams text" {
-		t.Errorf("expected 'teams text', got %q", msg.Text)
-	}
-	if msg.ChatID != "chat1" {
-		t.Errorf("expected chatID='chat1', got %q", msg.ChatID)
-	}
-}
-
-func TestExtractTeamsWebhook_EmptyValue(t *testing.T) {
-	msg := extractTeamsWebhook([]byte(`{"value":[]}`))
-	if msg.Text != "" {
-		t.Error("empty value should return empty Message")
-	}
-}
 
 // ── extractGenericWebhook ─────────────────────────────────────────────────────
 
