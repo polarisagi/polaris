@@ -36,7 +36,7 @@ func (t *MemoryPruneTool) Spec() types.Tool {
 func (t *MemoryPruneTool) Execute(ctx context.Context, args []byte) (*types.ToolResult, error) {
 	var p PruneArgs
 	if err := json.Unmarshal(args, &p); err != nil {
-		return &types.ToolResult{Error: "invalid arguments"}, nil
+		return &types.ToolResult{Error: "invalid arguments"}, apperr.Wrap(apperr.CodeInvalidInput, "memory_prune: invalid arguments", err)
 	}
 
 	if t.mem == nil {
@@ -45,7 +45,7 @@ func (t *MemoryPruneTool) Execute(ctx context.Context, args []byte) (*types.Tool
 
 	err := t.mem.MarkEntityExpired(ctx, p.EntityType, p.EntityName, p.Reason)
 	if err != nil {
-		return &types.ToolResult{Error: err.Error()}, nil
+		return &types.ToolResult{Error: err.Error()}, apperr.Wrap(apperr.CodeInternal, "memory_prune.MarkEntityExpired", err)
 	}
 
 	return &types.ToolResult{

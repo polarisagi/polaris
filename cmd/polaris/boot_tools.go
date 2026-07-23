@@ -295,7 +295,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		inProcSandbox.Register("memory_prune", func(ctx context.Context, input []byte) ([]byte, error) {
 			res, err := memoryPrune.Execute(ctx, input)
 			if err != nil {
-				return nil, err
+				return nil, apperr.Wrap(apperr.CodeInternal, "memory_prune.Execute", err)
 			}
 			if res.Error != "" {
 				return nil, apperr.New(apperr.CodeInternal, res.Error)

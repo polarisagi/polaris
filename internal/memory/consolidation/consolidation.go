@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -31,6 +30,13 @@ import (
 // 实现引用，必须通过注入的 LLMSummarizer 接口调用。此前只有 buildSummary 一处
 // 迁移到了 summarizer，extractEntitiesAndRelations/synthesizeUserProfile 仍在
 // 直接用 provider——这是同一根因在同一文件里遗漏的两处，一并收口到 summarizer。
+// GraphEntityFetcher 定义 GraphRAG 侧实体查询接口，用于写入期去重桥接（B2）。
+// 通过本地接口定义打断 L1(memory) → L2(knowledge/graphrag) 的层级依赖。
+// 调用方只做 nil 检查，不访问返回值的具体字段，因此使用 any 作为返回类型。
+type GraphEntityFetcher interface {
+	GetEntityByName(ctx context.Context, name string) (any, error)
+}
+
 type ConsolidationPipeline struct {
 	episodic     protocol.EpisodicMemory
 	semantic     protocol.SemanticMemory
@@ -41,7 +47,7 @@ type ConsolidationPipeline struct {
 	db           protocol.SQLQuerier
 	gate         backgroundGate
 	skillEvolver SkillEvolver
-	graphFetcher graphrag.EntityFetcher // B2: 桥接检查 GraphRAG 侧
+	graphFetcher GraphEntityFetcher // B2: 桥接检查 GraphRAG 侧
 }
 
 type backgroundGate interface {
