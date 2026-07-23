@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -80,7 +81,7 @@ func (po *PipelineOrchestrator) monitorCompensationTask(ctx context.Context, tas
 				"task_id", taskID,
 				"failed_stage", failedStage,
 			)
-			if metrics.InstrSwarmCompensationTimeoutTotal != nil {
+			if metrics.InstrSwarmCompensationTimeoutTotal != nil && !protocol.IsReplaying() {
 				metrics.InstrSwarmCompensationTimeoutTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", failedStage)))
 			}
 			po.escalateCompensationFailure(ctx, pipelineID, failedStage, taskID, "timeout")
@@ -100,7 +101,7 @@ func (po *PipelineOrchestrator) monitorCompensationTask(ctx context.Context, tas
 					"task_id", taskID,
 					"failed_stage", failedStage,
 				)
-				if metrics.InstrSwarmCompensationFailedTotal != nil {
+				if metrics.InstrSwarmCompensationFailedTotal != nil && !protocol.IsReplaying() {
 					metrics.InstrSwarmCompensationFailedTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", failedStage)))
 				}
 				po.escalateCompensationFailure(ctx, pipelineID, failedStage, taskID, "failed")
@@ -112,7 +113,7 @@ func (po *PipelineOrchestrator) monitorCompensationTask(ctx context.Context, tas
 }
 
 func (po *PipelineOrchestrator) escalateCompensationFailure(ctx context.Context, pipelineID, failedStage, taskID, reason string) {
-	if po.decisionLog != nil {
+	if po.decisionLog != nil && !protocol.IsReplaying() {
 		decisionCtx, _ := json.Marshal(map[string]string{
 			"pipeline_id":  pipelineID,
 			"failed_stage": failedStage,
@@ -132,7 +133,7 @@ func (po *PipelineOrchestrator) escalateCompensationFailure(ctx context.Context,
 		}
 	}
 
-	if po.hitl != nil {
+	if po.hitl != nil && !protocol.IsReplaying() {
 		promptText := fmt.Sprintf("Compensation task %s. PipelineID: %s, FailedStage: %s, TaskID: %s, Reason: %s", reason, pipelineID, failedStage, taskID, reason)
 		prompt := types.HITLPrompt{
 			ID:             "comp-esc-" + taskID,
