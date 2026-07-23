@@ -38,6 +38,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			max_retries INTEGER DEFAULT 3,
 			namespace TEXT,
 			intent BLOB,
+			trace_id TEXT,
+			span_id TEXT,
 			created_at DATETIME,
 			updated_at DATETIME
 		)

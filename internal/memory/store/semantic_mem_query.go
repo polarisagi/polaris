@@ -97,6 +97,28 @@ func (sm *SemanticMem) MarkEntitySuperseded(ctx context.Context, oldDBID int64, 
 	return nil
 }
 
+// MarkEntityExpired 主动将指定实体标记为过期。
+func (sm *SemanticMem) MarkEntityExpired(ctx context.Context, entityType, name, reason string) error {
+	db, err := sm.requireDB()
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.MarkEntityExpired", err)
+	}
+	
+	_, err = db.ExecContext(ctx,
+		`UPDATE semantic_entities SET status='expired', updated_at=?
+		 WHERE entity_type=? AND name=? AND status='active'`,
+		time.Now().UnixMilli(), entityType, name)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.MarkEntityExpired", err)
+	}
+
+	if sm.cognitive != nil {
+		_ = sm.cognitive.FTSDelete("sement_" + entityType + "_" + name)
+	}
+
+	return nil
+}
+
 // UpsertUserProfile 创建或更新用户画像。
 func (sm *SemanticMem) UpsertUserProfile(ctx context.Context, profile types.UserProfile) error {
 	db, err := sm.requireDB()
@@ -168,12 +190,6 @@ func (sm *SemanticMem) GetUserProfile(ctx context.Context, profileKey string) (*
 func (sm *SemanticMem) requireDB() (protocol.SQLQuerier, error) {
 	if q, ok := sm.store.(protocol.SQLQuerier); ok && q != nil {
 		return q, nil
-	}
-	if dba, ok := sm.store.(interface{ DB() *sql.DB }); ok {
-		if db := dba.DB(); db != nil {
-			return db, nil
-		}
-		return nil, apperr.New(apperr.CodeInternal, "Underlying DB is nil")
 	}
 	return nil, apperr.New(apperr.CodeInternal, "Store does not implement SQLQuerier")
 }

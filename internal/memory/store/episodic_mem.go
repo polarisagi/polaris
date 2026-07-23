@@ -8,10 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/polarisagi/polaris/internal/memory/util"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -66,8 +66,6 @@ func NewEpisodicMemWithCognitive(store protocol.Store, indexer EpisodicIndexer, 
 
 func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
 	ev.TaintLevel = types.PropagateTaint(ev.TaintLevel, taint) // only-up：取 max，禁降级
-	em.mu.Lock()
-	defer em.mu.Unlock()
 
 	// Payload 门控：超限落盘 + log_ref 替换
 	if len(ev.Payload) > maxEpisodicPayloadBytes {
@@ -85,22 +83,28 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.T
 		return apperr.Wrap(apperr.CodeStorageUnavailable, "EpisodicMem.Append", err)
 	}
 
+	em.mu.Lock()
 	// 容量门控：超过 maxEvents 时 FIFO 淘汰最旧内存条目（SQLite 侧不受影响）
 	em.events = append(em.events, ev)
 	if em.maxEvents > 0 && len(em.events) > em.maxEvents {
 		em.events = em.events[len(em.events)-em.maxEvents:]
 	}
+	em.mu.Unlock()
 
-	// 图索引：将事件节点与代理/会话建立关联边（Tier1+，nil 时跳过）
-	if em.indexer != nil {
-		em.indexer.Index(ctx, ev)
-	}
-	// SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅降级到 Tier0 BM25 路径
-	if em.cognitive != nil {
-		payload := string(ev.Payload)
-		if payload != "" {
-			_ = em.cognitive.FTSIndex(ev.ID, payload)
-		}
+	if em.indexer != nil || em.cognitive != nil {
+		concurrent.SafeGo(ctx, "episodic_mem.async_index", func(gctx context.Context) {
+			// 图索引：将事件节点与代理/会话建立关联边（Tier1+，nil 时跳过）
+			if em.indexer != nil {
+				em.indexer.Index(gctx, ev)
+			}
+			// SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅降级到 Tier0 BM25 路径
+			if em.cognitive != nil {
+				payload := string(ev.Payload)
+				if payload != "" {
+					_ = em.cognitive.FTSIndex(ev.ID, payload)
+				}
+			}
+		})
 	}
 	return nil
 }
@@ -360,7 +364,7 @@ func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, 
 
 func (em *EpisodicMem) Forget(ctx context.Context) (int, error) {
 	cutoff := time.Now().Add(-30 * 24 * time.Hour)
-	
+
 	em.mu.Lock()
 	var kept []types.Event
 	var toDelete []string

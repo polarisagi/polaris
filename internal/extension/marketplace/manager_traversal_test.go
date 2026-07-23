@@ -81,7 +81,7 @@ func TestManager_UninstallExtension_HookPathTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	err = mgr.UninstallExtension(ctx, "cat_valid")
 	if err != nil {
 		t.Fatal(err)

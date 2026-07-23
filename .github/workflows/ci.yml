@@ -156,8 +156,49 @@ jobs:
           SKIP_RUST_BUILD: 1
         run: make build
 
+  rust-lint-deny:
+    needs: [rust-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache cargo-deny
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/substrate"
+          cache-on-failure: true
+          shared-key: "polaris-x86_64-unknown-linux-gnu"
+          save-if: false
+      - name: Install cargo-deny
+        run: |
+          if ! command -v cargo-deny >/dev/null 2>&1; then
+            cargo install cargo-deny --locked
+          fi
+      - name: Run rust-lint and rust-deny
+        run: |
+          make rust-lint
+          make rust-deny
+
+  deadcode:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Create mock web dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: Run deadcode
+        run: make deadcode
+
   eval-gate:
-    needs: [lint, test, build, rust, docs-toc]
+    needs: [lint, test, build, rust, docs-toc, rust-lint-deny, deadcode]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

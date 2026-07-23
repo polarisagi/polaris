@@ -20,6 +20,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -86,11 +87,12 @@ type SysAdminHandler struct {
 
 	Embedder search.Embedder
 
-	Insights *insightsadmin.InsightsAdmin
-	Cron     *cronadmin.CronAdmin
-	Workflow *workflowadmin.WorkflowAdmin
-	Channels *channelsadmin.ChannelsAdmin
-	MCP      *mcpadmin.MCPAdmin
+	Insights   *insightsadmin.InsightsAdmin
+	Cron       *cronadmin.CronAdmin
+	KillSwitch *security.KillSwitch
+	Workflow   *workflowadmin.WorkflowAdmin
+	Channels   *channelsadmin.ChannelsAdmin
+	MCP        *mcpadmin.MCPAdmin
 	// Eval 与其余子结构体不同：不在 NewSysAdminHandler 内构造（EvalStore/
 	// MetaEvalSentinel 来自 AgentBundle，boot_agent.go 晚于本构造函数运行），
 	// 采用与 ToolExec/InstallMgr 相同的"先 nil、Server.SetEvalAdmin 后置回填"模式。
@@ -127,6 +129,7 @@ type Dependencies struct {
 	ParallelExec   *orchestrator.ParallelExecutor
 	SequentialExec *orchestrator.SequentialExecutor
 	SwarmCoord     *orchestrator.SwarmCoordinator
+	KillSwitch     *security.KillSwitch
 	ChannelMgr     interface {
 		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
@@ -172,6 +175,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		SequentialExec:    deps.SequentialExec,
 		SwarmCoord:        deps.SwarmCoord,
 		ChannelMgr:        deps.ChannelMgr,
+		KillSwitch:        deps.KillSwitch,
 		StreamIdleTimeout: deps.StreamIdleTimeout,
 		Insights:          insightsadmin.NewInsightsAdmin(deps.DB),
 		// Store/Sentinel 均先 nil 构造（此时 AgentBundle 尚未构建），Server.SetEvalAdmin

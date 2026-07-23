@@ -25,6 +25,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -76,6 +77,7 @@ type Server struct {
 	skillSignKey   []byte
 
 	updater *updater.Manager // OTA 自更新管理器（可为 nil）
+	ks      *security.KillSwitch // [B1] KillSwitch
 
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
 	soulMDContent       string                // ~/.polarisagi/polaris/config/SOUL.md 内容
@@ -225,6 +227,15 @@ func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
 func (s *Server) SetEmbeddingIndexer(idx *plugin.EmbeddingIndexer) {
 	if s.pluginHandler != nil {
 		s.pluginHandler.EmbeddingIndexer = idx
+	}
+}
+
+// SetKillSwitch removed SetEvalRunner to fix duplicate and undefined method error
+
+func (s *Server) SetKillSwitch(ks *security.KillSwitch) {
+	s.ks = ks
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.KillSwitch = ks
 	}
 }
 

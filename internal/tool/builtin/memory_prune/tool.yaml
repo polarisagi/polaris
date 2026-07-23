@@ -1,0 +1,6 @@
+name: "memory_prune"
+description: "主动遗忘（过期）记忆。允许 Agent 在确认某些记忆实体不再准确或用户明确要求遗忘时，将其状态标记为 expired，以避免未来检索命中。"
+capabilities: ["memory_prune"]
+category: "cognitive"
+safety_tier: "restricted"
+schema_file: "schema.json"

@@ -113,7 +113,9 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		clientIP := extractIP(r)
 		isAPI := strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/healthz"
 
-		if metrics.GlobalKillswitchStage.Load() >= 3 && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metrics" {
+		sealedException := r.URL.Path == "/_admin/unseal"
+		if metrics.GlobalKillswitchStage.Load() >= 3 && !sealedException &&
+			r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metrics" {
 			w.Header().Set("Retry-After", "3600")
 			http.Error(w, "503 Service Unavailable: emergency stop active", http.StatusServiceUnavailable)
 			return

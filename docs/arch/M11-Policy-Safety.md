@@ -311,10 +311,9 @@ executePause: 200ms timeout → toolRegistry.StopAllPending
 
 `substrate.IsFullStopFilePresent(dataDir)` 在 `main.go` 数据目录初始化完成后、任何服务启动前被调用。检测到 `dataDir/.fullstop` 存在时立即以错误退出，阻止系统以封印态重启并继续执行。
 
-要从 FullStop 恢复：
-1. 人工审查 `.fullstop` 文件内记录的触发原因和时间戳
-2. 确认安全后手动删除 `dataDir/.fullstop`
-3. 重新启动进程
+要从 FullStop 恢复（进程内活恢复）：
+1. 人工审查触发原因和审计日志。
+2. 调用 `POST /_admin/unseal`（携带有效 API Key 及 reason）。系统将自动删除 `.fullstop` 文件并恢复运行状态。
 
 封印态持久文件的内容为 JSON：`{"timestamp": <unix>, "reason": "...", "actor": "..."}`
 
@@ -325,6 +324,7 @@ executePause: 200ms timeout → toolRegistry.StopAllPending
 | Ctrl+C x3 (3s 窗口) | SIGINT 计数器, 窗口重置归零, >=3 → Full Stop | <1s |
 | ~/.polarisagi/polaris/KILLSWITCH 文件 | fsnotify 监视, 存在 → Full Stop | <500ms |
 | POST /_admin/kill | localhost-only (127.0.0.1/::1), 无认证 | <100ms |
+| POST /_admin/unseal | 强制鉴权 (API Key) | <100ms |
 | [TokenBurnRate] > 10x baseline 30s | 滑动窗口背压熔断 | ~30s |
 | Global DoS Guard (LLM10) | 全局信号量饱和 / Session Bucket 耗尽 | 限流或 Stage 1 |
 

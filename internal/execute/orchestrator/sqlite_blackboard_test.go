@@ -35,6 +35,8 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			error TEXT,
 			namespace TEXT,
 			intent BLOB,
+			trace_id TEXT,
+			span_id TEXT,
 			created_at DATETIME,
 			updated_at DATETIME
 		);

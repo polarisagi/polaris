@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/trace"
 
 	"context"
 	"encoding/json"
@@ -143,7 +144,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 						// ProcessHandle 仅作"已确认可用"令牌，实际执行委托给 SkillExecutor，
 						// 由 M7 ScriptSkillExecutor 完成脚本加载和沙箱执行。
 						runCtx, runCancel := context.WithTimeout(ctx, 200*time.Millisecond)
-						output, runErr := a.skillExecutor.ExecuteSkill(runCtx, handle.SkillID, []byte(a.sCtx.RawIntentTS.Content()))
+						output, runErr := a.skillExecutor.ExecuteSkill(runCtx, handle.SkillID, []byte(a.sCtx.RawIntentTS.UnsafeContent()))
 						runCancel() // 立即释放：超时上下文只覆盖 ExecuteSkill 调用，不扩散到后续异步 goroutine
 						if runErr == nil && len(output) > 0 {
 							scriptResult := string(output)
@@ -152,8 +153,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 							if a.memory != nil {
 								localIntent := a.sCtx.RawIntentTS.MarshalJSONString()
 								localResult := scriptResult
-								concurrent.SafeGo(ctx, "agent.episodic_memory_write", func(ctx context.Context) {
-									a.writeEpisodicWithExtract(ctx, types.Event{
+								concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.episodic_memory_write", func(gctx context.Context) {
+									a.writeEpisodicWithExtract(gctx, types.Event{
 										ID:        uuid.New().String(),
 										Type:      types.EventIntent,
 										Status:    types.StatusDone,
@@ -173,8 +174,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				nextState, err = llmEff.OnSuccess(protocol.StateContext{}, []byte(fastResult))
 				if a.memory != nil {
 					localIntent := a.sCtx.RawIntentTS.MarshalJSONString()
-					concurrent.SafeGo(ctx, "agent.episodic_memory_write", func(ctx context.Context) {
-						a.writeEpisodicWithExtract(ctx, types.Event{
+					concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.episodic_memory_write", func(gctx context.Context) {
+						a.writeEpisodicWithExtract(gctx, types.Event{
 							ID:        uuid.New().String(),
 							Type:      types.EventIntent,
 							Status:    types.StatusDone,
@@ -229,8 +230,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				err = nil
 				if a.memory != nil {
 					localIntent := a.sCtx.RawIntentTS.MarshalJSONString()
-					concurrent.SafeGo(ctx, "agent.episodic_memory_write", func(ctx context.Context) {
-						a.writeEpisodicWithExtract(ctx, types.Event{
+					concurrent.SafeGo(trace.DetachedWithLink(ctx), "agent.episodic_memory_write", func(gctx context.Context) {
+						a.writeEpisodicWithExtract(gctx, types.Event{
 							ID:        uuid.New().String(),
 							Type:      types.EventIntent,
 							Status:    types.StatusDone,

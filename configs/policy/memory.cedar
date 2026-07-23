@@ -21,6 +21,13 @@ permit (
 )
 when { resource.source_type == "user_stated" };
 
+// memory_prune: 允许 Agent 主动遗忘内容
+permit (
+    principal is Agent,
+    action == Action::"tool_execute",
+    resource == Tool::"memory_prune"
+);
+
 // memory_write with TaintHigh: forbid（防止高污点内容持久化到语义记忆）
 forbid (
     principal is Agent,

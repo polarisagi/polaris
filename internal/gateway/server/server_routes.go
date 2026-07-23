@@ -22,6 +22,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
 	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
 
+	// KillSwitch (M11) 管理端点
+	mux.HandleFunc("POST /_admin/kill", s.sysadminHandler.HandleKill)
+	mux.HandleFunc("POST /_admin/unseal", s.sysadminHandler.HandleUnseal)
+
 	// 厂商字典 API（只读，内置种子）
 	mux.HandleFunc("GET /v1/catalog/providers", s.providerHandler.HandleListCatalogProviders)
 

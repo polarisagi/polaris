@@ -12,10 +12,8 @@ StepContext struct {
 	SchemaPassed bool
 }
 
-type
-
 // TaskSnapshot Task 状态只读快照（避免拷贝含原子字段的 TaskEntry）。
-TaskSnapshot struct {
+type TaskSnapshot struct {
 	ID     string
 	Status TaskStatus
 	Result []byte
@@ -31,6 +29,10 @@ TaskSnapshot struct {
 	// 中心化按类型下推）需要在 ClaimTask 之前先用本字段判断任务是否属于自己的
 	// 能力类型，避免误认领其他能力类型的任务（2026-07-12 workflow 集成补齐）。
 	Type string
+
+	// TraceID / SpanID 用于跨 goroutine trace 延续 (A16)
+	TraceID string
+	SpanID  string
 }
 
 type
@@ -116,6 +118,8 @@ type TaskEntry struct {
 
 	// ── Token 记账字段（Gap-A, HE-Rule-1）────────────────────────────────────
 	// Worker.tryClaimAndExecute 完成后调用 Blackboard.UpdateTaskTokens 写入。
+	TraceID         string
+	SpanID          string
 	TokensInput     int
 	TokensOutput    int
 	TokensCacheRead int

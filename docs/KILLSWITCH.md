@@ -27,7 +27,7 @@
 
 ## 恢复
 
-重启 polaris。会话从事件日志重放中恢复（防崩溃，无需检查点）。
+发送 `POST /_admin/unseal`（需 `Authorization: Bearer <POLARIS_API_KEY>`，请求体含 `reason` 字段）触发进程内恢复，无需重启进程；恢复动作会写入审计日志。
 
 ## 不可侵犯
 
