@@ -41,14 +41,14 @@ func NewBudgetManager() *BudgetManager {
 }
 
 // ConsumeTokens 消耗指定数量的 Tokens，若超出 Session 级预算则报错。
-func (bm *BudgetManager) ConsumeTokens(tokens int) error {
+func (bm *BudgetManager) ConsumeTokens(ctx context.Context, tokens int) error {
 	bm.mu.Lock()
 	bm.usedTokens += tokens
 	used := bm.usedTokens
 	budget := bm.sessionTokenBudget
 	bm.mu.Unlock()
 	// HE-1: Token_Burn_Rate 一等公民上报
-	trace.RecordBudgetTokens(context.Background(), tokens)
+	trace.RecordBudgetTokens(ctx, tokens)
 	if used > budget {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("session token budget exceeded: %d > %d", used, budget))
 	}

@@ -134,6 +134,16 @@ func SpanFromContext(ctx context.Context) *Span {
 	return s
 }
 
+// DetachedWithLink creates a new context but carries over the trace span from the parent context.
+func DetachedWithLink(parent context.Context) context.Context {
+	span := SpanFromContext(parent)
+	ctx := context.Background()
+	if span != nil {
+		return context.WithValue(ctx, ctxKey{name: "observability_span"}, span)
+	}
+	return ctx
+}
+
 // spanIDCounter 防止同纳秒内生成重复 SpanID/TraceID。
 var spanIDCounter atomic.Int64
 

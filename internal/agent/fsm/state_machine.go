@@ -10,6 +10,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -314,7 +315,7 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 				copy(toRequeue, sm.stashedTriggers)
 				sm.stashedTriggers = sm.stashedTriggers[:0]
 				if sm.intentDispatcher != nil {
-					concurrent.SafeGo(context.Background(), "fsm.requeue_stashed", func(ctx context.Context) {
+					concurrent.SafeGo(trace.DetachedWithLink(ctx), "fsm.requeue_stashed", func(ctx context.Context) {
 						for _, tr := range toRequeue {
 							sm.intentDispatcher(tr)
 						}
@@ -386,7 +387,7 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 			slog.Debug("kernel: returning deterministic effect for extension activation", "goal", goalToActivate)
 
 			if sm.intentDispatcher != nil {
-				concurrent.SafeGo(context.Background(), "fsm.replan_extension_activation", func(actCtx context.Context) {
+				concurrent.SafeGo(trace.DetachedWithLink(ctx), "fsm.replan_extension_activation", func(actCtx context.Context) {
 					actCtx, cancel := context.WithTimeout(actCtx, sm.replanExtActivationTimeout)
 					defer cancel()
 
