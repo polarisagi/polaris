@@ -97,6 +97,18 @@ func (m *MockStore) DB() *sql.DB {
 	return m.db
 }
 
+func (m *MockStore) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return m.db.QueryContext(ctx, query, args...)
+}
+
+func (m *MockStore) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return m.db.ExecContext(ctx, query, args...)
+}
+
+func (m *MockStore) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return m.db.QueryRowContext(ctx, query, args...)
+}
+
 func (m *MockStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 	if v, ok := m.data[string(key)]; ok {
 		return v, nil
