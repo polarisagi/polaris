@@ -67,7 +67,7 @@ func newTestEnvelope(t *testing.T) *sandbox.ExecEnvelope {
 	t.Helper()
 	containerSbx := sandbox.NewContainerSandbox("", "linux", 0, echoRunner{})
 	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), containerSbx, nil, "linux", 2)
-	return sandbox.NewExecEnvelope(allowAllPolicyGate{}, router, 0, "linux", nil)
+	return sandbox.NewExecEnvelope(allowAllPolicyGate{}, router, 2, "linux", nil)
 }
 
 // ── Registry ──────────────────────────────────────────────────────────────────

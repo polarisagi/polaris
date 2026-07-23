@@ -14,8 +14,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func init() { Register(&WhatsappAdapter{}) }
-
 type WhatsappAdapter struct{}
 
 func (a *WhatsappAdapter) Type() string { return "whatsapp" }

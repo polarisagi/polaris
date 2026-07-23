@@ -448,8 +448,6 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 	return effects, nil
 }
 
-
-
 func (sm *StateMachine) activateExtWithRetry(ctx context.Context, goal string) ([]ExtActivatedHint, bool) {
 	const maxRetries = 2
 	var hints []ExtActivatedHint

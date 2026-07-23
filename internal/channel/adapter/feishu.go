@@ -246,8 +246,6 @@ func FeishuVerifyWebhookSignature(timestamp, nonce, encryptKey, rawBody, signatu
 	return computed == signature
 }
 
-func init() { Register(&FeishuAdapter{}) }
-
 type FeishuAdapter struct{}
 
 func (a *FeishuAdapter) Type() string { return "feishu" }

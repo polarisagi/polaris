@@ -2,8 +2,9 @@ package adapter
 
 import (
 	"context"
-	"github.com/polarisagi/polaris/internal/protocol"
 	"net/http"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // Host 是适配器执行 Send/StartPoller 所需的宿主能力（由 channel.Manager 实现）。
@@ -24,15 +25,52 @@ type Adapter interface {
 	StartPoller(host Host, channelID string, cfg map[string]any) (started bool)
 }
 
-var registry = map[string]Adapter{}
-
-// Register 在 init() 注册适配器；重复 Type 直接 panic（编译期即暴露冲突）。
-func Register(a Adapter) {
-	if _, dup := registry[a.Type()]; dup {
-		panic("channel adapter duplicate type: " + a.Type())
+//nolint:gocyclo // Registry factory pattern requires high complexity
+func GetAdapter(channelType string) (Adapter, bool) {
+	switch channelType {
+	case "dingtalk":
+		return &DingTalkAdapter{}, true
+	case "discord":
+		return &DiscordAdapter{}, true
+	case "email":
+		return &EmailAdapter{}, true
+	case "feishu":
+		return &FeishuAdapter{}, true
+	case "homeassistant":
+		return &HomeAssistantAdapter{}, true
+	case "line":
+		return &LineAdapter{}, true
+	case "matrix":
+		return &MatrixAdapter{}, true
+	case "mattermost":
+		return &MattermostAdapter{}, true
+	case "qqbot":
+		return &QQBotAdapter{}, true
+	case "signal":
+		return &SignalAdapter{}, true
+	case "slack":
+		return &SlackAdapter{}, true
+	case "sms":
+		return &SmsAdapter{}, true
+	case "teams":
+		return &TeamsAdapter{}, true
+	case "telegram":
+		return &TelegramAdapter{}, true
+	case "webhook":
+		return &WebhookAdapter{}, true
+	case "wecom":
+		return &WecomAdapter{}, true
+	case "whatsapp":
+		return &WhatsappAdapter{}, true
+	default:
+		return nil, false
 	}
-	registry[a.Type()] = a
 }
 
-func Lookup(channelType string) (Adapter, bool) { a, ok := registry[channelType]; return a, ok }
-func Registered() map[string]Adapter            { return registry }
+func Registered() []string {
+	return []string{
+		"dingtalk", "discord", "email", "feishu", "homeassistant", "line",
+		"matrix", "mattermost", "qqbot", "signal", "slack", "sms", "teams",
+		"telegram", "webhook", "wecom", "whatsapp",
+	}
+}

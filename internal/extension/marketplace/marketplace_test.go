@@ -3,8 +3,8 @@ package marketplace
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +13,12 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
 
 func TestMCPMarketplaceClient_Search(t *testing.T) {
 	mockResp := mcpRegistryResponse{
@@ -31,19 +37,23 @@ func TestMCPMarketplaceClient_Search(t *testing.T) {
 		},
 	}
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/servers" {
-			t.Errorf("expected /servers, got %s", r.URL.Path)
-		}
-		if r.URL.Query().Get("search") != "test" {
-			t.Errorf("expected query 'test', got %s", r.URL.Query().Get("search"))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResp)
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			if req.URL.Path != "/servers" {
+				t.Errorf("expected /servers, got %s", req.URL.Path)
+			}
+			if req.URL.Query().Get("search") != "test" {
+				t.Errorf("expected query 'test', got %s", req.URL.Query().Get("search"))
+			}
+			b, _ := json.Marshal(mockResp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(b))),
+			}
+		}),
+	}
 
-	client := NewMCPMarketplaceClient(ts.URL, "", &http.Client{})
+	client := NewMCPMarketplaceClient("http://dummy", "", clientHTTP)
 	entries, err := client.Search(context.Background(), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -59,12 +69,16 @@ func TestMCPMarketplaceClient_Search(t *testing.T) {
 }
 
 func TestMCPMarketplaceClient_Search_Error(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
-	client := NewMCPMarketplaceClient(ts.URL, "", &http.Client{})
+	client := NewMCPMarketplaceClient("http://dummy", "", clientHTTP)
 	_, err := client.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("expected error")
@@ -139,19 +153,23 @@ func TestMCPMarketplaceClient_Install_HTTP(t *testing.T) {
 }
 
 func TestMCPMarketplaceClient_Install_Download(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("binary data"))
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("binary data")),
+			}
+		}),
+	}
 
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, &http.Client{})
+	client := NewMCPMarketplaceClient("", dir, clientHTTP)
 
 	pkg := protocol.RegistryEntry{
 		ID:      "test/download",
 		Name:    "test_download",
 		Command: "test_bin",
-		URL:     ts.URL, // will trigger download
+		URL:     "http://dummy/download", // will trigger download
 	}
 
 	outDir, err := client.Install(context.Background(), pkg)
@@ -170,23 +188,29 @@ func TestMCPMarketplaceClient_Install_Download(t *testing.T) {
 }
 
 func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/checksums.txt" {
-			w.Write([]byte("9cb63cb779e8c571db3199b783a36cc43cd9e7c076beeb496c39e9cc06196dc5  test_bin\n"))
-			return
-		}
-		w.Write([]byte("binary data"))
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			if req.URL.Path == "/checksums.txt" {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("9cb63cb779e8c571db3199b783a36cc43cd9e7c076beeb496c39e9cc06196dc5  test_bin\n")),
+				}
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("binary data")),
+			}
+		}),
+	}
 
-	client := NewMCPMarketplaceClient("", t.TempDir(), &http.Client{})
+	client := NewMCPMarketplaceClient("", t.TempDir(), clientHTTP)
 
 	// 1. Checksum matched
 	pkg1 := protocol.RegistryEntry{
 		ID:        "test/checksum_pass",
 		Name:      "test_pass",
 		Command:   "test_bin",
-		URL:       ts.URL + "/bin",
+		URL:       "http://dummy/bin",
 		Checksum:  "9cb63cb779e8c571db3199b783a36cc43cd9e7c076beeb496c39e9cc06196dc5",
 		TrustTier: int(types.TrustOfficial),
 	}
@@ -200,7 +224,7 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 		ID:        "test/checksum_fail",
 		Name:      "test_fail",
 		Command:   "test_bin",
-		URL:       ts.URL + "/bin",
+		URL:       "http://dummy/bin",
 		Checksum:  "badhex",
 		TrustTier: int(types.TrustOfficial),
 	}
@@ -217,7 +241,7 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 		ID:        "test/checksum_missing_official",
 		Name:      "test_official",
 		Command:   "test_bin",
-		URL:       ts.URL + "/bin",
+		URL:       "http://dummy/bin",
 		TrustTier: int(types.TrustOfficial),
 	}
 	_, err = client.Install(context.Background(), pkg3)
@@ -230,7 +254,7 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 		ID:        "test/checksum_missing_community",
 		Name:      "test_community",
 		Command:   "test_bin",
-		URL:       ts.URL + "/bin",
+		URL:       "http://dummy/bin",
 		TrustTier: int(types.TrustCommunity),
 	}
 	_, err = client.Install(context.Background(), pkg4)
@@ -243,8 +267,8 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 		ID:          "test/checksum_url_pass",
 		Name:        "test_url",
 		Command:     "test_bin",
-		URL:         ts.URL + "/bin",
-		ChecksumURL: ts.URL + "/checksums.txt",
+		URL:         "http://dummy/bin",
+		ChecksumURL: "http://dummy/checksums.txt",
 		TrustTier:   int(types.TrustOfficial),
 	}
 	_, err = client.Install(context.Background(), pkg5)

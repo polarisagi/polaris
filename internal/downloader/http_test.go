@@ -2,31 +2,36 @@ package downloader
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestDownloadChunk(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Range") != "" {
-			w.WriteHeader(http.StatusPartialContent)
-			w.Write([]byte("chunk"))
-		} else {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("full"))
-		}
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			if req.Header.Get("Range") != "" {
+				return &http.Response{
+					StatusCode: http.StatusPartialContent,
+					Body:       io.NopCloser(strings.NewReader("chunk")),
+				}
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("full")),
+			}
+		}),
+	}
 
 	dir := t.TempDir()
 	part := filepath.Join(dir, "test.part")
 
 	// Full download
-	err := downloadChunk(context.Background(), ts.Client(), ts.URL, part, 0)
+	err := downloadChunk(context.Background(), clientHTTP, "http://dummy", part, 0)
 	if err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
@@ -36,7 +41,7 @@ func TestDownloadChunk(t *testing.T) {
 	}
 
 	// Range download
-	err = downloadChunk(context.Background(), ts.Client(), ts.URL, part, 4)
+	err = downloadChunk(context.Background(), clientHTTP, "http://dummy", part, 4)
 	if err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
@@ -47,18 +52,21 @@ func TestDownloadChunk(t *testing.T) {
 	}
 
 	// Test nil client error
-	err = downloadChunk(context.Background(), nil, ts.URL, part, 0)
+	err = downloadChunk(context.Background(), nil, "http://dummy", part, 0)
 	if err == nil {
 		t.Errorf("expected error for nil client")
 	}
 }
 
 func TestDownloadFile(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("data"))
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("data")),
+			}
+		}),
+	}
 
 	// 直接操作 proxyState 单例字段，绕过 probeOnce 触发探测。
 	s := getProxy()
@@ -69,7 +77,7 @@ func TestDownloadFile(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "test.txt")
 
-	err := DownloadFile(context.Background(), ts.Client(), ts.URL, dest)
+	err := DownloadFile(context.Background(), clientHTTP, "http://dummy", dest)
 	if err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
@@ -79,20 +87,23 @@ func TestDownloadFile(t *testing.T) {
 	}
 
 	// Idempotent
-	err = DownloadFile(context.Background(), ts.Client(), ts.URL, dest)
+	err = DownloadFile(context.Background(), clientHTTP, "http://dummy", dest)
 	if err != nil {
 		t.Fatalf("expected nil err on retry, got %v", err)
 	}
 }
 
 func TestDownloadExtract(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("dummy archive"))
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("dummy archive")),
+			}
+		}),
+	}
 
-	err := downloadExtract(context.Background(), ts.Client(), ts.URL, func(path string) error {
+	err := downloadExtract(context.Background(), clientHTTP, "http://dummy", func(path string) error {
 		return nil // mock success
 	})
 	if err != nil {

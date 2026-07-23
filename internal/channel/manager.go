@@ -72,7 +72,7 @@ func (m *Manager) StopAll() {
 
 // Start 按平台类型分发 poller 启动。
 func (m *Manager) Start(channelID, channelType string, cfg map[string]any) { //nolint:gocyclo
-	if a, ok := cadapter.Lookup(channelType); ok {
+	if a, ok := cadapter.GetAdapter(channelType); ok {
 		a.StartPoller(m, channelID, cfg)
 		return
 	}

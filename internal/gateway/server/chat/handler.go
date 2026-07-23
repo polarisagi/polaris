@@ -25,6 +25,7 @@ type SessionCompressor interface {
 type ChatHandler struct {
 	DB            protocol.SQLQuerier
 	ChatRepo      protocol.ChatRepository
+	ChannelRepo   repo.ChannelRepository
 	ProviderRepo  protocol.ProviderRepository
 	SystemRepo    repo.SystemRepository
 	AgentPool     protocol.AgentPool
@@ -99,6 +100,7 @@ type ChatHandler struct {
 type Dependencies struct {
 	DB                    protocol.SQLQuerier
 	ChatRepo              protocol.ChatRepository
+	ChannelRepo           repo.ChannelRepository
 	ProviderRepo          protocol.ProviderRepository
 	SystemRepo            repo.SystemRepository
 	AgentPool             protocol.AgentPool
@@ -141,6 +143,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 	return &ChatHandler{
 		DB:                    deps.DB,
 		ChatRepo:              deps.ChatRepo,
+		ChannelRepo:           deps.ChannelRepo,
 		ProviderRepo:          deps.ProviderRepo,
 		SystemRepo:            deps.SystemRepo,
 		AgentPool:             deps.AgentPool,

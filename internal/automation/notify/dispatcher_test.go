@@ -3,8 +3,9 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -27,23 +28,30 @@ func (m *mockPrefReader) GetPreference(_ context.Context, key string) (string, e
 	return m.values[key], nil
 }
 
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
+
 func TestDispatcher_Handle_DeliversToWebhook(t *testing.T) {
 	var received NotificationEvent
-	done := make(chan struct{})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer close(done)
-		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-			t.Errorf("decode webhook body failed: %v", err)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
 
 	prefs := newMockPrefReader(map[string]string{
-		PrefWebhookURL: srv.URL,
+		PrefWebhookURL: "http://dummy",
 	})
 	d := NewDispatcher(prefs)
+	d.httpClient = &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			if err := json.NewDecoder(req.Body).Decode(&received); err != nil {
+				t.Errorf("decode webhook body failed: %v", err)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
 	ev := NotificationEvent{
 		TaskID:   "task-1",
@@ -60,7 +68,6 @@ func TestDispatcher_Handle_DeliversToWebhook(t *testing.T) {
 		t.Fatalf("Handle returned error: %v", err)
 	}
 
-	<-done
 	if received.TaskID != "task-1" || !received.Success {
 		t.Errorf("webhook received unexpected payload: %+v", received)
 	}
@@ -78,17 +85,20 @@ func TestDispatcher_Handle_NoWebhookConfigured_Skips(t *testing.T) {
 
 func TestDispatcher_Handle_Disabled_Skips(t *testing.T) {
 	called := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
 	prefs := newMockPrefReader(map[string]string{
-		PrefWebhookURL: srv.URL,
+		PrefWebhookURL: "http://dummy",
 		PrefEnabled:    "false",
 	})
 	d := NewDispatcher(prefs)
+	d.httpClient = &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			called = true
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 	ev := NotificationEvent{TaskID: "task-3"}
 	payload, _ := json.Marshal(ev)
 
@@ -101,13 +111,16 @@ func TestDispatcher_Handle_Disabled_Skips(t *testing.T) {
 }
 
 func TestDispatcher_Handle_WebhookErrorStatus_ReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	prefs := newMockPrefReader(map[string]string{PrefWebhookURL: srv.URL})
+	prefs := newMockPrefReader(map[string]string{PrefWebhookURL: "http://dummy"})
 	d := NewDispatcher(prefs)
+	d.httpClient = &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 	ev := NotificationEvent{TaskID: "task-4"}
 	payload, _ := json.Marshal(ev)
 

@@ -41,6 +41,8 @@ type SysAdminHandler struct {
 	SystemRepo     repo.SystemRepository
 	BudgetRepo     repo.BudgetRepository
 	ChannelRepo    repo.ChannelRepository
+	EventRepo      repo.EventRepository
+	CronRepo       protocol.CronRepository
 	WorkflowRepo   repo.WorkflowRepository
 	Agent          protocol.AgentController
 	MCPMgr         MCPManager
@@ -100,6 +102,8 @@ type Dependencies struct {
 	SystemRepo     repo.SystemRepository
 	BudgetRepo     repo.BudgetRepository
 	ChannelRepo    repo.ChannelRepository
+	CronRepo       protocol.CronRepository
+	EventRepo      repo.EventRepository
 	WorkflowRepo   repo.WorkflowRepository
 	AgentPool      protocol.AgentPool
 	MCPMgr         MCPManager
@@ -144,6 +148,8 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		SystemRepo:        deps.SystemRepo,
 		BudgetRepo:        deps.BudgetRepo,
 		ChannelRepo:       deps.ChannelRepo,
+		EventRepo:         deps.EventRepo,
+		CronRepo:          deps.CronRepo,
 		WorkflowRepo:      deps.WorkflowRepo,
 		MCPMgr:            deps.MCPMgr,
 		Hooks:             deps.Hooks,
@@ -198,6 +204,9 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.DB,
 		deps.AgentPool,
 		deps.AutomationRepo,
+		deps.ChannelRepo,
+		deps.EventRepo,
+		deps.CronRepo,
 		deps.Chat,
 		deps.ChannelMgr,
 		deps.HITLGateway,

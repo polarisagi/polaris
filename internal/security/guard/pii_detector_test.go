@@ -1,9 +1,10 @@
 package guard
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -38,12 +39,17 @@ func TestPIIDetector(t *testing.T) {
 	}
 
 	// Test Presidio
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[{"start": 0, "end": 2, "entity_type": "PERSON", "score": 0.8}]`))
-	}))
-	defer ts.Close()
+	client := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString(`[{"start": 0, "end": 2, "entity_type": "PERSON", "score": 0.8}]`)),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
-	dP := NewPIIDetectorWithPresidio(ts.URL, ts.Client())
+	dP := NewPIIDetectorWithPresidio("http://dummy", client)
 	matchesP, err := dP.Detect(ctx, text)
 	if err != nil {
 		t.Fatal(err)
@@ -51,4 +57,10 @@ func TestPIIDetector(t *testing.T) {
 	if len(matchesP) != 4 {
 		t.Fatalf("expected 4 matches with Presidio, got %d", len(matchesP))
 	}
+}
+
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
 }

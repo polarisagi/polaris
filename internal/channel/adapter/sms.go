@@ -51,8 +51,6 @@ func TwilioSendSMS(ctx context.Context, client *http.Client, accountSID, authTok
 	return nil
 }
 
-func init() { Register(&SmsAdapter{}) }
-
 type SmsAdapter struct{}
 
 func (a *SmsAdapter) Type() string { return "sms" }

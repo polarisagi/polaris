@@ -131,8 +131,6 @@ type signalGroupInfo struct {
 	GroupID string `json:"groupId"`
 }
 
-func init() { Register(&SignalAdapter{}) }
-
 type SignalAdapter struct{}
 
 func (a *SignalAdapter) Type() string { return "signal" }

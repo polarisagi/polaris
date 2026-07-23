@@ -230,13 +230,10 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 		if chID, ok := strings.CutPrefix(a.ResultAction, "channel:"); ok {
 			// 向 Channel 发送消息：原 channelType="" 导致 SendReply 走 default 分支静默丢弃。
 			// 须先从 DB 读取 channel 的 type 和 config_json，才能正确分发。
-			var chType, cfgJSON string
-			if qErr := ca.DB.QueryRowContext(bgCtx,
-				`SELECT type, config_json FROM channels WHERE id=?`, chID).
-				Scan(&chType, &cfgJSON); qErr == nil {
+			if chRow, qErr := ca.ChannelRepo.GetChannel(bgCtx, chID); qErr == nil && chRow != nil {
 				var cfg map[string]any
-				_ = json.Unmarshal([]byte(cfgJSON), &cfg)
-				_ = ca.ChannelMgr.SendReply(bgCtx, chType, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply)
+				_ = json.Unmarshal([]byte(chRow.ConfigJSON), &cfg)
+				_ = ca.ChannelMgr.SendReply(bgCtx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply)
 			} else {
 				slog.Warn("automation: channel not found for result_action",
 					"automation_id", a.ID, "channel_id", chID, "err", qErr)

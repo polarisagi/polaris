@@ -260,8 +260,6 @@ func DiscordSendMessage(ctx context.Context, client *http.Client, token, channel
 	return nil
 }
 
-func init() { Register(&DiscordAdapter{}) }
-
 type DiscordAdapter struct{}
 
 func (a *DiscordAdapter) Type() string { return "discord" }

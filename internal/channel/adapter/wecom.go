@@ -164,8 +164,6 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 	}
 }
 
-func init() { Register(&WecomAdapter{}) }
-
 type WecomAdapter struct {
 	wecomSends sync.Map
 }

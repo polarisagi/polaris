@@ -61,7 +61,7 @@ func TestHandleListSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &ChatHandler{DataDir: t.TempDir(), DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
+	h := &ChatHandler{DataDir: t.TempDir(), DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db), ChannelRepo: repo.NewSQLiteChannelRepository(db)}
 
 	req := httptest.NewRequest("GET", "/api/v1/sessions", nil)
 	w := httptest.NewRecorder()

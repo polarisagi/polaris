@@ -172,8 +172,6 @@ func jsonStr(m map[string]json.RawMessage, key string) string {
 	return ""
 }
 
-func init() { Register(&SlackAdapter{}) }
-
 type SlackAdapter struct{}
 
 func (a *SlackAdapter) Type() string { return "slack" }

@@ -1,10 +1,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,27 +13,32 @@ import (
 )
 
 func TestRemoteSandbox_RunSuccess(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("expected Bearer test-token, got %s", r.Header.Get("Authorization"))
-		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("expected application/json, got %s", r.Header.Get("Content-Type"))
-		}
-		if r.URL.Path != "/execute" {
-			t.Errorf("expected /execute, got %s", r.URL.Path)
-		}
+	client := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			if req.Header.Get("Authorization") != "Bearer test-token" {
+				t.Errorf("expected Bearer test-token, got %s", req.Header.Get("Authorization"))
+			}
+			if req.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("expected application/json, got %s", req.Header.Get("Content-Type"))
+			}
+			if req.URL.Path != "/execute" {
+				t.Errorf("expected /execute, got %s", req.URL.Path)
+			}
 
-		res := types.ToolResult{
-			Success: true,
-			Output:  []byte("remote output"),
-		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(res)
-	}))
-	defer ts.Close()
+			res := types.ToolResult{
+				Success: true,
+				Output:  []byte("remote output"),
+			}
+			b, _ := json.Marshal(res)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(b)),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
-	sandbox := NewRemoteSandbox(ts.URL, "test-token", 5, ts.Client())
+	sandbox := NewRemoteSandbox("http://dummy", "test-token", 5, client)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -54,13 +60,17 @@ func TestRemoteSandbox_RunSuccess(t *testing.T) {
 }
 
 func TestRemoteSandbox_RunHTTPError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal error"))
-	}))
-	defer ts.Close()
+	client := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(bytes.NewBufferString("internal error")),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
-	sandbox := NewRemoteSandbox(ts.URL, "", 1, ts.Client())
+	sandbox := NewRemoteSandbox("http://dummy", "", 1, client)
 	ctx := context.Background()
 
 	result, err := sandbox.Run(ctx, SandboxSpec{ToolName: "test"})
@@ -76,13 +86,17 @@ func TestRemoteSandbox_RunHTTPError(t *testing.T) {
 }
 
 func TestRemoteSandbox_RunJSONParseError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("invalid json"))
-	}))
-	defer ts.Close()
+	client := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString("invalid json")),
+				Header:     make(http.Header),
+			}
+		}),
+	}
 
-	sandbox := NewRemoteSandbox(ts.URL, "", 1, ts.Client())
+	sandbox := NewRemoteSandbox("http://dummy", "", 1, client)
 	ctx := context.Background()
 
 	_, err := sandbox.Run(ctx, SandboxSpec{ToolName: "test"})
@@ -127,4 +141,10 @@ func TestRemoteSandbox_RunRequestDoError(t *testing.T) {
 	if result.Error == "" {
 		t.Errorf("expected error message")
 	}
+}
+
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
 }

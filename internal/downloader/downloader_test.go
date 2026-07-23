@@ -8,7 +8,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,33 +71,44 @@ func TestGet_NilClient(t *testing.T) {
 	}
 }
 
-func TestGet_200OK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("body"))
-	}))
-	defer srv.Close()
+type mockRoundTripperFunc func(req *http.Request) *http.Response
 
-	resp, err := Get(context.Background(), srv.Client(), srv.URL)
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
+
+func TestGet_200OK(t *testing.T) {
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("hello world")),
+			}
+		}),
+	}
+	resp, err := Get(context.Background(), clientHTTP, "http://dummy")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if string(data) != "body" {
-		t.Errorf("body: got %q, want %q", data, "body")
+	content, _ := io.ReadAll(resp.Body)
+	if string(content) != "hello world" {
+		t.Errorf("got %q, want 'hello world'", content)
 	}
 }
 
-func TestGet_NonOKStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	_, err := Get(context.Background(), srv.Client(), srv.URL)
+func TestGet_404NotFound(t *testing.T) {
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("Not Found")),
+			}
+		}),
+	}
+	_, err := Get(context.Background(), clientHTTP, "http://dummy")
 	if err == nil {
-		t.Error("expected error for 404, got nil")
+		t.Fatalf("expected error on 404, got nil")
 	}
 }
 

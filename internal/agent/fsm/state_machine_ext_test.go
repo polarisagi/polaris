@@ -2,10 +2,10 @@ package fsm
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 type mockExtensionActivator struct {
@@ -34,7 +34,7 @@ func TestActivateExtWithRetry_Success(t *testing.T) {
 }
 
 func TestActivateExtWithRetry_Degraded(t *testing.T) {
-	activator := &mockExtensionActivator{err: errors.New("timeout")}
+	activator := &mockExtensionActivator{err: apperr.New(apperr.CodeInternal, "timeout")}
 	sm := NewStateMachine(&dummyContextBuilder{})
 	sm.activator = activator
 

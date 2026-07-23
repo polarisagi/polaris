@@ -29,7 +29,7 @@ func TestRegistry_RegisteredAdapters(t *testing.T) {
 	// A simple sanity check that some known adapters are registered.
 	knownAdapters := []string{"telegram", "discord", "webhook"}
 	for _, name := range knownAdapters {
-		if _, ok := cadapter.Lookup(name); !ok {
+		if _, ok := cadapter.GetAdapter(name); !ok {
 			t.Errorf("expected adapter %q to be registered, but it was not", name)
 		}
 	}

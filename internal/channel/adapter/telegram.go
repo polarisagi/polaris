@@ -130,8 +130,6 @@ func tgDeleteWebhook(ctx context.Context, client *http.Client, token string) {
 	resp.Body.Close()
 }
 
-func init() { Register(&TelegramAdapter{}) }
-
 type TelegramAdapter struct{}
 
 func (a *TelegramAdapter) Type() string { return "telegram" }

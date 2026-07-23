@@ -138,8 +138,6 @@ type mmPost struct {
 	Message   string `json:"message"`
 }
 
-func init() { Register(&MattermostAdapter{}) }
-
 type MattermostAdapter struct{}
 
 func (a *MattermostAdapter) Type() string { return "mattermost" }

@@ -2,22 +2,45 @@ package adapter
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
-type mockPollerHost struct{}
+type mockPollerHost struct {
+	mockClient *http.Client
+}
 
-func (m *mockPollerHost) HTTPClient() *http.Client { return http.DefaultClient }
+func (m *mockPollerHost) HTTPClient() *http.Client {
+	if m.mockClient != nil {
+		return m.mockClient
+	}
+	return http.DefaultClient
+}
 func (m *mockPollerHost) OnMessage(channelType, channelID string, cfg map[string]any, msg protocol.ChannelMessage) {
 }
 func (m *mockPollerHost) RegisterPoller(channelID string, cancel context.CancelFunc) {}
 func (m *mockPollerHost) SafeDialer() protocol.SafeDialer                            { return nil }
+
+type mockRoundTripperFunc func(req *http.Request) *http.Response
+
+func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
+}
+
 func TestPollers_Coverage(t *testing.T) {
-	host := &mockPollerHost{}
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
+	host := &mockPollerHost{mockClient: clientHTTP}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately to test shutdown logic
 
@@ -35,18 +58,18 @@ func TestPollers_Coverage(t *testing.T) {
 
 	// Also call sendMessage functions loosely to increase coverage
 	// They will return errors but will hit the code
-	_ = DiscordSendMessage(ctx, http.DefaultClient, "token", "ch", "text")
-	_, _ = FeishuGetTenantToken(ctx, http.DefaultClient, FeishuOpenBase, "id", "secret")
-	_ = FeishuSendMessage(ctx, http.DefaultClient, FeishuOpenBase, "token", "ch", "text")
-	_ = SlackSendMessage(ctx, http.DefaultClient, "token", "ch", "text")
-	_ = QqbotSendMessage(ctx, http.DefaultClient, "token", "msgType", "ch", "text", nil)
-	_ = DingTalkSendMessage(ctx, http.DefaultClient, "token", "text")
-	_ = MattermostSendMessage(ctx, http.DefaultClient, "url", "token", "ch", "text")
-	_ = TwilioSendSMS(ctx, http.DefaultClient, "sid", "auth", "from", "to", "text")
-	_, _ = TeamsGetAccessToken(ctx, http.DefaultClient, "tenant", "client", "secret")
-	_ = TeamsSendMessage(ctx, http.DefaultClient, "token", "ch", "text")
-	_ = SignalSendMessage(ctx, http.DefaultClient, "url", "account", "ch", "text")
-	_ = HaSendPersistentNotification(ctx, http.DefaultClient, "url", "token", "text")
+	_ = DiscordSendMessage(ctx, clientHTTP, "token", "ch", "text")
+	_, _ = FeishuGetTenantToken(ctx, clientHTTP, FeishuOpenBase, "id", "secret")
+	_ = FeishuSendMessage(ctx, clientHTTP, FeishuOpenBase, "token", "ch", "text")
+	_ = SlackSendMessage(ctx, clientHTTP, "token", "ch", "text")
+	_ = QqbotSendMessage(ctx, clientHTTP, "token", "msgType", "ch", "text", nil)
+	_ = DingTalkSendMessage(ctx, clientHTTP, "token", "text")
+	_ = MattermostSendMessage(ctx, clientHTTP, "url", "token", "ch", "text")
+	_ = TwilioSendSMS(ctx, clientHTTP, "sid", "auth", "from", "to", "text")
+	_, _ = TeamsGetAccessToken(ctx, clientHTTP, "tenant", "client", "secret")
+	_ = TeamsSendMessage(ctx, clientHTTP, "token", "ch", "text")
+	_ = SignalSendMessage(ctx, clientHTTP, "url", "account", "ch", "text")
+	_ = HaSendPersistentNotification(ctx, clientHTTP, "url", "token", "text")
 
 	// Call connect functions with cancelled context
 	_, _, _, _ = DiscordConnect(ctx, host, "ch", "token", "botID", "url", "session", 0, nil)
@@ -76,32 +99,34 @@ func TestPollers_Coverage(t *testing.T) {
 	_ = FeishuVerifyWebhookSignature("ts", "nonce", "key", "body", "sig")
 	_, _ = feishuGetWSEndpoint(ctx, http.DefaultClient, "domain", "appID", "token")
 
-	// Create mock server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true, "data": []}`))
-	}))
-	defer ts.Close()
+	// Use mock client for valid server responses
+	mockClient := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true, "data": []}`)),
+			}
+		}),
+	}
 
-	// Call these with valid server to cover HTTP paths using a valid context
 	validCtx := context.Background()
-	_, _ = qqbotGetGatewayURL(validCtx, ts.Client(), "token")
-	_, _ = dingTalkGetEndpoint(validCtx, ts.Client(), "id", "secret")
-	_, _ = slackGetSocketURL(validCtx, ts.Client(), "token")
+	_, _ = qqbotGetGatewayURL(validCtx, mockClient, "token")
+	_, _ = dingTalkGetEndpoint(validCtx, mockClient, "id", "secret")
+	_, _ = slackGetSocketURL(validCtx, mockClient, "token")
 
-	_ = SignalSendMessage(validCtx, ts.Client(), ts.URL, "account", "ch", "text")
-	_ = HaSendPersistentNotification(validCtx, ts.Client(), ts.URL, "token", "text")
-	_, _ = feishuGetWSEndpoint(validCtx, ts.Client(), ts.URL, "appID", "token")
-	_, _ = TeamsGetAccessToken(validCtx, ts.Client(), "tenant", "client", "secret")
-	_ = TeamsSendMessage(validCtx, ts.Client(), "token", "ch", "text")
-	_ = MattermostSendMessage(validCtx, ts.Client(), ts.URL, "token", "ch", "text")
-	_ = SlackSendMessage(validCtx, ts.Client(), "token", "ch", "text")
-	_ = DingTalkSendMessage(validCtx, ts.Client(), "token", "text")
-	_ = QqbotSendMessage(validCtx, ts.Client(), "token", "msgType", "ch", "text", nil)
-	_ = FeishuSendMessage(validCtx, ts.Client(), ts.URL, "token", "ch", "text")
-	_, _ = FeishuGetTenantToken(validCtx, ts.Client(), ts.URL, "id", "secret")
-	_ = DiscordSendMessage(validCtx, ts.Client(), "token", "ch", "text")
+	_ = SignalSendMessage(validCtx, mockClient, "http://dummy", "account", "ch", "text")
+	_ = HaSendPersistentNotification(validCtx, mockClient, "http://dummy", "token", "text")
+	_, _ = feishuGetWSEndpoint(validCtx, mockClient, "http://dummy", "appID", "token")
+	_, _ = TeamsGetAccessToken(validCtx, mockClient, "tenant", "client", "secret")
+	_ = TeamsSendMessage(validCtx, mockClient, "token", "ch", "text")
+	_ = MattermostSendMessage(validCtx, mockClient, "http://dummy", "token", "ch", "text")
+	_ = SlackSendMessage(validCtx, mockClient, "token", "ch", "text")
+	_ = DingTalkSendMessage(validCtx, mockClient, "token", "text")
+	_ = QqbotSendMessage(validCtx, mockClient, "token", "msgType", "ch", "text", nil)
+	_ = FeishuSendMessage(validCtx, mockClient, "http://dummy", "token", "ch", "text")
+	_, _ = FeishuGetTenantToken(validCtx, mockClient, "http://dummy", "id", "secret")
+	_ = DiscordSendMessage(validCtx, mockClient, "token", "ch", "text")
 
 	// Also call methods of the manager that make requests
-	_ = signalReceiveSSE(validCtx, host, "ch", ts.URL, "account", nil)
+	_ = signalReceiveSSE(validCtx, host, "ch", "http://dummy", "account", nil)
 }

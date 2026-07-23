@@ -41,6 +41,8 @@ func runEvalCmd(args []string) error {
 		return runEvalSign(args[1:])
 	case "meta-holdout":
 		return runEvalMetaHoldoutCmd(args[1:])
+	case "bench":
+		return runEvalBenchCmd(args[1:])
 	case "meta-audit":
 		return runEvalMetaAuditCmd(args[1:])
 	case "help", "-h", "--help":
@@ -55,6 +57,7 @@ func printEvalHelp() {
 	fmt.Println()
 	fmt.Println("  genkey [--out <目录>]                                    本地生成 meta_auditor 密钥对（私钥不上传，仅本机使用）")
 	fmt.Println("  sign --key <私钥文件>                                    对当前时间窗口本地签名（输出 base64，供下方命令使用）")
+	fmt.Println("  bench --suite=<suite> --data=<path> [--out=<report.json>] 运行本地开放基准测试")
 	fmt.Println("  meta-holdout add --file <case.json> --signature <sig>   写入一条 meta_holdout 隔离测试用例")
 	fmt.Println("  meta-audit run --signature <sig>                        触发一次 Meta-Eval 审计并持久化结论")
 	fmt.Println("  meta-audit status                                       查看最新一次审计结论")

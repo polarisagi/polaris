@@ -2,20 +2,25 @@ package adapter
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 func TestDiscord_SendMessage(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
+	clientHTTP := &http.Client{
+		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+		}),
+	}
 
 	// temporarily override discordAPIBase if possible, or just let it fail/error
-	err := DiscordSendMessage(context.Background(), ts.Client(), "token", "123", "text")
-	// Since discordAPIBase is hardcoded, it will make a real request. We don't want that.
+	err := DiscordSendMessage(context.Background(), clientHTTP, "token", "123", "text")
+	// Since discordAPIBase is hardcoded, it will make a real request (mocked by clientHTTP).
 	// Oh wait, if it makes a real request it will fail but still cover code!
 	if err == nil {
 		// Expect an error because it hits api.discord.com which may timeout or reject

@@ -25,8 +25,6 @@ func DefaultAllowedDomains() []string {
 		"mirror.ghproxy.com",
 		"gh-proxy.com",
 		"ghp.ci",
-		"localhost",
-		"127.0.0.1",
 	}
 }
 
