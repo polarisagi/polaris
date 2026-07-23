@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // Teams 通过 Microsoft Graph API 接入 Teams 聊天。
@@ -80,4 +83,66 @@ func TeamsSendMessage(ctx context.Context, client *http.Client, accessToken, cha
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("teams: SendMessage status %d: %s", resp.StatusCode, b))
 	}
 	return nil
+}
+
+func init() { Register(&TeamsAdapter{}) }
+
+type TeamsAdapter struct{}
+
+func (a *TeamsAdapter) Type() string { return "teams" }
+
+func (a *TeamsAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	var raw struct {
+		Value []struct {
+			ResourceData struct {
+				Body struct {
+					Content string `json:"content"`
+				} `json:"body"`
+				From struct {
+					User struct {
+						ID          string `json:"id"`
+						DisplayName string `json:"displayName"`
+					} `json:"user"`
+				} `json:"from"`
+				ChatID string `json:"chatId"`
+			} `json:"resourceData"`
+		} `json:"value"`
+	}
+	if json.Unmarshal(body, &raw) != nil || len(raw.Value) == 0 {
+		return protocol.ChannelMessage{}
+	}
+	rd := raw.Value[0].ResourceData
+	text := rd.Body.Content
+	chatID := rd.ChatID
+	userID := rd.From.User.ID
+	if text == "" || chatID == "" {
+		return protocol.ChannelMessage{}
+	}
+	// Note: We need to import "github.com/polarisagi/polaris/internal/protocol" and "github.com/polarisagi/polaris/pkg/types"
+	return protocol.ChannelMessage{Text: text, ChatID: chatID, UserID: userID, TaintLevel: types.TaintHigh}
+}
+
+func (a *TeamsAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	tenantID, _ := cfg["tenant_id"].(string)
+	clientID, _ := cfg["client_id"].(string)
+	clientSecret, _ := cfg["client_secret"].(string)
+
+	if tenantID == "" || clientID == "" || clientSecret == "" {
+		slog.Warn("teams: config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	tok, err := TeamsGetAccessToken(ctx, host.HTTPClient(), tenantID, clientID, clientSecret)
+	if err != nil {
+		slog.Error("teams: get access_token failed", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "teams: get access_token", err)
+	}
+	if err := TeamsSendMessage(ctx, host.HTTPClient(), tok, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "teams", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "teams: send message", err)
+	}
+	return nil
+}
+
+func (a *TeamsAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	return false // Teams is webhook only
 }
