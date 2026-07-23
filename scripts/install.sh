@@ -228,11 +228,18 @@ msg "📦 正在校验并解压..." "📦 Verifying and extracting..."
 # -sha256（macOS/Linux 均预装）计算本地哈希，而不是引入平台相关的 sha256sum。
 TMP_SHA_FILE="${TMP_ARCHIVE}.sha256"
 rm -f "$TMP_SHA_FILE"
-if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${URL}.sha256"; then
-    msg "❌ 无法下载校验和文件 (${URL}.sha256)，出于供应链安全考虑已中止安装。" \
-        "❌ Failed to download checksum file (${URL}.sha256); aborting install for supply-chain safety."
-    rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
-    exit 1
+
+# 优先尝试从官方源下载校验和
+if ! curl -sSLf --max-time 15 -o "$TMP_SHA_FILE" "${DIRECT_URL}.sha256"; then
+    # 若官方源失败，回退到与二进制相同的源，并打印安全降级警告
+    msg "⚠️  无法从官方直连源获取校验和，回退到镜像源下载。存在潜在供应链污染风险。" \
+        "⚠️  Failed to fetch checksum from official source. Falling back to mirror. Potential supply-chain risk."
+    if ! curl -sSLf --max-time 15 -o "$TMP_SHA_FILE" "${URL}.sha256"; then
+        msg "❌ 无法下载校验和文件，出于供应链安全考虑已中止安装。" \
+            "❌ Failed to download checksum file; aborting install for supply-chain safety."
+        rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
+        exit 1
+    fi
 fi
 
 if ! command -v openssl >/dev/null 2>&1; then
