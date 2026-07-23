@@ -2,6 +2,7 @@ package agentctx
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,7 @@ func TestBuildPerceiveContext(t *testing.T) {
 	}
 
 	sCtx := &fsm.StateContext{
+		TaskID:      "test-task-1",
 		RawIntentTS: taint.NewTaintedString("migrate database", taint.TaintSource{}, "test"),
 	}
 
@@ -139,6 +141,7 @@ func TestBuildPerceiveContext(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
+	fmt.Printf("msgs: %+v\n", msgs)
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages (1 immutable, 1 system, 2 user data), got %d", len(msgs))
 	}
@@ -189,6 +192,7 @@ func TestBuildPerceiveContext_TaintInjection(t *testing.T) {
 	}
 
 	sCtx := &fsm.StateContext{
+		TaskID:      "test-task-2",
 		RawIntentTS: taint.NewTaintedString("agent task intent", taint.TaintSource{}, "test"),
 	}
 
