@@ -189,7 +189,7 @@ func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) bool {
 	for _, n := range ks.notifiers {
 		_ = n.Send("CRITICAL", "KillSwitch Transition", reason)
 	}
-	
+
 	return needsFullStop
 }
 
@@ -293,9 +293,9 @@ func (ks *KillSwitch) OnSIGINT() {
 		ks.actor = "user"
 		needsWrite, reason = ks.triggerFullStop("user", "triple SIGINT within 3s window")
 	}
-	
+
 	ks.mu.Unlock()
-	
+
 	if needsWrite {
 		ks.writeFullStopFile(reason)
 	}

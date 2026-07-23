@@ -271,7 +271,6 @@ func printMigrateDryRun(rep *migrateReport, clawhubURL string, withMemory bool, 
 		for _, s := range rep.Skills {
 			fmt.Printf("  • %s\n", s.Name)
 		}
-		fmt.Println("  ⚠  技能为 SKILL.md 脚本格式, 需人工确认 Logic Collapse 编译产物")
 	}
 
 	if rep.MemoryDB != "" {
@@ -444,7 +443,6 @@ func applySkills(rep *migrateReport, polarisDir string, overwrite bool) error {
 			action = "OVERWRITTEN"
 		}
 		fmt.Printf("OK  %s %s\n", action, dst)
-		fmt.Printf("    ⚠  SKILL.md 需人工确认 Logic Collapse 编译产物\n")
 	}
 
 	return nil

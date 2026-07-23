@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -40,6 +41,7 @@ type ConsolidationPipeline struct {
 	db           protocol.SQLQuerier
 	gate         backgroundGate
 	skillEvolver SkillEvolver
+	graphFetcher graphrag.EntityFetcher // B2: 桥接检查 GraphRAG 侧
 }
 
 type backgroundGate interface {

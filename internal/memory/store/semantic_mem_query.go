@@ -103,7 +103,7 @@ func (sm *SemanticMem) MarkEntityExpired(ctx context.Context, entityType, name, 
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.MarkEntityExpired", err)
 	}
-	
+
 	_, err = db.ExecContext(ctx,
 		`UPDATE semantic_entities SET status='expired', updated_at=?
 		 WHERE entity_type=? AND name=? AND status='active'`,
@@ -240,7 +240,9 @@ func (sm *SemanticMem) SearchEntities(ctx context.Context, query string, limit i
 	            COALESCE(valid_from, 0), COALESCE(valid_until, 0),
 	            COALESCE(taint_level, 0)
 	            FROM semantic_entities
-	            WHERE status='active' AND (name LIKE ? OR properties LIKE ?)
+	            WHERE status='active' 
+	              AND source_type IN ('llm_extract', 'user_stated', 'agent_inferred', 'graphrag_ingest')
+	              AND (name LIKE ? OR properties LIKE ?)
 	              AND (valid_from <= ? OR valid_from IS NULL OR valid_from = 0) 
 	              AND (valid_until > ? OR valid_until IS NULL OR valid_until = 0)
 	            LIMIT 100` // 取100条再 bm25

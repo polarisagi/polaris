@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS extension_catalog (
     publisher      TEXT NOT NULL DEFAULT '',
     trust_tier     INTEGER NOT NULL DEFAULT 1,
     url            TEXT NOT NULL DEFAULT '',
+    version        TEXT NOT NULL DEFAULT '',    -- B3: 市场同步得到的最新可用版本号
     payload        TEXT NOT NULL,               -- JSON 全字段快照
     updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );

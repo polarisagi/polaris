@@ -76,7 +76,7 @@ type Server struct {
 	scriptRunner   marketplace.HookRunner                                                         // install hook 沙箱执行器（ContainerSandbox.RunScript）
 	skillSignKey   []byte
 
-	updater *updater.Manager // OTA 自更新管理器（可为 nil）
+	updater *updater.Manager     // OTA 自更新管理器（可为 nil）
 	ks      *security.KillSwitch // [B1] KillSwitch
 
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）

@@ -29,12 +29,11 @@ func NewSQLiteExtensionRepository(db *sql.DB) *SQLiteExtensionRepository {
 
 func (r *SQLiteExtensionRepository) UpsertInstance(ctx context.Context, row types.ExtInstanceRow) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO extension_instances(id, ext_type, origin, catalog_id, name, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO extension_instances(id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
-		  status=excluded.status, error_msg=excluded.error_msg, updated_at=excluded.updated_at,
-		  install_path=excluded.install_path, config=excluded.config, name=excluded.name, trust_tier=excluded.trust_tier`,
-		row.ID, row.ExtType, row.Origin, row.CatalogID, row.Name, row.Publisher, row.TrustTier, row.RuntimeID, row.InstallPath, row.Config, row.Status, row.ErrorMsg, row.CreatedAt, row.UpdatedAt)
+		ext_type=excluded.ext_type, origin=excluded.origin, catalog_id=excluded.catalog_id, name=excluded.name, installed_version=excluded.installed_version, publisher=excluded.publisher, trust_tier=excluded.trust_tier, runtime_id=excluded.runtime_id, install_path=excluded.install_path, config=excluded.config, status=excluded.status, error_msg=excluded.error_msg, updated_at=excluded.updated_at`,
+		row.ID, row.ExtType, row.Origin, row.CatalogID, row.Name, row.InstalledVersion, row.Publisher, row.TrustTier, row.RuntimeID, row.InstallPath, row.Config, row.Status, row.ErrorMsg, row.CreatedAt, row.UpdatedAt)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpsertInstance", err)
 	}
@@ -44,9 +43,9 @@ func (r *SQLiteExtensionRepository) UpsertInstance(ctx context.Context, row type
 func (r *SQLiteExtensionRepository) GetInstance(ctx context.Context, id string) (*types.ExtInstanceRow, error) {
 	var row types.ExtInstanceRow
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, ext_type, origin, catalog_id, name, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at
+		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at
 		FROM extension_instances WHERE id=?`, id).Scan(
-		&row.ID, &row.ExtType, &row.Origin, &row.CatalogID, &row.Name, &row.Publisher, &row.TrustTier, &row.RuntimeID, &row.InstallPath, &row.Config, &row.Status, &row.ErrorMsg, &row.CreatedAt, &row.UpdatedAt)
+		&row.ID, &row.ExtType, &row.Origin, &row.CatalogID, &row.Name, &row.InstalledVersion, &row.Publisher, &row.TrustTier, &row.RuntimeID, &row.InstallPath, &row.Config, &row.Status, &row.ErrorMsg, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -82,7 +81,7 @@ func (r *SQLiteExtensionRepository) UpdateInstanceInstallPath(ctx context.Contex
 
 func (r *SQLiteExtensionRepository) ListInstances(ctx context.Context) ([]types.ExtInstanceRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, ext_type, origin, catalog_id, name, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at
+		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at
 		FROM extension_instances ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListInstances", err)
@@ -92,7 +91,7 @@ func (r *SQLiteExtensionRepository) ListInstances(ctx context.Context) ([]types.
 	var result []types.ExtInstanceRow
 	for rows.Next() {
 		var row types.ExtInstanceRow
-		if err := rows.Scan(&row.ID, &row.ExtType, &row.Origin, &row.CatalogID, &row.Name, &row.Publisher, &row.TrustTier, &row.RuntimeID, &row.InstallPath, &row.Config, &row.Status, &row.ErrorMsg, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.ExtType, &row.Origin, &row.CatalogID, &row.Name, &row.InstalledVersion, &row.Publisher, &row.TrustTier, &row.RuntimeID, &row.InstallPath, &row.Config, &row.Status, &row.ErrorMsg, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListInstances scan", err)
 		}
 		result = append(result, row)
@@ -113,9 +112,9 @@ func (r *SQLiteExtensionRepository) DeleteInstance(ctx context.Context, id strin
 func (r *SQLiteExtensionRepository) GetCatalogEntry(ctx context.Context, id string) (*types.ExtCatalogRow, error) {
 	var row types.ExtCatalogRow
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, payload, updated_at
+		`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, version, payload, updated_at
 		FROM extension_catalog WHERE id=?`, id).Scan(
-		&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Payload, &row.UpdatedAt)
+		&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Version, &row.Payload, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -128,7 +127,7 @@ func (r *SQLiteExtensionRepository) GetCatalogEntry(ctx context.Context, id stri
 func (r *SQLiteExtensionRepository) SearchCatalog(ctx context.Context, query string, limit int) ([]types.ExtCatalogRow, error) {
 	pattern := "%" + query + "%"
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, payload, updated_at
+		`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, version, payload, updated_at
 		FROM extension_catalog WHERE name LIKE ? OR description LIKE ? LIMIT ?`, pattern, pattern, limit)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SearchCatalog", err)
@@ -138,7 +137,7 @@ func (r *SQLiteExtensionRepository) SearchCatalog(ctx context.Context, query str
 	var result []types.ExtCatalogRow
 	for rows.Next() {
 		var row types.ExtCatalogRow
-		if err := rows.Scan(&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Payload, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Version, &row.Payload, &row.UpdatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SearchCatalog scan", err)
 		}
 		result = append(result, row)
@@ -156,7 +155,7 @@ func (r *SQLiteExtensionRepository) ListCatalogByIDs(ctx context.Context, ids []
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := fmt.Sprintf(`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, payload, updated_at
+	query := fmt.Sprintf(`SELECT id, marketplace_id, type, name, description, publisher, trust_tier, url, version, payload, updated_at
 		FROM extension_catalog WHERE id IN (%s)`, strings.Join(placeholders, ","))
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -168,7 +167,7 @@ func (r *SQLiteExtensionRepository) ListCatalogByIDs(ctx context.Context, ids []
 	var result []types.ExtCatalogRow
 	for rows.Next() {
 		var row types.ExtCatalogRow
-		if err := rows.Scan(&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Payload, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.MarketplaceID, &row.Type, &row.Name, &row.Description, &row.Publisher, &row.TrustTier, &row.URL, &row.Version, &row.Payload, &row.UpdatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListCatalogByIDs scan", err)
 		}
 		result = append(result, row)
@@ -190,9 +189,9 @@ func (r *SQLiteExtensionRepository) ReplaceMarketplaceCatalog(ctx context.Contex
 	syncedCount := 0
 	for _, e := range entries {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO extension_catalog(id, marketplace_id, type, name, description, publisher, trust_tier, url, payload) 
-			VALUES(?,?,?,?,?,?,?,?,?)`,
-			e.ID, marketplaceID, e.Type, e.Name, e.Description, e.Publisher, e.TrustTier, e.URL, e.Payload); err != nil {
+			`INSERT INTO extension_catalog(id, marketplace_id, type, name, description, publisher, trust_tier, url, version, payload) 
+			VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			e.ID, marketplaceID, e.Type, e.Name, e.Description, e.Publisher, e.TrustTier, e.URL, e.Version, e.Payload); err != nil {
 			return 0, apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 		syncedCount++
@@ -284,9 +283,9 @@ func (r *SQLiteExtensionRepository) GetMaxMarketplaceSortOrder(ctx context.Conte
 }
 
 func (r *SQLiteExtensionRepository) SeedCatalogEntry(ctx context.Context, row types.ExtCatalogRow) error {
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO extension_catalog(id, marketplace_id, type, name, description, publisher, trust_tier, url, payload)
-					VALUES(?,?,?,?,?,?,?,?,?)`,
-		row.ID, row.MarketplaceID, row.Type, row.Name, row.Description, row.Publisher, row.TrustTier, row.URL, row.Payload)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO extension_catalog(id, marketplace_id, type, name, description, publisher, trust_tier, url, version, payload)
+					VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		row.ID, row.MarketplaceID, row.Type, row.Name, row.Description, row.Publisher, row.TrustTier, row.URL, row.Version, row.Payload)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}
