@@ -3,16 +3,17 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"github.com/polarisagi/polaris/internal/memory/util"
-	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
-	"github.com/polarisagi/polaris/pkg/types"
 	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/memory/util"
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // maxEpisodicEvents Tier0 内存事件容量上限（防止 8GB 场景 OOM）。

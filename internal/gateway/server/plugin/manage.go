@@ -332,7 +332,7 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 	if installedVersion == catalogVersion {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotModified)
-		w.Write([]byte(`{"error": "already up to date"}`))
+		_, _ = w.Write([]byte(`{"error": "already up to date"}`))
 		return
 	}
 

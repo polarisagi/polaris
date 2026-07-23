@@ -55,10 +55,10 @@ func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 				return nil
 			}
 			// Update existing entity in semantic_entities if it exists but version is higher or sim is low
-			gw.semanticDB.ExecContext(ctx, `UPDATE semantic_entities SET embedding = ?, version = ?, source_type = 'graphrag_ingest', updated_at = strftime('%s','now')*1000 WHERE id = ?`, float32sToBytes(e.Embedding), e.SyncVersion, dbid)
+			_, _ = gw.semanticDB.ExecContext(ctx, `UPDATE semantic_entities SET embedding = ?, version = ?, source_type = 'graphrag_ingest', updated_at = strftime('%s','now')*1000 WHERE id = ?`, float32sToBytes(e.Embedding), e.SyncVersion, dbid)
 		} else {
 			// Insert new entity into semantic_entities
-			gw.semanticDB.ExecContext(ctx, `INSERT INTO semantic_entities (entity_type, name, properties, embedding, version, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'graphrag_ingest', strftime('%s','now')*1000, strftime('%s','now')*1000)`, e.Type, e.Name, "{}", float32sToBytes(e.Embedding), e.SyncVersion)
+			_, _ = gw.semanticDB.ExecContext(ctx, `INSERT INTO semantic_entities (entity_type, name, properties, embedding, version, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'graphrag_ingest', strftime('%s','now')*1000, strftime('%s','now')*1000)`, e.Type, e.Name, "{}", float32sToBytes(e.Embedding), e.SyncVersion)
 		}
 	}
 

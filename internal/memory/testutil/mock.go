@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/pb"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -98,11 +99,19 @@ func (m *MockStore) DB() *sql.DB {
 }
 
 func (m *MockStore) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return m.db.QueryContext(ctx, query, args...)
+	rows, err := m.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "MockStore.QueryContext", err)
+	}
+	return rows, nil
 }
 
 func (m *MockStore) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return m.db.ExecContext(ctx, query, args...)
+	res, err := m.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "MockStore.ExecContext", err)
+	}
+	return res, nil
 }
 
 func (m *MockStore) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {

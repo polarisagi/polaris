@@ -41,7 +41,7 @@ func (h *SysAdminHandler) HandleKill(w http.ResponseWriter, r *http.Request) {
 	// Write audit log
 	slog.Info("KillSwitch_ManualFullStop", "actor", actor, "reason", req.Reason)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "sealed"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "sealed"})
 }
 
 func (h *SysAdminHandler) HandleUnseal(w http.ResponseWriter, r *http.Request) {
@@ -79,5 +79,5 @@ func (h *SysAdminHandler) HandleUnseal(w http.ResponseWriter, r *http.Request) {
 	slog.Info("KillSwitch_Unseal", "actor", actor, "reason", req.Reason)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "unsealed"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "unsealed"})
 }
