@@ -225,9 +225,11 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 			// High-severity incident fallback -> convert to eval case
 			if e.incidentConverter != nil && strings.Contains(ev.Heuristic, "high-severity") {
 				payload, _ := json.Marshal(ev)
-				if id, err := e.incidentConverter(ctx, payload); err == nil && id != "" {
-					slog.Info("incident converted to eval case", "id", id)
-				}
+				concurrent.SafeGo(ctx, "learning.incident_convert", func(gctx context.Context) {
+					if id, err := e.incidentConverter(gctx, payload); err == nil && id != "" {
+						slog.Info("incident converted to eval case", "id", id)
+					}
+				})
 			}
 
 		// 中环：定时触发 AutoCurriculum
