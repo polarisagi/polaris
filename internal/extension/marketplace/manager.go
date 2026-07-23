@@ -276,7 +276,10 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 					if hook, ok := bundle.Hooks["uninstall"]; ok && hook != "" {
 						hookPath := filepath.Join(inst.InstallPath, hook)
 						// 路径防穿越：禁止逃逸出 installPath
-						if strings.HasPrefix(filepath.Clean(hookPath), filepath.Clean(inst.InstallPath)) {
+						cleanHook := filepath.Clean(hookPath)
+						cleanBase := filepath.Clean(inst.InstallPath)
+						rel, relErr := filepath.Rel(cleanBase, cleanHook)
+						if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 							if m.hookRunner != nil {
 								// 通过注入的沙笼接口执行：具体实现由 ContainerSandbox.RunScript 提供
 								if err := m.hookRunner.RunHook(ctx, hookPath, inst.InstallPath); err != nil {
