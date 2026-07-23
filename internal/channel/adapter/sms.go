@@ -5,11 +5,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // SMS 通过 Twilio REST API 发送短信，通过 webhook 接收。
@@ -46,4 +49,46 @@ func TwilioSendSMS(ctx context.Context, client *http.Client, accountSID, authTok
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("twilio: send status %d: %s", resp.StatusCode, b))
 	}
 	return nil
+}
+
+func init() { Register(&SmsAdapter{}) }
+
+type SmsAdapter struct{}
+
+func (a *SmsAdapter) Type() string { return "sms" }
+
+func (a *SmsAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMessage {
+	if r == nil {
+		return protocol.ChannelMessage{}
+	}
+	if err := r.ParseForm(); err != nil {
+		return protocol.ChannelMessage{}
+	}
+	text := r.FormValue("Body")
+	from := r.FormValue("From")
+	if text == "" || from == "" {
+		return protocol.ChannelMessage{}
+	}
+	// Note: We need to import "github.com/polarisagi/polaris/internal/protocol" and "github.com/polarisagi/polaris/pkg/types"
+	return protocol.ChannelMessage{Text: text, ChatID: from, UserID: from, TaintLevel: types.TaintHigh}
+}
+
+func (a *SmsAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
+	accountSID, _ := cfg["account_sid"].(string)
+	authToken, _ := cfg["auth_token"].(string)
+	fromNumber, _ := cfg["from_number"].(string)
+
+	if accountSID == "" || authToken == "" || fromNumber == "" {
+		slog.Warn("sms: twilio config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+		return nil
+	}
+	if err := TwilioSendSMS(ctx, host.HTTPClient(), accountSID, authToken, fromNumber, msg.ChatID, text); err != nil {
+		slog.Error("channels: send reply failed", "type", "sms", "err", err)
+		return apperr.Wrap(apperr.CodeInternal, "sms: send message", err)
+	}
+	return nil
+}
+
+func (a *SmsAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
+	return false // SMS is webhook only
 }

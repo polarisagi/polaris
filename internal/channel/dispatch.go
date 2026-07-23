@@ -19,19 +19,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 
 	switch channelType {
 
-	case "sms":
-		accountSID, _ := cfg["account_sid"].(string)
-		authToken, _ := cfg["auth_token"].(string)
-		fromNumber, _ := cfg["from_number"].(string)
-		if accountSID == "" || authToken == "" || fromNumber == "" {
-			slog.Warn("sms: twilio config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
-		}
-		if err := cadapter.TwilioSendSMS(ctx, m.httpClient, accountSID, authToken, fromNumber, msg.ChatID, text); err != nil {
-			slog.Error("channels: send reply failed", "type", channelType, "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "sms: send message", err)
-		}
-
 	case "teams":
 		tenantID, _ := cfg["tenant_id"].(string)
 		clientID, _ := cfg["client_id"].(string)
