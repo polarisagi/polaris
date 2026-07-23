@@ -363,6 +363,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 
 	if err != nil {
 		if strings.Contains(err.Error(), "tool not found") {
+			if a.sCtx.ReplanExtActivationDegraded {
+				return apperr.Wrap(apperr.CodeInvalidInput, "capability_gap with extension activation degraded", err)
+			}
 			a.sCtx.SuspendReason = "capability_gap"
 
 			// 通过 outbox 异步投递 m9_capability_gap 事件，触发 GapFillWorker 进行能力补全
