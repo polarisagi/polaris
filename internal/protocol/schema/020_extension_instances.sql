@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS extension_instances (
     origin       TEXT    NOT NULL,              -- 'builtin' | 'marketplace' | 'user' | 'learned'
     catalog_id   TEXT    NOT NULL DEFAULT '',   -- extension_catalog.id；user/learned 时为空
     name         TEXT    NOT NULL,
+    installed_version TEXT NOT NULL DEFAULT '',  -- B3: 当前安装的版本号
     publisher    TEXT    NOT NULL DEFAULT '',
     trust_tier   INTEGER NOT NULL DEFAULT 0,
     runtime_id   TEXT    NOT NULL DEFAULT '',   -- runtime 表 PK：mcp_servers.id / skills.name / plugins.id / apps.id

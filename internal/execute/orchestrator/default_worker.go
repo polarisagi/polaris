@@ -25,8 +25,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/observability/trace"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"

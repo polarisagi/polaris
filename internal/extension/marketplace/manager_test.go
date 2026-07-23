@@ -66,6 +66,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			origin TEXT,
 			catalog_id TEXT,
 			name TEXT,
+			installed_version TEXT DEFAULT '',
 			publisher TEXT,
 			trust_tier INTEGER,
 			runtime_id TEXT,

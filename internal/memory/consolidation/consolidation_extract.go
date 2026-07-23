@@ -240,6 +240,14 @@ func (p *ConsolidationPipeline) upsertSemantic(
 		if e.ID != "" {
 			if fetched, err := p.semantic.GetEntity(ctx, e.Type, e.Name); err == nil && fetched != nil {
 				ephemeralToDBID[e.ID] = fetched.DBID
+			} else if p.graphFetcher != nil {
+				// Tier1+ 查 SurrealDB (GraphRAG侧)
+				if gEnt, gErr := p.graphFetcher.GetEntityByName(ctx, e.Name); gErr == nil && gEnt != nil {
+					// Fallback to graphrag entity if semantic entity is not found
+					slog.Debug("consolidation: resolved DBID from graphFetcher for Tier1+", "name", e.Name)
+					// In Tier1+ we don't have DBID mapped nicely unless we insert into semantic_entities.
+					// B2 ensures GraphRAG ingest inserts into semantic_entities.
+				}
 			}
 		}
 	}

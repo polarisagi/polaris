@@ -181,6 +181,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/plugins", s.pluginHandler.HandleListPlugins)
 	mux.HandleFunc("PUT /v1/plugins/{id}", s.pluginHandler.HandleUpdatePlugin)
 	mux.HandleFunc("POST /v1/plugins/{id}/toggle", s.pluginHandler.HandleTogglePluginMCP)
+	mux.HandleFunc("POST /v1/plugins/{id}/upgrade", s.pluginHandler.HandleUpgradePlugin)
 
 	// Custom Entity Creation
 	// mux.HandleFunc("...", s.handleCreateMCP)

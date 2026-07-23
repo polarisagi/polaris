@@ -53,6 +53,7 @@ func TestExtensionLibrarianHandler(t *testing.T) {
 		CREATE TABLE extension_instances (
 			id TEXT PRIMARY KEY,
 			name TEXT,
+			installed_version TEXT DEFAULT '',
 			publisher TEXT,
 			install_path TEXT,
 			config TEXT,

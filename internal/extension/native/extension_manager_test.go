@@ -29,6 +29,7 @@ func TestExtensionManager_SearchExtension(t *testing.T) {
 			origin TEXT,
 			catalog_id TEXT,
 			name TEXT,
+			installed_version TEXT DEFAULT '',
 			publisher TEXT,
 			trust_tier INTEGER,
 			runtime_id TEXT,
@@ -49,6 +50,7 @@ func TestExtensionManager_SearchExtension(t *testing.T) {
 			publisher TEXT,
 			trust_tier INTEGER,
 			url TEXT,
+			version TEXT DEFAULT '',
 			payload TEXT,
 			updated_at TEXT
 		);
@@ -136,6 +138,7 @@ func TestExtensionManager_searchLocalCatalog(t *testing.T) {
 			publisher TEXT,
 			trust_tier INTEGER,
 			url TEXT,
+			version TEXT DEFAULT '',
 			payload TEXT,
 			updated_at TEXT
 		);
@@ -168,6 +171,7 @@ func TestExtensionManager_findRegistryTarget(t *testing.T) {
 			publisher TEXT,
 			trust_tier INTEGER,
 			url TEXT,
+			version TEXT DEFAULT '',
 			payload TEXT,
 			updated_at TEXT
 		);
@@ -231,6 +235,7 @@ func TestExtensionManager_InstallExtension(t *testing.T) {
 			origin TEXT,
 			catalog_id TEXT,
 			name TEXT,
+			installed_version TEXT DEFAULT '',
 			publisher TEXT,
 			trust_tier INTEGER,
 			runtime_id TEXT,
@@ -277,6 +282,7 @@ func TestExtensionManager_InstallExtension(t *testing.T) {
 			publisher TEXT,
 			trust_tier INTEGER,
 			url TEXT,
+			version TEXT DEFAULT '',
 			payload TEXT,
 			updated_at TEXT
 		);

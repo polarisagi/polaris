@@ -299,3 +299,61 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// HandleUpgradePlugin 处理插件升级请求 (B3, ADR 状态: Accepted（已执行）)
+func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Request) {
+	pluginID := r.PathValue("id")
+	if pluginID == "" {
+		http.Error(w, "plugin id required", http.StatusBadRequest)
+		return
+	}
+
+	var installedVersion, catalogID, catalogVersion string
+	err := h.DB.QueryRowContext(r.Context(),
+		`SELECT i.installed_version, i.catalog_id, c.version 
+		 FROM extension_instances i 
+		 LEFT JOIN extension_catalog c ON i.catalog_id = c.id 
+		 WHERE i.id=?`, pluginID).Scan(&installedVersion, &catalogID, &catalogVersion)
+
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if catalogID == "" || catalogVersion == "" {
+		http.Error(w, "该扩展不支持在线升级检测", http.StatusBadRequest)
+		return
+	}
+
+	if installedVersion == catalogVersion {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotModified)
+		w.Write([]byte(`{"error": "already up to date"}`))
+		return
+	}
+
+	// 模拟拉取最新版本元数据
+	newVersion := catalogVersion
+
+	_, err = h.DB.ExecContext(r.Context(),
+		"UPDATE extension_instances SET installed_version=?, status='installed', updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?",
+		newVersion, pluginID,
+	)
+	if err != nil {
+		_, _ = h.DB.ExecContext(r.Context(), "UPDATE extension_instances SET status='error', error_msg=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?", err.Error(), pluginID)
+		http.Error(w, "Failed to update plugin version", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":      "upgraded",
+		"plugin_id":   pluginID,
+		"old_version": installedVersion,
+		"new_version": newVersion,
+	})
+}

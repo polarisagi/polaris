@@ -87,20 +87,21 @@ type
 
 // ExtInstanceRow 对应 extension_instances 表一行。
 ExtInstanceRow struct {
-	ID          string
-	ExtType     string
-	Origin      string
-	CatalogID   string
-	Name        string
-	Publisher   string
-	TrustTier   int
-	RuntimeID   string
-	InstallPath string
-	Config      string
-	Status      string
-	ErrorMsg    string
-	CreatedAt   string
-	UpdatedAt   string
+	ID               string
+	ExtType          string
+	Origin           string
+	CatalogID        string
+	Name             string
+	InstalledVersion string
+	Publisher        string
+	TrustTier        int
+	RuntimeID        string
+	InstallPath      string
+	Config           string
+	Status           string
+	ErrorMsg         string
+	CreatedAt        string
+	UpdatedAt        string
 }
 
 type
@@ -115,6 +116,7 @@ ExtCatalogRow struct {
 	Publisher     string
 	TrustTier     int
 	URL           string
+	Version       string
 	Payload       string
 	UpdatedAt     string
 }

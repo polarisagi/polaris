@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -19,8 +20,14 @@ import (
 // 并在写入前执行实体消歧（基于余弦相似度，保留 version 高者）。
 // 架构文档: docs/arch/M10-Knowledge-RAG.md §2.8
 type GraphWriter struct {
-	bus     *store.DatabaseWriter
-	fetcher EntityFetcher
+	bus        *store.DatabaseWriter
+	fetcher    EntityFetcher
+	semanticDB protocol.SQLQuerier // B2: 桥接检查 semantic_entities
+}
+
+// SetSemanticDB 注入语义记忆底层 DB 以便写入期去重。
+func (gw *GraphWriter) SetSemanticDB(db protocol.SQLQuerier) {
+	gw.semanticDB = db
 }
 
 // UpsertEntity 提交实体写入意图。写入前通过余弦相似度消歧，LWW 语义保留 version 较高者。
@@ -35,6 +42,26 @@ func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 		}
 	}
 
+	// B2: 同样检查 semantic_entities 侧是否存在同名同类型高相似度实体
+	if gw.semanticDB != nil {
+		var existingEmbedding []byte
+		var existingVersion int64
+		var dbid int64
+		err := gw.semanticDB.QueryRowContext(ctx, "SELECT id, embedding, version FROM semantic_entities WHERE entity_type = ? AND name = ?", e.Type, e.Name).Scan(&dbid, &existingEmbedding, &existingVersion)
+		if err == nil && len(existingEmbedding) > 0 {
+			embFloats := bytesToFloat32s(existingEmbedding)
+			sim := CosineSimilarity(embFloats, e.Embedding)
+			if sim > 0.95 && e.SyncVersion <= existingVersion {
+				return nil
+			}
+			// Update existing entity in semantic_entities if it exists but version is higher or sim is low
+			gw.semanticDB.ExecContext(ctx, `UPDATE semantic_entities SET embedding = ?, version = ?, source_type = 'graphrag_ingest', updated_at = strftime('%s','now')*1000 WHERE id = ?`, float32sToBytes(e.Embedding), e.SyncVersion, dbid)
+		} else {
+			// Insert new entity into semantic_entities
+			gw.semanticDB.ExecContext(ctx, `INSERT INTO semantic_entities (entity_type, name, properties, embedding, version, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'graphrag_ingest', strftime('%s','now')*1000, strftime('%s','now')*1000)`, e.Type, e.Name, "{}", float32sToBytes(e.Embedding), e.SyncVersion)
+		}
+	}
+
 	intent := &store.MutationIntent{
 		Table:          "entities",
 		Operation:      "upsert",
@@ -43,6 +70,33 @@ func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 		ClaimedVersion: e.SyncVersion,
 	}
 	return gw.bus.Submit(ctx, intent)
+}
+
+func float32sToBytes(f []float32) []byte {
+	if len(f) == 0 {
+		return nil
+	}
+	b := make([]byte, len(f)*4)
+	for i, v := range f {
+		bits := math.Float32bits(v)
+		b[i*4] = byte(bits)
+		b[i*4+1] = byte(bits >> 8)
+		b[i*4+2] = byte(bits >> 16)
+		b[i*4+3] = byte(bits >> 24)
+	}
+	return b
+}
+
+func bytesToFloat32s(b []byte) []float32 {
+	if len(b)%4 != 0 {
+		return nil
+	}
+	floats := make([]float32, len(b)/4)
+	for i := range floats {
+		bits := uint32(b[i*4]) | uint32(b[i*4+1])<<8 | uint32(b[i*4+2])<<16 | uint32(b[i*4+3])<<24
+		floats[i] = math.Float32frombits(bits)
+	}
+	return floats
 }
 
 // ---------------------------------------------------------------------------

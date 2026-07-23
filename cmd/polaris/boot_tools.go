@@ -287,7 +287,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, exclusiveWriter, mb.Mem.Semantic(), mb.Mem.Retriever(), mb.Mem.Reflection(), mb.Mem.Working().CoreMemory()); err != nil {
 			slog.Warn("polaris: memory tool registration failed", "err", err)
 		}
-		
+
 		memoryPrune := memory_prune.NewMemoryPruneTool(mb.Mem.Semantic())
 		if err := toolReg.Register(memoryPrune.Spec()); err != nil {
 			slog.Warn("polaris: memory_prune tool registration failed", "err", err)
