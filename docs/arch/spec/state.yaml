@@ -29,7 +29,7 @@ par:
   description: |
     M4 default state machine. Single Agent task lifecycle.
     LLM is co-processor; Go state machine owns control flow (invariant 6).
-    5 main states + 2 recovery states + 2 terminal states + idle + interrupt + suspended.
+    5 main states (perceive/plan/validate/execute/reflect) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended = 12 states.
     s_interrupt 由 UserInterrupt 协议（POST /v1/agent/{taskID}/interrupt）从任意活跃态注入；
     Resume 路径返回 interruptFrom，Redirect 转 s_perceive，Abort 转 s_failed。
     详见 docs/arch/M04-Agent-Kernel.md §1 与 internal/agent/fsm/state_machine.go。

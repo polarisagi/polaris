@@ -13,6 +13,10 @@ type BlackboardEvent struct {
 	Payload   []byte
 	Timestamp int64
 	Err       error
+	// A16: CAS 认领跨 goroutine trace 连贯性
+	// 任务创建时落盘的 trace_id/span_id，认领方通过 trace.ContextWithRemoteSpan 恢复关联 span。
+	TraceID string
+	SpanID  string
 }
 
 // HITLNotification 待发送的人工审批通知消息。
