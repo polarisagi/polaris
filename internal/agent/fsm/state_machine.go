@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -143,6 +144,10 @@ type StateContext struct {
 
 	// 挂起原因（如 capability_gap）
 	SuspendReason string
+
+	// 上层重规划据此对 capability_gap 快速失败，避免缺工具空转。
+	ReplanExtActivationDegraded bool
+	ReplanExtActivationAttempts int
 
 	// SysEnvSnapshot 是启动时获取的系统静态快照，注入到每个 Prompt 头部
 	SysEnvSnapshot string
@@ -385,10 +390,13 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 					actCtx, cancel := context.WithTimeout(actCtx, sm.replanExtActivationTimeout)
 					defer cancel()
 
-					hints, hintErr := sm.activator.FindAndActivate(actCtx, goalToActivate)
-					if hintErr != nil {
-						slog.Warn("extension_activator: failed to activate extensions for replan", "err", hintErr)
-					} else if len(hints) > 0 {
+					hints, degraded := sm.activateExtWithRetry(actCtx, goalToActivate)
+					if degraded {
+						sm.mu.Lock()
+						sCtx.ReplanExtActivationDegraded = true
+						sm.mu.Unlock()
+					}
+					if len(hints) > 0 {
 						sm.hintsMu.Lock()
 						sm.dynamicHints = hints
 						sm.hintsMu.Unlock()
@@ -438,6 +446,34 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 	}
 
 	return effects, nil
+}
+
+
+
+func (sm *StateMachine) activateExtWithRetry(ctx context.Context, goal string) ([]ExtActivatedHint, bool) {
+	const maxRetries = 2
+	var hints []ExtActivatedHint
+	var err error
+
+	for attempt := 1; attempt <= maxRetries+1; attempt++ {
+		hints, err = sm.activator.FindAndActivate(ctx, goal)
+		if err == nil {
+			return hints, false
+		}
+		slog.Warn("extension_activator: failed to activate extensions for replan", "attempt", attempt, "err", err)
+		if attempt <= maxRetries {
+			select {
+			case <-ctx.Done():
+				return nil, true
+			case <-time.After(time.Duration(attempt) * time.Second):
+				// Exponential backoff or simple backoff
+			}
+		}
+	}
+
+	// Exhausted retries
+	metrics.GlobalReplanExtActivationDegradedTotal.Add(1)
+	return nil, true
 }
 
 // History 返回状态遍历历史。

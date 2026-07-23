@@ -30,6 +30,9 @@ var (
 
 	// GlobalBlindZoneRoutingTotal 因 BlindZone 检测强制升级为 System2 的累计次数（V8-S4）。
 	GlobalBlindZoneRoutingTotal atomic.Int64
+
+	// GlobalReplanExtActivationDegradedTotal tracks degraded extension activations during S_REPLAN.
+	GlobalReplanExtActivationDegradedTotal atomic.Int64
 )
 
 // foundingAnchorDriftScorePtr 以 atomic.Pointer 持有漂移评分注入函数，避免包级可变 var。
