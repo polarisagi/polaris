@@ -201,7 +201,7 @@ SSE 事件 (text/event-stream): "token" | "tool_call" | "tool_result" | "thinkin
 
 #### 1.2.2 Egress Gateway
 
-HTTP 层出站适配器，委托 M11 SafeDialer（M11 §6 统一安全 Dialer）执行完整 SSRF 防护。本层仅维护 Provider 域名白名单作为预检（api.deepseek.com, api.anthropic.com, api.openai.com, api.github.com, localhost）——不在白名单的域名提前拒绝，减少 SafeDialer DNS 查询开销。实际连接（DNS 解析、CIDR 校验、TOCTOU 消除、IP 锁定）全部由 M11 SafeDialer.DialContext 统一执行。扩展: /config network allow example.com:443（追加白名单，仍需经 SafeDialer 完整校验）。✅ 实现：`internal/gateway/egress/`，`EgressGateway` 实现 `http.RoundTripper`，白名单原子更新，注入点：`cmd/polaris/main.go`。
+HTTP 层出站适配器，委托 M11 SafeDialer（M11 §6 统一安全 Dialer）执行完整 SSRF 防护。本层仅维护 Provider 域名白名单作为预检（api.deepseek.com, api.anthropic.com, api.openai.com, api.github.com）——不在白名单的域名提前拒绝，减少 SafeDialer DNS 查询开销。**默认白名单不含 `localhost`/`127.0.0.1`**（2026-07-23 ADR-0066 移除，纵深防御：即便 SafeDialer 兜底，M13 层也不预先放行环回地址）；本地调试场景需通过 `/config network allow` 动态追加。实际连接（DNS 解析、CIDR 校验、TOCTOU 消除、IP 锁定）全部由 M11 SafeDialer.DialContext 统一执行。扩展: /config network allow example.com:443（追加白名单，仍需经 SafeDialer 完整校验；用户自托管的可观测导出端点—如 LangSmith/Braintrust/Phoenix，见 M03 §Trace Exporter—同样需要走此白名单，默认不放行）。✅ 实现：`internal/gateway/egress/`，`EgressGateway` 实现 `http.RoundTripper`，白名单原子更新，注入点：`cmd/polaris/main.go`。
 
 #### 1.2.3 Sealed 状态
 

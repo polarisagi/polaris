@@ -2,7 +2,7 @@
 
 > Go | L3 治理层 | [Code-Package-Mapping] → internal/eval/> [HE-Rule-4]: Eval 第 0 行存在，失败 = PR 不能合并
 > 黄金测试集 + 轨迹回放 + 影子执行 + 回归基线 + 自动熔断
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 EvalCase / 2:58 Evaluator5层 / 3:78 轨迹录制 / 4:91 Runner / 5:112 Suite分区 / 6:145 IncidentToEval / 7:151 AutoBootstrap / 8:161 影子执行 / 9:169 连续采样 / 10:185 增量快照 / 11:197 回归检测 / 12:205 集成回放 / 13:209 InvariantTestSuite / 14:222 EvalStore / 15:226 闭环 / 17:232 279(SOFT)降级 / 18:257 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 EvalCase / 2:58 Evaluator5层 / 3:78 轨迹录制 / 4:91 Runner / 5:120 Suite分区 / 6:153 IncidentToEval / 7:159 AutoBootstrap / 8:169 影子执行 / 9:177 连续采样 / 10:193 增量快照 / 11:205 回归检测 / 12:213 集成回放 / 13:217 InvariantTestSuite / 14:230 EvalStore / 15:234 闭环 / 17:240 279(SOFT)降级 / 18:265 依赖 -->
 ## 0-bis. 职责边界
 
 | M12 **是** | M12 **不是** |
@@ -108,6 +108,14 @@ EvalResult:
 - P0 失败阻塞，P1 单 Judge 置信度阈值见 `spec/state.yaml §m12_eval.judge_single_confidence`，低于阈值告警。
 - `BlockDeploy = P0PassRate < 1.0`
 - `WarnDeploy = P1PassRate < 0.8`
+
+## 4.1 开放基准适配器（Benchmark Adapter，ADR-0068）
+
+`internal/eval/harness/benchmark/` 提供 `BenchmarkAdapter` 接口（`Name()` + `Load(datasetPath) ([]harness.EvalCase, error)`），将行业标准开放基准（τ-bench、Terminal-Bench 等）的外部数据集格式转换为内部 `EvalCase`，复用既有 `RunnerImpl` 执行链路而非另起一套评测引擎。出于许可证与隐私合规，数据集不打包进仓库，由用户运行时指定本地路径。
+
+- **`TauBenchAdapter`**：已实现，解析 τ-bench 任务 JSON（`task_id`/`user_goal`/`available_tools`/`golden_actions`）为 `BehaviorToolCallSequence` 类型的 `EvalCase`。
+- **`TerminalBenchAdapter`**：仅接口预注册，`Load` 返回 `apperr.CodeUnimplemented`——外部数据格式尚未最终确认，刻意不臆测转换细节。
+- **CLI**：`polaris eval bench --suite=<suite> --data=<path> [--out=<report.json>]`（`cmd/polaris/cli_eval_bench.go`）。**现状边界**：该命令目前仅执行"加载并转换数据集"这一步，尚未接入 `RunnerImpl` 实际跑 Agent（`RunnerImpl.RunSuite` 依赖完整 Store/EvalStore/Agent 运行环境，与本命令期望的离线轻量用法不兼容，属独立工作量）；报告 JSON 如实标注 `executed:false`，不产出伪造的 pass/fail 结果。
 
 ## 5. Eval Suite 分区 (防 M9 过拟合)
 

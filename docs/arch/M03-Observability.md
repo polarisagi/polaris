@@ -1,7 +1,7 @@
 # 模块 3: Observability & Telemetry
 
 > OTel（OpenTelemetry）-native | slog | Token_Burn_Rate + Surprise_Index 一等公民 | Hardware Probe | [HE-Rule-1] [HE-Rule-4] | Go
-<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:170 HardwareProbe+AutoConfig / 6:248 OSMemoryGuard / 7:264 MonitorMemoryPressure / 8:284 LogLevel / 9:292 TraceContext / 10:304 DecisionLog / 10.1:316 PerformanceDrift / 11:355 Langfuse / 14:386 (SOFT)降级 / 15:403 依赖 -->
+<!-- §跳读: 0-bis:5 职责 / 0-ter:18 不变量速查 / 1:31 四层架构 / 2:68 Metrics / 3:103 TokenBurnRate(CANONICAL) / 4:126 SurpriseIndex / 5:170 HardwareProbe+AutoConfig / 6:248 OSMemoryGuard / 7:264 MonitorMemoryPressure / 8:284 LogLevel / 9:292 TraceContext / 10:316 DecisionLog / 10.1:316 PerformanceDrift / 11:367 Langfuse / 14:398 (SOFT)降级 / 15:415 依赖 -->
 ## 0-bis. 职责边界
 
 | M3 **是** | M3 **不是** |
@@ -298,6 +298,18 @@ atomicLevelVar: atomic.Int32 无锁存储 slog.Level; levelHandler: slog.Handler
 | MCP stdio | JSON-RPC `_meta.traceparent` |
 | Go channel (Blackboard) | `BlackboardEvent.TraceContext` [Blackboard] |
 | Wasm | 外层 span 包裹 |
+
+---
+
+## 9.1 Trace Span Exporter（OpenLLMetry，ADR-0069）
+
+面向自托管、需要对接外部大模型可观测平台（LangSmith / Braintrust / Phoenix 等）的场景，`internal/observability/trace` 提供可插拔的 `SpanExporter` 接口（`ExportSpan`/`Shutdown`），`Tracer.EndSpan` 生命周期挂载。首批实现 `OTLPHTTPExporter`（HTTP/JSON 推送）。
+
+**关键约束**（均已落地，非设计草案）：
+- **默认关闭**：由 `config.Thresholds.M3Observability.TraceExport{Enabled, Endpoint}` 门控（`configs/threshold-examples/m3_observability.toml`），`Enabled=false` 时等价于零 exporter（未定义 NoopExporter 类型，空 exporter 列表语义等价）。
+- **异步尽力而为**：导出经 `concurrent.SafeGo` 起协程，绝不阻塞 Agent 热路径；失败仅 `slog.Warn` + `metrics.GlobalTraceExporterErrorsTotal` 计数，不影响主链路。
+- **出站安全**：导出器 HTTP 客户端复用 boot 期已构造的 SafeDialer + EgressGateway 客户端（M11 §6 + M13 §1.2.2），与其余出站请求共享同一条纵深防御链路——用户配置的导出端点域名需显式加入 EgressGateway 白名单才能连通，不单独开后门。
+- **接线范围**：boot 期（`cmd/polaris/boot_substrate.go`）一次性注册为全局默认导出器（`trace.SetDefaultExporters`），各调用点（`internal/knowledge/rag_impl.go`、`retriever.go` 等）各自 `trace.NewTracer()` 构造的实例自动继承，无需逐一改造调用点。
 
 ---
 
