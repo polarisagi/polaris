@@ -227,8 +227,13 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 
 ### 7.2 已知缺口汇总
 
-无未解决缺口。
+- **M13 ChatOrchestrator 拆分**（ADR-0067）：`internal/gateway/server/chat/sse.go` 仍兼管输入预处理（@file 展开、斜杠指令）+ 上下文压缩调度 + 消息持久化，属于已识别但刻意推迟的重构——sse.go 是高频热路径，big-bang 重构回归面大，仅立 ADR 记录目标态与分步落地计划，本阶段不落码。
+- **M7 MCP Agent-to-Agent 协同**（ADR-0070）：外部 Agent 经标准 MCP 协议向 Swarm 投递任务、或 Polaris 向外部 Agent 委派子任务，目前仅有战略方向 ADR，未落码；MCP 当前仅作为工具层（同步调用）使用，无任务层（异步声明/状态跟踪/回调）语义。
+
+以上两项均为"设计已定、暂不实施"的显式已知缺口，非遗漏或 bug。
 
 ### 7.3 审计依据
 
 初版审计：2026-06-11；全量核查：2026-06-15；缺口闭环：2026-06-15。
+
+**2026-07-23 增量说明**：本次未对 M1-M13bis 全量重新审计，仅核实与本轮 35+ 提交（channel 适配器重构、Gateway SQL 下沉 Repository、EgressGateway 白名单收紧、S_REPLAN 扩展激活降级、开放基准适配器、OpenLLMetry 导出器接线，ADR-0064~0071）相关的模块行为，详见对应 ADR 与 M03/M04/M12/M13 各文件内的同步更新。7.1 完成度表格未重新核验，仍以 2026-06-15 状态为准，不代表本轮无新增能力。

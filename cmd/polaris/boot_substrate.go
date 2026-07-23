@@ -41,6 +41,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/ollamamgr"
 	"github.com/polarisagi/polaris/internal/observability"
 	"github.com/polarisagi/polaris/internal/observability/budget"
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/schema"
@@ -420,6 +421,21 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	llmadapter.SetDefaultHTTPClient(safeHTTPClient)
 	// 将 SafeDialer 注入下载器，使 GitHub Proxy 探测也经过 SSRF 过滤（XR-06）
 	downloader.Configure(cfg.Download.GithubProxy, safeHTTPClient)
+
+	// ─── 4.1 OpenLLMetry 轨迹导出器（ADR-0069，默认关闭）──────────────────────
+	// 复用上面已构造的 safeHTTPClient：它已套了 egressGW（域名白名单预检）+
+	// SafeDialer（SSRF 阻断），满足 ADR-0069 决策点 3"必须走 M11 SafeDialer 机制"
+	// 的要求，无需为导出器单独造一个 SafeDialer 实例。若用户配置的 endpoint 域名
+	// 不在 EgressGateway 白名单内，请求会被 egressGW 拒绝——这是刻意的纵深防御，
+	// 需要通过 cfg.System.EgressAllowedDomains 显式放行该域名。
+	if te := cfg.Thresholds.M3Observability.TraceExport; te.Enabled {
+		if te.Endpoint == "" {
+			slog.Warn("polaris: trace_export.enabled=true 但 endpoint 为空，跳过导出器注册")
+		} else {
+			trace.SetDefaultExporters([]trace.SpanExporter{trace.NewOTLPHTTPExporter(safeHTTPClient, te.Endpoint)})
+			slog.Info("polaris: trace exporter enabled", "endpoint", te.Endpoint)
+		}
+	}
 
 	reg := llm.NewProviderRegistry(cfg.Thresholds.M1Router)
 	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。

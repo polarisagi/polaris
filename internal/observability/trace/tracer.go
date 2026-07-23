@@ -39,12 +39,37 @@ type Tracer struct {
 	exporters []SpanExporter
 }
 
+// defaultExporters 是 boot 期注册的全局默认 SpanExporter 列表（ADR-0069）。
+// 调用方（internal/knowledge/rag_impl.go、retriever.go 等）各自用 NewTracer()
+// 构造独立 Tracer 实例、互不共享状态；若要求这些分散实例都能导出到外部平台，
+// 唯一低侵入方案是让 NewTracer() 自动附加 boot 期注册的默认导出器列表，而非把
+// 这些调用点全部改造成注入共享 Tracer 单例（那将是远超"接入导出器"范围的架构
+// 改动）。atomic.Pointer 零值 nil = 未配置（默认关闭，等价于 ADR-0069 决策点 4
+// 所称的 NoopExporter——Tracer.exporters 为空 slice 时 EndSpan 循环体不执行，
+// 语义上与显式 Noop 完全等价，未单独定义 NoopExporter 类型以避免冗余抽象）。
+// boot 期只应调用 SetDefaultExporters 一次，运行期只读，符合 Test_inv_NoGlobalVar
+// 豁免类别（atomic.* 零值单例）。
+//
+//nolint:gochecknoglobals // atomic.Pointer 零值单例，boot 期单次写入，运行期只读
+var defaultExporters atomic.Pointer[[]SpanExporter]
+
+// SetDefaultExporters 由 boot 期（cmd/polaris/boot_substrate.go）读取
+// config.Thresholds.M3Observability.TraceExport 后调用一次，注册全局默认导出器。
+// 之后所有 NewTracer() 构造的新 Tracer 实例自动继承该列表。
+func SetDefaultExporters(exporters []SpanExporter) {
+	defaultExporters.Store(&exporters)
+}
+
 func NewTracer() *Tracer {
-	return &Tracer{
+	t := &Tracer{
 		logger: slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
 	}
+	if p := defaultExporters.Load(); p != nil {
+		t.exporters = append(t.exporters, *p...)
+	}
+	return t
 }
 
 func (t *Tracer) RegisterExporter(e SpanExporter) {

@@ -98,7 +98,7 @@ ADR 被代码引用时，源文件头部加：
 | 0066 | Gateway 直连 SQL 下沉 Repository（A-4）+ EgressGateway 收紧默认白名单（A-6） | Accepted（已执行，回填） | 2026-07-23 |
 | 0067 | Gateway God Class 拆分（ChatOrchestrator，A-5） | Proposed（设计阶段，未实施） | 2026-07-23 |
 | 0068 | 开放基准适配器架构（τ-bench/Terminal-Bench，F-1） | Accepted（已执行） | 2026-07-23 |
-| 0069 | OpenLLMetry 轨迹导出器架构（F-2） | Accepted（导出器已实现，未接入 boot/config） | 2026-07-23 |
+| 0069 | OpenLLMetry 轨迹导出器架构（F-2），含 boot/config 接线 | Accepted（已执行） | 2026-07-23 |
 | 0070 | MCP Agent-to-Agent (A2A) 协同架构（F-3） | Proposed（战略方向，未落码） | 2026-07-23 |
 | 0071 | downloader 出站公网豁免 XR-06（proxy.go） | Accepted（已执行） | 2026-07-23 |
 
