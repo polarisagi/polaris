@@ -3,6 +3,8 @@ package channel
 import (
 	"net/http"
 	"testing"
+
+	cadapter "github.com/polarisagi/polaris/internal/channel/adapter"
 )
 
 // ── ExtractMessage dispatcher ─────────────────────────────────────────────────
@@ -20,6 +22,16 @@ func TestExtractMessage_Discord(t *testing.T) {
 	msg := ExtractMessage("discord", []byte(body), nil)
 	if msg.Text != "dc" {
 		t.Errorf("expected 'dc', got %q", msg.Text)
+	}
+}
+
+func TestRegistry_RegisteredAdapters(t *testing.T) {
+	// A simple sanity check that some known adapters are registered.
+	knownAdapters := []string{"telegram", "discord", "webhook"}
+	for _, name := range knownAdapters {
+		if _, ok := cadapter.Lookup(name); !ok {
+			t.Errorf("expected adapter %q to be registered, but it was not", name)
+		}
 	}
 }
 
