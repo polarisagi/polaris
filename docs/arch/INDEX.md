@@ -61,7 +61,7 @@
 - **症状特征**：订阅 `SQLiteBlackboard.Subscribe` 的消费方（如编排执行器）在 `task_completed` 事件里读 `ev.Payload` 得到空字节，即便 `CompleteTask` 明明传了非空 `result` 参数。
 - **归类模块**：M08
 - **根因类别**：某个状态转换方法的 `broadcast` 调用忘了把参数写进 `BlackboardEvent.Payload` 字段（对照同类兄弟方法，如 `FailTask` 有 `Payload: errBytes`，遗漏方法却没有）。
-- **排查起点**：`internal/execute/orchestrator/sqlite_blackboard.go`（2026-07-12 前路径为 `internal/swarm/orchestrator/`，见 ADR-0046）里对比 `CompleteTask`/`FailTask`/`SuspendTask` 等同类状态转换方法的 `bb.broadcast(...)` 字面量，看是否每个都对齐设置了 `Payload`；真实案例见 ADR-0041 §2 第6点（`CompleteTask` 此前遗漏）。
+- **排查起点**：`internal/execute/orchestrator/sqlite_blackboard.go`（2026-07-12 前路径为 `internal/swarm/orchestrator/`，见 ADR-0046）里对比 `PostTask`/`PostBatch`/`ClaimTask`/`StartExecution`/`CompleteTask`/`FailTask` 等状态转换方法的 `bb.broadcast(...)` 字面量，看是否每个都对齐设置了 `Payload`；真实案例见 ADR-0041 §2 第6点（`CompleteTask` 此前遗漏）。
 
 ### 症状 10：AgentPool 会话 SendIntent 后 FSM 无任何响应/流式无输出
 - **症状特征**：走 `AgentPool.Acquire` 的 per-session 请求，`SendIntent` 本身不报错，但 `SubscribeStream`/`CurrentState()` 永远不变化，像是石沉大海。

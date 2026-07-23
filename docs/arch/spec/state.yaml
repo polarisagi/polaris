@@ -10,7 +10,7 @@
 #   - Invariants are testable predicates (M12 Eval enforces)
 #   - All time values use monotonic ns offset (MonoNs); wall_clock is human display only
 # §跳读 (Read offset/limit 按需局部加载):
-#   meta:14 / par:24 (M4 PAR 10态) / staging:193 (M9 7阶段) / taint:326 (M11 污点)
+#   meta:14 / par:24 (M4 PAR 12态) / staging:193 (M9 7阶段) / taint:326 (M11 污点)
 #   kill_switch:417 (M11 D5) / task_status:467 (M8 7态) / outbox:555 (M2 4态)
 #   signals:633 (M3 信号) / global_invariants:679 / thresholds:745 (全模块阈值)
 # =============================================================================
@@ -22,7 +22,7 @@ meta:
   go_package: internal/protocol
 
 # =============================================================================
-# §par: M4 Plan-Act-Reflect 10-state machine
+# §par: M4 Plan-Act-Reflect 12-state machine
 # =============================================================================
 
 par:
