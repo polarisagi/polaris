@@ -421,7 +421,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				a.sCtx.TokensUsed += actualTokens
 				// [Task 11] BudgetManager 会话级记账：使用实际 token 数进行全局计账。
 				if a.sCtx.Budget != nil {
-					if budgetErr := a.sCtx.Budget.ConsumeTokens(actualTokens); budgetErr != nil {
+					if budgetErr := a.sCtx.Budget.ConsumeTokens(ctx, actualTokens); budgetErr != nil {
 						slog.Warn("kernel: session budget exceeded via BudgetManager",
 							"agent_id", a.ID, "tokens", actualTokens, "err", budgetErr)
 						a.sm.ForceState(types.AgentStateFailed)

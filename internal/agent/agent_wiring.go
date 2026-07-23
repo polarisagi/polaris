@@ -170,10 +170,10 @@ func (a *Agent) InjectOutboxWriter(ow protocol.OutboxWriter) {
 }
 
 // SetTaskID 由 Worker 在调用 Run() 前注入 Blackboard task_id，供内核写 tasks 表时使用。
-func (a *Agent) SetTaskID(id string) {
+func (a *Agent) SetTaskID(ctx context.Context, id string) {
 	a.sCtx.TaskID = id
 	if a.taskRepo != nil && id != "" {
-		count, err := a.taskRepo.GetTaskProviderSuspendCount(context.Background(), id)
+		count, err := a.taskRepo.GetTaskProviderSuspendCount(ctx, id)
 		if err == nil {
 			a.sCtx.ProviderSuspendCount = count
 		}
@@ -249,6 +249,7 @@ func (a *Agent) SetTaskIntent(intent []byte) {
 			// 同步写入 GlobalSurpriseIndex，保持 SelectThinkingMode（transitions.go）读值一致
 			metrics.GlobalSurpriseIndex().SetLastValue(a.sCtx.SurpriseIndex)
 		} else {
+			// [A6] 不透传 ctx：SetTaskIntent 由外部在 Agent 循环之外触发，且 ComputeBasic 为纯 CPU 同步计算，不涉及 IO 或 Trace，无需 trace ctx 传播。
 			a.sCtx.SurpriseIndex = metrics.GlobalSurpriseIndex().ComputeBasic(
 				context.Background(),
 				nil,
