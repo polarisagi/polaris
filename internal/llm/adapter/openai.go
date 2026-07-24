@@ -154,10 +154,10 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 }
 
 func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var cancel context.CancelFunc
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
+		//nolint:govet // cancel is intentionally passed to SafeGo
 		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
-		defer cancel()
 	}
 	options := &types.InferOptions{}
 	for _, opt := range opts {
@@ -180,13 +180,16 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 
 	cred := a.credPool.Pick()
 	if cred == nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.New(apperr.CodeResourceExhausted, "OpenAIAdapter.StreamInfer: no available credential (all keys cooling down)")
 	}
 	apiKey := cred.CredFn()()
 	defer llmparent.ClearBytes(apiKey)
 
 	tok := llmparent.NewTiktokenTokenizer(a.model)
-	rawCh, err := a.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
+	rawCh, err := a.client.SendStreamRequest(ctx, cancel, apiKey, apiReq, tok.EstimateRequest(req))
 	cred.RecordResult(err)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.StreamInfer", err)

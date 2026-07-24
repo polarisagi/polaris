@@ -181,10 +181,10 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	return resp, nil
 }
 func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var outerCancel context.CancelFunc
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
-		defer cancel()
+		//nolint:govet // cancel is intentionally passed to SafeGo
+		ctx, outerCancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
 	}
 	options := &types.InferOptions{}
 	for _, opt := range opts {
@@ -201,10 +201,16 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	}
 	body, err := buildGeminiRequest(req)
 	if err != nil {
+		if outerCancel != nil {
+			outerCancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	cred := a.credPool.Pick()
 	if cred == nil {
+		if outerCancel != nil {
+			outerCancel()
+		}
 		return nil, apperr.New(apperr.CodeResourceExhausted, "GoogleAgentPlatformAdapter.StreamInfer: no available credential (all keys cooling down)")
 	}
 	apiKey := cred.CredFn()()
@@ -213,11 +219,14 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	llmparent.ClearBytes(apiKey)
 
 	// 给单次推理加 120s 上限，防止 Google 连接 hang 住永不关闭导致前端卡死
-	inferCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	inferCtx, inferCancel := context.WithTimeout(ctx, 120*time.Second)
 
 	httpReq, err := http.NewRequestWithContext(inferCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		cancel()
+		inferCancel()
+		if outerCancel != nil {
+			outerCancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -225,13 +234,19 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
 		cred.RecordResult(err)
-		cancel()
+		inferCancel()
+		if outerCancel != nil {
+			outerCancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.StreamInfer", err)
 	}
 	if httpResp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		httpResp.Body.Close()
-		cancel()
+		inferCancel()
+		if outerCancel != nil {
+			outerCancel()
+		}
 		callErr := apperr.New(apperr.CodeInternal, fmt.Sprintf("google: HTTP %d: %s", httpResp.StatusCode, raw))
 		cred.RecordResult(callErr)
 		return nil, callErr
@@ -242,7 +257,10 @@ func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []typ
 	// [SafeGo] SSE 解码：畸形响应触发 panic 此前会直接崩进程；defer 链在 panic
 	// 展开时仍会执行（cancel/close(ch)/Body.Close 均不受影响）。
 	concurrent.SafeGo(inferCtx, "llm.adapter.google_stream_decode", func(ctx context.Context) {
-		defer cancel()
+		defer inferCancel()
+		if outerCancel != nil {
+			defer outerCancel()
+		}
 		defer close(ch)
 		defer httpResp.Body.Close()
 		parseGoogleStream(ctx, httpResp.Body, ch, a.model, a.tbr)

@@ -138,6 +138,9 @@ func (g *Gate) IsAuthorized(
 	principal, action, resource string,
 	evalCtx map[string]any,
 ) (bool, error) {
+	if g == nil {
+		return false, apperr.New(apperr.CodeInternal, "policy: nil receiver")
+	}
 	if principal == "" || action == "" {
 		g.recordFailure()
 		return false, apperr.New(apperr.CodeInternal, "policy: invalid request: principal and action are required")
@@ -174,6 +177,9 @@ func (g *Gate) IsAuthorized(
 
 // Review 实现 protocol.PolicyGate.Review（详细审查，附 Reason 与 Etag）。
 func (g *Gate) Review(ctx context.Context, req types.PolicyReviewRequest) (types.PolicyReviewResult, error) {
+	if g == nil {
+		return types.PolicyReviewResult{Allowed: false, Reason: "nil receiver"}, apperr.New(apperr.CodeInternal, "Gate.Review: nil receiver")
+	}
 	allowed, err := g.IsAuthorized(ctx, req.Principal, req.Action, req.Resource, req.Context)
 	if err != nil {
 		return types.PolicyReviewResult{Allowed: false, Reason: err.Error()}, apperr.Wrap(apperr.CodeInternal, "Gate.Review", err)
@@ -220,6 +226,9 @@ func formatCedarUID(defaultType, val string) string {
 // TaintEgressCheck 检查 Taint 出口：TaintMedium 级别数据不可直接输出到外部接口。
 // 违反 → ErrTaintBlockedEgress（对应 M11 §2.3 SanitizeBySchema 规则）。
 func (g *Gate) TaintEgressCheck(levels ...types.TaintLevel) error {
+	if g == nil {
+		return apperr.New(apperr.CodeInternal, "policy: nil receiver")
+	}
 	result := types.PropagateTaint(levels...)
 	// TaintMedium 硬地板：Medium 及以上级别数据不得直接出口，必须经过清洗
 	if result >= types.TaintMedium {
@@ -235,6 +244,9 @@ func (g *Gate) TaintEgressCheck(levels ...types.TaintLevel) error {
 // 被拦截的字节内容，不能用人类可读摘要代替），其 Unwrap() 仍指向
 // ErrTaintBlockedEgress，errors.Is(err, ErrTaintBlockedEgress) 不受影响。
 func (g *Gate) CheckEgressWithExemption(data []byte, taintLevel types.TaintLevel, tok *token.TaintExemptionToken) error {
+	if g == nil {
+		return apperr.New(apperr.CodeInternal, "policy: nil receiver")
+	}
 	if taintLevel < types.TaintMedium {
 		return nil
 	}

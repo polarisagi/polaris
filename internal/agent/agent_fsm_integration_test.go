@@ -19,7 +19,11 @@ type mockToolExecutor struct {
 }
 
 func (r *mockToolExecutor) Lookup(name string) (types.Tool, error) {
-	return types.Tool{Name: name, Source: types.ToolBuiltin, Capability: types.CapReadOnly}, nil
+	se := []types.SideEffect{}
+	if name == "non_idempotent_tool" {
+		se = []types.SideEffect{types.SideFileWrite}
+	}
+	return types.Tool{Name: name, Source: types.ToolBuiltin, Capability: types.CapReadOnly, SideEffects: se}, nil
 }
 func (r *mockToolExecutor) ExecuteWithTaint(_ context.Context, name string, _ []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 	r.ExecuteWithTaintCalled = true

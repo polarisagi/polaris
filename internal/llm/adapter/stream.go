@@ -50,7 +50,7 @@ type OpenAIStreamChunk struct {
 // SendStreamRequest 发送一个流式的 HTTP 请求并返回解析事件的 channel。
 // estimatedInputTokens 由调用方通过 MultimodalTokenizer.EstimateRequest 预估；
 // 当 ctx 被取消时，StreamCancelled 事件用该值作为 InputTokens 补偿计费。
-func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, apiKey []byte, req *OpenAIRequest, estimatedInputTokens int) (<-chan types.StreamEvent, error) { //nolint:gocyclo
+func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel context.CancelFunc, apiKey []byte, req *OpenAIRequest, estimatedInputTokens int) (<-chan types.StreamEvent, error) { //nolint:gocyclo
 	req.Stream = true
 	// 要求 API 在最后一个 chunk 附带完整 usage，供精确计费
 	req.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
@@ -72,10 +72,16 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, apiKey [
 
 	httpResp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "http request failed", err)
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
+		if cancel != nil {
+			cancel()
+		}
 		body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		httpResp.Body.Close()
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("api error (status %d): %s", httpResp.StatusCode, strings.TrimSpace(string(body))))
@@ -88,6 +94,9 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, apiKey [
 	concurrent.SafeGo(ctx, "llm.adapter.openai_compatible_stream_decode", func(ctx context.Context) {
 		defer httpResp.Body.Close()
 		defer close(ch)
+		if cancel != nil {
+			defer cancel()
+		}
 
 		scanner := bufio.NewScanner(httpResp.Body)
 		buf := make([]byte, 4096)

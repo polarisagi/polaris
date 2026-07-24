@@ -48,7 +48,7 @@ func TestSSEParser_DeepSeek(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	ch, err := client.SendStreamRequest(ctx, []byte("test-key"), translateRequest(req, true), 0)
+	ch, err := client.SendStreamRequest(ctx, nil, []byte("test-key"), translateRequest(req, true), 0)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

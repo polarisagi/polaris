@@ -216,10 +216,9 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 }
 
 func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var cancel context.CancelFunc
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
-		defer cancel()
 	}
 	options := &types.InferOptions{}
 	for _, opt := range opts {
@@ -266,6 +265,9 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 	concurrent.SafeGo(ctx, "llm.adapter.anthropic_stream_decode", func(ctx context.Context) {
 		defer close(ch)
 		defer httpResp.Body.Close()
+		if cancel != nil {
+			defer cancel()
+		}
 		a.parseAnthropicStream(ctx, req.Model, httpResp.Body, ch)
 	})
 	return ch, nil

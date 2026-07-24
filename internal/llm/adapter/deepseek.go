@@ -154,10 +154,10 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []types.Message, opts 
 
 // StreamInfer 执行流式推理并返回事件通道。
 func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var cancel context.CancelFunc
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
+		//nolint:govet // cancel is intentionally passed to SafeGo
 		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
-		defer cancel()
 	}
 	options := &types.InferOptions{}
 	for _, opt := range opts {
@@ -175,6 +175,9 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
 	cred := d.credPool.Pick()
 	if cred == nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.New(apperr.CodeResourceExhausted, "DeepSeekAdapter.StreamInfer: no available credential (all keys cooling down)")
 	}
 	apiKey := cred.CredFn()()
@@ -183,7 +186,7 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 	apiReq.Model = resolveDeepSeekModel(apiReq.Model)
 
 	tok := llmparent.NewTiktokenTokenizer("deepseek-v4")
-	rawCh, err := d.client.SendStreamRequest(ctx, apiKey, apiReq, tok.EstimateRequest(req))
+	rawCh, err := d.client.SendStreamRequest(ctx, cancel, apiKey, apiReq, tok.EstimateRequest(req))
 	// 建连/握手阶段的结果先行回报；建连成功后逐块解码期间的错误（rawCh 内部）
 	// 属于流中断，现有设计未对单块错误做凭证级分类，维持原有粒度不扩大改动范围。
 	cred.RecordResult(err)

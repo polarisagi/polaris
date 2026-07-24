@@ -173,16 +173,18 @@ func (a *LocalAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...
 // 优化点（不在本次 P3-1 范围内）。此处仍返回 <-chan types.StreamEvent 以
 // 满足 protocol.Provider 接口，调用方感知到的是"一次性到达的单个 delta"。
 func (a *LocalAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var cancel context.CancelFunc
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
-		defer cancel()
 	}
 
 	ch := make(chan types.StreamEvent, 1)
 	// [SafeGo] a.Infer 经 purego 跨界调用 Rust llama.cpp FFI，边界异常此前会直接崩进程。
 	concurrent.SafeGo(ctx, "llm.adapter.local_stream_infer", func(ctx context.Context) {
 		defer close(ch)
+		if cancel != nil {
+			defer cancel()
+		}
 		resp, err := a.Infer(ctx, msgs, opts...)
 		if err != nil {
 			ch <- types.StreamEvent{Type: types.StreamError, Content: err.Error()}

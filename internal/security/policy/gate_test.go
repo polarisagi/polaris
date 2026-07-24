@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,5 +271,29 @@ func TestGate_CedarEnforceFull_AllowIsAuthoritative(t *testing.T) {
 	}
 	if allowed {
 		t.Fatal("expected CedarEnforceFull to trust Cedar's Deny directly, overriding Go permit rules")
+	}
+}
+
+func TestGate_NilReceiver(t *testing.T) {
+	var g *Gate
+
+	allowed, err := g.IsAuthorized(context.Background(), "user", "read", "res", nil)
+	if allowed || err == nil || !strings.Contains(err.Error(), "policy: nil receiver") {
+		t.Errorf("expected IsAuthorized to fail with nil receiver, got allowed=%v err=%v", allowed, err)
+	}
+
+	res, err := g.Review(context.Background(), types.PolicyReviewRequest{})
+	if res.Allowed || err == nil || !strings.Contains(res.Reason, "nil receiver") {
+		t.Errorf("expected Review to fail with nil receiver, got allowed=%v err=%v", res.Allowed, err)
+	}
+
+	err = g.TaintEgressCheck(types.TaintLow)
+	if err == nil || !strings.Contains(err.Error(), "policy: nil receiver") {
+		t.Errorf("expected TaintEgressCheck to fail with nil receiver, got err=%v", err)
+	}
+
+	err = g.CheckEgressWithExemption([]byte("test"), types.TaintLow, nil)
+	if err == nil || !strings.Contains(err.Error(), "policy: nil receiver") {
+		t.Errorf("expected CheckEgressWithExemption to fail with nil receiver, got err=%v", err)
 	}
 }
