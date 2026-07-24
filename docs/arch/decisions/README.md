@@ -101,6 +101,9 @@ ADR 被代码引用时，源文件头部加：
 | 0069 | OpenLLMetry 轨迹导出器架构（F-2），含 boot/config 接线 | Accepted（已执行） | 2026-07-23 |
 | 0070 | MCP Agent-to-Agent (A2A) 协同架构（F-3） | Proposed（战略方向，未落码） | 2026-07-23 |
 | 0071 | downloader 出站公网豁免 XR-06（proxy.go） | Accepted（已执行） | 2026-07-23 |
+| 0073 | KillSwitch 恢复路径统一（进程内活恢复模型 + `/_admin/unseal`，含原 ADR-0072） | Accepted（已执行） | 2026-07-23 |
+| 0074 | Semantic(M5) 与 GraphRAG(M10) 最小整合桥接（写入期去重 + 检索期联合种子，不做物理合并） | Accepted（已执行） | 2026-07-23 |
+| 0075 | Extension Upgrade Versioning（extension_catalog/instances 版本列 + `/plugins/{id}/upgrade`） | Accepted（已执行） | 2026-07-23 |
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 
@@ -113,6 +116,7 @@ ADR 被代码引用时，源文件头部加：
 | 0036 | 核心工作记忆区（ZoneCoreMemory） | ADR-0033（§决策二） | 2026-07-22 |
 | 0038 | 影子执行器设计与异步回放选型 | ADR-0029（§K） | 2026-07-22 |
 | 0040 | 受控循环图执行器（CyclicGraphExecutor，未落地草案） | ADR-0041（§与 ADR-0040 的关系） | 2026-07-22 |
+| 0072 | KillSwitch 恢复路径统一（内容与 ADR-0073 重复，系同一决策的两次独立成文） | ADR-0073 | 2026-07-23 |
 
 > 现有 `docs/arch/M_X` 文档中的关键决策应回填为 ADR。回填优先级：依赖选型 > 跨层例外 > 性能权衡。
 

@@ -229,12 +229,46 @@ msg "📦 正在校验并解压..." "📦 Verifying and extracting..."
 TMP_SHA_FILE="${TMP_ARCHIVE}.sha256"
 rm -f "$TMP_SHA_FILE"
 
-# 优先尝试从官方源下载校验和
+# 校验和默认只从官方直连源下载，失败即中止（防止镜像被投毒后连"标尺"本身
+# 都被污染——如果哈希也来自镜像，篡改过二进制的镜像可以同时伪造一份匹配的
+# 校验和，比对形同虚设）。
+#
+# 但对完全无法直连 GitHub 的网络环境（常见于大陆网络，非"仅仅慢"而是彻底
+# 不可达），一律中止会让二进制虽已通过镜像下载成功、却因这一步无法完成而
+# 前功尽弃。系统最优设计：默认保持安全（不做任何静默/自动降级），仅在用户
+# 显式设置 POLARIS_ALLOW_MIRROR_CHECKSUM=1 时才允许回退到与二进制相同的镜像源
+# 获取校验和，并在回退前打印明确的风险警告（该模式下无法防御"镜像同时伪造
+# 二进制与校验和"的攻击，用户需自行承担该风险，例如已通过其他渠道信任该镜像，
+# 或后续自行核对官方发布页面公布的哈希）。
 if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${DIRECT_URL}.sha256"; then
-    msg "❌ 无法从官方直连源获取校验和文件，出于供应链安全考虑（严禁使用镜像源）已中止安装。" \
-        "❌ Failed to download checksum file from official source. Aborting install for supply-chain safety (mirrors are forbidden for checksums)."
-    rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
-    exit 1
+    # 回退源固定用 $URL（下载二进制那个 for 循环实际成功的源，循环 break 后
+    # 该变量仍保留其值）而非重新猜测/拼接镜像地址：语义上是"信任刚才已经把
+    # 二进制发给我的同一个源"，而不是引入另一个与二进制来源无关的新镜像。
+    # 若二进制本身就是从官方直连源下载的（$URL == $DIRECT_URL），这里再次
+    # 尝试同一 URL 没有意义，直接跳过回退。
+    if [ "$POLARIS_ALLOW_MIRROR_CHECKSUM" = "1" ] && [ "$URL" != "$DIRECT_URL" ]; then
+        msg "⚠️  无法从官方直连源获取校验和文件。检测到 POLARIS_ALLOW_MIRROR_CHECKSUM=1，" \
+            "⚠️  Failed to fetch checksum from the official source. POLARIS_ALLOW_MIRROR_CHECKSUM=1 detected,"
+        msg "⚠️  按你的显式授权回退到二进制同源（$URL）下载校验和。此模式下无法防御该源同时" \
+            "⚠️  falling back to the same source that served the binary ($URL) for the checksum. This mode cannot detect"
+        msg "⚠️  伪造二进制与校验和的供应链攻击，风险自负。" \
+            "⚠️  a source that forges both the binary and its checksum together — proceed at your own risk."
+        if ! curl -sSLf --max-time 30 -o "$TMP_SHA_FILE" "${URL}.sha256"; then
+            msg "❌ 该源同样无法获取校验和文件，已中止安装。" \
+                "❌ Checksum also unreachable via that source. Aborting install."
+            rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
+            exit 1
+        fi
+    else
+        msg "❌ 无法从官方直连源获取校验和文件，出于供应链安全考虑（默认严禁使用镜像源）已中止安装。" \
+            "❌ Failed to download checksum file from official source. Aborting install for supply-chain safety (mirrors are forbidden for checksums by default)."
+        msg "   若你所在网络无法直连 GitHub，可显式设置 POLARIS_ALLOW_MIRROR_CHECKSUM=1 后重新运行本脚本以" \
+            "   If your network cannot reach GitHub directly, you may explicitly set POLARIS_ALLOW_MIRROR_CHECKSUM=1 and re-run this script to"
+        msg "   回退到镜像源获取校验和（会降低供应链攻击防御能力，请仅在信任该镜像时使用）。" \
+            "   fall back to a mirror for the checksum (this weakens supply-chain attack defenses — only use it if you trust the mirror)."
+        rm -f "$TMP_ARCHIVE" "$TMP_SHA_FILE"
+        exit 1
+    fi
 fi
 
 if ! command -v openssl >/dev/null 2>&1; then

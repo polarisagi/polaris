@@ -46,7 +46,6 @@ import (
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
-	"github.com/polarisagi/polaris/internal/tool/builtin/memory_prune"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
 	"github.com/polarisagi/polaris/internal/vfs"
@@ -284,24 +283,19 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		// U-1：builtin.SemanticMemWriter 是 protocol.SemanticMemory 的方法子集，
 		// 接口值结构子类型自动满足，直接传接口，禁止具体类型断言（P1-4 规则 3）。
 		exclusiveWriter := memretrieval.NewExclusiveWriter(mb.Mem.Semantic(), mb.CascadeInvalidator, sb.Store.DB())
+		// 复核修正（本轮审查）：此前此处额外注册 memory_prune 工具（A17），但 A17 的
+		// 立项背景误判"全仓库搜索 Prune/prune 未命中任何已注册工具"，实际是遗漏了
+		// 早已存在、语义完全相同的 memory_expire（M05 §5-bis / 00-Global-Dictionary.md
+		// 已记录、受【防退化】保护的 Memory-Write-Tool 组成员）。二者对 LLM 可见时
+		// 参数字段还不一致（entity_name vs name），存在被误选风险；且 memory_expire
+		// 当时的实现有 bug（见 memory_tools_exec.go MakeMemoryExpireFn 注释）从未真正
+		// 生效，才让审计误判其"不存在"。现已修复 memory_expire 直接调用
+		// MarkEntityExpired，功能与原 memory_prune 完全等价，遂删除重复的
+		// memory_prune 工具（含 internal/tool/builtin/memory_prune/ 整包）及其
+		// Cedar 规则，memory_expire 保留为唯一入口。
 		if err := builtin.RegisterMemoryTools(inProcSandbox, toolReg, exclusiveWriter, mb.Mem.Semantic(), mb.Mem.Retriever(), mb.Mem.Reflection(), mb.Mem.Working().CoreMemory()); err != nil {
 			slog.Warn("polaris: memory tool registration failed", "err", err)
 		}
-
-		memoryPrune := memory_prune.NewMemoryPruneTool(mb.Mem.Semantic())
-		if err := toolReg.Register(memoryPrune.Spec()); err != nil {
-			slog.Warn("polaris: memory_prune tool registration failed", "err", err)
-		}
-		inProcSandbox.Register("memory_prune", func(ctx context.Context, input []byte) ([]byte, error) {
-			res, err := memoryPrune.Execute(ctx, input)
-			if err != nil {
-				return nil, apperr.Wrap(apperr.CodeInternal, "memory_prune.Execute", err)
-			}
-			if res.Error != "" {
-				return nil, apperr.New(apperr.CodeInternal, res.Error)
-			}
-			return res.Output, nil
-		})
 	}
 
 	var nativeCogn native.CognitiveSearcher

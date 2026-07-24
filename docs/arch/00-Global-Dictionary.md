@@ -541,7 +541,7 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
   - `StatefulSession`（GD-4-002，默认关闭）：显式开启后，同一 SessionID 的多次调用间通过 pickle（python）/`declare -p`（bash）快照文件延续变量状态；每次调用仍是独立的一次性 L3 沙箱进程，不是常驻 Kernel，安全边界不变。
 - `[Memory-Write-Tool]`: LLM 主动写记忆工具集。【防退化】（依据 GD-8-004 结论，属领先设计，删除或弱化需 ADR）。区别于被动记忆积累（Agent 轮次结束后 outbox 异步落盘）——是 LLM **在推理中即时调用工具、主动写入语义记忆**的能力。
   - 包含 4 个内置工具：`memory_write`（写入/覆盖事实）、`memory_search`（混合检索）、`memory_append`（追加属性）、`memory_expire`（标记失效）。
-  - 实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)`。写入底层对接 `SemanticMemWriter.UpsertFact/Archive`；检索对接 `HybridRetriever`。
+  - 实现：`internal/tool/builtin/memory_tools.go`，注册接口：`builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)`。写入底层对接 `SemanticMemWriter.UpsertFact`（写入/追加）与 `MarkEntityExpired`（标记失效，直接操作 `semantic_entities.status`，2026-07-24 复核修正——原 `Archive` 误用 KV 文档命名空间对实体从未生效）；检索对接 `HybridRetriever`。
   - 全部 `SandboxTier=InProcess`、`RiskLevel=Low`，走 PolicyGate 五阶段。定义见 M5 §5-bis，工具层描述见 M7 §3.1。
 - `[CoreMemory]`: 核心工作记忆区。Agent 显式可编辑、持久化、带硬上限的核心状态区。属于 Working Memory，通过 `ZoneCoreMemory` 注入 Prompt，支持通过 `core_memory_edit` 工具（支持 `set/append/delete`）显式管理。用于维护角色约束、长程任务状态等。定义见 ADR-0033 §决策二。分页置换（GD-14-002，M5 §2.4）：`memory_page_out`/`memory_page_in` 工具允许 LLM 自主把暂不需要每轮可见的块置换到 L2 Semantic Memory（仍可 `memory_search`/`memory_page_in` 找回），不新增独立回收机制，与 Forgetting 的全局被动清理正交。
 

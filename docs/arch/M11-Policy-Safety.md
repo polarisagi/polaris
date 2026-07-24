@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:227 Cedar / 4:293 KillSwitch / 5:364 隐私 / 6:434 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:446 Factuality / 7:486 审计 / 8:510 多Agent宪法 / 9:537 威胁监控 / 13:551 降级 / 14:583 跨模块契约 -->
+<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:227 Cedar / 4:293 KillSwitch / 5:371 隐私 / 6:441 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:446 Factuality / 7:493 审计 / 8:517 多Agent宪法 / 9:544 威胁监控 / 13:558 降级 / 14:590 跨模块契约 -->
 
 ---
 
@@ -323,14 +323,21 @@ executePause: 200ms timeout → toolRegistry.StopAllPending
 |------|------|------|
 | Ctrl+C x3 (3s 窗口) | SIGINT 计数器, 窗口重置归零, >=3 → Full Stop | <1s |
 | ~/.polarisagi/polaris/KILLSWITCH 文件 | fsnotify 监视, 存在 → Full Stop | <500ms |
-| POST /_admin/kill | localhost-only (127.0.0.1/::1), 无认证 | <100ms |
-| POST /_admin/unseal | 强制鉴权 (API Key) | <100ms |
+| POST /_admin/kill | 需已认证身份（任意合法用户，非 admin-only）；未配置 `POLARIS_API_KEY` 时按回环 IP (127.0.0.1/::1) 豁免免认证，已配置后不再有 IP 限制 | <100ms |
+| POST /_admin/unseal | 强制鉴权且要求 `UserID == "admin"`（不接受匿名/回环豁免，见 `HandleUnseal`） | <100ms |
 | [TokenBurnRate] > 10x baseline 30s | 滑动窗口背压熔断 | ~30s |
 | Global DoS Guard (LLM10) | 全局信号量饱和 / Session Bucket 耗尽 | 限流或 Stage 1 |
 
 - **TripleCtrlCGuard**: 3s 滑动窗口计数 SIGINT, `归零/>=3` → `executeFullStop`
 - **KILLSWITCHFileWatch**: fsnotify 监视 `~/.polarisagi/polaris/KILLSWITCH`, 存在 → `executeFullStop`, 删除后恢复
-- **AdminKillEndpoint**: 仅 127.0.0.1/::1, POST → `executeFullStop`; 否则 403
+- **AdminKillEndpoint**（2026-07-24 复核修正，此前文档误述为"仅 127.0.0.1/::1、无认证"，与
+  `internal/gateway/server/sysadmin/admin_killswitch.go` `HandleKill` 实际逻辑不符）：
+  鉴权规则由 `middleware_auth.go` 统一处理，与其余路由一致——未配置 `POLARIS_API_KEY` 时仅回环 IP
+  可匿名访问，配置后任意 IP 携带正确 Key 即可访问；`HandleKill` 本身只检查 `authCtx.UserID != ""`，
+  不区分 admin 与普通认证用户，也不做独立 IP 白名单。这是有意的不对称设计（fail-safe）：**触发停止
+  的门槛刻意放低**（任何已认证身份都能拉下紧急制动，倾向"宁可错停不可漏停"），**恢复的门槛刻意抬高**
+  （`/_admin/unseal` 要求 `UserID == "admin"`，见下一行），二者不应等同看待。POST → `executeFullStop`；
+  未认证 → 403。
 - **BurnRateFuse**: 订阅 M3 `polaris_token_burn_rate` Gauge (CANONICAL SOURCE) → 当 `EMA_30s > baseline.P95 × 10.0` 持续 30s `[Window-Burst-30s]` → `executeFullStop`。计算逻辑由 M3 单源持有，M11 不独立采样。M3 暴露专用 Counter `polaris_token_burn_stage3_triggered_total`，KillSwitch 从该 Counter 边沿驱动。
 - **Global DoS Guard** (OWASP LLM10 Model DoS 防护): 两层遏制——
   1. 全局信号量: 全系统并发 LLM 调用上限（Tier 0=4）

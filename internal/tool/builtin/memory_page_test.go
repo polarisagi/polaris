@@ -83,13 +83,16 @@ func (m *mockSemanticWriter) UpsertFact(_ context.Context, entity types.Entity, 
 	return nil
 }
 
-func (m *mockSemanticWriter) Archive(_ context.Context, id string, _ string) error {
+// MarkEntityExpired 复核修正（本轮审查）：接口方法由 Archive(ctx, id, reason)
+// 改为 MarkEntityExpired(ctx, entityType, name, reason)，此处同步更新 mock 实现
+// （见 memory_tools.go SemanticMemWriter 接口定义处的详细说明）。
+func (m *mockSemanticWriter) MarkEntityExpired(_ context.Context, entityType, name, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for k, e := range m.entities {
-		if e.ID == id {
-			delete(m.entities, k)
-		}
+	k := m.entKey(entityType, name)
+	if e, ok := m.entities[k]; ok {
+		e.Status = "expired"
+		m.entities[k] = e
 	}
 	return nil
 }
