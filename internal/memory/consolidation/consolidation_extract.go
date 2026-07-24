@@ -241,12 +241,16 @@ func (p *ConsolidationPipeline) upsertSemantic(
 			if fetched, err := p.semantic.GetEntity(ctx, e.Type, e.Name); err == nil && fetched != nil {
 				ephemeralToDBID[e.ID] = fetched.DBID
 			} else if p.graphFetcher != nil {
-				// Tier1+ 查 SurrealDB (GraphRAG侧)
-				if gEnt, gErr := p.graphFetcher.GetEntityByName(ctx, e.Name); gErr == nil && gEnt != nil {
-					// Fallback to graphrag entity if semantic entity is not found
-					slog.Debug("consolidation: resolved DBID from graphFetcher for Tier1+", "name", e.Name)
-					// In Tier1+ we don't have DBID mapped nicely unless we insert into semantic_entities.
-					// B2 ensures GraphRAG ingest inserts into semantic_entities.
+				// B2 复核（本轮审查）：此分支此前会查询 graphFetcher 但取到结果后仅打印
+				// debug 日志、不做任何事——注释曾暗示"用作 fallback"，实际从未消费查询
+				// 结果，是误导性的死分支。保留检测本身用于诊断日志（GetEntity 在刚写入
+				// 后失败极罕见，多半意味着 UpsertFactExclusive 把该实体判定为
+				// superseded/合并进了别的实体，而非真的丢失），但不再暗示存在真实回退路径：
+				// GraphRAG 侧实体的 DBID 映射完全依赖 GraphWriter.UpsertEntity 写入期已将
+				// 其落入同一张 semantic_entities 表（B2 写入期桥接），本函数无需、也没有
+				// 另一套从 graphFetcher 取 DBID 的机制。
+				if _, gErr := p.graphFetcher.GetEntityByName(ctx, e.Name); gErr == nil {
+					slog.Debug("consolidation: entity exists in graphFetcher but GetEntity(semantic) missed it; likely superseded/merged, not a genuine cross-pipeline DBID gap", "name", e.Name)
 				}
 			}
 		}

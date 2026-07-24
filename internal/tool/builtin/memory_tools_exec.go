@@ -210,9 +210,13 @@ func MakeMemoryExpireFn(writer SemanticMemWriter) sandbox.InProcessFn {
 			reason = "agent_expired"
 		}
 
-		if err := writer.Archive(ctx, ent.ID, reason); err != nil {
+		// 复核修正（本轮审查）：此前调用 writer.Archive(ctx, ent.ID, reason) 操作
+		// KV "doc:" 命名空间，与 ent.ID（"entity:"+DBID，SQL 主键）地址空间不匹配，
+		// 对实体场景从未真正生效（见 SemanticMemWriter 接口定义处的详细说明）。
+		// 改为直接以 entity_type+name 操作 semantic_entities.status='expired'。
+		if err := writer.MarkEntityExpired(ctx, args.EntityType, args.Name, reason); err != nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_expire", false)
-			return nil, apperr.Wrap(apperr.CodeInternal, "memory_expire: archive failed", err)
+			return nil, apperr.Wrap(apperr.CodeInternal, "memory_expire: mark expired failed", err)
 		}
 		metrics.RecordMemoryToolCall(ctx, "memory_expire", true)
 		b, _ := json.Marshal(map[string]string{

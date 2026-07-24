@@ -20,9 +20,19 @@ import (
 
 // SemanticMemWriter 语义记忆写入接口（consumer-side，L1 层内互引禁止）。
 // 与 pkg/cognition/memory.SemanticMemWriter 保持方法签名一致，Go 结构子类型自动满足。
+//
+// 复核修正（本轮审查）：此前声明 Archive(ctx, id, reason) 供 memory_expire 使用，
+// 但 Archive 操作的是 KV store 的 "doc:"+id 命名空间（面向 types.Document，见
+// SemanticMem.StoreDocument/GetDocument），而 memory_expire 传入的 ent.ID 形如
+// "entity:"+DBID（GetEntity 返回值，指向 SQL 表 semantic_entities 的主键）——
+// 两套地址空间完全不重叠，Archive 对实体场景永远返回 not-found，memory_expire
+// 从未真正生效。改为声明 MarkEntityExpired（直接以 entity_type+name 操作
+// semantic_entities.status，语义等价于 A17 新增的 memory_prune 实现，二者本应
+// 是同一功能——遂将 memory_prune 作为重复工具移除，memory_expire 保留为唯一
+// 入口，见 internal/tool/builtin/memory_tools_exec.go MakeMemoryExpireFn）。
 type SemanticMemWriter interface {
 	UpsertFact(ctx context.Context, entity types.Entity, taint types.TaintLevel) error
-	Archive(ctx context.Context, id string, reason string) error
+	MarkEntityExpired(ctx context.Context, entityType, name, reason string) error
 	GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error)
 }
 

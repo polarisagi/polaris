@@ -291,7 +291,7 @@ L3 Procedural 技能索引相关 DDL 实质托管于 M2 SurrealKV KV 引擎（`i
 | `memory_write` | `CapWriteLocal` | 写入/覆盖一条语义事实（`SemanticMemWriter.UpsertFact`），支持 `valid_until` 过期时长 |
 | `memory_search` | `CapReadOnly` | 混合检索（BM25 + vector + graph，`HybridRetriever`），返回最相关事实，支持 `as_of` 时空穿梭查询 |
 | `memory_append` | `CapWriteLocal` | 追加属性到已有实体（`UpsertFact` upsert 语义，不覆盖 description） |
-| `memory_expire` | `CapWriteLocal` | 标记事实失效（`SemanticMemWriter.Archive`），含 reason 审计字段 |
+| `memory_expire` | `CapWriteLocal` | 标记实体失效（`SemanticMemWriter.MarkEntityExpired`，直接置 `semantic_entities.status='expired'`），含 reason 审计字段 |
 | `memory_reflect`| `CapWriteLocal` | 记录系统反思、洞察或长期决策到 ReflectionMemory |
 
 所有 5 个工具 `SandboxTier = SandboxInProcess`、`RiskLevel = RiskLow`，经 PolicyGate 五阶段后在 InProcessSandbox 执行。
