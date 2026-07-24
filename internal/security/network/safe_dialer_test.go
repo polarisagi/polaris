@@ -176,7 +176,7 @@ func TestNewSafeHTTPClient(t *testing.T) {
 	sd := NewSafeDialer(0, nil, config.M11PolicyThresholds{})
 	client := NewSafeHTTPClient(sd)
 
-	if client == nil {
+	if client.Client == nil {
 		t.Fatal("expected non-nil http.Client")
 	}
 	if client.Timeout != 0 {

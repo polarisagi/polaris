@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func TestStateGraphExecutor_CheckpointResume(t *testing.T) {

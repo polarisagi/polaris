@@ -2,6 +2,7 @@ package consolidation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -100,8 +101,9 @@ func (p *ConsolidationPipeline) buildSummary(
 			return summary, nil
 		}
 		if err != nil {
-			if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
-				return "", err
+			var aerr *apperr.Error
+			if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
+				return "", apperr.Wrap(apperr.CodeInternal, "summarize failed", err)
 			}
 			slog.Warn("consolidation_summary: LLM inference failed, falling back to rule-based summary", "err", err)
 		}

@@ -2,6 +2,7 @@ package consolidation
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
@@ -146,7 +147,8 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 
 	err = p.executeStages(ctx, sessionID, events)
 	if err != nil {
-		if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+		var aerr *apperr.Error
+		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
 			if p.outbox != nil {
 				features := p.SampleOOMFeatures(events)
 				payload, _ := json.Marshal(map[string]any{
@@ -175,7 +177,8 @@ func (p *ConsolidationPipeline) executeStages(ctx context.Context, sessionID str
 	// Stage 1 — 实体/关系提取
 	entities, relations, err := p.extractEntitiesAndRelations(ctx, sessionID, events)
 	if err != nil {
-		if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+		var aerr *apperr.Error
+		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
 			return err
 		}
 		// 非阻断：Stage 1 失败不中止后续阶段
@@ -191,7 +194,8 @@ func (p *ConsolidationPipeline) executeStages(ctx context.Context, sessionID str
 
 	// Stage 3 — 会话摘要生成
 	if err := p.summarizeSession(ctx, sessionID, events); err != nil {
-		if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+		var aerr *apperr.Error
+		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
 			return err
 		}
 		slog.Warn("consolidation: stage3 summarizeSession failed", "err", err)

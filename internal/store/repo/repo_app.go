@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -53,7 +54,7 @@ func (r *SQLiteAppRepository) GetApp(ctx context.Context, id string) (*protocol.
 	`
 	row := r.db.QueryRowContext(ctx, query, id)
 	app, err := r.scanApp(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.CodeNotFound, "app not found", err)
 	}
 	if err != nil {
@@ -146,8 +147,8 @@ func (r *SQLiteAppRepository) scanApp(row *sql.Row) (*protocol.App, error) {
 		&enabled, &app.TrustTier, &app.CatalogID, &app.CreatedAt, &app.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperr.Wrap(apperr.CodeInternal, "scan error", err)
 		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "scan app failed", err)
 	}

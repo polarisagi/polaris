@@ -264,7 +264,7 @@ func TestOutboxWorker_BackoffSequence(t *testing.T) {
 
 	w := NewOutboxWorker(db, 5, 5, 100, 500)
 	w.RegisterHandler("test", func(ctx context.Context, rec *OutboxRecord) error {
-		return errors.New("simulated failure")
+		return apperr.New(apperr.CodeInternal, "simulated failure")
 	})
 
 	now := time.Now().UnixMilli()
