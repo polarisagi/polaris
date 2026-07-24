@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/graph"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -40,32 +41,32 @@ import (
 
 // StateGraphExecutor 跨 Agent 条件路由 + 有界循环状态图编排引擎。
 type StateGraphExecutor struct {
-	bb *SQLiteBlackboard
+	chkRepo protocol.TaskCheckpointRepository
+	bb      *SQLiteBlackboard
 }
 
 // NewStateGraphExecutor 创建 StateGraphExecutor。
 func NewStateGraphExecutor(bb *SQLiteBlackboard) *StateGraphExecutor {
-	return &StateGraphExecutor{bb: bb}
+	return &StateGraphExecutor{
+		bb:      bb,
+		chkRepo: repo.NewSQLiteTaskCheckpointRepository(bb.DB()),
+	}
 }
 
 // stateGraphRun 承载单次 Execute 调用的可变运行时状态，将其从局部变量收拢为
 // 结构体是为了让 Execute 主循环保持低圈复杂度（各分支下沉到方法中）。
 type stateGraphRun struct {
-	se           *StateGraphExecutor
-	parentTaskID string
-	nodeMap      map[string]protocol.WorkflowNodeSpec
-	outEdges     map[string][]protocol.WorkflowEdgeSpec
-	maxVisits    map[string]int
-	visits       map[string]int
-	inFlight     map[string]string // nodeID -> taskID
-	totalPosted  int
-
-	// requiredPreds/arrivedPreds 承载扇入 AND-Join 记账（仅统计 Condition==nil 且
-	// From!=To 的"硬依赖"边）：node -> 前驱节点 ID 集合。arrivedPreds 记录本轮已到达
-	// 的前驱，len(arrived) >= len(required) 时才触发一次 tryPostNode，与既有条件边/
-	// 自环边"任一满足立即触发"的 OR 语义互不干扰（后者不计入此记账）。
-	requiredPreds map[string]map[string]bool
-	arrivedPreds  map[string]map[string]bool
+	se              *StateGraphExecutor
+	parentTaskID    string
+	nodeMap         map[string]protocol.WorkflowNodeSpec
+	outEdges        map[string][]protocol.WorkflowEdgeSpec
+	maxVisits       map[string]int
+	visits          map[string]int
+	inFlight        map[string]string // nodeID -> taskID
+	requiredPreds   map[string]map[string]bool
+	arrivedPreds    map[string]map[string]bool
+	totalPosted     int
+	syntheticEvents []types.BlackboardEvent
 }
 
 // Execute 接收状态图规范并调度执行，直至所有已触发节点完成且无新触发产生，
@@ -101,7 +102,16 @@ func (se *StateGraphExecutor) Execute(ctx context.Context, parentTaskID string, 
 		return err
 	}
 
-	for len(run.inFlight) > 0 {
+	for len(run.inFlight) > 0 || len(run.syntheticEvents) > 0 {
+		if len(run.syntheticEvents) > 0 {
+			ev := run.syntheticEvents[0]
+			run.syntheticEvents = run.syntheticEvents[1:]
+			if err := run.handleEvent(ctx, ev); err != nil {
+				return err
+			}
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			return apperr.Wrap(apperr.CodeInternal, "state_graph canceled", ctx.Err())
@@ -151,13 +161,23 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 	switch ev.Type {
 	case "task_completed":
 		delete(r.inFlight, nodeID)
+
+		// 写入 checkpoint done
+		if r.se.chkRepo != nil {
+			_ = r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+				TaskID:      r.parentTaskID,
+				NodeID:      nodeID,
+				Attempt:     r.visits[nodeID],
+				Status:      "done",
+				OutputJSON:  string(ev.Payload),
+				CompletedAt: time.Now().UnixMilli(),
+			})
+		}
+
 		for _, edge := range r.outEdges[nodeID] {
 			if !evalEdgeCondition(edge.Condition, ev.Payload) {
 				continue
 			}
-			// 硬依赖边（无条件 + 非自环）走 AND-Join 记账：等待该目标节点声明的全部
-			// 前驱都到达才触发一次；条件边/自环边（路由分支、重试循环）维持既有
-			// "任一满足立即触发"OR 语义，不受此记账影响。
 			if edge.Condition == nil && edge.From != edge.To {
 				if !r.arriveJoin(edge.To, edge.From) {
 					continue
@@ -169,6 +189,17 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 		}
 		return nil
 	case "task_failed":
+		// 写入 checkpoint failed
+		if r.se.chkRepo != nil {
+			_ = r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+				TaskID:      r.parentTaskID,
+				NodeID:      nodeID,
+				Attempt:     r.visits[nodeID],
+				Status:      "failed",
+				Error:       string(ev.Payload),
+				CompletedAt: time.Now().UnixMilli(),
+			})
+		}
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("state graph node %s failed: %s", nodeID, string(ev.Payload)))
 	default:
 		return nil
@@ -266,6 +297,28 @@ func (r *stateGraphRun) tryPostNode(ctx context.Context, node protocol.WorkflowN
 		return nil
 	}
 
+	attempt := r.visits[node.ID] + 1
+	if r.se.chkRepo != nil {
+		cp, err := r.se.chkRepo.GetCheckpoint(ctx, r.parentTaskID, node.ID, attempt)
+		if err != nil {
+			slog.Warn("state_graph: failed to read checkpoint", "err", err, "node_id", node.ID)
+		}
+		if cp != nil && cp.Status == "done" {
+			slog.Info("state_graph: skip executed node from checkpoint", "node_id", node.ID, "attempt", attempt)
+			r.visits[node.ID]++
+			r.totalPosted++
+
+			synTaskID := fmt.Sprintf("synthetic-%s", node.ID)
+			r.inFlight[node.ID] = synTaskID
+			r.syntheticEvents = append(r.syntheticEvents, types.BlackboardEvent{
+				Type:    "task_completed",
+				TaskID:  synTaskID,
+				Payload: []byte(cp.OutputJSON),
+			})
+			return nil
+		}
+	}
+
 	taskID := fmt.Sprintf("%s-%s-%s", r.parentTaskID, node.ID, uuid.NewString()[:8])
 	intentData := map[string]any{
 		"state_graph_node_id": node.ID,
@@ -285,6 +338,17 @@ func (r *stateGraphRun) tryPostNode(ctx context.Context, node protocol.WorkflowN
 		IntentTaint: types.TaintMedium,
 		CreatedAt:   time.Now().UnixMilli(),
 		UpdatedAt:   time.Now().UnixMilli(),
+	}
+
+	// 写入 checkpoint executing (ADR-0076)
+	if r.se.chkRepo != nil {
+		_ = r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+			TaskID:    r.parentTaskID,
+			NodeID:    node.ID,
+			Attempt:   attempt,
+			Status:    "executing",
+			StartedAt: time.Now().UnixMilli(),
+		})
 	}
 
 	if err := r.se.bb.PostTask(ctx, task); err != nil {

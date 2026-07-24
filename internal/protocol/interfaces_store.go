@@ -231,3 +231,15 @@ TaskReadRepository interface {
 	GetTaskIntentTaint(ctx context.Context, taskID string) (int, error)
 	AggregateTokenCosts(ctx context.Context, startISO, endISO string) ([]types.TokenCostAgg, error)
 }
+
+type
+
+// TaskCheckpointRepository 任务节点断点记录契约。
+// @consumer: internal/execute/orchestrator
+// @producer: internal/store/repo
+TaskCheckpointRepository interface {
+	GetCheckpoint(ctx context.Context, taskID, nodeID string, attempt int) (*types.TaskCheckpointRow, error)
+	GetLatestCheckpoint(ctx context.Context, taskID, nodeID string) (*types.TaskCheckpointRow, error)
+	UpsertCheckpoint(ctx context.Context, row types.TaskCheckpointRow) error
+	ListCheckpointsByTask(ctx context.Context, taskID string) ([]types.TaskCheckpointRow, error)
+}

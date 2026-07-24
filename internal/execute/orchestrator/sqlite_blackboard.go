@@ -57,6 +57,11 @@ type SQLiteBlackboard struct {
 	cancels     map[string]context.CancelFunc // 记录每个执行中任务的取消函数
 }
 
+// DB exposes the underlying BlackboardDB.
+func (bb *SQLiteBlackboard) DB() protocol.BlackboardDB {
+	return bb.db
+}
+
 // SetRegistry 注入 AgentRegistry 用于校验 SpawnDepth
 func (bb *SQLiteBlackboard) SetRegistry(r *AgentRegistry) {
 	bb.mu.Lock()
