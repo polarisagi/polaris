@@ -206,7 +206,7 @@ func (qp *QueryPlanner) Plan(ctx context.Context, query string) ([]SubQuery, err
 weight 之和必须为 1.0，scope 为空表示全局检索。`},
 		{Role: "user", Content: query},
 	}, types.WithModel("standard"))
-	if err != nil {
+	if err != nil || resp == nil {
 		return []SubQuery{{Text: query, Weight: 1.0}}, nil //nolint:nilerr // 失败降级单查询
 	}
 

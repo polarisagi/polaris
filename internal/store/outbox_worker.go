@@ -35,15 +35,23 @@ type OutboxWorker struct {
 	versionCheck map[string]func(context.Context, *OutboxRecord) (int64, error)
 	pollInterval int64 // seconds，5s 默认
 	maxRetries   int   // 3
+	initialMs    int64
+	maxMs        int64
 }
 
 // NewOutboxWorker 创建 OutboxWorker，db 必须非 nil（fail-fast）。
-func NewOutboxWorker(db *sql.DB, pollInterval int64, maxRetries int) *OutboxWorker {
+func NewOutboxWorker(db *sql.DB, pollInterval int64, maxRetries int, initialMs, maxMs int64) *OutboxWorker {
 	if pollInterval <= 0 {
 		pollInterval = 5
 	}
 	if maxRetries <= 0 {
 		maxRetries = 3
+	}
+	if initialMs <= 0 {
+		initialMs = 100
+	}
+	if maxMs <= 0 {
+		maxMs = 8000
 	}
 	return &OutboxWorker{
 		db:           db,
@@ -51,6 +59,8 @@ func NewOutboxWorker(db *sql.DB, pollInterval int64, maxRetries int) *OutboxWork
 		versionCheck: make(map[string]func(context.Context, *OutboxRecord) (int64, error)),
 		pollInterval: pollInterval,
 		maxRetries:   maxRetries,
+		initialMs:    initialMs,
+		maxMs:        maxMs,
 	}
 }
 
@@ -270,8 +280,11 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 		metrics.GlobalOutboxDeadLetterTotal.Add(1)
 		slog.Error("outbox message dead", "id", record.ID, "target", record.TargetEngine, "attempts", newAttempts, "crash", record.CrashRecoveryCount)
 	} else {
-		// 指数退避：2^attempt × 5s
-		backoffMs := (int64(1) << newAttempts) * 5000
+		// 指数退避：initialMs << newAttempts，且不超过 maxMs
+		backoffMs := w.initialMs << newAttempts
+		if backoffMs > w.maxMs {
+			backoffMs = w.maxMs
+		}
 		nextRetry := now + backoffMs
 		_, _ = w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='failed', attempts=?, next_retry_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",

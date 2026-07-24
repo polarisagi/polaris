@@ -100,8 +100,9 @@ type SubstrateBundle struct {
 	TrustMap map[string]int
 
 	// 网络安全层
-	Dialer   *network.SafeDialer
-	SafeHTTP *http.Client
+	Dialer         *network.SafeDialer
+	SafeHTTPClient network.SafeHTTPClient
+	SafeHTTP       *http.Client
 
 	// 推理层
 	InfReg   *llm.ProviderRegistry
@@ -312,7 +313,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// Run() 内含 loadCursor（DB 恢复游标）、saveCursor（单调性保护）、
 	// processAndMark（CAS 防竞争）、Poison Pill 隔离、失败指数退避。
 	// 参考：docs/arch/Module-Dependency-Axioms.md XR-04 + outbox_worker.go L176
-	outboxWorker := sysstore.NewOutboxWorker(store.DB(), 5, 3)
+	outboxWorker := sysstore.NewOutboxWorker(store.DB(), 5, 3, 1000, 30000)
 	concurrent.SafeGo(ctx, "outbox-worker", func(ctx context.Context) {
 		if err := outboxWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("polaris: outbox worker exited unexpectedly", "err", err)
@@ -418,9 +419,9 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	allowedDomains := append(egress.DefaultAllowedDomains(), cfg.System.EgressAllowedDomains...)
 	egressGW := egress.NewEgressGateway(safeHTTPClient.Transport, allowedDomains)
 	safeHTTPClient.Transport = egressGW
-	llmadapter.SetDefaultHTTPClient(safeHTTPClient)
+	llmadapter.SetDefaultHTTPClient(safeHTTPClient.Client)
 	// 将 SafeDialer 注入下载器，使 GitHub Proxy 探测也经过 SSRF 过滤（XR-06）
-	downloader.Configure(cfg.Download.GithubProxy, safeHTTPClient)
+	downloader.Configure(cfg.Download.GithubProxy, safeHTTPClient.Client)
 
 	// ─── 4.1 OpenLLMetry 轨迹导出器（ADR-0069，默认关闭）──────────────────────
 	// 复用上面已构造的 safeHTTPClient：它已套了 egressGW（域名白名单预检）+
@@ -432,7 +433,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		if te.Endpoint == "" {
 			slog.Warn("polaris: trace_export.enabled=true 但 endpoint 为空，跳过导出器注册")
 		} else {
-			trace.SetDefaultExporters([]trace.SpanExporter{trace.NewOTLPHTTPExporter(safeHTTPClient, te.Endpoint)})
+			trace.SetDefaultExporters([]trace.SpanExporter{trace.NewOTLPHTTPExporter(safeHTTPClient.Client, te.Endpoint)})
 			slog.Info("polaris: trace exporter enabled", "endpoint", te.Endpoint)
 		}
 	}
@@ -482,7 +483,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		// 1. 全自动免安装与异步自愈逻辑 (Zero-setup background boot)
 		concurrent.SafeGo(context.Background(), "boot_substrate.ollama_lifecycle", func(ctxBg context.Context) {
 			slog.Info("polaris: Starting background Ollama lifecycle manager...")
-			binPath, err := ollamamgr.EnsureOllama(ctxBg, safeHTTPClient, layout.Bin)
+			binPath, err := ollamamgr.EnsureOllama(ctxBg, safeHTTPClient.Client, layout.Bin)
 			if err != nil {
 				slog.Error("polaris: Failed to install local Ollama", "err", err)
 				return
@@ -490,7 +491,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 			// Ensure service runs in background with a client that allows loopback polling
 			loopbackClient := network.NewLoopbackSafeHTTPClient(cfg.Thresholds.M11Policy)
-			_, err = ollamamgr.StartOllama(ctxBg, loopbackClient, binPath)
+			_, err = ollamamgr.StartOllama(ctxBg, loopbackClient.Client, binPath)
 			if err != nil {
 				slog.Error("polaris: Failed to start local Ollama", "err", err)
 				return
@@ -502,7 +503,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			}
 
 			// 一切就绪，热更新引擎
-			adapter := llmadapter.NewOllamaEmbeddingAdapter(targetModel, ollamaHTTPClient)
+			adapter := llmadapter.NewOllamaEmbeddingAdapter(targetModel, ollamaHTTPClient.Client)
 			dynEmbedder.Set(adapter)
 			slog.Info("polaris: Dynamic embedding engine is now ACTIVE!", "model", targetModel)
 		})
@@ -516,7 +517,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			cfg.Embedding.BaseURL,
 			cfg.Embedding.Model,
 			apiKey,
-			safeHTTPClient,
+			safeHTTPClient.Client,
 		)
 		dynEmbedder.Set(adapter)
 		slog.Info("polaris: Remote OpenAI-compat embedding registered as fallback",
@@ -531,7 +532,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			if localModel == "" {
 				localModel = "llama3.2"
 			}
-			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, ollamaHTTPClient, tbr))
+			reg.Register("ollama-local", "Local LLM", llmadapter.NewOllamaAdapter(localModel, ollamaHTTPClient.Client, tbr))
 			slog.Info("polaris: Ollama local inference registered", "model", localModel)
 
 			// llama.cpp FFI 本地推理（P3-1）：与上面的 Ollama 路径并存，不互斥。
@@ -547,21 +548,21 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		}
 
 		if autoConf.Gate.State(probe.FeatureQLoRA) != probe.FeatureDisabled {
-			qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient)
+			qloraAdapter = llmadapter.NewQLoRAAdapter("", ollamaHTTPClient.Client)
 			slog.Info("polaris: QLoRA training adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeaturePRMTraining) != probe.FeatureDisabled {
-			prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient)
+			prmAdapter = llmadapter.NewPRMAdapter("", ollamaHTTPClient.Client)
 			slog.Info("polaris: PRM training adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeatureActivationSteer) != probe.FeatureDisabled {
-			steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient)
+			steeringAdapter = llmadapter.NewSteeringAdapter("", ollamaHTTPClient.Client)
 			cvStore = llmadapter.NewControlVectorStore()
 			slog.Info("polaris: activation steering adapter initialized")
 		}
 		if autoConf.Gate.State(probe.FeatureLargeLocalLLM) != probe.FeatureDisabled {
 			if largeModel, ok := probe.TierLocalModel(autoConf.Config.Tier); ok {
-				reg.Register("ollama-large", "Large Local LLM", llmadapter.NewOllamaAdapter(largeModel, ollamaHTTPClient, tbr))
+				reg.Register("ollama-large", "Large Local LLM", llmadapter.NewOllamaAdapter(largeModel, ollamaHTTPClient.Client, tbr))
 				slog.Info("polaris: large local LLM registered", "model", largeModel)
 			}
 		}
@@ -624,7 +625,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		Gate:                     gate,
 		TrustMap:                 publisherTrustMap,
 		Dialer:                   dialer,
-		SafeHTTP:                 safeHTTPClient,
+		SafeHTTPClient:           safeHTTPClient,
+		SafeHTTP:                 safeHTTPClient.Client,
 		InfReg:                   reg,
 		Router:                   router,
 		Embedder:                 embedder,

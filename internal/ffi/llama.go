@@ -197,7 +197,7 @@ func LlamaLoad(ctx context.Context, req LlamaLoadRequest) (result *LlamaLoadResp
 	}
 	inputCStr, err := marshalLlamaRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "FFI serialization failed", err)
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferLoad(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
@@ -240,7 +240,7 @@ func LlamaGenerate(ctx context.Context, req LlamaGenerateRequest) (result *Llama
 	}
 	inputCStr, err := marshalLlamaRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "FFI serialization failed", err)
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferGenerate(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
@@ -267,7 +267,7 @@ func LlamaEmbed(ctx context.Context, req LlamaEmbedRequest) (result *LlamaEmbedR
 	}
 	inputCStr, err := marshalLlamaRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "FFI serialization failed", err)
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferEmbed(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
@@ -294,7 +294,7 @@ func LlamaRerank(ctx context.Context, req LlamaRerankRequest) (result *LlamaRera
 	}
 	inputCStr, err := marshalLlamaRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "FFI serialization failed", err)
 	}
 	var outJSON, outErr uintptr
 	code := llamaInferRerank(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)

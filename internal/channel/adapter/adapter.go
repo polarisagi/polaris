@@ -1,8 +1,6 @@
 package adapter
 
 import (
-	"context"
-	"net/http"
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -10,21 +8,10 @@ import (
 
 // Host 是适配器执行 Send/StartPoller 所需的宿主能力（由 channel.Manager 实现）。
 // 复用既有 PollerHost（HTTPClient/OnMessage/RegisterPoller/SafeDialer）并扩展 Send 侧能力。
-type Host interface {
-	PollerHost
-}
+type Host = protocol.ChannelHost
 
 // Adapter 是单个聊天平台的统一契约。实现放在各平台 <platform>.go。
-type Adapter interface {
-	// Type 返回 channelType 键（如 "telegram"）。
-	Type() string
-	// Extract 从 webhook body 解析入站消息；纯 poller / 无 webhook 的平台返回零值 ChannelMessage。
-	Extract(body []byte, r *http.Request) protocol.ChannelMessage
-	// Send 将回复发回平台。cfg 为该 channel 的配置。
-	Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error
-	// StartPoller 启动 poller；纯 webhook 平台直接返回 false（无 poller）。
-	StartPoller(host Host, channelID string, cfg map[string]any) (started bool)
-}
+type Adapter = protocol.ChannelAdapter
 
 // 各平台适配器均为进程内单例，用 sync.OnceValue 懒加载构造（内部无锁、并发安全，
 // 符合 internal/ 禁全局可变变量的约束——sync.OnceValue(...) 是 inv_NoGlobalVar

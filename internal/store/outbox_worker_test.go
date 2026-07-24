@@ -32,7 +32,9 @@ func setupOutboxDB(t *testing.T) *sql.DB {
 			attempts             INTEGER NOT NULL DEFAULT 0,
 			last_error           TEXT,
 			next_retry_at        INTEGER,
-			crash_recovery_count INTEGER NOT NULL DEFAULT 0
+			crash_recovery_count INTEGER NOT NULL DEFAULT 0,
+			updated_at           INTEGER,
+			processed_at         INTEGER
 		)`)
 	if err != nil {
 		t.Fatalf("create table: %v", err)
@@ -59,7 +61,7 @@ func insertOutboxRow(t *testing.T, db *sql.DB, id int64, engine, status string, 
 func TestNewOutboxWorker_Defaults(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
-	w := NewOutboxWorker(db, 0, 0)
+	w := NewOutboxWorker(db, 0, 0, 0, 0)
 	if w.pollInterval != 5 {
 		t.Errorf("expected default pollInterval=5, got %d", w.pollInterval)
 	}
@@ -86,7 +88,7 @@ func TestListBatch_NilDB(t *testing.T) {
 func TestListBatch_Empty(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 	records, err := w.ListBatch(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -103,7 +105,7 @@ func TestListBatch_ReturnsPendingRecords(t *testing.T) {
 	insertOutboxRow(t, db, 2, "surrealdb", "pending", nil)
 	insertOutboxRow(t, db, 3, "surrealdb", "done", nil)
 
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 	records, err := w.ListBatch(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -128,7 +130,7 @@ func TestListBatch_CursorFiltering(t *testing.T) {
 	insertOutboxRow(t, db, 2, "surrealdb", "pending", nil)
 	insertOutboxRow(t, db, 3, "surrealdb", "pending", nil)
 
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 	// cursor=2 → only id=3 returned from main query
 	records, err := w.ListBatch(context.Background(), 2, 10)
 	if err != nil {
@@ -147,7 +149,7 @@ func TestListBatch_SkipsFutureRetry(t *testing.T) {
 	past := time.Now().Add(-time.Hour).UnixMilli()
 	insertOutboxRow(t, db, 2, "surrealdb", "failed", &past)
 
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 	records, err := w.ListBatch(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -161,7 +163,7 @@ func TestListBatch_SkipsFutureRetry(t *testing.T) {
 func TestRegisterHandler_And_Process(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 
 	called := false
 	w.RegisterHandler("surrealdb", func(ctx context.Context, r *OutboxRecord) error {
@@ -181,7 +183,7 @@ func TestRegisterHandler_And_Process(t *testing.T) {
 func TestProcess_PoisonPill_CrashRecoveryCount(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 
 	handlerCalled := false
 	w.RegisterHandler("surrealdb", func(ctx context.Context, r *OutboxRecord) error {
@@ -202,7 +204,7 @@ func TestProcess_PoisonPill_CrashRecoveryCount(t *testing.T) {
 func TestProcess_NoHandler(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 	record := &OutboxRecord{ID: 1, TargetEngine: "unknown_engine", CrashRecoveryCount: 0}
 
 	if err := w.Process(context.Background(), record); !errors.Is(err, ErrUnknownTargetEngine) {
@@ -213,7 +215,7 @@ func TestProcess_NoHandler(t *testing.T) {
 func TestProcess_VersionCheck(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
-	w := NewOutboxWorker(db, 5, 3)
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
 
 	handlerCalled := false
 	handler := func(ctx context.Context, r *OutboxRecord) error {
@@ -253,5 +255,58 @@ func TestProcess_VersionCheck(t *testing.T) {
 	}
 	if !handlerCalled {
 		t.Error("handler should be called for new version")
+	}
+}
+
+func TestOutboxWorker_BackoffSequence(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+
+	w := NewOutboxWorker(db, 5, 5, 100, 500)
+	w.RegisterHandler("test", func(ctx context.Context, rec *OutboxRecord) error {
+		return errors.New("simulated failure")
+	})
+
+	now := time.Now().UnixMilli()
+	_, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status, attempts, next_retry_at) 
+		VALUES (1001, ?, 'test', 'fail', 'system', X'CAFE', 'key', 'pending', 0, NULL)`, now)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	records, err := w.ListBatch(ctx, 0, 10)
+	if err != nil {
+		t.Fatalf("ListBatch 1: %v", err)
+	}
+	t.Logf("ListBatch returned %d records. ID=%v, Engine=%v, Operation=%v", len(records), records[0].ID, records[0].TargetEngine, records[0].Operation)
+
+	_, err = w.processBatch(ctx, 0, 10)
+	if err != nil {
+		t.Fatalf("processBatch 1: %v", err)
+	}
+
+	var attempts int
+	var nextRetry sql.NullInt64
+	var status string
+	err = db.QueryRow(`SELECT attempts, next_retry_at, status FROM outbox WHERE id=1001`).Scan(&attempts, &nextRetry, &status)
+	if err != nil {
+		t.Fatalf("query 1: %v", err)
+	}
+	t.Logf("State after processBatch 1: attempts=%d, next_retry_at=%v, status=%s", attempts, nextRetry, status)
+
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt, got %d (status=%s)", attempts, status)
+	}
+	expectedBackoff := int64(100) << 1 // 200ms
+
+	if nextRetry.Valid {
+		if nextRetry.Int64 < now+expectedBackoff-50 || nextRetry.Int64 > now+expectedBackoff+200 {
+			t.Errorf("expected nextRetry around %d (backoff %d), got %d", now+expectedBackoff, expectedBackoff, nextRetry.Int64)
+		}
+	} else {
+		t.Errorf("nextRetry is NULL")
 	}
 }

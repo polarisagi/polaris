@@ -111,26 +111,37 @@ func NewSafeDialer(taintLevel int, allowedDomains []string, m11 config.M11Policy
 	}
 }
 
-// NewSafeHTTPClient 返回一个绑定了 SafeDialer 的 *http.Client。
+// SafeHTTPClient 包装了 *http.Client 并标记为已受 SafeDialer 保护
+type SafeHTTPClient struct {
+	*http.Client
+	isSafe bool
+}
+
+// IsSafe 返回该客户端是否真正经过安全配置
+func (s SafeHTTPClient) IsSafe() bool {
+	return s.isSafe
+}
+
+// NewSafeHTTPClient 返回一个绑定了 SafeDialer 的 SafeHTTPClient。
 // 所有 Adapter 和工具调用须使用此工厂，禁止传入 http.DefaultClient。
-func NewSafeHTTPClient(sd *SafeDialer) *http.Client {
+func NewSafeHTTPClient(sd *SafeDialer) SafeHTTPClient {
 	if sd == nil {
 		sd = NewSafeDialer(0, nil, config.M11PolicyThresholds{})
 	}
-	return newSafeHTTPClientFromDialer(sd)
+	return SafeHTTPClient{Client: newSafeHTTPClientFromDialer(sd), isSafe: true}
 }
 
 // NewLoopbackSafeHTTPClient 返回允许连接 loopback（127.x / ::1）的安全 HTTP 客户端。
 // 仅用于系统级受控本地服务（Ollama inference / embedding / QLoRA / PRM / Steering）。
 // 其余私有 CIDR 仍受 SafeDialer SSRF 阻断保护。
-func NewLoopbackSafeHTTPClient(m11 config.M11PolicyThresholds) *http.Client {
+func NewLoopbackSafeHTTPClient(m11 config.M11PolicyThresholds) SafeHTTPClient {
 	sd := NewSafeDialer(0, nil, m11)
 	sd.allowLoopback = true
 	c := newSafeHTTPClientFromDialer(sd)
 	if t, ok := c.Transport.(*http.Transport); ok {
 		t.ResponseHeaderTimeout = 300 * time.Second
 	}
-	return c
+	return SafeHTTPClient{Client: c, isSafe: true}
 }
 
 // newSafeHTTPClientFromDialer 从已配置的 SafeDialer 构造 http.Client（内部共用逻辑）。

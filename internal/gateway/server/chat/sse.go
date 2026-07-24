@@ -105,6 +105,19 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		var err error
 		agentCtrl, release, err = s.AgentPool.Acquire(ctx, sessionID)
 		if err != nil {
+			if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+				// 后台计算请求
+				if req.RunID != "" || req.ReasoningEffort == "background" {
+					s.WriteSSEError(w, flusher, "system_notice", "后台提炼排队中", sessionID, nil)
+					return
+				}
+				// 前台对话请求
+				WriteSSE(w, flusher, "system_notice", map[string]any{
+					"message": "系统当前负载较高，已为您转入沙箱保护模式，稍等片刻",
+					"retry":   true,
+				})
+				return
+			}
 			s.WriteSSEError(w, flusher, "agent_pool_error", "failed to acquire agent: "+err.Error(), sessionID, err)
 			return
 		}

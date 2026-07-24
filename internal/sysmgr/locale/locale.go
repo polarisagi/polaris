@@ -85,7 +85,7 @@ func probeGeoIP(ctx context.Context, baseClient *http.Client) (country string, o
 	client := baseClient
 	if client == nil {
 		sd := network.NewSafeDialer(0, []string{"ipinfo.io", "1.1.1.1", "api.ip.sb"}, config.M11PolicyThresholds{})
-		client = network.NewSafeHTTPClient(sd)
+		client = network.NewSafeHTTPClient(sd).Client
 		client.Timeout = geoIPTimeout
 	}
 

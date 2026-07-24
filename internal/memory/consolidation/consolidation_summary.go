@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -17,7 +18,10 @@ func (p *ConsolidationPipeline) summarizeSession(
 	sessionID string,
 	events []types.ScoredEvent,
 ) error {
-	summary := p.buildSummary(ctx, sessionID, events)
+	summary, err := p.buildSummary(ctx, sessionID, events)
+	if err != nil {
+		return err
+	}
 	if summary == "" {
 		return nil
 	}
@@ -64,7 +68,7 @@ func (p *ConsolidationPipeline) buildSummary(
 	ctx context.Context,
 	_ string, // sessionID 仅用于兜底文本，已嵌入 events
 	events []types.ScoredEvent,
-) string {
+) (string, error) {
 	// 组装最近 20 条事件作为摘要输入
 	var sb strings.Builder
 	limit := min(20, len(events))
@@ -93,9 +97,12 @@ func (p *ConsolidationPipeline) buildSummary(
 	if p.summarizer != nil {
 		summary, err := p.summarizer.Summarize(ctx, text, 256)
 		if err == nil && summary != "" {
-			return summary
+			return summary, nil
 		}
 		if err != nil {
+			if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+				return "", err
+			}
 			slog.Warn("consolidation_summary: LLM inference failed, falling back to rule-based summary", "err", err)
 		}
 	}
@@ -117,7 +124,7 @@ func (p *ConsolidationPipeline) buildSummary(
 			break
 		}
 	}
-	return fmt.Sprintf("Session consolidated: %d events. Types: %s.", len(events), strings.Join(parts, ", "))
+	return fmt.Sprintf("Session consolidated: %d events. Types: %s.", len(events), strings.Join(parts, ", ")), nil
 }
 
 // ─── Stage 4 ─────────────────────────────────────────────────────────────────

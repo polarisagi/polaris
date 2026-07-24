@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/polarisagi/polaris/internal/eval/harness"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -23,7 +23,7 @@ type taubenchTask struct {
 	GoldenActions  []map[string]any `json:"golden_actions"`
 }
 
-func (a *TauBenchAdapter) Load(ctx context.Context, datasetPath string) ([]harness.EvalCase, error) {
+func (a *TauBenchAdapter) Load(ctx context.Context, datasetPath string) ([]protocol.EvalCase, error) {
 	data, err := os.ReadFile(datasetPath)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInvalidInput, "TauBenchAdapter: failed to read dataset", err)
@@ -34,14 +34,14 @@ func (a *TauBenchAdapter) Load(ctx context.Context, datasetPath string) ([]harne
 		return nil, apperr.Wrap(apperr.CodeInvalidInput, "TauBenchAdapter: failed to parse dataset", err)
 	}
 
-	var cases []harness.EvalCase
+	var cases []protocol.EvalCase
 	for _, t := range tasks {
-		cases = append(cases, harness.EvalCase{
+		cases = append(cases, protocol.EvalCase{
 			ID:                  t.TaskID,
 			Input:               map[string]any{"query": t.UserGoal, "tools": t.AvailableTools},
 			Expected:            map[string]any{"tool_calls": t.GoldenActions},
-			BehaviorType:        harness.BehaviorToolCallSequence,
-			Level:               harness.Level3Trajectory,
+			BehaviorType:        protocol.BehaviorToolCallSequence,
+			Level:               protocol.Level3Trajectory,
 			FalsifiabilityScore: 1.0,
 			Severity:            "P1",
 			Source:              "tau-bench",

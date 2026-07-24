@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
@@ -48,6 +46,7 @@ type Manager struct {
 	hookRunner HookRunner
 	installer  ExtensionInstaller // 新增：文件下载
 	installFSM *lifecycle.InstallFSM
+	outbox     protocol.OutboxWriter
 }
 
 func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int) *Manager {
@@ -77,6 +76,11 @@ func (m *Manager) WithInstaller(i ExtensionInstaller) *Manager {
 
 func (m *Manager) WithInstallFSM(fsm *lifecycle.InstallFSM) *Manager {
 	m.installFSM = fsm
+	return m
+}
+
+func (m *Manager) WithOutbox(ob protocol.OutboxWriter) *Manager {
+	m.outbox = ob
 	return m
 }
 
@@ -266,41 +270,33 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 	}
 
 	for _, inst := range insts {
-		m.removeRuntime(ctx, inst.ExtType, inst.RuntimeID, catalogID)
-
-		if inst.InstallPath != "" {
-			if inst.ExtType == "plugin" {
-				var bundle protocol.PluginBundleManifest
-				if raw, err := os.ReadFile(filepath.Join(inst.InstallPath, "plugin.json")); err == nil {
-					_ = json.Unmarshal(raw, &bundle)
-					if hook, ok := bundle.Hooks["uninstall"]; ok && hook != "" {
-						hookPath := filepath.Join(inst.InstallPath, hook)
-						// 路径防穿越：禁止逃逸出 installPath
-						cleanHook := filepath.Clean(hookPath)
-						cleanBase := filepath.Clean(inst.InstallPath)
-						if strings.HasPrefix(cleanHook, cleanBase+string(filepath.Separator)) || cleanHook == cleanBase {
-							if m.hookRunner != nil {
-								// 通过注入的沙笼接口执行：具体实现由 ContainerSandbox.RunScript 提供
-								if err := m.hookRunner.RunHook(ctx, hookPath, inst.InstallPath); err != nil {
-									slog.Warn("marketplace: uninstall hook failed", "ext", inst.ID, "err", err)
-								}
-							} else {
-								// hookRunner 未注入：skip，记录日志提示调用方配置 ContainerSandbox
-								slog.Warn("marketplace: uninstall hook skipped (no HookRunner injected, call WithHookRunner to enable)",
-									"ext", inst.ID, "hook", hookPath)
-							}
-						}
-					}
-				}
-			}
-
-			_ = os.RemoveAll(inst.InstallPath)
+		// Update status to uninstalling
+		if err := m.extRepo.UpdateInstanceStatus(ctx, inst.ID, "uninstalling", ""); err != nil {
+			slog.Warn("marketplace: failed to update status to uninstalling", "ext", inst.ID, "err", err)
 		}
 
-		_ = m.extRepo.DeleteInstance(ctx, inst.ID)
+		if m.outbox != nil {
+			payload, _ := json.Marshal(map[string]any{
+				"instance_id":  inst.ID,
+				"catalog_id":   catalogID,
+				"install_path": inst.InstallPath,
+				"ext_type":     inst.ExtType,
+				"trust_tier":   inst.TrustTier,
+				"runtime_id":   inst.RuntimeID,
+			})
+			_ = m.outbox.Write(ctx, protocol.OutboxEntry{
+				TargetEngine:   "marketplace",
+				Operation:      "extension_uninstall",
+				Scope:          "extension",
+				Payload:        payload,
+				IdempotencyKey: fmt.Sprintf("uninstall:%s", inst.ID),
+			})
+		} else {
+			slog.Warn("marketplace: outbox writer not injected, extension uninstall will stall", "ext", inst.ID)
+		}
 
-		m.cleanCatalog(ctx, inst.Origin, catalogID)
 	}
+
 	return nil
 }
 

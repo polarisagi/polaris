@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 type SQLiteAppRepository struct {
@@ -38,7 +39,10 @@ func (r *SQLiteAppRepository) CreateApp(ctx context.Context, app *protocol.App) 
 		app.ID, app.Name, app.DisplayName, app.Description, app.URL, app.Publisher,
 		enabled, app.TrustTier, app.CatalogID, app.CreatedAt, app.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to create app", err)
+	}
+	return nil
 }
 
 func (r *SQLiteAppRepository) GetApp(ctx context.Context, id string) (*protocol.App, error) {
@@ -48,7 +52,14 @@ func (r *SQLiteAppRepository) GetApp(ctx context.Context, id string) (*protocol.
 		WHERE id = ?
 	`
 	row := r.db.QueryRowContext(ctx, query, id)
-	return r.scanApp(row)
+	app, err := r.scanApp(row)
+	if err == sql.ErrNoRows {
+		return nil, apperr.Wrap(apperr.CodeNotFound, "app not found", err)
+	}
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to query app", err)
+	}
+	return app, nil
 }
 
 func (r *SQLiteAppRepository) ListApps(ctx context.Context, enabledOnly bool) ([]*protocol.App, error) {
@@ -62,7 +73,7 @@ func (r *SQLiteAppRepository) ListApps(ctx context.Context, enabledOnly bool) ([
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to list apps", err)
 	}
 	defer rows.Close()
 
@@ -70,12 +81,12 @@ func (r *SQLiteAppRepository) ListApps(ctx context.Context, enabledOnly bool) ([
 	for rows.Next() {
 		app, err := r.scanAppRow(rows)
 		if err != nil {
-			return nil, err
+			return nil, apperr.Wrap(apperr.CodeInternal, "failed to scan app row", err)
 		}
 		apps = append(apps, app)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "rows iteration error", err)
 	}
 	return apps, nil
 }
@@ -98,13 +109,19 @@ func (r *SQLiteAppRepository) UpdateApp(ctx context.Context, app *protocol.App) 
 		app.Name, app.DisplayName, app.Description, app.URL, app.Publisher,
 		enabled, app.TrustTier, app.CatalogID, app.UpdatedAt, app.ID,
 	)
-	return err
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to update app", err)
+	}
+	return nil
 }
 
 func (r *SQLiteAppRepository) DeleteApp(ctx context.Context, id string) error {
 	query := `DELETE FROM apps WHERE id = ?`
 	_, err := r.db.ExecContext(ctx, query, id)
-	return err
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to delete app", err)
+	}
+	return nil
 }
 
 func (r *SQLiteAppRepository) SetAppEnabled(ctx context.Context, id string, enabled bool) error {
@@ -115,7 +132,10 @@ func (r *SQLiteAppRepository) SetAppEnabled(ctx context.Context, id string, enab
 	}
 	query := `UPDATE apps SET enabled = ?, updated_at = ? WHERE id = ?`
 	_, err := r.db.ExecContext(ctx, query, val, now, id)
-	return err
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to set app enabled", err)
+	}
+	return nil
 }
 
 func (r *SQLiteAppRepository) scanApp(row *sql.Row) (*protocol.App, error) {
@@ -126,7 +146,10 @@ func (r *SQLiteAppRepository) scanApp(row *sql.Row) (*protocol.App, error) {
 		&enabled, &app.TrustTier, &app.CatalogID, &app.CreatedAt, &app.UpdatedAt,
 	)
 	if err != nil {
-		return nil, err
+		if err == sql.ErrNoRows {
+			return nil, err
+		}
+		return nil, apperr.Wrap(apperr.CodeInternal, "scan app failed", err)
 	}
 	app.Enabled = enabled == 1
 	return app, nil
@@ -140,7 +163,7 @@ func (r *SQLiteAppRepository) scanAppRow(row *sql.Rows) (*protocol.App, error) {
 		&enabled, &app.TrustTier, &app.CatalogID, &app.CreatedAt, &app.UpdatedAt,
 	)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "scan app row failed", err)
 	}
 	app.Enabled = enabled == 1
 	return app, nil

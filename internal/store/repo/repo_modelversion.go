@@ -38,7 +38,7 @@ func scanModelVersionEntry(scanner rowScanner) (*repo.ModelVersionEntry, error) 
 		&e.PromptTemplate, &e.ToolCallStyle, &e.MaxContext, &e.Capabilities, &e.ValidatedOn,
 		&e.CompatibilityScore, &e.ConsecutiveErrors, &e.UpdatedAt,
 	); err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to scan model version entry", err)
 	}
 	e.Deprecated = deprecated != 0
 	return &e, nil

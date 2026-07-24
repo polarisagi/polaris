@@ -94,11 +94,11 @@ func (h *SummaryGenOutboxHandler) generateSummary(ctx context.Context, docID str
 	inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer inferCancel()
 	resp, err := safecall.Infer(inferCtx, h.provider, inferMsgs)
-	if err != nil {
+	if err != nil || resp == nil {
 		// LLM 调用失败多为瞬时（限流/超时/厂商故障），可重试。
 		return apperr.Wrap(apperr.CodeInternal, "summary_gen: llm infer", err)
 	}
-	if resp == nil || resp.Content == "" {
+	if resp.Content == "" {
 		// 空响应视为"本轮无有效摘要"，非错误，不重试（避免空响应无限重试打满 outbox）。
 		return nil
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/polarisagi/polaris/internal/memory/testutil"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -156,4 +157,77 @@ func TestE2EMemoryLoop(t *testing.T) {
 		t.Fatalf("Cognitive replayer failed: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond) // Allow goroutine to start and finish
+}
+
+type mockOutboxWriter struct {
+	entries []protocol.OutboxEntry
+}
+
+func (m *mockOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	m.entries = append(m.entries, entry)
+	return nil
+}
+
+type oomSummarizer struct{}
+
+func (s *oomSummarizer) Summarize(ctx context.Context, text string, maxTokens int) (string, error) {
+	return "", apperr.New(apperr.CodeResourceExhausted, "OOM")
+}
+func (s *oomSummarizer) InferRaw(ctx context.Context, prompt string, maxTokens int) (string, error) {
+	return "", apperr.New(apperr.CodeResourceExhausted, "OOM")
+}
+
+func TestConsolidation_OOMRetry(t *testing.T) {
+	mem, db, st := setupTestMem(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	// Seed some episodic events to trigger consolidation
+	for i := 0; i < 50; i++ {
+		_ = mem.Episodic().Append(ctx, types.Event{
+			TaskID: "test-session",
+			Type:   "user",
+		}, types.TaintNone)
+	}
+
+	outbox := &mockOutboxWriter{}
+	summarizer := &oomSummarizer{}
+
+	pipeline := consolidation.NewConsolidationPipelineFull(
+		mem.Episodic(),
+		mem.Semantic(),
+		nil, // skill registry not needed for this test
+		summarizer,
+		nil,
+		nil,
+		db,
+	).WithOutbox(outbox)
+
+	err := pipeline.Run(ctx, "test-session")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if aerr, ok := err.(*apperr.Error); !ok || aerr.Code != apperr.CodeResourceExhausted {
+		t.Fatalf("expected CodeResourceExhausted, got %v", err)
+	}
+
+	if len(outbox.entries) != 1 {
+		t.Fatalf("expected 1 outbox entry, got %d", len(outbox.entries))
+	}
+
+	entry := outbox.entries[0]
+	if entry.Operation != "memory_consolidate_retry" {
+		t.Errorf("expected operation memory_consolidate_retry, got %s", entry.Operation)
+	}
+	if entry.TargetEngine != "memory" {
+		t.Errorf("expected target engine memory, got %s", entry.TargetEngine)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+		t.Fatalf("failed to parse payload: %v", err)
+	}
+	if payload["session_id"] != "test-session" {
+		t.Errorf("expected session_id test-session, got %v", payload["session_id"])
+	}
 }
