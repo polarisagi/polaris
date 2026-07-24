@@ -36,9 +36,3 @@ type AgentInfer interface {
 	// reply 在 Agent goroutine 中调用，调用方需保证线程安全。
 	HandleMessage(ctx context.Context, sessionID, userID, text string, taint types.TaintLevel, reply func(string) error)
 }
-
-// 2026-07-12 移除 ChannelAuthChecker（原声称"实现：security.SecurityFacade
-// （IsAuthorized）"）：方法签名 IsChannelAllowed(ctx, userID, channelType) (bool, error)
-// 与 SecurityFacade.IsAuthorized(ctx, principal, action, resource, ctxData) (bool, error)
-// 并不匹配，全仓库零消费方、零实现，文档声称的实现关系不成立，按死代码清理
-// （与本次一并删除的 protocol.SecurityFacade/security.SecurityFacadeImpl 同批发现）。

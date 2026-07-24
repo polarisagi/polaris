@@ -49,6 +49,8 @@ type M2StorageThresholds struct {
 	MaxBatchSize             int     `toml:"transaction.max_batch_size"`     // 64
 	MaxRowsPerTx             int     `toml:"transaction.max_rows_per_tx"`    // 50
 	OutboxMaxAttempts        int     `toml:"outbox.max_attempts"`            // 5
+	OutboxBackoffInitialMs   int64   `toml:"outbox.backoff_initial_ms"`      // 100
+	OutboxBackoffMaxMs       int64   `toml:"outbox.backoff_max_ms"`          // 8000
 	MutationBusChannelCap    int     `toml:"mutation_bus.channel_cap"`       // 4096
 	TickerIntervalMs         int     `toml:"transaction.ticker_interval_ms"` // 10
 	WALCheckpointPages       int     `toml:"wal.checkpoint_pages"`           // 1000
@@ -261,6 +263,8 @@ func DefaultThresholds() Thresholds {
 			MaxBatchSize:             64,
 			MaxRowsPerTx:             50,
 			OutboxMaxAttempts:        5,
+			OutboxBackoffInitialMs:   100,
+			OutboxBackoffMaxMs:       8000,
 			MutationBusChannelCap:    4096,
 			TickerIntervalMs:         10,
 			WALCheckpointPages:       1000,

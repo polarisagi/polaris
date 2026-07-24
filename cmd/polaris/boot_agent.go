@@ -781,7 +781,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 内定义），把调度器的 action/meta 形式审计事件转换为 AuditTrail.RecordAudit
 	// 所需的 toolName/payload 形式，两者语义等价（都是"记录一条带元数据的审计事件"）。
 	bgTaskScheduler.InjectAuditLogger(auditTrailLogAdapter{at: sb.AuditTrail})
-	bgTaskScheduler.InjectImmuneGateway(NewImmuneGateway())
+
 	// [W-1-B] 接入 SurpriseReader
 	bgTaskScheduler.InjectSurpriseReader(&simpleSurpriseReader{})
 

@@ -108,7 +108,7 @@ func (s *SurrealDBCoreStore) SpreadingActivation(startIDs []string, maxDepth int
 	}
 	scored, err := s.GraphSpreadingActivation(startIDs, maxDepth, energyDecay, dormancyThreshold, fanOutLimit)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to execute spreading activation", err)
 	}
 	out := make([]types.ScoredNode, len(scored))
 	for i, r := range scored {

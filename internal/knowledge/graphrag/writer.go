@@ -145,7 +145,7 @@ func (pc *ProviderLLMClient) ExtractEntities(ctx context.Context, text string) (
 		req.Model = pc.model
 	}
 	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
-	if err != nil {
+	if err != nil || resp == nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LLM entity extraction failed: %v", err), err)
 	}
 	return parseEntityJSON(resp.Content)
@@ -173,7 +173,7 @@ func (pc *ProviderLLMClient) ExtractRelations(ctx context.Context, entities []*E
 		req.Model = pc.model
 	}
 	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
-	if err != nil {
+	if err != nil || resp == nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LLM relation extraction failed: %v", err), err)
 	}
 	return parseRelationJSON(resp.Content)

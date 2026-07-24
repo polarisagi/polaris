@@ -57,7 +57,7 @@ func NewRemoteSandbox(endpoint, authToken string, timeoutSec int, client *http.C
 		timeoutSec = 300
 	}
 	if client == nil {
-		client = network.NewSafeHTTPClient(nil)
+		client = network.NewSafeHTTPClient(nil).Client
 	}
 	client.Timeout = time.Duration(timeoutSec) * time.Second
 

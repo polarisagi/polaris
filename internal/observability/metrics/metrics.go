@@ -353,10 +353,3 @@ func (si *SurpriseIndex) InjectFaultSignal(severity float64) {
 		si.lastValue = 1.0
 	}
 }
-
-// 2026-07-21 deadcode 审查：此前这里有一套完全独立、零调用的 DecisionLog/
-// DecisionLogStore/DecisionLogger 平行实现，与 internal/store/audit/decisionlog.go
-// 的 SQLiteDecisionLog（实现 protocol.DecisionLogger 接口，被
-// internal/execute/orchestrator/pipeline.go 实际注入生产使用）撞名但完全无关联，
-// docs/arch/M03-Observability.md 曾引用的正是本文件这套未接线版本——已删除，
-// 文档同步订正为指向 SQLiteDecisionLog。

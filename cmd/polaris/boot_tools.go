@@ -223,7 +223,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	mcpMgr.SetCatalog(memoryCatalog)
 	mcpMgr.SetEnvelope(envelope)
 
-	mktClient := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTP)
+	mktClient := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTPClient)
 
 	hitlGateway := hitl.NewGateway(sb.Store)
 	hitlGateway.SetNotifier(hitl.NewChannelNotifier())
@@ -258,6 +258,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
 	// 从未调用而永久跳过（ADR-0051）；mktClient.Install 是完整实现，直接注入。
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
+	installMgr.WithOutbox(sb.Outbox)
 
 	cronRepo := repo.NewSQLiteCronRepository(sb.Store.DB())
 	if err := builtin.RegisterBuiltinTools(inProcSandbox, toolReg, allowedPaths, sb.Dialer,
@@ -368,6 +369,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, protocol.LLMInferFunc(llmInfer), nil)
 	sb.Outbox.RegisterHandler(protocol.TopicExtensionLibrarian, extensionLibrarianHandler.Handle)
+	sb.Outbox.RegisterHandler("extension_uninstall", sandbox.NewExtensionUninstallHandler(sandboxRouter, extRepo).Handle)
 
 	sb.Outbox.RegisterHandler(protocol.TopicEpisodicProject, consolidation.EpisodicProjectorHandler(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey)))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
@@ -469,6 +471,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		consolGate = sb.AutoConf.Gate
 	}
 	consolidationPipeline.WithBackgroundGate(budget.NewResourceBudget(sb.TBR, consolGuard, consolGate))
+	consolidationPipeline.WithOutbox(sb.Outbox)
 	sb.Outbox.RegisterHandler(protocol.TopicMemoryConsolidate, func(ctx context.Context, rec *store.OutboxRecord) error {
 		var payload struct {
 			SessionID string `json:"session_id"`
@@ -482,6 +485,23 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 		return consolidationPipeline.Run(ctx, payload.SessionID)
 	})
+
+	sb.Outbox.RegisterHandler("memory_consolidate_retry", func(ctx context.Context, rec *store.OutboxRecord) error {
+		var payload struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+			return nil //nolint:nilerr // malformed payload 跳过
+		}
+		if payload.SessionID == "" {
+			return nil
+		}
+
+		// 隔离沙箱优先分配: Set a high priority budget flag or similar if needed.
+		// For now, retry runs the same consolidation pipeline.
+		return consolidationPipeline.Run(ctx, payload.SessionID)
+	})
+
 	slog.Info("polaris: memory consolidation pipeline registered (OutboxWorker/memory_consolidate)")
 
 	// §6.8 PerMessageExtractor（每条消息立即提取实体，M5 准实时路径）──────────

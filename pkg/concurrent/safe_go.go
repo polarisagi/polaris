@@ -35,6 +35,3 @@ func SafeGo(ctx context.Context, name string, fn func(ctx context.Context)) {
 		fn(ctx)
 	}()
 }
-
-// 2026-07-14（ADR-0051）：BoundedPool/NewBoundedPool/Submit 删除——全仓零调用点、
-// 零测试覆盖、docs/ 内零引用，是完全孤立的投机性并发原语，无任何计划中的消费方。

@@ -251,3 +251,22 @@ type ForgettingManager struct {
 
 	archiver *ColdArchiver
 }
+
+// SampleOOMFeatures 提取 OOM 现场特征数据
+func (p *ConsolidationPipeline) SampleOOMFeatures(events []types.ScoredEvent) map[string]any {
+	typeDist := make(map[string]int)
+	totalBytes := 0
+
+	for _, se := range events {
+		if e, ok := se.Event.(*types.Event); ok && e != nil {
+			typeDist[string(e.Type)]++
+			totalBytes += len(e.Payload)
+		}
+	}
+
+	return map[string]any{
+		"total_events":        len(events),
+		"type_distribution":   typeDist,
+		"total_payload_bytes": totalBytes,
+	}
+}

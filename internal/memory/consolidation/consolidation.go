@@ -1,6 +1,9 @@
 package consolidation
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/polarisagi/polaris/internal/memory/retrieval"
 
 	"context"
@@ -48,6 +51,7 @@ type ConsolidationPipeline struct {
 	gate         backgroundGate
 	skillEvolver SkillEvolver
 	graphFetcher GraphEntityFetcher // B2: 桥接检查 GraphRAG 侧
+	outbox       protocol.OutboxWriter
 }
 
 type backgroundGate interface {
@@ -60,7 +64,15 @@ type SkillEvolver interface {
 }
 
 func (p *ConsolidationPipeline) WithBackgroundGate(g backgroundGate) { p.gate = g }
-func (p *ConsolidationPipeline) WithSkillEvolver(e SkillEvolver)     { p.skillEvolver = e }
+func (p *ConsolidationPipeline) WithSkillEvolver(se SkillEvolver) *ConsolidationPipeline {
+	p.skillEvolver = se
+	return p
+}
+
+func (p *ConsolidationPipeline) WithOutbox(ob protocol.OutboxWriter) *ConsolidationPipeline {
+	p.outbox = ob
+	return p
+}
 
 // NewConsolidationPipeline 创建压缩管线，episodic 和 semantic 必须非 nil。
 // 2026-07-14（ADR-0051）：基础版 NewConsolidationPipeline 删除——全仓生产零调用点，
@@ -132,13 +144,40 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 		slog.Warn("consolidation: mark cold episodic events failed", "err", err)
 	}
 
-	return p.executeStages(ctx, sessionID, events)
+	err = p.executeStages(ctx, sessionID, events)
+	if err != nil {
+		if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+			if p.outbox != nil {
+				features := p.SampleOOMFeatures(events)
+				payload, _ := json.Marshal(map[string]any{
+					"session_id":   sessionID,
+					"event_count":  len(events),
+					"timestamp":    time.Now().Unix(),
+					"oom_features": features,
+					"trace_tag":    "memory_consolidate_retry",
+				})
+				_ = p.outbox.Write(context.Background(), protocol.OutboxEntry{
+					TargetEngine:   "memory",
+					Operation:      "memory_consolidate_retry",
+					Scope:          "system",
+					Payload:        payload,
+					IdempotencyKey: fmt.Sprintf("consolidate:retry:%s:%d", sessionID, time.Now().UnixNano()),
+				})
+				slog.Warn("consolidation: OOM detected, scheduled retry", "session", sessionID)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (p *ConsolidationPipeline) executeStages(ctx context.Context, sessionID string, events []types.ScoredEvent) error {
 	// Stage 1 — 实体/关系提取
 	entities, relations, err := p.extractEntitiesAndRelations(ctx, sessionID, events)
 	if err != nil {
+		if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+			return err
+		}
 		// 非阻断：Stage 1 失败不中止后续阶段
 		entities = nil
 		relations = nil
@@ -152,6 +191,9 @@ func (p *ConsolidationPipeline) executeStages(ctx context.Context, sessionID str
 
 	// Stage 3 — 会话摘要生成
 	if err := p.summarizeSession(ctx, sessionID, events); err != nil {
+		if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+			return err
+		}
 		slog.Warn("consolidation: stage3 summarizeSession failed", "err", err)
 	}
 

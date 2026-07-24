@@ -18,13 +18,14 @@ import (
 
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // MCPMarketplaceClient handles interactions with external MCP registries.
 type MCPMarketplaceClient struct {
-	httpClient     *http.Client
+	httpClient     network.SafeHTTPClient
 	registryURL    string
 	baseInstallDir string
 }
@@ -32,12 +33,12 @@ type MCPMarketplaceClient struct {
 // NewMCPMarketplaceClient 创建市场客户端。
 // httpClient 必须是经 SafeDialer 包装的客户端（来自 network.NewSafeHTTPClient）；
 // 传 nil 时降级为裸 http.Client（仅测试场景允许）。
-func NewMCPMarketplaceClient(registryURL, baseInstallDir string, httpClient *http.Client) *MCPMarketplaceClient {
+func NewMCPMarketplaceClient(registryURL, baseInstallDir string, httpClient network.SafeHTTPClient) *MCPMarketplaceClient {
 	if registryURL == "" {
 		registryURL = "https://registry.modelcontextprotocol.io/v0.1"
 	}
-	if httpClient == nil {
-		panic("marketplace: httpClient must not be nil; inject a SafeDialer-backed client")
+	if !httpClient.IsSafe() {
+		panic("marketplace: httpClient must be a valid network.SafeHTTPClient")
 	}
 	return &MCPMarketplaceClient{
 		httpClient:     httpClient,
@@ -142,7 +143,7 @@ func publisherFromName(name string) string {
 // verifyDownload 校验已下载文件的 SHA-256。
 // expectedHex 非空时直接比对；否则尝试从 checksumURL 拉取并解析。
 // 两者均为空时：社区来源记录 Warn 并放行（降级策略），官方来源返回 error。
-func verifyDownload(ctx context.Context, client *http.Client, filePath, expectedHex, checksumURL string, trustTier int) error {
+func verifyDownload(ctx context.Context, client network.SafeHTTPClient, filePath, expectedHex, checksumURL string, trustTier int) error {
 	if expectedHex == "" && checksumURL != "" {
 		hex, err := fetchChecksumFromURL(ctx, client, checksumURL, filepath.Base(filePath))
 		if err != nil {
@@ -156,9 +157,8 @@ func verifyDownload(ctx context.Context, client *http.Client, filePath, expected
 		if trustTier >= int(types.TrustOfficial) {
 			return apperr.New(apperr.CodeInternal, "marketplace: official extension missing checksum")
 		}
-		slog.Warn("marketplace: no checksum available for community extension, skipping verification",
-			"file", filepath.Base(filePath), "trust_tier", trustTier)
-		return nil
+		// F7: 社区插件无 checksum 时拒绝安装
+		return apperr.New(apperr.CodeInternal, "marketplace: community extension missing checksum (rejected)")
 	}
 
 	f, err := os.Open(filePath)
@@ -182,7 +182,7 @@ func verifyDownload(ctx context.Context, client *http.Client, filePath, expected
 
 // fetchChecksumFromURL 下载 checksums.txt 并提取指定文件名的 SHA-256。
 // 格式：每行 "<sha256hex>  <filename>"（与 GitHub Releases 格式一致）。
-func fetchChecksumFromURL(ctx context.Context, client *http.Client, checksumURL, filename string) (string, error) {
+func fetchChecksumFromURL(ctx context.Context, client network.SafeHTTPClient, checksumURL, filename string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "fetchChecksumFromURL", err)
@@ -235,7 +235,7 @@ func (c *MCPMarketplaceClient) Install(ctx context.Context, pkg protocol.Registr
 		}
 
 		slog.Info("marketplace: downloading binary release", "url", pkg.URL, "to", binaryPath)
-		if err := downloader.DownloadFile(ctx, c.httpClient, pkg.URL, binaryPath); err != nil {
+		if err := downloader.DownloadFile(ctx, c.httpClient.Client, pkg.URL, binaryPath); err != nil {
 			return "", apperr.Wrap(apperr.CodeInternal, "marketplace: binary download failed", err)
 		}
 		// 下载完成后立即校验 SHA-256，不通过则拒绝并删除文件

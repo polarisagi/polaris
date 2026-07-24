@@ -171,7 +171,7 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 				{Role: "system", Content: "用一句话（50字以内）总结以下文本片段的核心内容，输出纯文本，不加任何格式："},
 				{Role: "user", Content: node.Content},
 			}, types.WithModel("standard"))
-			if err != nil || resp.Content == "" {
+			if err != nil || resp == nil || resp.Content == "" {
 				continue
 			}
 			summaryHash := fmt.Sprintf("%x", simpleHash(resp.Content))

@@ -48,7 +48,3 @@ type TierParameters struct {
 
 // computeTierParameters selects tier-appropriate numeric defaults.
 // 所有参数最终值可被 config.toml 覆盖。
-
-// 2026-07-14（ADR-0051）：Param（字符串键间接访问）删除——全仓生产代码
-// （auto_config_tiers.go 等）均通过结构体字段直读（如 p.ScriptWorkerMax），
-// 从未通过字符串键间接访问，是被字段直读完全取代的冗余索引器。

@@ -131,11 +131,6 @@ type BackgroundTaskScheduler struct {
 	surpriseReader SurpriseReader
 	redTeam        RedTeamRunner        // 可选；nil 时跳过 24h 红队探测
 	auditLogger    protocol.AuditLogger // 可 nil，nil 时降级为 slog.Error
-	immuneGateway  immuneGatewayInterface
-}
-
-type immuneGatewayInterface interface {
-	Scan(ctx context.Context, agentID string, scanType string) (any, error)
 }
 
 // SurpriseReader 读取当前系统 SurpriseIndex。
@@ -156,11 +151,6 @@ func (b *BackgroundTaskScheduler) InjectAuditLogger(logger protocol.AuditLogger)
 // InjectSurpriseReader 注入 SurpriseIndex 读取器（可选——nil 时使用 0.5 默认值）。
 func (b *BackgroundTaskScheduler) InjectSurpriseReader(r SurpriseReader) {
 	b.surpriseReader = r
-}
-
-// InjectImmuneGateway 注入免疫网关。
-func (b *BackgroundTaskScheduler) InjectImmuneGateway(gateway immuneGatewayInterface) {
-	b.immuneGateway = gateway
 }
 
 // InjectRedTeamProtocol 注入 Red Team 协议（可选）。
@@ -208,31 +198,6 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 			}
 		}
 	})
-
-	// 新增：7 天 FoundingAnchor 漂移检查（V8-S3）
-	if b.immuneGateway != nil {
-		concurrent.SafeGo(ctx, "curriculum-founding-anchor-check", func(ctx context.Context) {
-			ticker := time.NewTicker(7 * 24 * time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					// Delegate checking to M9 ImmuneGateway
-					res, err := b.immuneGateway.Scan(ctx, "system", "founding_anchor")
-					if err == nil && res != nil {
-						if frozen, ok := res.(bool); ok && frozen {
-							b.generator.SetGlobalFreeze(true)
-							b.audit(ctx, "curriculum_founding_anchor_freeze", map[string]any{
-								"reason": "founding_anchor drift scan flagged system for freeze",
-							})
-						}
-					}
-				}
-			}
-		})
-	}
 
 	// 新增：24 小时 Red Team 常态化探测（V8-S1）
 	if b.redTeam != nil {
