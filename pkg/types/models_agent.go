@@ -83,6 +83,20 @@ type DAGEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 }
+
+// TaskCheckpointRow 用于 StateGraphExecutor 节点级别的容错恢复。
+type TaskCheckpointRow struct {
+	TaskID         string
+	NodeID         string
+	Attempt        int
+	Status         string
+	OutputJSON     string
+	IdempotencyKey string
+	TaintLevel     TaintLevel
+	StartedAt      int64
+	CompletedAt    int64
+	Error          string
+}
 type TaskEntry struct {
 	ID          string
 	Type        string
