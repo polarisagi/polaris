@@ -103,10 +103,9 @@ func (a *OllamaAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 }
 
 func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	var cancel context.CancelFunc
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultStreamInferTimeout)
-		defer cancel()
 	}
 	options := &types.InferOptions{}
 	for _, opt := range opts {
@@ -124,5 +123,5 @@ func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = a.model
 	tok := &llmparent.SimpleTokenizer{}
-	return a.client.SendStreamRequest(ctx, nil, apiReq, tok.EstimateRequestTokens(req))
+	return a.client.SendStreamRequest(ctx, cancel, nil, apiReq, tok.EstimateRequestTokens(req))
 }

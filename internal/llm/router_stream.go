@@ -140,7 +140,11 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamFailover: non-retryable ("+string(ce.Reason)+")", err)
 		}
 		if ce.Retryable && ce.Reason == ReasonRateLimit {
-			time.Sleep(DefaultBackoff().DelayWithState(len(skipped), nil))
+			select {
+			case <-ctx.Done():
+				return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamFailover: ctx cancelled during backoff", ctx.Err())
+			case <-time.After(DefaultBackoff().DelayWithState(len(skipped), nil)):
+			}
 		}
 
 		skipped[chosen.name] = struct{}{}

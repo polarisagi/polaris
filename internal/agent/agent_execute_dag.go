@@ -134,7 +134,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				CapabilityID:    jitTok.Claims.TokenID,
 				SessionID:       a.sCtx.SessionID,
 				AgentID:         a.ID,
-				TaintLevel:      codeArgs.TaintLevel,
+				TaintLevel:      taintLevel,
 				StatefulSession: codeArgs.StatefulSession,
 			})
 			if err != nil {
@@ -184,45 +184,46 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				MaxTaintLevel: maxT,
 			}
 			events, err := a.memory.ListEpisodicEvents(ctx, query)
-			if err == nil {
-				hasPending := false
-				hasDone := false
-				signature := fmt.Sprintf(`"tool":"%s"`, toolName)
-				for _, e := range events {
-					if strings.Contains(string((func() *types.Event {
+			if err != nil {
+				return nil, apperr.Wrap(apperr.CodeInternal, "2PC phase1: list episodic events failed", err)
+			}
+			hasPending := false
+			hasDone := false
+			signature := fmt.Sprintf(`"tool":"%s"`, toolName)
+			for _, e := range events {
+				if strings.Contains(string((func() *types.Event {
+					if e, _ := e.Event.(*types.Event); e != nil {
+						return e
+					}
+					return &types.Event{}
+				}()).Payload), signature) {
+					if (func() *types.Event {
 						if e, _ := e.Event.(*types.Event); e != nil {
 							return e
 						}
 						return &types.Event{}
-					}()).Payload), signature) {
-						if (func() *types.Event {
-							if e, _ := e.Event.(*types.Event); e != nil {
-								return e
-							}
-							return &types.Event{}
-						}()).Type == types.EventActionPending {
-							hasPending = true
-						} else if (func() *types.Event {
-							if e, _ := e.Event.(*types.Event); e != nil {
-								return e
-							}
-							return &types.Event{}
-						}()).Type == types.EventActionDone {
-							hasDone = true
+					}()).Type == types.EventActionPending {
+						hasPending = true
+					} else if (func() *types.Event {
+						if e, _ := e.Event.(*types.Event); e != nil {
+							return e
 						}
+						return &types.Event{}
+					}()).Type == types.EventActionDone {
+						hasDone = true
 					}
 				}
-				if hasPending && !hasDone {
-					// Crashed during execution. 阻断以防止外部副作用重复发生
-					return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("double execution prevented: non-idempotent tool %s was interrupted previously", toolName))
-				}
-				if hasDone {
-					// 已成功执行但后续环节崩溃导致重跑
-					return &types.ToolResult{
-						Success: true,
-						Output:  []byte(fmt.Sprintf("tool %s was already executed successfully", toolName)),
-					}, nil
-				}
+			}
+			if hasPending && !hasDone {
+				// Crashed during execution. 阻断以防止外部副作用重复发生
+				return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("double execution prevented: non-idempotent tool %s was interrupted previously", toolName))
+			}
+			if hasDone {
+				// 已成功执行但后续环节崩溃导致重跑
+				return &types.ToolResult{
+					Success: true,
+					Output:  []byte(fmt.Sprintf("tool %s was already executed successfully", toolName)),
+				}, nil
 			}
 
 			// 写预写日志 Action_Pending
