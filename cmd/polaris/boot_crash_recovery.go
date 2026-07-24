@@ -148,7 +148,7 @@ func recoverOneSession(ctx context.Context, db *sql.DB, pool protocol.AgentPool,
 	if len(trace.LLMCalls) > 0 {
 		calls := make([]protocol.ReplayLLMCall, 0, len(trace.LLMCalls))
 		for _, c := range trace.LLMCalls {
-			calls = append(calls, protocol.ReplayLLMCall{Request: c.Request, Response: c.Response})
+			calls = append(calls, protocol.ReplayLLMCall(c))
 		}
 		agentCtrl.InjectReplayData(calls)
 		protocol.SetReplayMode(true)

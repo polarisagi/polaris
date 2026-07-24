@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -105,7 +106,8 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		var err error
 		agentCtrl, release, err = s.AgentPool.Acquire(ctx, sessionID)
 		if err != nil {
-			if aerr, ok := err.(*apperr.Error); ok && aerr.Code == apperr.CodeResourceExhausted {
+			var aerr *apperr.Error
+			if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
 				// 后台计算请求
 				if req.RunID != "" || req.ReasoningEffort == "background" {
 					s.WriteSSEError(w, flusher, "system_notice", "后台提炼排队中", sessionID, nil)
