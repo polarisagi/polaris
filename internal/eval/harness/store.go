@@ -193,8 +193,7 @@ const metaAuditLatestKey = "eval:meta_audit:latest"
 
 // RecordMetaAuditResult 持久化最新一次 Meta-Eval 审计结论，供 AdvanceGate 只读消费。
 // 不做独立签名校验——调用方（MetaEvalSentinel.RunAndRecord）在写入前已通过
-// GetMetaHoldoutCases 的签名校验成功读取过 meta_holdout，身份已在同一次调用链中
-// 验证过，无需重复校验。
+// 校验成功读取过 meta_holdout，身份已在同一次调用链中验证过，无需重复校验。
 func (s *SQLiteEvalStore) RecordMetaAuditResult(ctx context.Context, rec MetaAuditRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {

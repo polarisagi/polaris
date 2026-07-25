@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -62,9 +63,9 @@ func ctxWithToken() context.Context {
 }
 
 func newAllowRegistry() (*InMemoryToolRegistry, *sandbox.InProcessSandbox) {
-	sbx := sandbox.NewInProcessSandbox()
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0)
-	return NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil)), sbx
+	return NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil), config.DefaultThresholds().M7Tool), sbx
 }
 
 // ─── 注册/查找/列举 ──────────────────────────────────────────────────────────
@@ -145,7 +146,7 @@ func TestExecuteTool_ToolNotRegistered(t *testing.T) {
 }
 
 func TestExecuteTool_PolicyNil(t *testing.T) {
-	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), nil, nil, "linux", 0), 0, "linux", nil))
+	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), nil, nil, "linux", 0), 0, "linux", nil), config.DefaultThresholds().M7Tool)
 	_ = r.Register(minTool("test-tool"))
 	res, err := r.ExecuteTool(ctxWithToken(), "test-tool", []byte("x"), types.TaintNone)
 	if err != nil {
@@ -157,7 +158,7 @@ func TestExecuteTool_PolicyNil(t *testing.T) {
 }
 
 func TestExecuteTool_PolicyDenied(t *testing.T) {
-	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: false}, sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), nil, nil, "linux", 0), 0, "linux", nil))
+	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: false}, sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), nil, nil, "linux", 0), 0, "linux", nil), config.DefaultThresholds().M7Tool)
 	_ = r.Register(minTool("secret"))
 
 	res, err := r.ExecuteTool(ctxWithToken(), "secret", []byte("x"), types.TaintNone)
@@ -303,10 +304,10 @@ func TestExecuteTool_TaintPropagation(t *testing.T) {
 }
 
 func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
-	sbx := sandbox.NewInProcessSandbox()
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, sbx, "linux", 0) // hwTier=0 拒绝 L3
 	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil)
-	r := NewInMemoryToolRegistry(envelope)
+	r := NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
 
 	shellTool := types.Tool{
 		Name:        "run-sh",
@@ -333,7 +334,7 @@ func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 // ─── Policy Error & Context Cancel 分支覆盖 ──────────────────────────────────
 
 func TestExecuteTool_PolicyError(t *testing.T) {
-	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGateWithError{}, sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), nil, nil, "linux", 0), 0, "linux", nil))
+	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGateWithError{}, sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), nil, nil, "linux", 0), 0, "linux", nil), config.DefaultThresholds().M7Tool)
 	_ = r.Register(minTool("err-tool"))
 
 	result, err := r.ExecuteTool(ctxWithToken(), "err-tool", nil, types.TaintNone)
@@ -350,8 +351,8 @@ func TestExecuteTool_PolicyError(t *testing.T) {
 }
 
 func TestExecuteTool_ContextCancelled_PolicyStillRuns(t *testing.T) {
-	sbx := sandbox.NewInProcessSandbox()
-	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "linux", nil))
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	r := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "linux", nil), config.DefaultThresholds().M7Tool)
 	_ = r.Register(minTool("ctx-tool"))
 	sbx.Register("ctx-tool", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte("done"), nil

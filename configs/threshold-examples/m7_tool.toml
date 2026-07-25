@@ -7,3 +7,10 @@
 'script.max_wallclock_s' = 60
 'dryrun.protect_window_seconds' = 60
 max_code_size_bytes = 16384
+'idempotency_cache.size' = 1000
+'idempotency_cache.ttl_seconds' = 300
+'rate_limit.builtin_qps' = 100
+'rate_limit.mcp_qps' = 10
+'rate_limit.shell_qps' = 2
+'sandbox.quota_ms' = 30000
+'workspace.max_age_seconds' = 604800

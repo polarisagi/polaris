@@ -197,7 +197,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锁点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0062，0032 未分配；0027/0028/0034/0035/0036/0038/0040 已删除并入其他 ADR，见 decisions/README.md）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0075，0032 未分配；0027/0028/0034/0035/0036/0038/0040/0072 已删除并入其他 ADR，见 decisions/README.md）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go↑01 / Rust↑02 / Agent↑03 / 跨模块↑04 / 审查↑06 / 提交前↑06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
@@ -205,7 +205,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 9. `internal/protocol/` → 跨模块共享类型与接口契约
 10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~034，共 31 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
-**docs/arch/decisions/ 文件清单**（ADR-0001~0062，0032 未分配，按需 grep 主题词；0027/0028/0034/0035/0036/0038/0040 已删除并入下述目标 ADR，见 decisions/README.md「已删除」表）：
+**docs/arch/decisions/ 文件清单**（ADR-0001~0075，0032 未分配，按需 grep 主题词；0027/0028/0034/0035/0036/0038/0040/0072 已删除并入下述目标 ADR，见 decisions/README.md「已删除」表）：
 - 0001 观测单例 · 0002 Skill 注册合并 · 0003 SQLite modernc · 0004 Tier-0 硬件层 · 0005 purego FFI Cedar
 - 0030 Tier2 Semantic Embedding · 0031 TTS 三路提供商
 - 0006 state.yaml SSoT · 0007 污点五级 · 0008 沙箱三级回退 · 0009 KillSwitch 三阶段 · 0010 SurrealDB 认知存储
@@ -233,6 +233,12 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 - 0061 2026-07-22 deadcode 复核（47 项；新发现 GoldmarkChunker 删除、TaintBoundarySerializer 接入 rag_chunks、ReportSurrealDBIndexSize FFI 接线）
 - 0062 deadcode 44 项 DEFER 最终结清（`make deadcode` 门控 + `scripts/deadcode-allowlist.txt` 白名单；删除为主，C2 FactualityGuard.AddToGate 复核确认删除正确/Verify 防线仍在，taint_sanitizer SanitizeByDeterministicTransform 复核恢复；Tier1 本地默认选型 Qwen3-Embedding-0.6B + Qwen3-Reranker-0.6B）
 - 0063 llama_infer 控制面/计算面分离（ABORT_FLAG 协作式取消 + status 无锁只读镜像 STATUS，解决推理期监控/取消阻塞 GD-11.1；不改单槽位串行推理取舍）
+- 0064 Channel 适配器注册表重构（A-1）+ 统一入站分发接线（A-2）· 0065 S_REPLAN 扩展激活重试与降级标记（A-3）
+- 0066 Gateway 直连 SQL 下沉 Repository（A-4）+ EgressGateway 收紧默认白名单（A-6）· 0067 Gateway God Class 拆分（ChatOrchestrator）
+- 0068 开放基准适配器架构（τ-bench/Terminal-Bench）· 0069 OpenLLMetry 轨迹导出器架构（F-2）
+- 0070 MCP Agent-to-Agent (A2A) 协同架构（F-3）· 0071 downloader 出站公网豁免 XR-06
+- 0073 KillSwitch 恢复路径统一（进程内活恢复模型 + `/_admin/unseal`，含原 ADR-0072）· 0074 Semantic(M5) 与 GraphRAG(M10) 最小整合桥接
+- 0075 Extension Upgrade Versioning（extension_catalog/instances 版本列 + `/plugins/{id}/upgrade`）
 
 **internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，31 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```

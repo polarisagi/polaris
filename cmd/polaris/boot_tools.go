@@ -7,6 +7,7 @@ package main
 import (
 	"path/filepath"
 
+	"github.com/polarisagi/polaris/internal/config"
 	polartool "github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/internal/tool/dispatch"
 
@@ -106,12 +107,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	var containerSandbox *sandbox.ContainerSandbox
 	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureL3Sandbox) != probe.FeatureDisabled {
-		containerSandbox = sandbox.NewContainerSandbox(sb.AutoConf.Config.L3SandboxBackend, runtime.GOOS, sb.AutoConf.Config.Tier, cmdRunner)
+		containerSandbox = sandbox.NewContainerSandbox(sb.AutoConf.Config.L3SandboxBackend, runtime.GOOS, sb.AutoConf.Config.Tier, cmdRunner, config.DefaultThresholds().M7Tool)
 		slog.Info("polaris: L3 container sandbox initialized (Rust native sandbox)",
 			"backend", "rust_bwrap_seatbelt",
 			"platform", runtime.GOOS)
 	}
-	inProcSandbox := sandbox.NewInProcessSandbox()
+	inProcSandbox := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	// B4-F5: WasmtimeSandbox（L2）门控
 	// FeatureL2Sandbox 未启用时（内存 < 512MB 或 Tier 低于要求），传 nil 给 SandboxRouter。
 	// SandboxRouter 收到 nil wasmtimeSandbox 时，Wasm 工具降级到 InProcessSandbox。
@@ -126,7 +127,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// Tier-0（2GB VPS）上 FeatureL3Sandbox 未启用时作为 CodeAct 脚本执行后端。
 	// 始终初始化（Rust dylib 已随二进制打包），与 FeatureL3Sandbox 门控无关。
 	// 复用 cmdRunner（WrapBashCmdRunner）以规避 internal/sandbox ↔ internal/tool/sandbox 循环 import。
-	nativeOSSandbox := sandbox.NewNativeOSSandbox(cmdRunner)
+	nativeOSSandbox := sandbox.NewNativeOSSandbox(cmdRunner, config.DefaultThresholds().M7Tool)
 	sandboxRouter := sandbox.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, sb.Cfg.System.Tier)
 	sandboxRouter.WithNativeOS(nativeOSSandbox)
 	// RemoteSandbox（Sbx-L4，可选非硬依赖，[Tier-0-Limit]）：仅在运营者显式配置
@@ -192,7 +193,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		[]string{sb.DataDir},
 		sb.Cfg.Sandbox.AllowedPaths...,
 	))
-	toolReg := polartool.NewInMemoryToolRegistry(envelope)
+	toolReg := polartool.NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
 	toolReg.WithTokenVault(piiVault)
 
 	// M04 §3 出口污点检查 + HITL 豁免转义（2026-07-14 补齐，见 hitlGateway 构造处
@@ -252,9 +253,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	mcpMgr.SetNetApprovalStore(sysRepo)
 
 	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap)
-	if containerSandbox != nil {
-		installMgr.WithHookRunner(containerSandbox)
-	}
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
 	// 从未调用而永久跳过（ADR-0051）；mktClient.Install 是完整实现，直接注入。
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
@@ -350,7 +348,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// 初始化 WorkspaceManager 与 ToolRefOffloader
 	const workspaceMaxSize = 500 * 1024 * 1024 // Tier0 quota，来源：internal/vfs/workspace_manager.go §Tier0=500MB
-	vfsWM := vfs.NewWorkspaceManager(sb.Layout.Workspace, workspaceMaxSize)
+	vfsWM := vfs.NewWorkspaceManager(sb.Layout.Workspace, workspaceMaxSize, config.DefaultThresholds().M7Tool)
 	toolRefOffloader := memory.NewToolRefOffloader(sb.Store.DB(), vfsWM)
 
 	// GR-5-001 补线：bootMemory 早于 bootTools 执行（vfsWM 尚不存在），episodic

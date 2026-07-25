@@ -11,6 +11,8 @@
 'transaction.max_batch_size' = 64
 'transaction.max_rows_per_tx' = 50
 'outbox.max_attempts' = 5
+'outbox.backoff_initial_ms' = 100
+'outbox.backoff_max_ms' = 8000
 'mutation_bus.channel_cap' = 4096
 'transaction.ticker_interval_ms' = 10
 'wal.checkpoint_pages' = 1000

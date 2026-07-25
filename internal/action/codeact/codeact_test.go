@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/token"
@@ -260,7 +261,7 @@ func TestExecute_MissingCapabilityID(t *testing.T) {
 
 func TestExecute_PolicyDenied(t *testing.T) {
 	gate := &mockPolicyGate{allowed: false}
-	ca := NewCodeAct(sandbox.NewExecEnvelope(gate, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
+	ca := NewCodeAct(sandbox.NewExecEnvelope(gate, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
 		WithGovernanceAgent(&mockGovAgent{}),
 		WithTokenManager(defaultMockTokenManager()),
 	)
@@ -280,7 +281,7 @@ func TestExecute_PolicyDenied(t *testing.T) {
 func TestExecute_NilPolicyGate_FailClosed(t *testing.T) {
 	// policy gate 为 nil → fail-closed (envelope 中的 gate 为 nil)
 	// token manager 照常注入（只测 policy gate 缺失路径）
-	ca := NewCodeAct(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
+	ca := NewCodeAct(sandbox.NewExecEnvelope(nil, sandbox.NewSandboxRouter(nil, nil, sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), "linux", 0), 0, "linux", nil), &mockToolExecutor{},
 		WithGovernanceAgent(&mockGovAgent{}),
 		WithTokenManager(defaultMockTokenManager()),
 	)

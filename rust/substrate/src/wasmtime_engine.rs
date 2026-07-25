@@ -187,7 +187,7 @@ pub unsafe extern "C" fn wasmtime_free_string(ptr: *mut c_char) {
 pub unsafe extern "C" fn wasmtime_free_bytes(ptr: *mut u8, len: usize) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !ptr.is_null() {
-            unsafe { drop(Vec::from_raw_parts(ptr, len, len)) };
+            unsafe { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len))) };
         }
     }));
 }

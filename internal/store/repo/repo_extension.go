@@ -43,7 +43,7 @@ func (r *SQLiteExtensionRepository) UpsertInstance(ctx context.Context, row type
 func (r *SQLiteExtensionRepository) GetInstance(ctx context.Context, id string) (*types.ExtInstanceRow, error) {
 	var row types.ExtInstanceRow
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at
+		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, COALESCE(error_msg, ''), created_at, updated_at
 		FROM extension_instances WHERE id=?`, id).Scan(
 		&row.ID, &row.ExtType, &row.Origin, &row.CatalogID, &row.Name, &row.InstalledVersion, &row.Publisher, &row.TrustTier, &row.RuntimeID, &row.InstallPath, &row.Config, &row.Status, &row.ErrorMsg, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -81,7 +81,7 @@ func (r *SQLiteExtensionRepository) UpdateInstanceInstallPath(ctx context.Contex
 
 func (r *SQLiteExtensionRepository) ListInstances(ctx context.Context) ([]types.ExtInstanceRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, error_msg, created_at, updated_at
+		`SELECT id, ext_type, origin, catalog_id, name, installed_version, publisher, trust_tier, runtime_id, install_path, config, status, COALESCE(error_msg, ''), created_at, updated_at
 		FROM extension_instances ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListInstances", err)

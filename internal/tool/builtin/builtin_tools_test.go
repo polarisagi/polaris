@@ -46,8 +46,8 @@ func mockToken(caps []token.CapabilityType) *token.Token {
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	sbx := sandbox.NewInProcessSandbox()
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil)) // 无 PolicyGate，只测工具逻辑
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool) // 无 PolicyGate，只测工具逻辑
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -76,8 +76,8 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 // TestBuiltinTools_ReadFile_BlockedPath 验证 read_file 拒绝白名单外路径。
 func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	sbx := sandbox.NewInProcessSandbox()
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -99,8 +99,8 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 // TestBuiltinTools_ListDir 验证 list_dir 能列举临时目录。
 func TestBuiltinTools_ListDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	sbx := sandbox.NewInProcessSandbox()
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -136,8 +136,8 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 // TestBuiltinTools_WriteFile_AllowedPath 验证 write_file 在白名单路径下写文件。
 func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	sbx := sandbox.NewInProcessSandbox()
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -169,8 +169,8 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 
 // TestBuiltinTools_FetchURL_SSRFGuard 验证 fetch_url 阻断私有地址。
 func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
-	sbx := sandbox.NewInProcessSandbox()
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -198,8 +198,8 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 
 // TestBuiltinTools_FetchURL_PublicURL 验证 fetch_url 放行公共 URL（MVP stub 模式）。
 func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
-	sbx := sandbox.NewInProcessSandbox()
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil))
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}

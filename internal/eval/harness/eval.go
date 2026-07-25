@@ -9,7 +9,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// Evaluator represents one level in the evaluation pyramid.
+// EvaluatorLevel represents one level in the evaluation pyramid.
 type EvaluatorLevel = protocol.EvaluatorLevel
 
 const (

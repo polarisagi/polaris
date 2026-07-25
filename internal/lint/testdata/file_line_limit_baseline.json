@@ -8,5 +8,6 @@
   "internal/agent/fsm/state_machine.go": true,
   "internal/learning/reflexion/reflexion.go": true,
   "internal/gateway/server/server_core.go": true,
-  "internal/config/thresholds.go": true
+  "internal/config/thresholds.go": true,
+  "internal/execute/orchestrator/pattern_state_graph.go": true
 }

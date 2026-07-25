@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
@@ -92,7 +93,7 @@ func TestMCPManager_AddRemoveUpdate(t *testing.T) {
 	}
 
 	// Add some dummy entries to test CallTool, registerTools and makeMCPToolFn
-	mgr.sandbox = sandbox.NewInProcessSandbox() // need non-nil sandbox for registerTools
+	mgr.sandbox = sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 
 	mgr.mu.Lock()
 	testClient := NewMCPClient(MCPClientConfig{Trusted: true}, nil)

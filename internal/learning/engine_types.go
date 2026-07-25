@@ -112,8 +112,8 @@ func (r *TaskResult) IsUncontrollable() bool {
 
 // =============================================================================
 // PromptOptimizerAdapter — M9 内环通过此接口更新 optimizer.PromptOptimizer 状态。
-// 由 pkg/swarm.optimizer.PromptOptimizer 实现；self_improve 包不直接引用 swarm 包
-// （防止循环依赖：swarm → self_improve，self_improve 不可反向引用）。
+// 由 internal/prompt/optimizer.PromptOptimizer 实现；internal/learning 包不直接引用 internal/prompt 包
+// （防止循环依赖：internal/prompt/optimizer → internal/learning，internal/learning 不可反向引用）。
 // =============================================================================
 
 // PromptOptimizerAdapter M9 内环与外部 optimizer.PromptOptimizer 的解耦接口。
@@ -131,8 +131,8 @@ type VersionStoreAdapter interface {
 }
 
 // HeuristicsWriter M9 内环写入成功轨迹的接口（P1-4）。
-// 由 pkg/swarm.optimizer.HeuristicsMemory 实现；self_improve 包通过此接口解耦，
-// 避免 swarm → self_improve → swarm 循环引用。
+// 由 internal/prompt/optimizer.HeuristicsMemory 实现；internal/learning 包通过此接口解耦，
+// 避免 internal/prompt/optimizer → internal/learning → internal/prompt/optimizer 循环引用。
 type HeuristicsWriter interface {
 	// RecordSuccess 将成功任务的 taskType 写入 optimizer.HeuristicsMemory，更新 success_rate。
 	// heuristicID 为空时由实现方自行生成（以 taskID 作为种子）。

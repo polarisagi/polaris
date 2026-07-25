@@ -103,7 +103,7 @@ func (p *ConsolidationPipeline) buildSummary(
 		if err != nil {
 			var aerr *apperr.Error
 			if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
-				return "", apperr.Wrap(apperr.CodeInternal, "summarize failed", err)
+				return "", apperr.Wrap(apperr.CodeResourceExhausted, "summarize failed", err)
 			}
 			slog.Warn("consolidation_summary: LLM inference failed, falling back to rule-based summary", "err", err)
 		}

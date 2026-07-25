@@ -159,7 +159,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 					"trace_tag":    "memory_consolidate_retry",
 				})
 				_ = p.outbox.Write(context.Background(), protocol.OutboxEntry{
-					TargetEngine:   "memory",
+					TargetEngine:   protocol.TopicMemory,
 					Operation:      "memory_consolidate_retry",
 					Scope:          "system",
 					Payload:        payload,

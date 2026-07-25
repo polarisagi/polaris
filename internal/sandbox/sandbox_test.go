@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -14,7 +15,7 @@ import (
 // ─── InProcessSandbox 测试 ────────────────────────────────────────────────────
 
 func TestInProcessSandbox_RegisterAndRun(t *testing.T) {
-	sb := NewInProcessSandbox()
+	sb := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	sb.Register("echo", func(_ context.Context, input []byte) ([]byte, error) {
 		return append([]byte("echo:"), input...), nil
 	})
@@ -35,7 +36,7 @@ func TestInProcessSandbox_RegisterAndRun(t *testing.T) {
 }
 
 func TestInProcessSandbox_UnknownTool(t *testing.T) {
-	sb := NewInProcessSandbox()
+	sb := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	_, err := sb.Run(context.Background(), SandboxSpec{ToolName: "nonexistent"})
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
@@ -43,7 +44,7 @@ func TestInProcessSandbox_UnknownTool(t *testing.T) {
 }
 
 func TestInProcessSandbox_Timeout(t *testing.T) {
-	sb := NewInProcessSandbox()
+	sb := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	sb.Register("slow", func(ctx context.Context, _ []byte) ([]byte, error) {
 		select {
 		case <-ctx.Done():
@@ -69,7 +70,7 @@ func TestInProcessSandbox_Timeout(t *testing.T) {
 // ─── SandboxRouter 测试 ──────────────────────────────────────────────────────
 
 func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
-	inProc := NewInProcessSandbox()
+	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	inProc.Register("list-files", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`["a","b"]`), nil
 	})
@@ -86,7 +87,7 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 
 // TestSandboxRouter_MCPFallsToInProcessWithoutContainer 验证无 Container 时 MCP 降级到 InProcess。
 func TestSandboxRouter_MCPFallsToInProcessWithoutContainer(t *testing.T) {
-	inProc := NewInProcessSandbox()
+	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	inProc.Register("mcp-tool", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`{}`), nil
 	})
@@ -150,7 +151,7 @@ func TestAssignSandboxTier(t *testing.T) {
 // ─── Additional InProcessSandbox tests ──────────────────────────────────────
 
 func TestInProcessSandbox_AdditionalMethods(t *testing.T) {
-	sb := NewInProcessSandbox()
+	sb := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 
 	// RegisterWithTaint
 	sb.RegisterWithTaint("tainted", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -190,7 +191,7 @@ func (errorCmdRunner) RunCmd(_ context.Context, _ CmdRunnerCfg) ([]byte, int, st
 }
 
 func TestContainerSandbox_Methods(t *testing.T) {
-	sb := NewContainerSandbox("/usr/local/bin/polaris-sandbox", "darwin", 1, errorCmdRunner{})
+	sb := NewContainerSandbox("/usr/local/bin/polaris-sandbox", "darwin", 1, errorCmdRunner{}, config.DefaultThresholds().M7Tool)
 
 	if sb.Level() != int(types.SandboxContainer) {
 		t.Errorf("expected Container level %v, got %v", types.SandboxContainer, sb.Level())
@@ -210,7 +211,7 @@ func TestContainerSandbox_Methods(t *testing.T) {
 // ─── SandboxRouter Additional Tests ──────────────────────────────────────────
 
 func TestSandboxRouter_AnomalyPaths(t *testing.T) {
-	inProc := NewInProcessSandbox()
+	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 1) // HwTier=1
 
 	// Route should fall back appropriately

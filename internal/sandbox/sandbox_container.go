@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -29,15 +30,16 @@ type ContainerSandbox struct {
 	platform string
 	hwTier   probe.Tier
 	runner   CmdRunner // Rust FFI + Go 降级命令执行器，启动时注入
+	cfg      config.M7ToolThresholds
 }
 
 // NewContainerSandbox 构造 ContainerSandbox。
 // runner 为 nil 时自动使用 NopCmdRunner（测试环境安全降级）。
-func NewContainerSandbox(binPath, platform string, hwTier probe.Tier, runner CmdRunner) *ContainerSandbox {
+func NewContainerSandbox(binPath, platform string, hwTier probe.Tier, runner CmdRunner, cfg config.M7ToolThresholds) *ContainerSandbox {
 	if runner == nil {
 		runner = NopCmdRunner{}
 	}
-	return &ContainerSandbox{binPath: binPath, platform: platform, hwTier: hwTier, runner: runner}
+	return &ContainerSandbox{binPath: binPath, platform: platform, hwTier: hwTier, runner: runner, cfg: cfg}
 }
 
 // Level 返回沙箱级别（实现 protocol.SandboxProvider）。
@@ -46,7 +48,7 @@ func (s *ContainerSandbox) Level() int { return 3 }
 func (s *ContainerSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
 	quotaMs := spec.CPUQuotaMs
 	if quotaMs == 0 {
-		quotaMs = 30000
+		quotaMs = s.cfg.SandboxQuotaMs
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(quotaMs)*time.Millisecond)
@@ -150,7 +152,7 @@ func (s *ContainerSandbox) RunHook(ctx context.Context, scriptPath, workDir stri
 func (s *ContainerSandbox) runRawCommand(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
 	quotaMs := spec.CPUQuotaMs
 	if quotaMs == 0 {
-		quotaMs = 30000
+		quotaMs = s.cfg.SandboxQuotaMs
 	}
 	start := time.Now()
 	out, exitCode, _, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{

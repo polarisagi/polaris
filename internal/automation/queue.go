@@ -17,7 +17,7 @@ import (
 )
 
 // storedTask 持久化到 KV 的任务快照，附带调度状态与重试计数。
-// Submit 写入 "pending"；Start goroutine 消费时更新为 "running"/"completed"/"failed"。
+// 任务在 Submit 时写入 "pending"；Start goroutine 消费时更新为 "running"/"completed"/"failed"。
 type storedTask struct {
 	Task             types.Task `json:"task"`
 	Status           string     `json:"status"`                      // pending | running | completed | failed

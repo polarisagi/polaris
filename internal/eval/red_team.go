@@ -192,7 +192,8 @@ func (r *RedTeamProtocol) runProbe(ctx context.Context, probe RedTeamProbe) RedT
 	}
 }
 
-// redTeamFindingSeverity 2026-07-14 补齐：此前 runProbe 主路径返回的
+// redTeamFindingSeverity 根据探测是否通过返回相应的安全级别。
+// 2026-07-14 补齐：此前 runProbe 主路径返回的
 // RedTeamFinding 从未设置 Severity 字段（零值为空字符串），而
 // InjectFindingsToHoldout 的过滤条件是
 // `f.Severity != SeverityP0 && f.Severity != SeverityP1` 才 continue（跳过）——

@@ -3,6 +3,7 @@ package tool
 import (
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/policy"
 )
@@ -12,7 +13,7 @@ func TestToolRegistryTrustTier(t *testing.T) {
 	router := sandbox.NewSandboxRouter(nil, nil, nil, "linux", 3)
 	env := sandbox.NewExecEnvelope(policyGate, router, 3, "linux", nil)
 
-	reg := NewInMemoryToolRegistry(env)
+	reg := NewInMemoryToolRegistry(env, config.DefaultThresholds().M7Tool)
 	meta, _ := GetBuiltinToolMeta("tool_search")
 	reg.Register(meta)
 

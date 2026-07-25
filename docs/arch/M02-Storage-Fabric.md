@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:167 tasks表 / 3:203 容量 / 4:252 Workspace / 5:294 SchemaManager / 6:308 Reindexer / 7:322 Go↔Rust FFI / 8:346 连接池 / 9:361 多写者 / 10:374 引擎速查 / 11:391 四层记忆映射 / 15:399 428(SOFT)降级 / 16:413 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:167 tasks表 / 3:203 容量 / 4:252 Workspace / 5:294 SchemaManager / 6:308 Reindexer / 7:322 Go↔Rust FFI / 8:346 连接池 / 9:361 多写者 / 10:374 引擎速查 / 11:389 四层记忆映射 / 15:397 428(SOFT)降级 / 16:411 依赖 -->
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）
@@ -371,7 +371,7 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
 
 ---
 
-## 10. 引擎选择速查（2026 极简三轴架构）
+## 10. 引擎选择速查（2026 极简双轴架构）
 
 - 引擎: **[Storage-SQLite]** (modernc.org/sqlite, 纯 Go CGO-Free)
   - 用途: 系统控制轴。唯一的绝对真相源 (EventLog)、任务状态机、ACID 队列 (Outbox)。零 FFI 开销，最高稳定性。
@@ -385,8 +385,6 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
     > - **≥4GB（默认路径）**: 使用 `configs/defaults.toml [cognition] surreal_backend`（默认值 `"rocksdb"`），持久化落盘 `~/.polarisagi/polaris/data/surreal.db`，RSS ~200MB。
     > - **≥8GB**: 额外自动开启 workerThreads，提升并发处理能力。
     > - **surreal-mem**: 仅在 RAM 2-4GB 时自动降级，或显式配置 `surreal_backend = "mem"` 时使用。
-- 引擎: **[Storage-Native]** (纯 Go 内存原生结构)
-  - 用途: 热缓存轴。纯内存态的 L0 Working Memory，使用 `sync.Map` 和原生切片，满足 8GB 内存 (Tier-0) 约束。
 
 ## 11. 四层记忆 → 存储绑定
 
