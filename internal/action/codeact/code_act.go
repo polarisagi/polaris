@@ -246,12 +246,28 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	}
 
 	// 构造沙箱运行规格
-	// GD-4-002: StatefulSession=true 时在真正执行的脚本首尾注入状态快照样板
-	// （不改变 req.Code 本身，L0/L1/L2 审查已在上面 validateExecuteRequest 中
-	// 针对原始 req.Code 完成，此处只影响实际执行的字节，不影响审查范围）。
-	execCode, err := ca.buildExecutableScript(req)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: build executable script failed", err)
+	// D4/ADR-0079：StatefulSession 请求优先尝试 L4 长驻会话（真正的解释器进程
+	// 跨调用存活，而非 pickle/env 快照）。这个决策必须在构造 execCode 之前
+	// 就确定下来——L4 可用时发送原始代码（长驻进程自己保有状态，不需要样板
+	// 包装；反之样板包装反而会破坏协议：pickle 快照假设"每次调用都是全新
+	// 进程"，套在一个从不重启的长驻进程上没有意义），L4 不可用时维持原有
+	// pickle/env 包装路径不变（GD-4-002，零回归）。
+	useL4 := req.StatefulSession && req.SessionID != "" &&
+		(req.Language == "python" || req.Language == "bash") &&
+		ca.envelope.PersistentSandboxAvailable()
+
+	var execCode string
+	var err error
+	if useL4 {
+		execCode = req.Code
+	} else {
+		// GD-4-002: StatefulSession=true 时在真正执行的脚本首尾注入状态快照样板
+		// （不改变 req.Code 本身，L0/L1/L2 审查已在上面 validateExecuteRequest 中
+		// 针对原始 req.Code 完成，此处只影响实际执行的字节，不影响审查范围）。
+		execCode, err = ca.buildExecutableScript(req)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "code_act: build executable script failed", err)
+		}
 	}
 
 	// 安全策略：LLM 生成代码写入临时文件执行，禁止通过 -c 参数拼接（shell 注入向量）。
@@ -267,14 +283,25 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 
 	tok, _ := ca.tokenMgr.Lookup(req.CapabilityID)
 
-	res, err := ca.envelope.Execute(ctx, sandbox.ExecRequest{
+	execReq := sandbox.ExecRequest{
 		Principal: sandbox.PrincipalAgent, Kind: sandbox.KindScriptExecute,
 		Resource: "codeact:" + req.Language, TrustTier: types.TrustUntrusted,
 		Tool:  types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated},
 		Input: []byte("{}"), ScriptPath: tmpFile,
 		CapToken:   tok,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
-	})
+	}
+	if useL4 {
+		// 只有真正按 L4 路径构造了 execCode（未经 pickle 包装）时才要求 Execute()
+		// 把 tier 覆盖为 SandboxPersistent；useL4 已经在上面同步确认过
+		// PersistentSandboxAvailable()，这里不会出现"想用 L4 但其实不可用"的
+		// 不一致状态。
+		execReq.SessionID = req.SessionID
+		execReq.Language = req.Language
+		execReq.StatefulSession = true
+	}
+
+	res, err := ca.envelope.Execute(ctx, execReq)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: sandbox execution failed", err)
 	}

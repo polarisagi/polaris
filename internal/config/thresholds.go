@@ -128,22 +128,26 @@ type M6SkillThresholds struct {
 }
 
 type M7ToolThresholds struct {
-	DefaultSandboxLevel        int    `toml:"sandbox.default_level"` // 3 (L3 Container；macOS 降级至 L2 Wasmtime)
-	DryRunEnabled              bool   `toml:"sandbox.dry_run_enabled"`
-	MaxScriptMemoryMB          int    `toml:"script.max_memory_mb"`               // 256
-	MaxScriptWallclockS        int    `toml:"script.max_wallclock_s"`             // 60
-	DryRunProtectWindowSeconds int    `toml:"dryrun.protect_window_seconds"`      // 60
-	MaxCodeSizeBytes           int    `toml:"max_code_size_bytes"`                // 16384
-	IdempotencyCacheSize       int    `toml:"idempotency_cache.size"`             // 1000
-	IdempotencyCacheTTLSeconds int    `toml:"idempotency_cache.ttl_seconds"`      // 300
-	RateLimitBuiltinQPS        int    `toml:"rate_limit.builtin_qps"`             // 100
-	RateLimitMCPQPS            int    `toml:"rate_limit.mcp_qps"`                 // 10
-	RateLimitShellQPS          int    `toml:"rate_limit.shell_qps"`               // 2
-	SandboxQuotaMs             int    `toml:"sandbox.quota_ms"`                   // 30000
-	WorkspaceMaxAgeSeconds     int    `toml:"workspace.max_age_seconds"`          // 604800
-	ExtUninstallHookTimeoutS   int    `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
-	SandboxL4Enabled           bool   `toml:"sandbox.l4_enabled"`                 // false（D4/ADR-0078：Tier2+ 持久化沙箱，后端未实现前默认关闭）
-	SandboxL4Backend           string `toml:"sandbox.l4_backend"`                 // "unimplemented"（D4：运营者可声明期望后端，当前仅用于日志/诊断）
+	DefaultSandboxLevel          int    `toml:"sandbox.default_level"` // 3 (L3 Container；macOS 降级至 L2 Wasmtime)
+	DryRunEnabled                bool   `toml:"sandbox.dry_run_enabled"`
+	MaxScriptMemoryMB            int    `toml:"script.max_memory_mb"`               // 256
+	MaxScriptWallclockS          int    `toml:"script.max_wallclock_s"`             // 60
+	DryRunProtectWindowSeconds   int    `toml:"dryrun.protect_window_seconds"`      // 60
+	MaxCodeSizeBytes             int    `toml:"max_code_size_bytes"`                // 16384
+	IdempotencyCacheSize         int    `toml:"idempotency_cache.size"`             // 1000
+	IdempotencyCacheTTLSeconds   int    `toml:"idempotency_cache.ttl_seconds"`      // 300
+	RateLimitBuiltinQPS          int    `toml:"rate_limit.builtin_qps"`             // 100
+	RateLimitMCPQPS              int    `toml:"rate_limit.mcp_qps"`                 // 10
+	RateLimitShellQPS            int    `toml:"rate_limit.shell_qps"`               // 2
+	SandboxQuotaMs               int    `toml:"sandbox.quota_ms"`                   // 30000
+	WorkspaceMaxAgeSeconds       int    `toml:"workspace.max_age_seconds"`          // 604800
+	ExtUninstallHookTimeoutS     int    `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
+	SandboxL4Enabled             bool   `toml:"sandbox.l4_enabled"`                 // false（D4/ADR-0079：Tier2+ 长驻会话沙箱，默认关闭，需运营者显式开启）
+	SandboxL4Backend             string `toml:"sandbox.l4_backend"`                 // "live_process_pool"（D4：诊断标签，实际后端固定为长驻进程池，非可插拔选项）
+	SandboxL4IdleTTLSeconds      int    `toml:"sandbox.l4_idle_ttl_seconds"`        // 600（D4：会话空闲超过此时长被后台回收）
+	SandboxL4MaxSessions         int    `toml:"sandbox.l4_max_sessions"`            // 8（D4：单进程内并发存活会话上限，超限淘汰最久未用）
+	SandboxL4ExecTimeoutSeconds  int    `toml:"sandbox.l4_exec_timeout_seconds"`    // 30（D4：单次调用超时，超时判定会话协议不可信并终止）
+	SandboxL4ReapIntervalSeconds int    `toml:"sandbox.l4_reap_interval_seconds"`   // 30（D4：空闲回收扫描周期）
 }
 
 type M8OrchestratorThresholds struct {
@@ -339,22 +343,26 @@ func DefaultThresholds() Thresholds {
 			EvolutionMinUsage:              10,
 		},
 		M7Tool: M7ToolThresholds{
-			DefaultSandboxLevel:        3,
-			DryRunEnabled:              true,
-			MaxScriptMemoryMB:          256,
-			MaxScriptWallclockS:        60,
-			DryRunProtectWindowSeconds: 60,
-			MaxCodeSizeBytes:           16384,
-			IdempotencyCacheSize:       1000,
-			IdempotencyCacheTTLSeconds: 300,
-			RateLimitBuiltinQPS:        100,
-			RateLimitMCPQPS:            10,
-			RateLimitShellQPS:          2,
-			SandboxQuotaMs:             30000,
-			WorkspaceMaxAgeSeconds:     604800,
-			ExtUninstallHookTimeoutS:   180,
-			SandboxL4Enabled:           false,
-			SandboxL4Backend:           "unimplemented",
+			DefaultSandboxLevel:          3,
+			DryRunEnabled:                true,
+			MaxScriptMemoryMB:            256,
+			MaxScriptWallclockS:          60,
+			DryRunProtectWindowSeconds:   60,
+			MaxCodeSizeBytes:             16384,
+			IdempotencyCacheSize:         1000,
+			IdempotencyCacheTTLSeconds:   300,
+			RateLimitBuiltinQPS:          100,
+			RateLimitMCPQPS:              10,
+			RateLimitShellQPS:            2,
+			SandboxQuotaMs:               30000,
+			WorkspaceMaxAgeSeconds:       604800,
+			ExtUninstallHookTimeoutS:     180,
+			SandboxL4Enabled:             false,
+			SandboxL4Backend:             "live_process_pool",
+			SandboxL4IdleTTLSeconds:      600,
+			SandboxL4MaxSessions:         8,
+			SandboxL4ExecTimeoutSeconds:  30,
+			SandboxL4ReapIntervalSeconds: 30,
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,

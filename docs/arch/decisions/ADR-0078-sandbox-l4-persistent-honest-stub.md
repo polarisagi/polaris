@@ -1,7 +1,12 @@
 # ADR-0078: Sandbox-L4-Persistent 接线到位、后端诚实留空
 
 ## 状态
-Accepted（已执行，能力本身未生效）
+**Superseded by [ADR-0079](ADR-0079-sandbox-l4-live-process-pool.md)**（2026-07-25）——
+ADR-0079 推翻了本 ADR"CRIU/Firecracker 不可行 ⇒ Available() 必须恒为 false"
+的结论，改用 session-scoped 长驻解释器进程池达成同一目标（长程有状态
+CodeAct 会话状态不因每次调用重启进程而丢失），L4 现已真实可用。本文档的
+安全分析（bwrap/Seatbelt 无 checkpoint/restore 原语、伪造后端违反 HE-2）
+本身仍然成立，保留作为历史决策记录，不再代表当前实现状态。
 
 ## 背景
 

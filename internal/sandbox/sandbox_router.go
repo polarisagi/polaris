@@ -106,6 +106,13 @@ func (r *SandboxRouter) WithPersistent(persistent *PersistentSandbox) *SandboxRo
 	return r
 }
 
+// PersistentAvailable 报告 L4 持久化沙箱当前是否已注入且可用（D4/ADR-0079）。
+// 供 ExecEnvelope.PersistentSandboxAvailable 转调，供上游调用方（code_act.go）
+// 在构造脚本内容前做出确定性的路由决策。
+func (r *SandboxRouter) PersistentAvailable() bool {
+	return r.persistent != nil && r.persistent.Available()
+}
+
 // RouteByTier 根据已算好的 tier 路由，返回 SandboxProvider。
 // 规则与 AssignSandboxTier 保持一致。
 // trustTier 用于决定隔离不可用时能否降级。
