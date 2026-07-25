@@ -141,6 +141,7 @@ type M7ToolThresholds struct {
 	RateLimitShellQPS          int  `toml:"rate_limit.shell_qps"`          // 2
 	SandboxQuotaMs             int  `toml:"sandbox.quota_ms"`              // 30000
 	WorkspaceMaxAgeSeconds     int  `toml:"workspace.max_age_seconds"`     // 604800
+	ExtUninstallHookTimeoutS   int  `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
 }
 
 type M8OrchestratorThresholds struct {
@@ -349,6 +350,7 @@ func DefaultThresholds() Thresholds {
 			RateLimitShellQPS:          2,
 			SandboxQuotaMs:             30000,
 			WorkspaceMaxAgeSeconds:     604800,
+			ExtUninstallHookTimeoutS:   180,
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,

@@ -216,8 +216,13 @@ func (h *PluginHandler) HandleUninstallPlugin(w http.ResponseWriter, r *http.Req
 	}
 	h.ClearToolSchemaCache()
 
+	// UninstallExtension 现为异步流程（D2）：这里仅确认请求已受理并进入
+	// "uninstalling"，实际的 Hook 执行/文件擦除由 sandbox.ExtensionUninstallHandler
+	// 消费 outbox 事件后台完成。调用方需轮询 GET /v1/plugins（catalog 列表接口，
+	// 复用既有 extension_instances.status 字段）观察最终状态是否变为已删除/error。
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "uninstalled"}) //nolint:errcheck
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "uninstalling"}) //nolint:errcheck
 }
 
 // Marketplace CRUD ---------------------------------------------------------

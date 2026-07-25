@@ -24,14 +24,22 @@ type ExtensionUninstallPayload struct {
 }
 
 type ExtensionUninstallHandler struct {
-	router  *SandboxRouter
-	extRepo protocol.ExtensionRepository
+	router      *SandboxRouter
+	extRepo     protocol.ExtensionRepository
+	hookTimeout time.Duration // HE-6: 由 state.yaml M7Tool.ExtUninstallHookTimeoutS 注入，禁止硬编码
 }
 
-func NewExtensionUninstallHandler(router *SandboxRouter, extRepo protocol.ExtensionRepository) *ExtensionUninstallHandler {
+// NewExtensionUninstallHandler 构造卸载 Hook 处理器。
+// hookTimeoutSeconds<=0 时兜底为 180s（与 config.DefaultThresholds() 默认值一致），
+// 防止调用方未注入配置时退化为无超时挂起。
+func NewExtensionUninstallHandler(router *SandboxRouter, extRepo protocol.ExtensionRepository, hookTimeoutSeconds int) *ExtensionUninstallHandler {
+	if hookTimeoutSeconds <= 0 {
+		hookTimeoutSeconds = 180
+	}
 	return &ExtensionUninstallHandler{
-		router:  router,
-		extRepo: extRepo,
+		router:      router,
+		extRepo:     extRepo,
+		hookTimeout: time.Duration(hookTimeoutSeconds) * time.Second,
 	}
 }
 
@@ -46,7 +54,7 @@ func (h *ExtensionUninstallHandler) Handle(ctx context.Context, record *store.Ou
 	}
 
 	// Create a context with timeout to force destroy if hanging
-	execCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	execCtx, cancel := context.WithTimeout(ctx, h.hookTimeout)
 	defer cancel()
 
 	success := true
