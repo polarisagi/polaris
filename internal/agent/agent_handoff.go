@@ -36,6 +36,14 @@ import (
 // handoffPollInterval 与 csv_fanout.go waitForTask 保持一致的轮询间隔。
 const handoffPollInterval = 500 * time.Millisecond
 
+// InjectHandoffPoster 注入 transfer_to_agent 工具所需的 Blackboard 任务投递能力
+// （D5/GD-14-004）。nil 时 transfer_to_agent 节点返回 fail-closed 错误，不影响
+// 其余工具执行路径。注入器放在本文件而非 agent_wiring.go——后者已逼近 R7 的
+// 400 行上限，新增注入逻辑归入功能更内聚的本文件更合适。
+func (a *Agent) InjectHandoffPoster(p HandoffPoster) {
+	a.handoffPoster = p
+}
+
 // executeTransferToAgent 处理 transfer_to_agent 工具调用：
 //  1. 以当前任务的 NamespaceID（GD-14-001 共享记忆命名空间）为目标角色创建一条
 //     新的 Blackboard Task（Type 编码为 "agent_handoff:<role>"，供目标 Worker

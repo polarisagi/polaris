@@ -130,17 +130,17 @@ type M6SkillThresholds struct {
 type M7ToolThresholds struct {
 	DefaultSandboxLevel        int  `toml:"sandbox.default_level"` // 3 (L3 Container；macOS 降级至 L2 Wasmtime)
 	DryRunEnabled              bool `toml:"sandbox.dry_run_enabled"`
-	MaxScriptMemoryMB          int  `toml:"script.max_memory_mb"`          // 256
-	MaxScriptWallclockS        int  `toml:"script.max_wallclock_s"`        // 60
-	DryRunProtectWindowSeconds int  `toml:"dryrun.protect_window_seconds"` // 60
-	MaxCodeSizeBytes           int  `toml:"max_code_size_bytes"`           // 16384
-	IdempotencyCacheSize       int  `toml:"idempotency_cache.size"`        // 1000
-	IdempotencyCacheTTLSeconds int  `toml:"idempotency_cache.ttl_seconds"` // 300
-	RateLimitBuiltinQPS        int  `toml:"rate_limit.builtin_qps"`        // 100
-	RateLimitMCPQPS            int  `toml:"rate_limit.mcp_qps"`            // 10
-	RateLimitShellQPS          int  `toml:"rate_limit.shell_qps"`          // 2
-	SandboxQuotaMs             int  `toml:"sandbox.quota_ms"`              // 30000
-	WorkspaceMaxAgeSeconds     int  `toml:"workspace.max_age_seconds"`     // 604800
+	MaxScriptMemoryMB          int  `toml:"script.max_memory_mb"`               // 256
+	MaxScriptWallclockS        int  `toml:"script.max_wallclock_s"`             // 60
+	DryRunProtectWindowSeconds int  `toml:"dryrun.protect_window_seconds"`      // 60
+	MaxCodeSizeBytes           int  `toml:"max_code_size_bytes"`                // 16384
+	IdempotencyCacheSize       int  `toml:"idempotency_cache.size"`             // 1000
+	IdempotencyCacheTTLSeconds int  `toml:"idempotency_cache.ttl_seconds"`      // 300
+	RateLimitBuiltinQPS        int  `toml:"rate_limit.builtin_qps"`             // 100
+	RateLimitMCPQPS            int  `toml:"rate_limit.mcp_qps"`                 // 10
+	RateLimitShellQPS          int  `toml:"rate_limit.shell_qps"`               // 2
+	SandboxQuotaMs             int  `toml:"sandbox.quota_ms"`                   // 30000
+	WorkspaceMaxAgeSeconds     int  `toml:"workspace.max_age_seconds"`          // 604800
 	ExtUninstallHookTimeoutS   int  `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
 }
 
