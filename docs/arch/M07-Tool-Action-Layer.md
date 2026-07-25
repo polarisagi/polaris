@@ -338,7 +338,7 @@ L3PolicyMonitor goroutine (每个 L3 sandbox 一个):
 
 **动机**：长程有状态 CodeAct 会话（`internal/action/codeact/code_act_stateful.go` 的 `StatefulSession`）历史上的"持久化"是每次调用仍起全新一次性沙箱进程，脚本首尾注入样板代码把 Python `globals()` 通过标准库 `pickle` 序列化到磁盘文件（Bash 则用 `declare -p` 导出到 `.env` 文件）下次再反序列化回来，文件句柄、线程、数据库连接等不可序列化对象被静默跳过。原始设计（GD-14-003）设想用 CRIU/Firecracker checkpoint/restore 解决——但那只是达成"状态不因重启进程而丢失"这个目标的一种手段。**让解释器进程在多次调用之间根本不退出，是达成同一目标的另一种手段**，且不依赖本仓库缺失的任何操作系统级 checkpoint/restore 原语。
 
-**为什么不用 CRIU/Firecracker**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径，统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语；CRIU 理论上能对 bwrap 派生的进程树做 dump，但需要额外套一层 PID namespace 工程且仅覆盖 Linux。详见 ADR-0078/ADR-0079。
+**为什么不用 CRIU/Firecracker**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径，统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语；CRIU 理论上能对 bwrap 派生的进程树做 dump，但需要额外套一层 PID namespace 工程且仅覆盖 Linux。详见 ADR-0079（含原 ADR-0078 的安全分析）。
 
 **实现**（`internal/sandbox/sandbox_persistent.go` + `sandbox_persistent_session.go` + `sandbox_persistent_harness.go`）：
 - `PersistentSandbox` 实现 `SandboxProvider`；`Available()` 真实检测——`ArgvWrapper` 已注入且宿主 PATH 上至少有 python3/bash 之一时为 `true`。
