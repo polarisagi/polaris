@@ -28,8 +28,11 @@ func (pe *ParallelExecutor) Execute(ctx context.Context, parentTaskID string, su
 		return nil
 	}
 
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// 1. 先订阅事件，再投递任务，防止错过完成通知
-	events, err := pe.bb.Subscribe(ctx)
+	events, err := pe.bb.Subscribe(subCtx)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
 	}

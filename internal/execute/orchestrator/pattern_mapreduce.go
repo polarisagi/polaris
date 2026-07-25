@@ -35,8 +35,11 @@ func (mre *MapReduceExecutor) Execute(ctx context.Context, parentTaskID string, 
 		return nil, nil
 	}
 
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// 先订阅黑板事件，再投递任务，防止投递后错过事件
-	events, err := mre.bb.Subscribe(ctx)
+	events, err := mre.bb.Subscribe(subCtx)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "failed to subscribe", err)
 	}

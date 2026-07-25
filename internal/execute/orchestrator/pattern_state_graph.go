@@ -93,7 +93,10 @@ func (se *StateGraphExecutor) Execute(ctx context.Context, parentTaskID string, 
 		arrivedPreds:  make(map[string]map[string]bool, len(requiredPreds)),
 	}
 
-	events, err := se.bb.Subscribe(ctx)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	events, err := se.bb.Subscribe(subCtx)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
 	}

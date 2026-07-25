@@ -16,8 +16,8 @@ import (
 // 对 running 任务先 cancel（通过 bb.cancels），再标记 failed；
 // 对 pending 超时任务直接标记 failed（防止饥饿任务永久堆积）。
 func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
-	zombieCutoff := time.Now().Add(-ZombieTaskTTL).UnixMilli()
-	starvationCutoff := time.Now().Add(-StarvationTTL).UnixMilli()
+	zombieCutoff := time.Now().Add(-ZombieTaskTTL).UTC().Format("2006-01-02 15:04:05")
+	starvationCutoff := time.Now().Add(-StarvationTTL).UTC().Format("2006-01-02 15:04:05")
 
 	// 0. 物理删除终态任务（保留原有物理清理逻辑）
 	if _, err := bb.db.ExecContext(ctx, `
@@ -56,8 +56,8 @@ func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 		// 批量标记 failed
 		for _, id := range ids {
 			if _, err := bb.db.ExecContext(ctx,
-				`UPDATE tasks SET status='failed', error='reaper_phase2_zombie_timeout', updated_at=? WHERE task_id=? AND status='running'`,
-				time.Now().UnixMilli(), id); err != nil {
+				`UPDATE tasks SET status='failed', error='reaper_phase2_zombie_timeout', updated_at=datetime('now') WHERE task_id=? AND status='running'`,
+				id); err != nil {
 				slog.WarnContext(ctx, "blackboard: zombie task status update failed", "task_id", id, "error", err)
 			}
 			slog.WarnContext(ctx, "reaper phase2: zombie task killed", "task_id", id)
@@ -66,9 +66,9 @@ func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 
 	// 2. pending 超时（饥饿）任务
 	if _, err := bb.db.ExecContext(ctx,
-		`UPDATE tasks SET status='failed', error='reaper_phase2_pending_timeout', updated_at=?
+		`UPDATE tasks SET status='failed', error='reaper_phase2_pending_timeout', updated_at=datetime('now')
          WHERE status='pending' AND created_at < ?`,
-		time.Now().UnixMilli(), starvationCutoff); err != nil {
+		starvationCutoff); err != nil {
 		slog.WarnContext(ctx, "blackboard: starvation cleanup failed", "error", err)
 	}
 }

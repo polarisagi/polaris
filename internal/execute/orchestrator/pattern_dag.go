@@ -47,7 +47,10 @@ func (pe *PatternDAGExecutor) Execute(ctx context.Context, parentTaskID string, 
 	inFlight := make(map[string]string)  // nodeID -> taskID
 	executedUndo := make([]protocol.WorkflowNodeSpec, 0)
 
-	events, err := pe.bb.Subscribe(ctx)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	events, err := pe.bb.Subscribe(subCtx)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
 	}

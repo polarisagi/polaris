@@ -67,7 +67,9 @@ func (w *DefaultTaskWorker) RunLoop(ctx context.Context) error {
 	if w.bb == nil || w.pool == nil {
 		return apperr.New(apperr.CodeInternal, "default task worker: blackboard/agent pool 未注入")
 	}
-	events, err := w.bb.Subscribe(ctx)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	events, err := w.bb.Subscribe(subCtx)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "default task worker: subscribe failed", err)
 	}
