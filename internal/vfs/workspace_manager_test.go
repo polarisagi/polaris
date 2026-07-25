@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/config"
 )
 
 // TestWorkspaceManager_ConcurrentAccess_Race 复核修复 GR-6-002/GR-6-003：
@@ -16,7 +18,7 @@ import (
 // recover）。本测试跑并发读写，配合 `go test -race` 验证加锁修复真实生效。
 func TestWorkspaceManager_ConcurrentAccess_Race(t *testing.T) {
 	root := t.TempDir()
-	wm := NewWorkspaceManager(root, 1<<30) // 1GB，避免并发测试触发配额拒绝
+	wm := NewWorkspaceManager(root, 1<<30, config.DefaultThresholds().M7Tool) // 1GB，避免并发测试触发配额拒绝
 
 	const numTasks = 20
 	const numOpsPerTask = 20
@@ -58,7 +60,7 @@ func TestWorkspaceManager_ConcurrentAccess_Race(t *testing.T) {
 // （而非系统 /tmp），纳入配额核算，且 cleanup() 归还配额、删除文件。
 func TestWorkspaceManager_StageEphemeralFile(t *testing.T) {
 	root := t.TempDir()
-	wm := NewWorkspaceManager(root, 1<<20) // 1MB
+	wm := NewWorkspaceManager(root, 1<<20, config.DefaultThresholds().M7Tool) // 1MB
 
 	data := []byte("print('hello')")
 	path, cleanup, err := wm.StageEphemeralFile("session-1", "script.py", data)
@@ -95,7 +97,7 @@ func TestWorkspaceManager_StageEphemeralFile(t *testing.T) {
 // StageEphemeralFile fail-closed 拒绝写入，不留下部分写入的文件。
 func TestWorkspaceManager_StageEphemeralFile_QuotaExhausted(t *testing.T) {
 	root := t.TempDir()
-	wm := NewWorkspaceManager(root, 4) // 4 bytes，任何非空脚本都会超限
+	wm := NewWorkspaceManager(root, 4, config.DefaultThresholds().M7Tool) // 4 bytes，任何非空脚本都会超限
 
 	_, _, err := wm.StageEphemeralFile("session-1", "script.py", []byte("print('too long')"))
 	if err == nil {
@@ -107,7 +109,7 @@ func TestWorkspaceManager_StageEphemeralFile_QuotaExhausted(t *testing.T) {
 // 调用（进程崩溃场景）时，超过 maxAge 的文件被扫描删除并归还配额。
 func TestWorkspaceManager_SweepEphemeralOrphans(t *testing.T) {
 	root := t.TempDir()
-	wm := NewWorkspaceManager(root, 1<<20)
+	wm := NewWorkspaceManager(root, 1<<20, config.DefaultThresholds().M7Tool)
 
 	path, _, err := wm.StageEphemeralFile("session-1", "orphan.py", []byte("x = 1"))
 	if err != nil {
@@ -131,7 +133,7 @@ func TestWorkspaceManager_SweepEphemeralOrphans(t *testing.T) {
 
 func TestWorkspaceManager_PathTraversal(t *testing.T) {
 	root := t.TempDir()
-	wm := NewWorkspaceManager(root, 1<<30)
+	wm := NewWorkspaceManager(root, 1<<30, config.DefaultThresholds().M7Tool)
 
 	tests := []struct {
 		name    string

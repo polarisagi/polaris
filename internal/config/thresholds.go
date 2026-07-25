@@ -134,6 +134,13 @@ type M7ToolThresholds struct {
 	MaxScriptWallclockS        int  `toml:"script.max_wallclock_s"`        // 60
 	DryRunProtectWindowSeconds int  `toml:"dryrun.protect_window_seconds"` // 60
 	MaxCodeSizeBytes           int  `toml:"max_code_size_bytes"`           // 16384
+	IdempotencyCacheSize       int  `toml:"idempotency_cache.size"`        // 1000
+	IdempotencyCacheTTLSeconds int  `toml:"idempotency_cache.ttl_seconds"` // 300
+	RateLimitBuiltinQPS        int  `toml:"rate_limit.builtin_qps"`        // 100
+	RateLimitMCPQPS            int  `toml:"rate_limit.mcp_qps"`            // 10
+	RateLimitShellQPS          int  `toml:"rate_limit.shell_qps"`          // 2
+	SandboxQuotaMs             int  `toml:"sandbox.quota_ms"`              // 30000
+	WorkspaceMaxAgeSeconds     int  `toml:"workspace.max_age_seconds"`     // 604800
 }
 
 type M8OrchestratorThresholds struct {
@@ -335,6 +342,13 @@ func DefaultThresholds() Thresholds {
 			MaxScriptWallclockS:        60,
 			DryRunProtectWindowSeconds: 60,
 			MaxCodeSizeBytes:           16384,
+			IdempotencyCacheSize:       1000,
+			IdempotencyCacheTTLSeconds: 300,
+			RateLimitBuiltinQPS:        100,
+			RateLimitMCPQPS:            10,
+			RateLimitShellQPS:          2,
+			SandboxQuotaMs:             30000,
+			WorkspaceMaxAgeSeconds:     604800,
 		},
 		M8Orchestrator: M8OrchestratorThresholds{
 			LeaseTTLSeconds:             60,

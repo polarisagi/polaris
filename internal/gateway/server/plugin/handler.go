@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
@@ -21,7 +20,7 @@ type PluginHandler struct {
 	DataDir              string
 	StartMCPServer       func(ctx context.Context, cfg types.MCPServerConfig) error
 	SkillReg             protocol.SkillRegistry
-	ScriptRunner         marketplace.HookRunner
+	ScriptRunner         HookRunner
 	PluginCreator        PluginGenerator
 
 	// EmbeddingIndexer 市场同步后触发的向量预计算器（可 nil，禁用时降级 SQLite LIKE）。
@@ -29,6 +28,11 @@ type PluginHandler struct {
 
 	// SyncSkillToToolRegistry 运行时安装插件时，同步自带 skill 到 InMemoryToolRegistry
 	SyncSkillToToolRegistry func(slug, instructions string)
+}
+
+// HookRunner 在受限环境下执行插件 hook 脚本
+type HookRunner interface {
+	RunHook(ctx context.Context, hookPath, workDir string) error
 }
 
 type Dependencies struct {
@@ -42,7 +46,7 @@ type Dependencies struct {
 	DataDir              string
 	StartMCPServer       func(ctx context.Context, cfg types.MCPServerConfig) error
 	SkillReg             protocol.SkillRegistry
-	ScriptRunner         marketplace.HookRunner
+	ScriptRunner         HookRunner
 	PluginCreator        PluginGenerator
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -65,8 +66,8 @@ func (allowAllPolicyGate) Review(context.Context, types.PolicyReviewRequest) (ty
 // 以避开 V-1 (Tier0 拒绝 Container) 限制，确保测试能执行 echoRunner 桩代码。
 func newTestEnvelope(t *testing.T) *sandbox.ExecEnvelope {
 	t.Helper()
-	containerSbx := sandbox.NewContainerSandbox("", "linux", 0, echoRunner{})
-	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(), containerSbx, nil, "linux", 2)
+	containerSbx := sandbox.NewContainerSandbox("", "linux", 0, echoRunner{}, config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool), containerSbx, nil, "linux", 2)
 	return sandbox.NewExecEnvelope(allowAllPolicyGate{}, router, 2, "linux", nil)
 }
 

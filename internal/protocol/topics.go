@@ -20,6 +20,8 @@ const (
 	TopicCapabilityGap      = "m9_capability_gap"
 	TopicLogicCollapse      = "m9_logic_collapse"
 	TopicAgentInterrupt     = "agent_interrupt"
+	TopicMarketplace        = "marketplace"
+	TopicMemory             = "memory"
 	// TopicNotification 后台/自动化任务终态通知投递（GD-13-001 最小实现），
 	// 消费端见 internal/automation/notify.Dispatcher。
 	TopicNotification = "notification"

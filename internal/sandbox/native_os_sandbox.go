@@ -27,22 +27,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // NativeOSSandbox 通过 Rust FFI 直接调用 OS 隔离原语执行脚本。
 // 注入 CmdRunner（= WrapBashCmdRunner）以规避与 internal/tool/sandbox 的循环 import。
 type NativeOSSandbox struct {
-	runner CmdRunner // WrapBashCmdRunner（bwrap/Seatbelt）
+	runner CmdRunner
+	cfg    config.M7ToolThresholds // WrapBashCmdRunner（bwrap/Seatbelt）
 }
 
 // NewNativeOSSandbox 构造 NativeOSSandbox。
 // runner == nil 时自动使用 NopCmdRunner（测试安全降级）。
-func NewNativeOSSandbox(runner CmdRunner) *NativeOSSandbox {
+func NewNativeOSSandbox(runner CmdRunner, cfg config.M7ToolThresholds) *NativeOSSandbox {
 	if runner == nil {
 		runner = NopCmdRunner{}
 	}
-	return &NativeOSSandbox{runner: runner}
+	return &NativeOSSandbox{runner: runner, cfg: cfg}
 }
 
 // Run 实现 SandboxProvider 接口。
@@ -67,7 +69,7 @@ func (s *NativeOSSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.Too
 func (s *NativeOSSandbox) runRawCommand(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error) {
 	quotaMs := uint64(spec.CPUQuotaMs)
 	if quotaMs == 0 {
-		quotaMs = 30000
+		quotaMs = uint64(s.cfg.SandboxQuotaMs)
 	}
 	start := time.Now()
 	out, exitCode, _, runErr := s.runner.RunCmd(ctx, CmdRunnerCfg{
@@ -111,7 +113,7 @@ func (s *NativeOSSandbox) runScript(ctx context.Context, spec SandboxSpec) (*typ
 
 	quotaMs := uint64(spec.CPUQuotaMs)
 	if quotaMs == 0 {
-		quotaMs = 30000
+		quotaMs = uint64(s.cfg.SandboxQuotaMs)
 	}
 
 	callerType := "skill"

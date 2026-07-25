@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/memory/testutil"
 	"github.com/polarisagi/polaris/internal/vfs"
 )
@@ -30,7 +31,7 @@ func TestToolRefOffloader_Offload_Success(t *testing.T) {
 
 	// Setup WorkspaceManager
 	tmpDir := t.TempDir()
-	wm := vfs.NewWorkspaceManager(tmpDir, 50*1024*1024)
+	wm := vfs.NewWorkspaceManager(tmpDir, 50*1024*1024, config.DefaultThresholds().M7Tool)
 
 	offloader := NewToolRefOffloader(db, wm)
 
@@ -78,7 +79,7 @@ func TestToolRefOffloader_Offload_Failure(t *testing.T) {
 	db := store.DB()
 
 	tmpDir := t.TempDir()
-	wm := vfs.NewWorkspaceManager(tmpDir, 50*1024*1024)
+	wm := vfs.NewWorkspaceManager(tmpDir, 50*1024*1024, config.DefaultThresholds().M7Tool)
 
 	offloader := NewToolRefOffloader(db, wm)
 

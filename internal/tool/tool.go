@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/guard"
@@ -90,17 +91,16 @@ type SandboxExecutor interface {
 var _ protocol.ToolRegistry = (*InMemoryToolRegistry)(nil)
 
 // NewInMemoryToolRegistry 创建工具注册表。
-func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope) *InMemoryToolRegistry {
+func NewInMemoryToolRegistry(envelope *sandbox.ExecEnvelope, cfg config.M7ToolThresholds) *InMemoryToolRegistry {
 	return &InMemoryToolRegistry{
 		tools:            make(map[string]types.Tool),
 		envelope:         envelope,
 		blackboard:       nil,
-		idempotencyCache: newLRUCache(1000, 5*time.Minute),
+		idempotencyCache: newLRUCache(cfg.IdempotencyCacheSize, time.Duration(cfg.IdempotencyCacheTTLSeconds)*time.Second),
 		limiters: map[string]*rateLimiter{
-			string(types.ToolBuiltin): newRateLimiter(100), // 100 QPS
-			string(types.ToolMCP):     newRateLimiter(10),  // 10 QPS
-			// shell 工具通过 SideEffects 包含 process_spawn 识别，限制 2 QPS
-			"shell": newRateLimiter(2),
+			string(types.ToolBuiltin): newRateLimiter(int64(cfg.RateLimitBuiltinQPS)),
+			string(types.ToolMCP):     newRateLimiter(int64(cfg.RateLimitMCPQPS)),
+			"shell":                   newRateLimiter(int64(cfg.RateLimitShellQPS)),
 		},
 	}
 }

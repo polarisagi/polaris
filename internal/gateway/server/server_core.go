@@ -2,7 +2,6 @@ package server
 
 import (
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
-	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 
@@ -73,7 +72,7 @@ type Server struct {
 	dataDir        string                                                                         // 项目统一的数据根目录
 	installMgr     ExtensionInstaller                                                             // 扩展安装/卸载管理器（接口）
 	pluginCreator  plugin.PluginGenerator                                                         // LLM 驱动 MCP 插件自动生成（M2 PluginCreator，消费端接口）
-	scriptRunner   marketplace.HookRunner                                                         // install hook 沙箱执行器（ContainerSandbox.RunScript）
+	scriptRunner   plugin.HookRunner                                                              // install hook 沙箱执行器（ContainerSandbox.RunScript）
 	skillSignKey   []byte
 
 	updater *updater.Manager     // OTA 自更新管理器（可为 nil）
@@ -239,7 +238,7 @@ func (s *Server) SetKillSwitch(ks *security.KillSwitch) {
 	}
 }
 
-func (s *Server) SetScriptRunner(r marketplace.HookRunner) {
+func (s *Server) SetScriptRunner(r plugin.HookRunner) {
 	s.scriptRunner = r
 	if s.pluginHandler != nil {
 		s.pluginHandler.ScriptRunner = r

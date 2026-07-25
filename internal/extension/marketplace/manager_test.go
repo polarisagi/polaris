@@ -260,19 +260,11 @@ func TestManager_UninstallExtension(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify deletions
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM extension_instances").Scan(&count)
-	if count != 0 {
-		t.Errorf("expected 0 instances, got %d", count)
-	}
-	db.QueryRow("SELECT COUNT(*) FROM extension_catalog").Scan(&count)
-	if count != 0 {
-		t.Errorf("expected 0 catalog items, got %d", count)
-	}
-	db.QueryRow("SELECT COUNT(*) FROM mcp_servers").Scan(&count)
-	if count != 0 {
-		t.Errorf("expected 0 mcp servers, got %d", count)
+	// Verify status updated to uninstalling (deletion is async via queue)
+	var status string
+	db.QueryRow("SELECT status FROM extension_instances WHERE id='ext_1'").Scan(&status)
+	if status != "uninstalling" {
+		t.Errorf("expected status 'uninstalling', got %s", status)
 	}
 }
 

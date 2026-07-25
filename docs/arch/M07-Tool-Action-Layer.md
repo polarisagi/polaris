@@ -99,7 +99,7 @@ M7 桥接层对 MCP 扩展原语强制物理级护栏：
 
 Agent Card 服务端路径: `/.well-known/agent-card.json`（A2A v0.3+ 强制）。远程 Agent Card 签名校验见 M11 §2.6 VerifyExternalAgentCard。
 
-**ContainerSandbox 进程隔离**（2026-07-02 起统一至 Rust V2 沙箱；Go 侧手工 namespace 注入 `sandbox_linux.go`/`sandbox_other.go` 已物理删除）：
+**ContainerSandbox 进程隔离**（2026-07-02 起统一至 Rust V2 沙箱；Go 侧手工 namespace 注入已统一合并至 `internal/sandbox/native_os_sandbox.go` 和 `internal/sandbox/sandbox_container.go`）：
 当 SandboxRouter 路由至 `ContainerSandbox`（Tier1+）时，`sandbox.CmdRunner`（`internal/tool/sandbox/cmd_runner_adapter.go`）统一构造 `protocol.SandboxContext` 并调用 `native_sandbox_exec_v2`，由 Rust 层按平台分发：
 - Linux: `exec_bwrap_v2`（bubblewrap，PID/Mount/User namespace 隔离）
 - macOS: `exec_seatbelt_v2`（`sandbox-exec` profile）
@@ -145,7 +145,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 
 ### 3.2 平台原生进程沙箱（Rust V2 统一沙箱）
 
-`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts_edge` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/tool/sandbox/native_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
+`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts_edge` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/sandbox/native_os_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
 
 `runSandboxedArgv(ctx, callerType, execPath, execArgs, workDir, allowedPaths, netAllow, timeoutMs, sandboxEnabled, bwrapPath)` 构造 `protocol.SandboxContext`（`ExecPath`+`ExecArgs` argv 模式，不经 shell 解释，杜绝命令注入）并调用 `native_sandbox_exec_v2`，按平台分发：
 
@@ -441,7 +441,7 @@ Execute: ForegroundIntent→physical；BackgroundTask/AutoCurriculum→headless�
 **GUI Action Loop**: `see → decide → act` 循环 `maxSteps` 次。
 `Capture + UITree → VLM DecideAction(在主干) → 发送 MCP Command → executeAction(left_click/type等) → GUIResult`
 
-**HITL 拦截门控**（`interceptComputerUse`，`internal/agent/agent_execute.go`）:
+**HITL 拦截门控**（`interceptComputerUse`，`internal/agent/agent_execute_util.go`）:
 - 触发工具: `computer_use` 和 `browser_use`（均需经此门控）
 - 受全局 `permission_mode` 控制（由 `PreferencesRepo.GetPermissionMode` 注入）:
   - `full_access`: 自动放行（依赖 Cedar 的最终防线预检）
@@ -480,7 +480,7 @@ reasoning:  推理说明（仅日志，不转发 executor）
 
 **ExecutorFn 注入模式**: `executor ExecutorFn` 由调用方注入（通常 `action.NewComputerUseTool().Execute`），解耦 `internal/action/lam` 与 `internal/action` 父包，防止循环依赖。`executor=nil` → dry-run 模式，返回解析的动作 JSON 供调试。当前 boot 以 `sb.Router` 作为 VLM provider 注入，executor 暂为 nil（dry-run），待 Tier-1+ GUI 执行器接入后填充。
 
-**Agent Kernel 集成**（ADR-0025 BUG-1）: `ComputerUseEngine` 提供导出方法 `CheckPolicy(ctx context.Context, actionJSON []byte) error`，由 `Agent.interceptComputerUse`（`internal/agent/agent_execute.go`）在 HITL 审批**前**调用，实施 Cedar `browser_automate/lam/{allow_net:true}` deny-by-default 预检。Agent struct 持有 `lamEngine *lam.ComputerUseEngine` 字段，boot 通过 `agent.SetLAMEngine(lamEngine)` 注入。`lamEngine==nil` 时跳过 Cedar 预检（nil-safe，兼容无 LAM 场景）。调用顺序：Cedar PolicyGate（快速拒绝）→ HITL 审批（人工确认）。
+**Agent Kernel 集成**（ADR-0025 BUG-1）: `ComputerUseEngine` 提供导出方法 `CheckPolicy(ctx context.Context, actionJSON []byte) error`，由 `Agent.interceptComputerUse`（`internal/agent/agent_execute_util.go`）在 HITL 审批**前**调用，实施 Cedar `browser_automate/lam/{allow_net:true}` deny-by-default 预检。Agent struct 持有 `lamEngine *lam.ComputerUseEngine` 字段，boot 通过 `agent.SetLAMEngine(lamEngine)` 注入。`lamEngine==nil` 时跳过 Cedar 预检（nil-safe，兼容无 LAM 场景）。调用顺序：Cedar PolicyGate（快速拒绝）→ HITL 审批（人工确认）。
 
 **LAMConfig**:
 ```
@@ -663,7 +663,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 **加载流程**:
 ```
-POST /v1/plugins/install → plugin_catalog.go.downloadAndInstallPlugin()
+POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.downloadAndInstallExtension()
   → 解析 plugin.json（PluginBundleManifest）
   → mcp_inline / .mcp.json  → installBundleMCP() → mcp_servers + MCPManager.Add()
   → skills[]                → installBundleSkill() → skills（runtime=script）

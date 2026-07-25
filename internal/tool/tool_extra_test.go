@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -18,7 +19,7 @@ func (m mockSideEffectChecker) SideEffectPreCheck(ctx context.Context, taskID, a
 }
 
 func TestToolExtra_WithSideEffectChecker(t *testing.T) {
-	reg := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, nil, 0, "", nil))
+	reg := NewInMemoryToolRegistry(sandbox.NewExecEnvelope(nil, nil, 0, "", nil), config.DefaultThresholds().M7Tool)
 	reg.WithSideEffectChecker(mockSideEffectChecker{})
 	if reg.blackboard == nil {
 		t.Fatalf("expected blackboard to be set")
@@ -75,10 +76,10 @@ func (m *mockFailingSideEffectChecker) SideEffectPreCheck(ctx context.Context, t
 }
 
 func TestExecuteTool_TOCTOU_PostCheck(t *testing.T) {
-	sbx := sandbox.NewInProcessSandbox()
+	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0)
 	envelope := sandbox.NewExecEnvelope(&mockPolicyGate{allow: true}, router, 0, "linux", nil)
-	r := NewInMemoryToolRegistry(envelope)
+	r := NewInMemoryToolRegistry(envelope, config.DefaultThresholds().M7Tool)
 	r.WithSideEffectChecker(&mockFailingSideEffectChecker{})
 
 	_ = r.Register(minTool("toctou-tool"))

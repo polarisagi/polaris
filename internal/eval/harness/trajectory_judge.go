@@ -24,8 +24,7 @@ func NewTrajectoryJudge() *TrajectoryJudge {
 	return &TrajectoryJudge{}
 }
 
-// Evaluate checks if the given trace complies with the rules.
-// Returns (passed bool, errorMsg string).
+// Evaluate checks if the given trace complies with the rules and returns (passed bool, errorMsg string).
 //
 //nolint:gocyclo
 func (j *TrajectoryJudge) Evaluate(ctx context.Context, trace *TrajectoryTrace, rules *TrajectoryRules) (bool, string) {

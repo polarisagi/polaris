@@ -10,6 +10,7 @@ import (
 
 func TestGitDiff(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
 
 	// Init git repo
 	exec.Command("git", "-C", tmpDir, "init").Run()
@@ -49,6 +50,7 @@ func TestGitDiff(t *testing.T) {
 
 func TestGitCommit(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
 	exec.Command("git", "-C", tmpDir, "init").Run()
 	exec.Command("git", "-C", tmpDir, "config", "user.email", "test@test.com").Run()
 	exec.Command("git", "-C", tmpDir, "config", "user.name", "test").Run()

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -25,6 +26,7 @@ type InProcessSandbox struct {
 	// taintMap 存储每个工具的输出污点等级。
 	// 内置工具保持 TaintNone（零值），MCP/外部工具通过 RegisterWithTaint/RegisterRich 写入。
 	taintMap map[string]types.TaintLevel
+	cfg      config.M7ToolThresholds
 }
 
 // InProcessFn 内置工具执行函数签名（仅返回字节）。
@@ -35,11 +37,12 @@ type InProcessFn func(ctx context.Context, input []byte) ([]byte, error)
 // 调用方（InProcessSandbox.Run）会将 ToolResult.TaintLevel 设为注册时指定的 taint（若未设置）。
 type InProcessRichFn func(ctx context.Context, spec SandboxSpec) (*types.ToolResult, error)
 
-func NewInProcessSandbox() *InProcessSandbox {
+func NewInProcessSandbox(cfg config.M7ToolThresholds) *InProcessSandbox {
 	return &InProcessSandbox{
 		registry:     make(map[string]InProcessFn),
 		richRegistry: make(map[string]InProcessRichFn),
 		taintMap:     make(map[string]types.TaintLevel),
+		cfg:          cfg,
 	}
 }
 
@@ -103,7 +106,7 @@ func (s *InProcessSandbox) Run(ctx context.Context, spec SandboxSpec) (result *t
 
 	quotaMs := spec.CPUQuotaMs
 	if quotaMs == 0 {
-		quotaMs = 300000 // 默认提升至 5 分钟 (300,000ms)，以应对极端长耗时的插件或宏操作
+		quotaMs = s.cfg.SandboxQuotaMs * 10 // 默认提升至 5 分钟 (300,000ms)，以应对极端长耗时的插件或宏操作
 	}
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(quotaMs)*time.Millisecond)
 	defer cancel()

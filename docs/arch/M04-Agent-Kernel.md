@@ -116,7 +116,7 @@ Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状
 
 **前置条件**：若 `DAGModel == nil`（FastPath 空执行路径），`executeEffect` 在调用四层校验前直接发出 TriggerValidateOk，不进入校验流程。四层校验仅在 DAGModel 非 nil 时执行。
 
-> **实现说明**：`StateMachine.validateDAG` 和 `executeDAG` 是委托存根，因函数签名限制（无法访问 `a.toolRegistry`）返回硬编码 OK；真正校验逻辑在 `Agent.runValidateDAG`（`dag_validator.go`，L0-L3 四层）和 `Agent.runExecuteDAG`（`dag_executor.go`，Saga 逆序补偿）中执行，由 `Agent.Run` 主循环调用。任何跳过 `Agent.Run` 直接 Dispatch 这两个事件的路径将触发防御守卫返回错误。
+> **实现说明**：`StateMachine.validateDAG` 和 `executeDAG` 是委托存根，因函数签名限制（无法访问 `a.toolRegistry`）返回硬编码 OK；真正校验逻辑在 `Agent.runValidateDAG`（`agent_execute_validate.go`，L0-L3 四层）和 `Agent.runExecuteDAG`（`agent_execute_dag.go`，Saga 逆序补偿）中执行，由 `Agent.Run` 主循环调用。任何跳过 `Agent.Run` 直接 Dispatch 这两个事件的路径将触发防御守卫返回错误。
 
 | 层级 | 延迟 | 适用范围 | 检查内容 |
 |------|------|---------|---------|

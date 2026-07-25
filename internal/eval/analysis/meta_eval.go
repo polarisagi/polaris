@@ -45,16 +45,15 @@ func NewMetaEvalSentinel(store *harness.SQLiteEvalStore) *MetaEvalSentinel {
 
 // RunMetaEvalSuite 运行 Meta-Eval 套件，读取 meta_holdout 分区（非 validation）。
 //
-// 调用身份固定为 control.RoleMetaAuditor——这不是"审计某个 agentRole"，而是审计
-// EvalHarness 目标函数本身是否漂移（V8-S2），signature 由调用方用 meta_auditor
+// 本方法的作用是审查目标函数本身是否漂移（V8-S2），signature 由调用方用 meta_auditor
 // 私钥签名后传入（开发/测试环境可传 nil，未配置公钥时降级为仅告警）。
 //
 // 隔离边界的实际落点是密钥，不是物理进程：meta_auditor 私钥只应存在于运维本地
 // （通过 `polaris eval sign` 离线签名），从不写入运行中 server 的配置/环境变量
 // （server 侧只持有验签用的公钥 POLARIS_EVAL_PUBKEY_META_AUDITOR）。因此本方法
 // 被 evaladmin 包的 HTTP handler 在 server 进程内调用是允许的——服务器进程本身
-// 无法伪造一次通过的审计（它没有私钥去产生合法签名），真正被禁止的是让
-// AdvanceGate 之类的自动热路径在没有人工触发签名的情况下"自己审计自己"，
+// 无法伪造一次通过的审计（它没有私钥去产生合法签名），真正被禁止的是防止类似于
+// 自动热路径在没有人工触发签名的情况下"自己审计自己"，
 // 详见 RunAndRecord 与 internal/prompt/optimizer.MetaAuditReader 的分工说明。
 func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, signature []byte) (*MetaEvalResult, error) {
 	if m.store == nil {

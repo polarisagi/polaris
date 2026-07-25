@@ -15,13 +15,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/util"
 )
 
-// HookRunner 在受限环境下执行插件 hook 脚本。
-// 接口在调用方定义（AGENTS.md 原则），具体实现由 pkg/action.ContainerSandbox.RunHook 提供。
-type HookRunner interface {
-	// RunHook 执行 hookPath 指定的可执行文件， workDir 为工作目录。
-	RunHook(ctx context.Context, hookPath, workDir string) error
-}
-
 // ExtensionInstaller 负责将扩展文件下载到本地并返回安装目录。
 // 调用方注入具体实现（如 MCPMarketplaceClient.Install）。
 type ExtensionInstaller interface {
@@ -42,11 +35,9 @@ type Manager struct {
 	prefsRepo         protocol.PreferencesRepo
 	auditTrail        *security.AuditTrail
 	publisherTrustMap map[string]int
-	// hookRunner 通过 WithHookRunner 注入；nil 时 uninstall hook 降级为 warn+skip
-	hookRunner HookRunner
-	installer  ExtensionInstaller // 新增：文件下载
-	installFSM *lifecycle.InstallFSM
-	outbox     protocol.OutboxWriter
+	installer         ExtensionInstaller // 新增：文件下载
+	installFSM        *lifecycle.InstallFSM
+	outbox            protocol.OutboxWriter
 }
 
 func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int) *Manager {
@@ -61,12 +52,6 @@ func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, 
 		auditTrail:        at,
 		publisherTrustMap: publisherTrustMap,
 	}
-}
-
-// WithHookRunner 注入 HookRunner 实现（如 ContainerSandbox）。返回自身支持链式调用。
-func (m *Manager) WithHookRunner(hr HookRunner) *Manager {
-	m.hookRunner = hr
-	return m
 }
 
 func (m *Manager) WithInstaller(i ExtensionInstaller) *Manager {
@@ -285,7 +270,7 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 				"runtime_id":   inst.RuntimeID,
 			})
 			_ = m.outbox.Write(ctx, protocol.OutboxEntry{
-				TargetEngine:   "marketplace",
+				TargetEngine:   protocol.TopicMarketplace,
 				Operation:      "extension_uninstall",
 				Scope:          "extension",
 				Payload:        payload,
@@ -298,59 +283,6 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 	}
 
 	return nil
-}
-
-func (m *Manager) removeRuntime(ctx context.Context, extType, runtimeID, catalogID string) {
-	switch extType {
-	case "mcp":
-		if m.mcpMgr != nil && runtimeID != "" {
-			m.mcpMgr.Remove(runtimeID)
-		}
-		_ = m.extRepo.UninstallCleanup(ctx, "", runtimeID, "mcp")
-	case "skill":
-		// 独立安装的 skill：硬删除（非插件来源，卸载即消失）
-		if runtimeID != "" {
-			_ = m.extRepo.UninstallCleanup(ctx, "", runtimeID, "skill")
-		}
-	case "plugin":
-		if runtimeID == "" {
-			break
-		}
-		m.removePluginRuntime(ctx, runtimeID, m.mcpMgr)
-	case "app":
-		if runtimeID != "" {
-			_ = m.extRepo.UninstallCleanup(ctx, "", runtimeID, "app")
-		}
-	}
-}
-
-func (m *Manager) removePluginRuntime(ctx context.Context, runtimeID string, remover MCPRuntimeManager) {
-	// 从 mcp_servers 表读取所有子 MCP ID，停止运行时连接
-	if remover != nil {
-		mcpRows, err := m.extRepo.ListMCPServers(ctx)
-		if err == nil {
-			for _, mcp := range mcpRows {
-				if mcp.PluginID == runtimeID {
-					remover.Remove(mcp.ID)
-				}
-			}
-		}
-	}
-	// 硬删除子 MCP（卸载即消失，不留 deprecated 脏数据）
-	// 硬删除子 skills（同上）
-	_ = m.extRepo.UninstallCleanup(ctx, runtimeID, "", "plugin")
-}
-
-func (m *Manager) cleanCatalog(ctx context.Context, origin, catalogID string) {
-	switch origin {
-	case "user":
-		_ = m.extRepo.DeleteCatalogEntry(ctx, catalogID)
-	case "marketplace":
-		isBuiltin, err := m.extRepo.IsCatalogBuiltin(ctx, catalogID)
-		if err == nil && !isBuiltin {
-			_ = m.extRepo.DeleteCatalogEntry(ctx, catalogID)
-		}
-	}
 }
 
 // InstanceUpdate 表示需要更新的字段（零值字段跳过）。

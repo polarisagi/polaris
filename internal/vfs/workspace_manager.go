@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -26,8 +27,9 @@ import (
 // 原实现 CheckQuota 每次 O(N) 全量遍历 manifests，随活跃任务数增长成为热路径瓶颈。
 
 type WorkspaceManager struct {
-	rootDir   string // ~/.polarisagi/polaris/workspaces
-	maxSize   int64  // Tier 0 = 500MB
+	rootDir   string
+	cfg       config.M7ToolThresholds // ~/.polarisagi/polaris/workspaces
+	maxSize   int64                   // Tier 0 = 500MB
 	manifests map[string]*WorkspaceManifest
 	gcCh      chan string  // Background GC queue
 	mu        sync.RWMutex // 保护 manifests map 并发读写（GR-6-002）
@@ -35,10 +37,11 @@ type WorkspaceManager struct {
 }
 
 // NewWorkspaceManager 创建 WorkspaceManager，rootDir 不存在时自动创建。
-func NewWorkspaceManager(rootDir string, maxSize int64) *WorkspaceManager {
+func NewWorkspaceManager(rootDir string, maxSize int64, cfg config.M7ToolThresholds) *WorkspaceManager {
 	_ = os.MkdirAll(rootDir, 0o700)
 	wm := &WorkspaceManager{
 		rootDir:   rootDir,
+		cfg:       cfg,
 		maxSize:   maxSize,
 		manifests: make(map[string]*WorkspaceManifest),
 		gcCh:      make(chan string, 1000),
@@ -307,7 +310,7 @@ func (wm *WorkspaceManager) ReadFile(relPath string, limit int64) ([]byte, error
 // 活跃任务的 workspace 无论年龄多大都不删除，防止删除正在运行的持久战任务数据。
 // now 为 Unix 秒，由调用方传入，便于测试覆盖。
 func (wm *WorkspaceManager) GC(now int64, activeTaskIDs []string) {
-	const maxAgeSecs = 7 * 86400
+	maxAgeSecs := int64(wm.cfg.WorkspaceMaxAgeSeconds)
 
 	// 构建活跃任务 ID 集合，O(1) 查找
 	active := make(map[string]struct{}, len(activeTaskIDs))

@@ -234,9 +234,6 @@ func TestGatewayImpl_PromptTimeout_DeviceControlAutoReview(t *testing.T) {
 	}
 }
 
-// TestGatewayImpl_PromptTimeout_DeviceControlFullAccessButTainted 验证
-// TaintLevel 硬地板优先级高于权限模式：即使 full_access，TaintLevel>=Medium
-// 时超时仍必须 auto_deny，防止被污染的 Agent 拿设备操控设置当挡箭牌。
 // TestGatewayImpl_PromptTimeout_DeadlineNsIsAbsolute 回归测试：DeadlineNs 曾被
 // Prompt() 误当作相对 Duration 又叠加一次 time.Now()，导致所有调用方构造的
 // "N 分钟/小时后超时"实际上被推迟到约 56 年后，超时机制形同虚设（2026-07-07
@@ -264,6 +261,9 @@ func TestGatewayImpl_PromptTimeout_DeadlineNsIsAbsolute(t *testing.T) {
 	}
 }
 
+// TestGatewayImpl_PromptTimeout_DeviceControlFullAccessButTainted 验证
+// TaintLevel 硬地板优先级高于权限模式：即使 full_access，TaintLevel>=Medium
+// 时超时仍必须 auto_deny，防止被污染的 Agent 拿设备操控设置当挡箭牌。
 func TestGatewayImpl_PromptTimeout_DeviceControlFullAccessButTainted(t *testing.T) {
 	store := newMockStore()
 	gw := NewGateway(store)
