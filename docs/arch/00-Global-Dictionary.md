@@ -450,6 +450,36 @@ Polaris 系统并非依靠用户手动编写模板来安装第三方能力，而
 
 > **约束**：卸载操作必须由底层管理接口统一执行，严禁在 HTTP Handler 业务层直接写裸 `os.RemoveAll`。
 
+> **异步化（D2，2026-07-25）**：`DELETE /v1/plugins/{catalogID}` 现为异步流程——
+> 网关仅将 `extension_instances.status` 标记为 `uninstalling` 并写入 M2 Outbox
+> 事件（`extension_uninstall`），立即返回 202 + `{"status":"uninstalling"}`。
+> 后台 `internal/sandbox.ExtensionUninstallHandler` 消费该事件，经
+> `SandboxRouter` 按 `trust_tier` 路由到对应隔离级别（复用工具执行同一套
+> Taint/SafeDialer 边界）执行卸载 Hook，超时（`state.yaml` M7Tool
+> `ext_uninstall.hook_timeout_seconds`，默认 180s）则保留隔离目录供人工排查、
+> 标记 `error`；成功才执行本节所述的物理文件清除 + DB 级联清除。调用方通过既有
+> `GET /v1/plugins`（复用 `extension_instances.status` 字段）轮询最终状态。
+
+### [Agent-Handoff] (工具化 Multi-Agent 委派)
+LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内置工具
+`transfer_to_agent(target_agent_role, context_summary, taint_level)` 完成委派，
+无需自行编排完整 StateGraph 或订阅 Blackboard 事件（D5/GD-14-004）。
+
+实现（`internal/agent/agent_handoff.go`）：以当前任务的 `NamespaceID`
+（`[GD-14-001]` 共享记忆命名空间，为空则退化为 `SessionID`）为目标角色创建一条
+新 Blackboard Task（`Type` 编码为 `agent_handoff:<role>`），由目标角色 Worker
+按既有 CAS 自认领流程拾取（不引入中心化调度，兼容 ADR-0050）。当前实现为
+**同步阻塞**：发起委派的工具调用内部轮询等待子任务终态（复用
+`csv_fanout.go` 的 `waitForTask` 轮询模式），完成后将结果包装为 `ToolResult`
+返回；委派失败/超时不作为节点执行错误处理（不触发 Saga 补偿），而是通过
+`ToolResult.Success=false` 交由 LLM 决定重试或改变计划。
+
+> **已知后续方向**：若需要非阻塞挂起（发起方 Agent 在等待期间可处理其他任务），
+> 需要在 `internal/agent/fsm` 新增专用状态与恢复触发器，属独立于当前实现的
+> 后续设计，不应与 `[S_SUSPENDED]`（空闲挂起）或 HITL 的
+> `suspended`/`resume_from_suspended`（M8 task_status，语义为人工审批等待）
+> 混用。
+
 ### [Codex-Automation] (后台自动化与定时任务)
 参考 OpenAI Codex Automations。用于调度周期性循环任务、后台静默执行的检查流，并将结果推送到用户的“Triage (收件箱)”进行审批或通知。
 

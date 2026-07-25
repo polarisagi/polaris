@@ -78,6 +78,18 @@ type ScriptSkillCache interface {
 	GetOrSpawn(ctx context.Context, skillID string) (*SkillHandle, error)
 }
 
+// HandoffPoster Agent 对 M8 Blackboard 任务投递能力的消费端接口
+// （D5/GD-14-004：工具化 Multi-Agent Handoff，见 gemini-upgrade-prompt.md）。
+// 仅声明 transfer_to_agent 工具所需的最小方法集（PostTask + PeekTask），
+// 刻意不依赖 protocol.Blackboard 全量接口——该接口还含 ClaimTask/CompleteTask/
+// SuspendForHITL 等 Worker 任务生命周期方法，Agent 侧发起委派不需要它们。
+// 实现：internal/execute/orchestrator.SQLiteBlackboard 已结构性满足本接口
+// （方法签名与 protocol.Blackboard 同名方法一致），无需额外适配器包装。
+type HandoffPoster interface {
+	PostTask(ctx context.Context, task *types.TaskEntry) error
+	PeekTask(ctx context.Context, taskID string) (*types.TaskSnapshot, error)
+}
+
 // LAMPolicyChecker Agent 对 LAM GUI 自动化策略预检的消费端接口。
 // 实现：action/lam.ComputerUseEngine（通过 cmd/polaris.lamPolicyAdapter 包装）
 // 禁止：agent 直接 import action/lam

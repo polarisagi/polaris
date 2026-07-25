@@ -124,9 +124,19 @@ func buildAgent(
 	prefs map[string]string,
 	bgCtx context.Context,
 	personaRefiner *agentctx.PersonaRefiner,
+	bb *orchestrator.SQLiteBlackboard,
 ) *sysagent.Agent {
 	a := sysagent.NewAgent(sessionID, taskRepo, sb.Router)
 	a.SetExtQuerier(sb.Store.DB())
+	// D5（GD-14-004）：transfer_to_agent 工具依赖的 Blackboard 任务投递能力。
+	// 显式 nil 判断后才注入——若直接把可能为 nil 的 *orchestrator.SQLiteBlackboard
+	// 赋给 HandoffPoster 接口字段，即使指针本身为 nil，接口值也会变为非 nil
+	// （经典 Go "typed nil interface" 陷阱），导致 agent_handoff.go 里
+	// `a.handoffPoster == nil` 的 fail-closed 判断失效。理论上 buildAgent 调用点
+	// 均在 blackboard 构造后（bb 恒非 nil），此判断仅作防御。
+	if bb != nil {
+		a.InjectHandoffPoster(bb)
+	}
 	a.Config.MaxReplan = sb.Cfg.Thresholds.M4Kernel.MaxReplanAttempts
 	a.Config.DefaultBudget = sb.Cfg.Thresholds.M4Kernel.DefaultBudget
 	a.Config.MaxSteps = sb.Cfg.Thresholds.M4Kernel.MaxSteps
@@ -436,7 +446,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Warn("polaris: persona refiner load failed, using defaults", "err", err)
 	}
 
-	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner)
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard)
 
 	maxConcurrent := sb.Cfg.System.MaxAgents
 	if maxConcurrent <= 0 {
@@ -444,7 +454,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
-		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner)
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard)
 	}, maxConcurrent)
 	// KillSwitch 三阶段熔断（ADR-0009）接入：Pause/FullStop 阶段拒绝新 Agent 执行，
 	// Agent 内核异常退出上报错误计数（Acquire/AcquireHeadless 是全部触发路径的唯一收敛点）。
