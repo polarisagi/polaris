@@ -22,8 +22,8 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			status TEXT,
 			priority INTEGER,
 			claimed_by TEXT,
-			claimed_at DATETIME,
-			expires_at DATETIME,
+			claimed_at TEXT,
+			expires_at TEXT,
 			version INTEGER,
 			tokens_input INTEGER,
 			tokens_output INTEGER,
@@ -37,8 +37,8 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			intent BLOB,
 			trace_id TEXT,
 			span_id TEXT,
-			created_at DATETIME,
-			updated_at DATETIME
+			created_at TEXT,
+			updated_at TEXT
 		);
 		CREATE TABLE events (
 			id TEXT PRIMARY KEY,

@@ -30,6 +30,15 @@ func NewSequentialExecutor(bb *SQLiteBlackboard, perTaskTimeout time.Duration) *
 func (se *SequentialExecutor) Execute(ctx context.Context, parentTaskID string, subTasks []types.TaskEntry) error {
 	var lastResult []byte
 
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// 订阅黑板事件，等待当前任务完成
+	events, err := se.bb.Subscribe(subCtx)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
+	}
+
 	for i := range subTasks {
 		task := &subTasks[i]
 		// 如果不是第一个任务，将上一个任务的结果注入到当前任务的 Intent（携带上下文链）
@@ -40,12 +49,6 @@ func (se *SequentialExecutor) Execute(ctx context.Context, parentTaskID string, 
 		// 投递任务
 		if err := se.bb.PostTask(ctx, task); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to post sequential task %s", task.ID), err)
-		}
-
-		// 订阅黑板事件，等待当前任务完成
-		events, err := se.bb.Subscribe(ctx)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
 		}
 
 		completed := false

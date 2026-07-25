@@ -28,8 +28,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			priority INTEGER,
 			status TEXT,
 			claimed_by TEXT,
-			claimed_at DATETIME,
-			expires_at DATETIME,
+			claimed_at TEXT,
+			expires_at TEXT,
 			provider_suspended_count INTEGER DEFAULT 0,
 			suspend_reason TEXT,
 			error TEXT,
@@ -40,8 +40,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			intent BLOB,
 			trace_id TEXT,
 			span_id TEXT,
-			created_at DATETIME,
-			updated_at DATETIME
+			created_at TEXT,
+			updated_at TEXT
 		)
 	`)
 	if err != nil {
