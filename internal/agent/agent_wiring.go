@@ -169,13 +169,6 @@ func (a *Agent) InjectOutboxWriter(ow protocol.OutboxWriter) {
 	a.outboxWriter = ow
 }
 
-// InjectHandoffPoster 注入 transfer_to_agent 工具所需的 Blackboard 任务投递能力
-// （D5/GD-14-004）。nil 时 transfer_to_agent 节点返回 fail-closed 错误，不影响
-// 其余工具执行路径。
-func (a *Agent) InjectHandoffPoster(p HandoffPoster) {
-	a.handoffPoster = p
-}
-
 // SetTaskID 由 Worker 在调用 Run() 前注入 Blackboard task_id，供内核写 tasks 表时使用。
 func (a *Agent) SetTaskID(ctx context.Context, id string) {
 	a.sCtx.TaskID = id
