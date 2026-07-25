@@ -332,20 +332,23 @@ L3PolicyMonitor goroutine (每个 L3 sandbox 一个):
 
 **已知限制**（非本轮范围，供未来评估）：远端执行器侧的沙箱强度由第三方保证，Polaris 侧无法验证其物理隔离边界（HE-Rule-2 "可验证执行"在此退化为对第三方的信任假设，而非物理/密码学可验证）；成本计量与配额尚未接入 `internal/observability/budget`。
 
-### 4.7 Sandbox-L4-Persistent（D4/ADR-0078，可选，Tier2+）
+### 4.7 Sandbox-L4-Persistent（D4/ADR-0079，可选，Tier2+）
 
-**定位**：`types.SandboxPersistent` 是一个**已完整接线但后端诚实留空**的可选能力，不是生产可用的持久化沙箱。Tier-0/Tier-1 环境不受影响、无需关心本节。
+**定位**：`types.SandboxPersistent` 是**真实可用**的长程有状态 CodeAct 会话后端——session-scoped 长驻解释器进程池，不是 CRIU/Firecracker 式 checkpoint/restore（ADR-0078 曾把 D4 判定为不可行、诚实占位，ADR-0079 推翻了这一结论，见下）。Tier-0/Tier-1 环境不受影响、默认关闭（`sandbox.l4_enabled=false`）。
 
-**动机**：长程有状态 CodeAct 会话（`internal/action/codeact/code_act_stateful.go` 的 `StatefulSession`）目前的"持久化"本质是每次调用仍是全新一次性沙箱进程，脚本首尾注入样板代码把 Python `globals()` 通过标准库 `pickle` 序列化到磁盘文件（Bash 则用 `declare -p` 导出到 `.env` 文件）下次再 `source`/反序列化回来。文件句柄、线程、数据库连接等不可序列化对象会被静默跳过——这是刻意的 MVP 取舍而非 bug，但复杂 Python 环境下容易丢状态。原始设计（GD-14-003）设想引入 CRIU（Linux）或 Firecracker microVM snapshot 做真正的进程级 checkpoint/restore 来替代这套序列化方案。
+**动机**：长程有状态 CodeAct 会话（`internal/action/codeact/code_act_stateful.go` 的 `StatefulSession`）历史上的"持久化"是每次调用仍起全新一次性沙箱进程，脚本首尾注入样板代码把 Python `globals()` 通过标准库 `pickle` 序列化到磁盘文件（Bash 则用 `declare -p` 导出到 `.env` 文件）下次再反序列化回来，文件句柄、线程、数据库连接等不可序列化对象被静默跳过。原始设计（GD-14-003）设想用 CRIU/Firecracker checkpoint/restore 解决——但那只是达成"状态不因重启进程而丢失"这个目标的一种手段。**让解释器进程在多次调用之间根本不退出，是达成同一目标的另一种手段**，且不依赖本仓库缺失的任何操作系统级 checkpoint/restore 原语。
 
-**为什么后端留空**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径（本文档 §4.1/§4.2 提到的 "microVM"/"gVisor" 字样是尚未同步的历史文档漂移，实际实现统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`）。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语：CRIU 理论上能对 bwrap 派生的普通 Linux 进程树做 dump，但需要额外套一层 PID namespace 才能拿到干净的 dump 边界，且仅覆盖 Linux；macOS 的 Seatbelt 完全没有等价机制。在没有真实 Tier2+ Linux 宿主验证 CRIU 端到端可用性的前提下伪造一个"看起来能持久化但实际不 dump/restore 任何东西"的假后端，属于 HE-Rule-2（可验证执行）明令禁止的伪装能力，比不实现更危险。
+**为什么不用 CRIU/Firecracker**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径，统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语；CRIU 理论上能对 bwrap 派生的进程树做 dump，但需要额外套一层 PID namespace 工程且仅覆盖 Linux。详见 ADR-0078/ADR-0079。
 
-**已交付的接线**（`internal/sandbox/sandbox_persistent.go`）：
-- `PersistentSandbox` 实现 `SandboxProvider` 接口；`Available()` 恒定返回 `false`（诚实占位，附带清晰的"为什么"注释）；`Run()` 作为纵深防御第二道闸门，即便被误调用也显式返回 `apperr.CodeUnimplemented`，不会静默假装成功。
-- `sandbox_router.go RouteByTier` 新增 `case types.SandboxPersistent`：`persistent.Available()==true` 时才路由至 L4，否则按 Container 同等的降级链回退（Container → Remote → fail-closed），语义与"保持现状回退到既有 StatefulSession 序列化路径"一致。
-- 硬件门控 + 配置阈值：`internal/config/thresholds.go` `M7ToolThresholds.SandboxL4Enabled`（默认 `false`）/`SandboxL4Backend`（默认 `"unimplemented"`，仅用于日志诊断）；`cmd/polaris/boot_tools.go` 仅在 `SandboxL4Enabled && Tier>=2` 时构造并注入 `PersistentSandbox`，注入本身不改变任何现有路由行为。
+**实现**（`internal/sandbox/sandbox_persistent.go` + `sandbox_persistent_session.go` + `sandbox_persistent_harness.go`）：
+- `PersistentSandbox` 实现 `SandboxProvider`；`Available()` 真实检测——`ArgvWrapper` 已注入且宿主 PATH 上至少有 python3/bash 之一时为 `true`。
+- 每个 `SessionID` 对应一个长驻子进程（Python：`python3 -u -c <harness>`，逐行 JSON 协议；Bash：`bash --noprofile --norc -s`，哨兵 echo 协议），通过 `ArgvWrapper`（`internal/sandbox/argv_wrapper.go` 消费方接口，`internal/tool/sandbox.RustArgvWrapper` 实现）取得与 L3/MCP stdio 长进程同一条 Rust FFI 沙箱封装（`native_sandbox_wrap_argv`），Go 侧自己 `exec.Command` 并长期持有 stdin/stdout 管道——隔离强度与 L3 一致，不构成 inv_global_07 的降级例外。
+- 生命周期：`PersistentSandboxConfig{IdleTTL, MaxSessions, ExecTimeout, ReapInterval}`（默认 10min/8/30s/30s），后台回收 goroutine（`pkg/concurrent.SafeGo`）按 IdleTTL 终止空闲会话，超过 MaxSessions 淘汰最久未用；协议层任何失败（写入/读取/超时/格式错误）判定会话不可信，立即终止，下次调用拿到全新会话。`Shutdown()` 由 `cmd/polaris/main.go` 优雅关闭时调用，终止全部存活会话进程。
+- `sandbox_router.go RouteByTier` 的 `case types.SandboxPersistent`：`persistent.Available()==true` 时路由至 L4，否则按 Container 同等的降级链回退（Container → Remote → fail-closed）。
+- `code_act.go Execute()` 在构造脚本内容**之前**同步查询 `ca.envelope.PersistentSandboxAvailable()`：可用时发送原始代码（长驻进程自己保有状态，跳过 pickle/env 包装），不可用时维持既有 `buildExecutableScript` 包装路径（零回归）。`ExecEnvelope.Execute` 在 `StatefulSession && SessionID!=""` 时把 tier 覆盖为 `SandboxPersistent`。
+- 硬件门控 + 配置阈值：`M7ToolThresholds.SandboxL4Enabled`（默认 `false`）/`SandboxL4Backend`（诊断标签，固定 `"live_process_pool"`）/`SandboxL4IdleTTLSeconds`/`SandboxL4MaxSessions`/`SandboxL4ExecTimeoutSeconds`/`SandboxL4ReapIntervalSeconds`；`sandbox.l4_enabled && Tier>=2` 才装配。
 
-**未来接入真实后端时**：只需替换 `PersistentSandbox.Available()`（换成真实的宿主能力探测，如检测 `criu` 二进制 + 内核 checkpoint/restore 支持，或 dockerd experimental checkpoint 特性开关）与 `Run()`（实现真正的 dump/restore），路由层/配置层/硬件门控均无需改动——变更面被限制在这一个文件内（R1.4 消费方接口 + 组合原语的价值）。
+**已知边界**：沙箱边界（AllowedPaths/网络策略）在会话创建时固化，同一 SessionID 后续调用无法更改；Python 用户代码内 `input()` 等阻塞式 stdin 操作会挂起至 ExecTimeout 熔断；单会话同一时刻只处理一次调用（`execMu` 串行化）；未接入 OOM Guard 联动，`MaxSessions`/`IdleTTL` 是当前唯一的资源治理手段。
 
 ---
 

@@ -3,8 +3,10 @@ package codeact
 import (
 	"context"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -345,6 +347,100 @@ func TestExecute_Success(t *testing.T) {
 	}
 	if res.ExitCode != 0 {
 		t.Errorf("exit code: got %d, want 0", res.ExitCode)
+	}
+}
+
+// ── D4/ADR-0079：L4 长驻会话端到端集成 ──────────────────────────────────────
+
+// bareArgvWrapper 测试替身：绕过 Rust FFI/bwrap/Seatbelt，直接透传 argv/env，
+// 与 internal/sandbox 包自己的同名测试替身用途一致（不能跨包复用未导出类型，
+// 各自维护一份，逻辑很薄，不构成重复维护负担）。
+type bareArgvWrapper struct{}
+
+func (bareArgvWrapper) WrapArgv(_ context.Context, sctx protocol.SandboxContext) (*protocol.WrapArgvResult, error) {
+	return &protocol.WrapArgvResult{
+		Executable: sctx.ExecPath,
+		Argv:       sctx.ExecArgs,
+		EnvInArgv:  false,
+		Env:        append([]string{"PATH=/usr/bin:/bin:/usr/local/bin"}, sctx.EnvExtra...),
+	}, nil
+}
+
+func TestExecute_L4PersistentSession_StatePersistsAcrossCalls(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found on PATH, skipping")
+	}
+
+	gate := &mockPolicyGate{allowed: true}
+	inProc := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(inProc, nil, nil, "linux", 2)
+	persistent := sandbox.NewPersistentSandbox(bareArgvWrapper{}, sandbox.PersistentSandboxConfig{
+		IdleTTL: time.Minute, MaxSessions: 4, ExecTimeout: 5 * time.Second, ReapInterval: time.Minute,
+	})
+	defer persistent.Shutdown()
+	router.WithPersistent(persistent)
+	envelope := sandbox.NewExecEnvelope(gate, router, 2, "linux", nil)
+	ca := NewCodeAct(envelope, &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+	)
+
+	const sessionID = "codeact-l4-session-1"
+
+	res1, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language: "bash", Code: "export FOO=bar", CapabilityID: "cap-1",
+		SessionID: sessionID, AgentID: "a1", StatefulSession: true,
+	})
+	if err != nil {
+		t.Fatalf("call1 unexpected error: %v", err)
+	}
+	if res1.ExitCode != 0 {
+		t.Fatalf("call1 unexpected exit code %d, output=%q", res1.ExitCode, res1.Output)
+	}
+
+	res2, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language: "bash", Code: "echo $FOO", CapabilityID: "cap-1",
+		SessionID: sessionID, AgentID: "a1", StatefulSession: true,
+	})
+	if err != nil {
+		t.Fatalf("call2 unexpected error: %v", err)
+	}
+	if res2.ExitCode != 0 {
+		t.Fatalf("call2 unexpected exit code %d, output=%q", res2.ExitCode, res2.Output)
+	}
+	if !strings.Contains(string(res2.Output), "bar") {
+		t.Fatalf("expected call2 to observe FOO=bar exported by call1 through a real persisted shell process, got output=%q", res2.Output)
+	}
+}
+
+// TestExecute_StatefulSessionWithoutL4_FallsBackToPickleWrap 验证 L4 不可用
+// （未注入 persistent sandbox）时，StatefulSession 请求仍走既有 GD-4-002
+// pickle/env 包装路径——D4 集成不能让"申请了 StatefulSession 但 L4 不可用"
+// 的请求退化为无状态一次性执行（零回归要求）。用 mockSandbox 直接断言执行
+// 到达的 tier 仍是 buildExecutableScript 产生的普通路径（mockSandbox 对
+// SandboxTier 不敏感，这里主要验证不会因为 StatefulSession=true 而报错或
+// 路由失败）。
+func TestExecute_StatefulSessionWithoutL4_FallsBackToPickleWrap(t *testing.T) {
+	gate := &mockPolicyGate{allowed: true}
+	sbx := &mockSandbox{level: 2, result: &types.ToolResult{Output: []byte("ok"), Success: true}}
+	router := sandbox.NewSandboxRouter(nil, nil, sbx, "linux", 0) // 未 WithPersistent：L4 不可用
+	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
+	tmpDir := t.TempDir()
+	ca := NewCodeAct(envelope, &mockToolExecutor{},
+		WithGovernanceAgent(&mockGovAgent{}),
+		WithTokenManager(defaultMockTokenManager()),
+		WithStateDir(tmpDir),
+	)
+
+	res, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+		Language: "bash", Code: "echo hi", CapabilityID: "cap-1",
+		SessionID: "no-l4-session", StatefulSession: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("unexpected exit code %d", res.ExitCode)
 	}
 }
 

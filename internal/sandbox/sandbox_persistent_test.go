@@ -2,58 +2,340 @@ package sandbox
 
 import (
 	"context"
+	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// TestPersistentSandbox_AvailableIsAlwaysFalse 锁定 D4/ADR-0078 的核心不变量：
-// 在没有真实 checkpoint/restore 后端接入之前，Available() 必须恒定返回
-// false——这条断言本身就是"诚实占位"承诺的可验证边界（HE-2）。一旦未来有人
-// 接入真实后端并让这个测试失败，说明设计已经变化，需要同步更新本测试与
-// ADR-0078，而不是让假阳性可用性静默混进生产。
-func TestPersistentSandbox_AvailableIsAlwaysFalse(t *testing.T) {
-	p := NewPersistentSandbox("criu")
+// bareArgvWrapper 是 ArgvWrapper 的测试替身：不经 Rust FFI/bwrap/Seatbelt，
+// 直接把 ExecPath/ExecArgs/宿主环境原样透传。真实沙箱封装依赖已编译的 Rust
+// dylib，在纯 Go 测试环境里不保证存在；这里的目标是验证 PersistentSandbox
+// 自身的会话池/协议逻辑是否正确，不是复测 Rust FFI 桥接（那部分由
+// internal/tool/sandbox 的测试和 RustArgvWrapper 的 var _ ArgvWrapper 断言
+// 覆盖）。生产环境使用的是 toolsb.NewRustArgvWrapper，见 boot_tools.go。
+type bareArgvWrapper struct{}
+
+func (bareArgvWrapper) WrapArgv(_ context.Context, sctx protocol.SandboxContext) (*protocol.WrapArgvResult, error) {
+	return &protocol.WrapArgvResult{
+		Executable:    sctx.ExecPath,
+		Argv:          sctx.ExecArgs,
+		EnvInArgv:     false,
+		Env:           append([]string{"PATH=/usr/bin:/bin:/usr/local/bin"}, sctx.EnvExtra...),
+		SandboxMethod: "bare_test",
+	}, nil
+}
+
+// failingArgvWrapper 总是拒绝，用于验证 spawn 失败时 fail-closed（不裸跑）。
+type failingArgvWrapper struct{}
+
+func (failingArgvWrapper) WrapArgv(context.Context, protocol.SandboxContext) (*protocol.WrapArgvResult, error) {
+	return nil, apperr.New(apperr.CodeInternal, "simulated wrap failure")
+}
+
+func testConfig() PersistentSandboxConfig {
+	return PersistentSandboxConfig{
+		IdleTTL:      time.Minute,
+		MaxSessions:  4,
+		ExecTimeout:  5 * time.Second,
+		ReapInterval: time.Minute,
+	}
+}
+
+func requirePython(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		if _, err2 := exec.LookPath("python"); err2 != nil {
+			t.Skip("python3/python not found on PATH, skipping")
+		}
+	}
+}
+
+func requireBash(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found on PATH, skipping")
+	}
+}
+
+// ─── Available() ────────────────────────────────────────────────────────────
+
+func TestPersistentSandbox_UnavailableWithoutWrapper(t *testing.T) {
+	p := NewPersistentSandbox(nil, testConfig())
+	defer p.Shutdown()
 	if p.Available() {
-		t.Fatal("PersistentSandbox.Available() must remain false until a real checkpoint/restore backend is implemented")
-	}
-	if p.Backend() != "criu" {
-		t.Fatalf("expected backend to echo constructor arg, got %q", p.Backend())
+		t.Fatal("expected Available()==false when no ArgvWrapper injected (fail-closed)")
 	}
 }
 
-func TestPersistentSandbox_BackendDefaultsWhenEmpty(t *testing.T) {
-	p := NewPersistentSandbox("")
-	if p.Backend() != "unimplemented" {
-		t.Fatalf("expected default backend label 'unimplemented', got %q", p.Backend())
+func TestPersistentSandbox_AvailableWithWrapperAndInterpreter(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		if _, err2 := exec.LookPath("bash"); err2 != nil {
+			t.Skip("neither python3 nor bash found on PATH, skipping")
+		}
+	}
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+	if !p.Available() {
+		t.Fatal("expected Available()==true when wrapper injected and an interpreter is on PATH")
+	}
+	if p.Backend() != "live_process_pool" {
+		t.Fatalf("unexpected backend label: %q", p.Backend())
 	}
 }
 
-// TestPersistentSandbox_RunReturnsUnimplemented 验证纵深防御：即便调用方绕过
-// Available() 检查直接调用 Run()，也不会得到静默的假成功。
-func TestPersistentSandbox_RunReturnsUnimplemented(t *testing.T) {
-	p := NewPersistentSandbox("criu")
-	_, err := p.Run(context.Background(), SandboxSpec{ToolName: "some-tool"})
+func TestPersistentSandbox_RunFailClosedWhenUnavailable(t *testing.T) {
+	p := NewPersistentSandbox(nil, testConfig())
+	defer p.Shutdown()
+	_, err := p.Run(context.Background(), SandboxSpec{SessionID: "s1", Language: "python", ScriptBytes: []byte("x=1")})
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("expected error when backend unavailable")
 	}
 	if !apperr.IsCode(err, apperr.CodeUnimplemented) {
 		t.Fatalf("expected CodeUnimplemented, got %v", err)
 	}
 }
 
-// TestSandboxRouter_PersistentTier_FallsBackToContainer 验证 RouteByTier 在
-// persistent 注入但 Available()==false 时，按设计文档"否则保持现状"的降级
-// 语义回退到 Container（与既有 SandboxContainer 分支一致），不会误路由到
-// 未实现的 L4 后端。
+func TestPersistentSandbox_RunRequiresSessionID(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+	_, err := p.Run(context.Background(), SandboxSpec{Language: "bash", ScriptBytes: []byte("echo hi")})
+	if !apperr.IsCode(err, apperr.CodeInvalidInput) {
+		t.Fatalf("expected CodeInvalidInput for missing SessionID, got %v", err)
+	}
+}
+
+func TestPersistentSandbox_SpawnFailClosedOnWrapError(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(failingArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+	_, err := p.Run(context.Background(), SandboxSpec{SessionID: "s1", Language: "bash", ScriptBytes: []byte("echo hi")})
+	if err == nil {
+		t.Fatal("expected error when ArgvWrapper fails (fail-closed, no bare exec fallback)")
+	}
+}
+
+// ─── 真实跨调用状态持久化（核心价值验证）────────────────────────────────────
+
+func TestPersistentSandbox_Python_StatePersistsAcrossCalls(t *testing.T) {
+	requirePython(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+
+	ctx := context.Background()
+	res1, err := p.Run(ctx, SandboxSpec{
+		SessionID: "py-session-1", Language: "python",
+		ScriptBytes: []byte("x = 42\nprint('set')"),
+	})
+	if err != nil {
+		t.Fatalf("call1 failed: %v", err)
+	}
+	if !res1.Success || !strings.Contains(string(res1.Output), "set") {
+		t.Fatalf("call1 unexpected result: success=%v output=%q error=%q", res1.Success, res1.Output, res1.Error)
+	}
+
+	res2, err := p.Run(ctx, SandboxSpec{
+		SessionID: "py-session-1", Language: "python",
+		ScriptBytes: []byte("print(x)"),
+	})
+	if err != nil {
+		t.Fatalf("call2 failed: %v", err)
+	}
+	if !res2.Success {
+		t.Fatalf("call2 unexpected failure: output=%q error=%q", res2.Output, res2.Error)
+	}
+	if !strings.Contains(string(res2.Output), "42") {
+		t.Fatalf("expected call2 to see variable x=42 set by call1 (real process persistence), got output=%q", res2.Output)
+	}
+
+	// 验证确实是同一个会话（同一进程）在服务两次调用，而不是碰巧两次都新建。
+	if len(p.sessions) != 1 {
+		t.Fatalf("expected exactly 1 live session, got %d", len(p.sessions))
+	}
+}
+
+func TestPersistentSandbox_Python_ExceptionCaptured(t *testing.T) {
+	requirePython(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+
+	res, err := p.Run(context.Background(), SandboxSpec{
+		SessionID: "py-session-err", Language: "python",
+		ScriptBytes: []byte("raise ValueError('boom')"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if res.Success {
+		t.Fatal("expected Success=false for raised exception")
+	}
+	if !strings.Contains(res.Error, "ValueError") || !strings.Contains(res.Error, "boom") {
+		t.Fatalf("expected error text to contain exception details, got %q", res.Error)
+	}
+
+	// 会话在异常后应仍然存活（Python 异常不是协议层错误，不应导致 kill）。
+	if len(p.sessions) != 1 {
+		t.Fatalf("expected session to survive a caught Python exception, got %d live sessions", len(p.sessions))
+	}
+}
+
+func TestPersistentSandbox_Bash_StatePersistsAcrossCalls(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+
+	ctx := context.Background()
+	res1, err := p.Run(ctx, SandboxSpec{
+		SessionID: "bash-session-1", Language: "bash",
+		ScriptBytes: []byte("export FOO=bar"),
+	})
+	if err != nil {
+		t.Fatalf("call1 failed: %v", err)
+	}
+	if !res1.Success {
+		t.Fatalf("call1 unexpected failure: output=%q", res1.Output)
+	}
+
+	res2, err := p.Run(ctx, SandboxSpec{
+		SessionID: "bash-session-1", Language: "bash",
+		ScriptBytes: []byte("echo $FOO"),
+	})
+	if err != nil {
+		t.Fatalf("call2 failed: %v", err)
+	}
+	if !res2.Success {
+		t.Fatalf("call2 unexpected failure: output=%q", res2.Output)
+	}
+	if !strings.Contains(string(res2.Output), "bar") {
+		t.Fatalf("expected call2 to see FOO=bar exported by call1, got output=%q", res2.Output)
+	}
+}
+
+func TestPersistentSandbox_Bash_NonZeroExitReflectsFailure(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer p.Shutdown()
+
+	res, err := p.Run(context.Background(), SandboxSpec{
+		SessionID: "bash-session-fail", Language: "bash",
+		ScriptBytes: []byte("false"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if res.Success {
+		t.Fatal("expected Success=false for non-zero bash exit code")
+	}
+}
+
+// ─── 生命周期管理 ────────────────────────────────────────────────────────────
+
+func TestPersistentSandbox_IdleReapKillsSession(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, PersistentSandboxConfig{
+		IdleTTL:      50 * time.Millisecond,
+		MaxSessions:  4,
+		ExecTimeout:  5 * time.Second,
+		ReapInterval: 20 * time.Millisecond,
+	})
+	defer p.Shutdown()
+
+	_, err := p.Run(context.Background(), SandboxSpec{SessionID: "reap-me", Language: "bash", ScriptBytes: []byte("echo hi")})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	p.mu.Lock()
+	n := len(p.sessions)
+	p.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 live session right after Run, got %d", n)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		n = len(p.sessions)
+		p.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected idle session to be reaped within 2s, still have %d live sessions", n)
+}
+
+func TestPersistentSandbox_MaxSessionsEvictsOldest(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, PersistentSandboxConfig{
+		IdleTTL: time.Minute, MaxSessions: 1, ExecTimeout: 5 * time.Second, ReapInterval: time.Minute,
+	})
+	defer p.Shutdown()
+
+	ctx := context.Background()
+	if _, err := p.Run(ctx, SandboxSpec{SessionID: "old", Language: "bash", ScriptBytes: []byte("echo 1")}); err != nil {
+		t.Fatalf("run(old) failed: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond) // 确保 lastUsed 时间戳有序
+	if _, err := p.Run(ctx, SandboxSpec{SessionID: "new", Language: "bash", ScriptBytes: []byte("echo 2")}); err != nil {
+		t.Fatalf("run(new) failed: %v", err)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.sessions) != 1 {
+		t.Fatalf("expected exactly 1 live session after eviction, got %d", len(p.sessions))
+	}
+	if _, ok := p.sessions["new"]; !ok {
+		t.Fatal("expected newest session 'new' to survive eviction")
+	}
+	if _, ok := p.sessions["old"]; ok {
+		t.Fatal("expected oldest session 'old' to be evicted")
+	}
+}
+
+func TestPersistentSandbox_ShutdownKillsAllSessions(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+
+	ctx := context.Background()
+	if _, err := p.Run(ctx, SandboxSpec{SessionID: "a", Language: "bash", ScriptBytes: []byte("echo 1")}); err != nil {
+		t.Fatalf("run(a) failed: %v", err)
+	}
+	if _, err := p.Run(ctx, SandboxSpec{SessionID: "b", Language: "bash", ScriptBytes: []byte("echo 2")}); err != nil {
+		t.Fatalf("run(b) failed: %v", err)
+	}
+
+	p.Shutdown()
+
+	p.mu.Lock()
+	n := len(p.sessions)
+	p.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("expected 0 sessions after Shutdown, got %d", n)
+	}
+}
+
+func TestPersistentSandbox_ShutdownNilSafe(t *testing.T) {
+	var p *PersistentSandbox
+	p.Shutdown() // 不应 panic
+}
+
+// ─── SandboxRouter 降级链（沿用既有约定，Available()==false 时按 Container 降级）──
+
 func TestSandboxRouter_PersistentTier_FallsBackToContainer(t *testing.T) {
 	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	container := NewContainerSandbox("bwrap", runtime.GOOS, 2, nil, config.DefaultThresholds().M7Tool)
 	router := NewSandboxRouter(inProc, container, nil, runtime.GOOS, 2)
-	router.WithPersistent(NewPersistentSandbox("criu"))
+	unavailable := NewPersistentSandbox(nil, testConfig()) // wrapper=nil → Available()==false
+	defer unavailable.Shutdown()
+	router.WithPersistent(unavailable)
 
 	provider, err := router.RouteByTier(types.SandboxPersistent, types.TrustSystem)
 	if err != nil {
@@ -64,13 +346,30 @@ func TestSandboxRouter_PersistentTier_FallsBackToContainer(t *testing.T) {
 	}
 }
 
-// TestSandboxRouter_PersistentTier_NoFallbackFailsClosed 验证既无可用
-// persistent 后端、也无 Container/Remote 兜底时，fail-closed 拒绝而非静默
-// 降级到更弱的隔离级别。
+func TestSandboxRouter_PersistentTier_RoutesToPersistentWhenAvailable(t *testing.T) {
+	requireBash(t)
+	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
+	container := NewContainerSandbox("bwrap", runtime.GOOS, 2, nil, config.DefaultThresholds().M7Tool)
+	router := NewSandboxRouter(inProc, container, nil, runtime.GOOS, 2)
+	persistent := NewPersistentSandbox(bareArgvWrapper{}, testConfig())
+	defer persistent.Shutdown()
+	router.WithPersistent(persistent)
+
+	provider, err := router.RouteByTier(types.SandboxPersistent, types.TrustSystem)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if provider != SandboxProvider(persistent) {
+		t.Fatalf("expected persistent provider to be selected when available, got %T", provider)
+	}
+}
+
 func TestSandboxRouter_PersistentTier_NoFallbackFailsClosed(t *testing.T) {
 	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 2)
-	router.WithPersistent(NewPersistentSandbox("criu"))
+	unavailable := NewPersistentSandbox(nil, testConfig())
+	defer unavailable.Shutdown()
+	router.WithPersistent(unavailable)
 
 	_, err := router.RouteByTier(types.SandboxPersistent, types.TrustSystem)
 	if err == nil {
@@ -81,9 +380,6 @@ func TestSandboxRouter_PersistentTier_NoFallbackFailsClosed(t *testing.T) {
 	}
 }
 
-// TestSandboxRouter_PersistentTier_WithoutInjection 验证从未调用
-// WithPersistent 时（r.persistent 保持 nil，符合 Tier-0/1 默认不装配的
-// 现状）仍能正确降级，不会因 nil 指针方法调用而 panic。
 func TestSandboxRouter_PersistentTier_WithoutInjection(t *testing.T) {
 	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	container := NewContainerSandbox("bwrap", runtime.GOOS, 2, nil, config.DefaultThresholds().M7Tool)
@@ -95,5 +391,8 @@ func TestSandboxRouter_PersistentTier_WithoutInjection(t *testing.T) {
 	}
 	if provider != SandboxProvider(container) {
 		t.Fatalf("expected fallback to container provider, got %T", provider)
+	}
+	if router.PersistentAvailable() {
+		t.Fatal("expected PersistentAvailable()==false when WithPersistent was never called")
 	}
 }

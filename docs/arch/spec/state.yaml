@@ -924,11 +924,15 @@ thresholds:
     rate_limit_shell_qps: 2
     dryrun_protect_window_seconds: 60
     max_code_size_bytes: 16384
-    # sbx_l4_persistent_* — D4/ADR-0078：Tier2+ 可选持久化沙箱，接线到位但后端
-    # 诚实留空（internal/sandbox/sandbox_persistent.go Available() 恒定 false）。
+    # sbx_l4_persistent_* — D4/ADR-0079：Tier2+ 可选持久化沙箱，session-scoped
+    # 长驻解释器进程池（推翻 ADR-0078"诚实留空"结论，后端真实可用）。
     # 默认关闭，不影响 Tier-0/Tier-1 任何现有行为。
     sbx_l4_persistent_enabled: false
-    sbx_l4_persistent_backend: unimplemented
+    sbx_l4_persistent_backend: live_process_pool
+    sbx_l4_persistent_idle_ttl_seconds: 600
+    sbx_l4_persistent_max_sessions: 8
+    sbx_l4_persistent_exec_timeout_seconds: 30
+    sbx_l4_persistent_reap_interval_seconds: 30
     output_taint_defaults:
       builtin_fs_read: low
       mcp_any: high

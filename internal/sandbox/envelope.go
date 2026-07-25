@@ -51,6 +51,17 @@ type ExecRequest struct {
 
 	AllowNet bool
 	DryRun   bool
+
+	// SessionID/Language/StatefulSession D4/ADR-0079：CodeAct 长驻会话专用。
+	// StatefulSession=true 且 SessionID 非空时，Execute() 会把 actualTier 强制
+	// 覆盖为 types.SandboxPersistent（不经 AssignSandboxTier 的通用信任/能力
+	// 判定——那套判定不了解"这是一个有状态会话"这一语义）。调用方（目前仅
+	// code_act.go）必须在设置 StatefulSession=true 之前自行确认
+	// PersistentSandboxAvailable()==true，并据此决定是否已经把原始代码
+	// （而非 pickle 包装后的代码）写入 ScriptPath——本结构体不做这层判断。
+	SessionID       string
+	Language        string
+	StatefulSession bool
 }
 
 type ExecResult struct {
@@ -92,6 +103,15 @@ func NewExecEnvelope(policy protocol.PolicyGate, router *SandboxRouter, hwTier i
 // 独立 setter 而非构造参数：避免变更已有 ~20 处 NewExecEnvelope 调用点（含测试）签名。
 func (e *ExecEnvelope) SetHookFirer(f HookFirer) {
 	e.hookFirer = f
+}
+
+// PersistentSandboxAvailable 报告 D4/ADR-0079 长驻会话后端当前是否可用。
+// 调用方（目前仅 code_act.go）必须在决定"要不要跳过 pickle 包装、直接发送
+// 原始代码"之前同步查询此方法——这是打破"先写脚本文件、后决定走哪条 tier"
+// 先有鸡先有蛋问题的关键：CodeAct 必须在构造脚本内容之前就确定性地知道最终
+// 会不会用上 L4，而不能等 Execute() 内部路由完才知道。
+func (e *ExecEnvelope) PersistentSandboxAvailable() bool {
+	return e.router != nil && e.router.PersistentAvailable()
 }
 
 //nolint:gocyclo
@@ -145,6 +165,15 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	if tierErr != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "exec_envelope: sandbox tier rejected", tierErr)
 	}
+	// D4/ADR-0079：有状态会话请求覆盖为 SandboxPersistent tier。AssignSandboxTier
+	// 是面向所有工具的通用信任/能力判定，不了解"这是一次有状态 CodeAct 会话"这一
+	// 语义，因此在此单独覆盖。不是隔离降级——RouteByTier 的 SandboxPersistent
+	// 分支在后端不可用时会退化到与 SandboxContainer 完全一致的降级链
+	// （Container→Remote→fail-closed），隔离强度不低于 AssignSandboxTier 原本会
+	// 分配的等级。
+	if req.StatefulSession && req.SessionID != "" {
+		actualTier = types.SandboxPersistent
+	}
 
 	// Step 3: Capability Token（Privileged 强制；走 boot 注入的统一校验，语义同 tool.go）
 	if req.Tool.Capability >= types.CapPrivileged {
@@ -176,6 +205,8 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		SystemTier:  e.hwTier,
 		TaintLevel:  req.TaintLevel,
 		DryRunMode:  req.DryRun,
+		SessionID:   req.SessionID,
+		Language:    req.Language,
 	}
 	toolResult, execErr := provider.Run(ctx, spec)
 	if execErr != nil {

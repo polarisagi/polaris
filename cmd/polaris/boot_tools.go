@@ -96,6 +96,10 @@ type ToolBundle struct {
 	// hitlGateway 铸造端共享同一实例；boot_agent.go buildAgent 额外注入 Agent 作为
 	// S_VALIDATE TaintGate 的 TaintReviewChecker（M11 §2.5 SanitizeByUserReview）。
 	ExemptionVault *token.ExemptionVault
+	// PersistentSandbox D4/ADR-0079：Sbx-L4 长驻会话池；nil 表示未开启
+	// （sandbox.l4_enabled=false 或 hwTier<2，Tier-0/1 默认状态）。main.go 优雅
+	// 关闭时需对非 nil 值调用 Shutdown() 终止所有存活会话进程。
+	PersistentSandbox *sandbox.PersistentSandbox
 }
 
 // bootTools 执行 §6~§6.8 初始化，返回工具层 bundle。
@@ -151,16 +155,25 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			slog.Info("polaris: remote sandbox (Sbx-L4) initialized", "endpoint", sb.Cfg.Sandbox.Remote.Endpoint)
 		}
 	}
-	// PersistentSandbox（Sbx-L4-Persistent，D4/ADR-0078）：仅在运营者显式开启
-	// sandbox.l4_enabled 且硬件 Tier>=2 时构造并注入；Available() 当前恒定为
-	// false（后端未实现，见 sandbox_persistent.go），因此本段无论是否执行都
-	// 不改变任何现有路由行为——只是让"配置开关 + Tier 门控"这条前置管线提前
-	// 就位，供未来接入真实 checkpoint/restore 后端时复用。
+	// PersistentSandbox（Sbx-L4-Persistent，D4/ADR-0079）：仅在运营者显式开启
+	// sandbox.l4_enabled 且硬件 Tier>=2 时构造并注入。后端是真实的长驻解释器
+	// 进程池（非 CRIU/Firecracker checkpoint-restore，见 ADR-0079），通过
+	// toolsb.NewRustArgvWrapper() 复用与 L3/MCP stdio 长进程同一条 Rust 沙箱
+	// 封装链路，隔离强度不降级。未开启/Tier<2 时 sandboxRouter.persistent 保持
+	// nil，SandboxPersistent tier 请求按既有降级链回退到 Container/Remote，
+	// Tier-0/Tier-1 行为零回归。
+	var persistentSandbox *sandbox.PersistentSandbox
 	if sb.Cfg.Thresholds.M7Tool.SandboxL4Enabled && sb.Cfg.System.Tier >= 2 {
-		persistentSandbox := sandbox.NewPersistentSandbox(sb.Cfg.Thresholds.M7Tool.SandboxL4Backend)
+		m7 := sb.Cfg.Thresholds.M7Tool
+		persistentSandbox = sandbox.NewPersistentSandbox(toolsb.NewRustArgvWrapper(), sandbox.PersistentSandboxConfig{
+			IdleTTL:      time.Duration(m7.SandboxL4IdleTTLSeconds) * time.Second,
+			MaxSessions:  m7.SandboxL4MaxSessions,
+			ExecTimeout:  time.Duration(m7.SandboxL4ExecTimeoutSeconds) * time.Second,
+			ReapInterval: time.Duration(m7.SandboxL4ReapIntervalSeconds) * time.Second,
+		})
 		sandboxRouter.WithPersistent(persistentSandbox)
-		slog.Info("polaris: L4 persistent sandbox wiring enabled (backend not yet implemented, Available()=false)",
-			"backend", sb.Cfg.Thresholds.M7Tool.SandboxL4Backend, "tier", sb.Cfg.System.Tier)
+		slog.Info("polaris: L4 persistent sandbox enabled (live process pool)",
+			"backend", persistentSandbox.Backend(), "available", persistentSandbox.Available(), "tier", sb.Cfg.System.Tier)
 	}
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
@@ -595,6 +608,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		Dispatcher:            disp,
 		VFSWorkspace:          vfsWM,
 		ExemptionVault:        exemptionVault,
+		PersistentSandbox:     persistentSandbox,
 	}, nil
 }
 
