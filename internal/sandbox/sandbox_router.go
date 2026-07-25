@@ -22,9 +22,10 @@ type SandboxRouter struct {
 	container       *ContainerSandbox
 	nativeOS        *NativeOSSandbox // L4-native：Tier-0 Rust 原生沙箱，无需容器运行时
 	wasmtime        SandboxProvider
-	remote          *RemoteSandbox // L4：可选，Tier-0 OOM 逃生路径
-	goos            string         // "darwin" | "linux" | "windows"
-	hwTier          int            // 0 = Tier 0 (8GB) 主线
+	remote          *RemoteSandbox     // L4：可选，Tier-0 OOM 逃生路径
+	persistent      *PersistentSandbox // D4/ADR-0078：Tier2+ 可选持久化沙箱，Available()==false 时按既有链路降级
+	goos            string             // "darwin" | "linux" | "windows"
+	hwTier          int                // 0 = Tier 0 (8GB) 主线
 	newWasmDisabled atomic.Bool
 	// activeExecs 追踪所有正在执行的沙箱任务的取消函数，覆盖 Wasm/Container/
 	// NativeOS/InProcess/Remote 全部 tier（D-B6-04 修复：原 activeWasm 从未在
@@ -95,6 +96,16 @@ func (r *SandboxRouter) WithNativeOS(nativeOS *NativeOSSandbox) *SandboxRouter {
 	return r
 }
 
+// WithPersistent 注入 PersistentSandbox（D4/ADR-0078，Tier2+ 可选持久化沙箱）。
+// 返回自身，支持链式调用。注入后 SandboxPersistent tier 路由至此，但只有
+// persistent.Available()==true 时才会真正被选用；当前恒定为 false（诚实占位，
+// 见 sandbox_persistent.go），因此注入本身不改变任何现有行为，属于零风险
+// 前置接线。
+func (r *SandboxRouter) WithPersistent(persistent *PersistentSandbox) *SandboxRouter {
+	r.persistent = persistent
+	return r
+}
+
 // RouteByTier 根据已算好的 tier 路由，返回 SandboxProvider。
 // 规则与 AssignSandboxTier 保持一致。
 // trustTier 用于决定隔离不可用时能否降级。
@@ -141,6 +152,22 @@ func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.Trus
 			return r.remote, nil
 		}
 		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L3/Container required but unavailable; refusing to downgrade")
+	case types.SandboxPersistent:
+		// D4/ADR-0078：Available()==false 时（当前恒定如此，见
+		// sandbox_persistent.go）按 Container 同等的降级链回退，语义与设计
+		// 文档"否则保持现状回退到既有 StatefulSession pickle/env 序列化路径"
+		// 一致——调用方拿到 Container/Remote 后仍会走原有的一次性进程执行
+		// 路径，StatefulSession 的样板注入逻辑不受影响。
+		if r.persistent != nil && r.persistent.Available() {
+			return r.persistent, nil
+		}
+		if r.container != nil {
+			return r.container, nil
+		}
+		if r.remote != nil {
+			return r.remote, nil
+		}
+		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L4/Persistent requested but neither persistent backend nor Container/Remote fallback available; refusing to downgrade")
 	default: // InProcess
 		return r.inProcess, nil
 	}

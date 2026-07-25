@@ -47,7 +47,12 @@ type SandboxTier int
 const (
 	SandboxInProcess SandboxTier = iota + 1 // L1: 进程内隔离
 	SandboxWasm                             // L2: Wasmtime 沙箱
-	SandboxContainer                        // L3: gVisor / microVM
+	// SandboxContainer L3：实际由 Rust FFI 统一实现（Linux=bwrap namespace 隔离，
+	// macOS=Seatbelt sandbox profile），通过 CmdRunner 抽象跨平台调用，见
+	// internal/sandbox/sandbox_container.go。注释历史上写过 "gVisor / microVM"，
+	// 但 ADR-0008/ADR-0011 已将其收敛为 bwrap/Seatbelt，不涉及容器运行时或
+	// 虚拟化——2026-07-25 D4 复核订正此处过时描述（comment-drift）。
+	SandboxContainer
 	// SandboxRemote 委托给远端 HTTP 执行器，用于 Tier-0 内存受限时外包重计算任务。
 	SandboxRemote
 	// SandboxNativeOS Rust 原生 OS 沙箱（bwrap/Seatbelt）。
@@ -55,6 +60,19 @@ const (
 	// 直接通过 Rust FFI 调用宿主 OS 隔离原语（Linux=bwrap, macOS=Seatbelt）。
 	// assign.go：SandboxContainer + hwTier==0 → 自动降级为此 tier。
 	SandboxNativeOS
+	// SandboxPersistent D4（原 GD-14-003，ADR-0078）：Tier2+ 可选持久化沙箱
+	// （Sandbox-L4-Persistent，命名沿用设计文档；数值上是本枚举第 6 个 tier，
+	// 与既有注释中散称的 "L4"（SandboxRemote/SandboxNativeOS 的口语化标签，
+	// 非严格序号）不是同一含义，避免混淆特此说明）。
+	//
+	// 现状（诚实占位，非完整实现）：内置沙箱架构（bwrap/Seatbelt，见上）没有
+	// 对应的 checkpoint/restore 原语，本仓库也未选型/集成 CRIU 或等价机制
+	// （历史上考虑过的 Firecracker/gVisor/microVM 路径已在 ADR-0008/ADR-0011
+	// 废弃，没有可复用实现）。本 tier 的路由分支、硬件门控、配置阈值均已接线
+	// 完整，但底层 internal/sandbox.PersistentSandbox.Available() 恒定返回
+	// false——即这是一条已铺好但当前不可达的路径，不冒充已具备真实
+	// checkpoint/restore 能力。详见 sandbox_persistent.go 与 ADR-0078。
+	SandboxPersistent
 )
 
 // ToolSource 标识工具的来源类型（影响 TrustTier 和 TaintLevel 传播）。

@@ -45,6 +45,26 @@ func (p *ConsolidationPipeline) extractEntitiesAndRelations(
 		text = text[:8000]
 	}
 
+	// D3（ADR-0077）：统一实体/关系抽取优先走 SharedEntityExtractor（复用
+	// internal/knowledge/graphrag 的唯一 LLM 抽取实现，与 RAG 文档摄取共享同一
+	// 套 Prompt/LLM 调用）。未注入时（如未装配 graphrag 依赖的部署形态）退化到
+	// 本包历史上自带的 llmExtract 路径，再退化到 ruleExtract，三级降级链保持
+	// 向后兼容，不引入硬依赖。
+	if p.entityExtractor != nil {
+		if p.writeFilter != nil {
+			eval := p.writeFilter.Evaluate(ctx, text, 0, 0)
+			if eval.ShouldSkip {
+				slog.Debug("consolidation: retrieval.WriteFilter skipped content", "reason", eval.Reason, "score", eval.Value)
+				return nil, nil, nil
+			}
+		}
+		entities, relations, err := p.entityExtractor.ExtractEntitiesAndRelations(ctx, sessionID, text)
+		if err != nil {
+			slog.Warn("consolidation: SharedEntityExtractor failed, fallback to rule extract", "err", err)
+			return p.ruleExtract(sessionID, text)
+		}
+		return entities, relations, nil
+	}
 	if p.summarizer != nil {
 		return p.llmExtract(ctx, sessionID, text)
 	}
@@ -52,6 +72,11 @@ func (p *ConsolidationPipeline) extractEntitiesAndRelations(
 }
 
 // llmExtract 调用 LLM 提取实体/关系，返回 JSON 解析结果。
+//
+// D3（ADR-0077）：本方法是 SharedEntityExtractor 未注入时的历史兼容回退路径
+// （不再是主路径）——新部署应通过 cmd/polaris 装配 graphrag.GraphBuildPipeline
+// 并调用 WithEntityExtractor 注入，使实体/关系抽取与 RAG 文档摄取共享同一实现。
+// 保留本方法只是为了不强制要求装配 graphrag 依赖（如极简 Tier-0 部署）。
 func (p *ConsolidationPipeline) llmExtract(
 	ctx context.Context,
 	sessionID string,

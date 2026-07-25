@@ -924,6 +924,11 @@ thresholds:
     rate_limit_shell_qps: 2
     dryrun_protect_window_seconds: 60
     max_code_size_bytes: 16384
+    # sbx_l4_persistent_* — D4/ADR-0078：Tier2+ 可选持久化沙箱，接线到位但后端
+    # 诚实留空（internal/sandbox/sandbox_persistent.go Available() 恒定 false）。
+    # 默认关闭，不影响 Tier-0/Tier-1 任何现有行为。
+    sbx_l4_persistent_enabled: false
+    sbx_l4_persistent_backend: unimplemented
     output_taint_defaults:
       builtin_fs_read: low
       mcp_any: high
