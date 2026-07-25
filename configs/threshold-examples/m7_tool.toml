@@ -14,3 +14,4 @@ max_code_size_bytes = 16384
 'rate_limit.shell_qps' = 2
 'sandbox.quota_ms' = 30000
 'workspace.max_age_seconds' = 604800
+'ext_uninstall.hook_timeout_seconds' = 180

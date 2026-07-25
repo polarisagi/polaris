@@ -367,7 +367,8 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 	extensionLibrarianHandler := connector.NewExtensionLibrarianHandler(sb.Store.DB(), extCogn, protocol.LLMInferFunc(llmInfer), nil)
 	sb.Outbox.RegisterHandler(protocol.TopicExtensionLibrarian, extensionLibrarianHandler.Handle)
-	sb.Outbox.RegisterHandler("extension_uninstall", sandbox.NewExtensionUninstallHandler(sandboxRouter, extRepo).Handle)
+	sb.Outbox.RegisterHandler("extension_uninstall", sandbox.NewExtensionUninstallHandler(
+		sandboxRouter, extRepo, sb.Cfg.Thresholds.M7Tool.ExtUninstallHookTimeoutS).Handle)
 
 	sb.Outbox.RegisterHandler(protocol.TopicEpisodicProject, consolidation.EpisodicProjectorHandler(sb.Store.DB(), []byte(sb.Cfg.System.DataEncryptionKey)))
 	slog.Info("polaris: SemanticCompressHandler, ExtensionLibrarianHandler and EpisodicProjectorHandler registered")
