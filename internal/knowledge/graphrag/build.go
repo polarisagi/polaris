@@ -116,6 +116,39 @@ func (p *GraphBuildPipeline) Run(ctx context.Context, docID string) error {
 	return nil
 }
 
+// ExtractEntitiesAndRelations 执行 Phase1（实体抽取）+ Phase2（关系抽取），
+// 不执行 Phase3-5（跨文档链接/聚类/概念合成——这些阶段面向长期积累的文档语料，
+// 单次会话文本没有意义）。
+//
+// D3（原 GD-13-003，2026-07-25 推翻 ADR-0074 关于"不做管线合并"的结论，见
+// ADR-0077）：本方法是 internal/memory/consolidation 与 RAG 文档摄取共享的
+// 唯一 LLM 实体/关系抽取实现——不再各自维护独立 Prompt/LLM 调用，消除重复
+// Token 燃烧与因 Prompt 差异导致的实体漂移。ADR-0074 的写入期去重桥接
+// （GraphWriter.UpsertEntity 查重）与检索期联合种子机制不受影响、继续生效，
+// 本次只统一"抽取"这一步，不改变两条管线各自的写入 API 与 Tier0/Tier1+
+// 存储选型（consolidation 侧写入逻辑见 consolidation_extract.go upsertSemantic，
+// 仍走 SQLite semantic_entities，未强制依赖 SurrealDB，兼容 Tier-0）。
+func (p *GraphBuildPipeline) ExtractEntitiesAndRelations(ctx context.Context, sourceID, text string) ([]*Entity, []*Relation, error) {
+	entities, err := p.entityExtractor.Extract(ctx, text)
+	if err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline.ExtractEntitiesAndRelations: entity extraction failed", err)
+	}
+	if len(entities) == 0 {
+		return nil, nil, nil
+	}
+	for _, e := range entities {
+		if e.SourceDocID == "" {
+			e.SourceDocID = sourceID
+		}
+	}
+
+	edges, err := p.relationExtractor.Extract(ctx, entities)
+	if err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline.ExtractEntitiesAndRelations: relation extraction failed", err)
+	}
+	return entities, edges, nil
+}
+
 func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []*Entity, clusters map[int][]int) error { //nolint:gocyclo,nestif
 	for _, cluster := range clusters {
 		if len(cluster) < 3 {

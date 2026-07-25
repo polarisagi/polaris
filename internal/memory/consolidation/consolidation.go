@@ -41,18 +41,39 @@ type GraphEntityFetcher interface {
 	GetEntityByName(ctx context.Context, name string) (any, error)
 }
 
+// SharedEntityExtractor D3（原 GD-13-003；ADR-0077 推翻 ADR-0074"不做管线合并"
+// 的结论）：Episodic 会话文本与 RAG 文档摄取共享同一套 LLM 实体/关系抽取实现，
+// 消除此前两条管线（consolidation 自身的 llmExtract 与
+// internal/knowledge/graphrag 的 EntityExtractor/RelationExtractor）各自维护
+// 独立 Prompt、各触发一次 LLM 调用的重复燃烧与实体漂移问题。
+// 由 internal/knowledge/graphrag.GraphBuildPipeline 结构性实现（方法签名一致，
+// 无需适配器），cmd/polaris 装配时注入，打断 L1(memory) → L2(knowledge) 的层级
+// 依赖（与 GraphEntityFetcher 的既有模式一致）。nil 时退化为 ruleExtract 正则
+// 回退，不影响 Tier-0/无 LLM 场景。
+type SharedEntityExtractor interface {
+	ExtractEntitiesAndRelations(ctx context.Context, sourceID, text string) ([]*types.Entity, []*types.Relation, error)
+}
+
 type ConsolidationPipeline struct {
-	episodic     protocol.EpisodicMemory
-	semantic     protocol.SemanticMemory
-	skills       protocol.SkillRegistry
-	summarizer   memory.LLMSummarizer
-	writeFilter  *retrieval.WriteFilter
-	cascadeInv   *retrieval.CascadeInvalidator
-	db           protocol.SQLQuerier
-	gate         backgroundGate
-	skillEvolver SkillEvolver
-	graphFetcher GraphEntityFetcher // B2: 桥接检查 GraphRAG 侧
-	outbox       protocol.OutboxWriter
+	episodic        protocol.EpisodicMemory
+	semantic        protocol.SemanticMemory
+	skills          protocol.SkillRegistry
+	summarizer      memory.LLMSummarizer
+	writeFilter     *retrieval.WriteFilter
+	cascadeInv      *retrieval.CascadeInvalidator
+	db              protocol.SQLQuerier
+	gate            backgroundGate
+	skillEvolver    SkillEvolver
+	graphFetcher    GraphEntityFetcher    // B2: 桥接检查 GraphRAG 侧
+	entityExtractor SharedEntityExtractor // D3: 统一实体/关系抽取；nil 时走 ruleExtract
+	outbox          protocol.OutboxWriter
+}
+
+// WithEntityExtractor 注入统一实体/关系抽取器（D3/ADR-0077）。nil 时（默认）
+// 退化为纯规则抽取，行为与本次改动前一致。
+func (p *ConsolidationPipeline) WithEntityExtractor(ee SharedEntityExtractor) *ConsolidationPipeline {
+	p.entityExtractor = ee
+	return p
 }
 
 type backgroundGate interface {

@@ -151,6 +151,17 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			slog.Info("polaris: remote sandbox (Sbx-L4) initialized", "endpoint", sb.Cfg.Sandbox.Remote.Endpoint)
 		}
 	}
+	// PersistentSandbox（Sbx-L4-Persistent，D4/ADR-0078）：仅在运营者显式开启
+	// sandbox.l4_enabled 且硬件 Tier>=2 时构造并注入；Available() 当前恒定为
+	// false（后端未实现，见 sandbox_persistent.go），因此本段无论是否执行都
+	// 不改变任何现有路由行为——只是让"配置开关 + Tier 门控"这条前置管线提前
+	// 就位，供未来接入真实 checkpoint/restore 后端时复用。
+	if sb.Cfg.Thresholds.M7Tool.SandboxL4Enabled && sb.Cfg.System.Tier >= 2 {
+		persistentSandbox := sandbox.NewPersistentSandbox(sb.Cfg.Thresholds.M7Tool.SandboxL4Backend)
+		sandboxRouter.WithPersistent(persistentSandbox)
+		slog.Info("polaris: L4 persistent sandbox wiring enabled (backend not yet implemented, Available()=false)",
+			"backend", sb.Cfg.Thresholds.M7Tool.SandboxL4Backend, "tier", sb.Cfg.System.Tier)
+	}
 	if sb.AutoConf != nil {
 		sb.AutoConf.WithSandboxController(sandboxRouter)
 	}

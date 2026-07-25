@@ -104,6 +104,9 @@ ADR 被代码引用时，源文件头部加：
 | 0073 | KillSwitch 恢复路径统一（进程内活恢复模型 + `/_admin/unseal`，含原 ADR-0072） | Accepted（已执行） | 2026-07-23 |
 | 0074 | Semantic(M5) 与 GraphRAG(M10) 最小整合桥接（写入期去重 + 检索期联合种子，不做物理合并） | Accepted（已执行） | 2026-07-23 |
 | 0075 | Extension Upgrade Versioning（extension_catalog/instances 版本列 + `/plugins/{id}/upgrade`） | Accepted（已执行） | 2026-07-23 |
+| 0076 | Task Checkpoint and Resumption（task_checkpoints 表 + StateGraphExecutor 断点续跑，补齐 ADR-0057 execute 阶段保守跳过局限） | Accepted（已执行） | 2026-07-24 |
+| 0077 | Consolidation 与 GraphRAG 实体/关系抽取合一（推翻 ADR-0074 §3"不合并抽取实现"结论，写入期去重桥接与检索期联合种子不变） | Accepted（已执行） | 2026-07-25 |
+| 0078 | Sandbox-L4-Persistent 接线到位、后端诚实留空（CRIU/Firecracker 无可行选型，Available() 恒定 false，路由/配置/硬件门控完整接线） | Accepted（已执行，能力本身未生效） | 2026-07-25 |
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 

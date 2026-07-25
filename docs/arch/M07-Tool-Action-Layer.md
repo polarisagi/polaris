@@ -332,6 +332,21 @@ L3PolicyMonitor goroutine (每个 L3 sandbox 一个):
 
 **已知限制**（非本轮范围，供未来评估）：远端执行器侧的沙箱强度由第三方保证，Polaris 侧无法验证其物理隔离边界（HE-Rule-2 "可验证执行"在此退化为对第三方的信任假设，而非物理/密码学可验证）；成本计量与配额尚未接入 `internal/observability/budget`。
 
+### 4.7 Sandbox-L4-Persistent（D4/ADR-0078，可选，Tier2+）
+
+**定位**：`types.SandboxPersistent` 是一个**已完整接线但后端诚实留空**的可选能力，不是生产可用的持久化沙箱。Tier-0/Tier-1 环境不受影响、无需关心本节。
+
+**动机**：长程有状态 CodeAct 会话（`internal/action/codeact/code_act_stateful.go` 的 `StatefulSession`）目前的"持久化"本质是每次调用仍是全新一次性沙箱进程，脚本首尾注入样板代码把 Python `globals()` 通过标准库 `pickle` 序列化到磁盘文件（Bash 则用 `declare -p` 导出到 `.env` 文件）下次再 `source`/反序列化回来。文件句柄、线程、数据库连接等不可序列化对象会被静默跳过——这是刻意的 MVP 取舍而非 bug，但复杂 Python 环境下容易丢状态。原始设计（GD-14-003）设想引入 CRIU（Linux）或 Firecracker microVM snapshot 做真正的进程级 checkpoint/restore 来替代这套序列化方案。
+
+**为什么后端留空**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径（本文档 §4.1/§4.2 提到的 "microVM"/"gVisor" 字样是尚未同步的历史文档漂移，实际实现统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`）。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语：CRIU 理论上能对 bwrap 派生的普通 Linux 进程树做 dump，但需要额外套一层 PID namespace 才能拿到干净的 dump 边界，且仅覆盖 Linux；macOS 的 Seatbelt 完全没有等价机制。在没有真实 Tier2+ Linux 宿主验证 CRIU 端到端可用性的前提下伪造一个"看起来能持久化但实际不 dump/restore 任何东西"的假后端，属于 HE-Rule-2（可验证执行）明令禁止的伪装能力，比不实现更危险。
+
+**已交付的接线**（`internal/sandbox/sandbox_persistent.go`）：
+- `PersistentSandbox` 实现 `SandboxProvider` 接口；`Available()` 恒定返回 `false`（诚实占位，附带清晰的"为什么"注释）；`Run()` 作为纵深防御第二道闸门，即便被误调用也显式返回 `apperr.CodeUnimplemented`，不会静默假装成功。
+- `sandbox_router.go RouteByTier` 新增 `case types.SandboxPersistent`：`persistent.Available()==true` 时才路由至 L4，否则按 Container 同等的降级链回退（Container → Remote → fail-closed），语义与"保持现状回退到既有 StatefulSession 序列化路径"一致。
+- 硬件门控 + 配置阈值：`internal/config/thresholds.go` `M7ToolThresholds.SandboxL4Enabled`（默认 `false`）/`SandboxL4Backend`（默认 `"unimplemented"`，仅用于日志诊断）；`cmd/polaris/boot_tools.go` 仅在 `SandboxL4Enabled && Tier>=2` 时构造并注入 `PersistentSandbox`，注入本身不改变任何现有路由行为。
+
+**未来接入真实后端时**：只需替换 `PersistentSandbox.Available()`（换成真实的宿主能力探测，如检测 `criu` 二进制 + 内核 checkpoint/restore 支持，或 dockerd experimental checkpoint 特性开关）与 `Run()`（实现真正的 dump/restore），路由层/配置层/硬件门控均无需改动——变更面被限制在这一个文件内（R1.4 消费方接口 + 组合原语的价值）。
+
 ---
 
 ## 5. Policy Gate
