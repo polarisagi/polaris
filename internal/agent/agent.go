@@ -68,6 +68,7 @@ type Agent struct {
 	piiDetector        *guard.PIIDetector           // PII 检测与脱敏器
 	dagRunner          DAGRunner                    // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
 	dagValidator       DAGValidator                 // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
+	handoffPoster      HandoffPoster                // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
 	personaRefiner     *agentctx.PersonaRefiner     // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 	anomalyFilter      *guard.AnomalyDistanceFilter // OWASP LLM08 输入异常检测（M11 §2.2），按会话隔离；NewAgent 默认构造
 

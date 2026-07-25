@@ -147,6 +147,23 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}, nil
 		}
 
+		if toolName == "transfer_to_agent" {
+			// D5（GD-14-004）：与 code_act 同级特判，不走通用 ToolRegistry 分发。
+			var handoffArgs struct {
+				TargetAgentRole string `json:"target_agent_role"`
+				ContextSummary  string `json:"context_summary"`
+				// TaintLevel 字段仍解析但不采信（与 code_act 的 capability_id 同理，
+				// 见下方说明）——防止 LLM 通过工具参数伪造更低污点等级。
+				TaintLevel types.TaintLevel `json:"taint_level"`
+			}
+			if err := json.Unmarshal(args, &handoffArgs); err != nil {
+				return nil, apperr.Wrap(apperr.CodeInvalidInput, "transfer_to_agent: unmarshal args", err)
+			}
+			// 不采信 handoffArgs.TaintLevel：使用 DAG 执行器传入的授信 taintLevel
+			// （函数签名参数），与 F0-2/GD-04-001 同一不变量。
+			return a.executeTransferToAgent(ctx, handoffArgs.TargetAgentRole, handoffArgs.ContextSummary, taintLevel)
+		}
+
 		tool, err := a.toolRegistry.Lookup(toolName)
 		isIdempotent := true
 		if err == nil {
