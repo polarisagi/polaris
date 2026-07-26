@@ -130,11 +130,9 @@ type SubstrateBundle struct {
 // bootSubstrate 执行 §0.5~§4 初始化，返回 L0 基础设施 bundle。
 // stop 来自 run() 的 signal.NotifyContext，注入 bundle 供 OTA restart fn 使用。
 func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBundle, error) { //nolint:gocyclo
-	concurrent.SetOnPanic(func() {
-		if metrics.InstrGoroutinePanicTotal != nil {
-			metrics.InstrGoroutinePanicTotal.Add(context.Background(), 1)
-		}
-	})
+	// SafeGo panic hook：将 goroutine panic 上报到 polaris_goroutine_panic_total 指标（HE-1）。
+	// RecordGoroutinePanic 内部已做 nil 保护，直接传递函数引用消除与此处内联实现的重复。
+	concurrent.SetOnPanic(metrics.RecordGoroutinePanic)
 
 	// ─── 0.5 内核完整性校验 (L4) ─────────────────────────────────────────────
 	if err := config.VerifyKernelIntegrity(); err != nil {
