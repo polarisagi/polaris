@@ -434,3 +434,11 @@ mcp_servers: []
 | `MaxRuntimeSec` | int | 每行超时秒数（0=1800） |
 
 实现见 `internal/execute/orchestrator/`（csv_fanout + Blackboard.PeekTask）。
+
+---
+
+## §3-sexies PatternDebate 编排模式（编排模式 11）
+
+根据 GD-6 与 ADR-0080，系统引入了对抗性辩论（Debate）原语。
+该模式执行流：Judge 初始议题 -> Proponent/Opponent 轮番辩论 -> Judge 结案陈词。
+不使用阻塞轮询（`bb.Subscribe`），而是由 `DebateExecutor` 将状态落盘至 Checkpoint 并返回 `apperr.ErrSuspend` 进行异步挂起，复用 GD-1 引入的 Handoff/Watcher 机制跨 Agent 唤醒。
