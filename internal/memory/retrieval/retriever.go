@@ -31,7 +31,58 @@ const (
 // 结构体定义与构造函数见 retriever_construct.go；辅助检索函数见 retriever_helpers.go（R7 拆分）。
 // ============================================================================
 
-func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) { //nolint:gocyclo,nestif
+// searchGraphSpreadingActivation 执行 Stage 1c 图路径召回：取 BM25 Top-3 作为种子节点，
+// 通过 Spreading Activation 多种子能量扩散找到关联的 episodic 记忆（从 Search 拆出，
+// nestif 治理，行为不变）。调用方需保证 hr.graph != nil && len(bm25Results) > 0。
+func (hr *HybridRetrieverImpl) searchGraphSpreadingActivation(ctx context.Context, bm25Results []types.ScoredFragment) []types.ScoredFragment {
+	const (
+		saMaxSeeds          = 3
+		saMaxDepth          = 3
+		saEnergyDecay       = 0.7
+		saDormancyThreshold = 0.05
+		saFanOutLimit       = 10
+	)
+	seedIDs := make([]string, 0, saMaxSeeds)
+	seenSeed := make(map[string]struct{}, saMaxSeeds)
+	for _, r := range bm25Results {
+		if len(seedIDs) >= saMaxSeeds {
+			break
+		}
+		if _, dup := seenSeed[r.Source]; !dup && r.Source != "" {
+			seenSeed[r.Source] = struct{}{}
+			seedIDs = append(seedIDs, r.Source)
+		}
+	}
+
+	nodes, err := hr.graph.SpreadingActivation(seedIDs, saMaxDepth, saEnergyDecay, saDormancyThreshold, saFanOutLimit)
+	if err != nil {
+		return nil
+	}
+
+	var graphResults []types.ScoredFragment
+	for _, n := range nodes {
+		raw, kvErr := hr.store.Get(ctx, []byte("episodic:"+n.ID))
+		if kvErr != nil {
+			slog.Debug("polaris: skipping graph node due to kv missing", "node_id", n.ID, "err", kvErr)
+			continue
+		}
+		var ev types.Event
+		if jsonErr := json.Unmarshal(raw, &ev); jsonErr != nil {
+			slog.Debug("polaris: skipping graph node due to json unmarshal error", "node_id", n.ID, "err", jsonErr)
+			continue
+		}
+		graphResults = append(graphResults, types.ScoredFragment{
+			Content:      string(ev.Payload),
+			Score:        n.Score,
+			Source:       n.ID,
+			EvidenceType: types.EvidenceWeakSemantic,
+			TaintLevel:   taintForSource(n.ID),
+		})
+	}
+	return graphResults
+}
+
+func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) { //nolint:gocyclo
 	// Stage 0 — 确定扫描前缀（隐私门控由调用方 M11 注入，此处按 scope 路由）
 	prefix := []byte("chunk:")
 	if scope.Type == "memory" {
@@ -227,48 +278,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	//   - SA energy 按边权重传播，分数有物理意义，无需外部硬编码
 	//   - 参数：maxDepth=3, energyDecay=0.7, dormancy=0.05, fanOut=10
 	if hr.graph != nil && len(bm25Results) > 0 {
-		const (
-			saMaxSeeds          = 3
-			saMaxDepth          = 3
-			saEnergyDecay       = 0.7
-			saDormancyThreshold = 0.05
-			saFanOutLimit       = 10
-		)
-		seedIDs := make([]string, 0, saMaxSeeds)
-		seenSeed := make(map[string]struct{}, saMaxSeeds)
-		for _, r := range bm25Results {
-			if len(seedIDs) >= saMaxSeeds {
-				break
-			}
-			if _, dup := seenSeed[r.Source]; !dup && r.Source != "" {
-				seenSeed[r.Source] = struct{}{}
-				seedIDs = append(seedIDs, r.Source)
-			}
-		}
-		if nodes, err := hr.graph.SpreadingActivation(seedIDs, saMaxDepth, saEnergyDecay, saDormancyThreshold, saFanOutLimit); err == nil {
-			for _, n := range nodes {
-				var content string
-				if raw, kvErr := hr.store.Get(ctx, []byte("episodic:"+n.ID)); kvErr == nil {
-					var ev types.Event
-					if jsonErr := json.Unmarshal(raw, &ev); jsonErr == nil {
-						content = string(ev.Payload)
-					} else {
-						slog.Debug("polaris: skipping graph node due to json unmarshal error", "node_id", n.ID, "err", jsonErr)
-						continue
-					}
-				} else {
-					slog.Debug("polaris: skipping graph node due to kv missing", "node_id", n.ID, "err", kvErr)
-					continue
-				}
-				graphResults = append(graphResults, types.ScoredFragment{
-					Content:      content,
-					Score:        n.Score,
-					Source:       n.ID,
-					EvidenceType: types.EvidenceWeakSemantic,
-					TaintLevel:   taintForSource(n.ID),
-				})
-			}
-		}
+		graphResults = hr.searchGraphSpreadingActivation(ctx, bm25Results)
 	}
 
 	// Stage 2 — RRF 融合 (k=config.RRFK)

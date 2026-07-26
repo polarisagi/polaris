@@ -96,7 +96,10 @@ func (r *SQLiteExtensionRepository) ListInstances(ctx context.Context) ([]types.
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListInstances rows", err)
+	}
+	return result, nil
 }
 
 func (r *SQLiteExtensionRepository) DeleteInstance(ctx context.Context, id string) error {
@@ -142,7 +145,10 @@ func (r *SQLiteExtensionRepository) SearchCatalog(ctx context.Context, query str
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.SearchCatalog rows", err)
+	}
+	return result, nil
 }
 
 func (r *SQLiteExtensionRepository) ListCatalogByIDs(ctx context.Context, ids []string) ([]types.ExtCatalogRow, error) {
@@ -172,7 +178,10 @@ func (r *SQLiteExtensionRepository) ListCatalogByIDs(ctx context.Context, ids []
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ListCatalogByIDs rows", err)
+	}
+	return result, nil
 }
 
 func (r *SQLiteExtensionRepository) ReplaceMarketplaceCatalog(ctx context.Context, marketplaceID string, entries []types.ExtCatalogRow) (int, error) {
@@ -197,7 +206,10 @@ func (r *SQLiteExtensionRepository) ReplaceMarketplaceCatalog(ctx context.Contex
 		syncedCount++
 	}
 
-	return syncedCount, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.ReplaceMarketplaceCatalog commit", err)
+	}
+	return syncedCount, nil
 }
 
 func (r *SQLiteExtensionRepository) DeleteOrphanCatalogEntries(ctx context.Context, activeMarketplaceIDs []any) error {

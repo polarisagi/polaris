@@ -62,7 +62,7 @@ func (mre *MapReduceExecutor) Execute(ctx context.Context, parentTaskID string, 
 	for len(pendingMap) > 0 {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		case ev, ok := <-events:
 			if !ok {
 				return nil, apperr.New(apperr.CodeInternal, "events channel closed unexpectedly")

@@ -242,9 +242,13 @@ func (e *ComputerUseEngine) resolveAction(ctx context.Context, intent string, st
 		Coordinate []int  `json:"coordinate,omitempty"`
 		Text       string `json:"text,omitempty"`
 	}
-	return json.Marshal(execArgs{
+	data, err := json.Marshal(execArgs{
 		Action:     out.Action,
 		Coordinate: out.Coordinate,
 		Text:       out.Text,
 	})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "lam: 序列化 executor 参数失败", err)
+	}
+	return data, nil
 }

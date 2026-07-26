@@ -102,7 +102,10 @@ func EmailSendMessage(smtpHost, smtpPort, address, password, to, subject, body s
 			"\r\n" +
 			body + "\r\n",
 	)
-	return smtp.SendMail(smtpHost+":"+smtpPort, auth, address, []string{to}, msg)
+	if err := smtp.SendMail(smtpHost+":"+smtpPort, auth, address, []string{to}, msg); err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: SendMail 失败", err)
+	}
+	return nil
 }
 
 // ─── 轻量 IMAP 客户端 ─────────────────────────────────────────────────────────

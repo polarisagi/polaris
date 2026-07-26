@@ -181,14 +181,9 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	r.mu.RLock()
 	vault := r.tokenVault
 	r.mu.RUnlock()
-	execInput := input
-	if vault != nil && vault.HasTokens(string(input)) {
-		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
-		restored, restoreErr := vault.RestoreForTask(taskID, string(input))
-		if restoreErr != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "tool_registry: PII token restore failed, fail-closed", restoreErr)
-		}
-		execInput = []byte(restored)
+	execInput, err := r.restorePIIInput(ctx, vault, input)
+	if err != nil {
+		return nil, err
 	}
 
 	// Anomaly Distance Filter Check (M11 §2.2)
@@ -209,38 +204,12 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 	})
 
 	// PostCheck: 防止 TOCTOU 导致已取消任务的副作用不被感知（重用 SideEffectPreCheck 接口）
-	r.mu.RLock()
-	checker := r.blackboard
-	r.mu.RUnlock()
-	if checker != nil {
-		taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
-		agentID, _ := ctx.Value(protocol.CtxAgentIDKey{}).(string)
-		claimedVersion, _ := ctx.Value(protocol.CtxVersionKey{}).(int32)
-		if taskID != "" {
-			if postErr := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); postErr != nil {
-				slog.Warn("tool_registry: post-check failed (TOCTOU race detected after execution)", "task", taskID, "err", postErr)
-				return &types.ToolResult{
-					Success:    false,
-					Error:      "task reclaimed or revoked during execution (TOCTOU)",
-					TaintLevel: taintLevel,
-				}, apperr.New(apperr.CodeConflict, "tool_registry: side effect occurred after task was reclaimed/revoked")
-			}
-		}
+	if postRes, postErr := r.postCheckTOCTOU(ctx, taintLevel); postRes != nil {
+		return postRes, postErr
 	}
 
-	if vault != nil {
-		if redacted := r.redactOutputsForPII(ctx, vault, execErr, execRes); redacted != nil {
-			execErr = redacted
-		}
-	}
-
-	if execErr != nil {
-		r.reportOutcome(name, false, 0, execErr.Error(), ctx, execInput, nil)
-		return &types.ToolResult{ //nolint:nilerr
-			Success:    false,
-			Error:      execErr.Error(),
-			TaintLevel: taintLevel,
-		}, nil
+	if result, handled := r.finalizeExecError(ctx, name, execErr, execRes, execInput, vault, taintLevel); handled {
+		return result, nil
 	}
 
 	finalResult := &types.ToolResult{

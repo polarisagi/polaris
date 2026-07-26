@@ -338,8 +338,8 @@ func (a *Agent) Run(ctx context.Context) error {
 					return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
 				}
 				// context 取消由 M8 Reaper 触发——直接退出，不触发 S_ROLLBACK
-				if ctx.Err() != nil {
-					return ctx.Err()
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 				}
 				return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
 			}
@@ -370,7 +370,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			continue
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		}
 	}
 }

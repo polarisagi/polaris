@@ -253,7 +253,10 @@ func (c *connResponseWriter) flush() error {
 		Body:          io.NopCloser(bytes.NewReader(c.body)),
 		ContentLength: int64(len(c.body)),
 	}
-	return resp.Write(c.conn)
+	if err := resp.Write(c.conn); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "mock_proxy: 写回响应失败", err)
+	}
+	return nil
 }
 
 // EnvVars 返回需要注入沙箱的环境变量。

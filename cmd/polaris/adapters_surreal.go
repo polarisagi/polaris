@@ -14,6 +14,7 @@ import (
 	knowledgepkg "github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ─── surrealCognAdapter ────────────────────────────────────────────────────────
@@ -24,25 +25,37 @@ import (
 type surrealCognAdapter struct{ s *store.SurrealDBCoreStore }
 
 func (a *surrealCognAdapter) FTSIndex(docID, text string) error {
-	return a.s.FTSIndex(docID, text)
+	if err := a.s.FTSIndex(docID, text); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "FTSIndex 写入失败", err)
+	}
+	return nil
 }
 
 func (a *surrealCognAdapter) FTSDelete(docID string) error {
-	return a.s.FTSDelete(docID)
+	if err := a.s.FTSDelete(docID); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "FTSDelete 删除失败", err)
+	}
+	return nil
 }
 
 func (a *surrealCognAdapter) VecUpsert(id string, embedding []float32) error {
-	return a.s.VecUpsert(id, embedding)
+	if err := a.s.VecUpsert(id, embedding); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "VecUpsert 写入失败", err)
+	}
+	return nil
 }
 
 func (a *surrealCognAdapter) GraphRelate(fromID, edgeType, toID string, weight float64) error {
-	return a.s.GraphRelate(fromID, edgeType, toID, weight)
+	if err := a.s.GraphRelate(fromID, edgeType, toID, weight); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "GraphRelate 写入失败", err)
+	}
+	return nil
 }
 
 func (a *surrealCognAdapter) VecKNN(query []float32, k int) ([]types.CognitiveSearchResult, error) {
 	hits, err := a.s.VecKNN(query, k)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "VecKNN 检索失败", err)
 	}
 	out := make([]types.CognitiveSearchResult, len(hits))
 	for i, h := range hits {
@@ -54,7 +67,7 @@ func (a *surrealCognAdapter) VecKNN(query []float32, k int) ([]types.CognitiveSe
 func (a *surrealCognAdapter) FTSSearch(query string, k int) ([]types.CognitiveSearchResult, error) {
 	hits, err := a.s.FTSSearch(query, k)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "FTSSearch 检索失败", err)
 	}
 	out := make([]types.CognitiveSearchResult, len(hits))
 	for i, h := range hits {
@@ -123,9 +136,13 @@ func (a *knowledgeBaseAdapter) SearchJSON(ctx context.Context, query string, top
 		DocScope: docScope,
 	})
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "KnowledgeBase.Search 失败", err)
 	}
-	return json.Marshal(results)
+	out, err := json.Marshal(results)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "检索结果序列化失败", err)
+	}
+	return out, nil
 }
 
 // ─── fsmKnowledgeAdapter ──────────────────────────────────────────────────────
@@ -142,7 +159,7 @@ func (a *fsmKnowledgeAdapter) SearchRAG(ctx context.Context, query string, topK 
 		TopK:  topK,
 	})
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "KnowledgeBase.Search 失败", err)
 	}
 	out := make([]fsm.KnowledgeResult, len(results))
 	for i, r := range results {
@@ -166,7 +183,7 @@ func (a nativeCognAdapter) FTSSearch(query string, k int) ([]native.ScoredResult
 	}
 	res, err := a.s.FTSSearch(query, k)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "FTSSearch 检索失败", err)
 	}
 	out := make([]native.ScoredResult, len(res))
 	for i, r := range res {
@@ -181,7 +198,7 @@ func (a nativeCognAdapter) VecKNN(query []float32, k int) ([]native.ScoredResult
 	}
 	res, err := a.s.VecKNN(query, k)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "VecKNN 检索失败", err)
 	}
 	out := make([]native.ScoredResult, len(res))
 	for i, r := range res {
@@ -196,7 +213,7 @@ func (a nativeCognAdapter) GraphSpreadingActivation(startIDs []string, maxDepth 
 	}
 	res, err := a.s.GraphSpreadingActivation(startIDs, maxDepth, energyDecay, dormancyThreshold, fanOutLimit)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "GraphSpreadingActivation 检索失败", err)
 	}
 	out := make([]native.ScoredResult, len(res))
 	for i, r := range res {
@@ -209,12 +226,21 @@ func (a nativeCognAdapter) GraphSpreadingActivation(startIDs []string, maxDepth 
 type pluginCognIndexAdapter struct{ s *store.SurrealDBCoreStore }
 
 func (a *pluginCognIndexAdapter) FTSIndex(docID, text string) error {
-	return a.s.FTSIndex(docID, text)
+	if err := a.s.FTSIndex(docID, text); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "FTSIndex 写入失败", err)
+	}
+	return nil
 }
 
 func (a *pluginCognIndexAdapter) VecUpsert(id string, embedding []float32) error {
-	return a.s.VecUpsert(id, embedding)
+	if err := a.s.VecUpsert(id, embedding); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "VecUpsert 写入失败", err)
+	}
+	return nil
 }
 func (a *surrealCognAdapter) VecDelete(id string) error {
-	return a.s.VecDelete(id)
+	if err := a.s.VecDelete(id); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "VecDelete 删除失败", err)
+	}
+	return nil
 }

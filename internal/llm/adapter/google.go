@@ -93,6 +93,37 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "GoogleAgentPlatformAdapter.Infer", err)
 	}
+
+	out, err := a.sendGeminiInferRequest(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.buildInferResponseFromGemini(out, req.Model)
+}
+
+// geminiInferResponse 是 Gemini 非流式响应的解码结构（从 Infer 内联匿名结构体上提为
+// 具名类型，供 sendGeminiInferRequest 签名引用）。
+type geminiInferResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text         string              `json:"text"`
+				FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
+			} `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
+	} `json:"usageMetadata"`
+}
+
+// sendGeminiInferRequest 选取凭据、发送非流式 Gemini 请求并解码响应，同时记录凭据健康状态
+// 供 CredentialPool 轮换判定（从 Infer 拆出，gocyclo 治理，行为不变）。
+func (a *GoogleAgentPlatformAdapter) sendGeminiInferRequest(ctx context.Context, body []byte) (*geminiInferResponse, error) {
 	cred := a.credPool.Pick()
 	if cred == nil {
 		return nil, apperr.New(apperr.CodeResourceExhausted, "GoogleAgentPlatformAdapter.Infer: no available credential (all keys cooling down)")
@@ -122,26 +153,22 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 	}
 	cred.RecordResult(nil)
 
-	var out struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string              `json:"text"`
-					FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
-		UsageMetadata struct {
-			PromptTokenCount        int `json:"promptTokenCount"`
-			CandidatesTokenCount    int `json:"candidatesTokenCount"`
-			CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
-		} `json:"usageMetadata"`
-	}
+	var out geminiInferResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&out); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "google: decode", err)
 	}
+	return &out, nil
+}
 
+// buildInferResponseFromGemini 组装 ProviderResponse、记账 token 用量并做空响应兜底校验
+// （从 Infer 拆出，gocyclo 治理，行为不变）。
+//
+// Gemini doesn't use standard ToolCall struct in InferResponse yet, wait, polaris protocol uses string / json for stream but for non-stream what does it use?
+// The problem is InferResponse only has Content string. Tool calls in non-stream need to be handled if types.InferResponse supports it.
+// Looking at adapter_anthropic.go, Infer() only returns Content string. Our Tool calls are handled primarily in StreamInfer.
+// Wait, types.InferResponse doesn't have ToolCalls natively?
+// Let's check types.InferResponse definition via a quick look.
+func (a *GoogleAgentPlatformAdapter) buildInferResponseFromGemini(out *geminiInferResponse, modelReq string) (*types.ProviderResponse, error) {
 	text, finishReason := "", ""
 
 	if len(out.Candidates) > 0 {
@@ -153,12 +180,6 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 
 		}
 	}
-
-	// Gemini doesn't use standard ToolCall struct in InferResponse yet, wait, polaris protocol uses string / json for stream but for non-stream what does it use?
-	// The problem is InferResponse only has Content string. Tool calls in non-stream need to be handled if types.InferResponse supports it.
-	// Looking at adapter_anthropic.go, Infer() only returns Content string. Our Tool calls are handled primarily in StreamInfer.
-	// Wait, types.InferResponse doesn't have ToolCalls natively?
-	// Let's check types.InferResponse definition via a quick look.
 
 	resp := &types.ProviderResponse{
 		Content:      text,
@@ -176,7 +197,7 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 		}
 	}
 
-	metrics.RecordLLMCacheHit("google", req.Model, resp.Usage.CacheHitTokens > 0)
+	metrics.RecordLLMCacheHit("google", modelReq, resp.Usage.CacheHitTokens > 0)
 
 	if resp.Content == "" && len(resp.ToolCalls) == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")

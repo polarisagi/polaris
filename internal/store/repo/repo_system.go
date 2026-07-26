@@ -98,7 +98,10 @@ func (r *SQLiteSystemRepository) ListPreferences(ctx context.Context) (map[strin
 		}
 		prefs[k] = v
 	}
-	return prefs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteSystemRepository.ListPreferences rows", err)
+	}
+	return prefs, nil
 }
 
 func (r *SQLiteSystemRepository) GetPermissionMode(ctx context.Context) (types.PermissionMode, error) {

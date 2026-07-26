@@ -49,23 +49,50 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 	return fm.cleanupWithKV(ctx)
 }
 
+// decayUpdateItem 是 cleanupWithSQL 分流出的"需更新 decay_weight"条目。
+type decayUpdateItem struct {
+	ID          int64
+	DecayWeight float64
+}
+
+// archiveItem 是 cleanupWithSQL 分流出的"需归档"条目。
+type archiveItem struct {
+	ID        int64
+	EventUUID string
+}
+
+// txBeginner 是可选的事务开启能力（db 未实现时降级为非事务单语句执行）。
+type txBeginner interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
 func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQLQuerier) error {
+	now := time.Now().UnixMilli()
+	toUpdate, toArchive, err := fm.queryDecayCandidates(ctx, db, now)
+	if err != nil {
+		return err
+	}
+
+	txDB, _ := db.(txBeginner)
+
+	fm.applyDecayUpdates(ctx, db, txDB, toUpdate)
+	fm.applyArchival(ctx, db, txDB, toArchive, now)
+
+	return nil
+}
+
+// queryDecayCandidates 扫描未归档且 salience<1.0 的 episodic 事件，按衰减权重分流为
+// "需要更新 decay_weight" 与 "需要归档"（从 cleanupWithSQL 拆出，gocyclo 治理，行为不变）。
+func (fm *ForgettingManager) queryDecayCandidates(ctx context.Context, db protocol.SQLQuerier, now int64) ([]decayUpdateItem, []archiveItem, error) {
 	rows, err := db.QueryContext(ctx, "SELECT id, salience, occurred_at, event_uuid FROM episodic_events WHERE archived = 0 AND salience < 1.0")
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "ForgettingManager.cleanupWithSQL", err)
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "ForgettingManager.cleanupWithSQL", err)
 	}
 	defer rows.Close()
 
-	var toUpdate []struct {
-		ID          int64
-		DecayWeight float64
-	}
-	var toArchive []struct {
-		ID        int64
-		EventUUID string
-	}
+	var toUpdate []decayUpdateItem
+	var toArchive []archiveItem
 
-	now := time.Now().UnixMilli()
 	for rows.Next() {
 		var id int64
 		var salience float64
@@ -78,28 +105,23 @@ func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQL
 		ageHours := float64(now-occurredAt) / 3600000.0
 		decayWeight := fm.UpdateDecay(salience, ageHours)
 
-		if decayWeight < fm.salienceThreshold {
-			if ageHours > 30*24 {
-				toArchive = append(toArchive, struct {
-					ID        int64
-					EventUUID string
-				}{id, eventUUID})
-			} else {
-				toUpdate = append(toUpdate, struct {
-					ID          int64
-					DecayWeight float64
-				}{id, decayWeight})
-			}
+		if decayWeight >= fm.salienceThreshold {
+			continue
+		}
+		if ageHours > 30*24 {
+			toArchive = append(toArchive, archiveItem{ID: id, EventUUID: eventUUID})
+		} else {
+			toUpdate = append(toUpdate, decayUpdateItem{ID: id, DecayWeight: decayWeight})
 		}
 	}
-	rows.Close()
+	return toUpdate, toArchive, nil
+}
 
-	txDB, hasTx := db.(interface {
-		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
-	})
-
+// applyDecayUpdates 批量写入 decay_weight 更新，事务可用时同步写 change_log
+// （从 cleanupWithSQL 拆出，gocyclo 治理，行为不变）。
+func (fm *ForgettingManager) applyDecayUpdates(ctx context.Context, db protocol.SQLQuerier, txDB txBeginner, toUpdate []decayUpdateItem) {
 	for _, item := range toUpdate {
-		if !hasTx {
+		if txDB == nil {
 			_, err := db.ExecContext(ctx, "UPDATE episodic_events SET decay_weight=? WHERE id=?", item.DecayWeight, item.ID)
 			if err != nil {
 				slog.Warn("ForgettingManager.cleanupWithSQL: update decay_weight failed", "id", item.ID, "err", err)
@@ -124,19 +146,19 @@ func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQL
 			_ = tx.Commit()
 		}
 	}
+}
 
+// applyArchival 批量归档条目（archived=1），事务可用时同步写 change_log，并同步删除
+// 认知索引 FTS/Vec 条目（从 cleanupWithSQL 拆出，gocyclo 治理，行为不变）。
+func (fm *ForgettingManager) applyArchival(ctx context.Context, db protocol.SQLQuerier, txDB txBeginner, toArchive []archiveItem, now int64) {
 	for _, item := range toArchive {
-		if !hasTx {
+		if txDB == nil {
 			// archived=1 + archive_offset 填充
 			_, err := db.ExecContext(ctx, "UPDATE episodic_events SET archived=1, archive_offset=? WHERE id=?", now, item.ID)
 			if err != nil {
 				slog.Warn("ForgettingManager.cleanupWithSQL: archive failed", "id", item.ID, "err", err)
 			}
-			// 同步 cognitive.FTSDelete/VecDelete
-			if fm.cognitive != nil && item.EventUUID != "" {
-				_ = fm.cognitive.FTSDelete("ep_" + item.EventUUID)
-				_ = fm.cognitive.VecDelete("ep_" + item.EventUUID)
-			}
+			fm.deleteCognitiveIndex(item.EventUUID)
 			continue
 		}
 
@@ -156,15 +178,19 @@ func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQL
 			slog.Warn("ForgettingManager.cleanupWithSQL: archive tx failed", "id", item.ID, "err", err)
 		} else {
 			_ = tx.Commit()
-			// 同步 cognitive.FTSDelete/VecDelete
-			if fm.cognitive != nil && item.EventUUID != "" {
-				_ = fm.cognitive.FTSDelete("ep_" + item.EventUUID)
-				_ = fm.cognitive.VecDelete("ep_" + item.EventUUID)
-			}
+			fm.deleteCognitiveIndex(item.EventUUID)
 		}
 	}
+}
 
-	return nil
+// deleteCognitiveIndex 同步删除认知索引 FTS/Vec 条目（从 cleanupWithSQL 拆出，
+// gocyclo 治理，行为不变）。
+func (fm *ForgettingManager) deleteCognitiveIndex(eventUUID string) {
+	if fm.cognitive == nil || eventUUID == "" {
+		return
+	}
+	_ = fm.cognitive.FTSDelete("ep_" + eventUUID)
+	_ = fm.cognitive.VecDelete("ep_" + eventUUID)
 }
 
 func (fm *ForgettingManager) cleanupWithKV(ctx context.Context) error {

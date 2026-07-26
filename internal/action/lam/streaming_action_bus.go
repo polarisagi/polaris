@@ -113,11 +113,14 @@ func (b *StreamingActionBus) StreamAction(ctx context.Context, action Continuous
 		return nil
 	}
 
-	return b.displayServer.SendAction(map[string]any{
+	if err := b.displayServer.SendAction(map[string]any{
 		"type":       action.ActionType,
 		"vector":     vec,
 		"confidence": action.Confidence,
-	})
+	}); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "streaming_action_bus: SendAction 失败", err)
+	}
+	return nil
 }
 
 // StepCount 返回当前已发送的动作步数。
@@ -175,7 +178,7 @@ func (rl *ActionRateLimiter) Acquire(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断取消 vs 超时
 		case <-time.After(wait):
 		}
 	}

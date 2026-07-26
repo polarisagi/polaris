@@ -82,7 +82,11 @@ func (r *LoopbackResolver) LookupHost(ctx context.Context, host string) ([]strin
 		return []string{host}, nil
 	}
 	if isLocalTLD(host) {
-		return r.resolver.LookupHost(ctx, host)
+		addrs, err := r.resolver.LookupHost(ctx, host)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeNetworkUnavailable, "local_only: LookupHost 失败: "+host, err)
+		}
+		return addrs, nil
 	}
 	return nil, &ErrLocalOnlyDNSBlocked{Host: host}
 }

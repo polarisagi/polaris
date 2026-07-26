@@ -117,12 +117,12 @@ func edgeReadAudio(ctx context.Context, conn *websocket.Conn) ([]byte, error) {
 loop:
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, err //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		}
 		msgType, msg, err := conn.ReadMessage()
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				break loop

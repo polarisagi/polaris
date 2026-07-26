@@ -494,7 +494,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			// ProcessHandle 不持有实际进程；真正的执行由 SkillExecutor.ExecuteSkill 完成。
 			spawnFn := func(ctx context.Context, skillID string) (*skill.ProcessHandle, error) {
 				if _, err := tb.SkillRegistry.Get(ctx, skillID, ""); err != nil {
-					return nil, err
+					return nil, apperr.Wrap(apperr.CodeInternal, "boot_agent: SkillRegistry.Get 失败", err)
 				}
 				return &skill.ProcessHandle{SkillID: skillID, ReadyAt: time.Now()}, nil
 			}

@@ -204,6 +204,26 @@ func (s *SQLiteRolloutStore) ListPendingShadow(ctx context.Context) ([]string, e
 	return versions, nil
 }
 
+// checkMetaAuditGate 检查 V8-S2 Meta-Eval 前置门禁；返回 hold=true 时应停留在当前
+// Gate 不推进（fail-closed，从 AdvanceGate 拆出，gocyclo 治理，行为不变）。
+func (s *SQLiteRolloutStore) checkMetaAuditGate(ctx context.Context, version string) (hold bool) {
+	if !s.metaAuditGateEnabled || s.metaAuditReader == nil {
+		return false
+	}
+	passed, computedAt, ok, maErr := s.metaAuditReader.LatestMetaAudit(ctx)
+	if maErr != nil {
+		slog.Warn("rollout_store: meta_audit check errored, holding at current gate (V8-S2 fail-closed)",
+			"version", version, "err", maErr)
+		return true
+	}
+	if !ok || !passed || time.Since(computedAt) > s.metaAuditMaxAge {
+		slog.Warn("rollout_store: meta_audit missing/failed/stale, holding at current gate (V8-S2 fail-closed)",
+			"version", version, "recorded", ok, "passed", passed, "computed_at", computedAt, "max_age", s.metaAuditMaxAge)
+		return true
+	}
+	return false
+}
+
 // AdvanceGate 根据当前指标推进或触发硬停止。
 // Gate 路径：
 //
@@ -237,18 +257,8 @@ func (s *SQLiteRolloutStore) AdvanceGate(ctx context.Context, version string, st
 	// MetaAuditReader 文档）。fail-closed：结论缺失/未通过/过期，一律停在当前
 	// Gate 不推进，也不 Rollback（可能只是运维还没跑审计，不代表候选本身有问题，
 	// 不应对候选做出否定性判断）。
-	if s.metaAuditGateEnabled && s.metaAuditReader != nil {
-		passed, computedAt, ok, maErr := s.metaAuditReader.LatestMetaAudit(ctx)
-		if maErr != nil {
-			slog.Warn("rollout_store: meta_audit check errored, holding at current gate (V8-S2 fail-closed)",
-				"version", version, "err", maErr)
-			return state, nil
-		}
-		if !ok || !passed || time.Since(computedAt) > s.metaAuditMaxAge {
-			slog.Warn("rollout_store: meta_audit missing/failed/stale, holding at current gate (V8-S2 fail-closed)",
-				"version", version, "recorded", ok, "passed", passed, "computed_at", computedAt, "max_age", s.metaAuditMaxAge)
-			return state, nil
-		}
+	if s.checkMetaAuditGate(ctx, version) {
+		return state, nil
 	}
 
 	// Gate 2+：稳定期检查（24h）

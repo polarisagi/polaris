@@ -1,13 +1,19 @@
 package chat
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -132,6 +138,75 @@ func (s *ChatHandler) buildStreamUserMessage(req agentStreamRequest) (finalInput
 	}
 
 	return finalInput, userMsg
+}
+
+// acquireStreamAgent 从 AgentPool 获取本次流式对话的 AgentController，处理资源耗尽降级
+// （从 HandleAgentStream 拆出，nestif 治理，行为不变）。ok=false 表示已写入 SSE 错误/降级
+// 提示，调用方应立即 return；release 仅在 ok=true 时有效，调用方需 defer release()。
+func (s *ChatHandler) acquireStreamAgent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req agentStreamRequest, sessionID string) (protocol.AgentController, func(), bool) {
+	agentCtrl, release, err := s.AgentPool.Acquire(ctx, sessionID)
+	if err == nil {
+		return agentCtrl, release, true
+	}
+
+	var aerr *apperr.Error
+	if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
+		// 后台计算请求
+		if req.RunID != "" || req.ReasoningEffort == "background" {
+			s.WriteSSEError(w, flusher, "system_notice", "后台提炼排队中", sessionID, nil)
+			return nil, nil, false
+		}
+		// 前台对话请求
+		WriteSSE(w, flusher, "system_notice", map[string]any{
+			"message": "系统当前负载较高，已为您转入沙箱保护模式，稍等片刻",
+			"retry":   true,
+		})
+		return nil, nil, false
+	}
+	s.WriteSSEError(w, flusher, "agent_pool_error", "failed to acquire agent: "+err.Error(), sessionID, err)
+	return nil, nil, false
+}
+
+// handleStreamFSMEvent 处理单条 FSM 流事件：按类型转发 SSE 并累积 reply/inferErr
+// （从 handleAgentStreamFSM 拆出，gocyclo 治理，行为不变）。
+// 返回 stop=true 时调用方应结束事件循环（task_done 状态事件）。
+func (s *ChatHandler) handleStreamFSMEvent(
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	sessionID string,
+	ev types.AgentStreamEvent,
+	systemPromptGuard *guard.SystemPromptGuard,
+	reply *strings.Builder,
+	inferErr *string,
+) (stop bool) {
+	switch ev.Type {
+	case types.AgentStreamEventThinking:
+		WriteSSE(w, flusher, "reasoning", map[string]any{"content": ev.Content})
+	case types.AgentStreamEventToken:
+		cleaned, err := systemPromptGuard.Scan(ev.Content, true)
+		if err != nil {
+			slog.Warn("server: system prompt leak detected", "session_id", sessionID, "err", err)
+		}
+		ev.Content = cleaned
+		WriteSSE(w, flusher, "token", map[string]any{"content": ev.Content})
+		reply.WriteString(ev.Content)
+	case types.AgentStreamEventToolCall:
+		msg := fmt.Sprintf("Executing tool %s...", ev.ToolName)
+		WriteSSE(w, flusher, "status", map[string]any{"type": "tool_call", "message": msg})
+	case types.AgentStreamEventToolResult:
+		WriteSSE(w, flusher, "status", map[string]any{"type": "tool_result", "message": ev.Content})
+	case types.AgentStreamEventError:
+		if *inferErr == "" {
+			*inferErr = ev.Content
+		}
+		s.WriteSSEError(w, flusher, "fsm_error", ev.Content, sessionID, nil)
+	case types.AgentStreamEventStatus:
+		if ev.Content == "task_done" {
+			return true
+		}
+		WriteSSE(w, flusher, "status", map[string]any{"type": "info", "message": ev.Content})
+	}
+	return false
 }
 
 // ExecutedTool 记录一次工具调用的名称/输入/输出，用于持久化到消息的 tool_calls 字段。

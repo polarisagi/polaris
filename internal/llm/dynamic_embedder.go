@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // DynamicEmbedder 是一个线程安全的 Embedder 代理。
@@ -67,7 +68,11 @@ func (d *DynamicEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	if be, ok := e.(interface {
 		EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 	}); ok {
-		return be.EmbedBatch(ctx, texts)
+		res, err := be.EmbedBatch(ctx, texts)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "dynamic_embedder: EmbedBatch 失败", err)
+		}
+		return res, nil
 	}
 
 	// 逐条降级（不支持批量的普通 Embedder）

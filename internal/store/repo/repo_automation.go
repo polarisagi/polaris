@@ -123,7 +123,10 @@ func (r *SQLiteAutomationRepository) ListAutomations(ctx context.Context) ([]rep
 		row.RequiresHITL = hitlInt == 1
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.ListAutomations rows", err)
+	}
+	return result, nil
 }
 
 func (r *SQLiteAutomationRepository) ListDueAutomations(ctx context.Context, nowRFC3339 string) ([]repo.AutomationRow, error) {

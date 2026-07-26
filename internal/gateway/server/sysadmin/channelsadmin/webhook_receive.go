@@ -144,8 +144,9 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		return
 	}
 
-	history, _ := h.Chat.ListMessages(ctx, sessionKey)
-	history = append(history, types.Message{Role: "user", Content: msg.Text})
+	// 注意：AcquireHeadless 走单轮 intent（见下方），不消费多轮 history，
+	// 之前这里取历史后 append 一条用户消息却从未被读取，是 ineffassign 死代码，
+	// 直接删除（多轮上下文如需接入，属于 headless 路径的独立功能扩展，非本次范围）。
 	if err := h.Chat.SaveMessage(ctx, sessionKey, "user", msg.Text, "", "", 0); err != nil {
 		slog.Error("channel dispatch: saveMessage user", "err", err)
 	}

@@ -152,7 +152,10 @@ func (s *SQLNotesStore) List(ctx context.Context, tag string) ([]types.Note, err
 		}
 		notes = append(notes, *n)
 	}
-	return notes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "notes_store: 遍历结果集失败", err)
+	}
+	return notes, nil
 }
 
 // ListByTask 返回关联到指定 taskID 的所有笔记。

@@ -90,6 +90,54 @@ func (r *RunnerImpl) InjectProvider(p protocol.Provider) {
 	r.llmProvider = p
 }
 
+// publishEvalCompleted 计算通过率并向 M9 外环发布 EvalCompletedPayload，同时接入
+// TrajectoryRecorder/RegressionDetector（从 RunSuite 拆出，nestif 治理，行为不变）。
+// 非阻塞——信道满时丢弃，不阻断 Eval 主流程。调用方需确保 r.evalCh != nil && report != nil。
+func (r *RunnerImpl) publishEvalCompleted(ctx context.Context, report *types.EvalRunReport, suite, candidateID, runID string) {
+	total := report.TotalCases
+	if total <= 0 {
+		total = 1
+	}
+	passRate := float64(report.PassCount) / float64(total)
+
+	p0PassRate := 1.0
+	if report.P0Count > 0 {
+		p0PassRate = float64(report.P0Count-report.P0Fail) / float64(report.P0Count)
+	}
+
+	// [W-5-C] TrajectoryRecorder 接入
+	if r.recorder != nil {
+		if trace, err := r.recorder.Record(ctx, runID); err == nil {
+			slog.Debug("trajectory recorded", "run_id", runID, "states", len(trace.StateTrans))
+		}
+	}
+
+	// [W-5-D] RegressionDetector 接入
+	if r.rd != nil {
+		current := &RunMetrics{TaskSuccessRate: passRate}
+		baseline := &RunMetrics{TaskSuccessRate: 1.0} // Mock baseline
+		if verdict := r.rd.Check(baseline, current); verdict != nil {
+			slog.Warn("regression detected", "metric", verdict.Metric, "current", verdict.Current)
+		}
+	}
+
+	select {
+	case r.evalCh <- types.EvalCompletedPayload{
+		Seq:         r.evalSeqCounter.Add(1),
+		Suite:       suite,
+		CandidateID: candidateID,
+		PassRate:    passRate,
+		P0PassRate:  p0PassRate,
+		BlockDeploy: report.SafetyFail > 0 || report.P0Fail > 0,
+		WarnDeploy:  report.P1Fail > 0,
+		RunID:       runID,
+		CreatedAt:   time.Now().Unix(),
+	}:
+	default:
+		// 信道满，丢弃（M9 外环尽力而为，不阻断 Eval 主流程）
+	}
+}
+
 func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID string) (*types.EvalRunReport, error) { //nolint:gocyclo
 	var report *types.EvalRunReport
 	var runErr error
@@ -180,48 +228,7 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 
 	// 发布 EvalCompletedPayload 给 M9 外环（非阻塞；信道满时丢弃，后台尽力而为）。
 	if r.evalCh != nil && report != nil {
-		total := report.TotalCases
-		if total <= 0 {
-			total = 1
-		}
-		passRate := float64(report.PassCount) / float64(total)
-
-		p0PassRate := 1.0
-		if report.P0Count > 0 {
-			p0PassRate = float64(report.P0Count-report.P0Fail) / float64(report.P0Count)
-		}
-
-		// [W-5-C] TrajectoryRecorder 接入
-		if r.recorder != nil {
-			if trace, err := r.recorder.Record(ctx, runID); err == nil {
-				slog.Debug("trajectory recorded", "run_id", runID, "states", len(trace.StateTrans))
-			}
-		}
-
-		// [W-5-D] RegressionDetector 接入
-		if r.rd != nil {
-			current := &RunMetrics{TaskSuccessRate: passRate}
-			baseline := &RunMetrics{TaskSuccessRate: 1.0} // Mock baseline
-			if verdict := r.rd.Check(baseline, current); verdict != nil {
-				slog.Warn("regression detected", "metric", verdict.Metric, "current", verdict.Current)
-			}
-		}
-
-		select {
-		case r.evalCh <- types.EvalCompletedPayload{
-			Seq:         r.evalSeqCounter.Add(1),
-			Suite:       suite,
-			CandidateID: candidateID,
-			PassRate:    passRate,
-			P0PassRate:  p0PassRate,
-			BlockDeploy: report.SafetyFail > 0 || report.P0Fail > 0,
-			WarnDeploy:  report.P1Fail > 0,
-			RunID:       runID,
-			CreatedAt:   time.Now().Unix(),
-		}:
-		default:
-			// 信道满，丢弃（M9 外环尽力而为，不阻断 Eval 主流程）
-		}
+		r.publishEvalCompleted(ctx, report, suite, candidateID, runID)
 	}
 
 	// Task 5: 批次级别判断，如果 PassRate 低于 L3Threshold，触发全局兜底

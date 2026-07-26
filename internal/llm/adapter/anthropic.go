@@ -131,6 +131,37 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.Infer", err)
 	}
 
+	out, err := a.sendAnthropicMessage(ctx, req, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.buildInferResponseFromAnthropic(out, req.Model)
+}
+
+// anthropicMessageResponse 是 Anthropic Messages API 非流式响应的解码结构
+// （从 Infer 内联匿名结构体上提为具名类型，供 sendAnthropicMessage 签名引用）。
+type anthropicMessageResponse struct {
+	Content []struct {
+		Type  string          `json:"type"`
+		Text  string          `json:"text"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	} `json:"content"`
+	StopReason string `json:"stop_reason"`
+	Model      string `json:"model"`
+	Usage      struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	} `json:"usage"`
+}
+
+// sendAnthropicMessage 构造 HTTP 请求、发送并解码非流式 Anthropic Messages 响应
+// （从 Infer 拆出，gocyclo 治理，行为不变）。
+func (a *AnthropicAdapter) sendAnthropicMessage(ctx context.Context, req *types.InferRequest, body []byte) (*anthropicMessageResponse, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.Infer", err)
@@ -152,27 +183,16 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("anthropic: HTTP %d: %s", httpResp.StatusCode, raw))
 	}
 
-	var out struct {
-		Content []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			ID    string          `json:"id"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-		} `json:"content"`
-		StopReason string `json:"stop_reason"`
-		Model      string `json:"model"`
-		Usage      struct {
-			InputTokens              int `json:"input_tokens"`
-			OutputTokens             int `json:"output_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		} `json:"usage"`
-	}
+	var out anthropicMessageResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&out); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "anthropic: decode", err)
 	}
+	return &out, nil
+}
 
+// buildInferResponseFromAnthropic 将解码后的 Anthropic 响应组装为统一 ProviderResponse，
+// 记账 token 用量并做空响应兜底校验（从 Infer 拆出，gocyclo 治理，行为不变）。
+func (a *AnthropicAdapter) buildInferResponseFromAnthropic(out *anthropicMessageResponse, modelReq string) (*types.ProviderResponse, error) {
 	textBuilder := new(strings.Builder)
 	var toolCalls []types.InferToolCall
 	for _, c := range out.Content {
@@ -210,7 +230,7 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 	}
 
 	hit := resp.Usage.CacheHitTokens > 0
-	metrics.RecordLLMCacheHit("anthropic", req.Model, hit)
+	metrics.RecordLLMCacheHit("anthropic", modelReq, hit)
 
 	if resp.Content == "" && len(resp.ToolCalls) == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")

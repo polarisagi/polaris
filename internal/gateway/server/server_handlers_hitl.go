@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -57,6 +58,46 @@ func parseInterruptAction(action string) types.InterruptAction {
 // handleAgentInterrupt 处理用户中断请求（M13 §1.2.5，inv_global_08 <200ms SLO）。
 // POST /v1/agent/{taskID}/interrupt
 // body: {"action":"resume"|"redirect"|"abort","redirect":"新意图文本","reason":"..."}
+// dispatchInterruptRequest 将中断请求路由到目标 Agent：优先经 Outbox 异步分发，
+// 无 outboxWriter 时降级为经 AgentPool 直接调用（从 handleAgentInterrupt 拆出，
+// nestif 治理，行为不变）。
+func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action string, interruptReq types.InterruptRequest) {
+	if s.outboxWriter != nil {
+		// 异步路由：写入 Outbox，由 OutboxWorker 分发到目标 Agent 进程。
+		// OutboxWorker 需注册 operation="agent_interrupt" 的处理器（见 pkg/substrate/storage/outbox_worker.go）。
+		ev, _ := protocol.NewOutboxEvent(protocol.TopicAgentInterrupt, "agent_interrupt", map[string]any{
+			"task_id": taskID,
+			"request": interruptReq,
+		}, "interrupt:"+taskID+":"+action)
+		ev.Scope = taskID
+		if err := s.outboxWriter.Write(ctx, ev); err != nil {
+			slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call", "err", err)
+		}
+		return
+	}
+
+	if s.agentPool == nil {
+		slog.Warn("handleAgentInterrupt: neither outboxWriter nor agentPool available, interrupt request dropped", "task_id", taskID)
+		return
+	}
+
+	// 单进程降级路径修复（2026-07-12）：此前该分支的注释声称"直接调用"，
+	// 实际实现只打一行 INFO 日志——outboxWriter 此前从未在 cmd/polaris 启动
+	// 流程中被注入（SetOutboxWriter 从未被调用，见 server_core.go 修复），
+	// 意味着本端点在生产环境下恒定静默丢弃中断请求，客户端点击"中止/恢复/
+	// 重定向"实际上什么都不会发生。现在真正实现直接调用：与 sse.go
+	// handleAgentStreamFSM 客户端断连分支（ctx.Done() → agentCtrl.Interrupt）
+	// 使用同一条路径——经 AgentPool.Acquire 取得目标会话的 AgentController
+	// 后直接调用 Interrupt，用完立即 release。
+	agentCtrl, release, acqErr := s.agentPool.Acquire(ctx, taskID)
+	if acqErr != nil {
+		slog.Error("handleAgentInterrupt: direct-call fallback failed to acquire agent controller", "task_id", taskID, "err", acqErr)
+		return
+	}
+	agentCtrl.Interrupt(interruptReq)
+	release()
+}
+
 func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	clientIP := extractIP(r)
 	authCtx := authcontext.FromContext(r.Context())
@@ -94,36 +135,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		Action:   action,
 		Redirect: req.Redirect,
 	}
-	if s.outboxWriter != nil {
-		// 异步路由：写入 Outbox，由 OutboxWorker 分发到目标 Agent 进程。
-		// OutboxWorker 需注册 operation="agent_interrupt" 的处理器（见 pkg/substrate/storage/outbox_worker.go）。
-		ev, _ := protocol.NewOutboxEvent(protocol.TopicAgentInterrupt, "agent_interrupt", map[string]any{
-			"task_id": taskID,
-			"request": interruptReq,
-		}, "interrupt:"+taskID+":"+req.Action)
-		ev.Scope = taskID
-		if err := s.outboxWriter.Write(r.Context(), ev); err != nil {
-			slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call", "err", err)
-		}
-	} else if s.agentPool != nil {
-		// 单进程降级路径修复（2026-07-12）：此前该分支的注释声称"直接调用"，
-		// 实际实现只打一行 INFO 日志——outboxWriter 此前从未在 cmd/polaris 启动
-		// 流程中被注入（SetOutboxWriter 从未被调用，见 server_core.go 修复），
-		// 意味着本端点在生产环境下恒定静默丢弃中断请求，客户端点击"中止/恢复/
-		// 重定向"实际上什么都不会发生。现在真正实现直接调用：与 sse.go
-		// handleAgentStreamFSM 客户端断连分支（ctx.Done() → agentCtrl.Interrupt）
-		// 使用同一条路径——经 AgentPool.Acquire 取得目标会话的 AgentController
-		// 后直接调用 Interrupt，用完立即 release。
-		agentCtrl, release, acqErr := s.agentPool.Acquire(r.Context(), taskID)
-		if acqErr != nil {
-			slog.Error("handleAgentInterrupt: direct-call fallback failed to acquire agent controller", "task_id", taskID, "err", acqErr)
-		} else {
-			agentCtrl.Interrupt(interruptReq)
-			release()
-		}
-	} else {
-		slog.Warn("handleAgentInterrupt: neither outboxWriter nor agentPool available, interrupt request dropped", "task_id", taskID)
-	}
+	s.dispatchInterruptRequest(r.Context(), taskID, req.Action, interruptReq)
 
 	if s.auditTrail != nil {
 		detail, err := json.Marshal(map[string]any{

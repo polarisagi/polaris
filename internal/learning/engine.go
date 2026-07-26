@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -55,10 +54,11 @@ type Engine struct {
 
 	db *sql.DB // DB for cursor persistence
 
-	// taskSeqCounter：ReportOutcome 内部构造的 TaskCompleteEvent 单调递增序号
-	// （2026-07-04 审计补齐，供 learning_cursors 幂等去重使用）。atomic 而非裸
-	// int64，因为 ReportOutcome 可能被多个调用方并发调用。
-	taskSeqCounter atomic.Int64
+	// 注意：Seq 幂等去重号由事件生产方（写入 taskEvents/heuristicEvents/... 的调用方）
+	// 赋值，本 Engine 仅消费 ev.Seq 做单调游标比较（见下方 run 循环），不在本地
+	// 构造序号。此前这里有一个 taskSeqCounter atomic.Int64 字段及引用不存在的
+	// "ReportOutcome" 方法的注释，属于设计变更后未清理的死字段（unused linter
+	// 命中），已随该字段一并删除。
 
 	cursorCache map[string]int64
 	cursorMu    sync.Mutex
@@ -151,6 +151,40 @@ func NewEngine(
 // L2 (SkillGeneration) 由 LogicCollapseMonitor 在 RecordSuccess 时异步触发。
 // L3 (StrategyModify)  策略漂移检测 → HITLGateway.Prompt → 人工审批 → SubmitCandidate
 // L4 (SourceArchitecture) 多签名审批门控 → SubmitCandidate
+// handleTaskCompleteEvent 处理内环任务完成事件：失败任务异步交给 Reflexion 反思，
+// 成功任务记录到 HeuristicsMemory 驱动 success_rate 更新（从 Start 拆出，nestif 治理，行为不变）。
+func (e *Engine) handleTaskCompleteEvent(ctx context.Context, ev TaskCompleteEvent) {
+	if !ev.Success {
+		select {
+		case e.sem <- struct{}{}:
+			event := ev
+			concurrent.SafeGo(ctx, "learning.engine.reflect", func(sgCtx context.Context) {
+				defer func() { <-e.sem }()
+				result := &TaskResult{
+					TaskID:       event.TaskID,
+					Success:      event.Success,
+					FailureClass: event.Failure,
+					Output:       event.Output,
+				}
+				if e.reflector != nil {
+					if _, err := e.reflector.Reflect(sgCtx, event.TaskID, event.TaskType, result, nil, 0); err != nil {
+						slog.Warn("learning engine: reflect failed", "task_id", event.TaskID, "err", err)
+					}
+				}
+			})
+		default:
+			// 信号量满，丢弃（尽力而为原则）
+		}
+		return
+	}
+
+	// 成功轨迹写入 optimizer.HeuristicsMemory，驱动 success_rate 更新（P1-4）。
+	// 原实现忽略成功任务，导致 skillGapAnalysis 永远读不到有效 success_rate。
+	if e.heuristicsWriter != nil {
+		e.heuristicsWriter.RecordSuccess(ev.TaskID, ev.TaskType)
+	}
+}
+
 func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 	cursors := e.loadCursors(ctx)
 
@@ -182,7 +216,7 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 调用方按 err == context.Canceled 严格比较（见 engine_test.go），须保留哨兵身份
 
 		// 内环：任务完成事件 → Reflexion（失败）或 HeuristicsWriter（成功）
 		case ev, ok := <-e.taskEvents:
@@ -196,34 +230,7 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 				cursors["task"] = ev.Seq
 				e.saveCursorAsync(ctx, "task", ev.Seq)
 			}
-			if !ev.Success {
-				select {
-				case e.sem <- struct{}{}:
-					event := ev
-					concurrent.SafeGo(ctx, "learning.engine.reflect", func(sgCtx context.Context) {
-						defer func() { <-e.sem }()
-						result := &TaskResult{
-							TaskID:       event.TaskID,
-							Success:      event.Success,
-							FailureClass: event.Failure,
-							Output:       event.Output,
-						}
-						if e.reflector != nil {
-							if _, err := e.reflector.Reflect(sgCtx, event.TaskID, event.TaskType, result, nil, 0); err != nil {
-								slog.Warn("learning engine: reflect failed", "task_id", event.TaskID, "err", err)
-							}
-						}
-					})
-				default:
-					// 信号量满，丢弃（尽力而为原则）
-				}
-			} else {
-				// 成功轨迹写入 optimizer.HeuristicsMemory，驱动 success_rate 更新（P1-4）。
-				// 原实现忽略成功任务，导致 skillGapAnalysis 永远读不到有效 success_rate。
-				if e.heuristicsWriter != nil {
-					e.heuristicsWriter.RecordSuccess(ev.TaskID, ev.TaskType)
-				}
-			}
+			e.handleTaskCompleteEvent(ctx, ev)
 
 		// 内环（新）：HeuristicGenerated → 更新 optimizer.PromptOptimizer.optimizer.ErrorPatternMemory
 		case ev, ok := <-e.heuristicEvents:

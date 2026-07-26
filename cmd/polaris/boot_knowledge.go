@@ -18,6 +18,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/internal/store/search"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -148,7 +149,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 				DocID string `json:"doc_id"`
 			}
 			if err := json.Unmarshal(rec.Payload, &payload); err != nil {
-				return err
+				return apperr.Wrap(apperr.CodeInternal, "boot_knowledge: 解析 graph_build payload 失败", err)
 			}
 			return graphPipeline.Run(ctx, payload.DocID)
 		})

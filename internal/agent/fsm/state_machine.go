@@ -287,6 +287,133 @@ func (sm *StateMachine) WriteLLMCallEvent(sessionID string, request, response ma
 	}
 }
 
+// dispatchFromInterrupt 处理 S_INTERRUPT 态下的出边（从 Dispatch 拆出，nestif 治理，行为不变）。
+// 调用方需持有 sm.mu。
+func (sm *StateMachine) dispatchFromInterrupt(ctx context.Context, current types.AgentState, trigger types.AgentTrigger) ([]protocol.Effect, error) {
+	switch trigger {
+	case types.TriggerInterruptResume:
+		sm.history = append(sm.history, current)
+		sm.current = sm.interruptFrom
+		sm.requeueStashedTriggers(ctx)
+		return nil, nil
+	case types.TriggerInterruptAbort:
+		sm.history = append(sm.history, current)
+		sm.current = types.AgentStateFailed
+		if len(sm.stashedTriggers) > 0 {
+			slog.Info("fsm: discarding stashed triggers due to abort", "count", len(sm.stashedTriggers))
+			sm.stashedTriggers = sm.stashedTriggers[:0]
+		}
+		return nil, nil
+	default:
+		// P0-5: S_INTERRUPT 状态下收到非预期的 trigger 时，暂存到 stashedTriggers
+		if len(sm.stashedTriggers) >= maxStashedTriggers {
+			slog.Error("fsm: stashed triggers exceeded max capacity, dropping oldest", "max", maxStashedTriggers)
+			sm.stashedTriggers = sm.stashedTriggers[1:]
+		}
+		sm.stashedTriggers = append(sm.stashedTriggers, trigger)
+		slog.Debug("fsm: stashed trigger during S_INTERRUPT", "trigger", trigger)
+		return nil, nil
+	}
+}
+
+// requeueStashedTriggers 将 S_INTERRUPT 期间暂存的 trigger 重新入队。调用方需持有 sm.mu。
+func (sm *StateMachine) requeueStashedTriggers(ctx context.Context) {
+	if len(sm.stashedTriggers) == 0 {
+		return
+	}
+	toRequeue := make([]types.AgentTrigger, len(sm.stashedTriggers))
+	copy(toRequeue, sm.stashedTriggers)
+	sm.stashedTriggers = sm.stashedTriggers[:0]
+	if sm.intentDispatcher == nil {
+		return
+	}
+	concurrent.SafeGo(trace.DetachedWithLink(ctx), "fsm.requeue_stashed", func(ctx context.Context) {
+		for _, tr := range toRequeue {
+			sm.intentDispatcher(tr)
+		}
+	})
+}
+
+// handleReplanTransition 处理转入 S_REPLAN 的计数/耗尽检查与扩展激活分支
+// （从 Dispatch 拆出，gocyclo/nestif 治理，行为不变）。调用方需持有 sm.mu。
+func (sm *StateMachine) handleReplanTransition(ctx context.Context, sCtx *StateContext, current types.AgentState, t Transition, effects []protocol.Effect) ([]protocol.Effect, error) {
+	sm.replanCount++
+
+	// S_REPLAN：尝试按需激活未加载的扩展，补充工具集后重规划。
+	// 仅在第一次 replan 时触发（避免每次 replan 都触发语义搜索）。
+	goalToActivate, needActivate := sm.shouldActivateExtensions(sCtx)
+
+	if sm.replanCount >= sCtx.MaxReplan {
+		// replan 耗尽 → 自动进阶 S_FAILED，返回 ErrReplanExhausted
+		sm.history = append(sm.history, current, t.To)
+		sm.current = types.AgentStateFailed
+		return nil, ErrReplanExhausted
+	}
+
+	sm.history = append(sm.history, current)
+	sm.current = t.To
+
+	if !needActivate {
+		// 如果不需要激活，则直接返回一个空 effect 立即触发 ReplanDone
+		effects = append(effects, protocol.DeterministicEffect{
+			Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
+				return "S_REPLAN_DONE", nil
+			},
+		})
+		return effects, nil
+	}
+
+	sm.dispatchReplanExtensionActivation(ctx, sCtx, goalToActivate)
+
+	effects = append(effects, protocol.DeterministicEffect{
+		Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
+			if sm.intentDispatcher == nil {
+				return "S_REPLAN_DONE", nil
+			}
+			return "", nil
+		},
+	})
+	return effects, nil
+}
+
+// dispatchReplanExtensionActivation 触发 S_REPLAN 场景下按需的扩展激活（异步）。
+// 调用方需持有 sm.mu。
+func (sm *StateMachine) dispatchReplanExtensionActivation(ctx context.Context, sCtx *StateContext, goalToActivate string) {
+	slog.Debug("kernel: returning deterministic effect for extension activation", "goal", goalToActivate)
+
+	if sm.intentDispatcher == nil {
+		// GR-4-003 修复：移除持锁期间的同步 IO fallback。
+		// 原 fallback 分支在 sm.mu.Lock() 作用域内同步调用 FindAndActivate（含语义检索/IO），
+		// 会阀塞其他并发 Dispatch 调用直至完成或超时，违反 HE-5（FSM 锁内禁止 IO）。
+		// intentDispatcher 为 nil 是配置错误（生产环境组装一定会注入），需显式暴露而不是静默降级。
+		slog.Error("fsm: intentDispatcher not configured, cannot activate extension for replan — this is a configuration error",
+			"goal", goalToActivate)
+		// 不做扩展激活，也不推进 ReplanDone——上层调用方有 timeout 保护。
+		return
+	}
+
+	concurrent.SafeGo(trace.DetachedWithLink(ctx), "fsm.replan_extension_activation", func(actCtx context.Context) {
+		actCtx, cancel := context.WithTimeout(actCtx, sm.replanExtActivationTimeout)
+		defer cancel()
+
+		hints, degraded := sm.activateExtWithRetry(actCtx, goalToActivate)
+		if degraded {
+			sm.mu.Lock()
+			sCtx.ReplanExtActivationDegraded = true
+			sm.mu.Unlock()
+		}
+		if len(hints) > 0 {
+			sm.hintsMu.Lock()
+			sm.dynamicHints = hints
+			sm.hintsMu.Unlock()
+			slog.Info("extension_activator: activated extensions for replan",
+				"count", len(hints),
+				"goal", goalToActivate)
+		}
+		sm.intentDispatcher(types.TriggerReplanDone)
+	})
+}
+
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。
 // 返回的 effects 由 Agent.Run 消费——LLMFillEffect 调 LLM，DeterministicEffect 直接执行。
 func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigger types.AgentTrigger) ([]protocol.Effect, error) {
@@ -297,53 +424,16 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 
 	// ── S_INTERRUPT 通用处理（优先于 transitions 表）──────────────────────────
 	// 任意活跃态（非终态、非 S_INTERRUPT 自身）均可接收中断信号。
-	if trigger == types.TriggerInterruptReceived {
-		if !isTerminalState(current) && current != types.AgentStateInterrupt {
-			sm.interruptFrom = current
-			sm.history = append(sm.history, current)
-			sm.current = types.AgentStateInterrupt
-			return nil, nil
-		}
+	if trigger == types.TriggerInterruptReceived && !isTerminalState(current) && current != types.AgentStateInterrupt {
+		sm.interruptFrom = current
+		sm.history = append(sm.history, current)
+		sm.current = types.AgentStateInterrupt
+		return nil, nil
 	}
 
 	// S_INTERRUPT 出边：Resume → 恢复原状态；Abort → S_FAILED
 	if current == types.AgentStateInterrupt {
-		switch trigger {
-		case types.TriggerInterruptResume:
-			sm.history = append(sm.history, current)
-			sm.current = sm.interruptFrom
-
-			if len(sm.stashedTriggers) > 0 {
-				toRequeue := make([]types.AgentTrigger, len(sm.stashedTriggers))
-				copy(toRequeue, sm.stashedTriggers)
-				sm.stashedTriggers = sm.stashedTriggers[:0]
-				if sm.intentDispatcher != nil {
-					concurrent.SafeGo(trace.DetachedWithLink(ctx), "fsm.requeue_stashed", func(ctx context.Context) {
-						for _, tr := range toRequeue {
-							sm.intentDispatcher(tr)
-						}
-					})
-				}
-			}
-			return nil, nil
-		case types.TriggerInterruptAbort:
-			sm.history = append(sm.history, current)
-			sm.current = types.AgentStateFailed
-			if len(sm.stashedTriggers) > 0 {
-				slog.Info("fsm: discarding stashed triggers due to abort", "count", len(sm.stashedTriggers))
-				sm.stashedTriggers = sm.stashedTriggers[:0]
-			}
-			return nil, nil
-		default:
-			// P0-5: S_INTERRUPT 状态下收到非预期的 trigger 时，暂存到 stashedTriggers
-			if len(sm.stashedTriggers) >= maxStashedTriggers {
-				slog.Error("fsm: stashed triggers exceeded max capacity, dropping oldest", "max", maxStashedTriggers)
-				sm.stashedTriggers = sm.stashedTriggers[1:]
-			}
-			sm.stashedTriggers = append(sm.stashedTriggers, trigger)
-			slog.Debug("fsm: stashed trigger during S_INTERRUPT", "trigger", trigger)
-			return nil, nil
-		}
+		return sm.dispatchFromInterrupt(ctx, current, trigger)
 	}
 	// ─────────────────────────────────────────────────────────────────────────
 
@@ -370,75 +460,7 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 
 	// 特殊处理: S_REPLAN 计数 + 耗尽检查
 	if t.To == types.AgentStateReplan {
-		sm.replanCount++
-
-		// S_REPLAN：尝试按需激活未加载的扩展，补充工具集后重规划。
-		// 仅在第一次 replan 时触发（避免每次 replan 都触发语义搜索）。
-		goalToActivate, needActivate := sm.shouldActivateExtensions(sCtx)
-
-		if sm.replanCount >= sCtx.MaxReplan {
-			// replan 耗尽 → 自动进阶 S_FAILED，返回 ErrReplanExhausted
-			sm.history = append(sm.history, current, t.To)
-			sm.current = types.AgentStateFailed
-			return nil, ErrReplanExhausted
-		}
-
-		sm.history = append(sm.history, current)
-		sm.current = t.To
-
-		if needActivate {
-			slog.Debug("kernel: returning deterministic effect for extension activation", "goal", goalToActivate)
-
-			if sm.intentDispatcher != nil {
-				concurrent.SafeGo(trace.DetachedWithLink(ctx), "fsm.replan_extension_activation", func(actCtx context.Context) {
-					actCtx, cancel := context.WithTimeout(actCtx, sm.replanExtActivationTimeout)
-					defer cancel()
-
-					hints, degraded := sm.activateExtWithRetry(actCtx, goalToActivate)
-					if degraded {
-						sm.mu.Lock()
-						sCtx.ReplanExtActivationDegraded = true
-						sm.mu.Unlock()
-					}
-					if len(hints) > 0 {
-						sm.hintsMu.Lock()
-						sm.dynamicHints = hints
-						sm.hintsMu.Unlock()
-						slog.Info("extension_activator: activated extensions for replan",
-							"count", len(hints),
-							"goal", goalToActivate)
-					}
-					sm.intentDispatcher(types.TriggerReplanDone)
-				})
-			} else {
-				// GR-4-003 修复：移除持锁期间的同步 IO fallback。
-				// 原 fallback 分支在 sm.mu.Lock() 作用域内同步调用 FindAndActivate（含语义检索/IO），
-				// 会阀塞其他并发 Dispatch 调用直至完成或超时，违反 HE-5（FSM 锁内禁止 IO）。
-				// intentDispatcher 为 nil 是配置错误（生产环境组装一定会注入），需显式暴露而不是静默降级。
-				slog.Error("fsm: intentDispatcher not configured, cannot activate extension for replan — this is a configuration error",
-					"goal", goalToActivate)
-				// 不做扩展激活，也不推进 ReplanDone——上层调用方有 timeout 保护。
-			}
-
-			eff := protocol.DeterministicEffect{
-				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
-					if sm.intentDispatcher == nil {
-						return "S_REPLAN_DONE", nil
-					}
-					return "", nil
-				},
-			}
-			effects = append(effects, eff)
-		} else {
-			// 如果不需要激活，则直接返回一个空 effect 立即触发 ReplanDone
-			eff := protocol.DeterministicEffect{
-				Fn: func(effCtx context.Context, sCtx protocol.StateContext) (types.State, error) {
-					return "S_REPLAN_DONE", nil
-				},
-			}
-			effects = append(effects, eff)
-		}
-		return effects, nil
+		return sm.handleReplanTransition(ctx, sCtx, current, t, effects)
 	}
 
 	// 记录历史

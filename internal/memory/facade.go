@@ -40,7 +40,11 @@ func NewMemoryFacadeWithStore(sys *MemorySystemImpl, store protocol.Store) *Memo
 
 // 基础控制
 func (f *MemoryFacadeImpl) StoreStats() (string, error) {
-	return f.sys.Mem().StoreStats()
+	stats, err := f.sys.Mem().StoreStats()
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "memory_facade: StoreStats 失败", err)
+	}
+	return stats, nil
 }
 
 func (f *MemoryFacadeImpl) GetMemoryPressure() *budget.ResourceBudget {
@@ -51,7 +55,7 @@ func (f *MemoryFacadeImpl) GetMemoryPressure() *budget.ResourceBudget {
 func (f *MemoryFacadeImpl) SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error) {
 	entities, err := f.sys.Mem().Semantic().SearchEntities(ctx, query, topK, 0)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: SearchEntities 失败", err)
 	}
 	// 污点门控：过滤高于调用方允许等级的实体（ADR-0007 只升不降，读侧按上限截断）
 	filtered := entities[:0]
@@ -64,23 +68,36 @@ func (f *MemoryFacadeImpl) SearchEntities(ctx context.Context, query string, top
 }
 
 func (f *MemoryFacadeImpl) GetUserProfile(ctx context.Context, userID string) (*types.UserProfile, error) {
-	return f.sys.Mem().Semantic().GetUserProfile(ctx, userID)
+	profile, err := f.sys.Mem().Semantic().GetUserProfile(ctx, userID)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: GetUserProfile 失败", err)
+	}
+	return profile, nil
 }
 
 // Episodic 层调用
 func (f *MemoryFacadeImpl) ListEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
-	return f.sys.Mem().Episodic().Query(ctx, query)
+	events, err := f.sys.Mem().Episodic().Query(ctx, query)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: ListEpisodicEvents 失败", err)
+	}
+	return events, nil
 }
 
 func (f *MemoryFacadeImpl) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
-	return f.sys.Mem().Episodic().Append(ctx, event, taintLevel)
+	if err := f.sys.Mem().Episodic().Append(ctx, event, taintLevel); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "memory_facade: AppendEpisodicEvent 失败", err)
+	}
+	return nil
 }
 
 // ArchiveEpisodic 将会话的历史事件标记为冷数据（滑动窗口边界 = 当前时刻）。
 // 语义对齐 ConsolidationPipeline.MarkColdEpisodicEvents（M05 §3.2 Session Compaction）。
 func (f *MemoryFacadeImpl) ArchiveEpisodic(ctx context.Context, sessionID string) error {
-	_, err := f.sys.Mem().Episodic().MarkCold(ctx, sessionID, time.Now())
-	return err
+	if _, err := f.sys.Mem().Episodic().MarkCold(ctx, sessionID, time.Now()); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "memory_facade: ArchiveEpisodic 失败", err)
+	}
+	return nil
 }
 
 // AddWorkingContext 向 L0 工作记忆上下文窗口追加一条文本（热路径，不持久化）。
@@ -131,7 +148,9 @@ func (f *MemoryFacadeImpl) ListReflections(ctx context.Context, q types.Reflecti
 
 func (f *MemoryFacadeImpl) AppendReflection(ctx context.Context, entry types.ReflectionEntry) error {
 	if rm := f.sys.Mem().Reflection(); rm != nil {
-		return rm.AppendReflection(ctx, entry)
+		if err := rm.AppendReflection(ctx, entry); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "memory_facade: AppendReflection 失败", err)
+		}
 	}
 	return nil
 }
@@ -142,14 +161,21 @@ func (f *MemoryFacadeImpl) ScanHighSalienceEvents(ctx context.Context, sinceID i
 	if ep == nil {
 		return nil, nil
 	}
-	return ep.ScanHighSalience(ctx, sinceID, minSalience, limit)
+	events, err := ep.ScanHighSalience(ctx, sinceID, minSalience, limit)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "memory_facade: ScanHighSalienceEvents 失败", err)
+	}
+	return events, nil
 }
 
 func (f *MemoryFacadeImpl) PruneMemoryGraph(ctx context.Context) error {
 	if f.edgeMgr == nil {
 		return nil
 	}
-	return f.edgeMgr.PeriodicPrune(ctx)
+	if err := f.edgeMgr.PeriodicPrune(ctx); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "memory_facade: PruneMemoryGraph 失败", err)
+	}
+	return nil
 }
 
 // TaskMermaidCanvas 调用（M05 §11.3），委托给底层 MemorySystem 共享单实例。

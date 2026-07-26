@@ -131,58 +131,79 @@ func (re *ReflexionEngine) Reflect(
 	ref.GeneratedHeuristic = heuristicContent
 
 	// 写入 optimizer.HeuristicsMemory（启发式成功率从 0 开始，由后续任务 EWMA 更新）
-	if re.heuristics != nil {
-		hID := fmt.Sprintf("h_%s_%d", taskID, time.Now().UnixNano())
-		if err := re.heuristics.Add(ctx, &optimizer.Heuristic{
-			ID:          hID,
-			Content:     heuristicContent,
-			TaskType:    taskType,
-			SuccessRate: 0.5, // 冷启动中性值
-			UseCount:    0,
-			Keywords:    extractKeywords(taskType, cause),
-		}); err != nil {
-			slog.Warn("reflexion: heuristic write failed", "err", err)
-		}
-	}
+	re.recordHeuristic(ctx, taskID, taskType, heuristicContent, cause)
 
 	// 只有 Controllable/Logic 失败才写入 MEMF（Uncontrollable 排除）
-	if !result.IsUncontrollable() && re.memf != nil {
-		kwJSON, _ := json.Marshal(extractKeywords(taskType, cause))
-		_ = kwJSON
-		recordID := fmt.Sprintf("memf_%s_%d", taskID, time.Now().UnixNano())
-		if errMemf := re.memf.AddRecord(ctx, &optimizer.FallacyRecord{
-			ID:               recordID,
-			TaskType:         taskType,
-			FailureType:      string(result.FailureClass),
-			Keywords:         extractKeywords(taskType, cause),
-			Reflection:       cause + " | " + cf,
-			OccurrenceCount:  1,
-			NodeQualityScore: 0.5,
-			CreatedAt:        time.Now().Unix(),
-		}); errMemf != nil {
-			slog.Warn("reflexion: add memf record failed", "recordID", recordID, "err", errMemf)
-		}
-		ref.MEMFRecordID = recordID
-	}
+	ref.MEMFRecordID = re.recordFallacy(ctx, taskID, taskType, cause, cf, result)
 
 	// 发布 HeuristicGeneratedPayload 给 learning.Engine 内环（闭环关键路径）。
 	// 非阻塞发送：信道满时丢弃，后台尽力而为原则（M9 §6 降级策略）。
-	if re.heuristicCh != nil {
-		select {
-		case re.heuristicCh <- types.HeuristicGeneratedPayload{
-			Seq:       re.heuristicSeqCounter.Add(1),
-			TaskID:    taskID,
-			TaskType:  taskType,
-			Heuristic: heuristicContent,
-			AvoidRule: cause, // 步骤1产出的失败原因作为 AvoidRule 种子
-			CreatedAt: time.Now().Unix(),
-		}:
-		default:
-			// 信道满，丢弃（后台任务尽力而为，不阻断反思主流程）
-		}
-	}
+	re.publishHeuristicGenerated(taskID, taskType, heuristicContent, cause)
 
 	return ref, nil
+}
+
+// recordHeuristic 将本轮反思生成的 heuristic 写入 optimizer.HeuristicsMemory
+// （从 Reflect 拆出，gocyclo 治理，行为不变）。
+func (re *ReflexionEngine) recordHeuristic(ctx context.Context, taskID, taskType, heuristicContent, cause string) {
+	if re.heuristics == nil {
+		return
+	}
+	hID := fmt.Sprintf("h_%s_%d", taskID, time.Now().UnixNano())
+	if err := re.heuristics.Add(ctx, &optimizer.Heuristic{
+		ID:          hID,
+		Content:     heuristicContent,
+		TaskType:    taskType,
+		SuccessRate: 0.5, // 冷启动中性值
+		UseCount:    0,
+		Keywords:    extractKeywords(taskType, cause),
+	}); err != nil {
+		slog.Warn("reflexion: heuristic write failed", "err", err)
+	}
+}
+
+// recordFallacy 只有 Controllable/Logic 失败才写入 MEMF（Uncontrollable 排除），
+// 返回写入的 recordID（未写入时为空字符串）（从 Reflect 拆出，gocyclo 治理，行为不变）。
+func (re *ReflexionEngine) recordFallacy(ctx context.Context, taskID, taskType, cause, cf string, result *learning.TaskResult) string {
+	if result.IsUncontrollable() || re.memf == nil {
+		return ""
+	}
+	kwJSON, _ := json.Marshal(extractKeywords(taskType, cause))
+	_ = kwJSON
+	recordID := fmt.Sprintf("memf_%s_%d", taskID, time.Now().UnixNano())
+	if errMemf := re.memf.AddRecord(ctx, &optimizer.FallacyRecord{
+		ID:               recordID,
+		TaskType:         taskType,
+		FailureType:      string(result.FailureClass),
+		Keywords:         extractKeywords(taskType, cause),
+		Reflection:       cause + " | " + cf,
+		OccurrenceCount:  1,
+		NodeQualityScore: 0.5,
+		CreatedAt:        time.Now().Unix(),
+	}); errMemf != nil {
+		slog.Warn("reflexion: add memf record failed", "recordID", recordID, "err", errMemf)
+	}
+	return recordID
+}
+
+// publishHeuristicGenerated 非阻塞发布 HeuristicGeneratedPayload 给 learning.Engine
+// 内环；信道满时丢弃（从 Reflect 拆出，gocyclo 治理，行为不变）。
+func (re *ReflexionEngine) publishHeuristicGenerated(taskID, taskType, heuristicContent, cause string) {
+	if re.heuristicCh == nil {
+		return
+	}
+	select {
+	case re.heuristicCh <- types.HeuristicGeneratedPayload{
+		Seq:       re.heuristicSeqCounter.Add(1),
+		TaskID:    taskID,
+		TaskType:  taskType,
+		Heuristic: heuristicContent,
+		AvoidRule: cause, // 步骤1产出的失败原因作为 AvoidRule 种子
+		CreatedAt: time.Now().Unix(),
+	}:
+	default:
+		// 信道满，丢弃（后台任务尽力而为，不阻断反思主流程）
+	}
 }
 
 // replaySuccess 将成功纠偏轨迹提炼为 SurrealDB 技能记忆（AgentHER 核心）。

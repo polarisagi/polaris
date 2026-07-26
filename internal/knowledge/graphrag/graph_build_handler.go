@@ -38,5 +38,8 @@ func (h *GraphBuildOutboxHandler) Handle(ctx context.Context, record *store.Outb
 	if payload.DocID == "" {
 		return nil
 	}
-	return h.pipeline.Run(ctx, payload.DocID)
+	if err := h.pipeline.Run(ctx, payload.DocID); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GraphBuildOutboxHandler: pipeline.Run 失败", err)
+	}
+	return nil
 }

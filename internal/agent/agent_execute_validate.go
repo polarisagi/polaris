@@ -66,73 +66,84 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 
 	// L3: LLM 看门狗校验 (上提为标准 FSM Effect)
 	// 仅对 Tier 1+ 生效
-	if vCtx.SystemTier >= 1 && a.provider != nil && vCtx.Plan != nil { //nolint:nestif
-		var dangerous []string
-		for _, node := range vCtx.Plan.Nodes {
-			tool, err := a.toolRegistry.Lookup(node.ToolName)
-			if err != nil {
-				continue
-			}
-			// L3 仅针对 RiskPrivileged 节点，非只读但低风险节点已由 L1/L2 覆盖
-			if tool.RiskLevel == types.RiskPrivileged {
-				dangerous = append(dangerous, fmt.Sprintf("Tool: %s, Args: %s", node.ToolName, string(node.Args)))
-			}
-		}
-
-		if len(dangerous) > 0 {
-			// Prompt 统一走 internal/prompt/templates 管理（A-12 修复），且 dangerous
-			// 列表（来自 DAG 节点 ToolName/Args，可能间接受 LLM 分解结果影响，非完全可信）
-			// 用 prompt.NewRandomBoundary() 生成的随机边界符包裹，防止边界逃逸注入
-			// （与 GR-7-001 SecurityAuditAgent 的修复采用同一套防御模式）。
-			boundaryStart, boundaryEnd := prompt.NewRandomBoundary()
-			userPrompt, tmplErr := templates.Render("l3_watchdog_review.tmpl", map[string]string{
-				"BoundaryStart": boundaryStart,
-				"BoundaryEnd":   boundaryEnd,
-				"DangerousList": strings.Join(dangerous, "\n"),
-			})
-			if tmplErr != nil {
-				return apperr.Wrap(apperr.CodeInternal, "s_validate: render l3 watchdog prompt", tmplErr)
-			}
-			systemPrompt, tmplErr := templates.Render("l3_watchdog_system.tmpl", nil)
-			if tmplErr != nil {
-				return apperr.Wrap(apperr.CodeInternal, "s_validate: render l3 watchdog system prompt", tmplErr)
-			}
-
-			llmEff := protocol.LLMFillEffect{
-				SchemaRef: "l3_watchdog",
-				PromptFn: func(pCtx protocol.StateContext) []types.Message {
-					return []types.Message{
-						{Role: "system", Content: systemPrompt},
-						{Role: "user", Content: userPrompt},
-					}
-				},
-				OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
-					if strings.HasPrefix(strings.ToUpper(string(content)), "DENY") {
-						a.asyncIntent(types.TriggerValidateFail)
-						return "S_VALIDATE_FAIL", apperr.New(apperr.CodeForbidden, "LLM Watchdog denied: "+string(content))
-					}
-					a.asyncIntent(types.TriggerValidateOk)
-					return "S_VALIDATE_OK", nil
-				},
-				OnFailure: func(pCtx protocol.StateContext, err error) (types.State, error) {
-					// L3 失败时 fail-open——架构设计，非疏漏。
-					// 依据: M04 §L3 LLM 看门狗: "LLM 不可用时 fail-open 推进 S_VALIDATE_OK"。
-					// L3 是补充信号层：L0/L1/L2 未放行的动作不可因 L3 通过而放行；
-					// L3 DENY 推进 ValidateFail，L3 LLM 不可用时不应因此阻断正常业务流。
-					// 禁止改为 fail-closed：L3 LLM 故障会导致所有非只读 DAG 永久卡住。
-					a.asyncIntent(types.TriggerValidateOk)
-					return "S_VALIDATE_OK", nil
-				},
-				MaxRetry:  0, // 看门狗不重试
-				ModelPool: "reasoning",
-			}
-
-			// 递归执行该 Effect，利用标准流程调用 LLM 并计费
-			return a.executeEffect(ctx, llmEff)
+	if vCtx.SystemTier >= 1 && a.provider != nil && vCtx.Plan != nil {
+		if handled, err := a.runL3Watchdog(ctx, vCtx); handled {
+			return err
 		}
 	}
 
 	// 校验通过→ 异步推送 TriggerValidateOk
 	a.asyncIntent(types.TriggerValidateOk)
 	return nil
+}
+
+// runL3Watchdog 执行 S_VALIDATE 阶段 L3 LLM 看门狗审查（从 runValidateDAG 拆出，
+// gocyclo 治理，行为不变）。仅当 DAG 中存在 RiskPrivileged 节点时才触发看门狗 Effect；
+// handled=false 表示本次未触发（无危险节点），调用方应继续走默认的 ValidateOk 路径。
+func (a *Agent) runL3Watchdog(ctx context.Context, vCtx *protocol.DAGValidationContext) (bool, error) {
+	var dangerous []string
+	for _, node := range vCtx.Plan.Nodes {
+		tool, err := a.toolRegistry.Lookup(node.ToolName)
+		if err != nil {
+			continue
+		}
+		// L3 仅针对 RiskPrivileged 节点，非只读但低风险节点已由 L1/L2 覆盖
+		if tool.RiskLevel == types.RiskPrivileged {
+			dangerous = append(dangerous, fmt.Sprintf("Tool: %s, Args: %s", node.ToolName, string(node.Args)))
+		}
+	}
+
+	if len(dangerous) == 0 {
+		return false, nil
+	}
+
+	// Prompt 统一走 internal/prompt/templates 管理（A-12 修复），且 dangerous
+	// 列表（来自 DAG 节点 ToolName/Args，可能间接受 LLM 分解结果影响，非完全可信）
+	// 用 prompt.NewRandomBoundary() 生成的随机边界符包裹，防止边界逃逸注入
+	// （与 GR-7-001 SecurityAuditAgent 的修复采用同一套防御模式）。
+	boundaryStart, boundaryEnd := prompt.NewRandomBoundary()
+	userPrompt, tmplErr := templates.Render("l3_watchdog_review.tmpl", map[string]string{
+		"BoundaryStart": boundaryStart,
+		"BoundaryEnd":   boundaryEnd,
+		"DangerousList": strings.Join(dangerous, "\n"),
+	})
+	if tmplErr != nil {
+		return true, apperr.Wrap(apperr.CodeInternal, "s_validate: render l3 watchdog prompt", tmplErr)
+	}
+	systemPrompt, tmplErr := templates.Render("l3_watchdog_system.tmpl", nil)
+	if tmplErr != nil {
+		return true, apperr.Wrap(apperr.CodeInternal, "s_validate: render l3 watchdog system prompt", tmplErr)
+	}
+
+	llmEff := protocol.LLMFillEffect{
+		SchemaRef: "l3_watchdog",
+		PromptFn: func(pCtx protocol.StateContext) []types.Message {
+			return []types.Message{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			}
+		},
+		OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
+			if strings.HasPrefix(strings.ToUpper(string(content)), "DENY") {
+				a.asyncIntent(types.TriggerValidateFail)
+				return "S_VALIDATE_FAIL", apperr.New(apperr.CodeForbidden, "LLM Watchdog denied: "+string(content))
+			}
+			a.asyncIntent(types.TriggerValidateOk)
+			return "S_VALIDATE_OK", nil
+		},
+		OnFailure: func(pCtx protocol.StateContext, err error) (types.State, error) {
+			// L3 失败时 fail-open——架构设计，非疏漏。
+			// 依据: M04 §L3 LLM 看门狗: "LLM 不可用时 fail-open 推进 S_VALIDATE_OK"。
+			// L3 是补充信号层：L0/L1/L2 未放行的动作不可因 L3 通过而放行；
+			// L3 DENY 推进 ValidateFail，L3 LLM 不可用时不应因此阻断正常业务流。
+			// 禁止改为 fail-closed：L3 LLM 故障会导致所有非只读 DAG 永久卡住。
+			a.asyncIntent(types.TriggerValidateOk)
+			return "S_VALIDATE_OK", nil
+		},
+		MaxRetry:  0, // 看门狗不重试
+		ModelPool: "reasoning",
+	}
+
+	// 递归执行该 Effect，利用标准流程调用 LLM 并计费
+	return true, a.executeEffect(ctx, llmEff)
 }

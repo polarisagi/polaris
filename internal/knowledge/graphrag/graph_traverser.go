@@ -175,7 +175,10 @@ func (gt *GraphTraverser) findSeedEntities(ctx context.Context, queryText string
 			ids = append(ids, id)
 		}
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "graph_traverser: seed entity 结果集遍历失败", err)
+	}
+	return ids, nil
 }
 
 // fetchNeighbors 查询 entityID 的邻居节点。
@@ -244,7 +247,10 @@ func (gt *GraphTraverser) fetchNeighbors(ctx context.Context, entityID int64, li
 			ids = append(ids, id)
 		}
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.fetchNeighbors 结果集遍历失败", err)
+	}
+	return ids, nil
 }
 
 // joinStr 连接字符串切片。
@@ -295,5 +301,8 @@ func (gt *GraphTraverser) chunksForEntity(ctx context.Context, entityName string
 			chunks = append(chunks, c)
 		}
 	}
-	return chunks, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.chunksForEntity 结果集遍历失败", err)
+	}
+	return chunks, nil
 }

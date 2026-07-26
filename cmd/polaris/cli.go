@@ -73,10 +73,13 @@ var cliHTTP = &http.Client{Timeout: 15 * time.Second}
 func cliGet(path string, out any) error {
 	resp, err := cliHTTP.Get(cliServerURL() + path)
 	if err != nil {
-		return err
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "GET "+path+" 请求失败", err)
 	}
 	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(out)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GET "+path+" 响应解析失败", err)
+	}
+	return nil
 }
 
 func cliPost(path string, body any, out any) error {
@@ -95,14 +98,14 @@ func cliRequest(method, path string, body any, out any) error {
 	}
 	req, err := http.NewRequest(method, cliServerURL()+path, buf)
 	if err != nil {
-		return err
+		return apperr.Wrap(apperr.CodeInternal, method+" "+path+" 构造请求失败", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := cliHTTP.Do(req)
 	if err != nil {
-		return err
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, method+" "+path+" 请求失败", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -110,7 +113,9 @@ func cliRequest(method, path string, body any, out any) error {
 		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, method+" "+path+" 响应解析失败", err)
+		}
 	}
 	return nil
 }
@@ -459,7 +464,7 @@ func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
 	})
 	req, err := http.NewRequest("POST", cliServerURL()+"/v1/agent/stream", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", apperr.Wrap(apperr.CodeInternal, "构造流式请求失败", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -523,7 +528,10 @@ func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
 			evType = ""
 		}
 	}
-	return newSID, sc.Err()
+	if err := sc.Err(); err != nil {
+		return newSID, apperr.Wrap(apperr.CodeInternal, "读取 SSE 流失败", err)
+	}
+	return newSID, nil
 }
 
 func cliPrintSessions() {

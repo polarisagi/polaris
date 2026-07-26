@@ -101,7 +101,10 @@ func (s *SQLiteEvalStore) PutCase(ctx context.Context, partition, agentRole stri
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.PutCase", err)
 	}
-	return s.store.Put(ctx, []byte(key), data)
+	if err := s.store.Put(ctx, []byte(key), data); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteEvalStore.PutCase store", err)
+	}
+	return nil
 }
 
 func (s *SQLiteEvalStore) scanCasesByPrefix(ctx context.Context, prefix string) ([]any, error) {
@@ -148,7 +151,10 @@ func (s *SQLiteEvalStore) PromotePendingCase(ctx context.Context, caseID, fromPa
 	}
 
 	// 删除旧分区数据
-	return s.store.Delete(ctx, []byte(oldKey))
+	if err := s.store.Delete(ctx, []byte(oldKey)); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteEvalStore.PromotePendingCase delete old key", err)
+	}
+	return nil
 }
 
 // GetPassRateAvgSince 查询指定时间后的平均通过率（按 suite="validation" 过滤）。

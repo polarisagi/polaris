@@ -142,6 +142,45 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 	return b, nil
 }
 
+// emitToolCallOnBlockStop 在 content_block_stop 事件到达且当前处于 tool_use block 内时，
+// 拼装/修复累积的 partial_json 并发送 StreamToolCall 事件（从 parseAnthropicStream 拆出，
+// nestif 治理，行为不变）。返回 ctxDone=true 时调用方应立即从 parseAnthropicStream return。
+func (a *AnthropicAdapter) emitToolCallOnBlockStop(ctx context.Context, ch chan<- types.StreamEvent, toolID, toolName string, toolInputBuf *strings.Builder) (ctxDone bool) {
+	inputJSON := toolInputBuf.String()
+	if inputJSON == "" {
+		inputJSON = "{}"
+	} else if !json.Valid([]byte(inputJSON)) {
+		// 流被截断导致 tool_use 的 input_json_delta 拼接结果不是合法
+		// JSON：json.RawMessage 校验会使下方 json.Marshal 静默失败
+		// （payload=nil），StreamToolCall 事件内容凭空丢失。用
+		// JSONRepair 栈式修复尽力抢救已收到的参数片段。
+		if repaired, repairErr := llmparent.JSONRepair([]byte(inputJSON)); repairErr == nil && json.Valid(repaired.Repaired) {
+			inputJSON = string(repaired.Repaired)
+		} else {
+			inputJSON = "{}"
+		}
+	}
+	payload, err := json.Marshal(map[string]any{
+		"id":    toolID,
+		"name":  toolName,
+		"input": json.RawMessage(inputJSON),
+	})
+	if err != nil {
+		select {
+		case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
+		case <-ctx.Done():
+			return true
+		}
+		return false
+	}
+	select {
+	case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+	case <-ctx.Done():
+		return true
+	}
+	return false
+}
+
 // parseAnthropicStream 解析 Anthropic SSE 事件并转换为统一的 StreamEvent。
 // tool_use 事件打包为 StreamToolCall，Content 为 JSON: {"id","name","input"}。
 func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model string, body io.Reader, ch chan<- types.StreamEvent) { //nolint:gocyclo
@@ -250,42 +289,11 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 			}
 		case "content_block_stop":
 			if inToolBlock {
-				inputJSON := toolInputBuf.String()
-				if inputJSON == "" {
-					inputJSON = "{}"
-				} else if !json.Valid([]byte(inputJSON)) {
-					// 流被截断导致 tool_use 的 input_json_delta 拼接结果不是合法
-					// JSON：json.RawMessage 校验会使下方 json.Marshal 静默失败
-					// （payload=nil），StreamToolCall 事件内容凭空丢失。用
-					// JSONRepair 栈式修复尽力抢救已收到的参数片段。
-					if repaired, repairErr := llmparent.JSONRepair([]byte(inputJSON)); repairErr == nil && json.Valid(repaired.Repaired) {
-						inputJSON = string(repaired.Repaired)
-					} else {
-						inputJSON = "{}"
-					}
-				}
-				payload, err := json.Marshal(map[string]any{
-					"id":    toolID,
-					"name":  toolName,
-					"input": json.RawMessage(inputJSON),
-				})
-				if err != nil {
-					select {
-					case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
-					case <-ctx.Done():
-						return
-					}
-					inToolBlock = false
-					inThinkingBlock = false
-					continue
-				}
-				select {
-				case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
-				case <-ctx.Done():
+				if a.emitToolCallOnBlockStop(ctx, ch, toolID, toolName, &toolInputBuf) {
 					return
 				}
-				inToolBlock = false
 			}
+			inToolBlock = false
 			inThinkingBlock = false
 		case "message_delta":
 			if frame.Usage.OutputTokens > 0 {

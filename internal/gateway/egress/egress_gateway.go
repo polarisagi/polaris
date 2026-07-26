@@ -52,7 +52,11 @@ func (gw *EgressGateway) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, apperr.New(apperr.CodeForbidden,
 			fmt.Sprintf("egress_gateway: domain %q not in allowlist (M13 §1.2.2)", host))
 	}
-	return gw.inner.RoundTrip(req)
+	resp, err := gw.inner.RoundTrip(req)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeNetworkUnavailable, "egress_gateway: RoundTrip 失败", err)
+	}
+	return resp, nil
 }
 
 // AddAllowedDomain 动态追加白名单域名（对应 `polaris config network allow <domain>`）。

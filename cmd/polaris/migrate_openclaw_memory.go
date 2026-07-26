@@ -156,7 +156,10 @@ func ensureStagingTable(db *sql.DB) error {
 			created_at  INTEGER NOT NULL,
 			processed_at INTEGER
 		)`)
-	return err
+	if err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "创建 migration_staging 表失败", err)
+	}
+	return nil
 }
 
 func recordBatch(db *sql.DB, batchID string, total int, source string, sizes map[string]int) {
@@ -592,24 +595,27 @@ var patternKeywords = map[columnPattern][]string{
 func introspectTables(db *sql.DB) ([]string, error) {
 	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "查询 sqlite_master 表列表失败", err)
 	}
 	defer rows.Close()
 	var tables []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, err
+			return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "扫描表名失败", err)
 		}
 		tables = append(tables, name)
 	}
-	return tables, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "遍历表名结果集失败", err)
+	}
+	return tables, nil
 }
 
 func introspectColumns(db *sql.DB, table string) ([]columnInfo, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%q)", table))
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "查询 "+table+" 列信息失败", err)
 	}
 	defer rows.Close()
 	var cols []columnInfo
@@ -619,7 +625,7 @@ func introspectColumns(db *sql.DB, table string) ([]columnInfo, error) {
 		var def sql.NullString
 		var pk int
 		if err := rows.Scan(&c.Index, &c.Name, &c.Type, &nullable, &def, &pk); err != nil {
-			return nil, err
+			return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "扫描列信息失败", err)
 		}
 		c.NotNull = nullable == 0
 		if def.Valid {
@@ -629,7 +635,10 @@ func introspectColumns(db *sql.DB, table string) ([]columnInfo, error) {
 		c.Pattern = classifyColumn(c.Name)
 		cols = append(cols, c)
 	}
-	return cols, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "遍历列信息结果集失败", err)
+	}
+	return cols, nil
 }
 
 func classifyColumn(name string) columnPattern {
@@ -667,7 +676,10 @@ func resolvePolarisDB() string {
 
 func verifyEventsTable(db *sql.DB) error {
 	var name string
-	return db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").Scan(&name)
+	if err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").Scan(&name); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "校验 events 表存在性失败", err)
+	}
+	return nil
 }
 
 func readString(v any) string {

@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"github.com/polarisagi/polaris/internal/security/network"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
 	"log/slog"
@@ -56,7 +57,10 @@ func GitCloneOrPull(ctx context.Context, client *http.Client, repoURL, destDir s
 
 // runGitClone 执行 git clone --depth 1。
 func runGitClone(ctx context.Context, url, destDir string) error {
-	return exec.CommandContext(ctx, "git", "clone", "--depth", "1", url, destDir).Run()
+	if err := exec.CommandContext(ctx, "git", "clone", "--depth", "1", url, destDir).Run(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "downloader: git clone 失败: "+url, err)
+	}
+	return nil
 }
 
 // gitHash 返回指定目录仓库的当前 HEAD short hash；失败返回空串。

@@ -278,41 +278,15 @@ type RiskAssessor struct{}
 func (ra *RiskAssessor) Assess(code []byte) (riskLevel int, sandboxTier int) {
 	codeStr := string(code)
 
-	// 检测文件系统写入操作 → medium
-	hasFSWrite := strings.Contains(codeStr, "WriteFile") ||
-		strings.Contains(codeStr, "os.Create") ||
-		strings.Contains(codeStr, "os.OpenFile") ||
-		strings.Contains(codeStr, "ioutil.WriteFile") ||
-		strings.Contains(codeStr, "fs.writeFile") ||
-		strings.Contains(codeStr, "fs.writeFileSync") ||
-		strings.Contains(codeStr, "open(") // Python open() 读写两用，宁可偏保守判定
-
-	// 检测网络请求 → high
-	hasNetwork := strings.Contains(codeStr, "http.") ||
-		strings.Contains(codeStr, "net.Dial") ||
-		strings.Contains(codeStr, "grpc.Dial") ||
-		strings.Contains(codeStr, "fetch(") ||
-		strings.Contains(codeStr, "XMLHttpRequest") ||
-		strings.Contains(codeStr, "requests.get") ||
-		strings.Contains(codeStr, "requests.post") ||
-		strings.Contains(codeStr, "urllib.request")
-
-	// 检测 shell 执行 → high (需最高隔离)
-	hasShell := strings.Contains(codeStr, "exec.Command") ||
-		strings.Contains(codeStr, "os/exec") ||
-		strings.Contains(codeStr, "subprocess.") ||
-		strings.Contains(codeStr, "os.system") ||
-		strings.Contains(codeStr, "child_process")
-
 	// 风险级别判定
 	switch {
-	case hasShell:
+	case hasShellExec(codeStr):
 		riskLevel = 2   // high
 		sandboxTier = 3 // L3 Container
-	case hasNetwork:
+	case hasNetworkCall(codeStr):
 		riskLevel = 2   // high
 		sandboxTier = 3 // L3 Container
-	case hasFSWrite:
+	case hasFileSystemWrite(codeStr):
 		riskLevel = 1   // medium
 		sandboxTier = 3 // L3 Container
 	default:
@@ -321,6 +295,38 @@ func (ra *RiskAssessor) Assess(code []byte) (riskLevel int, sandboxTier int) {
 	}
 
 	return riskLevel, sandboxTier
+}
+
+// hasFileSystemWrite 检测文件系统写入操作 → medium 风险（从 Assess 拆出，gocyclo 治理，行为不变）。
+func hasFileSystemWrite(codeStr string) bool {
+	return strings.Contains(codeStr, "WriteFile") ||
+		strings.Contains(codeStr, "os.Create") ||
+		strings.Contains(codeStr, "os.OpenFile") ||
+		strings.Contains(codeStr, "ioutil.WriteFile") ||
+		strings.Contains(codeStr, "fs.writeFile") ||
+		strings.Contains(codeStr, "fs.writeFileSync") ||
+		strings.Contains(codeStr, "open(") // Python open() 读写两用，宁可偏保守判定
+}
+
+// hasNetworkCall 检测网络请求 → high 风险（从 Assess 拆出，gocyclo 治理，行为不变）。
+func hasNetworkCall(codeStr string) bool {
+	return strings.Contains(codeStr, "http.") ||
+		strings.Contains(codeStr, "net.Dial") ||
+		strings.Contains(codeStr, "grpc.Dial") ||
+		strings.Contains(codeStr, "fetch(") ||
+		strings.Contains(codeStr, "XMLHttpRequest") ||
+		strings.Contains(codeStr, "requests.get") ||
+		strings.Contains(codeStr, "requests.post") ||
+		strings.Contains(codeStr, "urllib.request")
+}
+
+// hasShellExec 检测 shell 执行 → high 风险，需最高隔离（从 Assess 拆出，gocyclo 治理，行为不变）。
+func hasShellExec(codeStr string) bool {
+	return strings.Contains(codeStr, "exec.Command") ||
+		strings.Contains(codeStr, "os/exec") ||
+		strings.Contains(codeStr, "subprocess.") ||
+		strings.Contains(codeStr, "os.system") ||
+		strings.Contains(codeStr, "child_process")
 }
 
 // Signer Step 4 — 签名 + 入库。

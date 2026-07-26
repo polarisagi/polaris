@@ -61,7 +61,11 @@ func NewJITToken(agentID, sessionID string, ops []TokenOperation, depth int, san
 	if depth >= 3 {
 		return nil, ErrMaxDelegationDepth
 	}
-	return getTokenManager().Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute, 0)
+	tok, err := getTokenManager().Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute, 0)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "capability_token: JIT Mint 失败", err)
+	}
+	return tok, nil
 }
 
 // 委托链（子 Agent 请求比父级更受限的子 Token）机制已于 2026-07-14 移除：

@@ -230,8 +230,9 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 	// 步骤 4: COMMIT 前 ctx 检查
 	select {
 	case <-ctx.Done():
-		dw.failAll(validBatch, ctx.Err())
-		return ctx.Err()
+		cancelErr := ctx.Err()
+		dw.failAll(validBatch, cancelErr)
+		return cancelErr //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 	default:
 	}
 

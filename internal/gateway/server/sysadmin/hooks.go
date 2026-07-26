@@ -85,7 +85,7 @@ func (h *HookRunner) exec(event string, env map[string]string, timeout time.Dura
 		if ctx.Err() == context.DeadlineExceeded {
 			slog.Warn("hook: timeout", "event", event, "timeout", timeout, "err", apperr.New(apperr.CodeInternal, "log event"))
 		}
-		return exitCode, output, runErr
+		return exitCode, output, apperr.Wrap(apperr.CodeInternal, "hooks: RunScript 执行失败", runErr)
 	}
 	return exitCode, output, nil
 }

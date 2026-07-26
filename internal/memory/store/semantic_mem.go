@@ -71,14 +71,21 @@ func (sm *SemanticMem) StoreChunks(ctx context.Context, docID string, chunks []t
 
 func (sm *SemanticMem) StoreStats() (string, error) {
 	if ext, ok := sm.store.(protocol.StoreExtStats); ok {
-		return ext.Stats()
+		stats, err := ext.Stats()
+		if err != nil {
+			return "", apperr.Wrap(apperr.CodeInternal, "SemanticMem.StoreStats", err)
+		}
+		return stats, nil
 	}
 	return "{}", nil
 }
 
 func (sm *SemanticMem) SetVectorMode(mode int) error {
 	if ext, ok := sm.store.(protocol.StoreExtVector); ok {
-		return ext.VecSetMode(mode)
+		if err := ext.VecSetMode(mode); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SemanticMem.SetVectorMode", err)
+		}
+		return nil
 	}
 	return nil
 }

@@ -71,8 +71,7 @@ func TestMCPClient_CallToolTainted(t *testing.T) {
 }
 
 func TestMCPClient_SSE(t *testing.T) {
-	var sseCh chan string
-	sseCh = make(chan string, 1)
+	sseCh := make(chan string, 1)
 
 	clientHTTP := &http.Client{
 		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {

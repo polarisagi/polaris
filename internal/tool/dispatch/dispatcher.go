@@ -113,5 +113,9 @@ func (d *Dispatcher) route(ctx context.Context, entry protocol.CatalogEntry, arg
 	// builtin/mcp/native 等全部来源统一走 ToolRegistry.ExecuteTool：
 	// PolicyGate → Capability Token → 沙箱分级 → 执行 → Taint only-up 传播 → RateLimit/Idempotency，
 	// 与 Agent Kernel（internal/agent/agent_execute.go）完全同一条路径，无第二套实现。
-	return d.toolReg.ExecuteTool(ctx, entry.Name, args, entry.TaintLevel)
+	result, err := d.toolReg.ExecuteTool(ctx, entry.Name, args, entry.TaintLevel)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "dispatch: ExecuteTool 失败", err)
+	}
+	return result, nil
 }

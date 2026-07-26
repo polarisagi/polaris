@@ -363,7 +363,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			inferOpts := append([]types.InferOption{types.WithModel("reasoning")}, opts...)
 			resp, err := sb.Router.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, inferOpts...)
 			if err != nil {
-				return "", err
+				return "", apperr.Wrap(apperr.CodeInternal, "boot_tools: llmInfer 失败", err)
 			}
 			return resp.Content, nil
 		}
@@ -631,7 +631,12 @@ func deduplicatePaths(paths []string) []string {
 
 type inlineTokenVerifier struct{}
 
-func (v *inlineTokenVerifier) Verify(t *token.Token) error { return action.GetTokenManager().Verify(t) }
+func (v *inlineTokenVerifier) Verify(t *token.Token) error {
+	if err := action.GetTokenManager().Verify(t); err != nil {
+		return apperr.Wrap(apperr.CodeForbidden, "inlineTokenVerifier: token 校验失败", err)
+	}
+	return nil
+}
 
 var _ sandbox.TokenVerifier = (*inlineTokenVerifier)(nil)
 

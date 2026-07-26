@@ -178,7 +178,10 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 		CreatedAt: time.Now(),
 	}
 
-	return rw.reflection.AppendReflection(ctx, entry)
+	if err := rw.reflection.AppendReflection(ctx, entry); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "reflection_worker: AppendReflection 失败", err)
+	}
+	return nil
 }
 
 // isWhitelisted 判断 taskType 是否在触发反思的白名单内。

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -257,7 +258,11 @@ func (lrw *LoggingResponseWriter) Write(b []byte) (int, error) {
 	if lrw.statusCode >= 400 {
 		lrw.body = append(lrw.body, b...)
 	}
-	return lrw.ResponseWriter.Write(b)
+	n, err := lrw.ResponseWriter.Write(b)
+	if err != nil {
+		return n, apperr.Wrap(apperr.CodeInternal, "middleware: ResponseWriter.Write 失败", err)
+	}
+	return n, nil
 }
 
 func (lrw *LoggingResponseWriter) Flush() {

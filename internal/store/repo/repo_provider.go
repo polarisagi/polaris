@@ -114,7 +114,10 @@ func (r *SQLiteProviderRepository) ListProviders(ctx context.Context) ([]types.P
 		row.Enabled = enabledInt == 1
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListProviders rows", err)
+	}
+	return result, nil
 }
 
 // DeleteProvider 删除 provider。
@@ -160,7 +163,10 @@ func (r *SQLiteProviderRepository) ListModels(ctx context.Context, providerID st
 		row.Enabled = enabledInt == 1
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ListModels rows", err)
+	}
+	return result, nil
 }
 
 // DeleteModelsByProvider 删除指定 provider 的所有 model。

@@ -31,7 +31,11 @@ func (f *ActionFacadeImpl) ExecuteCode(ctx context.Context, req protocol.CodeAct
 	if f.ca == nil {
 		return nil, apperr.New(apperr.CodeInternal, "action: codeact engine not initialized")
 	}
-	return f.ca.Execute(ctx, req)
+	result, err := f.ca.Execute(ctx, req)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "ActionFacadeImpl.ExecuteCode", err)
+	}
+	return result, nil
 }
 
 func (f *ActionFacadeImpl) CodeActAvailable() bool {

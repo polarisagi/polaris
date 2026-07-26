@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ─── LogEntry ───────────────────────────────────────────────────────────────────
@@ -94,7 +96,10 @@ func (s *LogStore) Handle(ctx context.Context, r slog.Record) error {
 	}
 	s.mu.Unlock()
 
-	return s.wrapped.Handle(ctx, r)
+	if err := s.wrapped.Handle(ctx, r); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "logstream: 底层 Handler.Handle 失败", err)
+	}
+	return nil
 }
 
 func (s *LogStore) WithAttrs(attrs []slog.Attr) slog.Handler {

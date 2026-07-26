@@ -42,7 +42,10 @@ func (r *SQLiteCronRepository) ListCronJobs(ctx context.Context) ([]types.CronJo
 		row.CircuitOpen = circuitOpenInt == 1
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteCronRepository.ListCronJobs rows", err)
+	}
+	return result, nil
 }
 
 // GetCronJob 获取单个 cron job

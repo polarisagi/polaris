@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 //nolint:gocyclo
@@ -38,7 +40,7 @@ func main() {
 
 			src, err := os.ReadFile(path)
 			if err != nil {
-				return err
+				return apperr.Wrap(apperr.CodeInternal, "gen_bare_error_baseline: 读取文件失败: "+path, err)
 			}
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, path, src, 0)

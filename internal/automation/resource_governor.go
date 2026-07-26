@@ -144,8 +144,6 @@ type ResourceGovernor struct {
 
 	cfg config.ResourceGovernorConfig
 
-	awake int32
-
 	memProbeFn func() (freeMB int64)
 	cpuProbeFn func() (usage float64)
 }
@@ -257,12 +255,15 @@ func (rg *ResourceGovernor) WaitForCapacity(ctx context.Context) error {
 	rg.mu.Lock()
 	defer rg.mu.Unlock()
 	for rg.inFlight >= rg.maxConcurrent {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		}
 		rg.cond.Wait()
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
+	}
+	return nil
 }
 
 // Release 释放一个并发额度，唤醒等待队列中的下一个任务。
@@ -323,12 +324,15 @@ func (rg *ResourceGovernor) WaitForLLMCapacity(ctx context.Context) error {
 	rg.mu.Lock()
 	defer rg.mu.Unlock()
 	for rg.maxConcurrentLLMCalls > 0 && rg.llmInFlight >= rg.maxConcurrentLLMCalls {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		}
 		rg.cond.Wait()
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
+	}
+	return nil
 }
 
 // ReleaseLLM 释放 LLM 的并发额度
