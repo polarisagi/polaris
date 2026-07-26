@@ -134,8 +134,13 @@ func (p *Pool) newPoolEntry(sessionID string) *poolEntry {
 	return &poolEntry{agent: ag}
 }
 
-// Acquire 返回 sessionID 对应的 Agent 及释放回调。
-func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
+// acquireInner 是 Acquire 和 AcquireHeadless 的公共内部实现。
+// ctx 的超时语义由调用方控制：
+//   - Acquire 传入以 p.acquireTimeout（100ms）包裹后的 ctx，适合交互式 SSE 路径，
+//     不让用户等待。
+//   - AcquireHeadless 直接传入上层 bgCtx（默认 10 分钟），允许后台课程/Workflow
+//     任务在 pool 短暂繁忙时排队等待空闲 slot，而非立即返回 CodeResourceExhausted。
+func (p *Pool) acquireInner(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
 	// KillSwitch 熔断检查：Pause/FullStop 阶段拒绝启动任何新 Agent 执行
 	// （进行中的 Agent 不受影响，语义对齐 KillPause 注释"中止并保存进行中请求的状态"——
 	// 由 KillSwitch 状态变迁时的上层编排负责，此处只负责"不再开新的"）。
@@ -143,12 +148,10 @@ func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentCon
 		return nil, nil, apperr.New(apperr.CodeInternal, "agent pool: system sealed by killswitch, rejecting new agent execution")
 	}
 
-	// 等待容量令牌
-	acquireCtx, cancel := context.WithTimeout(ctx, p.acquireTimeout)
-	defer cancel()
+	// 等待容量令牌（超时语义由传入的 ctx 决定）
 	select {
 	case <-p.sem:
-	case <-acquireCtx.Done():
+	case <-ctx.Done():
 		return nil, nil, apperr.New(apperr.CodeResourceExhausted, "agent pool: capacity exhausted")
 	}
 
@@ -207,11 +210,27 @@ func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentCon
 	return agent, release, nil
 }
 
+// Acquire 返回 sessionID 对应的 Agent 及释放回调。
+// 适用于交互式 SSE 路径：使用 p.acquireTimeout（100ms）短超时，超时即返回
+// CodeResourceExhausted，不阻塞用户响应。
+func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
+	acquireCtx, cancel := context.WithTimeout(ctx, p.acquireTimeout)
+	defer cancel()
+	return p.acquireInner(acquireCtx, sessionID)
+}
+
 // AcquireHeadless 供 Cron/Workflow/Webhook 等非交互式触发方注入 Intent 并同步获取最终结果，
 // 内部完整复用 Agent Kernel 的 FSM/DAG/安全 Gate/Reflection/Replan 能力。
+//
+// [Bug 2 修复] 此前调用 p.Acquire(ctx, sessionID)，后者用 100ms acquireTimeout 包裹
+// ctx，导致后台课程任务（AutoCurriculumGenerator 批量投递 4-6 个任务）在 pool 短暂
+// 竞争时立即失败。现改为直接调用 acquireInner，使用调用方传入的 bgCtx（10 分钟超时），
+// 允许后台任务排队等待空闲 slot。交互式路径（Acquire）不受影响，仍保持 100ms 超时。
 func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
 	sessionID := "headless-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%x", time.Now().UnixNano())
-	agent, release, err := p.Acquire(ctx, sessionID)
+	// headless 任务使用 ctx 自身超时（由 defaultTaskWorker 传入的 bgCtx，最长 10 分钟），
+	// 而非 p.acquireTimeout 的 100ms——后台批量任务应排队而非立即失败。
+	agent, release, err := p.acquireInner(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}

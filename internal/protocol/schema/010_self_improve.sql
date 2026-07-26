@@ -49,16 +49,19 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_active ON prompt_versions(task_type, is_active);
 
 -- Staging 渐进发布状态
+-- 列名必须与 internal/prompt/optimizer/rollout_store.go 中所有 SQL 查询保持一致：
+--   version / baseline / metadata（rollout_store.go 是唯一读写方，列名以代码为准）。
 CREATE TABLE IF NOT EXISTS rollout_states (
-    candidate_version TEXT    PRIMARY KEY,
-    baseline_version  TEXT    NOT NULL,
-    current_gate      INTEGER NOT NULL DEFAULT 0,
-    canary_percent    INTEGER NOT NULL DEFAULT 0,
-    status            TEXT    NOT NULL,
-    eval_score        REAL    NOT NULL DEFAULT -1,
-    shadow_ok         INTEGER NOT NULL DEFAULT 0,
-    started_at        INTEGER NOT NULL,
-    last_advanced_at  INTEGER NOT NULL
+    version          TEXT    PRIMARY KEY,
+    baseline         TEXT    NOT NULL,
+    current_gate     INTEGER NOT NULL DEFAULT 0,
+    canary_percent   INTEGER NOT NULL DEFAULT 0,
+    status           TEXT    NOT NULL DEFAULT 'pending',
+    eval_score       REAL    NOT NULL DEFAULT -1,
+    shadow_ok        INTEGER NOT NULL DEFAULT 0,
+    started_at       INTEGER NOT NULL,
+    last_advanced_at INTEGER NOT NULL,
+    metadata         TEXT    NOT NULL DEFAULT '{}'
 );
 
 -- Skill 描述符变体池（L2SkillGeneration 候选池）
