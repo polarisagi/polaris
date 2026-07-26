@@ -472,7 +472,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// reaper 强制失败。此处接入 DefaultTaskWorker，复用同日已验证的
 	// workflowadmin.RunStepWorkerLoop"自订阅+CAS"模式，排除已有专用 Worker
 	// 处理的 "workflow_step" 类型，其余任务一律走 AgentPool.AcquireHeadless。
-	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool, "workflow_step")
+	// "debate" 类型由专用 DebateWorker 认领（见 debate_worker.go），排除后防止
+	// DefaultTaskWorker 把结构化 DebateJobIntent JSON 当纯文本传给 LLM（HE-3）。
+	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool, "workflow_step", orchestrator.DebateTaskType)
 
 	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
 		Name:   "agent-0",
@@ -883,6 +885,13 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	})
 	sv.AddWorker("m9-engine", func(ctx context.Context) error {
 		return m9Engine.Start(ctx)
+	})
+	// GD-6 Debate/Critic 对抗协同模式驱动（ADR-0062 白名单行18-19 接线）：
+	// DebateWorker 订阅 Blackboard 事件，认领 type=="debate" 的任务并驱动
+	// DebateExecutor.Execute 状态机断点续跑，补齐此前缺失的调度循环驱动。
+	debateWorker := orchestrator.NewDebateWorker(blackboard, debateExec)
+	sv.AddWorker("debate-worker", func(ctx context.Context) error {
+		return debateWorker.RunLoop(ctx)
 	})
 	sv.AddWorker("memory-agent", func(ctx context.Context) error {
 		memoryAgent.Run(ctx)
