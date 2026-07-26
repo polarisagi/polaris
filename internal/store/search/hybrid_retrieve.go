@@ -84,7 +84,7 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 					})
 				}
 			} else {
-				slog.Warn("hybrid_retrieve: unmarshal fts value failed", "err", err)
+				slog.Warn("hybrid_retrieve: unmarshal failed", "err", err, "docID", string(ftsIter.Key()))
 			}
 		}
 	}
@@ -136,7 +136,7 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 						}
 					}
 				} else {
-					slog.Warn("hybrid_retrieve: unmarshal vec value failed", "err", err)
+					slog.Warn("hybrid_retrieve: unmarshal failed", "err", err, "docID", string(vecIter.Key()))
 				}
 			}
 		}

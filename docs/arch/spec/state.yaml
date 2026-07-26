@@ -974,6 +974,8 @@ thresholds:
     supervisor_backoff_max_seconds: 30
     compensation_timeout_seconds: 300
     compensation_poll_seconds: 5
+    debate_max_rounds: 3
+    debate_concurrent_sides: false
     re_eval_when:
       - max_agents_desktop_ht0: ["concurrency_bottleneck"]
       - max_agents_server_ht0: ["concurrency_bottleneck"]

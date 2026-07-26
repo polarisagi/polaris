@@ -14,6 +14,10 @@ func GetAdapter(name string) BenchmarkAdapter {
 		return &TauBenchAdapter{}
 	case "terminal":
 		return &TerminalBenchAdapter{}
+	case "locomo":
+		return &LoCoMoAdapter{}
+	case "longmemeval":
+		return &LongMemEvalAdapter{}
 	default:
 		return nil
 	}
