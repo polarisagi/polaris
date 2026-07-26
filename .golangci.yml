@@ -4,25 +4,15 @@ linters:
     - depguard
     - errorlint
     - forbidigo
-    - gochecknoglobals  # [Task 23] 禁止 internal/ 包级可变全局变量（豁免见 exclusions）
+    - gochecknoglobals  # 禁止 internal/ 包级可变全局变量（豁免见 exclusions）
     - gocyclo
     - misspell
     - nestif
     - nilerr
     - prealloc
     - unconvert
-    - wrapcheck     # [Task 23] 错误包装统一走 apperr，禁止裸 errors/fmt 跨调用链泄漏
-    # [Task 24] funlen 2026-07-04 审计：判断结论为「废弃，不采用宽松阈值」（见
-    # local_playground/upgrade/2026-07-03-full-remediation-development-prompt.md
-    # §附录·任务24——该附录是对同文档正文任务24"宽松阈值"框架的最终修订，
-    # 前提"有其它规则顶替 funlen 的复杂度治理职责"已满足：gocyclo 本仓库一直
-    # 启用（见下方 settings.gocyclo，min-complexity:15，ADR-0013 先例）。
-    # funlen 检查物理行数/语句数是复杂度的粗糙代理指标，与 gocyclo 高度冗余，
-    # 且 Go 惯用的 `if err != nil { return }` 密集出现天然拉长物理行数但不代表
-    # 复杂，误报率偏高。故不启用，复杂度治理职责收敛到 gocyclo 一家。
-    # 此前 Gemini 落地时启用了 funlen（宽松阈值 lines:120/stmts:80），采纳的是
-    # 正文任务24框架而非附录的最终修订判断，与文档结论相反且未向用户报告此
-    # 冲突，违反 CLAUDE.md「指令歧义或架构冲突 → 主动提问，禁止静默决策」。
+    - wrapcheck     # 错误包装统一走 apperr，禁止裸 errors/fmt 跨调用链泄漏
+    # funlen 未启用：与 gocyclo 高度冗余，误报率偏高（Go 惯用的 err 处理天然拉长行数）
   settings:
     depguard:
       rules:
@@ -34,31 +24,31 @@ linters:
             - '**/internal/security/**'
           deny:
             - pkg: github.com/polarisagi/polaris/internal/agent
-              desc: L0 不可引 L1 (B1 + R1.7)
+              desc: L0 不可引 L1
             - pkg: github.com/polarisagi/polaris/internal/memory
-              desc: L0 不可引 L1 (B1 + R1.7)
+              desc: L0 不可引 L1
             - pkg: github.com/polarisagi/polaris/internal/prompt
-              desc: L0 不可引 L1 (B1 + R1.7)
+              desc: L0 不可引 L1
             - pkg: github.com/polarisagi/polaris/internal/tool
-              desc: L0 不可引 L1 (B1 + R1.7)
+              desc: L0 不可引 L1
             - pkg: github.com/polarisagi/polaris/internal/sandbox
-              desc: L0 不可引 L1 (B1 + R1.7)
+              desc: L0 不可引 L1
             - pkg: github.com/polarisagi/polaris/internal/action
-              desc: L0 不可引 L1 (B1 + R1.7)
+              desc: L0 不可引 L1
             - pkg: github.com/polarisagi/polaris/internal/swarm
-              desc: L0 不可引 L2 (B1 + R1.7)
+              desc: L0 不可引 L2
             - pkg: github.com/polarisagi/polaris/internal/learning
-              desc: L0 不可引 L2 (B1 + R1.7)
+              desc: L0 不可引 L2
             - pkg: github.com/polarisagi/polaris/internal/knowledge
-              desc: L0 不可引 L2 (B1 + R1.7)
+              desc: L0 不可引 L2
             - pkg: github.com/polarisagi/polaris/internal/eval
-              desc: L0 不可引 L3 (B1 + R1.7)
+              desc: L0 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/gateway
-              desc: L0 不可引 L3 (B1 + R1.7)
+              desc: L0 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/channel
-              desc: L0 不可引 L3 (B1 + R1.7)
+              desc: L0 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/cli
-              desc: L0 不可引 L3 (B1 + R1.7)
+              desc: L0 不可引 L3
         L1_cognition_action:
           files:
             - '**/internal/agent/**'
@@ -69,19 +59,19 @@ linters:
             - '**/internal/action/**'
           deny:
             - pkg: github.com/polarisagi/polaris/internal/swarm
-              desc: L1 不可引 L2 (B1 + R1.7)
+              desc: L1 不可引 L2
             - pkg: github.com/polarisagi/polaris/internal/learning
-              desc: L1 不可引 L2 (B1 + R1.7)
+              desc: L1 不可引 L2
             - pkg: github.com/polarisagi/polaris/internal/knowledge
-              desc: L1 不可引 L2 (B1 + R1.7)
+              desc: L1 不可引 L2
             - pkg: github.com/polarisagi/polaris/internal/eval
-              desc: L1 不可引 L3 (B1 + R1.7)
+              desc: L1 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/gateway
-              desc: L1 不可引 L3 (B1 + R1.7)
+              desc: L1 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/channel
-              desc: L1 不可引 L3 (B1 + R1.7)
+              desc: L1 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/cli
-              desc: L1 不可引 L3 (B1 + R1.7)
+              desc: L1 不可引 L3
         L2_swarm:
           files:
             - '**/internal/swarm/**'
@@ -89,13 +79,13 @@ linters:
             - '**/internal/knowledge/**'
           deny:
             - pkg: github.com/polarisagi/polaris/internal/eval
-              desc: L2 不可引 L3 (B1 + R1.7)
+              desc: L2 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/gateway
-              desc: L2 不可引 L3 (B1 + R1.7)
+              desc: L2 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/channel
-              desc: L2 不可引 L3 (B1 + R1.7)
+              desc: L2 不可引 L3
             - pkg: github.com/polarisagi/polaris/internal/cli
-              desc: L2 不可引 L3 (B1 + R1.7)
+              desc: L2 不可引 L3
     errorlint:
       errorf: true
       asserts: true
@@ -111,7 +101,7 @@ linters:
     nestif:
       min-complexity: 5
     wrapcheck:
-      # [Task 23] 允许 apperr 自身不需要包装自身；允许 stdlib errors 包。
+      # 允许 apperr 自身及 stdlib errors 包不需要包装
       ignore-sigs:
         - .Errorf(
         - errors.New(
@@ -120,7 +110,7 @@ linters:
         - .New(
         - apperr.
       ignore-interface-regexps:
-        - ^(?i)(Closed|Simple|IO)$ # 常见 stdlib 接口不强制包装
+        - ^(?i)(Closed|Simple|IO)$
   exclusions:
     generated: lax
     presets:
@@ -129,57 +119,30 @@ linters:
       - legacy
       - std-error-handling
     rules:
+      # 测试文件：errcheck/errorlint/forbidigo/gochecknoglobals/gocyclo/nestif/wrapcheck 全豁免
+      # 测试用的裸 errors.New、未处理 error、fixture 全局变量均属正常惯用法
       - linters:
           - errcheck
           - errorlint
-          - forbidigo # 测试文件常需构造裸 error/errors.New 模拟第三方错误（如 pkg/apperr/apperr_test.go
-          # 测试 apperr.Wrap 包装任意 cause 的能力），若强制 apperr 反而使测试语义失真
-          - gochecknoglobals # 测试文件用包级变量做 fixture/mock 是常见惯用法（如 dummyDialerPtr）
+          - forbidigo
+          - gochecknoglobals
           - gocyclo
           - nestif
           - wrapcheck
         path: _test\.go
-      # [Task 23] ADR-0001 豁免：internal/observability/metrics/ 是一等公民指标全局变量。
-      # 这是永久性架构决策（不是待清理的存量债务），故用 path 豁免而非下方的
-      # new-from-rev 存量基线机制。
+      # ADR-0001：metrics 全局变量是 Prometheus 进程级单例，永久架构决策
       - linters:
           - gochecknoglobals
         path: internal/observability/metrics/
-      # 2026-07-26（344 lint 问题清理收尾）：ADR-0011（CGO→purego 迁移）豁免。
-      # 以下文件是 Rust substrate/wasmtime/sherpa-onnx dylib 的 purego 函数指针绑定——
-      # purego.RegisterLibFunc 要求把符号解析结果写入包级 `var fn func(...)`，
-      # dylib 句柄/ABI 状态（libHandle/loadOnce/loadErr 等）也是进程级单例，
-      # 与 dlopen 语义（同进程内共享同一份已加载的动态库）一一对应。
-      # 这是与 ADR-0001 指标全局变量同性质的永久性架构决策，非待清理存量债务：
-      # 把函数指针从包级 var 包进结构体字段不会改变其单例本质（RegisterLibFunc
-      # 仍需在 init/Load 时写一次、之后全进程只读），只会新增一层无意义的
-      # 解引用，故不作为"重构成结构体字段"处理，改用 path 豁免。
+      # ADR-0011：purego FFI 函数指针绑定，dlopen 语义要求包级 var，永久架构决策
       - linters:
           - gochecknoglobals
         path: (internal/store/surreal_store\.go|internal/llm/(stt|tts)/sherpa\.go|internal/ffi/(llama|dylib|vec_ops)\.go|internal/tool/sandbox/rust_(wasmtime|native)_sandbox\.go|internal/security/policy/cedar_ffi\.go)
-      # 2026-07-26（344 lint 问题清理收尾）：进程级单例/惰性初始化只读缓存/静态查表豁免。
-      # 逐文件复核确认均为以下三种模式之一，均非"隐式共享可变状态"意义上的反模式：
-      #   1. sync.OnceValue 惰性单例（编译正则/静态表/TokenManager 等）——项目已
-      #      明确弃用"包级 var + init()"改用此模式（见各文件注释：消除全局可变
-      #      状态、避免包初始化顺序依赖），首次调用后只读，本质是记忆化纯函数；
-      #      涉及 query_classifier.go/feature_gate.go/safe_dialer.go/
-      #      security_audit_agent.go/proxy.go/generate.go/entity.go/capability_token.go。
-      #   2. atomic 原子量组成的跨模块进程级单例（spanIDCounter/isReplaying/
-      #      PanicTotal/onPanic/globalConfig/defaultHTTPClientPtr）——均为
-      #      wait-free 读写、被全代码库广泛跨层引用（如 IsReplaying() 需在 M4/
-      #      M5/M11 任意位置无侵入检查），改造成结构体字段需要把该引用穿透式
-      #      注入进整个调用图，属于与 ADR-0001 指标全局变量同性质的架构决策。
-      #   3. 只读静态查表（staticResolverMappings/patternKeywords）——声明后从未
-      #      被写入（已核实调用点均为只读遍历/测试断言），等价于 const 数组，
-      #      仅因 Go 不支持复合字面量 const 才落地为 var。
+      # 进程级单例/sync.OnceValue 惰性初始化/atomic 原子量/只读静态查表，永久架构决策
       - linters:
           - gochecknoglobals
         path: (internal/memory/retrieval/query_classifier\.go|internal/observability/probe/feature_gate\.go|internal/security/network/safe_dialer\.go|internal/swarm/agents/security_audit_agent\.go|internal/downloader/proxy\.go|internal/extension/skill/generate\.go|internal/knowledge/graphrag/entity\.go|internal/action/capability_token\.go|internal/observability/trace/tracer\.go|internal/protocol/replay\.go|pkg/concurrent/safe_go\.go|internal/config/runtime\.go|internal/llm/adapter/http_client\.go|internal/llm/modelregistry/registry\.go|cmd/polaris/cli\.go|cmd/polaris/cli_i18n\.go|cmd/polaris/migrate_openclaw_memory\.go)
-      # 2026-07-26：构建期版本信息豁免。Version/CommitHash/BuildDate/BuildVersion
-      # 均通过 `go build -ldflags "-X pkg.Var=value"` 在链接期注入——ldflags -X
-      # 要求目标必须是包级字符串 var（不能是 const，也不能是结构体字段），是
-      # Go 工具链的标准做法（标准库 runtime/debug、众多开源项目同一惯用法），
-      # 非待清理的可变全局状态。
+      # ldflags -X 注入版本信息要求包级 var，Go 工具链标准做法
       - linters:
           - gochecknoglobals
         path: (pkg/version/version\.go|cmd/polaris/version\.go|internal/config/config\.go)
@@ -187,27 +150,9 @@ linters:
       - third_party$
       - builtin$
       - examples$
-# 2026-07-04 审计修复：wrapcheck/gochecknoglobals 存量债务范围核实。
-# 曾两次尝试用 exclusions.rules[].path 逐文件豁免存量违规：
-#   1. 沿用 local_playground/lint-violations-2026-07-04.md 记录的"存量路径"列表，
-#      结果与实测（golangci-lint run ./...）完全不符——该文档列出的路径下实测
-#      零违规，真实违规分布在完全不同的文件。
-#   2. 改为按首次实测结果逐文件豁免，结果仍不完整——golangci-lint 默认
-#      max-issues-per-linter:50 会截断输出，且并发分析下"哪 50 条被保留"
-#      run 与 run 之间不稳定，导致同一个命令两次运行看到不同的文件子集。
-# 关闭截断（max-issues-per-linter/max-same-issues: 0）后实测真实存量规模为
-# gochecknoglobals 64 处（12 文件）+ wrapcheck 208 处（93 文件），覆盖面几乎
-# 遍布整个仓库——本质上这两个 linter 自引入以来从未被真正强制过。逐文件
-# path 正则在这个规模下不可维护、且容易再次和实际状态脱节（如上两次教训）。
-# 改用 golangci-lint 原生的 issues.new-from-rev 基线机制：把此次审计完成时的
-# commit 设为基线，其"之前"存在的违规全部豁免（存量债务，后续排期清理，
-# 见 local_playground/lint-violations-2026-07-04.md），基线"之后"新增/修改的
-# 代码必须零违规——这正是任务23"渐进式：存量路径豁免，新增代码强制"的原始
-# 意图，且不依赖任何手工维护、可能与实际脱节的文件清单。
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  new-from-rev: f1c8205
 formatters:
   enable:
     - gofmt
