@@ -96,6 +96,7 @@ type TaskCheckpointRow struct {
 	StartedAt      int64
 	CompletedAt    int64
 	Error          string
+	Reason         string
 }
 type TaskEntry struct {
 	ID          string

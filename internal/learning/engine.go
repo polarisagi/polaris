@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -58,6 +59,9 @@ type Engine struct {
 	// （2026-07-04 审计补齐，供 learning_cursors 幂等去重使用）。atomic 而非裸
 	// int64，因为 ReportOutcome 可能被多个调用方并发调用。
 	taskSeqCounter atomic.Int64
+
+	cursorCache map[string]int64
+	cursorMu    sync.Mutex
 }
 
 type backgroundGate interface {
@@ -134,6 +138,7 @@ func NewEngine(
 		taskEvents:    taskEvents,
 		versionEvents: versionEvents,
 		sem:           make(chan struct{}, maxConcurrent),
+		cursorCache:   make(map[string]int64),
 		evolutionGate: &SimpleEvolutionGate{},
 	}
 }
@@ -148,6 +153,22 @@ func NewEngine(
 // L4 (SourceArchitecture) 多签名审批门控 → SubmitCandidate
 func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 	cursors := e.loadCursors(ctx)
+
+	// Start background cursor flusher
+	concurrent.SafeGo(ctx, "learning-cursor-flusher", func(ctx context.Context) {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				e.flushCursors(context.WithoutCancel(ctx))
+				return
+			case <-ticker.C:
+				e.flushCursors(ctx)
+			}
+		}
+	})
+
 	midTicker := time.NewTicker(e.cfg.MidLoopInterval)
 	defer midTicker.Stop()
 

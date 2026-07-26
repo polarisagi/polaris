@@ -3,8 +3,10 @@ package sandbox
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,7 +144,7 @@ func (p *PersistentSandbox) Run(ctx context.Context, spec SandboxSpec) (*types.T
 		return nil, err
 	}
 
-	sess, err := p.getOrCreateSession(ctx, spec.SessionID, lang, spec.AllowedPaths)
+	sess, err := p.getOrCreateSession(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -179,16 +181,16 @@ func readSpecCode(spec SandboxSpec) (string, error) {
 	return string(data), nil
 }
 
-func (p *PersistentSandbox) getOrCreateSession(ctx context.Context, sessionID, lang string, allowedPaths []string) (*liveSession, error) {
+func (p *PersistentSandbox) getOrCreateSession(ctx context.Context, spec SandboxSpec) (*liveSession, error) {
 	p.mu.Lock()
-	if sess, ok := p.sessions[sessionID]; ok {
-		if sess.language == lang && sess.alive() {
+	if sess, ok := p.sessions[spec.SessionID]; ok {
+		if sess.language == spec.Language && sess.alive() {
 			p.mu.Unlock()
 			sess.touch()
 			return sess, nil
 		}
 		// 语言不匹配或旧会话已失效：清理后重建。
-		delete(p.sessions, sessionID)
+		delete(p.sessions, spec.SessionID)
 		p.mu.Unlock()
 		sess.kill()
 		p.mu.Lock()
@@ -198,14 +200,14 @@ func (p *PersistentSandbox) getOrCreateSession(ctx context.Context, sessionID, l
 	}
 	p.mu.Unlock()
 
-	sess, err := p.spawnSession(ctx, sessionID, lang, allowedPaths)
+	sess, err := p.spawnSession(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
 	sess.touch()
 
 	p.mu.Lock()
-	p.sessions[sessionID] = sess
+	p.sessions[spec.SessionID] = sess
 	p.mu.Unlock()
 	return sess, nil
 }
@@ -239,10 +241,10 @@ func (p *PersistentSandbox) removeSession(sessionID string) {
 
 // spawnSession 通过 ArgvWrapper 取得沙箱封装后的 argv/env，构建并启动长驻
 // 解释器进程，返回持有 stdin/stdout 管道的 liveSession。
-func (p *PersistentSandbox) spawnSession(ctx context.Context, sessionID, lang string, allowedPaths []string) (*liveSession, error) {
+func (p *PersistentSandbox) spawnSession(ctx context.Context, spec SandboxSpec) (*liveSession, error) {
 	var execPath string
 	var execArgs []string
-	switch lang {
+	switch spec.Language {
 	case "python":
 		execPath = p.pythonPath
 		execArgs = []string{"-u", "-c", pythonSessionHarness}
@@ -261,8 +263,9 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, sessionID, lang st
 		ExecPath:      execPath,
 		ExecArgs:      execArgs,
 		Workdir:       workDir,
-		AllowedPaths:  append([]string{workDir}, allowedPaths...),
+		AllowedPaths:  append([]string{workDir}, spec.AllowedPaths...),
 		NetworkPolicy: protocol.NetPolicyDeny,
+		EnvExtra:      spec.ExtraEnv,
 	}
 	wrapped, err := p.argvWrapper.WrapArgv(ctx, sctx)
 	if err != nil {
@@ -276,6 +279,12 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, sessionID, lang st
 		cmd.Env = []string{}
 	} else {
 		cmd.Env = wrapped.Env
+	}
+	// DEBUG
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "PYTHON") || strings.HasPrefix(e, "CONDA") || strings.HasPrefix(e, "PATH") {
+			fmt.Printf("DEBUG ENV: %s\n", e)
+		}
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -304,8 +313,8 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, sessionID, lang st
 	_ = pw.Close() // 父进程侧写端副本关闭；子进程持有自己的副本，管道不会提前 EOF
 
 	sess := &liveSession{
-		sessionID: sessionID,
-		language:  lang,
+		sessionID: spec.SessionID,
+		language:  spec.Language,
 		workDir:   workDir,
 		cmd:       cmd,
 		stdin:     stdin,

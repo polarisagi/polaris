@@ -117,6 +117,8 @@ type Agent struct {
 	// 造成并发访问同一 Agent 内部状态的竞态。
 	done     chan struct{}
 	doneOnce sync.Once
+
+	taskCheckpointRepo protocol.TaskCheckpointRepository
 }
 
 // Done 返回一个在 Run() 循环真正退出时关闭的 channel。
@@ -202,6 +204,10 @@ type WorldModel interface {
 // InjectWorldModel 注入认知世界模型
 func (a *Agent) InjectWorldModel(wm WorldModel) {
 	a.worldModel = wm
+}
+
+func (a *Agent) InjectTaskCheckpointRepo(repo protocol.TaskCheckpointRepository) {
+	a.taskCheckpointRepo = repo
 }
 
 // InjectReplayData 见 protocol.AgentController 接口注释（M04 §8 崩溃恢复回放）。

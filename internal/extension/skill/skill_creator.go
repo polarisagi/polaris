@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"time"
 
@@ -100,6 +101,11 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 
 	// Create physical directory structure
 	pluginDir := filepath.Join(c.baseDir, result.Name)
+	cleanBase := filepath.Clean(c.baseDir)
+	cleanPluginDir := filepath.Clean(pluginDir)
+	if !strings.HasPrefix(cleanPluginDir, cleanBase) {
+		return "", apperr.Wrap(apperr.CodeInvalidInput, "skill_creator: path traversal detected", nil)
+	}
 	skillsDir := filepath.Join(pluginDir, "skills", result.Name)
 
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {

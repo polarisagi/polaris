@@ -116,12 +116,16 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			case <-ctx.Done():
 				// 用户主动取消：发出补偿计费事件后退出。
 				// InputTokens 用预估值（完整请求已发给 API），OutputTokens 为已收到的实际数量。
-				ch <- types.StreamEvent{
+				select {
+				case ch <- types.StreamEvent{
 					Type: types.StreamCancelled,
 					Usage: types.Usage{
 						InputTokens:  estimatedInputTokens,
 						OutputTokens: accumulatedOutputTokens,
 					},
+				}:
+				case <-ctx.Done():
+					return
 				}
 				return
 			default:
@@ -142,7 +146,11 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			var chunk OpenAIStreamChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("parse chunk: %v", err)}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("parse chunk: %v", err)}:
+				case <-ctx.Done():
+					return
+				}
 				return
 			}
 
@@ -161,7 +169,11 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			if len(chunk.Choices) == 0 {
 				if chunk.Usage != nil {
-					ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage}
+					select {
+					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Usage: currentUsage}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				continue
 			}
@@ -171,7 +183,11 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			// 思考链 delta（DeepSeek thinking mode）
 			if delta.ReasoningContent != "" {
-				ch <- types.StreamEvent{Type: types.StreamThinking, Content: delta.ReasoningContent}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamThinking, Content: delta.ReasoningContent}:
+				case <-ctx.Done():
+					return
+				}
 			}
 
 			// 文本 delta
@@ -180,7 +196,11 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 				if chunk.Usage == nil {
 					accumulatedOutputTokens += len([]rune(delta.Content)) / 3
 				}
-				ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: delta.Content, Usage: currentUsage}:
+				case <-ctx.Done():
+					return
+				}
 			}
 
 			// tool_call delta：拼接参数
@@ -227,10 +247,18 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 						"input": json.RawMessage(argsStr),
 					})
 					if err != nil {
-						ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}
+						select {
+						case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
-					ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}
+					select {
+					case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				// 清空，支持同一流中多轮（理论上不会，但防御性清空）
 				toolBuilders = map[int]*toolCallState{}
@@ -238,7 +266,11 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		}
 
 		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
-			ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("stream read: %v", err)}
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("stream read: %v", err)}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	})
 

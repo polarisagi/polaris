@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -112,6 +113,11 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 
 	// Create physical directory structure
 	pluginDir := filepath.Join(c.baseDir, result.Name)
+	cleanBase := filepath.Clean(c.baseDir)
+	cleanPluginDir := filepath.Clean(pluginDir)
+	if !strings.HasPrefix(cleanPluginDir, cleanBase) {
+		return "", apperr.Wrap(apperr.CodeInvalidInput, "plugin_creator: path traversal detected", nil)
+	}
 	srcDir := filepath.Join(pluginDir, "src")
 
 	if err := os.MkdirAll(srcDir, 0755); err != nil {

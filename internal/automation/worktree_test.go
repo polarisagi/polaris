@@ -12,10 +12,16 @@ import (
 // initTestRepo 创建一个带初始提交的临时 git 仓库，返回其路径。
 func initTestRepo(t *testing.T) string {
 	t.Helper()
+	// Smoke-check: skip the test if git cannot access user configuration (e.g.
+	// inside a restricted sandbox environment where ~/.gitconfig is forbidden).
+	if out, err := exec.Command("git", "version").CombinedOutput(); err != nil {
+		t.Skipf("git not available: %v (%s)", err, out)
+	}
 	dir := t.TempDir()
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "HOME="+dir) // isolate from ~/.gitconfig
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v failed: %v: %s", args, err, out)
 		}

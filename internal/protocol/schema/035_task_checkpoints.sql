@@ -10,6 +10,7 @@ CREATE TABLE task_checkpoints (
     started_at    INTEGER,
     completed_at  INTEGER,
     error         TEXT,
+    reason        TEXT,
     PRIMARY KEY (task_id, node_id, attempt)
 );
 CREATE INDEX idx_task_checkpoints_task ON task_checkpoints(task_id);

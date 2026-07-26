@@ -178,6 +178,10 @@ func (a *GoogleAgentPlatformAdapter) Infer(ctx context.Context, msgs []types.Mes
 
 	metrics.RecordLLMCacheHit("google", req.Model, resp.Usage.CacheHitTokens > 0)
 
+	if resp.Content == "" && len(resp.ToolCalls) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")
+	}
+
 	return resp, nil
 }
 func (a *GoogleAgentPlatformAdapter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {

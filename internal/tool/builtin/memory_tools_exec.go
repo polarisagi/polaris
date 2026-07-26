@@ -147,7 +147,14 @@ func MakeMemoryAppendFn(writer SemanticMemWriter) sandbox.InProcessFn {
 		}
 
 		ent, err := writer.GetEntity(ctx, args.EntityType, args.Name)
-		if err != nil || ent == nil {
+		if err != nil {
+			if !apperr.IsCode(err, apperr.CodeNotFound) {
+				return nil, apperr.Wrap(apperr.CodeInternal, "memory_append: get entity failed", err)
+			}
+			// 实体不存在时创建新实体
+			ent = nil
+		}
+		if ent == nil {
 			// 实体不存在时创建新实体
 			ent = &types.Entity{
 				ID:          "ent_" + args.Name,
@@ -193,9 +200,14 @@ func MakeMemoryExpireFn(writer SemanticMemWriter) sandbox.InProcessFn {
 			args.EntityType = "Fact"
 		}
 
-		// GetEntity: CodeNotFound（实体不存在）和 DB 错误均软失败 → 返回 not_found JSON。
-		// 丢弃 err 避免 nilerr：不存在是预期场景，其他错误同样不阻断工具响应。
-		ent, _ := writer.GetEntity(ctx, args.EntityType, args.Name)
+		// GetEntity: CodeNotFound（实体不存在）和 DB 错误需区分。
+		ent, err := writer.GetEntity(ctx, args.EntityType, args.Name)
+		if err != nil {
+			if !apperr.IsCode(err, apperr.CodeNotFound) {
+				return nil, apperr.Wrap(apperr.CodeInternal, "memory_expire: get entity failed", err)
+			}
+			ent = nil
+		}
 		if ent == nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_expire", false)
 			b, _ := json.Marshal(map[string]string{
@@ -332,7 +344,13 @@ func MakeMemoryPageInFn(coreMemory protocol.CoreMemory, writer SemanticMemWriter
 		entityName := pagedMemoryEntityName(c.SessionID, args.BlockKey)
 
 		// GetEntity 找不到时软失败（未曾 page_out 是正常场景，不是错误）。
-		ent, _ := writer.GetEntity(ctx, pagedMemoryEntityType, entityName)
+		ent, err := writer.GetEntity(ctx, pagedMemoryEntityType, entityName)
+		if err != nil {
+			if !apperr.IsCode(err, apperr.CodeNotFound) {
+				return nil, apperr.Wrap(apperr.CodeInternal, "memory_page_in: get entity failed", err)
+			}
+			ent = nil
+		}
 		if ent == nil {
 			metrics.RecordMemoryToolCall(ctx, "memory_page_in", false)
 			b, _ := json.Marshal(map[string]string{"status": "not_found", "block_key": args.BlockKey})

@@ -194,13 +194,17 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 		switch frame.Type {
 		case "message_start":
 			if frame.Message.Usage.InputTokens > 0 {
-				ch <- types.StreamEvent{
+				select {
+				case ch <- types.StreamEvent{
 					Type: types.StreamTextDelta,
 					Usage: types.Usage{
 						InputTokens:         frame.Message.Usage.InputTokens,
 						CacheHitTokens:      frame.Message.Usage.CacheReadInputTokens,
 						CacheCreationTokens: frame.Message.Usage.CacheCreationInputTokens,
 					},
+				}:
+				case <-ctx.Done():
+					return
 				}
 				if frame.Message.Usage.InputTokens > 0 {
 					if a.tbr != nil {
@@ -232,9 +236,17 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 				toolInputBuf.WriteString(frame.Delta.PartialJSON)
 			case inThinkingBlock && frame.Delta.Type == "thinking_delta" && frame.Delta.Thinking != "":
 				// 将思考内容发送给前端显示
-				ch <- types.StreamEvent{Type: types.StreamThinking, Content: frame.Delta.Thinking}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamThinking, Content: frame.Delta.Thinking}:
+				case <-ctx.Done():
+					return
+				}
 			case !inToolBlock && !inThinkingBlock && frame.Delta.Type == "text_delta" && frame.Delta.Text != "":
-				ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: frame.Delta.Text}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: frame.Delta.Text}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		case "content_block_stop":
 			if inToolBlock {
@@ -258,20 +270,32 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 					"input": json.RawMessage(inputJSON),
 				})
 				if err != nil {
-					ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}
+					select {
+					case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
+					case <-ctx.Done():
+						return
+					}
 					inToolBlock = false
 					inThinkingBlock = false
 					continue
 				}
-				ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+				case <-ctx.Done():
+					return
+				}
 				inToolBlock = false
 			}
 			inThinkingBlock = false
 		case "message_delta":
 			if frame.Usage.OutputTokens > 0 {
-				ch <- types.StreamEvent{
+				select {
+				case ch <- types.StreamEvent{
 					Type:  types.StreamTextDelta,
 					Usage: types.Usage{OutputTokens: frame.Usage.OutputTokens},
+				}:
+				case <-ctx.Done():
+					return
 				}
 				if a.tbr != nil {
 					a.tbr.Add(int64(frame.Usage.OutputTokens))

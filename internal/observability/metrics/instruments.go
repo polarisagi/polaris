@@ -24,6 +24,7 @@ var (
 	InstrBurnStage3Total     metric.Int64Counter
 	InstrLLMCacheHitRate     metric.Float64Histogram // (ISSUE-04)
 	InstrGoroutinePanicTotal metric.Int64Counter
+	InstrDbWriterPanicTotal  metric.Int64Counter
 
 	// M7 工具调用 & 沙箱
 	InstrToolCallsTotal metric.Int64Counter
@@ -143,6 +144,10 @@ func initInstruments(meter metric.Meter) {
 	InstrGoroutinePanicTotal, _ = meter.Int64Counter(
 		"polaris.goroutine_panic_total",
 		metric.WithDescription("SafeGo recover 的 panic 总数"),
+	)
+	InstrDbWriterPanicTotal, _ = meter.Int64Counter(
+		"polaris_dbwriter_panic",
+		metric.WithDescription("DatabaseWriter Run panic 总数"),
 	)
 
 	// 工具调用
@@ -350,6 +355,20 @@ func RecordRerankCall(ctx context.Context, outcome string, latencyMs float64) {
 	}
 	if InstrRerankCallsTotal != nil {
 		InstrRerankCallsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
+}
+
+// RecordGoroutinePanic 记录 SafeGo/panic。
+func RecordGoroutinePanic() {
+	if InstrGoroutinePanicTotal != nil {
+		InstrGoroutinePanicTotal.Add(context.Background(), 1)
+	}
+}
+
+// RecordDbWriterPanic 记录 DatabaseWriter panic。
+func RecordDbWriterPanic() {
+	if InstrDbWriterPanicTotal != nil {
+		InstrDbWriterPanicTotal.Add(context.Background(), 1)
 	}
 }
 

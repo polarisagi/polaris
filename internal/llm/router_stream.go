@@ -82,7 +82,11 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 						return
 					}
 				}
-				out <- ev
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	})
@@ -134,7 +138,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 		}
 
 		ce := ClassifyWithProvider(err, chosen.name)
-		if !ce.Retryable && !ce.ShouldFallback {
+		if !ce.Retryable && !ce.ShouldFallback && !ce.ShouldRotateCredential {
 			slog.Warn("inference_router: non-retryable stream error during failover, aborting remaining attempts",
 				"provider", chosen.name, "reason", ce.Reason, "err", err, "tried", len(skipped)+1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamFailover: non-retryable ("+string(ce.Reason)+")", err)

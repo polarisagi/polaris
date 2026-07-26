@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -47,6 +50,7 @@ type DatabaseWriter struct {
 	mu           sync.Mutex
 	wg           sync.WaitGroup
 	batch        []*MutationIntent
+	onPanic      func(err interface{}, stack []byte)
 }
 
 const (
@@ -157,13 +161,24 @@ func (dw *DatabaseWriter) SubmitComposite(ctx context.Context, comp *CompositeMu
 	return nil
 }
 
+// InjectOnPanic 注入 panic 时的回调（例如用于通知外部重启）
+func (dw *DatabaseWriter) InjectOnPanic(cb func(err interface{}, stack []byte)) {
+	dw.onPanic = cb
+}
+
 // Run 启动 DatabaseWriter 消费循环（由 M2 StorageFabric.Open() 调用）。
 func (dw *DatabaseWriter) Run(ctx context.Context) {
 	dw.wg.Add(1)
 	defer dw.wg.Done()
 	defer func() {
-		if r := recover(); r != nil { //nolint:staticcheck // panic recovery will be fully implemented soon
-			// CRITICAL + polaris_dbwriter_panic + stack trace → StorageFabric 重启 DatabaseWriter
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			slog.Error("CRITICAL: DatabaseWriter panicked", "err", r, "stack", string(stack))
+			metrics.RecordDbWriterPanic()
+
+			if dw.onPanic != nil {
+				dw.onPanic(r, stack)
+			}
 		}
 	}()
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -28,6 +29,7 @@ func getToolUseEnforcementModels() []string {
 type Manager struct {
 	configDir         string
 	embeddedPromptsFS fs.FS
+	optimizer         *optimizer.PromptOptimizer
 }
 
 var _ protocol.PromptFacade = (*Manager)(nil)
@@ -46,6 +48,11 @@ func NewManager(configDir string, embeddedPromptsFS fs.FS) *Manager {
 
 func (pm *Manager) resolveConfigDir() string {
 	return pm.configDir
+}
+
+// SetOptimizer 注入 prompt.Manager 所依赖的 PromptOptimizer 引擎（由外层构造后装配）。
+func (pm *Manager) SetOptimizer(opt *optimizer.PromptOptimizer) {
+	pm.optimizer = opt
 }
 
 // ReadPrompt 按三所有权层优先级读取提示词文件内容。
@@ -179,5 +186,10 @@ func containsAny(s string, substrs ...string) bool {
 
 // Optimize 异步优化指定 task_type 的 system prompt（Eval Harness 反馈驱动）。
 func (pm *Manager) Optimize(ctx context.Context, taskType string) error {
-	return apperr.New(apperr.CodeInternal, "prompt: Optimize not yet implemented in Manager")
+	if pm.optimizer == nil {
+		return apperr.New(apperr.CodeInternal, "prompt: Optimize failed, no PromptOptimizer injected")
+	}
+	// 委托给内部的 optimizer.PromptOptimizer
+	_ = pm.optimizer.Optimize(ctx, taskType, nil)
+	return nil
 }

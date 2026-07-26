@@ -324,9 +324,22 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// ─── 2.8 DatabaseWriter（AI 核心数据单写者）────────────────────────────
 	dbWriter := sysstore.NewDatabaseWriter(store.DB(), nil)
 	dbWriterDoneCh := make(chan struct{})
+
+	// 设置 panic 重启机制（复用既有外层重启思路）
+	dbWriter.InjectOnPanic(func(err interface{}, stack []byte) {
+		slog.Warn("polaris: StorageFabric triggering DatabaseWriter restart after panic")
+	})
+
 	concurrent.SafeGo(ctx, "boot_substrate.db_writer", func(ctx context.Context) {
-		dbWriter.Run(ctx)
-		close(dbWriterDoneCh)
+		defer close(dbWriterDoneCh)
+		for {
+			dbWriter.Run(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			// 退出且未被 cancel 时，说明发生了 panic 或异常，触发 StorageFabric 重启机制
+			time.Sleep(time.Second)
+		}
 	})
 	eventLog := audit.NewSQLiteEventLog(dbWriter)
 	decisionLog := audit.NewSQLiteDecisionLog(dbWriter)

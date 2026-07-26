@@ -102,6 +102,26 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
+	// GD-1: S_AWAIT_AGENT 阶段拦截：持久化 Handoff 状态并挂起
+	if a.sm.Current() == types.AgentStateAwaitAgent {
+		if a.taskCheckpointRepo != nil {
+			err := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+				TaskID:     a.sCtx.SessionID,
+				NodeID:     a.sCtx.HandoffTaskID,
+				Attempt:    1,
+				Status:     "await_agent",
+				StartedAt:  time.Now().Unix(),
+				Reason:     "handoff_wait",
+				TaintLevel: a.sCtx.GlobalTaintLevel,
+			})
+			if err != nil {
+				slog.Error("kernel: persist handoff wait failed", "err", err)
+			}
+		}
+		a.asyncIntent(types.TriggerSuspend)
+		return "", nil, true
+	}
+
 	if detEff.Fn != nil {
 		nextState, err = detEff.Fn(ctx, a.toProtocolCtx())
 	}

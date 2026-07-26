@@ -150,6 +150,10 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 		}
 	}
 
+	if out.Content == "" && len(out.ToolCalls) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")
+	}
+
 	return out, nil
 }
 
@@ -208,7 +212,11 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 			if ev.Usage.CacheHitTokens > 0 || ev.Usage.InputTokens > 0 {
 				metrics.RecordLLMCacheHit("openai", req.Model, ev.Usage.CacheHitTokens > 0)
 			}
-			outCh <- ev
+			select {
+			case outCh <- ev:
+			case <-ctx.Done():
+				return
+			}
 		}
 	})
 	return outCh, nil

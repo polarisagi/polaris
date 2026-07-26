@@ -139,7 +139,7 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		ev2, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
 		_ = p.outboxWriter.Write(ctx, ev2)
 	} else {
-		concurrent.SafeGo(context.Background(), "knowledge.rag.build_summary_tree", func(ctx context.Context) {
+		concurrent.SafeGo(trace.DetachedWithLink(ctx), "knowledge.rag.build_summary_tree", func(ctx context.Context) {
 			p.buildSummaryTree(ctx, docNode, db)
 		})
 	}

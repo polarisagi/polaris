@@ -212,6 +212,10 @@ func (a *AnthropicAdapter) Infer(ctx context.Context, msgs []types.Message, opts
 	hit := resp.Usage.CacheHitTokens > 0
 	metrics.RecordLLMCacheHit("anthropic", req.Model, hit)
 
+	if resp.Content == "" && len(resp.ToolCalls) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")
+	}
+
 	return resp, nil
 }
 

@@ -196,12 +196,13 @@ func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFrag
 	}
 }
 
-// stableSort 降序稳定排序（插入排序，n ≤ 50 时足够）。
+// scoredDoc 承载单条候选文档及其融合分数。
 type scoredDoc struct {
 	doc   ScoredFragment
 	score float64
 }
 
+// stableSort 降序稳定排序（插入排序，n ≤ 50 时足够）。
 func stableSort(s []scoredDoc) {
 	for i := 1; i < len(s); i++ {
 		key := s[i]

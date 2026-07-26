@@ -84,7 +84,7 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 			return resp, nil
 		}
 		ce := ClassifyWithProvider(err, chosen.name)
-		if !ce.Retryable && !ce.ShouldFallback {
+		if !ce.Retryable && !ce.ShouldFallback && !ce.ShouldRotateCredential {
 			slog.Warn("inference_router: non-retryable error during failover, aborting remaining attempts",
 				"provider", chosen.name, "reason", ce.Reason, "err", err, "tried", len(skipped)+1)
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.failover: non-retryable ("+string(ce.Reason)+")", err)

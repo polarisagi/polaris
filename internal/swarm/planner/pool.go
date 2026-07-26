@@ -110,7 +110,7 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		systemPrompt = "性能优先，可引入新依赖"
 	}
 
-	prompt := fmt.Sprintf("Goal: %s\nTaskType: %s\nConstraint: %s\nGenerate the Go code patch only.", p.goal, p.taskType, systemPrompt)
+	prompt := fmt.Sprintf("Generate the Go code patch only.\n\n<goal>\n%s\n</goal>\n<task_type>%s</task_type>\n<constraint>\n%s\n</constraint>", p.goal, p.taskType, systemPrompt)
 	req := &types.InferRequest{
 		Messages: []types.Message{
 			{Role: "user", Content: prompt},
@@ -130,29 +130,29 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 		return
 	}
 
-	tmpDir, err := os.MkdirTemp(".", "planner-pool-*")
+	tmpDir, err := os.MkdirTemp("", "planner-pool-*")
 	if err != nil {
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	testFile := filepath.Join(tmpDir, "patch_gen.go")
-	_ = os.WriteFile(testFile, []byte(patchStr), 0600)
+	if err := os.WriteFile(testFile, []byte(patchStr), 0600); err != nil {
+		return
+	}
 
 	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel1()
 
-	relDir := "./" + filepath.Base(tmpDir)
-
 	var compileScore = 0.0
 
 	if p.sandbox != nil {
-		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", relDir}, wd, 30*time.Second)
+		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", tmpDir}, wd, 30*time.Second)
 		if buildErr == nil {
 			testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel2()
 
-			out, testErr := p.sandbox.Execute(testCtx, "go", []string{"test", "-json", "-timeout", "20s", relDir}, wd, 20*time.Second)
+			out, testErr := p.sandbox.Execute(testCtx, "go", []string{"test", "-json", "-timeout", "20s", tmpDir}, wd, 20*time.Second)
 			if testErr == nil {
 				compileScore = 1.0
 			} else {
@@ -221,7 +221,7 @@ func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultCha
 	time.Sleep(100 * time.Millisecond)
 
 	if p.provider != nil {
-		prompt := fmt.Sprintf("Create a detailed plan for goal: %s (taskType: %s)", p.goal, p.taskType)
+		prompt := fmt.Sprintf("Create a detailed plan.\n<goal>\n%s\n</goal>\n<task_type>%s</task_type>", p.goal, p.taskType)
 		req := &types.InferRequest{
 			Messages: []types.Message{
 				{Role: "user", Content: prompt},

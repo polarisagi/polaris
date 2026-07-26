@@ -59,6 +59,14 @@ func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateCon
 	return types.State("S_ROLLBACK_OK"), nil
 }
 
+func (sm *StateMachine) persistHandoffWait(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
+	return types.State("S_AWAIT_AGENT_OK"), nil
+}
+
+func (sm *StateMachine) restoreHandoffResult(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
+	return types.State("S_RESTORE_HANDOFF_OK"), nil
+}
+
 // ExtensionActivatorIface 消费方接口（防止包循环，定义在调用方）。
 type ExtensionActivatorIface interface {
 	FindAndActivate(ctx context.Context, goal string) ([]ExtActivatedHint, error)

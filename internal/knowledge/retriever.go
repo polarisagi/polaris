@@ -225,7 +225,7 @@ func (hr *HybridRetrieverImpl) applyReranker(ctx context.Context, queryText stri
 // searchFTS 使用 FTS5 BM25 检索，返回 limit 条结果。
 func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, limit int) ([]Chunk, error) {
 	sqlQuery := `
-		SELECT rc.id, rc.doc_id, rc.content, rc.taint_level, rc.taint_source, rc.taint_hmac
+		SELECT rc.id, rc.doc_id, rc.content, rc.taint_level, rc.taint_source, rc.taint_hmac, rc.source_uri, rc.doc_version, rc.chunk_seq, rc.content_hash, rc.embed_model_version
 		FROM rag_chunks rc
 		WHERE rc.rowid IN (
 			SELECT rowid FROM rag_chunks_fts
@@ -244,7 +244,7 @@ func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, 
 	for rows.Next() {
 		var chunk Chunk
 		var taintSource, taintHMAC sql.NullString
-		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC, &chunk.SourceURI, &chunk.DocVersion, &chunk.ChunkSeq, &chunk.ContentHash, &chunk.EmbedModelVersion); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "failed to scan fts row", err)
 		}
 		if taintSource.Valid {
@@ -310,7 +310,7 @@ func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEm
 
 	// Tier 0 降级：读取所有有 embedding 的 chunk（线性扫描）
 	rows, err := hr.db.QueryContext(ctx, `
-		SELECT id, doc_id, content, taint_level, taint_source, taint_hmac, embedding
+		SELECT id, doc_id, content, taint_level, taint_source, taint_hmac, embedding, source_uri, doc_version, chunk_seq, content_hash, embed_model_version
 		FROM rag_chunks
 		WHERE embedding IS NOT NULL AND embedding != '' AND deleted_at IS NULL
 		LIMIT ?
@@ -335,7 +335,7 @@ func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEm
 		var chunk Chunk
 		var taintSource, taintHMAC sql.NullString
 		var embJSON sql.NullString
-		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC, &embJSON); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.DocID, &chunk.Content, &chunk.TaintLevel, &taintSource, &taintHMAC, &embJSON, &chunk.SourceURI, &chunk.DocVersion, &chunk.ChunkSeq, &chunk.ContentHash, &chunk.EmbedModelVersion); err != nil {
 			continue
 		}
 		if taintSource.Valid {

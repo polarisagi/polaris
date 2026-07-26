@@ -15,18 +15,19 @@ package types
 type AgentState int
 
 const (
-	AgentStateIdle      AgentState = iota // S_IDLE: 空闲等待意图
-	AgentStatePerceive                    // S_PERCEIVE: LLM 填槽理解任务
-	AgentStatePlan                        // S_PLAN: LLM 填槽生成 DAG
-	AgentStateValidate                    // S_VALIDATE: 四层校验
-	AgentStateExecute                     // S_EXECUTE: DAG 执行
-	AgentStateReflect                     // S_REFLECT: LLM 填槽反思
-	AgentStateReplan                      // S_REPLAN: 重新规划（Recovery）
-	AgentStateRollback                    // S_ROLLBACK: Saga 逆序补偿（Recovery）
-	AgentStateComplete                    // S_COMPLETE: 成功终态
-	AgentStateFailed                      // S_FAILED: 失败终态（ReplanGuard 超限）
-	AgentStateInterrupt                   // S_INTERRUPT: 用户中断暂停态（非终态，可 Resume/Redirect/Abort）
-	AgentStateSuspended                   // S_SUSPENDED: 空闲挂起（Suspend-on-Idle）
+	AgentStateIdle       AgentState = iota // S_IDLE: 空闲等待意图
+	AgentStatePerceive                     // S_PERCEIVE: LLM 填槽理解任务
+	AgentStatePlan                         // S_PLAN: LLM 填槽生成 DAG
+	AgentStateValidate                     // S_VALIDATE: 四层校验
+	AgentStateExecute                      // S_EXECUTE: DAG 执行
+	AgentStateReflect                      // S_REFLECT: LLM 填槽反思
+	AgentStateReplan                       // S_REPLAN: 重新规划（Recovery）
+	AgentStateRollback                     // S_ROLLBACK: Saga 逆序补偿（Recovery）
+	AgentStateComplete                     // S_COMPLETE: 成功终态
+	AgentStateFailed                       // S_FAILED: 失败终态（ReplanGuard 超限）
+	AgentStateInterrupt                    // S_INTERRUPT: 用户中断暂停态（非终态，可 Resume/Redirect/Abort）
+	AgentStateSuspended                    // S_SUSPENDED: 空闲挂起（Suspend-on-Idle）
+	AgentStateAwaitAgent                   // S_AWAIT_AGENT: 等待被委派的 Handoff 子任务终态
 )
 
 // AgentTrigger 定义驱动 FSM 状态转移的触发器枚举。
@@ -50,6 +51,8 @@ const (
 	TriggerInterruptAbort    // 中断后终止任务 → S_FAILED
 	TriggerSuspend           // Suspend-on-Idle 触发挂起
 	TriggerResume            // 从挂起状态恢复 → S_IDLE
+	TriggerAwaitAgent        // s_execute -> s_await_agent
+	TriggerAgentHandoffDone  // s_await_agent -> s_execute
 )
 
 // InterruptAction 定义中断处理语义。

@@ -82,23 +82,37 @@ func newLRUCache(cap int, ttl time.Duration) *lruCache {
 	return &lruCache{cap: cap, ttl: ttl, items: make(map[string]*lruEntry)}
 }
 
+func (c *lruCache) removeOrder(key string) {
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+}
+
 func (c *lruCache) get(key string) (*types.ToolResult, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.items[key]
 	if !ok || time.Now().After(e.expiresAt) {
 		delete(c.items, key)
+		c.removeOrder(key)
 		return nil, false
 	}
+	// 命中时提升为最近访问
+	c.removeOrder(key)
+	c.order = append(c.order, key)
 	return e.value, true
 }
 
 func (c *lruCache) set(key string, value *types.ToolResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.items[key]; !exists {
-		c.order = append(c.order, key)
+	if _, exists := c.items[key]; exists {
+		c.removeOrder(key)
 	}
+	c.order = append(c.order, key)
 	// TTL 刷新 / 新增
 	c.items[key] = &lruEntry{value: value, expiresAt: time.Now().Add(c.ttl)}
 	// 容量控制：超限时按插入顺序淘汰最老 key

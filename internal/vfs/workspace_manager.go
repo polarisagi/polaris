@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,7 +138,9 @@ func (wm *WorkspaceManager) rebuildManifests() {
 
 // writeCreatedAtMarker 在任务目录下写入创建时间标记（仅 Create() 首次创建时调用）。
 func writeCreatedAtMarker(dir string, unixSec int64) {
-	_ = os.WriteFile(filepath.Join(dir, createdAtMarkerFile), []byte(fmt.Sprint(unixSec)), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, createdAtMarkerFile), []byte(fmt.Sprint(unixSec)), 0o600); err != nil {
+		slog.Warn("vfs: failed to write created_at marker", "dir", dir, "err", err)
+	}
 }
 
 // readCreatedAtMarker 读取任务目录下的创建时间标记；不存在或解析失败返回 0。
@@ -337,10 +340,14 @@ func (wm *WorkspaceManager) GC(now int64, activeTaskIDs []string) {
 			select {
 			case wm.gcCh <- tombPath:
 			default:
-				_ = os.RemoveAll(tombPath) // queue full, delete synchronously
+				if errRm := os.RemoveAll(tombPath); errRm != nil {
+					slog.Warn("vfs: gc remove tombPath failed synchronously", "tombPath", tombPath, "err", errRm)
+				}
 			}
 		} else {
-			_ = os.RemoveAll(dir) // rename failed, fallback to direct delete
+			if errRm := os.RemoveAll(dir); errRm != nil {
+				slog.Warn("vfs: gc remove dir failed on rename fallback", "dir", dir, "err", errRm)
+			}
 		}
 		// 从原子计数器中减去回收的空间
 		atomic.AddInt64(&wm.totalSize, -m.TotalSize)

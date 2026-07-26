@@ -99,6 +99,10 @@ func (a *OllamaAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 			a.tbr.Add(int64(out.Usage.InputTokens + out.Usage.OutputTokens))
 		}
 	}
+	if out.Content == "" && len(out.ToolCalls) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider")
+	}
+
 	return out, nil
 }
 
