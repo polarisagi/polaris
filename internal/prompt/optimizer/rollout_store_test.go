@@ -9,9 +9,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// newRolloutTestDB 创建内存 SQLite，同时建好 rollout_states（由 NewSQLiteRolloutStore
-// 自建）和 prompt_versions（手工建表，与 010_self_improve.sql 定义对齐）两张表，
+// newRolloutTestDB 创建内存 SQLite，建好 rollout_states（与 010_self_improve.sql
+// DDL SSoT 严格对齐：列名 version/baseline/metadata）和 prompt_versions 两张表，
 // 供 ConfirmShadow → promptActivator.Activate 的联动测试使用。
+// 注意：测试使用内存 DB，schema bootstrapper 不执行，因此需在此显式建表。
 func newRolloutTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -19,6 +20,25 @@ func newRolloutTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("failed to open memory db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// rollout_states：与 internal/protocol/schema/010_self_improve.sql 严格对齐。
+	// 列名变更时必须同步更新此处（SSoT 以 .sql 文件为准）。
+	_, err = db.Exec(`
+		CREATE TABLE rollout_states (
+			version          TEXT    PRIMARY KEY,
+			baseline         TEXT    NOT NULL,
+			current_gate     INTEGER NOT NULL DEFAULT 0,
+			canary_percent   INTEGER NOT NULL DEFAULT 0,
+			status           TEXT    NOT NULL DEFAULT 'pending',
+			eval_score       REAL    NOT NULL DEFAULT -1,
+			shadow_ok        INTEGER NOT NULL DEFAULT 0,
+			started_at       INTEGER NOT NULL,
+			last_advanced_at INTEGER NOT NULL,
+			metadata         TEXT    NOT NULL DEFAULT '{}'
+		)
+	`)
+	if err != nil {
+		t.Fatalf("failed to create rollout_states: %v", err)
+	}
 	_, err = db.Exec(`
 		CREATE TABLE prompt_versions (
 			id TEXT PRIMARY KEY,

@@ -43,19 +43,8 @@ type MetaAuditReader interface {
 //   Gate 3 (Canary 25%+):   按 canarySteps 逐步推进（25/50/100）
 //   Gate 4 (Committed):     100% 流量切换，保留 7d 回滚窗口
 
-const createRolloutTable = `
-CREATE TABLE IF NOT EXISTS rollout_states (
-	version          TEXT PRIMARY KEY,
-	baseline         TEXT    NOT NULL,
-	current_gate     INTEGER NOT NULL DEFAULT 0,
-	canary_percent   INTEGER NOT NULL DEFAULT 0,
-	status           TEXT    NOT NULL DEFAULT 'pending',
-	eval_score       REAL    NOT NULL DEFAULT -1,
-	shadow_ok        INTEGER NOT NULL DEFAULT 0,
-	started_at       INTEGER NOT NULL,
-	last_advanced_at INTEGER NOT NULL,
-	metadata         TEXT    NOT NULL DEFAULT '{}'
-)`
+// rollout_states 表由 internal/protocol/schema/010_self_improve.sql（DDL SSoT）统一创建，
+// 禁止在此重复定义——两处 schema 必须严格一致，以代码查询列名为准（version/baseline/metadata）。
 
 // SQLiteRolloutStore 持久化渐进发布状态。
 type SQLiteRolloutStore struct {
@@ -69,11 +58,9 @@ type SQLiteRolloutStore struct {
 	metaAuditGateEnabled bool
 }
 
-// NewSQLiteRolloutStore 创建 RolloutStore 并确保表存在。
+// NewSQLiteRolloutStore 创建 RolloutStore。
+// rollout_states 表由 010_self_improve.sql（DDL SSoT）在启动时统一建表，此处不再重复 CREATE TABLE。
 func NewSQLiteRolloutStore(db protocol.SQLQuerier) (*SQLiteRolloutStore, error) {
-	if _, err := db.ExecContext(context.Background(), createRolloutTable); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "rollout_store: create table", err)
-	}
 	return &SQLiteRolloutStore{
 		db:      db,
 		rollout: NewProgressiveRollout(),
