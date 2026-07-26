@@ -59,13 +59,14 @@ func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateCon
 	return types.State("S_ROLLBACK_OK"), nil
 }
 
-func (sm *StateMachine) persistHandoffWait(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
-	return types.State("S_AWAIT_AGENT_OK"), nil
-}
-
-func (sm *StateMachine) restoreHandoffResult(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
-	return types.State("S_RESTORE_HANDOFF_OK"), nil
-}
+// persistHandoffWait / restoreHandoffResult 曾经是 S_AWAIT_AGENT 转移的
+// DeterministicEffect 占位实现，但从未被真正调用到：
+// executeDeterministicEffect（agent_execute_effect_helpers.go）在读取
+// a.sm.Current() 命中 AgentStateAwaitAgent/AgentStateExecute 时会提前
+// return，不会走到这里的 detEff.Fn 调用点。真实的 checkpoint 持久化与
+// watcher 唤醒逻辑已收敛到 agent_execute_effect_helpers.go +
+// agent_handoff.go（GD-1），此处不再保留死代码占位，转移 Effects 直接
+// 返回 nil（与 S_REFLECT → S_COMPLETE 等无副作用转移一致）。
 
 // ExtensionActivatorIface 消费方接口（防止包循环，定义在调用方）。
 type ExtensionActivatorIface interface {

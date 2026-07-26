@@ -32,6 +32,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			expires_at TEXT,
 			provider_suspended_count INTEGER DEFAULT 0,
 			suspend_reason TEXT,
+			result BLOB,
 			error TEXT,
 			version INTEGER,
 			retry_count INTEGER DEFAULT 0,

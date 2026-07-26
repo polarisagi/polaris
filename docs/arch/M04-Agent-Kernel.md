@@ -398,12 +398,12 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 
 | 故障 | (Q1) 检测 | (Q2) 影响范围 | (Q3) 即时反应 | (Q4) 自动恢复 | (Q5) 人工介入触发 |
 |------|----------|------------|------------|------------|----------------|
-| LLM Fill 多次重试失败 | retry counter ≥ MaxRetry | 单 Agent 当前状态转移 | OnFailure callback → s_error | 部分（下层 M1 CB 恢复后重试） | s_error 进 audit |
+| LLM Fill 多次重试失败 | retry counter ≥ MaxRetry | 单 Agent 当前状态转移 | OnFailure callback → s_failed | 部分（下层 M1 CB 恢复后重试） | s_failed 进 audit |
 | DAG 节点执行失败（可逆） | tool error | 单 step | step retry with backoff → 仍失败 → Saga 逆序补偿 → s_rollback | 是 | — |
 | DAG 节点执行失败（不可逆） | Reversible=false + error | 单 Agent | s_failed + HITL 告警 | 否 | 必须 HITL |
 | StructOutput JSON 解析失败 | JSON Repair 失败 | 单次 LLM 调用 | retry (1 次) → 仍失败 → s_replan | 是 | 同模型连续 ≥10 次 → audit |
 | ReplanGuard 超限 | ReplanCount > MaxReplanAttempts (`§m4_kernel.max_replan_attempts`) | 单 Agent | s_failed + HITL 告警 | 否 | 必须 HITL |
-| DAG 死锁（无就绪节点） | findReadyNodes 返回空且未完成节点 > 0 | 单 Agent | ErrDAGDeadlock → s_error + EventLog | 否 | M12 复盘 |
+| DAG 死锁（无就绪节点） | findReadyNodes 返回空且未完成节点 > 0 | 单 Agent | ErrDAGDeadlock → s_failed + EventLog | 否 | M12 复盘 |
 | Agent goroutine panic | recover() | 单 Agent | Supervisor OneForOne 自动重启 + EventLog 回放 | 是 (100ms→30s, 5 次上限) | 同 Agent 反复 panic ≥3/min → escalate |
 | HITL 审批超时 | deadline 到期 | 单 Agent | s_rollback（不触发 KillSwitch，仅当前任务失败） | 用户重新发起 | 反复 expire → audit |
 | 进程崩溃 | exit | 全局 | 重启后从 EventLog 重放，不重调 LLM | 是 | — |

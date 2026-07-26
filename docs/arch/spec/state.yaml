@@ -69,7 +69,7 @@ par:
         schema_ref: M4_PerceiveOutput
         prompt_fn: build_perceive_prompt
         on_success: store_task_model
-        on_failure: s_error
+        on_failure: s_failed
         max_retry: 2
         model_pool: budget
 
@@ -81,7 +81,7 @@ par:
         schema_ref: M4_PlanOutput
         prompt_fn: build_plan_prompt
         on_success: store_dag
-        on_failure: s_error
+        on_failure: s_failed
         max_retry: 2
         model_pool: budget
 
@@ -460,7 +460,7 @@ kill_switch:
 
   response_protocol:
     - module: m4_kernel
-      action: "save current trajectory → s_error → exit"
+      action: "save current trajectory → s_failed → exit"
       timeout_s: 30
     - module: m9_workers
       action: "complete current candidate batch → no new batch → exit"
@@ -701,8 +701,15 @@ global_invariants:
   - id: g_inv_01
     name: eventlog_is_truth_source
     predicate: |
-      All derived engines (SurrealDB-Core, SurrealDB-Core KV, blackboard_entries) can be rebuilt
+      All derived engines (SurrealDB-Core, SurrealDB-Core KV) can be rebuilt
       from events table replay. Crash recovery never loses business state.
+      EXEMPTION (GD-3, local_playground/upgrade/01-架构设计变更规范.md):
+      blackboard_entries (tasks table) is NOT covered by this invariant — it
+      is its own durable CAS state store with independent recovery via
+      reaperPhase2 timeout reclamation (see GR-B07-001 fix), not via events
+      replay. Rationale: XR-04 层三 CAS 写路径为直写，不产生 EventLog 事件，
+      回放重建在设计上不适用于此表；崩溃恢复依赖 reaperPhase2 扫描
+      running/pending 超时任务强制回收，而非从 events 表重建 blackboard 状态。
     enforced_by: m12.replay_test_suite
 
   - id: g_inv_02

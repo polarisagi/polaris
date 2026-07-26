@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     retry_count              INTEGER NOT NULL DEFAULT 0,
     max_retries              INTEGER NOT NULL DEFAULT 3,
     depends_on               TEXT,
+    -- result: CompleteTask 写入的任务产出（2026-07-26 补齐）。此前该表只有
+    -- result_taint（污点等级）没有 result 本体，CompleteTask 接收 result
+    -- 参数却从未持久化，PeekTask 读回的 TaskSnapshot.Result 永远为空——
+    -- 任何依赖"委派/编排子任务完成结果"的调用方（transfer_to_agent 恢复
+    -- 分支、PatternDebate 辩论历史/裁决）实际上从未真正拿到过结果内容。
+    -- 见 local_playground/upgrade 复核记录（GD-1/GD-6 关联缺陷）。
+    result                   BLOB,
     error                    TEXT,
     suspend_reason           TEXT,
     pii_vault_blob           TEXT,

@@ -43,22 +43,36 @@ type debateState struct {
 // Execute 执行三方辩论：Judge 初始议题 -> Proponent/Opponent 轮番辩论 -> Judge 结案陈词。
 // 遵循 GD-6 约束，本模式内部各任务间等待复用 checkpoint 异步挂起原语，不阻塞轮询。
 //
+// 已知缺口（诚实声明，非本次范围）：本函数用返回 apperr "suspend" 错误表示
+// "尚未完成，需要在子任务结束后被重新调用"，但目前系统内没有任何组件会在
+// 子任务完成时自动重新调用 Execute——本轮修复只接线了 boot_agent.go 的
+// DebateExecutor 构造与 AgentBundle 注入，未接入任何触发重调用的编排循环
+// （与 internal/agent 侧 transfer_to_agent 曾经的同类问题一致，见 GD-1）。
+// 调用方在真正把本模式接入生产调度前，必须先设计等价于 GD-1
+// watchHandoffCompletion 的重调用驱动，否则辩论会在首次挂起后停滞。
+// 单元测试（pattern_debate_test.go）仅验证状态机本身的 checkpoint 往返
+// 正确性，不代表已具备生产可用的自动恢复能力。
+//
 //nolint:gocyclo,nestif,funlen
 func (de *DebateExecutor) Execute(ctx context.Context, parentTaskID string, proponent, opponent, judge types.TaskEntry, maxRounds int) (verdict []byte, err error) {
 	stateID := "debate-state"
 
+	// [修复] protocol.TaskCheckpointRepository.GetCheckpoint 对"未找到"的约定是
+	// 返回 (nil, nil)，不是 (nil, CodeNotFound) 错误——与 pattern_state_graph.go
+	// checkNodeCheckpoint 的既有用法一致。此前代码误判为后者，导致每次全新
+	// 辩论的首次调用都会在 chk 为 nil 时对 chk.OutputJSON 解引用而 panic
+	// （100% 复现，见 pattern_debate_test.go 回归测试）。
 	chk, err := de.chkRepo.GetCheckpoint(ctx, parentTaskID, stateID, 1)
-	var state debateState
 	if err != nil {
-		if apperr.IsCode(err, apperr.CodeNotFound) {
-			state = debateState{
-				Round:          1,
-				Phase:          "judge_init",
-				CurrentSpeaker: "judge",
-				NextSpeaker:    "proponent",
-			}
-		} else {
-			return nil, apperr.Wrap(apperr.CodeInternal, "failed to load debate checkpoint", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to load debate checkpoint", err)
+	}
+	var state debateState
+	if chk == nil {
+		state = debateState{
+			Round:          1,
+			Phase:          "judge_init",
+			CurrentSpeaker: "judge",
+			NextSpeaker:    "proponent",
 		}
 	} else {
 		if err := json.Unmarshal([]byte(chk.OutputJSON), &state); err != nil {

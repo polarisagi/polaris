@@ -79,10 +79,14 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 	var statusStr string
 	var namespace sql.NullString
 	var intent []byte
+	var result []byte
 	var taskType string
 	var traceID, spanID sql.NullString
-	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, session_id, trace_id, span_id FROM tasks WHERE task_id=?", taskID).
-		Scan(&statusStr, &namespace, &intent, &taskType, &traceID, &spanID)
+	// [修复] 补齐 result 列读取——此前 SELECT 缺失该列，即便 CompleteTask
+	// 持久化了结果，PeekTask 调用方（transfer_to_agent 恢复分支、
+	// PatternDebate 等）也永远读不到，见 007_tasks.sql result 列注释。
+	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, result, session_id, trace_id, span_id FROM tasks WHERE task_id=?", taskID).
+		Scan(&statusStr, &namespace, &intent, &result, &taskType, &traceID, &spanID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -113,6 +117,7 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 		Status:    status,
 		Namespace: namespace.String,
 		Intent:    intent,
+		Result:    result,
 		Type:      taskType,
 		TraceID:   traceID.String,
 		SpanID:    spanID.String,

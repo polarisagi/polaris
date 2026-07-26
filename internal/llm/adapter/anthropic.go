@@ -238,13 +238,23 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 		ResponseFormat: options.ResponseFormat,
 		ThinkingBudget: options.ThinkingBudget,
 	}
+	// [vet lostcancel 修复] 以下四个提前 return 分支此前都未调用 cancel，
+	// 若 WithTimeout 确实创建了新 context（ctx 原本无 deadline 的场景），
+	// 会泄漏该 timer 直至其自然到期。cancel 仅在成功路径下由下方
+	// SafeGo 内的 defer 负责释放，因此这里的提前返回必须各自补上。
 	body, err := a.buildAnthropicRequest(req, true)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.StreamInfer", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.messagesURL(), bytes.NewReader(body))
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.StreamInfer", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -255,12 +265,18 @@ func (a *AnthropicAdapter) StreamInfer(ctx context.Context, msgs []types.Message
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "AnthropicAdapter.StreamInfer", err)
 	}
 
 	if httpResp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 		httpResp.Body.Close()
+		if cancel != nil {
+			cancel()
+		}
 		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("anthropic: HTTP %d: %s", httpResp.StatusCode, raw))
 	}
 

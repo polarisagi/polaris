@@ -142,17 +142,19 @@ func TestSpecParTransitionsReferenceKnownStates(t *testing.T) {
 	for _, s := range spec.Par.States {
 		states[s] = true
 	}
-	// s_error 是 LLM fill 失败时的内部错误终态指代（见 par.transitions effect.on_failure），
-	// 不在 par.states 显式列出但允许在 transitions 中引用
-	allowedExtras := map[string]bool{"s_error": true}
+	// GD-2 修复（local_playground/upgrade/01-架构设计变更规范.md）：此前
+	// state.yaml 的 s_perceive/s_plan on_failure 错误引用了未声明的幽灵状态
+	// s_error，本测试曾为此开白名单豁免（掩盖问题而非修复）。现已将 yaml
+	// 侧 on_failure 统一改为合法终态 s_failed，不再需要任何豁免——恢复
+	// 测试的完整严格性，未来若再出现未声明状态引用应直接失败暴露。
 	for i, tr := range spec.Par.Transitions {
 		if from, ok := tr["from"].(string); ok {
-			if !states[from] && !allowedExtras[from] {
+			if !states[from] {
 				t.Errorf("par.transitions[%d].from = %q 未在 par.states 中定义", i, from)
 			}
 		}
 		if to, ok := tr["to"].(string); ok {
-			if !states[to] && !allowedExtras[to] {
+			if !states[to] {
 				t.Errorf("par.transitions[%d].to = %q 未在 par.states 中定义", i, to)
 			}
 		}
@@ -282,20 +284,19 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"step_failed_recoverable": true, // Internal retry loop without explicit state change trigger
 	}
 
-	allowedExtraStates := map[string]bool{
-		"s_error": true, // Internal state transition for llm fill failure
-	}
+	// GD-2 修复：s_error 幽灵状态豁免已随 state.yaml on_failure 改为
+	// s_failed 一并移除，见上方 TestSpecParTransitionsReferenceKnownStates。
 
 	for i, tr := range spec.Par.Transitions {
 		fromStr, _ := tr["from"].(string)
 		toStr, _ := tr["to"].(string)
 		eventStr, _ := tr["event"].(string)
 
-		if _, ok := expectedStates[fromStr]; !ok && !allowedExtraStates[fromStr] {
+		if _, ok := expectedStates[fromStr]; !ok {
 			t.Errorf("par.transitions[%d].from = %q 未在 Go AgentState 枚举中定义", i, fromStr)
 		}
 
-		if _, ok := expectedStates[toStr]; !ok && !allowedExtraStates[toStr] {
+		if _, ok := expectedStates[toStr]; !ok {
 			t.Errorf("par.transitions[%d].to = %q 未在 Go AgentState 枚举中定义", i, toStr)
 		}
 

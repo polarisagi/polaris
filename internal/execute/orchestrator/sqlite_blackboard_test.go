@@ -32,6 +32,7 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			retry_count INTEGER DEFAULT 0,
 			max_retries INTEGER DEFAULT 3,
 			provider_suspended_count INTEGER DEFAULT 0,
+			result BLOB,
 			error TEXT,
 			namespace TEXT,
 			intent BLOB,
