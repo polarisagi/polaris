@@ -155,6 +155,25 @@ func newMemDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE rollout_states (
+			version          TEXT    PRIMARY KEY,
+			baseline         TEXT    NOT NULL,
+			current_gate     INTEGER NOT NULL DEFAULT 0,
+			canary_percent   INTEGER NOT NULL DEFAULT 0,
+			status           TEXT    NOT NULL DEFAULT 'pending',
+			eval_score       REAL    NOT NULL DEFAULT -1,
+			shadow_ok        INTEGER NOT NULL DEFAULT 0,
+			started_at       INTEGER NOT NULL,
+			last_advanced_at INTEGER NOT NULL,
+			metadata         TEXT    NOT NULL DEFAULT '{}'
+		)
+	`)
+	if err != nil {
+		t.Fatalf("failed to create rollout_states: %v", err)
+	}
+
 	return db
 }
 
