@@ -104,12 +104,20 @@ func entryID(provider, modelID string) string {
 
 // Get 按 provider+modelID 查询条目，未注册时返回 (nil, nil)。
 func (r *Registry) Get(ctx context.Context, provider, modelID string) (*repo.ModelVersionEntry, error) {
-	return r.repo.Get(ctx, entryID(provider, modelID))
+	entry, err := r.repo.Get(ctx, entryID(provider, modelID))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Get 失败", err)
+	}
+	return entry, nil
 }
 
 // List 返回全部已注册条目。
 func (r *Registry) List(ctx context.Context) ([]*repo.ModelVersionEntry, error) {
-	return r.repo.List(ctx)
+	entries, err := r.repo.List(ctx)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: List 失败", err)
+	}
+	return entries, nil
 }
 
 // getOrNew 取现有条目，不存在则构造一个默认值合理的新条目（不落盘，由调用方 Upsert）。
@@ -117,7 +125,7 @@ func (r *Registry) getOrNew(ctx context.Context, provider, modelID string) (*rep
 	id := entryID(provider, modelID)
 	entry, err := r.repo.Get(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Get 失败", err)
 	}
 	if entry == nil {
 		entry = &repo.ModelVersionEntry{
@@ -186,7 +194,10 @@ func (r *Registry) OnModelUpgrade(ctx context.Context, provider, modelID string,
 			"provider", provider, "model", modelID, "score", entry.CompatibilityScore,
 			"migration_decision", decision.String())
 	}
-	return r.repo.Upsert(ctx, entry)
+	if err := r.repo.Upsert(ctx, entry); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Upsert 失败", err)
+	}
+	return nil
 }
 
 // DeprecateModel 标记模型废弃并设置继任模型；若该模型具备 embedding 能力
@@ -200,7 +211,7 @@ func (r *Registry) DeprecateModel(ctx context.Context, provider, modelID, succes
 	entry.SuccessorModelID = successorModelID
 	entry.UpdatedAt = time.Now().Unix()
 	if err := r.repo.Upsert(ctx, entry); err != nil {
-		return err
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Upsert 失败", err)
 	}
 
 	// 记录本次废弃在当前 CompatibilityScore 下的迁移策略档位，供 sysadmin/运维
@@ -244,7 +255,7 @@ func (r *Registry) RecordCallResult(ctx context.Context, provider, modelID strin
 	id := entryID(provider, modelID)
 	entry, err := r.repo.Get(ctx, id)
 	if err != nil {
-		return false, "", err
+		return false, "", apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Get 失败", err)
 	}
 	if entry == nil {
 		return false, "", nil
@@ -255,7 +266,7 @@ func (r *Registry) RecordCallResult(ctx context.Context, provider, modelID strin
 			entry.ConsecutiveErrors = 0
 			entry.UpdatedAt = time.Now().Unix()
 			if upsertErr := r.repo.Upsert(ctx, entry); upsertErr != nil {
-				return false, "", upsertErr
+				return false, "", apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Upsert 失败", upsertErr)
 			}
 		}
 		return false, "", nil
@@ -264,7 +275,7 @@ func (r *Registry) RecordCallResult(ctx context.Context, provider, modelID strin
 	entry.ConsecutiveErrors++
 	entry.UpdatedAt = time.Now().Unix()
 	if upsertErr := r.repo.Upsert(ctx, entry); upsertErr != nil {
-		return false, "", upsertErr
+		return false, "", apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Upsert 失败", upsertErr)
 	}
 	if entry.ConsecutiveErrors < consecutiveErrorRollbackThreshold {
 		return false, "", nil
@@ -272,7 +283,7 @@ func (r *Registry) RecordCallResult(ctx context.Context, provider, modelID strin
 
 	predecessor, findErr := r.repo.FindPredecessor(ctx, provider, modelID)
 	if findErr != nil {
-		return true, "", findErr
+		return true, "", apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: FindPredecessor 失败", findErr)
 	}
 	if predecessor == nil {
 		return true, "", nil
@@ -316,7 +327,7 @@ func (r *Registry) SeedFromStaticResolvers(ctx context.Context) error {
 		id := entryID(m.provider, m.deprecated)
 		existing, err := r.repo.Get(ctx, id)
 		if err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Get 失败", err)
 		}
 		if existing != nil {
 			continue
@@ -333,7 +344,7 @@ func (r *Registry) SeedFromStaticResolvers(ctx context.Context) error {
 			UpdatedAt:          time.Now().Unix(),
 		}
 		if err := r.repo.Upsert(ctx, entry); err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeStorageUnavailable, "modelregistry: Upsert 失败", err)
 		}
 	}
 	return nil

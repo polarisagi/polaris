@@ -109,7 +109,10 @@ func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath s
 			lastErr = err
 			continue
 		}
-		return os.Rename(partPath, destPath)
+		if err := os.Rename(partPath, destPath); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "downloader: rename downloaded file failed", err)
+		}
+		return nil
 	}
 	return apperr.Wrap(apperr.CodeInternal, "downloader: all sources failed", lastErr)
 }

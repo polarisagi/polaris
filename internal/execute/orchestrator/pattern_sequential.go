@@ -55,7 +55,7 @@ func (se *SequentialExecutor) Execute(ctx context.Context, parentTaskID string, 
 		for !completed {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 			case ev := <-events:
 				if ev.TaskID == task.ID {
 					switch ev.Type {

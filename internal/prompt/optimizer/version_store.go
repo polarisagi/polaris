@@ -184,5 +184,8 @@ func (s *PromptVersionStore) ListRecent(ctx context.Context, taskType string, n 
 		v.Active = isActive == 1
 		result = append(result, v)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "prompt_version_store: 遍历结果集失败", err)
+	}
+	return result, nil
 }

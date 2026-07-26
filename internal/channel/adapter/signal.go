@@ -90,7 +90,10 @@ func signalReceiveSSE(ctx context.Context, host PollerHost, channelID, apiURL, a
 			})
 		})
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "signal: 读取消息流失败", err)
+	}
+	return nil
 }
 
 func SignalSendMessage(ctx context.Context, client *http.Client, apiURL, account, recipient, text string) error {

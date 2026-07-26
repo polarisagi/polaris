@@ -132,6 +132,8 @@ linters:
       - linters:
           - errcheck
           - errorlint
+          - forbidigo # 测试文件常需构造裸 error/errors.New 模拟第三方错误（如 pkg/apperr/apperr_test.go
+          # 测试 apperr.Wrap 包装任意 cause 的能力），若强制 apperr 反而使测试语义失真
           - gochecknoglobals # 测试文件用包级变量做 fixture/mock 是常见惯用法（如 dummyDialerPtr）
           - gocyclo
           - nestif
@@ -143,6 +145,44 @@ linters:
       - linters:
           - gochecknoglobals
         path: internal/observability/metrics/
+      # 2026-07-26（344 lint 问题清理收尾）：ADR-0011（CGO→purego 迁移）豁免。
+      # 以下文件是 Rust substrate/wasmtime/sherpa-onnx dylib 的 purego 函数指针绑定——
+      # purego.RegisterLibFunc 要求把符号解析结果写入包级 `var fn func(...)`，
+      # dylib 句柄/ABI 状态（libHandle/loadOnce/loadErr 等）也是进程级单例，
+      # 与 dlopen 语义（同进程内共享同一份已加载的动态库）一一对应。
+      # 这是与 ADR-0001 指标全局变量同性质的永久性架构决策，非待清理存量债务：
+      # 把函数指针从包级 var 包进结构体字段不会改变其单例本质（RegisterLibFunc
+      # 仍需在 init/Load 时写一次、之后全进程只读），只会新增一层无意义的
+      # 解引用，故不作为"重构成结构体字段"处理，改用 path 豁免。
+      - linters:
+          - gochecknoglobals
+        path: (internal/store/surreal_store\.go|internal/llm/(stt|tts)/sherpa\.go|internal/ffi/(llama|dylib|vec_ops)\.go|internal/tool/sandbox/rust_(wasmtime|native)_sandbox\.go|internal/security/policy/cedar_ffi\.go)
+      # 2026-07-26（344 lint 问题清理收尾）：进程级单例/惰性初始化只读缓存/静态查表豁免。
+      # 逐文件复核确认均为以下三种模式之一，均非"隐式共享可变状态"意义上的反模式：
+      #   1. sync.OnceValue 惰性单例（编译正则/静态表/TokenManager 等）——项目已
+      #      明确弃用"包级 var + init()"改用此模式（见各文件注释：消除全局可变
+      #      状态、避免包初始化顺序依赖），首次调用后只读，本质是记忆化纯函数；
+      #      涉及 query_classifier.go/feature_gate.go/safe_dialer.go/
+      #      security_audit_agent.go/proxy.go/generate.go/entity.go/capability_token.go。
+      #   2. atomic 原子量组成的跨模块进程级单例（spanIDCounter/isReplaying/
+      #      PanicTotal/onPanic/globalConfig/defaultHTTPClientPtr）——均为
+      #      wait-free 读写、被全代码库广泛跨层引用（如 IsReplaying() 需在 M4/
+      #      M5/M11 任意位置无侵入检查），改造成结构体字段需要把该引用穿透式
+      #      注入进整个调用图，属于与 ADR-0001 指标全局变量同性质的架构决策。
+      #   3. 只读静态查表（staticResolverMappings/patternKeywords）——声明后从未
+      #      被写入（已核实调用点均为只读遍历/测试断言），等价于 const 数组，
+      #      仅因 Go 不支持复合字面量 const 才落地为 var。
+      - linters:
+          - gochecknoglobals
+        path: (internal/memory/retrieval/query_classifier\.go|internal/observability/probe/feature_gate\.go|internal/security/network/safe_dialer\.go|internal/swarm/agents/security_audit_agent\.go|internal/downloader/proxy\.go|internal/extension/skill/generate\.go|internal/knowledge/graphrag/entity\.go|internal/action/capability_token\.go|internal/observability/trace/tracer\.go|internal/protocol/replay\.go|pkg/concurrent/safe_go\.go|internal/config/runtime\.go|internal/llm/adapter/http_client\.go|internal/llm/modelregistry/registry\.go|cmd/polaris/cli\.go|cmd/polaris/cli_i18n\.go|cmd/polaris/migrate_openclaw_memory\.go)
+      # 2026-07-26：构建期版本信息豁免。Version/CommitHash/BuildDate/BuildVersion
+      # 均通过 `go build -ldflags "-X pkg.Var=value"` 在链接期注入——ldflags -X
+      # 要求目标必须是包级字符串 var（不能是 const，也不能是结构体字段），是
+      # Go 工具链的标准做法（标准库 runtime/debug、众多开源项目同一惯用法），
+      # 非待清理的可变全局状态。
+      - linters:
+          - gochecknoglobals
+        path: (pkg/version/version\.go|cmd/polaris/version\.go|internal/config/config\.go)
     paths:
       - third_party$
       - builtin$

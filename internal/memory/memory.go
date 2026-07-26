@@ -173,11 +173,18 @@ func (m *MemImpl) InjectDriftRegistry(r memretrieval.DriftGate) {
 }
 
 func (m *MemImpl) StoreStats() (string, error) {
-	return m.semantic.StoreStats()
+	stats, err := m.semantic.StoreStats()
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "MemImpl.StoreStats", err)
+	}
+	return stats, nil
 }
 
 func (m *MemImpl) SetVectorMode(mode int) error {
-	return m.semantic.SetVectorMode(mode)
+	if err := m.semantic.SetVectorMode(mode); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "MemImpl.SetVectorMode", err)
+	}
+	return nil
 }
 
 func (m *MemImpl) GetMemoryPressure() *budget.ResourceBudget {

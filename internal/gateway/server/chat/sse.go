@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -103,24 +102,9 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	var agentCtrl protocol.AgentController
 	if s.AgentPool != nil {
 		var release func()
-		var err error
-		agentCtrl, release, err = s.AgentPool.Acquire(ctx, sessionID)
-		if err != nil {
-			var aerr *apperr.Error
-			if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
-				// 后台计算请求
-				if req.RunID != "" || req.ReasoningEffort == "background" {
-					s.WriteSSEError(w, flusher, "system_notice", "后台提炼排队中", sessionID, nil)
-					return
-				}
-				// 前台对话请求
-				WriteSSE(w, flusher, "system_notice", map[string]any{
-					"message": "系统当前负载较高，已为您转入沙箱保护模式，稍等片刻",
-					"retry":   true,
-				})
-				return
-			}
-			s.WriteSSEError(w, flusher, "agent_pool_error", "failed to acquire agent: "+err.Error(), sessionID, err)
+		var acquireOK bool
+		agentCtrl, release, acquireOK = s.acquireStreamAgent(ctx, w, flusher, req, sessionID)
+		if !acquireOK {
 			return
 		}
 		defer release()
@@ -223,8 +207,11 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 			mem = agentCtrl.Memory()
 		}
 
-		if compacted, res, err := s.Compressor.Compact(ctx, sessionID, history, p, mem); err == nil && !res.Skipped {
-			history = compacted
+		// 注意：压缩后的消息已由 Compressor.Compact 内部 persistCompacted 落盘，
+		// 本函数后续推理走 handleAgentStreamFSM（不依赖此处局部 history 变量），
+		// 故不需要也不应该把返回的 compacted 序列回写到 history（历史上曾误写，
+		// 但从未被读取，是 ineffassign 死赋值，这里显式丢弃）。
+		if _, res, err := s.Compressor.Compact(ctx, sessionID, history, p, mem); err == nil && !res.Skipped {
 			WriteSSE(w, flusher, "status", map[string]any{
 				"type":          "compacted",
 				"tokens_before": res.TokensBefore,
@@ -357,32 +344,8 @@ func (s *ChatHandler) handleAgentStreamFSM(
 			if !ok {
 				return reply.String(), inferErr, false
 			}
-			switch ev.Type {
-			case types.AgentStreamEventThinking:
-				WriteSSE(w, flusher, "reasoning", map[string]any{"content": ev.Content})
-			case types.AgentStreamEventToken:
-				cleaned, err := systemPromptGuard.Scan(ev.Content, true)
-				if err != nil {
-					slog.Warn("server: system prompt leak detected", "session_id", sessionID, "err", err)
-				}
-				ev.Content = cleaned
-				WriteSSE(w, flusher, "token", map[string]any{"content": ev.Content})
-				reply.WriteString(ev.Content)
-			case types.AgentStreamEventToolCall:
-				msg := fmt.Sprintf("Executing tool %s...", ev.ToolName)
-				WriteSSE(w, flusher, "status", map[string]any{"type": "tool_call", "message": msg})
-			case types.AgentStreamEventToolResult:
-				WriteSSE(w, flusher, "status", map[string]any{"type": "tool_result", "message": ev.Content})
-			case types.AgentStreamEventError:
-				if inferErr == "" {
-					inferErr = ev.Content
-				}
-				s.WriteSSEError(w, flusher, "fsm_error", ev.Content, sessionID, nil)
-			case types.AgentStreamEventStatus:
-				if ev.Content == "task_done" {
-					return reply.String(), inferErr, false
-				}
-				WriteSSE(w, flusher, "status", map[string]any{"type": "info", "message": ev.Content})
+			if s.handleStreamFSMEvent(w, flusher, sessionID, ev, systemPromptGuard, &reply, &inferErr) {
+				return reply.String(), inferErr, false
 			}
 		case <-ctx.Done():
 			// [GD-13-002] 客户端断连时通知 Agent Kernel 强制中止，避免后台无感空跑

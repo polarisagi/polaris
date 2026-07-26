@@ -17,6 +17,15 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// toolCallState 跨 chunk 聚合单个 tool_call 的参数：index → 状态。
+// 2026-07-26 由 SendStreamRequest 局部类型上提为包级类型（gocyclo 治理，
+// 供 emitCollectedToolCalls 辅助方法的签名引用，行为不变）。
+type toolCallState struct {
+	id        string
+	name      string
+	arguments strings.Builder
+}
+
 // OpenAIStreamDelta 流式响应中的 delta 字段（支持文本和 tool_call 两类）。
 type OpenAIStreamDelta struct {
 	Content          string                `json:"content"`
@@ -45,6 +54,52 @@ type OpenAIStreamChunk struct {
 		FinishReason string            `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *OpenAIUsage `json:"usage,omitempty"`
+}
+
+// emitCollectedToolCalls 在 finish_reason == "tool_calls" 到达时，把跨 chunk 聚合的所有
+// tool_call 参数拼装/修复后逐个 emit 出去（从 SendStreamRequest 拆出，nestif 治理，行为不变）。
+// 返回 ctxDone=true 时调用方应立即从 SendStreamRequest 的 goroutine return。
+func emitCollectedToolCalls(ctx context.Context, ch chan<- types.StreamEvent, toolBuilders map[int]*toolCallState) (ctxDone bool) {
+	for idx := range len(toolBuilders) {
+		s, ok := toolBuilders[idx]
+		if !ok {
+			continue
+		}
+		argsStr := s.arguments.String()
+		if argsStr == "" {
+			argsStr = "{}"
+		} else if !json.Valid([]byte(argsStr)) {
+			// 流被截断（如 finish_reason=length 提前收敛）导致 tool_call
+			// 参数 JSON 不完整：json.RawMessage 校验会使下方 json.Marshal
+			// 静默失败（payload=nil），整个 StreamToolCall 事件的内容凭空丢失，
+			// 上游拿到的是空字符串而非报错。用 JSONRepair 栈式修复尽力抢救
+			// 已收到的参数片段，而不是任由这条工具调用整体消失。
+			if repaired, repairErr := llmparent.JSONRepair([]byte(argsStr)); repairErr == nil && json.Valid(repaired.Repaired) {
+				argsStr = string(repaired.Repaired)
+			} else {
+				argsStr = "{}"
+			}
+		}
+		payload, err := json.Marshal(map[string]any{
+			"id":    s.id,
+			"name":  s.name,
+			"input": json.RawMessage(argsStr),
+		})
+		if err != nil {
+			select {
+			case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
+			case <-ctx.Done():
+				return true
+			}
+			continue
+		}
+		select {
+		case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+		case <-ctx.Done():
+			return true
+		}
+	}
+	return false
 }
 
 // SendStreamRequest 发送一个流式的 HTTP 请求并返回解析事件的 channel。
@@ -103,11 +158,6 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		scanner.Buffer(buf, 1024*1024)
 
 		// 跨 chunk 聚合 tool_call 参数：index → 状态
-		type toolCallState struct {
-			id        string
-			name      string
-			arguments strings.Builder
-		}
 		toolBuilders := map[int]*toolCallState{}
 		accumulatedOutputTokens := 0
 
@@ -221,44 +271,8 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			// finish_reason == "tool_calls" → 把所有已收集的 tool_call emit 出去
 			if choice.FinishReason == "tool_calls" {
-				for idx := range len(toolBuilders) {
-					s, ok := toolBuilders[idx]
-					if !ok {
-						continue
-					}
-					argsStr := s.arguments.String()
-					if argsStr == "" {
-						argsStr = "{}"
-					} else if !json.Valid([]byte(argsStr)) {
-						// 流被截断（如 finish_reason=length 提前收敛）导致 tool_call
-						// 参数 JSON 不完整：json.RawMessage 校验会使下方 json.Marshal
-						// 静默失败（payload=nil），整个 StreamToolCall 事件的内容凭空丢失，
-						// 上游拿到的是空字符串而非报错。用 JSONRepair 栈式修复尽力抢救
-						// 已收到的参数片段，而不是任由这条工具调用整体消失。
-						if repaired, repairErr := llmparent.JSONRepair([]byte(argsStr)); repairErr == nil && json.Valid(repaired.Repaired) {
-							argsStr = string(repaired.Repaired)
-						} else {
-							argsStr = "{}"
-						}
-					}
-					payload, err := json.Marshal(map[string]any{
-						"id":    s.id,
-						"name":  s.name,
-						"input": json.RawMessage(argsStr),
-					})
-					if err != nil {
-						select {
-						case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("tool_call payload marshal failed: %v", err)}:
-						case <-ctx.Done():
-							return
-						}
-						continue
-					}
-					select {
-					case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
-					case <-ctx.Done():
-						return
-					}
+				if ctxDone := emitCollectedToolCalls(ctx, ch, toolBuilders); ctxDone {
+					return
 				}
 				// 清空，支持同一流中多轮（理论上不会，但防御性清空）
 				toolBuilders = map[int]*toolCallState{}

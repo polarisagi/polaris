@@ -197,7 +197,7 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		case <-ticker.C:
 			newCursor, err := w.processBatch(ctx, cursor, 50)
 			if err != nil {

@@ -179,7 +179,7 @@ func (b *EmbeddingBatcher) Embed(ctx context.Context, texts []string, model stri
 		case r := <-req.ResultCh:
 			results[i] = r
 		case <-ctx.Done():
-			return results, ctx.Err()
+			return results, ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		}
 	}
 	return results, nil

@@ -84,7 +84,10 @@ func (pr *PersonaRefiner) Load(ctx context.Context) error {
 	}
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
-	return json.Unmarshal([]byte(raw), pr.profile)
+	if err := json.Unmarshal([]byte(raw), pr.profile); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "PersonaRefiner.Load 反序列化失败", err)
+	}
+	return nil
 }
 
 // Save 将用户画像持久化到 preferences 表。

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // SemanticCache — LLM 响应语义缓存。
@@ -202,7 +204,10 @@ func (c *SemanticCache) Put(key CacheKey, response, model string) error {
 	c.accessTime[entryKey] = now
 	c.mu.Unlock()
 
-	return c.store.Put(entry)
+	if err := c.store.Put(entry); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "semantic_cache: Put 失败", err)
+	}
+	return nil
 }
 
 // Count 返回当前缓存条目数（store=nil 时返回 0）。

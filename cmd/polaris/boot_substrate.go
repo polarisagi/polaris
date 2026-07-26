@@ -351,7 +351,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	auditTrail := security.NewAuditTrail(auditRepo, layout.AuditArchive)
 	if err := auditTrail.RecoverOnStartup(); err != nil {
 		slog.Error("polaris: AuditTrail recovery failed", "err", err)
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "boot_substrate: AuditTrail 恢复失败", err)
 	}
 	slog.Info("polaris: audit trail recovered and initialized")
 

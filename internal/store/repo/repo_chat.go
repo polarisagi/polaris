@@ -71,7 +71,10 @@ func (r *SQLiteChatRepository) ListSessions(ctx context.Context, limit int) ([]t
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions rows", err)
+	}
+	return result, nil
 }
 
 // UpdateSessionTitle 更新会话标题
@@ -174,7 +177,10 @@ func (r *SQLiteChatRepository) ListMessages(ctx context.Context, sessionID strin
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListMessages rows", err)
+	}
+	return result, nil
 }
 
 // SearchMessages 全文检索消息
@@ -197,7 +203,10 @@ func (r *SQLiteChatRepository) SearchMessages(ctx context.Context, query string,
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.SearchMessages rows", err)
+	}
+	return result, nil
 }
 
 // --- Additional mutations ---
@@ -257,5 +266,8 @@ func (r *SQLiteChatRepository) ReplaceSessionMessages(ctx context.Context, sessi
 			return apperr.Wrap(apperr.CodeInternal, "db error", err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ReplaceSessionMessages commit", err)
+	}
+	return nil
 }

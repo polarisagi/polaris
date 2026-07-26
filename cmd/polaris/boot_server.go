@@ -215,53 +215,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		sb.AutoConf.Gate.State(probe.FeatureLogicCollapse) != probe.FeatureDisabled
 
 	if logicCollapseEnabled && tb.ContainerSandbox != nil {
-		collapseCompilerTier := sb.AutoConf.Config.Tier
-		collapseCompiler := extskill.NewLogicCollapseCompiler(extskill.LogicCollapseConfig{
-			Gate:             extskill.NewCompileGate(collapseCompilerTier),
-			CodeGen:          si.NewDefaultLLMCodeGenerator(sb.Router),
-			Registry:         tb.SkillRegistry,
-			WorkDir:          sb.Layout.Workspace,
-			SigningKey:       skillSigningKey,
-			ContainerSandbox: tb.ContainerSandbox,
-		})
-		collapseMonitor := si.NewLogicCollapseMonitor(
-			collapseCompiler,
-			si.NewDefaultLLMCodeGenerator(sb.Router),
-			tb.SkillRegistry,
-			&hitlNotifierAdapter{gateway: tb.HITLGateway},
-			skillSigningKey,
-			sb.Layout.Workspace,
-		)
-		// 2026-07-10：复用 bootAgent 构造的 ab.RolloutStore（与 M9Engine 共用同一份
-		// rollout_states 状态），此前这里各自 new 一份 SQLiteRolloutStore，
-		// 与 M9Engine 的候选状态互不相干，Gate 推进对不上号。
-		if ab.RolloutStore != nil {
-			collapseMonitor.WithStagingPipeline(ab.RolloutStore)
-			slog.Info("polaris: StagingPipeline (shared with M9Engine) injected into LogicCollapseMonitor")
-		} else {
-			slog.Warn("polaris: RolloutStore unavailable, LogicCollapseMonitor L2 staging disabled")
-		}
-		ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
-		// [W-1-C] 接入 HeuristicsWriter
-		if ab.M9Engine != nil {
-			ab.M9Engine.SetHeuristicsWriter(newCollapseMonitorAdapter(collapseMonitor))
-		}
-		slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel",
-			"feature", probe.FeatureLogicCollapse,
-			"tier", collapseCompilerTier,
-		)
-
-		// [Task 10] 技能重生成监控
-		if tb.ConsolidationPipeline != nil {
-			skillEvolutionMonitor := extskill.NewSkillEvolutionMonitor(
-				sb.Store.DB(),
-				tb.SkillRegistry,
-				collapseCompiler,
-				&sb.Cfg.Thresholds,
-			)
-			tb.ConsolidationPipeline.WithSkillEvolver(skillEvolutionMonitor)
-			slog.Info("polaris: SkillEvolutionMonitor injected into ConsolidationPipeline")
-		}
+		bootLogicCollapseMonitor(sb, tb, ab, skillSigningKey)
 	} else {
 		slog.Info("polaris: LogicCollapseMonitor skipped (FeatureLogicCollapse disabled, AutoConf nil, or ContainerSandbox nil)")
 	}
@@ -357,10 +311,64 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 
 	if err := httpServer.Start(); err != nil {
 		slog.Error("polaris: failed to start HTTP server", "err", err)
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "boot_server: HTTP 服务启动失败", err)
 	}
 
 	return httpServer, nil
+}
+
+// bootLogicCollapseMonitor 从 bootServer 中拆出（nestif 治理，行为不变）：
+// 构造 LogicCollapseCompiler + LogicCollapseMonitor，注入 ToolCallRecorder/
+// HeuristicsWriter/SkillEvolutionMonitor。仅在 logicCollapseEnabled &&
+// tb.ContainerSandbox != nil 时由调用方触发。
+func bootLogicCollapseMonitor(sb *SubstrateBundle, tb *ToolBundle, ab *AgentBundle, skillSigningKey []byte) {
+	collapseCompilerTier := sb.AutoConf.Config.Tier
+	collapseCompiler := extskill.NewLogicCollapseCompiler(extskill.LogicCollapseConfig{
+		Gate:             extskill.NewCompileGate(collapseCompilerTier),
+		CodeGen:          si.NewDefaultLLMCodeGenerator(sb.Router),
+		Registry:         tb.SkillRegistry,
+		WorkDir:          sb.Layout.Workspace,
+		SigningKey:       skillSigningKey,
+		ContainerSandbox: tb.ContainerSandbox,
+	})
+	collapseMonitor := si.NewLogicCollapseMonitor(
+		collapseCompiler,
+		si.NewDefaultLLMCodeGenerator(sb.Router),
+		tb.SkillRegistry,
+		&hitlNotifierAdapter{gateway: tb.HITLGateway},
+		skillSigningKey,
+		sb.Layout.Workspace,
+	)
+	// 2026-07-10：复用 bootAgent 构造的 ab.RolloutStore（与 M9Engine 共用同一份
+	// rollout_states 状态），此前这里各自 new 一份 SQLiteRolloutStore，
+	// 与 M9Engine 的候选状态互不相干，Gate 推进对不上号。
+	if ab.RolloutStore != nil {
+		collapseMonitor.WithStagingPipeline(ab.RolloutStore)
+		slog.Info("polaris: StagingPipeline (shared with M9Engine) injected into LogicCollapseMonitor")
+	} else {
+		slog.Warn("polaris: RolloutStore unavailable, LogicCollapseMonitor L2 staging disabled")
+	}
+	ab.Agent.SetToolCallRecorder(&collapseRecorderAdapter{m: collapseMonitor})
+	// [W-1-C] 接入 HeuristicsWriter
+	if ab.M9Engine != nil {
+		ab.M9Engine.SetHeuristicsWriter(newCollapseMonitorAdapter(collapseMonitor))
+	}
+	slog.Info("polaris: LogicCollapseMonitor injected as ToolCallRecorder into agent kernel",
+		"feature", probe.FeatureLogicCollapse,
+		"tier", collapseCompilerTier,
+	)
+
+	// [Task 10] 技能重生成监控
+	if tb.ConsolidationPipeline != nil {
+		skillEvolutionMonitor := extskill.NewSkillEvolutionMonitor(
+			sb.Store.DB(),
+			tb.SkillRegistry,
+			collapseCompiler,
+			&sb.Cfg.Thresholds,
+		)
+		tb.ConsolidationPipeline.WithSkillEvolver(skillEvolutionMonitor)
+		slog.Info("polaris: SkillEvolutionMonitor injected into ConsolidationPipeline")
+	}
 }
 
 func performHotRestart(sb *SubstrateBundle) {

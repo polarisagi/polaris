@@ -136,5 +136,8 @@ func (g *SyntheticSkillGen) registerSkill(ctx context.Context, name, description
 		Deprecated:   false,
 	}
 
-	return g.skillReg.Register(ctx, meta)
+	if err := g.skillReg.Register(ctx, meta); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "synthetic_skill_gen: SkillRegistry.Register 失败", err)
+	}
+	return nil
 }

@@ -126,7 +126,7 @@ func readStagingEvents(db *sql.DB, batchID string) ([]stagingEvent, error) {
 		 FROM events WHERE actor = ? ORDER BY offset`,
 		actorPrefix)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "查询 staging events 失败", err)
 	}
 	defer rows.Close()
 
@@ -134,11 +134,14 @@ func readStagingEvents(db *sql.DB, batchID string) ([]stagingEvent, error) {
 	for rows.Next() {
 		var e stagingEvent
 		if err := rows.Scan(&e.Offset, &e.ID, &e.Topic, &e.Payload, &e.EventType, &e.Salience, &e.Occurred); err != nil {
-			return nil, err
+			return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "扫描 staging events 行失败", err)
 		}
 		events = append(events, e)
 	}
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "遍历 staging events 结果集失败", err)
+	}
+	return events, nil
 }
 
 // ─── Phase 1: 去重 ────────────────────────────────────────────────────────────────────

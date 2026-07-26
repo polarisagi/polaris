@@ -249,7 +249,10 @@ func (s *SQLiteScheduler) writeTask(ctx context.Context, st *storedTask) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteScheduler.writeTask", err)
 	}
-	return s.store.Put(ctx, []byte("scheduler:task:"+st.Task.ID), data)
+	if err := s.store.Put(ctx, []byte("scheduler:task:"+st.Task.ID), data); err != nil {
+		return apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteScheduler.writeTask store", err)
+	}
+	return nil
 }
 
 func (s *SQLiteScheduler) Submit(ctx context.Context, task types.Task) (string, error) {

@@ -241,8 +241,12 @@ func TemplateRenderFn(_ context.Context, input []byte) ([]byte, error) {
 		truncated = true
 	}
 
-	return json.Marshal(map[string]any{
+	out, err := json.Marshal(map[string]any{
 		"output":    result,
 		"truncated": truncated,
 	})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "git_text_tools: 序列化结果失败", err)
+	}
+	return out, nil
 }

@@ -171,3 +171,31 @@ func (r *InMemoryToolRegistry) cacheIdempotencyResult(key string, result *types.
 		r.idempotencyCache.set(key, result)
 	}
 }
+
+// postCheckTOCTOU 重用 SideEffectPreCheck 接口，在工具执行后二次校验任务未被
+// 撤回/重新认领，防止 TOCTOU 导致已取消任务的副作用不被感知；返回非 nil result
+// 时调用方应立即返回该结果（从 tool.go ExecuteTool 拆出，gocyclo 治理 +
+// R7 文件行数治理，行为不变）。
+func (r *InMemoryToolRegistry) postCheckTOCTOU(ctx context.Context, taintLevel types.TaintLevel) (*types.ToolResult, error) {
+	r.mu.RLock()
+	checker := r.blackboard
+	r.mu.RUnlock()
+	if checker == nil {
+		return nil, nil
+	}
+	taskID, _ := ctx.Value(protocol.CtxTaskIDKey{}).(string)
+	if taskID == "" {
+		return nil, nil
+	}
+	agentID, _ := ctx.Value(protocol.CtxAgentIDKey{}).(string)
+	claimedVersion, _ := ctx.Value(protocol.CtxVersionKey{}).(int32)
+	if postErr := checker.SideEffectPreCheck(ctx, taskID, agentID, claimedVersion); postErr != nil {
+		slog.Warn("tool_registry: post-check failed (TOCTOU race detected after execution)", "task", taskID, "err", postErr)
+		return &types.ToolResult{
+			Success:    false,
+			Error:      "task reclaimed or revoked during execution (TOCTOU)",
+			TaintLevel: taintLevel,
+		}, apperr.New(apperr.CodeConflict, "tool_registry: side effect occurred after task was reclaimed/revoked")
+	}
+	return nil, nil
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"os/exec"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ConvertToRawPCM 使用 ffmpeg 将音频转为 16kHz f32le 原始 PCM 流。
@@ -17,5 +19,9 @@ func ConvertToRawPCM(ctx context.Context, inPath string) ([]byte, error) {
 	// 文本会污染二进制流，导致下游 STT/TTS 模块解析失败。此外，inPath 是内部可信路径，
 	// 命令不包含外部输入拼接，本身 shell 注入风险极低。
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", inPath, "-f", "f32le", "-ac", "1", "-ar", "16000", "-")
-	return cmd.Output()
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "audio_convert: ffmpeg 转码失败", err)
+	}
+	return out, nil
 }

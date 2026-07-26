@@ -194,7 +194,7 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 			}
 			return &resp, nil
 		default: // "kill_pause" 或未配置
-			return nil, ctx.Err()
+			return nil, ctx.Err() //nolint:wrapcheck // 调用方按 err == context.DeadlineExceeded 严格比较（见 hitl_test.go），须保留哨兵身份
 		}
 	case resp := <-ch:
 		return &resp, nil

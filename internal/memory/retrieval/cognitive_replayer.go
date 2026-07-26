@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -53,7 +54,7 @@ func (cr *CognitiveReplayer) replayEpisodic(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		default:
 		}
 
@@ -64,7 +65,7 @@ func (cr *CognitiveReplayer) replayEpisodic(ctx context.Context) error {
 			"SELECT event_uuid, content, embedding FROM episodic_events WHERE archived = 0 AND event_uuid != '' ORDER BY id ASC LIMIT ? OFFSET ?",
 			cr.batchSize, offset)
 		if err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeStorageUnavailable, "cognitive replayer: 查询 episodic_events 失败", err)
 		}
 
 		var count int
@@ -73,7 +74,7 @@ func (cr *CognitiveReplayer) replayEpisodic(ctx context.Context) error {
 			var embBlob []byte
 			if err := rows.Scan(&eventID, &content, &embBlob); err != nil {
 				rows.Close()
-				return err
+				return apperr.Wrap(apperr.CodeStorageUnavailable, "cognitive replayer: 扫描 episodic_events 行失败", err)
 			}
 
 			// FTSIndex
@@ -107,7 +108,7 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		default:
 		}
 
@@ -117,7 +118,7 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 			"SELECT entity_type, name, COALESCE(properties, '') FROM semantic_entities WHERE status = 'active' ORDER BY entity_type, name LIMIT ? OFFSET ?",
 			cr.batchSize, offset)
 		if err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeStorageUnavailable, "cognitive replayer: 查询 semantic_entities 失败", err)
 		}
 
 		var count int
@@ -125,7 +126,7 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 			var entityType, name, propsJSON string
 			if err := rows.Scan(&entityType, &name, &propsJSON); err != nil {
 				rows.Close()
-				return err
+				return apperr.Wrap(apperr.CodeStorageUnavailable, "cognitive replayer: 扫描 semantic_entities 行失败", err)
 			}
 
 			docID := "sement_" + entityType + "_" + name
@@ -151,7 +152,7 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		default:
 		}
 
@@ -174,7 +175,7 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 			var weight float64
 			if err := rows.Scan(&from, &to, &rel, &weight); err != nil {
 				rows.Close()
-				return err
+				return apperr.Wrap(apperr.CodeStorageUnavailable, "cognitive replayer: 扫描 semantic_relations 行失败", err)
 			}
 
 			if err := cr.cognitive.GraphRelate(from, rel, to, weight); err != nil {

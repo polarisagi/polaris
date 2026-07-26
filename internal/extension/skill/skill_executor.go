@@ -77,13 +77,8 @@ func (e *ScriptSkillExecutor) WithPolicy(gate protocol.PolicyGate) *ScriptSkillE
 // 与 cmd/polaris/skill_loader.go 注册进 InProcessSandbox 的同名工具保持完全一致的语义（唯一实现，禁止重复）。
 func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, input []byte) ([]byte, error) {
 	// P1-8 幂等缓存检查：与 InMemoryToolRegistry.checkIdempotency 行为对齐
-	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
-		e.mu.Lock()
-		if cached, exists := e.idempotencyCache.get(string(key)); exists {
-			e.mu.Unlock()
-			return cached, nil
-		}
-		e.mu.Unlock()
+	if cached, hit := e.checkIdempotencyCache(ctx); hit {
+		return cached, nil
 	}
 
 	// P1-8 限流：Skill 执行速率上限 20 QPS
@@ -116,9 +111,51 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: script validation", err)
 	}
 
+	if err := e.authorizeScriptExecution(ctx, meta); err != nil {
+		return nil, err
+	}
+
+	out, err := e.runner.RunScript(ctx, skillID, scriptPath, input, meta.Trust)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: run script", err)
+	}
+
+	// P1-8 幂等缓存写入：成功结果按 key 缓存，下次同 key 命中直接返回
+	e.storeIdempotencyResult(ctx, out)
+
+	return out, nil
+}
+
+// checkIdempotencyCache 检查请求 context 中的幂等 key 是否命中缓存
+// （从 ExecuteSkill 拆出，gocyclo 治理，行为不变）。
+func (e *ScriptSkillExecutor) checkIdempotencyCache(ctx context.Context) ([]byte, bool) {
+	key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey)
+	if !ok || key == "" {
+		return nil, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.idempotencyCache.get(string(key))
+}
+
+// storeIdempotencyResult 若请求携带幂等 key，则写入缓存供后续同 key 命中
+// （从 ExecuteSkill 拆出，gocyclo 治理，行为不变）。
+func (e *ScriptSkillExecutor) storeIdempotencyResult(ctx context.Context, out []byte) {
+	key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey)
+	if !ok || key == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.idempotencyCache.set(string(key), out)
+}
+
+// authorizeScriptExecution 执行 Cedar PolicyGate 授权检查（fail-closed）
+// （从 ExecuteSkill 拆出，gocyclo 治理，行为不变）。
+func (e *ScriptSkillExecutor) authorizeScriptExecution(ctx context.Context, meta *types.SkillMeta) error {
 	if e.policy == nil {
 		// fail-closed：脚本执行必须经 PolicyGate 授权，policy 未注入时拒绝而非静默放行。
-		return nil, apperr.New(apperr.CodeForbidden, "skill_executor: policy gate not configured (deny-by-default)")
+		return apperr.New(apperr.CodeForbidden, "skill_executor: policy gate not configured (deny-by-default)")
 	}
 	allowed, err := e.policy.IsAuthorized(ctx, "agent", "script_execute", meta.Name, map[string]any{
 		"trust_tier":  int(meta.Trust),
@@ -130,22 +167,9 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 		if err != nil {
 			reason = err.Error()
 		}
-		return nil, apperr.New(apperr.CodeForbidden, "skill_executor: "+reason)
+		return apperr.New(apperr.CodeForbidden, "skill_executor: "+reason)
 	}
-
-	out, err := e.runner.RunScript(ctx, skillID, scriptPath, input, meta.Trust)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "skill_executor: run script", err)
-	}
-
-	// P1-8 幂等缓存写入：成功结果按 key 缓存，下次同 key 命中直接返回
-	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
-		e.mu.Lock()
-		e.idempotencyCache.set(string(key), out)
-		e.mu.Unlock()
-	}
-
-	return out, nil
+	return nil
 }
 
 // renderInstructions 将 tool-mode 指令技能的 SKILL.md 正文与调用方输入拼接返回。

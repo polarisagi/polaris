@@ -1,8 +1,6 @@
 package testutil
 
 import (
-	"errors"
-
 	"context"
 	"database/sql"
 
@@ -223,7 +221,7 @@ func (m *MockGraphTraverser) SpreadingActivation(_ []string, _ int, _, _ float64
 
 var _ protocol.GraphTraverser = (*MockGraphTraverser)(nil)
 
-var ErrProviderFailed = errors.New("provider failed")
+var ErrProviderFailed = apperr.New(apperr.CodeInternal, "provider failed")
 
 type MockProvider struct {
 	Fail bool

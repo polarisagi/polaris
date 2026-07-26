@@ -146,7 +146,7 @@ func GenerateNewKey(keyPath string) ([]byte, error) {
 	}
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.CodeInternal, "vault: 读取密钥文件失败: "+keyPath, err)
 	}
 	if len(keyData) < 32 {
 		return nil, apperr.New(apperr.CodeInternal, "generated key too short")

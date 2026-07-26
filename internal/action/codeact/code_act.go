@@ -179,18 +179,25 @@ func (ca *CodeAct) validateAST(req protocol.CodeActRequest) error {
 	if ca.astChecker == nil {
 		return nil
 	}
+	var err error
 	switch req.Language {
 	case "python":
-		return ca.astChecker.CheckPython([]byte(req.Code))
+		err = ca.astChecker.CheckPython([]byte(req.Code))
 	case "bash":
-		return ca.astChecker.CheckBash([]byte(req.Code))
+		err = ca.astChecker.CheckBash([]byte(req.Code))
+	}
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "code_act: L0 AST 检查失败", err)
 	}
 	return nil
 }
 
 func (ca *CodeAct) validateL1(req protocol.CodeActRequest) error {
 	caps := map[string]bool{}
-	return ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps)
+	if err := ca.govAgent.ValidateCode(req.Language, []byte(req.Code), caps); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "code_act: L1 governance 检查失败", err)
+	}
+	return nil
 }
 
 func (ca *CodeAct) validateL2(ctx context.Context, req protocol.CodeActRequest) error {
@@ -306,6 +313,12 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 		return nil, apperr.Wrap(apperr.CodeInternal, "code_act: sandbox execution failed", err)
 	}
 
+	return ca.finalizeExecuteResult(ctx, req, res)
+}
+
+// finalizeExecuteResult 计算退出码、二次 PII 脱敏输出、写入全链路审计并组装最终结果
+// （从 Execute 拆出，gocyclo 治理，行为不变）。
+func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeActRequest, res *sandbox.ExecResult) (*protocol.CodeActResult, error) {
 	exitCode := 0
 	out := res.Output
 	if !res.Success {

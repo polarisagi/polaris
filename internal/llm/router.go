@@ -154,30 +154,9 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 
 	normalizeInferRequest(req)
 
-	var ckey search.CacheKey
-	var useCache bool
-	if ir.semanticCache != nil && options.CacheHints != nil {
-		msgStrs := make([]string, 0, len(msgs))
-		for _, m := range msgs {
-			msgStrs = append(msgStrs, m.Role+":"+m.Content)
-		}
-		ckey = search.CacheKey{
-			ContextHintFingerprint: options.CacheHints.ContextHintFingerprint,
-			ActiveControlLabels:    options.CacheHints.ActiveControlLabels,
-			TaskType:               options.CacheHints.TaskType,
-			Messages:               msgStrs,
-		}
-		if respStr, hit := ir.semanticCache.Get(ckey); hit {
-			return &types.ProviderResponse{
-				Content: respStr,
-				Usage: types.Usage{
-					CacheHitTokens: req.MaxTokens, // Approximation as we don't have exact token count here
-				},
-				Model:        "semantic_cache",
-				FinishReason: "stop",
-			}, nil
-		}
-		useCache = true
+	cached, ckey, useCache := ir.resolveSemanticCache(options, msgs, req.MaxTokens)
+	if cached != nil {
+		return cached, nil
 	}
 
 	entry := ir.registry.best(req)
@@ -207,49 +186,91 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 	})
 	ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
 	if err != nil {
-		if ctx.Err() != nil {
-
-			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer", err)
-		}
-
-		// ErrorClassifier 接入（P1 2026-07-12）：此前任何错误一律 failover 到下一个
-		// provider，包括请求格式错误/永久认证失效/策略拦截这类换 provider 也无法
-		// 恢复的错误——既浪费时延，也可能把同一个畸形请求打到每一家 vendor。
-		// Retryable=false 且 ShouldFallback=false 是 Classify() 对这类错误的明确信号。
-		if ce := ClassifyWithProvider(err, entry.name); !ce.Retryable && !ce.ShouldFallback {
-			slog.Warn("inference_router: non-retryable error, skip failover",
-				"provider", entry.name, "reason", ce.Reason, "err", err)
-			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer: non-retryable ("+string(ce.Reason)+")", err)
-		}
-
-		return ir.failover(ctx, msgs, opts, req, entry.name)
+		return ir.handleInferError(ctx, err, entry, msgs, opts, req)
 	}
 
-	if resp != nil {
-		caps := entry.provider.Capabilities()
-		costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
-			float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
-			float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
-		trace.RecordLLMCall(ctx,
-			entry.name, resp.Model, "success", ms,
-			resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
-			costUSD,
-		)
-		// 2026-07-08 移除 eventWriter 写事件分支（复核
-		// code-quality-remediation-verification-20260707.md Phase 1.3 遗留项，
-		// 详见 local_playground/reports/phase4-hard-dep-and-deadcode-followup-20260708.md）：
-		// protocol.EventWriter 全仓库零实现，WithEventWriter 注入方法此前已被删除
-		// 导致 eventWriter 恒为 nil、这段代码永久不可达；LLM 调用观测已由上面的
-		// trace.RecordLLMCall（→ Prometheus/OTel InstrLLMCallsTotal 等）完整覆盖，
-		// 不存在观测缺口。ADR-0029 §H 曾计划将此处的裸 goroutine 迁移到 SafeGo 并
-		// 改经 event_buffer.go 批处理，但该 EventWriteBuffer 已确认零接线并删除，
-		// 原计划的落地目标已不存在，遂一并清理。
-
-		if useCache && len(resp.ToolCalls) == 0 {
-			_ = ir.semanticCache.Put(ckey, resp.Content, resp.Model)
-		}
-	}
+	ir.recordInferSuccess(ctx, entry, resp, ms, useCache, ckey)
 	return resp, nil
+}
+
+// resolveSemanticCache 检查语义缓存命中；未命中时返回可用于后续 Put 回写的 CacheKey
+// 及 useCache 标记（从 Infer 拆出，gocyclo 治理，行为不变）。
+func (ir *InferenceRouter) resolveSemanticCache(options *types.InferOptions, msgs []types.Message, maxTokens int) (cached *types.ProviderResponse, ckey search.CacheKey, useCache bool) {
+	if ir.semanticCache == nil || options.CacheHints == nil {
+		return nil, search.CacheKey{}, false
+	}
+	msgStrs := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		msgStrs = append(msgStrs, m.Role+":"+m.Content)
+	}
+	ckey = search.CacheKey{
+		ContextHintFingerprint: options.CacheHints.ContextHintFingerprint,
+		ActiveControlLabels:    options.CacheHints.ActiveControlLabels,
+		TaskType:               options.CacheHints.TaskType,
+		Messages:               msgStrs,
+	}
+	if respStr, hit := ir.semanticCache.Get(ckey); hit {
+		return &types.ProviderResponse{
+			Content: respStr,
+			Usage: types.Usage{
+				CacheHitTokens: maxTokens, // Approximation as we don't have exact token count here
+			},
+			Model:        "semantic_cache",
+			FinishReason: "stop",
+		}, ckey, true
+	}
+	return nil, ckey, true
+}
+
+// handleInferError 处理 provider.Infer 失败：ctx 已取消时直接透传；ErrorClassifier
+// 判定不可重试/不应 failover 时直接失败；否则触发 failover 到次优 provider
+// （从 Infer 拆出，gocyclo 治理，行为不变）。
+func (ir *InferenceRouter) handleInferError(ctx context.Context, err error, entry *providerEntry, msgs []types.Message, opts []types.InferOption, req *types.InferRequest) (*types.ProviderResponse, error) {
+	if ctx.Err() != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer", err)
+	}
+
+	// ErrorClassifier 接入（P1 2026-07-12）：此前任何错误一律 failover 到下一个
+	// provider，包括请求格式错误/永久认证失效/策略拦截这类换 provider 也无法
+	// 恢复的错误——既浪费时延，也可能把同一个畸形请求打到每一家 vendor。
+	// Retryable=false 且 ShouldFallback=false 是 Classify() 对这类错误的明确信号。
+	if ce := ClassifyWithProvider(err, entry.name); !ce.Retryable && !ce.ShouldFallback {
+		slog.Warn("inference_router: non-retryable error, skip failover",
+			"provider", entry.name, "reason", ce.Reason, "err", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.Infer: non-retryable ("+string(ce.Reason)+")", err)
+	}
+
+	return ir.failover(ctx, msgs, opts, req, entry.name)
+}
+
+// recordInferSuccess 记录成功调用的延迟/成本 trace，并在启用语义缓存时回写命中结果
+// （从 Infer 拆出，gocyclo 治理，行为不变）。
+func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *providerEntry, resp *types.ProviderResponse, ms float64, useCache bool, ckey search.CacheKey) {
+	if resp == nil {
+		return
+	}
+	caps := entry.provider.Capabilities()
+	costUSD := float64(resp.Usage.InputTokens)*caps.CostPer1KInput/1000.0 +
+		float64(resp.Usage.OutputTokens)*caps.CostPer1KOutput/1000.0 +
+		float64(resp.Usage.CacheHitTokens)*caps.CostPer1KCacheHit/1000.0
+	trace.RecordLLMCall(ctx,
+		entry.name, resp.Model, "success", ms,
+		resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
+		costUSD,
+	)
+	// 2026-07-08 移除 eventWriter 写事件分支（复核
+	// code-quality-remediation-verification-20260707.md Phase 1.3 遗留项，
+	// 详见 local_playground/reports/phase4-hard-dep-and-deadcode-followup-20260708.md）：
+	// protocol.EventWriter 全仓库零实现，WithEventWriter 注入方法此前已被删除
+	// 导致 eventWriter 恒为 nil、这段代码永久不可达；LLM 调用观测已由上面的
+	// trace.RecordLLMCall（→ Prometheus/OTel InstrLLMCallsTotal 等）完整覆盖，
+	// 不存在观测缺口。ADR-0029 §H 曾计划将此处的裸 goroutine 迁移到 SafeGo 并
+	// 改经 event_buffer.go 批处理，但该 EventWriteBuffer 已确认零接线并删除，
+	// 原计划的落地目标已不存在，遂一并清理。
+
+	if useCache && len(resp.ToolCalls) == 0 {
+		_ = ir.semanticCache.Put(ckey, resp.Content, resp.Model)
+	}
 }
 
 // StreamInfer 路由流式请求，内嵌延迟记录与 Failover。

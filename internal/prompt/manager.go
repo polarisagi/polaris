@@ -120,7 +120,10 @@ func (pm *Manager) WriteUserPrompt(name, content string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WriteUserPrompt", err)
 	}
-	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "WriteUserPrompt: 写入文件失败", err)
+	}
+	return nil
 }
 
 // DeleteUserPrompt 删除用户自定义提示词文件，恢复到 embedded 默认。

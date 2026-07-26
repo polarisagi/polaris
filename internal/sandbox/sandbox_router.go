@@ -121,63 +121,89 @@ func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.Trus
 	mustIsolate := trustTier < types.TrustOfficial
 	switch tier {
 	case types.SandboxNativeOS:
-		// Tier-0 fallback：Rust 原生沙箱（无容器运行时依赖）。
-		// assign.go 在 hwTier==0 时将 SandboxContainer 降级为此 tier。
-		if r.nativeOS != nil {
-			return r.nativeOS, nil
-		}
-		// nativeOS 未注入时（测试环境）尝试 container，否则 fail-closed。
-		if r.container != nil {
-			return r.container, nil
-		}
-		return nil, apperr.New(apperr.CodeForbidden, "sandbox: NativeOS required for Tier-0 CodeAct but unavailable; refusing to downgrade")
+		return r.routeNativeOS()
 	case types.SandboxRemote:
 		if r.remote != nil {
 			return r.remote, nil
 		}
-		fallthrough
+		return r.routeWasm(mustIsolate)
 	case types.SandboxWasm:
-		if r.wasmtime != nil {
-			return r.wasmtime, nil
-		}
-		if r.container != nil {
-			return r.container, nil
-		}
-		if r.remote != nil {
-			return r.remote, nil
-		}
-		if mustIsolate {
-			return nil, apperr.New(apperr.CodeForbidden, "sandbox: L2/Wasm required for untrusted code but unavailable; refusing to downgrade")
-		}
-		slog.Warn("sandbox: Wasm 不可用，可信来源降级 InProcess")
-		return r.inProcess, nil
+		return r.routeWasm(mustIsolate)
 	case types.SandboxContainer:
-		if r.container != nil {
-			return r.container, nil
-		}
-		if r.remote != nil {
-			return r.remote, nil
-		}
-		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L3/Container required but unavailable; refusing to downgrade")
+		return r.routeContainer()
 	case types.SandboxPersistent:
-		// D4/ADR-0078：Available()==false 时（当前恒定如此，见
-		// sandbox_persistent.go）按 Container 同等的降级链回退，语义与设计
-		// 文档"否则保持现状回退到既有 StatefulSession pickle/env 序列化路径"
-		// 一致——调用方拿到 Container/Remote 后仍会走原有的一次性进程执行
-		// 路径，StatefulSession 的样板注入逻辑不受影响。
-		if r.persistent != nil && r.persistent.Available() {
-			return r.persistent, nil
-		}
-		if r.container != nil {
-			return r.container, nil
-		}
-		if r.remote != nil {
-			return r.remote, nil
-		}
-		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L4/Persistent requested but neither persistent backend nor Container/Remote fallback available; refusing to downgrade")
+		return r.routePersistent()
 	default: // InProcess
 		return r.inProcess, nil
 	}
+}
+
+// routeNativeOS 路由 Tier-0 NativeOS（Rust 原生沙箱）；未注入时尝试 Container 兜底，
+// 否则 fail-closed（从 RouteByTier 拆出，gocyclo 治理，行为不变）。
+func (r *SandboxRouter) routeNativeOS() (SandboxProvider, error) {
+	// Tier-0 fallback：Rust 原生沙箱（无容器运行时依赖）。
+	// assign.go 在 hwTier==0 时将 SandboxContainer 降级为此 tier。
+	if r.nativeOS != nil {
+		return r.nativeOS, nil
+	}
+	// nativeOS 未注入时（测试环境）尝试 container，否则 fail-closed。
+	if r.container != nil {
+		return r.container, nil
+	}
+	return nil, apperr.New(apperr.CodeForbidden, "sandbox: NativeOS required for Tier-0 CodeAct but unavailable; refusing to downgrade")
+}
+
+// routeWasm 路由 L2/Wasm 隔离：依次尝试 Wasm→Container→Remote；不可信来源找不到
+// 隔离时 fail-closed，可信来源允许降级 InProcess（从 RouteByTier 拆出，
+// gocyclo 治理，行为不变；SandboxRemote 未注入 remote 时 fallthrough 至此复用同一逻辑）。
+func (r *SandboxRouter) routeWasm(mustIsolate bool) (SandboxProvider, error) {
+	if r.wasmtime != nil {
+		return r.wasmtime, nil
+	}
+	if r.container != nil {
+		return r.container, nil
+	}
+	if r.remote != nil {
+		return r.remote, nil
+	}
+	if mustIsolate {
+		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L2/Wasm required for untrusted code but unavailable; refusing to downgrade")
+	}
+	slog.Warn("sandbox: Wasm 不可用，可信来源降级 InProcess")
+	return r.inProcess, nil
+}
+
+// routeContainer 路由 L3/Container 隔离；不可用时尝试 Remote，否则 fail-closed
+// （从 RouteByTier 拆出，gocyclo 治理，行为不变）。
+func (r *SandboxRouter) routeContainer() (SandboxProvider, error) {
+	if r.container != nil {
+		return r.container, nil
+	}
+	if r.remote != nil {
+		return r.remote, nil
+	}
+	return nil, apperr.New(apperr.CodeForbidden, "sandbox: L3/Container required but unavailable; refusing to downgrade")
+}
+
+// routePersistent 路由 L4/Persistent 隔离（D4/ADR-0078）：Available()==false 时按
+// Container 同等的降级链回退，否则 fail-closed（从 RouteByTier 拆出，
+// gocyclo 治理，行为不变）。
+func (r *SandboxRouter) routePersistent() (SandboxProvider, error) {
+	// D4/ADR-0078：Available()==false 时（当前恒定如此，见
+	// sandbox_persistent.go）按 Container 同等的降级链回退，语义与设计
+	// 文档"否则保持现状回退到既有 StatefulSession pickle/env 序列化路径"
+	// 一致——调用方拿到 Container/Remote 后仍会走原有的一次性进程执行
+	// 路径，StatefulSession 的样板注入逻辑不受影响。
+	if r.persistent != nil && r.persistent.Available() {
+		return r.persistent, nil
+	}
+	if r.container != nil {
+		return r.container, nil
+	}
+	if r.remote != nil {
+		return r.remote, nil
+	}
+	return nil, apperr.New(apperr.CodeForbidden, "sandbox: L4/Persistent requested but neither persistent backend nor Container/Remote fallback available; refusing to downgrade")
 }
 
 // Execute 完整执行路径：Route → Run → ToolResult。

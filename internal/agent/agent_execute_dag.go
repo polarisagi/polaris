@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/observability/trace"
@@ -23,6 +24,88 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// handleDAGExecutionFailure 处理 DAG 节点执行失败后的分流：能力缺口 / TOCTOU 冲突 /
+// 污点出口拦截人工复核 / 兜底回滚（从 runExecuteDAG 拆出，nestif 治理，行为不变）。
+func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Span, err error) error {
+	if strings.Contains(err.Error(), "tool not found") {
+		return a.handleCapabilityGap(ctx, err)
+	}
+
+	if apperr.IsCode(err, apperr.CodeConflict) {
+		a.asyncIntent(types.TriggerExecuteFail)
+		return err //nolint:wrapcheck // Return directly for TOCTOU
+	}
+
+	if errors.Is(err, policy.ErrTaintBlockedEgress) && a.hitl != nil {
+		if retryErr := a.handleTaintEgressBlocked(ctx, err); retryErr != nil {
+			return retryErr
+		}
+	}
+
+	// 执行失败 → 触发 S_ROLLBACK
+	span.RecordError(err)
+	a.asyncIntent(types.TriggerExecuteFail)
+	return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
+}
+
+// handleCapabilityGap 处理 DAG 执行中 "tool not found" 能力缺口：投递 GapFill 事件并转入中断，
+// 若扩展激活已降级则直接失败。调用方保证 err 已确认为 tool-not-found。
+func (a *Agent) handleCapabilityGap(ctx context.Context, err error) error {
+	if a.sCtx.ReplanExtActivationDegraded {
+		return apperr.Wrap(apperr.CodeInvalidInput, "capability_gap with extension activation degraded", err)
+	}
+	a.sCtx.SuspendReason = "capability_gap"
+
+	// 通过 outbox 异步投递 m9_capability_gap 事件，触发 GapFillWorker 进行能力补全
+	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
+		payloadBytes, _ := json.Marshal(map[string]string{"error": err.Error()})
+		_, _ = sqlRepo.ExecContext(ctx, `
+			INSERT INTO background_tasks (id, agent_id, status, type, args_json, created_at)
+			VALUES (?, ?, 'pending', 'prompt_optimization', ?, ?)
+		`, "opt_"+a.ID+"_"+time.Now().Format("150405"), a.ID, `{"target_metric": "quality"}`, time.Now().Unix())
+		_, _ = sqlRepo.ExecContext(ctx, `
+			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, time.Now().UnixMilli(), "m9_capability_gap", "upsert", "capability_gap", payloadBytes, uuid.New().String(), "pending")
+	}
+
+	a.asyncIntent(types.TriggerInterruptReceived)
+	return nil
+}
+
+// handleTaintEgressBlocked 处理 taint egress 拦截：提请 HITL 人工复核铸造豁免令牌。
+// 返回非 nil 表示应立即从 runExecuteDAG 返回该错误（豁免已批准，等待下轮重试）；
+// 返回 nil 表示未获批准，交由调用方走兜底回滚分支（与原逻辑一致）。
+func (a *Agent) handleTaintEgressBlocked(ctx context.Context, err error) error {
+	slog.Info("agent: taint egress blocked, requesting HITL exemption", "session_id", a.sCtx.SessionID)
+	// 2026-07-14 补齐：从错误链里取出被拦截的原始字节（*policy.TaintEgressBlockedError，
+	// 由 tool.InMemoryToolRegistry.checkPreExecution → CheckEgressWithExemption 产出），
+	// 随 HITLPrompt 一并送审——GatewayImpl.Respond 铸造 TaintExemptionToken 时必须对
+	// 精确匹配的字节内容计算哈希，不能用下面这行人类可读摘要代替。取不到（理论上不会
+	// 发生，因为触发条件就是这个错误类型）时留空，Respond 侧会因内容为空而跳过铸造，
+	// fail-closed，不铸造一个内容为空、可通配任意豁免检查的令牌。
+	var blockedErr *policy.TaintEgressBlockedError
+	var exemptionContent []byte
+	if errors.As(err, &blockedErr) {
+		exemptionContent = blockedErr.Data
+	}
+	hitlResp, hitlErr := a.hitl.Prompt(ctx, types.HITLPrompt{
+		ID:                    fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
+		AgentID:               a.sCtx.AgentID,
+		CheckpointType:        "data_exfiltration",
+		PromptText:            fmt.Sprintf("Taint egress blocked (TaintMedium+). Error: %v. Approve to mint TaintExemptionToken.", err),
+		TaintLevel:            types.TaintMedium,
+		DeadlineNs:            time.Now().Add(10 * time.Minute).UnixNano(),
+		ExemptionFieldContent: exemptionContent,
+	})
+	if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
+		// Token minted by hitl.Respond. Will retry on next plan/exec.
+		a.asyncIntent(types.TriggerExecuteFail)
+		return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: taint exemption granted, please retry", err)
+	}
+	return nil
+}
 
 // runExecuteDAG 是 Agent 层面的 DAG 执行入口。
 // 从 a.sCtx.DAGModel 构建 protocol.DAGPlan，通过 a.dagRunner（execute/dag.Runner，
@@ -388,67 +471,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	}
 
 	if err != nil {
-		if strings.Contains(err.Error(), "tool not found") {
-			if a.sCtx.ReplanExtActivationDegraded {
-				return apperr.Wrap(apperr.CodeInvalidInput, "capability_gap with extension activation degraded", err)
-			}
-			a.sCtx.SuspendReason = "capability_gap"
-
-			// 通过 outbox 异步投递 m9_capability_gap 事件，触发 GapFillWorker 进行能力补全
-			if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
-				payloadBytes, _ := json.Marshal(map[string]string{"error": err.Error()})
-				_, _ = sqlRepo.ExecContext(ctx, `
-					INSERT INTO background_tasks (id, agent_id, status, type, args_json, created_at)
-					VALUES (?, ?, 'pending', 'prompt_optimization', ?, ?)
-				`, "opt_"+a.ID+"_"+time.Now().Format("150405"), a.ID, `{"target_metric": "quality"}`, time.Now().Unix())
-				_, _ = sqlRepo.ExecContext(ctx, `
-					INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
-					VALUES (?, ?, ?, ?, ?, ?, ?)
-				`, time.Now().UnixMilli(), "m9_capability_gap", "upsert", "capability_gap", payloadBytes, uuid.New().String(), "pending")
-			}
-
-			a.asyncIntent(types.TriggerInterruptReceived)
-			return nil
-		}
-
-		if apperr.IsCode(err, apperr.CodeConflict) {
-			a.asyncIntent(types.TriggerExecuteFail)
-			return err //nolint:wrapcheck // Return directly for TOCTOU
-		}
-
-		if errors.Is(err, policy.ErrTaintBlockedEgress) && a.hitl != nil {
-			slog.Info("agent: taint egress blocked, requesting HITL exemption", "session_id", a.sCtx.SessionID)
-			// 2026-07-14 补齐：从错误链里取出被拦截的原始字节（*policy.TaintEgressBlockedError，
-			// 由 tool.InMemoryToolRegistry.checkPreExecution → CheckEgressWithExemption 产出），
-			// 随 HITLPrompt 一并送审——GatewayImpl.Respond 铸造 TaintExemptionToken 时必须对
-			// 精确匹配的字节内容计算哈希，不能用下面这行人类可读摘要代替。取不到（理论上不会
-			// 发生，因为触发条件就是这个错误类型）时留空，Respond 侧会因内容为空而跳过铸造，
-			// fail-closed，不铸造一个内容为空、可通配任意豁免检查的令牌。
-			var blockedErr *policy.TaintEgressBlockedError
-			var exemptionContent []byte
-			if errors.As(err, &blockedErr) {
-				exemptionContent = blockedErr.Data
-			}
-			hitlResp, hitlErr := a.hitl.Prompt(ctx, types.HITLPrompt{
-				ID:                    fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
-				AgentID:               a.sCtx.AgentID,
-				CheckpointType:        "data_exfiltration",
-				PromptText:            fmt.Sprintf("Taint egress blocked (TaintMedium+). Error: %v. Approve to mint TaintExemptionToken.", err),
-				TaintLevel:            types.TaintMedium,
-				DeadlineNs:            time.Now().Add(10 * time.Minute).UnixNano(),
-				ExemptionFieldContent: exemptionContent,
-			})
-			if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
-				// Token minted by hitl.Respond. Will retry on next plan/exec.
-				a.asyncIntent(types.TriggerExecuteFail)
-				return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: taint exemption granted, please retry", err)
-			}
-		}
-
-		// 执行失败 → 触发 S_ROLLBACK
-		span.RecordError(err)
-		a.asyncIntent(types.TriggerExecuteFail)
-		return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
+		return a.handleDAGExecutionFailure(ctx, span, err)
 	}
 
 	// 检查是否有节点挂起

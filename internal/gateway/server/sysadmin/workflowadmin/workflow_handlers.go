@@ -85,6 +85,31 @@ func (h *WorkflowAdmin) HandleGetWorkflow(w http.ResponseWriter, r *http.Request
 
 // ─── POST /v1/workflows ───────────────────────────────────────────────────────
 
+// validateCreateWorkflowRequest 校验/归一化建表请求参数（type/trigger_type 默认值，
+// name 必填，trigger_type=cron 时 cron_schedule 必填），失败时直接写入 400 响应。
+// 返回 ok=false 时调用方应立即 return（从 HandleCreateWorkflow 拆出，gocyclo 治理，行为不变）。
+func validateCreateWorkflowRequest(w http.ResponseWriter, reqType *string, name string, triggerType *string, cronSchedule string) bool {
+	if *reqType == "" {
+		*reqType = "chain"
+	}
+	if *reqType != "chain" && *reqType != "dag" {
+		http.Error(w, "type must be 'chain' or 'dag'", http.StatusBadRequest)
+		return false
+	}
+	if strings.TrimSpace(name) == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return false
+	}
+	if *triggerType == "" {
+		*triggerType = "manual"
+	}
+	if *triggerType == "cron" && strings.TrimSpace(cronSchedule) == "" {
+		http.Error(w, "cron_schedule required for trigger_type=cron", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type         string         `json:"type"`
@@ -99,22 +124,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
 		return
 	}
-	if req.Type == "" {
-		req.Type = "chain"
-	}
-	if req.Type != "chain" && req.Type != "dag" {
-		http.Error(w, "type must be 'chain' or 'dag'", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
-		return
-	}
-	if req.TriggerType == "" {
-		req.TriggerType = "manual"
-	}
-	if req.TriggerType == "cron" && strings.TrimSpace(req.CronSchedule) == "" {
-		http.Error(w, "cron_schedule required for trigger_type=cron", http.StatusBadRequest)
+	if !validateCreateWorkflowRequest(w, &req.Type, req.Name, &req.TriggerType, req.CronSchedule) {
 		return
 	}
 

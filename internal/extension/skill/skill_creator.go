@@ -72,36 +72,33 @@ Output ONLY valid JSON matching this schema:
 Do not include any Markdown wrappers like ` + "```json" + ` in the output.
 `
 
-// GenerateSkill takes a user's intent, calls the LLM, and creates the physical skill directory and SKILL.md.
-func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string, error) {
-	if c.llm == nil {
-		return "", apperr.New(apperr.CodeInternal, "skill_creator: LLM client is nil")
-	}
-
-	response, err := c.llm.Generate(ctx, skillCreatorSystemPrompt, intent)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to generate skill", err)
-	}
-
+// parseGeneratedSkill 解析 LLM 生成的响应为结构化 GeneratedSkill 并校验必填字段
+// （从 GenerateSkill 拆出，gocyclo 治理，行为不变）。
+func parseGeneratedSkill(response string) (GeneratedSkill, error) {
 	// Simple JSON extraction to handle model quirks
 	jsonStr := extractJSON(response)
 
 	var result GeneratedSkill
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to parse generated skill JSON", err)
+		return GeneratedSkill{}, apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to parse generated skill JSON", err)
 	}
 
 	if result.Name == "" || result.Description == "" {
-		return "", apperr.New(apperr.CodeInternal, "skill_creator: invalid generation, missing name or description")
+		return GeneratedSkill{}, apperr.New(apperr.CodeInternal, "skill_creator: invalid generation, missing name or description")
 	}
 
 	if result.ExecMode == "" {
 		result.ExecMode = "tool"
 	}
+	return result, nil
+}
 
+// writeSkillFiles 落盘物理插件目录结构（SKILL.md + plugin.json），返回 pluginDir
+// （从 GenerateSkill 拆出，gocyclo 治理，行为不变）。
+func writeSkillFiles(baseDir string, result GeneratedSkill) (string, error) {
 	// Create physical directory structure
-	pluginDir := filepath.Join(c.baseDir, result.Name)
-	cleanBase := filepath.Clean(c.baseDir)
+	pluginDir := filepath.Join(baseDir, result.Name)
+	cleanBase := filepath.Clean(baseDir)
 	cleanPluginDir := filepath.Clean(pluginDir)
 	if !strings.HasPrefix(cleanPluginDir, cleanBase) {
 		return "", apperr.Wrap(apperr.CodeInvalidInput, "skill_creator: path traversal detected", nil)
@@ -135,6 +132,29 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 	pluginJSONPath := filepath.Join(pluginMetaDir, "plugin.json")
 	if err := os.WriteFile(pluginJSONPath, []byte(pluginJSON), 0644); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to write plugin.json", err)
+	}
+	return pluginDir, nil
+}
+
+// GenerateSkill takes a user's intent, calls the LLM, and creates the physical skill directory and SKILL.md.
+func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string, error) {
+	if c.llm == nil {
+		return "", apperr.New(apperr.CodeInternal, "skill_creator: LLM client is nil")
+	}
+
+	response, err := c.llm.Generate(ctx, skillCreatorSystemPrompt, intent)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to generate skill", err)
+	}
+
+	result, err := parseGeneratedSkill(response)
+	if err != nil {
+		return "", err
+	}
+
+	pluginDir, err := writeSkillFiles(c.baseDir, result)
+	if err != nil {
+		return "", err
 	}
 
 	// Trigger security gate / DB registration via InstallExtension

@@ -113,7 +113,7 @@ func (r *SQLiteRegistryImpl) markReverseDependenciesCompatCheck(ctx context.Cont
 		pattern := `%"` + cur + `"%`
 		rows, err := r.db.QueryContext(ctx, query, pattern, pattern)
 		if err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeInternal, "sqlite_registry: 查询 skills 依赖失败", err)
 		}
 
 		var parents []string

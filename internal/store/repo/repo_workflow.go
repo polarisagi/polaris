@@ -76,7 +76,10 @@ func (r *SQLiteWorkflowRepository) CreateWorkflowWithSteps(ctx context.Context, 
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteWorkflowRepository.CreateWorkflowWithSteps commit", err)
+	}
+	return nil
 }
 
 func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, wf repo.WorkflowRow, steps []repo.WorkflowStepRow, updateSteps bool) error {
@@ -122,7 +125,10 @@ func (r *SQLiteWorkflowRepository) UpdateWorkflowWithSteps(ctx context.Context, 
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteWorkflowRepository.UpdateWorkflowWithSteps commit", err)
+	}
+	return nil
 }
 
 func (r *SQLiteWorkflowRepository) DeleteWorkflow(ctx context.Context, wfID string) error {
@@ -142,7 +148,10 @@ func (r *SQLiteWorkflowRepository) DeleteWorkflow(ctx context.Context, wfID stri
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteWorkflowRepository.DeleteWorkflow commit", err)
+	}
+	return nil
 }
 
 func (r *SQLiteWorkflowRepository) CreateWorkflowRun(ctx context.Context, runID, wfID, trigger, status string, currentStep, totalSteps int, startedAt string) error {

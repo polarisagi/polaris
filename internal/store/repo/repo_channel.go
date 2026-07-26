@@ -74,7 +74,10 @@ func (r *SQLiteChannelRepository) ListChannels(ctx context.Context) ([]repo.Chan
 		row.Enabled = enabledInt == 1
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChannelRepository.ListChannels rows", err)
+	}
+	return result, nil
 }
 
 func (r *SQLiteChannelRepository) GetChannel(ctx context.Context, id string) (*repo.ChannelRow, error) {

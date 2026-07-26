@@ -87,7 +87,7 @@ func getDownloadName() string {
 
 func extractOllamaArchive(downloadName, tmpArchive, distDir string) error {
 	if err := os.MkdirAll(distDir, 0755); err != nil {
-		return err
+		return apperr.Wrap(apperr.CodeInternal, "创建解压目标目录失败: "+distDir, err)
 	}
 
 	slog.Info("polaris: Extracting Ollama archive...", "archive", downloadName)
@@ -128,7 +128,7 @@ func locateOllamaBinary(distDir, binName, defaultBinPath string) string {
 func extractZip(src, dest string) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
-		return err
+		return apperr.Wrap(apperr.CodeInternal, "打开 zip 归档失败: "+src, err)
 	}
 	defer r.Close()
 
@@ -140,27 +140,27 @@ func extractZip(src, dest string) error {
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(fpath, os.ModePerm); err != nil {
-				return err
+				return apperr.Wrap(apperr.CodeInternal, "创建解压目录失败: "+fpath, err)
 			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeInternal, "创建解压父目录失败: "+filepath.Dir(fpath), err)
 		}
 		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 		if err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeInternal, "创建解压目标文件失败: "+fpath, err)
 		}
 		rc, err := f.Open()
 		if err != nil {
 			outFile.Close()
-			return err
+			return apperr.Wrap(apperr.CodeInternal, "打开归档内文件失败: "+f.Name, err)
 		}
 		_, err = io.Copy(outFile, rc)
 		outFile.Close()
 		rc.Close()
 		if err != nil {
-			return err
+			return apperr.Wrap(apperr.CodeInternal, "写入解压文件失败: "+fpath, err)
 		}
 	}
 	return nil

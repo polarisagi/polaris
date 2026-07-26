@@ -253,7 +253,10 @@ func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, 
 		chunk.TaintLevel = verifyChunkTaint(hr.boundarySerializer, chunk.ID, chunk.Content, chunk.TaintLevel, chunk.TaintSource, taintHMAC.String)
 		results = append(results, chunk)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: 遍历 fts 结果集失败", err)
+	}
+	return results, nil
 }
 
 // searchVector 从 rag_chunks 读取已存储的 embedding，计算余弦相似度，返回 top-limit 条。
@@ -329,7 +332,7 @@ func (hr *HybridRetrieverImpl) searchVectorFallback(ctx context.Context, queryEm
 	for rows.Next() {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		default:
 		}
 		var chunk Chunk

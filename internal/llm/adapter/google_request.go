@@ -251,6 +251,27 @@ func buildGeminiRequest(req *types.InferRequest) ([]byte, error) { //nolint:gocy
 	return b, nil
 }
 
+// geminiStreamUsageMetadata 是 Gemini 流式响应 usageMetadata 字段的解码结构
+// （从 parseGoogleStream 内联匿名结构体上提为具名类型，供 emitGeminiStreamUsage 签名引用）。
+type geminiStreamUsageMetadata struct {
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
+}
+
+// geminiStreamFrame 是单条 Gemini SSE 帧的解码结构。
+type geminiStreamFrame struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text         string              `json:"text"`
+				FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	UsageMetadata geminiStreamUsageMetadata `json:"usageMetadata"`
+}
+
 func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- types.StreamEvent, model string, tbr *metrics.TokenBurnRate) {
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
@@ -267,65 +288,70 @@ func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- types.Stre
 		if data == "[DONE]" {
 			return
 		}
-		var frame struct {
-			Candidates []struct {
-				Content struct {
-					Parts []struct {
-						Text         string              `json:"text"`
-						FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
-					} `json:"parts"`
-				} `json:"content"`
-			} `json:"candidates"`
-			UsageMetadata struct {
-				PromptTokenCount        int `json:"promptTokenCount"`
-				CandidatesTokenCount    int `json:"candidatesTokenCount"`
-				CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
-			} `json:"usageMetadata"`
-		}
+		var frame geminiStreamFrame
 		if err := json.Unmarshal([]byte(data), &frame); err != nil {
 			continue
 		}
-		for _, c := range frame.Candidates {
-			for i, p := range c.Content.Parts {
-				if p.Text != "" {
-					select {
-					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: p.Text}:
-					case <-ctx.Done():
-						return
-					}
-				}
-				if p.FunctionCall != nil {
-					argsBytes, _ := json.Marshal(p.FunctionCall.Args)
-					payload, _ := json.Marshal(map[string]any{
-						"id":    fmt.Sprintf("call_%d", i),
-						"name":  p.FunctionCall.Name,
-						"input": json.RawMessage(argsBytes),
-					})
-					select {
-					case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
+		if emitGeminiStreamParts(ctx, ch, frame) {
+			return
 		}
 		if frame.UsageMetadata.CandidatesTokenCount > 0 || frame.UsageMetadata.PromptTokenCount > 0 {
-			select {
-			case ch <- types.StreamEvent{
-				Type: types.StreamTextDelta,
-				Usage: types.Usage{
-					InputTokens:    frame.UsageMetadata.PromptTokenCount,
-					OutputTokens:   frame.UsageMetadata.CandidatesTokenCount,
-					CacheHitTokens: frame.UsageMetadata.CachedContentTokenCount,
-				},
-			}:
-			case <-ctx.Done():
+			if emitGeminiStreamUsage(ctx, ch, frame.UsageMetadata, model, tbr) {
 				return
 			}
-			if tbr != nil {
-				tbr.Add(int64(frame.UsageMetadata.PromptTokenCount + frame.UsageMetadata.CandidatesTokenCount))
-			}
-			metrics.RecordLLMCacheHit("google", model, frame.UsageMetadata.CachedContentTokenCount > 0)
 		}
 	}
+}
+
+// emitGeminiStreamParts 逐条候选/parts 转发 SSE 文本增量与工具调用事件
+// （从 parseGoogleStream 拆出，gocyclo 治理，行为不变）。
+// 返回 ctxDone=true 时调用方应立即从 parseGoogleStream return。
+func emitGeminiStreamParts(ctx context.Context, ch chan<- types.StreamEvent, frame geminiStreamFrame) (ctxDone bool) {
+	for _, c := range frame.Candidates {
+		for i, p := range c.Content.Parts {
+			if p.Text != "" {
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: p.Text}:
+				case <-ctx.Done():
+					return true
+				}
+			}
+			if p.FunctionCall != nil {
+				argsBytes, _ := json.Marshal(p.FunctionCall.Args)
+				payload, _ := json.Marshal(map[string]any{
+					"id":    fmt.Sprintf("call_%d", i),
+					"name":  p.FunctionCall.Name,
+					"input": json.RawMessage(argsBytes),
+				})
+				select {
+				case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+				case <-ctx.Done():
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// emitGeminiStreamUsage 转发 usage token 计数事件并记账（从 parseGoogleStream 拆出，
+// gocyclo 治理，行为不变）。返回 ctxDone=true 时调用方应立即从 parseGoogleStream return。
+func emitGeminiStreamUsage(ctx context.Context, ch chan<- types.StreamEvent, usage geminiStreamUsageMetadata, model string, tbr *metrics.TokenBurnRate) (ctxDone bool) {
+	select {
+	case ch <- types.StreamEvent{
+		Type: types.StreamTextDelta,
+		Usage: types.Usage{
+			InputTokens:    usage.PromptTokenCount,
+			OutputTokens:   usage.CandidatesTokenCount,
+			CacheHitTokens: usage.CachedContentTokenCount,
+		},
+	}:
+	case <-ctx.Done():
+		return true
+	}
+	if tbr != nil {
+		tbr.Add(int64(usage.PromptTokenCount + usage.CandidatesTokenCount))
+	}
+	metrics.RecordLLMCacheHit("google", model, usage.CachedContentTokenCount > 0)
+	return false
 }

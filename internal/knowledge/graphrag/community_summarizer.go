@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // CommunitySummary Leiden 社区的自然语言摘要。
@@ -101,7 +102,10 @@ func parseJSON(s string, v any) error {
 	if idx := strings.LastIndex(s, "}"); idx >= 0 {
 		s = s[:idx+1]
 	}
-	return json.Unmarshal([]byte(s), v)
+	if err := json.Unmarshal([]byte(s), v); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "community_summarizer: 解析 LLM JSON 响应失败", err)
+	}
+	return nil
 }
 
 func truncStr(s string, max int) string {

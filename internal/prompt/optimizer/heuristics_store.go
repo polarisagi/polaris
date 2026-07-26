@@ -41,7 +41,10 @@ func (hs *HeuristicsStore) ListHeuristics(ctx context.Context) (map[string][]*Pr
 		}
 		result[taskType] = append(result[taskType], s)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "heuristics_store: 遍历 heuristics 结果集失败", err)
+	}
+	return result, nil
 }
 
 // ListFallacies 启动时从 fallacy_records 恢复避免规则到内存 map。
@@ -64,7 +67,10 @@ func (hs *HeuristicsStore) ListFallacies(ctx context.Context) (map[string]*Error
 		}
 		result[p.ID] = p
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "heuristics_store: 遍历 fallacies 结果集失败", err)
+	}
+	return result, nil
 }
 
 // SaveHeuristic 持久化成功策略（已存在则更新 success_rate 和 use_count）。

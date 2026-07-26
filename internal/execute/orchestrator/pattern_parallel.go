@@ -75,5 +75,8 @@ func (pe *ParallelExecutor) Execute(ctx context.Context, parentTaskID string, su
 		return nil
 	})
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "pattern_parallel: 等待并行任务失败", err)
+	}
+	return nil
 }

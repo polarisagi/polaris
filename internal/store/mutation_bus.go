@@ -90,7 +90,7 @@ func (dw *DatabaseWriter) Submit(ctx context.Context, intent *MutationIntent) er
 	case targetCh <- intent:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 	default:
 	}
 
@@ -108,14 +108,14 @@ func (dw *DatabaseWriter) Submit(ctx context.Context, intent *MutationIntent) er
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		case <-timer.C:
 		}
 		select {
 		case targetCh <- intent:
 			return nil
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		default:
 			if i == len(backoff)-1 {
 				return ErrMutationBusOverloaded
@@ -141,7 +141,7 @@ func (dw *DatabaseWriter) SubmitBatch(ctx context.Context, intents []*MutationIn
 		if end < len(intents) {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 			default:
 			}
 			runtime.Gosched()

@@ -46,7 +46,7 @@ func (l *SQLiteEventLog) AppendEvent(ctx context.Context, ev *pb.Event) error {
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 	case err := <-resultCh:
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "SQLiteEventLog.AppendEvent", err)

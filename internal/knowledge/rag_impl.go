@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -45,6 +46,59 @@ func NewDefaultIngestionPipeline(router *store.StorageRouter, provider protocol.
 	}
 }
 
+// checkIngestCache 增量检测：若 rag_docs.content_hash 与本次摄取文档一致，则复用已缓存
+// 的 tree_json 直接返回，跳过重摄取（从 Ingest 拆出，gocyclo 治理，行为不变）。
+func (p *DefaultIngestionPipeline) checkIngestCache(ctx context.Context, db *sql.DB, doc *Document) (*DocTree, bool) {
+	var existingHash string
+	_ = db.QueryRowContext(ctx,
+		`SELECT content_hash FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
+	).Scan(&existingHash)
+	if existingHash == "" || existingHash != doc.Ref.ContentHash {
+		return nil, false
+	}
+
+	var treeJSON string
+	if err := db.QueryRowContext(ctx,
+		`SELECT tree_json FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
+	).Scan(&treeJSON); err != nil || treeJSON == "" {
+		return nil, false
+	}
+
+	var cached DocTree
+	if json.Unmarshal([]byte(treeJSON), &cached) != nil {
+		return nil, false
+	}
+	return &cached, true
+}
+
+// persistChunks 在事务内批量写入分块到 rag_chunks，并同步索引到 HybridSearchEngine
+// （从 Ingest 拆出，gocyclo 治理，行为不变）。
+func (p *DefaultIngestionPipeline) persistChunks(ctx context.Context, tx *sql.Tx, chunks []Chunk) error {
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR REPLACE INTO rag_chunks
+			(id, doc_id, content, taint_level, taint_source, taint_hmac, source_uri, doc_version,
+			 chunk_seq, content_hash, embed_model_version, chunk_type, chunk_index)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "ingestion: prepare stmt", err)
+	}
+	defer stmt.Close()
+
+	for i, c := range chunks {
+		hmacHex := sealChunkTaint(p.boundarySerializer, c.ID, c.Content, c.TaintLevel, c.TaintSource)
+		if _, err := stmt.ExecContext(ctx,
+			c.ID, c.DocID, c.Content, c.TaintLevel, c.TaintSource, hmacHex,
+			c.SourceURI, c.DocVersion, i, c.ContentHash, "", c.ChunkType, c.ChunkIndex,
+		); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "ingestion: insert chunk", err)
+		}
+		if p.searchEngine != nil {
+			_ = p.searchEngine.AddDocument(ctx, c.ID, c.Content)
+		}
+	}
+	return nil
+}
+
 func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, initialTaint int) (*DocTree, error) {
 	tracer := trace.NewTracer()
 	span, ctx := tracer.StartSpan(ctx, trace.SpanMemoryOp, "Knowledge.Ingest")
@@ -60,20 +114,8 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 	}
 
 	// 增量检测：hash 相同则跳过重摄取，返回缓存 DocTree
-	var existingHash string
-	_ = db.QueryRowContext(ctx,
-		`SELECT content_hash FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
-	).Scan(&existingHash)
-	if existingHash != "" && existingHash == doc.Ref.ContentHash {
-		var treeJSON string
-		if err := db.QueryRowContext(ctx,
-			`SELECT tree_json FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
-		).Scan(&treeJSON); err == nil && treeJSON != "" {
-			var cached DocTree
-			if json.Unmarshal([]byte(treeJSON), &cached) == nil {
-				return &cached, nil
-			}
-		}
+	if cached, hit := p.checkIngestCache(ctx, db, doc); hit {
+		return cached, nil
 	}
 
 	docNode := &DocNode{
@@ -105,27 +147,8 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: insert rag_docs", err)
 	}
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR REPLACE INTO rag_chunks
-			(id, doc_id, content, taint_level, taint_source, taint_hmac, source_uri, doc_version,
-			 chunk_seq, content_hash, embed_model_version, chunk_type, chunk_index)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: prepare stmt", err)
-	}
-	defer stmt.Close()
-
-	for i, c := range chunks {
-		hmacHex := sealChunkTaint(p.boundarySerializer, c.ID, c.Content, c.TaintLevel, c.TaintSource)
-		if _, err := stmt.ExecContext(ctx,
-			c.ID, c.DocID, c.Content, c.TaintLevel, c.TaintSource, hmacHex,
-			c.SourceURI, c.DocVersion, i, c.ContentHash, "", c.ChunkType, c.ChunkIndex,
-		); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: insert chunk", err)
-		}
-		if p.searchEngine != nil {
-			_ = p.searchEngine.AddDocument(ctx, c.ID, c.Content)
-		}
+	if err := p.persistChunks(ctx, tx, chunks); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: commit", err)
@@ -186,7 +209,10 @@ func (p *DefaultIngestionPipeline) Delete(ctx context.Context, uri string) error
 		return apperr.Wrap(apperr.CodeInternal, "delete: tombstone rag_docs", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "delete: commit tombstone tx", err)
+	}
+	return nil
 }
 
 func (p *DefaultIngestionPipeline) chunkDocument(content string, docID string, taintLevel int, ref DocumentRef) []Chunk {

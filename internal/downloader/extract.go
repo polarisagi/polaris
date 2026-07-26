@@ -128,5 +128,8 @@ func writeFromReader(r io.Reader, path string, mode os.FileMode) error {
 		return apperr.Wrap(apperr.CodeInternal, "downloader: writeFromReader copy", err)
 	}
 	f.Close()
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "downloader: writeFromReader rename", err)
+	}
+	return nil
 }

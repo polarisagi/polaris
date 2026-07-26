@@ -54,7 +54,10 @@ func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
 		Payload:        []byte(e.ID),
 		ClaimedVersion: e.SyncVersion,
 	}
-	return gw.bus.Submit(ctx, intent)
+	if err := gw.bus.Submit(ctx, intent); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "graph_writer: Submit 失败", err)
+	}
+	return nil
 }
 
 // upsertToSemanticDB 向 semantic_entities 写入 graphrag_ingest 来源的实体。

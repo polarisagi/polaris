@@ -36,7 +36,7 @@ func (f *InstallFSM) Install(ctx context.Context, req InstallReq, extType types.
 	installDir, err := installer.Install(ctx, req)
 	if err != nil {
 		_ = f.extRepo.UpdateInstanceStatus(ctx, req.InstID, "failed", err.Error())
-		return installDir, err
+		return installDir, apperr.Wrap(apperr.CodeInternal, "install_fsm: Install 失败", err)
 	}
 
 	// 如果 installer 没有标记状态，统一标记
@@ -47,7 +47,9 @@ func (f *InstallFSM) Install(ctx context.Context, req InstallReq, extType types.
 func (f *InstallFSM) Uninstall(ctx context.Context, req UninstallReq) error {
 	installer, ok := f.installers[req.ExtType]
 	if ok {
-		return installer.Uninstall(ctx, req)
+		if err := installer.Uninstall(ctx, req); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "install_fsm: Uninstall 失败", err)
+		}
 	}
 	return nil
 }

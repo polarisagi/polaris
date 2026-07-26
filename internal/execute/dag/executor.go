@@ -127,6 +127,20 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 	return e.runScheduler(ctx, plan)
 }
 
+// classifyNodeError 对节点执行失败进行分类（从 runScheduler 拆出，nestif 治理，行为不变）：
+// ErrAllProvidersFailed 触发降级重规划裁剪下游；TOCTOU 冲突直接透传；其余包装为通用节点失败错误。
+func (e *DAGExecutor) classifyNodeError(ctx context.Context, nodeErr error, nodeID string, plan *DAGPlan) error {
+	if errors.Is(nodeErr, protocol.ErrAllProvidersFailed) {
+		e.pruneDownstream(ctx, nodeID, plan)
+		e.DegradedReplan = true
+		return protocol.ErrAllProvidersFailed
+	}
+	if apperr.IsCode(nodeErr, apperr.CodeConflict) {
+		return nodeErr
+	}
+	return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("node %s failed", nodeID), nodeErr)
+}
+
 func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeResult, error) {
 	sem := make(chan struct{}, e.maxConcurrency)
 	var (
@@ -187,15 +201,7 @@ func (e *DAGExecutor) runScheduler(ctx context.Context, plan *DAGPlan) ([]NodeRe
 					failed.Store(true)
 					errMu.Lock()
 					if firstErr == nil {
-						if errors.Is(result.Err, protocol.ErrAllProvidersFailed) {
-							e.pruneDownstream(ctx, n.ID, plan)
-							e.DegradedReplan = true
-							firstErr = protocol.ErrAllProvidersFailed
-						} else if apperr.IsCode(result.Err, apperr.CodeConflict) {
-							firstErr = result.Err
-						} else {
-							firstErr = apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("node %s failed", n.ID), result.Err)
-						}
+						firstErr = e.classifyNodeError(ctx, result.Err, n.ID, plan)
 					}
 					errMu.Unlock()
 					return
