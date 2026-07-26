@@ -69,7 +69,7 @@
   "internal/agent/fsm/transitions.go": "7efe39a5e96fb18c0df38b7dd0544c176e67fa262f9f1a8d8311e38a0edddad7",
   "internal/agent/inv_test.go": "5743dddc0a244e495eb44b02fbe291d0f23a308610ad4869562220d5ce2fb11f",
   "internal/agent/pii_opaque_token_test.go": "a0765076ce3711e93afe08c93cbbb1deaa79d89ed893389cf0bcc319aae88db7",
-  "internal/agent/pool.go": "40bcea60947cc9e6516f6846cdc75fc9ae48fd6683494d43be4a36ad231143f2",
+  "internal/agent/pool.go": "3a5d0a746a9c3fe73a1a0a0543869089f52ede98676159dfdb5deea866e3cf06",
   "internal/agent/pool_test.go": "917eba123253faf4c006725ba7a127cd6c194eb6adc04c5c0dca58a62fb54d80",
   "internal/agent/prm.go": "2f13696cee988bbf5e83261cfc57684e26cd21b0d048c5ea37be8bd21c1a6fae",
   "internal/agent/prm_test.go": "e47345bf044f85d0e589c0546b0755b7e535f4f956715cce8124a501d18444f3",
