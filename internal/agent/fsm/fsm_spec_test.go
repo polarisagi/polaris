@@ -63,6 +63,8 @@ func stateToString(s types.AgentState) string {
 		return "s_interrupt"
 	case types.AgentStateSuspended:
 		return "s_suspended"
+	case types.AgentStateAwaitAgent:
+		return "s_await_agent"
 	default:
 		return "unknown"
 	}
@@ -102,6 +104,10 @@ func triggerToString(t types.AgentTrigger) string {
 		return "suspend"
 	case types.TriggerResume:
 		return "resume"
+	case types.TriggerAwaitAgent:
+		return "await_agent"
+	case types.TriggerAgentHandoffDone:
+		return "agent_handoff_done"
 	default:
 		return "unknown"
 	}

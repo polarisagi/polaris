@@ -145,9 +145,35 @@ type AuthManager struct {
 }
 
 func NewAuthManager() *AuthManager {
-	return &AuthManager{
+	am := &AuthManager{
 		failures: make(map[string]int),
 		lockedAt: make(map[string]time.Time),
+	}
+	go am.cleanupLoop() //custom-nolint:bare-goroutine AuthManager.cleanupLoop 是纯内部生命周期 goroutine，不依赖传入 ctx，使用 SafeGo 反而需要伪造 context；此模式与 RateLimiter.cleanupLoop 保持一致
+	return am
+}
+
+func (am *AuthManager) cleanupLoop() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		am.mu.Lock()
+		for ip, lockedTime := range am.lockedAt {
+			if time.Since(lockedTime) > 5*time.Minute {
+				delete(am.failures, ip)
+				delete(am.lockedAt, ip)
+			}
+		}
+		// Also clean up IPs with failures but no lock if they haven't failed recently
+		// To be precise we can just clear all failures that aren't locked if we want
+		// But clearing locked is enough to prevent unbounded growth of locked IPs.
+		// Let's clear failures for IPs that aren't locked at all.
+		for ip := range am.failures {
+			if _, locked := am.lockedAt[ip]; !locked {
+				delete(am.failures, ip)
+			}
+		}
+		am.mu.Unlock()
 	}
 }
 

@@ -160,11 +160,36 @@ func (e *Engine) saveCursorAsync(ctx context.Context, stream string, seq int64) 
 	if e.db == nil {
 		return
 	}
-	concurrent.SafeGo(ctx, "learning-cursor-save", func(ctx context.Context) {
-		now := time.Now().Unix()
+	e.cursorMu.Lock()
+	if e.cursorCache == nil {
+		e.cursorCache = make(map[string]int64)
+	}
+	e.cursorCache[stream] = seq
+	e.cursorMu.Unlock()
+}
+
+func (e *Engine) flushCursors(ctx context.Context) {
+	if e.db == nil {
+		return
+	}
+
+	e.cursorMu.Lock()
+	if len(e.cursorCache) == 0 {
+		e.cursorMu.Unlock()
+		return
+	}
+	batch := make(map[string]int64, len(e.cursorCache))
+	for k, v := range e.cursorCache {
+		batch[k] = v
+	}
+	e.cursorCache = make(map[string]int64)
+	e.cursorMu.Unlock()
+
+	now := time.Now().Unix()
+	for stream, seq := range batch {
 		_, err := e.db.ExecContext(ctx, "INSERT INTO learning_cursors(stream_name, last_seq, updated_at) VALUES(?, ?, ?) ON CONFLICT(stream_name) DO UPDATE SET last_seq=excluded.last_seq, updated_at=excluded.updated_at", stream, seq, now)
 		if err != nil {
 			slog.Error("failed to save learning cursor", "stream", stream, "seq", seq, "err", err)
 		}
-	})
+	}
 }

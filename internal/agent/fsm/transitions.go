@@ -214,16 +214,36 @@ func (sm *StateMachine) registerTransitions() {
 		},
 	})
 
-	// S_EXECUTE → S_ROLLBACK: DAG 执行失败
+	// S_EXECUTE → S_ROLLBACK: 业务节点失败，触发 Saga 补偿
 	sm.add(Transition{
 		From:    types.AgentStateExecute,
 		Trigger: types.TriggerExecuteFail,
 		To:      types.AgentStateRollback,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{protocol.DeterministicEffect{Fn: sm.rollbackSaga}}, nil
+		},
+	})
+
+	// S_EXECUTE → S_AWAIT_AGENT: 发起委派
+	sm.add(Transition{
+		From:    types.AgentStateExecute,
+		Trigger: types.TriggerAwaitAgent,
+		To:      types.AgentStateAwaitAgent,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
 			return []protocol.Effect{
-				protocol.DeterministicEffect{
-					Fn: sm.rollbackSaga,
-				},
+				protocol.DeterministicEffect{Fn: sm.persistHandoffWait},
+			}, nil
+		},
+	})
+
+	// S_AWAIT_AGENT → S_EXECUTE: 委派完成恢复
+	sm.add(Transition{
+		From:    types.AgentStateAwaitAgent,
+		Trigger: types.TriggerAgentHandoffDone,
+		To:      types.AgentStateExecute,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{
+				protocol.DeterministicEffect{Fn: sm.restoreHandoffResult},
 			}, nil
 		},
 	})

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
+	"github.com/polarisagi/polaris/internal/prompt"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -25,7 +26,7 @@ import (
 // M05 §3.4: S_PERCEIVE 阶段拉取同 task_type 的 top-3 reflection 注入上下文。
 func BuildPerceiveContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
-	b := protocol.NewPromptBuilder()
+	b := prompt.NewPromptBuilder()
 
 	// 1. 可信系统指令（基础模板 + 扩展信息）
 	instr := "Structure the user intent into a fsm.TaskModel JSON.\n\n"
@@ -174,16 +175,16 @@ func BuildPerceiveContext( //nolint:gocyclo
 // tools 为 nil 时跳过工具注入（测试环境）。
 func BuildPlanContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
-	b := protocol.NewPromptBuilder()
+	b := prompt.NewPromptBuilder()
 
 	var sysPrompt strings.Builder
 	sysPrompt.WriteString("Generate an execution DAG based on the fsm.TaskModel.\n\n")
 	if sCtx.TaskModel != nil {
 		taskJson, _ := json.Marshal(sCtx.TaskModel)
-		sysPrompt.WriteString("Parsed fsm.TaskModel:\n" + string(taskJson) + "\n\n")
+		sysPrompt.WriteString("<task_model>\n" + string(taskJson) + "\n</task_model>\n\n")
 	}
 	if sCtx.GroundingGap != "" {
-		sysPrompt.WriteString("Critical Knowledge Gap:\n" + sCtx.GroundingGap + "\n(Please address this gap explicitly in the plan.)\n\n")
+		sysPrompt.WriteString("<grounding_gap source=\"untrusted\">\n" + sCtx.GroundingGap + "\n</grounding_gap>\n(Please address this gap explicitly in the plan.)\n\n")
 	}
 	if sCtx.InstalledExtensionsInfo != "" {
 		sysPrompt.WriteString(sCtx.InstalledExtensionsInfo + "\n\n")
@@ -330,7 +331,7 @@ func BuildToolListSection(ctx context.Context, cata catalog.Catalog) string {
 }
 
 func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
-	b := protocol.NewPromptBuilder()
+	b := prompt.NewPromptBuilder()
 
 	instr := "Reflect on the execution result and evaluate the completion of the goal.\n\n"
 	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(

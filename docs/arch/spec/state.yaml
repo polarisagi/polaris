@@ -48,6 +48,7 @@ par:
     - s_failed
     - s_interrupt
     - s_suspended
+    - s_await_agent
 
   transitions:
     - from: s_idle
@@ -108,6 +109,16 @@ par:
       event: step_failed_recoverable
       to: s_execute
       effect: { kind: deterministic, fn: retry_step_with_backoff }
+
+    - from: s_execute
+      event: await_agent
+      to: s_await_agent
+      effect: { kind: deterministic, fn: persist_handoff_wait }
+
+    - from: s_await_agent
+      event: agent_handoff_done
+      to: s_execute
+      effect: { kind: deterministic, fn: restore_handoff_result }
 
     - from: s_execute
       event: step_failed_unrecoverable

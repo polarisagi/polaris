@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -23,11 +24,24 @@ import (
 type bareArgvWrapper struct{}
 
 func (bareArgvWrapper) WrapArgv(_ context.Context, sctx protocol.SandboxContext) (*protocol.WrapArgvResult, error) {
+	// 透传宿主关键 env 变量（PATH / PYTHONHOME / CONDA_PREFIX 等），确保
+	// Python 解释器能找到标准库（encodings 等）。测试目标是验证会话池协议，
+	// 不是测试沙箱封装本身，所以这里不做任何削减。
+	keepPrefixes := []string{"PATH=", "PYTHON", "CONDA", "HOME=", "TMPDIR=", "TEMP=", "TMP="}
+	var hostEnv []string
+	for _, e := range os.Environ() {
+		for _, prefix := range keepPrefixes {
+			if strings.HasPrefix(e, prefix) {
+				hostEnv = append(hostEnv, e)
+				break
+			}
+		}
+	}
 	return &protocol.WrapArgvResult{
 		Executable:    sctx.ExecPath,
 		Argv:          sctx.ExecArgs,
 		EnvInArgv:     false,
-		Env:           append([]string{"PATH=/usr/bin:/bin:/usr/local/bin"}, sctx.EnvExtra...),
+		Env:           append(hostEnv, sctx.EnvExtra...),
 		SandboxMethod: "bare_test",
 	}, nil
 }
@@ -50,10 +64,20 @@ func testConfig() PersistentSandboxConfig {
 
 func requirePython(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		if _, err2 := exec.LookPath("python"); err2 != nil {
+	pyPath, err := exec.LookPath("python3")
+	if err != nil {
+		pyPath, err = exec.LookPath("python")
+		if err != nil {
 			t.Skip("python3/python not found on PATH, skipping")
 		}
+	}
+	// Verify the interpreter actually works in the current environment.
+	// On conda-managed systems the LookPath-found python3 may be a conda binary
+	// that needs PYTHONHOME set correctly; if it can't import encodings the test
+	// would always fail regardless of our code, so skip rather than FAIL.
+	out, runErr := exec.Command(pyPath, "-c", "import encodings; print('ok')").CombinedOutput() //nolint:gosec
+	if runErr != nil || !strings.Contains(string(out), "ok") {
+		t.Skipf("python at %s cannot run basic import (output: %s err: %v); skipping persistent-sandbox tests", pyPath, out, runErr)
 	}
 }
 
@@ -133,6 +157,7 @@ func TestPersistentSandbox_Python_StatePersistsAcrossCalls(t *testing.T) {
 	res1, err := p.Run(ctx, SandboxSpec{
 		SessionID: "py-session-1", Language: "python",
 		ScriptBytes: []byte("x = 42\nprint('set')"),
+		ExtraEnv:    os.Environ(),
 	})
 	if err != nil {
 		t.Fatalf("call1 failed: %v", err)
@@ -144,6 +169,7 @@ func TestPersistentSandbox_Python_StatePersistsAcrossCalls(t *testing.T) {
 	res2, err := p.Run(ctx, SandboxSpec{
 		SessionID: "py-session-1", Language: "python",
 		ScriptBytes: []byte("print(x)"),
+		ExtraEnv:    os.Environ(),
 	})
 	if err != nil {
 		t.Fatalf("call2 failed: %v", err)
@@ -168,7 +194,8 @@ func TestPersistentSandbox_Python_ExceptionCaptured(t *testing.T) {
 
 	res, err := p.Run(context.Background(), SandboxSpec{
 		SessionID: "py-session-err", Language: "python",
-		ScriptBytes: []byte("raise ValueError('boom')"),
+		ScriptBytes: []byte("raise ValueError('something went wrong')"),
+		ExtraEnv:    os.Environ(),
 	})
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
@@ -176,7 +203,7 @@ func TestPersistentSandbox_Python_ExceptionCaptured(t *testing.T) {
 	if res.Success {
 		t.Fatal("expected Success=false for raised exception")
 	}
-	if !strings.Contains(res.Error, "ValueError") || !strings.Contains(res.Error, "boom") {
+	if !strings.Contains(res.Error, "ValueError") || !strings.Contains(res.Error, "something went wrong") {
 		t.Fatalf("expected error text to contain exception details, got %q", res.Error)
 	}
 

@@ -52,6 +52,8 @@ func TestConsumer_CursorPersistence(t *testing.T) {
 	// Wait a bit for processing
 	time.Sleep(100 * time.Millisecond)
 	cancel()
+	// Wait for cursor-flusher SafeGo goroutine to complete flush on ctx.Done()
+	time.Sleep(100 * time.Millisecond)
 
 	// Check cursor in DB
 	var lastSeq int64

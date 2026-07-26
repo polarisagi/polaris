@@ -175,6 +175,9 @@ type StateContext struct {
 
 	// SkillVersions 记录已注入的技能版本，用于验证版本单调性
 	SkillVersions map[string]int64
+
+	// GD-1: Handoff 委派的目标任务 ID，持久化至 checkpoint 以供恢复
+	HandoffTaskID string
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。

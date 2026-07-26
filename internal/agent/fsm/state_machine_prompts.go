@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
+	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -30,7 +31,7 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 		}
 	}
 
-	b := protocol.NewPromptBuilder()
+	b := prompt.NewPromptBuilder()
 	if sCtx.SysEnvSnapshot != "" {
 		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
 	}
@@ -81,7 +82,7 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		}
 	}
 
-	b := protocol.NewPromptBuilder()
+	b := prompt.NewPromptBuilder()
 	if sCtx.SysEnvSnapshot != "" {
 		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
 	}
@@ -179,7 +180,7 @@ func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateCon
 		}
 	}
 
-	b := protocol.NewPromptBuilder()
+	b := prompt.NewPromptBuilder()
 	if sCtx.SysEnvSnapshot != "" {
 		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
 	}

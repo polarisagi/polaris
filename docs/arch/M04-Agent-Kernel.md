@@ -151,7 +151,7 @@ L1.1 资源冲突检测: 规范 artifactID → 对无依赖边的并行写冲突
 - **Layer B 精确子串**: `taint_sensitive` 字段 vs active taint set
 - **输入反序列化**: TaintedJSONNode 递归树 (禁止 map[string]any, 防 Go JSON 剥离污点标记)
 - **TaintBlocked**: → HITL → TaintExemptionToken (field_hash+TTL)
-- **SchemaValidator**: Taint 扫描 → InputSchema 校验 → OutputSchema 一致性 → 幂等 ID 合法性（`dag_validator.go` 仅校验结构，字段级 Taint 降级 SanitizeBySchema 在 M7 工具调用层执行）
+- **SchemaValidator**: Taint 扫描 → InputSchema 校验 → OutputSchema 一致性 → 幂等 ID 合法性（`internal/execute/dag/validator.go` 仅校验结构，字段级 Taint 降级 SanitizeBySchema 在 M7 工具调用层执行）
 
 PolicyGate: `[Cedar-Gate]` {principal, action, resource, context} → FORBID 优先
 
@@ -215,7 +215,7 @@ DAGExecutor 实现见 `internal/agent/`（旧版 `internal/agent/` 顶层文件�
 - 并复用 `LocalAdapter.Infer()` 已支持的 GBNF（GGML BNF，GGML 巴科斯范式） grammar 约束（`root ::= "+1" | "0" | "-1"`）做三态离散打分，避免自由生成拖慢单步预算。
 - `scoreWithPRM()` 融合公式：`(1-0.6)*staticScore + 0.6*prmNormalized`（+1→1.0/0→0.5/-1→0.0），100ms 硬超时（`context.WithTimeout`，独立于调用方 ctx）。
 - FFI 错误（含 Rust 侧 `catch_unwind` 转换的 OOM/panic）与非法输出均安全降级为纯静态分，不向上抛出 error。
-- 调用点见 `internal/agent/agent_execute.go`（工具调用后打分处）。单元测试见 `internal/agent/step_scorer_prm_test.go`（覆盖融合方向、超时降级、错误降级、非法输出降级、Tier0/远程 Provider 不启用）。
+- 调用点见 `internal/agent/agent_execute_effect.go`（工具调用后打分处）。单元测试见 `internal/agent/step_scorer_prm_test.go`（覆盖融合方向、超时降级、错误降级、非法输出降级、Tier0/远程 Provider 不启用）。
 
 **Adaptive Max-Steps 闭环**:
 - `StateContext` 持有 `StepsUsed / MaxStepsLimit`；`AgentConfig.MaxSteps` 在首次 `Run()` 时写入 `MaxStepsLimit`（0=无上限，不推荐生产）。
@@ -269,7 +269,7 @@ RouteReasoning:
 
 ## 6. World Model
 
-L1 快速路径：SurpriseIndex < 0.3 时旁路 LLM（在 `agent_execute.go` FastPath 分支执行）。L2：LLM 执行后，SurpriseIndex 更新并影响下一轮路由。StatePredictor / Isotonic Regression 已废弃，路由完全由 SurpriseIndex 主导。
+L1 快速路径：SurpriseIndex < 0.3 时旁路 LLM（在 `agent_execute_effect.go` FastPath 分支执行）。L2：LLM 执行后，SurpriseIndex 更新并影响下一轮路由。StatePredictor / Isotonic Regression 已废弃，路由完全由 SurpriseIndex 主导。
 
 **知识空缺感知 (Knowledge Gap Awareness)**:
 LLM 推理前调用 `WorldModel.AssessGrounding` 评估上下文充分性。上下文不足时将警告注入 prompt 末尾（`[System Warning: Knowledge gap detected. Consider further retrieval...]`），引导 Agent 优先检索，不直接拦截执行。
@@ -313,7 +313,7 @@ WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/agent/` �
 - 该指令来源标记 `TaintNone`，经 `SanitizeToSafe` 后注入 `WriteInstruction` slot（符合 Taint 类型约束）。
 - `BudgetWarned`/`BudgetPressure` 字段定义在 `StateContext`；重放时从 EventLog 恢复，保证 `[inv_M4_03]` promptFn 确定性。
 
-M4 不重复实现 TokenBurnRate 检测逻辑，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate 的 CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 将速率直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是触发 KillSwitch 阶段变迁的**唯一路径**。M4 在每次 LLMFillEffect 前读取 `observability.GlobalKillswitchStage`（原子 int32）并响应（`agent_execute.go §1.5`）:
+M4 不重复实现 TokenBurnRate 检测逻辑，也不独立触发 KillSwitch 阶段变迁。TokenBurnRate 的 CANONICAL SOURCE 是 M3（EMA_5s + EMA_30s），M3 将速率直接推送至 M11 KillSwitch.CheckAndAct（M11 §4.3），这是触发 KillSwitch 阶段变迁的**唯一路径**。M4 在每次 LLMFillEffect 前读取 `observability.GlobalKillswitchStage`（原子 int32）并响应（`agent_execute_effect.go §1.5`）:
 
 - **Throttle 阶段**（已实现）: `sCtx.MaxStepsLimit` 收紧至 3，`sCtx.ThrottleNoNetwork = true`；DAGExecutor `toolExecFn` 对含 `SideNetworkCall` 副作用的工具返回 `ErrForbidden`
 - **Pause 阶段**（已实现）: 返回 CodeInternal 错误，挂起当前 LLM 调用，等待 M11 恢复或 ESCALATE
@@ -331,7 +331,7 @@ M4 仅持有热路径上下文窗口管理与触发判断；具体压缩算法�
 
 ### 7.1 `[ReasoningState]` 跨轮持久化
 
-`StateContext.LastReasoningContent` 持有本轮 LLM 返回的 `reasoning_content`（由 Adapter 从响应中提取写入 `ProviderResponse.ReasoningContent`，M4 在 `agent_execute.go` 存入 `sCtx`）。下次 LLM 调用构建 messages 时，将其作为 assistant 消息的 `reasoning_content` 字段回传，满足 DeepSeek V4 Pro 多轮工具调用的 API 约束。
+`StateContext.LastReasoningContent` 持有本轮 LLM 返回的 `reasoning_content`（由 Adapter 从响应中提取写入 `ProviderResponse.ReasoningContent`，M4 在 `agent_execute_effect.go` 存入 `sCtx`）。下次 LLM 调用构建 messages 时，将其作为 assistant 消息的 `reasoning_content` 字段回传，满足 DeepSeek V4 Pro 多轮工具调用的 API 约束。
 
 跨 session / 跨任务不继承。`FeatureReasoningStateCarry`（Tier 1+ 启用）扩展此行为至 episodic_events 落盘持久化（msgpack + AES-256-GCM，SessionPIIVault.SecureZero 同步清零）。
 

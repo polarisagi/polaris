@@ -27,6 +27,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/learning/synthetic"
 	"github.com/polarisagi/polaris/internal/memory"
+	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/security/guard"
 
@@ -620,6 +621,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	promptOptimizer := optimizer.NewPromptOptimizerWithDB(sb.Router, versionStore, sb.Store.DB(), 0)
+	if pm, ok := sb.PromptMgr.(*prompt.Manager); ok {
+		pm.SetOptimizer(promptOptimizer)
+	}
 	m9Engine := learning.NewEngine(learning.DefaultEngineConfig(), reflexionBridge, curriculumBridge, rolloutBridge, taskEventCh, versionEventCh)
 	// 2026-07-04 审计补齐（任务5）：SetDB 此前从未在生产启动代码中被调用，
 	// 导致 learning_cursors 持久化/幂等去重整套机制在 e.db==nil 短路下形同虚设

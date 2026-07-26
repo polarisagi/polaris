@@ -288,7 +288,11 @@ func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- types.Stre
 		for _, c := range frame.Candidates {
 			for i, p := range c.Content.Parts {
 				if p.Text != "" {
-					ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: p.Text}
+					select {
+					case ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: p.Text}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				if p.FunctionCall != nil {
 					argsBytes, _ := json.Marshal(p.FunctionCall.Args)
@@ -297,18 +301,26 @@ func parseGoogleStream(ctx context.Context, body io.Reader, ch chan<- types.Stre
 						"name":  p.FunctionCall.Name,
 						"input": json.RawMessage(argsBytes),
 					})
-					ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}
+					select {
+					case ch <- types.StreamEvent{Type: types.StreamToolCall, Content: string(payload)}:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}
 		if frame.UsageMetadata.CandidatesTokenCount > 0 || frame.UsageMetadata.PromptTokenCount > 0 {
-			ch <- types.StreamEvent{
+			select {
+			case ch <- types.StreamEvent{
 				Type: types.StreamTextDelta,
 				Usage: types.Usage{
 					InputTokens:    frame.UsageMetadata.PromptTokenCount,
 					OutputTokens:   frame.UsageMetadata.CandidatesTokenCount,
 					CacheHitTokens: frame.UsageMetadata.CachedContentTokenCount,
 				},
+			}:
+			case <-ctx.Done():
+				return
 			}
 			if tbr != nil {
 				tbr.Add(int64(frame.UsageMetadata.PromptTokenCount + frame.UsageMetadata.CandidatesTokenCount))

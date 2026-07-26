@@ -43,10 +43,6 @@ const (
 
 type EvalResult = protocol.EvalResult
 
-type Runner interface {
-	Run(ctx context.Context, cases []EvalCase) []EvalResult
-}
-
 type TrajectoryRecorder = protocol.TrajectoryRecorder
 type TrajectoryReplayer = protocol.TrajectoryReplayer
 type TrajectoryTrace = protocol.TrajectoryTrace

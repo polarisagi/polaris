@@ -9,15 +9,11 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// fakeHandoffPoster 是 HandoffPoster 的纯内存测试替身。autoCompleteAfter>0 时，
-// 在 PostTask 后延迟指定时长自动将任务标记为 TaskDone，模拟目标 Worker 认领并
-// 完成委派任务；autoCompleteAfter==0 时任务永不完成，用于验证超时路径。
+// fakeHandoffPoster 是 HandoffPoster 的纯内存测试替身。
 type fakeHandoffPoster struct {
-	mu                sync.Mutex
-	tasks             map[string]*types.TaskSnapshot
-	autoCompleteAfter time.Duration
-	autoFail          bool
-	lastPosted        *types.TaskEntry
+	mu         sync.Mutex
+	tasks      map[string]*types.TaskSnapshot
+	lastPosted *types.TaskEntry
 }
 
 func (f *fakeHandoffPoster) PostTask(_ context.Context, task *types.TaskEntry) error {
@@ -25,24 +21,6 @@ func (f *fakeHandoffPoster) PostTask(_ context.Context, task *types.TaskEntry) e
 	f.lastPosted = task
 	f.tasks[task.ID] = &types.TaskSnapshot{ID: task.ID, Status: types.TaskPending, Namespace: task.Namespace, Type: task.Type}
 	f.mu.Unlock()
-
-	if f.autoCompleteAfter > 0 {
-		go func() {
-			time.Sleep(f.autoCompleteAfter)
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			snap := f.tasks[task.ID]
-			if snap == nil {
-				return
-			}
-			if f.autoFail {
-				snap.Status = types.TaskFailed
-			} else {
-				snap.Status = types.TaskDone
-				snap.Result = []byte("delegated-result")
-			}
-		}()
-	}
 	return nil
 }
 
@@ -62,7 +40,7 @@ func newTestHandoffAgent(t *testing.T) *Agent {
 func TestExecuteTransferToAgent_Success(t *testing.T) {
 	a := newTestHandoffAgent(t)
 	a.sCtx.NamespaceID = "ns-shared"
-	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot), autoCompleteAfter: 50 * time.Millisecond}
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
 	a.InjectHandoffPoster(poster)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -72,11 +50,11 @@ func TestExecuteTransferToAgent_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if !res.Success {
-		t.Fatalf("expected Success=true, got false, output=%s", res.Output)
+	if !res.Suspended {
+		t.Fatalf("expected Suspended=true, got false")
 	}
-	if string(res.Output) != "delegated-result" {
-		t.Errorf("expected delegated-result, got %s", res.Output)
+	if string(res.Output) != "Agent suspended waiting for handoff task completion." {
+		t.Errorf("expected suspended message, got %s", res.Output)
 	}
 	if poster.lastPosted == nil {
 		t.Fatal("expected a task to have been posted")
@@ -92,7 +70,7 @@ func TestExecuteTransferToAgent_Success(t *testing.T) {
 func TestExecuteTransferToAgent_NamespaceFallsBackToSessionID(t *testing.T) {
 	a := newTestHandoffAgent(t)
 	// NamespaceID 留空，验证退化为 SessionID。
-	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot), autoCompleteAfter: 10 * time.Millisecond}
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
 	a.InjectHandoffPoster(poster)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -102,52 +80,6 @@ func TestExecuteTransferToAgent_NamespaceFallsBackToSessionID(t *testing.T) {
 	}
 	if poster.lastPosted.Namespace != a.sCtx.SessionID {
 		t.Errorf("expected namespace to fall back to SessionID %q, got %q", a.sCtx.SessionID, poster.lastPosted.Namespace)
-	}
-}
-
-func TestExecuteTransferToAgent_DelegateFailed(t *testing.T) {
-	a := newTestHandoffAgent(t)
-	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot), autoCompleteAfter: 10 * time.Millisecond, autoFail: true}
-	a.InjectHandoffPoster(poster)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	res, err := a.executeTransferToAgent(ctx, "librarian", "x", types.TaintLow)
-	if err != nil {
-		t.Fatalf("expected nil error (delegate failure surfaces via ToolResult, not error), got %v", err)
-	}
-	if res.Success {
-		t.Error("expected Success=false when delegate task fails")
-	}
-}
-
-func TestExecuteTransferToAgent_TimesOutWithoutDeadlock(t *testing.T) {
-	a := newTestHandoffAgent(t)
-	// autoCompleteAfter=0：任务永不完成，验证 ctx 超时后能在有限时间内返回。
-	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
-	a.InjectHandoffPoster(poster)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
-	defer cancel()
-
-	done := make(chan struct{})
-	var res *types.ToolResult
-	var err error
-	go func() {
-		res, err = a.executeTransferToAgent(ctx, "librarian", "x", types.TaintLow)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("executeTransferToAgent did not return after ctx deadline")
-	}
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if res.Success {
-		t.Error("expected Success=false on timeout")
 	}
 }
 

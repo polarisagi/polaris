@@ -75,7 +75,7 @@ DDL 和索引定义见 `internal/protocol/schema/001_events.sql`。
 **❌ 原设计的 EventWriteBuffer（MPSC channel 批量缓冲 + 100ms ticker/batch≥64 +
 leaseChecker 二次校验）当前未实现/已删除**（2026-07-08 复核
 code-quality-remediation-verification-20260707.md Phase 1.3 遗留项时发现：
-全仓库零构造点、零测试覆盖，`internal/store/audit/event_buffer.go` 完整实现
+全仓库零构造点、零测试覆盖（原 `internal/store/audit/event_buffer.go` 曾有完整实现，现已一并删除），
 228 行代码但从未被任何 boot 路径调用；`IncrEventBufferDrainTimeout` 此前被
 判定为死代码删除是正确的——其挂载目标 `EventWriteBuffer` 本身才是真正未接线
 的历史包袱，已一并删除，避免继续误导后续读者。详见
@@ -93,7 +93,7 @@ MutationBus → DatabaseWriter 串行 INSERT，不做批量缓冲，不做租约
 
 ### 2.3 MutationBus + DatabaseWriter — 通用状态变异串行化
 
-实现见 `internal/store/`（MutationBus + DatabaseWriter）。核心文件：`mutation_bus.go`（接口+投递）、`mutation_bus_execute.go`（DatabaseWriter 执行循环）、`embedding_batcher.go`（向量批处理）、`reranker.go`（重排序）；事件写入见 `internal/store/audit/eventlog.go`（`SQLiteEventLog`，§2.2）。
+实现见 `internal/store/`（MutationBus + DatabaseWriter）。核心文件：`mutation_bus.go`（接口+投递）、`mutation_bus_execute.go`（DatabaseWriter 执行循环）、`internal/store/search/embedding_batcher.go`（向量批处理）、`internal/store/search/reranker.go`（重排序）；事件写入见 `internal/store/audit/eventlog.go`（`SQLiteEventLog`，§2.2）。
 
 禁止业务 goroutine 直接 BEGIN IMMEDIATE 写 SQLite。所有状态变异通过 MutationBus 投递变异意图（含表名、操作类型、优先级、组合 ID），DatabaseWriter 单一 goroutine 串行执行。
 

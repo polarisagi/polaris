@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
 
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/observability/trace"
@@ -29,14 +30,19 @@ import (
 // 结果写入 a.sCtx.ExecuteResult。
 // 任意节点失败 → 推送 TriggerExecuteFail（触发 S_ROLLBACK 和 Saga 补偿）。
 func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
+	ctx, span := otel.Tracer("agent").Start(ctx, "agent.runExecuteDAG")
+	defer span.End()
+
 	if a.sCtx.DAGModel == nil {
 		// DAGModel 为空时跳过执行（等价于空 DAG），直接推进 ExecuteDone
+		span.AddEvent("empty_dag_skip")
 		a.asyncIntent(types.TriggerExecuteDone)
 		return nil
 	}
 
 	if a.toolRegistry == nil {
 		// fail-closed: 无工具注册表时拒绝执行
+		span.RecordError(apperr.New(apperr.CodeInternal, "toolRegistry is nil"))
 		a.asyncIntent(types.TriggerExecuteFail)
 		return apperr.New(apperr.CodeInternal, "runExecuteDAG: toolRegistry is nil (fail-closed)")
 	}
@@ -50,6 +56,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		// fail-closed: 无 DAG 执行引擎时拒绝执行（2026-07-12 execute/dag 迁出后新增，
 		// 与上方 toolRegistry==nil 分支同一 fail-closed 原则；NewAgentWithDefaults/
 		// buildAgent 均默认注入，理论上不会命中，仅作防御）。
+		span.RecordError(apperr.New(apperr.CodeInternal, "dagRunner is nil"))
 		a.asyncIntent(types.TriggerExecuteFail)
 		return apperr.New(apperr.CodeInternal, "runExecuteDAG: dagRunner is nil (fail-closed)")
 	}
@@ -439,6 +446,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		}
 
 		// 执行失败 → 触发 S_ROLLBACK
+		span.RecordError(err)
 		a.asyncIntent(types.TriggerExecuteFail)
 		return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
 	}
@@ -491,6 +499,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		a.sCtx.GlobalTaintLevel = maxNodeTaint
 	}
 
+	span.AddEvent("dag_execute_done")
 	a.asyncIntent(types.TriggerExecuteDone)
 	return nil
 }

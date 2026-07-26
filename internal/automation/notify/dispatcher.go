@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/security/network"
+
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -59,9 +61,11 @@ type Dispatcher struct {
 
 // NewDispatcher 创建通知投递处理器。
 func NewDispatcher(prefs PreferenceReader) *Dispatcher {
+	c := network.NewSafeHTTPClient(nil).Client
+	c.Timeout = httpTimeout
 	return &Dispatcher{
 		prefs:      prefs,
-		httpClient: &http.Client{Timeout: httpTimeout},
+		httpClient: c,
 	}
 }
 

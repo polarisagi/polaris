@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -159,7 +160,7 @@ func (w *WorktreeManager) CreatePullRequest(ctx context.Context, branchName, tit
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := network.NewSafeHTTPClient(nil).Do(req)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "CreatePullRequest: request failed", err)
 	}

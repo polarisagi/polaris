@@ -102,18 +102,19 @@ func TestSpecTaintLevels(t *testing.T) {
 func TestSpecParStates(t *testing.T) {
 	spec := loadStateSpec(t)
 	expected := map[string]types.AgentState{
-		"s_idle":      types.AgentStateIdle,
-		"s_perceive":  types.AgentStatePerceive,
-		"s_plan":      types.AgentStatePlan,
-		"s_validate":  types.AgentStateValidate,
-		"s_execute":   types.AgentStateExecute,
-		"s_reflect":   types.AgentStateReflect,
-		"s_replan":    types.AgentStateReplan,
-		"s_rollback":  types.AgentStateRollback,
-		"s_complete":  types.AgentStateComplete,
-		"s_failed":    types.AgentStateFailed,
-		"s_interrupt": types.AgentStateInterrupt,
-		"s_suspended": types.AgentStateSuspended,
+		"s_idle":        types.AgentStateIdle,
+		"s_perceive":    types.AgentStatePerceive,
+		"s_plan":        types.AgentStatePlan,
+		"s_validate":    types.AgentStateValidate,
+		"s_execute":     types.AgentStateExecute,
+		"s_reflect":     types.AgentStateReflect,
+		"s_replan":      types.AgentStateReplan,
+		"s_rollback":    types.AgentStateRollback,
+		"s_complete":    types.AgentStateComplete,
+		"s_failed":      types.AgentStateFailed,
+		"s_interrupt":   types.AgentStateInterrupt,
+		"s_suspended":   types.AgentStateSuspended,
+		"s_await_agent": types.AgentStateAwaitAgent,
 	}
 	yamlSet := make(map[string]bool, len(spec.Par.States))
 	for _, s := range spec.Par.States {
@@ -240,18 +241,19 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 	spec := loadStateSpec(t)
 
 	expectedStates := map[string]types.AgentState{
-		"s_idle":      types.AgentStateIdle,
-		"s_perceive":  types.AgentStatePerceive,
-		"s_plan":      types.AgentStatePlan,
-		"s_validate":  types.AgentStateValidate,
-		"s_execute":   types.AgentStateExecute,
-		"s_reflect":   types.AgentStateReflect,
-		"s_replan":    types.AgentStateReplan,
-		"s_rollback":  types.AgentStateRollback,
-		"s_complete":  types.AgentStateComplete,
-		"s_failed":    types.AgentStateFailed,
-		"s_interrupt": types.AgentStateInterrupt,
-		"s_suspended": types.AgentStateSuspended,
+		"s_idle":        types.AgentStateIdle,
+		"s_perceive":    types.AgentStatePerceive,
+		"s_plan":        types.AgentStatePlan,
+		"s_validate":    types.AgentStateValidate,
+		"s_execute":     types.AgentStateExecute,
+		"s_reflect":     types.AgentStateReflect,
+		"s_replan":      types.AgentStateReplan,
+		"s_rollback":    types.AgentStateRollback,
+		"s_complete":    types.AgentStateComplete,
+		"s_failed":      types.AgentStateFailed,
+		"s_interrupt":   types.AgentStateInterrupt,
+		"s_suspended":   types.AgentStateSuspended,
+		"s_await_agent": types.AgentStateAwaitAgent,
 	}
 
 	expectedTriggers := map[string]types.AgentTrigger{
@@ -271,6 +273,8 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"interrupt_abort":           types.TriggerInterruptAbort,
 		"suspend":                   types.TriggerSuspend,
 		"resume":                    types.TriggerResume,
+		"await_agent":               types.TriggerAwaitAgent,
+		"agent_handoff_done":        types.TriggerAgentHandoffDone,
 	}
 
 	allowedExtraEvents := map[string]bool{

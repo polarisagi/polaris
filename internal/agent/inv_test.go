@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
-	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/prompt"
 
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -61,7 +61,7 @@ func Test_inv_M4_03_PromptBuilderDeterminism(t *testing.T) {
 	}
 
 	buildOnce := func() []types.Message {
-		b := protocol.NewPromptBuilder()
+		b := prompt.NewPromptBuilder()
 		b.WriteInstruction(safe)
 		b.WriteSystemEnvironment("OS: linux | Arch: amd64")
 		return b.Build()
@@ -84,13 +84,13 @@ func Test_inv_M4_03_PromptBuilderNoWallClock(t *testing.T) {
 	reviewed := taint.SanitizeByUserReview(ts, "r")
 	safe, _ := taint.SanitizeToSafe(reviewed)
 
-	b1 := protocol.NewPromptBuilder()
+	b1 := prompt.NewPromptBuilder()
 	b1.WriteInstruction(safe)
 	msgs1 := b1.Build()
 
 	time.Sleep(10 * time.Millisecond)
 
-	b2 := protocol.NewPromptBuilder()
+	b2 := prompt.NewPromptBuilder()
 	b2.WriteInstruction(safe)
 	msgs2 := b2.Build()
 

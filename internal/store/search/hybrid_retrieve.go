@@ -14,6 +14,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// HybridRetriever 共享引擎 — BM25 + Dense Vector + Graph Traversal 三路融合。
+// M5 和 M10 共享底层 RRF+Rerank 引擎，检索范围和配置参数各自独立。
+// 架构文档: docs/arch/05-Memory-System-深度选型.md §7.4,
+//
+//	docs/arch/10-Knowledge-RAG-深度选型.md §2.2
+//
 // HybridSearchEngine 提供统一接口: Search(ctx, query, scope, config) → []ScoredFragment
 type HybridSearchEngine struct {
 	router   *store.StorageRouter
@@ -77,6 +83,8 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 						Score:   score,
 					})
 				}
+			} else {
+				slog.Warn("hybrid_retrieve: unmarshal fts value failed", "err", err)
 			}
 		}
 	}
@@ -127,6 +135,8 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 							})
 						}
 					}
+				} else {
+					slog.Warn("hybrid_retrieve: unmarshal vec value failed", "err", err)
 				}
 			}
 		}
@@ -202,11 +212,6 @@ func bm25Score(doc string, query string, stats *CorpusStats) float64 {
 	}
 	return score
 }
-
-// HybridRetriever 共享引擎 — BM25 + Dense Vector + Graph Traversal 三路融合。
-// M5 和 M10 共享底层 RRF+Rerank 引擎，检索范围和配置参数各自独立。
-// 架构文档: docs/arch/05-Memory-System-深度选型.md §7.4,
-//           docs/arch/10-Knowledge-RAG-深度选型.md §2.2
 
 // RetrievalConfig 检索配置。
 type RetrievalConfig struct {

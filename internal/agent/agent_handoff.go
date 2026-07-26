@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -32,9 +31,6 @@ import (
 // 代价：委派耗时期间占用一个 DAG 节点执行槽位（与 spawn_planner 的真异步挂起
 // 相比不能立即释放当前 Agent 去做其他事）。若未来需要真正的非阻塞挂起，需专项
 // 设计 Agent FSM 新状态 + 恢复触发器，属于独立于本次修复范围的后续工作。
-
-// handoffPollInterval 与 csv_fanout.go waitForTask 保持一致的轮询间隔。
-const handoffPollInterval = 500 * time.Millisecond
 
 // InjectHandoffPoster 注入 transfer_to_agent 工具所需的 Blackboard 任务投递能力
 // （D5/GD-14-004）。nil 时 transfer_to_agent 节点返回 fail-closed 错误，不影响
@@ -69,6 +65,33 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		namespace = a.sCtx.SessionID
 	}
 
+	// [GD-1] 检查是否为挂起恢复
+	if a.sCtx.HandoffTaskID != "" {
+		snap, err := a.handoffPoster.PeekTask(ctx, a.sCtx.HandoffTaskID)
+		if err == nil && snap != nil && snap.Status == types.TaskDone {
+			a.sCtx.HandoffTaskID = "" // 清理恢复状态
+			return &types.ToolResult{
+				Success:    true,
+				Output:     snap.Result,
+				TaintLevel: taintLevel,
+			}, nil
+		}
+		if err == nil && snap != nil && snap.Status == types.TaskFailed {
+			a.sCtx.HandoffTaskID = "" // 清理恢复状态
+			return &types.ToolResult{ //nolint:nilerr
+				Success: false,
+				Output:  []byte(fmt.Sprintf("handoff task %s failed", snap.ID)),
+			}, nil
+		}
+		// 如果还没完成，或者查不到（异常），继续往下或者直接再次挂起
+		return &types.ToolResult{
+			Success:    true,
+			Suspended:  true, // 告知 DAG 执行器中断
+			Output:     []byte("Agent suspended waiting for handoff task completion."),
+			TaintLevel: taintLevel,
+		}, nil
+	}
+
 	childID := fmt.Sprintf("handoff-%s-%s", a.ID, uuid.NewString())
 	entry := &types.TaskEntry{
 		ID:          childID,
@@ -83,49 +106,14 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		return nil, apperr.Wrap(apperr.CodeInternal, "transfer_to_agent: post task", err)
 	}
 
-	result, waitErr := waitForHandoffTask(ctx, a.handoffPoster, childID)
-	if waitErr != nil {
-		// 委派任务失败/超时不视为节点执行错误（不触发 Saga 补偿）——按 ToolResult
-		// 失败语义返回，交由上层 LLM 决定重试或改变计划，与 code_act 失败路径的
-		// error-vs-failure 区分原则一致；waitErr 内容已写入 Output 供上层查看，
-		// 不静默丢弃。
-		return &types.ToolResult{ //nolint:nilerr // 意图返回：委派失败是业务结果不是执行错误
-			Success: false,
-			Output:  []byte(waitErr.Error()),
-		}, nil
-	}
+	// [GD-1] 改造为异步挂起，移除阻塞轮询
+	a.sCtx.HandoffTaskID = childID
+	a.asyncIntent(types.TriggerAwaitAgent)
+
 	return &types.ToolResult{
 		Success:    true,
-		Output:     []byte(result),
+		Suspended:  true, // 告知 DAG 执行器中断
+		Output:     []byte("Agent suspended waiting for handoff task completion."),
 		TaintLevel: taintLevel,
 	}, nil
-}
-
-// waitForHandoffTask 轮询 Blackboard 等待委派任务达到终态（done/failed），
-// 与 internal/execute/orchestrator/csv_fanout.go 的 waitForTask 采用同一模式。
-func waitForHandoffTask(ctx context.Context, poster HandoffPoster, taskID string) (string, error) {
-	ticker := time.NewTicker(handoffPollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", apperr.New(apperr.CodeInternal,
-				fmt.Sprintf("transfer_to_agent: timeout waiting for handoff task %s", taskID))
-		case <-ticker.C:
-			snap, err := poster.PeekTask(ctx, taskID)
-			if err != nil {
-				return "", apperr.Wrap(apperr.CodeInternal, "transfer_to_agent: peek task", err)
-			}
-			if snap == nil {
-				continue
-			}
-			switch snap.Status {
-			case types.TaskDone:
-				return string(snap.Result), nil
-			case types.TaskFailed:
-				return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("handoff task %s failed", taskID))
-			}
-		}
-	}
 }
