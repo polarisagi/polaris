@@ -102,3 +102,36 @@ func TestExecuteTransferToAgent_NilPosterFailsClosed(t *testing.T) {
 		t.Fatal("expected fail-closed error when handoffPoster is nil")
 	}
 }
+
+// TestWatchHandoffCompletion_FiresResumeOnDone 回归测试 GD-1 修复：
+// watcher 检测到子任务 Done 后，必须投递 TriggerAgentHandoffDone 唤醒 FSM，
+// 而不是（修复前的）投递 TriggerSuspend 导致 Dispatch 返回
+// "no transition from S_AWAIT_AGENT with trigger TriggerSuspend" 硬错误。
+func TestWatchHandoffCompletion_FiresResumeOnDone(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	const childID = "handoff-child-1"
+	poster.mu.Lock()
+	poster.tasks[childID] = &types.TaskSnapshot{ID: childID, Status: types.TaskPending}
+	poster.mu.Unlock()
+
+	a.watchHandoffCompletion(childID)
+
+	// 轮询间隔 1s，短暂等待后再翻转为 Done，确认 watcher 能在下一次
+	// 轮询中捕获状态变化（而非只在启动瞬间读取一次）。
+	time.Sleep(50 * time.Millisecond)
+	poster.mu.Lock()
+	poster.tasks[childID].Status = types.TaskDone
+	poster.mu.Unlock()
+
+	select {
+	case trigger := <-a.intent:
+		if trigger != types.TriggerAgentHandoffDone {
+			t.Fatalf("expected TriggerAgentHandoffDone, got %v", trigger)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for watcher to fire TriggerAgentHandoffDone")
+	}
+}

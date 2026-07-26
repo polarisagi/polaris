@@ -79,6 +79,7 @@ type AgentBundle struct {
 	ParallelExec   *orchestrator.ParallelExecutor
 	SequentialExec *orchestrator.SequentialExecutor
 	SwarmCoord     *orchestrator.SwarmCoordinator
+	DebateExec     *orchestrator.DebateExecutor // GD-6：Debate/Critic 对抗协同模式
 
 	// Agent Kernel & DAG Executor
 	Agent   *sysagent.Agent
@@ -395,6 +396,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	parallelExec := orchestrator.NewParallelExecutor(blackboard)
 	sequentialExec := orchestrator.NewSequentialExecutor(blackboard, 5*time.Minute)
 	swarmCoord := orchestrator.NewSwarmCoordinator(blackboard)
+	debateExec := orchestrator.NewDebateExecutor(blackboard) // GD-6：Debate/Critic 对抗协同模式
 
 	// ─── §10 Agent Kernel (L1 M4) ────────────────────────────────────────────
 	taskRepo := repo.NewSQLiteTaskReadRepository(sb.Store.DB())
@@ -947,6 +949,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		ParallelExec:     parallelExec,
 		SequentialExec:   sequentialExec,
 		SwarmCoord:       swarmCoord,
+		DebateExec:       debateExec,
 		Agent:            agent,
 		DAGExec:          dagExec,
 		M9Engine:         m9Engine,

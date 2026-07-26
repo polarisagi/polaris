@@ -20,6 +20,15 @@ import (
 // 现在允许 LLM 显式标注"派生推论"关系，与既有 depends_on/configures/conflicts_with/
 // relates_to 并列，语义更精确地覆盖"基础信念变更时其派生推论应连带失效"这一原始诉求）。
 // 触发：ConsolidationPipeline.upsertSemantic 完成 belief revision 后调用。
+//
+// 为什么不用 SurrealDB-Core 图引擎（GD-4，local_playground/upgrade/
+// 01-架构设计变更规范.md）：本级联是写路径操作——级联发现与
+// ExclusiveWriter 的实体状态标记（markPendingReview）必须处于同一事务
+// 边界内，crash 时要么全生效要么全不生效。SurrealDB-Core 是独立于主
+// *sql.DB 的 FFI 侧车进程，与 SQLite 不共享事务，跨引擎调用会引入
+// "semantic_relations 双写同步"与"跨引擎原子性缺口"两个新问题，
+// 收益（图引擎统一）不足以覆盖代价。图引擎统一仅适用于读路径的关联
+// 发现（[BFS-Traverse]/[Spreading-Activation]），与本文件职责正交。
 type CascadeInvalidator struct {
 	db protocol.SQLQuerier
 }

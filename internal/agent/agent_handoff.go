@@ -3,34 +3,36 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// D5（GD-14-004）：工具化 Multi-Agent Handoff。
+// D5（GD-14-004）→ GD-1（本轮升级，local_playground/upgrade/01-架构设计变更规范.md）：
+// 工具化 Multi-Agent Handoff，异步挂起版本。
 //
-// 设计背景（gemini-upgrade-prompt.md D5）：ADR-0050 已删除中心化
-// Orchestrator/Worker，多 Agent 协同收敛为 Blackboard CAS 自认领模型。本文件
-// 在此模型之上提供一层轻量工具封装——LLM 判断需要委派给另一角色时，直接调用
-// transfer_to_agent 工具，无需自行编排完整 StateGraph/Blackboard 订阅。
+// 历史背景：原实现（D5 首版）为同步阻塞——`transfer_to_agent` 工具调用内部
+// 轮询等待子任务终态，独占一个 DAG 执行槽位直至委派完成。GD-1 复核后改为
+// 异步挂起：FSM 新增 S_AWAIT_AGENT 状态（见 docs/arch/spec/state.yaml），
+// `executeTransferToAgent` 首次调用时投递子任务后立即返回
+// `ToolResult{Suspended:true}` 并推进 TriggerAwaitAgent，不再阻塞当前
+// goroutine。真正的恢复由 `watchHandoffCompletion` 启动的后台 watcher
+// 完成（见本文件下方），完成后投递 TriggerAgentHandoffDone 使 FSM 回到
+// S_EXECUTE，`runExecuteDAG` 重新进入本函数时，`a.sCtx.HandoffTaskID` 非空
+// 触发"恢复检查"分支，直接返回子任务结果，不重新投递任务。
 //
-// 实现选择（与原设计的已知偏差，见收尾说明）：原设计设想通过复用
-// hitl_suspend/resume_from_suspended 转移使当前 Agent 异步挂起、由目标任务
-// 完成事件触发恢复。复核发现该转移属于 M8 task_status（Blackboard 任务生命
-// 周期）状态机语义，而非 Agent 认知 FSM（internal/agent/fsm）状态；且 Agent
-// 侧真正precedented 的异步挂起路径（spawn_planner→S_INTERRUPT→whisperChan）
-// 依赖 PlannerPool 专用的耳语回灌机制，与"等待任意委派任务完成"场景耦合过紧，
-// 贸然复用风险高于收益。故本实现改为同步阻塞：转移到目标角色的 Blackboard
-// 任务由当前工具调用内部轮询等待（复用 csv_fanout.go 已验证的
-// "PostTask→轮询 PeekTask 直至终态" 模式），完成后把结果作为 ToolResult 返回，
-// Agent 自身 FSM 不做任何新状态转移（无需变更 state.yaml/fsm/state_machine.go）。
-// 优点：零 FSM 变更、零新增后台 watcher 子系统，正确性可通过阻塞轮询直接验证；
-// 代价：委派耗时期间占用一个 DAG 节点执行槽位（与 spawn_planner 的真异步挂起
-// 相比不能立即释放当前 Agent 去做其他事）。若未来需要真正的非阻塞挂起，需专项
-// 设计 Agent FSM 新状态 + 恢复触发器，属于独立于本次修复范围的后续工作。
+// 崩溃安全边界（诚实声明，非本次范围）：watcher 是绑定 `a.ctx`（Agent 进程
+// 内存态）生命周期的 goroutine，与 spawn_planner 现有的 whisperChan 方案
+// 风险等级一致——若进程在委派等待期间重启，watcher 随进程消亡。
+// `a.taskCheckpointRepo` 持久化的 checkpoint 记录为未来实现"独立
+// Reconciler 扫描 task_checkpoints 补偿唤醒"预留了锚点，但该 Reconciler
+// 本次未实现。这不是本次修复引入的新缺陷，而是与既有 whisperChan 机制
+// 相同量级的既有限制，留作独立后续工作。
 
 // InjectHandoffPoster 注入 transfer_to_agent 工具所需的 Blackboard 任务投递能力
 // （D5/GD-14-004）。nil 时 transfer_to_agent 节点返回 fail-closed 错误，不影响
@@ -116,4 +118,51 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		Output:     []byte("Agent suspended waiting for handoff task completion."),
 		TaintLevel: taintLevel,
 	}, nil
+}
+
+// handoffWatchPollInterval 委派完成后台轮询间隔。后台 watcher 不再占用 DAG
+// 执行槽位，无需追求原同步阻塞轮询的 500ms 低延迟，1s 足够。
+const handoffWatchPollInterval = 1 * time.Second
+
+// watchHandoffCompletion 启动一个绑定 a.ctx（Agent 生命周期）的后台
+// goroutine，轮询委派子任务 childTaskID 的终态；到达终态后异步投递
+// TriggerAgentHandoffDone 唤醒 FSM（S_AWAIT_AGENT → S_EXECUTE）。
+//
+// [GD-1 修复] 此前版本在进入 S_AWAIT_AGENT 后错误地投递了
+// TriggerSuspend——该 Trigger 在 FSM 转移表中只定义了
+// S_IDLE → S_SUSPENDED 一条边，从 S_AWAIT_AGENT 触发会命中
+// state_machine.go Dispatch() 的"no transition from %v with trigger %v"
+// 硬错误分支，导致 Agent.Run() 直接返回错误退出——每次 transfer_to_agent
+// 调用都会使父任务在进入等待状态后立即失败，且没有任何组件会在委派完成
+// 时唤醒它（全仓搜索确认不存在对应的常驻 Watcher）。本函数是该缺失环节的
+// 补齐：不再投递任何 TriggerSuspend，FSM 保持在 S_AWAIT_AGENT 自然等待
+// 下一个外部 Trigger（与其它非终态状态的等待方式一致），由本 watcher
+// 负责在委派完成时把 TriggerAgentHandoffDone 送入 a.intent。
+func (a *Agent) watchHandoffCompletion(childTaskID string) {
+	if a.handoffPoster == nil || childTaskID == "" {
+		return
+	}
+	concurrent.SafeGo(a.ctx, "agent.handoff_watcher", func(ctx context.Context) {
+		ticker := time.NewTicker(handoffWatchPollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				snap, err := a.handoffPoster.PeekTask(ctx, childTaskID)
+				if err != nil {
+					slog.Warn("agent: handoff watcher peek failed", "task_id", childTaskID, "err", err)
+					continue
+				}
+				if snap == nil {
+					continue
+				}
+				if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
+					a.asyncIntent(types.TriggerAgentHandoffDone)
+					return
+				}
+			}
+		}
+	})
 }

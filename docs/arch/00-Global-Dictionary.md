@@ -531,7 +531,7 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 - `[MemAPO]`: 双记忆跨任务复用 Prompt 优化。PromptOptimizer 三融合算法之二。
 - `[ContraPrompt]`: 对比轨迹 Prompt 优化。PromptOptimizer 三融合算法之三。
 - `[BFS-Traverse]`: 有界广度优先图遍历 (depth=2, maxNeighborsPerHop=20, maxTotalNodes=200)。关联发现模式使用 [Spreading-Activation]。
-- `[CascadeInvalidator]`: 级联失效器。区别于 [BFS-Traverse]（检索时的关联发现）——是 Entity 被 `superseded` 后触发的**写路径**图遍历：`ExclusiveWriter` 闭合旧事实后，沿 `semantic_relations`（含 `derived_from` 派生血缘关系）用单条 SQLite `WITH RECURSIVE` CTE 扩散 2 跳（`maxCascadeHops`），命中实体标记 `pending_review` 而非直接改写，交由后续复核。决策见 GD-14-001。定义见 M5 §9。
+- `[CascadeInvalidator]`: 级联失效器。区别于 [BFS-Traverse]（检索时的关联发现，跨 M5/M10 走 SurrealDB-Core 图引擎）——CascadeInvalidator 是 Entity 被 `superseded` 后触发的**写路径**级联：`ExclusiveWriter` 闭合旧事实后，必须与其状态标记保持同一事务边界，故有意选择沿 `semantic_relations`（含 `derived_from` 派生血缘关系）用单条 SQLite `WITH RECURSIVE` CTE 扩散 2 跳（`maxCascadeHops`），而非跨 FFI 边界调用 SurrealDB-Core（会引入双写同步与跨引擎原子性缺口）。命中实体标记 `pending_review` 而非直接改写，交由后续复核。此为写路径（事务原子性优先）与读路径（图引擎统一）的职责分离设计，非选型遗留问题，详见 local_playground/upgrade/01-架构设计变更规范.md GD-4。定义见 M5 §9。
 - `[Spreading-Activation]`: 扩散激活图遍历。
   - 种子实体 energy=1.0
   - 每轮 ×edge.weight 传播

@@ -224,27 +224,27 @@ func (sm *StateMachine) registerTransitions() {
 		},
 	})
 
-	// S_EXECUTE → S_AWAIT_AGENT: 发起委派
+	// S_EXECUTE → S_AWAIT_AGENT: 发起委派。真实的 checkpoint 持久化 +
+	// watcher 启动在 executeDeterministicEffect（agent_execute_effect_
+	// helpers.go）中按当前状态拦截处理，此转移本身无需额外 Effect
+	// （沿用 protocol.DeterministicEffect 空载体，保持转移表结构一致）。
 	sm.add(Transition{
 		From:    types.AgentStateExecute,
 		Trigger: types.TriggerAwaitAgent,
 		To:      types.AgentStateAwaitAgent,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			return []protocol.Effect{
-				protocol.DeterministicEffect{Fn: sm.persistHandoffWait},
-			}, nil
+			return nil, nil
 		},
 	})
 
-	// S_AWAIT_AGENT → S_EXECUTE: 委派完成恢复
+	// S_AWAIT_AGENT → S_EXECUTE: 委派完成恢复。真实的结果回填由
+	// runExecuteDAG 重新进入 executeTransferToAgent 的"恢复检查"分支完成。
 	sm.add(Transition{
 		From:    types.AgentStateAwaitAgent,
 		Trigger: types.TriggerAgentHandoffDone,
 		To:      types.AgentStateExecute,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			return []protocol.Effect{
-				protocol.DeterministicEffect{Fn: sm.restoreHandoffResult},
-			}, nil
+			return nil, nil
 		},
 	})
 

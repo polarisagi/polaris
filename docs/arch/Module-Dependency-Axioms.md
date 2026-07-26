@@ -86,6 +86,27 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于
 - `protocol/interfaces.go` 中的接口仅用于"3个以上消费者"的通用场景
 - 单一消费者场景优先选用路径 A（Consumer-side Interface）
 
+### 2.6 M7 专项：tool / sandbox / action / extension 边界（GD-5）
+
+> 背景：`gemini-review-design.md` GD-13-002 提出 M7（工具执行层）物理目录碎片化，
+> 建议合并为单一 `internal/action/` 包。复核（`local_playground/upgrade/
+> 01-架构设计变更规范.md` GD-5）结论：**不采纳物理合并**——`internal/action/
+> CLAUDE.md` 已有清晰的"拥有/禁止"边界文档，物理合并会把 `internal/extension`
+> 承载的 M6（Skill）/M13-bis（Registry）职责一并卷入，制造新的越界。真正需要
+> 收紧的是 import 方向，而非目录结构。裁决记录见
+> `docs/arch/decisions/ADR-0044-m7-boundary-deferred.md`。
+
+显式 import 方向约束（Arch-L2 `tool`/`sandbox`/`action` vs Arch-L3 `extension`）：
+
+| 从 → 到 | 是否允许 | 说明 |
+|---|---|---|
+| `extension` → `tool`/`sandbox` | ✅ 允许 | 符合 §2.2 单向下沉（L3 → L2），extension 消费 tool 注册的工具、sandbox 提供的执行环境 |
+| `extension` → `action` | ✅ 允许 | 同上，extension 通过 action 暴露的消费端接口触发 CodeAct/LAM/Hook 执行 |
+| `tool`/`sandbox` → `extension` | ❌ 禁止 | 违反单向下沉，L2 不得依赖 L3 |
+| `action` → `extension` | ❌ 禁止 | 同上 |
+| `extension` 直接定义本应属于 `tool`/`sandbox` 的接口类型 | ❌ 禁止 | 类型/接口定义权属于 L2（谁执行谁定义），extension 只能消费，不得越权定义后反向要求 L2 遵从 |
+| `tool` ↔ `sandbox` ↔ `action` 同层互引 | 参照 §2.2 | 同层跨包直接 import 具体实现仍需走路径 A/B，不因同属 M7 而豁免 |
+
 ---
 
 ## 3. 常见违规示例

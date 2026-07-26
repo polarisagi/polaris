@@ -102,7 +102,17 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
-	// GD-1: S_AWAIT_AGENT 阶段拦截：持久化 Handoff 状态并挂起
+	// GD-1: S_AWAIT_AGENT 阶段拦截：持久化 Handoff 状态并启动后台 watcher。
+	//
+	// 修复说明：此前版本在此处额外投递了 TriggerSuspend——FSM 转移表
+	// 中该 Trigger 只定义了 S_IDLE → S_SUSPENDED 一条边，从
+	// S_AWAIT_AGENT 触发必然命中 Dispatch() 的"no transition"硬错误，
+	// Agent.Run() 主循环随即返回错误退出，导致每次 transfer_to_agent
+	// 调用都会让父任务在挂起后立即失败，且没有任何组件负责在委派完成时
+	// 唤醒它。现改为：不再投递 TriggerSuspend，FSM 保持在 S_AWAIT_AGENT
+	// 自然等待（与其它非终态一致，Run() 主循环的 select 会持续等待下一个
+	// Trigger），由 watchHandoffCompletion 启动的后台 watcher 负责在委派
+	// 完成时投递 TriggerAgentHandoffDone 恢复执行。
 	if a.sm.Current() == types.AgentStateAwaitAgent {
 		if a.taskCheckpointRepo != nil {
 			err := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
@@ -118,7 +128,7 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 				slog.Error("kernel: persist handoff wait failed", "err", err)
 			}
 		}
-		a.asyncIntent(types.TriggerSuspend)
+		a.watchHandoffCompletion(a.sCtx.HandoffTaskID)
 		return "", nil, true
 	}
 
