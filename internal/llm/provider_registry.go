@@ -18,10 +18,10 @@ type providerEntry struct {
 	role        string // general | default | reasoning
 	displayName string // 用于 WebUI 展示的友好名称
 	cb          *circuitBreaker
+	winBreaker  *windowCircuitBreaker
 	mu          sync.RWMutex
 	p95ms       float64 // P95 延迟（指数移动平均）
 	successRate float64 // 成功率（指数移动平均，初始 1.0）
-
 }
 
 func newProviderEntry(name, displayName string, p protocol.Provider, cfg config.M1RouterThresholds) *providerEntry {
@@ -30,6 +30,7 @@ func newProviderEntry(name, displayName string, p protocol.Provider, cfg config.
 		displayName: displayName,
 		provider:    p,
 		cb:          newCircuitBreaker(cfg),
+		winBreaker:  newWindowCircuitBreaker(cfg),
 		p95ms:       200,
 		successRate: 1.0,
 	}
@@ -58,6 +59,7 @@ func (e *providerEntry) recordOutcome(success bool, onRecovery func()) {
 	defer e.mu.Unlock()
 	if success {
 		e.successRate = e.successRate*0.95 + 0.05
+		e.winBreaker.RecordSuccess()
 		if recovered := e.cb.RecordSuccess(); recovered && onRecovery != nil {
 			concurrent.SafeGo(context.Background(), "llm.provider_registry.on_recovery", func(context.Context) {
 				onRecovery()
@@ -66,6 +68,7 @@ func (e *providerEntry) recordOutcome(success bool, onRecovery func()) {
 	} else {
 		e.successRate = e.successRate * 0.95
 		e.cb.RecordFailure()
+		e.winBreaker.RecordFailure()
 	}
 }
 
@@ -155,7 +158,7 @@ func (r *ProviderRegistry) findBestByRole(role string) *providerEntry {
 	var chosen *providerEntry
 	bestScore := -1.0
 	for _, e := range r.entries {
-		if !e.cb.Allow() {
+		if !e.cb.Allow() || !e.winBreaker.Allow() {
 			continue
 		}
 		if e.role != role && e.role != "general" {
@@ -197,7 +200,7 @@ func (r *ProviderRegistry) PickProviderByRecordID(mID string) protocol.Provider 
 		if !strings.HasSuffix(name, "/"+suffix) {
 			continue
 		}
-		if !e.cb.Allow() {
+		if !e.cb.Allow() || !e.winBreaker.Allow() {
 			continue
 		}
 		if s := e.healthScore(); s > bestScore {
@@ -234,7 +237,7 @@ func (r *ProviderRegistry) best(req *types.InferRequest) *providerEntry {
 	var chosen *providerEntry
 	bestScore := -1.0
 	for _, e := range r.entries {
-		if !e.cb.Allow() {
+		if !e.cb.Allow() || !e.winBreaker.Allow() {
 			continue
 		}
 		caps := e.provider.Capabilities()
