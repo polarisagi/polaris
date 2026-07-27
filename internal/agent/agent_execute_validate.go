@@ -35,12 +35,12 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		//   若 LLM 已将摘要降级为 TaintMedium，节点级应反映该降级结果。
 		// 若所有节点均为 TaintNone（FastPath/空 DAG），网关自然跳过（< TaintMedium）。
 		ActiveTaintLevel: maxNodeTaintLevel(plan),
-		PolicyGate:       a.policyGate,
+		PolicyGate:       a.Security.PolicyGate,
 		ToolExecutor:     a.toolRegistry, // 用于 isReadOnlyTool 动态查询工具 Capability
 		AgentID:          a.sCtx.AgentID,
 		SessionID:        a.sCtx.SessionID,
 		SystemTier:       a.Config.SystemTier, // 由 M3 HardwareProbe 探测后通过 AgentConfig.SystemTier 注入
-		ReviewChecker:    a.taintReviewChecker,
+		ReviewChecker:    a.Security.TaintReviewChecker,
 	}
 
 	// [Task 11] 向 PolicyGate 填充 monthly_spend_usd 供 Cedar budget_cap 规则使用。
@@ -145,5 +145,5 @@ func (a *Agent) runL3Watchdog(ctx context.Context, vCtx *protocol.DAGValidationC
 	}
 
 	// 递归执行该 Effect，利用标准流程调用 LLM 并计费
-	return true, a.executeEffect(ctx, llmEff)
+	return true, a.executeEffect(ctx, llmEff).Err
 }

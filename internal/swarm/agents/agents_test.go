@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // ── NewGovernanceAgent ──────────────────────────────────────────────────────
@@ -33,10 +35,10 @@ func TestGovernanceAgent_Run_StopsOnContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() {
+	concurrent.SafeGo(ctx, "TestGovernanceAgent_Run_StopsOnContextCancel", func(_ context.Context) {
 		ga.Run(ctx)
 		close(done)
-	}()
+	})
 
 	cancel()
 	select {
@@ -185,10 +187,10 @@ func TestMemoryAgent_Run_StopsOnContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() {
+	concurrent.SafeGo(ctx, "TestMemoryAgent_Run_StopsOnContextCancel", func(_ context.Context) {
 		ma.Run(ctx)
 		close(done)
-	}()
+	})
 
 	cancel()
 	select {

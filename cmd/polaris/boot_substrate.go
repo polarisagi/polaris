@@ -187,7 +187,13 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	cfg.Thresholds = *thresholds
 
 	// ─── 0.34 硬件探针 & TBR ────────────────────────────────────────────────
-	autoConf, err := observability.NewAutoConfig()
+	var caution, warning, critical uint64
+	if cfg.Thresholds.M3Observability.MemCautionMB > 0 {
+		caution = uint64(cfg.Thresholds.M3Observability.MemCautionMB)
+		warning = uint64(cfg.Thresholds.M3Observability.MemWarningMB)
+		critical = uint64(cfg.Thresholds.M3Observability.MemCriticalMB)
+	}
+	autoConf, err := observability.NewAutoConfig(caution, warning, critical)
 	if err != nil {
 		slog.Warn("polaris: AutoConfig failed, using Tier0 defaults", "err", err)
 	}

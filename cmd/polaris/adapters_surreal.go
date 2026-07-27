@@ -88,7 +88,12 @@ func (a *knowledgeEmbedderAdapter) Embed(_ context.Context, text string) ([]floa
 
 // ─── colbertRerankerAdapter ────────────────────────────────────────────────────
 //
-// 将 search.Reranker（无 error 返回，[]search.ScoredFragment）适配为
+// Reranker 接口遵循 R1.4 在消费方定义。
+type Reranker interface {
+	Rerank(ctx context.Context, query string, docs []search.ScoredFragment) []search.ScoredFragment
+}
+
+// 将 Reranker（无 error 返回，[]search.ScoredFragment）适配为
 // protocol.Reranker（有 error 返回，[]types.CognitiveSearchResult），供 SurrealDB
 // 路径的 HybridRetrieverImpl.SetReranker 复用同一个 ApproximateColBERTReranker
 // 实例（2026-07-04 新增，任务2）。
@@ -97,7 +102,7 @@ func (a *knowledgeEmbedderAdapter) Embed(_ context.Context, text string) ([]floa
 // 见 internal/store/search/hybrid_retrieve.go），按 ID 而非 Content 做映射，
 // 避免内容重复的两个不同 chunk 互相覆盖。
 type colbertRerankerAdapter struct {
-	inner search.Reranker // 建议传入 search.NewSafeRerank(colbertReranker, 0) 已具备超时/panic 保护
+	inner Reranker // 建议传入 search.NewSafeRerank(colbertReranker, 0) 已具备超时/panic 保护
 }
 
 func (a *colbertRerankerAdapter) Rerank(ctx context.Context, query string, docs []types.CognitiveSearchResult) ([]types.CognitiveSearchResult, error) {

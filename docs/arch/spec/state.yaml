@@ -790,6 +790,10 @@ thresholds:
     semantic_cache_similarity_threshold: 0.95
     semantic_cache_ttl_hours: 24
     l1_target_hit_rate: 0.90
+    window_breaker_window_secs: 60
+    window_breaker_min_samples: 20
+    window_breaker_threshold: 0.5
+    window_breaker_cooldown_sec: 30
     re_eval_when:
       - circuit_breaker_failure_count: ["false_open_rate>0.05", "miss_open_drift_p95"]
       - pre_flight_cost_estimate_tolerance_pct: ["long_tail_drift>0.30"]

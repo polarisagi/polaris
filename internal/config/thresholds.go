@@ -36,6 +36,10 @@ type M1RouterThresholds struct {
 	SemanticCacheMaxEntries       int     `toml:"semantic_cache.max_entries"`           // 10000
 	SemanticCacheSimilarity       float64 `toml:"semantic_cache.similarity_threshold"`  // 0.95
 	SemanticCacheTTLHours         int     `toml:"semantic_cache.ttl_hours"`             // 24
+	WindowBreakerWindowSecs       int     `toml:"window_breaker_window_secs"`
+	WindowBreakerMinSamples       int     `toml:"window_breaker_min_samples"`
+	WindowBreakerThreshold        float64 `toml:"window_breaker_threshold"`
+	WindowBreakerCooldownSec      int     `toml:"window_breaker_cooldown_sec"`
 }
 
 type M2StorageThresholds struct {
@@ -265,6 +269,10 @@ func DefaultThresholds() Thresholds {
 			SemanticCacheMaxEntries:       10000,
 			SemanticCacheSimilarity:       0.95,
 			SemanticCacheTTLHours:         24,
+			WindowBreakerWindowSecs:       60,
+			WindowBreakerMinSamples:       20,
+			WindowBreakerThreshold:        0.5,
+			WindowBreakerCooldownSec:      30,
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,

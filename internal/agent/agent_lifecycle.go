@@ -43,23 +43,36 @@ func stateToTriggerMap() map[types.State]types.AgentTrigger {
 // 供 Effect 执行使用：LLMFillEffect 调 LLM 后走 OnSuccess/OnFailure 推进状态；DeterministicEffect 调用纯函数。
 func (a *Agent) toProtocolCtx() protocol.StateContext {
 	maxTaint := types.TaintNone
+	var sessionID string
+	var preferences map[string]string
+	var sagaLog []types.SagaStep
+	var initialMaxStepsLimit int
+
 	if a.sCtx != nil {
+		a.sCtx.Mu.RLock()
 		maxTaint = a.sCtx.GlobalTaintLevel
 		if lv := a.sCtx.RawIntentTS.Level(); lv > maxTaint {
 			maxTaint = lv
 		}
+		sessionID = a.sCtx.SessionID
+		preferences = a.sCtx.Preferences
+		sagaLog = a.sCtx.SagaLog
+		initialMaxStepsLimit = a.sCtx.InitialMaxStepsLimit
+		a.sCtx.Mu.RUnlock()
 	}
+
+	// End of RLock section
 	return protocol.StateContext{
 		AgentID:              a.ID,
-		SessionID:            a.sCtx.SessionID,
+		SessionID:            sessionID,
 		MaxTaintLevel:        maxTaint,
 		Mem:                  a.memory,
 		Tools:                a.toolRegistry,
 		Provider:             a.provider,
-		Policy:               a.policyGate,
-		Preferences:          a.sCtx.Preferences,
-		SagaLog:              a.sCtx.SagaLog,
-		InitialMaxStepsLimit: a.sCtx.InitialMaxStepsLimit,
+		Policy:               a.Security.PolicyGate,
+		Preferences:          preferences,
+		SagaLog:              sagaLog, // No type conversion needed, assuming SagaLog is same type
+		InitialMaxStepsLimit: initialMaxStepsLimit,
 	}
 }
 
@@ -119,11 +132,13 @@ func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
 		}
 	}
 
+	a.sCtx.Mu.Lock()
 	if len(exts) > 0 {
 		a.sCtx.InstalledExtensionsInfo = "Installed Extensions:\n" + strings.Join(exts, "\n")
 	} else {
 		a.sCtx.InstalledExtensionsInfo = ""
 	}
+	a.sCtx.Mu.Unlock()
 }
 
 // InjectExtensionActivator 注入按需扩展激活器。
@@ -281,8 +296,8 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 	// ctx.Value(protocol.CtxTaskIDKey{}) 同一命名空间（a.sCtx.SessionID，
 	// 不是 a.sCtx.TaskID——二者是不同字段，此处曾误用 TaskID 导致清理打不中
 	// 实际写入的桶，见上方 SessionID 的既有说明）。
-	if a.tokenVault != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
-		a.tokenVault.ClearTask(a.sCtx.SessionID)
+	if a.Security.TokenVault != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
+		a.Security.TokenVault.ClearTask(a.sCtx.SessionID)
 	}
 
 	a.refinePersonaAsync(ctx, current)

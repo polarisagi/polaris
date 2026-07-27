@@ -359,8 +359,8 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 	}
 	// anomalyFilter 恒非 nil（NewAgent 默认构造，见 agent.go），随任务域 ctx 一并
 	// 注入，供 internal/tool/tool.go checkAnomaly 读取（ADR-0051 关联接线）。
-	if a.anomalyFilter != nil {
-		ctx = context.WithValue(ctx, protocol.CtxAnomalyFilterKey{}, a.anomalyFilter)
+	if a.Security.AnomalyFilter != nil {
+		ctx = context.WithValue(ctx, protocol.CtxAnomalyFilterKey{}, a.Security.AnomalyFilter)
 	}
 	return ctx
 }
@@ -368,7 +368,7 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 // tokenizeMessagesForLLM 在消息送入 LLM Provider 前，对每条 message.Content 做 PII 令牌化。
 // piiDetector/tokenVault 任一为 nil 时直接跳过（不阻塞主流程，Tier0 无 Presidio 场景下的降级行为）。
 func (a *Agent) tokenizeMessagesForLLM(ctx context.Context, messages []types.Message) ([]types.Message, error) {
-	if a.piiDetector == nil || a.tokenVault == nil {
+	if a.Security.PIIDetector == nil || a.Security.TokenVault == nil {
 		return messages, nil
 	}
 	out := make([]types.Message, len(messages))
@@ -378,7 +378,7 @@ func (a *Agent) tokenizeMessagesForLLM(ctx context.Context, messages []types.Mes
 			continue
 		}
 		// RedactWithMode 会内部从 ctx 提取 CtxTaskIDKey 并调用 TokenizeForTask
-		tokenized, n, err := a.piiDetector.RedactWithMode(ctx, m.Content, "tokenize", nil, a.tokenVault)
+		tokenized, n, err := a.Security.PIIDetector.RedactWithMode(ctx, m.Content, "tokenize", nil, a.Security.TokenVault)
 		if err != nil {
 			slog.Error("agent: PII tokenization failed, fail-closed", "err", err)
 			// 选择 fail-closed 策略：如果 PII 提取失败，截断流程，防止明文 PII 流入 LLM。

@@ -118,14 +118,14 @@ type BudgetBreakdown struct {
 }
 
 // NewAutoConfig probes hardware and generates the complete system configuration.
-func NewAutoConfig() (*AutoConfig, error) {
+func NewAutoConfig(cautionMB, warningMB, criticalMB uint64) (*AutoConfig, error) {
 	totalRAM, availableRAM := probe.MemoryProbe()
 
 	ac := &AutoConfig{
 		Probe: probe.NewHardwareProbe(totalRAM, availableRAM),
 		TBR:   metrics.NewTokenBurnRate(),
 	}
-	ac.Guard = probe.NewOSMemoryGuard(totalRAM / (1024 * 1024))
+	ac.Guard = probe.NewOSMemoryGuard(totalRAM/(1024*1024), cautionMB, warningMB, criticalMB)
 	ac.Gate = probe.NewFeatureGate(ac.Probe, ac.Guard)
 	ac.computeConfig()
 	probe.SetGlobalFeatureGate(ac.Gate)

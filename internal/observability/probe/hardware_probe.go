@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/cpu"
-
-	"github.com/polarisagi/polaris/internal/config"
 )
 
 // Tier is the hardware capability level determined at startup.
@@ -167,23 +165,21 @@ const (
 	DegradationCritical                         // L3 临界
 )
 
-func NewOSMemoryGuard(totalRAMMB uint64) *OSMemoryGuard {
-	cfg := config.Get()
-	var caution, warning, critical uint64
-	if cfg != nil && cfg.Thresholds.M3Observability.MemCautionMB > 0 {
-		caution = uint64(cfg.Thresholds.M3Observability.MemCautionMB)
-		warning = uint64(cfg.Thresholds.M3Observability.MemWarningMB)
-		critical = uint64(cfg.Thresholds.M3Observability.MemCriticalMB)
-	} else {
-		caution = 1536
-		warning = 1024
-		critical = 512
+func NewOSMemoryGuard(totalRAMMB, cautionMB, warningMB, criticalMB uint64) *OSMemoryGuard {
+	if cautionMB == 0 {
+		cautionMB = 1536
+	}
+	if warningMB == 0 {
+		warningMB = 1024
+	}
+	if criticalMB == 0 {
+		criticalMB = 512
 	}
 
 	return &OSMemoryGuard{
-		criticalThresholdMB: critical,
-		warningThresholdMB:  warning,
-		cautionThresholdMB:  caution,
+		criticalThresholdMB: criticalMB,
+		warningThresholdMB:  warningMB,
+		cautionThresholdMB:  cautionMB,
 		slopeThreshold:      -100,
 		slopeInterval:       5,
 		totalRAMMB:          totalRAMMB,

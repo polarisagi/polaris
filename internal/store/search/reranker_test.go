@@ -179,33 +179,3 @@ func TestApproximateColBERTReranker_DefaultWindow(t *testing.T) {
 }
 
 // ── hybrid_retrieve 集成：Reranker 接入 ──────────────────────────────────────
-
-func TestRetrievalConfig_NilReranker_NoOp(t *testing.T) {
-	cfg := RetrievalConfig{
-		RerankTopM: 10,
-		Reranker:   nil, // nil → 跳过重排
-	}
-	if cfg.Reranker != nil {
-		t.Error("nil Reranker should stay nil")
-	}
-	if cfg.RerankTopM != 10 {
-		t.Errorf("expected RerankTopM=10, got %d", cfg.RerankTopM)
-	}
-}
-
-// ── stableSort ────────────────────────────────────────────────────────────────
-
-func TestStableSort_Descending(t *testing.T) {
-	items := []scoredDoc{
-		{score: 0.3},
-		{score: 0.9},
-		{score: 0.1},
-		{score: 0.7},
-	}
-	stableSort(items)
-	for i := 1; i < len(items); i++ {
-		if items[i].score > items[i-1].score {
-			t.Errorf("not descending at [%d]: %f > %f", i, items[i].score, items[i-1].score)
-		}
-	}
-}

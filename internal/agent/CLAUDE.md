@@ -48,3 +48,13 @@ LAMPolicyChecker、WorldModelUpdater。
 单个 Agent 实例的 FSM 转移必须串行（禁止并发触发 Dispatch）。
 多 Agent 并发由 `swarm` 层管理，不在 agent 包内处理。
 AgentContext 缓存 TTL 不超过 60s（防止 Prompt 版本晋升后继续使用旧版本）。
+
+**Effect 异步执行与串行保证**：
+FSM Dispatch 产生的 Effect（如 LLM 调用、系统操作）经 `executeEffect` 异步执行。
+主循环通过 `effectDone` channel（缓冲 1）接收 `EffectResult`。
+`effectRunning` (atomic.Bool) 强制保证同一时刻仅有一个 Effect 在后台执行，若上一个未完成则跳过新产生的 Effect（保守策略），维持与 FSM 串行语义的一致性。
+
+## 结构体字段分组设计 (SecurityBundle)
+
+为避免 `Agent` 结构体过于臃肿（超过 40+ 字段），相关组件按业务领域内聚分组。
+`SecurityBundle` 负责将所有安全策略、过滤器和脱敏器（`PolicyGate`, `TaintReviewChecker`, `TokenVault`, `PIIDetector`, `AnomalyFilter`）封装在一起。此设计在不改变既有依赖注入逻辑的前提下，显著改善了长生命周期对象的可读性。

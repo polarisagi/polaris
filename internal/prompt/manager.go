@@ -50,6 +50,22 @@ func (pm *Manager) resolveConfigDir() string {
 	return pm.configDir
 }
 
+// safePromptName 验证 name 是合法的纯文件名，防止路径穿越攻击。
+// 拒绝含路径分隔符、`..` 组件、空字符串。
+func safePromptName(name string) error {
+	if name == "" {
+		return apperr.New(apperr.CodeInvalidInput, "prompt name cannot be empty")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return apperr.New(apperr.CodeInvalidInput, "prompt name contains path separator")
+	}
+	clean := filepath.Clean(name)
+	if clean != name || strings.Contains(clean, "..") {
+		return apperr.New(apperr.CodeInvalidInput, "prompt name contains illegal path component")
+	}
+	return nil
+}
+
 // SetOptimizer 注入 prompt.Manager 所依赖的 PromptOptimizer 引擎（由外层构造后装配）。
 func (pm *Manager) SetOptimizer(opt *optimizer.PromptOptimizer) {
 	pm.optimizer = opt
@@ -116,6 +132,9 @@ func (pm *Manager) GetSoulMD() string {
 
 // WriteUserPrompt 将用户编辑的提示词写入 config/prompts/{name}。
 func (pm *Manager) WriteUserPrompt(name, content string) error {
+	if err := safePromptName(name); err != nil {
+		return err
+	}
 	dir := filepath.Join(pm.resolveConfigDir(), "prompts")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WriteUserPrompt", err)
@@ -128,6 +147,9 @@ func (pm *Manager) WriteUserPrompt(name, content string) error {
 
 // DeleteUserPrompt 删除用户自定义提示词文件，恢复到 embedded 默认。
 func (pm *Manager) DeleteUserPrompt(name string) error {
+	if err := safePromptName(name); err != nil {
+		return err
+	}
 	path := filepath.Join(pm.resolveConfigDir(), "prompts", name)
 	err := os.Remove(path)
 	if os.IsNotExist(err) {
@@ -151,7 +173,7 @@ func (pm *Manager) ReadPromptDefault(name string) string {
 // 从 configs/prompts/platform/{platform}.md 加载（embedded，只读）。
 func (pm *Manager) PlatformHintFor(platform string) string {
 	key := strings.ToLower(strings.TrimSpace(platform))
-	if key == "" {
+	if key == "" || strings.ContainsAny(key, `/\`) {
 		return ""
 	}
 	return pm.ReadPrompt("platform/"+key+".md", "")
@@ -160,6 +182,9 @@ func (pm *Manager) PlatformHintFor(platform string) string {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func (pm *Manager) loadUserPromptFile(name string) string {
+	if err := safePromptName(name); err != nil {
+		return ""
+	}
 	b, err := os.ReadFile(filepath.Join(pm.resolveConfigDir(), "prompts", name))
 	if err != nil {
 		return ""

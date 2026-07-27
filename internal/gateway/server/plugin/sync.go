@@ -14,6 +14,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -34,8 +35,10 @@ type SkillFrontmatter struct {
 
 // pullOrClone 通过 downloader.GitCloneOrPull 同步单个市场仓库。
 // 在中国大陆网络下自动走 ghproxy 加速。
-func pullOrClone(repoURL, mpDir string) (available bool, updated bool) {
-	return downloader.GitCloneOrPull(context.Background(), nil, repoURL, mpDir)
+func pullOrClone(ctx context.Context, repoURL, mpDir string) (available bool, updated bool) {
+	return downloader.GitCloneOrPull(ctx, nil, func(url string) error {
+		return network.ValidateGitURL(ctx, url)
+	}, repoURL, mpDir)
 }
 
 // syncMarketplace 同步单个市场
@@ -54,7 +57,7 @@ func (h *PluginHandler) syncMarketplace(ctx context.Context, mp protocol.Marketp
 			updated = true
 		}
 	} else {
-		available, updated = pullOrClone(mp.RepoURL, mpDir)
+		available, updated = pullOrClone(ctx, mp.RepoURL, mpDir)
 	}
 
 	if !available {

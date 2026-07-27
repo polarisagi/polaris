@@ -38,8 +38,7 @@ func TestTokenizeMessagesForLLM(t *testing.T) {
 	detector := guard.NewPIIDetector()
 	vault := guard.NewPIITokenVault()
 	a := &Agent{
-		piiDetector: detector,
-		tokenVault:  vault,
+		Security: SecurityBundle{PIIDetector: detector, TokenVault: vault},
 	}
 
 	taskID := "task-123"
@@ -89,6 +88,7 @@ func TestTokenizeMessagesForLLM(t *testing.T) {
 // CtxTaskIDKey，所有请求的 PII token 都退化写入共享的空 taskID 命名空间。
 func TestWithTaskScopeCtx_InjectsSessionID(t *testing.T) {
 	a := &Agent{
+		Security: SecurityBundle{PIIDetector: guard.NewPIIDetector(), TokenVault: guard.NewPIITokenVault()},
 		sCtx: &fsm.StateContext{
 			SessionID: "session-abc",
 			TaskID:    "blackboard-task-xyz", // 故意设为不同值，验证不会被误用
@@ -109,7 +109,8 @@ func TestWithTaskScopeCtx_InjectsSessionID(t *testing.T) {
 // TestWithTaskScopeCtx_EmptySessionID_NoInjection 验证 SessionID 为空时不注入，
 // 不覆盖调用方已有的 ctx 值（例如脱离完整 Agent 生命周期的调用场景）。
 func TestWithTaskScopeCtx_EmptySessionID_NoInjection(t *testing.T) {
-	a := &Agent{sCtx: &fsm.StateContext{}}
+	a := &Agent{Security: SecurityBundle{PIIDetector: guard.NewPIIDetector(), TokenVault: guard.NewPIITokenVault()},
+		sCtx: &fsm.StateContext{}}
 
 	ctx := a.withTaskScopeCtx(context.Background())
 
@@ -128,9 +129,8 @@ func TestPIIOpaqueTokenIntegration(t *testing.T) {
 	detector := guard.NewPIIDetector()
 	vault := guard.NewPIITokenVault()
 	a := &Agent{
-		piiDetector: detector,
-		tokenVault:  vault,
-		sCtx:        &fsm.StateContext{SessionID: "session-integration"},
+		Security: SecurityBundle{PIIDetector: detector, TokenVault: vault},
+		sCtx:     &fsm.StateContext{SessionID: "session-integration"},
 	}
 
 	// 1. Agent Tokenize：ctx 经 withTaskScopeCtx 注入 SessionID 命名空间

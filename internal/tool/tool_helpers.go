@@ -147,8 +147,17 @@ func (rl *rateLimiter) Allow() bool {
 			rl.tokens.Store(rl.maxQPS)
 		}
 	}
-	// Add(-1) 是原子操作；负值代表本窗口超限，不还回——避免多 goroutine 同时还回导致误放行。
-	return rl.tokens.Add(-1) >= 0
+	// CAS 取令牌：cur<=0 时快速拒绝，CompareAndSwap 竞争失败立即重试。
+	// 相比 Add(-1)，避免并发下 tokens 无限下溢至 int64 最小值。
+	for {
+		cur := rl.tokens.Load()
+		if cur <= 0 {
+			return false
+		}
+		if rl.tokens.CompareAndSwap(cur, cur-1) {
+			return true
+		}
+	}
 }
 
 // ErrToolNotFound 工具未注册时返回的哨兵错误。

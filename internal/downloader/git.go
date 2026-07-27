@@ -1,7 +1,6 @@
 package downloader
 
 import (
-	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"context"
@@ -18,11 +17,13 @@ import (
 //   - available=false：所有尝试均失败（网络不通或仓库不存在）
 //   - available=true, updated=false：仓库已存在且无新提交
 //   - available=true, updated=true：成功获取更新
-func GitCloneOrPull(ctx context.Context, client *http.Client, repoURL, destDir string) (available, updated bool) {
+func GitCloneOrPull(ctx context.Context, client *http.Client, validator URLValidator, repoURL, destDir string) (available, updated bool) {
 	// exec git 子进程直接使用 OS 网络栈，绕过 SafeDialer DialContext，需在 Go 层提前拦截。
-	if err := network.ValidateGitURL(ctx, repoURL); err != nil {
-		slog.Error("downloader: git URL blocked by SSRF guard", "url", repoURL, "err", err)
-		return false, false
+	if validator != nil {
+		if err := validator(repoURL); err != nil {
+			slog.Error("downloader: git URL blocked by validator", "url", repoURL, "err", err)
+			return false, false
+		}
 	}
 
 	gitDir := destDir + "/.git"

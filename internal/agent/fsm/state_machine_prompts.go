@@ -32,11 +32,18 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 	}
 
 	b := prompt.NewPromptBuilder()
-	if sCtx.SysEnvSnapshot != "" {
-		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
+	sCtx.Mu.RLock()
+	sysEnvSnapshot := sCtx.SysEnvSnapshot
+	extInfo := sCtx.InstalledExtensionsInfo
+	rawIntent := sCtx.RawIntentTS
+	epochTracker := sCtx.EpochTracker
+	sCtx.Mu.RUnlock()
+
+	if sysEnvSnapshot != "" {
+		b.WriteSystemEnvironment(sysEnvSnapshot)
 	}
 	tmpl, _ := configs.LoadPromptTemplate("kernel/perceive.md", map[string]any{
-		"ExtensionsSection": sCtx.InstalledExtensionsInfo,
+		"ExtensionsSection": extInfo,
 	})
 	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
 		tmpl,
@@ -44,10 +51,12 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 		"system_prompt",
 	))
 	b.WriteInstruction(safeInst)
-	b.WriteUserData(sCtx.RawIntentTS)
+	b.WriteUserData(rawIntent)
 	msgs := b.Build()
-	if sCtx.EpochTracker != nil {
-		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
+	if epochTracker != nil {
+		sCtx.Mu.Lock()
+		sCtx.ContextEpoch = epochTracker.check(msgs)
+		sCtx.Mu.Unlock()
 	}
 	return msgs
 }
@@ -83,8 +92,15 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	}
 
 	b := prompt.NewPromptBuilder()
-	if sCtx.SysEnvSnapshot != "" {
-		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
+	sCtx.Mu.RLock()
+	sysEnvSnapshot := sCtx.SysEnvSnapshot
+	extInfo := sCtx.InstalledExtensionsInfo
+	groundingGap := sCtx.GroundingGap
+	preferences := sCtx.Preferences
+	sCtx.Mu.RUnlock()
+
+	if sysEnvSnapshot != "" {
+		b.WriteSystemEnvironment(sysEnvSnapshot)
 	}
 
 	// TaskID 激活作用域同源于 pCtx.SessionID（与 agent_execute.go 的
@@ -97,11 +113,11 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 
 	tmpl, _ := configs.LoadPromptTemplate("kernel/plan.md", map[string]any{
 		"ToolsSection":      sm.cb.BuildToolListSection(toolListCtx, nil),
-		"ExtensionsSection": sCtx.InstalledExtensionsInfo,
+		"ExtensionsSection": extInfo,
 	})
 
-	if sCtx.GroundingGap != "" {
-		tmpl += "\n\nCritical Knowledge Gap:\n" + sCtx.GroundingGap + "\n(Please address this gap explicitly in the plan.)"
+	if groundingGap != "" {
+		tmpl += "\n\nCritical Knowledge Gap:\n" + groundingGap + "\n(Please address this gap explicitly in the plan.)"
 	}
 
 	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
@@ -114,14 +130,14 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	mode := "auto_review"
 	anyAppEnabled := false
 	chromeEnabled := false
-	if sCtx.Preferences != nil {
-		if v, ok := sCtx.Preferences["computer_use_mode"]; ok && v != "" {
+	if preferences != nil {
+		if v, ok := preferences["computer_use_mode"]; ok && v != "" {
 			mode = v
 		}
-		if v, ok := sCtx.Preferences["computer_any_app_enabled"]; ok {
+		if v, ok := preferences["computer_any_app_enabled"]; ok {
 			anyAppEnabled = v == "true"
 		}
-		if v, ok := sCtx.Preferences["computer_chrome_enabled"]; ok {
+		if v, ok := preferences["computer_chrome_enabled"]; ok {
 			chromeEnabled = v == "true"
 		}
 	}

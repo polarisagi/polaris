@@ -1,6 +1,8 @@
 package plugin
 
 import (
+	"context"
+
 	"github.com/polarisagi/polaris/internal/store/repo"
 
 	"database/sql"
@@ -36,7 +38,7 @@ func TestDiscoverMarketplaceEntries(t *testing.T) {
 
 func TestPullOrClone(t *testing.T) {
 	downloader.Configure("off", nil)
-	pullOrClone("http://127.0.0.1:0/bad", filepath.Join(t.TempDir(), "mpDir"))
+	pullOrClone(context.Background(), "http://127.0.0.1:0/bad", filepath.Join(t.TempDir(), "mpDir"))
 }
 
 func TestSyncMarketplace(t *testing.T) {

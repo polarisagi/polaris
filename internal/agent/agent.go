@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
@@ -21,8 +22,15 @@ import (
 	"github.com/polarisagi/polaris/internal/sysinfo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// EffectResult 承载 executeEffect 的异步完成结果。
+type EffectResult struct {
+	Transition types.AgentTrigger // 执行完成后应触发的 FSM 事件
+	Err        error
+}
 
 // ============================================================================
 // Agent 运行循环（Suspend-on-Idle 语义）
@@ -30,47 +38,43 @@ import (
 
 // Agent 是系统核心执行单元——一个 goroutine，空闲时挂起。
 type Agent struct {
-	ID                 string
-	taskRepo           protocol.TaskReadRepository
-	intent             chan types.AgentTrigger
-	sm                 *fsm.StateMachine
-	sCtx               *fsm.StateContext
-	Config             AgentConfig
-	ctx                context.Context
-	cancel             context.CancelFunc
-	provider           protocol.Provider             // LLM 调用入口（由 M1 提供）
-	policyGate         protocol.PolicyGate           // Cedar 策略引擎（由 M11 提供）
-	hitl               protocol.HITL                 // 人工审批网关
-	taintReviewChecker protocol.TaintReviewChecker   // S_VALIDATE TaintGate 人工复核豁免查询（M11 §2.5）；nil 时跳过
-	toolRegistry       protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
-	catalog            catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
-	memory             protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
-	worldModel         WorldModel                    // 认知世界模型，nil 时安全降级
-	prm                *DefaultPRM                   // 可选；nil 时跳过多候选打分
-	blindZoneDetector  BlindZoneDetector             // 可选；nil 时跳过盲区检查
-	scorer             *stepScorer                   // Adaptive Max-Steps 打分器
-	whisperChan        <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
-	whisperSendChan    chan<- protocol.MemoryWhisper // PlannerPool 推送端
-	plannerSpawner     func(ctx context.Context, goal, taskType string, provider protocol.Provider)
-	outboxWriter       protocol.OutboxWriter
-	piiVault           *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
-	extQuerier         protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
-	toolCallRecorder   ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
-	memInjector        MemoryInjector            // NEW: 组装前主动记忆注入
-	codeAct            CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
-	skillCache         ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
-	skillExecutor      protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
-	assembler          *agentctx.Assembler       // CC-3 ContextAssembler
-	lamEngine          LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
-	surpriseCalc       SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
-	terminalCallback   func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
-	tokenVault         *guard.PIITokenVault         // PII OpaqueToken 会话级可逆令牌库
-	piiDetector        *guard.PIIDetector           // PII 检测与脱敏器
-	dagRunner          DAGRunner                    // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
-	dagValidator       DAGValidator                 // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
-	handoffPoster      HandoffPoster                // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
-	personaRefiner     *agentctx.PersonaRefiner     // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
-	anomalyFilter      *guard.AnomalyDistanceFilter // OWASP LLM08 输入异常检测（M11 §2.2），按会话隔离；NewAgent 默认构造
+	ID                string
+	taskRepo          protocol.TaskReadRepository
+	intent            chan types.AgentTrigger
+	sm                *fsm.StateMachine
+	sCtx              *fsm.StateContext
+	Config            AgentConfig
+	ctx               context.Context
+	cancel            context.CancelFunc
+	provider          protocol.Provider             // LLM 调用入口（由 M1 提供）
+	Security          SecurityBundle                // 安全组件包（GR-6-006）
+	hitl              protocol.HITL                 // 人工审批网关
+	toolRegistry      protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
+	catalog           catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
+	memory            protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
+	worldModel        WorldModel                    // 认知世界模型，nil 时安全降级
+	prm               *DefaultPRM                   // 可选；nil 时跳过多候选打分
+	blindZoneDetector BlindZoneDetector             // 可选；nil 时跳过盲区检查
+	scorer            *stepScorer                   // Adaptive Max-Steps 打分器
+	whisperChan       <-chan protocol.MemoryWhisper // 接收 MemoryAgent 耳语（只读）
+	whisperSendChan   chan<- protocol.MemoryWhisper // PlannerPool 推送端
+	plannerSpawner    func(ctx context.Context, goal, taskType string, provider protocol.Provider)
+	outboxWriter      protocol.OutboxWriter
+	piiVault          *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
+	extQuerier        protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
+	toolCallRecorder  ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
+	memInjector       MemoryInjector            // NEW: 组装前主动记忆注入
+	codeAct           CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
+	skillCache        ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
+	skillExecutor     protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）
+	assembler         *agentctx.Assembler       // CC-3 ContextAssembler
+	lamEngine         LAMPolicyChecker          // LAM GUI 自动化引擎策略检查（R3）；nil 时跳过 Cedar policy 预检
+	surpriseCalc      SurpriseReader            // 可选；非 nil 时替换 ComputeBasic 基础版路由
+	terminalCallback  func(ctx context.Context, taskID, taskType string, replanCount int, success bool)
+	dagRunner         DAGRunner                // 单 Agent 内工具链 DAG 执行引擎；NewAgentWithDefaults 默认注入
+	dagValidator      DAGValidator             // S_VALIDATE 四层校验管线；NewAgentWithDefaults 默认注入
+	handoffPoster     HandoffPoster            // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
+	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 
 	// cwm M04 §7 热路径上下文窗口管理（见 budget.go ContextWindowManager 与
 	// agent_context_compaction.go）；NewAgent 默认构造（90000 token），可经
@@ -119,6 +123,9 @@ type Agent struct {
 	doneOnce sync.Once
 
 	taskCheckpointRepo protocol.TaskCheckpointRepository
+
+	effectDone    chan EffectResult // effect 异步完成回传（缓冲 1，防止 goroutine 泄漏）
+	effectRunning atomic.Bool       // 串行保证：同一时刻只有一个 effect 在执行
 }
 
 // Done 返回一个在 Run() 循环真正退出时关闭的 channel。
@@ -129,6 +136,15 @@ func (a *Agent) Done() <-chan struct{} {
 // GetStateMachine 返回 Agent 内部的 StateMachine
 func (a *Agent) GetStateMachine() *fsm.StateMachine {
 	return a.sm
+}
+
+// SecurityBundle 将离散的安全组件打包。
+type SecurityBundle struct {
+	PolicyGate         protocol.PolicyGate          // Cedar 策略引擎（由 M11 提供）
+	TaintReviewChecker protocol.TaintReviewChecker  // S_VALIDATE TaintGate 人工复核豁免查询（M11 §2.5）；nil 时跳过
+	TokenVault         *guard.PIITokenVault         // PII OpaqueToken 会话级可逆令牌库
+	PIIDetector        *guard.PIIDetector           // PII 检测与脱敏器
+	AnomalyFilter      *guard.AnomalyDistanceFilter // OWASP LLM08 输入异常检测（M11 §2.2），按会话隔离；NewAgent 默认构造
 }
 
 type AgentConfig struct {
@@ -189,8 +205,11 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, provider protocol
 		// 任何调用方构造过该 filter 并写入 ctx，OWASP LLM08 输入异常检测在生产
 		// 环境从未真正生效（checkAnomaly 的 ok 断言恒为 false，静默直接放行）。
 		// 每个 Agent（= 每个会话）持有独立实例，与其 docstring "按会话隔离"一致。
-		anomalyFilter: guard.NewAnomalyDistanceFilter(0),
-		cwm:           NewContextWindowManager(0),
+		Security: SecurityBundle{
+			AnomalyFilter: guard.NewAnomalyDistanceFilter(0),
+		},
+		cwm:        NewContextWindowManager(0),
+		effectDone: make(chan EffectResult, 1),
 	}
 	agent.sm.SetIntentDispatcher(agent.asyncIntent)
 	return agent
@@ -300,19 +319,26 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer idleTimer.Stop()
 
 	for {
-		// 动态加载已安装插件信息
-		a.refreshInstalledExtensions(ctx)
+		// 动态加载已安装插件信息 (仅当无 effect 运行时安全刷新，避免与 executeEffect 并发竞争)
+		if !a.effectRunning.Load() {
+			a.refreshInstalledExtensions(ctx)
+		}
 
 		select {
 		case trigger := <-a.intent:
 			idleTimer.Reset(time.Duration(idleTimeout) * time.Second)
 			// Adaptive Max-Steps: 步骤计数 + 预算熔断
+			a.sCtx.Mu.Lock()
 			a.sCtx.StepsUsed++
-			if a.sCtx.MaxStepsLimit > 0 && a.sCtx.StepsUsed > a.sCtx.MaxStepsLimit {
+			limit := a.sCtx.MaxStepsLimit
+			used := a.sCtx.StepsUsed
+			a.sCtx.Mu.Unlock()
+
+			if limit > 0 && used > limit {
 				a.sm.ForceState(types.AgentStateFailed)
 				return apperr.New(apperr.CodeInternal,
 					fmt.Sprintf("MAX_STEPS_EXCEEDED: steps %d > limit %d",
-						a.sCtx.StepsUsed, a.sCtx.MaxStepsLimit))
+						used, limit))
 			}
 
 			// GR-4-004: 消费 pendingRedirectCh——如果有 InterruptRedirect 请求在途，
@@ -321,11 +347,13 @@ func (a *Agent) Run(ctx context.Context) error {
 				select {
 				case redirect := <-a.pendingRedirectCh:
 					if redirect != "" {
+						a.sCtx.Mu.Lock()
 						a.sCtx.RawIntentTS = taint.NewTaintedString(
 							redirect,
 							taint.TaintSource{OriginTaintLevel: types.TaintHigh},
 							"user_interrupt_redirect",
 						)
+						a.sCtx.Mu.Unlock()
 					}
 				default:
 				}
@@ -346,12 +374,37 @@ func (a *Agent) Run(ctx context.Context) error {
 
 			// 执行 Effects: LLMFillEffect → 调 LLM；DeterministicEffect → 直接执行
 			for _, effect := range effects {
-				if err := a.executeEffect(ctx, effect); err != nil {
-					return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
+				// 串行保证：若上一个 effect 未完成，跳过本次（保守策略）
+				if !a.effectRunning.CompareAndSwap(false, true) {
+					slog.Warn("agent: effect still running, skipping new effect dispatch")
+					continue
 				}
+				concurrent.SafeGo(ctx, "agent.executeEffect", func(execCtx context.Context) {
+					defer a.effectRunning.Store(false)
+					result := a.executeEffect(execCtx, effect)
+					select {
+					case a.effectDone <- result:
+					case <-execCtx.Done():
+					}
+				})
 			}
 
 			// 终态检查
+			current := a.sm.Current()
+			if current == types.AgentStateComplete || current == types.AgentStateFailed {
+				a.handleTerminalState(ctx, current)
+				return nil
+			}
+
+		case result := <-a.effectDone:
+			if result.Err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "Agent.Run", result.Err)
+			}
+			if result.Transition != 0 {
+				a.asyncIntent(result.Transition)
+			}
+
+			// 终态检查 (可能被 effect transition 修改)
 			current := a.sm.Current()
 			if current == types.AgentStateComplete || current == types.AgentStateFailed {
 				a.handleTerminalState(ctx, current)
