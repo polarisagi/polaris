@@ -66,6 +66,8 @@ const (
 
 // StateContext 穿越状态机各转移的共享上下文（与 protocol.StateContext 互补）。
 type StateContext struct {
+	Mu sync.RWMutex
+
 	AgentID   string
 	SessionID string
 	TaskID    string // 当前认领的 Blackboard task_id；由 Worker 在 Run() 前通过 SetTaskID() 注入

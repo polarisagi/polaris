@@ -32,15 +32,19 @@ func recordExplainBits(ctx context.Context, bits uint8) {
 	}
 }
 
+type ragReranker interface {
+	Rerank(ctx context.Context, query string, docs []search.ScoredFragment) []search.ScoredFragment
+}
+
 // DefaultHybridRetriever 实现了 HybridRetriever
 type DefaultHybridRetriever struct {
 	engine   *search.HybridSearchEngine
-	reranker search.Reranker // 可 nil；FeatureDeepRAG 门控下注入 ApproximateColBERTReranker（2026-07-04 补齐）
+	reranker ragReranker // 可 nil；FeatureDeepRAG 门控下注入 ApproximateColBERTReranker（2026-07-04 补齐）
 }
 
 // NewDefaultHybridRetriever 创建默认检索器。reranker 可传 nil（等价于不重排，
 // 与改造前行为一致）。
-func NewDefaultHybridRetriever(router *store.StorageRouter, embedder search.Embedder, reranker search.Reranker) *DefaultHybridRetriever {
+func NewDefaultHybridRetriever(router *store.StorageRouter, embedder search.Embedder, reranker ragReranker) *DefaultHybridRetriever {
 	return &DefaultHybridRetriever{
 		engine:   search.NewHybridSearchEngine(router, embedder),
 		reranker: reranker,
@@ -66,7 +70,6 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope
 		OversampleN:  3,
 		RerankTopM:   50,
 		FinalTopK:    config.FinalTopK,
-		Reranker:     r.reranker,
 	}
 	if searchConfig.FinalTopK <= 0 {
 		searchConfig.FinalTopK = 5
@@ -75,6 +78,18 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope
 	fragments, err := r.engine.Search(ctx, query, []byte("chunk:"), searchConfig)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "DefaultHybridRetriever.Search", err)
+	}
+
+	if r.reranker != nil && searchConfig.RerankTopM > 0 && len(fragments) > 0 {
+		candidates := fragments
+		if len(candidates) > searchConfig.RerankTopM {
+			candidates = candidates[:searchConfig.RerankTopM]
+		}
+		fragments = r.reranker.Rerank(ctx, query, candidates)
+	}
+
+	if len(fragments) > searchConfig.FinalTopK {
+		fragments = fragments[:searchConfig.FinalTopK]
 	}
 
 	var results []types.ScoredFragment

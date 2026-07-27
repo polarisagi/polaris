@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -35,6 +37,7 @@ type WorkspaceManager struct {
 	gcCh      chan string  // Background GC queue
 	mu        sync.RWMutex // 保护 manifests map 并发读写（GR-6-002）
 	totalSize int64        // 所有 manifest TotalSize 之和，原子更新（GR-6-003）
+	sf        singleflight.Group
 }
 
 // NewWorkspaceManager 创建 WorkspaceManager，rootDir 不存在时自动创建。
@@ -183,24 +186,44 @@ func (wm *WorkspaceManager) Create(taskID string) (string, error) {
 		return "", apperr.New(apperr.CodeInvalidInput, "invalid taskID")
 	}
 
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
+	wm.mu.RLock()
 	if _, exists := wm.manifests[key]; exists {
+		wm.mu.RUnlock()
 		return filepath.Join(wm.rootDir, key), nil // 幂等
 	}
+	wm.mu.RUnlock()
+
 	dir := filepath.Join(wm.rootDir, key)
-	// MkdirAll 是磁盘 IO，在锁内执行。由于 Create 不是高频热路径（每个任务仅创建一次），
-	// 持锁期间短暂 IO 可接受。相比在锁外做 IO 后再锁内写 map 的 TOCTOU 风险，
-	// 当前方式更安全：避免两个并发 Create(同一 taskID) 同时通过幂等检查然后双重创建。
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+
+	_, err, _ := wm.sf.Do(key, func() (any, error) {
+		// Double check inside singleflight
+		wm.mu.RLock()
+		if _, exists := wm.manifests[key]; exists {
+			wm.mu.RUnlock()
+			return nil, nil
+		}
+		wm.mu.RUnlock()
+
+		// MkdirAll 是磁盘 IO，在锁外执行，避免阻塞其他任务的 Create/GC
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.Create: mkdir", err)
+		}
+		createdAt := time.Now().Unix()
+		writeCreatedAtMarker(dir, createdAt) // D-B6-03：持久化真实创建时间
+
+		wm.mu.Lock()
+		defer wm.mu.Unlock()
+		if _, exists := wm.manifests[key]; !exists {
+			wm.manifests[key] = &WorkspaceManifest{
+				TaskID:    taskID,
+				CreatedAt: createdAt,
+			}
+		}
+		return nil, nil
+	})
+
+	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.Create", err)
-	}
-	createdAt := time.Now().Unix()
-	writeCreatedAtMarker(dir, createdAt) // D-B6-03：持久化真实创建时间，供重启后 rebuildManifests 读取
-	wm.manifests[key] = &WorkspaceManifest{
-		TaskID:    taskID,
-		CreatedAt: createdAt,
 	}
 	return dir, nil
 }

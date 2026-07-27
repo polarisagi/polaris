@@ -41,8 +41,8 @@ func (a *Agent) SetPIIVault(vault *agentctx.SessionPIIVault) {
 // 在主 Agent Kernel 构造完成后、供 Supervisor 启动前调用。
 // detector/vault 均允许为 nil（优雅降级为不进行输入令牌化）。
 func (a *Agent) InjectPIITokenizer(detector *guard.PIIDetector, vault *guard.PIITokenVault) {
-	a.piiDetector = detector
-	a.tokenVault = vault
+	a.Security.PIIDetector = detector
+	a.Security.TokenVault = vault
 }
 
 // SetExtQuerier 注入用于查询已安装扩展的 SQLQuerier。
@@ -134,7 +134,7 @@ func (a *Agent) InjectBlindZoneDetector(d BlindZoneDetector) {
 }
 
 // InjectPolicyGate 注入 Cedar PolicyGate（允许运行时替换，例如用于单元测试注入 mock）。
-func (a *Agent) InjectPolicyGate(pg protocol.PolicyGate) { a.policyGate = pg }
+func (a *Agent) InjectPolicyGate(pg protocol.PolicyGate) { a.Security.PolicyGate = pg }
 
 // InjectHITL 注入人工审批网关。
 func (a *Agent) InjectHITL(hitl protocol.HITL) { a.hitl = hitl }
@@ -143,7 +143,9 @@ func (a *Agent) InjectHITL(hitl protocol.HITL) { a.hitl = hitl }
 // （M11 §2.5 SanitizeByUserReview 触发点，2026-07-14 新增；复用
 // internal/security/token.ExemptionVault，与 tool.go 出口污点检查共享同一实例）。
 // nil 时该降级路径不生效，不影响既有拦截行为（fail-closed）。
-func (a *Agent) InjectTaintReviewChecker(c protocol.TaintReviewChecker) { a.taintReviewChecker = c }
+func (a *Agent) InjectTaintReviewChecker(c protocol.TaintReviewChecker) {
+	a.Security.TaintReviewChecker = c
+}
 
 // InjectWhisperChan 注入耳语接收通道（由顶层 wire 调用，可 nil）。
 func (a *Agent) InjectWhisperChan(ch <-chan protocol.MemoryWhisper) {

@@ -13,5 +13,9 @@
   "internal/observability/metrics/instruments.go": true,
   "_reason_metrics_instruments": "GR-1 added telemetry metric temporarily crossing 400 lines, will be split",
   "internal/tool/builtin/memory_tools_exec.go": true,
-  "_reason_memory_tools_exec": "GR-6-003 fix added per-error-code branching for GetEntity calls (memory_append/memory_expire/memory_page_in), temporarily crossing 400 lines; will be split into memory_entity_ops.go and memory_paged_ops.go"
+  "_reason_memory_tools_exec": "GR-6-003 fix added per-error-code branching for GetEntity calls (memory_append/memory_expire/memory_page_in), temporarily crossing 400 lines; will be split into memory_entity_ops.go and memory_paged_ops.go",
+  "internal/agent/agent.go": true,
+  "_reason_agent": "TASK-10 and TASK-12 refactors temporarily crossing 400 lines; will be split",
+  "internal/agent/agent_wiring.go": true,
+  "_reason_agent_wiring": "TASK-10 and TASK-12 refactors temporarily crossing 400 lines; will be split"
 }

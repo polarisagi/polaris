@@ -11,15 +11,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-// Reranker 后处理重排接口。NilReranker 是默认零值实现（透传）。
-//
-// 架构文档：docs/arch/10-Knowledge-RAG-深度选型.md §2.2（Late-Interaction 神经重排）
-// 前置条件：ColBERT 模型需 onnxruntime-go 生产就绪后接入；
-//
-//	在此之前默认使用 NilReranker 透传（不影响 RRF 排序结果）。
-type Reranker interface {
-	Rerank(ctx context.Context, query string, docs []ScoredFragment) []ScoredFragment
-}
+// Reranker 接口已被移除（遵循 R1.4），由各个消费方自行定义私有接口。
 
 // NilReranker 透传重排器（默认），不修改文档顺序。
 type NilReranker struct{}
@@ -149,17 +141,22 @@ func (r *ApproximateColBERTReranker) tokenVecs(text string) [][]float32 {
 	return vecs
 }
 
-// SafeRerank 包装任意 Reranker，加超时 + panic 恢复双重保护（2026-07-04 新增，
+// internalReranker 是 SafeRerank 内部使用的接口。
+type internalReranker interface {
+	Rerank(ctx context.Context, query string, docs []ScoredFragment) []ScoredFragment
+}
+
+// SafeRerank 包装任意满足内部重排签名的实现，加超时 + panic 恢复双重保护（2026-07-04 新增，
 // 任务2审计修复：ApproximateColBERTReranker 本身没有超时/panic 保护，一旦
 // Embedder 调用挂起或 embedder.Embed 内部 panic，会直接拖垮/中断整条检索请求。
 // 超时或 panic 时降级为透传原始 docs，不影响 RRF 排序结果的可用性）。
 type SafeRerank struct {
-	inner   Reranker
+	inner   internalReranker
 	timeout time.Duration
 }
 
 // NewSafeRerank 构造安全重排包装器。timeout<=0 时使用默认值 2s。
-func NewSafeRerank(inner Reranker, timeout time.Duration) *SafeRerank {
+func NewSafeRerank(inner internalReranker, timeout time.Duration) *SafeRerank {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}

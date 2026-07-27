@@ -158,16 +158,9 @@ func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []b
 	}
 	fused := RRFFuse(config.RRFK, weights, results, sourceBits)
 
-	// ColBERT 近似重排：取 RerankTopM 候选送入 Reranker，再截断到 FinalTopK。
-	// Reranker 为 nil 时跳过（等价于 NilReranker），不改变 RRF 排序结果。
-	if config.Reranker != nil && config.RerankTopM > 0 && len(fused) > 0 {
-		candidates := fused
-		if len(candidates) > config.RerankTopM {
-			candidates = candidates[:config.RerankTopM]
-		}
-		fused = config.Reranker.Rerank(ctx, query, candidates)
-	}
+	// Reranking moved to internal/knowledge/rag_retrieval.go
 
+	// 截断到 FinalTopK
 	if config.FinalTopK > 0 && len(fused) > config.FinalTopK {
 		fused = fused[:config.FinalTopK]
 	}
@@ -222,9 +215,6 @@ type RetrievalConfig struct {
 	OversampleN  int     // M5:3, M10:3
 	RerankTopM   int     // M5:30, M10:50
 	FinalTopK    int     // M5:10, M10:5
-	// Reranker 后处理重排器。nil 或 NilReranker 跳过重排（默认行为）。
-	// ApproximateColBERTReranker 可在 NewHybridSearchEngine 中注入。
-	Reranker Reranker
 
 	Tier0VectorScanLimit int // 向量全表扫描安全上限
 }

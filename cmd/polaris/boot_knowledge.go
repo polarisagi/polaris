@@ -39,7 +39,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	// ApproximateColBERTReranker（2026-07-04 审计补齐，任务2）：按 FeatureDeepRAG
 	// 门控启用，复用 sb.Embedder。包一层 SafeRerank 提供超时+panic 保护。
 	// FeatureDeepRAG 已存在（MinTier:Tier0, MinMemoryMB:1024），无需新增 Feature。
-	var colbertReranker search.Reranker
+	var colbertReranker Reranker
 	if sb.AutoConf != nil && sb.AutoConf.Gate.State(probe.FeatureDeepRAG) != probe.FeatureDisabled && sb.Embedder != nil {
 		colbertReranker = search.NewSafeRerank(search.NewApproximateColBERTReranker(sb.Embedder, 3), 2*time.Second)
 		slog.Info("polaris: ApproximateColBERTReranker enabled (FeatureDeepRAG)")

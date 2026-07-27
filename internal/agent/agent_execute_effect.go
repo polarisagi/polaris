@@ -52,7 +52,7 @@ func toolCallsToDAGJSON(calls []types.InferToolCall) ([]byte, error) {
 	return out, nil
 }
 
-func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error { //nolint:gocyclo
+func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) EffectResult { //nolint:gocyclo
 	ctx = a.withTaskScopeCtx(ctx)
 
 	var nextState types.State
@@ -61,7 +61,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 	if effect.IsLLMFill() { //nolint:nestif
 		llmEff, ok := effect.(protocol.LLMFillEffect)
 		if !ok {
-			return apperr.New(apperr.CodeInternal, "invalid LLMFillEffect type")
+			return EffectResult{Err: apperr.New(apperr.CodeInternal, "invalid LLMFillEffect type")}
 		}
 
 		// 1. Budget Control: 分级预算检查
@@ -74,8 +74,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				// 硬断路：INFERENCE_OOM，任务失败。
 				// M3 在下一轮 TokenBurnRate 检测时自驱触发 KillSwitch CheckAndAct。
 				a.sm.ForceState(types.AgentStateFailed)
-				return apperr.New(apperr.CodeInternal,
-					fmt.Sprintf("INFERENCE_OOM: token budget exceeded (%d > %d)", used, budget))
+				return EffectResult{Err: apperr.New(apperr.CodeInternal,
+					fmt.Sprintf("INFERENCE_OOM: token budget exceeded (%d > %d)", used, budget))}
 
 			case used*100/budget >= fsm.BudgetCriticalPct:
 				// 软阈值 75%：注入预算压力标记，S_PLAN 生成 DAG 时收紧规模。
@@ -103,7 +103,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 		}
 
 		if a.provider == nil {
-			return apperr.New(apperr.CodeInternal, "agent missing provider for LLMFillEffect")
+			return EffectResult{Err: apperr.New(apperr.CodeInternal, "agent missing provider for LLMFillEffect")}
 		}
 
 		// 1.5 KillSwitch Check
@@ -111,9 +111,9 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 		switch stage {
 		case int32(types.KillFullStop):
 			a.sm.ForceState(types.AgentStateFailed)
-			return apperr.New(apperr.CodeInternal, "killswitch: stage=FullStop, refusing new inference")
+			return EffectResult{Err: apperr.New(apperr.CodeInternal, "killswitch: stage=FullStop, refusing new inference")}
 		case int32(types.KillPause):
-			return apperr.New(apperr.CodeInternal, "killswitch: stage=Pause, suspending task")
+			return EffectResult{Err: apperr.New(apperr.CodeInternal, "killswitch: stage=Pause, suspending task")}
 		case int32(types.KillThrottle):
 			// Stage 1 降级：收紧步骤预算至 3，标记禁用网络写工具（M03 §5 ThrottlePolicy）。
 			if a.sCtx.MaxStepsLimit == 0 || a.sCtx.MaxStepsLimit > 3 {
@@ -257,7 +257,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 				baseMessages = a.injectMemoryToMsgs(ctx, baseMessages)
 				baseMessages, err = a.tokenizeMessagesForLLM(ctx, baseMessages)
 				if err != nil {
-					return apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages for PRM candidates, fail-closed", err)
+					return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages for PRM candidates, fail-closed", err)}
 				}
 
 				type candidateResult struct {
@@ -334,7 +334,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 			reqMsgs = a.hotPathCompactIfNeeded(ctx, reqMsgs)
 			reqMsgs, err = a.tokenizeMessagesForLLM(ctx, reqMsgs)
 			if err != nil {
-				return apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)
+				return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)}
 			}
 			inferOpts := []types.InferOption{types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode)}
 			// 原生 LLM function-calling 并行通路（2026-07-14）：仅在 S_PLAN 阶段、且
@@ -385,7 +385,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 						if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
 							a.sCtx.ProviderSuspendCount = 0
 						} else {
-							return apperr.New(apperr.CodeInternal, "provider_exhausted hitl denied")
+							return EffectResult{Err: apperr.New(apperr.CodeInternal, "provider_exhausted hitl denied")}
 						}
 					} else {
 						// 写 DB：标记任务为 suspended，供 recovery.go 恢复扫描
@@ -426,7 +426,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 						slog.Warn("kernel: session budget exceeded via BudgetManager",
 							"agent_id", a.ID, "tokens", actualTokens, "err", budgetErr)
 						a.sm.ForceState(types.AgentStateFailed)
-						return apperr.Wrap(apperr.CodeInternal, "BudgetManager.ConsumeTokens", budgetErr)
+						return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "BudgetManager.ConsumeTokens", budgetErr)}
 					}
 				}
 				// 保存 reasoning_content 供下轮消息历史回传（BUG-04 fix）
@@ -481,25 +481,24 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) error
 		var handled bool
 		nextState, err, handled = a.executeDeterministicEffect(ctx, effect)
 		if handled {
-			return err
+			return EffectResult{Err: err}
 		}
 	}
 
 	// 优先判断是否有逻辑状态推进。如果有，说明 FSM 已经接管了这个业务错误，我们不抛出致命异常
 	if nextState != "" {
 		if trigger, ok := stateToTriggerMap()[nextState]; ok {
-			a.asyncIntent(trigger)
-			return nil
+			return EffectResult{Transition: trigger}
 		}
-		return apperr.New(apperr.CodeInternal, fmt.Sprintf("unknown next state: %s (err: %v)", nextState, err))
+		return EffectResult{Err: apperr.New(apperr.CodeInternal, fmt.Sprintf("unknown next state: %s (err: %v)", nextState, err))}
 	}
 
 	// 只有当没有状态流转时，才把底层技术错误抛出导致 Agent 终止
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "Agent.executeEffect", err)
+		return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "Agent.executeEffect", err)}
 	}
 
-	return nil
+	return EffectResult{}
 }
 
 const (

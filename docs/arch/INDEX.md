@@ -104,6 +104,7 @@
 | `M12-Eval-Harness.md` | L3 评测 | 17K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |
 | `ROADMAP.md` | 路线 | 7K | 时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载） |
 | `DIAGRAMS.md` | 图谱 | 14K | 时序图（**人类参考**，AI 默认不加载） |
+| `Module-Dependency-Axioms.md` | 依赖公理 | 5K | 包间依赖方向、防循环依赖底线、领域模型正交性 |
 
 #### M07 补充
 MCP（Model Context Protocol，模型上下文协议）/A2A（Agent-to-Agent，智能体间通信）、Rust 沙箱三级分级、Capability Token、Workspace Bridge。
@@ -144,6 +145,7 @@ HTTP/SSE、HITLGateway、ResourceGovernor、TaskQueue、Web UI 规约（Alpine.j
 | 修改用户中断 / 长程任务控制 | `00` + `M04` §1 + `M13` §1.2.5 | ~75K |
 | 修改反思记忆 / Reasoning State | `00` + `M05` §3.4 §3.1 + `M04` §7.1 | ~80K |
 | 修改运行时漂移检测 | `00` + `M03` §10.1 + `M12` (§11 RegressionDetector 对比) | ~65K |
+| 修改包结构 / 引入新依赖 | `00` + `ARCHITECTURE` + `Module-Dependency-Axioms` | ~50K |
 
 ## §2.5 章节级跳读
 

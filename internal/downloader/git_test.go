@@ -34,7 +34,7 @@ func TestGitCloneOrPull_NotARepo(t *testing.T) {
 	os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("data"), 0644)
 
 	// Since we don't have git setup in tests, just testing error paths
-	available, updated := GitCloneOrPull(context.Background(), http.DefaultClient, "http://127.0.0.1:0/fake.git", dir)
+	available, updated := GitCloneOrPull(context.Background(), http.DefaultClient, nil, "http://127.0.0.1:0/fake.git", dir)
 	if available {
 		t.Errorf("expected not available")
 	}

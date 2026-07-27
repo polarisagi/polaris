@@ -1,3 +1,5 @@
+// Package memory 实现了 Polaris 四层记忆系统 (Working/Core/Episodic/Procedural)。
+// 架构设计详见 docs/arch/M05-Memory-System.md §1-5
 package memory
 
 import (
@@ -248,9 +250,6 @@ var (
 	_ protocol.HybridRetriever  = (*memretrieval.HybridRetrieverImpl)(nil)
 	_ protocol.ReflectionMemory = (*memstore.ReflectionMem)(nil)
 )
-
-// Package memory 实现了 Polaris 四层记忆系统 (Working/Core/Episodic/Procedural)。
-// 架构设计详见 docs/arch/M05-Memory-System.md §1-5
 
 // ============================================================================
 // MemImpl — protocol.MemorySystem 的四层具体实现

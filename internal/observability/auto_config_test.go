@@ -38,7 +38,7 @@ func TestNewAutoConfig_TierAssignment(t *testing.T) {
 func TestFeatureGate_TierGating(t *testing.T) {
 	// Simulate HT0: 8GB total, 3GB available
 	hp := probe.NewHardwareProbe(8*1024*1024*1024, 3*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(8 * 1024)
+	guard := probe.NewOSMemoryGuard(8*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	// HT0 should NOT have QLoRA, PRM, large local models
@@ -60,7 +60,7 @@ func TestFeatureGate_TierGating(t *testing.T) {
 func TestFeatureGate_Tier1MemoryPressure(t *testing.T) {
 	// Simulate HT1: 16GB total, 8GB available
 	hp := probe.NewHardwareProbe(16*1024*1024*1024, 8*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(16 * 1024)
+	guard := probe.NewOSMemoryGuard(16*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	// HT1 with sufficient memory should have QLoRA
@@ -77,7 +77,7 @@ func TestFeatureGate_Tier1MemoryPressure(t *testing.T) {
 
 func TestFeatureGate_DegradationOrder(t *testing.T) {
 	hp := probe.NewHardwareProbe(32*1024*1024*1024, 16*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(32 * 1024)
+	guard := probe.NewOSMemoryGuard(32*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	order := fg.DegradationOrder()
@@ -106,7 +106,7 @@ func TestAutoConfig_StorageEngineSelection(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hp := probe.NewHardwareProbe(tc.totalRAM, tc.totalRAM/2)
-			guard := probe.NewOSMemoryGuard(tc.totalRAM / (1024 * 1024))
+			guard := probe.NewOSMemoryGuard(tc.totalRAM/(1024*1024), 0, 0, 0)
 			fg := probe.NewFeatureGate(hp, guard)
 			probe.SetGlobalFeatureGate(fg)
 
@@ -178,7 +178,7 @@ func TestSandboxPlatformConfig(t *testing.T) {
 
 func TestFeatureGate_Override(t *testing.T) {
 	hp := probe.NewHardwareProbe(8*1024*1024*1024, 3*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(8 * 1024)
+	guard := probe.NewOSMemoryGuard(8*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	if fg.IsEnabled(probe.FeatureQLoRA) {
@@ -199,7 +199,7 @@ func TestFeatureGate_Override(t *testing.T) {
 }
 
 func TestOSMemoryGuard_DegradationLevels(t *testing.T) {
-	guard := probe.NewOSMemoryGuard(8 * 1024) // 8GB total
+	guard := probe.NewOSMemoryGuard(8*1024, 0, 0, 0) // 8GB total
 
 	tests := []struct {
 		availableMB uint64
@@ -221,7 +221,7 @@ func TestOSMemoryGuard_DegradationLevels(t *testing.T) {
 func TestMemoryBudget_Scaling(t *testing.T) {
 	// HT0: verify budget doesn't exceed available
 	hp := probe.NewHardwareProbe(8*1024*1024*1024, 2*1024*1024*1024) // only 2GB available
-	guard := probe.NewOSMemoryGuard(8 * 1024)
+	guard := probe.NewOSMemoryGuard(8*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 	probe.SetGlobalFeatureGate(fg)
 
@@ -246,7 +246,7 @@ func TestFeatureGate_BucketBNewFeatures(t *testing.T) {
 	// HT0（8GB，3GB 可用）: LogicCollapse/GraphRAGFull/DeepRAG 已下放至 probe.Tier0，应 enabled。
 	// ActivationSteer（需本地模型）、PresidioPII（probe.Tier1 PII sidecar）仍 disabled。
 	hp := probe.NewHardwareProbe(8*1024*1024*1024, 3*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(8 * 1024)
+	guard := probe.NewOSMemoryGuard(8*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	if !fg.IsEnabled(probe.FeatureLogicCollapse) {
@@ -267,7 +267,7 @@ func TestFeatureGate_BucketBNewFeatures(t *testing.T) {
 
 	// HT2（32GB）: 以上全部 enabled
 	hp2 := probe.NewHardwareProbe(32*1024*1024*1024, 16*1024*1024*1024)
-	guard2 := probe.NewOSMemoryGuard(32 * 1024)
+	guard2 := probe.NewOSMemoryGuard(32*1024, 0, 0, 0)
 	fg2 := probe.NewFeatureGate(hp2, guard2)
 
 	if !fg2.IsEnabled(probe.FeatureLogicCollapse) {
@@ -283,7 +283,7 @@ func TestFeatureGate_BucketBNewFeatures(t *testing.T) {
 
 func TestFeatureGate_ComputerUseGUI_DisplayCheck(t *testing.T) {
 	hp := probe.NewHardwareProbe(16*1024*1024*1024, 8*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(16 * 1024)
+	guard := probe.NewOSMemoryGuard(16*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	// On macOS, should always be available (has display)
@@ -303,7 +303,7 @@ func TestFeatureGate_ComputerUseGUI_DisplayCheck(t *testing.T) {
 func TestFeatureGate_CrossFeatureDependencies(t *testing.T) {
 	// ActivationSteer requires local inference
 	hp := probe.NewHardwareProbe(32*1024*1024*1024, 16*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(32 * 1024)
+	guard := probe.NewOSMemoryGuard(32*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	if !fg.IsEnabled(probe.FeatureActivationSteer) {
@@ -357,7 +357,7 @@ func TestTierParameters_AllTiers(t *testing.T) {
 
 func TestAutoConfig_FeatureMap_AllFeatures(t *testing.T) {
 	hp := probe.NewHardwareProbe(32*1024*1024*1024, 16*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(32 * 1024)
+	guard := probe.NewOSMemoryGuard(32*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 	probe.SetGlobalFeatureGate(fg)
 
@@ -381,7 +381,7 @@ func TestAutoConfig_FeatureMap_AllFeatures(t *testing.T) {
 
 func TestFeatureGate_DegradationOrder_Complete(t *testing.T) {
 	hp := probe.NewHardwareProbe(32*1024*1024*1024, 16*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(32 * 1024)
+	guard := probe.NewOSMemoryGuard(32*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 
 	order := fg.DegradationOrder()
@@ -423,7 +423,7 @@ func (m *mockSandboxController) KillAllNonCritical(ctx context.Context) {
 
 func TestAutoConfig_SandboxController(t *testing.T) {
 	hp := probe.NewHardwareProbe(16*1024*1024*1024, 8*1024*1024*1024)
-	guard := probe.NewOSMemoryGuard(16 * 1024)
+	guard := probe.NewOSMemoryGuard(16*1024, 0, 0, 0)
 	fg := probe.NewFeatureGate(hp, guard)
 	ac := &AutoConfig{Probe: hp, Guard: guard, Gate: fg}
 
