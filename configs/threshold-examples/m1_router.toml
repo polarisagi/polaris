@@ -16,3 +16,7 @@ safecall_stream_idle_timeout_seconds = 60
 'semantic_cache.max_entries' = 10000
 'semantic_cache.similarity_threshold' = 0.95
 'semantic_cache.ttl_hours' = 24
+window_breaker_window_secs = 60
+window_breaker_min_samples = 20
+window_breaker_threshold = 0.5
+window_breaker_cooldown_sec = 30
