@@ -234,10 +234,10 @@ pub(super) fn build_bwrap_args_v2(
     } else {
         args.extend(["--tmpfs".into(), "/tmp".into()]);
         // bind_host_tmp=false 但有 script_path：单文件 bind
-        if let Some(sp) = &ctx.script_path {
-            if Path::new(sp).exists() {
-                args.extend(["--ro-bind-try".into(), sp.clone(), sp.clone()]);
-            }
+        if let Some(sp) = &ctx.script_path
+            && Path::new(sp).exists()
+        {
+            args.extend(["--ro-bind-try".into(), sp.clone(), sp.clone()]);
         }
     }
     args.extend(["--tmpfs".into(), "/run".into()]);

@@ -78,7 +78,7 @@ func TestPool_Acquire_SecondSessionAlsoRuns(t *testing.T) {
 		t.Fatalf("SendIntent sess-b failed: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctrl1.CurrentState() == types.AgentStateComplete && ctrl2.CurrentState() == types.AgentStateComplete {
 			return

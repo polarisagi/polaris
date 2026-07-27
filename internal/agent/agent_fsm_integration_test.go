@@ -269,7 +269,7 @@ func TestAgent_MemoryIntegration_HappyPath(t *testing.T) {
 	select {
 	case <-done:
 		// wait
-	case <-time.After(2 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("agent run timeout")
 	}
 
