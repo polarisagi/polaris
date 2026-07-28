@@ -385,6 +385,9 @@ func (a *Agent) Run(ctx context.Context) error {
 					select {
 					case a.effectDone <- result:
 					case <-execCtx.Done():
+						if result.Err != nil {
+							slog.WarnContext(execCtx, "agent: effect result dropped on ctx cancel", "err", result.Err)
+						}
 					}
 				})
 			}
