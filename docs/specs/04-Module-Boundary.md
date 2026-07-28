@@ -60,7 +60,7 @@ L0 基础设施层 → L0 不可引用 L1/L2/L3
 
 - [ ] 这个包属于哪个层？（L0-L3）
 - [ ] 它依赖哪些现有包？是否违反依赖方向？
-- [ ] 它需要暴露哪些接口给上层？是否需要在 `internal/protocol/interfaces.go` 添加？
+- [ ] 它需要暴露哪些接口给上层？是否需要在 `internal/protocol/interfaces_*.go` 添加？
 - [ ] 它的状态需要落盘吗？（HE-Rule-6 检查）
 - [ ] 它需要 EventLog 记录吗？（HE-Rule-1 检查）
 - [ ] Tier 0（8GB）能正常运行吗？如果不能，FeatureGate 在哪？
@@ -95,7 +95,7 @@ L0 基础设施层 → L0 不可引用 L1/L2/L3
 1. 独立 commit，message 加 `[proto-break]` tag
 2. 同 PR 内同步更新所有 producer / consumer
 3. 写一份 ADR 说明动机（`docs/arch/decisions/`）
-4. `internal/protocol/CHANGELOG.md` 追加条目
+4. `docs/specs/CHANGELOG.md` 追加条目
 5. 如涉及持久化字段，同步迁移 SQL + 回滚脚本
 
 ### B5.3 跨语言边界（FFI）

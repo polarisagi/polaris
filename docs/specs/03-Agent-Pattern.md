@@ -34,7 +34,7 @@ Agent A → EventTaskPosted → Blackboard → CAS Acquire → Agent B
 - 任务认领用 CAS（Compare-And-Swap），重试 3 次后放弃
 - Lease TTL = 60s，Reaper 1s 扫描过期任务
 
-参考 `internal/swarm/orchestrator/worker.go` 的 `ListenLoop` + `dispatchPendingTasks`。
+参考 `internal/execute/orchestrator/default_worker.go` 的 `ListenLoop` + `dispatchPendingTasks`。
 
 ## AGENT-3 Memory 访问分层
 
