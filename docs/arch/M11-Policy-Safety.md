@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:227 Cedar / 4:293 KillSwitch / 5:371 隐私 / 6:441 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:446 Factuality / 7:493 审计 / 8:517 多Agent宪法 / 9:544 威胁监控 / 13:558 降级 / 14:590 跨模块契约 -->
+<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:227 Cedar / 4:295 KillSwitch / 5:373 隐私 / 6:443 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:446 Factuality / 7:495 审计 / 8:519 多Agent宪法 / 9:546 威胁监控 / 13:560 降级 / 14:592 跨模块契约 -->
 
 ---
 
@@ -32,7 +32,7 @@ M11 与 M3/M12 的分工:
 | # | 防线 | 机制 | 守护对象 | 物理锚点 |
 |---|------|------|---------|---------|
 | **D1** | 数据污点追踪 | Taint 5 级 + Slot 物理分离 | 输入 | `internal/security/` |
-| **D2** | 能力令牌 | 短寿命 Ed25519 + 最小权限 + 委托链 ≤3 | 权限 | `internal/action/capability_token.go` |
+| **D2** | 能力令牌 | 短寿命 Ed25519 + 最小权限 + 委托链 ≤3 | 权限 | `internal/security/token/capability_token.go` |
 | **D3** | 沙箱分级 | Sbx-L1(InProc) / L2(Rust 脚本沙箱) / L3(平台原生 microVM: Linux Firecracker / macOS VZ / Windows WSL2，gVisor 仅作 Linux KVM 不可用 fallback) | 执行 | `internal/sandbox/sandbox_impl.go` |
 | **D4** | 宪法分层 | Layer 1(编译期常量) / 2(Cedar forbid) / 3(Cedar permit) / 4(多 Agent) | 决策 | `internal/security/` |
 | **D5** | Kill Switch + Audit | 三阶段 FSM（Finite State Machine，有限状态机） + hash chain 仅追加 | 系统 | `internal/security/` |
@@ -66,7 +66,7 @@ M11 与 M3/M12 的分工:
 - **TestInviolableConstants 编译期验证**: 上述常量若移除或置 false → 编译/测试失败
 
 **L4 运行时启动期保护**: 
-M11 进程启动后第一时间计算核心安全相关源码目录及文件（包括 M4 Agent Kernel 的 `internal/agent/`、`internal/security/`、`internal/sandbox/`、`internal/config/immutable_constants.go`、`internal/protocol/schema/` 等）的当前 SHA-256 哈希集合，并与构建时通过 ldflags 注入（或 go:embed 静态绑定）在二进制文件内的权威 manifest 进行比对。若哈希值不一致（表明运行时源码已被篡改），则触发 fail-closed 拒绝启动并生成 CRITICAL 级别的审计日志。`internal/protocol/interfaces.go` 定义安全关键接口（SafeDialer/Cedar-Gate/TaintLevel/Blackboard），`schema/` 定义 EventLog DDL——两者是安全链的契约基础，篡改即整个安全模型失效。
+M11 进程启动后第一时间计算核心安全相关源码目录及文件（包括 M4 Agent Kernel 的 `internal/agent/`、`internal/security/`、`internal/sandbox/`、`internal/protocol/immutable_core.go`、`internal/protocol/schema/` 等）的当前 SHA-256 哈希集合，并与构建时通过 ldflags 注入（或 go:embed 静态绑定）在二进制文件内的权威 manifest 进行比对。若哈希值不一致（表明运行时源码已被篡改），则触发 fail-closed 拒绝启动并生成 CRITICAL 级别的审计日志。`internal/protocol/interfaces_*.go` 定义安全关键接口（SafeDialer/Cedar-Gate/TaintLevel/Blackboard），`schema/` 定义 EventLog DDL——两者是安全链的契约基础，篡改即整个安全模型失效。
 
 **额外防御**: 禁止 `internal/swarm/` 路径下使用 `unsafe` / `reflect.Value.UnsafePointer` / CGO（CI lint 强制）；进程启动期 `SetGCPercent` + `SetMemoryLimit` 锁定 runtime 参数，禁止运行时通过 reflect 修改。关键二进制可选 TPM/Secure Enclave 锚定（Tier 2+ 选配）。
 
@@ -237,8 +237,10 @@ Cedar: Rust 核心, CGO-Free FFI (purego) (<70ns overhead), <1ms 评估延迟, d
 |---------|------|------|
 | Init 失败 | fail-closed + 拒绝启动 (fatal) | CRITICAL |
 | Evaluate panic | catch_unwind → deny + WARN | audit + `polaris_cedar_panic_total` Counter |
-| Evaluate 超时 (>10ms) | deny + 增加 `polaris_cedar_timeout_total` Counter | WARN |
+| Evaluate 超时 (>500ms) | deny + 增加 `polaris_cedar_timeout_total` Counter | WARN |
 | 连续 10 次 Evaluate 失败 | KillSwitch Stage 1 THROTTLE | CRITICAL |
+
+> Go 侧 Gate 默认配额超时为 `defaultEvalTimeout = 500ms`（`internal/security/policy/gate.go:41`）；10ms 仅为 FFI 内部传递超时值为空时的兜底保护下限（`gate.go:336`），不是常规运行超时。
 
 ### 3.1 Cedar 策略结构
 
@@ -397,7 +399,7 @@ approval:
 
   **OpaqueToken 与 SessionPIIVault 的语义边界**：二者是强度不同的两套方案，不能互相等价代替：
   - **OpaqueToken**（把 PII 在进入 LLM prompt 前替换为占位符 token、模型只见占位符、事后按需把占位符换回原文、原文全程不落盘）——✅ **已完全闭环实现**。
-    - **令牌化（输入端）**：`internal/agent/agent_execute.go` 的 `executeEffect` 入口调用 `withTaskScopeCtx` 把 `a.sCtx.SessionID`（不是 `a.sCtx.TaskID`——二者是不同字段，SessionID 贯穿会话生命周期不变，TaskID 随认领的 Blackboard 任务变化）注入 `ctx.Value(protocol.CtxTaskIDKey{})`；主路径和 PRM 候选路径组装好 `types.Message` 之后、调用 `provider.Infer` 之前，通过 `tokenizeMessagesForLLM` 对每条消息 `Content` 做 PII 提取和令牌化。任何提取错误均按 fail-closed 策略阻断，防止敏感信息流出。
+    - **令牌化（输入端）**：`internal/agent/agent_execute_effect.go` 的 `executeEffect` 入口调用 `withTaskScopeCtx` 把 `a.sCtx.SessionID`（不是 `a.sCtx.TaskID`——二者是不同字段，SessionID 贯穿会话生命周期不变，TaskID 随认领的 Blackboard 任务变化）注入 `ctx.Value(protocol.CtxTaskIDKey{})`；主路径和 PRM 候选路径组装好 `types.Message` 之后、调用 `provider.Infer` 之前，通过 `tokenizeMessagesForLLM` 对每条消息 `Content` 做 PII 提取和令牌化。任何提取错误均按 fail-closed 策略阻断，防止敏感信息流出。
     - **隔离与清理**：`guard.PIITokenVault` 内部为 `map[SessionID]map[token]真值` 二维结构，`TokenizeForTask`/`ResolveForTask`/`RestoreForTask` 均严格按 SessionID 命名空间隔离，**不做跨命名空间回退查找**——用错误的 SessionID 还原会 fail-closed 拒绝，而不是静默从其它会话的桶里读到值。`agent.go` 的 `handleTerminalState`（终态触发，`Run()` 即将返回前）调用 `ClearTask(a.sCtx.SessionID)`，与 `SecureZero` 协同执行，仅清理当前会话自己的命名空间，不影响进程内其它并发会话，避免内存泄漏。
     - **还原（输出端）**：在 `internal/tool/tool.go` 的 `InMemoryToolRegistry.ExecuteTool` 内，通过 `ctx.Value(protocol.CtxTaskIDKey{})` 提取同一 SessionID，并使用 `RestoreForTask` 安全精准还原真值，用后即焚。该 ctx 值与 `dag/executor.go` `DAGExecutor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)` 沿用同一仓库既有惯例，保证令牌化端与还原端使用同一 taskID 命名空间。
     - **已知局限**：目前只会针对 `Message.Content` 进行令牌化保护；`Message.Parts` 中因可能夹杂极其复杂多态的结构与多模态数据，强制文本替换具有高风险性，因此暂不纳入自动令牌化保护层。
@@ -430,7 +432,7 @@ approval:
 
 Tier 3 本地模型守卫: M1 LocalProvider.Probe() 验证可加载模型且峰值 RSS + 已用内存 < 64GB (1GB 预留)，否则拒绝 local_only。
 
-**当前实现状态：已实现（2026-07-03）。** `protocol.LocalProvider` 接口新增 `Probe(ctx) (LocalProbeResult, error)`（`internal/protocol/interfaces.go`），只读校验当前是否有模型处于已加载可用状态，不触发加载；`LocalAdapter.Probe()`（`internal/llm/adapter/local.go`）实现该方法，复用已有的 `LocalStatus()` + 新增的 `probe.ProcessPeakRSSBytes()`（`internal/observability/probe/process_rss_{linux,darwin,windows}.go`，getrusage RUSAGE_SELF 读取 ru_maxrss）与 `probe.MemoryProbe()` 汇总系统已用内存。`NetworkSandbox`（`internal/security/network/local_only.go`）新增 `SetLocalProvider()` 注入点（与既有 `SetSafeDialer()` 同构），`StartupCheck()` 在原有 60GB 物理内存门槛检查之后追加第 5 步：调用 `LocalProvider.Probe()`，若模型未加载或 `峰值RSS+已用内存 >= 64GB-1GB` 则 fail-closed 拒绝进入 local_only。60GB 物理内存检查校验硬件容量，Probe() 校验运行时实际预算，两者互补（前者通过不代表后者一定通过——其它进程可能已占用大量内存）。单元测试见 `internal/llm/adapter/local_test.go`（`TestLocalAdapter_ProbeGraceful`）与 `internal/security/network/local_only_test.go`。
+**当前实现状态：已实现（2026-07-03）。** `protocol.LocalProvider` 接口新增 `Probe(ctx) (LocalProbeResult, error)`（`internal/protocol/interfaces_llm.go`），只读校验当前是否有模型处于已加载可用状态，不触发加载；`LocalAdapter.Probe()`（`internal/llm/adapter/local.go`）实现该方法，复用已有的 `LocalStatus()` + 新增的 `probe.ProcessPeakRSSBytes()`（`internal/observability/probe/process_rss_{linux,darwin,windows}.go`，getrusage RUSAGE_SELF 读取 ru_maxrss）与 `probe.MemoryProbe()` 汇总系统已用内存。`NetworkSandbox`（`internal/security/network/local_only.go`）新增 `SetLocalProvider()` 注入点（与既有 `SetSafeDialer()` 同构），`StartupCheck()` 在原有 60GB 物理内存门槛检查之后追加第 5 步：调用 `LocalProvider.Probe()`，若模型未加载或 `峰值RSS+已用内存 >= 64GB-1GB` 则 fail-closed 拒绝进入 local_only。60GB 物理内存检查校验硬件容量，Probe() 校验运行时实际预算，两者互补（前者通过不代表后者一定通过——其它进程可能已占用大量内存）。单元测试见 `internal/llm/adapter/local_test.go`（`TestLocalAdapter_ProbeGraceful`）与 `internal/security/network/local_only_test.go`。
 
 **当前实现状态：已接入（2026-07-06 前已完成，随并发稳定性修复一并确认）。** `NetworkSandbox` 构造 + `Enable()` + `StartupCheck()` 调用链已接入 `cmd/polaris/boot_server.go`（`bootServer()` 函数开头）：读取 `sb.Cfg.Security.LocalOnlyMode`（`internal/config/config.go` `local_only_mode`），为真时依次执行 `network.NewNetworkSandbox(100)` → `SetSafeDialer()` → `SetLocalProvider()`（2026-07-04 审计补齐，此前从未调用，导致 Tier3 本地模型内存预算守卫被静默跳过）→ `Enable()` → `StartupCheck()`；`Enable()` 必须先于 `StartupCheck()` 执行（若顺序颠倒，loopback-only 探测会在防御生效前进行，导致 `local_only_mode=true` 时启动 100% 失败，2026-07-04 审计已修正此顺序）。任一步失败均 `apperr.Wrap` 返回错误阻止启动（fail-closed）。至此 local_only 模式已端到端可用，不再是遗留缺口。
 
@@ -452,7 +454,7 @@ blockedCIDRs（`init()` 预编译）：0.0.0.0/8 / 127.0.0.0/8 / 10.0.0.0/8 / 10
 
 与 M7 协作: M7 做 URL/IP 静态校验 + Capability 声明层收缩，M11 做出口强制执行 + DNS Rebinding 动态检测 + IP 锁定。两层纵深防御: 声明层(M7) → 网络出口层(M11 Phase 0)。
 
-**统一安全 Dialer** (`internal/protocol/interfaces.go` SafeDialer):
+**统一安全 Dialer** (`internal/protocol/interfaces_net.go` SafeDialer):
 - M11 导出 `SafeDialer.DialContext`。四层注入覆盖全出站: `http.Transport.DialContext` / `grpc.WithContextDialer` / `websocket.Dialer.NetDialContext` / `net.DefaultDialer.Control`
 - DialContext 内执行五阶段 SSRF (Phase 0-4)。
 - **Taint 出口拦截**: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上级别（TaintMedium/TaintHigh）未经 SanitizeByUserReview → `ErrTaintBlockedEgress`。Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防止出口绕过。

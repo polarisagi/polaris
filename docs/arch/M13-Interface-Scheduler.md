@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:306 对内调度 / 3:426 MCP / 6:444 (SOFT)降级 / 7:469 跨模块契约 / 8:486 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:308 对内调度 / 3:428 MCP / 6:446 (SOFT)降级 / 7:471 跨模块契约 / 8:488 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -203,6 +203,8 @@ SSE 事件 (text/event-stream): "token" | "tool_call" | "tool_result" | "thinkin
 
 HTTP 层出站适配器，委托 M11 SafeDialer（M11 §6 统一安全 Dialer）执行完整 SSRF 防护。本层仅维护 Provider 域名白名单作为预检（api.deepseek.com, api.anthropic.com, api.openai.com, api.github.com）——不在白名单的域名提前拒绝，减少 SafeDialer DNS 查询开销。**默认白名单不含 `localhost`/`127.0.0.1`**（2026-07-23 ADR-0066 移除，纵深防御：即便 SafeDialer 兜底，M13 层也不预先放行环回地址）；本地调试场景需通过 `/config network allow` 动态追加。实际连接（DNS 解析、CIDR 校验、TOCTOU 消除、IP 锁定）全部由 M11 SafeDialer.DialContext 统一执行。扩展: /config network allow example.com:443（追加白名单，仍需经 SafeDialer 完整校验；用户自托管的可观测导出端点—如 LangSmith/Braintrust/Phoenix，见 M03 §Trace Exporter—同样需要走此白名单，默认不放行）。✅ 实现：`internal/gateway/egress/`，`EgressGateway` 实现 `http.RoundTripper`，白名单原子更新，注入点：`cmd/polaris/main.go`。
 
+**方法级能力防护（`CapabilityRoundTripper`）**：出站 HTTP 请求还经 `internal/security/network/safe_dialer_capability.go` 的 `WrapCapability(inner, cap)` 组合封装，在 HTTP RoundTripper 层针对具体 `CapabilityType`（如 `CapNetworkRead`）做方法级终检——拦截非 GET/HEAD/OPTIONS 方法，防止只读能力被用于发起写操作。已在 `fetch_url` / `web_search` 等工具的出站路径接入。
+
 #### 1.2.3 Sealed 状态
 
 `/v1/status` 响应中的 `sealed` 字段由 `observability.GlobalKillswitchStage` 原子量驱动（`>= KillFullStop(3)` 时为 `true`）。KillSwitch 状态变迁通过 `StateChangeCallback` 同步写入该原子量。
@@ -259,7 +261,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 
 #### 1.2.7 消息预处理：引用展开（ContextRefExpander）
 
-`internal/gateway/authcontext/contextref.go`（`ContextRefExpander`）—— 在 SSE 管道最早阶段（`sse.go` 请求基础校验后、`SlashCommandRouter.Dispatch` 前）对用户输入中的 `@file`/`@url`/`git:` 引用做展开替换，展开结果写回 `req.Input` 后再进入斜线命令、Compressor 等后续环节（2026-07-12 复核：原文列举的 ToolStage 环节实为从未接入聊天管道的孤儿注入点，`ChatHandler.ToolStage` 字段已随复核级联移除；语义化工具筛选能力仍保留在 `internal/agent/context/tool_stage.go`，供未来 PRM/FSM 路径按需接入）。单条引用展开失败记入 `report.Skipped` 并 `slog.Warn`，不阻断请求；`ContextRefExpander` 为 nil（未注入 HTTPClient）时整段预处理跳过，退化为不做引用展开。
+`internal/gateway/authcontext/contextref.go`（`ContextRefExpander`）—— 在 SSE 管道最早阶段（`sse.go` 请求基础校验后、`SlashCommandRouter.Dispatch` 前）对用户输入中的 `@file`/`@url`/`git:` 引用做展开替换，展开结果写回 `req.Input` 后再进入斜线命令、Compressor 等后续环节（2026-07-12 复核：原文列举的 ToolStage 环节实为从未接入聊天管道的孤儿注入点，`ChatHandler.ToolStage` 字段已随复核级联移除；`internal/agent/context/tool_stage.go` 已彻底清理，代码库中不再存在语义化工具筛选的孤儿实现，未来 PRM/FSM 若需该能力须重新设计接入点）。单条引用展开失败记入 `report.Skipped` 并 `slog.Warn`，不阻断请求；`ContextRefExpander` 为 nil（未注入 HTTPClient）时整段预处理跳过，退化为不做引用展开。
 
 #### 1.2.8 斜线命令系统（SlashCommandRouter）
 
@@ -336,7 +338,7 @@ FeatureGate: `FeatureWebUI` 控制是否注册 `/` 路由。关闭时仅 REST AP
 
 TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatchFn)` 启动后台扫描 goroutine，每 5s 扫 `scheduler:task:` 前缀，CAS（Compare-And-Swap，比较并交换） 更新 storedTask.Status: pending → running → completed/failed；崩溃重启后自动重试直至 MaxAttempts）。幂等键 = Task.IdempotencyKey。
 
-**Agent 任务直通**（`protocol.AgentInvoker`）：当 `task.Type == "agent"` 时，扫描循环优先调用 `AgentInvoker.InvokeAgent(ctx, string(task.Payload))` 而非 `dispatchFn`。通过 `SQLiteScheduler.SetAgentInvoker` 注入（`boot_agent.go` 启动时绑定 `agentInvokerAdapter`）。未注入或任务类型非 "agent" 时回落 `dispatchFn`。接口定义见 `internal/protocol/interfaces.go`。
+**Agent 任务直通**（`protocol.AgentInvoker`）：当 `task.Type == "agent"` 时，扫描循环优先调用 `AgentInvoker.InvokeAgent(ctx, string(task.Payload))` 而非 `dispatchFn`。通过 `SQLiteScheduler.SetAgentInvoker` 注入（`boot_agent.go` 启动时绑定 `agentInvokerAdapter`）。未注入或任务类型非 "agent" 时回落 `dispatchFn`。接口定义见 `internal/protocol/interfaces_*.go`。
 
 **终态通知投递（GD-13-001，最小实现）**：`SQLiteScheduler.notifyTaskTerminal` 在任务进入终态（重试耗尽的失败 / 成功完成，`Pool=="intent_handler"` 的交互式任务除外——用户已通过 SSE 实时可见，无需外发通知）时，向注入的 `protocol.OutboxWriter` 写入一条 `protocol.TopicNotification="notification"` 事件。消费端为新增的 `internal/automation/notify.Dispatcher`（复用既有 `internal/store/outbox_worker.go` `OutboxWorker` 消费框架及其指数退避重试，未新建独立总线）：反序列化 `NotificationEvent` payload，从 `PreferenceReader`（`016_preferences` 表）读取用户配置的 Webhook URL，HTTP POST 投递；payload 畸形或未配置 Webhook 视为软跳过（非错误，不重试），非 2xx 响应或网络错误返回 error 交由 `OutboxWorker` 既有重试机制处理。IM/邮件渠道复用 `internal/channel` 留待后续迭代，本轮只做 Webhook 一种。
 
@@ -477,7 +479,7 @@ TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatch
 | M8 Orchestrator | HITL 挂起/恢复、TrafficSplitter 流量分发 | M8 §1.5, M13 §2.5 |
 | M9 Self-Improve | ProgressiveRollout 执行分发、ResourceReaper 闲时清理 | M9 §2.3, M13 §2.3 |
 | M11 Policy Safety | KillSwitch FullStop → SealedMiddleware 503、SafeDialer 网络出口 | M11 §4, §6 |
-| 接口定义 | SafeDialer/Blackboard/TaskEntry/ScheduledTask | internal/protocol/interfaces.go, types.go |
+| 接口定义 | SafeDialer/Blackboard/TaskEntry/ScheduledTask | internal/protocol/interfaces_*.go, types.go |
 | 全局字典 | ESCALATE/KillSwitch/SSRFGuard 定义 | 00-Global-Dictionary §3, §4 |
 | 时序图 | KillSwitch 触发链（M13 SealedMiddleware 503 响应）| DIAGRAMS.md#killswitch |
 
@@ -615,7 +617,7 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 
 | ID | 约束 | 验证位置 |
 |----|------|---------|
-| `inv_webui_01` | `dist/` 不入 Git；`make build` 必先调 `make build-ui`。 | `web/.gitignore` + `Makefile` |
+| `inv_webui_01` | `dist/` 不入 Git；`make build` 必先调 `make build-ui`。 | 根 `.gitignore`（`web/dist/*` 规则）+ `Makefile` |
 | `inv_webui_02` | npm `dependencies` 仅 `alpinejs` + `marked`。`devDependencies` 仅 `@tailwindcss/vite` + `daisyui` + `vite`。零 CDN 依赖（内网离线可用）。 | `web/package.json` |
 | `inv_webui_03` | `FeatureGate.FeatureWebUI=false` 或密封(`SEALED`)态时，API 拒服，UI 出强警告横幅。 | `internal/observability/` |
 | `inv_webui_04` | 写操作携带 `X-Session-Token`（`sessionStorage.getItem('polaris_token')`）。 | `web/src/js/sse.js` + middleware |
@@ -640,7 +642,7 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | `plugins` | 已安装 Plugin 记录（ai-plugin.json 规范） | `id, name, manifest_url, publisher, trust_tier, enabled` |
 | `apps` | 已安装 App 记录（独立交互能力） | `id, name, url, publisher, trust_tier, enabled` |
 | `skills` (008_skills) | 已安装 Skill 记录（TypeScript/Python 脚本） | `id, name, script_path, trust_tier` |
-| `mcp_servers` (018) | 已注册 MCP Server | `id, name, command, args, env, trust_tier` |
+| `mcp_servers` (015) | 已注册 MCP Server | `id, name, command, args, env, trust_tier` |
 
 ### 业务流：安装闭环
 
@@ -688,8 +690,8 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 | `trigger_type` | `cron`=定时 / `webhook`=事件驱动 / `both`=两者 / `manual`=仅手动触发 |
 | `cron_schedule` | 标准 5 字段 cron 表达式；trigger_type=webhook 时可空 |
 | `channel_id` | 关联 channels.id；webhook 触发时非空 |
-| `env_type` | `chat`=纯对话（无目录）/ `local`=读写项目文件 / `worktree`=Git 隔离可生成 PR |
-| `projects_json` | JSON 字符串数组，多个项目路径；env_type=chat 时为 `[]` |
+| `env_type` | `inline`=当前目录读写（DDL 默认值）/ `worktree`=Git 隔离分支，可生成 PR |
+| `working_dir` | TEXT，单一工作目录路径（已取代原 `projects_json` 多路径设计） |
 | `reasoning_effort` | `low/medium/high/ultra`，自动映射 model_roles（用户不感知模型名） |
 | `result_action` | `session`=追加到自动 session / `channel:{id}`=接入推送 / `silent`=静默 |
 | `next_run_at` | 预计算下次触发时间，cronTick 按此列索引，避免全表扫描 |
@@ -727,7 +729,7 @@ Agent 执行触发危险操作（`write_network` / Privileged / 超预算）时�
 
 `POST /v1/webhooks/{channelType}/{channelID}` → M13 ChannelManager → 查 `automations WHERE channel_id=channelID AND enabled=1` → 平台级验签（`verifyWebhookSource`，失败 401，fail-closed）→ `executeAutomation(..., "webhook")`。
 
-平台级验签实现（`internal/gateway/server/sysadmin/channels.go`）：
+平台级验签实现（`internal/gateway/server/sysadmin/channelsadmin/`）：
 
 | 平台 | 验签机制 | 必需配置项 |
 |------|---------|-----------|
@@ -748,7 +750,7 @@ Agent 执行触发危险操作（`write_network` / Privileged / 超预算）时�
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/v1/automations` | 列出全部自动化任务 |
-| POST | `/v1/automations` | 创建（`trigger_type / cron_schedule / env_type / projects_json / reasoning_effort / result_action`） |
+| POST | `/v1/automations` | 创建（`trigger_type / cron_schedule / env_type / working_dir / reasoning_effort / result_action`） |
 | PUT | `/v1/automations/{id}` | 更新（patch 语义） |
 | DELETE | `/v1/automations/{id}` | 删除（同时删除 `automation_runs`） |
 | GET | `/v1/automations/{id}/runs` | 执行历史（`limit` 默认 20） |

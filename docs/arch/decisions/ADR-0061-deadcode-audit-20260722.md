@@ -1,9 +1,7 @@
-# ADR-0061：2026-07-22 全仓库 deadcode 复核（47 项，3 项新发现 + 44 项既定 DEFER 复现）
+# ADR-0061: 2026-07-22 全仓库 deadcode 复核（47 项，3 项新发现 + 44 项既定 DEFER 复现）
 
-## 状态
-
-已接受，已实现（含一次过程中订正，见"订正记录"节；`ReportSurrealDBIndexSize`
-FFI 接线已于同日追加完成，不再有遗留决策项）。
+- **状态**: Accepted（已执行）（含一次过程中订正，见"订正记录"节；`ReportSurrealDBIndexSize`
+  FFI 接线已于同日追加完成，不再有遗留决策项；全部 44 项既定 DEFER 已由 ADR-0062 最终结清）
 
 ## 背景
 

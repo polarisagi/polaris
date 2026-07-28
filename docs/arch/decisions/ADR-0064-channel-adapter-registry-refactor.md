@@ -1,7 +1,6 @@
 # ADR-0064: Channel Adapter Registry Refactor & Unified Inbound Dispatch Wiring
 
-## Status
-Accepted
+- **状态**: Accepted（已执行）
 
 ## Context
 1. **Channel 适配器注册表重构** (A-1)

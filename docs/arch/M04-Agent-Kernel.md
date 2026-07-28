@@ -9,7 +9,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
-<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 2:99 Suspend-on-Idle / 3:115 S_VALIDATE / 4:164 DAG（Directed Acyclic Graph，有向无环图） / 5:246 System1/2 / 6:270 WorldModel / 7:281 推理预算 / 8:340 CrashRecovery / 12:388 已知Bug修复记录 / 13:397 (SOFT)降级 / 14:415 跨模块契约 -->
+<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 2:99 Suspend-on-Idle / 3:115 S_VALIDATE / 4:164 DAG（Directed Acyclic Graph，有向无环图） / 5:251 System1/2 / 6:275 WorldModel / 7:286 推理预算 / 8:345 CrashRecovery / 12:393 已知Bug修复记录 / 13:402 (SOFT)降级 / 14:420 跨模块契约 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -59,11 +59,11 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
                                                           ├──Redirect─→ S_PLAN (用户修正意图)
                                                           └──Abort────→ S_FAILED
 ```
-5 主执行态: Perceive / Plan / Validate / Execute / Reflect。2 恢复态: Replan / Rollback。1 中断态: Interrupt。1 挂起态: Suspended（Suspend-on-Idle 及 provider_exhausted 挂起）。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **12 态**（`state_machine.go` 注册 s_idle ~ s_suspended 共 12 状态、15 条转移）。
+5 主执行态: Perceive / Plan / Validate / Execute / Reflect。2 恢复态: Replan / Rollback。1 中断态: Interrupt。1 挂起态: Suspended（Suspend-on-Idle 及 provider_exhausted 挂起）。1 等待态: AwaitAgent（`S_AWAIT_AGENT`，本 Agent 已把子任务 Handoff 给其他 Agent，阻塞等待其终态；由 `TriggerAwaitAgent` 进入、`TriggerAgentHandoffDone` 离开）。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **13 态**（`pkg/types/enums_agent.go` 定义 `AgentStateIdle` ~ `AgentStateAwaitAgent`，`transitions.go` 注册 19 条转移）。
 ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel.max_replan_attempts`) 超限 → S_FAILED + `[ESCALATE]`
 
 **`[UserInterrupt]` 协议**（inv_global_08, < 200ms 传播）:
-- **触发**: M13 `POST /v1/agent/{taskID}/interrupt` (M13 §1.X) → 写 `tasks.interrupt_pending=true` + 通过 EventLog Subscribe 推送至 Agent
+- **触发**: M13 `POST /v1/agent/{taskID}/interrupt` (M13 §1.X) → 通过 EventLog Subscribe 与 `agent.ContextCancel()` 内存通知推送至 Agent（`007_tasks.sql` 无 `interrupt_pending` 列，中断信号不落盘）
 - **进入 S_INTERRUPT**: `agent.ContextCancel()` 立即取消 → 所有 LLM call / tool call / [BestOfN] ParallelSampler 子 goroutine 同步终止
 - **中断操作语义**:
   - **Resume**: 用户提供"继续"指令 → 恢复原状态 + 注入用户指令到 ZoneImmutable（标记 `source='user_interrupt'`, [TaintLevel]=TaintUserReviewed）
@@ -177,7 +177,7 @@ LLMWatchdog (L3, 仅 RiskPrivileged): 使用 DeepSeek 输出 ALLOW/DENY，不设
 #### Context 隔离补充
 **每个子 Agent 持有独立 PromptBuilder 实例与 context window**，仅通过 Blackboard 结构化 result entry 交换（[Sub-agent-Isolation]）。
 
-> Sub-agent 物理隔离：M8 派发 Macro-DAG 节点时为每个执行 Agent 创建独立 `kernel.PromptBuilder` 实例（`internal/agent/`），禁止共享父 Agent 内存中的 ImmutableCore/MutableSkill/TaintedData zone。子任务结果以结构化 schema（M8 5 原语之 Result）写入 Blackboard，父 Agent 通过订阅 Blackboard 事件消费，避免上下文污染与 token 膨胀（见 00-Global-Dictionary §9-bis [Sub-agent-Isolation]）。
+> Sub-agent 物理隔离：M8 派发 Macro-DAG 节点时为每个执行 Agent 创建独立 `prompt.PromptBuilder` 实例（接口在 `internal/protocol/prompt_builder.go`，实现在 `internal/prompt/prompt_builder.go`），禁止共享父 Agent 内存中的 ImmutableCore/MutableSkill/TaintedData zone。子任务结果以结构化 schema（M8 5 原语之 Result）写入 Blackboard，父 Agent 通过订阅 Blackboard 事件消费，避免上下文污染与 token 膨胀（见 00-Global-Dictionary §9-bis [Sub-agent-Isolation]）。
 
 ### 4.2 数据模型
 
@@ -231,7 +231,10 @@ ProcessRewardModel（PRM）集成于 Agent Kernel（`internal/agent/`），在 *
 
 **触发条件**：任务复杂度超过可配置阈值（默认 0.5）且 PRM 已启用；低于阈值的简单任务直接跳过，零额外 token 消耗。复杂度由 S_PERCEIVE 阶段写入任务上下文。
 
-**多候选并发选优流程**：S_PLAN 阶段并发生成多个候选 DAG（默认 3 个），再并发调用 budget-tier LLM 对每个候选打分（0–1），选出最高分方案推进至 S_VALIDATE。若全部候选分数低于最低可接受阈值（默认 0.4），fallback 取第一个候选，保证规划不丢失。
+**多候选并发选优流程 [未接线]**：设计为 S_PLAN 阶段并发生成多个候选 DAG（默认 3 个），再并发调用 budget-tier LLM 对每个候选打分（0–1），选出最高分方案推进至 S_VALIDATE；若全部候选分数低于最低可接受阈值（默认 0.4），fallback 取第一个候选，保证规划不丢失。
+
+> **实现状态（2026-07-28 裁决）**：`internal/agent/prm.go` 的 `DefaultPRM.SelectBest` 打分算法已完整实现并被 ADR-0056 的 PRM 训练样本采集复用，但 **FSM 主流程未接线**——`transitions.go` 的 S_PLAN 转移（`promptPlan`/`parsePlanOnSuccess`）仍单次调用 LLM 只解出一份 `DAGModel`，从不生成 N 个候选、从不调用 `SelectBest`。
+> 维持未接线为**有意决策**而非缺陷：多候选生成使每次 S_PLAN 的 LLM 调用量变为 N+N（生成 N 份 + 打分 N 次），与 Tier-0 单机预算纪律（`ARCHITECTURE.md §1`）直接冲突，且当前无 ADR 授权该开销。若未来要接线，须先有量化证据（Eval Harness 上多候选选优相对单候选的成功率增益 > token 成本增幅），并新立 ADR。
 
 **关键配置**（均可由 M8 Orchestrator 在运行时注入覆盖）：默认关闭须显式开启；打分模型使用 budget-tier LLM；候选数默认 3（研究数据显示 3 候选 ROI 最优）；复杂度门限默认 0.5。
 
@@ -240,6 +243,8 @@ ProcessRewardModel（PRM）集成于 Agent Kernel（`internal/agent/`），在 *
 ### 4.7 spawn_planner — 后台子规划器
 
 S_PLAN 阶段若任务复杂度触发子规划策略，异步启动规划器池（`internal/swarm/planner/`）。规划器池内置多 Worker 策略引擎，通过内部通道将子计划异步回传给父 Agent。
+
+> **归属澄清**：`internal/swarm/planner/`（`TaskDecomposer` + `AgentPool`）在架构上属于 **M08 Swarm 层**的 Macro-DAG 分解能力，不是 M04 Agent Kernel 的内部组件——`internal/agent` 不 import 该包，单 Agent FSM 的 S_PLAN 也不直接触发该 goroutine 池。本节列于 M04 仅为说明"复杂任务如何从单 Agent 规划溢出到 Swarm 层"这条链路；组件本体设计见 `M08-Multi-Agent-Orchestrator.md §5`。
 
 ---
 
@@ -274,7 +279,7 @@ L1 快速路径：SurpriseIndex < 0.3 时旁路 LLM（在 `agent_execute_effect.
 **知识空缺感知 (Knowledge Gap Awareness)**:
 LLM 推理前调用 `WorldModel.AssessGrounding` 评估上下文充分性。上下文不足时将警告注入 prompt 末尾（`[System Warning: Knowledge gap detected. Consider further retrieval...]`），引导 Agent 优先检索，不直接拦截执行。
 
-WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/agent/` 的 `PromptBuilder` 统一执行（含四 Zone 布局 + TaintData Spotlighting 门控）。
+WorldModel 实现见 `internal/memory/`；上下文组装由 `internal/prompt/` 的 `PromptBuilder` 统一执行（含四 Zone 布局 + TaintData Spotlighting 门控）。
 
 ---
 
@@ -414,7 +419,7 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 
 ## 14. 跨模块契约
 
-> 接口签名权威源在 `internal/protocol/interfaces.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
+> 接口签名权威源在 `internal/protocol/interfaces_*.go`（按域拆分）+ `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
 
 | 方向 | 接口/契约 | 用途 / 锚点 |
 |------|----------|-------------|

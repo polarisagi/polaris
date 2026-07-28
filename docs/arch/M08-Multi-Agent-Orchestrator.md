@@ -5,7 +5,7 @@
 > M8 描述的编排语义/不变量不变，仅物理归属调整；`internal/swarm` 现在是消费方而非实现方。
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:9 职责 / 0-ter:22 不变量速查 / 1:35 黑板+CAS(核心) / 2:111 Supervisor / 2-bis:130 常驻角色Agent / 3:147 编排模式 / 3-bis:178(已删除,见ADR-0050) / 3-ter:187 PipelineOrchestrator / 4:281 AgentCard / 5:293 Task分解 / 8:333 拓扑自演化(已删除,见ADR-0050) / 10:310 (SOFT)降级 / 11:329 跨模块契约 / 11.2:318 已知实现缺口 / 12:369 Custom Agent / 13:407 CSV Fan-out -->
+<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:112 Supervisor / 2-bis:131 常驻角色Agent / 3:148 编排模式 / 3-bis:178(已删除,见ADR-0050) / 3-ter:189 PipelineOrchestrator / 4:283 AgentCard / 5:295 Task分解 / 8:333 拓扑自演化(已删除,见ADR-0050) / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:318 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
@@ -15,7 +15,8 @@
 | 7 种编排模式执行（Supervisor/Hierarchy/Sequential/Parallel/MapReduce/Reflection/Swarm） | 编排模式的选择决策（由任务复杂度自适应） |
 | Agent Card 注册与能力发现（AgentRegistry.Register/Get，供 SpawnDepth 校验） | Agent 自身的能力实现（各 Agent 自行声明） |
 | Task DAG（Directed Acyclic Graph，有向无环图） 分解（跨 Agent 边界的子任务） | 子任务内部的工具调用 DAG（那是 M4 Micro-DAG） |
-| A2A（Agent-to-Agent，智能体间通信） 跨机互操作（gRPC/HTTP（HyperText Transfer Protocol，超文本传输协议）） | Provider 路由（那是 M1） |
+| 单进程内多 Agent 消息/任务流转（Blackboard CAS 认领 + Handoff） | Provider 路由（那是 M1） |
+| — | **A2A 跨机互操作（gRPC/HTTP）**：ADR-0070 状态 Proposed 未落码，且 `ROADMAP.md §3.4`「跨节点 Agent 永远不在计划」+ `ARCHITECTURE.md §1` 单进程主体硬约束明确禁止。M8 不承担跨机职责 |
 
 ---
 
@@ -87,7 +88,7 @@ SupervisorEpoch 在启动时写入 SQLite sys_config 原子递增，Worker 在 S
 
 > ✅ Reaper 已回退至规范的 `retry_count` 及 `provider_suspended_count` 逻辑；CompleteTask 竞态已修复。
 
-**阶段 2（Phase 2 GC，✅ 已实现）**：`reaperPhase2` 每秒随 Phase 1 一同触发；`running` 状态超 30s（`ZombieTaskTTL`）的僵尸任务先 cancel goroutine 再标 failed，`pending` 状态超 30min（`StarvationTaskTTL`）的饥饿任务直接标 failed，防止 SQLite 黑板体积失控。
+**阶段 2（Phase 2 GC，✅ 已实现）**：`reaperPhase2` 每秒随 Phase 1 一同触发；`running` 状态超 **30 分钟**的僵尸任务先 cancel goroutine 再标 failed，`pending` 状态超 **60 分钟**的饥饿任务直接标 failed（错误码 `reaper_phase2_pending_timeout`），防止 SQLite 黑板体积失控。两个超时目前直接内联在 `internal/execute/orchestrator/sqlite_blackboard_reaper.go` 的 SQL 字面量（`datetime('now','-30 minute')` / `'-60 minute'`）中，尚未提取为命名常量或 `state.yaml` 阈值——如需运行期可调，须先补 `m8_multiagent` 阈值键再改代码。
 
 ### 1.8 Agent 看板监听
 
@@ -158,6 +159,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 | 8 | Pipeline | 专家流水线(含验证) | PipelineOrchestrator |
 | 9 | PatternDAG | 强类型 DAG(防环/补偿) | PatternDAGExecutor |
 | 10 | StateGraph | 条件路由+有界循环(GD-8-001) | StateGraphExecutor |
+| 11 | PatternDebate | 对抗性辩论(多角色互驳收敛，ADR-0080) | DebateExecutor（详见 §3-sexies） |
 
 **MapReduceExecutor**: 
 1. **Map**: Planner拆N个同构子任务, 不同 scope, PostTask
@@ -168,7 +170,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 
 **SwarmCoordinator**: 
 1. **初始认领**: 初始 CAS 认领
-2. **Handoff**: 持有者不自适 → handoff (`Status` → `Pending` + `handoff_note` + `EventTaskHandoff`)
+2. **Handoff**: 持有者不自适 → handoff（`SwarmCoordinator.Handoff` 调 `FailTask`，payload 写入带 `[HANDOFF_NOTE]:` 前缀的移交说明；`Status` 回落 `Pending` 供其余 Agent 重认领。无独立 `EventTaskHandoff` 事件类型）
 3. **重匹配与认领**: 其余 Agent 按 `handoff_note` 重匹配 ActivationRule → 重认领
 4. **升级**: `max_handoff_depth(3)` 后升级 Supervisor。
 
@@ -295,6 +297,15 @@ AgentCard 声明 Agent 能力集（Skills/Tools/Models）、激活条件（TaskT
 Macro-DAG(本模块): 节点=子任务跨Agent边界, [Blackboard] 发布, 边=data|approval|sequential
 Micro-DAG(M4): 子任务内部工具调用, M4 Agent Kernel 管理
 
+### 5.1 分解实现组件（`internal/swarm/planner/`）
+
+| 组件 | 文件 | 职责 |
+|---|---|---|
+| `TaskDecomposer` | `decomposer.go` | 用 LLM 结构化输出把一个大目标拆成 Macro-DAG 子任务列表（每节点含 `id`/`name`/`description`/`tool_name`/`args`/`depends_on`）。生成的 `tool_name` 必须过 `ToolLookup` 白名单校验（消费方定义接口，由 `dispatch.Dispatcher` 满足，符合 R1.4）；模板约定的哨兵值 `agent:run` 表示"递归交子 Agent 处理"，不查注册表直接放行 |
+| `PlannerPool` | `pool.go` | 管理多条并发思考流，各流独立跑分解/规划，结果经 `whisperChan`（`protocol.MemoryWhisper` 耳语通道，M09 §异步耳语）异步回传主脑，而非同步返回 |
+
+> 命名注意：本包的池类型是 `PlannerPool`（规划流池）；与之同名易混的 `AgentPool` 在 `internal/agent/pool.go`，是 M04 的 per-session Agent 实例池（见 ADR-0029 §E），两者无关。
+
 Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential；ExecuteDAG 按拓扑分层并发（errgroup），任一层失败即终止并触发 Saga Rollback；Planner 5min 超时 → DAG Rollback，崩溃后由 Supervisor 通过 [EventLog] 恢复。**✅ 已实现（Saga rollbackSaga）**：`rollbackSaga` 从存根升级为真实补偿：`StateContext.SagaLog` 记录每步已执行节点，失败时逆序调用各节点注册的 `UndoFn`（无 UndoFn 的工具跳过并 WARN，最大努力补偿）。
 
 ---
@@ -316,8 +327,8 @@ Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential�
 | Supervisor Tree Agent 崩溃 | OneForOne 自动重启 (100ms→30s 退避，5 次上限) | 超过上限 Escalate → Root Supervisor |
 | Planner DAG 生成超时 (>5min) | DAG Rollback + ErrPlanningTimeout | — |
 | 黑板 entries 丢失 (崩溃前未写 EventLog) | 从 EventLog 回放重建 | — |
-| A2A 远程 Agent 不可达 | mark_unreachable → 不参与匹配 | 心跳恢复自动重新注册 |
-| 拓扑自演化 A/B 退化 | 自动回滚到 baseline 拓扑 | 7 天稳定后重试 |
+| ~~A2A 远程 Agent 不可达~~ | 不适用：无跨机 Agent（见 §0-bis） | — |
+| ~~拓扑自演化 A/B 退化~~ | 不适用：`TopologyEvolverService` 已于 2026-07-14 删除（ADR-0050，见 §8） | — |
 
 与 OSMemoryGuard 协同: L2 紧急 → 限制 Agent 并发 ≤2 / L3 临界 → StopAll（所有 Executing→Suspended），恢复后从 [EventLog] 回放重建黑板。local_only 模式下若 M13 ResourceGovernor 检测到 LLM（Large Language Model，大语言模型） 卸载死锁（M13 §2.0），M8 接收强制 Rollback 指令：Priority >= 2 的非核心任务直接 Rollback，Priority=1 的前台辅助任务 Suspended + 写入 Cold Archive，释放内存供 LLM 重载。
 
@@ -328,7 +339,7 @@ Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential�
 
 ## 11. 跨模块契约
 
-> 接口签名权威源在 `internal/protocol/interfaces.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
+> 接口签名权威源在 `internal/protocol/interfaces_swarm.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
 
 | 方向 | 接口/契约 | 用途 / 锚点 |
 |------|----------|-------------|
@@ -339,7 +350,7 @@ Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential�
 | M8→M3 | SurpriseIndex 消费 | 编排决策反馈。M3 §4 |
 | M9→M8 | Auto-Curriculum PostTask | priority=3 → 拓扑自演化候选。M9 §2.2 |
 | M13→M8 | HITL Suspend/Resume | SuspendForHITL / ResumeFromHITL。M13 §2.4 |
-| Schema | Blackboard / TaskEntry / AgentCard / AgentHandle | `internal/protocol/interfaces.go`, `types.go` |
+| Schema | Blackboard / TaskEntry / AgentCard / AgentHandle | `internal/protocol/interfaces_swarm.go`, `types.go` |
 | 全局字典 | Blackboard 定义、HE-Rule-5 状态机持有控制流 | 00-Global-Dictionary §8, §1-bis |
 
 ### 11.1 多 Agent 共享记忆说明
@@ -391,7 +402,7 @@ mcp_servers: []
 **max_depth 防递归**:
 - `TaskEntry` 注入 `SpawnDepth int`，子 Agent PostTask 时检查 `SpawnDepth ≥ Profile.MaxDepth`
 - 默认 `max_depth=1`（直接子 Agent 可生成，禁止孙 Agent），全局阈值见 `state.yaml §agents.max_depth`
-- 超深度 → 返回 `ErrMaxDepthExceeded`，冒泡至父 Saga 决策
+- 超深度 → `sqlite_blackboard.go` 返回 `apperr.New(apperr.CodeForbidden, ...)`（无专用 `ErrMaxDepthExceeded` 哨兵错误），冒泡至父 Saga 决策
 
 **内置 Agent 类型**（参考 Codex）:
 | 名称 | 用途 | Sandbox |
@@ -416,7 +427,7 @@ mcp_servers: []
 ```
 
 **执行流程**:
-`ReadCSV` 解析后按行展开为 TaskEntry 批量 PostTask，并发 PeekTask 轮询；所有行 Done/Failed 后写入结果 CSV。每行状态经 EventLog 双写（inv_M8_02，已实现）。
+`RunCSVFanout`（`internal/execute/orchestrator/csv_fanout.go` 对外主入口，内部批读函数为 `readCSVBatch`）解析后按行展开为 TaskEntry 批量 PostTask，并发 PeekTask 轮询；所有行 Done/Failed 后写入结果 CSV。每行状态经 EventLog 双写（inv_M8_02，已实现）。
 
 **状态持久化**（HE-Rule-6 State-in-DB（Database，数据库））:
 - 每行 Task 的状态变更经 `TaskEntry.Status` 写入 Blackboard → EventLog 双写（inv_M8_02）

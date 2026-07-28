@@ -1,7 +1,8 @@
 # ADR-0074: Semantic 与 GraphRAG 最小整合桥接
 
-## 状态
-Accepted（已执行）
+- **状态**: Accepted（已执行）
+
+> **注意**：本 ADR 中关于"不合并抽取实现"的结论已在 ADR-0077 中被推翻（抽取实现已合一为 SharedEntityExtractor）；写入期去重桥接与检索期联合种子结论保持有效。
 
 ## 背景
 原始设计 GD-13-002 建议将 Semantic (M5) 完全并入 GraphRAG (M10)，使 M5 只保留 Working/Episodic/Procedural，但这涉及改动面过大，且违背 Tier-0 使用 SQLite、Tier-1+ 使用图存储的分级架构设定。

@@ -2,7 +2,7 @@
 
 > 多存储引擎并存，全部可嵌入。Go 编排/接口/Outbox Worker/Schema Migration，Rust 侧车热路径引擎 FFI。
 > [HE-Rule-3] [HE-Rule-5] [HE-Rule-6] [Tier-0-Limit] [Day0-ColdStart] [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:167 tasks表 / 3:203 容量 / 4:252 Workspace / 5:294 SchemaManager / 6:308 Reindexer / 7:322 Go↔Rust FFI / 8:346 连接池 / 9:361 多写者 / 10:374 引擎速查 / 11:389 四层记忆映射 / 15:397 428(SOFT)降级 / 16:411 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:17 不变量速查 / 1:30 接口层 / 2:56 EventLog / 2.6:167 tasks表 / 3:214 容量 / 4:263 Workspace / 5:305 SchemaManager / 6:319 Reindexer / 7:333 Go↔Rust FFI / 8:357 连接池 / 9:372 多写者 / 10:385 引擎速查 / 11:400 四层记忆映射 / 15:408 428(SOFT)降级 / 16:422 依赖 -->
 ## 0-bis. 职责边界
 
 - M2 **是**: 多引擎统一抽象接口（Store interface） | M2 **不是**: 具体引擎的内部实现（引擎自身负责）
@@ -10,7 +10,7 @@
 - M2 **是**: 跨引擎 Outbox 异步投影 + MutationBus 单写者 | M2 **不是**: 跨引擎 ACID 保证（嵌入式不可实现）
 - M2 **是**: SQL Schema Migration 管理 | M2 **不是**: 业务缓存策略（M5 自行管理）
 - M2 **是**: 多引擎间数据路由（Storage-Router） | M2 **不是**: 索引构建逻辑（M10/KB 自行管理）
-- M2 **是**: DDL 物理 schema 权威定义 | M2 **不是**: 跨模块接口契约定义（`internal/protocol/interfaces.go`）
+- M2 **是**: DDL 物理 schema 权威定义 | M2 **不是**: 跨模块接口契约定义（`internal/protocol/interfaces_store.go`）
 
 ---
 
@@ -31,7 +31,7 @@
 
 ### 1.1 Store 接口
 
-契约权威源 `internal/protocol/interfaces.go` `Store` / `Transaction` 接口。所有引擎适配器须实现。
+契约权威源 `internal/protocol/interfaces_store.go` `Store` / `Transaction` 接口。所有引擎适配器须实现。
 
 ### 1.2 [Storage-Router]
 
@@ -134,10 +134,9 @@ OutboxWorker（`internal/store/outbox_worker.go`）批量拉取待处理记录�
 **Cursor 持久化**：游标持久化到 `sys_config` 表（key=`outbox_cursor`），`loadCursor` 启动时恢复，`saveCursor` 每批提交后原子 CAS（Compare-And-Swap，比较并交换） 更新，保证重启后不漏消费。
 
 **指数退避**：失败记录 backoff = min(outbox_backoff_initial_ms << attempts, outbox_backoff_max_ms)，
-当前默认 outbox_backoff_initial_ms=100ms，outbox_backoff_max_ms=8000ms（见 state.yaml §thresholds/m2_storage）
+当前默认 outbox_backoff_initial_ms=100ms，outbox_backoff_max_ms=8000ms，outbox_max_attempts=5（见 state.yaml §thresholds/m2_storage，Go 侧对应 `config.M2StorageThresholds.OutboxBackoffInitialMs` / `OutboxBackoffMaxMs` / `OutboxMaxAttempts`）。
 
-> [!NOTE]
-> 当前代码实现 (`internal/store/outbox_worker.go`) 仍硬编码为 5000ms，此文档描述为最终 SSoT 设计意图，待后续代码重构对齐。
+> **✅ 已对齐（2026-07-28，DR-1-007）**：此前四方不一致——state.yaml/本文 (100/8000/5)、`outbox_worker.go` 构造兜底 (100/8000/3)、启动点 `cmd/polaris/boot_substrate.go` 内联字面量 (1000/30000/3)。根因是启动点绕过配置层直接传字面量。现已改为 `NewOutboxWorker(db, 5, m2.OutboxMaxAttempts, m2.OutboxBackoffInitialMs, m2.OutboxBackoffMaxMs)`，四方由构造关系保证一致：state.yaml → `DefaultThresholds()` → 启动注入 → Worker 运行值。`pollInterval`（5s）无对应阈值键，保留字面量且与 Worker 内部兜底一致。
 
 `next_retry_at` 业务主动设置的最早执行时间下界与退避共同生效（取最大值）。
 
@@ -184,15 +183,27 @@ DDL 权威定义见 `internal/protocol/schema/007_tasks.sql`。以下为文档�
 | `session_id` | TEXT | 所属 Session，关联 events 表 |
 | `status` | TEXT | Pending/Claimed/Executing/Done/Failed/Suspended/Compensating |
 | `priority` | INTEGER DEFAULT 1 | 0=用户交互 / 1=前台辅助 / 2=后台优化 / 3=最低（Auto-Curriculum） |
+| `intent` | BLOB (nullable) | TaskEntry.Intent 持久化落点（2026-07-12 补齐），Worker 认领后读取实际意图内容 |
 | `claimed_by` | TEXT (nullable) | 认领该任务的 agentID；nil 表示未认领 |
 | `claimed_at` | TEXT (nullable) | 认领时间 UTC |
 | `expires_at` | TEXT (nullable) | 租约到期时间 UTC；Reaper 检测此字段驱逐过期任务 |
 | `version` | INTEGER DEFAULT 0 | 乐观锁版本计数；CAS Claim/BeginExecution/Reaper 均递增 |
 | `replan_count` | INTEGER DEFAULT 0 | ReplanGuard 计数；>= MaxReplanAttempts (`spec/state.yaml §m4_kernel.max_replan_attempts`) → S_FAILED |
+| `retry_count` | INTEGER DEFAULT 0 | 当前重试次数计数 |
+| `max_retries` | INTEGER DEFAULT 3 | 最大重试次数上限 |
 | `depends_on` | TEXT (nullable) | JSON array of task_id，Macro-DAG（Directed Acyclic Graph，有向无环图） 前驱依赖 |
+| `result` | BLOB (nullable) | CompleteTask 写入的任务产出（2026-07-26 补齐），供委派/编排子任务完成结果回读（transfer_to_agent 恢复分支、PatternDebate 辩论历史） |
+| `error` | TEXT (nullable) | 任务失败错误信息 |
 | `suspend_reason` | TEXT (nullable) | 挂起原因标记，枚举: `hitl` / `provider_exhausted` / `killswitch`（**added: #23 audit fix**） |
 | `pii_vault_blob` | TEXT (nullable) | SessionPIIVault.SuspendSnapshot 落盘的加密 blob（AES-256-GCM，key 由 M11 CredentialVault.persistent_key 派生）；恢复后由 RestoreFromSnapshot 消费并 SecureZero（**added: #23 audit fix**） |
 | `provider_suspended_count` | INTEGER DEFAULT 0 | provider_exhausted 自动唤醒计数；> 5 触发 [ESCALATE] + HITL（Human-in-the-loop，人机协同），转 HITL-Suspended TTL 管理（**added: #23 audit fix**） |
+| `intent_taint` / `result_taint` | INTEGER DEFAULT 0 | TaintLevel（0=None~4=UserReviewed），随 Intent/Result 跨 Agent 边界传递（inv_M8_05），只升不降 |
+| `pipeline_id` / `pipeline_stage` | TEXT (nullable) | 流水线阶段 handoff 字段（M08 §5 Pipeline Protocol）：所属流水线实例 ID / 阶段名称（research/plan/execute/verify） |
+| `context_payload` | TEXT (nullable) | 前序阶段结构化产出（JSON），Agent S_PERCEIVE 优先读取 |
+| `namespace` | TEXT (nullable) | 协同任务共享记忆命名空间（GD-14-001），同一 namespace 下多个 Worker Agent 可互相检索 episodic 记忆片段 |
+| `trace_id` / `span_id` | TEXT (nullable) | 分布式追踪标识，关联 OTel Span |
+| `tokens_input` / `tokens_output` / `tokens_cache_read` | INTEGER DEFAULT 0 | 本任务累计 LLM 输入/输出/缓存命中 token 数（per-task observability，HE-Rule-1） |
+| `cost_usd` | REAL DEFAULT 0.0 | 本任务估算费用 |
 | `created_at` | TEXT | 任务创建时间 UTC |
 | `updated_at` | TEXT | 最后状态变更时间 UTC |
 
@@ -417,7 +428,7 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
 | M5 Memory | 四层记忆 → Store 引擎绑定、episodic_events 派生投影 | M5 §1, §3 |
 | M10 Knowledge RAG | doc_nodes/chunks/summaries 三层索引存储、Outbox Worker 共用 | M10 §3.2 |
 | M11 Policy Safety | CredentialVault 为前置屏障（StorageFabric.Open() 须在 Init() 之后） | M11 §5.2 |
-| 接口定义 | Store/Transaction/Iterator/MutationIntent/DatabaseWriter | internal/protocol/interfaces.go, internal/store/ |
+| 接口定义 | Store/Transaction/Iterator/MutationIntent/DatabaseWriter | internal/protocol/interfaces_store.go, internal/store/ |
 | 全局字典 | HE-Rule-6 State-in-DB、EventLog/MutationBus/Idempotency-Key 定义 | 00-Global-Dictionary §6 |
 | DDL | 全部 DDL（001_events 至 028_apps，共 25 份，权威目录 `internal/protocol/schema/`） | internal/protocol/schema/ |
 | DDL 约束 (entities 表) | `UNIQUE(name, type)` 约束位于 `004_semantic_memory.sql`，支持 GraphWriter OpUpsert 的幂等 ON CONFLICT 语义（M10 §2.7） | internal/protocol/schema/004_semantic_memory.sql |

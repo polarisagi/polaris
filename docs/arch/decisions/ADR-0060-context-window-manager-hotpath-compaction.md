@@ -1,8 +1,6 @@
-# ADR-0060：M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取
+# ADR-0060: M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取
 
-## 状态
-
-已接受，已实现。
+- **状态**: Accepted（已执行）
 
 ## 背景
 

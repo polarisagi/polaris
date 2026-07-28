@@ -127,7 +127,7 @@ Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模�
 | XR-09 | **LLM 调用规范**。见下方 [XR-09 补充](#xr-09-补充) | M1→M4,M9,M10 |
 | XR-10 | **工具/技能/插件执行规范**。见下方 [XR-10 补充](#xr-10-补充) | M7→M4,M6,M13 |
 | XR-11 | **文件系统操作分层规范**。见下方 [XR-11 补充](#xr-11-补充) | M7→全模块 |
-| XR-12 | **模块 import 层级约束**。业务模块（Arch-L2~L4）禁止跨层直接 import 具体实现；接口定义权属于消费方；bootstrap 是唯一允许跨层引用的 DI 容器。完整规则见 `docs/arch/Module-Dependency-Axioms.md`。 | 全模块 |
+| XR-12 | **模块 import 层级约束**。业务模块（Arch-L2~L4）禁止跨层直接 import 具体实现；接口定义权属于消费方；bootstrap 是唯一允许跨层引用的 DI 容器。`internal/bootstrap`（`Bootable` 接口 + `DependencyMap` Kahn 拓扑排序）负责启动期依赖排序装配，与优雅关停（Phase 1 Ingress→Phase 2 Engine→Phase 3 Substrate→Phase 4 Storage 四阶清扫）共用同一拓扑图的逆序。完整规则见 `docs/arch/Module-Dependency-Axioms.md`。 | 全模块 |
 | XR-13 | **pkg/ 净化约束**。`pkg/` 目录仅允许 POD 数据结构（struct/enum/const/纯内存方法），绝对禁止定义任何 `interface`，禁止 import 任何 `internal/` 包。interface 必须定义在消费方模块内部。 | pkg/→internal/ |
 
 #### XR-04 补充
@@ -613,13 +613,13 @@ Go 内存内统一为 `internal/security/` 的 `TaintLevel` 枚举类型 (int)�
 |------|---------|
 | `[EventLog]` | `internal/protocol/schema/001_events.sql` |
 | `[MutationBus]` | `internal/protocol/schema/002_outbox.sql` + `internal/protocol/types.go` |
-| `[Storage-SQLite]` / `[Storage-SurrealDB-Core]` / `[Storage-Router]` | `internal/protocol/interfaces.go` (Store) |
-| `[HybridRetriever]` / `[RRF]` | 接口定义: `internal/protocol/interfaces.go` (HybridRetriever)；实现: `internal/store/` |
-| `[Wasm-Sandbox]` | `internal/protocol/interfaces.go` (SkillExecutor) |
-| `[Cedar-Gate]` | `internal/protocol/interfaces.go` (PolicyGate) |
-| `[Blackboard]` | `internal/protocol/interfaces.go` (Blackboard) |
+| `[Storage-SQLite]` / `[Storage-SurrealDB-Core]` / `[Storage-Router]` | `internal/protocol/interfaces_store.go` (Store) |
+| `[HybridRetriever]` / `[RRF]` | 接口定义: `internal/protocol/interfaces_memory.go`（HybridRetriever）；实现: `internal/store/` |
+| `[Wasm-Sandbox]` | `internal/protocol/interfaces_*.go` (SkillExecutor) |
+| `[Cedar-Gate]` | `internal/protocol/interfaces_*.go` (PolicyGate) |
+| `[Blackboard]` | `internal/protocol/interfaces_swarm.go` (Blackboard) |
 | `[TaintLevel]` / `[Taint-Prop]` | `internal/protocol/types.go` (TaintLevel) |
-| `[SSRFGuard]` | `internal/protocol/interfaces.go` (SafeDialer) |
+| `[SSRFGuard]` | `internal/protocol/interfaces_*.go` (SafeDialer) |
 | `[TokenBurnRate]` | `internal/observability/` (EMA 计算 + 熔断) |
 | `[SurpriseIndex]` | `internal/observability/` (Prometheus Gauge) / `internal/learning/` (M9 完整版推送) |
 | `[KillSwitch]` | `internal/security/` (FSM + 阶段变迁) |

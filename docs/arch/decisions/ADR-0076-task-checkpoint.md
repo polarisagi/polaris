@@ -1,7 +1,6 @@
 # ADR-0076: Task Checkpoint and Resumption
 
-## Status
-Accepted
+- **状态**: Accepted（已执行）
 
 ## Context
 在当前的执行模块中，Reaper 在任务超时后将其整体重置为 `Pending` (见 ADR-0057 崩溃恢复，主要覆盖 perceive/plan/reflect 阶段)，但对于 Execute 阶段保守跳过，缺乏节点级别的恢复记录。这导致如果在执行长程 DAG 的部分节点后发生崩溃，重新执行可能会重放非幂等副作用（例如发邮件、转账或外部写操作）。

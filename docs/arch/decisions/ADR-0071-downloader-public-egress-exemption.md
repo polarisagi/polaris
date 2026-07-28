@@ -1,7 +1,6 @@
-# ADR 0071: Downloader Public Egress Exemption
+# ADR-0071: Downloader Public Egress Exemption
 
-## 状态
-已接受
+- **状态**: Accepted（已执行）
 
 ## 上下文
 在代码审查过程中（见 `UPGRADE-PROMPT.md` P0-3），发现 `internal/downloader/proxy.go` 中的 `canReachGitHub` 等函数使用了裸 `http.DefaultTransport`，绕过了 M11 `SafeDialer` 的五阶段网络隔离（违反 XR-06 红线）。

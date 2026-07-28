@@ -2,7 +2,7 @@
 
 > MCP（Model Context Protocol，模型上下文协议） 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:166 三级沙箱(CANONICAL) / 5:355 PolicyGate / 6:414 Capability / 7:439 动作扩展 / 8:580 Usage演化 / 12:621 (SOFT)降级 / 13:639 跨模块契约 / 14:659 Plugin / 15:701 Hook -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:180 三级沙箱(CANONICAL) / 5:376 PolicyGate / 6:435 Capability / 7:460 动作扩展 / 8:601 Usage演化 / 12:642 (SOFT)降级 / 13:660 跨模块契约 / 14:680 Plugin / 15:722 Hook -->
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -112,7 +112,7 @@ A2A 同进程黑板模式（M8）；跨机: HTTP/gRPC 端点。构建时按部�
 
 ## 3. 工具注册系统
 
-Tool/CapabilityLevel/SideEffect/RiskLevel/SandboxTier/ToolSource/ToolResult 类型定义见 `internal/protocol/types.go`。ToolRegistry 接口见 `internal/protocol/interfaces.go`。
+Tool/CapabilityLevel/SideEffect/RiskLevel/SandboxTier/ToolSource/ToolResult 类型定义见 `internal/protocol/types.go`。ToolRegistry 接口见 `internal/protocol/interfaces_*.go`。
 其中 `ToolResult` 支持携带 `ImageParts []ImagePart`，解决 MCP 等外部工具返回图片数据的能力需求。
 
 Schema 版本化（防技能断裂）: 新增可选字段=Patch, 新增必填字段=Minor, 移除/重命名字段=Major。Minor/Patch 向后兼容；Major→Logic Collapse 重生成（`needs_adaptation`）。工具来源: Built-in(~20) | MCP(inf) | Skill(inf) | A2A(inf) | LLM-generated(临时，[Sandbox-L3])
@@ -127,15 +127,29 @@ Schema 版本化（防技能断裂）: 新增可选字段=Patch, 新增必填字
 
 Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接执行，提供最高性能且受限于原生沙箱策略。
 
-核心内置工具清单（`internal/tool/builtin/` 共 22 个 + `git_text_tools.go` 的 git 工具），严禁在外部或扩展层绕过它们：
+核心内置工具清单（共 **42 个**，分 4 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配），严禁在外部或扩展层绕过它们：
+
+**入口 1 — `builtin.RegisterBuiltinTools`（31 个，元数据来自 `internal/tool/builtin/<name>/tool.yaml` + `schema.json`）**
 
 - **文件读写**：`read_file`、`write_file`、`list_dir`、`str_replace_editor`（防漂移编辑器，含 undo 缓冲）、`multi_edit`（单文件多处原子修改）、`glob`（受限目录/文件模式匹配）
 - **搜索**：`grep`（工作区全文正则）
 - **网络**：`fetch_url`（SafeDialer 出站保护）、`web_search`（原生网页检索）
-- **执行**：`bash`（平台原生沙箱）、`run_command`（受限构建，如 `go test`）、`execute_wasm`（Wasm 沙箱执行）、`data_query`（工作区结构化数据查询）
+- **执行**：`bash`（平台原生沙箱）、`run_command`（受限构建，如 `go test`）、`data_query`（工作区结构化数据查询）
+- **数据/文本处理**：`csv_parse`（CSV 解析）、`diff_text`（文本差异）、`template_render`（模板渲染）
+- **多媒体**：`video_analysis`（视频内容分析）、`tts_edge`（Edge TTS 语音合成）
+- **系统**：`get_datetime`（当前时间）、`sys_probe`（硬件探针，M03 §5）
 - **辅助**：`todo_read`/`todo_write`（任务列表持久化）、`notebook_read`/`notebook_edit`（Jupyter Notebook）、`read_tool_ref`（工具定义自省）
 - **Git**：`git_diff`、`git_commit`（`git_text_tools.go`，Agent 可直接调用无需 MCP 扩展）
-- **记忆（LLM 主动写）**：`memory_write`（写入语义事实）、`memory_search`（混合检索记忆）、`memory_append`（追加属性到已有实体）、`memory_expire`（标记事实失效）— 详见 M05 §5-bis。通过 `builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)` 统一注册（`internal/tool/builtin/memory_tools.go`）。
+- **Cron**（条件注册，`cronRepo != nil` 时才注册；单元测试无 Repo 时跳过）：`cron_list`、`cron_create`、`cron_delete`
+- **Rich 工具**（`RegisterRich`，默认 `TaintHigh`）：`execute_wasm`（Wasm 沙箱执行）、`get_task_result`（异步任务结果回取，GD-08-001）
+
+**入口 2 — `builtin.RegisterMemoryTools`（8 个，`internal/tool/builtin/memory_tools.go`；元数据内联构造不走 `tool.yaml`）**
+
+`memory_write`（写入语义事实）、`memory_search`（混合检索记忆）、`memory_append`（追加属性到已有实体）、`memory_expire`（标记事实失效）、`memory_reflect`（写反思记忆）、`core_memory_edit`（编辑 ZoneCoreMemory 块）、`memory_page_out`/`memory_page_in`（核心记忆换出/换入）— 详见 M05 §5-bis 与 ADR-0033。
+
+**入口 3 — `builtin.RegisterSkillTools`（2 个，`internal/tool/builtin/skill_tools.go`）**：`skill_save`、`skill_generate`（Logic Collapse 蒸馏，详见 M06 §2.2）。
+
+**入口 4 — 惰性目录（`boot_tools.go:457`，`CompositeCatalog`）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold`＝40 时用于按需检索工具定义，避免全量 schema 撑爆 prompt）。
 
 > 历史遗留的 Wasm 版 `file_read`/`file_write`/`web_fetch`/`shell_exec` 技能已全部废弃并清理。
 
@@ -145,7 +159,7 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 
 ### 3.2 平台原生进程沙箱（Rust V2 统一沙箱）
 
-`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts_edge` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/sandbox/native_os_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
+`internal/tool/sandbox/rust_native_sandbox.go`（purego FFI 桥）+ `internal/tool/builtin/bash/sandboxed_exec.go`（Go 侧封装）— 为内置 `bash`/`run_command`/`git_diff`/`git_commit`/`video_analysis`/`tts_edge` 等工具提供进程级隔离，与 Wasmtime Wasm 沙箱互补（Wasmtime 管 Wasm 技能，原生沙箱管系统进程）。V1 接口（`WrapBashCmd`/`NativeSandboxCfg`/`internal/sandbox/native_os_sandbox.go`）已于 2026-07-02 全量删除，CmdRunner 与内置工具统一迁移至 V2（`native_sandbox_exec_v2`）。
 
 `runSandboxedArgv(ctx, callerType, execPath, execArgs, workDir, allowedPaths, netAllow, timeoutMs, sandboxEnabled, bwrapPath)` 构造 `protocol.SandboxContext`（`ExecPath`+`ExecArgs` argv 模式，不经 shell 解释，杜绝命令注入）并调用 `native_sandbox_exec_v2`，按平台分发：
 
@@ -207,7 +221,14 @@ Wasm 沙箱由 Rust Wasmtime 引擎驱动，通过 purego FFI 桥接至 Go 层�
 | CPU / 壁钟 | 30s / 90s | 10s / 30s | 5s / 15s |
 | 调用次数 | 10000 | 5000 | 2000 |
 | I/O 总量 | 100MB | 10MB | 1MB |
-| 内存(maxPages) | 256 (16MB) | 128 (8MB) | 64 (4MB) |
+
+内存上限不按 Built-in/User/LLM 生成分档，而按沙箱等级 + 资源档位分档，SSoT 在 `spec/state.yaml §thresholds.m7_tool`（对应 `internal/config/thresholds.go` `M7ToolThresholds`）：
+
+| 键 | 值 | 适用 |
+|---|---|---|
+| `sbx_l2_low_mem_mb` | 64 MB | L2 Wasm 低档（低配硬件 / 低信任脚本） |
+| `sbx_l2_medium_mem_mb` | 256 MB | L2 Wasm 中档（默认，与 `script.max_memory_mb` 一致） |
+| `sbx_l3_high_mem_mb` | 512 MB | L3 容器高档 |
 
 **SandboxSpec tier 一致性**: `SandboxRouter.Execute` 传入 `SandboxSpec.SandboxTier` 为 `AssignSandboxTier` 升级后的实际 tier，确保审计日志与执行层一致。
 
@@ -638,7 +659,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 ## 13. 跨模块契约
 
-> 接口签名权威源在 `internal/protocol/interfaces.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
+> 接口签名权威源在 `internal/protocol/interfaces_*.go` + `types.go`。本表仅列依赖方向 + 一句话语义 + 锚点。
 
 | 方向 | 接口/契约 | 用途 / 锚点 |
 |------|----------|-------------|
@@ -694,7 +715,7 @@ POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.
 - Plugin Bundle MCP 默认 Taint=High（M7 inv_M7_02）
 - Script Skills trust_tier 继承 extension_catalog
 
-**代码位置**: `internal/gateway/server/plugin/catalog.go`（安装）、`internal/extension/marketplace/adapter.go`（多厂商解析）、`internal/extension/marketplace/loader.go`（Polaris 原生格式）
+**代码位置**: `internal/gateway/server/plugin/catalog.go`（安装）、`internal/extension/marketplace/adapter.go`（`ParseManifestDir` 统一解析多厂商格式：OpenAI ai-plugin.json / Claude `.claude-plugin` / Codex `.codex-plugin` / Polaris 原生 `.polaris-plugin` 均优先原生格式）
 
 ---
 
@@ -739,8 +760,9 @@ hooks:
   only-up 三步的独立 `CmdRunner` 旁路；`envelope==nil` 时 fail-closed，不回退裸执行
 
 **代码位置**: `internal/action/hook/`（hook.go 类型定义 / registry.go 加载 hooks.yaml /
-runner.go 实现 `sandbox.HookFirer` 接口 + `ExecEnvelope` 化执行 / script.go 底层 `RunScript`
-exec 原语，供 ShellHooks 复用）；`sandbox.HookFirer` 接口与 `ExecEnvelope.SetHookFirer` 注入点见
+runner.go 实现 `sandbox.HookFirer` 接口 + `ExecEnvelope` 化执行）；底层 `RunScript`
+exec 原语不在本包，定义在 `internal/sysmgr/osutils/script.go`，由 Hook 框架与 ShellHooks 共用；
+`sandbox.HookFirer` 接口与 `ExecEnvelope.SetHookFirer` 注入点见
 `internal/sandbox/envelope.go`；生产环境构造见 `cmd/polaris/boot_tools.go`（`hook.LoadDefault` +
 `hook.NewRunner` + `envelope.SetHookFirer`）。
 
@@ -748,9 +770,9 @@ exec 原语，供 ShellHooks 复用）；`sandbox.HookFirer` 接口与 `ExecEnve
 （`[ShellHooks]`，见 `00-Global-Dictionary.md` §1）承接生命周期类事件：`gateway.startup`/
 `session.new`/`message.before`/`message.after`/`turn.stop`（对应 Codex Stop 语义）/
 `session.compact.before`/`session.compact.after`，按事件名读取单个脚本文件，非本节的
-`hooks.yaml`+matcher 模型；执行路径是 `hook.RunScript` 裸 `exec.CommandContext`（无沙箱，
+`hooks.yaml`+matcher 模型；执行路径是 `osutils.RunScript` 裸 `exec.CommandContext`（无沙箱，
 类 git-hooks 信任模型，设计如此非缺陷——脚本目录可写者已具备完整文件系统权限）。两者共享
 同一底层 `RunScript` 原语，覆盖不同粒度（ShellHooks=会话/进程生命周期，本节=单次工具调用），
 相互独立、互不调用。
 
-> **✅ 已修复（native_sandbox.rs mutex 中毒）**：`rust/substrate/src/native_sandbox.rs` 中 stdout/stderr 采集子线程的 `buf.lock().unwrap()` 已改为 `unwrap_or_else(|e| e.into_inner())`，锁中毒时取回内部数据而非 panic，子线程不再因锁异常丢失输出。
+> **✅ 已修复（native_sandbox mutex 中毒）**：`rust/substrate/src/native_sandbox/mod.rs` 中 stdout/stderr 采集子线程的 `buf.lock().unwrap()` 已改为 `unwrap_or_else(|e| e.into_inner())`，锁中毒时取回内部数据而非 panic，子线程不再因锁异常丢失输出。

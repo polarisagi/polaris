@@ -169,7 +169,7 @@ M4 读取 `polaris_surprise_index` Gauge (fallback → `polaris_surprise_index_b
 
 ## 5. Hardware Capability Probe + AutoConfig + FeatureGate
 
-> 代码见 `internal/observability/`（hardware_probe.go, auto_config.go, feature_gate.go, memory_probe_linux.go, memory_probe_darwin.go）。
+> 代码见 `internal/observability/probe/`（hardware_probe.go, feature_gate.go, memory_probe_linux.go, memory_probe_darwin.go）与 `internal/observability/`（auto_config.go）。
 
 ### 5.1 启动期: HardwareProbe → AutoConfig
 
