@@ -58,6 +58,9 @@ func NewRemoteSandbox(endpoint, authToken string, timeoutSec int, client *http.C
 	}
 	if client == nil {
 		client = network.NewSafeHTTPClient(nil).Client
+	} else {
+		c := *client // 浅拷贝，避免修改调用方持有的原始对象
+		client = &c
 	}
 	client.Timeout = time.Duration(timeoutSec) * time.Second
 
