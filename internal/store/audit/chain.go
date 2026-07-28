@@ -45,14 +45,14 @@ func (a *AuditChain) VerifyChain(ctx context.Context, fromOffset int64) (VerifyR
 	// 防止归档/截断后的链首断裂被静默跳过
 	if fromOffset > 0 {
 		var prevRowHash sql.NullString
-		anchorQuery := `SELECT hash FROM events WHERE "offset" = ?`
+		anchorQuery := `SELECT hash FROM events WHERE offset = ?`
 		if err := a.db.QueryRowContext(ctx, anchorQuery, fromOffset-1).Scan(&prevRowHash); err != nil && err != sql.ErrNoRows {
 			return report, apperr.Wrap(apperr.CodeInternal, "VerifyChain: query anchor hash failed", err)
 		}
 		if prevRowHash.Valid {
 			expectedPrevHash = prevRowHash.String
-			isFirstRow = false // 已有锚点，首行同样参与 prev_hash 校验
 		}
+		isFirstRow = false // 取消 isFirstRow 跳过逻辑，首行纳入校验
 	}
 
 	for rows.Next() {
