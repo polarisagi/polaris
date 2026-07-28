@@ -20,20 +20,6 @@ import (
 // Consolidation — Episodic → Semantic 记忆压缩管线。
 // 架构文档: docs/arch/M05-Memory-System.md §4
 
-// ConsolidationPipeline 4 阶段压缩管线。
-// 触发: 主题转换 shift → 立即触发 | eventCount ≥ 50 → 触发 | sessionClosed → 强制触发.
-//
-// 依赖注入:
-//   - episodic:   读取待压缩的 Episodic 事件
-//   - semantic:   写入提取出的实体/关系/摘要
-//   - skills:     Stage 4 Logic Collapse 注册新 Skill（nil 时跳过）
-//   - summarizer: LLM 提取实体/摘要/画像合成（nil 时走规则 fallback）
-//
-// 2026-07-11 复核修复（GR-5-005）：移除此前直接持有的 protocol.Provider 字段。
-// internal/memory/CLAUDE.md 明令 memory 包 [MUST NOT] 持有 LLM Provider 的具体
-// 实现引用，必须通过注入的 LLMSummarizer 接口调用。此前只有 buildSummary 一处
-// 迁移到了 summarizer，extractEntitiesAndRelations/synthesizeUserProfile 仍在
-// 直接用 provider——这是同一根因在同一文件里遗漏的两处，一并收口到 summarizer。
 // GraphEntityFetcher 定义 GraphRAG 侧实体查询接口，用于写入期去重桥接（B2）。
 // 通过本地接口定义打断 L1(memory) → L2(knowledge/graphrag) 的层级依赖。
 // 调用方只做 nil 检查，不访问返回值的具体字段，因此使用 any 作为返回类型。
@@ -54,6 +40,20 @@ type SharedEntityExtractor interface {
 	ExtractEntitiesAndRelations(ctx context.Context, sourceID, text string) ([]*types.Entity, []*types.Relation, error)
 }
 
+// ConsolidationPipeline 4 阶段压缩管线。
+// 触发: 主题转换 shift → 立即触发 | eventCount ≥ 50 → 触发 | sessionClosed → 强制触发.
+//
+// 依赖注入:
+//   - episodic:   读取待压缩的 Episodic 事件
+//   - semantic:   写入提取出的实体/关系/摘要
+//   - skills:     Stage 4 Logic Collapse 注册新 Skill（nil 时跳过）
+//   - summarizer: LLM 提取实体/摘要/画像合成（nil 时走规则 fallback）
+//
+// 2026-07-11 复核修复（GR-5-005）：移除此前直接持有的 protocol.Provider 字段。
+// internal/memory/CLAUDE.md 明令 memory 包 [MUST NOT] 持有 LLM Provider 的具体
+// 实现引用，必须通过注入的 LLMSummarizer 接口调用。此前只有 buildSummary 一处
+// 迁移到了 summarizer，extractEntitiesAndRelations/synthesizeUserProfile 仍在
+// 直接用 provider——这是同一根因在同一文件里遗漏的两处，一并收口到 summarizer。
 type ConsolidationPipeline struct {
 	episodic        protocol.EpisodicMemory
 	semantic        protocol.SemanticMemory
