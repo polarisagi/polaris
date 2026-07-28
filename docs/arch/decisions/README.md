@@ -90,7 +90,7 @@ ADR 被代码引用时，源文件头部加：
 | 0058 | SICCleaner LLM 检测器接线 | Accepted（已执行） | 2026-07-22 |
 | 0059 | Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移） | Accepted（已执行） | 2026-07-22 |
 | 0060 | M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取 | Accepted（已执行） | 2026-07-22 |
-| 0061 | 2026-07-22 deadcode 复核（47 项，1 项新发现 GoldmarkChunker 已删除，2 项待产品决策） | Accepted（部分已执行） | 2026-07-22 |
+| 0061 | 2026-07-22 deadcode 复核（47 项，1 项新发现 GoldmarkChunker 已删除，2 项待产品决策） | Accepted（已执行） | 2026-07-22 |
 | 0062 | deadcode 44 项 DEFER 最终结清（删除为主 + 门控白名单；C2 AddToGate 复核确认删除正确，taint_sanitizer 复核恢复；Tier1 本地默认选型 Qwen3-0.6B 对） | Accepted（已执行） | 2026-07-22 |
 | 0063 | llama_infer 控制面/计算面分离（ABORT_FLAG 协作式取消 + status 无锁只读镜像 STATUS；不改单槽位串行推理取舍） | Accepted（已执行） | 2026-07-22 |
 | 0064 | Channel 适配器注册表重构（A-1，sync.OnceValue 单例查表）+ 统一入站分发接线（A-2） | Accepted（已执行） | 2026-07-23 |
@@ -107,6 +107,8 @@ ADR 被代码引用时，源文件头部加：
 | 0076 | Task Checkpoint and Resumption（task_checkpoints 表 + StateGraphExecutor 断点续跑，补齐 ADR-0057 execute 阶段保守跳过局限） | Accepted（已执行） | 2026-07-24 |
 | 0077 | Consolidation 与 GraphRAG 实体/关系抽取合一（推翻 ADR-0074 §3"不合并抽取实现"结论，写入期去重桥接与检索期联合种子不变） | Accepted（已执行） | 2026-07-25 |
 | 0079 | Sandbox-L4-Persistent 改用长驻解释器进程池（推翻原 ADR-0078"诚实留空"结论，含原 ADR-0078；session-scoped Python/Bash 长驻进程，经 ArgvWrapper 复用 L3 同款 Rust 沙箱封装，隔离强度不降级） | Accepted（已执行） | 2026-07-25 |
+| 0080 | 新增 Debate/Critic 编排模式（GD-6） | Accepted（已执行） | 2026-07-26 |
+| 0081 | 架构文档结构治理（拆分提案暂缓 + 失效路径引用 CI 门控） | Accepted（门控已实施）/ Deferred（四条拆分） | 2026-07-28 |
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 

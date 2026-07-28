@@ -173,7 +173,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 - `internal/` 禁全局可变变量（并发安全 + 测试隔离；ADR-0001 豁免仅限 observability/metrics 一等公民指标）
 - 跨模块走 `internal/protocol/` 结构化事件（禁字符串隐式耦合）
 - Rust 仅性能关键 FFI（维持语言边界）
-- **[强制] 提交前自检**：在执行 `git commit` 之前，必须先执行 `make lint`（或 `make fmt && make lint`）确保代码风格、圈复杂度等检查全部绿灯。
+- **[强制] 提交前自检**：在执行 `git commit` 之前，必须先执行 `make lint`（或 `make fmt && make lint`）确保代码风格、圈复杂度等检查全部绿灯。**若本次改动涉及 `docs/arch/` 或包路径迁移，追加 `make docs-refs`**（失效路径引用门控，ADR-0081；白名单 `scripts/docs-refs-allowlist.txt` 仅收"文档在记载已删除/已迁移路径"的历史注记）。
 - **[强制] 配置变更策略**：凡修改 `internal/config/` 中的结构体定义，**必须**执行 `make gen-threshold-examples` 重新生成 TOML 配置文件并提交。禁止代码与配置模板脱节。
 - **[强制] DDL 修改策略**：`internal/protocol/schema/NNN_*.sql` 是 Schema SSoT，禁止以 ALTER TABLE / ADD COLUMN 补丁文件打补丁。
   - **上线前**（`§当前阶段` 未标注"上线后"）：Schema 变更**直接修改原始建表文件**；开发库删除重建（`rm ~/.polarisagi/polaris/data/polaris.db`）。
@@ -197,15 +197,15 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锁点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0079，0032 未分配；0027/0028/0034/0035/0036/0038/0040/0072/0078 已删除并入其他 ADR，见 decisions/README.md）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0081，0032 未分配；0027/0028/0034/0035/0036/0038/0040/0072/0078 已删除并入其他 ADR，见 decisions/README.md）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go↑01 / Rust↑02 / Agent↑03 / 跨模块↑04 / 审查↑06 / 提交前↑06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
 8. `docs/specs/09-LLM-Agent-Production.md` → **写任何 Agent/LLM/Tool/RAG/Memory 相关代码前必读**（A-01~A-14 陷阱 + P-1~P-9 生产原则 + RAG/并发安全检查清单）
 9. `internal/protocol/` → 跨模块共享类型与接口契约
-10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~034，共 31 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
+10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~035，共 32 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
-**docs/arch/decisions/ 文件清单**（ADR-0001~0079，0032 未分配，按需 grep 主题词；0027/0028/0034/0035/0036/0038/0040/0072/0078 已删除并入下述目标 ADR，见 decisions/README.md「已删除」表）：
+**docs/arch/decisions/ 文件清单**（ADR-0001~0081，0032 未分配，按需 grep 主题词；0027/0028/0034/0035/0036/0038/0040/0072/0078 已删除并入下述目标 ADR，见 decisions/README.md「已删除」表）：
 - 0001 观测单例 · 0002 Skill 注册合并 · 0003 SQLite modernc · 0004 Tier-0 硬件层 · 0005 purego FFI Cedar
 - 0030 Tier2 Semantic Embedding · 0031 TTS 三路提供商
 - 0006 state.yaml SSoT · 0007 污点五级 · 0008 沙箱三级回退 · 0009 KillSwitch 三阶段 · 0010 SurrealDB 认知存储
@@ -242,8 +242,10 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 - 0076 Task Checkpoint and Resumption（task_checkpoints 表 + StateGraphExecutor 断点续跑，补齐 ADR-0057 execute 阶段保守跳过局限）
 - 0077 Consolidation 与 GraphRAG 实体/关系抽取合一（推翻 ADR-0074 §3"不合并抽取实现"结论；写入期去重桥接/检索期联合种子不变）
 - 0079 Sandbox-L4-Persistent 改用长驻解释器进程池（推翻原 ADR-0078"诚实留空"结论，含原 ADR-0078；session-scoped Python/Bash 长驻进程，经 ArgvWrapper 复用 L3 同款 Rust 沙箱封装）
+- 0080 新增 Debate/Critic 编排模式（GD-6，DebateExecutor/DebateWorker）
+- 0081 架构文档结构治理（`make docs-refs` 失效路径引用门控 + 白名单；M07/M13 拆分与 M14 新建暂缓，含重新评估触发条件；ARCHITECTURE.md §8 启动与关停协议）
 
-**internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，31 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
+**internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，32 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```
 001_events · 002_outbox · 003_episodic_memory · 004_semantic_memory · 005_workspace_vfs
 006_decision_log · 007_tasks · 008_skills · 009_rag_chunks · 010_self_improve
@@ -251,6 +253,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 016_preferences · 017_automations · 018_plugin_marketplaces · 019_extension_catalog · 020_extension_instances · 021_plugins
 022_provider_catalog · 023_notes · 024_reflection_memory · 028_apps · 029_workflows
 030_oom_guard_log · 031_planner_sessions · 032_mock_response_cache · 033_model_version_registry · 034_core_memory
+035_task_checkpoints
 ```
 
 **禁止**：
@@ -259,7 +262,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 - 将 `ARCHITECTURE.md` 全量预读（SSoT 锚点，按场景按 §跳读）
 - 以 ALTER TABLE / ADD COLUMN 补丁文件修改 Schema（上线前直接改原始 SQL 文件）
 
-**模块上下文（重要）**：进入 `internal/<X>/` 时，若该目录存在 `internal/<X>/CLAUDE.md` 则必读（当前仅 action/agent/extension/learning/memory/swarm 6 个模块有对应文件，其余模块不存在时不适用本条）。
+**模块上下文（重要）**：进入 `internal/<X>/` 时，若该目录存在 `internal/<X>/CLAUDE.md` 则必读（当前 action/agent/execute/extension/learning/memory/swarm 及 gateway/server 共 8 个目录有对应文件，其余模块不存在时不适用本条）。
 - 各包规范文件名统一为 **CLAUDE.md**（Claude Code 原生自动注入子目录 CLAUDE.md；Gemini / GPT / Cursor 等工具**需手动读取**）
 - README.md 为人类导航页，仅重定向至 CLAUDE.md，不含规范内容
 
