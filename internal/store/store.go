@@ -120,7 +120,7 @@ func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 	return s, nil
 }
 
-// 2026-07-14（ADR-0051）：OpenSQLiteFromDir 删除——CHANGELOG（2026-05-23"初始化
+// 2026-07-14（ADR-0062）：OpenSQLiteFromDir 删除——CHANGELOG（2026-05-23"初始化
 // 链路重构"）记载 cmd/polaris/main.go 已从相对路径 OpenSQLiteFromDir 改为
 // embed.FS OpenSQLite（消灭已安装二进制启动失败），本函数是被主动替换掉的旧
 // 实现，全仓（含测试）零调用点。

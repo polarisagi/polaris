@@ -18,7 +18,7 @@ import (
 // steering/cvStore 均由 Server.SetSteering 注入（boot_server.go），未注入时
 // （FeatureActivationSteer 未启用或 Tier<1）nil-safe 提示不可用，不影响其余
 // 斜线命令。calibrate-layer 与"成功率<0.1 自动停用"两项本次未实现（见方法
-// 内注释与 ADR-0054 后续记录），原因是二者分别需要额外的分层效果评估机制与
+// 内注释与 ADR-0048 后续记录），原因是二者分别需要额外的分层效果评估机制与
 // 会话结果反馈信号，本仓库目前均不存在，不臆测语义强行接入（R1）。
 func (r *SlashCommandRouter) handleSteer(ctx context.Context, args, sessionID string, w http.ResponseWriter, flusher http.Flusher) string {
 	if r.steering == nil || r.cvStore == nil {

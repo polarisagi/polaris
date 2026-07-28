@@ -12,7 +12,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// HandleUpgradePlugin 处理插件升级请求 (B3, ADR-0075)。
+// HandleUpgradePlugin 处理插件升级请求 (B3, ADR-0016)。
 //
 // 复核修正（本轮审查）：初版实现只更新 installed_version 字符串，从未真正同步
 // install_path 下的文件——对 ext_type='skill'/'plugin'（唯一真正落盘文件的两种

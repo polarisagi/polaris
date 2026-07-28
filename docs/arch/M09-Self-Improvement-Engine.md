@@ -40,7 +40,7 @@
 |------|------|---------|
 | (a) Eval 驱动 Prompt 优化 | Eval Harness 回归 → 识别退化 → 自动调整 system prompt [HE-Rule-4] | ✅ 已实现 |
 | (b) 经验重放与反思 | 失败轨迹 → LLM 反思 → Episodic Memory | ✅ 已实现：`Engine.Run()` 内环已添加 `RecordSuccess` 调用，成功轨迹写入 HeuristicsMemory |
-| (c) Logic Collapse | 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → Skill Library | ✅ 已实现（Tier 0+/≥8GB 且 L3 可用，并发=1；<8GB VPS 禁用。决策见 ADR-0026） |
+| (c) Logic Collapse | 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → Skill Library | ✅ 已实现（Tier 0+/≥8GB 且 L3 可用，并发=1；<8GB VPS 禁用。决策见 ADR-0008） |
 | (d) 检索式个性化 | 用户偏好 + 纠错历史 → UserProfile.InteractionSummary | ✅ 已实现 |
 | (e) Activation Steering | Control vector 推理时注入 | ✅ 已实现（仅 Tier 3+，local_only） |
 
@@ -133,7 +133,7 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 每次 Agent 任务完成后自动执行:
 
 任务完成后：
-- **成功路径**: HeuristicsMemory 更新 + Logic Collapse 触发（Python 技能蒸馏，ADR-0026）。
+- **成功路径**: HeuristicsMemory 更新 + Logic Collapse 触发（Python 技能蒸馏，ADR-0008）。
 - **失败路径 (Reflexion Closed-Loop)**: `ReflexionEngine` 触发反思 → 生成 heuristic 发送至 `heuristicCh` 被 Engine 消费 (注入 PromptOptimizer)；同时 `ReflectionWorker` 将反思结果写入 `reflection_memory` (M5 L2)。此反思数据将在下一次任务的 Perceive 阶段被加载入上下文，形成完整闭环。
 - **后续阶段**: Consolidation Check → Semantic Memory（M5 L2）；冷路径异步 Preference Learner → UserProfile。
 
@@ -163,7 +163,7 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 4. 同一 SourceSkill 连续 3 次生成的课程任务全部失败 → 临时冻结该技能的课程生成 60 分钟
 5. Curriculum 任务由于 DeepSeek API 成本极低，总成本取消 20% 硬上限，允许在空闲时段全力生成
 6. LLM 生成（当前实现：每技能 `maxPerSkill=3`，总 `maxPerCycle=10`/周期），目标难度 = `currentSurpriseIndex`（传入 `generateDescriptionsLLM`）
-7. 生成后安全审查（五阶段，含 SQL 预筛，ADR-0029 §G）:
+7. 生成后安全审查（五阶段，含 SQL 预筛，ADR-0025 §G）:
    (0) **SQL 适应度预筛**（`SQLFitnessEvaluator`，前置于所有其他检查）: 查询 `events` 表 7 天窗口内该技能的执行历史，计算 `fitness = 成功率 × (1 - 平均预测误差)`；样本 ≥ 5 且 fitness < 0.5 → 直接拒绝，不调用 LLM；样本 < 5 或 fitness ≥ 0.5 → 进入后续审查。`SQLFitnessEvaluator` nil-safe，未注入时跳过此步骤。实现见 `internal/learning/curriculum/fitness.go`。
    (a) M11 Taint Gate 扫描任务描述中的注入载荷
    (b) 若含 shell/bash 命令 → 危险模式黑名单拒绝（同原列表）
@@ -185,7 +185,7 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 > 硬停止条件全局适用：error>baseline×1.2 / P95>baseline×1.4 / 安全违规 / SurpriseIndex 退化 → autoRollback（`ProgressiveRollout.CheckHardStop`）。
 
-**候选真正生效的唯一入口**：`ConfirmShadow` 成功后，通过注入的 `promptActivator`（同包窄接口，由 `*optimizer.PromptVersionStore` 实现）回调 `Activate`，读取 `SubmitCandidate` 时随 `AgentVersionSnapshot`（`TaskType`/`BaselineScore` 字段）落盘的 `rollout_states.metadata` 完成激活。`handleEvalCompleted` 本身**不再**在 Eval 通过时直接调用 `Activate`——2026-07-10 之前的实现在此处同步激活，导致 Gate 2/3 对 GEPA 候选完全不构成门禁（详见 ADR-0029 §K 修订记录）。
+**候选真正生效的唯一入口**：`ConfirmShadow` 成功后，通过注入的 `promptActivator`（同包窄接口，由 `*optimizer.PromptVersionStore` 实现）回调 `Activate`，读取 `SubmitCandidate` 时随 `AgentVersionSnapshot`（`TaskType`/`BaselineScore` 字段）落盘的 `rollout_states.metadata` 完成激活。`handleEvalCompleted` 本身**不再**在 Eval 通过时直接调用 `Activate`——2026-07-10 之前的实现在此处同步激活，导致 Gate 2/3 对 GEPA 候选完全不构成门禁（详见 ADR-0025 §K 修订记录）。
 
 **单一状态源**：`m9Engine`（GEPA 候选路径）与 `LogicCollapseMonitor`（L2/L3/L4 候选路径）共用同一个 `SQLiteRolloutStore` 实例，由 `cmd/polaris/boot_agent.go` 构造并通过 `AgentBundle.RolloutStore` 传递给 `boot_server.go`——此前两者各自持有互不相干的状态（`m9Engine` 曾注入无 DB 持久化的纯内存版本），已统一。M13 TrafficSplitter 按 Gate 3 的 canary 百分比分发流量。
 

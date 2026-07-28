@@ -3,8 +3,8 @@
 // SessionCompressor（持久化于 chat_messages 表的会话历史）共享同一套压缩逻辑，
 // 不各自维护一份容易漂移的重复实现。
 //
-// 2026-07-22 一致性审查（ADR-0052 DEFER 项 `ContextWindowManager.NeedsCompaction`
-// 的后续闭环，见 ADR-0060）背景：M04-Agent-Kernel.md §7 明确要求"M4
+// 2026-07-22 一致性审查（ADR-0062 DEFER 项 `ContextWindowManager.NeedsCompaction`
+// 的后续闭环，见 ADR-0033）背景：M04-Agent-Kernel.md §7 明确要求"M4
 // ContextWindowManager 持有热路径阈值，触发时调用 M5 SessionCompressor 的
 // Stage1/2/3"，但 M4 的 reqMsgs（PromptFn 每轮现场组装）与 M5/网关 Compressor
 // 操作的 []apptypes.Message（chat_messages 持久化行）实际上是同一个 Go 类型

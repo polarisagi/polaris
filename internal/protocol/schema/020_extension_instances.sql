@@ -16,7 +16,7 @@
 --   marketplace= 市场安装（catalog_id 非空），trust_tier 继承 extension_catalog
 --   user       = 用户手动创建，trust_tier=1
 --   learned    = M9 自演化 promote，trust_tier=1
--- 关联: M13-bis(Extension Registry), ADR-0019
+-- 关联: M13-bis(Extension Registry), ADR-0016
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS extension_instances (

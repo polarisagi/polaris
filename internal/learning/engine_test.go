@@ -236,7 +236,7 @@ func TestEngine_DefaultConfig(t *testing.T) {
 // TestEngine_handleEvalCompleted_SubmitsToStaging 验证 2026-07-10 后的新行为：
 // Eval 达标后提交 Staging 进入 Gate 2(Shadow)，不再直接调用 rollout.AdvanceGate
 // 或 versionStore.Activate——真正的激活推迟到 ShadowExecutor 确认之后
-// （见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0029 §K）。
+// （见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0025 §K）。
 func TestEngine_handleEvalCompleted_SubmitsToStaging(t *testing.T) {
 	cfg := DefaultEngineConfig()
 	cfg.BaselinePassRate = 0.8

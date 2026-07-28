@@ -57,7 +57,7 @@ struct ModelHolder {
     // 但保留 gen_ctx 在前，提醒读者其生命周期先于 model_ptr 结束。
     // 仅保留计算路径实际读取的字段：gen_ctx/model_ptr 供推理，n_ctx 供 generate 的
     // prompt 长度校验。其余展示型元数据（path/n_gpu_layers/n_ctx_train/n_embd）已下沉到
-    // STATUS 只读镜像（见 ADR-0063），不在此重复持有，避免双份状态漂移与死字段。
+    // STATUS 只读镜像（见 ADR-0011），不在此重复持有，避免双份状态漂移与死字段。
     gen_ctx: LlamaContext<'static>,
     model_ptr: *mut LlamaModel,
     n_ctx: u32,
@@ -71,7 +71,7 @@ unsafe impl Send for ModelHolder {}
 static STATE: Mutex<Option<ModelHolder>> = Mutex::new(None);
 static ABORT_FLAG: AtomicBool = AtomicBool::new(false);
 
-// STATUS 是 STATE 的只读镜像快照（控制面/计算面分离，见 WO-10/ADR-0063）：
+// STATUS 是 STATE 的只读镜像快照（控制面/计算面分离，见 WO-10/ADR-0011）：
 // generate() 在长循环期间独占 STATE 计算锁，若 status() 也走 STATE 会被阻塞数十秒、
 // 形成推理期监控盲区。status() 需要的字段（loaded/path/n_ctx 等）在模型加载后即固定不变，
 // 故用独立 RwLock 缓存一份；generate()/evict 全程不触碰 STATUS，status() 读锁与推理无竞争。
@@ -263,7 +263,7 @@ pub struct StatusResponse {
 }
 
 // status() 读只读镜像 STATUS 而非 STATE：即使 generate() 正持 STATE 计算锁做长推理，
-// 监控查询也不被阻塞（WO-10/ADR-0063 控制面/计算面分离）。RwLock 中毒时退化为 not-loaded。
+// 监控查询也不被阻塞（WO-10/ADR-0011 控制面/计算面分离）。RwLock 中毒时退化为 not-loaded。
 pub fn status() -> Result<StatusResponse, String> {
     let snap = STATUS.read().ok().and_then(|g| g.clone());
     Ok(match snap {

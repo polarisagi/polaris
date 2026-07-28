@@ -18,7 +18,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// CSVFanoutJob CSV batch fan-out 任务描述（ADR-0015 §2.5）。
+// CSVFanoutJob CSV batch fan-out 任务描述（ADR-0016 §2.5）。
 // 每行 CSV → 一个 SubAgent Task → Blackboard 认领执行 → 结果聚合写回。
 //
 // 状态持久化：每行状态变更写 EventLog（event_type=csv_job_row_*），

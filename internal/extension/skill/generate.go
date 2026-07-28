@@ -2,7 +2,7 @@ package skill
 
 // Logic Collapse 编译流水线。
 // 架构文档: docs/arch/M06-Skill-Library.md §2.2
-// 技能以 Python 脚本形式生成（src/skill.py），通过 ContainerSandbox L3 执行（ADR-0026）。
+// 技能以 Python 脚本形式生成（src/skill.py），通过 ContainerSandbox L3 执行（ADR-0008）。
 // 顺序: freshnessCheck → taintCheck → evalGate → compileGate → DataStripping → LLM 代码生成 → ValidatePython → 风险分级 → 沙箱探针 → 签名 → 入库
 
 import (

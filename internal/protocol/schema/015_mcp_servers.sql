@@ -2,7 +2,7 @@
 -- 015_mcp_servers: MCP Server 连接配置（MCPManager 唯一消费方）
 -- ============================================================================
 -- 架构角色: 记录 MCP 进程的运行时连接参数。安装来源见 extension_instances（020）。
--- trust_tier 决定 Taint 传播级别（ADR-0016 §2.1, ADR-0018）：
+-- trust_tier 决定 Taint 传播级别（ADR-0016 §2.1, ADR-0017）：
 --   3=Official（catalog_id 非空）→ TaintMedium
 --   2=Community → TaintHigh
 --   1=Local（用户手动） → TaintHigh + 每次提示

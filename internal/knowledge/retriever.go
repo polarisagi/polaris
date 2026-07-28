@@ -57,7 +57,7 @@ func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySer
 	hr.boundarySerializer = ser
 }
 
-// 2026-07-14（ADR-0051）：NewHybridRetriever/NewHybridRetrieverWithEmbedder/
+// 2026-07-14（ADR-0062）：NewHybridRetriever/NewHybridRetrieverWithEmbedder/
 // NewHybridRetrieverWithGraph 删除——boot_knowledge.go 生产两条检索栈装配路径
 // （SurrealStore≠nil 用 WithCognitive；SurrealStore==nil 用
 // NewDefaultHybridRetriever/StorageRouter）都不经过本类型的这 3 个平行构造函数，
@@ -65,8 +65,8 @@ func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySer
 // 结构上不可达。embedder/cognitive/graph 均可传 nil 走对应降级路径，
 // NewHybridRetrieverWithCognitive 是本类型唯一生产构造入口。
 //
-// V-5（2026-07-23 复核订正）：此前的注释误引"ADR-0051 §4 判定为 DEFER"及"已登记
-// deadcode-allowlist"——均核实不实：ADR-0051 Phase 4 的 DEFER 表格中并无
+// V-5（2026-07-23 复核订正）：此前的注释误引"ADR-0062 §4 判定为 DEFER"及"已登记
+// deadcode-allowlist"——均核实不实：ADR-0062 Phase 4 的 DEFER 表格中并无
 // HybridRetrieverImpl.graph 或本文件的条目（该表格里唯一相关项是
 // internal/knowledge/graphrag/writer.go 的 GraphWriter，是另一个组件）；
 // scripts/deadcode-allowlist.txt 中也没有 retriever.go 的登记项。

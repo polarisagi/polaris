@@ -89,7 +89,7 @@ func NewHybridRetriever(store protocol.Store) *HybridRetrieverImpl {
 	return &HybridRetrieverImpl{store: store}
 }
 
-// 2026-07-14（ADR-0051）：NewHybridRetrieverWithGraph/NewHybridRetrieverWithDurative
+// 2026-07-14（ADR-0062）：NewHybridRetrieverWithGraph/NewHybridRetrieverWithDurative
 // 删除——graph-without-durative/durative-without-reflectionMem 是幽灵 Tier 档位：
 // graph 与 cognitive/durative 同源自 sb.SurrealStore，实际启动分级逻辑中不存在
 // "只有 graph 没有其余能力"的组合，全仓零调用点。生产唯一使用 NewHybridRetriever

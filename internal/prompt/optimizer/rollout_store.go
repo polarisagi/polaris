@@ -128,7 +128,7 @@ func (s *SQLiteRolloutStore) RecordEvalScore(ctx context.Context, version string
 // 由影子执行监控组件（ShadowExecutor）在 shadow_ok 条件满足后调用。
 // Gate 推进成功后，若已注入 promptActivator，进一步激活对应 Prompt 候选——这是
 // M9 自进化真正生效的唯一入口，取代此前 handleEvalCompleted 内 Eval 一过就同步
-// Activate、绕过 Shadow 验证的旧路径（见 docs/arch/decisions/ADR-0029 §K）。
+// Activate、绕过 Shadow 验证的旧路径（见 docs/arch/decisions/ADR-0025 §K）。
 func (s *SQLiteRolloutStore) ConfirmShadow(ctx context.Context, version string) error {
 	state, err := s.GetState(ctx, version)
 	if err != nil {

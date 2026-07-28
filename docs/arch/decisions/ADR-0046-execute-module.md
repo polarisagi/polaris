@@ -1,93 +1,33 @@
-# ADR-0046: 新建 internal/execute 模块，收敛单/多 Agent 执行引擎
+# ADR-0046: internal/execute 模块创建 + 编排模式演进（模式9 PatternDAG / 模式10 StateGraph / 模式11 Debate-Critic，含原 ADR-0037/0041/0080）
 
-- **状态**: Implemented
-- **日期**: 2026-07-13
-- **决策者**: MrLaoLiAI
-- **相关模块**: M04 / M08 / `internal/agent`（原 `internal/agent/dag`）/ `internal/swarm`（原 `internal/swarm/orchestrator`）/ `internal/execute`（新）
+- **状态**: Implemented | **日期**: 2026-07-13（模式演进 2026-07-11~07-26，合并 2026-07-28）| **模块**: M04/M08 `internal/execute/`
 
-## 上下文
+## 决策一：模块创建（原决策）
 
-用户提出："系统经过三次彻底重构，前两次都有一个 Executor 模块，现在是否该重新引入"，
-并要求不受旧系统（`polaris-agent`）架构文档/决策文档约束，仅以"AI Agent 系统最优"
-为准绳，先调研 2026 年最新 Agent 系统设计实践再判断，且明确排除"把规划（planner）
-也并入执行模块"这一选项。
+新建 `internal/execute` 顶层模块，物理迁入 `internal/agent/dag` → `internal/execute/dag`（单 Agent 内工具链 DAG）与 `internal/swarm/orchestrator` → `internal/execute/orchestrator`（跨 Agent Blackboard 编排）。**规划（`swarm/planner`）不迁入**——Planner-Executor 分离是行业验证的最优实践（LangGraph/AutoGen/CrewAI 共识），混合会导致规划失败传播。
 
-调研 2026 年生产级 Agent 编排实践（LangGraph/AutoGen/CrewAI 等）：
-1. **Planner-Executor 强制分离**是行业共识——独立推理循环（甚至不同模型尺寸），
-   混合会导致"规划失败传播"（planner 产出错误步骤时 executor 无法自行纠正）。
-2. **"Executor"在 2026 术语里特指图/DAG 执行引擎**（LangGraph 的 node+edge+
-   conditional edge+checkpoint 模型），强调持久化状态、可审计、确定性回放。
+`agent/dag` 原被 FSM 核心直接 import，迁出后按消费端接口模式（HE-3）改造：新增 `DAGRunner`/`DAGValidator` 接口，`execute/dag.Runner`/`Validator` 作为无状态适配器由 `boot_agent.go` 构造注入。`execute/dag` 与 `execute/orchestrator` 不合并为单一包——调度对象（工具调用 vs Agent 任务）、生命周期、失败语义均不同。
 
-同时排查 polaris 现状发现："Executor"一词在代码库历史/现状中已有三层不同语义：
-1. 旧 `polaris-agent/internal/executor`：SENA 架构的盲执行动作层（Router+Executor，
-   基底核/动作选择，禁业务逻辑）——对应今天的 `action`+`tool`+`sandbox`。
-2. `internal/agent/dag.DAGExecutor`：单 Agent 内一次 S_PLAN 产出的工具调用链
-   DAG 执行（M04 §5.3）。
-3. `internal/swarm/orchestrator.Pattern*Executor`/`StateGraphExecutor`：跨 Agent
-   Blackboard 编排（M08）——本会话前半场刚完成其首个生产接入（workflow DAG）。
+## 决策二：模式9 PatternDAGExecutor（原 ADR-0037）
 
-`internal/swarm/CLAUDE.md` 早已明文"不包含 Agent 内部执行逻辑，只负责任务分发与
-生命周期协调"；`internal/agent/CLAUDE.md` 明文 DAG 执行是 agent 思考循环的一部分。
-二者的"执行引擎"实现此前分别物理挂靠在 `agent/`（L1）与 `swarm/`（L2）目录下，
-从未被当作独立关注点收拢。
+支持跨 Agent 边界的有向无环图调度（`ModePatternDAG`，`protocol.WorkflowGraphSpec`），区别于 `internal/execute/dag`（单 Agent 内部工具级 Micro-DAG）。图校验逻辑（环检测/深度限制）下沉至 `pkg/graph/dag.go` 复用。基于 Blackboard `Subscribe()` 事件驱动（Kahn 拓扑排序思想），仅分发上游依赖已完成的节点。Fail-Fast：任一节点失败立即停止投递后续节点，已完成节点按拓扑逆序并发投递补偿。
 
-## 决策
+## 决策三：模式10 StateGraphExecutor（原 ADR-0041，GD-8-001）
 
-**新建 `internal/execute` 顶层模块，物理迁入 `internal/agent/dag` → `internal/execute/dag`
-与 `internal/swarm/orchestrator` → `internal/execute/orchestrator`，规划（`swarm/planner`）
-不迁入。**
+在 PatternDAGExecutor 之上叠加条件边与有界循环，**不**替换 Blackboard 底层机制（CAS 认领/Lease/Reaper 是既有不变量的基础设施，替换代价远超能力缺口本身）。
 
-依据：
+**协议扩展**（`WorkflowGraphSpec`，两个执行器共用）：`WorkflowEdgeSpec.Condition` 声明式字段比较（`Field`/`Op`/`Value`，算子集合 `eq`/`ne`/`gt`/`lt`/`ge`/`le`/`contains`/`exists` + `And`/`Or` 递归复合，HE-2 要求不引入脚本/表达式引擎含 CEL）；`WorkflowNodeSpec.MaxVisits` 节点最大触发次数；`WorkflowNodeSpec.IsEntry` 显式声明入口。
 
-1. Planner-Executor 分离是 2026 行业验证的最优实践，`swarm/planner` 与执行引擎的
-   既有边界本就正确，合并是倒退，故不采纳"规划也并入"的选项。
-2. 迁移前 `internal/agent/dag` 被 FSM 核心（`fsm/state_machine.go`、
-   `fsm/transitions.go`、`agent_execute_*.go`）直接 import——物理迁出后按
-   `agent/provider.go` 既有的消费端接口模式（HE-3）改造：新增 `DAGRunner`/
-   `DAGValidator` 接口，`execute/dag.Runner`/`execute/dag.Validator` 作为无状态
-   适配器由 `cmd/polaris/boot_agent.go` 构造注入，FSM 不再直接依赖具体实现。
-3. `internal/swarm/orchestrator` 迁移前仅 6 处组装根引用（`cmd/polaris/boot_agent.go`、
-   `server_lifecycle.go`、`sysadmin/handler.go`、`workflowadmin/{admin,workflow_engine}.go`、
-   `swarm/startup_test.go`），无深层耦合，纯路径重命名。
-4. 迁移过程中一并修复两处发现的遗留缺陷：`internal/protocol/dag_node.go` 的
-   `DAGPlan`/`ExecEdge`/`EdgePolarity` 此前已定义却从未被 `agent/dag` 引用（死代码，
-   `agent/dag` 保留了独立重复定义）；`ImmutableKernelPackages()` 注释与实际返回值
-   长期不一致。
+**拓扑校验**（`ValidateStateGraphTopology`）：允许环，但要求引用完整性、至少一个合法入口、`effectiveMaxVisits` 总和 ≤200（硬编码熔断常量）。终止性由运行时硬计数器（非拓扑猜测）物理保证。`MaxVisits>1` 且声明 `Compensation` fail-closed 拒绝——补偿逆序语义未定义。无条件多前驱边 AND-Join 语义；条件边/自环边 OR 语义。
 
-## 后果
+## 决策四：模式11 DebateExecutor（原 ADR-0080，GD-6）
 
-- **正向**: 单/多 Agent 执行引擎有了统一、语义清晰的物理归属；FSM 与执行引擎的
-  依赖方向通过消费端接口显式化，符合 HE-3；`internal/execute/dag` 保留 L4 不可变
-  内核保护（随迁移同步调整白名单，不丢失 L1 TaintGate/PolicyGate 的 CI 保护）。
-- **负向**: `internal/agent` 新增一层接口间接性（`DAGRunner`/`DAGValidator`），
-  `NewAgentWithDefaults` 保留了一处对 `internal/execute/dag` 的直接 import（测试/
-  开发默认构造器的务实例外，生产路径仍由 `boot_agent.go` 显式覆盖注入）。
-- **反例守护**: 未来如有人提议把 `swarm/planner` 也物理迁入 `internal/execute`
-  （"既然都叫执行引擎，规划也该在一起"），引用本 ADR 第 1 条拒绝——规划与执行的
-  分离是经过调研验证的架构决策，不是历史遗留待清理项。
+既有 Sequential/Parallel/MapReduce/PatternDAG/StateGraph 均无法原生表达"对抗性辩论/互审"任务流（强用 StateGraph 会致节点逻辑膨胀）。新增 `DebateExecutor`（`PatternDebate`）：Judge/Proponent/Opponent 三方通过 `agent_handoff:<role>` 类型 Blackboard 事件交互，复用既有 Checkpoint+Watcher 异步挂起原语，不引入新阻塞轮询机制。配置 `debate.max_rounds`/`debate.concurrent_sides`；初始阶段强制串行交替（防多 LLM 实例并发 OOM，Tier-0 约束）。
 
-## 被驳回的方案
+## 反例守护
 
-| 方案 | 驳回理由 |
-|------|---------|
-| 保留现状，不做物理重组 | orchestrator 本次会话才完成首个生产接入，用户主动要求评估重组而非"先观察"；调研已给出明确依据，无需再拖延 |
-| 仅重命名 `swarm/orchestrator` → `swarm/execute`（子目录级，不动 `agent/dag`） | 用户在看到 `agent/dag` 深耦合 FSM 控制流的具体成本分析后，仍选择"仍按方案搬迁，补接口化改造"，即接受更大改动换取单/多 Agent 执行引擎的统一物理归属 |
-| 把 `swarm/planner` 一并迁入 `internal/execute` | 与 2026 年 Planner-Executor 分离的行业共识矛盾，见"决策"第 1 条 |
-| `execute/dag` 与 `execute/orchestrator` 合并为单一 Go 包 | 二者调度对象（工具调用 vs. Agent 任务）、生命周期、失败语义均不同，强行合并是巨石化，见 `internal/execute/CLAUDE.md`"为何是两个子包" |
+拒绝把 `swarm/planner` 也迁入 `internal/execute`——与 Planner-Executor 分离共识矛盾。拒绝接入 CEL 等表达式引擎——审查确定性优先于表达力。拒绝新增编排模式时引入独立阻塞轮询机制——统一复用 Checkpoint+Watcher 异步挂起原语。
 
 ## 引用代码
 
-- `internal/execute/dag/`（原 `internal/agent/dag`，DAGExecutor/ValidateDAG 实现 + `runner.go` 适配器）
-- `internal/execute/orchestrator/`（原 `internal/swarm/orchestrator`）
-- `internal/agent/provider.go`（`DAGRunner`/`DAGValidator` 消费端接口）
-- `internal/protocol/dag_node.go` + `dag_validation.go`（跨模块共享类型，本次迁移一并修复 `DAGPlan`/`ExecEdge` 死代码问题）
-- `internal/config/immutable_constants.go`（`ImmutableKernelPackages` 白名单同步调整）
-- `internal/execute/CLAUDE.md`（模块权力边界）
-- `docs/arch/M04-Agent-Kernel.md §5.3`、`docs/arch/M08-Multi-Agent-Orchestrator.md`（设计文档）
-
-## 修订记录
-
-| 日期 | 变更 |
-|------|------|
-| 2026-07-12 | 初稿，记录 internal/execute 模块化决策与迁移范围 |
-| 2026-07-13 | 状态更新为 Implemented，新增的模式执行器（MapReduce等）已全线接入 sysadmin API |
+`internal/execute/dag/`、`internal/execute/orchestrator/`（`pattern_dag.go`/`pattern_state_graph.go`/`pattern_debate.go`/`debate_worker.go`）、`pkg/graph/{dag,state_graph}.go`、`internal/agent/provider.go`（`DAGRunner`/`DAGValidator`）、`internal/execute/CLAUDE.md`

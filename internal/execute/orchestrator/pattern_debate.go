@@ -14,7 +14,7 @@ import (
 
 // DebateExecutor 实现了对抗性辩论/互审编排模式（编排模式11，GD-6）。
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3-sexies
-// 决策记录: docs/arch/decisions/ADR-0080-pattern-debate.md
+// 决策记录: docs/arch/decisions/ADR-0046-execute-module.md（决策四，含原 ADR-0080）
 type DebateExecutor struct {
 	bb      *SQLiteBlackboard
 	chkRepo protocol.TaskCheckpointRepository

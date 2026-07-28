@@ -18,11 +18,11 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// PersistentSandbox 是 D4（原 GD-14-003，ADR-0079 推翻 ADR-0078 的"诚实留空"
+// PersistentSandbox 是 D4（原 GD-14-003，ADR-0008 决策三推翻原 ADR-0078 的"诚实留空"
 // 结论）Sandbox-L4-Persistent 的真实实现：session-scoped 长驻解释器进程池，
 // 而非 CRIU/Firecracker 式 checkpoint/restore。
 //
-// 背景与设计取舍详见 docs/arch/decisions/ADR-0079-sandbox-l4-live-process-pool.md，
+// 背景与设计取舍详见 docs/arch/decisions/ADR-0008-sandbox-three-tier-platform-fallback.md（决策三，含原 ADR-0079），
 // 核心结论：原始设计目标是"长程有状态 CodeAct 会话的状态不因每次调用重新起
 // 进程而丢失"；CRIU/Firecracker 是达成这个目标的一种（在本仓库不可行的）手段，
 // 不是目标本身。让解释器进程在多次调用之间根本不退出，同样能达成目标，且

@@ -51,10 +51,10 @@ Agent A → EventTaskPosted → Blackboard → CAS Acquire → Agent B
 
 ## AGENT-4 Skill 生命周期
 
-Skill 执行路径（ADR-0026，Logic Collapse Python + ContainerSandbox）：
+Skill 执行路径（ADR-0008，Logic Collapse Python + ContainerSandbox）：
 
 ```
-创作 → Logic Collapse（System 2 轨迹蒸馏为 Python 技能，ADR-0026）→ 注册 → System 1 零推理执行
+创作 → Logic Collapse（System 2 轨迹蒸馏为 Python 技能，ADR-0008）→ 注册 → System 1 零推理执行
 ```
 
 - Skill 三件套（SKILL.md + schema.json + src/skill.py）现已迁移至官方插件仓库（polaris-plugins-official），不再内置于主仓库；主二进制不再通过 `go:embed` 硬编码打包技能代码，而是通过扩展市场统一拉取；运行时由 ContainerSandbox L3 执行（Python `def execute(input: dict) -> dict:`）。元数据注册信息（skill ID、版本、签名）写入 skills 表

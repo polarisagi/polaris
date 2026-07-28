@@ -99,7 +99,7 @@ EvalResult:
 - `synthetic_adapter.go`: L3→L2 转换（SyntheticCase→EvalCase）
 - `store.go`: SQLiteEvalStore
 
-**✅ 组件状态更新（2026-07-10）**：`ShadowExecutor`（`internal/eval/analysis/shadow_executor.go`）已恢复实现并完成生产接入——此前经历"实现→误删→重新实现→再次误删为死代码"的反复（详见 ADR-0029 §K 修订记录），根因是仅有实现、缺少顶层周期触发器与 `StagingPipeline` 未接入 M9Engine 两处集成缺口，而非设计本身有问题。现由 `cmd/polaris/boot_agent.go` 启动 5 分钟周期 goroutine，发现 `rollout_states` 中停留在 Gate 2(Shadow) 的候选并调用 `RunReplayBatch`。
+**✅ 组件状态更新（2026-07-10）**：`ShadowExecutor`（`internal/eval/analysis/shadow_executor.go`）已恢复实现并完成生产接入——此前经历"实现→误删→重新实现→再次误删为死代码"的反复（详见 ADR-0025 §K 修订记录），根因是仅有实现、缺少顶层周期触发器与 `StagingPipeline` 未接入 M9Engine 两处集成缺口，而非设计本身有问题。现由 `cmd/polaris/boot_agent.go` 启动 5 分钟周期 goroutine，发现 `rollout_states` 中停留在 Gate 2(Shadow) 的候选并调用 `RunReplayBatch`。
 
 漂移分数监控已实现为 `internal/eval/founding_anchor.go` 的 `DriftMonitor` 结构体（`atomic.Value` 封装，非包级全局变量），符合 ADR-0001（Architecture Decision Record，架构决策记录） 规定。
 
@@ -172,7 +172,7 @@ M9 §1.1 PromptOptimizer 早停依据: Training Set 充分性 + Validation Set �
 
 ## 8. 影子执行
 
-**✅ ShadowExecutor 已实现（2026-07-10 恢复接入）**。`ShadowExecutor.RunReplayBatch` 从 `events` 表按游标增量抓取 `llm_call` 记录，对候选配置回放打分（异步 EventLog 回放，ADR-0029 §K 决策），通过率 ≥ `M12Eval.ShadowPassRateThreshold` 调用 `StagingPipeline.ConfirmShadow` 推进 Gate 2→3，否则调用 `Rollback`。`ConfirmShadow` 内部进一步通过 `promptActivator` 回调 `PromptVersionStore.Activate`，这是 M9 GEPA 候选 Prompt 真正生效的唯一入口——此前 `handleEvalCompleted` 在 Eval(Gate 1) 一通过就同步调用 `Activate`，Gate 2/3 从未真正拦截过任何候选，已随本次修复一并纠正。
+**✅ ShadowExecutor 已实现（2026-07-10 恢复接入）**。`ShadowExecutor.RunReplayBatch` 从 `events` 表按游标增量抓取 `llm_call` 记录，对候选配置回放打分（异步 EventLog 回放，ADR-0025 §K 决策），通过率 ≥ `M12Eval.ShadowPassRateThreshold` 调用 `StagingPipeline.ConfirmShadow` 推进 Gate 2→3，否则调用 `Rollback`。`ConfirmShadow` 内部进一步通过 `promptActivator` 回调 `PromptVersionStore.Activate`，这是 M9 GEPA 候选 Prompt 真正生效的唯一入口——此前 `handleEvalCompleted` 在 Eval(Gate 1) 一通过就同步调用 `Activate`，Gate 2/3 从未真正拦截过任何候选，已随本次修复一并纠正。
 
 ContinuousSamplingMonitor ✅ 已实现于 `internal/eval/analysis/sampling_monitor.go`，滑动窗口 100 条 + 10min 定时检测 + 退化归因（Internal/External/Mixed）；写侧生产接入见 §9 末尾（2026-07-14 补齐前，`RecordSample` 全仓零生产调用点，窗口恒空）。`onDegradation` 回调仍为 nil（M9 autoRollback 触发链依赖真实免疫网关实现，未接入）——该项与 ShadowExecutor 相互独立。
 

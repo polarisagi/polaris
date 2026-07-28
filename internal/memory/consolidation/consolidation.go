@@ -41,7 +41,7 @@ type GraphEntityFetcher interface {
 	GetEntityByName(ctx context.Context, name string) (any, error)
 }
 
-// SharedEntityExtractor D3（原 GD-13-003；ADR-0077 推翻 ADR-0074"不做管线合并"
+// SharedEntityExtractor D3（原 GD-13-003；ADR-0077 决策二推翻原 ADR-0074"不做管线合并"
 // 的结论）：Episodic 会话文本与 RAG 文档摄取共享同一套 LLM 实体/关系抽取实现，
 // 消除此前两条管线（consolidation 自身的 llmExtract 与
 // internal/knowledge/graphrag 的 EntityExtractor/RelationExtractor）各自维护
@@ -97,7 +97,7 @@ func (p *ConsolidationPipeline) WithOutbox(ob protocol.OutboxWriter) *Consolidat
 }
 
 // NewConsolidationPipeline 创建压缩管线，episodic 和 semantic 必须非 nil。
-// 2026-07-14（ADR-0051）：基础版 NewConsolidationPipeline 删除——全仓生产零调用点，
+// 2026-07-14（ADR-0062）：基础版 NewConsolidationPipeline 删除——全仓生产零调用点，
 // boot_tools.go:426 唯一使用 NewConsolidationPipelineFull（writeFilter/cascadeInv/db
 // 可传 nil 降级），是从未被采纳的平行构造路径。
 

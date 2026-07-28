@@ -135,7 +135,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 	} else {
 		slog.Info("polaris: GraphRAG pipeline disabled by FeatureGate (<8GB VPS or memory pressure, 1024MB min)")
 	}
-	// D3（ADR-0077，推翻 ADR-0074 的"不做管线合并"结论）：Episodic 巩固与 RAG
+	// D3（ADR-0077 决策二，推翻原 ADR-0074 的"不做管线合并"结论）：Episodic 巩固与 RAG
 	// 文档摄取共享同一套实体/关系抽取实现。graphPipeline 在 Tier-0/内存压力下
 	// 可能为 nil（FeatureGraphRAGFull 关闭）——此时 tb.ConsolidationPipeline
 	// 保持其原有三级降级链（llmExtract→ruleExtract），不引入硬依赖，Tier-0 行为
@@ -184,7 +184,7 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 			kbGate = sb.AutoConf.Gate
 		}
 		// KnowledgeConflictArbiter：此前恒传 nil，KnowledgeBase.Search 的冲突仲裁
-		// 分支永久跳过（ADR-0051 关联接线）；构造函数零依赖，直接激活。
+		// 分支永久跳过（ADR-0062 关联接线）；构造函数零依赖，直接激活。
 		knowledgeBase = knowledgepkg.NewKnowledgeBase(retriever, expander, navigator, planner, knowledgepkg.NewKnowledgeConflictArbiter(), kbGate)
 	}
 

@@ -115,7 +115,7 @@ func run() error { //nolint:gocyclo
 	if err != nil {
 		return err
 	}
-	// D4/ADR-0079：L4 长驻会话池持有子进程（Python/Bash 解释器），优雅关闭时
+	// D4/ADR-0008：L4 长驻会话池持有子进程（Python/Bash 解释器），优雅关闭时
 	// 必须显式终止，否则会成为孤儿进程。Shutdown() 对 nil 接收者安全
 	// （未开启 sandbox.l4_enabled 时 tb.PersistentSandbox 为 nil）。
 	defer tb.PersistentSandbox.Shutdown()

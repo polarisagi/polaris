@@ -62,7 +62,7 @@ func NewMemImpl(store protocol.Store) *MemImpl {
 	}
 }
 
-// 2026-07-14（ADR-0051）：NewMemImplWithGraph 删除——全仓零调用点。
+// 2026-07-14（ADR-0062）：NewMemImplWithGraph 删除——全仓零调用点。
 // "只有 graph 没有 cognitive/db" 是幽灵 Tier 档位：graph 与 cognitive 同源自
 // sb.SurrealStore，实际启动分级逻辑中二者总是同时具备或同时缺失，不存在只解锁
 // graph 的中间状态。生产唯一使用 NewMemImpl（Tier0 基础）/NewMemImplWithDB
@@ -116,7 +116,7 @@ func NewMemImplFull(store protocol.Store, graph protocol.GraphTraverser, cogniti
 		// NewWorkingMemWithBudget（≥8GB SurrealDB 全路径，32000 token 预算）：
 		// 此前用 NewWorkingMemWithDB 不设 tokenBudget，AppendAndPage 的自动换页
 		// 分支（超预算时压缩到 EpisodicMem）永远不触发，working memory 只能无界
-		// 增长直到调用方自行处理，2026-07-14（ADR-0051 关联接线）激活真实的
+		// 增长直到调用方自行处理，2026-07-14（ADR-0062 关联接线）激活真实的
 		// 溢出保护。
 		m.working = memstore.NewWorkingMemWithBudget(db, m.episodic, 32000)
 		m.retriever = memretrieval.NewHybridRetrieverWithCognitive(store, graph, memstore.NewDurativeMemoryManager(m.episodic, nil, store), sqlRefl, cognitive, m.semantic)
@@ -138,7 +138,7 @@ func NewMemImplWithDB(store protocol.Store, db protocol.SQLQuerier) *MemImpl {
 		sqlRefl := memstore.NewSQLReflectionMem(db)
 		m.reflection = sqlRefl
 		// NewWorkingMemWithBudget（<8GB 降级路径，8000 token 预算，见函数doc）：
-		// 同上激活 working memory 溢出保护（ADR-0051 关联接线）。
+		// 同上激活 working memory 溢出保护（ADR-0062 关联接线）。
 		m.working = memstore.NewWorkingMemWithBudget(db, m.episodic, 8000)
 		m.retriever = memretrieval.NewHybridRetrieverFull(store, nil, memstore.NewDurativeMemoryManager(m.episodic, nil, store), sqlRefl)
 	}

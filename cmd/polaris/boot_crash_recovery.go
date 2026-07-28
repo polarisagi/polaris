@@ -4,7 +4,7 @@
 // StateContext → 从崩溃点续跑"的崩溃恢复设计，但 protocol.SetReplayMode 此前
 // 只有 4 处读侧护栏（agent_execute_dag.go/agent_execute_effect_helpers.go/
 // outbox_worker.go/execute/dag/executor_node.go），从未有任何 Setter 调用点
-// （ADR-0052 deadcode 审计发现）。本文件补齐驱动逻辑：boot 阶段扫描上一次
+// （ADR-0062 deadcode 审计发现）。本文件补齐驱动逻辑：boot 阶段扫描上一次
 // 运行遗留的 in-flight 标记（internal/agent/agent.go markInFlight/
 // clearInFlight，Run() 处理期间写入、正常退出时清除），对候选会话尝试
 // TrajectoryRecorderImpl 录像回放式恢复。

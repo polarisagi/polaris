@@ -11,7 +11,7 @@ import (
 )
 
 // HandleCreateSkill 用户意图驱动的技能生成入口（2026-07-21 deadcode 审查补齐，
-// ADR-0052）：与 M6 LogicCollapse 的"任务轨迹驱动"生成管线平行，这里是"用户
+// ADR-0062）：与 M6 LogicCollapse 的"任务轨迹驱动"生成管线平行，这里是"用户
 // 显式描述一个工作流 → LLM 生成 SKILL.md → 安装到技能库"的另一条路径。
 // skill.SkillCreator 本身早已实现完整（生成/落盘/安装/注册），此前只是缺一个
 // 触发入口——本次选择 HTTP + CLI（polaris skill create）两端配套。

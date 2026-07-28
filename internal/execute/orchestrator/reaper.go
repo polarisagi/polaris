@@ -56,7 +56,7 @@ func (r *Reaper) Run(ctx context.Context) {
 	}
 }
 
-// 2026-07-14（ADR-0051）：SupervisorEpoch 删除——ADR-0050 淘汰的中心化
+// 2026-07-14（ADR-0062）：SupervisorEpoch 删除——ADR-0062 淘汰的中心化
 // Orchestrator "Worker 拉取式读 epoch 校验"设计的孤儿残留，全仓零调用点。
 // 当前并发控制走 claimed_by/claimed_at/expires_at 租约认领模型
 // （sqlite_blackboard_reaper.go），与本类型描述的机制无关。

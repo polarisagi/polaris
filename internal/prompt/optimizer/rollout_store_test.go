@@ -61,7 +61,7 @@ func newRolloutTestDB(t *testing.T) *sql.DB {
 
 // TestConfirmShadow_ActivatesPromptCandidate 验证 ConfirmShadow 通过后，若注入了
 // promptActivator，会用 SubmitCandidate 时落盘的 TaskType/BaselineScore 回调激活
-// 对应的 Prompt 候选——这是本次修复 ADR-0029 §K"Gate 2/3 被 Activate() 同步旁路"
+// 对应的 Prompt 候选——这是本次修复 ADR-0025 §K"Gate 2/3 被 Activate() 同步旁路"
 // 问题的核心断言。
 func TestConfirmShadow_ActivatesPromptCandidate(t *testing.T) {
 	db := newRolloutTestDB(t)

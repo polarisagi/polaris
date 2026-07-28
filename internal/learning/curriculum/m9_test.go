@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// 2026-07-14（ADR-0051）：DynamicDifficultyCalibrator/CoEvolutionCoordinator/
+// 2026-07-14（ADR-0062）：DynamicDifficultyCalibrator/CoEvolutionCoordinator/
 // AutoConfigOptimizer 整体删除（calibrator.go）——全仓生产零调用点，是与
 // internal/prompt/optimizer/memf.go 同名但独立、从未被采纳的平行实现（该包
 // 真正使用的动态难度校准是 memf.go 自己的 DynamicDifficultyCalibrator）。原

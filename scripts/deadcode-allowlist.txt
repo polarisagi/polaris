@@ -1,17 +1,17 @@
 internal/agent/agent.go: unreachable func: NewAgentWithDefaults # 根因一(测试假阳性)，ADR-0046/ADR-0062
-internal/downloader/http.go: unreachable func: Get # 根因一(测试假阳性)，ADR-0052/ADR-0062
-internal/downloader/http.go: unreachable func: DownloadExtractTarGz # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/downloader/http.go: unreachable func: Get # 根因一(测试假阳性)，ADR-0062
+internal/downloader/http.go: unreachable func: DownloadExtractTarGz # 根因一(测试假阳性)，ADR-0062
 internal/downloader/proxy.go: unreachable func: ResolveURL # 根因一(测试假阳性)，ADR-0062
 internal/downloader/proxy.go: unreachable func: ProxyStatus # 根因一(测试假阳性)，ADR-0062
-internal/llm/credential_pool.go: unreachable func: NewSingleCredentialPool # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/llm/credential_pool.go: unreachable func: NewSingleCredentialPool # 根因一(测试假阳性)，ADR-0062
 internal/security/credential/vault.go: unreachable func: NewVault # 根因一(测试假阳性)，ADR-0062
 internal/security/taint/taint.go: unreachable func: SafeString.Content # 根因一(测试假阳性)，ADR-0062
-internal/store/search/reranker.go: unreachable func: NilReranker.Rerank # 根因一(测试假阳性)，ADR-0052/ADR-0062
-internal/swarm/supervisor/tree.go: unreachable func: Supervisor.Wait # 根因一(测试假阳性)，ADR-0052/ADR-0062
+internal/store/search/reranker.go: unreachable func: NilReranker.Rerank # 根因一(测试假阳性)，ADR-0062
+internal/swarm/supervisor/tree.go: unreachable func: Supervisor.Wait # 根因一(测试假阳性)，ADR-0062
 internal/swarm/planner/pool.go: unreachable func: DefaultSpawner # 根因一(测试假阳性)，ADR-0062
-pkg/types/models_event.go: unreachable func: BuildIdempotencyKey # 根因一(测试假阳性)，ADR-0059/ADR-0062
+pkg/types/models_event.go: unreachable func: BuildIdempotencyKey # 根因一(测试假阳性)，ADR-0076/ADR-0062
 internal/ffi/llama.go: unreachable func: LlamaEmbed # 门控假阳性，tier1 默认不可达，ADR-0062
 internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 默认不可达，ADR-0062
-internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0047 刻意保留不接入，ADR-0062 恢复
+internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0007 刻意保留不接入，ADR-0062 恢复
 internal/channel/message.go: unreachable func: jsonNestedInt64 # 根因一(测试假阳性)，仅被 channels_test.go 调用
 internal/observability/trace/tracer.go: unreachable func: Tracer.RegisterExporter # ADR-0069，boot 期改走 SetDefaultExporters（NewTracer 自动附加），RegisterExporter 保留作为单 Tracer 实例的手动注册入口（测试/未来场景用），2026-07-23 接入 boot 后复核仍为生产不可达

@@ -146,7 +146,7 @@ type StagingPipelineAdapter interface {
 	SubmitCandidate(ctx context.Context, snap *optimizer.AgentVersionSnapshot) error
 	// RecordEvalScore 记录 Gate 1(Eval) 评分，候选进入 Gate 2(Shadow) 等待 ShadowExecutor 确认。
 	// 真正的 Prompt 激活推迟到 ConfirmShadow 通过之后（见 optimizer.SQLiteRolloutStore.ConfirmShadow），
-	// 不在此处/handleEvalCompleted 内直接调用 versionStore.Activate（ADR-0029 §K）。
+	// 不在此处/handleEvalCompleted 内直接调用 versionStore.Activate（ADR-0025 §K）。
 	RecordEvalScore(ctx context.Context, version string, passRate float64, baselinePassRate float64) error
 }
 

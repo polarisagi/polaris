@@ -110,7 +110,7 @@ type SandboxSpec struct {
 	DryRunMode   bool
 	MockProxyEnv string
 
-	// SessionID D4/ADR-0079：非空时表示调用方希望复用/新建一个长驻会话
+	// SessionID D4/ADR-0008：非空时表示调用方希望复用/新建一个长驻会话
 	// （PersistentSandbox/SandboxPersistent tier）。其余 SandboxProvider 实现
 	// 忽略此字段（零值兼容，不影响任何现有行为）。
 	SessionID string

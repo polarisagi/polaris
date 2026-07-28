@@ -122,7 +122,7 @@ const (
 // ContextWindowManager 上下文窗口管理器（M04-Agent-Kernel.md §7 热路径压缩）。
 // maxTokens=90000. >70%→salience 排序压缩; >90%→语义结构感知逐出.
 //
-// 2026-07-22 一致性审查修复（ADR-0052 DEFER 项闭环，见 ADR-0060）：此前本
+// 2026-07-22 一致性审查修复（ADR-0062 DEFER 项闭环，见 ADR-0033）：此前本
 // 类型从未被构造、currentUsage 从未被赋值，NeedsCompaction 恒定基于零值
 // 计算——M4 主循环的 50/75/100% 三级检测（agent_execute_effect.go）只做
 // [BUDGET_CONSTRAINT] 提示注入与 100% 硬熔断任务失败，从不做实际压缩。

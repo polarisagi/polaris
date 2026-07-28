@@ -1,5 +1,5 @@
 // polaris skill 子命令组：用户意图驱动的技能生成（2026-07-21 deadcode 审查
-// 补齐，ADR-0052）。与 polaris eval / polaris allowlist 一样，是纯 HTTP 客户端
+// 补齐，ADR-0062）。与 polaris eval / polaris allowlist 一样，是纯 HTTP 客户端
 // 薄封装——真正的生成逻辑（LLM 调用 + 落盘 + 安装 + 注册）跑在 polaris serve
 // 侧（internal/gateway/server/sysadmin.HandleCreateSkill），CLI 只负责把用户的
 // 自然语言描述发过去。

@@ -350,7 +350,7 @@ func TestExecute_Success(t *testing.T) {
 	}
 }
 
-// ── D4/ADR-0079：L4 长驻会话端到端集成 ──────────────────────────────────────
+// ── D4/ADR-0008：L4 长驻会话端到端集成 ──────────────────────────────────────
 
 // bareArgvWrapper 测试替身：绕过 Rust FFI/bwrap/Seatbelt，直接透传 argv/env，
 // 与 internal/sandbox 包自己的同名测试替身用途一致（不能跨包复用未导出类型，

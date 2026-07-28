@@ -10,7 +10,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// AgentProfile 用户定义的自定义 Agent 配置（ADR-0015 §2.4）。
+// AgentProfile 用户定义的自定义 Agent 配置（ADR-0016 §2.4）。
 // 从 .polaris/agents/*.yaml 或 ~/.polarisagi/polaris/agents/*.yaml 加载。
 // 映射到 AgentCard，在 Blackboard 中注册。
 //

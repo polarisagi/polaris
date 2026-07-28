@@ -101,7 +101,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 	// 会直接终止整个进程；HTTP 路径有 withMiddleware 的 PanicRecovery 兜底
 	// （server_lifecycle.go:190），但本 goroutine 无论从 cron/event/webhook
 	// 后台触发还是从 manual HTTP 触发都会脱离调用方 goroutine 独立执行，均不
-	// 受 HTTP 中间件保护。改用 pkg/concurrent.SafeGo 统一接入（ADR-0029 §H
+	// 受 HTTP 中间件保护。改用 pkg/concurrent.SafeGo 统一接入（ADR-0025 §H
 	// "SafeGo 全量迁移"未覆盖到本文件，是覆盖遗漏而非有意延后）。
 	concurrent.SafeGo(context.Background(), "cronadmin.executeAutomation.worker", func(context.Context) {
 		// 动态映射超时

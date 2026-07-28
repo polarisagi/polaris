@@ -33,7 +33,7 @@ const (
 
 // charsPerToken/minSummaryTokens/summaryRatio/maxSummaryTokens/
 // compactSummaryPrefix/compactSummarizePrompt 2026-07-22 迁移至
-// internal/memory/compact（M4/M5 共享压缩算法，见该包 doc 注释与 ADR-0060），
+// internal/memory/compact（M4/M5 共享压缩算法，见该包 doc 注释与 ADR-0033），
 // 此处不再保留本地重复定义，避免与 M4 热路径侧漂移。
 
 // types.ContextStats 会话上下文使用统计，由 Stats() 返回。

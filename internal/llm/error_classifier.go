@@ -64,7 +64,7 @@ type ClassifiedError struct {
 	ShouldFallback         bool // 换模型（非换 provider）
 }
 
-// 2026-07-14（ADR-0051）：IsAuth/FallbackTierInt 删除——与"调用方直接读布尔字段，
+// 2026-07-14（ADR-0062）：IsAuth/FallbackTierInt 删除——与"调用方直接读布尔字段，
 // 不 switch Reason"的设计原则相悖；FallbackTierInt 映射的目标类型
 // substrate.FallbackTier 全仓库不存在，是未完成的过度设计，生产路由决策
 // （router_failover.go）已用更简单的布尔判断完全覆盖同等语义。

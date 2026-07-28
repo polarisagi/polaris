@@ -1,6 +1,6 @@
 package sandbox
 
-// D4/ADR-0079：长驻会话协议实现。
+// D4/ADR-0008：长驻会话协议实现。
 //
 // Python 用一个常驻的小型"harness"脚本自己实现协议（JSON 一行请求 → JSON 一行
 // 响应），而不是把用户代码直接喂给 `python3 -i` 交互式 REPL——REPL 的 `>>>`/`...`

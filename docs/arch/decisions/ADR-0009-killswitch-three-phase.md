@@ -1,51 +1,21 @@
-# ADR-0009: KillSwitch 三阶段熔断 + `.fullstop` 持久状态防重启循环
+# ADR-0009: KillSwitch 熔断与恢复合集（三阶段熔断 + 进程内活恢复模型，含原 ADR-0072/0073）
 
-- **状态**: Accepted
-- **日期**: 2026-05-16
-- **决策者**: 架构组
-- **相关模块**: M11 / `internal/security/killswitch.go`
-- **实现详情**: [M11 §4 KillSwitch FSM](../M11-Policy-Safety.md) | [00-Dict §4 KillSwitch + §1-ter XR-01](../00-Global-Dictionary.md) | [DIAGRAMS §2 KillSwitch 触发链](../DIAGRAMS.md)
+- **状态**: Accepted | **日期**: 2026-05-16（恢复路径修正 2026-07-23，合并 2026-07-28）| **模块**: M11 `internal/security/killswitch.go`
 
-## 上下文
+## 决策一：三阶段熔断 + `.fullstop` 持久状态防重启循环（原决策）
 
-LLM 系统失控模式:成本爆炸(TokenBurnRate 持续高位)/ 持续失败 / 状态机异常。仅用进程级 panic 会被守护进程重启重新触发 → fork-bomb。需要渐进降级 + 持久止损 + 显式人工恢复。
+三阶段（阈值详见 [M11 §4](../M11-Policy-Safety.md)）：Stage1 THROTTLE（`EMA_5s > P95×2.0`）限流 → Stage2 PAUSE（`EMA_30s > P95×3.0`）暂停新任务 → Stage3 FULLSTOP（`EMA_30s > P95×10.0` 或连续 10 次安全防线失败）写 `.fullstop` + 密封模式。
 
-## 决策
+Stage1/2 自动回落；Stage3 仅经人工恢复端点显式解锁（见决策二）并删 `.fullstop`。守护进程重启检测到 `.fullstop` → 直接密封，禁自动 unseal。阶段变迁唯一触发点 = M11 KillSwitch FSM（[XR-01](../00-Global-Dictionary.md)）。
 
-**三阶段 KillSwitch + `.fullstop` 持久状态文件 + 密封模式人工解锁。**
+## 决策二：恢复路径统一为进程内活恢复模型（原 ADR-0073，对决策一恢复路径细节的补充修正）
 
-三阶段触发阈值(详见 [M11 §4](../M11-Policy-Safety.md) + [00-Dict §4 KillSwitch](../00-Global-Dictionary.md)):
-- **Stage 1 THROTTLE**: `EMA_5s > baseline.P95 × 2.0` → 限流
-- **Stage 2 PAUSE**: `EMA_30s > baseline.P95 × 3.0` → 暂停新任务,保留处理中
-- **Stage 3 FULLSTOP**: `EMA_30s > baseline.P95 × 10.0` 或连续 10 次安全防线失败 → 写 `.fullstop` + 密封模式
+采纳"进程内活恢复"，放弃"重启进程重放事件日志"模型——此前文档（`KILLSWITCH.md`/`state.yaml`）与代码（`recoveryCallback` 机制）三方矛盾，且 Tier-0（2GB VPS）通常缺乏自动重启编排，重启恢复不可控。新增管理端点 `POST /_admin/unseal`（需有效 `POLARIS_API_KEY`，鉴权中间件放行路径但不免鉴权）触发活恢复。`writeFullStopFile` 磁盘 IO 移出锁范围。文档同步订正。
 
-恢复路径:Stage 1/2 自动回落;Stage 3 仅经 `POST /_admin/unseal` 显式人工恢复并删 `.fullstop`。守护进程重启时检测 `.fullstop` → 直接密封(**禁自动 unseal**)。
+## 反例守护
 
-阶段变迁唯一触发点 = M11 KillSwitch FSM(由 M3 推送 TokenBurnRate Gauge,FSM 切换由 M11 唯一执行,见 [XR-01](../00-Global-Dictionary.md))。
-
-## 后果
-
-- **正向**: 见决策章节
-- **负向**: 暂无已知负向后果
-- **反例守护**:
-  - 未来如有人提议"加自动 unseal 路径"—本 ADR 拒绝。任何自动恢复路径在持续失控时陷入循环
-  - 未来如有人提议"M4/M8/M13 各自判定 KillSwitch 阶段"—违反 XR-01,本 ADR 与 XR-01 联合拒绝
-
-## 被驳回的方案
-
-| 方案 | 驳回理由 |
-|------|---------|
-| 单一 KILL(无渐进) | 缺少限流缓冲;误杀率高 |
-| 仅内存状态 | 重启即失效;不防 fork-bomb |
-| 时间窗自动恢复(如 1h 后解锁) | 持续失控时陷入循环;与"显式人工干预"哲学矛盾 |
-| 多组件独立判定阶段 | 状态机分裂;阶段不一致导致部分模块仍在跑 |
+拒绝任何自动 unseal 路径——持续失控时会陷入循环。拒绝 M4/M8/M13 各自判定阶段——违反 XR-01。拒绝恢复到"重启进程重放事件日志"模型——已证实与 Tier-0 场景及既有代码路径三方矛盾。
 
 ## 引用代码
 
-- `internal/security/killswitch.go`
-
-## 修订记录
-
-| 日期 | 变更 |
-|------|------|
-| 2026-05-16 | 初稿（回填，初始决策早于 ADR 体系建立） |
+`internal/security/killswitch.go`

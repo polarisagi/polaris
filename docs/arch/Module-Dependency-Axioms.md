@@ -102,7 +102,7 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于
 > CLAUDE.md` 已有清晰的"拥有/禁止"边界文档，物理合并会把 `internal/extension`
 > 承载的 M6（Skill）/M13-bis（Registry）职责一并卷入，制造新的越界。真正需要
 > 收紧的是 import 方向，而非目录结构。裁决记录见
-> `docs/arch/decisions/ADR-0044-m7-boundary-deferred.md`。
+> `docs/arch/decisions/ADR-0081-arch-doc-structure-governance.md`（决策三，含原 ADR-0044）。
 
 显式 import 方向约束（Arch-L2 `tool`/`sandbox`/`action` vs Arch-L3 `extension`）：
 

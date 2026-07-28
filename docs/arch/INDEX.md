@@ -55,25 +55,25 @@
 - **症状特征**：多个浏览器标签页/并发会话之间出现 Agent 状态互相覆盖、串话。
 - **归类模块**：M04 / M13
 - **根因类别**：Agent 实例是全服务器单例，并发请求共享同一份状态字段。
-- **排查起点**：检查是否走 `AgentPool`（per-session 实例）而非单例 `ChatHandler.Agent`；历史真实案例见 `ADR-0029` §E。
+- **排查起点**：检查是否走 `AgentPool`（per-session 实例）而非单例 `ChatHandler.Agent`；历史真实案例见 `ADR-0025` §E。
 
 ### 症状 9：Blackboard 事件消费方读到的 ev.Payload 恒为空
 - **症状特征**：订阅 `SQLiteBlackboard.Subscribe` 的消费方（如编排执行器）在 `task_completed` 事件里读 `ev.Payload` 得到空字节，即便 `CompleteTask` 明明传了非空 `result` 参数。
 - **归类模块**：M08
 - **根因类别**：某个状态转换方法的 `broadcast` 调用忘了把参数写进 `BlackboardEvent.Payload` 字段（对照同类兄弟方法，如 `FailTask` 有 `Payload: errBytes`，遗漏方法却没有）。
-- **排查起点**：`internal/execute/orchestrator/sqlite_blackboard.go`（2026-07-12 前路径为 `internal/swarm/orchestrator/`，见 ADR-0046）里对比 `PostTask`/`PostBatch`/`ClaimTask`/`StartExecution`/`CompleteTask`/`FailTask` 六个状态转换方法的 `bb.broadcast(...)` 字面量，看是否每个都对齐设置了 `Payload`；真实案例见 ADR-0041 §2 第6点（`CompleteTask` 此前遗漏）。
+- **排查起点**：`internal/execute/orchestrator/sqlite_blackboard.go`（2026-07-12 前路径为 `internal/swarm/orchestrator/`，见 ADR-0046）里对比 `PostTask`/`PostBatch`/`ClaimTask`/`StartExecution`/`CompleteTask`/`FailTask` 六个状态转换方法的 `bb.broadcast(...)` 字面量，看是否每个都对齐设置了 `Payload`；真实案例见 ADR-0046 §2 第6点（`CompleteTask` 此前遗漏）。
 
 ### 症状 10：AgentPool 会话 SendIntent 后 FSM 无任何响应/流式无输出
 - **症状特征**：走 `AgentPool.Acquire` 的 per-session 请求，`SendIntent` 本身不报错，但 `SubscribeStream`/`CurrentState()` 永远不变化，像是石沉大海。
 - **归类模块**：M04
 - **根因类别**：Agent 实例已构造但没有任何 goroutine 消费其 intent channel——`a.intent` 带缓冲（cap=10），短期内写入不报错，掩盖了 FSM 从未被驱动的事实；构造点忘记为该实例启动 `Run()` 事件循环。
-- **排查起点**：确认该 Agent 实例的构造点是否有配套的 `concurrent.SafeGo(..., func(ctx) { agent.Run(ctx) })`；历史真实案例见 `ADR-0029` §E Addendum（`internal/agent/pool.go` `newPoolEntry` 此前遗漏）。
+- **排查起点**：确认该 Agent 实例的构造点是否有配套的 `concurrent.SafeGo(..., func(ctx) { agent.Run(ctx) })`；历史真实案例见 `ADR-0025` §E Addendum（`internal/agent/pool.go` `newPoolEntry` 此前遗漏）。
 
 ### 症状 11：Worker 认领任务后 PeekTask 读不回任务意图内容
 - **症状特征**：`PostTask` 时通过 `TaskEntry.Intent` 传入的意图数据（如编排执行器编码的节点 ID/模板），Worker `ClaimTask` 之后调用 `PeekTask` 却读不到——`Intent` 字段恒为空。
 - **归类模块**：M08
 - **根因类别**：`SQLiteBlackboard.PostTask`/`PostBatch` 的 INSERT 语句从未写入 `intent` 列（`tasks` 表此前也没有这一列），`TaskEntry.Intent` 在写路径上被静默丢弃；`task_posted` 事件同样不携带 payload。此前未暴露是因为没有真实生产 Worker 消费过 `Pattern*Executor` 投递的任务。
-- **排查起点**：确认 `007_tasks.sql` 是否有 `intent` 列 + `sqlite_blackboard.go` PostTask/PostBatch 的 INSERT 字段列表是否包含 `task.Intent`；真实案例见 `ADR-0041` §6 Addendum（workflow 接入 StateGraphExecutor 时发现，2026-07-12）。
+- **排查起点**：确认 `007_tasks.sql` 是否有 `intent` 列 + `sqlite_blackboard.go` PostTask/PostBatch 的 INSERT 字段列表是否包含 `task.Intent`；真实案例见 `ADR-0046` §6 Addendum（workflow 接入 StateGraphExecutor 时发现，2026-07-12）。
 
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。

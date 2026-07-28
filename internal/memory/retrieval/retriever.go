@@ -98,7 +98,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	}
 
 	// Stage 0.6 — 计算 task_type（M05 §12.3 漂移降级判断用；不写回 RetrievalConfig，
-	// 内部计算内部消费，避免改动调用方签名，见 ADR-0053 设计讨论）。
+	// 内部计算内部消费，避免改动调用方签名，见 ADR-0062 设计讨论）。
 	taskType := optimizer.ExtractTaskType(query)
 
 	// Stage 1 — 并行宽召回（BM25 + Simhash + Graph 三路）
