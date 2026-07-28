@@ -400,7 +400,7 @@ func (s *Server) SetChannelStarter(mgr ChannelStarter) {
 	s.channelMgr = mgr
 }
 
-func (s *Server) SetInferenceRouter(router protocol.Provider) {
+func (s *Server) SetInferenceRouter(router protocol.ProviderRouter) {
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Router = router
 	}

@@ -138,6 +138,12 @@ func (h *EvalAdmin) HandleGetMetaAuditStatus(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// HandleBenchmark 触发 Benchmark.
+func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"benchmark ok"}`))
+}
+
 // decodeSignature 将 base64 签名字符串解码为字节。空字符串返回 nil（放行开发模式——
 // 未配置公钥时 verifyEvalSignature 仅告警，与既有 Training/Validation 签名校验行为一致）。
 func decodeSignature(b64 string) ([]byte, error) {

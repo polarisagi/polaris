@@ -55,7 +55,7 @@ type SysAdminHandler struct {
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Registry       protocol.LLMRegistry
-	Router         protocol.Provider
+	Router         protocol.ProviderRouter
 	HITLGateway    protocol.HITL
 	Blackboard     *orchestrator.SQLiteBlackboard
 	PipelineOrch   *orchestrator.PipelineOrchestrator
@@ -118,7 +118,7 @@ type Dependencies struct {
 	AutomationRepo repo.AutomationRepository
 	Chat           ChatDispatcher
 	Registry       protocol.LLMRegistry
-	Router         protocol.Provider
+	Router         protocol.ProviderRouter
 	HTTPClient     *http.Client
 	ExtRepo        protocol.ExtensionRepository
 	HITLGateway    protocol.HITL

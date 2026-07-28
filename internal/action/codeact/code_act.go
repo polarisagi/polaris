@@ -384,6 +384,7 @@ func writeTempScript(language, code string) (string, error) {
 	defer f.Close()
 
 	if _, err := f.WriteString(code); err != nil {
+		f.Close() // 先关闭句柄，避免 Windows 系统文件锁导致 Remove 失败
 		os.Remove(f.Name())
 		return "", apperr.Wrap(apperr.CodeInternal, "write temp file", err)
 	}

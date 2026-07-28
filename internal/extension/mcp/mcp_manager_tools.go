@@ -177,7 +177,9 @@ func makeMCPToolFn(client *MCPClient, mcpName string) sandbox.InProcessRichFn {
 		// 与此处按次调用实际测得的污点是两回事，此前被 `_` 丢弃，导致
 		// agent_execute_dag.go 的 GlobalTaintLevel/hasHighTaint 逻辑对 MCP 工具结果
 		// 永远视为 TaintNone——外部/不可信响应内容完全没有参与污点升级判断。
-		text, imgs, taintLevel, err := client.CallToolTainted(ctx, mcpName, args)
+		callCtx, cancel := context.WithTimeout(ctx, client.cfg.Timeout)
+		defer cancel()
+		text, imgs, taintLevel, err := client.CallToolTainted(callCtx, mcpName, args)
 		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeMCPToolFn", err)
 		}
@@ -289,6 +291,7 @@ type DynamicConnectRequest struct {
 	Command    string // stdio 模式：可执行文件路径
 	Args       []string
 	URL        string // sse/http 模式：端点 URL
+	TrustTier  int    // TrustTier
 }
 
 // DynamicConnect 动态连接一个 MCP server 并注册其工具到沙箱。

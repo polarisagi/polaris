@@ -138,6 +138,7 @@ func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectReque
 		Command:    req.Command,
 		Args:       req.Args,
 		URL:        req.URL,
+		TrustTier:  req.TrustTier,
 	}
 	client := NewMCPClient(cfg, m.httpClient)
 	if err := client.Connect(ctx); err != nil {

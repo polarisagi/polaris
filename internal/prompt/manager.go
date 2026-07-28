@@ -50,18 +50,15 @@ func (pm *Manager) resolveConfigDir() string {
 	return pm.configDir
 }
 
-// safePromptName 验证 name 是合法的纯文件名，防止路径穿越攻击。
-// 拒绝含路径分隔符、`..` 组件、空字符串。
+// safePromptName 校验 prompt 名称合法性，允许子目录相对路径，仅禁止路径穿越和绝对路径。
+// 原实现拒绝所有含 / 的名称，导致 "tool_enforcement/deepseek.md" 类合法子路径无法加载用户覆盖（GR-6-001）。
 func safePromptName(name string) error {
-	if name == "" {
-		return apperr.New(apperr.CodeInvalidInput, "prompt name cannot be empty")
-	}
-	if strings.ContainsAny(name, `/\`) {
-		return apperr.New(apperr.CodeInvalidInput, "prompt name contains path separator")
+	if filepath.IsAbs(name) {
+		return apperr.New(apperr.CodeInvalidInput, "prompt name must be relative")
 	}
 	clean := filepath.Clean(name)
-	if clean != name || strings.Contains(clean, "..") {
-		return apperr.New(apperr.CodeInvalidInput, "prompt name contains illegal path component")
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return apperr.New(apperr.CodeInvalidInput, "prompt name contains path traversal")
 	}
 	return nil
 }

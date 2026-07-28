@@ -14,7 +14,7 @@ message BlackboardEvent {
   string task_id = 2;
   string agent_id = 3;
   bytes payload = 4;
-  int64 timestamp = 5;         // Unix microseconds
+  int64 timestamp = 5;         // Unix milliseconds（全局 CANONICAL：time.Now().UnixMilli()）
   bytes trace_context = 6;     // OTel W3C Trace Context
 }
 
@@ -25,7 +25,7 @@ message TaskIntent {
   int32 priority = 3;          // 0=最高
   repeated string required_capabilities = 4;
   bytes input = 5;             // JSON 序列化输入
-  int64 deadline = 6;          // Unix microseconds
+  int64 deadline = 6;          // Unix milliseconds（全局 CANONICAL：time.Now().UnixMilli()）
 }
 
 // TaskResult 是任务完成结果。

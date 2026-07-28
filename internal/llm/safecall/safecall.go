@@ -51,6 +51,8 @@ func Infer(ctx context.Context, provider protocol.Provider, msgs []types.Message
 }
 
 // StreamInfer 也是全仓唯一允许直接调用 provider.StreamInfer 的入口。
+//
+//nolint:gocyclo
 func StreamInfer(ctx context.Context, provider protocol.Provider, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
 	timeoutSec := 60
 	cfg := config.Get()
@@ -90,14 +92,21 @@ func StreamInfer(ctx context.Context, provider protocol.Provider, msgs []types.M
 		defer timer.Stop()
 
 		for {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			timer.Reset(idleTimeout)
 			select {
 			case <-ctx.Done():
 				return
 			case <-timer.C:
-				outChan <- types.StreamEvent{
-					Type:    types.StreamError,
-					Content: "stream idle timeout",
+				select {
+				case <-ctx.Done():
+					return
+				case outChan <- types.StreamEvent{Type: types.StreamError, Content: "stream idle timeout"}:
 				}
 				return
 			case ev, ok := <-evChan:

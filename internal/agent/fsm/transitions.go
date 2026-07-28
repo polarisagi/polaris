@@ -125,7 +125,18 @@ func (sm *StateMachine) registerTransitions() {
 			} else {
 				originTaint = types.TaintMedium
 			}
-			thinkMode := metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current())
+			surpriseIndex := metrics.GlobalSurpriseIndex().Current()
+			if surpriseIndex < 0.3 && sCtx.DAGModel != nil && len(sCtx.DAGModel.Nodes) > 0 {
+				// SurpriseIndex 低于阈值，跳过 LLM 规划直接复用上次成功计划（GD-13-004）
+				return []protocol.Effect{
+					protocol.DeterministicEffect{
+						Fn: func(ctx context.Context, pCtx protocol.StateContext) (types.State, error) {
+							return types.State("S_PLAN_DONE"), nil
+						},
+					},
+				}, nil
+			}
+			thinkMode := metrics.SelectThinkingMode(sm.replanCount, originTaint, surpriseIndex)
 			return []protocol.Effect{
 				protocol.LLMFillEffect{
 					ThinkingMode: thinkMode,

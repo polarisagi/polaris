@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -72,7 +73,8 @@ func (ea *EventArchiver) Archive(ctx context.Context) error {
 	coldDBPath := filepath.Join(ea.coldDBDir, "events_archive.db")
 
 	// 1. ATTACH DATABASE
-	attachStmt := fmt.Sprintf("ATTACH DATABASE '%s' AS cold_archive", coldDBPath)
+	safePath := strings.ReplaceAll(coldDBPath, "'", "''")
+	attachStmt := fmt.Sprintf("ATTACH DATABASE '%s' AS cold_archive", safePath)
 	if _, err := ea.db.ExecContext(ctx, attachStmt); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "EventArchiver.Archive: attach cold db", err)
 	}
@@ -135,6 +137,17 @@ CREATE TABLE IF NOT EXISTS cold_archive.events (
 	`
 	if _, err := tx.ExecContext(ctx, insertStmt, cutoffMs); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "EventArchiver.Archive: insert into cold db", err)
+	}
+
+	// 记录归档边界，供跨库哈希链完整性验证使用（GR-5-001）
+	var lastOffset int64
+	var lastHash sql.NullString
+	checkpointQuery := `SELECT "offset", hash FROM main.events WHERE created_at < ? ORDER BY "offset" DESC LIMIT 1`
+	if err := tx.QueryRowContext(ctx, checkpointQuery, cutoffMs).Scan(&lastOffset, &lastHash); err == nil && lastHash.Valid {
+		_, _ = tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO archive_checkpoints (archived_upto_offset, archived_upto_hash, archived_at) VALUES (?, ?, ?)`,
+			lastOffset, lastHash.String, time.Now().UnixMilli(),
+		)
 	}
 
 	deleteStmt := `DELETE FROM main.events WHERE created_at < ?`

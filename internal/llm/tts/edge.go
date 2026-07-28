@@ -64,9 +64,14 @@ func (p *EdgeProvider) Generate(ctx context.Context, text string) ([]byte, error
 	defer conn.Close()
 
 	// context 取消时通过设置读超时解除 ReadMessage 阻塞
-	concurrent.SafeGo(ctx, "llm.tts.edge_cancel_watcher", func(ctx context.Context) {
-		<-ctx.Done()
-		_ = conn.SetReadDeadline(time.Now())
+	done := make(chan struct{})
+	defer close(done)
+	concurrent.SafeGo(ctx, "llm.tts.edge_cancel_watcher", func(gctx context.Context) {
+		select {
+		case <-gctx.Done():
+			_ = conn.SetReadDeadline(time.Now())
+		case <-done:
+		}
 	})
 
 	if err := edgeSendRequests(conn, p, text); err != nil {

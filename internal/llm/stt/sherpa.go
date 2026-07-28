@@ -20,7 +20,7 @@ type SherpaOnnxOfflineStream struct{}
 // SherpaOnnxOfflinePunctuation is an opaque pointer
 type SherpaOnnxOfflinePunctuation struct{}
 
-var (
+type sherpaFuncs struct {
 	CreateOfflineRecognizer        func(config uintptr) *SherpaOnnxOfflineRecognizer
 	DestroyOfflineRecognizer       func(recognizer *SherpaOnnxOfflineRecognizer)
 	CreateOfflineStream            func(recognizer *SherpaOnnxOfflineRecognizer) *SherpaOnnxOfflineStream
@@ -34,7 +34,9 @@ var (
 	DestroyOfflinePunctuation  func(punct *SherpaOnnxOfflinePunctuation)
 	OfflinePunctuationAddPunct func(punct *SherpaOnnxOfflinePunctuation, text uintptr) uintptr
 	OfflinePunctuationFreeText func(text uintptr)
-)
+}
+
+var sf sherpaFuncs
 
 var (
 	libMu   sync.Mutex
@@ -58,19 +60,19 @@ func LoadLibrary(libPath string) error {
 		return loadErr
 	}
 
-	purego.RegisterLibFunc(&CreateOfflineRecognizer, lib, "SherpaOnnxCreateOfflineRecognizer")
-	purego.RegisterLibFunc(&DestroyOfflineRecognizer, lib, "SherpaOnnxDestroyOfflineRecognizer")
-	purego.RegisterLibFunc(&CreateOfflineStream, lib, "SherpaOnnxCreateOfflineStream")
-	purego.RegisterLibFunc(&DestroyOfflineStream, lib, "SherpaOnnxDestroyOfflineStream")
-	purego.RegisterLibFunc(&AcceptWaveformOffline, lib, "SherpaOnnxAcceptWaveformOffline")
-	purego.RegisterLibFunc(&DecodeOfflineStream, lib, "SherpaOnnxDecodeOfflineStream")
-	purego.RegisterLibFunc(&GetOfflineStreamResult, lib, "SherpaOnnxGetOfflineStreamResult")
-	purego.RegisterLibFunc(&DestroyOfflineRecognizerResult, lib, "SherpaOnnxDestroyOfflineRecognizerResult")
+	purego.RegisterLibFunc(&sf.CreateOfflineRecognizer, lib, "SherpaOnnxCreateOfflineRecognizer")
+	purego.RegisterLibFunc(&sf.DestroyOfflineRecognizer, lib, "SherpaOnnxDestroyOfflineRecognizer")
+	purego.RegisterLibFunc(&sf.CreateOfflineStream, lib, "SherpaOnnxCreateOfflineStream")
+	purego.RegisterLibFunc(&sf.DestroyOfflineStream, lib, "SherpaOnnxDestroyOfflineStream")
+	purego.RegisterLibFunc(&sf.AcceptWaveformOffline, lib, "SherpaOnnxAcceptWaveformOffline")
+	purego.RegisterLibFunc(&sf.DecodeOfflineStream, lib, "SherpaOnnxDecodeOfflineStream")
+	purego.RegisterLibFunc(&sf.GetOfflineStreamResult, lib, "SherpaOnnxGetOfflineStreamResult")
+	purego.RegisterLibFunc(&sf.DestroyOfflineRecognizerResult, lib, "SherpaOnnxDestroyOfflineRecognizerResult")
 
-	purego.RegisterLibFunc(&CreateOfflinePunctuation, lib, "SherpaOnnxCreateOfflinePunctuation")
-	purego.RegisterLibFunc(&DestroyOfflinePunctuation, lib, "SherpaOnnxDestroyOfflinePunctuation")
-	purego.RegisterLibFunc(&OfflinePunctuationAddPunct, lib, "SherpaOfflinePunctuationAddPunct")
-	purego.RegisterLibFunc(&OfflinePunctuationFreeText, lib, "SherpaOfflinePunctuationFreeText")
+	purego.RegisterLibFunc(&sf.CreateOfflinePunctuation, lib, "SherpaOnnxCreateOfflinePunctuation")
+	purego.RegisterLibFunc(&sf.DestroyOfflinePunctuation, lib, "SherpaOnnxDestroyOfflinePunctuation")
+	purego.RegisterLibFunc(&sf.OfflinePunctuationAddPunct, lib, "SherpaOfflinePunctuationAddPunct")
+	purego.RegisterLibFunc(&sf.OfflinePunctuationFreeText, lib, "SherpaOfflinePunctuationFreeText")
 
 	loaded = true
 	loadErr = nil
@@ -136,7 +138,7 @@ func NewEngine(modelDir, punctDir string) (*Engine, error) {
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetDecodingMethod)) = cString("greedy_search")
 
 	// 调用 C API
-	rec := CreateOfflineRecognizer(cfgPtr)
+	rec := sf.CreateOfflineRecognizer(cfgPtr)
 	if rec == nil {
 		return nil, apperr.New(apperr.CodeInternal, "stt: failed to create offline recognizer")
 	}
@@ -160,7 +162,7 @@ func NewEngine(modelDir, punctDir string) (*Engine, error) {
 		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetDebug)) = 0
 		*(*uintptr)(unsafe.Pointer(pCfgPtr + PunctOffsetProvider)) = cString("cpu")
 
-		punct = CreateOfflinePunctuation(pCfgPtr)
+		punct = sf.CreateOfflinePunctuation(pCfgPtr)
 	}
 
 	return &Engine{
@@ -175,11 +177,11 @@ func (e *Engine) Close() {
 	defer e.mu.Unlock()
 
 	if e.recognizer != nil {
-		DestroyOfflineRecognizer(e.recognizer)
+		sf.DestroyOfflineRecognizer(e.recognizer)
 		e.recognizer = nil
 	}
 	if e.punct != nil {
-		DestroyOfflinePunctuation(e.punct)
+		sf.DestroyOfflinePunctuation(e.punct)
 		e.punct = nil
 	}
 }
@@ -201,22 +203,22 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	stream := CreateOfflineStream(e.recognizer)
+	stream := sf.CreateOfflineStream(e.recognizer)
 	if stream == nil {
 		return Result{}, apperr.New(apperr.CodeInternal, "stt: failed to create stream")
 	}
-	defer DestroyOfflineStream(stream)
+	defer sf.DestroyOfflineStream(stream)
 
 	if len(samples) > 0 {
-		AcceptWaveformOffline(stream, int32(sampleRate), &samples[0], int32(len(samples)))
+		sf.AcceptWaveformOffline(stream, int32(sampleRate), &samples[0], int32(len(samples)))
 	}
-	DecodeOfflineStream(e.recognizer, stream)
+	sf.DecodeOfflineStream(e.recognizer, stream)
 
-	resPtr := GetOfflineStreamResult(stream)
+	resPtr := sf.GetOfflineStreamResult(stream)
 	if resPtr == 0 {
 		return Result{}, apperr.New(apperr.CodeInternal, "stt: failed to get result")
 	}
-	defer DestroyOfflineRecognizerResult(resPtr)
+	defer sf.DestroyOfflineRecognizerResult(resPtr)
 
 	// 解析返回的 C 结构体中的 const char* text
 	// 按照 SherpaOnnx 规范，result 的第一个字段就是 text 指针
@@ -242,9 +244,9 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 	if e.punct != nil && rawText != "" {
 		cRawText := append([]byte(rawText), 0)
 		cRawPtr := uintptr(unsafe.Pointer(&cRawText[0]))
-		punctuatedPtr := OfflinePunctuationAddPunct(e.punct, cRawPtr)
+		punctuatedPtr := sf.OfflinePunctuationAddPunct(e.punct, cRawPtr)
 		if punctuatedPtr != 0 {
-			defer OfflinePunctuationFreeText(punctuatedPtr)
+			defer sf.OfflinePunctuationFreeText(punctuatedPtr)
 			rawText = parseCString(punctuatedPtr)
 		}
 		runtime.KeepAlive(cRawText)

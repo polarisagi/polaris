@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -347,14 +348,18 @@ func formatTrajectory(traj []learning.Step) string {
 	return out
 }
 
+// ErrLLMInferNotConfigured 标识 llmInfer 未注入时的哨兵错误，
+// 调用方 Reflect() 收到此错误后自然触发 inferCauseFromTrajectory 规则回退（GR-7-001）。
+var ErrLLMInferNotConfigured = apperr.New(apperr.CodeUnimplemented, "reflexion: llmInfer not configured")
+
 // infer LLM 主路径 + 规则回退。
 // DeepSeek ¥1/1M tokens 使反思分析的经济成本可忽略。
 func (re *ReflexionEngine) infer(ctx context.Context, prompt string) (string, error) {
 	if re.llmInfer != nil {
 		return re.llmInfer(ctx, prompt)
 	}
-	// 离线/故障回退：返回空让调用方使用规则推断
-	return "", nil
+	// llmInfer 未配置时返回哨兵错误，让调用方触发确定性规则推断回退，而非静默返回空字符串
+	return "", ErrLLMInferNotConfigured
 }
 
 func buildCausePrompt(taskType string, trajectory []learning.Step) string {

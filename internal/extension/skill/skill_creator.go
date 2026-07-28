@@ -16,6 +16,8 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // LLMClient is a minimal interface for the SkillCreator to generate responses.
 type LLMClient interface {
 	// Generate uses the system prompt and user intent to generate a structured response.
@@ -97,11 +99,15 @@ func parseGeneratedSkill(response string) (GeneratedSkill, error) {
 // （从 GenerateSkill 拆出，gocyclo 治理，行为不变）。
 func writeSkillFiles(baseDir string, result GeneratedSkill) (string, error) {
 	// Create physical directory structure
+	if !validNamePattern.MatchString(result.Name) {
+		return "", apperr.New(apperr.CodeInvalidInput, "skill_creator: invalid name")
+	}
+
 	pluginDir := filepath.Join(baseDir, result.Name)
-	cleanBase := filepath.Clean(baseDir)
+	cleanBase := filepath.Clean(baseDir) + string(os.PathSeparator)
 	cleanPluginDir := filepath.Clean(pluginDir)
-	if !strings.HasPrefix(cleanPluginDir, cleanBase) {
-		return "", apperr.Wrap(apperr.CodeInvalidInput, "skill_creator: path traversal detected", nil)
+	if !strings.HasPrefix(cleanPluginDir+string(os.PathSeparator), cleanBase) {
+		return "", apperr.New(apperr.CodeInvalidInput, "skill_creator: path traversal detected")
 	}
 	skillsDir := filepath.Join(pluginDir, "skills", result.Name)
 

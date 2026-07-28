@@ -201,7 +201,9 @@ func (dw *DatabaseWriter) Run(ctx context.Context) {
 			}
 		case intent, ok := <-dw.priorityCh:
 			if !ok {
-				// priorityCh 已关闭，排空 ch 后退出
+				// priorityCh 已关闭，必须先排空 ch 残留请求再退出；
+				// 否则等待 ResultCh 的调用方因 ch 无人消费而永久阻塞（GR-1-001）
+				dw.drainCh()
 				dw.flushBatch(ctx) //nolint:errcheck
 				return
 			}
@@ -247,6 +249,24 @@ func (dw *DatabaseWriter) Close() {
 	close(dw.ch)
 	close(dw.priorityCh)
 	dw.wg.Wait()
+}
+
+// drainCh 排空普通通道残余（priorityCh 关闭后调用，避免 ch 中残留请求无人消费导致死锁）（GR-1-001）。
+func (dw *DatabaseWriter) drainCh() {
+	for {
+		select {
+		case intent, ok := <-dw.ch:
+			if !ok {
+				return
+			}
+			// 用零值 error 回告残留请求，让调用方能感知到请求已被处理（即使未落盘）
+			if intent.ResultCh != nil {
+				intent.ResultCh <- apperr.New(apperr.CodeInternal, "DatabaseWriter is restarting")
+			}
+		default:
+			return
+		}
+	}
 }
 
 // drainPriorityCh 排空优先通道残余（ch 关闭后调用，避免丢失高优先级写入）。

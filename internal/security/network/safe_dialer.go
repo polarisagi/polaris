@@ -303,7 +303,7 @@ func (sd *SafeDialer) InjectHTTPTransport() *http.Transport {
 	// 强制仅 HTTP/1.1 + HTTP/2，不升级到 HTTP/3
 	newTransport.ForceAttemptHTTP2 = true
 	newTransport.TLSClientConfig.NextProtos = []string{"h2", "http/1.1"} // 显式排除 "h3"
-	
+
 	return newTransport
 }
 

@@ -150,9 +150,9 @@ type LogConfig struct {
 }
 
 type AgentConfig struct {
-	Kernel            KernelConfig `toml:"kernel"`
-	Memory            MemoryConfig `toml:"memory"`
-	Skill             SkillConfig  `toml:"skill"`
+	Kernel KernelConfig `toml:"kernel"`
+	Memory MemoryConfig `toml:"memory"`
+	Skill  SkillConfig  `toml:"skill"`
 }
 
 type KernelConfig struct {

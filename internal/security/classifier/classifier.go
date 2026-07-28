@@ -23,6 +23,9 @@ import (
 	"strings"
 )
 
+// reSpaces 预编译空白折叠正则，避免热路径重复编译（GR-2-001）
+var reSpaces = regexp.MustCompile(`[ \t]+`)
+
 // RiskLevel 命令风险等级（数值越大风险越高）。
 type RiskLevel int
 
@@ -134,7 +137,6 @@ func normalizeCommand(cmd string) string {
 	// 去首尾空白
 	cmd = strings.TrimSpace(cmd)
 	// 折叠多余空格（保留换行以便多行命令匹配）
-	reSpaces := regexp.MustCompile(`[ \t]+`)
 	cmd = reSpaces.ReplaceAllString(cmd, " ")
 	return cmd
 }

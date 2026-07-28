@@ -85,7 +85,7 @@ Skill/JSONSchema/Condition/SkillSource 结构体定义见 `pkg/types/models_skil
 4. **ValidatePython 静态检查**
 5. **ContainerSandbox 探针测试**
 6. **签名入库**
-7. **System 1**: 同类任务 `SurpriseIndex < 0.2` → Python 技能直接命中，零 LLM 推理 `[SurpriseIndex]`
+7. **System 1**: 同类任务 `SurpriseIndex < 0.3` → Python 技能直接命中，零 LLM 推理 `[SurpriseIndex]`
 
 **蒸馏策略**: 技能先以 SKILL.md 形态存在，累积 >= 50 次成功 + 语义方差检查 + HITL/Eval Gate → Logic Collapse → Python 脚本生成
 

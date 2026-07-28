@@ -149,10 +149,14 @@ func (s *Supervisor) runWorker(w *WorkerEntry) {
 
 		slog.Warn("supervisor: worker crashed, restarting", "worker", w.ID, "err", err, "backoff", backoff)
 
+		timer := time.NewTimer(backoff)
 		select {
 		case <-s.ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return
-		case <-time.After(backoff):
+		case <-timer.C:
 			// 继续循环，重新拉起
 		}
 	}

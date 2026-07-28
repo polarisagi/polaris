@@ -90,8 +90,11 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	if p.CheckpointType == "l4_multi_sig" && g.evalRunner != nil && g.regression != nil {
 		slog.Info("hitl_gateway: triggering L3 full regression", "checkpoint", p.ID)
 
-		// Run P0+P1 regression
-		report, err := g.evalRunner.RunSuite(context.Background(), "regression_p0_p1", "")
+		// TODO(GR-10-002): "regression_p0_p1" partition 当前在 EvalStore/control.Engine 体系
+		// 中尚无完整数据面支撑，RunSuite 调用会返回 "unknown suite" 错误被静默吞没。
+		// 过渡方案：暂用 "validation" suite 作为等价门禁，直到 regression_p0_p1
+		// 分区的数据写入路径完成接线后再切换回来（参考 ADR-0048 待补充决策）。
+		report, err := g.evalRunner.RunSuite(context.Background(), "validation", "")
 		if err == nil && report != nil {
 			if report.P0Fail > 0 {
 				slog.Warn("hitl_gateway: P0 regression failed, auto-denying patch", "checkpoint", p.ID)

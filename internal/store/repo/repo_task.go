@@ -56,8 +56,7 @@ func (r *SQLiteTaskReadRepository) GetTaskIntentTaint(ctx context.Context, taskI
 }
 
 // AggregateTokenCosts 从 events 表聚合指定时间范围内的 token 费用统计。
-// startMicro / endMicro 为 Unix 微秒整数，与 events.created_at 列的存储格式一致
-// （参见 cost_report.go aggregateCosts 中的 start.UnixMicro() 用法）。
+// startISO / endISO 为 ISO 8601 格式的时间字符串。
 // 事件 payload 格式：{"provider":"...","input_tokens":N,"output_tokens":N,"cache_read_tokens":N,"cost_usd":F}
 func (r *SQLiteTaskReadRepository) AggregateTokenCosts(ctx context.Context, startISO, endISO string) ([]types.TokenCostAgg, error) {
 	rows, err := r.db.QueryContext(ctx,
