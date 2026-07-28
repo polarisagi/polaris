@@ -85,7 +85,6 @@ type ChatHandler struct {
 	// 全仓零调用方，功能完整且有独立测试覆盖但从未接线，现接入 HandleAgentStream
 	// 消息预处理入口（见 sse.go）。
 	ContextRefExpander *authcontext.ContextRefExpander
-	EnableFSMChatPath  bool
 
 	// OutboxWriter 供 SaveMessage 在直写 chat_messages 重试耗尽后做异步兜底
 	// 投递（GD-13-004 复核修复，见 chat_message_persist_handler.go）。nil 时
@@ -124,7 +123,6 @@ type Dependencies struct {
 	TTSEngine             *atomic.Pointer[TTSProviderBox]
 	WriteSSE              func(http.ResponseWriter, http.Flusher, string, any)
 	ContextRefExpander    *authcontext.ContextRefExpander
-	EnableFSMChatPath     bool
 	OutboxWriter          protocol.OutboxWriter
 	TaintTracker          *taint.TaintTracker
 }
@@ -168,7 +166,6 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		TTSEngine:             deps.TTSEngine,
 		WriteSSE:              deps.WriteSSE,
 		ContextRefExpander:    deps.ContextRefExpander,
-		EnableFSMChatPath:     deps.EnableFSMChatPath,
 		OutboxWriter:          deps.OutboxWriter,
 		TaintTracker:          deps.TaintTracker,
 		skillEmbedCache:       make(map[string][]float32),

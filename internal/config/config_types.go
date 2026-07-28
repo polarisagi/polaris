@@ -153,7 +153,6 @@ type AgentConfig struct {
 	Kernel            KernelConfig `toml:"kernel"`
 	Memory            MemoryConfig `toml:"memory"`
 	Skill             SkillConfig  `toml:"skill"`
-	EnableFSMChatPath bool         `toml:"enable_fsm_chat_path"`
 }
 
 type KernelConfig struct {
