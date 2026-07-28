@@ -88,6 +88,12 @@ docs-lint:
 	if [ $$bad -ne 0 ]; then exit 1; fi ; \
 	echo "docs-lint ok"
 
+# 失效路径引用门控: 活文档(docs/arch/*.md + CLAUDE.md)里写的代码路径必须真实存在。
+# 白名单 scripts/docs-refs-allowlist.txt 仅收「文档在记载已删除/已迁移路径」的历史注记。
+# 不扫 docs/arch/decisions/——ADR 按定义记录写作当时的事实，改它等于篡改历史。
+docs-refs:
+	@bash scripts/docs-refs.sh
+
 rust-build:
 	CFLAGS= LDFLAGS= $(CARGO) build --release $(if $(CARGO_TARGET),--target $(CARGO_TARGET),) --manifest-path rust/substrate/Cargo.toml
 
@@ -177,4 +183,5 @@ rust-deny:
 
 # check-all: 完整质量门禁（CI 用）
 # 顺序: fmt → lint → test → test-race → rust-lint → rust-test → rust-deny → deadcode
-check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode
+#      → docs-check（§跳读行号）→ docs-lint（代码块禁令）→ docs-refs（失效路径引用）
+check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs

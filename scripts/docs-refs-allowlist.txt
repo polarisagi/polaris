@@ -1,0 +1,33 @@
+# docs-refs 白名单 —— 活文档中「本就不该存在」的路径引用。
+#
+# 唯一合法用途：文档正在**记载历史**（"该路径已于某日删除/迁移至 X，见 ADR-XXXX"），
+# 路径不存在恰恰是文档正确的证明。除此之外一律修文档，不要往这里加。
+#
+# 格式：每行一个引用字符串（与文档反引号里的写法逐字一致，含或不含尾部 /）。
+# 同行 # 之后为缘由说明，必须写明"为何该路径注定不存在"。
+# 校验：make docs-refs（已并入 make check-all）。
+
+# ── ADR-0046（2026-07-12/13）：dag 与 orchestrator 物理迁入 internal/execute ──
+# 迁移前路径。M04/M08 文件头与 internal/execute/CLAUDE.md 的迁移注记必须写出旧路径，
+# 否则读者无法把历史 commit / 旧 ADR 里的包名对应到现在的位置。
+internal/agent/dag
+internal/agent/dag/
+internal/swarm/orchestrator
+internal/swarm/orchestrator/
+
+# ── ADR-0050（2026-07-14）：SwarmRouter / CapabilityRegistry / TopologyEvolver 整包删除 ──
+# M08 §3-bis 与 §8 记载"本节曾描述的机制已随该包删除"，路径注定不存在。
+internal/swarm/topology/
+
+# ── ADR-0062（2026-07-22）deadcode 清理：event_buffer 已删除 ──
+# M02 §1.3 记载该缓冲层已删除、写路径改为直落，需要点名旧文件读者才知道说的是哪个。
+internal/store/audit/event_buffer.go
+
+# ── 协议层接口按域拆分：interfaces_vfs.go 未随之产生 ──
+# M11 §5.1 记载 VFS 相关接口未单独成文件（并入其它 interfaces_*.go），
+# 明写该文件名是为了阻止后来者按"每域一文件"的惯例去找/去建这个文件。
+internal/protocol/interfaces_vfs.go
+
+# ── tool_stage.go 彻底清理 ──
+# M13 §1.2.7 记载 ContextRefExpander 重构后该文件已不存在，防止重复提出"它去哪了"。
+internal/agent/context/tool_stage.go

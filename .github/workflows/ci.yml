@@ -43,6 +43,8 @@ jobs:
         run: make docs-check
       - name: docs/arch 禁 Go 代码块 / 完整签名 (#9)
         run: make docs-lint
+      - name: docs/arch 失效路径引用门控
+        run: make docs-refs
 
   # 单次编译 Rust，产物通过 artifact 传递给下游 job
   # 最终产物缓存：如果 Rust 源码无变化，直接跳过工具链安装和编译
