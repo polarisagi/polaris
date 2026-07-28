@@ -86,9 +86,7 @@ func RegisterBuiltinTools(
 		{"notebook_read", notebook_read.MakeNotebookReadFn(allowedPaths)},
 		{"notebook_edit", notebook_edit.MakeNotebookEditFn(allowedPaths)},
 		{"grep", grep.MakeGrepFn(allowedPaths)},
-		{"git_diff", MakeGitDiffFn(allowedPaths, sandboxEnabled, bwrapPath)},
-		{"git_commit", MakeGitCommitFn(allowedPaths, sandboxEnabled, bwrapPath)},
-		{"template_render", TemplateRenderFn},
+
 		{"data_query", data_query.MakeDataQueryFn(allowedPaths)},
 	}
 

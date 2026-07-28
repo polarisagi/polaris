@@ -85,4 +85,6 @@ const (
 	OutboxProcessing OutboxStatus = "processing"
 	OutboxDone       OutboxStatus = "done"
 	OutboxDead       OutboxStatus = "dead" // 超过 MaxRetries
+	OutboxSkipped    OutboxStatus = "skipped"
+	OutboxFailed     OutboxStatus = "failed"
 )

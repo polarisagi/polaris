@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"os"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -122,51 +121,41 @@ func newTestMetaEvalStore() *SQLiteEvalStore {
 }
 
 func TestPutMetaHoldoutCase_RequiresValidSignatureWhenConfigured(t *testing.T) {
-	envKey := "POLARIS_EVAL_PUBKEY_META_AUDITOR"
-	os.Unsetenv(envKey)
-	defer os.Unsetenv(envKey)
-
 	s := newTestMetaEvalStore()
 	c := EvalCase{ID: "case-1", FalsifiabilityScore: 0.8, BehaviorType: BehaviorSemanticQuality}
 
-	// 1. 未配置公钥：放行模式，nil 签名可写入。
-	if err := s.PutMetaHoldoutCase(context.Background(), c, nil); err != nil {
-		t.Fatalf("expected nil error in dev/no-pubkey mode, got %v", err)
+	// 1. 未配置公钥：必须 fail-closed（GR-10-001 修复漏洞后不再允许放行）
+	if err := s.PutMetaHoldoutCase(context.Background(), c, nil); err == nil {
+		t.Fatalf("expected error in no-pubkey mode due to fail-closed, got nil")
 	}
-	cases, err := s.GetMetaHoldoutCases(context.Background(), control.RoleMetaAuditor, nil)
-	if err != nil {
-		t.Fatalf("GetMetaHoldoutCases failed: %v", err)
-	}
-	if len(cases) != 1 {
-		t.Fatalf("expected 1 case after put, got %d", len(cases))
-	}
+	// 不再检查是否写入，因为写入失败了
 
 	// 2. 配置公钥后，无效签名必须被拒绝。
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.Setenv(envKey, base64.StdEncoding.EncodeToString(pub))
+	// Create a new store that has the pubkey configured
+	sWithKey := NewSQLiteEvalStore(newMemKVStore(), control.NewEngine(map[string]ed25519.PublicKey{control.RoleMetaAuditor: pub}))
 
 	c2 := EvalCase{ID: "case-2", FalsifiabilityScore: 0.9, BehaviorType: BehaviorSafetyBoundary}
-	if err := s.PutMetaHoldoutCase(context.Background(), c2, nil); err == nil {
+	if err := sWithKey.PutMetaHoldoutCase(context.Background(), c2, nil); err == nil {
 		t.Fatal("expected error when pubkey configured but signature is nil")
 	}
 
 	// 3. 正确签名（control.RoleMetaAuditor:control.PartitionMetaHoldout）可写入。
-	now := time.Now().UTC()
-	payload := []byte(control.RoleMetaAuditor + ":" + control.PartitionMetaHoldout + ":" + now.Format("200601021504"))
+	payload := []byte(fmt.Sprintf("%s:%s:%d", control.RoleMetaAuditor, control.PartitionMetaHoldout, time.Now().Unix()))
 	sig := ed25519.Sign(priv, payload)
-	if err := s.PutMetaHoldoutCase(context.Background(), c2, sig); err != nil {
+	if err := sWithKey.PutMetaHoldoutCase(context.Background(), c2, sig); err != nil {
 		t.Fatalf("expected nil error with valid signature, got %v", err)
 	}
 
-	cases, err = s.GetMetaHoldoutCases(context.Background(), control.RoleMetaAuditor, sig)
+	cases, err := sWithKey.GetMetaHoldoutCases(context.Background(), control.RoleMetaAuditor, sig)
 	if err != nil {
 		t.Fatalf("GetMetaHoldoutCases failed: %v", err)
 	}
-	if len(cases) != 2 {
-		t.Fatalf("expected 2 cases after second put, got %d", len(cases))
+	if len(cases) != 1 {
+		t.Fatalf("expected 1 case after put, got %d", len(cases))
 	}
 }
 
