@@ -32,7 +32,7 @@ func (s *Server) handleGetPendingApprovals(w http.ResponseWriter, r *http.Reques
 
 	pending, err := s.hitlGateway.Pending(r.Context())
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -124,7 +124,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		Reason   string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 
@@ -186,7 +186,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 		Comment string `json:"comment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 
@@ -201,7 +201,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 
 	err := s.hitlGateway.Respond(r.Context(), approvalID, resp)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 

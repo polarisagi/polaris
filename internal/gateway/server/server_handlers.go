@@ -94,7 +94,7 @@ func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
 		CandidateID string `json:"candidate_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if req.Suite == "" {
@@ -102,7 +102,7 @@ func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := s.evalRunner.RunSuite(r.Context(), req.Suite, req.CandidateID)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -117,7 +117,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"session_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if strings.TrimSpace(req.Input) == "" {

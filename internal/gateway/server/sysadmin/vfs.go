@@ -57,7 +57,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 	// 限制上传大小 (e.g., 100MB)
 	r.Body = http.MaxBytesReader(w, r.Body, 100<<20)
 	if err := r.ParseMultipartForm(100 << 20); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 

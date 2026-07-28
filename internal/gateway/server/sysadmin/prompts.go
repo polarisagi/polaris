@@ -86,7 +86,7 @@ func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if len(req.Value) > 32*1024 {

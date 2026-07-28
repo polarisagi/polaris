@@ -25,7 +25,7 @@ func (h *WorkflowAdmin) HandleListWorkflows(w http.ResponseWriter, r *http.Reque
 		       ON sc.workflow_id = w.id
 		ORDER BY w.created_at DESC`)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -121,7 +121,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 		Steps        []workflowStep `json:"steps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if !validateCreateWorkflowRequest(w, &req.Type, req.Name, &req.TriggerType, req.CronSchedule) {
@@ -183,7 +183,7 @@ func (h *WorkflowAdmin) HandleCreateWorkflow(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.WorkflowRepo.CreateWorkflowWithSteps(r.Context(), wfRow, stepRows); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -208,7 +208,7 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 		Steps        []workflowStep `json:"steps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 
@@ -300,7 +300,7 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.WorkflowRepo.UpdateWorkflowWithSteps(r.Context(), wfRow, stepRows, updateSteps); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -313,7 +313,7 @@ func (h *WorkflowAdmin) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Requ
 func (h *WorkflowAdmin) HandleDeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 	wfID := r.PathValue("id")
 	if err := h.WorkflowRepo.DeleteWorkflow(r.Context(), wfID); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -354,7 +354,7 @@ func (h *WorkflowAdmin) HandleListWorkflowRuns(w http.ResponseWriter, r *http.Re
 		FROM workflow_runs WHERE workflow_id=?
 		ORDER BY started_at DESC LIMIT 30`, wfID)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()

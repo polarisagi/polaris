@@ -26,7 +26,7 @@ const skillEmbedCacheMax = 512
 func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo
 	var req agentStreamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if strings.TrimSpace(req.Input) == "" && len(req.Attachments) == 0 && len(req.ImageParts) == 0 {

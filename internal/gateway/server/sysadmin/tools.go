@@ -123,14 +123,14 @@ func (h *SysAdminHandler) HandleExecuteTool(w http.ResponseWriter, r *http.Reque
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
 
 	res, err := h.ToolExec(r.Context(), name, body)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -154,7 +154,7 @@ func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Requ
 		ScriptPath  string `json:"script_path"` // 技能脚本安装路径
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -168,7 +168,7 @@ func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.SkillReg.Register(r.Context(), meta); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	h.ClearToolSchemaCache()

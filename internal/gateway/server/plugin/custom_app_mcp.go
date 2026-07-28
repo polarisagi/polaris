@@ -30,7 +30,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 		URL         string `json:"url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -100,7 +100,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
+		httputil.RespondError(w, "", err, http.StatusForbidden)
 		return
 	}
 
@@ -154,7 +154,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 		URL       string            `json:"url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -230,7 +230,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
+		httputil.RespondError(w, "", err, http.StatusForbidden)
 		return
 	}
 

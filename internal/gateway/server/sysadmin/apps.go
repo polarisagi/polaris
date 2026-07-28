@@ -13,7 +13,7 @@ func (h *SysAdminHandler) HandleListApps(w http.ResponseWriter, r *http.Request)
 	enabledOnly := r.URL.Query().Get("enabled") == "true"
 	apps, err := h.AppRepo.ListApps(r.Context(), enabledOnly)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	if apps == nil {
@@ -26,7 +26,7 @@ func (h *SysAdminHandler) HandleListApps(w http.ResponseWriter, r *http.Request)
 func (h *SysAdminHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) {
 	var app protocol.App
 	if err := json.NewDecoder(r.Body).Decode(&app); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if app.ID == "" {
@@ -34,7 +34,7 @@ func (h *SysAdminHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.AppRepo.CreateApp(r.Context(), &app); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -45,7 +45,7 @@ func (h *SysAdminHandler) HandleGetApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	app, err := h.AppRepo.GetApp(r.Context(), id)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusNotFound)
+		httputil.RespondError(w, "", err, http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -56,12 +56,12 @@ func (h *SysAdminHandler) HandleUpdateApp(w http.ResponseWriter, r *http.Request
 	id := r.PathValue("id")
 	var app protocol.App
 	if err := json.NewDecoder(r.Body).Decode(&app); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	app.ID = id
 	if err := h.AppRepo.UpdateApp(r.Context(), &app); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -71,7 +71,7 @@ func (h *SysAdminHandler) HandleUpdateApp(w http.ResponseWriter, r *http.Request
 func (h *SysAdminHandler) HandleDeleteApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.AppRepo.DeleteApp(r.Context(), id); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -83,11 +83,11 @@ func (h *SysAdminHandler) HandleSetAppEnabled(w http.ResponseWriter, r *http.Req
 		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if err := h.AppRepo.SetAppEnabled(r.Context(), id, req.Enabled); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

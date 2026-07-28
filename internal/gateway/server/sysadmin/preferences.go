@@ -10,7 +10,7 @@ import (
 func (h *SysAdminHandler) HandleGetPreferences(w http.ResponseWriter, r *http.Request) {
 	prefs, err := h.SystemRepo.ListPreferences(r.Context())
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -23,13 +23,13 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 
 	err := h.SystemRepo.UpsertPreference(r.Context(), key, req.Value)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 

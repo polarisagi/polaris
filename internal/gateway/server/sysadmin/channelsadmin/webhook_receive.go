@@ -49,7 +49,7 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 
 	if err := h.verifyWebhookSource(w, r, channelType, cfg, body); err != nil {
 		slog.Warn("webhook verification failed", "channel", channelID, "err", err)
-		httputil.RespondError(w, "Internal Server Error", err, apperr.HTTPStatus(apperr.CodeOf(err)))
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 

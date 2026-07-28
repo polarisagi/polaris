@@ -39,13 +39,13 @@ func (h *ProviderHandler) HandleModelUpgrade(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.ModelRegistry.OnModelUpgrade(r.Context(), providerID, modelID, req.SkillNames, nil); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
 	entry, err := h.ModelRegistry.Get(r.Context(), providerID, modelID)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -68,18 +68,18 @@ func (h *ProviderHandler) HandleModelDeprecate(w http.ResponseWriter, r *http.Re
 		SuccessorModelID string `json:"successor_model_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 
 	if err := h.ModelRegistry.DeprecateModel(r.Context(), providerID, modelID, req.SuccessorModelID); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
 	entry, err := h.ModelRegistry.Get(r.Context(), providerID, modelID)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

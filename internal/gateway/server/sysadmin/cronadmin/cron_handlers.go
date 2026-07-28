@@ -15,7 +15,7 @@ import (
 func (ca *CronAdmin) HandleListAutomations(w http.ResponseWriter, r *http.Request) {
 	rows, err := ca.AutomationRepo.ListAutomations(r.Context())
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -75,7 +75,7 @@ func (ca *CronAdmin) HandleCreateAutomation(w http.ResponseWriter, r *http.Reque
 		EventFilter     string `json:"event_filter"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
@@ -136,7 +136,7 @@ func (ca *CronAdmin) HandleCreateAutomation(w http.ResponseWriter, r *http.Reque
 		EventFilter:     req.EventFilter,
 	})
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -167,7 +167,7 @@ func (ca *CronAdmin) HandleUpdateAutomation(w http.ResponseWriter, r *http.Reque
 		EventFilter     *string `json:"event_filter"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 
@@ -264,7 +264,7 @@ func (ca *CronAdmin) HandleUpdateAutomation(w http.ResponseWriter, r *http.Reque
 		EventFilter:     j.EventFilter,
 	})
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -277,7 +277,7 @@ func (ca *CronAdmin) HandleDeleteAutomation(w http.ResponseWriter, r *http.Reque
 	jobID := r.PathValue("id")
 	ca.AutomationRepo.DeleteRunsByAutomationID(r.Context(), jobID) //nolint:errcheck
 	if err := ca.AutomationRepo.DeleteAutomation(r.Context(), jobID); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -296,7 +296,7 @@ func (ca *CronAdmin) HandleListAutomationRuns(w http.ResponseWriter, r *http.Req
 
 	rows, err := ca.AutomationRepo.ListRunsByAutomationID(r.Context(), jobID, limit)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 

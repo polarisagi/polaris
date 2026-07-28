@@ -113,7 +113,7 @@ func (h *MCPAdmin) HandleMCPNetworkApproval(w http.ResponseWriter, r *http.Reque
 
 	if err := h.MCPMgr.ApproveNetworkAccess(r.Context(), id, h.ExtRepo, h.DataDir, body.Approved); err != nil {
 		statusCode := http.StatusInternalServerError
-		httputil.RespondError(w, "Internal Server Error", err, statusCode)
+		httputil.RespondError(w, "", err, statusCode)
 		return
 	}
 

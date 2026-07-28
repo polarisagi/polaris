@@ -179,7 +179,7 @@ func (h *PluginHandler) HandleSyncMarketplaces(w http.ResponseWriter, r *http.Re
 	syncedCount, err := h.SyncAllMarketplaces(r.Context(), localOnly)
 	if err != nil {
 		slog.Error("polaris-server: manual sync marketplaces failed", "err", err)
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	slog.Info("polaris-server: manual sync marketplaces finished", "synced_count", syncedCount)
