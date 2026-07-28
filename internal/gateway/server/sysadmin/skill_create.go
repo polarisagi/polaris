@@ -22,7 +22,7 @@ func (h *SysAdminHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Reque
 		Intent string `json:"intent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -44,7 +44,7 @@ func (h *SysAdminHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Reque
 
 	pluginDir, err := creator.GenerateSkill(r.Context(), req.Intent)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	h.ClearToolSchemaCache()

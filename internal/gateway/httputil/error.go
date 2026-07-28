@@ -28,7 +28,7 @@ func defaultMessageForStatus(code int) string {
 func RespondError(w http.ResponseWriter, msg string, err error, code int) {
 	// 当 message 为 "Internal Server Error" 且 HTTP status 不是 500 时，
 	// 自动修正为与 status code 匹配的语义化消息，避免误导用户（GR-9-003）
-	if msg == "Internal Server Error" && code != http.StatusInternalServerError {
+	if msg == "" || (msg == "Internal Server Error" && code != http.StatusInternalServerError) {
 		msg = defaultMessageForStatus(code)
 	}
 

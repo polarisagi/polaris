@@ -17,7 +17,7 @@ func (h *ChatHandler) HandleSessionRecap(w http.ResponseWriter, r *http.Request)
 
 	rawMsgs, err := h.ChatRepo.ListMessages(ctx, sessionID, 0)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 

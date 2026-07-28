@@ -92,7 +92,7 @@ func (h *SysAdminHandler) HandleExportTrajectories(w http.ResponseWriter, r *htt
 
 	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()

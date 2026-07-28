@@ -38,7 +38,7 @@ func (h *SysAdminHandler) HandleSetBudget(w http.ResponseWriter, r *http.Request
 		MonthlyUSD float64 `json:"monthly_usd"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	if req.MonthlyUSD < 0 {
@@ -47,7 +47,7 @@ func (h *SysAdminHandler) HandleSetBudget(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.BudgetRepo.SetBudget(r.Context(), req.MonthlyUSD); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	// 2026-07-04 审计修复（附录·任务11）：持久化后同步热更新运行中的 Agent，

@@ -30,7 +30,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 		Entrypoint  string `json:"entrypoint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	extID := util.GenerateHumanReadableID("ext", req.Name)
@@ -85,7 +85,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
+		httputil.RespondError(w, "", err, http.StatusForbidden)
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 	installReq0.Name = req.Name
 	installReq0.Config = string(configJSON)
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq0); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -121,7 +121,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 		Intent      string `json:"intent"` // LLM 驱动生成：描述插件意图，留空则走 manifest_url 模式
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusBadRequest)
+		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
 	extID := util.GenerateHumanReadableID("ext", req.Name)
@@ -177,7 +177,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusForbidden)
+		httputil.RespondError(w, "", err, http.StatusForbidden)
 		return
 	}
 
@@ -197,7 +197,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 	installReq1.Name = req.Name
 	installReq1.Config = string(configJSON)
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq1); err != nil {
-		httputil.RespondError(w, "Internal Server Error", err, http.StatusInternalServerError)
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
