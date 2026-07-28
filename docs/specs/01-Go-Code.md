@@ -19,7 +19,7 @@
 10. // 辅助纯函数、类型转换函数
 ```
 
-参考 `internal/swarm/orchestrator/worker.go`、`internal/security/guard/factuality_guard.go`。
+参考 `internal/execute/orchestrator/default_worker.go`、`internal/security/guard/factuality_guard.go`。
 
 例外：`xxx_test.go` 中测试函数按被测对象分组。`doc.go` 只包含包级 markdown 注释。
 
@@ -40,7 +40,7 @@ type Store interface {
 - `@producer`：实现该接口的模块  
 - `@arch`：关联的架构文档位置
 
-消费方定义在 `internal/protocol/interfaces.go`。实现方不暴露出接口定义，只暴露结构体和构造函数。
+消费方定义在 `internal/protocol/interfaces_*.go`。实现方不暴露出接口定义，只暴露结构体和构造函数。
 
 ## F3 错误处理
 
