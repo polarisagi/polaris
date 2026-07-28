@@ -145,11 +145,10 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 		defer func() {
 			if wtManager != nil {
-				defer wtManager.Cleanup(wtDir)
-
 				if status == "ok" {
 					finalizeWorktreeChanges(context.Background(), ca, a, runID, wtDir, branchName, wtManager, &status, &errMsg)
 				}
+				wtManager.Cleanup(wtDir)
 			}
 
 			finishedAt = time.Now().UTC().Format(time.RFC3339)
