@@ -18,6 +18,11 @@ Arch-L1: internal/store              ← 基础设施层（存储）
           internal/downloader        ← 2026-07-07 从 internal/sysmgr/downloader 迁出
           （二者原归类 Arch-L4 sysmgr 下，但被 Arch-L2/L3 广泛引用，分类与实际
           用途不匹配，复核后物理迁移为独立 Arch-L1 包，见 CLAUDE.md 项目结构）
+Arch-L1bis: internal/execute         ← 单/多 Agent 执行引擎层（ADR-0046，2026-07-13 新增）
+          （dag: 单 Agent 工具链 DAG 执行 + S_VALIDATE 四层校验管线；
+          orchestrator: Blackboard + Worker + 多模式编排。只负责"如何跑完一份
+          已确定的计划/图"，不做决策。被 Arch-L2 internal/agent 与 Arch-L3
+          internal/swarm 消费，禁止反向依赖二者内部实现，仅可 import Arch-L0/LX）
 Arch-L2: internal/agent              ← 认知/执行层（核心业务）
           internal/action
           internal/memory
@@ -57,6 +62,7 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于
 - **[MUST NOT]** Arch-L2 模块之间跨包直接 import 具体实现
   - 正确：`agent` 在自身包内声明接口，`bootstrap` 注入 `action` 的具体实现
   - 错误：`agent` 直接 `import internal/action/codeact`
+- **[MUST NOT]** `internal/execute`（Arch-L1bis）反向 import `internal/agent`（Arch-L2）或 `internal/swarm`（Arch-L3）的内部实现；`execute` 仅通过 `agent/provider.go` 的 `DAGRunner`/`DAGValidator` 消费端接口被动接线，自身只 import `internal/protocol`
 
 ### 2.3 跨 Arch-L2 通信规范
 
@@ -69,15 +75,17 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于
 - 参考标杆：`internal/agent/provider.go`（已实现）
 
 **路径 B（Protocol 共享契约）**：
-- 接口定义在 `internal/protocol/interfaces.go`
+- 接口定义在 `internal/protocol/interfaces_*.go`（按域拆分，如 `interfaces_store.go`/`interfaces_memory.go`/`interfaces_swarm.go`）
 - 适用于被 3 个以上模块共享的通用接口
 - 每个接口必须标注 `@consumer` 和 `@producer`
 
 ### 2.4 Arch-L8 装配层特权
 
-- **[MUST]** `internal/bootstrap/` 是全仓库唯一允许跨层引用的包
-- **[MUST]** 所有具体实现与接口的注入，必须且仅能在 `bootstrap` 中完成
+- **[MUST]** 装配层是全仓库唯一允许跨层引用的位置
+- **[MUST]** 所有具体实现与接口的注入，必须且仅能在装配层完成
 - **[MUST NOT]** 其他任何包通过全局变量或 `init()` 做隐式依赖注入
+
+> **装配层当前的物理落点是 `cmd/polaris/boot_*.go`，不是 `internal/bootstrap/`**（2026-07-28 核查）。后者定义了 `Bootable`/`DependencyMap`/Kahn 拓扑排序/四阶关停这套自动编排契约，但全仓库零 import，从未在生产路径执行。上述三条 [MUST] 约束的是**职责归属**（装配集中、业务模块间不互相 new 具体实现），对两种装配方式同等有效。详见 `ARCHITECTURE.md §8`。
 
 ### 2.5 `internal/protocol/` 特殊规则
 
@@ -116,7 +124,7 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于
   **✅ 正确**：在 `agent/provider.go` 声明消费者接口（如 `CodeActEngine` 及其方法），由外部组装并注入。
 
 - **❌ 违规 2**：`pkg/types` 包定义业务接口
-  在 `pkg/types/models.go` 中定义诸如 `StoreWriter` 等接口契约。
+  在 `pkg/types/models_*.go` 中定义诸如 `StoreWriter` 等接口契约。
   **✅ 正确**：接口必须定义在消费方包内（如 `internal/agent/provider.go`）。
 
 - **❌ 违规 3**：低层依赖高层（逆向引用）
@@ -130,5 +138,5 @@ Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于
 |---|---|
 | 本文档 | import 方向约束（谁不能 import 谁）|
 | `00-Global-Dictionary.md §1-ter XR 规则` | 跨模块协作协议（怎么通信）|
-| `internal/protocol/interfaces.go` | 具体接口契约代码（权威实现）|
+| `internal/protocol/interfaces_*.go` | 具体接口契约代码（权威实现，按域拆分）|
 | 各模块 `CLAUDE.md` 权力边界章节 | 单模块内部的禁令清单 |

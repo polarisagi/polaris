@@ -156,7 +156,7 @@ M3 OSMemoryGuard L1 预警（1.5GB Free）在峰值时，会触发后台任务�
 
 1. **ADR**：全局/宪法级 → 新建 `decisions/ADR-NNNN-*.md`；模块级 → 对应模块 "## 决策" 节
 2. **DDL**：数据模型 → `internal/protocol/schema/`
-3. **接口**：跨模块契约 → `internal/protocol/interfaces.go` / `types.go`
+3. **接口**：跨模块契约 → `internal/protocol/interfaces_*.go`（按域拆分）/ `types.go`
 4. **状态机**：状态/不变量 → `spec/state.yaml`
 5. **概念标签**：标签语义 → `00-Global-Dictionary.md`
 
@@ -190,6 +190,45 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 
 ---
 
+## 8. 启动与关停协议（Bootstrap & Graceful Shutdown）
+
+> 本节是启动序/退出序的架构落点（DS-10-005）。改启动依赖或关停清扫职责前必读——顺序错一步的典型后果是循环依赖起不来，或关停时子进程变孤儿、WAL 没落盘。
+
+### 8.1 生产启动序：`cmd/polaris/` 手工分阶段装配
+
+实际跑的是 `cmd/polaris/main.go run()` 里一条**显式线性装配链**，不是自动拓扑排序。每阶段一个 `boot_*.go` 文件，产出一个 Bundle 结构体供下游阶段消费，层级严格 L0 → L3 下沉：
+
+| 序 | 入口 | 产出 | 承载 |
+|---|---|---|---|
+| 1 | `bootSubstrate` | `SubstrateBundle` | L0：配置加载、DataLayout、Store（SQLite/SurrealDB）、KillSwitch、OutboxWorker、审计链、Dialer |
+| 2 | `bootMemory` | `MemoryBundle` | 四层记忆 + MEMF + Consolidation Worker |
+| 3 | `bootTools` | `ToolBundle` | 工具注册（4 个注册入口，见 M07 §3.1）、沙箱、L4 长驻会话池 |
+| 4 | `bootKnowledge` | `KnowledgeBundle` | RAG + GraphRAG + Connector |
+| 5 | `bootAgent` | `AgentBundle` | Agent Kernel、AgentPool、M09 自进化、Supervisor Tree、Reaper |
+| 6 | `bootServer` | `*server.Server` | L3：HTTP/SSE 网关、Channel 适配器、各类 setter 注入 |
+
+**依赖方向由参数签名物理保证**：`bootTools(ctx, sb, mb)` 拿不到 `kb`/`ab`，编译期就杜绝了倒挂引用——这是它相比运行期拓扑排序的唯一实质优势。
+
+**关停序**：`<-ctx.Done()`（`signal.NotifyContext` 捕获 SIGINT/SIGTERM）后走 30s 超时的清扫链——`httpSrv.Shutdown`（停流）→ `ab.ReaperStop`（停 Reaper，须早于 dbWriter 排空）→ `AuditChain.VerifyChain`（审计链完整性校验）→ 其余经 `defer` 按 LIFO 逆序释放（`tb.PersistentSandbox.Shutdown` 终止 L4 解释器子进程防孤儿、`sb.Store.Close`、`sb.LogFile.Close`）。另有 `TripleCtrlCGuard`：连续 SIGINT 触发 `KillSwitch.OnSIGINT`。
+
+### 8.2 `internal/bootstrap/`：已定义未接线的自动编排契约
+
+`internal/bootstrap/`（`bootable.go` + `bootstrapper.go`）定义了一套更强的自动编排契约：
+
+- `Bootable` 接口（`Init(deps *DependencyMap) error` / `Ready() bool` / `Dependencies() []string`）
+- `DependencyMap` 依赖注入表（`Register`/`Get`/`MustGet`），禁止模块自取全局变量
+- `Bootstrapper.Ignite` 用 **Kahn 拓扑排序**按 `Dependencies()` 声明自动定序初始化，并校验 `Ready()`
+- 四阶优雅关停接口，模块按需实现：`Stage1Stopper.StopIngress`（停流，目标 gateway/channel）→ `Stage2Drainer.Drain`（排干内存队列，目标 orchestrator/scheduler）→ `Stage3Flusher.Flush`（刷盘，WAL Checkpoint）→ `Stage4Closer.Close`（释放句柄/子进程）
+- `ConfigProvider.GetMasterKey` 内存级 KMS 密钥总线，`Ignite` 完成后立即 memclr
+
+> **[未接线]（2026-07-28 核查）**：全仓库除自身包与单测外，**零处 import `internal/bootstrap`**。生产启动完全走 §8.1 的手工装配，`Ignite`/`ListenAndServe`/四阶接口从未在生产路径执行过。
+>
+> 由此产生一处必须点明的表述冲突：`Module-Dependency-Axioms.md §4` 的 **[MUST]「所有具体实现与接口的注入，必须且仅能在 `bootstrap` 中完成」**，描述的是本节的目标契约，**不是当前代码事实**——真实注入点是 `cmd/polaris/boot_*.go`。读该 [MUST] 时须按"装配职责必须收敛在装配层（当前即 `cmd/polaris/boot_*.go`），业务模块间禁止互相 new 具体实现"来理解；不要据字面去 `internal/bootstrap` 里找注入点，那里没有。
+>
+> 是否把生产启动迁移到 `Bootstrapper`：当前 6 阶段线性链只有 ~6 个节点、依赖关系由函数签名静态可验、且已稳定运行，换成运行期拓扑排序在正确性上无增益，反而把编译期错误降级为运行期错误。迁移的真实收益出现在"模块数量增长到手工排序易错"或"需要按 Tier/FeatureGate 动态增删模块"之后——满足其一再立 ADR 评估，届时四阶关停接口是现成的。
+
+---
+
 **END OF ARCHITECTURE.md**
 
 ---
@@ -215,7 +254,7 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 | M11 Policy / Safety | 完整 | ✅ 完整 | `polaris_cedar_degraded_total` Prometheus Counter 已实现（`internal/observability/metrics/metrics.go` 定义，`internal/security/policy/gate.go` 超时/FFI 报错两处埋点） |
 | M12 Eval Harness | 完整 | ✅ 完整 | — |
 | M13 Scheduler / Gateway | 完整 | ✅ 完整 | 未设置 POLARIS_API_KEY 时所有 /v1/ 端点均无鉴权（部署配置问题，非代码 bug；admin 写入已限 localhost） |
-| M13-bis Extension Registry | 完整 | ✅ 完整 | `runtimeRegistrarAdapter` 已在 cmd/ 启动流程注入，WithRegistrar 调用点在 skillRegistry 初始化后 |
+| M13-bis Extension Registry | 完整 | ✅ 完整 | `marketplace.NewManager` 在 `cmd/polaris/boot_tools.go` 直接实例化装配（原设计的 `runtimeRegistrarAdapter` 中间适配层已在重构中消除，无需独立 `WithRegistrar` 注入点） |
 
 #### M9 补充
 
