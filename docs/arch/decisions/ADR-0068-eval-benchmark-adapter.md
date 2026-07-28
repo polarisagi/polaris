@@ -1,7 +1,6 @@
 # ADR-0068: 开放基准适配器架构 (Benchmark Adapter)
 
-## 状态
-Accepted
+- **状态**: Accepted（已执行）
 
 ## 背景 (Context)
 随着能力评测体系的发展，我们需要引入行业标准开放基准（如 τ-bench, Terminal-Bench 等）来补充自定义的 harness 评测，支持离线或本地化的 Tier-0 基准测试能力（满足 GD-14-001 规范）。

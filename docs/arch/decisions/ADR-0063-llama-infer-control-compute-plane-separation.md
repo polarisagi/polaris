@@ -1,4 +1,4 @@
-# ADR-0063：llama_infer 控制面/计算面分离（协作式取消 + status 无锁镜像）
+# ADR-0063: llama_infer 控制面/计算面分离（协作式取消 + status 无锁镜像）
 
 - **状态**: Accepted（已执行）
 - **日期**: 2026-07-22

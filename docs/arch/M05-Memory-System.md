@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:125 L1 Episodic / 4:227 L2 Semantic / 5:269 L3 Procedural / 6:323 写路径 / 7:335 HybridRetriever / 8:421 EffConn / 9:431 Consolidation / 10:466 Forgetting / 11:483 PromptBuilder / 12:553 Drift / 14:591 496(SOFT)降级 / 15:615 依赖 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:125 L1 Episodic / 4:227 L2 Semantic / 5:269 L3 Procedural / 6:323 写路径 / 7:335 HybridRetriever / 8:421 EffConn / 9:431 Consolidation / 10:467 Forgetting / 11:484 PromptBuilder / 12:554 Drift / 14:592 496(SOFT)降级 / 15:616 依赖 -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -42,7 +42,7 @@
 
 ### 2.1 核心结构
 
-WorkingMemory/ImmutableCore/ContextWindow/ScratchPad 接口定义见 `internal/protocol/interfaces.go`，实现见 `internal/memory/`。NotesStore 实现见 `internal/memory/`；UserProfile（PersonaRefiner）实现见 `internal/agent/context/`。
+WorkingMemory/ImmutableCore/ContextWindow/ScratchPad 接口定义见 `internal/protocol/interfaces_memory.go`，实现见 `internal/memory/`。NotesStore 实现见 `internal/memory/`；UserProfile（PersonaRefiner）实现见 `internal/agent/context/`。
 
 **写入权分离**: M11 Policy → ImmutableCore.SafetyConstraints; M9 PersonalizationWorker → ImmutableCore.UserPreferences + InteractionSummary; 用户显式 `/set` → UserPreferences; M5 Memory System → 仅读取，永不写入。
 
@@ -61,7 +61,7 @@ ZoneTaintedData=3    // 外部数据，[TaintLevel] Tracked，永不进入指令
 
 **kernel.PromptBuilder 写入门控**:
 0. **InteractionSummary 特例**: M9 PersonaRefiner 生成的 InteractionSummary (`source='persona_refinement'` + Ed25519 签名) 写 ZoneImmutable 前执行 `SanitizeByDeterministicTransform`（保留 <200 tokens 摘要 + SHA-256 校验和），TaintLevel 强制 TaintLow。固定白名单——仅 `source='persona_refinement'` + 有效 M9 签名可写 ZoneImmutable
-1. zone==ZoneImmutable 且内容 TaintLevel > TaintLow → 编译期阻断：`WriteInstruction`/`WriteSystemPrompt` 参数类型强制为 `substrate.SafeString`，`TaintedString` 无法隐式传入（`prompt.go` 实现），运行时 panic 路径已移除
+1. zone==ZoneImmutable 且内容 TaintLevel > TaintLow → 编译期阻断：`WriteInstruction` 参数类型强制为 `taint.SafeString`（`internal/protocol/prompt_builder.go`），`TaintedString` 无法隐式传入，运行时 panic 路径已移除
 2. zone==ZoneTaintedData 且内容 Tainted → 接受写入（正确归宿）; zone!=ZoneTaintedData 且 TaintLevel >= TaintMedium → 降级路由到 ZoneTaintedData + WARN + 审计事件 `prompt_builder_taint_zone_routing`
 3. zone==ZoneMutableSkill → 验证 Ed25519 ApprovalSignature（M9 签发）→ 签名无效则降级 ZoneTaintedData + WARN + 审计事件 `prompt_builder_mutable_skill_integrity_failed`
 4. 签名通过 → Monotonic Version Gate: 查询 `sys_config.min_skill_version`，version < min → 拒绝 + CRITICAL + 审计事件 `prompt_builder_rollback_attack_blocked`
@@ -242,7 +242,7 @@ DDL 见 `internal/protocol/schema/004_semantic_memory.sql`。图存储使用 [St
 - **精确名称冲突**：ON CONFLICT UPDATE 更新属性，同时 `MarkEntitySuperseded(oldDBID, 0)` 将旧行置 `superseded`（直接 SQL，同步执行，非 MutationBus 异步路径）
 - **Jaccard 近重复检测**（仅 `user_preference` 类型）：`ListActiveEntities` 取同类活跃实体，对新实体名与各实体名分词求 Jaccard 相似度，`> 0.6` 的实体视为矛盾旧观念，调用 `MarkEntitySuperseded` 打标后再 INSERT 新事实
 
-**[接口约束]** SemanticMemory 的事实/关系写入方法必须在 `internal/protocol/interfaces.go` 中声明，实现见 `internal/memory/`；所有写入必经 MutationBus，禁止绕过 M2 单写者约束直接执行 SQL。实体生命周期管理（标记废弃、列举活跃、UserProfile 读写）属于轻量同步读写，走直接 SQL（不经 MutationBus）。Embedding 存 BLOB（float32→float16 量化，量化工具位于 `internal/llm/`）。
+**[接口约束]** SemanticMemory 的事实/关系写入方法必须在 `internal/protocol/interfaces_memory.go` 中声明，实现见 `internal/memory/`；所有写入必经 MutationBus，禁止绕过 M2 单写者约束直接执行 SQL。实体生命周期管理（标记废弃、列举活跃、UserProfile 读写）属于轻量同步读写，走直接 SQL（不经 MutationBus）。Embedding 存 BLOB（float32→float16 量化，量化工具位于 `internal/llm/`）。
 
 **[XR-16 读写对称]** `taint_level` 写路径已有 only-up 语义（ON CONFLICT 用 `MAX(taint_level, excluded.taint_level)`）。`GetEntity` 读路径同步：SELECT 包含 `COALESCE(taint_level, 0)`，Scan 绑定 `ent.TaintLevel`（ADR-0025（Architecture Decision Record，架构决策记录） BUG-4）。任何绕过此绑定的直读路径视为 XR-16 违规。
 
@@ -438,8 +438,9 @@ ActivationMaximization 查询时 O(1) 完成——任务 embedding 搜索最相�
 **5-Stage Pipeline** (`internal/memory/`):
 
 - **Stage 1 — 实体/关系提取**: 
-  - 聚合 Session 内 Episodic 事件文本，优先调用 Provider LLM 提取命名的限定实体（`user_preference`, `constraint`, `temporary_conclusion`, `entity`）与特定关系（`depends_on`, `configures`, `conflicts_with`, `relates_to`, `derived_from`），结构化输出 JSON。`derived_from`（GD-14-001 新增）专用于标注"一个实体是另一实体的推论/派生结论"，区别于运行时/配置依赖的 `depends_on`，供下方级联失效识别真实派生血缘。
-  - LLM 不可用时降级为正则模式匹配。
+  - **[ADR-0077]** 主路径优先调用 `SharedEntityExtractor`（即 M10 `graphrag.GraphBuildPipeline` 的 Phase1/Phase2，复用同一套 LLM 抽取逻辑），消除与 M10 的重复 LLM 燃烧与实体表述漂移；`SharedEntityExtractor` 不可用时降级为聚合 Session 内 Episodic 事件文本、独立调用 Provider LLM 提取命名的限定实体（`user_preference`, `constraint`, `temporary_conclusion`, `entity`）与特定关系（`depends_on`, `configures`, `conflicts_with`, `relates_to`, `derived_from`），结构化输出 JSON。`derived_from`（GD-14-001 新增）专用于标注"一个实体是另一实体的推论/派生结论"，区别于运行时/配置依赖的 `depends_on`，供下方级联失效识别真实派生血缘。
+  - LLM 不可用时最终降级为正则模式匹配。
+  - **[ADR-0074/0077 写入期去重桥接]**：经 `SharedEntityExtractor` 抽取的实体写入时标记 `source_type='graphrag_ingest'`，与 M10 GraphRAG 管线共享去重键，避免同一实体在 M5/M10 两侧产生重复数据；检索期 Spreading Activation 以此标记联合两侧种子（见 M10 §2.7）。
 - **Stage 2 — Upsert Semantic + Entity 生命周期 + 级联失效**: 
   - 批量调用 `SemanticMemory.UpsertFact / UpsertRelation`，经 `retrieval.ExclusiveWriter` 闭合旧事实。
   - 精确名称冲突 → `MarkEntitySuperseded(oldDBID)` 打标 `superseded` 后 INSERT 新版本。
@@ -467,7 +468,7 @@ ActivationMaximization 查询时 O(1) 完成——任务 embedding 搜索最相�
 
 ### 10.1 热删除：效用衰减
 
-记忆的效用随时间按指数衰减。衰减公式: `salience × exp(-decayRate × ageHours/24)`，decayRate = 0.01/日。衰减权重低于 salienceThreshold（默认 0.15）时写入 tombstone 标记（key=`forgettable:{id}`），不物理删除原事件。Q-Learning 熵门控（`QLearner`）动态调整阈值——高熵任务降低阈值保留更多历史，低熵任务提高阈值加速遗忘（α=0.1, γ=0.9）。
+记忆的效用随时间按指数衰减。衰减公式: `salience × exp(-decayRate × ageHours/24)`，decayRate = 0.01/日。衰减权重低于 salienceThreshold（默认 0.15）时写入 tombstone 标记（key=`forgettable:{id}`），不物理删除原事件。**`[2026-07-22 订正]`**：原计划中的 Q-Learning 熵门控（`QLearner`，动态调整阈值）已在 ADR-0062 deadcode 最终结清中确认删除；当前 salienceThreshold 为静态配置阈值，不随任务熵动态调整。
 
 Forgettable 事件保持原地，由 ColdArchiver.PhysicalCompact 负责最终清理。
 
@@ -541,7 +542,7 @@ Layout Zone → ContextZone 映射表、安全约束和不变量见上文 §2.1�
 
 压缩 Stage（由 M4 ContextWindowManager 调用，不独立设阈值）:
 - **Stage 1**: tool output pre-pruning——超过 10KB 的 `tool_result` 替换为存根 `[offloaded: N bytes → read_tool_ref("xxx")]`，原始内容经 `ToolRefOffloader` 落盘；立即释放 token，可按 node_id 按需回取
-- **Stage 2**: LLM 锚点摘要——以 currentSummary 为锚点追加新事件产生增量摘要（由上层 M4 调用后写入 `SetAnchor`）
+- **Stage 2**: LLM 锚点摘要——以 currentSummary 为锚点追加新事件产生增量摘要（由 `internal/memory/compact` 包的 `Summarize` 实现，上层 M4 ContextWindowManager 调用后写回锚点）
 - **Stage 3**: **TaskMermaidCanvas 注入**——将 `TaskMermaidCanvas.Render()` 输出（`graph LR` 有向图）前置注入 anchor，形成 `## Task State (node_id → read_tool_ref)\n{mermaid}\n## Summary\n{anchor}` 结构；画布为空时跳过注入。来源：TencentDB Agent Memory 符号化短期记忆（61% token 节省原理）
 
 **TaskMermaidCanvas**（`internal/memory/`）：线程安全符号画布，追踪工具调用的 pending/success/fail 状态并自动连边，输出 Mermaid `graph LR`。节点上限 30，估算约 8 token/节点（20 节点 ~160 token）。
@@ -651,7 +652,7 @@ EmbeddingVersionTracker:
 |------|------|---------|-------|-------|
 | **D-MEM 多巴胺门控巩固** | arXiv:2603.14597, 2026 | 以 SurpriseIndex 信号作门控，仅 surprise > 阈值的情节事件才晋升语义层，消除冗余写入与 O(N²) 延迟 | `internal/memory/` + `internal/learning/` | P1 |
 | **Path-Constrained Retrieval** | arXiv:2511.18313, 2025 | BFS 遍历限定关系类型白名单（uses/depends_on/extends），防止多跳推理语义漂移 | `internal/store/` (HybridRetriever GraphTraverse) | P2 |
-| **E-mem 多 Agent 情节重建** | arXiv:2601.21714, 2026 | 异构辅助 Agent 维护未压缩情节上下文，token -70%，F1 +54%；当前单节点情节记忆在 swarm 场景是盲点 | `internal/swarm/orchestrator/`（中期） | P3 |
+| **E-mem 多 Agent 情节重建** | arXiv:2601.21714, 2026 | 异构辅助 Agent 维护未压缩情节上下文，token -70%，F1 +54%；当前单节点情节记忆在 swarm 场景是盲点 | `internal/execute/orchestrator/`（中期） | P3 |
 
 
 ## 13. MemoryAgent (Swarm Integration)

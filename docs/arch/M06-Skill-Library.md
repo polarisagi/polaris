@@ -1,7 +1,7 @@
 # 模块 6: Skill Library
 
 > 可命名、可参数化、可索引的复用技能。Go 主导管理+检索+Logic Collapse，script runtime（Python，ContainerSandbox 执行）。[HE-Rule-3] [HE-Rule-5]
-<!-- §跳读: 0-bis:5 职责 / 0-ter:15 不变量速查 / 1:26 技能表征 / 2:62 生命周期(CANONICAL) / 3:214 检索系统 / 4:241 演化 / 5:276 脚本缓存 / 7:311 340(SOFT)降级 / 8:325 依赖 -->
+<!-- §跳读: 0-bis:5 职责 / 0-ter:15 不变量速查 / 1:26 技能表征 / 2:62 生命周期(CANONICAL) / 3:214 检索系统 / 4:241 演化 / 5:277 脚本缓存 / 7:312 340(SOFT)降级 / 8:326 依赖 -->
 ## 0-bis. 职责边界
 
 - M6 **是**: 技能注册、索引、检索、生命周期管理 | M6 **不是**: 技能沙箱执行（那是 M7）
@@ -49,7 +49,7 @@ Logic Collapse 生成的技能从轨迹蒸馏为 Python 脚本（`src/skill.py`�
 
 ### 1.2 Go 数据结构
 
-Skill/JSONSchema/Condition/SkillSource 类型定义见 `internal/protocol/interfaces.go`（旧路径 `internal/extension/skill/skill.go` 已迁移）。
+Skill/JSONSchema/Condition/SkillSource 结构体定义见 `pkg/types/models_skill.go`，接口定义见 `internal/protocol/interfaces_skill.go`（旧路径 `internal/extension/skill/skill.go` 已迁移）。
 
 依赖环检测 **✅ 已实现**：`SkillMeta` 新增 `DependsOn []string` + `ComposesOf []string` 字段，`008_skills.sql` 同步增列；`SQLiteRegistryImpl.Register()` 和 in-memory `RegistryImpl.Register()` 均在 INSERT 前执行 BFS 环检测，发现循环依赖返回错误，拒绝注册。`needs_compat_check` 字段留待版本更新路径实现。
 
@@ -103,7 +103,7 @@ Skill/JSONSchema/Condition/SkillSource 类型定义见 `internal/protocol/interf
    - Day-0 冷启动分级阈值 (`minEvalCasesPerSkill=5`):
      (a) 黄金用例=0 且成功≥50 → Auto-Eval-Bootstrapping: M12 放开抽样池，采用 DeepSeek V4 批量审查（抽取大量最分散轨迹，如 20 条），进行深度交叉审查 (越权/数据泄漏/行为偏差)。全部通过 → `source=synthetic_auto_bootstrap`；任一未通过 → `needs_review`
      (b) 0<用例<5 → 降低阈值至实际用例数，通过 → `eval_coverage_partial`
-     (c) 用例=0 且成功<50 → `ErrInsufficientEvalCoverage`
+     (c) 用例=0 且成功<50 → `ErrInsufficientSuccessCount`；Eval 门控未通过则返回 `ErrEvalGateNotPassed`
 
 **生成前静态分析** (LLM 生成 src/skill.py 后、沙箱执行前):
 
@@ -117,7 +117,7 @@ Skill/JSONSchema/Condition/SkillSource 类型定义见 `internal/protocol/interf
 **脚本方案**:
 - LLM 生成 Python 脚本（`src/skill.py`），经 ContainerSandbox（L3）执行。Python 运行时已为 CodeAct 引入，零增量依赖。决策见 ADR-0026。
 - Logic Collapse 依赖 `FeatureLogicCollapse` AND `FeatureL3Sandbox` 双门控；L3 不可用时跳过蒸馏（仅存元数据）
-- local_only 模式: Logic Collapse 禁用，仅加载预生成技能。触发时若 `privacyMode=="local_only"` → `ErrLogicCollapseUnavailableInLocalOnly`；降级到 SKILL.md 模式 (WARN)
+- local_only 模式: Logic Collapse 禁用，仅加载预生成技能。触发时若 `privacyMode=="local_only"`（或 Tier0/内存不足）→ `ErrLogicCollapseDisabled`；降级到 SKILL.md 模式 (WARN)
 - Tier 0 预生成技能库随版本发布，覆盖 System 1 核心能力面
 
 **并发控制**:
@@ -138,14 +138,14 @@ CompileGate 准入: 空闲内存 >= 80MB (50MB 技能预算 + 30MB 安全边距)
 - `/tmp/sandbox/` → `os.TempDir()/polaris_sandbox_{skill_id}/`
 - 宿主绝对路径 → 沙箱内不可见；技能通过 M7 Workspace Bridge 按需获取文件内容
 
-**脚本数据安全** (LLM 代码生成前 — `TaintSanitizeForRemoteGeneration`):
-解析轨迹数据，将字符串字面量/敏感标识符替换为参数化占位符，生成 `redaction_map.json` 存本地，确保 PII（Personally Identifiable Information，个人敏感信息） 不进入 LLM 生成路径。脚本通过 stdin/stdout JSON 传递参数。
+**脚本数据安全** (LLM 代码生成前 — `buildToolCallsDescription`，`internal/learning/logic_collapse_codegen.go`):
+采用"纯类型签名剥离"策略——仅将工具调用的类型签名（type signatures only）与 Input/Output Schema 传递给 LLM，从源头剥离具体参数值，确保 PII（Personally Identifiable Information，个人敏感信息） 不进入 LLM 生成路径。脚本通过 stdin/stdout JSON 传递参数。
 
 **脚本 ABI (stdin/stdout JSON 方案)**:
 - 调用: Go 宿主侧将参数 JSON 序列化写入进程 stdin
 - 脚本内: Python `def execute(input: dict) -> dict:` 接收字典 → 执行技能逻辑 → return 结果字典（Go 宿主通过 stdout 读取）
 - 宿主侧: 读取 stdout → JSON 反序列化 → ToolResult
-- 参数值注入: `redaction_map.json` 中的原始参数值在宿主侧 JSON 序列化时还原
+- 参数值注入: 原始参数值由宿主侧在调用时直接通过 stdin JSON 注入（不经 LLM 生成路径，无需还原映射文件）
 
 每个技能仅接收自身声明的参数值 (最小权限)，禁止全局 PII 访问接口。
 
@@ -261,15 +261,16 @@ UncontrollableFailure（网络不可达、API 配额耗尽、OS（Operating Syst
 
 Logic Collapse 将生成瞬间的 M5 Persona 和 M9 Activation Steering 隐式固化为脚本行为。用户切换偏好时 System 1 命中旧脚本 → 输出不一致。
 
-结构约束:
+结构约束（唯一已落码的一条）:
 1. 绝对禁止表现层风格 (语气/冗长度/格式化) 硬编码到脚本 — 通过 `context_hint` 运行时注入
-2. 每个脚本生成时记录 `CompiledPersonaFingerprint{InteractionSummaryHash, ActiveCVLabels, VerbosityPref, ResponseFormat, CompiledAt}`
-3. M4 System 1 命中后对比当前 Persona 指纹 vs 生成指纹 — 关键维度变更 → Cache Miss → System 1.5 LLM 接管
 
-**IsPersonaCompatible**:
-1. **步骤1**: `CompiledPersonaFingerprint == nil` → 始终兼容 (内置/用户定义)
-2. **步骤2**: `VerbosityPref` 或 `ResponseFormat` 不一致 → 不兼容
-3. **步骤3**: subtractive cv label 变更 (编译时 label 被移除) → 不兼容；additive → 兼容
+> **[未实现] 运行时 Persona 指纹兼容性检查（2026-07-28 裁决，DR-4-002）**
+>
+> 本节此前给出了"生成期记录 Persona 指纹 + System 1 命中时比对指纹决定是否 Cache Miss"的完整机制，含具体类型与字段清单（`CompiledPersonaFingerprint`、`VerbosityPref` 等）与三步判定算法。经全仓库符号扫描：这些标识符**从未存在过任何 Go 实现**（`git log -S` 显示仅在写本文档的那次提交中出现），ROADMAP 亦未登记。
+>
+> 裁决为**删除虚构规格、保留问题陈述**，理由：(1) 保留精确到字段名和分支步骤的伪实现规格，会让后续 AI/开发者按图索骥去"修复"一个不存在的东西，比没有描述更有害；(2) 项目规范禁止在 M_X 文档中出现类型定义与函数签名（`make docs-lint` #9），原表述本身违规；(3) 该机制真正要解决的问题（用户切换偏好后 System 1 命中固化了旧偏好的脚本）确实存在且未解决，值得留档，但解法未经验证不应以"已设计"的形态呈现。
+>
+> 若未来要落地，须先经 Eval Harness 量化"偏好漂移导致的 System 1 误命中率"，确认收益后新立 ADR，再定指纹字段集——而不是直接照抄上面这段已删除的描述。
 
 ---
 
@@ -311,7 +312,7 @@ Logic Collapse 将生成瞬间的 M5 Persona 和 M9 Activation Steering 隐式�
 ## 7. 降级与失败模式
 
 - 故障场景: SkillSelector 未匹配任何技能 | 降级路径: 退到 LLM 通用工具调用路径 | 恢复策略: 新技能注册后自动生效
-- 故障场景: 脚本生成失败 | 降级路径: `ErrLogicCollapseUnavailableInLocalOnly` + 降级到 SKILL.md 模式 (WARN) | 恢复策略: LLM 蒸馏失败缓存标记，下次重试
+- 故障场景: 脚本生成失败 | 降级路径: `ErrLogicCollapseDisabled` + 降级到 SKILL.md 模式 (WARN) | 恢复策略: LLM 蒸馏失败缓存标记，下次重试
 - 故障场景: HMAC-SHA256 签名校验失败 | 降级路径: 拒绝加载（fail-closed）+ CRITICAL 审计 | 恢复策略: 重新签名或回滚旧版本
 - 故障场景: 技能执行超时 | 降级路径: 硬 kill（超时见 `spec/state.yaml §m6_skill.skill_exec_timeout_low_seconds` / `skill_exec_timeout_medium_high_seconds`）+ ErrSkillTimeout | 恢复策略: 下次调用正常执行
 - 故障场景: 技能缓存 LRU 驱逐 | 降级路径: 冷加载 (~100ms 延迟) | 恢复策略: 热度恢复后自动缓存
@@ -351,6 +352,7 @@ exec_mode: ambient              # "tool"（默认）| "ambient"
 risk_level: medium              # "low" | "medium" | "high"
 sandbox: L2                     # "L1" | "L2" | "L3"
 capability: read-write          # 描述性能力标签
+ambient_priority: auto          # "always" | "auto"（默认）| "index_only"，控制 ambient 注入优先级
 ---
 
 正文：使用指令 / 决策树 / 规范...

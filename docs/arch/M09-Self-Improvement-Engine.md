@@ -114,7 +114,7 @@ ROADMAP §4.4 决议了"三层机会主义架构"（Layer A logprob / Layer B Ma
 
 **当前实现（Tier 0 默认基线）**: 三组件 `embeddingCosineDistance + toolSequenceDivergence + MEMFMatchScore`。冷启动 (<10条) → 0.5。TotalTrajectories<100 时轨迹追加 `bootstrapping=true` 标签防噪音污染。延迟 100-300ms。
 
-**Layer B 马尔可夫矩阵（✅ 代码已实现，数据量门控激活）**: `MarkovMatrix` 始终初始化并持续积累数据（`surprise.go` 第 62 行：`markov: NewMarkovMatrix()`）。`TotalTransitions() >= threshold`（`DefaultLayerBThreshold=1000`，`MinLayerBThreshold=500`）时自动切换 toolSequenceDivergence 为马尔可夫条件概率 O(1) 查表，公式形态不变。构建矩阵时排除 `bootstrapping=true` 数据。未达阈值前回落 Levenshtein 编辑距离（Phase 1 基线）。
+**Layer B 马尔可夫矩阵（✅ 代码已实现，数据量门控激活）**: `MarkovMatrix` 始终初始化并持续积累数据（`surprise.go` 第 62 行：`markov: NewMarkovMatrix()`）。`TotalTransitions() >= threshold`（`DefaultLayerBThreshold=100`，`MinLayerBThreshold=50`）时自动切换 toolSequenceDivergence 为马尔可夫条件概率 O(1) 查表，公式形态不变。构建矩阵时排除 `bootstrapping=true` 数据。未达阈值前回落 Levenshtein 编辑距离（Phase 1 基线）。
 
 **Layer A（实验性，不修改主计算式）**: per-token logprob 机会主义旁路收集，依赖上游 Provider 暴露 logprob（DeepSeek V4/Claude 全系不暴露；2027+ 可能）。≥6个月数据后评估是否叠加。
 
@@ -266,8 +266,8 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 | `internal/observability/` | [HE-Rule-1] 可观测管线 |
 | `internal/agent/` | [KillSwitch] 熔断链路 |
 | `internal/sandbox/` | [Sandbox-L2] 边界实施 |
-| `internal/config/immutable_constants.go` | 编译期不可变常量 |
-| `internal/protocol/interfaces.go` | 安全接口契约 (SafeDialer/Cedar-Gate/TaintLevel/Blackboard) |
+| `internal/protocol/immutable_core.go` | 编译期不可变常量 |
+| `internal/protocol/interfaces_*.go` | 安全接口契约 (SafeDialer/Cedar-Gate/TaintLevel/Blackboard) |
 | `internal/protocol/schema/` | EventLog DDL（Data Definition Language，数据定义语言） + Outbox DDL，M11 hash chain 依赖其完整性 |
 
 **L4 白名单 (Default-Deny)**: `internal/swarm/**`, `internal/extension/skill/**`, `internal/memory/**`, `internal/gateway/**`。CI/CD 配置 + 构建入口 + go.mod 等全部禁止 L4 修改。

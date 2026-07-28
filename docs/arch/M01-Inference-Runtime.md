@@ -5,7 +5,7 @@
 > **实现语言**：Go　|　**代码位置**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:160 Token预算 / 6:236 SemanticCache / 7:285 Fallback / 8:349 本地推理local_only / 9:402 ModelVersion / 12:439 349(SOFT)降级 / 13:474 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:162 Token预算 / 6:238 SemanticCache / 7:284 Fallback / 8:348 本地推理local_only / 9:401 ModelVersion / 12:438 349(SOFT)降级 / 13:473 依赖 -->
 
 ---
 
@@ -46,7 +46,7 @@ Provider-agnostic 设计。`configs/defaults.toml` 推荐组合：DeepSeek V4 �
 
 ## 2. Provider Interface
 
-接口定义见 `internal/protocol/interfaces.go`（`Provider`），包含 `ModelID() string` 支持真实模型身份认知的系统提示词注入。
+接口定义见 `internal/protocol/interfaces_llm.go`（`Provider`），包含 `ModelID() string` 支持真实模型身份认知的系统提示词注入。
 
 类型定义见 `internal/protocol/types.go`（`InferRequest` / `InferResponse` / `StreamEvent` / `ProviderCapabilities` / `TokenizerAdapter`）。
 
@@ -138,7 +138,9 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 实现见 `internal/llm/`（`InferenceRouter`）。Provider 选择按健康分降序 + CircuitBreaker 状态 + 多模态能力过滤；失败则 Failover，全部不可用返回 `ErrAllProvidersFailed`。
 
-**CircuitBreaker 独立实现于 `fallback.go`**（非 Router 内部），`FallbackExecutor` 持有 `*CircuitBreaker` 引用，Router 通过 `FallbackExecutor` 执行降级链。
+**熔断器由 `ProviderRegistry` 直接持有**（`internal/llm/provider_registry.go`），无独立 `fallback.go` 或 `FallbackExecutor` 类型：
+- `circuitBreaker`（`internal/llm/circuit_breaker.go`）：基于连续失败次数的标准 3 态熔断器（Closed/Open/HalfOpen）。
+- `windowCircuitBreaker`（`internal/llm/window_breaker.go`）：基于滑动时间窗口错误率的熔断器，与 `circuitBreaker` 并行生效，窗口内请求数达到 `minRequests` 后按 `errorRateThreshold` 判定熔断。
 
 ### 4.5 路由配置参数
 
@@ -263,15 +265,12 @@ TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `pol
 `cacheStore` 并通过 `llm.WithSemanticCache` 注入 `InferenceRouter`；`store=nil` 只在
 SurrealDB 未启用时才发生，属正常降级，不是"待激活"状态。
 
-**真正未接入的缺口**：`types.WithSemanticCacheHints(...)`（构造 `ContextHintFingerprint`/
-`ActiveControlLabels`/`TaskType`）全仓库生产侧零调用点——`InferenceRouter.Infer`（非流式）
-的 Get/Put 逻辑因此永远不会真正执行；且该逻辑只存在于 `Infer`，`StreamInfer`（主对话轮
-实际走的路径，`router_stream.go`）完全没有等价的缓存查询/写入分支，即使补齐
-`WithSemanticCacheHints` 调用点，主对话仍不会被缓存命中。`ContextHintFingerprint` 所需的
-SHA-256 指纹其实已经在 `internal/agent/fsm/epoch.go`（`epochTracker.check`）里逐条计算，
-但只返回 epoch 计数器、丢弃了指纹字符串本身，`sCtx.ContextEpoch` 写入后也无任何读取方——
-是同一个"生产者/消费者都存在、中间没有真正接线"的模式，接入需要给 `StreamInfer` 补一条
-对称的缓存命中/写入分支（含如何在流式通道里返回一次性缓存内容），非一行接线。
+**`[2026-07-28 订正]`**：本节此前描述的 `types.WithSemanticCacheHints(...)` Option 已在
+ADR-0062（deadcode 最终结清，D3 条目）中作为死代码删除——`StreamInfer` 对称缓存分支始终
+未落地、Option 无消费者。`ContextHintFingerprint` 所需的 SHA-256 指纹目前仍在
+`internal/agent/fsm/epoch.go`（`epochTracker.check`）里逐条计算，但只返回 epoch 计数器、
+不再有下游消费该指纹的路径。若后续需要重新接入语义缓存提示，需在 ADR 中重新论证
+`StreamInfer` 的对称缓存分支设计，而非直接恢复已删除的 Option。
 
 **缓存三重匹配**：RequestHash + Namespace + SystemPromptHash。
 `hashRequest` 计算公式：`SHA-256(Namespace + SystemPromptHash + ContextHint.Fingerprint + ActiveControlVectorLabels + TaskType + MessageContents)`。
@@ -364,7 +363,7 @@ MutationIntent{
 ### 8.1 LocalProvider
 
 **当前实现状态：已实现（P3-1，2026-07-03）。**
-`protocol.LocalProvider`（`internal/protocol/interfaces.go`）扩展 `protocol.Provider`，新增 `LoadModel` / `UnloadModel` / `EvictKVCache` / `LocalStatus` 四个生命周期方法。
+`protocol.LocalProvider`（`internal/protocol/interfaces_llm.go`）扩展 `protocol.Provider`，新增 `LoadModel` / `UnloadModel` / `EvictKVCache` / `LocalStatus` / `Probe` 五个生命周期方法（`Probe` 供网络隔离安全检查与 StartupCheck 使用）。
 
 `internal/llm/adapter/local.go` 的 `LocalAdapter` 是其唯一实现。底层通过 `internal/ffi/llama.go`（purego 懒绑定 + `recover()` 优雅降级，与 `native_sandbox`/`surreal_store`/`cedar_ffi` 同款 FFI 模式）调用 `rust/substrate/src/llama_infer/`（`llama-cpp-2` crate，`tier1` Cargo feature 门控）导出的 `llama_infer_*` 函数。
 
@@ -408,9 +407,9 @@ MutationIntent{
 **当前实现状态：已实现（P3-2，2026-07-03）。**
 DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/schema/033_model_version_registry.sql`（`model_version_entries` 表）。三层结构：
 
-- `internal/protocol/repo.ModelVersionEntry` / `ModelVersionRepository`（接口契约，字段与 DDL（Data Definition Language，数据定义语言）一一对应）
-- `internal/store/repo.SQLiteModelVersionRepository`（SQLite 实现，`Get`/`List`/`ListDeprecated`/`FindPredecessor`/`Upsert`/`Delete`）
-- `internal/llm/modelregistry.Registry`（业务逻辑层）：
+- `internal/protocol/repo/repo_modelversion.go`（`ModelVersionEntry` / `ModelVersionRepository` 接口契约，字段与 DDL（Data Definition Language，数据定义语言）一一对应）
+- `internal/store/repo/repo_modelversion.go`（SQLite 实现 `SQLiteModelVersionRepository`，`Get`/`List`/`ListDeprecated`/`FindPredecessor`/`Upsert`/`Delete`）
+- `internal/llm/modelregistry/registry.go`（业务逻辑层 `Registry`）：
   - `DecideMigration(score)` 三档判定（纯函数，阈值与本节一致）
   - `OnModelUpgrade(ctx, provider, modelID, skillNames, tester)` —— `tester` 为 `SkillCompatTester` 接口（consumer-side，当前无生产实现时可传 `nil`，仅刷新元数据不重测）；score < 0.8 时 `slog.Warn`
   - `RecordCallResult(ctx, provider, modelID, success)` —— 连续失败计数，达到 3 次返回 `shouldRollback=true` + 通过 `FindPredecessor`（查询“谁把 successor_model_id 指向当前模型”）定位的回退目标模型 ID；成功调用清零计数
@@ -461,7 +460,7 @@ DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/sche
 
 **RateLimitTracker**：解析 Provider HTTP 响应头中的 12 个速率限制字段（分钟/小时 × 请求/Token），提供退避延迟建议。以 RoundTripper 包装层自动捕获限速头，无需改动各 Adapter。退避算法采用去相关抖动指数策略（防雷群效应）。
 
-**ErrorClassifier**：提取 HTTP 状态码 + 关键词，分类为 17 种失败原因，输出包含可重试性、上下文压缩、凭证轮换、降级策略在内的恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 Provider 错误体格式。
+**`ClassifyError`（`error_classifier.go`）**：提取 HTTP 状态码 + 关键词，分类为 17 种失败原因，返回 `*ClassifiedError`，包含可重试性、上下文压缩、凭证轮换、降级策略在内的恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 Provider 错误体格式。
 
 ---
 
@@ -480,5 +479,5 @@ DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/sche
 | M4 Agent Kernel | Provider.Infer/StreamInfer 消费者（LLM 调用唯一入口）| M4 §10 |
 | M9 Self-Improve | PromptOptimizer 使用 LLM 调用（经 Provider 路由）| M9 §1.1 |
 | M11 Policy Safety | SafeDialer 网络出口、Taint 门控 | M11 §5.2, §6 |
-| 接口定义 | Provider/InferRequest/InferResponse/StreamEvent | internal/protocol/interfaces.go, types.go |
+| 接口定义 | Provider/InferRequest/InferResponse/StreamEvent | internal/protocol/interfaces_llm.go, types.go |
 | 全局字典 | TokenBurnRate/SurpriseIndex 完整定义 | 00-Global-Dictionary §3 |

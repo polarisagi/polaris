@@ -196,7 +196,7 @@ sequenceDiagram
 ## 4. Intent→Result 端到端时序图 {#intent-to-result}
 
 > 覆盖: CLI 输入 → Intent 判定 → Agent 规划 → 执行验证 → 结果输出
-> 关键路径包: `internal/gateway`, `internal/agent`, `internal/swarm/orchestrator/blackboard.go`
+> 关键路径包: `internal/gateway`, `internal/agent`, `internal/execute/orchestrator/sqlite_blackboard.go`
 
 ```mermaid
 sequenceDiagram
@@ -253,7 +253,7 @@ sequenceDiagram
 ## 6. Multi-Agent 黑板协调 {#multi-agent-blackboard}
 
 > 覆盖: CAS 原子认领, 任务分配, Supervisor Tree
-> 关键路径包: `internal/swarm/orchestrator`
+> 关键路径包: `internal/execute/orchestrator`
 
 ```mermaid
 sequenceDiagram

@@ -74,7 +74,7 @@ HT0 基线（`configs/defaults.toml`，tier=0, max_agents=3）已对齐，Featur
 
 `MarkovMatrix`（`internal/learning/surprise/surprise_markov.go`，Laplace 平滑转移概率 + `Update`/`UpdateWeighted`/`Surprise`/`TotalTransitions`）已实现，且已接入 `SurpriseCalculator`（`internal/learning/surprise/surprise.go`）：`markov` 字段始终非 nil、在线持续积累转移数据；累计转移次数达到 `layerBThreshold` 后自动从 Tier-0 启发式基线切换为马尔可夫条件概率惊异值，无需人工升级。
 
-前置条件已从"时间维度（≥6 个月）"落地为"数据量维度"：`DefaultLayerBThreshold=1000` 次转移、`MinLayerBThreshold=500`（约对应 500+ 条成功轨迹，见 M09 §2.0）。剩余是运营性前置条件——生产环境实际积累到阈值 + M12 评测验证增量收益后转 stable 主信号，代码层面已无阻塞。详见 `spec/state.yaml §signals.surprise_index`。
+前置条件已从"时间维度（≥6 个月）"落地为"数据量维度"：`DefaultLayerBThreshold=100` 次转移、`MinLayerBThreshold=50`（约对应 50+ 条成功轨迹，见 M09 §2.0）。剩余是运营性前置条件——生产环境实际积累到阈值 + M12 评测验证增量收益后转 stable 主信号，代码层面已无阻塞。详见 `spec/state.yaml §signals.surprise_index`。
 
 ### 3.2 形式化验证（Lean4 / TLA+）
 
@@ -177,7 +177,7 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 | Schema 过时 / 动态功能验证替代 JSON Schema | 违反不变量 6（状态机持有控制流） |
 | 引入 Redis/Kafka/RabbitMQ | 违反单机硬约束 |
 | cgroups 做单机 App 内存隔离 | macOS/Windows 无此机制，应用进程内 Governor |
-| 已集成多模态 / M09 自主补全引擎 | M15 已在底层及前端支持图片、视频分析与 TTS；M09 已实现缺失能力自主探测与合成 |
+| 已集成多模态 / M09 自主补全引擎 | M01/M13 已在底层及前端支持图片、视频分析与 TTS；M09 已实现缺失能力自主探测与合成 |
 
 ---
 

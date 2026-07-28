@@ -1,8 +1,6 @@
-# ADR-0059：Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移）
+# ADR-0059: Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移）
 
-## 状态
-
-已接受，已实现。
+- **状态**: Accepted（已执行）
 
 ## 背景
 

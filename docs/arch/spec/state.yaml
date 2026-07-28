@@ -806,7 +806,7 @@ thresholds:
     sqlite_busy_timeout_ms: 5000
     sqlite_synchronous: NORMAL
     wal_checkpoint_pages: 1000
-    SurrealDB_block_cache_mb: 50
+    SurrealDB_block_cache_mb: 64
     SurrealDB-Core_hnsw_M: 16
     SurrealDB-Core_hnsw_efConstruction: 200
     SurrealDB-Core_hnsw_efSearch: 64
@@ -820,6 +820,9 @@ thresholds:
     eventlog_warm_days: 30
     eventlog_cold_archive: parquet
     event_payload_max_kb: 64
+    eventlog_disk_watermark_pct: 20 # toml:"eventlog.disk_watermark_pct"，<=0 禁用门控
+    eventlog_hot_row_limit: 1000000 # toml:"eventlog.hot_row_limit"
+    eventlog_hot_size_mb: 500 # toml:"eventlog.hot_size_mb"
     snapshot_retention_hourly_24h: 7
     snapshot_retention_weekly: 4
 
@@ -830,7 +833,7 @@ thresholds:
     core_memory_block_max_kb: 2
     core_memory_total_max_kb: 8
     rrf_k: 60
-    graph_max_depth: 3
+    graph_max_depth: 2
     re_eval_when:
       - episodic_ttl_days: ["storage_cost_exceeds_budget"]
       - core_memory_block_max_kb: ["llm_context_window_pressure"]
@@ -879,6 +882,10 @@ thresholds:
     snapshot_retention_count: 5
     world_model_skip_threshold: 0.8
     l3_watchdog_max_per_hour: 10
+    prm_enabled: false # toml:"prm.enabled"
+    prm_complexity_gate: 0.5 # toml:"prm.complexity_gate"
+    prm_max_candidates: 3 # toml:"prm.max_candidates"
+    prm_min_threshold: 0.4 # toml:"prm.min_threshold"
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - context_window_compress_pct: ["compress_recall_drop"]
@@ -895,10 +902,13 @@ thresholds:
     chunk_text_overlap_tokens: 64
     mem_l0_cache_mb: 80
     mem_l0_cache_ttl_minutes: 30
-    graph_max_depth: 3
+    graph_max_depth: 2
     consolidation_period_hours: 24
     decay_half_life_days: 14
     backfill_concurrency: 2
+    drift_check_interval_hours: 168 # toml:"drift.check_interval_hours"
+    drift_threshold: 0.05 # toml:"drift.threshold"
+    drift_anchor_sample_rate: 0.02 # toml:"drift.anchor_sample_rate"
     re_eval_when:
       - chunk_*: ["recall_at_10<0.85"]
       - mem_l0_cache_*: ["hit_ratio<0.60"]
@@ -946,6 +956,7 @@ thresholds:
     rate_limit_shell_qps: 2
     dryrun_protect_window_seconds: 60
     max_code_size_bytes: 16384
+    ext_uninstall_hook_timeout_seconds: 180 # toml:"ext_uninstall.hook_timeout_seconds"（D2：卸载 Hook 沙箱执行超时兜底）
     # sbx_l4_persistent_* — D4/ADR-0079：Tier2+ 可选持久化沙箱，session-scoped
     # 长驻解释器进程池（推翻 ADR-0078"诚实留空"结论，后端真实可用）。
     # 默认关闭，不影响 Tier-0/Tier-1 任何现有行为。
@@ -981,8 +992,8 @@ thresholds:
     subscribe_channel_buffer: 32
     parent_ref_max_depth: 5
     delegation_chain_max_depth: 3
-    supervisor_backoff_initial_ms: 100
-    supervisor_backoff_max_seconds: 30
+    supervisor_backoff_initial_ms: 200
+    supervisor_backoff_max_seconds: 60
     compensation_timeout_seconds: 300
     compensation_poll_seconds: 5
     debate_max_rounds: 3
@@ -1008,6 +1019,8 @@ thresholds:
     canary_steps: [0.01, 0.10, 0.50, 1.00]
     canary_dwell_per_step_hours_ht0: 1
     lora_min_training_samples: 200
+    qlora_train_batch_size: 64 # toml:"qlora.train_batch_size"
+    prm_train_batch_size: 64 # toml:"prm.train_batch_size"
     lora_qlora_bits: 4
     lora_r: 16
     lora_alpha: 32
@@ -1036,12 +1049,18 @@ thresholds:
     connector_max_doc_size_mb: 10
     document_version_keep: 3
     recall_at_k_eval: 10
-    graphrag_llm_call_daily_budget_ht0: 200
+    # graphrag_llm_call_daily_budget_ht0 已按 M10 inv_M10_05 彻底移除（2026-07-28）：
+    # DeepSeek 低成本使 GraphRAG 全量生成不再需要日预算硬上限，详见 M10-Knowledge-RAG.md §2.7。
     re_eval_when:
       - chunk_*: ["recall_at_10<0.85"]
       - rebem_priority_weights: ["embed_backfill_roi"]
 
   m11_policy:
+    # [2026-07-28 订正] internal/config/thresholds.go M11PolicyThresholds 当前仅实现单一
+    # capability.default_ttl_seconds（未按 fs/net/shell/mcp/process 细分）与
+    # audit.retention_days（730，非年）；本节下方细分 TTL 键为文档设计目标，代码尚未
+    # 接入细分逻辑，四方对照未完全收敛，处置留待代码侧决策（DR-6-002）。
+    l3_improvement_cooldown_seconds: 600 # toml:"l3_improvement_cooldown_seconds"，与 EscalationTimeoutMinutes 同属 M11PolicyThresholds
     capability_default_ttl_fs_seconds: 300
     capability_default_ttl_net_seconds: 60
     capability_default_ttl_shell_seconds: 30
@@ -1089,6 +1108,8 @@ thresholds:
     replay_sample_per_100_sessions: 5
     canary_traffic_pct_steps: [0.01, 0.10, 0.50, 1.00]
     mirror_shadow_traffic_steps: [0.05, 0.10, 0.25]
+    meta_audit_gate_enabled: false # toml:"meta_audit.gate_enabled"，需运维先生成 meta_auditor 密钥对并成功跑过一次 meta-audit
+    meta_audit_max_age_hours: 168 # toml:"meta_audit.max_age_hours"，超过则 AdvanceGate 视为 stale fail-closed
     re_eval_when:
       - golden_set_min_size_*: ["eval_signal_instability"]
       - multi_judge_count: ["voting_cost_vs_inconclusive_rate"]
@@ -1097,9 +1118,9 @@ thresholds:
   resource_governor:
     # 配置结构体: internal/config/config_types.go ResourceGovernorConfig
     # 全局适用：触发资源降级的 OS 空闲内存阈值（Tier-0 默认值）
-    mem_l1_free_mb: 1024   # ≥1GB free: 正常运行
-    mem_l2_free_mb: 512    # ≥512MB free: 限制新任务接入
-    mem_l3_free_mb: 256    # ≥256MB free: 紧急暂停，拒绝所有新任务
+    mem_l1_free_mb: 1536   # ≥1.5GB free: 正常运行
+    mem_l2_free_mb: 1024   # ≥1GB free: 限制新任务接入
+    mem_l3_free_mb: 512    # ≥512MB free: 紧急暂停，拒绝所有新任务
     # CPU 占用阈值（toml:"cpu_l1_pct"/"cpu_l2_pct"）；默认值取自 configs/defaults.toml
     cpu_l1_pct: 80.0        # CPU 占用 ≥80%: 降低后台任务优先级
     cpu_l2_pct: 95.0        # CPU 占用 ≥95%: 限制并发请求
@@ -1120,6 +1141,10 @@ thresholds:
     worker_cron: 1               # toml:"worker.cron"
     max_concurrent_llm_calls: 4  # toml:"max_concurrent_llm_calls"
     lazy_load_tool_threshold: 40 # toml:"lazy_load_tool_threshold"
+    # ambient skill instructions 全文注入总字符预算（M13-bis §3 / M06 §9.3）。
+    # 超预算的 skill 降级为 index-only（仅注入名称+描述行）。
+    # 2026-07-28 前该值在 system_prompt.go 硬编码 128_000，超设计约束 32 倍（DR-4-005）。
+    ambient_skill_max_chars: 4000 # toml:"ambient_skill_max_chars"
     hitl_default_deadline_min_urgent: 5
     hitl_default_deadline_min_normal: 60
     hitl_default_deadline_min_long: 1440

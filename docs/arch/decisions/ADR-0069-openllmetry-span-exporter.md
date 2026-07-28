@@ -1,7 +1,6 @@
 # ADR-0069: OpenLLMetry 轨迹导出器架构
 
-## 状态
-Accepted
+- **状态**: Accepted（已执行）
 
 ## 背景 (Context)
 随着系统能力的增强，用户（尤其是重度自托管和安全审计要求高的场景）需要将我们内部 `gen_ai.*` 语义的执行轨迹（Trajectory）和 Span 数据导出到外部的大模型可观测平台（如 LangSmith, Braintrust, Phoenix 等）。这符合架构规范 GD-14-002 对可观测性的开放要求。

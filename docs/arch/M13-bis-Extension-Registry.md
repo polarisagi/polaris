@@ -1,7 +1,7 @@
 # 模块 13-bis: Extension Registry
 
 > 扩展系统的市场、安装、路由三层模型。覆盖 MCP（Model Context Protocol，模型上下文协议） / Skill / Plugin / App / Automation / Agent 六类扩展。[HE-Rule-3] [HE-Rule-6]
-<!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:79 技能执行模式 / 4:104 工具懒加载 / 5:133 安装流 / 6:229 信任门控 / 7:276 文件系统 / 8:307 调用路由 / 9:346 自动化 / 10:424 跨代理协作 / 11:450 学习技能归并 / 12:464 表引用 -->
+<!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:79 技能执行模式 / 4:105 工具懒加载 / 5:134 安装流 / 6:230 信任门控 / 7:277 文件系统 / 8:308 调用路由 / 9:347 自动化 / 10:425 跨代理协作 / 11:451 学习技能归并 / 12:465 表引用 -->
 
 ---
 
@@ -88,9 +88,10 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 > **注**：DDL（Data Definition Language，数据定义语言） `exec_mode` 仅支持 `'tool'|'ambient'` 两值。"同时暴露为工具 + 注入"的场景通过分别注册两条记录实现，无独立 `both` 值。
 
 **ambient 加载规则**：
-- 查询 `skills WHERE exec_mode='ambient' AND deprecated=0`，按 trust_tier 排序
+- 查询 `skills WHERE exec_mode='ambient' AND deprecated=0`，按 `ambient_priority`（`'always'|'auto'|'index_only'`，DDL `008_skills.sql`，默认 `'auto'`）与 trust_tier 排序；`always` 强制注入全文，`index_only` 仅注入索引摘要不注入全文
 - 注入位置：system prompt ImmutableCore 区末尾，TaintedData 区之前
-- 总字符限制：ambient skills 合计 ≤ `m13_ext.ambient_skill_max_chars`（默认 4000 字符，不得占用超过 ~10% 上下文窗口）
+- 总字符限制：ambient skills 合计 ≤ `spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars`（默认 4000 字符，不得占用超过 ~10% 上下文窗口）。超预算的 skill 降级为 index-only（仅注入名称+描述行并 WARN）。链路：state.yaml → `config.M13InterfaceThresholds.AmbientSkillMaxChars` → `Server.SetAmbientSkillMaxChars` → `ChatHandler.AmbientMaxChars`；未注入时回落 `defaultAmbientMaxChars = 4000`。大上下文窗口模型可经 `[m13_interface] ambient_skill_max_chars` 调高
+  > **✅ 已修复（2026-07-28，DR-4-005）**：此前 `system_prompt.go` 硬编码 `maxFullTextChars = 128_000`（≈32K tokens），超本条设计约束 32 倍，在 Tier-0（2GB VPS）上单靠 ambient skill 即可打爆整个 prompt 预算；且文档引用的模块键 `m13_ext` 在 `state.yaml`/`thresholds.go` 中并不存在（实际为 `m13_scheduler` / `[m13_interface]`）。现已参数化并统一键名。
 - 超限时优先保留 trust_tier 高的，其余截断并 WARN
 
 **代码约束**：
@@ -103,7 +104,7 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 
 ## 4. 工具发现与懒加载
 
-当已安装工具总数超过 `spec/state.yaml §thresholds.m13_ext.lazy_load_tool_threshold`（默认 40），切换到懒加载模式，避免 context 爆炸。
+当已安装工具总数超过 `spec/state.yaml §thresholds.m13_scheduler.lazy_load_tool_threshold`（默认 40），切换到懒加载模式，避免 context 爆炸。
 
 工具激活状态跟踪已通过 `internal/tool/catalog/composite.go` 基于 `session_id` 实现。`BuildToolSchemas()` 会根据阈值动态过滤未激活的非核心工具。
 
@@ -308,7 +309,7 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
 
 ### 8.1 工具列表构建（每次推理请求）
 
-懒加载阈值见 `spec/state.yaml §thresholds.m13_ext.lazy_load_tool_threshold`（默认 40）。
+懒加载阈值见 `spec/state.yaml §thresholds.m13_scheduler.lazy_load_tool_threshold`（默认 40）。
 
 `totalTools() ≤ LazyLoadThreshold` 时全量返回 builtin + mcp + script runtime skill（exec_mode=tool）；超限时仅返回核心 builtin + `search_tools` 元工具。`skillToolSchemas()` 仅暴露 runtime='script' AND exec_mode='tool' 的技能，工具名格式为 `skill__{slug}`。Logic Collapse 脚本技能经 `execute_skill` 工具调用，不进入此列表。
 
