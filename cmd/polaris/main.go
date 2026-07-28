@@ -21,7 +21,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "polaris: fatal: %v\n", err)
+		slog.Error("polaris: fatal", "err", err)
 		os.Exit(1)
 	}
 }
@@ -141,7 +141,7 @@ func run() error { //nolint:gocyclo
 	// ─── §10.7 从 DB 加载全部厂商配置（唯一合法的 Provider 注册路径）──────
 	slog.Info("polaris-server: loading providers from db...")
 	if err := LoadProvidersFromDB(ctx, sb.Store.DB(), sb.Vault, sb.InfReg, sb.SafeHTTP, sb.TBR); err != nil {
-		slog.Error("polaris-server: failed to load providers from db", "error", err)
+		return apperr.Wrap(apperr.CodeInternal, "polaris-server: load providers from db failed", err)
 	}
 
 	// ─── §10.75 M04 §8 崩溃恢复回放 ──────────────────────────────────────────
