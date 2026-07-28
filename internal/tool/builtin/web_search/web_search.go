@@ -57,7 +57,10 @@ func MakeWebSearchFn(cfg *config.Config, dialer protocol.SafeDialer) sandbox.InP
 		}
 		defer resp.Body.Close()
 		// 限制读取大小（2MB），防止超大响应体导致内存耗尽
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "web_search: read response body failed", err)
+		}
 
 		tagRe := regexp.MustCompile(`<[^>]*>`)
 		spaceRe := regexp.MustCompile(`\s+`)
