@@ -54,7 +54,7 @@ run_step "[2/12] 执行跨平台 Go 静态检查 (macOS/Linux/Windows)" "golangc
 
 run_step "[3/12] 执行 Rust 格式化与静态检查" "cargo fmt --manifest-path rust/substrate/Cargo.toml --check && cargo clippy --manifest-path rust/substrate/Cargo.toml -- -D warnings"
 
-run_step "[4/12] 执行 docs/arch 一致性检查" "make docs-check && make docs-lint"
+run_step "[4/12] 执行 docs/arch 一致性检查" "make docs-check && make docs-lint && make docs-refs"
 
 run_step "[5/12] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
 
