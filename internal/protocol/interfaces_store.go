@@ -116,8 +116,8 @@ ChatRepository interface {
 type
 
 // ProviderRepository Provider 配置读写契约。
-// @consumer: pkg/gateway/server/, pkg/substrate/inference/
-// @producer: pkg/substrate/storage/repo_provider.go
+// @consumer: internal/gateway/server/
+// @producer: internal/store/repo/repo_provider.go
 ProviderRepository interface {
 	ListProviders(ctx context.Context) ([]types.ProviderRow, error)
 	GetProvider(ctx context.Context, id string) (*types.ProviderRow, error)
@@ -142,8 +142,8 @@ ProviderRepository interface {
 type
 
 // CronRepository 定时任务读写契约。
-// @consumer: pkg/action/tool/cron_tools.go, pkg/gateway/server/ (cron.go)
-// @producer: pkg/substrate/storage/repo_cron.go
+// @consumer: internal/tool/builtin/, internal/gateway/server/sysadmin/
+// @producer: internal/store/repo/repo_cron.go
 CronRepository interface {
 	ListCronJobs(ctx context.Context) ([]types.CronJobRow, error)
 	GetCronJob(ctx context.Context, id string) (*types.CronJobRow, error)
@@ -159,8 +159,8 @@ CronRepository interface {
 type
 
 // ExtensionRepository 扩展安装与目录读写契约。
-// @consumer: pkg/extensions/native/, pkg/extensions/marketplace/, pkg/extensions/mcp/
-// @producer: pkg/substrate/storage/repo_extension.go
+// @consumer: internal/extension/native/, internal/extension/marketplace/, internal/extension/mcp/
+// @producer: internal/store/repo/repo_extension.go
 ExtensionRepository interface {
 	// extension_instances
 	UpsertInstance(ctx context.Context, row types.ExtInstanceRow) error
@@ -213,8 +213,8 @@ ExtensionRepository interface {
 type
 
 // AuditRepository 审计日志读写契约。
-// @consumer: pkg/substrate/security/audit_trail.go
-// @producer: pkg/substrate/storage/repo_audit.go
+// @consumer: internal/security/audit_trail.go
+// @producer: internal/store/repo/repo_audit.go
 AuditRepository interface {
 	AppendAuditEvent(ctx context.Context, row types.AuditEventRow) error
 	ListAuditEvents(ctx context.Context, limit int, before string) ([]types.AuditEventRow, error)
@@ -224,12 +224,12 @@ AuditRepository interface {
 type
 
 // TaskReadRepository 任务表只读契约（写路径由 Blackboard 的 CAS 持有 *sql.DB）。
-// @consumer: pkg/cognition/kernel/agent.go, pkg/edge/scheduler/cost_report.go
-// @producer: pkg/substrate/storage/repo_task.go
+// @consumer: internal/agent/, internal/swarm/
+// @producer: internal/store/repo/repo_task.go
 TaskReadRepository interface {
 	GetTaskProviderSuspendCount(ctx context.Context, taskID string) (int, error)
 	GetTaskIntentTaint(ctx context.Context, taskID string) (int, error)
-	AggregateTokenCosts(ctx context.Context, startISO, endISO string) ([]types.TokenCostAgg, error)
+	AggregateTokenCosts(ctx context.Context, startMs, endMs int64) ([]types.TokenCostAgg, error)
 }
 
 type

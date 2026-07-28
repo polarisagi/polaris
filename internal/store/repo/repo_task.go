@@ -56,14 +56,14 @@ func (r *SQLiteTaskReadRepository) GetTaskIntentTaint(ctx context.Context, taskI
 }
 
 // AggregateTokenCosts 从 events 表聚合指定时间范围内的 token 费用统计。
-// startISO / endISO 为 ISO 8601 格式的时间字符串。
+// startMs / endMs 为 Unix 毫秒时间戳。
 // 事件 payload 格式：{"provider":"...","input_tokens":N,"output_tokens":N,"cache_read_tokens":N,"cost_usd":F}
-func (r *SQLiteTaskReadRepository) AggregateTokenCosts(ctx context.Context, startISO, endISO string) ([]types.TokenCostAgg, error) {
+func (r *SQLiteTaskReadRepository) AggregateTokenCosts(ctx context.Context, startMs, endMs int64) ([]types.TokenCostAgg, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT payload FROM events
 		 WHERE topic LIKE 'llm.%'
 		   AND created_at >= ? AND created_at < ?`,
-		startISO, endISO)
+		startMs, endMs)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskReadRepository.AggregateTokenCosts", err)
 	}
