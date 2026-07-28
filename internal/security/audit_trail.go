@@ -128,8 +128,14 @@ func (at *AuditTrail) VerifyIntegrity() (bool, int) {
 
 	for i, r := range at.records {
 		// 检查 PrevHash 链接
-		if i > 0 && r.PrevHash != at.records[i-1].RecordHash {
-			return false, i
+		if i > 0 {
+			if r.PrevHash != at.records[i-1].RecordHash {
+				return false, i
+			}
+		} else if at.epochStartHash != "" {
+			if r.PrevHash != at.epochStartHash {
+				return false, 0
+			}
 		}
 		// 重算 RecordHash 校验数据未被篡改
 		data := serializeRecord(r)
@@ -274,6 +280,17 @@ func (at *AuditTrail) recoverFromDB() error {
 	}
 
 	at.mu.Lock()
+	if len(loaded) > 0 {
+		// 额外查询被截断边界前一条记录的 hash 作为校验锚点 (GR-2-007)
+		oldestCreatedAt := events[len(events)-1].CreatedAt
+		boundaryEvents, err := at.repo.ListAuditEvents(ctx, 1, oldestCreatedAt)
+		if err == nil && len(boundaryEvents) > 0 {
+			var anchorRec AuditRecord
+			if json.Unmarshal([]byte(boundaryEvents[0].Meta), &anchorRec) == nil {
+				at.epochStartHash = anchorRec.RecordHash
+			}
+		}
+	}
 	at.records = append(at.records, loaded...)
 	if len(loaded) > 0 {
 		at.lastHash = loaded[len(loaded)-1].RecordHash
