@@ -9,9 +9,8 @@ import (
 // 本文件声明 extension 包对外部模块的消费端接口（Consumer-side Interfaces）。
 //
 // extension 包（扩展注册 + MCP 管理）需要以下外部能力：
-//   1. ExtensionPolicyGate — 扩展安装授权策略检查（Cedar deny-by-default）
-//   2. EmbedSearcher       — 扩展语义激活时的向量检索（native.ExtensionActivator 依赖）
-//   3. ToolRegistrar       — MCP 工具注册回调（已在 mcp/mcp_manager.go 声明，此处文档化）
+//   1. EmbedSearcher       — 扩展语义激活时的向量检索（native.ExtensionActivator 依赖）
+//   2. ToolRegistrar       — MCP 工具注册回调（已在 mcp/mcp_manager.go 声明，此处文档化）
 //
 // @consumer: extension/marketplace/manager.go（授权），extension/native/extension_activator.go（激活）
 // @producer: 各具体模块由 cli.go/bootstrap 注入

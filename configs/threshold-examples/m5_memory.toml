@@ -7,7 +7,7 @@
 'core.memory_block_max_kb' = 2
 'core.memory_total_max_kb' = 8
 'rrf.k' = 60
-'graph.max_depth' = 3
+'graph.max_depth' = 2
 'reflection.task_type_whitelist' = ['complex_reasoning', 'coding', 'research', 'debug', 'analysis']
 'reflection.min_replan_count' = 2
 'drift.check_interval_hours' = 168

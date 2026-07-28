@@ -36,12 +36,15 @@ type sherpaFuncs struct {
 	OfflinePunctuationFreeText func(text uintptr)
 }
 
-var sf sherpaFuncs
+// Library 封装 sherpa-onnx 函数指针，避免包级全局可变变量
+type Library struct {
+	funcs sherpaFuncs
+}
 
 var (
 	libMu   sync.Mutex
 	loadErr error
-	loaded  bool
+	libInst *Library
 )
 
 // LoadLibrary 动态加载 sherpa-onnx C API (零 CGO)。
@@ -50,7 +53,7 @@ func LoadLibrary(libPath string) error {
 	libMu.Lock()
 	defer libMu.Unlock()
 
-	if loaded {
+	if libInst != nil {
 		return nil // 已成功加载，直接复用
 	}
 
@@ -60,6 +63,7 @@ func LoadLibrary(libPath string) error {
 		return loadErr
 	}
 
+	var sf sherpaFuncs
 	purego.RegisterLibFunc(&sf.CreateOfflineRecognizer, lib, "SherpaOnnxCreateOfflineRecognizer")
 	purego.RegisterLibFunc(&sf.DestroyOfflineRecognizer, lib, "SherpaOnnxDestroyOfflineRecognizer")
 	purego.RegisterLibFunc(&sf.CreateOfflineStream, lib, "SherpaOnnxCreateOfflineStream")
@@ -74,7 +78,7 @@ func LoadLibrary(libPath string) error {
 	purego.RegisterLibFunc(&sf.OfflinePunctuationAddPunct, lib, "SherpaOfflinePunctuationAddPunct")
 	purego.RegisterLibFunc(&sf.OfflinePunctuationFreeText, lib, "SherpaOfflinePunctuationFreeText")
 
-	loaded = true
+	libInst = &Library{funcs: sf}
 	loadErr = nil
 	return nil
 }
@@ -84,11 +88,16 @@ type Engine struct {
 	mu         sync.Mutex
 	recognizer *SherpaOnnxOfflineRecognizer
 	punct      *SherpaOnnxOfflinePunctuation
+	lib        *Library
 }
 
 // NewEngine 构造新的 Sherpa-ONNX 离线推理引擎
 func NewEngine(modelDir, punctDir string) (*Engine, error) {
-	if !loaded {
+	libMu.Lock()
+	lib := libInst
+	libMu.Unlock()
+
+	if lib == nil {
 		return &Engine{recognizer: nil}, nil
 	}
 
@@ -138,7 +147,7 @@ func NewEngine(modelDir, punctDir string) (*Engine, error) {
 	*(*uintptr)(unsafe.Pointer(cfgPtr + OffsetDecodingMethod)) = cString("greedy_search")
 
 	// 调用 C API
-	rec := sf.CreateOfflineRecognizer(cfgPtr)
+	rec := lib.funcs.CreateOfflineRecognizer(cfgPtr)
 	if rec == nil {
 		return nil, apperr.New(apperr.CodeInternal, "stt: failed to create offline recognizer")
 	}
@@ -162,12 +171,13 @@ func NewEngine(modelDir, punctDir string) (*Engine, error) {
 		*(*int32)(unsafe.Pointer(pCfgPtr + PunctOffsetDebug)) = 0
 		*(*uintptr)(unsafe.Pointer(pCfgPtr + PunctOffsetProvider)) = cString("cpu")
 
-		punct = sf.CreateOfflinePunctuation(pCfgPtr)
+		punct = lib.funcs.CreateOfflinePunctuation(pCfgPtr)
 	}
 
 	return &Engine{
 		recognizer: rec,
 		punct:      punct,
+		lib:        lib,
 	}, nil
 }
 
@@ -176,12 +186,16 @@ func (e *Engine) Close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if e.lib == nil {
+		return
+	}
+
 	if e.recognizer != nil {
-		sf.DestroyOfflineRecognizer(e.recognizer)
+		e.lib.funcs.DestroyOfflineRecognizer(e.recognizer)
 		e.recognizer = nil
 	}
 	if e.punct != nil {
-		sf.DestroyOfflinePunctuation(e.punct)
+		e.lib.funcs.DestroyOfflinePunctuation(e.punct)
 		e.punct = nil
 	}
 }
@@ -195,7 +209,7 @@ type Result struct {
 
 // Transcribe 传入 16000Hz 16-bit PCM 单声道音频数据并返回文本
 func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
-	if !loaded || e.recognizer == nil {
+	if e.lib == nil || e.recognizer == nil {
 		// Mock 回退：如果未正确初始化，返回模拟文本
 		return Result{Text: "（未连接真实引擎，此为本地 Mock 语音转文字）"}, nil
 	}
@@ -203,22 +217,22 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	stream := sf.CreateOfflineStream(e.recognizer)
+	stream := e.lib.funcs.CreateOfflineStream(e.recognizer)
 	if stream == nil {
 		return Result{}, apperr.New(apperr.CodeInternal, "stt: failed to create stream")
 	}
-	defer sf.DestroyOfflineStream(stream)
+	defer e.lib.funcs.DestroyOfflineStream(stream)
 
 	if len(samples) > 0 {
-		sf.AcceptWaveformOffline(stream, int32(sampleRate), &samples[0], int32(len(samples)))
+		e.lib.funcs.AcceptWaveformOffline(stream, int32(sampleRate), &samples[0], int32(len(samples)))
 	}
-	sf.DecodeOfflineStream(e.recognizer, stream)
+	e.lib.funcs.DecodeOfflineStream(e.recognizer, stream)
 
-	resPtr := sf.GetOfflineStreamResult(stream)
+	resPtr := e.lib.funcs.GetOfflineStreamResult(stream)
 	if resPtr == 0 {
 		return Result{}, apperr.New(apperr.CodeInternal, "stt: failed to get result")
 	}
-	defer sf.DestroyOfflineRecognizerResult(resPtr)
+	defer e.lib.funcs.DestroyOfflineRecognizerResult(resPtr)
 
 	// 解析返回的 C 结构体中的 const char* text
 	// 按照 SherpaOnnx 规范，result 的第一个字段就是 text 指针
@@ -241,12 +255,12 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (Result, error) {
 	// 简单的 C 字符串转 Go 字符串
 	rawText := parseCString(uintptr(unsafe.Pointer(textPtr)))
 
-	if e.punct != nil && rawText != "" {
+	if e.punct != nil && rawText != "" && e.lib != nil {
 		cRawText := append([]byte(rawText), 0)
 		cRawPtr := uintptr(unsafe.Pointer(&cRawText[0]))
-		punctuatedPtr := sf.OfflinePunctuationAddPunct(e.punct, cRawPtr)
+		punctuatedPtr := e.lib.funcs.OfflinePunctuationAddPunct(e.punct, cRawPtr)
 		if punctuatedPtr != 0 {
-			defer sf.OfflinePunctuationFreeText(punctuatedPtr)
+			defer e.lib.funcs.OfflinePunctuationFreeText(punctuatedPtr)
 			rawText = parseCString(punctuatedPtr)
 		}
 		runtime.KeepAlive(cRawText)

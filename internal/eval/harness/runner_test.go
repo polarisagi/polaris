@@ -47,7 +47,7 @@ func TestRunner(t *testing.T) {
 	c3 := `{"id":"3", "level":4, "severity":"P0", "falsifiability_score":0.9}`
 
 	ms := &mockSQLiteStore{vals: [][]byte{[]byte(c1), []byte(c2), []byte(c3)}}
-	
+
 	pub, sig := testSignRunner(control.RoleM9Optimizer, control.PartitionTraining)
 	evalStore := NewSQLiteEvalStore(ms, control.NewEngine(map[string]ed25519.PublicKey{control.RoleM9Optimizer: pub}))
 

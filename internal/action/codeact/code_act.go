@@ -381,19 +381,25 @@ func writeTempScript(language, code string) (string, error) {
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "create temp file", err)
 	}
-	defer f.Close()
 
-	if _, err := f.WriteString(code); err != nil {
-		f.Close() // 先关闭句柄，避免 Windows 系统文件锁导致 Remove 失败
-		os.Remove(f.Name())
-		return "", apperr.Wrap(apperr.CodeInternal, "write temp file", err)
-	}
-	// 设置执行权限（bash 脚本需要）
-	if language == "bash" {
-		if err := os.Chmod(f.Name(), 0700); err != nil {
-			os.Remove(f.Name())
-			return "", apperr.Wrap(apperr.CodeInternal, "chmod temp file", err)
+	writeErr := func() error {
+		defer f.Close()
+		if _, err := f.WriteString(code); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "write temp file", err)
 		}
+		// 设置执行权限（bash 脚本需要）
+		if language == "bash" {
+			if err := os.Chmod(f.Name(), 0700); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "chmod temp file", err)
+			}
+		}
+		return nil
+	}()
+
+	if writeErr != nil {
+		os.Remove(f.Name())
+		return "", writeErr
 	}
+
 	return f.Name(), nil
 }
