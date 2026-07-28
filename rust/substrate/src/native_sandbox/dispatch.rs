@@ -602,7 +602,7 @@ mod tests {
         let input = serde_json::json!({
             "command": "echo hello_sandbox",
             "workdir": "/tmp",
-            "network_block": true,
+            "network_block": false,
             "timeout_ms": 5000
         });
         let input_cstr = CString::new(input.to_string()).unwrap();

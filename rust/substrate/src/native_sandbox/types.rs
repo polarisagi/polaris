@@ -111,6 +111,7 @@ pub(super) fn is_credential_key(key: &str) -> bool {
 
 /// V2 统一沙箱请求（JSON 反序列化）
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub(super) struct SandboxContextV2 {
     /// 调用方："builtin"|"mcp"|"codeact"|"skill"|"hook"|"plugin"
     pub(super) caller_type: Option<String>,
