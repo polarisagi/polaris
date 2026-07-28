@@ -233,7 +233,7 @@ ProcessRewardModel（PRM）集成于 Agent Kernel（`internal/agent/`），在 *
 
 **多候选并发选优流程 [未接线]**：设计为 S_PLAN 阶段并发生成多个候选 DAG（默认 3 个），再并发调用 budget-tier LLM 对每个候选打分（0–1），选出最高分方案推进至 S_VALIDATE；若全部候选分数低于最低可接受阈值（默认 0.4），fallback 取第一个候选，保证规划不丢失。
 
-> **实现状态（2026-07-28 裁决）**：`internal/agent/prm.go` 的 `DefaultPRM.SelectBest` 打分算法已完整实现并被 ADR-0056 的 PRM 训练样本采集复用，但 **FSM 主流程未接线**——`transitions.go` 的 S_PLAN 转移（`promptPlan`/`parsePlanOnSuccess`）仍单次调用 LLM 只解出一份 `DAGModel`，从不生成 N 个候选、从不调用 `SelectBest`。
+> **实现状态（2026-07-28 裁决）**：`internal/agent/prm.go` 的 `DefaultPRM.SelectBest` 打分算法已完整实现并被 ADR-0048 的 PRM 训练样本采集复用，但 **FSM 主流程未接线**——`transitions.go` 的 S_PLAN 转移（`promptPlan`/`parsePlanOnSuccess`）仍单次调用 LLM 只解出一份 `DAGModel`，从不生成 N 个候选、从不调用 `SelectBest`。
 > 维持未接线为**有意决策**而非缺陷：多候选生成使每次 S_PLAN 的 LLM 调用量变为 N+N（生成 N 份 + 打分 N 次），与 Tier-0 单机预算纪律（`ARCHITECTURE.md §1`）直接冲突，且当前无 ADR 授权该开销。若未来要接线，须先有量化证据（Eval Harness 上多候选选优相对单候选的成功率增益 > token 成本增幅），并新立 ADR。
 
 **关键配置**（均可由 M8 Orchestrator 在运行时注入覆盖）：默认关闭须显式开启；打分模型使用 budget-tier LLM；候选数默认 3（研究数据显示 3 候选 ROI 最优）；复杂度门限默认 0.5。
@@ -268,7 +268,7 @@ RouteReasoning:
 2. 未命中或 si>=0.3 → 调用 `M6.SkillSelector.SelectTopK(intent, K=5)` 选取候选工具/技能描述（**Tool Selection > Tool Design**：避免把全部工具列表塞给 LLM 导致选择崩溃）→ buildMessages → `providerRouter.Route`
 3. buildMessages: ImmutableCore + GoalDescription + DAG 上下文 + SkillSelector 选取的 top-K 工具描述
 
-**AgentPool（ADR-0029 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）而非单个 `AgentController`。每个 sessionID 对应独立 `Agent` 实例，容量由 `TierParams.MaxConcurrentAgents` 限制（Tier-0: 4）；超容量时 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。Idle 超过 10 分钟的 session 由 `Pool.GC()` 低频回收。每个新建 Agent 实例由 `Pool.Acquire` 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（消费其内部 intent channel），语义与 Supervisor 对单例 `agent-0` 的启动方式一致；`GC()` 回收 idle session 时对应调用 `Shutdown()` 停止该循环（详见 ADR-0029 Addendum，2026-07-12 复核修复：此前该循环从未启动，per-session 会话 FSM 实际不会推进状态）。
+**AgentPool（ADR-0025 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）而非单个 `AgentController`。每个 sessionID 对应独立 `Agent` 实例，容量由 `TierParams.MaxConcurrentAgents` 限制（Tier-0: 4）；超容量时 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。Idle 超过 10 分钟的 session 由 `Pool.GC()` 低频回收。每个新建 Agent 实例由 `Pool.Acquire` 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（消费其内部 intent channel），语义与 Supervisor 对单例 `agent-0` 的启动方式一致；`GC()` 回收 idle session 时对应调用 `Shutdown()` 停止该循环（详见 ADR-0025 Addendum，2026-07-12 复核修复：此前该循环从未启动，per-session 会话 FSM 实际不会推进状态）。
 
 ---
 

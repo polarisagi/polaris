@@ -2,7 +2,7 @@
 // 可执行的 protocol.WorkflowGraphSpec（2026-07-12 workflow DAG 并行 + 失败重试接入）。
 //
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3-quinquies
-// 决策记录: docs/arch/decisions/ADR-0041-state-graph-orchestration.md
+// 决策记录: docs/arch/decisions/ADR-0046-execute-module.md（决策三，含原 ADR-0041）
 package workflowadmin
 
 import (

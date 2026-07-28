@@ -50,7 +50,7 @@ func WithSemanticCache(cache *search.SemanticCache) RouterOption {
 }
 
 // recordModelCallResult 把一次 Provider 调用结果同步给 ModelVersionRegistry
-// （2026-07-14 ADR-0051 关联接线：Registry.RecordCallResult 此前已完整实现连续
+// （2026-07-14 ADR-0062 关联接线：Registry.RecordCallResult 此前已完整实现连续
 // 失败计数 + FindPredecessor 回退建议，但路由层从未持有 Registry 实例、从未
 // 调用过它，数据一直是空的）。modelRegistry 为 nil（未注入）时整体是 no-op。
 // shouldRollback=true 时目前只做可观测日志：路由的 Provider 选择由
@@ -132,7 +132,7 @@ func (ir *InferenceRouter) ModelID() string {
 
 // Infer 路由单次请求到最优 Provider，失败时 failover 至次优。
 func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
-	// 2026-07-14（ADR-0051 关联接线）：改用 protocol.ApplyInferOptions 复用统一实现，
+	// 2026-07-14（ADR-0062 关联接线）：改用 protocol.ApplyInferOptions 复用统一实现，
 	// 消除与该函数重复的内联 for-range opt(options) 循环（此前 router.go 内两处、
 	// protocol.ApplyInferOptions 一处，三份同构代码）。行为等价：
 	// ApplyInferOptions 显式给 ThinkingMode 填充 types.ThinkingDisabled 默认值，
@@ -264,7 +264,7 @@ func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *provid
 	// protocol.EventWriter 全仓库零实现，WithEventWriter 注入方法此前已被删除
 	// 导致 eventWriter 恒为 nil、这段代码永久不可达；LLM 调用观测已由上面的
 	// trace.RecordLLMCall（→ Prometheus/OTel InstrLLMCallsTotal 等）完整覆盖，
-	// 不存在观测缺口。ADR-0029 §H 曾计划将此处的裸 goroutine 迁移到 SafeGo 并
+	// 不存在观测缺口。ADR-0025 §H 曾计划将此处的裸 goroutine 迁移到 SafeGo 并
 	// 改经 event_buffer.go 批处理，但该 EventWriteBuffer 已确认零接线并删除，
 	// 原计划的落地目标已不存在，遂一并清理。
 
@@ -275,7 +275,7 @@ func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *provid
 
 // StreamInfer 路由流式请求，内嵌延迟记录与 Failover。
 func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
-	// 2026-07-14（ADR-0051 关联接线）：改用 protocol.ApplyInferOptions 复用统一实现，
+	// 2026-07-14（ADR-0062 关联接线）：改用 protocol.ApplyInferOptions 复用统一实现，
 	// 消除与该函数重复的内联 for-range opt(options) 循环（此前 router.go 内两处、
 	// protocol.ApplyInferOptions 一处，三份同构代码）。行为等价：
 	// ApplyInferOptions 显式给 ThinkingMode 填充 types.ThinkingDisabled 默认值，

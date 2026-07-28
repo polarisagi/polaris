@@ -208,7 +208,7 @@ func buildAgent(
 	// M04 §8 崩溃恢复：注入 KV Store 供 Run() 写入/清除 in-flight 崩溃检测标记
 	// （见 internal/agent/agent.go markInFlight/clearInFlight + boot_crash_recovery.go）。
 	a.InjectEventStore(sb.Store)
-	// M04 §7 热路径上下文窗口压缩 Stage 1（ADR-0060）：与网关 Compressor
+	// M04 §7 热路径上下文窗口压缩 Stage 1（ADR-0033）：与网关 Compressor
 	// （boot_server.go SetToolRefOffloader）共用同一个 ToolRefOffloader 实例，
 	// 两条压缩路径落盘到同一份 workspace_vfs 索引，read_tool_ref 均可回读。
 	a.InjectToolRefOffloader(tb.ToolRefOffloader)
@@ -385,7 +385,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ─── §9.5 M8 Multi-Agent Orchestrator ────────────────────────────────────
 	// 2026-07-14：中心化 Orchestrator（RegisterWorker/dispatchPendingTasks）已删除
 	// ——生产环境从未调用 RegisterWorker，任务派发实际由下方 default-task-worker
-	// 承接的"自订阅 Blackboard + CAS 认领"模式完成（见 ADR-0050）。AgentRegistry
+	// 承接的"自订阅 Blackboard + CAS 认领"模式完成（见 ADR-0062）。AgentRegistry
 	// 仍需保留并注入 SQLiteBlackboard，用于 PostTask 时的 SpawnDepth 校验。
 	agentRegistry := orchestrator.NewAgentRegistry()
 	blackboard.SetRegistry(agentRegistry)
@@ -605,7 +605,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// Shadow/Canary 门禁在生产环境实际上从未真正运转。现改为：versionStore/rolloutStore
 	// 均为真实 DB 支撑实例，rolloutStore 同时服务 M9Engine 和下方 LogicCollapseMonitor
 	// （原各自独立构造两份，互不相干），ConfirmShadow 通过后经 promptActivator 回调激活
-	// Prompt 候选（见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0029 §K）。
+	// Prompt 候选（见 optimizer.SQLiteRolloutStore.ConfirmShadow，ADR-0025 §K）。
 	versionStore := optimizer.NewPromptVersionStore(sb.Store.DB())
 	var (
 		rolloutStore  *optimizer.SQLiteRolloutStore
@@ -766,7 +766,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			rolloutStore,
 		)
 		concurrent.SafeGo(ctx, "shadow-executor-replay", func(ctx context.Context) {
-			// 5 分钟周期，与 boot_knowledge.go corpus-stats-flush 同量级；ADR-0029 §K
+			// 5 分钟周期，与 boot_knowledge.go corpus-stats-flush 同量级；ADR-0025 §K
 			// 认定"分钟级延迟"对离线质量回归验证可接受，非实时链路无需更短周期。
 			ticker := time.NewTicker(5 * time.Minute)
 			defer ticker.Stop()
@@ -874,7 +874,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	sv.AddWorker("agent-0", func(ctx context.Context) error {
 		return agent.Run(ctx)
 	})
-	// 中心化 Orchestrator.ListenLoop 已删除（2026-07-14，ADR-0050）：其
+	// 中心化 Orchestrator.ListenLoop 已删除（2026-07-14，ADR-0062）：其
 	// dispatchPendingTasks 在生产环境下 100% 无法成功派发任务（RegisterWorker
 	// 从未调用、agent-0 的 Skills=["general"] 与真实任务类型永远不匹配），
 	// 任务派发完全由下方 default-task-worker 的"自订阅 Blackboard + CAS 认领"
@@ -1044,7 +1044,7 @@ func (r *simpleSurpriseReader) CurrentSurprise() float64 {
 // Log(ctx, action string, meta map[string]any)，供
 // curriculum.BackgroundTaskScheduler.InjectAuditLogger 使用。
 //
-// 2026-07-14（ADR-0051 关联接线）：*security.AuditTrail 只实现了前者（其文档注释
+// 2026-07-14（ADR-0062 关联接线）：*security.AuditTrail 只实现了前者（其文档注释
 // "实现 protocol.AuditLogger 接口" 是过时表述，已一并订正），全仓库不存在
 // protocol.AuditLogger 的直接实现，导致该接口的唯一消费方
 // BackgroundTaskScheduler 此前无法注入任何真实审计后端。两个接口语义等价

@@ -77,7 +77,7 @@ Skill/JSONSchema/Condition/SkillSource 结构体定义见 `pkg/types/models_skil
 
 ### 2.2 Logic Collapse: System 2 → System 1
 
-> **实现状态**：`FeatureLogicCollapse` 特性门控已定义（Tier 0+，≥8GB 且 ≥1GB free 自动启用）。蒸馏流水线：新鲜度检查 → 数据脱敏 → 编译门控 → LLM 代码生成（**Python**）→ 静态分析（ValidatePython）→ ContainerSandbox 行为测试 → 风险分级 → HMAC-SHA256 签名 → Skill 注册写入。M9 触发器位于 `internal/learning/`（在线语义方差估算 + HITL（Human-in-the-loop，人机协同） 分流）。<8GB VPS 仅加载预生成技能，Logic Collapse 被编译门控拦截。决策见 ADR-0026（Architecture Decision Record，架构决策记录）。
+> **实现状态**：`FeatureLogicCollapse` 特性门控已定义（Tier 0+，≥8GB 且 ≥1GB free 自动启用）。蒸馏流水线：新鲜度检查 → 数据脱敏 → 编译门控 → LLM 代码生成（**Python**）→ 静态分析（ValidatePython）→ ContainerSandbox 行为测试 → 风险分级 → HMAC-SHA256 签名 → Skill 注册写入。M9 触发器位于 `internal/learning/`（在线语义方差估算 + HITL（Human-in-the-loop，人机协同） 分流）。<8GB VPS 仅加载预生成技能，Logic Collapse 被编译门控拦截。决策见 ADR-0008（Architecture Decision Record，架构决策记录）。
 
 1. **System 2 成功执行**
 2. **轨迹分析**
@@ -115,7 +115,7 @@ Skill/JSONSchema/Condition/SkillSource 结构体定义见 `pkg/types/models_skil
 3. 确定性审查: `time.time()`/`random`/`os.environ` 等非确定性调用
 
 **脚本方案**:
-- LLM 生成 Python 脚本（`src/skill.py`），经 ContainerSandbox（L3）执行。Python 运行时已为 CodeAct 引入，零增量依赖。决策见 ADR-0026。
+- LLM 生成 Python 脚本（`src/skill.py`），经 ContainerSandbox（L3）执行。Python 运行时已为 CodeAct 引入，零增量依赖。决策见 ADR-0008。
 - Logic Collapse 依赖 `FeatureLogicCollapse` AND `FeatureL3Sandbox` 双门控；L3 不可用时跳过蒸馏（仅存元数据）
 - local_only 模式: Logic Collapse 禁用，仅加载预生成技能。触发时若 `privacyMode=="local_only"`（或 Tier0/内存不足）→ `ErrLogicCollapseDisabled`；降级到 SKILL.md 模式 (WARN)
 - Tier 0 预生成技能库随版本发布，覆盖 System 1 核心能力面

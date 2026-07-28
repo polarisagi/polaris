@@ -67,7 +67,7 @@ Shell Script Hooks — End-User 级生命周期扩展机制。类 git-hooks 模�
 | `session.new` | 用户执行 `/new` 或 `/reset` 后 | `POLARIS_SESSION_ID`, `POLARIS_PREV_SESSION_ID` |
 | `message.before` | 处理用户消息前（非零退出 = 拦截） | `POLARIS_MESSAGE`, `POLARIS_SESSION_ID`, `POLARIS_CHANNEL` |
 | `message.after` | AI 回复发出后 | `POLARIS_REPLY`, `POLARIS_SESSION_ID`, `POLARIS_CHANNEL`, `POLARIS_USER_ID` |
-| `turn.stop` | Agent 完成本轮回复（对应 ADR-0015 §2.2 Codex Stop 语义），与 message.after 同点触发但语义独立，供未来分化 | `POLARIS_SESSION_ID`, `POLARIS_CHANNEL`, `POLARIS_USER_ID` |
+| `turn.stop` | Agent 完成本轮回复（对应 ADR-0016 §2.2 Codex Stop 语义），与 message.after 同点触发但语义独立，供未来分化 | `POLARIS_SESSION_ID`, `POLARIS_CHANNEL`, `POLARIS_USER_ID` |
 | `session.compact.before` | 上下文压缩开始前 | `POLARIS_SESSION_ID`, `POLARIS_TOKEN_COUNT` |
 | `session.compact.after` | 上下文压缩完成后 | `POLARIS_SESSION_ID`, `POLARIS_TOKEN_BEFORE`, `POLARIS_TOKEN_AFTER` |
 
@@ -316,7 +316,7 @@ Phase 1 THROTTLE → Phase 2 PAUSE → Phase 3 FULLSTOP
 Go 原生执行层，高性能零虚拟化开销。对于普通文件和数据操作（如文本替换 `str_replace_editor`、文件匹配 `glob`）采用进程内执行；对于外部命令（如 `bash`, `run_command`）采用平台原生子进程沙箱隔离（Bubblewrap / Apple Seatbelt / WSL2）。仅限系统核心内置工具使用。
 
 ### [Sandbox-L2]
-Rust 脚本沙箱（wasmtime_engine.rs via FFI，定义见 07-Tool-Action-Layer, §4.3）。deny-by-default，资源硬限制(RAM/CPU/Walltime)。用于 Wasm 二进制执行；Python Logic Collapse 技能不走 L2，改走 L3 ContainerSandbox（ADR-0026）。
+Rust 脚本沙箱（wasmtime_engine.rs via FFI，定义见 07-Tool-Action-Layer, §4.3）。deny-by-default，资源硬限制(RAM/CPU/Walltime)。用于 Wasm 二进制执行；Python Logic Collapse 技能不走 L2，改走 L3 ContainerSandbox（ADR-0008）。
 
 ### [Sandbox-L3]
 gVisor (runsc) 用户态内核 sandbox (定义见 07-Tool-Action-Layer, §4.7)。跨平台（Linux/macOS/Windows），sentry 拦截 syscall，~30-50MB 基线。Tier 2+ Linux 可选 Firecracker microVM 升级（~125MB，需硬件 KVM，最高隔离级别）。Tier 0 全平台 L3 不可用（内存不足以启动 gVisor sandbox ≥256MB）。
@@ -393,7 +393,7 @@ M5 `episodic_events` 为 events 的派生投影表（记忆检索优化），两
 多 Agent 协调黑板（08-Multi-Agent-Orchestrator, §1）。CAS 原子认领，Lease TTL 60s，心跳 15s±5s jitter，Reaper 1s 扫描。`TaskEntry.Namespace`（GD-14-001，08-Multi-Agent-Orchestrator §11.1）：任务发布方可选指定的记忆命名空间，随 `PeekTask` 传播给认领 Agent，用于同批协同子任务间的 Episodic 记忆共享——不是新的协调通道，只是既有分区键的可选联合。
 
 ### [Script-Sandbox]
-Python 脚本沙箱（ContainerSandbox L3，ADR-0026）。Logic Collapse 蒸馏的技能以 `src/skill.py` 安装，函数签名 `def execute(input: dict) -> dict:`，通过 ContainerSandbox 执行（stdin/stdout JSON ABI）。M6 分层缓存：热技能容器预热 / 冷技能按需启动。Tier 0（L3 不可用）时禁止蒸馏，仅存 SKILL.md 元数据。
+Python 脚本沙箱（ContainerSandbox L3，ADR-0008）。Logic Collapse 蒸馏的技能以 `src/skill.py` 安装，函数签名 `def execute(input: dict) -> dict:`，通过 ContainerSandbox 执行（stdin/stdout JSON ABI）。M6 分层缓存：热技能容器预热 / 冷技能按需启动。Tier 0（L3 不可用）时禁止蒸馏，仅存 SKILL.md 元数据。
 
 ### [CredentialVault]
 凭证安全存储（11-Policy-Safety, §5.2）。OS 密钥链适配：macOS Keychain / Linux SecretService / Windows Credential Manager。API Key SHA-256 加密封箱。
@@ -468,7 +468,7 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 实现（`internal/agent/agent_handoff.go`）：以当前任务的 `NamespaceID`
 （`[GD-14-001]` 共享记忆命名空间，为空则退化为 `SessionID`）为目标角色创建一条
 新 Blackboard Task（`Type` 编码为 `agent_handoff:<role>`），由目标角色 Worker
-按既有 CAS 自认领流程拾取（不引入中心化调度，兼容 ADR-0050）。当前实现为
+按既有 CAS 自认领流程拾取（不引入中心化调度，兼容 ADR-0062）。当前实现为
 **同步阻塞**：发起委派的工具调用内部轮询等待子任务终态（复用
 `csv_fanout.go` 的 `waitForTask` 轮询模式），完成后将结果包装为 `ToolResult`
 返回；委派失败/超时不作为节点执行错误处理（不触发 Saga 补偿），而是通过
@@ -521,7 +521,7 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 - `[System-1]`: 零 LLM 推理路径，SurpriseIndex < 0.3。Logic Collapse 蒸馏的 Python 技能脚本经 ContainerSandbox 直接执行。定义见 M4 §5。
 - `[System-1.5]`: 轻量 LLM 推理，0.3 ≤ SurpriseIndex < 0.6。Tier 1 Budget API。
 - `[System-2]`: 重量 LLM 推理，SurpriseIndex ≥ 0.6。Tier 2/3 Reasoning API。
-- `[Logic-Collapse]`: System 2 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → System 1 缓存（HE-6 State-in-DB）。决策见 ADR-0026。定义见 M6 §2.2。
+- `[Logic-Collapse]`: System 2 成功轨迹 → LLM 生成 Python 脚本 → ContainerSandbox 执行 → System 1 缓存（HE-6 State-in-DB）。决策见 ADR-0008。定义见 M6 §2.2。
 - `[MEMF]`: 谬误记忆池 (FallacyMemoryPool)。失败轨迹向量化打标存入专用池，MCTS/Best-of-N 剪枝前做相似度过滤。定义见 M9 §2.1。
 - `[HeuristicsMemory]`: 成功启发式库。`task_type → []Heuristic`，检索时注入 prompt 引导。定义见 M9 §2.1。
 - `[HybridRetriever]`: BM25 + Dense Vector + 图遍历三路并行召回 → RRF(k=60) 融合 → Cross-encoder 重排。M5 和 M10 共享 `internal/store/` 底层引擎，检索范围和配置参数各自独立。

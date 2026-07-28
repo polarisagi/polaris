@@ -178,7 +178,7 @@ func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Requ
 }
 
 // BuildToolSchemas 收集全部可用工具 schema，用于注入 InferRequest.Tools。
-// 2026-07-14（ADR-0051 关联接线）：用 mcp.IsValidLLMName 防御性过滤名称非法
+// 2026-07-14（ADR-0062 关联接线）：用 mcp.IsValidLLMName 防御性过滤名称非法
 // （不满足 ^[a-zA-Z0-9_-]+$）的条目——MCP server/skill 名称部分来自用户/第三方
 // 配置，不受本仓库命名约束，若原样传给要求 function name 满足该正则的
 // Provider（如 OpenAI function calling）会导致整次请求被拒绝。此前

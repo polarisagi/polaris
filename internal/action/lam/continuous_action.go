@@ -10,7 +10,7 @@ type ContinuousAction struct {
 	Confidence   float64   // 0-1 置信度
 }
 
-// 2026-07-14（ADR-0051）：ActionDiscretizer/Discretize/ActionProjector/
+// 2026-07-14（ADR-0062）：ActionDiscretizer/Discretize/ActionProjector/
 // keyToCentroid/cosineSim/normalizeVec 删除——全仓零生产调用点。StreamingActionBus
 // 是 ContinuousAction 唯一生产消费方，直接将其转发给 DisplayServer.SendAction
 // （GUI 连续动作，不需要离散化），从未有调用方构造 ActionDiscretizer 并调用

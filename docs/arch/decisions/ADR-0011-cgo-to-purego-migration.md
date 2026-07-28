@@ -1,87 +1,30 @@
-# ADR-0011: cgo → purego 迁移（cedar_ffi.go + surreal_store.go）
+# ADR-0011: purego（零 CGO）作为 Go→Rust FFI 桥接方式（含原 ADR-0005/0030/0063，含 Tree-sitter 例外）
 
-- **状态**: Accepted（**已执行完毕** 2026-05-16）
-- **日期**: 2026-05-16
-- **决策者**: 架构组
-- **相关模块**: M2 / M11 / `internal/security` / `internal/store` / `rust/substrate`
+- **状态**: Accepted（已执行）| **日期**: 2026-05-16（扩展 2026-06-25~07-22，合并 2026-07-28）| **模块**: M2/M11 `internal/security` / `internal/store` / `internal/ffi` / `rust/substrate/`
 
-## 上下文
+## 决策一：purego 桥接（原决策）
 
-ADR-0005 决策购零 CGO（purego 桥接），但代码实际滞后：
-- `internal/security/policy/cedar_ffi.go` (98 行) 仍用 cgo
-- `internal/store/surreal_store.go` (348 行) 仍用 cgo
+`cedar_ffi.go`（Cedar 策略引擎）+ `surreal_store.go`（SurrealDB-Core，21 个 FFI 函数）经 purego 桥接 Rust dylib，零 CGO，引入 ABI 版本协议（`substrate_abi_version()`：major 不匹配 panic，minor 不匹配 warn+continue）。字节流生命周期约定：Go→C 用 ptr+len（`*uint8`+`uintptr`）传递 `[]byte`，空 slice 经 `bytePtrOrNil()` 返回 nil+0；C→Go 立即拷贝立即调 `*_free_*`；不使用 null-terminated 约定。
 
-`00-Global-Dictionary.md §4 §6` 宣称 "purego" 是设计意图，非实施事实。本 ADR 补齐实施计划。
+**受限例外（原 ADR-0034）**：`internal/knowledge/` 的代码切分（chunking）路径允许依赖 CGO（`go-tree-sitter`）——不在请求热路径（仅离线/后台知识库索引），物理隔离（`chunker_cgo.go`/`chunker_nocgo.go` build tag 双实现，`CGO_ENABLED=0` 自动降级至字符串匹配 fallback），失败安全（parse 失败回退 `fallbackChunk`）。仅限该离线索引路径，在线请求路径（agent/gateway 等）不得援引此例外。
 
-实施滞后产生的具体问题：
-1. **交叉编译困难** — cgo 需目标平台 C 工具链
-2. **单二进制分发受阻** — Rust dylib 必须随附，`LDFLAGS` 路径硬编码
-3. **与 ADR-0003 体系矛盾** — modernc/sqlite 选购零 CGO，FFI 路径却开 CGO
+## 决策二：Tier-2 语义嵌入 SIMD 桥接（原 ADR-0030）
 
-## 决策
+引入 `OpenAICompatibleEmbeddingAdapter`（支持 DeepSeek/OpenAI/Ollama）对 Ambient Skill 与 Extension Catalog 做语义向量相似度检索（Tier-2），替代此前仅有的 Tier-1 关键词/Token 重叠匹配；Tier-1 保留作为降级路径。向量运算用 Rust SIMD `VecCosineF32`，经 purego 桥接（零 CGO，遵从决策一）。Extension Catalog 向量化经 `EmbeddingIndexer` 挂载 marketplace sync 周期异步执行，不阻塞。
 
-**分阶段迁移 `cedar_ffi.go` + `surreal_store.go` 到 purego，引入 ABI 版本协议。**
+## 决策三：llama_infer 控制面/计算面分离（原 ADR-0063）
 
-| Phase | 范围 | 落地代码 |
-|-------|------|---------|
-| 1 | ABI 版本协议（major 不匹配 → panic；minor 不匹配 → warn+continue） | `rust/substrate/src/lib.rs` `substrate_abi_version()` |
-| 2 | cedar_ffi.go 4 函数迁移（load_policies / evaluate / policy_count / free_string） | `internal/security/policy/cedar_ffi.go` |
-| 3 | surreal_store.go 21 函数迁移（KV/Vector/Graph/FTS/free + Scan/Graph 扩展） | `internal/store/surreal_store.go` |
-| 4 | Makefile 平台 dylib 拷贝 + 启动加载 | `Makefile` / `internal/ffi/dylib.go` |
-| 5 | 文档同步（dict §4 §6 / 07 / internal/substrate AGENTS.md / ffi-abi.md §7） | 见 CHANGELOG 2026-05-16 |
+不改"单槽位单模型推理串行"取舍（`STATE: Mutex` 仍序列化 `generate` 与 `load`/`unload`/`evict`）。仅拆出两条不需独占计算锁的能力：
 
-字节流生命周期约定：Go→C 用 **ptr+len**（`*uint8` + `uintptr`）传递 `[]byte`；空 slice 经 `bytePtrOrNil()` 返回 nil+0；C→Go 立即拷贝立即调 `*_free_*`。不使用 null-terminated 约定。
+1. **协作式取消**：`static ABORT_FLAG: AtomicBool`，`generate()` token 循环每步检查，命中即以 `finish_reason="abort"` 退出释放锁；`unload_model()` 取锁前先置位，避免无限期等待。
+2. **status 无锁只读镜像**：`static STATUS: RwLock<Option<StatusSnapshot>>`，缓存加载后不变字段，`status()` 只读镜像，与推理无锁竞争。写点仅在 `STATE` 锁保护下的加载成功/卸载两处，不会漂移。
 
-## 后果
+`evict_kv_cache()` 仍需独占锁（不能在生成中途清 KV，是正确性要求非缺陷）。不引入按 token 流式取消或多模型并行槽位——超出 Tier-1 单机单模型定位。
 
-- **正向**: ADR-0005 真正落地；零 CGO 交叉编译；与 ADR-0003 一致；ABI 版本协议防 drift
-- **负向**: 字符串/字节生命周期手动管理较 cgo 复杂；Windows DLL 加载路径需 GOOS 特化
-- **反例守护**:
-  - 未来如有人提议"为简化代码改回 cgo" → 本 ADR + ADR-0005 联合拒绝
-  - 新增 Rust 库需 Go 调用 → 直接 purego，不可新建 cgo 桥
-  - purego 缺特定能力（如 Go callback into Rust）→ 先扩展 purego 或重新设计 ABI，不绕回 cgo
+## 反例守护
 
-## 被驳回的方案
+拒绝为简化代码改回 CGO——违反零 CGO 交叉编译/单二进制分发目标，任何新增 Rust 互操作点一律走 purego。拒绝将 Tree-sitter CGO 例外扩大到在线请求路径。拒绝 Tier-2 路径硬依赖 Ollama——VPS 无 GPU 场景需保持 provider-agnostic。
 
-| 方案 | 驳回理由 |
-|------|---------|
-| 保持 cgo 现状 | 违反 ADR-0005；交叉编译困难持续；单二进制分发受阻 |
-| 一次性全量迁移（不分阶段） | cedar (4) 与 surreal (13) 复杂度差异大，风险叠加 |
-| 仅迁 cedar | 不一致性持续；surreal 是更大 FFI 暴露面 |
-| gRPC sidecar 隔离 | 增加进程依赖；违反 Tier-0；Cedar 在延迟敏感路径 |
-| Rust 重写为纯 Go | Cedar 形式化验证（Lean）不可复现；SurrealDB-Core 重写工作量巨大 |
+## 引用代码
 
-## 风险与缓解（保留为运行时关注项）
-
-| 风险 | 缓解 |
-|------|------|
-| ABI 静默 drift | `substrate_abi_version` 启动校验 + `ffi-abi.md` 文档 |
-| Use-after-free | "立即拷贝 + 立即归还"模式 |
-| Windows DLL 路径 | `bin/lib/libsubstrate.{so,dylib,dll}` GOOS 分发 |
-| macOS Gatekeeper | 开发自签；发布走 Apple Developer 流程 |
-| 性能回归 | Cedar < 1ms 预算充裕；purego 调用开销 < 100ns |
-
-## 受限例外：Tree-sitter CGO 依赖 (原 ADR-0034)
-
-**决策**：允许 `internal/knowledge/` 的代码切分（chunking）路径依赖 CGO (`go-tree-sitter`)，作为本 ADR 的受限例外。
-
-**理由**：
-1. **不在请求热路径**：chunking 只发生在离线/后台知识库索引期（RAG 语料预处理），不参与在线推理请求的响应延迟预算，不违反 Tier-0（2GB VPS）核心路径的实时性约束。
-2. **物理隔离，非硬依赖**：通过 Go build tag 双实现分流——`chunker_cgo.go` 提供精确切分，`chunker_nocgo.go` 提供等价的字符串匹配 fallback。`CGO_ENABLED=0` 交叉编译时自动降级，不产生编译错误。
-3. **失败安全**：`treeSitterChunk` 在 parse 失败时主动回退至 `fallbackChunk`，无 panic 风险。
-
-**反例守护**：本例外仅限 `internal/knowledge/` 的离线索引路径。若有提议在在线请求路径（如 `internal/agent/`、`internal/gateway/` 等）引入 CGO，不以本例外为先例，继续以本 ADR 予以拒绝。
-
-## 关联 ADR
-
-- [ADR-0005](./ADR-0005-purego-ffi-cedar.md): 设计决策，本 ADR 是实施计划
-- [ADR-0003](./ADR-0003-sqlite-modernc-primary-storage.md): 零 CGO 体系一致性论据
-- [ADR-0010](./ADR-0010-surrealdb-cognitive-storage.md): SurrealDB-Core 集成
-
-## 修订记录
-
-| 日期 | 变更 |
-|------|------|
-| 2026-05-16 | 初稿，Accepted；代码执行待 B 阶段批准 |
-| 2026-05-16 | Phase 1~5 全部执行完毕；ABI 1.1（Major=1, Minor=1）；`make build/test` 全套绿；副发现 ffi-abi.md §1.1 引擎清单与 lib.rs 不符（已 §7.5 标记） |
-| 2026-07-09 | 综合合并：将原 ADR-0034（Tree-sitter CGO 例外）作为受限例外说明并入本档案，并废弃原 ADR-0034 文件 |
+`internal/security/policy/cedar_ffi.go`、`internal/store/surreal_store.go`、`internal/knowledge/{chunker_cgo,chunker_nocgo}.go`、`rust/substrate/src/lib.rs`（`vec_cosine_f32`，ABI minor=2）、`internal/ffi/vec_ops.go`、`internal/llm/adapter/embedding.go`、`rust/substrate/src/llama_infer/mod.rs`

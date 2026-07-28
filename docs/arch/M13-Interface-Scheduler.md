@@ -583,7 +583,7 @@ dist/                         # Vite 输出（gitignore；make build-ui 生成�
 
 #### 8.3.4 Generative UI（提案）
 
-新增 SSE 事件字面量 `ui_component`，沿用本节无 registry 的字符串字面量模式；渲染工具（`render_chart`/`render_form`）经标准 `protocol.ToolRegistry.ExecuteTool` 注册（`SandboxTier=InProcess`），先写 `events` 表后广播；前端按组件白名单渲染，禁止 `x-html` 挂载原生 HTML。设计草案见 [ADR-0043](./decisions/ADR-0043-generative-ui-sse.md)（Proposed，未实现）。
+新增 SSE 事件字面量 `ui_component`，沿用本节无 registry 的字符串字面量模式；渲染工具（`render_chart`/`render_form`）经标准 `protocol.ToolRegistry.ExecuteTool` 注册（`SandboxTier=InProcess`），先写 `events` 表后广播；前端按组件白名单渲染，禁止 `x-html` 挂载原生 HTML。设计草案见 [ADR-0042](./decisions/ADR-0042-hitl-askhuman-consultation.md)（决策二，含原 ADR-0043，Proposed，未实现）。
 
 ---
 

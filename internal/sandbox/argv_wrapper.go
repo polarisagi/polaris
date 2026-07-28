@@ -8,7 +8,7 @@
 // internal/tool/sandbox.RustSandboxWrapArgv 提供（内部调用 Rust
 // native_sandbox_wrap_argv），经由 cmd/polaris 装配的适配器注入。
 //
-// 用途：PersistentSandbox（D4/ADR-0079）需要长驻解释器进程的 stdin/stdout
+// 用途：PersistentSandbox（D4/ADR-0008）需要长驻解释器进程的 stdin/stdout
 // 管道贯穿多次调用，CmdRunner"运行到完成才返回"的语义无法满足，因此需要
 // 这个独立接口。已有先例：internal/extension/mcp/mcp_client.go 的
 // buildSandboxedMCPCmd 用同一底层 Rust 能力为 MCP stdio 长进程做同样的事，

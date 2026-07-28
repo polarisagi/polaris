@@ -17,7 +17,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-// liveSession 是一个长驻解释器进程（D4/ADR-0079）。与一次性沙箱执行不同，
+// liveSession 是一个长驻解释器进程（D4/ADR-0008）。与一次性沙箱执行不同，
 // 这里的进程在多次 PersistentSandbox.Run 调用之间保持存活，语言运行时状态
 // （变量/导入/打开的文件句柄等）天然保留在进程内存中，不需要 pickle/env 序列化。
 //

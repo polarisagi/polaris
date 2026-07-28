@@ -60,7 +60,7 @@ const (
 	// 直接通过 Rust FFI 调用宿主 OS 隔离原语（Linux=bwrap, macOS=Seatbelt）。
 	// assign.go：SandboxContainer + hwTier==0 → 自动降级为此 tier。
 	SandboxNativeOS
-	// SandboxPersistent D4（原 GD-14-003，ADR-0078）：Tier2+ 可选持久化沙箱
+	// SandboxPersistent D4（原 GD-14-003，ADR-0008）：Tier2+ 可选持久化沙箱
 	// （Sandbox-L4-Persistent，命名沿用设计文档；数值上是本枚举第 6 个 tier，
 	// 与既有注释中散称的 "L4"（SandboxRemote/SandboxNativeOS 的口语化标签，
 	// 非严格序号）不是同一含义，避免混淆特此说明）。
@@ -71,7 +71,7 @@ const (
 	// 废弃，没有可复用实现）。本 tier 的路由分支、硬件门控、配置阈值均已接线
 	// 完整，但底层 internal/sandbox.PersistentSandbox.Available() 恒定返回
 	// false——即这是一条已铺好但当前不可达的路径，不冒充已具备真实
-	// checkpoint/restore 能力。详见 sandbox_persistent.go 与 ADR-0078。
+	// checkpoint/restore 能力。详见 sandbox_persistent.go 与 ADR-0008。
 	SandboxPersistent
 )
 

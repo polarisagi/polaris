@@ -7,7 +7,7 @@ package orchestrator
 // 2026-07-14：随中心化 Orchestrator/Worker 一并删除的生产用内存 Blackboard
 // （blackboard.go/blackboard_lifecycle.go）与本类型是两回事——那是曾经真实
 // 提供 protocol.Blackboard 生产实现、但已被 SQLiteBlackboard 完全取代的死代码
-// （HE-6 State-in-DB 反模式，零生产调用点，见 ADR-0050）；本类型是纯测试替身，
+// （HE-6 State-in-DB 反模式，零生产调用点，见 ADR-0062）；本类型是纯测试替身，
 // 从未也不应作为生产实现使用。
 
 import (

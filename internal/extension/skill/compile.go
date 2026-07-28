@@ -6,7 +6,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// 2026-07-14（ADR-0051）：ValidateJS 删除——Skill 生成/编译管线当前只有 Python
+// 2026-07-14（ADR-0062）：ValidateJS 删除——Skill 生成/编译管线当前只有 Python
 // runtime 真正被使用（generate.go 唯一调用 ValidatePython），全仓没有对应的
 // TypeScript/JS skill 生成路径消费本函数，是为未支持的 runtime 预写的孤立校验器。
 // 若未来真的支持 TS/JS skill runtime，应随该 runtime 的生成/编译管线一并设计，

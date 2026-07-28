@@ -10,7 +10,7 @@ import (
 // 本文件历史上实现过 protocol.SkillRegistry 的内存版本（RegistryImpl）。
 // 持久化版本见 sqlite_registry.go (SQLiteRegistryImpl)，是当前唯一生产实现
 // （boot_tools.go 构造 skill.NewSQLiteRegistry，内存版从未被生产代码调用）。
-// 2026-07-14（ADR-0051）：内存版 RegistryImpl/NewRegistry/Register/Get/List/
+// 2026-07-14（ADR-0062）：内存版 RegistryImpl/NewRegistry/Register/Get/List/
 // Deprecate/AuditLog/detectSkillCycle 删除——与本会话已删除的
 // internal/execute/orchestrator 内存版 Blackboard 同构的"两套实现，一套从未被
 // 采纳"模式：SQLiteRegistryImpl 独立实现了同名的 markReverseDependenciesCompatCheck

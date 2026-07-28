@@ -253,7 +253,7 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	}
 
 	// 构造沙箱运行规格
-	// D4/ADR-0079：StatefulSession 请求优先尝试 L4 长驻会话（真正的解释器进程
+	// D4/ADR-0008：StatefulSession 请求优先尝试 L4 长驻会话（真正的解释器进程
 	// 跨调用存活，而非 pickle/env 快照）。这个决策必须在构造 execCode 之前
 	// 就确定下来——L4 可用时发送原始代码（长驻进程自己保有状态，不需要样板
 	// 包装；反之样板包装反而会破坏协议：pickle 快照假设"每次调用都是全新

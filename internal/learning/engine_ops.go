@@ -91,7 +91,7 @@ func (e *Engine) detectL4Trigger(ctx context.Context, change Change) {
 // 注意：此处不再直接调用 versionStore.Activate。候选 Prompt 的真正激活推迟到
 // ShadowExecutor 完成影子回放并调用 SQLiteRolloutStore.ConfirmShadow 之后，由
 // ConfirmShadow 内部回调 promptActivator.Activate 触发（见 rollout_store.go）。
-// 旧实现在此处 Eval 一过就同步 Activate，Gate 2/3 形同虚设，见 ADR-0029 §K。
+// 旧实现在此处 Eval 一过就同步 Activate，Gate 2/3 形同虚设，见 ADR-0025 §K。
 func (e *Engine) handleEvalCompleted(ctx context.Context, ev types.EvalCompletedPayload) {
 	if ev.CandidateID == "" || ev.BlockDeploy {
 		return // 基线评测或安全否决，不提交

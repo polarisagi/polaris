@@ -33,7 +33,7 @@ func (a *policyEvolverOutcomeAdapter) RecordToolOutcome(toolName string, success
 // 桥接 marketplace.ExtensionInstaller（consumer-side 接口，Manager.WithInstaller
 // 注入点）→ *marketplace.MCPMarketplaceClient.Install（真实实现：校验和验证+下载+
 // 解压，见 marketplace.go:214，此前完整实现但 WithInstaller 从未被调用，
-// postInstallSteps 的下载分支永久跳过，见 ADR-0051）。ExtensionInstaller.Install
+// postInstallSteps 的下载分支永久跳过，见 ADR-0062）。ExtensionInstaller.Install
 // 接收 target any（Manager.postInstallSteps 直传 req.Target），实际运行时值恒为
 // *protocol.RegistryEntry（唯一构造点 native/extension_manager.go
 // findRegistryTarget），此处做一次类型断言完成签名适配。

@@ -28,7 +28,7 @@ const defaultTimeout = 30 * time.Second
 // ExecEnvelope 在工具调用前后触发本引擎——2026-07-02 起 Runner 自身的命令执行
 // 也改经 ExecEnvelope.Execute（Kind=KindHookExecute），不再直接调用 CmdRunner，
 // 使 Hook 执行获得与其他执行类型一致的沙箱分级/Capability Token/Taint 传播（见
-// envelope.go Step 1.5/PostToolUse 触发点，ADR-0015 修订记录 2026-07-02）。
+// envelope.go Step 1.5/PostToolUse 触发点，ADR-0016 修订记录 2026-07-02）。
 type Runner struct {
 	registry       *Registry
 	policy         protocol.PolicyGate    // nil → deny-by-default（事件级粗粒度检查）

@@ -29,7 +29,7 @@ func (a *Agent) InjectToolRefOffloader(off compact.Offloader) {
 }
 
 // hotPathCompactIfNeeded 是 M4 ContextWindowManager 热路径压缩的驱动入口
-// （M04-Agent-Kernel.md §7；ADR-0060）：在每次 LLMFillEffect 组装完 reqMsgs、
+// （M04-Agent-Kernel.md §7；ADR-0033）：在每次 LLMFillEffect 组装完 reqMsgs、
 // 发起真实推理前调用，更新 currentUsage 并按 >70%/>90% 阈值触发压缩。
 //
 // 2026-07-22 一致性审查修复背景：此前 ContextWindowManager 从未被构造、

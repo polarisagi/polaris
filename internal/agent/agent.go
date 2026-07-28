@@ -199,7 +199,7 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, provider protocol
 		streamSubs:        make(map[uint64]chan types.AgentStreamEvent),
 		pendingRedirectCh: make(chan string, 1),
 		done:              make(chan struct{}),
-		// anomalyFilter 2026-07-14 补齐（ADR-0051 关联接线）：读侧
+		// anomalyFilter 2026-07-14 补齐（ADR-0062 关联接线）：读侧
 		// internal/tool/tool.go checkAnomaly 此前已完整实现（从 ctx 取
 		// *guard.AnomalyDistanceFilter，检测越界后经 HITL 网关升级审批），但没有
 		// 任何调用方构造过该 filter 并写入 ctx，OWASP LLM08 输入异常检测在生产

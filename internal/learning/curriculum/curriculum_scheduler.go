@@ -170,7 +170,7 @@ func (b *BackgroundTaskScheduler) readSurprise() float64 {
 // audit 记录调度器安全相关事件（FoundingAnchor 冻结触发 / 红队探测失败等）。
 // auditLogger 非 nil 时写入审计链（可追溯、可审计取证）；nil 时按字段注释既定
 // 设计降级为 slog.Error（可观测但不可追溯）。
-// 2026-07-14（ADR-0051 关联接线）：auditLogger 此前虽已可注入，但从未被任何方法
+// 2026-07-14（ADR-0062 关联接线）：auditLogger 此前虽已可注入，但从未被任何方法
 // 实际读取过——本函数是该字段的首个消费方。
 func (b *BackgroundTaskScheduler) audit(ctx context.Context, action string, meta map[string]any) {
 	if b.auditLogger != nil {

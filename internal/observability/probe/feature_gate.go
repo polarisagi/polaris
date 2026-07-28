@@ -213,7 +213,7 @@ func (fg *FeatureGate) reassessAll() {
 		FeaturePRMTraining,
 		FeatureGraphRAGFull,
 		FeatureDeepRAG,
-		FeatureLogicCollapse, // depends on FeatureL3Sandbox（M06 §116，ADR-0026）
+		FeatureLogicCollapse, // depends on FeatureL3Sandbox（M06 §116，ADR-0008）
 		// Layer 2 — depends on local inference
 		FeatureLargeLocalLLM,   // depends on FeatureLocalInference
 		FeatureActivationSteer, // depends on FeatureLocalInference

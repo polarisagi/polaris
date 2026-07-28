@@ -3,7 +3,7 @@ package orchestrator
 // StateGraphExecutor 显式状态图编排引擎（编排模式10，GD-8-001）。
 //
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3-quinquies
-// 决策记录: docs/arch/decisions/ADR-0041-state-graph-orchestration.md
+// 决策记录: docs/arch/decisions/ADR-0046-execute-module.md（决策三，含原 ADR-0041）
 //
 // 设计动机：PatternDAGExecutor（编排模式9）已将执行控制流从"Blackboard 去中心化
 // 认领"收敛为"显式拓扑驱动"，但要求严格无环、静态依赖，无法表达 LangGraph 式
@@ -367,7 +367,7 @@ func (r *stateGraphRun) tryPostNode(ctx context.Context, node protocol.WorkflowN
 // evalEdgeCondition 声明式条件求值。nil = 无条件边，恒真。
 // HE-Rule-2：仅支持声明式字段比较 + 结构化 And/Or 复合（GD-14-002 复核扩展见
 // protocol.EdgeCondition 类型注释），禁止内嵌脚本/表达式引擎（避免"可验证执行"
-// 退化为"运行任意代码决定控制流"，ADR-0041 已就引入 CEL 的原始 finding 做出否决，
+// 退化为"运行任意代码决定控制流"，ADR-0046 已就引入 CEL 的原始 finding 做出否决，
 // 维持不变）。无法解析上游输出或字段缺失时 fail-closed（宁可漏触发下游边，也不在
 // 未验证的输出上误触发）。JSON 反序列化本身在 Execute 主循环中每条边仅执行一次，
 // 不存在重复解析开销问题。

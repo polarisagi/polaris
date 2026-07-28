@@ -37,7 +37,7 @@ func (m *mockScriptLoader) LoadScriptPath(skillID string) (string, error) {
 	return m.path, m.err
 }
 
-// 2026-07-14（ADR-0051）：内存版 RegistryImpl 专属测试
+// 2026-07-14（ADR-0062）：内存版 RegistryImpl 专属测试
 // （TestRegistryImpl_RegisterAndGet/_UpgradeMarksReverseDependencies/
 // _DeprecateAndList）随 RegistryImpl 一并删除——Register/Get/collision/
 // 升级反向依赖标记/List(IncludeDeprecated)/AuditLog 的等价覆盖已移植到
@@ -83,7 +83,7 @@ func TestScriptSkillExecutor_ExecuteSkill(t *testing.T) {
 	// SQLiteRegistryImpl.Get 只从 extension_instances.install_path 派生
 	// ScriptPath（marketplace 安装路径），Register 不落盘裸 meta.ScriptPath
 	// 字段（2026-07-14 由内存版 RegistryImpl 切换到 SQLiteRegistryImpl 后的真实
-	// 行为差异，ADR-0051）。本用例走文件系统兜底加载器（loader.LoadScriptPath）
+	// 行为差异，ADR-0062）。本用例走文件系统兜底加载器（loader.LoadScriptPath）
 	// 这条生产同样支持的路径来提供脚本路径。
 	runner := &mockScriptRunner{response: []byte("success")}
 	loader := &mockScriptLoader{path: "/path/to/script"}
@@ -151,7 +151,7 @@ func TestScriptSkillExecutor_ExecuteSkill_FailClosedWithoutPolicy(t *testing.T) 
 	_ = reg.Register(ctx, meta)
 
 	// SQLiteRegistryImpl.Get 只从 extension_instances.install_path 派生
-	// ScriptPath（Register 不落盘裸 meta.ScriptPath 字段，ADR-0051），本用例
+	// ScriptPath（Register 不落盘裸 meta.ScriptPath 字段，ADR-0062），本用例
 	// 直接写入 extension_instances 模拟 marketplace 安装路径，使 scriptPath
 	// 非空从而真正触达下方待测的 fail-closed 分支。
 	_, err := reg.db.ExecContext(ctx,

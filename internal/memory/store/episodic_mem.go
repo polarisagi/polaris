@@ -48,7 +48,7 @@ func NewEpisodicMem(store protocol.Store) *EpisodicMem {
 	}
 }
 
-// 2026-07-14（ADR-0051）：NewEpisodicMemWithGraph 删除——全仓零生产调用点。
+// 2026-07-14（ADR-0062）：NewEpisodicMemWithGraph 删除——全仓零生产调用点。
 // 唯一调用方 NewMemImplWithGraph 已同批删除（graph-without-cognitive 是幽灵
 // Tier 档位，见 memory.go）。生产唯一使用 NewEpisodicMem（Tier0）/
 // NewEpisodicMemWithCognitive（Tier1+，indexer+cognitive 同时注入）。

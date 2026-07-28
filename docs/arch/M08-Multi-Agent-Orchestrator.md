@@ -5,7 +5,7 @@
 > M8 描述的编排语义/不变量不变，仅物理归属调整；`internal/swarm` 现在是消费方而非实现方。
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:112 Supervisor / 2-bis:131 常驻角色Agent / 3:148 编排模式 / 3-bis:178(已删除,见ADR-0050) / 3-ter:189 PipelineOrchestrator / 4:283 AgentCard / 5:295 Task分解 / 8:333 拓扑自演化(已删除,见ADR-0050) / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:318 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out -->
+<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:112 Supervisor / 2-bis:131 常驻角色Agent / 3:148 编排模式 / 3-bis:178(已删除,见ADR-0062) / 3-ter:189 PipelineOrchestrator / 4:283 AgentCard / 5:295 Task分解 / 8:333 拓扑自演化(已删除,见ADR-0062) / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:318 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
@@ -16,7 +16,7 @@
 | Agent Card 注册与能力发现（AgentRegistry.Register/Get，供 SpawnDepth 校验） | Agent 自身的能力实现（各 Agent 自行声明） |
 | Task DAG（Directed Acyclic Graph，有向无环图） 分解（跨 Agent 边界的子任务） | 子任务内部的工具调用 DAG（那是 M4 Micro-DAG） |
 | 单进程内多 Agent 消息/任务流转（Blackboard CAS 认领 + Handoff） | Provider 路由（那是 M1） |
-| — | **A2A 跨机互操作（gRPC/HTTP）**：ADR-0070 状态 Proposed 未落码，且 `ROADMAP.md §3.4`「跨节点 Agent 永远不在计划」+ `ARCHITECTURE.md §1` 单进程主体硬约束明确禁止。M8 不承担跨机职责 |
+| — | **A2A 跨机互操作（gRPC/HTTP）**：ADR-0017 状态 Proposed 未落码，且 `ROADMAP.md §3.4`「跨节点 Agent 永远不在计划」+ `ARCHITECTURE.md §1` 单进程主体硬约束明确禁止。M8 不承担跨机职责 |
 
 ---
 
@@ -29,7 +29,7 @@
 | inv_M8_03 | Task 状态单调推进 Pending→Claimed→Executing→Done/Failed，禁止回退 | CAS Version++ 乐观锁 | ✅ 已实现 |
 | inv_M8_04 | Agent Lease TTL（Time To Live，存活时间） 60s + 心跳 15s ±5s jitter + Reaper 1s 扫描——Lease 过期任务自动回收 | M8 §1.7 Reaper | ✅ 已实现（注：Reaper toxicity 计数机制为代码扩展，文档未含） |
 | inv_M8_05 | Taint 经 Blackboard 传播——input_data 携带原始 TaintLevel，协调期间不降级 | M8 §4 blackboard_entries taint_level CHECK | ✅ 已实现 |
-| inv_M8_06 | 委托链深度 ≤3——跨 Agent 委托禁止超过 3 层 | M11 §8 Layer 4 多 Agent 宪法 | ✅ 已实现（`sqlite_blackboard.go` `PostTask`/`PostBatch` 校验；内存版 `blackboard.go` 已随 ADR-0050 删除，SQLiteBlackboard 是唯一生产实现） |
+| inv_M8_06 | 委托链深度 ≤3——跨 Agent 委托禁止超过 3 层 | M11 §8 Layer 4 多 Agent 宪法 | ✅ 已实现（`sqlite_blackboard.go` `PostTask`/`PostBatch` 校验；内存版 `blackboard.go` 已随 ADR-0062 删除，SQLiteBlackboard 是唯一生产实现） |
 
 ---
 
@@ -38,7 +38,7 @@
 ### 1.1 核心结构
 
 Blackboard/TaskEntry/TaskStatus/BlackboardEvent 类型及 CAS Claim/RenewLease/SideEffectPreCheck 实现见 `internal/execute/orchestrator/`。核心文件：`sqlite_blackboard*.go`（SQLiteBlackboard，唯一生产 Blackboard 实现，CAS+TOCTOU 幂等锁+PostTask）、`default_worker.go`/`workflow_step_worker.go`（自订阅 Blackboard + CAS 认领的任务消费者）、`pipeline.go`（PipelineOrchestrator）、`pattern_*.go`（各编排模式）、`reaper.go`（Reaper 泄漏回收）、`csv_fanout.go`（CSV 扇出）、`tree.go`（Supervisor Tree，因依赖在同包内但逻辑独立）。
-> 2026-07-14（ADR-0050）：中心化 `Orchestrator`（`orchestrator.go`，RegisterWorker/dispatchPendingTasks）、`Worker`（`worker.go`）与内存版 `Blackboard`（`blackboard.go`/`blackboard_lifecycle.go`）已删除——三者在生产环境从未被真正驱动（`orch.ListenLoop` 未注册为 Supervisor Worker、`RegisterWorker`/`NewWorker` 全仓库零调用、内存 Blackboard 违反 HE-6 State-in-DB），任务派发实际由 `default_worker.go`/`workflow_step_worker.go` 独立收敛出的"自订阅 Blackboard + CAS 认领"模式承接。
+> 2026-07-14（ADR-0062）：中心化 `Orchestrator`（`orchestrator.go`，RegisterWorker/dispatchPendingTasks）、`Worker`（`worker.go`）与内存版 `Blackboard`（`blackboard.go`/`blackboard_lifecycle.go`）已删除——三者在生产环境从未被真正驱动（`orch.ListenLoop` 未注册为 Supervisor Worker、`RegisterWorker`/`NewWorker` 全仓库零调用、内存 Blackboard 违反 HE-6 State-in-DB），任务派发实际由 `default_worker.go`/`workflow_step_worker.go` 独立收敛出的"自订阅 Blackboard + CAS 认领"模式承接。
 
 ### 1.2 初始化
 
@@ -113,7 +113,7 @@ TaskEntry 包含 Priority 字段，与 M13 ResourceGovernor 统一优先级体�
 
 **独立子包**：`internal/swarm/supervisor/`（`tree.go`），OTP 风格独立模块，**与 M8 Blackboard/Worker 解耦**，直接从 `cmd/polaris/main.go` 启动（`supervisor.NewSupervisor(5, 5*time.Minute)`）。
 
-Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory-agent 等，Supervisor, OneForOne)，各 Worker 直接挂载为 Root 的平级子节点（2026-07-14 起无中心化 Orchestrator 中间层，见 §1.1 ADR-0050 说明）。重启窗口策略权威源 `spec/state.yaml §m8_multiagent.agent_restart_max_in_window` / `agent_restart_window_seconds`。
+Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory-agent 等，Supervisor, OneForOne)，各 Worker 直接挂载为 Root 的平级子节点（2026-07-14 起无中心化 Orchestrator 中间层，见 §1.1 ADR-0062 说明）。重启窗口策略权威源 `spec/state.yaml §m8_multiagent.agent_restart_max_in_window` / `agent_restart_window_seconds`。
 退避指数从 `spec/state.yaml §m8_multiagent.supervisor_backoff_initial_ms` 倍增至 `supervisor_backoff_max_seconds` 封顶。
 
 | 策略 | 行为 | 适用 |
@@ -159,7 +159,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 | 8 | Pipeline | 专家流水线(含验证) | PipelineOrchestrator |
 | 9 | PatternDAG | 强类型 DAG(防环/补偿) | PatternDAGExecutor |
 | 10 | StateGraph | 条件路由+有界循环(GD-8-001) | StateGraphExecutor |
-| 11 | PatternDebate | 对抗性辩论(多角色互驳收敛，ADR-0080) | DebateExecutor（详见 §3-sexies） |
+| 11 | PatternDebate | 对抗性辩论(多角色互驳收敛，ADR-0046) | DebateExecutor（详见 §3-sexies） |
 
 **MapReduceExecutor**: 
 1. **Map**: Planner拆N个同构子任务, 不同 scope, PostTask
@@ -180,9 +180,9 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 
 ## 3-bis.（已删除）SwarmRouter + CapabilityRegistry
 
-`internal/swarm/topology/`（`swarm.go`/`swarm_router.go`/`evolver_service.go`）已于 2026-07-14 整包删除（ADR-0050）。`NewSwarmRouter`/`NewTopologyEvolverService`/`NewCapabilityRegistry` 全仓库零生产调用点（仅测试文件构造过），本节曾描述的"Agent 数 ≥10 自动升级 Mesh 拓扑"路由决策层从未在生产环境运行过一次。
+`internal/swarm/topology/`（`swarm.go`/`swarm_router.go`/`evolver_service.go`）已于 2026-07-14 整包删除（ADR-0062）。`NewSwarmRouter`/`NewTopologyEvolverService`/`NewCapabilityRegistry` 全仓库零生产调用点（仅测试文件构造过），本节曾描述的"Agent 数 ≥10 自动升级 Mesh 拓扑"路由决策层从未在生产环境运行过一次。
 
-真实生产的多 Agent 编排走 §3 十种模式（PatternDAG/StateGraph/MapReduce/Parallel/Sequential/Swarm 等，均已接入 `sysadmin` REST API）+ `internal/swarm/agents/` 三个硬编码常驻角色（§2-bis）；两者均是**结构显式声明**（DAG 边/StateGraph 转移表/固定角色），不存在"运行时按 Agent 数量动态切换拓扑"的真实需求——当前架构里没有"同一角色多实例竞争"的场景，`CapabilityRegistry` 解决的"多候选 Agent 择优路由"问题在生产中不存在。若未来出现真实的多实例同构 Agent 池场景，应基于已验证生产可用的"自订阅 Blackboard + CAS 认领"模式（`default_worker.go`/`workflow_step_worker.go`）扩展按能力过滤，而非复活本节描述的独立路由决策层。详见 ADR-0050《被驳回的方案》一节。
+真实生产的多 Agent 编排走 §3 十种模式（PatternDAG/StateGraph/MapReduce/Parallel/Sequential/Swarm 等，均已接入 `sysadmin` REST API）+ `internal/swarm/agents/` 三个硬编码常驻角色（§2-bis）；两者均是**结构显式声明**（DAG 边/StateGraph 转移表/固定角色），不存在"运行时按 Agent 数量动态切换拓扑"的真实需求——当前架构里没有"同一角色多实例竞争"的场景，`CapabilityRegistry` 解决的"多候选 Agent 择优路由"问题在生产中不存在。若未来出现真实的多实例同构 Agent 池场景，应基于已验证生产可用的"自订阅 Blackboard + CAS 认领"模式（`default_worker.go`/`workflow_step_worker.go`）扩展按能力过滤，而非复活本节描述的独立路由决策层。详见 ADR-0062《被驳回的方案》一节。
 
 ---
 
@@ -230,7 +230,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 ## 3-quater. PatternDAGExecutor（编排模式 9）
 
 > 实现: `internal/execute/orchestrator/pattern_dag.go`
-> 架构记录: `docs/arch/decisions/ADR-0037-pattern-dag-orchestration.md`
+> 架构记录: `docs/arch/decisions/ADR-0046-execute-module.md`（决策二，含原 ADR-0037）
 
 在跨 Agent 边界（Macro-DAG）的场景下，除了简单的串行与分片归并，常常需要复杂的有向无环图调度（如 A 输出给 B/C，B/C 完成后 D 归并）。
 
@@ -244,17 +244,17 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 ## 3-quinquies. StateGraphExecutor（编排模式10，GD-8-001）
 
 > 实现: `internal/execute/orchestrator/pattern_state_graph.go`（`StateGraphExecutor`）+ `pkg/graph/state_graph.go`（`ValidateStateGraphTopology`）
-> 决策记录: `docs/arch/decisions/ADR-0041-state-graph-orchestration.md`（取代未落地的 `ADR-0040-cyclic-graph-executor.md` 草案）
+> 决策记录: `docs/arch/decisions/ADR-0046-execute-module.md`（决策三，含原 ADR-0041，取代未落地的原 ADR-0040 草案）
 
 在 `PatternDAGExecutor`（编排模式9，严格无环）之上泛化支持 LangGraph 式"条件路由 + 有界循环"，与 `WorkflowGraphSpec` 共用协议类型（`PatternDAGExecutor` 忽略新增字段，向后兼容）：
 
 - **条件边**：`WorkflowEdgeSpec.Condition`（`EdgeCondition{Field,Op,Value}`，可选 `And`/`Or` 结构化复合）对上游节点输出 JSON 做声明式字段比较，决定该边是否触发。HE-Rule-2 约束：不支持脚本/表达式引擎求值。
   - 算子集合（GD-8-001 初版 `eq`/`ne` + GD-14-002 复核扩展 `gt`/`lt`/`ge`/`le`/`contains`/`exists`）：数值算子对两侧做 `float64` 解析比较，任一侧非数字 fail-closed；`contains` 做字符串子串匹配；`exists` 仅判定字段是否出现，忽略 `Value`。
-  - `And`/`Or`：`[]*EdgeCondition` 递归嵌套表达布尔组合，与顶层 `Field/Op/Value` 互斥（非空时优先生效，`And` 优先于 `Or`）。仍是预定义、可枚举、可静态分析的声明式结构，不引入变量绑定/函数调用/自由语法，不改变 HE-Rule-2 合规边界（GD-14-002 原始 finding 建议接入 CEL 表达式引擎，经复核确认与 ADR-0041 已落盘的否决理由直接冲突，故未采纳；改为在现有声明式模型上扩展算子集合与结构化复合，覆盖同等实际表达力缺口）。
+  - `And`/`Or`：`[]*EdgeCondition` 递归嵌套表达布尔组合，与顶层 `Field/Op/Value` 互斥（非空时优先生效，`And` 优先于 `Or`）。仍是预定义、可枚举、可静态分析的声明式结构，不引入变量绑定/函数调用/自由语法，不改变 HE-Rule-2 合规边界（GD-14-002 原始 finding 建议接入 CEL 表达式引擎，经复核确认与 ADR-0046 已落盘的否决理由直接冲突，故未采纳；改为在现有声明式模型上扩展算子集合与结构化复合，覆盖同等实际表达力缺口）。
 - **有界循环**：`WorkflowNodeSpec.MaxVisits` 声明节点允许被重复触发的次数上限；`WorkflowNodeSpec.IsEntry` 显式标记入口节点（参与循环反馈的节点入度恒 > 0，纯入度分析无法识别）。
 - **拓扑校验**：`ValidateStateGraphTopology` 允许环，但要求引用完整性 + 至少一个合法入口 + 全部节点 `effectiveMaxVisits` 之和不超过 `StateGraphMaxTotalVisitBudget`（=200，熔断常量）。
 - **终止性**：不依赖拓扑分析猜测是否可能死循环（概率性判断），而是运行时硬计数器（节点级 + 全局）物理保证终止，超预算触发直接丢弃（非错误——语义上是该分支循环/路由的自然终止）。
-- **不替代 Blackboard**：仍复用 `bb.PostTask`/`bb.Subscribe` 作为持久化任务队列/事件总线，CAS 认领、Lease/Reaper、`inv_M8_02` 双写等既有机制不变——ADR-0041 评估后判断"完全替换 Blackboard"代价远超"条件路由+有界循环"这一实际能力缺口，故不采用。
+- **不替代 Blackboard**：仍复用 `bb.PostTask`/`bb.Subscribe` 作为持久化任务队列/事件总线，CAS 认领、Lease/Reaper、`inv_M8_02` 双写等既有机制不变——ADR-0046 评估后判断"完全替换 Blackboard"代价远超"条件路由+有界循环"这一实际能力缺口，故不采用。
 - **已知限制**：与 `Compensation`（Saga 补偿）冲突（`MaxVisits>1` 且非 nil `Compensation` 校验阶段拒绝，补偿逆序语义未定义）；条件求值仅支持顶层字段比较（不支持嵌套路径/数组遍历）。
 
 ### 3-quinquies-a. 扇入 AND-Join（2026-07-12）
@@ -265,7 +265,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 
 ### 3-quinquies-b. Blackboard Intent 持久化缺陷修复（2026-07-12）
 
-`SQLiteBlackboard.PostTask`/`PostBatch` 此前的 INSERT 语句只写入 `task_id/session_id/status/priority/version/namespace`，从未持久化 `TaskEntry.Intent`——`tasks` 表（`007_tasks.sql`）此前无 `intent` 列，`task_posted` 事件也不携带 payload。这意味着任何真实 Worker 认领任务后都无法读回该任务的实际意图内容（如 `StateGraphExecutor.tryPostNode` 编码的 `state_graph_node_id`/`template`）——此前未暴露是因为全仓库范围内没有真实生产 Worker 消费本模块任一 `Pattern*Executor` 投递的任务（`orchestrator.NewWorker` 全仓库零调用，`Orchestrator.RegisterWorker` 同样从未被调用——`Orchestrator`/`Worker` 二者已于 2026-07-14 随 ADR-0050 删除）。
+`SQLiteBlackboard.PostTask`/`PostBatch` 此前的 INSERT 语句只写入 `task_id/session_id/status/priority/version/namespace`，从未持久化 `TaskEntry.Intent`——`tasks` 表（`007_tasks.sql`）此前无 `intent` 列，`task_posted` 事件也不携带 payload。这意味着任何真实 Worker 认领任务后都无法读回该任务的实际意图内容（如 `StateGraphExecutor.tryPostNode` 编码的 `state_graph_node_id`/`template`）——此前未暴露是因为全仓库范围内没有真实生产 Worker 消费本模块任一 `Pattern*Executor` 投递的任务（`orchestrator.NewWorker` 全仓库零调用，`Orchestrator.RegisterWorker` 同样从未被调用——`Orchestrator`/`Worker` 二者已于 2026-07-14 随 ADR-0062 删除）。
 
 修复：`tasks` 表新增 `intent BLOB` 列；`PostTask`/`PostBatch` 写入该字段；`types.TaskSnapshot` 新增 `Intent`/`Type` 两个字段，`PeekTask` 一并读回——`Type` 字段使自订阅式 Worker（见下）能在 `ClaimTask` 之前判断任务是否属于自己的能力类型，避免误认领。
 
@@ -274,7 +274,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 WebUI「工作流」自动化功能（`internal/gateway/server/sysadmin/workflowadmin`）此前是一个不经过 Blackboard 的朴素顺序 `for` 循环，无并行、无重试、无条件路由。现改造为 `StateGraphExecutor` 的第一个真实生产消费方：
 
 - **图构造**（`workflow_graph.go` `buildGraphSpec`）：`workflows.type='chain'`（默认）时完全忽略 `depends_on`，按 `seq` 合成顺序链，与旧实现行为逐字节等价；`type='dag'` 时如实按 `depends_on` 构造无条件依赖边，多依赖由上述 AND-Join 保证等待全部完成。`depends_on` 的 JSON 数组元素是 **0-based seq 索引的字符串**而非步骤 DB id——因为 `CreateWorkflowWithSteps`/`UpdateWorkflowWithSteps` 每次保存都对整张 `workflow_steps` 表先删后插、为全部步骤重新生成 id，id 在两次保存之间不稳定，seq 索引才是前端可持久引用的锚点。`max_retries>0` 的步骤额外附加自环条件边（`status=="error"` 时重试），`MaxVisits=1+max_retries`；与 `compensation_tool`（Saga 补偿）互斥，HTTP 层提前校验拒绝（`validateStepRetryCompensation`）。
-- **执行下沉**（`workflow_step_worker.go` `WorkflowAdmin.RunStepWorkerLoop`）：不依赖中心化推送机制，采用"自订阅 Blackboard + CAS 认领"模式（与 `default_worker.go` 同构，二者独立收敛出同一模式——已废弃的中心化 `Orchestrator`/`Worker`，见 §1.1 ADR-0050 说明）——订阅 `task_posted`，按 `PeekTask` 返回的 `Type` 过滤仅认领 `workflow_step` 能力类型的任务，实际执行复用既有 `runWorkflowStep`（AgentPool headless 推理）。业务失败（工具/LLM 报错）一律走 `CompleteTask` 写回 `{"status":"error",...}` 而非 `FailTask`——把重试判定完全交给声明式自环条件边；只有基础设施级故障（intent 解析失败、步骤配置缺失）才走 `FailTask` 触发 Fail-Fast 中止。
+- **执行下沉**（`workflow_step_worker.go` `WorkflowAdmin.RunStepWorkerLoop`）：不依赖中心化推送机制，采用"自订阅 Blackboard + CAS 认领"模式（与 `default_worker.go` 同构，二者独立收敛出同一模式——已废弃的中心化 `Orchestrator`/`Worker`，见 §1.1 ADR-0062 说明）——订阅 `task_posted`，按 `PeekTask` 返回的 `Type` 过滤仅认领 `workflow_step` 能力类型的任务，实际执行复用既有 `runWorkflowStep`（AgentPool headless 推理）。业务失败（工具/LLM 报错）一律走 `CompleteTask` 写回 `{"status":"error",...}` 而非 `FailTask`——把重试判定完全交给声明式自环条件边；只有基础设施级故障（intent 解析失败、步骤配置缺失）才走 `FailTask` 触发 Fail-Fast 中止。
 - **执行历史**：`workflow_runs.step_outputs`/`current_step` 由该 Worker 以原子 SQL（`json_insert` 追加 / `current_step+1` 自增）增量写入，兼容 DAG 并行下多步骤并发完成，避免"读-改-写"竞态丢失更新。
 - **生命周期**：`RunStepWorkerLoop` 在 `server.Start()` 以 `concurrent.SafeGo` 启动为长驻 goroutine，`Shutdown()` 时随专属 `context.CancelFunc` 一并停止。
 
@@ -284,7 +284,7 @@ WebUI「工作流」自动化功能（`internal/gateway/server/sysadmin/workflow
 
 AgentCard 声明 Agent 能力集（Skills/Tools/Models）、激活条件（TaskTypes/MaxLoad/RequiresTools）、信任级别与沙箱层级；AgentRegistry 以 RWMutex 保护 agentID→Handle 映射，支持本地 chan 与远程 A2A gRPC 两种 Handle 类型。
 
-> 2026-07-14（ADR-0050）：`FindBestAgent`（Phase1 能力硬过滤 + Phase2 Laplace 成功率/负载加权评分选主）与其依赖的实时负载查询（原"Orchestrator 在每次调度前查询数据库获取各 Agent 当前 claimed+running 任务数"）已随中心化 `Orchestrator` 一并删除——该评分逻辑仅服务于 `dispatchPendingTasks` 的"择优下推"，而 `dispatchPendingTasks` 本身从未在生产环境运行过。当前生产的任务分配是"自订阅 Blackboard + CAS 认领"（先到先得，见 §1.1），不做择优评分；`AgentRegistry` 仅保留 Register/Get/Deregister/MarkUnreachable，供 `SQLiteBlackboard.SetRegistry` 做 SpawnDepth 校验（心跳超时标记 unreachable 的调用方同样不存在，标记逻辑保留但当前无生产触发点）。
+> 2026-07-14（ADR-0062）：`FindBestAgent`（Phase1 能力硬过滤 + Phase2 Laplace 成功率/负载加权评分选主）与其依赖的实时负载查询（原"Orchestrator 在每次调度前查询数据库获取各 Agent 当前 claimed+running 任务数"）已随中心化 `Orchestrator` 一并删除——该评分逻辑仅服务于 `dispatchPendingTasks` 的"择优下推"，而 `dispatchPendingTasks` 本身从未在生产环境运行过。当前生产的任务分配是"自订阅 Blackboard + CAS 认领"（先到先得，见 §1.1），不做择优评分；`AgentRegistry` 仅保留 Register/Get/Deregister/MarkUnreachable，供 `SQLiteBlackboard.SetRegistry` 做 SpawnDepth 校验（心跳超时标记 unreachable 的调用方同样不存在，标记逻辑保留但当前无生产触发点）。
 
 **SQLiteBlackboard.StartExecution**：`ClaimTask`（claimed）之后，Agent 开始实际执行前调用此方法将状态推进到 running，广播 task_running 事件，提供更细粒度的任务状态追踪。幂等，重复调用 already-running 不报错。
 
@@ -304,7 +304,7 @@ Micro-DAG(M4): 子任务内部工具调用, M4 Agent Kernel 管理
 | `TaskDecomposer` | `decomposer.go` | 用 LLM 结构化输出把一个大目标拆成 Macro-DAG 子任务列表（每节点含 `id`/`name`/`description`/`tool_name`/`args`/`depends_on`）。生成的 `tool_name` 必须过 `ToolLookup` 白名单校验（消费方定义接口，由 `dispatch.Dispatcher` 满足，符合 R1.4）；模板约定的哨兵值 `agent:run` 表示"递归交子 Agent 处理"，不查注册表直接放行 |
 | `PlannerPool` | `pool.go` | 管理多条并发思考流，各流独立跑分解/规划，结果经 `whisperChan`（`protocol.MemoryWhisper` 耳语通道，M09 §异步耳语）异步回传主脑，而非同步返回 |
 
-> 命名注意：本包的池类型是 `PlannerPool`（规划流池）；与之同名易混的 `AgentPool` 在 `internal/agent/pool.go`，是 M04 的 per-session Agent 实例池（见 ADR-0029 §E），两者无关。
+> 命名注意：本包的池类型是 `PlannerPool`（规划流池）；与之同名易混的 `AgentPool` 在 `internal/agent/pool.go`，是 M04 的 per-session Agent 实例池（见 ADR-0025 §E），两者无关。
 
 Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential；ExecuteDAG 按拓扑分层并发（errgroup），任一层失败即终止并触发 Saga Rollback；Planner 5min 超时 → DAG Rollback，崩溃后由 Supervisor 通过 [EventLog] 恢复。**✅ 已实现（Saga rollbackSaga）**：`rollbackSaga` 从存根升级为真实补偿：`StateContext.SagaLog` 记录每步已执行节点，失败时逆序调用各节点注册的 `UndoFn`（无 UndoFn 的工具跳过并 WARN，最大努力补偿）。
 
@@ -312,7 +312,7 @@ Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential�
 
 ## 8.（已删除）编排拓扑自演化
 
-本节曾描述的 Shadow→A/B→Gradual→Commit 拓扑灰度演化状态机（`TopologyEvolverService`，`internal/swarm/topology/`）已于 2026-07-14 随 §3-bis 一并删除（ADR-0050）：`SetTopologyEvolverService`/`NewTopologyEvolverService` 全仓库零生产调用点，此前文档"✅ 已接入"的断言与代码不符——`Orchestrator.evolverSvc` 字段在生产环境永远为 nil（未曾被注入过），演化状态机、Pareto 双维评估、Shadow/A-B/Gradual/Commit 四阶段回滚逻辑均只在单元测试中运行过。若未来需要拓扑级 A/B 实验，应先确认存在真实的"多套可比拓扑同时候选"场景（当前架构无此场景，见 §3-bis 说明），而非复活本节描述的独立状态机。
+本节曾描述的 Shadow→A/B→Gradual→Commit 拓扑灰度演化状态机（`TopologyEvolverService`，`internal/swarm/topology/`）已于 2026-07-14 随 §3-bis 一并删除（ADR-0062）：`SetTopologyEvolverService`/`NewTopologyEvolverService` 全仓库零生产调用点，此前文档"✅ 已接入"的断言与代码不符——`Orchestrator.evolverSvc` 字段在生产环境永远为 nil（未曾被注入过），演化状态机、Pareto 双维评估、Shadow/A-B/Gradual/Commit 四阶段回滚逻辑均只在单元测试中运行过。若未来需要拓扑级 A/B 实验，应先确认存在真实的"多套可比拓扑同时候选"场景（当前架构无此场景，见 §3-bis 说明），而非复活本节描述的独立状态机。
 
 启用: 全 Tier 已支持 10 种编排模式，按职责分层存放：执行模式（`internal/execute/orchestrator/pattern_*.go`：Sequential/Parallel/MapReduce/Swarm/PatternDAG/StateGraph）、容错基础设施（`internal/swarm/supervisor/`：Supervisor OneForOne 重启树）、认知循环（`reflexion.go`：Reflection，深度耦合 M4 S_REFLECT/M9）。
 
@@ -328,7 +328,7 @@ Macro-DAG 节点为跨 Agent 子任务，边类型为 data/approval/sequential�
 | Planner DAG 生成超时 (>5min) | DAG Rollback + ErrPlanningTimeout | — |
 | 黑板 entries 丢失 (崩溃前未写 EventLog) | 从 EventLog 回放重建 | — |
 | ~~A2A 远程 Agent 不可达~~ | 不适用：无跨机 Agent（见 §0-bis） | — |
-| ~~拓扑自演化 A/B 退化~~ | 不适用：`TopologyEvolverService` 已于 2026-07-14 删除（ADR-0050，见 §8） | — |
+| ~~拓扑自演化 A/B 退化~~ | 不适用：`TopologyEvolverService` 已于 2026-07-14 删除（ADR-0062，见 §8） | — |
 
 与 OSMemoryGuard 协同: L2 紧急 → 限制 Agent 并发 ≤2 / L3 临界 → StopAll（所有 Executing→Suspended），恢复后从 [EventLog] 回放重建黑板。local_only 模式下若 M13 ResourceGovernor 检测到 LLM（Large Language Model，大语言模型） 卸载死锁（M13 §2.0），M8 接收强制 Rollback 指令：Priority >= 2 的非核心任务直接 Rollback，Priority=1 的前台辅助任务 Suspended + 写入 Cold Archive，释放内存供 LLM 重载。
 
@@ -377,7 +377,7 @@ inv_M8_02 确立 EventLog 为真相源（单机单 SQLite）。同进程内所�
 
 ---
 
-## 12. Custom Agent Profile（ADR-0015（Architecture Decision Record，架构决策记录） §2.4）
+## 12. Custom Agent Profile（ADR-0016（Architecture Decision Record，架构决策记录） §2.4）
 
 > End-User 通过 YAML 文件定义专用子 Agent，无需修改源码。
 > 映射到现有 AgentCard 注册到 Blackboard，不引入新执行路径。
@@ -415,7 +415,7 @@ mcp_servers: []
 
 ---
 
-## 13. CSV Batch Fan-out（ADR-0015 §2.5）
+## 13. CSV Batch Fan-out（ADR-0016 §2.5）
 
 > 编排模式 8：CSV 输入 → 每行一个 SubAgent Task → 并发 Blackboard 认领执行 → 结果聚合 CSV。
 > 适合大规模并行审计（PR 逐文件 review / 批量数据处理 / 多目标扫描）。
@@ -431,7 +431,7 @@ mcp_servers: []
 
 **状态持久化**（HE-Rule-6 State-in-DB（Database，数据库））:
 - 每行 Task 的状态变更经 `TaskEntry.Status` 写入 Blackboard → EventLog 双写（inv_M8_02）
-- 不引入独立 SQLite（禁止，[ADR-0015] §2.5）
+- 不引入独立 SQLite（禁止，[ADR-0016] §2.5）
 - `event_type=csv_job_row_*` 事件可供 Eval Harness 消费（HE-Rule-4）
 
 **配置参数**（CSVFanoutJob）:
@@ -450,6 +450,6 @@ mcp_servers: []
 
 ## §3-sexies PatternDebate 编排模式（编排模式 11）
 
-根据 GD-6 与 ADR-0080，系统引入了对抗性辩论（Debate）原语。
+根据 GD-6 与 ADR-0046，系统引入了对抗性辩论（Debate）原语。
 该模式执行流：Judge 初始议题 -> Proponent/Opponent 轮番辩论 -> Judge 结案陈词。
 不使用阻塞轮询（`bb.Subscribe`），而是由 `DebateExecutor` 将状态落盘至 Checkpoint 并返回 `apperr.ErrSuspend` 进行异步挂起，复用 GD-1 引入的 Handoff/Watcher 机制跨 Agent 唤醒。

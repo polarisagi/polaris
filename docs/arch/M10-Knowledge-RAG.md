@@ -161,7 +161,7 @@ ContextExpander 全 Tier 均启用（仅 DB 查询，无 LLM 开销），扩展�
 
 EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `internal/knowledge/graphrag/`（子包：`build.go`/`entity.go`/`cluster.go`/`community_summarizer.go`/`writer.go`）。GraphTraverser 在父包 `internal/knowledge/graphrag/graph_traverser.go`。
 
-**[ADR-0074/0077 与 M5 共享抽取]**：`GraphBuildPipeline` 同时作为 `SharedEntityExtractor` 被 M5 Consolidation 复用（Phase1/Phase2 抽取逻辑），消除 M5/M10 重复 LLM 燃烧与实体表述漂移。`GraphWriter`（`internal/knowledge/graphrag/writer.go`）在写入期对来自 M5 的实体标记 `source_type='graphrag_ingest'` 并按此键去重；检索期 Spreading Activation 联合 M5/M10 两侧种子实体（详见 M05-Memory-System.md §9）。
+**[ADR-0077/0077 与 M5 共享抽取]**：`GraphBuildPipeline` 同时作为 `SharedEntityExtractor` 被 M5 Consolidation 复用（Phase1/Phase2 抽取逻辑），消除 M5/M10 重复 LLM 燃烧与实体表述漂移。`GraphWriter`（`internal/knowledge/graphrag/writer.go`）在写入期对来自 M5 的实体标记 `source_type='graphrag_ingest'` 并按此键去重；检索期 Spreading Activation 联合 M5/M10 两侧种子实体（详见 M05-Memory-System.md §9）。
 
 触发: 文档摄入后, Ingester 通过 Outbox 写 graph_build_task。GraphBuildWorker 由 M2 全局 Outbox Worker 消费（注册于 handler 映射，见 §3.2），不独立开启内部轮询 goroutine。Phase 1-5 完整流程见代码。
 

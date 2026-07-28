@@ -146,7 +146,7 @@ type M7ToolThresholds struct {
 	SandboxQuotaMs               int    `toml:"sandbox.quota_ms"`                   // 30000
 	WorkspaceMaxAgeSeconds       int    `toml:"workspace.max_age_seconds"`          // 604800
 	ExtUninstallHookTimeoutS     int    `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
-	SandboxL4Enabled             bool   `toml:"sandbox.l4_enabled"`                 // false（D4/ADR-0079：Tier2+ 长驻会话沙箱，默认关闭，需运营者显式开启）
+	SandboxL4Enabled             bool   `toml:"sandbox.l4_enabled"`                 // false（D4/ADR-0008：Tier2+ 长驻会话沙箱，默认关闭，需运营者显式开启）
 	SandboxL4Backend             string `toml:"sandbox.l4_backend"`                 // "live_process_pool"（D4：诊断标签，实际后端固定为长驻进程池，非可插拔选项）
 	SandboxL4IdleTTLSeconds      int    `toml:"sandbox.l4_idle_ttl_seconds"`        // 600（D4：会话空闲超过此时长被后台回收）
 	SandboxL4MaxSessions         int    `toml:"sandbox.l4_max_sessions"`            // 8（D4：单进程内并发存活会话上限，超限淘汰最久未用）

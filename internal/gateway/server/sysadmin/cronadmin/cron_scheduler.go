@@ -48,7 +48,7 @@ func automationFromRow(row repo.AutomationRow) automation {
 // 裸 `go func(){}()`，任一 panic（ca.Chat/ca.Registry 等硬依赖为 nil、Provider
 // 流式推理异常等）会直接终止整个进程——不同于 HTTP 路径有 withMiddleware 的
 // PanicRecovery 兜底（server_lifecycle.go:190，单个 handler panic 只返回 500），
-// 后台调度 goroutine 完全未接入 ADR-0029 §H "SafeGo 全量迁移"（该 ADR 迁移
+// 后台调度 goroutine 完全未接入 ADR-0025 §H "SafeGo 全量迁移"（该 ADR 迁移
 // embedding_batcher/channel adapter 时 cronadmin 尚未从 sysadmin 拆分为独立子包，
 // 是覆盖遗漏而非有意延后）。现改用 pkg/concurrent.SafeGo 统一接入：一次 tick 或
 // 一次 automation 执行 panic 时只记录堆栈（slog.Error）+ 计数

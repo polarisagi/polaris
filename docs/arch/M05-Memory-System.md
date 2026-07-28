@@ -440,7 +440,7 @@ ActivationMaximization 查询时 O(1) 完成——任务 embedding 搜索最相�
 - **Stage 1 — 实体/关系提取**: 
   - **[ADR-0077]** 主路径优先调用 `SharedEntityExtractor`（即 M10 `graphrag.GraphBuildPipeline` 的 Phase1/Phase2，复用同一套 LLM 抽取逻辑），消除与 M10 的重复 LLM 燃烧与实体表述漂移；`SharedEntityExtractor` 不可用时降级为聚合 Session 内 Episodic 事件文本、独立调用 Provider LLM 提取命名的限定实体（`user_preference`, `constraint`, `temporary_conclusion`, `entity`）与特定关系（`depends_on`, `configures`, `conflicts_with`, `relates_to`, `derived_from`），结构化输出 JSON。`derived_from`（GD-14-001 新增）专用于标注"一个实体是另一实体的推论/派生结论"，区别于运行时/配置依赖的 `depends_on`，供下方级联失效识别真实派生血缘。
   - LLM 不可用时最终降级为正则模式匹配。
-  - **[ADR-0074/0077 写入期去重桥接]**：经 `SharedEntityExtractor` 抽取的实体写入时标记 `source_type='graphrag_ingest'`，与 M10 GraphRAG 管线共享去重键，避免同一实体在 M5/M10 两侧产生重复数据；检索期 Spreading Activation 以此标记联合两侧种子（见 M10 §2.7）。
+  - **[ADR-0077/0077 写入期去重桥接]**：经 `SharedEntityExtractor` 抽取的实体写入时标记 `source_type='graphrag_ingest'`，与 M10 GraphRAG 管线共享去重键，避免同一实体在 M5/M10 两侧产生重复数据；检索期 Spreading Activation 以此标记联合两侧种子（见 M10 §2.7）。
 - **Stage 2 — Upsert Semantic + Entity 生命周期 + 级联失效**: 
   - 批量调用 `SemanticMemory.UpsertFact / UpsertRelation`，经 `retrieval.ExclusiveWriter` 闭合旧事实。
   - 精确名称冲突 → `MarkEntitySuperseded(oldDBID)` 打标 `superseded` 后 INSERT 新版本。

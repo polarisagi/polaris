@@ -166,7 +166,7 @@ pkg/               通用工具（无业务逻辑，任意层可引用）
   types/           基础共享类型
   version/         版本信息
 
-rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥接层，见 ADR-0005/ADR-0011）
+rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥接层，见 ADR-0011）
 ```
 
 - 错误统一 `pkg/apperr`（`apperr.New/Wrap`；禁裸 `errors.New`/`fmt.Errorf` 泄漏调用链）
@@ -197,7 +197,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锁点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 已驳方案档案（ADR-0001~0081，0032 未分配；0027/0028/0034/0035/0036/0038/0040/0072/0078 已删除并入其他 ADR，见 decisions/README.md）；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，34 份规则化短文（决策+后果边界+反例守护，不含叙事；模块内多份"生产接线/新增模式"系列合入单一锚点文件，用"决策一/决策二/…"分节），编号 SSoT 见 `decisions/README.md` 索引表；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go↑01 / Rust↑02 / Agent↑03 / 跨模块↑04 / 审查↑06 / 提交前↑06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
@@ -205,45 +205,9 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 9. `internal/protocol/` → 跨模块共享类型与接口契约
 10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~035，共 32 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
-**docs/arch/decisions/ 文件清单**（ADR-0001~0081，0032 未分配，按需 grep 主题词；0027/0028/0034/0035/0036/0038/0040/0072/0078 已删除并入下述目标 ADR，见 decisions/README.md「已删除」表）：
-- 0001 观测单例 · 0002 Skill 注册合并 · 0003 SQLite modernc · 0004 Tier-0 硬件层 · 0005 purego FFI Cedar
-- 0030 Tier2 Semantic Embedding · 0031 TTS 三路提供商
-- 0006 state.yaml SSoT · 0007 污点五级 · 0008 沙箱三级回退 · 0009 KillSwitch 三阶段 · 0010 SurrealDB 认知存储
-- 0011 CGO→purego（含 Tree-sitter 受限例外，原 ADR-0034 已合并）· 0012 spec 一致性测试 · 0013 Lint 阶段1 · 0014 对抗审查 Action · 0015 Codex 特性集成
-- 0016 统一信任扩展模型 · 0017 MCP Streamable HTTP · 0018 MCP 污点解码器 · 0019 扩展实例统一安装表
-- 0020 DeepSeek V4 默认提供商 · 0021 核心机制实现（SurpriseIndex/ScriptTester/BM25/FSM）
-- 0022 ThinkingMode 三档路由 · 0023 episodic 写路径双轨制 · 0024 GovernanceAgent 代码安全三层防线
-- 0025 全局架构审查修复综合档案（R21 + 原 ADR-0027 Gemini 缺口 BUG-1~4 + 原 ADR-0028 Phase0 缺口 BUG-A~D，均已合并）· 0026 Logic Collapse Python+ContainerSandbox 运行时
-- 0029 Phase 1-2 系统加固（AgentPool / VFS 墓碑 / SQL Fitness / SafeGo 全量 / OS Fault 注入 / ShadowExecutor §K，原 ADR-0038 已合并）
-- 0033 记忆子系统范围限制与扩展（Won't Do + ZoneCoreMemory §决策二/原ADR-0036 + 时序检索§决策三/原ADR-0035，均已合并）
-- 0037 Pattern DAG 编排 · 0039 Gateway 控制权移交 FSM
-- 0041 StateGraphExecutor 显式状态图编排（取代未落地的原 ADR-0040 草案）· 0042 HITL AskUser 咨询闭环
-- 0043 Generative UI SSE 集成 · 0044 M7 模块边界拆分暂缓 · 0045 保留五级污点传播 · 0046 execute 模块化（单/多 Agent 执行引擎收敛）
-- 0047 taint_sanitizer 二级降级接入 S_VALIDATE（复用 ExemptionVault）· 0048 ContinuousSamplingMonitor 生产流量 1% LLM Judge 采样 · 0049 sCtx.SessionID 根因 Bug 修复
-- 0050 删除中心化 Orchestrator/Worker/内存 Blackboard 与 SwarmRouter/CapabilityRegistry/TopologyEvolverService（自订阅 CAS 认领胜出）
-- 0051 跨模块死代码清理与悬空接线收尾 Phase1-4 · 0052 2026-07-21 deadcode 审查（15 项新 DEFER）
-- 0053 ADR-0051 遗留 11 项 DEFER 复核（1 项 WIRE：MCPKnowledgeConnector；1 项理由订正：WithSemanticCacheHints）
-- 0054 DriftDetector 漂移响应编排器接线（DetectByTaskType/RecordAnchor/DriftDowngradeRegistry/DriftOrchestrator）+ EmbeddingVersionTracker 范围订正（需先扩展 CognitiveSearcher 接口，独立 DEFER）
-- 0055 `/steer` 激活引导命令面接线（list/import/set/deactivate/delete）；calibrate-layer 与成功率自动停用标注为独立未实现项
-- 0056 QLoRA/PRM 训练样本采集+批次触发（QLoRA←reflexion 纠偏轨迹，PRM←M12 §9 Judge 打分；TrainingSampleCollector 共用）
-- 0057 崩溃恢复回放驱动器（M04 §8：in-flight 标记 + TrajectoryRecorder 录像回放，仅 Perceive/Plan/Reflect 末态自动恢复，S_EXECUTE 等保守跳过）
-- 0058 SICCleaner LLM 检测器接线（AutoCurriculumGenerator 复用既有 llmProvider，与 llmJudgeSafe 不同维度信号不合并）
-- 0059 Outbox 幂等键唯一性修复（非 BuildIdempotencyKey 统一迁移；7 处退化键修复，含多轮对话 perceive/plan/exec/reflect 投影+consolidate+语义抽取从第二轮起静默丢失的根因修复）
-- 0060 M4 ContextWindowManager 热路径压缩接入 + M4/M5 共享压缩算法抽取（新建 internal/memory/compact，网关 Compressor 重构为委托调用；软触发只 Stage1 卸载不调 LLM，硬触发追加 Stage2/3）
-- 0061 2026-07-22 deadcode 复核（47 项；新发现 GoldmarkChunker 删除、TaintBoundarySerializer 接入 rag_chunks、ReportSurrealDBIndexSize FFI 接线）
-- 0062 deadcode 44 项 DEFER 最终结清（`make deadcode` 门控 + `scripts/deadcode-allowlist.txt` 白名单；删除为主，C2 FactualityGuard.AddToGate 复核确认删除正确/Verify 防线仍在，taint_sanitizer SanitizeByDeterministicTransform 复核恢复；Tier1 本地默认选型 Qwen3-Embedding-0.6B + Qwen3-Reranker-0.6B）
-- 0063 llama_infer 控制面/计算面分离（ABORT_FLAG 协作式取消 + status 无锁只读镜像 STATUS，解决推理期监控/取消阻塞 GD-11.1；不改单槽位串行推理取舍）
-- 0064 Channel 适配器注册表重构（A-1）+ 统一入站分发接线（A-2）· 0065 S_REPLAN 扩展激活重试与降级标记（A-3）
-- 0066 Gateway 直连 SQL 下沉 Repository（A-4）+ EgressGateway 收紧默认白名单（A-6）· 0067 Gateway God Class 拆分（ChatOrchestrator）
-- 0068 开放基准适配器架构（τ-bench/Terminal-Bench）· 0069 OpenLLMetry 轨迹导出器架构（F-2）
-- 0070 MCP Agent-to-Agent (A2A) 协同架构（F-3）· 0071 downloader 出站公网豁免 XR-06
-- 0073 KillSwitch 恢复路径统一（进程内活恢复模型 + `/_admin/unseal`，含原 ADR-0072）· 0074 Semantic(M5) 与 GraphRAG(M10) 最小整合桥接
-- 0075 Extension Upgrade Versioning（extension_catalog/instances 版本列 + `/plugins/{id}/upgrade`）
-- 0076 Task Checkpoint and Resumption（task_checkpoints 表 + StateGraphExecutor 断点续跑，补齐 ADR-0057 execute 阶段保守跳过局限）
-- 0077 Consolidation 与 GraphRAG 实体/关系抽取合一（推翻 ADR-0074 §3"不合并抽取实现"结论；写入期去重桥接/检索期联合种子不变）
-- 0079 Sandbox-L4-Persistent 改用长驻解释器进程池（推翻原 ADR-0078"诚实留空"结论，含原 ADR-0078；session-scoped Python/Bash 长驻进程，经 ArgvWrapper 复用 L3 同款 Rust 沙箱封装）
-- 0080 新增 Debate/Critic 编排模式（GD-6，DebateExecutor/DebateWorker）
-- 0081 架构文档结构治理（`make docs-refs` 失效路径引用门控 + 白名单；M07/M13 拆分与 M14 新建暂缓，含重新评估触发条件；ARCHITECTURE.md §8 启动与关停协议）
+**docs/arch/decisions/ 索引**：2026-07-28 两轮精简，73 份 → 60 份 → 34 份（第一轮合并同主题系列 11 份，第二轮按模块功能 + 跨文档引用关系合并 26 份）。权威索引表（编号+一句话标题+状态+日期）与「已删除」编号对照表统一维护在 [`decisions/README.md`](docs/arch/decisions/README.md)，本文件不重复维护副本——按主题词 grep `docs/arch/decisions/` 即可，避免双份索引漂移。
+
+合并主题速查（原编号 → 最终存活编号，转手合并已按最终归宿列出）：taint 修正案 0045/0047→0007 · purego/FFI 桥接 0005/0030/0034/0063→0011 · Sandbox 分级 0026/0078/0079→0008 · KillSwitch 恢复路径 0072/0073→0009 · 扩展/插件治理 0015/0019/0075→0016 · MCP 传输/协同 0018/0070→0017 · LLM Provider/推理路由 0022→0020 · 系统加固/审查批次 0027/0028/0029/0038→0025 · M05 记忆架构 0023/0035/0036/0060→0033 · Gateway 交互式提案 0043→0042 · internal/execute 模块+编排模式 0037/0040/0041/0080→0046 · M9 生产接线 0049/0054/0055/0056/0058→0048 · deadcode 治理 0050/0051/0052/0053/0061→0062 · Gateway 治理路线 0064/0067→0066 · 崩溃恢复/Checkpoint/幂等 0057/0059→0076 · M5↔M10 桥接 0074→0077 · 文档治理 0044→0081。详见 README「已删除」表。
 
 **internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，32 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```

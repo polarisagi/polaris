@@ -24,7 +24,7 @@ func NewMemorySystemFromMemImpl(mem *MemImpl) *MemorySystemImpl {
 	return &MemorySystemImpl{MemImpl: mem}
 }
 
-// 2026-07-14（ADR-0051）：NewMemorySystem/NewMemorySystemWithGraph 删除——全仓
+// 2026-07-14（ADR-0062）：NewMemorySystem/NewMemorySystemWithGraph 删除——全仓
 // 零调用点，boot_agent.go 唯一使用 NewMemorySystemFromMemImpl 包装已由
 // NewMemImplWithDB/NewMemImplFull 构造好的 *MemImpl；本函数是从未被采纳的平行
 // 构造路径（NewMemorySystemWithGraph 调用的 NewMemImplWithGraph 本身也是

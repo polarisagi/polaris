@@ -130,9 +130,9 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 **已废弃并移除**：项目初期曾设计 `determineComplexity`（基于工具数量 + 预估输出 token 给出 1-3 级复杂度评分）作为 L2 路由辅助。
 
-但在实际验证中发现，当前的单层 HealthScore 路由 + Role Pool（`general`/`default`/`reasoning`）+ ADR-0022（Architecture Decision Record，架构决策记录） ThinkingMode 三档设计已完全能覆盖“简单任务便宜模型、复杂任务深度思考”的核心诉求。为避免引入不必要的判断分支和复杂度，`determineComplexity` 及其相关代码已被彻底删除。
+但在实际验证中发现，当前的单层 HealthScore 路由 + Role Pool（`general`/`default`/`reasoning`）+ ADR-0020（Architecture Decision Record，架构决策记录） ThinkingMode 三档设计已完全能覆盖“简单任务便宜模型、复杂任务深度思考”的核心诉求。为避免引入不必要的判断分支和复杂度，`determineComplexity` 及其相关代码已被彻底删除。
 
-注意与 ADR-0022（ThinkingMode 三档路由，`internal/observability/metrics/metrics.go` 的 `SelectThinkingMode`）区分：后者选的是“思考强度”而非“Provider”，两者是并行机制，不能互相替代。
+注意与 ADR-0020（ThinkingMode 三档路由，`internal/observability/metrics/metrics.go` 的 `SelectThinkingMode`）区分：后者选的是“思考强度”而非“Provider”，两者是并行机制，不能互相替代。
 
 ### 4.5 Route 方法
 

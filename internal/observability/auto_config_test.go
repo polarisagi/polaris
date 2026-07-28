@@ -352,7 +352,7 @@ func TestTierParameters_AllTiers(t *testing.T) {
 	}
 }
 
-// 2026-07-14（ADR-0051）：TierParameters.Param 已删除（全仓零生产调用点，字段
+// 2026-07-14（ADR-0062）：TierParameters.Param 已删除（全仓零生产调用点，字段
 // 直接读取即可），TestTierParameters_ParamLookup 随之删除。
 
 func TestAutoConfig_FeatureMap_AllFeatures(t *testing.T) {

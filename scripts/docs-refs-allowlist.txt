@@ -15,7 +15,7 @@ internal/agent/dag/
 internal/swarm/orchestrator
 internal/swarm/orchestrator/
 
-# ── ADR-0050（2026-07-14）：SwarmRouter / CapabilityRegistry / TopologyEvolver 整包删除 ──
+# ── ADR-0062（2026-07-14）：SwarmRouter / CapabilityRegistry / TopologyEvolver 整包删除 ──
 # M08 §3-bis 与 §8 记载"本节曾描述的机制已随该包删除"，路径注定不存在。
 internal/swarm/topology/
 

@@ -79,7 +79,7 @@ func (c *PooledCredential) Available() bool {
 // CredFn 返回与 adapter 构造函数兼容的 func() []byte。
 // 每次调用累计 requestCount，adapter 侧 defer ClearBytes(local) 清零局部拷贝。
 //
-// 2026-07-14（ADR-0051 关联修复）：必须返回 c.key 的拷贝而非原始切片。此前直接
+// 2026-07-14（ADR-0062 关联修复）：必须返回 c.key 的拷贝而非原始切片。此前直接
 // `return c.key` 把池内长驻凭证的底层数组暴露给调用方，adapter 侧的
 // `defer llmparent.ClearBytes(apiKey)`（本为清理"局部拷贝"，本函数注释也如此
 // 承诺）实际清零的是同一块内存——第一次 Infer() 调用结束后，池中该凭证即被

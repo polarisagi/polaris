@@ -1,53 +1,50 @@
-# ADR-0048: ContinuousSamplingMonitor 写侧接入生产流量，1% 抽样 + LLM Judge 打分
+# ADR-0048: M9 自进化引擎生产接线合集（含原 ADR-0049/0054/0055/0056/0058）
 
-- **状态**: Accepted（已执行）
-- **日期**: 2026-07-14
-- **决策者**: MrLaoLiAI（明确确认按文档全量实现，而非用启发式替代或延后）
-- **相关模块**: M12 §9（连续采样监控）/ `internal/eval/analysis` / `internal/gateway/server/chat`
+- **状态**: Accepted（已执行）| **日期**: 2026-07-14~07-22（合并 2026-07-28）| **模块**: M09/M12 §9
 
-## 上下文
+## 决策一：ContinuousSamplingMonitor 写侧接入（原决策）
 
-M12-Eval-Harness.md §9 设计的连续采样监控（滑动窗口 100 条 + 10min 定时检测 + 退化归因）读侧（`GetL3Threshold`/`Start`/`CheckDegradation`/`InjectL3ThresholdProvider`）已完整实现，但写侧 `RecordSample` 全仓零生产调用点（仅测试调用），`samplingRate=0.01` 是从未被引用的死常量——窗口永远为空，退化检测形同虚设，文档"✅ 已实现"的断言此前具有误导性（见 M12-Eval-Harness.md §9 订正、docs/arch/M12-Eval-Harness.md L165）。
+M12 §9 连续采样监控读侧完整、写侧 `RecordSample` 此前全仓零生产调用点。新增 `MaybeSampleAndScore`，接入全部 4 条生产 assistant 回复路径（交互式 SSE / webhook / cron / workflow，共享 `ChatHandler.SampleAndScoreReply`），按 1% 概率异步（独立 goroutine + `context.Background()`）触发 LLM Judge 打分，输出连续 `[0,1]` 分数（非结构化 pass/fail）。判分 Provider 复用 `PickProvider("default")→("general")` 兜底链。`onDegradation` 回调保持 nil——M9 autoRollback 依赖的真实免疫网关（`boot_immune.go`）仍是占位，不强行接伪回调制造假闭环。
 
-要按文档设计真正补全写侧，唯一可行路径是给生产回复流量接入抽样 + LLM Judge 打分（文档 §9 原文即"共享 LLM Judge 引擎"）。这与此前"把现有死代码接起来"的任务性质不同——它会产生持续的真实 LLM 调用开销、增加异步延迟、且把用户对话内容发给额外的评判模型（隐私面）。因此在动工前明确征询用户意见，在"按文档全量实现 / 仅接入主交互路径 / 用免费启发式替代 LLM Judge / 暂不接入"四个选项中，用户选择了**按文档全量实现**。
+**已征询用户**：在"全量实现/仅主路径/启发式替代/暂不接入"四选项中选择全量实现，接受持续 LLM 调用成本与用户对话内容流向评判模型的隐私面。
 
-## 决策
+## 决策二：SessionID 根因修复（原 ADR-0049）
 
-**新增 `ContinuousSamplingMonitor.MaybeSampleAndScore`，接入全部 4 条生产 assistant 回复路径，按 1% 概率异步触发 LLM Judge 打分。**
+`NewAgent` 构造 `fsm.StateContext` 时 `SessionID` 从未赋值（恒空字符串），导致 `events:session:{id}:` 前缀查询、founding_anchor 漂移检测、记忆巩固触发、PII 快照等多处消费方静默降级/跳过。修复：`StateContext{SessionID: id}`，与 `AgentID` 同源。这是 founding_anchor 生产接线的前置条件——读侧逻辑再完整也建立在空数据上。
 
-依据：
+## 决策三：DriftDetector 漂移响应编排器接线（原 ADR-0054）
 
-1. 抽样门控在调用方文件层面完成（`samplingRate` 常量首次被引用），命中前零开销直接返回，未命中不产生任何 I/O；命中后在独立 `concurrent.SafeGo` goroutine 中执行，使用 `context.Background()` 而非调用方请求 ctx——HTTP 请求可能在打分完成前已经结束，不应因为打分阻塞或依赖请求生命周期。
-2. 判分 Prompt 与既有 `RunnerImpl` Level4LLMJudge / `ShadowExecutor.scoreShadow` 同一 `safecall.Infer` 调用模式，但输出连续 `[0,1]` 分数而非结构化布尔 pass/fail——服务于"退化趋势"场景而非"是否达标"场景，因此不复用 `judge_schema.go` 的结构化 schema，走独立的极简数字解析（`extractLeadingFloat` 容错模型输出的多余文字/越界负数）。
-3. 判分用 Provider 复用 `ChatHandler.Registry.PickProvider("default")` → `("general")` 兜底链，与 `system_prompt.go` 组装系统提示词的取用方式完全一致，不为打分单独引入新的 Provider 解析路径或新的配置项。
-4. 覆盖全部 4 条生产 assistant 回复落点（交互式 SSE 主路径 `sse.go` / 频道 webhook `webhook_receive.go` / cron 定时任务 `cron_runner.go` / workflow 步骤 `workflow_engine.go`），而非只接主路径——四条路径共享同一 `ChatHandler.SampleAndScoreReply` 方法，逐一接线成本低，且退化检测样本若只覆盖交互式流量会漏检自动化任务侧的模型质量劣化。
-5. `onDegradation` 回调保持 `nil`：M9 autoRollback 触发链依赖 `dummyImmuneGateway` 之外的真实免疫网关实现（`cmd/polaris/boot_immune.go` 当前是"Empty implementation per requirements"占位），是独立待设计项，本次不强行接伪回调造成"看起来已闭环"的假象。
+补齐漂移检测编排链：`Search() 采样 anchor → DetectByTaskType() 按 task_type 评分 → DriftDowngradeRegistry 同步降级状态 → Search() 读降级状态零权重 VectorWeight → 触发 OnlineReindexer 批次`。新增 `DetectByTaskType`（按 task_type 分组评分，<5 样本组跳过）、`DriftDowngradeRegistry`、`DriftOrchestrator`（周期 168h，覆盖式重新评分，不臆测"重嵌已完成"）。
 
-## 后果
+**分层修正**：`internal/memory`（L1）不得直接 import `internal/learning/surprise`（L2）——改为消费方接口模式（`DriftAnchorRecorder`/`DriftGate`），`cmd/polaris` 组合根注入具体实例。
 
-- **正向**: `ContinuousSamplingMonitor` 从"读侧完整、写侧空转"变为真正闭环运行；四条生产路径的模型回复质量被统一纳入退化检测窗口。
-- **负向**: 新增持续 LLM 调用成本（约 1% 生产回复流量）与对应延迟（异步，不阻塞主响应路径，但占用后台并发/Provider 配额）；用户对话内容会被发送给额外的评判模型调用，构成新增的数据流出面，需与现有隐私/数据处理策略保持一致。
-- **反例守护**: 未来如有人提议"退化检测样本不够密集，把抽样率从 1% 调高"，需重新评估 LLM 调用成本与本 ADR 记录的隐私面，而非直接改常量；如有人提议"用规则替代 LLM Judge 省成本"，需注意这会偏离 M12 §9"共享 LLM Judge 引擎"的既定设计语义，退化检测精度会下降，应视为新的独立决策而非本 ADR 的自然延伸。
+**范围订正**：`EmbeddingVersionTracker.Update`（跨 embedding 版本混合检索分数归一化）不在本次范围——依赖的版本标签在 `protocol.CognitiveSearcher` 接口中不存在，属独立架构变更（后于 [ADR-0062](./ADR-0062-deadcode-final-settlement.md) 接受删除，待未来立项重建）。
 
-## 被驳回的方案
+## 决策四：`/steer` 激活引导命令面接线（原 ADR-0055）
 
-| 方案 | 驳回理由 |
-|------|---------|
-| 仅接入主交互路径（sse.go），跳过 webhook/cron/workflow 三条次要路径 | 用户明确选择"按文档全量实现"；且退化检测若遗漏自动化任务流量，会对该类场景的模型质量劣化完全失明 |
-| 用免费启发式（响应非空/无错误标记等）替代 LLM Judge 打分 | 偏离 M12 §9"共享 LLM Judge 引擎"的既定设计语义，退化检测精度显著下降；用户在四个选项中明确未选择此项 |
-| 暂不接入，记录为待设计项（对齐 `dummyImmuneGateway` 的处理方式） | 用户明确选择立即按文档全量实现，而非推迟 |
+`SteeringAdapter.SteerActivations`/`ClearSteering` 适配器骨架已完整，接入现成的 `SlashCommandRouter.Dispatch`（与 `/context`/`/compact` 同一模式），实现 `/steer list|import <label> <file>|set <label> <weight>|deactivate|delete`。新增 `ControlVectorStore`（进程内存 label→向量注册表）。默认注入层 `layer=15`（采用 M09 §1.3 文档已定义值，非臆测）。
+
+**不在本次范围**（诚实标注，非臆测实现）：`calibrate-layer <task_type>` 需要按 layer 分组的评估轮次机制（Eval Harness 无此 case 类型）；"成功率<0.1 自动停用"需要结果归因信号（不存在）；`ControlVectorStore` 无持久化，重启需重新 import。
+
+## 决策五：QLoRA/PRM 训练样本采集流水线（原 ADR-0056）
+
+拒绝凭空发明训练样本/reward 语义，只复用仓库中已真实存在的信号：
+
+- **QLoRA 样本源**：`ReflexionEngine.replaySuccess`——"经 replan 才成功"的纠偏轨迹（`result.Success && replanCount>0`），Prompt=成功前轨迹上下文，Completion=最终成功步骤结果。
+- **PRM 样本源**：M12 §9 生产流量采样 LLM Judge 打分（决策一），`[0,1]` 连续分数直接作为 Reward 标签。
+
+共用 `TrainingSampleCollector`（L0 `internal/llm/adapter`，线程安全累积，达 `batchSize` 时经 `SafeGo` 异步调 `Train`，失败只记日志不重试不回填）。批次大小默认值 **64**（LoRA/PRM 小批次微调常见量级，两条数据源均低频，非精确调优结果，供后续校准）。
+
+## 决策六：SICCleaner LLM 检测器接线（原 ADR-0058）
+
+`AutoCurriculumGenerator.passSafetyAudit` 此前固定用 `guard.NewSICCleaner()`（内置正则），未升级到 M11 §2.2 设计的 LLM 感知检测器。改为方法 `sicCleaner()` 现场判断（非构造时固定绑定，因 `llmProvider` 由 boot 阶段异步注入）：`llmProvider` 就绪则 `NewSICCleanerWithDetector(sicDetectFn)`，否则回退 Tier0 正则。
+
+`sicDetectFn`（判断"是否试图覆盖/提取系统指令"，prompt injection）与既有 `llmJudgeSafe`（判断"任务描述本身是否有害"）关注点不同，保留两次独立 LLM 调用，不合并——合并会让单一职责契约模糊。失败 fail-closed，与 `llmJudgeSafe` 一致。
+
+## 反例守护
+
+调高抽样率前须重新评估 LLM 成本与隐私面。排查"founding_anchor 查不到数据"类问题时先确认 `SessionID` 非空，而非默认假设读侧有 Bug。拒绝 `sicDetectFn` 与 `llmJudgeSafe` 合并为一次 LLM 调用。
 
 ## 引用代码
 
-- `internal/eval/analysis/sampling_scorer.go`（`MaybeSampleAndScore`/`judgeReplyQuality`/`extractLeadingFloat`）
-- `internal/gateway/server/chat/sessions_helpers.go`（`ChatHandler.SampleAndScoreReply`）
-- `internal/gateway/server/chat/sse.go`、`internal/gateway/server/sysadmin/channelsadmin/webhook_receive.go`、`internal/gateway/server/sysadmin/cronadmin/cron_runner.go`、`internal/gateway/server/sysadmin/workflowadmin/workflow_engine.go`（4 条接入点）
-- `internal/gateway/server/server_setters_sampling.go`（`Server.SetSamplingMonitor`）
-- `cmd/polaris/boot_agent.go`（`AgentBundle.SamplingMonitor` 构造）、`cmd/polaris/boot_server.go`（注入）
-- `docs/arch/M12-Eval-Harness.md §9`（设计文档，已同步订正"已实现"断言并补充本次接入点说明）
-
-## 修订记录
-
-| 日期 | 变更 |
-|------|------|
-| 2026-07-14 | 初稿，记录写侧生产接入决策与用户确认的成本/隐私权衡 |
+`internal/eval/analysis/sampling_scorer.go`、`internal/agent/agent.go`（`NewAgent`）、`cmd/polaris/boot_events.go`、`internal/learning/surprise/{drift_detector,drift_downgrade_registry,drift_orchestrator}.go`、`internal/memory/retrieval/retriever.go`、`internal/llm/adapter/{control_vector_store,training_sample_collector}.go`、`internal/gateway/server/chat/slash_command_steer.go`、`internal/learning/reflexion/reflexion.go`、`internal/learning/curriculum/{curriculum,curriculum_scheduler}.go`

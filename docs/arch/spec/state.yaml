@@ -957,8 +957,8 @@ thresholds:
     dryrun_protect_window_seconds: 60
     max_code_size_bytes: 16384
     ext_uninstall_hook_timeout_seconds: 180 # toml:"ext_uninstall.hook_timeout_seconds"（D2：卸载 Hook 沙箱执行超时兜底）
-    # sbx_l4_persistent_* — D4/ADR-0079：Tier2+ 可选持久化沙箱，session-scoped
-    # 长驻解释器进程池（推翻 ADR-0078"诚实留空"结论，后端真实可用）。
+    # sbx_l4_persistent_* — D4/ADR-0008：Tier2+ 可选持久化沙箱，session-scoped
+    # 长驻解释器进程池（推翻 ADR-0008"诚实留空"结论，后端真实可用）。
     # 默认关闭，不影响 Tier-0/Tier-1 任何现有行为。
     sbx_l4_persistent_enabled: false
     sbx_l4_persistent_backend: live_process_pool

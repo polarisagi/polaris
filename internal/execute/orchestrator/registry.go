@@ -9,7 +9,7 @@ import (
 
 // AgentRegistry 负责 Agent 的注册与能力发现。
 // 2026-07-14：FindBestAgent（负载加权评分选主）随中心化 Orchestrator 一并删除
-// （生产环境 RegisterWorker 从未调用，评分逻辑零消费者，见 ADR-0050）。
+// （生产环境 RegisterWorker 从未调用，评分逻辑零消费者，见 ADR-0062）。
 // AgentRegistry 本体保留：SQLiteBlackboard.SetRegistry 用它做 SpawnDepth 校验
 // （真实生产依赖），agent-0 也在启动时注册进来。
 type AgentRegistry struct {

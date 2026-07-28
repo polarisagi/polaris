@@ -327,7 +327,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 		{
 			reqMsgs := llmEff.PromptFn(a.toProtocolCtx())
 			reqMsgs = a.injectMemoryToMsgs(ctx, reqMsgs)
-			// M04 §7 热路径上下文窗口压缩（ADR-0060）：单次 LLM 调用的 reqMsgs
+			// M04 §7 热路径上下文窗口压缩（ADR-0033）：单次 LLM 调用的 reqMsgs
 			// 实际大小检测，与上面第 1 步的任务级累计预算检测是互补的两个维度
 			// （见 agent_context_compaction.go 顶部注释），必须在 PII tokenize
 			// 之前压缩——压缩后消息更少，tokenize 扫描量也相应减少。

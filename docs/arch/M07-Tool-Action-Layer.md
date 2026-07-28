@@ -38,7 +38,7 @@ MCP Client 消费端: `ConnectExternalMCP(serverCmd)` → CommandTransport/Strea
 
 **Streamable HTTP（HyperText Transfer Protocol，超文本传输协议）** 为默认远程传输层；SSE（Server-Sent Events，服务器发送事件） 仅向后兼容（legacy）。决策见 [ADR-0017（Architecture Decision Record，架构决策记录）](./decisions/ADR-0017-mcp-streamable-http-default.md)。
 
-**MCP Transport 污点保护反序列化**：MCP Client 路径强制使用 TaintPreservingDecoder（`internal/extension/mcp/taint_decoder.go`），禁用标准 JSON 直解动态 schema——所有 string 叶子包装为 TaintedString（Source=MCP, Origin=server_name），初始 `[TaintLevel]` 按 M11 §2.4 `[Connector-Taint-Table]` 判定。决策与被驳回方案见 [ADR-0018](./decisions/ADR-0018-mcp-taint-preserving-decoder.md)。
+**MCP Transport 污点保护反序列化**：MCP Client 路径强制使用 TaintPreservingDecoder（`internal/extension/mcp/taint_decoder.go`），禁用标准 JSON 直解动态 schema——所有 string 叶子包装为 TaintedString（Source=MCP, Origin=server_name），初始 `[TaintLevel]` 按 M11 §2.4 `[Connector-Taint-Table]` 判定。决策与被驳回方案见 [ADR-0017](./decisions/ADR-0017-mcp-streamable-http-default.md)（决策二，含原 ADR-0018）。
 
 **MCPManager.CallTool 直接路径安全**：`MCPManager.CallTool` 提供面向外部调用方的直接路由接口。该入口在调用 MCP Client 前强制执行 `PolicyGate.IsAuthorized`（deny-by-default），信任等级根据服务器是否在白名单（Trusted）动态设置。与 `InMemoryToolRegistry.ExecuteTool` 保持一致的安全语义，两条路径均不绕过策略层。
 
@@ -306,7 +306,7 @@ depth=0 Token"的模式），应重新设计而非恢复本节描述的旧实现
 `task.SpawnDepth`，超过 `MaxSpawnDepth=3` 直接返回 `ErrSpawnDepthExceeded`
 （纯任务派生深度计数器，不涉及 Capability 交集/沙箱单调等 Token 语义）。
 2026-07-14：内存版 `Blackboard`（曾与 SQLiteBlackboard 并存的实现）已删除，
-SQLiteBlackboard 是唯一生产实现，见 ADR-0050。
+SQLiteBlackboard 是唯一生产实现，见 ADR-0062。
 
 运行时策略重检: Host Function I/O前比对Cedar policy etag与Wasm实例化时policy_etag_at_start。etag变更→重调[Cedar-Gate] Review→FORBID返回ErrPolicyRevoked。etag比对O(1)，仅变更时触发完整评估。
 
@@ -353,13 +353,13 @@ L3PolicyMonitor goroutine (每个 L3 sandbox 一个):
 
 **已知限制**（非本轮范围，供未来评估）：远端执行器侧的沙箱强度由第三方保证，Polaris 侧无法验证其物理隔离边界（HE-Rule-2 "可验证执行"在此退化为对第三方的信任假设，而非物理/密码学可验证）；成本计量与配额尚未接入 `internal/observability/budget`。
 
-### 4.7 Sandbox-L4-Persistent（D4/ADR-0079，可选，Tier2+）
+### 4.7 Sandbox-L4-Persistent（D4/ADR-0008，可选，Tier2+）
 
-**定位**：`types.SandboxPersistent` 是**真实可用**的长程有状态 CodeAct 会话后端——session-scoped 长驻解释器进程池，不是 CRIU/Firecracker 式 checkpoint/restore（ADR-0078 曾把 D4 判定为不可行、诚实占位，ADR-0079 推翻了这一结论，见下）。Tier-0/Tier-1 环境不受影响、默认关闭（`sandbox.l4_enabled=false`）。
+**定位**：`types.SandboxPersistent` 是**真实可用**的长程有状态 CodeAct 会话后端——session-scoped 长驻解释器进程池，不是 CRIU/Firecracker 式 checkpoint/restore（原 ADR-0078 曾把 D4 判定为不可行、诚实占位，ADR-0008 决策三/原 ADR-0079 推翻了这一结论，见下）。Tier-0/Tier-1 环境不受影响、默认关闭（`sandbox.l4_enabled=false`）。
 
 **动机**：长程有状态 CodeAct 会话（`internal/action/codeact/code_act_stateful.go` 的 `StatefulSession`）历史上的"持久化"是每次调用仍起全新一次性沙箱进程，脚本首尾注入样板代码把 Python `globals()` 通过标准库 `pickle` 序列化到磁盘文件（Bash 则用 `declare -p` 导出到 `.env` 文件）下次再反序列化回来，文件句柄、线程、数据库连接等不可序列化对象被静默跳过。原始设计（GD-14-003）设想用 CRIU/Firecracker checkpoint/restore 解决——但那只是达成"状态不因重启进程而丢失"这个目标的一种手段。**让解释器进程在多次调用之间根本不退出，是达成同一目标的另一种手段**，且不依赖本仓库缺失的任何操作系统级 checkpoint/restore 原语。
 
-**为什么不用 CRIU/Firecracker**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径，统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语；CRIU 理论上能对 bwrap 派生的进程树做 dump，但需要额外套一层 PID namespace 工程且仅覆盖 Linux。详见 ADR-0079（含原 ADR-0078 的安全分析）。
+**为什么不用 CRIU/Firecracker**：本仓库的 L3 容器沙箱已在 ADR-0008/ADR-0011 明确废弃了容器运行时/虚拟化路径，统一收敛为 Rust FFI 驱动的 bwrap（Linux namespace）/Seatbelt（macOS sandbox profile），见 `internal/sandbox/sandbox_container.go`。bwrap/Seatbelt 都没有对应的 checkpoint/restore 原语；CRIU 理论上能对 bwrap 派生的进程树做 dump，但需要额外套一层 PID namespace 工程且仅覆盖 Linux。详见 ADR-0008 决策三（保留原 ADR-0078 的安全分析）。
 
 **实现**（`internal/sandbox/sandbox_persistent.go` + `sandbox_persistent_session.go` + `sandbox_persistent_harness.go`）：
 - `PersistentSandbox` 实现 `SandboxProvider`；`Available()` 真实检测——`ArgvWrapper` 已注入且宿主 PATH 上至少有 python3/bash 之一时为 `true`。
@@ -677,10 +677,10 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 
 ---
 
-## 14. Plugin Registry（ADR-0015 §2.1）
+## 14. Plugin Registry（ADR-0016 §2.1）
 
 > End-User 可通过 Plugin Bundle（tar.gz）打包分发技能+MCP 组合，无需修改源码。
-> 参见 [ADR-0015](./decisions/ADR-0015-codex-feature-integration.md) 与 M13-bis §3.3。
+> 参见 [ADR-0016](./decisions/ADR-0016-unified-trust-extension-model.md)（决策二，含原 ADR-0015）与 M13-bis §3.3。
 
 **Plugin manifest 格式** (`plugin.json`，即 `PluginBundleManifest`）:
 ```json
@@ -719,13 +719,13 @@ POST /v1/plugins/install → internal/gateway/server/plugin/catalog_download.go.
 
 ---
 
-## 15. Hook 框架（ADR-0015 §2.2）
+## 15. Hook 框架（ADR-0016 §2.2）
 
 > `internal/action/hook/` 实现 Codex 语义的 PreToolUse/PostToolUse 工具调用级 Hook 引擎。
 > **非** ARCHITECTURE.md §1 `[ShellHooks]`——两者是独立系统，见本节末"与 ShellHooks 的关系"。
 > 输出强制 TaintLevel=High，通过 M11 PolicyGate 才可注入 Agent 上下文。
 
-**事件触发点**（2026-07-02 起，范围收窄为 2 事件——原 ADR-0015 §2.2 设计的 SessionStart/
+**事件触发点**（2026-07-02 起，范围收窄为 2 事件——原 ADR-0016 §2.2 设计的 SessionStart/
 UserPromptSubmit/Stop 与 ShellHooks 既有事件高度重叠，为避免同一生命周期节点两套配置源
 并存，不重复实现；`Stop` 由 ShellHooks 新增的 `turn.stop` 事件承接，见下）：
 

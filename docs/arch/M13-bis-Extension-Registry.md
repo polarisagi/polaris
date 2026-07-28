@@ -169,7 +169,7 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 
 启动时 MCPManager.LoadFromDB 统一加载含 plugin_id 的子 MCP；Skill 注入走 `buildToolSchemas()`（tool 模式）和 `buildAmbientSkillsSection()`（ambient 模式）。
 
-所有写路径统一路由至 `marketplace.Manager.InstallExtension`，实现 ADR-0019 单写原则，消除了 `extension_instances` 的双写问题；`Manager` 新增 `UpdateStatus` 方法供状态变更使用。
+所有写路径统一路由至 `marketplace.Manager.InstallExtension`，实现 ADR-0016 单写原则，消除了 `extension_instances` 的双写问题；`Manager` 新增 `UpdateStatus` 方法供状态变更使用。
 
 **插件生命周期级联**：
 
@@ -281,7 +281,7 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
 ├── extensions/
 │   ├── skill/{ext_id}/         # script runtime 技能安装目录
 │   │   ├── SKILL.md            # frontmatter: name, description, mode
-│   │   └── src/skill.py        # Logic Collapse 蒸馏脚本（Python，ADR-0026，存在时为 script runtime）
+│   │   └── src/skill.py        # Logic Collapse 蒸馏脚本（Python，ADR-0008，存在时为 script runtime）
 │   ├── plugin/{ext_id}/        # Plugin Bundle 解压（市场安装）
 │   │   ├── plugin.json         # PluginBundleManifest
 │   │   ├── skills/             # Bundle 内技能
@@ -458,7 +458,7 @@ M9 Self-Improvement Engine promote 候选技能时：
 
 **禁止**：M9 不得绕过 extension_instances 直写 skills 表（inv_M6_02）。
 
-技能经过足够次数成功调用后，Logic Collapse 将其蒸馏为 Python 脚本（M6 §2.2，ADR-0026）：
+技能经过足够次数成功调用后，Logic Collapse 将其蒸馏为 Python 脚本（M6 §2.2，ADR-0008）：
 - 脚本生成完成 → UPDATE skills SET runtime='script'，src/skill.py 写入安装目录
 - 脚本技能走 SkillExecutor.ExecuteSkill()（ContainerSandbox L3 执行）
 

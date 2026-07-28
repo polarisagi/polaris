@@ -262,6 +262,6 @@ func generateTokenID() string {
 
 // Validate 校验 Capability Token 的合法性，使用注入的校验闭包。
 // 解决包循环依赖问题：由 boot 或 caller 注入 Verify 函数。
-// 2026-07-14（ADR-0051）：Validate（包级函数）删除——生产代码统一走
+// 2026-07-14（ADR-0062）：Validate（包级函数）删除——生产代码统一走
 // TokenManager.Verify(tok)，toolName 参数从未被函数体使用，是"为解决尚未发生的
 // 循环依赖而预写、但从未真正需要"的投机性代码，全仓零调用点。

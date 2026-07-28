@@ -83,7 +83,7 @@ func (ag *AutoCurriculumGenerator) InjectLLMProvider(p protocol.Provider) {
 	ag.llmProvider = p
 }
 
-// 2026-07-14（ADR-0051）：WithBlackboard/CurriculumGeneratorAdapter/
+// 2026-07-14（ADR-0062）：WithBlackboard/CurriculumGeneratorAdapter/
 // NewCurriculumGeneratorAdapter/(*CurriculumGeneratorAdapter).Generate 删除——
 // 全仓生产零调用点。boot_agent.go:557 唯一使用 reflexion.NewCurriculumBridge
 // （bb 通过构造函数直接传入，而非本适配器依赖的 WithBlackboard 注入字段），
@@ -337,7 +337,7 @@ func (ag *AutoCurriculumGenerator) passSafetyAudit(ctx context.Context, sample *
 	// 使用 LLM 检测器识别自然语言变体的注入尝试（不止关键词命中）；Tier0 降级
 	// 到内置正则规则。与下面 (d) llmJudgeSafe 是不同维度的信号——injection 关注
 	// "这段文本是否试图操纵*后续消费它的* LLM 的系统指令"，llmJudgeSafe 关注
-	// "这个任务本身的内容是否有害"，两者不冗余（见 ADR-0058）。
+	// "这个任务本身的内容是否有害"，两者不冗余（见 ADR-0048）。
 	if _, err := ag.sicCleaner().CleanInstructions(ctx, desc); err != nil {
 		// ErrUncleanableContent / 检测器故障 → fail-closed 拒绝
 		return false

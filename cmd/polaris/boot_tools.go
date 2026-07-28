@@ -96,7 +96,7 @@ type ToolBundle struct {
 	// hitlGateway 铸造端共享同一实例；boot_agent.go buildAgent 额外注入 Agent 作为
 	// S_VALIDATE TaintGate 的 TaintReviewChecker（M11 §2.5 SanitizeByUserReview）。
 	ExemptionVault *token.ExemptionVault
-	// PersistentSandbox D4/ADR-0079：Sbx-L4 长驻会话池；nil 表示未开启
+	// PersistentSandbox D4/ADR-0008：Sbx-L4 长驻会话池；nil 表示未开启
 	// （sandbox.l4_enabled=false 或 hwTier<2，Tier-0/1 默认状态）。main.go 优雅
 	// 关闭时需对非 nil 值调用 Shutdown() 终止所有存活会话进程。
 	PersistentSandbox *sandbox.PersistentSandbox
@@ -155,9 +155,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			slog.Info("polaris: remote sandbox (Sbx-L4) initialized", "endpoint", sb.Cfg.Sandbox.Remote.Endpoint)
 		}
 	}
-	// PersistentSandbox（Sbx-L4-Persistent，D4/ADR-0079）：仅在运营者显式开启
+	// PersistentSandbox（Sbx-L4-Persistent，D4/ADR-0008）：仅在运营者显式开启
 	// sandbox.l4_enabled 且硬件 Tier>=2 时构造并注入。后端是真实的长驻解释器
-	// 进程池（非 CRIU/Firecracker checkpoint-restore，见 ADR-0079），通过
+	// 进程池（非 CRIU/Firecracker checkpoint-restore，见 ADR-0008），通过
 	// toolsb.NewRustArgvWrapper() 复用与 L3/MCP stdio 长进程同一条 Rust 沙箱
 	// 封装链路，隔离强度不降级。未开启/Tier<2 时 sandboxRouter.persistent 保持
 	// nil，SandboxPersistent tier 请求按既有降级链回退到 Container/Remote，
@@ -181,7 +181,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	envelope := sandbox.NewExecEnvelope(sb.Gate, sandboxRouter, sb.Cfg.System.Tier, runtime.GOOS, &inlineTokenVerifier{})
 	slog.Info("polaris: sandbox router & envelope initialized", "os", runtime.GOOS, "tier", sb.Cfg.System.Tier)
 
-	// PreToolUse/PostToolUse Hook 引擎（ADR-0015 §2.2）：从 ~/.polarisagi/polaris/hooks/hooks.yaml
+	// PreToolUse/PostToolUse Hook 引擎（ADR-0016 §2.2）：从 ~/.polarisagi/polaris/hooks/hooks.yaml
 	// （用户级）+ .polaris/hooks/hooks.yaml（项目级）加载，接入 ExecEnvelope 统一入口。
 	// 配置缺失/为空不报错（ADR-0006 确定性降级）；YAML 语法错误则降级为空 Registry，不阻塞启动。
 	hookRegistry, hookLoadErr := hook.GetDefaultRegistry()
@@ -278,7 +278,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap)
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
-	// 从未调用而永久跳过（ADR-0051）；mktClient.Install 是完整实现，直接注入。
+	// 从未调用而永久跳过（ADR-0062）；mktClient.Install 是完整实现，直接注入。
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})
 	installMgr.WithOutbox(sb.Outbox)
 

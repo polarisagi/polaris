@@ -52,7 +52,7 @@ type ExecRequest struct {
 	AllowNet bool
 	DryRun   bool
 
-	// SessionID/Language/StatefulSession D4/ADR-0079：CodeAct 长驻会话专用。
+	// SessionID/Language/StatefulSession D4/ADR-0008：CodeAct 长驻会话专用。
 	// StatefulSession=true 且 SessionID 非空时，Execute() 会把 actualTier 强制
 	// 覆盖为 types.SandboxPersistent（不经 AssignSandboxTier 的通用信任/能力
 	// 判定——那套判定不了解"这是一个有状态会话"这一语义）。调用方（目前仅
@@ -105,7 +105,7 @@ func (e *ExecEnvelope) SetHookFirer(f HookFirer) {
 	e.hookFirer = f
 }
 
-// PersistentSandboxAvailable 报告 D4/ADR-0079 长驻会话后端当前是否可用。
+// PersistentSandboxAvailable 报告 D4/ADR-0008 长驻会话后端当前是否可用。
 // 调用方（目前仅 code_act.go）必须在决定"要不要跳过 pickle 包装、直接发送
 // 原始代码"之前同步查询此方法——这是打破"先写脚本文件、后决定走哪条 tier"
 // 先有鸡先有蛋问题的关键：CodeAct 必须在构造脚本内容之前就确定性地知道最终
@@ -165,7 +165,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	if tierErr != nil {
 		return nil, apperr.Wrap(apperr.CodeSandboxTier0Limit, "exec_envelope: sandbox tier rejected", tierErr)
 	}
-	// D4/ADR-0079：有状态会话请求覆盖为 SandboxPersistent tier。AssignSandboxTier
+	// D4/ADR-0008：有状态会话请求覆盖为 SandboxPersistent tier。AssignSandboxTier
 	// 是面向所有工具的通用信任/能力判定，不了解"这是一次有状态 CodeAct 会话"这一
 	// 语义，因此在此单独覆盖。不是隔离降级——RouteByTier 的 SandboxPersistent
 	// 分支在后端不可用时会退化到与 SandboxContainer 完全一致的降级链

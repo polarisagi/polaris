@@ -3,7 +3,7 @@
 // RustArgvWrapper 实现 internal/sandbox.ArgvWrapper 接口，以 RustSandboxWrapArgv
 // （本包 rust_native_sandbox.go）为后端。
 //
-// 调用链：PersistentSandbox（internal/sandbox，D4/ADR-0079）
+// 调用链：PersistentSandbox（internal/sandbox，D4/ADR-0008）
 //           → ArgvWrapper 接口
 //           → RustArgvWrapper（此文件）
 //           → RustSandboxWrapArgv → native_sandbox_wrap_argv (Rust FFI)

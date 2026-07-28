@@ -17,7 +17,7 @@ import (
 // logic_collapse_trigger.go；TrajectoryStats/LogicCollapseMonitor 触发器
 // 主体见 logic_collapse_trigger.go）。
 
-// defaultLLMCodeGenerator 使用 protocol.Provider 生成 Python 技能脚本（ADR-0026）。
+// defaultLLMCodeGenerator 使用 protocol.Provider 生成 Python 技能脚本（ADR-0008）。
 type defaultLLMCodeGenerator struct {
 	provider protocol.Provider
 }

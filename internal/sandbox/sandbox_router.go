@@ -23,7 +23,7 @@ type SandboxRouter struct {
 	nativeOS        *NativeOSSandbox // L4-native：Tier-0 Rust 原生沙箱，无需容器运行时
 	wasmtime        SandboxProvider
 	remote          *RemoteSandbox     // L4：可选，Tier-0 OOM 逃生路径
-	persistent      *PersistentSandbox // D4/ADR-0078：Tier2+ 可选持久化沙箱，Available()==false 时按既有链路降级
+	persistent      *PersistentSandbox // D4/ADR-0008：Tier2+ 可选持久化沙箱，Available()==false 时按既有链路降级
 	goos            string             // "darwin" | "linux" | "windows"
 	hwTier          int                // 0 = Tier 0 (8GB) 主线
 	newWasmDisabled atomic.Bool
@@ -96,7 +96,7 @@ func (r *SandboxRouter) WithNativeOS(nativeOS *NativeOSSandbox) *SandboxRouter {
 	return r
 }
 
-// WithPersistent 注入 PersistentSandbox（D4/ADR-0078，Tier2+ 可选持久化沙箱）。
+// WithPersistent 注入 PersistentSandbox（D4/ADR-0008，Tier2+ 可选持久化沙箱）。
 // 返回自身，支持链式调用。注入后 SandboxPersistent tier 路由至此，但只有
 // persistent.Available()==true 时才会真正被选用；当前恒定为 false（诚实占位，
 // 见 sandbox_persistent.go），因此注入本身不改变任何现有行为，属于零风险
@@ -106,7 +106,7 @@ func (r *SandboxRouter) WithPersistent(persistent *PersistentSandbox) *SandboxRo
 	return r
 }
 
-// PersistentAvailable 报告 L4 持久化沙箱当前是否已注入且可用（D4/ADR-0079）。
+// PersistentAvailable 报告 L4 持久化沙箱当前是否已注入且可用（D4/ADR-0008）。
 // 供 ExecEnvelope.PersistentSandboxAvailable 转调，供上游调用方（code_act.go）
 // 在构造脚本内容前做出确定性的路由决策。
 func (r *SandboxRouter) PersistentAvailable() bool {
@@ -185,11 +185,11 @@ func (r *SandboxRouter) routeContainer() (SandboxProvider, error) {
 	return nil, apperr.New(apperr.CodeForbidden, "sandbox: L3/Container required but unavailable; refusing to downgrade")
 }
 
-// routePersistent 路由 L4/Persistent 隔离（D4/ADR-0078）：Available()==false 时按
+// routePersistent 路由 L4/Persistent 隔离（D4/ADR-0008）：Available()==false 时按
 // Container 同等的降级链回退，否则 fail-closed（从 RouteByTier 拆出，
 // gocyclo 治理，行为不变）。
 func (r *SandboxRouter) routePersistent() (SandboxProvider, error) {
-	// D4/ADR-0078：Available()==false 时（当前恒定如此，见
+	// D4/ADR-0008：Available()==false 时（当前恒定如此，见
 	// sandbox_persistent.go）按 Container 同等的降级链回退，语义与设计
 	// 文档"否则保持现状回退到既有 StatefulSession pickle/env 序列化路径"
 	// 一致——调用方拿到 Container/Remote 后仍会走原有的一次性进程执行
