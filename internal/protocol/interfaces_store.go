@@ -63,7 +63,7 @@ AuditLogger interface {
 type
 
 // SQLQuerier 是 *sql.DB 与 *sql.Tx 共同满足的最小 SQL 接口。
-// 非存储层包（pkg/cognition/ pkg/swarm/ 等）必须接受此接口而非裸 *sql.DB，
+// 非存储层包（internal/agent/ internal/swarm/ 等）必须接受此接口而非裸 *sql.DB，
 // 以保持层边界。调用方构造时直接传入 *sql.DB，Go 结构化类型自动满足。
 SQLQuerier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -85,8 +85,8 @@ BlackboardDB interface {
 type
 
 // ChatRepository 会话与消息的完整读写契约。
-// @consumer: pkg/gateway/server/
-// @producer: pkg/substrate/storage/repo_chat.go
+// @consumer: internal/gateway/server/chat/
+// @producer: internal/store/repo/repo_chat.go
 ChatRepository interface {
 	// Sessions
 	CreateSession(ctx context.Context, row types.ChatSessionRow) error
@@ -242,4 +242,5 @@ TaskCheckpointRepository interface {
 	GetLatestCheckpoint(ctx context.Context, taskID, nodeID string) (*types.TaskCheckpointRow, error)
 	UpsertCheckpoint(ctx context.Context, row types.TaskCheckpointRow) error
 	ListCheckpointsByTask(ctx context.Context, taskID string) ([]types.TaskCheckpointRow, error)
+	ListByStatus(ctx context.Context, status string) ([]types.TaskCheckpointRow, error)
 }
