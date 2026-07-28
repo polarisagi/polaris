@@ -25,7 +25,7 @@
 ```
 src/
 ├── lib.rs              # 顶层 FFI 导出函数 + crate 文档（549 行）
-├── surreal_store.rs    # SurrealDB 认知检索轴 FFI（见 ADR-0010/ADR-0011）
+├── surreal_store.rs    # SurrealDB 认知检索轴 FFI（见 ADR-0003/ADR-0011）
 ├── wasmtime_engine.rs  # Wasmtime Wasm 执行引擎 FFI
 ├── native_sandbox.rs   # 原生进程沙箱 FFI（~1300 行）
 └── check_wasi.rs       # WASI 可用性探测
@@ -37,7 +37,7 @@ src/
 
 - `crate-type = ["staticlib", "cdylib"]` 不可移除
 - 依赖以最小化原则添加——每加一个 `[dependencies]` 必须说明理由
-- 当前依赖白名单：`cedar-policy`（Cedar 策略引擎）、`bytemuck`（安全字节转换）、`capnp`（序列化）、`surrealdb`（认知检索轴，见 ADR-0010）、`wasmtime`+`wasmtime-wasi`（**Rust 侧原生依赖**，L2 沙箱执行引擎，通过 FFI 暴露给 Go；不是 Go 侧 wazero，两者完全分离）、`tokio`（异步运行时）、`serde`+`serde_json`（序列化）、`anyhow`（错误传播）、`bytes`+`lazy_static`（工具）、`libc = "0.2"`（Unix 平台依赖，`[target.'cfg(unix)'.dependencies]`，用于 `native_sandbox.rs` 的 `pre_exec` 等 Unix 系统调用）
+- 当前依赖白名单：`cedar-policy`（Cedar 策略引擎）、`bytemuck`（安全字节转换）、`capnp`（序列化）、`surrealdb`（认知检索轴，见 ADR-0003）、`wasmtime`+`wasmtime-wasi`（**Rust 侧原生依赖**，L2 沙箱执行引擎，通过 FFI 暴露给 Go；不是 Go 侧 wazero，两者完全分离）、`tokio`（异步运行时）、`serde`+`serde_json`（序列化）、`anyhow`（错误传播）、`bytes`+`lazy_static`（工具）、`libc = "0.2"`（Unix 平台依赖，`[target.'cfg(unix)'.dependencies]`，用于 `native_sandbox.rs` 的 `pre_exec` 等 Unix 系统调用）
 - 新增依赖必须经过讨论并记录 ADR，禁止静默引入
 
 ## RUST-5 FFI 边界测试

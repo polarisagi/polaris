@@ -1,7 +1,7 @@
 package protocol
 
 // spec_consistency_test 守护 docs/arch/spec/state.yaml ↔ Go 代码的一致性。
-// 设计依据: docs/arch/decisions/ADR-0012-spec-consistency-test.md
+// 设计依据: docs/arch/decisions/ADR-0006-state-yaml-ssot.md（决策二，含原 ADR-0012）
 // SSoT 决策: docs/arch/decisions/ADR-0006-state-yaml-ssot.md
 //
 // 当前覆盖 Tier 1（CI fail-closed）:
@@ -10,7 +10,7 @@ package protocol
 //   - par.transitions     ↔ from/to 必须引用已定义的状态（结构性校验）
 //   - kill_switch.stages  ↔ KillState 三阶段（不含隐式 Normal base）
 //
-// Tier 2/3 在后续迭代增量补充——见 ADR-0012 §测试范围分级。
+// Tier 2/3 在后续迭代增量补充——见 ADR-0006 决策二（原 ADR-0012）§测试范围分级。
 
 import (
 	"os"

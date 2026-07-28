@@ -22,7 +22,7 @@ import (
 // 生产路径：ReviewSync 供 codeact.CodeAct.validateL2 同步阻塞调用。HITL 审批由调用方
 // （CodeAct 自身的 hitlGateway）处理，本 Agent 不持有 HITL 引用——2026-07-02 删除了
 // 未接线的 AuditAsync 异步审查路径及其专属 HITL 提示逻辑（promptUser/buildHITLText 等），
-// 那条路径在生产代码里零调用点，且与 ADR-0024 要求的"L2 结论必须同步到达"相矛盾。
+// 那条路径在生产代码里零调用点，且与 ADR-0008 要求的"L2 结论必须同步到达"相矛盾。
 type SecurityAuditAgent struct {
 	llmInfer LLMInferFunc // 依赖注入，可 mock
 	lang     string       // 输出语言："zh"（中文）| "en"（英文）

@@ -387,7 +387,7 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
 - 引擎: **[Storage-SQLite]** (modernc.org/sqlite, 纯 Go CGO-Free)
   - 用途: 系统控制轴。唯一的绝对真相源 (EventLog)、任务状态机、ACID 队列 (Outbox)。零 FFI 开销，最高稳定性。
 - 引擎: **[Storage-SurrealDB-Core]** ([surrealdb](https://github.com/surrealdb/surrealdb) crate，Rust cdylib via purego, CGO-Free FFI)
-  - 用途: 认知检索轴。SurrealDB 嵌入式模式原生提供 KV（Key-Value，键值） + HNSW 向量索引 + 有向图遍历 + BM25 全文检索，单一 crate 四轴闭环。决策与被驳方案（Qdrant+neo4j+ES / 仅 SQLite 自建 / BoltDB / 全 Rust 重写 / rust-rocksdb 直接使用）见 [ADR-0010](./decisions/ADR-0010-surrealdb-cognitive-storage.md)。
+  - 用途: 认知检索轴。SurrealDB 嵌入式模式原生提供 KV（Key-Value，键值） + HNSW 向量索引 + 有向图遍历 + BM25 全文检索，单一 crate 四轴闭环。决策与被驳方案（Qdrant+neo4j+ES / 仅 SQLite 自建 / BoltDB / 全 Rust 重写 / rust-rocksdb 直接使用）见 [ADR-0003](./decisions/ADR-0003-sqlite-modernc-primary-storage.md)（决策二，含原 ADR-0010）。
   - **Rust crate**: `surrealdb = { version = "3", features = ["kv-mem", "kv-rocksdb"] }`
   - > [!IMPORTANT]
     > **后端选择策略（三级 RAM 降级，`boot_substrate.go initSurrealStore`）**

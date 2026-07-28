@@ -41,7 +41,7 @@ var headlessPromptGuard = sync.OnceValue(func() *guard.SystemPromptGuard { //nol
 // ReportSafetyViolation/IsSealed 等状态转移与查询方法在全仓库零调用——熔断升级到
 // Pause/FullStop 后，运行中的进程不会拒绝任何新 Agent 执行请求，只有下次重启才会
 // 被 .fullstop 文件挡住。AgentPool.Acquire/AcquireHeadless 是全部交互式与
-// Cron/Workflow/Webhook headless 触发路径的唯一收敛入口（ADR-0039 Gateway 控制权
+// Cron/Workflow/Webhook headless 触发路径的唯一收敛入口（ADR-0066 Gateway 控制权
 // 移交 FSM 之后），在此处做一次性检查即可覆盖全部路径，无需在各 handler 分别判断。
 type KillSwitchGate interface {
 	// Allowed 返回当前是否允许启动新的 Agent 执行；Pause/FullStop 阶段返回 false。

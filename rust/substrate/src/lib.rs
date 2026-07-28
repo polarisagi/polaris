@@ -740,7 +740,7 @@ fn test_vec_cosine_empty_returns_zero() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // [Storage-SurrealDB-Core] 认知检索轴 FFI
-// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
+// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0003
 //
 // 功能: KV + HNSW 向量 + 有向图遍历 + BM25 全文检索
 // ═══════════════════════════════════════════════════════════════════════════════

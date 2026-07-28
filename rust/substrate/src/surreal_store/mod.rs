@@ -2,7 +2,7 @@
 //
 // 后端运行时选择: kv-mem（默认，任意机器，含 2GB VPS）/ kv-rocksdb（显式，大内存服务器）
 // 向量维度 vec_dim 由调用方传入（典型值 1536 或 768）。
-// 架构: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
+// 架构: docs/arch/M02-Storage-Fabric.md §10，ADR-0003
 //
 // 模块结构：
 //   mod.rs  — 共享类型、常量、全局 STORE、辅助函数

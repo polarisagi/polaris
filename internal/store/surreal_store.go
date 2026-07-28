@@ -1,6 +1,6 @@
 // Package storage — SurrealDBCoreStore purego 桥接。
 // 历史: 原 cgo 实现已按 ADR-0011 Phase 3 迁移到 purego。
-// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0010
+// 架构文档: docs/arch/M02-Storage-Fabric.md §10，ADR-0003
 //
 // SurrealDBCoreStore — [Storage-SurrealDB-Core] 认知检索轴的 Go 封装。
 // 实现 protocol.Store + 扩展接口（VectorStore / GraphStore / FTSStore）。

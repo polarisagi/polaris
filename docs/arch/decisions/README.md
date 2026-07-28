@@ -5,10 +5,18 @@
 > 不保留上下文铺垫、被驳回方案逐条论证、修订历史细节——这些留在 git 提交记录里可查，
 > ADR 只承载"未来读者需要知道的规则"。
 >
-> **精简历史**：2026-07-28 两轮压缩，73 份 → 60 份 → 34 份。第一轮合并同主题系列（11 份），
-> 第二轮按模块功能 + 跨文档引用关系进一步合并（26 份）——同一模块的多份"生产接线/新增模式/
-> 阶段性加固"系列 ADR、以及正文互相引用（取代/补充/推翻）的 ADR 合入单一锚点文件，
-> 用"决策一/决策二/…"分节承载，不再各自独立成文件。
+> **精简历史**：2026-07-28 三轮压缩，73 份 → 60 份 → 34 份 → 29 份。第一轮合并同主题
+> 系列（11 份），第二轮按模块功能 + 跨文档引用关系合并（26 份），第三轮补漏同模块紧耦合
+> 决策（5 份：互补技术选型、SSoT+其验证测试、CI 门禁批次、同管线纵深防线、控制流基础决策
+> +其后续治理路线）——同一模块的多份"生产接线/新增模式/阶段性加固"系列 ADR、以及正文
+> 互相引用（取代/补充/推翻/互补/前置条件）的 ADR 合入单一锚点文件，用"决策一/决策二/…"
+> 分节承载，不再各自独立成文件。
+>
+> **编号不重排**：文件被合并删除后原编号永久留空，不做序号压缩整理。理由：（1）编号本身
+> 不承载语义，只是分配顺序标记，稀疏不影响检索——README 索引表与文件名前缀已是唯一入口；
+> （2）压缩编号会使已合入内容的"原 ADR-NNNN"历史标注全部失真，且任何指向具体编号的历史
+> commit message / 代码注释 / 外部文档都会与新编号错位，属于"篡改历史"而非精简；
+> （3）"编号一经分配不复用"是本文件自身写明的既定规则（见下）。
 
 ## 何时写 ADR
 
@@ -49,32 +57,27 @@ ADR 被代码引用时，源文件头部加：
 |------|------|------|------|
 | 0001 | observability 一等公民指标使用包级全局变量（R1.3 豁免） | Accepted | 2026-05-16 |
 | 0002 | skill 子包内本地接口/类型消除（R1.4 合规） | Accepted（已执行完毕） | 2026-05-16 |
-| 0003 | modernc/sqlite（零 CGO）作为主持久化存储 | Accepted | 2026-05-16 |
+| 0003 | 主存储引擎选型合集（modernc/sqlite 主持久化 + SurrealDB 认知检索轴，含原 ADR-0010） | Accepted | 2026-05-16 |
 | 0004 | Tier-0 8GB 内存硬上限 + Hardware Tier 解锁机制 | Accepted | 2026-05-16 |
-| 0006 | state.yaml 作为状态机 + 全模块阈值的 SSoT | Accepted | 2026-05-16 |
+| 0006 | state.yaml SSoT + 一致性回归测试合集（含原 ADR-0012） | Accepted | 2026-05-16 |
 | 0007 | TaintLevel 五级 + 只升不降 + Sanitizer 受控降级（含原 ADR-0045/0047） | Accepted | 2026-05-16 |
-| 0008 | Sandbox 分级架构合集（三级基座 + Logic Collapse L3 运行时 + L4 长驻进程池，含原 ADR-0026/0078/0079） | Accepted | 2026-05-16 |
+| 0008 | Sandbox 与代码安全防线合集（三级基座 + Logic Collapse L3 + L4 长驻进程池 + 三层代码安全防线，含原 ADR-0024/0026/0078/0079） | Accepted | 2026-05-16 |
 | 0009 | KillSwitch 熔断与恢复合集（三阶段熔断 + 进程内活恢复模型，含原 ADR-0072/0073） | Accepted | 2026-05-16 |
-| 0010 | SurrealDB（Rust FFI 嵌入式）作为认知检索轴 | Accepted | 2026-05-16 |
 | 0011 | purego（零 CGO）FFI 桥接合集（含原 ADR-0005/0030/0034/0063，含 Tree-sitter 例外） | Accepted（已执行） | 2026-05-16 |
-| 0012 | state.yaml ↔ Go 代码一致性回归测试设计 | Accepted（已执行） | 2026-05-16 |
-| 0013 | lint 机械化 Phase 1（depguard / errorlint / nestif / gocyclo） | Accepted（已执行） | 2026-05-16 |
-| 0014 | 对抗审查 GitHub Action（执行带 3） | Accepted（已执行） | 2026-05-16 |
+| 0013 | CI 质量门禁合集（lint 机械化 Phase 1 + 对抗审查 GitHub Action，含原 ADR-0014） | Accepted（已执行完毕） | 2026-05-16 |
 | 0016 | 扩展/插件系统治理合集（统一信任模型 + Codex 特性集成 + 安装/升级生命周期，含原 ADR-0015/0019/0075） | Accepted | 2026-05-21 |
 | 0017 | MCP 传输层与协同架构合集（Streamable HTTP + TaintPreservingDecoder + A2A 战略方向，含原 ADR-0018/0070） | Accepted / Proposed | 2026-05-21 |
 | 0020 | LLM Provider 选型与推理路由合集（DeepSeek V4 默认 + ThinkingMode 三档，含原 ADR-0022） | Accepted | 2026-06-08 |
 | 0021 | 核心机制实现（SurpriseIndex / ScriptTester / BM25 / FSM） | Accepted | 2026-06-09 |
-| 0024 | GovernanceAgent 代码安全三层防线（AST + 正则 + 单次 ThinkingMax LLM） | Accepted | 2026-06-13 |
 | 0025 | 全局架构审查与系统加固综合档案（含原 ADR-0027/0028/0029/0038） | Accepted | 2026-06-14 |
 | 0031 | TTS 三路 Provider 架构（Edge / HTTP / Sherpa） | Accepted | 2026-06-27 |
 | 0033 | M05 记忆子系统架构决策合集（写路径 + 范围限制 + 容量压缩，含原 ADR-0023/0035/0036/0060） | Accepted | 2026-06-13 |
-| 0039 | Gateway 控制权移交 FSM（废除 MVP 直通模式） | Accepted | 2026-07-08 |
 | 0042 | Gateway 交互式提案合集：HITL AskUser 咨询闭环 + Generative UI SSE（含原 ADR-0043） | Proposed（均未实现） | 2026-07-11 |
 | 0046 | internal/execute 模块创建 + 编排模式演进（模式9 PatternDAG / 模式10 StateGraph / 模式11 Debate-Critic，含原 ADR-0037/0041/0080） | Implemented | 2026-07-13 |
 | 0048 | M9 自进化引擎生产接线合集（含原 ADR-0049/0054/0055/0056/0058） | Accepted（已执行） | 2026-07-14 |
 | 0062 | 死代码治理：判定方法论 + `make deadcode` 门控（含原 ADR-0050/0051/0052/0053/0061） | Accepted（已执行） | 2026-07-22 |
 | 0065 | S_REPLAN 扩展激活重试与降级标记 | Accepted（已执行，回填） | 2026-07-23 |
-| 0066 | Gateway 治理合集（SQL 下沉 + Egress 收紧 + Channel 适配器重构 + ChatOrchestrator 拆分路线，含原 ADR-0064/0067） | Accepted / Proposed | 2026-07-23 |
+| 0066 | Gateway 治理合集（控制权移交 FSM + SQL 下沉 + Egress 收紧 + Channel 适配器重构 + ChatOrchestrator 拆分路线，含原 ADR-0039/0064/0067） | Accepted / Proposed | 2026-07-08 |
 | 0068 | 开放基准适配器架构（τ-bench/Terminal-Bench） | Accepted（已执行） | 2026-07-23 |
 | 0069 | OpenLLMetry 轨迹导出器架构 | Accepted（已执行） | 2026-07-23 |
 | 0071 | downloader 出站公网豁免（XR-06） | Accepted（已执行） | 2026-07-23 |
@@ -87,11 +90,15 @@ ADR 被代码引用时，源文件头部加：
 | 原编号 | 标题 | 合并至（最终存活编号） | 删除日期 |
 |------|------|--------|---------|
 | 0005 | purego（零 CGO）作为 Go→Rust FFI 桥接方式（原始设计决策） | ADR-0011 | 2026-07-28 |
+| 0010 | SurrealDB（Rust FFI 嵌入式）作为认知检索轴 | ADR-0003 | 2026-07-28 |
+| 0012 | state.yaml ↔ Go 代码一致性回归测试设计 | ADR-0006 | 2026-07-28 |
+| 0014 | 对抗审查 GitHub Action（执行带 3） | ADR-0013 | 2026-07-28 |
 | 0015 | Codex 特性集成 | ADR-0016 | 2026-07-28 |
 | 0018 | MCP Transport 用 TaintPreservingDecoder | ADR-0017 | 2026-07-28 |
 | 0019 | extension_instances 统一安装实例表 | ADR-0016 | 2026-07-28 |
 | 0022 | ThinkingMode 三档路由取代 BestOfN/MCTS | ADR-0020 | 2026-07-28 |
 | 0023 | episodic 写路径双轨制 | ADR-0033 | 2026-07-28 |
+| 0024 | GovernanceAgent 代码安全三层防线 | ADR-0008 | 2026-07-28 |
 | 0026 | Logic Collapse 执行运行时：Python + ContainerSandbox | ADR-0008 | 2026-07-28 |
 | 0027 | Gemini 执行后遗留实现缺口修复 | ADR-0025 | 2026-07-22 |
 | 0028 | Phase 0 P0 Bug 修复 | ADR-0025 | 2026-07-22 |
@@ -102,12 +109,14 @@ ADR 被代码引用时，源文件头部加：
 | 0036 | 核心工作记忆区（ZoneCoreMemory） | ADR-0033 | 2026-07-22 |
 | 0037 | PatternDAG Orchestration（跨 Agent Macro-DAG 编排模式9） | ADR-0046 | 2026-07-28 |
 | 0038 | 影子执行器设计与异步回放选型 | ADR-0025 | 2026-07-22（转手合并 2026-07-28） |
+| 0039 | Gateway 控制权移交 FSM（废除 MVP 直通模式） | ADR-0066 | 2026-07-28 |
 | 0040 | 受控循环图执行器（CyclicGraphExecutor，未落地草案） | ADR-0046 | 2026-07-22（转手合并 2026-07-28） |
 | 0041 | StateGraphExecutor（显式状态图编排，编排模式10） | ADR-0046 | 2026-07-28 |
 | 0043 | Generative UI SSE 集成（结构化组件渲染） | ADR-0042 | 2026-07-28 |
 | 0044 | M7 模块边界拆分（GD-13-002）暂缓 | ADR-0081 | 2026-07-28 |
 | 0045 | 保留五级污点传播（GD-13-004 否决 / GD-14-003 采纳） | ADR-0007 | 2026-07-28 |
 | 0047 | taint_sanitizer 二级降级接入 S_VALIDATE | ADR-0007 | 2026-07-28 |
+
 | 0049 | 修复 sCtx.SessionID 从未赋值的根因 Bug | ADR-0048 | 2026-07-28 |
 | 0050 | 删除中心化 Orchestrator/Worker/内存 Blackboard 与 SwarmRouter 等 | ADR-0062 | 2026-07-28 |
 | 0051 | 跨模块死代码清理与悬空接线收尾（Phase 1-4） | ADR-0062 | 2026-07-28 |
