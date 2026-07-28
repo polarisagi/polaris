@@ -178,7 +178,7 @@ func (f *MemoryFacadeImpl) PruneMemoryGraph(ctx context.Context) error {
 	return nil
 }
 
-// TaskMermaidCanvas 调用（M05 §11.3），委托给底层 MemorySystem 共享单实例。
+// TrackToolCall 调用（M05 §11.3），委托给底层 MemorySystem 共享单实例。
 func (f *MemoryFacadeImpl) TrackToolCall(toolUseID, toolName string) {
 	f.sys.Mem().TrackToolCall(toolUseID, toolName)
 }
