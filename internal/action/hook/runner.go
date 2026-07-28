@@ -118,7 +118,20 @@ func (r *Runner) Fire(ctx context.Context, input HookInput) []HookResult {
 		res HookResult
 	}
 	results := make([]HookResult, 0)
-	ch := make(chan indexed, 16)
+
+	totalHooks := 0
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if h.Type == "command" {
+				totalHooks++
+			}
+		}
+	}
+	if totalHooks == 0 {
+		return results
+	}
+
+	ch := make(chan indexed, totalHooks)
 	var wg sync.WaitGroup
 
 	idx := 0
