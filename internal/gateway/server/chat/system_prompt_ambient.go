@@ -111,7 +111,10 @@ func (s *ChatHandler) buildAmbientSkillsSection(ctx context.Context, userQuery s
 
 	var indexLines []string
 	var fullTextParts []string
-	fullTextBudget := maxFullTextChars
+	fullTextBudget := s.AmbientMaxChars
+	if fullTextBudget <= 0 {
+		fullTextBudget = defaultAmbientMaxChars
+	}
 
 	var queryVec []float32
 	if s.Embedder != nil {

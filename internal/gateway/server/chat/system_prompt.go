@@ -134,8 +134,16 @@ func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol
 }
 
 const (
-	maxFullTextChars   = 128_000 // 全文注入总预算（128K字符 ≈ 32K tokens）
-	relevanceThreshold = 0.05    // 关键词词元重叠阈值（5%）
+	// defaultAmbientMaxChars ambient skill 全文注入总预算的兜底值（字符）。
+	// 权威值来自 spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars
+	// → cfg.Thresholds.M13Interface.AmbientSkillMaxChars → ChatHandler.AmbientMaxChars；
+	// 此常量仅在未注入（如单元测试直接构造 ChatHandler）时生效。
+	//
+	// 为何不是原先硬编码的 128_000：128K 字符 ≈ 32K tokens，在 Tier-0（2GB VPS，
+	// 小上下文窗口模型）上单靠 ambient skill 就能打爆整个 prompt 预算，与 M13-bis §3
+	// "不得占用超过 ~10% 上下文窗口"的设计约束相差 32 倍（DR-4-005）。
+	defaultAmbientMaxChars = 4000
+	relevanceThreshold     = 0.05 // 关键词词元重叠阈值（5%）
 )
 
 // Ambient skills 相关性判定/文本注入 (relevanceScore/skillTextKey/

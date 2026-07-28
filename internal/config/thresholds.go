@@ -247,6 +247,10 @@ type M13InterfaceThresholds struct {
 	WorkerCron                     int `toml:"worker.cron"`                       // 1
 	MaxConcurrentLLMCalls          int `toml:"max_concurrent_llm_calls"`          // 4
 	LazyLoadToolThreshold          int `toml:"lazy_load_tool_threshold"`          // 40
+	// AmbientSkillMaxChars ambient skill instructions 全文注入的总字符预算
+	// （M13-bis §3：不得占用超过 ~10% 上下文窗口）。超预算的 skill 降级为 index-only。
+	// 大上下文模型可调高；<=0 时回落到 DefaultThresholds 的 4000。
+	AmbientSkillMaxChars int `toml:"ambient_skill_max_chars"` // 4000
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
@@ -439,6 +443,7 @@ func DefaultThresholds() Thresholds {
 			WorkerCron:                     1,
 			MaxConcurrentLLMCalls:          4,
 			LazyLoadToolThreshold:          40,
+			AmbientSkillMaxChars:           4000,
 		},
 	}
 }
