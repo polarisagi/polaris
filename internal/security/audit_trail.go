@@ -256,9 +256,15 @@ func (at *AuditTrail) recoverFromDB() error {
 	}
 
 	var loaded []*AuditRecord
-	for _, ev := range events {
+	for i, ev := range events {
 		var rec AuditRecord
 		if unmarshalErr := json.Unmarshal([]byte(ev.Meta), &rec); unmarshalErr == nil {
+			if i == 0 && rec.PrevHash != "" {
+				// 回收窗口内首条已有 PrevHash，说明恢复范围前尚有更早记录未包含，
+				// 渡陶账延证可能存在盲区，记录 WARN 供操作员周知
+				slog.Warn("audit_trail: recovery window truncated, hash chain verification before offset is unavailable",
+					"first_offset", ev.ID, "prev_hash", rec.PrevHash)
+			}
 			loaded = append(loaded, &rec)
 		}
 	}
