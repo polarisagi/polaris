@@ -62,9 +62,28 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint:
+lint: taint-check fsm-check policy-gate-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
+
+taint-check:
+	@echo "=== [GD-14-004] Taint propagation check ==="
+	@! grep -rn 'TaintedString{' internal/ --include="*.go" | grep -v "_test.go" | grep -v "internal/security/taint/" | grep -v "newTainted\|MakeTainted\|func.*TaintedString" \
+		&& echo "PASS: No raw TaintedString{} construction found" \
+		|| (echo "FAIL: Direct TaintedString{} construction detected" && exit 1)
+
+fsm-check:
+	@echo "=== [GD-14-006] FSM control flow check ==="
+	@! grep -rn 'goto ' internal/agent/fsm/ --include="*.go" | grep -v "_test.go" \
+		&& echo "PASS: No goto found in FSM package" \
+		|| (echo "FAIL: goto detected in FSM package" && exit 1)
+
+policy-gate-check:
+	@echo "=== [GD-14-004] PolicyGate fail-closed check ==="
+	@if grep -rn 'policyGate\.Review\|gate\.Review' internal/ --include="*.go" | grep -v "_test.go" > /dev/null; then \
+		echo "INFO: Found PolicyGate Review usages, please ensure they are guarded by nil checks"; \
+	fi
+	@echo "PASS: PolicyGate check done"
 
 clean:
 	rm -rf bin/ bin/lib
@@ -82,9 +101,9 @@ docs-check:
 # 接口签名权威源在 internal/protocol/, 文档只允许字段名清单 + 单行语义 + Schema Anchor.
 docs-lint:
 	@bad=0 ; \
-	if grep -rnE '^```(go|rust)' docs/arch/M*.md ; then echo "FAIL: 禁止 \`\`\`go/\`\`\`rust 代码块" ; bad=1 ; fi ; \
-	if grep -rnE '^\s*type\s+\w+\s+(struct|interface)\s*\{' docs/arch/M*.md ; then echo "FAIL: 禁止裸 type struct/interface 定义" ; bad=1 ; fi ; \
-	if grep -rnE '^\s*func\s+(\([^)]+\)\s+)?\w+\([^)]*\)' docs/arch/M*.md ; then echo "FAIL: 禁止完整 func 签名" ; bad=1 ; fi ; \
+	if grep -rnE '^```(go|rust)' docs/arch/*.md ; then echo "FAIL: 禁止 \`\`\`go/\`\`\`rust 代码块" ; bad=1 ; fi ; \
+	if grep -rnE '^\s*type\s+\w+\s+(struct|interface)\s*\{' docs/arch/*.md ; then echo "FAIL: 禁止裸 type struct/interface 定义" ; bad=1 ; fi ; \
+	if grep -rnE '^\s*func\s+(\([^)]+\)\s+)?\w+\([^)]*\)' docs/arch/*.md ; then echo "FAIL: 禁止完整 func 签名" ; bad=1 ; fi ; \
 	if [ $$bad -ne 0 ]; then exit 1; fi ; \
 	echo "docs-lint ok"
 

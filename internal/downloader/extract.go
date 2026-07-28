@@ -14,6 +14,16 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+// safeJoinDest 验证 destPath 不逃出 destDir，防止 Zip Slip 攻击（GR-1-005）
+func safeJoinDest(destDir, destPath string) (string, error) {
+	cleanDest := filepath.Clean(destPath)
+	cleanDir := filepath.Clean(destDir)
+	if !strings.HasPrefix(cleanDest+string(os.PathSeparator), cleanDir+string(os.PathSeparator)) {
+		return "", apperr.New(apperr.CodeInvalidInput, "zip slip detected: path escapes destDir")
+	}
+	return cleanDest, nil
+}
+
 // ExtractTarBz2 流式解压 .tar.bz2，对每个普通文件调用 mapper 决定是否写出及写入路径。
 // mapper(tarEntryName) → (destAbsPath, shouldWrite)
 func ExtractTarBz2(r io.Reader, destDir string, mapper func(string) (string, bool)) error {
@@ -85,6 +95,10 @@ func ExtractZip(zipPath, destDir string, mapper func(string) (string, bool)) err
 			destPath, ok = mapper(f.Name)
 			if !ok {
 				continue
+			}
+			destPath, err = safeJoinDest(destDir, destPath)
+			if err != nil {
+				return err
 			}
 		} else {
 			// 路径穿越防护：确保提取路径在 destDir 内

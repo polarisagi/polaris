@@ -73,6 +73,9 @@ func (m *Manager) WithOutbox(ob protocol.OutboxWriter) *Manager {
 //
 //nolint:gocyclo
 func (m *Manager) Authorize(ctx context.Context, req protocol.ExtensionInstallRequest) error {
+	if m.policyGate == nil {
+		return apperr.New(apperr.CodeInternal, "policy gate not configured (fail-closed)")
+	}
 	mode, err := m.prefsRepo.GetPermissionMode(ctx)
 	if err != nil {
 		mode = types.ModeAutoReview

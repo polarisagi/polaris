@@ -151,119 +151,126 @@ func (p *GraphBuildPipeline) ExtractEntitiesAndRelations(ctx context.Context, so
 
 func (p *GraphBuildPipeline) synthesizeConcepts(ctx context.Context, entities []*Entity, clusters map[int][]int) error { //nolint:gocyclo,nestif
 	for _, cluster := range clusters {
-		if len(cluster) < 3 {
-			continue // Only synthesize concepts for clusters with >= 3 entities
+		if err := p.synthesizeOneCluster(ctx, entities, cluster); err != nil {
+			return err
 		}
+	}
+	return nil
+}
 
-		var conceptLabel string
-		var errLLM error
-		if p.entityExtractor.llmClient != nil { //nolint:nestif
-			var entityNames []string //nolint:prealloc
-			for _, idx := range cluster {
-				entityNames = append(entityNames, entities[idx].Name)
+func (p *GraphBuildPipeline) synthesizeOneCluster(ctx context.Context, entities []*Entity, cluster []int) error { //nolint:nestif,gocyclo
+	if len(cluster) < 3 {
+		return nil // Only synthesize concepts for clusters with >= 3 entities
+	}
+
+	var conceptLabel string
+	var errLLM error
+	if p.entityExtractor.llmClient != nil { //nolint:nestif
+		var entityNames []string //nolint:prealloc
+		for _, idx := range cluster {
+			entityNames = append(entityNames, entities[idx].Name)
+		}
+		// A-12：System/User 消息分离，实体名列表（来自 DB）作为 User 消息，不拼入 System。
+		if providerClient, ok := p.entityExtractor.llmClient.(*ProviderLLMClient); ok {
+			conceptMsgs := []types.Message{
+				{
+					Role:    "system",
+					Content: "你是知识图谱概念提炼助手。请为用户提供的实体列表提炼一个简短的概念标签，只输出标签内容，不要有其他解释。",
+				},
+				{
+					Role:    "user",
+					Content: strings.Join(entityNames, ", "),
+				},
 			}
-			// A-12：System/User 消息分离，实体名列表（来自 DB）作为 User 消息，不拼入 System。
-			if providerClient, ok := p.entityExtractor.llmClient.(*ProviderLLMClient); ok {
-				conceptMsgs := []types.Message{
-					{
-						Role:    "system",
-						Content: "你是知识图谱概念提炼助手。请为用户提供的实体列表提炼一个简短的概念标签，只输出标签内容，不要有其他解释。",
-					},
-					{
-						Role:    "user",
-						Content: strings.Join(entityNames, ", "),
-					},
-				}
-				// P-1：每次 LLM 调用自持超时（90s，A-05）。
-				inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
-				defer inferCancel()
-				start := time.Now()
-				resp, err := safecall.Infer(inferCtx, providerClient.provider, conceptMsgs)
-				latencyMs := time.Since(start).Milliseconds()
-				if err == nil && resp != nil && resp.Content != "" {
-					conceptLabel = strings.Split(strings.TrimSpace(resp.Content), "\n")[0]
-					trace.RecordLLMCall(ctx,
-						"ProviderLLMClient",
-						providerClient.model,
-						"success",
-						float64(latencyMs),
-						resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
-						0,
-					)
-				} else {
-					trace.RecordLLMCall(ctx, "ProviderLLMClient", providerClient.model, "error", float64(latencyMs), 0, 0, 0, 0)
-					if err != nil {
-						errLLM = apperr.Wrap(apperr.CodeInternal, "llm inference failed", err)
-					} else {
-						errLLM = apperr.New(apperr.CodeInternal, "llm inference failed: empty response")
-					}
-				}
+			// P-1：每次 LLM 调用自持超时（90s，A-05）。
+			inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
+			defer inferCancel()
+			start := time.Now()
+			resp, err := safecall.Infer(inferCtx, providerClient.provider, conceptMsgs)
+			latencyMs := time.Since(start).Milliseconds()
+			if err == nil && resp != nil && resp.Content != "" {
+				conceptLabel = strings.Split(strings.TrimSpace(resp.Content), "\n")[0]
+				trace.RecordLLMCall(ctx,
+					"ProviderLLMClient",
+					providerClient.model,
+					"success",
+					float64(latencyMs),
+					resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
+					0,
+				)
 			} else {
-				errLLM = apperr.New(apperr.CodeInternal, "unsupported llm client type")
-			}
-		}
-
-		if p.entityExtractor.llmClient == nil || errLLM != nil {
-			// Fallback: use highest occurrence entity name
-			highestIdx := cluster[0]
-			for _, idx := range cluster {
-				if entities[idx].OccurrenceCount > entities[highestIdx].OccurrenceCount {
-					highestIdx = idx
+				trace.RecordLLMCall(ctx, "ProviderLLMClient", providerClient.model, "error", float64(latencyMs), 0, 0, 0, 0)
+				if err != nil {
+					errLLM = apperr.Wrap(apperr.CodeInternal, "llm inference failed", err)
+				} else {
+					errLLM = apperr.New(apperr.CodeInternal, "llm inference failed: empty response")
 				}
 			}
-			conceptLabel = entities[highestIdx].Name
+		} else {
+			errLLM = apperr.New(apperr.CodeInternal, "unsupported llm client type")
 		}
+	}
 
-		var maxTaint types.TaintLevel
-		sourceEntityIDs := make([]string, 0, len(cluster))
+	if p.entityExtractor.llmClient == nil || errLLM != nil {
+		// Fallback: use highest occurrence entity name
+		highestIdx := cluster[0]
 		for _, idx := range cluster {
-			sourceEntityIDs = append(sourceEntityIDs, entities[idx].ID)
-			if entities[idx].TaintLevel > maxTaint {
-				maxTaint = entities[idx].TaintLevel
+			if entities[idx].OccurrenceCount > entities[highestIdx].OccurrenceCount {
+				highestIdx = idx
 			}
 		}
-		if maxTaint < types.TaintMedium {
-			maxTaint = types.TaintMedium
+		conceptLabel = entities[highestIdx].Name
+	}
+
+	var maxTaint types.TaintLevel
+	sourceEntityIDs := make([]string, 0, len(cluster))
+	for _, idx := range cluster {
+		sourceEntityIDs = append(sourceEntityIDs, entities[idx].ID)
+		if entities[idx].TaintLevel > maxTaint {
+			maxTaint = entities[idx].TaintLevel
+		}
+	}
+	if maxTaint < types.TaintMedium {
+		maxTaint = types.TaintMedium
+	}
+
+	conceptEntity := types.Entity{
+		ID:         "concept:" + conceptLabel,
+		Name:       conceptLabel,
+		Type:       "Concept",
+		Properties: map[string]any{"cluster_size": len(cluster), "source_entities": sourceEntityIDs},
+		TaintLevel: maxTaint,
+	}
+
+	if err := p.semanticMem.UpsertFact(ctx, conceptEntity, maxTaint); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert fact failed", err)
+	}
+
+	// fetch DBID for the concept entity we just created/updated
+	conceptDBEntity, err := p.semanticMem.GetEntity(ctx, "Concept", conceptLabel)
+	if err != nil || conceptDBEntity == nil {
+		return nil // skip relations if concept entity resolution failed
+	}
+
+	for _, idx := range cluster {
+		// fetch DBID for the source entity
+		srcEntity := entities[idx]
+		srcDBEntity, err := p.semanticMem.GetEntity(ctx, srcEntity.Type, srcEntity.Name)
+		if err != nil || srcDBEntity == nil {
+			continue // skip relation if source entity resolution failed
 		}
 
-		conceptEntity := types.Entity{
-			ID:         "concept:" + conceptLabel,
-			Name:       conceptLabel,
-			Type:       "Concept",
-			Properties: map[string]any{"cluster_size": len(cluster), "source_entities": sourceEntityIDs},
-			TaintLevel: maxTaint,
+		rel := types.Relation{
+			FromEntityID: srcEntity.ID,
+			ToEntityID:   conceptEntity.ID,
+			FromDBID:     srcDBEntity.DBID,     // MUST fill
+			ToDBID:       conceptDBEntity.DBID, // MUST fill
+			RelationType: "RELATED_TO",
+			Weight:       1.0,
+			TaintLevel:   maxTaint,
 		}
-
-		if err := p.semanticMem.UpsertFact(ctx, conceptEntity, maxTaint); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert fact failed", err)
-		}
-
-		// fetch DBID for the concept entity we just created/updated
-		conceptDBEntity, err := p.semanticMem.GetEntity(ctx, "Concept", conceptLabel)
-		if err != nil || conceptDBEntity == nil {
-			continue // skip relations if concept entity resolution failed
-		}
-
-		for _, idx := range cluster {
-			// fetch DBID for the source entity
-			srcEntity := entities[idx]
-			srcDBEntity, err := p.semanticMem.GetEntity(ctx, srcEntity.Type, srcEntity.Name)
-			if err != nil || srcDBEntity == nil {
-				continue // skip relation if source entity resolution failed
-			}
-
-			rel := types.Relation{
-				FromEntityID: srcEntity.ID,
-				ToEntityID:   conceptEntity.ID,
-				FromDBID:     srcDBEntity.DBID,     // MUST fill
-				ToDBID:       conceptDBEntity.DBID, // MUST fill
-				RelationType: "RELATED_TO",
-				Weight:       1.0,
-				TaintLevel:   maxTaint,
-			}
-			if err := p.semanticMem.UpsertRelation(ctx, rel, maxTaint); err != nil {
-				return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert relation failed", err)
-			}
+		if err := p.semanticMem.UpsertRelation(ctx, rel, maxTaint); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase5 upsert relation failed", err)
 		}
 	}
 	return nil

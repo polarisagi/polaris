@@ -283,7 +283,7 @@ D2 (性能) 触发: Hot 表行数 >100 万或空间 >500MB → 自动触发 Warm
   - 到期: (a) 清零 pii_vault_blob（PII（Personally Identifiable Information，个人敏感信息） 先于一切删除）→ (b) MutationBus 置 S_FAILED + 写 `suspended_hitl_timeout_expired` → (c) HITL 通知（M13）→ (d) 之后 7 天走正常 GC
 - **KillSwitch-Suspended**: 无 TTL（等 unseal 自动恢复）。
   - 但磁盘 <100MB CRITICAL 且 workspace UpdatedAt >7 天 → 打包 `~/.polarisagi/polaris/archive/<task_id>_<timestamp>.tar.zst` 删原目录，保留 Blackboard 元数据。unseal 时 M13 检查 archive 存在 → 先解压再恢复任务。归档上限 10GB（LRU 删最老 + WARN）。
-- **Dead-letter Pending**: `status=Pending` 且 Outbox max_attempts 耗尽 (`dead_letter=true`) 且 UpdatedAt+7d>now → 直接 S_FAILED + GC workspace。
+- **Dead-letter Pending**: `status=Pending` 且 Outbox max_attempts 耗尽 (`status='dead'`) 且 UpdatedAt+7d>now → 直接 S_FAILED + GC workspace。
 - **provider_exhausted-Suspended**: 无 TTL。M1 CircuitBreaker 恢复 (§7.3) 触发自动唤醒。`provider_suspended_count > 5` 已 ESCALATE→HITL，转 HITL-Suspended TTL 管理。
 
 > **配置参数**（`internal/config/immutable_constants.go` 之外可调）:

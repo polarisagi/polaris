@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"unsafe"
 
 	"time"
 
@@ -336,13 +335,13 @@ func parseImagePart(ip types.ImagePart) map[string]any {
 }
 
 // setAuthHeader 将 "Bearer <key>" 写入 Authorization header。
-// 使用 unsafe.String 避免额外堆分配；返回清理函数供请求完成后清零。
+// 改为使用 string(bearer) 普通拷贝，牺牲一次小内存分配换取语义正确性，避免 defer 中修改已赋值给 http.Header 的字符串底层内存。
 func setAuthHeader(req *http.Request, key []byte) func() {
 	const prefix = "Bearer "
 	bearer := make([]byte, len(prefix)+len(key))
 	copy(bearer, prefix)
 	copy(bearer[len(prefix):], key)
-	req.Header.Set("Authorization", unsafe.String(unsafe.SliceData(bearer), len(bearer)))
+	req.Header.Set("Authorization", string(bearer))
 	return func() {
 		req.Header.Del("Authorization") // 删除 Header map 引用（inv_M1_06）
 		for i := range bearer {

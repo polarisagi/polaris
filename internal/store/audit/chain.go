@@ -26,6 +26,7 @@ func NewAuditChain(db *sql.DB) *AuditChain {
 	return &AuditChain{db: db}
 }
 
+//nolint:gocyclo
 func (a *AuditChain) VerifyChain(ctx context.Context, fromOffset int64) (VerifyReport, error) {
 	report := VerifyReport{Valid: true}
 
@@ -40,6 +41,20 @@ func (a *AuditChain) VerifyChain(ctx context.Context, fromOffset int64) (VerifyR
 	var expectedPrevHash string
 	isFirstRow := true
 
+	// GR-1-003: fromOffset>0 时，先查前一行 hash 作为链首校验锚点，
+	// 防止归档/截断后的链首断裂被静默跳过
+	if fromOffset > 0 {
+		var prevRowHash sql.NullString
+		anchorQuery := `SELECT hash FROM events WHERE "offset" = ?`
+		if err := a.db.QueryRowContext(ctx, anchorQuery, fromOffset-1).Scan(&prevRowHash); err != nil && err != sql.ErrNoRows {
+			return report, apperr.Wrap(apperr.CodeInternal, "VerifyChain: query anchor hash failed", err)
+		}
+		if prevRowHash.Valid {
+			expectedPrevHash = prevRowHash.String
+			isFirstRow = false // 已有锚点，首行同样参与 prev_hash 校验
+		}
+	}
+
 	for rows.Next() {
 		var (
 			offset      int64
@@ -53,6 +68,16 @@ func (a *AuditChain) VerifyChain(ctx context.Context, fromOffset int64) (VerifyR
 		)
 		if err := rows.Scan(&offset, &id, &topic, &actor, &evtType, &payload, &prevHash, &currentHash); err != nil {
 			return report, apperr.Wrap(apperr.CodeInternal, "VerifyChain scan failed", err)
+		}
+
+		if isFirstRow && fromOffset == 0 && prevHash.Valid && prevHash.String != "" {
+			// 链头 prev_hash 非空说明已被归档截断，应视为校验失败（GR-5-001）
+			report.Valid = false
+			report.FirstError = apperr.New(apperr.CodeInternal,
+				fmt.Sprintf("audit chain truncated at offset %d: first row has non-null prev_hash %q, events may have been archived",
+					offset, prevHash.String))
+			report.ErrorOffset = offset
+			return report, nil
 		}
 
 		if !isFirstRow {

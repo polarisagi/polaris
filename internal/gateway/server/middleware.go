@@ -150,7 +150,9 @@ func NewAuthManager() *AuthManager {
 		failures: make(map[string]int),
 		lockedAt: make(map[string]time.Time),
 	}
-	go am.cleanupLoop() //custom-nolint:bare-goroutine AuthManager.cleanupLoop 是纯内部生命周期 goroutine，不依赖传入 ctx，使用 SafeGo 反而需要伪造 context；此模式与 RateLimiter.cleanupLoop 保持一致
+	concurrent.SafeGo(context.Background(), "gateway.server.auth_cleanup_loop", func(context.Context) {
+		am.cleanupLoop()
+	})
 	return am
 }
 

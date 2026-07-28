@@ -99,6 +99,7 @@ func (p *PluginInstaller) Install(ctx context.Context, req InstallReq) (string, 
 			clientCfg := mcp.MCPClientConfig{
 				Transport: mcp.MCPTransport(transport),
 				Command:   command,
+				TrustTier: req.TrustTier,
 			}
 			if args, ok := cfg["args"].([]any); ok {
 				clientCfg.Args = make([]string, len(args))

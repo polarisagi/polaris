@@ -164,7 +164,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 	layout := config.NewDataLayout(dataDir, cfg.System.Dirs)
 	if err := layout.MkdirAll(); err != nil {
-		slog.Warn("polaris: failed to create data directories", "err", err)
+		return nil, apperr.Wrap(apperr.CodeInternal, "failed to create data directories", err)
 	}
 	layout.Migrate()
 

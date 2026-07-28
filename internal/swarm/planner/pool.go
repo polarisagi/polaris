@@ -95,6 +95,8 @@ func (p *PlannerPool) Run(ctx context.Context) {
 	}
 }
 
+// TODO(HE-3): 直接操作本地文件系统（os.MkdirTemp, os.WriteFile）破坏了沙盒边界，
+// 需重构注入 WorkspaceManager 依赖隔离物理资源访问。
 func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultChan chan<- workerResult) {
 	if p.provider == nil {
 		return
@@ -125,16 +127,19 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	}
 	patchStr := resp.Content
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return
-	}
+	// 减少对宿主机当前目录的依赖
+	wd := os.TempDir()
 
 	tmpDir, err := os.MkdirTemp("", "planner-pool-*")
 	if err != nil {
 		return
 	}
 	defer os.RemoveAll(tmpDir)
+
+	// 严格验证路径以防逃逸
+	if !strings.HasPrefix(filepath.Clean(tmpDir), filepath.Clean(os.TempDir())) {
+		return
+	}
 
 	testFile := filepath.Join(tmpDir, "patch_gen.go")
 	if err := os.WriteFile(testFile, []byte(patchStr), 0600); err != nil {

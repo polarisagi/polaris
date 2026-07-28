@@ -2,13 +2,8 @@ package harness
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -34,7 +29,7 @@ func NewSQLiteEvalStore(store protocol.Store, engine *control.Engine) *SQLiteEva
 
 // GetTrainingCases 获取用于训练和优化的评测用例 (Training Set)。
 func (s *SQLiteEvalStore) GetTrainingCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
-	if err := verifyEvalSignature(agentRole, control.PartitionTraining, signature); err != nil {
+	if err := s.engine.VerifyRequest(agentRole, control.PartitionTraining, signature, time.Now().Unix()); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetTrainingCases", err)
 	}
 	if err := s.engine.CheckAccess(agentRole, control.PartitionTraining); err != nil {
@@ -45,7 +40,7 @@ func (s *SQLiteEvalStore) GetTrainingCases(ctx context.Context, agentRole string
 
 // GetValidationCases 获取用于泛化验证的评测用例 (Holdout Set)。
 func (s *SQLiteEvalStore) GetValidationCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
-	if err := verifyEvalSignature(agentRole, control.PartitionValidation, signature); err != nil {
+	if err := s.engine.VerifyRequest(agentRole, control.PartitionValidation, signature, time.Now().Unix()); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetValidationCases", err)
 	}
 	if err := s.engine.CheckAccess(agentRole, control.PartitionValidation); err != nil {
@@ -62,7 +57,7 @@ func (s *SQLiteEvalStore) GetValidationCases(ctx context.Context, agentRole stri
 // 身份签名，且该角色私钥不应出现在运行中 server 进程里——合法调用方只应是脱离
 // 主进程的人工/CI 审计流程，通过本方法的具体类型直接引用（而非走 EvalAPI）。
 func (s *SQLiteEvalStore) GetMetaHoldoutCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
-	if err := verifyEvalSignature(agentRole, control.PartitionMetaHoldout, signature); err != nil {
+	if err := s.engine.VerifyRequest(agentRole, control.PartitionMetaHoldout, signature, time.Now().Unix()); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetMetaHoldoutCases", err)
 	}
 	if err := s.engine.CheckAccess(agentRole, control.PartitionMetaHoldout); err != nil {
@@ -76,7 +71,7 @@ func (s *SQLiteEvalStore) GetMetaHoldoutCases(ctx context.Context, agentRole str
 // 直接调用，本身不做鉴权），本方法面向可能被 HTTP 层暴露的场景，必须携带有效
 // 签名，否则任何持有 *SQLiteEvalStore 引用的调用方都能绕过隔离直接写入。
 func (s *SQLiteEvalStore) PutMetaHoldoutCase(ctx context.Context, c EvalCase, signature []byte) error {
-	if err := verifyEvalSignature(control.RoleMetaAuditor, control.PartitionMetaHoldout, signature); err != nil {
+	if err := s.engine.VerifyRequest(control.RoleMetaAuditor, control.PartitionMetaHoldout, signature, time.Now().Unix()); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.PutMetaHoldoutCase", err)
 	}
 	if err := s.engine.CheckAccess(control.RoleMetaAuditor, control.PartitionMetaHoldout); err != nil {
@@ -229,46 +224,4 @@ func (s *SQLiteEvalStore) LatestMetaAudit(ctx context.Context) (passed bool, com
 		return false, time.Time{}, false, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.LatestMetaAudit: unmarshal", jsonErr)
 	}
 	return rec.Passed, time.Unix(rec.ComputedAt, 0), true, nil
-}
-
-// verifyEvalSignature 校验 agentRole 对 payload 的 Ed25519 签名。
-// 若系统未配置对应 agentRole 的公钥（开发环境），仅记录 WARN 并放行；
-// 若已配置公钥，签名无效则返回 ErrInvalidSignature。
-// payload 格式：agentRole + ":" + partition + ":" + UTC 分钟级时间戳（防重放 ±2min）
-func verifyEvalSignature(agentRole, partition string, signature []byte) error {
-	pubKey := evalPublicKey(agentRole) // 从环境变量或配置文件读取
-	if pubKey == nil {
-		// 未配置公钥：开发/Tier-0 模式，仅告警
-		slog.Warn("eval signature not verified: no public key configured",
-			"agent_role", agentRole, "partition", partition)
-		return nil
-	}
-	if len(signature) == 0 {
-		return apperr.New(apperr.CodeForbidden, "eval_store: signature required")
-	}
-	// payload = agentRole:partition:YYYYMMDDHHmm（UTC 分钟，±2min 容差）
-	now := time.Now().UTC()
-	for _, t := range []time.Time{now, now.Add(-time.Minute), now.Add(time.Minute),
-		now.Add(-2 * time.Minute), now.Add(2 * time.Minute)} {
-		payload := []byte(agentRole + ":" + partition + ":" + t.Format("200601021504"))
-		if ed25519.Verify(pubKey, payload, signature) {
-			return nil
-		}
-	}
-	return apperr.New(apperr.CodeForbidden, "eval_store: invalid signature")
-}
-
-// evalPublicKey 从环境变量 POLARIS_EVAL_PUBKEY_<ROLE> 读取 base64 编码的 Ed25519 公钥。
-// 返回 nil 表示未配置（放行模式）。
-func evalPublicKey(agentRole string) ed25519.PublicKey {
-	envKey := "POLARIS_EVAL_PUBKEY_" + strings.ToUpper(strings.ReplaceAll(agentRole, "-", "_"))
-	b64 := os.Getenv(envKey)
-	if b64 == "" {
-		return nil
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil || len(raw) != ed25519.PublicKeySize {
-		return nil
-	}
-	return ed25519.PublicKey(raw)
 }

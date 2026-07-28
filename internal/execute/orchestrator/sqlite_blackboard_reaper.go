@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	"golang.org/x/sync/errgroup"
@@ -15,6 +16,8 @@ import (
 // reaperPhase2 清理长时间未完成的僵尸任务（running/pending 超时）以及终态物理回收。
 // 对 running 任务先 cancel（通过 bb.cancels），再标记 failed；
 // 对 pending 超时任务直接标记 failed（防止饥饿任务永久堆积）。
+//
+//nolint:gocyclo,nestif
 func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 	// 0. 物理删除终态任务（保留原有物理清理逻辑）
 	if _, err := bb.db.ExecContext(ctx, `
@@ -52,20 +55,58 @@ func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 	if len(ids) > 0 {
 		// 批量标记 failed
 		for _, id := range ids {
-			if _, err := bb.db.ExecContext(ctx,
-				`UPDATE tasks SET status='failed', error='reaper_phase2_zombie_timeout', updated_at=datetime('now') WHERE task_id=? AND status='running'`,
-				id); err != nil {
-				slog.WarnContext(ctx, "blackboard: zombie task status update failed", "task_id", id, "error", err)
+			tx, err := bb.db.BeginTx(ctx, nil)
+			if err != nil {
+				continue
 			}
+			res, err := tx.ExecContext(ctx,
+				`UPDATE tasks SET status='failed', error='reaper_phase2_zombie_timeout', updated_at=datetime('now') WHERE task_id=? AND status='running'`,
+				id)
+			if err != nil {
+				_ = tx.Rollback()
+				slog.WarnContext(ctx, "blackboard: zombie task status update failed", "task_id", id, "error", err)
+				continue
+			}
+			ra, _ := res.RowsAffected()
+			if ra > 0 {
+				if werr := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_failed", id); werr != nil {
+					slog.WarnContext(ctx, "blackboard: failed to write reaper event", "task_id", id, "error", werr)
+				}
+				bb.broadcast(types.BlackboardEvent{Type: "task_failed", TaskID: id, Err: apperr.New(apperr.CodeTimeout, "reaper_phase2_zombie_timeout")})
+			}
+			_ = tx.Commit()
 			slog.WarnContext(ctx, "reaper phase2: zombie task killed", "task_id", id)
 		}
 	}
 
 	// 2. pending 超时（饥饿）任务
-	if _, err := bb.db.ExecContext(ctx,
-		`UPDATE tasks SET status='failed', error='reaper_phase2_pending_timeout', updated_at=datetime('now')
-         WHERE status='pending' AND created_at < datetime('now', '-60 minute')`); err != nil {
-		slog.WarnContext(ctx, "blackboard: starvation cleanup failed", "error", err)
+	tx, err := bb.db.BeginTx(ctx, nil)
+	if err == nil {
+		rows, err := tx.QueryContext(ctx,
+			`UPDATE tasks SET status='failed', error='reaper_phase2_pending_timeout', updated_at=datetime('now')
+         WHERE status='pending' AND created_at < datetime('now', '-60 minute') RETURNING task_id`)
+		if err != nil {
+			_ = tx.Rollback()
+			slog.WarnContext(ctx, "blackboard: starvation cleanup failed", "error", err)
+		} else {
+			var starvedIDs []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err == nil {
+					starvedIDs = append(starvedIDs, id)
+				}
+			}
+			_ = rows.Close()
+			for _, id := range starvedIDs {
+				if werr := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_failed", id); werr != nil {
+					slog.WarnContext(ctx, "blackboard: failed to write reaper event", "task_id", id, "error", werr)
+				}
+				bb.broadcast(types.BlackboardEvent{Type: "task_failed", TaskID: id, Err: apperr.New(apperr.CodeTimeout, "reaper_phase2_starvation_timeout")})
+			}
+			_ = tx.Commit()
+		}
+	} else {
+		slog.WarnContext(ctx, "blackboard: starvation tx begin failed", "error", err)
 	}
 }
 

@@ -81,6 +81,7 @@ func (m *MCPInstaller) Install(ctx context.Context, req InstallReq) (string, err
 		Args:      mcpCfg.Args,
 		URL:       mcpCfg.Endpoint,
 		Env:       mcpCfg.Env,
+		TrustTier: req.TrustTier,
 	}
 
 	if addErr := m.mcpConn.Add(ctx, req.InstID, name, clientCfg); addErr != nil {

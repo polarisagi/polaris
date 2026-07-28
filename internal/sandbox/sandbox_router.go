@@ -142,7 +142,7 @@ func (r *SandboxRouter) RouteByTier(tier types.SandboxTier, trustTier types.Trus
 // 否则 fail-closed（从 RouteByTier 拆出，gocyclo 治理，行为不变）。
 func (r *SandboxRouter) routeNativeOS() (SandboxProvider, error) {
 	// Tier-0 fallback：Rust 原生沙箱（无容器运行时依赖）。
-	// assign.go 在 hwTier==0 时将 SandboxContainer 降级为此 tier。
+	// assign.go 在 hwTier==0 时对 Container 请求直接 fail-closed 拒绝（apperr.ErrTier0SandboxLimit），不做降级。
 	if r.nativeOS != nil {
 		return r.nativeOS, nil
 	}

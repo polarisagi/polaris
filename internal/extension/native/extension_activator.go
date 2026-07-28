@@ -219,6 +219,7 @@ func (a *ExtensionActivator) activateMCP(ctx context.Context, extID, runtimeID, 
 		Command:    command,
 		Args:       args,
 		URL:        url,
+		TrustTier:  int(trustTier),
 	})
 	if connectErr != nil {
 		slog.Warn("extension_activator: MCP connect failed", "server", runtimeID, "err", connectErr)

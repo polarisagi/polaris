@@ -48,8 +48,10 @@ func (cb *circuitBreaker) Allow() bool {
 		return true
 	case circuitOpen:
 		if time.Now().UnixNano() > cb.openUntil.Load() {
-			cb.state.Store(int32(circuitHalfOpen))
-			return true
+			if cb.state.CompareAndSwap(int32(circuitOpen), int32(circuitHalfOpen)) {
+				return true // 仅本次 CAS 成功的 goroutine 获得探测权
+			}
+			return false // 其余并发请求视为仍处于 Open
 		}
 		return false
 	case circuitHalfOpen:

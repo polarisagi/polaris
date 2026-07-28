@@ -14,6 +14,8 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // denoPermFlags 根据信任等级返回 Deno 运行时权限标志。
 // 对应 extension_instances.trust_tier 的语义：
 //
@@ -89,6 +91,8 @@ Do not include any Markdown wrappers like ` + "```json" + ` in the output. Ensur
 `
 
 // GeneratePlugin takes a user's intent, calls the LLM, and creates the physical plugin directory, .mcp.json, and server.py.
+//
+//nolint:gocyclo
 func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trustTier int) (string, error) {
 	if c.llm == nil {
 		return "", apperr.New(apperr.CodeInternal, "plugin_creator: LLM client is nil")
@@ -111,12 +115,16 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 		return "", apperr.New(apperr.CodeInternal, "plugin_creator: invalid generation, missing required fields")
 	}
 
+	if !validNamePattern.MatchString(result.Name) {
+		return "", apperr.New(apperr.CodeInvalidInput, "plugin_creator: invalid name")
+	}
+
 	// Create physical directory structure
 	pluginDir := filepath.Join(c.baseDir, result.Name)
-	cleanBase := filepath.Clean(c.baseDir)
+	cleanBase := filepath.Clean(c.baseDir) + string(os.PathSeparator)
 	cleanPluginDir := filepath.Clean(pluginDir)
-	if !strings.HasPrefix(cleanPluginDir, cleanBase) {
-		return "", apperr.Wrap(apperr.CodeInvalidInput, "plugin_creator: path traversal detected", nil)
+	if !strings.HasPrefix(cleanPluginDir+string(os.PathSeparator), cleanBase) {
+		return "", apperr.New(apperr.CodeInvalidInput, "plugin_creator: path traversal detected")
 	}
 	srcDir := filepath.Join(pluginDir, "src")
 

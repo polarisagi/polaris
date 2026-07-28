@@ -156,7 +156,7 @@ internal/
   protocol/        跨模块共享类型 + 接口契约 + DDL
     repo/          Repository 接口定义（对应 store/repo/ 实现）
     pb/            Protobuf 生成文件
-    schema/        DDL SQL 文件（31 个，SSoT）
+    schema/        DDL SQL 文件（33 个，SSoT）
   config/          配置加载 + 编译期不变量
   lint/            CI 静态扫描规则
   bootstrap/       模块生命周期统一编排（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）

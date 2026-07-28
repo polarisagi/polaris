@@ -46,7 +46,7 @@ func NewPIIDetector() *PIIDetector {
 // endpoint 为 Presidio Analyzer HTTP 地址（如 http://localhost:3000/analyze）。
 func NewPIIDetectorWithPresidio(endpoint string, client *http.Client) *PIIDetector {
 	d := NewPIIDetector()
-	if endpoint != "" {
+	if endpoint != "" && client != nil {
 		d.presidioClient = &presidioClient{endpoint: endpoint, client: client}
 	}
 	return d

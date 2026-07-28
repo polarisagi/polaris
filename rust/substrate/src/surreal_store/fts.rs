@@ -60,14 +60,19 @@ pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c
 /// 从 FTS 索引删除文档（供 Forget 路径调用，与 episodic_memory 表同步清理）。
 ///
 /// # Safety
-/// doc_id 须为有效 NUL-terminated UTF-8 C 字符串。
+/// doc_id 须为有效 NUL-terminated UTF-8 C 字符串，不可为 null。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
-    let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（GR-11-001）
+    if doc_id.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(move || {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（GR-11-001）
+        let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
         let Some(store_arc) = get_store() else {
             return SURREAL_OK;
         };
@@ -100,21 +105,27 @@ pub unsafe extern "C" fn surreal_fts_delete(doc_id: *const c_char) -> c_int {
 /// 原 `SELECT doc_id` 对应表字段，已从 DDL 移除。
 ///
 /// # Safety
-/// query 须为有效 NUL-terminated UTF-8 C 字符串。
+/// query 须为有效 NUL-terminated UTF-8 C 字符串，不可为 null。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_search(
     query: *const c_char,
     k: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    let q = match unsafe { CStr::from_ptr(query) }.to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            write_cstr(out_json, "[]");
-            return SURREAL_ERR_UTF8;
-        }
-    };
+    // 入参 null 判断前置，避免 null 解引用 UB（GR-11-001）
+    if query.is_null() {
+        write_cstr(out_json, "[]");
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(move || {
+        // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（GR-11-001）
+        let q = match unsafe { CStr::from_ptr(query) }.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                write_cstr(out_json, "[]");
+                return SURREAL_ERR_UTF8;
+            }
+        };
         let Some(store_arc) = get_store() else {
             write_cstr(out_json, "[]");
             return SURREAL_OK;

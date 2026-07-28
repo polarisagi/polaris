@@ -163,11 +163,19 @@ func (rm *SQLReflectionMem) ListReflections( //nolint:gocyclo
 		concurrent.SafeGo(context.Background(), "sql_reflection_mem.lru_touch", func(_ context.Context) {
 			bCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			for _, id := range ids {
-				_, _ = rm.db.ExecContext(bCtx,
-					"UPDATE reflection_memory SET last_accessed_at = ?, accessed_count = accessed_count + 1 WHERE id = ?",
-					now, id)
+			if len(ids) == 0 {
+				return
 			}
+			placeholders := strings.Repeat("?,", len(ids))
+			placeholders = strings.TrimSuffix(placeholders, ",")
+			args := make([]any, 0, len(ids)+1)
+			args = append(args, now)
+			for _, id := range ids {
+				args = append(args, id)
+			}
+			_, _ = rm.db.ExecContext(bCtx,
+				fmt.Sprintf("UPDATE reflection_memory SET last_accessed_at = ?, accessed_count = accessed_count + 1 WHERE id IN (%s)", placeholders),
+				args...)
 		})
 	}
 

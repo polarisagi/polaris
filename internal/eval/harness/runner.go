@@ -155,6 +155,8 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 			casesAny, err = r.evalStore.GetTrainingCases(runCtx, control.RoleM9Optimizer, r.evalSignature)
 		case "validation":
 			casesAny, err = r.evalStore.GetValidationCases(runCtx, control.RoleM9Optimizer, r.evalSignature)
+		case "benchmark":
+			casesAny, err = r.evalStore.GetValidationCases(runCtx, control.RoleM9Optimizer, r.evalSignature)
 		default:
 			return apperr.New(apperr.CodeInternal, fmt.Sprintf("eval_runner: unknown suite %s", suite))
 		}

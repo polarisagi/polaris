@@ -198,6 +198,8 @@ type gcraState struct {
 
 // GetBreaker 获取或创建对应 key 的熔断器。
 func (rlm *RateLimiterMiddleware) GetBreaker(key string) *RateBreaker {
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
 	if b, ok := rlm.breakers[key]; ok {
 		return b
 	}

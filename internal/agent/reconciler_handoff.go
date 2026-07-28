@@ -45,7 +45,7 @@ func (r *AwaitingHandoffReconciler) Reconcile(ctx context.Context) error {
 		}
 		sessionID := row.TaskID
 		childTaskID := row.NodeID
-		
+
 		// 尝试获取 Agent 实例，如果不存在则跳过（不强制创建）
 		ctrl, release, err := r.pool.Acquire(ctx, sessionID)
 		if err != nil {
@@ -53,7 +53,7 @@ func (r *AwaitingHandoffReconciler) Reconcile(ctx context.Context) error {
 				"session_id", sessionID, "err", err)
 			continue
 		}
-		
+
 		ag, ok := ctrl.(*Agent)
 		if !ok {
 			release()

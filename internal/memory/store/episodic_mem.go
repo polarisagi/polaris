@@ -93,7 +93,7 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.T
 	em.mu.Unlock()
 
 	if em.indexer != nil || em.cognitive != nil {
-		concurrent.SafeGo(ctx, "episodic_mem.async_index", func(gctx context.Context) {
+		concurrent.SafeGo(context.WithoutCancel(ctx), "episodic_mem.async_index", func(gctx context.Context) {
 			// 图索引：将事件节点与代理/会话建立关联边（Tier1+，nil 时跳过）
 			if em.indexer != nil {
 				em.indexer.Index(gctx, ev)

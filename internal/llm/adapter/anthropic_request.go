@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"unsafe"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
@@ -364,10 +363,10 @@ func (rt keyInjectRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, apperr.New(apperr.CodeResourceExhausted, "keyInjectRT: no available credential (all keys cooling down)")
 	}
 	apiKey := cred.CredFn()()
-	// 直接用 []byte 构造 canonical header value，避免 string() 产生不可清零副本。
+	// 改为使用 string() 普通拷贝，牺牲一次小内存分配换取语义正确性，避免 defer/清理 时修改已赋值给 http.Header 的字符串底层内存导致内存竞态。
 	// http.Header 内部会 clone string，但此处我们在 RoundTrip 返回后立即
 	// 删除 header 引用，将泄漏窗口收窄到单次 TCP write。
-	req.Header.Set("x-api-key", unsafe.String(unsafe.SliceData(apiKey), len(apiKey)))
+	req.Header.Set("x-api-key", string(apiKey))
 	resp, err := rt.inner.RoundTrip(req)
 	req.Header.Del("x-api-key")  // 立即清除 header map 引用
 	llmparent.ClearBytes(apiKey) // 清零原始 key 字节

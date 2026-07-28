@@ -99,6 +99,12 @@ type LLMRegistry interface {
 	RegisterWithRole(name, displayName, role string, p Provider)
 }
 
+// ProviderRouter 扩展 Provider，暴露特定于路由器的直接指定 Provider 推理能力。
+type ProviderRouter interface {
+	Provider
+	StreamInferWithTarget(ctx context.Context, p Provider, providerName string, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error)
+}
+
 // TrainingSample 单条训练样本（QLoRA / PRM 共用）。
 type TrainingSample struct {
 	Prompt     string  `json:"prompt"`

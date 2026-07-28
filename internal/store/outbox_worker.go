@@ -266,17 +266,23 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 	}
 
 	if errors.Is(err, ErrUnknownTargetEngine) {
-		_, _ = w.db.ExecContext(ctx,
+		_, execErr := w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='dead', processed_at=?, error=? WHERE id=?",
 			now, err.Error(), record.ID)
+		if execErr != nil {
+			slog.Error("outbox message dead update failed", "err", apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr))
+		}
 		return nil
 	}
 
 	newAttempts := record.Attempts + 1
 	if newAttempts >= w.maxRetries || record.CrashRecoveryCount >= 3 {
-		_, _ = w.db.ExecContext(ctx,
+		_, execErr := w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='dead', attempts=?, processed_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, now, record.ID)
+		if execErr != nil {
+			slog.Error("outbox message dead update failed", "err", apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead max retries failed", execErr))
+		}
 		metrics.GlobalOutboxDeadLetterTotal.Add(1)
 		slog.Error("outbox message dead", "id", record.ID, "target", record.TargetEngine, "attempts", newAttempts, "crash", record.CrashRecoveryCount)
 	} else {
@@ -286,14 +292,14 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 			backoffMs = w.maxMs
 		}
 		nextRetry := now + backoffMs
-		_, _ = w.db.ExecContext(ctx,
+		_, execErr := w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='failed', attempts=?, next_retry_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, nextRetry, record.ID)
+		if execErr != nil {
+			slog.Error("outbox message failed update failed", "err", apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark failed failed", execErr))
+		}
 	}
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
-	}
-	return nil
+	return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
 }
 
 // loadCursor 从 sys_config 读取持久化的消费游标。

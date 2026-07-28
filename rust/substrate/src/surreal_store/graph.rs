@@ -32,6 +32,7 @@ pub unsafe extern "C" fn surreal_graph_relate(
     to_ptr: *const u8,
     to_len: usize,
     weight_bits: u64,
+) -> c_int {
     let result = panic::catch_unwind(move || {
         let weight = f64::from_bits(weight_bits);
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
