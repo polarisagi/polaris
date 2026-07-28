@@ -310,3 +310,27 @@ func TestOutboxWorker_BackoffSequence(t *testing.T) {
 		t.Errorf("nextRetry is NULL")
 	}
 }
+
+func TestProcessAndMark_DBError(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+	w.RegisterHandler("test", func(ctx context.Context, r *OutboxRecord) error {
+		return ErrUnknownTargetEngine
+	})
+
+	now := time.Now().UnixMilli()
+	_, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status, attempts, next_retry_at) 
+		VALUES (2001, ?, 'test', 'fail', 'system', X'CAFE', 'key2001', 'pending', 0, NULL)`, now)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_, _ = db.Exec("DROP TABLE outbox")
+
+	record := &OutboxRecord{ID: 2001, TargetEngine: "test"}
+	err = w.processAndMark(context.Background(), record)
+	if err == nil {
+		t.Errorf("expected DB error, got nil")
+	}
+}

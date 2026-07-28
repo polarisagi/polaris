@@ -270,7 +270,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 			"UPDATE outbox SET status='dead', processed_at=?, error=? WHERE id=?",
 			now, err.Error(), record.ID)
 		if execErr != nil {
-			slog.Error("outbox message dead update failed", "err", apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr))
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr)
 		}
 		return nil
 	}
@@ -281,7 +281,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 			"UPDATE outbox SET status='dead', attempts=?, processed_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, now, record.ID)
 		if execErr != nil {
-			slog.Error("outbox message dead update failed", "err", apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead max retries failed", execErr))
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead max retries failed", execErr)
 		}
 		metrics.GlobalOutboxDeadLetterTotal.Add(1)
 		slog.Error("outbox message dead", "id", record.ID, "target", record.TargetEngine, "attempts", newAttempts, "crash", record.CrashRecoveryCount)
@@ -296,7 +296,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 			"UPDATE outbox SET status='failed', attempts=?, next_retry_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, nextRetry, record.ID)
 		if execErr != nil {
-			slog.Error("outbox message failed update failed", "err", apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark failed failed", execErr))
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark failed failed", execErr)
 		}
 	}
 	return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
