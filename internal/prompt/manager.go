@@ -53,6 +53,9 @@ func (pm *Manager) resolveConfigDir() string {
 // safePromptName 校验 prompt 名称合法性，允许子目录相对路径，仅禁止路径穿越和绝对路径。
 // 原实现拒绝所有含 / 的名称，导致 "tool_enforcement/deepseek.md" 类合法子路径无法加载用户覆盖（GR-6-001）。
 func safePromptName(name string) error {
+	if name == "" {
+		return apperr.New(apperr.CodeInvalidInput, "prompt name cannot be empty")
+	}
 	if filepath.IsAbs(name) {
 		return apperr.New(apperr.CodeInvalidInput, "prompt name must be relative")
 	}

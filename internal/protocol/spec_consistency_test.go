@@ -219,6 +219,8 @@ func TestSpecOutboxStatus(t *testing.T) {
 		"processing": types.OutboxProcessing,
 		"done":       types.OutboxDone,
 		"dead":       types.OutboxDead,
+		"skipped":    types.OutboxSkipped,
+		"failed":     types.OutboxFailed,
 	}
 	yamlSet := make(map[string]bool, len(spec.Outbox.States))
 	for _, s := range spec.Outbox.States {

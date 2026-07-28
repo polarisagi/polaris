@@ -2,6 +2,8 @@ package harness
 
 import (
 	"context"
+	"crypto/ed25519"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,15 +35,24 @@ func (m *mockProvider) Infer(ctx context.Context, msgs []types.Message, opts ...
 	return m.resp, m.err
 }
 
+func testSignRunner(role, partition string) (ed25519.PublicKey, []byte) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	msg := []byte(fmt.Sprintf("%s:%s:%d", role, partition, time.Now().Unix()))
+	return pub, ed25519.Sign(priv, msg)
+}
+
 func TestRunner(t *testing.T) {
 	c1 := `{"id":"1", "level":1, "expected":{"output":"hello"}}`
 	c2 := `{"id":"2", "level":1, "expected":{"tools":["t1"]}}`
 	c3 := `{"id":"3", "level":4, "severity":"P0", "falsifiability_score":0.9}`
 
 	ms := &mockSQLiteStore{vals: [][]byte{[]byte(c1), []byte(c2), []byte(c3)}}
-	evalStore := NewSQLiteEvalStore(ms, control.NewEngine(nil))
+	
+	pub, sig := testSignRunner(control.RoleM9Optimizer, control.PartitionTraining)
+	evalStore := NewSQLiteEvalStore(ms, control.NewEngine(map[string]ed25519.PublicKey{control.RoleM9Optimizer: pub}))
 
 	runner := NewRunner(ms, evalStore, config.DefaultThresholds(), config.EvalConfig{})
+	runner.SetEvalSignature(sig)
 
 	ch := make(chan types.EvalCompletedPayload, 1)
 	runner.SetEvalChannel(ch)

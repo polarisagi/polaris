@@ -14,8 +14,8 @@ func TestSafePromptName(t *testing.T) {
 		{"empty string", "", true},
 		{"contains directory traversal", "../../../etc/passwd", true},
 		{"absolute path", "/etc/passwd", true},
-		{"sub directory", "sub/file.md", true},
-		{"backslash path", "sub\\file.md", true},
+		{"sub directory", "sub/file.md", false},
+		{"backslash path", "sub\\file.md", false},
 		{"just dots", "..", true},
 	}
 
