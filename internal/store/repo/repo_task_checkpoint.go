@@ -132,6 +132,39 @@ func (r *SQLiteTaskCheckpointRepository) ListCheckpointsByTask(ctx context.Conte
 		cp.StartedAt = startedAt.Int64
 		cp.CompletedAt = completedAt.Int64
 		cp.Error = errStr.String
+		// Reason not populated in this query historically, leaving as is unless strictly required, but let's select reason in ListByStatus.
+		res = append(res, cp)
+	}
+	return res, nil
+}
+
+func (r *SQLiteTaskCheckpointRepository) ListByStatus(ctx context.Context, status string) ([]types.TaskCheckpointRow, error) {
+	// 增加 ListByStatus 实现
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT task_id, node_id, attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error, reason 
+		 FROM task_checkpoints WHERE status = ? ORDER BY started_at ASC`,
+		status,
+	)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskCheckpointRepository.ListByStatus", err)
+	}
+	defer rows.Close()
+
+	var res []types.TaskCheckpointRow
+	for rows.Next() {
+		var cp types.TaskCheckpointRow
+		var outputJSON, idempotencyKey, errStr, reasonStr sql.NullString
+		var startedAt, completedAt sql.NullInt64
+
+		if err := rows.Scan(&cp.TaskID, &cp.NodeID, &cp.Attempt, &cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr, &reasonStr); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskCheckpointRepository.ListByStatus.Scan", err)
+		}
+		cp.OutputJSON = outputJSON.String
+		cp.IdempotencyKey = idempotencyKey.String
+		cp.StartedAt = startedAt.Int64
+		cp.CompletedAt = completedAt.Int64
+		cp.Error = errStr.String
+		cp.Reason = reasonStr.String
 		res = append(res, cp)
 	}
 	return res, nil
