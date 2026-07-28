@@ -163,7 +163,6 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		// 相对进程 CWD（而非 dataDir）解析路径；同一 Dependencies 结构体的其他字段
 		// 早已能拿到 s.dataDir，此处透传而非发明新配置源。
 		ContextRefExpander: authcontext.NewContextRefExpander(httpClient, authcontext.WithWorkDir(s.dataDir)),
-		EnableFSMChatPath:  agentCfg.EnableFSMChatPath,
 		TaintTracker:       taint.NewTaintTracker(), // [W-2-C] 接入 TaintTracker
 	})
 	s.sysadminHandler = sysadmin.NewSysAdminHandler(sysadmin.Dependencies{

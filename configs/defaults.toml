@@ -128,7 +128,6 @@ level = "info"
 format = "json"
 
 [agent]
-enable_fsm_chat_path = true
 
 [agent.kernel]
 state_machine = "dual_route"
