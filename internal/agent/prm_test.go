@@ -27,9 +27,11 @@ func (m *mockProvider) Infer(_ context.Context, msgs []types.Message, _ ...types
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// 故障注入路径：prompt 含指定关键词时报错
-	if m.failOn != "" && len(msgs) > 0 && strings.Contains(msgs[0].Content, m.failOn) {
-		m.failCount++
-		return nil, fmt.Errorf("mock llm failure: %s", m.failOn)
+	for _, msg := range msgs {
+		if m.failOn != "" && strings.Contains(msg.Content, m.failOn) {
+			m.failCount++
+			return nil, fmt.Errorf("mock llm failure: %s", m.failOn)
+		}
 	}
 	// PRM 队列路径
 	if len(m.responses) > 0 {
@@ -41,8 +43,10 @@ func (m *mockProvider) Infer(_ context.Context, msgs []types.Message, _ ...types
 		return &types.ProviderResponse{Content: resp}, nil
 	}
 	// 默认路径：状态机集成测试通用响应
-	if len(msgs) > 0 && strings.Contains(msgs[0].Content, "基于 TaskModel 生成执行 DAG") {
-		return &types.ProviderResponse{Content: `{"nodes":[{"id":"n1","action":"test_tool","params":{},"retry":0,"timeout":""}],"edges":[]}`}, nil
+	for _, msg := range msgs {
+		if strings.Contains(msg.Content, "基于 TaskModel 生成执行 DAG") {
+			return &types.ProviderResponse{Content: `{"nodes":[{"id":"n1","action":"test_tool","params":{},"retry":0,"timeout":""}],"edges":[]}`}, nil
+		}
 	}
 	return &types.ProviderResponse{Content: "mock_success"}, nil
 }
