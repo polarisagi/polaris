@@ -254,7 +254,7 @@ type M13InterfaceThresholds struct {
 }
 
 // DefaultThresholds 提供内置默认值（当 config/m*.toml 缺失时使用）。
-// 数值与 docs/arch/spec/state.yaml §thresholds 手工同步（ADR-0012 spec_consistency_test 守护核心 SSoT）。
+// 数值与 docs/arch/spec/state.yaml §thresholds 手工同步（ADR-0006 spec_consistency_test 守护核心 SSoT）。
 func DefaultThresholds() Thresholds {
 	return Thresholds{
 		M1Router: M1RouterThresholds{

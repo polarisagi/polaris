@@ -211,7 +211,7 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 **founding_anchor 漂移检测**（`internal/eval/founding_anchor.go` + `internal/eval/harness`）：`FoundingAnchor` 是首次启动（或历史轨迹积累到 200 条会话上限）时对 Agent 行为的一次性"指纹快照"（`BehaviorFingerprint`，由 `ComputeFingerprint` 从近期 `TrajectoryTrace` 聚合得出）。此后每 24 小时取最近 50 条会话轨迹重新计算指纹，与锚点做 `CompareWithAnchor` 对比生成 `DriftReport`；`DriftReport.OverallDriftScore` 写入 `DriftMonitor`（`atomic.Value` 封装单例），`ShouldFreeze=true` 时触发 M9 `TriggerCurriculum` 冻结课程生成。轨迹来源为 `ChatRepository.ListSessions`（按 `updated_at DESC` 取最近会话 ID）逐一调用 `TrajectoryRecorder.Record`——这条读路径依赖 `sCtx.SessionID` 被正确赋值（见 §6-bis #3），此前该字段从未赋值导致锚点长期建立在空数据上。
 
-**red_team 常态化对抗探测**（`internal/eval/red_team.go`，`RedTeamProtocol`）：内置 4 条探针（L0 配置对抗/L1 Prompt Injection/L2 恶意 Skill 描述/L3 自引用 DAG 无限循环），通过 `AgentPool.AcquireHeadless` 在进程内拉起 Headless Agent 实际执行探测输入，按响应/错误中是否含拒绝关键词（"blocked"/"refused"/"policy_violation"/"killswitch"）判定探针是否被正确拦截。未通过（防御未生效）标记 `SeverityP0` 并经 `InjectFindingsToHoldout` 写入 M12 Eval Holdout 分区；通过标记 `SeverityP2`（仅记录，不注入）。与 ADR-0014（PR 代码对抗审查 Action，CI 层面）是两个不同机制：ADR-0014 审查的是提交的代码本身，本节审查的是运行中 Agent 的实际防御行为。
+**red_team 常态化对抗探测**（`internal/eval/red_team.go`，`RedTeamProtocol`）：内置 4 条探针（L0 配置对抗/L1 Prompt Injection/L2 恶意 Skill 描述/L3 自引用 DAG 无限循环），通过 `AgentPool.AcquireHeadless` 在进程内拉起 Headless Agent 实际执行探测输入，按响应/错误中是否含拒绝关键词（"blocked"/"refused"/"policy_violation"/"killswitch"）判定探针是否被正确拦截。未通过（防御未生效）标记 `SeverityP0` 并经 `InjectFindingsToHoldout` 写入 M12 Eval Holdout 分区；通过标记 `SeverityP2`（仅记录，不注入）。与 ADR-0013 决策二（原 ADR-0014，PR 代码对抗审查 Action，CI 层面）是两个不同机制：前者审查的是提交的代码本身，本节审查的是运行中 Agent 的实际防御行为。
 
 ---
 

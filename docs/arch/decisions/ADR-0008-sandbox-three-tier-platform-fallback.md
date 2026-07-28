@@ -1,6 +1,6 @@
-# ADR-0008: Sandbox 分级架构合集（三级基座 + Logic Collapse L3 运行时 + L4 长驻进程池，含原 ADR-0026/0078/0079）
+# ADR-0008: Sandbox 与代码安全防线合集（三级基座 + Logic Collapse L3 运行时 + L4 长驻进程池 + 三层代码安全防线，含原 ADR-0024/0026/0078/0079）
 
-- **状态**: Accepted（已执行）| **日期**: 2026-05-16（扩展 2026-06/2026-07-25，合并 2026-07-28）| **模块**: M7 `internal/action` / `internal/sandbox/` / `internal/extension/skill/` / `internal/action/codeact/`
+- **状态**: Accepted（已执行）| **日期**: 2026-05-16（扩展 2026-06/06-13/2026-07-25，合并 2026-07-28）| **模块**: M7 `internal/action` / `internal/sandbox/` / `internal/extension/skill/` / `internal/action/codeact/` / `internal/swarm/agents`
 
 ## 决策一：三级 Sandbox + Tier-0 平台特化降级（原决策）
 
@@ -27,10 +27,22 @@ Logic Collapse（System 2 轨迹蒸馏为 System 1 技能）产物语言定为 *
 
 **已知边界**：沙箱边界（AllowedPaths/网络策略）会话创建时固化，不可中途更改；单会话同一时刻只能串行处理一次调用；未接入 OOM Guard 联动。
 
+## 决策四：GovernanceAgent 代码安全三层防线（原 ADR-0024，AST + 正则 + 单次 ThinkingMax LLM）
+
+LLM 生成代码（CodeAct/Wasm）进沙箱前经三层串行防线，取代原三路 goroutine LLM 投票（成本 3×、收益边际低）：
+
+| 层 | 性质 | 机制 |
+|----|------|------|
+| Layer 0 | 同步 <5ms | Go AST 解析 + import 白名单，拦截 `os/exec`/`syscall`/`unsafe` 等危险包（gpython AST + mvdan.cc/sh 语法树） |
+| Layer 1 | 同步 <1ms | 正则规则集，邻近匹配距离 ≤200 字节防跨行误报 |
+| Layer 2 | 异步 | 单次 LLM + `ThinkingMax` 深度审计，超时 fail-closed |
+
+本决策与决策一/二/三的关系：决策一/二/三管代码**在哪运行**（沙箱隔离层级），本决策管代码**能否放行运行**（执行前静态+LLM 审计门），两者是同一 CodeAct 管线的串联防线，非替代关系。
+
 ## 反例守护
 
-拒绝"为方便所有工具降到 L1"——L1 仅限内置确定性工具。拒绝"LLM 生成技能用 L1 兼容"——至少 L2。拒绝改用 Go/Rust 直接编译执行 Logic Collapse 产物——蒸馏产物是动态生成代码。拒绝在 Wasm(L1) 中运行 Python。拒绝伪造 L4 checkpoint/restore 后端——ADR-0078 的安全分析结论仍然有效。
+拒绝"为方便所有工具降到 L1"——L1 仅限内置确定性工具。拒绝"LLM 生成技能用 L1 兼容"——至少 L2。拒绝改用 Go/Rust 直接编译执行 Logic Collapse 产物——蒸馏产物是动态生成代码。拒绝在 Wasm(L1) 中运行 Python。拒绝伪造 L4 checkpoint/restore 后端——ADR-0078 的安全分析结论仍然有效。拒绝恢复多视角 ensemble 投票——单次 ThinkingMax 推理质量已优于三路无 thinking 投票，且成本更低。
 
 ## 引用代码
 
-`internal/action/sandbox/`、`internal/extension/skill/compile.go`（`ValidatePython`）、`internal/extension/skill/skill_pipeline.go`、`internal/sandbox/sandbox_persistent.go`、`internal/tool/sandbox/argv_wrapper_adapter.go`
+`internal/action/sandbox/`、`internal/extension/skill/compile.go`（`ValidatePython`）、`internal/extension/skill/skill_pipeline.go`、`internal/sandbox/sandbox_persistent.go`、`internal/tool/sandbox/argv_wrapper_adapter.go`、`internal/action/codeact/code_act.go`（三层同步编排）、`internal/action/codeact/code_act_checker.go`（Layer 0 AST）、`internal/swarm/agents/security_audit_agent.go`（Layer 2）

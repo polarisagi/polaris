@@ -1,6 +1,6 @@
 package config
 
-// CognitionConfig SurrealDB 认知存储后端配置（ADR-0010）。
+// CognitionConfig SurrealDB 认知存储后端配置（ADR-0003）。
 type CognitionConfig struct {
 	// SurrealBackend 后端选择：
 	//   "mem"     — kv-mem 默认，进程重启数据丢失，由 SQLite Outbox 投影恢复；256MB+ 可用，含 VPS。
