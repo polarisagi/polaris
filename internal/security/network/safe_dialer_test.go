@@ -49,21 +49,14 @@ func TestSafeDialer_QUICDisabled(t *testing.T) {
 func TestSafeDialer_InjectHTTPTransport(t *testing.T) {
 	sd := NewSafeDialer(0, nil, config.M11PolicyThresholds{})
 
-	// Reset DefaultTransport to avoid polluting
-	dt := http.DefaultTransport.(*http.Transport)
-	oldProtos := []string{}
-	if dt.TLSClientConfig != nil {
-		oldProtos = dt.TLSClientConfig.NextProtos
-	}
+	tr := sd.InjectHTTPTransport()
 
-	sd.InjectHTTPTransport()
-
-	if dt.TLSClientConfig == nil {
+	if tr.TLSClientConfig == nil {
 		t.Fatal("TLSClientConfig should be initialized")
 	}
 
 	foundH3 := false
-	for _, p := range dt.TLSClientConfig.NextProtos {
+	for _, p := range tr.TLSClientConfig.NextProtos {
 		if p == "h3" {
 			foundH3 = true
 		}
@@ -73,8 +66,8 @@ func TestSafeDialer_InjectHTTPTransport(t *testing.T) {
 		t.Errorf("HTTP/3 (QUIC) should be explicitly excluded from NextProtos")
 	}
 
-	if dt.TLSClientConfig != nil {
-		dt.TLSClientConfig.NextProtos = oldProtos
+	if tr.DialContext == nil {
+		t.Errorf("DialContext should be set")
 	}
 }
 

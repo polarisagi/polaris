@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -106,5 +107,25 @@ func TestCoalesceEvents(t *testing.T) {
 	res := hub.CoalesceEvents(events)
 	if len(res) != 2 {
 		t.Errorf("Expected 2 events after coalesce, got %d", len(res))
+	}
+}
+
+func TestRateLimiterMiddleware_GetBreaker_Concurrent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rlm := NewRateLimiterMiddleware(ctx)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rlm.GetBreaker("test-key")
+		}()
+	}
+	wg.Wait()
+
+	if rlm.breakers["test-key"] == nil {
+		t.Error("Expected breaker to be created")
 	}
 }

@@ -102,7 +102,7 @@ type M5MemoryThresholds struct {
 	CoreMemoryBlockMaxKB  int `toml:"core.memory_block_max_kb"`  // 2
 	CoreMemoryTotalMaxKB  int `toml:"core.memory_total_max_kb"`  // 8
 	RRFK                  int `toml:"rrf.k"`                     // 60 — M5/M10 共享
-	GraphMaxDepth         int `toml:"graph.max_depth"`           // 3
+	GraphMaxDepth         int `toml:"graph.max_depth"`           // 2
 	// ReflectionTaskTypeWhitelist/ReflectionMinReplanCount — §3.4 ReflectionWorker
 	// 触发策略（2026-07-21 deadcode 审查补齐，此前 reflexion.NewReflectionWorkerWithConfig
 	// 有完整实现+测试但生产侧无配置来源，一直只能走硬编码默认值）。
@@ -335,7 +335,7 @@ func DefaultThresholds() Thresholds {
 			CoreMemoryBlockMaxKB:  2,
 			CoreMemoryTotalMaxKB:  8,
 			RRFK:                  60,
-			GraphMaxDepth:         3,
+			GraphMaxDepth:         2,
 			ReflectionTaskTypeWhitelist: []string{
 				"complex_reasoning", "coding", "research", "debug", "analysis",
 			},

@@ -97,7 +97,7 @@ func TestModelFilesPresent_Complete(t *testing.T) {
 func TestLoadLibrary_NonExistentPath(t *testing.T) {
 	// 确保重置全局状态（避免已加载状态干扰）
 	libMu.Lock()
-	wasLoaded := loaded
+	wasLoaded := libInst != nil
 	libMu.Unlock()
 
 	if wasLoaded {
@@ -114,16 +114,16 @@ func TestLoadLibrary_NonExistentPath(t *testing.T) {
 
 func TestNewEngine_LibraryNotLoaded(t *testing.T) {
 	libMu.Lock()
-	wasLoaded := loaded
-	savedLoaded := loaded
+	wasLoaded := libInst != nil
+	savedLoaded := libInst
 	if wasLoaded {
-		loaded = false // 临时模拟未加载状态
+		libInst = nil // 临时模拟未加载状态
 	}
 	libMu.Unlock()
 
 	defer func() {
 		libMu.Lock()
-		loaded = savedLoaded
+		libInst = savedLoaded
 		libMu.Unlock()
 	}()
 

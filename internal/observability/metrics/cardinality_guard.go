@@ -2,7 +2,7 @@ package metrics
 
 import "sync"
 
-// cardinalityGuard 固定容量 first-write-wins 集合（cap=500），已达容量的新 key 统一映射为 <overflow>，不做淘汰。
+// cardinalityGuard 固定容量 first-write-wins 集合（inv_M3_06: cap=500），已达容量的新 key 统一映射为 <overflow>，不做淘汰。
 // 超过 cap 后，新值映射为 "<overflow>" 桶，防止高基标签爆炸 Prometheus 内存。
 type cardinalityGuard struct {
 	mu    sync.Mutex

@@ -17,5 +17,7 @@
   "internal/agent/agent.go": true,
   "_reason_agent": "TASK-10 and TASK-12 refactors temporarily crossing 400 lines; will be split",
   "internal/agent/agent_wiring.go": true,
-  "_reason_agent_wiring": "TASK-10 and TASK-12 refactors temporarily crossing 400 lines; will be split"
+  "_reason_agent_wiring": "TASK-10 and TASK-12 refactors temporarily crossing 400 lines; will be split",
+  "internal/action/codeact/code_act.go": true,
+  "_reason_code_act": "GR-4-002 fix temporarily crossed 400 lines; will be split"
 }

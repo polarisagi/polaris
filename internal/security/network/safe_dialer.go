@@ -284,27 +284,17 @@ func (sd *SafeDialer) dialerControl(network, address string, c syscall.RawConn) 
 // InjectHTTPTransport 返回一个配置了 SafeDialer 的新 *http.Transport。
 // 覆盖 REST/SSE 调用。
 func (sd *SafeDialer) InjectHTTPTransport() *http.Transport {
-	// 基础克隆
-	dt, ok := http.DefaultTransport.(*http.Transport)
-	var newTransport *http.Transport
-	if ok {
-		newTransport = dt.Clone()
-	} else {
-		newTransport = &http.Transport{}
+	return &http.Transport{
+		DialContext:           sd.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		TLSClientConfig: &tls.Config{
+			NextProtos: []string{"h2", "http/1.1"},
+		},
 	}
-
-	newTransport.DialContext = sd.DialContext
-
-	// 禁用 HTTP/3 (QUIC): 移除 Alt-Svc 升级路径
-	// http.Transport 默认不启用 QUIC，但显式设置 TLSClientConfig 确保
-	if newTransport.TLSClientConfig == nil {
-		newTransport.TLSClientConfig = &tls.Config{}
-	}
-	// 强制仅 HTTP/1.1 + HTTP/2，不升级到 HTTP/3
-	newTransport.ForceAttemptHTTP2 = true
-	newTransport.TLSClientConfig.NextProtos = []string{"h2", "http/1.1"} // 显式排除 "h3"
-
-	return newTransport
 }
 
 // InjectWebSocketDialer 将 SafeDialer 注入 WebSocket 连接。
