@@ -134,6 +134,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	httpServer.SetWorktreeManagerFactory(func(wd, r string) sysadmin.WorktreeManager { return autopkg.NewWorktreeManager(wd, r) })
 	httpServer.SetSkillRegistry(tb.SkillRegistry)
 	httpServer.SetEmbedder(sb.Embedder, sb.Cfg.Embedding.Threshold)
+	httpServer.SetAmbientSkillMaxChars(sb.Cfg.Thresholds.M13Interface.AmbientSkillMaxChars)
 	// M09 §1.3 /steer 命令面（2026-07-21 deadcode 审查补齐）：sb.Steering/sb.CVStore
 	// 均可为 nil（FeatureActivationSteer 未启用），SetSteering/handleSteer 全链 nil-safe。
 	httpServer.SetSteering(sb.Steering, sb.CVStore)

@@ -317,7 +317,13 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	// Run() 内含 loadCursor（DB 恢复游标）、saveCursor（单调性保护）、
 	// processAndMark（CAS 防竞争）、Poison Pill 隔离、失败指数退避。
 	// 参考：docs/arch/Module-Dependency-Axioms.md XR-04 + outbox_worker.go L176
-	outboxWorker := sysstore.NewOutboxWorker(store.DB(), 5, 3, 1000, 30000)
+	// 退避/重试参数必须走配置层（SSoT: spec/state.yaml §thresholds.m2_storage →
+	// config.M2StorageThresholds），禁止在此内联字面量——历史上此处硬编码
+	// (3, 1000, 30000) 与 state.yaml (5, 100, 8000) 四方不一致，见 DR-1-007。
+	// pollInterval 无对应阈值键，保持 5s（与 NewOutboxWorker 内部兜底一致）。
+	m2 := cfg.Thresholds.M2Storage
+	outboxWorker := sysstore.NewOutboxWorker(store.DB(), 5,
+		m2.OutboxMaxAttempts, m2.OutboxBackoffInitialMs, m2.OutboxBackoffMaxMs)
 	concurrent.SafeGo(ctx, "outbox-worker", func(ctx context.Context) {
 		if err := outboxWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("polaris: outbox worker exited unexpectedly", "err", err)

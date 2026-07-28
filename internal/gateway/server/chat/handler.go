@@ -68,6 +68,11 @@ type ChatHandler struct {
 	// EmbedThreshold Tier 2 余弦相似度阈值（默认 0.60，由 cfg.Embedding.Threshold 注入）。
 	EmbedThreshold float64
 
+	// AmbientMaxChars ambient skill 全文注入的总字符预算（M13-bis §3）。
+	// 由 boot_server.go 从 cfg.Thresholds.M13Interface.AmbientSkillMaxChars 注入；
+	// <=0（未注入，如单元测试直接构造 ChatHandler）时回落 defaultAmbientMaxChars。
+	AmbientMaxChars int
+
 	// skillEmbedCacheMu/skillEmbedCache 技能文本→向量缓存（sha256(text) 为 key）。
 	// 依赖注入替代包级可变变量（R1.3）：原实现是 sse.go 里的包级 var，
 	// 2026-07-07 复核发现后收敛为按 ChatHandler 实例持有——每个 ChatHandler

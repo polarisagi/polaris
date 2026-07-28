@@ -15,3 +15,4 @@
 'worker.cron' = 1
 max_concurrent_llm_calls = 4
 lazy_load_tool_threshold = 40
+ambient_skill_max_chars = 4000

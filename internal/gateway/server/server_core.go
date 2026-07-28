@@ -206,6 +206,15 @@ func (s *Server) SetPersonaRefiner(pr *agentctx.PersonaRefiner) {
 // SetSamplingMonitor 见 server_setters_sampling.go（R7 拆分：server_core.go
 // 加入该 setter 会突破 400 行上限）。
 
+// SetAmbientSkillMaxChars 注入 ambient skill 全文注入的字符预算（M13-bis §3）。
+// SSoT: spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars。
+// <=0 时不覆盖，ChatHandler 侧回落 defaultAmbientMaxChars。
+func (s *Server) SetAmbientSkillMaxChars(n int) {
+	if s.chatHandler != nil && n > 0 {
+		s.chatHandler.AmbientMaxChars = n
+	}
+}
+
 // SetEmbedder 注入语义向量化引擎（Tier 2 Ambient 匹配 + tool schema 语义过滤）。
 // nil 时 ChatHandler/SysAdminHandler 均自动降级 Tier 1（全量 schema 注入）。
 func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
