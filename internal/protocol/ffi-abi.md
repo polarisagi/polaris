@@ -64,13 +64,13 @@
 Rust 导出 `substrate_abi_version() -> u32`（高16位=major, 低16位=minor）。
 
 | 侧 | 当前值 |
-|----|--------|
-| Go `ExpectedABIMajor` | 1 |
-| Go `ExpectedABIMinor` | 1 |
-| Rust `SUBSTRATE_ABI_MAJOR` | 1 |
-| Rust `SUBSTRATE_ABI_MINOR` | 1 |
+| Go `ExpectedABIMajor` | 3 |
+| Go `ExpectedABIMinor` | 3 |
+| Rust `SUBSTRATE_ABI_MAJOR` | 3 |
+| Rust `SUBSTRATE_ABI_MINOR` | 3 |
 
 ABI 1.1 新增：`surreal_set_worker_threads` / `surreal_vec_delete` / `surreal_fts_delete` / `surreal_graph_delete_edges`；`surreal_stats` 扩展四路计数字段；HNSW 替换 MTREE。
+ABI 3.3 新增：版本递增，同步 Rust 侧定义。
 
 ### 3.2 校验机制（`internal/ffi/dylib.go` `verifyABI`）
 
