@@ -16,6 +16,12 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
+	// modernc.org/sqlite 的 ":memory:" 库是"每连接独立"的：database/sql 默认
+	// 允许连接池开多条连接，若测试并发/重试触发了第二条连接，它会拿到一个
+	// 全新的空库，看不到下面建的表，报 "no such table: rag_chunks"——本次
+	// 复核跑 -count=3 -race 时实测复现（约 1/3 概率）。限制为单连接消除该
+	// 竞态，语义上等价于其他测试用 file::memory:?cache=shared 的目的。
+	db.SetMaxOpenConns(1)
 
 	// Create rag_chunks schema（含 031_rag_lineage 新增的 lineage 字段）
 	_, err = db.Exec(`
