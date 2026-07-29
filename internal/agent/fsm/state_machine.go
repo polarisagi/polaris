@@ -51,12 +51,18 @@ type StateMachine struct {
 	stashedTriggers            []types.AgentTrigger // P0-5: 暂存中断期间的事件
 	intentDispatcher           func(types.AgentTrigger)
 	sessionEventWriter         SessionEventWriter
+	skillMatcher               SkillMatcher
 }
 
 // SessionEventWriter records events to the session trajectory store.
 type SessionEventWriter interface {
 	WriteStateTransEvent(sessionID string, stateType string)
 	WriteLLMCallEvent(sessionID string, request, response map[string]any)
+}
+
+// SkillMatcher 提供意图匹配，用于 System 1 快速短路（GD-13-004）
+type SkillMatcher interface {
+	MatchIntent(rawIntent string) (skillID string, score float64, err error)
 }
 
 const (
@@ -277,6 +283,13 @@ func (sm *StateMachine) SetSessionEventWriter(writer SessionEventWriter) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.sessionEventWriter = writer
+}
+
+// SetSkillMatcher sets the skill matcher for System 1 bypass.
+func (sm *StateMachine) SetSkillMatcher(matcher SkillMatcher) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.skillMatcher = matcher
 }
 
 // WriteLLMCallEvent records an LLM call to the trajectory.
