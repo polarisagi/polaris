@@ -2,77 +2,51 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
-
-	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // SequentialExecutor 实现了串行编排模式。
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3
 // 行为: Task A 的输出将作为 Task B 的输入，依次串联执行。
+// 内部收敛为 StateGraphExecutor 的 thin wrapper (GD-13-005)。
 type SequentialExecutor struct {
-	bb             *SQLiteBlackboard
-	perTaskTimeout time.Duration // 单任务等待超时，默认 5min
+	sge *StateGraphExecutor
 }
 
-// NewSequentialExecutor 创建 SequentialExecutor，perTaskTimeout=0 使用默认值 5min。
+// NewSequentialExecutor 创建 SequentialExecutor，perTaskTimeout 当前由底层统一管理。
 func NewSequentialExecutor(bb *SQLiteBlackboard, perTaskTimeout time.Duration) *SequentialExecutor {
-	if perTaskTimeout <= 0 {
-		perTaskTimeout = 5 * time.Minute
+	sge := NewStateGraphExecutor(bb)
+	sge.PreserveNodeID = true
+	return &SequentialExecutor{
+		sge: sge,
 	}
-	return &SequentialExecutor{bb: bb, perTaskTimeout: perTaskTimeout}
 }
 
 // Execute 依次投递任务，并等待上一个任务完成再投递下一个。
 func (se *SequentialExecutor) Execute(ctx context.Context, parentTaskID string, subTasks []types.TaskEntry) error {
-	var lastResult []byte
-
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// 订阅黑板事件，等待当前任务完成
-	events, err := se.bb.Subscribe(subCtx)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
+	if len(subTasks) == 0 {
+		return nil
 	}
-
+	spec := protocol.WorkflowGraphSpec{}
 	for i := range subTasks {
-		task := &subTasks[i]
-		// 如果不是第一个任务，将上一个任务的结果注入到当前任务的 Intent（携带上下文链）
-		if i > 0 && len(lastResult) > 0 {
-			task.Intent = append(task.Intent, []byte(fmt.Sprintf("\n[Previous Result]: %s", string(lastResult)))...)
+		t := &subTasks[i]
+		node := protocol.WorkflowNodeSpec{
+			ID:             t.ID,
+			CapabilityType: t.Type,
+			IntentTemplate: string(t.Intent),
+			IsEntry:        i == 0,
 		}
+		spec.Nodes = append(spec.Nodes, node)
 
-		// 投递任务
-		if err := se.bb.PostTask(ctx, task); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to post sequential task %s", task.ID), err)
-		}
-
-		completed := false
-		for !completed {
-			select {
-			case <-ctx.Done():
-				return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
-			case ev := <-events:
-				if ev.TaskID == task.ID {
-					switch ev.Type {
-					case "task_completed":
-						lastResult = ev.Payload
-						completed = true
-					case "task_failed":
-						return apperr.New(apperr.CodeInternal, fmt.Sprintf("sequential pipeline broken: task %s failed with: %s", task.ID, string(ev.Payload)))
-					}
-				}
-			case <-time.After(se.perTaskTimeout):
-				return apperr.New(apperr.CodeInternal, fmt.Sprintf("sequential pipeline timeout waiting for task %s", task.ID))
-			}
+		if i > 0 {
+			spec.Edges = append(spec.Edges, protocol.WorkflowEdgeSpec{
+				From: subTasks[i-1].ID,
+				To:   t.ID,
+			})
 		}
 	}
-
-	// 最终将最后一个任务的结果写回 Parent Task
-	// 此处省略父任务的 CompleteTask 调用，交给上层 Orchestrator 或 Planner
-	return nil
+	return se.sge.Execute(ctx, parentTaskID, spec)
 }

@@ -2,81 +2,42 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
-
-	"golang.org/x/sync/errgroup"
-
-	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ParallelExecutor 实现了并发编排模式。
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3
 // 行为: 将多个无依赖的子任务同时投递到黑板，并等待它们全部完成。
+// 内部收敛为 StateGraphExecutor 的 thin wrapper (GD-13-005)。
 type ParallelExecutor struct {
-	bb *SQLiteBlackboard
+	sge *StateGraphExecutor
 }
 
 func NewParallelExecutor(bb *SQLiteBlackboard) *ParallelExecutor {
-	return &ParallelExecutor{bb: bb}
+	sge := NewStateGraphExecutor(bb)
+	sge.PreserveNodeID = true
+	return &ParallelExecutor{
+		sge: sge,
+	}
 }
 
-// Execute 批量投递任务并使用 errgroup 等待它们完成。
+// Execute 批量投递任务并等待它们完成。
 func (pe *ParallelExecutor) Execute(ctx context.Context, parentTaskID string, subTasks []types.TaskEntry) error {
 	if len(subTasks) == 0 {
 		return nil
 	}
 
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// 1. 先订阅事件，再投递任务，防止错过完成通知
-	events, err := pe.bb.Subscribe(subCtx)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "failed to subscribe to blackboard", err)
-	}
-
+	spec := protocol.WorkflowGraphSpec{}
 	for i := range subTasks {
-		task := &subTasks[i]
-		if err := pe.bb.PostTask(ctx, task); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to post parallel task %s", task.ID), err)
-		}
+		t := &subTasks[i]
+		spec.Nodes = append(spec.Nodes, protocol.WorkflowNodeSpec{
+			ID:             t.ID,
+			CapabilityType: t.Type,
+			IntentTemplate: string(t.Intent),
+			IsEntry:        true,
+		})
 	}
-
-	// 跟踪完成情况
-	pendingMap := make(map[string]bool)
-	for _, task := range subTasks {
-		pendingMap[task.ID] = true
-	}
-
-	g, gCtx := errgroup.WithContext(ctx)
-
-	// 启动一个监听协程
-	g.Go(func() error {
-		for len(pendingMap) > 0 {
-			select {
-			case <-gCtx.Done():
-				return gCtx.Err()
-			case ev, ok := <-events:
-				if !ok {
-					return apperr.New(apperr.CodeInternal, fmt.Sprintf("event channel closed while %d tasks pending", len(pendingMap)))
-				}
-				if ev.TaskID != "" && pendingMap[ev.TaskID] {
-					switch ev.Type {
-					case "task_completed":
-						delete(pendingMap, ev.TaskID)
-					case "task_failed":
-						return apperr.New(apperr.CodeInternal, fmt.Sprintf("parallel task %s failed with: %s", ev.TaskID, string(ev.Payload)))
-					}
-				}
-			}
-		}
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "pattern_parallel: 等待并行任务失败", err)
-	}
-	return nil
+	return pe.sge.Execute(ctx, parentTaskID, spec)
 }
