@@ -98,6 +98,11 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerIntentReceived,
 		To:      types.AgentStatePerceive,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			if bypassEffect := sm.trySystem1Bypass(ctx, sCtx); bypassEffect != nil {
+				return []protocol.Effect{bypassEffect}, nil
+			}
+			// Unmatched case
+			metrics.RecordSystem1Bypass(ctx, false)
 			return []protocol.Effect{
 				protocol.LLMFillEffect{
 					SchemaRef: "perceive_task",
@@ -150,6 +155,39 @@ func (sm *StateMachine) registerTransitions() {
 					OnFailure: sm.onPlanFailure,
 					MaxRetry:  1,
 					ModelPool: "reasoning",
+				},
+			}, nil
+		},
+	})
+
+	// S_PERCEIVE → S_EXECUTE: System 1 Bypass 后四层校验通过
+	sm.add(Transition{
+		From:    types.AgentStatePerceive,
+		Trigger: types.TriggerValidateOk,
+		To:      types.AgentStateExecute,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{
+				protocol.DeterministicEffect{
+					Fn: sm.executeDAG,
+				},
+			}, nil
+		},
+	})
+
+	// S_PERCEIVE → S_REPLAN: System 1 Bypass 后四层校验失败
+	sm.add(Transition{
+		From:    types.AgentStatePerceive,
+		Trigger: types.TriggerValidateFail,
+		To:      types.AgentStateReplan,
+		Guard: func(ctx context.Context, sCtx *StateContext) bool {
+			return sm.replanCount < sCtx.MaxReplan
+		},
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{
+				protocol.DeterministicEffect{
+					Fn: func(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
+						return types.State("S_REPLAN_DONE"), nil
+					},
 				},
 			}, nil
 		},
@@ -368,4 +406,42 @@ func (sm *StateMachine) registerTransitions() {
 			return nil, nil
 		},
 	})
+}
+
+// trySystem1Bypass 尝试短路 LLM 思考，直接命中已有技能并组装成验证态（GD-13-004）
+func (sm *StateMachine) trySystem1Bypass(ctx context.Context, sCtx *StateContext) protocol.Effect {
+	if sm.skillMatcher == nil {
+		return nil
+	}
+	surpriseIndex := metrics.GlobalSurpriseIndex().Current()
+	if surpriseIndex >= 0.3 {
+		return nil
+	}
+	skillID, score, err := sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
+	if err != nil || skillID == "" {
+		return nil
+	}
+	if score < 0.92 {
+		return nil
+	}
+
+	// 命中 System-1 Bypass
+	metrics.RecordSystem1Bypass(ctx, true)
+	sCtx.TaskModel = &TaskModel{
+		Goal:       sCtx.RawIntentTS.UnsafeContent(),
+		Complexity: 0.1,
+	}
+	sCtx.DAGModel = &DAGModel{
+		Nodes: []protocol.ExecNode{
+			{
+				ID:       "bypass_node",
+				ToolName: skillID,
+			},
+		},
+	}
+
+	// 直接返回 validateDAG，触发 FSM 去做四层校验，并在成功后返回 "S_VALIDATE_OK"
+	return protocol.DeterministicEffect{
+		Fn: sm.validateDAG,
+	}
 }
