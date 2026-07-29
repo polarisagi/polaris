@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/a2a"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 )
 
@@ -21,6 +22,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/agent/mmd-canvas", s.sysadminHandler.HandleGetMMDCanvas) // M05 §11.3 TaskMermaidCanvas 只读展示
 	mux.HandleFunc("GET /v1/approvals/pending", s.handleGetPendingApprovals)
 	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
+
+	// A2A v0.3 Endpoints
+	mux.HandleFunc("GET /.well-known/agent-card.json", a2a.AgentCardHandler)
+	mux.HandleFunc("POST /v1/a2a/tasks", a2a.TaskSubmitHandler(s.blackboard))
 
 	// KillSwitch (M11) 管理端点
 	mux.HandleFunc("POST /_admin/kill", s.sysadminHandler.HandleKill)

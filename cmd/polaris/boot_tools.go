@@ -70,6 +70,7 @@ type ToolBundle struct {
 	SkillRegistry         protocol.SkillRegistry
 	SkillExecutor         protocol.SkillExecutor // ScriptSkillExecutor；注入 Agent FastPath（M4 System 1）
 	ConsolidationPipeline *consolidation.ConsolidationPipeline
+	ForgettingManager     *consolidation.ForgettingManager
 	ToolRefOffloader      chat.ToolRefOffloader
 	NativeCogn            native.CognitiveSearcher // 可 nil（SurrealDB 未启用时）
 	EmbedFn               native.EmbedFn           // 可 nil（Ollama 未启用时；ExtensionActivator 降级为纯 FTS）
@@ -593,6 +594,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		SkillRegistry:         skillReg,
 		SkillExecutor:         skillExecutor,
 		ConsolidationPipeline: consolidationPipeline,
+		ForgettingManager:     forgettingMgr,
 		ToolRefOffloader:      toolRefOffloader,
 		NativeCogn:            nativeCogn,
 		EmbedFn:               nativeEmbedFn,

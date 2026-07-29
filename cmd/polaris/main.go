@@ -149,6 +149,7 @@ func run() error { //nolint:gocyclo
 	// 全局 protocol.ReplayMode 标志是进程级而非会话级，此窗口内不存在其他
 	// 并发会话与其读取冲突（见 boot_crash_recovery.go 文件头注释）。
 	recoverCrashedSessions(ctx, sb, ab)
+	recoverAwaitingHandoffs(ctx, sb, ab)
 
 	// ─── §10.8 Eval Harness CI Gate ─────────────────────────────────────────
 	if len(os.Args) > 2 && os.Args[1] == "eval" && os.Args[2] == "--ci-gate" {

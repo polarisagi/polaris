@@ -3,11 +3,25 @@ package automation
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+)
+
+var (
+	idleEvolutionTasksTotal = promauto.NewCounterVec( //nolint:gochecknoglobals
+		prometheus.CounterOpts{
+			Name: "idle_evolution_tasks_total",
+			Help: "Total number of idle evolution tasks started.",
+		},
+		[]string{"task_type", "status"},
+	)
 )
 
 // IdleEvolutionScheduler 在系统空闲期间主动触发记忆巴固、连弹和学习任务。
@@ -20,6 +34,9 @@ type IdleEvolutionScheduler struct {
 	// 可被注入的任务（Tier0 默认开启）
 	consolidateFn func(ctx context.Context) error // consolidation.ConsolidationPipeline.Consolidate
 	forgettingFn  func(ctx context.Context) error // ForgettingManager.PeriodicCleanup
+
+	mu          sync.Mutex
+	cancelFuncs []context.CancelFunc
 }
 
 func NewIdleEvolutionScheduler(rg *ResourceGovernor, hw *probe.HardwareProbe) *IdleEvolutionScheduler {
@@ -57,11 +74,26 @@ func (s *IdleEvolutionScheduler) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.cancelAll()
 			return
 		case <-ticker.C:
-			s.tryRunIdleTasks(ctx)
+			if s.isIdle() {
+				s.tryRunIdleTasks(ctx)
+			} else {
+				// 有新请求，立刻打断正在运行的 idle task
+				s.cancelAll()
+			}
 		}
 	}
+}
+
+func (s *IdleEvolutionScheduler) cancelAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cancel := range s.cancelFuncs {
+		cancel()
+	}
+	s.cancelFuncs = nil
 }
 
 func (s *IdleEvolutionScheduler) isIdle() bool {
@@ -71,22 +103,38 @@ func (s *IdleEvolutionScheduler) isIdle() bool {
 }
 
 func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
-	if !s.isIdle() {
+	s.mu.Lock()
+	if len(s.cancelFuncs) > 0 {
+		// 已经在运行中
+		s.mu.Unlock()
 		return
 	}
 	slog.InfoContext(ctx, "idle_evolution: idle window detected, starting background tasks")
+
+	taskCtx, cancel := context.WithCancel(ctx)
+	s.cancelFuncs = append(s.cancelFuncs, cancel)
+	s.mu.Unlock()
+
 	// Tier0 任务：巴固 + 记忆滤波
 	if s.consolidateFn != nil {
+		idleEvolutionTasksTotal.WithLabelValues("consolidate", "started").Inc()
 		concurrent.SafeGo(ctx, "idle_evolution.consolidate", func(gctx context.Context) {
-			if err := s.consolidateFn(gctx); err != nil {
+			if err := s.consolidateFn(taskCtx); err != nil {
 				slog.WarnContext(gctx, "idle_evolution: consolidate failed", "err", err)
+				idleEvolutionTasksTotal.WithLabelValues("consolidate", "failed").Inc()
+			} else {
+				idleEvolutionTasksTotal.WithLabelValues("consolidate", "success").Inc()
 			}
 		})
 	}
 	if s.forgettingFn != nil {
+		idleEvolutionTasksTotal.WithLabelValues("forgetting", "started").Inc()
 		concurrent.SafeGo(ctx, "idle_evolution.forgetting", func(gctx context.Context) {
-			if err := s.forgettingFn(gctx); err != nil {
+			if err := s.forgettingFn(taskCtx); err != nil {
 				slog.WarnContext(gctx, "idle_evolution: forgetting failed", "err", err)
+				idleEvolutionTasksTotal.WithLabelValues("forgetting", "failed").Inc()
+			} else {
+				idleEvolutionTasksTotal.WithLabelValues("forgetting", "success").Inc()
 			}
 		})
 	}

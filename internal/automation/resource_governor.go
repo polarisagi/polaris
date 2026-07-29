@@ -144,8 +144,9 @@ type ResourceGovernor struct {
 
 	cfg config.ResourceGovernorConfig
 
-	memProbeFn func() (freeMB int64)
-	cpuProbeFn func() (usage float64)
+	memProbeFn       func() (freeMB int64)
+	cpuProbeFn       func() (usage float64)
+	activityCallback func()
 }
 
 // NewResourceGovernor 创建并初始化全局资源治理器。
@@ -183,6 +184,13 @@ func (rg *ResourceGovernor) WithMaxConcurrentLLM(n int) *ResourceGovernor {
 	return rg
 }
 
+// OnActivity 注册活跃事件回调
+func (rg *ResourceGovernor) OnActivity(cb func()) {
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+	rg.activityCallback = cb
+}
+
 // interactiveConcurrencyMultiplier 交互式任务（priority=0）允许超过 maxConcurrent 的倍数上限。
 // 防止 priority=0 任务无界堆积导致 OOM，同时保留其优先准入语义。
 const interactiveConcurrencyMultiplier = 4
@@ -192,6 +200,9 @@ const interactiveConcurrencyMultiplier = 4
 // priority=0 表示交互式高优任务，允许突破一般并发上限。
 func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 	rg.mu.Lock()
+	if rg.activityCallback != nil {
+		rg.activityCallback()
+	}
 	defer rg.mu.Unlock()
 
 	freeMemMB := rg.memProbeFn()
@@ -277,6 +288,9 @@ func (rg *ResourceGovernor) Release() {
 // AdmitLLM 专门为 LLM 请求分配并发额度，结合基础降级判断
 func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
 	rg.mu.Lock()
+	if rg.activityCallback != nil {
+		rg.activityCallback()
+	}
 	defer rg.mu.Unlock()
 
 	freeMemMB := rg.memProbeFn()

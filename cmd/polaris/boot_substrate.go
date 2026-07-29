@@ -99,6 +99,9 @@ type SubstrateBundle struct {
 	Gate     *policy.Gate
 	TrustMap map[string]int
 
+	// Governor for resource admission
+	ResourceGov *automation.ResourceGovernor
+
 	// 网络安全层
 	Dialer         *network.SafeDialer
 	SafeHTTPClient network.SafeHTTPClient
@@ -647,6 +650,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		DBWriterDone:             dbWriterDoneCh,
 		Gate:                     gate,
 		TrustMap:                 publisherTrustMap,
+		ResourceGov:              gov,
 		Dialer:                   dialer,
 		SafeHTTPClient:           safeHTTPClient,
 		SafeHTTP:                 safeHTTPClient.Client,
