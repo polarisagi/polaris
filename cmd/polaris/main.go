@@ -71,7 +71,9 @@ func run() error { //nolint:gocyclo
 			// （真实 EvalRunner，而非本 CLI 子命令组的纯 HTTP 客户端 runEvalCmd），
 			// 不在此拦截，落到 switch 之外走下方完整 boot 流程；其余 polaris eval
 			// 子命令（genkey/sign/meta-holdout/meta-audit）才归 runEvalCmd 处理。
-			if len(os.Args) <= 2 || os.Args[2] != "--ci-gate" {
+			// GD-14-007: `eval bench --execute` 同样需要落入下方 boot 流程获取完整环境
+			isBenchExecute := len(os.Args) >= 4 && os.Args[2] == "bench" && hasExecuteFlag(os.Args[3:])
+			if len(os.Args) <= 2 || (os.Args[2] != "--ci-gate" && !isBenchExecute) {
 				return runEvalCmd(os.Args[2:])
 			}
 		}
@@ -152,20 +154,25 @@ func run() error { //nolint:gocyclo
 	recoverAwaitingHandoffs(ctx, sb, ab)
 
 	// ─── §10.8 Eval Harness CI Gate ─────────────────────────────────────────
-	if len(os.Args) > 2 && os.Args[1] == "eval" && os.Args[2] == "--ci-gate" {
-		slog.Info("polaris: running eval --ci-gate validation suite")
-		report, runErr := ab.EvalRunner.RunSuite(ctx, "validation", "ci")
-		if runErr != nil {
-			return apperr.Wrap(apperr.CodeInternal, "eval ci-gate execution failed", runErr)
+	if len(os.Args) > 2 && os.Args[1] == "eval" {
+		switch os.Args[2] {
+		case "--ci-gate":
+			slog.Info("polaris: running eval --ci-gate validation suite")
+			report, runErr := ab.EvalRunner.RunSuite(ctx, "validation", "ci")
+			if runErr != nil {
+				return apperr.Wrap(apperr.CodeInternal, "eval ci-gate execution failed", runErr)
+			}
+			if report.Status == "failed" {
+				return apperr.New(apperr.CodeInternal, fmt.Sprintf(
+					"eval ci-gate failed: pass=%d fail=%d safety_fail=%d",
+					report.PassCount, report.FailCount, report.SafetyFail,
+				))
+			}
+			slog.Info("polaris: eval ci-gate passed", "pass_count", report.PassCount)
+			return nil
+		case "bench":
+			return runEvalBenchCmdWithDeps(os.Args[3:], ab.EvalStore, ab.EvalRunner)
 		}
-		if report.Status == "failed" {
-			return apperr.New(apperr.CodeInternal, fmt.Sprintf(
-				"eval ci-gate failed: pass=%d fail=%d safety_fail=%d",
-				report.PassCount, report.FailCount, report.SafetyFail,
-			))
-		}
-		slog.Info("polaris: eval ci-gate passed", "pass_count", report.PassCount)
-		return nil
 	}
 
 	// ─── §11 M13 Interface Server ────────────────────────────────────────────
@@ -230,4 +237,13 @@ func printStartupSummary(cfg *config.Config, components ...any) {
 		"os", runtime.GOOS,
 		"components", len(components),
 	)
+}
+
+func hasExecuteFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--execute" {
+			return true
+		}
+	}
+	return false
 }
