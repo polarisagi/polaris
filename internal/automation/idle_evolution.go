@@ -15,6 +15,7 @@ import (
 )
 
 var (
+	//custom-nolint:global-var
 	idleEvolutionTasksTotal = promauto.NewCounterVec( //nolint:gochecknoglobals
 		prometheus.CounterOpts{
 			Name: "idle_evolution_tasks_total",

@@ -809,6 +809,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 				fac := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
 				return fac.PruneMemoryGraph(ctx)
 			})
+		// [复核修复] IdleEvolutionScheduler 的空闲判定依赖 ResourceGovernor.Admit/AdmitLLM
+		// 每次被调用时回传"有前台活动"信号——ResourceGovernor 已预留 OnActivity(cb) 挂载点
+		// 但此前从未接线，导致 lastActivityAt 永远停留在构造时刻，isIdle() 恒真，调度器会
+		// 在系统持续繁忙时也误判为空闲并抢占前台算力。此处补齐这一行完成接线。
+		sb.ResourceGov.OnActivity(idleScheduler.MarkActivity)
 		concurrent.SafeGo(ctx, "idle-evolution-scheduler", func(ctx context.Context) {
 			idleScheduler.Run(ctx)
 		})
