@@ -799,6 +799,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			}).
 			WithForgetting(func(_ context.Context) error {
 				return tb.ForgettingManager.PeriodicCleanup()
+			}).
+			WithGraphPrune(func(ctx context.Context) error {
+				fac := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
+				return fac.PruneMemoryGraph(ctx)
 			})
 		concurrent.SafeGo(ctx, "idle-evolution-scheduler", func(ctx context.Context) {
 			idleScheduler.Run(ctx)

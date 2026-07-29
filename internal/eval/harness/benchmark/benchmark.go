@@ -18,6 +18,12 @@ func GetAdapter(name string) BenchmarkAdapter {
 		return &LoCoMoAdapter{}
 	case "longmemeval":
 		return &LongMemEvalAdapter{}
+	case "swe-bench":
+		return &SWEBenchLiteAdapter{}
+	case "swe-bench-jsonl":
+		return &SWEBenchLiteJSONLAdapter{}
+	case "gaia":
+		return &GAIAAdapter{}
 	default:
 		return nil
 	}
