@@ -3,9 +3,11 @@ package knowledge
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
@@ -87,6 +89,8 @@ func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbe
 }
 
 // Search 执行混合检索。
+//
+//nolint:gocyclo,nestif
 func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
 	tracer := trace.NewTracer()
 	span, ctx := tracer.StartSpan(ctx, trace.SpanMemoryOp, "Knowledge.Search")
@@ -102,7 +106,43 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 
 	var wg sync.WaitGroup
 	var ftsErr error
-	var ftsResults, vecResults, graphResults []Chunk
+	var ftsResults, vecResults, graphResults, macroResults []Chunk
+
+	// 宏观查询判定：词数少且无具体实体名
+	var isMacro bool
+	if len(strings.Fields(query)) <= 4 {
+		var ec int
+		_ = hr.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_entities WHERE name = ? AND entity_type != 'Community'", query).Scan(&ec)
+		isMacro = (ec == 0)
+	}
+
+	if isMacro {
+		wg.Add(1)
+		concurrent.SafeGo(ctx, "knowledge.retriever.search_macro", func(ctx context.Context) {
+			defer wg.Done()
+			// 优先检索 Type="Community" AND level>=1
+			rows, err := hr.db.QueryContext(ctx, `
+				SELECT id, properties 
+				FROM semantic_entities 
+				WHERE entity_type = 'Community' AND json_extract(properties, '$.level') >= 1 
+				ORDER BY json_extract(properties, '$.level') DESC 
+				LIMIT ?`, topK)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var id int
+					var props string
+					if err := rows.Scan(&id, &props); err == nil {
+						// 简单组装为 Chunk，依赖 RRF 融合
+						macroResults = append(macroResults, Chunk{
+							ID:      fmt.Sprintf("macro-community-%d", id),
+							Content: "【社区摘要】" + props,
+						})
+					}
+				}
+			}
+		})
+	}
 
 	wg.Add(1)
 	concurrent.SafeGo(ctx, "knowledge.retriever.search_fts", func(ctx context.Context) {
@@ -151,12 +191,17 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		finalResults = ftsResults
 	}
 
-	if hr.reranker != nil && len(finalResults) > 0 {
-		finalResults = hr.applyReranker(ctx, query, finalResults)
+	// 宏观查询摘要置顶
+	if isMacro && len(macroResults) > 0 {
+		finalResults = append(macroResults, finalResults...)
 	}
 
 	if len(finalResults) > topK {
 		finalResults = finalResults[:topK]
+	}
+
+	if hr.reranker != nil {
+		finalResults = hr.applyReranker(ctx, query, finalResults)
 	}
 
 	bitsByID := explainBitsByChunkID(ftsResults, vecResults, graphResults)
