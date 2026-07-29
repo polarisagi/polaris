@@ -57,9 +57,9 @@ func (a *SWEBenchLiteAdapter) Load(_ context.Context, datasetPath string) ([]pro
 				"test_patch":  inst.TestPatch,
 			},
 			Expected: map[string]any{
-				"patch":         inst.Patch,
-				"fail_to_pass":  inst.FailToPass,
-				"pass_to_pass":  inst.PassToPass,
+				"patch":        inst.Patch,
+				"fail_to_pass": inst.FailToPass,
+				"pass_to_pass": inst.PassToPass,
 			},
 			BehaviorType:        protocol.BehaviorCodePatch,
 			Level:               protocol.Level3Trajectory,

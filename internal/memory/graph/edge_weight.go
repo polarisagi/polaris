@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ============================================================================
@@ -79,5 +80,8 @@ func (ewm *EdgeWeightManager) FeedbackCalibrate(ctx context.Context, successPath
 func (ewm *EdgeWeightManager) PeriodicPrune(ctx context.Context) error {
 	query := `DELETE FROM world_model_edges WHERE (storage_strength * retrieval_strength) < ?`
 	_, err := ewm.db.ExecContext(ctx, query, ewm.pruneThreshold)
-	return err
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "EdgeWeightManager: failed to prune edges", err)
+	}
+	return nil
 }
