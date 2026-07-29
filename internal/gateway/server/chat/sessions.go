@@ -22,7 +22,7 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	sessions, err := h.ChatRepo.ListSessions(r.Context(), 200)
+	sessions, err := h.PersistenceService.ChatRepo.ListSessions(r.Context(), 200)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
@@ -80,7 +80,7 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	messages, err := h.ChatRepo.ListMessages(r.Context(), sessionID, 100000)
+	messages, err := h.PersistenceService.ChatRepo.ListMessages(r.Context(), sessionID, 100000)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
@@ -143,7 +143,7 @@ func parseTaskDuration(createdStr, updatedStr string) int64 {
 // DELETE /v1/sessions/{sessionID}
 func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionID")
-	if err := h.ChatRepo.DeleteSession(r.Context(), sessionID); err != nil {
+	if err := h.PersistenceService.ChatRepo.DeleteSession(r.Context(), sessionID); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}

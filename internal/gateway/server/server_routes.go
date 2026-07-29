@@ -24,7 +24,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/approvals/", s.handleResolveApproval) // /v1/approvals/{id}/resolve
 
 	// A2A v0.3 Endpoints
-	mux.HandleFunc("GET /.well-known/agent-card.json", a2a.AgentCardHandler)
+	mux.HandleFunc("GET /.well-known/agent-card.json", a2a.AgentCardHandler(s.a2aCfg))
 	mux.HandleFunc("POST /v1/a2a/tasks", a2a.TaskSubmitHandler(s.blackboard))
 
 	// KillSwitch (M11) 管理端点
@@ -89,8 +89,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
 
 	// 语音识别 API
-	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.HandleAudioTranscriptions)
-	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.HandleAudioSpeech)
+	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)
+	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.AudioService.HandleAudioSpeech)
 
 	// VFS 通用文件上传
 	// mux.HandleFunc("...", s.xx.HandleUpload)

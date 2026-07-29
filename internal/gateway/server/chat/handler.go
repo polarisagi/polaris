@@ -3,17 +3,14 @@ package chat
 import (
 	"context"
 	"net/http"
-	"sync"
 	"sync/atomic"
 
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/security/taint"
-	"github.com/polarisagi/polaris/internal/store/search"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -23,82 +20,32 @@ type SessionCompressor interface {
 }
 
 type ChatHandler struct {
-	DB            protocol.SQLQuerier
-	ChatRepo      protocol.ChatRepository
-	ChannelRepo   repo.ChannelRepository
-	ProviderRepo  protocol.ProviderRepository
-	SystemRepo    repo.SystemRepository
-	AgentPool     protocol.AgentPool
-	Blackboard    protocol.Blackboard
-	Compressor    *Compressor
-	SlashRouter   *SlashCommandRouter
-	TranscriptDir string
-	PromptMgr     protocol.PromptFacade
-	SoulMDContent *string
-
-	Hooks                   HookRunner
-	DataDir                 string
-	Registry                protocol.LLMRegistry
-	SkillReg                protocol.SkillRegistry
-	ToolReg                 protocol.ToolRegistry
-	MCPMgr                  MCPManager
-	ServerPlatform          string
-	BaseSystemPromptTpl     string
-	ActivatedSystemPromptMu sync.RWMutex
-	ActivatedSystemPrompt   string
-	LogStore                interface {
+	AgentPool      protocol.AgentPool
+	Blackboard     protocol.Blackboard
+	ChannelRepo    repo.ChannelRepository
+	ProviderRepo   protocol.ProviderRepository
+	SystemRepo     repo.SystemRepository
+	Registry       protocol.LLMRegistry
+	ToolReg        protocol.ToolRegistry
+	SkillReg       protocol.SkillRegistry
+	MCPMgr         MCPManager
+	ServerPlatform string
+	DataDir        string
+	TranscriptDir  string
+	Hooks          HookRunner
+	SlashRouter    *SlashCommandRouter
+	WriteSSE       func(http.ResponseWriter, http.Flusher, string, any)
+	LogStore       interface {
 		Append(entry any)
 		Subscribe() chan any
 		Unsubscribe(chan any)
 	}
-
-	STTEngine *atomic.Pointer[STTEngineBox]
-	TTSEngine *atomic.Pointer[TTSProviderBox]
-	WriteSSE  func(http.ResponseWriter, http.Flusher, string, any)
-
-	// Embedder 语义向量化引擎（nil = Tier 1 词元重叠降级）。
-	// 由 boot_server.go 通过 SetEmbedder 注入；聊天主流程不依赖此字段，可安全为 nil。
-	Embedder search.Embedder
-
-	// PersonaRefiner 用户画像精炼器（M05 §2.3），与 internal/agent 共享同一进程级
-	// 单例。由 boot_server.go 通过 Server.SetPersonaRefiner 注入；nil 时
-	// InjectSystemPrompt 跳过用户偏好画像注入（与 Embedder 同一防御风格）。
-	PersonaRefiner *agentctx.PersonaRefiner
-
-	// EmbedThreshold Tier 2 余弦相似度阈值（默认 0.60，由 cfg.Embedding.Threshold 注入）。
-	EmbedThreshold float64
-
-	// AmbientMaxChars ambient skill 全文注入的总字符预算（M13-bis §3）。
-	// 由 boot_server.go 从 cfg.Thresholds.M13Interface.AmbientSkillMaxChars 注入；
-	// <=0（未注入，如单元测试直接构造 ChatHandler）时回落 defaultAmbientMaxChars。
-	AmbientMaxChars int
-
-	// skillEmbedCacheMu/skillEmbedCache 技能文本→向量缓存（sha256(text) 为 key）。
-	// 依赖注入替代包级可变变量（R1.3）：原实现是 sse.go 里的包级 var，
-	// 2026-07-07 复核发现后收敛为按 ChatHandler 实例持有——每个 ChatHandler
-	// 生命周期独立，测试互不污染，且与本文件其它并发状态管理方式一致。
-	skillEmbedCacheMu sync.RWMutex
-	skillEmbedCache   map[string][]float32
-
-	// ContextRefExpander 展开用户消息中的 @file/@url/git 引用（nil = 跳过展开，
-	// 兼容未注入场景）。2026-07-08 修复：此前 authcontext.ContextRefExpander
-	// 全仓零调用方，功能完整且有独立测试覆盖但从未接线，现接入 HandleAgentStream
-	// 消息预处理入口（见 sse.go）。
-	ContextRefExpander *authcontext.ContextRefExpander
-
-	// OutboxWriter 供 SaveMessage 在直写 chat_messages 重试耗尽后做异步兜底
-	// 投递（GD-13-004 复核修复，见 chat_message_persist_handler.go）。nil 时
-	// SaveMessage 降级为仅记录错误日志（与修复前行为一致）。
-	OutboxWriter protocol.OutboxWriter
-	// [W-2-C] 接入 TaintTracker，用于在收到用户输入时标记请求污染等级
-	TaintTracker *taint.TaintTracker
-
-	// SamplingMonitor 连续采样退化监控（M12 §9）。由 boot_server.go 通过
-	// Server.SetSamplingMonitor 注入，与 Embedder/PersonaRefiner 同一注入
-	// 风格（构造时未知，跨模块单例，nil 时安全跳过）。非 nil 时，
-	// SampleAndScoreReply 在每轮 assistant 回复后按 1% 概率异步触发 LLM
-	// Judge 打分并回灌 RecordSample。
 	SamplingMonitor *analysis.ContinuousSamplingMonitor
+
+	PersistenceService *ChatPersistenceService
+	PromptService      *PromptAssemblyService
+	AudioService       *AudioService
+	CompressionService *CompressionService
 }
 
 type Dependencies struct {
@@ -109,7 +56,7 @@ type Dependencies struct {
 	SystemRepo            repo.SystemRepository
 	AgentPool             protocol.AgentPool
 	Blackboard            protocol.Blackboard
-	Compressor            *Compressor
+	CompressionService    *CompressionService
 	TranscriptDir         string
 	PromptMgr             protocol.PromptFacade
 	SoulMDContent         *string
@@ -143,32 +90,51 @@ type Dependencies struct {
 //  4. 唯一发现的真实解引用风险（SoulMDContent *string）已在 system_prompt.go
 //     补 nil-safe 判空，成本极低且不影响任何调用方。
 func NewChatHandler(deps Dependencies) *ChatHandler {
+	persistence := NewChatPersistenceService(
+		deps.ChatRepo,
+		deps.DB,
+		deps.OutboxWriter,
+		deps.TaintTracker,
+		nil,
+		deps.Registry,
+	)
+
+	audio := NewAudioService(deps.STTEngine, deps.TTSEngine)
+
+	prompt := NewPromptAssemblyService(
+		deps.PromptMgr,
+		deps.SoulMDContent,
+		nil,
+		deps.BaseSystemPromptTpl,
+		deps.Registry,
+		deps.ServerPlatform,
+		nil,
+		deps.DB,
+		nil,
+		0.0,
+		0,
+		nil,
+		deps.ActivatedSystemPrompt,
+	)
+	prompt.ContextRefExpander = deps.ContextRefExpander
+
 	return &ChatHandler{
-		DB:                    deps.DB,
-		ChatRepo:              deps.ChatRepo,
-		ChannelRepo:           deps.ChannelRepo,
-		ProviderRepo:          deps.ProviderRepo,
-		SystemRepo:            deps.SystemRepo,
-		AgentPool:             deps.AgentPool,
-		Blackboard:            deps.Blackboard,
-		Compressor:            deps.Compressor,
-		SlashRouter:           NewSlashCommandRouter(deps.Compressor, deps.ChatRepo, deps.WriteSSE),
-		TranscriptDir:         deps.TranscriptDir,
-		PromptMgr:             deps.PromptMgr,
-		SoulMDContent:         deps.SoulMDContent,
-		Hooks:                 deps.Hooks,
-		DataDir:               deps.DataDir,
-		Registry:              deps.Registry,
-		ServerPlatform:        deps.ServerPlatform,
-		BaseSystemPromptTpl:   deps.BaseSystemPromptTpl,
-		ActivatedSystemPrompt: deps.ActivatedSystemPrompt,
-		STTEngine:             deps.STTEngine,
-		TTSEngine:             deps.TTSEngine,
-		WriteSSE:              deps.WriteSSE,
-		ContextRefExpander:    deps.ContextRefExpander,
-		OutboxWriter:          deps.OutboxWriter,
-		TaintTracker:          deps.TaintTracker,
-		skillEmbedCache:       make(map[string][]float32),
+		AgentPool:          deps.AgentPool,
+		Blackboard:         deps.Blackboard,
+		ChannelRepo:        deps.ChannelRepo,
+		ProviderRepo:       deps.ProviderRepo,
+		SystemRepo:         deps.SystemRepo,
+		Registry:           deps.Registry,
+		ServerPlatform:     deps.ServerPlatform,
+		DataDir:            deps.DataDir,
+		TranscriptDir:      deps.TranscriptDir,
+		Hooks:              deps.Hooks,
+		WriteSSE:           deps.WriteSSE,
+		SlashRouter:        NewSlashCommandRouter(deps.CompressionService, deps.ChatRepo, deps.WriteSSE),
+		PersistenceService: persistence,
+		AudioService:       audio,
+		CompressionService: deps.CompressionService,
+		PromptService:      prompt,
 	}
 }
 
@@ -195,3 +161,34 @@ type HookRunner interface {
 // 筛选能力，internal/agent/context/tool_stage.go）予以保留：它是自包含的独立
 // 能力单元，未来若 PRM/FSM 路径需要工具语义筛选可直接复用，不属于本次死代码
 // 清理范围。
+
+// ── SysAdmin ChatDispatcher Facade ───────────────────────────────────────────
+// 这些方法实现 sysadmin.ChatDispatcher 接口，透传到内部服务。
+
+func (h *ChatHandler) EnsureSession(ctx context.Context, sessionID string) error {
+	return h.PersistenceService.EnsureSession(ctx, sessionID)
+}
+
+func (h *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []apptypes.Message, userQuery string) []apptypes.Message {
+	return h.PromptService.InjectSystemPrompt(ctx, agentCtrl, history, userQuery)
+}
+
+func (h *ChatHandler) SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, toolCount int64) error {
+	return h.PersistenceService.SaveMessage(ctx, sessionID, role, content, toolCalls, reasoningContent, toolCount)
+}
+
+func (h *ChatHandler) UpdateSessionTitle(ctx context.Context, sessionID, firstMessage string) error {
+	return h.PersistenceService.UpdateSessionTitle(ctx, sessionID, firstMessage)
+}
+
+func (h *ChatHandler) TouchSession(ctx context.Context, sessionID string) error {
+	return h.PersistenceService.TouchSession(ctx, sessionID)
+}
+
+func (h *ChatHandler) ListMessages(ctx context.Context, sessionID string) ([]apptypes.Message, error) {
+	return h.PersistenceService.ListMessages(ctx, sessionID)
+}
+
+func (h *ChatHandler) SampleAndScoreReply(sessionID, query, response string) {
+	h.PersistenceService.SampleAndScoreReply(sessionID, query, response)
+}

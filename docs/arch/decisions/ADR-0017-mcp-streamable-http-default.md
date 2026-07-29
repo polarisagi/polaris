@@ -1,6 +1,6 @@
 # ADR-0017: MCP 传输层与协同架构合集（Streamable HTTP + TaintPreservingDecoder + A2A 战略方向，含原 ADR-0018/0070）
 
-- **状态**: Accepted（决策一/二已执行）/ Proposed（决策三，战略方向，未排期）| **日期**: 2026-05-21（合并 2026-07-28）| **模块**: M7 `internal/extension/mcp/` / M11
+- **状态**: Accepted（已执行，A2A 决策三实现了标准 A2A 1.0 最小子集）| **日期**: 2026-05-21（合并 2026-07-28）| **模块**: M7 `internal/extension/mcp/` / M11
 
 ## 决策一：默认传输层选用 Streamable HTTP，SSE 降级为 legacy（原决策）
 

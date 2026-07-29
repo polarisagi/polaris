@@ -54,31 +54,30 @@ func TestSessionsInternal(t *testing.T) {
 	}
 
 	h := &ChatHandler{DataDir: t.TempDir(),
-		DB:           db,
-		ChatRepo:     repo.NewSQLiteChatRepository(db),
-		ProviderRepo: repo.NewSQLiteProviderRepository(db),
+		ProviderRepo:       repo.NewSQLiteProviderRepository(db),
+		PersistenceService: &ChatPersistenceService{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db)},
 	}
 
 	ctx := context.Background()
 
 	// ensureSession
-	h.EnsureSession(ctx, "sess-1")
+	h.PersistenceService.EnsureSession(ctx, "sess-1")
 
 	// saveMessage
-	h.SaveMessage(ctx, "sess-1", "user", "hello", "", "", 0)
+	h.PersistenceService.SaveMessage(ctx, "sess-1", "user", "hello", "", "", 0)
 
 	// saveMessage with tool calls
-	h.SaveMessage(ctx, "sess-1", "assistant", "", `{"type":"tool_call"}`, "", 100)
+	h.PersistenceService.SaveMessage(ctx, "sess-1", "assistant", "", `{"type":"tool_call"}`, "", 100)
 
 	// loadMessages
-	msgs, _ := h.ListMessages(ctx, "sess-1")
+	msgs, _ := h.PersistenceService.ListMessages(ctx, "sess-1")
 	if len(msgs) != 2 {
 		t.Errorf("expected 2 messages, got %d", len(msgs))
 	}
 
 	// updateSessionTitle
-	h.UpdateSessionTitle(ctx, "sess-1", "new title")
+	h.PersistenceService.UpdateSessionTitle(ctx, "sess-1", "new title")
 
 	// touchSession
-	_ = h.TouchSession(ctx, "sess-1")
+	_ = h.PersistenceService.TouchSession(ctx, "sess-1")
 }

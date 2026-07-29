@@ -21,7 +21,7 @@ func TestAmbientSkill(t *testing.T) {
 	inst := "test"
 
 	// test a) Embedder == nil
-	s := &ChatHandler{DataDir: t.TempDir(),
+	s := &PromptAssemblyService{
 		Embedder: nil,
 	}
 	// relevanceScore is 0 for these texts
@@ -30,7 +30,7 @@ func TestAmbientSkill(t *testing.T) {
 	}
 
 	// test b) Embedder != nil but queryVec is nil
-	s2 := &ChatHandler{DataDir: t.TempDir(),
+	s2 := &PromptAssemblyService{
 		Embedder: &mockEmbedder{retVec: nil},
 	}
 	if s2.isSkillRelevant(nil, query, name, desc, inst) != false {
@@ -39,7 +39,7 @@ func TestAmbientSkill(t *testing.T) {
 
 	// test c) Embedder normal
 	me := &mockEmbedder{retVec: []float32{1.0, 0.0}}
-	s3 := &ChatHandler{DataDir: t.TempDir(),
+	s3 := &PromptAssemblyService{
 		Embedder:       me,
 		EmbedThreshold: 0.60,
 	}

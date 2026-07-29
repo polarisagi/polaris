@@ -13,27 +13,41 @@ import (
 
 	"github.com/google/uuid"
 
+	"sync/atomic"
+
 	"github.com/polarisagi/polaris/internal/tool/builtin"
 )
 
+type AudioService struct {
+	STTEngine *atomic.Pointer[STTEngineBox]
+	TTSEngine *atomic.Pointer[TTSProviderBox]
+}
+
+func NewAudioService(stt *atomic.Pointer[STTEngineBox], tts *atomic.Pointer[TTSProviderBox]) *AudioService {
+	return &AudioService{
+		STTEngine: stt,
+		TTSEngine: tts,
+	}
+}
+
 // SetSTTEngine 原子替换全局 STT 引擎实例（goroutine-safe）。
 // engine 为 nil 时显式清除（使 Load 后 E 字段为 nil，HandleAudioTranscriptions 返回 503）。
-func (h *ChatHandler) SetSTTEngine(engine STTTranscriber) {
-	h.STTEngine.Store(&STTEngineBox{E: engine})
+func (s *AudioService) SetSTTEngine(engine STTTranscriber) {
+	s.STTEngine.Store(&STTEngineBox{E: engine})
 }
 
 // SetTTSEngine 原子替换全局 TTS Provider 实例（goroutine-safe）。
 // p == nil 时显式清除（使 Load 返回 nil，HandleAudioSpeech 返回 503）。
-func (h *ChatHandler) SetTTSEngine(p TTSProvider) {
+func (s *AudioService) SetTTSEngine(p TTSProvider) {
 	if p == nil {
-		h.TTSEngine.Store(nil)
+		s.TTSEngine.Store(nil)
 		return
 	}
-	h.TTSEngine.Store(&TTSProviderBox{P: p})
+	s.TTSEngine.Store(&TTSProviderBox{P: p})
 }
 
-func (h *ChatHandler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
-	box := h.TTSEngine.Load()
+func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
+	box := s.TTSEngine.Load()
 	if box == nil {
 		http.Error(w, "TTS Engine not initialized", http.StatusServiceUnavailable)
 		return
@@ -67,9 +81,9 @@ func (h *ChatHandler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) 
 
 // handleAudioTranscriptions 处理前端语音输入并转写文本
 // 路由: POST /v1/audio/transcriptions
-func (h *ChatHandler) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Request) {
+func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Request) {
 	// 原子 Load，与 SetSTTEngine 的 Store 不存在 data race
-	box := h.STTEngine.Load()
+	box := s.STTEngine.Load()
 	if box == nil || box.E == nil {
 		http.Error(w, "STT Engine not initialized", http.StatusServiceUnavailable)
 		return

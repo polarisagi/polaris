@@ -27,10 +27,10 @@ func TestCompressor_NeedsCompact(t *testing.T) {
 	}
 	defer db.Close()
 
-	c := NewCompressor(db, repo.NewSQLiteChatRepository(db), nil, config.CompressorConfig{
+	c := NewCompressionService(db, repo.NewSQLiteChatRepository(db), nil, config.CompressorConfig{
 		ContextWindow:  1000,
 		AutoCompactPct: 90,
-	})
+	}, nil, 0.0)
 
 	if c.NeedsCompact([]types.Message{{Content: "1234"}}) {
 		t.Errorf("expected false for small msg")
@@ -54,10 +54,10 @@ func TestCompressor_Compact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCompressor(db, repo.NewSQLiteChatRepository(db), sysadmin.NewHookRunner(""), config.CompressorConfig{
+	c := NewCompressionService(db, repo.NewSQLiteChatRepository(db), sysadmin.NewHookRunner(""), config.CompressorConfig{
 		ContextWindow:  1000,
 		AutoCompactPct: 50, // threshold 500 tokens = 2000 chars
-	})
+	}, nil, 0.0)
 	c.tailTokens = 100 // 400 chars tail
 
 	// 3000 chars > threshold 2000 chars

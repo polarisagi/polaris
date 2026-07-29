@@ -259,3 +259,8 @@ model     = ""
 api_key   = ""
 # 余弦相似度阈值，低于此值的技能/扩展不注入
 similarity_threshold = 0.60
+
+[a2a]
+enabled = true
+name = "polaris-agent-0"
+skills = ["general", "coding", "planning"]

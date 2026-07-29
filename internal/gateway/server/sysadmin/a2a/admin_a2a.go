@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -14,20 +15,22 @@ import (
 
 // AgentCardHandler GET /.well-known/agent-card.json
 // 提供 A2A v0.3 Agent Card 静态信息
-func AgentCardHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func AgentCardHandler(cfg config.A2AConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	card := orchestrator.AgentCard{
-		Name:    "polaris-agent-0",
-		Version: "v0.3.0",
-		Skills:  []string{"general", "coding", "planning"},
-	}
+		card := orchestrator.AgentCard{
+			Name:    cfg.Name,
+			Version: "v0.3.0",
+			Skills:  cfg.Skills,
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(card)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(card)
+	}
 }
 
 // A2ATaskRequest 定义外部 A2A 任务请求体 (JSON-RPC 2.0 风格)

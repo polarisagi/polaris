@@ -10,7 +10,7 @@ import (
 )
 
 func TestAudioHandlers_EngineNotInitialized(t *testing.T) {
-	h := &ChatHandler{DataDir: t.TempDir(),
+	h := &AudioService{
 		TTSEngine: new(atomic.Pointer[TTSProviderBox]),
 		STTEngine: new(atomic.Pointer[STTEngineBox])}
 

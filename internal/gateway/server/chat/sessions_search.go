@@ -32,7 +32,7 @@ func (h *ChatHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// FTS5 搜索：按会话分组，每会话取最多 3 条匹配；结果按 rank 排序
-	messages, err := h.ChatRepo.SearchMessages(r.Context(), q, 100)
+	messages, err := h.PersistenceService.ChatRepo.SearchMessages(r.Context(), q, 100)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
@@ -57,7 +57,7 @@ func (h *ChatHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		sessID := msg.SessionID
 		sr, ok := bySession[sessID]
 		if !ok {
-			sess, err := h.ChatRepo.GetSession(r.Context(), sessID)
+			sess, err := h.PersistenceService.ChatRepo.GetSession(r.Context(), sessID)
 			if err != nil {
 				continue
 			}
@@ -106,13 +106,13 @@ func (h *ChatHandler) HandleGetSessionContext(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	history, err := h.ListMessages(r.Context(), sessionID)
+	history, err := h.PersistenceService.ListMessages(r.Context(), sessionID)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
-	stats := h.Compressor.Stats(history)
+	stats := h.CompressionService.Stats(history)
 
 	var lastCompactAt *time.Time
 	if !stats.LastCompactAt.IsZero() {

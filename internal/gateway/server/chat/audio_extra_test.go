@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandleAudioSpeech(t *testing.T) {
-	h := &ChatHandler{DataDir: t.TempDir(),
+	h := &AudioService{
 		TTSEngine: new(atomic.Pointer[TTSProviderBox]),
 		STTEngine: new(atomic.Pointer[STTEngineBox])}
 
@@ -25,7 +25,7 @@ func TestHandleAudioSpeech(t *testing.T) {
 }
 
 func TestHandleAudioTranscriptions(t *testing.T) {
-	h := &ChatHandler{DataDir: t.TempDir(),
+	h := &AudioService{
 		TTSEngine: new(atomic.Pointer[TTSProviderBox]),
 		STTEngine: new(atomic.Pointer[STTEngineBox])}
 
