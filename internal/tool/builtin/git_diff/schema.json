@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "git_diff",
+  "description": "Show the unified diff for a git repository (working tree, staged changes, or between two refs).",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Git repository root directory (must be within the allowed path whitelist)."
+    },
+    "ref1": {
+      "type": "string",
+      "description": "Optional starting ref (e.g. 'HEAD~1', a branch name, or a commit hash)."
+    },
+    "ref2": {
+      "type": "string",
+      "description": "Optional ending ref, used together with ref1."
+    },
+    "file": {
+      "type": "string",
+      "description": "Optional: limit the diff to a single file, relative to path."
+    },
+    "staged": {
+      "type": "boolean",
+      "description": "Whether to show staged changes (git diff --cached)."
+    }
+  },
+  "required": ["path"]
+}

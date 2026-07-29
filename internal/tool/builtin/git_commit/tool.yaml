@@ -1,0 +1,14 @@
+name: git_commit
+description: "Stage files and create a git commit (git add + git commit). Returns the new commit hash and current branch name. This tool performs a mechanical operation only and does not review commit content."
+version: "1.0.0"
+capability: write-local
+risk_level: high
+sandbox: container
+side_effects:
+  - file-write
+  - process-spawn
+  - state-mutate
+tags:
+  - git
+  - commit
+  - vcs
