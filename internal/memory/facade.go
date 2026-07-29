@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	memgraph "github.com/polarisagi/polaris/internal/memory/graph"
@@ -33,7 +34,9 @@ func NewMemoryFacade(sys *MemorySystemImpl) *MemoryFacadeImpl {
 func NewMemoryFacadeWithStore(sys *MemorySystemImpl, store protocol.Store) *MemoryFacadeImpl {
 	f := &MemoryFacadeImpl{sys: sys}
 	if store != nil {
-		f.edgeMgr = memgraph.NewEdgeWeightManager(store)
+		if dbProvider, ok := store.(interface{ DB() *sql.DB }); ok {
+			f.edgeMgr = memgraph.NewEdgeWeightManager(dbProvider.DB())
+		}
 	}
 	return f
 }

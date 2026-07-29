@@ -34,6 +34,7 @@ type IdleEvolutionScheduler struct {
 	// 可被注入的任务（Tier0 默认开启）
 	consolidateFn func(ctx context.Context) error // consolidation.ConsolidationPipeline.Consolidate
 	forgettingFn  func(ctx context.Context) error // ForgettingManager.PeriodicCleanup
+	graphPruneFn  func(ctx context.Context) error // EdgeWeightManager.PeriodicPrune
 
 	mu          sync.Mutex
 	cancelFuncs []context.CancelFunc
@@ -64,6 +65,12 @@ func (s *IdleEvolutionScheduler) WithConsolidate(fn func(ctx context.Context) er
 // WithForgetting 注入记忆滤波任务
 func (s *IdleEvolutionScheduler) WithForgetting(fn func(ctx context.Context) error) *IdleEvolutionScheduler {
 	s.forgettingFn = fn
+	return s
+}
+
+// WithGraphPrune 注入图边裁剪任务
+func (s *IdleEvolutionScheduler) WithGraphPrune(fn func(ctx context.Context) error) *IdleEvolutionScheduler {
+	s.graphPruneFn = fn
 	return s
 }
 
@@ -135,6 +142,17 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 				idleEvolutionTasksTotal.WithLabelValues("forgetting", "failed").Inc()
 			} else {
 				idleEvolutionTasksTotal.WithLabelValues("forgetting", "success").Inc()
+			}
+		})
+	}
+	if s.graphPruneFn != nil {
+		idleEvolutionTasksTotal.WithLabelValues("graph_prune", "started").Inc()
+		concurrent.SafeGo(ctx, "idle_evolution.graph_prune", func(gctx context.Context) {
+			if err := s.graphPruneFn(taskCtx); err != nil {
+				slog.WarnContext(gctx, "idle_evolution: graph prune failed", "err", err)
+				idleEvolutionTasksTotal.WithLabelValues("graph_prune", "failed").Inc()
+			} else {
+				idleEvolutionTasksTotal.WithLabelValues("graph_prune", "success").Inc()
 			}
 		})
 	}
