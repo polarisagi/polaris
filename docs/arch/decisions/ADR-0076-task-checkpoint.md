@@ -16,6 +16,10 @@
 
 修复：不改 `NextEventID`（其确定性是决策一崩溃恢复重放的必要不变量），在 outbox 幂等键构造层追加 `outboxUniqueSuffix()`（纳秒时间戳 + 进程内单调原子计数器，单独时间戳不足以防同一 goroutine 背靠背调用冲突）。
 
+## 决策四：S_AWAIT_AGENT 被动恢复 Reconciler
+
+进程崩溃前若停留在 `S_AWAIT_AGENT`（等待 Handoff 子任务）且没有在 LLM 状态写入标记，原有恢复机制会遗漏该会话。新增 `AwaitingHandoffReconciler`（启动期由 `recoverAwaitingHandoffs` 调度），通过查询 `task_checkpoints` 中 `status="await_agent"` 且 `reason="handoff_wait"` 的记录，重新挂载子任务监听或直接推进 FSM 到 `S_EXECUTE`（子任务已完成）。FSM 退出 `S_AWAIT_AGENT` 进入 `S_EXECUTE` 时清理该 checkpoint (`status="done"`)，确保扫描幂等。不扩展原 LLM 回放白名单，因为这本质是异步任务监听的被动恢复，而非 LLM 执行现场的重放。
+
 ## 引用代码
 
-`internal/protocol/replay.go`、`cmd/polaris/boot_crash_recovery.go`、`internal/execute/orchestrator/pattern_state_graph.go`（`task_checkpoints` 消费）、`internal/agent/agent_execute_effect_helpers.go`（`outboxUniqueSuffix`）
+`internal/protocol/replay.go`、`cmd/polaris/boot_crash_recovery.go`、`internal/execute/orchestrator/pattern_state_graph.go`、`internal/agent/agent_execute_effect_helpers.go`、`cmd/polaris/boot_handoff_reconciler.go`、`internal/agent/reconciler_handoff.go`

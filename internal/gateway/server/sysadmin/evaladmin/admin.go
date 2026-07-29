@@ -19,12 +19,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
+	"github.com/polarisagi/polaris/internal/eval/benchmark"
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -45,12 +48,13 @@ type MetaAuditor interface {
 type EvalAdmin struct {
 	Store    EvalStore
 	Sentinel MetaAuditor
+	Runner   protocol.EvalRunner
 }
 
 // NewEvalAdmin 构造 EvalAdmin。Store/Sentinel 为 nil 时对应 handler 返回 503，
 // 不 panic（与本包其余 handler 及 mcpadmin.HandleCreateMCPServer 的 nil 防御一致）。
-func NewEvalAdmin(store EvalStore, sentinel MetaAuditor) *EvalAdmin {
-	return &EvalAdmin{Store: store, Sentinel: sentinel}
+func NewEvalAdmin(store EvalStore, sentinel MetaAuditor, runner protocol.EvalRunner) *EvalAdmin {
+	return &EvalAdmin{Store: store, Sentinel: sentinel, Runner: runner}
 }
 
 // addMetaHoldoutCaseRequest POST /v1/eval/meta-holdout/cases 请求体。
@@ -140,8 +144,42 @@ func (h *EvalAdmin) HandleGetMetaAuditStatus(w http.ResponseWriter, r *http.Requ
 
 // HandleBenchmark 触发 Benchmark.
 func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"benchmark ok"}`))
+	if h.Runner == nil {
+		http.Error(w, "eval runner not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	datasetName := r.URL.Query().Get("dataset")
+	if datasetName == "" {
+		datasetName = "humaneval"
+	}
+
+	var url string
+	switch datasetName {
+	case "humaneval":
+		url = benchmark.HumanEvalDatasetURL
+	default:
+		http.Error(w, "unsupported dataset", http.StatusBadRequest)
+		return
+	}
+
+	cases, err := benchmark.FetchDataset(r.Context(), datasetName, url)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to fetch dataset: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	casesAny := make([]any, len(cases))
+	for i, c := range cases {
+		casesAny[i] = c
+	}
+
+	go func() {
+		_, _ = h.Runner.RunBenchmarkDataset(context.Background(), datasetName, casesAny, "manual")
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = fmt.Fprintf(w, `{"status":"benchmark started","dataset":%q,"cases":%d}`, datasetName, len(cases))
 }
 
 // decodeSignature 将 base64 签名字符串解码为字节。空字符串返回 nil（放行开发模式——

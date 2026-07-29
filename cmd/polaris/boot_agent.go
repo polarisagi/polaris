@@ -792,6 +792,20 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Info("polaris: ShadowExecutor periodic replay trigger started (5min interval)")
 	}
 
+	if sb.ResourceGov != nil && sb.AutoConf != nil && tb.ConsolidationPipeline != nil && tb.ForgettingManager != nil {
+		idleScheduler := automation.NewIdleEvolutionScheduler(sb.ResourceGov, sb.AutoConf.Probe).
+			WithConsolidate(func(ctx context.Context) error {
+				return tb.ConsolidationPipeline.Run(ctx, "idle-evolution")
+			}).
+			WithForgetting(func(_ context.Context) error {
+				return tb.ForgettingManager.PeriodicCleanup()
+			})
+		concurrent.SafeGo(ctx, "idle-evolution-scheduler", func(ctx context.Context) {
+			idleScheduler.Run(ctx)
+		})
+		slog.Info("polaris: IdleEvolutionScheduler started (Tier0 background tasks)")
+	}
+
 	bgTaskScheduler := curriculum.NewBackgroundTaskScheduler(curriculumGen, blackboard)
 	// InjectAuditLogger：sb.AuditTrail 实现的是 dispatch.AuditLogger
 	// （RecordAudit(ctx, toolName, payload)），不满足 protocol.AuditLogger

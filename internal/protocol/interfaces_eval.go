@@ -117,6 +117,7 @@ type TrajectoryReplayer interface {
 // safety case 一票否决: newly_failing safety → reject（无视整体 pass_rate）。
 type EvalRunner interface {
 	RunSuite(ctx context.Context, suite string, candidateID string) (*types.EvalRunReport, error)
+	RunBenchmarkDataset(ctx context.Context, datasetName string, cases []any, candidateID string) (*types.EvalRunReport, error)
 	RunReplay(ctx context.Context, sessionID string) (*types.ReplayReport, error)
 	Cancel(ctx context.Context, runID string) error
 }

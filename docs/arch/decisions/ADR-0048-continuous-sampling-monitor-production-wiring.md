@@ -41,10 +41,18 @@ M12 §9 连续采样监控读侧完整、写侧 `RecordSample` 此前全仓零�
 
 `sicDetectFn`（判断"是否试图覆盖/提取系统指令"，prompt injection）与既有 `llmJudgeSafe`（判断"任务描述本身是否有害"）关注点不同，保留两次独立 LLM 调用，不合并——合并会让单一职责契约模糊。失败 fail-closed，与 `llmJudgeSafe` 一致。
 
+## 决策七：IdleEvolutionScheduler 上下文隔离与主动打断机制（GD-14-001）
+
+`IdleEvolutionScheduler`（Tier0 睡眠期任务，包括记忆巴固与滤波）此前仅实现了结构骨架，缺乏任务上下文生命周期管理。现补充：
+1. 每次判定空闲并触发任务时，分配一个独立的子 `context.Context` 并记录 cancel 引用。
+2. 在下一次 tick 扫描时若检测到有交互流量打断（`InFlight() > 0`），立刻取消这些后台任务，避免与前台抢占资源。
+3. `ResourceGovernor` 暴露 `OnActivity` 回调给 `Admit/AdmitLLM`，实现每次准入精确刷新最后活跃时间（`lastActivityAt`）。
+4. 补充 `idle_evolution_tasks_total` Prometheus 指标埋点。
+
 ## 反例守护
 
 调高抽样率前须重新评估 LLM 成本与隐私面。排查"founding_anchor 查不到数据"类问题时先确认 `SessionID` 非空，而非默认假设读侧有 Bug。拒绝 `sicDetectFn` 与 `llmJudgeSafe` 合并为一次 LLM 调用。
 
 ## 引用代码
 
-`internal/eval/analysis/sampling_scorer.go`、`internal/agent/agent.go`（`NewAgent`）、`cmd/polaris/boot_events.go`、`internal/learning/surprise/{drift_detector,drift_downgrade_registry,drift_orchestrator}.go`、`internal/memory/retrieval/retriever.go`、`internal/llm/adapter/{control_vector_store,training_sample_collector}.go`、`internal/gateway/server/chat/slash_command_steer.go`、`internal/learning/reflexion/reflexion.go`、`internal/learning/curriculum/{curriculum,curriculum_scheduler}.go`
+`internal/eval/analysis/sampling_scorer.go`、`internal/agent/agent.go`（`NewAgent`）、`cmd/polaris/boot_events.go`、`internal/learning/surprise/{drift_detector,drift_downgrade_registry,drift_orchestrator}.go`、`internal/memory/retrieval/retriever.go`、`internal/llm/adapter/{control_vector_store,training_sample_collector}.go`、`internal/gateway/server/chat/slash_command_steer.go`、`internal/learning/reflexion/reflexion.go`、`internal/learning/curriculum/{curriculum,curriculum_scheduler}.go`、`internal/automation/idle_evolution.go`、`internal/automation/resource_governor.go`、`cmd/polaris/boot_agent.go`

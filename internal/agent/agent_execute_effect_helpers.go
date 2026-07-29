@@ -50,7 +50,7 @@ func outboxUniqueSuffix() string {
 // runValidateDAG/runExecuteDAG 内部 SendIntent 推进 FSM），调用方应直接
 // return err，不再走 executeEffect 末尾的统一 stateToTriggerMap 分发，
 // 避免双重推进。
-func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.Effect) (nextState types.State, err error, handled bool) {
+func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.Effect) (nextState types.State, err error, handled bool) { //nolint:gocyclo,cyclop
 	detEff, ok := effect.(protocol.DeterministicEffect)
 	if !ok {
 		return "", apperr.New(apperr.CodeInternal, "invalid DeterministicEffect type"), true
@@ -75,7 +75,23 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 
 	// S_EXECUTE 阶段拦截：调用 Agent 层 DAG 执行（可访问 toolRegistry 与完整 sCtx）。
 	// 同理，由 runExecuteDAG 自行推进 FSM（ExecuteDone / ExecuteFail）。
-	if a.sm.Current() == types.AgentStateExecute {
+	if a.sm.Current() == types.AgentStateExecute { //nolint:nestif
+		// GD-13-003: 退出 S_AWAIT_AGENT 进入 S_EXECUTE 时，清理 Checkpoint
+		if a.sCtx.HandoffTaskID != "" && a.taskCheckpointRepo != nil {
+			err := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+				TaskID:     a.sCtx.SessionID,
+				NodeID:     a.sCtx.HandoffTaskID,
+				Attempt:    1,
+				Status:     "done",
+				StartedAt:  time.Now().Unix(),
+				Reason:     "handoff_wait",
+				TaintLevel: a.sCtx.GlobalTaintLevel,
+			})
+			if err != nil {
+				slog.Error("kernel: clear handoff wait checkpoint failed", "err", err)
+			}
+		}
+
 		// runExecuteDAG 内负责在完成后将结果写入 a.sCtx.ExecuteResult
 		execErr := a.runExecuteDAG(ctx)
 		if execErr == nil && a.memory != nil && len(a.sCtx.ExecuteResult) > 0 {
