@@ -29,6 +29,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 // EvalStore evaladmin 消费方视角的最小 meta_holdout 数据接口。
@@ -174,9 +175,13 @@ func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
 		casesAny[i] = c
 	}
 
-	go func() {
-		_, _ = h.Runner.RunBenchmarkDataset(context.Background(), datasetName, casesAny, "manual")
-	}()
+	// 用 context.Background() 而非 r.Context()：HTTP handler 立即返回
+	// 202 Accepted，若绑定请求 ctx，函数返回时 ctx 被取消会打断刚启动的
+	// 后台评测任务。concurrent.SafeGo 提供 panic 恢复，避免裸 go func()
+	// 里的一次评测 panic 打挂整个 HTTP server 进程。
+	concurrent.SafeGo(context.Background(), "evaladmin.run_benchmark_dataset", func(ctx context.Context) {
+		_, _ = h.Runner.RunBenchmarkDataset(ctx, datasetName, casesAny, "manual")
+	})
 
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = fmt.Fprintf(w, `{"status":"benchmark started","dataset":%q,"cases":%d}`, datasetName, len(cases))
