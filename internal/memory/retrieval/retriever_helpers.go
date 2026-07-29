@@ -205,17 +205,26 @@ func (hr *HybridRetrieverImpl) resolveSemanticHit(ctx context.Context, hitID str
 	return ent.Name + " " + propStr, ent.ID, ent.TaintLevel, true
 }
 
-func (hr *HybridRetrieverImpl) searchSemanticEntities(ctx context.Context, query string, asOf int64) []types.ScoredFragment {
+func (hr *HybridRetrieverImpl) searchSemanticEntities(ctx context.Context, query string, asOf int64, qType QueryType) []types.ScoredFragment {
 	var semanticResults []types.ScoredFragment
 	entities, err := hr.semantic.SearchEntities(ctx, query, 20, asOf)
-	if err == nil {
+	if err == nil { //nolint:nestif
 		for _, ent := range entities {
 			var propStr string
 			if b, merr := json.Marshal(ent.Properties); merr == nil {
 				propStr = string(b)
 			}
 			content := ent.Name + " " + propStr
-			if s := util.Bm25Score(query, content); s > 0 {
+			s := util.Bm25Score(query, content)
+			if qType == QueryTypeMacro && ent.Type == "Community" {
+				// GD-14-002: Prioritize Community nodes for macro intent
+				if lvl, ok := ent.Properties["level"].(float64); ok && lvl >= 1 {
+					s += 2.0 // Boost high level community nodes heavily
+				} else {
+					s += 1.0 // Boost community nodes
+				}
+			}
+			if s > 0 {
 				src := ent.ID
 				semanticResults = append(semanticResults, types.ScoredFragment{
 					Content:      content,

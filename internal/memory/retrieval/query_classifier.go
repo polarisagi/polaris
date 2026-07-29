@@ -21,6 +21,7 @@ const (
 	QueryTypeFactual             // 实体/定义查询（是什么、谁是）
 	QueryTypeHowTo               // 过程性知识（如何做、步骤）
 	QueryTypeReasoning           // 分析推理（为什么、比较、影响）
+	QueryTypeMacro               // 宏观概括（总结、全貌、overview）
 )
 
 // String 返回可读标签，便于日志追踪。
@@ -34,6 +35,8 @@ func (qt QueryType) String() string {
 		return "how_to"
 	case QueryTypeReasoning:
 		return "reasoning"
+	case QueryTypeMacro:
+		return "macro"
 	default:
 		return "unknown"
 	}
@@ -45,6 +48,7 @@ type classifyKeywords struct {
 	factual   []string
 	howTo     []string
 	reasoning []string
+	macro     []string
 }
 
 var getClassifyKeywords = sync.OnceValue(func() classifyKeywords {
@@ -66,6 +70,10 @@ var getClassifyKeywords = sync.OnceValue(func() classifyKeywords {
 			"为什么", "原因", "分析", "比较", "区别", "优缺点", "影响", "评估",
 			"why", "because", "analyze", "compare", "difference", "pros and cons",
 		},
+		macro: []string{
+			"总结", "概述", "大图景", "全貌", "概要", "宏观",
+			"summary", "overview", "macro", "summarize", "overall",
+		},
 	}
 })
 
@@ -80,6 +88,9 @@ func ClassifyQuery(query string) QueryType {
 	}
 	if matchAny(lower, kw.howTo) {
 		return QueryTypeHowTo
+	}
+	if matchAny(lower, kw.macro) {
+		return QueryTypeMacro
 	}
 	if matchAny(lower, kw.factual) {
 		return QueryTypeFactual

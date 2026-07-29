@@ -203,7 +203,8 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 
 	// 第 5 路（temporal 查询激活）：DurativeMemory 持续性记忆簇
 	var durativeResults []types.ScoredFragment
-	if scope.Type == "memory" && hr.durative != nil && hr.queryClassifier().ClassifyQuerySemantic(ctx, query, hr.embedder) == QueryTypeTemporal {
+	semanticType := hr.queryClassifier().ClassifyQuerySemantic(ctx, query, hr.embedder)
+	if scope.Type == "memory" && hr.durative != nil && semanticType == QueryTypeTemporal {
 		groups := hr.durative.ListGroups(ctx, query, 5)
 		for _, g := range groups {
 			content := g.Label + ": " + g.Summary
@@ -265,11 +266,9 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		}
 	}
 
-	// 第 6 路（P0-2）：Semantic Entities 召回。
-	// scope "semantic"（memory_search layer=semantic）时同样生效——事实类记忆是该 layer 的主体。
 	var semanticResults []types.ScoredFragment
 	if (scope.Type == "memory" || scope.Type == "semantic") && hr.semantic != nil {
-		semanticResults = hr.searchSemanticEntities(ctx, query, config.AsOf)
+		semanticResults = hr.searchSemanticEntities(ctx, query, config.AsOf, semanticType)
 	}
 
 	// Stage 1c — Graph 路径（Tier1+）：Spreading Activation 多种子能量扩散
