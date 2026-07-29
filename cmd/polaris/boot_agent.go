@@ -146,6 +146,11 @@ func buildAgent(
 	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
+
+	if tb.SkillRegistry != nil && tb.EmbedFn != nil {
+		matcher := skill.NewSkillIntentMatcher(tb.SkillRegistry, skill.EmbedFn(tb.EmbedFn))
+		a.InjectSkillMatcher(matcher)
+	}
 	// BlindZoneDetector（V8-S4）：2026-07-21 deadcode 审查发现构造+注入点均从未被调用，
 	// 见 boot_memory.go 的 BlindZoneDetector 字段注释。
 	a.InjectBlindZoneDetector(mb.BlindZoneDetector)
