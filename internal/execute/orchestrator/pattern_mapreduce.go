@@ -2,95 +2,79 @@ package orchestrator
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/types"
-
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // MapReduceExecutor 分片归并执行器。
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3
 // Map: 将父任务按 Scope 拆分后投递至黑板
 // Reduce: 收集 Result，去重 Artifacts hash，聚合结果写回。
+// 内部收敛为 StateGraphExecutor 的 thin wrapper (GD-13-005)。
 type MapReduceExecutor struct {
-	bb           *SQLiteBlackboard
-	totalTimeout time.Duration // 全局等待超时，默认 10min
+	bb  *SQLiteBlackboard
+	sge *StateGraphExecutor
 }
 
-// NewMapReduceExecutor 创建 MapReduceExecutor，totalTimeout=0 使用默认值 10min。
+// NewMapReduceExecutor 创建 MapReduceExecutor，totalTimeout 当前由底层统一管理。
 func NewMapReduceExecutor(bb *SQLiteBlackboard, totalTimeout time.Duration) *MapReduceExecutor {
-	if totalTimeout <= 0 {
-		totalTimeout = 10 * time.Minute
+	sge := NewStateGraphExecutor(bb)
+	sge.PreserveNodeID = true
+	return &MapReduceExecutor{
+		bb:  bb,
+		sge: sge,
 	}
-	return &MapReduceExecutor{bb: bb, totalTimeout: totalTimeout}
 }
 
 // Execute 接收已经拆分好的子任务，并行执行后进行 Reduce 收集。
-func (mre *MapReduceExecutor) Execute(ctx context.Context, parentTaskID string, subTasks []types.TaskEntry) ([]byte, error) { //nolint:gocyclo
+func (mre *MapReduceExecutor) Execute(ctx context.Context, parentTaskID string, subTasks []types.TaskEntry) ([]byte, error) {
 	if len(subTasks) == 0 {
 		return nil, nil
 	}
 
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// 先订阅黑板事件，再投递任务，防止投递后错过事件
-	events, err := mre.bb.Subscribe(subCtx)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to subscribe", err)
-	}
-
+	spec := protocol.WorkflowGraphSpec{}
 	for i := range subTasks {
-		task := &subTasks[i]
-		if err := mre.bb.PostTask(ctx, task); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("failed to post map task %s", task.ID), err)
-		}
+		t := &subTasks[i]
+		spec.Nodes = append(spec.Nodes, protocol.WorkflowNodeSpec{
+			ID:             t.ID,
+			CapabilityType: t.Type,
+			IntentTemplate: string(t.Intent),
+			IsEntry:        true,
+		})
 	}
 
-	pendingMap := make(map[string]bool)
-	for _, task := range subTasks {
-		pendingMap[task.ID] = true
+	// 委托执行 Map 任务
+	if err := mre.sge.Execute(ctx, parentTaskID, spec); err != nil {
+		return nil, err
 	}
 
-	results := make([][]byte, 0, len(subTasks))
+	// 收集并 Reduce 结果
+	var aggregated []byte
+	chkRepo := repo.NewSQLiteTaskCheckpointRepository(mre.bb.DB())
 	seenHashes := make(map[string]bool)
 
-	for len(pendingMap) > 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
-		case ev, ok := <-events:
-			if !ok {
-				return nil, apperr.New(apperr.CodeInternal, "events channel closed unexpectedly")
-			}
-			if pendingMap[ev.TaskID] {
-				switch ev.Type {
-				case "task_completed":
-					// SHA-256 去重：相同 payload 只聚合一次（防止重复 Agent 产出）
-					hash := sha256.Sum256(ev.Payload)
-					hashStr := hex.EncodeToString(hash[:])
-					if !seenHashes[hashStr] {
-						seenHashes[hashStr] = true
-						results = append(results, ev.Payload)
-					}
-					delete(pendingMap, ev.TaskID)
-				case "task_failed":
-					return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("map task %s failed: %s", ev.TaskID, string(ev.Payload)))
-				}
-			}
-		case <-time.After(mre.totalTimeout):
-			return nil, apperr.New(apperr.CodeInternal, "mapreduce execution timeout")
+	for i, t := range subTasks {
+		cp, err := chkRepo.GetCheckpoint(ctx, parentTaskID, t.ID, 1) // 假设只访问一次
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "failed to get map result", err)
 		}
-	}
+		if cp == nil || cp.Status != "done" {
+			return nil, apperr.New(apperr.CodeInternal, "map task did not complete successfully")
+		}
 
-	var aggregated []byte
-	for i, res := range results {
-		aggregated = append(aggregated, []byte(fmt.Sprintf("\n--- Result %d ---\n", i))...)
-		aggregated = append(aggregated, res...)
+		// 这里复用原本基于 OutputJSON 的 hash 逻辑进行去重。
+		// 由于去重在原始代码是按 Payload 整体，现在提取 OutputJSON 模拟。
+		hashStr := cp.OutputJSON // 简单去重
+		if !seenHashes[hashStr] {
+			seenHashes[hashStr] = true
+			aggregated = append(aggregated, []byte(fmt.Sprintf("\n--- Result %d ---\n", i))...)
+			aggregated = append(aggregated, []byte(cp.OutputJSON)...)
+		}
 	}
 
 	return aggregated, nil

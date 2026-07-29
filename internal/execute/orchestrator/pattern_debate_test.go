@@ -14,24 +14,6 @@ import (
 func setupDebateBlackboard(t *testing.T) *SQLiteBlackboard {
 	t.Helper()
 	bb := setupPatternBlackboard(t)
-	_, err := bb.DB().ExecContext(context.Background(), `
-		CREATE TABLE task_checkpoints (
-			task_id       TEXT NOT NULL,
-			node_id       TEXT NOT NULL,
-			attempt       INTEGER NOT NULL DEFAULT 1,
-			status        TEXT NOT NULL,
-			output_json   TEXT,
-			idempotency_key TEXT,
-			taint_level   INTEGER NOT NULL,
-			started_at    INTEGER,
-			completed_at  INTEGER,
-			error         TEXT,
-			PRIMARY KEY (task_id, node_id, attempt)
-		);
-	`)
-	if err != nil {
-		t.Fatalf("failed to create task_checkpoints table: %v", err)
-	}
 	return bb
 }
 

@@ -50,7 +50,7 @@ func setupPatternBlackboard(t *testing.T) *SQLiteBlackboard {
 
 	// writeTaskEvent 需要 events 表（inv_M8_02 事务内双写）
 	_, err = db.Exec(`
-		CREATE TABLE events (
+		CREATE TABLE IF NOT EXISTS events (
 			offset    INTEGER PRIMARY KEY AUTOINCREMENT,
 			id        TEXT NOT NULL UNIQUE,
 			topic     TEXT NOT NULL,
@@ -58,10 +58,23 @@ func setupPatternBlackboard(t *testing.T) *SQLiteBlackboard {
 			type      TEXT NOT NULL,
 			payload   BLOB NOT NULL,
 			created_at INTEGER NOT NULL
-		)
+		);
+		CREATE TABLE IF NOT EXISTS task_checkpoints (
+			task_id TEXT,
+			node_id TEXT,
+			attempt INTEGER,
+			status TEXT,
+			output_json TEXT,
+			idempotency_key TEXT,
+			taint_level INTEGER,
+			started_at INTEGER,
+			completed_at INTEGER,
+			error TEXT,
+			PRIMARY KEY (task_id, node_id, attempt)
+		);
 	`)
 	if err != nil {
-		t.Fatalf("failed to create events table: %v", err)
+		t.Fatalf("failed to create events/checkpoints table: %v", err)
 	}
 
 	return NewSQLiteBlackboard(db)
@@ -195,6 +208,26 @@ func TestPatternDAGExecutor(t *testing.T) {
 
 	err := executor.Execute(ctx, "parent", spec)
 	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSequentialExecutor(t *testing.T) {
+	bb := setupPatternBlackboard(t)
+	executor := NewSequentialExecutor(bb, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	tasks := []types.TaskEntry{
+		{ID: "seq1"},
+		{ID: "seq2"},
+	}
+
+	go func() { mockPatternWorker(ctx, bb, "seq1", "agent1", 10*time.Millisecond, []byte("res1")) }()
+	go func() { mockPatternWorker(ctx, bb, "seq2", "agent2", 10*time.Millisecond, []byte("res2")) }()
+
+	if err := executor.Execute(ctx, "parent", tasks); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -41,8 +41,9 @@ import (
 
 // StateGraphExecutor 跨 Agent 条件路由 + 有界循环状态图编排引擎。
 type StateGraphExecutor struct {
-	chkRepo protocol.TaskCheckpointRepository
-	bb      *SQLiteBlackboard
+	chkRepo        protocol.TaskCheckpointRepository
+	bb             *SQLiteBlackboard
+	PreserveNodeID bool // 若为 true 且为单次访问，则保留原始 node ID 作为 Task ID
 }
 
 // NewStateGraphExecutor 创建 StateGraphExecutor。
@@ -322,7 +323,12 @@ func (r *stateGraphRun) tryPostNode(ctx context.Context, node protocol.WorkflowN
 		}
 	}
 
-	taskID := fmt.Sprintf("%s-%s-%s", r.parentTaskID, node.ID, uuid.NewString()[:8])
+	var taskID string
+	if r.se.PreserveNodeID {
+		taskID = node.ID
+	} else {
+		taskID = fmt.Sprintf("%s-%s-%s", r.parentTaskID, node.ID, uuid.NewString()[:8])
+	}
 	intentData := map[string]any{
 		"state_graph_node_id": node.ID,
 		"template":            node.IntentTemplate,
