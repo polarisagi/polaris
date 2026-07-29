@@ -120,6 +120,26 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 	}, nil
 }
 
+// ResumeAwaitingHandoff 供 AwaitingHandoffReconciler（GD-13-003）在进程重启后
+// 使用：把刚从 Pool 新建、默认停在 S_IDLE 的 Agent 直接就位到崩溃前的
+// S_AWAIT_AGENT 委派等待点，并回填 HandoffTaskID，使随后投递的
+// TriggerAgentHandoffDone 能命中转移表中的合法边（否则会命中 Dispatch() 的
+// "no transition from S_IDLE"硬错误，与下方 GD-1 描述的 TriggerSuspend
+// 误投递是同一类故障）。复用 fsm.StateMachine 既有的 ForceState（跳过
+// Trigger 边校验但记录 history，语义与其它致命异常强制切态一致，见
+// state_machine.go 中 ForceState 的既有用法），不新增第二套强制切态机制。
+//
+// 已知限制：a.sCtx.DAGModel 等执行期上下文无法跨进程重启恢复（task_checkpoints
+// 只持久化了 TaskID/NodeID/Status 等元数据，不含完整 DAG 计划），恢复后进入
+// S_EXECUTE 会走 runExecuteDAG 的 nil-DAGModel 快速路径直接终态，不会真正续跑
+// 委派节点之后的下游 DAG 节点。本方法保证的是"消除永久死锁"，不是"无损续跑"
+// ——调用方必须据此记录明确的降级恢复日志，不能把这类会话终态误判为正常
+// 完整完成。
+func (a *Agent) ResumeAwaitingHandoff(childTaskID string) {
+	a.sCtx.HandoffTaskID = childTaskID
+	a.sm.ForceState(types.AgentStateAwaitAgent)
+}
+
 // handoffWatchPollInterval 委派完成后台轮询间隔。后台 watcher 不再占用 DAG
 // 执行槽位，无需追求原同步阻塞轮询的 500ms 低延迟，1s 足够。
 const handoffWatchPollInterval = 1 * time.Second

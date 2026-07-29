@@ -27,7 +27,16 @@ func (f *fakeHandoffPoster) PostTask(_ context.Context, task *types.TaskEntry) e
 func (f *fakeHandoffPoster) PeekTask(_ context.Context, taskID string) (*types.TaskSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.tasks[taskID], nil
+	snap, ok := f.tasks[taskID]
+	if !ok || snap == nil {
+		return nil, nil
+	}
+	// 返回副本而非内部 map 值的指针：调用方（watcher/reconciler 的轮询
+	// goroutine）会在释放锁之后读取返回值字段，若直接返回内部指针，
+	// 测试里通过 poster.mu 保护的"写"和调用方无锁的"读"会形成数据竞争
+	// （-race 可复现，2026-07-29 AwaitingHandoffReconciler 测试引入时发现）。
+	cp := *snap
+	return &cp, nil
 }
 
 func newTestHandoffAgent(t *testing.T) *Agent {
