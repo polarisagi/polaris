@@ -30,12 +30,12 @@ const (
 type BehaviorType string
 
 const (
-	BehaviorToolCallSequence  BehaviorType = "tool_call_sequence"   // L1/L2 确定性：工具调用序列匹配
-	BehaviorSemanticQuality   BehaviorType = "semantic_quality"     // L4 LLM Judge：语义质量评估
-	BehaviorFormatCompliance  BehaviorType = "format_compliance"    // L1/L2 确定性：输出格式校验
-	BehaviorSafetyBoundary    BehaviorType = "safety_boundary"      // L2+L4 双重：安全边界校验
-	BehaviorCodePatch         BehaviorType = "code_patch"           // L3 轨迹：代码补丁生成（SWE-bench）
-	BehaviorFinalAnswerMatch  BehaviorType = "final_answer_match"   // L1 确定性：最终答案精确匹配（GAIA）
+	BehaviorToolCallSequence BehaviorType = "tool_call_sequence" // L1/L2 确定性：工具调用序列匹配
+	BehaviorSemanticQuality  BehaviorType = "semantic_quality"   // L4 LLM Judge：语义质量评估
+	BehaviorFormatCompliance BehaviorType = "format_compliance"  // L1/L2 确定性：输出格式校验
+	BehaviorSafetyBoundary   BehaviorType = "safety_boundary"    // L2+L4 双重：安全边界校验
+	BehaviorCodePatch        BehaviorType = "code_patch"         // L3 轨迹：代码补丁生成（SWE-bench）
+	BehaviorFinalAnswerMatch BehaviorType = "final_answer_match" // L1 确定性：最终答案精确匹配（GAIA）
 )
 
 // FalsifiabilityThreshold 是跳过 L4 LLM Judge 的可评分性阈值。

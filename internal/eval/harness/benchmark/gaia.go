@@ -52,10 +52,10 @@ func (a *GAIAAdapter) Load(_ context.Context, datasetPath string) ([]protocol.Ev
 		level, falsifiability := gaiaLevelToEval(t.Level)
 
 		cases = append(cases, protocol.EvalCase{
-			ID:          t.TaskID,
-			Description: t.Question,
-			Input:       map[string]any{"question": t.Question},
-			Expected:    map[string]any{"answer": t.FinalAnswer},
+			ID:                  t.TaskID,
+			Description:         t.Question,
+			Input:               map[string]any{"question": t.Question},
+			Expected:            map[string]any{"answer": t.FinalAnswer},
 			BehaviorType:        protocol.BehaviorFinalAnswerMatch,
 			Level:               level,
 			FalsifiabilityScore: falsifiability,
