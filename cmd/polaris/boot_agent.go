@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -273,9 +274,26 @@ func loadFoundingAnchorSigningKey() (ed25519.PrivateKey, ed25519.PublicKey) {
 
 func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, kb *KnowledgeBundle) (*AgentBundle, error) { //nolint:gocyclo
 	// ─── §8 Eval Harness (L3 M12) ────────────────────────────────────────────
-	evalAccessEngine := control.NewEngine(nil)
+	// [复核修复] evalAccessEngine 此前一直用 control.NewEngine(nil) 构造——
+	// RoleM9Optimizer 没有任何注册公钥，control.Engine.VerifyRequest 对
+	// training/validation 分区的请求 fail-closed 拒绝，M9 自我改进闭环
+	// （RunnerImpl.RunSuite 内部请求评测用例）与 `polaris eval --ci-gate`
+	// 从未真正跑通过（自 first commit 起如此，与本次升级任务无关）。
+	// RoleM9Optimizer 访问 training/validation 分区是同一进程内部的一致性
+	// 检查（不同于 V8-S2 meta_holdout 要求私钥必须常驻服务器进程之外的
+	// 外部信任边界），故在此按进程生命周期生成一对临时密钥：公钥注册进
+	// Engine，私钥注入 RunnerImpl（InjectEvalPrivKey，签名细节见
+	// runner.go 该方法注释），无需跨重启持久化。
+	m9OptimizerPub, m9OptimizerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "bootAgent: generate m9_optimizer eval keypair", err)
+	}
+	evalAccessEngine := control.NewEngine(map[string]ed25519.PublicKey{
+		control.RoleM9Optimizer: m9OptimizerPub,
+	})
 	evalStore := harness.NewSQLiteEvalStore(sb.Store, evalAccessEngine)
 	evalRunner := harness.NewRunner(sb.Store, evalStore, sb.Cfg.Thresholds, sb.Cfg.Eval)
+	evalRunner.InjectEvalPrivKey(m9OptimizerPriv)
 	// V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区审计，见 00-Global-Dictionary.md
 	// §V8-Principle + internal/eval/analysis/meta_eval.go）。仅构造，不在此处调用——
 	// 调用入口是 evaladmin 的 HTTP handler（httpServer.SetEvalAdmin，boot_server.go），
