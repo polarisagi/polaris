@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -25,8 +26,17 @@ type RunnerImpl struct {
 	evalCh chan<- types.EvalCompletedPayload
 	// llmProvider 用于 Level4LLMJudge 语义评判，可选注入（nil 时 L4 退化为 L1 字符串匹配）
 	llmProvider protocol.Provider
-	// evalSignature 评测签名，供 Store 接口校验（P1-02）。
+	// evalSignature 静态预签名（供未注入 evalPrivKey 的简单/测试场景使用）。
 	evalSignature []byte
+	// evalPrivKey 非 nil 时优先于 evalSignature：control.Engine.VerifyRequest
+	// 的签名消息里嵌入的 timestamp 是校验方自己在调用瞬间取的
+	// time.Now().Unix()（见 store.go GetTrainingCases/GetValidationCases），
+	// 而不是签名方随请求一并传入的声明值——一次性预签名（evalSignature）
+	// 只有在签名与校验落在同一 Unix 秒内才能验签通过，静态签名几乎必然
+	// 过期失配。evalPrivKey 让 RunSuite 在每次真正发起请求前"现签"，把
+	// 签名/校验两端调用 time.Now().Unix() 的间隔压缩到同进程内的微秒级，
+	// 与本包 runner_test.go testSignRunner 验证过的用法一致。
+	evalPrivKey ed25519.PrivateKey
 	// evalSeqCounter：EvalCompletedPayload 单调递增序号（2026-07-04 审计补齐，
 	// 供 learning_cursors 幂等去重使用）。
 	evalSeqCounter atomic.Int64
@@ -64,9 +74,30 @@ func NewRunner(store protocol.Store, evalStore *SQLiteEvalStore, thresholds conf
 	}
 }
 
-// SetEvalSignature 注入签名以通过 policy gate。
+// SetEvalSignature 注入静态预签名以通过 policy gate（简单/测试场景；生产
+// 路径见 InjectEvalPrivKey，避免签名/校验双方各自取时间戳导致的整秒竞态）。
 func (r *RunnerImpl) SetEvalSignature(sig []byte) {
 	r.evalSignature = sig
+}
+
+// InjectEvalPrivKey 注入 RoleM9Optimizer 的 Ed25519 私钥，RunSuite 据此对
+// 每次请求现签，而非使用一次性静态签名。cmd/polaris/boot_agent.go 在启动
+// 时生成一对进程内密钥（公钥注册进 control.Engine，私钥注入这里）——这不
+// 是 V8-S2 meta_holdout 那种"私钥必须常驻服务器进程之外"的外部信任边界，
+// RoleM9Optimizer 访问 training/validation 分区是 M9 自我改进闭环内部的
+// 一致性检查，签名方与校验方本就在同一进程里，密钥自签自验即可。
+func (r *RunnerImpl) InjectEvalPrivKey(priv ed25519.PrivateKey) {
+	r.evalPrivKey = priv
+}
+
+// signEvalRequest 返回请求 role:partition 分区评测用例时应携带的签名：
+// 优先现签（见 evalPrivKey 字段注释），未注入私钥时退回静态 evalSignature。
+func (r *RunnerImpl) signEvalRequest(role, partition string) []byte {
+	if r.evalPrivKey != nil {
+		msg := fmt.Appendf(nil, "%s:%s:%d", role, partition, time.Now().Unix())
+		return ed25519.Sign(r.evalPrivKey, msg)
+	}
+	return r.evalSignature
 }
 
 // SetEvalChannel 注入事件发布通道（可选；nil 时不发布，HE-Rule-3）。
@@ -197,11 +228,14 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 		var err error
 		switch suite {
 		case "training":
-			casesAny, err = r.evalStore.GetTrainingCases(runCtx, control.RoleM9Optimizer, r.evalSignature)
+			sig := r.signEvalRequest(control.RoleM9Optimizer, control.PartitionTraining)
+			casesAny, err = r.evalStore.GetTrainingCases(runCtx, control.RoleM9Optimizer, sig)
 		case "validation":
-			casesAny, err = r.evalStore.GetValidationCases(runCtx, control.RoleM9Optimizer, r.evalSignature)
+			sig := r.signEvalRequest(control.RoleM9Optimizer, control.PartitionValidation)
+			casesAny, err = r.evalStore.GetValidationCases(runCtx, control.RoleM9Optimizer, sig)
 		case "benchmark":
-			casesAny, err = r.evalStore.GetValidationCases(runCtx, control.RoleM9Optimizer, r.evalSignature)
+			sig := r.signEvalRequest(control.RoleM9Optimizer, control.PartitionValidation)
+			casesAny, err = r.evalStore.GetValidationCases(runCtx, control.RoleM9Optimizer, sig)
 		default:
 			return apperr.New(apperr.CodeInternal, fmt.Sprintf("eval_runner: unknown suite %s", suite))
 		}
