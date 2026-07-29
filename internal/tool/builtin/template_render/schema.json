@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "template_render",
+  "description": "Render a Go text/template string against a JSON data object.",
+  "type": "object",
+  "properties": {
+    "template": {
+      "type": "string",
+      "description": "The Go text/template source string (max 64KB)."
+    },
+    "data": {
+      "type": "object",
+      "description": "Data object made available to the template during execution."
+    }
+  },
+  "required": ["template"]
+}

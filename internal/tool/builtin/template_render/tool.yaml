@@ -1,0 +1,12 @@
+name: template_render
+description: "Render a Go text/template string against a JSON data object. Pure in-memory computation, no filesystem or network access. Input capped at 64KB, output capped at 50KB (truncated beyond that)."
+version: "1.0.0"
+capability: read-only
+risk_level: low
+sandbox: in-process
+side_effects:
+  - none
+tags:
+  - text
+  - template
+  - utility
