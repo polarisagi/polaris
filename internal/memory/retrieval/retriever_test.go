@@ -84,3 +84,47 @@ func TestHybridRetriever_GraphNodeSkip(t *testing.T) {
 		}
 	}
 }
+
+type fakeSemantic struct {
+	protocol.SemanticMemory
+	entities []types.Entity
+}
+
+func (f *fakeSemantic) SearchEntities(ctx context.Context, query string, topK int, asOf int64) ([]types.Entity, error) {
+	return f.entities, nil
+}
+
+func TestHybridRetriever_MacroIntentCommunityPriority(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStore{}
+	hr := NewHybridRetrieverFull(store, nil, nil, nil)
+	hr.semantic = &fakeSemantic{
+		entities: []types.Entity{
+			{ID: "ent1", Name: "常规实体总结", Type: "Person", Properties: map[string]any{"level": float64(1)}},
+			{ID: "ent2", Name: "社区摘要总结", Type: "Community", Properties: map[string]any{"level": float64(1)}},
+			{ID: "ent3", Name: "低级社区摘要总结", Type: "Community", Properties: map[string]any{"level": float64(0)}},
+		},
+	}
+
+	res, _ := hr.Search(ctx, "总结一下全局架构", types.SearchScope{Type: "semantic"}, types.RetrievalConfig{})
+
+	var ent1Score, ent2Score, ent3Score float64
+	for _, r := range res {
+		if r.Source == "ent1" {
+			ent1Score = r.Score
+		}
+		if r.Source == "ent2" {
+			ent2Score = r.Score
+		}
+		if r.Source == "ent3" {
+			ent3Score = r.Score
+		}
+	}
+
+	if ent2Score <= ent1Score {
+		t.Errorf("expected community entity to be boosted over normal entity (ent2:%v ent1:%v)", ent2Score, ent1Score)
+	}
+	if ent2Score <= ent3Score {
+		t.Errorf("expected level>=1 community to be boosted heavily (ent2:%v ent3:%v)", ent2Score, ent3Score)
+	}
+}

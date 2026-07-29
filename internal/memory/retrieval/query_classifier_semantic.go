@@ -32,6 +32,7 @@ func (s *SemanticQueryClassifier) InitPrototypes(ctx context.Context, embedder Q
 		QueryTypeFactual:   "什么是 transformer？定义一下 attention 机制。",
 		QueryTypeHowTo:     "如何配置 Go 模块？请给出步骤。",
 		QueryTypeReasoning: "为什么 Rust 比 C++ 更安全？分析原因。",
+		QueryTypeMacro:     "请总结一下全局架构，整体概览是什么？",
 	}
 	vecs := make(map[QueryType][]float32, len(prototypeSeeds))
 	for qt, seed := range prototypeSeeds {
