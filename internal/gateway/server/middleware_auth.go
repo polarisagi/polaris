@@ -35,9 +35,10 @@ func isLoopback(ip string) bool {
 //
 //nolint:gochecknoglobals
 var healthPathSet = map[string]struct{}{
-	"/healthz": {},
-	"/readyz":  {},
-	"/metrics": {},
+	"/healthz":                     {},
+	"/readyz":                      {},
+	"/metrics":                     {},
+	"/.well-known/agent-card.json": {},
 }
 
 // checkAuth 执行 API Key 校验和匿名写保护，返回注入了身份的 context。
@@ -174,10 +175,11 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 		// readiness 守卫：未就绪前只放行 /healthz, /readyz, /v1/status, /metrics
 		alwaysAllow := map[string]bool{
-			"/healthz":   true,
-			"/readyz":    true,
-			"/v1/status": true,
-			"/metrics":   true,
+			"/healthz":                     true,
+			"/readyz":                      true,
+			"/v1/status":                   true,
+			"/metrics":                     true,
+			"/.well-known/agent-card.json": true,
 		}
 		if !s.isReady.Load() && !alwaysAllow[r.URL.Path] {
 			w.Header().Set("Content-Type", "application/json")

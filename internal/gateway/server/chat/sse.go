@@ -54,8 +54,8 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	// @file/@url/git 引用展开（消息预处理入口）：ContextRefExpander 为 nil 时
 	// 跳过（未注入场景，行为与展开前完全一致）；展开失败的单条引用会被记录到
 	// report.Skipped 但不阻断请求，避免因单个引用问题导致整轮对话失败。
-	if s.ContextRefExpander != nil {
-		if expanded, report := s.ContextRefExpander.Expand(ctx, req.Input); report != nil {
+	if s.PromptService.ContextRefExpander != nil {
+		if expanded, report := s.PromptService.ContextRefExpander.Expand(ctx, req.Input); report != nil {
 			req.Input = expanded
 			if len(report.Skipped) > 0 {
 				slog.Warn("server: context ref expand skipped some references", "skipped", report.Skipped)
@@ -69,7 +69,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	if isNewSession {
 		sessionID = newSessionID()
 	}
-	if err := s.EnsureSession(ctx, sessionID); err != nil {
+	if err := s.PersistenceService.EnsureSession(ctx, sessionID); err != nil {
 		s.WriteSSEError(w, flusher, "session_error", err.Error(), sessionID, err)
 		return
 	}
@@ -92,7 +92,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 加载历史消息（多轮上下文）
-	history, err := s.ListMessages(ctx, sessionID)
+	history, err := s.PersistenceService.ListMessages(ctx, sessionID)
 	if err != nil {
 		s.WriteSSEError(w, flusher, "history_error", err.Error(), sessionID, err)
 		return
@@ -110,7 +110,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		defer release()
 	}
 
-	history = s.InjectSystemPrompt(ctx, agentCtrl, history, req.Input)
+	history = s.PromptService.InjectSystemPrompt(ctx, agentCtrl, history, req.Input)
 	// 注意：FSM 触发（SetTaskIntent/SendIntent）已移入 handleAgentStreamFSM，
 	// 在订阅事件流之后执行——先订阅后触发消除早期 token 丢失竞态；
 	// 且触发点位于斜杠命令短路之后，/compact 等命令不再空耗一次 FSM 推理。
@@ -129,7 +129,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	finalInput, userMsg := s.buildStreamUserMessage(req)
 
 	history = append(history, userMsg)
-	if err := s.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
+	if err := s.PersistenceService.SaveMessage(ctx, sessionID, "user", finalInput, "", "", 0); err != nil {
 		slog.Error("server: saveMessage user", "session", sessionID, "err", err)
 	}
 	if tw != nil {
@@ -170,11 +170,11 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		if cmdResult.Response != "" {
 			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := s.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
+			if err := s.PersistenceService.SaveMessage(saveCtx, sessionID, "assistant", cmdResult.Response, "", "", 0); err != nil {
 				slog.Error("server: saveMessage slash response", "session", sessionID, "err", err)
 			}
 		}
-		_ = s.TouchSession(context.WithoutCancel(ctx), sessionID)
+		_ = s.PersistenceService.TouchSession(context.WithoutCancel(ctx), sessionID)
 		WriteSSE(w, flusher, "complete", map[string]any{"session_id": sessionID, "session_title": ""})
 		return
 	}
@@ -182,9 +182,9 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	// ── 上下文使用率评估（警告 + 防抖动告警 + 自动压缩）────────────────────────
 	// 阈值模型对齐 Claude Code：contextWindow × autoCompactPct%（默认 95%），
 	// warnPct%（默认 80%）时提前告警，连续 thrashing 后停止自动压缩并专项提示。
-	ctxStats := s.Compressor.Stats(history)
+	ctxStats := s.CompressionService.Stats(history)
 
-	if ctxStats.UsagePercent >= s.Compressor.WarnPct() {
+	if ctxStats.UsagePercent >= s.CompressionService.WarnPct() {
 		msg := fmt.Sprintf("上下文使用量已达 %d%%，可使用 /compact 手动压缩", int(ctxStats.UsagePercent))
 		if ctxStats.Thrashing {
 			msg = fmt.Sprintf("⚠ 自动压缩抖动：上下文 %d%% 使用量居高不下，请手动 /compact 并缩减单次工具输出规模", int(ctxStats.UsagePercent))
@@ -199,7 +199,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 自动压缩：非 thrashing 状态 + 超过 autoCompactPct 阈值 → 静默压缩后继续推理
-	if !ctxStats.Thrashing && s.Compressor.NeedsCompact(history) {
+	if !ctxStats.Thrashing && s.CompressionService.NeedsCompact(history) {
 		WriteSSE(w, flusher, "status", map[string]any{"type": "compacting", "message": "正在压缩上下文..."})
 
 		var mem protocol.MemoryFacade
@@ -211,7 +211,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		// 本函数后续推理走 handleAgentStreamFSM（不依赖此处局部 history 变量），
 		// 故不需要也不应该把返回的 compacted 序列回写到 history（历史上曾误写，
 		// 但从未被读取，是 ineffassign 死赋值，这里显式丢弃）。
-		if _, res, err := s.Compressor.Compact(ctx, sessionID, history, p, mem); err == nil && !res.Skipped {
+		if _, res, err := s.CompressionService.Compact(ctx, sessionID, history, p, mem); err == nil && !res.Skipped {
 			WriteSSE(w, flusher, "status", map[string]any{
 				"type":          "compacted",
 				"tokens_before": res.TokensBefore,
@@ -239,7 +239,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		// 这里尽力保存已产出内容（若有），ctx 已取消，用独立的短超时 context。
 		if reply != "" {
 			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
+			if err := s.PersistenceService.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", 0); err != nil {
 				slog.Error("server: saveMessage assistant (aborted turn)", "session", sessionID, "err", err)
 			}
 			saveCancel()
@@ -265,18 +265,18 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	defer saveCancel()
 
 	if reply != "" {
-		if err := s.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs); err != nil {
+		if err := s.PersistenceService.SaveMessage(saveCtx, sessionID, "assistant", reply, "", "", inferLatencyMs); err != nil {
 			slog.Error("server: saveMessage assistant", "session", sessionID, "err", err)
 		}
-		s.SampleAndScoreReply(sessionID, req.Input, reply)
+		s.PersistenceService.SampleAndScoreReply(sessionID, req.Input, reply)
 		if tw != nil {
 			tw.WriteTurn("assistant", reply, inferLatencyMs, 0)
 		}
 	}
 	if isFirstTurn {
-		_ = s.UpdateSessionTitle(saveCtx, sessionID, req.Input)
+		_ = s.PersistenceService.UpdateSessionTitle(saveCtx, sessionID, req.Input)
 	}
-	_ = s.TouchSession(saveCtx, sessionID)
+	_ = s.PersistenceService.TouchSession(saveCtx, sessionID)
 
 	slog.Info("server: turn complete",
 		"session", sessionID,
@@ -320,9 +320,10 @@ func (s *ChatHandler) handleAgentStreamFSM(
 	for _, frag := range guard.KernelPromptFragments() {
 		systemPromptGuard.AddFragment(frag)
 	}
-	s.ActivatedSystemPromptMu.RLock()
-	systemPromptGuard.AddFragment(s.ActivatedSystemPrompt)
-	s.ActivatedSystemPromptMu.RUnlock()
+	s.PromptService.ActivatedSystemPromptMu.RLock()
+	activatedSysPrompt := s.PromptService.ActivatedSystemPrompt
+	s.PromptService.ActivatedSystemPromptMu.RUnlock()
+	systemPromptGuard.AddFragment(activatedSysPrompt)
 
 	// 先订阅后触发：订阅通道就绪前 FSM 不会开始产出，消除早期事件丢失竞态。
 	ch := agentCtrl.SubscribeStream(ctx)

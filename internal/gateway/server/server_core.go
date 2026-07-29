@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -56,14 +57,14 @@ type Server struct {
 	cronRepo       protocol.CronRepository
 	workflowRepo   prepo.WorkflowRepository
 	appRepo        prepo.AppRepository
-	registry       protocol.LLMRegistry  // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
-	httpClient     *http.Client          // 复用 SafeHTTPClient
-	transcriptDir  string                // per-session JSONL transcript 目录
-	hooks          *sysadmin.HookRunner  // Shell Script Hooks（End-User 扩展点）
-	compressor     *chat.Compressor      // 上下文超长自动压缩
-	channelMgr     ChannelStarter        // 所有聊天平台 poller 管理（接口）
-	mcpMgr         MCPManager            // MCP Server 连接管理（接口）
-	toolReg        protocol.ToolRegistry // builtin tool 元数据
+	registry       protocol.LLMRegistry     // 热重载 Provider 注册表（接口，禁止直接持有 *llm.ProviderRegistry）
+	httpClient     *http.Client             // 复用 SafeHTTPClient
+	transcriptDir  string                   // per-session JSONL transcript 目录
+	hooks          *sysadmin.HookRunner     // Shell Script Hooks（End-User 扩展点）
+	compressor     *chat.CompressionService // 上下文超长自动压缩
+	channelMgr     ChannelStarter           // 所有聊天平台 poller 管理（接口）
+	mcpMgr         MCPManager               // MCP Server 连接管理（接口）
+	toolReg        protocol.ToolRegistry    // builtin tool 元数据
 	catalog        catalog.Catalog
 	skillReg       protocol.SkillRegistry                                                         // skill 元数据
 	toolExec       func(ctx context.Context, name string, args []byte) (*types.ToolResult, error) // tool_use 执行器
@@ -106,6 +107,7 @@ type Server struct {
 	chatHandler      *chat.ChatHandler
 	sysadminHandler  *sysadmin.SysAdminHandler
 	codeActEngine    CodeActEngine // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
+	a2aCfg           config.A2AConfig
 }
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
@@ -126,8 +128,8 @@ func (s *Server) ChannelsAdmin() *channelsadmin.ChannelsAdmin {
 // （GD-13-004 复核修复）——二者共用同一个 Outbox 实例，无需重复注入。
 func (s *Server) SetOutboxWriter(w protocol.OutboxWriter) {
 	s.outboxWriter = w
-	if s.chatHandler != nil {
-		s.chatHandler.OutboxWriter = w
+	if s.chatHandler != nil && s.chatHandler.PersistenceService != nil {
+		s.chatHandler.PersistenceService.OutboxWriter = w
 	}
 }
 
@@ -198,8 +200,8 @@ func (s *Server) SetPluginCreator(pc plugin.PluginGenerator) {
 // 进程级单例（cmd/polaris/boot_agent.go 构造 + Load）。nil 时 ChatHandler
 // 跳过用户偏好画像注入（消费端见 chat/system_prompt.go）。
 func (s *Server) SetPersonaRefiner(pr *agentctx.PersonaRefiner) {
-	if s.chatHandler != nil {
-		s.chatHandler.PersonaRefiner = pr
+	if s.chatHandler != nil && s.chatHandler.PromptService != nil {
+		s.chatHandler.PromptService.PersonaRefiner = pr
 	}
 }
 
@@ -210,20 +212,25 @@ func (s *Server) SetPersonaRefiner(pr *agentctx.PersonaRefiner) {
 // SSoT: spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars。
 // <=0 时不覆盖，ChatHandler 侧回落 defaultAmbientMaxChars。
 func (s *Server) SetAmbientSkillMaxChars(n int) {
-	if s.chatHandler != nil && n > 0 {
-		s.chatHandler.AmbientMaxChars = n
+	if s.chatHandler != nil && s.chatHandler.PromptService != nil && n > 0 {
+		s.chatHandler.PromptService.AmbientMaxChars = n
 	}
 }
 
 // SetEmbedder 注入语义向量化引擎（Tier 2 Ambient 匹配 + tool schema 语义过滤）。
 // nil 时 ChatHandler/SysAdminHandler 均自动降级 Tier 1（全量 schema 注入）。
 func (s *Server) SetEmbedder(e search.Embedder, threshold float64) {
+	if threshold <= 0 {
+		threshold = 0.60
+	}
 	if s.chatHandler != nil {
-		s.chatHandler.Embedder = e
-		if threshold > 0 {
-			s.chatHandler.EmbedThreshold = threshold
-		} else {
-			s.chatHandler.EmbedThreshold = 0.60 // 默认阈值
+		if s.chatHandler.PromptService != nil {
+			s.chatHandler.PromptService.Embedder = e
+			s.chatHandler.PromptService.EmbedThreshold = threshold
+		}
+		if s.chatHandler.CompressionService != nil {
+			s.chatHandler.CompressionService.Embedder = e
+			s.chatHandler.CompressionService.EmbedThreshold = threshold
 		}
 	}
 	// SysAdminHandler 使用同一 Embedder 做 tool schema 语义过滤（>40 工具时激活）
@@ -390,9 +397,9 @@ func (s *Server) SetPromptManager(mgr protocol.PromptFacade) {
 	}
 	s.baseSystemPromptTpl = sysTmpl
 
-	if s.chatHandler != nil {
-		s.chatHandler.PromptMgr = mgr
-		s.chatHandler.BaseSystemPromptTpl = s.baseSystemPromptTpl
+	if s.chatHandler != nil && s.chatHandler.PromptService != nil {
+		s.chatHandler.PromptService.PromptMgr = mgr
+		s.chatHandler.PromptService.BaseSystemPromptTpl = s.baseSystemPromptTpl
 	}
 }
 
@@ -407,14 +414,14 @@ func (s *Server) SetInferenceRouter(router protocol.ProviderRouter) {
 }
 
 func (s *Server) SetSTTProvider(provider chat.STTTranscriber) {
-	if s.chatHandler != nil {
-		s.chatHandler.SetSTTEngine(provider)
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetSTTEngine(provider)
 	}
 }
 
 func (s *Server) SetTTSProvider(provider chat.TTSProvider) {
-	if s.chatHandler != nil {
-		s.chatHandler.SetTTSEngine(provider)
+	if s.chatHandler != nil && s.chatHandler.AudioService != nil {
+		s.chatHandler.AudioService.SetTTSEngine(provider)
 	}
 }
 

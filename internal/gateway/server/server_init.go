@@ -134,7 +134,7 @@ func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.
 	case "edge":
 		// Edge TTS：免费、无需下载、立即激活，不受 FeatureGate 门控（无内存开销）
 		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice)
-		s.chatHandler.SetTTSEngine(p)
+		s.SetTTSProvider(p)
 		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice)
 		return
 
@@ -145,7 +145,7 @@ func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.
 			return
 		}
 		p := tts.NewHTTPProvider(ttsConfig.HTTPEndpoint, httpClient)
-		s.chatHandler.SetTTSEngine(p)
+		s.SetTTSProvider(p)
 		slog.Info("tts: HTTP sidecar TTS active", "endpoint", ttsConfig.HTTPEndpoint)
 		return
 	}
@@ -181,7 +181,7 @@ func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.
 			slog.Warn("tts: engine init failed", "err", err)
 			return
 		}
-		s.chatHandler.SetTTSEngine(engine)
+		s.SetTTSProvider(engine)
 		slog.Info("tts: sherpa-onnx Kokoro active", "model_dir", modelDir)
 	})
 }

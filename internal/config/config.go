@@ -32,6 +32,7 @@ type Config struct {
 	Compressor    CompressorConfig    `toml:"compressor"`
 	Sandbox       SandboxConfig       `toml:"sandbox"`
 	Security      SecurityConfig      `toml:"security"`
+	A2A           A2AConfig           `toml:"a2a"`
 	Thresholds    Thresholds          `toml:"-"`
 }
 

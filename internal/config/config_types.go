@@ -283,3 +283,10 @@ type CompressorConfig struct {
 	// MaxThrashCount 连续自动压缩但仍超阈值的最大次数，超出后停止自动压缩并告警。
 	MaxThrashCount int `toml:"max_thrash_count"`
 }
+
+// A2AConfig 控制 Agent-to-Agent (A2A) 接口配置。
+type A2AConfig struct {
+	Enabled bool     `toml:"enabled"`
+	Name    string   `toml:"name"`
+	Skills  []string `toml:"skills"`
+}

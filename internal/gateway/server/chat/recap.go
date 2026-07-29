@@ -15,7 +15,7 @@ func (h *ChatHandler) HandleSessionRecap(w http.ResponseWriter, r *http.Request)
 	sessionID := r.PathValue("sessionID")
 	ctx := r.Context()
 
-	rawMsgs, err := h.ChatRepo.ListMessages(ctx, sessionID, 0)
+	rawMsgs, err := h.PersistenceService.ChatRepo.ListMessages(ctx, sessionID, 0)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return

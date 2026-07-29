@@ -47,7 +47,7 @@ import (
 //   - db    : 只读连接池（protocol.SQLQuerier），供 handler 层执行轻量 SELECT 查询使用。
 //     两个连接指向同一个 SQLite 文件，分别以 WAL 读写模式 / 只读模式打开，
 //     避免批量写（如 SeedMarketplace）占住唯一写连接而阻塞读路径。
-func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, rwDB *sql.DB, db protocol.SQLQuerier, registry protocol.LLMRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, agentCfg config.AgentConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
+func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, rwDB *sql.DB, db protocol.SQLQuerier, registry protocol.LLMRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, agentCfg config.AgentConfig, a2aCfg config.A2AConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
 	tDir := filepath.Join(dataDir, "sessions")
 	// 启动时异步清理 30 天前的 transcript
 	concurrent.SafeGo(context.Background(), "gateway.server.prune_transcripts", func(context.Context) {
@@ -68,6 +68,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		tbr:              tbr,
 		rateLimiter:      rateLimiter,
 		interruptLimiter: NewRateLimitManager(1, 10), // Approx 10 req/min with burst
+		a2aCfg:           a2aCfg,
 	}
 	if rwDB == nil {
 		panic("NewServer: rwDB（读写连接）不能为 nil")
@@ -123,7 +124,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		}
 	}
 
-	s.compressor = chat.NewCompressor(db, s.chatRepo, s.hooks, compressorCfg)
+	s.compressor = chat.NewCompressionService(db, s.chatRepo, s.hooks, compressorCfg, nil, 0)
 
 	s.providerHandler = provider.NewProviderHandler(provider.Dependencies{
 		ProviderRepo: s.providerRepo,
@@ -146,7 +147,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		SystemRepo:            s.systemRepo,
 		AgentPool:             agentPool,
 		Blackboard:            bb,
-		Compressor:            s.compressor,
+		CompressionService:    s.compressor,
 		TranscriptDir:         s.transcriptDir,
 		PromptMgr:             s.promptMgr,
 		SoulMDContent:         &s.soulMDContent,

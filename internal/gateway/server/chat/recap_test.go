@@ -38,7 +38,7 @@ func TestHandleSessionRecap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &ChatHandler{DataDir: t.TempDir(), DB: db, ChatRepo: repo.NewSQLiteChatRepository(db), ProviderRepo: repo.NewSQLiteProviderRepository(db)}
+	h := &ChatHandler{DataDir: t.TempDir(), ProviderRepo: repo.NewSQLiteProviderRepository(db), PersistenceService: &ChatPersistenceService{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db)}}
 
 	// Empty session
 	req := httptest.NewRequest("GET", "/v1/sessions/s1/recap", nil)

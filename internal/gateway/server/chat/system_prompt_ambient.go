@@ -44,7 +44,7 @@ func skillTextKey(name, desc, inst string) string {
 
 // cachedSkillEmbed 从缓存读取或调用 Embedder 获取技能向量。
 // 失败时返回 nil（调用方降级 Tier 1）。
-func (s *ChatHandler) cachedSkillEmbed(e search.Embedder, name, desc, inst string) []float32 {
+func (s *PromptAssemblyService) cachedSkillEmbed(e search.Embedder, name, desc, inst string) []float32 {
 	key := skillTextKey(name, desc, inst)
 	s.skillEmbedCacheMu.RLock()
 	if v, ok := s.skillEmbedCache[key]; ok {
@@ -79,7 +79,7 @@ func (s *ChatHandler) cachedSkillEmbed(e search.Embedder, name, desc, inst strin
 // Tier 2（Embedder 可用）：余弦相似度 >= EmbedThreshold。
 // Tier 1（降级）：词元重叠度 >= relevanceThreshold。
 // 任何错误静默降级 Tier 1，不中断聊天主流程。
-func (s *ChatHandler) isSkillRelevant(queryVec []float32, query, name, desc, inst string) bool {
+func (s *PromptAssemblyService) isSkillRelevant(queryVec []float32, query, name, desc, inst string) bool {
 	if s.Embedder == nil || queryVec == nil {
 		return relevanceScore(query, name, desc, inst) >= relevanceThreshold
 	}
@@ -97,7 +97,7 @@ func (s *ChatHandler) isSkillRelevant(queryVec []float32, query, name, desc, ins
 }
 
 // buildAmbientSkillsSection 按 trust_tier 和 ambient_priority 注入 ambient skill instructions
-func (s *ChatHandler) buildAmbientSkillsSection(ctx context.Context, userQuery string) string {
+func (s *PromptAssemblyService) buildAmbientSkillsSection(ctx context.Context, userQuery string) string {
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT name, description, instructions, plugin_id, ambient_priority, trust_tier
          FROM skills
@@ -171,7 +171,7 @@ func (s *ChatHandler) buildAmbientSkillsSection(ctx context.Context, userQuery s
 
 // SetActivatedSystemPrompt 热更新 M9 激活的系统提示词（goroutine-safe）。
 // 由 PromptVersionStore.OnActivate 回调触发，对 task_type='general' 的激活版本生效。
-func (s *ChatHandler) SetActivatedSystemPrompt(taskType, promptText string) {
+func (s *PromptAssemblyService) SetActivatedSystemPrompt(taskType, promptText string) {
 	if taskType != "general" {
 		return
 	}

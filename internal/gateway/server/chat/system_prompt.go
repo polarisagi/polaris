@@ -11,7 +11,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-func (s *ChatHandler) InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message { //nolint:gocyclo,nestif
+func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message { //nolint:gocyclo,nestif
 	if agentCtrl == nil || agentCtrl.Memory() == nil {
 		return history
 	}

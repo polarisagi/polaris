@@ -64,9 +64,8 @@ func TestSessionsHandlersExtra(t *testing.T) {
 	}
 
 	h := &ChatHandler{DataDir: t.TempDir(),
-		DB:           db,
-		ChatRepo:     repo.NewSQLiteChatRepository(db),
-		ProviderRepo: repo.NewSQLiteProviderRepository(db),
+		ProviderRepo:       repo.NewSQLiteProviderRepository(db),
+		PersistenceService: &ChatPersistenceService{DB: db, ChatRepo: repo.NewSQLiteChatRepository(db)},
 	}
 
 	// Get Session

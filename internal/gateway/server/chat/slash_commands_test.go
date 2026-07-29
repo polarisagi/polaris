@@ -47,7 +47,7 @@ func (m mockFlusher) Flush() {}
 func newTestRouter(t *testing.T) (*SlashCommandRouter, *httptest.ResponseRecorder, mockFlusher) {
 	t.Helper()
 	router := &SlashCommandRouter{
-		compressor: &Compressor{
+		compressor: &CompressionService{
 			contextWindow:  defaultContextWindow,
 			autoCompactPct: defaultAutoCompactPct,
 			warnPct:        defaultWarnPct,
@@ -151,7 +151,7 @@ func TestDispatch_UnknownCommand(t *testing.T) {
 // ── Compressor.Stats ──────────────────────────────────────────────────────────
 
 func TestCompressor_Stats_Empty(t *testing.T) {
-	c := &Compressor{contextWindow: 1000, autoCompactPct: defaultAutoCompactPct, warnPct: defaultWarnPct, maxThrashCount: defaultMaxThrashCount, tailTokens: defaultTailTokens}
+	c := &CompressionService{contextWindow: 1000, autoCompactPct: defaultAutoCompactPct, warnPct: defaultWarnPct, maxThrashCount: defaultMaxThrashCount, tailTokens: defaultTailTokens}
 	stats := c.Stats(nil)
 	if stats.TokenCount != 0 {
 		t.Errorf("空 history token=%d want 0", stats.TokenCount)
@@ -166,7 +166,7 @@ func TestCompressor_Stats_Empty(t *testing.T) {
 
 func TestCompressor_Stats_Threshold(t *testing.T) {
 	// contextWindow=100 token，autoCompactPct=100% → 阈值=100 token
-	c := &Compressor{contextWindow: 100, autoCompactPct: 100.0, warnPct: defaultWarnPct, maxThrashCount: defaultMaxThrashCount, tailTokens: defaultTailTokens}
+	c := &CompressionService{contextWindow: 100, autoCompactPct: 100.0, warnPct: defaultWarnPct, maxThrashCount: defaultMaxThrashCount, tailTokens: defaultTailTokens}
 	// 200 字符 = 50 token（roughTokens: chars/4）
 	msgs := []types.Message{{Role: "user", Content: repeat("x", 200)}}
 	stats := c.Stats(msgs)

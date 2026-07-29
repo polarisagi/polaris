@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/store/search"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -41,7 +42,7 @@ const (
 // Compressor 对超长对话历史进行 LLM 摘要压缩。
 // 压缩策略：保护尾部 N token 原文 + 用 LLM 摘要替代中间消息。
 // 阈值模型对齐 Claude Code：contextWindow × autoCompactPct%（默认 95%）。
-type Compressor struct {
+type CompressionService struct {
 	db             protocol.SQLQuerier
 	chatRepo       protocol.ChatRepository
 	hooks          *sysadmin.HookRunner
@@ -55,10 +56,12 @@ type Compressor struct {
 	lastCompactAt time.Time
 	thrashedCount int // 连续压缩后仍超阈值的次数
 
-	offloader ToolRefOffloader
+	offloader      ToolRefOffloader
+	Embedder       search.Embedder
+	EmbedThreshold float64
 }
 
-func NewCompressor(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hooks *sysadmin.HookRunner, cfg config.CompressorConfig) *Compressor {
+func NewCompressionService(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hooks *sysadmin.HookRunner, cfg config.CompressorConfig, embedder search.Embedder, embedThreshold float64) *CompressionService {
 	contextWindow := cfg.ContextWindow
 	if contextWindow <= 0 {
 		contextWindow = defaultContextWindow
@@ -75,7 +78,7 @@ func NewCompressor(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hoo
 	if maxThrashCount <= 0 {
 		maxThrashCount = defaultMaxThrashCount
 	}
-	return &Compressor{
+	return &CompressionService{
 		db:             db,
 		chatRepo:       chatRepo,
 		hooks:          hooks,
@@ -84,36 +87,38 @@ func NewCompressor(db protocol.SQLQuerier, chatRepo protocol.ChatRepository, hoo
 		warnPct:        warnPct,
 		maxThrashCount: maxThrashCount,
 		tailTokens:     defaultTailTokens,
+		Embedder:       embedder,
+		EmbedThreshold: embedThreshold,
 	}
 }
 
 // SetToolRefOffloader 注入符号化卸载器
-func (c *Compressor) SetToolRefOffloader(offloader ToolRefOffloader) {
+func (c *CompressionService) SetToolRefOffloader(offloader ToolRefOffloader) {
 	c.offloader = offloader
 }
 
 // autoCompactThreshold 返回自动压缩触发 token 数（contextWindow × autoCompactPct%）。
-func (c *Compressor) autoCompactThreshold() int {
+func (c *CompressionService) autoCompactThreshold() int {
 	return int(float64(c.contextWindow) * c.autoCompactPct / 100.0)
 }
 
 // warnThreshold 返回警告触发 token 数（contextWindow × warnPct%）。
-func (c *Compressor) warnThreshold() int {
+func (c *CompressionService) warnThreshold() int {
 	return int(float64(c.contextWindow) * c.warnPct / 100.0)
 }
 
 // WarnPct 返回当前警告触发百分比（供 sse.go 直接比较 UsagePercent）。
-func (c *Compressor) WarnPct() float64 { return c.warnPct }
+func (c *CompressionService) WarnPct() float64 { return c.warnPct }
 
 // IsThrashin 返回当前是否处于 thrashing 状态。
-func (c *Compressor) IsThrashin() bool {
+func (c *CompressionService) IsThrashin() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.thrashedCount >= c.maxThrashCount
 }
 
 // Stats 返回当前上下文使用统计，不修改任何状态（纯读操作）。
-func (c *Compressor) Stats(msgs []apptypes.Message) types.ContextStats {
+func (c *CompressionService) Stats(msgs []apptypes.Message) types.ContextStats {
 	tokens := compact.RoughTokens(msgs)
 	usagePct := 0.0
 	if c.contextWindow > 0 {
@@ -135,7 +140,7 @@ func (c *Compressor) Stats(msgs []apptypes.Message) types.ContextStats {
 }
 
 // NeedsCompact 判断是否需要自动压缩。thrashing 状态下始终返回 false。
-func (c *Compressor) NeedsCompact(msgs []apptypes.Message) bool {
+func (c *CompressionService) NeedsCompact(msgs []apptypes.Message) bool {
 	if c.IsThrashin() {
 		return false
 	}
@@ -146,13 +151,13 @@ func (c *Compressor) NeedsCompact(msgs []apptypes.Message) bool {
 
 // Compact 自动触发路径：超过阈值时压缩对话历史。
 // 若未达阈值、处于 thrashing 状态或 hook 阻塞，返回原消息序列（Skipped=true）。
-func (c *Compressor) Compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+func (c *CompressionService) Compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	return c.compact(ctx, sessionID, msgs, provider, false, mem)
 }
 
 // ForceCompact 用户主动触发路径：跳过阈值检查，强制压缩，并重置 thrashing 计数。
 // 若消息不足以分段（tail 已覆盖全部），返回 Skipped=true。
-func (c *Compressor) ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+func (c *CompressionService) ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	// 用户手动触发：重置 thrashing 状态，给自动压缩一次新的机会
 	c.mu.Lock()
 	c.thrashedCount = 0
@@ -161,7 +166,7 @@ func (c *Compressor) ForceCompact(ctx context.Context, sessionID string, msgs []
 }
 
 // compact 核心压缩逻辑。force=true 跳过 NeedsCompact 阈值检查。
-func (c *Compressor) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	tokensBefore := compact.RoughTokens(msgs)
 	skip := types.CompactResult{TokensBefore: tokensBefore, Skipped: true}
 

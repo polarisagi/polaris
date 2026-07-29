@@ -43,8 +43,8 @@ func (noopProvider) ModelID() string                          { return "noop" }
 // 不 panic、不触碰 Registry。
 func TestSampleAndScoreReply_NilSamplingMonitor_NoOp(t *testing.T) {
 	reg := &fakeLLMRegistry{}
-	h := &ChatHandler{Registry: reg, SamplingMonitor: nil}
-	h.SampleAndScoreReply("session-1", "q", "r")
+	h := &ChatHandler{Registry: reg, PersistenceService: &ChatPersistenceService{SamplingMonitor: nil}}
+	h.PersistenceService.SampleAndScoreReply("session-1", "q", "r")
 	if len(reg.pickedRoles) != 0 {
 		t.Errorf("expected Registry untouched when SamplingMonitor is nil, got PickProvider calls: %v", reg.pickedRoles)
 	}
@@ -52,8 +52,8 @@ func TestSampleAndScoreReply_NilSamplingMonitor_NoOp(t *testing.T) {
 
 // TestSampleAndScoreReply_NilRegistry_NoOp Registry 未注入时同样安全跳过。
 func TestSampleAndScoreReply_NilRegistry_NoOp(t *testing.T) {
-	h := &ChatHandler{Registry: nil, SamplingMonitor: analysis.NewContinuousSamplingMonitor(nil)}
-	h.SampleAndScoreReply("session-1", "q", "r") // 不应 panic
+	h := &ChatHandler{PersistenceService: &ChatPersistenceService{Registry: nil, SamplingMonitor: analysis.NewContinuousSamplingMonitor(nil)}}
+	h.PersistenceService.SampleAndScoreReply("session-1", "q", "r") // 不应 panic
 }
 
 // TestSampleAndScoreReply_FallsBackFromDefaultToGeneral 验证 Provider 取用
@@ -61,8 +61,9 @@ func TestSampleAndScoreReply_NilRegistry_NoOp(t *testing.T) {
 // PickProvider("general")。
 func TestSampleAndScoreReply_FallsBackFromDefaultToGeneral(t *testing.T) {
 	reg := &fakeLLMRegistry{byRole: map[string]protocol.Provider{"general": noopProvider{}}}
-	h := &ChatHandler{Registry: reg, SamplingMonitor: analysis.NewContinuousSamplingMonitor(nil)}
-	h.SampleAndScoreReply("session-1", "q", "r")
+	sm := analysis.NewContinuousSamplingMonitor(nil)
+	h := &ChatHandler{PersistenceService: &ChatPersistenceService{SamplingMonitor: sm, Registry: reg}}
+	h.PersistenceService.SampleAndScoreReply("session-1", "user message", "assistant message")
 	want := []string{"default", "general"}
 	if len(reg.pickedRoles) != len(want) || reg.pickedRoles[0] != want[0] || reg.pickedRoles[1] != want[1] {
 		t.Errorf("expected PickProvider role sequence %v, got %v", want, reg.pickedRoles)
@@ -73,8 +74,8 @@ func TestSampleAndScoreReply_FallsBackFromDefaultToGeneral(t *testing.T) {
 // 有 Provider 时不应再兜底查询 general。
 func TestSampleAndScoreReply_DefaultAvailable_SkipsGeneralFallback(t *testing.T) {
 	reg := &fakeLLMRegistry{byRole: map[string]protocol.Provider{"default": noopProvider{}}}
-	h := &ChatHandler{Registry: reg, SamplingMonitor: analysis.NewContinuousSamplingMonitor(nil)}
-	h.SampleAndScoreReply("session-1", "q", "r")
+	h := &ChatHandler{PersistenceService: &ChatPersistenceService{Registry: reg, SamplingMonitor: analysis.NewContinuousSamplingMonitor(nil)}}
+	h.PersistenceService.SampleAndScoreReply("session-1", "q", "r")
 	if len(reg.pickedRoles) != 1 || reg.pickedRoles[0] != "default" {
 		t.Errorf("expected only PickProvider(\"default\") called, got %v", reg.pickedRoles)
 	}

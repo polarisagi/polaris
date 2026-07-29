@@ -16,7 +16,7 @@ import (
 
 // persistCompacted 原子替换 chat_messages：删除旧消息，写入摘要 + tail。
 // 在事务内完成，保证 SQLite 单连接安全。
-func (c *Compressor) persistCompacted(ctx context.Context, sessionID string, summary apptypes.Message, tail []apptypes.Message) error {
+func (c *CompressionService) persistCompacted(ctx context.Context, sessionID string, summary apptypes.Message, tail []apptypes.Message) error {
 	msgs := make([]apptypes.ChatMessageRow, 0, len(tail)+1)
 	msgs = append(msgs, apptypes.ChatMessageRow{Role: summary.Role, Content: summary.Content})
 	for _, m := range tail {

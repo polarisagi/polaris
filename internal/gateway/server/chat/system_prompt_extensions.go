@@ -14,7 +14,7 @@ import (
 
 // buildExtensionSummary 构建插件/MCP/App 感知摘要字符串（单行，| 分隔）。
 // 只注入名称和连接状态；详细工具参数由 BuildToolSchemas() 注入 function schema 传递，避免双重注入。
-func (s *ChatHandler) buildExtensionSummary(ctx context.Context) string {
+func (s *PromptAssemblyService) buildExtensionSummary(ctx context.Context) string {
 	var parts []string
 	if s.DB != nil {
 		if plugParts := s.queryPluginSummary(ctx); len(plugParts) > 0 {
@@ -34,7 +34,7 @@ func (s *ChatHandler) buildExtensionSummary(ctx context.Context) string {
 
 // queryPluginSummary 查询已安装插件名称与 MCP 整体连接状态（格式："PluginName(✓)"）。
 // ✓ = 所有 MCP 已连接；~ = 部分连接；✗ = 未连接。
-func (s *ChatHandler) queryPluginSummary(ctx context.Context) []string {
+func (s *PromptAssemblyService) queryPluginSummary(ctx context.Context) []string {
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT id, name, display_name, mcp_policy FROM plugins WHERE enabled=1`)
 	if err != nil {
@@ -90,7 +90,7 @@ func (s *ChatHandler) queryPluginSummary(ctx context.Context) []string {
 }
 
 // queryAppSummary 查询已启用 App 的显示名称列表。
-func (s *ChatHandler) queryAppSummary(ctx context.Context) []string {
+func (s *PromptAssemblyService) queryAppSummary(ctx context.Context) []string {
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT display_name, name FROM apps WHERE enabled=1`)
 	if err != nil {
@@ -114,7 +114,7 @@ func (s *ChatHandler) queryAppSummary(ctx context.Context) []string {
 }
 
 // standaloneMCPSummary 返回非插件独立 MCP 服务的名称+连接状态列表。
-func (s *ChatHandler) standaloneMCPSummary() []string {
+func (s *PromptAssemblyService) standaloneMCPSummary() []string {
 	result := make([]string, 0, len(s.MCPMgr.ListServers()))
 	for _, srv := range s.MCPMgr.ListServers() {
 		if strings.HasPrefix(srv.ID, "plugin_") {
