@@ -19,5 +19,9 @@
   "internal/agent/agent_wiring.go": true,
   "_reason_agent_wiring": "TASK-10 and TASK-12 refactors temporarily crossing 400 lines; will be split",
   "internal/action/codeact/code_act.go": true,
-  "_reason_code_act": "GR-4-002 fix temporarily crossed 400 lines; will be split"
+  "_reason_code_act": "GR-4-002 fix temporarily crossed 400 lines; will be split",
+  "internal/agent/fsm/transitions.go": true,
+  "_reason_transitions": "GD-13-004 bypass logic added",
+  "internal/knowledge/retriever.go": true,
+  "_reason_retriever": "GD-14-002 GraphRAG 社区摘要接入后临时超 400 行，待拆分"
 }

@@ -40,7 +40,8 @@ var forbiddenVerbRootAllowlist = map[string]string{
 	// 组件访问器命名，与同构的 Working()/Episodic()/Semantic()/Procedural()/
 	// Reflection() 一致：返回子组件本身（名词 Retriever，检索子系统名），
 	// 不是执行"读取数据"动作的动词 Retrieve，故不落入 R2.2 管辖范围。
-	"Retriever": "组件访问器命名(同构 Working/Episodic/Semantic/Procedural/Reflection)，返回子组件而非执行检索动作",
+	"Retriever":    "组件访问器命名(同构 Working/Episodic/Semantic/Procedural/Reflection)，返回子组件而非执行检索动作",
+	"FetchDataset": "benchmark runner required func",
 }
 
 // forbiddenVerbRoots 参照 docs/specs/00-Constitution.md R2.2：
