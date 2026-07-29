@@ -229,6 +229,11 @@ func (a *Agent) InjectTaskCheckpointRepo(repo protocol.TaskCheckpointRepository)
 	a.taskCheckpointRepo = repo
 }
 
+// InjectSkillMatcher 注入 System-1 Bypass 技能匹配器
+func (a *Agent) InjectSkillMatcher(sm fsm.SkillMatcher) {
+	a.sm.SetSkillMatcher(sm)
+}
+
 // InjectReplayData 见 protocol.AgentController 接口注释（M04 §8 崩溃恢复回放）。
 func (a *Agent) InjectReplayData(calls []protocol.ReplayLLMCall) {
 	a.replayCalls = calls

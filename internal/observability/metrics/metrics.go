@@ -6,6 +6,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var (
@@ -351,5 +354,16 @@ func (si *SurpriseIndex) InjectFaultSignal(severity float64) {
 	si.lastValue += severity
 	if si.lastValue > 1.0 {
 		si.lastValue = 1.0
+	}
+}
+
+// RecordSystem1Bypass 记录 System-1 Bypass 触发次数。
+func RecordSystem1Bypass(ctx context.Context, matched bool) {
+	if InstrSystem1BypassTotal != nil {
+		matchedStr := "false"
+		if matched {
+			matchedStr = "true"
+		}
+		InstrSystem1BypassTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("matched", matchedStr)))
 	}
 }

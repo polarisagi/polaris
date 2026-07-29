@@ -35,6 +35,9 @@ var (
 	InstrSwarmCompensationFailedTotal  metric.Int64Counter
 	InstrSwarmCompensationTimeoutTotal metric.Int64Counter
 
+	// System 1 Bypass
+	InstrSystem1BypassTotal metric.Int64Counter
+
 	// [Task 14] M10 Embedding 可观测性
 	InstrEmbeddingLatencyMs  metric.Float64Histogram // embedding 调用延迟
 	InstrEmbeddingErrorTotal metric.Int64Counter     // embedding 调用失败次数
@@ -116,6 +119,11 @@ func initInstruments(meter metric.Meter) {
 	InstrTokensTotal, _ = meter.Int64Counter(
 		"polaris.tokens.consumed_total",
 		metric.WithDescription("消耗 token 总数 (label: type: input/output/cache_hit)"),
+	)
+
+	InstrSystem1BypassTotal, _ = meter.Int64Counter(
+		"polaris.system1_bypass_total",
+		metric.WithDescription("System 1 Bypass 次数 (label: matched=true/false)"),
 	)
 
 	InstrRetrievalExplainBitsTotal, _ = meter.Int64Counter(
