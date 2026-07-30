@@ -385,6 +385,9 @@ func (a *Agent) Run(ctx context.Context) error {
 					continue
 				}
 				concurrent.SafeGo(ctx, "agent.executeEffect", func(execCtx context.Context) {
+					// panic 由 SafeGo 外层 recover（打日志+计量），goroutine 静默退出。
+					// 此处 defer 保证无论正常返回还是 panic，effectRunning 都能解锁，
+					// 避免主循环在 effectDone select 上永久阻塞。
 					defer a.effectRunning.Store(false)
 					result := a.executeEffect(execCtx, effect)
 					select {
