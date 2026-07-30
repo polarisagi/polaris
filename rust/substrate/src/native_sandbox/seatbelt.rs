@@ -5,10 +5,14 @@
 //
 // 设计依据: ADR-0008-sandbox-three-tier-fallback.md §macOS
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
+#[cfg(target_os = "macos")]
 use super::engine::{run_with_timeout, shell_quote_value, which_tool};
+#[cfg(target_os = "macos")]
 use super::env::{build_env_v2, build_safe_env, build_sandbox_path, build_ulimit_prefix};
+#[cfg(target_os = "macos")]
 use super::types::{
     NativeSandboxRequest, NativeSandboxResponse, SandboxContextV2, WrapArgvResponseV2,
 };
