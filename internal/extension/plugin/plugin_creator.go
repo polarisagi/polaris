@@ -10,9 +10,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/polarisagi/polaris/internal/extension/llmgen"
+	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
+
+// pluginStructuredBackoff 结构化 JSON 纠错重试退避（阶段03 R-06），语义与
+// skill/skill_creator.go 的 skillStructuredBackoff 一致：比
+// llmparent.DefaultBackoff() 默认的 5s 更短，面向交互式生成请求。
+func pluginStructuredBackoff() llmparent.BackoffConfig {
+	return llmparent.BackoffConfig{Base: 500 * time.Millisecond, Max: 3 * time.Second, JitterRatio: 0.3}
+}
 
 var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
@@ -53,19 +63,26 @@ func checkDenoAvailable() bool {
 type LLMClient interface {
 	// Generate uses the system prompt and user intent to generate a structured response.
 	Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	// GenerateJSON 语义同 Generate，但要求实现尽力让 Provider 侧强制返回合法
+	// JSON（如 response_format=json_object）；不支持结构化输出的实现可退化为
+	// 等同于 Generate——上层 StructuredGenerator 的 extractJSON 兜底与有界
+	// 重试仍然生效（阶段03 R-06）。
+	GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 }
 
 // PluginCreator defines the auto-generation workflow for MCP plugins based on user intent.
 type PluginCreator struct {
-	llm     LLMClient
-	baseDir string // e.g. ~/.polarisagi/polaris/extensions/local/
+	llm       LLMClient
+	baseDir   string                      // e.g. ~/.polarisagi/polaris/extensions/local/
+	structGen *llmgen.StructuredGenerator // 阶段03 R-06：有界重试+熔断+tracing/metrics
 }
 
 // NewPluginCreator initializes a new creator for auto-generating plugins.
 func NewPluginCreator(llm LLMClient, baseDir string) *PluginCreator {
 	return &PluginCreator{
-		llm:     llm,
-		baseDir: baseDir,
+		llm:       llm,
+		baseDir:   baseDir,
+		structGen: llmgen.NewStructuredGenerator("plugin").WithBackoff(pluginStructuredBackoff()),
 	}
 }
 
@@ -98,25 +115,29 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 		return "", apperr.New(apperr.CodeInternal, "plugin_creator: LLM client is nil")
 	}
 
-	response, err := c.llm.Generate(ctx, pluginCreatorSystemPrompt, intent)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to generate plugin", err)
-	}
-
-	// Simple JSON extraction to handle model quirks
-	jsonStr := extractJSON(response)
-
+	// 阶段03 R-06：优先走 GenerateJSON（Provider 侧结构化输出尽力保证合法 JSON），
+	// 有界重试（含错误回灌）+ 熔断 + tracing/metrics 交由 StructuredGenerator
+	// 统一处理；解析失败时把错误摘要回灌进下一次重试的 prompt。
 	var result GeneratedPlugin
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to parse generated plugin JSON", err)
-	}
-
-	if result.Name == "" || result.Description == "" || result.TypeScriptCode == "" {
-		return "", apperr.New(apperr.CodeInternal, "plugin_creator: invalid generation, missing required fields")
-	}
-
-	if !validNamePattern.MatchString(result.Name) {
-		return "", apperr.New(apperr.CodeInvalidInput, "plugin_creator: invalid name")
+	genErr := c.structGen.Generate(ctx, pluginCreatorSystemPrompt, intent, c.llm.GenerateJSON, func(raw string) error {
+		jsonStr := extractJSON(raw)
+		var parsed GeneratedPlugin
+		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to parse generated plugin JSON", err)
+		}
+		if parsed.Name == "" || parsed.Description == "" || parsed.TypeScriptCode == "" {
+			return apperr.New(apperr.CodeInternal, "plugin_creator: invalid generation, missing required fields")
+		}
+		if !validNamePattern.MatchString(parsed.Name) {
+			return apperr.New(apperr.CodeInvalidInput, "plugin_creator: invalid name")
+		}
+		result = parsed
+		return nil
+	})
+	if genErr != nil {
+		// apperr.CodeOf 保留 llmgen 内部判定的具体 Code（如熔断开启时的
+		// CodeResourceExhausted），不能用固定 Code 重新包装掩盖语义。
+		return "", apperr.Wrap(apperr.CodeOf(genErr), "plugin_creator: structured plugin generation failed", genErr)
 	}
 
 	// Create physical directory structure

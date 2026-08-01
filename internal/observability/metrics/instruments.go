@@ -82,6 +82,12 @@ var (
 	InstrPIIMappingEvictionsTotal          metric.Int64Counter // 无 label（partitionKey 无界基数，不进维度，阶段03 R-02）
 	InstrSandboxDowngradeTotal             metric.Int64Counter // label: from, to, reason（均为固定枚举值，有界基数，阶段03 R-05）
 
+	// [阶段03 R-06] Skill/Plugin 生成器 LLM 结构化输出可观测性。kind 固定枚举
+	// "skill"/"plugin"，result 固定枚举 "success"/"failure"/"circuit_open"。
+	InstrExtensionLLMDurationMs              metric.Float64Histogram
+	InstrExtensionLLMCallsTotal              metric.Int64Counter
+	InstrExtensionLLMStructuredFailuresTotal metric.Int64Counter // label: kind
+
 	instrOnce sync.Once
 )
 
@@ -412,6 +418,24 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("沙箱隔离层级降级次数 (label: from, to, reason，均为固定枚举值)"),
 	)
 	ie.capture("polaris.sandbox.downgrade_total", err)
+	InstrExtensionLLMDurationMs, err = meter.Float64Histogram(
+		"polaris.extension.llm_duration_ms",
+		metric.WithDescription("Skill/Plugin 生成器结构化 LLM 调用端到端延迟，含重试（ms）(label: kind)"),
+		metric.WithExplicitBucketBoundaries(
+			100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600, 51200,
+		),
+	)
+	ie.capture("polaris.extension.llm_duration_ms", err)
+	InstrExtensionLLMCallsTotal, err = meter.Int64Counter(
+		"polaris.extension.llm_calls_total",
+		metric.WithDescription("Skill/Plugin 生成器调用次数 (label: kind, result: success/failure/circuit_open)"),
+	)
+	ie.capture("polaris.extension.llm_calls_total", err)
+	InstrExtensionLLMStructuredFailuresTotal, err = meter.Int64Counter(
+		"polaris.extension.llm_structured_failures_total",
+		metric.WithDescription("Skill/Plugin 生成器结构化 JSON 解析重试耗尽次数 (label: kind)"),
+	)
+	ie.capture("polaris.extension.llm_structured_failures_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter) {
@@ -652,5 +676,27 @@ func RecordSandboxDowngrade(ctx context.Context, from, to, reason string) {
 			attribute.String("to", to),
 			attribute.String("reason", reason),
 		))
+	}
+}
+
+// RecordExtensionLLMCall 记录一次 Skill/Plugin 生成器的结构化 LLM 生成调用
+// （阶段03 R-06）。kind 固定枚举 "skill"/"plugin"；result 固定枚举
+// "success"/"failure"/"circuit_open"；durationMs 覆盖含重试的完整耗时。
+func RecordExtensionLLMCall(ctx context.Context, kind, result string, durationMs float64) {
+	if InstrExtensionLLMCallsTotal != nil {
+		InstrExtensionLLMCallsTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("kind", kind),
+			attribute.String("result", result),
+		))
+	}
+	if InstrExtensionLLMDurationMs != nil {
+		InstrExtensionLLMDurationMs.Record(ctx, durationMs, metric.WithAttributes(attribute.String("kind", kind)))
+	}
+}
+
+// RecordExtensionStructuredFailure 记录一次结构化 JSON 重试耗尽失败（阶段03 R-06）。
+func RecordExtensionStructuredFailure(ctx context.Context, kind string) {
+	if InstrExtensionLLMStructuredFailuresTotal != nil {
+		InstrExtensionLLMStructuredFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", kind)))
 	}
 }
