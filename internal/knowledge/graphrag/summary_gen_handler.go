@@ -20,14 +20,26 @@ import (
 
 const EventTypeRAGDocSummaryNeeded = "rag_doc_summary_needed"
 
+// ChunkTaintSealer 是 graphrag 对跨模块持久化边界 HMAC 签名能力（inv_M11_02）
+// 的消费端接口（S-05，HE-3：接口在调用方定义）。graphrag 不得反向依赖
+// internal/knowledge 根包（会与 knowledge→graphrag 的既有依赖方向成环），
+// 故由 knowledge 包实现本接口（knowledge.ChunkTaintSealerAdapter）并注入。
+type ChunkTaintSealer interface {
+	// SealChunkTaint 为一条 rag_chunks 记录计算 HMAC-SHA256 边界签名。
+	SealChunkTaint(id, content string, level int, source string) string
+}
+
 // SummaryGenOutboxHandler 监听 rag_doc_summary_needed 事件，异步触发 LLM 摘要生成。
 type SummaryGenOutboxHandler struct {
 	db       protocol.SQLQuerier
 	provider protocol.Provider
+	// sealer 为 nil 时 taint_hmac 写空串（与 knowledge.sealChunkTaint 的既有
+	// nil-safe 降级语义对称）；生产路径（boot_knowledge.go）恒定注入非 nil 实例。
+	sealer ChunkTaintSealer
 }
 
-func NewSummaryGenOutboxHandler(db protocol.SQLQuerier, provider protocol.Provider) *SummaryGenOutboxHandler {
-	return &SummaryGenOutboxHandler{db: db, provider: provider}
+func NewSummaryGenOutboxHandler(db protocol.SQLQuerier, provider protocol.Provider, sealer ChunkTaintSealer) *SummaryGenOutboxHandler {
+	return &SummaryGenOutboxHandler{db: db, provider: provider, sealer: sealer}
 }
 
 func (h *SummaryGenOutboxHandler) Handle(ctx context.Context, record *store.OutboxRecord) error {
@@ -72,6 +84,19 @@ func (h *SummaryGenOutboxHandler) generateSummary(ctx context.Context, docID str
 		return nil
 	}
 
+	// S-05：摘要必须继承源文档的最高 taint_level（only-up 语义），不得写死为 0。
+	// 读取失败 fail-closed 取 TaintHigh，禁止取 0（与 ingester.go 的
+	// sealChunkTaint 调用点保持同一 canonical 写法）。COALESCE 兜底 TaintMedium
+	// 仅覆盖"查得到行但全为 NULL"这一理论边界（正常情况下 len(contents)>0
+	// 已保证至少一行 parent chunk 存在）。
+	var srcTaint int
+	if err := h.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(taint_level), ?) FROM rag_chunks WHERE doc_id = ? AND chunk_type != 'doc_summary'`,
+		int(types.TaintMedium), docID).Scan(&srcTaint); err != nil {
+		slog.WarnContext(ctx, "summary_gen: read source taint failed, fail-closed to TaintHigh", "doc_id", docID, "err", err)
+		srcTaint = int(types.TaintHigh)
+	}
+
 	// A-12：System Prompt 与用户数据严格分离，避免拼接注入风险。
 	// System 消息固定角色定义；User 消息携带待摘要的原始文档内容（可能含外部数据）。
 	sysPrompt, err := templates.Render("graphrag_doc_summary.tmpl", nil)
@@ -104,11 +129,17 @@ func (h *SummaryGenOutboxHandler) generateSummary(ctx context.Context, docID str
 	}
 
 	summaryID := fmt.Sprintf("doc_summary_%s", docID)
+	// S-05：taint_level 继承 srcTaint（而非硬编码 0），并补上 taint_hmac 签名
+	// （inv_M11_02 持久化边界密码学验证），与 ingester.go 的 canonical 写法对齐。
+	var hmacHex string
+	if h.sealer != nil {
+		hmacHex = h.sealer.SealChunkTaint(summaryID, resp.Content, srcTaint, "outbox_summary")
+	}
 	if _, err := h.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO rag_chunks
-			(id, doc_id, content, taint_level, taint_source, chunk_type, chunk_index)
-		 VALUES (?,?,?,?,?,?,?)`,
-		summaryID, docID, resp.Content, 0, "outbox_summary", "doc_summary", -1); err != nil {
+			(id, doc_id, content, taint_level, taint_source, taint_hmac, chunk_type, chunk_index)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		summaryID, docID, resp.Content, srcTaint, "outbox_summary", hmacHex, "doc_summary", -1); err != nil {
 		// 持久化失败可重试（INSERT OR REPLACE 幂等，重试安全）；仍记录日志便于排障。
 		slog.WarnContext(ctx, "summary_gen: db update failed", "error", err)
 		return apperr.Wrap(apperr.CodeInternal, "summary_gen: persist summary", err)

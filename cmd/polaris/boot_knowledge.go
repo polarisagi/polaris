@@ -154,7 +154,11 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 			return graphPipeline.Run(ctx, payload.DocID)
 		})
 		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocIngested, graphrag.NewGraphBuildOutboxHandler(graphPipeline).Handle)
-		summaryGenHandler := graphrag.NewSummaryGenOutboxHandler(sb.Store.DB(), sb.Router)
+		// S-05：注入 ragTaintSerializer 同源的 ChunkTaintSealerAdapter，使摘要写入
+		// 与 ingester.go 的 canonical 写法一致签发 taint_hmac；ragTaintSerializer
+		// 为 nil 时 adapter 内部 sealChunkTaint 也按既有语义降级返回空串。
+		summaryGenHandler := graphrag.NewSummaryGenOutboxHandler(sb.Store.DB(), sb.Router,
+			&knowledgepkg.ChunkTaintSealerAdapter{Ser: ragTaintSerializer})
 		sb.Outbox.RegisterHandler(graphrag.EventTypeRAGDocSummaryNeeded, summaryGenHandler.Handle)
 		slog.Info("polaris: SummaryGenOutboxHandler registered for rag_doc_summary_needed")
 		slog.Info("polaris: GraphBuildPipeline registered to outbox for graph_build and rag_doc_ingested")

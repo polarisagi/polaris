@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -18,14 +19,24 @@ var _ KnowledgeSourceConnector = (*NotionConnector)(nil)
 
 type NotionConnector struct {
 	tokenProvider func(context.Context) (string, error)
+	// httpClient 是经 EgressGateway/SafeDialer 包裹的受保护 client（S-04）。
+	// 禁止为 nil：notionapi.NewClient 若不显式注入会退化为 http.DefaultClient，
+	// 完全绕过 SSRF 防护与 PolicyGate 出口审计。
+	httpClient *http.Client
 }
 
 // NewNotionConnector creates a new Notion connector.
 // tokenProvider should integrate with the P0-1 secure credential vault.
-func NewNotionConnector(tokenProvider func(context.Context) (string, error)) *NotionConnector {
+// httpClient 必须是 EgressGateway 提供的受保护 client（如 boot_substrate.go
+// 的 sb.SafeHTTP），nil 时 fail-closed 返回 error（S-04，不得退化为默认 client）。
+func NewNotionConnector(tokenProvider func(context.Context) (string, error), httpClient *http.Client) (*NotionConnector, error) {
+	if httpClient == nil {
+		return nil, apperr.New(apperr.CodeInternal, "notion_connector: protected http client is required (fail-closed)")
+	}
 	return &NotionConnector{
 		tokenProvider: tokenProvider,
-	}
+		httpClient:    httpClient,
+	}, nil
 }
 
 func (c *NotionConnector) ID() string {
@@ -53,7 +64,7 @@ func (c *NotionConnector) getClient(ctx context.Context) (*notionapi.Client, err
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeForbidden, "failed to get notion token", err)
 	}
-	return notionapi.NewClient(notionapi.Token(token)), nil
+	return notionapi.NewClient(notionapi.Token(token), notionapi.WithHTTPClient(c.httpClient)), nil
 }
 
 // List scans the Notion workspace for pages using the search API.

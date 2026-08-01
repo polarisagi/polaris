@@ -28,7 +28,7 @@ func TestGraphBuildOutboxHandler(t *testing.T) {
 }
 
 func TestSummaryGenOutboxHandler(t *testing.T) {
-	handler := NewSummaryGenOutboxHandler(nil, nil)
+	handler := NewSummaryGenOutboxHandler(nil, nil, nil)
 
 	// Test empty payload
 	entry := &store.OutboxRecord{
