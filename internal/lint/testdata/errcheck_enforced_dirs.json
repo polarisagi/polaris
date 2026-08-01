@@ -1,0 +1,11 @@
+{
+  "_comment": "Test_inv_HE1_NoSilentErrorDiscard 目录白名单（阶段02 §3）。列出的目录才参与扫描；未列入 = 待后续批次接入，非豁免。阶段02 结束时覆盖完 8 个模块目录（见 02-error-handling.md 完成条件）。",
+  "internal/store": true,
+  "internal/memory": true,
+  "internal/execute": true,
+  "internal/knowledge": true,
+  "internal/learning": true,
+  "internal/gateway": true,
+  "internal/tool": true,
+  "internal/observability": true
+}
