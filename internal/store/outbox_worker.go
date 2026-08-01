@@ -188,8 +188,9 @@ func scanOutboxRows(rows *sql.Rows) ([]*OutboxRecord, error) {
 //   - 毒丸记录（crash_recovery_count ≥ 3）直接标记 dead，不再重试。
 //   - 处于 ReplayMode 时跳过所有副作用（只消费，不触发 handler）。
 func (w *OutboxWorker) Run(ctx context.Context) error {
-	// 从 DB 恢复 cursor（崩溃重启场景）
-	cursor := w.loadCursor(ctx)
+	// 从 DB 恢复 cursor（崩溃重启场景）。cursorReady=false 表示尚未获得可信 cursor，
+	// 此时绝不能带着 0 值跑 processBatch（会从头重复处理全部 outbox，见 L3 定级）。
+	cursor, cursorReady := w.loadCursorSafe(ctx)
 
 	ticker := time.NewTicker(time.Duration(w.pollInterval) * time.Second)
 	defer ticker.Stop()
@@ -199,6 +200,12 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		case <-ticker.C:
+			if !cursorReady {
+				cursor, cursorReady = w.loadCursorSafe(ctx)
+				if !cursorReady {
+					continue // 游标仍未恢复，本轮跳过，避免从 0 重放
+				}
+			}
 			newCursor, err := w.processBatch(ctx, cursor, 50)
 			if err != nil {
 				// 非致命：记录并继续，防止单批失败中断整个 worker
@@ -221,7 +228,13 @@ func (w *OutboxWorker) processBatch(ctx context.Context, cursor int64, batchSize
 
 	maxID := cursor
 	for _, r := range records {
-		_ = w.processAndMark(ctx, r) // 单条失败不中断批次
+		// L2：单条失败不应中断整批处理（其余记录仍需推进），但必须可观测，
+		// 否则某个 target_engine 持续失败会在 dead-letter 之前完全无声（HE-1）。
+		if err := w.processAndMark(ctx, r); err != nil {
+			slog.WarnContext(ctx, "store/outbox: 单条记录处理失败，跳过继续处理下一条",
+				"outbox_id", r.ID, "target_engine", r.TargetEngine, "operation", r.Operation, "err", err)
+			metrics.RecordOutboxProcessFailure(ctx, r.TargetEngine)
+		}
 		if r.ID > maxID {
 			maxID = r.ID
 		}
@@ -249,9 +262,13 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 	now = time.Now().UnixMilli()
 
 	if err == nil {
-		_, _ = w.db.ExecContext(ctx,
+		// L1：标记 done 失败会让记录永久卡在 'processing'（既不会被 ListBatch 的
+		// pending/failed 条件重新捡起，也不会重试），必须向上传播由调用方感知。
+		if _, execErr := w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='done', processed_at=? WHERE id=?",
-			now, record.ID)
+			now, record.ID); execErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark done failed", execErr)
+		}
 		return nil
 	}
 
@@ -302,22 +319,35 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 	return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark", err)
 }
 
-// loadCursor 从 sys_config 读取持久化的消费游标。
-func (w *OutboxWorker) loadCursor(ctx context.Context) int64 {
-	var cursor int64
+// loadCursorSafe 从 sys_config 读取持久化的消费游标。
+// L3 fail-safe：Scan 失败（非 sql.ErrNoRows）不得退回零值继续跑——那会导致从头
+// 重复处理全部 outbox。真实解析失败时返回 ok=false，调用方（Run）据此本轮跳过、
+// 下一 tick 重试，而不是带着 cursor=0 消费。sql.ErrNoRows 是合法的首次启动场景。
+func (w *OutboxWorker) loadCursorSafe(ctx context.Context) (cursor int64, ok bool) {
 	row := w.db.QueryRowContext(ctx,
 		"SELECT CAST(value AS INTEGER) FROM sys_config WHERE key='outbox_cursor' LIMIT 1")
-	_ = row.Scan(&cursor)
-	return cursor
+	if err := row.Scan(&cursor); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, true // 首次运行，游标表尚无记录，从 0 开始合法
+		}
+		slog.ErrorContext(ctx, "store/outbox: 游标解析失败，本轮跳过消费以避免从 0 重放", "err", err)
+		metrics.RecordOutboxCursorError(ctx, "load")
+		return 0, false
+	}
+	return cursor, true
 }
 
 // saveCursor 原子更新消费游标到 sys_config。
 // [MUST] 游标只能单调递增：WHERE 子句物理阻断游标回溯，防止重放历史消息。
 // 若外部传入比当前值更小的 cursor（理论上不应发生），SQL 静默忽略，不报错。
+// L2：持久化失败下次仍会重复处理（幂等键兜底），Warn + counter 即可，不阻断 Run 循环。
 func (w *OutboxWorker) saveCursor(ctx context.Context, cursor int64) {
-	_, _ = w.db.ExecContext(ctx,
+	if _, err := w.db.ExecContext(ctx,
 		"INSERT INTO sys_config(key,value) VALUES('outbox_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE excluded.value > sys_config.value",
-		cursor)
+		cursor); err != nil {
+		slog.WarnContext(ctx, "store/outbox: 游标持久化失败，下次重启将重复处理（幂等键兜底）", "cursor", cursor, "err", err)
+		metrics.RecordOutboxCursorError(ctx, "save")
+	}
 }
 
 // Process 处理单条 Outbox 记录。

@@ -2,8 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"log/slog"
 	"strconv"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -51,7 +53,11 @@ func (sm *SchemaManager) ApplyMigrations() error {
 		if m.Version <= sm.currentVersion {
 			continue
 		}
-		_ = sm.BeginMigration(m.Version)
+		// L1：迁移开始标记未落盘，崩溃后 Recover() 读不到 in_progress 状态，
+		// 会让一次半途而废的 DDL 变更被当作"未开始"重复执行。必须 return。
+		if err := sm.BeginMigration(m.Version); err != nil {
+			return &MigrationError{m.Version, "begin migration marker: " + err.Error()}
+		}
 
 		var execErr error
 		if sm.db != nil {
@@ -61,7 +67,11 @@ func (sm *SchemaManager) ApplyMigrations() error {
 				return &MigrationError{m.Version, "begin tx: " + err.Error()}
 			}
 			if execErr = m.Up(&sqlTxWrapper{sqlTx}); execErr != nil {
-				_ = sqlTx.Rollback()
+				// L4：回滚失败无补救动作——事务已因 execErr 判定失败，回滚本身
+				// 仅是尽力而为的资源释放；即便失败，连接池最终会因 tx 超时/关闭回收。
+				if rbErr := sqlTx.Rollback(); rbErr != nil {
+					slog.Debug("store/schema_manager: 迁移失败后事务回滚也失败，依赖连接释放兜底", "version", m.Version, "err", rbErr)
+				}
 			} else {
 				execErr = sqlTx.Commit()
 			}
@@ -73,7 +83,11 @@ func (sm *SchemaManager) ApplyMigrations() error {
 			return &MigrationError{m.Version, execErr.Error()}
 		}
 		sm.currentVersion = m.Version
-		_ = sm.CompleteMigration()
+		// L1：迁移完成标记未落盘，Recover() 会继续认为 in_progress，导致下次启动
+		// 被误判为"上次崩溃"而阻断启动，即使迁移本身已成功提交。必须 return。
+		if err := sm.CompleteMigration(); err != nil {
+			return &MigrationError{m.Version, "complete migration marker: " + err.Error()}
+		}
 	}
 	return nil
 }
@@ -115,11 +129,17 @@ func (sm *SchemaManager) BeginMigration(version int) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SchemaManager.BeginMigration", err)
 	}
-	_, _ = sm.db.Exec(
+	// L2：migration_version 只是崩溃后人工排查"卡在哪个版本"的诊断辅助字段，
+	// 不参与 Recover() 的状态机判定（该判定只读 migration_status）。写入失败
+	// 不影响迁移正确性，但会削弱事故排查能力，故 Warn + counter 而非 return。
+	if _, err := sm.db.Exec(
 		"INSERT INTO sys_config(key,value) VALUES('migration_version',?) "+
 			"ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		strconv.Itoa(version),
-	)
+	); err != nil {
+		slog.Warn("store/schema_manager: 迁移版本诊断字段写入失败，不影响迁移正确性但会削弱崩溃排查能力", "version", version, "err", err)
+		metrics.GlobalSchemaMigrationDiagWriteFailuresTotal.Add(1)
+	}
 	return nil
 }
 
