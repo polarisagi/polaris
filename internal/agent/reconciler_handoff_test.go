@@ -156,12 +156,17 @@ func TestReconcile_ChildTaskStillPending(t *testing.T) {
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
 
-	// watcher 挂载后短暂等待，翻转子任务为 Done，watcher 的下一次轮询
-	// （1s 间隔）应捕获并投递 TriggerAgentHandoffDone。
+	// watcher 挂载后短暂等待其完成 Subscribe，再推送匹配事件（阶段04 A-01：
+	// watchHandoffCompletion 改为事件驱动，不再靠轮询捕获状态翻转）。
 	time.Sleep(100 * time.Millisecond)
 	poster.mu.Lock()
 	poster.tasks[childID].Status = types.TaskDone
+	ch := poster.subscribeCh
 	poster.mu.Unlock()
+	if ch == nil {
+		t.Fatal("expected re-attached watcher to have called Subscribe by now")
+	}
+	ch <- types.BlackboardEvent{Type: "task_completed", TaskID: childID}
 
 	select {
 	case trigger := <-a.intent:
