@@ -5,7 +5,9 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -66,11 +68,20 @@ func writeToolCallOutcome(ctx context.Context, sessionWriter SessionEventWriter,
 		return
 	}
 
+	// L3：outcome 记录是 M9 学习信号（成功率统计/失败模式识别），反序列化失败时
+	// 对应 map 保持 nil，退化为"该次调用无结构化输入/输出"，不影响 WriteToolCallEvent
+	// 本身的写入（工具执行结果已经发生，这里只是丰富度损失，非正确性问题）。
 	var inMap map[string]any
-	_ = json.Unmarshal(input, &inMap)
+	if err := json.Unmarshal(input, &inMap); err != nil {
+		slog.Warn("tool: outcome input 反序列化失败，按空处理", "tool_name", toolName, "err", err)
+		metrics.RecordToolOutcomeDecodeFailure(ctx, toolName)
+	}
 	var outMap map[string]any
 	if res != nil {
-		_ = json.Unmarshal(res.Output, &outMap)
+		if err := json.Unmarshal(res.Output, &outMap); err != nil {
+			slog.Warn("tool: outcome output 反序列化失败，按空处理", "tool_name", toolName, "err", err)
+			metrics.RecordToolOutcomeDecodeFailure(ctx, toolName)
+		}
 	} else if errMsg != "" {
 		outMap = map[string]any{"error": errMsg}
 	}
