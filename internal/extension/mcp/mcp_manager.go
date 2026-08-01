@@ -64,6 +64,13 @@ type MCPManager struct {
 	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
 	netApproval      NetApprovalStore    // 网络访问审批持久化；nil 时跳过审批逻辑（安全降级：保持断网）
 	asyncTasks       *asyncTaskCache     // GD-08-001: CallToolAsync 的 tasks_cache（内存，TTL=300s）
+
+	// starting 是阶段03 R-03 新增的 per-serverID 互斥占位集合：Add() 的
+	// Connect/Initialize/ListTools 三步长时 IO 移出 m.mu 写锁后，用它防止
+	// 同一 serverID 并发双启，同时不阻塞其它 serverID 的读写（尤其是
+	// CallToolAsync 的 m.mu.RLock()，此前会被整段 IO 期间的写锁排队阻塞，
+	// 单个 MCP 插件重启即冻结整个工具层）。
+	starting map[string]struct{}
 }
 
 // IsPluginConnected 判断给定 plugin_id 是否有至少一个已连接的 MCP Server。
@@ -93,6 +100,7 @@ func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy pro
 		httpClient: httpClient,
 		policy:     policy,
 		asyncTasks: newAsyncTaskCache(),
+		starting:   make(map[string]struct{}),
 	}
 	m.startAsyncTaskSweeper()
 	return m
@@ -168,32 +176,61 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 
 	slog.Info("mcp_manager: starting mcp server", "id", serverID, "name", name, "transport", cfg.Transport, "command", cfg.Command)
 
+	// ── 段2a：抢占启动权（短临界区）───────────────────────────────────────
+	// 阶段03 R-03：Connect/Initialize/ListTools 是数十秒量级的长时 IO，不得
+	// 在写锁内执行——期间所有 CallTool(Async) 的 m.mu.RLock() 会排队阻塞，
+	// 单个 MCP 插件重启即冻结整个工具层（违反 HE-5 变体：锁内不做 IO）。
+	// 用 starting 集合做 per-serverID 互斥，避免同一 server 并发双启，
+	// 同时不阻塞其它 serverID 的读写。
 	m.mu.Lock()
+	if _, busy := m.starting[serverID]; busy {
+		m.mu.Unlock()
+		return apperr.New(apperr.CodeResourceExhausted, "mcp_manager: server "+serverID+" is already starting")
+	}
+	m.starting[serverID] = struct{}{}
+	old := m.entries[serverID] // 取旧实例引用，锁外关闭
+	httpClient := m.httpClient
+	samplingProv := m.samplingProvider
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.starting, serverID)
+		m.mu.Unlock()
+	}()
 
-	if old, ok := m.entries[serverID]; ok {
-		if old.client != nil {
-			old.client.Close()
-		}
+	// ── 段1：锁外长时 IO ─────────────────────────────────────────────────
+	// 关闭旧连接 + 注销旧工具必须成对、立即执行（而非把 unregisterTools 推迟到
+	// 段3 成功路径）：若只关闭旧连接而不注销旧工具，一旦新连接失败
+	// （storeFailed 分支永不到达段3），sandbox 里仍挂着指向已关闭 old.client
+	// 的富工具闭包——调用会在传输层失败而不是"工具未找到"这种干净的失败，
+	// 且 tombstone entry 与仍然注册着的旧工具会不一致。unregisterTools 本身
+	// 不含 IO（只操作 sandbox/toolReg/catalog 的内部并发安全表），不需要
+	// m.mu 保护即可安全放在段1（与本函数对 m.entries 的读写完全解耦，
+	// 且 InProcessSandbox/ToolRegistrar/Catalog 的 Register/Unregister 各自
+	// 内部已有锁）。这一点与 03-resource-concurrency.md 给出的伪代码不同
+	// （原文把 unregisterTools 放在段3），是复核时发现的正确性修正。
+	if old != nil && old.client != nil {
+		old.client.Close()
+	}
+	if old != nil {
 		m.unregisterTools(old.name, old.tools)
 	}
 
 	storeFailed := func(err error) error {
+		m.mu.Lock()
 		m.entries[serverID] = &mcpEntry{name: name, cfg: cfg, errMsg: err.Error()}
 		m.mu.Unlock()
 		slog.Error("mcp_manager: start server failed", "id", serverID, "name", name, "err", err)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "MCPManager.Add", err)
-		}
-		return nil
+		return apperr.Wrap(apperr.CodeInternal, "MCPManager.Add", err)
 	}
 
-	client := NewMCPClient(cfg, m.httpClient)
+	client := NewMCPClient(cfg, httpClient)
 
 	if err := client.Connect(ctx); err != nil {
 		wrapped := apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mcp_manager: connect %q", serverID), err)
 		return storeFailed(wrapped)
 	}
-	if m.samplingProvider != nil {
+	if samplingProv != nil {
 		client.SetServerRequestHandler(m.makeSamplingHandler())
 	}
 	if err := client.Initialize(ctx); err != nil {
@@ -208,6 +245,9 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 		return storeFailed(wrapped)
 	}
 
+	// ── 段3：短写锁落库 ──────────────────────────────────────────────────
+	// 旧工具已在段1 unregisterTools 时移除，这里只需注册新工具 + 落 entries。
+	m.mu.Lock()
 	validTools := m.registerTools(name, client, tools)
 	m.entries[serverID] = &mcpEntry{
 		client: client,
