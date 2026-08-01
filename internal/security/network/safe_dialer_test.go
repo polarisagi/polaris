@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -203,5 +204,48 @@ func TestGetParsedCIDRs(t *testing.T) {
 	const expectedCount = 10
 	if len(cidrs) != expectedCount {
 		t.Errorf("getParsedCIDRs: got %d entries, want %d", len(cidrs), expectedCount)
+	}
+}
+
+// TestSafeDialer_TaintDomainGate_S01 验证 S-01 修复：污点等级比较必须使用 >=，
+// 禁止使用 ==（否则比 TaintMedium 更高的等级会完全绕过 allowedDomains 白名单）。
+// 本用例在修复前（== types.TaintMedium）必失败：TaintHigh + 域名不在白名单
+// 时旧代码会放行，新代码必须返回 CodeForbidden。
+func TestSafeDialer_TaintDomainGate_S01(t *testing.T) {
+	allowed := []string{"allowed.example.com"}
+
+	cases := []struct {
+		name       string
+		taintLevel types.TaintLevel
+		host       string
+		wantForbid bool
+	}{
+		{"TaintNone_不在白名单_允许", types.TaintNone, "evil.example.com", false},
+		{"TaintLow_不在白名单_允许", types.TaintLow, "evil.example.com", false},
+		{"TaintMedium_不在白名单_拒绝", types.TaintMedium, "evil.example.com", true},
+		// 回归锚点：修复前 == TaintMedium 会让 TaintHigh 完全绕过白名单。
+		{"TaintHigh_不在白名单_拒绝", types.TaintHigh, "evil.example.com", true},
+		{"TaintHigh_在白名单_允许", types.TaintHigh, "allowed.example.com", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sd := NewSafeDialer(int(tc.taintLevel), allowed, config.M11PolicyThresholds{})
+
+			// 用已取消的 context：若通过污点门（未被 CodeForbidden 拦截），
+			// 后续 DNS 解析阶段会因 context 取消而快速失败，避免测试依赖真实网络。
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			_, err := sd.DialContext(ctx, "tcp", tc.host+":443")
+			if err == nil {
+				t.Fatalf("expected error (either taint-forbidden or ctx-cancelled), got nil")
+			}
+			isForbidden := apperr.IsCode(err, apperr.CodeForbidden)
+			if isForbidden != tc.wantForbid {
+				t.Errorf("taintLevel=%v host=%s: got forbidden=%v (err=%v), want forbidden=%v",
+					tc.taintLevel, tc.host, isForbidden, err, tc.wantForbid)
+			}
+		})
 	}
 }

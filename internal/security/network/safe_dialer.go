@@ -184,7 +184,8 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 		port = "443"
 	}
 
-	if types.TaintLevel(sd.taintLevel) == types.TaintMedium {
+	// 污点等级 → 施加限制：语义为"只增不减"，故用 >=，禁止用 ==（否则更高污点等级绕过白名单）。
+	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium {
 		allowed := false
 		for _, d := range sd.allowedDomains {
 			if strings.EqualFold(host, d) || strings.HasSuffix(strings.ToLower(host), "."+strings.ToLower(d)) {
@@ -193,7 +194,7 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 			}
 		}
 		if !allowed {
-			return nil, apperr.New(apperr.CodeForbidden, "safe_dialer: TaintMedium requests are restricted to allowed domains")
+			return nil, apperr.New(apperr.CodeForbidden, "safe_dialer: taint>=Medium requests are restricted to allowed domains")
 		}
 	}
 
