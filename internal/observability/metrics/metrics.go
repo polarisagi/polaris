@@ -121,6 +121,13 @@ func (tbr *TokenBurnRate) Add(tokens int64) {
 	tbr.callCount.Add(1)
 }
 
+// CumulativeTokens 返回累计 Add() 的 token 总量。阶段03 R-04 新增：Provider
+// adapter 的 StreamInfer 转发协程测试需要直接断言"tbr 累加值正确"，EMA5s/
+// EMA30s 依赖 Tick() 的时间窗口、不适合做确定性单测断言。
+func (tbr *TokenBurnRate) CumulativeTokens() int64 {
+	return tbr.cumulativeTokens.Load()
+}
+
 // Tick updates the EMA rates. Must be called periodically (e.g., every 1s).
 func (tbr *TokenBurnRate) Tick() {
 	tbr.mu.Lock()

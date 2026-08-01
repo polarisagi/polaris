@@ -5,6 +5,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/ffi"
 	llmparent "github.com/polarisagi/polaris/internal/llm"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -26,6 +27,10 @@ type LocalAdapter struct {
 	// modelID 缓存最近一次 LoadModel 的路径，用作 ModelID() 展示；
 	// 未加载时返回固定占位符，避免空字符串导致 Router 展示异常。
 	modelID string
+	// tbr 阶段03 R-04 补齐：此前 LocalAdapter 完全未接入 TokenBurnRate，
+	// 本地 FFI 推理路径的预算探测/熔断永远失效（与 boot_substrate.go 同一个
+	// tbr 实例也驱动 KillSwitch 的事实矛盾——本地推理再快也该计入速率）。
+	tbr *metrics.TokenBurnRate
 }
 
 var (
@@ -35,7 +40,8 @@ var (
 
 // NewLocalAdapter 构造本地 llama.cpp FFI 推理适配器。构造时不加载任何模型
 // （惰性——LoadModel 由调用方在热切换场景中显式触发，见 LocalProvider 接口）。
-func NewLocalAdapter() *LocalAdapter {
+// tbr 允许为 nil（Infer/StreamInfer 内部判空跳过累加，与 OllamaAdapter 一致）。
+func NewLocalAdapter(tbr *metrics.TokenBurnRate) *LocalAdapter {
 	return &LocalAdapter{
 		caps: types.ProviderCapabilities{
 			SupportsStreaming: true,
@@ -46,6 +52,7 @@ func NewLocalAdapter() *LocalAdapter {
 			MaxContextTokens: 4096, // LoadModel 成功后按模型实际 n_ctx 动态更新
 		},
 		modelID: "local:unloaded",
+		tbr:     tbr,
 	}
 }
 
@@ -153,6 +160,9 @@ func (a *LocalAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "local adapter: infer", err)
 	}
+	if a.tbr != nil && (resp.PromptTokens > 0 || resp.TokensGenerated > 0) {
+		a.tbr.Add(int64(resp.PromptTokens) + int64(resp.TokensGenerated))
+	}
 	return &types.ProviderResponse{
 		Content:      resp.Text,
 		Model:        a.modelID,
@@ -166,7 +176,8 @@ func (a *LocalAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...
 	}, nil
 }
 
-// StreamInfer 当前实现为"整体生成后单帧下发"（非逐 token 流式）——
+// StreamInfer 当前实现为"整体生成后单帧下发"（非逐 token 流式），内部复用
+// Infer()（tbr 累加已在 Infer() 内完成，此处不重复计数）——
 // llama_infer_generate 的 FFI 协议是 run-to-completion（Rust 侧一次性返回
 // 完整文本），真正的逐 token SSE 需要 Rust 侧改为回调/迭代器式 FFI（每采样
 // 一个 token 就跨界回调一次 Go），属于更大的 FFI 协议改造，记录为已知后续

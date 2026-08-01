@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewLocalAdapter_DefaultState(t *testing.T) {
-	a := NewLocalAdapter()
+	a := NewLocalAdapter(nil)
 	if a.ModelID() != "local:unloaded" {
 		t.Errorf("expected default ModelID 'local:unloaded', got %q", a.ModelID())
 	}
@@ -46,7 +46,7 @@ func TestToLocalMessages_Conversion(t *testing.T) {
 // Infer 返回明确错误而非 panic——无论底层 dylib 是否以 tier1 构建都应成立
 // （bindLlamaInfer 优雅降级 + Rust 侧"no model loaded"业务错误路径共同保证）。
 func TestLocalAdapter_InferWithoutLoadedModelReturnsError(t *testing.T) {
-	a := NewLocalAdapter()
+	a := NewLocalAdapter(nil)
 	_, err := a.Infer(context.Background(), []types.Message{{Role: "user", Content: "hi"}})
 	if err == nil {
 		t.Fatal("expected error: no model loaded (or tier1 symbols unavailable)")
@@ -54,7 +54,7 @@ func TestLocalAdapter_InferWithoutLoadedModelReturnsError(t *testing.T) {
 }
 
 func TestLocalAdapter_StreamInferWithoutLoadedModelEmitsErrorEvent(t *testing.T) {
-	a := NewLocalAdapter()
+	a := NewLocalAdapter(nil)
 	ch, err := a.StreamInfer(context.Background(), []types.Message{{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatalf("StreamInfer itself should not error synchronously: %v", err)
@@ -72,7 +72,7 @@ func TestLocalAdapter_StreamInferWithoutLoadedModelEmitsErrorEvent(t *testing.T)
 }
 
 func TestLocalAdapter_LocalStatusGraceful(t *testing.T) {
-	a := NewLocalAdapter()
+	a := NewLocalAdapter(nil)
 	status, err := a.LocalStatus(context.Background())
 	if !ffi.LlamaAvailable() {
 		if err == nil {
@@ -91,7 +91,7 @@ func TestLocalAdapter_LocalStatusGraceful(t *testing.T) {
 // TestLocalAdapter_ProbeGraceful 验证 Probe()（M11 §5.3 Tier3 内存守卫依赖）
 // 在 tier1 符号不可用时优雅报错、可用时返回一致的未加载状态 + 非零内存读数。
 func TestLocalAdapter_ProbeGraceful(t *testing.T) {
-	a := NewLocalAdapter()
+	a := NewLocalAdapter(nil)
 	result, err := a.Probe(context.Background())
 	if !ffi.LlamaAvailable() {
 		if err == nil {

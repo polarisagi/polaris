@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -127,5 +128,30 @@ func (a *OllamaAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 	apiReq := translateRequest(req, a.caps.SupportsVision)
 	apiReq.Model = a.model
 	tok := &llmparent.SimpleTokenizer{}
-	return a.client.SendStreamRequest(ctx, cancel, nil, apiReq, tok.EstimateRequestTokens(req))
+
+	raw, err := a.client.SendStreamRequest(ctx, cancel, nil, apiReq, tok.EstimateRequestTokens(req))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "OllamaAdapter.StreamInfer", err)
+	}
+	if a.tbr == nil {
+		return raw, nil
+	}
+	// [SafeGo] R-04：此前直接透传 raw，未接入 TokenBurnRate，本地推理的
+	// 单流硬阻断（预算探测）在 Ollama 上完全失效。中间层转发协程对齐
+	// openai.go:204-221 的 canonical 模式。
+	out := make(chan types.StreamEvent, cap(raw))
+	concurrent.SafeGo(ctx, "llm.ollama.stream_tbr", func(context.Context) {
+		defer close(out)
+		for ev := range raw {
+			if ev.Usage.InputTokens+ev.Usage.OutputTokens > 0 {
+				a.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens))
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return // 消费方已放弃，退出避免 goroutine 泄漏
+			}
+		}
+	})
+	return out, nil
 }
