@@ -69,6 +69,13 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 	if isNewSession {
 		sessionID = newSessionID()
 	}
+	// S-07 入口白名单校验（双重防御第一层）：sessionID 后续会拼入 transcript
+	// 文件路径（openTranscript）等场景，未经校验的值可携带 "../" 实现路径穿越。
+	// newSessionID() 的产出恒定满足本白名单，故不影响正常的新会话路径。
+	if !sessionIDPattern.MatchString(sessionID) {
+		httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "invalid session_id"), http.StatusBadRequest)
+		return
+	}
 	if err := s.PersistenceService.EnsureSession(ctx, sessionID); err != nil {
 		s.WriteSSEError(w, flusher, "session_error", err.Error(), sessionID, err)
 		return
