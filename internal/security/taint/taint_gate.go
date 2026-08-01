@@ -10,6 +10,16 @@ import (
 //
 // 防线原则：data / tool_result 槽的内容（TaintMedium+）绝对不得流入 instruction 槽。
 // 任何违规立即返回 ErrTaintSlotViolation，fail-closed。
+//
+// 注（S-02）：本文件的 PromptSlot 是 LLM 请求维度的槽位模型，与
+// internal/prompt.PromptBuilder 的 Zone（ZoneImmutable/.../ZoneExternalCatalog）
+// 是两套不同维度的隔离机制，故本文件不直接引用 Zone 常量（引用 internal/protocol
+// 会与其反向依赖 internal/security/taint 形成包循环）。Zone 维度的"ZoneImmutable/
+// ZoneCoreMemory 不得承载 >= TaintMedium 内容、ZoneExternalCatalog 允许承载
+// TaintMedium/TaintHigh"约束由 internal/prompt.PromptBuilder 自身结构性保证：
+// WriteInstruction 仅接受编译期证明为 TaintNone 的 taint.SafeString（类型系统
+// 强制，无法绕过），WriteExternalCatalog 对 >= TaintMedium 内容强制 Spotlighting。
+// 回归测试见 internal/prompt/prompt_builder_test.go。
 
 // PromptSlot 标识 Prompt 的内容槽位。
 type PromptSlot string

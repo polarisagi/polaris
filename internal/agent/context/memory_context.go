@@ -28,11 +28,8 @@ func BuildPerceiveContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
-	// 1. 可信系统指令（基础模板 + 扩展信息）
+	// 1. 可信系统指令（基础模板，不含第三方来源内容）
 	instr := "Structure the user intent into a fsm.TaskModel JSON.\n\n"
-	if sCtx.InstalledExtensionsInfo != "" {
-		instr += sCtx.InstalledExtensionsInfo + "\n\n"
-	}
 	if hint := contextPressureHint(sCtx); hint != "" {
 		instr += hint + "\n\n"
 	}
@@ -42,6 +39,15 @@ func BuildPerceiveContext( //nolint:gocyclo
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext: sanitize instr", err)
 	}
 	b.WriteInstruction(safe)
+
+	// S-02：已安装扩展的自述信息来源不可信（第三方可控），单独进入
+	// ZoneExternalCatalog 并按 TaintHigh 打标，禁止混入 ZoneImmutable。
+	if sCtx.InstalledExtensionsInfo != "" {
+		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
+			sCtx.InstalledExtensionsInfo,
+			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
+			"extension_catalog"))
+	}
 
 	if memory == nil {
 		return b.Build(), nil
@@ -186,21 +192,8 @@ func BuildPlanContext( //nolint:gocyclo
 	if sCtx.GroundingGap != "" {
 		sysPrompt.WriteString("<grounding_gap source=\"untrusted\">\n" + sCtx.GroundingGap + "\n</grounding_gap>\n(Please address this gap explicitly in the plan.)\n\n")
 	}
-	if sCtx.InstalledExtensionsInfo != "" {
-		sysPrompt.WriteString(sCtx.InstalledExtensionsInfo + "\n\n")
-	}
 	if hint := contextPressureHint(sCtx); hint != "" {
 		sysPrompt.WriteString(hint + "\n\n")
-	}
-
-	// 5. Build Tools List (M2.c/f)
-	if cata != nil {
-		// TaskID 激活作用域必须与 internal/execute/dag/executor.go 的 Execute()
-		// 注入值一致——生产路径用 a.sCtx.SessionID 作为 taskID（见 agent_execute.go
-		// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)），此处保持同源。
-		toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, sCtx.SessionID)
-		toolSec := BuildToolListSection(toolCtx, cata)
-		sysPrompt.WriteString(toolSec)
 	}
 
 	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
@@ -209,6 +202,30 @@ func BuildPlanContext( //nolint:gocyclo
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext: sanitize instr", err)
 	}
 	b.WriteInstruction(safe)
+
+	// S-02：已安装扩展自述信息来源不可信，单独进入 ZoneExternalCatalog。
+	if sCtx.InstalledExtensionsInfo != "" {
+		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
+			sCtx.InstalledExtensionsInfo,
+			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
+			"extension_catalog"))
+	}
+
+	// 5. Build Tools List (M2.c/f) —— 按来源分级写入 ZoneExternalCatalog，禁止与
+	// 内核指令混入同一 TaintNone 区（S-02，间接 Prompt Injection 防护）。
+	if cata != nil {
+		// TaskID 激活作用域必须与 internal/execute/dag/executor.go 的 Execute()
+		// 注入值一致——生产路径用 a.sCtx.SessionID 作为 taskID（见 agent_execute.go
+		// executor.Execute(ctx, plan, a.sCtx.SessionID, a.sCtx.AgentID)），此处保持同源。
+		toolCtx := context.WithValue(ctx, protocol.CtxTaskIDKey{}, sCtx.SessionID)
+		toolSec, toolTaint := BuildToolListSection(toolCtx, cata)
+		if toolSec != "" {
+			b.WriteExternalCatalog("tools", taint.NewTaintedString(
+				toolSec,
+				taint.TaintSource{Module: "tool_catalog", OriginTaintLevel: toolTaint},
+				"tool_catalog"))
+		}
+	}
 
 	if memory == nil {
 		return b.Build(), nil
@@ -298,37 +315,9 @@ func BuildPlanContext( //nolint:gocyclo
 	return msgs, nil
 }
 
-// BuildToolListSection 将注册表中所有工具格式化为 LLM 可读的工具定义段落。
-// 格式与 DAGNode.Action + DAGNode.Params 字段对齐，便于 LLM 直接引用。
-//
-// ctx 必须携带 protocol.CtxTaskIDKey（由调用方从 sCtx.SessionID 注入），否则
-// 懒加载模式下 search_tools 在上一轮激活的工具（CompositeCatalog.ActivateTool）
-// 无法在本轮 Schemas() 重建时命中同一激活作用域——见 internal/tool/catalog/composite.go
-// 的 Schemas() 与 internal/tool/tool_search.go 的 sessionIDFromCtx，两处必须使用
-// 同一个 TaskID 才能让"搜索到的工具在后续轮次真正可调用"这个懒加载协议闭环。
-func BuildToolListSection(ctx context.Context, cata catalog.Catalog) string {
-	if cata == nil {
-		return ""
-	}
-	// TrustCommunity 是通常的默认门槛，如果有更高要求可传入不同值
-	schemas := cata.Schemas(ctx, types.TrustCommunity)
-	if len(schemas) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("Available Tools List (The 'action' field of DAG nodes MUST be one of the following names):\n")
-	for _, t := range schemas {
-		fmt.Fprintf(&sb, "- %s: %s", t.Name, t.Description)
-		if t.Parameters != nil {
-			if schemaBytes, err := json.Marshal(t.Parameters); err == nil {
-				fmt.Fprintf(&sb, " (Parameters schema: %s)", string(schemaBytes))
-			}
-		}
-		sb.WriteByte('\n')
-	}
-	sb.WriteByte('\n')
-	return sb.String()
-}
+// BuildToolListSection 已迁移至 tool_list_section.go（R7 文件行数治理，S-02/S-03
+// 改造导致本文件超出 400 行上限，按职责拆分：工具目录格式化与 Perceive/Plan/
+// Reflect 上下文组装是两个不同职责）。
 
 func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()

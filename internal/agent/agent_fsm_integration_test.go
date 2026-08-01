@@ -130,8 +130,8 @@ func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory proto
 func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	return nil, nil
 }
-func (d *dummyContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) string {
-	return ""
+func (d *dummyContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel) {
+	return "", types.TaintNone
 }
 
 // allowPolicyGate 放行所有请求（用于 Agent HappyPath 测试）。

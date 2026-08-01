@@ -37,5 +37,7 @@ type ContextBuilder interface {
 	BuildPerceiveContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, cognitive CognitiveSearcher) ([]types.Message, error)
 	BuildPlanContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext, cata catalog.Catalog, cognitive CognitiveSearcher) ([]types.Message, error)
 	BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext) ([]types.Message, error)
-	BuildToolListSection(ctx context.Context, cata catalog.Catalog) string
+	// BuildToolListSection 返回工具目录正文及该次目录中出现过的最高来源污点等级
+	// （S-02：MCP 外部工具描述必须按来源分级，供调用方决定是否 Spotlighting）。
+	BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel)
 }

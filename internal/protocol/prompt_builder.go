@@ -9,7 +9,12 @@ const (
 	ZoneImmutable    = 0
 	ZoneCoreMemory   = 1
 	ZoneMutableSkill = 2
-	ZoneTaintedData  = 3
+	// ZoneExternalCatalog 第三方工具/扩展目录区（S-02，M11 §3）：内容由 MCP 服务器
+	// / 已安装扩展自述，来源不可信但语义上是"功能性目录"，信任度低于 ZoneMutableSkill
+	// 但优先级高于纯用户数据（模型必须先看到可用能力才能规划）。
+	ZoneExternalCatalog = 3
+	ZoneTaintedData     = 4
+	zoneCount           = 5
 )
 
 // PromptBuilder 是系统内唯一合法的 LLM Prompt 组装构造器。
@@ -29,6 +34,11 @@ type PromptBuilder interface {
 	WriteComputerUsePolicy(mode string, anyAppEnabled, chromeEnabled bool)
 	// WriteToolHints 将工具自进化闭环产出的 <tool-hints> XML 块写入 ZoneImmutable。
 	WriteToolHints(hint string)
+	// WriteExternalCatalog 写入第三方来源的工具/扩展目录（S-02）。
+	// kind 为目录类别（"tools" | "extensions"），ts 为渲染后的目录正文及其来源污点。
+	// level >= TaintMedium 时内部强制 Spotlighting 包裹，禁止调用方自行绕过；
+	// 空内容（ts.Value()==""）直接跳过。
+	WriteExternalCatalog(kind string, ts taint.TaintedString)
 	// Build 输出最终组装完毕可用于 InferRequest 的消息序列。
 	Build() []types.Message
 }
