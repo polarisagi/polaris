@@ -69,12 +69,17 @@ func TestInProcessSandbox_Timeout(t *testing.T) {
 
 // ─── SandboxRouter 测试 ──────────────────────────────────────────────────────
 
+// 阶段03 R-05：可信来源降级 InProcess 默认 fail-closed，本测试显式 opt-in
+// （WithAllowTrustedInProcessFallback(true)）以保留"配置允许时确实能通过
+// InProcess 兜底执行"这一原有验证意图；默认不 opt-in 的 fail-closed 行为见
+// sandbox_router_trustfallback_test.go。
 func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	inProc.Register("list-files", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`["a","b"]`), nil
 	})
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
+	router.WithAllowTrustedInProcessFallback(true)
 
 	res, err := router.Execute(context.Background(), types.Tool{SandboxTier: 1, Name: "list-files", TrustTier: types.TrustSystem}, nil, types.TaintNone)
 	if err != nil {
@@ -85,13 +90,15 @@ func TestSandboxRouter_BuiltinGoesToInProcess(t *testing.T) {
 	}
 }
 
-// TestSandboxRouter_MCPFallsToInProcessWithoutContainer 验证无 Container 时 MCP 降级到 InProcess。
+// TestSandboxRouter_MCPFallsToInProcessWithoutContainer 验证无 Container 时、
+// 且显式配置允许可信来源降级（阶段03 R-05）后，MCP 工具能降级到 InProcess。
 func TestSandboxRouter_MCPFallsToInProcessWithoutContainer(t *testing.T) {
 	inProc := NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 	inProc.Register("mcp-tool", func(_ context.Context, _ []byte) ([]byte, error) {
 		return []byte(`{}`), nil
 	})
 	router := NewSandboxRouter(inProc, nil, nil, runtime.GOOS, 0)
+	router.WithAllowTrustedInProcessFallback(true)
 
 	res, err := router.Execute(context.Background(), types.Tool{SandboxTier: 3, Name: "mcp-tool", TrustTier: types.TrustSystem}, []byte("{}"), types.TaintNone)
 	if err != nil {

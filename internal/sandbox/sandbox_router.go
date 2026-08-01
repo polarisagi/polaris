@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -34,6 +35,11 @@ type SandboxRouter struct {
 	// 统一在 Execute() 单一执行入口处注册/注销，覆盖所有 tier。
 	activeExecs map[string]context.CancelFunc
 	execSeq     atomic.Uint64
+	// allowTrustedInProcessFallback 阶段03 R-05：可信来源在 Wasm/Container/
+	// Remote 均不可用时是否允许降级到 InProcess。默认 false（fail-closed）——
+	// "可信"是安全维度判断，不等于"稳定"，可信来源代码的死循环/OOM/panic
+	// 在 InProcess 执行会直接拖垮宿主进程。见 SandboxConfig.AllowTrustedInProcessFallback。
+	allowTrustedInProcessFallback bool
 }
 
 func NewSandboxRouter(inProcess *InProcessSandbox, container *ContainerSandbox, wasmtime SandboxProvider, goos string, hwTier int) *SandboxRouter {
@@ -93,6 +99,14 @@ func (r *SandboxRouter) WithRemote(remote *RemoteSandbox) *SandboxRouter {
 // 配置后，SandboxNativeOS tier（assign.go Tier-0 + Container 降级路径）路由至此。
 func (r *SandboxRouter) WithNativeOS(nativeOS *NativeOSSandbox) *SandboxRouter {
 	r.nativeOS = nativeOS
+	return r
+}
+
+// WithAllowTrustedInProcessFallback 配置可信来源在 Wasm/Container/Remote 均
+// 不可用时是否允许降级到 InProcess（阶段03 R-05，默认 false/fail-closed）。
+// 返回自身，支持链式调用。
+func (r *SandboxRouter) WithAllowTrustedInProcessFallback(allow bool) *SandboxRouter {
+	r.allowTrustedInProcessFallback = allow
 	return r
 }
 
@@ -167,7 +181,21 @@ func (r *SandboxRouter) routeWasm(mustIsolate bool) (SandboxProvider, error) {
 	if mustIsolate {
 		return nil, apperr.New(apperr.CodeForbidden, "sandbox: L2/Wasm required for untrusted code but unavailable; refusing to downgrade")
 	}
-	slog.Warn("sandbox: Wasm 不可用，可信来源降级 InProcess")
+	// 阶段03 R-05：可信来源（mustIsolate==false）此前直接静默降级 InProcess，
+	// 只打一条 Warn。"可信"是安全维度的判断，不等于"稳定"——可信来源的代码
+	// 仍可能有死循环/内存爆炸/panic，InProcess 执行会直接拖垮宿主进程。
+	// 默认 fail-closed，需显式配置 opt-in（不能无条件 fail-closed：会让没
+	// 编译 Wasm 引擎的开发环境完全跑不了工具）。
+	if !r.allowTrustedInProcessFallback {
+		// apperr 无独立 CodeUnavailable；CodeSandboxTier0Limit（HTTP 503）是本文件
+		// 已有的"沙箱能力当前不可用、拒绝静默降级"语义载体（见 Execute() 对
+		// AssignSandboxTier 拒绝的包裹），语义上与此处一致，故复用而非新增 Code。
+		return nil, apperr.New(apperr.CodeSandboxTier0Limit,
+			"sandbox: Wasm/Container/Remote unavailable and trusted-source InProcess fallback is disabled "+
+				"(set sandbox.allow_trusted_inprocess_fallback=true to opt in)")
+	}
+	slog.Warn("sandbox: Wasm 不可用，按配置允许可信来源降级 InProcess（宿主稳定性风险已被显式接受）")
+	metrics.RecordSandboxDowngrade(context.Background(), "wasm", "inprocess", "trusted_source_opt_in")
 	return r.inProcess, nil
 }
 

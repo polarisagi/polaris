@@ -135,6 +135,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	nativeOSSandbox := sandbox.NewNativeOSSandbox(cmdRunner, config.DefaultThresholds().M7Tool)
 	sandboxRouter := sandbox.NewSandboxRouter(inProcSandbox, containerSandbox, wasmtimeSandbox, runtime.GOOS, sb.Cfg.System.Tier)
 	sandboxRouter.WithNativeOS(nativeOSSandbox)
+	// 阶段03 R-05：可信来源在 Wasm/Container/Remote 均不可用时是否允许降级
+	// InProcess，默认 false（fail-closed），由运营者显式 opt-in。
+	sandboxRouter.WithAllowTrustedInProcessFallback(sb.Cfg.Sandbox.AllowTrustedInProcessFallback)
 	// RemoteSandbox（Sbx-L4，可选非硬依赖，[Tier-0-Limit]）：仅在运营者显式配置
 	// endpoint 并开启 enabled 时注入；未配置时 r.remote 保持 nil，SandboxRemote/
 	// SandboxContainer 路由请求按 sandbox_router.go 既有 fallback 链降级，不阻塞启动。
