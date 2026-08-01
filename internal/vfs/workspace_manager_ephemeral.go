@@ -50,21 +50,27 @@ func (wm *WorkspaceManager) StageEphemeralFile(namespace, filename string, data 
 	}
 
 	size := int64(len(data))
-	if qerr := wm.CheckQuota(size); qerr != nil {
-		return "", nil, qerr
-	}
-
 	full := filepath.Join(wm.rootDir, ephemeralScriptsSubdir, safeNS, filename)
-	if mkErr := os.MkdirAll(filepath.Dir(full), 0700); mkErr != nil {
-		wm.ReleaseQuota(size)
-		return "", nil, apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.StageEphemeralFile: mkdir", mkErr)
-	}
-	// 0700：CodeAct bash 脚本场景需要执行位；解释器均以显式命令形式调用
-	// （如 "bash <path>"），执行位并非严格必需，但保留以维持与旧
-	// os.CreateTemp+os.Chmod(0700) 路径等价的权限语义，避免行为细节回归。
-	if wErr := os.WriteFile(full, data, 0700); wErr != nil {
-		wm.ReleaseQuota(size)
-		return "", nil, apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.StageEphemeralFile: write", wErr)
+
+	// 阶段03 R-07：CheckQuota/ReleaseQuota 裸配对改用 WithQuota 闭包收敛。
+	// fn 返回 error 时 WithQuota 自动归还预占份额；返回 nil（写入成功）时
+	// 故意不归还——配额需一直持有到调用方后续调用 cleanup()（或
+	// SweepEphemeralOrphans 兜底）才释放，这正是 WithQuota 文档所述"返回 nil
+	// 视为调用方已登记"语义在本场景下的体现（此处"登记"即"交由 cleanup()
+	// 接管释放责任"，而非 RegisterFile）。
+	if qerr := wm.WithQuota(size, func() error {
+		if mkErr := os.MkdirAll(filepath.Dir(full), 0700); mkErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.StageEphemeralFile: mkdir", mkErr)
+		}
+		// 0700：CodeAct bash 脚本场景需要执行位；解释器均以显式命令形式调用
+		// （如 "bash <path>"），执行位并非严格必需，但保留以维持与旧
+		// os.CreateTemp+os.Chmod(0700) 路径等价的权限语义，避免行为细节回归。
+		if wErr := os.WriteFile(full, data, 0700); wErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.StageEphemeralFile: write", wErr)
+		}
+		return nil
+	}); qerr != nil {
+		return "", nil, qerr
 	}
 
 	cleanup = func() {

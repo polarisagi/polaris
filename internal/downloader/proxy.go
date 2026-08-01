@@ -114,14 +114,14 @@ func probe(ctx context.Context, _ *http.Client) {
 //
 // 注：GeoIP 探测（isMainlandChina）已从此路径中移除，
 // 将在未来由独立的用户画像/本地化模块（sysmgr/locale）承接。
-func autoProbe(ctx context.Context, _ *http.Client) string {
+func autoProbe(ctx context.Context, client *http.Client) string {
 	if canReachGitHub(ctx) {
 		slog.Info("downloader: GitHub reachable directly, proxy not needed")
 		return ""
 	}
 
 	slog.Info("downloader: GitHub unreachable, racing proxy mirrors")
-	if winner := raceFastestMirror(ctx, nil); winner != "" {
+	if winner := raceFastestMirror(ctx, client); winner != "" {
 		slog.Info("downloader: using GitHub proxy (won race)", "proxy", winner)
 		return winner
 	}

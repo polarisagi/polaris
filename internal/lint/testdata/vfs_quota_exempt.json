@@ -1,0 +1,4 @@
+{
+  "_comment": "阶段03 R-07：CheckQuota 裸调用豁免清单。新增写入路径一律使用 WorkspaceManager.WithQuota 闭包，禁止裸调 CheckQuota/ReleaseQuota 配对（配对写法依赖人工纪律，是配额预占泄漏的高发模式，见 03-resource-concurrency.md R-07）。此清单仅收录 WithQuota 自身实现内部的合法调用点。",
+  "internal/vfs/workspace_manager_quota.go": true
+}

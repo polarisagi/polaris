@@ -247,27 +247,6 @@ func (wm *WorkspaceManager) RegisterFile(taskID string, f WorkspaceFile) {
 	wm.mu.Unlock()
 }
 
-// CheckQuota 配额预占式检查（D-B6-01 修复：原实现仅读取快照，Check 通过后到
-// RegisterFile 实际登记之间存在 TOCTOU 窗口，并发写入可无限突破 maxSize 硬限制）。
-// 通过即代表已原子占用 pendingWrite 份额；调用方后续必须且只能二选一：
-//  1. 写入成功 → 正常调用 RegisterFile 登记文件（不再重复占用配额）；
-//  2. 写入失败/放弃 → 必须调用 ReleaseQuota(pendingWrite) 归还预占份额，
-//     否则配额会永久泄漏。
-func (wm *WorkspaceManager) CheckQuota(pendingWrite int64) error {
-	total := atomic.AddInt64(&wm.totalSize, pendingWrite)
-	if total > wm.maxSize {
-		atomic.AddInt64(&wm.totalSize, -pendingWrite) // 回滚预占
-		return ErrWorkspaceQuotaExhausted
-	}
-	return nil
-}
-
-// ReleaseQuota 归还 CheckQuota 预占但最终未通过 RegisterFile 登记的配额份额
-// （写入失败/中途放弃场景下调用方必须调用，防止预占配额永久泄漏）。
-func (wm *WorkspaceManager) ReleaseQuota(n int64) {
-	atomic.AddInt64(&wm.totalSize, -n)
-}
-
 func resolveWithinRoot(rootDir, relPath string) (string, error) {
 	if relPath == "" || filepath.IsAbs(relPath) {
 		return "", apperr.New(apperr.CodeInvalidInput, "path must be a non-empty relative path")
@@ -383,9 +362,3 @@ func (wm *WorkspaceManager) DirPath(taskID string) string {
 	key := filepath.Base(filepath.Clean(taskID))
 	return filepath.Join(wm.rootDir, key)
 }
-
-var ErrWorkspaceQuotaExhausted = &WorkspaceError{"workspace quota exhausted"}
-
-type WorkspaceError struct{ msg string }
-
-func (e *WorkspaceError) Error() string { return e.msg }
