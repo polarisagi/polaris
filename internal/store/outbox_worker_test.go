@@ -311,6 +311,86 @@ func TestOutboxWorker_BackoffSequence(t *testing.T) {
 	}
 }
 
+// TestProcessAndMark_MarkDoneFailure_ReturnsError_S02 验证阶段02修复：Process()
+// 成功但落盘 status='done' 失败时，processAndMark 必须向上返回错误。
+// 回归锚点：修复前 `_, _ = w.db.ExecContext(...)` 吞没该错误，记录会永久卡在
+// 'processing'（ListBatch 只捡 pending/failed，永远不会被重新消费或重试）。
+func TestProcessAndMark_MarkDoneFailure_ReturnsError_S02(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	// 仅在 UPDATE ... SET status='done' 时触发失败，'processing' 阶段的更新不受影响。
+	if _, err := db.Exec(`
+		CREATE TRIGGER reject_done BEFORE UPDATE OF status ON outbox
+		WHEN NEW.status = 'done'
+		BEGIN SELECT RAISE(ABORT, 'simulated done write failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+	w.RegisterHandler("test", func(ctx context.Context, r *OutboxRecord) error {
+		return nil // Process 本身成功
+	})
+
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status)
+		VALUES (3001, ?, 'test', 'ok', 'system', X'CAFE', 'key3001', 'pending')`, now); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	record := &OutboxRecord{ID: 3001, TargetEngine: "test"}
+	err := w.processAndMark(context.Background(), record)
+	if err == nil {
+		t.Fatal("expected error when marking done fails, got nil")
+	}
+
+	var status string
+	if err := db.QueryRow(`SELECT status FROM outbox WHERE id=3001`).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "processing" {
+		t.Errorf("expected status to remain 'processing' (not silently lost), got %q", status)
+	}
+}
+
+// TestProcessBatch_SingleRecordFailure_ContinuesToNextRecord_S02 验证阶段02修复：
+// 单条记录处理失败（L2）不应中断整批处理，其余记录仍需推进 cursor。
+func TestProcessBatch_SingleRecordFailure_ContinuesToNextRecord_S02(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+	w.RegisterHandler("test", func(ctx context.Context, r *OutboxRecord) error {
+		if r.ID == 4001 {
+			return apperr.New(apperr.CodeInternal, "simulated failure")
+		}
+		return nil
+	})
+
+	now := time.Now().UnixMilli()
+	for _, id := range []int64{4001, 4002} {
+		if _, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status)
+			VALUES (?, ?, 'test', 'ok', 'system', X'CAFE', ?, 'pending')`, id, now, "key"+string(rune('0'+id))); err != nil {
+			t.Fatalf("insert %d: %v", id, err)
+		}
+	}
+
+	maxID, err := w.processBatch(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("processBatch should not fail when a single record errors: %v", err)
+	}
+	if maxID != 4002 {
+		t.Errorf("expected maxID=4002 (both records advance cursor regardless of per-record outcome), got %d", maxID)
+	}
+
+	var status2 string
+	if err := db.QueryRow(`SELECT status FROM outbox WHERE id=4002`).Scan(&status2); err != nil {
+		t.Fatalf("query status 4002: %v", err)
+	}
+	if status2 != "done" {
+		t.Errorf("expected record 4002 to complete despite 4001 failing, got status=%q", status2)
+	}
+}
+
 func TestProcessAndMark_DBError(t *testing.T) {
 	db := setupOutboxDB(t)
 	defer db.Close()
@@ -332,5 +412,43 @@ func TestProcessAndMark_DBError(t *testing.T) {
 	err = w.processAndMark(context.Background(), record)
 	if err == nil {
 		t.Errorf("expected DB error, got nil")
+	}
+}
+
+// TestLoadCursorSafe_NoRows_ReturnsZeroOK_S02 验证首次启动（sys_config 尚无
+// outbox_cursor 记录）是合法场景：cursor=0 且 ok=true，Run() 应正常从 0 开始消费。
+func TestLoadCursorSafe_NoRows_ReturnsZeroOK_S02(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE sys_config (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
+		t.Fatalf("create sys_config: %v", err)
+	}
+
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+	cursor, ok := w.loadCursorSafe(context.Background())
+	if !ok {
+		t.Fatal("expected ok=true for legitimate first-run ErrNoRows")
+	}
+	if cursor != 0 {
+		t.Errorf("expected cursor=0, got %d", cursor)
+	}
+}
+
+// TestLoadCursorSafe_QueryFailure_ReturnsNotOK_S02 验证阶段02修复：游标查询真实
+// 失败（如 sys_config 表缺失/损坏）时必须返回 ok=false，不得静默退回 cursor=0。
+// 回归锚点：修复前 `_ = row.Scan(&cursor)` 吞没错误，函数总是返回 0，Run() 会
+// 误以为"从未消费过"而重放全部 outbox。
+func TestLoadCursorSafe_QueryFailure_ReturnsNotOK_S02(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	// 故意不创建 sys_config 表，令查询本身失败（而非 ErrNoRows）。
+
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+	cursor, ok := w.loadCursorSafe(context.Background())
+	if ok {
+		t.Fatal("expected ok=false when the underlying query fails (not ErrNoRows)")
+	}
+	if cursor != 0 {
+		t.Errorf("expected cursor=0 as safe zero-value alongside ok=false, got %d", cursor)
 	}
 }

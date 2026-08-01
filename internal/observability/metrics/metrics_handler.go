@@ -127,6 +127,40 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			metric.WithDescription("Performance drift detector baseline pass rate"),
 		)
 
+		// [阶段02-错误吞没整改] 无 label Global* 累计计数器的 gauge 暴露
+		memorySupersedeFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.memory.supersede_failures_total",
+			metric.WithDescription("语义超越标记失败累计次数"),
+		)
+		memoryEvictEventLostGauge, _ := meter.Float64ObservableGauge(
+			"polaris.memory.evict_event_lost_total",
+			metric.WithDescription("工作记忆驱逐事件归档失败累计次数"),
+		)
+		memoryFTSIndexFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.memory.fts_index_failures_total",
+			metric.WithDescription("情景记忆 FTS 索引写入失败累计次数"),
+		)
+		blackboardFailTaskErrorsGauge, _ := meter.Float64ObservableGauge(
+			"polaris.blackboard.fail_task_errors_total",
+			metric.WithDescription("DebateWorker.FailTask 失败累计次数"),
+		)
+		learningCursorErrorsGauge, _ := meter.Float64ObservableGauge(
+			"polaris.learning.cursor_errors_total",
+			metric.WithDescription("自进化引擎游标扫描失败累计次数"),
+		)
+		learningSkillRegisterFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.learning.skill_register_failures_total",
+			metric.WithDescription("合成技能注册失败累计次数"),
+		)
+		gatewayPreferenceWriteFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.gateway.preference_write_failures_total",
+			metric.WithDescription("Gateway 偏好/系统提示词模板落库失败累计次数"),
+		)
+		schemaMigrationDiagWriteFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.store.schema_migration_diag_write_failures_total",
+			metric.WithDescription("SchemaManager 迁移版本诊断字段写入失败累计次数"),
+		)
+
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
@@ -158,8 +192,18 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(perfDriftPassRateGauge, pd.CurrentPassRate())
 			o.ObserveFloat64(perfDriftBaselineGauge, pd.Baseline())
 
+			o.ObserveFloat64(memorySupersedeFailuresGauge, float64(GlobalMemorySupersedeFailuresTotal.Load()))
+			o.ObserveFloat64(memoryEvictEventLostGauge, float64(GlobalMemoryEvictEventLostTotal.Load()))
+			o.ObserveFloat64(memoryFTSIndexFailuresGauge, float64(GlobalMemoryFTSIndexFailuresTotal.Load()))
+			o.ObserveFloat64(blackboardFailTaskErrorsGauge, float64(GlobalBlackboardFailTaskErrorsTotal.Load()))
+			o.ObserveFloat64(learningCursorErrorsGauge, float64(GlobalLearningCursorErrorsTotal.Load()))
+			o.ObserveFloat64(learningSkillRegisterFailuresGauge, float64(GlobalLearningSkillRegisterFailuresTotal.Load()))
+			o.ObserveFloat64(gatewayPreferenceWriteFailuresGauge, float64(GlobalGatewayPreferenceWriteFailuresTotal.Load()))
+			o.ObserveFloat64(schemaMigrationDiagWriteFailuresGauge, float64(GlobalSchemaMigrationDiagWriteFailuresTotal.Load()))
+
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge)
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
+			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge)
 
 		h := promhttp.Handler()
 		otelHandlerPtr.Store(&h)
@@ -253,6 +297,39 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_performance_drift_baseline Performance drift detector baseline pass rate\n")
 		fmt.Fprintf(w, "# TYPE polaris_performance_drift_baseline gauge\n")
 		fmt.Fprintf(w, "polaris_performance_drift_baseline %g\n", pd.Baseline())
+
+		// ── [阶段02-错误吞没整改] 无 label Global* 累计计数器 ─────────────────────
+		fmt.Fprintf(w, "# HELP polaris_memory_supersede_failures_total Semantic supersede marking failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_memory_supersede_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_memory_supersede_failures_total %d\n", GlobalMemorySupersedeFailuresTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_memory_evict_event_lost_total Working memory eviction event archive failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_memory_evict_event_lost_total counter\n")
+		fmt.Fprintf(w, "polaris_memory_evict_event_lost_total %d\n", GlobalMemoryEvictEventLostTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_memory_fts_index_failures_total Episodic memory FTS index write failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_memory_fts_index_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_memory_fts_index_failures_total %d\n", GlobalMemoryFTSIndexFailuresTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_blackboard_fail_task_errors_total DebateWorker.FailTask failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_blackboard_fail_task_errors_total counter\n")
+		fmt.Fprintf(w, "polaris_blackboard_fail_task_errors_total %d\n", GlobalBlackboardFailTaskErrorsTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_learning_cursor_errors_total Self-improve engine cursor scan failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_learning_cursor_errors_total counter\n")
+		fmt.Fprintf(w, "polaris_learning_cursor_errors_total %d\n", GlobalLearningCursorErrorsTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_learning_skill_register_failures_total Synthetic skill registration failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_learning_skill_register_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_learning_skill_register_failures_total %d\n", GlobalLearningSkillRegisterFailuresTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_gateway_preference_write_failures_total Gateway preference/prompt template write failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_gateway_preference_write_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_gateway_preference_write_failures_total %d\n", GlobalGatewayPreferenceWriteFailuresTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_store_schema_migration_diag_write_failures_total SchemaManager migration_version diagnostic field write failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_store_schema_migration_diag_write_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_store_schema_migration_diag_write_failures_total %d\n", GlobalSchemaMigrationDiagWriteFailuresTotal.Load())
 	})
 }
 

@@ -67,6 +67,15 @@ var (
 	// [UP-06] Agent 流式事件广播：订阅者缓冲满导致的丢弃计数（HE-1 可观测）
 	InstrAgentStreamDroppedTotal metric.Int64Counter
 
+	// [阶段02-错误吞没整改] 带 label 的失败类指标，均为枚举有界值，无需 CardinalityGuard。
+	InstrOutboxProcessFailuresTotal        metric.Int64Counter // label: engine
+	InstrOutboxCursorErrorsTotal           metric.Int64Counter // label: kind
+	InstrMemoryJSONDecodeFailuresTotal     metric.Int64Counter // label: table
+	InstrBlackboardScanErrorsTotal         metric.Int64Counter // label: op
+	InstrKnowledgeOutboxWriteFailuresTotal metric.Int64Counter // label: event_type
+	InstrKnowledgeGraphWriteFailuresTotal  metric.Int64Counter // label: op
+	InstrToolOutcomeDecodeFailuresTotal    metric.Int64Counter // label: tool_category（经 ToolCategory() 归一化，非原始 tool_name）
+
 	instrOnce sync.Once
 )
 
@@ -258,6 +267,36 @@ func initInstruments(meter metric.Meter) {
 		metric.WithDescription("Shadow replay pass rate"),
 		metric.WithExplicitBucketBoundaries(0.1, 0.5, 0.8, 0.9, 0.95, 0.99, 1.0),
 	)
+
+	// [阶段02-错误吞没整改] §4 新增指标，详见 local_playground/upgrade/02-error-handling.md
+	InstrOutboxProcessFailuresTotal, _ = meter.Int64Counter(
+		"polaris.outbox.process_failures_total",
+		metric.WithDescription("单条 outbox 记录处理失败次数 (label: engine)"),
+	)
+	InstrOutboxCursorErrorsTotal, _ = meter.Int64Counter(
+		"polaris.outbox.cursor_errors_total",
+		metric.WithDescription("outbox 游标加载/持久化失败次数 (label: kind: load/save)"),
+	)
+	InstrMemoryJSONDecodeFailuresTotal, _ = meter.Int64Counter(
+		"polaris.memory.json_decode_failures_total",
+		metric.WithDescription("记忆子系统 JSON/Scan 反序列化失败次数 (label: table)"),
+	)
+	InstrBlackboardScanErrorsTotal, _ = meter.Int64Counter(
+		"polaris.blackboard.scan_errors_total",
+		metric.WithDescription("Blackboard 行扫描/查询失败次数 (label: op)"),
+	)
+	InstrKnowledgeOutboxWriteFailuresTotal, _ = meter.Int64Counter(
+		"polaris.knowledge.outbox_write_failures_total",
+		metric.WithDescription("知识管线 outbox 事件投递失败次数 (label: event_type)"),
+	)
+	InstrKnowledgeGraphWriteFailuresTotal, _ = meter.Int64Counter(
+		"polaris.knowledge.graph_write_failures_total",
+		metric.WithDescription("GraphRAG 实体/边落库失败次数 (label: op)"),
+	)
+	InstrToolOutcomeDecodeFailuresTotal, _ = meter.Int64Counter(
+		"polaris.tool.outcome_decode_failures_total",
+		metric.WithDescription("工具 outcome JSON 解析失败次数 (label: tool_category)"),
+	)
 }
 
 func registerObservableGauges(meter metric.Meter) {
@@ -417,5 +456,58 @@ func RecordMemoryToolCall(ctx context.Context, toolName string, success bool) {
 func RecordExplainBit(ctx context.Context, bit string) {
 	if InstrRetrievalExplainBitsTotal != nil {
 		InstrRetrievalExplainBitsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("bit", bit)))
+	}
+}
+
+// ── [阶段02-错误吞没整改] Record 辅助函数 ────────────────────────────────────
+// 均为 nil-safe（Tier-0 legacy 路径无 OTel meter 时静默 no-op）。
+
+// RecordOutboxProcessFailure 记录单条 outbox 记录处理失败（L2，不中断批次）。
+func RecordOutboxProcessFailure(ctx context.Context, engine string) {
+	if InstrOutboxProcessFailuresTotal != nil {
+		InstrOutboxProcessFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("engine", engine)))
+	}
+}
+
+// RecordOutboxCursorError 记录 outbox 游标加载/持久化失败，kind ∈ {load, save}。
+func RecordOutboxCursorError(ctx context.Context, kind string) {
+	if InstrOutboxCursorErrorsTotal != nil {
+		InstrOutboxCursorErrorsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", kind)))
+	}
+}
+
+// RecordMemoryJSONDecodeFailure 记录记忆子系统字段反序列化失败（L3，字段保持零值）。
+func RecordMemoryJSONDecodeFailure(ctx context.Context, table string) {
+	if InstrMemoryJSONDecodeFailuresTotal != nil {
+		InstrMemoryJSONDecodeFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("table", table)))
+	}
+}
+
+// RecordBlackboardScanError 记录 Blackboard 行扫描/查询失败，op 为调用点标识。
+func RecordBlackboardScanError(ctx context.Context, op string) {
+	if InstrBlackboardScanErrorsTotal != nil {
+		InstrBlackboardScanErrorsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("op", op)))
+	}
+}
+
+// RecordKnowledgeOutboxWriteFailure 记录知识管线 outbox 事件投递失败。
+func RecordKnowledgeOutboxWriteFailure(ctx context.Context, eventType string) {
+	if InstrKnowledgeOutboxWriteFailuresTotal != nil {
+		InstrKnowledgeOutboxWriteFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("event_type", eventType)))
+	}
+}
+
+// RecordKnowledgeGraphWriteFailure 记录 GraphRAG 实体/边落库失败。
+func RecordKnowledgeGraphWriteFailure(ctx context.Context, op string) {
+	if InstrKnowledgeGraphWriteFailuresTotal != nil {
+		InstrKnowledgeGraphWriteFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("op", op)))
+	}
+}
+
+// RecordToolOutcomeDecodeFailure 记录工具 outcome JSON 解析失败。
+// toolName 经 ToolCategory() 归一化为 mcp/skill/builtin 后才作为 label，原始 tool_name 只进日志（禁止高基 label）。
+func RecordToolOutcomeDecodeFailure(ctx context.Context, toolName string) {
+	if InstrToolOutcomeDecodeFailuresTotal != nil {
+		InstrToolOutcomeDecodeFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("tool_category", ToolCategory(toolName))))
 	}
 }
