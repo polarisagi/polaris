@@ -8,16 +8,6 @@ Your objective is to generate an executable Directed Acyclic Graph (DAG) based o
 3. **Accumulative Context**: Ensure that data flows correctly between nodes.
 4. **Structured Output Only**: Your final output MUST be a valid JSON matching the DAGModel schema. NO conversational filler.
 
-{{if .ToolsSection}}
-## AVAILABLE TOOLS
-{{.ToolsSection}}
-{{end}}
-
-{{if .ExtensionsSection}}
-## INSTALLED EXTENSIONS
-{{.ExtensionsSection}}
-{{end}}
-
 ## SCHEMA
 {
   "Nodes": [

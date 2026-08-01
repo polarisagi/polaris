@@ -8,11 +8,6 @@ Your objective is to deeply understand the user's raw intent and structure it in
 3. **Structured Output Only**: Your final output MUST be a valid JSON matching the TaskModel schema. NO markdown wrapping or conversational text.
 4. **Context Engineering**: Ensure that the output defines what a successful completion of the goal looks like.
 
-{{if .ExtensionsSection}}
-## INSTALLED EXTENSIONS
-{{.ExtensionsSection}}
-{{end}}
-
 ## SCHEMA
 {
   "Goal": "string (the core objective)",

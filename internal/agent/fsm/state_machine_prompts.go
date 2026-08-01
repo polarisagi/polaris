@@ -42,15 +42,25 @@ func (sm *StateMachine) promptPerceive(sCtx *StateContext, pCtx protocol.StateCo
 	if sysEnvSnapshot != "" {
 		b.WriteSystemEnvironment(sysEnvSnapshot)
 	}
-	tmpl, _ := configs.LoadPromptTemplate("kernel/perceive.md", map[string]any{
-		"ExtensionsSection": extInfo,
-	})
+	// S-02：模板不再承载 ExtensionsSection 占位符，故此处不传入——保持模板与
+	// TaintNone 标记名副其实（纯静态内核指令，无第三方内容混入）。
+	tmpl, _ := configs.LoadPromptTemplate("kernel/perceive.md", nil)
 	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
 		tmpl,
 		taint.TaintSource{OriginTaintLevel: types.TaintNone},
 		"system_prompt",
 	))
 	b.WriteInstruction(safeInst)
+
+	// S-02：已安装扩展的自述信息来源不可信（第三方可控），必须单独进入
+	// ZoneExternalCatalog 并按 TaintHigh 打标，禁止与内核指令混入 ZoneImmutable。
+	if extInfo != "" {
+		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
+			extInfo,
+			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
+			"extension_catalog"))
+	}
+
 	b.WriteUserData(rawIntent)
 	msgs := b.Build()
 	if epochTracker != nil {
@@ -111,10 +121,8 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	defer cancel()
 	toolListCtx = context.WithValue(toolListCtx, protocol.CtxTaskIDKey{}, pCtx.SessionID)
 
-	tmpl, _ := configs.LoadPromptTemplate("kernel/plan.md", map[string]any{
-		"ToolsSection":      sm.cb.BuildToolListSection(toolListCtx, nil),
-		"ExtensionsSection": extInfo,
-	})
+	// S-02：模板不再承载 ToolsSection/ExtensionsSection 占位符。
+	tmpl, _ := configs.LoadPromptTemplate("kernel/plan.md", nil)
 
 	if groundingGap != "" {
 		tmpl += "\n\nCritical Knowledge Gap:\n" + groundingGap + "\n(Please address this gap explicitly in the plan.)"
@@ -127,20 +135,11 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	))
 	b.WriteInstruction(safeInst)
 
-	mode := "auto_review"
-	anyAppEnabled := false
-	chromeEnabled := false
-	if preferences != nil {
-		if v, ok := preferences["computer_use_mode"]; ok && v != "" {
-			mode = v
-		}
-		if v, ok := preferences["computer_any_app_enabled"]; ok {
-			anyAppEnabled = v == "true"
-		}
-		if v, ok := preferences["computer_chrome_enabled"]; ok {
-			chromeEnabled = v == "true"
-		}
-	}
+	// S-02：外部工具/扩展目录（第三方来源，禁止混入 ZoneImmutable）。拆成独立方法
+	// 以控制 promptPlan 圈复杂度（R7/gocyclo）。
+	sm.writePlanExternalCatalogs(b, toolListCtx, extInfo)
+
+	mode, anyAppEnabled, chromeEnabled := computerUsePolicyFromPrefs(preferences)
 	b.WriteComputerUsePolicy(mode, anyAppEnabled, chromeEnabled)
 
 	if sm.toolHintProvider != nil {
@@ -184,6 +183,46 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 
 func (sm *StateMachine) onPlanFailure(sCtx protocol.StateContext, err error) (types.State, error) {
 	return types.State("S_PLAN_FAILED"), apperr.New(apperr.CodeInternal, "plan: LLM fill failed")
+}
+
+// writePlanExternalCatalogs 将第三方来源的扩展/工具目录写入 ZoneExternalCatalog
+// （S-02：从 promptPlan 拆出以控制圈复杂度，语义不变）。
+func (sm *StateMachine) writePlanExternalCatalogs(b *prompt.PromptBuilder, toolListCtx context.Context, extInfo string) {
+	if extInfo != "" {
+		b.WriteExternalCatalog("extensions", taint.NewTaintedString(
+			extInfo,
+			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
+			"extension_catalog"))
+	}
+
+	// MCP 外部工具描述禁止与内核指令混入同一 TaintNone 区；BuildToolListSection
+	// 返回该次目录中出现过的最高来源污点等级。
+	toolsSection, toolsTaint := sm.cb.BuildToolListSection(toolListCtx, nil)
+	if toolsSection != "" {
+		b.WriteExternalCatalog("tools", taint.NewTaintedString(
+			toolsSection,
+			taint.TaintSource{Module: "tool_catalog", OriginTaintLevel: toolsTaint},
+			"tool_catalog"))
+	}
+}
+
+// computerUsePolicyFromPrefs 从会话偏好解析电脑操控策略三元组
+// （S-02：从 promptPlan 拆出以控制圈复杂度，语义不变）。
+func computerUsePolicyFromPrefs(preferences map[string]string) (mode string, anyAppEnabled, chromeEnabled bool) {
+	mode = "auto_review"
+	if preferences == nil {
+		return mode, false, false
+	}
+	if v, ok := preferences["computer_use_mode"]; ok && v != "" {
+		mode = v
+	}
+	if v, ok := preferences["computer_any_app_enabled"]; ok {
+		anyAppEnabled = v == "true"
+	}
+	if v, ok := preferences["computer_chrome_enabled"]; ok {
+		chromeEnabled = v == "true"
+	}
+	return mode, anyAppEnabled, chromeEnabled
 }
 
 func (sm *StateMachine) promptReflect(sCtx *StateContext, pCtx protocol.StateContext) []types.Message {

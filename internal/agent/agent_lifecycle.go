@@ -190,7 +190,7 @@ func (b *agentContextBuilder) BuildReflectContext(ctx context.Context, memory pr
 	return msgs, nil
 }
 
-func (b *agentContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) string {
+func (b *agentContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel) {
 	useCata := cata
 	if useCata == nil {
 		useCata = b.cata
