@@ -969,12 +969,18 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			slog.Error("polaris: failed to init credential vault for NotionConnector, skipping", "err", err)
 		} else {
 			sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
-			notionConn := connector.NewNotionConnector(func(ctx context.Context) (string, error) {
+			// S-04：注入 sb.SafeHTTP（EgressGateway/SafeDialer 包裹的受保护 client），
+			// 禁止让 NotionConnector 自建裸 client 绕过 SSRF 防护。
+			notionConn, err := connector.NewNotionConnector(func(ctx context.Context) (string, error) {
 				return resolveNotionToken(ctx, sysRepo, notionVault)
-			})
-			notionSched := connector.NewSyncScheduler(notionConn, kb.Ingester, 0)
-			memoryAgent.RegisterSyncScheduler(notionSched)
-			slog.Info("polaris: NotionConnector registered to MemoryAgent")
+			}, sb.SafeHTTP)
+			if err != nil {
+				slog.Error("polaris: failed to init NotionConnector, skipping", "err", err)
+			} else {
+				notionSched := connector.NewSyncScheduler(notionConn, kb.Ingester, 0)
+				memoryAgent.RegisterSyncScheduler(notionSched)
+				slog.Info("polaris: NotionConnector registered to MemoryAgent")
+			}
 		}
 
 		// MCP 知识源连接器（2026-07-04 审计补齐，任务17）：此前 mcp_installer.go

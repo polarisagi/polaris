@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -58,3 +59,18 @@ func verifyChunkTaint(ser *taint.TaintBoundarySerializer, id, content string, le
 	}
 	return int(recovered.Level())
 }
+
+// ChunkTaintSealerAdapter 把包内 sealChunkTaint 暴露为窄消费端接口
+// （graphrag.ChunkTaintSealer），供 graphrag 子包注入使用而不必反向依赖
+// knowledge 根包（S-05，HE-3：接口在调用方 graphrag 定义，knowledge 仅提供实现，
+// 依赖方向维持既有 knowledge → graphrag，不新增环）。
+type ChunkTaintSealerAdapter struct {
+	Ser *taint.TaintBoundarySerializer
+}
+
+// SealChunkTaint 实现 graphrag.ChunkTaintSealer。
+func (a *ChunkTaintSealerAdapter) SealChunkTaint(id, content string, level int, source string) string {
+	return sealChunkTaint(a.Ser, id, content, level, source)
+}
+
+var _ graphrag.ChunkTaintSealer = (*ChunkTaintSealerAdapter)(nil)
