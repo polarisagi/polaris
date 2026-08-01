@@ -206,7 +206,9 @@ func (a *OpenAIAdapter) StreamInfer(ctx context.Context, msgs []types.Message, o
 		for ev := range rawCh {
 			if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
 				if a.tbr != nil {
-					a.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens)) // Stream events usually just have deltas or final usage? Actually SendStreamRequest returns final usage only for Input/Output tokens, wait.
+					// SendStreamRequest 仅在末事件（收到完整 usage 后）填充 InputTokens/
+					// OutputTokens，中间 delta 事件该字段为 0，故此处不会重复计数。
+					a.tbr.Add(int64(ev.Usage.InputTokens + ev.Usage.OutputTokens))
 				}
 			}
 			if ev.Usage.CacheHitTokens > 0 || ev.Usage.InputTokens > 0 {

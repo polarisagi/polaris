@@ -568,7 +568,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 			// 仅当二进制以 --features tier1 构建（ffi.LlamaAvailable()）时才注册，
 			// 避免 Tier-0/未编译 tier1 的二进制里出现一个必然报错的 Provider 条目。
 			if ffi.LlamaAvailable() {
-				reg.Register("llama-local", "Local LLM (llama.cpp FFI)", llmadapter.NewLocalAdapter())
+				reg.Register("llama-local", "Local LLM (llama.cpp FFI)", llmadapter.NewLocalAdapter(tbr))
 				slog.Info("polaris: llama.cpp FFI local inference registered (unloaded, awaiting LoadModel)")
 			}
 		}
