@@ -1359,3 +1359,38 @@ func Test_inv_M13_06_ChannelNoRawHTTPClient(t *testing.T) {
 		t.Errorf("inv_M13_06 VIOLATED: %s", v)
 	}
 }
+
+// Test_inv_VFS_QuotaMustUseWithQuota 验证阶段03 R-07：新增 VFS 配额预占写入
+// 路径一律使用 WorkspaceManager.WithQuota 闭包，禁止裸调 CheckQuota（历史上
+// 依赖"每条失败路径手工配对 ReleaseQuota"的人工纪律，是配额预占泄漏的高发
+// 模式）。扫描 internal/ 下所有 "<expr>.CheckQuota(" 形式的调用点，豁免仅限
+// WithQuota 自身实现所在文件（internal/vfs/workspace_manager.go）。
+func Test_inv_VFS_QuotaMustUseWithQuota(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "vfs_quota_exempt.json")
+
+	var violations []violation
+	walkGoFilesUnder(t, root, "internal", exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "CheckQuota" {
+				return true
+			}
+			pos := fset.Position(call.Pos())
+			violations = append(violations, violation{
+				relPath: relPath,
+				line:    pos.Line,
+				detail:  "裸调 CheckQuota(...) — 新增配额预占写入路径须改用 WorkspaceManager.WithQuota(pendingWrite, fn) 闭包，避免失败路径遗漏 ReleaseQuota（阶段03 R-07）",
+			})
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_VFS_Quota VIOLATED: %s", v)
+	}
+}

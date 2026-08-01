@@ -164,3 +164,82 @@ func TestWorkspaceManager_PathTraversal(t *testing.T) {
 		})
 	}
 }
+
+// ─── 阶段03 R-07：WithQuota 闭包配额管理回归测试 ───────────────────────────
+
+// TestWorkspaceManager_WithQuota_ErrorReleasesQuota 验证 fn 返回 error 时
+// WithQuota 自动归还预占份额，totalSize 回到调用前值。
+func TestWorkspaceManager_WithQuota_ErrorReleasesQuota(t *testing.T) {
+	root := t.TempDir()
+	wm := NewWorkspaceManager(root, 1<<20, config.DefaultThresholds().M7Tool)
+
+	before := wm.totalSize
+	sentinel := &WorkspaceError{"boom"}
+	err := wm.WithQuota(100, func() error {
+		return sentinel
+	})
+	if err != sentinel {
+		t.Fatalf("期望 WithQuota 原样返回 fn 的 error，got %v", err)
+	}
+	if wm.totalSize != before {
+		t.Fatalf("期望 fn 返回 error 后 totalSize 回到调用前值 %d，实际 %d", before, wm.totalSize)
+	}
+}
+
+// TestWorkspaceManager_WithQuota_PanicReleasesQuotaAndRepanics 验证 fn panic
+// 时 WithQuota 先归还预占份额，再重新 panic（不吞异常）。
+func TestWorkspaceManager_WithQuota_PanicReleasesQuotaAndRepanics(t *testing.T) {
+	root := t.TempDir()
+	wm := NewWorkspaceManager(root, 1<<20, config.DefaultThresholds().M7Tool)
+
+	before := wm.totalSize
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("期望 panic 被重新抛出，实际未 panic")
+		}
+		if wm.totalSize != before {
+			t.Fatalf("期望 panic 后 totalSize 回到调用前值 %d，实际 %d", before, wm.totalSize)
+		}
+	}()
+	_ = wm.WithQuota(100, func() error {
+		panic("boom")
+	})
+}
+
+// TestWorkspaceManager_WithQuota_SuccessKeepsQuotaReserved 验证 fn 返回 nil
+// （视为调用方已登记）时预占份额保持占用，不被归还。
+func TestWorkspaceManager_WithQuota_SuccessKeepsQuotaReserved(t *testing.T) {
+	root := t.TempDir()
+	wm := NewWorkspaceManager(root, 1<<20, config.DefaultThresholds().M7Tool)
+
+	before := wm.totalSize
+	err := wm.WithQuota(100, func() error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wm.totalSize != before+100 {
+		t.Fatalf("期望 fn 返回 nil 后配额保持占用 %d，实际 totalSize=%d", before+100, wm.totalSize)
+	}
+}
+
+// TestWorkspaceManager_WithQuota_QuotaExhaustedDoesNotCallFn 验证 CheckQuota
+// 本身失败（超限）时，fn 完全不被调用。
+func TestWorkspaceManager_WithQuota_QuotaExhaustedDoesNotCallFn(t *testing.T) {
+	root := t.TempDir()
+	wm := NewWorkspaceManager(root, 4, config.DefaultThresholds().M7Tool) // 4 bytes
+
+	called := false
+	err := wm.WithQuota(100, func() error {
+		called = true
+		return nil
+	})
+	if err != ErrWorkspaceQuotaExhausted {
+		t.Fatalf("期望 ErrWorkspaceQuotaExhausted，实际 %v", err)
+	}
+	if called {
+		t.Error("配额超限时不应调用 fn")
+	}
+}

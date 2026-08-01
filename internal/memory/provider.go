@@ -68,6 +68,11 @@ type WorkspaceProvider interface {
 	CheckQuota(pendingWrite int64) error
 	// ReleaseQuota 归还 CheckQuota 预占但未通过 RegisterFile 登记的配额份额。
 	ReleaseQuota(n int64)
+	// WithQuota 以闭包方式管理配额预占：CheckQuota 通过后执行 fn，fn 返回
+	// error 或 panic 时自动 ReleaseQuota 归还，返回 nil 时视为已在 fn 内部
+	// RegisterFile 登记（阶段03 R-07，GR-6-001 降级项防退化）。新增写入路径
+	// 一律使用本方法，禁止裸调 CheckQuota/ReleaseQuota 配对。
+	WithQuota(pendingWrite int64, fn func() error) error
 	// WriteFile 将 data 写入相对路径 relPath（基于 RootDir），自动创建父目录。
 	WriteFile(relPath string, data []byte) error
 	// ReadFile 从相对路径 relPath 读取文件，最多读取 limit 字节。如果 limit <= 0，读取全部。
