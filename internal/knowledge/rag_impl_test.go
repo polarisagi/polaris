@@ -210,7 +210,9 @@ func TestDefaultIngestionPipeline_Ingest_OutboxWriteFailure_ReturnsError_S02(t *
 		t.Fatal("expected error when both outbox writes fail, got nil")
 	}
 	if tree == nil {
-		t.Error("expected non-nil tree despite outbox failure (chunks already committed)")
+		// t.Fatal（而非 t.Error）：下方立即解引用 tree.Document.ID，staticcheck
+		// SA5011 正确指出 t.Error 不会中止执行、tree 仍可能为 nil 造成真实 panic。
+		t.Fatal("expected non-nil tree despite outbox failure (chunks already committed)")
 	}
 
 	var count int

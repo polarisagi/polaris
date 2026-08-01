@@ -255,24 +255,8 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 		slog.Warn("blackboard: RowsAffected failed", "err", raErr)
 	}
 	if rows == 0 {
-		// 可能已是 running（幂等）或未认领（错误）
-		// L3：读取失败时 status 保持零值 ""，与"未认领"分支走同一 ErrTaskNotOwned
-		// 出口——语义上安全（不会误判为已 running），但需要计数以便区分"真的未
-		// 认领"与"读取本身失败"两种情况，避免误判被长期掩盖。
-		var status string
-		if scanErr := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status); scanErr != nil {
-			if errors.Is(scanErr, sql.ErrNoRows) {
-				slog.DebugContext(ctx, "blackboard: start-execution status readback found no row (task deleted concurrently)", "task_id", taskID)
-			} else {
-				slog.WarnContext(ctx, "blackboard: start-execution status readback failed", "task_id", taskID, "err", scanErr)
-			}
-			metrics.RecordBlackboardScanError(ctx, "start_execution_status_readback")
-		}
-		if status != statusRunning {
-			return ErrTaskNotOwned
-		}
-		// already-running 幂等路径：不写事件，直接 Rollback 返回 nil
-		return nil
+		// 可能已是 running（幂等）或未认领（错误），见 startExecutionIdempotentCheck。
+		return bb.startExecutionIdempotentCheck(ctx, tx, taskID)
 	}
 	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_running", taskID); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.StartExecution: write event", err)
@@ -285,6 +269,31 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 		TaskID:  taskID,
 		AgentID: agentID,
 	})
+	return nil
+}
+
+// startExecutionIdempotentCheck 处理 StartExecution 的 UPDATE 影响行数为 0 的
+// 情况：任务可能已是 running（幂等，返回 nil）或未认领（错误，返回
+// ErrTaskNotOwned）。从 StartExecution 抽出以降低嵌套深度（golangci-lint
+// nestif 阈值），语义与原内联逻辑完全一致。
+//
+// L3：读取失败时 status 保持零值 ""，与"未认领"分支走同一 ErrTaskNotOwned
+// 出口——语义上安全（不会误判为已 running），但需要计数以便区分"真的未
+// 认领"与"读取本身失败"两种情况，避免误判被长期掩盖。
+func (bb *SQLiteBlackboard) startExecutionIdempotentCheck(ctx context.Context, tx *sql.Tx, taskID string) error {
+	var status string
+	if scanErr := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			slog.DebugContext(ctx, "blackboard: start-execution status readback found no row (task deleted concurrently)", "task_id", taskID)
+		} else {
+			slog.WarnContext(ctx, "blackboard: start-execution status readback failed", "task_id", taskID, "err", scanErr)
+		}
+		metrics.RecordBlackboardScanError(ctx, "start_execution_status_readback")
+	}
+	if status != statusRunning {
+		return ErrTaskNotOwned
+	}
+	// already-running 幂等路径：不写事件，直接 Rollback 返回 nil
 	return nil
 }
 

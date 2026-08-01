@@ -61,20 +61,7 @@ func (sm *SchemaManager) ApplyMigrations() error {
 
 		var execErr error
 		if sm.db != nil {
-			// 在独立事务内执行迁移，失败自动回滚，避免传 nil 导致 nil pointer panic。
-			sqlTx, err := sm.db.Begin()
-			if err != nil {
-				return &MigrationError{m.Version, "begin tx: " + err.Error()}
-			}
-			if execErr = m.Up(&sqlTxWrapper{sqlTx}); execErr != nil {
-				// L4：回滚失败无补救动作——事务已因 execErr 判定失败，回滚本身
-				// 仅是尽力而为的资源释放；即便失败，连接池最终会因 tx 超时/关闭回收。
-				if rbErr := sqlTx.Rollback(); rbErr != nil {
-					slog.Debug("store/schema_manager: 迁移失败后事务回滚也失败，依赖连接释放兜底", "version", m.Version, "err", rbErr)
-				}
-			} else {
-				execErr = sqlTx.Commit()
-			}
+			execErr = sm.runMigrationInTx(m)
 		} else {
 			execErr = m.Up(nil)
 		}
@@ -88,6 +75,28 @@ func (sm *SchemaManager) ApplyMigrations() error {
 		if err := sm.CompleteMigration(); err != nil {
 			return &MigrationError{m.Version, "complete migration marker: " + err.Error()}
 		}
+	}
+	return nil
+}
+
+// runMigrationInTx 在独立事务内执行单条迁移，失败自动回滚，避免传 nil
+// Transaction 导致 nil pointer panic。从 ApplyMigrations 抽出以降低嵌套深度
+// （golangci-lint nestif 阈值）。
+func (sm *SchemaManager) runMigrationInTx(m Migration) error {
+	sqlTx, err := sm.db.Begin()
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "begin tx", err)
+	}
+	if execErr := m.Up(&sqlTxWrapper{sqlTx}); execErr != nil {
+		// L4：回滚失败无补救动作——事务已因 execErr 判定失败，回滚本身
+		// 仅是尽力而为的资源释放；即便失败，连接池最终会因 tx 超时/关闭回收。
+		if rbErr := sqlTx.Rollback(); rbErr != nil {
+			slog.Debug("store/schema_manager: 迁移失败后事务回滚也失败，依赖连接释放兜底", "version", m.Version, "err", rbErr)
+		}
+		return execErr
+	}
+	if err := sqlTx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "commit tx", err)
 	}
 	return nil
 }

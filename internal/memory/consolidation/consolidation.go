@@ -169,36 +169,45 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, sessionID string) error
 	err = p.executeStages(ctx, sessionID, events)
 	if err != nil {
 		var aerr *apperr.Error
-		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
-			if p.outbox != nil {
-				features := p.SampleOOMFeatures(events)
-				payload, _ := json.Marshal(map[string]any{
-					"session_id":   sessionID,
-					"event_count":  len(events),
-					"timestamp":    time.Now().Unix(),
-					"oom_features": features,
-					"trace_tag":    "memory_consolidate_retry",
-				})
-				// L1：重试消息投递失败意味着这次 OOM 之后再也没有任何机制会重新
-				// 巩固该 session 的事件——巩固状态机对这个 session 彻底停摆，
-				// 必须向上抛出（而非仅返回原始 ResourceExhausted），让调用方/告警
-				// 路径感知到"连重试都没排上"这一更严重的失败。
-				if writeErr := p.outbox.Write(context.Background(), protocol.OutboxEntry{
-					TargetEngine:   protocol.TopicMemory,
-					Operation:      "memory_consolidate_retry",
-					Scope:          "system",
-					Payload:        payload,
-					IdempotencyKey: fmt.Sprintf("consolidate:retry:%s:%d", sessionID, time.Now().UnixNano()),
-				}); writeErr != nil {
-					return apperr.Wrap(apperr.CodeInternal,
-						fmt.Sprintf("consolidation: OOM retry scheduling failed for session %s, consolidation stalled (original: %v)", sessionID, err),
-						writeErr)
-				}
-				slog.Warn("consolidation: OOM detected, scheduled retry", "session", sessionID)
+		if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted && p.outbox != nil {
+			if scheduleErr := p.scheduleOOMRetry(ctx, sessionID, events, err); scheduleErr != nil {
+				return scheduleErr
 			}
 		}
 		return err
 	}
+	return nil
+}
+
+// scheduleOOMRetry 在 executeStages 因 CodeResourceExhausted 失败后向 outbox
+// 投递一条重试消息。originalErr 仅用于拼接错误信息（投递失败时需要说明是在
+// 处理哪次 OOM 时又失败了）。从 Run 抽出以降低嵌套深度（golangci-lint nestif
+// 阈值），语义与原内联逻辑完全一致。
+func (p *ConsolidationPipeline) scheduleOOMRetry(ctx context.Context, sessionID string, events []types.ScoredEvent, originalErr error) error {
+	features := p.SampleOOMFeatures(events)
+	payload, _ := json.Marshal(map[string]any{
+		"session_id":   sessionID,
+		"event_count":  len(events),
+		"timestamp":    time.Now().Unix(),
+		"oom_features": features,
+		"trace_tag":    "memory_consolidate_retry",
+	})
+	// L1：重试消息投递失败意味着这次 OOM 之后再也没有任何机制会重新
+	// 巩固该 session 的事件——巩固状态机对这个 session 彻底停摆，
+	// 必须向上抛出（而非仅返回原始 ResourceExhausted），让调用方/告警
+	// 路径感知到"连重试都没排上"这一更严重的失败。
+	if writeErr := p.outbox.Write(context.Background(), protocol.OutboxEntry{
+		TargetEngine:   protocol.TopicMemory,
+		Operation:      "memory_consolidate_retry",
+		Scope:          "system",
+		Payload:        payload,
+		IdempotencyKey: fmt.Sprintf("consolidate:retry:%s:%d", sessionID, time.Now().UnixNano()),
+	}); writeErr != nil {
+		return apperr.Wrap(apperr.CodeInternal,
+			fmt.Sprintf("consolidation: OOM retry scheduling failed for session %s, consolidation stalled (original: %v)", sessionID, originalErr),
+			writeErr)
+	}
+	slog.Warn("consolidation: OOM detected, scheduled retry", "session", sessionID)
 	return nil
 }
 
