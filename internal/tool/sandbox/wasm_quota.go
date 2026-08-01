@@ -26,7 +26,12 @@ func CalculateWasmQuota(tier int, taintLevel types.TaintLevel) WasmQuota {
 		q.Fuel = 50000000
 		q.MaxMounts = 5
 	}
-	if taintLevel == types.TaintHigh {
+	// 污点等级 → 施加限制（配额折半）：语义为"只增不减"，用 >=，避免比 High 更高的
+	// 等级（若未来新增）反而不受限。TaintUserReviewed 数值上大于 TaintHigh 但代表
+	// "人工已复核"（豁免语义而非风险语义），必须先排除，否则复核后配额反而更紧，
+	// 与 execute/dag/taint_downgrade.go 的 "先判 UserReviewed 豁免、再判 >= High 限制"
+	// 既定 idiom 相悖。
+	if taintLevel != types.TaintUserReviewed && taintLevel >= types.TaintHigh {
 		q.MemoryPages /= 2
 		q.Fuel /= 2
 		q.MaxMounts /= 2
