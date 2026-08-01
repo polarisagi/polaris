@@ -11,6 +11,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -147,4 +148,76 @@ func TestStructuredNavigator_Empty(t *testing.T) {
 func TestKnowledgeBase_Search_Full(t *testing.T) {
 	// We'll skip deep integration test that causes panic due to nil Embedder and surreal mock mismatch.
 	// We already achieved coverage through unit tests for subcomponents.
+}
+
+// dbOnlyStore 只实现 StorageRouter.GetPrimary 依赖的 DB() 方法，其余
+// protocol.Store 方法通过嵌入 nil 接口占位（本测试不会调用到）。
+type dbOnlyStore struct {
+	protocol.Store
+	db *sql.DB
+}
+
+func (s *dbOnlyStore) DB() *sql.DB { return s.db }
+
+// ragImplFailingOutboxWriter 的 Write 总是失败，用于验证阶段02修复：
+// DefaultIngestionPipeline.Ingest 的摘要/图谱两条 outbox 投递失败必须向上
+// 返回错误（GR-7-004）。
+type ragImplFailingOutboxWriter struct{}
+
+func (f *ragImplFailingOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	return apperr.New(apperr.CodeInternal, "simulated outbox write failure")
+}
+
+func setupRagImplTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`
+		CREATE TABLE rag_docs (uri TEXT PRIMARY KEY, doc_id TEXT, content_hash TEXT, tree_json TEXT);
+		CREATE TABLE rag_chunks (
+			id TEXT PRIMARY KEY, doc_id TEXT, content TEXT, taint_level INTEGER,
+			taint_source TEXT, taint_hmac TEXT, source_uri TEXT, doc_version TEXT,
+			chunk_seq INTEGER, content_hash TEXT, embed_model_version TEXT,
+			chunk_type TEXT, chunk_index INTEGER
+		);
+	`); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	return db
+}
+
+// TestDefaultIngestionPipeline_Ingest_OutboxWriteFailure_ReturnsError_S02 验证
+// 阶段02修复：摘要生成/图谱构建两条 outbox 投递中任一失败，Ingest 必须向上
+// 返回错误（而非像修复前 `_ = p.outboxWriter.Write(...)` 那样彻底静默，导致
+// 两条链路对该文档永久不会触发，调用方却拿到 nil error 误以为成功）。
+func TestDefaultIngestionPipeline_Ingest_OutboxWriteFailure_ReturnsError_S02(t *testing.T) {
+	db := setupRagImplTestDB(t)
+	defer db.Close()
+
+	router := store.NewStorageRouter(&dbOnlyStore{db: db}, nil)
+	pipeline := NewDefaultIngestionPipeline(router, nil, &ragImplFailingOutboxWriter{}, nil, nil)
+
+	doc := &Document{
+		Ref: DocumentRef{URI: "doc-rag-outbox-fail", Title: "Test", ContentHash: "hash-rag-outbox-fail"},
+		Raw: []byte("Some content to chunk."),
+	}
+
+	tree, err := pipeline.Ingest(context.Background(), doc, 0)
+	if err == nil {
+		t.Fatal("expected error when both outbox writes fail, got nil")
+	}
+	if tree == nil {
+		t.Error("expected non-nil tree despite outbox failure (chunks already committed)")
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks WHERE doc_id = ?", tree.Document.ID).Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count == 0 {
+		t.Error("expected chunks to remain committed despite outbox failure")
+	}
 }
