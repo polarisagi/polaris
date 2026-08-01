@@ -297,3 +297,77 @@ func TestGate_NilReceiver(t *testing.T) {
 		t.Errorf("expected CheckEgressWithExemption to fail with nil receiver, got err=%v", err)
 	}
 }
+
+// ─── R-01：cedarLeaks 滑动窗口（阶段03） ─────────────────────────────────────
+
+// TestGate_RecordCedarLeak_WindowTriggersKillSwitch 验证窗口内连续 5 次泄漏
+// 触发 KillSwitch（阈值 cedarLeakKillSwitchThreshold=5）。
+func TestGate_RecordCedarLeak_WindowTriggersKillSwitch(t *testing.T) {
+	triggered := false
+	g := NewGate(func() { triggered = true }).WithEvalTimeout(2 * time.Second)
+
+	base := time.Now()
+	var leaksInWindow int
+	for i := 0; i < 5; i++ {
+		leaksInWindow = g.recordCedarLeak(base.Add(time.Duration(i) * time.Second))
+	}
+	if leaksInWindow < cedarLeakKillSwitchThreshold {
+		t.Fatalf("expected leaksInWindow >= %d after 5 leaks within window, got %d", cedarLeakKillSwitchThreshold, leaksInWindow)
+	}
+	if leaksInWindow >= cedarLeakKillSwitchThreshold {
+		g.mu.RLock()
+		onKS := g.onKillSwitch
+		g.mu.RUnlock()
+		if onKS != nil {
+			onKS()
+		}
+	}
+	if !triggered {
+		t.Fatal("expected KillSwitch to be triggered after 5 leaks within cedarLeakWindow")
+	}
+}
+
+// TestGate_RecordCedarLeak_WindowExpiryDoesNotAccumulate 是修复前会触发、
+// 修复后不应触发的回归锚点：4 次泄漏 → 假时钟推进超过 cedarLeakWindow →
+// 再 4 次泄漏 → 窗口内有效泄漏数应保持在阈值以下（旧记录已过期淘汰），
+// 而不是像修复前 atomic.Int64 只增不减那样跨窗口累加到 8 次触发 KillSwitch。
+func TestGate_RecordCedarLeak_WindowExpiryDoesNotAccumulate(t *testing.T) {
+	g := NewGate(nil).WithEvalTimeout(2 * time.Second)
+
+	base := time.Now()
+	var leaksInWindow int
+	for i := 0; i < 4; i++ {
+		leaksInWindow = g.recordCedarLeak(base.Add(time.Duration(i) * time.Second))
+	}
+	if leaksInWindow != 4 {
+		t.Fatalf("expected 4 leaks in window after first batch, got %d", leaksInWindow)
+	}
+
+	// 推进假时钟超过 cedarLeakWindow，前 4 次记录应被淘汰。
+	afterWindow := base.Add(cedarLeakWindow + time.Minute)
+	for i := 0; i < 4; i++ {
+		leaksInWindow = g.recordCedarLeak(afterWindow.Add(time.Duration(i) * time.Second))
+	}
+	if leaksInWindow >= cedarLeakKillSwitchThreshold {
+		t.Fatalf("expected window expiry to prevent accumulation across windows, got leaksInWindow=%d (threshold=%d) — regression: old atomic.Int64 behavior resurfaced", leaksInWindow, cedarLeakKillSwitchThreshold)
+	}
+
+	// cedarLeaksTotal 仍应是全部 8 次的累计（只增不减，供长期趋势观测）。
+	if got := g.cedarLeaksTotal.Load(); got != 8 {
+		t.Errorf("expected cedarLeaksTotal=8 (cumulative, never reset), got %d", got)
+	}
+}
+
+// TestGate_RecordCedarLeak_CapacityBounded 验证窗口内记录数不会无限增长：
+// 容量上限 = cedarLeakKillSwitchThreshold*2，超限丢弃最旧。
+func TestGate_RecordCedarLeak_CapacityBounded(t *testing.T) {
+	g := NewGate(nil).WithEvalTimeout(2 * time.Second)
+	base := time.Now()
+	var last int
+	for i := 0; i < 50; i++ {
+		last = g.recordCedarLeak(base.Add(time.Duration(i) * time.Millisecond))
+	}
+	if capLimit := cedarLeakKillSwitchThreshold * 2; last > capLimit {
+		t.Errorf("expected cedarLeakTimes capped at %d, got %d", capLimit, last)
+	}
+}

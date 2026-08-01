@@ -101,6 +101,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		surrealSizeGauge, _ := meter.Float64ObservableGauge("polaris.surrealdb.index_size_mb")
 		killswitchGauge, _ := meter.Float64ObservableGauge("polaris.killswitch.stage")
 		cedarDegradedGauge, _ := meter.Float64ObservableGauge("polaris.cedar.degraded_total")
+		cedarFFILeaksGauge, _ := meter.Float64ObservableGauge("polaris.cedar.ffi_leaks_total")
 		outboxDeadLetterGauge, _ := meter.Float64ObservableGauge("polaris.outbox.dead_letter_total")
 		factualityJudgeUnavailableGauge, _ := meter.Float64ObservableGauge("polaris.factuality.judge_unavailable_total")
 
@@ -195,6 +196,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 
 			o.ObserveFloat64(killswitchGauge, float64(GlobalKillswitchStage.Load()))
 			o.ObserveFloat64(cedarDegradedGauge, float64(GlobalCedarDegradedTotal.Load()))
+			o.ObserveFloat64(cedarFFILeaksGauge, float64(GlobalCedarFFILeaksTotal.Load()))
 			o.ObserveFloat64(outboxDeadLetterGauge, float64(GlobalOutboxDeadLetterTotal.Load()))
 			o.ObserveFloat64(factualityJudgeUnavailableGauge, float64(GlobalFactualityJudgeUnavailableTotal.Load()))
 
@@ -218,7 +220,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(cronNextRunWriteFailuresGauge, float64(GlobalCronNextRunWriteFailuresTotal.Load()))
 
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
+		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, cedarFFILeaksGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
 			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, memoryColdArchiveDetachFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge, cronNextRunWriteFailuresGauge)
 
 		h := promhttp.Handler()
@@ -287,6 +289,11 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_cedar_degraded_total Total number of Cedar FFI evaluation failures\n")
 		fmt.Fprintf(w, "# TYPE polaris_cedar_degraded_total counter\n")
 		fmt.Fprintf(w, "polaris_cedar_degraded_total %d\n", cd)
+
+		// ── Cedar FFI Leaks Total（阶段03 R-01：只增计数，不参与 KillSwitch 判定）──
+		fmt.Fprintf(w, "# HELP polaris_cedar_ffi_leaks_total Cumulative count of Cedar FFI goroutine leaks (timeout-triggered)\n")
+		fmt.Fprintf(w, "# TYPE polaris_cedar_ffi_leaks_total counter\n")
+		fmt.Fprintf(w, "polaris_cedar_ffi_leaks_total %d\n", GlobalCedarFFILeaksTotal.Load())
 
 		// ── KillSwitch Stage ──────────────────────────────────────────────────
 		stage := GlobalKillswitchStage.Load()

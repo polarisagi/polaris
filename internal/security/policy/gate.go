@@ -48,16 +48,57 @@ const (
 	CedarEnforceFull                         // 2: 完全生效
 )
 
+// cedarLeakWindow Cedar FFI 泄漏计数的观察窗口。
+// 语义：KillSwitch 关心的是「短时间内密集泄漏」（说明 Rust 侧真的卡死了），
+// 而不是「进程跑了 30 天累计遇到 5 次偶发超时」。后者用固定阈值会造成
+// 长时运行必然停服的可用性漏洞（阶段03 R-01，gemini-review Batch 2 #2）。
+// 阈值 SSoT：docs/arch/spec/state.yaml（阶段06 登记）。
+const cedarLeakWindow = 30 * time.Minute
+
+// cedarLeakKillSwitchThreshold 窗口内累计泄漏数达到该值即触发 KillSwitch。
+const cedarLeakKillSwitchThreshold = 5
+
 type Gate struct {
 	mu               sync.RWMutex
 	cedarEnforceMode CedarEnforceMode
 	forbidRules      []ForbidRule
 	permitRules      []PermitRule
 	consecutiveFail  atomic.Int64
-	onKillSwitch     func()       // 连续失败 10 次时触发
-	cedarLeaks       atomic.Int64 // 累计 Cedar FFI goroutine 泄漏数
-	cedar            *CedarEngine // Rust FFI 引擎
-	evalTimeout      time.Duration
+	onKillSwitch     func() // 连续失败 10 次、或 cedarLeak 窗口内密集泄漏时触发
+
+	// cedarLeakMu/cedarLeakTimes 保护窗口内泄漏时间戳（Unix 纳秒），实现无
+	// 后台 goroutine 的惰性衰减：每次记录时顺带淘汰早于 now-cedarLeakWindow
+	// 的记录。容量上限 = cedarLeakKillSwitchThreshold × 2，超限丢弃最旧。
+	cedarLeakMu    sync.Mutex
+	cedarLeakTimes []int64
+	// cedarLeaksTotal 累计泄漏总量，只增不减，仅用于 Prometheus Gauge
+	// polaris_cedar_ffi_leaks_total 的长期趋势观测，不参与 KillSwitch 判定
+	// （避免"长期缓慢泄漏"被监控发现，但又不误触发短时窗口停服判定）。
+	cedarLeaksTotal atomic.Int64
+
+	cedar       *CedarEngine // Rust FFI 引擎
+	evalTimeout time.Duration
+}
+
+// recordCedarLeak 记录一次 FFI 泄漏并返回窗口内的有效泄漏数。
+// 淘汰早于 now-cedarLeakWindow 的记录，实现无后台 goroutine 的惰性衰减。
+func (g *Gate) recordCedarLeak(now time.Time) int {
+	g.cedarLeakMu.Lock()
+	defer g.cedarLeakMu.Unlock()
+	cutoff := now.Add(-cedarLeakWindow).UnixNano()
+	kept := g.cedarLeakTimes[:0]
+	for _, t := range g.cedarLeakTimes {
+		if t >= cutoff {
+			kept = append(kept, t)
+		}
+	}
+	g.cedarLeakTimes = append(kept, now.UnixNano())
+	if capLimit := cedarLeakKillSwitchThreshold * 2; len(g.cedarLeakTimes) > capLimit {
+		g.cedarLeakTimes = g.cedarLeakTimes[len(g.cedarLeakTimes)-capLimit:]
+	}
+	g.cedarLeaksTotal.Add(1)
+	metrics.GlobalCedarFFILeaksTotal.Store(g.cedarLeaksTotal.Load())
+	return len(g.cedarLeakTimes)
 }
 
 var _ protocol.PolicyGate = (*Gate)(nil)
@@ -373,9 +414,12 @@ func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource st
 
 	metrics.GlobalCedarDegradedTotal.Add(1)
 	if strings.Contains(err.Error(), "timeout") {
-		leaks := g.cedarLeaks.Add(1)
-		slog.WarnContext(ctx, "cedar ffi evaluate timed out, degrading to go rules", "error", err, "cumulative_leaks", leaks)
-		if leaks >= 5 && g.onKillSwitch != nil {
+		// R-01：窗口内密集泄漏才触发 KillSwitch，长期偶发泄漏只计入
+		// cedarLeaksTotal（Prometheus 趋势观测），不再用全进程生命周期的
+		// 只增计数误判为"持续故障"（见 gate.go 顶部 cedarLeakWindow 注释）。
+		leaksInWindow := g.recordCedarLeak(time.Now())
+		slog.WarnContext(ctx, "cedar ffi evaluate timed out, degrading to go rules", "error", err, "leaks_in_window", leaksInWindow, "cumulative_leaks_total", g.cedarLeaksTotal.Load())
+		if leaksInWindow >= cedarLeakKillSwitchThreshold && g.onKillSwitch != nil {
 			g.onKillSwitch()
 		}
 	} else {
