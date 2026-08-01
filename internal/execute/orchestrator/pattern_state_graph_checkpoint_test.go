@@ -26,6 +26,8 @@ func TestStateGraphExecutor_CheckpointResume(t *testing.T) {
 			started_at    INTEGER,
 			completed_at  INTEGER,
 			error         TEXT,
+			reason        TEXT,
+			resume_ctx_json TEXT,
 			PRIMARY KEY (task_id, node_id, attempt)
 		);
 	`)

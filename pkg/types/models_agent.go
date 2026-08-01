@@ -84,19 +84,26 @@ type DAGEdge struct {
 	To   string `json:"to"`
 }
 
-// TaskCheckpointRow 用于 StateGraphExecutor 节点级别的容错恢复。
+// TaskCheckpointRow 用于 StateGraphExecutor 节点级别的容错恢复，
+// 以及 Agent Kernel 委派挂起（S_AWAIT_AGENT）的执行期上下文恢复（GD-13-009）。
 type TaskCheckpointRow struct {
 	TaskID         string
 	NodeID         string
 	Attempt        int
 	Status         string
-	OutputJSON     string
+	OutputJSON     string // NodeResult 序列化（StateGraph 语义，勿与 ResumeCtxJSON 混用）
 	IdempotencyKey string
 	TaintLevel     TaintLevel
 	StartedAt      int64
 	CompletedAt    int64
 	Error          string
 	Reason         string
+	// ResumeCtxJSON Agent 执行期上下文快照（GD-13-009）。仅 Reason="handoff_wait"
+	// 的行填充。载荷为 agent.HandoffResumeContext 的 JSON，含 schema_version
+	// 用于向后兼容。与 OutputJSON 严格分离：后者是 StateGraph 的 NodeResult，
+	// 语义不同，禁止复用。反序列化后必须重跑 S_VALIDATE 四层校验（防 DB 直改
+	// DAG 提权，见 XR/HE-2）。
+	ResumeCtxJSON string
 }
 type TaskEntry struct {
 	ID          string

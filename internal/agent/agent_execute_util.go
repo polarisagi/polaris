@@ -111,6 +111,29 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 	return nil
 }
 
+// mergeResumedExecuteResult 合并崩溃前快照的聚合结果（prior）与本次续跑新
+// 产出的结果（fresh），用于 GD-13-009 崩溃恢复续跑场景。两者都可能是任意
+// 字节内容（单节点场景 aggregateDAGResults 直接返回工具原始输出，未必是
+// 合法 JSON），故不能用 json.RawMessage 直接拼接——改用字符串字段承载，
+// json.Marshal 会对内容做安全转义，保证输出恒为合法 JSON。
+func mergeResumedExecuteResult(prior, fresh []byte) []byte {
+	envelope := struct {
+		ResumedPriorResults string `json:"resumed_prior_results"`
+		PostResumeResults   string `json:"post_resume_results"`
+	}{
+		ResumedPriorResults: string(prior),
+		PostResumeResults:   string(fresh),
+	}
+	merged, err := json.Marshal(envelope)
+	if err != nil {
+		// 理论上字符串字段的 json.Marshal 不会失败；fail-safe 退回仅使用新结果，
+		// 不让一个不可能发生的序列化错误阻断整条 DAG 执行完成路径。
+		slog.Warn("agent: mergeResumedExecuteResult marshal failed, falling back to fresh results only", "err", err)
+		return fresh
+	}
+	return merged
+}
+
 // aggregateDAGResults 将多节点执行结果聚合为统一 JSON 格式。
 // 单节点直接返回 output；多节点序列化为 {"results":[{id,output},...]}.
 func aggregateDAGResults(results []protocol.NodeResult) []byte {

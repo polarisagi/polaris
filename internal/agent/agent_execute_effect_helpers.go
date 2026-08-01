@@ -130,20 +130,7 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 	// Trigger），由 watchHandoffCompletion 启动的后台 watcher 负责在委派
 	// 完成时投递 TriggerAgentHandoffDone 恢复执行。
 	if a.sm.Current() == types.AgentStateAwaitAgent {
-		if a.taskCheckpointRepo != nil {
-			err := a.taskCheckpointRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
-				TaskID:     a.sCtx.SessionID,
-				NodeID:     a.sCtx.HandoffTaskID,
-				Attempt:    1,
-				Status:     "await_agent",
-				StartedAt:  time.Now().Unix(),
-				Reason:     "handoff_wait",
-				TaintLevel: a.sCtx.GlobalTaintLevel,
-			})
-			if err != nil {
-				slog.Error("kernel: persist handoff wait failed", "err", err)
-			}
-		}
+		a.persistHandoffWaitCheckpoint(ctx)
 		a.watchHandoffCompletion(a.sCtx.HandoffTaskID)
 		return "", nil, true
 	}

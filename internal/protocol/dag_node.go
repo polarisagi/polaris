@@ -78,6 +78,12 @@ type ExecEdge struct {
 type DAGPlan struct {
 	Nodes []ExecNode
 	Edges []ExecEdge
+	// PreCompletedNodes 列出调度前即视为已完成的节点 ID（GD-13-009 崩溃恢复
+	// 续跑）。Runner 在调度前把这些节点标记为 done（不产生 NodeResult——其
+	// 原始输出不在计划粒度可得，由调用方在恢复时从快照的 ExecuteResult 单独
+	// 合并），使依赖它们的下游节点可以就绪执行；正常（非恢复）路径下为空，
+	// 无行为变化。
+	PreCompletedNodes []string
 }
 
 // WorkflowNodeSpec 表示强类型跨 Agent 编排模式的节点。

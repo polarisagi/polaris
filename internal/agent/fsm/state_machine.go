@@ -186,6 +186,13 @@ type StateContext struct {
 
 	// GD-1: Handoff 委派的目标任务 ID，持久化至 checkpoint 以供恢复
 	HandoffTaskID string
+
+	// CompletedNodeIDs 记录 DAGModel 中已成功执行完成的节点 ID（GD-13-009）。
+	// 崩溃恢复场景下由 ResumeAwaitingHandoff 从 HandoffResumeContext 回填，
+	// runExecuteDAG 据此构建 protocol.DAGPlan.PreCompletedNodes，使 DAG
+	// 续跑时跳过已完成节点直接从委派节点下游继续，而非从头重跑或直接
+	// 终态截断。正常（非恢复）路径下保持为空，无行为变化。
+	CompletedNodeIDs []string
 }
 
 // TaskModel LLM 填槽产出——将自然语言任务结构化。
