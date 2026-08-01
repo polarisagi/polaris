@@ -1,0 +1,5 @@
+{
+  "_comment": "Test_inv_M13_06_ChannelNoRawHTTPClient 豁免列表。每条豁免须有对应 ADR。",
+  "_comment_adapter": "adapter.go 的 deriveClient() 是本包唯一合法的 http.Client{} 构造点：显式复用 base.Transport（SafeDialer），仅覆盖 Timeout，语义与裸构造相反，是防线本身而非绕过（S-03）。",
+  "internal/channel/adapter/adapter.go": true
+}

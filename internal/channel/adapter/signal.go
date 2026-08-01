@@ -48,7 +48,13 @@ func signalReceiveSSE(ctx context.Context, host PollerHost, channelID, apiURL, a
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	client := &http.Client{Timeout: 0}
+	// S-03：复用 host.HTTPClient() 的受保护 Transport（SafeDialer SSRF 防护），
+	// 仅覆盖 Timeout=0（SSE 长连接不设全局超时，靠 ctx 取消）。禁止新建裸
+	// http.Client——此前的写法完全绕过了 SafeDialer。
+	client, err := deriveClient(host.HTTPClient(), 0)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Manager.signalReceiveSSE", err)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "Manager.signalReceiveSSE", err)

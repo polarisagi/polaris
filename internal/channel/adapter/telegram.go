@@ -36,10 +36,15 @@ type telegramPoller struct {
 	httpClient *http.Client
 }
 
-func NewTelegramPoller() *telegramPoller {
-	return &telegramPoller{
-		httpClient: &http.Client{Timeout: 35 * time.Second},
+// NewTelegramPoller 构造 telegram 长轮询器。base 必须为受保护的
+// host.HTTPClient()（Transport 挂载 SafeDialer SSRF 防护）；S-03 修复前此处
+// 自建裸 http.Client，完全绕过防护。base 为 nil 时 fail-closed 返回 error。
+func NewTelegramPoller(base *http.Client) (*telegramPoller, error) {
+	client, err := deriveClient(base, 35*time.Second)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "NewTelegramPoller", err)
 	}
+	return &telegramPoller{httpClient: client}, nil
 }
 
 func RunTelegramPoller(ctx context.Context, host PollerHost, poller *telegramPoller, channelID, token string, cfg map[string]any) {
@@ -197,9 +202,13 @@ func (a *TelegramAdapter) StartPoller(host Host, channelID string, cfg map[strin
 	if token == "" {
 		return false
 	}
+	poller, err := NewTelegramPoller(host.HTTPClient())
+	if err != nil {
+		slog.Error("telegram: failed to create poller", "err", err)
+		return false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	host.RegisterPoller(channelID, cancel)
-	poller := NewTelegramPoller()
 	concurrent.SafeGo(ctx, "poller.telegram."+channelID, func(ctx context.Context) {
 		RunTelegramPoller(ctx, host, poller, channelID, token, cfg)
 	})
