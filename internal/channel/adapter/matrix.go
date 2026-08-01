@@ -134,8 +134,13 @@ func matrixSync(ctx context.Context, client *http.Client, homeserver, accessToke
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	syncClient := &http.Client{Timeout: 40 * time.Second}
-	resp, err := syncClient.Do(req)
+	// S-03：复用调用方传入的受保护 client（host.HTTPClient()，经 SafeDialer SSRF
+	// 五阶段校验），禁止在此新建裸 http.Client——此前的 syncClient 完全弃用了形参
+	// client，导致 homeserver（用户可控配置）绕过 SSRF 防护。
+	syncCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
+	req = req.WithContext(syncCtx)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, apperr.Wrap(apperr.CodeInternal, "matrixSync", err)
 	}

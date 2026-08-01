@@ -1303,3 +1303,59 @@ func Test_inv_NoDirectSemanticMemoryWriteOutsideBuiltin(t *testing.T) {
 		t.Errorf("inv_NoDirectSemanticMemoryWriteOutsideBuiltin VIOLATED: %s", v)
 	}
 }
+
+// ─── inv_M13_06 ─────────────────────────────────────────────────────────────
+
+// Test_inv_M13_06_ChannelNoRawHTTPClient 验证 internal/channel/ 下不存在裸
+// &http.Client{...} 构造或 http.DefaultClient 引用（S-03，防止 Channel Poller
+// 绕过 host.HTTPClient() 承载的 SafeDialer SSRF 五阶段防护）。豁免列表由
+// testdata/m13_raw_http_exempt.json 管理——每条豁免须有对应 ADR，初始为空。
+//
+// 扫描范围刻意限定在 internal/channel/：homeserver/apiURL 等出站目标来自用户
+// 可控的 channels 表配置，是真实 SSRF 面；其余模块的 &http.Client{} 构造属于
+// 另一类问题（如 downloader 的 ADR-0071 豁免），不在本规则覆盖范围。
+func Test_inv_M13_06_ChannelNoRawHTTPClient(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "m13_raw_http_exempt.json")
+
+	var violations []violation
+	walkGoFilesUnder(t, root, filepath.Join("internal", "channel"), exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CompositeLit:
+				sel, ok := node.Type.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkgIdent, ok := sel.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "http" || sel.Sel.Name != "Client" {
+					return true
+				}
+				pos := fset.Position(node.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  "http.Client{} 裸构造 — 绕过 host.HTTPClient() 承载的 SafeDialer SSRF 防护，须改用 deriveClient(host.HTTPClient(), ...)",
+				})
+			case *ast.SelectorExpr:
+				pkgIdent, ok := node.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "http" {
+					return true
+				}
+				if node.Sel.Name == "DefaultClient" || node.Sel.Name == "DefaultTransport" {
+					pos := fset.Position(node.Pos())
+					violations = append(violations, violation{
+						relPath: relPath,
+						line:    pos.Line,
+						detail:  fmt.Sprintf("http.%s — 裸 HTTP 出口，绕过 SafeDialer SSRF 防护，须改用注入的 host.HTTPClient()", node.Sel.Name),
+					})
+				}
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_M13_06 VIOLATED: %s", v)
+	}
+}
