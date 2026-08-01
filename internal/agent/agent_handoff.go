@@ -14,8 +14,9 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// D5（GD-14-004）→ GD-1（本轮升级，local_playground/upgrade/01-架构设计变更规范.md）：
-// 工具化 Multi-Agent Handoff，异步挂起版本。
+// D5（GD-14-004）→ GD-1（local_playground/upgrade/01-架构设计变更规范.md）→
+// GD-13-007/GD-13-009（阶段04 A-01/A-02）：工具化 Multi-Agent Handoff，
+// 异步挂起 + 事件驱动唤醒 + 崩溃无损续跑版本。
 //
 // 历史背景：原实现（D5 首版）为同步阻塞——`transfer_to_agent` 工具调用内部
 // 轮询等待子任务终态，独占一个 DAG 执行槽位直至委派完成。GD-1 复核后改为
@@ -23,17 +24,19 @@ import (
 // `executeTransferToAgent` 首次调用时投递子任务后立即返回
 // `ToolResult{Suspended:true}` 并推进 TriggerAwaitAgent，不再阻塞当前
 // goroutine。真正的恢复由 `watchHandoffCompletion` 启动的后台 watcher
-// 完成（见本文件下方），完成后投递 TriggerAgentHandoffDone 使 FSM 回到
-// S_EXECUTE，`runExecuteDAG` 重新进入本函数时，`a.sCtx.HandoffTaskID` 非空
-// 触发"恢复检查"分支，直接返回子任务结果，不重新投递任务。
+// 完成（见本文件下方，GD-13-007 起改为 Blackboard 事件订阅驱动，轮询降级
+// 为兜底），完成后投递 TriggerAgentHandoffDone 使 FSM 回到 S_EXECUTE，
+// `runExecuteDAG` 重新进入本函数时，`a.sCtx.HandoffTaskID` 非空触发
+// "恢复检查"分支，直接返回子任务结果，不重新投递任务。
 //
-// 崩溃安全边界（诚实声明，非本次范围）：watcher 是绑定 `a.ctx`（Agent 进程
-// 内存态）生命周期的 goroutine，与 spawn_planner 现有的 whisperChan 方案
-// 风险等级一致——若进程在委派等待期间重启，watcher 随进程消亡。
-// `a.taskCheckpointRepo` 持久化的 checkpoint 记录为未来实现"独立
-// Reconciler 扫描 task_checkpoints 补偿唤醒"预留了锚点，但该 Reconciler
-// 本次未实现。这不是本次修复引入的新缺陷，而是与既有 whisperChan 机制
-// 相同量级的既有限制，留作独立后续工作。
+// 崩溃安全边界（GD-13-009 起，见 agent_handoff_resume.go）：进程重启场景由
+// AwaitingHandoffReconciler 扫描 task_checkpoints（reason='handoff_wait'）
+// 驱动恢复。`ResumeAwaitingHandoff` 反序列化落盘的 HandoffResumeContext
+// 快照（含 DAGModel/ExecuteResult/CompletedNodeIDs/GlobalTaintLevel），
+// 强制重跑 S_VALIDATE 四层校验后回填执行期上下文，使新建 Agent 实例能够
+// 从委派节点下游继续执行，而非仅仅"消除死锁后直接终态"。快照缺失或校验
+// 失败时仍会安全降级为旧行为（ResumeAwaitingHandoff 返回 restored=false），
+// 不会因反序列化输入异常而 panic 或误放行未经校验的 DAG。
 
 // InjectHandoffPoster 注入 transfer_to_agent 工具所需的 Blackboard 任务投递能力
 // （D5/GD-14-004）。nil 时 transfer_to_agent 节点返回 fail-closed 错误，不影响
@@ -119,26 +122,6 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		Output:     []byte("Agent suspended waiting for handoff task completion."),
 		TaintLevel: taintLevel,
 	}, nil
-}
-
-// ResumeAwaitingHandoff 供 AwaitingHandoffReconciler（GD-13-003）在进程重启后
-// 使用：把刚从 Pool 新建、默认停在 S_IDLE 的 Agent 直接就位到崩溃前的
-// S_AWAIT_AGENT 委派等待点，并回填 HandoffTaskID，使随后投递的
-// TriggerAgentHandoffDone 能命中转移表中的合法边（否则会命中 Dispatch() 的
-// "no transition from S_IDLE"硬错误，与下方 GD-1 描述的 TriggerSuspend
-// 误投递是同一类故障）。复用 fsm.StateMachine 既有的 ForceState（跳过
-// Trigger 边校验但记录 history，语义与其它致命异常强制切态一致，见
-// state_machine.go 中 ForceState 的既有用法），不新增第二套强制切态机制。
-//
-// 已知限制：a.sCtx.DAGModel 等执行期上下文无法跨进程重启恢复（task_checkpoints
-// 只持久化了 TaskID/NodeID/Status 等元数据，不含完整 DAG 计划），恢复后进入
-// S_EXECUTE 会走 runExecuteDAG 的 nil-DAGModel 快速路径直接终态，不会真正续跑
-// 委派节点之后的下游 DAG 节点。本方法保证的是"消除永久死锁"，不是"无损续跑"
-// ——调用方必须据此记录明确的降级恢复日志，不能把这类会话终态误判为正常
-// 完整完成。
-func (a *Agent) ResumeAwaitingHandoff(childTaskID string) {
-	a.sCtx.HandoffTaskID = childTaskID
-	a.sm.ForceState(types.AgentStateAwaitAgent)
 }
 
 // handoffWatchPollInterval 委派完成轮询间隔，仅用于 Subscribe 不可用/失活时

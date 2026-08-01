@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -102,6 +103,7 @@ func (r *AwaitingHandoffReconciler) Reconcile(ctx context.Context) error {
 		}
 		sessionID := row.TaskID
 		childTaskID := row.NodeID
+		resumeCtxJSON := row.ResumeCtxJSON
 
 		if _, loaded := r.inFlight.LoadOrStore(sessionID, struct{}{}); loaded {
 			slog.InfoContext(ctx, "AwaitingHandoffReconciler: session already being reconciled, skipping this scan",
@@ -111,15 +113,15 @@ func (r *AwaitingHandoffReconciler) Reconcile(ctx context.Context) error {
 
 		concurrent.SafeGo(ctx, "agent.handoff_reconciler."+sessionID, func(ctx context.Context) {
 			defer r.inFlight.Delete(sessionID)
-			r.reconcileOne(ctx, sessionID, childTaskID)
+			r.reconcileOne(ctx, sessionID, childTaskID, resumeCtxJSON)
 		})
 	}
 	return nil
 }
 
-// reconcileOne 恢复单个会话：Acquire → 就位 FSM → （子任务已终态则直接
-// 触发／否则重挂 watcher）→ 有界等待会话到达终态 → release。
-func (r *AwaitingHandoffReconciler) reconcileOne(ctx context.Context, sessionID, childTaskID string) {
+// reconcileOne 恢复单个会话：Acquire → 就位 FSM（+ 尝试无损续跑执行期上下文）
+// → （子任务已终态则直接触发／否则重挂 watcher）→ 有界等待会话到达终态 → release。
+func (r *AwaitingHandoffReconciler) reconcileOne(ctx context.Context, sessionID, childTaskID, resumeCtxJSON string) {
 	ctrl, release, err := r.pool.Acquire(ctx, sessionID)
 	if err != nil {
 		slog.WarnContext(ctx, "AwaitingHandoffReconciler: acquire agent failed, skipping",
@@ -135,8 +137,21 @@ func (r *AwaitingHandoffReconciler) reconcileOne(ctx context.Context, sessionID,
 	}
 
 	// 就位到崩溃前的 S_AWAIT_AGENT，否则下面投递的 Trigger 会命中
-	// Dispatch() 的 "no transition from S_IDLE" 硬错误。
-	ag.ResumeAwaitingHandoff(childTaskID)
+	// Dispatch() 的 "no transition from S_IDLE" 硬错误；resumeCtxJSON 非空
+	// 且校验通过时同时回填执行期上下文，实现委派节点下游 DAG 无损续跑
+	// （GD-13-009）。restored=false 时仍安全（消除死锁的基本保证不受影响），
+	// 只是退化为"仅消除死锁"的旧行为，故此处记录明确日志区分两种结果。
+	restored := ag.ResumeAwaitingHandoff(childTaskID, resumeCtxJSON)
+	if restored {
+		metrics.RecordAgentHandoffResume(ctx, "restored")
+		slog.InfoContext(ctx, "AwaitingHandoffReconciler: execution context restored, downstream DAG nodes will resume",
+			"session_id", sessionID, "child_task_id", childTaskID)
+	} else {
+		metrics.RecordAgentHandoffResume(ctx, "degraded")
+		slog.WarnContext(ctx, "AwaitingHandoffReconciler: resumed without execution context, "+
+			"downstream DAG nodes will NOT be re-executed (deadlock-avoidance only)",
+			"session_id", sessionID, "child_task_id", childTaskID)
+	}
 
 	drainCtx, cancel := context.WithTimeout(ctx, r.drainTimeout)
 	defer cancel()

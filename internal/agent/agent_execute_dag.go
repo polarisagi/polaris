@@ -133,7 +133,16 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	plan := &protocol.DAGPlan{
 		Nodes: a.sCtx.DAGModel.Nodes,
 		Edges: a.sCtx.DAGModel.Edges,
+		// GD-13-009：崩溃恢复续跑时 CompletedNodeIDs 由 ResumeAwaitingHandoff
+		// 从快照回填，使 Runner 跳过委派节点上游/自身已完成的节点，直接从
+		// 下游继续；正常路径下为空，无行为变化。
+		PreCompletedNodes: a.sCtx.CompletedNodeIDs,
 	}
+	// 恢复场景下 a.sCtx.ExecuteResult 此刻仍持有崩溃前快照的聚合结果（由
+	// ResumeAwaitingHandoff 回填），下方会被本次新执行的结果覆盖——先取出，
+	// 执行完成后与新结果合并，避免丢失委派节点之前已产出的内容。
+	priorExecuteResult := a.sCtx.ExecuteResult
+	isResume := len(a.sCtx.CompletedNodeIDs) > 0
 
 	if a.dagRunner == nil {
 		// fail-closed: 无 DAG 执行引擎时拒绝执行（2026-07-12 execute/dag 迁出后新增，
@@ -477,6 +486,20 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	// 检查是否有节点挂起
 	for _, res := range results {
 		if res.Suspended {
+			// GD-13-009：记录本轮已完成节点 ID（排除挂起节点自身），供随后
+			// executeDeterministicEffect 进入 S_AWAIT_AGENT 分支时
+			// buildHandoffResumeSnapshot 写入快照——恢复时 DAGExecutor 据此跳过
+			// 这些节点，只从挂起节点（含）继续。同一字段在本 Agent 实例内也
+			// 服务"活跃进程内恢复"（无崩溃、TriggerAgentHandoffDone 唤醒后
+			// 重新进入 runExecuteDAG 的第二次调用）：见函数顶部 PreCompletedNodes
+			// 注入，两条路径复用同一份数据，无需区分。
+			var completedIDs []string
+			for _, r := range results {
+				if !r.Suspended {
+					completedIDs = append(completedIDs, r.NodeID)
+				}
+			}
+			a.sCtx.CompletedNodeIDs = completedIDs
 			// spawn_planner 等工具已触发中断，无需再发 ExecuteDone
 			return nil
 		}
@@ -485,7 +508,16 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	// 聚合所有节点输出为 JSON 数组，反思阶段可获取完整 DAG 执行结果。
 	// 单节点时保持向后兼容（直接取 output 字节）；多节点时序列化为 {"results":[...]} 结构。
 	raw := aggregateDAGResults(results)
+	if isResume && len(priorExecuteResult) > 0 {
+		// GD-13-009：合并崩溃前快照的聚合结果与本次续跑新产出的结果，避免
+		// 委派节点之前已完成部分的内容在恢复后从 ExecuteResult 中静默丢失
+		// （下游反思阶段 Prompt 依赖 ExecuteResult 获知完整执行结果）。
+		raw = mergeResumedExecuteResult(priorExecuteResult, raw)
+	}
 	a.sCtx.ExecuteResult = truncateExecResult(a.sCtx.SessionID, raw)
+	// 单次消费：清空 CompletedNodeIDs，防止同一 Agent 实例后续正常轮次
+	// （非恢复）误用本轮已经合并过的 PreCompletedNodes/priorExecuteResult。
+	a.sCtx.CompletedNodeIDs = nil
 
 	var imgs []types.ImagePart
 	for _, r := range results {

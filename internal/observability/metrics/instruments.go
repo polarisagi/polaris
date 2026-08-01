@@ -93,6 +93,11 @@ var (
 	// Blackboard 事件订阅链路有问题（GD-13-007）。
 	InstrAgentHandoffWakeTotal metric.Int64Counter // label: path
 
+	// [阶段04 A-02] Agent Handoff 崩溃续跑可观测性（GD-13-009）。
+	// result 固定枚举 "restored"/"degraded"。
+	InstrAgentHandoffResumeTotal            metric.Int64Counter // label: result
+	InstrAgentHandoffSnapshotOversizedTotal metric.Int64Counter // 无 label（单一事件类型）
+
 	instrOnce sync.Once
 )
 
@@ -446,6 +451,16 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Agent handoff 唤醒路径计数 (label: path，取值 event/peek/poll_fallback)"),
 	)
 	ie.capture("polaris.agent.handoff_wake_total", err)
+	InstrAgentHandoffResumeTotal, err = meter.Int64Counter(
+		"polaris.agent.handoff_resume_total",
+		metric.WithDescription("Agent handoff 崩溃续跑结果计数 (label: result，取值 restored/degraded)"),
+	)
+	ie.capture("polaris.agent.handoff_resume_total", err)
+	InstrAgentHandoffSnapshotOversizedTotal, err = meter.Int64Counter(
+		"polaris.agent.handoff_snapshot_oversized_total",
+		metric.WithDescription("Agent handoff 恢复快照超出体积上限、放弃落盘的次数（无 label）"),
+	)
+	ie.capture("polaris.agent.handoff_snapshot_oversized_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter) {
@@ -717,5 +732,22 @@ func RecordExtensionStructuredFailure(ctx context.Context, kind string) {
 func RecordAgentHandoffWake(ctx context.Context, path string) {
 	if InstrAgentHandoffWakeTotal != nil {
 		InstrAgentHandoffWakeTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("path", path)))
+	}
+}
+
+// RecordAgentHandoffResume 记录一次 Agent handoff 崩溃续跑结果（阶段04 A-02，
+// GD-13-009）。result 必须是调用方硬编码的固定枚举字符串（"restored"/
+// "degraded"），禁止传入任何用户/任务可控值（CardinalityGuard）。
+func RecordAgentHandoffResume(ctx context.Context, result string) {
+	if InstrAgentHandoffResumeTotal != nil {
+		InstrAgentHandoffResumeTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+	}
+}
+
+// RecordAgentHandoffSnapshotOversized 记录一次 handoff 恢复快照因超出体积
+// 上限而放弃落盘（阶段04 A-02）。无 label：单一事件类型，无需维度。
+func RecordAgentHandoffSnapshotOversized(ctx context.Context) {
+	if InstrAgentHandoffSnapshotOversizedTotal != nil {
+		InstrAgentHandoffSnapshotOversizedTotal.Add(ctx, 1)
 	}
 }

@@ -113,6 +113,13 @@ func (e *DAGExecutor) Execute(ctx context.Context, plan *DAGPlan, taskID, agentI
 	e.mu.Lock()
 	e.completed = make(map[string][]byte, len(plan.Nodes))
 	e.executedUndo = nil
+	// GD-13-009 崩溃恢复续跑：预置已完成节点集，使依赖它们的下游节点在
+	// findReadyNodes 中判定为就绪，跳过重新调度。这些节点不产生 NodeResult
+	// （其原始输出不在计划粒度可得），调用方（agent.runExecuteDAG）负责从
+	// 快照恢复的 ExecuteResult 与本次新产出结果合并，避免信息丢失。
+	for _, id := range plan.PreCompletedNodes {
+		e.completed[id] = []byte{} // 非 nil sentinel = 已完成（区别于 in-progress 的 nil）
+	}
 	e.mu.Unlock()
 
 	// 启动 LeaseHeartbeat 防止 M8 Reaper 误判
