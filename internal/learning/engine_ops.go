@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -136,24 +137,37 @@ func (e *Engine) TriggerCurriculum(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) loadCursors(ctx context.Context) map[string]int64 {
+// loadCursors 读取所有学习流的消费游标。
+// L1（GR-7-001）：单条 Scan 失败若被忽略，该流的游标会缺失，Start() 据此
+// 从 seq=0 重放整条流——与其他已正确加载的流之间产生不一致的重放窗口，
+// 且这种"部分游标丢失"在当前调用点完全不可观测。因此改为中止本次加载并
+// 向上返回错误，由 Start() 决定是否阻止启动，而不是返回一个看似完整、实
+// 则残缺的 cursors map。
+func (e *Engine) loadCursors(ctx context.Context) (map[string]int64, error) {
 	cursors := make(map[string]int64)
 	if e.db == nil {
-		return cursors
+		return cursors, nil
 	}
 	rows, err := e.db.QueryContext(ctx, "SELECT stream_name, last_seq FROM learning_cursors")
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			var seq int64
-			_ = rows.Scan(&name, &seq)
-			cursors[name] = seq
-		}
-	} else {
-		slog.Warn("failed to load learning cursors", "err", err)
+	if err != nil {
+		metrics.GlobalLearningCursorErrorsTotal.Add(1)
+		return nil, apperr.Wrap(apperr.CodeInternal, "learning: 游标查询失败", err)
 	}
-	return cursors
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var seq int64
+		if err := rows.Scan(&name, &seq); err != nil {
+			metrics.GlobalLearningCursorErrorsTotal.Add(1)
+			return nil, apperr.Wrap(apperr.CodeInternal, "learning: 游标 Scan 失败，中止加载防止部分游标丢失", err)
+		}
+		cursors[name] = seq
+	}
+	if err := rows.Err(); err != nil {
+		metrics.GlobalLearningCursorErrorsTotal.Add(1)
+		return nil, apperr.Wrap(apperr.CodeInternal, "learning: 游标行迭代失败", err)
+	}
+	return cursors, nil
 }
 
 func (e *Engine) saveCursorAsync(ctx context.Context, stream string, seq int64) {

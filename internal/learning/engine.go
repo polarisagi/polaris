@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -186,7 +187,12 @@ func (e *Engine) handleTaskCompleteEvent(ctx context.Context, ev TaskCompleteEve
 }
 
 func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
-	cursors := e.loadCursors(ctx)
+	// GR-7-001：游标加载失败必须阻止启动，而非以空/残缺游标继续（会导致
+	// 学习引擎从错误位置重放，见 loadCursors 内部注释）。
+	cursors, err := e.loadCursors(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "Engine.Start: loadCursors 失败", err)
+	}
 
 	// Start background cursor flusher
 	concurrent.SafeGo(ctx, "learning-cursor-flusher", func(ctx context.Context) {

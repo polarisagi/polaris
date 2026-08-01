@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -102,8 +103,14 @@ func (w *GapFillWorker) synthesizeSkill(ctx context.Context, toolName string) er
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)
 	}
+	// L1（GR-7-002）：注册失败意味着本次 LLM 合成成本已花掉但成果彻底丢失
+	// （既未持久化到 skillReg，也未挂进即时可调用的 registry），必须向上
+	// 返回错误，交由 HandleOutbox 的 outbox 重试机制重新触发合成。
 	if w.registry != nil {
-		_ = w.registry.Register(skill)
+		if err := w.registry.Register(skill); err != nil {
+			metrics.GlobalLearningSkillRegisterFailuresTotal.Add(1)
+			return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill: registry.Register 失败", err)
+		}
 	}
 	return nil
 }
