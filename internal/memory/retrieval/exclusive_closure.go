@@ -74,7 +74,9 @@ func (w *ExclusiveWriter) supersedeSimilarPreferences(ctx context.Context, newNa
 	if err != nil {
 		// 候选列表读取失败与"未发现近似碰撞"在语义上等价（均不改变任何已有信念），
 		// 非本次 L1 定级范围（GR-5-002 只点名 supersedeAndCascade 的写入失败），维持原行为。
-		return nil
+		// 阶段02 把本函数签名改为返回 error 后触发 nilerr 检测（"检查了 err 但分支返回
+		// nil"），此处是刻意设计而非疏漏，显式 nolint。
+		return nil //nolint:nilerr
 	}
 	for _, act := range actives {
 		if act.Name == newName {

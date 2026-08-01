@@ -99,21 +99,29 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.T
 			if em.indexer != nil {
 				em.indexer.Index(gctx, ev)
 			}
-			// SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅降级到 Tier0 BM25 路径。
-			// L2：语义正确（不阻断）但此前无可观测性——索引持续丢失是渐进性检索质量
-			// 退化，不是一次性事件，Debug 级不够，必须 Warn + counter。
-			if em.cognitive != nil {
-				payload := string(ev.Payload)
-				if payload != "" {
-					if err := em.cognitive.FTSIndex(ev.ID, payload); err != nil {
-						slog.WarnContext(gctx, "memory/episodic_mem: FTS 索引写入失败，降级至 Tier0 BM25 检索", "event_id", ev.ID, "err", err)
-						metrics.GlobalMemoryFTSIndexFailuresTotal.Add(1)
-					}
-				}
-			}
+			em.ftsIndexAsync(gctx, ev)
 		})
 	}
 	return nil
+}
+
+// ftsIndexAsync 执行 SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅
+// 降级到 Tier0 BM25 路径。从 Append 的异步闭包中抽出以降低嵌套深度
+// （golangci-lint nestif 阈值），语义与原内联逻辑完全一致。
+// L2：语义正确（不阻断）但此前无可观测性——索引持续丢失是渐进性检索质量
+// 退化，不是一次性事件，Debug 级不够，必须 Warn + counter。
+func (em *EpisodicMem) ftsIndexAsync(gctx context.Context, ev types.Event) {
+	if em.cognitive == nil {
+		return
+	}
+	payload := string(ev.Payload)
+	if payload == "" {
+		return
+	}
+	if err := em.cognitive.FTSIndex(ev.ID, payload); err != nil {
+		slog.WarnContext(gctx, "memory/episodic_mem: FTS 索引写入失败，降级至 Tier0 BM25 检索", "event_id", ev.ID, "err", err)
+		metrics.GlobalMemoryFTSIndexFailuresTotal.Add(1)
+	}
 }
 
 func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]types.ScoredEvent, error) { //nolint:gocyclo

@@ -20,13 +20,15 @@ func (m *gapFillMockProvider) Infer(ctx context.Context, messages []types.Messag
 func (m *gapFillMockProvider) StreamInfer(ctx context.Context, messages []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
 	return nil, nil
 }
-func (m *gapFillMockProvider) Capabilities() types.ProviderCapabilities { return types.ProviderCapabilities{} }
-func (m *gapFillMockProvider) Tokenizer() protocol.TokenizerAdapter     { return nil }
-func (m *gapFillMockProvider) ModelID() string                         { return "mock" }
-func (m *gapFillMockProvider) MaxConcurrency() int                     { return 1 }
-func (m *gapFillMockProvider) SupportsModel(model string) bool         { return true }
-func (m *gapFillMockProvider) ID() string                              { return "mock" }
-func (m *gapFillMockProvider) Close() error                            { return nil }
+func (m *gapFillMockProvider) Capabilities() types.ProviderCapabilities {
+	return types.ProviderCapabilities{}
+}
+func (m *gapFillMockProvider) Tokenizer() protocol.TokenizerAdapter { return nil }
+func (m *gapFillMockProvider) ModelID() string                      { return "mock" }
+func (m *gapFillMockProvider) MaxConcurrency() int                  { return 1 }
+func (m *gapFillMockProvider) SupportsModel(model string) bool      { return true }
+func (m *gapFillMockProvider) ID() string                           { return "mock" }
+func (m *gapFillMockProvider) Close() error                         { return nil }
 
 // alwaysFailToolRegistry 的 Register 总是失败，用于验证阶段02修复（GR-7-002）：
 // 合成技能注册失败必须向上返回错误，不得像修复前 `_ = w.registry.Register(skill)`
