@@ -72,7 +72,7 @@ func (d *PIIDetector) Detect(ctx context.Context, text string) ([]PIIMatch, erro
 // 从后往前替换保证前面的偏移量在本次迭代结束前始终有效。
 // 注意：替换操作在原始 string 字节层面进行，偏移来自正则匹配结果，天然是字节偏移，无需转换。
 func (d *PIIDetector) Redact(ctx context.Context, text string) (string, int, error) {
-	return d.RedactWithMode(ctx, text, "redact", nil, nil)
+	return d.RedactWithMode(ctx, text, "redact", "", nil, nil)
 }
 
 // RedactWithMode 将文本中所有 PII 进行脱敏。
@@ -80,7 +80,13 @@ func (d *PIIDetector) Redact(ctx context.Context, text string) (string, int, err
 // - "redact" (默认): 粗暴替换为 [REDACTED:<type>]
 // - "replace": 格式保留假数据替换（依赖 PIIDesensitizer）
 // - "tokenize": 会话级可逆令牌替换（依赖 PIITokenVault）
-func (d *PIIDetector) RedactWithMode(ctx context.Context, text string, mode string, desensitizer *PIIDesensitizer, vault *PIITokenVault) (string, int, error) {
+//
+// sessionID（阶段03 R-02 新增）：mode="replace" 时作为 PIIDesensitizer 的
+// partitionKey，隔离不同会话的假值映射并支持会话终态精确回收
+// （PIIDesensitizer.ReleasePartition）。调用方拿不到 SessionID 时传空串，
+// 会落入 PIIDesensitizer 的兜底 "global" 分区（仅受 LRU 兜底约束，无法被
+// ReleasePartition 精确回收）。
+func (d *PIIDetector) RedactWithMode(ctx context.Context, text string, mode string, sessionID string, desensitizer *PIIDesensitizer, vault *PIITokenVault) (string, int, error) {
 	matches, err := d.Detect(ctx, text)
 	if err != nil {
 		return text, 0, apperr.Wrap(apperr.CodeInternal, "PIIDetector.Redact", err)
@@ -100,7 +106,7 @@ func (d *PIIDetector) RedactWithMode(ctx context.Context, text string, mode stri
 		switch mode {
 		case "replace":
 			if desensitizer != nil {
-				replacement = desensitizer.Desensitize(m.Type, m.Value)
+				replacement = desensitizer.DesensitizeIn(sessionID, m.Type, m.Value)
 			} else {
 				replacement = "[REDACTED:" + m.Type + "]"
 			}

@@ -378,7 +378,7 @@ func (a *Agent) tokenizeMessagesForLLM(ctx context.Context, messages []types.Mes
 			continue
 		}
 		// RedactWithMode 会内部从 ctx 提取 CtxTaskIDKey 并调用 TokenizeForTask
-		tokenized, n, err := a.Security.PIIDetector.RedactWithMode(ctx, m.Content, "tokenize", nil, a.Security.TokenVault)
+		tokenized, n, err := a.Security.PIIDetector.RedactWithMode(ctx, m.Content, "tokenize", "", nil, a.Security.TokenVault)
 		if err != nil {
 			slog.Error("agent: PII tokenization failed, fail-closed", "err", err)
 			// 选择 fail-closed 策略：如果 PII 提取失败，截断流程，防止明文 PII 流入 LLM。

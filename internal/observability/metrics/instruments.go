@@ -79,6 +79,7 @@ var (
 	InstrKnowledgeGraphWriteFailuresTotal  metric.Int64Counter // label: op
 	InstrKnowledgeReadFailuresTotal        metric.Int64Counter // label: op（非 ErrNoRows 的真实读路径查询失败）
 	InstrToolOutcomeDecodeFailuresTotal    metric.Int64Counter // label: tool_category（经 ToolCategory() 归一化，非原始 tool_name）
+	InstrPIIMappingEvictionsTotal          metric.Int64Counter // 无 label（partitionKey 无界基数，不进维度，阶段03 R-02）
 
 	instrOnce sync.Once
 )
@@ -400,6 +401,11 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("工具 outcome JSON 解析失败次数 (label: tool_category)"),
 	)
 	ie.capture("polaris.tool.outcome_decode_failures_total", err)
+	InstrPIIMappingEvictionsTotal, err = meter.Int64Counter(
+		"polaris.pii.mapping_evictions_total",
+		metric.WithDescription("PIIDesensitizer 分区内映射 LRU 淘汰次数（无 label，阶段03 R-02）"),
+	)
+	ie.capture("polaris.pii.mapping_evictions_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter) {
@@ -619,5 +625,13 @@ func RecordKnowledgeReadFailure(ctx context.Context, op string) {
 func RecordToolOutcomeDecodeFailure(ctx context.Context, toolName string) {
 	if InstrToolOutcomeDecodeFailuresTotal != nil {
 		InstrToolOutcomeDecodeFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("tool_category", ToolCategory(toolName))))
+	}
+}
+
+// RecordPIIMappingEviction 记录一次 PIIDesensitizer 分区内映射 LRU 淘汰。
+// 不带 label（分区键=SessionID 通常无界基数，禁止进指标维度，阶段03 R-02）。
+func RecordPIIMappingEviction() {
+	if InstrPIIMappingEvictionsTotal != nil {
+		InstrPIIMappingEvictionsTotal.Add(context.Background(), 1)
 	}
 }

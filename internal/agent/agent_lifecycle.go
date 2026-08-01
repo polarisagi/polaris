@@ -299,6 +299,14 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 	if a.Security.TokenVault != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
 		a.Security.TokenVault.ClearTask(a.sCtx.SessionID)
 	}
+	// 阶段03 R-02：会话终态确定性回收 PIIDesensitizer 的分区映射，而不是
+	// 依赖其内部 LRU 兜底——LRU 只防 OOM，不代表"这个会话已经结束、映射
+	// 不再需要"；不精确回收会导致长期运行的进程里，早已结束的会话映射
+	// 仍占着分区 LRU 名额，挤占仍在进行的会话（见 pii_desensitizer.go 顶部
+	// 设计说明）。
+	if a.Security.PIIDesensitizer != nil && a.sCtx != nil && a.sCtx.SessionID != "" {
+		a.Security.PIIDesensitizer.ReleasePartition(a.sCtx.SessionID)
+	}
 
 	a.refinePersonaAsync(ctx, current)
 	a.archiveEpisodicAsync(ctx)

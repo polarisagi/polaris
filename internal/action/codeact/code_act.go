@@ -336,7 +336,7 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 	// 未脱敏的原始 out 继续写入 EventLog 审计并返回给调用方，是静默 fail-open。
 	// 脱敏本身失败说明无法保证输出不含明文 PII，必须整体拒绝而不是裸传原文。
 	if ca.detector != nil && len(out) > 0 {
-		redacted, _, err := ca.detector.RedactWithMode(ctx, string(out), "replace", ca.desensitizer, nil)
+		redacted, _, err := ca.detector.RedactWithMode(ctx, string(out), "replace", req.SessionID, ca.desensitizer, nil)
 		if err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "codeact: output PII desensitization failed, fail-closed", err)
 		}

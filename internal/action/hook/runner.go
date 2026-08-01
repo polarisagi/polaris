@@ -172,7 +172,7 @@ func (r *Runner) redactHookInput(ctx context.Context, input HookInput) ([]byte, 
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("hook: marshal input: %v", err), err)
 	}
-	redacted, n, err := r.piiDetector.RedactWithMode(ctx, string(raw), "replace", r.piiDesens, nil)
+	redacted, n, err := r.piiDetector.RedactWithMode(ctx, string(raw), "replace", input.SessionID, r.piiDesens, nil)
 	if err != nil {
 		// 脱敏失败按失败关闭处理：宁可拒绝，不裸传未脱敏内容（HE-Rule 2）。
 		return nil, apperr.Wrap(apperr.CodeInternal, "hook: PII redact failed", err)

@@ -884,6 +884,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// 注入 PII OpaqueToken 检测器与令牌库（M11 §5.1 语义闭环）
 	agent.InjectPIITokenizer(tb.PIIDetector, tb.PIITokenVault)
+	// 注入格式保留假数据脱敏器，供会话终态 ReleasePartition 精确回收分区映射
+	// （阶段03 R-02，见 agent_lifecycle.go handleTerminalState）。
+	agent.InjectPIIDesensitizer(tb.PIIDesensitizer)
 
 	// TopicAgentInterrupt handler：gateway 写入的中断请求路由到 Agent Kernel。
 	// 当前进程内单 kernel（agent-0）+ Pool 共存，Pool 内会话由 gateway 直连路径覆盖，
