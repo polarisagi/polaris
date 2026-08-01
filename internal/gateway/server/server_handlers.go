@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"github.com/google/uuid"
 
@@ -17,10 +18,17 @@ import (
 )
 
 // handleHealthz 提供基础的健康检查。
+// [阶段02-错误吞没整改 §2.2] degraded_metrics 暴露 OTel instrument 注册是否部分失败
+// （metrics.InstrumentsDegraded()）——注册失败不阻断启动（Tier-0 可用性优先），
+// 但必须可见，不能静默；始终返回 200，degraded 仅作观测信号，不代表服务不健康。
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	body := `{"status":"ok","degraded_metrics":false}`
+	if metrics.InstrumentsDegraded() {
+		body = `{"status":"ok","degraded_metrics":true}`
+	}
+	_, _ = w.Write([]byte(body))
 }
 
 // handleReadyz Kubernetes readiness probe 端点。

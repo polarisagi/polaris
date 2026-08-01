@@ -83,7 +83,13 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		)
 		meter := provider.Meter("github.com/polarisagi/polaris/internal/observability")
 
-		InitMetrics(meter)
+		// [阶段02-错误吞没整改] 全部 sync instrument 注册失败说明 meter provider
+		// 根本没起来，此时不再继续注册 gauge/callback，直接降级为 legacy handler
+		// （otelHandlerPtr 保持 nil，MetricsHandler 下次调用回退）。
+		if err := InitMetrics(meter); err != nil {
+			slog.Error("observability: OTel metrics initialization failed entirely, falling back to legacy handler", "err", err)
+			return
+		}
 
 		ema5sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema5s_tps")
 		ema30sGauge, _ := meter.Float64ObservableGauge("polaris.token_burn_rate.ema30s_tps")
