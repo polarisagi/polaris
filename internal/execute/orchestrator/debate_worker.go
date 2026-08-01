@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -145,7 +146,13 @@ func (w *DebateWorker) tryClaimAndResume(ctx context.Context, taskID string) {
 	var job DebateJobIntent
 	if err := json.Unmarshal(snap.Intent, &job); err != nil {
 		slog.Warn("debate worker: invalid intent JSON, failing task", "task_id", taskID, "err", err)
-		_ = w.bb.FailTask(ctx, taskID, debateWorkerAgentID, []byte("invalid debate intent: "+err.Error()))
+		// L2（脑裂关键）：FailTask 失败意味着任务既没成功也没被标失败，只能靠
+		// Reaper 的 expires_at 超时兜底捡回；必须 Error 级（非 Warn）+ counter，
+		// 因为这是"双写不一致"的前兆，运维需要立刻可见而非淹没在普通 Warn 里。
+		if ftErr := w.bb.FailTask(ctx, taskID, debateWorkerAgentID, []byte("invalid debate intent: "+err.Error())); ftErr != nil {
+			slog.ErrorContext(ctx, "debate worker: FailTask failed after invalid intent, task stuck until reaper timeout", "task_id", taskID, "agent_id", debateWorkerAgentID, "err", ftErr)
+			metrics.GlobalBlackboardFailTaskErrorsTotal.Add(1)
+		}
 		return
 	}
 	if job.MaxRounds <= 0 {
@@ -168,7 +175,11 @@ func (w *DebateWorker) tryClaimAndResume(ctx context.Context, taskID string) {
 		}
 		// 真实错误，标记失败
 		slog.Warn("debate worker: Execute failed", "task_id", taskID, "err", err)
-		_ = w.bb.FailTask(ctx, taskID, debateWorkerAgentID, []byte(errMsg))
+		// L2（脑裂关键）：同上，FailTask 失败必须 Error 级 + counter。
+		if ftErr := w.bb.FailTask(ctx, taskID, debateWorkerAgentID, []byte(errMsg)); ftErr != nil {
+			slog.ErrorContext(ctx, "debate worker: FailTask failed after Execute error, task stuck until reaper timeout", "task_id", taskID, "agent_id", debateWorkerAgentID, "err", ftErr)
+			metrics.GlobalBlackboardFailTaskErrorsTotal.Add(1)
+		}
 		return
 	}
 
