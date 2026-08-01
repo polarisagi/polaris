@@ -6,12 +6,14 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/memory/util"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -58,8 +60,12 @@ func (sm *SemanticMem) ListActiveEntities(ctx context.Context, entityType string
 			continue
 		}
 		ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+		// L3：反序列化失败时 Properties 保持零值继续返回，下游按"无扩展属性"处理。
 		if len(propertiesJSON) > 0 {
-			_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+			if err := json.Unmarshal(propertiesJSON, &ent.Properties); err != nil {
+				slog.Warn("memory/semantic_mem: properties 反序列化失败，实体属性按空处理", "entity_id", ent.DBID, "err", err)
+				metrics.RecordMemoryJSONDecodeFailure(ctx, "semantic_entities.properties")
+			}
 		}
 		result = append(result, ent)
 	}
@@ -173,14 +179,25 @@ func (sm *SemanticMem) GetUserProfile(ctx context.Context, profileKey string) (*
 		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.GetUserProfile", err)
 	}
+	// L3：三个字段各自独立反序列化，任一失败仅令该字段保持零值（nil），不影响
+	// profile_key/synthesis_count 等核心字段，画像合成侧按"该维度缺失"处理。
 	if len(stableJSON) > 0 {
-		_ = json.Unmarshal(stableJSON, &p.StableFacts)
+		if err := json.Unmarshal(stableJSON, &p.StableFacts); err != nil {
+			slog.Warn("memory/semantic_mem: user_profile.stable_facts 反序列化失败", "profile_key", profileKey, "err", err)
+			metrics.RecordMemoryJSONDecodeFailure(ctx, "user_profile.stable_facts")
+		}
 	}
 	if len(recentJSON) > 0 {
-		_ = json.Unmarshal(recentJSON, &p.RecentActivity)
+		if err := json.Unmarshal(recentJSON, &p.RecentActivity); err != nil {
+			slog.Warn("memory/semantic_mem: user_profile.recent_activity 反序列化失败", "profile_key", profileKey, "err", err)
+			metrics.RecordMemoryJSONDecodeFailure(ctx, "user_profile.recent_activity")
+		}
 	}
 	if len(behavioralJSON) > 0 {
-		_ = json.Unmarshal(behavioralJSON, &p.BehavioralPatterns)
+		if err := json.Unmarshal(behavioralJSON, &p.BehavioralPatterns); err != nil {
+			slog.Warn("memory/semantic_mem: user_profile.behavioral_patterns 反序列化失败", "profile_key", profileKey, "err", err)
+			metrics.RecordMemoryJSONDecodeFailure(ctx, "user_profile.behavioral_patterns")
+		}
 	}
 	return &p, nil
 }
@@ -269,8 +286,12 @@ func (sm *SemanticMem) SearchEntities(ctx context.Context, query string, limit i
 			return nil, apperr.Wrap(apperr.CodeInternal, "SemanticMem.SearchEntities", err)
 		}
 		ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+		// L3：反序列化失败时 Properties 保持零值继续返回，下游按"无扩展属性"处理。
 		if len(propertiesJSON) > 0 {
-			_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+			if err := json.Unmarshal(propertiesJSON, &ent.Properties); err != nil {
+				slog.Warn("memory/semantic_mem: properties 反序列化失败，实体属性按空处理", "entity_id", ent.DBID, "err", err)
+				metrics.RecordMemoryJSONDecodeFailure(ctx, "semantic_entities.properties")
+			}
 		}
 		if len(embeddingBytes) > 0 {
 			ent.Embedding = bytesToFloat32s(embeddingBytes)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -222,7 +223,15 @@ func CompactWorkingMemory(ctx context.Context, cw *ContextWindowImpl, em *Episod
 				TaskID:  "compact",
 				Payload: []byte(m.Content),
 			}
-			_ = em.Append(ctx, ev, types.TaintNone)
+			// L2：驱逐事件归档失败影响审计链重建（哪些消息被压缩掉了），但不
+			// 影响 CompactWorkingMemory 主流程的正确性（消息已从 ContextWindow
+			// 驱逐是既成事实）。CompactWorkingMemory 无 session_id 入参（仅持有
+			// ContextWindowImpl/EpisodicMem），可定位键退化为 event_id + role。
+			if err := em.Append(ctx, ev, types.TaintNone); err != nil {
+				slog.WarnContext(ctx, "memory/working_mem: 驱逐事件归档失败，审计链可能出现缺口",
+					"event_id", ev.ID, "role", m.Role, "err", err)
+				metrics.GlobalMemoryEvictEventLostTotal.Add(1)
+			}
 		}
 	}
 	return nil

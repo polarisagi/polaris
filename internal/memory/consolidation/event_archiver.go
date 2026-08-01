@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -79,7 +80,12 @@ func (ea *EventArchiver) Archive(ctx context.Context) error {
 		return apperr.Wrap(apperr.CodeInternal, "EventArchiver.Archive: attach cold db", err)
 	}
 	defer func() {
-		_, _ = ea.db.ExecContext(context.Background(), "DETACH DATABASE cold_archive")
+		// L2：defer 内尽力而为，DETACH 失败不影响本次归档已完成的数据迁移，
+		// 但会累积连接句柄（cold_archive 保持 ATTACH 状态），需要计数以便观测。
+		if _, err := ea.db.ExecContext(context.Background(), "DETACH DATABASE cold_archive"); err != nil {
+			slog.Warn("memory/event_archiver: DETACH DATABASE 失败，连接句柄可能累积", "err", err)
+			metrics.GlobalMemoryColdArchiveDetachFailuresTotal.Add(1)
+		}
 	}()
 
 	// 2. Create table in cold DB (mirroring the main events table)

@@ -50,6 +50,9 @@ var (
 	GlobalMemoryEvictEventLostTotal atomic.Int64
 	// GlobalMemoryFTSIndexFailuresTotal 情景记忆 FTS 索引写入失败累计次数（持续性能退化）。
 	GlobalMemoryFTSIndexFailuresTotal atomic.Int64
+	// GlobalMemoryColdArchiveDetachFailuresTotal EventArchiver DETACH DATABASE 失败累计次数
+	// （defer 内尽力而为，失败会累积连接句柄，值得单独观测）。
+	GlobalMemoryColdArchiveDetachFailuresTotal atomic.Int64
 	// GlobalBlackboardFailTaskErrorsTotal DebateWorker.FailTask 失败累计次数（任务卡在既非成功也非失败态，依赖 Reaper 兜底）。
 	GlobalBlackboardFailTaskErrorsTotal atomic.Int64
 	// GlobalLearningCursorErrorsTotal 自进化引擎游标扫描失败累计次数（会导致从错误位置重放）。

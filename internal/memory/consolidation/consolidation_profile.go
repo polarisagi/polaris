@@ -11,6 +11,11 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// ─── Stage 3.5 ───────────────────────────────────────────────────────────────
+// GR-5-006 复核修复：本节标题此前遗留在 consolidation_skills.go 文件末尾（文件
+// 拆分时忘记随代码一起搬移），孤立指向一个空章节。Stage 3.5 的实际代码
+// （synthesizeUserProfile）一直都在本文件，现将标题归位到其对应代码上方。
+
 // synthesizeUserProfile 从 Episodic 事件合成用户画像（L3 Persona）。
 //
 // 触发策略: events ≥ 10 且距上次合成 > 50 事件（由 LastEventTS 间接判断）。

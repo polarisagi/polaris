@@ -13,6 +13,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// ─── Stage 3 ─────────────────────────────────────────────────────────────────
+// GR-5-006 复核修复：本节标题此前遗留在 consolidation_extract.go 文件末尾（当年
+// 文件拆分时忘记随代码一起搬移），孤立指向一个空章节。Stage 3 的实际代码
+// （summarizeSession/buildSummary/summaryTaintLevel）一直都在本文件，现将标题
+// 归位到其对应代码上方。
+
 // summarizeSession 为会话生成 3-5 句摘要，写入 store.SemanticMemory 作为 compaction 文档。
 func (p *ConsolidationPipeline) summarizeSession(
 	ctx context.Context,
@@ -128,5 +134,3 @@ func (p *ConsolidationPipeline) buildSummary(
 	}
 	return fmt.Sprintf("Session consolidated: %d events. Types: %s.", len(events), strings.Join(parts, ", ")), nil
 }
-
-// ─── Stage 4 ─────────────────────────────────────────────────────────────────
