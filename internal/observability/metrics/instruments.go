@@ -80,6 +80,7 @@ var (
 	InstrKnowledgeReadFailuresTotal        metric.Int64Counter // label: op（非 ErrNoRows 的真实读路径查询失败）
 	InstrToolOutcomeDecodeFailuresTotal    metric.Int64Counter // label: tool_category（经 ToolCategory() 归一化，非原始 tool_name）
 	InstrPIIMappingEvictionsTotal          metric.Int64Counter // 无 label（partitionKey 无界基数，不进维度，阶段03 R-02）
+	InstrSandboxDowngradeTotal             metric.Int64Counter // label: from, to, reason（均为固定枚举值，有界基数，阶段03 R-05）
 
 	instrOnce sync.Once
 )
@@ -406,6 +407,11 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("PIIDesensitizer 分区内映射 LRU 淘汰次数（无 label，阶段03 R-02）"),
 	)
 	ie.capture("polaris.pii.mapping_evictions_total", err)
+	InstrSandboxDowngradeTotal, err = meter.Int64Counter(
+		"polaris.sandbox.downgrade_total",
+		metric.WithDescription("沙箱隔离层级降级次数 (label: from, to, reason，均为固定枚举值)"),
+	)
+	ie.capture("polaris.sandbox.downgrade_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter) {
@@ -633,5 +639,18 @@ func RecordToolOutcomeDecodeFailure(ctx context.Context, toolName string) {
 func RecordPIIMappingEviction() {
 	if InstrPIIMappingEvictionsTotal != nil {
 		InstrPIIMappingEvictionsTotal.Add(context.Background(), 1)
+	}
+}
+
+// RecordSandboxDowngrade 记录一次沙箱隔离层级降级（阶段03 R-05）。
+// from/to/reason 必须是调用方硬编码的固定枚举字符串（如 "wasm"/"inprocess"/
+// "trusted_source_opt_in"），禁止传入任何用户/工具可控值（CardinalityGuard）。
+func RecordSandboxDowngrade(ctx context.Context, from, to, reason string) {
+	if InstrSandboxDowngradeTotal != nil {
+		InstrSandboxDowngradeTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("from", from),
+			attribute.String("to", to),
+			attribute.String("reason", reason),
+		))
 	}
 }

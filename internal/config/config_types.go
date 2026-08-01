@@ -248,6 +248,13 @@ type SandboxConfig struct {
 	AllowedPaths []string `toml:"allowed_paths"`
 	// Remote 远端云沙箱（Sbx-L4）配置，见 RemoteSandboxConfig。
 	Remote RemoteSandboxConfig `toml:"remote"`
+	// AllowTrustedInProcessFallback 可信来源（TrustOfficial 及以上）在
+	// Wasm/Container/Remote 均不可用时是否允许降级到 InProcess 执行。
+	// 默认 false（fail-closed）：可信 ≠ 稳定，可信来源的代码仍可能有死循环/
+	// 内存爆炸/panic，InProcess 执行会直接拖垮宿主进程——这是稳定性维度的
+	// 风险，与"可信"这一安全维度的判断是两回事，不应被静默混为一谈
+	// （阶段03 R-05）。仅开发环境或明确接受该风险时置 true。
+	AllowTrustedInProcessFallback bool `toml:"allow_trusted_inprocess_fallback"`
 }
 
 // RemoteSandboxConfig 远端云沙箱（Sbx-L4）配置。可选能力，非硬依赖（[Tier-0-Limit]）。

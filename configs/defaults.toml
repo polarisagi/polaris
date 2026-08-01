@@ -205,6 +205,12 @@ bwrap_path = ""
 # 示例（取消注释并按需修改）：
 # allowed_paths = ["/home/user/projects", "/tmp"]
 allowed_paths = []
+# 可信来源（TrustOfficial 及以上）在 Wasm/Container/Remote 均不可用时，是否
+# 允许降级到 InProcess 执行。默认 false（fail-closed）：可信 ≠ 稳定，可信来源
+# 的代码仍可能死循环/内存爆炸/panic，InProcess 执行会直接拖垮宿主进程——这是
+# 稳定性维度的风险，与"可信"这一安全维度判断是两回事（阶段03 R-05）。
+# 仅开发环境未编译 Wasm 引擎、或明确接受该风险时置 true。
+allow_trusted_inprocess_fallback = false
 
 [sandbox.remote]
 # 远端云沙箱（Sbx-L4）：Tier-0 本地无法启动 L3 容器沙箱或需要更高计算力/隔离度时
