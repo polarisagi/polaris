@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/memory/util"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -98,11 +99,16 @@ func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.T
 			if em.indexer != nil {
 				em.indexer.Index(gctx, ev)
 			}
-			// SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅降级到 Tier0 BM25 路径
+			// SurrealDB FTS 同步索引（Tier1+）；失败不阻断写入，仅降级到 Tier0 BM25 路径。
+			// L2：语义正确（不阻断）但此前无可观测性——索引持续丢失是渐进性检索质量
+			// 退化，不是一次性事件，Debug 级不够，必须 Warn + counter。
 			if em.cognitive != nil {
 				payload := string(ev.Payload)
 				if payload != "" {
-					_ = em.cognitive.FTSIndex(ev.ID, payload)
+					if err := em.cognitive.FTSIndex(ev.ID, payload); err != nil {
+						slog.WarnContext(gctx, "memory/episodic_mem: FTS 索引写入失败，降级至 Tier0 BM25 检索", "event_id", ev.ID, "err", err)
+						metrics.GlobalMemoryFTSIndexFailuresTotal.Add(1)
+					}
 				}
 			}
 		})

@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strconv"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/pb"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -307,8 +309,13 @@ func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (
 	}
 
 	ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+	// L3：反序列化失败时 ent.Properties 保持零值（nil map）继续返回，检索/展示侧
+	// 按"该实体无扩展属性"处理，不影响实体本身的存在性与核心字段正确性。
 	if len(propertiesJSON) > 0 {
-		_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+		if err := json.Unmarshal(propertiesJSON, &ent.Properties); err != nil {
+			slog.Warn("memory/semantic_mem: properties 反序列化失败，实体属性按空处理", "entity_id", ent.DBID, "err", err)
+			metrics.RecordMemoryJSONDecodeFailure(ctx, "semantic_entities.properties")
+		}
 	}
 	if len(embeddingBytes) > 0 {
 		ent.Embedding = bytesToFloat32s(embeddingBytes)
@@ -350,8 +357,13 @@ func (sm *SemanticMem) GetEntityByID(ctx context.Context, id int64) (*types.Enti
 	}
 
 	ent.ID = "entity:" + strconv.FormatInt(ent.DBID, 10)
+	// L3：反序列化失败时 ent.Properties 保持零值（nil map）继续返回，检索/展示侧
+	// 按"该实体无扩展属性"处理，不影响实体本身的存在性与核心字段正确性。
 	if len(propertiesJSON) > 0 {
-		_ = json.Unmarshal(propertiesJSON, &ent.Properties)
+		if err := json.Unmarshal(propertiesJSON, &ent.Properties); err != nil {
+			slog.Warn("memory/semantic_mem: properties 反序列化失败，实体属性按空处理", "entity_id", ent.DBID, "err", err)
+			metrics.RecordMemoryJSONDecodeFailure(ctx, "semantic_entities.properties")
+		}
 	}
 	if len(embeddingBytes) > 0 {
 		ent.Embedding = bytesToFloat32s(embeddingBytes)

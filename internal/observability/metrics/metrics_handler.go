@@ -146,6 +146,10 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			"polaris.memory.fts_index_failures_total",
 			metric.WithDescription("情景记忆 FTS 索引写入失败累计次数"),
 		)
+		memoryColdArchiveDetachFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.memory.cold_archive_detach_failures_total",
+			metric.WithDescription("EventArchiver DETACH DATABASE 失败累计次数"),
+		)
 		blackboardFailTaskErrorsGauge, _ := meter.Float64ObservableGauge(
 			"polaris.blackboard.fail_task_errors_total",
 			metric.WithDescription("DebateWorker.FailTask 失败累计次数"),
@@ -201,6 +205,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(memorySupersedeFailuresGauge, float64(GlobalMemorySupersedeFailuresTotal.Load()))
 			o.ObserveFloat64(memoryEvictEventLostGauge, float64(GlobalMemoryEvictEventLostTotal.Load()))
 			o.ObserveFloat64(memoryFTSIndexFailuresGauge, float64(GlobalMemoryFTSIndexFailuresTotal.Load()))
+			o.ObserveFloat64(memoryColdArchiveDetachFailuresGauge, float64(GlobalMemoryColdArchiveDetachFailuresTotal.Load()))
 			o.ObserveFloat64(blackboardFailTaskErrorsGauge, float64(GlobalBlackboardFailTaskErrorsTotal.Load()))
 			o.ObserveFloat64(learningCursorErrorsGauge, float64(GlobalLearningCursorErrorsTotal.Load()))
 			o.ObserveFloat64(learningSkillRegisterFailuresGauge, float64(GlobalLearningSkillRegisterFailuresTotal.Load()))
@@ -209,7 +214,7 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 
 			return nil
 		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
-			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge)
+			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, memoryColdArchiveDetachFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge)
 
 		h := promhttp.Handler()
 		otelHandlerPtr.Store(&h)
@@ -316,6 +321,10 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_memory_fts_index_failures_total Episodic memory FTS index write failures\n")
 		fmt.Fprintf(w, "# TYPE polaris_memory_fts_index_failures_total counter\n")
 		fmt.Fprintf(w, "polaris_memory_fts_index_failures_total %d\n", GlobalMemoryFTSIndexFailuresTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_memory_cold_archive_detach_failures_total EventArchiver DETACH DATABASE failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_memory_cold_archive_detach_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_memory_cold_archive_detach_failures_total %d\n", GlobalMemoryColdArchiveDetachFailuresTotal.Load())
 
 		fmt.Fprintf(w, "# HELP polaris_blackboard_fail_task_errors_total DebateWorker.FailTask failures\n")
 		fmt.Fprintf(w, "# TYPE polaris_blackboard_fail_task_errors_total counter\n")

@@ -296,5 +296,3 @@ func (p *ConsolidationPipeline) upsertSemantic(
 	}
 	return nil
 }
-
-// ─── Stage 3 ─────────────────────────────────────────────────────────────────

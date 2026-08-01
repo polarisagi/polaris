@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -144,8 +146,13 @@ func (rm *SQLReflectionMem) ListReflections( //nolint:gocyclo
 			return nil, apperr.Wrap(apperr.CodeInternal, "sql_reflection_mem: scan", err)
 		}
 		e.CreatedAt = time.Unix(createdAt, 0)
+		// L3：meta_json 反序列化失败时 e.Meta 保持 nil，下方紧接着会兜底为空 map，
+		// 检索侧按"无扩展元数据"处理，不影响 ReflectionEntry 核心字段的正确性。
 		if metaStr != "" && metaStr != "{}" {
-			_ = json.Unmarshal([]byte(metaStr), &e.Meta)
+			if err := json.Unmarshal([]byte(metaStr), &e.Meta); err != nil {
+				slog.Warn("memory/sql_reflection_mem: meta_json 反序列化失败，按空 meta 处理", "reflection_id", e.ID, "err", err)
+				metrics.RecordMemoryJSONDecodeFailure(ctx, "reflection_memory.meta_json")
+			}
 		}
 		if e.Meta == nil {
 			e.Meta = make(map[string]any)

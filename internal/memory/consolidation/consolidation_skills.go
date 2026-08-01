@@ -10,6 +10,11 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+// ─── Stage 4 ─────────────────────────────────────────────────────────────────
+// GR-5-006 复核修复：本节标题此前遗留在 consolidation_summary.go 文件末尾（文件
+// 拆分时忘记随代码一起搬移），孤立指向一个空章节。Stage 4 的实际代码
+// （updateSkills）一直都在本文件，现将标题归位到其对应代码上方。
+
 // updateSkills 从成功的工具调用事件中提炼并注册技能（Logic Collapse）。
 // 触发条件: 同一 tool_name 在 session 中成功调用 ≥ 3 次。
 func (p *ConsolidationPipeline) updateSkills(
@@ -83,5 +88,3 @@ func (p *ConsolidationPipeline) updateSkills(
 	}
 	return nil
 }
-
-// ─── Stage 3.5 ───────────────────────────────────────────────────────────────

@@ -231,3 +231,50 @@ func TestConsolidation_OOMRetry(t *testing.T) {
 		t.Errorf("expected session_id test-session, got %v", payload["session_id"])
 	}
 }
+
+// failingOutboxWriter 的 Write 总是失败，用于模拟阶段02 §2.3 GR-5-001 场景：
+// OOM 重试消息投递本身也失败。
+type failingOutboxWriter struct{}
+
+func (f *failingOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	return apperr.New(apperr.CodeInternal, "simulated outbox write failure")
+}
+
+// TestConsolidation_OOMRetry_WriteFailure_S02 验证阶段02修复：OOM 触发的重试消息
+// 投递本身也失败时，Run() 必须向上返回错误（而不是吞没），否则这次 OOM 之后
+// 该 session 的巩固状态机会彻底停摆且无人知晓——连"已安排重试"的假象都没有。
+// 回归锚点：修复前 consolidation.go:182 `_ = p.outbox.Write(...)` 吞没该错误，
+// Run() 仍只返回原始 ResourceExhausted，调用方无法区分"已排上重试"与"重试也丢了"。
+func TestConsolidation_OOMRetry_WriteFailure_S02(t *testing.T) {
+	mem, db, st := setupTestMem(t)
+	defer st.Close()
+	ctx := context.Background()
+
+	for i := 0; i < 50; i++ {
+		_ = mem.Episodic().Append(ctx, types.Event{
+			TaskID: "test-session-2",
+			Type:   "user",
+		}, types.TaintNone)
+	}
+
+	outbox := &failingOutboxWriter{}
+	summarizer := &oomSummarizer{}
+
+	pipeline := consolidation.NewConsolidationPipelineFull(
+		mem.Episodic(),
+		mem.Semantic(),
+		nil,
+		summarizer,
+		nil,
+		nil,
+		db,
+	).WithOutbox(outbox)
+
+	err := pipeline.Run(ctx, "test-session-2")
+	if err == nil {
+		t.Fatal("expected error when outbox retry write also fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "simulated outbox write failure") {
+		t.Errorf("expected error to surface the retry-write failure, got: %v", err)
+	}
+}

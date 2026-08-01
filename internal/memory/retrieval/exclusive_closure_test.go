@@ -135,3 +135,46 @@ func TestExclusiveWriter_JaccardCollision_BelowThreshold_NoCascade(t *testing.T)
 		t.Errorf("entity 21 (downstream of unrelated entity): expected to remain active, got %q", got)
 	}
 }
+
+// TestExclusiveWriter_MarkSupersededFailure_ReturnsError_S02 验证阶段02修复：
+// MarkEntitySuperseded 写入失败必须向上传播中止 UpsertFactExclusive，不得静默
+// 吞没继续写入新事实。回归锚点：修复前 supersedeAndCascade 内
+// `_ = w.semantic.MarkEntitySuperseded(...)` 吞没错误，旧信念标记失败但新事实
+// 仍会被 UpsertFact 写入，导致同名实体出现两条"active"记录（事实层数据损坏，
+// GR-5-002 P0 语义）。
+func TestExclusiveWriter_MarkSupersededFailure_ReturnsError_S02(t *testing.T) {
+	ms := testutil.NewMockStore()
+	semantic := memstore.NewSemanticMem(ms, &testutil.MockIntentSubmitter{})
+	ctx := context.Background()
+
+	insertEntityFull(t, ms, 30, "Concept", "seed")
+
+	// 仅在标记为 superseded 时触发失败，其余写入不受影响。
+	if _, err := ms.DB().Exec(`
+		CREATE TRIGGER reject_supersede BEFORE UPDATE OF status ON semantic_entities
+		WHEN NEW.status = 'superseded'
+		BEGIN SELECT RAISE(ABORT, 'simulated supersede write failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	writer := retrieval.NewExclusiveWriter(semantic, nil, ms.DB())
+	newFact := &types.Entity{Type: "Concept", Name: "seed", Confidence: 0.9}
+
+	err := writer.UpsertFactExclusive(ctx, newFact, types.TaintNone)
+	if err == nil {
+		t.Fatal("expected error when MarkEntitySuperseded write fails, got nil")
+	}
+
+	// 新事实不应被写入（UpsertFact 从未被调用到），旧实体也仍应停留在 active
+	// （UPDATE 被触发器回滚），避免出现"两条 active 记录"的数据损坏场景。
+	if got := entityStatusFull(t, ms, 30); got != "active" {
+		t.Errorf("entity 30: expected to remain active (update rejected by trigger), got %q", got)
+	}
+	var count int
+	if err := ms.DB().QueryRow(`SELECT COUNT(*) FROM semantic_entities WHERE entity_type='Concept' AND name='seed' AND status='active'`).Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 active 'seed' entity (no duplicate written), got %d", count)
+	}
+}
