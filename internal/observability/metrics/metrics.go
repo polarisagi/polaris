@@ -23,6 +23,11 @@ var (
 	// GlobalCedarDegradedTotal tracks the number of times Cedar FFI evaluation failed.
 	GlobalCedarDegradedTotal atomic.Int64
 
+	// GlobalCedarFFILeaksTotal 累计 Cedar FFI goroutine 泄漏数（只增不减）。
+	// 阶段03 R-01：policy.Gate 的 KillSwitch 判定改用滑动窗口计数，本变量仅
+	// 用于长期趋势观测（polaris_cedar_ffi_leaks_total），不参与 KillSwitch 判定。
+	GlobalCedarFFILeaksTotal atomic.Int64
+
 	// GlobalOutboxDeadLetterTotal tracks the number of outbox records marked as dead.
 	GlobalOutboxDeadLetterTotal atomic.Int64
 
