@@ -164,7 +164,11 @@ func (s *ChatPersistenceService) UpdateSessionTitle(ctx context.Context, session
 }
 
 func (s *ChatPersistenceService) TouchSession(ctx context.Context, sessionID string) error {
-	tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// [阶段02-错误吞没整改 §2.8] L1（上下文断链）：此前用 context.Background()
+	// 而非入参 ctx 派生超时，导致调用方传入的取消信号/deadline/trace 完全丢失
+	// （例如上游请求被显式取消后，本次落库仍会跑满 5s 才超时）。改为以 ctx 为
+	// 父级派生，保留取消链路，同时仍设 5s 硬超时防止落库卡死拖垮请求处理。
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.ChatRepo.TouchSession(tctx, sessionID); err != nil {
 		slog.Warn("server: failed to touch session", "session", sessionID, "err", err)

@@ -17,6 +17,7 @@ import (
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 
 	"context"
+	"log/slog"
 	"sync/atomic"
 
 	"net/http"
@@ -84,6 +85,12 @@ type Server struct {
 	serverPlatform      string                // 接入平台标识，决定平台感知提示词（cli/webui/api/cron）
 	promptMgr           protocol.PromptFacade // 提示词管理器（接口）
 	baseSystemPromptTpl string                // sysTmpl 基础值，每轮请求重置 ic.SystemPromptTemplate 防止 ambient 累积
+
+	// systemPromptDegraded [阶段02-错误吞没整改 §2.8] system_prompt_template
+	// 落库失败时置位：内存中已用新模板正常运行（baseSystemPromptTpl 不受影响），
+	// 但下次重启会重新读到残缺兜底版，需 /healthz 暴露供运维介入。不阻断启动
+	// （Tier-0 可用性优先）。
+	systemPromptDegraded atomic.Bool
 
 	// M9 激活的系统提示词（从 DB prompt_versions 表读取，Activate 回调热更新）
 	activatedSystemPrompt string // task_type='general' 的激活版本
@@ -393,7 +400,13 @@ func (s *Server) SetPromptManager(mgr protocol.PromptFacade) {
 		if sysTmpl == protocol.DefaultPolarisIdentityFallback {
 			sysTmpl = "你是 {{.AgentName}}，{{.AgentRole}}。\n当前运行模型：{{.ModelID}}。"
 		}
-		_ = s.systemRepo.UpsertPreference(context.Background(), "system_prompt_template", sysTmpl)
+		// [阶段02-错误吞没整改 §2.8] L2→Error：落库失败不阻断启动（Tier-0 可用性
+		// 优先，本轮请求仍用内存中的正确模板），但系统会在残缺兜底版持久化状态
+		// 下"看起来正常"直到下次重启，必须 Error 级可见 + /healthz 可读的降级标记。
+		if err := s.systemRepo.UpsertPreference(context.Background(), "system_prompt_template", sysTmpl); err != nil {
+			slog.Error("server: system_prompt_template 持久化失败，重启后将回退到残缺兜底版", "err", err)
+			s.systemPromptDegraded.Store(true)
+		}
 	}
 	s.baseSystemPromptTpl = sysTmpl
 

@@ -181,7 +181,12 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 				slog.Error("server: saveMessage slash response", "session", sessionID, "err", err)
 			}
 		}
-		_ = s.PersistenceService.TouchSession(context.WithoutCancel(ctx), sessionID)
+		// [阶段02-错误吞没整改 §2.8] L2：TouchSession 失败仅影响 last_active_at
+		// 展示准确性，不影响本轮已完成的斜线命令响应，故不阻断返回，但需 Warn
+		// 带 session 定位键，避免长期静默漂移不可观测。
+		if err := s.PersistenceService.TouchSession(context.WithoutCancel(ctx), sessionID); err != nil {
+			slog.Warn("server: touch session failed (slash command path)", "session", sessionID, "err", err)
+		}
 		WriteSSE(w, flusher, "complete", map[string]any{"session_id": sessionID, "session_title": ""})
 		return
 	}
@@ -280,10 +285,17 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 			tw.WriteTurn("assistant", reply, inferLatencyMs, 0)
 		}
 	}
+	// [阶段02-错误吞没整改 §2.8] L2：标题/last_active_at 落库失败只影响会话列表
+	// 展示，不影响本轮已产出并落盘的 assistant 回复，故不阻断返回，但需 Warn
+	// 带 session 定位键。
 	if isFirstTurn {
-		_ = s.PersistenceService.UpdateSessionTitle(saveCtx, sessionID, req.Input)
+		if err := s.PersistenceService.UpdateSessionTitle(saveCtx, sessionID, req.Input); err != nil {
+			slog.Warn("server: update session title failed", "session", sessionID, "err", err)
+		}
 	}
-	_ = s.PersistenceService.TouchSession(saveCtx, sessionID)
+	if err := s.PersistenceService.TouchSession(saveCtx, sessionID); err != nil {
+		slog.Warn("server: touch session failed", "session", sessionID, "err", err)
+	}
 
 	slog.Info("server: turn complete",
 		"session", sessionID,

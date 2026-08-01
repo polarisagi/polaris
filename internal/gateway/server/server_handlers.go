@@ -21,14 +21,19 @@ import (
 // [阶段02-错误吞没整改 §2.2] degraded_metrics 暴露 OTel instrument 注册是否部分失败
 // （metrics.InstrumentsDegraded()）——注册失败不阻断启动（Tier-0 可用性优先），
 // 但必须可见，不能静默；始终返回 200，degraded 仅作观测信号，不代表服务不健康。
+// [阶段02-错误吞没整改 §2.8] degraded_system_prompt 暴露 system_prompt_template
+// 落库失败标记（server_core.go SetPromptManager），同样不阻断启动，仅作可见性。
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	body := `{"status":"ok","degraded_metrics":false}`
-	if metrics.InstrumentsDegraded() {
-		body = `{"status":"ok","degraded_metrics":true}`
+	body := map[string]any{
+		"status":                 "ok",
+		"degraded_metrics":       metrics.InstrumentsDegraded(),
+		"degraded_system_prompt": s.systemPromptDegraded.Load(),
 	}
-	_, _ = w.Write([]byte(body))
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		slog.Warn("server: healthz encode failed", "err", err)
+	}
 }
 
 // handleReadyz Kubernetes readiness probe 端点。
