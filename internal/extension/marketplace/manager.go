@@ -145,7 +145,9 @@ func (m *Manager) AuthorizeAction(ctx context.Context, principal string, action 
 func (m *Manager) InstallExtension(ctx context.Context, req protocol.ExtensionInstallRequest) error {
 	if !req.BypassAuth {
 		if err := m.Authorize(ctx, req); err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "Manager.InstallExtension", err)
+			// S-06：保留 PolicyGate 的原始语义 Code（如 CodeForbidden），避免
+			// apperr.Wrap 以入参 Code 为准把 403 覆盖成 500。
+			return apperr.Wrap(apperr.CodeOf(err), "Manager.InstallExtension", err)
 		}
 	}
 

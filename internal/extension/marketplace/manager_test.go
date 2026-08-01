@@ -13,6 +13,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/lifecycle"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -304,5 +305,38 @@ func TestManager_UpdateInstance(t *testing.T) {
 	}
 	if errMsg.Valid {
 		t.Errorf("expected error_msg to be NULL, got '%s'", errMsg.String)
+	}
+}
+
+// TestManager_InstallExtension_PolicyGateDenied_PreservesForbidden 验证 S-06
+// 修复：PolicyGate 拒绝时 InstallExtension 必须保留 CodeForbidden 语义，网关侧
+// 405/403 不得因 apperr.Wrap(apperr.CodeInternal, ...) 覆盖内层 Code 而退化成 500。
+// 回归锚点：修复前 apperr.CodeOf(err) 恒为 CodeInternal，本用例必失败。
+func TestManager_InstallExtension_PolicyGateDenied_PreservesForbidden(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	pg := &mockPolicyGate{allowed: false, reason: "forbidden: test policy"}
+	pr := &mockPrefs{}
+	extRepo := repo.NewSQLiteExtensionRepository(db)
+	mgr := NewManager(extRepo, nil, pg, pr, nil, nil)
+
+	ctx := context.Background()
+	req := protocol.ExtensionInstallRequest{
+		ExtensionID: "ext_denied",
+		ExtType:     "mcp",
+		CatalogID:   "cat_denied",
+		Target:      "dummy",
+	}
+
+	err := mgr.InstallExtension(ctx, req)
+	if err == nil {
+		t.Fatal("expected error when PolicyGate denies installation, got nil")
+	}
+	if !apperr.IsCode(err, apperr.CodeForbidden) {
+		t.Errorf("expected CodeForbidden, got %v (err=%v)", apperr.CodeOf(err), err)
+	}
+	if status := apperr.HTTPStatus(apperr.CodeOf(err)); status != 403 {
+		t.Errorf("expected HTTP 403, got %d", status)
 	}
 }
