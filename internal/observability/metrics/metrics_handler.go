@@ -170,6 +170,10 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			"polaris.store.schema_migration_diag_write_failures_total",
 			metric.WithDescription("SchemaManager 迁移版本诊断字段写入失败累计次数"),
 		)
+		cronNextRunWriteFailuresGauge, _ := meter.Float64ObservableGauge(
+			"polaris.tool.cron_next_run_write_failures_total",
+			metric.WithDescription("cron_create 回填 next_run_at 失败累计次数"),
+		)
 
 		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
@@ -211,10 +215,11 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(learningSkillRegisterFailuresGauge, float64(GlobalLearningSkillRegisterFailuresTotal.Load()))
 			o.ObserveFloat64(gatewayPreferenceWriteFailuresGauge, float64(GlobalGatewayPreferenceWriteFailuresTotal.Load()))
 			o.ObserveFloat64(schemaMigrationDiagWriteFailuresGauge, float64(GlobalSchemaMigrationDiagWriteFailuresTotal.Load()))
+			o.ObserveFloat64(cronNextRunWriteFailuresGauge, float64(GlobalCronNextRunWriteFailuresTotal.Load()))
 
 			return nil
 		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
-			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, memoryColdArchiveDetachFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge)
+			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, memoryColdArchiveDetachFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge, cronNextRunWriteFailuresGauge)
 
 		h := promhttp.Handler()
 		otelHandlerPtr.Store(&h)
@@ -345,6 +350,10 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# HELP polaris_store_schema_migration_diag_write_failures_total SchemaManager migration_version diagnostic field write failures\n")
 		fmt.Fprintf(w, "# TYPE polaris_store_schema_migration_diag_write_failures_total counter\n")
 		fmt.Fprintf(w, "polaris_store_schema_migration_diag_write_failures_total %d\n", GlobalSchemaMigrationDiagWriteFailuresTotal.Load())
+
+		fmt.Fprintf(w, "# HELP polaris_tool_cron_next_run_write_failures_total cron_create next_run_at backfill failures\n")
+		fmt.Fprintf(w, "# TYPE polaris_tool_cron_next_run_write_failures_total counter\n")
+		fmt.Fprintf(w, "polaris_tool_cron_next_run_write_failures_total %d\n", GlobalCronNextRunWriteFailuresTotal.Load())
 	})
 }
 

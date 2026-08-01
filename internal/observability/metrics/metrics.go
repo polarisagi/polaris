@@ -61,6 +61,9 @@ var (
 	GlobalLearningSkillRegisterFailuresTotal atomic.Int64
 	// GlobalGatewayPreferenceWriteFailuresTotal Gateway 偏好/系统提示词模板落库失败累计次数。
 	GlobalGatewayPreferenceWriteFailuresTotal atomic.Int64
+	// GlobalCronNextRunWriteFailuresTotal cron_create 工具创建任务后回填 next_run_at
+	// 失败的累计次数（调度时间可能错乱，不影响任务本身已创建成功）。
+	GlobalCronNextRunWriteFailuresTotal atomic.Int64
 	// GlobalSchemaMigrationDiagWriteFailuresTotal SchemaManager.BeginMigration 写入
 	// migration_version 诊断字段失败累计次数（不影响 migration_status 主状态机正确性，
 	// 仅影响崩溃后人工排查时"上次卡在哪个版本"的可诊断性，定级 L2）。

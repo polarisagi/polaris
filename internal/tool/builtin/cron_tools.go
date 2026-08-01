@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -116,8 +118,14 @@ func MakeCronCreateFn(cronRepo protocol.CronRepository) sandbox.InProcessFn {
 			return nil, apperr.Wrap(apperr.CodeInternal, "cron_create: insert failed", err)
 		}
 
-		// Ensure next_run_at is populated if the repo does not support it in CreateCronJob
-		_ = cronRepo.UpdateLastRun(ctx, id, "", nextRunAt)
+		// Ensure next_run_at is populated if the repo does not support it in CreateCronJob.
+		// L2：next_run_at 回填失败不影响任务已创建成功（CreateCronJob 已提交），但
+		// 会让调度器按 CreateCronJob 里的初始值（1 分钟后）而非真实 cron 表达式触发，
+		// 属调度时间错乱，需要可观测。
+		if err := cronRepo.UpdateLastRun(ctx, id, "", nextRunAt); err != nil {
+			slog.Warn("tool/cron: next_run_at 回填失败，调度时间可能与 cron 表达式不一致", "job_id", id, "err", err)
+			metrics.GlobalCronNextRunWriteFailuresTotal.Add(1)
+		}
 
 		return json.Marshal(map[string]any{
 			"id":          id,

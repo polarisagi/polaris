@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
 
@@ -85,6 +86,49 @@ func TestCronCreate(t *testing.T) {
 	id, ok := res["id"].(string)
 	if !ok || id == "" {
 		t.Fatal("missing id in response")
+	}
+}
+
+// TestCronCreate_NextRunBackfillFailure_NonFatal_S02 验证阶段02修复：cron_create
+// 创建任务后回填 next_run_at 失败（UpdateLastRun）不应导致整个工具调用失败——
+// 任务本身已经通过 CreateCronJob 成功落库，只是调度时间可能与真实 cron 表达式
+// 不一致（该后果已在代码注释中说明），必须 Warn+counter 而非静默或阻断。
+func TestCronCreate_NextRunBackfillFailure_NonFatal_S02(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TRIGGER reject_next_run_update BEFORE UPDATE OF next_run_at ON cron_jobs
+		BEGIN SELECT RAISE(ABORT, 'simulated next_run_at backfill failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	fn := MakeCronCreateFn(repo.NewSQLiteCronRepository(db))
+	ctx := context.Background()
+
+	before := metrics.GlobalCronNextRunWriteFailuresTotal.Load()
+
+	out, err := fn(ctx, []byte(`{
+		"name": "test job 2",
+		"prompt": "do it",
+		"schedule": "0 9 * * 1-5",
+		"session_id": "session-456"
+	}`))
+	if err != nil {
+		t.Fatalf("cron_create should succeed even if next_run_at backfill fails: %v", err)
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("invalid json response: %v", err)
+	}
+	if id, ok := res["id"].(string); !ok || id == "" {
+		t.Fatal("missing id in response despite backfill failure")
+	}
+
+	after := metrics.GlobalCronNextRunWriteFailuresTotal.Load()
+	if after != before+1 {
+		t.Errorf("expected GlobalCronNextRunWriteFailuresTotal += 1, got before=%d after=%d", before, after)
 	}
 }
 
