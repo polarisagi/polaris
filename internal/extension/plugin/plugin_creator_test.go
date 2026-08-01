@@ -18,6 +18,10 @@ func (m *MockLLMClient) Generate(ctx context.Context, systemPrompt, userPrompt s
 }`, nil
 }
 
+func (m *MockLLMClient) GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return m.Generate(ctx, systemPrompt, userPrompt)
+}
+
 func TestPluginCreator(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "plugin-creator-test")
 	if err != nil {

@@ -35,3 +35,23 @@ func (a *ProviderLLMClient) Generate(ctx context.Context, systemPrompt, userProm
 	}
 	return resp.Content, nil
 }
+
+// GenerateJSON 实现 LLMClient（阶段03 R-06）。语义同 Generate，但附带
+// ResponseFormat=json_object，让支持结构化输出的 Provider（走
+// internal/llm/adapter 的 OpenAICompatibleClient 一族：openai/deepseek/
+// ollama）尽力强制返回合法 JSON。Anthropic/Google 当前不读取该字段（透传
+// 无副作用），由上层 StructuredGenerator 的 extractJSON 兜底 + 有界重试
+// 兜底覆盖，不需要在此处按 Provider 能力位分支。
+func (a *ProviderLLMClient) GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	if a.Provider == nil {
+		return "", apperr.New(apperr.CodeInternal, "skill_creator: no LLM provider available to generate skill")
+	}
+	resp, err := safecall.Infer(ctx, a.Provider, []types.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}, types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}))
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: LLM infer failed", err)
+	}
+	return resp.Content, nil
+}

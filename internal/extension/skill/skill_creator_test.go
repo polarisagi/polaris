@@ -16,6 +16,10 @@ func (m *mockLLMClient) Generate(ctx context.Context, systemPrompt, userPrompt s
 	return m.ret, m.err
 }
 
+func (m *mockLLMClient) GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return m.ret, m.err
+}
+
 func TestNewSkillCreator(t *testing.T) {
 	c := NewSkillCreator(nil, "base", nil, nil)
 	if c.baseDir != "base" {

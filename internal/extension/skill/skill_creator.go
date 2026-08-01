@@ -11,10 +11,20 @@ import (
 
 	"time"
 
+	"github.com/polarisagi/polaris/internal/extension/llmgen"
+	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// skillStructuredBackoff 结构化 JSON 纠错重试退避（阶段03 R-06）：比
+// llmparent.DefaultBackoff() 的默认 5s 基值更短——这里重试的目的是让模型
+// 依据回灌的错误信息重新生成，不是规避 Provider 限流，长间隔只会拖慢
+// 面向用户的交互式生成请求。
+func skillStructuredBackoff() llmparent.BackoffConfig {
+	return llmparent.BackoffConfig{Base: 500 * time.Millisecond, Max: 3 * time.Second, JitterRatio: 0.3}
+}
 
 var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
@@ -22,6 +32,11 @@ var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 type LLMClient interface {
 	// Generate uses the system prompt and user intent to generate a structured response.
 	Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	// GenerateJSON 语义同 Generate，但要求实现尽力让 Provider 侧强制返回合法
+	// JSON（如 response_format=json_object）；不支持结构化输出的 Provider 可
+	// 退化为等同于 Generate——上层 StructuredGenerator 的 extractJSON 兜底与
+	// 有界重试仍然生效（阶段03 R-06）。
+	GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 }
 
 // ExtensionInstaller 是 SkillCreator 唯一需要的安装能力（消费方定义接口，
@@ -40,6 +55,7 @@ type SkillCreator struct {
 	baseDir    string // e.g. ~/.polarisagi/polaris/plugins/user/
 	installMgr ExtensionInstaller
 	registry   protocol.SkillRegistry
+	structGen  *llmgen.StructuredGenerator // 阶段03 R-06：有界重试+熔断+tracing/metrics
 }
 
 // NewSkillCreator initializes a new creator for auto-generating skills.
@@ -49,6 +65,7 @@ func NewSkillCreator(llm LLMClient, baseDir string, installMgr ExtensionInstalle
 		baseDir:    baseDir,
 		installMgr: installMgr,
 		registry:   registry,
+		structGen:  llmgen.NewStructuredGenerator("skill").WithBackoff(skillStructuredBackoff()),
 	}
 }
 
@@ -148,14 +165,22 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 		return "", apperr.New(apperr.CodeInternal, "skill_creator: LLM client is nil")
 	}
 
-	response, err := c.llm.Generate(ctx, skillCreatorSystemPrompt, intent)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to generate skill", err)
-	}
-
-	result, err := parseGeneratedSkill(response)
-	if err != nil {
-		return "", err
+	// 阶段03 R-06：优先走 GenerateJSON（Provider 侧结构化输出尽力保证合法 JSON），
+	// 有界重试（含错误回灌）+ 熔断 + tracing/metrics 交由 StructuredGenerator
+	// 统一处理；解析失败时把错误摘要回灌进下一次重试的 prompt。
+	var result GeneratedSkill
+	genErr := c.structGen.Generate(ctx, skillCreatorSystemPrompt, intent, c.llm.GenerateJSON, func(raw string) error {
+		parsed, perr := parseGeneratedSkill(raw)
+		if perr != nil {
+			return perr
+		}
+		result = parsed
+		return nil
+	})
+	if genErr != nil {
+		// apperr.CodeOf 保留 llmgen 内部判定的具体 Code（如熔断开启时的
+		// CodeResourceExhausted），不能用固定 Code 重新包装掩盖语义。
+		return "", apperr.Wrap(apperr.CodeOf(genErr), "skill_creator: structured skill generation failed", genErr)
 	}
 
 	pluginDir, err := writeSkillFiles(c.baseDir, result)
