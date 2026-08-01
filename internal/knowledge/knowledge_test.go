@@ -6,10 +6,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	_ "modernc.org/sqlite"
 )
+
+// failingOutboxWriter 的 Write 总是失败，用于验证阶段02修复：GraphBuild outbox
+// 投递失败必须向上返回错误，不得静默吞没（GR-7-003）。
+type failingOutboxWriter struct{}
+
+func (f *failingOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	return apperr.New(apperr.CodeInternal, "simulated outbox write failure")
+}
 
 func setupTestDB(t *testing.T) *sql.DB {
 	db, err := sql.Open("sqlite", ":memory:")
@@ -91,6 +101,38 @@ func TestPipelineImpl_Ingest(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("expected 3 chunks in db, got %d", count)
+	}
+}
+
+// TestPipelineImpl_Ingest_OutboxWriteFailure_ReturnsError_S02 验证阶段02修复：
+// GraphBuild outbox 投递失败必须向上返回错误。回归锚点：修复前
+// `_ = p.outboxWriter.Write(ctx, ev)` 吞没该错误，调用方拿到 nil error + 非 nil
+// tree，会误以为摄入完全成功，但知识图谱构建这条链路从此对该文档永久不会触发。
+func TestPipelineImpl_Ingest_OutboxWriteFailure_ReturnsError_S02(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	pipeline := NewPipeline(db, nil, &failingOutboxWriter{}, nil, nil)
+
+	doc := &Document{
+		Ref: DocumentRef{URI: "doc-outbox-fail", Title: "Test", ContentHash: "hash-outbox-fail"},
+		Raw: []byte("Paragraph 1\n\nParagraph 2"),
+	}
+
+	tree, err := pipeline.Ingest(context.Background(), doc, TaintLow)
+	if err == nil {
+		t.Fatal("expected error when outbox write fails, got nil")
+	}
+	// chunks 已经落盘（先于 outbox 投递），tree 仍应非 nil 供调用方按需处理，
+	// 但必须同时拿到 error 信号，不能误判为完全成功。
+	if tree == nil {
+		t.Error("expected non-nil tree despite outbox failure (chunks already committed)")
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks WHERE doc_id = ?", doc.Ref.URI).Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count == 0 {
+		t.Error("expected chunks to remain committed despite outbox failure")
 	}
 }
 

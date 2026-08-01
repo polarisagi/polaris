@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -50,9 +53,20 @@ func NewDefaultIngestionPipeline(router *store.StorageRouter, provider protocol.
 // 的 tree_json 直接返回，跳过重摄取（从 Ingest 拆出，gocyclo 治理，行为不变）。
 func (p *DefaultIngestionPipeline) checkIngestCache(ctx context.Context, db *sql.DB, doc *Document) (*DocTree, bool) {
 	var existingHash string
-	_ = db.QueryRowContext(ctx,
+	// L3：sql.ErrNoRows 是正常路径（该 URI 首次摄入，rag_docs 尚无记录），
+	// existingHash 保持零值 "" 直接落入下方"未命中"分支，语义正确。其它真实
+	// 查询错误（连接/损坏等）同样安全退化为"未命中→重新摄取"，但需要区分
+	// 计数，不能和"首次摄入"混在一起看不出数据库层面的异常。
+	if err := db.QueryRowContext(ctx,
 		`SELECT content_hash FROM rag_docs WHERE uri = ?`, doc.Ref.URI,
-	).Scan(&existingHash)
+	).Scan(&existingHash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			slog.Debug("knowledge_ingest: cache lookup no existing doc (first ingest)", "uri", doc.Ref.URI)
+		} else {
+			slog.Warn("knowledge_ingest: cache lookup query failed, falling back to full re-ingest", "uri", doc.Ref.URI, "err", err)
+			metrics.RecordKnowledgeReadFailure(ctx, "rag_docs_cache_lookup")
+		}
+	}
 	if existingHash == "" || existingHash != doc.Ref.ContentHash {
 		return nil, false
 	}
@@ -155,12 +169,24 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 	}
 
 	if p.outboxWriter != nil {
+		// L1：两条 outbox 投递各自独立驱动摘要生成/图谱构建链路，任一失败都会让
+		// 对应链路在这份文档上永久静默不发生（chunks 已经 commit，调用方若只看
+		// tree 非 nil 会误以为摄入完全成功）。两条都尝试（互不因对方失败而跳过），
+		// 失败的合并成一个错误向上返回。
+		var outboxErrs []error
 		// 触发 LLM 摘要生成
 		ev1, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID}, "summary:"+docNode.ID)
-		_ = p.outboxWriter.Write(ctx, ev1)
+		if err := p.outboxWriter.Write(ctx, ev1); err != nil {
+			outboxErrs = append(outboxErrs, fmt.Errorf("summary outbox write failed: %w", err))
+		}
 		// 触发知识图谱构建（GraphBuildOutboxHandler 监听此事件）
 		ev2, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
-		_ = p.outboxWriter.Write(ctx, ev2)
+		if err := p.outboxWriter.Write(ctx, ev2); err != nil {
+			outboxErrs = append(outboxErrs, fmt.Errorf("graph_build outbox write failed: %w", err))
+		}
+		if len(outboxErrs) > 0 {
+			return tree, apperr.Wrap(apperr.CodeInternal, "ingestion: outbox 投递失败", errors.Join(outboxErrs...))
+		}
 	} else {
 		concurrent.SafeGo(trace.DetachedWithLink(ctx), "knowledge.rag.build_summary_tree", func(ctx context.Context) {
 			p.buildSummaryTree(ctx, docNode, db)

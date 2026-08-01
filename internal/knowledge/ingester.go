@@ -202,7 +202,12 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 	if p.outboxWriter != nil {
 		idemKey := fmt.Sprintf("ragdoc:%s:%d", doc.Ref.URI, time.Now().UnixNano())
 		ev, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "", map[string]string{"doc_id": doc.Ref.URI}, idemKey)
-		_ = p.outboxWriter.Write(ctx, ev)
+		// L1：投递失败意味着这份文档永远不会触发知识图谱构建（GraphBuild 完全
+		// 依赖该 outbox 事件驱动），且文档分片本身已经成功写入 rag_chunks——
+		// 若在此静默吞没，调用方会误以为摄入完全成功。必须向上返回错误。
+		if err := p.outboxWriter.Write(ctx, ev); err != nil {
+			return tree, apperr.Wrap(apperr.CodeInternal, "knowledge_ingester: GraphBuild outbox 投递失败", err)
+		}
 	}
 
 	return tree, nil

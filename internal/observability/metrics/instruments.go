@@ -77,6 +77,7 @@ var (
 	InstrBlackboardScanErrorsTotal         metric.Int64Counter // label: op
 	InstrKnowledgeOutboxWriteFailuresTotal metric.Int64Counter // label: event_type
 	InstrKnowledgeGraphWriteFailuresTotal  metric.Int64Counter // label: op
+	InstrKnowledgeReadFailuresTotal        metric.Int64Counter // label: op（非 ErrNoRows 的真实读路径查询失败）
 	InstrToolOutcomeDecodeFailuresTotal    metric.Int64Counter // label: tool_category（经 ToolCategory() 归一化，非原始 tool_name）
 
 	instrOnce sync.Once
@@ -389,6 +390,11 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("GraphRAG 实体/边落库失败次数 (label: op)"),
 	)
 	ie.capture("polaris.knowledge.graph_write_failures_total", err)
+	InstrKnowledgeReadFailuresTotal, err = meter.Int64Counter(
+		"polaris.knowledge.read_failures_total",
+		metric.WithDescription("知识管线读路径查询失败次数，非 ErrNoRows (label: op)"),
+	)
+	ie.capture("polaris.knowledge.read_failures_total", err)
 	InstrToolOutcomeDecodeFailuresTotal, err = meter.Int64Counter(
 		"polaris.tool.outcome_decode_failures_total",
 		metric.WithDescription("工具 outcome JSON 解析失败次数 (label: tool_category)"),
@@ -598,6 +604,13 @@ func RecordKnowledgeOutboxWriteFailure(ctx context.Context, eventType string) {
 func RecordKnowledgeGraphWriteFailure(ctx context.Context, op string) {
 	if InstrKnowledgeGraphWriteFailuresTotal != nil {
 		InstrKnowledgeGraphWriteFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("op", op)))
+	}
+}
+
+// RecordKnowledgeReadFailure 记录知识管线读路径真实查询失败（非 ErrNoRows）。
+func RecordKnowledgeReadFailure(ctx context.Context, op string) {
+	if InstrKnowledgeReadFailuresTotal != nil {
+		InstrKnowledgeReadFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("op", op)))
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -112,7 +113,14 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	var isMacro bool
 	if len(strings.Fields(query)) <= 4 {
 		var ec int
-		_ = hr.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_entities WHERE name = ? AND entity_type != 'Community'", query).Scan(&ec)
+		// L3：COUNT(*) 查询恒返回一行，不存在 ErrNoRows 场景，任何 Scan 失败都是
+		// 真实查询异常。失败时 ec 保持零值 0，会让 isMacro 误判为 true，改变
+		// 检索策略（转向 Community 摘要检索而非精确实体检索）——这是明确的降级
+		// 行为（宁可召回过广也不因查询异常整体失败），但必须可观测。
+		if err := hr.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_entities WHERE name = ? AND entity_type != 'Community'", query).Scan(&ec); err != nil {
+			slog.Warn("knowledge_retriever: entity count query failed, degrading to macro/Community search", "query", query, "err", err)
+			metrics.RecordKnowledgeReadFailure(ctx, "macro_query_entity_count")
+		}
 		isMacro = (ec == 0)
 	}
 
