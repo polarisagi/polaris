@@ -45,6 +45,15 @@ func (a *Agent) InjectPIITokenizer(detector *guard.PIIDetector, vault *guard.PII
 	a.Security.TokenVault = vault
 }
 
+// InjectPIIDesensitizer 注入格式保留假数据脱敏器（阶段03 R-02）。
+// SecurityBundle 已直接持有具体的 *guard.PIIDetector/*guard.PIITokenVault
+// （见上），本字段沿用同一模式，不另建 HE-3 消费端接口——为这一处单独抽象
+// 会与相邻两个字段的既有约定不一致，收益也不成比例。nil 时 handleTerminalState
+// 的 ReleasePartition 调用安全跳过（不影响脱敏功能，只是不做分区精确回收）。
+func (a *Agent) InjectPIIDesensitizer(desensitizer *guard.PIIDesensitizer) {
+	a.Security.PIIDesensitizer = desensitizer
+}
+
 // SetExtQuerier 注入用于查询已安装扩展的 SQLQuerier。
 // 必须在 Agent 启动前调用；传 nil 时 refreshInstalledExtensions 安全降级为空字符串。
 func (a *Agent) SetExtQuerier(q protocol.SQLQuerier) {

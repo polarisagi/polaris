@@ -144,6 +144,7 @@ type SecurityBundle struct {
 	TaintReviewChecker protocol.TaintReviewChecker  // S_VALIDATE TaintGate 人工复核豁免查询（M11 §2.5）；nil 时跳过
 	TokenVault         *guard.PIITokenVault         // PII OpaqueToken 会话级可逆令牌库
 	PIIDetector        *guard.PIIDetector           // PII 检测与脱敏器
+	PIIDesensitizer    *guard.PIIDesensitizer       // 阶段03 R-02：格式保留假数据脱敏映射，按 SessionID 分区；终态需 ReleasePartition
 	AnomalyFilter      *guard.AnomalyDistanceFilter // OWASP LLM08 输入异常检测（M11 §2.2），按会话隔离；NewAgent 默认构造
 }
 
