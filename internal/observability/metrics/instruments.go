@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"log/slog"
 	"runtime"
 	"runtime/metrics"
 	"sync"
@@ -9,6 +10,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ── 同步 instruments（Counter / Histogram）─────────────────────────────────
@@ -98,205 +101,299 @@ var (
 
 // ── InitMetrics ─────────────────────────────────────────────────────────────
 
+// instrumentInitErrs 收集初始化期所有 OTel 同步 instrument（Counter/Histogram）
+// 注册失败，避免 initInstruments 内 30+ 处逐个静默吞没（阶段02 §2.2）。
+// attempts 记录总尝试次数（成功+失败），用于判定"是否全部失败"而无需硬编码总数。
+type instrumentInitErrs struct {
+	errs     []error
+	attempts int
+}
+
+func (e *instrumentInitErrs) capture(name string, err error) {
+	e.attempts++
+	if err != nil {
+		e.errs = append(e.errs, apperr.Wrap(apperr.CodeInternal, "instruments: register "+name, err))
+	}
+}
+
+// metricsDegraded 标记 OTel instrument 注册是否发生部分失败。
+// ADR-0001 豁免：observability 一等公民指标范畴，允许包级可变原子状态。
+var metricsDegraded atomic.Bool
+
+// InstrumentsDegraded 供 /healthz 与 FeatureGate 消费，暴露指标注册降级状态（HE-1，不静默）。
+func InstrumentsDegraded() bool {
+	return metricsDegraded.Load()
+}
+
+// evaluateInstrumentInitErrs 根据聚合结果判定是否降级 / 是否致命。
+// 抽出为独立纯函数（不触碰 instrOnce/metricsDegraded 全局状态），便于脱离
+// InitMetrics 的单例限制单独单元测试判定逻辑本身。
+//
+// 设计决策（阶段02 §2.2）：指标注册失败 = M3 可观测性大面积瘫痪，属初始化致命
+// 错误，但不得 panic（2GB VPS 上偶发注册失败直接打死进程，违反 Tier-0 可用性
+// 目标）。部分失败仅 Error 日志 + degraded=true，不阻断；仅当全部 instrument
+// 都失败（说明 meter provider 根本没启动）才返回 fatal error。
+func evaluateInstrumentInitErrs(ie *instrumentInitErrs) (degraded bool, fatal error) {
+	if len(ie.errs) == 0 {
+		return false, nil
+	}
+	slog.Error("observability: OTel instrument registration failed, metrics partially degraded",
+		"failed_count", len(ie.errs), "total", ie.attempts, "first_err", ie.errs[0])
+	degraded = true
+	if len(ie.errs) >= ie.attempts {
+		fatal = apperr.Wrap(apperr.CodeInternal,
+			"InitMetrics: all sync instruments failed to register, meter provider likely not started",
+			ie.errs[0])
+	}
+	return degraded, fatal
+}
+
 // InitMetrics 注册所有业务指标 instrument。
 // 仅在 otelMetricsHandler 的 otelOnce.Do 内部调用一次（Tier 1+）。
 // Tier-0 legacy 路径不调用此函数，所有 Record* 函数在该路径下为静默 no-op。
-func InitMetrics(meter metric.Meter) {
+func InitMetrics(meter metric.Meter) error {
+	var initErr error
 	instrOnce.Do(func() {
-		initInstruments(meter)
+		ie := &instrumentInitErrs{}
+		initInstruments(meter, ie)
 		registerObservableGauges(meter)
+
+		degraded, fatal := evaluateInstrumentInitErrs(ie)
+		if degraded {
+			metricsDegraded.Store(true)
+		}
+		initErr = fatal
 	})
+	return initErr
 }
 
-func initInstruments(meter metric.Meter) {
+func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
+	var err error
+
 	// LLM 调用计数
-	InstrLLMCallsTotal, _ = meter.Int64Counter(
+	InstrLLMCallsTotal, err = meter.Int64Counter(
 		"polaris.llm.calls_total",
 		metric.WithDescription("LLM 调用次数 (label: provider, model, status)"),
 	)
+	ie.capture("polaris.llm.calls_total", err)
 
 	// LLM 延迟直方图（ExponentialBuckets 100ms→51.2s，M03 §2）
-	InstrLLMLatencyMs, _ = meter.Float64Histogram(
+	InstrLLMLatencyMs, err = meter.Float64Histogram(
 		"polaris.llm.call_latency_ms",
 		metric.WithDescription("LLM 调用端到端延迟（ms）(label: model)"),
 		metric.WithExplicitBucketBoundaries(
 			100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600, 51200,
 		),
 	)
+	ie.capture("polaris.llm.call_latency_ms", err)
 
 	// Token 消耗分类计数（input / output / cache_hit）
-	InstrTokensTotal, _ = meter.Int64Counter(
+	InstrTokensTotal, err = meter.Int64Counter(
 		"polaris.tokens.consumed_total",
 		metric.WithDescription("消耗 token 总数 (label: type: input/output/cache_hit)"),
 	)
+	ie.capture("polaris.tokens.consumed_total", err)
 
-	InstrSystem1BypassTotal, _ = meter.Int64Counter(
+	InstrSystem1BypassTotal, err = meter.Int64Counter(
 		"polaris.system1_bypass_total",
 		metric.WithDescription("System 1 Bypass 次数 (label: matched=true/false)"),
 	)
+	ie.capture("polaris.system1_bypass_total", err)
 
-	InstrRetrievalExplainBitsTotal, _ = meter.Int64Counter(
+	InstrRetrievalExplainBitsTotal, err = meter.Int64Counter(
 		"polaris.retrieval.explain_bits_total",
 		metric.WithDescription("Retrieval explain bits distribution (label: bit)"),
 	)
+	ie.capture("polaris.retrieval.explain_bits_total", err)
 
 	// Cache Hit Rate Histogram (ISSUE-04)
-	InstrLLMCacheHitRate, _ = meter.Float64Histogram(
+	InstrLLMCacheHitRate, err = meter.Float64Histogram(
 		"polaris.llm.cache_hit_rate",
 		metric.WithDescription("LLM Context Caching 命中率 (label: provider, model)"),
 		metric.WithExplicitBucketBoundaries(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 	)
+	ie.capture("polaris.llm.cache_hit_rate", err)
 
 	// API 费用（USD）
-	InstrAPIcostUSD, _ = meter.Float64Counter(
+	InstrAPIcostUSD, err = meter.Float64Counter(
 		"polaris.api.cost_usd_total",
 		metric.WithDescription("API 费用累计（USD）(label: provider, model, call_type)"),
 	)
+	ie.capture("polaris.api.cost_usd_total", err)
 
 	// Stage3 FULLSTOP 边沿计数（与 M03 §3.2 KillSwitch 联动）
-	InstrBurnStage3Total, _ = meter.Int64Counter(
+	InstrBurnStage3Total, err = meter.Int64Counter(
 		"polaris.token_burn.extreme_total",
 		metric.WithDescription("TokenBurnRate Stage3 FULLSTOP 触发次数"),
 	)
-	InstrGoroutinePanicTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.token_burn.extreme_total", err)
+	InstrGoroutinePanicTotal, err = meter.Int64Counter(
 		"polaris.goroutine_panic_total",
 		metric.WithDescription("SafeGo recover 的 panic 总数"),
 	)
-	InstrDbWriterPanicTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.goroutine_panic_total", err)
+	InstrDbWriterPanicTotal, err = meter.Int64Counter(
 		"polaris_dbwriter_panic",
 		metric.WithDescription("DatabaseWriter Run panic 总数"),
 	)
+	ie.capture("polaris_dbwriter_panic", err)
 
 	// 工具调用
-	InstrToolCallsTotal, _ = meter.Int64Counter(
+	InstrToolCallsTotal, err = meter.Int64Counter(
 		"polaris.tool.calls_total",
 		metric.WithDescription("工具调用次数 (label: tool_category, status, sandbox_tier)"),
 	)
+	ie.capture("polaris.tool.calls_total", err)
 
-	InstrToolLatencyMs, _ = meter.Float64Histogram(
+	InstrToolLatencyMs, err = meter.Float64Histogram(
 		"polaris.tool.call_latency_ms",
 		metric.WithDescription("工具调用延迟（ms）(label: tool_category)"),
 		metric.WithExplicitBucketBoundaries(1, 5, 10, 50, 100, 500, 1000, 5000),
 	)
+	ie.capture("polaris.tool.call_latency_ms", err)
 
 	// 沙箱执行次数（按 tier）
-	InstrSandboxTotal, _ = meter.Int64Counter(
+	InstrSandboxTotal, err = meter.Int64Counter(
 		"polaris.sandbox.executions_total",
 		metric.WithDescription("沙箱执行次数 (label: tier: inprocess/l2/l3)"),
 	)
+	ie.capture("polaris.sandbox.executions_total", err)
 
-	InstrSwarmCompensationFailedTotal, _ = meter.Int64Counter(
+	InstrSwarmCompensationFailedTotal, err = meter.Int64Counter(
 		"polaris.swarm.compensation_failed_total",
 		metric.WithDescription("Swarm compensation failed total (label: stage)"),
 	)
+	ie.capture("polaris.swarm.compensation_failed_total", err)
 
-	InstrSwarmCompensationTimeoutTotal, _ = meter.Int64Counter(
+	InstrSwarmCompensationTimeoutTotal, err = meter.Int64Counter(
 		"polaris.swarm.compensation_timeout_total",
 		metric.WithDescription("Swarm compensation timeout total (label: stage)"),
 	)
+	ie.capture("polaris.swarm.compensation_timeout_total", err)
 
 	// [UP-06] Agent 流式事件订阅者缓冲满丢弃计数
-	InstrAgentStreamDroppedTotal, _ = meter.Int64Counter(
+	InstrAgentStreamDroppedTotal, err = meter.Int64Counter(
 		"polaris.agent.stream_dropped_total",
 		metric.WithDescription("Agent 流式事件因订阅者缓冲满被丢弃的条数"),
 	)
+	ie.capture("polaris.agent.stream_dropped_total", err)
 
 	// [Task 14] Embedding 指标：调用延迟 + 失败计数，便于排查 embedding 调用健康度。
-	InstrEmbeddingLatencyMs, _ = meter.Float64Histogram(
+	InstrEmbeddingLatencyMs, err = meter.Float64Histogram(
 		"polaris.embedding.call_latency_ms",
 		metric.WithDescription("Embedding 调用延迟（ms）(label: provider, model)"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2000),
 	)
-	InstrEmbeddingErrorTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.embedding.call_latency_ms", err)
+	InstrEmbeddingErrorTotal, err = meter.Int64Counter(
 		"polaris.embedding.errors_total",
 		metric.WithDescription("Embedding 调用失败次数 (label: provider, model)"),
 	)
+	ie.capture("polaris.embedding.errors_total", err)
 
 	// [Task 14] Cedar policy 评估三态：allow/deny/degraded，便于排查策略允许/拒绝比例。
 	// InstrCedarDegradedTotal 已有旧名 GlobalCedarDegradedTotal，此处新增 allow/deny 两个。
-	InstrCedarAllowTotal, _ = meter.Int64Counter(
+	InstrCedarAllowTotal, err = meter.Int64Counter(
 		"polaris.cedar.allow_total",
 		metric.WithDescription("Cedar PolicyGate 评估结果: allow (label: action)"),
 	)
-	InstrCedarDenyTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.cedar.allow_total", err)
+	InstrCedarDenyTotal, err = meter.Int64Counter(
 		"polaris.cedar.deny_total",
 		metric.WithDescription("Cedar PolicyGate 评估结果: deny (label: action, reason)"),
 	)
-	InstrCedarDegradedTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.cedar.deny_total", err)
+	InstrCedarDegradedTotal, err = meter.Int64Counter(
 		"polaris.cedar.degraded_total",
 		metric.WithDescription("Cedar FFI 故障降级为 Go 内置规则的次数"),
 	)
+	ie.capture("polaris.cedar.degraded_total", err)
 
 	// [Task 14] FFI 调用健康度：延迟 + 失败计数，按 ffi_target 标签区分各 FFI 桥。
-	InstrFFILatencyMs, _ = meter.Float64Histogram(
+	InstrFFILatencyMs, err = meter.Float64Histogram(
 		"polaris.ffi.call_latency_ms",
 		metric.WithDescription("FFI 调用延迟（ms）(label: ffi_target: llama/cedar/surreal/sandbox)"),
 		metric.WithExplicitBucketBoundaries(0.1, 0.5, 1, 5, 10, 50, 100, 500),
 	)
-	InstrFFIErrorTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.ffi.call_latency_ms", err)
+	InstrFFIErrorTotal, err = meter.Int64Counter(
 		"polaris.ffi.errors_total",
 		metric.WithDescription("FFI 调用失败次数 (label: ffi_target)"),
 	)
+	ie.capture("polaris.ffi.errors_total", err)
 
 	// [GR-1-003] Rerank 指标：调用延迟 + 结果计数，排查 RAG 重排步骤性能瓶颈与降级频率。
-	InstrRerankLatencyMs, _ = meter.Float64Histogram(
+	InstrRerankLatencyMs, err = meter.Float64Histogram(
 		"polaris.rerank.call_latency_ms",
 		metric.WithDescription("Reranker 单次调用延迟（ms）(label: outcome)"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2000),
 	)
-	InstrRerankCallsTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.rerank.call_latency_ms", err)
+	InstrRerankCallsTotal, err = meter.Int64Counter(
 		"polaris.rerank.calls_total",
 		metric.WithDescription("Reranker 调用计数 (label: outcome: success/fallback/timeout)"),
 	)
+	ie.capture("polaris.rerank.calls_total", err)
 
-	InstrShadowReplayTotal, _ = meter.Int64Counter(
+	InstrShadowReplayTotal, err = meter.Int64Counter(
 		"polaris.shadow.replay_total",
 		metric.WithDescription("Shadow replay batches total"),
 	)
-	InstrShadowSkippedTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.shadow.replay_total", err)
+	InstrShadowSkippedTotal, err = meter.Int64Counter(
 		"polaris.shadow.skipped_total",
 		metric.WithDescription("Shadow skipped samples total"),
 	)
-	InstrShadowDurationMs, _ = meter.Float64Histogram(
+	ie.capture("polaris.shadow.skipped_total", err)
+	InstrShadowDurationMs, err = meter.Float64Histogram(
 		"polaris.shadow.duration_ms",
 		metric.WithDescription("Shadow replay batch duration ms"),
 		metric.WithExplicitBucketBoundaries(10, 50, 100, 500, 1000, 5000, 10000, 30000),
 	)
-	InstrShadowPassRate, _ = meter.Float64Histogram(
+	ie.capture("polaris.shadow.duration_ms", err)
+	InstrShadowPassRate, err = meter.Float64Histogram(
 		"polaris.shadow.pass_rate",
 		metric.WithDescription("Shadow replay pass rate"),
 		metric.WithExplicitBucketBoundaries(0.1, 0.5, 0.8, 0.9, 0.95, 0.99, 1.0),
 	)
+	ie.capture("polaris.shadow.pass_rate", err)
 
 	// [阶段02-错误吞没整改] §4 新增指标，详见 local_playground/upgrade/02-error-handling.md
-	InstrOutboxProcessFailuresTotal, _ = meter.Int64Counter(
+	InstrOutboxProcessFailuresTotal, err = meter.Int64Counter(
 		"polaris.outbox.process_failures_total",
 		metric.WithDescription("单条 outbox 记录处理失败次数 (label: engine)"),
 	)
-	InstrOutboxCursorErrorsTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.outbox.process_failures_total", err)
+	InstrOutboxCursorErrorsTotal, err = meter.Int64Counter(
 		"polaris.outbox.cursor_errors_total",
 		metric.WithDescription("outbox 游标加载/持久化失败次数 (label: kind: load/save)"),
 	)
-	InstrMemoryJSONDecodeFailuresTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.outbox.cursor_errors_total", err)
+	InstrMemoryJSONDecodeFailuresTotal, err = meter.Int64Counter(
 		"polaris.memory.json_decode_failures_total",
 		metric.WithDescription("记忆子系统 JSON/Scan 反序列化失败次数 (label: table)"),
 	)
-	InstrBlackboardScanErrorsTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.memory.json_decode_failures_total", err)
+	InstrBlackboardScanErrorsTotal, err = meter.Int64Counter(
 		"polaris.blackboard.scan_errors_total",
 		metric.WithDescription("Blackboard 行扫描/查询失败次数 (label: op)"),
 	)
-	InstrKnowledgeOutboxWriteFailuresTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.blackboard.scan_errors_total", err)
+	InstrKnowledgeOutboxWriteFailuresTotal, err = meter.Int64Counter(
 		"polaris.knowledge.outbox_write_failures_total",
 		metric.WithDescription("知识管线 outbox 事件投递失败次数 (label: event_type)"),
 	)
-	InstrKnowledgeGraphWriteFailuresTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.knowledge.outbox_write_failures_total", err)
+	InstrKnowledgeGraphWriteFailuresTotal, err = meter.Int64Counter(
 		"polaris.knowledge.graph_write_failures_total",
 		metric.WithDescription("GraphRAG 实体/边落库失败次数 (label: op)"),
 	)
-	InstrToolOutcomeDecodeFailuresTotal, _ = meter.Int64Counter(
+	ie.capture("polaris.knowledge.graph_write_failures_total", err)
+	InstrToolOutcomeDecodeFailuresTotal, err = meter.Int64Counter(
 		"polaris.tool.outcome_decode_failures_total",
 		metric.WithDescription("工具 outcome JSON 解析失败次数 (label: tool_category)"),
 	)
+	ie.capture("polaris.tool.outcome_decode_failures_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter) {
