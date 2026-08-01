@@ -5,12 +5,19 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 const transcriptVersion = 1
+
+// sessionIDPattern 会话 ID 白名单：仅允许字母数字、短横线、下划线，长度 1~128。
+// 用于一切以 sessionID 参与文件路径/表主键构造的场景（S-07，防路径穿越 +
+// 防 SQL 侧异常）。
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // transcriptEntry 是 JSONL 文件中的一行记录。
 // 字段按 type 复用，零值字段 omitempty 不输出，保持文件紧凑。
@@ -36,10 +43,20 @@ type TranscriptWriter struct {
 // openTranscript 打开（或创建）sessionID 对应的 transcript 文件。
 // writeHeader=true 时追加会话起始行（isFirstTurn 时使用）。
 func openTranscript(dir, sessionID string, writeHeader bool) (*TranscriptWriter, error) {
+	// S-07 落盘处兜底校验（双重防御第二层，第一层见 sse.go HandleAgentStream
+	// 入口白名单）：即便调用方遗漏入口校验，这里仍拒绝非法 sessionID，且做
+	// 路径归一化前缀断言防御符号链接/../ 变体。
+	if !sessionIDPattern.MatchString(sessionID) {
+		return nil, apperr.New(apperr.CodeInvalidInput, "openTranscript: invalid session id")
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "openTranscript", err)
 	}
-	path := filepath.Join(dir, sessionID+".jsonl")
+	cleanDir := filepath.Clean(dir) + string(os.PathSeparator)
+	path := filepath.Clean(filepath.Join(dir, sessionID+".jsonl"))
+	if !strings.HasPrefix(path, cleanDir) {
+		return nil, apperr.New(apperr.CodeForbidden, "openTranscript: path escapes transcript dir")
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "openTranscript", err)
