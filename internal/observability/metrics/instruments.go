@@ -88,6 +88,11 @@ var (
 	InstrExtensionLLMCallsTotal              metric.Int64Counter
 	InstrExtensionLLMStructuredFailuresTotal metric.Int64Counter // label: kind
 
+	// [阶段04 A-01] Agent Handoff 唤醒路径可观测性。path 固定枚举
+	// "event"/"peek"/"poll_fallback"——生产上 poll_fallback 非零即代表
+	// Blackboard 事件订阅链路有问题（GD-13-007）。
+	InstrAgentHandoffWakeTotal metric.Int64Counter // label: path
+
 	instrOnce sync.Once
 )
 
@@ -436,6 +441,11 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Skill/Plugin 生成器结构化 JSON 解析重试耗尽次数 (label: kind)"),
 	)
 	ie.capture("polaris.extension.llm_structured_failures_total", err)
+	InstrAgentHandoffWakeTotal, err = meter.Int64Counter(
+		"polaris.agent.handoff_wake_total",
+		metric.WithDescription("Agent handoff 唤醒路径计数 (label: path，取值 event/peek/poll_fallback)"),
+	)
+	ie.capture("polaris.agent.handoff_wake_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter) {
@@ -698,5 +708,14 @@ func RecordExtensionLLMCall(ctx context.Context, kind, result string, durationMs
 func RecordExtensionStructuredFailure(ctx context.Context, kind string) {
 	if InstrExtensionLLMStructuredFailuresTotal != nil {
 		InstrExtensionLLMStructuredFailuresTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", kind)))
+	}
+}
+
+// RecordAgentHandoffWake 记录一次 Agent handoff 唤醒（阶段04 A-01，GD-13-007）。
+// path 必须是调用方硬编码的固定枚举字符串（"event"/"peek"/"poll_fallback"），
+// 禁止传入任何用户/任务可控值（CardinalityGuard）。
+func RecordAgentHandoffWake(ctx context.Context, path string) {
+	if InstrAgentHandoffWakeTotal != nil {
+		InstrAgentHandoffWakeTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("path", path)))
 	}
 }

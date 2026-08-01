@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -140,13 +141,19 @@ func (a *Agent) ResumeAwaitingHandoff(childTaskID string) {
 	a.sm.ForceState(types.AgentStateAwaitAgent)
 }
 
-// handoffWatchPollInterval 委派完成后台轮询间隔。后台 watcher 不再占用 DAG
-// 执行槽位，无需追求原同步阻塞轮询的 500ms 低延迟，1s 足够。
+// handoffWatchPollInterval 委派完成轮询间隔，仅用于 Subscribe 不可用/失活时
+// 的降级路径（阶段04 A-01 前是唯一机制，现在是兜底）。
 const handoffWatchPollInterval = 1 * time.Second
 
+// handoffWatchSafetyInterval 事件订阅之外的兜底巡检间隔（阶段04 A-01，
+// GD-13-007）。事件驱动是主路径；本兜底只覆盖"订阅通道因实现方内部异常
+// 静默失活"这一残余风险，间隔取分钟级即可，不再构成轮询版本的 SQLite 读压。
+const handoffWatchSafetyInterval = 2 * time.Minute
+
 // watchHandoffCompletion 启动一个绑定 a.ctx（Agent 生命周期）的后台
-// goroutine，轮询委派子任务 childTaskID 的终态；到达终态后异步投递
-// TriggerAgentHandoffDone 唤醒 FSM（S_AWAIT_AGENT → S_EXECUTE）。
+// goroutine，订阅 Blackboard 事件流等待委派子任务 childTaskID 到达终态；
+// 到达终态后异步投递 TriggerAgentHandoffDone 唤醒 FSM（S_AWAIT_AGENT →
+// S_EXECUTE）。
 //
 // [GD-1 修复] 此前版本在进入 S_AWAIT_AGENT 后错误地投递了
 // TriggerSuspend——该 Trigger 在 FSM 转移表中只定义了
@@ -158,31 +165,117 @@ const handoffWatchPollInterval = 1 * time.Second
 // 补齐：不再投递任何 TriggerSuspend，FSM 保持在 S_AWAIT_AGENT 自然等待
 // 下一个外部 Trigger（与其它非终态状态的等待方式一致），由本 watcher
 // 负责在委派完成时把 TriggerAgentHandoffDone 送入 a.intent。
+//
+// [GD-13-007 修复] 原实现以 1s ticker 轮询 PeekTask，在 N 个 Agent 并发委派
+// 时对 SQLite 单写者连接池产生 N QPS 的无谓读压。改为订阅
+// SQLiteBlackboard 已有的事件广播（`bb.Subscribe`，与 debate_worker.go /
+// default_worker.go / pattern_dag.go / pattern_state_graph.go 已确立的
+// idiom 一致），事件到达即唤醒，分钟级 safety ticker 只作静默失活兜底。
+//
+// 订阅者生命周期（防泄漏）：Subscribe 用**本函数派生的** watchCtx（而非
+// 直接透传 a.ctx）——若直接传 a.ctx，本函数返回后订阅通道仍会挂在
+// SQLiteBlackboard.subscribers 里（无上限 slice），直到整个 Agent 生命周期
+// 结束才会因 a.ctx.Done() 被注销；而一个 Agent 在其存活期内可能发起多次
+// transfer_to_agent（每次都会调用本函数一次），若不逐次收敛就会随委派次数
+// 线性堆积失效订阅者。watchCtx 在本函数任一返回路径（含 defer）都会被
+// cancel，确保订阅"即用即还"，与调用次数无关。
 func (a *Agent) watchHandoffCompletion(childTaskID string) {
 	if a.handoffPoster == nil || childTaskID == "" {
 		return
 	}
-	concurrent.SafeGo(a.ctx, "agent.handoff_watcher", func(ctx context.Context) {
-		ticker := time.NewTicker(handoffWatchPollInterval)
-		defer ticker.Stop()
+	concurrent.SafeGo(a.ctx, "agent.handoff_watcher", func(parentCtx context.Context) {
+		watchCtx, cancel := context.WithCancel(parentCtx)
+		defer cancel()
+
+		events, err := a.handoffPoster.Subscribe(watchCtx)
+		if err != nil {
+			// 订阅失败时不能静默放弃（会导致父任务永久挂在 S_AWAIT_AGENT）：
+			// 退回纯轮询兜底，并显式告警说明已降级。
+			slog.WarnContext(watchCtx, "agent: handoff subscribe failed, falling back to polling",
+				"task_id", childTaskID, "err", err)
+			a.pollHandoffCompletion(watchCtx, childTaskID, handoffWatchPollInterval)
+			return
+		}
+
+		// 订阅就绪后立刻补一次 Peek：覆盖"投递委派任务到订阅生效之间子任务
+		// 已终态"的丢事件窗口（与 reconciler_handoff.go 同一 idiom）。
+		if a.peekAndWake(watchCtx, childTaskID) {
+			return
+		}
+
+		safety := time.NewTicker(handoffWatchSafetyInterval)
+		defer safety.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-watchCtx.Done():
 				return
-			case <-ticker.C:
-				snap, err := a.handoffPoster.PeekTask(ctx, childTaskID)
-				if err != nil {
-					slog.Warn("agent: handoff watcher peek failed", "task_id", childTaskID, "err", err)
+			case ev, ok := <-events:
+				if !ok {
+					// 订阅通道被实现方关闭（非 ctx 取消）：降级为轮询，不静默退出。
+					slog.WarnContext(watchCtx, "agent: handoff event stream closed unexpectedly, falling back to polling",
+						"task_id", childTaskID)
+					a.pollHandoffCompletion(watchCtx, childTaskID, handoffWatchPollInterval)
+					return
+				}
+				if ev.TaskID != childTaskID {
 					continue
 				}
-				if snap == nil {
-					continue
-				}
-				if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
+				if ev.Type == "task_completed" || ev.Type == "task_failed" {
+					metrics.RecordAgentHandoffWake(watchCtx, "event")
 					a.asyncIntent(types.TriggerAgentHandoffDone)
+					return
+				}
+			case <-safety.C:
+				if a.peekAndWake(watchCtx, childTaskID) {
 					return
 				}
 			}
 		}
 	})
+}
+
+// peekAndWake 查询子任务快照，已终态则记录 metrics.RecordAgentHandoffWake
+// "peek"、投递唤醒 Trigger 并返回 true。
+func (a *Agent) peekAndWake(ctx context.Context, childTaskID string) bool {
+	snap, err := a.handoffPoster.PeekTask(ctx, childTaskID)
+	if err != nil {
+		slog.WarnContext(ctx, "agent: handoff peek failed", "task_id", childTaskID, "err", err)
+		return false
+	}
+	if snap == nil {
+		return false
+	}
+	if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
+		metrics.RecordAgentHandoffWake(ctx, "peek")
+		a.asyncIntent(types.TriggerAgentHandoffDone)
+		return true
+	}
+	return false
+}
+
+// pollHandoffCompletion 原轮询实现，仅作为 Subscribe 不可用/中途失活时的
+// 降级路径（阶段04 A-01）。
+func (a *Agent) pollHandoffCompletion(ctx context.Context, childTaskID string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			snap, err := a.handoffPoster.PeekTask(ctx, childTaskID)
+			if err != nil {
+				slog.WarnContext(ctx, "agent: handoff poll fallback peek failed", "task_id", childTaskID, "err", err)
+				continue
+			}
+			if snap == nil {
+				continue
+			}
+			if snap.Status == types.TaskDone || snap.Status == types.TaskFailed {
+				metrics.RecordAgentHandoffWake(ctx, "poll_fallback")
+				a.asyncIntent(types.TriggerAgentHandoffDone)
+				return
+			}
+		}
+	}
 }
