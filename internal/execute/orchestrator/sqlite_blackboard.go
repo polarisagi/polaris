@@ -21,11 +21,14 @@ package orchestrator
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -210,9 +213,18 @@ func (bb *SQLiteBlackboard) ClaimTask(ctx context.Context, taskID, agentID strin
 	}
 	// A16: 读取 PostTask 时落盘的 trace_id/span_id，随广播事件透传给认领方
 	// 认领方可用 trace.ContextWithRemoteSpan(ctx, ev.TraceID, ev.SpanID) 恢复 trace 连续性
+	// L3：读取失败只影响链路连续性（trace/span 透传丢失），不影响认领本身已经
+	// commit 成功的事实，claimTraceID/claimSpanID 保持零值继续广播。
 	var claimTraceID, claimSpanID string
-	_ = tx.QueryRowContext(ctx, "SELECT COALESCE(trace_id,''), COALESCE(span_id,'') FROM tasks WHERE task_id=?", taskID).
-		Scan(&claimTraceID, &claimSpanID)
+	if scanErr := tx.QueryRowContext(ctx, "SELECT COALESCE(trace_id,''), COALESCE(span_id,'') FROM tasks WHERE task_id=?", taskID).
+		Scan(&claimTraceID, &claimSpanID); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			slog.DebugContext(ctx, "blackboard: claim trace/span readback found no row (task deleted concurrently)", "task_id", taskID)
+		} else {
+			slog.WarnContext(ctx, "blackboard: claim trace/span readback failed, broadcast will carry empty trace context", "task_id", taskID, "err", scanErr)
+		}
+		metrics.RecordBlackboardScanError(ctx, "claim_trace_span_readback")
+	}
 	if err := tx.Commit(); err != nil {
 		return false, apperr.Wrap(apperr.CodeInternal, "blackboard.ClaimTask: commit", err)
 	}
@@ -244,8 +256,18 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 	}
 	if rows == 0 {
 		// 可能已是 running（幂等）或未认领（错误）
+		// L3：读取失败时 status 保持零值 ""，与"未认领"分支走同一 ErrTaskNotOwned
+		// 出口——语义上安全（不会误判为已 running），但需要计数以便区分"真的未
+		// 认领"与"读取本身失败"两种情况，避免误判被长期掩盖。
 		var status string
-		_ = tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status)
+		if scanErr := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status); scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				slog.DebugContext(ctx, "blackboard: start-execution status readback found no row (task deleted concurrently)", "task_id", taskID)
+			} else {
+				slog.WarnContext(ctx, "blackboard: start-execution status readback failed", "task_id", taskID, "err", scanErr)
+			}
+			metrics.RecordBlackboardScanError(ctx, "start_execution_status_readback")
+		}
 		if status != statusRunning {
 			return ErrTaskNotOwned
 		}

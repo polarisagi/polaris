@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -38,10 +39,19 @@ func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 	var ids []string
 	for rows.Next() {
 		var id string
-		_ = rows.Scan(&id)
+		// L1（读上下文降级为同函数一致的 Warn+continue 语义，见提交信息说明）：
+		// 扫描失败绝不能把零值 id 当作真实 task_id 追加进 ids——那会污染
+		// bb.cancels 查找与后续批量 UPDATE 的 WHERE 子句（虽然空字符串不会误伤
+		// 真实任务，但会让这一行僵尸任务本轮被跳过）。必须 continue 而非带着
+		// 空值继续。
+		if err := rows.Scan(&id); err != nil {
+			slog.WarnContext(ctx, "blackboard: reaper phase2 running-zombie row scan failed, skipping this row", "err", err)
+			metrics.RecordBlackboardScanError(ctx, "reaperPhase2_running_scan")
+			continue
+		}
 		ids = append(ids, id)
 	}
-	_ = rows.Close()
+	_ = rows.Close() //nolint:errcheck // 已有 defer rows.Close() 兜底，此处显式二次调用（sql.Rows.Close 幂等安全）
 
 	bb.mu.Lock()
 	for _, id := range ids {
@@ -72,9 +82,20 @@ func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 				if werr := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_failed", id); werr != nil {
 					slog.WarnContext(ctx, "blackboard: failed to write reaper event", "task_id", id, "error", werr)
 				}
+			}
+			// 全量扫描补录（同函数内与已定级的 GR-6-003 同类问题，一并修复）：
+			// commit 之前 broadcast 会导致"广播已发生但 DB 未必真的落盘"的不一致——
+			// 若 Commit 失败，订阅者已经收到 task_failed 事件，但 DB 里该任务可能
+			// 仍是 running。改为先 Commit 确认成功，再广播；Commit 失败则 Warn+
+			// counter，交给下一轮 reaperPhase2（30s 后）重新捕获同一僵尸任务。
+			if commitErr := tx.Commit(); commitErr != nil {
+				slog.WarnContext(ctx, "blackboard: zombie task commit failed, will retry next scan", "task_id", id, "error", commitErr)
+				metrics.RecordBlackboardScanError(ctx, "reaperPhase2_zombie_commit")
+				continue
+			}
+			if ra > 0 {
 				bb.broadcast(types.BlackboardEvent{Type: "task_failed", TaskID: id, Err: apperr.New(apperr.CodeTimeout, "reaper_phase2_zombie_timeout")})
 			}
-			_ = tx.Commit()
 			slog.WarnContext(ctx, "reaper phase2: zombie task killed", "task_id", id)
 		}
 	}
@@ -101,9 +122,16 @@ func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
 				if werr := bb.writeTaskEvent(ctx, tx, "system:blackboard", "task_failed", id); werr != nil {
 					slog.WarnContext(ctx, "blackboard: failed to write reaper event", "task_id", id, "error", werr)
 				}
-				bb.broadcast(types.BlackboardEvent{Type: "task_failed", TaskID: id, Err: apperr.New(apperr.CodeTimeout, "reaper_phase2_starvation_timeout")})
 			}
-			_ = tx.Commit()
+			// 同上：先 Commit 确认成功，再广播，避免"广播已发生但 DB 未落盘"。
+			if commitErr := tx.Commit(); commitErr != nil {
+				slog.WarnContext(ctx, "blackboard: starvation cleanup commit failed, will retry next scan", "count", len(starvedIDs), "error", commitErr)
+				metrics.RecordBlackboardScanError(ctx, "reaperPhase2_starvation_commit")
+			} else {
+				for _, id := range starvedIDs {
+					bb.broadcast(types.BlackboardEvent{Type: "task_failed", TaskID: id, Err: apperr.New(apperr.CodeTimeout, "reaper_phase2_starvation_timeout")})
+				}
+			}
 		}
 	} else {
 		slog.WarnContext(ctx, "blackboard: starvation tx begin failed", "error", err)
@@ -187,7 +215,13 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 	args := []any{statusFailed, statusPending, statusClaimed, statusRunning} //nolint:prealloc
 	args = append(args, taskIDs...)
 
-	_, _ = bb.db.ExecContext(ctx, query, args...)
+	// L2：批量回写失败下一轮 reap（1s 后）仍会重新扫到同一批 expires_at 已过期
+	// 的任务并重试，不阻断（cancel() 已经执行，goroutine 已经中止，只是 DB
+	// 状态未及时回写），但必须 Warn + counter，持续失败意味着 DB 层面有问题。
+	if _, err := bb.db.ExecContext(ctx, query, args...); err != nil {
+		slog.WarnContext(ctx, "blackboard: reap lease-expire batch update failed, will retry next scan", "count", len(expired), "err", err)
+		metrics.RecordBlackboardScanError(ctx, "reap_lease_expire_update")
+	}
 
 	for _, r := range expired {
 		bb.broadcast(types.BlackboardEvent{
