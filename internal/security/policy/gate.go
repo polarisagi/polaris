@@ -9,17 +9,16 @@
 //
 // 双轨实现: 启动时从 configs/policy/ embed 加载 Cedar 策略（Rust FFI）；
 // FFI 不可用时降级到 in-memory Go 规则兜底，行为语义等价。
+//
+// 2026-08-02 拆分说明（Test_inv_FileLineLimit R7 400 行上限存量债务，见
+// local_playground/upgrade/99-new-findings.md 阶段03 R-07 发现，纯搬运无行为
+// 变更）：本文件保留 Gate 核心结构与 IsAuthorized/Review 决策入口；出口污点
+// 检查迁至 gate_egress.go；Cedar FFI 求值细节迁至 gate_cedar.go。
 package policy
 
 import (
-	"github.com/polarisagi/polaris/internal/security/token"
-
-	"github.com/polarisagi/polaris/internal/observability/metrics"
-
 	"context"
 	"fmt"
-	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -251,61 +251,6 @@ func (g *Gate) Review(ctx context.Context, req types.PolicyReviewRequest) (types
 	}, nil
 }
 
-// formatCedarUID 确保输入符合 Cedar EntityUID 格式 (Type::"ID")。
-func formatCedarUID(defaultType, val string) string {
-	if val == "" {
-		return defaultType + `::"anonymous"`
-	}
-	if strings.Contains(val, `::"`) {
-		return val
-	}
-	// 转义双引号
-	escaped := strings.ReplaceAll(val, `"`, `\"`)
-	return defaultType + `::"` + escaped + `"`
-}
-
-// TaintEgressCheck 检查 Taint 出口：TaintMedium 级别数据不可直接输出到外部接口。
-// 违反 → ErrTaintBlockedEgress（对应 M11 §2.3 SanitizeBySchema 规则）。
-func (g *Gate) TaintEgressCheck(levels ...types.TaintLevel) error {
-	if g == nil {
-		return apperr.New(apperr.CodeInternal, "policy: nil receiver")
-	}
-	result := types.PropagateTaint(levels...)
-	// TaintMedium 硬地板：Medium 及以上级别数据不得直接出口，必须经过清洗
-	if result >= types.TaintMedium {
-		return ErrTaintBlockedEgress
-	}
-	return nil
-}
-
-// CheckEgressWithExemption 出口污点检查，支持 HITL 放行令牌。
-// token 为 nil 时退化为 CheckEgress（无放行通道）。
-// 拦截时返回的错误是 *TaintEgressBlockedError（携带被拦截的原始 data，供上游
-// M04 §3 转义路径铸造 TaintExemptionToken 时使用——豁免令牌的哈希必须精确匹配
-// 被拦截的字节内容，不能用人类可读摘要代替），其 Unwrap() 仍指向
-// ErrTaintBlockedEgress，errors.Is(err, ErrTaintBlockedEgress) 不受影响。
-func (g *Gate) CheckEgressWithExemption(data []byte, taintLevel types.TaintLevel, tok *token.TaintExemptionToken) error {
-	if g == nil {
-		return apperr.New(apperr.CodeInternal, "policy: nil receiver")
-	}
-	if taintLevel < types.TaintMedium {
-		return nil
-	}
-	// HITL 放行：令牌有效则放行，并记录审计事件
-	if tok != nil && tok.Valid(data) {
-		return nil // 已放行，审计由调用方通过 EventLog 记录 token.Summary()
-	}
-	return &TaintEgressBlockedError{Data: data}
-}
-
-// TaintEgressBlockedError 包裹 ErrTaintBlockedEgress 并携带被拦截的原始数据。
-type TaintEgressBlockedError struct {
-	Data []byte
-}
-
-func (e *TaintEgressBlockedError) Error() string { return ErrTaintBlockedEgress.Error() }
-func (e *TaintEgressBlockedError) Unwrap() error { return ErrTaintBlockedEgress }
-
 // AddForbidRule 热更新添加 Forbid 规则（仅限 Layer 3 策略热更新；Layer 1/2 内置规则不可删除）。
 func (g *Gate) AddForbidRule(r ForbidRule) {
 	g.mu.Lock()
@@ -365,65 +310,3 @@ func (g *Gate) recordFailure() {
 // ErrTaintBlockedEgress 实际阻断阈值为 TaintMedium 及以上（>= TaintMedium）。
 // 与 SafeDialer.TaintEgressCheck 采用同一阈值，两层一致——见 M11 §6。
 var ErrTaintBlockedEgress = apperr.New(apperr.CodeInternal, "policy: taint egress blocked (TaintMedium+ data cannot exit without sanitization)")
-
-func (g *Gate) evaluateCedar(ctx context.Context, principal, action, resource string, evalCtx map[string]any) (bool, bool, error) {
-	pUID := formatCedarUID("Principal", principal)
-	aUID := formatCedarUID("Action", action)
-	rUID := formatCedarUID("Resource", resource)
-
-	// 传递 evalTimeout 转换为毫秒给 FFI
-	timeoutMs := uint64(g.evalTimeout.Milliseconds())
-	if timeoutMs == 0 {
-		timeoutMs = 10 // 兜底 10ms（Go 侧永不向 Rust 请求"0=无限等待"语义，安全边界考虑）
-	}
-	allowed, reason, err := g.cedar.Evaluate(pUID, aUID, rUID, evalCtx, timeoutMs)
-
-	if err == nil {
-		if !allowed && evalCtx != nil {
-			evalCtx["cedar_reason"] = reason
-		}
-
-		// GD-2-001 修复：此前无论 cedarEnforceMode 取何值，Cedar 的 Allow 结果
-		// 恒不作为终裁——只有 Deny 分支会在 EnforceDeny/EnforceFull 下立即返回，
-		// Allow 分支永远 "falls through to go rules"，导致配置为 CedarEnforceFull
-		// （"完全生效"）时与 CedarEnforceDeny 行为完全等价：Cedar Layer 3 Permit
-		// 规则从未真正授予过任何权限，必须由 Go 兜底 permitRules 独立再次命中
-		// 才能放行，Cedar 白名单形同虚设。这与双轨实现的设计意图矛盾——
-		// configs/policy/soft_constraints.cedar（Layer 3）在 Cedar FFI 可用时
-		// 应当是权威源，Go 规则只是 FFI 不可用时的降级兜底（本函数外层
-		// `g.cedar != nil && g.cedar.PolicyCount() > 0` 已保证走到这里时 Cedar
-		// 确实已加载策略）。
-		//
-		// 三档语义现在真正区分：
-		//   - CedarEnforceFull : Cedar 结果（Allow 与 Deny）均直接终裁，不回退 Go 规则。
-		//   - CedarEnforceDeny : 仅 Cedar 的 Deny 立即生效（新增 Forbid 可灰度先行）；
-		//     Cedar 的 Allow 仍回退 Go permitRules 独立判定（迁移期放权更谨慎）。
-		//   - CedarShadow      : 只记录，不影响终裁，始终回退 Go 规则。
-		switch {
-		case g.cedarEnforceMode == CedarEnforceFull:
-			slog.DebugContext(ctx, "cedar evaluated (full enforce, authoritative)", "allowed", allowed, "reason", reason)
-			return true, allowed, nil
-		case !allowed && g.cedarEnforceMode == CedarEnforceDeny:
-			slog.DebugContext(ctx, "cedar evaluated deny (enforced)", "reason", reason)
-			return true, false, nil
-		default:
-			slog.DebugContext(ctx, "cedar evaluated (falling through to go rules)", "allowed", allowed, "reason", reason)
-			return false, false, nil
-		}
-	}
-
-	metrics.GlobalCedarDegradedTotal.Add(1)
-	if strings.Contains(err.Error(), "timeout") {
-		// R-01：窗口内密集泄漏才触发 KillSwitch，长期偶发泄漏只计入
-		// cedarLeaksTotal（Prometheus 趋势观测），不再用全进程生命周期的
-		// 只增计数误判为"持续故障"（见 gate.go 顶部 cedarLeakWindow 注释）。
-		leaksInWindow := g.recordCedarLeak(time.Now())
-		slog.WarnContext(ctx, "cedar ffi evaluate timed out, degrading to go rules", "error", err, "leaks_in_window", leaksInWindow, "cumulative_leaks_total", g.cedarLeaksTotal.Load())
-		if leaksInWindow >= cedarLeakKillSwitchThreshold && g.onKillSwitch != nil {
-			g.onKillSwitch()
-		}
-	} else {
-		slog.WarnContext(ctx, "cedar ffi failed, degrading to go rules", "error", err)
-	}
-	return false, false, nil
-}
