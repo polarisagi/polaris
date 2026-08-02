@@ -67,7 +67,11 @@ func (h *PluginHandler) syncMarketplace(ctx context.Context, mp protocol.Marketp
 		// 仓库无新变化；若 catalog 已有条目（正常情况）则跳过，节省解析开销。
 		// 若 catalog 为空（如 DB 重建），仍需重新写库，否则插件列表永久为空。
 		var count int
-		_ = h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM extension_catalog WHERE marketplace_id=?", mp.ID).Scan(&count)
+		if err := h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM extension_catalog WHERE marketplace_id=?", mp.ID).Scan(&count); err != nil {
+			// 查询失败时 count 保持零值，退化为"当作 catalog 为空"继续走下方重新写库
+			// 路径（安全默认），但底层查询错误（如 schema 不一致）本身需要留痕。
+			slog.Warn("plugin_sync: count existing catalog entries failed", "marketplace", mp.ID, "err", err)
+		}
 		if count > 0 {
 			return 0
 		}
@@ -155,14 +159,21 @@ func (h *PluginHandler) SyncAllMarketplaces(ctx context.Context, localOnly bool)
 	rows.Close()
 
 	tmpDir := filepath.Join(h.DataDir, "tmp", "marketplaces")
-	_ = os.MkdirAll(tmpDir, 0755)
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		// 失败会导致下面每个 marketplace 的 pullOrClone/os.Stat 逐个静默返回
+		// available=false，表现为"全部市场同步 0 条"且无任何根因线索，故此处
+		// 必须留痕（HE-1）。
+		slog.Warn("plugin_sync: create marketplaces tmp dir failed", "dir", tmpDir, "err", err)
+	}
 
 	// 首先清理已经从活跃列表中移除的孤儿市场缓存
 	activeIDs := make([]any, 0, len(mps))
 	for _, mp := range mps {
 		activeIDs = append(activeIDs, mp.ID)
 	}
-	_ = h.ExtRepo.DeleteOrphanCatalogEntries(ctx, activeIDs)
+	if err := h.ExtRepo.DeleteOrphanCatalogEntries(ctx, activeIDs); err != nil {
+		slog.Warn("plugin_sync: delete orphan catalog entries failed", "err", err)
+	}
 
 	syncedCount := 0
 	for _, mp := range mps {

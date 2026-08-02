@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -66,7 +67,11 @@ func (h *ProviderHandler) HandleCreateModel(w http.ResponseWriter, r *http.Reque
 	now := time.Now().UTC().Format(time.RFC3339)
 	// 独占角色：同角色只能有一个 default/reasoning
 	if m.Role == "default" || m.Role == "reasoning" {
-		_ = h.ProviderRepo.ClearModelRoles(r.Context(), []string{m.Role}, "")
+		if err := h.ProviderRepo.ClearModelRoles(r.Context(), []string{m.Role}, ""); err != nil {
+			// 失败会导致"同角色只能有一个"的独占约束被打破（新旧模型同时持有该角色），
+			// 属于真实数据一致性风险，需留痕（HE-1）。
+			slog.Warn("provider_models: clear model roles before create failed", "role", m.Role, "err", err)
+		}
 	}
 	err := h.ProviderRepo.UpsertModel(r.Context(), types.ProviderModelRow{
 		ID:         m.ID,
@@ -107,7 +112,9 @@ func (h *ProviderHandler) HandleUpdateModel(w http.ResponseWriter, r *http.Reque
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if m.Role == "default" || m.Role == "reasoning" {
-		_ = h.ProviderRepo.ClearModelRoles(r.Context(), []string{m.Role}, modelID)
+		if err := h.ProviderRepo.ClearModelRoles(r.Context(), []string{m.Role}, modelID); err != nil {
+			slog.Warn("provider_models: clear model roles before update failed", "role", m.Role, "err", err)
+		}
 	}
 	err := h.ProviderRepo.UpsertModel(r.Context(), types.ProviderModelRow{
 		ID:         modelID,
@@ -178,13 +185,19 @@ func (h *ProviderHandler) HandleSetModelRoles(w http.ResponseWriter, r *http.Req
 		httputil.RespondError(w, "", err, http.StatusBadRequest)
 		return
 	}
-	_ = h.ProviderRepo.ClearModelRoles(r.Context(), []string{"default", "reasoning"}, "")
+	if err := h.ProviderRepo.ClearModelRoles(r.Context(), []string{"default", "reasoning"}, ""); err != nil {
+		slog.Warn("provider_models: clear model roles before set failed", "err", err)
+	}
 
 	if req.DefaultModelID != "" {
-		_ = h.ProviderRepo.SetModelRole(r.Context(), req.DefaultModelID, "default")
+		if err := h.ProviderRepo.SetModelRole(r.Context(), req.DefaultModelID, "default"); err != nil {
+			slog.Warn("provider_models: set default model role failed", "model_id", req.DefaultModelID, "err", err)
+		}
 	}
 	if req.ReasoningModelID != "" {
-		_ = h.ProviderRepo.SetModelRole(r.Context(), req.ReasoningModelID, "reasoning")
+		if err := h.ProviderRepo.SetModelRole(r.Context(), req.ReasoningModelID, "reasoning"); err != nil {
+			slog.Warn("provider_models: set reasoning model role failed", "model_id", req.ReasoningModelID, "err", err)
+		}
 	}
 	h.reloadProviders()
 	w.Header().Set("Content-Type", "application/json")

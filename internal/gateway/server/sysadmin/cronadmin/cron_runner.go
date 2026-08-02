@@ -73,7 +73,7 @@ func finalizeWorktreeChanges(ctx context.Context, ca *CronAdmin, a *automation, 
 // executeAutomation 创建 run 记录、调用 Agent 执行、更新状态。
 // 返回 runID，异步执行不阻塞调用方。
 //
-//nolint:gocyclo,funlen
+//nolint:gocyclo,funlen,nestif
 func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigger string) string {
 	runID := newRunID()
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -164,8 +164,12 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 		if ca.HITLGateway != nil && a.RequiresHITL {
 			// 更新状态为 suspended，等待审批
-			_ = ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", "", 0)
-			_ = ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "suspended")
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", "", 0); err != nil {
+				slog.Warn("automation: update run status to suspended failed", "run", runID, "err", err)
+			}
+			if err := ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "suspended"); err != nil {
+				slog.Warn("automation: update automation status to suspended failed", "id", a.ID, "err", err)
+			}
 
 			var taintLevel types.TaintLevel
 			switch trigger {
@@ -195,8 +199,12 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 				return
 			}
 			// 审批通过，继续执行
-			_ = ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "running", "", "", 0)
-			_ = ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "running")
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "running", "", "", 0); err != nil {
+				slog.Warn("automation: update run status to running failed", "run", runID, "err", err)
+			}
+			if err := ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "running"); err != nil {
+				slog.Warn("automation: update automation status to running failed", "id", a.ID, "err", err)
+			}
 		}
 
 		// [A-03 Step5] 原内联 AcquireHeadless + SaveMessage(assistant) +
@@ -239,7 +247,12 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 					slog.Warn("automation: channel config_json 解析失败，result_action 可能因缺少配置而投递失败",
 						"automation_id", a.ID, "channel_id", chID, "err", cfgErr)
 				}
-				_ = ca.ChannelMgr.SendReply(bgCtx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply)
+				if err := ca.ChannelMgr.SendReply(bgCtx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply); err != nil {
+					// 呼应上方 2026-08-02 注释：区分"配置解析失败"与"发送本身失败"，
+					// 此前二者都不可见，运维无从判断 result_action 未送达的根因。
+					slog.Warn("automation: result_action send reply failed",
+						"automation_id", a.ID, "channel_id", chID, "err", err)
+				}
 			} else {
 				slog.Warn("automation: channel not found for result_action",
 					"automation_id", a.ID, "channel_id", chID, "err", qErr)

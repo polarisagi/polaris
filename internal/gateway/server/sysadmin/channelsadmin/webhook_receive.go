@@ -163,5 +163,7 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		return
 	}
 
-	_ = h.ChannelMgr.SendReply(ctx, channelType, channelID, cfg, msg, reply)
+	if err := h.ChannelMgr.SendReply(ctx, channelType, channelID, cfg, msg, reply); err != nil {
+		slog.Warn("channel dispatch: send reply failed", "channel", channelID, "err", err)
+	}
 }

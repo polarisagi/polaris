@@ -73,9 +73,15 @@ func SeedProvidersFromEnv(ctx context.Context, repo protocol.ProviderRepository)
 				"env_var", seed.envKey)
 		} else {
 			// 已存在，只更新 api_key（防止 key 轮换后旧 key 留在 DB）
-			_ = repo.UpdateProviderAPIKey(ctx, seed.id, apiKey, now)
-			slog.Info("polaris: env provider already in DB, api_key refreshed",
-				"id", seed.id, "env_var", seed.envKey)
+			if err := repo.UpdateProviderAPIKey(ctx, seed.id, apiKey, now); err != nil {
+				// 此前无论成败都打印 "api_key_refreshed" Info 日志，误导排查
+				// "key 轮换未生效"问题；现按实际结果分级记录（HE-1）。
+				slog.Warn("polaris: SeedProvidersFromEnv: api_key refresh failed",
+					"id", seed.id, "env_var", seed.envKey, "err", err)
+			} else {
+				slog.Info("polaris: env provider already in DB, api_key refreshed",
+					"id", seed.id, "env_var", seed.envKey)
+			}
 		}
 
 		// 写入 provider_models 表（已存在则忽略）

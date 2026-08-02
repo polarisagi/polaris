@@ -70,7 +70,9 @@ func (h *PluginHandler) registerPluginMCPServers(ctx context.Context, pluginID, 
 				TrustTier: trustTier,
 			}
 			concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.start_mcp_server_register", func(ctx context.Context) {
-				_ = h.StartMCPServer(ctx, cfg)
+				if err := h.StartMCPServer(ctx, cfg); err != nil {
+					slog.Warn("plugin_catalog: start registered plugin mcp server failed", "server", srvName, "err", err)
+				}
 			})
 		}
 	}
@@ -79,6 +81,8 @@ func (h *PluginHandler) registerPluginMCPServers(ctx context.Context, pluginID, 
 // registerPluginSkills 扫描插件 bundle 中声明的 skills 目录，
 // 将每个 SKILL.md 注册进 skills 表（agentskills.io 标准：plugin 安装时 skills 自动发现）。
 // skillReg 为 nil 时静默跳过（Tier-0 降级）。
+//
+//nolint:gocyclo
 func (h *PluginHandler) registerPluginSkills(ctx context.Context, pluginID, pluginName, destDir string, bundle *protocol.PluginBundleManifest, trustTier int) {
 	if h.SkillReg == nil {
 		return
@@ -117,13 +121,17 @@ func (h *PluginHandler) registerPluginSkills(ctx context.Context, pluginID, plug
 	if skillsRoot == "" {
 		return
 	}
-	_ = filepath.WalkDir(skillsRoot, func(path string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(skillsRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || d.Name() != "SKILL.md" {
 			return nil //nolint:nilerr
 		}
 		h.registerOneSkill(ctx, pluginID, pluginName, path, trustTier)
 		return nil
-	})
+	}); err != nil {
+		// walkFn 内部已把逐项错误吞掉（nilerr）继续遍历；这里只可能是根目录本身
+		// 不可达（权限/竞态删除），此时 skills 扫描整体失败，需留痕供排查。
+		slog.Warn("plugin_catalog: walk skills dir failed", "root", skillsRoot, "err", err)
+	}
 }
 
 // registerOneSkill 读取单个 SKILL.md 并写入 skills 表。

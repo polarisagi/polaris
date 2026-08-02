@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -95,7 +96,9 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 	installReq.Config = string(genConfigJSON)
 	installReq.RuntimeID = mcpID
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq); err != nil {
-		_ = h.ExtRepo.DeleteMCPServer(r.Context(), mcpID)
+		if delErr := h.ExtRepo.DeleteMCPServer(r.Context(), mcpID); delErr != nil {
+			slog.Warn("plugin_custom: rollback mcp_servers row failed", "mcp_id", mcpID, "err", delErr)
+		}
 		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -103,7 +106,7 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 	// 异步启动 MCP Server
 	if h.MCPMgr != nil {
 		concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.start_mcp_server_from_intent", func(ctx context.Context) {
-			_ = h.StartMCPServer(ctx, types.MCPServerConfig{
+			if err := h.StartMCPServer(ctx, types.MCPServerConfig{
 				ID:        mcpID,
 				Name:      pluginName,
 				Transport: "stdio",
@@ -112,7 +115,9 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 				Timeout:   30,
 				TrustTier: 1,
 				Enabled:   true,
-			})
+			}); err != nil {
+				slog.Warn("plugin_custom: start mcp server from intent failed", "id", mcpID, "err", err)
+			}
 		})
 	}
 

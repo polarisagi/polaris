@@ -51,7 +51,7 @@ func (s *Server) SeedBuiltinConfig(marketplacesData, registryData []byte) {
 		if err := yaml.Unmarshal(registryData, &entries); err == nil {
 			for _, e := range entries {
 				payload, _ := json.Marshal(e)
-				_ = s.extRepo.SeedCatalogEntry(context.Background(), types.ExtCatalogRow{
+				if err := s.extRepo.SeedCatalogEntry(context.Background(), types.ExtCatalogRow{
 					ID:            e.ID,
 					MarketplaceID: "builtin",
 					Type:          e.Type,
@@ -61,7 +61,10 @@ func (s *Server) SeedBuiltinConfig(marketplacesData, registryData []byte) {
 					TrustTier:     e.TrustTier,
 					URL:           e.URL,
 					Payload:       string(payload),
-				})
+				}); err != nil {
+					// 与上方 SeedMarketplace 分支保持一致的错误留痕（HE-1）。
+					slog.Error("polaris-server: SeedCatalogEntry failed", "err", err, "id", e.ID)
+				}
 			}
 		} else {
 			slog.Warn("polaris-server: configs/extensions/registry.yaml parse failed", "err", err)
