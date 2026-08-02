@@ -58,9 +58,12 @@ WITH RECURSIVE cascade(id, hop, path) AS (
     SELECT n.nbr, cascade.hop + 1, cascade.path || n.nbr || '|'
     FROM cascade
     JOIN (
-        SELECT source_id AS node, target_id AS nbr FROM semantic_relations
+        -- ADR-0083 双时态：级联失效只沿"当前仍成立的事实"传播，历史版本边
+        -- （status != 'active'，信念修正后的旧关系）不参与扩散，否则一条早已
+        -- 被取代的关系会把失效状态传给本不该受影响的节点。
+        SELECT source_id AS node, target_id AS nbr FROM semantic_relations WHERE status = 'active'
         UNION ALL
-        SELECT target_id AS node, source_id AS nbr FROM semantic_relations
+        SELECT target_id AS node, source_id AS nbr FROM semantic_relations WHERE status = 'active'
     ) n ON n.node = cascade.id
     WHERE cascade.hop < ?
       AND instr(cascade.path, '|' || n.nbr || '|') = 0

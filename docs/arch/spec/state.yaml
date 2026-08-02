@@ -838,10 +838,12 @@ thresholds:
     core_memory_max_blocks: 16 # toml:"core.memory_max_blocks" — ADR-0082 MemFS 块数上限
     rrf_k: 60
     graph_max_depth: 2
+    relation_weight_delta_threshold: 0.2 # toml:"graph.relation_weight_delta_threshold" — ADR-0083 关系边信念修正阈值
     re_eval_when:
       - episodic_ttl_days: ["storage_cost_exceeds_budget"]
       - core_memory_block_max_kb: ["llm_context_window_pressure"]
       - core_memory_max_blocks: ["agent_hits_block_cap_frequently"]
+      - relation_weight_delta_threshold: ["belief_revision_version_chain_explosion", "belief_revision_never_triggers"]
     mutation_bus_channel_cap: 4096
     max_rows_per_tx: 50
     max_batch_size: 64

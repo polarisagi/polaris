@@ -228,10 +228,6 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation, t
 		return apperr.New(apperr.CodeInternal,
 			"SemanticMem.UpsertRelation: FromDBID/ToDBID not resolved; call GetEntity after UpsertFact to populate")
 	}
-	db, err := sm.requireDB()
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertRelation", err)
-	}
 
 	rel.TaintLevel = types.PropagateTaint(rel.TaintLevel, taint)
 	if rel.Properties == nil {
@@ -250,30 +246,37 @@ func (sm *SemanticMem) UpsertRelation(ctx context.Context, rel types.Relation, t
 	}
 
 	var nullProps any
+	propsJSON := ""
 	if len(rel.Properties) > 0 {
 		if b, merr := json.Marshal(rel.Properties); merr == nil {
 			nullProps = string(b)
+			propsJSON = string(b)
 		}
 	}
 
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO semantic_relations
-		    (source_id, target_id, relation_type, weight, properties,
-		     created_at, source_event_id, updated_at, confidence, taint_level)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
-		    weight      = MAX(weight, excluded.weight),
-		    updated_at  = excluded.updated_at,
-		    confidence  = MAX(confidence, excluded.confidence),
-		    taint_level = MAX(taint_level, excluded.taint_level),
-		    properties  = excluded.properties`,
-		rel.FromDBID, rel.ToDBID, rel.RelationType, weight, nullProps,
-		now, nullableInt64(rel.SourceEventID), now, confidence, int(rel.TaintLevel),
-	)
+	// ADR-0083 双时态：uq_semantic_rel_active 只约束 status='active' 切片，
+	// 不能再用 ON CONFLICT(source_id, target_id, relation_type) 隐式 upsert
+	// （该三元组约束已删除）。显式读现有活跃边后按"实质变化"判定分支处理，
+	// 三个分支（新建/原地更新/信念修正）的 SQL 细节下沉到
+	// semantic_relation_temporal.go，本函数只负责编排（R7 拆分 + gocyclo）。
+	existing, err := sm.queryActiveRelation(ctx, rel.FromDBID, rel.ToDBID, rel.RelationType)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SemanticMem.UpsertRelation", err)
 	}
-	return nil
+
+	p := relationWriteParams{
+		FromDBID: rel.FromDBID, ToDBID: rel.ToDBID, RelationType: rel.RelationType,
+		Weight: weight, Confidence: confidence, TaintLevel: int(rel.TaintLevel),
+		SourceEventID: rel.SourceEventID, NullProps: nullProps, Now: now,
+	}
+
+	if existing == nil {
+		return sm.insertNewActiveRelation(ctx, p)
+	}
+	if !relationSubstantiallyChanged(*existing, weight, propsJSON, relationWeightDeltaThreshold()) {
+		return sm.updateRelationInPlace(ctx, *existing, p)
+	}
+	return sm.reviseRelation(ctx, *existing, p)
 }
 
 func (sm *SemanticMem) GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error) {

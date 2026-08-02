@@ -158,11 +158,14 @@ func (cr *CognitiveReplayer) replaySemantic(ctx context.Context) error {
 
 		// 关系表权威名为 semantic_relations（schema/004），source_id/target_id 是实体主键，
 		// 需 JOIN 回实体名——SurrealDB 图边以实体名为节点 ID（与 EpisodicGraphIndexer 口径一致）。
+		// ADR-0083 双时态：只回放当前活跃关系——历史版本边（信念修正后的旧关系，
+		// status != 'active'）不应进入 SurrealDB 侧的"当前知识图谱"读路径视图。
 		rows, err := cr.db.QueryContext(ctx, `
 			SELECT se_from.name, se_to.name, sr.relation_type, sr.weight
 			FROM semantic_relations sr
 			JOIN semantic_entities se_from ON se_from.id = sr.source_id
 			JOIN semantic_entities se_to   ON se_to.id = sr.target_id
+			WHERE sr.status = 'active'
 			ORDER BY sr.id LIMIT ? OFFSET ?`, cr.batchSize, offset)
 		if err != nil {
 			slog.WarnContext(ctx, "cognitive replayer: failed to query semantic_relations, skipping graph replay", "err", err)

@@ -125,14 +125,42 @@ CREATE TABLE IF NOT EXISTS semantic_relations (
     --   only-up 语义：ON CONFLICT 时用 MAX(taint_level, excluded.taint_level) 合并。
     --   外部来源局部下限 TaintMedium（XR-16）。
 
-    UNIQUE(source_id, target_id, relation_type)
-    -- ↑ 同一对实体间同一关系类型唯一 —— 重复提取时 UPDATE weight/updated_at。
+    valid_from      INTEGER,
+    -- ↑ 关系（事实）生效起始时间（Unix 毫秒）。NULL = 从创建即生效。
+    --   与 semantic_entities.valid_from 语义一致：这是"有效时间"，区别于
+    --   created_at 的"事务时间"（我们何时得知这条事实）。
+    --   Zep/Graphiti 双时态模型：事实=边，边必须携带有效期（ADR-0083）。
+
+    valid_until     INTEGER,
+    -- ↑ 关系失效时间（Unix 毫秒）。NULL = 至今有效。
+    --   信念修正时旧边置为 now 而非删除，保留历史可回放（ADR-0083）。
+
+    status          TEXT NOT NULL DEFAULT 'active',
+    -- ↑ 'active' | 'superseded' | 'expired'。与实体侧语义对齐，供图遍历
+    --   WHERE status='active' 快速过滤（避免每次都算时间区间）。
+
+    superseded_by   INTEGER REFERENCES semantic_relations(id)
+    -- ↑ 被取代的边指向新边，构成同一事实的版本链（ADR-0083）。
 );
+
+-- 活跃关系唯一性（ADR-0083）：只约束"当前活跃版本"，历史版本
+-- （status != 'active'）不受此约束，使同一 (source,target,relation_type)
+-- 三元组可保留完整时态版本链。原表级 UNIQUE(source_id, target_id,
+-- relation_type) 已删除——所有依赖旧 ON CONFLICT(source_id, target_id,
+-- relation_type) 的 upsert 语句必须同步改为此部分索引形式。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_semantic_rel_active
+    ON semantic_relations(source_id, target_id, relation_type)
+    WHERE status = 'active';
 
 -- 出边索引（source → target，BFS 正向遍历）
 CREATE INDEX IF NOT EXISTS idx_semantic_rel_source ON semantic_relations(source_id);
 -- 入边反向索引（target → source，BFS 反向遍历 + 双向路径检索）
 CREATE INDEX IF NOT EXISTS idx_semantic_rel_target ON semantic_relations(target_id);
+-- 关系时态有效窗索引（AsOf 查询与 TemporalExpirer 扫描加速，ADR-0083）
+CREATE INDEX IF NOT EXISTS idx_semantic_rel_valid
+    ON semantic_relations(valid_from, valid_until);
+-- 活跃关系索引（图遍历热路径 + status 过滤，ADR-0083）
+CREATE INDEX IF NOT EXISTS idx_semantic_rel_status ON semantic_relations(status);
 
 -- 生命周期索引（status 查询加速，HybridRetriever WHERE status='active'）
 CREATE INDEX IF NOT EXISTS idx_semantic_ent_status ON semantic_entities(status);

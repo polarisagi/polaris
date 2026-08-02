@@ -54,8 +54,13 @@ func NewMockStore() *MockStore {
 			updated_at      INTEGER NOT NULL DEFAULT 0,
 			confidence      REAL NOT NULL DEFAULT 1.0,
 			taint_level     INTEGER NOT NULL DEFAULT 0,
-			UNIQUE(source_id, target_id, relation_type)
+			valid_from      INTEGER,
+			valid_until     INTEGER,
+			status          TEXT NOT NULL DEFAULT 'active',
+			superseded_by   INTEGER REFERENCES semantic_relations(id)
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS uq_semantic_rel_active
+			ON semantic_relations(source_id, target_id, relation_type) WHERE status = 'active';
 		CREATE TABLE IF NOT EXISTS episodic_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL DEFAULT '',

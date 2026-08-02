@@ -201,6 +201,15 @@ type Relation struct {
 	// DDL: semantic_relations.source_id / target_id（INTEGER FK → semantic_entities.id）
 	FromDBID int64 // 来源实体的数据库自增 ID
 	ToDBID   int64 // 目标实体的数据库自增 ID
+
+	// 双时态知识图谱字段（ADR-0083，来源: Zep/Graphiti temporal belief revision）。
+	// 与 Entity 的同名字段语义一致，DDL: semantic_relations.valid_from / valid_until /
+	// status / superseded_by。
+	DBID         int64  // 本条关系边自身的数据库自增 ID（区别于 FromDBID/ToDBID 指向的实体 ID）
+	Status       string // 'active'(默认) | 'superseded' | 'expired'
+	SupersededBy int64  // status='superseded' 时指向新版本关系边的 DBID
+	ValidFrom    int64  // 事实生效起始时间（Unix 毫秒）；0 = 从创建即生效
+	ValidUntil   int64  // 事实失效时间（Unix 毫秒）；0 = 永久有效
 }
 type Document struct {
 	ID         string
