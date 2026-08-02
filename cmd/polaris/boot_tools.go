@@ -325,6 +325,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		}
 	}
 
+	// ADR-0084：list_a2a_agents 让 transfer_to_agent 的 "mcp:<server>/<agent>"
+	// 委派目标第一次拥有真实可发现路径，独立于 mb.Mem 是否可用。
+	if err := builtin.RegisterA2ATools(inProcSandbox, toolReg, &mcpA2AListerAdapter{inner: mcpMgr}); err != nil {
+		slog.Warn("polaris: a2a tool registration failed", "err", err)
+	}
+
 	var nativeCogn native.CognitiveSearcher
 	if sb.SurrealStore != nil {
 		nativeCogn = nativeCognAdapter{s: sb.SurrealStore}

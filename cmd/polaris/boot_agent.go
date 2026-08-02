@@ -497,7 +497,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 处理的 "workflow_step" 类型，其余任务一律走 AgentPool.AcquireHeadless。
 	// "debate" 类型由专用 DebateWorker 认领（见 debate_worker.go），排除后防止
 	// DefaultTaskWorker 把结构化 DebateJobIntent JSON 当纯文本传给 LLM（HE-3）。
-	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool, "workflow_step", orchestrator.DebateTaskType)
+	// "agent_handoff:mcp:" 前缀由专用 MCPA2AWorker 认领（ADR-0084），排除后
+	// 防止 target_agent_role 的 mcp: 委派语义被当作纯文本 headless 查询丢弃。
+	defaultTaskWorker := orchestrator.NewDefaultTaskWorker(blackboard, agentPool,
+		"workflow_step", orchestrator.DebateTaskType, orchestrator.MCPA2AHandoffPrefix)
+
+	// ADR-0084：MCP A2A 出站委派专用 Worker，认领 "agent_handoff:mcp:<server>/<agent>"
+	// 任务，转译为对目标 MCP Server 的 a2a_delegate 工具调用。*mcp.MCPManager 已天然
+	// 满足 orchestrator.MCPToolCaller（结构子类型，无需适配器）。
+	mcpA2AWorker := orchestrator.NewMCPA2AWorker(blackboard, tb.MCPMgr,
+		time.Duration(sb.Cfg.Thresholds.M8Orchestrator.A2AHandoffTimeoutSeconds)*time.Second)
 
 	agentRegistry.Register("agent-0", orchestrator.AgentCard{ //nolint:errcheck
 		Name:   "agent-0",
@@ -941,6 +950,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	debateWorker := orchestrator.NewDebateWorker(blackboard, debateExec)
 	sv.AddWorker("debate-worker", func(ctx context.Context) error {
 		return debateWorker.RunLoop(ctx)
+	})
+	// ADR-0084：MCP A2A 出站委派 Worker（见上方 mcpA2AWorker 构造注释）。
+	sv.AddWorker("mcp-a2a-worker", func(ctx context.Context) error {
+		return mcpA2AWorker.RunLoop(ctx)
 	})
 	sv.AddWorker("memory-agent", func(ctx context.Context) error {
 		memoryAgent.Run(ctx)

@@ -79,6 +79,10 @@ type
 AgentController interface {
 	AgentID() string
 	SetTaskIntent(intent []byte)
+	// SetSpawnDepth 注入本次执行继承的委派链深度（ADR-0084），供
+	// transfer_to_agent 投递子任务时据此计算 SpawnDepth+1。depth<=0 等同于
+	// 顶层任务（默认零值），与引入本机制前的行为一致。
+	SetSpawnDepth(depth int)
 	SendIntent(trigger types.AgentTrigger) error
 	SurpriseIndex() float64
 	Memory() MemoryFacade

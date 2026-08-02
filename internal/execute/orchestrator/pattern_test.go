@@ -40,6 +40,7 @@ func setupPatternBlackboard(t *testing.T) *SQLiteBlackboard {
 			intent BLOB,
 			trace_id TEXT,
 			span_id TEXT,
+			spawn_depth INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT (datetime('now')),
 			updated_at DATETIME DEFAULT (datetime('now'))
 		)

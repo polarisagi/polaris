@@ -154,6 +154,104 @@ func TestDefaultTaskWorker_HeadlessFailureFailsTask(t *testing.T) {
 	}
 }
 
+// TestDefaultTaskWorker_SkipsMCPA2APrefixExcludedType 验证 ADR-0084 引入的
+// 前缀匹配排除：Type 带 "agent_handoff:mcp:" 前缀（非精确等于该前缀本身）的
+// 任务同样被排除，不被当作纯文本 headless 查询执行。
+func TestDefaultTaskWorker_SkipsMCPA2APrefixExcludedType(t *testing.T) {
+	bb := &mockBlackboard{
+		tasks:  make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 10),
+	}
+	bb.tasks["task-mcp-1"] = &types.TaskEntry{
+		ID:     "task-mcp-1",
+		Type:   "agent_handoff:mcp:linear/researcher",
+		Status: types.TaskPending,
+		Intent: []byte("summarize X"),
+	}
+
+	pool := &mockAgentPool{replyOutput: "should not be called"}
+	worker := NewDefaultTaskWorker(bb, pool, "workflow_step", MCPA2AHandoffPrefix)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "task-mcp-1"}
+	time.Sleep(50 * time.Millisecond)
+
+	bb.mu.Lock()
+	entry := bb.tasks["task-mcp-1"]
+	bb.mu.Unlock()
+
+	if entry.Status != types.TaskPending {
+		t.Fatalf("expected mcp: prefixed task to remain untouched (Pending), got %v", entry.Status)
+	}
+	if len(pool.queriesForTest()) != 0 {
+		t.Fatalf("expected AcquireHeadless never called for mcp: prefixed task, got %v", pool.queriesForTest())
+	}
+}
+
+// TestDefaultTaskWorker_PassesSpawnDepthToHeadlessOptions 验证 ADR-0084
+// SpawnDepth 透传：DefaultTaskWorker 派生 headless 任务时携带
+// snap.SpawnDepth，供 AcquireHeadless 注入新建 Agent 的 sCtx。
+func TestDefaultTaskWorker_PassesSpawnDepthToHeadlessOptions(t *testing.T) {
+	bb := &mockBlackboard{
+		tasks:  make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 10),
+	}
+	bb.tasks["task-depth-1"] = &types.TaskEntry{
+		ID:         "task-depth-1",
+		Type:       "agent_query",
+		Status:     types.TaskPending,
+		Intent:     []byte("x"),
+		SpawnDepth: 2,
+	}
+
+	pool := &spawnDepthCapturingPool{replyOutput: "ok"}
+	worker := NewDefaultTaskWorker(bb, pool, "workflow_step")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "task-depth-1"}
+	time.Sleep(50 * time.Millisecond)
+
+	if got := pool.lastSpawnDepthForTest(); got != 2 {
+		t.Errorf("expected SpawnDepth 2 passed to AcquireHeadless, got %d", got)
+	}
+}
+
+// spawnDepthCapturingPool 记录 AcquireHeadless 收到的 HeadlessOptions.SpawnDepth。
+type spawnDepthCapturingPool struct {
+	mu             sync.Mutex
+	replyOutput    string
+	lastSpawnDepth int
+}
+
+func (p *spawnDepthCapturingPool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
+	return nil, func() {}, nil
+}
+
+func (p *spawnDepthCapturingPool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
+	opt := &types.HeadlessOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+	p.mu.Lock()
+	p.lastSpawnDepth = opt.SpawnDepth
+	p.mu.Unlock()
+	return &types.AgentResult{Output: p.replyOutput}, nil
+}
+
+func (p *spawnDepthCapturingPool) lastSpawnDepthForTest() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastSpawnDepth
+}
+
 // mockFailTrackingBlackboard 包一层 mockBlackboard，记录 FailTask 是否被调用
 // （基类的 FailTask 是无操作 stub，无法从外部观测调用与否）。
 type mockFailTrackingBlackboard struct {

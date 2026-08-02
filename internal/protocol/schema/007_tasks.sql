@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     tokens_output            INTEGER NOT NULL DEFAULT 0,
     tokens_cache_read        INTEGER NOT NULL DEFAULT 0,
     cost_usd                 REAL    NOT NULL DEFAULT 0.0,
+    -- spawn_depth: TaskEntry.SpawnDepth 的持久化落点（ADR-0084 补齐）。此前
+    -- PostTask/PostBatch 只在内存中校验 task.SpawnDepth 是否超过
+    -- resolveMaxDepth 上限（inv_M8_06），从未写入本表——PeekTask 无法读回，
+    -- 委派链上任何"认领任务→再次派生子任务"的 Worker（如
+    -- DefaultTaskWorker/MCPA2AWorker）都拿不到父任务的当前深度，深度上限
+    -- 对 transfer_to_agent 委派链实际从未生效（entry.SpawnDepth 恒为 0）。
+    spawn_depth              INTEGER NOT NULL DEFAULT 0,
     created_at               TEXT    NOT NULL,
     updated_at               TEXT    NOT NULL
 );

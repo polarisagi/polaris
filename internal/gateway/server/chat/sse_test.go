@@ -26,6 +26,8 @@ func (m *mockAgentController) SetTaskIntent(intent []byte) {
 	m.intentSet = intent
 }
 
+func (m *mockAgentController) SetSpawnDepth(depth int) {}
+
 func (m *mockAgentController) SendIntent(trigger types.AgentTrigger) error {
 	m.lastTrigger = trigger
 	if m.sendIntentDelay > 0 {

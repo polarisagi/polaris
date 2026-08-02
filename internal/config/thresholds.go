@@ -173,6 +173,10 @@ type M8OrchestratorThresholds struct {
 	SupervisorBackoffMaxSeconds int `toml:"supervisor.backoff_max_seconds"`    // 60
 	CompensationTimeoutSeconds  int `toml:"compensation.timeout_seconds"`      // 300
 	CompensationPollSeconds     int `toml:"compensation.poll_seconds"`         // 5
+	// A2AHandoffTimeoutSeconds MCPA2AWorker 对单次跨框架委派调用施加的超时上限
+	// （ADR-0084 A4）。委派链深度上限复用既有 SpawnDepth/resolveMaxDepth
+	// （inv_M8_06，state.yaml delegation_chain_max_depth），不在此重复登记。
+	A2AHandoffTimeoutSeconds int `toml:"a2a.handoff_timeout_seconds"` // 600 (10min)
 }
 
 // M9SelfImproveThresholds — 后台自演化 worker 调度 + Canary rollout 参数。
@@ -397,6 +401,7 @@ func DefaultThresholds() Thresholds {
 			SupervisorBackoffMaxSeconds: 60,
 			CompensationTimeoutSeconds:  300,
 			CompensationPollSeconds:     5,
+			A2AHandoffTimeoutSeconds:    600,
 		},
 		M9SelfImprove: M9SelfImproveThresholds{
 			WorkerCPUPctUserActive:         0.05,

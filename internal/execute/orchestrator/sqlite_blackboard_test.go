@@ -38,6 +38,7 @@ func newMockSQLiteDB() (*sql.DB, error) {
 			intent BLOB,
 			trace_id TEXT,
 			span_id TEXT,
+			spawn_depth INTEGER DEFAULT 0,
 			created_at TEXT,
 			updated_at TEXT
 		);
