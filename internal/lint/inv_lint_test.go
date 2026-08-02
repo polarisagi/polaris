@@ -1394,3 +1394,114 @@ func Test_inv_VFS_QuotaMustUseWithQuota(t *testing.T) {
 		t.Errorf("inv_VFS_Quota VIOLATED: %s", v)
 	}
 }
+
+// ─── inv_M13（A-03 SessionOrchestrator，GD-13-008）───────────────────────────
+
+// Test_inv_M13_SessionPkgNoHTTP 验证 internal/gateway/session/ 下零 net/http
+// 依赖（04-arch-refactor.md A-03 §5 规则1）。session 包的消费端窄接口
+// （Sink/HookRunner/Persistence 等，见 types.go）刻意不依赖 net/http 具体类型，
+// 由 chat/sse_sink.go 在 HTTP 边界层反向实现 Sink，避免 session 包与传输协议
+// 耦合、也避免 chat→session→chat 循环依赖。本规则只扫描该包自身文件的直接
+// import（不含测试文件——ids_test.go/orchestrator_test.go 等测试用 fake 不
+// 应受此约束影响，但因内容不含 net/http 目前无论扫不扫都通过，保留
+// walkGoFilesUnder 默认跳过 _test.go 的行为，不额外放宽）。
+func Test_inv_M13_SessionPkgNoHTTP(t *testing.T) {
+	root := repoRoot(t)
+
+	var violations []violation
+	walkGoFilesUnder(t, root, filepath.Join("internal", "gateway", "session"), nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		for _, imp := range f.Imports {
+			if imp.Path == nil {
+				continue
+			}
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			if importPath == "net/http" {
+				pos := fset.Position(imp.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `import "net/http" — internal/gateway/session 包硬约束零 net/http 依赖（A-03 §5 规则1），HTTP 边界逻辑须留在 chat/sse.go 等调用方`,
+				})
+			}
+		}
+	})
+
+	for _, v := range violations {
+		t.Errorf("inv_M13_SessionPkgNoHTTP VIOLATED: %s", v)
+	}
+}
+
+// Test_inv_M13_SingleTurnEntry 验证 SetTaskIntent(...) + SendIntent(types.
+// TriggerIntentReceived) 配对调用（驱动一轮 Agent FSM 的底层触发原语）只出现
+// 在三处固定位置：internal/gateway/session/（SSE+Headless 会话轮次，A-03
+// 收敛后的唯一会话编排入口）、internal/agent/pool.go（Acquire/AcquireHeadless
+// 自身的 Agent 生命周期原语，非会话编排）、cmd/polaris/boot_crash_recovery.go
+// （崩溃回放，重放上次未完成的用户消息）。其余调用点须登记进
+// testdata/turn_entry_exempt.json 并附豁免理由，防止"第三方会话编排重复实现"
+// 静默重新出现（04-arch-refactor.md A-03 §5 规则2）。
+//
+// 检测锚点选 SendIntent(types.TriggerIntentReceived) 而非要求 SetTaskIntent
+// 紧邻同现：这是真正触发 FSM 状态跳转的调用，SetTaskIntent 只是写入待消费的
+// intent 字节，二者在部分调用点之间会插入 SafeGo 包裹的 goroutine 启动等
+// 中间代码（如 cmd/polaris/adapters_eval.go），单独锚定后者更稳健。
+func Test_inv_M13_SingleTurnEntry(t *testing.T) {
+	root := repoRoot(t)
+	exempt := loadExemptFile(t, root, "turn_entry_exempt.json")
+
+	allowedPrefixes := []string{
+		filepath.ToSlash(filepath.Join("internal", "gateway", "session")) + "/",
+	}
+	allowedExact := map[string]bool{
+		filepath.ToSlash(filepath.Join("internal", "agent", "pool.go")):             true,
+		filepath.ToSlash(filepath.Join("cmd", "polaris", "boot_crash_recovery.go")): true,
+	}
+
+	var violations []violation
+	// 本规则的合法调用点横跨 internal/ 与 cmd/，walkGoFilesUnder 单次只能遍历
+	// 一个子目录，分两趟扫描（与 Test_inv_NoDirectSemanticMemoryWriteOutsideBuiltin
+	// 的目录级豁免思路一致，但那里只需扫 internal/）。
+	scan := func(subdir string) {
+		walkGoFilesUnder(t, root, subdir, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+			forwardPath := filepath.ToSlash(relPath)
+			if allowedExact[forwardPath] {
+				return
+			}
+			for _, prefix := range allowedPrefixes {
+				if strings.HasPrefix(forwardPath, prefix) {
+					return
+				}
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "SendIntent" || len(call.Args) != 1 {
+					return true
+				}
+				argSel, ok := call.Args[0].(*ast.SelectorExpr)
+				if !ok || argSel.Sel.Name != "TriggerIntentReceived" {
+					return true
+				}
+				pkgIdent, ok := argSel.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "types" {
+					return true
+				}
+				pos := fset.Position(call.Pos())
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `SendIntent(types.TriggerIntentReceived) — 驱动 FSM 轮次的调用只允许出现在 internal/gateway/session/、internal/agent/pool.go、cmd/polaris/boot_crash_recovery.go 三处，其余调用点须登记进 internal/lint/testdata/turn_entry_exempt.json 并附豁免理由（A-03 §5 规则2，防"第三方会话编排重复实现"重新出现）`,
+				})
+				return true
+			})
+		})
+	}
+	scan("internal")
+	scan("cmd")
+
+	for _, v := range violations {
+		t.Errorf("inv_M13_SingleTurnEntry VIOLATED: %s", v)
+	}
+}
