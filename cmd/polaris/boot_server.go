@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/action/codeact"
 	autopkg "github.com/polarisagi/polaris/internal/automation"
+	extplugin "github.com/polarisagi/polaris/internal/extension/plugin"
 	extskill "github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/server"
 	"github.com/polarisagi/polaris/internal/gateway/server/chat"
@@ -255,6 +257,23 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 
 	// ─── 其余 Server 装配 ─────────────────────────────────────────────────────
 	httpServer.SetInstallManager(tb.InstallMgr)
+	// PluginCreator（LLM 驱动 MCP 插件自动生成，2026-08-02 阶段03 R-06 死代码
+	// 接线补齐）：GeneratePlugin 实现本身早已完整（生成/落盘/注册为 MCP
+	// Server），此前只是缺"用哪个 Provider 生成"这层适配器与 boot 期
+	// SetPluginCreator 调用，导致 gateway/server/plugin/custom.go 的 intent
+	// 分支恒因 h.PluginCreator==nil 不可达。Provider 取用方式与
+	// sysadmin/skill_create.go pickSkillCreatorProvider 完全一致的
+	// default→general 兜底链；baseDir 落地目录同
+	// docs/arch/M13-bis-Extension-Registry.md §5.8 约定的
+	// ~/.polarisagi/polaris/extensions/local/。
+	pluginCreatorProvider := sb.InfReg.PickProvider("default")
+	if pluginCreatorProvider == nil {
+		pluginCreatorProvider = sb.InfReg.PickProvider("general")
+	}
+	httpServer.SetPluginCreator(extplugin.NewPluginCreator(
+		&extplugin.ProviderLLMClient{Provider: pluginCreatorProvider},
+		filepath.Join(sb.DataDir, "extensions", "local"),
+	))
 	httpServer.SetSkillSigningKey(skillSigningKey)
 	httpServer.SetMCPManager(tb.MCPMgr)
 	if tb.ContainerSandbox != nil {
