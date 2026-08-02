@@ -101,7 +101,13 @@ func (h *PluginHandler) downloadAndInstallExtension(ctx context.Context, extID, 
 		} {
 			if raw, err2 := os.ReadFile(manifestPath); err2 == nil {
 				manifestRaw = raw
-				_ = json.Unmarshal(raw, &bundle)
+				// 2026-08-02 HE-1 补齐：解析失败此前静默丢弃，bundle 保持零值，
+				// 后续代码会把"清单损坏"误当成"插件未声明任何 MCP/能力"继续安装，
+				// 而非阻断并提示清单损坏（见 99-new-findings.md 阶段02 §2.8 发现）。
+				if err3 := json.Unmarshal(raw, &bundle); err3 != nil {
+					h.updateExtensionInstanceError(ctx, extID, "parse plugin manifest: "+err3.Error())
+					return
+				}
 				break
 			}
 		}

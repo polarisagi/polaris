@@ -232,7 +232,13 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			// 须先从 DB 读取 channel 的 type 和 config_json，才能正确分发。
 			if chRow, qErr := ca.ChannelRepo.GetChannel(bgCtx, chID); qErr == nil && chRow != nil {
 				var cfg map[string]any
-				_ = json.Unmarshal([]byte(chRow.ConfigJSON), &cfg)
+				// 2026-08-02 HE-1 补齐：解析失败此前静默丢弃，cfg 保持 nil 继续下发，
+				// SendReply 会因缺少必要 config（如 webhook URL/token）而静默失败，
+				// 运维无从判断"result_action 没送达"到底是配置损坏还是发送失败。
+				if cfgErr := json.Unmarshal([]byte(chRow.ConfigJSON), &cfg); cfgErr != nil {
+					slog.Warn("automation: channel config_json 解析失败，result_action 可能因缺少配置而投递失败",
+						"automation_id", a.ID, "channel_id", chID, "err", cfgErr)
+				}
 				_ = ca.ChannelMgr.SendReply(bgCtx, chRow.Type, chID, cfg, protocol.ChannelMessage{ChatID: ""}, reply)
 			} else {
 				slog.Warn("automation: channel not found for result_action",

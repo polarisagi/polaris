@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 )
 
@@ -61,7 +62,14 @@ func (s *PromptAssemblyService) queryPluginSummary(ctx context.Context) []string
 		}
 
 		var policy map[string]map[string]any
-		_ = json.Unmarshal([]byte(policyJSON), &policy)
+		// 2026-08-02 HE-1 补齐：解析失败此前静默丢弃，policy 保持 nil，下方循环
+		// 空转，摘要里该插件会被误报为"0个已连接 MCP"，而非真实反映
+		// mcp_policy 数据本身已损坏（L3：仅影响系统提示词摘要展示，非阻断路径，
+		// 记录日志即可）。
+		if err := json.Unmarshal([]byte(policyJSON), &policy); err != nil {
+			slog.Warn("system_prompt: plugin mcp_policy 解析失败，摘要连接数可能不准确",
+				"plugin_id", plugID, "err", err)
+		}
 
 		connected, total := 0, 0
 		for serverName, entry := range policy {
