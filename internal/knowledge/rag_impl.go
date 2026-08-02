@@ -177,11 +177,13 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		// 触发 LLM 摘要生成
 		ev1, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID}, "summary:"+docNode.ID)
 		if err := p.outboxWriter.Write(ctx, ev1); err != nil {
+			metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocSummaryNeeded))
 			outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "summary outbox write failed", err))
 		}
 		// 触发知识图谱构建（GraphBuildOutboxHandler 监听此事件）
 		ev2, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
 		if err := p.outboxWriter.Write(ctx, ev2); err != nil {
+			metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocIngested))
 			outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "graph_build outbox write failed", err))
 		}
 		if len(outboxErrs) > 0 {

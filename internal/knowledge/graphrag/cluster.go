@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -222,6 +223,7 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 				TaintLevel: communityMaxTaint[s.CommunityID], // 继承成员最高污点，防止外部数据洗白
 			}
 			if err := gw.UpsertEntity(ctx, entity); err != nil {
+				metrics.RecordKnowledgeGraphWriteFailure(ctx, "cluster_level1_upsert")
 				return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster: Level 1 Upsert", err)
 			}
 			level1Entities = append(level1Entities, entity)
@@ -277,6 +279,7 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 					TaintLevel: l2MaxTaint[s.CommunityID],
 				}
 				if err := gw.UpsertEntity(ctx, entity); err != nil {
+					metrics.RecordKnowledgeGraphWriteFailure(ctx, "cluster_level2_upsert")
 					return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster: Level 2 Upsert", err)
 				}
 			}
