@@ -1,20 +1,14 @@
 package agent
 
 import (
-	"github.com/polarisagi/polaris/internal/observability/metrics"
-
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -111,119 +105,6 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 	return nil
 }
 
-// mergeResumedExecuteResult 合并崩溃前快照的聚合结果（prior）与本次续跑新
-// 产出的结果（fresh），用于 GD-13-009 崩溃恢复续跑场景。两者都可能是任意
-// 字节内容（单节点场景 aggregateDAGResults 直接返回工具原始输出，未必是
-// 合法 JSON），故不能用 json.RawMessage 直接拼接——改用字符串字段承载，
-// json.Marshal 会对内容做安全转义，保证输出恒为合法 JSON。
-func mergeResumedExecuteResult(prior, fresh []byte) []byte {
-	envelope := struct {
-		ResumedPriorResults string `json:"resumed_prior_results"`
-		PostResumeResults   string `json:"post_resume_results"`
-	}{
-		ResumedPriorResults: string(prior),
-		PostResumeResults:   string(fresh),
-	}
-	merged, err := json.Marshal(envelope)
-	if err != nil {
-		// 理论上字符串字段的 json.Marshal 不会失败；fail-safe 退回仅使用新结果，
-		// 不让一个不可能发生的序列化错误阻断整条 DAG 执行完成路径。
-		slog.Warn("agent: mergeResumedExecuteResult marshal failed, falling back to fresh results only", "err", err)
-		return fresh
-	}
-	return merged
-}
-
-// aggregateDAGResults 将多节点执行结果聚合为统一 JSON 格式。
-// 单节点直接返回 output；多节点序列化为 {"results":[{id,output},...]}.
-func aggregateDAGResults(results []protocol.NodeResult) []byte {
-	if len(results) == 0 {
-		return []byte("{}")
-	}
-	if len(results) == 1 {
-		if results[0].Err != nil {
-			return []byte(`{"error":"` + results[0].Err.Error() + `"}`)
-		}
-		if len(results[0].Output) == 0 {
-			if len(results[0].ImageParts) > 0 {
-				return []byte("[Success (Image Attached)]")
-			}
-			return []byte("[Success (Empty Output)]")
-		}
-		return results[0].Output
-	}
-
-	// 多节点：构建聚合结构
-	buf := make([]byte, 0, 256+len(results)*64)
-	buf = append(buf, `{"results":[`...)
-	for i, r := range results {
-		if i > 0 {
-			buf = append(buf, ',')
-		}
-		buf = append(buf, `{"id":"`...)
-		buf = append(buf, r.NodeID...)
-		buf = append(buf, `","output":`...)
-		if r.Err != nil {
-			buf = append(buf, `{"error":"`...)
-			buf = append(buf, r.Err.Error()...)
-			buf = append(buf, `"}`...)
-		} else if len(r.Output) > 0 {
-			buf = append(buf, r.Output...)
-		} else if len(r.ImageParts) > 0 {
-			buf = append(buf, `"[Success (Image Attached)]"`...)
-		} else {
-			buf = append(buf, `"[Success (Empty Output)]"`...)
-		}
-		buf = append(buf, '}')
-	}
-	buf = append(buf, "]}"...)
-	return buf
-}
-
-// maxExecResultBytes 注入 LLM 的工具执行结果最大字节数（≈ 2000 token × 4 bytes/token）。
-const maxExecResultBytes = 8000
-
-// truncateExecResult 截断过长的执行结果，超限部分落盘并返回 log_ref 占位符。
-// 落盘路径：~/.polarisagi/polaris/logs/exec_results/<logID>.txt
-// LLM 收到：原文（≤8KB）或 <log_ref id="<logID>" bytes="<N>" /> 提示符（>8KB）
-func truncateExecResult(sessionID string, raw []byte) []byte {
-	if len(raw) <= maxExecResultBytes {
-		return raw
-	}
-
-	logID := fmt.Sprintf("%s-%d", sessionID, time.Now().UnixNano())
-	logDir := filepath.Join(os.ExpandEnv("$HOME"), ".polarisagi", "polaris", "logs", "exec_results")
-	// 创建目录（best-effort，失败不阻断）
-	if err := os.MkdirAll(logDir, 0700); err == nil {
-		logPath := filepath.Join(logDir, logID+".txt")
-		_ = os.WriteFile(logPath, raw, 0600)
-	}
-
-	// 截取前 512 字节作为内联预览，其余引用 log_ref
-	preview := raw[:512]
-	ref := fmt.Sprintf(
-		"<log_ref id=%q bytes=%d />\n[Preview]\n%s\n[...truncated, see log]",
-		logID, len(raw), preview,
-	)
-	return []byte(ref)
-}
-
-// maxNodeTaintLevel 计算 protocol.DAGPlan 中所有节点的最高污点等级。
-// 实现 ADR-0007 PropagateTaint 语义：output = max(inputs)，只升不降。
-// plan 为 nil 或无节点时返回 TaintNone（validateTaintGate 自动跳过）。
-func maxNodeTaintLevel(plan *protocol.DAGPlan) types.TaintLevel {
-	if plan == nil {
-		return types.TaintNone
-	}
-	var max types.TaintLevel
-	for _, node := range plan.Nodes {
-		if node.TaintLevel > max {
-			max = node.TaintLevel
-		}
-	}
-	return max
-}
-
 // extractTaskType 从任务目标字符串提取规范化任务类型键。
 // 2026-07-21 deadcode 审查去重：此前与 optimizer.ExtractTaskType 是逐字节相同的
 // 平行实现，注释所称"避免 L1 到 L2 的依赖"已过期——internal/prompt/optimizer 现属
@@ -233,132 +114,6 @@ func maxNodeTaintLevel(plan *protocol.DAGPlan) types.TaintLevel {
 // 修改而不同步，是比重复代码本身更大的隐患）。
 func extractTaskType(goal string) string {
 	return optimizer.ExtractTaskType(goal)
-}
-
-func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []types.Message {
-	if a.assembler == nil || a.sCtx.TaskModel == nil {
-		return msgs
-	}
-
-	maxT := a.sCtx.RawIntentTS.Source.OriginTaintLevel
-	if maxT == types.TaintNone {
-		maxT = types.TaintHigh
-	}
-	req := agentctx.AssembleRequest{
-		Query:                 a.sCtx.TaskModel.Goal,
-		SessionKey:            a.sCtx.SessionID,
-		MaxTokens:             2000,
-		MaxTaint:              maxT,
-		IncludeKnowledge:      true,
-		SurpriseHint:          metrics.GlobalSurpriseIndex().Current(),
-		SurpriseHintThreshold: a.Config.SurpriseHintThreshold,
-	}
-
-	ac, err := a.assembler.Assemble(ctx, req)
-	if err != nil || len(ac.Items) == 0 {
-		return msgs
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Relevant Context:\n")
-	for _, item := range ac.Items {
-		fmt.Fprintf(&sb, "- [%s] %s\n", item.Source, item.Content)
-	}
-
-	return append([]types.Message{{Role: "system", Content: sb.String()}}, msgs...)
-}
-
-func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
-	if a.memory == nil {
-		return
-	}
-	if err := a.memory.AppendEpisodicEvent(ctx, ev, types.TaintNone); err != nil {
-		a.handleMemoryPersistenceFailure(ctx, err, ev)
-		return
-	}
-
-	if a.outboxWriter == nil {
-		return
-	}
-
-	switch string(ev.Type) {
-	case "task_perceived", "plan_generated", "reflection_completed", "execution_completed", string(types.EventActionPending), string(types.EventActionDone):
-		sessionID := ev.TaskID
-		if sessionID == "" && a.sCtx != nil {
-			sessionID = a.sCtx.SessionID
-		}
-		// 幂等键不能只用 ev.ID（2026-07-22 一致性审查修复）：ev.ID 由
-		// fsm.StateMachine.NextEventID 生成，形如 "{sessionID}:{seq}:{eventType}"，
-		// 其中 seq（sm.eventSeq）是*每个 Agent 实例*的私有计数器——按设计
-		// （见 NextEventID 文档："同 session+seq → 同 ID，不依赖 wall clock"，
-		// 满足 inv_M4_02 崩溃恢复重放确定性要求）在新建 Agent 实例时重置为 0。
-		// Pool.Acquire 对同一 sessionID 的每一轮新对话都会在上一轮终态后构造
-		// 全新 Agent 实例，因此不同轮次的 seq 序列会重复，ev.ID 本身也会重复
-		// ——若直接拿 ev.ID 做 outbox 幂等键后缀，第二轮起会撞
-		// idempotency_key UNIQUE 约束，导致 TopicEpisodicExtract 语义抽取
-		// 触发从第二轮起被静默丢弃。这里刻意不改 NextEventID/ev.ID 本身
-		// （那是重放确定性的必要不变量），只在 outbox 键这一层追加
-		// outboxUniqueSuffix()：本调用同步执行一次、无重试语义，足以解决。
-		outboxEv, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicExtract, "episodic_extract", map[string]any{
-			"session_id": sessionID,
-			"event_type": string(ev.Type),
-			"content":    string(ev.Payload),
-		}, ev.ID+":extract:"+outboxUniqueSuffix())
-		_ = a.outboxWriter.Write(ctx, outboxEv)
-	}
-}
-
-// handleMemoryPersistenceFailure 处理 Episodic 写入失败（GD-13-003 FSM 熔断）。
-//
-// HE-6（State-in-DB）：Episodic 事件是 Agent 状态外化的核心路径之一，Reflect/Replan
-// 等后续决策均依赖历史事件序列。持久化失败若被静默吞掉（旧实现 `_ = a.memory.
-// AppendEpisodicEvent(...)`），会导致 Agent 在残缺状态上继续决策而不自知——违反
-// HE-1（可观测优先）与 HE-6。
-//
-// 只对存储层不可用（CodeStorageUnavailable）熔断；序列化失败等其他 CodeInternal
-// 错误只记录日志不熔断，避免偶发的单条事件构造失败误杀整条执行链路。
-//
-// 熔断机制复用 agent_execute_dag.go capability_gap 先例，不新增 FSM 转换规则、
-// 不新增挂起态类型（HE-3 可组合原语 + ADR-0042 先例）：
-//  1. 设置 sCtx.SuspendReason，供 HITL/运维侧观测挂起原因；
-//  2. 经 outbox 异步投递 m9_storage_degraded 事件，供运维告警/自动恢复 Worker 消费；
-//  3. 调用 a.asyncIntent(TriggerInterruptReceived) —— 该 trigger 在
-//     fsm/state_machine.go Dispatch() 中作为状态无关的全局处理（见该文件 S_INTERRUPT
-//     通用处理分支），可从任意非终态直接进入 S_INTERRUPT，无需在 transitions.go
-//     注册表中新增专用转换规则。
-func (a *Agent) handleMemoryPersistenceFailure(ctx context.Context, err error, ev types.Event) {
-	if !isMemoryPersistenceFailure(err) {
-		slog.Error("writeEpisodicWithExtract: episodic 写入失败（非存储层故障，不熔断）",
-			"error", err, "event_type", ev.Type, "task_id", ev.TaskID)
-		return
-	}
-
-	slog.Error("writeEpisodicWithExtract: 检测到存储层持久化失败，触发 FSM 熔断",
-		"error", err, "event_type", ev.Type, "task_id", ev.TaskID)
-
-	if a.sCtx != nil {
-		a.sCtx.SuspendReason = "memory_persistence_failure"
-	}
-
-	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
-		payloadBytes, _ := json.Marshal(map[string]string{
-			"error":      err.Error(),
-			"event_type": string(ev.Type),
-			"task_id":    ev.TaskID,
-		})
-		_, _ = sqlRepo.ExecContext(ctx, `
-			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, time.Now().UnixMilli(), "m9_storage_degraded", "upsert", "memory_persistence_failure",
-			payloadBytes, uuid.New().String(), "pending")
-	}
-
-	a.asyncIntent(types.TriggerInterruptReceived)
-}
-
-// isMemoryPersistenceFailure 判断错误是否为存储层不可用（而非序列化等其他内部错误）。
-func isMemoryPersistenceFailure(err error) bool {
-	return apperr.IsCode(err, apperr.CodeStorageUnavailable)
 }
 
 // withTaskScopeCtx 把当前会话标识注入 ctx，供 tokenizeMessagesForLLM 写令牌、

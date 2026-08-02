@@ -24,10 +24,5 @@
   "_reason_transitions": "GD-13-004 bypass logic added",
   "internal/knowledge/retriever.go": true,
   "_reason_retriever": "GD-14-002 GraphRAG 社区摘要接入后临时超 400 行，待拆分",
-  "internal/agent/agent_execute_util.go": true,
-  "_reason_agent_execute_util": "阶段06 复核发现的存量超标（本次会话未触碰该文件，与阶段05 P-01~P-03 改动无关联调用链），415 行，待拆分",
-  "internal/observability/metrics/metrics.go": true,
-  "_reason_metrics": "阶段06 复核发现的存量超标（本次会话未触碰该文件），408 行，待拆分",
-  "internal/security/policy/gate.go": true,
-  "_reason_gate": "阶段06 复核发现的存量超标（本次会话未触碰该文件，ADR-0087 仅引用其 cedarLeak 机制未修改代码），429 行，待拆分"
+  "_reason_2026-08-02_split": "internal/agent/agent_execute_util.go(415行)/internal/observability/metrics/metrics.go(408行)/internal/security/policy/gate.go(429行) 三项已于 2026-08-02 实际拆分完毕（分别拆出 agent_execute_result.go+agent_execute_memory.go / metrics_tokenburn.go+metrics_surprise.go / gate_egress.go+gate_cedar.go，纯搬运无行为变更，全部子文件 <400 行），已从本名单移除，见 local_playground/upgrade/99-new-findings.md"
 }
