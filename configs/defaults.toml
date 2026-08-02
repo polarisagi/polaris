@@ -11,7 +11,7 @@ egress_allowed_domains = [] # 出站域名白名单（仅开启网络隔离时�
 
 [system.resource_governor]
 # 资源控制阈值，低于指定阈值时触发对应降级保护
-mem_l1_free_mb = 2048 # L1 警告：停止拉起新 Agent
+mem_l1_free_mb = 1536 # L1 警告：停止拉起新 Agent
 mem_l2_free_mb = 1024 # L2 阻塞：挂起所有后台任务
 mem_l3_free_mb = 512  # L3 濒死：强杀耗存最大的子进程
 cpu_l1_pct = 80.0     # CPU 阈值：降低后台任务优先级
