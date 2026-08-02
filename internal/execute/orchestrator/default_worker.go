@@ -157,7 +157,12 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	// 决策记录）。
 	// ADR-0084：透传 SpawnDepth，使 transfer_to_agent 委派链深度校验对本兜底
 	// 路径执行的委派任务同样生效（此前恒为 0，见 agent_handoff.go）。
-	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt}, types.WithSpawnDepth(snap.SpawnDepth))
+	// GD-14-001（2026-08-02 补齐）：同时透传 Namespace，使本地角色委派
+	// （agent_handoff:<role>，非 mcp: 前缀）与发起方共享记忆检索范围
+	// （此前恒为空串，AcquireHeadless 从未调用 SetMemoryNamespace，见
+	// 99-new-findings.md 阶段05 P-03 续 发现 / ADR-0084"已知限制"）。
+	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt},
+		types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace))
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())

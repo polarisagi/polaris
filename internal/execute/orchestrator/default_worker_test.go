@@ -224,11 +224,48 @@ func TestDefaultTaskWorker_PassesSpawnDepthToHeadlessOptions(t *testing.T) {
 	}
 }
 
-// spawnDepthCapturingPool 记录 AcquireHeadless 收到的 HeadlessOptions.SpawnDepth。
+// TestDefaultTaskWorker_PassesNamespaceToHeadlessOptions 验证 GD-14-001
+// Namespace 透传（2026-08-02 补齐）：DefaultTaskWorker 派生 headless 任务时
+//携带 snap.Namespace，供 AcquireHeadless 注入 AgentController.SetMemoryNamespace，
+// 使本地 agent_handoff:<role> 委派任务与发起方共享记忆检索范围（此前恒为空串，
+// 见 99-new-findings.md 阶段05 P-03 续 发现 / ADR-0084"已知限制"）。
+func TestDefaultTaskWorker_PassesNamespaceToHeadlessOptions(t *testing.T) {
+	bb := &mockBlackboard{
+		tasks:  make(map[string]*types.TaskEntry),
+		events: make(chan types.BlackboardEvent, 10),
+	}
+	bb.tasks["task-ns-1"] = &types.TaskEntry{
+		ID:        "task-ns-1",
+		Type:      "agent_handoff:librarian",
+		Status:    types.TaskPending,
+		Intent:    []byte("x"),
+		Namespace: "swarm-ns-shared",
+	}
+
+	pool := &spawnDepthCapturingPool{replyOutput: "ok"}
+	worker := NewDefaultTaskWorker(bb, pool, "workflow_step")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = worker.RunLoop(ctx) }()
+
+	time.Sleep(10 * time.Millisecond)
+	bb.events <- types.BlackboardEvent{Type: "task_posted", TaskID: "task-ns-1"}
+	time.Sleep(50 * time.Millisecond)
+
+	if got := pool.lastNamespaceForTest(); got != "swarm-ns-shared" {
+		t.Errorf("expected Namespace %q passed to AcquireHeadless, got %q", "swarm-ns-shared", got)
+	}
+}
+
+// spawnDepthCapturingPool 记录 AcquireHeadless 收到的 HeadlessOptions.SpawnDepth/
+// Namespace（2026-08-02 补充 Namespace 捕获，见
+// TestDefaultTaskWorker_PassesNamespaceToHeadlessOptions）。
 type spawnDepthCapturingPool struct {
 	mu             sync.Mutex
 	replyOutput    string
 	lastSpawnDepth int
+	lastNamespace  string
 }
 
 func (p *spawnDepthCapturingPool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
@@ -242,6 +279,7 @@ func (p *spawnDepthCapturingPool) AcquireHeadless(ctx context.Context, intent ty
 	}
 	p.mu.Lock()
 	p.lastSpawnDepth = opt.SpawnDepth
+	p.lastNamespace = opt.Namespace
 	p.mu.Unlock()
 	return &types.AgentResult{Output: p.replyOutput}, nil
 }
@@ -250,6 +288,12 @@ func (p *spawnDepthCapturingPool) lastSpawnDepthForTest() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastSpawnDepth
+}
+
+func (p *spawnDepthCapturingPool) lastNamespaceForTest() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastNamespace
 }
 
 // mockFailTrackingBlackboard 包一层 mockBlackboard，记录 FailTask 是否被调用
