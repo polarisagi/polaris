@@ -71,7 +71,10 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 	}
 
 	if err := h.InstallMgr.InstallExtension(ctx, installReq); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "Server.internalInstallMCP", err)
+		// [2026-08-02 S-06 抽样复查] InstallExtension 内部 PolicyGate 拒绝时返回
+		// CodeForbidden，此前恒被 CodeInternal 覆盖，导致客户端本应看到 403 却
+		// 收到 500。改用 apperr.CodeOf(err) 保留内层真实语义 Code。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "Server.internalInstallMCP", err)
 	}
 
 	err := h.ExtRepo.UpsertMCPServer(ctx, apptypes.MCPServerRow{
@@ -157,7 +160,9 @@ func (h *PluginHandler) internalInstallGeneric(ctx context.Context, extID string
 	}
 
 	if err := h.InstallMgr.InstallExtension(ctx, installReq); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "Server.internalInstallGeneric", err)
+		// [2026-08-02 S-06 抽样复查] 同 internalInstallMCP：保留 InstallExtension
+		// 内层 PolicyGate 拒绝的真实 Code（CodeForbidden），不再被 CodeInternal 覆盖。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "Server.internalInstallGeneric", err)
 	}
 
 	if entry.Type == "skill" || entry.Type == "plugin" {

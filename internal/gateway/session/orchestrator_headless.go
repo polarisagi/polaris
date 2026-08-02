@@ -47,7 +47,9 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	intent := types.Intent{Query: req.Input, WorkingDir: req.WorkingDir}
 	res, err := o.agentPool.AcquireHeadless(ctx, intent)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): acquire headless failed", err)
+		// [2026-08-02 S-06 抽样复查] AgentPool 容量耗尽时 acquireInner 返回
+		// CodeResourceExhausted（应映射 429），此前恒被 CodeInternal 覆盖成 500。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "session.RunTurn(headless): acquire headless failed", err)
 	}
 
 	reply := o.finishHeadlessTurn(ctx, req, sessionID, isFirstTurn, res)
