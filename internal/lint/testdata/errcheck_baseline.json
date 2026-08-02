@@ -191,8 +191,6 @@
   "internal/memory/store/sql_reflection_mem.go:201": true,
   "internal/memory/testutil/mock.go:25": true,
   "internal/observability/logger.go:102": true,
-  "internal/observability/metrics/instruments.go:484": true,
-  "internal/observability/metrics/metrics_handler.go:179": true,
   "internal/store/mutation_bus_execute.go:46": true,
   "internal/store/repo/repo_automation.go:359": true,
   "internal/store/search/semantic_cache.go:158": true,
