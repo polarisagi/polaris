@@ -1,0 +1,11 @@
+{
+  "_comment": "Test_inv_M13_SingleTurnEntry 豁免列表：SetTaskIntent+SendIntent(types.TriggerIntentReceived) 配对调用（驱动一轮 Agent FSM）的额外合法调用点。规则本身允许的三处固定位置（internal/gateway/session/、internal/agent/pool.go、cmd/polaris/boot_crash_recovery.go）不走本文件，直接硬编码在测试里。",
+  "_comment_red_team": "internal/eval/red_team.go：红队探针刻意绕过会话编排直打内核（04-arch-refactor.md A-03 Step5 §4 明确指示：\"不改，红队探针刻意绕过会话编排直打内核，这是设计意图\"）。无 sessionID/持久化/多轮历史语义，非会话轮次。",
+  "internal/eval/red_team.go": true,
+  "_comment_default_worker": "internal/execute/orchestrator/default_worker.go：L2 Blackboard DAG Worker 调 L1 Agent 内核，若改经 internal/gateway/session（L3）会造成层级倒挂（04-arch-refactor.md A-03 Step5 §4 明确指示：\"不改，L2 Worker 调 L1 内核，跨 L3 会造成层级倒挂\"）。",
+  "internal/execute/orchestrator/default_worker.go": true,
+  "_comment_adapters_agent": "cmd/polaris/adapters_agent.go agentInvokerAdapter.InvokeAgent：internal/automation（后台任务队列 SQLiteScheduler）的通用 Agent 触发适配器，供 automation/queue.go 分发 type=\"agent\" 的排队任务。核实调用链（queue.go dispatchTask）确认零 EnsureSession/ChatRepo/Hooks.FireBefore(\"message.before\")/SampleAndScoreReply/UpdateSessionTitle 等会话持久化语义——是与 AgentPool.AcquireHeadless 同类的『一次性触发 FSM、拿文本结果』原语，服务对象是 automation 任务队列而非聊天会话。04-arch-refactor.md A-03 §5 制定豁免清单时未覆盖到此调用点（Step5 §4 调用点改造清单只枚举了 workflow/cron/webhook 三个 sysadmin 入口），本条目为 A-03 Step7 执行期间通过全仓 grep SetTaskIntent+SendIntent 配对复核后新增，尚无专属 ADR 记录该豁免，建议阶段06 文档同步时视情况补一条 ADR 或在 04-arch-refactor.md 正文回填此发现（见 local_playground/upgrade/99-new-findings.md）。",
+  "cmd/polaris/adapters_agent.go": true,
+  "_comment_adapters_eval": "cmd/polaris/adapters_eval.go evalAgentAdapter.Run：internal/eval/regression 回归检测/评估用的 eval.EvalAgent 接口适配器，供离线评估跑一次 Agent 拿输出/日志比对期望结果。同样零会话持久化语义，是评估框架专属的『驱动一次 Agent 执行』原语，与 red_team.go 同属\"红队/评估探针刻意绕过会话编排直打内核\"这一既有设计意图的延伸，只是执行主体从内核安全探针换成评估框架。ADR 引用现状同 adapters_agent.go 条目。",
+  "cmd/polaris/adapters_eval.go": true
+}
