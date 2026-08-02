@@ -133,17 +133,20 @@ func (t TrustTier) SandboxFloor() SandboxTier {
 	}
 }
 
-// TaintLevel 返回工具/MCP 输出的 Taint 标记级别。
-// 0=None（不污染），1=Medium，2=High。
-// 与 M11 TaintLevel 枚举对应（数值相同）。
+// TaintLevel 返回工具/MCP 输出应打上的 Taint 标记级别，数值与 types.TaintLevel 枚举对齐
+// （TaintNone=0/TaintLow=1/TaintMedium=2/TaintHigh=3，本方法跳过 TaintLow 不产出）。
+// 修正记录：此前注释声称"0=None,1=Medium,2=High"且直接返回字面量 0/1/2，与
+// types.TaintLevel 实际枚举值不符（真实 TaintMedium=2、TaintHigh=3），若被直接转型
+// 为 types.TaintLevel 会得到错误等级（如声称 Medium 实际转型后是 Low）。全仓当前
+// 零调用点（死代码），故直接修正为返回真实枚举值，无需迁移调用方。
 func (t TrustTier) TaintLevel() int {
 	switch {
 	case t >= TrustSystem:
-		return 0 // TaintNone：内置工具输出不污染上下文
+		return int(TaintNone) // 内置工具输出不污染上下文
 	case t >= TrustOfficial:
-		return 1 // TaintMedium：官方来源，可信但非内置
+		return int(TaintMedium) // 官方来源，可信但非内置
 	default:
-		return 2 // TaintHigh：社区/本地/未知来源
+		return int(TaintHigh) // 社区/本地/未知来源
 	}
 }
 
