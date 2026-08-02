@@ -75,8 +75,13 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 						installReq0.Name = req.Name
 						installReq0.Config = string(configJSON)
 						installReq0.BypassAuth = true
-						_ = h.InstallMgr.InstallExtension(bgCtx, installReq0)
-						slog.Info("plugin_custom: custom skill installed via HITL", "id", extID)
+						if err := h.InstallMgr.InstallExtension(bgCtx, installReq0); err != nil {
+							// 此前无论成败都打印 "installed" Info 日志，误导运维排查；
+							// 现按实际结果分级记录（HE-1）。
+							slog.Warn("plugin_custom: custom skill install via HITL failed", "id", extID, "err", err)
+						} else {
+							slog.Info("plugin_custom: custom skill installed via HITL", "id", extID)
+						}
 					}
 				})
 				w.Header().Set("Content-Type", "application/json")
@@ -167,8 +172,12 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 						installReq1.Name = req.Name
 						installReq1.Config = string(configJSON)
 						installReq1.BypassAuth = true
-						_ = h.InstallMgr.InstallExtension(bgCtx, installReq1)
-						slog.Info("plugin_custom: custom plugin installed via HITL", "id", extID)
+						if err := h.InstallMgr.InstallExtension(bgCtx, installReq1); err != nil {
+							// 同上：按实际结果分级记录，避免安装失败仍打印 "installed"（HE-1）。
+							slog.Warn("plugin_custom: custom plugin install via HITL failed", "id", extID, "err", err)
+						} else {
+							slog.Info("plugin_custom: custom plugin installed via HITL", "id", extID)
+						}
 					}
 				})
 				w.Header().Set("Content-Type", "application/json")

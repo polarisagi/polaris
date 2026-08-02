@@ -89,8 +89,13 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 							installReq2.Config = string(configJSON)
 							installReq2.RuntimeID = appID
 							installReq2.BypassAuth = true
-							_ = h.InstallMgr.InstallExtension(bgCtx, installReq2)
-							slog.Info("plugin_custom: custom app installed via HITL", "id", extID)
+							if err := h.InstallMgr.InstallExtension(bgCtx, installReq2); err != nil {
+								// 此前无论成败都打印 "installed" Info 日志，误导运维排查；
+								// 现按实际结果分级记录（HE-1）。
+								slog.Warn("plugin_custom: custom app install via HITL failed", "id", extID, "err", err)
+							} else {
+								slog.Info("plugin_custom: custom app installed via HITL", "id", extID)
+							}
 						}
 					}
 				})
@@ -130,7 +135,9 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 	installReq2.RuntimeID = appID
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq2); err != nil {
 		// 回滚 apps 插入
-		_ = h.ExtRepo.DeleteApp(r.Context(), appID)
+		if delErr := h.ExtRepo.DeleteApp(r.Context(), appID); delErr != nil {
+			slog.Warn("plugin_custom: rollback apps row failed", "app_id", appID, "err", delErr)
+		}
 		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -144,7 +151,7 @@ func (h *PluginHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) 
 // HandleCreateMCP 用户手动配置 MCP Server。
 // POST /v1/mcp/create
 // MCP 需要实时连接，同时写 mcp_servers（运行时）和 extension_instances（安装 SSoT）。
-func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) { //nolint:nestif
+func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo,nestif
 	var req struct {
 		Name      string            `json:"name"`
 		Transport string            `json:"transport"`
@@ -219,8 +226,12 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 							installReq3.Config = string(configJSON)
 							installReq3.RuntimeID = mcpID
 							installReq3.BypassAuth = true
-							_ = h.InstallMgr.InstallExtension(bgCtx, installReq3)
-							slog.Info("plugin_custom: custom mcp installed via HITL", "id", extID)
+							if err := h.InstallMgr.InstallExtension(bgCtx, installReq3); err != nil {
+								// 同上：按实际结果分级记录，避免安装失败仍打印 "installed"（HE-1）。
+								slog.Warn("plugin_custom: custom mcp install via HITL failed", "id", extID, "err", err)
+							} else {
+								slog.Info("plugin_custom: custom mcp installed via HITL", "id", extID)
+							}
 						}
 					}
 				})
@@ -277,7 +288,7 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 
 	if h.MCPMgr != nil {
 		concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.start_mcp_server", func(ctx context.Context) {
-			_ = h.StartMCPServer(ctx, types.MCPServerConfig{
+			if err := h.StartMCPServer(ctx, types.MCPServerConfig{
 				ID:        mcpID,
 				Name:      req.Name,
 				Transport: req.Transport,
@@ -288,7 +299,9 @@ func (h *PluginHandler) HandleCreateMCP(w http.ResponseWriter, r *http.Request) 
 				Timeout:   30,
 				TrustTier: 1,
 				Enabled:   true,
-			})
+			}); err != nil {
+				slog.Warn("plugin_custom: start mcp server failed", "id", mcpID, "err", err)
+			}
 		})
 	}
 

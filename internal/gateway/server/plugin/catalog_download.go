@@ -191,20 +191,24 @@ func (h *PluginHandler) downloadAndInstallExtension(ctx context.Context, extID, 
 	}
 
 	// 4. 更新 extension_instances 为 installed
-	_ = h.InstallMgr.UpdateInstance(ctx, extID, marketplace.InstanceUpdate{
+	if err := h.InstallMgr.UpdateInstance(ctx, extID, marketplace.InstanceUpdate{
 		Status:      "installed",
 		RuntimeID:   runtimeID,
 		InstallPath: destDir,
 		ClearError:  true,
-	})
+	}); err != nil {
+		slog.Warn("plugin_catalog: mark extension installed failed", "ext", extID, "err", err)
+	}
 }
 
 func (h *PluginHandler) updateExtensionInstanceError(ctx context.Context, extID, errMsg string) {
 	if h.InstallMgr != nil {
-		_ = h.InstallMgr.UpdateInstance(ctx, extID, marketplace.InstanceUpdate{
+		if err := h.InstallMgr.UpdateInstance(ctx, extID, marketplace.InstanceUpdate{
 			Status:   "error",
 			ErrorMsg: errMsg,
-		})
+		}); err != nil {
+			slog.Warn("plugin_catalog: record extension error status failed", "ext", extID, "err", err)
+		}
 	}
 }
 

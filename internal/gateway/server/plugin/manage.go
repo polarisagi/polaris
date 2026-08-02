@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -184,15 +185,19 @@ func (h *PluginHandler) disablePluginComponents(ctx context.Context, pluginID, n
 			mcpRows.Close()
 		}
 	}
-	_ = h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 0, now)
+	if err := h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 0, now); err != nil {
+		slog.Warn("plugin_manage: disable plugin components failed", "plugin", pluginID, "err", err)
+	}
 	h.ClearToolSchemaCache()
 }
 
 // enablePluginComponents 启动插件的所有子 MCP，并恢复 skills。
-func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, now string) {
-	_ = h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 1, now)
+func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, now string) { //nolint:nestif
+	if err := h.ExtRepo.SetPluginComponentsEnabled(ctx, pluginID, 1, now); err != nil {
+		slog.Warn("plugin_manage: enable plugin components failed", "plugin", pluginID, "err", err)
+	}
 
-	if h.MCPMgr != nil {
+	if h.MCPMgr != nil { //nolint:nestif
 		mcpRows, err := h.DB.QueryContext(ctx,
 			`SELECT id, name, transport, command, args, env, url, timeout, work_dir, trust_tier
 			 FROM mcp_servers WHERE plugin_id=? AND enabled=1`, pluginID)
@@ -205,7 +210,9 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 					json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 					json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
 					concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.start_mcp_server_enable", func(ctx context.Context) {
-						_ = h.StartMCPServer(ctx, c)
+						if err := h.StartMCPServer(ctx, c); err != nil {
+							slog.Warn("plugin_manage: start mcp server on enable failed", "id", c.ID, "err", err)
+						}
 					})
 				}
 			}
@@ -218,7 +225,7 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 // handleTogglePluginMCP 切换插件内单个子 MCP 的启用状态。
 // 直接操作 mcp_servers.enabled（权威来源），不再通过 mcp_policy.enabled。
 // PATCH /v1/plugins/{id}/mcp/{serverName}
-func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Request) {
+func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Request) { //nolint:nestif
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
 		return
@@ -263,7 +270,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if h.MCPMgr != nil {
+	if h.MCPMgr != nil { //nolint:nestif
 		if !req.Enabled {
 			h.MCPMgr.Remove(serverID)
 		} else {
@@ -277,7 +284,9 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 				json.Unmarshal([]byte(argsJSON), &c.Args) //nolint:errcheck
 				json.Unmarshal([]byte(envJSON), &c.Env)   //nolint:errcheck
 				concurrent.SafeGo(protocol.Detach(r.Context()), "gateway.plugin.start_mcp_server_toggle", func(ctx context.Context) {
-					_ = h.StartMCPServer(ctx, c)
+					if err := h.StartMCPServer(ctx, c); err != nil {
+						slog.Warn("plugin_manage: start mcp server on toggle failed", "id", c.ID, "err", err)
+					}
 				})
 			}
 		}

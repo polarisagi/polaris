@@ -6,6 +6,7 @@ import (
 
 	"context"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
 
@@ -93,13 +94,17 @@ func (h *PluginHandler) internalInstallMCP(ctx context.Context, extID string, en
 		UpdatedAt: now,
 	})
 	if err != nil {
-		_ = h.ExtRepo.DeleteInstance(ctx, extID)
+		if delErr := h.ExtRepo.DeleteInstance(ctx, extID); delErr != nil {
+			slog.Warn("plugin_catalog: rollback extension_instances row failed", "ext", extID, "err", delErr)
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "Server.internalInstallMCP", err)
 	}
 
 	if h.MCPMgr != nil {
 		concurrent.SafeGo(protocol.Detach(ctx), "gateway.plugin.start_mcp_server_install", func(ctx context.Context) {
-			_ = h.StartMCPServer(ctx, cfg)
+			if err := h.StartMCPServer(ctx, cfg); err != nil {
+				slog.Warn("plugin_catalog: start mcp server on install failed", "id", cfg.ID, "err", err)
+			}
 		})
 	}
 

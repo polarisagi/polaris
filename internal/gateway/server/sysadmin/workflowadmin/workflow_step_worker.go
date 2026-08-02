@@ -127,7 +127,11 @@ func (h *WorkflowAdmin) tryClaimAndExecuteStep(ctx context.Context, taskID strin
 // 中止，而非静默吞掉或伪装成 status=error 让重试自环徒劳空转。
 func (h *WorkflowAdmin) failStepTaskInfra(ctx context.Context, taskID, msg string) {
 	slog.Error("workflow step worker: infra failure", "task_id", taskID, "err", msg)
-	_ = h.Blackboard.FailTask(context.Background(), taskID, workflowStepWorkerAgentID, []byte(msg))
+	if err := h.Blackboard.FailTask(context.Background(), taskID, workflowStepWorkerAgentID, []byte(msg)); err != nil {
+		// FailTask 本身失败意味着任务停留在 claimed 状态，既不会重试也不会
+		// 触发 Fail-Fast 中止，是比原始 infra failure 更严重的复合故障，需单独留痕。
+		slog.Error("workflow step worker: FailTask write failed", "task_id", taskID, "err", err)
+	}
 }
 
 // executeStepTask 执行单个步骤：应用 automation 覆盖 + input_from_prev 注入 +
