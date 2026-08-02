@@ -75,7 +75,9 @@ func (d *Dispatcher) Lookup(name string) (types.Tool, error) {
 	}
 	tool, err := d.toolReg.Lookup(name)
 	if err != nil {
-		return types.Tool{}, apperr.Wrap(apperr.CodeInternal, "Dispatcher.Lookup", err)
+		// [2026-08-02 S-06 抽样复查] toolReg.Lookup 对未注册工具返回
+		// CodeNotFound，此前恒被 CodeInternal 覆盖成 500，本应是 404。
+		return types.Tool{}, apperr.Wrap(apperr.CodeOf(err), "Dispatcher.Lookup", err)
 	}
 	return tool, nil
 }
@@ -102,7 +104,9 @@ func (d *Dispatcher) route(ctx context.Context, entry protocol.CatalogEntry, arg
 	if entry.Source == types.ToolSkill && d.skillExec != nil {
 		output, err := d.skillExec.ExecuteSkill(ctx, entry.SkillName, args)
 		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "dispatch: execute skill "+entry.SkillName, err)
+			// [2026-08-02 S-06 抽样复查] ExecuteSkill 内部 authorizeScriptExecution
+			// 拒绝时原样上抛 CodeForbidden，此前恒被 CodeInternal 覆盖成 500。
+			return nil, apperr.Wrap(apperr.CodeOf(err), "dispatch: execute skill "+entry.SkillName, err)
 		}
 		return &types.ToolResult{Success: true, Output: output, TaintLevel: entry.TaintLevel}, nil
 	}
@@ -115,7 +119,10 @@ func (d *Dispatcher) route(ctx context.Context, entry protocol.CatalogEntry, arg
 	// 与 Agent Kernel（internal/agent/agent_execute.go）完全同一条路径，无第二套实现。
 	result, err := d.toolReg.ExecuteTool(ctx, entry.Name, args, entry.TaintLevel)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "dispatch: ExecuteTool 失败", err)
+		// [2026-08-02 S-06 抽样复查] 与 tool.go ExecuteTool 内层修复联动——该层
+		// 现在会正确保留 CodeNotFound/CodeForbidden 等真实 Code，本层若仍硬编码
+		// CodeInternal 会把刚保留下来的语义重新掩码掉，因此同步改用 CodeOf。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "dispatch: ExecuteTool 失败", err)
 	}
 	return result, nil
 }

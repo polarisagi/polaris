@@ -154,14 +154,18 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 
 	tool, err := r.Lookup(name)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
+		// [2026-08-02 S-06 抽样复查] Lookup 对未注册工具返回 CodeNotFound，
+		// 此前恒被 CodeInternal 覆盖成 500，本应是 404。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "InMemoryToolRegistry.ExecuteTool", err)
 	}
 
 	// 预执行校验 (RateLimit, DryRun)
 	modifiedInput, res, err := r.checkPreExecution(ctx, tool, taintLevel, input)
 	if res != nil || err != nil {
 		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "InMemoryToolRegistry.ExecuteTool", err)
+			// [2026-08-02 S-06 抽样复查] checkTaintEgress 拦截时返回
+			// CodeForbidden（SSRF/污点出口拒绝），此前恒被 CodeInternal 覆盖。
+			return nil, apperr.Wrap(apperr.CodeOf(err), "InMemoryToolRegistry.ExecuteTool", err)
 		}
 		return res, nil
 	}

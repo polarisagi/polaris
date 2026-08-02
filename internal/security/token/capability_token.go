@@ -202,7 +202,10 @@ func (tm *TokenManager) Revoke(tokenID string) {
 // HasCap 检查令牌是否持有指定能力（先经 Verify 验证有效性）。
 func (tm *TokenManager) HasCap(tok *Token, cap CapabilityType) (bool, error) {
 	if err := tm.Verify(tok); err != nil {
-		return false, apperr.Wrap(apperr.CodeInternal, "TokenManager.HasCap", err)
+		// [2026-08-02 S-06 抽样复查] Verify 对过期/撤销/签名无效返回
+		// CodeUnauthorized、对畸形令牌返回 CodeInvalidInput，此前恒被
+		// CodeInternal 覆盖成 500，掩盖了本应是 401/400 的语义。
+		return false, apperr.Wrap(apperr.CodeOf(err), "TokenManager.HasCap", err)
 	}
 	for _, c := range tok.Claims.Caps {
 		if c == cap {

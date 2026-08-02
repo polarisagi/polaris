@@ -165,7 +165,9 @@ func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, 
 	}
 	res, err := h.SessionOrch.RunTurn(ctx, req, session.NewBufferSink())
 	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "session.RunTurn(workflow step) failed", err)
+		// [2026-08-02 S-06 抽样复查] RunTurn 内部 resolveSessionID 对非法
+		// session_id 返回 CodeInvalidInput，此前恒被 CodeInternal 覆盖。
+		return "", apperr.Wrap(apperr.CodeOf(err), "session.RunTurn(workflow step) failed", err)
 	}
 	if res.Aborted {
 		return "", apperr.New(apperr.CodeInternal, "workflow step blocked (hook rejection or session error)")
