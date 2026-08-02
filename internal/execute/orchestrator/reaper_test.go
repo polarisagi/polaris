@@ -12,60 +12,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// setupTestDB 建表 DDL 已收敛至 schema_test_helper_test.go 的
+// newSchemaBackedDB（直接执行 SSoT .sql 文件），不再手工内联复制。
 func setupTestDB(t *testing.T) *sql.DB {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open sqlite: %v", err)
-	}
-	// in-memory SQLite 每个连接是独立的数据库，必须限制为单连接
-	db.SetMaxOpenConns(1)
-
-	_, err = db.Exec(`
-		CREATE TABLE tasks (
-			task_id TEXT PRIMARY KEY,
-			session_id TEXT,
-			type TEXT,
-			priority INTEGER,
-			status TEXT,
-			claimed_by TEXT,
-			claimed_at TEXT,
-			expires_at TEXT,
-			provider_suspended_count INTEGER DEFAULT 0,
-			suspend_reason TEXT,
-			result BLOB,
-			error TEXT,
-			version INTEGER,
-			retry_count INTEGER DEFAULT 0,
-			max_retries INTEGER DEFAULT 3,
-			namespace TEXT,
-			intent BLOB,
-			trace_id TEXT,
-			span_id TEXT,
-			spawn_depth INTEGER DEFAULT 0,
-			created_at TEXT,
-			updated_at TEXT
-		)
-	`)
-	if err != nil {
-		t.Fatalf("failed to create tasks table: %v", err)
-	}
-
-	// writeTaskEvent 需要 events 表（inv_M8_02 事务内双写）
-	_, err = db.Exec(`
-		CREATE TABLE events (
-			offset    INTEGER PRIMARY KEY AUTOINCREMENT,
-			id        TEXT NOT NULL UNIQUE,
-			topic     TEXT NOT NULL,
-			actor     TEXT NOT NULL,
-			type      TEXT NOT NULL,
-			payload   BLOB NOT NULL,
-			created_at INTEGER NOT NULL
-		)
-	`)
-	if err != nil {
-		t.Fatalf("failed to create events table: %v", err)
-	}
-	return db
+	return newSchemaBackedDB(t)
 }
 
 func TestReaperCancelGracePeriod(t *testing.T) {

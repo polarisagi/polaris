@@ -13,25 +13,10 @@ import (
 )
 
 func TestStateGraphExecutor_CheckpointResume(t *testing.T) {
+	// setupTestDB 已通过 SSoT schema（035_task_checkpoints.sql）建好
+	// task_checkpoints 表，此前这里额外内联复制一份 CREATE TABLE 会与之冲突
+	// （table already exists），已移除（2026-08-02，见 schema_test_helper_test.go）。
 	db := setupTestDB(t)
-	_, err := db.Exec(`
-		CREATE TABLE task_checkpoints (
-			task_id       TEXT NOT NULL,
-			node_id       TEXT NOT NULL,
-			attempt       INTEGER NOT NULL DEFAULT 1,
-			status        TEXT NOT NULL,
-			output_json   TEXT,
-			idempotency_key TEXT,
-			taint_level   INTEGER NOT NULL,
-			started_at    INTEGER,
-			completed_at  INTEGER,
-			error         TEXT,
-			reason        TEXT,
-			resume_ctx_json TEXT,
-			PRIMARY KEY (task_id, node_id, attempt)
-		);
-	`)
-	require.NoError(t, err)
 	bb := NewSQLiteBlackboard(db)
 	executor := NewStateGraphExecutor(bb)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -50,14 +35,14 @@ func TestStateGraphExecutor_CheckpointResume(t *testing.T) {
 	taskID := "task-checkpoint-test"
 
 	// Pre-fill a checkpoint for n1 as "done"
-	_ = executor.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+	require.NoError(t, executor.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
 		TaskID:      taskID,
 		NodeID:      "n1",
 		Attempt:     1,
 		Status:      "done",
 		OutputJSON:  `{"res":"skipped"}`,
 		CompletedAt: time.Now().UnixMilli(),
-	})
+	}))
 
 	errCh := make(chan error, 1)
 	go func() {
