@@ -388,6 +388,14 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 
 完整时序见 `DIAGRAMS.md#eventlog`。
 
+## 8-bis. Handoff 唤醒事件化 + 无损续跑（ADR-0086）
+
+`transfer_to_agent` 委派子任务后父 Agent 进入 `S_AWAIT_AGENT`。唤醒机制以 Blackboard 事件订阅（`bb.Subscribe`，`task_completed`/`task_failed`）为主路径，分钟级 `handoffWatchSafetyInterval`（2min）巡检仅覆盖订阅通道静默失活的残余风险；`handoffWatchPollInterval`（1s）纯轮询保留作为 `Subscribe` 不可用时的降级路径。
+
+进程崩溃重启后，`task_checkpoints.resume_ctx_json` 列持久化 `HandoffResumeContext{SchemaVersion, DAGModel, ExecuteResult, CompletedNodeIDs, GlobalTaintLevel, HandoffNodeID, NamespaceID, SnapshotAt}` 快照（体积上限 `handoffSnapshotMaxBytes`=256KB，超限降级为仅消除死锁）。`AwaitingHandoffReconciler` 扫描 `await_agent` 态 checkpoint，`ResumeAwaitingHandoff` 就位 FSM 后（若快照可用且 `SchemaVersion` 匹配）**强制重跑与正常路径完全相同的 S_VALIDATE 四层校验**才回填 `DAGModel`/`ExecuteResult`/`CompletedNodeIDs`——`resume_ctx_json` 来自数据库，属跨信任边界的反序列化输入，不因"数据来自自家表"而放行（HE-2）。`GlobalTaintLevel` 回填遵循 only-up 语义。校验失败/`dagValidator` 为 `nil`/快照为空一律降级为"仅消除死锁"（委派节点下游 DAG 节点不再续跑，但不会误判为正常完成——`restored=false` 结果显式记录 Warn 日志 + `RecordAgentHandoffResume(ctx,"degraded")` 计数）。
+
+实现：`internal/agent/agent_handoff.go`（唤醒）、`internal/agent/agent_handoff_resume.go`（快照/恢复）、`internal/agent/reconciler_handoff.go`（`AwaitingHandoffReconciler`）。
+
 ---
 
 ## 12. 已知 Bug 修复记录
@@ -427,7 +435,7 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 | M4→M2 | EventLog Append / GetEvents | 崩溃恢复回放真相源。M2 §2.1 |
 | M4→M2 | Outbox `m4_provider_recovery` handler | `internal/store/` 注册；实现 `internal/agent/`。M2 §2.5, M4 §8 |
 | M4→M3 | OTel（OpenTelemetry） spans + SurpriseIndex 消费 | 双层回退 完整版→基础版→0.5。`[HE-Rule-1]` M3 §4 |
-| M4→M5 | PromptBuilder / HybridRetriever | 记忆检索 + 上下文组装（PromptBuilder 四 Zone 布局）。M5 §2, §7 |
+| M4→M5 | PromptBuilder / HybridRetriever | 记忆检索 + 上下文组装（PromptBuilder Zone 布局：ZoneImmutable→ZoneCoreMemory→ZoneMutableSkill→ZoneTaintedData 四固定 Zone + `ZoneExternalCatalog` 信任分区，见 M11 §2.1）。M5 §2, §7 |
 | M4→M6 | SkillLookup / SkillRegister | System 1 技能缓存 + Persona 兼容性。M6 §3, §4.3 |
 | M4→M7 | ToolRegistry.ExecuteTool | S_EXECUTE 节点调用 `[Wasm-Sandbox]`。M7 §3 |
 | M4→M11 | TaintGate / PolicyGate / KillSwitch | 查阅，仅响应不主动触发。M11 §2, §4 |

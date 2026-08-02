@@ -264,12 +264,10 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 - `LightweightRegressionDetector.DetectRegression` 基于 EventLog（`events` 表）近期/基线窗口 type 分布 + 错误类 topic 占比对比。
 - 明确不做多签（单用户场景无意义）。
 
-### 7.2 已知缺口汇总
+### 7.2 已知缺口汇总（2026-08-01 复核：以下两项均已落码，非遗漏或 bug）
 
-- **M13 ChatOrchestrator 拆分**（ADR-0066）：`internal/gateway/server/chat/sse.go` 仍兼管输入预处理（@file 展开、斜杠指令）+ 上下文压缩调度 + 消息持久化，属于已识别但刻意推迟的重构——sse.go 是高频热路径，big-bang 重构回归面大，仅立 ADR 记录目标态与分步落地计划，本阶段不落码。
-- **M7 MCP Agent-to-Agent 协同**（ADR-0017）：外部 Agent 经标准 MCP 协议向 Swarm 投递任务、或 Polaris 向外部 Agent 委派子任务，目前仅有战略方向 ADR，未落码；MCP 当前仅作为工具层（同步调用）使用，无任务层（异步声明/状态跟踪/回调）语义。
-
-以上两项均为"设计已定、暂不实施"的显式已知缺口，非遗漏或 bug。
+- **M13 ChatOrchestrator 拆分**（ADR-0066 目标态，ADR-0085 落地）：原推迟的重构已完成——`internal/gateway/session` 新领域层收敛 SSE 与 Headless 两条入口的会话生命周期编排（会话确保/历史加载/Hook 分发/斜线命令路由/压缩决策/`SystemPromptGuard` 装配/消息持久化），`chat/sse.go` 仅保留请求解码/SSE 帧翻译/错误码映射。零 `net/http` 依赖 + 唯一 FSM 轮次入口两条防退化 lint 已接入 CI。
+- **M7 MCP Agent-to-Agent 协同**（ADR-0017 战略方向，ADR-0084 落地出站方向）：出站方向（Polaris 向外部 Agent 委派子任务）已实现——外部 Agent 建模为特殊 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 异步挂起机制 + `MCPManager.CallTool`，不新建协议栈。入站方向（ADR-0017 决策三）此前已实现，两翼合一。
 
 ### 7.3 审计依据
 

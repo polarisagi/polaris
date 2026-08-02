@@ -61,6 +61,12 @@ LLM 生成代码（CodeAct/Wasm）进沙箱前经三层串行防线，取代原�
 
 **安全约束延续**：Component Model 不改变本 ADR 决策一/四的沙箱隔离层级与代码审计要求；组件实例仍须在 L2（wasmtime deny-by-default）内运行，不得提升到 L1 原生层。
 
+## 决策六：可信来源的 InProcess 回退需显式 opt-in（追加，引用 ADR-0087）
+
+可信来源（TrustOfficial 及以上）在 Wasm/Container/Remote 均不可用时，**默认不**允许降级到 InProcess 执行（`configs/defaults.toml` `[sandbox] allow_trusted_inprocess_fallback = false`）。
+
+理由：可信 ≠ 稳定——可信来源的代码仍可能死循环/内存爆炸/panic，InProcess 执行会直接拖垮宿主进程；这是**稳定性维度**的风险，与"可信"这一**安全维度**判断是两个正交问题（阶段03 R-05）。仅开发环境未编译 Wasm 引擎、或运维明确接受该风险时可显式置 `true`。该开关与其余 fail-closed 降级同属 ADR-0087"降级必须显式"总原则的一个实例。
+
 ## 反例守护（更新）
 
 拒绝"为方便所有工具降到 L1"——L1 仅限内置确定性工具。拒绝"LLM 生成技能用 L1 兼容"——至少 L2。拒绝改用 Go/Rust 直接编译执行 Logic Collapse 产物——蒸馏产物是动态生成代码。拒绝在 Wasm(L1) 中运行 Python。拒绝伪造 L4 checkpoint/restore 后端——ADR-0078 的安全分析结论仍然有效。拒绝恢复多视角 ensemble 投票——单次 ThinkingMax 推理质量已优于三路无 thinking 投票，且成本更低。**拒绝在 Component Model 未完整落地前对外声称"已支持 WASI 0.2"**——当前仅配置开关已开启，完整实现尚未完成。

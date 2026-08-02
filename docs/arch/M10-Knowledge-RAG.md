@@ -189,6 +189,14 @@ EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `inter
 - 优先级: 优先处理用户最近 24h 活跃检索的知识库文档的图谱构建，48h+ 未访问的文档降级为低优先级。
 - Global Search: 默认启用高质量的后台 LLM 生成式摘要（Generative Summarization），废弃原“为了省钱而被迫采用的抽取式摘要”方案。
 
+### 2.7-bis 关系边双时态化 + AsOf 视图（ADR-0083）
+
+`semantic_relations`（事实=边）现与实体侧对齐双时态：新增 `valid_from`/`valid_until`/`status`/`superseded_by`（事务时间=`created_at`/`updated_at`，有效时间=`valid_from`/`valid_until`）。表级 `UNIQUE(source_id, target_id, relation_type)` 改为部分索引 `uq_semantic_rel_active ... WHERE status='active'`，允许同一三元组保留多条历史版本，仅约束"当前活跃版本"唯一。
+
+**信念修正**：`UpsertRelation` 写入时若目标三元组已有活跃边且 `weight` 变化超过 `relation_weight_delta_threshold=0.2`（或 `properties` 不同）→ 判定实质变化 → 旧边 `status='superseded'`/`valid_until=now`/`superseded_by=<新边id>`，插入新活跃边；否则原地 `UPDATE`，避免版本链无谓膨胀。
+
+**AsOf 视图**：`internal/knowledge/graphrag/temporal_view.go` 的 `AsOfFilter{At time.Time}.SQLWhere(alias)` 零值 → `status='active'`（走既有索引，查询计划不变）；非零值 → 时间区间过滤，回答"当时以为的事实是什么"。已接入 `GraphTraverser.fetchNeighbors` 全部 4 条邻居查询与 `findSeedEntities`。`CascadeInvalidator`/`cognitive_replayer` 两处下游读路径同步补齐 `status='active'` 过滤（关系边新增历史版本后，遗漏会让历史版本污染级联传播/图引擎回放）。`TemporalExpirer.ExpireStale` 同一调用内追加对 `semantic_relations` 的到期扫描，不新增 ticker。
+
 ### 2.8 ConceptSynthesizer (跨文档合成)
 
 触发门控：DocCount>20 且 Type 不在白名单（"API"/"ConfigParam"/"BusinessRule"/"DataType"）时跳过，防 LLM 洪峰。处理流程：① AggregateContext 从 CrossDocLinks 取相关 ParentChunk；② ContradictionDetection LLM 提取 key claims 跨文档对比；③ EvolutionDetection 按版本排序识别变更；④ LLM 合成 ~200 tokens CrossDocumentSummary（定义+共识+矛盾+演进）。输出 Taint 取 contexts[] max 并设 Floor-Medium，M4 门控禁止 TaintHigh 进入 instruction slot。

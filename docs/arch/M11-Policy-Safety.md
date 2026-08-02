@@ -100,6 +100,8 @@ TaintLevel/TaintedString/SafeString/TaintSource/PropagateTaint 类型定义见 `
 | 第三重：持久化边界密码学验证 | SQL/JSON/Protobuf 序列化层附加 HMAC-SHA256（`persistent_key` OS（Operating System，操作系统） Keychain 派生），反序列化时重算验证；验证失败或字段缺失 → 强制 `TaintHigh` + CRITICAL 审计；启动顺序 `CredentialVault.Init() → StorageFabric.Open()`，超时 30s 进程退出 | 运行时序列化钩子 |
 | 第四重：泛型反序列化防剥离 | 禁止 `json.Unmarshal` 到 `map[string]interface{}` / `any` 等弱类型集合；外部 JSON 须反序列化到显式声明的带污点结构体 | CI go-vet lint 强制 |
 
+**ZoneExternalCatalog 信任分区**：`internal/prompt.PromptBuilder` 在 `ZoneImmutable`/`ZoneCoreMemory`/`ZoneMutableSkill`/`ZoneTaintedData`（详见 M05 §ContextZone）之外新增 `ZoneExternalCatalog` 分区，专门承载"来自外部但已知结构化程度较高"的内容（如 MCP Server/A2A 目录描述）。与 `ZoneImmutable`/`ZoneCoreMemory` 不同——这两者结构性禁止承载 `>= TaintMedium` 内容（`WriteInstruction` 编译期只接受 `taint.SafeString`）——`ZoneExternalCatalog` **允许**承载 `TaintMedium`/`TaintHigh` 内容，但 `WriteExternalCatalog` 对此类内容强制 M11 Spotlighting 包裹（`=== UNTRUSTED_DATA_{sha256}... ===`，见 M05 §ContextZone）。二者是同一份 Zone 维度隔离机制里的不同分区职责，不是 `internal/security/taint` 的 PromptSlot（LLM 请求维度槽位模型）——两套维度正交，不互相引用（防包循环，见 `taint_gate.go` 顶部注释）。
+
 ### 2.2 辅助防线 (OWASP LLM Top 10 2025 防护)
 
 执行顺序: Taint Gate → AnomalyDistanceFilter → Spotlighting → SIC（System Instruction Check，系统指令检查） Cleaning → SystemPromptGuard → Capability Gate
@@ -385,6 +387,7 @@ approval:
 **RedactMode**:
 - **RedactBlock**: 含 PII → `ErrPIIDetected`, 阻止执行
 - **RedactReplace/SessionTokenizer/OpaqueToken**: ✅ 已实现（PIIDesensitizer 格式保留假数据 + PIITokenVault 会话级可逆令牌，二者分工不同，互不替代。PIITokenVault 和崩溃恢复用途的 SessionPIIVault 各自独立）
+  - **PIIDesensitizer 映射回收**（ADR-0087，`internal/security/guard/pii_desensitizer.go`）：original→fake 映射按分区（通常=SessionID）LRU 有界，单分区 `pii_mapping_max_entries=10000` 条、分区数上限 `pii_partition_max_entries=256`（`state.yaml §m11_policy`），取代原无界增长设计（一致性仅在窗口内保证，被淘汰原值再次出现得到新假值）。无 SessionID 时落入 `piiGlobalPartition="global"` 兜底分区，仅受条目数约束，不能被精确回收。
 - **RedactWarn**: 含 PII → warn 日志继续
 
 **PIIGuard 双向防护**: PIIGuard 同时在输入端（M4→M7 工具参数 SecureUnredact 之前）和输出端（M7 ToolResult→EventLog PostExecution Redact，M7 §4.3 Step 5）工作。输入端阻止 PII 进入 LLM Provider，输出端阻止 PII 进入不可变审计轨迹。Tier 0 仅保证结构化 PII 模式检测覆盖两端。
@@ -540,6 +543,15 @@ Layer 4: Agent 间交互规则 (在 §1 三层宪法之上):
 | 3 | + 用户原始输入, 跨 Agent 上下文 |
 | 4 | + 安全事件, 审计日志 |
 | 5 | 全部 |
+
+**MCP A2A 跨框架委派安全约束（ADR-0084）**：外部 Agent 建模为特殊 MCP 工具类别（`mcp:<server>/<agent>` 寻址），复用 `transfer_to_agent` 挂起机制而非新建协议栈，受以下约束：
+1. **深度上限（A3）**：复用既有 `SpawnDepth`/`resolveMaxDepth`（`state.yaml §m8_multiagent.delegation_chain_max_depth=3`），不新增独立计数器。
+2. **强制高污点（A1）**：跨框架外部 Agent 产出经 `types.PropagateTaint(taintLevel, TaintHigh)`，only-up，不因发起方会话污点更低而降级。
+3. **PII 脱敏出境（A6）**：投递前对 `context_summary` 静态不可逆脱敏（`PIIDetector.Redact`，非可逆令牌化）。
+4. **超时（A4）**：`MCPManager.CallTool` 施加 `context.WithTimeout`（默认 600s，`state.yaml §m8_multiagent.mcp_a2a_handoff_timeout_seconds`）。
+5. **网络出口（A7）**：不新增网络客户端，复用 `MCPManager.CallTool` 既有 `SafeHTTP`（SafeDialer）出口。
+6. **可发现性（A2/A5）**：`MCPManager.ListA2AAgents` + 内置工具 `list_a2a_agents` 向 LLM 暴露合法 `mcp:` 目标。
+7. **执行前二次校验**：`MCPA2AWorker` 认领任务后、发起外部调用前重新比对深度上限（入口 + 执行前两道闸，防配置热更后已入库任务在极端场景越界执行）。
 
 ---
 

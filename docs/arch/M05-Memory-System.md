@@ -54,6 +54,8 @@ ZoneMutableSkill=2   // SKILL.md 描述模板，M9 PromptOptimizer 合法优化�
 ZoneTaintedData=3    // 外部数据，[TaintLevel] Tracked，永不进入指令区
 ```
 
+**MemFS —— 显式可编程记忆块（ADR-0082）**：`core_memory_edit` 工具 operation 集合扩展为 `["list", "get", "set", "append", "replace", "delete", "describe"]`（不新建独立工具族）。`replace` 要求 `old_str` 唯一匹配（除非 `replace_all=true`）；`describe` 记录块用途自述。`core_memory_blocks` 表（`034_core_memory.sql`）新增 `description`/`read_only`（保护块，拒绝一切写操作）/`max_bytes`（单块字节上限，新建行时固化，不追溯旧行）三列。容量三层：单块 `max_bytes`（逐行）、总量 `core.memory_total_max_kb`（全局既有阈值）、块数 `core.memory_max_blocks`（新阈值=16，见 `state.yaml §m5_memory`）。`list` 返回 JSON 不含 `content`（只含 key/description/size_bytes/max_bytes/read_only/updated_at），防止一次 list 把整个记忆区灌入上下文。全部 operation 经既有 `ExecuteTool` 路径，无旁路。
+
 **M9 → ZoneMutableSkill Taint Gate（双层）**:
 1. **自动层**: PromptOptimizer 输出 → M11 `SanitizeBySchema` + `SanitizeByDeterministicTransform` → SIC（System Instruction Check，系统指令检查） 检测 → 阳性丢弃 + 审计 `prompt_opt_taint_rejected`
 2. **HITL（Human-in-the-loop，人机协同） 层**: 前 5 次写入经 LLM（Large Language Model，大语言模型）-as-Judge 语义审核 → unsafe → [ESCALATE]。累计 5 次通过 → 概率抽查 (20%/次，安全随机源)，优先抽查"语义距离 >2σ"输出（历史 PromptOptimizer embedding 分布）。命中 + unsafe → 撤销该 task_type 全部豁免 + 语义漂移分析（余弦距离 >2σ → CRITICAL）。禁止永久豁免

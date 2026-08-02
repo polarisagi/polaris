@@ -75,6 +75,12 @@
 - **根因类别**：`SQLiteBlackboard.PostTask`/`PostBatch` 的 INSERT 语句从未写入 `intent` 列（`tasks` 表此前也没有这一列），`TaskEntry.Intent` 在写路径上被静默丢弃；`task_posted` 事件同样不携带 payload。此前未暴露是因为没有真实生产 Worker 消费过 `Pattern*Executor` 投递的任务。
 - **排查起点**：确认 `007_tasks.sql` 是否有 `intent` 列 + `sqlite_blackboard.go` PostTask/PostBatch 的 INSERT 字段列表是否包含 `task.Intent`；真实案例见 `ADR-0046` §6 Addendum（workflow 接入 StateGraphExecutor 时发现，2026-07-12）。
 
+### 症状 12：`transfer_to_agent` 委派链深度上限从未生效
+- **症状特征**：`SQLiteBlackboard.PostTask` 的 `resolveMaxDepth`/`MaxSpawnDepth` 深度校验代码看着存在，但无论委派链多深都不会触发 `CodeForbidden`。
+- **归类模块**：M04 / M08
+- **根因类别**：`TaskEntry.SpawnDepth` 从未被任何调用方赋值（恒为零值），校验逻辑本身没问题，只是永远拿到 0——传播链路（`agent_handoff.go` 构造 `TaskEntry` → `007_tasks.sql` 列 → `PeekTask` 回填 → `StateContext.SpawnDepth` → `SetSpawnDepth`）此前完全缺失。
+- **排查起点**：确认 `007_tasks.sql` 是否有 `spawn_depth` 列 + `sqlite_blackboard.go`/`sqlite_blackboard_ops.go` 的 `PostTask`/`PeekTask` 是否读写该列 + `agent_handoff.go` 构造 `entry.SpawnDepth` 时是否为 `a.sCtx.SpawnDepth + 1`；真实案例见 `ADR-0084` §引用代码（阶段05 P-03 实现 MCP A2A 时发现，2026-08-02）。
+
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。
 - 相似症状优先合并成一项（用"/"列举变体），不要为每个变体开新项。

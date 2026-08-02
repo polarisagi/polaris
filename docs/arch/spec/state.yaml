@@ -836,9 +836,16 @@ thresholds:
     core_memory_block_max_kb: 2
     core_memory_total_max_kb: 8
     core_memory_max_blocks: 16 # toml:"core.memory_max_blocks" — ADR-0082 MemFS 块数上限
+    # [阶段06 D-plan 归并说明] 06-docs-adr-sync.md §6 speculative 阈值草案曾拟设独立
+    # core_memory:{max_blocks,default_block_max_bytes,total_max_bytes} 分组；核实后
+    # max_blocks 已是本组 core_memory_max_blocks（同值 16），default/total 已是本组
+    # core_memory_block_max_kb(2KB)/core_memory_total_max_kb(8KB)（单位 KB 非 bytes，
+    # 与草案 4096/65536 bytes 数值不同——以本组既有实现值为准，不重复登记新键）。
     rrf_k: 60
     graph_max_depth: 2
     relation_weight_delta_threshold: 0.2 # toml:"graph.relation_weight_delta_threshold" — ADR-0083 关系边信念修正阈值
+    # [阶段06 D-plan 归并说明] speculative knowledge_graph.relation_weight_delta_threshold
+    # 草案与本组同名同值（0.2），确认为同一阈值，不新增 knowledge_graph 分组重复登记。
     re_eval_when:
       - episodic_ttl_days: ["storage_cost_exceeds_budget"]
       - core_memory_block_max_kb: ["llm_context_window_pressure"]
@@ -938,9 +945,16 @@ thresholds:
     skill_exec_timeout_low_seconds: 30
     skill_exec_timeout_medium_high_seconds: 120
     hmac_sha256_verify_cache_ttl_hours: 1
+    # LLM 结构化生成骨架（internal/extension/llmgen/generate_structured.go，
+    # 阶段03 R-06；ADR-0087"降级必须显式"总原则实例）：Skill/Plugin 生成器共用的
+    # 有界重试 + 熔断，当前为包级硬编码常量，未接入 configs/defaults.toml。
+    structured_max_retries: 2               # maxStructuredRetries，超限即放弃（A-08 防 token 风暴）
+    structured_breaker_threshold: 5         # breakerThreshold，连续失败达此值触发熔断
+    structured_breaker_cooldown_minutes: 5  # breakerCooldown，熔断冷却时长
     re_eval_when:
       - distillation_*: ["false_trigger_rate", "miss_trigger_rate"]
       - canary_*: ["regression_window_demand"]
+      - structured_breaker_threshold: ["Skill/Plugin 生成长期开路，需人工介入排查 LLM Provider 侧问题"]
 
   m7_tool:
     sbx_l2_low_fuel_giga: 1
@@ -964,6 +978,7 @@ thresholds:
     dryrun_protect_window_seconds: 60
     max_code_size_bytes: 16384
     ext_uninstall_hook_timeout_seconds: 180 # toml:"ext_uninstall.hook_timeout_seconds"（D2：卸载 Hook 沙箱执行超时兜底）
+    sbx_allow_trusted_inprocess_fallback: false # toml:"sandbox.allow_trusted_inprocess_fallback" — ADR-0008 决策六/ADR-0087：可信来源 InProcess 回退需显式 opt-in，默认 fail-closed
     # sbx_l4_persistent_* — D4/ADR-0008：Tier2+ 可选持久化沙箱，session-scoped
     # 长驻解释器进程池（推翻 ADR-0008"诚实留空"结论，后端真实可用）。
     # 默认关闭，不影响 Tier-0/Tier-1 任何现有行为。
@@ -983,6 +998,7 @@ thresholds:
     re_eval_when:
       - sbx_*: ["long_tail_hit_rate"]
       - rate_limit_*: ["abuse_signal"]
+      - sbx_allow_trusted_inprocess_fallback: ["Wasm 引擎不可用导致可信来源任务大量失败，需权衡稳定性风险后运维显式开启"]
 
   m8_multiagent:
     max_agents_desktop_ht0: 2
@@ -1005,7 +1021,18 @@ thresholds:
     # mcp_a2a_handoff_timeout_seconds: MCPA2AWorker 单次跨框架 A2A 委派调用超时
     # 上限（ADR-0084 A4，toml:"a2a.handoff_timeout_seconds"）。委派链深度上限
     # 复用本组已登记的 delegation_chain_max_depth，不重复登记。
+    # [阶段06 D-plan 归并说明] speculative agent_handoff.mcp_a2a_timeout_minutes=10
+    # 与 agent_handoff.max_handoff_depth=3 草案，实际实现分别落在本组
+    # mcp_a2a_handoff_timeout_seconds=600（600s=10min，同值不同单位）与
+    # delegation_chain_max_depth=3（同值），不新增 agent_handoff 分组重复登记。
     mcp_a2a_handoff_timeout_seconds: 600
+    # watch_safety_interval_minutes/watch_poll_interval_seconds/
+    # resume_snapshot_max_bytes 三项为 speculative 草案中真实存在但尚未登记的值
+    # （ADR-0086，当前硬编码于 internal/agent/agent_handoff.go /
+    # agent_handoff_resume.go，未接入 configs/defaults.toml）：
+    watch_safety_interval_minutes: 2   # handoffWatchSafetyInterval，事件订阅之外的兜底巡检间隔
+    watch_poll_interval_seconds: 1     # handoffWatchPollInterval，Subscribe 不可用时的降级轮询间隔
+    resume_snapshot_max_bytes: 262144  # handoffSnapshotMaxBytes，HandoffResumeContext 序列化上限
     compensation_poll_seconds: 5
     debate_max_rounds: 3
     debate_concurrent_sides: false
@@ -1013,6 +1040,8 @@ thresholds:
       - max_agents_desktop_ht0: ["concurrency_bottleneck"]
       - max_agents_server_ht0: ["concurrency_bottleneck"]
       - max_coordination_token_per_task: ["token_bankruptcy_event"]
+      - resume_snapshot_max_bytes: ["RecordAgentHandoffSnapshotOversized 计数持续增长"]
+      - watch_safety_interval_minutes: ["handoff 完成后长期未唤醒的会话数上升（订阅通道静默失活迹象）"]
 
   m9_self_improve:
     worker_cpu_pct_user_active: 0.05
@@ -1088,10 +1117,20 @@ thresholds:
     safe_dialer_toctou_delay_ms: 50
     safe_dialer_max_ips_threshold: 20
     escalation_timeout_minutes: 30
+    # Cedar FFI 泄漏滑动时间窗（internal/security/policy/gate.go，阶段03 R-01；
+    # ADR-0087）：窗口内密集泄漏才触发 KillSwitch，避免长进程累计值误判。
+    cedar_leak_window_minutes: 30           # cedarLeakWindow
+    cedar_leak_killswitch_threshold: 5      # cedarLeakKillSwitchThreshold，窗口内达此值触发 KillSwitch Stage 1
+    # PII 映射表按分区 LRU 回收（internal/security/guard/pii_desensitizer.go，
+    # 阶段03 R-02；ADR-0087）：取代原无界增长设计。
+    pii_mapping_max_entries: 10000          # piiMappingMaxEntries，单分区原值→假值映射上限
+    pii_partition_max_entries: 256          # piiPartitionMaxEntries，分区（通常=SessionID）数上限
     re_eval_when:
       - capability_default_ttl_*: ["long_task_premature_expire"]
       - taint_high_ratio_warn: ["false_alarm_rate"]
       - kill_switch_global_timeout_seconds: ["module_drain_p95>120"]
+      - cedar_leak_killswitch_threshold: ["FFI 泄漏 KillSwitch 误触发率过高或过低"]
+      - pii_mapping_max_entries: ["长会话 PII 映射淘汰率过高导致脱敏一致性频繁失效（RecordPIIMappingEviction 增速异常）"]
 
   m12_eval:
     golden_set_min_size_day1: 30

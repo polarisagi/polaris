@@ -105,6 +105,8 @@ internal/
 
   # --- L3 接口/治理层 ---
   gateway/         HTTP API 网关（REST/SSE/OpenAI 兼容）
+    session/       SessionOrchestrator 会话生命周期编排领域层（零 net/http 依赖，
+                   收敛 SSE+Headless 两条入口，ADR-0085）
     server/        核心 HTTP 服务（middleware / logstream）
       chat/        聊天接口处理
       plugin/      插件管理接口

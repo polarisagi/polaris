@@ -31,3 +31,12 @@
 ## 引用代码
 
 `internal/execute/dag/`、`internal/execute/orchestrator/`（`pattern_dag.go`/`pattern_state_graph.go`/`pattern_debate.go`/`debate_worker.go`）、`pkg/graph/{dag,state_graph}.go`、`internal/agent/provider.go`（`DAGRunner`/`DAGValidator`）、`internal/execute/CLAUDE.md`
+
+## 防退化条款：StateGraph 编排不得被 Chain/Pipeline 替代
+
+`PatternStateGraphExecutor`（internal/execute/orchestrator/pattern_state_graph.go）
+的确定性状态机流转 + EventLog 回放能力是刻意设计，不是过度工程。
+任何"简化为线性 Chain/Pipeline"的提议一律驳回，除非同时给出等价的
+确定性回放方案。删除或弱化该执行器需新开 ADR 论证。
+
+（2026-08-01 追加，来源：阶段06 D-plan GD-14-104 复核——审查曾建议简化，经核实为刻意设计后驳回，见 `local_playground/upgrade/98-rejected-findings.md` §5。）
