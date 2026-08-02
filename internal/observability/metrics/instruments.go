@@ -175,7 +175,7 @@ func InitMetrics(meter metric.Meter) error {
 	instrOnce.Do(func() {
 		ie := &instrumentInitErrs{}
 		initInstruments(meter, ie)
-		registerObservableGauges(meter)
+		registerObservableGauges(meter, ie)
 
 		degraded, fatal := evaluateInstrumentInitErrs(ie)
 		if degraded {
@@ -463,7 +463,7 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	ie.capture("polaris.agent.handoff_snapshot_oversized_total", err)
 }
 
-func registerObservableGauges(meter metric.Meter) {
+func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {
 	goroutinesGauge, _ := meter.Float64ObservableGauge(
 		"polaris.goroutines",
 		metric.WithDescription("当前 goroutine 数量"),
@@ -481,7 +481,13 @@ func registerObservableGauges(meter metric.Meter) {
 		metric.WithDescription("任务成功率（success/total，滑窗近似）"),
 	)
 
-	_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+	// [2026-08-02 HE-1 补齐] RegisterCallback 失败此前静默丢弃（_, _ =），意味着
+	// 本组 ObservableGauge（goroutines/内存/活跃Agent数/任务成功率）会在 /metrics
+	// 上永久缺失且无任何日志线索——运维排查"某个 gauge 消失了"时无处下手。
+	// 现改为经 instrumentInitErrs 聚合（与 initInstruments 的同步 instrument 走
+	// 同一条 degraded 判定路径，见 evaluateInstrumentInitErrs），见
+	// local_playground/upgrade/99-new-findings.md 阶段03 R-07 发现。
+	_, err := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		// goroutines & memory：直接从 runtime 读取，无额外 goroutine
 		o.ObserveFloat64(goroutinesGauge, float64(runtime.NumGoroutine()))
 
@@ -507,6 +513,7 @@ func registerObservableGauges(meter metric.Meter) {
 		}
 		return nil
 	}, goroutinesGauge, memAllocMBGauge, agentsActiveGauge, taskSuccessRateGauge)
+	ie.capture("observable_gauges_callback", err)
 }
 
 // attribute helpers（内部使用，避免重复字面量）

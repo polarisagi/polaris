@@ -176,7 +176,10 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			metric.WithDescription("cron_create 回填 next_run_at 失败累计次数"),
 		)
 
-		_, _ = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		// [2026-08-02 HE-1 补齐] 失败不再静默丢弃，改为记录日志+回退 legacy handler
+		// （与上方 InitMetrics 全部失败时的既有降级路径语义一致），否则本组 gauge
+		// 会在 /metrics 上无声消失且无日志线索。
+		_, cbErr := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
 			o.ObserveFloat64(totalCounter, float64(tbr.cumulativeTokens.Load()))
@@ -222,6 +225,10 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			return nil
 		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, cedarFFILeaksGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
 			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, memoryColdArchiveDetachFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge, cronNextRunWriteFailuresGauge)
+		if cbErr != nil {
+			slog.Error("observability: failed to register OTel observable gauge callback, falling back to legacy handler", "err", cbErr)
+			return
+		}
 
 		h := promhttp.Handler()
 		otelHandlerPtr.Store(&h)
