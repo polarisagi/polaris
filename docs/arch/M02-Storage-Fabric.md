@@ -131,7 +131,7 @@ OutboxWorker（`internal/store/outbox_worker.go`）批量拉取待处理记录�
 
 **Handler 注册**：`RegisterHandler(taskType, handler, checker...)` 注册各目标引擎处理器（如 `m10_graph_build`/`episodic`），可选传入版本高水位检查器。消费循环按 `target_engine` 路由到对应 handler。
 
-**Cursor 持久化**：游标持久化到 `sys_config` 表（key=`outbox_cursor`），`loadCursor` 启动时恢复，`saveCursor` 每批提交后原子 CAS（Compare-And-Swap，比较并交换） 更新，保证重启后不漏消费。
+**Cursor 持久化**：游标持久化到 `sys_config` 表（key=`outbox_cursor`），`loadCursorSafe` 启动时恢复，`saveCursor` 每批提交后原子 CAS（Compare-And-Swap，比较并交换） 更新，保证重启后不漏消费。**L3 fail-safe（`loadCursorSafe`）**：`sql.ErrNoRows`（首次启动，游标表尚无记录）视为合法，从 0 开始；其余 Scan 失败（真实解析错误）不得退回零值继续跑——那会导致从头重复处理全部 outbox——而是返回 `ok=false`，`Run()` 据此本轮跳过消费、下一 tick 重试（`metrics.RecordOutboxCursorError(ctx,"load"|"save")` 计数）。
 
 **指数退避**：失败记录 backoff = min(outbox_backoff_initial_ms << attempts, outbox_backoff_max_ms)，
 当前默认 outbox_backoff_initial_ms=100ms，outbox_backoff_max_ms=8000ms，outbox_max_attempts=5（见 state.yaml §thresholds/m2_storage，Go 侧对应 `config.M2StorageThresholds.OutboxBackoffInitialMs` / `OutboxBackoffMaxMs` / `OutboxMaxAttempts`）。

@@ -84,6 +84,14 @@ ADR 被代码引用时，源文件头部加：
 | 0076 | 崩溃恢复回放驱动器 + Task Checkpoint + Outbox 幂等修复合集（含原 ADR-0057/0059） | Accepted（已执行） | 2026-07-22 |
 | 0077 | M5↔M10 桥接与实体/关系抽取统一（推翻原 ADR-0074 §3 结论，含原 ADR-0074） | Accepted（已执行） | 2026-07-23 |
 | 0081 | 架构文档结构治理（`make docs-refs` 门控 + M07/M13 拆分暂缓，含原 ADR-0044） | Accepted（门控已实施）/ Deferred（拆分） | 2026-07-28 |
+| 0082 | MemFS：扩展 core_memory_edit 实现显式可编程记忆块 | Accepted（已执行） | 2026-08-02 |
+| 0083 | 双时态知识图谱：关系边时态化 + AsOf 视图 | Accepted（已执行） | 2026-08-02 |
+| 0084 | MCP A2A：复用 transfer_to_agent 挂起机制补齐出站跨框架委派 | Accepted（已执行） | 2026-08-02 |
+| 0085 | 抽取 SessionOrchestrator 领域层收敛会话生命周期编排 | Accepted（已执行） | 2026-08-01 |
+| 0086 | Handoff 唤醒事件化 + 崩溃后无损续跑快照 | Accepted（已执行） | 2026-08-01 |
+| 0087 | 降级必须显式：cedarLeaks 时间窗 + PII LRU 分区回收 + 沙箱可信来源 opt-in | Accepted（已执行） | 2026-08-01 |
+
+> 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 
 ## 已删除（内容已合并至目标 ADR，不再保留独立文件）
 

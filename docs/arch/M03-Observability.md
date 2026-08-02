@@ -392,6 +392,7 @@ DDL（Data Definition Language，数据定义语言） 见 `internal/protocol/sc
 | Linux memory probe 未包含 page cache | P2 | ✅ 已修复 | 改为解析 `/proc/meminfo MemAvailable` |
 | 监控指标实现不完整 | P2 | ✅ 已实现 | `instruments.go` 已覆盖 11 个指标（含沙箱、LLM 调用等），M1/M4/M7 三处埋点已实装。embedding、policy、FFI 等相关指标均已在 `instruments.go` 落实。memory 类已有弱覆盖——`instruments.go` `RecordMemoryToolCall()` 复用通用 `InstrToolCallsTotal` 打 `category="memory"` 标签。 |
 | `polaris_llm_cache_hit_rate` | P2 | ✅ 已实现 | `observability.RecordLLMCacheHit()` 已在 deepseek/openai/anthropic/google 四个 Adapter 响应解析后调用 |
+| 阶段01~05 新增可观测埋点缺失 | P2 | ✅ 已实现 | `instruments.go` 新增 `RecordAgentHandoffWake`/`RecordAgentHandoffResume`/`RecordAgentHandoffSnapshotOversized`（ADR-0086 委派唤醒/恢复路径）、`RecordPIIMappingEviction`（ADR-0087 PII 分区 LRU 淘汰）、`RecordKnowledgeOutboxWriteFailure`/`RecordKnowledgeGraphWriteFailure`/`RecordKnowledgeReadFailure`（M10 图谱写入/读取失败）、`RecordExtensionLLMCall`/`RecordExtensionStructuredFailure`（LLM 结构化生成骨架熔断）、`RecordSandboxDowngrade`（ADR-0087 降级必须显式）、`RecordToolOutcomeDecodeFailure`/`RecordBlackboardScanError`/`RecordMemoryJSONDecodeFailure`/`RecordOutboxCursorError`/`RecordOutboxProcessFailure` |
 
 ---
 

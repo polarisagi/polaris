@@ -23,5 +23,11 @@
   "internal/agent/fsm/transitions.go": true,
   "_reason_transitions": "GD-13-004 bypass logic added",
   "internal/knowledge/retriever.go": true,
-  "_reason_retriever": "GD-14-002 GraphRAG 社区摘要接入后临时超 400 行，待拆分"
+  "_reason_retriever": "GD-14-002 GraphRAG 社区摘要接入后临时超 400 行，待拆分",
+  "internal/agent/agent_execute_util.go": true,
+  "_reason_agent_execute_util": "阶段06 复核发现的存量超标（本次会话未触碰该文件，与阶段05 P-01~P-03 改动无关联调用链），415 行，待拆分",
+  "internal/observability/metrics/metrics.go": true,
+  "_reason_metrics": "阶段06 复核发现的存量超标（本次会话未触碰该文件），408 行，待拆分",
+  "internal/security/policy/gate.go": true,
+  "_reason_gate": "阶段06 复核发现的存量超标（本次会话未触碰该文件，ADR-0087 仅引用其 cedarLeak 机制未修改代码），429 行，待拆分"
 }

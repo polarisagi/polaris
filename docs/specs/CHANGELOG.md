@@ -4,6 +4,15 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-08-01（阶段01~05 新增 4 条防退化 lint 不变量）
+
+`internal/lint/inv_lint_test.go` 新增：
+
+- `Test_inv_M13_06_ChannelNoRawHTTPClient`：`internal/channel/` 下禁止裸 HTTP Client（三个渠道 Poller 收敛至 `host.HTTPClient` 恢复 SSRF 防护）
+- `Test_inv_VFS_QuotaMustUseWithQuota`：VFS 配额预占必须经 `WithQuota` 闭包收敛，禁止手动 `CheckQuota`/`ReleaseQuota` 配对（防止阶段03 GR-6-001 一类遗漏路径重新出现）
+- `Test_inv_M13_SessionPkgNoHTTP`：`internal/gateway/session/` 下禁止任何 `net/http` 依赖（ADR-0085，SessionOrchestrator 零 HTTP 依赖约束）
+- `Test_inv_M13_SingleTurnEntry`：`SetTaskIntent`+`SendIntent(types.TriggerIntentReceived)` 驱动 FSM 轮次的调用只允许出现在三处固定位置（ADR-0085，防"第三方会话编排重复实现"重新出现）
+
 ## 2026-07-12（新建 internal/execute 模块，收敛单/多 Agent 执行引擎，ADR-0046）
 
 响应"是否该重新引入 Executor 模块"的提问，调研 2026 年 Planner-Executor 分离行业实践后判断：不采纳"规划一并并入"，但采纳"单/多 Agent 执行引擎物理归拢"。

@@ -192,6 +192,8 @@ SSE 事件 (text/event-stream): "token" | "tool_call" | "tool_result" | "thinkin
 - `status/compacting`：压缩进行中（前端显示蓝色 Indicator）
 - `status/compacted`：压缩完成（前端在末尾消息标记分隔线）
 
+**SessionOrchestrator 领域层**（ADR-0085）：`POST /v1/agent/stream`（本节）与 `AgentPool.AcquireHeadless`（Cron/Workflow/Webhook）两条会话轮次入口共享 `internal/gateway/session.Orchestrator.RunTurn`，会话确保/历史加载/Hook 分发/斜线命令路由/压缩决策/`SystemPromptGuard` 装配/消息持久化统一收敛于此，避免此前两条入口各自重复实现导致的防护漏接（如 `SystemPromptGuard` 曾只接 SSE 路径）。HTTP 层仅负责请求解码/SSE 帧格式转译/错误码映射（`chat/sse_sink.go` 实现 `session.Sink` 把领域事件译为本节 SSE 事件字面量），不持有编排逻辑。`internal/gateway/session/` 零 `net/http` 依赖，由 `Test_inv_M13_SessionPkgNoHTTP` 强制门控；驱动 FSM 轮次的 `SendIntent(types.TriggerIntentReceived)` 调用点收敛至三处固定位置，由 `Test_inv_M13_SingleTurnEntry` 强制门控。
+
 #### 1.2.1 认证
 
 **AuthMiddleware**:
