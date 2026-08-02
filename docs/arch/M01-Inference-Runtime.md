@@ -132,7 +132,7 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 但在实际验证中发现，当前的单层 HealthScore 路由 + Role Pool（`general`/`default`/`reasoning`）+ ADR-0020（Architecture Decision Record，架构决策记录） ThinkingMode 三档设计已完全能覆盖“简单任务便宜模型、复杂任务深度思考”的核心诉求。为避免引入不必要的判断分支和复杂度，`determineComplexity` 及其相关代码已被彻底删除。
 
-注意与 ADR-0020（ThinkingMode 三档路由，`internal/observability/metrics/metrics.go` 的 `SelectThinkingMode`）区分：后者选的是“思考强度”而非“Provider”，两者是并行机制，不能互相替代。
+注意与 ADR-0020（ThinkingMode 三档路由，`internal/observability/metrics/metrics_handler.go` 的 `SelectThinkingMode`）区分：后者选的是”思考强度”而非”Provider”，两者是并行机制，不能互相替代。
 
 ### 4.5 Route 方法
 
@@ -187,7 +187,9 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 > **设计决策**：对齐 DeepSeek V4 Pro / Claude Sonnet thinking 原生推理范式。MCTS/BestOfN/多候选路由已废弃——Provider 原生扩展思考（native extended thinking）覆盖相同能力。
 
-**`[ThinkingMode]`** —— `internal/observability/metrics/metrics.go` 中 `SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 三档驱动（由 M4 `transitions.go` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
+> 权威定义见 00-Global-Dictionary §9-ter `[ThinkingMode]`；本节为映射表的实现细节展开，避免双份定义漂移。
+
+**`[ThinkingMode]`** —— `internal/observability/metrics/metrics_handler.go` 中 `SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 三档驱动（由 M4 `transitions.go` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
 
 | 档位 | 触发条件 | DeepSeek V4 Pro 映射 | Claude 映射 |
 |------|---------|----------------------|-------------|
@@ -392,7 +394,7 @@ MutationIntent{
 - **热切换**：`LoadModel` 覆盖式替换——若已有模型常驻，先完整 `unload`（释放 `LlamaContext` 与模型内存）再加载新模型（单槽位，`rust/substrate/src/llama_infer/mod.rs` `ModelHolder`）。
 - **空闲卸载 / Tier 降级**（OSMemoryGuard 空闲内存 < 1.0GB 强制卸载）：
   Go API（`UnloadModel`）已具备。
-  `cmd/polaris/boot_substrate.go` 已启动 `autoConf.RunMemoryWatcher`（5s 轮询）驱动 `internal/observability/auto_config.go` 的 `MemoryPressureCallback`。
+  `cmd/polaris/boot_substrate.go` 已启动 `autoConf.RunMemoryWatcher`（5s 轮询）驱动 `internal/observability/auto_config_pressure.go` 的 `MemoryPressureCallback`。
   `DegradationCritical`（< 1GB）时会执行 `Gate.Override(FeatureLocalInference, Disabled)` + GC + 终止沙箱，作为过渡性降级措施先阻止新的本地推理请求。但该回调尚未直接调用 `UnloadModel` 主动释放已加载模型内存，“OSMemoryGuard 自动触发 UnloadModel”这一直接对接仍待后续完成。
 - **命令面**：`protocol.LocalProvider` 的生命周期方法已在 Go API 层完整可调用（通过 `llm.ProviderRegistry.Get("llama-local")` 取出后类型断言），面向用户的 `/model local <model_id>` 命令解析/HTTP 端点属于命令面对接工作，不在本次 FFI 核心交付范围内。
 

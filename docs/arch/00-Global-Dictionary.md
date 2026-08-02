@@ -553,18 +553,19 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 
 > 与 [System-1/1.5/2]（任务难度维度）正交，独立的"推理深度"维度。本节即权威定义。
 
-- `[ReasoningEffort]`: Provider 抽象层一等公民字段，枚举 `low` / `medium` / `high`。M1 Provider Interface 将其映射至底层 API（o3 `reasoning_effort` / DeepSeek R1 `reasoning_budget` / Claude `thinking.budget_tokens`）。**与 task 难度无关**——同一 task 可在不同 effort 下执行。定义见 M1 §X。
+- `[ThinkingMode]`: Polaris 内部推理深度决策枚举，`ThinkingDisabled` / `ThinkingHigh` / `ThinkingMax` 三档。由 `internal/observability/metrics/metrics_handler.go` 的 `SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 计算，M4 `transitions.go` 在 LLM 调用前经 `protocol.WithThinkingMode` 注入 InferOption。**与 [ReasoningEffort] 是「决策层 → 抽象层」的映射关系，不是同义词**：ThinkingMode 是 Polaris 自己算出的"该想多深"，ReasoningEffort 是把它翻译成 Provider 能理解的字段。映射表见 M1 §5.2-bis。
+- `[ReasoningEffort]`: Provider 抽象层一等公民字段，枚举 `low` / `medium` / `high`。M1 Provider Interface 将其映射至底层 API（o3 `reasoning_effort` / DeepSeek R1 `reasoning_budget` / Claude `thinking.budget_tokens`）。**与 task 难度无关**——同一 task 可在不同 effort 下执行。定义见 M1 §5.2-bis Test-Time Compute。由 [ThinkingMode] 映射而来，见上条。
 - `[ReasoningTokens]`: Provider 返回的 usage 字段，与 `output_tokens` 分计。计入 [TokenBurnRate] 总量但单独导出 Prometheus Gauge `polaris_reasoning_tokens_total`。
-- `[ReasoningState]`: 跨轮 reasoning 状态持久化。物理载体为 M5 `episodic_events.reasoning_state` 列（msgpack 加密 blob），用于推理模型多轮间继承思维链。Tier 0 默认 off（成本控制），Tier 1+ 启用。定义见 M5 §X。
-- `[BestOfN]`: M4 可选执行模式。同一 query 用 `temperature>0` 并行采样 N 次（默认 N=3），由 [Verifier] 选最优。Cedar 策略 `permit when context.task_priority >= 1` 限制（高优任务才用）。定义见 M1 §X。
-- `[SelfConsistency]`: BestOfN 的聚合策略——N 个采样结果做多数投票（结构化输出）或语义聚类（自由文本）。区别于 BestOfN 的"挑最优"，SelfConsistency 是"投票"。
-- `[TTC]`: Test-Time Compute 统称，覆盖 ReasoningEffort / BestOfN / SelfConsistency / 推理时搜索。运行成本 = N × ReasoningTokens × 单价。
+- `[ReasoningState]`: 跨轮 reasoning 状态持久化。物理载体为 M5 `episodic_events.reasoning_state` 列（msgpack 加密 blob），用于推理模型多轮间继承思维链。Tier 0 默认 off（成本控制），Tier 1+ 启用。定义见 M5 §3.1 episodic_events 表。
+- `[BestOfN]`: **已废弃**（ADR-0020 决策二，2026-07-28）。原设计为 M4 可选执行模式——同一 query 用 `temperature>0` 并行采样 N 次由 [Verifier] 选最优——但从未真正实现；DeepSeek V4 Pro 原生 extended thinking 已等效覆盖，改由 [ThinkingMode] 三档驱动。废弃说明见 M1 §5.2-bis 设计决策。**M04-Agent-Kernel.md §进入 S_INTERRUPT 与 M03-Observability.md §10.1 中残留的 `[BestOfN]` 引用属历史未清理措辞，非仍存在的运行时组件**（见 99-new-findings.md）。
+- `[SelfConsistency]`: **随 [BestOfN] 一并废弃**——原设想为 BestOfN 的聚合策略（N 个采样结果做多数投票或语义聚类），因 BestOfN 从未实现而从未落地。保留词条仅为历史索引，不代表当前可用能力。
+- `[TTC]`: Test-Time Compute 统称。当前实际覆盖范围仅 [ReasoningEffort]/[ThinkingMode] 与 [ReasoningTokens] 计量；[BestOfN]/[SelfConsistency] 已废弃，不再计入运行成本模型。
 
 ## §9-quater 第六防线与即时执行
 
 - `[FactualityGuard]`: 安全防线 D6（与 D1~D5 同等级），守护 LLM 输出的事实性。
   - 运行时抽样 5%（可配）经 [CitationValidator] + 数值一致性检查。
-  - 检测到 hallucination → 标记 `TaintLevel` 强制升至 [Taint-Medium] + 触发 LLM-as-Judge 二次裁决。完整定义见 M11 §X。
+  - 检测到 hallucination → 标记 `TaintLevel` 强制升至 [Taint-Medium] + 触发 LLM-as-Judge 二次裁决。完整定义见 M11 §6.5 D6 防线。
 - `[CitationValidator]`: 引用核验器。M10 RAG 输出强制附带 `chunk_id` 引用；FactualityGuard 抽样验证引用 chunk 真实包含输出主张。定义见 M10 §4.X。
 - `[CodeAct]`: 即时代码执行行动空间。区别于 [Logic-Collapse]（沉淀型脚本技能）与 LLM 生成脚本（走 staging 流水线）——CodeAct 是**单次 ad-hoc 代码 + 立即执行**，不写入 Skill Library。
   - 强制 [Sandbox-L3]（HT0 不可用）+ Capability Token + Audit。定义见 M7 §7.4。
@@ -579,7 +580,7 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 
 - `[UserInterrupt]`: 用户中断协议。M13 `POST /v1/agent/{taskID}/interrupt` 触发 M4 状态机进入 S_INTERRUPT（状态总数见 M4 §1）。< 200ms 内传播 context.Cancel 至所有运行 LLM 调用与工具调用。与 [KillSwitch] FULLSTOP 同等优先级但作用域为单任务。定义见 M4 §1, M13 §1.2.5。
 - `[ReflectionMemory]`: 反思记忆。区别于 Episodic（事件流水）与 Semantic（事实图谱）——是 Agent 自身对"做了什么 + 学到什么"的元认知摘要。M5 §3.X 新表 `reflection_memory` 存储；触发: 任务终态 + Session 关闭 + 失败 reflection。区别于 M9 PersonaRefiner（用户画像更新）。
-- `[PerformanceDrift]`: 运行时任务质量漂移检测。M3 滑窗 [Window-Quality-10min] 统计任务成功率，对比 RollingBaseline（24h EMA），偏离 >2σ → WARN，>3σ → CRITICAL + 候选 [KillSwitch] Stage 1。区别于 M12 RegressionDetector（CI 触发的离线检测）。定义见 M3 §X。
+- `[PerformanceDrift]`: 运行时任务质量漂移检测。M3 滑窗 [Window-Quality-10min] 统计任务成功率，对比 RollingBaseline（24h EMA），偏离 >2σ → WARN，>3σ → CRITICAL + 候选 [KillSwitch] Stage 1。区别于 M12 RegressionDetector（CI 触发的离线检测）。定义见 M3 §10.1。
 
 ---
 
