@@ -2,85 +2,18 @@ package orchestrator
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
+// setupPatternBlackboard 建表 DDL 已收敛至 schema_test_helper_test.go 的
+// newSchemaBackedDB（直接执行 SSoT .sql 文件），不再手工内联复制。
 func setupPatternBlackboard(t *testing.T) *SQLiteBlackboard {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open sqlite: %v", err)
-	}
-	// in-memory SQLite 每个连接是独立的数据库，必须限制为单连接
-	db.SetMaxOpenConns(1)
-
-	_, err = db.Exec(`
-		CREATE TABLE tasks (
-			task_id TEXT PRIMARY KEY,
-			session_id TEXT,
-			type TEXT,
-			priority INTEGER DEFAULT 0,
-			status TEXT DEFAULT 'pending',
-			claimed_by TEXT,
-			claimed_at DATETIME,
-			expires_at DATETIME,
-			provider_suspended_count INTEGER DEFAULT 0,
-			suspend_reason TEXT,
-			result BLOB,
-			error TEXT,
-			version INTEGER DEFAULT 0,
-			namespace TEXT,
-			intent BLOB,
-			trace_id TEXT,
-			span_id TEXT,
-			spawn_depth INTEGER DEFAULT 0,
-			created_at DATETIME DEFAULT (datetime('now')),
-			updated_at DATETIME DEFAULT (datetime('now'))
-		)
-	`)
-	if err != nil {
-		t.Fatalf("failed to create tasks table: %v", err)
-	}
-
-	// writeTaskEvent 需要 events 表（inv_M8_02 事务内双写）
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS events (
-			offset    INTEGER PRIMARY KEY AUTOINCREMENT,
-			id        TEXT NOT NULL UNIQUE,
-			topic     TEXT NOT NULL,
-			actor     TEXT NOT NULL,
-			type      TEXT NOT NULL,
-			payload   BLOB NOT NULL,
-			created_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS task_checkpoints (
-			task_id TEXT,
-			node_id TEXT,
-			attempt INTEGER,
-			status TEXT,
-			output_json TEXT,
-			idempotency_key TEXT,
-			taint_level INTEGER,
-			started_at INTEGER,
-			completed_at INTEGER,
-			error TEXT,
-			reason TEXT,
-			resume_ctx_json TEXT,
-			PRIMARY KEY (task_id, node_id, attempt)
-		);
-	`)
-	if err != nil {
-		t.Fatalf("failed to create events/checkpoints table: %v", err)
-	}
-
-	return NewSQLiteBlackboard(db)
+	return NewSQLiteBlackboard(newSchemaBackedDB(t))
 }
 
 func mockPatternWorker(ctx context.Context, bb *SQLiteBlackboard, taskID, agentID string, delay time.Duration, result []byte) {

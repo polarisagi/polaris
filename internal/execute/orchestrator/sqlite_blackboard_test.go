@@ -10,52 +10,16 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func newMockSQLiteDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		return nil, err
-	}
-	_, err = db.Exec(`
-		CREATE TABLE tasks (
-			task_id TEXT PRIMARY KEY,
-			session_id TEXT,
-			status TEXT,
-			priority INTEGER,
-			claimed_by TEXT,
-			claimed_at TEXT,
-			expires_at TEXT,
-			version INTEGER,
-			tokens_input INTEGER,
-			tokens_output INTEGER,
-			tokens_cache_read INTEGER,
-			cost_usd REAL,
-			retry_count INTEGER DEFAULT 0,
-			max_retries INTEGER DEFAULT 3,
-			provider_suspended_count INTEGER DEFAULT 0,
-			result BLOB,
-			error TEXT,
-			namespace TEXT,
-			intent BLOB,
-			trace_id TEXT,
-			span_id TEXT,
-			spawn_depth INTEGER DEFAULT 0,
-			created_at TEXT,
-			updated_at TEXT
-		);
-		CREATE TABLE events (
-			id TEXT PRIMARY KEY,
-			topic TEXT,
-			actor TEXT,
-			type TEXT,
-			payload TEXT,
-			created_at INTEGER
-		);
-	`)
-	return db, err
+// newMockSQLiteDB 建表 DDL 已收敛至 schema_test_helper_test.go 的
+// newSchemaBackedDB（直接执行 SSoT .sql 文件），不再手工内联复制。
+// 注：此前内联的 events 表以 id 为主键、无 offset 列，与 SSoT（offset
+// AUTOINCREMENT 为主键）不同，但本文件内测试均未依赖 offset 列本身。
+func newMockSQLiteDB(t *testing.T) (*sql.DB, error) {
+	return newSchemaBackedDB(t), nil
 }
 
 func TestSQLiteBlackboard(t *testing.T) {
-	db, err := newMockSQLiteDB()
+	db, err := newMockSQLiteDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +185,7 @@ func TestSQLiteBlackboard(t *testing.T) {
 // 经 PostTask/PostBatch 落盘后，PeekTask 能正确透传回 TaskSnapshot.Namespace，
 // 供 Worker 读取后注入 AgentKernel.SetMemoryNamespace。
 func TestSQLiteBlackboard_NamespacePersistence(t *testing.T) {
-	db, err := newMockSQLiteDB()
+	db, err := newMockSQLiteDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
