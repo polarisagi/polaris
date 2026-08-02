@@ -106,6 +106,9 @@ type M5MemoryThresholds struct {
 	CoreMemoryMaxBlocks int `toml:"core.memory_max_blocks"` // 16
 	RRFK                int `toml:"rrf.k"`                  // 60 — M5/M10 共享
 	GraphMaxDepth       int `toml:"graph.max_depth"`        // 2
+	// RelationWeightDeltaThreshold 关系边权重变化超此值判为"实质变化"，触发信念
+	// 修正（旧边 superseded + 新建活跃边）；未超阈值原地 UPDATE（ADR-0083）。
+	RelationWeightDeltaThreshold float64 `toml:"graph.relation_weight_delta_threshold"` // 0.2
 	// ReflectionTaskTypeWhitelist/ReflectionMinReplanCount — §3.4 ReflectionWorker
 	// 触发策略（2026-07-21 deadcode 审查补齐，此前 reflexion.NewReflectionWorkerWithConfig
 	// 有完整实现+测试但生产侧无配置来源，一直只能走硬编码默认值）。
@@ -332,14 +335,15 @@ func DefaultThresholds() Thresholds {
 			PRMScorerModel:                "",
 		},
 		M5Memory: M5MemoryThresholds{
-			EpisodicTTLDays:       30,
-			ConsolidationInterval: 60000,
-			ImmutableCoreMax:      100,
-			CoreMemoryBlockMaxKB:  2,
-			CoreMemoryTotalMaxKB:  8,
-			CoreMemoryMaxBlocks:   16,
-			RRFK:                  60,
-			GraphMaxDepth:         2,
+			EpisodicTTLDays:              30,
+			ConsolidationInterval:        60000,
+			ImmutableCoreMax:             100,
+			CoreMemoryBlockMaxKB:         2,
+			CoreMemoryTotalMaxKB:         8,
+			CoreMemoryMaxBlocks:          16,
+			RelationWeightDeltaThreshold: 0.2,
+			RRFK:                         60,
+			GraphMaxDepth:                2,
 			ReflectionTaskTypeWhitelist: []string{
 				"complex_reasoning", "coding", "research", "debug", "analysis",
 			},

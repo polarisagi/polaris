@@ -33,9 +33,15 @@ func setupTraverserTestDB(t *testing.T) *sql.DB {
 			relation_type TEXT NOT NULL,
 			weight REAL DEFAULT 1.0,
 			created_at INTEGER NOT NULL DEFAULT 0,
-			UNIQUE(source_id, target_id, relation_type)
+			status TEXT NOT NULL DEFAULT 'active',
+			valid_from INTEGER,
+			valid_until INTEGER,
+			superseded_by INTEGER REFERENCES semantic_relations(id)
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS uq_semantic_rel_active
+			ON semantic_relations(source_id, target_id, relation_type) WHERE status = 'active';
 		CREATE INDEX IF NOT EXISTS idx_semantic_rel_source ON semantic_relations(source_id);
+		CREATE INDEX IF NOT EXISTS idx_semantic_rel_status ON semantic_relations(status);
 		CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(content, content=rag_chunks, content_rowid=rowid);
 		CREATE TABLE IF NOT EXISTS rag_chunks (
 			id TEXT PRIMARY KEY,

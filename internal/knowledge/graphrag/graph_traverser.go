@@ -31,6 +31,7 @@ type TraverseOptions struct {
 	RelationTypes []string          // 关系类型白名单（为空时不过滤）
 	Direction     TraverseDirection // 为空则使用 DirectionOutgoing
 	MaxDepth      int               // 为 0 则使用常量 bfsDepthLimit
+	AsOf          AsOfFilter        // ADR-0083：零值 = 当前活跃视图（默认行为，向后兼容）
 }
 
 func (o TraverseOptions) maxDepth() int {
@@ -200,6 +201,11 @@ func (gt *GraphTraverser) fetchNeighbors(ctx context.Context, entityID int64, li
 		typeFilter = " AND r.relation_type IN (" + joinStr(placeholders, ",") + ")"
 	}
 
+	// ADR-0083 双时态：AsOf 视图过滤（零值 = status='active' 快路径，与改造前
+	// 查询计划一致；非零值 = 按有效时间区间回放历史）。
+	asOfWhere, asOfArgs := opts.AsOf.SQLWhere("r")
+	extraFilter := typeFilter + " AND " + asOfWhere
+
 	var q string
 	var args []any
 
@@ -208,30 +214,34 @@ func (gt *GraphTraverser) fetchNeighbors(ctx context.Context, entityID int64, li
 		// incoming: target=entityID, 返回 source_id
 		q = `SELECT r.source_id FROM semantic_relations r
 			JOIN semantic_entities e ON r.source_id = e.id AND e.status = 'active'
-			WHERE r.target_id = ?` + typeFilter + `
+			WHERE r.target_id = ?` + extraFilter + `
 			ORDER BY r.weight DESC LIMIT ?`
 		args = append([]any{entityID}, typeArgs...)
+		args = append(args, asOfArgs...)
 		args = append(args, limit)
 	case DirectionBoth:
 		// both: UNION 出边和入边
 		q = `SELECT r.target_id FROM semantic_relations r
 			JOIN semantic_entities e ON r.target_id = e.id AND e.status = 'active'
-			WHERE r.source_id = ?` + typeFilter + `
+			WHERE r.source_id = ?` + extraFilter + `
 			UNION
 			SELECT r.source_id FROM semantic_relations r
 			JOIN semantic_entities e ON r.source_id = e.id AND e.status = 'active'
-			WHERE r.target_id = ?` + typeFilter + `
+			WHERE r.target_id = ?` + extraFilter + `
 			ORDER BY 1 LIMIT ?`
 		args = append([]any{entityID}, typeArgs...)
+		args = append(args, asOfArgs...)
 		args = append(args, entityID)
 		args = append(args, typeArgs...)
+		args = append(args, asOfArgs...)
 		args = append(args, limit)
 	default: // DirectionOutgoing
 		q = `SELECT r.target_id FROM semantic_relations r
 			JOIN semantic_entities e ON r.target_id = e.id AND e.status = 'active'
-			WHERE r.source_id = ?` + typeFilter + `
+			WHERE r.source_id = ?` + extraFilter + `
 			ORDER BY r.weight DESC LIMIT ?`
 		args = append([]any{entityID}, typeArgs...)
+		args = append(args, asOfArgs...)
 		args = append(args, limit)
 	}
 

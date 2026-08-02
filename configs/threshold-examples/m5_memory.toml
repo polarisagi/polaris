@@ -9,6 +9,7 @@
 'core.memory_max_blocks' = 16
 'rrf.k' = 60
 'graph.max_depth' = 2
+'graph.relation_weight_delta_threshold' = 0.2
 'reflection.task_type_whitelist' = ['complex_reasoning', 'coding', 'research', 'debug', 'analysis']
 'reflection.min_replan_count' = 2
 'drift.check_interval_hours' = 168
