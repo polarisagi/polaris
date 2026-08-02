@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,13 @@ func parseFrontmatter(content string) SkillFrontmatter {
 	}
 	var fm SkillFrontmatter
 	if firstDash != -1 && secondDash != -1 && secondDash > firstDash+1 {
-		_ = yaml.Unmarshal([]byte(strings.Join(lines[firstDash+1:secondDash], "\n")), &fm)
+		// 2026-08-02 HE-1 补齐：函数按文档约定的"找不到/解析失败一律降级为零值"
+		// 语义保持不变（签名无 error 返回，不改变调用方契约），但此前连
+		// "frontmatter 存在却解析失败"（YAML 语法损坏，区别于真正找不到
+		// frontmatter 的场景）都完全静默，补一条日志避免脏 SKILL.md 无法排查。
+		if err := yaml.Unmarshal([]byte(strings.Join(lines[firstDash+1:secondDash], "\n")), &fm); err != nil {
+			slog.Warn("plugin: SKILL.md frontmatter YAML 解析失败，按零值降级", "err", err)
+		}
 	}
 	if fm.ExecMode == "" {
 		fm.ExecMode = "tool"

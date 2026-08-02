@@ -104,7 +104,12 @@ func (h *WorkflowAdmin) loadWorkflowSteps(ctx context.Context, wfID string) []wo
 		st.InputFromPrev = inputInt == 1
 		// 解析失败（脏数据/手工改库）按"无依赖"降级，由 buildGraphSpec 合成顺序链
 		// 兜底，而非中止整个 workflow 加载（fail-closed 但不是 fail-hard）。
-		_ = json.Unmarshal([]byte(dependsOnJSON), &st.DependsOn)
+		// 2026-08-02 HE-1 补齐：降级行为本身维持不变（设计如此），但此前完全
+		// 静默、运维无法区分"步骤本就无依赖"与"depends_on 字段已损坏"，
+		// 现补一条日志（不阻断加载）。
+		if err := json.Unmarshal([]byte(dependsOnJSON), &st.DependsOn); err != nil {
+			slog.Warn("workflow: workflow_steps.depends_on 解析失败，按无依赖降级", "step_id", st.ID, "err", err)
+		}
 		steps = append(steps, st)
 	}
 	return steps
@@ -133,7 +138,11 @@ func (h *WorkflowAdmin) loadWorkflowStepByID(ctx context.Context, stepID string)
 		return nil, apperr.Wrap(apperr.CodeInternal, "load workflow_step by id", err)
 	}
 	st.InputFromPrev = inputInt == 1
-	_ = json.Unmarshal([]byte(dependsOnJSON), &st.DependsOn)
+	// 2026-08-02 HE-1 补齐：与 loadWorkflowSteps 同款降级语义（无依赖兜底），
+	// 补一条日志避免脏数据被完全静默。
+	if err := json.Unmarshal([]byte(dependsOnJSON), &st.DependsOn); err != nil {
+		slog.Warn("workflow: workflow_steps.depends_on 解析失败，按无依赖降级", "step_id", st.ID, "err", err)
+	}
 	return &st, nil
 }
 
