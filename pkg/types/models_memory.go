@@ -227,4 +227,13 @@ type CoreMemoryBlock struct {
 	Content    string
 	TaintLevel TaintLevel
 	UpdatedAt  time.Time
+
+	// Description 块用途的一句话说明（Agent 自述，ADR-0082 MemFS）。
+	Description string
+	// ReadOnly 保护块标记：为 true 时拒绝一切写操作（set/append/replace/delete）。
+	ReadOnly bool
+	// MaxBytes 单块内容字节上限，创建时固化，不随全局配置变化追溯（ADR-0082）。
+	MaxBytes int
+	// SizeBytes 派生值（len(Content) 的字节数），不入库，仅供 list/get 响应展示。
+	SizeBytes int
 }

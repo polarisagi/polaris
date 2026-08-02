@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/polarisagi/polaris/internal/memory/store"
+	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/pkg/types"
 
 	_ "modernc.org/sqlite"
@@ -22,18 +23,12 @@ func TestSQLCoreMemoryStore(t *testing.T) {
 
 	ctx := context.Background()
 	// core memory 属于 memory_schemas 之一，但可能 034 还未被 ApplyMemorySchemas 包含
-	// 为了确保，手动执行 034
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS core_memory_blocks (
-			agent_id TEXT NOT NULL,
-			session_id TEXT NOT NULL,
-			block_key TEXT NOT NULL,
-			content TEXT NOT NULL,
-			taint_level INTEGER NOT NULL,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (agent_id, session_id, block_key)
-		);
-	`)
+	// 为了确保，手动执行 034。直接读取 SSoT DDL 文件内容建表（而非手工复制一份 schema
+	// 文本），避免阶段04 A-02 记录过的"内联 DDL 复制品与 SSoT 失步"故障重演——
+	// 034 一旦新增列，这里自动跟着变，不需要人工同步第二份 schema。
+	ddl, err := schema.FS.ReadFile("034_core_memory.sql")
+	require.NoError(t, err)
+	_, err = db.Exec(string(ddl))
 	require.NoError(t, err)
 
 	coreMem := store.NewSQLCoreMemoryStore(db)

@@ -835,11 +835,13 @@ thresholds:
     core_immutable_max: 100
     core_memory_block_max_kb: 2
     core_memory_total_max_kb: 8
+    core_memory_max_blocks: 16 # toml:"core.memory_max_blocks" — ADR-0082 MemFS 块数上限
     rrf_k: 60
     graph_max_depth: 2
     re_eval_when:
       - episodic_ttl_days: ["storage_cost_exceeds_budget"]
       - core_memory_block_max_kb: ["llm_context_window_pressure"]
+      - core_memory_max_blocks: ["agent_hits_block_cap_frequently"]
     mutation_bus_channel_cap: 4096
     max_rows_per_tx: 50
     max_batch_size: 64

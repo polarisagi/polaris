@@ -101,8 +101,11 @@ type M5MemoryThresholds struct {
 	ImmutableCoreMax      int `toml:"core.immutable_max"`        // 100
 	CoreMemoryBlockMaxKB  int `toml:"core.memory_block_max_kb"`  // 2
 	CoreMemoryTotalMaxKB  int `toml:"core.memory_total_max_kb"`  // 8
-	RRFK                  int `toml:"rrf.k"`                     // 60 — M5/M10 共享
-	GraphMaxDepth         int `toml:"graph.max_depth"`           // 2
+	// CoreMemoryMaxBlocks 单会话核心记忆块数上限（ADR-0082 MemFS）。达到上限后
+	// core_memory_edit 拒绝创建新块（已存在块的 set/append/replace 不受此限）。
+	CoreMemoryMaxBlocks int `toml:"core.memory_max_blocks"` // 16
+	RRFK                int `toml:"rrf.k"`                  // 60 — M5/M10 共享
+	GraphMaxDepth       int `toml:"graph.max_depth"`        // 2
 	// ReflectionTaskTypeWhitelist/ReflectionMinReplanCount — §3.4 ReflectionWorker
 	// 触发策略（2026-07-21 deadcode 审查补齐，此前 reflexion.NewReflectionWorkerWithConfig
 	// 有完整实现+测试但生产侧无配置来源，一直只能走硬编码默认值）。
@@ -334,6 +337,7 @@ func DefaultThresholds() Thresholds {
 			ImmutableCoreMax:      100,
 			CoreMemoryBlockMaxKB:  2,
 			CoreMemoryTotalMaxKB:  8,
+			CoreMemoryMaxBlocks:   16,
 			RRFK:                  60,
 			GraphMaxDepth:         2,
 			ReflectionTaskTypeWhitelist: []string{

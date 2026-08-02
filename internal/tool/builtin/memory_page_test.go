@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -62,6 +63,49 @@ func (m *mockCoreMemory) List(_ context.Context, agentID, sessionID string) ([]t
 		}
 	}
 	return out, nil
+}
+
+// Replace/Describe 最小可用实现（ADR-0082），仅供 memory_page_out/in 测试满足接口，
+// 未覆盖 read_only/max_bytes 策略——那部分由 core_memory_edit_test.go 针对
+// SQLCoreMemoryStore 真实实现覆盖。
+func (m *mockCoreMemory) Replace(_ context.Context, agentID, sessionID, blockKey, old, newStr string, replaceAll bool, taintLevel types.TaintLevel) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := m.key(agentID, sessionID, blockKey)
+	b, ok := m.blocks[k]
+	if !ok {
+		return 0, apperr.New(apperr.CodeNotFound, "block not found")
+	}
+	occurrences := strings.Count(b.Content, old)
+	if occurrences == 0 {
+		return 0, apperr.New(apperr.CodeNotFound, "old_str not found")
+	}
+	if occurrences > 1 && !replaceAll {
+		return occurrences, apperr.New(apperr.CodeInvalidInput, "old_str matches multiple times")
+	}
+	if replaceAll {
+		b.Content = strings.ReplaceAll(b.Content, old, newStr)
+	} else {
+		b.Content = strings.Replace(b.Content, old, newStr, 1)
+	}
+	if taintLevel > b.TaintLevel {
+		b.TaintLevel = taintLevel
+	}
+	m.blocks[k] = b
+	return occurrences, nil
+}
+
+func (m *mockCoreMemory) Describe(_ context.Context, agentID, sessionID, blockKey, description string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := m.key(agentID, sessionID, blockKey)
+	b, ok := m.blocks[k]
+	if !ok {
+		return apperr.New(apperr.CodeNotFound, "block not found")
+	}
+	b.Description = description
+	m.blocks[k] = b
+	return nil
 }
 
 // mockSemanticWriter 是 SemanticMemWriter 的内存实现。

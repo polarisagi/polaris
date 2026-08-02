@@ -120,6 +120,18 @@ CoreMemory interface {
 	Set(ctx context.Context, agentID, sessionID, blockKey, content string, taintLevel types.TaintLevel) error
 	Delete(ctx context.Context, agentID, sessionID, blockKey string) error
 	List(ctx context.Context, agentID, sessionID string) ([]types.CoreMemoryBlock, error)
+
+	// Replace 在块内做精确子串替换（MemFS 语义，ADR-0082）。old 在块中出现 0 次
+	// 返回 CodeNotFound；出现 >1 次且 replaceAll=false 返回 CodeInvalidInput，提示
+	// Agent 提供更长的唯一上下文（与 str_replace_editor 工具同一约定）。read_only
+	// 块返回 CodeForbidden；结果超过块的 MaxBytes 返回 CodeInvalidInput。
+	// taintLevel 为本次调用的授信污点（S_VALIDATE 注入，禁止采信 LLM 生成参数），
+	// 写入后块的 taint_level = max(原值, taintLevel)（只升不降，与 Set/Append 同一
+	// 不变量）。occurrences 为替换前 old 的出现次数。
+	Replace(ctx context.Context, agentID, sessionID, blockKey, old, newStr string, replaceAll bool, taintLevel types.TaintLevel) (occurrences int, err error)
+
+	// Describe 设置块的用途说明，供 list 展示。块不存在返回 CodeNotFound。
+	Describe(ctx context.Context, agentID, sessionID, blockKey, description string) error
 }
 
 type
