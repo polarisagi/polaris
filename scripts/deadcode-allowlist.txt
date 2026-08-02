@@ -15,8 +15,6 @@ internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 �
 internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0007 刻意保留不接入，ADR-0062 恢复
 internal/channel/message.go: unreachable func: jsonNestedInt64 # 根因一(测试假阳性)，仅被 channels_test.go 调用
 internal/observability/trace/tracer.go: unreachable func: Tracer.RegisterExporter # ADR-0069，boot 期改走 SetDefaultExporters（NewTracer 自动附加），RegisterExporter 保留作为单 Tracer 实例的手动注册入口（测试/未来场景用），2026-07-23 接入 boot 后复核仍为生产不可达
-internal/observability/metrics/instruments.go: unreachable func: RecordKnowledgeOutboxWriteFailure # 根因一(测试假阳性)，阶段05 P-03 make deadcode 复核时发现，与本次 A2A 改动无关联调用链，登记于 99-new-findings.md 待阶段06/07 复核
-internal/observability/metrics/instruments.go: unreachable func: RecordKnowledgeGraphWriteFailure # 根因一(测试假阳性)，阶段05 P-03 make deadcode 复核时发现，与本次 A2A 改动无关联调用链，登记于 99-new-findings.md 待阶段06/07 复核
-internal/security/guard/pii_desensitizer.go: unreachable func: lruMapping.len # 根因一(测试假阳性)，阶段05 P-03 make deadcode 复核时发现，仅被 pii_desensitizer_test.go 调用，登记于 99-new-findings.md 待阶段06/07 复核
-internal/security/guard/pii_desensitizer.go: unreachable func: PIIDesensitizer.partitionLen # 根因一(测试假阳性)，阶段05 P-03 make deadcode 复核时发现，仅被 pii_desensitizer_test.go 调用，登记于 99-new-findings.md 待阶段06/07 复核
-internal/security/guard/pii_desensitizer.go: unreachable func: PIIDesensitizer.partitionCount # 根因一(测试假阳性)，阶段05 P-03 make deadcode 复核时发现，仅被 pii_desensitizer_test.go 调用，登记于 99-new-findings.md 待阶段06/07 复核
+internal/security/guard/pii_desensitizer.go: unreachable func: lruMapping.len # 根因一(测试假阳性)，2026-08-02 root cause 确认：partitionLen/partitionCount（同注释"仅供测试"）是白盒测试专用访问器，仅被 pii_desensitizer_test.go 调用，不存在自然的生产调用点，长期归属本名单
+internal/security/guard/pii_desensitizer.go: unreachable func: PIIDesensitizer.partitionLen # 根因一(测试假阳性)，2026-08-02 root cause 确认：白盒测试专用访问器，仅被 pii_desensitizer_test.go 调用，不存在自然的生产调用点，长期归属本名单
+internal/security/guard/pii_desensitizer.go: unreachable func: PIIDesensitizer.partitionCount # 根因一(测试假阳性)，2026-08-02 root cause 确认：白盒测试专用访问器，仅被 pii_desensitizer_test.go 调用，不存在自然的生产调用点，长期归属本名单

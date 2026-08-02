@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/internal/store/search"
 
@@ -206,6 +207,7 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 		// 依赖该 outbox 事件驱动），且文档分片本身已经成功写入 rag_chunks——
 		// 若在此静默吞没，调用方会误以为摄入完全成功。必须向上返回错误。
 		if err := p.outboxWriter.Write(ctx, ev); err != nil {
+			metrics.RecordKnowledgeOutboxWriteFailure(ctx, graphrag.EventTypeRAGDocIngested)
 			return tree, apperr.Wrap(apperr.CodeInternal, "knowledge_ingester: GraphBuild outbox 投递失败", err)
 		}
 	}
