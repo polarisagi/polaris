@@ -33,6 +33,12 @@ type TaskSnapshot struct {
 	// TraceID / SpanID 用于跨 goroutine trace 延续 (A16)
 	TraceID string
 	SpanID  string
+
+	// SpawnDepth 透传自 TaskEntry.SpawnDepth（ADR-0084 补齐持久化，见
+	// 007_tasks.sql spawn_depth 列注释）。自订阅式 Worker 认领任务后若需要
+	// 再派生子任务（如 transfer_to_agent 委派链），据此设置子任务的
+	// SpawnDepth+1，使 resolveMaxDepth 深度上限校验对多级委派链生效。
+	SpawnDepth int
 }
 
 type

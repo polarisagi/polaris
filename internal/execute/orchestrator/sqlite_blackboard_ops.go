@@ -82,11 +82,14 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 	var result []byte
 	var taskType string
 	var traceID, spanID sql.NullString
+	var spawnDepth int
 	// [修复] 补齐 result 列读取——此前 SELECT 缺失该列，即便 CompleteTask
 	// 持久化了结果，PeekTask 调用方（transfer_to_agent 恢复分支、
 	// PatternDebate 等）也永远读不到，见 007_tasks.sql result 列注释。
-	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, result, session_id, trace_id, span_id FROM tasks WHERE task_id=?", taskID).
-		Scan(&statusStr, &namespace, &intent, &result, &taskType, &traceID, &spanID)
+	// [ADR-0084] 补齐 spawn_depth 列读取，使自订阅式 Worker 能在派生子任务时
+	// 传递委派链当前深度（此前该列不存在，见 007_tasks.sql spawn_depth 列注释）。
+	err := bb.db.QueryRowContext(ctx, "SELECT status, namespace, intent, result, session_id, trace_id, span_id, spawn_depth FROM tasks WHERE task_id=?", taskID).
+		Scan(&statusStr, &namespace, &intent, &result, &taskType, &traceID, &spanID, &spawnDepth)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -113,14 +116,15 @@ func (bb *SQLiteBlackboard) PeekTask(ctx context.Context, taskID string) (*types
 	}
 
 	return &types.TaskSnapshot{
-		ID:        taskID,
-		Status:    status,
-		Namespace: namespace.String,
-		Intent:    intent,
-		Result:    result,
-		Type:      taskType,
-		TraceID:   traceID.String,
-		SpanID:    spanID.String,
+		ID:         taskID,
+		Status:     status,
+		Namespace:  namespace.String,
+		Intent:     intent,
+		Result:     result,
+		Type:       taskType,
+		TraceID:    traceID.String,
+		SpanID:     spanID.String,
+		SpawnDepth: spawnDepth,
 	}, nil
 }
 

@@ -187,6 +187,14 @@ type StateContext struct {
 	// GD-1: Handoff 委派的目标任务 ID，持久化至 checkpoint 以供恢复
 	HandoffTaskID string
 
+	// SpawnDepth 当前 Agent 实例继承自其所属 TaskEntry.SpawnDepth 的委派链深度
+	// （ADR-0084）。默认 0（顶层交互式/首个 headless 任务）。由 Worker 在 Run()
+	// 前通过 SetSpawnDepth() 注入；executeTransferToAgent 投递新的
+	// agent_handoff:* 任务时取 SpawnDepth+1，交由 SQLiteBlackboard.PostTask 的
+	// resolveMaxDepth 校验（inv_M8_06，state.yaml delegation_chain_max_depth）。
+	// 此前该字段不存在，entry.SpawnDepth 恒为 0，委派链深度上限从未真正启用。
+	SpawnDepth int
+
 	// CompletedNodeIDs 记录 DAGModel 中已成功执行完成的节点 ID（GD-13-009）。
 	// 崩溃恢复场景下由 ResumeAwaitingHandoff 从 HandoffResumeContext 回填，
 	// runExecuteDAG 据此构建 protocol.DAGPlan.PreCompletedNodes，使 DAG

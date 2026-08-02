@@ -23,6 +23,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/observability/trace"
@@ -44,21 +45,41 @@ const defaultTaskExecTimeout = 10 * time.Minute
 // （通过 excludeTypes 声明的能力类型，如 "workflow_step"）声明的任务，将
 // TaskEntry.Intent 原样作为 headless 查询文本执行。
 type DefaultTaskWorker struct {
-	bb           protocol.Blackboard
-	pool         protocol.AgentPool
-	excludeTypes map[string]struct{}
+	bb              protocol.Blackboard
+	pool            protocol.AgentPool
+	excludeTypes    map[string]struct{}
+	excludePrefixes []string
 }
 
 // NewDefaultTaskWorker 构造通用兜底 Worker。excludeTypes 列出已有专用自订阅
-// Worker 处理的能力类型（例如 workflowadmin 包的 "workflow_step"），避免与其
-// 竞争 CAS 认领——专用 Worker 对这些类型的 Intent 有结构化解析预期（如 JSON
-// envelope），若被本 Worker 误认领会把结构化数据当纯文本传给 LLM。
+// Worker 处理的能力类型/前缀（例如 workflowadmin 包的 "workflow_step"、
+// ADR-0084 的 "agent_handoff:mcp:"），避免与其竞争 CAS 认领——专用 Worker 对
+// 这些类型的 Intent 有结构化解析预期（如 JSON envelope、mcp: 委派语义），若被
+// 本 Worker 误认领会把结构化数据当纯文本传给 LLM。
+//
+// 精确类型（如 "debate"）与前缀（如 "agent_handoff:mcp:"）统一按前缀匹配处理
+// ——精确类型本身也满足"是自己的前缀"，不需要区分两套判定逻辑（ADR-0084）。
 func NewDefaultTaskWorker(bb protocol.Blackboard, pool protocol.AgentPool, excludeTypes ...string) *DefaultTaskWorker {
 	ex := make(map[string]struct{}, len(excludeTypes))
+	prefixes := make([]string, 0, len(excludeTypes))
 	for _, t := range excludeTypes {
 		ex[t] = struct{}{}
+		prefixes = append(prefixes, t)
 	}
-	return &DefaultTaskWorker{bb: bb, pool: pool, excludeTypes: ex}
+	return &DefaultTaskWorker{bb: bb, pool: pool, excludeTypes: ex, excludePrefixes: prefixes}
+}
+
+// isExcluded 判断 taskType 是否属于专用 Worker 声明的能力类型/前缀。
+func (w *DefaultTaskWorker) isExcluded(taskType string) bool {
+	if _, ok := w.excludeTypes[taskType]; ok {
+		return true
+	}
+	for _, p := range w.excludePrefixes {
+		if strings.HasPrefix(taskType, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // RunLoop 是本 Worker 的主守护协程，应在 boot 阶段以 concurrent.SafeGo 或
@@ -103,8 +124,8 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	if err != nil || snap == nil {
 		return
 	}
-	if _, excluded := w.excludeTypes[snap.Type]; excluded {
-		return // 属于专用 Worker 的能力类型，让其处理
+	if w.isExcluded(snap.Type) {
+		return // 属于专用 Worker 的能力类型/前缀，让其处理
 	}
 	if snap.Status != types.TaskPending {
 		return
@@ -134,7 +155,9 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	// AcquireHeadless（internal/agent/pool.go）自身在返回前统一扫描，覆盖
 	// 包括本调用在内的全部直接/间接调用方（见 session/guard.go 顶部注释的
 	// 决策记录）。
-	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt})
+	// ADR-0084：透传 SpawnDepth，使 transfer_to_agent 委派链深度校验对本兜底
+	// 路径执行的委派任务同样生效（此前恒为 0，见 agent_handoff.go）。
+	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt}, types.WithSpawnDepth(snap.SpawnDepth))
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())

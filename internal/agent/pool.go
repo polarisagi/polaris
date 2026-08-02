@@ -241,6 +241,11 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 		o(opt)
 	}
 
+	// ADR-0084：透传委派链深度，使 transfer_to_agent 的 SpawnDepth 校验
+	// （inv_M8_06）对经 headless 路径执行的委派任务生效。opt.SpawnDepth 默认 0，
+	// 等同于未引入本机制前的行为。
+	agent.SetSpawnDepth(opt.SpawnDepth)
+
 	intentBytes, _ := json.Marshal(intent)
 	agent.SetTaskIntent(intentBytes)
 

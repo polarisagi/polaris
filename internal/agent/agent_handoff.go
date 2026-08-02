@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,12 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// mcpA2ATargetPrefix 标记 target_agent_role 指向跨框架外部 Agent（ADR-0084）。
+// 命中该前缀时：(1) 强制返回结果 TaintHigh（A1）；(2) 投递前对 context_summary
+// 做 PII 脱敏（A6）。实际路由/超时/深度校验由 internal/execute/orchestrator
+// 的 MCPA2AWorker 承担，本文件不关心 mcp: 目标的内部寻址语义。
+const mcpA2ATargetPrefix = "mcp:"
 
 // D5（GD-14-004）→ GD-1（local_playground/upgrade/01-架构设计变更规范.md）→
 // GD-13-007/GD-13-009（阶段04 A-01/A-02）：工具化 Multi-Agent Handoff，
@@ -79,7 +86,7 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 			return &types.ToolResult{
 				Success:    true,
 				Output:     snap.Result,
-				TaintLevel: taintLevel,
+				TaintLevel: resolveHandoffResultTaint(targetRole, taintLevel),
 			}, nil
 		}
 		if err == nil && snap != nil && snap.Status == types.TaskFailed {
@@ -98,6 +105,10 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		}, nil
 	}
 
+	if strings.HasPrefix(targetRole, mcpA2ATargetPrefix) {
+		contextSummary = a.redactForMCPEgress(ctx, targetRole, contextSummary)
+	}
+
 	childID := fmt.Sprintf("handoff-%s-%s", a.ID, uuid.NewString())
 	entry := &types.TaskEntry{
 		ID:          childID,
@@ -106,10 +117,16 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		Intent:      []byte(contextSummary),
 		IntentTaint: taintLevel,
 		Namespace:   namespace,
+		// SpawnDepth（ADR-0084）：复用既有 inv_M8_06 委派链深度校验
+		// （SQLiteBlackboard.PostTask resolveMaxDepth），此前恒为 0 从未生效。
+		SpawnDepth: a.sCtx.SpawnDepth + 1,
 	}
 
 	if err := a.handoffPoster.PostTask(ctx, entry); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "transfer_to_agent: post task", err)
+		// [ADR-0084] SpawnDepth 校验现实际可触发 CodeForbidden（此前 SpawnDepth
+		// 恒为 0 从未命中）；用 apperr.CodeOf 保留分类，避免固定 CodeInternal
+		// 把深度超限误报成内部错误。
+		return nil, apperr.Wrap(apperr.CodeOf(err), "transfer_to_agent: post task", err)
 	}
 
 	// [GD-1] 改造为异步挂起，移除阻塞轮询
@@ -122,6 +139,36 @@ func (a *Agent) executeTransferToAgent(ctx context.Context, targetRole, contextS
 		Output:     []byte("Agent suspended waiting for handoff task completion."),
 		TaintLevel: taintLevel,
 	}, nil
+}
+
+// resolveHandoffResultTaint 计算委派恢复分支返回给 DAG 执行器的 TaintLevel。
+// mcp: 前缀目标（ADR-0084 A1）强制 TaintHigh（only-up，即使发起方自身会话
+// 污点更低也不得降级）；本地角色委派保持既有行为不变。
+func resolveHandoffResultTaint(targetRole string, taintLevel types.TaintLevel) types.TaintLevel {
+	if strings.HasPrefix(targetRole, mcpA2ATargetPrefix) {
+		return types.PropagateTaint(taintLevel, types.TaintHigh)
+	}
+	return taintLevel
+}
+
+// redactForMCPEgress 对即将离开本地信任边界的 context_summary 做 PII 静态
+// 脱敏（ADR-0084 A6）：不可逆替换，非 RedactWithMode 的可逆令牌化——外部方
+// 不应持有能被复原的映射。PIIDetector 未注入或脱敏失败时记录 Warn 后放行，
+// 与既有 headless 路径的 PII 降级策略一致（Tier-0 无 Presidio 场景不阻断
+// 主流程）。
+func (a *Agent) redactForMCPEgress(ctx context.Context, targetRole, contextSummary string) string {
+	if a.Security.PIIDetector == nil {
+		slog.WarnContext(ctx, "transfer_to_agent: PIIDetector not injected, mcp: egress skips desensitization",
+			"target_role", targetRole)
+		return contextSummary
+	}
+	cleaned, _, redactErr := a.Security.PIIDetector.Redact(ctx, contextSummary)
+	if redactErr != nil {
+		slog.WarnContext(ctx, "transfer_to_agent: PII redact failed on mcp: egress, sending original text",
+			"target_role", targetRole, "err", redactErr)
+		return contextSummary
+	}
+	return cleaned
 }
 
 // handoffWatchPollInterval 委派完成轮询间隔，仅用于 Subscribe 不可用/失活时

@@ -1002,6 +1002,10 @@ thresholds:
     supervisor_backoff_initial_ms: 200
     supervisor_backoff_max_seconds: 60
     compensation_timeout_seconds: 300
+    # mcp_a2a_handoff_timeout_seconds: MCPA2AWorker 单次跨框架 A2A 委派调用超时
+    # 上限（ADR-0084 A4，toml:"a2a.handoff_timeout_seconds"）。委派链深度上限
+    # 复用本组已登记的 delegation_chain_max_depth，不重复登记。
+    mcp_a2a_handoff_timeout_seconds: 600
     compensation_poll_seconds: 5
     debate_max_rounds: 3
     debate_concurrent_sides: false

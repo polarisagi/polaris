@@ -13,3 +13,4 @@
 'supervisor.backoff_max_seconds' = 60
 'compensation.timeout_seconds' = 300
 'compensation.poll_seconds' = 5
+'a2a.handoff_timeout_seconds' = 600

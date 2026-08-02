@@ -98,9 +98,9 @@ func (bb *SQLiteBlackboard) PostTask(ctx context.Context, task *types.TaskEntry)
 	}
 
 	result, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, intent, trace_id, span_id, created_at, updated_at)
-		VALUES(?,?,?,?,0,?,?,?,?,datetime('now'),datetime('now'))`,
-		task.ID, task.Type, statusPending, task.Priority, task.Namespace, task.Intent, traceID, spanID,
+		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, intent, trace_id, span_id, spawn_depth, created_at, updated_at)
+		VALUES(?,?,?,?,0,?,?,?,?,?,datetime('now'),datetime('now'))`,
+		task.ID, task.Type, statusPending, task.Priority, task.Namespace, task.Intent, traceID, spanID, task.SpawnDepth,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostTask", err)
@@ -133,8 +133,8 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*types.TaskEn
 	}()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, intent, trace_id, span_id, created_at, updated_at)
-		VALUES(?,?,?,?,0,?,?,?,?,datetime('now'),datetime('now'))`)
+		INSERT OR IGNORE INTO tasks(task_id, session_id, status, priority, version, namespace, intent, trace_id, span_id, spawn_depth, created_at, updated_at)
+		VALUES(?,?,?,?,0,?,?,?,?,?,datetime('now'),datetime('now'))`)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
 	}
@@ -154,7 +154,7 @@ func (bb *SQLiteBlackboard) PostBatch(ctx context.Context, tasks []*types.TaskEn
 				fmt.Sprintf("blackboard.PostBatch: SpawnDepth %d exceeds max %d for agent %q",
 					task.SpawnDepth, maxDepth, task.Type))
 		}
-		result, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority, task.Namespace, task.Intent, traceID, spanID)
+		result, err := stmt.ExecContext(ctx, task.ID, task.Type, statusPending, task.Priority, task.Namespace, task.Intent, traceID, spanID, task.SpawnDepth)
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "blackboard.PostBatch", err)
 		}

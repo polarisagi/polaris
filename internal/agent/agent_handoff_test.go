@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -288,6 +289,125 @@ func TestWatchHandoffCompletion_WakesViaInitialPeekWhenAlreadyTerminal(t *testin
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for initial peek to fire TriggerAgentHandoffDone")
+	}
+}
+
+// ─── ADR-0084: MCP A2A 深度/污点/PII 相关测试 ──────────────────────────────
+
+// TestExecuteTransferToAgent_SpawnDepthIncrementsFromSCtx 验证委派链深度
+// 正确从 a.sCtx.SpawnDepth 递增写入 entry.SpawnDepth（此前恒为 0，深度上限
+// 从未真正生效，见 ADR-0084 决策3）。
+func TestExecuteTransferToAgent_SpawnDepthIncrementsFromSCtx(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	a.sCtx.SpawnDepth = 2
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	if _, err := a.executeTransferToAgent(context.Background(), "librarian", "x", types.TaintLow); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if poster.lastPosted.SpawnDepth != 3 {
+		t.Errorf("expected posted SpawnDepth=3 (parent 2 + 1), got %d", poster.lastPosted.SpawnDepth)
+	}
+}
+
+// TestExecuteTransferToAgent_MCPTargetForcesTaintHighOnResume 验证 ADR-0084 A1：
+// mcp: 前缀目标的委派结果恢复时强制 TaintHigh，即使发起方自身污点更低。
+func TestExecuteTransferToAgent_MCPTargetForcesTaintHighOnResume(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	const childID = "handoff-mcp-child"
+	poster.mu.Lock()
+	poster.tasks[childID] = &types.TaskSnapshot{ID: childID, Status: types.TaskDone, Result: []byte("external result")}
+	poster.mu.Unlock()
+	a.sCtx.HandoffTaskID = childID
+
+	res, err := a.executeTransferToAgent(context.Background(), "mcp:linear/researcher", "x", types.TaintLow)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if res.TaintLevel != types.TaintHigh {
+		t.Errorf("expected TaintHigh forced for mcp: target, got %v", res.TaintLevel)
+	}
+}
+
+// TestExecuteTransferToAgent_NonMCPTargetDoesNotForceHighTaint 验证本地角色
+// 委派（非 mcp: 前缀）不受 A1 强制高污点规则影响，保持既有行为。
+func TestExecuteTransferToAgent_NonMCPTargetDoesNotForceHighTaint(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	const childID = "handoff-local-child"
+	poster.mu.Lock()
+	poster.tasks[childID] = &types.TaskSnapshot{ID: childID, Status: types.TaskDone, Result: []byte("local result")}
+	poster.mu.Unlock()
+	a.sCtx.HandoffTaskID = childID
+
+	res, err := a.executeTransferToAgent(context.Background(), "librarian", "x", types.TaintLow)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if res.TaintLevel != types.TaintLow {
+		t.Errorf("expected TaintLevel unchanged (TaintLow) for non-mcp target, got %v", res.TaintLevel)
+	}
+}
+
+// TestExecuteTransferToAgent_MCPTargetRedactsPII 验证 ADR-0084 A6：mcp: 前缀
+// 目标投递前对 context_summary 做 PII 静态脱敏。
+func TestExecuteTransferToAgent_MCPTargetRedactsPII(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	a.Security.PIIDetector = guard.NewPIIDetector()
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	const summary = "contact user at leaked@example.com for details"
+	if _, err := a.executeTransferToAgent(context.Background(), "mcp:linear/researcher", summary, types.TaintLow); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	posted := string(poster.lastPosted.Intent)
+	if strings.Contains(posted, "leaked@example.com") {
+		t.Errorf("expected email to be redacted before mcp: egress, got intent: %s", posted)
+	}
+	if !strings.Contains(posted, "REDACTED") {
+		t.Errorf("expected [REDACTED:...] marker in posted intent, got: %s", posted)
+	}
+}
+
+// TestExecuteTransferToAgent_NonMCPTargetSkipsPIIRedaction 验证本地角色委派
+// 不受 A6 出境脱敏规则影响（该规则只约束离开信任边界的 mcp: 委派）。
+func TestExecuteTransferToAgent_NonMCPTargetSkipsPIIRedaction(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	a.Security.PIIDetector = guard.NewPIIDetector()
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	const summary = "contact user at kept@example.com for details"
+	if _, err := a.executeTransferToAgent(context.Background(), "librarian", summary, types.TaintLow); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(poster.lastPosted.Intent) != summary {
+		t.Errorf("expected non-mcp target intent to pass through unmodified, got: %s", poster.lastPosted.Intent)
+	}
+}
+
+// TestExecuteTransferToAgent_MCPTargetNilPIIDetectorSkipsRedaction 验证
+// PIIDetector 未注入时降级放行（不阻断主流程），与既有 headless 路径 PII
+// 降级策略一致。
+func TestExecuteTransferToAgent_MCPTargetNilPIIDetectorSkipsRedaction(t *testing.T) {
+	a := newTestHandoffAgent(t)
+	// a.Security.PIIDetector 保持 nil。
+	poster := &fakeHandoffPoster{tasks: make(map[string]*types.TaskSnapshot)}
+	a.InjectHandoffPoster(poster)
+
+	const summary = "contact user at plain@example.com for details"
+	if _, err := a.executeTransferToAgent(context.Background(), "mcp:linear/researcher", summary, types.TaintLow); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(poster.lastPosted.Intent) != summary {
+		t.Errorf("expected passthrough when PIIDetector is nil, got: %s", poster.lastPosted.Intent)
 	}
 }
 

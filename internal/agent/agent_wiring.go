@@ -198,6 +198,13 @@ func (a *Agent) SetMemoryNamespace(ns string) {
 	a.sCtx.NamespaceID = ns
 }
 
+// SetSpawnDepth 由 Worker 在调用 Run() 前注入本次执行继承的委派链深度
+// （对应 types.TaskEntry.SpawnDepth，ADR-0084）。depth<=0 时等同于顶层任务
+// （默认零值），与引入本机制前的行为一致。
+func (a *Agent) SetSpawnDepth(depth int) {
+	a.sCtx.SpawnDepth = depth
+}
+
 // memoryPartitionKey 返回 episodic 记忆写入应使用的分区键：设置了协同命名空间时
 // 返回 NamespaceID（使同命名空间下的多个 Agent 共享记忆），否则返回 SessionID
 // （默认行为，与引入 GD-14-001 前完全一致）。

@@ -103,6 +103,7 @@ func newFakeAgentController() *fakeAgentController {
 
 func (f *fakeAgentController) AgentID() string                                 { return "fake" }
 func (f *fakeAgentController) SetTaskIntent(intent []byte)                     { f.intent = intent }
+func (f *fakeAgentController) SetSpawnDepth(depth int)                         {}
 func (f *fakeAgentController) SurpriseIndex() float64                          { return 0 }
 func (f *fakeAgentController) Memory() protocol.MemoryFacade                   { return nil }
 func (f *fakeAgentController) Interrupt(_ types.InterruptRequest)              {}
