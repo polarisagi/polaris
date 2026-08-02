@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 )
 
@@ -20,17 +20,17 @@ import (
 // 斜线命令。calibrate-layer 与"成功率<0.1 自动停用"两项本次未实现（见方法
 // 内注释与 ADR-0048 后续记录），原因是二者分别需要额外的分层效果评估机制与
 // 会话结果反馈信号，本仓库目前均不存在，不臆测语义强行接入（R1）。
-func (r *SlashCommandRouter) handleSteer(ctx context.Context, args, sessionID string, w http.ResponseWriter, flusher http.Flusher) string {
+func (r *SlashCommandRouter) handleSteer(ctx context.Context, args, sessionID string, sink session.Sink) string {
 	if r.steering == nil || r.cvStore == nil {
 		msg := "激活引导未启用（需要 FeatureActivationSteer 门控开启，通常要求 Tier1+ 且已启用本地推理）"
-		r.WriteSSEText(w, flusher, msg)
+		r.WriteSSEText(sink, msg)
 		return msg
 	}
 
 	fields := strings.Fields(args)
 	if len(fields) == 0 {
 		msg := "用法: /steer list | import <label> <file> | set <label> <weight> | deactivate | delete <label> | calibrate-layer <task_type>"
-		r.WriteSSEText(w, flusher, msg)
+		r.WriteSSEText(sink, msg)
 		return msg
 	}
 
@@ -54,7 +54,7 @@ func (r *SlashCommandRouter) handleSteer(ctx context.Context, args, sessionID st
 	default:
 		resp = fmt.Sprintf("未知 /steer 子命令: %s（可用: list/import/set/deactivate/delete/calibrate-layer）", fields[0])
 	}
-	r.WriteSSEText(w, flusher, resp)
+	r.WriteSSEText(sink, resp)
 	return resp
 }
 

@@ -4,14 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/types"
-
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // slashCommandMeta 命令元数据，用于 /help 输出和路由表。
@@ -30,23 +29,20 @@ func builtinSlashCommands() []slashCommandMeta {
 	}
 }
 
-// CommandResult 命令执行结果，由 SlashCommandRouter.Dispatch 返回。
-type CommandResult struct {
-	// Handled=true 表示命令已处理，调用方应短路（跳过 LLM 推理）。
-	Handled bool
-	// Response 是助手回复文本，非空时由调用方持久化到 DB。
-	Response string
-	// UpdatedHistory 是命令执行后的消息历史（/compact 和 /clear 会修改）。
-	UpdatedHistory []types.Message
-}
-
 // SlashCommandRouter 斜线命令路由器。
 // 拦截 /context /compact /clear /help，在 LLM 推理前短路处理。
 // 命令不消耗 TokenBudget，不进入 Agent FSM。
+//
+// [A-03 Step2] Dispatch 及各子处理器的签名此前直接持有
+// (http.ResponseWriter, http.Flusher)，本轮改为 session.Sink——这是
+// internal/gateway/session 包"零 net/http 依赖"硬约束下的必要解耦：
+// SlashCommandRouter 被 session.Orchestrator.RunTurn 直接调用（经
+// session.SlashDispatcher 窄接口），若签名仍含 net/http 类型，session 包的
+// 接口声明将无法避免 import net/http。行为不变，WriteSSE(w,flusher,...)
+// 调用点原样替换为 sink.Emit(session.Event{...})。
 type SlashCommandRouter struct {
 	compressor SessionCompressor
 	chatRepo   protocol.ChatRepository
-	WriteSSE   func(http.ResponseWriter, http.Flusher, string, any)
 
 	// steering/cvStore — M09 §1.3 Activation Steering 命令面（2026-07-21 deadcode
 	// 审查补齐）。均可为 nil（FeatureActivationSteer 未启用/Tier<1 时），/steer
@@ -56,8 +52,8 @@ type SlashCommandRouter struct {
 	cvStore  *llmadapter.ControlVectorStore
 }
 
-func NewSlashCommandRouter(compressor SessionCompressor, chatRepo protocol.ChatRepository, WriteSSE func(http.ResponseWriter, http.Flusher, string, any)) *SlashCommandRouter {
-	return &SlashCommandRouter{compressor: compressor, chatRepo: chatRepo, WriteSSE: WriteSSE}
+func NewSlashCommandRouter(compressor SessionCompressor, chatRepo protocol.ChatRepository) *SlashCommandRouter {
+	return &SlashCommandRouter{compressor: compressor, chatRepo: chatRepo}
 }
 
 // SetSteering 注入激活引导适配器与控制向量注册表（可选，nil-safe）。
@@ -66,47 +62,48 @@ func (r *SlashCommandRouter) SetSteering(steering *llmadapter.SteeringAdapter, c
 	r.cvStore = cvStore
 }
 
-// Dispatch 若 input 为斜线命令则执行并返回 CommandResult（Handled=true）。
-// 非斜线命令时返回 Handled=false，调用方继续正常 LLM 流程。
-// SSE 回复（token 事件）由各子处理器直接写入；complete 事件由调用方发送。
+// Dispatch 若 input 为斜线命令则执行并返回 session.CommandResult
+// （Handled=true）。非斜线命令时返回 Handled=false，调用方继续正常 LLM 流程。
+// SSE 回复（token 事件）由各子处理器经 sink 直接写入；complete 事件由调用方
+// 统一发送。满足 session.SlashDispatcher 接口。
 func (r *SlashCommandRouter) Dispatch(
 	ctx context.Context,
 	input, sessionID string,
 	history []types.Message,
 	provider protocol.Provider,
-	w http.ResponseWriter, flusher http.Flusher,
-	mem MemoryFacade,
-) CommandResult {
+	sink session.Sink,
+	mem session.MemoryFacade,
+) session.CommandResult {
 	cmd, args, ok := parseSlashCommand(input)
 	if !ok {
-		return CommandResult{Handled: false, UpdatedHistory: history}
+		return session.CommandResult{Handled: false, UpdatedHistory: history}
 	}
 
 	switch cmd {
 	case "/context":
-		resp := r.handleContext(sessionID, history, w, flusher)
-		return CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
+		resp := r.handleContext(sessionID, history, sink)
+		return session.CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
 	case "/compact":
-		resp, updated := r.handleCompact(ctx, sessionID, history, provider, w, flusher, mem)
-		return CommandResult{Handled: true, Response: resp, UpdatedHistory: updated}
+		resp, updated := r.handleCompact(ctx, sessionID, history, provider, sink, mem)
+		return session.CommandResult{Handled: true, Response: resp, UpdatedHistory: updated}
 	case "/clear":
-		resp, updated := r.handleClear(ctx, sessionID, history, w, flusher)
-		return CommandResult{Handled: true, Response: resp, UpdatedHistory: updated}
+		resp, updated := r.handleClear(ctx, sessionID, history, sink)
+		return session.CommandResult{Handled: true, Response: resp, UpdatedHistory: updated}
 	case "/steer":
-		resp := r.handleSteer(ctx, args, sessionID, w, flusher)
-		return CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
+		resp := r.handleSteer(ctx, args, sessionID, sink)
+		return session.CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
 	case "/help":
-		resp := r.handleHelp(w, flusher)
-		return CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
+		resp := r.handleHelp(sink)
+		return session.CommandResult{Handled: true, Response: resp, UpdatedHistory: history}
 	default:
 		msg := fmt.Sprintf("未知命令: %s，输入 /help 查看可用命令", cmd)
-		r.WriteSSEText(w, flusher, msg)
-		return CommandResult{Handled: true, Response: msg, UpdatedHistory: history}
+		r.WriteSSEText(sink, msg)
+		return session.CommandResult{Handled: true, Response: msg, UpdatedHistory: history}
 	}
 }
 
 // handleContext 输出当前上下文 token 使用统计。
-func (r *SlashCommandRouter) handleContext(sessionID string, history []types.Message, w http.ResponseWriter, flusher http.Flusher) string {
+func (r *SlashCommandRouter) handleContext(sessionID string, history []types.Message, sink session.Sink) string {
 	stats := r.compressor.Stats(history)
 	var lastCompact string
 	if stats.LastCompactAt.IsZero() {
@@ -127,7 +124,7 @@ func (r *SlashCommandRouter) handleContext(sessionID string, history []types.Mes
 		stats.TokenCount, stats.Threshold, stats.UsagePercent,
 		stats.MessageCount, lastCompact,
 	)
-	r.WriteSSEText(w, flusher, resp)
+	r.WriteSSEText(sink, resp)
 	return resp
 }
 
@@ -137,43 +134,43 @@ func (r *SlashCommandRouter) handleCompact(
 	sessionID string,
 	history []types.Message,
 	provider protocol.Provider,
-	w http.ResponseWriter, flusher http.Flusher,
-	mem MemoryFacade,
+	sink session.Sink,
+	mem session.MemoryFacade,
 ) (string, []types.Message) {
 	if provider == nil {
 		msg := "无法压缩：未配置 LLM 厂商（压缩需要 LLM 生成摘要）"
-		r.WriteSSEText(w, flusher, msg)
+		r.WriteSSEText(sink, msg)
 		return msg, history
 	}
 
-	r.WriteSSE(w, flusher, "status", map[string]any{"type": "compacting", "message": "正在压缩上下文..."})
+	_ = sink.Emit(session.Event{Kind: session.KindStatus, Payload: map[string]any{"type": "compacting", "message": "正在压缩上下文..."}})
 
 	compacted, res, err := r.compressor.ForceCompact(ctx, sessionID, history, provider, mem)
 	if err != nil {
 		msg := fmt.Sprintf("压缩失败: %v", err)
 		slog.Warn("slash /compact: ForceCompact error", "session", sessionID, "err", err)
-		r.WriteSSEText(w, flusher, msg)
+		r.WriteSSEText(sink, msg)
 		return msg, history
 	}
 	if res.Skipped {
 		msg := fmt.Sprintf("上下文内容较少（%d tokens），无需压缩", res.TokensBefore)
-		r.WriteSSEText(w, flusher, msg)
+		r.WriteSSEText(sink, msg)
 		return msg, history
 	}
 
-	r.WriteSSE(w, flusher, "status", map[string]any{
+	_ = sink.Emit(session.Event{Kind: session.KindStatus, Payload: map[string]any{
 		"type":          "compacted",
 		"tokens_before": res.TokensBefore,
 		"tokens_after":  res.TokensAfter,
 		"message":       fmt.Sprintf("上下文已压缩：%d → %d tokens", res.TokensBefore, res.TokensAfter),
-	})
+	}})
 
 	resp := fmt.Sprintf(
 		"上下文压缩完成：%d tokens → %d tokens（节省 %d%%）",
 		res.TokensBefore, res.TokensAfter,
 		100-res.TokensAfter*100/res.TokensBefore,
 	)
-	r.WriteSSEText(w, flusher, resp)
+	r.WriteSSEText(sink, resp)
 	return resp, compacted
 }
 
@@ -182,7 +179,7 @@ func (r *SlashCommandRouter) handleClear(
 	ctx context.Context,
 	sessionID string,
 	history []types.Message,
-	w http.ResponseWriter, flusher http.Flusher,
+	sink session.Sink,
 ) (string, []types.Message) {
 	if r.chatRepo != nil {
 		err := r.chatRepo.ClearNonSystemMessages(ctx, sessionID)
@@ -199,19 +196,19 @@ func (r *SlashCommandRouter) handleClear(
 	}
 
 	resp := "会话历史已清空（system 提示词保留）"
-	r.WriteSSEText(w, flusher, resp)
+	r.WriteSSEText(sink, resp)
 	return resp, retained
 }
 
 // handleHelp 输出可用斜线命令列表。
-func (r *SlashCommandRouter) handleHelp(w http.ResponseWriter, flusher http.Flusher) string {
+func (r *SlashCommandRouter) handleHelp(sink session.Sink) string {
 	var sb strings.Builder
 	sb.WriteString("**可用斜线命令**\n\n")
 	for _, c := range builtinSlashCommands() {
 		fmt.Fprintf(&sb, "- `%s` — %s\n", c.Name, c.Desc)
 	}
 	resp := strings.TrimRight(sb.String(), "\n")
-	r.WriteSSEText(w, flusher, resp)
+	r.WriteSSEText(sink, resp)
 	return resp
 }
 
@@ -234,8 +231,8 @@ func parseSlashCommand(input string) (cmd, args string, ok bool) {
 	return cmd, args, true
 }
 
-// WriteSSEText 以 token 事件流的形式发送纯文本回复。
+// WriteSSEText 以 KindDelta 领域事件的形式发送纯文本回复（对应 wire "token" 事件）。
 // 不发送 complete 事件——由调用方统一负责。
-func (r *SlashCommandRouter) WriteSSEText(w http.ResponseWriter, flusher http.Flusher, text string) {
-	r.WriteSSE(w, flusher, "token", map[string]string{"content": text})
+func (r *SlashCommandRouter) WriteSSEText(sink session.Sink, text string) {
+	_ = sink.Emit(session.Event{Kind: session.KindDelta, Text: text})
 }

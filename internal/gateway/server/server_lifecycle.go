@@ -6,6 +6,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/plugin"
 	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
@@ -51,7 +52,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 	tDir := filepath.Join(dataDir, "sessions")
 	// 启动时异步清理 30 天前的 transcript
 	concurrent.SafeGo(context.Background(), "gateway.server.prune_transcripts", func(context.Context) {
-		chat.PruneTranscripts(tDir, 30)
+		session.PruneTranscripts(tDir, 30)
 	})
 
 	s := &Server{
@@ -134,7 +135,6 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		TBR:          tbr,
 		DB:           db,
 	})
-	// Use chat.WriteSSE directly
 	// STT/TTS 原子指针：启动时持有 nil 引擎，InitSTTEngine/InitTTSEngine 完成后原子替换为真实引擎。
 	// 必须非 nil，否则 .Store()/.Load() 调用时 nil pointer dereference。
 	sttPtr := new(atomic.Pointer[chat.STTEngineBox])
@@ -159,7 +159,6 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		ActivatedSystemPrompt: s.activatedSystemPrompt,
 		STTEngine:             sttPtr,
 		TTSEngine:             ttsPtr,
-		WriteSSE:              chat.WriteSSE,
 		// WithWorkDir 2026-07-21 deadcode 审查修复：此前未传，@file 引用解析退化为
 		// 相对进程 CWD（而非 dataDir）解析路径；同一 Dependencies 结构体的其他字段
 		// 早已能拿到 s.dataDir，此处透传而非发明新配置源。

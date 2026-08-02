@@ -2,11 +2,11 @@ package chat
 
 import (
 	"context"
-	"net/http"
 	"sync/atomic"
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
@@ -16,7 +16,7 @@ import (
 
 type SessionCompressor interface {
 	Stats(msgs []apptypes.Message) types.ContextStats
-	ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error)
+	ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem session.MemoryFacade) ([]apptypes.Message, types.CompactResult, error)
 }
 
 type ChatHandler struct {
@@ -34,7 +34,6 @@ type ChatHandler struct {
 	TranscriptDir  string
 	Hooks          HookRunner
 	SlashRouter    *SlashCommandRouter
-	WriteSSE       func(http.ResponseWriter, http.Flusher, string, any)
 	LogStore       interface {
 		Append(entry any)
 		Subscribe() chan any
@@ -46,6 +45,10 @@ type ChatHandler struct {
 	PromptService      *PromptAssemblyService
 	AudioService       *AudioService
 	CompressionService *CompressionService
+
+	// Orchestrator 会话编排领域服务（A-03，GD-13-008）。HandleAgentStream
+	// 瘦身后经此驱动完整会话轮次，见 sse.go。
+	Orchestrator session.Orchestrator
 }
 
 type Dependencies struct {
@@ -68,7 +71,6 @@ type Dependencies struct {
 	ActivatedSystemPrompt string
 	STTEngine             *atomic.Pointer[STTEngineBox]
 	TTSEngine             *atomic.Pointer[TTSProviderBox]
-	WriteSSE              func(http.ResponseWriter, http.Flusher, string, any)
 	ContextRefExpander    *authcontext.ContextRefExpander
 	OutboxWriter          protocol.OutboxWriter
 	TaintTracker          *taint.TaintTracker
@@ -118,7 +120,9 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 	)
 	prompt.ContextRefExpander = deps.ContextRefExpander
 
-	return &ChatHandler{
+	slashRouter := NewSlashCommandRouter(deps.CompressionService, deps.ChatRepo)
+
+	h := &ChatHandler{
 		AgentPool:          deps.AgentPool,
 		Blackboard:         deps.Blackboard,
 		ChannelRepo:        deps.ChannelRepo,
@@ -129,13 +133,34 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		DataDir:            deps.DataDir,
 		TranscriptDir:      deps.TranscriptDir,
 		Hooks:              deps.Hooks,
-		WriteSSE:           deps.WriteSSE,
-		SlashRouter:        NewSlashCommandRouter(deps.CompressionService, deps.ChatRepo, deps.WriteSSE),
+		SlashRouter:        slashRouter,
 		PersistenceService: persistence,
 		AudioService:       audio,
 		CompressionService: deps.CompressionService,
 		PromptService:      prompt,
 	}
+
+	// [A-03] session.Orchestrator 依赖注入：全部以窄接口形式声明（HE-3），
+	// 具体实现（persistence/prompt/CompressionService/slashRouter）均已在
+	// 本文件之上或各自文件内满足对应接口方法集，无需额外适配器包装。
+	// deps.CompressionService/deps.Hooks 为 nil 时（例如部分测试构造场景，
+	// 见 NewChatHandler 顶部 nil-safe 设计说明）session.Deps 对应字段也会是
+	// nil——Orchestrator 内部按既有 nil-safe 风格处理（AgentPool==nil 时不
+	// Acquire，Hooks==nil 时…… 调用方需确保生产装配路径全部注入，测试路径
+	// 若需要 RunTurn 可用必须显式提供 fake）。
+	h.Orchestrator = session.New(session.Deps{
+		Hooks:         deps.Hooks,
+		SlashRouter:   slashRouter,
+		Compression:   deps.CompressionService,
+		Persistence:   persistence,
+		Prompt:        prompt,
+		Registry:      deps.Registry,
+		AgentPool:     deps.AgentPool,
+		TranscriptDir: deps.TranscriptDir,
+		DataDir:       deps.DataDir,
+	})
+
+	return h
 }
 
 type HookRunner interface {

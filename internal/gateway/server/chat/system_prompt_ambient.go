@@ -17,6 +17,12 @@ import (
 // system_prompt_extensions.go。
 // ============================================================================
 
+// skillEmbedCacheMax 技能文本→向量缓存上限：超限时随机淘汰（技能数量有限，
+// 随机淘汰成本低）。容量估算：512 × 1536 维 × 4 字节 ≈ 3MB，可接受。
+// [A-03 Step4] 原声明于 sse.go（HandleAgentStream 瘦身迁移时随之搬到唯一真实
+// 消费方所在文件，非新引入常量）。
+const skillEmbedCacheMax = 512
+
 func relevanceScore(query string, name string, desc string, inst string) float64 {
 	queryLower := strings.ToLower(query)
 	targetText := strings.ToLower(name + " " + desc + " " + inst)
