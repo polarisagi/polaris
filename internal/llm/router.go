@@ -92,6 +92,17 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts 
 	transport := &http.Transport{}
 	if dialer != nil {
 		transport.DialContext = dialer.DialContext
+	} else {
+		// [2026-08-02 S-03 复核] dialer==nil 时 transport.DialContext 保持零值，
+		// 退化为标准库默认拨号，绕过 SafeDialer 的 SSRF 防护（出站 LLM API 调用
+		// 不再受 EgressAllowedDomains/内网地址拦截约束）。核实生产唯一装配点
+		// cmd/polaris/boot_substrate.go:627 的 dialer 恒来自
+		// network.NewSafeDialer(...)（该构造函数不存在返回 nil 的分支），
+		// 故此分支当前生产不可达，nil 仅用于单测（httptest 本地服务器需绕过
+		// SafeDialer 才能连通 127.0.0.1）。此处补一条日志而非改为 fail-closed
+		// panic：既能在未来若真的因误改装配代码而意外触发时被立刻观测到
+		// （HE-1），又不破坏现有依赖 nil-dialer 直连本地测试服务器的测试用例。
+		slog.Warn("llm.NewInferenceRouter: dialer is nil, SafeDialer SSRF protection is bypassed for this router instance (expected only in tests)")
 	}
 	tracker := NewRateLimitTracker()
 	ir := &InferenceRouter{
