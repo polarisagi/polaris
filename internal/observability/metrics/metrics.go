@@ -77,6 +77,12 @@ var (
 	// migration_version 诊断字段失败累计次数（不影响 migration_status 主状态机正确性，
 	// 仅影响崩溃后人工排查时"上次卡在哪个版本"的可诊断性，定级 L2）。
 	GlobalSchemaMigrationDiagWriteFailuresTotal atomic.Int64
+	// GlobalCheckpointWriteFailuresTotal DebateExecutor/StateGraphExecutor 写入
+	// task_checkpoints 失败累计次数（2026-08-02 补齐，见
+	// local_playground/upgrade/99-new-findings.md 阶段02 §2.5 发现）。影响崩溃恢复
+	// 续跑的可诊断性——checkpoint 写入是尽力而为（不阻断主执行链路），但持续失败
+	// 意味着崩溃后无法从最近状态续跑，值得单独观测，定级 L2。
+	GlobalCheckpointWriteFailuresTotal atomic.Int64
 )
 
 // foundingAnchorDriftScorePtr 以 atomic.Pointer 持有漂移评分注入函数，避免包级可变 var。
