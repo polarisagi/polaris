@@ -30,23 +30,14 @@ func saveMessageRetryBackoff(attempt int) time.Duration {
 // ============================================================================
 
 // newMessageDedupeKey 生成消息幂等键：会话/角色前缀便于人工排查 + 随机后缀
-// 保证唯一性（熵池耗尽时降级为纳秒时间戳，与 newSessionID 一致的降级策略）。
+// 保证唯一性（熵池耗尽时降级为纳秒时间戳，与 session 包 newSessionID
+// 一致的降级策略，见 internal/gateway/session/ids.go）。
 func newMessageDedupeKey(sessionID, role string) string {
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
 		return fmt.Sprintf("%s:%s:%d", sessionID, role, time.Now().UnixNano())
 	}
 	return fmt.Sprintf("%s:%s:%s", sessionID, role, hex.EncodeToString(b))
-}
-
-// newSessionID 生成 16 字节随机 hex ID。
-// 熵池耗尽时降级为纳秒时间戳，确保唯一性（不使用固定零值，防止 session 碰撞）。
-func newSessionID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("sess_%d", time.Now().UnixNano())
-	}
-	return "sess_" + hex.EncodeToString(b)
 }
 
 // truncate 截断字节，防止错误消息过长写入 SSE。

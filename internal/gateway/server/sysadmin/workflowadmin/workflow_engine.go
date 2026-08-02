@@ -10,9 +10,9 @@ import (
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ─── 执行引擎 ─────────────────────────────────────────────────────────────────
@@ -147,36 +147,28 @@ func (h *WorkflowAdmin) scanStepOutputErrors(ctx context.Context, runID string) 
 
 // runWorkflowStep 同步执行单步，返回 Agent 回复文本。
 //
-//nolint:gocyclo,funlen
+// [A-03 Step5] 原内联 EnsureSession/SaveMessage(user)/AcquireHeadless/
+// SaveMessage(assistant)/SampleAndScoreReply/UpdateSessionTitle 六步序列，与
+// cronadmin.executeAutomation、channelsadmin.dispatchChannelMessage 的对应
+// 序列几乎相同又不完全一致（本函数此前从不触发 message.before hook 拦截、也
+// 不 TouchSession），收敛至 session.Orchestrator.RunTurn(Headless:true) 统一
+// 实现，见 internal/gateway/session/orchestrator_headless.go 顶部注释。
 func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, workingDir, reasoningEffort, name string) (string, error) {
-	// Provider selection is now handled internally by AgentPool.
-
-	if err := h.Chat.EnsureSession(ctx, sessionID); err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "ensure session", err)
+	req := session.Request{
+		SessionID:       sessionID,
+		Input:           prompt,
+		Channel:         "workflow",
+		Headless:        true,
+		WorkingDir:      workingDir,
+		TitleHint:       name,
+		ReasoningEffort: reasoningEffort,
 	}
-
-	userMessage := prompt
-	if workingDir != "" {
-		userMessage = "[工作目录: " + workingDir + "]\n\n" + prompt
-	}
-	if err := h.Chat.SaveMessage(ctx, sessionID, "user", userMessage, "", "", 0); err != nil {
-		slog.Warn("workflow step: saveMessage user failed", "err", err)
-	}
-
-	intent := types.Intent{
-		Query: prompt,
-	}
-
-	res, err := h.AgentPool.AcquireHeadless(ctx, intent)
+	res, err := h.SessionOrch.RunTurn(ctx, req, session.NewBufferSink())
 	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "headless infer failed", err)
+		return "", apperr.Wrap(apperr.CodeInternal, "session.RunTurn(workflow step) failed", err)
 	}
-
-	reply := res.Output
-	if err := h.Chat.SaveMessage(ctx, sessionID, "assistant", reply, "", "", 0); err != nil {
-		slog.Warn("workflow step: saveMessage assistant failed", "err", err)
+	if res.Aborted {
+		return "", apperr.New(apperr.CodeInternal, "workflow step blocked (hook rejection or session error)")
 	}
-	h.Chat.SampleAndScoreReply(sessionID, userMessage, reply)
-	_ = h.Chat.UpdateSessionTitle(ctx, sessionID, name)
-	return reply, nil
+	return res.Reply, nil
 }

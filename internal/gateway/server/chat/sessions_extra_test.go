@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -21,16 +20,6 @@ func TestParseTaskDuration(t *testing.T) {
 	res2 := parseTaskDuration("invalid", "invalid")
 	if res2 != 0 {
 		t.Errorf("expected 0 for invalid duration")
-	}
-}
-
-func TestNewSessionID(t *testing.T) {
-	sID := newSessionID()
-	if !strings.HasPrefix(sID, "sess_") {
-		t.Errorf("expected sess_ prefix, got %s", sID)
-	}
-	if len(sID) != 37 {
-		t.Errorf("expected length 37, got %d", len(sID))
 	}
 }
 

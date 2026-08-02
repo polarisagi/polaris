@@ -127,6 +127,13 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	// A16: 恢复跨 goroutine trace 连贯性
 	bgCtx = trace.ContextWithRemoteSpan(bgCtx, snap.TraceID, snap.SpanID)
 
+	// [A-03 Step5 豁免] 直接调用 AgentPool.AcquireHeadless，不经
+	// internal/gateway/session.Orchestrator.RunTurn(Headless:true)：Blackboard
+	// DAG 任务执行无 sessionID/多轮历史/消息持久化语义，不是"会话轮次"，是
+	// 一次性任务执行。SystemPromptGuard 防泄露保护仍然生效——由
+	// AcquireHeadless（internal/agent/pool.go）自身在返回前统一扫描，覆盖
+	// 包括本调用在内的全部直接/间接调用方（见 session/guard.go 顶部注释的
+	// 决策记录）。
 	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt})
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)

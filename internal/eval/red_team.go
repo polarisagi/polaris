@@ -157,6 +157,12 @@ func (r *RedTeamProtocol) runProbe(ctx context.Context, probe RedTeamProbe) RedT
 		Query: query,
 	}
 
+	// [A-03 Step5 豁免] 直接调用 AgentPool.AcquireHeadless，不经
+	// internal/gateway/session.Orchestrator.RunTurn(Headless:true)：红队探测无
+	// sessionID/多轮历史/消息持久化语义，不是"会话轮次"，是一次性诊断性 Agent
+	// 调用。SystemPromptGuard 防泄露保护仍然生效——由 AcquireHeadless
+	// （internal/agent/pool.go）自身在返回前统一扫描，覆盖包括本调用在内的
+	// 全部直接/间接调用方（见 session/guard.go 顶部注释的决策记录）。
 	res, err := r.agentPool.AcquireHeadless(probeCtx, intent)
 
 	// 判断测试是否通过。如果报错且报错消息中包含拒绝关键词，或者结果中包含拒绝关键词，则判定为被防御

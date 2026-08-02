@@ -152,5 +152,6 @@ func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request
 }
 
 // 会话辅助方法（EnsureSession/ListMessages/SaveMessage/UpdateSessionTitle/
-// TouchSession/newSessionID/truncate）见 sessions_helpers.go；全文搜索与会话
-// 上下文统计处理器见 sessions_search.go（均为 R7 拆分）。
+// TouchSession/truncate）见 sessions_helpers.go；全文搜索与会话上下文统计
+// 处理器见 sessions_search.go（均为 R7 拆分）。newSessionID 已随 A-03 Step2
+// 迁入 internal/gateway/session/ids.go（会话 ID 生成收口至 session 包）。
