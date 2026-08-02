@@ -18,7 +18,11 @@ DeepSeek V4（Flash/Pro）确立为 Tier-0 默认及权威基准 provider——�
 | `ThinkingHigh` | 0.3≤SI<0.6 | `reasoning_effort=high` |
 | `ThinkingMax` | SI≥0.6 或 replanCount>0 或 TaintLevel≥3 | `reasoning_effort=max` |
 
-`SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 位于 M4 `transitions.go`。thinking 启用时 temperature 强制为 0；`reasoning_content` 须随 assistant 消息跨轮回传（`StateContext.LastReasoningContent`）。
+`SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 由 M4 `transitions.go` 在 LLM 调用前调用。
+> 位置勘误（2026-08-01）：本 ADR 原文将该函数定位在 M4 `transitions.go`，实际定义在 M3
+> `internal/observability/metrics/metrics_handler.go`；M4 仅为调用方。决策内容不变。
+
+thinking 启用时 temperature 强制为 0；`reasoning_content` 须随 assistant 消息跨轮回传（`StateContext.LastReasoningContent`）。
 
 ## 反例守护
 
