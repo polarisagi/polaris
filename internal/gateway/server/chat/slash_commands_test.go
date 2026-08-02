@@ -2,10 +2,9 @@ package chat
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -39,12 +38,11 @@ func TestParseSlashCommand_Valid(t *testing.T) {
 
 // ── SlashCommandRouter.Dispatch ───────────────────────────────────────────────
 
-// mockFlusher 实现 http.Flusher 接口（no-op）。
-type mockFlusher struct{ http.ResponseWriter }
-
-func (m mockFlusher) Flush() {}
-
-func newTestRouter(t *testing.T) (*SlashCommandRouter, *httptest.ResponseRecorder, mockFlusher) {
+// [A-03 Step2] Dispatch 签名改为 session.Sink 后，测试不再需要
+// httptest.ResponseRecorder/mockFlusher，直接用 session.NewBufferSink()——
+// 所有既有断言均只检查 CommandResult.Response 返回值，从未检查过 SSE 写入
+// 内容，故迁移对测试断言零影响。
+func newTestRouter(t *testing.T) (*SlashCommandRouter, *session.BufferSink) {
 	t.Helper()
 	router := &SlashCommandRouter{
 		compressor: &CompressionService{
@@ -55,11 +53,8 @@ func newTestRouter(t *testing.T) (*SlashCommandRouter, *httptest.ResponseRecorde
 			tailTokens:     defaultTailTokens,
 		},
 		chatRepo: nil,
-		WriteSSE: func(w http.ResponseWriter, f http.Flusher, event string, data any) {},
 	}
-	rec := httptest.NewRecorder()
-	flusher := mockFlusher{rec}
-	return router, rec, flusher
+	return router, session.NewBufferSink()
 }
 
 func testHistory() []types.Message {
@@ -71,17 +66,17 @@ func testHistory() []types.Message {
 }
 
 func TestDispatch_NotSlashCommand(t *testing.T) {
-	router, rec, flusher := newTestRouter(t)
+	router, sink := newTestRouter(t)
 	history := testHistory()
-	result := router.Dispatch(context.Background(), "普通消息", "s1", history, nil, rec, flusher, nil)
+	result := router.Dispatch(context.Background(), "普通消息", "s1", history, nil, sink, nil)
 	if result.Handled {
 		t.Fatal("普通消息不应被 Dispatch 处理")
 	}
 }
 
 func TestDispatch_Help(t *testing.T) {
-	router, rec, flusher := newTestRouter(t)
-	result := router.Dispatch(context.Background(), "/help", "s1", testHistory(), nil, rec, flusher, nil)
+	router, sink := newTestRouter(t)
+	result := router.Dispatch(context.Background(), "/help", "s1", testHistory(), nil, sink, nil)
 	if !result.Handled {
 		t.Fatal("/help 应被处理")
 	}
@@ -97,9 +92,9 @@ func TestDispatch_Help(t *testing.T) {
 }
 
 func TestDispatch_Context(t *testing.T) {
-	router, rec, flusher := newTestRouter(t)
+	router, sink := newTestRouter(t)
 	history := testHistory()
-	result := router.Dispatch(context.Background(), "/context", "sess-42", history, nil, rec, flusher, nil)
+	result := router.Dispatch(context.Background(), "/context", "sess-42", history, nil, sink, nil)
 	if !result.Handled {
 		t.Fatal("/context 应被处理")
 	}
@@ -112,9 +107,9 @@ func TestDispatch_Context(t *testing.T) {
 }
 
 func TestDispatch_Clear(t *testing.T) {
-	router, rec, flusher := newTestRouter(t)
+	router, sink := newTestRouter(t)
 	history := testHistory()
-	result := router.Dispatch(context.Background(), "/clear", "s1", history, nil, rec, flusher, nil)
+	result := router.Dispatch(context.Background(), "/clear", "s1", history, nil, sink, nil)
 	if !result.Handled {
 		t.Fatal("/clear 应被处理")
 	}
@@ -127,8 +122,8 @@ func TestDispatch_Clear(t *testing.T) {
 }
 
 func TestDispatch_CompactNoProvider(t *testing.T) {
-	router, rec, flusher := newTestRouter(t)
-	result := router.Dispatch(context.Background(), "/compact", "s1", testHistory(), nil, rec, flusher, nil)
+	router, sink := newTestRouter(t)
+	result := router.Dispatch(context.Background(), "/compact", "s1", testHistory(), nil, sink, nil)
 	if !result.Handled {
 		t.Fatal("/compact 应被处理（即使无 provider）")
 	}
@@ -138,8 +133,8 @@ func TestDispatch_CompactNoProvider(t *testing.T) {
 }
 
 func TestDispatch_UnknownCommand(t *testing.T) {
-	router, rec, flusher := newTestRouter(t)
-	result := router.Dispatch(context.Background(), "/unknowncmd", "s1", testHistory(), nil, rec, flusher, nil)
+	router, sink := newTestRouter(t)
+	result := router.Dispatch(context.Background(), "/unknowncmd", "s1", testHistory(), nil, sink, nil)
 	if !result.Handled {
 		t.Fatal("未知斜线命令应被拦截（Handled=true）")
 	}

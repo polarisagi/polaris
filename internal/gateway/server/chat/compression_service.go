@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/memory/compact"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -151,13 +152,13 @@ func (c *CompressionService) NeedsCompact(msgs []apptypes.Message) bool {
 
 // Compact 自动触发路径：超过阈值时压缩对话历史。
 // 若未达阈值、处于 thrashing 状态或 hook 阻塞，返回原消息序列（Skipped=true）。
-func (c *CompressionService) Compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+func (c *CompressionService) Compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem session.MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	return c.compact(ctx, sessionID, msgs, provider, false, mem)
 }
 
 // ForceCompact 用户主动触发路径：跳过阈值检查，强制压缩，并重置 thrashing 计数。
 // 若消息不足以分段（tail 已覆盖全部），返回 Skipped=true。
-func (c *CompressionService) ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+func (c *CompressionService) ForceCompact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, mem session.MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	// 用户手动触发：重置 thrashing 状态，给自动压缩一次新的机会
 	c.mu.Lock()
 	c.thrashedCount = 0
@@ -166,7 +167,7 @@ func (c *CompressionService) ForceCompact(ctx context.Context, sessionID string,
 }
 
 // compact 核心压缩逻辑。force=true 跳过 NeedsCompact 阈值检查。
-func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool, mem MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
+func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs []apptypes.Message, provider protocol.Provider, force bool, mem session.MemoryFacade) ([]apptypes.Message, types.CompactResult, error) {
 	tokensBefore := compact.RoughTokens(msgs)
 	skip := types.CompactResult{TokensBefore: tokensBefore, Skipped: true}
 

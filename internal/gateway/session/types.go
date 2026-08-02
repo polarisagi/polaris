@@ -30,11 +30,18 @@ type EventKind int
 
 const (
 	KindDelta EventKind = iota
+	// KindReasoning 对应 wire 事件 "reasoning"（LLM 思考过程占位文本），Text 携带内容，
+	// 不计入 BufferSink 累积的最终回复（与 KindDelta 的关键区别）。
+	KindReasoning
+	// KindStatus 对应 wire 事件 "status"，Payload 直接透传（含 type/message 等既有字段）。
 	KindStatus
 	KindContextWarning
 	KindToolCall
 	KindComplete
 	KindError
+	// KindSystemNotice 对应 wire 事件 "system_notice"（Agent 池资源降级提示，
+	// 独立事件名，非嵌套在 KindStatus 的 "status" 事件内），Payload 直接透传。
+	KindSystemNotice
 )
 
 // Event 领域事件。Text 用于 KindDelta 增量文本；Payload 用于 KindStatus /
@@ -86,6 +93,22 @@ type Request struct {
 	// Streaming false 时 Orchestrator 内部缓冲（配 BufferSink），Result.Reply
 	// 携带完整回复；true 时逐 token 经 sink.Emit(KindDelta) 增量推送。
 	Streaming bool
+	// Headless=true 时走 AgentPool.AcquireHeadless 一次性子路径（Cron/
+	// Workflow/Webhook），=false 时走 AgentPool.Acquire 交互式子路径（SSE，
+	// per-session 长驻 Agent 实例）。二者池化语义不同（A-03 Step5 设计），
+	// 保留显式区分而非仅凭 Channel 字符串推断。
+	Headless bool
+	// WorkingDir 仅 Headless=true 时可能非空（Workflow/Cron 任务的工作目录，
+	// 拼入 types.Intent.WorkingDir）。
+	WorkingDir string
+	// TitleHint 会话标题来源覆盖；为空时 RunTurn 用 Input 作为标题来源。
+	// 保留字段是为了不改变 Headless 三个既有调用方（workflow_engine.go /
+	// cron_runner.go）此前传自动化任务名（而非用户输入原文）作为标题的行为。
+	TitleHint string
+	// RunID / ReasoningEffort 原 agentStreamRequest 字段，仅交互式路径在
+	// AgentPool 资源耗尽降级判定时使用（区分后台提炼请求 vs 前台对话请求）。
+	RunID           string
+	ReasoningEffort string
 }
 
 // Result 一轮对话的结果。
@@ -140,10 +163,12 @@ type Persistence interface {
 // （包装既有字段访问，不改变行为），供 chat.PromptAssemblyService 满足本接口。
 type PromptAssembler interface {
 	InjectSystemPrompt(ctx context.Context, agentCtrl protocol.AgentController, history []types.Message, userQuery string) []types.Message
-	// ActivatedSystemPrompt 返回当前激活的系统提示词（M9 GEPA 动态激活提示词，
-	// 可能为空）。包装 chat.PromptAssemblyService.ActivatedSystemPromptMu 读锁
-	// 访问，避免 session 包直接持有 sync.RWMutex 字段。
-	ActivatedSystemPrompt() string
+	// ReadActivatedSystemPrompt 返回当前激活的系统提示词（M9 GEPA 动态激活
+	// 提示词，可能为空）。包装 chat.PromptAssemblyService.ActivatedSystemPromptMu
+	// 读锁访问，避免 session 包直接持有 sync.RWMutex 字段。命名避开
+	// chat.PromptAssemblyService 已有的同名导出字段 ActivatedSystemPrompt
+	// （Go 不允许方法与字段同名）。
+	ReadActivatedSystemPrompt() string
 	// ExpandContextRefs 展开 @file/@url/git: 引用；ContextRefExpander 未注入时
 	// 原样返回 input；单条引用展开失败计入 skipped 但不阻断。
 	ExpandContextRefs(ctx context.Context, input string) (expanded string, skipped []string)

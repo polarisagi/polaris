@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"context"
+	"log/slog"
 	"sync"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
@@ -60,4 +62,32 @@ func NewPromptAssemblyService(
 		ActivatedSystemPrompt: activatedSystemPrompt,
 		skillEmbedCache:       make(map[string][]float32),
 	}
+}
+
+// ReadActivatedSystemPrompt 满足 session.PromptAssembler 接口（A-03 Step2）。
+// 包装既有 ActivatedSystemPromptMu 读锁访问，行为与 sse.go 原直接字段访问
+// 完全等价，仅为满足窄接口调用形态改为方法。方法名避开同名导出字段
+// ActivatedSystemPrompt（Go 不允许方法与字段重名）。
+func (s *PromptAssemblyService) ReadActivatedSystemPrompt() string {
+	s.ActivatedSystemPromptMu.RLock()
+	defer s.ActivatedSystemPromptMu.RUnlock()
+	return s.ActivatedSystemPrompt
+}
+
+// ExpandContextRefs 满足 session.PromptAssembler 接口（A-03 Step2）。
+// 包装既有 ContextRefExpander nil 判空 + Expand 调用逻辑（原内联于
+// sse.go HandleAgentStream 顶部），行为完全等价：ContextRefExpander 未注入时
+// 原样返回 input；单条引用展开失败计入 skipped 但不阻断整轮请求。
+func (s *PromptAssemblyService) ExpandContextRefs(ctx context.Context, input string) (expanded string, skipped []string) {
+	if s.ContextRefExpander == nil {
+		return input, nil
+	}
+	expandedText, report := s.ContextRefExpander.Expand(ctx, input)
+	if report == nil {
+		return input, nil
+	}
+	if len(report.Skipped) > 0 {
+		slog.Warn("server: context ref expand skipped some references", "skipped", report.Skipped)
+	}
+	return expandedText, report.Skipped
 }

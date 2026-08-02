@@ -1,4 +1,4 @@
-package chat
+package session
 
 import (
 	"encoding/json"
@@ -12,12 +12,21 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
+// [A-03 Step2] 本文件自 internal/gateway/server/chat/transcript.go 原样迁入
+// （逻辑零改动，仅包名调整）：Transcript 写入是 RunTurn 的编排职责一部分
+// （见 orchestrator.go 职责划分注释），且本文件自身零 net/http 依赖，符合
+// session 包的硬约束。SessionIDPattern 由此成为 S-07 sessionID 白名单的
+// 唯一权威源，chat 包侧（HTTP 边界层"第一层"早期校验）改为引用本变量，
+// 不再本地重复定义。
+
 const transcriptVersion = 1
 
-// sessionIDPattern 会话 ID 白名单：仅允许字母数字、短横线、下划线，长度 1~128。
+// SessionIDPattern 会话 ID 白名单：仅允许字母数字、短横线、下划线，长度 1~128。
 // 用于一切以 sessionID 参与文件路径/表主键构造的场景（S-07，防路径穿越 +
-// 防 SQL 侧异常）。
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+// 防 SQL 侧异常）。导出供 HTTP 边界层（chat/sse.go）做早期校验复用，本文件
+// openTranscript 自身仍保留独立的第二层防御性校验（即便调用方遗漏入口
+// 校验，这里仍拒绝非法 sessionID）。
+var SessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // transcriptEntry 是 JSONL 文件中的一行记录。
 // 字段按 type 复用，零值字段 omitempty 不输出，保持文件紧凑。
@@ -43,10 +52,10 @@ type TranscriptWriter struct {
 // openTranscript 打开（或创建）sessionID 对应的 transcript 文件。
 // writeHeader=true 时追加会话起始行（isFirstTurn 时使用）。
 func openTranscript(dir, sessionID string, writeHeader bool) (*TranscriptWriter, error) {
-	// S-07 落盘处兜底校验（双重防御第二层，第一层见 sse.go HandleAgentStream
-	// 入口白名单）：即便调用方遗漏入口校验，这里仍拒绝非法 sessionID，且做
-	// 路径归一化前缀断言防御符号链接/../ 变体。
-	if !sessionIDPattern.MatchString(sessionID) {
+	// S-07 落盘处兜底校验（双重防御第二层，第一层见 chat/sse.go 入口白名单）：
+	// 即便调用方遗漏入口校验，这里仍拒绝非法 sessionID，且做路径归一化前缀
+	// 断言防御符号链接/../ 变体。
+	if !SessionIDPattern.MatchString(sessionID) {
 		return nil, apperr.New(apperr.CodeInvalidInput, "openTranscript: invalid session id")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

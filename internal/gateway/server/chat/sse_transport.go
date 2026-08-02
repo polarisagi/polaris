@@ -3,38 +3,23 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 )
 
+// WriteSSE 是 SSE wire 帧写入原语，供 chat 包内所有直接产出 SSE 响应的场景
+// 复用（chat/sse_sink.go 的 session.Sink 实现、audio.go 等）。
+//
+// [A-03 Step4] ChatHandler.WriteSSEError（原 error 事件写入 + 分级日志封装）
+// 已随 HandleAgentStream 瘦身一并移除：唯一调用方是原 281 行版本的
+// HandleAgentStream 自身，日志分级逻辑已等价迁入
+// session.orchestrator.emitError（见 internal/gateway/session/orchestrator.go），
+// error 事件写入经 sseSink.Emit(KindError) 统一收口，不留孤儿方法。
 func WriteSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, payload any) {
 	data, _ := json.Marshal(payload)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
 	flusher.Flush()
 }
 
-func (s *ChatHandler) WriteSSEError(w http.ResponseWriter, flusher http.Flusher, code, message string, sessionID string, err error) {
-	if code == "hook_blocked" || code == "empty_response" || code == "no_provider" {
-		slog.Warn("server: sse error", "code", code, "session", sessionID, "message", message, "err", err)
-	} else {
-		slog.Error("server: sse error", "code", code, "session", sessionID, "message", message, "err", err)
-	}
-	WriteSSE(w, flusher, "error", map[string]string{
-		"code":    code,
-		"message": message,
-	})
-}
-
-// handleAgentStream 处理 SSE 方式的流式对话。
-// 将用户输入包装后转发给 Agent FSM，并订阅 FSM 产生的事件流推送到客户端。
-//
-// SSE 事件协议（与前端 app.js _onEvent 对齐）:
-//
-//	thinking  → {"content":"..."} 占位思考指示
-//	token     → {"content":"<增量文本>"}
-//	complete  → {"session_id":"<id>"}
-//	error     → {"code":"...","message":"..."}
-//
 // sseImagePart 前端上传的图片载荷（base64 字符串，不含 data URI 前缀）。
 type sseImagePart struct {
 	MimeType string `json:"mimeType"`
