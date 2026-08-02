@@ -226,7 +226,7 @@ func TestDefaultTaskWorker_PassesSpawnDepthToHeadlessOptions(t *testing.T) {
 
 // TestDefaultTaskWorker_PassesNamespaceToHeadlessOptions 验证 GD-14-001
 // Namespace 透传（2026-08-02 补齐）：DefaultTaskWorker 派生 headless 任务时
-//携带 snap.Namespace，供 AcquireHeadless 注入 AgentController.SetMemoryNamespace，
+// 携带 snap.Namespace，供 AcquireHeadless 注入 AgentController.SetMemoryNamespace，
 // 使本地 agent_handoff:<role> 委派任务与发起方共享记忆检索范围（此前恒为空串，
 // 见 99-new-findings.md 阶段05 P-03 续 发现 / ADR-0084"已知限制"）。
 func TestDefaultTaskWorker_PassesNamespaceToHeadlessOptions(t *testing.T) {
