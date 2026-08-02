@@ -31,6 +31,13 @@ func (b *PromptBuilder) WriteSystemEnvironment(snapshot string) {
 }
 
 func (b *PromptBuilder) WriteCoreMemory(blocks []types.CoreMemoryBlock) {
+	if len(blocks) > 0 {
+		// ADR-0082 MemFS：显式提示模型可主动管理记忆块，避免"有工具但不知道该主动用"。
+		b.zones[protocol.ZoneCoreMemory] = append(b.zones[protocol.ZoneCoreMemory], types.Message{
+			Role:    "system",
+			Content: "你可以用 core_memory_edit 工具主动管理以上记忆块（list/get/set/append/replace/delete/describe）。",
+		})
+	}
 	for _, block := range blocks {
 		content := fmt.Sprintf("<core_memory block=\"%s\">\n%s\n</core_memory>", block.BlockKey, block.Content)
 		if block.TaintLevel >= types.TaintHigh {

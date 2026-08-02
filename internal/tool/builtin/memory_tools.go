@@ -36,7 +36,8 @@ type SemanticMemWriter interface {
 	GetEntity(ctx context.Context, entityType, name string) (*types.Entity, error)
 }
 
-// RegisterMemoryTools 注册 4 个记忆工具到 InProcessSandbox 和 tool.InMemoryToolRegistry。
+// RegisterMemoryTools 注册 8 个记忆工具到 InProcessSandbox 和 tool.InMemoryToolRegistry
+// （原注释"4 个"与下方 entries 实际条目数不符，随本次改动一并修正，comment-drift）。
 // 注意：工具元数据内联构造，不依赖 tool.GetBuiltinToolMeta（避免 builtin/<name>/ 目录缺失导致
 // 静默跳过——这是 Gemini 首版实现的功能 bug，此处修复）。
 func RegisterMemoryTools(

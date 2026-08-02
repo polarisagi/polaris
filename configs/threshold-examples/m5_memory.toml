@@ -6,6 +6,7 @@
 'core.immutable_max' = 100
 'core.memory_block_max_kb' = 2
 'core.memory_total_max_kb' = 8
+'core.memory_max_blocks' = 16
 'rrf.k' = 60
 'graph.max_depth' = 2
 'reflection.task_type_whitelist' = ['complex_reasoning', 'coding', 'research', 'debug', 'analysis']
