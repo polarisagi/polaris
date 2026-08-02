@@ -246,6 +246,12 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	// 等同于未引入本机制前的行为。
 	agent.SetSpawnDepth(opt.SpawnDepth)
 
+	// GD-14-001（2026-08-02 补齐）：透传协同任务共享记忆命名空间，使本地
+	// agent_handoff:<role> 委派任务（落 DefaultTaskWorker 兜底执行）与发起方
+	// 共享记忆检索范围，而非静默退化为各自独立命名空间（ADR-0084"已知限制"）。
+	// opt.Namespace 默认空串，等同于未引入本机制前的行为。
+	agent.SetMemoryNamespace(opt.Namespace)
+
 	intentBytes, _ := json.Marshal(intent)
 	agent.SetTaskIntent(intentBytes)
 

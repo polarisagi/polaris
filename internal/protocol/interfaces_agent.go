@@ -83,6 +83,10 @@ AgentController interface {
 	// transfer_to_agent 投递子任务时据此计算 SpawnDepth+1。depth<=0 等同于
 	// 顶层任务（默认零值），与引入本机制前的行为一致。
 	SetSpawnDepth(depth int)
+	// SetMemoryNamespace 注入协同任务共享记忆命名空间（GD-14-001，2026-08-02
+	// 随 types.HeadlessOptions.Namespace 补齐 AcquireHeadless 路径透传）。
+	// ns 为空表示不共享，与引入本机制前的行为一致。
+	SetMemoryNamespace(ns string)
 	SendIntent(trigger types.AgentTrigger) error
 	SurpriseIndex() float64
 	Memory() MemoryFacade

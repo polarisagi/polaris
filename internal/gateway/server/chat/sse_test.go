@@ -28,6 +28,8 @@ func (m *mockAgentController) SetTaskIntent(intent []byte) {
 
 func (m *mockAgentController) SetSpawnDepth(depth int) {}
 
+func (m *mockAgentController) SetMemoryNamespace(ns string) {}
+
 func (m *mockAgentController) SendIntent(trigger types.AgentTrigger) error {
 	m.lastTrigger = trigger
 	if m.sendIntentDelay > 0 {
