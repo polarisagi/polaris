@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -110,7 +111,14 @@ func (de *DebateExecutor) Execute(ctx context.Context, parentTaskID string, prop
 			case "judge_final":
 				state.JudgeFinalized = true
 				state.Verdict = string(snap.Result)
-				_ = de.saveCheckpoint(ctx, parentTaskID, stateID, state, "done")
+				// checkpoint 写入是尽力而为（不阻断裁决结果返回），但持续失败意味着
+				// 崩溃恢复无法从"已终裁"状态续跑（会被误判为仍需重新辩论），值得观测
+				// （2026-08-02 补齐，见 99-new-findings.md 阶段02 §2.5 发现）。
+				if err := de.saveCheckpoint(ctx, parentTaskID, stateID, state, "done"); err != nil {
+					metrics.GlobalCheckpointWriteFailuresTotal.Add(1)
+					slog.Error("debate: 终裁 checkpoint 写入失败，崩溃恢复可能从错误状态续跑",
+						"task_id", parentTaskID, "state_id", stateID, "err", err)
+				}
 				return []byte(state.Verdict), nil
 			}
 		} else if err == nil && snap != nil && snap.Status == types.TaskFailed {

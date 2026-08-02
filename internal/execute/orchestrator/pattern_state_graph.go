@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -166,16 +167,22 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 	case "task_completed":
 		delete(r.inFlight, nodeID)
 
-		// 写入 checkpoint done
+		// 写入 checkpoint done（尽力而为，不阻断下游边求值——持续失败会影响崩溃
+		// 恢复续跑准确性，值得观测，2026-08-02 补齐，见 99-new-findings.md 阶段02
+		// §2.5 发现）
 		if r.se.chkRepo != nil {
-			_ = r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+			if err := r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
 				TaskID:      r.parentTaskID,
 				NodeID:      nodeID,
 				Attempt:     r.visits[nodeID],
 				Status:      "done",
 				OutputJSON:  string(ev.Payload),
 				CompletedAt: time.Now().UnixMilli(),
-			})
+			}); err != nil {
+				metrics.GlobalCheckpointWriteFailuresTotal.Add(1)
+				slog.Error("state_graph: checkpoint(done) 写入失败，崩溃恢复可能从错误状态续跑",
+					"task_id", r.parentTaskID, "node_id", nodeID, "err", err)
+			}
 		}
 
 		for _, edge := range r.outEdges[nodeID] {
@@ -193,16 +200,20 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 		}
 		return nil
 	case "task_failed":
-		// 写入 checkpoint failed
+		// 写入 checkpoint failed（尽力而为，不阻断 Fail-Fast 返回；同上补齐观测）
 		if r.se.chkRepo != nil {
-			_ = r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+			if err := r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
 				TaskID:      r.parentTaskID,
 				NodeID:      nodeID,
 				Attempt:     r.visits[nodeID],
 				Status:      "failed",
 				Error:       string(ev.Payload),
 				CompletedAt: time.Now().UnixMilli(),
-			})
+			}); err != nil {
+				metrics.GlobalCheckpointWriteFailuresTotal.Add(1)
+				slog.Error("state_graph: checkpoint(failed) 写入失败，崩溃恢复可能从错误状态续跑",
+					"task_id", r.parentTaskID, "node_id", nodeID, "err", err)
+			}
 		}
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("state graph node %s failed: %s", nodeID, string(ev.Payload)))
 	default:
@@ -349,15 +360,19 @@ func (r *stateGraphRun) tryPostNode(ctx context.Context, node protocol.WorkflowN
 		UpdatedAt:   time.Now().UnixMilli(),
 	}
 
-	// 写入 checkpoint executing (ADR-0076)
+	// 写入 checkpoint executing (ADR-0076)（尽力而为，不阻断任务投递；同上补齐观测）
 	if r.se.chkRepo != nil {
-		_ = r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
+		if err := r.se.chkRepo.UpsertCheckpoint(ctx, types.TaskCheckpointRow{
 			TaskID:    r.parentTaskID,
 			NodeID:    node.ID,
 			Attempt:   attempt,
 			Status:    "executing",
 			StartedAt: time.Now().UnixMilli(),
-		})
+		}); err != nil {
+			metrics.GlobalCheckpointWriteFailuresTotal.Add(1)
+			slog.Error("state_graph: checkpoint(executing) 写入失败，崩溃恢复可能从错误状态续跑",
+				"task_id", r.parentTaskID, "node_id", node.ID, "err", err)
+		}
 	}
 
 	if err := r.se.bb.PostTask(ctx, task); err != nil {
