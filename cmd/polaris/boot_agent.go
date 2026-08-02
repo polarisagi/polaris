@@ -147,6 +147,18 @@ func buildAgent(
 	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
+	// 2026-08-02 补齐接线：InjectCatalog 此前全仓零调用点，导致
+	// a.catalog/fsm 上下文构建器的 cata 恒为 nil——BuildToolListSection
+	// （agent/context/tool_list_section.go）与 S_PLAN 原生 function-calling
+	// 分支（agent_execute_effect.go）均以 cata==nil 为前提直接跳过，
+	// refreshInstalledExtensions（agent_lifecycle.go）同样早退——三者叠加
+	// 导致生产环境 LLM 在 S_PLAN 阶段完全看不到工具列表/Schema/已装扩展信息，
+	// 而不仅仅是 transfer_to_agent 单个工具（见 99-new-findings.md 阶段05
+	// P-03 续 target_agent_role 可见性排查的扩大发现）。tb.Catalog 即
+	// boot_tools.go 构造的 compCatalog，与 httpServer.SetCatalog 注入的是
+	// 同一个实例，buildAgent 同时服务 agent-0 与 AgentPool 派生 Agent，
+	// 此处注入覆盖全部实例。
+	a.InjectCatalog(tb.Catalog)
 
 	if tb.SkillRegistry != nil && tb.EmbedFn != nil {
 		matcher := skill.NewSkillIntentMatcher(tb.SkillRegistry, skill.EmbedFn(tb.EmbedFn))
