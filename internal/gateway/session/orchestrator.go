@@ -97,6 +97,24 @@ func (o *orchestrator) resolveSessionID(req Request) (sessionID string, isNewSes
 	return sessionID, isNewSession, nil
 }
 
+// mergeHookEnv 合并调用方注入的 req.Metadata 到通用 Hook env map：先写入
+// Metadata 再写入通用键，保证 POLARIS_MESSAGE/POLARIS_SESSION_ID/
+// POLARIS_CHANNEL/POLARIS_REPLY 等通用字段不会被 Metadata 意外覆盖（Webhook
+// 场景注入 POLARIS_USER_ID/POLARIS_CHAT_ID，见 Request.Metadata 字段注释）。
+func mergeHookEnv(meta map[string]string, base map[string]string) map[string]string {
+	if len(meta) == 0 {
+		return base
+	}
+	env := make(map[string]string, len(meta)+len(base))
+	for k, v := range meta {
+		env[k] = v
+	}
+	for k, v := range base {
+		env[k] = v
+	}
+	return env
+}
+
 // emitError 统一的错误事件出口：按 code 分级日志（部分 code 视为预期内的
 // 降级路径，用 Warn 而非 Error，行为与原 chat.WriteSSEError 完全等价）+
 // 经 sink 推送 KindError 事件。

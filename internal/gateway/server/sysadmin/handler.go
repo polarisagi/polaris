@@ -19,6 +19,7 @@ import (
 	"context"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security"
 	"github.com/polarisagi/polaris/internal/store/search"
@@ -117,6 +118,12 @@ type Dependencies struct {
 	ServerAddr     string
 	AutomationRepo repo.AutomationRepository
 	Chat           ChatDispatcher
+	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008）。生产装配路径复用
+	// chat.NewChatHandler 已构造的单例（同一份 Persistence/Hooks/AgentPool/
+	// Registry），而非重新构造一份等价对象——三个 Headless 子结构体
+	// （Workflow/Cron/Channels）与 chat SSE 入口共享同一套服务器级依赖，见
+	// server_lifecycle.go 装配注释。
+	SessionOrch    session.Orchestrator
 	Registry       protocol.LLMRegistry
 	Router         protocol.ProviderRouter
 	HTTPClient     *http.Client
@@ -193,6 +200,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.AgentPool,
 		deps.Chat,
 		deps.Blackboard,
+		deps.SessionOrch,
 		nil,
 		h.BuildToolSchemas,
 	)
@@ -217,6 +225,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.HTTPClient,
 		deps.Registry,
 		&sync.Map{},
+		deps.SessionOrch,
 		nil, nil,
 		h.BuildToolSchemas,
 		h.Workflow.CronTickWorkflows,
@@ -233,6 +242,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		deps.Hooks,
 		h.Cron,
 		deps.AgentPool,
+		deps.SessionOrch,
 		nil,
 		h.BuildToolSchemas,
 	)

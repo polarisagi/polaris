@@ -109,6 +109,15 @@ type Request struct {
 	// AgentPool 资源耗尽降级判定时使用（区分后台提炼请求 vs 前台对话请求）。
 	RunID           string
 	ReasoningEffort string
+	// Metadata 额外注入 message.before/message.after/turn.stop 等 Hook 环境变量
+	// 的调用方专属字段（如 Webhook 的 POLARIS_USER_ID/POLARIS_CHAT_ID），随
+	// SessionID/Channel 等通用字段一起合入 Fire/FireBefore 的 env map（通用键
+	// 优先，Metadata 不能覆盖 POLARIS_MESSAGE/POLARIS_SESSION_ID/
+	// POLARIS_CHANNEL/POLARIS_REPLY）。Cron/Workflow 无对应概念时留空即可，
+	// 三条 Headless 调用方此前 message.after/turn.stop hook 覆盖不一致（仅
+	// Webhook 分支接了），A-03 Step5 起统一由 runHeadless 触发（见
+	// orchestrator_headless.go）。
+	Metadata map[string]string
 }
 
 // Result 一轮对话的结果。

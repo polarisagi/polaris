@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -60,6 +61,12 @@ type ChannelsAdmin struct {
 	Hooks            HookFirer
 	Cron             WebhookAutomationTrigger
 	TemplateCacheMap *sync.Map
+	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008），
+	// dispatchChannelMessage 经此驱动 Headless 轮次，收敛此前与
+	// workflowadmin/cronadmin 三处几乎相同又不完全一致的编排实现（本分支此前
+	// 是三者中唯一同时接了 message.before hook 与 TouchSession 的"参照实现"，
+	// 见 webhook_receive.go dispatchChannelMessage 注释）。
+	SessionOrch session.Orchestrator
 
 	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	BuildToolSchemas func() []types.ToolSchema
@@ -75,6 +82,7 @@ func NewChannelsAdmin(
 	hooks HookFirer,
 	cron WebhookAutomationTrigger,
 	agentPool protocol.AgentPool,
+	sessionOrch session.Orchestrator,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	buildToolSchemas func() []types.ToolSchema,
 ) *ChannelsAdmin {
@@ -88,6 +96,7 @@ func NewChannelsAdmin(
 		Hooks:            hooks,
 		Cron:             cron,
 		TemplateCacheMap: &sync.Map{},
+		SessionOrch:      sessionOrch,
 		ToolExec:         toolExec,
 		BuildToolSchemas: buildToolSchemas,
 	}

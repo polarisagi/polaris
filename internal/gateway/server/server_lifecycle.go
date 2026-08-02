@@ -180,9 +180,15 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		DataDir:        s.dataDir,
 		DB:             db,
 		Chat:           s.chatHandler,
-		ChannelMgr:     s.channelMgr,
-		HITLGateway:    hitlGateway,
-		AgentPool:      s.agentPool,
+		// SessionOrch 复用 s.chatHandler 已构造的 session.Orchestrator 单例
+		// （A-03 Step5）：Workflow/Cron/Channels 三个 Headless 子结构体与 chat
+		// SSE 入口共享同一份 Persistence/Hooks/AgentPool/Registry，没有理由
+		// 为 Headless 侧重新装配一份等价对象——见 sysadmin.Dependencies.
+		// SessionOrch 字段注释、chat/handler.go NewChatHandler。
+		SessionOrch: s.chatHandler.Orchestrator,
+		ChannelMgr:  s.channelMgr,
+		HITLGateway: hitlGateway,
+		AgentPool:   s.agentPool,
 		// 类型断言而非直接透传：NewServer 只接受 protocol.Blackboard 接口（见 bb 形参），
 		// sysadmin/workflowadmin 需要具体类型 *orchestrator.SQLiteBlackboard 才能构造
 		// StateGraphExecutor（NewStateGraphExecutor 签名要求具体类型，非接口）。生产环境

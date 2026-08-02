@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -54,6 +55,10 @@ type CronAdmin struct {
 	Registry         protocol.LLMRegistry
 	TemplateCacheMap *sync.Map
 	LastEventOffset  int64
+	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008），executeAutomation
+	// 经此驱动 Headless 轮次，收敛此前与 workflowadmin/channelsadmin 三处几乎
+	// 相同又不完全一致的编排实现，见 cron_runner.go executeAutomation 注释。
+	SessionOrch session.Orchestrator
 
 	ToolExec           func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	NewWorktreeManager func(workingDir, worktreeRoot string) WorktreeManager
@@ -74,6 +79,7 @@ func NewCronAdmin(
 	httpClient *http.Client,
 	registry protocol.LLMRegistry,
 	templateCacheMap *sync.Map,
+	sessionOrch session.Orchestrator,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	newWorktreeManager func(workingDir, worktreeRoot string) WorktreeManager,
 	buildToolSchemas func() []types.ToolSchema,
@@ -92,6 +98,7 @@ func NewCronAdmin(
 		HTTPClient:         httpClient,
 		Registry:           registry,
 		TemplateCacheMap:   templateCacheMap,
+		SessionOrch:        sessionOrch,
 		ToolExec:           toolExec,
 		NewWorktreeManager: newWorktreeManager,
 		BuildToolSchemas:   buildToolSchemas,

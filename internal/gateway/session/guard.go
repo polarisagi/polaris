@@ -1,8 +1,6 @@
 package session
 
 import (
-	"sync"
-
 	"github.com/polarisagi/polaris/internal/security/guard"
 )
 
@@ -19,17 +17,17 @@ func newTurnSystemPromptGuard(activatedSysPrompt string) *guard.SystemPromptGuar
 	return g
 }
 
-// headlessPromptGuard 供 runHeadless（Cron/Workflow/Webhook 触发路径的唯一
-// 收敛入口）扫描最终输出，堵住此前 SSE 交互路径早已接入 SystemPromptGuard、
-// 但 headless 路径从未调用的缺口（OWASP LLM07 系统提示词逐字泄露）。原
-// internal/agent/pool.go 同名单例迁入本包，随 A-03 Step5 一并从 pool.go 删除
-// （AcquireHeadless 回归"纯 Agent 生命周期原语"，该领域职责上移至此）。
-// headless 场景不像交互式路径有逐会话的 M9 GEPA 激活提示词可注册，只注册
-// 内核阶段模板——这是"系统提示词"的静态主体，覆盖面已经是从 0 到有。
-var headlessPromptGuard = sync.OnceValue(func() *guard.SystemPromptGuard { //nolint:gochecknoglobals // sync.OnceValue 懒加载单例，SystemPromptGuard 内部自带锁，无外部可变状态
-	g := guard.NewSystemPromptGuard(0)
-	for _, frag := range guard.KernelPromptFragments() {
-		g.AddFragment(frag)
-	}
-	return g
-})
+// [A-03 Step5 决策修正] 本文件曾计划把 internal/agent/pool.go 的
+// headlessPromptGuard 单例整体迁入本包，并让 pool.go 删除原版、"回归纯 Agent
+// 生命周期原语"。核实 Step5 真实调用面后发现该计划有安全空洞：
+// internal/eval/red_team.go:160、internal/execute/orchestrator/
+// default_worker.go:130 两处直接调用 AgentPool.AcquireHeadless，完全不经过
+// session.Orchestrator.RunTurn（它们不是"会话轮次"——无 sessionID/持久化/多轮
+// 历史语义，是一次性 Agent 探测/DAG 任务执行）。若真的从 pool.go 删除该单例，
+// 这两处会静默失去 SystemPromptGuard 保护（OWASP LLM07 系统提示词泄露）。
+// 结论：保留 pool.go 内联单例作为 AcquireHeadless 的唯一/规范扫描点——它已经
+// 覆盖当前及未来任何直接调用 AcquireHeadless 的场景，是比"每个调用方各自记得
+// 扫一遍"更安全的收敛方式（fail-safe 默认值 vs. opt-in）。runHeadless
+// （orchestrator_headless.go）不再重复扫描：AcquireHeadless 返回的 res.Output
+// 在到达这里之前已经过 pool.go 的净化，本包无需（也不应）二次持有一份重复的
+// 单例。详见 red_team.go/default_worker.go 对应行的豁免说明注释。

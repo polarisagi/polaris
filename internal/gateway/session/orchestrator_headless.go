@@ -13,15 +13,18 @@ import (
 //
 // [A-03 Step5] 原分散在 workflowadmin/workflow_engine.go runWorkflowStep、
 // cronadmin/cron_runner.go（AcquireHeadless 前后片段）、
-// channelsadmin/webhook_receive.go dispatchToAgent 三处几乎相同又不完全一致
-// 的编排逻辑收敛于此（各自独立实现是历史代价：只有 webhook 分支接了
-// Hooks.FireBefore("message.before") 与 TouchSession，workflow/cron 分支
-// 完全没有；SystemPromptGuard 扫描此前只在 pool.go 内部单独接了一次，
-// workflow/cron/webhook 三个调用方都不知情）。收敛后三条路径统一获得：
-// EnsureSession → session.new(首轮) → message.before 拦截 → SaveMessage(user)
-// → AcquireHeadless → SystemPromptGuard 扫描 → SaveMessage(assistant) →
-// SampleAndScoreReply → UpdateSessionTitle(首轮) → TouchSession，是本次收敛
-// 的核心价值锚点（补齐此前遗漏的防护与持久化步骤，而非制造新分歧）。
+// channelsadmin/webhook_receive.go dispatchChannelMessage 三处几乎相同又不
+// 完全一致的编排逻辑收敛于此（各自独立实现是历史代价：只有 webhook 分支接了
+// Hooks.FireBefore("message.before")/Fire("message.after")/Fire("turn.stop")
+// 与 TouchSession，workflow/cron 分支完全没有；SystemPromptGuard 扫描则由
+// AgentPool.AcquireHeadless 自身统一覆盖，三个调用方从未各自遗漏，见
+// guard.go 顶部注释）。收敛后三条路径统一获得：EnsureSession →
+// session.new(首轮) → message.before 拦截 → SaveMessage(user) →
+// AcquireHeadless（含 SystemPromptGuard 净化）→ SaveMessage(assistant) →
+// SampleAndScoreReply → UpdateSessionTitle(首轮) → TouchSession →
+// message.after → turn.stop，是本次收敛的核心价值锚点（补齐此前遗漏的
+// Hook/持久化步骤，而非制造新分歧）。调用方专属 Hook 字段（如 Webhook 的
+// POLARIS_USER_ID/POLARIS_CHAT_ID）经 Request.Metadata 透传，见 types.go。
 //
 // cron_runner.go 的 HITL（人工审批）前置检查、workflow_engine.go 的
 // worktree 准备/清理等自动化专属编排逻辑不属于本函数职责，继续留在各自
@@ -49,6 +52,20 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 
 	reply := o.finishHeadlessTurn(ctx, req, sessionID, isFirstTurn, res)
 
+	// message.after / turn.stop：三条 Headless 调用方此前只有 Webhook 分支接了
+	// （workflow/cron 分支完全没有），A-03 Step5 起统一触发，是本次收敛新补齐
+	// 的能力而非行为收窄（ADR-0016 §2.2 Codex Stop 事件语义，对应交互式路径
+	// runInteractive 同名 hook，见 orchestrator_interactive.go）。
+	o.hooks.Fire("message.after", mergeHookEnv(req.Metadata, map[string]string{
+		"POLARIS_REPLY":      reply,
+		"POLARIS_SESSION_ID": sessionID,
+		"POLARIS_CHANNEL":    req.Channel,
+	}))
+	o.hooks.Fire("turn.stop", mergeHookEnv(req.Metadata, map[string]string{
+		"POLARIS_SESSION_ID": sessionID,
+		"POLARIS_CHANNEL":    req.Channel,
+	}))
+
 	if reply != "" {
 		_ = sink.Emit(Event{Kind: KindDelta, Text: reply})
 	}
@@ -68,17 +85,17 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 		return false, nil, apperr.Wrap(apperr.CodeInternal, "session.RunTurn(headless): ensure session", err)
 	}
 	if isNewSession {
-		o.hooks.Fire("session.new", map[string]string{
+		o.hooks.Fire("session.new", mergeHookEnv(req.Metadata, map[string]string{
 			"POLARIS_SESSION_ID": sessionID,
 			"POLARIS_CHANNEL":    req.Channel,
-		})
+		}))
 	}
 
-	if blocked, reason := o.hooks.FireBefore("message.before", map[string]string{
+	if blocked, reason := o.hooks.FireBefore("message.before", mergeHookEnv(req.Metadata, map[string]string{
 		"POLARIS_MESSAGE":    req.Input,
 		"POLARIS_SESSION_ID": sessionID,
 		"POLARIS_CHANNEL":    req.Channel,
-	}); blocked {
+	})); blocked {
 		slog.Info("session: headless turn blocked by hook", "session", sessionID, "channel", req.Channel, "reason", reason)
 		_ = sink.Emit(Event{Kind: KindError, Payload: map[string]any{"code": "hook_blocked", "message": reason}})
 		return false, &Result{SessionID: sessionID, Aborted: true}, nil
@@ -101,20 +118,16 @@ func (o *orchestrator) prepareHeadlessTurn(ctx context.Context, sink Sink, req R
 	return isFirstTurn, nil, nil
 }
 
-// finishHeadlessTurn SystemPromptGuard 扫描 + 助手消息持久化 + 会话标题/
-// TouchSession（从 runHeadless 拆出，gocyclo 治理，行为不变）。返回净化后的
-// 回复文本。
+// finishHeadlessTurn 助手消息持久化 + 会话标题/TouchSession（从 runHeadless
+// 拆出，gocyclo 治理，行为不变）。返回回复文本。
+//
+// [A-03 Step5 决策修正] 不在此处重复 SystemPromptGuard 扫描：res.Output 由
+// AgentPool.AcquireHeadless（internal/agent/pool.go）返回前已扫描净化——该
+// 扫描是 AcquireHeadless 自身职责的一部分（覆盖包括本路径在内的全部直接/间接
+// 调用方，见 guard.go 顶部注释的决策记录），本包二次持有一份重复单例只会
+// 徒增一次空扫描成本，不提供额外保护。
 func (o *orchestrator) finishHeadlessTurn(ctx context.Context, req Request, sessionID string, isFirstTurn bool, res *types.AgentResult) string {
 	reply := res.Output
-	// [W-2-B] SystemPromptGuard：headless 路径一次性扫描完整输出（拼接完成的
-	// 全量文本，无需处理跨 chunk 边界问题），redact=true 净化后继续返回，
-	// 不中断 Cron/Workflow/Webhook 自动化。原 internal/agent/pool.go
-	// AcquireHeadless 内联逻辑迁入本包统一收口（见本文件与 guard.go 顶部注释）。
-	if cleaned, scanErr := headlessPromptGuard().Scan(reply, true); scanErr == nil {
-		reply = cleaned
-	} else {
-		slog.Warn("session: system prompt guard scan failed on headless output", "session_id", sessionID, "err", scanErr)
-	}
 
 	if reply != "" {
 		if err := o.persistence.SaveMessage(ctx, sessionID, "assistant", reply, "", "", res.LatencyMs); err != nil {

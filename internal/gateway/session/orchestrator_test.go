@@ -368,8 +368,10 @@ func TestRunTurn_Interactive_ClientAbort(t *testing.T) {
 	}
 }
 
-// TestRunTurn_Headless_HappyPath 验证 Headless 路径：AcquireHeadless 输出经
-// SystemPromptGuard 扫描后落盘，且 Complete 事件推送（bufferSink 用法）。
+// TestRunTurn_Headless_HappyPath 验证 Headless 路径：AcquireHeadless 输出
+// 落盘（SystemPromptGuard 扫描职责在 AgentPool.AcquireHeadless 内部完成，见
+// guard.go 顶部注释的 A-03 Step5 决策修正，本层不重复扫描），且 Complete
+// 事件推送（bufferSink 用法）。
 func TestRunTurn_Headless_HappyPath(t *testing.T) {
 	persistence := newFakePersistence()
 	pool := &fakeAgentPool{headlessResult: &types.AgentResult{Output: "automation reply", LatencyMs: 42}}

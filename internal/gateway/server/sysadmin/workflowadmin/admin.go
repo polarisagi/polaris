@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -38,6 +39,10 @@ type WorkflowAdmin struct {
 	// Blackboard StateGraphExecutor 的任务队列/事件总线，同时供 RunStepWorkerLoop
 	// 自订阅认领本包投递的 workflow_step 任务（workflow_step_worker.go）。
 	Blackboard *orchestrator.SQLiteBlackboard
+	// SessionOrch 会话编排领域服务（A-03 Step5，GD-13-008），runWorkflowStep
+	// 经此驱动 Headless 轮次，收敛此前与 cronadmin/channelsadmin 三处几乎相同又
+	// 不完全一致的编排实现，见 workflow_engine.go runWorkflowStep 注释。
+	SessionOrch session.Orchestrator
 
 	ToolExec         func(ctx context.Context, name string, args []byte) (*types.ToolResult, error)
 	BuildToolSchemas func() []types.ToolSchema
@@ -50,6 +55,7 @@ func NewWorkflowAdmin(
 	agentPool protocol.AgentPool,
 	chat ChatDispatcher,
 	bb *orchestrator.SQLiteBlackboard,
+	sessionOrch session.Orchestrator,
 	toolExec func(ctx context.Context, name string, args []byte) (*types.ToolResult, error),
 	buildToolSchemas func() []types.ToolSchema,
 ) *WorkflowAdmin {
@@ -60,6 +66,7 @@ func NewWorkflowAdmin(
 		Chat:             chat,
 		TemplateCacheMap: &sync.Map{},
 		Blackboard:       bb,
+		SessionOrch:      sessionOrch,
 		ToolExec:         toolExec,
 		BuildToolSchemas: buildToolSchemas,
 	}

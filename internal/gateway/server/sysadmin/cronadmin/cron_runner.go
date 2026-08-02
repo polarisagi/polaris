@@ -1,6 +1,7 @@
 package cronadmin
 
 import (
+	"github.com/polarisagi/polaris/internal/gateway/session"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 
@@ -161,17 +162,6 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			ca.updateAutomationStats(a.ID, status, errMsg, finishedAt)
 		}()
 
-		// 准备 Intent
-		userMessage := a.Prompt
-		if a.WorkingDir != "" {
-			userMessage = "[工作目录: " + a.WorkingDir + "]\n\n" + a.Prompt
-		}
-
-		intent := types.Intent{
-			Query:      userMessage,
-			WorkingDir: a.WorkingDir,
-		}
-
 		if ca.HITLGateway != nil && a.RequiresHITL {
 			// 更新状态为 suspended，等待审批
 			_ = ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", "", 0)
@@ -209,21 +199,32 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			_ = ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "running")
 		}
 
-		res, err := ca.AgentPool.AcquireHeadless(bgCtx, intent)
-		if err != nil {
+		// [A-03 Step5] 原内联 AcquireHeadless + SaveMessage(assistant) +
+		// SampleAndScoreReply + UpdateSessionTitle 序列（此前从不 EnsureSession/
+		// 不存 user 消息/不触发 message.before hook/不 TouchSession——workflowadmin
+		// 分支同款缺口），收敛至 session.Orchestrator.RunTurn(Headless:true)
+		// 统一实现，见 internal/gateway/session/orchestrator_headless.go 顶部
+		// 注释。WorkingDir 前缀拼接由 RunTurn 内部处理，此处传原始 a.Prompt。
+		result, runErr := ca.SessionOrch.RunTurn(bgCtx, session.Request{
+			SessionID:  sessionID,
+			Input:      a.Prompt,
+			Channel:    "cron",
+			Headless:   true,
+			WorkingDir: a.WorkingDir,
+			TitleHint:  a.Name,
+		}, session.NewBufferSink())
+		if runErr != nil {
 			status = "error"
-			errMsg = "agent headless execution failed: " + err.Error()
+			errMsg = "agent headless execution failed: " + runErr.Error()
+			return
+		}
+		if result.Aborted {
+			status = "error"
+			errMsg = "automation blocked (hook rejection or session error)"
 			return
 		}
 
-		reply := res.Output
-		latencyMs := res.LatencyMs
-
-		if err := ca.Chat.SaveMessage(bgCtx, sessionID, "assistant", reply, "", "", latencyMs); err != nil {
-			slog.Warn("automation: saveMessage assistant failed", "err", err)
-		}
-		ca.Chat.SampleAndScoreReply(sessionID, userMessage, reply)
-		_ = ca.Chat.UpdateSessionTitle(bgCtx, sessionID, a.Name)
+		reply := result.Reply
 
 		// 处理 result_action
 		if chID, ok := strings.CutPrefix(a.ResultAction, "channel:"); ok {

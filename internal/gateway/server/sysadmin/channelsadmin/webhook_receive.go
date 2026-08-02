@@ -10,11 +10,11 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	"github.com/polarisagi/polaris/internal/gateway/session"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // HandleWebhookReceive 接收来自聊天平台的 webhook 推送。
@@ -127,67 +127,41 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 	}
 
 	sessionKey := fmt.Sprintf("ch_%s_%s", channelID, msg.ChatID)
-	if err := h.Chat.EnsureSession(ctx, sessionKey); err != nil {
-		slog.Error("channel dispatch: ensureSession", "err", err)
-		return
-	}
 
-	if blocked, reason := h.Hooks.FireBefore("message.before", map[string]string{
-		"POLARIS_MESSAGE":    msg.Text,
-		"POLARIS_SESSION_ID": sessionKey,
-		"POLARIS_CHANNEL":    channelType,
-		"POLARIS_USER_ID":    msg.UserID,
-		"POLARIS_CHAT_ID":    msg.ChatID,
-	}); blocked {
-		slog.Info("channel dispatch: hook blocked message",
-			"channel", channelType, "user", msg.UserID, "reason", reason)
-		return
-	}
-
-	// 注意：AcquireHeadless 走单轮 intent（见下方），不消费多轮 history，
-	// 之前这里取历史后 append 一条用户消息却从未被读取，是 ineffassign 死代码，
-	// 直接删除（多轮上下文如需接入，属于 headless 路径的独立功能扩展，非本次范围）。
-	if err := h.Chat.SaveMessage(ctx, sessionKey, "user", msg.Text, "", "", 0); err != nil {
-		slog.Error("channel dispatch: saveMessage user", "err", err)
-	}
-
-	intent := types.Intent{
-		Query: msg.Text,
-	}
-
-	res, err := h.AgentPool.AcquireHeadless(ctx, intent)
+	// [A-03 Step5] 原内联 EnsureSession/FireBefore("message.before")/
+	// SaveMessage(user)/AcquireHeadless/SaveMessage(assistant)/
+	// SampleAndScoreReply/UpdateSessionTitle/TouchSession/Fire("message.after")/
+	// Fire("turn.stop") 九步序列收敛至 session.Orchestrator.RunTurn
+	// (Headless:true) 统一实现，见 internal/gateway/session/
+	// orchestrator_headless.go 顶部注释——本分支此前是 workflow/cron/webhook
+	// 三者中唯一完整接了 message.before/message.after/turn.stop/TouchSession
+	// 的"参照实现"，收敛后 workflow/cron 分支同步补齐这些能力。
+	// POLARIS_USER_ID/POLARIS_CHAT_ID 经 Request.Metadata 透传给 Hook 环境变量
+	// （Metadata 不覆盖通用键，见 types.go 字段注释）。
+	result, err := h.SessionOrch.RunTurn(ctx, session.Request{
+		SessionID: sessionKey,
+		Input:     msg.Text,
+		Channel:   channelType,
+		Headless:  true,
+		TitleHint: msg.Text,
+		Metadata: map[string]string{
+			"POLARIS_USER_ID": msg.UserID,
+			"POLARIS_CHAT_ID": msg.ChatID,
+		},
+	}, session.NewBufferSink())
 	if err != nil {
-		slog.Error("channel dispatch: AcquireHeadless failed", "channel", channelID, "err", err)
+		slog.Error("channel dispatch: session.RunTurn failed", "channel", channelID, "err", err)
+		return
+	}
+	if result.Aborted {
+		// 拦截原因（hook 拒绝/会话错误）已在 session 包内部记日志，此处无需重复。
 		return
 	}
 
-	reply := res.Output
-	inferLatencyMs := res.LatencyMs
-
+	reply := result.Reply
 	if reply == "" {
 		return
 	}
-	if err := h.Chat.SaveMessage(ctx, sessionKey, "assistant", reply, "", "", inferLatencyMs); err != nil {
-		slog.Error("channel dispatch: saveMessage assistant", "err", err)
-	}
-	h.Chat.SampleAndScoreReply(sessionKey, msg.Text, reply)
-	_ = h.Chat.UpdateSessionTitle(ctx, sessionKey, msg.Text)
-	_ = h.Chat.TouchSession(ctx, sessionKey)
-
-	h.Hooks.Fire("message.after", map[string]string{
-		"POLARIS_REPLY":      reply,
-		"POLARIS_SESSION_ID": sessionKey,
-		"POLARIS_CHANNEL":    channelType,
-		"POLARIS_USER_ID":    msg.UserID,
-		"POLARIS_CHAT_ID":    msg.ChatID,
-	})
-	// turn.stop hook：见 chat/sse.go 同名注释（ADR-0016 §2.2 Codex Stop 事件语义）。
-	h.Hooks.Fire("turn.stop", map[string]string{
-		"POLARIS_SESSION_ID": sessionKey,
-		"POLARIS_CHANNEL":    channelType,
-		"POLARIS_USER_ID":    msg.UserID,
-		"POLARIS_CHAT_ID":    msg.ChatID,
-	})
 
 	_ = h.ChannelMgr.SendReply(ctx, channelType, channelID, cfg, msg, reply)
 }
