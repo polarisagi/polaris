@@ -95,15 +95,15 @@ pub unsafe extern "C" fn surreal_graph_delete_edges(
     et_ptr: *const u8,
     et_len: usize,
 ) -> c_int {
-    let from = match unsafe { crate::slice_to_str(from_ptr, from_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
-    let et = match unsafe { crate::slice_to_str(et_ptr, et_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => return SURREAL_ERR_UTF8,
-    };
     let result = panic::catch_unwind(move || {
+        let from = match unsafe { crate::slice_to_str(from_ptr, from_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
+        let et = match unsafe { crate::slice_to_str(et_ptr, et_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => return SURREAL_ERR_UTF8,
+        };
         let Some(store_arc) = get_store() else {
             return SURREAL_OK;
         };
@@ -154,25 +154,25 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
     fan_out_limit: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    let energy_decay = f64::from_bits(energy_decay_bits);
-    let dormancy_threshold = f64::from_bits(dormancy_threshold_bits);
-    let ids_str = match unsafe { crate::slice_to_str(start_ids_ptr, start_ids_len) } {
-        Ok(s) => s,
-        Err(_) => {
-            write_cstr(out_json, "[]");
-            return SURREAL_ERR_UTF8;
-        }
-    };
-
-    let start_ids: Vec<String> = match serde_json::from_str(ids_str) {
-        Ok(v) => v,
-        Err(_) => {
-            write_cstr(out_json, "[]");
-            return SURREAL_ERR_UTF8;
-        }
-    };
-
     let result = panic::catch_unwind(move || {
+        let energy_decay = f64::from_bits(energy_decay_bits);
+        let dormancy_threshold = f64::from_bits(dormancy_threshold_bits);
+        let ids_str = match unsafe { crate::slice_to_str(start_ids_ptr, start_ids_len) } {
+            Ok(s) => s,
+            Err(_) => {
+                write_cstr(out_json, "[]");
+                return SURREAL_ERR_UTF8;
+            }
+        };
+
+        let start_ids: Vec<String> = match serde_json::from_str(ids_str) {
+            Ok(v) => v,
+            Err(_) => {
+                write_cstr(out_json, "[]");
+                return SURREAL_ERR_UTF8;
+            }
+        };
+
         let Some(store_arc) = get_store() else {
             write_cstr(out_json, "[]");
             return SURREAL_OK;
@@ -295,21 +295,21 @@ pub unsafe extern "C" fn surreal_graph_traverse(
     max_depth: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    let start = match unsafe { crate::slice_to_str(start_ptr, start_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            write_cstr(out_json, "[]");
-            return SURREAL_ERR_UTF8;
-        }
-    };
-    let et = match unsafe { crate::slice_to_str(et_ptr, et_len) } {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            write_cstr(out_json, "[]");
-            return SURREAL_ERR_UTF8;
-        }
-    };
     let result = panic::catch_unwind(move || {
+        let start = match unsafe { crate::slice_to_str(start_ptr, start_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                write_cstr(out_json, "[]");
+                return SURREAL_ERR_UTF8;
+            }
+        };
+        let et = match unsafe { crate::slice_to_str(et_ptr, et_len) } {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                write_cstr(out_json, "[]");
+                return SURREAL_ERR_UTF8;
+            }
+        };
         let Some(store_arc) = get_store() else {
             write_cstr(out_json, "[]");
             return SURREAL_OK;
