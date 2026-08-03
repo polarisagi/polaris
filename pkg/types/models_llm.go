@@ -60,6 +60,7 @@ type InferRequest struct {
 	ResponseFormat *ResponseFormat // 支持强制 JSON Schema / GBNF 等结构化约束
 	ThinkingMode   ThinkingMode    // TTC 推理深度控制（None=不传，High=最大扩展思考）
 	ThinkingBudget int
+	ModelPool      string // 目标 Model Pool（Provider 角色/role），空串表示不限定。由 WithModelPool 选项填充（GD-13-005）
 }
 
 func (req *InferRequest) HasImageParts() bool {
@@ -144,6 +145,7 @@ InferOptions struct {
 	TopP           float64
 	ThinkingBudget int
 	CacheHints     *SemanticCacheHints
+	ModelPool      string // 目标 Model Pool（Provider 角色/role），空串表示不限定（GD-13-005）
 }
 
 type
@@ -172,6 +174,7 @@ ProviderResponse struct {
 	Usage            Usage           // Token 用量；用现有 Usage 类型（若存在）
 	Model            string          // 添加以兼容现有使用
 	FinishReason     string          // 添加以兼容现有使用
+	DegradedFromPool string          `json:"degraded_from_pool,omitempty"` // 若非空，表示发生了跨 Pool 降级，值为原始请求目标 Pool
 }
 
 // WithResponseFormat 设置响应格式

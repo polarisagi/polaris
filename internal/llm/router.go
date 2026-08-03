@@ -19,13 +19,14 @@ import (
 // InferenceRouter 实现 protocol.Provider，对上层透明地完成多厂商路由。
 // 架构文档: docs/arch/M01-Inference-Runtime.md §4
 type InferenceRouter struct {
-	registry      *ProviderRegistry
-	rateTracker   *RateLimitTracker
-	client        *http.Client
-	outboxWriter  protocol.OutboxWriter
-	governor      LLMGovernor
-	semanticCache *search.SemanticCache
-	modelRegistry *modelregistry.Registry
+	registry          *ProviderRegistry
+	rateTracker       *RateLimitTracker
+	client            *http.Client
+	outboxWriter      protocol.OutboxWriter
+	governor          LLMGovernor
+	semanticCache     *search.SemanticCache
+	modelRegistry     *modelregistry.Registry
+	poolFallbackChain map[string][]string // Pool 级联降级链（GD-13-005）
 }
 
 // LLMGovernor 用于限流 LLM 请求 (P0-3)
@@ -47,6 +48,18 @@ func WithSemanticCache(cache *search.SemanticCache) RouterOption {
 	return func(ir *InferenceRouter) {
 		ir.semanticCache = cache
 	}
+}
+
+// WithPoolFallbackChain 覆盖默认 Pool 降级链配置（GD-13-005）。
+func WithPoolFallbackChain(chain map[string][]string) RouterOption {
+	return func(ir *InferenceRouter) {
+		ir.poolFallbackChain = chain
+	}
+}
+
+// WithModelPool 设置请求的目标 Model Pool（Provider 角色）。
+func WithModelPool(pool string) types.InferOption {
+	return func(o *types.InferOptions) { o.ModelPool = pool }
 }
 
 // recordModelCallResult 把一次 Provider 调用结果同步给 ModelVersionRegistry
@@ -115,6 +128,14 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts 
 			},
 			Timeout: 120 * time.Second,
 		},
+		// poolFallbackChain 定义当目标 Model Pool 所有 Provider 耗尽时的级联降级顺序（GD-13-005）。
+		// 可通过 RouterOption 覆盖，当前默认值适配 reasoning/general/default/budget 四档分层。
+		poolFallbackChain: map[string][]string{
+			"reasoning": {"general", "default", "budget"},
+			"general":   {"default", "budget"},
+			"default":   {"budget"},
+			"budget":    {},
+		},
 	}
 	for _, opt := range opts {
 		opt(ir)
@@ -161,6 +182,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
 		ThinkingBudget: options.ThinkingBudget,
+		ModelPool:      options.ModelPool,
 	}
 
 	normalizeInferRequest(req)
@@ -170,7 +192,16 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		return cached, nil
 	}
 
-	entry := ir.registry.best(req)
+	// ModelPool 非空时，初始选择也应严格按 role 过滤（GD-13-005）；
+	// ModelPool 为空时使用全局 best()。
+	var entry *providerEntry
+	if req.ModelPool != "" {
+		ir.registry.mu.RLock()
+		entry = ir.findBestProviderLockedMultiSkip(req, nil)
+		ir.registry.mu.RUnlock()
+	} else {
+		entry = ir.registry.best(req)
+	}
 	if entry == nil {
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}
@@ -304,10 +335,20 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 		Temperature:    options.Temperature,
 		ResponseFormat: options.ResponseFormat,
 		ThinkingBudget: options.ThinkingBudget,
+		ModelPool:      options.ModelPool,
 	}
 
 	normalizeInferRequest(req)
-	entry := ir.registry.best(req)
+	// ModelPool 非空时，初始选择也应严格按 role 过滤（GD-13-005）；
+	// ModelPool 为空时使用全局 best()。
+	var entry *providerEntry
+	if req.ModelPool != "" {
+		ir.registry.mu.RLock()
+		entry = ir.findBestProviderLockedMultiSkip(req, nil)
+		ir.registry.mu.RUnlock()
+	} else {
+		entry = ir.registry.best(req)
+	}
 	if entry == nil {
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}

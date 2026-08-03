@@ -230,3 +230,71 @@ func TestErrAllProvidersFailed(t *testing.T) {
 		t.Fatalf("expected protocol.ErrAllProvidersFailed, got %v", err)
 	}
 }
+
+// ─── 跨 Pool 降级测试（GD-13-005）────────────────────────────────────────────
+
+// mockFailProvider 始终返回可重试错误（模拟 reasoning Pool 全部耗尽的场景）。
+type mockFailProvider struct{ caps types.ProviderCapabilities }
+
+func (m *mockFailProvider) Infer(_ context.Context, _ []types.Message, _ ...types.InferOption) (*types.ProviderResponse, error) {
+	return nil, apperr.New(apperr.CodeProviderExhausted, "mock: always fail")
+}
+func (m *mockFailProvider) StreamInfer(_ context.Context, _ []types.Message, _ ...types.InferOption) (<-chan types.StreamEvent, error) {
+	return nil, apperr.New(apperr.CodeProviderExhausted, "mock: always fail")
+}
+func (m *mockFailProvider) Capabilities() types.ProviderCapabilities { return m.caps }
+func (m *mockFailProvider) Tokenizer() protocol.TokenizerAdapter     { return &SimpleTokenizer{} }
+func (m *mockFailProvider) ModelID() string                          { return "mock-fail" }
+
+// TestInferenceRouter_CrossPoolFallback 验证 reasoning Pool 耗尽时自动降级到 general Pool。
+func TestInferenceRouter_CrossPoolFallback(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+
+	// reasoning Pool：只有一个始终失败的 Provider
+	reg.RegisterWithRole("reasoning-p1", "ReasoningP1", "reasoning", &mockFailProvider{})
+
+	// general Pool：始终成功的 Provider
+	generalProvider := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}}
+	reg.RegisterWithRole("general-p1", "GeneralP1", "general", generalProvider)
+
+	router := NewInferenceRouter(reg, nil)
+
+	// 发起 reasoning Pool 请求
+	resp, err := router.Infer(context.Background(),
+		[]types.Message{{Role: "user", Content: "hello"}},
+		WithModelPool("reasoning"),
+	)
+	if err != nil {
+		t.Fatalf("expected cross-pool fallback to succeed, got err: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	// 验证降级标记
+	if resp.DegradedFromPool != "reasoning" {
+		t.Fatalf("expected DegradedFromPool='reasoning', got '%s'", resp.DegradedFromPool)
+	}
+}
+
+// TestInferenceRouter_CrossPoolFallback_AllExhausted 验证所有 Pool 均耗尽时返回 ErrAllProvidersFailed。
+func TestInferenceRouter_CrossPoolFallback_AllExhausted(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+
+	// reasoning Pool：始终失败
+	reg.RegisterWithRole("reasoning-p1", "ReasoningP1", "reasoning", &mockFailProvider{})
+	// general Pool：也始终失败
+	reg.RegisterWithRole("general-p1", "GeneralP1", "general", &mockFailProvider{})
+
+	router := NewInferenceRouter(reg, nil)
+
+	_, err := router.Infer(context.Background(),
+		[]types.Message{{Role: "user", Content: "hello"}},
+		WithModelPool("reasoning"),
+	)
+	if err == nil {
+		t.Fatal("expected error when all pools exhausted")
+	}
+	if !errors.Is(err, protocol.ErrAllProvidersFailed) {
+		t.Fatalf("expected ErrAllProvidersFailed, got %v", err)
+	}
+}
