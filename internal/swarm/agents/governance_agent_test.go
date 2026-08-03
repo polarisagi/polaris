@@ -17,15 +17,10 @@ func TestGovernanceAgent_Idempotent(t *testing.T) {
 	defer db.Close()
 
 	_, err = db.Exec(`
-		CREATE TABLE outbox (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			idempotency_key TEXT UNIQUE,
-			target_engine TEXT,
-			operation TEXT,
-			scope TEXT,
-			payload BLOB,
-			status TEXT,
-			created_at INTEGER
+		CREATE TABLE idempotent_cache (
+			operation_hash TEXT PRIMARY KEY,
+			payload TEXT NOT NULL,
+			created_at INTEGER NOT NULL
 		)
 	`)
 	if err != nil {

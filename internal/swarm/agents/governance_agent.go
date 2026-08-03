@@ -75,9 +75,8 @@ func (ga *GovernanceAgent) Run(ctx context.Context) {
 func (ga *GovernanceAgent) CheckIdempotent(ctx context.Context, operationHash string) ([]byte, bool) {
 	var payload []byte
 	err := ga.db.QueryRowContext(ctx, `
-		SELECT payload FROM outbox 
-		WHERE idempotency_key = 'idem:' || ? 
-		AND status = 'done' 
+		SELECT payload FROM idempotent_cache 
+		WHERE operation_hash = ? 
 		LIMIT 1
 	`, operationHash).Scan(&payload)
 
@@ -108,10 +107,10 @@ func (ga *GovernanceAgent) AuditAST(language string, code []byte, caps Capabilit
 // RecordExecution 记录执行成功的操作到 outbox（用于下次幂等命中）。
 func (ga *GovernanceAgent) RecordExecution(ctx context.Context, operationHash string, response []byte) error {
 	_, err := ga.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO outbox
-		  (idempotency_key, target_engine, operation, scope, payload, status, created_at)
+		INSERT OR IGNORE INTO idempotent_cache
+		  (operation_hash, payload, created_at)
 		VALUES
-		  ('idem:' || ?, 'idempotent_gateway', 'record', 'execution', ?, 'done', ?)
+		  (?, ?, ?)
 	`, operationHash, response, time.Now().UnixMilli())
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.RecordExecution", err)
@@ -186,4 +185,14 @@ func probeMemoryFallback() float64 {
 	// mock 8GB limit for the fallback calculation
 	total := 8.0 * 1024 * 1024 * 1024
 	return (total - alloc) / total
+}
+
+// PruneStaleCache 清理 30 天以上的幂等缓存记录。
+func (ga *GovernanceAgent) PruneStaleCache(ctx context.Context) error {
+	cutoff := time.Now().Add(-30 * 24 * time.Hour).UnixMilli()
+	_, err := ga.db.ExecContext(ctx, `DELETE FROM idempotent_cache WHERE created_at < ?`, cutoff)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.PruneStaleCache", err)
+	}
+	return nil
 }
