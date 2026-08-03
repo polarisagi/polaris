@@ -111,7 +111,10 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 					Payload:   a.sCtx.ExecuteResult,
 					CreatedAt: time.Now(),
 				}, a.sCtx.SessionID+":exec:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-				_ = a.outboxWriter.Write(ctx, ev)
+				if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
+					slog.Error("agent: outbox write failed, event may be lost",
+						"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
+				}
 			}
 		}
 		// 业务执行失败会触发 ExecuteFail，同样不抛出以免阻断状态机
@@ -221,7 +224,7 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) 
 // 平铺并列导致，拆分前该复杂度计入 executeEffect 本身（已有 //nolint:gocyclo），
 // 拆分只是物理搬迁，不应也不必在这里拆得更碎去规避圈复杂度检查。
 //
-//nolint:gocyclo
+//nolint:gocyclo,nestif
 func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.State, resp *types.ProviderResponse) {
 	// ReplayMode 物理短路：回放时不写副作用，防止双写 EventLog / Outbox。
 	if protocol.IsReplaying() {
@@ -251,7 +254,10 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			}, a.sCtx.SessionID+":perceive:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-			_ = a.outboxWriter.Write(ctx, ev)
+			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
+				slog.Error("agent: outbox write failed, event may be lost",
+					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
+			}
 		}
 	}
 
@@ -285,7 +291,10 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			}, a.sCtx.SessionID+":plan:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-			_ = a.outboxWriter.Write(ctx, ev)
+			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
+				slog.Error("agent: outbox write failed, event may be lost",
+					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
+			}
 		}
 	}
 
@@ -314,12 +323,18 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 				Payload:   []byte(content),
 				CreatedAt: time.Now(),
 			}, a.sCtx.SessionID+":reflect:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-			_ = a.outboxWriter.Write(ctx, ev)
+			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
+				slog.Error("agent: outbox write failed, event may be lost",
+					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
+			}
 		}
 		// 触发 Episodic → Semantic 4 阶段记忆蒸馏（ConsolidationPipeline，M5 §4）
 		if a.outboxWriter != nil && a.sCtx.SessionID != "" {
 			ev, _ := protocol.NewOutboxEvent(protocol.TopicMemoryConsolidate, "memory_consolidate", map[string]string{"session_id": a.sCtx.SessionID}, a.sCtx.SessionID+":consolidate:"+outboxUniqueSuffix())
-			_ = a.outboxWriter.Write(ctx, ev)
+			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
+				slog.Error("agent: outbox write failed, event may be lost",
+					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
+			}
 		}
 	}
 }
@@ -349,12 +364,18 @@ func reconstructReplayResponse(m map[string]any) *types.ProviderResponse {
 	}
 	if u, ok := m["usage"]; ok {
 		if b, err := json.Marshal(u); err == nil {
-			_ = json.Unmarshal(b, &resp.Usage)
+			if umErr := json.Unmarshal(b, &resp.Usage); umErr != nil {
+				slog.Warn("agent: replay response unmarshal partial failure",
+					"field", "Usage", "err", umErr)
+			}
 		}
 	}
 	if tc, ok := m["tool_calls"]; ok {
 		if b, err := json.Marshal(tc); err == nil {
-			_ = json.Unmarshal(b, &resp.ToolCalls)
+			if umErr := json.Unmarshal(b, &resp.ToolCalls); umErr != nil {
+				slog.Warn("agent: replay response unmarshal partial failure",
+					"field", "ToolCalls", "err", umErr)
+			}
 		}
 	}
 	return resp
