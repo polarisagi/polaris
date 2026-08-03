@@ -189,7 +189,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		// 后置回填时对本对象的字段做原地赋值而非替换整个指针——server_routes.go 注册路由
 		// 时捕获的是 h.Eval 这个指针本身，必须保持稳定，否则回填对已注册路由不可见
 		// （与 mcpadmin.InstallMgr"先nil、SetInstallManager 原地回填"是同一模式）。
-		Eval: evaladmin.NewEvalAdmin(nil, nil, nil),
+		Eval: evaladmin.NewEvalAdmin(nil, nil, nil, deps.HTTPClient),
 	}
 	// 2026-07-07 R7 瘦身：workflow.go（原 730 行）拆为独立 workflowadmin 子包
 	// （沿用 cronadmin/insightsadmin 模式）。CronTickWorkflows 回调改指向

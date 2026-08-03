@@ -119,15 +119,24 @@ type Engine struct {
 	pubKeys           map[string]ed25519.PublicKey
 	allowedPartitions map[string]map[string]struct{}
 	Splitter          DataSplitter
+	devMode           bool // 开发模式标记，仅在 dev/test 环境下设为 true
+}
+
+// EngineOption 用于配置 Engine.
+type EngineOption func(*Engine)
+
+// WithDevMode 设置开发模式，允许跳过签名验证。
+func WithDevMode(enabled bool) EngineOption {
+	return func(e *Engine) { e.devMode = enabled }
 }
 
 // NewEngine 创建引擎，pubKeys 为 agentRole → Ed25519 公钥的映射。
 // 生产环境应从 OS Keychain 或配置中心加载持久化密钥对；
 // 测试环境可用 crypto/ed25519.GenerateKey 临时生成。
-func NewEngine(pubKeys map[string]ed25519.PublicKey) *Engine {
+func NewEngine(pubKeys map[string]ed25519.PublicKey, opts ...EngineOption) *Engine {
 	keys := make(map[string]ed25519.PublicKey, len(pubKeys))
 	maps.Copy(keys, pubKeys)
-	return &Engine{
+	e := &Engine{
 		pubKeys: keys,
 		allowedPartitions: map[string]map[string]struct{}{
 			RoleM9Optimizer: {
@@ -142,6 +151,10 @@ func NewEngine(pubKeys map[string]ed25519.PublicKey) *Engine {
 			},
 		},
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // VerifyRequest 执行完整请求验证：
@@ -190,7 +203,12 @@ func (e *Engine) VerifyRequestDev(agentRole, partition string, signature []byte,
 		return apperr.Wrap(apperr.CodeInternal, "Engine.VerifyRequestDev", err)
 	}
 	if _, ok := e.pubKeys[agentRole]; !ok {
-		// dev/test 模式：无注册密钥时仅做访问白名单检查
+		// dev/test 模式：无注册密钥时仅做访问白名单检查。
+		// 安全断言：生产模式下不允许跳过签名验证（GR-10-005 修复）。
+		if !e.devMode {
+			return apperr.New(apperr.CodeForbidden,
+				"Engine.VerifyRequestDev: signature bypass rejected in production mode")
+		}
 		return nil
 	}
 	return e.VerifyRequest(agentRole, partition, signature, timestamp)

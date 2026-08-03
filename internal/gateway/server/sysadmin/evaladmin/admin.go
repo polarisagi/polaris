@@ -47,15 +47,16 @@ type MetaAuditor interface {
 
 // EvalAdmin 承载 meta_holdout 用例写入 + 审计触发 + 状态查询。
 type EvalAdmin struct {
-	Store    EvalStore
-	Sentinel MetaAuditor
-	Runner   protocol.EvalRunner
+	Store      EvalStore
+	Sentinel   MetaAuditor
+	Runner     protocol.EvalRunner
+	HTTPClient *http.Client
 }
 
 // NewEvalAdmin 构造 EvalAdmin。Store/Sentinel 为 nil 时对应 handler 返回 503，
 // 不 panic（与本包其余 handler 及 mcpadmin.HandleCreateMCPServer 的 nil 防御一致）。
-func NewEvalAdmin(store EvalStore, sentinel MetaAuditor, runner protocol.EvalRunner) *EvalAdmin {
-	return &EvalAdmin{Store: store, Sentinel: sentinel, Runner: runner}
+func NewEvalAdmin(store EvalStore, sentinel MetaAuditor, runner protocol.EvalRunner, httpClient *http.Client) *EvalAdmin {
+	return &EvalAdmin{Store: store, Sentinel: sentinel, Runner: runner, HTTPClient: httpClient}
 }
 
 // addMetaHoldoutCaseRequest POST /v1/eval/meta-holdout/cases 请求体。
@@ -164,7 +165,7 @@ func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cases, err := benchmark.FetchDataset(r.Context(), datasetName, url)
+	cases, err := benchmark.FetchDataset(r.Context(), h.HTTPClient, datasetName, url)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to fetch dataset: %v", err), http.StatusInternalServerError)
 		return
