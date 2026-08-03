@@ -53,8 +53,9 @@ func (l *UserLocale) IsMainlandChina() bool {
 //  2. 并发请求三个 GeoIP 服务，取最先成功的结果（最多等待 geoIPTimeout）
 //  3. 若 GeoIP 全部失败，降级为根据时区推断国家
 //
-// httpClient 应传入调用方管理的 HTTP 客户端；传 nil 使用 http.DefaultClient。
-// 注意：为了满足全局安全策略，如果未传入客户端，内部会构造带有特定域名白名单的 SafeDialer 客户端，而不是使用 http.DefaultClient。
+// httpClient 应传入调用方管理的 HTTP 客户端；传 nil 时内部会构造带有
+// 特定域名白名单的 SafeDialer 客户端（满足 XR-06 全局安全策略），
+// 不会使用 http.DefaultClient。
 func Detect(ctx context.Context, httpClient *http.Client) *UserLocale {
 	tz := readSystemTimezone()
 

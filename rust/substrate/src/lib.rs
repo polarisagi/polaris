@@ -127,6 +127,7 @@ const SUBSTRATE_ABI_MAJOR: u16 = 3;
 /// 2: 新增 tier1 feature 门控下的 llama_infer_* 本地推理 FFI（load/unload/generate/
 ///    embed/rerank/evict_kv_cache/status/free_string，P3-1）；非 tier1 构建下这些
 ///    符号不导出，Go 侧通过 purego RegisterLibFunc + recover 优雅降级探测。
+/// 3: Cedar FFI 接口字符串参数由 NUL-terminated C 字符串全面迁移为 ptr+len 风格 UTF-8 字符串（无 NUL 结尾要求）。
 const SUBSTRATE_ABI_MINOR: u16 = 3;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
