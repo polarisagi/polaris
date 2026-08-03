@@ -164,11 +164,13 @@ deadcode:
 # 为何不跑全量: race detector 慢 5-10x，仅针对并发高发区
 test-race:
 	$(GO) test -race -count=1 -timeout=120s \
+		./internal/action/... \
 		./internal/agent/... \
+		./internal/execute/... \
 		./internal/memory/... \
 		./internal/prompt/... \
-		./internal/swarm/... \
-		./internal/store/...
+		./internal/store/... \
+		./internal/swarm/...
 
 # rust-lint: Cargo clippy 静态分析（以 warning 为 error）
 # 覆盖: 所有 target（lib + test + bench），FFI unsafe 代码
