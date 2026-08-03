@@ -253,9 +253,12 @@ const (
 
 // AgentStreamEvent defines a token-level or block-level structured event published during FSM reasoning.
 type AgentStreamEvent struct {
-	Type       AgentStreamEventType `json:"type"`
-	Content    string               `json:"content"`
-	TaintLevel TaintLevel           `json:"taint_level,omitempty"`
-	ToolName   string               `json:"tool_name,omitempty"`
-	ToolInput  []byte               `json:"tool_input,omitempty"`
+	Type           AgentStreamEventType `json:"type"`
+	Content        string               `json:"content"`
+	TaintLevel     TaintLevel           `json:"taint_level,omitempty"`
+	ToolName       string               `json:"tool_name,omitempty"`
+	ToolInput      []byte               `json:"tool_input,omitempty"`
+	ChildAgentRole string               `json:"child_agent_role,omitempty"` // 子 Agent 角色（委派场景嵌套事件，GD-13-001）
+	ParentTaskID   string               `json:"parent_task_id,omitempty"`   // 父任务 ID（委派场景嵌套事件）
+	IsNested       bool                 `json:"is_nested,omitempty"`        // 是否为子 Agent 嵌套事件
 }

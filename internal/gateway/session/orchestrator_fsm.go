@@ -72,6 +72,15 @@ func (o *orchestrator) handleFSMEvent(
 	reply *[]byte,
 	inferErr *string,
 ) (stop bool) {
+	// GD-13-001：处理子 Agent 嵌套事件，添加角色前缀
+	prefix := ""
+	if ev.IsNested && ev.ChildAgentRole != "" {
+		prefix = fmt.Sprintf("[%s] ", ev.ChildAgentRole)
+		if ev.Content != "" && ev.Type != types.AgentStreamEventToken {
+			ev.Content = prefix + ev.Content
+		}
+	}
+
 	switch ev.Type {
 	case types.AgentStreamEventThinking:
 		_ = sink.Emit(Event{Kind: KindReasoning, Text: ev.Content})
@@ -83,7 +92,7 @@ func (o *orchestrator) handleFSMEvent(
 		_ = sink.Emit(Event{Kind: KindDelta, Text: cleaned})
 		*reply = append(*reply, cleaned...)
 	case types.AgentStreamEventToolCall:
-		msg := fmt.Sprintf("Executing tool %s...", ev.ToolName)
+		msg := fmt.Sprintf("%sExecuting tool %s...", prefix, ev.ToolName)
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "tool_call", "message": msg}})
 	case types.AgentStreamEventToolResult:
 		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "tool_result", "message": ev.Content}})

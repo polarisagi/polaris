@@ -52,12 +52,13 @@ const (
 // SQLiteBlackboard 实现 protocol.Blackboard，以 SQLite 为持久化后端。
 // 与现有内存 Blackboard 结构共存，此实现为持久化版本。
 type SQLiteBlackboard struct {
-	db          protocol.BlackboardDB
-	registry    *AgentRegistry
-	mu          sync.Mutex
-	subscribers []chan types.BlackboardEvent
-	subMu       sync.RWMutex
-	cancels     map[string]context.CancelFunc // 记录每个执行中任务的取消函数
+	db            protocol.BlackboardDB
+	registry      *AgentRegistry
+	mu            sync.Mutex
+	subscribers   []chan types.BlackboardEvent
+	subMu         sync.RWMutex
+	cancels       map[string]context.CancelFunc            // 记录每个执行中任务的取消函数
+	taskEventSubs map[string][]chan types.AgentStreamEvent // 任务级事件订阅者（GD-13-001）
 }
 
 // DB exposes the underlying BlackboardDB.
@@ -389,4 +390,46 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 		Payload: errBytes,
 	})
 	return nil
+}
+
+// SubscribeTaskEvents 订阅指定任务（含子 Agent 委派任务）的实时事件流。
+// 返回一个只读 channel，当任务产生流式事件时推送。
+// 调用方必须在不再需要时调用返回的 cancel 函数取消订阅（GD-13-001）。
+func (bb *SQLiteBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
+	ch := make(chan types.AgentStreamEvent, 64)
+	bb.mu.Lock()
+	if bb.taskEventSubs == nil {
+		bb.taskEventSubs = make(map[string][]chan types.AgentStreamEvent)
+	}
+	bb.taskEventSubs[taskID] = append(bb.taskEventSubs[taskID], ch)
+	bb.mu.Unlock()
+
+	cancel := func() {
+		bb.mu.Lock()
+		defer bb.mu.Unlock()
+		subs := bb.taskEventSubs[taskID]
+		for i, s := range subs {
+			if s == ch {
+				bb.taskEventSubs[taskID] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}
+	return ch, cancel
+}
+
+// PublishTaskEvent 向指定任务的所有订阅者广播事件（GD-13-001）。
+func (bb *SQLiteBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {
+	bb.mu.Lock()
+	subs := bb.taskEventSubs[taskID]
+	bb.mu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- event:
+		default:
+			// 订阅者消费慢，丢弃事件而非阻塞子 Agent
+		}
+	}
 }

@@ -233,35 +233,49 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 			return
 		}
 
-		safety := time.NewTicker(handoffWatchSafetyInterval)
-		defer safety.Stop()
-		for {
-			select {
-			case <-watchCtx.Done():
+		// GD-13-001：订阅子 Agent 事件流，透传至父 Agent 的 Stream Channel
+		childEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(childTaskID)
+		defer cancelSub()
+
+		a.loopHandoffEvents(watchCtx, childTaskID, events, childEvents)
+	})
+}
+
+func (a *Agent) loopHandoffEvents(ctx context.Context, childTaskID string, events <-chan types.BlackboardEvent, childEvents <-chan types.AgentStreamEvent) {
+	safety := time.NewTicker(handoffWatchSafetyInterval)
+	defer safety.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case childEv, ok := <-childEvents:
+			if !ok {
+				continue
+			}
+			// 透传至父 Agent 的 Stream Channel，原样转发嵌套事件
+			a.publishStreamEvent(childEv)
+		case ev, ok := <-events:
+			if !ok {
+				// 订阅通道被实现方关闭（非 ctx 取消）：降级为轮询，不静默退出。
+				slog.WarnContext(ctx, "agent: handoff event stream closed unexpectedly, falling back to polling",
+					"task_id", childTaskID)
+				a.pollHandoffCompletion(ctx, childTaskID, handoffWatchPollInterval)
 				return
-			case ev, ok := <-events:
-				if !ok {
-					// 订阅通道被实现方关闭（非 ctx 取消）：降级为轮询，不静默退出。
-					slog.WarnContext(watchCtx, "agent: handoff event stream closed unexpectedly, falling back to polling",
-						"task_id", childTaskID)
-					a.pollHandoffCompletion(watchCtx, childTaskID, handoffWatchPollInterval)
-					return
-				}
-				if ev.TaskID != childTaskID {
-					continue
-				}
-				if ev.Type == "task_completed" || ev.Type == "task_failed" {
-					metrics.RecordAgentHandoffWake(watchCtx, "event")
-					a.asyncIntent(types.TriggerAgentHandoffDone)
-					return
-				}
-			case <-safety.C:
-				if a.peekAndWake(watchCtx, childTaskID) {
-					return
-				}
+			}
+			if ev.TaskID != childTaskID {
+				continue
+			}
+			if ev.Type == "task_completed" || ev.Type == "task_failed" {
+				metrics.RecordAgentHandoffWake(ctx, "event")
+				a.asyncIntent(types.TriggerAgentHandoffDone)
+				return
+			}
+		case <-safety.C:
+			if a.peekAndWake(ctx, childTaskID) {
+				return
 			}
 		}
-	})
+	}
 }
 
 // peekAndWake 查询子任务快照，已终态则记录 metrics.RecordAgentHandoffWake

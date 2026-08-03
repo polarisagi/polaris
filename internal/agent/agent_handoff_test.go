@@ -35,6 +35,10 @@ func (f *fakeHandoffPoster) PostTask(_ context.Context, task *types.TaskEntry) e
 	return nil
 }
 
+func (f *fakeHandoffPoster) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
+	return nil, func() {}
+}
+
 func (f *fakeHandoffPoster) PeekTask(_ context.Context, taskID string) (*types.TaskSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

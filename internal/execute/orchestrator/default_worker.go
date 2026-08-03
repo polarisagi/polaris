@@ -161,8 +161,17 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	// （agent_handoff:<role>，非 mcp: 前缀）与发起方共享记忆检索范围
 	// （此前恒为空串，AcquireHeadless 从未调用 SetMemoryNamespace，见
 	// 99-new-findings.md 阶段05 P-03 续 发现 / ADR-0084"已知限制"）。
+	// GD-13-001：注册事件回调，透传子 Agent 事件到 Blackboard
+	eventCb := types.WithEventCallback(func(ev types.AgentStreamEvent) {
+		// 附加嵌套标记及当前委派的角色
+		ev.IsNested = true
+		ev.ParentTaskID = taskID
+		ev.ChildAgentRole = strings.TrimPrefix(snap.Type, "agent_handoff:")
+		w.bb.PublishTaskEvent(taskID, ev)
+	})
+
 	res, err := w.pool.AcquireHeadless(bgCtx, types.Intent{Query: prompt},
-		types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace))
+		types.WithSpawnDepth(snap.SpawnDepth), types.WithNamespace(snap.Namespace), eventCb)
 	if err != nil {
 		slog.Warn("default task worker: headless execution failed", "task_id", taskID, "type", snap.Type, "err", err)
 		w.failTask(taskID, err.Error())
