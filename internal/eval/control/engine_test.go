@@ -154,7 +154,7 @@ func TestEngine_VerifyRequest_NoKeyRegistered(t *testing.T) {
 }
 
 func TestEngine_VerifyRequestDev_NoKey_SkipsSig(t *testing.T) {
-	e := NewEngine(nil) // 无注册密钥 → dev 模式跳过签名
+	e := NewEngine(nil, WithDevMode(true)) // 无注册密钥 → dev 模式跳过签名
 	ts := time.Now().Unix()
 	// 即使签名是空的，dev 模式下角色合法时应放行
 	if err := e.VerifyRequestDev(RoleM9Optimizer, PartitionTraining, nil, ts); err != nil {
@@ -163,7 +163,7 @@ func TestEngine_VerifyRequestDev_NoKey_SkipsSig(t *testing.T) {
 }
 
 func TestEngine_VerifyRequestDev_NoKey_StillEnforcesRole(t *testing.T) {
-	e := NewEngine(nil)
+	e := NewEngine(nil, WithDevMode(true))
 	ts := time.Now().Unix()
 	// dev 模式下，角色访问违规仍应拒绝
 	if err := e.VerifyRequestDev(RoleM9Optimizer, PartitionHoldout, nil, ts); err == nil {

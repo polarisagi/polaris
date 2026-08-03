@@ -49,7 +49,7 @@ func (f *fakeMetaAuditor) RunAndRecord(context.Context, []byte) (*analysis.MetaE
 // ── nil 依赖防御：与 mcpadmin/cronadmin 等既有子包一致，未接线时返回 503 而非 panic ──
 
 func TestHandleAddMetaHoldoutCase_NilStore_Returns503(t *testing.T) {
-	h := NewEvalAdmin(nil, nil, nil)
+	h := NewEvalAdmin(nil, nil, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodPost, "/v1/eval/meta-holdout/cases", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	h.HandleAddMetaHoldoutCase(w, req)
@@ -59,7 +59,7 @@ func TestHandleAddMetaHoldoutCase_NilStore_Returns503(t *testing.T) {
 }
 
 func TestHandleRunMetaAudit_NilSentinel_Returns503(t *testing.T) {
-	h := NewEvalAdmin(nil, nil, nil)
+	h := NewEvalAdmin(nil, nil, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodPost, "/v1/eval/meta-audit", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	h.HandleRunMetaAudit(w, req)
@@ -69,7 +69,7 @@ func TestHandleRunMetaAudit_NilSentinel_Returns503(t *testing.T) {
 }
 
 func TestHandleGetMetaAuditStatus_NilStore_Returns503(t *testing.T) {
-	h := NewEvalAdmin(nil, nil, nil)
+	h := NewEvalAdmin(nil, nil, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodGet, "/v1/eval/meta-audit", nil)
 	w := httptest.NewRecorder()
 	h.HandleGetMetaAuditStatus(w, req)
@@ -82,7 +82,7 @@ func TestHandleGetMetaAuditStatus_NilStore_Returns503(t *testing.T) {
 
 func TestHandleAddMetaHoldoutCase_ForwardsToStore(t *testing.T) {
 	store := &fakeEvalStore{}
-	h := NewEvalAdmin(store, nil, nil)
+	h := NewEvalAdmin(store, nil, nil, http.DefaultClient)
 	body := `{"case":{"id":"case-1","falsifiability_score":0.8},"signature":""}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/eval/meta-holdout/cases", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -97,7 +97,7 @@ func TestHandleAddMetaHoldoutCase_ForwardsToStore(t *testing.T) {
 
 func TestHandleAddMetaHoldoutCase_StoreErrorMapsTo403(t *testing.T) {
 	store := &fakeEvalStore{putErr: errForbidden("bad signature")}
-	h := NewEvalAdmin(store, nil, nil)
+	h := NewEvalAdmin(store, nil, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodPost, "/v1/eval/meta-holdout/cases", strings.NewReader(`{"case":{"id":"x"}}`))
 	w := httptest.NewRecorder()
 	h.HandleAddMetaHoldoutCase(w, req)
@@ -108,7 +108,7 @@ func TestHandleAddMetaHoldoutCase_StoreErrorMapsTo403(t *testing.T) {
 
 func TestHandleAddMetaHoldoutCase_InvalidSignatureEncoding_Returns400(t *testing.T) {
 	store := &fakeEvalStore{}
-	h := NewEvalAdmin(store, nil, nil)
+	h := NewEvalAdmin(store, nil, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodPost, "/v1/eval/meta-holdout/cases", strings.NewReader(`{"case":{"id":"x"},"signature":"not-valid-base64!!"}`))
 	w := httptest.NewRecorder()
 	h.HandleAddMetaHoldoutCase(w, req)
@@ -119,7 +119,7 @@ func TestHandleAddMetaHoldoutCase_InvalidSignatureEncoding_Returns400(t *testing
 
 func TestHandleRunMetaAudit_ForwardsResultAsJSON(t *testing.T) {
 	sentinel := &fakeMetaAuditor{result: &analysis.MetaEvalResult{Passed: true, TotalCases: 5}}
-	h := NewEvalAdmin(nil, sentinel, nil)
+	h := NewEvalAdmin(nil, sentinel, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodPost, "/v1/eval/meta-audit", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	h.HandleRunMetaAudit(w, req)
@@ -137,7 +137,7 @@ func TestHandleRunMetaAudit_ForwardsResultAsJSON(t *testing.T) {
 
 func TestHandleGetMetaAuditStatus_ReturnsRecordedFalseWhenNeverAudited(t *testing.T) {
 	store := &fakeEvalStore{latestOK: false}
-	h := NewEvalAdmin(store, nil, nil)
+	h := NewEvalAdmin(store, nil, nil, http.DefaultClient)
 	req := httptest.NewRequest(http.MethodGet, "/v1/eval/meta-audit", nil)
 	w := httptest.NewRecorder()
 	h.HandleGetMetaAuditStatus(w, req)

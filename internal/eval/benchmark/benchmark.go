@@ -22,13 +22,17 @@ const HumanEvalDatasetURL = "https://raw.githubusercontent.com/openai/human-eval
 
 // FetchDataset 下载并解析基准测试数据集为 EvalCase 列表。
 // 数据集必须为 JSONL 格式（每行一条 JSON 记录）。
-func FetchDataset(ctx context.Context, name string, url string) ([]harness.EvalCase, error) {
+// httpClient 必须由调用方传入（推荐使用 SafeDialer 派生的 Client）；传 nil 将 panic。
+func FetchDataset(ctx context.Context, httpClient *http.Client, name string, url string) ([]harness.EvalCase, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "benchmark: build request", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req) //nolint:noctx
+	if httpClient == nil {
+		panic("benchmark.FetchDataset: httpClient must not be nil (XR-06)")
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "benchmark: fetch dataset", err)
 	}
