@@ -67,20 +67,19 @@ func (s *stubBlackboard) SideEffectPreCheck(_ context.Context, _, _ string, _ in
 	return nil
 }
 
-func (s *stubBlackboard) CountByStatus(statuses ...types.TaskStatus) int {
-	return 0
+func (s *stubBlackboard) UpdateTaskTokens(_ context.Context, _ string, _, _, _ int, _ float64) error {
+	return nil
 }
-
-func (s *stubBlackboard) MaxActivePriority() int {
-	return 3
+func (s *stubBlackboard) CountByStatus(statuses ...types.TaskStatus) int { return 0 }
+func (s *stubBlackboard) MaxActivePriority() int                         { return 0 }
+func (s *stubBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
+	return nil, func() {}
 }
+func (s *stubBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
 
 func (s *stubBlackboard) Subscribe(_ context.Context) (<-chan types.BlackboardEvent, error) {
 	ch := make(chan types.BlackboardEvent)
 	return ch, nil
-}
-func (s *stubBlackboard) UpdateTaskTokens(ctx context.Context, taskID string, promptTokens, completionTokens, cacheRead int, cost float64) error {
-	return nil
 }
 
 // ─── tests ───────────────────────────────────────────────────────────────────

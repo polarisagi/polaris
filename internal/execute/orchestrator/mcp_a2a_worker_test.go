@@ -80,7 +80,11 @@ func (b *fakeA2ABlackboard) SideEffectPreCheck(_ context.Context, _, _ string, _
 	return nil
 }
 func (b *fakeA2ABlackboard) CountByStatus(statuses ...types.TaskStatus) int { return 0 }
-func (b *fakeA2ABlackboard) MaxActivePriority() int                         { return 3 }
+func (b *fakeA2ABlackboard) MaxActivePriority() int                         { return 0 }
+func (b *fakeA2ABlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
+	return nil, func() {}
+}
+func (b *fakeA2ABlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
 func (b *fakeA2ABlackboard) PeekTask(ctx context.Context, taskID string) (*types.TaskSnapshot, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

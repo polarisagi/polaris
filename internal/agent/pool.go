@@ -263,6 +263,10 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	start := time.Now()
 	var finalOutput string
 	for ev := range stream {
+		// GD-13-001：若注入了事件回调（子 Agent 事件透传），先转发给回调方。
+		if opt.EventCallback != nil {
+			opt.EventCallback(ev)
+		}
 		if ev.Type == types.AgentStreamEventError {
 			if p.killGate != nil {
 				p.killGate.ReportError()

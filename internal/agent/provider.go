@@ -91,6 +91,8 @@ type HandoffPoster interface {
 	// Subscribe 订阅 Blackboard 事件流。ctx 取消时实现方负责注销订阅并关闭通道。
 	// 用于 handoff 唤醒：替代轮询，消除高并发委派下的 SQLite 读压（GD-13-007）。
 	Subscribe(ctx context.Context) (<-chan types.BlackboardEvent, error)
+	// SubscribeTaskEvents 订阅子 Agent 实时事件流（GD-13-001）。
+	SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func())
 }
 
 // LAMPolicyChecker Agent 对 LAM GUI 自动化策略预检的消费端接口。

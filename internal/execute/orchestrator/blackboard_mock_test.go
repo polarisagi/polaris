@@ -98,3 +98,8 @@ func (b *mockBlackboard) Subscribe(ctx context.Context) (<-chan types.Blackboard
 func (b *mockBlackboard) UpdateTaskTokens(_ context.Context, _ string, _, _, _ int, _ float64) error {
 	return nil
 }
+
+func (b *mockBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
+	return nil, func() {}
+}
+func (b *mockBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {}
