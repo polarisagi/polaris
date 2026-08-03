@@ -99,8 +99,14 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 			if report.P0Fail > 0 {
 				slog.Warn("hitl_gateway: P0 regression failed, auto-denying patch", "checkpoint", p.ID)
 				resp := types.HITLResponse{Approved: false, Reason: "auto_denied_p0_regression_failed"}
-				if err := g.Respond(context.Background(), p.ID, resp); err != nil {
-					slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
+				// 直接返回拒绝结果，不经过 Respond——此时 pending 尚未写入 store、
+				// waiter 尚未注册，调用 Respond 会因 "no active waiter" 而报错（GR-10-001 修复）。
+				// 归档记录仍需落盘以保留审计轨迹。
+				archiveKey := []byte(fmt.Sprintf("hitl:archive:%s:%d", p.ID, time.Now().UnixNano()))
+				if archiveData, mErr := json.Marshal(resp); mErr == nil {
+					if aErr := g.store.Put(ctx, archiveKey, archiveData); aErr != nil {
+						slog.Warn("hitl_gateway: auto-deny archive failed", "checkpoint", p.ID, "err", aErr)
+					}
 				}
 				return &resp, nil
 			}
