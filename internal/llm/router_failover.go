@@ -65,7 +65,8 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 		ir.registry.mu.RUnlock()
 
 		if chosen == nil {
-			return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers exhausted", protocol.ErrAllProvidersFailed)
+			// 当前 Pool 所有 Provider 耗尽，尝试跨 Pool 降级（GD-13-005）
+			return ir.tryPoolFallback(ctx, msgs, opts, req)
 		}
 		start := time.Now()
 		resp, err := chosen.provider.Infer(ctx, msgs, opts...)
@@ -102,6 +103,64 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 	}
 }
 
+// tryPoolFallback 当目标 Pool 所有 Provider 耗尽时，按 poolFallbackChain 尝试降级（GD-13-005）。
+// 降级成功时在 resp.DegradedFromPool 中记录原始 Pool 名，供上层感知并通知用户。
+func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Message, opts []types.InferOption, req *types.InferRequest) (*types.ProviderResponse, error) {
+	originalPool := req.ModelPool
+	if originalPool == "" {
+		// 未指定 Pool 时全局耗尽，直接返回错误
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers exhausted", protocol.ErrAllProvidersFailed)
+	}
+	fallbacks, ok := ir.poolFallbackChain[originalPool]
+	if !ok || len(fallbacks) == 0 {
+		return nil, apperr.Wrap(apperr.CodeResourceExhausted,
+			"inference_router: all providers exhausted for pool "+originalPool,
+			protocol.ErrAllProvidersFailed)
+	}
+	for _, fallbackPool := range fallbacks {
+		slog.Warn("llm_router: target pool exhausted, attempting cross-pool fallback",
+			"original_pool", originalPool, "fallback_pool", fallbackPool)
+		// 克隆请求并切换目标 Pool，不修改其他任何推理参数
+		degradedReq := *req
+		degradedReq.ModelPool = fallbackPool
+
+		ir.registry.mu.RLock()
+		entry := ir.findBestProviderLockedMultiSkip(&degradedReq, nil)
+		ir.registry.mu.RUnlock()
+		if entry == nil {
+			slog.Warn("llm_router: no available provider in fallback pool, trying next",
+				"fallback_pool", fallbackPool)
+			continue
+		}
+		start := time.Now()
+		resp, err := entry.provider.Infer(ctx, msgs, opts...)
+		entry.recordOutcome(err == nil, func() {
+			ir.registry.mu.RLock()
+			fn := ir.registry.onRecovery
+			name := entry.name
+			ir.registry.mu.RUnlock()
+			if fn != nil {
+				fn(name)
+			}
+		})
+		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+		if err == nil && resp != nil {
+			ir.recordFailoverMetrics(ctx, entry, resp, start)
+			// 标记发生了 Pool 降级，让上层感知（如 SessionOrchestrator 发送系统通知）
+			resp.DegradedFromPool = originalPool
+			slog.Info("llm_router: cross-pool degraded inference succeeded",
+				"original_pool", originalPool, "actual_pool", fallbackPool)
+			return resp, nil
+		}
+		slog.Warn("llm_router: fallback pool also failed, trying next",
+			"fallback_pool", fallbackPool, "err", err)
+	}
+	// 所有 Pool（含降级）均耗尽
+	return nil, apperr.Wrap(apperr.CodeResourceExhausted,
+		"inference_router: all providers exhausted including fallback pools for "+originalPool,
+		protocol.ErrAllProvidersFailed)
+}
+
 func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferRequest, skipped map[string]struct{}) *providerEntry {
 	bestScore := -1.0
 	var chosen *providerEntry
@@ -112,6 +171,11 @@ func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferReque
 		if req != nil {
 			caps := e.provider.Capabilities()
 			if (req.HasImageParts() && !caps.SupportsVision) || (req.HasVideoParts() && !caps.SupportsVideo) {
+				continue
+			}
+			// ModelPool 非空时严格按 role 过滤：只考虑 role 与 ModelPool 完全匹配的 Provider。
+			// "general" 不会自动透传到其他 Pool 的搜索结果；跨 Pool 降级由 tryPoolFallback 显式处理（GD-13-005）。
+			if req.ModelPool != "" && e.role != req.ModelPool {
 				continue
 			}
 		}

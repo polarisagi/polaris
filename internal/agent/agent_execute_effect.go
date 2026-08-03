@@ -434,6 +434,19 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 					a.sCtx.LastReasoningContent = resp.ReasoningContent
 				}
 
+				// Pool 降级通知（GD-13-005）：当 InferenceRouter 因目标 Pool 耗尽而
+				// 跨 Pool 降级成功时，resp.DegradedFromPool 会携带原始 Pool 名。
+				// 在此通知用户，避免用户误以为系统使用了其指定的高阶推理模型。
+				if resp.DegradedFromPool != "" {
+					a.publishStreamEvent(types.AgentStreamEvent{
+						Type:    types.AgentStreamEventStatus,
+						Content: "高阶推理模型暂不可用（" + resp.DegradedFromPool + " 池已耗尽），已自动切换至备用模型为您解答。",
+					})
+					slog.Info("agent: cross-pool inference degradation notified",
+						"original_pool", resp.DegradedFromPool,
+						"session_id", a.sCtx.SessionID)
+				}
+
 				// 回放模式下该记录本就来自既有 EventLog，重写只会造成重复条目，
 				// 与其余 3 处 IsReplaying 物理短路点（2PC/memory-write/outbox）同一语义。
 				if !protocol.IsReplaying() {
