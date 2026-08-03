@@ -132,11 +132,14 @@ func (a *Agent) handleMemoryPersistenceFailure(ctx context.Context, err error, e
 			"event_type": string(ev.Type),
 			"task_id":    ev.TaskID,
 		})
-		_, _ = sqlRepo.ExecContext(ctx, `
+		if _, execErr := sqlRepo.ExecContext(ctx, `
 			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
 		`, time.Now().UnixMilli(), "m9_storage_degraded", "upsert", "memory_persistence_failure",
-			payloadBytes, uuid.New().String(), "pending")
+			payloadBytes, uuid.New().String(), "pending"); execErr != nil {
+			slog.Error("agent: memory persistence failure outbox write failed",
+				"agent_id", a.ID, "err", execErr)
+		}
 	}
 
 	a.asyncIntent(types.TriggerInterruptReceived)

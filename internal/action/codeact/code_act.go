@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -354,7 +355,10 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 			"exit_code":     exitCode,
 			"latency_ms":    res.LatencyMs,
 		})
-		_ = ca.toolExec.RecordAudit(ctx, "code_act", auditPayload)
+		if auditErr := ca.toolExec.RecordAudit(ctx, "code_act", auditPayload); auditErr != nil {
+			slog.Error("codeact: audit record failed, compliance trail broken",
+				"err", auditErr)
+		}
 	}
 
 	return &protocol.CodeActResult{

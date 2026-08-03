@@ -60,14 +60,20 @@ func (a *Agent) handleCapabilityGap(ctx context.Context, err error) error {
 	// 通过 outbox 异步投递 m9_capability_gap 事件，触发 GapFillWorker 进行能力补全
 	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
 		payloadBytes, _ := json.Marshal(map[string]string{"error": err.Error()})
-		_, _ = sqlRepo.ExecContext(ctx, `
+		if _, execErr := sqlRepo.ExecContext(ctx, `
 			INSERT INTO background_tasks (id, agent_id, status, type, args_json, created_at)
 			VALUES (?, ?, 'pending', 'prompt_optimization', ?, ?)
-		`, "opt_"+a.ID+"_"+time.Now().Format("150405"), a.ID, `{"target_metric": "quality"}`, time.Now().Unix())
-		_, _ = sqlRepo.ExecContext(ctx, `
+		`, "opt_"+a.ID+"_"+time.Now().Format("150405"), a.ID, `{"target_metric": "quality"}`, time.Now().Unix()); execErr != nil {
+			slog.Error("agent: db exec failed in post-execute side-effect",
+				"agent_id", a.ID, "err", execErr)
+		}
+		if _, execErr := sqlRepo.ExecContext(ctx, `
 			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, time.Now().UnixMilli(), "m9_capability_gap", "upsert", "capability_gap", payloadBytes, uuid.New().String(), "pending")
+		`, time.Now().UnixMilli(), "m9_capability_gap", "upsert", "capability_gap", payloadBytes, uuid.New().String(), "pending"); execErr != nil {
+			slog.Error("agent: db exec failed in post-execute side-effect",
+				"agent_id", a.ID, "err", execErr)
+		}
 	}
 
 	a.asyncIntent(types.TriggerInterruptReceived)
