@@ -32,8 +32,11 @@ func Detach(ctx context.Context) context.Context {
 	return detachedContext{parent: ctx}
 }
 
-// CtxCapabilityToken 用于在 context 中传递 capability token
-type CtxCapabilityToken struct{}
+// CtxCapabilityToken 已删除（2026-08-06，ADR-0088 决策二）：
+// 该键自定义以来从未被任何代码写入过，唯一读取点是 agent_execute_dag.go 里
+// 一段结构上不可达的 MaxCallsPerTask 配额校验。留着一个"看起来是能力令牌
+// 传递通道、实际没有任何东西经过"的键，只会让人误判系统里已有该防护。
+// 令牌使用次数的真实兑现点是 security/token.TokenManager.Consume。
 
 // CtxDryRun 用于在 context 中指示当前是否为 dry run 模式
 type CtxDryRun struct{}

@@ -299,50 +299,11 @@ func (g *GatewayImpl) SetPolicyEtag(etag string) {
 }
 
 // Respond 提交人工审批决策。
-//
-//nolint:nestif // 原因：审批时需要解包历史状态并校验强制冷却时间，嵌套较深但逻辑单一，无需强行拆分。
 func (g *GatewayImpl) Respond(ctx context.Context, checkpointID string, response types.HITLResponse) error {
-	// Task 21: Check mandatory cooldown
 	key := []byte("hitl:pending:" + checkpointID)
 	if response.Approved {
-		data, err := g.store.Get(ctx, key)
-		if err == nil {
-			var p types.HITLPrompt
-			if json.Unmarshal(data, &p) == nil {
-				if p.EligibleApproveTime > 0 {
-					if time.Now().Unix() < p.EligibleApproveTime {
-						return apperr.New(apperr.CodeForbidden, "hitl_gateway: mandatory cooldown active, please carefully read the shadow regression report before approving")
-					}
-				}
-
-				// Task 8（2026-07-14 补齐）: Mint TaintExemptionToken on human approval。
-				// 此前只有日志 + TODO 注释，令牌从未真正铸造——即便 tool 层的出口污点
-				// 检查触发了 HITL 审批且人工批准，下一次重试仍会撞上同一个拦截，
-				// M04 §3 转义路径整体形同虚设。
-				//
-				// fail-closed 而非 best-effort：ExemptionFieldContent 为空（可能是
-				// 发起侧未能从错误链取出被拦截数据，或该 checkpoint 根本不是出口污点
-				// 转义场景）或未注入 exemptionVault 时，明确跳过铸造并记录原因，
-				// 不铸造一个内容为空、Valid() 对任意 data 都可能误判通过的令牌。
-				switch {
-				case p.TaintLevel <= 0:
-					// 非出口污点转义场景（其余 HITL checkpoint 类型），无需铸造。
-				case len(p.ExemptionFieldContent) == 0:
-					slog.Warn("hitl_gateway: approved high-taint checkpoint has empty ExemptionFieldContent, skipping token mint (fail-closed)",
-						"checkpoint", checkpointID, "checkpoint_type", p.CheckpointType)
-				case g.exemptionVault == nil:
-					slog.Warn("hitl_gateway: exemptionVault not configured, TaintExemptionToken minted but not stored, next retry will not find it",
-						"checkpoint", checkpointID)
-				case p.AgentID == "":
-					slog.Warn("hitl_gateway: approved high-taint checkpoint has empty AgentID, cannot key exemption vault, skipping mint (fail-closed)",
-						"checkpoint", checkpointID)
-				default:
-					tok := token.NewTaintExemptionToken(p.ExemptionFieldContent, taintExemptionTokenTTL, response.UserID)
-					g.exemptionVault.Store(p.AgentID, tok)
-					slog.Info("hitl_gateway: minted and stored TaintExemptionToken for approved high-taint operation",
-						"checkpoint", checkpointID, "agent_id", p.AgentID, "summary", tok.Summary())
-				}
-			}
+		if err := g.applyApprovalGuards(ctx, key, checkpointID, response); err != nil {
+			return err
 		}
 	}
 

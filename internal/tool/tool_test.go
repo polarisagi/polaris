@@ -5,15 +5,11 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/sandbox"
-	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
-	"github.com/polarisagi/polaris/internal/action"
-	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -53,13 +49,16 @@ func minTool(name string) types.Tool {
 	}
 }
 
-func mockTokenForTest() *token.Token {
-	tok, _ := action.GetTokenManager().Mint("test-agent", []token.CapabilityType{token.CapProcess}, 1, 5*time.Minute, 0)
-	return tok
-}
-
+// ctxWithToken 保留原名以免改动数十个调用点，但已不再注入能力令牌。
+//
+// 它原先向 ctx 写入 protocol.CtxCapabilityToken，而**生产代码从未写入过该键**，
+// 读取它的唯一位置是 agent_execute_dag.go 里一段不可达的配额校验。也就是说
+// 这些测试一直在搭建一个生产中并不存在的前置条件——测试通过并不能证明
+// 令牌配额在生产上生效。ADR-0088 决策二删除该键后，此处一并退化为普通
+// context；令牌使用次数的真实校验点是 token.TokenManager.Consume，
+// 由 internal/action/codeact 侧的测试覆盖。
 func ctxWithToken() context.Context {
-	return context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, mockTokenForTest())
+	return context.Background()
 }
 
 func newAllowRegistry() (*InMemoryToolRegistry, *sandbox.InProcessSandbox) {

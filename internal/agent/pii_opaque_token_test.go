@@ -4,16 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 
-	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/guard"
-	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/tool"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -29,9 +26,12 @@ func (m *mockPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) 
 	return types.PolicyReviewResult{Allowed: m.allow}, nil
 }
 
+// ctxWithCapabilityToken 保留原名以免改动调用点，但已不再注入能力令牌：
+// protocol.CtxCapabilityToken 随 ADR-0088 决策二删除（生产从未写入该键，
+// 唯一读取点是不可达的配额校验）。本测试关心的是 PII OpaqueToken 的
+// tokenize/restore 往返，与能力令牌无关。
 func ctxWithCapabilityToken(base context.Context) context.Context {
-	tok, _ := action.GetTokenManager().Mint("test-agent", []token.CapabilityType{token.CapProcess}, 1, 5*time.Minute, 0)
-	return context.WithValue(base, protocol.CtxCapabilityToken{}, tok)
+	return base
 }
 
 func TestTokenizeMessagesForLLM(t *testing.T) {

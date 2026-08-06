@@ -1,15 +1,12 @@
 package agent
 
 import (
-	"github.com/polarisagi/polaris/internal/security/token"
-
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -169,19 +166,15 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	a.sagaRecorder = protocol.NewSagaCompensationRecorder()
 	ctx = context.WithValue(ctx, protocol.CtxSagaRecorderKey{}, a.sagaRecorder)
 
-	var callCount atomic.Int32
-
 	// 将 AgentToolExecutor.ExecuteWithTaint 绑定为 a.dagRunner 的工具执行函数
+	//
+	// 此处曾有一段读 protocol.CtxCapabilityToken 并比对 Claims.MaxCallsPerTask
+	// 的配额校验（配 callCount 计数器）。该 ctx 键**全仓从未被任何代码写入过**，
+	// 分支结构上不可达——它营造了"这里在做配额校验"的假象，实际一次都没执行过。
+	// 令牌使用次数的真实兑现点是 security/token.TokenManager.Consume，
+	// 由 CodeAct.validatePolicyAndEnv 在放行副作用前调用（ADR-0088 决策二）。
+	// 按 ADR-0062 deadcode 纪律删除，避免后续维护者误以为此处已有防护。
 	toolExecFnInner := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-		tokenVal := ctx.Value(protocol.CtxCapabilityToken{})
-		if token, ok := tokenVal.(*token.Token); ok && token != nil {
-			max := int32(token.Claims.MaxCallsPerTask)
-			if max > 0 && callCount.Load() >= max {
-				return nil, apperr.New(apperr.CodeForbidden, "capability token: max_calls_per_task exceeded")
-			}
-			callCount.Add(1)
-		}
-
 		if toolName == "spawn_planner" {
 			// spawn_planner 特殊处理：不走普通工具执行路径，而是：
 			// 1. 发送 InterruptRequest{Action: InterruptResume}（挂起自身，等待 whisperChan）
