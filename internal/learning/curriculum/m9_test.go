@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 
 	_ "modernc.org/sqlite"
 )

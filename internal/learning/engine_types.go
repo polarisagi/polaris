@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -110,18 +109,6 @@ func (r *TaskResult) IsUncontrollable() bool {
 	return !r.Success && r.FailureClass == FailureUncontrollable
 }
 
-// =============================================================================
-// PromptOptimizerAdapter — M9 内环通过此接口更新 optimizer.PromptOptimizer 状态。
-// 由 internal/prompt/optimizer.PromptOptimizer 实现；internal/learning 包不直接引用 internal/prompt 包
-// （防止循环依赖：internal/prompt/optimizer → internal/learning，internal/learning 不可反向引用）。
-// =============================================================================
-
-// PromptOptimizerAdapter M9 内环与外部 optimizer.PromptOptimizer 的解耦接口。
-type PromptOptimizerAdapter interface {
-	// AddAvoidRule 将 Reflexion 生成的规避规则写入 optimizer.ErrorPatternMemory。
-	AddAvoidRule(taskType, rule string)
-}
-
 // VersionStoreAdapter M9 外环与外部 optimizer.PromptVersionStore 的解耦接口。
 type VersionStoreAdapter interface {
 	// UpdateScore 更新候选版本的 Eval 评分。
@@ -131,23 +118,8 @@ type VersionStoreAdapter interface {
 }
 
 // HeuristicsWriter M9 内环写入成功轨迹的接口（P1-4）。
-// 由 internal/prompt/optimizer.HeuristicsMemory 实现；internal/learning 包通过此接口解耦，
-// 避免 internal/prompt/optimizer → internal/learning → internal/prompt/optimizer 循环引用。
 type HeuristicsWriter interface {
-	// RecordSuccess 将成功任务的 taskType 写入 optimizer.HeuristicsMemory，更新 success_rate。
-	// heuristicID 为空时由实现方自行生成（以 taskID 作为种子）。
 	RecordSuccess(taskID, taskType string)
-}
-
-// StagingPipelineAdapter L3/L4 审批通过、以及 Eval(Gate1) 通过后提交候选版本的解耦接口。
-// 由 optimizer.SQLiteRolloutStore 实现；self_improve 包通过接口解耦，防循环引用。
-// 注：optimizer.AgentVersionSnapshot 定义在 rollout.go，此接口签名与 optimizer.StagingPipeline 对齐。
-type StagingPipelineAdapter interface {
-	SubmitCandidate(ctx context.Context, snap *optimizer.AgentVersionSnapshot) error
-	// RecordEvalScore 记录 Gate 1(Eval) 评分，候选进入 Gate 2(Shadow) 等待 ShadowExecutor 确认。
-	// 真正的 Prompt 激活推迟到 ConfirmShadow 通过之后（见 optimizer.SQLiteRolloutStore.ConfirmShadow），
-	// 不在此处/handleEvalCompleted 内直接调用 versionStore.Activate（ADR-0025 §K）。
-	RecordEvalScore(ctx context.Context, version string, passRate float64, baselinePassRate float64) error
 }
 
 // =============================================================================

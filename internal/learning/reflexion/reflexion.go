@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
 	"github.com/polarisagi/polaris/internal/observability/trace"
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"

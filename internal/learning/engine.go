@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -34,9 +35,9 @@ type Engine struct {
 	evalEvents <-chan types.EvalCompletedPayload
 
 	// 新增：外部适配器（接口解耦，防 swarm→self_improve 循环引用）
-	optimizer        PromptOptimizerAdapter // 可 nil，nil 时跳过 AvoidRule 注入
-	versionStore     VersionStoreAdapter    // 可 nil，nil 时跳过评分更新
-	heuristicsWriter HeuristicsWriter       // 可 nil，nil 时跳过成功轨迹写入（P1-4）
+	optimizer        *optimizer.PromptOptimizer // 可 nil，nil 时跳过 AvoidRule 注入
+	versionStore     VersionStoreAdapter        // 可 nil，nil 时跳过评分更新
+	heuristicsWriter HeuristicsWriter           // 可 nil，nil 时跳过成功轨迹写入（P1-4）
 
 	// 反思并发信号量（控制 goroutine 数量）
 	sem chan struct{}
@@ -46,7 +47,7 @@ type Engine struct {
 
 	// L3/L4 进化网关依赖（可为 nil）
 	hitlGateway     protocol.HITL
-	stagingPipeline StagingPipelineAdapter
+	stagingPipeline optimizer.StagingPipeline
 	l4TriggerCh     <-chan Change // admin 主动触发 L4，非自动检测
 	evolutionGate   EvolutionGate // M12: EvolutionGate instance
 	gate            backgroundGate
@@ -80,19 +81,15 @@ func (e *Engine) SetDB(db *sql.DB) { e.db = db }
 // SetHITLGateway 注入 HITL 网关（L3/L4 审批路径；nil 时跳过通知）。
 func (e *Engine) SetHITLGateway(h protocol.HITL) { e.hitlGateway = h }
 
-// SetStagingPipeline 注入 Staging 流水线（审批通过后提交候选版本）。
-func (e *Engine) SetStagingPipeline(s StagingPipelineAdapter) { e.stagingPipeline = s }
+func (e *Engine) SetStagingPipeline(s optimizer.StagingPipeline) { e.stagingPipeline = s }
 
 // SetL4TriggerChannel 注入 L4 管理员信号通道（admin 主动触发，非自动）。
 func (e *Engine) SetL4TriggerChannel(ch <-chan Change) { e.l4TriggerCh = ch }
 
-// SetOptimizer 注入 PromptOptimizerAdapter（可选；nil 时内环跳过 AvoidRule 注入）。
-func (e *Engine) SetOptimizer(opt PromptOptimizerAdapter) { e.optimizer = opt }
+func (e *Engine) SetOptimizer(opt *optimizer.PromptOptimizer) { e.optimizer = opt }
 
-// SetVersionStore 注入 VersionStoreAdapter（可选；nil 时外环跳过评分更新）。
 func (e *Engine) SetVersionStore(vs VersionStoreAdapter) { e.versionStore = vs }
 
-// SetHeuristicsWriter 注入 HeuristicsWriter（可选；nil 时内环跳过成功轨迹写入，P1-4）。
 func (e *Engine) SetHeuristicsWriter(hw HeuristicsWriter) { e.heuristicsWriter = hw }
 
 func (e *Engine) SetIncidentConverter(fn func(ctx context.Context, payload []byte) (string, error)) {

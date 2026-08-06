@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strings"
 	"sync"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -140,21 +139,6 @@ func (m *FallacyMemoryPool) DeleteRecord(ctx context.Context, recordID string) e
 
 // HeuristicsMemory（成功启发式库）与 BlindZoneDetector（认知盲区探测器）
 // 见 memf_heuristics.go（R7 拆分）。
-
-// ExtractTaskType 从任务目标字符串提取规范化任务类型键。
-// 取前 3 个非空词的小写形式作为分组 key。
-// 示例: "Write a Python function to sort..." → "write_a_python"
-// MVP 降级方案：若 StateContext 未来新增 TaskType 字段，直接使用该字段替代。
-func ExtractTaskType(goal string) string {
-	words := strings.Fields(strings.ToLower(goal))
-	if len(words) == 0 {
-		return "unknown"
-	}
-	if len(words) > 3 {
-		words = words[:3]
-	}
-	return strings.Join(words, "_")
-}
 
 // GetMaxQualityScore 查询指定任务类型中最高的 node_quality_score。
 // 供外部包（如 pkg/swarm）的 SurpriseCalculator 计算 MEMF 惊异贡献时调用。

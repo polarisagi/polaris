@@ -15,8 +15,9 @@ import (
 // db 须已完成 WAL 初始化（由 StorageFabric 传入）；*sql.DB 自动满足 protocol.BlackboardDB。
 func NewSQLiteBlackboard(db protocol.BlackboardDB) *SQLiteBlackboard {
 	return &SQLiteBlackboard{
-		db:      db,
-		cancels: make(map[string]context.CancelFunc),
+		db:               db,
+		cancels:          make(map[string]context.CancelFunc),
+		taskRetentionTTL: 24 * time.Hour,
 	}
 }
 

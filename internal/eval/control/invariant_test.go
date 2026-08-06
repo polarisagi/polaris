@@ -2,6 +2,7 @@ package control_test
 
 import (
 	"github.com/polarisagi/polaris/internal/eval/analysis"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"github.com/polarisagi/polaris/internal/observability/trace"
@@ -11,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/eval"
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -174,8 +175,8 @@ func TestInvariant_V8_BlindZoneDetectorContract(t *testing.T) {
 
 	t.Run("extract_task_type_deterministic", func(t *testing.T) {
 		goal := "Write a Python function to sort"
-		key1 := optimizer.ExtractTaskType(goal)
-		key2 := optimizer.ExtractTaskType(goal)
+		key1 := prompt.ExtractTaskType(goal)
+		key2 := prompt.ExtractTaskType(goal)
 		if key1 != key2 {
 			t.Errorf("[V8-S4] ExtractTaskType 非确定性: %q != %q", key1, key2)
 		}

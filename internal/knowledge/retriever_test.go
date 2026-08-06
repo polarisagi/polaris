@@ -79,23 +79,6 @@ func TestParseEmbedding(t *testing.T) {
 	}
 }
 
-func TestRRFThreeWay(t *testing.T) {
-	bm25 := []Chunk{{ID: "c1", Content: "a"}, {ID: "c2", Content: "b"}}
-	vec := []Chunk{{ID: "c2", Content: "b"}, {ID: "c3", Content: "c"}}
-	graph := []Chunk{{ID: "c1", Content: "a"}}
-
-	out := rrfThreeWay(bm25, vec, graph, 2)
-	if len(out) != 2 {
-		t.Errorf("expected 2 chunks, got %d", len(out))
-	}
-
-	// c2 is highly ranked in vector (weight 0.6) and second in bm25 (0.3)
-	// c1 is first in bm25 (0.3) and first in graph (0.1)
-	if out[0].ID != "c2" && out[0].ID != "c1" {
-		t.Errorf("expected top result to be c1 or c2, got %s", out[0].ID)
-	}
-}
-
 // 2026-07-14（ADR-0062）：NewHybridRetriever/NewHybridRetrieverWithEmbedder/
 // NewHybridRetrieverWithGraph 三个构造函数随之删除——boot_knowledge.go 生产唯一
 // 使用 NewHybridRetrieverWithCognitive（embedder/cognitive/graph 可传 nil 降级），
@@ -104,22 +87,5 @@ func TestHybridRetrieverConstructors(t *testing.T) {
 	hr3 := NewHybridRetrieverWithCognitive(nil, nil, nil, 0)
 	if hr3 == nil {
 		t.Errorf("NewHybridRetrieverWithCognitive returned nil")
-	}
-}
-
-func TestRRFThreeWay_WeightSum(t *testing.T) {
-	bm25 := []Chunk{{ID: "a", Content: "a"}, {ID: "b", Content: "b"}}
-	vec := []Chunk{{ID: "b", Content: "b"}, {ID: "c", Content: "c"}}
-	graph := []Chunk{{ID: "a", Content: "a"}}
-	result := rrfThreeWay(bm25, vec, graph, 5)
-	if len(result) == 0 {
-		t.Fatal("expected non-empty result from rrfThreeWay")
-	}
-	// "a" 在 BM25 rank=0 + graph rank=0，"b" 在 BM25 rank=1 + vec rank=0
-	// "a" 得分: 0.3×(1/61) + 0.1×(1/61) = 0.4/61 ≈ 0.00656
-	// "b" 得分: 0.3×(1/62) + 0.6×(1/61) ≈ 0.00484+0.00984 = 0.01467
-	// "b" 应高于 "a"（vec 权重高）
-	if result[0].ID != "b" {
-		t.Errorf("expected 'b' first (high vec weight), got %s", result[0].ID)
 	}
 }

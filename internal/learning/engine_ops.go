@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"

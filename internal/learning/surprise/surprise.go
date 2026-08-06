@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 

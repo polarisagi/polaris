@@ -146,6 +146,7 @@ web_search_api_key = ""
 [orchestrator]
 mode = "blackboard"
 protocol = "structured_event"
+task_retention_ttl = "24h"
 
 [self_improve]
 gradient = false

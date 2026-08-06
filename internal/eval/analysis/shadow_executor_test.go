@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"

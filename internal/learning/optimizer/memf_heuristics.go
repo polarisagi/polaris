@@ -174,9 +174,11 @@ func (d *BlindZoneDetector) IsBlindZone(ctx context.Context, taskType string) bo
 	}
 	var memfCount int
 	if d.DB != nil {
-		_ = d.DB.QueryRowContext(ctx,
+		if err := d.DB.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM fallacy_records WHERE task_type = ?`, taskType,
-		).Scan(&memfCount)
+		).Scan(&memfCount); err != nil {
+			slog.WarnContext(ctx, "failed to scan fallacy record count", "err", err)
+		}
 	}
 	return memfCount <= 1
 }
@@ -204,9 +206,11 @@ func (d *BlindZoneDetector) ActiveBlindZones(ctx context.Context) []BlindZoneEnt
 		}
 		var memfCount int
 		if d.DB != nil {
-			_ = d.DB.QueryRowContext(ctx,
+			if err := d.DB.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM fallacy_records WHERE task_type = ?`, taskType,
-			).Scan(&memfCount)
+			).Scan(&memfCount); err != nil {
+				slog.WarnContext(ctx, "failed to scan fallacy record count", "err", err)
+			}
 		}
 		if memfCount <= 1 {
 			result = append(result, BlindZoneEntry{

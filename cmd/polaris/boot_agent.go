@@ -24,12 +24,12 @@ import (
 
 	"github.com/polarisagi/polaris/internal/action/lam"
 	"github.com/polarisagi/polaris/internal/learning/curriculum"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 	"github.com/polarisagi/polaris/internal/learning/reflexion"
 	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/learning/synthetic"
 	"github.com/polarisagi/polaris/internal/memory"
 	"github.com/polarisagi/polaris/internal/prompt"
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/security/guard"
 
 	sysagent "github.com/polarisagi/polaris/internal/agent"
@@ -363,6 +363,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// ─── §9 Blackboard & Scheduler (L2 M8 + L3 M13) ─────────────────────────
 	blackboard := orchestrator.NewSQLiteBlackboard(sb.Store.DB())
+	if sb.Cfg.Orchestrator.TaskRetentionTTL > 0 {
+		blackboard.SetTaskRetentionTTL(sb.Cfg.Orchestrator.TaskRetentionTTL)
+	}
 
 	// KillSwitch recovery 回调：恢复 oom_evicted 挂起任务
 	sb.KS.OnRecovery(func(ctx context.Context) {
