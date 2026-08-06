@@ -212,15 +212,11 @@ type StateEvent struct {
 	Payload any
 }
 
-type
+// SagaStep 已删除（ADR-0088 决策一）：它承载的是 ToolDefinition.UndoFn 那套
+// 补偿机制，而 UndoFn 在全仓从未被赋值，且工具定义层拿不到本次调用实参、
+// 无法表达"撤销刚才那次具体操作"。Saga 补偿的唯一声明来源是
+// protocol.ExecNode.Compensation，唯一执行者是 execute/dag.runCompensation。
 
-// SagaStep 记录单个执行步骤的补偿信息
-SagaStep struct {
-	NodeID   string
-	ToolName string
-	UndoFn   string
-	Args     []byte
-}
 type Task struct {
 	ID             string
 	Type           string

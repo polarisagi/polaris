@@ -76,11 +76,17 @@ type Agent struct {
 	handoffPoster     HandoffPoster            // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
 	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 
-	// sagaLedger 本轮 DAG 执行的 Saga 补偿去重账本，由 runExecuteDAG 每次新建，
-	// 同时经 ctx 交给 execute/dag 的 runCompensation、经 buildStateContext 交给
-	// FSM 的 rollbackSaga，使两条独立补偿路径对同一 undo 只执行一次。
-	// nil（尚未进入过 S_EXECUTE）时 TryClaim 恒放行，不改变行为。
-	sagaLedger *protocol.SagaCompensationLedger
+	// workspaceCtxLoader / workspaceRoot 工作区标准上下文装载（GD-14-005）。
+	// 任一为空即禁用该能力。信任判定在 loader 内部完成——未在配置中显式声明
+	// 信任的工作区，其 AGENTS.md/CLAUDE.md 只进 ZoneExternalCatalog。
+	workspaceCtxLoader *agentctx.WorkspaceContextLoader
+	workspaceRoot      string
+
+	// sagaRecorder 本轮 DAG 执行的 Saga 补偿结果记录器，由 runExecuteDAG 每次新建，
+	// 经 ctx 交给 execute/dag 的 runCompensation 写入，经 buildStateContext 交给
+	// FSM 的 rollbackSaga 读取——补偿由 DAG 层唯一执行，FSM 只汇报结果
+	// （ADR-0088 决策一）。nil（尚未进入过 S_EXECUTE）时视为无补偿发生。
+	sagaRecorder *protocol.SagaCompensationRecorder
 
 	// cwm M04 §7 热路径上下文窗口管理（见 budget.go ContextWindowManager 与
 	// agent_context_compaction.go）；NewAgent 默认构造（90000 token），可经
@@ -334,6 +340,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		// 动态加载已安装插件信息 (仅当无 effect 运行时安全刷新，避免与 executeEffect 并发竞争)
 		if !a.effectRunning.Load() {
 			a.refreshInstalledExtensions(ctx)
+			// GD-14-005：工作区上下文与扩展清单同周期刷新，共用同一个
+			// "无 effect 运行"的安全窗口。
+			a.refreshWorkspaceContext(ctx)
 		}
 
 		select {

@@ -5,7 +5,8 @@
 --           为不可变日志，本表为其派生投影——增加检索优化字段，独立索引。
 -- 生产者:    M2 OutboxWorker（异步投影）
 -- 消费者:    M5 HybridRetriever / M4 ContextAssembler / M9 MEMF
--- 可变字段:  archived、archive_offset、decay_weight、salience（仅此 4 字段允许 UPDATE）
+-- 可变字段:  archived、archive_offset、decay_weight、salience、retrieval_count、
+--           last_retrieved_at（仅此 6 字段允许 UPDATE）
 -- 写入路径:  M2 OutboxWorker 异步投影，禁止直接写 MutationBus
 -- 关联:      M5(Memory) §3.1, M2(Storage) §2.1
 -- ============================================================================
@@ -32,6 +33,16 @@ CREATE TABLE IF NOT EXISTS episodic_events (
     -- ↑ 写入前主动价值评估得分（WriteFilter）。
     --   0.0-1.0，阈值 0.4。WriteFilter 跳过的条目不写入 semantic_entities。
     --   LLM 评估（DeepSeek V4 优先），provider=nil 时走启发式 fallback。
+
+    retrieval_count    INTEGER NOT NULL DEFAULT 0,
+    -- ↑ 被 HybridRetriever 命中并真正进入 Prompt 的累计次数（GD-14-003）。
+    --   由 RetrievalReinforcer 内存累计 + 周期性批量落盘，**不在读路径上同步写**
+    --   （Tier-0 上每次检索都写库会把只读路径变成写路径）。
+
+    last_retrieved_at  INTEGER,
+    -- ↑ 最近一次被检索命中的 Unix 毫秒时间戳；NULL = 从未被检索过。
+    --   与 retrieval_count 共同构成"检索强化"信号：常被用到的记忆抗遗忘，
+    --   长期无人问津的记忆加速衰减（见 ForgettingManager.UpdateDecay）。
 
     UNIQUE(session_id, seq)
 );

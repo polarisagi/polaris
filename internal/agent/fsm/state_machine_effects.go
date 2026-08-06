@@ -38,32 +38,32 @@ func (sm *StateMachine) executeDAG(ctx context.Context, sCtx protocol.StateConte
 	return types.State("S_EXECUTE_OK"), nil
 }
 
-func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateContext) (types.State, error) {
-	var firstErr error
-	// Saga 逆序补偿——已执行步骤的 Undo 操作
-	for i := len(sCtx.SagaLog) - 1; i >= 0; i-- {
-		step := sCtx.SagaLog[i]
-		if step.UndoFn != "" && sCtx.Tools != nil {
-			// 跨补偿路径去重：本 undo 若已被 execute/dag 侧 runCompensation
-			// 执行过则跳过。两条路径数据来源相互独立（toolDef.UndoFn vs
-			// node.Compensation），对非幂等 undo 重复执行会造成数据损坏——
-			// 见 protocol.SagaCompensationLedger 类型注释。
-			if !sCtx.SagaLedger.TryClaim(step.UndoFn, step.Args) {
-				slog.Info("fsm: saga compensation already performed by peer path, skipping",
-					"node_id", step.NodeID, "tool", step.UndoFn)
-				continue
-			}
-			_, err := sCtx.Tools.ExecuteWithTaint(ctx, step.UndoFn, step.Args, sCtx.MaxTaintLevel)
-			if err != nil {
-				slog.Warn("Saga rollback failed for step", "node_id", step.NodeID, "tool", step.UndoFn, "err", err)
-				if firstErr == nil {
-					firstErr = apperr.Wrap(apperr.CodeInternal, "rollbackSaga: undo failed for node "+step.NodeID, err)
-				}
-			}
-		}
+// rollbackSaga 汇报 Saga 补偿结果，决定 S_ROLLBACK 的出边。
+//
+// 本函数**不执行**补偿（ADR-0088 决策一）。补偿的唯一执行者是
+// execute/dag.DAGExecutor.runCompensation——它持有 ExecNode.Compensation
+// （携带本次调用的实参）并知道哪些节点真正成功过，是唯一具备执行条件的层。
+//
+// 此前这里有一套平行实现，遍历 sCtx.SagaLog 调 toolDef.UndoFn 自行补偿。
+// 那套机制结构上是死的：UndoFn 字段在全仓从未被赋值过（tool.yaml 加载器无
+// 对应映射），SagaLog 恒为空，本函数恒返回 S_ROLLBACK_OK——即 S_ROLLBACK
+// 从未反映过任何真实补偿结果。且 UndoFn 是挂在工具定义上的静态工具名、
+// 无参数绑定，补偿"删掉刚创建的那个文件"这类动作在该层拿不到实参，
+// 属设计死胡同而非接线缺口，故整体删除而非补活。
+//
+// recorder 为 nil（未进入过 DAG 执行，或本轮无任何补偿动作）时视为
+// "无补偿失败"，返回 S_ROLLBACK_OK——与补偿队列为空的语义一致。
+func (sm *StateMachine) rollbackSaga(_ context.Context, sCtx protocol.StateContext) (types.State, error) {
+	executed, failed := sCtx.SagaRecorder.Outcome()
+	if failed > 0 {
+		firstErr := sCtx.SagaRecorder.FirstError()
+		slog.Error("fsm: saga compensation partially failed, escalating",
+			"executed", executed, "failed", failed, "first_err", firstErr)
+		return types.State("S_ROLLBACK_PARTIAL"),
+			apperr.Wrap(apperr.CodeInternal, "rollbackSaga: compensation partially failed", firstErr)
 	}
-	if firstErr != nil {
-		return types.State("S_ROLLBACK_PARTIAL"), firstErr
+	if executed > 0 {
+		slog.Info("fsm: saga compensation completed", "executed", executed)
 	}
 	return types.State("S_ROLLBACK_OK"), nil
 }

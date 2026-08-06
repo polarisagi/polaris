@@ -130,8 +130,7 @@ type StateContext struct {
 	// 0 = 无上限（不推荐用于生产）。
 	StepsUsed            int
 	MaxStepsLimit        int
-	InitialMaxStepsLimit int              // 原始步骤上限 (ISSUE-08)
-	SagaLog              []types.SagaStep // Saga 记录 (ISSUE-03)
+	InitialMaxStepsLimit int // 原始步骤上限 (ISSUE-08)
 
 	// KillThrottle 降级标记（M03 §5 ThrottlePolicy）。
 	// KillThrottle 阶段生效：MaxStepsLimit 被收紧至 3，网络写工具被拒绝。
@@ -163,6 +162,16 @@ type StateContext struct {
 
 	// InstalledExtensionsInfo 包含当前系统已安装的扩展清单
 	InstalledExtensionsInfo string
+
+	// WorkspaceContextUntrusted 工作区标准上下文文档（AGENTS.md/CLAUDE.md 等）
+	// 中**未被用户显式信任**的部分，已渲染为待围栏的正文；空串表示无。
+	// 与 InstalledExtensionsInfo 同等对待：第三方可控、看起来像指令的文本，
+	// 只能进 ZoneExternalCatalog（GD-14-005 / ADR-0088 决策三）。
+	WorkspaceContextUntrusted string
+
+	// WorkspaceContextTrusted 工作区上下文中来自用户**显式声明信任路径**的部分，
+	// 可写入 ZoneImmutable（项目级系统指令）。空串表示无。
+	WorkspaceContextTrusted string
 
 	// Cognitive 语义检索接口（L2）
 	Cognitive CognitiveSearcher
