@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // Reranker 接口已被移除（遵循 R1.4），由各个消费方自行定义私有接口。
@@ -16,7 +17,7 @@ import (
 // NilReranker 透传重排器（默认），不修改文档顺序。
 type NilReranker struct{}
 
-func (NilReranker) Rerank(_ context.Context, _ string, docs []ScoredFragment) []ScoredFragment {
+func (NilReranker) Rerank(_ context.Context, _ string, docs []types.ScoredFragment) []types.ScoredFragment {
 	return docs
 }
 
@@ -91,7 +92,7 @@ func NewApproximateColBERTReranker(embedder Embedder, window int) *ApproximateCo
 }
 
 // Rerank 对 docs 按 MaxSim 分数降序重排，返回新切片（不修改输入）。
-func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, docs []ScoredFragment) []ScoredFragment {
+func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, docs []types.ScoredFragment) []types.ScoredFragment {
 	start := time.Now()
 	if len(docs) == 0 || r.embedder == nil {
 		return docs
@@ -112,7 +113,7 @@ func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, d
 	// 降序排序（稳定）
 	stableSort(result)
 
-	out := make([]ScoredFragment, len(result))
+	out := make([]types.ScoredFragment, len(result))
 	for i, s := range result {
 		frag := s.doc
 		frag.Score = s.score // 用 MaxSim 分数替换 RRF 分数
@@ -143,7 +144,7 @@ func (r *ApproximateColBERTReranker) tokenVecs(text string) [][]float32 {
 
 // internalReranker 是 SafeRerank 内部使用的接口。
 type internalReranker interface {
-	Rerank(ctx context.Context, query string, docs []ScoredFragment) []ScoredFragment
+	Rerank(ctx context.Context, query string, docs []types.ScoredFragment) []types.ScoredFragment
 }
 
 // SafeRerank 包装任意满足内部重排签名的实现，加超时 + panic 恢复双重保护（2026-07-04 新增，
@@ -163,7 +164,7 @@ func NewSafeRerank(inner internalReranker, timeout time.Duration) *SafeRerank {
 	return &SafeRerank{inner: inner, timeout: timeout}
 }
 
-func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFragment) []ScoredFragment {
+func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []types.ScoredFragment) []types.ScoredFragment {
 	if s.inner == nil || len(docs) == 0 {
 		return docs
 	}
@@ -171,7 +172,7 @@ func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFrag
 	rerankCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	resultChan := make(chan []ScoredFragment, 1)
+	resultChan := make(chan []types.ScoredFragment, 1)
 	// 使用 SafeGo 封装：统一 panic 计数到 PanicTotal 指标（ADR-0025/0029），
 	// 超时或 panic 时由后续 select 的 rerankCtx.Done() 分支执行降级返回。
 	concurrent.SafeGo(rerankCtx, "search.SafeRerank", func(_ context.Context) {
@@ -195,7 +196,7 @@ func (s *SafeRerank) Rerank(ctx context.Context, query string, docs []ScoredFrag
 
 // scoredDoc 承载单条候选文档及其融合分数。
 type scoredDoc struct {
-	doc   ScoredFragment
+	doc   types.ScoredFragment
 	score float64
 }
 

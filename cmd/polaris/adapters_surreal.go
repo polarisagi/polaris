@@ -90,10 +90,10 @@ func (a *knowledgeEmbedderAdapter) Embed(_ context.Context, text string) ([]floa
 //
 // Reranker 接口遵循 R1.4 在消费方定义。
 type Reranker interface {
-	Rerank(ctx context.Context, query string, docs []search.ScoredFragment) []search.ScoredFragment
+	Rerank(ctx context.Context, query string, docs []types.ScoredFragment) []types.ScoredFragment
 }
 
-// 将 Reranker（无 error 返回，[]search.ScoredFragment）适配为
+// 将 Reranker（无 error 返回，[]types.ScoredFragment）适配为
 // protocol.Reranker（有 error 返回，[]types.CognitiveSearchResult），供 SurrealDB
 // 路径的 HybridRetrieverImpl.SetReranker 复用同一个 ApproximateColBERTReranker
 // 实例（2026-07-04 新增，任务2）。
@@ -109,9 +109,9 @@ func (a *colbertRerankerAdapter) Rerank(ctx context.Context, query string, docs 
 	if a.inner == nil || len(docs) == 0 {
 		return docs, nil
 	}
-	frags := make([]search.ScoredFragment, len(docs))
+	frags := make([]types.ScoredFragment, len(docs))
 	for i, d := range docs {
-		frags[i] = search.ScoredFragment{Content: d.Content, Score: d.Score, Source: d.ID}
+		frags[i] = types.ScoredFragment{Content: d.Content, Score: d.Score, Source: d.ID}
 	}
 	reranked := a.inner.Rerank(ctx, query, frags)
 	idToDoc := make(map[string]types.CognitiveSearchResult, len(docs))
