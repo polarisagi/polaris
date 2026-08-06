@@ -54,7 +54,7 @@ func NewMetaEvalSentinel(store *harness.SQLiteEvalStore) *MetaEvalSentinel {
 // 被 evaladmin 包的 HTTP handler 在 server 进程内调用是允许的——服务器进程本身
 // 无法伪造一次通过的审计（它没有私钥去产生合法签名），真正被禁止的是防止类似于
 // 自动热路径在没有人工触发签名的情况下"自己审计自己"，
-// 详见 RunAndRecord 与 internal/prompt/optimizer.MetaAuditReader 的分工说明。
+// 详见 RunAndRecord 与 internal/learning/optimizer.MetaAuditReader 的分工说明。
 func (m *MetaEvalSentinel) RunMetaEvalSuite(ctx context.Context, signature []byte) (*MetaEvalResult, error) {
 	if m.store == nil {
 		return &MetaEvalResult{Passed: false, FailureReasons: []string{"store is nil"}}, nil

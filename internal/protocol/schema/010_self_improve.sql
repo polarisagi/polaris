@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_active ON prompt_versions(task_type, is_active);
 
 -- Staging 渐进发布状态
--- 列名必须与 internal/prompt/optimizer/rollout_store.go 中所有 SQL 查询保持一致：
+-- 列名必须与 internal/learning/optimizer/rollout_store.go 中所有 SQL 查询保持一致：
 --   version / baseline / metadata（rollout_store.go 是唯一读写方，列名以代码为准）。
 CREATE TABLE IF NOT EXISTS rollout_states (
     version          TEXT    PRIMARY KEY,

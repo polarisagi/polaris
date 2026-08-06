@@ -107,8 +107,10 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 
 // extractTaskType 从任务目标字符串提取规范化任务类型键。
 // 2026-07-21 deadcode 审查去重：此前与 prompt.ExtractTaskType 是逐字节相同的
-// 平行实现，注释所称"避免 L1 到 L2 的依赖"已过期——internal/prompt/optimizer 现属
-// L1（与 internal/agent 同层，非 L2），且 optimizer 不反向依赖 agent，无循环风险。
+// 平行实现，注释所称"避免 L1 到 L2 的依赖"已过期——ExtractTaskType 本身住在
+// internal/prompt（L1，与 internal/agent 同层），且 prompt 不反向依赖 agent，
+// 无循环风险。（GD-13-003 已把 optimizer 迁至 internal/learning/optimizer，
+// 与本函数的依赖关系无关，见 internal/prompt/task_type.go。）
 // prompt.ExtractTaskType 有 internal/eval/control 的 V8-S4 确定性不变量测试覆盖，
 // 是两者中被正式验证的一份，故改为委托，消除漂移风险（两份实现未来可能各自被
 // 修改而不同步，是比重复代码本身更大的隐患）。

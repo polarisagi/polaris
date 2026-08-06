@@ -127,7 +127,16 @@ const SUBSTRATE_ABI_MAJOR: u16 = 3;
 /// 2: 新增 tier1 feature 门控下的 llama_infer_* 本地推理 FFI（load/unload/generate/
 ///    embed/rerank/evict_kv_cache/status/free_string，P3-1）；非 tier1 构建下这些
 ///    符号不导出，Go 侧通过 purego RegisterLibFunc + recover 优雅降级探测。
-/// 3: Cedar FFI 接口字符串参数由 NUL-terminated C 字符串全面迁移为 ptr+len 风格 UTF-8 字符串（无 NUL 结尾要求）。
+/// 3: Cedar FFI 字符串入参由 NUL-terminated C 字符串迁移为 ptr+len 风格 UTF-8
+///    （无 NUL 结尾要求）。
+///
+///    分类说明（勿再"顺手"改回加法变更）：该迁移**改了函数签名**（多出 *_len
+///    参数），按本常量上方"minor = 加法变更"的规则本不该记在 minor。它之所以
+///    出现在这里，是因为它与 major 2→3 的 timeout_ms 批次是同一次发布——
+///    major 已经因该批次递增过一次，minor 只是在同一 ABI 代际内继续单调递增
+///    以便 Go 侧 verifyABI 精确识别 dylib 版本（minor 不匹配只 Warn 不 panic，
+///    见 internal/ffi/dylib.go verifyABI）。破坏性语义的权威记录在上方 major
+///    2→3 段落，此处仅作符号级变更清单。
 const SUBSTRATE_ABI_MINOR: u16 = 3;
 
 /// 返回当前 ABI 版本（高 16 位 major | 低 16 位 minor）。
