@@ -51,6 +51,12 @@ func (hr *HybridRetrieverImpl) SetReranker(r protocol.Reranker) {
 	hr.reranker = r
 }
 
+// SetGraphTraverser 注入 M10 §2.6 LocalSearch 图遍历器，激活融合管线的第三路
+// （2026-08-06 接线）。nil 时该路返回空结果，退化为 BM25+Vector 两路。
+func (hr *HybridRetrieverImpl) SetGraphTraverser(g *graphrag.GraphTraverser) {
+	hr.graph = g
+}
+
 // SetBoundarySerializer 注入跨边界 HMAC 校验器（inv_M11_02）。与 SetReranker
 // 同为启动期热注入 setter：boot_knowledge.go 组合根按 Tier 装配检索栈时，
 // TaintBoundarySerializer 由 sb.Vault 派生，构造顺序上晚于 retriever 本身。
@@ -66,18 +72,21 @@ func (hr *HybridRetrieverImpl) SetBoundarySerializer(ser *taint.TaintBoundarySer
 // 结构上不可达。embedder/cognitive/graph 均可传 nil 走对应降级路径，
 // NewHybridRetrieverWithCognitive 是本类型唯一生产构造入口。
 //
-// V-5（2026-07-23 复核订正）：此前的注释误引"ADR-0062 §4 判定为 DEFER"及"已登记
-// deadcode-allowlist"——均核实不实：ADR-0062 Phase 4 的 DEFER 表格中并无
-// HybridRetrieverImpl.graph 或本文件的条目（该表格里唯一相关项是
-// internal/knowledge/graphrag/writer.go 的 GraphWriter，是另一个组件）；
-// scripts/deadcode-allowlist.txt 中也没有 retriever.go 的登记项。
-// 唯一与本字段直接相关的决议是 ADR-0062 C5：`graphrag.NewGraphTraverser`
-// 构造函数已被判定 DELETE（仅因 GraphTraverser 结构体仍被本文件签名引用而未删除
-// 类型本身）。即当前并无任何 ADR 支持"待接线"的结论，按 R6/ADR-0062 deadcode
-// 纪律的默认处置（无 WIRE 决议 → 倾向删除），graph 字段与本 Search 中的检索支路
-// 理应删除；因该删除会级联影响 rrfThreeWay/explainBitsByChunkID 签名，改动面超出
-// 本轮修复范围，暂保留字段但更正注释，避免继续以虚构引用误导后续维护者。真正处置
-// （删除或补齐真实 WIRE 决议）留待专项 ADR。
+// 2026-08-06 终态处置（取代 V-5 注记）：graph 字段改为**接线**而非删除。
+//
+// V-5（2026-07-23）当时的判断是"无 WIRE 决议 → 按 deadcode 纪律理应删除，
+// 但级联影响面大，暂留待专项 ADR"。本轮重新评估后选择接线，理由：
+//   - graphrag.GraphTraverser 是一份完整可用的实现（318 行 BFS + 双时态
+//     AsOf 过滤 + 深度衰减评分），缺的只是一个构造入口——删掉是丢能力，
+//     不是清死代码；
+//   - GD-13-002 收敛后 knowledge 走统一融合管线，M10 §2.2 本就为 Graph 留了
+//     第三路权重（0.1）。不接线的话这一路恒为空，等于权重配置在描述一个
+//     不存在的东西；
+//   - V-5 提到的级联障碍（rrfThreeWay/explainBitsByChunkID 签名）已随
+//     GD-13-002 收敛一并消失——那两个函数都已删除。
+//
+// 接线点：graphrag.NewGraphTraverser（同轮补回）+ SetGraphTraverser，
+// 由 cmd/polaris/boot_knowledge.go 在 SurrealDB 路径上注入。
 
 // NewHybridRetrieverWithCognitive 创建含 SurrealDB HNSW 路径的全功能 HybridRetriever（Tier 1+）。
 func NewHybridRetrieverWithCognitive(db protocol.SQLQuerier, embedder VectorEmbedder, cognitive CognitiveSearcher, vecScanLimit int) *HybridRetrieverImpl {

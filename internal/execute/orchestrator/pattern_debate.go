@@ -44,15 +44,19 @@ type debateState struct {
 // Execute 执行三方辩论：Judge 初始议题 -> Proponent/Opponent 轮番辩论 -> Judge 结案陈词。
 // 遵循 GD-6 约束，本模式内部各任务间等待复用 checkpoint 异步挂起原语，不阻塞轮询。
 //
-// 已知缺口（诚实声明，非本次范围）：本函数用返回 apperr "suspend" 错误表示
-// "尚未完成，需要在子任务结束后被重新调用"，但目前系统内没有任何组件会在
-// 子任务完成时自动重新调用 Execute——本轮修复只接线了 boot_agent.go 的
-// DebateExecutor 构造与 AgentBundle 注入，未接入任何触发重调用的编排循环
-// （与 internal/agent 侧 transfer_to_agent 曾经的同类问题一致，见 GD-1）。
-// 调用方在真正把本模式接入生产调度前，必须先设计等价于 GD-1
-// watchHandoffCompletion 的重调用驱动，否则辩论会在首次挂起后停滞。
-// 单元测试（pattern_debate_test.go）仅验证状态机本身的 checkpoint 往返
-// 正确性，不代表已具备生产可用的自动恢复能力。
+// 挂起/续跑约定：本函数用返回 apperr "suspend" 错误表示"尚未完成，需要在
+// 子任务结束后被重新调用"。该重调用驱动由 DebateWorker 提供（debate_worker.go）
+// ——它认领 type=="debate" 的任务，监听 task_completed/task_failed 后重调
+// Execute，实现断点续跑；boot_agent.go 构造并启动它。
+//
+// 注：此处原有一段"已知缺口：无任何组件会自动重新调用 Execute，辩论会在首次
+// 挂起后停滞"的声明。该缺口已由 DebateWorker 补齐，注释于 2026-08-06 订正
+// ——留着会让维护者误以为本模式至今不可用。
+//
+// 无 Saga 补偿是**刻意的**，不是遗漏：辩论子任务产出的是论点文本（正方/反方/
+// 裁判的陈述），不产生需要回滚的外部副作用。为它加补偿等于给一个只读推理
+// 流程套上事务语义，徒增复杂度。若将来辩论参与方被允许调用有副作用的工具，
+// 需重新评估（届时应复用 StateGraphExecutor 的补偿协调，而非另写一份）。
 //
 //nolint:gocyclo,nestif,funlen
 func (de *DebateExecutor) Execute(ctx context.Context, parentTaskID string, proponent, opponent, judge types.TaskEntry, maxRounds int) (verdict []byte, err error) {

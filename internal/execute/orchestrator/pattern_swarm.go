@@ -11,6 +11,12 @@ import (
 // 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3
 // 行为: 初始认领后，若持有者自判不适，则修改 Note 后退回 Pending（Handoff），
 // 由其他 Agent 基于 Note 重新评估是否接手。
+//
+// 无 Saga 补偿是**刻意的**，不是遗漏（2026-08-06 复核记录）：本类型是
+// **单任务**移交原语——一个任务从 A Agent 退回黑板等 B Agent 接手，
+// 全程只有一个任务、没有扇出、不存在"部分成功部分失败"。跨 Agent Saga 协调
+// （GD-14-001）针对的是并发扇出场景，由 StateGraphExecutor 承载
+// （见 state_graph_saga.go）；把补偿语义套到单任务移交上没有对应的问题域。
 type SwarmCoordinator struct {
 	bb              *SQLiteBlackboard
 	maxHandoffDepth int

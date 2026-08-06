@@ -54,6 +54,18 @@ type GraphTraverser struct {
 	db protocol.SQLQuerier
 }
 
+// NewGraphTraverser 构造图遍历器（2026-08-06 重新接线）。
+//
+// 该构造函数曾于 ADR-0062 C5 被判为 deadcode 删除，导致 knowledge 侧
+// HybridRetrieverImpl.graph 字段在生产中恒为 nil、整条 M10 §2.6 图检索路
+// 结构上不可达——本实现（318 行 BFS + 双时态过滤 + 深度衰减评分）一直完好，
+// 缺的只是一个构造入口。本轮判定"补齐接线"优于"删掉能力"：
+// GD-13-002 收敛后 knowledge 走的统一融合管线本就为 Graph 留了第三路权重
+// （M10 §2.2 graph=0.1），没有它这一路恒为空。
+func NewGraphTraverser(db protocol.SQLQuerier) *GraphTraverser {
+	return &GraphTraverser{db: db}
+}
+
 // TraverseChunks 以 queryText 匹配种子实体，BFS 扩散（depth=2），
 // 收集关联 rag_chunks，返回评分 Chunk 列表（按 BFS 深度衰减评分）。
 //
@@ -70,8 +82,19 @@ func (gt *GraphTraverser) TraverseChunks(ctx context.Context, queryText string, 
 func (gt *GraphTraverser) TraverseChunksWithOptions(ctx context.Context, queryText string, topK int, opts TraverseOptions) ([]Chunk, error) {
 	// Step 1: 以 queryText 文本匹配实体（FTS5 名称检索，限 top-5 种子）
 	seeds, err := gt.findSeedEntities(ctx, queryText, 5)
-	if err != nil || len(seeds) == 0 {
-		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.TraverseChunks", err) // 无种子实体，降级（调用方回退到 FTS5+Vector）
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.TraverseChunks: find seed entities", err)
+	}
+	if len(seeds) == 0 {
+		// 无种子实体是**正常**结果（查询词不对应任何已抽取实体），不是故障：
+		// 返回空结果让调用方按 BM25+Vector 两路继续。
+		//
+		// 此前这里与 err != nil 共用一个分支、走 apperr.Wrap(..., err)——而
+		// apperr.Wrap 对 nil cause 同样返回非 nil，等于把"没匹配到实体"包装成
+		// 了一个错误。融合层（store/search.HybridSearch）对 graph 路错误的处理
+		// 是"降级 + Warn"，接线后每一次没有命中实体的查询都会刷一条 Warn，
+		// 真实故障淹没在噪声里。
+		return nil, nil
 	}
 
 	// Step 2: BFS 扩散（depth=2，≤200 节点，每节点 ≤20 出边）
