@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -79,67 +80,17 @@ func NewGateway(store protocol.Store) *GatewayImpl {
 //
 //nolint:gocyclo,nestif // 原因：HITL 审批流程涉及高风险拦截、强制冷却与上下文超时控制等多个不可分割的网关级拦截逻辑。
 func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HITLResponse, error) {
-	// Task 21+22 修复（2026-07-04 审计）：触发条件从 `p.RiskLevel >= 3` 收窄为
-	// `p.CheckpointType == "l4_multi_sig"`。
-	// 原因：RiskLevel>=3 会误捕获所有高风险 HITL 请求（如 code_act_warning、
-	// security_review、logic_collapse_high_risk 等，见 internal/action/codeact/code_act.go、
-	// internal/extension/native/extension_manager.go、cmd/polaris/adapters_misc.go 等调用方），
-	// 导致这些与"L4 自我改进候选晋升"无关的审批被强制附加 P0/P1 全量回归 + 强制冷却期，
-	// 阻塞正常的工具执行/扩展安装审批。L4 自我改进晋升是本回归门禁的唯一设计目标
-	// （见 internal/learning/engine.go detectL4Trigger，CheckpointType 固定为 "l4_multi_sig"）。
-	if p.CheckpointType == "l4_multi_sig" && g.evalRunner != nil && g.regression != nil {
-		slog.Info("hitl_gateway: triggering L3 full regression", "checkpoint", p.ID)
+	// [GD-14-004 观测先行] 审批发起计数。自适应降级（"同类申请批准过 N 次后
+	// 自动放行"）需要真实的频次与批准率作阈值依据，在拿到数据之前不改任何
+	// 放行逻辑——本次只加观测。agent_id 维度传空串避免时间序列爆炸，
+	// 按 Agent 下钻走审计表（见 RecordHITLPrompt 注释）。
+	metrics.RecordHITLPrompt(ctx, p.CheckpointType, "")
 
-		// TODO(GR-10-002): "regression_p0_p1" partition 当前在 EvalStore/control.Engine 体系
-		// 中尚无完整数据面支撑，RunSuite 调用会返回 "unknown suite" 错误被静默吞没。
-		// 过渡方案：暂用 "validation" suite 作为等价门禁，直到 regression_p0_p1
-		// 分区的数据写入路径完成接线后再切换回来（参考 ADR-0048 待补充决策）。
-		report, err := g.evalRunner.RunSuite(context.Background(), "validation", "")
-		if err != nil {
-			// L3 回归门禁失败**不能静默**（此前 `if err == nil` 直接把错误吞掉，
-			// 上面 TODO 描述的 "unknown suite" 就是这样长期无人察觉的）。
-			// 这里刻意不 fail-closed 直接拒绝：门禁不可用属于运维故障而非候选
-			// 补丁有问题，拒绝会让 L4 自我改进晋升整体卡死；降级为"跳过回归、
-			// 转入正常人工审批"，并留下 Error 级痕迹供运维发现。
-			slog.Error("hitl_gateway: L3 regression suite failed, falling back to plain human review",
-				"checkpoint", p.ID, "err", err)
-		}
-		if err == nil && report != nil {
-			if report.P0Fail > 0 {
-				slog.Warn("hitl_gateway: P0 regression failed, auto-denying patch", "checkpoint", p.ID)
-				resp := types.HITLResponse{Approved: false, Reason: "auto_denied_p0_regression_failed"}
-				// 直接返回拒绝结果，不经过 Respond——此时 pending 尚未写入 store、
-				// waiter 尚未注册，调用 Respond 会因 "no active waiter" 而报错（GR-10-001 修复）。
-				// 归档记录仍需落盘以保留审计轨迹。
-				archiveKey := []byte(fmt.Sprintf("hitl:archive:%s:%d", p.ID, time.Now().UnixNano()))
-				if archiveData, mErr := json.Marshal(resp); mErr == nil {
-					if aErr := g.store.Put(ctx, archiveKey, archiveData); aErr != nil {
-						slog.Warn("hitl_gateway: auto-deny archive failed", "checkpoint", p.ID, "err", aErr)
-					}
-				}
-				return &resp, nil
-			}
-
-			// P0 passed, generate shadow diff
-			shadowReport, rErr := g.regression.DetectRegression(context.Background(), p.CheckpointType)
-			switch {
-			case rErr != nil:
-				// 影子回归报告是审批人做判断的核心依据，缺失必须显式告警，
-				// 否则审批人看到的是一个"看起来正常但没有回归证据"的请求。
-				slog.Error("hitl_gateway: shadow regression report unavailable, approver will see no diff evidence",
-					"checkpoint", p.ID, "err", rErr)
-				p.PromptText += "\n\n⚠️ 影子回归报告生成失败，本次审批缺少回归差异证据，请谨慎批准。"
-			case shadowReport != nil:
-				p.PromptText += "\n\n" + shadowReport.Markdown
-			}
-
-			// Apply cooldown
-			cooldown := g.l3Cooldown
-			if cooldown == 0 {
-				cooldown = 10 * time.Minute
-			}
-			p.EligibleApproveTime = time.Now().Add(cooldown).Unix()
-		}
+	// L3 全量回归门禁（仅 l4_multi_sig 候选触发，实现见 gateway_l3gate.go，R7 拆分）。
+	// 返回非 nil 表示已就地作出终态决策（P0 回归失败自动拒绝），直接返回不再走
+	// pending/waiter 流程；返回 nil 时 p 可能已被追加影子报告与强制冷却期。
+	if resp := g.applyL3RegressionGate(ctx, &p); resp != nil {
+		return resp, nil
 	}
 
 	// 若调用方未设置截止时间但 p.DeadlineNs > 0，用 DeadlineNs 建立截止上下文，
@@ -208,20 +159,30 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 		switch action {
 		case "auto_approve":
 			resp := types.HITLResponse{Approved: true, Reason: "auto_approved_on_timeout"}
+			metrics.RecordHITLDecision(ctx, p.CheckpointType, "approved", "auto_approve")
 			if err := g.Respond(context.Background(), p.ID, resp); err != nil {
 				slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
 			}
 			return &resp, nil
 		case "auto_deny":
 			resp := types.HITLResponse{Approved: false, Reason: "auto_denied_on_timeout"}
+			metrics.RecordHITLDecision(ctx, p.CheckpointType, "denied", "auto_deny")
 			if err := g.Respond(context.Background(), p.ID, resp); err != nil {
 				slog.Error("hitl gateway: respond failed", "pending_id", p.ID, "err", err)
 			}
 			return &resp, nil
 		default: // "kill_pause" 或未配置
+			metrics.RecordHITLDecision(ctx, p.CheckpointType, "denied", "timeout_kill_pause")
 			return nil, ctx.Err() //nolint:wrapcheck // 调用方按 err == context.DeadlineExceeded 严格比较（见 hitl_test.go），须保留哨兵身份
 		}
 	case resp := <-ch:
+		// 真人应答：这是"审批疲劳"最需要观察的一档——同一 checkpoint_type 的
+		// human 批准率若长期接近 100%，说明该类审批已退化为习惯性点击。
+		decision := "denied"
+		if resp.Approved {
+			decision = "approved"
+		}
+		metrics.RecordHITLDecision(ctx, p.CheckpointType, decision, "human")
 		return &resp, nil
 	}
 }

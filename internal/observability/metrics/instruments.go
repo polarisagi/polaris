@@ -71,10 +71,17 @@ var (
 	InstrAgentStreamDroppedTotal metric.Int64Counter
 
 	// [阶段02-错误吞没整改] 带 label 的失败类指标，均为枚举有界值，无需 CardinalityGuard。
-	InstrOutboxProcessFailuresTotal        metric.Int64Counter // label: engine
-	InstrOutboxCursorErrorsTotal           metric.Int64Counter // label: kind
-	InstrMemoryJSONDecodeFailuresTotal     metric.Int64Counter // label: table
-	InstrBlackboardScanErrorsTotal         metric.Int64Counter // label: op
+	InstrOutboxProcessFailuresTotal    metric.Int64Counter // label: engine
+	InstrOutboxCursorErrorsTotal       metric.Int64Counter // label: kind
+	InstrMemoryJSONDecodeFailuresTotal metric.Int64Counter // label: table
+	InstrBlackboardScanErrorsTotal     metric.Int64Counter // label: op
+
+	// [GD-14-004 观测先行] HITL 审批频率与结果分布。
+	// 只做观测，不参与任何放行决策——自适应降级（"同类申请批准过 N 次后
+	// 自动放行"）是在削弱安全边界，必须先有真实频次/批准率数据支撑阈值，
+	// 否则等于凭感觉打开一个越权口子。见 docs/arch/decisions ADR 待定项。
+	InstrHITLPromptsTotal                  metric.Int64Counter // labels: checkpoint_type, agent_id
+	InstrHITLDecisionsTotal                metric.Int64Counter // labels: checkpoint_type, decision, source
 	InstrKnowledgeOutboxWriteFailuresTotal metric.Int64Counter // label: event_type
 	InstrKnowledgeGraphWriteFailuresTotal  metric.Int64Counter // label: op
 	InstrKnowledgeReadFailuresTotal        metric.Int64Counter // label: op（非 ErrNoRows 的真实读路径查询失败）
@@ -398,6 +405,16 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Blackboard 行扫描/查询失败次数 (label: op)"),
 	)
 	ie.capture("polaris.blackboard.scan_errors_total", err)
+	InstrHITLPromptsTotal, err = meter.Int64Counter(
+		"polaris.hitl.prompts_total",
+		metric.WithDescription("HITL 审批发起次数 (labels: checkpoint_type, agent_id)"),
+	)
+	ie.capture("polaris.hitl.prompts_total", err)
+	InstrHITLDecisionsTotal, err = meter.Int64Counter(
+		"polaris.hitl.decisions_total",
+		metric.WithDescription("HITL 审批结果分布 (labels: checkpoint_type, decision, source)"),
+	)
+	ie.capture("polaris.hitl.decisions_total", err)
 	InstrKnowledgeOutboxWriteFailuresTotal, err = meter.Int64Counter(
 		"polaris.knowledge.outbox_write_failures_total",
 		metric.WithDescription("知识管线 outbox 事件投递失败次数 (label: event_type)"),
@@ -658,6 +675,34 @@ func RecordMemoryJSONDecodeFailure(ctx context.Context, table string) {
 func RecordBlackboardScanError(ctx context.Context, op string) {
 	if InstrBlackboardScanErrorsTotal != nil {
 		InstrBlackboardScanErrorsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("op", op)))
+	}
+}
+
+// RecordHITLPrompt 记录一次 HITL 审批发起（GD-14-004 观测先行）。
+//
+// agentID 基数说明：Agent ID 形如 "agent-{sessionID}"，理论上无界。这里刻意
+// **不**直接打 agentID，而是由调用方传入已归一化的值（当前传空串或固定角色名），
+// 避免 Prometheus 时间序列爆炸。真正需要按 Agent 下钻时走 decision_log/审计表，
+// 不走指标维度（与 InstrPIIMappingEvictionsTotal 不打 partitionKey 同一原则）。
+func RecordHITLPrompt(ctx context.Context, checkpointType, agentID string) {
+	if InstrHITLPromptsTotal != nil {
+		InstrHITLPromptsTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("checkpoint_type", checkpointType),
+			attribute.String("agent_id", agentID),
+		))
+	}
+}
+
+// RecordHITLDecision 记录一次 HITL 审批结果（GD-14-004 观测先行）。
+// decision 取 "approved"/"denied"；source 取 "human"/"auto_approve"/"auto_deny"/
+// "timeout_kill_pause"/"auto_denied_p0_regression"，均为固定枚举，基数有界。
+func RecordHITLDecision(ctx context.Context, checkpointType, decision, source string) {
+	if InstrHITLDecisionsTotal != nil {
+		InstrHITLDecisionsTotal.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("checkpoint_type", checkpointType),
+			attribute.String("decision", decision),
+			attribute.String("source", source),
+		))
 	}
 }
 
