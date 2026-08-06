@@ -40,6 +40,20 @@ func BuildPerceiveContext( //nolint:gocyclo
 	}
 	b.WriteInstruction(safe)
 
+	// GD-14-005：用户显式声明信任的工作区约束文档，作为项目级系统指令写入
+	// ZoneImmutable。只有 WorkspaceContextLoader 判定 Trusted 的内容才会到这里
+	// ——默认路径下本字段恒为空，AGENTS.md 走下方不可信通道。
+	if sCtx.WorkspaceContextTrusted != "" {
+		trustedSafe, tErr := taint.SanitizeToSafe(taint.NewTaintedString(
+			sCtx.WorkspaceContextTrusted,
+			taint.TaintSource{Module: "workspace", OriginTaintLevel: types.TaintNone},
+			"workspace_context_trusted"))
+		if tErr != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext: sanitize trusted workspace context", tErr)
+		}
+		b.WriteInstruction(trustedSafe)
+	}
+
 	// S-02：已安装扩展的自述信息来源不可信（第三方可控），单独进入
 	// ZoneExternalCatalog 并按 TaintHigh 打标，禁止混入 ZoneImmutable。
 	if sCtx.InstalledExtensionsInfo != "" {
@@ -47,6 +61,17 @@ func BuildPerceiveContext( //nolint:gocyclo
 			sCtx.InstalledExtensionsInfo,
 			taint.TaintSource{Module: "extension", OriginTaintLevel: types.TaintHigh},
 			"extension_catalog"))
+	}
+
+	// GD-14-005：工作区上下文的默认通道。AGENTS.md/CLAUDE.md 在 clone 来的仓库中
+	// 完全是攻击者可控的，威胁模型与第三方扩展自述一致，故同样只进
+	// ZoneExternalCatalog 并按 TaintHigh 围栏——绝不因"文件名恰好是约定名字"
+	// 而推定信任。
+	if sCtx.WorkspaceContextUntrusted != "" {
+		b.WriteExternalCatalog("workspace_context", taint.NewTaintedString(
+			sCtx.WorkspaceContextUntrusted,
+			taint.TaintSource{Module: "workspace", OriginTaintLevel: types.TaintHigh},
+			"workspace_context"))
 	}
 
 	if memory == nil {
