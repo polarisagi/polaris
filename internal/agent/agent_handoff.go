@@ -217,13 +217,23 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 		watchCtx, cancel := context.WithCancel(parentCtx)
 		defer cancel()
 
+		// GD-13-001：订阅子 Agent 事件流，透传至父 Agent 的 Stream Channel。
+		// 必须**先于** Subscribe/peekAndWake 完成注册：子任务在 PostTask 之后
+		// 随时可能被 DefaultTaskWorker 认领并开始产出思考/工具事件，晚注册一步
+		// 就会丢掉委派开头那批事件（恰恰是用户最需要看到"它动起来了"的时刻）。
+		// 订阅本身无 DB IO，提前注册不增加成本；即使随后 peekAndWake 命中终态
+		// 直接返回，defer 也会立刻注销，不会残留。
+		childEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(childTaskID)
+		defer cancelSub()
+
 		events, err := a.handoffPoster.Subscribe(watchCtx)
 		if err != nil {
 			// 订阅失败时不能静默放弃（会导致父任务永久挂在 S_AWAIT_AGENT）：
-			// 退回纯轮询兜底，并显式告警说明已降级。
+			// 退回纯轮询兜底，并显式告警说明已降级。降级路径仍然透传子事件流
+			// ——GD-13-001 的可观测性收益不应因黑板事件订阅不可用而一并丢失。
 			slog.WarnContext(watchCtx, "agent: handoff subscribe failed, falling back to polling",
 				"task_id", childTaskID, "err", err)
-			a.pollHandoffCompletion(watchCtx, childTaskID, handoffWatchPollInterval)
+			a.pollHandoffCompletion(watchCtx, childTaskID, handoffWatchPollInterval, childEvents)
 			return
 		}
 
@@ -232,10 +242,6 @@ func (a *Agent) watchHandoffCompletion(childTaskID string) {
 		if a.peekAndWake(watchCtx, childTaskID) {
 			return
 		}
-
-		// GD-13-001：订阅子 Agent 事件流，透传至父 Agent 的 Stream Channel
-		childEvents, cancelSub := a.handoffPoster.SubscribeTaskEvents(childTaskID)
-		defer cancelSub()
 
 		a.loopHandoffEvents(watchCtx, childTaskID, events, childEvents)
 	})
@@ -250,6 +256,9 @@ func (a *Agent) loopHandoffEvents(ctx context.Context, childTaskID string, event
 			return
 		case childEv, ok := <-childEvents:
 			if !ok {
+				// 订阅已注销：置 nil 让本分支永久阻塞，避免 for-select 忙轮询
+				// （已关闭的 channel 恒可读，原实现的 continue 会 100% 占满 CPU）。
+				childEvents = nil
 				continue
 			}
 			// 透传至父 Agent 的 Stream Channel，原样转发嵌套事件
@@ -259,7 +268,7 @@ func (a *Agent) loopHandoffEvents(ctx context.Context, childTaskID string, event
 				// 订阅通道被实现方关闭（非 ctx 取消）：降级为轮询，不静默退出。
 				slog.WarnContext(ctx, "agent: handoff event stream closed unexpectedly, falling back to polling",
 					"task_id", childTaskID)
-				a.pollHandoffCompletion(ctx, childTaskID, handoffWatchPollInterval)
+				a.pollHandoffCompletion(ctx, childTaskID, handoffWatchPollInterval, childEvents)
 				return
 			}
 			if ev.TaskID != childTaskID {
@@ -299,13 +308,24 @@ func (a *Agent) peekAndWake(ctx context.Context, childTaskID string) bool {
 
 // pollHandoffCompletion 原轮询实现，仅作为 Subscribe 不可用/中途失活时的
 // 降级路径（阶段04 A-01）。
-func (a *Agent) pollHandoffCompletion(ctx context.Context, childTaskID string, interval time.Duration) {
+//
+// childEvents 可为 nil（nil channel 在 select 中永久阻塞，等价于该分支不存在）；
+// 非 nil 时降级路径同样透传子 Agent 事件流（GD-13-001）——黑板任务事件订阅
+// 不可用不代表子事件订阅也不可用，两者是相互独立的通道。
+func (a *Agent) pollHandoffCompletion(ctx context.Context, childTaskID string, interval time.Duration, childEvents <-chan types.AgentStreamEvent) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case childEv, ok := <-childEvents:
+			if !ok {
+				// 订阅已注销：置 nil 让本分支永久阻塞，避免忙轮询空转。
+				childEvents = nil
+				continue
+			}
+			a.publishStreamEvent(childEv)
 		case <-ticker.C:
 			snap, err := a.handoffPoster.PeekTask(ctx, childTaskID)
 			if err != nil {

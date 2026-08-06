@@ -405,37 +405,60 @@ func (bb *SQLiteBlackboard) FailTask(ctx context.Context, taskID, agentID string
 // SubscribeTaskEvents 订阅指定任务（含子 Agent 委派任务）的实时事件流。
 // 返回一个只读 channel，当任务产生流式事件时推送。
 // 调用方必须在不再需要时调用返回的 cancel 函数取消订阅（GD-13-001）。
+//
+// 并发契约（与 Subscribe/broadcast 同一 idiom，见 sqlite_blackboard_ops.go）：
+// 订阅表用 bb.subMu 而非 bb.mu 保护——bb.mu 同时保护 cancels/registry 且被
+// 任务认领等 DB 路径持有，把广播扇出压到该锁上会放大争用；且此处必须**在持锁
+// 期间完成 channel 发送**（见 PublishTaskEvent 注释），锁的粒度必须尽可能小。
+//
+// cancel 幂等：重复调用只有第一次会摘除并 close，避免 close of closed channel。
 func (bb *SQLiteBlackboard) SubscribeTaskEvents(taskID string) (<-chan types.AgentStreamEvent, func()) {
 	ch := make(chan types.AgentStreamEvent, 64)
-	bb.mu.Lock()
+	bb.subMu.Lock()
 	if bb.taskEventSubs == nil {
 		bb.taskEventSubs = make(map[string][]chan types.AgentStreamEvent)
 	}
 	bb.taskEventSubs[taskID] = append(bb.taskEventSubs[taskID], ch)
-	bb.mu.Unlock()
+	bb.subMu.Unlock()
 
+	var once sync.Once
 	cancel := func() {
-		bb.mu.Lock()
-		defer bb.mu.Unlock()
-		subs := bb.taskEventSubs[taskID]
-		for i, s := range subs {
-			if s == ch {
-				bb.taskEventSubs[taskID] = append(subs[:i], subs[i+1:]...)
-				break
+		once.Do(func() {
+			bb.subMu.Lock()
+			defer bb.subMu.Unlock()
+			subs := bb.taskEventSubs[taskID]
+			for i, s := range subs {
+				if s == ch {
+					subs = append(subs[:i], subs[i+1:]...)
+					break
+				}
 			}
-		}
-		close(ch)
+			// 空 slice 必须连 key 一起删除：每次 transfer_to_agent 委派都会新建一个
+			// taskID key，若只留空 slice，map 会随委派次数无界增长（Tier-0 2GB 约束
+			// 下这是真实的常驻内存泄漏，且任务终态后该 key 永远不会被复用）。
+			if len(subs) == 0 {
+				delete(bb.taskEventSubs, taskID)
+			} else {
+				bb.taskEventSubs[taskID] = subs
+			}
+			close(ch)
+		})
 	}
 	return ch, cancel
 }
 
 // PublishTaskEvent 向指定任务的所有订阅者广播事件（GD-13-001）。
+//
+// 必须**在持有 subMu 读锁期间**完成发送：若先复制订阅者切片再释放锁后发送，
+// 与 cancel() 的 close(ch) 之间存在窗口——订阅者取消（父 Agent 收到
+// task_completed 后 defer cancelSub）与子 Agent 收尾事件的投递几乎必然同时
+// 发生，命中窗口即 panic: send on closed channel。cancel 侧取写锁 + close，
+// 本侧取读锁 + 发送，二者互斥即消除该竞态（与 broadcast 完全一致的 idiom）。
+// 发送是 select/default 非阻塞的，持锁时间为 O(订阅者数)，不会长时间阻塞。
 func (bb *SQLiteBlackboard) PublishTaskEvent(taskID string, event types.AgentStreamEvent) {
-	bb.mu.Lock()
-	subs := bb.taskEventSubs[taskID]
-	bb.mu.Unlock()
-
-	for _, ch := range subs {
+	bb.subMu.RLock()
+	defer bb.subMu.RUnlock()
+	for _, ch := range bb.taskEventSubs[taskID] {
 		select {
 		case ch <- event:
 		default:
