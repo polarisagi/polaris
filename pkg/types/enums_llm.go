@@ -34,4 +34,9 @@ const (
 	StreamError
 	// StreamCancelled 用户主动取消时发出，Usage 字段携带补偿计费数据。
 	StreamCancelled
+	// StreamSystemNotice 系统级提示（非模型输出），Content 是可直接展示给用户的中文文案。
+	// 目前唯一生产者是 InferenceRouter 的跨 Model Pool 降级（GD-13-005）：
+	// 目标池耗尽并成功降级到备用池时，在流首插入一条告知用户"已切换模型"的提示。
+	// 消费方须把它当作旁路信息渲染，**不得**计入助手回复正文或写进消息历史。
+	StreamSystemNotice
 )

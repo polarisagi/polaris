@@ -262,7 +262,7 @@ func TestInferenceRouter_CrossPoolFallback(t *testing.T) {
 	// 发起 reasoning Pool 请求
 	resp, err := router.Infer(context.Background(),
 		[]types.Message{{Role: "user", Content: "hello"}},
-		WithModelPool("reasoning"),
+		types.WithModelPool("reasoning"),
 	)
 	if err != nil {
 		t.Fatalf("expected cross-pool fallback to succeed, got err: %v", err)
@@ -289,7 +289,7 @@ func TestInferenceRouter_CrossPoolFallback_AllExhausted(t *testing.T) {
 
 	_, err := router.Infer(context.Background(),
 		[]types.Message{{Role: "user", Content: "hello"}},
-		WithModelPool("reasoning"),
+		types.WithModelPool("reasoning"),
 	)
 	if err == nil {
 		t.Fatal("expected error when all pools exhausted")

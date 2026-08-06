@@ -101,6 +101,11 @@ func (o *orchestrator) handleFSMEvent(
 			*inferErr = ev.Content
 		}
 		o.emitError(sink, "fsm_error", ev.Content, sessionID, nil)
+	case types.AgentStreamEventNotice:
+		// 系统旁路提示（当前唯一来源：LLM 跨 Model Pool 降级，GD-13-005）。
+		// 走 KindStatus 而非 KindDelta——它不是模型输出，绝不能进 *reply
+		// （那会被当作助手回复正文持久化进消息历史）。
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "notice", "message": ev.Content}})
 	case types.AgentStreamEventStatus:
 		if ev.Content == "task_done" {
 			return true

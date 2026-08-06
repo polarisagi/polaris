@@ -165,6 +165,23 @@ func WithModel(model string) InferOption {
 	return func(o *InferOptions) { o.Model = model }
 }
 
+// WithModelPool 设置请求的目标 Model Pool（Provider 注册时绑定的 role，
+// 取值 general | default | reasoning | budget）。
+//
+// 语义是**偏好**而非硬约束：目标 Pool 无可用 Provider 时，InferenceRouter 按
+// 降级链级联回退（reasoning → general → default → budget），链尾还有一次
+// 不限 role 的全局兜底（见 internal/llm/router_failover.go tryPoolFallback）。
+// 兜底不可省——自托管最常见形态是只注册了一个 role 为空串的本地 Provider
+// （cmd/polaris/boot_substrate.go 的 reg.Register），若把 Pool 当硬约束，
+// 指定 "reasoning" 会在健康 Provider 就在眼前时直接拒绝服务，比 GD-13-005
+// 原本要修的"单池耗尽即断链"更糟。
+//
+// 与 WithModel 的分工：WithModel 传的是模型名（透传给 adapter），
+// WithModelPool 传的是路由用的角色池，二者不可互相替代。
+func WithModelPool(pool string) InferOption {
+	return func(o *InferOptions) { o.ModelPool = pool }
+}
+
 type
 
 // DecisionLogEntry 对应 006_decision_log.sql 表的数据结构

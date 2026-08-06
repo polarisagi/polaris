@@ -111,12 +111,13 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 		// 未指定 Pool 时全局耗尽，直接返回错误
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers exhausted", protocol.ErrAllProvidersFailed)
 	}
-	fallbacks, ok := ir.poolFallbackChain[originalPool]
-	if !ok || len(fallbacks) == 0 {
-		return nil, apperr.Wrap(apperr.CodeResourceExhausted,
-			"inference_router: all providers exhausted for pool "+originalPool,
-			protocol.ErrAllProvidersFailed)
-	}
+	// 降级链末尾追加一次"不限 role 的全局兜底"（空串 Pool）：
+	// findBestProviderLockedMultiSkip 对空 ModelPool 不做 role 过滤，等价于
+	// 降级前的 best() 行为。这一档不可省——自托管最常见形态是只注册了一个
+	// role 为空串的本地 Provider（boot_substrate.go reg.Register），若把 Pool
+	// 当硬约束，指定 "reasoning" 会在健康 Provider 就在眼前时直接拒绝服务，
+	// 比 GD-13-005 原本要修的"单池耗尽即断链"更糟。
+	fallbacks := append(append([]string{}, ir.poolFallbackChain[originalPool]...), "")
 	for _, fallbackPool := range fallbacks {
 		slog.Warn("llm_router: target pool exhausted, attempting cross-pool fallback",
 			"original_pool", originalPool, "fallback_pool", fallbackPool)

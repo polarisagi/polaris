@@ -249,6 +249,10 @@ const (
 	AgentStreamEventToolResult AgentStreamEventType = "tool_result"
 	AgentStreamEventError      AgentStreamEventType = "error"
 	AgentStreamEventStatus     AgentStreamEventType = "status"
+	// AgentStreamEventNotice 系统级旁路提示（非模型输出、非错误）。
+	// 目前唯一来源是 LLM 跨 Model Pool 降级通知（GD-13-005）。
+	// 前端应作为提示条渲染；**不得**并入助手回复正文或写进消息历史。
+	AgentStreamEventNotice AgentStreamEventType = "notice"
 )
 
 // AgentStreamEvent defines a token-level or block-level structured event published during FSM reasoning.
