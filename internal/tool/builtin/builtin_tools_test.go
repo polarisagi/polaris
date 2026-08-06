@@ -3,8 +3,6 @@ package builtin
 import (
 	"fmt"
 
-	"github.com/polarisagi/polaris/internal/security/token"
-
 	"context"
 	"encoding/json"
 	"net"
@@ -17,7 +15,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/tool"
 
-	"github.com/polarisagi/polaris/internal/action"
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
@@ -40,10 +37,9 @@ func (dummyPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) (t
 	return types.PolicyReviewResult{Allowed: true}, nil
 }
 
-func mockToken(caps []token.CapabilityType) *token.Token {
-	tok, _ := action.GetTokenManager().Mint("agent1", caps, 1, 5*time.Minute, 0)
-	return tok
-}
+// mockToken 已删除：它铸造的能力令牌只经 protocol.CtxCapabilityToken 注入 ctx，
+// 而该键在生产中从未被写入、读取点不可达，随 ADR-0088 决策二一并删除。
+// 令牌配额的真实校验点是 token.TokenManager.Consume（由 codeact 侧测试覆盖）。
 
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
@@ -61,8 +57,7 @@ func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"path": testFile})
-	tok := mockToken([]token.CapabilityType{token.CapFS})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	ctx := context.Background()
 	result, err := toolReg.ExecuteTool(ctx, "read_file", args, types.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool read_file: %v", err)
@@ -85,8 +80,7 @@ func TestBuiltinTools_ReadFile_BlockedPath(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"path": "/etc/passwd"})
-	tok := mockToken([]token.CapabilityType{token.CapFS})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	ctx := context.Background()
 	result, err := toolReg.ExecuteTool(ctx, "read_file", args, types.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool should not return err: %v", err)
@@ -112,8 +106,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("b"), 0o600)
 
 	args, _ := json.Marshal(map[string]string{"path": tmpDir})
-	tok := mockToken([]token.CapabilityType{token.CapFS})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	ctx := context.Background()
 	result, err := toolReg.ExecuteTool(ctx, "list_dir", args, types.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool list_dir: %v", err)
@@ -150,8 +143,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 		"content": "written by agent",
 		"append":  false,
 	})
-	tok := mockToken([]token.CapabilityType{token.CapFS})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	ctx := context.Background()
 	result, err := toolReg.ExecuteTool(ctx, "write_file", args, types.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool write_file: %v", err)
@@ -185,8 +177,7 @@ func TestBuiltinTools_FetchURL_SSRFGuard(t *testing.T) {
 	}
 	for _, url := range blocked {
 		args, _ := json.Marshal(map[string]string{"url": url})
-		tok := mockToken([]token.CapabilityType{token.CapNetwork})
-		ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+		ctx := context.Background()
 		result, err := toolReg.ExecuteTool(ctx, "fetch_url", args, types.TaintNone)
 		if err != nil {
 			t.Fatalf("ExecuteTool should not return err: %v", err)
@@ -236,8 +227,7 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
-	tok := mockToken([]token.CapabilityType{token.CapFS})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	ctx := context.Background()
 
 	// 首次提交
 	if err := os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("v1\n"), 0o600); err != nil {
@@ -328,8 +318,7 @@ func TestBuiltinTools_TemplateRender(t *testing.T) {
 	if err := RegisterBuiltinTools(sbx, toolReg, nil, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
-	tok := mockToken([]token.CapabilityType{token.CapFS})
-	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityToken{}, tok)
+	ctx := context.Background()
 
 	args, _ := json.Marshal(map[string]any{
 		"template": "Hello, {{.name}}! You have {{.count}} messages.",

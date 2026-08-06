@@ -38,12 +38,8 @@ func TestDetachedContext(t *testing.T) {
 		t.Errorf("Expected nil Done() channel, got %v", done)
 	}
 
-	// Test CtxCapabilityToken and CtxDryRun types
-	capCtx := context.WithValue(context.Background(), CtxCapabilityToken{}, "cap_token")
-	if val := capCtx.Value(CtxCapabilityToken{}); val != "cap_token" {
-		t.Errorf("Expected CtxCapabilityToken value 'cap_token', got %v", val)
-	}
-
+	// CtxCapabilityToken 已随 ADR-0088 决策二删除（该键从未被任何生产代码写入，
+	// 唯一读取点是一段不可达的配额校验），对应断言一并移除。
 	dryRunCtx := context.WithValue(context.Background(), CtxDryRun{}, true)
 	if val := dryRunCtx.Value(CtxDryRun{}); val != true {
 		t.Errorf("Expected CtxDryRun value true, got %v", val)
