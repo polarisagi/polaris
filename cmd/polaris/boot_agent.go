@@ -128,6 +128,8 @@ func buildAgent(
 	bgCtx context.Context,
 	personaRefiner *agentctx.PersonaRefiner,
 	bb *orchestrator.SQLiteBlackboard,
+	workspaceCtxLoader *agentctx.WorkspaceContextLoader,
+	workspaceRoot string,
 ) *sysagent.Agent {
 	a := sysagent.NewAgent(sessionID, taskRepo, sb.Router)
 	a.SetExtQuerier(sb.Store.DB())
@@ -242,6 +244,13 @@ func buildAgent(
 	// 单例（2026-07-13 deadcode 复核发现完整实现但从未接线：NewPersonaRefiner/
 	// Load/RefineAtSessionEnd/Save/ToUserPreferences 此前零生产调用点）。
 	a.InjectPersonaRefiner(personaRefiner)
+
+	// GD-14-005 工作区上下文协议：装载器为进程级共享（无状态，只读配置）。
+	// 信任列表默认为空 → 所有工作区上下文按 TaintHigh 走 ZoneExternalCatalog；
+	// 用户在 [agent] trusted_workspace_roots 中显式声明的路径才进 ZoneImmutable。
+	if workspaceCtxLoader != nil && workspaceRoot != "" {
+		a.InjectWorkspaceContextLoader(workspaceCtxLoader, workspaceRoot)
+	}
 	return a
 }
 
@@ -438,6 +447,14 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	swarmCoord := orchestrator.NewSwarmCoordinator(blackboard)
 	debateExec := orchestrator.NewDebateExecutor(blackboard) // GD-6：Debate/Critic 对抗协同模式
 
+	// GD-14-001：并发编排模式（Parallel/MapReduce/Sequential 均以
+	// StateGraphExecutor 为底座）共享同一个 PipelineOrchestrator，
+	// 使跨 Agent 补偿的"补偿任务自身超时/失败 → ESCALATE"处置与
+	// PatternDAG/Pipeline 完全一致，而不是各自实现一份。
+	parallelExec.SetPipelineOrchestrator(pipelineOrch)
+	mapReduceExec.SetPipelineOrchestrator(pipelineOrch)
+	sequentialExec.SetPipelineOrchestrator(pipelineOrch)
+
 	// ─── §10 Agent Kernel (L1 M4) ────────────────────────────────────────────
 	taskRepo := repo.NewSQLiteTaskReadRepository(sb.Store.DB())
 
@@ -489,7 +506,16 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Warn("polaris: persona refiner load failed, using defaults", "err", err)
 	}
 
-	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard)
+	// GD-14-005 工作区上下文装载器：无状态、只读配置，进程级共享一个实例。
+	// trusted_workspace_roots 默认为空 → 所有 AGENTS.md/CLAUDE.md 按 TaintHigh
+	// 走 ZoneExternalCatalog 围栏，只有用户显式声明的路径才进 ZoneImmutable。
+	workspaceCtxLoader := agentctx.NewWorkspaceContextLoader(sb.Cfg.Agent.TrustedWorkspaceRoots)
+	workspaceRoot := ""
+	if tb.VFSWorkspace != nil {
+		workspaceRoot = tb.VFSWorkspace.GetRootDir()
+	}
+
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot)
 
 	maxConcurrent := sb.Cfg.System.MaxAgents
 	if maxConcurrent <= 0 {
@@ -497,7 +523,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
-		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard)
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot)
 	}, maxConcurrent)
 	// KillSwitch 三阶段熔断（ADR-0009）接入：Pause/FullStop 阶段拒绝新 Agent 执行，
 	// Agent 内核异常退出上报错误计数（Acquire/AcquireHeadless 是全部触发路径的唯一收敛点）。
