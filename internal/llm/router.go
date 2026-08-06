@@ -50,17 +50,14 @@ func WithSemanticCache(cache *search.SemanticCache) RouterOption {
 	}
 }
 
-// WithPoolFallbackChain 覆盖默认 Pool 降级链配置（GD-13-005）。
-func WithPoolFallbackChain(chain map[string][]string) RouterOption {
-	return func(ir *InferenceRouter) {
-		ir.poolFallbackChain = chain
-	}
-}
-
-// WithModelPool 设置请求的目标 Model Pool（Provider 角色）。
-func WithModelPool(pool string) types.InferOption {
-	return func(o *types.InferOptions) { o.ModelPool = pool }
-}
+// 目标 Model Pool 的注入选项是 types.WithModelPool（与 types.WithModel 同处
+// pkg/types，供 internal/agent 等上层调用方使用，避免它们为一个纯粹的
+// options setter 反向依赖 internal/llm）。
+//
+// 注：不提供 WithPoolFallbackChain 之类的运行期覆盖选项——降级链是编译期常量
+// （见下方 NewInferenceRouter）。此前存在的该 RouterOption 无任何生产调用点，
+// 按 ADR-0062 deadcode 纪律（无 WIRE 决议 → 删除）移除；若将来确需配置化，
+// 需先补 ADR 与 configs 键位。
 
 // recordModelCallResult 把一次 Provider 调用结果同步给 ModelVersionRegistry
 // （2026-07-14 ADR-0062 关联接线：Registry.RecordCallResult 此前已完整实现连续
@@ -145,11 +142,23 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts 
 		if ir.outboxWriter == nil {
 			return
 		}
-		ev, _ := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "provider_recovery", map[string]string{
+		ev, evErr := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "provider_recovery", map[string]string{
 			"event_type":    "m4_provider_recovery",
 			"provider_name": providerName,
 		}, "recovery:"+providerName+":"+strconv.FormatInt(time.Now().Unix(), 10))
-		_ = ir.outboxWriter.Write(context.Background(), ev)
+		if evErr != nil {
+			// 构造失败会返回零值 OutboxEntry（无 target_engine/payload），
+			// 写出去只会污染 outbox；直接丢弃并告警。
+			slog.Error("llm_router: build provider_recovery outbox event failed",
+				"provider", providerName, "err", evErr)
+			return
+		}
+		// 恢复通知丢失 = M4 侧永远收不到"该 Provider 已恢复"，会一直按熔断态
+		// 绕开它直到下一次探活；必须告警而非静默（HE-1）。
+		if err := ir.outboxWriter.Write(context.Background(), ev); err != nil {
+			slog.Error("llm_router: provider recovery outbox write failed, downstream may keep provider circuit-open",
+				"provider", providerName, "err", err)
+		}
 	})
 	return ir
 }
@@ -203,6 +212,13 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 		entry = ir.registry.best(req)
 	}
 	if entry == nil {
+		// 指定了 Pool 却在该 Pool 内无可用 Provider：这与"该 Pool 的 Provider
+		// 全部调用失败"是同一种状况，必须同样走跨 Pool 降级链（GD-13-005），
+		// 而不是在这里直接拒绝——否则只要目标 Pool 一个 Provider 都没注册，
+		// 降级机制就完全不会被触发（这正是本特性此前在生产中不可达的原因之一）。
+		if req.ModelPool != "" {
+			return ir.tryPoolFallback(ctx, msgs, opts, req)
+		}
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}
 
@@ -350,6 +366,11 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 		entry = ir.registry.best(req)
 	}
 	if entry == nil {
+		// 与 Infer 同构：目标 Pool 内无可用 Provider 时不直接拒绝，先走
+		// 流式跨 Pool 降级链（GD-13-005）。
+		if req.ModelPool != "" {
+			return ir.streamPoolFallback(ctx, msgs, opts, req)
+		}
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
 	}
 

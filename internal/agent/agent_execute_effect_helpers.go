@@ -103,19 +103,13 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 				Payload:   a.sCtx.ExecuteResult,
 				CreatedAt: time.Now(),
 			})
-			if a.outboxWriter != nil {
-				ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
-					ID:        eventID,
-					Type:      "execution_completed",
-					TaskID:    a.memoryPartitionKey(),
-					Payload:   a.sCtx.ExecuteResult,
-					CreatedAt: time.Now(),
-				}, a.sCtx.SessionID+":exec:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-				if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
-					slog.Error("agent: outbox write failed, event may be lost",
-						"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
-				}
-			}
+			a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+				ID:        eventID,
+				Type:      "execution_completed",
+				TaskID:    a.memoryPartitionKey(),
+				Payload:   a.sCtx.ExecuteResult,
+				CreatedAt: time.Now(),
+			}, a.sCtx.SessionID+":exec:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "execution_completed")
 		}
 		// 业务执行失败会触发 ExecuteFail，同样不抛出以免阻断状态机
 		return "", nil, true
@@ -192,6 +186,15 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) 
 				ToolName:   tc.Name,
 				ToolInput:  tc.Input,
 			})
+		case types.StreamSystemNotice:
+			// 跨 Model Pool 降级提示（GD-13-005）：只透传给前端展示，
+			// **不**写进 content/reasoning——它不是模型输出，混进正文会污染
+			// 助手回复内容与后续轮次的消息历史。
+			a.publishStreamEvent(types.AgentStreamEvent{
+				Type:       types.AgentStreamEventNotice,
+				Content:    ev.Content,
+				TaintLevel: a.sCtx.GlobalTaintLevel,
+			})
 		case types.StreamError:
 			if inferErr == nil {
 				inferErr = apperr.New(apperr.CodeProviderExhausted, ev.Content)
@@ -246,19 +249,13 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
 		})
-		if a.outboxWriter != nil {
-			ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
-				ID:        eventID,
-				Type:      "task_perceived",
-				TaskID:    a.memoryPartitionKey(),
-				Payload:   []byte(content),
-				CreatedAt: time.Now(),
-			}, a.sCtx.SessionID+":perceive:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
-				slog.Error("agent: outbox write failed, event may be lost",
-					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
-			}
-		}
+		a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+			ID:        eventID,
+			Type:      "task_perceived",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		}, a.sCtx.SessionID+":perceive:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "task_perceived")
 	}
 
 	// 成功完成计划，写入计划记忆
@@ -283,19 +280,13 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
 		})
-		if a.outboxWriter != nil {
-			ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
-				ID:        eventID,
-				Type:      "plan_generated",
-				TaskID:    a.memoryPartitionKey(),
-				Payload:   []byte(content),
-				CreatedAt: time.Now(),
-			}, a.sCtx.SessionID+":plan:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
-				slog.Error("agent: outbox write failed, event may be lost",
-					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
-			}
-		}
+		a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+			ID:        eventID,
+			Type:      "plan_generated",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		}, a.sCtx.SessionID+":plan:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "plan_generated")
 	}
 
 	// 成功完成反思，写入反思记忆，并保存 ReasoningState
@@ -315,26 +306,19 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
 		})
-		if a.outboxWriter != nil {
-			ev, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicProject, "project", types.Event{
-				ID:        eventID,
-				Type:      "reflection_completed",
-				TaskID:    a.memoryPartitionKey(),
-				Payload:   []byte(content),
-				CreatedAt: time.Now(),
-			}, a.sCtx.SessionID+":reflect:"+a.sCtx.AgentID+":"+outboxUniqueSuffix())
-			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
-				slog.Error("agent: outbox write failed, event may be lost",
-					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
-			}
-		}
+		a.emitOutbox(ctx, protocol.TopicEpisodicProject, "project", types.Event{
+			ID:        eventID,
+			Type:      "reflection_completed",
+			TaskID:    a.memoryPartitionKey(),
+			Payload:   []byte(content),
+			CreatedAt: time.Now(),
+		}, a.sCtx.SessionID+":reflect:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "reflection_completed")
+
 		// 触发 Episodic → Semantic 4 阶段记忆蒸馏（ConsolidationPipeline，M5 §4）
-		if a.outboxWriter != nil && a.sCtx.SessionID != "" {
-			ev, _ := protocol.NewOutboxEvent(protocol.TopicMemoryConsolidate, "memory_consolidate", map[string]string{"session_id": a.sCtx.SessionID}, a.sCtx.SessionID+":consolidate:"+outboxUniqueSuffix())
-			if wErr := a.outboxWriter.Write(ctx, ev); wErr != nil {
-				slog.Error("agent: outbox write failed, event may be lost",
-					"agent_id", a.ID, "event_type", ev.Operation, "err", wErr)
-			}
+		if a.sCtx.SessionID != "" {
+			a.emitOutbox(ctx, protocol.TopicMemoryConsolidate, "memory_consolidate",
+				map[string]string{"session_id": a.sCtx.SessionID},
+				a.sCtx.SessionID+":consolidate:"+outboxUniqueSuffix(), "memory_consolidate")
 		}
 	}
 }

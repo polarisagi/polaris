@@ -336,7 +336,18 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			if err != nil {
 				return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)}
 			}
-			inferOpts := []types.InferOption{types.WithModel(llmEff.ModelPool), types.WithThinkingMode(llmEff.ThinkingMode)}
+			// GD-13-005 接线：llmEff.ModelPool 既是模型名提示（WithModel），也是
+			// 目标 Provider 角色池（WithModelPool，如 S_VALIDATE 固定用 "reasoning"）。
+			// 此前只传了 WithModel → req.ModelPool 恒为空 → 跨 Pool 级联降级在
+			// 生产中从未被触发过（该特性唯一的写入口就是 WithModelPool）。
+			// Pool 是偏好而非硬约束：目标池无可用 Provider 时路由会沿降级链回退，
+			// 链尾还有一次不限 role 的全局兜底（见 router_failover.go tryPoolFallback），
+			// 因此对"只注册了一个无角色本地 Provider"的 Tier-0 部署不构成回归。
+			inferOpts := []types.InferOption{
+				types.WithModel(llmEff.ModelPool),
+				types.WithModelPool(llmEff.ModelPool),
+				types.WithThinkingMode(llmEff.ThinkingMode),
+			}
 			// 原生 LLM function-calling 并行通路（2026-07-14）：仅在 S_PLAN 阶段、且
 			// 工具目录非空时附加 Tools——resp.ToolCalls 非空时由下方 toolCallsToDAGJSON
 			// 转换为 DAGModel JSON 再喂给既有 OnSuccess，两条通路收敛到同一张 DAG 上，
