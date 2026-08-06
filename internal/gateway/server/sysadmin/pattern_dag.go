@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -30,6 +31,5 @@ func (h *SysAdminHandler) HandlePatternDAGRun(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	httputil.WriteJSON(w, map[string]string{"status": "started"})
 }

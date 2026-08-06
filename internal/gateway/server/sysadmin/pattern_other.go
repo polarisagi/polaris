@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -30,8 +31,7 @@ func (h *SysAdminHandler) HandleMapReduceRun(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"result": string(res)})
+	httputil.WriteJSON(w, map[string]string{"result": string(res)})
 }
 
 // HandleParallelRun 触发一条 Parallel 编排任务。
@@ -56,8 +56,7 @@ func (h *SysAdminHandler) HandleParallelRun(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	httputil.WriteJSON(w, map[string]string{"status": "started"})
 }
 
 // HandleSequentialRun 触发一条 Sequential 编排任务。
@@ -82,8 +81,7 @@ func (h *SysAdminHandler) HandleSequentialRun(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	httputil.WriteJSON(w, map[string]string{"status": "started"})
 }
 
 // HandleSwarmRun 触发一条 Swarm 编排任务。
@@ -110,6 +108,5 @@ func (h *SysAdminHandler) HandleSwarmRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "handed_off"})
+	httputil.WriteJSON(w, map[string]string{"status": "handed_off"})
 }

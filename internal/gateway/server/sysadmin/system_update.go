@@ -85,7 +85,5 @@ func (h *SysAdminHandler) HandleTriggerUpdate(w http.ResponseWriter, r *http.Req
 }
 
 func respondJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	httputil.WriteJSONStatus(w, status, data)
 }

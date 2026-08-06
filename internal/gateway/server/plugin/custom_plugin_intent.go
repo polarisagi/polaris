@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -121,9 +122,7 @@ func (h *PluginHandler) HandleCreatePluginFromIntent( //nolint:cyclop
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSONStatus(w, http.StatusCreated, map[string]any{
 		"id": extID, "mcp_id": mcpID, "name": pluginName,
 		"type": "mcp", "plugin_dir": pluginDir,
 	})

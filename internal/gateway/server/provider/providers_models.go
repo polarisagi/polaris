@@ -41,8 +41,7 @@ func (h *ProviderHandler) HandleListModels(w http.ResponseWriter, r *http.Reques
 			UpdatedAt:  row.UpdatedAt,
 		})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
+	httputil.WriteJSON(w, map[string]any{"models": models})
 }
 
 func (h *ProviderHandler) HandleCreateModel(w http.ResponseWriter, r *http.Request) {
@@ -89,9 +88,7 @@ func (h *ProviderHandler) HandleCreateModel(w http.ResponseWriter, r *http.Reque
 	}
 	m.CreatedAt, m.UpdatedAt = now, now
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(m)
+	httputil.WriteJSONStatus(w, http.StatusCreated, m)
 }
 
 func (h *ProviderHandler) HandleUpdateModel(w http.ResponseWriter, r *http.Request) {
@@ -131,8 +128,7 @@ func (h *ProviderHandler) HandleUpdateModel(w http.ResponseWriter, r *http.Reque
 	}
 	m.UpdatedAt = now
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(m)
+	httputil.WriteJSON(w, m)
 }
 
 func (h *ProviderHandler) HandleDeleteModel(w http.ResponseWriter, r *http.Request) {
@@ -144,8 +140,7 @@ func (h *ProviderHandler) HandleDeleteModel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	httputil.WriteJSON(w, map[string]string{"status": "deleted"})
 }
 
 // ── model-roles ───────────────────────────────────────────────────────────────
@@ -168,8 +163,7 @@ func (h *ProviderHandler) HandleGetModelRoles(w http.ResponseWriter, r *http.Req
 	h.DB.QueryRowContext(r.Context(), query, "reasoning").
 		Scan(&reasoning.ModelID, &reasoning.ModelName, &reasoning.ProviderID, &reasoning.ProviderName) //nolint:errcheck
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"default":   def,
 		"reasoning": reasoning,
 	})
@@ -200,6 +194,5 @@ func (h *ProviderHandler) HandleSetModelRoles(w http.ResponseWriter, r *http.Req
 		}
 	}
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	httputil.WriteJSON(w, map[string]string{"status": "ok"})
 }

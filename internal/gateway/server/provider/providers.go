@@ -121,8 +121,7 @@ func (h *ProviderHandler) HandleListProviders(w http.ResponseWriter, r *http.Req
 			p.SAKeyJSON = "••••••••"
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"providers": list})
+	httputil.WriteJSON(w, map[string]any{"providers": list})
 }
 
 func (h *ProviderHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Request) {
@@ -157,9 +156,7 @@ func (h *ProviderHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Re
 	p.Models = []ProviderModel{}
 	p.CreatedAt, p.UpdatedAt = now, now
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(p)
+	httputil.WriteJSONStatus(w, http.StatusCreated, p)
 }
 
 func (h *ProviderHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Request) {
@@ -188,8 +185,7 @@ func (h *ProviderHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Re
 	}
 	p.UpdatedAt = now
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(p)
+	httputil.WriteJSON(w, p)
 }
 
 func (h *ProviderHandler) HandleDeleteProvider(w http.ResponseWriter, r *http.Request) {
@@ -200,8 +196,7 @@ func (h *ProviderHandler) HandleDeleteProvider(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.reloadProviders()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	httputil.WriteJSON(w, map[string]string{"status": "deleted"})
 }
 
 // HandleTestProvider 取厂商下第一个模型做连通性探测。
@@ -218,8 +213,7 @@ func (h *ProviderHandler) HandleTestProvider(w http.ResponseWriter, r *http.Requ
 	}
 
 	ok, msg := probeProvider(r.Context(), h.HTTPClient, p.Type, p.BaseURL, p.APIKey, modelID, p.ProjectID, p.Location)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": ok, "message": msg})
+	httputil.WriteJSON(w, map[string]any{"ok": ok, "message": msg})
 }
 
 // provider_models CRUD + model-roles 见 providers_models.go（R7 拆分）。

@@ -86,8 +86,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		source = "embedded:configs/defaults.toml"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"path":   source,
 		"format": "toml",
 		"raw":    string(raw),
@@ -118,8 +117,7 @@ func (s *Server) handleEvalRun(w http.ResponseWriter, r *http.Request) {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(report)
+	httputil.WriteJSON(w, report)
 }
 
 // handleAgentQuery 将用户查询发布为异步 Blackboard Task，立即返回 task_id。
@@ -150,8 +148,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 				release()
 			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		httputil.WriteJSON(w, map[string]any{
 			"task_id": "",
 			"status":  "pending",
 			"note":    "blackboard not available; intent injected directly",
@@ -185,12 +182,10 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted) // 202 Accepted
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]any{
 		"task_id": task.ID,
 		"status":  "pending",
-	})
+	}) // 202 Accepted
 }
 
 // handleGetAgentTask 查询 Blackboard 中指定 task 的当前状态快照。
@@ -218,8 +213,7 @@ func (s *Server) handleGetAgentTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(snap)
+	httputil.WriteJSON(w, snap)
 }
 
 // handleGetPendingApprovals/parseInterruptAction/handleAgentInterrupt/

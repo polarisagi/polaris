@@ -13,8 +13,7 @@ func (h *SysAdminHandler) HandleGetPreferences(w http.ResponseWriter, r *http.Re
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(prefs)
+	httputil.WriteJSON(w, prefs)
 }
 
 func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +48,5 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "key": key, "value": req.Value})
+	httputil.WriteJSON(w, map[string]string{"status": "ok", "key": key, "value": req.Value})
 }

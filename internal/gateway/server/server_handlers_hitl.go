@@ -35,8 +35,7 @@ func (s *Server) handleGetPendingApprovals(w http.ResponseWriter, r *http.Reques
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"pending": pending,
 	})
 }
@@ -173,8 +172,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	httputil.WriteJSON(w, map[string]string{
 		"status": "accepted",
 		"taskID": taskID,
 	})
@@ -218,8 +216,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	httputil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
 // handleStatus 返回 WebUI statusBar 所需的运行时指标快照。
@@ -243,8 +240,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// KillFullStop = 3；PolarisKillswitchStage 由 main.go KillSwitch 回调写入
 	sealed := metrics.GlobalKillswitchStage.Load() >= 3
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"sealed":          sealed,
 		"model_id":        modelID,
 		"token_used":      0,

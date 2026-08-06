@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -30,8 +29,7 @@ func (h *ChatHandler) HandleSessionRecap(w http.ResponseWriter, r *http.Request)
 	}
 
 	if len(msgs) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		httputil.WriteJSON(w, map[string]any{
 			"session_id":    sessionID,
 			"message_count": 0,
 			"summary":       "会话尚无消息",
@@ -89,8 +87,7 @@ func (h *ChatHandler) HandleSessionRecap(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"session_id":          sessionID,
 		"message_count":       len(msgs),
 		"user_messages":       userCount,

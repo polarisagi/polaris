@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -269,8 +270,7 @@ func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Re
 		},
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	httputil.WriteJSON(w, resp)
 }
 
 func (h *SysAdminHandler) writeOAIChunk(w http.ResponseWriter, flusher http.Flusher, chunk oaiChunk) {

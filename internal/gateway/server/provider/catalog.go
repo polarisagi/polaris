@@ -95,8 +95,7 @@ func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *h
 		out = append(out, provMap[id])
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"providers": out})
+	httputil.WriteJSON(w, map[string]any{"providers": out})
 }
 
 // fromCatalogRequest POST /v1/providers/from-catalog 请求体。
@@ -233,9 +232,7 @@ func (h *ProviderHandler) HandleCreateProviderFromCatalog(w http.ResponseWriter,
 		Enabled: true, Models: createdModels,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(out)
+	httputil.WriteJSONStatus(w, http.StatusCreated, out)
 }
 
 func (h *ProviderHandler) createModelsForProvider(ctx context.Context, provID string, catalogModels []catalogModelRow, now string) []ProviderModel {

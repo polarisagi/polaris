@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
@@ -125,9 +126,7 @@ func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "mcp_servers insert: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(resp)
+	httputil.WriteJSONStatus(w, http.StatusCreated, resp)
 }
 
 // internalInstallGeneric 安装 skill / plugin / app：写 extension_instances。
@@ -195,9 +194,7 @@ func (h *PluginHandler) installGenericExtension(w http.ResponseWriter, r *http.R
 		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(resp)
+	httputil.WriteJSONStatus(w, http.StatusCreated, resp)
 }
 
 // downloadAndInstallExtension（skill/plugin 异步下载安装）、

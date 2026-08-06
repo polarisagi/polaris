@@ -46,8 +46,7 @@ func (h *SysAdminHandler) HandleListPrompts(w http.ResponseWriter, r *http.Reque
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(entries)
+	httputil.WriteJSON(w, entries)
 }
 
 // handleGetPrompt GET /v1/config/prompts/{name}
@@ -62,8 +61,7 @@ func (h *SysAdminHandler) HandleGetPrompt(w http.ResponseWriter, r *http.Request
 	defaultVal := h.PromptMgr.ReadPromptDefault(filename)
 	currentVal := h.PromptMgr.ReadPrompt(filename, defaultVal)
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(PromptEntry{
+	httputil.WriteJSON(w, PromptEntry{
 		Name:         name,
 		CurrentValue: currentVal,
 		DefaultValue: defaultVal,
@@ -105,8 +103,7 @@ func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request
 		(*h.SoulMDContent) = req.Value
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "name": name})
+	httputil.WriteJSON(w, map[string]string{"status": "ok", "name": name})
 }
 
 // handleResetPrompt DELETE /v1/config/prompts/{name}
@@ -130,8 +127,7 @@ func (h *SysAdminHandler) HandleResetPrompt(w http.ResponseWriter, r *http.Reque
 	}
 
 	defaultVal := h.PromptMgr.ReadPromptDefault(filename)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	httputil.WriteJSON(w, map[string]string{
 		"status":        "ok",
 		"name":          name,
 		"restored_to":   "default",

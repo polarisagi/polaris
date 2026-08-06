@@ -66,8 +66,7 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 	if list == nil {
 		list = []sessionRow{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"sessions": list})
+	httputil.WriteJSON(w, map[string]any{"sessions": list})
 }
 
 // GET /v1/sessions/{sessionID}
@@ -115,8 +114,7 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 	if msgs == nil {
 		msgs = []msgRow{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sessionID, "messages": msgs})
+	httputil.WriteJSON(w, map[string]any{"session_id": sessionID, "messages": msgs})
 }
 
 func parseTaskDuration(createdStr, updatedStr string) int64 {
@@ -147,8 +145,7 @@ func (h *ChatHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	httputil.WriteJSON(w, map[string]string{"status": "deleted"})
 }
 
 // 会话辅助方法（EnsureSession/ListMessages/SaveMessage/UpdateSessionTitle/

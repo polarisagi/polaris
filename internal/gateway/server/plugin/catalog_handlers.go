@@ -175,9 +175,7 @@ func (h *PluginHandler) HandleInstallPlugin(w http.ResponseWriter, r *http.Reque
 						}
 					}
 				})
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted) // 202 Accepted
-				_ = json.NewEncoder(w).Encode(map[string]string{"status": "pending_approval", "id": extID})
+				httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]string{"status": "pending_approval", "id": extID}) // 202 Accepted
 				return
 			}
 		}
@@ -244,8 +242,7 @@ func (h *PluginHandler) HandleListMarketplaces(w http.ResponseWriter, r *http.Re
 		}
 		rows.Close()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"marketplaces": mps, "total": len(mps)})
+	httputil.WriteJSON(w, map[string]any{"marketplaces": mps, "total": len(mps)})
 }
 
 // HandleAddMarketplace POST /v1/plugins/marketplaces
@@ -271,9 +268,7 @@ func (h *PluginHandler) HandleAddMarketplace(w http.ResponseWriter, r *http.Requ
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(req)
+	httputil.WriteJSONStatus(w, http.StatusCreated, req)
 }
 
 // HandleDeleteMarketplace DELETE /v1/plugins/marketplaces/{id}
@@ -288,8 +283,7 @@ func (h *PluginHandler) HandleDeleteMarketplace(w http.ResponseWriter, r *http.R
 		http.Error(w, "marketplace not found or is builtin", http.StatusForbidden)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	httputil.WriteJSON(w, map[string]string{"status": "deleted"})
 }
 
 // cond 三元运算辅助（Go 无三元）
