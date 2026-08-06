@@ -146,7 +146,9 @@ web_search_api_key = ""
 [orchestrator]
 mode = "blackboard"
 protocol = "structured_event"
-task_retention_ttl = "24h"
+# 终态任务保留秒数（86400 = 24h）。到期由 Blackboard Reaper 归档进 decision_log
+# 后物理删除（GD-13-004）。0 = 用代码默认 24h；低于 300 秒的取值会被拒绝。
+task_retention_ttl_sec = 86400
 
 [self_improve]
 gradient = false

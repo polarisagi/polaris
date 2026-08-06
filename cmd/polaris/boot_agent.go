@@ -363,8 +363,10 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	// ─── §9 Blackboard & Scheduler (L2 M8 + L3 M13) ─────────────────────────
 	blackboard := orchestrator.NewSQLiteBlackboard(sb.Store.DB())
-	if sb.Cfg.Orchestrator.TaskRetentionTTL > 0 {
-		blackboard.SetTaskRetentionTTL(sb.Cfg.Orchestrator.TaskRetentionTTL)
+	if ttlSec := sb.Cfg.Orchestrator.TaskRetentionTTLSec; ttlSec > 0 {
+		// SetTaskRetentionTTL 自身拒绝 < 5 分钟的取值（保底不让 Reaper 把刚完成
+		// 的任务立刻回收），这里只负责单位换算，不重复校验。
+		blackboard.SetTaskRetentionTTL(time.Duration(ttlSec) * time.Second)
 	}
 
 	// KillSwitch recovery 回调：恢复 oom_evicted 挂起任务
