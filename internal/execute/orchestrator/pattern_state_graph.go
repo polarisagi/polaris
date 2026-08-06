@@ -45,6 +45,11 @@ type StateGraphExecutor struct {
 	chkRepo        protocol.TaskCheckpointRepository
 	bb             *SQLiteBlackboard
 	PreserveNodeID bool // 若为 true 且为单次访问，则保留原始 node ID 作为 Task ID
+
+	// pipelineOrch 复用 PipelineOrchestrator 的补偿任务监控与 ESCALATE 处置
+	// （GD-14-001，见 state_graph_saga.go）。为 nil 时补偿仍会投递，
+	// 但"补偿任务自身失败"无人跟进，运行期会显式告警。
+	pipelineOrch *PipelineOrchestrator
 }
 
 // NewStateGraphExecutor 创建 StateGraphExecutor。
@@ -53,6 +58,13 @@ func NewStateGraphExecutor(bb *SQLiteBlackboard) *StateGraphExecutor {
 		bb:      bb,
 		chkRepo: repo.NewSQLiteTaskCheckpointRepository(bb.DB()),
 	}
+}
+
+// SetPipelineOrchestrator 注入补偿任务监控器（GD-14-001）。
+// 与 PatternDAGExecutor 复用同一个 PipelineOrchestrator 实例，
+// 使三条补偿路径共用同一套超时/失败 ESCALATE 处置。
+func (se *StateGraphExecutor) SetPipelineOrchestrator(po *PipelineOrchestrator) {
+	se.pipelineOrch = po
 }
 
 // stateGraphRun 承载单次 Execute 调用的可变运行时状态，将其从局部变量收拢为
@@ -69,6 +81,10 @@ type stateGraphRun struct {
 	arrivedPreds    map[string]map[string]bool
 	totalPosted     int
 	syntheticEvents []types.BlackboardEvent
+
+	// executedUndo 已成功完成且声明了 Compensation 的节点，按完成的**逆序**
+	// 排列（后完成的先补偿）。见 state_graph_saga.go。
+	executedUndo []compensationEntry
 }
 
 // Execute 接收状态图规范并调度执行，直至所有已触发节点完成且无新触发产生，
@@ -165,6 +181,8 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 
 	switch ev.Type {
 	case "task_completed":
+		// GD-14-001：登记补偿动作（必须在 delete(inFlight) 之前取 taskID）。
+		r.recordCompensable(nodeID, r.inFlight[nodeID])
 		delete(r.inFlight, nodeID)
 
 		// 写入 checkpoint done（尽力而为，不阻断下游边求值——持续失败会影响崩溃
@@ -215,6 +233,10 @@ func (r *stateGraphRun) handleEvent(ctx context.Context, ev types.BlackboardEven
 					"task_id", r.parentTaskID, "node_id", nodeID, "err", err)
 			}
 		}
+		// GD-14-001 跨 Agent Saga 协调：Fail-Fast 返回前先取消在途兄弟任务、
+		// 再逆序补偿已成功节点。此前这里直接 return，并发扇出场景下
+		// "部分成功部分失败"留下的副作用无人回滚——而这恰恰是扇出的常态。
+		r.abortWithCompensation(ctx, nodeID, ev.Payload)
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("state graph node %s failed: %s", nodeID, string(ev.Payload)))
 	default:
 		return nil

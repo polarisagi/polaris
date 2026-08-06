@@ -50,3 +50,10 @@ func (se *SequentialExecutor) Execute(ctx context.Context, parentTaskID string, 
 	}
 	return se.sge.Execute(ctx, parentTaskID, spec)
 }
+
+// SetPipelineOrchestrator 注入补偿任务监控器，透传给内部 StateGraphExecutor
+// （GD-14-001）。本模式的补偿能力完全来自底座 StateGraphExecutor，
+// 不注入时补偿仍会投递，但补偿任务自身失败无人跟进。
+func (se *SequentialExecutor) SetPipelineOrchestrator(po *PipelineOrchestrator) {
+	se.sge.SetPipelineOrchestrator(po)
+}

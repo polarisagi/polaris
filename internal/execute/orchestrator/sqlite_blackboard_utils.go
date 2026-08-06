@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // NewSQLiteBlackboard 创建 SQLiteBlackboard。
@@ -56,6 +57,48 @@ func (bb *SQLiteBlackboard) removeCancelFunc(taskID string) {
 	if bb.cancels != nil {
 		delete(bb.cancels, taskID)
 	}
+}
+
+// CancelTask 中止一个在途任务：先触发其 ctx 取消（让 Worker 侧 goroutine 真正
+// 停下来），再把 DB 状态置为 failed（GD-14-001 跨 Agent Saga 协调）。
+//
+// 两步顺序不可交换：只改 DB 状态不会让正在跑的 goroutine 停下，它仍会继续产生
+// 副作用；而只 cancel 不改状态，任务会一直挂在 running 直到 Reaper 30 分钟后
+// 才判定僵尸——补偿协调等不了那么久。
+//
+// 任务已终态或 cancel 函数不存在（Worker 已自然退出）时不视为错误：
+// 目标状态"这个任务不会再产生副作用"已经达成。
+func (bb *SQLiteBlackboard) CancelTask(ctx context.Context, taskID string) error {
+	bb.mu.Lock()
+	cancel, hasCancel := bb.cancels[taskID]
+	if hasCancel {
+		delete(bb.cancels, taskID)
+	}
+	bb.mu.Unlock()
+
+	if hasCancel && cancel != nil {
+		cancel()
+	}
+
+	// 只更新仍处于非终态的行：已 done/failed 的任务不得被回写覆盖。
+	res, err := bb.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET status=?, error=?, version=version+1, updated_at=datetime('now')
+		WHERE task_id=? AND status IN (?, ?, ?)`,
+		statusFailed, "cancelled_by_saga_coordinator", taskID,
+		statusPending, statusClaimed, statusRunning,
+	)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CancelTask", err)
+	}
+	if affected, _ := res.RowsAffected(); affected > 0 {
+		bb.broadcast(types.BlackboardEvent{
+			Type:   "task_failed",
+			TaskID: taskID,
+			Err:    apperr.New(apperr.CodeInternal, "cancelled_by_saga_coordinator"),
+		})
+	}
+	return nil
 }
 
 // resolveMaxDepth 查询注册的 agent MaxDepth
