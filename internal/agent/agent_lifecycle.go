@@ -45,7 +45,6 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 	maxTaint := types.TaintNone
 	var sessionID string
 	var preferences map[string]string
-	var sagaLog []types.SagaStep
 	var initialMaxStepsLimit int
 
 	if a.sCtx != nil {
@@ -56,7 +55,6 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 		}
 		sessionID = a.sCtx.SessionID
 		preferences = a.sCtx.Preferences
-		sagaLog = a.sCtx.SagaLog
 		initialMaxStepsLimit = a.sCtx.InitialMaxStepsLimit
 		a.sCtx.Mu.RUnlock()
 	}
@@ -71,11 +69,10 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 		Provider:             a.provider,
 		Policy:               a.Security.PolicyGate,
 		Preferences:          preferences,
-		SagaLog:              sagaLog, // No type conversion needed, assuming SagaLog is same type
 		InitialMaxStepsLimit: initialMaxStepsLimit,
-		// 与 runExecuteDAG 注入给 DAGExecutor 的是同一个实例（a.sagaLedger），
-		// 两条补偿路径据此对同一 undo 只执行一次。
-		SagaLedger: a.sagaLedger,
+		// 与 runExecuteDAG 注入给 DAGExecutor 的是同一个实例（a.sagaRecorder）：
+		// DAG 层执行补偿并写入结果，FSM 的 S_ROLLBACK 读取它决定 OK/PARTIAL。
+		SagaRecorder: a.sagaRecorder,
 	}
 }
 
@@ -142,6 +139,38 @@ func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
 		a.sCtx.InstalledExtensionsInfo = ""
 	}
 	a.sCtx.Mu.Unlock()
+}
+
+// refreshWorkspaceContext 探测并装载工作区标准上下文文档（GD-14-005）。
+//
+// 与 refreshInstalledExtensions 并列在感知阶段刷新，而非启动时装载一次：
+// 工作区在会话过程中可能被切换（VFS GetRootDir 变化），且用户可能在会话中
+// 修改 AGENTS.md——每轮重读的成本是几次 stat + 小文件读，远低于装载过期约束
+// 带来的行为不一致。
+//
+// 信任边界在 loader 内部判定（见 WorkspaceContextLoader.isTrusted）：
+// 未在配置中显式声明信任的工作区，其上下文一律走 Untrusted 通道。
+func (a *Agent) refreshWorkspaceContext(ctx context.Context) {
+	if a.workspaceCtxLoader == nil || a.workspaceRoot == "" {
+		return
+	}
+	docs := a.workspaceCtxLoader.Load(ctx, a.workspaceRoot)
+
+	a.sCtx.Mu.Lock()
+	a.sCtx.WorkspaceContextTrusted = agentctx.RenderTrusted(docs)
+	if ts := agentctx.RenderUntrusted(docs); !ts.IsEmpty() {
+		a.sCtx.WorkspaceContextUntrusted = ts.UnsafeContent()
+	} else {
+		a.sCtx.WorkspaceContextUntrusted = ""
+	}
+	a.sCtx.Mu.Unlock()
+}
+
+// InjectWorkspaceContextLoader 注入工作区上下文装载器与工作区根目录。
+// 任一为空即整体禁用该能力（与未接线时行为一致）。
+func (a *Agent) InjectWorkspaceContextLoader(l *agentctx.WorkspaceContextLoader, root string) {
+	a.workspaceCtxLoader = l
+	a.workspaceRoot = root
 }
 
 // InjectExtensionActivator 注入按需扩展激活器。

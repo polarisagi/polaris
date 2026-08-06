@@ -83,10 +83,13 @@ func maxCallsFromOps(ops []TokenOperation) int {
 // 整个丢弃——导致 M07 §4.6 与本函数注释三处声称的"一次性令牌"从未真正生效，
 // 实际铸出的是 5 分钟内可无限次复用的令牌。令牌一旦泄漏（如被注入的 Agent
 // 转手给其它节点），无限次调用与单次调用的风险差异是数量级的。
-func NewJITToken(agentID, sessionID string, ops []TokenOperation, depth int, sandboxTier int) (*token.Token, error) {
-	if depth >= 3 {
-		return nil, ErrMaxDelegationDepth
-	}
+// 签名清理（2026-08-06）：移除 sessionID 与 depth 两个参数。
+//   - sessionID 自引入起从未被使用过（令牌 claims 里没有会话维度，
+//     TokenClaims 只有 AgentID）；
+//   - depth 的委托链校验已于 2026-07-14 移除（见下方注释），唯一生产调用点
+//     固定传 0，`depth >= 3` 分支结构上不可达。留着两个"看起来在做事、
+//     实际不做事"的参数，会让调用方误以为委托深度在此处被校验。
+func NewJITToken(agentID string, ops []TokenOperation, sandboxTier int) (*token.Token, error) {
 	tok, err := getTokenManager().Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute, maxCallsFromOps(ops))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "capability_token: JIT Mint 失败", err)
@@ -103,12 +106,15 @@ func NewJITToken(agentID, sessionID string, ops []TokenOperation, depth int, san
 // 哨兵错误统一改用 pkg/apperr（GR-Batch4 capability_token 修复）：原生 &TokenError{...}
 // 未接入 apperr 体系会导致令牌提权/越权失败时 Trace 栈丢失上游上下文（apperr.CodeOf/IsCode
 // 无法识别）。这里直接把哨兵变量本身的类型换成 *apperr.Error，而不是在每个 return 处再包一层
-// apperr.Wrap——因为 NewJITToken 直接 `return nil, ErrMaxDelegationDepth` 返回这个哨兵，
-// 调用方依赖的是"哨兵值本身被原样返回"（errors.Is 与 identity 比较均需成立），若在返回处
-// 再包一层 apperr.Wrap 会产生新对象，破坏既有比较语义；直接让哨兵本身就是 *apperr.Error，
-// 两种比较方式均不受影响，同时 apperr.IsCode(err, ...) 也能正确识别。
+// apperr.Wrap——调用方依赖的是"哨兵值本身被原样返回"（errors.Is 与 identity 比较均需成立），
+// 若在返回处再包一层 apperr.Wrap 会产生新对象，破坏既有比较语义；直接让哨兵本身就是
+// *apperr.Error，两种比较方式均不受影响，同时 apperr.IsCode(err, ...) 也能正确识别。
+//
+// ErrMaxDelegationDepth 已删除（2026-08-06）：委托链机制 2026-07-14 移除后，
+// 它的唯一 return 点（NewJITToken 的 depth>=3 分支）随 depth 参数一并消失，
+// 全仓无任何生产/测试引用。派生深度校验的现役实现是
+// execute/orchestrator 的 MaxSpawnDepth（PostTask/PostBatch 前置校验）。
 var (
-	ErrTokenExpired       = apperr.New(apperr.CodeUnauthorized, "token expired")
-	ErrMaxDelegationDepth = apperr.New(apperr.CodeResourceExhausted, "max delegation depth exceeded")
-	ErrPolicyRevoked      = apperr.New(apperr.CodeForbidden, "policy revoked during execution")
+	ErrTokenExpired  = apperr.New(apperr.CodeUnauthorized, "token expired")
+	ErrPolicyRevoked = apperr.New(apperr.CodeForbidden, "policy revoked during execution")
 )

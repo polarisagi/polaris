@@ -68,13 +68,17 @@ StateContext struct {
 	Provider             Provider
 	Policy               PolicyGate
 	Preferences          map[string]string // 从 DB 加载的用户偏好配置
-	SagaLog              []types.SagaStep  // Saga 记录日志
 	InitialMaxStepsLimit int               // Agent 启动时的原始步骤上限
 	ProviderSuspendCount int               // 连续无可用 provider 失败次数
 
-	// SagaLedger 跨补偿路径去重账本，与 execute/dag.DAGExecutor 共享同一实例。
-	// nil 时退化为不去重（行为与引入前一致）。见 SagaCompensationLedger 注释。
-	SagaLedger *SagaCompensationLedger
+	// SagaRecorder execute/dag 补偿结果的回报通道，与 DAGExecutor 共享同一实例。
+	// FSM 的 S_ROLLBACK 据此在 OK/PARTIAL 之间选择，自身不执行补偿。
+	// nil 时视为无补偿发生。见 SagaCompensationRecorder 注释。
+	//
+	// 注：此前这里还有一个 `SagaLog []types.SagaStep` 字段，配合
+	// ToolDefinition.UndoFn 构成第二套补偿机制。该字段在全仓从未被赋值，
+	// 已随 ADR-0088 决策一整体删除。
+	SagaRecorder *SagaCompensationRecorder
 }
 
 type

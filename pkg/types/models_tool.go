@@ -60,9 +60,12 @@ type Tool struct {
 	TrustTier    TrustTier
 	Source       ToolSource
 	SourceURI    string
-	UndoFn       string // 补偿工具的名称 (ISSUE-03)
-	Timeout      time.Duration
-	RetryPolicy  *RetryPolicy
+	// UndoFn 已删除（ADR-0088 决策一）：全仓从未被赋值（tool.yaml 加载器无对应
+	// 字段映射），且工具定义层拿不到本次调用的实参，无法表达"撤销刚才那次具体
+	// 操作"。Saga 补偿改由 protocol.ExecNode.Compensation 单一承载——它携带
+	// 本次调用的实参，由 execute/dag.runCompensation 唯一执行。
+	Timeout     time.Duration
+	RetryPolicy *RetryPolicy
 }
 type ToolCallRequest struct {
 	ID             string

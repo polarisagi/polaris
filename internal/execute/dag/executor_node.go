@@ -114,8 +114,10 @@ func (e *DAGExecutor) runCompensation(ctx context.Context) {
 	compCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// 账本从**父 ctx** 取（compCtx 是 Background 派生的，不带值）。
-	ledger := protocol.SagaLedgerFromContext(ctx)
+	// 记录器从**父 ctx** 取（compCtx 是 Background 派生的，不带值）。
+	// 补偿结果经它回报给 FSM 的 S_ROLLBACK 转移，决定 S_ROLLBACK_OK 还是
+	// S_ROLLBACK_PARTIAL（ADR-0088 决策一：补偿由本层唯一执行，FSM 只汇报）。
+	recorder := protocol.SagaRecorderFromContext(ctx)
 
 	e.mu.Lock()
 	undos := append([]CompensationAction{}, e.executedUndo...)
@@ -133,29 +135,18 @@ func (e *DAGExecutor) runCompensation(ctx context.Context) {
 			continue
 		}
 
-		// 跨补偿路径去重：本 undo 若已被 FSM 侧 rollbackSaga 执行过则跳过。
-		// 两条路径的数据来源相互独立（node.Compensation vs toolDef.UndoFn），
-		// 对非幂等 undo 重复执行会造成数据损坏——见
-		// protocol.SagaCompensationLedger 类型注释。
-		if !ledger.TryClaim(comp.ToolName, comp.Args) {
-			slog.Info("dag_executor: saga compensation already performed by peer path, skipping",
-				"tool", comp.ToolName)
-			continue
-		}
-
 		// 补偿失败记录但继续（Saga 尽力补偿原则）
 		// 补偿动作继承与原节点相同的污染等级
-		if res, err := e.toolExec(compCtx, comp.ToolName, comp.Args, comp.TaintLevel); err != nil || (res != nil && !res.Success) {
-			// 写入审计日志：生产环境应通过 EventLog 记录 saga_compensation_failed
-			errMsg := ""
-			if err != nil {
-				errMsg = err.Error()
-			} else if res != nil {
-				errMsg = res.Error
-			}
+		res, err := e.toolExec(compCtx, comp.ToolName, comp.Args, comp.TaintLevel)
+		compErr := err
+		if compErr == nil && res != nil && !res.Success {
+			compErr = apperr.New(apperr.CodeInternal, "dag_executor: saga compensation returned failure: "+res.Error)
+		}
+		recorder.Record(comp.ToolName, compErr)
+		if compErr != nil {
 			slog.Warn("dag_executor: saga compensation failed",
 				"tool", comp.ToolName,
-				"error", errMsg,
+				"error", compErr.Error(),
 			)
 		}
 	}

@@ -159,16 +159,15 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		return apperr.New(apperr.CodeInternal, "runExecuteDAG: dagRunner is nil (fail-closed)")
 	}
 
-	// Saga 跨路径补偿去重账本：每次 DAG 执行新建一份，同时给到
-	//   1. execute/dag.DAGExecutor.runCompensation（经 ctx 注入，见下方 dagCtx）
-	//   2. FSM 的 rollbackSaga（经 buildStateContext 的 SagaLedger 字段）
-	// 两条补偿路径的数据来源相互独立（node.Compensation vs toolDef.UndoFn），
-	// 不去重会让同一个 undo 执行两次——对非幂等补偿是数据损坏。
-	// 生命周期刻意是"每次 runExecuteDAG 一份"：账本表达的是"本次失败的这一轮
-	// 补偿里，某个 undo 是否已经跑过"，跨轮次复用会让 S_REPLAN 后重新执行的
-	// 新一轮补偿被错误跳过。
-	a.sagaLedger = protocol.NewSagaCompensationLedger()
-	ctx = context.WithValue(ctx, protocol.CtxSagaLedgerKey{}, a.sagaLedger)
+	// Saga 补偿结果记录器：每次 DAG 执行新建一份，
+	//   写入方 = execute/dag.DAGExecutor.runCompensation（经下方 ctx 注入）
+	//   读取方 = FSM 的 rollbackSaga（经 buildStateContext 的 SagaRecorder 字段）
+	// 补偿由 DAG 层唯一执行，FSM 的 S_ROLLBACK 只据此汇报 OK/PARTIAL
+	// （ADR-0088 决策一）。
+	// 生命周期刻意是"每次 runExecuteDAG 一份"：它表达的是"本轮失败触发的这次
+	// 补偿结果如何"，跨轮复用会让 S_REPLAN 后新一轮的判定读到上一轮的残留。
+	a.sagaRecorder = protocol.NewSagaCompensationRecorder()
+	ctx = context.WithValue(ctx, protocol.CtxSagaRecorderKey{}, a.sagaRecorder)
 
 	var callCount atomic.Int32
 
@@ -239,8 +238,8 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			// capability_id（可伪造/越权），此处铸造一次性 Token 立即传给沙箱执行入口：
 			// depth=0（顶层铸造非委托），sandboxTier=3 对应 ContainerSandbox/Sbx-L3
 			// （docs/arch/M07-Tool-Action-Layer.md §7.4 inv_global_07 "强制 Sbx-L3"）。
-			jitTok, err := action.NewJITToken(a.ID, a.sCtx.SessionID,
-				[]action.TokenOperation{{ToolName: lang, MaxCalls: 1}}, 0, 3)
+			jitTok, err := action.NewJITToken(a.ID,
+				[]action.TokenOperation{{ToolName: lang, MaxCalls: 1}}, 3)
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: JIT token mint failed", err)
 			}
@@ -419,15 +418,12 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		}
 
 		if err == nil && res != nil && res.Success {
-			toolDef, lookupErr := a.toolRegistry.Lookup(toolName)
-			if lookupErr == nil && toolDef.UndoFn != "" {
-				a.sCtx.SagaLog = append(a.sCtx.SagaLog, types.SagaStep{
-					NodeID:   toolName, // executor 不传 NodeID，暂以 toolName 代替
-					ToolName: toolName,
-					UndoFn:   toolDef.UndoFn,
-					Args:     args,
-				})
-			}
+			// 此处曾按 toolDef.UndoFn 追加 sCtx.SagaLog，构成 FSM 侧的第二套
+			// Saga 补偿。该机制结构上是死的（UndoFn 全仓从未被赋值），且工具
+			// 定义层拿不到本次调用的实参、无法表达"撤销刚才那次具体操作"，
+			// 已随 ADR-0088 决策一整体删除。补偿的唯一声明来源是
+			// ExecNode.Compensation，唯一执行者是 execute/dag.runCompensation。
+
 			// Logic Collapse 触发器：记录工具调用成功轨迹（M9 §4 Skill 蒸馏）
 			if a.toolCallRecorder != nil {
 				a.toolCallRecorder.RecordToolSuccess(ctx, toolName)
