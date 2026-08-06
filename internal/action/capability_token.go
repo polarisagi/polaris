@@ -54,14 +54,40 @@ func opsToCapabilities(ops []TokenOperation) []token.CapabilityType {
 	return caps
 }
 
+// maxCallsFromOps 取 ops 中最严格（最小非零）的 MaxCalls 作为令牌的单任务调用上限。
+// 全部为 0（未声明）时返回 0，即 TokenClaims 语义下的"无限制"。
+//
+// 最小权限原则：与 TokenManager.minTTL 取最短 TTL 同构——一个令牌覆盖多个操作时，
+// 约束取各操作中最紧的那个，而不是最松的。
+func maxCallsFromOps(ops []TokenOperation) int {
+	minCalls := 0
+	for _, op := range ops {
+		if op.MaxCalls <= 0 {
+			continue
+		}
+		if minCalls == 0 || op.MaxCalls < minCalls {
+			minCalls = op.MaxCalls
+		}
+	}
+	return minCalls
+}
+
 // NewJITToken JIT 签发 Token。
 // 签发后置到 Sandbox 门口: Planner(S_PLAN)→LLM决定调用→不签发Token(仅ToolIntent)
-// → Gate1-5通过→JIT Mint Token(MaxCalls=1, TTL=5min)→立即拉起Sandbox
+// → Gate1-5通过→JIT Mint Token(MaxCalls 取自 ops, TTL=5min)→立即拉起Sandbox
+//
+// MaxCalls 透传修复（2026-08-06）：此前这里对 Mint 硬编码 maxCallsPerTask=0，
+// 而 TokenClaims.MaxCallsPerTask 的 0 语义是**无限制**（见该字段注释）。
+// 调用方（agent_execute_dag.go code_act 分支）明明传了
+// TokenOperation{MaxCalls: 1}，opsToCapabilities 却只取 ToolName、把 MaxCalls
+// 整个丢弃——导致 M07 §4.6 与本函数注释三处声称的"一次性令牌"从未真正生效，
+// 实际铸出的是 5 分钟内可无限次复用的令牌。令牌一旦泄漏（如被注入的 Agent
+// 转手给其它节点），无限次调用与单次调用的风险差异是数量级的。
 func NewJITToken(agentID, sessionID string, ops []TokenOperation, depth int, sandboxTier int) (*token.Token, error) {
 	if depth >= 3 {
 		return nil, ErrMaxDelegationDepth
 	}
-	tok, err := getTokenManager().Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute, 0)
+	tok, err := getTokenManager().Mint(agentID, opsToCapabilities(ops), sandboxTier, 5*time.Minute, maxCallsFromOps(ops))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "capability_token: JIT Mint 失败", err)
 	}
