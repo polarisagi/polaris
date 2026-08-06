@@ -153,20 +153,22 @@ func TestEngine_VerifyRequest_NoKeyRegistered(t *testing.T) {
 	}
 }
 
-func TestEngine_VerifyRequestDev_NoKey_SkipsSig(t *testing.T) {
-	e := NewEngine(nil, WithDevMode(true)) // 无注册密钥 → dev 模式跳过签名
+// TestEngine_NoSignatureBypassSurface 守护 GR-10-005 终态处置：
+// Engine 上不得再出现任何"未注册公钥即放行"的验签绕过入口
+// （历史上的 VerifyRequestDev + WithDevMode 已删除，理由见 engine.go
+// EngineOption 注释）。本测试从行为侧钉住该结论：无论角色是否注册公钥，
+// 唯一的验签入口 VerifyRequest 都必须 fail-closed。
+func TestEngine_NoSignatureBypassSurface(t *testing.T) {
+	e := NewEngine(nil) // 无任何注册公钥
 	ts := time.Now().Unix()
-	// 即使签名是空的，dev 模式下角色合法时应放行
-	if err := e.VerifyRequestDev(RoleM9Optimizer, PartitionTraining, nil, ts); err != nil {
-		t.Fatalf("VerifyRequestDev should skip sig when no key: %v", err)
-	}
-}
 
-func TestEngine_VerifyRequestDev_NoKey_StillEnforcesRole(t *testing.T) {
-	e := NewEngine(nil, WithDevMode(true))
-	ts := time.Now().Unix()
-	// dev 模式下，角色访问违规仍应拒绝
-	if err := e.VerifyRequestDev(RoleM9Optimizer, PartitionHoldout, nil, ts); err == nil {
-		t.Fatal("VerifyRequestDev should still enforce role access policy")
+	// 合法角色 + 合法分区，但无公钥：仍须拒绝（不得因"看起来像开发环境"放行）。
+	if err := e.VerifyRequest(RoleM9Optimizer, PartitionTraining, nil, ts); err == nil {
+		t.Fatal("VerifyRequest must fail-closed when the role has no registered public key")
+	}
+
+	// 角色访问白名单本身也仍然生效（分区越权独立于签名校验）。
+	if err := e.CheckAccess(RoleM9Optimizer, PartitionHoldout); err == nil {
+		t.Fatal("CheckAccess must still reject holdout partition for m9_optimizer")
 	}
 }
