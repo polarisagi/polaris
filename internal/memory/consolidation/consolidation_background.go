@@ -232,16 +232,46 @@ func (fm *ForgettingManager) cleanupWithKV(ctx context.Context) error {
 	return nil
 }
 
+// processForgettableItemKV 为一条低价值记忆打 tombstone；超过 30 天的再做冷归档。
+//
+// 三处 store 调用此前均为 `_ =` 静默丢弃（2026-08-06 修复），每一处失败都有
+// 明确且不可自愈的后果，必须可观测（HE-1 / HE-6）：
+//   - tombstone 写失败 → ColdArchiver.PhysicalCompact 永远扫不到这条，
+//     该记忆事实上"永不被遗忘"，遗忘机制对它静默失效；
+//   - 归档 Put 失败后若仍继续删热存储 → 记忆直接永久丢失（无处可恢复），
+//     因此这里改为**归档失败即中止本条处理**，宁可留在热存储等下一轮；
+//   - 热存储 Delete 失败 → 同一条记忆同时存在于热存储与 archive: 前缀，
+//     后续检索会重复命中，且下一轮会重复归档。
 func (fm *ForgettingManager) processForgettableItemKV(ctx context.Context, id string, decayWeight float64, ageHours float64, key, val []byte) {
 	tombstoneKey := fmt.Appendf(nil, "forgettable:%s", id)
 	tombstoneVal := fmt.Appendf(nil, `{"id":"%s","decay_weight":%.4f,"marked_at":%d}`, id, decayWeight, time.Now().UnixMilli())
-	_ = fm.store.Put(ctx, tombstoneKey, tombstoneVal)
+	if err := fm.store.Put(ctx, tombstoneKey, tombstoneVal); err != nil {
+		slog.ErrorContext(ctx, "forgetting: tombstone write failed, item will never be reclaimed",
+			"id", id, "decay_weight", decayWeight, "err", err)
+		return
+	}
 
-	if ageHours > 30*24 {
-		archiveKey := fmt.Appendf(nil, "archive:episodic:%s", id)
-		_ = fm.store.Put(ctx, archiveKey, val)
-		_ = fm.store.Delete(ctx, key)
-		_ = fm.store.Delete(ctx, tombstoneKey)
+	if ageHours <= 30*24 {
+		return
+	}
+
+	// 冷归档：先确保归档副本落盘，再删热存储——顺序不可颠倒。
+	archiveKey := fmt.Appendf(nil, "archive:episodic:%s", id)
+	if err := fm.store.Put(ctx, archiveKey, val); err != nil {
+		slog.ErrorContext(ctx, "forgetting: cold archive write failed, keeping hot copy (will retry next cycle)",
+			"id", id, "err", err)
+		return
+	}
+	if err := fm.store.Delete(ctx, key); err != nil {
+		slog.ErrorContext(ctx, "forgetting: hot copy delete failed, memory now duplicated in hot store and archive",
+			"id", id, "err", err)
+		return
+	}
+	if err := fm.store.Delete(ctx, tombstoneKey); err != nil {
+		// 归档已完成，仅残留一个 tombstone：PhysicalCompact 下一轮会尝试删除
+		// 一个已不存在的 key，无实质损害，故只 Warn 不中止。
+		slog.WarnContext(ctx, "forgetting: tombstone cleanup failed, stale marker left behind",
+			"id", id, "err", err)
 	}
 }
 
