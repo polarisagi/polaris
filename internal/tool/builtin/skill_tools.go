@@ -188,12 +188,17 @@ func MakeSkillGenerateFn(outbox protocol.OutboxWriter) sandbox.InProcessFn {
 			// task_type + 纳秒时间戳：前者保留可追溯性，后者保证每次真实触发都
 			// 不会与历史记录冲突。
 			idemKey := fmt.Sprintf("skillgap:%s:%d", args.TaskType, time.Now().UnixNano())
-			ev, _ := protocol.NewOutboxEvent(protocol.TopicCapabilityGap, "trigger", map[string]string{
+			ev, evErr := protocol.NewOutboxEvent(protocol.TopicCapabilityGap, "trigger", map[string]string{
 				"error":     "tool not found: " + args.TaskType,
 				"task_type": args.TaskType,
 				"reasoning": args.Reasoning,
 				"trigger":   "agent_explicit",
 			}, idemKey)
+			if evErr != nil {
+				// 构造失败返回零值 OutboxEntry，写出去只是往 outbox 塞垃圾且
+				// GapFillWorker 收不到信号；与写入失败同样按"非致命 + 告警"处理。
+				return []byte(fmt.Sprintf(`{"status":"queued_with_warning","message":"signal not sent, outbox event build failed: %s"}`, evErr.Error())), nil
+			}
 			ev.Scope = args.TaskType
 			if err := outbox.Write(ctx, ev); err != nil {
 				// 非致命：outbox 写入失败不阻断工具响应

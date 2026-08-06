@@ -95,6 +95,15 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 		// 过渡方案：暂用 "validation" suite 作为等价门禁，直到 regression_p0_p1
 		// 分区的数据写入路径完成接线后再切换回来（参考 ADR-0048 待补充决策）。
 		report, err := g.evalRunner.RunSuite(context.Background(), "validation", "")
+		if err != nil {
+			// L3 回归门禁失败**不能静默**（此前 `if err == nil` 直接把错误吞掉，
+			// 上面 TODO 描述的 "unknown suite" 就是这样长期无人察觉的）。
+			// 这里刻意不 fail-closed 直接拒绝：门禁不可用属于运维故障而非候选
+			// 补丁有问题，拒绝会让 L4 自我改进晋升整体卡死；降级为"跳过回归、
+			// 转入正常人工审批"，并留下 Error 级痕迹供运维发现。
+			slog.Error("hitl_gateway: L3 regression suite failed, falling back to plain human review",
+				"checkpoint", p.ID, "err", err)
+		}
 		if err == nil && report != nil {
 			if report.P0Fail > 0 {
 				slog.Warn("hitl_gateway: P0 regression failed, auto-denying patch", "checkpoint", p.ID)
@@ -113,7 +122,14 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 
 			// P0 passed, generate shadow diff
 			shadowReport, rErr := g.regression.DetectRegression(context.Background(), p.CheckpointType)
-			if rErr == nil && shadowReport != nil {
+			switch {
+			case rErr != nil:
+				// 影子回归报告是审批人做判断的核心依据，缺失必须显式告警，
+				// 否则审批人看到的是一个"看起来正常但没有回归证据"的请求。
+				slog.Error("hitl_gateway: shadow regression report unavailable, approver will see no diff evidence",
+					"checkpoint", p.ID, "err", rErr)
+				p.PromptText += "\n\n⚠️ 影子回归报告生成失败，本次审批缺少回归差异证据，请谨慎批准。"
+			case shadowReport != nil:
 				p.PromptText += "\n\n" + shadowReport.Markdown
 			}
 

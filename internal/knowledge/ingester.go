@@ -202,7 +202,13 @@ func (p *PipelineImpl) Ingest(ctx context.Context, doc *Document, initialTaint i
 	// 前者保留可读性/可追溯性，后者保证每次真实摄入都不会与历史记录冲突。
 	if p.outboxWriter != nil {
 		idemKey := fmt.Sprintf("ragdoc:%s:%d", doc.Ref.URI, time.Now().UnixNano())
-		ev, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "", map[string]string{"doc_id": doc.Ref.URI}, idemKey)
+		ev, evErr := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "", map[string]string{"doc_id": doc.Ref.URI}, idemKey)
+		if evErr != nil {
+			// 构造失败返回零值 OutboxEntry；写出去等于往 outbox 塞一条无目标
+			// 引擎的垃圾记录，且 GraphBuild 依然不会被触发——与写入失败同等处理。
+			metrics.RecordKnowledgeOutboxWriteFailure(ctx, graphrag.EventTypeRAGDocIngested)
+			return tree, apperr.Wrap(apperr.CodeInternal, "knowledge_ingester: GraphBuild outbox 事件构造失败", evErr)
+		}
 		// L1：投递失败意味着这份文档永远不会触发知识图谱构建（GraphBuild 完全
 		// 依赖该 outbox 事件驱动），且文档分片本身已经成功写入 rag_chunks——
 		// 若在此静默吞没，调用方会误以为摄入完全成功。必须向上返回错误。
