@@ -1,9 +1,5 @@
 package config
 
-import (
-	"time"
-)
-
 // CognitionConfig SurrealDB 认知存储后端配置（ADR-0003）。
 type CognitionConfig struct {
 	// SurrealBackend 后端选择：
@@ -177,9 +173,19 @@ type SkillConfig struct {
 }
 
 type OrchestratorConfig struct {
-	Mode             string        `toml:"mode"`
-	Protocol         string        `toml:"protocol"`
-	TaskRetentionTTL time.Duration `toml:"task_retention_ttl"`
+	Mode     string `toml:"mode"`
+	Protocol string `toml:"protocol"`
+
+	// TaskRetentionTTLSec 终态任务（done/failed）在 tasks 表中的保留秒数，
+	// 到期由 Blackboard Reaper 归档进 decision_log 后物理删除（GD-13-004）。
+	// 0 表示用代码默认值 24h；低于 5 分钟的取值会被 SetTaskRetentionTTL 拒绝。
+	//
+	// 单位后缀写进字段名/键名而非用 time.Duration：BurntSushi/toml 不能把
+	// "24h" 这类字符串解码进 time.Duration，本项目全部时长配置一律采用
+	// `xxx_ms` / `xxx_sec` 整数（见 internal/config/thresholds.go）。
+	// 初版曾用 `TaskRetentionTTL time.Duration` + `task_retention_ttl = "24h"`，
+	// 直接导致 **内嵌 defaults.toml 解析失败 → Load() 整体报错 → 二进制无法启动**。
+	TaskRetentionTTLSec int `toml:"task_retention_ttl_sec"`
 }
 
 type SelfImproveConfig struct {
