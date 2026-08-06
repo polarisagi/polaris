@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -105,7 +106,12 @@ func (rm *ReflectionMem) evictLRU(ctx context.Context) {
 
 	key := []byte("reflection:" + rm.entries[oldestIdx].ID)
 	if rm.store != nil {
-		_ = rm.store.Delete(ctx, key)
+		// LRU 淘汰：下方立即从内存 entries 摘除，KV 删除失败即产生孤儿记录
+		// （不可达但占存储）。不阻断淘汰，但必须留痕。
+		if err := rm.store.Delete(ctx, key); err != nil {
+			slog.WarnContext(ctx, "reflection_mem: LRU evict KV delete failed, orphan record leaked",
+				"key", string(key), "err", err)
+		}
 	}
 
 	rm.entries = append(rm.entries[:oldestIdx], rm.entries[oldestIdx+1:]...)
