@@ -22,8 +22,6 @@
   "_reason_code_act": "GR-4-002 fix temporarily crossed 400 lines; will be split",
   "internal/agent/fsm/transitions.go": true,
   "_reason_transitions": "GD-13-004 bypass logic added",
-  "internal/knowledge/retriever.go": true,
-  "_reason_retriever": "GD-14-002 GraphRAG 社区摘要接入后临时超 400 行，待拆分",
   "internal/execute/orchestrator/sqlite_blackboard.go": true,
   "internal/llm/router.go": true,
   "_reason_2026-08-02_split": "internal/agent/agent_execute_util.go(415行)/internal/observability/metrics/metrics.go(408行)/internal/security/policy/gate.go(429行) 三项已于 2026-08-02 实际拆分完毕（分别拆出 agent_execute_result.go+agent_execute_memory.go / metrics_tokenburn.go+metrics_surprise.go / gate_egress.go+gate_cedar.go，纯搬运无行为变更，全部子文件 <400 行），已从本名单移除，见 local_playground/upgrade/99-new-findings.md"
