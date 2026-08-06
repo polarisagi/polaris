@@ -100,7 +100,7 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	}
 	topK := config.FinalTopK
 	if topK <= 0 {
-		topK = 10
+		topK = defaultKnowledgeTopK
 	}
 
 	var isMacro bool
@@ -130,22 +130,35 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		searchReranker = (*rerankerAdapter)(hr)
 	}
 
+	// 融合前先截到 topK*2（重构前 rrfThreeWay(..., topK*2)），置顶宏观摘要后
+	// 再统一截到 topK——顺序不能颠倒，否则宏观摘要会挤掉正常召回的名额。
 	merged, err := search.HybridSearch(ctx, src, query, queryEmbed, search.HybridSearchConfig{
-		BM25Weight:   config.BM25Weight,
-		VectorWeight: config.VectorWeight,
-		GraphWeight:  config.GraphWeight,
-		RRFk:         60, // Fixed RRF k parameter for knowledge
-		TopK:         topK,
+		BM25Weight:   knowledgeBM25Weight,
+		VectorWeight: knowledgeVectorWeight,
+		GraphWeight:  knowledgeGraphWeight,
+		RRFk:         knowledgeRRFk,
+		TopK:         topK * 2,
+		RecallWidth:  topK * 3,
 		EnableRerank: hr.reranker != nil,
 		Reranker:     searchReranker,
 	})
-
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: search failed", err)
 	}
 
-	for _, m := range merged {
-		recordExplainBits(ctx, m.ExplainBits)
+	// 宏观查询：Community 摘要置顶（重构前 append(macroResults, finalResults...)）。
+	if macro := src.macroResults(); len(macro) > 0 {
+		merged = append(macro, merged...)
+	}
+	if len(merged) > topK {
+		merged = merged[:topK]
+	}
+
+	// Source 语义还原：融合期用 chunk ID 做去重键，对外必须输出 SourceURI
+	// （调用方据此做引用溯源，重构前 toScoredFragments 即如此）。
+	for i := range merged {
+		merged[i].Source = src.resolveURI(merged[i].Source)
+		recordExplainBits(ctx, merged[i].ExplainBits)
 	}
 
 	return merged, nil
@@ -189,9 +202,6 @@ func (r *rerankerAdapter) Rerank(ctx context.Context, query string, docs []types
 	}
 	return finalResults, nil
 }
-
-// explainBitsByChunkID 记录每个 chunk ID 命中的检索路径（GR-1-003/Batch8 ExplainBits 归因修复）。
-// rrfThreeWay 融合后原始来源信息即丢失，必须在融合前的三路原始结果上标记；这里用 ID
 
 // searchFTS 使用 FTS5 BM25 检索，返回 limit 条结果。
 func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, limit int) ([]Chunk, error) {

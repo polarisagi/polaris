@@ -28,7 +28,28 @@ const (
 // ============================================================================
 // HybridRetriever — BM25 + Dense Vector + Graph 三路融合检索（与 M10 共享）
 // 结构体定义与构造函数见 retriever_construct.go；辅助检索函数见 retriever_helpers.go（R7 拆分）。
+//
+// 融合算法自 GD-13-002 起下沉至 internal/store/search.HybridSearch（M5/M10 共用）；
+// 本包只负责 M5 领域的召回实现（memoryDocumentSource，见 source.go）与下述默认值。
 // ============================================================================
+
+// M5 检索默认值（SSoT：docs/arch/spec/state.yaml §retrieval）。
+// store/search 融合层按字面值使用权重，默认值必须在本领域层解析——
+// 因为"权重 0"在 M05 §12.3 漂移降级场景下是有意义的显式取值，不是"未设置"。
+const (
+	defaultBM25Weight   = 1.0
+	defaultVectorWeight = 0.6
+	defaultGraphWeight  = 0.6
+	defaultMemoryTopK   = 20
+)
+
+// resolveWeight 把"未设置（<=0）"解析为领域默认值。
+func resolveWeight(configured, fallback float64) float64 {
+	if configured <= 0 {
+		return fallback
+	}
+	return configured
+}
 
 // searchGraphSpreadingActivation 执行 Stage 1c 图路径召回：取 BM25 Top-3 作为种子节点，
 // 通过 Spreading Activation 多种子能量扩散找到关联的 episodic 记忆（从 Search 拆出，
@@ -94,10 +115,27 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		}
 	}
 
+	// Stage 0.6 — 计算 task_type（M05 §12.3 漂移降级判断用；不写回 RetrievalConfig，
+	// 内部计算内部消费，避免改动调用方签名，见 ADR-0062 设计讨论）。
 	taskType := prompt.ExtractTaskType(query)
-	vw := config.VectorWeight
+
+	// 领域默认值必须在**本层**解析完毕后再交给 store/search：融合层按字面值
+	// 使用权重（<=0 即关闭该路）。顺序不可交换——先补默认值再判漂移降级，
+	// 否则降级置的 0 会被默认值覆盖，M05 §12.3 的降级开关直接失效。
+	bw := resolveWeight(config.BM25Weight, defaultBM25Weight)
+	vw := resolveWeight(config.VectorWeight, defaultVectorWeight)
+	gw := resolveWeight(config.GraphWeight, defaultGraphWeight)
+
+	// M05 §12.3 降级表：Embedding DriftDetector 检测到漂移 → 该 task_type 降级
+	// 纯 BM25，其余 task_type 不受影响。Blue-Green 重嵌完成后 DriftOrchestrator
+	// 清除降级标记，此处自动恢复正常权重（无需额外代码路径）。
 	if hr.driftRegistry != nil && hr.driftRegistry.IsDowngraded(taskType) {
-		vw = 0 // M05 §12.3 降级
+		vw = 0
+	}
+
+	topK := config.FinalTopK
+	if topK <= 0 {
+		topK = defaultMemoryTopK
 	}
 
 	if ext, ok := hr.store.(protocol.StoreExtVector); ok {
@@ -120,11 +158,12 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	}
 
 	merged, err := search.HybridSearch(ctx, src, query, queryF32, search.HybridSearchConfig{
-		BM25Weight:   config.BM25Weight,
+		BM25Weight:   bw,
 		VectorWeight: vw,
-		GraphWeight:  config.GraphWeight,
+		GraphWeight:  gw,
 		RRFk:         config.RRFK,
-		TopK:         config.FinalTopK,
+		TopK:         topK,
+		RecallWidth:  topK * 3,
 		EnableRerank: false,
 	})
 
