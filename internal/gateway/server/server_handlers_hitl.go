@@ -65,15 +65,28 @@ func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action st
 	if s.outboxWriter != nil {
 		// 异步路由：写入 Outbox，由 OutboxWorker 分发到目标 Agent 进程。
 		// OutboxWorker 需注册 operation="agent_interrupt" 的处理器（见 pkg/substrate/storage/outbox_worker.go）。
-		ev, _ := protocol.NewOutboxEvent(protocol.TopicAgentInterrupt, "agent_interrupt", map[string]any{
+		//
+		// 注释与实现对齐修复：此前日志写着"falling back to direct call"，但紧跟
+		// 一个无条件 return——异步投递失败时中断请求实际被静默丢弃，用户点击
+		// "中止/恢复/重定向"毫无反应，正是本端点 2026-07-12 修过一次的同类缺口。
+		// 现改为构造/投递任一失败都真正落到下方的 AgentPool 直接调用路径。
+		ev, evErr := protocol.NewOutboxEvent(protocol.TopicAgentInterrupt, "agent_interrupt", map[string]any{
 			"task_id": taskID,
 			"request": interruptReq,
 		}, "interrupt:"+taskID+":"+action)
-		ev.Scope = taskID
-		if err := s.outboxWriter.Write(ctx, ev); err != nil {
-			slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call", "err", err)
+		switch {
+		case evErr != nil:
+			slog.Error("handleAgentInterrupt: build outbox event failed, falling back to direct call",
+				"task_id", taskID, "err", evErr)
+		default:
+			ev.Scope = taskID
+			if err := s.outboxWriter.Write(ctx, ev); err != nil {
+				slog.Error("handleAgentInterrupt: outbox write failed, falling back to direct call",
+					"task_id", taskID, "err", err)
+				break
+			}
+			return
 		}
-		return
 	}
 
 	if s.agentPool == nil {

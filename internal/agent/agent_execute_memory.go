@@ -85,12 +85,41 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 		// 触发从第二轮起被静默丢弃。这里刻意不改 NextEventID/ev.ID 本身
 		// （那是重放确定性的必要不变量），只在 outbox 键这一层追加
 		// outboxUniqueSuffix()：本调用同步执行一次、无重试语义，足以解决。
-		outboxEv, _ := protocol.NewOutboxEvent(protocol.TopicEpisodicExtract, "episodic_extract", map[string]any{
+		// GR-4-001 补漏：本站点与 agent_execute_effect_helpers.go 的 5 处同源，
+		// 但当轮修复只覆盖了后者。
+		a.emitOutbox(ctx, protocol.TopicEpisodicExtract, "episodic_extract", map[string]any{
 			"session_id": sessionID,
 			"event_type": string(ev.Type),
 			"content":    string(ev.Payload),
-		}, ev.ID+":extract:"+outboxUniqueSuffix())
-		_ = a.outboxWriter.Write(ctx, outboxEv)
+		}, ev.ID+":extract:"+outboxUniqueSuffix(), "episodic_extract")
+	}
+}
+
+// emitOutbox 构造并投递一条 outbox 事件，构造/写入失败均记录 Error 级告警。
+//
+// 存在意义（HE-6 + HE-3）：Agent 的 6 个 outbox 投递点此前都是
+// `ev, _ := protocol.NewOutboxEvent(...)` + `Write(ctx, ev)` 的复制粘贴。
+// 两个错误都必须处理，且处理方式完全一致：
+//   - NewOutboxEvent 失败返回**零值** OutboxEntry（TargetEngine/Payload/幂等键
+//     全空）。若不拦截就 Write，落库的是一条没有目标引擎、无法被任何
+//     OutboxWorker 路由的垃圾记录，且会永久占用一个空幂等键槽位；
+//   - Write 失败意味着该派生事件永久丢失（无重试语义），必须告警。
+//
+// 这些投递都是主控制流之外的 side-effect（记忆投影/语义抽取/巩固触发），
+// 失败不得中断 Agent 执行——因此只告警不返回错误，也不改变调用点控制流。
+func (a *Agent) emitOutbox(ctx context.Context, topic, op string, payload any, idemKey, what string) {
+	if a.outboxWriter == nil {
+		return
+	}
+	ev, err := protocol.NewOutboxEvent(topic, op, payload, idemKey)
+	if err != nil {
+		slog.ErrorContext(ctx, "agent: build outbox event failed, derived event dropped",
+			"agent_id", a.ID, "topic", topic, "what", what, "err", err)
+		return
+	}
+	if err := a.outboxWriter.Write(ctx, ev); err != nil {
+		slog.ErrorContext(ctx, "agent: outbox write failed, derived event may be lost",
+			"agent_id", a.ID, "topic", topic, "what", what, "err", err)
 	}
 }
 

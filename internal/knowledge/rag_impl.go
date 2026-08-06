@@ -175,16 +175,30 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		// 失败的合并成一个错误向上返回。
 		var outboxErrs []error
 		// 触发 LLM 摘要生成
-		ev1, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID}, "summary:"+docNode.ID)
-		if err := p.outboxWriter.Write(ctx, ev1); err != nil {
+		ev1, ev1Err := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID}, "summary:"+docNode.ID)
+		switch {
+		case ev1Err != nil:
+			// 构造失败返回零值 OutboxEntry，写出去只会污染 outbox；
+			// 与写入失败同等对待（同样会导致摘要链路永不触发）。
 			metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocSummaryNeeded))
-			outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "summary outbox write failed", err))
+			outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "summary outbox event build failed", ev1Err))
+		default:
+			if err := p.outboxWriter.Write(ctx, ev1); err != nil {
+				metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocSummaryNeeded))
+				outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "summary outbox write failed", err))
+			}
 		}
 		// 触发知识图谱构建（GraphBuildOutboxHandler 监听此事件）
-		ev2, _ := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
-		if err := p.outboxWriter.Write(ctx, ev2); err != nil {
+		ev2, ev2Err := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
+		switch {
+		case ev2Err != nil:
 			metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocIngested))
-			outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "graph_build outbox write failed", err))
+			outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "graph_build outbox event build failed", ev2Err))
+		default:
+			if err := p.outboxWriter.Write(ctx, ev2); err != nil {
+				metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocIngested))
+				outboxErrs = append(outboxErrs, apperr.Wrap(apperr.CodeInternal, "graph_build outbox write failed", err))
+			}
 		}
 		if len(outboxErrs) > 0 {
 			return tree, apperr.Wrap(apperr.CodeInternal, "ingestion: outbox 投递失败", errors.Join(outboxErrs...))
