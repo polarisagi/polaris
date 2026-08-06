@@ -107,8 +107,7 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 		result = []pluginResponse{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"plugins": result, "total": len(result)})
+	httputil.WriteJSON(w, map[string]any{"plugins": result, "total": len(result)})
 }
 
 // handleUpdatePlugin 更新插件启用状态或 mcp_policy，并级联同步 mcp_servers / skills / MCPManager。
@@ -167,8 +166,7 @@ func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "updated", "id": pluginID})
+	httputil.WriteJSON(w, map[string]any{"status": "updated", "id": pluginID})
 }
 
 // disablePluginComponents 停止插件的所有子 MCP，并将 skills 标记为 deprecated。
@@ -293,8 +291,7 @@ func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Req
 	}
 	h.ClearToolSchemaCache()
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"status":    "updated",
 		"plugin_id": pluginID,
 		"server":    serverName,

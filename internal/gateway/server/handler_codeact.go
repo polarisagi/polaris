@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -57,14 +58,11 @@ func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := apperr.CodeOf(err)
 		status := apperr.HTTPStatus(code)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		httputil.WriteJSONStatus(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(codeActHTTPResponse{
+	httputil.WriteJSON(w, codeActHTTPResponse{
 		Output:    string(result.Output),
 		ExitCode:  result.ExitCode,
 		LatencyMs: result.LatencyMs,

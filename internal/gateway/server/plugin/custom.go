@@ -84,9 +84,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 						}
 					}
 				})
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted)
-				_ = json.NewEncoder(w).Encode(map[string]string{"status": "pending_approval", "id": extID})
+				httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]string{"status": "pending_approval", "id": extID})
 				return
 			}
 		}
@@ -105,9 +103,7 @@ func (h *PluginHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSONStatus(w, http.StatusCreated, map[string]any{
 		"id": extID, "name": req.Name, "type": "skill",
 	})
 }
@@ -180,9 +176,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 						}
 					}
 				})
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted)
-				_ = json.NewEncoder(w).Encode(map[string]string{"status": "pending_approval", "id": extID})
+				httputil.WriteJSONStatus(w, http.StatusAccepted, map[string]string{"status": "pending_approval", "id": extID})
 				return
 			}
 		}
@@ -209,9 +203,7 @@ func (h *PluginHandler) HandleCreatePlugin(w http.ResponseWriter, r *http.Reques
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSONStatus(w, http.StatusCreated, map[string]any{
 		"id": extID, "name": req.Name, "type": "plugin",
 	})
 }

@@ -3,7 +3,6 @@ package sysadmin
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -124,8 +123,7 @@ func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request
 		mimeType = "application/octet-stream"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"uri":       vfsURI,
 		"name":      header.Filename,
 		"size":      size,

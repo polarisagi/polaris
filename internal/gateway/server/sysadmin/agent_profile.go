@@ -1,10 +1,10 @@
 package sysadmin
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
 // HandleListAgentProfiles returns all registered AgentProfiles.
@@ -18,6 +18,5 @@ func (h *SysAdminHandler) HandleListAgentProfiles(w http.ResponseWriter, r *http
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(allProfiles)
+	httputil.WriteJSON(w, allProfiles)
 }

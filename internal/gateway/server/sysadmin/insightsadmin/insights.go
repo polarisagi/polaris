@@ -1,10 +1,10 @@
 package insightsadmin
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 )
 
@@ -113,8 +113,7 @@ func (a *InsightsAdmin) HandleInsights(w http.ResponseWriter, r *http.Request) {
 		topSessions = []topSession{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"period_days":     days,
 		"total_sessions":  totalSessions,
 		"total_messages":  totalMessages,

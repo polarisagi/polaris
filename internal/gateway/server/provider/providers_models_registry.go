@@ -48,8 +48,7 @@ func (h *ProviderHandler) HandleModelUpgrade(w http.ResponseWriter, r *http.Requ
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "entry": entry})
+	httputil.WriteJSON(w, map[string]any{"status": "ok", "entry": entry})
 }
 
 // HandleModelDeprecate 触发 ModelVersionRegistry.DeprecateModel：运营决定
@@ -82,6 +81,5 @@ func (h *ProviderHandler) HandleModelDeprecate(w http.ResponseWriter, r *http.Re
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "entry": entry})
+	httputil.WriteJSON(w, map[string]any{"status": "ok", "entry": entry})
 }

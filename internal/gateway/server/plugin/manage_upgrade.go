@@ -109,8 +109,7 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"status":      "upgraded",
 		"plugin_id":   pluginID,
 		"old_version": installedVersion,

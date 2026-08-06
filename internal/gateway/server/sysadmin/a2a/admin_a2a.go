@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -28,8 +29,7 @@ func AgentCardHandler(cfg config.A2AConfig) http.HandlerFunc {
 			Skills:  cfg.Skills,
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(card)
+		httputil.WriteJSON(w, card)
 	}
 }
 
@@ -88,8 +88,6 @@ func TaskSubmitHandler(bb protocol.Blackboard) http.HandlerFunc {
 				"status": "accepted",
 			},
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(resp)
+		httputil.WriteJSONStatus(w, http.StatusAccepted, resp)
 	}
 }

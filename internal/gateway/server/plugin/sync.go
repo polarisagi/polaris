@@ -194,8 +194,7 @@ func (h *PluginHandler) HandleSyncMarketplaces(w http.ResponseWriter, r *http.Re
 		return
 	}
 	slog.Info("polaris-server: manual sync marketplaces finished", "synced_count", syncedCount)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "synced", "synced_count": syncedCount})
+	httputil.WriteJSON(w, map[string]any{"status": "synced", "synced_count": syncedCount})
 }
 
 type PackageJSON struct {

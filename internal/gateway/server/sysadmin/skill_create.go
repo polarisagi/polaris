@@ -49,8 +49,7 @@ func (h *SysAdminHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Reque
 	}
 	h.ClearToolSchemaCache()
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "plugin_dir": pluginDir})
+	httputil.WriteJSON(w, map[string]any{"status": "ok", "plugin_dir": pluginDir})
 }
 
 // pickSkillCreatorProvider 复用既有 default→general 兜底链（同 doctor.go /

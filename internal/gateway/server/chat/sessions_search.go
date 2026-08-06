@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,8 +92,7 @@ func (h *ChatHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		results = []*sessionResult{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"query": q, "results": results})
+	httputil.WriteJSON(w, map[string]any{"query": q, "results": results})
 }
 
 // GET /v1/sessions/{sessionID}/context
@@ -120,8 +118,7 @@ func (h *ChatHandler) HandleGetSessionContext(w http.ResponseWriter, r *http.Req
 		lastCompactAt = &t
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	httputil.WriteJSON(w, map[string]any{
 		"session_id":      sessionID,
 		"token_count":     stats.TokenCount,
 		"threshold":       stats.Threshold,

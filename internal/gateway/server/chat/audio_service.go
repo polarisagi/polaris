@@ -15,6 +15,7 @@ import (
 
 	"sync/atomic"
 
+	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/tool/builtin"
 )
 
@@ -151,6 +152,5 @@ func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.
 }
 
 func respondJSON(w http.ResponseWriter, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(data)
+	httputil.WriteJSON(w, data)
 }

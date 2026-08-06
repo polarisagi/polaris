@@ -19,8 +19,7 @@ func (h *SysAdminHandler) HandleListApps(w http.ResponseWriter, r *http.Request)
 	if apps == nil {
 		apps = []*protocol.App{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apps)
+	httputil.WriteJSON(w, apps)
 }
 
 func (h *SysAdminHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +36,7 @@ func (h *SysAdminHandler) HandleCreateApp(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(app)
+	httputil.WriteJSON(w, app)
 }
 
 func (h *SysAdminHandler) HandleGetApp(w http.ResponseWriter, r *http.Request) {
@@ -48,8 +46,7 @@ func (h *SysAdminHandler) HandleGetApp(w http.ResponseWriter, r *http.Request) {
 		httputil.RespondError(w, "", err, http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(app)
+	httputil.WriteJSON(w, app)
 }
 
 func (h *SysAdminHandler) HandleUpdateApp(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +61,7 @@ func (h *SysAdminHandler) HandleUpdateApp(w http.ResponseWriter, r *http.Request
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(app)
+	httputil.WriteJSON(w, app)
 }
 
 func (h *SysAdminHandler) HandleDeleteApp(w http.ResponseWriter, r *http.Request) {
