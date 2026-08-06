@@ -3,6 +3,7 @@ package search
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -155,7 +156,12 @@ func (c *SemanticCache) Get(key CacheKey) (string, bool) {
 		// 更新 HitCount（fire-and-forget）
 		entry.HitCount++
 		entry.LastAccess = time.Now()
-		_ = c.store.Put(entry)
+		// fire-and-forget：命中统计写失败只影响 LRU 淘汰顺序的准确性，
+		// 不影响本次命中结果，故不阻断读路径；但持续失败会让淘汰退化为近似
+		// 随机，缓存命中率无声下滑。
+		if err := c.store.Put(entry); err != nil {
+			slog.Warn("semantic_cache: hit-count persist failed, LRU ordering may degrade", "err", err)
+		}
 
 		return entry.Response, true
 	}
@@ -250,10 +256,6 @@ func (c *SemanticCache) evictLRU() {
 	storeOldest := c.store.ListOldest(evictCount * 2)
 
 	// 构建合并 map：key → lastAccess（store 持久值作底，内存热点覆盖）
-	type kv struct {
-		key string
-		t   time.Time
-	}
 	merged := make(map[string]time.Time, len(storeOldest))
 	for _, e := range storeOldest {
 		merged[e.Key] = e.LastAccess
@@ -276,17 +278,44 @@ func (c *SemanticCache) evictLRU() {
 		return
 	}
 
-	// 阶段三：从合并结果中取最旧 evictCount 条（插入排序，条目数有上限）
-	items := make([]kv, 0, len(merged))
-	for k, t := range merged {
+	// 阶段三：从合并结果中取最旧 evictCount 条
+	toDelete := oldestKeys(merged, evictCount)
+
+	// 淘汰删除失败：下方仍会从内存 accessTime 摘除，于是这些条目在存储里
+	// 变成不可达的孤儿（永远不会再被 Get 命中，也不会再被选中淘汰）。
+	if err := c.store.Delete(toDelete); err != nil {
+		slog.Warn("semantic_cache: LRU evict delete failed, orphan entries leaked",
+			"count", len(toDelete), "err", err)
+	}
+
+	c.mu.Lock()
+	for _, k := range toDelete {
+		delete(c.accessTime, k)
+	}
+	c.mu.Unlock()
+}
+
+// oldestKeys 从 key→lastAccess 映射中选出最旧的 limit 个 key。
+//
+// 部分选择排序而非全量排序：只需要前 limit 个最小值，O(n·limit) 在
+// limit（= maxEntries/10，通常 ≤ 1000）远小于 n 时优于 O(n log n)，
+// 且不额外分配排序所需的中间结构（Tier-0 内存约束）。
+//
+// 从 evictLRU 拆出以控制其圈复杂度（R7 gocyclo）——该函数已含
+// "取持久层 / 合并内存热点 / 选最旧 / 删除并清理" 四个阶段。
+func oldestKeys(byAccess map[string]time.Time, limit int) []string {
+	type kv struct {
+		key string
+		t   time.Time
+	}
+	items := make([]kv, 0, len(byAccess))
+	for k, t := range byAccess {
 		items = append(items, kv{k, t})
 	}
-	// 部分排序：只需前 evictCount 个最小值，插入排序 O(n*evictCount)，evictCount 通常 ≤ 1000
-	limit := evictCount
 	if limit > len(items) {
 		limit = len(items)
 	}
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		minIdx := i
 		for j := i + 1; j < len(items); j++ {
 			if items[j].t.Before(items[minIdx].t) {
@@ -295,17 +324,9 @@ func (c *SemanticCache) evictLRU() {
 		}
 		items[i], items[minIdx] = items[minIdx], items[i]
 	}
-
-	toDelete := make([]string, limit)
-	for i := range toDelete {
-		toDelete[i] = items[i].key
+	out := make([]string, limit)
+	for i := range out {
+		out[i] = items[i].key
 	}
-
-	_ = c.store.Delete(toDelete)
-
-	c.mu.Lock()
-	for _, k := range toDelete {
-		delete(c.accessTime, k)
-	}
-	c.mu.Unlock()
+	return out
 }

@@ -197,10 +197,15 @@ func (fm *ForgettingManager) applyDecayUpdates(ctx context.Context, db protocol.
 			_, err = tx.ExecContext(ctx, "INSERT INTO episodic_events_change_log(event_id, operation, payload, occurred_at) VALUES (?, 'UPDATE', ?, ?)", item.ID, fmt.Sprintf(`{"decay_weight":%f}`, item.DecayWeight), time.Now().UnixMilli())
 		}
 		if err != nil {
-			_ = tx.Rollback()
-			slog.Warn("ForgettingManager.cleanupWithSQL: update decay_weight tx failed", "id", item.ID, "err", err)
-		} else {
-			_ = tx.Commit()
+			_ = tx.Rollback() //nolint:errcheck // 回滚失败无补救手段，错误来源已在下方日志中
+			slog.WarnContext(ctx, "ForgettingManager.cleanupWithSQL: update decay_weight tx failed", "id", item.ID, "err", err)
+			continue
+		}
+		if cErr := tx.Commit(); cErr != nil {
+			// 衰减权重未落盘：本条下轮会以旧 decay_weight 重新计算，
+			// 结果收敛（幂等），故不重试；但持续失败意味着遗忘机制整体停摆。
+			slog.WarnContext(ctx, "ForgettingManager: decay_weight commit failed, will recompute next cycle",
+				"id", item.ID, "err", cErr)
 		}
 	}
 }
@@ -231,12 +236,20 @@ func (fm *ForgettingManager) applyArchival(ctx context.Context, db protocol.SQLQ
 		}
 
 		if err != nil {
-			_ = tx.Rollback()
-			slog.Warn("ForgettingManager.cleanupWithSQL: archive tx failed", "id", item.ID, "err", err)
-		} else {
-			_ = tx.Commit()
-			fm.deleteCognitiveIndex(item.EventUUID)
+			_ = tx.Rollback() //nolint:errcheck // 回滚失败无补救手段，错误来源已在下方日志中
+			slog.WarnContext(ctx, "ForgettingManager.cleanupWithSQL: archive tx failed", "id", item.ID, "err", err)
+			continue
 		}
+		// Commit 成功才删认知索引——顺序不可交换，且 Commit 失败必须跳过删除。
+		// 此前是 `_ = tx.Commit()` 后无条件 deleteCognitiveIndex：若 Commit 失败，
+		// 行仍是 archived=0（可检索状态），但它的 FTS/Vec 索引条目已被删掉，
+		// 该条记忆就此对检索**不可见**却仍占存储，且 DB 里看不出任何异常。
+		if cErr := tx.Commit(); cErr != nil {
+			slog.WarnContext(ctx, "ForgettingManager: archive commit failed, keeping cognitive index intact",
+				"id", item.ID, "err", cErr)
+			continue
+		}
+		fm.deleteCognitiveIndex(item.EventUUID)
 	}
 }
 

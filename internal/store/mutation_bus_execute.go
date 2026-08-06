@@ -41,9 +41,19 @@ func (dw *DatabaseWriter) executeInsertEvent(tx *sql.Tx, intent *MutationIntent)
 		return apperr.Wrap(apperr.CodeInternal, "unmarshal pb.Event", err)
 	}
 
-	// 读取链上最新 hash（同 tx 内已插入的事件对此查询可见，保证批内链式连续）
+	// 读取链上最新 hash（同 tx 内已插入的事件对此查询可见，保证批内链式连续）。
+	//
+	// 必须区分 ErrNoRows 与真实查询错误（2026-08-06 修复）：此前一律 `_ =` 丢弃，
+	// 于是任何 DB 故障都会让 prevHash 保持 Invalid，新事件按"链首"计算 hash 落库
+	// ——events 是不可变真相源，其 prev_hash/hash 构成防篡改哈希链，一个静默断裂
+	// 的链节会让后续所有校验失效，且**事后无法区分**"这是链首"与"当时查询失败了"。
+	// 违反 HE-2（安全边界必须密码学可验证）。ErrNoRows 是合法的链首场景，放行；
+	// 其余错误必须中止本次写入，让事务回滚。
 	var prevHash sql.NullString
-	_ = tx.QueryRow(`SELECT hash FROM events ORDER BY offset DESC LIMIT 1`).Scan(&prevHash)
+	if err := tx.QueryRow(`SELECT hash FROM events ORDER BY offset DESC LIMIT 1`).Scan(&prevHash); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return apperr.Wrap(apperr.CodeInternal,
+			"executeInsertEvent: read previous chain hash failed, refusing to break the event hash chain", err)
+	}
 
 	// SHA-256(id || topic || actor || type || payload || prev_hash)
 	h := sha256.New()
