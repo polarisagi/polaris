@@ -63,6 +63,11 @@ func bootKnowledge(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, t
 		}
 		if hri, ok := retriever.(*knowledgepkg.HybridRetrieverImpl); ok {
 			hri.SetBoundarySerializer(ragTaintSerializer)
+			// M10 §2.6 LocalSearch 图检索接线（2026-08-06）：此前 graph 字段
+			// 无任何注入点、生产恒为 nil，融合管线的第三路（M10 §2.2 权重 0.1）
+			// 恒返回空。GraphTraverser 只需 SQLQuerier，读的是 GraphBuild 管线
+			// 已在填充的 semantic_entities / semantic_relations 两表。
+			hri.SetGraphTraverser(graphrag.NewGraphTraverser(sb.Store.DB()))
 		}
 		slog.Info("polaris: knowledge RAG initialized (FTS5 + SurrealDB HNSW, Tier0+/≥8GB)")
 	} else {
