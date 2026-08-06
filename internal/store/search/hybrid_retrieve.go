@@ -5,22 +5,27 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/store"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// HybridRetriever 共享引擎 — BM25 + Dense Vector + Graph Traversal 三路融合。
-// M5 和 M10 共享底层 RRF+Rerank 引擎，检索范围和配置参数各自独立。
+// HybridSearchEngine 是 StorageRouter 之上的召回引擎（M10 Tier-0 路径，<8GB VPS）。
+//
 // 架构文档: docs/arch/05-Memory-System-深度选型.md §7.4,
 //
 //	docs/arch/10-Knowledge-RAG-深度选型.md §2.2
 //
-// HybridSearchEngine 提供统一接口: Search(ctx, query, scope, config) → []ScoredFragment
+// 职责边界（GD-13-002 收敛终态）：本类型只负责**召回**（BM25 全表打分 +
+// 向量线性扫描）与语料统计维护，**不做融合**。RRF 融合、ExplainBits 归因、
+// Rerank、TopK 截断统一走 HybridSearch（见 hybrid_retriever.go）。
+//
+// 收敛前这里有一套独立的 Search + RRFFuse + 私有 ScoredFragment/RetrievalConfig，
+// 与 memory/retrieval、knowledge 的两套实现并列构成**三套**融合逻辑——
+// 而 GD-13-002 当初只识别出前两套。Tier-0（<8GB）恰恰走的是本条路径，
+// 意味着最受资源约束的部署反而用着未被收敛、未被测试覆盖的那份融合代码。
 type HybridSearchEngine struct {
 	router   *store.StorageRouter
 	embedder Embedder
@@ -37,10 +42,20 @@ func NewHybridSearchEngine(router *store.StorageRouter, embedder Embedder) *Hybr
 
 // Stats 暴露内部 CorpusStats，供调用方在启动时 RestoreStatsFromDB 恢复历史统计、
 // 并周期性 FlushTo 持久化增量（2026-07-04 审计补齐，任务18：此前 RestoreStatsFromDB/
-// FlushTo 均已正确实现但从未被生产代码调用，是纯死代码——重启后统计从零开始，
+// FlushTo 均已正确实现但从未被生产代码调用——重启后统计从零开始，
 // FlushTo 也从未被任何后台 worker 触发过）。
 func (e *HybridSearchEngine) Stats() *CorpusStats {
 	return e.stats
+}
+
+// EmbedQuery 计算查询向量；未注入 embedder（纯 FTS 降级）时返回 nil。
+// 暴露它而非让调用方持有 embedder：向量召回与查询编码必须用同一个模型实例，
+// 分开持有会在 Tier 切换时出现"用 A 模型编码、拿 B 模型的向量库比对"。
+func (e *HybridSearchEngine) EmbedQuery(query string) []float32 {
+	if e.embedder == nil || query == "" {
+		return nil
+	}
+	return e.embedder.Embed(query)
 }
 
 func (e *HybridSearchEngine) AddDocument(ctx context.Context, id, content string) error {
@@ -51,121 +66,143 @@ func (e *HybridSearchEngine) AddDocument(ctx context.Context, id, content string
 	return nil
 }
 
-func (e *HybridSearchEngine) Search(ctx context.Context, query string, scope []byte, config RetrievalConfig) ([]ScoredFragment, error) { //nolint:gocyclo,nestif
-	if query == "" {
-		return nil, apperr.New(apperr.CodeInvalidInput, "empty query")
-	}
+// routerDocumentSource 把 HybridSearchEngine 的两路召回适配到统一融合管线
+// （search.DocumentSource）。scope 是 KV 前缀（如 "chunk:"）。
+type routerDocumentSource struct {
+	engine       *HybridSearchEngine
+	scope        []byte
+	vecScanLimit int
+}
 
-	ftsStore := e.router.Route(ctx, &store.StorageRequest{
+var _ DocumentSource = (*routerDocumentSource)(nil)
+
+// NewRouterDocumentSource 构造 StorageRouter 路径的 DocumentSource。
+// vecScanLimit <= 0 时取 500（Tier-0 向量全表扫描安全上限）。
+func (e *HybridSearchEngine) NewRouterDocumentSource(scope []byte, vecScanLimit int) DocumentSource {
+	if vecScanLimit <= 0 {
+		vecScanLimit = 500
+	}
+	return &routerDocumentSource{engine: e, scope: scope, vecScanLimit: vecScanLimit}
+}
+
+// SearchBM25 全表 BM25 打分召回（Tier-0 无倒排索引，只能扫描 + 逐条打分）。
+func (s *routerDocumentSource) SearchBM25(ctx context.Context, query string, _ int) ([]types.ScoredFragment, error) {
+	ftsStore := s.engine.router.Route(ctx, &store.StorageRequest{
 		DataType:   "knowledge",
 		AccessMode: "adhoc_query",
 	})
-	vecStore := e.router.Route(ctx, &store.StorageRequest{
+	if ftsStore == nil {
+		return nil, nil
+	}
+	iter, err := ftsStore.Scan(ctx, s.scope)
+	if err != nil {
+		// 主路扫描失败向上传播：BM25 是本路径唯一的关键词召回，
+		// 静默返回空会让检索"看起来成功但什么都没召回"。
+		return nil, err //nolint:wrapcheck // 由 HybridSearch 调用方按领域语义包装
+	}
+	defer iter.Close()
+
+	var out []types.ScoredFragment
+	for iter.Next() {
+		var c struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(iter.Value(), &c); err != nil {
+			slog.WarnContext(ctx, "hybrid_retrieve: bm25 doc unmarshal failed, skipping",
+				"err", err, "doc_id", string(iter.Key()))
+			continue
+		}
+		if score := bm25Score(c.Content, query, s.engine.stats); score > 0 {
+			out = append(out, types.ScoredFragment{
+				Content:      c.Content,
+				Source:       c.ID,
+				Score:        score,
+				EvidenceType: types.EvidenceFTSKeyword,
+			})
+		}
+	}
+	return out, nil
+}
+
+// SearchVector Tier-0 向量召回：线性扫描 + Go 余弦，受 vecScanLimit 硬上限保护。
+func (s *routerDocumentSource) SearchVector(ctx context.Context, embedding []float32, _ int) ([]types.ScoredFragment, error) {
+	if s.engine.embedder == nil || len(embedding) == 0 {
+		return nil, nil
+	}
+	vecStore := s.engine.router.Route(ctx, &store.StorageRequest{
 		DataType:   "knowledge",
 		AccessMode: "knn_read",
 	})
+	if vecStore == nil {
+		return nil, nil
+	}
+	iter, err := vecStore.Scan(ctx, s.scope)
+	if err != nil {
+		// 向量路失败只降级（融合层会记录 Warn 并继续用 BM25 结果）。
+		return nil, err //nolint:wrapcheck // 融合层按辅路语义降级处理
+	}
+	defer iter.Close()
 
-	var ftsResults []ScoredFragment
-	ftsIter, err := ftsStore.Scan(ctx, scope)
-	if err == nil {
-		defer ftsIter.Close()
-		for ftsIter.Next() {
-			var c struct {
-				ID      string `json:"id"`
-				Content string `json:"content"`
+	var out []types.ScoredFragment
+	scanned := 0
+	for iter.Next() {
+		if scanned >= s.vecScanLimit {
+			slog.WarnContext(ctx, "hybrid_retrieve: vector scan limit reached, truncating",
+				"limit", s.vecScanLimit, "scope", string(s.scope))
+			break
+		}
+		scanned++
+
+		var c struct {
+			ID        string    `json:"id"`
+			Content   string    `json:"content"`
+			Embedding []float64 `json:"embedding"`
+		}
+		if err := json.Unmarshal(iter.Value(), &c); err != nil {
+			slog.WarnContext(ctx, "hybrid_retrieve: vector doc unmarshal failed, skipping",
+				"err", err, "doc_id", string(iter.Key()))
+			continue
+		}
+		if sim, ok := cosineF32F64(embedding, c.Embedding); ok {
+			et := types.EvidenceWeakSemantic
+			if sim >= 0.85 {
+				et = types.EvidenceHighVector
 			}
-			if err := json.Unmarshal(ftsIter.Value(), &c); err == nil {
-				score := bm25Score(c.Content, query, e.stats)
-				if score > 0 {
-					ftsResults = append(ftsResults, ScoredFragment{
-						Content: c.Content,
-						Source:  c.ID,
-						Score:   score,
-					})
-				}
-			} else {
-				slog.Warn("hybrid_retrieve: unmarshal failed", "err", err, "docID", string(ftsIter.Key()))
-			}
+			out = append(out, types.ScoredFragment{
+				Content:      c.Content,
+				Source:       c.ID,
+				Score:        sim,
+				EvidenceType: et,
+			})
 		}
 	}
+	return out, nil
+}
 
-	var vecResults []ScoredFragment
-	if e.embedder != nil && vecStore != nil { //nolint:nestif
-		qEmbF32 := e.embedder.Embed(query)
-		vecIter, err := vecStore.Scan(ctx, scope)
-		if err == nil {
-			defer vecIter.Close()
+// SearchGraph StorageRouter 路径无图遍历能力，按 DocumentSource 契约返回空而非错误。
+func (s *routerDocumentSource) SearchGraph(context.Context, string, int) ([]types.ScoredFragment, error) {
+	return nil, nil
+}
 
-			vecScanLimit := config.Tier0VectorScanLimit
-			if vecScanLimit <= 0 {
-				vecScanLimit = 500
-			}
-			vecScanned := 0
-
-			for vecIter.Next() {
-				if vecScanned >= vecScanLimit {
-					slog.Warn("hybrid_retrieve: vector scan limit reached, truncating",
-						"limit", vecScanLimit,
-						"scope", string(scope),
-					)
-					break
-				}
-				vecScanned++
-
-				var c struct {
-					ID        string    `json:"id"`
-					Content   string    `json:"content"`
-					Embedding []float64 `json:"embedding"`
-				}
-				if err := json.Unmarshal(vecIter.Value(), &c); err == nil {
-					if len(qEmbF32) > 0 && len(c.Embedding) == len(qEmbF32) {
-						var dot, n1, n2 float64
-						for i := range qEmbF32 {
-							v1 := float64(qEmbF32[i])
-							v2 := c.Embedding[i]
-							dot += v1 * v2
-							n1 += v1 * v1
-							n2 += v2 * v2
-						}
-						if n1 > 0 && n2 > 0 {
-							vecResults = append(vecResults, ScoredFragment{
-								Content: c.Content,
-								Source:  c.ID,
-								Score:   dot / math.Sqrt(n1*n2),
-							})
-						}
-					}
-				} else {
-					slog.Warn("hybrid_retrieve: unmarshal failed", "err", err, "docID", string(vecIter.Key()))
-				}
-			}
-		}
+// cosineF32F64 计算 float32 查询向量与 float64 文档向量的余弦相似度。
+// 维度不一致或任一向量为零向量时返回 ok=false（该文档跳过，不计入召回）。
+func cosineF32F64(q []float32, d []float64) (float64, bool) {
+	if len(q) == 0 || len(d) != len(q) {
+		return 0, false
 	}
-
-	results := map[string][]ScoredFragment{
-		"bm25":   ftsResults,
-		"vector": vecResults,
+	var dot, n1, n2 float64
+	for i := range q {
+		v1 := float64(q[i])
+		v2 := d[i]
+		dot += v1 * v2
+		n1 += v1 * v1
+		n2 += v2 * v2
 	}
-	weights := map[string]float64{
-		"bm25":   config.BM25Weight,
-		"vector": config.VectorWeight,
+	if n1 <= 0 || n2 <= 0 {
+		return 0, false
 	}
-
-	// sourceBits 供 RRFFuse 标记每条结果由哪几路召回贡献（GR-1-003/Batch8 ExplainBits 归因）。
-	sourceBits := map[string]uint8{
-		"bm25":   types.BitBM25,
-		"vector": types.BitVector,
-	}
-	fused := RRFFuse(config.RRFK, weights, results, sourceBits)
-
-	// Reranking moved to internal/knowledge/rag_retrieval.go
-
-	// 截断到 FinalTopK
-	if config.FinalTopK > 0 && len(fused) > config.FinalTopK {
-		fused = fused[:config.FinalTopK]
-	}
-
-	return fused, nil
+	return dot / math.Sqrt(n1*n2), true
 }
 
 func bm25Score(doc string, query string, stats *CorpusStats) float64 {
@@ -204,82 +241,4 @@ func bm25Score(doc string, query string, stats *CorpusStats) float64 {
 		score += idf * (f * (k1 + 1)) / (f + k1*(1-b+b*(float64(len(docTerms))/avgdl)))
 	}
 	return score
-}
-
-// RetrievalConfig 检索配置。
-type RetrievalConfig struct {
-	BM25Weight   float64 // M5:0.3, M10:0.3
-	VectorWeight float64 // M5:0.6, M10:0.6
-	GraphWeight  float64 // M5:0.1, M10:0.1
-	RRFK         int     // 60
-	OversampleN  int     // M5:3, M10:3
-	RerankTopM   int     // M5:30, M10:50
-	FinalTopK    int     // M5:10, M10:5
-
-	Tier0VectorScanLimit int // 向量全表扫描安全上限
-}
-
-// ScoredFragment 检索结果片段。
-type ScoredFragment struct {
-	Content  string
-	Score    float64
-	Source   string
-	Metadata map[string]string
-	// ExplainBits 检索路径位图（线上排障用，不进 Prompt）。位定义与
-	// pkg/types.ScoredFragment.ExplainBits 一致，由 RRFFuse 的 sourceBits 参数填充
-	// （GR-1-003/Batch8 ExplainBits 归因修复）。
-	ExplainBits uint8
-}
-
-// HybridResult 三路召回原始结果。
-type HybridResult struct {
-	BM25Results  []ScoredFragment
-	DenseResults []ScoredFragment
-	GraphResults []ScoredFragment
-}
-
-// RRFFuse 倒数排名融合。
-// 公式: weight / (k + rank + 1), k=60。三路累加后降序排列。
-// key = Source（优先）或 Content（Source 为空时兜底），保留首次出现的完整字段（Source/Metadata）。
-// sourceBits 将 results 的 key（如 "bm25"/"vector"/"graph"）映射到 ExplainBits 位掩码，
-// 用于标记每条融合结果具体由哪几路召回贡献（GR-1-003/Batch8 ExplainBits 归因修复）。
-// 三路结果在此处融合前是分开存放的（HybridResult），融合后归因信息会丢失，必须在这里
-// （融合的同时）记录，融合完成后无法反推。sourceBits 传 nil 时跳过归因（ExplainBits 保持
-// 零值，兼容不需要归因的调用方）。
-func RRFFuse(k int, weights map[string]float64, results map[string][]ScoredFragment, sourceBits map[string]uint8) []ScoredFragment {
-	scores := make(map[string]float64)
-	frags := make(map[string]ScoredFragment) // key → 首次出现的完整 fragment（保留 Source/Metadata）
-	bits := make(map[string]uint8)           // key → 命中路径位图（only-up 累加，见 HE-7）
-
-	for source, w := range weights {
-		for rank, r := range results[source] {
-			// Source 为空时退化到 Content（兜底），避免不同来源相同内容互相覆盖分数
-			key := r.Source
-			if key == "" {
-				key = r.Content
-			}
-			scores[key] += w / float64(k+rank+1)
-			if _, seen := frags[key]; !seen {
-				frags[key] = r // 首次出现，保留 Source/Metadata 等原始字段
-			}
-			if sourceBits != nil {
-				bits[key] |= sourceBits[source]
-			}
-		}
-	}
-
-	fused := make([]ScoredFragment, 0, len(scores))
-	for key, score := range scores {
-		frag := frags[key]
-		frag.Score = score
-		frag.ExplainBits |= bits[key]
-		fused = append(fused, frag)
-	}
-
-	// 按分数降序排序
-	sort.Slice(fused, func(i, j int) bool {
-		return fused[i].Score > fused[j].Score
-	})
-
-	return fused
 }

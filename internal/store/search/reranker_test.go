@@ -4,12 +4,14 @@ import (
 	"context"
 	"math"
 	"testing"
+
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // ── NilReranker ───────────────────────────────────────────────────────────────
 
 func TestNilReranker_Passthrough(t *testing.T) {
-	docs := []ScoredFragment{
+	docs := []types.ScoredFragment{
 		{Content: "doc-a", Score: 0.9},
 		{Content: "doc-b", Score: 0.5},
 	}
@@ -136,7 +138,7 @@ func TestApproximateColBERTReranker_OrderChanged(t *testing.T) {
 	// 查询: "golang concurrency"
 	// doc-a: "golang goroutines channels concurrency" (高相关)
 	// doc-b: "python web framework django" (低相关)
-	docs := []ScoredFragment{
+	docs := []types.ScoredFragment{
 		{Content: "python web framework django", Score: 0.9},            // RRF 高分但低相关
 		{Content: "golang goroutines channels concurrency", Score: 0.5}, // RRF 低分但高相关
 	}
@@ -153,7 +155,7 @@ func TestApproximateColBERTReranker_OrderChanged(t *testing.T) {
 }
 
 func TestApproximateColBERTReranker_EmptyQuery(t *testing.T) {
-	docs := []ScoredFragment{{Content: "some doc"}}
+	docs := []types.ScoredFragment{{Content: "some doc"}}
 	r := NewApproximateColBERTReranker(mockEmbedder{}, 3)
 	got := r.Rerank(context.Background(), "", docs)
 	// 空 query 无 token vecs → 透传原始列表
@@ -163,7 +165,7 @@ func TestApproximateColBERTReranker_EmptyQuery(t *testing.T) {
 }
 
 func TestApproximateColBERTReranker_NilEmbedder(t *testing.T) {
-	docs := []ScoredFragment{{Content: "doc"}}
+	docs := []types.ScoredFragment{{Content: "doc"}}
 	r := &ApproximateColBERTReranker{embedder: nil, window: 3}
 	got := r.Rerank(context.Background(), "query", docs)
 	if len(got) != 1 {

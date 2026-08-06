@@ -32,8 +32,13 @@ func recordExplainBits(ctx context.Context, bits uint8) {
 	}
 }
 
+// tier0DefaultTopK Tier-0 路径未指定 FinalTopK 时的默认返回条数。
+// 刻意低于 Tier-1 的 defaultKnowledgeTopK(10)：<8GB 部署上每条 chunk 都要
+// 进 Prompt，上下文预算更紧。
+const tier0DefaultTopK = 5
+
 type ragReranker interface {
-	Rerank(ctx context.Context, query string, docs []search.ScoredFragment) []search.ScoredFragment
+	Rerank(ctx context.Context, query string, docs []types.ScoredFragment) []types.ScoredFragment
 }
 
 // DefaultHybridRetriever 实现了 HybridRetriever
@@ -57,54 +62,87 @@ func (r *DefaultHybridRetriever) Engine() *search.HybridSearchEngine {
 	return r.engine
 }
 
+// tier0RerankTopM Tier-0 路径送入 Cross-encoder 重排的候选上限（M10 §2.2）。
+const tier0RerankTopM = 50
+
+// Search 执行 Tier-0（StorageRouter-only，<8GB VPS）路径的混合检索。
+//
+// GD-13-002 收敛：此前本方法调用 HybridSearchEngine.Search + RRFFuse，
+// 那是全仓**第三套**独立的融合实现（另两套在 memory/retrieval 与
+// knowledge/retriever.go），且恰好服务于最受资源约束的 Tier-0 部署。
+// 现统一走 search.HybridSearch，与 SurrealDB 路径（HybridRetrieverImpl）
+// 共用同一份 RRF/ExplainBits/Rerank/TopK 逻辑与同一组 M10 §2.2 权重常量。
 func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
 	if query == "" {
 		return nil, apperr.New(apperr.CodeInvalidInput, "empty query")
 	}
 
-	searchConfig := search.RetrievalConfig{
-		BM25Weight:   0.3,
-		VectorWeight: 0.6,
-		GraphWeight:  0.1,
-		RRFK:         60,
-		OversampleN:  3,
-		RerankTopM:   50,
-		FinalTopK:    config.FinalTopK,
-	}
-	if searchConfig.FinalTopK <= 0 {
-		searchConfig.FinalTopK = 5
+	topK := config.FinalTopK
+	if topK <= 0 {
+		topK = tier0DefaultTopK
 	}
 
-	fragments, err := r.engine.Search(ctx, query, []byte("chunk:"), searchConfig)
+	var queryEmbed []float32
+	if emb := r.engine.EmbedQuery(query); len(emb) > 0 {
+		queryEmbed = emb
+	}
+
+	var searchReranker search.Reranker
+	if r.reranker != nil {
+		searchReranker = &tier0RerankerAdapter{inner: r.reranker, topM: tier0RerankTopM}
+	}
+
+	merged, err := search.HybridSearch(ctx,
+		r.engine.NewRouterDocumentSource([]byte("chunk:"), config.Tier0VectorScanLimit),
+		query, queryEmbed,
+		search.HybridSearchConfig{
+			// 与 knowledge/source.go 同一组常量：Tier-0 与 Tier-1 的检索
+			// 策略必须一致，只是底层召回能力不同（全表扫描 vs FTS5/HNSW）。
+			BM25Weight:   knowledgeBM25Weight,
+			VectorWeight: knowledgeVectorWeight,
+			GraphWeight:  knowledgeGraphWeight,
+			RRFk:         knowledgeRRFk,
+			TopK:         topK,
+			RecallWidth:  topK * 3,
+			EnableRerank: searchReranker != nil,
+			Reranker:     searchReranker,
+		})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "DefaultHybridRetriever.Search", err)
 	}
 
-	if r.reranker != nil && searchConfig.RerankTopM > 0 && len(fragments) > 0 {
-		candidates := fragments
-		if len(candidates) > searchConfig.RerankTopM {
-			candidates = candidates[:searchConfig.RerankTopM]
+	for i := range merged {
+		// 污点等级从 Metadata 还原：StorageRouter 路径的文档以 JSON 存储，
+		// taint_level 在 Metadata 里而非独立字段。
+		if merged[i].TaintLevel == 0 && merged[i].Metadata != nil {
+			merged[i].TaintLevel = parseTaintLevel(merged[i].Metadata["taint_level"])
 		}
-		fragments = r.reranker.Rerank(ctx, query, candidates)
+		recordExplainBits(ctx, merged[i].ExplainBits)
 	}
+	return merged, nil
+}
 
-	if len(fragments) > searchConfig.FinalTopK {
-		fragments = fragments[:searchConfig.FinalTopK]
-	}
+// tier0RerankerAdapter 把 Tier-0 的 ragReranker（无 error 返回）适配为统一管线的
+// search.Reranker，并施加 topM 候选截断——Cross-encoder 成本随候选数线性增长，
+// Tier-0（<8GB）不能把全部融合结果都送进去。
+type tier0RerankerAdapter struct {
+	inner ragReranker
+	topM  int
+}
 
-	var results []types.ScoredFragment
-	for _, f := range fragments {
-		recordExplainBits(ctx, f.ExplainBits)
-		results = append(results, types.ScoredFragment{
-			Content:     f.Content,
-			Score:       f.Score,
-			Source:      f.Source,
-			Metadata:    f.Metadata,
-			TaintLevel:  parseTaintLevel(f.Metadata["taint_level"]),
-			ExplainBits: f.ExplainBits,
-		})
+func (a *tier0RerankerAdapter) Rerank(ctx context.Context, query string, docs []types.ScoredFragment) ([]types.ScoredFragment, error) {
+	if a.inner == nil || len(docs) == 0 {
+		return docs, nil
 	}
-	return results, nil
+	candidates := docs
+	var tail []types.ScoredFragment
+	if a.topM > 0 && len(candidates) > a.topM {
+		tail = candidates[a.topM:]
+		candidates = candidates[:a.topM]
+	}
+	// 重排头部候选，未参与重排的尾部原样接回——直接丢弃会让 TopK 截断
+	// 在候选数略多于 topM 时凭空少掉结果。
+	return append(a.inner.Rerank(ctx, query, candidates), tail...), nil
 }
 
 // ContextExpander 将 LeafChunk 扩展为 AugmentedContext（父块 + 前后兄弟块）。
