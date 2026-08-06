@@ -22,6 +22,7 @@ import (
 	"github.com/polarisagi/polaris/internal/learning/surprise"
 	"github.com/polarisagi/polaris/internal/llm/modelregistry"
 	"github.com/polarisagi/polaris/internal/memory"
+	"github.com/polarisagi/polaris/internal/memory/consolidation"
 	storerepo "github.com/polarisagi/polaris/internal/store/repo"
 )
 
@@ -66,6 +67,33 @@ func bootMemory(ctx context.Context, sb *SubstrateBundle) (*MemoryBundle, error)
 		mem.InjectEmbedder(&memEmbedderAdapter{e: sb.Embedder, model: embedModelName})
 		slog.Info("polaris: vector retrieval path activated")
 	}
+
+	// ─── GD-14-003 检索强化：让遗忘按"有没有人用"而非"够不够旧"淘汰 ────────
+	// 命中在读路径上只做内存累加，落盘由下方 ticker 批量执行（5 分钟）。
+	// 刻意与 6h 遗忘周期解耦——遗忘跑之前必须已经看到最近的命中，否则刚被
+	// 反复使用的记忆会因"库里仍是 0 次命中"被误判为噪声删掉。
+	retrievalReinforcer := consolidation.NewRetrievalReinforcer(sb.Store.DB())
+	mem.InjectRetrievalReinforcer(retrievalReinforcer)
+	concurrent.SafeGo(ctx, "boot_memory.retrieval_reinforce_flush", func(ctx context.Context) {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				// 关停前最后冲一次，避免丢掉本次运行末尾的命中统计。
+				flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := retrievalReinforcer.Flush(flushCtx); err != nil {
+					slog.Warn("polaris: retrieval reinforcement final flush failed", "err", err)
+				}
+				cancel()
+				return
+			case <-ticker.C:
+				if err := retrievalReinforcer.Flush(ctx); err != nil {
+					slog.Warn("polaris: retrieval reinforcement flush failed", "err", err)
+				}
+			}
+		}
+	})
 
 	// ─── §4.10.5 OnlineReindexer（后台异步 Embedding 版本漂移修复）──────────
 	// embedder 非 nil 时才启动（FeatureLocalEmbedding 已开启），否则 Tier0 走纯 BM25。

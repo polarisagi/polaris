@@ -25,11 +25,60 @@ func NewForgettingManager(store protocol.Store, cognitive protocol.CognitiveSear
 	}
 }
 
-// UpdateDecay 更新衰减权重。
+// UpdateDecay 更新衰减权重（纯时间衰减）。
 // ageHours = now - timestamp; DecayWeight = salience × exp(-decayRate × ageHours/24).
+//
+// 保留此签名供无检索统计的降级路径（纯 KV 部署）使用；SQL 路径一律走
+// UpdateDecayReinforced，见其注释说明为什么纯时间衰减不够。
 func (fm *ForgettingManager) UpdateDecay(salience float64, ageHours float64) float64 {
 	decay := salience * math.Exp(-fm.decayRate*ageHours/24.0)
 	return decay
+}
+
+// reinforcementCap 检索强化的权重上限倍数。
+// 封顶而非无限放大：否则一条被反复命中的记忆会获得近乎永久的豁免，
+// 遗忘机制对高频区失效，退化成"只清理冷数据"。
+const reinforcementCap = 3.0
+
+// idleDecayPenaltyHours 超过此时长未被检索则开始施加闲置惩罚。
+// 取 14 天：短于典型的"隔周回到同一个项目"周期会误伤周期性使用的记忆。
+const idleDecayPenaltyHours = 14 * 24
+
+// UpdateDecayReinforced 在时间衰减基础上叠加检索强化与闲置惩罚（GD-14-003）。
+//
+//	weight = salience × exp(-rate·age/24) × reinforce(count) × idlePenalty(idleHours)
+//
+// 为什么纯时间衰减不够：它表达的是"越老越该忘"，会误删**旧但持续有用**的
+// 记忆（项目约定、用户长期偏好、反复踩过的坑），同时留下大量"新但从没人
+// 用过"的噪声——与 GD-14-003 要提升的检索信噪比恰好相反。真正该淘汰的是
+// "没人用的"，不是"旧的"。
+//
+//   - reinforce：命中次数的对数增益（前几次命中收益大，之后边际递减），
+//     封顶 reinforcementCap，避免高频记忆获得永久豁免。
+//   - idlePenalty：从未被检索、或超过 idleDecayPenaltyHours 未命中的条目
+//     额外加速衰减。这是"激进遗忘"真正的着力点——它专打噪声，不误伤热数据。
+//
+// retrievalCount<=0 且 lastRetrievedAtMs<=0 表示从未被检索过。
+func (fm *ForgettingManager) UpdateDecayReinforced(
+	salience, ageHours float64, retrievalCount int, lastRetrievedAtMs int64,
+) float64 {
+	weight := fm.UpdateDecay(salience, ageHours)
+
+	if retrievalCount > 0 {
+		// 1 次命中 ≈ ×1.69，5 次 ≈ ×2.79，10 次封顶 ×3.0
+		boost := 1.0 + math.Log1p(float64(retrievalCount))
+		weight *= math.Min(boost, reinforcementCap)
+	}
+
+	idleHours := ageHours // 从未被检索：闲置时长等同于存在时长
+	if lastRetrievedAtMs > 0 {
+		idleHours = float64(time.Now().UnixMilli()-lastRetrievedAtMs) / 3600000.0
+	}
+	if idleHours > idleDecayPenaltyHours {
+		// 超期闲置按额外一轮指数衰减惩罚，闲置越久惩罚越重。
+		weight *= math.Exp(-fm.decayRate * (idleHours - idleDecayPenaltyHours) / 24.0)
+	}
+	return weight
 }
 
 // PeriodicCleanup 扫描 Episodic 事件，将低于 salienceThreshold 的条目标记为可遗忘，
@@ -84,7 +133,13 @@ func (fm *ForgettingManager) cleanupWithSQL(ctx context.Context, db protocol.SQL
 // queryDecayCandidates 扫描未归档且 salience<1.0 的 episodic 事件，按衰减权重分流为
 // "需要更新 decay_weight" 与 "需要归档"（从 cleanupWithSQL 拆出，gocyclo 治理，行为不变）。
 func (fm *ForgettingManager) queryDecayCandidates(ctx context.Context, db protocol.SQLQuerier, now int64) ([]decayUpdateItem, []archiveItem, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, salience, occurred_at, event_uuid FROM episodic_events WHERE archived = 0 AND salience < 1.0")
+	// GD-14-003：一并取出检索强化信号（retrieval_count / last_retrieved_at），
+	// 让淘汰依据从"够不够旧"变为"有没有人用"。
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, salience, occurred_at, event_uuid,
+		       retrieval_count, COALESCE(last_retrieved_at, 0)
+		FROM episodic_events
+		WHERE archived = 0 AND salience < 1.0`)
 	if err != nil {
 		return nil, nil, apperr.Wrap(apperr.CodeInternal, "ForgettingManager.cleanupWithSQL", err)
 	}
@@ -98,12 +153,14 @@ func (fm *ForgettingManager) queryDecayCandidates(ctx context.Context, db protoc
 		var salience float64
 		var occurredAt int64
 		var eventUUID string
-		if err := rows.Scan(&id, &salience, &occurredAt, &eventUUID); err != nil {
+		var retrievalCount int
+		var lastRetrievedAt int64
+		if err := rows.Scan(&id, &salience, &occurredAt, &eventUUID, &retrievalCount, &lastRetrievedAt); err != nil {
 			continue
 		}
 
 		ageHours := float64(now-occurredAt) / 3600000.0
-		decayWeight := fm.UpdateDecay(salience, ageHours)
+		decayWeight := fm.UpdateDecayReinforced(salience, ageHours, retrievalCount, lastRetrievedAt)
 
 		if decayWeight >= fm.salienceThreshold {
 			continue

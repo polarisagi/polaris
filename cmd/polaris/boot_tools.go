@@ -261,6 +261,14 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// ExecuteTool 出口污点检查）必须读写同一份存储。
 	hitlGateway.SetExemptionVault(exemptionVault)
 
+	// GD-14-004 自适应降级：默认 MinApprovals=0 即完全关闭，与引入前行为一致。
+	// 用户按 polaris.hitl.decisions_total 观测到某类 checkpoint 已退化为
+	// 习惯性点击后，才在 [agent] hitl_trust_min_approvals 中显式开启。
+	hitlGateway.SetTrustScorer(hitl.NewTrustScorer(hitl.TrustPolicy{
+		MinApprovals: sb.Cfg.Agent.HITLTrustMinApprovals,
+		Window:       time.Duration(sb.Cfg.Agent.HITLTrustWindowHours) * time.Hour,
+	}))
+
 	// V-4 核实：解决启动期循环依赖，在 hitlGateway 初始化后通过 SetOnKillSwitch
 	// 注入回 boot_substrate 阶段已实例化的 sb.Gate。
 	sb.Gate.SetOnKillSwitch(func() {

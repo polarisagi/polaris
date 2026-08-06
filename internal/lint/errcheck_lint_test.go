@@ -32,16 +32,62 @@ import (
 // silentDiscard 描述一处 "_ = f(...)" / "_, _ = f(...)" 形式的调用发现。
 type silentDiscard struct {
 	relPath  string
-	line     int
+	line     int    // 仅用于报错定位，不参与 baseline 键
+	funcName string // 所在函数/方法名（方法为 "Recv.Method"）
 	callName string // 被丢弃返回值的方法/函数裸名（无法识别时为空串）
+	ordinal  int    // 同一 (file, func, callName) 内的出现序号，从 0 开始
 }
 
+// key 是 baseline 棘轮的稳定标识。
+//
+// **刻意不含行号**：baseline 早期以 "file:line" 为键，导致任何在豁免行**之上**
+// 的编辑（哪怕只加一行注释）都会让键失配，把一条既有豁免变成"新增违规"，
+// CI 假红。这不是理论问题——2026-08-06 一轮修改先后触发了 8 条这样的假失配，
+// 每次都要人工回填行号，属于纯粹的维护摩擦，且会训练维护者"报错了就改
+// baseline"的坏习惯，反过来削弱棘轮本身的意义。
+//
+// 改用 (文件, 所在函数, 被丢弃调用名, 同组序号)：函数内代码上下移动、
+// 文件其它部分增删都不影响它；只有真正在同一函数内新增同名调用的丢弃点
+// 才会产生新键——那恰恰就是棘轮应该拦住的情况。
 func (d silentDiscard) key() string {
-	return fmt.Sprintf("%s:%d", d.relPath, d.line)
+	return fmt.Sprintf("%s:%s:%s#%d", d.relPath, d.funcName, d.callName, d.ordinal)
 }
 
 func (d silentDiscard) String() string {
-	return fmt.Sprintf("%s: 静默丢弃调用返回值（`_ = ...`/`_, _ = ...`），需按 HE-1 分级（L1-L4）处理——callName=%s", d.key(), d.callName)
+	return fmt.Sprintf("%s:%d (%s) 静默丢弃调用返回值（`_ = ...`/`_, _ = ...`），需按 HE-1 分级（L1-L4）处理——callName=%s；baseline 键=%s",
+		d.relPath, d.line, d.funcName, d.callName, d.key())
+}
+
+// enclosingFuncName 返回 AST 节点所在的顶层函数/方法名。
+// 方法返回 "Recv.Method" 形式；找不到（包级 var 初始化等）返回 "<file>"。
+func enclosingFuncName(f *ast.File, pos token.Pos) string {
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || pos < fn.Pos() || pos > fn.End() {
+			continue
+		}
+		if fn.Recv != nil && len(fn.Recv.List) > 0 {
+			return recvTypeName(fn.Recv.List[0].Type) + "." + fn.Name.Name
+		}
+		return fn.Name.Name
+	}
+	return "<file>"
+}
+
+// recvTypeName 提取接收者类型名（剥离指针与泛型实参）。
+func recvTypeName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.StarExpr:
+		return recvTypeName(e.X)
+	case *ast.IndexExpr:
+		return recvTypeName(e.X)
+	case *ast.IndexListExpr:
+		return recvTypeName(e.X)
+	case *ast.Ident:
+		return e.Name
+	default:
+		return "?"
+	}
 }
 
 // silentDiscardCallName 返回调用表达式的裸方法/函数名（不含包名/接收者），
@@ -62,6 +108,9 @@ func silentDiscardCallName(fun ast.Expr) string {
 func collectSilentErrorDiscards(t *testing.T, root, dir string) []silentDiscard {
 	t.Helper()
 	var found []silentDiscard
+	// ordinals 跨文件累计 (file, func, callName) → 已见次数。
+	// 必须在 walk 之外声明：同一文件内的多次命中要连续编号。
+	ordinals := make(map[string]int)
 	walkGoFilesUnder(t, root, dir, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			assign, ok := n.(*ast.AssignStmt)
@@ -91,7 +140,19 @@ func collectSilentErrorDiscards(t *testing.T, root, dir string) []silentDiscard 
 				return true
 			}
 			pos := fset.Position(assign.Pos())
-			found = append(found, silentDiscard{relPath: relPath, line: pos.Line, callName: callName})
+			fnName := enclosingFuncName(f, assign.Pos())
+			// ordinal 在 (file, func, callName) 分组内递增，使同一函数里多个
+			// 同名调用的丢弃点各有稳定且互不冲突的键。
+			groupKey := relPath + ":" + fnName + ":" + callName
+			ord := ordinals[groupKey]
+			ordinals[groupKey]++
+			found = append(found, silentDiscard{
+				relPath:  relPath,
+				line:     pos.Line,
+				funcName: fnName,
+				callName: callName,
+				ordinal:  ord,
+			})
 			return true
 		})
 	})

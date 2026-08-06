@@ -1,6 +1,6 @@
 # ADR-0088: Saga 双补偿归属裁决暂缓（先幂等止血）+ 三项对标差距的处置边界
 
-- **状态**: Accepted（决策一止血部分已实施）/ Deferred（决策一归属裁决、决策三） | **日期**: 2026-08-06 | **模块**: `internal/execute/dag`, `internal/agent/fsm`, `internal/agent/context`, `internal/automation/hitl`
+- **状态**: Accepted（四条决策均已实施） | **日期**: 2026-08-06（同日补充终态裁决） | **模块**: `internal/execute/dag`, `internal/agent/fsm`, `internal/execute/orchestrator`, `internal/agent/context`, `internal/automation/hitl`, `internal/memory`
 
 ## 决策一：两套并行 Saga 补偿——先加幂等键，归属裁决暂缓
 
@@ -82,3 +82,55 @@
 ## 引用代码
 
 `internal/protocol/saga_ledger.go`、`internal/execute/dag/executor_node.go`、`internal/agent/fsm/state_machine_effects.go`、`internal/security/token/capability_token.go`、`internal/action/capability_token.go`、`internal/action/codeact/code_act.go`、`internal/automation/hitl/gateway.go`、`internal/observability/metrics/instruments.go`
+
+---
+
+## 终态裁决（同日补充，取代上文三处 Deferred）
+
+上文四条决策中原本标记 Deferred 的部分已全部裁决并落地，此节记录最终结论。
+
+### 决策一终态：`ExecNode.Compensation` 是 Saga 补偿的唯一 SSoT
+
+裁决依据是一条全仓核查事实：`ToolDefinition.UndoFn` **从未被赋值过**（tool.yaml 加载器无对应字段映射，唯一出现处是 `agent_execute_dag.go` 读取它）。因此 `sCtx.SagaLog` 恒为空，`fsm.rollbackSaga` 恒遍历空切片、恒返回 `S_ROLLBACK_OK`——FSM 的 `S_ROLLBACK` 自始至终没有反映过任何真实补偿结果。所谓"两套并行补偿"实为"一套活的 + 一套结构上死的"。
+
+B 之所以删除而非接线补活：`UndoFn` 是挂在**工具定义**上的静态工具名，没有参数绑定。补偿"删除刚创建的那个文件"需要知道是哪个文件，而工具定义层拿不到本次调用的实参——这是设计上的死胡同，不是接线缺口。
+
+落地：删除 `SagaLog` / `types.SagaStep` / `ToolDefinition.UndoFn`；`rollbackSaga` 从"执行者"改为"结果汇报者"，读 `SagaCompensationRecorder` 决定 `S_ROLLBACK_OK` / `S_ROLLBACK_PARTIAL`。上文提到的幂等键账本（`SagaCompensationLedger`）随之删除——单一路径不需要跨路径去重，它本就是临时止血。
+
+`S_ROLLBACK` 状态本身保留（两条语义不同的出边），反例守护不变。
+
+### 决策三终态：工作区上下文协议按"默认不可信 + 显式信任例外"实现
+
+三个候选方案中选定第三个（折中）：默认按 `TaintHigh` 进 `ZoneExternalCatalog` 并加 Spotlighting 围栏，与 S-02 的第三方扩展自述同级——两者威胁模型完全一致（第三方可控、看起来像指令的文本），不应给工作区文件更高信任度。仅当工作区路径命中用户在 `[agent] trusted_workspace_roots` 中**显式声明**的绝对路径前缀时，才写入 `ZoneImmutable`。
+
+信任判定的两个必须项：前缀匹配须校验目录边界（否则 `/home/u/proj-evil` 会继承 `/home/u/proj` 的信任）；相对路径条目一律忽略（`"."` 之类会让任意 cwd 变成受信任）。二者均有回归测试锁定。
+
+### 决策四终态：自适应降级实现为"默认关闭 + 硬地板 + 只降一档"
+
+观测（`polaris.hitl.decisions_total`）回答"**是否需要**开启"，`TrustScorer` 提供"**开启后**怎么执行"，两者互补而非二选一。
+
+不可放宽的设计约束：默认 `MinApprovals=0` 即完全关闭；启用后**只降级为通知**，永不静默放行；污点 ≥ TaintMedium / RiskLevel ≥ 3 / 设备操控 / L4 晋升 / 无法归因到具体 Agent 一律不参与（`downgradeEligible`，与 `resolveTimeoutAction` 的地板保持同一组条件）；任何一次人工拒绝立即清零信任；只有**人工**决策参与累积——把自动放行计入会形成正反馈，几轮后就没人在看了。
+
+### 新增决策五：跨 Agent Saga 协调补齐并发扇出路径
+
+`StateGraphExecutor`（Parallel / MapReduce / Sequential 的共同底座）一直声明并校验 `WorkflowNodeSpec.Compensation`，却从未在任何失败路径上执行过补偿——节点失败时只返回错误，已成功兄弟节点的副作用无人回滚。而"部分成功部分失败"恰是并发扇出的常态，不是边界情况。
+
+落地两件事，顺序不可交换：**先取消在途兄弟**（`Blackboard.CancelTask`：先 cancel goroutine 再置 DB 状态），**再逆序补偿**。反过来的话，仍在执行的兄弟会在补偿完成之后才写入副作用，导致"补偿先于副作用"，回滚等于没做。
+
+三条补偿路径（Pipeline / PatternDAG / StateGraph）共用同一个 `PipelineOrchestrator.monitorCompensationTask`，即"补偿任务自身超时/失败 → ESCALATE"的处置只有一份。
+
+### 新增决策六：遗忘按"有没有人用"而非"够不够旧"淘汰
+
+纯时间衰减（`salience × exp(-rate·age)`）表达的是"越老越该忘"，会误删**旧但持续有用**的记忆（项目约定、用户长期偏好、反复踩过的坑），同时留下大量"新但从没人用过"的噪声——与 GD-14-003 想提升的检索信噪比恰好相反。真正该淘汰的是"没人用的"，不是"旧的"。
+
+`episodic_events` 新增 `retrieval_count` / `last_retrieved_at`，`UpdateDecayReinforced` 叠加两项信号：命中次数的对数增益（封顶 3.0，避免高频记忆获得永久豁免）与超期闲置惩罚（14 天起）。
+
+性能硬约束：命中统计**绝不在读路径上同步写库**。检索是高频只读操作，每次命中都 UPDATE 会在 Tier-0 单写者 SQLite 上与主写入链路争锁。采用内存累计 + 5 分钟批量落盘，刻意与 6h 遗忘周期解耦——遗忘跑之前必须已看到最近命中，否则刚被反复使用的记忆会因"库里仍是 0 次命中"被误判为噪声。
+
+### 反例守护（补充）
+
+- 不得恢复 `ToolDefinition.UndoFn` 那套补偿机制；需要补偿的工具在 DAG 节点上声明 `Compensation`。
+- 不得让 `rollbackSaga` 重新承担执行职责——它只汇报 `execute/dag` 的结果。
+- 工作区上下文的任何实现都必须显式声明装入哪个 Zone、打什么污点等级；不得因"文件名恰好是约定名字"推定信任。
+- 自适应降级的硬地板与 `resolveTimeoutAction` 必须同步修改；出现"超时不敢自动放行、但疲劳降级放行了"的组合即为缺陷。
+- 检索强化不得改为读路径同步写。
