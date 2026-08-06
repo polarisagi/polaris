@@ -42,7 +42,13 @@ type WorkspaceManager struct {
 
 // NewWorkspaceManager 创建 WorkspaceManager，rootDir 不存在时自动创建。
 func NewWorkspaceManager(rootDir string, maxSize int64, cfg config.M7ToolThresholds) *WorkspaceManager {
-	_ = os.MkdirAll(rootDir, 0o700)
+	// 构造函数无 error 返回（调用方为组合根，历史签名），但根目录创建失败
+	// 意味着后续所有任务沙箱目录都建不出来——必须留痕，否则表现为"每个工具
+	// 调用各自报一个看不出根因的路径错误"。
+	if err := os.MkdirAll(rootDir, 0o700); err != nil {
+		slog.Error("vfs: failed to create workspace root, all task sandboxes will fail",
+			"root_dir", rootDir, "err", err)
+	}
 	wm := &WorkspaceManager{
 		rootDir:   rootDir,
 		cfg:       cfg,
@@ -75,7 +81,11 @@ func NewWorkspaceManager(rootDir string, maxSize int64, cfg config.M7ToolThresho
 
 func (wm *WorkspaceManager) gcWorker() {
 	for path := range wm.gcCh {
-		_ = os.RemoveAll(path)
+		// 后台回收失败只告警不重试：目录会留到下一次同 taskID 复用或人工清理，
+		// 不影响正确性；但持续失败意味着磁盘在泄漏，必须可观测。
+		if err := os.RemoveAll(path); err != nil {
+			slog.Warn("vfs: workspace gc failed, directory leaked", "path", path, "err", err)
+		}
 		// Sleep briefly to reduce I/O pressure on disk during background cleanup
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -105,7 +115,9 @@ func (wm *WorkspaceManager) rebuildManifests() {
 		dir := filepath.Join(wm.rootDir, taskID)
 		var totalSize int64
 		var files []WorkspaceFile
-		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		// Walk 错误只影响单个任务清单的完整性（下方按 files/totalSize 重建），
+		// 不阻断其余任务的重建循环；但静默丢弃会让"清单少了文件"无从追查。
+		walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -119,6 +131,10 @@ func (wm *WorkspaceManager) rebuildManifests() {
 			})
 			return nil
 		})
+		if walkErr != nil {
+			slog.Warn("vfs: workspace manifest rebuild walk failed, manifest may be incomplete",
+				"task_id", taskID, "dir", dir, "err", walkErr)
+		}
 		// 优先读取持久化的真实创建时间标记；缺失时（如升级前已存在的旧目录）
 		// 回退 ModTime 作为近似值，与修复前行为兼容。
 		createdAt := readCreatedAtMarker(dir)

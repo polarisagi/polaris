@@ -1,8 +1,6 @@
 package guard
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -35,9 +33,10 @@ func NewPIITokenVault() *PIITokenVault {
 
 // TokenizeForTask 记录原始值并返回一个人类可读的短 token，绑定到指定的 taskID。
 func (v *PIITokenVault) TokenizeForTask(taskID string, original string) string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	shortID := hex.EncodeToString(b)
+	// 4 字节 → 8 位小写 hex，与 tokenPattern ⟦PII:[0-9a-f]{8}⟧ 严格对应。
+	// 熵源不可用时 secureRandomHex fail-fast，绝不用可预测值生成令牌——
+	// 全零 shortID 会让同一 task 内所有 PII 映射塌缩成一个 key 互相覆盖。
+	shortID := secureRandomHex(4)
 
 	token := fmt.Sprintf("⟦PII:%s⟧", shortID)
 

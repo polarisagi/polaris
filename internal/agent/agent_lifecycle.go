@@ -102,15 +102,29 @@ func (a *Agent) Interrupt(req types.InterruptRequest) {
 				a.pendingRedirectCh <- req.Redirect
 			}
 		}
-		_ = a.SendIntent(types.TriggerInterruptReceived)
+		a.sendInterruptReceived("redirect")
 		// 注入到 S_INTERRUPT 后立即 Resume（Redirect = 新意图的 Resume）
 		a.asyncIntent(types.TriggerInterruptResume)
 	case types.InterruptAbort:
-		_ = a.SendIntent(types.TriggerInterruptReceived)
+		a.sendInterruptReceived("abort")
 		a.asyncIntent(types.TriggerInterruptAbort)
 	default: // types.InterruptResume
-		_ = a.SendIntent(types.TriggerInterruptReceived)
+		a.sendInterruptReceived("resume")
 		a.asyncIntent(types.TriggerInterruptResume)
+	}
+}
+
+// sendInterruptReceived 投递 TriggerInterruptReceived，失败时告警。
+//
+// 不向上传播错误：Interrupt 是 inv_global_08 <200ms SLO 的非阻塞入口，
+// 签名无 error 返回且调用方（HTTP handler）已经返回 202。但失败必须留痕
+// ——投递不成功意味着 Agent 根本没进入 S_INTERRUPT，用户点的"中止/重定向"
+// 完全没生效，而界面上看起来是成功的。此前三处均为 `_ = a.SendIntent(...)`，
+// 这种"用户操作静默失效"正是最难排查的一类问题。
+func (a *Agent) sendInterruptReceived(action string) {
+	if err := a.SendIntent(types.TriggerInterruptReceived); err != nil {
+		slog.Error("agent: failed to deliver interrupt trigger, user request silently ineffective",
+			"agent_id", a.ID, "action", action, "err", err)
 	}
 }
 

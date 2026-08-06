@@ -3,7 +3,6 @@ package guard
 import (
 	"container/list"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -245,9 +244,7 @@ func generateFakeValue(piiType, original string) string {
 }
 
 func randomHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	return secureRandomHex(n)
 }
 
 func generateFakeEmail() string {
@@ -306,8 +303,7 @@ func generateFakeIDCard() string {
 	birthday := "19900101"
 
 	// 顺序码
-	seqB := make([]byte, 1)
-	_, _ = rand.Read(seqB)
+	seqB := secureRandomBytes(1)
 	seqInt := int(seqB[0]) % 1000
 	seq := fmt.Sprintf("%03d", seqInt)
 
