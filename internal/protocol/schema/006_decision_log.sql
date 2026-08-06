@@ -14,8 +14,9 @@
 -- 不变量:
 --   1. append-only, 不可删除 [HE-Rule-6]
 --   2. outcome 异步更新 —— 先写入决策（choice），后续补充结果（outcome）
---   3. 覆盖 13 种决策类型（见 decision_type 注释）
--- 写入路径: MutationBus（所有决策日志统一入口）
+--   3. 覆盖 14 种决策类型（见 decision_type 注释）
+-- 写入路径: MutationBus（决策日志统一入口）。唯一例外见 decision_type
+--           'task_archived' 注释（M8 Reaper 删除前归档，须与 DELETE 同步）。
 -- 关联模块: M3(Observability) §10, M12(Eval) §2, M11(Policy) §7
 -- ============================================================================
 
@@ -47,6 +48,14 @@ CREATE TABLE IF NOT EXISTS decision_log (
     --   'persona_refine'          —— M9 PersonaRefiner 画像更新
     --   'progressive_rollout'     —— M9 ProgressiveRollout 流量推进
     --   'co_evolution_compensate' —— M9 CoEvolutionCoordinator 联合进化补偿
+    --   'task_archived'           —— M8 Blackboard Reaper 终态任务物理删除前的
+    --                                摘要归档（GD-13-004）。写入方是 Reaper 自身
+    --                                （SQLiteBlackboard.reaperPhase2）而非
+    --                                MutationBus：Reaper 就跑在存储层内、与
+    --                                DELETE 同一条连接上，走 MutationBus 反而会
+    --                                在"归档 → 删除"之间引入异步窗口，删掉的任务
+    --                                可能永远等不到归档落盘。这是本表"写入路径:
+    --                                MutationBus"的唯一例外，新增例外须走 ADR。
 
     context       JSON,
     -- ↑ 决策上下文（JSON）。包含影响决策的关键输入信息。
