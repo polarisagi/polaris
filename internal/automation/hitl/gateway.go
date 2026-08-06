@@ -43,6 +43,10 @@ type GatewayImpl struct {
 	regression RegressionDetector
 	l3Cooldown time.Duration
 
+	// trustScorer GD-14-004 自适应降级评分器；nil 时机制完全关闭
+	// （所有方法 nil-safe，ShouldDowngrade 恒返回 false）。
+	trustScorer *TrustScorer
+
 	// exemptionVault 存放 M04 §3 TaintBlocked→HITL 审批→颁发豁免令牌 转义路径
 	// 铸造出的 TaintExemptionToken，供 tool.InMemoryToolRegistry 下一次执行
 	// 同一 Agent 的工具调用时查询。nil（未注入）时 Respond 跳过铸造，行为与
@@ -85,6 +89,18 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 	// 放行逻辑——本次只加观测。agent_id 维度传空串避免时间序列爆炸，
 	// 按 Agent 下钻走审计表（见 RecordHITLPrompt 注释）。
 	metrics.RecordHITLPrompt(ctx, p.CheckpointType, "")
+
+	// GD-14-004 自适应降级：同一 Agent 对同类低风险 checkpoint 连续获得人工
+	// 批准达阈值后，降级为"通知"而非阻塞式审批，缓解审批疲劳。
+	// 默认关闭（未注入 trustScorer 或 MinApprovals<=0）；启用后也只降到通知，
+	// 且污点/高风险/设备操控/L4 晋升一律不参与（见 downgradeEligible）。
+	if g.trustScorer.ShouldDowngrade(p) {
+		slog.InfoContext(ctx, "hitl_gateway: downgraded to notification by trust score",
+			"checkpoint", p.ID, "checkpoint_type", p.CheckpointType, "agent_id", p.AgentID)
+		metrics.RecordHITLDecision(ctx, p.CheckpointType, "approved", "trust_downgrade")
+		g.notifyDowngraded(ctx, p)
+		return &types.HITLResponse{Approved: true, Reason: "auto_approved_by_trust_score"}, nil
+	}
 
 	// L3 全量回归门禁（仅 l4_multi_sig 候选触发，实现见 gateway_l3gate.go，R7 拆分）。
 	// 返回非 nil 表示已就地作出终态决策（P0 回归失败自动拒绝），直接返回不再走
@@ -183,8 +199,38 @@ func (g *GatewayImpl) Prompt(ctx context.Context, p types.HITLPrompt) (*types.HI
 			decision = "approved"
 		}
 		metrics.RecordHITLDecision(ctx, p.CheckpointType, decision, "human")
+		// GD-14-004：只有**人工**决策参与信任累积。把自动放行也计入会形成
+		// 正反馈——降级产生的"通过"反过来加固降级依据，几轮后就没人在看了。
+		g.trustScorer.RecordDecision(p, resp.Approved)
 		return &resp, nil
 	}
+}
+
+// notifyDowngraded 对已降级为通知的审批发出告知（不阻塞执行）。
+// 降级绝不等于静默：用户必须仍然知道这件事发生了，且审计留痕不减。
+func (g *GatewayImpl) notifyDowngraded(ctx context.Context, p types.HITLPrompt) {
+	if g.notifier == nil {
+		return
+	}
+	concurrent.SafeGo(context.WithoutCancel(ctx), "automation.hitl.notify_downgraded", func(nCtx context.Context) {
+		if err := g.notifier.Notify(nCtx, types.HITLNotification{
+			CheckpointID: p.ID,
+			TaskID:       p.AgentID,
+			Description:  "[已按信任评分自动放行] " + p.PromptText,
+			Risk:         p.CheckpointType,
+			DeadlineNs:   p.DeadlineNs,
+			ReviewURL:    "/v1/hitl/review?id=" + p.ID,
+		}); err != nil {
+			slog.ErrorContext(nCtx, "hitl_gateway: downgraded-approval notify failed, user is unaware of the action",
+				"checkpoint", p.ID, "err", err)
+		}
+	})
+}
+
+// SetTrustScorer 注入自适应降级评分器（GD-14-004）。
+// 不注入即完全关闭该机制，行为与引入前一致。
+func (g *GatewayImpl) SetTrustScorer(s *TrustScorer) {
+	g.trustScorer = s
 }
 
 func (g *GatewayImpl) resolveTimeoutAction(p types.HITLPrompt) string {

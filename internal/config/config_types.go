@@ -153,6 +153,30 @@ type AgentConfig struct {
 	Kernel KernelConfig `toml:"kernel"`
 	Memory MemoryConfig `toml:"memory"`
 	Skill  SkillConfig  `toml:"skill"`
+
+	// TrustedWorkspaceRoots 用户显式声明信任的工作区**绝对路径**前缀。
+	// 命中的工作区，其 AGENTS.md/CLAUDE.md/.polaris_context.md 会作为项目级
+	// 系统指令写入 ZoneImmutable；未命中（默认，空列表）则一律按 TaintHigh
+	// 进 ZoneExternalCatalog 并加围栏（GD-14-005 / ADR-0088 决策三）。
+	//
+	// 默认必须为空：Agent 处理 clone 来的仓库时，其中的 AGENTS.md 完全是
+	// 攻击者可控的。信任只能由用户针对具体路径主动授予，不得由"文件名恰好
+	// 是约定名字"推定。相对路径会被忽略（无法可靠判定信任边界）。
+	TrustedWorkspaceRoots []string `toml:"trusted_workspace_roots"`
+
+	// HITLTrustMinApprovals 自适应降级阈值（GD-14-004）：同一 Agent 对同类
+	// 低风险 checkpoint 连续获得多少次**人工批准**后，后续同类请求降级为
+	// 通知而非阻塞审批。0（默认）= 完全关闭。
+	//
+	// 默认必须为 0：自适应降级本质是削弱安全边界，开启前应先用
+	// polaris.hitl.decisions_total 指标确认哪些 checkpoint_type 的 human
+	// 批准率确实长期接近 100%（即已退化为习惯性点击），再按类开启。
+	// 即使开启，也只降到"通知"，且污点/高风险/设备操控/L4 晋升一律不参与。
+	HITLTrustMinApprovals int `toml:"hitl_trust_min_approvals"`
+
+	// HITLTrustWindowHours 信任累积的有效期（小时）。0 时取 24。
+	// 信任不应无限期留存——"三个月前批过 10 次"不构成今天放行的理由。
+	HITLTrustWindowHours int `toml:"hitl_trust_window_hours"`
 }
 
 type KernelConfig struct {

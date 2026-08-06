@@ -128,6 +128,21 @@ level = "info"
 format = "json"
 
 [agent]
+# 用户显式声明信任的工作区绝对路径前缀（GD-14-005）。
+# 命中的工作区，其 AGENTS.md / CLAUDE.md / .polaris_context.md 会作为项目级
+# 系统指令写入 ZoneImmutable；未命中则按 TaintHigh 进 ZoneExternalCatalog 加围栏。
+#
+# 默认必须为空——Agent 处理 clone 来的仓库时，其中的 AGENTS.md 完全是攻击者
+# 可控的，无条件信任等于开一条直通系统提示词的注入通路。只把你自己的项目
+# 目录加进来，例："/home/me/myproject"。相对路径会被忽略。
+trusted_workspace_roots = []
+
+# HITL 自适应降级（GD-14-004）。0 = 关闭（默认）。
+# 开启前请先看 polaris.hitl.decisions_total 指标，确认某类 checkpoint 的
+# human 批准率确实长期接近 100%（已退化为习惯性点击）再按需调高。
+# 即使开启也只降级为"通知"，且污点/高风险/设备操控/L4 晋升一律不参与降级。
+hitl_trust_min_approvals = 0
+hitl_trust_window_hours = 24
 
 [agent.kernel]
 state_machine = "dual_route"

@@ -90,7 +90,7 @@ ADR 被代码引用时，源文件头部加：
 | 0085 | 抽取 SessionOrchestrator 领域层收敛会话生命周期编排 | Accepted（已执行） | 2026-08-01 |
 | 0086 | Handoff 唤醒事件化 + 崩溃后无损续跑快照 | Accepted（已执行） | 2026-08-01 |
 | 0087 | 降级必须显式：cedarLeaks 时间窗 + PII LRU 分区回收 + 沙箱可信来源 opt-in | Accepted（已执行） | 2026-08-01 |
-| 0088 | Saga 双补偿先幂等止血（归属裁决暂缓）+ 令牌 claim 必须有兑现点 + 工作区上下文/HITL 疲劳的处置边界 | Accepted（止血已执行）/ Deferred | 2026-08-06 |
+| 0088 | Saga 补偿收敛单一 SSoT + 令牌 claim 兑现 + 工作区上下文信任模型 + HITL 自适应降级 + 跨 Agent Saga 协调 + 检索强化遗忘 | Accepted（已执行） | 2026-08-06 |
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 

@@ -174,6 +174,12 @@ func (m *MemImpl) InjectDriftRegistry(r memretrieval.DriftGate) {
 	m.retriever.InjectDriftRegistry(r)
 }
 
+// InjectRetrievalReinforcer 注入检索强化计数器（委托给内部 retriever，GD-14-003）。
+// 未注入时检索不记录命中，ForgettingManager 退化为纯时间衰减。
+func (m *MemImpl) InjectRetrievalReinforcer(r memretrieval.RetrievalReinforcer) {
+	m.retriever.InjectRetrievalReinforcer(r)
+}
+
 func (m *MemImpl) StoreStats() (string, error) {
 	stats, err := m.semantic.StoreStats()
 	if err != nil {

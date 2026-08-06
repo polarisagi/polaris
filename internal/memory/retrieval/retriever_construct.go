@@ -47,6 +47,23 @@ type HybridRetrieverImpl struct {
 	driftDetector   DriftAnchorRecorder
 	driftRegistry   DriftGate
 	driftSampleRate float64 // M5MemoryThresholds.DriftAnchorSampleRate，0 时等效未注入
+
+	// reinforcer 检索强化计数器（GD-14-003），可选注入；nil 时不记录命中，
+	// 遗忘退化为纯时间衰减。只做内存累加，落盘由后台 ticker 批量执行。
+	reinforcer RetrievalReinforcer
+}
+
+// RetrievalReinforcer 记录检索命中的消费端接口（R1.4：接口在调用方定义）。
+// 实现：memory/consolidation.RetrievalReinforcer。
+type RetrievalReinforcer interface {
+	// Reinforce 记录一批真正进入最终结果的片段来源（ScoredFragment.Source）。
+	Reinforce(sources []string)
+}
+
+// InjectRetrievalReinforcer 注入检索强化计数器（GD-14-003）。
+// 未注入时 Search 不记录命中，ForgettingManager 退化为纯时间衰减（nil-safe）。
+func (hr *HybridRetrieverImpl) InjectRetrievalReinforcer(r RetrievalReinforcer) {
+	hr.reinforcer = r
 }
 
 // InjectDriftDetector 注入漂移检测器与采样率，激活 Search() 内的 anchor 采样。

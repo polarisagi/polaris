@@ -174,8 +174,26 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 	// 记录最终合并结果的位图指标
 	recordExplainBitMetrics(ctx, merged)
 
+	hr.reinforceHits(merged)
+
 	// Stage 5 — 漂移检测 anchor 采样（M05 §12.3，见 retriever_helpers.go sampleDriftAnchor）
 	hr.sampleDriftAnchor(taskType, query, queryF32, merged)
 
 	return merged, nil
+}
+
+// reinforceHits 记录本次检索的命中，供 ForgettingManager 做检索强化（GD-14-003）。
+//
+// 只对**最终进入结果**的片段计数，不含被 RRF 融合淘汰的中间候选——
+// 后者不代表"有用"，计入会让强化信号失真，反而保护住噪声。
+// Reinforce 只做内存累加，落盘由后台 ticker 批量执行，不拖慢读路径。
+func (hr *HybridRetrieverImpl) reinforceHits(merged []types.ScoredFragment) {
+	if hr.reinforcer == nil || len(merged) == 0 {
+		return
+	}
+	sources := make([]string, 0, len(merged))
+	for _, m := range merged {
+		sources = append(sources, m.Source)
+	}
+	hr.reinforcer.Reinforce(sources)
 }
