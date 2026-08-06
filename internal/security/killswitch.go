@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -187,7 +186,12 @@ func (ks *KillSwitch) transitionLocked(s types.KillState, reason string) bool {
 		ks.StateChangeCallback(s, reason)
 	}
 	for _, n := range ks.notifiers {
-		_ = n.Send("CRITICAL", "KillSwitch Transition", reason)
+		// 通知失败不阻断状态迁移（熔断本身必须先生效），但必须留痕：
+		// KillSwitch 迁移是最高等级的运维事件，"运维没收到告警"本身就是事故。
+		if err := n.Send("CRITICAL", "KillSwitch Transition", reason); err != nil {
+			slog.Error("killswitch: transition notification failed, operators may be unaware",
+				"stage", s, "reason", reason, "err", err)
+		}
 	}
 
 	return needsFullStop
@@ -201,7 +205,14 @@ func (ks *KillSwitch) writeFullStopFile(reason string) {
 		}
 	}
 	if dataDir != "" {
-		_ = os.MkdirAll(dataDir, 0o700)
+		// 目录创建失败必须 fail-closed，与下方 WriteFile 失败同等对待：
+		// .fullstop 是 KillSwitch 跨重启的**唯一**持久化凭证，写不成功意味着
+		// 进程重启后会以为从未熔断过、直接恢复服务——这正是熔断要防的事。
+		// 此前这里静默丢弃 MkdirAll 错误，随后 WriteFile 必然也失败并 panic，
+		// 结果一致但 panic 信息指向 WriteFile，掩盖了真实根因（目录不可创建）。
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
+			panic(fmt.Sprintf("killswitch: failed to create data dir %q for .fullstop marker (fail-closed): %v", dataDir, err))
+		}
 		actor := ks.actor
 		if actor == "" {
 			actor = "system"
@@ -326,69 +337,4 @@ func (ks *KillSwitch) CheckKILLSWITCHFile() {
 			ks.writeFullStopFile(reason)
 		}
 	}
-}
-
-// IsFullStopped 返回当前是否处于 FullStop 状态（持锁读）。
-func (ks *KillSwitch) IsFullStopped() bool {
-	ks.mu.Lock()
-	defer ks.mu.Unlock()
-	return ks.state == types.KillFullStop
-}
-
-// OnRecovery 注册恢复回调
-func (ks *KillSwitch) OnRecovery(cb func(ctx context.Context)) {
-	ks.mu.Lock()
-	defer ks.mu.Unlock()
-	ks.recoveryCallback = cb
-}
-
-// removeFullStopFile 删除全停文件。
-func (ks *KillSwitch) removeFullStopFile() error {
-	dataDir := ks.dataDir
-	if dataDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			dataDir = filepath.Join(home, ".polarisagi/polaris")
-		}
-	}
-	if dataDir == "" {
-		return nil
-	}
-	fullStopFile := filepath.Join(dataDir, ".fullstop")
-	if err := os.Remove(fullStopFile); err != nil && !os.IsNotExist(err) {
-		return apperr.Wrap(apperr.CodeInternal, "failed to remove fullstop file", err)
-	}
-	return nil
-}
-
-// ManualRecover 线程安全地手动触发恢复（解除封印）。
-func (ks *KillSwitch) ManualRecover(ctx context.Context, actor, reason string) error {
-	ks.mu.Lock()
-	wasSealed := ks.state == types.KillFullStop
-
-	if wasSealed {
-		if err := ks.removeFullStopFile(); err != nil {
-			ks.mu.Unlock()
-			slog.Error("killswitch: failed to remove .fullstop file", "err", err)
-			return apperr.Wrap(apperr.CodeInternal, "killswitch: failed to remove .fullstop file", err)
-		}
-	}
-
-	ks.actor = actor
-	ks.monitors.errorCounter = 0
-	ks.monitors.safetyViolations = 0
-	ks.monitors.fatalViolations = 0
-	ks.monitors.irreversibleAttempts = 0
-	ks.transitionLocked(types.KillNormal, reason)
-	cb := ks.recoveryCallback
-	ks.mu.Unlock()
-
-	if wasSealed && cb != nil {
-		cb(ctx)
-	}
-	return nil
-}
-
-// Unseal 是最高权限的管理端点调用的解封方法，等价于 ManualRecover
-func (ks *KillSwitch) Unseal(ctx context.Context, actor, reason string) error {
-	return ks.ManualRecover(ctx, actor, reason)
 }

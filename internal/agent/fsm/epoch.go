@@ -24,10 +24,13 @@ func NewEpochTracker() *epochTracker {
 func (t *epochTracker) check(msgs []types.Message) int64 {
 	h := sha256.New()
 	for _, m := range msgs {
-		_, _ = h.Write([]byte(m.Role))
-		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(m.Content))
-		_, _ = h.Write([]byte{0})
+		// hash.Hash.Write 契约上永不返回错误（标准库文档明示），因此直接以
+		// 语句形式调用，而非用 `_, _ =` 显式丢弃——后者与"忘了处理错误"在
+		// 视觉上无法区分，会稀释 HE-1 门控的信号价值。
+		h.Write([]byte(m.Role))
+		h.Write([]byte{0})
+		h.Write([]byte(m.Content))
+		h.Write([]byte{0})
 	}
 	fp := hex.EncodeToString(h.Sum(nil))
 	if last, ok := t.lastFP.Load().(string); ok && last == fp {
