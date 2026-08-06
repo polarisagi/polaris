@@ -52,13 +52,14 @@ const (
 // SQLiteBlackboard 实现 protocol.Blackboard，以 SQLite 为持久化后端。
 // 与现有内存 Blackboard 结构共存，此实现为持久化版本。
 type SQLiteBlackboard struct {
-	db            protocol.BlackboardDB
-	registry      *AgentRegistry
-	mu            sync.Mutex
-	subscribers   []chan types.BlackboardEvent
-	subMu         sync.RWMutex
-	cancels       map[string]context.CancelFunc            // 记录每个执行中任务的取消函数
-	taskEventSubs map[string][]chan types.AgentStreamEvent // 任务级事件订阅者（GD-13-001）
+	db               protocol.BlackboardDB
+	registry         *AgentRegistry
+	mu               sync.Mutex
+	subscribers      []chan types.BlackboardEvent
+	subMu            sync.RWMutex
+	cancels          map[string]context.CancelFunc            // 记录每个执行中任务的取消函数
+	taskEventSubs    map[string][]chan types.AgentStreamEvent // 任务级事件订阅者（GD-13-001）
+	taskRetentionTTL time.Duration                            // 终态任务保留时长，默认 24h
 }
 
 // DB exposes the underlying BlackboardDB.
@@ -71,6 +72,15 @@ func (bb *SQLiteBlackboard) SetRegistry(r *AgentRegistry) {
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 	bb.registry = r
+}
+
+// SetTaskRetentionTTL 注入任务归档和清理的保留时间
+func (bb *SQLiteBlackboard) SetTaskRetentionTTL(ttl time.Duration) {
+	bb.mu.Lock()
+	defer bb.mu.Unlock()
+	if ttl >= 5*time.Minute {
+		bb.taskRetentionTTL = ttl
+	}
 }
 
 var _ protocol.Blackboard = (*SQLiteBlackboard)(nil)

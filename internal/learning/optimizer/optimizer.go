@@ -7,6 +7,7 @@ package optimizer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"sync"
 	"time"
@@ -87,7 +88,9 @@ func (po *PromptOptimizer) AddAvoidRule(taskType, rule string) {
 		concurrent.SafeGo(context.Background(), "prompt_optimizer.save_fallacy", func(_ context.Context) {
 			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = po.heuristicsStore.SaveFallacy(saveCtx, p)
+			if err := po.heuristicsStore.SaveFallacy(saveCtx, p); err != nil {
+				slog.WarnContext(saveCtx, "failed to save fallacy", "err", err)
+			}
 		})
 	}
 }
@@ -108,7 +111,9 @@ func (po *PromptOptimizer) RecordHeuristic(ctx context.Context, taskType string,
 		concurrent.SafeGo(context.Background(), "prompt_optimizer.save_heuristic", func(_ context.Context) {
 			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = po.heuristicsStore.SaveHeuristic(saveCtx, taskType, s)
+			if err := po.heuristicsStore.SaveHeuristic(saveCtx, taskType, s); err != nil {
+				slog.WarnContext(saveCtx, "failed to save heuristic", "err", err)
+			}
 		})
 	}
 }
@@ -220,6 +225,12 @@ func (gps *GeneticPromptSearch) GetParetoFront() []*PromptVersion {
 //  3. tasksSinceLastOpt ≥ 50
 //
 // 产出经 [Taint-Prop] Gate → Ed25519 签名 → M5 ZoneMutableSkill（由调用方负责）。
+// OptimizeTask 为 prompt.Manager 等解耦接口提供的方法。
+func (po *PromptOptimizer) OptimizeTask(ctx context.Context, taskType string) error {
+	po.Optimize(ctx, taskType, nil)
+	return nil
+}
+
 func (po *PromptOptimizer) Optimize(ctx context.Context, taskType string, recent []*PromptVersion) []*PromptVersion { //nolint:gocyclo
 	if len(recent) == 0 {
 		return nil
@@ -324,6 +335,8 @@ func (po *PromptOptimizer) saveCandiates(ctx context.Context, taskType string, c
 		if c.Version == 0 {
 			c.Version = int(time.Now().Unix())
 		}
-		_ = po.versionStore.Save(ctx, c) // 单条失败不阻断，错误已内部记录
+		if err := po.versionStore.Save(ctx, c); err != nil {
+			slog.WarnContext(ctx, "failed to save candidate version", "err", err, "id", c.ID)
+		}
 	}
 }

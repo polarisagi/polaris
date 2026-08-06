@@ -20,12 +20,44 @@ import (
 //
 //nolint:gocyclo,nestif
 func (bb *SQLiteBlackboard) reaperPhase2(ctx context.Context) {
-	// 0. 物理删除终态任务（保留原有物理清理逻辑）
-	if _, err := bb.db.ExecContext(ctx, `
+	ttlStr := fmt.Sprintf("-%d minute", int(bb.taskRetentionTTL.Minutes()))
+	if bb.taskRetentionTTL == 0 {
+		ttlStr = "-1440 minute" // default fallback
+	}
+
+	// GD-13-004: 归档即将删除的任务摘要到 decision_log
+	_, archiveErr := bb.db.ExecContext(ctx, `
+		INSERT INTO decision_log (timestamp, session_id, agent_id, decision_type, choice, context)
+		SELECT 
+			CAST(strftime('%s', 'now') * 1000 AS INTEGER),
+			'blackboard_reaper',
+			'system',
+			'task_archived',
+			task_id,
+			json_object(
+				'task_id', task_id,
+				'session_id', session_id,
+				'status', status,
+				'error', error,
+				'created_at', created_at,
+				'updated_at', updated_at
+			)
+		FROM tasks
+		WHERE status IN ('done', 'failed') AND updated_at < datetime('now', ?)
+	`, ttlStr)
+	if archiveErr != nil {
+		slog.WarnContext(ctx, "blackboard: archive before delete failed", "err", archiveErr)
+	}
+
+	// 0. 物理删除终态任务（保留原有物理清理逻辑，延长保留期）
+	result, err := bb.db.ExecContext(ctx, `
 		DELETE FROM tasks
-		WHERE status IN ('done', 'failed') AND updated_at < datetime('now', '-5 minute')
-	`); err != nil {
+		WHERE status IN ('done', 'failed') AND updated_at < datetime('now', ?)
+	`, ttlStr)
+	if err != nil {
 		slog.WarnContext(ctx, "blackboard: reaper cleanup failed", "error", err)
+	} else if affected, _ := result.RowsAffected(); affected > 0 {
+		slog.InfoContext(ctx, "blackboard: reaper phase2 cleanup", "deleted", affected)
 	}
 
 	// 1. 取消 running 中的超时任务

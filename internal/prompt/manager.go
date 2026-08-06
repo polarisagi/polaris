@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -29,7 +28,7 @@ func getToolUseEnforcementModels() []string {
 type Manager struct {
 	configDir         string
 	embeddedPromptsFS fs.FS
-	optimizer         *optimizer.PromptOptimizer
+	optimizer         PromptOptimizer
 }
 
 var _ protocol.PromptFacade = (*Manager)(nil)
@@ -66,8 +65,13 @@ func safePromptName(name string) error {
 	return nil
 }
 
+// PromptOptimizer 解耦接口（HE-3）。由 internal/learning/optimizer.PromptOptimizer 实现。
+type PromptOptimizer interface {
+	OptimizeTask(ctx context.Context, taskType string) error
+}
+
 // SetOptimizer 注入 prompt.Manager 所依赖的 PromptOptimizer 引擎（由外层构造后装配）。
-func (pm *Manager) SetOptimizer(opt *optimizer.PromptOptimizer) {
+func (pm *Manager) SetOptimizer(opt PromptOptimizer) {
 	pm.optimizer = opt
 }
 
@@ -217,7 +221,8 @@ func (pm *Manager) Optimize(ctx context.Context, taskType string) error {
 	if pm.optimizer == nil {
 		return apperr.New(apperr.CodeInternal, "prompt: Optimize failed, no PromptOptimizer injected")
 	}
-	// 委托给内部的 optimizer.PromptOptimizer
-	_ = pm.optimizer.Optimize(ctx, taskType, nil)
+	if err := pm.optimizer.OptimizeTask(ctx, taskType); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "prompt: Optimize failed", err)
+	}
 	return nil
 }

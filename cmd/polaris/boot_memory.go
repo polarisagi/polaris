@@ -14,7 +14,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/learning/optimizer"
 
 	"github.com/polarisagi/polaris/internal/memory/graph"
 	"github.com/polarisagi/polaris/internal/memory/retrieval"

@@ -3,20 +3,18 @@ package knowledge
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
 	"math"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -105,18 +103,9 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		topK = 10
 	}
 
-	var wg sync.WaitGroup
-	var ftsErr error
-	var ftsResults, vecResults, graphResults, macroResults []Chunk
-
-	// 宏观查询判定：词数少且无具体实体名
 	var isMacro bool
 	if len(strings.Fields(query)) <= 4 {
 		var ec int
-		// L3：COUNT(*) 查询恒返回一行，不存在 ErrNoRows 场景，任何 Scan 失败都是
-		// 真实查询异常。失败时 ec 保持零值 0，会让 isMacro 误判为 true，改变
-		// 检索策略（转向 Community 摘要检索而非精确实体检索）——这是明确的降级
-		// 行为（宁可召回过广也不因查询异常整体失败），但必须可观测。
 		if err := hr.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_entities WHERE name = ? AND entity_type != 'Community'", query).Scan(&ec); err != nil {
 			slog.Warn("knowledge_retriever: entity count query failed, degrading to macro/Community search", "query", query, "err", err)
 			metrics.RecordKnowledgeReadFailure(ctx, "macro_query_entity_count")
@@ -124,156 +113,85 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		isMacro = (ec == 0)
 	}
 
-	if isMacro {
-		wg.Add(1)
-		concurrent.SafeGo(ctx, "knowledge.retriever.search_macro", func(ctx context.Context) {
-			defer wg.Done()
-			// 优先检索 Type="Community" AND level>=1
-			rows, err := hr.db.QueryContext(ctx, `
-				SELECT id, properties 
-				FROM semantic_entities 
-				WHERE entity_type = 'Community' AND json_extract(properties, '$.level') >= 1 
-				ORDER BY json_extract(properties, '$.level') DESC 
-				LIMIT ?`, topK)
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var id int
-					var props string
-					if err := rows.Scan(&id, &props); err == nil {
-						// 简单组装为 Chunk，依赖 RRF 融合
-						macroResults = append(macroResults, Chunk{
-							ID:      fmt.Sprintf("macro-community-%d", id),
-							Content: "【社区摘要】" + props,
-						})
-					}
-				}
-			}
-		})
+	var queryEmbed []float32
+	if hr.embedder != nil {
+		if emb, err := hr.embedder.Embed(ctx, query); err == nil {
+			queryEmbed = emb
+		}
 	}
 
-	wg.Add(1)
-	concurrent.SafeGo(ctx, "knowledge.retriever.search_fts", func(ctx context.Context) {
-		defer wg.Done()
-		res, err := hr.searchFTS(ctx, query, topK*3)
-		if err != nil {
-			ftsErr = err
-			return
-		}
-		ftsResults = res
+	src := &knowledgeDocumentSource{
+		hr:      hr,
+		isMacro: isMacro,
+	}
+
+	var searchReranker search.Reranker
+	if hr.reranker != nil {
+		searchReranker = (*rerankerAdapter)(hr)
+	}
+
+	merged, err := search.HybridSearch(ctx, src, query, queryEmbed, search.HybridSearchConfig{
+		BM25Weight:   config.BM25Weight,
+		VectorWeight: config.VectorWeight,
+		GraphWeight:  config.GraphWeight,
+		RRFk:         60, // Fixed RRF k parameter for knowledge
+		TopK:         topK,
+		EnableRerank: hr.reranker != nil,
+		Reranker:     searchReranker,
 	})
 
-	if hr.embedder != nil {
-		wg.Add(1)
-		concurrent.SafeGo(ctx, "knowledge.retriever.search_vector", func(ctx context.Context) {
-			defer wg.Done()
-			vr, err := hr.searchVector(ctx, query, topK*3)
-			if err == nil {
-				vecResults = vr
-			}
-		})
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: search failed", err)
 	}
 
-	if hr.graph != nil {
-		wg.Add(1)
-		concurrent.SafeGo(ctx, "knowledge.retriever.search_graph", func(ctx context.Context) {
-			defer wg.Done()
-			gr, err := hr.graph.TraverseChunks(ctx, query, topK*3)
-			if err == nil {
-				graphResults = gr
-			}
-		})
+	for _, m := range merged {
+		recordExplainBits(ctx, m.ExplainBits)
 	}
 
-	wg.Wait()
+	return merged, nil
+}
 
-	if ftsErr != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "fts search failed", ftsErr)
+type rerankerAdapter HybridRetrieverImpl
+
+func (r *rerankerAdapter) Rerank(ctx context.Context, query string, docs []types.ScoredFragment) ([]types.ScoredFragment, error) {
+	hr := (*HybridRetrieverImpl)(r)
+	if hr.reranker == nil {
+		return docs, nil
 	}
 
-	// RRF 三路融合（有 vector 或 graph 时才融合）
-	var finalResults []Chunk
-	if len(vecResults) > 0 || len(graphResults) > 0 {
-		finalResults = rrfThreeWay(ftsResults, vecResults, graphResults, topK*2)
-	} else {
-		finalResults = ftsResults
+	// Convert types.ScoredFragment to types.CognitiveSearchResult
+	cDocs := make([]types.CognitiveSearchResult, len(docs))
+	for i, d := range docs {
+		cDocs[i] = types.CognitiveSearchResult{
+			ID:      d.Source,
+			Score:   d.Score,
+			Content: d.Content,
+		}
 	}
 
-	// 宏观查询摘要置顶
-	if isMacro && len(macroResults) > 0 {
-		finalResults = append(macroResults, finalResults...)
+	rerankedDocs, err := hr.reranker.Rerank(ctx, query, cDocs)
+	if err != nil {
+		slog.Warn("knowledge: reranker failed, fallback to original order", "err", err)
+		return docs, nil
 	}
 
-	if len(finalResults) > topK {
-		finalResults = finalResults[:topK]
+	// Create a map to quickly recover original fields
+	docMap := make(map[string]types.ScoredFragment, len(docs))
+	for _, d := range docs {
+		docMap[d.Source] = d
 	}
 
-	if hr.reranker != nil {
-		finalResults = hr.applyReranker(ctx, query, finalResults)
+	finalResults := make([]types.ScoredFragment, 0, len(rerankedDocs))
+	for _, rd := range rerankedDocs {
+		if orig, ok := docMap[rd.ID]; ok {
+			finalResults = append(finalResults, orig)
+		}
 	}
-
-	bitsByID := explainBitsByChunkID(ftsResults, vecResults, graphResults)
-	return toScoredFragments(ctx, finalResults, bitsByID), nil
+	return finalResults, nil
 }
 
 // explainBitsByChunkID 记录每个 chunk ID 命中的检索路径（GR-1-003/Batch8 ExplainBits 归因修复）。
 // rrfThreeWay 融合后原始来源信息即丢失，必须在融合前的三路原始结果上标记；这里用 ID
-// 反查而非改造 Chunk 结构体，因为 ExplainBits 是检索期概念，不属于 graphrag.Chunk 这个
-// 跨包共享的文档域类型（避免污染无关调用方）。从 Search 中拆出以控制圈复杂度（R7 gocyclo）。
-func explainBitsByChunkID(ftsResults, vecResults, graphResults []Chunk) map[string]uint8 {
-	bitsByID := make(map[string]uint8, len(ftsResults)+len(vecResults)+len(graphResults))
-	for _, c := range ftsResults {
-		bitsByID[c.ID] |= types.BitBM25
-	}
-	for _, c := range vecResults {
-		bitsByID[c.ID] |= types.BitVector
-	}
-	for _, c := range graphResults {
-		bitsByID[c.ID] |= types.BitGraph
-	}
-	return bitsByID
-}
-
-// toScoredFragments 将最终 Chunk 结果转换为 ScoredFragment，并上报每条结果的 ExplainBits 归因指标。
-func toScoredFragments(ctx context.Context, finalResults []Chunk, bitsByID map[string]uint8) []types.ScoredFragment {
-	scored := make([]types.ScoredFragment, len(finalResults))
-	for i, c := range finalResults {
-		bits := bitsByID[c.ID]
-		recordExplainBits(ctx, bits)
-		scored[i] = types.ScoredFragment{
-			Content:     c.Content,
-			Source:      c.SourceURI,
-			TaintLevel:  types.TaintLevel(c.TaintLevel),
-			ExplainBits: bits,
-		}
-	}
-	return scored
-}
-
-func (hr *HybridRetrieverImpl) applyReranker(ctx context.Context, queryText string, results []Chunk) []Chunk {
-	docs := make([]types.CognitiveSearchResult, len(results))
-	chunkMap := make(map[string]Chunk)
-	for i, c := range results {
-		docs[i] = types.CognitiveSearchResult{
-			ID:      c.ID,
-			Score:   0,
-			Content: c.Content,
-		}
-		chunkMap[c.ID] = c
-	}
-	rerankedDocs, err := hr.reranker.Rerank(ctx, queryText, docs)
-	if err != nil {
-		slog.Warn("knowledge: reranker failed, fallback to original order", "err", err)
-		return results
-	}
-	finalResults := make([]Chunk, 0, len(rerankedDocs))
-	for _, rd := range rerankedDocs {
-		if c, ok := chunkMap[rd.ID]; ok {
-			finalResults = append(finalResults, c)
-		}
-	}
-	return finalResults
-}
 
 // searchFTS 使用 FTS5 BM25 检索，返回 limit 条结果。
 func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, limit int) ([]Chunk, error) {
@@ -310,30 +228,6 @@ func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, 
 		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: 遍历 fts 结果集失败", err)
 	}
 	return results, nil
-}
-
-// searchVector 从 rag_chunks 读取已存储的 embedding，计算余弦相似度，返回 top-limit 条。
-// 仅对存储了 embedding 的 chunk 生效；无 embedding 的 chunk 跳过（向量路径幂等）。
-func (hr *HybridRetrieverImpl) searchVector(ctx context.Context, queryText string, limit int) ([]Chunk, error) { //nolint:gocyclo,nestif
-	queryEmbed, err := hr.embedder.Embed(ctx, queryText)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to embed query text", err)
-	}
-	if len(queryEmbed) == 0 {
-		return nil, nil
-	}
-
-	// Tier 1+: SurrealDB HNSW (O(log N))
-	if hr.cognitive != nil {
-		if hits, vecErr := hr.cognitive.VecKNN(queryEmbed, limit); vecErr == nil {
-			return hr.fetchCognitiveHits(ctx, hits)
-		} else {
-			// BUG-4 修复：VecKNN 错误不再静默吞噬，保证 HE-Rule §1 可观测性
-			slog.Warn("knowledge: SurrealDB VecKNN failed, degrading to linear scan", "err", vecErr)
-		}
-	}
-
-	return hr.searchVectorFallback(ctx, queryEmbed, limit)
 }
 
 // fetchCognitiveHits 从 cognitive search hits (含有 ID 和 Score) 还原完整的 chunk。

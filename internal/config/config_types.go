@@ -1,5 +1,9 @@
 package config
 
+import (
+	"time"
+)
+
 // CognitionConfig SurrealDB 认知存储后端配置（ADR-0003）。
 type CognitionConfig struct {
 	// SurrealBackend 后端选择：
@@ -173,8 +177,9 @@ type SkillConfig struct {
 }
 
 type OrchestratorConfig struct {
-	Mode     string `toml:"mode"`
-	Protocol string `toml:"protocol"`
+	Mode             string        `toml:"mode"`
+	Protocol         string        `toml:"protocol"`
+	TaskRetentionTTL time.Duration `toml:"task_retention_ttl"`
 }
 
 type SelfImproveConfig struct {

@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/polarisagi/polaris/internal/prompt/optimizer"
+	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -106,14 +106,14 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 }
 
 // extractTaskType 从任务目标字符串提取规范化任务类型键。
-// 2026-07-21 deadcode 审查去重：此前与 optimizer.ExtractTaskType 是逐字节相同的
+// 2026-07-21 deadcode 审查去重：此前与 prompt.ExtractTaskType 是逐字节相同的
 // 平行实现，注释所称"避免 L1 到 L2 的依赖"已过期——internal/prompt/optimizer 现属
 // L1（与 internal/agent 同层，非 L2），且 optimizer 不反向依赖 agent，无循环风险。
-// optimizer.ExtractTaskType 有 internal/eval/control 的 V8-S4 确定性不变量测试覆盖，
+// prompt.ExtractTaskType 有 internal/eval/control 的 V8-S4 确定性不变量测试覆盖，
 // 是两者中被正式验证的一份，故改为委托，消除漂移风险（两份实现未来可能各自被
 // 修改而不同步，是比重复代码本身更大的隐患）。
 func extractTaskType(goal string) string {
-	return optimizer.ExtractTaskType(goal)
+	return prompt.ExtractTaskType(goal)
 }
 
 // withTaskScopeCtx 把当前会话标识注入 ctx，供 tokenizeMessagesForLLM 写令牌、
