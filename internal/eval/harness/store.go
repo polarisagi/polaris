@@ -209,7 +209,7 @@ func (s *SQLiteEvalStore) RecordMetaAuditResult(ctx context.Context, rec MetaAud
 // LatestMetaAudit 读取最新一次 Meta-Eval 审计结论。ok=false 表示从未审计过
 // （尚未配置/运行过 meta_holdout 审计流程）。本方法故意不做签名校验——返回的只是
 // pass/fail 摘要，不暴露 meta_holdout 原始用例数据，供 AdvanceGate/运维状态查询
-// 等进程内场景自由调用；结构上满足 internal/prompt/optimizer.MetaAuditReader
+// 等进程内场景自由调用；结构上满足 internal/learning/optimizer.MetaAuditReader
 // 消费方接口（HE-3：接口由调用方定义），无需适配器。
 func (s *SQLiteEvalStore) LatestMetaAudit(ctx context.Context) (passed bool, computedAt time.Time, ok bool, err error) {
 	val, getErr := s.store.Get(ctx, []byte(metaAuditLatestKey))

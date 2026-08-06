@@ -177,7 +177,7 @@ SurpriseIndex 计算与路由实现位于 `internal/learning/`，支持优雅停
 
 ### 2.3 外环: 架构演化（周/月级）
 
-**四级 Gate + Canary 阶梯发布门控**（`internal/prompt/optimizer/rollout.go` `RolloutGate` 枚举 + `rollout_store.go` `SQLiteRolloutStore` 实际实现）：
+**四级 Gate + Canary 阶梯发布门控**（`internal/learning/optimizer/rollout.go` `RolloutGate` 枚举 + `rollout_store.go` `SQLiteRolloutStore` 实际实现）：
 1. **Gate 1 EvalRegression**: `SubmitCandidate` 提交后立即进入本 Gate；Eval Harness 离线回归通过（`RecordEvalScore`）即视为满足，等待 Gate 2 影子确认。
 2. **Gate 2 ShadowExecution**: `ShadowExecutor` 周期性回放候选（`internal/eval/analysis/shadow_executor.go`，5 分钟周期，`cmd/polaris/boot_agent.go` 启动），从 `events` 表按游标增量抓取历史 `llm_call`，用候选配置重新推理并与基线响应对比打分；通过率 ≥ `M12Eval.ShadowPassRateThreshold` → `ConfirmShadow` 推进至 Gate 3，否则 `Rollback`。
 3. **Gate 3 CanaryRollout**: `AdvanceGate` 按 `canarySteps=[1,5,25,50,100]` 逐级推进灰度流量，每步 24h 驻留门槛。

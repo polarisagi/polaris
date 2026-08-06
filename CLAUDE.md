@@ -205,13 +205,13 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
 8. `docs/specs/09-LLM-Agent-Production.md` → **写任何 Agent/LLM/Tool/RAG/Memory 相关代码前必读**（A-01~A-14 陷阱 + P-1~P-9 生产原则 + RAG/并发安全检查清单）
 9. `internal/protocol/` → 跨模块共享类型与接口契约
-10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~035，共 32 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
+10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~038，共 35 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
 **docs/arch/decisions/ 索引**：2026-07-28 三轮精简，73 份 → 60 份 → 34 份 → 29 份（第一轮合并同主题系列 11 份，第二轮按模块功能 + 跨文档引用关系合并 26 份，第三轮补漏同模块紧耦合决策 5 份）。编号不重排（理由见 README 顶部说明）。权威索引表（编号+一句话标题+状态+日期）与「已删除」编号对照表统一维护在 [`decisions/README.md`](docs/arch/decisions/README.md)，本文件不重复维护副本——按主题词 grep `docs/arch/decisions/` 即可，避免双份索引漂移。
 
 合并主题速查（原编号 → 最终存活编号，转手合并已按最终归宿列出）：taint 修正案 0045/0047→0007 · purego/FFI 桥接 0005/0030/0034/0063→0011 · 存储引擎选型 0010→0003 · state.yaml SSoT+验证 0012→0006 · CI 质量门禁 0014→0013 · Sandbox+代码安全防线 0024/0026/0078/0079→0008 · KillSwitch 恢复路径 0072/0073→0009 · 扩展/插件治理 0015/0019/0075→0016 · MCP 传输/协同 0018/0070→0017 · LLM Provider/推理路由 0022→0020 · 系统加固/审查批次 0027/0028/0029/0038→0025 · M05 记忆架构 0023/0035/0036/0060→0033 · Gateway 交互式提案 0043→0042 · internal/execute 模块+编排模式 0037/0040/0041/0080→0046 · M9 生产接线 0049/0054/0055/0056/0058→0048 · deadcode 治理 0050/0051/0052/0053/0061→0062 · Gateway 治理路线 0039/0064/0067→0066 · 崩溃恢复/Checkpoint/幂等 0057/0059→0076 · M5↔M10 桥接 0074→0077 · 文档治理 0044→0081。详见 README「已删除」表。
 
-**internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，32 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
+**internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，35 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
 ```
 001_events · 002_outbox · 003_episodic_memory · 004_semantic_memory · 005_workspace_vfs
 006_decision_log · 007_tasks · 008_skills · 009_rag_chunks · 010_self_improve
@@ -219,7 +219,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 016_preferences · 017_automations · 018_plugin_marketplaces · 019_extension_catalog · 020_extension_instances · 021_plugins
 022_provider_catalog · 023_notes · 024_reflection_memory · 028_apps · 029_workflows
 030_oom_guard_log · 031_planner_sessions · 032_mock_response_cache · 033_model_version_registry · 034_core_memory
-035_task_checkpoints
+035_task_checkpoints · 036_archive_checkpoints · 037_world_model · 038_idempotent_cache
 ```
 
 **禁止**：
