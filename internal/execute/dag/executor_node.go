@@ -114,6 +114,9 @@ func (e *DAGExecutor) runCompensation(ctx context.Context) {
 	compCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// 账本从**父 ctx** 取（compCtx 是 Background 派生的，不带值）。
+	ledger := protocol.SagaLedgerFromContext(ctx)
+
 	e.mu.Lock()
 	undos := append([]CompensationAction{}, e.executedUndo...)
 	e.mu.Unlock()
@@ -127,6 +130,16 @@ func (e *DAGExecutor) runCompensation(ctx context.Context) {
 
 		// 处于重放模式时物理切断外部副作用
 		if protocol.IsReplaying() {
+			continue
+		}
+
+		// 跨补偿路径去重：本 undo 若已被 FSM 侧 rollbackSaga 执行过则跳过。
+		// 两条路径的数据来源相互独立（node.Compensation vs toolDef.UndoFn），
+		// 对非幂等 undo 重复执行会造成数据损坏——见
+		// protocol.SagaCompensationLedger 类型注释。
+		if !ledger.TryClaim(comp.ToolName, comp.Args) {
+			slog.Info("dag_executor: saga compensation already performed by peer path, skipping",
+				"tool", comp.ToolName)
 			continue
 		}
 

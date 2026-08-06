@@ -76,6 +76,12 @@ type Agent struct {
 	handoffPoster     HandoffPoster            // D5：transfer_to_agent 工具依赖的 Blackboard 任务投递能力；nil 时该工具返回错误
 	personaRefiner    *agentctx.PersonaRefiner // 用户画像精炼（M05 §2.3）；nil 时跳过会话结束画像更新
 
+	// sagaLedger 本轮 DAG 执行的 Saga 补偿去重账本，由 runExecuteDAG 每次新建，
+	// 同时经 ctx 交给 execute/dag 的 runCompensation、经 buildStateContext 交给
+	// FSM 的 rollbackSaga，使两条独立补偿路径对同一 undo 只执行一次。
+	// nil（尚未进入过 S_EXECUTE）时 TryClaim 恒放行，不改变行为。
+	sagaLedger *protocol.SagaCompensationLedger
+
 	// cwm M04 §7 热路径上下文窗口管理（见 budget.go ContextWindowManager 与
 	// agent_context_compaction.go）；NewAgent 默认构造（90000 token），可经
 	// InjectContextWindowManager 覆盖。toolOffloader 为 Stage 1 大 tool_result

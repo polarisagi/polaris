@@ -71,6 +71,10 @@ StateContext struct {
 	SagaLog              []types.SagaStep  // Saga 记录日志
 	InitialMaxStepsLimit int               // Agent 启动时的原始步骤上限
 	ProviderSuspendCount int               // 连续无可用 provider 失败次数
+
+	// SagaLedger 跨补偿路径去重账本，与 execute/dag.DAGExecutor 共享同一实例。
+	// nil 时退化为不去重（行为与引入前一致）。见 SagaCompensationLedger 注释。
+	SagaLedger *SagaCompensationLedger
 }
 
 type

@@ -73,6 +73,9 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 		Preferences:          preferences,
 		SagaLog:              sagaLog, // No type conversion needed, assuming SagaLog is same type
 		InitialMaxStepsLimit: initialMaxStepsLimit,
+		// 与 runExecuteDAG 注入给 DAGExecutor 的是同一个实例（a.sagaLedger），
+		// 两条补偿路径据此对同一 undo 只执行一次。
+		SagaLedger: a.sagaLedger,
 	}
 }
 
