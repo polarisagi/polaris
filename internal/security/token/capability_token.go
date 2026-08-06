@@ -77,6 +77,10 @@ type TokenManager struct {
 	// revokeQ 的 FIFO 上限模式加界，并在 Lookup 命中过期 token 时惰性清理。
 	issued  map[string]*Token
 	issuedQ []string // 用于 issued 的 FIFO 淘汰，容量同 maxRevokedCap
+
+	// used 记录每个 tokenID 已被消费的次数，用于兑现 Claims.MaxCallsPerTask。
+	// 与 issued 共享 FIFO 淘汰（在 evict 时一并删除），不额外引入无界 map。
+	used map[string]int
 }
 
 // maxIssuedCap issued 缓存 FIFO 上限，防止无界增长（与 maxRevokedCap 保持一致量级）。
@@ -94,6 +98,7 @@ func NewTokenManager() (*TokenManager, error) {
 		privKey: priv,
 		revoked: make(map[string]struct{}),
 		issued:  make(map[string]*Token),
+		used:    make(map[string]int),
 	}, nil
 }
 
@@ -143,9 +148,47 @@ func (tm *TokenManager) recordIssued(tokenID string, tok *Token) {
 		oldest := tm.issuedQ[0]
 		tm.issuedQ = tm.issuedQ[1:]
 		delete(tm.issued, oldest)
+		delete(tm.used, oldest)
 	}
 	tm.issued[tokenID] = tok
 	tm.issuedQ = append(tm.issuedQ, tokenID)
+}
+
+// Consume 记录一次令牌使用，并在超出 Claims.MaxCallsPerTask 时拒绝。
+// MaxCallsPerTask == 0 表示不限次数，此时只计数不拦截。
+//
+// 为什么需要显式的消费入口（2026-08-06 修复）：MaxCallsPerTask 此前在全仓
+// 只有一处读取点（agent_execute_dag.go 从 ctx 取 token 后比对），而
+// protocol.CtxCapabilityToken 从未被任何生产代码写入过——也就是说这个字段
+// 签发后从来没有被兑现过，"一次性令牌"始终只是文档里的说法。Verify 只校验
+// 签名/过期/撤销，天然无法表达"用过几次"这种有状态语义，因此单独开
+// Consume：由真正执行副作用的入口（CodeAct.validatePolicyAndEnv）在放行前调用。
+//
+// 并发安全：整个"读计数 → 判超限 → 写回"在同一把写锁内完成，
+// 避免两个并发调用各自读到 n-1 而都放行。
+func (tm *TokenManager) Consume(tokenID string) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	tok, ok := tm.issued[tokenID]
+	if !ok {
+		// 不在 issued 缓存里（已被 FIFO 淘汰或从未签发）：不在此处判失败，
+		// 交给调用链上的 Lookup/Verify 给出准确错误，避免双重语义。
+		return nil
+	}
+	maxCalls := tok.Claims.MaxCallsPerTask
+	if maxCalls <= 0 {
+		return nil // 未声明上限
+	}
+	if tm.used == nil {
+		tm.used = make(map[string]int)
+	}
+	if tm.used[tokenID] >= maxCalls {
+		return apperr.New(apperr.CodeForbidden,
+			fmt.Sprintf("policy: capability token %s exhausted (max_calls_per_task=%d)", tokenID, maxCalls))
+	}
+	tm.used[tokenID]++
+	return nil
 }
 
 // Verify 验证令牌的签名有效性、过期状态及撤销状态。

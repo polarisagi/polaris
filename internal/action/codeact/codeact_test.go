@@ -55,6 +55,10 @@ func (m *mockGovAgent) ValidateCode(_ string, _ []byte, _ map[string]bool) error
 type mockTokenManager struct {
 	tok *token.Token
 	err error
+	// consumeErr 非 nil 时模拟"令牌配额已耗尽"（MaxCallsPerTask 用完）。
+	consumeErr error
+	// consumeCalls 记录 Consume 被调用次数，用于断言每次执行都真正消费一次配额。
+	consumeCalls int
 }
 
 func (m *mockTokenManager) Lookup(_ string) (*token.Token, error) {
@@ -68,6 +72,11 @@ func (m *mockTokenManager) Lookup(_ string) (*token.Token, error) {
 }
 
 func (m *mockTokenManager) Verify(_ *token.Token) error { return m.err }
+
+func (m *mockTokenManager) Consume(_ string) error {
+	m.consumeCalls++
+	return m.consumeErr
+}
 
 // defaultMockTokenManager returns a token manager that always succeeds.
 func defaultMockTokenManager() *mockTokenManager { return &mockTokenManager{} }

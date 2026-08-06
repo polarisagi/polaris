@@ -53,6 +53,9 @@ type govAgent interface {
 type tokenManager interface {
 	Lookup(tokenID string) (*token.Token, error)
 	Verify(tok *token.Token) error
+	// Consume 兑现 Claims.MaxCallsPerTask 的一次使用配额。Verify 只覆盖
+	// 签名/过期/撤销这些无状态判定，"还剩几次可用"必须单独消费。
+	Consume(tokenID string) error
 }
 
 // CodeActOption 定义初始化选项
@@ -171,6 +174,12 @@ func (ca *CodeAct) validatePolicyAndEnv(ctx context.Context, req protocol.CodeAc
 	}
 	if verifyErr := ca.tokenMgr.Verify(tok); verifyErr != nil {
 		return apperr.New(apperr.CodeForbidden, "code_act: capability token verification failed")
+	}
+	// 兑现 Claims.MaxCallsPerTask（2026-08-06 修复）：Verify 只覆盖签名/过期/撤销，
+	// "还能用几次"是有状态语义，必须在真正放行副作用之前单独消费一次。
+	// 本处是 code_act 唯一的执行入口，放在这里等价于"每次真实执行消费一次"。
+	if consumeErr := ca.tokenMgr.Consume(req.CapabilityID); consumeErr != nil {
+		return apperr.Wrap(apperr.CodeForbidden, "code_act: capability token exhausted", consumeErr)
 	}
 
 	return nil
