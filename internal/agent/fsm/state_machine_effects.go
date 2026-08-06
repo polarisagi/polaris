@@ -44,6 +44,15 @@ func (sm *StateMachine) rollbackSaga(ctx context.Context, sCtx protocol.StateCon
 	for i := len(sCtx.SagaLog) - 1; i >= 0; i-- {
 		step := sCtx.SagaLog[i]
 		if step.UndoFn != "" && sCtx.Tools != nil {
+			// 跨补偿路径去重：本 undo 若已被 execute/dag 侧 runCompensation
+			// 执行过则跳过。两条路径数据来源相互独立（toolDef.UndoFn vs
+			// node.Compensation），对非幂等 undo 重复执行会造成数据损坏——
+			// 见 protocol.SagaCompensationLedger 类型注释。
+			if !sCtx.SagaLedger.TryClaim(step.UndoFn, step.Args) {
+				slog.Info("fsm: saga compensation already performed by peer path, skipping",
+					"node_id", step.NodeID, "tool", step.UndoFn)
+				continue
+			}
 			_, err := sCtx.Tools.ExecuteWithTaint(ctx, step.UndoFn, step.Args, sCtx.MaxTaintLevel)
 			if err != nil {
 				slog.Warn("Saga rollback failed for step", "node_id", step.NodeID, "tool", step.UndoFn, "err", err)

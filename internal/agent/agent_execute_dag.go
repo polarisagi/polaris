@@ -159,6 +159,17 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		return apperr.New(apperr.CodeInternal, "runExecuteDAG: dagRunner is nil (fail-closed)")
 	}
 
+	// Saga 跨路径补偿去重账本：每次 DAG 执行新建一份，同时给到
+	//   1. execute/dag.DAGExecutor.runCompensation（经 ctx 注入，见下方 dagCtx）
+	//   2. FSM 的 rollbackSaga（经 buildStateContext 的 SagaLedger 字段）
+	// 两条补偿路径的数据来源相互独立（node.Compensation vs toolDef.UndoFn），
+	// 不去重会让同一个 undo 执行两次——对非幂等补偿是数据损坏。
+	// 生命周期刻意是"每次 runExecuteDAG 一份"：账本表达的是"本次失败的这一轮
+	// 补偿里，某个 undo 是否已经跑过"，跨轮次复用会让 S_REPLAN 后重新执行的
+	// 新一轮补偿被错误跳过。
+	a.sagaLedger = protocol.NewSagaCompensationLedger()
+	ctx = context.WithValue(ctx, protocol.CtxSagaLedgerKey{}, a.sagaLedger)
+
 	var callCount atomic.Int32
 
 	// 将 AgentToolExecutor.ExecuteWithTaint 绑定为 a.dagRunner 的工具执行函数
