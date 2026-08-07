@@ -14,7 +14,7 @@
 - 只交付当前目标的最少代码集。禁止超前抽象、臆测开发
 - 100% 指令溯源。禁止顺手重构未损坏内容、擅改历史排版
 - 指令歧义或架构冲突 → 主动提问，禁止静默决策
-- 所有结论必须有文档依据，引用指明文件名 + 章节/段落
+- **结论以代码事实为准**，文档为佐证；引用须指明文件名 + 章节/段落。文档与代码不符 → 以代码为准，并同步订正文档（见 `§文档可修订性`）
 
 ## 语言
 
@@ -199,7 +199,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锁点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，29 份规则化短文（决策+后果边界+反例守护，不含叙事；模块内多份"生产接线/新增模式/紧耦合决策"系列合入单一锚点文件，用"决策一/决策二/…"分节；编号刻意不重排，见 README 说明），编号 SSoT 见 `decisions/README.md` 索引表；**"为什么不用 X" 先 grep 这里**，避免重提已驳方案
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，29 份规则化短文（决策+后果边界+反例守护，不含叙事；模块内多份"生产接线/新增模式/紧耦合决策"系列合入单一锚点文件，用"决策一/决策二/…"分节；编号刻意不重排，见 README 说明），编号 SSoT 见 `decisions/README.md` 索引表；**"为什么不用 X" 先 grep 这里**——重提已驳方案须带新事实/新约束并在原 ADR 追记复核，不得凭空重议（见 `§文档可修订性`）
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go↑01 / Rust↑02 / Agent↑03 / 跨模块↑04 / 审查↑06 / 提交前↑06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
@@ -236,6 +236,16 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 - `arch/` = 系统**是什么**（设计）：M_X 实现 / ARCH SSoT 锚点 / 00-Dict 概念 / state.yaml 阈值
 - `arch/decisions/` = 决策档案（why-not 单源）：ADR 是"反复被驳的方案"档案，与 M_X 是引用关系
 - `specs/` = AI 代码**怎么写**（规范）：R1~R8 反模式 + R2 命名 SSoT + 工作流 + 审查清单
+
+## 文档可修订性
+
+**一切以代码为准。** 文档（`docs/arch/` 含 `decisions/`、`docs/specs/`、各级 `CLAUDE.md`）记录写作当时的认知，是决策记录而非宪法。当前处于代码重构与问题处理阶段——判定存在全局更优解时**应当**修订文档，不得为迁就旧文档而写次优代码。
+
+修订方式：在原节**追记**复核日期 + 推翻理由，原结论保持可见。禁止静默改写使旧决策看起来从未存在——那会让"当初为什么这么定"失去可追溯性，下一个人将重蹈已驳方案。
+
+ADR 补充：`decisions/` 免 `make docs-refs` 扫描（刻意记载历史路径，扫描必然误报），但**免扫 ≠ 免改**（ADR-0081 决策一 2026-08-07 澄清）。已驳方案可重提，前提是有新事实/新约束，并在原 ADR 追记复核。
+
+**三项不可变**：ADR 编号不重排/不复用（理由见 `docs/arch/decisions/README.md` 顶部）；上线后已应用的 DDL 迁移文件（见 `§项目结构` DDL 修改策略）；他人 commit 历史。
 
 ## 当前阶段
 
