@@ -169,6 +169,40 @@ B 之所以删除而非接线补活：`UndoFn` 是挂在**工具定义**上的�
 
 选择维持。**重新评估触发条件**：启动顺序出现真实缺陷（如某子系统初始化依赖被手工链遗漏）；或手工装配链再次显著膨胀（> 6000 行）使人工维护顺序变得不可靠。
 
+### `internal/bootstrap` 接线可行性复核（2026-08-07）
+
+一次以"立即接线"为目标的复核，结论仍为维持不接线。本节记录复核所得的硬事实，避免下次再从零讨论。
+
+**触发条件逐条实测：四个全部未满足。**
+
+| # | 条件 | 出处 | 实测 |
+|---|---|---|---|
+| ① | 启动顺序出现真实缺陷 | 本 ADR 上节 | 无案例 |
+| ② | 手工链 > 6000 行 | 本 ADR 上节 | **4015 行**（`cmd/polaris/boot_*.go` 生产文件；含 5 个测试文件 579 行时为 4594，勿混用口径） |
+| ③ | 模块数增长到手工排序易错 | ARCHITECTURE.md §8.2 | 仍为 6 阶段线性链，依赖由函数签名静态可验 |
+| ④ | 需按 Tier/FeatureGate 动态增删模块 | ARCHITECTURE.md §8.2 | 无此需求 |
+
+**契约与实际装配的结构性不匹配（本次复核的主要产出，此前无处记载）。**
+
+前两项是**语义上无法表达**，不是工作量问题——即便投入任意多人力也无法在现有 `Bootable` 契约下正确表达：
+
+- **两阶段装配 vs 单阶段契约**：`Bootable` 只有 `Init` 一个构造钩子，而实际装配普遍是"先构造、后回注"——`cmd/polaris/boot_*.go` 生产文件中 setter/回注型调用 **137 处**（`.Set*` 107、`.On*`/`.Register*` 30）。其中存在**反向回注**，典型如 `boot_agent.go:411` `tb.RecoveryHandler.SetBlackboard(blackboard)`：L1 tools 阶段的对象被 L2 agent 阶段的产物回填。拓扑排序保证"被依赖者先 Init"，反向回注天然违反拓扑方向。`DependencyMap` 表达的是"谁需要谁"，无法表达"谁必须在谁之后被回填"。
+- **顺序性副作用 vs 依赖图**：崩溃恢复（`main.go:154-155`）依赖进程级全局标志 `protocol.ReplayMode` 的**独占窗口**——必须在 Provider 加载后、`bootServer` 前串行跑完，但它与 `bootServer` 之间**无依赖边**。Kahn 排序对无边节点不保证相对顺序（当前实现按 map 迭代填初始队列）。同类还有 `ab.Supervisor.Start()` 必须在两个 defer 就位后（`main.go:137-140`）、`eval --ci-gate` 分支在 `bootServer` 前 return（契约无"条件性跳过后续模块"语义）。用假依赖边强制定序可绕过，但假边无法与真依赖区分，比手工排序更难维护。
+
+后三项是**契约自身缺陷**，可修，但修了也不解决上面两项：
+
+- `gracefulShutdown` 四阶各自 `for name, mod := range b.modules`，**map 迭代顺序随机**。现有链有硬时序：`Supervisor.Stop()` 先于 `ReaperStop()`，`ReaperStop()` 早于 dbWriter 排空（`main.go:137-138,213`）。接线即把确定序换成随机序。
+- `Init(deps *DependencyMap) error` **无 ctx**，而 7 个 boot 阶段签名全部带 ctx；`bootSubstrate(ctx, stop)` 还额外消费 `context.CancelFunc` 控制流句柄。
+- `Ignite` **无失败回滚**：中途 Init 失败直接返回，已初始化模块不走任何 Stage。现有链靠 defer LIFO 兜底，其中 `tb.PersistentSandbox.Shutdown()` 是 ADR-0008 要求的 L4 解释器子进程终止点，缺失即产生孤儿进程。
+
+另：`internal/bootstrap` 单测仅 1 个用例（`TestGracefulShutdown_WithErrors`，只验证出错不 panic），`topologicalSort`／`Ignite`／KMS memclr **零覆盖**。
+
+**本次不修上述缺陷。** 按 ADR-0062 deadcode 治理纪律，为一个零引用且已判定不接线的包投入修复 + 补测成本理据不足，会退化为"为将来可能用而现在维护"。缺陷记录在案即可。
+
+**将来立项时的 P0 前置**：先修三项契约缺陷（关停按 Ignite 拓扑逆序、`Init` 加 ctx、`Ignite` 失败时按已完成逆序调用 `Stage4Closer`）并补齐 `topologicalSort`／`Ignite` 单测，再谈迁移；且必须先给出两项"无法表达"问题的处置方案（新增二阶段回注钩子？假依赖边并逐条记录真实原因？），否则迁移在技术上做不完整。另需注意 `Bootstrapper.ListenAndServe` 自建 `signal.Notify` 与 `main.go` 既有两套信号处理（`signal.NotifyContext` + TripleCtrlCGuard 的 SIGINT 连续计数）不能共存。
+
+**同期订正**：ARCHITECTURE.md §8.2 原记有"[MUST] 表述冲突"一段，引用的是 `Module-Dependency-Axioms.md §4` 的旧措辞。该 [MUST] 已于 2026-07-28 改为"必须且仅能在**装配层**完成"并加注物理落点，冲突已不存在，§8.2 该段本次改为如实描述。**接线与否不影响这两份文档的一致性**——曾以"消除文档冲突"为由推动接线的论证不再成立。
+
 ### 反例守护
 
 不得因"已登记 baseline/白名单"就认为条目已处理——它们是债务记录，处置状态是"待偿"。
