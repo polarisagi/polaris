@@ -107,7 +107,7 @@ docs-lint:
 	if [ $$bad -ne 0 ]; then exit 1; fi ; \
 	echo "docs-lint ok"
 
-# 失效路径引用门控: 活文档(docs/arch/*.md + CLAUDE.md)里写的代码路径必须真实存在。
+# 失效路径引用门控: 活文档(docs/arch/*.md + CLAUDE.md)与全仓 .go 注释里写的代码路径必须真实存在。
 # 白名单 scripts/docs-refs-allowlist.txt 仅收「文档在记载已删除/已迁移路径」的历史注记。
 # 不扫 docs/arch/decisions/——ADR 按定义记录写作当时的事实，改它等于篡改历史。
 docs-refs:
