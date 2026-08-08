@@ -31,11 +31,22 @@ func (p *DefaultIngestionPipeline) buildSummaryTree(ctx context.Context, docNode
 		return
 	}
 
-	// 查询源 chunks 最高污点级别（taint 只升不降）
+	// 查询源 chunks 最高污点级别（taint 只升不降）。
+	//
+	// 2026-08-08 改为失败即中止：此前 `_ =` 吞掉 Scan 错误，srcTaint 保持零值
+	// 0（TaintNone），后续三级摘要会以"无污点"落盘。摘要内容是源 chunk 的
+	// LLM 改写，污点必须继承源头——一次查询失败就把外部来源内容洗成可信数据，
+	// 是 HE-2 明令禁止的 Taint 静默丢失。COALESCE 保证有行时不会 ErrNoRows，
+	// 无行时 fetchLeafChunks 已提前返回，故此处报错必属真实数据库故障，
+	// 唯一安全处置是放弃本次摘要生成（摘要缺失可由下次摄取补，污点降级不可逆）。
 	var srcTaint int
-	_ = db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(taint_level), 0) FROM rag_chunks WHERE doc_id = ? AND deleted_at IS NULL`,
-		docNode.ID).Scan(&srcTaint)
+		docNode.ID).Scan(&srcTaint); err != nil {
+		slog.WarnContext(ctx, "knowledge: 源污点级别查询失败，放弃摘要生成以免污点降级",
+			"doc_id", docNode.ID, "err", err)
+		return
+	}
 
 	p.generateSummaryLevels(ctx, db, docNode, leaves, srcTaint)
 }

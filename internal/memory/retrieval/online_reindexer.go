@@ -77,9 +77,20 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 	var batch []entry
 	for rows.Next() {
 		var e entry
-		if scanErr := rows.Scan(&e.id, &e.eventUUID, &e.content); scanErr == nil {
-			batch = append(batch, e)
+		if scanErr := rows.Scan(&e.id, &e.eventUUID, &e.content); scanErr != nil {
+			// 2026-08-08：原为 `if scanErr == nil { append }`，扫描失败的行被
+			// 无声丢弃且不留痕。这些行的 embed_model_version 仍是 ''，下一轮
+			// 会被同一条查询再次选中、再次静默丢弃——形成不产生任何日志的
+			// 死循环。至少要让它可见（HE-1 禁止能算不上报）。
+			slog.Warn("reindexer: row scan failed, row skipped", "err", scanErr)
+			continue
 		}
+		batch = append(batch, e)
+	}
+	// rows.Err() 区分"正常读完"与"迭代中途出错截断"。不查则截断表现为批次
+	// 变小，与"确实只剩这些"无法区分。
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return 0, false, apperr.Wrap(apperr.CodeInternal, "reindexer: rows iteration failed", rowsErr)
 	}
 	if closeErr := rows.Close(); closeErr != nil {
 		slog.Warn("reindexer: rows close error", "err", closeErr)
@@ -123,10 +134,17 @@ func (r *OnlineReindexer) Run(ctx context.Context) (processed int, remaining boo
 
 	// 检查空版本条目（走 idx_ep_embed_ver 偏索引，O(1) 量级）
 	// 仅检测 ''，版本切换场景由调用方决策是否重新触发，避免无限循环
+	//
+	// 2026-08-08 改为返回错误：此前 `_ =` 吞掉 Scan 失败，cnt 保持零值，函数
+	// 随即返回 remaining=false——调用方据此认定"重索引已做完"并停止驱动，
+	// 剩余条目的 embed_model_version 永远停在 ''，向量检索路径对它们永久失效，
+	// 且全程无任何日志。返回错误让调用方按失败重试，而不是把故障读成完成。
 	var cnt int
-	_ = r.db.QueryRowContext(ctx,
+	if err := r.db.QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM episodic_events WHERE embed_model_version = '' AND archived = 0`,
-	).Scan(&cnt)
+	).Scan(&cnt); err != nil {
+		return processed, false, apperr.Wrap(apperr.CodeInternal, "reindexer: remaining count query failed", err)
+	}
 
 	return processed, cnt > 0, nil
 }

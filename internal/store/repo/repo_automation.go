@@ -349,19 +349,24 @@ func (r *SQLiteAutomationRepository) TimeoutRuns(ctx context.Context, startedBef
 func (r *SQLiteAutomationRepository) UpdateAutomationStats(ctx context.Context, id, status, errMsg, finishedAt string, circuitBreakThreshold int) (int, error) {
 	if status == "error" {
 		_, err := r.db.ExecContext(ctx, "UPDATE automations SET last_run_status=?, last_run_error=?, run_count=run_count+1, failure_count=failure_count+1, circuit_open=CASE WHEN failure_count+1 >= ? THEN 1 ELSE circuit_open END, circuit_opened_at=CASE WHEN failure_count+1 >= ? AND circuit_open=0 THEN ? ELSE circuit_opened_at END, updated_at=? WHERE id=?", status, errMsg, circuitBreakThreshold, circuitBreakThreshold, finishedAt, finishedAt, id)
+		// 原为 `if err != nil { if err != nil { ... } return 0, nil }`——内层
+		// 条件恒真，外层的 `return 0, nil` 是不可达死分支。
 		if err != nil {
-			if err != nil {
-				return 0, apperr.Wrap(apperr.CodeInternal, "error", err)
-			}
-			return 0, nil
+			return 0, apperr.Wrap(apperr.CodeInternal, "UpdateAutomationStats: 写失败统计失败", err)
 		}
+		// 2026-08-08 改为返回错误：此前 `_ =` 吞掉 Scan 失败，circuitOpen 保持
+		// 零值，调用方据此判定"熔断器未打开"并让该 automation 继续按原节奏运行。
+		// 上一条 UPDATE 刚刚可能把 circuit_open 置了 1——读回失败却表现为"没熔断"，
+		// 等于熔断器在数据库抖动时静默失效，正是它本该防住的场景。
 		var circuitOpen int
-		_ = r.db.QueryRowContext(ctx, "SELECT circuit_open FROM automations WHERE id=?", id).Scan(&circuitOpen)
+		if err := r.db.QueryRowContext(ctx, "SELECT circuit_open FROM automations WHERE id=?", id).Scan(&circuitOpen); err != nil {
+			return 0, apperr.Wrap(apperr.CodeInternal, "UpdateAutomationStats: 回读熔断状态失败", err)
+		}
 		return circuitOpen, nil
 	}
 	_, err := r.db.ExecContext(ctx, "UPDATE automations SET last_run_status=?, last_run_error='', run_count=run_count+1, failure_count=0, circuit_open=0, circuit_opened_at='', updated_at=? WHERE id=?", status, finishedAt, id)
 	if err != nil {
-		return 0, apperr.Wrap(apperr.CodeInternal, "error", err)
+		return 0, apperr.Wrap(apperr.CodeInternal, "UpdateAutomationStats: 写成功统计失败", err)
 	}
 	return 0, nil
 }
