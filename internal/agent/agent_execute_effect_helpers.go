@@ -38,6 +38,20 @@ var outboxSeqCounter atomic.Uint64
 // 第二轮起就从未真正触发过。这里的调用点都是同步执行一次、无重试语义，
 // 用纳秒时间戳 + 单调序号即可保证每次真实投影都不会与历史记录或同一进程内
 // 其他调用冲突，不需要引入更复杂的跨 Agent 实例全局幂等状态机制。
+// outboxIdemKey 组装 FSM 派生事件的 outbox 幂等键：规范前缀 + 唯一性后缀。
+//
+// 前缀走 types.BuildIdempotencyKey，与全仓其余 11 个投递点保持同一格式
+// engine:type:id:op:version（ADR-0076）；后缀保留 outboxUniqueSuffix()，因为这批
+// 派生事件（记忆投影/语义抽取/巩固触发）**必须每次都是新事件、不可被 outbox 去重**，
+// 而 version 是 int，装不下「纳秒 + 进程内原子序号」两段，只能显式外挂。
+//
+// AgentID 不再进键：唯一性已由进程全局原子序号保证，键里带它并不能防任何碰撞，
+// 而它本来就在 payload 里——键的职责是去重，不是承载业务字段。
+func (a *Agent) outboxIdemKey(topic, entityType, entityID, op string) string {
+	return string(types.BuildIdempotencyKey(topic, entityType, entityID, op, 1)) +
+		":" + outboxUniqueSuffix()
+}
+
 func outboxUniqueSuffix() string {
 	seq := outboxSeqCounter.Add(1)
 	return strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + strconv.FormatUint(seq, 10)
@@ -109,7 +123,8 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 				TaskID:    a.memoryPartitionKey(),
 				Payload:   a.sCtx.ExecuteResult,
 				CreatedAt: time.Now(),
-			}, a.sCtx.SessionID+":exec:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "execution_completed")
+			}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "exec"),
+				"execution_completed")
 		}
 		// 业务执行失败会触发 ExecuteFail，同样不抛出以免阻断状态机
 		return "", nil, true
@@ -255,7 +270,8 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			TaskID:    a.memoryPartitionKey(),
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
-		}, a.sCtx.SessionID+":perceive:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "task_perceived")
+		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "perceive"),
+			"task_perceived")
 	}
 
 	// 成功完成计划，写入计划记忆
@@ -286,7 +302,8 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			TaskID:    a.memoryPartitionKey(),
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
-		}, a.sCtx.SessionID+":plan:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "plan_generated")
+		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "plan"),
+			"plan_generated")
 	}
 
 	// 成功完成反思，写入反思记忆，并保存 ReasoningState
@@ -312,13 +329,15 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 			TaskID:    a.memoryPartitionKey(),
 			Payload:   []byte(content),
 			CreatedAt: time.Now(),
-		}, a.sCtx.SessionID+":reflect:"+a.sCtx.AgentID+":"+outboxUniqueSuffix(), "reflection_completed")
+		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "reflect"),
+			"reflection_completed")
 
 		// 触发 Episodic → Semantic 4 阶段记忆蒸馏（ConsolidationPipeline，M5 §4）
 		if a.sCtx.SessionID != "" {
 			a.emitOutbox(ctx, protocol.TopicMemoryConsolidate, "memory_consolidate",
 				map[string]string{"session_id": a.sCtx.SessionID},
-				a.sCtx.SessionID+":consolidate:"+outboxUniqueSuffix(), "memory_consolidate")
+				a.outboxIdemKey(protocol.TopicMemoryConsolidate, "agent_session", a.sCtx.SessionID, "consolidate"),
+				"memory_consolidate")
 		}
 	}
 }
