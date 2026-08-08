@@ -3,7 +3,7 @@ package types
 // ============================================================================
 // M4 Agent Kernel — FSM 状态枚举
 // 来源: internal/protocol/types.go §M4
-// 架构文档: docs/arch/04-Agent-Kernel-深度选型.md §1
+// 架构文档: docs/arch/M04-Agent-Kernel.md §1
 // 11 状态: 5 主执行态 + 2 恢复态 + 2 终态 + 1 中断暂停态 + 1 挂起态
 //
 // 从 enums.go 按模块拆出（R7 文件行数治理，2026-07-07），纯类型/常量声明，
@@ -56,7 +56,7 @@ const (
 )
 
 // InterruptAction 定义中断处理语义。
-// 来源: internal/protocol/interfaces.go §Agent 控制接口
+// 来源: internal/protocol/（按域拆分的 interfaces_*.go） §Agent 控制接口
 type InterruptAction int
 
 const (

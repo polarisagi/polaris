@@ -141,7 +141,7 @@ func (m *FallacyMemoryPool) DeleteRecord(ctx context.Context, recordID string) e
 // 见 memf_heuristics.go（R7 拆分）。
 
 // GetMaxQualityScore 查询指定任务类型中最高的 node_quality_score。
-// 供外部包（如 pkg/swarm）的 SurpriseCalculator 计算 MEMF 惊异贡献时调用。
+// 供外部包（如 internal/swarm）的 SurpriseCalculator 计算 MEMF 惊异贡献时调用。
 // DB 为 nil 时返回 0。
 func (m *FallacyMemoryPool) GetMaxQualityScore(ctx context.Context, taskType string) float64 {
 	if m.DB == nil {

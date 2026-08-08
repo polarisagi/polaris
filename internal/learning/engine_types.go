@@ -151,7 +151,7 @@ type VersionChangeEvent struct {
 	Stats            RolloutStats
 }
 
-// RolloutStats 外环统计数据（与 pkg/swarm 包的 RolloutStats 保持对齐）。
+// RolloutStats 外环统计数据（与 internal/swarm 包的 RolloutStats 保持对齐）。
 type RolloutStats struct {
 	ErrorRate            float64
 	BaselineErrorRate    float64
@@ -186,7 +186,7 @@ func DefaultEngineConfig() *EngineConfig {
 	}
 }
 
-// Reflector 内环反思接口（由 pkg/swarm.ReflexionEngine 实现，通过接口解耦）。
+// Reflector 内环反思接口（由 internal/swarm.ReflexionEngine 实现，通过接口解耦）。
 type Reflector interface {
 	Reflect(ctx context.Context, taskID, taskType string, result *TaskResult, trajectory []Step, replanCount int) (*Reflection, error)
 }

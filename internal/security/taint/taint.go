@@ -14,7 +14,7 @@ import (
 
 // Taint Tracking — 污点追踪类型系统。
 // 权威 TaintLevel 枚举定义见 internal/protocol/types.go。
-// 架构文档: docs/arch/11-Policy-Safety-深度选型.md §2
+// 架构文档: docs/arch/M11-Policy-Safety.md §2
 
 // TaintedString 是带污点标记的字符串。
 // content 未导出——仅 Sanitize() 可构造 SafeString。

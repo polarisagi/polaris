@@ -15,7 +15,7 @@ import (
 
 // SQLiteAuditRepository 实现 protocol.AuditRepository。
 // 操作 events 表（审计记录存储为 topic='audit.policy' 的事件）。
-// @arch: docs/upgrade/repo-interface-migration.md §3.5
+// @arch: docs/arch/M02-Storage-Fabric.md
 type SQLiteAuditRepository struct {
 	db          *sql.DB
 	eventLogger protocol.EventLogger

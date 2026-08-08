@@ -65,7 +65,7 @@ func ScanInjectionPatterns(content string) (bool, string) {
 }
 
 // Sanitizer 提供将 TaintedString 降级的策略集合。
-// 架构文档: docs/arch/M11-Policy-Safety-深度选型.md §2.5
+// 架构文档: docs/arch/M11-Policy-Safety.md §2.5
 
 // SanitizeBySchema 基于强 Schema（format/pattern/enum）校验后降级。
 // 结果: data.Level = min(Level-1, TaintMedium)

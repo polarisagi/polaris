@@ -13,7 +13,7 @@ import (
 
 // SQLiteTaskReadRepository 实现 protocol.TaskReadRepository。
 // 只读读取 tasks 表和 events 表（写路径由 Blackboard CAS 持有 *sql.DB）。
-// @arch: docs/upgrade/repo-interface-migration.md §3.6
+// @arch: docs/arch/M02-Storage-Fabric.md
 type SQLiteTaskReadRepository struct {
 	db *sql.DB
 }

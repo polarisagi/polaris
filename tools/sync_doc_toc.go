@@ -11,8 +11,8 @@
 //
 // 用法:
 //
-//	go run scripts/sync_doc_toc.go              # 重写所有 docs/arch/*.md
-//	go run scripts/sync_doc_toc.go -check       # 只校验，drift 时退出非零（CI 用）
+//	go run tools/sync_doc_toc.go              # 重写所有 docs/arch/*.md
+//	go run tools/sync_doc_toc.go -check       # 只校验，drift 时退出非零（CI 用）
 package main
 
 import (

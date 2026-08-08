@@ -10,7 +10,7 @@ import (
 )
 
 // StreamingActionBus 是 LAM 连续动作流的速率限制和裁剪总线。
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §7.3
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §7.3
 //
 // [接口预留][实现依赖 Tier-1+ 显示服务器接入，当前为令牌桶速率控制实现]
 type StreamingActionBus struct {

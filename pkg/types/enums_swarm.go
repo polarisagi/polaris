@@ -3,10 +3,10 @@ package types
 // ============================================================================
 // M8 Multi-Agent Orchestrator — 任务状态枚举
 // 来源: internal/protocol/types.go §M8
-// 架构文档: docs/arch/08-Multi-Agent-Orchestrator-深度选型.md §1
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §1
 //
 // 黑板事件 & 出箱状态枚举
-// 来源: internal/protocol/event.go
+// 来源: 协议层按域拆分前的 event 定义
 //
 // 从 enums.go 按模块拆出（R7 文件行数治理，2026-07-07），纯类型/常量/String()
 // 声明，无逻辑变更。

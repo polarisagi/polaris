@@ -4,11 +4,11 @@ import "context"
 
 // ============================================================================
 // M11 Policy & Safety — 安全层枚举
-// 来源: internal/protocol/types.go §TaintLevel, internal/protocol/interfaces.go §M11
-// 架构文档: docs/arch/11-Policy-Safety-深度选型.md §2.3
+// 来源: 协议层拆分前的 types.go §TaintLevel, internal/protocol/（按域拆分的 interfaces_*.go） §M11
+// 架构文档: docs/arch/M11-Policy-Safety.md §2.3
 //
 // 失败分类枚举
-// 来源: internal/protocol/intent.go
+// 来源: 协议层按域拆分前的 intent 定义
 //
 // 从 enums.go 按模块拆出（R7 文件行数治理，2026-07-07）：原文件中 TrustTier 的
 // 类型/常量声明与其方法集（SandboxFloor/TaintLevel/ApprovalRequired/...）在拆分前
@@ -57,7 +57,7 @@ func (t TaintLevel) String() string {
 }
 
 // PermissionMode 定义外部扩展调用的权限模式。
-// 来源: internal/protocol/interfaces.go §M11
+// 来源: internal/protocol/（按域拆分的 interfaces_*.go） §M11
 type PermissionMode string
 
 const (
@@ -77,9 +77,8 @@ const (
 const CheckpointDeviceControlReview = "device_control_review"
 
 // TrustTier 五级信任体系（ADR-0016 §2.1）。
-// 来源: internal/protocol/trust.go
 // 替代 SignatureValid bool，使系统能区分技能/工具来源的信任级别。
-// 业务方法（MaxSandboxTier、ApprovalRequired 等）保留在 internal/protocol/trust.go。
+// 业务方法（ApprovalRequired 等）定义在本文件下方。
 type TrustTier int
 
 const (

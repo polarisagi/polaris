@@ -11,7 +11,7 @@ import (
 )
 
 // ProviderRecoveryHandler 处理 M1 CircuitBreaker 恢复后的任务唤醒逻辑。
-// 注册到 pkg/substrate/outbox_worker.go 的 OutboxWorker，
+// 注册到 internal/store/outbox_worker.go 的 OutboxWorker，
 // 消费 target_engine="provider_recovery" 的 Outbox 事件。
 //
 // 两步恢复流程：

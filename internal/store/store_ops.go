@@ -224,7 +224,7 @@ func (s *SQLiteStore) Capabilities() types.StoreCapabilities {
 // 适用场景：
 //   - MutationBus.DatabaseWriter（AI 核心数据批量写）
 //   - SQLiteBlackboard（CAS 操作，需同步确认）
-//   - pkg/gateway/server（配置管理 CRUD，复杂 SQL 无法走 KV 接口）
+//   - internal/gateway/server（配置管理 CRUD，复杂 SQL 无法走 KV 接口）
 //
 // 所有调用方共享同一实例，MaxOpenConns=1 保证写串行化，无需额外锁。
 // 仅需只读查询的调用方请改用 ReadDB()，避免占用写连接排队名额。
@@ -240,7 +240,7 @@ func (s *SQLiteStore) ReadDB() *sql.DB { return s.readDB }
 
 // SQLQuerier 返回 SQLiteStore 作为 protocol.SQLQuerier 接口。
 // 适合需要同时传递 protocol.Store 和 protocol.SQLQuerier 的场景，避免调用方持有 *sql.DB。
-// @arch: docs/upgrade/repo-interface-migration.md 附录B
+// @arch: docs/arch/M02-Storage-Fabric.md
 func (s *SQLiteStore) SQLQuerier() protocol.SQLQuerier {
 	return s.db
 }

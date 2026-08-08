@@ -40,7 +40,7 @@ StreamEvent struct {
 type
 
 // ImagePart 多模态图片内容块（工具结果、LLM 消息均可携带）。
-// 注意：不含任何方法，与 internal/protocol/go 中的同名类型语义相同。
+// 注意：不含任何方法，与 internal/protocol 中的同名类型语义相同。
 ImagePart struct {
 	Type      string // "image"
 	MediaType string // "image/jpeg" | "image/png" | "image/webp" | "image/gif"

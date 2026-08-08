@@ -10,7 +10,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// M10 §2.2 HybridRetrieverConfig 融合权重（SSoT：docs/arch/10-Knowledge-RAG-深度选型.md §2.2）。
+// M10 §2.2 HybridRetrieverConfig 融合权重（SSoT：docs/arch/M10-Knowledge-RAG.md §2.2）。
 // 与 M5 的权重体系刻意不同：知识库以向量语义为主、BM25 为辅、图遍历只做补充。
 // 这三个常数是重构前 rrfThreeWay 的硬编码权重，下沉到统一融合管线后必须显式传入
 // ——否则会退化成 M5 的默认权重（1.0/0.6/0.6），把 M10 的检索策略悄悄改掉。

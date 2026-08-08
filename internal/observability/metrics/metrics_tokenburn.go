@@ -11,7 +11,7 @@ import (
 )
 
 // TokenBurnRate tracks token consumption rate for circuit breaking.
-// 架构文档: docs/arch/M03-Observability-深度选型.md §3
+// 架构文档: docs/arch/M03-Observability.md §3
 type TokenBurnRate struct {
 	cumulativeTokens atomic.Int64
 	lastTick         time.Time

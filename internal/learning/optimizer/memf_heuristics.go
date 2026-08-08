@@ -149,7 +149,7 @@ func NewBlindZoneDetector(DB protocol.SQLQuerier) *BlindZoneDetector {
 }
 
 // RecordProduction 记录 taskType 在生产中的一次出现。
-// 由 pkg/cognition/kernel/agent_execute.go S_PLAN 阶段开头调用。
+// 由 internal/agent/agent_execute_dag.go S_PLAN 阶段开头调用。
 func (d *BlindZoneDetector) RecordProduction(taskType string) {
 	if taskType == "" {
 		return

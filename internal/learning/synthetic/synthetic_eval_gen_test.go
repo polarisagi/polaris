@@ -357,7 +357,7 @@ func TestTruncate_Empty(t *testing.T) {
 }
 
 // TestCaseSeverityConstants 验证 CaseSeverity 常量值与 governance/eval.Severity 语义对齐。
-// ToEvalCase 转换逻辑已移至 pkg/governance/eval.SyntheticCaseToEvalCase（L3 侧 adapter）。
+// ToEvalCase 转换逻辑已移至 internal/eval.SyntheticCaseToEvalCase（L3 侧 adapter）。
 func TestCaseSeverityConstants(t *testing.T) {
 	if CaseSeverityP0 != "P0" {
 		t.Errorf("CaseSeverityP0 should be 'P0', got %q", CaseSeverityP0)

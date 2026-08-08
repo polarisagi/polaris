@@ -14,12 +14,12 @@ import (
 )
 
 // ============================================================================
-// 记忆工具集 — consumer-side 接口定义（防 pkg/action ↔ pkg/cognition 包循环）
-// 实现由 pkg/cognition/memory.SemanticMem 提供，在 cmd/polaris/main.go 注入。
+// 记忆工具集 — consumer-side 接口定义（防 internal/tool ↔ internal/memory 包循环）
+// 实现由 internal/memory.SemanticMem 提供，在 cmd/polaris/main.go 注入。
 // ============================================================================
 
 // SemanticMemWriter 语义记忆写入接口（consumer-side，L1 层内互引禁止）。
-// 与 pkg/cognition/memory.SemanticMemWriter 保持方法签名一致，Go 结构子类型自动满足。
+// 与 internal/memory.SemanticMemWriter 保持方法签名一致，Go 结构子类型自动满足。
 //
 // 复核修正（本轮审查）：此前声明 Archive(ctx, id, reason) 供 memory_expire 使用，
 // 但 Archive 操作的是 KV store 的 "doc:"+id 命名空间（面向 types.Document，见

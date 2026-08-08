@@ -20,7 +20,7 @@ import (
 )
 
 // WorkspaceManager — 重型中间物文件系统。
-// 架构文档: docs/arch/02-Storage-Fabric-深度选型.md §3
+// 架构文档: docs/arch/M02-Storage-Fabric.md §3
 //
 // GR-6-002 修复（2026-07-11）：新增 mu sync.RWMutex 保护 manifests map 并发读写。
 // gcWorker 作为后台 goroutine 运行，与主线程 Create/RegisterFile/GC 等方法存在

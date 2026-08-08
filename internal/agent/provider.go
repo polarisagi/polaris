@@ -23,11 +23,11 @@ import (
 //   5. agent 包不再 import extension/skill、action/codeact、action/lam
 //
 // @consumer: agent/agent.go（字段类型）
-// @producer: cmd/polaris/adapters.go（adapter 层注入）
+// @producer: cmd/polaris/adapters_agent.go（adapter 层注入）
 
 // ─── 桥接类型（Bridge Types）────────────────────────────────────────────────
 // 这些类型是 agent 包的本地定义，与 codeact/skill 具体包的类型字段一一对应。
-// adapter 层（cmd/polaris/adapters.go）负责在两者之间做字段映射。
+// adapter 层（cmd/polaris/adapters_agent.go）负责在两者之间做字段映射。
 
 // CodeActRequest agent 包本地定义的代码执行请求。
 // 字段与 action/protocol.CodeActRequest 完全对应，避免 agent 包 import codeact。
@@ -123,7 +123,7 @@ type WorldModelUpdater interface {
 
 // ─── DAG 执行引擎消费端接口（2026-07-12 随 internal/execute 模块化新增）───────
 //
-// internal/agent/dag 物理迁出为 internal/execute/dag 顶层模块前，FSM 思考循环
+// internal/execute/dag 物理迁出为 internal/execute/dag 顶层模块前，FSM 思考循环
 // （fsm/state_machine.go、agent_execute_dag.go 等）直接 import 同目录子包，
 // 不算跨模块依赖。迁出后按本文件既有模式收敛为消费端接口：agent 不再直接
 // import internal/execute/dag，具体实现（execute/dag.Runner/Validator）由

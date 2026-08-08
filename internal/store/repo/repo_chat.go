@@ -13,7 +13,7 @@ import (
 
 // SQLiteChatRepository 实现 protocol.ChatRepository。
 // 操作 chat_sessions, chat_messages 表以及 messages_fts 虚拟表。
-// @arch: docs/upgrade/repo-interface-migration.md §3.1
+// @arch: docs/arch/M02-Storage-Fabric.md
 type SQLiteChatRepository struct {
 	db *sql.DB
 }

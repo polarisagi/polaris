@@ -70,7 +70,7 @@ type SemanticCache struct {
 
 // CacheKey 语义缓存查询键（调用方填充请求上下文字段）。
 type CacheKey struct {
-	// ContextHintFingerprint M4 epochTracker 计算的上下文指纹（SHA-256 全量，见 pkg/cognition/kernel/epoch.go）。
+	// ContextHintFingerprint M4 epochTracker 计算的上下文指纹（SHA-256 全量，见 internal/agent/fsm/epoch.go）。
 	ContextHintFingerprint string
 	// ActiveControlLabels 当前激活的 Control Vector 标签列表。
 	ActiveControlLabels []string

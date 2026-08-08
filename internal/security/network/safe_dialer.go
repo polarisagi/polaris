@@ -45,7 +45,7 @@ var getParsedCIDRs = sync.OnceValue(func() []*net.IPNet {
 })
 
 // SafeDialer 统一安全拨号器 —— SSRFGuard 五阶段校验的唯一实现。
-// 实现 internal/protocol/interfaces.go (SafeDialer)。
+// 实现 internal/protocol/ 下按域拆分的 interfaces_*.go (SafeDialer)。
 // 所有出站网络连接必须通过此入口，CI safe_dialer_lint 扫描裸 net.Dial/grpc.Dial/http.Get → ERROR。
 type SafeDialer struct {
 	dnsCache    map[string][]net.IP // hostname → resolved IPs

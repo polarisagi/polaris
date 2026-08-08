@@ -17,7 +17,7 @@ import (
 // PIIDetector 个人信息检测器。
 // Tier 0: Go 正则规则引擎（覆盖结构化 PII：邮箱/手机/身份证/信用卡/IP）。
 // Tier 1+: Presidio HTTP sidecar（NER 级语义 PII，FeaturePresidioPII 门控）。
-// 架构文档: docs/arch/M11-Policy-Safety-深度选型.md §5.1
+// 架构文档: docs/arch/M11-Policy-Safety.md §5.1
 type PIIDetector struct {
 	rules          []*piiRule
 	presidioClient *presidioClient // nil = Tier 0 only

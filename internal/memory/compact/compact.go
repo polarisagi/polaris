@@ -12,7 +12,7 @@
 // 算法与"网关专属关注点"（chat_messages 持久化回写、hook 触发、thrashing 计数、
 // 配置来源）耦合在同一个 *chat.Compressor 结构体里。本包只抽出前者（纯算法/
 // 只需要 protocol.Provider 与一个窄 Offloader 接口），网关专属部分留在
-// internal/gateway/server/chat/compressor.go 里不动。
+// internal/gateway/server/chat/compression_service.go 里不动。
 package compact
 
 import (

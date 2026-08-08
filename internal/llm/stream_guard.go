@@ -8,7 +8,7 @@ import (
 )
 
 // StreamBudgetGuard — 流式响应 token 预算守卫。
-// 架构文档: docs/arch/01-Inference-Runtime-深度选型.md §5.2-5.4
+// 架构文档: docs/arch/M01-Inference-Runtime.md §5.2-5.4
 
 type StreamBudgetGuard struct {
 	sessionBudget  *TokenBudget

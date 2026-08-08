@@ -19,7 +19,7 @@ import (
 // inputTokens / outputTokens / cacheHitTokens: 来自 types.ProviderResponse.Usage
 // costUSD: 本次调用费用（USD），由调用方按 Capabilities().CostPer1K* 计算
 //
-// 调用方: pkg/substrate/inference/router.go Infer() / failover()
+// 调用方: internal/llm/router.go Infer() / failover()
 func RecordLLMCall(
 	ctx context.Context,
 	provider, model, status string,
@@ -61,7 +61,7 @@ func RecordLLMCall(
 
 // RecordBudgetTokens 上报 BudgetManager 层的 token 消耗（来自 ConsumeTokens）。
 // tokenType: "budget_consumed"（与 inference 层 "input"/"output" 区分标签）
-// 调用方: pkg/cognition/kernel/budget.go BudgetManager.ConsumeTokens()
+// 调用方: internal/agent/budget.go BudgetManager.ConsumeTokens()
 func RecordBudgetTokens(ctx context.Context, tokens int) {
 	if metrics.InstrTokensTotal == nil {
 		return
@@ -71,7 +71,7 @@ func RecordBudgetTokens(ctx context.Context, tokens int) {
 }
 
 // IncrBurnStage3 记录 TokenBurnRate Stage3 FULLSTOP 触发（边沿计数，每次触发调用一次）。
-// 调用方: pkg/substrate/inference/router.go 或 M11 KillSwitch 触发点。
+// 调用方: internal/llm/router.go 或 M11 KillSwitch 触发点。
 func IncrBurnStage3() {
 	if metrics.InstrBurnStage3Total != nil {
 		metrics.InstrBurnStage3Total.Add(context.Background(), 1)
@@ -86,7 +86,7 @@ func IncrBurnStage3() {
 // sandboxTierLabel: "inprocess" | "l2" | "l3"（调用方根据 SandboxTier 常量映射）
 // latencyMs: 工具执行端到端耗时（ms）
 //
-// 调用方: pkg/action/sandbox_impl.go InProcessSandbox.Run()
+// 调用方: internal/sandbox InProcessSandbox.Run()
 func RecordToolCall(ctx context.Context, toolName, status, sandboxTierLabel string, latencyMs float64) {
 	cat := metrics.ToolCategory(toolName)
 	if metrics.InstrToolCallsTotal != nil {
@@ -116,7 +116,7 @@ func RecordSandboxExecution(ctx context.Context, tierLabel string) {
 
 // RecordTaskOutcome 记录任务终态（S_COMPLETE / S_FAILED）。
 // 驱动 polaris_task_success_rate ObservableGauge。
-// 调用方: pkg/cognition/kernel/agent.go Run() 终态检查处。
+// 调用方: internal/agent/agent.go Run() 终态检查处。
 func RecordTaskOutcome(_ context.Context, success bool) {
 	metrics.TaskTotalCount.Add(1)
 	if success {

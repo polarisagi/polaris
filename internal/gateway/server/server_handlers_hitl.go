@@ -63,7 +63,7 @@ func parseInterruptAction(action string) types.InterruptAction {
 func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action string, interruptReq types.InterruptRequest) {
 	if s.outboxWriter != nil {
 		// 异步路由：写入 Outbox，由 OutboxWorker 分发到目标 Agent 进程。
-		// OutboxWorker 需注册 operation="agent_interrupt" 的处理器（见 pkg/substrate/storage/outbox_worker.go）。
+		// OutboxWorker 需注册 operation="agent_interrupt" 的处理器（见 internal/store/outbox_worker.go）。
 		//
 		// 注释与实现对齐修复：此前日志写着"falling back to direct call"，但紧跟
 		// 一个无条件 return——异步投递失败时中断请求实际被静默丢弃，用户点击

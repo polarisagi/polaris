@@ -15,7 +15,7 @@ import (
 // ─── hitlNotifierAdapter ──────────────────────────────────────────────────────
 //
 // 将 hitl.GatewayImpl 适配为 orchestrator.HITLNotifier（LogicCollapseMonitor 依赖）。
-// 在 cmd/ 层定义以避免 pkg/swarm → pkg/edge/hitl 包循环。
+// 在 cmd/ 层定义以避免 internal/swarm → internal/automation/hitl 包循环。
 type hitlNotifierAdapter struct {
 	gateway *hitl.GatewayImpl
 }

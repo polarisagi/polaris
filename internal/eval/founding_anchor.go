@@ -1,5 +1,5 @@
 // founding_anchor.go — 创始行为锚点（V8-S3 缓解机制）。
-// 属于 pkg/governance/eval 包，治理评测层。
+// 属于 internal/eval 包，治理评测层。
 package eval
 
 import (

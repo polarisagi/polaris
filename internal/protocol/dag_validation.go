@@ -6,7 +6,7 @@ import "github.com/polarisagi/polaris/pkg/types"
 //
 // producer: internal/execute/dag（DAGExecutor.Execute 产出 NodeResult；
 //           ValidateDAG 消费 DAGValidationContext；2026-07-12 随 internal/execute
-//           模块化从 internal/agent/dag 迁出）
+//           模块化从 internal/execute/dag 迁出）
 // consumer: internal/agent（runExecuteDAG/runValidateDAG 通过 agent/provider.go
 //           声明的 DAGRunner/DAGValidator 消费端接口间接使用，不再直接 import
 //           internal/execute/dag）

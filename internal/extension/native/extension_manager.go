@@ -43,7 +43,7 @@ type ScoredResult struct {
 type EmbedFn func(ctx context.Context, text string) ([]float32, error)
 
 // KnowledgeSearcher 知识库检索接口（消费方定义，防包循环）。
-// 实现由 pkg/swarm/knowledge.KnowledgeBase 提供，通过 main.go 适配器注入。
+// 实现由 internal/swarm/knowledge.KnowledgeBase 提供，通过 main.go 适配器注入。
 // nil 时 knowledge_search 工具不注册（FeatureDeepRAG 未启用时的降级路径）。
 type KnowledgeSearcher interface {
 	// Search 执行三阶段 RAG 检索，返回 JSON 编码的结果段落列表。

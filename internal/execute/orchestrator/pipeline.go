@@ -23,7 +23,7 @@ import (
 //   - 当 VerificationPolicy.Adversarial == true 时，在意图字段注入对抗性前置假设，
 //     强制验证 Agent 从"目标未达成"出发做目标反向分析。
 //
-// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator-深度选型.md §5
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §5
 type PipelineOrchestrator struct {
 	blackboard   protocol.Blackboard
 	hitl         protocol.HITL

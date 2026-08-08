@@ -3,7 +3,7 @@ package types
 // ============================================================================
 // M1 Inference Runtime — LLM 推理控制枚举
 // 来源: internal/protocol/types.go §M1
-// 架构文档: docs/arch/01-Inference-Runtime-深度选型.md
+// 架构文档: docs/arch/M01-Inference-Runtime.md
 //
 // 从 enums.go 按模块拆出（R7 文件行数治理，2026-07-07），纯类型/常量声明，
 // 无逻辑变更。

@@ -14,7 +14,7 @@ import (
 var ErrBatcherSaturated = apperr.New(apperr.CodeResourceExhausted, "embedding batcher saturated")
 
 // EmbeddingBatcher — Embedding API 批量调用优化器。
-// 架构文档: docs/arch/01-Inference-Runtime-深度选型.md §6.1
+// 架构文档: docs/arch/M01-Inference-Runtime.md §6.1
 
 // EmbedFn M1 Embedding API 调用函数类型（依赖注入，可 mock）。
 type EmbedFn func(ctx context.Context, texts []string, model string) ([][]float32, error)
