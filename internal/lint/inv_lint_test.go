@@ -410,7 +410,7 @@ func Test_inv_M11_05_NoRawNetDial(t *testing.T) {
 
 // Test_inv_LintScanner_DoesNotFlagStringLiterals 验证扫描器对字符串字面量中的
 // "net.Dial" "http.Get" 等模式不产生误报。
-// 背景：pkg/cognition/skill_pipeline.go 的 StaticAnalyzer.Analyze 将这些字符串作为
+// 背景：internal/extension/skill/skill_pipeline.go 的 StaticAnalyzer.Analyze 将这些字符串作为
 // 被扫描目标（字符串比较），不是实际调用——AST 方案应正确区分。
 func Test_inv_LintScanner_DoesNotFlagStringLiterals(t *testing.T) {
 	// 构造一个包含字符串字面量"net.Dial"的合成文件，解析后确认无 CallExpr 违规
@@ -810,15 +810,16 @@ func Test_inv_NoAlterTableInSchema(t *testing.T) {
 // Test_inv_NoFFIOutsideFfiPkg 验证 purego FFI 仅限受控边界使用。
 //
 // 豁免原则（L0 受控 FFI 边界）：
-// 以下文件均属于 pkg/substrate/（L0）或 pkg/action/（L1）内的性能关键路径，
-// 且各自拥有独立的 Rust dylib 绑定目标，不具备合并到 pkg/substrate/ffi/ 的价值。
+// 以下文件均属于 L0 基础设施或 L1 动作层内的性能关键路径，
+// 且各自拥有独立的 Rust dylib 绑定目标，不具备合并到 internal/ffi/ 的价值。
 // 每条豁免均需有明确的 Rust FFI 目标说明，禁止以"历史原因"为由新增豁免。
-//   - pkg/substrate/ffi/          → purego 桥的权威实现（定义 allowlist 的原点）
-//   - pkg/action/tool/rust_*      → Rust WASM/native sandbox，独立 dylib，L1 合法 exec 封装
-//   - pkg/substrate/inference/stt → Sherpa-ONNX STT dylib（音频推理，L0 基础设施）
-//   - pkg/substrate/inference/tts → Sherpa-ONNX TTS dylib（音频推理，L0 基础设施）
-//   - pkg/substrate/policy/cedar  → Cedar 策略引擎 dylib（L0 安全基础设施）
-//   - pkg/substrate/storage/surreal → SurrealDB embedded dylib（L0 存储基础设施）
+//   - internal/ffi/                → purego 桥的权威实现（定义 allowlist 的原点）
+//   - internal/tool/sandbox/rust_native_sandbox.go + rust_wasmtime_sandbox.go
+//     → Rust WASM/native sandbox，独立 dylib，L1 合法 exec 封装
+//   - internal/llm/stt/            → Sherpa-ONNX STT dylib（音频推理，L0 基础设施）
+//   - internal/llm/tts/            → Sherpa-ONNX TTS dylib（音频推理，L0 基础设施）
+//   - internal/security/policy/    → Cedar 策略引擎 dylib（L0 安全基础设施）
+//   - internal/store/              → SurrealDB embedded dylib（L0 存储基础设施）
 func Test_inv_NoFFIOutsideFfiPkg(t *testing.T) {
 	root := repoRoot(t)
 	// 豁免列表由 testdata/ffi_boundary_exempt.json 管理，见该文件注释说明。
@@ -914,7 +915,22 @@ func Test_inv_TaintContentCallAudit(t *testing.T) {
 
 // ─── inv_BareErrorReturnRatchet ──────────────────────────────────────────────
 
-// Test_inv_BareErrorReturnRatchet 检测并防范新增 "return err" 裸返回。
+// Test_inv_BareErrorReturnRatchet 检测并防范「err 来自外部调用却裸返回」。
+//
+// 判定按 err 的来源收窄，而非见 `return err` 就报（ADR-0089 决策二）：
+//   - err 来自**标准库 / 三方库**调用 → 违规。此时错误链上除了库自己的措辞没有
+//     任何本仓上下文，调用方拿到 "no such file or directory" 无从定位是谁在读哪个文件；
+//   - err 来自**本仓调用**（同包函数、方法、接口）→ 合规。被调方按 pkg/apperr
+//     约定自行包装，调用点再包一层只会得到 apperr 套 apperr 的重复链。
+//
+// 2026-08-08 收窄前，本规则见 `return err` 即报，baseline 因此积了 106 条；AST 溯源
+// 显示其中 104 条的 err 来自本仓调用，真正缺上下文的只有 1 条。按旧判定清偿这 106 条
+// 会把重复包装写进全仓，且规则文本要求的 `fmt.Errorf / errors.Wrap` 与 CLAUDE.md
+// 「禁裸 errors.New/fmt.Errorf 泄漏调用链」直接冲突。
+//
+// baseline 保留为空并作为「零债务」的守卫。原 cmd/gen_bare_error_baseline 一键重建
+// 工具已随本次收窄删除：它持有一份与本规则并行的判定副本，且「一键接受当前全部违规」
+// 正是空 baseline 与空转规则长期共存的原因。需要重新建档时，本规则的失败输出即清单。
 func Test_inv_BareErrorReturnRatchet(t *testing.T) {
 	root := repoRoot(t)
 	baselinePath := filepath.Join(root, "internal", "lint", "testdata", "bare_error_return_baseline.json")
@@ -930,23 +946,26 @@ func Test_inv_BareErrorReturnRatchet(t *testing.T) {
 
 	var violations []violation
 	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		external := externalPkgIdents(f)
 		ast.Inspect(f, func(n ast.Node) bool {
-			retStmt, ok := n.(*ast.ReturnStmt)
-			if !ok {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
 				return true
 			}
-			for _, res := range retStmt.Results {
-				if ident, isIdent := res.(*ast.Ident); isIdent && ident.Name == "err" {
-					pos := fset.Position(retStmt.Pos())
-					key := fmt.Sprintf("%s:%d", relPath, pos.Line)
-					if !baseline[key] {
-						violations = append(violations, violation{
-							relPath: relPath,
-							line:    pos.Line,
-							detail:  `发现新的裸返回 "return err" — 须使用 fmt.Errorf 或 errors.Wrap 等包装错误上下文`,
-						})
-					}
+			for _, hit := range bareErrReturns(fn) {
+				if !errFromExternalCall(fn, hit, external) {
+					continue
 				}
+				pos := fset.Position(hit.Pos())
+				key := fmt.Sprintf("%s:%d", relPath, pos.Line)
+				if baseline[key] {
+					continue
+				}
+				violations = append(violations, violation{
+					relPath: relPath,
+					line:    pos.Line,
+					detail:  `err 来自标准库/三方调用却裸返回 — 须用 apperr.Wrap 补上「谁在做什么」的上下文`,
+				})
 			}
 			return true
 		})
@@ -957,14 +976,91 @@ func Test_inv_BareErrorReturnRatchet(t *testing.T) {
 	}
 }
 
+// externalPkgIdents 返回本文件中「非本仓」导入包的引用名集合。
+// 判定依据是导入路径不以模块路径开头——标准库无域名前缀，三方库域名不同。
+func externalPkgIdents(f *ast.File) map[string]bool {
+	const modulePath = "github.com/polarisagi/polaris/"
+	out := map[string]bool{}
+	for _, imp := range f.Imports {
+		p := strings.Trim(imp.Path.Value, `"`)
+		if strings.HasPrefix(p, modulePath) {
+			continue
+		}
+		name := p[strings.LastIndex(p, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name != "_" && name != "." {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// bareErrReturns 收集函数体内所有含裸 `err` 结果的 return 语句。
+func bareErrReturns(fn *ast.FuncDecl) []*ast.ReturnStmt {
+	var out []*ast.ReturnStmt
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, res := range ret.Results {
+			if id, isIdent := res.(*ast.Ident); isIdent && id.Name == "err" {
+				out = append(out, ret)
+				return true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// errFromExternalCall 报告 ret 处的 err 是否由外部包调用赋值而来。
+// 取 ret 之前最后一次对 err 的赋值作为来源；来源不是包选择器调用（同包函数、
+// 变量方法、接口方法）一律视为本仓来源。
+//
+// 作用域限定在**最内层**函数体：闭包里的 err 常常是回调契约自带的形参
+// （filepath.WalkFunc、sql 事务闭包），此时 `return err` 是把错误交还给框架，
+// 不是丢上下文，必须与外层函数里的同名变量区分开。
+func errFromExternalCall(fn *ast.FuncDecl, ret *ast.ReturnStmt, external map[string]bool) bool {
+	scope, params := innermostScope(fn, ret)
+	if params["err"] {
+		return false // err 是回调形参，return err 属于契约内的错误交还
+	}
+	var origin ast.Expr
+	ast.Inspect(scope, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || assign.Pos() >= ret.Pos() {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			if id, isIdent := lhs.(*ast.Ident); isIdent && id.Name == "err" && len(assign.Rhs) > 0 {
+				origin = assign.Rhs[len(assign.Rhs)-1]
+			}
+		}
+		return true
+	})
+	call, ok := origin.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkgIdent, ok := sel.X.(*ast.Ident)
+	return ok && external[pkgIdent.Name]
+}
+
 // ─── inv_MCPSubprocessEnvSanitized ───────────────────────────────────────────
 
 // Test_inv_MCPSubprocessEnvSanitized 禁止任何子进程启动器通过 cmd.Env = os.Environ() 或
 // cmd.Env = append(os.Environ(), ...) 继承父进程完整环境（R1.15）。
 //
 // 覆盖范围：
-//   - pkg/extensions/  — MCP 子进程（R1.15 核心场景）
-//   - pkg/action/      — hook 脚本、X11 工具、sandbox DryRunMode 等所有子进程启动器
+//   - internal/extension/ — MCP 子进程（R1.15 核心场景）
+//   - internal/action/    — hook 脚本、X11 工具、sandbox DryRunMode 等所有子进程启动器
 //
 // 正确做法：使用域专属白名单函数（sanitizeParentEnv / sanitizeHookEnv /
 // sanitizeX11Env / sandboxMinEnv）构造子进程环境，再 append 调用方显式注入的变量。
@@ -1209,9 +1305,9 @@ func Test_inv_NoBareLogPrint(t *testing.T) {
 
 // Test_inv_NoRawSQLDBField 禁止在 storage 层以外的包声明 *sql.DB 结构体字段。
 // 非 storage 包须持有 protocol.SQLQuerier 或领域 Repository 接口，保证可测试性与边界隔离。
-// 白名单：pkg/substrate/storage/ 下所有 repo_*.go + store.go + 基础设施文件，
+// 白名单：internal/store/ 下所有 repo_*.go + store.go + 基础设施文件，
 //
-//	以及 pkg/swarm/orchestrator/sqlite_blackboard.go（CAS 原子操作须直接持有 *sql.DB）。
+//	以及 internal/execute/orchestrator/sqlite_blackboard.go（CAS 原子操作须直接持有 *sql.DB）。
 func Test_inv_NoRawSQLDBField(t *testing.T) {
 	root := repoRoot(t)
 
@@ -1551,4 +1647,29 @@ func walkDirsErr(root string, subdirs []string, fn filepath.WalkFunc) error {
 		}
 	}
 	return nil
+}
+
+// innermostScope 返回包含 ret 的最内层函数体，以及该函数的形参名集合。
+func innermostScope(fn *ast.FuncDecl, ret *ast.ReturnStmt) (*ast.BlockStmt, map[string]bool) {
+	scope, ftype := fn.Body, fn.Type
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit.Body == nil {
+			return true
+		}
+		if lit.Body.Pos() < ret.Pos() && ret.Pos() < lit.Body.End() &&
+			lit.Body.Pos() >= scope.Pos() {
+			scope, ftype = lit.Body, lit.Type
+		}
+		return true
+	})
+	params := map[string]bool{}
+	if ftype.Params != nil {
+		for _, f := range ftype.Params.List {
+			for _, nm := range f.Names {
+				params[nm.Name] = true
+			}
+		}
+	}
+	return scope, params
 }
