@@ -100,15 +100,12 @@ func (h *PluginHandler) HandleUpgradePlugin(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	_, err = h.DB.ExecContext(ctx,
-		"UPDATE extension_instances SET installed_version=?, status='installed', updated_at=? WHERE id=?",
-		newVersion, now, pluginID,
-	)
+	err = h.ExtRepo.UpdateInstanceInstalledVersion(ctx, pluginID, newVersion)
 	if err != nil {
 		// 错误态回写本身再失败，实例会停在 'installing' 之类的中间态，UI 上
 		// 表现为"升级卡住"而非"升级失败"，用户无从判断该重试还是该回滚。
 		// 兜底路径不宜再向上抛（主错误已在下面返回给客户端），但必须留痕。
-		if _, markErr := h.DB.ExecContext(ctx, "UPDATE extension_instances SET status='error', error_msg=?, updated_at=? WHERE id=?", err.Error(), now, pluginID); markErr != nil {
+		if markErr := h.ExtRepo.UpdateInstanceStatus(ctx, pluginID, "error", err.Error()); markErr != nil {
 			slog.ErrorContext(ctx, "plugin: 升级失败后错误态回写也失败，实例将停在中间态",
 				"plugin_id", pluginID, "upgrade_err", err, "mark_err", markErr)
 		}

@@ -167,6 +167,7 @@ ExtensionRepository interface {
 	GetInstance(ctx context.Context, id string) (*types.ExtInstanceRow, error)
 	UpdateInstanceStatus(ctx context.Context, id, status, errorMsg string) error
 	UpdateInstanceInstallPath(ctx context.Context, id, installPath string) error
+	UpdateInstanceInstalledVersion(ctx context.Context, id, version string) error
 	ListInstances(ctx context.Context) ([]types.ExtInstanceRow, error)
 	DeleteInstance(ctx context.Context, id string) error
 
