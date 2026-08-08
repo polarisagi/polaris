@@ -17,6 +17,8 @@ func TestLoadCursors_ScanFailure_AbortsAndReturnsError_S02(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	if _, err := db.Exec(`CREATE TABLE learning_cursors (
@@ -55,6 +57,8 @@ func TestLoadCursors_AllValid_ReturnsAllRows_S02(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	if _, err := db.Exec(`CREATE TABLE learning_cursors (

@@ -18,6 +18,8 @@ import (
 
 func TestSQLCoreMemoryStore(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	require.NoError(t, err)
 	defer db.Close()
 

@@ -19,6 +19,8 @@ func newRolloutTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to open memory db: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	// rollout_states：与 internal/protocol/schema/010_self_improve.sql 严格对齐。
 	// 列名变更时必须同步更新此处（SSoT 以 .sql 文件为准）。

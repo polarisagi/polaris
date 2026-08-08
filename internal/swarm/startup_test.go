@@ -81,6 +81,8 @@ func TestSQLiteBlackboard_Ping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	bb := orchestrator.NewSQLiteBlackboard(db)
 	err = bb.Ping(context.Background())

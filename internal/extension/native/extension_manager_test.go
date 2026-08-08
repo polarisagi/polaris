@@ -20,6 +20,8 @@ func TestExtensionManager_SearchExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`
@@ -127,6 +129,8 @@ func TestExtensionManager_searchLocalCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_, _ = db.Exec(`
 		CREATE TABLE IF NOT EXISTS extension_catalog (
@@ -160,6 +164,8 @@ func TestExtensionManager_findRegistryTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_, _ = db.Exec(`
 		CREATE TABLE IF NOT EXISTS extension_catalog (
@@ -226,6 +232,8 @@ func TestExtensionManager_InstallExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`

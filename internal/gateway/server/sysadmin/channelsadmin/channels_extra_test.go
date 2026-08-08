@@ -23,6 +23,8 @@ func TestChannels_WebhookReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`
@@ -79,6 +81,8 @@ func TestTriggerWebhookAutomations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	h := &ChannelsAdmin{DB: db}
 	// GD-9-001 复核修复后 TriggerWebhookAutomations 改走 AutomationRepo，
@@ -108,6 +112,8 @@ func TestDispatchChannelMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	reg := llm.NewProviderRegistry(config.M1RouterThresholds{})

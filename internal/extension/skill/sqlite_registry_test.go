@@ -21,6 +21,8 @@ func newTestSQLiteRegistry(t *testing.T) *SQLiteRegistryImpl {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 
 	_, err = db.Exec(`

@@ -20,6 +20,8 @@ type MockStore struct {
 
 func NewMockStore() *MockStore {
 	db, _ := sql.Open("sqlite3", ":memory:")
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 
 	// Create required tables — DDL 与 internal/protocol/schema/004_semantic_memory.sql 保持一致
 	_, _ = db.Exec(`

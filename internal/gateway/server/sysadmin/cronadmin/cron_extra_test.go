@@ -24,6 +24,8 @@ func TestUpdateAutomationStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_, err = db.Exec("CREATE TABLE automations (id TEXT PRIMARY KEY, run_count INTEGER, success_count INTEGER, failure_count INTEGER, last_run_status TEXT, last_run_error TEXT, circuit_open INTEGER, circuit_opened_at DATETIME, next_run_at DATETIME, updated_at DATETIME)")
 	if err != nil {
@@ -42,6 +44,8 @@ func TestExecuteAutomation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_, err = db.Exec("CREATE TABLE automations (id TEXT PRIMARY KEY, run_count INTEGER, success_count INTEGER, failure_count INTEGER, last_run_status TEXT, last_run_error TEXT, circuit_open INTEGER, circuit_opened_at DATETIME, next_run_at DATETIME, updated_at DATETIME, last_run_at DATETIME)")
 	if err != nil {
