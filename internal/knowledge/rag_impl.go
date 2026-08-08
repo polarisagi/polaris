@@ -155,8 +155,8 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 
 	docData, _ := json.Marshal(tree)
 	if _, err := tx.ExecContext(ctx,
-		`INSERT OR REPLACE INTO rag_docs (uri, doc_id, tree_json) VALUES (?, ?, ?)`,
-		doc.Ref.URI, docNode.ID, string(docData),
+		`INSERT OR REPLACE INTO rag_docs (uri, doc_id, content_hash, tree_json) VALUES (?, ?, ?, ?)`,
+		doc.Ref.URI, docNode.ID, doc.Ref.ContentHash, string(docData),
 	); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "ingestion: insert rag_docs", err)
 	}
@@ -385,11 +385,4 @@ func splitIntoLeaves(text string, maxRunes int) []string {
 		start = end
 	}
 	return leaves
-}
-
-// GetRecentChunks returns a list of recent chunks.
-// Task 4: SyntheticEvalGen Pipeline integration hook.
-func (p *DefaultIngestionPipeline) GetRecentChunks(ctx context.Context, limit int) ([]string, error) {
-	// 按照任务要求，不需要真查 DB，返回一个写死的一条 Chunk 的 slice
-	return []string{"This is a mocked recent chunk for SyntheticEvalGen pipeline test."}, nil
 }

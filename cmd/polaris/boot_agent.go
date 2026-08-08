@@ -17,7 +17,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/knowledge"
 	"github.com/polarisagi/polaris/internal/knowledge/connector"
 
 	llmadapter "github.com/polarisagi/polaris/internal/llm/adapter"
@@ -963,10 +962,15 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
 	sv := supervisor.NewSupervisor(5, 5*time.Minute)
 	// [W-3] 接入 SyncScheduler
-	knowledgePipeline := knowledge.NewPipeline(sb.Store.DB(), nil, sb.Outbox, nil, sb.RAGChunksTaintSerializer)
+	// 2026-08-08：原先在此另建一条 knowledge.NewPipeline（PipelineImpl）驱动连接器
+	// 同步，与 kb.Ingester（DefaultIngestionPipeline）构成同接口双实现，且两者对
+	// rag_docs 的列集互不兼容——PipelineImpl 的 INSERT 带 title/source_type/
+	// updated_at 三个 SSoT 里不存在的列，实测报 "table rag_docs has no column
+	// named title"，即每个连接器的每次同步都在落盘那一步失败。此处收敛为唯一
+	// 摄取实现，PipelineImpl 已删除。
 	for _, conn := range tb.KnowledgeConnRegistry.GetAll() {
 		c := conn
-		syncScheduler := connector.NewSyncScheduler(c, knowledgePipeline, 0)
+		syncScheduler := connector.NewSyncScheduler(c, kb.Ingester, 0)
 		sv.AddWorker(fmt.Sprintf("sync-scheduler-%s", c.Name()), func(ctx context.Context) error {
 			return syncScheduler.Start(ctx)
 		})

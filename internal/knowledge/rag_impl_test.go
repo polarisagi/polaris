@@ -170,22 +170,18 @@ func (f *ragImplFailingOutboxWriter) Write(ctx context.Context, entry protocol.O
 
 func setupRagImplTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	// 用 modernc.org/sqlite（包内 knowledge_test.go 已注册）而非 mattn/go-sqlite3：
+	// 后者未带 fts5 构建标签，跑 DDL SSoT 会在建 rag_chunks_fts 时报
+	// "no such module: fts5"。生产走的也是 modernc，测试对齐生产驱动。
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`
-		CREATE TABLE rag_docs (uri TEXT PRIMARY KEY, doc_id TEXT, content_hash TEXT, tree_json TEXT);
-		CREATE TABLE rag_chunks (
-			id TEXT PRIMARY KEY, doc_id TEXT, content TEXT, taint_level INTEGER,
-			taint_source TEXT, taint_hmac TEXT, source_uri TEXT, doc_version TEXT,
-			chunk_seq INTEGER, content_hash TEXT, embed_model_version TEXT,
-			chunk_type TEXT, chunk_index INTEGER
-		);
-	`); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
+	// 2026-08-08：改由 DDL SSoT 建表（见 knowledge_test.go applyRAGSchema 注释）。
+	// 原先手抄的列集与 SSoT 不一致——rag_docs 少 deleted_at、rag_chunks 少
+	// created_at/deleted_at——正是这份"自带兼容表结构"让生产的列缺失缺陷通过了 CI。
+	applyRAGSchema(t, db)
 	return db
 }
 
