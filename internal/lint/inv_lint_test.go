@@ -85,10 +85,21 @@ func (v violation) String() string {
 
 // walkPkgGoFiles 遍历 root/pkg/ 下所有非测试 .go 文件，返回解析后的 AST。
 // 跳过 exemptRel 中列出的相对路径（相对于 root）。
-func walkPkgGoFiles(t *testing.T, root string, exemptRel map[string]bool,
+// walkRepoGoFiles 遍历 internal/ + pkg/ 下所有非测试 .go 文件。
+//
+// 2026-08-08：本函数原名 walkPkgGoFiles，函数体硬编码 walkGoFilesUnder(t, root,
+// "pkg", ...)。2026-07-07 那次复核抽出了 walkGoFilesUnder 以便"平移到覆盖
+// internal/"（见其文档注释），但这个包装函数没跟着改，用它的 5 条规则
+// （M1-01 裸 HTTP、M11-05 裸 net.Dial、FFI 边界、.Content() 审计、裸 error 棘轮）
+// 因此继续对着 29 个文件的 pkg/ 扫描，而真实代码的 1189 个文件在 internal/ 下
+// 从未被检查过——CI 恒绿，给的是虚假保证。改名是为了让"只扫 pkg"这个语义
+// 无法再被无声继承。
+func walkRepoGoFiles(t *testing.T, root string, exemptRel map[string]bool,
 	fn func(fset *token.FileSet, f *ast.File, relPath string)) {
 	t.Helper()
-	walkGoFilesUnder(t, root, "pkg", exemptRel, fn)
+	for _, sub := range []string{"internal", "pkg"} {
+		walkGoFilesUnder(t, root, sub, exemptRel, fn)
+	}
 }
 
 // walkGoFilesUnder 遍历 root/<subdir>/ 下所有非测试 .go 文件，返回解析后的 AST。
@@ -258,7 +269,7 @@ func Test_inv_M1_01_NoRawHTTPCalls(t *testing.T) {
 	}
 
 	var violations []violation
-	walkPkgGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+	walkRepoGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
@@ -361,7 +372,7 @@ func Test_inv_M11_05_NoRawNetDial(t *testing.T) {
 	}
 
 	var violations []violation
-	walkPkgGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+	walkRepoGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			// 仅检查 CallExpr 中的 Fun，避免变量名 net.Dialer 之类误报
 			call, ok := n.(*ast.CallExpr)
@@ -814,7 +825,7 @@ func Test_inv_NoFFIOutsideFfiPkg(t *testing.T) {
 	exempt := loadExemptFile(t, root, "ffi_boundary_exempt.json")
 
 	var violations []violation
-	walkPkgGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
+	walkRepoGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
 		for _, imp := range f.Imports {
 			if imp.Path != nil && strings.Trim(imp.Path.Value, `"`) == "github.com/ebitengine/purego" {
 				pos := fset.Position(imp.Pos())
@@ -866,7 +877,7 @@ func Test_inv_TaintContentCallAudit(t *testing.T) {
 	approvedCalls := loadExemptFileRaw(t, root, "taint_content_approved_calls.json")
 
 	var violations []violation
-	walkPkgGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
 		forwardSlashPath := filepath.ToSlash(relPath)
 		if strings.HasPrefix(forwardSlashPath, "pkg/substrate/policy/") {
 			return
@@ -918,7 +929,7 @@ func Test_inv_BareErrorReturnRatchet(t *testing.T) {
 	}
 
 	var violations []violation
-	walkPkgGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			retStmt, ok := n.(*ast.ReturnStmt)
 			if !ok {
@@ -1072,7 +1083,9 @@ func Test_inv_NoRawDBExecWriteInGateway(t *testing.T) {
 		t.Fatalf("解析 baseline 失败: %v", err)
 	}
 
-	err = filepath.Walk(filepath.Join(root, "pkg", "gateway"), func(path string, info os.FileInfo, err error) error {
+	// 2026-08-08：原扫描根 pkg/gateway 在四层布局迁移后根本不存在，
+	// filepath.Walk 对不存在的目录直接返回，本规则等同从未运行。
+	err = filepath.Walk(filepath.Join(root, "internal", "gateway"), func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr
 		}
@@ -1142,7 +1155,9 @@ func Test_inv_NoBareLogPrint(t *testing.T) {
 	root := repoRoot(t)
 	var violations []violation
 
-	err := filepath.Walk(filepath.Join(root, "pkg"), func(path string, info os.FileInfo, err error) error {
+	// 2026-08-08：原扫描根为 pkg/（29 文件），规则文本说的"cmd/polaris 以外"
+	// 主体是 internal/（1189 文件），从未被扫过。
+	err := walkDirsErr(root, []string{"internal", "pkg"}, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr
 		}
@@ -1205,7 +1220,8 @@ func Test_inv_NoRawSQLDBField(t *testing.T) {
 
 	var violations []violation
 
-	err := filepath.Walk(filepath.Join(root, "pkg"), func(path string, info os.FileInfo, err error) error {
+	// 2026-08-08：原扫描根为 pkg/，storage 层与所有消费方均已迁至 internal/。
+	err := walkDirsErr(root, []string{"internal", "pkg"}, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr
 		}
@@ -1523,4 +1539,16 @@ func Test_inv_M13_SingleTurnEntry(t *testing.T) {
 	for _, v := range violations {
 		t.Errorf("inv_M13_SingleTurnEntry VIOLATED: %s", v)
 	}
+}
+
+// walkDirsErr 依次遍历 root 下多个子目录，语义等价于对每个子目录调用
+// filepath.Walk。抽出本函数是因为仓库从 pkg/* 迁到 internal/* 四层布局后，
+// 多条规则的检查面同时横跨两者，而 filepath.Walk 单次只能给一个根。
+func walkDirsErr(root string, subdirs []string, fn filepath.WalkFunc) error {
+	for _, sub := range subdirs {
+		if err := filepath.Walk(filepath.Join(root, sub), fn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
