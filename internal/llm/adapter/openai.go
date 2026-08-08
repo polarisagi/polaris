@@ -30,7 +30,7 @@ var _ protocol.Provider = (*OpenAIAdapter)(nil)
 // NewOpenAIAdapter 初始化一个 OpenAI 适配器。
 // baseURL 默认为 "https://api.openai.com/v1"（如果传入空串）。
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
-// llmparent.NewSingleCredentialPool(key) 构造。
+// llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
 func NewOpenAIAdapter(baseURL, model string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate) *OpenAIAdapter {
 	if client == nil {
 		client = defaultHTTPClient()

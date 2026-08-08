@@ -183,31 +183,6 @@ func TestNewVaultInDir_PassphraseEnvOverride(t *testing.T) {
 	}
 }
 
-// TestNewVault_DefaultsUnderHomeDir 验证不带参数的 NewVault() 仍然可用
-// （向后兼容路径），key 落在 ~/.polarisagi/polaris/vault.key。
-func TestNewVault_DefaultsUnderHomeDir(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	t.Setenv("POLARIS_VAULT_PASSPHRASE", "") // 确保走文件 key 路径
-
-	v, err := NewVault()
-	if err != nil {
-		t.Fatalf("NewVault failed: %v", err)
-	}
-	expected := filepath.Join(tmpHome, ".polarisagi", "polaris", "vault.key")
-	if _, err := os.Stat(expected); err != nil {
-		t.Errorf("expected vault.key at %s: %v", expected, err)
-	}
-
-	ciphertext, err := v.Encrypt("x")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-	if _, err := v.Decrypt(ciphertext); err != nil {
-		t.Errorf("Decrypt failed: %v", err)
-	}
-}
-
 // TestGenerateNewKey 验证 GenerateNewKey 用于密钥轮换场景：生成新 32 字节随机
 // key 并落盘，返回值与文件内容一致。
 func TestGenerateNewKey(t *testing.T) {

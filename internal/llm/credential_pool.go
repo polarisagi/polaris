@@ -171,11 +171,6 @@ func NewCredentialPool(keys []string, strategy SelectStrategy) *CredentialPool {
 	return p
 }
 
-// NewSingleCredentialPool 单 key 快捷构造，等价于 NewCredentialPool([]string{key}, StrategyFillFirst)。
-func NewSingleCredentialPool(key string) *CredentialPool {
-	return NewCredentialPool([]string{key}, StrategyFillFirst)
-}
-
 // Add 运行时追加凭证（热更新，线程安全）。
 func (p *CredentialPool) Add(key, label string) {
 	if label == "" {

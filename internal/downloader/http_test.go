@@ -144,13 +144,4 @@ func TestDownloadExtractTarBz2_Gz(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected err")
 	}
-
-	// 重置超时用于第二次调用
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel2()
-
-	err = DownloadExtractTarGz(ctx2, http.DefaultClient, "http://127.0.0.1:0/fake.gz", t.TempDir(), nil)
-	if err == nil {
-		t.Errorf("expected err")
-	}
 }

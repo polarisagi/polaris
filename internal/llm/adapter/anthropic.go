@@ -50,7 +50,7 @@ func WithAnthropicPromptCaching() AnthropicOption {
 
 // NewAnthropicAdapter 构造 Anthropic 适配器。
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
-// llmparent.NewSingleCredentialPool(key) 构造，语义与旧版单 credFn 完全等价。
+// llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造，语义与旧版单 credFn 完全等价。
 func NewAnthropicAdapter(model string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate, opts ...AnthropicOption) *AnthropicAdapter {
 	if client == nil {
 		client = defaultHTTPClient()

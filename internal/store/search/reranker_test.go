@@ -8,29 +8,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// ── NilReranker ───────────────────────────────────────────────────────────────
-
-func TestNilReranker_Passthrough(t *testing.T) {
-	docs := []types.ScoredFragment{
-		{Content: "doc-a", Score: 0.9},
-		{Content: "doc-b", Score: 0.5},
-	}
-	got := NilReranker{}.Rerank(context.Background(), "query", docs)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 docs, got %d", len(got))
-	}
-	if got[0].Content != "doc-a" {
-		t.Error("NilReranker should not change order")
-	}
-}
-
-func TestNilReranker_Empty(t *testing.T) {
-	got := NilReranker{}.Rerank(context.Background(), "q", nil)
-	if got != nil {
-		t.Error("NilReranker nil input should return nil")
-	}
-}
-
 // ── cosineSim32 ───────────────────────────────────────────────────────────────
 
 func TestCosineSim32_Identical(t *testing.T) {

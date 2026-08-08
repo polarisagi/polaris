@@ -5,7 +5,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"io"
 	"net/http"
 	"os"
@@ -62,54 +61,10 @@ func TestJoinPath(t *testing.T) {
 	}
 }
 
-// ── Get ────────────────────────────────────────────────────────────────────
-
-func TestGet_NilClient(t *testing.T) {
-	_, err := Get(context.Background(), nil, "https://example.com")
-	if err == nil {
-		t.Error("expected error for nil client, got nil")
-	}
-}
-
 type mockRoundTripperFunc func(req *http.Request) *http.Response
 
 func (f mockRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req), nil
-}
-
-func TestGet_200OK(t *testing.T) {
-	clientHTTP := &http.Client{
-		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader("hello world")),
-			}
-		}),
-	}
-	resp, err := Get(context.Background(), clientHTTP, "http://dummy")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer resp.Body.Close()
-	content, _ := io.ReadAll(resp.Body)
-	if string(content) != "hello world" {
-		t.Errorf("got %q, want 'hello world'", content)
-	}
-}
-
-func TestGet_404NotFound(t *testing.T) {
-	clientHTTP := &http.Client{
-		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
-			return &http.Response{
-				StatusCode: http.StatusNotFound,
-				Body:       io.NopCloser(strings.NewReader("Not Found")),
-			}
-		}),
-	}
-	_, err := Get(context.Background(), clientHTTP, "http://dummy")
-	if err == nil {
-		t.Fatalf("expected error on 404, got nil")
-	}
 }
 
 // ── ExtractTarBz2 ──────────────────────────────────────────────────────────

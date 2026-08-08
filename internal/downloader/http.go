@@ -14,28 +14,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// Get 发起带 context 的 GET 请求，非 200 视为错误。
-// client 必须由调用方注入（通常是 substrate.NewSafeHTTPClient），禁止传 nil。
-func Get(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
-	if client == nil {
-		return nil, apperr.New(apperr.CodeInternal, "downloader: http.Client is required; use substrate.NewSafeHTTPClient")
-	}
-	c := client
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "downloader: build request failed", err)
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "downloader: GET "+url+" failed", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, apperr.New(apperr.CodeInternal, "downloader: HTTP "+fmt.Sprint(resp.StatusCode)+" for "+url)
-	}
-	return resp, nil
-}
-
 // downloadChunk 向 url 发起 Range GET，将响应体写入 partPath。
 // offset>0 时携带 Range 头；服务端返回 206 则追加，返回 200 则覆写（服务端不支持 Range）。
 func downloadChunk(ctx context.Context, client *http.Client, url, partPath string, offset int64) error {
@@ -163,18 +141,6 @@ func DownloadExtractTarBz2(ctx context.Context, client *http.Client, rawURL stri
 		}
 		defer f.Close()
 		return ExtractTarBz2(f, destDir, mapper)
-	})
-}
-
-// DownloadExtractTarGz 下载 .tar.gz 并调用 mapper 选择性提取，支持断点续传。
-func DownloadExtractTarGz(ctx context.Context, client *http.Client, rawURL string, destDir string, mapper func(string) (string, bool)) error {
-	return downloadExtract(ctx, client, rawURL, func(path string) error {
-		f, err := os.Open(path)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "DownloadExtractTarGz", err)
-		}
-		defer f.Close()
-		return ExtractTarGz(f, destDir, mapper)
 	})
 }
 

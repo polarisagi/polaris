@@ -21,7 +21,7 @@ func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestAdapters_Infer(t *testing.T) {
-	credPool := llmparent.NewSingleCredentialPool("test-key")
+	credPool := llmparent.NewCredentialPool([]string{"test-key"}, llmparent.StrategyFillFirst)
 	msgs := []types.Message{
 		{Role: "user", Content: "Hi"},
 	}

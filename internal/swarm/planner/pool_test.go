@@ -158,23 +158,27 @@ func TestPlannerPool_Run_BestScoreWins(t *testing.T) {
 	}
 }
 
-// ── DefaultSpawner ──────────────────────────────────────────────────────────
+// ── PlannerPool 端到端（原 DefaultSpawner 覆盖范围）─────────────────────────
+//
+// 2026-08-08：DefaultSpawner 是仅测试可达的便捷包装（其自身注释即写明"生产环境
+// 的真实 spawner 由 cmd/polaris/boot_agent.go 构造"），已删除。这两个用例改为
+// 直接走 NewPlannerPool + Run，与生产注入路径一致。
 
-func TestDefaultSpawner_NilProvider(t *testing.T) {
+func TestPlannerPool_NilProvider(t *testing.T) {
 	// 不崩溃、不超时即通过
 	ch := make(chan protocol.MemoryWhisper, 10)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	DefaultSpawner(ctx, "some goal", "plan", nil, ch)
+	NewPlannerPool("some goal", "plan", nil, ch, nil).Run(ctx)
 }
 
-func TestDefaultSpawner_WithProvider(t *testing.T) {
+func TestPlannerPool_WithProvider(t *testing.T) {
 	prov := &mockProvider{resp: &types.ProviderResponse{Content: "spawner result"}}
 	ch := make(chan protocol.MemoryWhisper, 10)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	DefaultSpawner(ctx, "optimize", "plan", prov, ch)
+	NewPlannerPool("optimize", "plan", prov, ch, nil).Run(ctx)
 	if len(ch) == 0 {
-		t.Error("expected whisper from DefaultSpawner")
+		t.Error("expected whisper from PlannerPool")
 	}
 }

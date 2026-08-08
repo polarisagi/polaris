@@ -42,8 +42,8 @@ func FuzzSanitizeToSafe(f *testing.F) {
 			}
 		}
 
-		if err == nil && safeStr.Content() != content {
-			t.Errorf("SanitizeToSafe modified content. expected %q, got %q", content, safeStr.Content())
+		if err == nil && safeStr.content != content {
+			t.Errorf("SanitizeToSafe modified content. expected %q, got %q", content, safeStr.content)
 		}
 	})
 }
