@@ -21,7 +21,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 )
 
-// handleGetBudget GET /v1/config/budget
+// HandleGetBudget GET /v1/config/budget
 func (h *SysAdminHandler) HandleGetBudget(w http.ResponseWriter, r *http.Request) {
 	monthlyUSD, err := h.BudgetRepo.GetBudget(r.Context())
 	if err != nil {
@@ -31,7 +31,7 @@ func (h *SysAdminHandler) HandleGetBudget(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]any{"monthly_usd": monthlyUSD}) //nolint:errcheck
 }
 
-// handleSetBudget PUT /v1/config/budget
+// HandleSetBudget PUT /v1/config/budget
 // Body: {"monthly_usd": 10.0}
 func (h *SysAdminHandler) HandleSetBudget(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -67,7 +67,7 @@ type backupRecord struct {
 	Row   map[string]any `json:"row"`
 }
 
-// handleExportBackup GET /v1/export/backup
+// HandleExportBackup GET /v1/export/backup
 //
 // 以 JSONL 流式导出 chat_sessions / chat_messages / kv_store 三张核心表。
 // 文件格式：每行一个 backupRecord JSON 对象，首行为元数据头。
@@ -137,7 +137,7 @@ func (h *SysAdminHandler) HandleExportBackup(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-// handleImportBackup POST /v1/import/backup
+// HandleImportBackup POST /v1/import/backup
 //
 // 接收 JSONL 格式备份文件（Content-Type: application/jsonl 或 text/plain），
 // 幂等 upsert 所有记录。

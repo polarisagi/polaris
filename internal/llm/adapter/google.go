@@ -36,6 +36,8 @@ type GoogleAgentPlatformAdapter struct {
 
 var _ protocol.Provider = (*GoogleAgentPlatformAdapter)(nil)
 
+// NewGoogleAgentPlatformAdapter 构造 Google Agent Platform 适配器。
+//
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
 // llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
 func NewGoogleAgentPlatformAdapter(model, projectID, location string, credPool *llmparent.CredentialPool, client *http.Client, tbr *metrics.TokenBurnRate) *GoogleAgentPlatformAdapter {

@@ -33,7 +33,7 @@ type SkillInfo struct {
 	PluginID    string `json:"plugin_id,omitempty"` // 来自插件时填充
 }
 
-// handleListTools 返回所有已注册工具（builtin + MCP）。
+// HandleListTools 返回所有已注册工具（builtin + MCP）。
 // GET /v1/tools
 func (h *SysAdminHandler) HandleListTools(w http.ResponseWriter, r *http.Request) {
 	var tools []ToolInfo
@@ -60,7 +60,7 @@ func (h *SysAdminHandler) HandleListTools(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]any{"tools": tools}) //nolint:errcheck
 }
 
-// handleListSkills 返回所有已注册 skill。
+// HandleListSkills 返回所有已注册 skill。
 // GET /v1/skills
 func (h *SysAdminHandler) HandleListSkills(w http.ResponseWriter, r *http.Request) {
 	var skills []SkillInfo
@@ -97,7 +97,7 @@ func (h *SysAdminHandler) HandleListSkills(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]any{"skills": skills, "total": len(skills)}) //nolint:errcheck
 }
 
-// handleListToolSchemas 返回可注入 LLM 的 tool schema 列表（供调试用）。
+// HandleListToolSchemas 返回可注入 LLM 的 tool schema 列表（供调试用）。
 // 复用 buildToolSchemas，暴露给前端检查工具注入是否正确。
 func (h *SysAdminHandler) HandleListToolSchemas(w http.ResponseWriter, _ *http.Request) {
 	schemas := h.BuildToolSchemas()
@@ -108,7 +108,7 @@ func (h *SysAdminHandler) HandleListToolSchemas(w http.ResponseWriter, _ *http.R
 	json.NewEncoder(w).Encode(map[string]any{"schemas": schemas, "total": len(schemas)}) //nolint:errcheck
 }
 
-// handleExecuteTool 直接执行工具（内置或 MCP）。
+// HandleExecuteTool 直接执行工具（内置或 MCP）。
 // POST /v1/tools/{name}/execute
 func (h *SysAdminHandler) HandleExecuteTool(w http.ResponseWriter, r *http.Request) {
 	if h.ToolExec == nil {
@@ -138,7 +138,7 @@ func (h *SysAdminHandler) HandleExecuteTool(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(res) //nolint:errcheck
 }
 
-// handleInstallSkill 接受 Wasm 载荷或源码，注册到技能库中。
+// HandleInstallSkill 接受 Wasm 载荷或源码，注册到技能库中。
 // POST /v1/skills/install
 func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Request) {
 	if h.SkillReg == nil {

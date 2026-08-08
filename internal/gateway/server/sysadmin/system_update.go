@@ -44,7 +44,7 @@ func requireLocalOrigin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// handleGetVersion 返回当前版本信息与正在进行的更新进度（前端轮询入口）。
+// HandleGetVersion 返回当前版本信息与正在进行的更新进度（前端轮询入口）。
 // 版本对比由前端直接调 GitHub API 完成，后端只提供 current + update_status + update_error。
 func (h *SysAdminHandler) HandleGetVersion(w http.ResponseWriter, _ *http.Request) {
 	if h.Updater == nil {
@@ -57,7 +57,7 @@ func (h *SysAdminHandler) HandleGetVersion(w http.ResponseWriter, _ *http.Reques
 	respondJSON(w, http.StatusOK, h.Updater.GetVersionInfo())
 }
 
-// handleTriggerUpdate 启动下载 → SHA-256 校验 → 原子替换 → 重启流程。
+// HandleTriggerUpdate 启动下载 → SHA-256 校验 → 原子替换 → 重启流程。
 // 请求体：{"version": "v1.2.3"}，版本由前端从 GitHub API 获取后传入。
 func (h *SysAdminHandler) HandleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
 	// CSRF 防御：拒绝来自非 localhost 域名的浏览器跨域请求

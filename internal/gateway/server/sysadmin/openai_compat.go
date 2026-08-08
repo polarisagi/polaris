@@ -76,7 +76,7 @@ type oaiUsage struct {
 
 // ── 处理器 ──────────────────────────────────────────────────────────────────
 
-// handleOpenAIChat POST /v1/chat/completions
+// HandleOpenAIChat POST /v1/chat/completions
 func (h *SysAdminHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	var req oaiCompletionReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -133,7 +133,7 @@ func (h *SysAdminHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// handleOpenAIChatStream 流式响应（text/event-stream SSE）
+// HandleOpenAIChatStream 流式响应（text/event-stream SSE）
 func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.Request, p protocol.Provider,
 	inferReq *types.InferRequest, id, model string, created int64) {
 
@@ -222,7 +222,7 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 	}
 }
 
-// handleOpenAIChatSync 非流式响应（一次性 JSON）
+// HandleOpenAIChatSync 非流式响应（一次性 JSON）
 func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Request, p protocol.Provider,
 	inferReq *types.InferRequest, id, model string, created int64) {
 

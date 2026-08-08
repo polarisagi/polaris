@@ -204,7 +204,7 @@ const (
 	templateMaxOutputBytes = 50 * 1024 // 渲染输出上限 50KB
 )
 
-// templateRenderFn 用 Go text/template 渲染模板字符串，纯内存计算无外部依赖。
+// TemplateRenderFn 用 Go text/template 渲染模板字符串，纯内存计算无外部依赖。
 // 使用 text/template 而非 html/template，避免 HTML 转义破坏非 HTML 场景的输出。
 func TemplateRenderFn(_ context.Context, input []byte) ([]byte, error) {
 	var args struct {
