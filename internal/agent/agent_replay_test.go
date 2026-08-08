@@ -131,7 +131,9 @@ func TestAgent_ReplayMode_FullTrajectory_NoRealCallsNoDuplicateToolExec(t *testi
 		_ = agent.Run(context.Background())
 		close(done)
 	}()
-	agent.SendIntent(types.TriggerIntentReceived)
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		t.Fatalf("SendIntent failed: %v", err)
+	}
 
 	select {
 	case <-done:
@@ -180,7 +182,9 @@ func TestAgent_ReplayMode_PartialTrajectory_FallsBackToRealExecution(t *testing.
 		_ = agent.Run(context.Background())
 		close(done)
 	}()
-	agent.SendIntent(types.TriggerIntentReceived)
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		t.Fatalf("SendIntent failed: %v", err)
+	}
 
 	select {
 	case <-done:
@@ -267,7 +271,9 @@ func TestAgent_InFlightMarker_SetOnRunClearOnExit(t *testing.T) {
 		_ = agent.Run(context.Background())
 		close(done)
 	}()
-	agent.SendIntent(types.TriggerIntentReceived)
+	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		t.Fatalf("SendIntent failed: %v", err)
+	}
 
 	select {
 	case <-done:

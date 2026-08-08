@@ -345,7 +345,7 @@ func (a *Agent) SendIntent(trigger types.AgentTrigger) error {
 	select {
 	case a.intent <- trigger:
 		return nil
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		return apperr.New(apperr.CodeInternal, "SendIntent timeout")
 	}
 }
