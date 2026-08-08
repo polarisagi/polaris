@@ -1,4 +1,3 @@
 {
-  "_comment": "Test_inv_M11_05_NoRawNetDial 豁免列表。\n清理方向：safe_dialer.go 是 SafeDialer 唯一实现，内部合法使用 net.Dialer{}.DialContext（struct method，非包函数）。此豁免长期有效，不应删除。",
-  "pkg/substrate/security/safe_dialer.go": true
+  "_comment": "M11-05 禁裸 net.Dial 的豁免表。2026-08-08：同 raw_http_calls_exempt，原键为重构前路径，扫描根接回 internal/ 后全仓零违规，豁免表清空。"
 }

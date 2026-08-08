@@ -1,12 +1,18 @@
 {
-  "_comment": "Test_inv_NoFFIOutsideFfiPkg 豁免列表（L0 受控 FFI 边界）。\n每条豁免须对应唯一的 Rust dylib 绑定目标；禁止以'历史原因'为由新增。\n清理方向：所有 FFI 绑定均为 purego 语言约束，长期有效，不应删除。",
-  "pkg/substrate/ffi/dlopen_unix.go": true,
-  "pkg/substrate/ffi/dylib.go": true,
-  "pkg/action/tool/rust_native_sandbox.go": true,
-  "pkg/action/tool/rust_wasmtime_sandbox.go": true,
-  "pkg/substrate/inference/stt/dlopen_unix.go": true,
-  "pkg/substrate/inference/stt/sherpa.go": true,
-  "pkg/substrate/inference/tts/sherpa.go": true,
-  "pkg/substrate/policy/cedar_ffi.go": true,
-  "pkg/substrate/storage/surreal_store.go": true
+  "_comment": "purego FFI 受控边界豁免。2026-08-08 重建：原 9 条键全部指向重构前的 pkg/substrate/*、pkg/action/* 路径，四层布局迁移后无一命中，等同零豁免；而规则本身又只扫 pkg/（walkPkgGoFiles 硬编码），两个错误互相掩盖使 CI 恒绿。下列为现址，每条对应一个独立 Rust dylib 绑定目标。",
+  "internal/ffi/dlopen_unix.go": true,
+  "internal/ffi/dylib.go": true,
+  "internal/ffi/llama.go": true,
+  "internal/ffi/vec_ops.go": true,
+  "_comment_sandbox": "Rust WASM/native sandbox，独立 dylib，L1 合法 exec 封装",
+  "internal/tool/sandbox/rust_native_sandbox.go": true,
+  "internal/tool/sandbox/rust_wasmtime_sandbox.go": true,
+  "_comment_audio": "Sherpa-ONNX STT/TTS dylib（音频推理，L0 基础设施）",
+  "internal/llm/stt/dlopen_unix.go": true,
+  "internal/llm/stt/sherpa.go": true,
+  "internal/llm/tts/sherpa.go": true,
+  "_comment_policy": "Cedar 策略引擎 dylib（L0 安全基础设施）",
+  "internal/security/policy/cedar_ffi.go": true,
+  "_comment_storage": "SurrealDB embedded dylib（L0 存储基础设施）",
+  "internal/store/surreal_store.go": true
 }
