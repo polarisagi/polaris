@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/schema"
+	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 
@@ -21,7 +23,27 @@ func (f *failingOutboxWriter) Write(ctx context.Context, entry protocol.OutboxEn
 	return apperr.New(apperr.CodeInternal, "simulated outbox write failure")
 }
 
+// applyRAGSchema 从 DDL SSoT（internal/protocol/schema/009_rag_chunks.sql）建表，
+// 不再手抄一份列集。
+//
+// 2026-08-08 结构性修复：本函数原先内联手写 rag_chunks 建表语句且完全不建
+// rag_docs，于是被测代码自己的 CREATE TABLE IF NOT EXISTS 兜了底，测试跑在一份
+// 只存在于测试进程里的表结构上。真实后果是 rag_docs 长期存在三套互不兼容的列
+// 集（SSoT / ingester.go / 本文件），生产两条摄取路径实测双双报
+// "no such column"，而 CI 全绿。用 SSoT 建表后，任何列漂移会在测试里直接暴露。
+func applyRAGSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ddl, err := schema.FS.ReadFile("009_rag_chunks.sql")
+	if err != nil {
+		t.Fatalf("read DDL SSoT 009_rag_chunks.sql: %v", err)
+	}
+	if _, err := db.Exec(string(ddl)); err != nil {
+		t.Fatalf("apply DDL SSoT: %v", err)
+	}
+}
+
 func setupTestDB(t *testing.T) *sql.DB {
+	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
@@ -32,46 +54,20 @@ func setupTestDB(t *testing.T) *sql.DB {
 	// 复核跑 -count=3 -race 时实测复现（约 1/3 概率）。限制为单连接消除该
 	// 竞态，语义上等价于其他测试用 file::memory:?cache=shared 的目的。
 	db.SetMaxOpenConns(1)
-
-	// Create rag_chunks schema（含 031_rag_lineage 新增的 lineage 字段）
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS rag_chunks (
-			id                   TEXT PRIMARY KEY,
-			doc_id               TEXT NOT NULL,
-			content              TEXT NOT NULL,
-			taint_level          INTEGER NOT NULL DEFAULT 1,
-			taint_source         TEXT,
-			taint_hmac           TEXT NOT NULL DEFAULT '',
-			source_uri           TEXT NOT NULL DEFAULT '',
-			doc_version          TEXT NOT NULL DEFAULT '',
-			chunk_seq            INTEGER NOT NULL DEFAULT 0,
-			content_hash         TEXT NOT NULL DEFAULT '',
-			embed_model_version  TEXT NOT NULL DEFAULT '',
-			created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			deleted_at           INTEGER
-		);
-
-		CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
-			content,
-			content='rag_chunks',
-			content_rowid='rowid'
-		);
-
-		CREATE TRIGGER IF NOT EXISTS rag_chunks_ai AFTER INSERT ON rag_chunks BEGIN
-		  INSERT INTO rag_chunks_fts(rowid, content) VALUES (new.rowid, new.content);
-		END;
-	`)
-	if err != nil {
-		t.Fatalf("failed to create schema: %v", err)
-	}
-
+	applyRAGSchema(t, db)
 	return db
 }
 
-func TestPipelineImpl_Ingest(t *testing.T) {
+// newTestIngestionPipeline 按生产装配方式构造摄取流水线：走 StorageRouter，
+// 与 cmd/polaris/boot_knowledge.go 的 NewDefaultIngestionPipeline 同一条路径。
+func newTestIngestionPipeline(db *sql.DB, outbox protocol.OutboxWriter) *DefaultIngestionPipeline {
+	return NewDefaultIngestionPipeline(store.NewStorageRouter(&dbOnlyStore{db: db}, nil), nil, outbox, nil, nil)
+}
+
+func TestIngestionPipeline_Ingest(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, nil, nil, nil)
+	pipeline := newTestIngestionPipeline(db, nil)
 
 	doc := &Document{
 		Ref: DocumentRef{
@@ -89,29 +85,66 @@ func TestPipelineImpl_Ingest(t *testing.T) {
 	if tree == nil {
 		t.Fatal("expected non-nil DocTree")
 	}
-	if len(tree.Document.Children) != 3 {
-		t.Fatalf("expected 3 chunks, got %d", len(tree.Document.Children))
-	}
 
-	// Verify storage
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM rag_chunks").Scan(&count)
-	if err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks").Scan(&count); err != nil {
 		t.Fatalf("failed to count chunks: %v", err)
 	}
-	if count != 3 {
-		t.Fatalf("expected 3 chunks in db, got %d", count)
+	if count == 0 {
+		t.Fatal("expected chunks to be persisted")
 	}
 }
 
-// TestPipelineImpl_Ingest_OutboxWriteFailure_ReturnsError_S02 验证阶段02修复：
-// GraphBuild outbox 投递失败必须向上返回错误。回归锚点：修复前
-// `_ = p.outboxWriter.Write(ctx, ev)` 吞没该错误，调用方拿到 nil error + 非 nil
-// tree，会误以为摄入完全成功，但知识图谱构建这条链路从此对该文档永久不会触发。
-func TestPipelineImpl_Ingest_OutboxWriteFailure_ReturnsError_S02(t *testing.T) {
+// TestIngestionPipeline_Ingest_WritesContentHash 回归锚点（2026-08-08）：
+// rag_docs.content_hash 是增量摄取的唯一判据。此前 INSERT 根本不写这一列，
+// 且 SSoT 里也没有这一列，checkIngestCache 每次读都报 "no such column:
+// content_hash" → 缓存 100% 落空 → 每次同步全量重算 embedding。
+func TestIngestionPipeline_Ingest_WritesContentHash(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, &failingOutboxWriter{}, nil, nil)
+	pipeline := newTestIngestionPipeline(db, nil)
+
+	doc := &Document{
+		Ref: DocumentRef{URI: "doc-hash", Title: "T", ContentHash: "hash-abc"},
+		Raw: []byte("Alpha\n\nBeta"),
+	}
+	if _, err := pipeline.Ingest(context.Background(), doc, TaintLow); err != nil {
+		t.Fatalf("ingest failed: %v", err)
+	}
+
+	var got string
+	if err := db.QueryRow("SELECT content_hash FROM rag_docs WHERE uri = ?", doc.Ref.URI).Scan(&got); err != nil {
+		t.Fatalf("read back content_hash: %v", err)
+	}
+	if got != "hash-abc" {
+		t.Fatalf("expected content_hash %q persisted, got %q", "hash-abc", got)
+	}
+
+	// 二次摄取同一 hash 必须命中缓存：chunk 数不增长。
+	var before int
+	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks").Scan(&before); err != nil {
+		t.Fatalf("count chunks: %v", err)
+	}
+	if _, err := pipeline.Ingest(context.Background(), doc, TaintLow); err != nil {
+		t.Fatalf("second ingest failed: %v", err)
+	}
+	var after int
+	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks").Scan(&after); err != nil {
+		t.Fatalf("count chunks: %v", err)
+	}
+	if after != before {
+		t.Fatalf("expected incremental cache hit (chunk count unchanged), got %d → %d", before, after)
+	}
+}
+
+// TestIngestionPipeline_Ingest_OutboxWriteFailure_ReturnsError_S02 验证阶段02
+// 修复：outbox 投递失败必须向上返回错误。回归锚点：修复前 `_ = Write(...)`
+// 吞没该错误，调用方拿到 nil error + 非 nil tree，会误以为摄入完全成功，但
+// 知识图谱构建这条链路从此对该文档永久不会触发。
+func TestIngestionPipeline_Ingest_OutboxWriteFailure_ReturnsError_S02(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	pipeline := newTestIngestionPipeline(db, &failingOutboxWriter{})
 
 	doc := &Document{
 		Ref: DocumentRef{URI: "doc-outbox-fail", Title: "Test", ContentHash: "hash-outbox-fail"},
@@ -125,10 +158,10 @@ func TestPipelineImpl_Ingest_OutboxWriteFailure_ReturnsError_S02(t *testing.T) {
 	// chunks 已经落盘（先于 outbox 投递），tree 仍应非 nil 供调用方按需处理，
 	// 但必须同时拿到 error 信号，不能误判为完全成功。
 	if tree == nil {
-		t.Error("expected non-nil tree despite outbox failure (chunks already committed)")
+		t.Fatal("expected non-nil tree despite outbox failure (chunks already committed)")
 	}
 	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks WHERE doc_id = ?", doc.Ref.URI).Scan(&count); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM rag_chunks").Scan(&count); err != nil {
 		t.Fatalf("count query: %v", err)
 	}
 	if count == 0 {
@@ -136,13 +169,14 @@ func TestPipelineImpl_Ingest_OutboxWriteFailure_ReturnsError_S02(t *testing.T) {
 	}
 }
 
-// TestPipelineImpl_GetRecentChunks 2026-07-14 回归防护：此前硬编码返回同一条
-// 写死字符串，忽略真实 rag_chunks 内容与 limit 参数。验证改为真查 DB 后能
-// 正确读取最近写入的内容、遵守 limit、跳过软删除行、且不返回自身写死的占位句。
-func TestPipelineImpl_GetRecentChunks(t *testing.T) {
+// TestIngestionPipeline_GetRecentChunks 回归防护：GetRecentChunks 必须真查 DB。
+// 该缺陷 2026-07-14 在 PipelineImpl 上修过一次，但生产调的是本类型
+// （boot_agent.go 的 kb.Ingester），修复落在了孪生死实现上从未生效；孪生实现
+// 已于 2026-08-08 删除，本用例锚定在唯一存活的实现上。
+func TestIngestionPipeline_GetRecentChunks(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, nil, nil, nil)
+	pipeline := newTestIngestionPipeline(db, nil)
 
 	doc := &Document{
 		Ref: DocumentRef{URI: "doc1", Title: "Test", ContentHash: "hash1"},
@@ -181,7 +215,7 @@ func TestPipelineImpl_GetRecentChunks(t *testing.T) {
 func TestHybridRetrieverImpl_Search(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	pipeline := NewPipeline(db, nil, nil, nil, nil)
+	pipeline := newTestIngestionPipeline(db, nil)
 	retriever := NewHybridRetrieverWithCognitive(db, nil, nil, 0)
 
 	doc := &Document{
@@ -191,8 +225,7 @@ func TestHybridRetrieverImpl_Search(t *testing.T) {
 		},
 		Raw: []byte("Apples are red\n\nBananas are yellow\n\nGrapes are green"),
 	}
-	_, err := pipeline.Ingest(context.Background(), doc, TaintNone)
-	if err != nil {
+	if _, err := pipeline.Ingest(context.Background(), doc, TaintNone); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -200,10 +233,20 @@ func TestHybridRetrieverImpl_Search(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
+	// 不断言结果条数：DefaultIngestionPipeline 同时落 parent（整段）与 leaf（句级）
+	// 两级分块，"yellow" 会同时命中两者，条数是分块粒度的函数而非检索正确性的
+	// 判据。锚点收在"检索必须找到含 Bananas 的那一块"。
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
 	}
-	if !strings.Contains(results[0].Content, "Bananas") {
-		t.Fatalf("expected chunk with Bananas, got %s", results[0].Content)
+	found := false
+	for _, r := range results {
+		if strings.Contains(r.Content, "Bananas") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a chunk containing Bananas, got %+v", results)
 	}
 }

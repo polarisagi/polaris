@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
 CREATE TABLE IF NOT EXISTS rag_docs (
     uri           TEXT PRIMARY KEY,
     doc_id        TEXT NOT NULL,
+    -- 增量摄取判据（DefaultIngestionPipeline.checkIngestCache）：与 DocumentRef.ContentHash
+    -- 比对，相同则复用 tree_json 跳过重摄取。缺此列会让缓存检测 100% 落空，
+    -- 每次同步都重算全量 embedding——Tier-0 上是实打实的成本，不是纯性能优化。
+    content_hash  TEXT NOT NULL DEFAULT '',
     tree_json     TEXT NOT NULL,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     deleted_at    TEXT
