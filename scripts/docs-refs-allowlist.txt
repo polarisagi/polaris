@@ -31,3 +31,45 @@ internal/protocol/interfaces_vfs.go
 # ── tool_stage.go 彻底清理 ──
 # M13 §1.2.7 记载 ContextRefExpander 重构后该文件已不存在，防止重复提出"它去哪了"。
 internal/agent/context/tool_stage.go
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 以下条目自 2026-08-08 起同时服务 make docs-refs 的 .go 注释扫描
+# （tools/comment_refs.go），均为「注释在记载历史」的合法引用。
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 四层布局迁移（pkg/* → internal/*）前的旧顶层包名 ──
+# internal/lint 的多条规则注释、internal/config 的旧规则表引文都必须写出旧包名，
+# 否则读者无法把「2026-07-07 修正：原规则表键入 pkg/substrate|cognition|...」这类
+# 记录对应到今天的目录。这些顶层名注定不会再出现，任何新引用按定义都是历史注记。
+pkg/substrate
+pkg/cognition
+pkg/action
+pkg/gateway
+pkg/edge
+
+# ── ADR-0062 deadcode 清理：整包/整文件删除，注释点名旧路径读者才知道说的是谁 ──
+internal/tool/builtin/memory_prune
+internal/knowledge/ingester.go
+
+# ── 从未存在过的 baseline 幽灵条目（inv_lint_test.go 记录其成因）──
+# 2026-07-07「按当前 internal/ 结构手写 baseline」时凭空写出的两条，
+# 注释明写「不仅当前不存在，在整个 git 历史里也从未存在过」。
+internal/sandbox/wasm_host.go
+internal/tool/builtin/sandboxenv/hostenv.go
+
+# ── ADR-0085 会话编排层抽出：文件迁移注记 ──
+# internal/gateway/session/transcript.go 文件头写明「本文件自 X 原样迁入」。
+internal/gateway/server/chat/transcript.go
+
+# ── CLAUDE.md 历史误写：内部错误包从来不叫 internal/errors ──
+# pkg/apperr/apperr_test.go 注释明写该包不存在，用于阻止后来者再去找它。
+internal/errors
+
+# ── 不是路径：MCP JSON-RPC 方法名 ──
+# internal/extension/mcp 的并发测试注释里的 tools/list 是协议方法名。
+tools/list
+
+# ── ADR-0089 决策二：一键重建 baseline 的工具已删除 ──
+# inv_BareErrorReturnRatchet 的注释必须点名它，否则读者无从理解「baseline 为空
+# 且没有重建入口」是刻意设计而非遗漏。
+cmd/gen_bare_error_baseline

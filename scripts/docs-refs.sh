@@ -7,7 +7,8 @@
 # 这类漂移 100% 机械可检，靠人工复审必然复发——故照 ADR-0062 的 `make deadcode`
 # 先例建立门控 + 白名单，不再依赖下一次全量审计。
 #
-# 扫描范围：docs/arch/*.md（活文档）+ 根 CLAUDE.md + internal/*/CLAUDE.md。
+# 扫描范围：docs/arch/*.md（活文档）+ 根 CLAUDE.md + internal/*/CLAUDE.md，
+#           以及全仓 .go 注释（2026-08-08 并入，实现见 tools/comment_refs.go）。
 # 判定对象：markdown 反引号里、以仓库顶层目录开头的路径字面量。
 #
 # 刻意不扫 docs/arch/decisions/（ADR）：ADR 是决策档案，按定义记录的是**写作当时**
@@ -77,4 +78,8 @@ fi
 if [ "$bad" -ne 0 ]; then
 	exit 1
 fi
-echo "docs-refs ok（无失效路径引用）"
+echo "docs-refs ok（活文档无失效路径引用）"
+
+# .go 注释侧的同类漂移（2026-08-08 并入）：判定规则相同、白名单共用同一份，
+# 只是判定对象从 markdown 反引号换成 Go 注释。拆成 Go 程序的理由见该文件头。
+env GOOS= GOARCH= go run tools/comment_refs.go
