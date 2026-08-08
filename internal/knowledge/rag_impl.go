@@ -19,6 +19,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // summaryInferConcurrency 单个 DefaultIngestionPipeline 实例上，摘要树生成
@@ -175,7 +176,8 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 		// 失败的合并成一个错误向上返回。
 		var outboxErrs []error
 		// 触发 LLM 摘要生成
-		ev1, ev1Err := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID}, "summary:"+docNode.ID)
+		ev1, ev1Err := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocSummaryNeeded, "generate", map[string]string{"doc_id": docNode.ID},
+			string(types.BuildIdempotencyKey(graphrag.EventTypeRAGDocSummaryNeeded, "doc", docNode.ID, "summary", 1)))
 		switch {
 		case ev1Err != nil:
 			// 构造失败返回零值 OutboxEntry，写出去只会污染 outbox；
@@ -189,7 +191,8 @@ func (p *DefaultIngestionPipeline) Ingest(ctx context.Context, doc *Document, in
 			}
 		}
 		// 触发知识图谱构建（GraphBuildOutboxHandler 监听此事件）
-		ev2, ev2Err := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID}, "graph:"+docNode.ID)
+		ev2, ev2Err := protocol.NewOutboxEvent(graphrag.EventTypeRAGDocIngested, "graph_build", map[string]string{"doc_id": docNode.ID},
+			string(types.BuildIdempotencyKey(graphrag.EventTypeRAGDocIngested, "doc", docNode.ID, "graph_build", 1)))
 		switch {
 		case ev2Err != nil:
 			metrics.RecordKnowledgeOutboxWriteFailure(ctx, string(graphrag.EventTypeRAGDocIngested))

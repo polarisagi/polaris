@@ -279,7 +279,7 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 				Operation:      "extension_uninstall",
 				Scope:          "extension",
 				Payload:        payload,
-				IdempotencyKey: fmt.Sprintf("uninstall:%s", inst.ID),
+				IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMarketplace, "extension_instance", inst.ID, "uninstall", 1)),
 			})
 		} else {
 			slog.Warn("marketplace: outbox writer not injected, extension uninstall will stall", "ext", inst.ID)

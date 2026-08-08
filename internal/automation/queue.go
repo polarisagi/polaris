@@ -90,7 +90,8 @@ func (s *SQLiteScheduler) notifyTaskTerminal(ctx context.Context, task types.Tas
 		Error:     errMsg,
 		Timestamp: time.Now().UnixMilli(),
 	}
-	entry, err := protocol.NewOutboxEvent(protocol.TopicNotification, "notify", ev, "notify:"+task.ID)
+	entry, err := protocol.NewOutboxEvent(protocol.TopicNotification, "notify", ev,
+		string(types.BuildIdempotencyKey(protocol.TopicNotification, "task", task.ID, "notify", 1)))
 	if err != nil {
 		slog.Error("scheduler: build notification outbox event failed", "task_id", task.ID, "err", err)
 		return

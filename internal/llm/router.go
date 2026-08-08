@@ -6,7 +6,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/modelregistry"
@@ -145,7 +144,8 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts 
 		ev, evErr := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "provider_recovery", map[string]string{
 			"event_type":    "m4_provider_recovery",
 			"provider_name": providerName,
-		}, "recovery:"+providerName+":"+strconv.FormatInt(time.Now().Unix(), 10))
+		}, string(types.BuildIdempotencyKey(protocol.TopicProviderRecovered, "provider", providerName, "recovery",
+			int(time.Now().Unix()))))
 		if evErr != nil {
 			// 构造失败会返回零值 OutboxEntry（无 target_engine/payload），
 			// 写出去只会污染 outbox；直接丢弃并告警。

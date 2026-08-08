@@ -118,10 +118,11 @@ retryLoop:
 		payloadBytes, marshalErr := json.Marshal(payload)
 		if marshalErr == nil {
 			entry := protocol.OutboxEntry{
-				TargetEngine:   protocol.TopicChatMessagePersistRetry,
-				Operation:      "insert",
-				Payload:        payloadBytes,
-				IdempotencyKey: "chat_message_persist:" + row.DedupeKey,
+				TargetEngine: protocol.TopicChatMessagePersistRetry,
+				Operation:    "insert",
+				Payload:      payloadBytes,
+				IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicChatMessagePersistRetry, "chat_message",
+					row.DedupeKey, "insert", 1)),
 			}
 			obCtx, obCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			writeErr := s.OutboxWriter.Write(obCtx, entry)

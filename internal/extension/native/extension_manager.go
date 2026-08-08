@@ -358,7 +358,8 @@ func MakeExtensionInstallFn(extRepo protocol.ExtensionRepository, client *market
 
 		// 投递 Outbox 任务给 ExtensionLibrarian 异步处理
 		if outboxWriter != nil {
-			ev, evErr := protocol.NewOutboxEvent(protocol.TopicExtensionLibrarian, "index_extension", map[string]string{"extension_id": args.ID}, "index_ext_"+args.ID)
+			ev, evErr := protocol.NewOutboxEvent(protocol.TopicExtensionLibrarian, "index_extension", map[string]string{"extension_id": args.ID},
+				string(types.BuildIdempotencyKey(protocol.TopicExtensionLibrarian, "extension", args.ID, "index", 1)))
 			switch {
 			case evErr != nil:
 				slog.Error("native: build extension index outbox event failed, extension will not be indexed",

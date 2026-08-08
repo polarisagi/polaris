@@ -197,11 +197,12 @@ func (p *ConsolidationPipeline) scheduleOOMRetry(ctx context.Context, sessionID 
 	// 必须向上抛出（而非仅返回原始 ResourceExhausted），让调用方/告警
 	// 路径感知到"连重试都没排上"这一更严重的失败。
 	if writeErr := p.outbox.Write(context.Background(), protocol.OutboxEntry{
-		TargetEngine:   protocol.TopicMemory,
-		Operation:      "memory_consolidate_retry",
-		Scope:          "system",
-		Payload:        payload,
-		IdempotencyKey: fmt.Sprintf("consolidate:retry:%s:%d", sessionID, time.Now().UnixNano()),
+		TargetEngine: protocol.TopicMemory,
+		Operation:    "memory_consolidate_retry",
+		Scope:        "system",
+		Payload:      payload,
+		IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMemory, "session", sessionID, "consolidate_retry",
+			int(time.Now().UnixNano()))),
 	}); writeErr != nil {
 		return apperr.Wrap(apperr.CodeInternal,
 			fmt.Sprintf("consolidation: OOM retry scheduling failed for session %s, consolidation stalled (original: %v)", sessionID, originalErr),

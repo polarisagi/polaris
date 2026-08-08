@@ -422,7 +422,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		// `ev, _ :=` 丢弃，零值 ev 写出去只会污染 outbox）。
 		ev, evErr := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery",
 			map[string]string{"status": "recovered"},
-			fmt.Sprintf("killswitch_recovery:%d", time.Now().UnixNano()))
+			string(types.BuildIdempotencyKey(protocol.TopicProviderRecovered, "killswitch", "global", "recovery",
+				int(time.Now().UnixNano()))))
 		if evErr != nil {
 			slog.Error("polaris: KillSwitch 恢复事件构造失败，下游订阅方不会收到恢复通知", "err", evErr)
 		} else if writeErr := sb.Outbox.Write(ctx, ev); writeErr != nil {
