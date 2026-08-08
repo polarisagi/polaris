@@ -180,9 +180,15 @@ func (rm *SQLReflectionMem) ListReflections( //nolint:gocyclo
 			for _, id := range ids {
 				args = append(args, id)
 			}
-			_, _ = rm.db.ExecContext(bCtx,
+			// LRU 时间戳写失败不影响本次查询结果，但会让 enforceCapacity 的
+			// ORDER BY last_accessed_at 依据陈旧数据淘汰——热条目可能被当成
+			// 冷条目删掉。属"降级可接受、静默不可接受"，留一条告警。
+			if _, err := rm.db.ExecContext(bCtx,
 				fmt.Sprintf("UPDATE reflection_memory SET last_accessed_at = ?, accessed_count = accessed_count + 1 WHERE id IN (%s)", placeholders),
-				args...)
+				args...); err != nil {
+				slog.Warn("memory/sql_reflection_mem: LRU 时间戳更新失败，淘汰顺序将依据陈旧数据",
+					"ids", len(ids), "err", err)
+			}
 		})
 	}
 
@@ -190,22 +196,33 @@ func (rm *SQLReflectionMem) ListReflections( //nolint:gocyclo
 }
 
 // enforceCapacity 在 append 前检查总量，超出 HT0 上限则 LRU 淘汰一批。
+//
+// 2026-08-08 补埋点：两处错误此前都是完全静默（`return` / `_, _ =`）。本函数
+// 是 reflection_memory 唯一的容量闸门，两条失败路径的后果都是"淘汰没发生但
+// 没人知道"——表持续增长直到超出 Tier-0 的 2GB 预算。不向上返回错误是刻意的
+// （淘汰属维护动作，失败不该让 Append 一并失败），但必须留痕，否则违反 HE-1
+// "禁止能算不上报"。
 func (rm *SQLReflectionMem) enforceCapacity(ctx context.Context) {
 	var count int
 	if err := rm.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM reflection_memory").Scan(&count); err != nil {
+		slog.WarnContext(ctx, "memory/sql_reflection_mem: 容量检查失败，本轮跳过淘汰",
+			"err", err)
 		return
 	}
 	if count < reflectHT0Limit {
 		return
 	}
-	_, _ = rm.db.ExecContext(ctx, `
+	if _, err := rm.db.ExecContext(ctx, `
 		DELETE FROM reflection_memory
 		WHERE id IN (
 			SELECT id FROM reflection_memory
 			ORDER BY last_accessed_at ASC
 			LIMIT ?
 		)
-	`, reflectEvictBatch)
+	`, reflectEvictBatch); err != nil {
+		slog.WarnContext(ctx, "memory/sql_reflection_mem: LRU 淘汰失败，表将继续超限增长",
+			"count", count, "limit", reflectHT0Limit, "err", err)
+	}
 }
 
 // 编译期确认 SQLReflectionMem 实现 protocol.ReflectionMemory 接口

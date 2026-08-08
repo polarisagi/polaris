@@ -3,6 +3,7 @@ package consolidation
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -145,15 +146,8 @@ CREATE TABLE IF NOT EXISTS cold_archive.events (
 		return apperr.Wrap(apperr.CodeInternal, "EventArchiver.Archive: insert into cold db", err)
 	}
 
-	// 记录归档边界，供跨库哈希链完整性验证使用（GR-5-001）
-	var lastOffset int64
-	var lastHash sql.NullString
-	checkpointQuery := `SELECT "offset", hash FROM main.events WHERE created_at < ? ORDER BY "offset" DESC LIMIT 1`
-	if err := tx.QueryRowContext(ctx, checkpointQuery, cutoffMs).Scan(&lastOffset, &lastHash); err == nil && lastHash.Valid {
-		_, _ = tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO archive_checkpoints (archived_upto_offset, archived_upto_hash, archived_at) VALUES (?, ?, ?)`,
-			lastOffset, lastHash.String, time.Now().UnixMilli(),
-		)
+	if err := recordArchiveCheckpoint(ctx, tx, cutoffMs); err != nil {
+		return err
 	}
 
 	deleteStmt := `DELETE FROM main.events WHERE created_at < ?`
@@ -232,4 +226,43 @@ func (ea *EventArchiver) shouldSkipArchive(ctx context.Context) (bool, string) {
 		return false, ""
 	}
 	return true, "disk_headroom_sufficient_and_row_size_ok"
+}
+
+// recordArchiveCheckpoint 记录归档边界，供跨库哈希链完整性验证使用（GR-5-001）。
+//
+// 2026-08-08 改为失败即中止事务：此前 `_, _ =` 吞掉写入错误，而调用方紧接着
+// 就会 DELETE 掉 main.events 里被归档的那批行。checkpoint 没写成而删除照常
+// 提交，等于把冷热两库之间的哈希链锚点弄丢——链条断在哪里、断没断，事后无法
+// 判定。HE-2 要求安全边界密码学可验证，这条记录就是那个可验证性的载体，不能
+// "尽力而为"。查询本身失败（非 ErrNoRows）同理：拿不到边界就不该删。
+func recordArchiveCheckpoint(ctx context.Context, tx *sql.Tx, cutoffMs int64) error {
+	var lastOffset int64
+	var lastHash sql.NullString
+	const q = `SELECT "offset", hash FROM main.events WHERE created_at < ? ORDER BY "offset" DESC LIMIT 1`
+	err := tx.QueryRowContext(ctx, q, cutoffMs).Scan(&lastOffset, &lastHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		// cutoff 之前没有任何事件——无可归档，也就无边界可记，正常路径。
+		return nil
+	}
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal,
+			"EventArchiver.Archive: 归档边界查询失败，拒绝在无锚点的情况下删除热库事件", err)
+	}
+	if !lastHash.Valid {
+		// 边界行存在但 hash 为 NULL。001_events.sql 的 hash 列可空（链首为
+		// NULL，且存在绕过 MutationBus 直插的历史行），故这是合法状态而非故障，
+		// 维持原语义：无锚点可记就不记，归档照常进行。但要留痕——若这行日志
+		// 频繁出现，说明有写入路径没走哈希链，那是另一个需要查的问题。
+		slog.WarnContext(ctx, "EventArchiver: 归档边界行 hash 为空，本次不记 checkpoint",
+			"last_offset", lastOffset)
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO archive_checkpoints (archived_upto_offset, archived_upto_hash, archived_at) VALUES (?, ?, ?)`,
+		lastOffset, lastHash.String, time.Now().UnixMilli(),
+	); err != nil {
+		return apperr.Wrap(apperr.CodeInternal,
+			"EventArchiver.Archive: 归档边界 checkpoint 写入失败，拒绝在无锚点的情况下删除热库事件", err)
+	}
+	return nil
 }

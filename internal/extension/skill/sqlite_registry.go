@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -116,39 +118,61 @@ func (r *SQLiteRegistryImpl) markReverseDependenciesCompatCheck(ctx context.Cont
 			return apperr.Wrap(apperr.CodeInternal, "sqlite_registry: 查询 skills 依赖失败", err)
 		}
 
-		var parents []string
-		for rows.Next() {
-			var name, dJSON, cJSON string
-			if err := rows.Scan(&name, &dJSON, &cJSON); err == nil {
-				var deps, comps []string
-				_ = json.Unmarshal([]byte(dJSON), &deps)
-				_ = json.Unmarshal([]byte(cJSON), &comps)
-				found := false
-				for _, d := range deps {
-					if d == cur {
-						found = true
-					}
-				}
-				for _, c := range comps {
-					if c == cur {
-						found = true
-					}
-				}
-				if found {
-					parents = append(parents, name)
-				}
-			}
-		}
+		// 2026-08-08：本段原先三处全静默（Scan 走 `err == nil` 分支、两处
+		// `_ = json.Unmarshal`、UPDATE 走 `_, _ =`）。四条失败路径导向同一个
+		// 后果——依赖方的 needs_compat_check 停在 0，升级后不再被要求重新
+		// 校验兼容性，会带着不兼容的依赖继续执行。解析类失败不中断整轮 BFS
+		// （单行畸形不该让整棵依赖树漏标），但必须留痕；UPDATE 失败直接上抛，
+		// 调用方（line 90）已按错误处理。
+		parents, err := scanDependentSkills(ctx, rows, cur)
 		rows.Close()
+		if err != nil {
+			return err
+		}
 
 		for _, p := range parents {
 			if !visited[p] && p != targetSkill {
 				queue = append(queue, p)
-				_, _ = r.db.ExecContext(ctx, "UPDATE skills SET needs_compat_check = 1, updated_at = CURRENT_TIMESTAMP WHERE name = ?", p)
+				if _, err := r.db.ExecContext(ctx, "UPDATE skills SET needs_compat_check = 1, updated_at = CURRENT_TIMESTAMP WHERE name = ?", p); err != nil {
+					return apperr.Wrap(apperr.CodeInternal, "sqlite_registry: 标记 needs_compat_check 失败", err)
+				}
 			}
 		}
 	}
 	return nil
+}
+
+// scanDependentSkills 从查询结果中挑出真正依赖/组合了 cur 的技能名。
+// LIKE 预筛只保证 JSON 文本里出现过该子串，仍需解出数组逐项精确比对。
+//
+// 解析类失败按"该项无此依赖"降级并留痕——单行畸形 JSON 不应让整棵依赖树
+// 漏标；迭代类失败上抛，因为它意味着结果集被截断，漏标范围不可知。
+func scanDependentSkills(ctx context.Context, rows *sql.Rows, cur string) ([]string, error) {
+	var parents []string
+	for rows.Next() {
+		var name, dJSON, cJSON string
+		if err := rows.Scan(&name, &dJSON, &cJSON); err != nil {
+			slog.WarnContext(ctx, "sqlite_registry: 依赖行扫描失败，该技能本轮漏标 needs_compat_check",
+				"cur", cur, "err", err)
+			continue
+		}
+		var deps, comps []string
+		if err := json.Unmarshal([]byte(dJSON), &deps); err != nil {
+			slog.WarnContext(ctx, "sqlite_registry: depends_on 解析失败，按无依赖处理",
+				"skill", name, "err", err)
+		}
+		if err := json.Unmarshal([]byte(cJSON), &comps); err != nil {
+			slog.WarnContext(ctx, "sqlite_registry: composes_of 解析失败，按无组合处理",
+				"skill", name, "err", err)
+		}
+		if slices.Contains(deps, cur) || slices.Contains(comps, cur) {
+			parents = append(parents, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "sqlite_registry: 依赖行迭代失败", err)
+	}
+	return parents, nil
 }
 
 func (r *SQLiteRegistryImpl) Get(ctx context.Context, name, version string) (*types.SkillMeta, error) {

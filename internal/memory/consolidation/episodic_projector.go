@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/types"
@@ -43,12 +44,18 @@ func EpisodicProjectorHandler(db protocol.SQLQuerier, encKey []byte) store.Outbo
 			sessionID = "unknown"
 		}
 
-		// seq 使用 outbox record.ID 保证单调递增（同 session 内唯一）
+		// seq 使用 outbox record.ID 保证单调递增（同 session 内唯一）。
+		// maxSeq 仅用于下面的 archived 判定；查询失败时它保持 0，会让本条
+		// 事件一律按"未归档"落盘。这个降级方向是安全的（宁可不标归档也不要
+		// 误标），但静默会掩盖数据库层面的持续故障，故补一条告警。
 		var maxSeq int64
-		_ = db.QueryRowContext(ctx,
+		if err := db.QueryRowContext(ctx,
 			"SELECT COALESCE(MAX(seq), 0) FROM episodic_events WHERE session_id = ?",
 			sessionID,
-		).Scan(&maxSeq)
+		).Scan(&maxSeq); err != nil {
+			slog.WarnContext(ctx, "consolidation: session 最大 seq 查询失败，本条按未归档处理",
+				"session_id", sessionID, "err", err)
+		}
 
 		archived := 0
 		if maxSeq > 1000 && record.ID < maxSeq-1000 {
