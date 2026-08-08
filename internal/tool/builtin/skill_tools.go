@@ -187,7 +187,8 @@ func MakeSkillGenerateFn(outbox protocol.OutboxWriter) sandbox.InProcessFn {
 			// 技能合成信号从第二次起就再也没有到达过 GapFillWorker）。用
 			// task_type + 纳秒时间戳：前者保留可追溯性，后者保证每次真实触发都
 			// 不会与历史记录冲突。
-			idemKey := fmt.Sprintf("skillgap:%s:%d", args.TaskType, time.Now().UnixNano())
+			idemKey := string(types.BuildIdempotencyKey(protocol.TopicCapabilityGap, "task_type", args.TaskType,
+				"trigger", int(time.Now().UnixNano())))
 			ev, evErr := protocol.NewOutboxEvent(protocol.TopicCapabilityGap, "trigger", map[string]string{
 				"error":     "tool not found: " + args.TaskType,
 				"task_type": args.TaskType,

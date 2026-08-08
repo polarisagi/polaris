@@ -72,7 +72,7 @@ func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action st
 		ev, evErr := protocol.NewOutboxEvent(protocol.TopicAgentInterrupt, "agent_interrupt", map[string]any{
 			"task_id": taskID,
 			"request": interruptReq,
-		}, "interrupt:"+taskID+":"+action)
+		}, string(types.BuildIdempotencyKey(protocol.TopicAgentInterrupt, "task", taskID, action, 1)))
 		switch {
 		case evErr != nil:
 			slog.Error("handleAgentInterrupt: build outbox event failed, falling back to direct call",
