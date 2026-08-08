@@ -87,12 +87,6 @@ func (m *lruMapping) setIfAbsent(key, value string) (final string, evicted bool)
 	return value, evicted
 }
 
-func (m *lruMapping) len() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.ll.Len()
-}
-
 // PIIDesensitizer 格式保留假数据脱敏器。
 // 映射按 partitionKey（推荐取 SessionID/NamespaceID）隔离：
 //   - 同分区内，同一原值始终映射到同一假值（一致性承诺仅在分区内保证）；
@@ -203,24 +197,6 @@ func (d *PIIDesensitizer) Clear() {
 	d.partitions = make(map[string]*lruMapping)
 	d.partitionOrder = list.New()
 	d.partitionElems = make(map[string]*list.Element)
-}
-
-// partitionLen 仅供测试：返回指定分区当前映射条数（不存在则返回 0，不创建分区）。
-func (d *PIIDesensitizer) partitionLen(partitionKey string) int {
-	d.mu.Lock()
-	mapping, ok := d.partitions[partitionKey]
-	d.mu.Unlock()
-	if !ok {
-		return 0
-	}
-	return mapping.len()
-}
-
-// partitionCount 仅供测试：返回当前分区总数。
-func (d *PIIDesensitizer) partitionCount() int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return len(d.partitions)
 }
 
 func generateFakeValue(piiType, original string) string {
