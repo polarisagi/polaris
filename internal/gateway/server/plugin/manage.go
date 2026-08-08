@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -51,16 +52,20 @@ type pluginResponse struct {
 // HandleListPlugins 返回已安装插件列表，含子 MCP 运行时状态。
 // 子 MCP 状态从 mcp_servers 表读取（State-in-DB），不再解析 mcp_policy.enabled。
 // GET /v1/plugins
+//
+// 两段式读取（2026-08-09）：先把 plugins 全部读进内存并关闭 rows，再一次性拉取
+// mcp_servers 按 plugin_id 归组。原实现在 rows.Next() 循环体内对每行再发一次查询，
+// 是「外层 Rows 未关闭时嵌套查询」——该模式会占住一条连接不放：readDB 池
+// MaxOpenConns=4，第 4 个并发 List 请求到达时四条连接全被外层 Rows 占用，内层查询
+// 无连接可用且外层要等内层完成，整个读池死锁；:memory: 测试库只有一条连接，
+// 有任意一行数据即必然卡死（本函数正是被这条路径揪出来的）。
+// 顺带消掉 N+1。
 func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id, name, version, display_name, description, publisher, enabled,
-		        trust_tier, mcp_policy, install_path, catalog_id, created_at, updated_at
-		 FROM plugins ORDER BY created_at DESC`)
+	plugins, err := h.listPluginRows(r)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	connectedMCPs := make(map[string]protocol.MCPServerInfo)
 	if h.MCPMgr != nil {
@@ -68,8 +73,32 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 			connectedMCPs[srv.ID] = srv
 		}
 	}
+	mcpByPlugin := h.listPluginMCPStatuses(r, connectedMCPs)
 
-	var result []pluginResponse
+	result := make([]pluginResponse, 0, len(plugins))
+	for _, p := range plugins {
+		statuses := mcpByPlugin[p.ID]
+		if statuses == nil {
+			statuses = []pluginMCPStatus{}
+		}
+		result = append(result, pluginResponse{pluginRow: p, MCPServers: statuses})
+	}
+
+	httputil.WriteJSON(w, map[string]any{"plugins": result, "total": len(result)})
+}
+
+// listPluginRows 读出全部插件行；返回前 rows 已关闭，调用方可安全发起后续查询。
+func (h *PluginHandler) listPluginRows(r *http.Request) ([]pluginRow, error) {
+	rows, err := h.DB.QueryContext(r.Context(),
+		`SELECT id, name, version, display_name, description, publisher, enabled,
+		        trust_tier, mcp_policy, install_path, catalog_id, created_at, updated_at
+		 FROM plugins ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "plugin: 查询 plugins 列表失败", err)
+	}
+	defer rows.Close()
+
+	var out []pluginRow
 	for rows.Next() {
 		var p pluginRow
 		var enabledInt int
@@ -79,35 +108,43 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		p.Enabled = enabledInt == 1
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "plugin: 遍历 plugins 结果集失败", err)
+	}
+	return out, nil
+}
 
-		mcpStatuses := []pluginMCPStatus{}
-		mcpRows, err2 := h.DB.QueryContext(r.Context(),
-			`SELECT id, name, enabled FROM mcp_servers WHERE plugin_id=? ORDER BY created_at`, p.ID)
-		if err2 == nil {
-			for mcpRows.Next() {
-				var serverID, serverName string
-				var srvEnabled int
-				if mcpRows.Scan(&serverID, &serverName, &srvEnabled) == nil {
-					st := pluginMCPStatus{ID: serverID, Name: serverName, Enabled: srvEnabled == 1}
-					if info, ok := connectedMCPs[serverID]; ok {
-						st.Connected = info.Connected
-						st.ToolCount = len(info.Tools)
-						st.Error = info.Error
-					}
-					mcpStatuses = append(mcpStatuses, st)
-				}
-			}
-			mcpRows.Close()
+// listPluginMCPStatuses 一次性拉取全部子 MCP 并按 plugin_id 归组。
+// 查询失败按空结果降级：子 MCP 状态是列表页的附加信息，不该让整个插件列表失败。
+func (h *PluginHandler) listPluginMCPStatuses(
+	r *http.Request, connected map[string]protocol.MCPServerInfo,
+) map[string][]pluginMCPStatus {
+	out := map[string][]pluginMCPStatus{}
+	rows, err := h.DB.QueryContext(r.Context(),
+		`SELECT plugin_id, id, name, enabled FROM mcp_servers
+		 WHERE plugin_id IS NOT NULL AND plugin_id != '' ORDER BY created_at`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pluginID, serverID, serverName string
+		var srvEnabled int
+		if rows.Scan(&pluginID, &serverID, &serverName, &srvEnabled) != nil {
+			continue
 		}
-
-		result = append(result, pluginResponse{pluginRow: p, MCPServers: mcpStatuses})
+		st := pluginMCPStatus{ID: serverID, Name: serverName, Enabled: srvEnabled == 1}
+		if info, ok := connected[serverID]; ok {
+			st.Connected = info.Connected
+			st.ToolCount = len(info.Tools)
+			st.Error = info.Error
+		}
+		out[pluginID] = append(out[pluginID], st)
 	}
-
-	if result == nil {
-		result = []pluginResponse{}
-	}
-
-	httputil.WriteJSON(w, map[string]any{"plugins": result, "total": len(result)})
+	return out
 }
 
 // HandleUpdatePlugin 更新插件启用状态或 mcp_policy，并级联同步 mcp_servers / skills / MCPManager。
