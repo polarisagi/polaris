@@ -661,6 +661,25 @@ func Test_inv_NoGlobalVar(t *testing.T) {
 		exempt[filepath.FromSlash(k)] = true
 	}
 
+	// baseline 路径必须真实存在。
+	//
+	// 2026-08-08 新增：baseline 里 `internal/sandbox/wasm_host.go` 与
+	// `internal/tool/builtin/sandboxenv/hostenv.go` 两条指向的文件不仅当前不
+	// 存在，在整个 git 历史里也从未存在过——是 2026-07-07 那次"按当前 internal/
+	// 四层布局真实路径重新核对全部条目"时凭空写进去的。而那次重写的动因，恰恰
+	// 就是清理上一代残留的失效路径（见本文件上方注释）。同一种腐烂一年内复发
+	// 两次，说明问题不在某次疏忽，而在于 baseline 没有任何自校验：写错的豁免
+	// 项不会报错，只会安静地不生效，等下一轮人工审计再翻出来。
+	//
+	// 失效条目不是无害的：它让"这里有一处已知豁免"这条信息变成假的，审计时会
+	// 据此跳过真正需要看的地方。此处按文件是否存在直接失败，成本一次 os.Stat。
+	for rel := range exempt {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("global_var_baseline.json 条目 %q 指向不存在的文件——豁免项失效（既不生效也不报错）。"+
+				"文件被删除/迁移时必须同步删除或订正该条目", filepath.ToSlash(rel))
+		}
+	}
+
 	checkGlobalVars := func(fset *token.FileSet, f *ast.File, relPath string) []violation {
 		var vs []violation
 		for _, decl := range f.Decls {

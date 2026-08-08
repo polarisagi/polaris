@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -171,6 +172,21 @@ func Test_inv_HE1_NoSilentErrorDiscard(t *testing.T) {
 		dirs = append(dirs, d)
 	}
 	sort.Strings(dirs)
+
+	// baseline 键的文件部分必须真实存在（与 global_var_baseline 同款防护，
+	// 2026-08-08）：本轮删除 internal/knowledge/ingester.go 时，它的 4 条
+	// baseline 条目留了下来——不报错、也不再对应任何代码，只是让"待偿债务
+	// 清单"越来越不可信。棘轮的价值建立在条目数可信之上，幽灵条目直接侵蚀
+	// 这一点。
+	for key := range baseline {
+		rel, _, found := strings.Cut(key, ":")
+		if !found {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("errcheck_baseline.json 条目 %q 指向不存在的文件 %q——删除/迁移文件时须同步清理其 baseline 条目", key, rel)
+		}
+	}
 
 	var violations []silentDiscard
 	for _, dir := range dirs {

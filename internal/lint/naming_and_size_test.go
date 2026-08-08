@@ -115,6 +115,17 @@ func Test_inv_FileLineLimit(t *testing.T) {
 	root := repoRoot(t)
 	exempt := loadExemptFile(t, root, fileLineLimitBaselinePath)
 
+	// baseline 路径必须真实存在（与 global_var / errcheck 两处 baseline 同款
+	// 防护，2026-08-08）：文件被拆分或删除后遗留的条目不会报错，只是安静失效，
+	// 让"还欠多少行数债"这个数字失真。本轮 internal/knowledge/ingester.go 被
+	// 删除即属此类。
+	for rel := range exempt {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s 条目 %q 指向不存在的文件——拆分/删除文件后须同步清理该条目",
+				fileLineLimitBaselinePath, filepath.ToSlash(rel))
+		}
+	}
+
 	var violations []violation
 	walkGoFilesUnder(t, root, "internal", nil, func(_ *token.FileSet, _ *ast.File, relPath string) {
 		checkFileLineLimit(t, root, relPath, exempt, &violations)
