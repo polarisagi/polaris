@@ -5,7 +5,7 @@ import (
 )
 
 // TokenVerifier 定义 Token 验证接口（Consumer-side Interface）。
-// 供 ExecEnvelope 在隔离环境中校验调用方能力凭证，打破对 pkg/action 或安全包的直接依赖。
+// 供 ExecEnvelope 在隔离环境中校验调用方能力凭证，打破对 internal/action 或安全包的直接依赖。
 type TokenVerifier interface {
 	Verify(t *token.Token) error
 }

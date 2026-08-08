@@ -14,9 +14,9 @@ import (
 
 // HybridSearchEngine 是 StorageRouter 之上的召回引擎（M10 Tier-0 路径，<8GB VPS）。
 //
-// 架构文档: docs/arch/05-Memory-System-深度选型.md §7.4,
+// 架构文档: docs/arch/M05-Memory-System.md §7.4,
 //
-//	docs/arch/10-Knowledge-RAG-深度选型.md §2.2
+//	docs/arch/M10-Knowledge-RAG.md §2.2
 //
 // 职责边界（GD-13-002 收敛终态）：本类型只负责**召回**（BM25 全表打分 +
 // 向量线性扫描）与语料统计维护，**不做融合**。RRF 融合、ExplainBits 归因、

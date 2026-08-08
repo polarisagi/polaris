@@ -46,7 +46,7 @@ const (
 	CodeSandboxTier0Limit  Code = "SANDBOX_TIER0_LIMIT"
 	// CodeStorageUnavailable 标记持久化存储层写入/读取失败（如 SurrealDB kv-mem 连接中断、
 	// 磁盘写满等），与 CodeInternal（泛化内部错误）区分，供上层（如 Agent FSM）识别为
-	// "需要熔断而非重试" 的信号（GD-13-003，见 docs/arch/decisions/ADR-0046）。
+	// "需要熔断而非重试" 的信号（GD-13-003，见 docs/arch/decisions/ADR-0046-execute-module.md）。
 	CodeStorageUnavailable Code = "STORAGE_UNAVAILABLE"
 )
 

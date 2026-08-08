@@ -2,7 +2,7 @@
 // FTS 索引（SurrealDB BM25）和向量 Upsert（SurrealDB HNSW），
 // 激活 search_extension 工具的 FTSSearch + VecKNN 路径。
 //
-// 架构文档: docs/arch/M13-bis(Extension Registry) §3（预计算节点）
+// 架构文档: docs/arch/M13-bis-Extension-Registry.md §3（预计算节点）
 // 调用时机: insertMarketplaceEntries 成功写库后异步触发（不阻塞同步主流程）。
 package plugin
 

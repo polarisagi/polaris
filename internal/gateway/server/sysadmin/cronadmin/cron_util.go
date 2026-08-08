@@ -219,7 +219,7 @@ type automationTemplate struct {
 	Author          string   `yaml:"author"           json:"author,omitempty"`
 }
 
-// automationSource 对应 configs/automation_sources.yaml 中的单条来源配置。
+// automationSource 对应 configs/extensions/automation_sources.yaml 中的单条来源配置。
 type automationSource struct {
 	ID          string `yaml:"id"`
 	Name        string `yaml:"name"`

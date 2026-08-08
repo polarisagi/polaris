@@ -21,7 +21,7 @@ func (w *sqlTxWrapper) Exec(query string, args ...any) error {
 }
 
 // SchemaManager — 版本化数据库迁移。
-// 架构文档: docs/arch/02-Storage-Fabric-深度选型.md §4
+// 架构文档: docs/arch/M02-Storage-Fabric.md §4
 
 type Migration struct {
 	Version     int

@@ -7,7 +7,7 @@ import (
 )
 
 // DriftDetector — Embedding 空间漂移检测。
-// 架构文档: docs/arch/05-Memory-System-深度选型.md §12.3
+// 架构文档: docs/arch/M05-Memory-System.md §12.3
 
 type DriftDetector struct {
 	anchors        []AnchorSample // 100 条锚定样本

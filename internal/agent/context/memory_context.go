@@ -17,7 +17,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// 实现由上层注入（pkg/cognition 层调用方提供 SurrealDBCoreStore）。
+// 实现由上层注入（internal/agent 层调用方提供 SurrealDBCoreStore）。
 
 // fsm.CogResult 单条语义检索结果。
 

@@ -3,7 +3,7 @@ package mcp
 import "github.com/polarisagi/polaris/internal/protocol"
 
 // MCP 工具注册与发现。
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §1
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §1
 
 // MCPTransport protocol.MCPTransport 本地别名，使包内调用无需显式引用 protocol 包。
 type MCPTransport = protocol.MCPTransport
@@ -26,7 +26,7 @@ type MCPServerConfig struct {
 }
 
 // AgentCard A2A v0.3 Agent 能力声明。
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §2
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §2
 type A2AAgentCard struct {
 	Name               string          `json:"name"`
 	Version            string          `json:"version"`

@@ -1,6 +1,6 @@
 // Package dag 实现 M4 Agent Kernel 的 DAG 执行器与 Saga 补偿逻辑。
 // 架构文档: docs/arch/M04-Agent-Kernel.md §5.3, §5.4
-// 2026-07-12 随 internal/execute 模块化从 internal/agent/dag 物理迁出（原
+// 2026-07-12 随 internal/execute 模块化从 internal/execute/dag 物理迁出（原
 // 包注释误写"Package kernel"，与实际 `package dag` 不符，一并修正）。
 // 迁出后 internal/agent 不再直接 import 本包，改为通过 agent/provider.go
 // 声明的 DAGRunner/DAGValidator 消费端接口消费（见 internal/execute/dag/runner.go）。

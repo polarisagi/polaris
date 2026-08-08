@@ -1,7 +1,7 @@
 package orchestrator
 
 // 编排模式实现。
-// 架构文档: docs/arch/08-Multi-Agent-Orchestrator-深度选型.md §3, §1.3-1.9
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §3, §1.3-1.9
 
 // OrchestrationMode 编排模式。
 type OrchestrationMode int

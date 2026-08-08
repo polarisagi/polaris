@@ -77,7 +77,7 @@ type
 // 存储失败原因、策略切换决策、元认知观察。
 // 区别于 PersonaRefiner（PersonaRefiner 调整偏好，ReflectionMemory 记录元决策）。
 // @consumer: M4(Agent Kernel - 每轮反思写入), M9(Self-Improve - 反思数据驱动蒸馏)
-// @producer: pkg/cognition/memory/ (ReflectionMem 实现)
+// @producer: internal/memory/ (ReflectionMem 实现)
 // @arch: docs/arch/M05-Memory-System.md §3.4
 ReflectionMemory interface {
 	AppendReflection(ctx context.Context, entry types.ReflectionEntry) error
@@ -101,7 +101,7 @@ type
 // NotesStore 跨会话轻量笔记存储（M05 §2.2）。
 // DDL 权威源：internal/protocol/schema/023_notes.sql
 // @consumer: M4(S_PERCEIVE 注入), M13(API read/write)
-// @producer: pkg/cognition/memory/ (SQLNotesStore / InMemNotesStore)
+// @producer: internal/memory/ (SQLNotesStore / InMemNotesStore)
 NotesStore interface {
 	Get(ctx context.Context, key string) (*types.Note, error)
 	Set(ctx context.Context, key, content string, tags []string, expectedVersion int) error

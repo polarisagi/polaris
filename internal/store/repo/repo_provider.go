@@ -14,7 +14,7 @@ import (
 
 // SQLiteProviderRepository 实现 protocol.ProviderRepository。
 // 操作 providers + provider_models 表。
-// @arch: docs/upgrade/repo-interface-migration.md §3.2
+// @arch: docs/arch/M02-Storage-Fabric.md
 type SQLiteProviderRepository struct {
 	db    *sql.DB
 	vault *credential.Vault

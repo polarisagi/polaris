@@ -29,7 +29,7 @@ type GPUInfo struct {
 }
 
 // HardwareProbe stores the full hardware capability snapshot taken at startup.
-// 架构文档: docs/arch/03-Observability-深度选型.md §5
+// 架构文档: docs/arch/M03-Observability.md §5
 type HardwareProbe struct {
 	TotalRAM          uint64   `json:"total_ram"`
 	AvailableRAM      uint64   `json:"available_ram"`
@@ -143,7 +143,7 @@ func probeLinuxGPU() GPUInfo {
 
 // OSMemoryGuard monitors free memory with slope detection and triggers global degradation.
 // 与 M13 ResourceGovernor 共享统一三级降级阈值（见 00-模块架构研究 §4）。
-// 架构文档: docs/arch/03-Observability-深度选型.md §6
+// 架构文档: docs/arch/M03-Observability.md §6
 type OSMemoryGuard struct {
 	criticalThresholdMB uint64    // 512 MB — 临界降级 (L3)
 	warningThresholdMB  uint64    // 1024 MB (1.0 GB) — 紧急降级 (L2)

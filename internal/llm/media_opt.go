@@ -3,10 +3,10 @@ package llm
 // media_opt.go — 推理层多模态内容预处理
 // 职责：在将请求发给任何 Provider 前，统一对图片/视频内容做尺寸/格式标准化。
 // 位置选择：L0 推理层（不是 L3 网关层），使得所有调用方——
-//   - pkg/gateway/server（HTTP 网关上传）
-//   - pkg/cognition/kernel（Agent FSM 工具调用结果）
-//   - pkg/extensions（MCP/Plugin/Browser 插件返回图片）
-//   - pkg/swarm（多 Agent 编排中间推理）
+//   - internal/gateway/server（HTTP 网关上传）
+//   - internal/agent（Agent FSM 工具调用结果）
+//   - internal/extension（MCP/Plugin/Browser 插件返回图片）
+//   - internal/swarm（多 Agent 编排中间推理）
 // ——都能自动获益，无需各自实现。
 //
 // 仅使用 Go 标准库（image/jpeg、image/png、image/gif、image/draw），零外部依赖。

@@ -1,7 +1,7 @@
 package lam
 
 // ContinuousAction 用于 LAM (Large Action Model) 和 Diffusion Policy 的连续动作表示。
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §7.2
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §7.2
 // MVP 不实现 vision 解析路径，Computer Use 仅文本+坐标动作。vision 解析 Tier 1+ 研究分支。
 type ContinuousAction struct {
 	ActionType   string    // "tool_call" | "mouse_delta" | "key_sequence"

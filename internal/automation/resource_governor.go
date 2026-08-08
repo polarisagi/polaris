@@ -1,5 +1,5 @@
 // Package scheduler 提供 M13 任务调度的正式实现。
-// 权威接口: internal/protocol/interfaces.go (protocol.Scheduler / protocol.HITL)
+// 权威接口: internal/protocol/（按域拆分的 interfaces_*.go） (protocol.Scheduler / protocol.HITL)
 // 正式实现: SQLiteScheduler (queue.go) 实现 protocol.Scheduler
 //
 //	GatewayImpl    (../hitl/gateway.go) 实现 protocol.HITL

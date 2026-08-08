@@ -12,7 +12,7 @@ import (
 
 // SurpriseIndex measures trajectory deviation from historical successes.
 // 基础版实现 (两组件: embedding + tool sequence).
-// 架构文档: docs/arch/M03-Observability-深度选型.md §4.0
+// 架构文档: docs/arch/M03-Observability.md §4.0
 type SurpriseIndex struct {
 	mu              sync.RWMutex
 	lastValue       float64

@@ -14,7 +14,7 @@ import (
 )
 
 // CLI — 流式 REPL 入口。
-// 架构文档: docs/arch/13-Interface-Scheduler-深度选型.md §1.1
+// 架构文档: docs/arch/M13-Interface-Scheduler.md §1.1
 
 // AgentREPL 交互式 Agent REPL。
 type AgentREPL struct {

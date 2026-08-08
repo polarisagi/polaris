@@ -12,7 +12,7 @@ import (
 )
 
 // 推理预算管理 — 四层预算体系。
-// 架构文档: docs/arch/04-Agent-Kernel-深度选型.md §8
+// 架构文档: docs/arch/M04-Agent-Kernel.md §8
 
 // 编译期断言：BudgetManager 必须满足 fsm.BudgetController 接口。
 var _ fsm.BudgetController = (*BudgetManager)(nil)

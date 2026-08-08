@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"sync"
 ) // ToolUsagePolicy 描述工具的最优参数建议和适用场景。
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §8.2
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §8.2
 type ToolUsagePolicy struct {
 	ToolName          string
 	ParamHints        map[string]ParamHint // 最优参数建议

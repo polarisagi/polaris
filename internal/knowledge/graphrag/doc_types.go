@@ -1,7 +1,7 @@
 package graphrag
 
 // 知识 RAG 类型定义。
-// 架构文档: docs/arch/10-Knowledge-RAG-深度选型.md §1
+// 架构文档: docs/arch/M10-Knowledge-RAG.md §1
 
 // DocNode 文档树节点。
 type DocNode struct {

@@ -3,7 +3,7 @@ package types
 // ============================================================================
 // M7 Tool & Action — 工具层枚举
 // 来源: internal/protocol/types.go §M7
-// 架构文档: docs/arch/07-Tool-Action-Layer-深度选型.md §3
+// 架构文档: docs/arch/M07-Tool-Action-Layer.md §3
 //
 // 从 enums.go 按模块拆出（R7 文件行数治理，2026-07-07），纯类型/常量声明，
 // 无逻辑变更。

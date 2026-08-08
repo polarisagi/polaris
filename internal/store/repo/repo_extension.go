@@ -14,7 +14,7 @@ import (
 
 // SQLiteExtensionRepository 实现 protocol.ExtensionRepository。
 // 操作 extension_instances, extension_catalog, mcp_servers 表。
-// @arch: docs/upgrade/repo-interface-migration.md §3.4
+// @arch: docs/arch/M02-Storage-Fabric.md
 type SQLiteExtensionRepository struct {
 	db *sql.DB
 }
