@@ -73,3 +73,8 @@ tools/list
 # inv_BareErrorReturnRatchet 的注释必须点名它，否则读者无从理解「baseline 为空
 # 且没有重建入口」是刻意设计而非遗漏。
 cmd/gen_bare_error_baseline
+
+# ── Cargo 编译产物路径：在未执行 cargo build 的 CI 环境（如 docs-toc）中不存在 ──
+# internal/ffi/dylib_test.go 验证加载路径包含该目录，属于测试断言说明。
+rust/substrate/target/release
+

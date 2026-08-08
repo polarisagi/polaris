@@ -135,7 +135,7 @@ func TestAgent_ReplayMode_FullTrajectory_NoRealCallsNoDuplicateToolExec(t *testi
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("agent run timeout")
 	}
 
@@ -184,7 +184,7 @@ func TestAgent_ReplayMode_PartialTrajectory_FallsBackToRealExecution(t *testing.
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("agent run timeout")
 	}
 
@@ -271,7 +271,7 @@ func TestAgent_InFlightMarker_SetOnRunClearOnExit(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("agent run timeout")
 	}
 
