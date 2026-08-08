@@ -91,7 +91,8 @@ func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 			"session_id": sessionID,
 			"event_type": string(ev.Type),
 			"content":    string(ev.Payload),
-		}, ev.ID+":extract:"+outboxUniqueSuffix(), "episodic_extract")
+		}, a.outboxIdemKey(protocol.TopicEpisodicExtract, "event", ev.ID, "extract"),
+			"episodic_extract")
 	}
 }
 
