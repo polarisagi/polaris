@@ -46,6 +46,8 @@ func TestSyncMarketplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_ = &PluginHandler{DB: db, ExtRepo: repo.NewSQLiteExtensionRepository(db)}
 }
@@ -55,6 +57,8 @@ func TestInsertMarketplaceEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_ = &PluginHandler{DB: db, ExtRepo: repo.NewSQLiteExtensionRepository(db)}
 }
@@ -64,6 +68,8 @@ func TestHandleSyncMarketplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	h := &PluginHandler{DB: db, ExtRepo: repo.NewSQLiteExtensionRepository(db)}
 	w := httptest.NewRecorder()

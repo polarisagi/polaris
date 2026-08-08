@@ -18,6 +18,8 @@ func TestHandleListPluginCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`
@@ -80,6 +82,8 @@ func TestHandleListMarketplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`
@@ -120,6 +124,8 @@ func TestHandleAddDeleteMarketplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`
@@ -177,6 +183,8 @@ func TestHandleInstallUninstallPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`

@@ -16,6 +16,8 @@ func TestHandleListCatalogProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS sys_providers (id TEXT, display_name TEXT, provider_type TEXT, is_local INTEGER, default_base_url TEXT, homepage TEXT, created_at DATETIME, display_order INTEGER)")

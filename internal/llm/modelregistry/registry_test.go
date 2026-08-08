@@ -17,6 +17,8 @@ func newTestRegistry(t *testing.T) (*Registry, *sql.DB) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	ddl := `
 	CREATE TABLE IF NOT EXISTS model_version_entries (

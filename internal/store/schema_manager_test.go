@@ -15,6 +15,8 @@ func setupSchemaTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`CREATE TABLE sys_config (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
 		t.Fatalf("create sys_config: %v", err)
 	}
@@ -30,6 +32,8 @@ func TestApplyMigrations_BeginMigrationFailure_AbortsBeforeUp_S02(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	// 故意不创建 sys_config 表，令 BeginMigration 的 INSERT 必然失败。
 

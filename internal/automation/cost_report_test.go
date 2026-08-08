@@ -55,6 +55,8 @@ func TestGenerateCostReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open db: %v", err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`CREATE TABLE events (

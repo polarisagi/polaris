@@ -25,6 +25,8 @@ func TestCompressor_NeedsCompact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	c := NewCompressionService(db, repo.NewSQLiteChatRepository(db), nil, config.CompressorConfig{
@@ -47,6 +49,8 @@ func TestCompressor_Compact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS chat_messages (session_id TEXT, role TEXT, content TEXT, reasoning_content TEXT NOT NULL DEFAULT '', tool_calls TEXT, file_offset INTEGER NOT NULL DEFAULT 0, file_length INTEGER NOT NULL DEFAULT 0, created_at DATETIME, updated_at DATETIME)`)

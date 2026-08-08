@@ -115,6 +115,8 @@ func TestContextExpander_Hit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 	_, _ = db.Exec(`CREATE TABLE rag_chunks (id TEXT, doc_id TEXT, content TEXT, section_path TEXT, taint_level INTEGER, taint_source TEXT, taint_hmac TEXT DEFAULT '', source_uri TEXT, doc_version TEXT, chunk_type TEXT, deleted_at DATETIME)`)
 	_, _ = db.Exec(`INSERT INTO rag_chunks (id, doc_id, content, section_path, chunk_type) VALUES ('c1', 'd1', 'hello', 'root,c1', 'parent')`)

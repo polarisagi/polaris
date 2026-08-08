@@ -116,6 +116,8 @@ func TestBuildAmbientSkillsSection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	_, err = db.Exec(`CREATE TABLE skills (name TEXT, description TEXT, instructions TEXT, plugin_id TEXT, exec_mode TEXT, ambient_priority TEXT, deprecated INTEGER, trust_tier INTEGER)`)
