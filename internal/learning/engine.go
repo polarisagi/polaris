@@ -2,7 +2,6 @@ package learning
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -54,7 +53,8 @@ type Engine struct {
 
 	incidentConverter func(ctx context.Context, payload []byte) (string, error)
 
-	db *sql.DB // DB for cursor persistence
+	// 2026-08-08：原为 *sql.DB，见 inv_NoRawSQLDBField。游标持久化只用 Exec/Query。
+	db protocol.SQLQuerier // 学习游标持久化
 
 	// 注意：Seq 幂等去重号由事件生产方（写入 taskEvents/heuristicEvents/... 的调用方）
 	// 赋值，本 Engine 仅消费 ev.Seq 做单调游标比较（见下方 run 循环），不在本地
@@ -76,7 +76,7 @@ func (e *Engine) WithBackgroundGate(g backgroundGate) { e.gate = g }
 func (e *Engine) SetSurpriseIndexProvider(fn func() float64) { e.surpriseIndexFn = fn }
 
 // SetDB 注入数据库连接。
-func (e *Engine) SetDB(db *sql.DB) { e.db = db }
+func (e *Engine) SetDB(db protocol.SQLQuerier) { e.db = db }
 
 // SetHITLGateway 注入 HITL 网关（L3/L4 审批路径；nil 时跳过通知）。
 func (e *Engine) SetHITLGateway(h protocol.HITL) { e.hitlGateway = h }
