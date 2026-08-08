@@ -195,7 +195,9 @@ func run() error { //nolint:gocyclo
 	}
 	if providerCount == 0 {
 		if cliTTY {
-			_ = runInit()
+			if err := runInit(); err != nil {
+				slog.Warn("polaris: 初始化向导未完成", "err", err)
+			}
 		} else {
 			slog.Warn("polaris: [Zero-Provider] No AI providers found in the database.")
 			slog.Warn("polaris: Please visit http://localhost:28888 or run `polaris init` to configure the system.")
@@ -209,7 +211,11 @@ func run() error { //nolint:gocyclo
 	slog.Info("polaris: shutdown initiated, draining...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
+	// 30s 内没排空会返回 DeadlineExceeded——此时仍有在途请求被强行切断，
+	// 与"干净停机"是两回事，不该看起来一样。
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("polaris: HTTP 服务未在超时内排空，存在被切断的在途请求", "err", err)
+	}
 	ab.ReaperStop() // 显式提前停止 Reaper，确保在 dbWriter 排空前释放
 
 	if rep, err := sb.AuditChain.VerifyChain(shutdownCtx, 0); err != nil {

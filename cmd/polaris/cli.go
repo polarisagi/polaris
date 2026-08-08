@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -234,7 +235,12 @@ func runInit() error { //nolint:gocyclo
 	if initPromptBool(sc, t("init_test_q"), true) {
 		fmt.Print(clr(ansiDim, t("init_testing")))
 		var testRes map[string]any
-		_ = cliPost("/v1/providers/"+url.PathEscape(providerID)+"/test", nil, &testRes)
+		// 请求本身失败时 testRes 保持 nil，下方 ok 断言取到 false，会走"测试
+		// 未通过"分支——降级方向正确，但用户看到的是"模型不可用"而非"连不上
+		// 本机 API"，两者的排查方向完全不同，故补一行提示。
+		if err := cliPost("/v1/providers/"+url.PathEscape(providerID)+"/test", nil, &testRes); err != nil {
+			slog.Debug("cli: provider 连通性测试请求失败", "err", err)
+		}
 		if ok, _ := testRes["ok"].(bool); ok {
 			msg, _ := testRes["message"].(string)
 			fmt.Println(clr(ansiOk, fmt.Sprintf(t("init_test_ok"), msg)))
@@ -290,7 +296,11 @@ func runInit() error { //nolint:gocyclo
 					rolesPayload["reasoning_model_id"] = reasoningModelID
 				}
 				if len(rolesPayload) > 0 {
-					_ = cliPut("/v1/config/model-roles", rolesPayload, nil)
+					// 保存失败而不告知，用户会以为角色已配置好，实际下次启动
+					// 仍是默认值。
+					if err := cliPut("/v1/config/model-roles", rolesPayload, nil); err != nil {
+						fmt.Println(clr(ansiDim, "  ! "+err.Error()))
+					}
 				}
 			}
 		}
@@ -586,7 +596,11 @@ func cliSessionFile() string {
 }
 
 func cliSaveSession(id string) {
-	_ = os.WriteFile(cliSessionFile(), []byte(id), 0o600)
+	// 纯便利功能（记住上次会话 ID），失败只影响下次免输入，不影响任何功能。
+	// 但仍留 Debug 级日志，避免"续接不上会话"时无从查起。
+	if err := os.WriteFile(cliSessionFile(), []byte(id), 0o600); err != nil {
+		slog.Debug("cli: 会话 ID 落盘失败，下次需手动指定", "path", cliSessionFile(), "err", err)
+	}
 }
 
 func cliLoadSession() string {

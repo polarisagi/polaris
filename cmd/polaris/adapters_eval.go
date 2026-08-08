@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
@@ -27,7 +28,11 @@ func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []str
 		errCh <- a.agent.Run(ctx)
 	})
 
-	_ = a.agent.SendIntent(types.TriggerIntentReceived)
+	// 意图没送进去，下面的 select 会一直等到 ctx 超时才收场，表现为"这条 eval
+	// 用例莫名超时"而非"意图投递失败"。
+	if err := a.agent.SendIntent(types.TriggerIntentReceived); err != nil {
+		slog.Error("adapters_eval: 意图投递失败，本次 eval 将空转至超时", "err", err)
+	}
 
 	select {
 	case err := <-errCh:

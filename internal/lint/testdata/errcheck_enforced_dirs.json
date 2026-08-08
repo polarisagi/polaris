@@ -2,6 +2,9 @@
   "_comment": "Test_inv_HE1_NoSilentErrorDiscard 目录白名单：列出的目录才参与扫描。2026-08-06 起覆盖 internal/ 全部模块——此前只接入 8 个，其余 20 个既不扫描也不算豁免，处于'门控看不见'的状态。而 GR-4-00x 那批 outbox/DB 写入吞错恰好就在未接入的 internal/agent 里，是靠人工逐个翻出来的：本该被机械拦住的东西，靠人去找。",
   "_comment_baseline": "接入新目录时其历史存量由 errcheck_baseline.json 棘轮豁免（POLARIS_GEN_ERRCHECK_BASELINE=1 重新生成）。棘轮只挡新增、不追溯旧账；baseline 条目是待偿债务清单，不是永久许可。",
   "_comment_pkg": "pkg/ 未接入：pkg/ 是无业务逻辑的通用工具层，其中的 `_ =` 多为 sync/atomic 等无错误语义调用。若将来 pkg/ 出现真实 IO 路径需一并接入。",
+  "_comment_cmd": "2026-08-08 接入 cmd/polaris：此前门控只扫 internal/，而生产装配全在 cmd/polaris/boot_*.go（4015 行，五个文件 400+），恰恰是启动期一次性执行、出错最难察觉的一段。'门控看不见'的范围本身就是缺陷藏身处——本轮 rag_docs 三套定义不兼容就是在这一带被人工翻出来的。",
+
+  "cmd/polaris": true,
 
   "internal/action": true,
   "internal/agent": true,
