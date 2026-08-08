@@ -28,7 +28,7 @@ type ProcessHandle struct {
 	Closer func()
 }
 
-// SkillStats 技能运行统计，由 M4/M6 ExecuteSkill 调用方填写后传给 promoteOrCache。
+// SkillStats 技能运行统计，由 M4/M6 ExecuteSkill 调用方填写后传给 PromoteOrCache。
 type SkillStats struct {
 	SkillID     string
 	SuccessRate float64 // 近期成功率
@@ -88,7 +88,7 @@ func NewScriptSkillCache(
 }
 
 // GetOrSpawn 查找或按需启动技能进程句柄。
-// 查找顺序：gold → silver → bronze（TTL touch）→ 按需 spawn → promoteOrCache。
+// 查找顺序：gold → silver → bronze（TTL touch）→ 按需 spawn → PromoteOrCache。
 func (c *ScriptSkillCache) GetOrSpawn(ctx context.Context, skillID string) (*ProcessHandle, error) {
 	c.mu.Lock()
 	// 1. Gold 命中
@@ -124,7 +124,7 @@ func (c *ScriptSkillCache) GetOrSpawn(ctx context.Context, skillID string) (*Pro
 		return nil, apperr.Wrap(apperr.CodeInternal, "ScriptSkillCache.GetOrSpawn", err)
 	}
 
-	// 5. 放入 bronze（等待 promoteOrCache 晋级）
+	// 5. 放入 bronze（等待 PromoteOrCache 晋级）
 	c.mu.Lock()
 	c.putBronzeLocked(skillID, handle)
 	c.mu.Unlock()

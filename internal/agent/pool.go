@@ -115,7 +115,7 @@ const releaseWaitTimeout = 3 * time.Second
 // agent.Run(ctx) })（cmd/polaris/boot_agent.go）外，Pool 管理的 per-session
 // Agent 从未有任何 goroutine 消费 a.intent。SendIntent 写入的是带缓冲 channel
 // （cap=10），短期内不会报错超时，这掩盖了 FSM 实际从未推进状态的事实——
-// AgentPool 交互式聊天路径（sse.go handleAgentStreamFSM）端到端从未被测试
+// AgentPool 交互式聊天路径（gateway/session 交互式编排）端到端从未被测试
 // 覆盖过（internal/agent 无 pool_test.go，chat 包测试也不构造真实 AgentPool），
 // 是本次复核发现的真实（而非假设）生产缺陷。现补上：每个新建 Agent 立即启动
 // Run()，语义与 Supervisor 对 "agent-0" 的启动方式一致，只是宿主从 Supervisor

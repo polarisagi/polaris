@@ -160,7 +160,7 @@ func recoverOneSession(ctx context.Context, db *sql.DB, pool protocol.AgentPool,
 	defer cancel()
 
 	// 与正常交互/headless 路径完全相同的"先订阅后触发"顺序（见
-	// internal/gateway/server/chat/sse.go handleAgentStreamFSM /
+	// internal/gateway/session 的交互式编排路径 /
 	// internal/agent/pool.go AcquireHeadless），消除早期事件丢失竞态。
 	stream := agentCtrl.SubscribeStream(recoverCtx)
 	agentCtrl.SetTaskIntent([]byte(lastUserMsg))
