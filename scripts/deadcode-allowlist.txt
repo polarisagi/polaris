@@ -1,20 +1,28 @@
-internal/agent/agent.go: unreachable func: NewAgentWithDefaults # 根因一(测试假阳性)，ADR-0046/ADR-0062
-internal/downloader/http.go: unreachable func: Get # 根因一(测试假阳性)，ADR-0062
-internal/downloader/http.go: unreachable func: DownloadExtractTarGz # 根因一(测试假阳性)，ADR-0062
-internal/downloader/proxy.go: unreachable func: ResolveURL # 根因一(测试假阳性)，ADR-0062
-internal/downloader/proxy.go: unreachable func: ProxyStatus # 根因一(测试假阳性)，ADR-0062
-internal/llm/credential_pool.go: unreachable func: NewSingleCredentialPool # 根因一(测试假阳性)，ADR-0062
-internal/security/credential/vault.go: unreachable func: NewVault # 根因一(测试假阳性)，ADR-0062
-internal/security/taint/taint.go: unreachable func: SafeString.Content # 根因一(测试假阳性)，ADR-0062
-internal/store/search/reranker.go: unreachable func: NilReranker.Rerank # 根因一(测试假阳性)，ADR-0062
-internal/swarm/supervisor/tree.go: unreachable func: Supervisor.Wait # 根因一(测试假阳性)，ADR-0062
-internal/swarm/planner/pool.go: unreachable func: DefaultSpawner # 根因一(测试假阳性)，ADR-0062
-pkg/types/models_event.go: unreachable func: BuildIdempotencyKey # 根因一(测试假阳性)，ADR-0076/ADR-0062
+# deadcode 白名单 —— `make deadcode` 从 ./cmd/polaris/... 出发做可达性分析，
+# 本文件收录「生产不可达但必须保留」的符号。
+#
+# 唯一合法用途：符号因**工具能力边界**（构建标签门控）或**已归档决策**（ADR 明写
+# 刻意保留）而不可达。除此之外一律处理源码，不要往这里加。
+#
+# 【2026-08-08 清理】原 20 条中 17 条被证伪：它们标注为「根因一(测试假阳性)」，
+# 但复核发现 deadcode 判定是对的——这些符号在生产侧确实零调用，属于「写了没接线」
+# 而非工具误报。处置见 git log，摘要：
+#   - 10 个整体删除（downloader.Get/DownloadExtractTarGz/ResolveURL/ProxyStatus、
+#     credential.NewVault、swarm.Supervisor.Wait、planner.DefaultSpawner、
+#     channel.jsonNestedInt64、llm.NewSingleCredentialPool、taint.SafeString.Content）
+#   - 1 个类型整体删除（search.NilReranker，空对象模式生产从未选用）
+#   - 4 个搬进同包 _test.go（agent.NewAgentWithDefaults、guard 的三个白盒访问器），
+#     其中 NewAgentWithDefaults 的搬迁顺带摘掉了 internal/agent 生产侧对
+#     internal/execute/dag 的 import——provider.go §DAGRunner 明文「禁止：agent
+#     直接 import internal/execute/dag」，此前该约定并未真正成立。
+#
+# 格式：`<路径>: unreachable func: <符号>  # <为何注定不可达>`
+# 校验：make deadcode（已并入 make check-all）。
+
+# ── 构建标签门控：tier1 专用 FFI，默认构建下注定不可达（ADR-0062）──
 internal/ffi/llama.go: unreachable func: LlamaEmbed # 门控假阳性，tier1 默认不可达，ADR-0062
 internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 默认不可达，ADR-0062
+
+# ── 已归档决策：刻意保留不接入 ──
 internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0007 刻意保留不接入，ADR-0062 恢复
-internal/channel/message.go: unreachable func: jsonNestedInt64 # 根因一(测试假阳性)，仅被 channels_test.go 调用
-internal/observability/trace/tracer.go: unreachable func: Tracer.RegisterExporter # ADR-0069，boot 期改走 SetDefaultExporters（NewTracer 自动附加），RegisterExporter 保留作为单 Tracer 实例的手动注册入口（测试/未来场景用），2026-07-23 接入 boot 后复核仍为生产不可达
-internal/security/guard/pii_desensitizer.go: unreachable func: lruMapping.len # 根因一(测试假阳性)，2026-08-02 root cause 确认：partitionLen/partitionCount（同注释"仅供测试"）是白盒测试专用访问器，仅被 pii_desensitizer_test.go 调用，不存在自然的生产调用点，长期归属本名单
-internal/security/guard/pii_desensitizer.go: unreachable func: PIIDesensitizer.partitionLen # 根因一(测试假阳性)，2026-08-02 root cause 确认：白盒测试专用访问器，仅被 pii_desensitizer_test.go 调用，不存在自然的生产调用点，长期归属本名单
-internal/security/guard/pii_desensitizer.go: unreachable func: PIIDesensitizer.partitionCount # 根因一(测试假阳性)，2026-08-02 root cause 确认：白盒测试专用访问器，仅被 pii_desensitizer_test.go 调用，不存在自然的生产调用点，长期归属本名单
+internal/observability/trace/tracer.go: unreachable func: Tracer.RegisterExporter # ADR-0069，boot 期改走 SetDefaultExporters（NewTracer 自动附加），RegisterExporter 保留作为单 Tracer 实例的手动注册入口，2026-07-23 接入 boot 后复核仍为生产不可达
