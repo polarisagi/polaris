@@ -54,7 +54,7 @@ func (f *MemoryFacadeImpl) GetMemoryPressure() *budget.ResourceBudget {
 	return f.sys.Mem().GetMemoryPressure()
 }
 
-// Semantic 层调用
+// SearchEntities 语义层实体检索，透传至 Mem().Semantic()。
 func (f *MemoryFacadeImpl) SearchEntities(ctx context.Context, query string, topK int, maxTaint int) ([]types.Entity, error) {
 	entities, err := f.sys.Mem().Semantic().SearchEntities(ctx, query, topK, 0)
 	if err != nil {
@@ -78,7 +78,7 @@ func (f *MemoryFacadeImpl) GetUserProfile(ctx context.Context, userID string) (*
 	return profile, nil
 }
 
-// Episodic 层调用
+// ListEpisodicEvents 情景层事件查询，透传至 Mem().Episodic()。
 func (f *MemoryFacadeImpl) ListEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error) {
 	events, err := f.sys.Mem().Episodic().Query(ctx, query)
 	if err != nil {

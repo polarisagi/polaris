@@ -141,14 +141,6 @@ func NewEngine(
 	}
 }
 
-// Run 启动三环主循环，阻塞直到 ctx 取消。
-// 内环：消费 taskEvents + heuristicEvents，并发执行 Reflect（受信号量限制）
-// 中环：2min ticker 触发 AutoCurriculumGenerator
-// 外环：消费 versionEvents + evalEvents，触发 Rollout AdvanceGate
-//
-// L2 (SkillGeneration) 由 LogicCollapseMonitor 在 RecordSuccess 时异步触发。
-// L3 (StrategyModify)  策略漂移检测 → HITLGateway.Prompt → 人工审批 → SubmitCandidate
-// L4 (SourceArchitecture) 多签名审批门控 → SubmitCandidate
 // handleTaskCompleteEvent 处理内环任务完成事件：失败任务异步交给 Reflexion 反思，
 // 成功任务记录到 HeuristicsMemory 驱动 success_rate 更新（从 Start 拆出，nestif 治理，行为不变）。
 func (e *Engine) handleTaskCompleteEvent(ctx context.Context, ev TaskCompleteEvent) {
@@ -183,6 +175,14 @@ func (e *Engine) handleTaskCompleteEvent(ctx context.Context, ev TaskCompleteEve
 	}
 }
 
+// Start 启动三环主循环，阻塞直到 ctx 取消。
+// 内环：消费 taskEvents + heuristicEvents，并发执行 Reflect（受信号量限制）
+// 中环：2min ticker 触发 AutoCurriculumGenerator
+// 外环：消费 versionEvents + evalEvents，触发 Rollout AdvanceGate
+//
+// L2 (SkillGeneration) 由 LogicCollapseMonitor 在 RecordSuccess 时异步触发。
+// L3 (StrategyModify)  策略漂移检测 → HITLGateway.Prompt → 人工审批 → SubmitCandidate
+// L4 (SourceArchitecture) 多签名审批门控 → SubmitCandidate
 func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 	// GR-7-001：游标加载失败必须阻止启动，而非以空/残缺游标继续（会导致
 	// 学习引擎从错误位置重放，见 loadCursors 内部注释）。
