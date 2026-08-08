@@ -7,16 +7,19 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // SQLCoreMemoryStore 实现了 protocol.CoreMemory 接口，持久化到 core_memory_blocks 表。
 type SQLCoreMemoryStore struct {
-	db *sql.DB
+	// 2026-08-08：原为 *sql.DB。inv_NoRawSQLDBField 要求 storage 层外持接口而非
+	// 具体连接；本类型只用 Exec/Query/QueryRow，protocol.SQLQuerier 恰好覆盖。
+	db protocol.SQLQuerier
 }
 
-func NewSQLCoreMemoryStore(db *sql.DB) *SQLCoreMemoryStore {
+func NewSQLCoreMemoryStore(db protocol.SQLQuerier) *SQLCoreMemoryStore {
 	return &SQLCoreMemoryStore{db: db}
 }
 

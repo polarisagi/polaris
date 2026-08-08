@@ -26,7 +26,7 @@ import (
 // 增长）。调用方（ConsolidationWorker 6h ticker，见 cmd/polaris/boot_tools.go）
 // 保持不变，门控逻辑完全内聚在 Archive() 内部。
 type EventArchiver struct {
-	db               *sql.DB
+	db               archiveDB
 	warmDays         int
 	coldDBDir        string
 	diskWatermarkPct float64
@@ -39,7 +39,19 @@ type EventArchiver struct {
 // NewEventArchiver 构造 EventArchiver。
 // diskWatermarkPct: 空闲磁盘占比阈值（0~100），低于此值才触发归档；<=0 表示
 // 禁用门控（等价于旧版无条件归档，供不关心磁盘压力的部署或测试使用）。
-func NewEventArchiver(db *sql.DB, warmDays int, coldDBDir string, diskWatermarkPct float64) *EventArchiver {
+// archiveDB 是 EventArchiver 所需的最小 DB 能力集。
+//
+// 2026-08-08：本字段原为 *sql.DB，违反 inv_NoRawSQLDBField（storage 层外禁持
+// 具体连接）。protocol.SQLQuerier 不含 BeginTx，而冷热分层归档必须在事务里
+// 完成「写冷库 + 删热库」，故按 HE-3「接口在调用方定义」就地声明最小集，
+// 而不是去拓宽 protocol.SQLQuerier 让全仓陪跑一个多余方法。
+type archiveDB interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+func NewEventArchiver(db archiveDB, warmDays int, coldDBDir string, diskWatermarkPct float64) *EventArchiver {
 	return &EventArchiver{
 		db:               db,
 		warmDays:         warmDays,
