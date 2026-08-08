@@ -98,7 +98,7 @@ func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action st
 	// 流程中被注入（SetOutboxWriter 从未被调用，见 server_core.go 修复），
 	// 意味着本端点在生产环境下恒定静默丢弃中断请求，客户端点击"中止/恢复/
 	// 重定向"实际上什么都不会发生。现在真正实现直接调用：与 sse.go
-	// handleAgentStreamFSM 客户端断连分支（ctx.Done() → agentCtrl.Interrupt）
+	// 交互式编排的客户端断连分支（ctx.Done() → agentCtrl.Interrupt）
 	// 使用同一条路径——经 AgentPool.Acquire 取得目标会话的 AgentController
 	// 后直接调用 Interrupt，用完立即 release。
 	agentCtrl, release, acqErr := s.agentPool.Acquire(ctx, taskID)

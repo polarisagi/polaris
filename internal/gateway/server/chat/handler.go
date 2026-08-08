@@ -171,7 +171,7 @@ type HookRunner interface {
 // GenerateReply / RunPostProcessors 已删除（2026-07-12，Batch 9 B-5/G-2 修复）：
 // 绕过 AgentController/FSM 在网关层直接开 for-loop 做 LLM 推理 + 工具执行，
 // 破坏 HE-5（状态机持控制流）与 R1.9（禁止 LLM 自由流转）；全仓库零引用的死
-// 代码，唯一风险是被误调用。真实聊天流程见 sse.go handleAgentStreamFSM，
+// 代码，唯一风险是被误调用。真实聊天流程见 gateway/session 的交互式编排，
 // 经 AgentController.SendIntent 由 FSM 驱动。ChatDispatcher 接口同步移除
 // 对应方法声明（sysadmin/handler.go）。
 //
