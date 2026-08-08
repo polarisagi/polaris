@@ -3,7 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"context"
-	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -283,7 +283,7 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, spec SandboxSpec) 
 	// DEBUG
 	for _, e := range cmd.Env {
 		if strings.HasPrefix(e, "PYTHON") || strings.HasPrefix(e, "CONDA") || strings.HasPrefix(e, "PATH") {
-			fmt.Printf("DEBUG ENV: %s\n", e)
+			slog.DebugContext(ctx, "sandbox: 持久化容器环境变量", "env", e)
 		}
 	}
 
