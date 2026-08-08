@@ -277,7 +277,12 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 			"action", "hitl_callback",
 		)
 		// 使用 adapters_security.go 中的 hitlNotifierAdapter 进行适配调用
-		_ = (&hitlNotifierAdapter{gateway: hitlGateway}).NotifyHITL(context.Background(), "policy_gate", "Cedar evaluation failed continuously")
+		// 这条通知是"Cedar 连续评估失败、需要人工介入"的唯一出口。投递失败
+		// 若再静默，KillSwitch 触发了而没有任何人知道——安全通知不能 best-effort
+		// 到连日志都不留。
+		if err := (&hitlNotifierAdapter{gateway: hitlGateway}).NotifyHITL(context.Background(), "policy_gate", "Cedar evaluation failed continuously"); err != nil {
+			slog.Error("polaris: HITL 通知投递失败，PolicyGate 熔断无人知悉", "err", err)
+		}
 		sb.KS.ReportError()
 	})
 	sysRepo := repo.NewSQLiteSystemRepository(sb.Store.DB())
@@ -474,7 +479,11 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	compCatalog := catalog.NewCompositeCatalog(memoryCatalog, skillCatalog)
 	if meta, err := polartool.GetBuiltinToolMeta("tool_search"); err == nil {
 		inProcSandbox.Register(meta.Name, polartool.MakeToolSearchFn(compCatalog, sb.Embedder))
-		_ = toolReg.Register(meta)
+		// 注册失败则 tool_search 在注册表里根本不存在，Agent 从此无法检索工具，
+		// 而 sandbox 侧已注册成功——两侧不一致且无日志，是最难查的一类。
+		if err := toolReg.Register(meta); err != nil {
+			slog.Error("polaris: tool_search 注册失败，Agent 将无法检索工具", "err", err)
+		}
 	} else {
 		slog.Warn("polaris: failed to load tool_search meta", "err", err)
 	}

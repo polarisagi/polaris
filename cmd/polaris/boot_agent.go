@@ -380,18 +380,33 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// KillSwitch recovery 回调：恢复 oom_evicted 挂起任务
 	sb.KS.OnRecovery(func(ctx context.Context) {
 		slog.Info("polaris: KillSwitch recovery triggered, resuming suspended tasks")
+		// 2026-08-08：本段四处静默（查询失败整段跳过、Scan 走 err==nil 丢行、
+		// 无 rows.Err()、ResumeFromSuspended 走 `_ =`）。KillSwitch 恢复是
+		// oom_evicted 任务重新跑起来的唯一路径，任一条失败都表现为"任务永远
+		// 停在 suspended"且无任何日志。恢复动作是 best-effort（单个任务恢复
+		// 失败不该阻断其余任务），但必须逐条留痕。
 		rows, err := sb.Store.DB().QueryContext(ctx, "SELECT id FROM tasks WHERE status = ?", int(types.TaskSuspended))
-		if err == nil {
-			defer rows.Close()
+		if err != nil {
+			slog.Error("polaris: 查询挂起任务失败，本次 KillSwitch 恢复未恢复任何任务", "err", err)
+		} else {
 			var taskIDs []string
 			for rows.Next() {
 				var id string
-				if err := rows.Scan(&id); err == nil {
-					taskIDs = append(taskIDs, id)
+				if scanErr := rows.Scan(&id); scanErr != nil {
+					slog.Warn("polaris: 挂起任务 ID 扫描失败，该任务本轮不恢复", "err", scanErr)
+					continue
 				}
+				taskIDs = append(taskIDs, id)
 			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				slog.Error("polaris: 挂起任务列表迭代中断，部分任务未纳入本轮恢复", "err", rowsErr)
+			}
+			rows.Close()
 			for _, id := range taskIDs {
-				_ = blackboard.ResumeFromSuspended(ctx, id)
+				if resumeErr := blackboard.ResumeFromSuspended(ctx, id); resumeErr != nil {
+					slog.Error("polaris: 任务恢复失败，将继续停留在 suspended",
+						"task_id", id, "err", resumeErr)
+				}
 			}
 		}
 		// 幂等键必须真正唯一（2026-07-22 一致性审查修复）：outbox.idempotency_key
@@ -400,10 +415,19 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		// 静默丢弃（Write 错误被 `_ =` 丢弃）——不是"缺少幂等保护"这么轻的问题，
 		// 是"真实事件被悄悄吞掉"。此处无重试语义（同步调用一次），用纳秒时间戳
 		// 保证每次真实恢复都能独立落盘，不臆测"版本/序号"等这里并不存在的业务概念。
-		ev, _ := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery",
+		//
+		// 2026-08-08 补完：上面这段注释准确描述了"Write 错误被 `_ =` 丢弃 =
+		// 真实事件被悄悄吞掉"，但当时只换了幂等键，`_ =` 原样留在了下一行——
+		// 注释描述的缺陷仍然成立。构造失败同理（NewOutboxEvent 的 err 走
+		// `ev, _ :=` 丢弃，零值 ev 写出去只会污染 outbox）。
+		ev, evErr := protocol.NewOutboxEvent(protocol.TopicProviderRecovered, "killswitch_recovery",
 			map[string]string{"status": "recovered"},
 			fmt.Sprintf("killswitch_recovery:%d", time.Now().UnixNano()))
-		_ = sb.Outbox.Write(ctx, ev)
+		if evErr != nil {
+			slog.Error("polaris: KillSwitch 恢复事件构造失败，下游订阅方不会收到恢复通知", "err", evErr)
+		} else if writeErr := sb.Outbox.Write(ctx, ev); writeErr != nil {
+			slog.Error("polaris: KillSwitch 恢复事件投递失败，下游订阅方不会收到恢复通知", "err", writeErr)
+		}
 	})
 
 	// 热注入 blackboard 到 ProviderRecoveryHandler（bootTools 时尚未装配）
@@ -820,7 +844,12 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 					sb.DriftMonitor.SetScore(report.OverallDriftScore)
 				}
 				if report.ShouldFreeze && m9Engine != nil {
-					_ = m9Engine.TriggerCurriculum(ctx)
+					// 漂移触发冻结后自动加课是自进化环路的收敛动作，
+					// 静默失败等于漂移被检出却没有任何响应。
+					if err := m9Engine.TriggerCurriculum(ctx); err != nil {
+						slog.Error("polaris: 漂移冻结后触发课程失败，本次漂移无对应响应",
+							"drift_score", report.OverallDriftScore, "err", err)
+					}
 				}
 			}
 		}
