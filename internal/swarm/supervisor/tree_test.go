@@ -55,8 +55,9 @@ func TestSupervisor_MaxRestartsExceeded(t *testing.T) {
 
 	sup.Start()
 
-	// Wait should unblock after max restarts (initial run + 2 restarts = 3 executions)
-	sup.Wait()
+	// 等待 worker 因超过最大重启次数而全部退出（初次运行 + 2 次重启 = 3 次执行）。
+	// 不能用 Stop()：Stop 会 cancel 上下文提前打断重启序列，语义不同。
+	sup.wg.Wait()
 
 	if atomic.LoadInt32(&executionCount) != 3 {
 		t.Errorf("expected exactly 3 executions, got %d", atomic.LoadInt32(&executionCount))

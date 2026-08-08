@@ -94,11 +94,6 @@ func (s *Supervisor) Stop() {
 	s.wg.Wait()
 }
 
-// Wait 阻塞直到所有 worker 被优雅终止或由于超过最大重启次数而终止。
-func (s *Supervisor) Wait() {
-	s.wg.Wait()
-}
-
 // runWorker 内部方法，运行 Worker 并捕获 panic/错误以进行重启策略。
 func (s *Supervisor) runWorker(w *WorkerEntry) {
 	defer s.wg.Done()

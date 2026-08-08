@@ -250,11 +250,3 @@ func (p *PlannerPool) workerEngineB(ctx context.Context, workerID int, resultCha
 		content: fmt.Sprintf("Fallback plan for %s at temp %f", p.goal, t),
 	}
 }
-
-// DefaultSpawner 是用于注入到 kernel 的默认构造器函数。
-// 不接入工具目录（toolLookup=nil），decomposer 跳过白名单校验——生产环境的真实
-// spawner 由 cmd/polaris/boot_agent.go 构造并传入 tb.Dispatcher，见其注入点注释。
-func DefaultSpawner(ctx context.Context, goal, taskType string, provider protocol.Provider, whisperChan chan<- protocol.MemoryWhisper) {
-	pool := NewPlannerPool(goal, taskType, provider, whisperChan, nil)
-	pool.Run(ctx)
-}

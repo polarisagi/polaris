@@ -19,23 +19,6 @@ type Vault struct {
 	masterKey []byte
 }
 
-// NewVault initializes a new Vault using the default key location
-// (~/.polarisagi/polaris/vault.key)。
-//
-// 仅供不关心运行时数据根目录覆盖的场景使用（如单元测试、一次性脚本）。
-// 生产路径（server 启动、vault CLI 子命令）一律使用 NewVaultInDir，
-// 否则在 POLARIS_DATA_DIR / cfg.System.DataDir 被覆盖的部署（典型如 Docker，
-// 容器内 $HOME 往往不是持久化卷）下，vault.key 会被写到与 SQLite 数据库
-// 完全不同、且可能非持久化的位置：容器重启后旧 key 丢失、已加密的
-// Provider API Key 全部无法解密——这不是配置洁癖，是数据丢失风险。
-func NewVault() (*Vault, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "NewVault: get home dir", err)
-	}
-	return NewVaultInDir(filepath.Join(homeDir, ".polarisagi", "polaris"))
-}
-
 // NewVaultInDir initializes a new Vault whose key file lives under dataDir
 // (即 resolveDataDirBase 解析出的运行时数据根目录，与 SQLite 数据库同源)。
 // Master key derivation strategy:

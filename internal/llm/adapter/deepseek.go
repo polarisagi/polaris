@@ -27,7 +27,7 @@ type DeepSeekAdapter struct {
 // modelID 传 "" 时默认使用 "deepseek-v4-flash"（V4 Flash，低成本推理）；
 // 传 "deepseek-v4-pro" 时启用 1M context 上限。
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
-// llmparent.NewSingleCredentialPool(key) 构造。
+// llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
 func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Client, modelID string, tbr *metrics.TokenBurnRate) *DeepSeekAdapter {
 	if httpClient == nil {
 		httpClient = defaultHTTPClient()

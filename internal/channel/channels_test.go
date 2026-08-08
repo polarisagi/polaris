@@ -60,32 +60,6 @@ func TestExtractMessage_Unknown(t *testing.T) {
 	}
 }
 
-// ── jsonNestedInt64 ───────────────────────────────────────────────────────────
-
-func TestJSONNestedInt64_Valid(t *testing.T) {
-	m := map[string]any{
-		"chat": map[string]any{"id": float64(42)},
-	}
-	got := jsonNestedInt64(m, "chat", "id")
-	if got != "42" {
-		t.Errorf("expected '42', got %q", got)
-	}
-}
-
-func TestJSONNestedInt64_MissingKey(t *testing.T) {
-	m := map[string]any{"chat": map[string]any{}}
-	if got := jsonNestedInt64(m, "chat", "id"); got != "" {
-		t.Errorf("missing id should return empty string, got %q", got)
-	}
-}
-
-func TestJSONNestedInt64_MissingNested(t *testing.T) {
-	m := map[string]any{}
-	if got := jsonNestedInt64(m, "chat", "id"); got != "" {
-		t.Errorf("missing nested key should return empty string, got %q", got)
-	}
-}
-
 // ── NewManager ────────────────────────────────────────────────────────────────
 
 func TestNewManager_NotNil(t *testing.T) {

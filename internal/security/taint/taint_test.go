@@ -54,8 +54,8 @@ func TestSanitizeBySchema(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected safe string generation, got err: %v", err)
 	}
-	if safeStr.Content() != "test" {
-		t.Errorf("expected test, got %s", safeStr.Content())
+	if safeStr.content != "test" {
+		t.Errorf("expected test, got %s", safeStr.content)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestSanitizeByUserReview(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-	if safeStr.Content() != "test" {
-		t.Errorf("expected test, got %s", safeStr.Content())
+	if safeStr.content != "test" {
+		t.Errorf("expected test, got %s", safeStr.content)
 	}
 }

@@ -50,18 +50,6 @@ func TestConfigure_SetsGlobalProxy(t *testing.T) {
 	}
 }
 
-func TestProxyStatus_AfterConfigure(t *testing.T) {
-	// Call probe to apply Configure. We can't rely on it because sync.Once
-	// But we can reset sync.Once using reflection or just know it's a singleton.
-	// For testing, let's just observe. If it hasn't probed, resolvedProxy is "".
-	// ProxyStatus returns "direct" if resolvedProxy == ""
-	status := ProxyStatus()
-	if status != "direct" && status != "proxy:https://myproxy.com" {
-		// Depending on if probe() was already called in this process
-		t.Logf("ProxyStatus: %s", status)
-	}
-}
-
 func TestHeadOK_ServerReturns200(t *testing.T) {
 	clientHTTP := &http.Client{
 		Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
@@ -102,19 +90,6 @@ func TestHeadOK_ConnectionRefused(t *testing.T) {
 	// Attempt to connect to a likely unused port
 	if headOK(context.Background(), http.DefaultClient, "http://127.0.0.1:0") {
 		t.Errorf("expected false")
-	}
-}
-
-func TestResolveURL_ProxyConfigured(t *testing.T) {
-	// 直接操作 proxyState 单例字段，绕过 probeOnce（单次探测在进程级只运行一次）。
-	s := getProxy()
-	old := s.resolved
-	s.resolved = "https://myproxy.com"
-	defer func() { s.resolved = old }()
-
-	url := ResolveURL(context.Background(), http.DefaultClient, "github.com/foo/bar")
-	if url != "https://myproxy.com/github.com/foo/bar" {
-		t.Errorf("expected https://myproxy.com/github.com/foo/bar, got %s", url)
 	}
 }
 

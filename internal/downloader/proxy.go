@@ -204,16 +204,6 @@ func headOK(ctx context.Context, client *http.Client, url string) bool {
 
 // ── 公开 URL 解析接口 ──────────────────────────────────────────────────────────
 
-// ResolveURL 将 github.com URL 解析为最优地址（直连或代理加速）。
-// 结果由进程内探测/配置缓存决定，多次调用无额外网络开销。
-func ResolveURL(ctx context.Context, _ *http.Client, rawURL string) string {
-	probe(ctx, nil)
-	if getProxy().resolved == "" {
-		return rawURL
-	}
-	return getProxy().resolved + "/" + rawURL
-}
-
 // CandidateURLs 返回给定 URL 的全部候选地址（优先级排序）。
 // 调用方可逐一尝试直到成功，适合需要多源降级的场景。
 func CandidateURLs(ctx context.Context, _ *http.Client, rawURL string) []string {
@@ -236,15 +226,6 @@ func CandidateURLs(ctx context.Context, _ *http.Client, rawURL string) []string 
 		candidates = append(candidates, rawURL)
 	}
 	return candidates
-}
-
-// ProxyStatus 返回当前生效的代理策略（仅在 probe 执行后准确）。
-// 供 /health 或 debug 接口使用。
-func ProxyStatus() string {
-	if getProxy().resolved == "" {
-		return "direct"
-	}
-	return "proxy:" + getProxy().resolved
 }
 
 func maskURL(u string) string {

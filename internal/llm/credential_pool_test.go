@@ -22,7 +22,7 @@ func TestNewCredentialPool_Empty(t *testing.T) {
 }
 
 func TestNewSingleCredentialPool(t *testing.T) {
-	p := NewSingleCredentialPool("sk-test-key")
+	p := NewCredentialPool([]string{"sk-test-key"}, StrategyFillFirst)
 	if p.Len() != 1 {
 		t.Fatalf("Len want 1, got %d", p.Len())
 	}
@@ -89,7 +89,7 @@ func TestCooldownFor(t *testing.T) {
 }
 
 func TestCredential_RecordResult_RateLimit(t *testing.T) {
-	p := NewSingleCredentialPool("sk-ratelimit")
+	p := NewCredentialPool([]string{"sk-ratelimit"}, StrategyFillFirst)
 	c := p.Pick()
 	if !c.Available() {
 		t.Fatal("should be available before failure")
@@ -114,7 +114,7 @@ func TestCredential_RecordResult_RateLimit(t *testing.T) {
 }
 
 func TestCredential_RecordResult_Auth(t *testing.T) {
-	p := NewSingleCredentialPool("sk-auth")
+	p := NewCredentialPool([]string{"sk-auth"}, StrategyFillFirst)
 	c := p.Pick()
 	err := apperr.New(apperr.CodeInternal, "[INTERNAL] anthropic: HTTP 401: invalid api key")
 	c.RecordResult(err)
@@ -130,7 +130,7 @@ func TestCredential_RecordResult_Auth(t *testing.T) {
 }
 
 func TestCredential_RecordResult_ServerError_NoCooldown(t *testing.T) {
-	p := NewSingleCredentialPool("sk-server")
+	p := NewCredentialPool([]string{"sk-server"}, StrategyFillFirst)
 	c := p.Pick()
 	// 500 不进入凭证冷却（由 CircuitBreaker 处理）
 	err := apperr.New(apperr.CodeInternal, "[INTERNAL] api error (status 500): internal server error")
@@ -141,7 +141,7 @@ func TestCredential_RecordResult_ServerError_NoCooldown(t *testing.T) {
 }
 
 func TestCredential_RecordResult_Nil(t *testing.T) {
-	p := NewSingleCredentialPool("sk-ok")
+	p := NewCredentialPool([]string{"sk-ok"}, StrategyFillFirst)
 	c := p.Pick()
 	c.RecordResult(nil) // 成功
 	if !c.Available() {
@@ -150,7 +150,7 @@ func TestCredential_RecordResult_Nil(t *testing.T) {
 }
 
 func TestCredential_RecordFailureReason_Permanent(t *testing.T) {
-	p := NewSingleCredentialPool("sk-perm")
+	p := NewCredentialPool([]string{"sk-perm"}, StrategyFillFirst)
 	c := p.Pick()
 	c.RecordFailureReason(ReasonAuthPermanent)
 	if c.Available() {
@@ -343,7 +343,7 @@ func TestLabelFor(t *testing.T) {
 }
 
 func TestCredential_Label(t *testing.T) {
-	p := NewSingleCredentialPool("sk-secret-key-12345")
+	p := NewCredentialPool([]string{"sk-secret-key-12345"}, StrategyFillFirst)
 	c := p.Pick()
 	label := c.Label()
 	// label 不得包含完整 key

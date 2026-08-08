@@ -88,12 +88,6 @@ func (ts TaintedString) AppendToMap(m map[string]string, key string) bool {
 	return true
 }
 
-// Content 获取已清洗的绝对安全字符串。
-// 此字符串可以安全地注入到 LLM 的 Instruction Slot 中。
-func (ss SafeString) Content() string {
-	return ss.content
-}
-
 // IntoMessage 将安全字符串直接构造为指定角色的 types.Message。
 // 供 PromptBuilder 使用，避免调用方在 policy 豁免域外出现 .Content() 调用。
 func (ss SafeString) IntoMessage(role string) types.Message {

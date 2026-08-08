@@ -14,13 +14,6 @@ import (
 
 // Reranker 接口已被移除（遵循 R1.4），由各个消费方自行定义私有接口。
 
-// NilReranker 透传重排器（默认），不修改文档顺序。
-type NilReranker struct{}
-
-func (NilReranker) Rerank(_ context.Context, _ string, docs []types.ScoredFragment) []types.ScoredFragment {
-	return docs
-}
-
 // MaxSimScore 计算 ColBERT Late-Interaction MaxSim 分数。
 //
 // ColBERT 公式：S(Q,D) = Σ_{q∈Q} max_{d∈D} cosine(q, d) / |Q|
