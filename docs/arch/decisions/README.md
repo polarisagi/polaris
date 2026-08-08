@@ -91,6 +91,7 @@ ADR 被代码引用时，源文件头部加：
 | 0086 | Handoff 唤醒事件化 + 崩溃后无损续跑快照 | Accepted（已执行） | 2026-08-01 |
 | 0087 | 降级必须显式：cedarLeaks 时间窗 + PII LRU 分区回收 + 沙箱可信来源 opt-in | Accepted（已执行） | 2026-08-01 |
 | 0088 | Saga 补偿收敛单一 SSoT + 令牌 claim 兑现 + 工作区上下文信任模型 + HITL 自适应降级 + 跨 Agent Saga 协调 + 检索强化遗忘 | Accepted（已执行） | 2026-08-06 |
+| 0089 | lint 规则扫描根接回 internal/ + 裸 error 判定按来源收窄 + 失效路径门控扩展到 .go 注释 | Accepted（已执行） | 2026-08-08 |
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 
