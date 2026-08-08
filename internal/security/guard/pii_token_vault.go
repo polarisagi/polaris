@@ -86,7 +86,9 @@ func (v *PIITokenVault) Resolve(token string) (string, error) {
 	return v.ResolveForTask("", token)
 }
 
-// Restore 扫描整段文本里的所有 ⟦PII:xxxx⟧ 令牌，逐一还原为真实值后返回。
+// RestoreForTask 扫描整段文本里的所有 ⟦PII:xxxx⟧ 令牌，仅从指定 taskID 的命名空间
+// 逐一还原为真实值。不做跨 taskID 回退查找，理由同 ResolveForTask。
+//
 // 任一令牌无法解析（未知/伪造）即整体 fail-closed 返回 error，不做部分还原
 // ——部分还原会产生"一部分是假值占位符、一部分是真实值"的歧义文本，比整体
 // 拒绝更危险。
@@ -96,9 +98,6 @@ func (v *PIITokenVault) Resolve(token string) (string, error) {
 //     LLM 可见上下文；
 //  2. 不得以明文形式记录到 EventLog / 审计日志；
 //  3. 不得被 idempotencyCache 缓存或以任何形式持久化。
-//
-// RestoreForTask 扫描整段文本里的所有 ⟦PII:xxxx⟧ 令牌，仅从指定 taskID 的命名空间
-// 逐一还原为真实值。不做跨 taskID 回退查找，理由同 ResolveForTask。
 func (v *PIITokenVault) RestoreForTask(taskID string, text string) (string, error) {
 	matches := tokenPattern.FindAllString(text, -1)
 	if len(matches) == 0 {

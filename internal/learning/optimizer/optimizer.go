@@ -217,6 +217,12 @@ func (gps *GeneticPromptSearch) GetParetoFront() []*PromptVersion {
 	return gps.paretoFront
 }
 
+// OptimizeTask 为 prompt.Manager 等解耦接口提供的入口，等价于 Optimize(ctx, taskType, nil)。
+func (po *PromptOptimizer) OptimizeTask(ctx context.Context, taskType string) error {
+	po.Optimize(ctx, taskType, nil)
+	return nil
+}
+
 // Optimize 执行 prompt 优化周期，持久化候选到 prompt_versions 表。
 //
 // 触发条件 (OR):
@@ -225,12 +231,6 @@ func (gps *GeneticPromptSearch) GetParetoFront() []*PromptVersion {
 //  3. tasksSinceLastOpt ≥ 50
 //
 // 产出经 [Taint-Prop] Gate → Ed25519 签名 → M5 ZoneMutableSkill（由调用方负责）。
-// OptimizeTask 为 prompt.Manager 等解耦接口提供的方法。
-func (po *PromptOptimizer) OptimizeTask(ctx context.Context, taskType string) error {
-	po.Optimize(ctx, taskType, nil)
-	return nil
-}
-
 func (po *PromptOptimizer) Optimize(ctx context.Context, taskType string, recent []*PromptVersion) []*PromptVersion { //nolint:gocyclo
 	if len(recent) == 0 {
 		return nil

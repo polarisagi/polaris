@@ -36,7 +36,7 @@ func (r *Registry) Unregister(id string) {
 	delete(r.connectors, id)
 }
 
-// Get 返回所有已注册的 Connector
+// GetAll 返回所有已注册的 Connector
 func (r *Registry) GetAll() []KnowledgeSourceConnector {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
