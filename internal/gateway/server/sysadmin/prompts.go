@@ -25,7 +25,7 @@ type PromptEntry struct {
 	IsCustomized bool   `json:"is_customized"`
 }
 
-// handleListPrompts GET /v1/config/prompts
+// HandleListPrompts GET /v1/config/prompts
 // 返回所有用户可编辑的提示词及其当前值与内置默认值。
 func (h *SysAdminHandler) HandleListPrompts(w http.ResponseWriter, r *http.Request) {
 	descriptions := map[string]string{
@@ -49,7 +49,7 @@ func (h *SysAdminHandler) HandleListPrompts(w http.ResponseWriter, r *http.Reque
 	httputil.WriteJSON(w, entries)
 }
 
-// handleGetPrompt GET /v1/config/prompts/{name}
+// HandleGetPrompt GET /v1/config/prompts/{name}
 func (h *SysAdminHandler) HandleGetPrompt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	filename, ok := allowedUserPrompts()[name]
@@ -69,7 +69,7 @@ func (h *SysAdminHandler) HandleGetPrompt(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleSetPrompt PUT /v1/config/prompts/{name}
+// HandleSetPrompt PUT /v1/config/prompts/{name}
 // 将用户编辑的提示词写入 ~/.polarisagi/polaris/config/prompts/{filename}。
 // 立即热更新 ImmutableCore，下一轮对话生效。
 func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +106,7 @@ func (h *SysAdminHandler) HandleSetPrompt(w http.ResponseWriter, r *http.Request
 	httputil.WriteJSON(w, map[string]string{"status": "ok", "name": name})
 }
 
-// handleResetPrompt DELETE /v1/config/prompts/{name}
+// HandleResetPrompt DELETE /v1/config/prompts/{name}
 // 删除用户自定义提示词文件，恢复到 embedded 内置默认。
 func (h *SysAdminHandler) HandleResetPrompt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

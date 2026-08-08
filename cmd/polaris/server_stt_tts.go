@@ -16,7 +16,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-// InitSTTEngine 按 FeatureGate 门控初始化 STT 引擎。
+// initSTTEngine 按 FeatureGate 门控初始化 STT 引擎。
 // 必须在 NewServer 之后、Start 之前调用（或与 Start 并发，mock 引擎已就绪）。
 // 流程：
 //  1. 立即注入 mock 引擎（保证 /v1/audio/transcriptions 不返回 503）
@@ -74,7 +74,7 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 	})
 }
 
-// InitTTSEngine 初始化 TTS Provider 并注入 ChatHandler。
+// initTTSEngine 初始化 TTS Provider 并注入 ChatHandler。
 //
 // 三条路径由 ttsConfig.Provider 决定：
 //   - "edge"    → EdgeProvider（Microsoft Edge TTS WebSocket，无需下载，立即可用）

@@ -80,7 +80,7 @@ func (s *AudioService) HandleAudioSpeech(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleAudioTranscriptions 处理前端语音输入并转写文本
+// HandleAudioTranscriptions 处理前端语音输入并转写文本
 // 路由: POST /v1/audio/transcriptions
 func (s *AudioService) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Request) {
 	// 原子 Load，与 SetSTTEngine 的 Store 不存在 data race

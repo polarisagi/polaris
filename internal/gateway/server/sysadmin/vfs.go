@@ -50,7 +50,7 @@ func sanitizeUploadExt(ext string) string {
 	return ".blob"
 }
 
-// handleVFSUpload 处理前端通用工作区文件上传
+// HandleVFSUpload 处理前端通用工作区文件上传
 // 对应路由：POST /v1/workspace/upload
 func (h *SysAdminHandler) HandleVFSUpload(w http.ResponseWriter, r *http.Request) {
 	// 限制上传大小 (e.g., 100MB)

@@ -25,7 +25,7 @@ import (
 	webui "github.com/polarisagi/polaris/web"
 )
 
-// seedBuiltinConfig 将 embedded yaml 配置作为种子数据写入数据库（INSERT OR IGNORE）。
+// SeedBuiltinConfig 将 embedded yaml 配置作为种子数据写入数据库（INSERT OR IGNORE）。
 //
 //nolint:nestif
 func (s *Server) SeedBuiltinConfig(marketplacesData, registryData []byte) {

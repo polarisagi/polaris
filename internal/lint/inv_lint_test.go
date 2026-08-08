@@ -83,8 +83,6 @@ func (v violation) String() string {
 	return fmt.Sprintf("%s:%d: %s", v.relPath, v.line, v.detail)
 }
 
-// walkPkgGoFiles 遍历 root/pkg/ 下所有非测试 .go 文件，返回解析后的 AST。
-// 跳过 exemptRel 中列出的相对路径（相对于 root）。
 // walkRepoGoFiles 遍历 internal/ + pkg/ 下所有非测试 .go 文件。
 //
 // 2026-08-08：本函数原名 walkPkgGoFiles，函数体硬编码 walkGoFilesUnder(t, root,

@@ -38,6 +38,8 @@ var outboxSeqCounter atomic.Uint64
 // 第二轮起就从未真正触发过。这里的调用点都是同步执行一次、无重试语义，
 // 用纳秒时间戳 + 单调序号即可保证每次真实投影都不会与历史记录或同一进程内
 // 其他调用冲突，不需要引入更复杂的跨 Agent 实例全局幂等状态机制。
+// ↑ 以上说明属于 outboxUniqueSuffix（见下方定义）。
+
 // outboxIdemKey 组装 FSM 派生事件的 outbox 幂等键：规范前缀 + 唯一性后缀。
 //
 // 前缀走 types.BuildIdempotencyKey，与全仓其余 11 个投递点保持同一格式

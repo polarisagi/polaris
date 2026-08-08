@@ -48,7 +48,7 @@ type pluginResponse struct {
 	MCPServers []pluginMCPStatus `json:"mcp_servers"`
 }
 
-// handleListPlugins 返回已安装插件列表，含子 MCP 运行时状态。
+// HandleListPlugins 返回已安装插件列表，含子 MCP 运行时状态。
 // 子 MCP 状态从 mcp_servers 表读取（State-in-DB），不再解析 mcp_policy.enabled。
 // GET /v1/plugins
 func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +110,7 @@ func (h *PluginHandler) HandleListPlugins(w http.ResponseWriter, r *http.Request
 	httputil.WriteJSON(w, map[string]any{"plugins": result, "total": len(result)})
 }
 
-// handleUpdatePlugin 更新插件启用状态或 mcp_policy，并级联同步 mcp_servers / skills / MCPManager。
+// HandleUpdatePlugin 更新插件启用状态或 mcp_policy，并级联同步 mcp_servers / skills / MCPManager。
 // PUT /v1/plugins/{id}
 func (h *PluginHandler) HandleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 	pluginID := r.PathValue("id")
@@ -220,7 +220,7 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 	h.ClearToolSchemaCache()
 }
 
-// handleTogglePluginMCP 切换插件内单个子 MCP 的启用状态。
+// HandleTogglePluginMCP 切换插件内单个子 MCP 的启用状态。
 // 直接操作 mcp_servers.enabled（权威来源），不再通过 mcp_policy.enabled。
 // PATCH /v1/plugins/{id}/mcp/{serverName}
 func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Request) { //nolint:nestif

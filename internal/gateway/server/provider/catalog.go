@@ -36,7 +36,7 @@ type CatalogModel struct {
 	DisplayOrder    int    `json:"display_order"`
 }
 
-// handleListCatalogProviders GET /v1/catalog/providers
+// HandleListCatalogProviders GET /v1/catalog/providers
 // 返回内置厂商字典（含各厂商预设模型列表），供前端展示选择器。
 func (h *ProviderHandler) HandleListCatalogProviders(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.QueryContext(r.Context(),
@@ -126,7 +126,7 @@ func getFallbackGeneralModel(models []catalogModelRow) catalogModelRow {
 	return models[0]
 }
 
-// handleCreateProviderFromCatalog POST /v1/providers/from-catalog
+// HandleCreateProviderFromCatalog POST /v1/providers/from-catalog
 // 用户只需提供 catalog_id + api_key，系统自动：
 //  1. 查厂商字典填充 type / base_url
 //  2. 从模型字典生成 provider_models，自动分配 default/reasoning/general 角色

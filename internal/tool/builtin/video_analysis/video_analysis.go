@@ -17,7 +17,7 @@ import (
 
 // ExecuteVideoAnalysis 执行视频分析。元数据由 builtin/video_analysis/tool.yaml + schema.json 定义。
 
-// makeExecuteVideoAnalysisFn 执行视频分析。
+// MakeExecuteVideoAnalysisFn 执行视频分析。
 func MakeExecuteVideoAnalysisFn(sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, args []byte) ([]byte, error) {
 		var req struct {

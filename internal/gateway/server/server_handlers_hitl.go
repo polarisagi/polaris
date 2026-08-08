@@ -54,7 +54,7 @@ func parseInterruptAction(action string) types.InterruptAction {
 	}
 }
 
-// handleAgentInterrupt 处理用户中断请求（M13 §1.2.5，inv_global_08 <200ms SLO）。
+// dispatchInterruptRequest 处理用户中断请求（M13 §1.2.5，inv_global_08 <200ms SLO）。
 // POST /v1/agent/{taskID}/interrupt
 // body: {"action":"resume"|"redirect"|"abort","redirect":"新意图文本","reason":"..."}
 // dispatchInterruptRequest 将中断请求路由到目标 Agent：优先经 Outbox 异步分发，

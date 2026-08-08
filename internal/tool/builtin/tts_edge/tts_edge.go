@@ -13,7 +13,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// makeExecuteEdgeTTSFn 返回文本转语音工具。元数据由 builtin/tts_edge/tool.yaml + schema.json 定义。
+// MakeExecuteEdgeTTSFn 返回文本转语音工具。元数据由 builtin/tts_edge/tool.yaml + schema.json 定义。
 func MakeExecuteEdgeTTSFn(sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, args []byte) ([]byte, error) {
 		var req struct {
