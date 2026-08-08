@@ -69,6 +69,20 @@ func (r *SQLiteExtensionRepository) UpdateInstanceStatus(ctx context.Context, id
 	return nil
 }
 
+// UpdateInstanceInstalledVersion 升级成功后回写版本号并置为 installed。
+// 2026-08-08 新增：gateway/server/plugin/manage_upgrade.go 此前直接 DB.ExecContext
+// 写 extension_instances，违反 inv_NoRawDBExecWriteInGateway（该规则因扫描根仍指向
+// 已不存在的 pkg/gateway 而从未真正运行过）。
+func (r *SQLiteExtensionRepository) UpdateInstanceInstalledVersion(ctx context.Context, id, version string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE extension_instances SET installed_version=?, status='installed', updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
+		version, id)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteExtensionRepository.UpdateInstanceInstalledVersion", err)
+	}
+	return nil
+}
+
 func (r *SQLiteExtensionRepository) UpdateInstanceInstallPath(ctx context.Context, id, installPath string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE extension_instances SET install_path=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
