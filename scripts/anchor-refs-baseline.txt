@@ -1,0 +1,37 @@
+# anchor-refs 存量白名单（棘轮模式，ADR-0088 先例）——只许收窄，不许批量新增。
+#
+# 背景：2026-08-09 P4-0-2（local_playground/prompt/docs-optimization-plan.md）首次
+# 引入 § 章节锚点门控（tools/anchor_refs.go），首跑即产生存量——历史注释从未被此类
+# 门控扫过。按方案要求：本阶段不清偿存量，只挡新增；已确认判定的条目才可移出本列表。
+#
+# 每行格式：<模块代号> §<章节号>（与工具报错里的 ref 字段逐字一致）。
+# 详细清单（含具体 file:line、按频次分组）见 local_playground/reports/anchor-refs-baseline.md
+# （该目录未纳入版本控制，报告是本文件的人类可读展开，不是另一份 SSoT）。
+#
+# 移出本列表前须验证：引用确实已修正为有效章节号，或该引用本就是刻意的非章节命名
+# 记法（如 §HITL/§Trace 类词面锚点，非"## N."格式的编号标题）——移出理由写进
+# commit message，不得静默清空。
+
+M01 §5.2-5.4
+M01 §5.2-bis
+M03 §Trace
+M04 §5.3
+M04 §5.5
+M04 §B2
+M04 §L3
+M05 §1-5
+M05 §11.3
+M05 §ContextZone
+M06 §116
+M06 §6.3
+M08 §3-quinquies
+M08 §3-sexies
+M08 §8.2
+M09 §RAGAS
+M10 §0
+M10 §4.X
+M11 §5.4
+M13 §1.X
+M13 §1.x
+M13 §HITL
+M13-bis §3.3
