@@ -139,7 +139,7 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锁点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，40 份规则化短文（决策+后果边界+反例守护，不含叙事；同模块多份紧耦合决策合入单一锚点文件，用"决策一/决策二/…"分节）；**"为什么不用 X" 先 grep 这里**——重提已驳方案须带新事实/新约束并在原 ADR 追记复核，不得凭空重议（见 `§文档可修订性`）
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，规则化短文（决策+后果边界+反例守护，不含叙事；同模块多份紧耦合决策合入单一锚点文件，用"决策一/决策二/…"分节）；**"为什么不用 X" 先 grep 这里**——重提已驳方案须带新事实/新约束并在原 ADR 追记复核，不得凭空重议（见 `§文档可修订性`）
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go↑01 / Rust↑02 / Agent↑03 / 跨模块↑04 / 审查↑06 / 提交前↑06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
@@ -147,7 +147,7 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
 9. `internal/protocol/` → 跨模块共享类型与接口契约
 10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~038，共 35 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
-**docs/arch/decisions/ 索引**：编号 SSoT = [`decisions/README.md`](docs/arch/decisions/README.md)（权威索引表 + 「已删除」编号对照表 + 合并主题速查 + 编号不重排的理由）。本文件不维护副本，避免双份索引漂移——按主题词 grep `docs/arch/decisions/` 即可。
+**docs/arch/decisions/ 索引**：编号 SSoT = [`decisions/README.md`](docs/arch/decisions/README.md)（权威索引表 + 「已删除」编号对照表 + 编号不重排的理由）。本文件不维护副本（含份数——`make docs-refs` 的 adr-index 项每次运行都会打印实时份数），避免双份索引漂移——按主题词 grep `docs/arch/decisions/` 即可。
 
 **internal/protocol/schema/ DDL 清单**：`ls internal/protocol/schema/*.sql` 即得（35 个）。025~027 编号段**刻意预留**——对应表已重构合并至其他表，编号不复用防历史混淆，不得报为"缺失文件"；`embed.go` 用 `//go:embed *.sql` 自动包含，跳号不影响编译。修改 Schema 前必读目标表文件。
 
