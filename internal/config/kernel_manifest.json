@@ -80,7 +80,7 @@
   "internal/agent/inv_test.go": "5743dddc0a244e495eb44b02fbe291d0f23a308610ad4869562220d5ce2fb11f",
   "internal/agent/pii_opaque_token_test.go": "81cf06f241890b68ab0025ee1450df4d005450086a0952fa830cb0fd679ebc81",
   "internal/agent/pool.go": "ce2ba17b9c315d717f21cbedbaf5c3f578f90d23d831bf08f7f422ecf825531b",
-  "internal/agent/pool_test.go": "d1770f2e1229353f7557e5a2653859dca35316043aa1b699a51a1da7c70e58a9",
+  "internal/agent/pool_test.go": "308857fb96887097b62995a20dd9ed1ab3ab18130ee4cff99f2c770fc91094eb",
   "internal/agent/prm.go": "2f13696cee988bbf5e83261cfc57684e26cd21b0d048c5ea37be8bd21c1a6fae",
   "internal/agent/prm_test.go": "8eb3d9b1359ed7fab5c34b81d6a18c652e350f0d780db1edf020277f68fb8b34",
   "internal/agent/provider.go": "38a303bfda956702908a703b1f5a59e4386dc2103805280a1ebe6d22e03a17f5",
