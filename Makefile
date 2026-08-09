@@ -159,18 +159,18 @@ deadcode:
 	@rm .deadcode.out .deadcode_clean.out .deadcode_diff.out .allowlist_clean.tmp
 	@echo "deadcode ok"
 
-# test-race: 对并发密集路径运行 Go race detector
-# 覆盖范围: Agent FSM / Worker Pool / MutationBus / 群体编排
-# 为何不跑全量: race detector 慢 5-10x，仅针对并发高发区
+# test-race: 全仓运行 Go race detector
+#
+# 2026-08-09 从 7 个手选目录改为全仓。原清单的问题不是选得少，是**选得不对且会漂移**：
+# 它自称覆盖"并发高发区"，实测并发原语最密的三个包 internal/gateway（33 文件）、
+# internal/llm（23）、internal/extension（18）一个都不在里面，反而收了
+# internal/prompt（2 文件）。手维护的覆盖清单和它声称的标准之间没有任何机械约束，
+# 漂了多久没人知道——和 ADR-0089 里那 8 条只扫 pkg/ 的规则是同一种失效。
+#
+# "race detector 慢 5-10x 所以不跑全量"这个理由实测不成立：包之间并行，
+# 全仓 106 包墙钟 164s，只比原清单多约 100s。删掉清单 = 删掉漂移源。
 test-race:
-	$(GO) test -race -count=1 -timeout=120s \
-		./internal/action/... \
-		./internal/agent/... \
-		./internal/execute/... \
-		./internal/memory/... \
-		./internal/prompt/... \
-		./internal/store/... \
-		./internal/swarm/...
+	$(GO) test -race -count=1 -timeout=900s ./internal/... ./cmd/... ./pkg/...
 
 # rust-lint: Cargo clippy 静态分析（以 warning 为 error）
 # 覆盖: 所有 target（lib + test + bench），FFI unsafe 代码
@@ -205,4 +205,9 @@ rust-deny:
 # check-all: 完整质量门禁（CI 用）
 # 顺序: fmt → lint → test → test-race → rust-lint → rust-test → rust-deny → deadcode
 #      → docs-check（§跳读行号）→ docs-lint（代码块禁令）→ docs-refs（失效路径引用）
-check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs
+#      → fuzz-taint / fuzz-skill（各 30s，2026-08-09 并入）
+#
+# 2026-08-09：fuzz-taint / fuzz-skill 此前只是可手动调用的 target，从未进入 CI。
+# 三个 fuzz 目标合计 90s，守的是 Taint 五级传播（HE-2 的密码学可验证边界）与
+# Skill 校验管线——正是最不该只靠人工偶尔想起来跑一次的两处。
+check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs fuzz-taint fuzz-skill

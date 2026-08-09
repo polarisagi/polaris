@@ -44,7 +44,11 @@ func TestPool_Acquire_StartsKernelRunLoop(t *testing.T) {
 		t.Fatalf("SendIntent failed: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	// 15s 而非 3s：与下方 TestPool_Acquire_SecondSessionAlsoRuns 对齐。
+	// 2026-08-09 把 make test-race 从 7 个目录扩到全仓后，本用例在 -race 下偶发超时——
+	// 不是新引入的缺陷，而是并行包数从 7 涨到 106 后 CPU 争用变高，3s 这个离群值
+	// 兜不住线程调度抖动了。同类问题见 commit 9587503（SendIntent 3s → 5s）。
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctrl.CurrentState() == types.AgentStateComplete {
 			return
