@@ -94,6 +94,7 @@ ADR 被代码引用时，源文件头部加：
 | 0089 | lint 规则扫描根接回 internal/ + 裸 error 判定按来源收窄 + 失效路径门控扩展到 .go 注释 | Accepted（已执行） | 2026-08-08 |
 | 0090 | 注释里的设计名与代码名：不做符号门控，改为要求实现处锚定 | Accepted（已执行） | 2026-08-09 |
 | 0091 | 审计门控的覆盖面而非结果：test-race 改全仓、fuzz 并入 check-all、docs-refs 去 maxdepth | Accepted（已执行） | 2026-08-09 |
+| 0092 | docs/ 与提示词的读者定位：AI 优先，reformat（人类可读性）方向视为已驳回 | Accepted（已执行） | 2026-08-09 |
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 
