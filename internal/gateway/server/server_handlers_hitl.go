@@ -124,8 +124,8 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 
 	taskID := r.PathValue("taskID")
 
-	if authCtx == nil || (authCtx.UserID != "admin" && authCtx.UserID != "system") {
-		// MVP 阶段仅 admin 可操作。在多租户下需检查 task 所属 user。
+	if !authCtx.Authenticated || (authCtx.UserID != "admin" && authCtx.UserID != "system") {
+		// MVP 阶段仅已认证的 admin 可操作。在多租户下需检查 task 所属 user。
 		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
 		return
 	}

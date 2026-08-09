@@ -60,7 +60,7 @@ func TestHandleUnseal_AdminSucceeds(t *testing.T) {
 
 	body, _ := json.Marshal(KillSwitchReq{Reason: "manual recovery"})
 	req := httptest.NewRequest(http.MethodPost, "/_admin/unseal", bytes.NewReader(body))
-	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin"})
+	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin", Authenticated: true})
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.HandleUnseal(w, req)
@@ -84,12 +84,69 @@ func TestHandleUnseal_EmptyReasonRejected(t *testing.T) {
 
 	body, _ := json.Marshal(KillSwitchReq{Reason: ""})
 	req := httptest.NewRequest(http.MethodPost, "/_admin/unseal", bytes.NewReader(body))
-	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin"})
+	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin", Authenticated: true})
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.HandleUnseal(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("empty reason: expected 400, got %d", w.Code)
+	}
+}
+
+// TestHandleKill_AnonymousRejected_WebUI 验证未认证的 webui 匿名请求调用 /_admin/killswitch 被拒绝 (NEW-001 验收)。
+func TestHandleKill_AnonymousRejected_WebUI(t *testing.T) {
+	ks := newTestKillSwitch(t)
+	h := &SysAdminHandler{KillSwitch: ks}
+
+	body, _ := json.Marshal(KillSwitchReq{Reason: "emergency stop"})
+	req := httptest.NewRequest(http.MethodPost, "/_admin/killswitch", bytes.NewReader(body))
+	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "anonymous", ClientType: "webui", Authenticated: false})
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.HandleKill(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("anonymous webui: expected 403, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleKill_AnonymousRejected_Unknown 验证未提供 context (默认 anonymous/unknown) 的请求被拒绝 (NEW-001 验收)。
+func TestHandleKill_AnonymousRejected_Unknown(t *testing.T) {
+	ks := newTestKillSwitch(t)
+	h := &SysAdminHandler{KillSwitch: ks}
+
+	body, _ := json.Marshal(KillSwitchReq{Reason: "emergency stop"})
+	req := httptest.NewRequest(http.MethodPost, "/_admin/killswitch", bytes.NewReader(body))
+	// 从 context 未注入 auth -> FromContext 返回 UserID: "anonymous", Authenticated: false
+	w := httptest.NewRecorder()
+	h.HandleKill(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("unauthenticated request: expected 403, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleKill_AdminSucceeds 验证已认证的 admin 请求可以成功触发 KillSwitch (NEW-001 验收)。
+func TestHandleKill_AdminSucceeds(t *testing.T) {
+	ks := newTestKillSwitch(t)
+	h := &SysAdminHandler{KillSwitch: ks}
+
+	body, _ := json.Marshal(KillSwitchReq{Reason: "manual emergency stop"})
+	req := httptest.NewRequest(http.MethodPost, "/_admin/killswitch", bytes.NewReader(body))
+	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin", ClientType: "api", Authenticated: true})
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.HandleKill(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("admin: expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp["status"] != "sealed" {
+		t.Errorf("expected status=sealed, got %q", resp["status"])
 	}
 }
