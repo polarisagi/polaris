@@ -11,6 +11,10 @@
 #           以及全仓 .go 注释（2026-08-08 并入，实现见 tools/comment_refs.go）。
 # 判定对象：markdown 反引号里、以仓库顶层目录开头的路径字面量。
 #
+# 2026-08-09 并入 tools/anchor_refs.go：校验 "M13 §1.2" 这类模块章节锚点引用
+# （与上面的路径字面量是两类判定对象，不能共用同一套正则——见该文件头部说明）。
+# 采用 baseline 棘轮模式，白名单见 scripts/anchor-refs-baseline.txt。
+#
 # 刻意不扫 docs/arch/decisions/（ADR）：ADR 是决策档案，按定义记录的是**写作当时**
 # 的代码事实。事后把 ADR 正文里的旧路径改成新路径，等于篡改历史记录，会让
 # 「为什么当初这么决策」失去可追溯的上下文。ADR 里的路径漂移是预期状态，不是缺陷。
@@ -83,6 +87,19 @@ if [ "$bad" -ne 0 ]; then
 fi
 echo "docs-refs ok（活文档无失效路径引用）"
 
+# .go 注释与文档侧的两类锚点门控都靠 go run 执行——若 go 不可用，此前的写法是
+# 静默吞掉 env 报错继续往下跑，路径检查照常输出 ok，门控失效与门控通过在输出上
+# 长得一模一样（2026-08-09 复核发现，登记于 local_playground/reports/plan-side-findings.md
+# PS-006）。改为显式前置检查，缺 go 就明确报错退出，不再静默跳过。
+if ! command -v go >/dev/null 2>&1; then
+	echo "FAIL: 未找到 go 命令，无法执行 .go 注释 / § 锚点门控（tools/comment_refs.go、" \
+		"tools/anchor_refs.go）。路径字面量检查已通过，但这两项未跑，不能算 docs-refs 整体通过。" >&2
+	exit 1
+fi
+
 # .go 注释侧的同类漂移（2026-08-08 并入）：判定规则相同、白名单共用同一份，
 # 只是判定对象从 markdown 反引号换成 Go 注释。拆成 Go 程序的理由见该文件头。
-env GOOS= GOARCH= go run tools/comment_refs.go
+env GOOS= GOARCH= go run tools/comment_refs.go || exit 1
+
+# § 章节锚点漂移（2026-08-09 并入，见上方说明）。
+env GOOS= GOARCH= go run tools/anchor_refs.go
