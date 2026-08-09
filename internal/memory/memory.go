@@ -1,5 +1,5 @@
 // Package memory 实现了 Polaris 四层记忆系统 (Working/Core/Episodic/Procedural)。
-// 架构设计详见 docs/arch/M05-Memory-System.md §1-5
+// 架构设计详见 docs/arch/M05-Memory-System.md §2-5
 package memory
 
 import (

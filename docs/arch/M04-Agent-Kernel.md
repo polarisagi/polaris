@@ -63,7 +63,7 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
 ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel.max_replan_attempts`) 超限 → S_FAILED + `[ESCALATE]`
 
 **`[UserInterrupt]` 协议**（inv_global_08, < 200ms 传播）:
-- **触发**: M13 `POST /v1/agent/{taskID}/interrupt` (M13 §1.X) → 通过 EventLog Subscribe 与 `agent.ContextCancel()` 内存通知推送至 Agent（`007_tasks.sql` 无 `interrupt_pending` 列，中断信号不落盘）
+- **触发**: M13 `POST /v1/agent/{taskID}/interrupt` (M13 §1.2.5) → 通过 EventLog Subscribe 与 `agent.ContextCancel()` 内存通知推送至 Agent（`007_tasks.sql` 无 `interrupt_pending` 列，中断信号不落盘）
 - **进入 S_INTERRUPT**: `agent.ContextCancel()` 立即取消 → 所有 LLM call / tool call / [BestOfN] ParallelSampler 子 goroutine 同步终止
 - **中断操作语义**:
   - **Resume**: 用户提供"继续"指令 → 恢复原状态 + 注入用户指令到 ZoneImmutable（标记 `source='user_interrupt'`, [TaintLevel]=TaintUserReviewed）

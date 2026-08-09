@@ -76,7 +76,7 @@ type ToolBundle struct {
 	EmbedFn               native.EmbedFn           // 可 nil（Ollama 未启用时；ExtensionActivator 降级为纯 FTS）
 	PIIDesensitizer       *guard.PIIDesensitizer
 	PIIDetector           *guard.PIIDetector
-	PIITokenVault         *guard.PIITokenVault // M11 §5.4：会话级可逆 PII 令牌 vault，注入 ToolRegistry 供工具执行前还原
+	PIITokenVault         *guard.PIITokenVault // M11 §5.1：会话级可逆 PII 令牌 vault，注入 ToolRegistry 供工具执行前还原
 	KnowledgeConnRegistry *connector.Registry  // M10 Task17：MCP 知识源连接器注册表，boot_agent.go 消费 GetAll() 接入 SyncScheduler
 	RecoveryHandler       *agent.ProviderRecoveryHandler
 	Catalog               catalog.Catalog // 统一工具目录

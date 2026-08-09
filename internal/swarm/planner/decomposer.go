@@ -40,7 +40,7 @@ type ToolLookup interface {
 const agentRunSentinel = "agent:run"
 
 // TaskDecomposer 将高层目标分解为可执行的 DAG 节点列表。
-// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §8.2 Planner
+// 架构文档: docs/arch/M08-Multi-Agent-Orchestrator.md §5.1 Planner
 type TaskDecomposer struct {
 	provider protocol.Provider
 	// toolLookup 用于校验 LLM 生成的 tool_name 是否在工具目录中注册（GR-7-002 修复）。

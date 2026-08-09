@@ -959,7 +959,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		slog.Info("polaris: PRM training sample collector wired", "batch_size", sb.Cfg.Thresholds.M9SelfImprove.PRMTrainBatchSize)
 	}
 
-	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 M04 §B2）
+	// 初始化 MemoryAgent（统一经 MemoryFacade 访问记忆子系统，见 docs/specs/04-Module-Boundary.md §B2）
 	memoryFacadeForAgent := memory.NewMemoryFacadeWithStore(memory.NewMemorySystemFromMemImpl(mb.Mem), sb.Store)
 	memoryAgent := agents.NewMemoryAgent(memoryFacadeForAgent, agent.GetWhisperChan(), nil)
 

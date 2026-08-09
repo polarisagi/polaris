@@ -680,7 +680,7 @@ Logic Collapse (M6) 创建新技能，本机制提升已有工具使用策略—
 ## 14. Plugin Registry（ADR-0016 §2.1）
 
 > End-User 可通过 Plugin Bundle（tar.gz）打包分发技能+MCP 组合，无需修改源码。
-> 参见 [ADR-0016](./decisions/ADR-0016-unified-trust-extension-model.md)（决策二，含原 ADR-0015）与 M13-bis §3.3。
+> 参见 [ADR-0016](./decisions/ADR-0016-unified-trust-extension-model.md)（决策二，含原 ADR-0015）与 M13-bis §5.3。
 
 **Plugin manifest 格式** (`plugin.json`，即 `PluginBundleManifest`）:
 ```json

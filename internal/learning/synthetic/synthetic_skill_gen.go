@@ -15,7 +15,7 @@ import (
 
 // SyntheticSkillGen 实现 M6 Logic-Collapse：
 // 任务轨迹 → LLM 蒸馏 → SkillMeta → SkillRegistry 持久化。
-// 架构文档: docs/arch/M06-Skill-Library.md §6.3
+// 架构文档: docs/arch/M06-Skill-Library.md §2.2
 type SyntheticSkillGen struct {
 	provider protocol.Provider
 	skillReg protocol.SkillRegistry // 写入目标（State-in-DB，HE-6）；nil 时降级仅返回 Tool

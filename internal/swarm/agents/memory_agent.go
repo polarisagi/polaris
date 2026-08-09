@@ -18,7 +18,7 @@ type LLMInferFunc = protocol.LLMInferFunc
 
 // MemoryAgent 常驻 goroutine：周期扫描高显著性情景事件生成耳语提示，并驱动记忆图谱边权重维护。
 // 统一经 protocol.MemoryFacade 访问记忆子系统，禁止直接 import internal/memory/graph 或裸 SQL
-// 查询 episodic_events（M04 §B2 跨模块通信通道）。
+// 查询 episodic_events（docs/specs/04-Module-Boundary.md §B2 跨模块通信通道）。
 type MemoryAgent struct {
 	mem          protocol.MemoryFacade
 	whisperChan  chan<- MemoryWhisper

@@ -140,7 +140,7 @@ type
 ImmutableCore interface {
 	Load(ctx context.Context, userID string, sessionID string) (types.ImmutableCoreView, error)
 	// Fields 返回可写字段集合（ImmutableCoreFields）指针，供 gateway 等消费方组装系统提示词。
-	// 取代此前 `.(*store.ImmutableCore)` 类型断言（M04 §B2）。
+	// 取代此前 `.(*store.ImmutableCore)` 类型断言（docs/specs/04-Module-Boundary.md §B2）。
 	Fields() *ImmutableCoreFields
 	PrependToMessages(msgs []types.Message) []types.Message
 }

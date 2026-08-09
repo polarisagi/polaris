@@ -16,7 +16,7 @@ import (
 )
 
 // CaseSeverity / QuestionType / DifficultyLevel / SyntheticCase 权威定义已上移至
-// internal/protocol/synthetic_case.go（M04 §B2：跨模块共享类型须在 internal/protocol/
+// internal/protocol/synthetic_case.go（docs/specs/04-Module-Boundary.md §B2：跨模块共享类型须在 internal/protocol/
 // 定义，internal/eval 消费方不再直接 import 本包）。此处仅保留别名。
 type CaseSeverity = protocol.CaseSeverity
 type QuestionType = protocol.QuestionType

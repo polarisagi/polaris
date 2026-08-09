@@ -250,7 +250,7 @@ L1 CitationCheck 执行三项全确定性校验（零 LLM，延迟 <20ms）：�
 3. **多数共识**: 时效相同时，相同主张的 chunk 数 ≥3 → 接受多数；< 3 → 标记 `[KnowledgeConflict]` 不裁决，向 Agent 返回**全部**冲突候选 + 来源标签
 4. **不可仲裁**: 三条均不成立 → **静默兜底选取最高优先级候选**（`Arbitrate` 返回 `consensusPick(recentGroup)` 或 `candidates[0]`，`ArbitrateChunks` 返回 `group[0]`），附带 reason 标记（`"consensus"` 等）供审计追溯；**不抛错、不阻断检索**
 
-> **裁决记录（2026-07-28，DR-3-008）**：此前本条写作"返回 `ErrKnowledgeConflictUnresolved` + Agent [ESCALATE] HITL"，代码 `internal/knowledge/conflict.go` 从未定义该错误、也从未升阶。经裁决**文档随代码**，不新增该错误：仲裁位于检索热路径（约束要求全确定性、<5ms），若因"无法裁决"抛错阻断，一次无关紧要的知识版本冲突就会让整条 RAG 检索失败，可用性代价远超收益；且 HITL 升阶应由消费该检索结果的 Agent 依据下游任务风险决定（M13 §HITL），不该由检索层越权触发。冲突信息不丢失——被淘汰候选仍经下方 `ConflictMarkers[]` 输出给调用方。
+> **裁决记录（2026-07-28，DR-3-008）**：此前本条写作"返回 `ErrKnowledgeConflictUnresolved` + Agent [ESCALATE] HITL"，代码 `internal/knowledge/conflict.go` 从未定义该错误、也从未升阶。经裁决**文档随代码**，不新增该错误：仲裁位于检索热路径（约束要求全确定性、<5ms），若因"无法裁决"抛错阻断，一次无关紧要的知识版本冲突就会让整条 RAG 检索失败，可用性代价远超收益；且 HITL 升阶应由消费该检索结果的 Agent 依据下游任务风险决定（M13 §2.4），不该由检索层越权触发。冲突信息不丢失——被淘汰候选仍经下方 `ConflictMarkers[]` 输出给调用方。
 
 **输出**: KnowledgeBase.Search 返回结构含 `ConflictMarkers[]`（被仲裁淘汰的候选 + 淘汰原因），供 [CitationValidator] 和 [FactualityGuard] 审计追溯。
 

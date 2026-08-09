@@ -6,7 +6,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// DAG 可执行节点跨模块契约（M04 §5.3, M08 §8.2）。
+// DAG 可执行节点跨模块契约（M04 §4.3, M08 §5.1）。
 //
 // producer: internal/execute/dag（DAGExecutor 具体调度实现，类型别名于此；
 //           2026-07-12 随 internal/execute 模块化从 internal/execute/dag 迁出）
@@ -14,7 +14,7 @@ import (
 //           internal/agent/fsm（DAGModel 填槽产出）
 //
 // ExecNode 此前以 internal/execute/dag.ExecNode 具体类型由 internal/swarm/planner
-// 直接 import 消费，违反 M04 §B2。现收敛至此，execute/dag 与 swarm/planner 均引用
+// 直接 import 消费，违反 docs/specs/04-Module-Boundary.md §B2。现收敛至此，execute/dag 与 swarm/planner 均引用
 // 本文件定义，execute/dag 不再是唯一权威源但保留同名别名保证向后兼容。
 //
 // DAGPlan/ExecEdge/EdgePolarity 此前存在遗留缺陷：本文件已定义这三个类型，但

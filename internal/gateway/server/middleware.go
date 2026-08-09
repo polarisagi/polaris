@@ -55,7 +55,7 @@ type clientQuota struct {
 	Max  int // burst 上限
 }
 
-// builtinClientQuotas M13 §1.x 配额表（SSoT: state.yaml §m13_gateway）。
+// builtinClientQuotas M13 §1.5 配额表（SSoT: state.yaml §m13_gateway）。
 func builtinClientQuotas() map[string]clientQuota {
 	return map[string]clientQuota{
 		"cli":     {Rate: 50, Max: 100},

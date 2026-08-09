@@ -28,7 +28,7 @@ import (
 
 const (
 	// MinSuccessCount / MinSemanticVariance 权威定义已上移至 protocol.MinSkillSuccessCount /
-	// protocol.MinSkillSemanticVariance（M04 §B2，供 extension/skill 与 learning 共享）。
+	// protocol.MinSkillSemanticVariance（docs/specs/04-Module-Boundary.md §B2，供 extension/skill 与 learning 共享）。
 	// 此处保留同名常量作为包内简写，值恒等于 protocol 定义。
 	MinSuccessCount     = protocol.MinSkillSuccessCount
 	MinSemanticVariance = protocol.MinSkillSemanticVariance
@@ -56,7 +56,7 @@ const staleTrajectoryDays = 30
 //
 // CollapseTrajectory / CollapseToolCall / CollapseEntity / CompileRequest /
 // CompileResult / LLMCodeGenerator 权威定义已上移至 internal/protocol/skill_compile.go
-// （M04 §B2：跨模块共享类型须在 internal/protocol/ 定义，internal/learning 消费方
+// （docs/specs/04-Module-Boundary.md §B2：跨模块共享类型须在 internal/protocol/ 定义，internal/learning 消费方
 // 不再直接 import 本包）。此处仅保留类型别名，包内代码与外部既有引用不受影响。
 
 type CollapseTrajectory = protocol.CollapseTrajectory
