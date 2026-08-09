@@ -53,7 +53,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 
 	// 健康/指标端点始终放行（无需鉴权）
 	if _, isHealth := healthPathSet[r.URL.Path]; isHealth {
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "unknown", TraceID: traceID}), true
+		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "unknown", TraceID: traceID, Authenticated: false}), true
 	}
 
 	// 未配置 API Key：仅允许本机回环访问，防止远程未授权调用
@@ -65,7 +65,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		}
 		// loopback 无 key：视为 webui 场景（页面加载并发多请求），用 webui quota 而非 unknown，
 		// 避免首屏并发 GET 打光 unknown 的 burst=20 导致误触 429。
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "webui", TraceID: traceID}), true
+		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "webui", TraceID: traceID, Authenticated: false}), true
 	}
 
 	if authManager.IsLocked(clientIP) {
@@ -88,7 +88,8 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 
 	authManager.RecordSuccess(clientIP)
 	// MVP 阶段单一 API Key，统一记录为 admin
-	return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "admin", ClientType: "api", TraceID: traceID}), true
+	return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "admin", ClientType: "api", TraceID: traceID, Authenticated: true}), true
+
 }
 
 // withMiddleware 挂载所有基础网关级别的安全防护（Auth + Rate Limit + CORS + Logging + Panic Recovery）

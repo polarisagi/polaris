@@ -21,8 +21,8 @@ func (h *SysAdminHandler) HandleKill(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	authCtx := authcontext.FromContext(ctx)
-	if authCtx.UserID == "" {
-		httputil.RespondError(w, "authentication required", apperr.New(apperr.CodeForbidden, "authentication required"), http.StatusForbidden)
+	if !authCtx.Authenticated || authCtx.UserID != "admin" {
+		httputil.RespondError(w, "killswitch requires valid POLARIS_API_KEY", apperr.New(apperr.CodeForbidden, "killswitch requires valid POLARIS_API_KEY, anonymous/loopback exemption is not accepted"), http.StatusForbidden)
 		return
 	}
 	actor := authCtx.UserID
@@ -54,10 +54,11 @@ func (h *SysAdminHandler) HandleUnseal(w http.ResponseWriter, r *http.Request) {
 
 	// B1: 鉴权加固（unseal 是最高敏感操作，不适用常规宽松规则）
 	// unseal 需要有效 POLARIS_API_KEY，不接受匿名/loopback 豁免
-	if authCtx.UserID != "admin" {
+	if !authCtx.Authenticated || authCtx.UserID != "admin" {
 		httputil.RespondError(w, "unseal requires valid POLARIS_API_KEY", apperr.New(apperr.CodeForbidden, "unseal requires valid POLARIS_API_KEY, anonymous/loopback exemption is not accepted"), http.StatusForbidden)
 		return
 	}
+
 	actor := authCtx.UserID
 
 	var req KillSwitchReq
