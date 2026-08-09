@@ -34,7 +34,10 @@ TOP_DIRS='internal|pkg|cmd|rust|configs|api|scripts|tools|web|docs'
 mapfile -t FILES < <(
 	find docs/arch -maxdepth 2 -name '*.md' -type f -not -path 'docs/arch/decisions/*'
 	echo CLAUDE.md
-	find internal -maxdepth 3 -name 'CLAUDE.md' -type f
+	# 不设 maxdepth：2026-08-09 复核发现原来的 -maxdepth 3 恰好卡在现存最深的
+	# internal/gateway/server/CLAUDE.md 上，再多一层子包就会被静默漏掉——
+	# 「扫描面刚好够用」和「扫描面已经失效」在 CI 输出上长得一模一样。
+	find internal -name 'CLAUDE.md' -type f
 )
 
 bad=0
