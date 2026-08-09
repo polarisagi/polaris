@@ -75,8 +75,7 @@ ADR 被代码引用时，源文件头部加：
 | 0042 | Gateway 交互式提案合集：HITL AskUser 咨询闭环 + Generative UI SSE（含原 ADR-0043） | Proposed（均未实现） | 2026-07-11 |
 | 0046 | internal/execute 模块创建 + 编排模式演进（模式9 PatternDAG / 模式10 StateGraph / 模式11 Debate-Critic，含原 ADR-0037/0041/0080） | Implemented | 2026-07-13 |
 | 0048 | M9 自进化引擎生产接线合集（含原 ADR-0049/0054/0055/0056/0058） | Accepted（已执行） | 2026-07-14 |
-| 0051 | M12 Eval Harness 评测隔离层设计（**编号复用提示**：`已删除` 表同编号原指另一份已合并入 ADR-0062 的死代码审计 ADR，见下方"已删除"表 0051 行与 `plan-side-findings.md` PS-011） | Accepted | 2026-07-28 |
-| 0062 | 死代码治理：判定方法论 + `make deadcode` 门控（含原 ADR-0050/0051/0052/0053/0061，此处 0051 指已删除的旧文档，非现存 `ADR-0051-eval-harness-isolation.md`） | Accepted（已执行） | 2026-07-22 |
+| 0062 | 死代码治理：判定方法论 + `make deadcode` 门控（含原 ADR-0050/0051/0052/0053/0061） | Accepted（已执行） | 2026-07-22 |
 | 0065 | S_REPLAN 扩展激活重试与降级标记 | Accepted（已执行，回填） | 2026-07-23 |
 | 0066 | Gateway 治理合集（控制权移交 FSM + SQL 下沉 + Egress 收紧 + Channel 适配器重构 + ChatOrchestrator 拆分路线，含原 ADR-0039/0064/0067） | Accepted / Proposed | 2026-07-08 |
 | 0068 | 开放基准适配器架构（τ-bench/Terminal-Bench） | Accepted（已执行） | 2026-07-23 |
@@ -96,6 +95,7 @@ ADR 被代码引用时，源文件头部加：
 | 0090 | 注释里的设计名与代码名：不做符号门控，改为要求实现处锚定 | Accepted（已执行） | 2026-08-09 |
 | 0091 | 审计门控的覆盖面而非结果：test-race 改全仓、fuzz 并入 check-all、docs-refs 去 maxdepth | Accepted（已执行） | 2026-08-09 |
 | 0092 | docs/ 与提示词的读者定位：AI 优先，reformat（人类可读性）方向视为已驳回 | Accepted（已执行） | 2026-08-09 |
+| 0093 | M12 Eval Harness 评测隔离层设计（2026-08-09 由 0051 改号，原编号与已删除 ADR 撞号，见该文件顶部改号说明） | Accepted | 2026-07-28 |
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 
@@ -133,7 +133,7 @@ ADR 被代码引用时，源文件头部加：
 
 | 0049 | 修复 sCtx.SessionID 从未赋值的根因 Bug | ADR-0048 | 2026-07-28 |
 | 0050 | 删除中心化 Orchestrator/Worker/内存 Blackboard 与 SwarmRouter 等 | ADR-0062 | 2026-07-28 |
-| 0051 | 跨模块死代码清理与悬空接线收尾（Phase 1-4）（**编号复用**：该编号已于同日被 `ADR-0051-eval-harness-isolation.md` 重新占用，违反本文件"编号一经分配不复用"规则，见 §索引表 0051 行与 `plan-side-findings.md` PS-011，未静默处理） | ADR-0062 | 2026-07-28 |
+| 0051 | 跨模块死代码清理与悬空接线收尾（Phase 1-4） | ADR-0062 | 2026-07-28 |
 | 0052 | 2026-07-21 全仓库 deadcode 复核收尾 | ADR-0062 | 2026-07-28 |
 | 0053 | ADR-0051 遗留 11 项 DEFER 复核 + MCPKnowledgeConnector 接入 | ADR-0062 | 2026-07-28 |
 | 0054 | DriftDetector 漂移响应编排器接线 | ADR-0048 | 2026-07-28 |
