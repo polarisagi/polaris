@@ -109,4 +109,8 @@ env GOOS= GOARCH= go run tools/anchor_refs.go || exit 1
 # 并拦截"编号被复用"这一不可变规则的违反。缘由见 tools/adr_index_check.go 头部。
 # 注意：本项**要**扫 docs/arch/decisions/，与上面"不扫 ADR 正文路径"不冲突——
 # 判定对象是编号体系而非正文里的历史路径，前者必须自洽，后者按定义允许陈旧。
-env GOOS= GOARCH= go run tools/adr_index_check.go
+env GOOS= GOARCH= go run tools/adr_index_check.go || exit 1
+
+# CLAUDE.md 计数断言（2026-08-09 并入）：模块数 / schema SQL 数 / 模块级 CLAUDE.md
+# 数三项与仓库实际比对。该类计数一周内漂了四次，见 tools/doc_counts_check.go 头部。
+env GOOS= GOARCH= go run tools/doc_counts_check.go
