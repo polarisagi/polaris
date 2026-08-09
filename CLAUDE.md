@@ -1,6 +1,8 @@
 # polaris
 
-> 开源自托管 AI Agent | Go 1.26+ + Rust 1.94+ | 28 internal module / 4 layer | 最低 2GB VPS 可运行，Tier 0 (8GB) 为开发推荐地板 | provider-agnostic (`configs/defaults.toml` 推荐 DeepSeek V4)
+> 开源自托管 AI Agent | Go 1.26+ + Rust 1.94+ | 29 internal module / 4 layer | 最低 2GB VPS 可运行，Tier 0 (8GB) 为开发推荐地板 | provider-agnostic (`configs/defaults.toml` 推荐 DeepSeek V4)
+>
+> **本文件及全部 `docs/` 的读者定位：AI 优先**（2026-08-09 裁决）。人类可读性不是维护目标；`§跳读` 行、`[HE-Rule-x]`/`[Concept]` 标签、`inv_` 编号表、紧凑表格均为一等公民导航结构，不得以"人类阅读噪音"为由删除。
 
 ## 角色
 
@@ -43,132 +45,70 @@
 ## 项目结构
 
 ```text
-api/proto/                   Protobuf 原始定义
-cmd/polaris/                 主入口 (尽量保持极简，将初始化逻辑下推到 internal/cli)
-configs/                     嵌入式启动配置（随二进制打包）
-  threshold-examples/        阈值覆盖示例（m*.toml）
-  agents/ prompts/ *.yaml    各类启动配置
+api/proto/       Protobuf 原始定义
+cmd/polaris/     主入口（极简，初始化逻辑下推 internal/cli）
+configs/         嵌入式启动配置（随二进制打包）；threshold-examples/ 阈值覆盖示例（m*.toml）
 
-internal/
+internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必读，子包细节以其为准不在此重复
   # --- L1 认知/执行层 ---
-  agent/           核心状态机 (FSM)、生命周期、思考循环
-    fsm/           状态机实现（state_machine / transitions / epoch）
-    context/       感知上下文（memory_context / pii_vault / whisper / persona_refiner）
-  action/          动作执行层（CodeAct / LAM / Hook / 能力令牌）
-    codeact/       即时代码执行
-    lam/           LAM 动作执行
-    hook/          Hook 框架（RunScript 脚本执行）
-  memory/          记忆系统（Working / Episodic / Semantic / Procedural）
-    consolidation/ 记忆巩固 Worker（含 SemanticCompressHandler VFS 语义压缩）
-    graph/         世界模型图 + 突触可塑性
-    retrieval/     HybridRetriever 多路融合检索
-    store/         记忆物理存储后端
-  tool/            工具注册与执行（InMemoryToolRegistry + PolicyGate 五阶段）
-    builtin/       内置工具集（每工具独立子目录含 tool.yaml/schema.json）
-    sandbox/       工具沙箱执行适配层
-  sandbox/         沙箱执行环境（Wasm / 容器三级回退）
-  prompt/          提示词模板管理
-    optimizer/     提示词优化器
-  vfs/             虚拟工作区与文件系统隔离
+  agent/       ★ 核心状态机 (FSM)、生命周期、思考循环、感知上下文（fsm / context）
+  action/      ★ 动作执行层（codeact / lam / hook；能力令牌）
+  memory/      ★ 四层记忆 Working/Episodic/Semantic/Procedural（consolidation / graph / retrieval / store）
+  tool/          工具注册与执行（InMemoryToolRegistry + PolicyGate 五阶段）
+    builtin/     内置工具集（每工具独立子目录含 tool.yaml/schema.json）
+    sandbox/     工具沙箱执行适配层
+  sandbox/       沙箱执行环境（Wasm / 容器三级回退）
+  prompt/        提示词模板管理（optimizer/ 提示词优化器）
+  vfs/           虚拟工作区与文件系统隔离
 
-  # --- 单/多 Agent 执行引擎层（2026-07-12 新增，服务 L1 + L2）---
-  execute/         执行引擎：只负责"如何跑完一份已确定的计划/图"，不做决策
-                   （详见 internal/execute/CLAUDE.md、ADR-0046）
-    dag/           单 Agent 内工具链 DAG 执行器 + S_VALIDATE 四层校验管线
-                   （原 agent/dag，经 agent/provider.go DAGRunner/DAGValidator
-                   消费端接口反向注入 internal/agent）
-    orchestrator/  Blackboard + Worker + 多模式编排（Sequential/Parallel/
-                   MapReduce/PatternDAG/StateGraph/CSV-Fanout；原
-                   swarm/orchestrator，经 internal/swarm 消费）
+  # --- 单/多 Agent 执行引擎层（服务 L1 + L2；ADR-0046）---
+  execute/     ★ 只负责"如何跑完一份已确定的计划/图"，不做决策
+               dag/ 工具链 DAG + S_VALIDATE 四层校验；orchestrator/ Blackboard + 多模式编排
 
   # --- L2 协同/知识层 ---
-  swarm/           多 Agent 协同策略（任务分解/拓扑路由/Supervisor Tree）
-    planner/       任务规划与分解
-    supervisor/    Supervisor Tree
-    topology/      三角色默认拓扑（Supervisor/Librarian/Governance）
-    agents/        常驻 goroutine Agent（governance/security_audit/memory）
-  learning/        自进化引擎（三环架构）
-    surprise/      SurpriseIndex + 漂移检测
-    reflexion/     HER ReflexionEngine + 异步耳语通道
-    synthetic/     合成评估用例 + Python Skill 生成（Logic Collapse 蒸馏）
-    curriculum/    自动课程 + 动态难度校准
-  knowledge/       RAG + 知识图谱
-    graphrag/      图谱构建管线、图遍历、社区摘要
-    connector/     外部知识源（Obsidian / 同步调度 / ExtensionLibrarianHandler 扩展索引）
-  extension/       扩展注册与运行时
-    mcp/           MCP 客户端管理（LoadFromDB / TaintPreservingDecoder）
-    plugin/        插件系统
-    skill/         Skill 编译与执行（LogicCollapse Python / ContainerSandbox）
-    marketplace/   插件市场（安装/卸载/级联删除）
-    native/        本地扩展激活器
-    models/        扩展模型定义
+  swarm/       ★ 多 Agent 协同策略（planner / supervisor / topology / agents 常驻 goroutine）
+  learning/    ★ 自进化引擎三环（surprise / reflexion / synthetic / curriculum）
+  knowledge/     RAG + 知识图谱
+    graphrag/    图谱构建管线、图遍历、社区摘要
+    connector/   外部知识源（Obsidian / 同步调度 / 扩展索引）
+  extension/   ★ 扩展注册与运行时（mcp / plugin / skill / marketplace / native / models）
 
   # --- L3 接口/治理层 ---
-  gateway/         HTTP API 网关（REST/SSE/OpenAI 兼容）
-    session/       SessionOrchestrator 会话生命周期编排领域层（零 net/http 依赖，
-                   收敛 SSE+Headless 两条入口，ADR-0085）
-    server/        核心 HTTP 服务（middleware / logstream）
-      chat/        聊天接口处理
-      plugin/      插件管理接口
-      provider/    Provider 管理接口
-      sysadmin/    系统管理接口（channels/MCP/sysinfo 等）
-    egress/        出口网关
-    authcontext/   认证上下文
-    types/         共享类型
-  automation/      定时调度与自动化工作流
-    hitl/          HITL 人工审批网关（ESCALATE 协议）
-  eval/            评估与 Benchmark 引擎
-    harness/       评估执行器（EvalCase / RunnerImpl / SQLiteEvalStore）
-    analysis/      元评估 / 采样监控 / 影子执行 (ShadowExecutor)
-    control/       访问控制（RBAC/PBAC）
-  channel/         聊天平台双向适配器（TG/Discord）
-    adapter/       各平台实现
-  sysmgr/          系统资源管理（downloader/sysinfo 已迁出至 L0，见下）
-    updater/       自动更新
-    locale/        本地化
-  cli/             命令行引导与命令处理
+  gateway/       HTTP API 网关（REST/SSE/OpenAI 兼容）
+    session/     SessionOrchestrator 会话生命周期编排（零 net/http 依赖，ADR-0085）
+    server/    ★ 核心 HTTP 服务（middleware / logstream / chat / plugin / provider / sysadmin）
+    egress/ authcontext/ types/   出口网关 / 认证上下文 / 共享类型
+  automation/    定时调度与自动化工作流（hitl/ HITL 审批网关，ESCALATE 协议）
+  eval/          评估与 Benchmark 引擎
+    harness/     评估执行器（EvalCase / RunnerImpl / SQLiteEvalStore）
+    analysis/    元评估 / 采样监控 / 影子执行（ShadowExecutor）
+    control/     访问控制（RBAC/PBAC）
+  channel/       聊天平台双向适配器 TG/Discord（adapter/ 各平台实现）
+  sysmgr/        系统资源管理（updater/ 自动更新，locale/ 本地化）
+  cli/           命令行引导与命令处理
 
   # --- L0 基础设施层 ---
-  store/           存储机制
-    repo/          SQLite Repository 实现层（对应 protocol/repo/ 接口）
-    search/        全文/语义检索（BM25）
-    audit/         事件日志与决策日志
-  observability/   监控度量与遥测
-    metrics/       Prometheus 指标 + instruments（TokenBurnRate CANONICAL）
-    probe/         硬件探针 / 内存探针 / Tier 参数 / FeatureGate
-    trace/         链路追踪 / LLM 调用埋点
-  security/        安全体系
-    taint/         五级污点传播系统（TaintedString / SafeString）
-    policy/        Cedar 策略引擎（三层防线 deny-by-default）
-    token/         能力令牌（Ed25519 签名）
-    network/       网络隔离（SafeDialer / LocalOnly）
-    guard/         Factuality Guard / PII 检测
-  llm/             大模型对接层
-    adapter/       各 Provider 适配器（anthropic/deepseek/google/ollama/openai）
-    stt/           语音识别（Sherpa-ONNX）
-    tts/           语音合成
-  ffi/             Rust dylib 零 CGO 高性能桥接（purego）
-  sysinfo/         系统信息采集（硬件探针，供 agent 硬件分级 / sys_probe 工具使用）
-  downloader/      通用资源下载（HTTP/Git + 系统代理探测，模型二进制/插件包下载共用）
-  # 2026-07-07 从 sysmgr/ 物理迁移至此：原归类在 L3 但被 L0(llm/ollamamgr、
-  # llm/stt、llm/tts)/L1(agent、tool/builtin/sys_probe)/L2(extension/marketplace)
-  # 广泛引用，属于分类与实际用途不匹配（不含 L3 接口治理语义的通用工具）。
+  store/         repo/ SQLite Repository 实现（对应 protocol/repo/ 接口）、search/ BM25、audit/ 事件与决策日志
+  observability/ metrics/ Prometheus（TokenBurnRate CANONICAL）、probe/ 硬件与内存探针 + Tier 参数 + FeatureGate、trace/ 链路追踪
+  security/      taint/ 五级污点（TaintedString/SafeString）、policy/ Cedar 三层防线 deny-by-default、
+                 token/ 能力令牌 Ed25519、network/ SafeDialer + LocalOnly、guard/ Factuality + PII
+  llm/           adapter/（anthropic/deepseek/google/ollama/openai）、stt/ Sherpa-ONNX、tts/
+  ffi/           Rust dylib 零 CGO 桥接（purego）
+  sysinfo/       系统信息采集（硬件探针；供 agent 硬件分级 / sys_probe 工具）
+  downloader/    通用资源下载（HTTP/Git + 系统代理探测；模型二进制与插件包共用）
+  # sysinfo/ downloader/ 2026-07-07 自 sysmgr/ 迁入 L0：被 L0/L1/L2 广泛引用，不含 L3 治理语义
 
   # --- 通用契约（所有层均可引用）---
-  protocol/        跨模块共享类型 + 接口契约 + DDL
-    repo/          Repository 接口定义（对应 store/repo/ 实现）
-    pb/            Protobuf 生成文件
-    schema/        DDL SQL 文件（33 个，SSoT）
-  config/          配置加载 + 编译期不变量
-  lint/            CI 静态扫描规则
-  bootstrap/       模块生命周期统一编排（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）
+  protocol/      跨模块共享类型 + 接口契约：repo/ 接口定义、pb/ Protobuf 生成物、schema/ DDL SQL（35 个，SSoT）
+  config/        配置加载 + 编译期不变量
+  lint/          CI 静态扫描规则
+  bootstrap/     模块生命周期编排（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）
 
-pkg/               通用工具（无业务逻辑，任意层可引用）
-  apperr/          统一错误类型（禁裸 error 泄漏调用链）——`apperr.New/Wrap/IsCode/HTTPStatus`
-  types/           基础共享类型
-  version/         版本信息
+pkg/             通用工具（无业务逻辑，任意层可引用）
+  apperr/        统一错误类型 apperr.New/Wrap/IsCode/HTTPStatus（禁裸 error 泄漏调用链）
+  types/ version/  基础共享类型 / 版本信息
 
-rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥接层，见 ADR-0011）
+rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥接，ADR-0011）
 ```
 
 - 错误统一 `pkg/apperr`（`apperr.New/Wrap`；禁裸 `errors.New`/`fmt.Errorf` 泄漏调用链）
@@ -199,7 +139,7 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 1. `docs/arch/INDEX.md` → §2 场景表选 1~3 个 `M_X`，按文件头 §偏移跳读精读章节
 2. `docs/arch/00-Global-Dictionary.md` → `[Concept]` 唯一权威源 + XR-01~07 跨模块规则
 3. `docs/arch/ARCHITECTURE.md` → SSoT 锁点；仅 Staging 7 阶段 / HT0 预算 / 变更控制 / 配置层 4 场景必读
-4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，29 份规则化短文（决策+后果边界+反例守护，不含叙事；模块内多份"生产接线/新增模式/紧耦合决策"系列合入单一锚点文件，用"决策一/决策二/…"分节；编号刻意不重排，见 README 说明），编号 SSoT 见 `decisions/README.md` 索引表；**"为什么不用 X" 先 grep 这里**——重提已驳方案须带新事实/新约束并在原 ADR 追记复核，不得凭空重议（见 `§文档可修订性`）
+4. `docs/arch/decisions/ADR-XXXX-*.md` → 决策档案，40 份规则化短文（决策+后果边界+反例守护，不含叙事；同模块多份紧耦合决策合入单一锚点文件，用"决策一/决策二/…"分节）；**"为什么不用 X" 先 grep 这里**——重提已驳方案须带新事实/新约束并在原 ADR 追记复核，不得凭空重议（见 `§文档可修订性`）
 5. `docs/arch/spec/state.yaml` → 状态机 + 全模块阈值 SSoT，按 `§par/§staging/§taint/...` 偏移局部读
 6. `docs/specs/0X-*.md` → 按域选读：Go↑01 / Rust↑02 / Agent↑03 / 跨模块↑04 / 审查↑06 / 提交前↑06
 7. `docs/specs/07-Reference-Implementation.md` → 写新代码前定位 canonical 标瑯
@@ -207,20 +147,9 @@ rust/substrate/   Rust 高性能 FFI 库（Cedar 策略引擎 + SurrealDB-Core�
 9. `internal/protocol/` → 跨模块共享类型与接口契约
 10. `internal/protocol/schema/NNN_*.sql` → **DDL Schema SSoT**（001~024 + 028~038，共 35 个 SQL 文件，025~027 保留未用）；修改 Schema 前必读目标表文件，禁 ALTER TABLE 补丁（上线前直接改原始文件 + 删库重建）
 
-**docs/arch/decisions/ 索引**：2026-07-28 三轮精简，73 份 → 60 份 → 34 份 → 29 份（第一轮合并同主题系列 11 份，第二轮按模块功能 + 跨文档引用关系合并 26 份，第三轮补漏同模块紧耦合决策 5 份）。编号不重排（理由见 README 顶部说明）。权威索引表（编号+一句话标题+状态+日期）与「已删除」编号对照表统一维护在 [`decisions/README.md`](docs/arch/decisions/README.md)，本文件不重复维护副本——按主题词 grep `docs/arch/decisions/` 即可，避免双份索引漂移。
+**docs/arch/decisions/ 索引**：编号 SSoT = [`decisions/README.md`](docs/arch/decisions/README.md)（权威索引表 + 「已删除」编号对照表 + 合并主题速查 + 编号不重排的理由）。本文件不维护副本，避免双份索引漂移——按主题词 grep `docs/arch/decisions/` 即可。
 
-合并主题速查（原编号 → 最终存活编号，转手合并已按最终归宿列出）：taint 修正案 0045/0047→0007 · purego/FFI 桥接 0005/0030/0034/0063→0011 · 存储引擎选型 0010→0003 · state.yaml SSoT+验证 0012→0006 · CI 质量门禁 0014→0013 · Sandbox+代码安全防线 0024/0026/0078/0079→0008 · KillSwitch 恢复路径 0072/0073→0009 · 扩展/插件治理 0015/0019/0075→0016 · MCP 传输/协同 0018/0070→0017 · LLM Provider/推理路由 0022→0020 · 系统加固/审查批次 0027/0028/0029/0038→0025 · M05 记忆架构 0023/0035/0036/0060→0033 · Gateway 交互式提案 0043→0042 · internal/execute 模块+编排模式 0037/0040/0041/0080→0046 · M9 生产接线 0049/0054/0055/0056/0058→0048 · deadcode 治理 0050/0051/0052/0053/0061→0062 · Gateway 治理路线 0039/0064/0067→0066 · 崩溃恢复/Checkpoint/幂等 0057/0059→0076 · M5↔M10 桥接 0074→0077 · 文档治理 0044→0081。详见 README「已删除」表。
-
-**internal/protocol/schema/ DDL 清单**（修改 Schema 前按需加载对应文件，35 个 SQL 文件；025~027 编号段**刻意预留**——对应表已被重构合并至其他表，编号不复用防历史混淆；`embed.go` 使用 `//go:embed *.sql` 自动包含所有实际 .sql 文件，跳号不影响编译）：
-```
-001_events · 002_outbox · 003_episodic_memory · 004_semantic_memory · 005_workspace_vfs
-006_decision_log · 007_tasks · 008_skills · 009_rag_chunks · 010_self_improve
-011_providers · 012_channels · 013_chat · 014_cron_jobs · 015_mcp_servers
-016_preferences · 017_automations · 018_plugin_marketplaces · 019_extension_catalog · 020_extension_instances · 021_plugins
-022_provider_catalog · 023_notes · 024_reflection_memory · 028_apps · 029_workflows
-030_oom_guard_log · 031_planner_sessions · 032_mock_response_cache · 033_model_version_registry · 034_core_memory
-035_task_checkpoints · 036_archive_checkpoints · 037_world_model · 038_idempotent_cache
-```
+**internal/protocol/schema/ DDL 清单**：`ls internal/protocol/schema/*.sql` 即得（35 个）。025~027 编号段**刻意预留**——对应表已重构合并至其他表，编号不复用防历史混淆，不得报为"缺失文件"；`embed.go` 用 `//go:embed *.sql` 自动包含，跳号不影响编译。修改 Schema 前必读目标表文件。
 
 **禁止**：
 - 未读 INDEX 直接加载多个 M_X
