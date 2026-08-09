@@ -261,7 +261,10 @@ AI 生成新错误码前必须 `grep -n "Code.*Code = " pkg/apperr/apperr.go` �
 `.golangci.yml` 用 `gocyclo` / `nestif` / `lll` 机械化检查；CI fail-closed。
 `funlen`（函数物理行数/语句数）不启用：与 `gocyclo` 高度冗余，且 Go 错误处理惯例天然拉长物理行数但不代表真实复杂，误报率偏高。复杂度治理职责收敛到 `gocyclo` 一家（判断依据见 `docs/arch/decisions/ADR-0013-lint-machinery-phase1.md` 修订记录 2026-07-04）。
 
+> Fail-Closed 安全判定、身份单源、后台协程生命周期锚定、状态落盘吞错、结构化载体防注入、stdlib 接口包装透传与模型池枚举规范及对应 Lint 门控，见 [`ADR-0094`](file:///Users/mrlaoliai/PolarisAGI/polaris/docs/arch/decisions/ADR-0094-fail-closed-and-lifecycle-lint-gates.md)。
+
 > 为什么硬上限：AI 生成长函数无内省压力、不主动拆分。量化卡死是防 AI 输出膨胀的最小代价。
+
 
 ## R8 参考实现强制引用
 
