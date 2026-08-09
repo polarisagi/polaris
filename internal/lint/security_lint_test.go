@@ -157,3 +157,72 @@ func TestLintSecurityExportsCalled(t *testing.T) {
 		t.Logf("Found %d uncalled security functions:\n%s", len(violations), strings.Join(violations, "\n"))
 	}
 }
+
+// TestFailClosedSafetyVerdict (ADR-0094 决策一) 检查 security 与 agents 包中返回 AuditResult / 风险判定结果的 parse 函数，
+// 禁止在 error / parse 失败分支返回 RiskLevel: "none" 或隐式放行。
+func TestFailClosedSafetyVerdict(t *testing.T) {
+	root := repoRoot(t)
+	fset := token.NewFileSet()
+	var violations []string
+
+	targetPaths := []string{
+		filepath.Join(root, "internal", "swarm", "agents"),
+		filepath.Join(root, "internal", "security"),
+	}
+
+	for _, dir := range targetPaths {
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil //nolint:nilerr
+			}
+			f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+			if err != nil {
+				return nil //nolint:nilerr
+			}
+
+			rel, _ := filepath.Rel(root, path)
+
+			ast.Inspect(f, func(n ast.Node) bool {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					return true
+				}
+
+				// 检查 parseAuditResult 或类似 parse 判定函数
+				if strings.HasPrefix(fn.Name.Name, "parse") || strings.HasSuffix(fn.Name.Name, "Result") {
+					ast.Inspect(fn.Body, func(bn ast.Node) bool {
+						ret, ok := bn.(*ast.ReturnStmt)
+						if !ok {
+							return true
+						}
+						// 检查是否在 return 语句中构造并返回了 RiskLevel: "none"
+						for _, expr := range ret.Results {
+							if cl, ok := expr.(*ast.UnaryExpr); ok {
+								expr = cl.X
+							}
+							if cl, ok := expr.(*ast.CompositeLit); ok {
+								for _, elt := range cl.Elts {
+									if kv, ok := elt.(*ast.KeyValueExpr); ok {
+										if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "RiskLevel" {
+											if val, ok := kv.Value.(*ast.BasicLit); ok && strings.Contains(strings.ToLower(val.Value), "none") {
+												pos := fset.Position(ret.Pos())
+												violations = append(violations, rel+":"+pos.String()+": fail-closed violation: "+fn.Name.Name+" returns RiskLevel: \"none\" on fallback path")
+											}
+										}
+									}
+								}
+							}
+						}
+						return true
+					})
+				}
+				return true
+			})
+			return nil
+		})
+	}
+
+	if len(violations) > 0 {
+		t.Errorf("Found %d fail-closed safety verdict violations:\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}

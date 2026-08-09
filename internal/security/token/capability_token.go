@@ -79,8 +79,12 @@ type TokenManager struct {
 	issuedQ []string // 用于 issued 的 FIFO 淘汰，容量同 maxRevokedCap
 
 	// used 记录每个 tokenID 已被消费的次数，用于兑现 Claims.MaxCallsPerTask。
-	// 与 issued 共享 FIFO 淘汰（在 evict 时一并删除），不额外引入无界 map。
 	used map[string]int
+
+	// exhausted 记录已耗尽 maxCalls 的 tokenID 集合（FIFO 容量 maxRevokedCap），
+	// 避免在 issued 被 FIFO 淘汰后丢失超限约束（GR-2-001 / ADR-0094 决策一）。
+	exhausted  map[string]struct{}
+	exhaustedQ []string
 }
 
 // maxIssuedCap issued 缓存 FIFO 上限，防止无界增长（与 maxRevokedCap 保持一致量级）。
@@ -94,11 +98,12 @@ func NewTokenManager() (*TokenManager, error) {
 		return nil, apperr.Wrap(apperr.CodeInternal, "capability_token: failed to generate key pair", err)
 	}
 	return &TokenManager{
-		pubKey:  pub,
-		privKey: priv,
-		revoked: make(map[string]struct{}),
-		issued:  make(map[string]*Token),
-		used:    make(map[string]int),
+		pubKey:    pub,
+		privKey:   priv,
+		revoked:   make(map[string]struct{}),
+		issued:    make(map[string]*Token),
+		used:      make(map[string]int),
+		exhausted: make(map[string]struct{}),
 	}, nil
 }
 
@@ -140,13 +145,17 @@ func (tm *TokenManager) Mint(agentID string, caps []CapabilityType, sandboxTier 
 }
 
 // recordIssued 将新签发/委派的 token 计入 issued 缓存，超出 maxIssuedCap 时
-// FIFO 淘汰最旧条目（与 Revoke 的 revokeQ 模式一致），避免无界内存增长。
+// FIFO 淘汰最旧条目（与 Revoke 的 revokeQ 模式一致）。若被淘汰的 token 已耗尽，
+// 迁入 exhausted 集合防退化。
 func (tm *TokenManager) recordIssued(tokenID string, tok *Token) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if len(tm.issuedQ) >= maxIssuedCap {
 		oldest := tm.issuedQ[0]
 		tm.issuedQ = tm.issuedQ[1:]
+		if oldTok, ok := tm.issued[oldest]; ok && oldTok.Claims.MaxCallsPerTask > 0 && tm.used[oldest] >= oldTok.Claims.MaxCallsPerTask {
+			tm.markExhaustedLocked(oldest)
+		}
 		delete(tm.issued, oldest)
 		delete(tm.used, oldest)
 	}
@@ -154,27 +163,43 @@ func (tm *TokenManager) recordIssued(tokenID string, tok *Token) {
 	tm.issuedQ = append(tm.issuedQ, tokenID)
 }
 
+// markExhaustedLocked 记录 tokenID 已耗尽（调用方必须持写锁）。
+func (tm *TokenManager) markExhaustedLocked(tokenID string) {
+	if tm.exhausted == nil {
+		tm.exhausted = make(map[string]struct{})
+	}
+	if _, exists := tm.exhausted[tokenID]; exists {
+		return
+	}
+	if len(tm.exhaustedQ) >= maxRevokedCap {
+		oldest := tm.exhaustedQ[0]
+		tm.exhaustedQ = tm.exhaustedQ[1:]
+		delete(tm.exhausted, oldest)
+	}
+	tm.exhausted[tokenID] = struct{}{}
+	tm.exhaustedQ = append(tm.exhaustedQ, tokenID)
+}
+
 // Consume 记录一次令牌使用，并在超出 Claims.MaxCallsPerTask 时拒绝。
 // MaxCallsPerTask == 0 表示不限次数，此时只计数不拦截。
-//
-// 为什么需要显式的消费入口（2026-08-06 修复）：MaxCallsPerTask 此前在全仓
-// 只有一处读取点（agent_execute_dag.go 从 ctx 取 token 后比对），而
-// protocol.CtxCapabilityToken 从未被任何生产代码写入过——也就是说这个字段
-// 签发后从来没有被兑现过，"一次性令牌"始终只是文档里的说法。Verify 只校验
-// 签名/过期/撤销，天然无法表达"用过几次"这种有状态语义，因此单独开
-// Consume：由真正执行副作用的入口（CodeAct.validatePolicyAndEnv）在放行前调用。
-//
-// 并发安全：整个"读计数 → 判超限 → 写回"在同一把写锁内完成，
-// 避免两个并发调用各自读到 n-1 而都放行。
 func (tm *TokenManager) Consume(tokenID string) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
+	// 先查已耗尽集合
+	if tm.exhausted != nil {
+		if _, isExhausted := tm.exhausted[tokenID]; isExhausted {
+			return apperr.New(apperr.CodeForbidden,
+				fmt.Sprintf("policy: capability token %s exhausted and evicted", tokenID))
+		}
+	}
+
 	tok, ok := tm.issued[tokenID]
 	if !ok {
-		// 不在 issued 缓存里（已被 FIFO 淘汰或从未签发）：不在此处判失败，
-		// 交给调用链上的 Lookup/Verify 给出准确错误，避免双重语义。
-		return nil
+		// 未在该 TokenManager 的 issued 中找到。由于 Verify 仅能通过静态 Token 对象验证，
+		// 若此处无法从活跃会话追踪配额，出于 fail-closed 原则返回 CodeForbidden。
+		return apperr.New(apperr.CodeForbidden,
+			fmt.Sprintf("policy: capability token %s not found in active session context", tokenID))
 	}
 	maxCalls := tok.Claims.MaxCallsPerTask
 	if maxCalls <= 0 {
@@ -184,10 +209,14 @@ func (tm *TokenManager) Consume(tokenID string) error {
 		tm.used = make(map[string]int)
 	}
 	if tm.used[tokenID] >= maxCalls {
+		tm.markExhaustedLocked(tokenID)
 		return apperr.New(apperr.CodeForbidden,
 			fmt.Sprintf("policy: capability token %s exhausted (max_calls_per_task=%d)", tokenID, maxCalls))
 	}
 	tm.used[tokenID]++
+	if tm.used[tokenID] >= maxCalls {
+		tm.markExhaustedLocked(tokenID)
+	}
 	return nil
 }
 

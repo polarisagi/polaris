@@ -41,12 +41,10 @@ func TestParseAuditResult(t *testing.T) {
 
 	rawNoJSON := "No JSON here"
 	res, err = parseAuditResult(rawNoJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatalf("expected error for no JSON block, got nil (res=%v)", res)
 	}
-	if res.RiskLevel != "none" { // default
-		t.Errorf("expected default none")
-	}
+
 }
 
 func TestSanitizeCode(t *testing.T) {

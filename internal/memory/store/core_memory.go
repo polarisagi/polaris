@@ -69,28 +69,47 @@ func defaultBlockMaxBytes() int {
 }
 
 func (s *SQLCoreMemoryStore) Set(ctx context.Context, agentID, sessionID, blockKey, content string, taintLevel types.TaintLevel) error {
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO core_memory_blocks (agent_id, session_id, block_key, content, taint_level, updated_at, max_bytes)
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
 		ON CONFLICT(agent_id, session_id, block_key) DO UPDATE SET
 			content = excluded.content,
 			taint_level = excluded.taint_level,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		WHERE core_memory_blocks.read_only = 0`,
 		agentID, sessionID, blockKey, content, int(taintLevel), defaultBlockMaxBytes(),
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "failed to set core memory block", err)
 	}
+	if res != nil {
+		rows, rowsErr := res.RowsAffected()
+		if rowsErr == nil && rows == 0 {
+			existing, getErr := s.Get(ctx, agentID, sessionID, blockKey)
+			if getErr == nil && existing != nil && existing.ReadOnly {
+				return apperr.New(apperr.CodeForbidden, "core_memory_set: block is read-only")
+			}
+		}
+	}
 	return nil
 }
 
 func (s *SQLCoreMemoryStore) Delete(ctx context.Context, agentID, sessionID, blockKey string) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM core_memory_blocks WHERE agent_id = ? AND session_id = ? AND block_key = ?`,
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM core_memory_blocks WHERE agent_id = ? AND session_id = ? AND block_key = ? AND read_only = 0`,
 		agentID, sessionID, blockKey,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "failed to delete core memory block", err)
+	}
+	if res != nil {
+		rows, rowsErr := res.RowsAffected()
+		if rowsErr == nil && rows == 0 {
+			existing, getErr := s.Get(ctx, agentID, sessionID, blockKey)
+			if getErr == nil && existing != nil && existing.ReadOnly {
+				return apperr.New(apperr.CodeForbidden, "core_memory_delete: block is read-only")
+			}
+		}
 	}
 	return nil
 }
