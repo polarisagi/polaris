@@ -43,8 +43,23 @@ var (
 	// 已包含的信息，直接用它定位文件），3=章节号
 	refRe = regexp.MustCompile(`(M[0-9]{2}(?:-bis)?)(-[A-Za-z][A-Za-z]*(?:-[A-Za-z]+)*\.md)?\s*§\s*([0-9A-Za-z][0-9A-Za-z.\-]*)`)
 
-	// 标题行章节号：## 8.6 xxx / ### 0-bis. xxx / #### 4.1 xxx
-	headingRe = regexp.MustCompile(`^#{2,4}\s+([0-9]+(?:-bis|-ter)?(?:\.[0-9]+)*)\.?\s`)
+	// 标题行首 token：## 8.6 xxx / ### 0-bis. xxx / ### 5.2-bis xxx /
+	// ## 3-quinquies. xxx / ## §3-sexies xxx / #### L3 补充 / ### RAGAS Evolution
+	//
+	// 2026-08-09 重写（原实现为 `^#{2,4}\s+([0-9]+(?:-bis|-ter)?(?:\.[0-9]+)*)\.?\s`）：
+	// 原正则只认"纯数字 + 可选 -bis/-ter"，导致三类真实存在的标题被判为不存在，
+	// 首跑 23 类存量里有 5 类属于此种工具误报——① 拉丁序数后缀 -quater/-quinquies/
+	// -sexies（M08 §3-quinquies 等 5 处）；② 点号后再带后缀的 N.M-bis（M01 §5.2-bis
+	// 2 处，原正则在 "5.2" 后要求 `\.?\s` 而实际是 "-"，回溯后仍不匹配）；③ 命名式
+	// 标题（M04 `#### L3 补充`、M09 `### RAGAS Evolution …`）。
+	// 把工具局限写进 baseline 等于永久掩盖这些文件后续的真实漂移（ADR-0091：门控
+	// 失效与门控通过在输出上长得一模一样），故改为提取标题首个空白分隔 token，
+	// 不再预设章节号的构词法。
+	headingRe = regexp.MustCompile(`^#{2,6}\s+(\S+)`)
+
+	// 区间记法：§5.2-5.4 / §1-5（两端均为纯数字章节号）。与 5.2-bis 这类后缀记法
+	// 的区别是"-"两侧都能解析成数字章节号，故先试精确匹配、失败再按区间拆。
+	rangeRe = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)*)-([0-9]+(?:\.[0-9]+)*)$`)
 
 	skipDirs = map[string]bool{
 		".git": true, "vendor": true, "node_modules": true, "target": true,
@@ -170,10 +185,31 @@ func extractHeadings(path string) (map[string]bool, error) {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		if m := headingRe.FindStringSubmatch(sc.Text()); m != nil {
-			set[m[1]] = true
+			set[normalizeAnchor(m[1])] = true
 		}
 	}
 	return set, sc.Err()
+}
+
+// normalizeAnchor 抹平"标题里怎么写"与"引用里怎么写"的无语义差异：标题侧可能带
+// § 前缀（M08 `## §3-sexies PatternDebate`）或编号后的句点（`## 3-quinquies.`），
+// 引用侧一律写成 `§3-sexies` / `§3-quinquies`。两侧过同一函数后再比对。
+func normalizeAnchor(s string) string {
+	s = strings.TrimPrefix(s, "§")
+	return strings.TrimRight(s, ".．、：:")
+}
+
+// anchorExists 判定引用的章节号在目标文件的标题集合中是否成立。
+// 区间记法（§5.2-5.4）要求两端点各自成立——只要有一端漂移就该报，不因"看起来
+// 像个范围"整体放行。
+func anchorExists(set map[string]bool, anchor string) bool {
+	if set[anchor] {
+		return true
+	}
+	if m := rangeRe.FindStringSubmatch(anchor); m != nil {
+		return set[m[1]] && set[m[2]]
+	}
+	return false
 }
 
 func scanGoFile(path string, moduleFiles map[string]string, headings map[string]map[string]bool) []finding {
@@ -221,7 +257,7 @@ func checkLine(path string, lineNo int, text string, moduleFiles map[string]stri
 	var out []finding
 	for _, m := range refRe.FindAllStringSubmatch(text, -1) {
 		module := m[1]
-		anchor := strings.TrimRight(m[3], ".")
+		anchor := normalizeAnchor(m[3])
 		targetFile, ok := moduleFiles[module]
 		if !ok {
 			continue // 模块代号解析不出具体文件，不在本工具判定范围内（避免误伤非模块引用）
@@ -230,7 +266,7 @@ func checkLine(path string, lineNo int, text string, moduleFiles map[string]stri
 		// 但归入"模块代号解析不到该文件名对应模块"的边界情形，此处不单独细分，交给
 		// module 代号解析结果统一处理，避免规则再分叉）。
 		set := headings[targetFile]
-		if set[anchor] {
+		if anchorExists(set, anchor) {
 			continue
 		}
 		out = append(out, finding{
