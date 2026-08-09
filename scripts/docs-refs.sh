@@ -92,8 +92,9 @@ echo "docs-refs ok（活文档无失效路径引用）"
 # 长得一模一样（2026-08-09 复核发现，登记于 local_playground/reports/plan-side-findings.md
 # PS-006）。改为显式前置检查，缺 go 就明确报错退出，不再静默跳过。
 if ! command -v go >/dev/null 2>&1; then
-	echo "FAIL: 未找到 go 命令，无法执行 .go 注释 / § 锚点门控（tools/comment_refs.go、" \
-		"tools/anchor_refs.go）。路径字面量检查已通过，但这两项未跑，不能算 docs-refs 整体通过。" >&2
+	echo "FAIL: 未找到 go 命令，无法执行 .go 注释 / § 锚点 / ADR 编号门控（tools/comment_refs.go、" \
+		"tools/anchor_refs.go、tools/adr_index_check.go）。路径字面量检查已通过，但这三项未跑，" \
+		"不能算 docs-refs 整体通过。" >&2
 	exit 1
 fi
 
@@ -102,4 +103,10 @@ fi
 env GOOS= GOARCH= go run tools/comment_refs.go || exit 1
 
 # § 章节锚点漂移（2026-08-09 并入，见上方说明）。
-env GOOS= GOARCH= go run tools/anchor_refs.go
+env GOOS= GOARCH= go run tools/anchor_refs.go || exit 1
+
+# ADR 编号体系自洽（2026-08-09 并入）：索引/已删除两表与实际文件三方对齐，
+# 并拦截"编号被复用"这一不可变规则的违反。缘由见 tools/adr_index_check.go 头部。
+# 注意：本项**要**扫 docs/arch/decisions/，与上面"不扫 ADR 正文路径"不冲突——
+# 判定对象是编号体系而非正文里的历史路径，前者必须自洽，后者按定义允许陈旧。
+env GOOS= GOARCH= go run tools/adr_index_check.go
