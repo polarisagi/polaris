@@ -49,7 +49,8 @@ func CheckAllowedPath(path string, allowedPaths []string) error {
 			return nil
 		}
 	}
-	return apperr.New(apperr.CodeInternal, fmt.Sprintf("path_guard: path %q not in allowed paths", path))
+	return apperr.New(apperr.CodeForbidden, fmt.Sprintf("path_guard: path %q not in allowed paths", path))
+
 }
 
 func IsPathAllowed(path string, allowedPaths []string) bool {

@@ -2,10 +2,22 @@ package guard
 
 import (
 	"context"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
+
+//nolint:gochecknoglobals
+var compiledInjectionPatterns = sync.OnceValue(func() []*regexp.Regexp {
+	keywords := dangerousKeywords()
+	regexes := make([]*regexp.Regexp, len(keywords))
+	for i, k := range keywords {
+		regexes[i] = regexp.MustCompile("(?i)" + regexp.QuoteMeta(k))
+	}
+	return regexes
+})
 
 // SICCleaner — Spotlighting + SIC Instruction Cleaner（M11 §2.2）。
 // 架构文档: docs/arch/M11-Policy-Safety.md §2.2
@@ -87,12 +99,11 @@ func (s *SICCleaner) detect(ctx context.Context, text string) (bool, error) {
 	return builtinDetect(text), nil
 }
 
-// rewrite 将检测到的注入特征替换为安全标记 [REDACTED_INJECTION]。
+// rewrite 将检测到的注入特征替换为安全标记 [REDACTED_INJECTION]（大小写不敏感）。
 func (s *SICCleaner) rewrite(text string) string {
-	patterns := injectionPatterns()
 	result := text
-	for _, p := range patterns {
-		result = strings.ReplaceAll(result, p, "[REDACTED_INJECTION]")
+	for _, re := range compiledInjectionPatterns() {
+		result = re.ReplaceAllString(result, "[REDACTED_INJECTION]")
 	}
 	return result
 }
@@ -130,11 +141,4 @@ func dangerousKeywords() []string {
 		"your new role",
 		"from now on you",
 	}
-}
-
-// injectionPatterns 返回用于 rewrite 的完整模式列表（保留大小写以精准替换）。
-func injectionPatterns() []string {
-	// 为了实现多模式替换，此处使用小写版本统一处理；
-	// 实际生产中应使用 regexp.ReplaceAllStringFunc 配合 (?i) 标志
-	return dangerousKeywords()
 }

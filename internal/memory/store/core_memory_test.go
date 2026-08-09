@@ -90,4 +90,28 @@ func TestSQLCoreMemoryStore(t *testing.T) {
 		assert.Len(t, blocks, 1)
 		assert.Equal(t, "task_state", blocks[0].BlockKey)
 	})
+
+	t.Run("ReadOnly blocks Set and Delete", func(t *testing.T) {
+		// 手动插入一个 read_only = 1 的块
+		_, err := db.Exec(`INSERT INTO core_memory_blocks (agent_id, session_id, block_key, content, taint_level, read_only, updated_at) VALUES ('agent_1', 'sess_1', 'system_rules', 'Immutable rules', 0, 1, CURRENT_TIMESTAMP)`)
+		require.NoError(t, err)
+
+		// 尝试修改该 read_only 块
+		setErr := coreMem.Set(ctx, agentID, sessionID, "system_rules", "Hacked rules", types.TaintHigh)
+		assert.Error(t, setErr)
+
+		// 确认内容未变
+		block, err := coreMem.Get(ctx, agentID, sessionID, "system_rules")
+		assert.NoError(t, err)
+		assert.Equal(t, "Immutable rules", block.Content)
+
+		// 尝试删除该 read_only 块
+		delErr := coreMem.Delete(ctx, agentID, sessionID, "system_rules")
+		assert.Error(t, delErr)
+
+		// 确认块仍存在
+		blockStill, err := coreMem.Get(ctx, agentID, sessionID, "system_rules")
+		assert.NoError(t, err)
+		assert.NotNil(t, blockStill)
+	})
 }

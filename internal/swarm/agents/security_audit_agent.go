@@ -64,16 +64,33 @@ func (a *SecurityAuditAgent) ReviewSync(ctx context.Context, language string, co
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "security_audit: ReviewSync failed", err)
 	}
+
+	var levelVerdict string
+	switch strings.ToLower(result.RiskLevel) {
+	case "high":
+		levelVerdict = "danger"
+	case "medium":
+		levelVerdict = "warning"
+	}
+
 	for _, item := range result.RiskItems {
 		if item.Severity == "danger" {
 			return "danger", nil
 		}
 	}
+	if levelVerdict == "danger" {
+		return "danger", nil
+	}
+
 	for _, item := range result.RiskItems {
 		if item.Severity == "warning" {
 			return "warning", nil
 		}
 	}
+	if levelVerdict == "warning" {
+		return "warning", nil
+	}
+
 	return "safe", nil
 }
 
@@ -150,11 +167,11 @@ func parseAuditResult(raw string) (*AuditResult, error) {
 	start := strings.Index(raw, "{")
 	end := strings.LastIndex(raw, "}")
 	if start < 0 || end <= start {
-		return &AuditResult{RiskLevel: "none"}, nil // 无 JSON → 默认通过（保守策略）
+		return nil, apperr.New(apperr.CodeInvalidInput, "parse audit result failed: no valid JSON block found")
 	}
 	var result AuditResult
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &result); err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "parse audit result", err)
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "parse audit result: unmarshal JSON failed", err)
 	}
 	return &result, nil
 }
