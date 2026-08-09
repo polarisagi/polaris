@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:310 对内调度 / 3:430 MCP / 6:448 (SOFT)降级 / 7:473 跨模块契约 / 8:490 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:436 对内调度 / 3:556 MCP / 6:574 (SOFT)降级 / 7:599 跨模块契约 / 8:616 Web UI 规约 / 8.6:插件聚合市场DB+流 / 8.7:自动化中心DB+流+工作流 / 8.8:电脑操控权限+Preferences -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -277,6 +277,132 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | `/help` | SSE 输出所有注册命令列表 |
 
 `SlashCommandRouter.Dispatch()` 返回 `CommandResult{Handled, Response, UpdatedHistory}`；Handled=true 时调用方短路，直接发 `complete` 事件。命令回复作为助手消息持久化到 DB。
+
+#### 1.2.9 路由完整清单（生成，交叉核对用）
+
+上方 §1.2 的分组罗列是手写的，携带跨小节引用与语义分组（如哪些端点属于 HITL/自动化/编排），不追求逐条与代码同步；下表由 `tools/docs_gen.go` 从 `server_routes.go` 机械提取，是路由是否漂移的权威核对基准（`make docs-gen-check` 门控）。两者不一致时，以下表为准判断"代码里到底有什么"，以上方罗列为准判断"这个端点属于哪个业务域、和哪些其他端点有关"。
+
+<!-- BEGIN GENERATED: m13-route-inventory · 源: internal/gateway/server/server_routes.go · 勿手改，改源后跑 make docs-gen -->
+| Method | Path | Handler |
+|---|---|---|
+| GET | `/.well-known/agent-card.json` | `a2a.AgentCardHandler(s.a2aCfg)` |
+| POST | `/_admin/kill` | `sysadminHandler.HandleKill` |
+| POST | `/_admin/unseal` | `sysadminHandler.HandleUnseal` |
+| GET | `/healthz` | `handleHealthz` |
+| GET | `/metrics` | `metrics.MetricsHandler(s.tbr)` |
+| GET | `/readyz` | `handleReadyz` |
+| POST | `/v1/a2a/tasks` | `a2a.TaskSubmitHandler(s.blackboard)` |
+| GET | `/v1/admin/profiles` | `sysadminHandler.HandleListAgentProfiles` |
+| POST | `/v1/admin/tasks/csv-fanout` | `sysadminHandler.HandleCSVFanout` |
+| POST | `/v1/admin/tasks/pattern-dag` | `sysadminHandler.HandlePatternDAGRun` |
+| POST | `/v1/admin/tasks/pattern-mapreduce` | `sysadminHandler.HandleMapReduceRun` |
+| POST | `/v1/admin/tasks/pattern-parallel` | `sysadminHandler.HandleParallelRun` |
+| POST | `/v1/admin/tasks/pattern-sequential` | `sysadminHandler.HandleSequentialRun` |
+| POST | `/v1/admin/tasks/pattern-swarm` | `sysadminHandler.HandleSwarmRun` |
+| POST | `/v1/admin/tasks/pipeline` | `sysadminHandler.HandlePipelineRun` |
+| POST | `/v1/agent/codeact` | `handleCodeAct` |
+| GET | `/v1/agent/mmd-canvas` | `sysadminHandler.HandleGetMMDCanvas` |
+| POST | `/v1/agent/query` | `handleAgentQuery` |
+| POST | `/v1/agent/stream` | `chatHandler.HandleAgentStream` |
+| GET | `/v1/agent/tasks/{taskID}` | `handleGetAgentTask` |
+| POST | `/v1/agent/{taskID}/interrupt` | `handleAgentInterrupt` |
+| POST | `/v1/approvals/` | `handleResolveApproval` |
+| GET | `/v1/approvals/pending` | `handleGetPendingApprovals` |
+| GET | `/v1/apps` | `sysadminHandler.HandleListApps` |
+| POST | `/v1/apps` | `sysadminHandler.HandleCreateApp` |
+| DELETE | `/v1/apps/{id}` | `sysadminHandler.HandleDeleteApp` |
+| GET | `/v1/apps/{id}` | `sysadminHandler.HandleGetApp` |
+| PUT | `/v1/apps/{id}` | `sysadminHandler.HandleUpdateApp` |
+| POST | `/v1/apps/{id}/enable` | `sysadminHandler.HandleSetAppEnabled` |
+| POST | `/v1/audio/speech` | `chatHandler.AudioService.HandleAudioSpeech` |
+| POST | `/v1/audio/transcriptions` | `chatHandler.AudioService.HandleAudioTranscriptions` |
+| GET | `/v1/automation-templates` | `sysadminHandler.Cron.HandleListAutomationTemplates` |
+| GET | `/v1/automations` | `sysadminHandler.Cron.HandleListAutomations` |
+| POST | `/v1/automations` | `sysadminHandler.Cron.HandleCreateAutomation` |
+| DELETE | `/v1/automations/{id}` | `sysadminHandler.Cron.HandleDeleteAutomation` |
+| PUT | `/v1/automations/{id}` | `sysadminHandler.Cron.HandleUpdateAutomation` |
+| GET | `/v1/automations/{id}/runs` | `sysadminHandler.Cron.HandleListAutomationRuns` |
+| POST | `/v1/automations/{id}/trigger` | `sysadminHandler.Cron.HandleTriggerAutomation` |
+| GET | `/v1/catalog/providers` | `providerHandler.HandleListCatalogProviders` |
+| GET | `/v1/channels` | `sysadminHandler.Channels.HandleListChannels` |
+| POST | `/v1/channels` | `sysadminHandler.Channels.HandleCreateChannel` |
+| DELETE | `/v1/channels/{channelID}` | `sysadminHandler.Channels.HandleDeleteChannel` |
+| PUT | `/v1/channels/{channelID}` | `sysadminHandler.Channels.HandleUpdateChannel` |
+| GET | `/v1/config` | `handleGetConfig` |
+| GET | `/v1/config/budget` | `sysadminHandler.HandleGetBudget` |
+| PUT | `/v1/config/budget` | `sysadminHandler.HandleSetBudget` |
+| GET | `/v1/config/model-roles` | `providerHandler.HandleGetModelRoles` |
+| PUT | `/v1/config/model-roles` | `providerHandler.HandleSetModelRoles` |
+| GET | `/v1/config/server` | `handleGetConfig` |
+| GET | `/v1/doctor` | `sysadminHandler.HandleDoctor` |
+| POST | `/v1/eval/benchmark` | `sysadminHandler.Eval.HandleBenchmark` |
+| GET | `/v1/eval/meta-audit` | `sysadminHandler.Eval.HandleGetMetaAuditStatus` |
+| POST | `/v1/eval/meta-audit` | `sysadminHandler.Eval.HandleRunMetaAudit` |
+| POST | `/v1/eval/meta-holdout/cases` | `sysadminHandler.Eval.HandleAddMetaHoldoutCase` |
+| POST | `/v1/eval/run` | `handleEvalRun` |
+| GET | `/v1/export/backup` | `sysadminHandler.HandleExportBackup` |
+| GET | `/v1/export/trajectories` | `sysadminHandler.HandleExportTrajectories` |
+| POST | `/v1/import/backup` | `sysadminHandler.HandleImportBackup` |
+| GET | `/v1/insights` | `sysadminHandler.HandleInsights` |
+| GET | `/v1/logs/stream` | `handleLogStream` |
+| GET | `/v1/mcp-servers` | `sysadminHandler.MCP.HandleListMCPServers` |
+| POST | `/v1/mcp-servers` | `sysadminHandler.MCP.HandleCreateMCPServer` |
+| DELETE | `/v1/mcp-servers/{serverID}` | `sysadminHandler.MCP.HandleDeleteMCPServer` |
+| PUT | `/v1/mcp-servers/{serverID}` | `sysadminHandler.MCP.HandleUpdateMCPServer` |
+| PUT | `/v1/mcp-servers/{serverID}/network-access` | `sysadminHandler.MCP.HandleMCPNetworkApproval` |
+| POST | `/v1/mcp-servers/{serverID}/test` | `sysadminHandler.MCP.HandleTestMCPServer` |
+| GET | `/v1/plugins` | `pluginHandler.HandleListPlugins` |
+| GET | `/v1/plugins/catalog` | `pluginHandler.HandleListPluginCatalog` |
+| POST | `/v1/plugins/install` | `pluginHandler.HandleInstallPlugin` |
+| GET | `/v1/plugins/marketplaces` | `pluginHandler.HandleListMarketplaces` |
+| POST | `/v1/plugins/marketplaces` | `pluginHandler.HandleAddMarketplace` |
+| POST | `/v1/plugins/marketplaces/sync` | `pluginHandler.HandleSyncMarketplaces` |
+| DELETE | `/v1/plugins/marketplaces/{id}` | `pluginHandler.HandleDeleteMarketplace` |
+| POST | `/v1/plugins/sync` | `pluginHandler.HandleSyncMarketplaces` |
+| DELETE | `/v1/plugins/{catalogID}` | `pluginHandler.HandleUninstallPlugin` |
+| PUT | `/v1/plugins/{id}` | `pluginHandler.HandleUpdatePlugin` |
+| POST | `/v1/plugins/{id}/toggle` | `pluginHandler.HandleTogglePluginMCP` |
+| POST | `/v1/plugins/{id}/upgrade` | `pluginHandler.HandleUpgradePlugin` |
+| GET | `/v1/preferences` | `sysadminHandler.HandleGetPreferences` |
+| PUT | `/v1/preferences/{key}` | `sysadminHandler.HandleSetPreference` |
+| GET | `/v1/providers` | `providerHandler.HandleListProviders` |
+| POST | `/v1/providers` | `providerHandler.HandleCreateProvider` |
+| POST | `/v1/providers/from-catalog` | `providerHandler.HandleCreateProviderFromCatalog` |
+| DELETE | `/v1/providers/{providerID}` | `providerHandler.HandleDeleteProvider` |
+| PUT | `/v1/providers/{providerID}` | `providerHandler.HandleUpdateProvider` |
+| GET | `/v1/providers/{providerID}/models` | `providerHandler.HandleListModels` |
+| POST | `/v1/providers/{providerID}/models` | `providerHandler.HandleCreateModel` |
+| DELETE | `/v1/providers/{providerID}/models/{modelID}` | `providerHandler.HandleDeleteModel` |
+| PUT | `/v1/providers/{providerID}/models/{modelID}` | `providerHandler.HandleUpdateModel` |
+| POST | `/v1/providers/{providerID}/models/{modelID}/deprecate` | `providerHandler.HandleModelDeprecate` |
+| POST | `/v1/providers/{providerID}/models/{modelID}/upgrade` | `providerHandler.HandleModelUpgrade` |
+| POST | `/v1/providers/{providerID}/test` | `providerHandler.HandleTestProvider` |
+| GET | `/v1/search` | `chatHandler.HandleSearch` |
+| GET | `/v1/sessions` | `chatHandler.HandleListSessions` |
+| DELETE | `/v1/sessions/{sessionID}` | `chatHandler.HandleDeleteSession` |
+| GET | `/v1/sessions/{sessionID}` | `chatHandler.HandleGetSession` |
+| GET | `/v1/sessions/{sessionID}/context` | `chatHandler.HandleGetSessionContext` |
+| POST | `/v1/sessions/{sessionID}/recap` | `chatHandler.HandleSessionRecap` |
+| GET | `/v1/skills` | `sysadminHandler.HandleListSkills` |
+| POST | `/v1/skills/create` | `sysadminHandler.HandleCreateSkill` |
+| POST | `/v1/skills/install` | `sysadminHandler.HandleInstallSkill` |
+| GET | `/v1/status` | `handleStatus` |
+| POST | `/v1/system/update` | `sysadminHandler.HandleTriggerUpdate` |
+| GET | `/v1/system/version` | `sysadminHandler.HandleGetVersion` |
+| GET | `/v1/tools` | `sysadminHandler.HandleListTools` |
+| POST | `/v1/tools/{name}/execute` | `sysadminHandler.HandleExecuteTool` |
+| GET | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |
+| POST | `/v1/webhooks/{channelType}/{channelID}` | `sysadminHandler.Channels.HandleWebhookReceive` |
+| GET | `/v1/workflows` | `sysadminHandler.Workflow.HandleListWorkflows` |
+| POST | `/v1/workflows` | `sysadminHandler.Workflow.HandleCreateWorkflow` |
+| DELETE | `/v1/workflows/{id}` | `sysadminHandler.Workflow.HandleDeleteWorkflow` |
+| GET | `/v1/workflows/{id}` | `sysadminHandler.Workflow.HandleGetWorkflow` |
+| PUT | `/v1/workflows/{id}` | `sysadminHandler.Workflow.HandleUpdateWorkflow` |
+| GET | `/v1/workflows/{id}/runs` | `sysadminHandler.Workflow.HandleListWorkflowRuns` |
+| POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
+
+共 115 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+<!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
 
