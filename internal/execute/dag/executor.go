@@ -1,5 +1,5 @@
 // Package dag 实现 M4 Agent Kernel 的 DAG 执行器与 Saga 补偿逻辑。
-// 架构文档: docs/arch/M04-Agent-Kernel.md §5.3, §5.4
+// 架构文档: docs/arch/M04-Agent-Kernel.md §4.3, §4.4
 // 2026-07-12 随 internal/execute 模块化从 internal/execute/dag 物理迁出（原
 // 包注释误写"Package kernel"，与实际 `package dag` 不符，一并修正）。
 // 迁出后 internal/agent 不再直接 import 本包，改为通过 agent/provider.go
@@ -30,7 +30,7 @@ import (
 // ─── DAG 数据模型 ────────────────────────────────────────────────────────────
 //
 // CompensationAction / NodeStatus / ExecNode / EdgePolarity / ExecEdge / DAGPlan
-// 权威定义均在 internal/protocol/dag_node.go（M04 §B2：跨模块共享类型须在
+// 权威定义均在 internal/protocol/dag_node.go（docs/specs/04-Module-Boundary.md §B2：跨模块共享类型须在
 // internal/protocol/ 定义，internal/swarm/planner、internal/agent/fsm 等消费方
 // 不再直接 import 本包）。此处仅保留别名。
 //
@@ -60,7 +60,7 @@ const (
 // ─── DAG Executor ───────────────────────────────────────────────────────────
 
 const (
-	tier0MaxConcurrency = 4 // Tier 0 硬限：最大 4 并发（docs/arch/M04 §5.3）
+	tier0MaxConcurrency = 4 // Tier 0 硬限：最大 4 并发（docs/arch/M04 §4.3）
 	defaultNodeTimeout  = 60 * time.Second
 	leaseHeartbeatBase  = 15 * time.Second
 )
@@ -72,7 +72,7 @@ type ToolExecutorFn func(ctx context.Context, toolName string, args []byte, tain
 type LeaseRenewFn func(ctx context.Context, taskID, agentID string, ttl time.Duration) error
 
 // DAGExecutor 执行 M4 Micro-DAG。
-// 架构文档: docs/arch/M04-Agent-Kernel.md §5.3
+// 架构文档: docs/arch/M04-Agent-Kernel.md §4.3
 type DAGExecutor struct {
 	maxConcurrency int
 	toolExec       ToolExecutorFn

@@ -200,7 +200,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		)
 		// 通过 adapter 注入：agent 包依赖接口，不直接持有 *codeact.CodeAct
 		ab.Agent.SetCodeAct(&codeActAdapter{inner: codeActEngine})
-		// gateway 侧同样只依赖 action.ActionFacade 接口，不直接持有 *codeact.CodeAct（M04 §B2）
+		// gateway 侧同样只依赖 action.ActionFacade 接口，不直接持有 *codeact.CodeAct（docs/specs/04-Module-Boundary.md §B2）
 		httpServer.SetCodeActEngine(action.NewActionFacade(codeActEngine))
 		slog.Info("polaris: CodeAct engine initialized and injected",
 			"sandbox", "L3-container",

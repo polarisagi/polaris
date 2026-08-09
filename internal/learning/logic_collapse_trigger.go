@@ -25,7 +25,7 @@ import (
 // ─── 接口约定 ─────────────────────────────────────────────────────────────────
 
 // TrajectoryCompiler 是 extension/skill.LogicCollapseCompiler 的消费端抽象（防止 test 时需要
-// 构建完整编译器）。请求/结果类型使用 protocol.CompileRequest/CompileResult（M04 §B2），
+// 构建完整编译器）。请求/结果类型使用 protocol.CompileRequest/CompileResult（docs/specs/04-Module-Boundary.md §B2），
 // learning 包不直接 import internal/extension/skill。
 type TrajectoryCompiler interface {
 	Compile(ctx context.Context, req *protocol.CompileRequest) (*protocol.CompileResult, error)

@@ -100,7 +100,7 @@ TaintLevel/TaintedString/SafeString/TaintSource/PropagateTaint 类型定义见 `
 | 第三重：持久化边界密码学验证 | SQL/JSON/Protobuf 序列化层附加 HMAC-SHA256（`persistent_key` OS（Operating System，操作系统） Keychain 派生），反序列化时重算验证；验证失败或字段缺失 → 强制 `TaintHigh` + CRITICAL 审计；启动顺序 `CredentialVault.Init() → StorageFabric.Open()`，超时 30s 进程退出 | 运行时序列化钩子 |
 | 第四重：泛型反序列化防剥离 | 禁止 `json.Unmarshal` 到 `map[string]interface{}` / `any` 等弱类型集合；外部 JSON 须反序列化到显式声明的带污点结构体 | CI go-vet lint 强制 |
 
-**ZoneExternalCatalog 信任分区**：`internal/prompt.PromptBuilder` 在 `ZoneImmutable`/`ZoneCoreMemory`/`ZoneMutableSkill`/`ZoneTaintedData`（详见 M05 §ContextZone）之外新增 `ZoneExternalCatalog` 分区，专门承载"来自外部但已知结构化程度较高"的内容（如 MCP Server/A2A 目录描述）。与 `ZoneImmutable`/`ZoneCoreMemory` 不同——这两者结构性禁止承载 `>= TaintMedium` 内容（`WriteInstruction` 编译期只接受 `taint.SafeString`）——`ZoneExternalCatalog` **允许**承载 `TaintMedium`/`TaintHigh` 内容，但 `WriteExternalCatalog` 对此类内容强制 M11 Spotlighting 包裹（`=== UNTRUSTED_DATA_{sha256}... ===`，见 M05 §ContextZone）。二者是同一份 Zone 维度隔离机制里的不同分区职责，不是 `internal/security/taint` 的 PromptSlot（LLM 请求维度槽位模型）——两套维度正交，不互相引用（防包循环，见 `taint_gate.go` 顶部注释）。
+**ZoneExternalCatalog 信任分区**：`internal/prompt.PromptBuilder` 在 `ZoneImmutable`/`ZoneCoreMemory`/`ZoneMutableSkill`/`ZoneTaintedData`（详见 M05 §2.1）之外新增 `ZoneExternalCatalog` 分区，专门承载"来自外部但已知结构化程度较高"的内容（如 MCP Server/A2A 目录描述）。与 `ZoneImmutable`/`ZoneCoreMemory` 不同——这两者结构性禁止承载 `>= TaintMedium` 内容（`WriteInstruction` 编译期只接受 `taint.SafeString`）——`ZoneExternalCatalog` **允许**承载 `TaintMedium`/`TaintHigh` 内容，但 `WriteExternalCatalog` 对此类内容强制 M11 Spotlighting 包裹（`=== UNTRUSTED_DATA_{sha256}... ===`，见 M05 §2.1）。二者是同一份 Zone 维度隔离机制里的不同分区职责，不是 `internal/security/taint` 的 PromptSlot（LLM 请求维度槽位模型）——两套维度正交，不互相引用（防包循环，见 `taint_gate.go` 顶部注释）。
 
 ### 2.2 辅助防线 (OWASP LLM Top 10 2025 防护)
 
@@ -610,7 +610,7 @@ M11 故障默认 fail-closed (拒绝执行)，保障安全。与 OSMemoryGuard �
 | M4 Agent Kernel | TaintGate Layer A/A.1/B、CheckBurnStatus 仅响应不触发 | M4 §3, §7 |
 | M7 Tool & Action | Capability Token JIT Minting、SafetyMonitor 事件来源 | M7 §6, §4 |
 | M8 Orchestrator | KillSwitch FullStop → orchestrator.StopAll | M8 §1.7 |
-| M10 Knowledge RAG（Retrieval-Augmented Generation，检索增强生成） | Connector Taint 初始等级查找表 | M10 §0, M11 §2.4 |
+| M10 Knowledge RAG（Retrieval-Augmented Generation，检索增强生成） | Connector Taint 初始等级查找表 | M10 §0-bis, M11 §2.4 |
 | 全局字典 | TaintLevel/Taint-Prop/Taint-Sanitizer/KillSwitch 完整定义 | 00-Global-Dictionary §4, §5, §8 |
 | DDL | 001_events（审计轨迹 source）、006_decision_log（决策日志） | internal/protocol/schema/ |
 | 时序图 | KillSwitch 触发与响应链全流程 | DIAGRAMS.md#killswitch |

@@ -94,7 +94,7 @@ type
 
 // SalienceEvent 高显著性情景事件的轻量摘要（episodic_events 物化表投影）。
 // 供后台维护 Agent（如 swarm.MemoryAgent）扫描生成耳语提示，避免调用方绕过
-// MemoryFacade 直接执行裸 SQL（M04 §B2 跨模块通信通道）。
+// MemoryFacade 直接执行裸 SQL（docs/specs/04-Module-Boundary.md §B2 跨模块通信通道）。
 SalienceEvent struct {
 	ID         int64
 	SessionID  string

@@ -30,7 +30,7 @@ internal/execute/
 
 `dag` 与 `orchestrator` 均以"Executor"命名结尾（DAGExecutor / PatternDAGExecutor /
 StateGraphExecutor），但作用域不同：`dag` 是单个 Agent 内部工具调用序列的执行
-（M04 §5.3，输入是 LLM 一次 S_PLAN 产出的 ExecNode 列表），`orchestrator` 是跨
+（M04 §4.3，输入是 LLM 一次 S_PLAN 产出的 ExecNode 列表），`orchestrator` 是跨
 多个 Agent 实例的任务编排（M08，输入是 Blackboard 上多个独立 Agent 认领的任务）。
 二者的调度对象（工具调用 vs. Agent 任务）、生命周期（一次 FSM 步骤内同步执行 vs.
 跨多个异步 Agent 生命周期）、失败语义（Saga 补偿 vs. Blackboard 任务重试/Reaper）

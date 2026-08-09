@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:127 L1 Episodic / 4:229 L2 Semantic / 5:271 L3 Procedural / 6:325 写路径 / 7:337 HybridRetriever / 8:423 EffConn / 9:433 Consolidation / 10:469 Forgetting / 11:486 PromptBuilder / 12:556 Drift / 14:594 496(SOFT)降级 / 15:618 依赖 -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:127 L1 Episodic / 4:229 L2 Semantic / 5:271 L3 Procedural / 6:325 写路径 / 7:337 HybridRetriever / 8:423 EffConn / 9:433 Consolidation / 10:469 Forgetting / 11:486 PromptBuilder / 12:562 Drift / 14:600 496(SOFT)降级 / 15:624 依赖 -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -536,7 +536,13 @@ PromptBuilder 布局实现见 `internal/agent/`（PromptBuilder），SessionComp
 
 Layout Zone → ContextZone 映射表、安全约束和不变量见上文 §2.1。
 
-### SessionCompressor
+### 11.3 SessionCompressor
+
+> 编号说明（2026-08-09 补）：本节标题此前缺失编号，而全仓 17 处 `.go`/`.md` 注释一致
+> 以 `M05 §11.3` 引用本节（Stage 1 ToolRefOffloader / Stage 3 TaskMermaidCanvas 内容
+> 逐条对得上），是标题在某次编辑中丢了编号而非引用方写错——按多数独立引用为准补回
+> `11.3`，不改那 17 处引用。§11.2 空缺为历史删除留白，**不得**为"连号好看"把本节改成
+> 11.2，那会一次性打断全部 17 处引用。
 
 **SessionCompressor** 实现见 `internal/memory/`。
 

@@ -108,7 +108,7 @@ func (e *DAGExecutor) executeNode(ctx context.Context, node ExecNode) NodeResult
 }
 
 // runCompensation 逆序执行 Saga 补偿动作（尽力而为，不阻塞 Cancel）。
-// 架构文档: docs/arch/M04-Agent-Kernel.md §5.3 step 5
+// 架构文档: docs/arch/M04-Agent-Kernel.md §4.3 step 5
 func (e *DAGExecutor) runCompensation(ctx context.Context) {
 	// 使用后台上下文——避免父 ctx 已取消时补偿被跳过
 	compCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

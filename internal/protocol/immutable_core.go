@@ -8,7 +8,7 @@ package protocol
 // sysadmin/preferences.go 热更新用户偏好）
 //
 // 此前 gateway 通过 `.(*store.ImmutableCore)` 类型断言绕过 protocol.ImmutableCore
-// 接口直接读写这些字段，违反 M04 §B2。现将可写字段集合收敛至此，
+// 接口直接读写这些字段，违反 docs/specs/04-Module-Boundary.md §B2。现将可写字段集合收敛至此，
 // protocol.ImmutableCore.Fields() 返回本结构体指针供调用方读写，
 // 不再需要下探到 memory/store 具体类型。
 type ImmutableCoreFields struct {

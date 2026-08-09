@@ -12,7 +12,7 @@ import (
 // consumer: internal/learning（LogicCollapseMonitor 触发编译）
 //
 // 这些类型此前分别以 internal/extension/skill.CollapseTrajectory 等具体类型
-// 由 internal/learning 直接 import 消费，违反 M04 §B2（跨模块共享类型须在
+// 由 internal/learning 直接 import 消费，违反 docs/specs/04-Module-Boundary.md §B2（跨模块共享类型须在
 // internal/protocol/ 定义）。现收敛至此，extension/skill 与 learning 均通过
 // 类型别名/直接引用本文件的定义，不再互相 import 对方的具体实现包。
 

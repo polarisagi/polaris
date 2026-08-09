@@ -4,7 +4,7 @@ import "github.com/polarisagi/polaris/internal/protocol"
 
 // stepScorer 执行步骤实时打分，用于 Adaptive Max-Steps 动态预算收紧。
 // 权重: toolSuccess=0.4, schemaCheck=0.3, latency=0.2, tokenEfficiency=0.1。
-// 架构文档: docs/arch/M04-Agent-Kernel.md §5.5
+// 架构文档: docs/arch/M04-Agent-Kernel.md §4.5
 //
 // prm 非 nil 时（Tier1+ 且 Agent.provider 实现 protocol.LocalProvider，见
 // step_scorer_prm.go newStepScorer）额外挂载语义打分融合通道，见 §4.5。

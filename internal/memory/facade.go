@@ -30,7 +30,7 @@ func NewMemoryFacade(sys *MemorySystemImpl) *MemoryFacadeImpl {
 
 // NewMemoryFacadeWithStore 构造带图谱周期维护能力的记忆门面。
 // 供需要驱动 PruneMemoryGraph 的调用方使用（如 swarm.MemoryAgent 常驻 goroutine），
-// 避免该调用方直接 import internal/memory/graph 构造 EdgeWeightManager（M04 §B2）。
+// 避免该调用方直接 import internal/memory/graph 构造 EdgeWeightManager（docs/specs/04-Module-Boundary.md §B2）。
 func NewMemoryFacadeWithStore(sys *MemorySystemImpl, store protocol.Store) *MemoryFacadeImpl {
 	f := &MemoryFacadeImpl{sys: sys}
 	if store != nil {

@@ -38,7 +38,7 @@ type InMemoryToolRegistry struct {
 	// idempotencyCache 幂等缓存：LRU 上限 1000 条 + TTL 5min 双控。
 	// 上限 1000 是 state.yaml §m7_tool.idempotency_cache_max 的默认值。
 	idempotencyCache   *lruCache
-	tokenVault         *guard.PIITokenVault // 可选注入（M11 §5.4 PII 令牌化）；nil 时行为与改造前完全一致
+	tokenVault         *guard.PIITokenVault // 可选注入（M11 §5.1 PII 令牌化）；nil 时行为与改造前完全一致
 	hitl               protocol.HITL        // HITL 网关 (人工审批)
 	outcomeRecorder    ToolOutcomeRecorder
 	sessionEventWriter SessionEventWriter
@@ -177,7 +177,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		return nil, apperr.New(apperr.CodeInternal, "tool_registry: envelope is nil")
 	}
 
-	// PII 令牌还原（M11 §5.4）：input 里若含 ⟦PII:xxxx⟧ 令牌，在真正执行前原地
+	// PII 令牌还原（M11 §5.1）：input 里若含 ⟦PII:xxxx⟧ 令牌，在真正执行前原地
 	// 还原为真实值，仅用于本次调用栈。还原失败（未知/伪造 token）fail-closed
 	// 直接拒绝执行，不放行部分还原或原样透传。还原后的明文只存在于局部变量
 	// execInput 中，不会被写回 finalResult/idempotencyCache（两者均基于

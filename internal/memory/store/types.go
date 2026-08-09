@@ -5,7 +5,7 @@ import (
 )
 
 // ImmutableCore 永不裁剪的核心区（M05 §2.2），写入经 M9 staging + M11 闸控。
-// 可写字段集合内嵌 protocol.ImmutableCoreFields（M04 §B2 跨模块共享类型），
+// 可写字段集合内嵌 protocol.ImmutableCoreFields（docs/specs/04-Module-Boundary.md §B2 跨模块共享类型），
 // 外部消费方（gateway）经 protocol.ImmutableCore.Fields() 读写，不再需要
 // 类型断言到本具体类型。字段级注释见 protocol/immutable_core.go。
 type ImmutableCore struct {

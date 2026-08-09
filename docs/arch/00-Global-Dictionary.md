@@ -566,7 +566,7 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 - `[FactualityGuard]`: 安全防线 D6（与 D1~D5 同等级），守护 LLM 输出的事实性。
   - 运行时抽样 5%（可配）经 [CitationValidator] + 数值一致性检查。
   - 检测到 hallucination → 标记 `TaintLevel` 强制升至 [Taint-Medium] + 触发 LLM-as-Judge 二次裁决。完整定义见 M11 §6.5 D6 防线。
-- `[CitationValidator]`: 引用核验器。M10 RAG 输出强制附带 `chunk_id` 引用；FactualityGuard 抽样验证引用 chunk 真实包含输出主张。定义见 M10 §4.X。
+- `[CitationValidator]`: 引用核验器。M10 RAG 输出强制附带 `chunk_id` 引用；FactualityGuard 抽样验证引用 chunk 真实包含输出主张。定义见 M10 §4.1。
 - `[CodeAct]`: 即时代码执行行动空间。区别于 [Logic-Collapse]（沉淀型脚本技能）与 LLM 生成脚本（走 staging 流水线）——CodeAct 是**单次 ad-hoc 代码 + 立即执行**，不写入 Skill Library。
   - 强制 [Sandbox-L3]（HT0 不可用）+ Capability Token + Audit。定义见 M7 §7.4。
   - `StatefulSession`（GD-4-002，默认关闭）：显式开启后，同一 SessionID 的多次调用间通过 pickle（python）/`declare -p`（bash）快照文件延续变量状态；每次调用仍是独立的一次性 L3 沙箱进程，不是常驻 Kernel，安全边界不变。

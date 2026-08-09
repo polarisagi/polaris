@@ -6,7 +6,7 @@ package protocol
 // consumer: internal/eval（SyntheticCaseToEvalCase 适配为 harness.EvalCase）
 //
 // SyntheticCase 此前以 internal/learning/synthetic.SyntheticCase 具体类型由
-// internal/eval 直接 import 消费，违反 M04 §B2。现收敛至此。
+// internal/eval 直接 import 消费，违反 docs/specs/04-Module-Boundary.md §B2。现收敛至此。
 
 // CaseSeverity 合成用例严重等级字符串（与 eval/harness.Severity 语义对齐）。
 type CaseSeverity = string
