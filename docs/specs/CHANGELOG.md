@@ -6,7 +6,15 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-08-09（新增 ADR-0094 Fail-Closed 安全判定与生命周期锚定 Lint 门控）
+
+`docs/arch/decisions/ADR-0094-fail-closed-and-lifecycle-lint-gates.md` 新增：
+
+- 明确 8 条规范性决策（Fail-Closed 三态、身份单源、生命周期锚定、状态落盘不得静默吞错、FFI 指针保活判据、结构化载体禁直拼、stdlib 包装透传与模型池枚举规范）。
+- 对应在 `internal/lint/` 中补齐 10 条 CI 机械化门控规则。
+
 ## 2026-08-01（阶段01~05 新增 4 条防退化 lint 不变量）
+
 
 `internal/lint/inv_lint_test.go` 新增：
 

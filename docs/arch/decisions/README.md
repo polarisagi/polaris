@@ -96,6 +96,8 @@ ADR 被代码引用时，源文件头部加：
 | 0091 | 审计门控的覆盖面而非结果：test-race 改全仓、fuzz 并入 check-all、docs-refs 去 maxdepth | Accepted（已执行） | 2026-08-09 |
 | 0092 | docs/ 与提示词的读者定位：AI 优先，reformat（人类可读性）方向视为已驳回 | Accepted（已执行） | 2026-08-09 |
 | 0093 | M12 Eval Harness 评测隔离层设计（2026-08-09 由 0051 改号，原编号与已删除 ADR 撞号，见该文件顶部改号说明） | Accepted | 2026-07-28 |
+| 0094 | Fail-Closed 安全判定与生命周期锚定 Lint 门控 | Accepted | 2026-08-09 |
+
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。
 
