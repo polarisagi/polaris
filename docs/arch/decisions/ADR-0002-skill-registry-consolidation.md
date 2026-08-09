@@ -12,4 +12,8 @@
 
 ## 引用代码
 
-`internal/extension/skill/skill.go`；权威定义见 `internal/protocol/interfaces.go §407-443`
+`internal/extension/skill/skill.go`；权威定义见 `internal/protocol/interfaces_skill.go`（原 `interfaces.go §407-443` 已拆分，行号引用同步失效，不再保留旧行号）
+
+> 2026-08-09 追记：重新评估触发条件——若某子包确实出现字段语义与 protocol 定义
+> 无法兼容的真实需求（而非图省事），应先扩展 protocol 定义本身，而不是重新引入
+> 本地并行接口；只有 protocol 层扩展被证明不可行时才重议本 ADR。

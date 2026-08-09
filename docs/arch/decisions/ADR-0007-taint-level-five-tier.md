@@ -20,3 +20,7 @@
 ## 引用代码
 
 `internal/security/taint/taint.go`、`internal/security/taint/taint_sanitizer.go`
+
+> 2026-08-09 追记：重新评估触发条件——五级传播已被 GD-13-004/GD-14-003 两轮挑战
+> 后维持采纳，重提简化方案须证明五级粒度在实际生产中从未被用到（例如 Medium
+> 硬地板与 High 从未产生不同处置分支），而非纯粹"看起来复杂"。

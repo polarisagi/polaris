@@ -23,3 +23,8 @@ M5 Episodic→Semantic 蒸馏管线与 M10 RAG 摄取管线此前各自独立调
 ## 引用代码
 
 `internal/memory/consolidation/consolidation_extract.go`、`internal/knowledge/graphrag/build.go`
+
+> 2026-08-09 追记：重新评估触发条件——"M5 完全并入 M10"物理合并方案已被决策一
+> 否决且决策二明确重申未推翻，重提须证明 Tier-0 SQLite / Tier-1+ 图存储分级
+> 架构本身已不再是约束（如 Tier-0 硬下限被取消），而不是单纯"两套管线维护
+> 麻烦"。

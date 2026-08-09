@@ -81,7 +81,7 @@
 
 ## 引用代码
 
-`internal/protocol/saga_ledger.go`、`internal/execute/dag/executor_node.go`、`internal/agent/fsm/state_machine_effects.go`、`internal/security/token/capability_token.go`、`internal/action/capability_token.go`、`internal/action/codeact/code_act.go`、`internal/automation/hitl/gateway.go`、`internal/observability/metrics/instruments.go`
+`internal/protocol/saga_compensation.go`（`SagaCompensationLedger` 实际定义处，原引用文件名 `saga_ledger.go` 不存在）、`internal/execute/dag/executor_node.go`、`internal/agent/fsm/state_machine_effects.go`、`internal/security/token/capability_token.go`、`internal/action/capability_token.go`、`internal/action/codeact/code_act.go`、`internal/automation/hitl/gateway.go`、`internal/observability/metrics/instruments.go`
 
 ---
 

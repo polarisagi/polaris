@@ -16,3 +16,7 @@ Tier-0（8GB）是核心路径硬上限；超额能力通过四级 Hardware Tier
 ## 引用代码
 
 `internal/observability/probe/{hardware_probe,feature_gate,tier_parameters,memory_probe}.go`
+
+> 2026-08-09 追记：重新评估触发条件——若核心路径（kv-mem+Embedding+STT+Wasm 沙箱）
+> 在实测中被证明无法在 8GB 环境稳定运行且无可行优化空间，才重议上调 Tier-0 硬
+> 下限；单纯"新功能想要更多内存"不构成触发条件，须先走 FeatureGate + Tier 声明。

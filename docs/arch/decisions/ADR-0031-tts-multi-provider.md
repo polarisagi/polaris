@@ -21,3 +21,8 @@
 ## 引用代码
 
 `internal/llm/tts/{provider,edge,http,sherpa,wav}.go`
+
+> 2026-08-09 追记：重新评估触发条件——若 Sherpa-ONNX（Tier-0 离线路径）质量长期
+> 无法满足基本可用性且无替代离线方案，才重议是否放宽"不打包 GPU 推理进主进程"
+> 的边界；HTTPProvider sidecar 模式已把 GPU 依赖隔离在外，非亲手验证过 sidecar
+> 方案不可行前不重议。

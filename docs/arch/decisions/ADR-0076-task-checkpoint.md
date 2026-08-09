@@ -23,3 +23,9 @@
 ## 引用代码
 
 `internal/protocol/replay.go`、`cmd/polaris/boot_crash_recovery.go`、`internal/execute/orchestrator/pattern_state_graph.go`、`internal/agent/agent_execute_effect_helpers.go`、`cmd/polaris/boot_handoff_reconciler.go`、`internal/agent/reconciler_handoff.go`
+
+> 2026-08-09 追记：重新评估触发条件——① 决策一"S_VALIDATE/S_EXECUTE/S_REPLAN/
+> S_ROLLBACK 保守跳过自动恢复"须先有专门的 2PC 预写日志审计通过，才能扩大自动
+> 恢复范围到这些状态；② `pkg/types.BuildIdempotencyKey` 的 `version` 参数保持
+> DEFER，重提统一迁移须先找到真实对应业务概念的调用点，而非为了"统一"而臆造
+> 语义。

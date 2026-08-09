@@ -28,3 +28,9 @@ Phase 1 启用四个低成本高 ROI linter 机械化守护宪法规则：`depgu
 ## 引用代码
 
 `.golangci.yml`、`.github/workflows/ci.yml`、`.github/workflows/constitutional-review.yml`、`scripts/constitutional_review.sh`
+
+> 2026-08-09 追记：重新评估触发条件——① `funlen` 已判定不采用（2026-07-04），重提
+> 须证明 `gocyclo` 存在其无法覆盖的真实漏检案例；② "warning-only 不阻断 CI"若被
+> 证明导致审查意见长期零响应（团队学会忽略而非绕过），才重议是否分级阻断；
+> ③ `wrapcheck`/`gochecknoglobals` 推进 Phase 2 前须先完成既有违规盘点，不得
+> 直接开启导致大量存量报错淹没信号。

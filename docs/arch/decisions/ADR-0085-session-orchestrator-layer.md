@@ -51,3 +51,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-08-01 | 初稿，阶段06 ADR 归档补录（对应阶段04 A-03 已落地实现） |
+| 2026-08-09 | 追记：重新评估触发条件——任何在 `chat` 包或 `agent/pool.go` 内新增"确保会话/加载历史/驱动 FSM"重复实现的提议，须先说明为何不能复用 `session.Orchestrator`；`Test_inv_M13_SingleTurnEntry`/`Test_inv_M13_SessionPkgNoHTTP` 两条 lint 是本决策的强制执行机制，放宽须同步修改这两条测试并说明理由。 |

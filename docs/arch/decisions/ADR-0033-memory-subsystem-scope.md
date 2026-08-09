@@ -44,8 +44,14 @@ M4 任务级 token 预算三级检测（50/75/100%）与本机制互补，非替
 
 ## 引用代码
 
-`internal/memory/store/episodic_mem.go`、`internal/memory/graph/episodic_graph_bridge.go`、`internal/memory/retrieval/online_reindexer.go`、`internal/memory/consolidation/exclusive_writer.go`、`internal/memory/retrieval/hybrid_retriever.go`、`internal/tool/builtin/core_memory_edit/`、`internal/protocol/schema/034_core_memory.sql`、`internal/memory/compact/`、`internal/agent/agent_context_compaction.go`
+`internal/memory/store/episodic_mem.go`、`internal/memory/graph/episodic_graph_bridge.go`、`internal/memory/retrieval/online_reindexer.go`、`internal/memory/retrieval/exclusive_closure.go`（`ExclusiveWriter` 实际定义处，原引用路径 `consolidation/exclusive_writer.go` 不存在）、`internal/memory/retrieval/retriever.go`（`HybridRetriever` 实际定义处，原引用文件名 `hybrid_retriever.go` 不存在）、`internal/tool/builtin/core_memory_edit/`、`internal/protocol/schema/034_core_memory.sql`、`internal/memory/compact/`、`internal/agent/agent_context_compaction.go`
 
 ## 修订记录
 
 2026-07-22：显式"有效窗"辅助函数与 `SynapticPlasticityManager`（零生产构造点）已删除，见 [ADR-0062](./ADR-0062-deadcode-final-settlement.md)。
+
+> 2026-08-09 追记：重新评估触发条件——决策二"不做列表"两项均有明确复议条件
+> （SurrealKV 双轨检索：压测证明现有 Registry+Selector 瓶颈后；多签审批：出现
+> 真实多用户/多操作者场景后），前提不变则维持已驳回；决策五 M4/M5 压缩接入
+> 若发现 Stage1"大 tool_result 优先卸载"的保守替代长期无法逼近真实 salience
+> 排序效果，才重议引入更复杂的排序算法。

@@ -34,4 +34,9 @@ Plugin Catalog 正确位置是 M13（`plugin_catalog.go`），非 M7——修正
 
 ## 引用代码
 
-`internal/config/trusted_publishers.go`、`internal/protocol/schema/{008,015,019,020,021}_*.sql`、`internal/action/hook/`、`internal/extension/skill/`、`internal/swarm/orchestrator/agent_profile.go`、`internal/gateway/server/plugin/{catalog,manage}.go`
+`internal/config/trusted_publishers.go`、`internal/protocol/schema/{008,015,019,020,021}_*.sql`、`internal/action/hook/`、`internal/extension/skill/`、`internal/execute/orchestrator/agent_profile.go`、`internal/gateway/server/plugin/{catalog,manage}.go`
+
+> 2026-08-09 追记：重新评估触发条件——① 官方 Publisher 白名单（决策一）若因生态
+> 扩张需要频繁人工新增，考虑改为可配置白名单而非硬编码，但离线优先/供应链风险
+> 控制的原则不变；② P3 搁置项（prefix_rule DSL、Permission Profile）若 Cedar
+> 覆盖被证明有真实缺口，重议纳入路线图，而非因"业界流行"直接采纳。

@@ -30,4 +30,10 @@ thinking 启用时 temperature 强制为 0；`reasoning_content` 须随 assistan
 
 ## 引用代码
 
-`internal/llm/`、`internal/llm/adapter/deepseek.go`、`internal/agent/agent_execute.go`
+`internal/llm/`、`internal/llm/adapter/deepseek.go`、`internal/agent/agent_execute_effect.go`（原 `agent_execute.go` 已拆分为多个 `agent_execute_*.go` 文件）
+
+> 2026-08-09 追记：重新评估触发条件——① DeepSeek V4 的成本/质量优势若被后继模型
+> 明显超越（价格不再是 1/50~1/1000 量级或质量出现代差），重议默认 provider；
+> ② 本地模型定位若因硬件普及（如消费级设备 NPU 算力大幅提升）不再局限于
+> Tier-3 高级特权场景，重议其角色，但当前"非省钱降级方案"的定位不因单纯价格
+> 波动而改变。

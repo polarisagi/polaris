@@ -1,6 +1,6 @@
 # ADR-0069: OpenLLMetry 轨迹导出器架构
 
-- **状态**: Accepted（已执行，含 boot 期接线）| **模块**: `internal/observability/trace`
+- **状态**: Accepted（已执行，含 boot 期接线）| **日期**: 2026-07-23 | **模块**: `internal/observability/trace`
 
 ## 决策
 
@@ -11,3 +11,8 @@
 ## 引用代码
 
 `internal/observability/trace/tracer.go`、`cmd/polaris/boot_substrate.go`
+
+> 2026-08-09 追记：重新评估触发条件——新增导出器实现（如 Jaeger/Zipkin 原生协议）
+> 前须确认无法用已有 `OTLPHTTPExporter` 覆盖；异步最佳努力策略若被证明导致
+> 生产环境 trace 丢失率过高影响排障，才重议是否需要同步兜底路径，但不得因此
+> 引入阻塞 Agent 热路径的方案。

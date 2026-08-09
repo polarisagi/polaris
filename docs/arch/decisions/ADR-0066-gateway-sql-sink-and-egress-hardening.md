@@ -34,4 +34,10 @@ Gateway 控制层六个明确站点（`cron_runner.go`/`cron_handlers.go`/`cron_
 
 ## 引用代码
 
-`internal/agent/agent_execute.go`、`internal/gateway/server/chat/sse.go`、`internal/protocol/repo/repo_automation.go`、`internal/gateway/egress/egress_gateway.go`、`internal/channel/adapter/adapter.go`、`internal/channel/manager.go`
+`internal/agent/agent_execute_effect.go`（原 `agent_execute.go` 已拆分为多个 `agent_execute_*.go` 文件）、`internal/gateway/server/chat/sse.go`、`internal/protocol/repo/repo_automation.go`、`internal/gateway/egress/egress_gateway.go`、`internal/channel/adapter/adapter.go`、`internal/channel/manager.go`
+
+> 2026-08-09 追记：重新评估触发条件——决策五 ChatOrchestrator 拆分"待排期"是
+> 因 `sse.go` 高频热路径 big-bang 重构风险过大，重新排期前须先有分阶段拆分
+> 方案（而非一次性大改），或该文件的职责过载已实测阻碍新功能开发到不可接受
+> 程度；决策二"六处明确站点"之外的裸 SQL 不背书也不禁止，扩大范围前需单独
+> 评估，不得默认套用同一模式。

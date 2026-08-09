@@ -31,8 +31,13 @@
 
 ## 引用代码
 
-`internal/agent/pool.go`、`internal/learning/curriculum/`、`pkg/concurrent/safego.go`、`internal/learning/synthetic/shadow_executor.go`
+`internal/agent/pool.go`、`internal/learning/curriculum/`、`pkg/concurrent/safe_go.go`、`internal/eval/analysis/shadow_executor.go`（原 `internal/learning/synthetic/` 已迁移至 `internal/eval/analysis/`）
 
 ## 引用
 
 实施细节内联于提交记录，专项整改见 `docs/upgrade/upgrade-01~05`。
+
+> 2026-08-09 追记：重新评估触发条件——本 ADR 是历史缺陷修复档案，条目本身不
+> 需要"重新评估"（缺陷已修复即成立）；唯一可能重议的是决策一"反例守护"两项
+> （eBPF 沙箱探针、完整 HLC 时钟）——若 Tier-0 硬约束被放宽，或出现真实多节点
+> 需求，才重新评估这两项拒绝是否仍然成立。

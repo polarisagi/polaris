@@ -66,3 +66,4 @@ ADR-0017 决策三已实现 A2A v0.3 入站端点（`GET /.well-known/agent-card
 | 日期 | 变更 |
 |------|------|
 | 2026-08-02 | 初稿，随阶段05 P-03 落地 |
+| 2026-08-09 | 追记：重新评估触发条件——`NamespaceID`/角色路由对 `DefaultTaskWorker` 本地非 `mcp:` 委派路径的缺口是独立于本 ADR 的既有 bug（登记于 `99-new-findings.md`），须单独 ADR 评审，不得在本 ADR 范围内顺手修复；新增独立 A2A HTTP 客户端的提议须先证明 `MCPManager.CallTool` 复用路径已无法满足需求。 |

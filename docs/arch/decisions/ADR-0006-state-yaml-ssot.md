@@ -21,4 +21,8 @@ Tier 1（必测，CI fail-closed）：M4 状态枚举/转移、TaintLevel 五级
 
 ## 引用代码
 
-`internal/protocol/constants.go`、`internal/protocol/spec_consistency_test.go`
+`internal/protocol/interfaces_agent.go`（state.yaml §par 状态枚举镜像点，原 `constants.go` 已拆分不复存在）、`internal/protocol/spec_consistency_test.go`
+
+> 2026-08-09 追记：重新评估触发条件——若 `spec_consistency_test.go` 的显式断言映射
+> 维护成本被证明高于反射/代码生成方案（例如阈值数量级增长导致断言列表本身失控），
+> 才重议机制切换；当前 Tier 1/Tier 2 分级门控策略仍成立时不重议。
