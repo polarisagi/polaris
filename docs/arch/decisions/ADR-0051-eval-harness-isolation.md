@@ -24,3 +24,8 @@ Polaris 需要一个强隔离的评测系统来验证自进化 (M9) 生成的代
 - `internal/eval/benchmark/benchmark.go`
 - `internal/eval/harness/runner.go`
 - `internal/gateway/server/sysadmin/evaladmin/admin.go`
+
+> 2026-08-09 追记：重新评估触发条件——若出现真实需要"部分复用"训练数据与
+> 基准数据集边界的场景（如需要用基准结果反哺训练），须先经安全评估确认不会
+> 引入模型在验证集作弊风险，才重议"数据集只读不回流"边界；单纯为图方便的
+> 边界放宽一律拒绝。

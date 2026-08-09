@@ -32,3 +32,10 @@
 ## 引用代码
 
 `scripts/deadcode-allowlist.txt`、`Makefile`（`deadcode`/`check-all`）、`internal/security/taint/taint_sanitizer.go`
+
+> 2026-08-09 追记：重新评估触发条件——本 ADR 的三类判定标准（WIRE/DELETE/EXEMPT）
+> 与关键个案先例是长期适用的方法论，不因单次审计结果变化而重议；唯一的重议
+> 触发点是先例本身被证明不适用于新发现的符号（如 `SanitizeByDeterministicTransform`
+> 若未来真的出现可验证的统一触发点，才重新评估是否接入 S_VALIDATE，而非维持
+> 永久 EXEMPT）。白名单收窄需求见 `local_playground/reports/plan-side-findings.md`
+> 及各轮审计报告，本条不重复列出。

@@ -23,3 +23,9 @@
 ## 引用代码
 
 `internal/automation/hitl/gateway.go`、`pkg/types/models_other.go`（HITLPrompt/HITLResponse）、`internal/gateway/server/chat/sse.go`、`internal/tool/tool.go`
+
+> 2026-08-09 追记：重新评估触发条件——本 ADR 状态仍为 `Proposed（均未实现）`，
+> 实施前须先核实设计假设仍成立（决策二依赖的 DOMPurify 依赖在 2026-07-11 提出
+> 时确认尚未引入，实施前需重新核实 `web/package.json` 现状）；若实施过程中发现
+> 现有 `HITLPrompt`/`HITLResponse` 复用方案不足以支撑自由文本咨询语义，才重议
+> 新建平行类型体系，而非默认直接偏离本决策。

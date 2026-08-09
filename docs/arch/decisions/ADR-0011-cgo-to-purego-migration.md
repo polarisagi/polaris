@@ -28,3 +28,8 @@
 ## 引用代码
 
 `internal/security/policy/cedar_ffi.go`、`internal/store/surreal_store.go`、`internal/knowledge/{chunker_cgo,chunker_nocgo}.go`、`rust/substrate/src/lib.rs`（`vec_cosine_f32`，ABI minor=2）、`internal/ffi/vec_ops.go`、`internal/llm/adapter/embedding.go`、`rust/substrate/src/llama_infer/mod.rs`
+
+> 2026-08-09 追记：重新评估触发条件——① Tree-sitter CGO 例外若被发现已悄悄用于
+> 在线请求路径（违反"仅限离线索引路径"边界），须立即整改而非追认扩大范围；
+> ② 若交叉编译/单二进制分发目标本身被放弃（如改为容器分发），purego 零 CGO
+> 纪律的前提才失效，重议整体桥接方式。

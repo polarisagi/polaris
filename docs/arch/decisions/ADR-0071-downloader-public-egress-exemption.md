@@ -1,6 +1,6 @@
 # ADR-0071: Downloader 公网出站豁免（XR-06）
 
-- **状态**: Accepted（已执行）| **模块**: `internal/downloader/proxy.go`
+- **状态**: Accepted（已执行）| **日期**: 2026-07-23 | **模块**: `internal/downloader/proxy.go`
 
 ## 决策
 
@@ -11,3 +11,8 @@
 ## 引用代码
 
 `internal/downloader/proxy.go`、`internal/lint/testdata/xr06_raw_transport_exempt.json`
+
+> 2026-08-09 追记：重新评估触发条件——豁免范围若出现扩大需求（新的静态写死域名
+> 需要走系统代理），先加入 CI 白名单并说明理由，而非放宽豁免判定标准本身；
+> 若目标域名从静态写死变为任何形式的用户输入/动态拼接，必须立即撤回豁免，
+> 无例外。

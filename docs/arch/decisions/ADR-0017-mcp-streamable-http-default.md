@@ -26,3 +26,8 @@ MCP JSON-RPC 动态嵌套结构禁止用 `encoding/json` 直解到 `map[string]i
 ## 引用代码
 
 `internal/extension/mcp/mcp_client.go`、`internal/extension/mcp/taint_decoder.go`、`internal/security/taint/taint.go`、`internal/gateway/server/sysadmin/a2a/admin_a2a.go`、`internal/gateway/server/server_routes.go`
+
+> 2026-08-09 追记：重新评估触发条件——① A2A 出站委派（决策三"待实现"部分）落地
+> 前须先确认信任模型判断逻辑（按被委派 Agent 沙盒信任等级）与 M11/ADR-0016
+> 一致，不得为赶进度绕过；② MCP spec 若发布新的强制传输层要求，重议是否跟进，
+> 但 SSE 仅作 legacy 兼容的定位不因此改变。

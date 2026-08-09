@@ -75,3 +75,10 @@ LLM 生成代码（CodeAct/Wasm）进沙箱前经三层串行防线，取代原�
 
 `internal/action/sandbox/`、`internal/extension/skill/compile.go`（`ValidatePython`）、`internal/extension/skill/skill_pipeline.go`、`internal/sandbox/sandbox_persistent.go`、`internal/tool/sandbox/argv_wrapper_adapter.go`、`internal/action/codeact/code_act.go`（三层同步编排）、`internal/action/codeact/code_act_checker.go`（Layer 0 AST）、`internal/swarm/agents/security_audit_agent.go`（Layer 2）、`rust/substrate/src/wasmtime_engine.rs`（L2 Wasmtime 引擎）
 
+> 2026-08-09 追记：重新评估触发条件——① Wasm Component Model 若要从"配置开关已开"
+> 推进到"可对外声称支持"，须先完成决策五路线图四步（wit-bindgen/组件实例化/WASI 0.2/
+> 插件格式迁移），逐步验收，不得跳步宣称；② L4 长驻进程池的"已知边界"（会话内串行、
+> 未接 OOM Guard）任一被真实场景触发问题，需回来加固而非放大回收阈值绕过；
+> ③ 决策六的 `allow_trusted_inprocess_fallback` 默认值若要改真，须先有稳定性维度的
+> 独立评估（资源限额/超时熔断），不能因为"来源可信"就跳过该评估。
+

@@ -56,3 +56,10 @@ M12 §9 连续采样监控读侧完整、写侧 `RecordSample` 此前全仓零�
 ## 引用代码
 
 `internal/eval/analysis/sampling_scorer.go`、`internal/agent/agent.go`（`NewAgent`）、`cmd/polaris/boot_events.go`、`internal/learning/surprise/{drift_detector,drift_downgrade_registry,drift_orchestrator}.go`、`internal/memory/retrieval/retriever.go`、`internal/llm/adapter/{control_vector_store,training_sample_collector}.go`、`internal/gateway/server/chat/slash_command_steer.go`、`internal/learning/reflexion/reflexion.go`、`internal/learning/curriculum/{curriculum,curriculum_scheduler}.go`、`internal/automation/idle_evolution.go`、`internal/automation/resource_governor.go`、`cmd/polaris/boot_agent.go`
+
+> 2026-08-09 追记：重新评估触发条件——① `onDegradation` 回调若要真正接入
+> autoRollback，须先有真实免疫网关（`boot_immune.go` 当前仍是占位），不得为
+> 制造"看起来在跑"的假闭环而强行接伪回调；② 1% 采样率、64 批次大小等均为
+> 保守初值，非精确调优结果，压力/成本实测后可校准，但调高抽样率前须重新评估
+> LLM 成本与隐私面（决策一已征询用户选择全量实现）；③ `EmbeddingVersionTracker.Update`
+> 已被 ADR-0062 接受删除，重建前须先在 `protocol.CognitiveSearcher` 补齐版本标签接口。

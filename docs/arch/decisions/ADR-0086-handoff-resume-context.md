@@ -47,3 +47,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-08-01 | 初稿，阶段06 ADR 归档补录（对应阶段04 A-01/A-02 已落地实现） |
+| 2026-08-09 | 追记：重新评估触发条件——恢复路径跳过 S_VALIDATE 重校验的提议须先重新论证 `resume_ctx_json` 反序列化输入的信任模型（"数据来自自家表"不构成理由）；`handoffSnapshotMaxBytes`（256KB，当前硬编码常量）若观测到 `RecordAgentHandoffSnapshotOversized` 触顶频繁，应先登记为 `state.yaml` 可配置阈值再评估是否调大。 |
