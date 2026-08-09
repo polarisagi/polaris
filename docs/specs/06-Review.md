@@ -45,6 +45,7 @@
 - [ ] 提交粒度：一次提交解决一个逻辑变更
 - [ ] 不含测试文件的提交必须有理由
 - [ ] 不含对未损坏代码的顺手修改（100% 指令溯源性）
+- [ ] **门控命令与署名规则**：以根 `CLAUDE.md` 的 `[强制]` 条目为准（提交前自检 `make lint`、改 `docs/arch/` 或包路径追加 `make docs-refs`、改 `internal/config/` 结构体必跑 `make gen-threshold-examples`、Git 署名 `MrLaoLiAI <polarisagi.online@gmail.com>`）——**此处刻意只放指针不复制清单**：根 `CLAUDE.md` 由 Claude Code 原生自动注入，是这几条的唯一 SSoT；抄一份到这里会立刻多出一处需要人工同步的漂移面（PS-001 判定）
 
 ## C7 批量评审指引（AI 生成变更摘要）
 
