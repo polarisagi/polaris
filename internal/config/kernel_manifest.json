@@ -22,7 +22,7 @@
   "internal/action/provider.go": "c5ec0bbe41090a669eaf190d6f4a96b1d26c625b32d030a90fcc7806dcc3ca29",
   "internal/action/tool_usage_policy.go": "7ad3ff0843b73b70edd241bd9bec215733f9af7ab47652f3f70a28e76203763f",
   "internal/action/tool_usage_policy_test.go": "d35b31d24426e32068a1cdf93b805e806f26102ccf210217482f4a27c78d65cf",
-  "internal/agent/agent.go": "94a5b27e5bb50271390c6ba9e76add01eb53139d1a2eb8a3781bcb034e7dff32",
+  "internal/agent/agent.go": "9231d70f385add34350cf4bef0474d1cd3ff1dd9c996fee8a78d16ab859333ba",
   "internal/agent/agent_context_compaction.go": "535f1199d7281f4188f88d9884c22ec2b138e7972c028491ba1d04ca9d9ee8d6",
   "internal/agent/agent_context_compaction_test.go": "9729bad4922ae619b6d07b04f5e9d61b15336da4e9d362673e240c40107c1a95",
   "internal/agent/agent_execute_dag.go": "32283c8d38b6a854a8d72b88e2a9ab1ab24820139a9152c06a9b2dd973f18a3d",

@@ -378,10 +378,13 @@ func (a *Agent) Run(ctx context.Context) error {
 
 			// 执行 Effects: LLMFillEffect → 调 LLM；DeterministicEffect → 直接执行
 			for _, effect := range effects {
-				// 串行保证：若上一个 effect 未完成，跳过本次（保守策略）
-				if !a.effectRunning.CompareAndSwap(false, true) {
-					slog.Warn("agent: effect still running, skipping new effect dispatch")
-					continue
+				// 串行保证：若上一个 effect 未完成，自旋等待其完成，防止并发竞态导致 effect 丢失
+				for !a.effectRunning.CompareAndSwap(false, true) {
+					select {
+					case <-ctx.Done():
+						return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份
+					case <-time.After(1 * time.Millisecond):
+					}
 				}
 				concurrent.SafeGo(ctx, "agent.executeEffect", func(execCtx context.Context) {
 					// panic 由 SafeGo 外层 recover（打日志+计量），goroutine 静默退出。
