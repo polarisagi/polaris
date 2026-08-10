@@ -76,6 +76,24 @@ func readU32LEB128(data []byte, offset int) (uint32, int, error) {
 	return 0, offset, apperr.New(apperr.CodeInvalidInput, "LEB128 decoding error")
 }
 
+// readBytesAt 安全读取 [offset, offset+n) 区间。n/offset 均来自对不可信 Wasm
+// 二进制的 LEB128 解码结果（攻击者可控），越界时返回 error 而非让运行时
+// slice-bounds panic 直接打崩调用方进程（畸形/截断 Wasm 上传的 DoS 面）。
+func readBytesAt(data []byte, offset, n int) ([]byte, error) {
+	if offset < 0 || n < 0 || offset > len(data) || n > len(data)-offset {
+		return nil, apperr.New(apperr.CodeInvalidInput, "wasm: read out of bounds")
+	}
+	return data[offset : offset+n], nil
+}
+
+// readByteAt 安全读取单字节，理由同 readBytesAt。
+func readByteAt(data []byte, offset int) (byte, error) {
+	if offset < 0 || offset >= len(data) {
+		return 0, apperr.New(apperr.CodeInvalidInput, "wasm: read out of bounds")
+	}
+	return data[offset], nil
+}
+
 func skipKindData(kind byte, wasmBytes []byte, importOffset int) (int, error) {
 	switch kind {
 	case 0: // func
@@ -86,7 +104,10 @@ func skipKindData(kind byte, wasmBytes []byte, importOffset int) (int, error) {
 		return nextOffset, nil
 	case 1: // table
 		importOffset++ // ref_type
-		limitsFlag := wasmBytes[importOffset]
+		limitsFlag, err := readByteAt(wasmBytes, importOffset)
+		if err != nil {
+			return 0, apperr.Wrap(apperr.CodeInvalidInput, "skipKindData: table limits flag", err)
+		}
 		importOffset++
 		_, nextOffset, err := readU32LEB128(wasmBytes, importOffset)
 		if err != nil {
@@ -101,7 +122,10 @@ func skipKindData(kind byte, wasmBytes []byte, importOffset int) (int, error) {
 		}
 		return nextOffset, nil
 	case 2: // mem
-		limitsFlag := wasmBytes[importOffset]
+		limitsFlag, err := readByteAt(wasmBytes, importOffset)
+		if err != nil {
+			return 0, apperr.Wrap(apperr.CodeInvalidInput, "skipKindData: mem limits flag", err)
+		}
 		importOffset++
 		_, nextOffset, err := readU32LEB128(wasmBytes, importOffset)
 		if err != nil {
@@ -134,7 +158,11 @@ func (ga *GovernanceAgent) validateImportSection(wasmBytes []byte, importOffset 
 			return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.validateImportSection", err)
 		}
 		importOffset = nextOffset
-		modName := string(wasmBytes[importOffset : importOffset+int(modNameLen)])
+		modNameBytes, err := readBytesAt(wasmBytes, importOffset, int(modNameLen))
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInvalidInput, "GovernanceAgent.validateImportSection: module name", err)
+		}
+		modName := string(modNameBytes)
 		importOffset += int(modNameLen)
 
 		fieldNameLen, nextOffset, err := readU32LEB128(wasmBytes, importOffset)
@@ -142,10 +170,17 @@ func (ga *GovernanceAgent) validateImportSection(wasmBytes []byte, importOffset 
 			return apperr.Wrap(apperr.CodeInternal, "GovernanceAgent.validateImportSection", err)
 		}
 		importOffset = nextOffset
-		fieldName := string(wasmBytes[importOffset : importOffset+int(fieldNameLen)])
+		fieldNameBytes, err := readBytesAt(wasmBytes, importOffset, int(fieldNameLen))
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInvalidInput, "GovernanceAgent.validateImportSection: field name", err)
+		}
+		fieldName := string(fieldNameBytes)
 		importOffset += int(fieldNameLen)
 
-		kind := wasmBytes[importOffset]
+		kind, err := readByteAt(wasmBytes, importOffset)
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInvalidInput, "GovernanceAgent.validateImportSection: import kind", err)
+		}
 		importOffset++
 
 		importOffset, err = skipKindData(kind, wasmBytes, importOffset)

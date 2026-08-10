@@ -2,6 +2,9 @@ package planner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +32,35 @@ func (m *mockProvider) Capabilities() types.ProviderCapabilities {
 }
 func (m *mockProvider) Tokenizer() protocol.TokenizerAdapter { return nil }
 func (m *mockProvider) ModelID() string                      { return "mock" }
+
+// ── mock WorkspaceStager（WP-9：workerEngineA 落盘依赖注入验证）──────────────
+
+// mockWorkspaceStager 用测试专用临时目录模拟 *vfs.WorkspaceManager.StageEphemeralFile，
+// 记录每次落盘/清理调用次数，验证 workerEngineA 不再直连裸 os.MkdirTemp/os.WriteFile，
+// 而是完全通过注入的 WorkspaceStager 接口落盘并在 defer cleanup() 时归还。
+type mockWorkspaceStager struct {
+	mu          sync.Mutex
+	staged      []string
+	cleanupCall int
+}
+
+func (m *mockWorkspaceStager) StageEphemeralFile(namespace, filename string, data []byte) (string, func(), error) {
+	dir := os.TempDir() // 测试替身允许直接用系统临时目录；生产实现见 vfs.WorkspaceManager
+	path := filepath.Join(dir, namespace+"-"+filename)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return "", nil, err
+	}
+	m.mu.Lock()
+	m.staged = append(m.staged, namespace+"/"+filename)
+	m.mu.Unlock()
+	cleanup := func() {
+		m.mu.Lock()
+		m.cleanupCall++
+		m.mu.Unlock()
+		_ = os.Remove(path)
+	}
+	return path, cleanup, nil
+}
 
 // ── parseTestScore ─────────────────────────────────────────────────────────
 
@@ -180,5 +212,53 @@ func TestPlannerPool_WithProvider(t *testing.T) {
 	NewPlannerPool("optimize", "plan", prov, ch, nil).Run(ctx)
 	if len(ch) == 0 {
 		t.Error("expected whisper from PlannerPool")
+	}
+}
+
+// ── workerEngineA / WorkspaceStager 注入（WP-9）───────────────────────────────
+
+// TestPlannerPool_WorkerEngineA_NilWorkspaceSkips 验证 workerEngineA 在未注入
+// WorkspaceStager 时直接跳过编译评分（不回退到裸 os.MkdirTemp/os.WriteFile），
+// 因此 code_act 三个 worker 均不产出结果，whisperChan 保持空。
+func TestPlannerPool_WorkerEngineA_NilWorkspaceSkips(t *testing.T) {
+	prov := &mockProvider{resp: &types.ProviderResponse{Content: "package main"}}
+	ch := make(chan protocol.MemoryWhisper, 10)
+	pool := NewPlannerPool("fix bug", "code_act", prov, ch, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool.Run(ctx)
+	if len(ch) != 0 {
+		t.Errorf("expected no whisper when WorkspaceStager not injected, got %d", len(ch))
+	}
+}
+
+// TestPlannerPool_WorkerEngineA_WithWorkspace_StagesAndCleansUp 验证注入
+// WorkspaceStager 后 workerEngineA 通过接口落盘（而非直连文件系统），且每次
+// 落盘都在 defer cleanup() 时被正确回收——3 个并发 worker 各自落盘一次、
+// 各自清理一次。
+func TestPlannerPool_WorkerEngineA_WithWorkspace_StagesAndCleansUp(t *testing.T) {
+	prov := &mockProvider{resp: &types.ProviderResponse{Content: "package main"}}
+	ch := make(chan protocol.MemoryWhisper, 10)
+	pool := NewPlannerPool("fix bug", "code_act", prov, ch, nil)
+	ws := &mockWorkspaceStager{}
+	pool.SetWorkspace(ws)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool.Run(ctx)
+
+	if len(ch) == 0 {
+		t.Fatal("expected whisper when WorkspaceStager injected")
+	}
+
+	ws.mu.Lock()
+	staged := len(ws.staged)
+	cleanups := ws.cleanupCall
+	ws.mu.Unlock()
+
+	if staged != 3 {
+		t.Errorf("expected 3 staged files (1 per code_act worker), got %d", staged)
+	}
+	if cleanups != staged {
+		t.Errorf("expected cleanup() called once per staged file, got %d cleanups for %d staged", cleanups, staged)
 	}
 }
