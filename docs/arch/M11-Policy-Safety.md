@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:229 Cedar / 4:297 KillSwitch / 5:375 隐私 / 6:446 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:446 Factuality / 7:498 审计 / 8:522 多Agent宪法 / 9:558 威胁监控 / 13:572 降级 / 14:604 跨模块契约 -->
+<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:229 Cedar / 4:297 KillSwitch / 5:375 隐私 / 6:446 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:473 Factuality / 7:499 审计 / 8:523 多Agent宪法 / 9:559 威胁监控 / 13:573 降级 / 14:605 跨模块契约 -->
 
 ---
 
@@ -463,7 +463,8 @@ blockedCIDRs（`init()` 预编译）：0.0.0.0/8 / 127.0.0.0/8 / 10.0.0.0/8 / 10
 - **Taint 出口拦截**: 调用方在 DialContext 前显式调用 `SafeDialer.TaintEgressCheck(taintLevels)`，`[Taint-Medium]` 及以上级别（TaintMedium/TaintHigh）未经 SanitizeByUserReview → `ErrTaintBlockedEgress`。Gate.TaintEgressCheck 与 SafeDialer.TaintEgressCheck 采用同一阈值（`>= TaintMedium`），两层一致防止出口绕过。
 - **两层纵深**: M7 Policy Gate4（声明层预检）+ M11 SafeDialer.TaintEgressCheck（出口层终检，调用方职责）。
 - M7/M10/M13 所有出站必经此入口。CI `safe_dialer_lint` 扫描裸 `net.Dial` / `grpc.Dial` / `http.Get` → ERROR。
-- **✅ 已修复（SurrealStore 出口缺失）**：Go 侧 SurrealStore wrapper 在调用 `surreal_store_insert` / `surreal_store_query` FFI 前补充 `SafeDialer.TaintEgressCheck`，确保 TaintHigh 数据不绕过出口拦截直写认知存储。
+- **认知存储不是出口，不走 TaintEgressCheck**（2026-08-10 订正）：写入 `[Storage-SurrealDB-Core]` 是**进程内本地落盘**，不产生任何出站连接，`SafeDialer.TaintEgressCheck` 的语义（拦 TaintMedium+ 数据外发）在此不适用；`SurrealDBCoreStore.Put/VecUpsert/FTSIndex` 签名里也不存在污点等级可供校验。认知存储侧的污点完整性由 **inv_M11_02 跨边界 HMAC** 承担：`taint.TaintBoundarySerializer`（密钥由 `Vault.DeriveKey` 派生，装配点 `cmd/polaris/boot_substrate.go`）在 `rag_chunks` 写入时 Seal 出 `taint_hmac`，检索侧 `internal/knowledge/retriever.go` Unseal 校验，HMAC 不匹配强制升到 TaintHigh。真正的出口拦截发生在数据离开进程时（HTTP/gRPC/WebSocket 出站，见上两条）。
+  > 本条原文为「**✅ 已修复（SurrealStore 出口缺失）**：Go 侧 SurrealStore wrapper 在调用 `surreal_store_insert` / `surreal_store_query` FFI 前补充 `SafeDialer.TaintEgressCheck`」。该描述与代码不符且不可能成立——全仓不存在 `surreal_store_insert` / `surreal_store_query` 这两个 FFI 符号（Rust 侧导出的是 `surreal_kv_put` / `surreal_vec_upsert` / `surreal_fts_index` 等），`internal/store/surreal_store.go` 也从无 `TaintEgressCheck` 调用。按 `CLAUDE.md §文档可修订性`，实现描述属描述性文档，与代码冲突以代码为准，故订正为上述实际防护路径。
 
 **读写能力分级出口检查**（`internal/security/network/safe_dialer_capability.go`）：Phase 0 声明层检查之外，另有一层 HTTP 方法级的能力校验，与 Phase 0 的粗粒度 `read_only`/`write_local` 声明是两个层次——Phase 0 拦在 Capability Token 声明侧，本层拦在实际出站 `http.RoundTripper` 侧，纵深防御互不替代。三级：`CapNetworkRead`（仅放行 GET/HEAD/OPTIONS，其余方法 → `ErrCapabilityWriteBlocked`）/ `CapNetworkWriteLocal`（放行，内网 IP 校验由调用方在 DialContext 中执行）/ `CapNetworkWrite`（放行，交由 Phase 1-4 保护）。通过 `WrapCapability(inner, cap)` 包装现有 `http.RoundTripper` 接入（`CapabilityRoundTripper.RoundTrip` 在转发前调用 `CheckCapability`），消费方：`internal/tool/builtin/fetch_url/`、`internal/tool/builtin/web_search/`（2026-07-14 补齐，此前用裸 `http.Transport` 完全绕过该层校验，是纵深防御缺口）。
 

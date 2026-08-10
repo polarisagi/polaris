@@ -95,6 +95,20 @@ Output ONLY valid JSON. No markdown formatting or extra text.`, name, descriptio
 		return nil, types.Tool{}, apperr.Wrap(apperr.CodeInternal, "failed to parse synthesized JSON", err)
 	}
 
+	// LLM 输出必须过必填字段校验再驱动逻辑（09-LLM-Agent-Production H 维度）：
+	// json.Unmarshal 只保证"是合法 JSON"，不保证字段存在。缺 name 会注册出一个
+	// 名为 "skill:" 的技能，缺 input_schema 会让 S_VALIDATE 的 hasStrictSchema
+	// 永远返回 false（M11 §2.5 降级前置条件），两者都是在下游很远的地方才炸。
+	// fail-fast 在这里，错误信息才指得回"是这次合成的产物有问题"。
+	if strings.TrimSpace(raw.Name) == "" {
+		return nil, types.Tool{}, apperr.New(apperr.CodeInvalidInput, "synthesized skill: 缺少必填字段 name")
+	}
+	if strings.TrimSpace(raw.Description) == "" {
+		return nil, types.Tool{}, apperr.New(apperr.CodeInvalidInput, "synthesized skill: 缺少必填字段 description")
+	}
+	if len(raw.InputSchema) == 0 {
+		return nil, types.Tool{}, apperr.New(apperr.CodeInvalidInput, "synthesized skill: 缺少必填字段 input_schema")
+	}
 	if raw.Version == "" {
 		raw.Version = "1.0.0"
 	}
