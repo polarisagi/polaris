@@ -274,7 +274,9 @@ func (p *PersistentSandbox) spawnSession(ctx context.Context, spec SandboxSpec) 
 	}
 
 	cmd := exec.Command(wrapped.Executable, wrapped.Argv...) //nolint:gosec // Executable/Argv 来自 Rust 沙箱封装，非用户直接输入
+	cmd.SysProcAttr = setPdeathsig(cmd.SysProcAttr)
 	cmd.Dir = workDir
+
 	if wrapped.EnvInArgv {
 		cmd.Env = []string{}
 	} else {

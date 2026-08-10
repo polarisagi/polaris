@@ -263,10 +263,15 @@ func (c *ObsidianConnector) Watch(ctx context.Context) (<-chan types.ChangeEvent
 					Size:        size,
 				}
 
-				out <- types.ChangeEvent{
+				select {
+				case out <- types.ChangeEvent{
 					Type: evType,
 					Ref:  docRef,
+				}:
+				case <-ctx.Done():
+					return
 				}
+
 			case <-c.watcher.Errors:
 				// just continue on watch errors
 			}

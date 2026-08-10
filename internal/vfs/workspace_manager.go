@@ -42,6 +42,13 @@ type WorkspaceManager struct {
 
 // NewWorkspaceManager 创建 WorkspaceManager，rootDir 不存在时自动创建。
 func NewWorkspaceManager(rootDir string, maxSize int64, cfg config.M7ToolThresholds) *WorkspaceManager {
+	return NewWorkspaceManagerWithContext(context.Background(), rootDir, maxSize, cfg)
+}
+
+func NewWorkspaceManagerWithContext(parentCtx context.Context, rootDir string, maxSize int64, cfg config.M7ToolThresholds) *WorkspaceManager {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	// 构造函数无 error 返回（调用方为组合根，历史签名），但根目录创建失败
 	// 意味着后续所有任务沙箱目录都建不出来——必须留痕，否则表现为"每个工具
 	// 调用各自报一个看不出根因的路径错误"。
@@ -58,13 +65,13 @@ func NewWorkspaceManager(rootDir string, maxSize int64, cfg config.M7ToolThresho
 	}
 	wm.rebuildManifests()
 	// gcWorker 负责异步清理墓碑目录；panic 不应导致 tombstone 永久堆积，用 SafeGo 保护
-	concurrent.SafeGo(context.Background(), "vfs.tombstone.gc", func(_ context.Context) {
+	concurrent.SafeGo(parentCtx, "vfs.tombstone.gc", func(_ context.Context) {
 		wm.gcWorker()
 	})
 	// ephemeral 脚本孤儿巡检：进程崩溃/panic 导致 StageEphemeralFile 返回的
 	// cleanup() 未被调用时的兜底回收，独立于 7 天周期的 GC()（后者面向持久
 	// taskID 工作区，粒度太粗，不适合"预期秒级生命周期"的临时脚本）。
-	concurrent.SafeGo(context.Background(), "vfs.ephemeral.sweep", func(ctx context.Context) {
+	concurrent.SafeGo(parentCtx, "vfs.ephemeral.sweep", func(ctx context.Context) {
 		ticker := time.NewTicker(ephemeralSweepInterval)
 		defer ticker.Stop()
 		for {

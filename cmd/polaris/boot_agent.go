@@ -990,7 +990,8 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	sb.Outbox.RegisterHandler(protocol.TopicNotification, notify.NewDispatcher(tb.SysRepo).Handle)
 
 	// ─── §10.5 Supervisor Tree（仅注册 workers；Start() 由 run() 在注册 defer 后调用）
-	sv := supervisor.NewSupervisor(5, 5*time.Minute)
+	sv := supervisor.NewSupervisor(ctx, 5, 5*time.Minute)
+
 	// [W-3] 接入 SyncScheduler
 	// 2026-08-08：原先在此另建一条 knowledge.NewPipeline（PipelineImpl）驱动连接器
 	// 同步，与 kb.Ingester（DefaultIngestionPipeline）构成同接口双实现，且两者对

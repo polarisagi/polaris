@@ -68,8 +68,9 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		dataDir:          dataDir,
 		tbr:              tbr,
 		rateLimiter:      rateLimiter,
-		interruptLimiter: NewRateLimitManager(1, 10), // Approx 10 req/min with burst
-		a2aCfg:           a2aCfg,
+		interruptLimiter: NewRateLimitManager(context.Background(), 1, 10), // Approx 10 req/min with burst
+
+		a2aCfg: a2aCfg,
 	}
 	if rwDB == nil {
 		panic("NewServer: rwDB（读写连接）不能为 nil")

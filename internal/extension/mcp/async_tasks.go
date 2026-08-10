@@ -95,12 +95,20 @@ const asyncTaskSweepInterval = 30 * time.Second
 // startAsyncTaskSweeper 启动后台清理 goroutine，随进程生命周期运行。
 // 由 NewMCPManager 调用一次；ctx 使用 context.Background() 是有意的——tasks_cache
 // 的清理不应绑定任何单次请求的生命周期，与 MCPManager 实例本身同寿命。
-func (m *MCPManager) startAsyncTaskSweeper() {
-	concurrent.SafeGo(context.Background(), "mcp.async_task_sweeper", func(ctx context.Context) {
+func (m *MCPManager) startAsyncTaskSweeper(parentCtx context.Context) {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	concurrent.SafeGo(parentCtx, "mcp.async_task_sweeper", func(ctx context.Context) {
 		ticker := time.NewTicker(asyncTaskSweepInterval)
 		defer ticker.Stop()
-		for range ticker.C {
-			m.asyncTasks.sweep()
+		for {
+			select {
+			case <-ticker.C:
+				m.asyncTasks.sweep()
+			case <-ctx.Done():
+				return
+			}
 		}
 	})
 }

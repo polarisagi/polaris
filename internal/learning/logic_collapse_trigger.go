@@ -207,11 +207,12 @@ func (m *LogicCollapseMonitor) RecordSuccess(
 
 	// 异步触发编译（L1 优先级后台任务）
 	// GR-7-001: 补齐超时上界（默认 10 分钟），防挂起
-	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	bgCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	concurrent.SafeGo(bgCtx, "logic_collapse.trigger_collapse", func(ctx context.Context) {
 		defer cancel()
 		m.triggerCollapse(ctx, traj, variance)
 	})
+
 }
 
 // triggerCollapse 执行 Eval Gate 检查 + 编译触发（异步运行）。

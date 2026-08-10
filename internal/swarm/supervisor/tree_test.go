@@ -10,7 +10,7 @@ import (
 )
 
 func TestSupervisor_OneForOne_Restart(t *testing.T) {
-	sup := NewSupervisor(3, 5*time.Second) // max 3 restarts within 5s
+	sup := NewSupervisor(context.Background(), 3, 5*time.Second) // max 3 restarts within 5s
 	// modify backoff for faster testing
 	sup.baseBackoff = 10 * time.Millisecond
 	sup.maxBackoff = 50 * time.Millisecond
@@ -43,7 +43,7 @@ func TestSupervisor_OneForOne_Restart(t *testing.T) {
 }
 
 func TestSupervisor_MaxRestartsExceeded(t *testing.T) {
-	sup := NewSupervisor(2, 5*time.Second)
+	sup := NewSupervisor(context.Background(), 2, 5*time.Second)
 	sup.baseBackoff = 10 * time.Millisecond
 
 	var executionCount int32
@@ -65,7 +65,7 @@ func TestSupervisor_MaxRestartsExceeded(t *testing.T) {
 }
 
 func TestSupervisor_GracefulStop(t *testing.T) {
-	sup := NewSupervisor(3, 5*time.Second)
+	sup := NewSupervisor(context.Background(), 3, 5*time.Second)
 
 	var executionCount int32
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestRateLimiter(t *testing.T) {
 }
 
 func TestRateLimitManager(t *testing.T) {
-	rm := NewRateLimitManager(1, 2)
+	rm := NewRateLimitManager(context.Background(), 1, 2)
 
 	if !rm.Allow("ip1", "test_client") {
 		t.Errorf("expected allow")
@@ -47,7 +48,7 @@ func TestRateLimitManager(t *testing.T) {
 }
 
 func TestAuthManager(t *testing.T) {
-	am := NewAuthManager()
+	am := NewAuthManager(context.Background())
 
 	if am.IsLocked("ip1") {
 		t.Errorf("expected false initially")
@@ -134,7 +135,7 @@ func TestHealthPaths(t *testing.T) {
 
 func TestCheckAuth(t *testing.T) {
 	s := &Server{}
-	am := NewAuthManager()
+	am := NewAuthManager(context.Background())
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/healthz", nil)
