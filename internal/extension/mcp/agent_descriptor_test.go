@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 )
@@ -10,7 +9,7 @@ import (
 // TestListA2AAgents_ExcludesServersWithoutDelegateTool 验证只有暴露
 // A2ADelegateToolName 的 Server 才被视为具备 A2A 能力（ADR-0084）。
 func TestListA2AAgents_ExcludesServersWithoutDelegateTool(t *testing.T) {
-	m := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	m := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	m.entries["srv-plain"] = &mcpEntry{
 		name:  "plain-server",
 		tools: []MCPTool{{Name: "some_other_tool"}},
@@ -29,7 +28,7 @@ func TestListA2AAgents_ExcludesServersWithoutDelegateTool(t *testing.T) {
 // tombstone entry 不参与枚举，即便其 tools 列表恰好包含 a2a_delegate（残留
 // 数据，理论上不应出现，但防御性排除）。
 func TestListA2AAgents_ExcludesTombstonedEntries(t *testing.T) {
-	m := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	m := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	m.entries["srv-dead"] = &mcpEntry{
 		name:   "dead-server",
 		errMsg: "connection refused",
@@ -48,7 +47,7 @@ func TestListA2AAgents_ExcludesTombstonedEntries(t *testing.T) {
 // TestListA2AAgents_NoListToolFallsBackToDefault 验证暴露 a2a_delegate 但未
 // 暴露 a2a_list_agents 的 Server 退化为单条 "default" 描述符。
 func TestListA2AAgents_NoListToolFallsBackToDefault(t *testing.T) {
-	m := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	m := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	m.entries["srv-1"] = &mcpEntry{
 		name:  "linear",
 		tools: []MCPTool{{Name: A2ADelegateToolName}},
@@ -70,7 +69,7 @@ func TestListA2AAgents_NoListToolFallsBackToDefault(t *testing.T) {
 // a2a_list_agents 存在但底层 CallTool 失败（本测试未注入 Envelope，天然失败）
 // 时不 panic、不中断，而是退化为携带错误说明的 "default" 描述符。
 func TestListA2AAgents_ListToolPresentDegradesGracefullyOnCallFailure(t *testing.T) {
-	m := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	m := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	m.entries["srv-1"] = &mcpEntry{
 		name:  "linear",
 		tools: []MCPTool{{Name: A2ADelegateToolName}, {Name: A2AListAgentsToolName}},
@@ -94,7 +93,7 @@ func TestListA2AAgents_ListToolPresentDegradesGracefullyOnCallFailure(t *testing
 // TestResolveServerIDByName_FoundAndNotFound 验证按 LLM 侧服务器名反查
 // serverID，且跳过 tombstone entry。
 func TestResolveServerIDByName_FoundAndNotFound(t *testing.T) {
-	m := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	m := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	m.entries["srv-1"] = &mcpEntry{name: "linear"}
 	m.entries["srv-dead"] = &mcpEntry{name: "dead", errMsg: "boom"}
 

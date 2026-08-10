@@ -65,7 +65,7 @@ func newDelayedInitTransport(delay time.Duration) http.RoundTripper {
 // 等待至 IO 结束；重构后：读路径应在数毫秒内返回。
 func TestMCPManager_Add_DoesNotBlockConcurrentReads(t *testing.T) {
 	const ioDelay = 250 * time.Millisecond
-	httpClient := &http.Client{Transport: newDelayedInitTransport(ioDelay)}
+	httpClient := testSafeHTTP(newDelayedInitTransport(ioDelay))
 	mgr := NewMCPManager(nil, httpClient, &mockPolicyGate{})
 
 	done := make(chan error, 1)
@@ -103,7 +103,7 @@ func TestMCPManager_Add_DoesNotBlockConcurrentReads(t *testing.T) {
 // （CodeResourceExhausted），不产生双实例；先到者正常完成连接。
 func TestMCPManager_Add_ConcurrentDoubleAddSameServerID(t *testing.T) {
 	const ioDelay = 200 * time.Millisecond
-	httpClient := &http.Client{Transport: newDelayedInitTransport(ioDelay)}
+	httpClient := testSafeHTTP(newDelayedInitTransport(ioDelay))
 	mgr := NewMCPManager(nil, httpClient, &mockPolicyGate{})
 
 	cfg := MCPClientConfig{

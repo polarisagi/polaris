@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/network"
 	sandboxpkg "github.com/polarisagi/polaris/internal/tool/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -51,7 +51,7 @@ type MCPClientConfig = protocol.MCPClientConfig
 // MCPClient 实现 MCP JSON-RPC 2.0 协议客户端（stdio + SSE + Streamable HTTP）。
 type MCPClient struct {
 	cfg        MCPClientConfig
-	httpClient *http.Client
+	httpClient network.SafeHTTPClient
 
 	// stdio 专用
 	cmd   *exec.Cmd
@@ -78,7 +78,17 @@ func (c *MCPClient) SetServerRequestHandler(h ServerRequestHandler) {
 	c.mu.Unlock()
 }
 
-func NewMCPClient(cfg MCPClientConfig, httpClient *http.Client) *MCPClient {
+// NewMCPClient 构造 MCP 客户端。
+//
+// httpClient 必须是经 SafeDialer 包装的 network.SafeHTTPClient（XR-06：出站网络
+// 禁裸 http.Client，全部走 M11 SafeDialer）。此前该形参是裸 *http.Client——生产
+// 装配传的确实是 sb.SafeHTTP（SafeDialer 包装后的实例），但类型上无任何约束，
+// 任何人塞一个 http.DefaultClient 都能编过，MCP 出站将整体绕过五阶段 SSRF 防护。
+// 改用带 isSafe 标记的 SafeHTTPClient + fail-fast 校验，与 marketplace 同一形态。
+func NewMCPClient(cfg MCPClientConfig, httpClient network.SafeHTTPClient) *MCPClient {
+	if !httpClient.IsSafe() {
+		panic("mcp_client: httpClient must be a valid network.SafeHTTPClient (XR-06)")
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
