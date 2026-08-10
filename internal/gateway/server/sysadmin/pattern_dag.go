@@ -1,7 +1,6 @@
 package sysadmin
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -25,7 +24,7 @@ func (h *SysAdminHandler) HandlePatternDAGRun(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	err := h.PatternDAGExec.Execute(context.Background(), req.ParentTaskID, req.Spec)
+	err := h.PatternDAGExec.Execute(r.Context(), req.ParentTaskID, req.Spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

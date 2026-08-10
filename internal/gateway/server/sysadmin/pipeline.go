@@ -1,7 +1,6 @@
 package sysadmin
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -22,7 +21,7 @@ func (h *SysAdminHandler) HandlePipelineRun(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	res, err := h.PipelineOrch.Run(context.Background(), req)
+	res, err := h.PipelineOrch.Run(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
