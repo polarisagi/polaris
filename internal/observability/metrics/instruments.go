@@ -101,6 +101,13 @@ var (
 	InstrAgentHandoffResumeTotal            metric.Int64Counter // label: result
 	InstrAgentHandoffSnapshotOversizedTotal metric.Int64Counter // 无 label（单一事件类型）
 
+	// [GD-13-005] M9 Reflexion 反思并发信号量满时丢弃失败任务事件的计数。
+	// engine.go handleTaskCompleteEvent 此前对该分支静默 return，被丢弃的失败
+	// 任务既不进入 Reflexion，也不计入任何计数器——只有成功任务经
+	// HeuristicsWriter.RecordSuccess 被观测到，长期运行下 success_rate 会系统性
+	// 偏高（分母隐性丢了失败样本）。无 label（单一事件类型，不构成基数问题）。
+	InstrLearningReflectionDroppedTotal metric.Int64Counter
+
 	instrOnce sync.Once
 )
 

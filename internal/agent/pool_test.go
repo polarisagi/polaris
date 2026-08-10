@@ -154,3 +154,62 @@ func TestPool_GC_KeepsActiveSessions(t *testing.T) {
 		t.Fatal("expected GC to keep a session still held by an active Acquire (refs>0)")
 	}
 }
+
+// TestPool_AcquireHeadless_WithSessionID_ReusesEntry 验证 GD-13-001 修复：
+// AcquireHeadless 注入 types.WithSessionID(id) 后，应以调用方透传的真实业务
+// SessionID 注册 p.sessions（而不是像修复前那样忽略它、自生成一次性
+// "headless-<时间戳>" ID）——这是同一业务会话跨多轮 headless 调用能够命中
+// 同一个 per-session Agent 内核实例的前提。
+func TestPool_AcquireHeadless_WithSessionID_ReusesEntry(t *testing.T) {
+	pool := NewPool(newTestPoolAgent, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, err := pool.AcquireHeadless(ctx, types.Intent{Query: "hi"}, types.WithSessionID("biz-session-1"))
+	if err != nil {
+		t.Fatalf("AcquireHeadless failed: %v", err)
+	}
+
+	pool.mu.Lock()
+	_, exists := pool.sessions["biz-session-1"]
+	numSessions := len(pool.sessions)
+	pool.mu.Unlock()
+
+	if !exists {
+		t.Fatal("expected AcquireHeadless(WithSessionID) to register p.sessions keyed by the caller-supplied SessionID")
+	}
+	if numSessions != 1 {
+		t.Fatalf("expected exactly 1 session entry keyed by the supplied SessionID, got %d", numSessions)
+	}
+}
+
+// TestPool_AcquireHeadless_WithoutSessionID_GeneratesUniqueIDs 回归验证：未提供
+// SessionID 时（如 Blackboard DAG 一次性任务执行、红队探测，均无会话语义）
+// 仍退回原自生成行为——两次调用各自落在不同的 p.sessions key 下。
+func TestPool_AcquireHeadless_WithoutSessionID_GeneratesUniqueIDs(t *testing.T) {
+	pool := NewPool(newTestPoolAgent, 4)
+
+	// 每次调用各自独立的超时预算，而非共享同一个 ctx——AcquireHeadless 是
+	// 同步阻塞到 FSM 走完整个流程才返回，两次调用顺序执行，共享单一 15s
+	// 预算会在冷启动较慢时让第二次调用在第一次耗尽大半预算后才轮到，
+	// 与本测试意图（验证两次调用各自落在不同 session key，而非验证时序
+	// 预算）无关，应避免相互影响。
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel1()
+	if _, err := pool.AcquireHeadless(ctx1, types.Intent{Query: "task 1"}); err != nil {
+		t.Fatalf("AcquireHeadless #1 failed: %v", err)
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel2()
+	if _, err := pool.AcquireHeadless(ctx2, types.Intent{Query: "task 2"}); err != nil {
+		t.Fatalf("AcquireHeadless #2 failed: %v", err)
+	}
+
+	pool.mu.Lock()
+	numSessions := len(pool.sessions)
+	pool.mu.Unlock()
+	if numSessions != 2 {
+		t.Fatalf("expected 2 distinct self-generated session entries, got %d", numSessions)
+	}
+}

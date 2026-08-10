@@ -45,7 +45,11 @@ func (o *orchestrator) runHeadless(ctx context.Context, req Request, sink Sink) 
 	}
 
 	intent := types.Intent{Query: req.Input, WorkingDir: req.WorkingDir}
-	res, err := o.agentPool.AcquireHeadless(ctx, intent)
+	// GD-13-001：透传真实业务 SessionID，使同一会话跨多轮 Cron/Workflow/Webhook
+	// 触发命中 Pool 中同一个 per-session Agent 内核实例，而非每轮都新建
+	// 一次性实例（此前 AcquireHeadless 自行生成 headless-<时间戳> 丢弃了
+	// sessionID，见 internal/agent/pool.go AcquireHeadless 注释）。
+	res, err := o.agentPool.AcquireHeadless(ctx, intent, types.WithSessionID(sessionID))
 	if err != nil {
 		// [2026-08-02 S-06 抽样复查] AgentPool 容量耗尽时 acquireInner 返回
 		// CodeResourceExhausted（应映射 429），此前恒被 CodeInternal 覆盖成 500。

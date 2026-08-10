@@ -227,7 +227,20 @@ func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentCon
 // 竞争时立即失败。现改为直接调用 acquireInner，使用调用方传入的 bgCtx（10 分钟超时），
 // 允许后台任务排队等待空闲 slot。交互式路径（Acquire）不受影响，仍保持 100ms 超时。
 func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ...types.HeadlessOption) (*types.AgentResult, error) {
-	sessionID := "headless-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%x", time.Now().UnixNano())
+	opt := &types.HeadlessOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	// GD-13-001：优先复用调用方透传的真实业务 SessionID，使同一会话跨多轮
+	// headless 调用命中 Pool 中同一个 per-session Agent 内核实例（常驻 FSM
+	// Run() 循环得以真正被"按 session 复用"，而非每轮都新建）；未提供时
+	// （如 Blackboard DAG 一次性任务执行，本就没有会话语义）退回原自生成
+	// 一次性 ID 的行为，与引入本机制前完全等价。
+	sessionID := opt.SessionID
+	if sessionID == "" {
+		sessionID = "headless-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%x", time.Now().UnixNano())
+	}
 	// headless 任务使用 ctx 自身超时（由 defaultTaskWorker 传入的 bgCtx，最长 10 分钟），
 	// 而非 p.acquireTimeout 的 100ms——后台批量任务应排队而非立即失败。
 	agent, release, err := p.acquireInner(ctx, sessionID)
@@ -235,11 +248,6 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 		return nil, err
 	}
 	defer release()
-
-	opt := &types.HeadlessOptions{}
-	for _, o := range opts {
-		o(opt)
-	}
 
 	// ADR-0084：透传委派链深度，使 transfer_to_agent 的 SpawnDepth 校验
 	// （inv_M8_06）对经 headless 路径执行的委派任务生效。opt.SpawnDepth 默认 0，
@@ -275,6 +283,20 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 		}
 		if ev.Type == types.AgentStreamEventToken {
 			finalOutput += ev.Content
+		}
+		// [性能修复] SubscribeStream 返回的 channel 只在 ctx.Done() 时才会被
+		// 关闭（agent_wiring.go 注释），FSM 到达终态（Complete/Failed）本身
+		// 并不会关闭 channel——它只会额外发一条 handleTerminalState 广播的
+		// Status/"task_done" 事件（agent_lifecycle.go）。此前这里没有识别该
+		// 信号提前跳出循环，导致 `for ev := range stream` 只能靠 ctx 自身超时
+		// 才会退出：AcquireHeadless 是 Cron/Workflow/Webhook 全部 headless 触发
+		// 路径的唯一收敛入口，意味着无论任务实际多快完成，每一次调用都会
+		// 阻塞到调用方传入 ctx 的整个超时预算才返回——延迟通知/占用 Pool 容量。
+		// 收到 task_done 后没有更多事件会发生（handleTerminalState 是终态唯一
+		// 处理路径），直接跳出循环即可；stream 订阅本身仍随 ctx 结束时正常清理
+		// （SubscribeStream 内部 SafeGo，不因提前 break 产生泄漏）。
+		if ev.Type == types.AgentStreamEventStatus && ev.Content == "task_done" {
+			break
 		}
 	}
 

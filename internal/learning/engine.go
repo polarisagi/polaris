@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/learning/optimizer"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -163,7 +164,15 @@ func (e *Engine) handleTaskCompleteEvent(ctx context.Context, ev TaskCompleteEve
 				}
 			})
 		default:
-			// 信号量满，丢弃（尽力而为原则）
+			// [GD-13-005] 信号量满，丢弃（尽力而为原则）——但丢弃本身必须可观测，
+			// 否则被丢弃的失败任务既不进 Reflexion，也不计入任何计数器，只有
+			// 成功任务经 HeuristicsWriter.RecordSuccess 被记录，success_rate
+			// 会系统性偏高（HE-4：不能悄悄丢样本又假装分母完整）。
+			if metrics.InstrLearningReflectionDroppedTotal != nil {
+				metrics.InstrLearningReflectionDroppedTotal.Add(ctx, 1)
+			}
+			slog.Warn("learning engine: reflexion semaphore full, dropping failed task event",
+				"task_id", ev.TaskID, "task_type", ev.TaskType)
 		}
 		return
 	}
