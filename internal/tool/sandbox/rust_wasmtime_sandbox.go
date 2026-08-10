@@ -20,6 +20,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -226,8 +227,12 @@ func runWasmtimeExecuteFFI(wasmBytes []byte, inputJSON string, workspaceDir stri
 		&outJSONLen,
 		&outErr,
 	)
+	runtime.KeepAlive(wasmBytes)
+	runtime.KeepAlive(inputCStr)
+	runtime.KeepAlive(workspaceCStr)
 
 	errStr := readAndFreeWasmtimeStr(outErr)
+
 	jsonBytes := readAndFreeWasmtimeBytes(outJSON, outJSONLen)
 
 	if rc != 0 {
