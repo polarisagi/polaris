@@ -128,7 +128,8 @@ func (r *ProviderRegistry) UnregisterAll() {
 	r.entries = make(map[string]*providerEntry)
 }
 
-// RegisterWithRole 注册带角色标记的 Provider（general | default | reasoning）。
+// RegisterWithRole 注册带角色标记的 Provider（general | default | reasoning | budget，
+// 唯一 SSoT 见 router.go poolFallbackChain 与 pkg/types.ModelPool）。
 func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p protocol.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

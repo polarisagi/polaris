@@ -42,10 +42,21 @@ const (
 )
 
 // ModelPool 模型池强类型枚举（ADR-0094 决策八）。
+//
+// 合法取值唯一 SSoT = internal/llm/router.go 的 poolFallbackChain 降级链
+// （reasoning → general → default → budget，见 NewInferenceRouter）。"standard"
+// 不是、也从未是合法池名——它是 4 处历史误用（rag_retrieval.go /
+// agent/fsm/transitions.go ×2 / eval/analysis/sampling_scorer.go）里凭空出现
+// 的字面量，本次订正为下列四个真实枚举值之一，不得再引入。
 type ModelPool string
 
 const (
-	ModelPoolBudget    ModelPool = "budget"
-	ModelPoolStandard  ModelPool = "standard"
+	// ModelPoolReasoning 复杂规划/重规划/高风险决策，成本最高。
 	ModelPoolReasoning ModelPool = "reasoning"
+	// ModelPoolGeneral 主对话/感知/反思等高频常规任务。
+	ModelPoolGeneral ModelPool = "general"
+	// ModelPoolDefault 查询分解、质量评分等辅助性任务。
+	ModelPoolDefault ModelPool = "default"
+	// ModelPoolBudget 级联降级链末档，最低成本。
+	ModelPoolBudget ModelPool = "budget"
 )

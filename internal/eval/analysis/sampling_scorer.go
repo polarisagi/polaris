@@ -72,7 +72,7 @@ func judgeReplyQuality(ctx context.Context, provider protocol.Provider, query, r
 				"不要输出任何其它文字或符号。",
 		},
 		{Role: "user", Content: "用户问题：\n" + query + "\n\nAI 回复：\n" + response},
-	}, types.WithModel("standard"))
+	}, types.WithModelPool(string(types.ModelPoolDefault)))
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "sampling_monitor: judge inference failed", err)
 	}

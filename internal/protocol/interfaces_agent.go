@@ -42,7 +42,7 @@ LLMFillEffect struct {
 	OnSuccess      func(sCtx StateContext, fill []byte) (types.State, error) // LLM 产出 → 下一状态
 	OnFailure      func(sCtx StateContext, err error) (types.State, error)   // LLM 失败 → 错误状态
 	MaxRetry       int
-	ModelPool      string // budget / standard / reasoning
+	ModelPool      string // 合法值取自 pkg/types.ModelPool：reasoning / general / default / budget（不含 "standard"，SSoT 见 internal/llm/router.go poolFallbackChain）
 	ThinkingMode   types.ThinkingMode
 	IdempotencyKey types.IdempotencyKey
 }

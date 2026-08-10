@@ -139,7 +139,9 @@ func Test_inv_FileLineLimit(t *testing.T) {
 	}
 }
 
-// TestModelPoolEnumStrictTyping (ADR-0094 决策八) 校验 types.ModelPool 枚举及其合法取值定义。
+// TestModelPoolEnumStrictTyping (ADR-0094 决策八) 校验 types.ModelPool 枚举定义完整，
+// 且四个合法值（唯一 SSoT: internal/llm/router.go poolFallbackChain）齐全、不含
+// 从未合法过的 "standard"。
 func TestModelPoolEnumStrictTyping(t *testing.T) {
 	root := repoRoot(t)
 	targetFile := filepath.Join(root, "pkg", "types", "enums_llm.go")
@@ -151,10 +153,65 @@ func TestModelPoolEnumStrictTyping(t *testing.T) {
 
 	content := string(data)
 	if !strings.Contains(content, "type ModelPool string") ||
-		!strings.Contains(content, "ModelPoolBudget") ||
-		!strings.Contains(content, "ModelPoolStandard") ||
-		!strings.Contains(content, "ModelPoolReasoning") {
-		t.Errorf("ModelPoolEnumStrictTyping VIOLATED: types.ModelPool enum declaration missing or incomplete in pkg/types/enums_llm.go")
+		!strings.Contains(content, "ModelPoolReasoning") ||
+		!strings.Contains(content, "ModelPoolGeneral") ||
+		!strings.Contains(content, "ModelPoolDefault") ||
+		!strings.Contains(content, "ModelPoolBudget") {
+		t.Errorf("ModelPoolEnumStrictTyping VIOLATED: types.ModelPool enum declaration missing or incomplete in pkg/types/enums_llm.go (需含 Reasoning/General/Default/Budget 四值)")
+	}
+	// 只匹配真实的常量声明模式（ModelPool = "standard" 或 ModelPoolStandard 标识符），
+	// 不匹配散文注释里解释"为什么 standard 不合法"时提到的 "standard" 字样。
+	if strings.Contains(content, `ModelPool = "standard"`) || strings.Contains(content, "ModelPoolStandard") {
+		t.Errorf("ModelPoolEnumStrictTyping VIOLATED: %q 从未是合法池名（唯一 SSoT: internal/llm/router.go poolFallbackChain），不得作为枚举值出现", "standard")
+	}
+}
+
+// TestModelPoolEnumOnly (ADR-0094 决策八) AST 扫描全仓调用点：禁止 types.WithModel /
+// types.WithModelPool 传入字面量 "standard"，禁止 ModelPool: "standard" 结构体字面量
+// 赋值。TestModelPoolEnumStrictTyping 只检查枚举定义文件本身，本规则补齐"调用点是否
+// 真的用了枚举"这一环——2026-08-10 复核发现枚举定义与四处调用点分别修复过、
+// 但都可能被后续 PR 悄悄改回字面量，此处是唯一的调用点级机械门控。
+func TestModelPoolEnumOnly(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			// 场景一：types.WithModel("standard") / types.WithModelPool("standard")
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok &&
+					(sel.Sel.Name == "WithModel" || sel.Sel.Name == "WithModelPool") {
+					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "types" {
+						for _, arg := range call.Args {
+							if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"standard"` {
+								pos := fset.Position(call.Pos())
+								violations = append(violations, violation{
+									relPath: relPath, line: pos.Line,
+									detail: "types." + sel.Sel.Name + `("standard") — "standard" 不是合法 ModelPool，改用 pkg/types.ModelPool 具名常量`,
+								})
+							}
+						}
+					}
+				}
+			}
+			// 场景二：ModelPool: "standard" 结构体字面量字段
+			if kv, ok := n.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "ModelPool" {
+					if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"standard"` {
+						pos := fset.Position(kv.Pos())
+						violations = append(violations, violation{
+							relPath: relPath, line: pos.Line,
+							detail: `ModelPool: "standard" — 改用 string(types.ModelPoolGeneral/Default/Reasoning/Budget)`,
+						})
+					}
+				}
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("ModelPoolEnumOnly VIOLATED: %s", v)
 	}
 }
 

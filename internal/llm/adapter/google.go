@@ -165,26 +165,37 @@ func (a *GoogleAgentPlatformAdapter) sendGeminiInferRequest(ctx context.Context,
 // buildInferResponseFromGemini 组装 ProviderResponse、记账 token 用量并做空响应兜底校验
 // （从 Infer 拆出，gocyclo 治理，行为不变）。
 //
-// Gemini doesn't use standard ToolCall struct in InferResponse yet, wait, polaris protocol uses string / json for stream but for non-stream what does it use?
-// The problem is InferResponse only has Content string. Tool calls in non-stream need to be handled if types.InferResponse supports it.
-// Looking at adapter_anthropic.go, Infer() only returns Content string. Our Tool calls are handled primarily in StreamInfer.
-// Wait, types.InferResponse doesn't have ToolCalls natively?
-// Let's check types.InferResponse definition via a quick look.
+// 非流式路径此前只累积 p.Text，完全忽略 p.FunctionCall——纯 functionCall 响应（无 text
+// part）会被下方"空响应"兜底误判为 provider 异常直接报错。ID 生成策略与流式路径
+// emitGeminiStreamParts 保持一致（fmt.Sprintf("call_%d", <parts 内下标>)），Gemini
+// 原生协议本身不提供工具调用 ID。
 func (a *GoogleAgentPlatformAdapter) buildInferResponseFromGemini(out *geminiInferResponse, modelReq string) (*types.ProviderResponse, error) {
 	text, finishReason := "", ""
+	var toolCalls []types.InferToolCall
 
 	if len(out.Candidates) > 0 {
 		finishReason = out.Candidates[0].FinishReason
-		for _, p := range out.Candidates[0].Content.Parts {
+		for i, p := range out.Candidates[0].Content.Parts {
 			if p.Text != "" {
 				text += p.Text
 			}
-
+			if p.FunctionCall != nil {
+				argsBytes, err := json.Marshal(p.FunctionCall.Args)
+				if err != nil {
+					return nil, apperr.Wrap(apperr.CodeInternal, "buildInferResponseFromGemini: marshal functionCall args", err)
+				}
+				toolCalls = append(toolCalls, types.InferToolCall{
+					ID:    fmt.Sprintf("call_%d", i),
+					Name:  p.FunctionCall.Name,
+					Input: argsBytes,
+				})
+			}
 		}
 	}
 
 	resp := &types.ProviderResponse{
 		Content:      text,
+		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Model:        a.model,
 		Usage: types.Usage{

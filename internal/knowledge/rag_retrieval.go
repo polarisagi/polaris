@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // recordExplainBits 按位图上报每一路命中的检索来源指标（Batch8 ExplainBits 归因修复）。
@@ -227,7 +228,7 @@ func (sn *StructuredNavigator) Navigate(ctx context.Context, query string) (stri
         WHERE rag_chunks_fts MATCH ?
           AND rc.chunk_type = 'summary' AND rc.deleted_at IS NULL
         ORDER BY rank
-        LIMIT 1`, query)
+        LIMIT 1`, util.QuoteFTS5Query(query))
 
 	var docID string
 	if err := row.Scan(&docID); err != nil {
@@ -258,7 +259,7 @@ func (qp *QueryPlanner) Plan(ctx context.Context, query string) ([]SubQuery, err
 [{"text":"子查询1","scope":"","weight":0.6},{"text":"子查询2","scope":"","weight":0.4}]
 weight 之和必须为 1.0，scope 为空表示全局检索。`},
 		{Role: "user", Content: query},
-	}, types.WithModel("standard"))
+	}, types.WithModelPool(string(types.ModelPoolDefault)))
 	if err != nil || resp == nil {
 		return []SubQuery{{Text: query, Weight: 1.0}}, nil //nolint:nilerr // 失败降级单查询
 	}
