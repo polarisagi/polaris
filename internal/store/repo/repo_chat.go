@@ -9,6 +9,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // SQLiteChatRepository 实现 protocol.ChatRepository。
@@ -189,7 +190,7 @@ func (r *SQLiteChatRepository) SearchMessages(ctx context.Context, query string,
 		`SELECT cm.id, cm.session_id, cm.role, cm.content, cm.tool_calls, cm.file_offset, cm.file_length, cm.created_at, cm.updated_at
 		FROM messages_fts fts
 		JOIN chat_messages cm ON cm.id = fts.rowid
-		WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?`, query, limit)
+		WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?`, util.QuoteFTS5Query(query), limit)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.SearchMessages", err)
 	}

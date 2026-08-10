@@ -16,6 +16,7 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // VectorEmbedder 向量嵌入接口（consumer-side，防止包循环）。
@@ -224,7 +225,7 @@ func (hr *HybridRetrieverImpl) searchFTS(ctx context.Context, queryText string, 
 			LIMIT ?
 		) AND rc.deleted_at IS NULL
 	`
-	rows, err := hr.db.QueryContext(ctx, sqlQuery, queryText, limit)
+	rows, err := hr.db.QueryContext(ctx, sqlQuery, util.QuoteFTS5Query(queryText), limit)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "hybrid_retriever: fts search failed", err)
 	}
