@@ -14,24 +14,34 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-var (
+// ttsFuncs 持有 sherpa-onnx TTS 相关的 purego 函数指针。
+type ttsFuncs struct {
 	CreateOfflineTts                func(config uintptr) uintptr
 	DestroyOfflineTts               func(tts uintptr)
 	OfflineTtsGenerate              func(tts uintptr, text uintptr, sid int32, speed float32) uintptr
 	DestroyOfflineTtsGeneratedAudio func(audio uintptr)
+}
 
-	loaded  bool
+// Library 封装 sherpa-onnx TTS 函数指针，避免包级导出可变变量（CLAUDE.md「internal/
+// 禁全局可变变量」；与 internal/llm/stt/sherpa.go 的既有 Library 模式对齐）。
+type Library struct {
+	funcs ttsFuncs
+}
+
+var (
+	libMu   sync.Mutex
 	loadErr error
-	mu      sync.Mutex
+	libInst *Library
 )
 
-// LoadLibrary 延迟加载 sherpa-onnx 动态库并映射 TTS 符号
+// LoadLibrary 延迟加载 sherpa-onnx 动态库并映射 TTS 符号。
+// 幂等可重入：已加载则直接返回 nil；加载失败后可再次尝试（下载完成后调用）。
 func LoadLibrary(libPath string) error {
-	mu.Lock()
-	defer mu.Unlock()
+	libMu.Lock()
+	defer libMu.Unlock()
 
-	if loaded {
-		return nil
+	if libInst != nil {
+		return nil // 已成功加载，直接复用
 	}
 
 	lib, err := stt.Dlopen(libPath)
@@ -40,12 +50,13 @@ func LoadLibrary(libPath string) error {
 		return loadErr
 	}
 
-	purego.RegisterLibFunc(&CreateOfflineTts, lib, "SherpaOnnxCreateOfflineTts")
-	purego.RegisterLibFunc(&DestroyOfflineTts, lib, "SherpaOnnxDestroyOfflineTts")
-	purego.RegisterLibFunc(&OfflineTtsGenerate, lib, "SherpaOnnxOfflineTtsGenerate")
-	purego.RegisterLibFunc(&DestroyOfflineTtsGeneratedAudio, lib, "SherpaOnnxDestroyOfflineTtsGeneratedAudio")
+	var tf ttsFuncs
+	purego.RegisterLibFunc(&tf.CreateOfflineTts, lib, "SherpaOnnxCreateOfflineTts")
+	purego.RegisterLibFunc(&tf.DestroyOfflineTts, lib, "SherpaOnnxDestroyOfflineTts")
+	purego.RegisterLibFunc(&tf.OfflineTtsGenerate, lib, "SherpaOnnxOfflineTtsGenerate")
+	purego.RegisterLibFunc(&tf.DestroyOfflineTtsGeneratedAudio, lib, "SherpaOnnxDestroyOfflineTtsGeneratedAudio")
 
-	loaded = true
+	libInst = &Library{funcs: tf}
 	loadErr = nil
 	return nil
 }
@@ -54,11 +65,16 @@ func LoadLibrary(libPath string) error {
 type Engine struct {
 	mu  sync.Mutex
 	tts uintptr
+	lib *Library
 }
 
 // NewEngine 构造新的 Sherpa-ONNX 离线 TTS 引擎 (Kokoro 模型)
 func NewEngine(modelDir string) (*Engine, error) {
-	if !loaded {
+	libMu.Lock()
+	lib := libInst
+	libMu.Unlock()
+
+	if lib == nil {
 		return nil, apperr.New(apperr.CodeInternal, "tts: library not loaded")
 	}
 
@@ -108,12 +124,12 @@ func NewEngine(modelDir string) (*Engine, error) {
 
 	*(*int32)(unsafe.Pointer(cfgPtr + OffsetMaxNumSentences)) = 1
 
-	tts := CreateOfflineTts(cfgPtr)
+	tts := lib.funcs.CreateOfflineTts(cfgPtr)
 	if tts == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "tts: failed to create offline tts engine")
 	}
 
-	return &Engine{tts: tts}, nil
+	return &Engine{tts: tts, lib: lib}, nil
 }
 
 // Generate 实现 Provider 接口，生成给定文本的 WAV 音频（ctx 由 sherpa 同步推理忽略）。
@@ -128,12 +144,12 @@ func (e *Engine) Generate(_ context.Context, text string) ([]byte, error) {
 	cText := append([]byte(text), 0)
 	textPtr := uintptr(unsafe.Pointer(&cText[0]))
 	// 使用 voice 3（zf_001，高质量中文女声）；voice 0 为 af_maple（美音）。
-	audioPtr := OfflineTtsGenerate(e.tts, textPtr, 3, 1.0)
+	audioPtr := e.lib.funcs.OfflineTtsGenerate(e.tts, textPtr, 3, 1.0)
 	runtime.KeepAlive(cText) // 防 GC 在 FFI 调用期间回收 cText 底层内存
 	if audioPtr == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "tts: failed to generate audio")
 	}
-	defer DestroyOfflineTtsGeneratedAudio(audioPtr)
+	defer e.lib.funcs.DestroyOfflineTtsGeneratedAudio(audioPtr)
 
 	samplesPtr := *(*uintptr)(unsafe.Pointer(audioPtr))
 	n := *(*int32)(unsafe.Pointer(audioPtr + 8))
@@ -153,7 +169,7 @@ func (e *Engine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.tts != 0 {
-		DestroyOfflineTts(e.tts)
+		e.lib.funcs.DestroyOfflineTts(e.tts)
 		e.tts = 0
 	}
 	return nil

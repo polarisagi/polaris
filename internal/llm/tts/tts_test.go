@@ -119,13 +119,14 @@ func TestEncodeWAV_PrecisionMidValue(t *testing.T) {
 // ── LoadLibrary ────────────────────────────────────────────────────────────
 
 func TestLoadLibrary_NonexistentPath(t *testing.T) {
-	// 重置状态，防止包级 loaded 标志影响本测试
-	mu.Lock()
-	wasLoaded := loaded
-	loadedBefore := loaded
-	mu.Unlock()
+	// 重置状态，防止包级 libInst 单例影响本测试（ADR-0094 WP-8：TTS 函数指针
+	// 收进 Library 结构体后，"已加载" 状态由 libInst != nil 判定，不再有独立
+	// 的 loaded bool 标志）。
+	libMu.Lock()
+	instBefore := libInst
+	libMu.Unlock()
 
-	if loadedBefore {
+	if instBefore != nil {
 		t.Skip("library already loaded in this process, cannot test failure path")
 	}
 
@@ -135,23 +136,23 @@ func TestLoadLibrary_NonexistentPath(t *testing.T) {
 	}
 
 	// 恢复状态
-	mu.Lock()
-	if !wasLoaded {
-		loaded = false
+	libMu.Lock()
+	if instBefore == nil {
+		libInst = nil
 		loadErr = nil
 	}
-	mu.Unlock()
+	libMu.Unlock()
 }
 
 func TestNewEngine_NotLoaded(t *testing.T) {
-	mu.Lock()
-	wasLoaded := loaded
-	loaded = false
-	mu.Unlock()
+	libMu.Lock()
+	instBefore := libInst
+	libInst = nil
+	libMu.Unlock()
 	defer func() {
-		mu.Lock()
-		loaded = wasLoaded
-		mu.Unlock()
+		libMu.Lock()
+		libInst = instBefore
+		libMu.Unlock()
 	}()
 
 	_, err := NewEngine("/some/model/dir")
