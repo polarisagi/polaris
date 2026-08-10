@@ -73,9 +73,11 @@ func (s *CommunityGenerativeSummarizer) Summarize(ctx context.Context, communiti
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			// context 已取消：不再派发新的社区摘要任务，已派发的任务仍会自然
-			// 收尾（safecall.Infer 内部会因 ctx.Done() 尽快返回错误）。
+			// 收尾（safecall.Infer 内部会因 ctx.Done() 尽快返回错误）。调用方
+			// （Clusterer.Cluster）统一 apperr.Wrap 不做哨兵身份比较，此处无需
+			// 保留 ctx.Err() 原始类型，wrapcheck 要求包一层可溯源前缀。
 			wg.Wait()
-			return results, ctx.Err()
+			return results, apperr.Wrap(apperr.CodeInternal, "CommunityGenerativeSummarizer.Summarize: context canceled", ctx.Err())
 		}
 
 		wg.Add(1)
