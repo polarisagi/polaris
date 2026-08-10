@@ -20,6 +20,10 @@ const (
 	degradationThreshold = 0.9  // avgScore < baseline × 0.9 → alert
 	monitorInterval      = 10 * time.Minute
 	baselineSnapshotTTL  = 7 * 24 * time.Hour // 7 天前快照用于归因
+	// snapshotRefreshInterval 7 天基线快照的刷新周期。
+	// 取 24h：快照本身覆盖 7 天窗口，日级刷新足以跟上，且避免每 10min 的检测
+	// 循环都去打一次 eval 存储。
+	snapshotRefreshInterval = 24 * time.Hour
 )
 
 // DegradationAlert 退化告警，含归因结果。
@@ -62,6 +66,9 @@ type ContinuousSamplingMonitor struct {
 	// 退化监控，不额外采集训练样本。judgeReplyQuality 已产出的 [0,1] 质量分
 	// 复用作为 PRM Reward 标签（真实存在的 LLM Judge 信号，非臆测）。
 	prmCollector *llmadapter.TrainingSampleCollector
+
+	// snapshotStore 7 天基线快照数据源，见 InjectSnapshotStore。nil 时不刷新快照。
+	snapshotStore *harness.SQLiteEvalStore
 }
 
 // InjectPRMCollector 注入 PRM 训练样本采集器（可选，nil-safe）。
@@ -144,8 +151,24 @@ func (m *ContinuousSamplingMonitor) GetL3Threshold() float64 {
 	return m.baselineAvg * degradationThreshold
 }
 
+// InjectSnapshotStore 注入 7 天基线快照的数据源。
+//
+// 2026-08-10 接线：`SyncSevenDaySnapshot` 早已实现且注释写明「应在 Monitor 启动
+// 时调用一次，之后每 24h 刷新」，但全仓零生产调用方——`m.sevenDayAvg` 恒为 0，
+// `attributeLocked` 每次都回落到内存里的滚动基线 `baselineAvg`。后果是归因失真：
+// 滚动基线本身会随退化一起下移，用它当分母算出的 drop 恒偏小，本该判 CausalInternal
+// （≥15% → 触发 M9 autoRollback）的持续性退化会被判成 CausalExternal（<5% → 仅告警）。
+// 也就是说，缺这一次接线让"静默退化检测"自己变成了静默的。
+//
+// store 为 nil 时快照刷新整体跳过，行为退回接线前（不因数据源缺席阻断监控主循环）。
+func (m *ContinuousSamplingMonitor) InjectSnapshotStore(store *harness.SQLiteEvalStore) {
+	m.mu.Lock()
+	m.snapshotStore = store
+	m.mu.Unlock()
+}
+
 // SyncSevenDaySnapshot 从 eval 存储加载 7 天前的通过率快照。
-// 应在 Monitor 启动时调用一次，之后每 24h 刷新。
+// 由 Start 在启动时调用一次、之后每 snapshotRefreshInterval 刷新一次。
 func (m *ContinuousSamplingMonitor) SyncSevenDaySnapshot(ctx context.Context, store *harness.SQLiteEvalStore) error {
 	avg, err := store.GetPassRateAvgSince(ctx, time.Now().AddDate(0, 0, -7))
 	if err != nil {
@@ -163,10 +186,17 @@ func (m *ContinuousSamplingMonitor) Start(ctx context.Context) {
 	concurrent.SafeGo(ctx, "eval.analysis.sampling_monitor_loop", func(ctx context.Context) {
 		ticker := time.NewTicker(monitorInterval)
 		defer ticker.Stop()
+		// 启动即取一次快照，之后按 snapshotRefreshInterval 刷新——否则监控循环
+		// 头 24 小时内的归因全部落在"无 7 天基线"的降级分支上。
+		m.refreshSnapshot(ctx)
+		snapshotTicker := time.NewTicker(snapshotRefreshInterval)
+		defer snapshotTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-snapshotTicker.C:
+				m.refreshSnapshot(ctx)
 			case <-ticker.C:
 				degraded, alert := m.CheckDegradation()
 				if !degraded {
@@ -183,6 +213,20 @@ func (m *ContinuousSamplingMonitor) Start(ctx context.Context) {
 			}
 		}
 	})
+}
+
+// refreshSnapshot 刷新 7 天基线快照。数据源未注入时静默跳过；查询失败只记 Warn
+// ——归因降级到滚动基线仍能工作，不该让一次存储抖动打断整个监控循环。
+func (m *ContinuousSamplingMonitor) refreshSnapshot(ctx context.Context) {
+	m.mu.Lock()
+	store := m.snapshotStore
+	m.mu.Unlock()
+	if store == nil {
+		return
+	}
+	if err := m.SyncSevenDaySnapshot(ctx, store); err != nil {
+		slog.Warn("sampling_monitor: 7 天基线快照刷新失败，归因将回落到内存滚动基线", "err", err)
+	}
 }
 
 // snapshotBaselineLocked 更新基线快照（需持锁调用）。
