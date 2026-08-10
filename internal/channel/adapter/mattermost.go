@@ -63,9 +63,14 @@ func mattermostConnect(ctx context.Context, host PollerHost, channelID, mmURL, t
 	}
 	defer conn.Close()
 
-	_ = conn.WriteJSON(map[string]any{
+	// 认证挑战发不出去就没有后续可言：连接虽在，但服务端永远不会推事件，
+	// 下面的 for 循环会静默空转到 ctx 取消。此前 `_ =` 吞掉后，现象是
+	// "适配器显示已连接但一条消息都收不到"。直接返回错误交由重连逻辑处理。
+	if err := conn.WriteJSON(map[string]any{
 		"seq": 1, "action": "authentication_challenge", "data": map[string]any{"token": token},
-	})
+	}); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "mattermost: authentication_challenge write", err)
+	}
 
 	for {
 		select {
