@@ -48,6 +48,13 @@ func (ac *AutoConfig) MemoryPressureCallback(availableMB uint64, level probe.Deg
 	case probe.DegradationWarning:
 		ac.Gate.Override(probe.FeatureQLoRA, probe.FeatureDisabled)
 		ac.Gate.Override(probe.FeatureLargeLocalLLM, probe.FeatureDegraded)
+		// Warning 级先清 KV cache 而非直接卸载模型：KV cache 随上下文长度线性增长，
+		// 是本地推理常驻内存里最大且最容易回收的一块，清掉它不影响模型继续服务；
+		// 而 UnloadModel 会让后续所有本地推理落空，属于 Critical 级才该付的代价。
+		// 少了这一档，内存压力只能从 Warning 直接跳到 Critical——
+		// `LocalProvider.EvictKVCache` 与底层 `LlamaEvictKVCache` FFI 早已实现，
+		// 但在 2026-08-10 之前全仓零生产调用方，这条中间档位形同虚设。
+		ac.evictLocalKVCache()
 		// M07 §12 L2：kill 空闲沙箱
 		if ac.Sandbox != nil {
 			ac.Sandbox.KillIdleSandboxes(context.Background())
@@ -91,6 +98,32 @@ func (ac *AutoConfig) unloadLocalModel() {
 		return
 	}
 	slog.Info("observability: local model unloaded due to critical memory pressure")
+}
+
+// evictLocalKVCache best-effort 清空 "llama-local" 的 KV cache（M01 §8.2 Warning 档）。
+//
+// 与 unloadLocalModel 同一 fail-open 纪律：unloader 未注入 / Provider 未注册 /
+// 类型断言失败 / EvictKVCache 报错，一律只记日志不中断降级流程。超时同样固定 3s
+// ——MemoryPressureCallback 跑在 5s 轮询 goroutine 上，不能被单个 FFI 调用挂住。
+func (ac *AutoConfig) evictLocalKVCache() {
+	if ac.localUnloader == nil {
+		return
+	}
+	provider, ok := ac.localUnloader.Get("llama-local")
+	if !ok {
+		return
+	}
+	localProvider, ok := provider.(protocol.LocalProvider)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := localProvider.EvictKVCache(ctx); err != nil {
+		slog.Warn("observability: failed to evict local KV cache under memory pressure", "err", err)
+		return
+	}
+	slog.Info("observability: local KV cache evicted due to memory pressure (warning level)")
 }
 
 // RunMemoryWatcher polls available system RAM every 5s and drives MemoryPressureCallback.
