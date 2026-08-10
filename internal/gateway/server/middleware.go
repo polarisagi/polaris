@@ -281,5 +281,15 @@ func (lrw *LoggingResponseWriter) Flush() {
 	}
 }
 
+// Unwrap 暴露底层 http.ResponseWriter（ADR-0094 决策七）。Go 1.20+ 的
+// http.ResponseController（logstream.go / chat/sse.go / openai_compat.go 均用它
+// 设置 SetWriteDeadline）依靠标准库 http.rwUnwrapper 接口逐层 Unwrap() 才能定位
+// 底层的 http.Flusher / http.Hijacker / SetWriteDeadline 方法。缺了这个方法，
+// http.NewResponseController(lrw).SetWriteDeadline(...) 会静默返回
+// http.ErrNotSupported，SSE/流式响应的写超时设置全盘失效且不会报错。
+func (lrw *LoggingResponseWriter) Unwrap() http.ResponseWriter {
+	return lrw.ResponseWriter
+}
+
 // 鉴权中间件（adminWritePaths/isAdminWrite/isLoopback/healthPathSet/checkAuth/
 // withMiddleware）见 middleware_auth.go（R7 拆分）。

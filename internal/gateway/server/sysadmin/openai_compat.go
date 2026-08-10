@@ -88,6 +88,13 @@ func (h *SysAdminHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// ADR-0094 决策二类推（fail-closed 空依赖判空）：SysAdminHandler 若未被正确
+	// 注入 Registry/Router（组件解耦测试、降级运行模式），直接调用会 nil 指针崩溃。
+	if h.Registry == nil || h.Router == nil {
+		http.Error(w, `{"error":{"message":"inference backend not ready","type":"server_error"}}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	// 选取 Provider（优先 default，次选 general）
 	p := h.Registry.PickProvider("default")
 	if p == nil {

@@ -187,6 +187,10 @@ func buildAgent(
 		// tb.Dispatcher 同时满足 planner.ToolLookup（Lookup(name) (types.Tool, error)），
 		// 使 TaskDecomposer 能对 LLM 生成的 tool_name 做白名单校验（GR-7-002）。
 		pool := planner.NewPlannerPool(goal, taskType, provider, whisperChan, tb.Dispatcher)
+		// workerEngineA 落盘候选补丁到 tb.VFSWorkspace 管辖的 rootDir 下执行编译/
+		// 测试评分（WP-9：不再用裸 os.MkdirTemp/os.WriteFile 触碰宿主机系统级
+		// /tmp，见 planner.WorkspaceStager 注释）。
+		pool.SetWorkspace(tb.VFSWorkspace)
 		pool.Run(ctx)
 	})
 	a.InjectExtensionActivator(&extensionActivatorAdapter{inner: tb.Activator})

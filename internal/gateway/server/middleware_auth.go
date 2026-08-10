@@ -97,8 +97,15 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 //nolint:gocyclo
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	// 按照 M13 规范，为每个 IP 分配一个单独的桶，限制默认并发 QPS
-	limiter := NewRateLimitManager(context.Background(), 20, 50)
-	authManager := NewAuthManager(context.Background())
+	// 用 s.rootCtx（进程级根 context，NewServer 时由 main.go 的 signal.NotifyContext
+	// 传入）而非 context.Background()：否则这两个 cleanupLoop 后台协程在进程收到
+	// SIGINT/SIGTERM 时永远不会退出。
+	rootCtx := s.rootCtx
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	limiter := NewRateLimitManager(rootCtx, 20, 50)
+	authManager := NewAuthManager(rootCtx)
 
 	expectedKey := os.Getenv("POLARIS_API_KEY")
 	if expectedKey == "" {
