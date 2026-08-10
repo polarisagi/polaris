@@ -38,6 +38,11 @@ const (
 	qqbotOpInvalidSession = 9
 	qqbotOpHello          = 10
 	qqbotOpHeartbeatAck   = 11
+
+	// qqbotDefaultHeartbeatMS 是 HELLO 未给出可用 heartbeat_interval 时的兜底值。
+	// 取 30s：QQ 开放平台文档给出的典型值为 30000~45000ms，取下界保证不会因心跳
+	// 过疏被判失活。
+	qqbotDefaultHeartbeatMS = 30000
 )
 
 type qqbotPayload struct {
@@ -131,14 +136,28 @@ func qqbotConnect( //nolint:gocyclo
 		return false, newSessionID, seq.Load()
 	}
 	var hello qqbotPayload
-	_ = json.Unmarshal(helloData, &hello)
+	if err := json.Unmarshal(helloData, &hello); err != nil {
+		slog.Warn("qqbot: HELLO 帧解析失败，本次连接放弃", "err", err)
+		return false, newSessionID, seq.Load()
+	}
 	if hello.Op != qqbotOpHello {
 		return false, newSessionID, seq.Load()
 	}
 	var helloD struct {
 		HeartbeatInterval int `json:"heartbeat_interval"`
 	}
-	_ = json.Unmarshal(hello.D, &helloD)
+	if err := json.Unmarshal(hello.D, &helloD); err != nil {
+		slog.Warn("qqbot: HELLO.d 解析失败，改用默认心跳间隔", "err", err, "fallback_ms", qqbotDefaultHeartbeatMS)
+	}
+	// 兜底必须在这里而不是靠调用方：HeartbeatInterval 为 0（字段缺失 / 解析失败 /
+	// 平台改协议）会让下面的 rand.IntN(0) 与 time.NewTicker(0) 双双 panic。
+	// SafeGo 的 recover 能兜住进程，但心跳协程当场死掉 → QQ 侧判定连接失活 → 断线，
+	// 表现为"莫名其妙的重连循环"。此前 `_ =` 吞掉解析错误正是让这条路径无声。
+	if helloD.HeartbeatInterval <= 0 {
+		slog.Warn("qqbot: HELLO 未给出有效 heartbeat_interval，改用默认值",
+			"got", helloD.HeartbeatInterval, "fallback_ms", qqbotDefaultHeartbeatMS)
+		helloD.HeartbeatInterval = qqbotDefaultHeartbeatMS
+	}
 
 	concurrent.SafeGo(heartbeatCtx, "adapter_heartbeat", func(_ context.Context) {
 		jitter := time.Duration(rand.IntN(helloD.HeartbeatInterval)) * time.Millisecond
@@ -208,7 +227,11 @@ func qqbotConnect( //nolint:gocyclo
 				var ready struct {
 					SessionID string `json:"session_id"`
 				}
-				_ = json.Unmarshal(p.D, &ready)
+				// 解析失败 → session_id 丢失 → 后续断线只能重新 Identify 而非
+				// Resume，历史消息会漏收。留 Warn 让这件事可见。
+				if err := json.Unmarshal(p.D, &ready); err != nil {
+					slog.Warn("qqbot: READY 帧解析失败，session_id 丢失，后续断线将无法 Resume", "err", err)
+				}
 				newSessionID = ready.SessionID
 			case "AT_MESSAGE_CREATE", "C2C_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE", "DIRECT_MESSAGE_CREATE":
 				var msg struct {

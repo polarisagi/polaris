@@ -75,12 +75,17 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 		case "SYSTEM":
 			topic, _ := frame.Headers["topic"].(string)
 			if topic == "ping" {
-				_ = conn.WriteJSON(map[string]any{
+				// pong 发不出去 = 钉钉侧会在下一个探测周期判定连接失活并断开。
+				// 此处不主动断连（下一轮 ReadJSON 自然会拿到 EOF），但要留痕，
+				// 否则表现为"连接每隔几分钟自己断一次"且无线索。
+				if err := conn.WriteJSON(map[string]any{
 					"code":    200,
 					"headers": map[string]any{"messageId": msgID, "topic": "pong"},
 					"message": "OK",
 					"data":    nil,
-				})
+				}); err != nil {
+					slog.Warn("dingtalk: pong 回写失败，连接可能即将被服务端判定失活", "msg_id", msgID, "err", err)
+				}
 			}
 		case "EVENT":
 			ack := map[string]any{
@@ -89,10 +94,16 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 				"message": "OK",
 				"data":    nil,
 			}
-			_ = conn.WriteJSON(ack)
+			// ACK 发不出去 = 钉钉会重投该事件，下游将收到重复消息。
+			// 不 continue（本条事件仍要处理，幂等由下游 IdempotencyKey 保证），
+			// 但必须记录，否则重复投递的根因无从查起。
+			if err := conn.WriteJSON(ack); err != nil {
+				slog.Warn("dingtalk: 事件 ACK 回写失败，服务端可能重投该事件", "msg_id", msgID, "err", err)
+			}
 
 			var evData dingTalkEventData
-			if json.Unmarshal([]byte(frame.Data), &evData) != nil {
+			if err := json.Unmarshal([]byte(frame.Data), &evData); err != nil {
+				slog.Warn("dingtalk: 事件数据解析失败，跳过本条", "msg_id", msgID, "err", err)
 				continue
 			}
 			text := strings.TrimSpace(evData.Text.Content)

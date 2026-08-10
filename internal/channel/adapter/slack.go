@@ -89,7 +89,12 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 				} `json:"event"`
 			}
 			if payloadRaw, ok := envelope["payload"]; ok {
-				_ = json.Unmarshal(payloadRaw, &payload)
+				// 解析失败 → payload 保持零值 → 下面的空字段检查会 continue 丢弃本条。
+				// 行为正确，但 Slack 改事件结构时应当有人知道，否则表现为
+				// "某类消息突然不再触发"且无任何日志。
+				if err := json.Unmarshal(payloadRaw, &payload); err != nil {
+					slog.Warn("slack: event payload 解析失败，本条事件被丢弃", "err", err)
+				}
 			}
 			if payload.Event.BotID != "" || payload.Event.Text == "" || payload.Event.Channel == "" {
 				continue

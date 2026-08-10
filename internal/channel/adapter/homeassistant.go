@@ -101,7 +101,9 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 	var authReq struct {
 		Type string `json:"type"`
 	}
-	_ = json.Unmarshal(raw, &authReq)
+	if err := json.Unmarshal(raw, &authReq); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "ha: parse auth_required frame", err)
+	}
 	if authReq.Type != "auth_required" {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("ha: expected auth_required, got %s", authReq.Type))
 	}
@@ -116,7 +118,9 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 	var authOK struct {
 		Type string `json:"type"`
 	}
-	_ = json.Unmarshal(raw, &authOK)
+	if err := json.Unmarshal(raw, &authOK); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "ha: parse auth_ok frame", err)
+	}
 	if authOK.Type != "auth_ok" {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("ha: auth failed (type=%s)", authOK.Type))
 	}
