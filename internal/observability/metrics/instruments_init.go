@@ -315,6 +315,13 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 		metric.WithDescription("Agent handoff 恢复快照超出体积上限、放弃落盘的次数（无 label）"),
 	)
 	ie.capture("polaris.agent.handoff_snapshot_oversized_total", err)
+
+	// [GD-13-005] M9 Reflexion 反思信号量满导致失败任务事件被丢弃的计数。
+	InstrLearningReflectionDroppedTotal, err = meter.Int64Counter(
+		"polaris.learning.reflection_dropped_total",
+		metric.WithDescription("M9 Reflexion 反思并发信号量满时丢弃的失败任务事件数（无 label）"),
+	)
+	ie.capture("polaris.learning.reflection_dropped_total", err)
 }
 
 func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {

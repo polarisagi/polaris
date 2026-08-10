@@ -33,6 +33,15 @@ type HeadlessOptions struct {
 	// AcquireHeadless 在消费每个 AgentStreamEvent 时调用此回调，供调用方将
 	// 子 Agent 事件中继到 Blackboard 或父 Session Stream。nil = 不回调。
 	EventCallback func(AgentStreamEvent)
+	// SessionID 透传调用方真实的业务 SessionID（GD-13-001）。AcquireHeadless
+	// 内部以 sessionID 为 key 复用/新建 per-session Agent 内核实例（含常驻
+	// FSM Run() 循环）；此前恒不设置，AcquireHeadless 每次调用都自行生成
+	// "headless-"+时间戳 的一次性 ID，导致同一业务会话（如 orchestrator_headless.go
+	// 的多轮 Cron/Workflow/Webhook 对话）每一轮都新建一个内核实例，Pool
+	// "按 session 复用/idle 挂起"的设计初衷对 headless 路径完全失效。
+	// 空串 = 退回原自生成行为（如 Blackboard DAG 一次性任务执行，本就没有
+	// 会话/多轮语义，见 execute/orchestrator/default_worker.go 调用点注释）。
+	SessionID string
 }
 
 // WithSpawnDepth 设置本次 headless 执行继承的委派链深度（ADR-0084）。
@@ -51,4 +60,10 @@ func WithNamespace(ns string) HeadlessOption {
 // fn 不得在内部阻塞，否则会延迟子 Agent 执行；建议配合带缓冲的 channel 异步转发。
 func WithEventCallback(fn func(AgentStreamEvent)) HeadlessOption {
 	return func(o *HeadlessOptions) { o.EventCallback = fn }
+}
+
+// WithSessionID 透传调用方真实的业务 SessionID（GD-13-001），供 AcquireHeadless
+// 复用/新建对应的 per-session Agent 内核实例，而非每次调用都自生成一次性 ID。
+func WithSessionID(id string) HeadlessOption {
+	return func(o *HeadlessOptions) { o.SessionID = id }
 }
