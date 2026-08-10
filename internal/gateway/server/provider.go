@@ -98,10 +98,6 @@ type OTAUpdater interface {
 	Apply(ctx context.Context) error
 }
 
-// 实现：llm/stt.SherpaSTT（nil 时功能不可用）
-
-// 实现：llm/tts.TTSEngine（nil 时功能不可用）
-
 // CodeActEngine server 包对 CodeAct 引擎的消费端接口。
 type CodeActEngine interface {
 	ExecuteCode(ctx context.Context, req protocol.CodeActRequest) (*protocol.CodeActResult, error)

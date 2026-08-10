@@ -34,6 +34,13 @@ import (
 
 // Server 包装 HTTP 与 WebSocket 服务，作为 M13 的对外网关。
 type Server struct {
+	// rootCtx 是 cmd/polaris/main.go 通过 signal.NotifyContext(SIGINT/SIGTERM)
+	// 构造并沿 bootSubstrate→...→bootServer 链路传入的进程级根 context——不是
+	// internal/bootstrap.Bootstrapper.RootContext()（后者在生产入口从未被
+	// 实例化，是一段未接线的独立机制，见 99-遗留线索.md）。withMiddleware 内
+	// 长驻的 RateLimitManager/AuthManager 清理协程必须锚定在这个真根 context
+	// 上才能在进程收到 SIGINT/SIGTERM 时真正退出，而不是永久驻留。
+	rootCtx        context.Context
 	addr           string
 	srv            *http.Server
 	isReady        atomic.Bool
@@ -251,8 +258,6 @@ func (s *Server) SetEmbeddingIndexer(idx *plugin.EmbeddingIndexer) {
 		s.pluginHandler.EmbeddingIndexer = idx
 	}
 }
-
-// SetKillSwitch removed SetEvalRunner to fix duplicate and undefined method error
 
 func (s *Server) SetKillSwitch(ks *security.KillSwitch) {
 	s.ks = ks

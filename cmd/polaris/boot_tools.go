@@ -246,7 +246,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	memoryCatalog := catalog.NewMemoryCatalog()
 
-	mcpMgr := mcp.NewMCPManager(inProcSandbox, sb.SafeHTTP, sb.Gate)
+	mcpMgr := mcp.NewMCPManagerWithContext(ctx, inProcSandbox, sb.SafeHTTP, sb.Gate)
 	// MCP 工具注册时同步到 InMemoryToolRegistry，Agent Kernel FSM 可发现 MCP 工具
 	mcpMgr.SetToolRegistrar(toolReg)
 	mcpMgr.SetCatalog(memoryCatalog)
@@ -395,7 +395,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	// 初始化 WorkspaceManager 与 ToolRefOffloader
 	const workspaceMaxSize = 500 * 1024 * 1024 // Tier0 quota，来源：internal/vfs/workspace_manager.go §Tier0=500MB
-	vfsWM := vfs.NewWorkspaceManager(sb.Layout.Workspace, workspaceMaxSize, config.DefaultThresholds().M7Tool)
+	vfsWM := vfs.NewWorkspaceManagerWithContext(ctx, sb.Layout.Workspace, workspaceMaxSize, config.DefaultThresholds().M7Tool)
 	toolRefOffloader := memory.NewToolRefOffloader(sb.Store.DB(), vfsWM)
 
 	// GR-5-001 补线：bootMemory 早于 bootTools 执行（vfsWM 尚不存在），episodic

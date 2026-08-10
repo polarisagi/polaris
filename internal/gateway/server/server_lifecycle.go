@@ -48,14 +48,18 @@ import (
 //   - db    : 只读连接池（protocol.SQLQuerier），供 handler 层执行轻量 SELECT 查询使用。
 //     两个连接指向同一个 SQLite 文件，分别以 WAL 读写模式 / 只读模式打开，
 //     避免批量写（如 SeedMarketplace）占住唯一写连接而阻塞读路径。
-func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, rwDB *sql.DB, db protocol.SQLQuerier, registry protocol.LLMRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, agentCfg config.AgentConfig, a2aCfg config.A2AConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
+func NewServer(ctx context.Context, addr string, dataDir string, agentPool protocol.AgentPool, bb protocol.Blackboard, hitlGateway protocol.HITL, rwDB *sql.DB, db protocol.SQLQuerier, registry protocol.LLMRegistry, httpClient *http.Client, safeDialer protocol.SafeDialer, compressorCfg config.CompressorConfig, agentCfg config.AgentConfig, a2aCfg config.A2AConfig, tbr *metrics.TokenBurnRate, rateLimiter *rate.Limiter) *Server {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	tDir := filepath.Join(dataDir, "sessions")
 	// 启动时异步清理 30 天前的 transcript
-	concurrent.SafeGo(context.Background(), "gateway.server.prune_transcripts", func(context.Context) {
+	concurrent.SafeGo(ctx, "gateway.server.prune_transcripts", func(context.Context) {
 		session.PruneTranscripts(tDir, 30)
 	})
 
 	s := &Server{
+		rootCtx:          ctx,
 		addr:             addr,
 		agentPool:        agentPool,
 		blackboard:       bb,
@@ -68,7 +72,7 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 		dataDir:          dataDir,
 		tbr:              tbr,
 		rateLimiter:      rateLimiter,
-		interruptLimiter: NewRateLimitManager(context.Background(), 1, 10), // Approx 10 req/min with burst
+		interruptLimiter: NewRateLimitManager(ctx, 1, 10), // Approx 10 req/min with burst
 
 		a2aCfg: a2aCfg,
 	}
@@ -97,20 +101,9 @@ func NewServer(addr string, dataDir string, agentPool protocol.AgentPool, bb pro
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(rwDB)
 	s.appRepo = repo.NewSQLiteAppRepository(rwDB)
 
-	// 注入内置的 yaml 配置作为种子数据到数据库（SSoT 架构）
-
-	// 系统提示词模板的初始化将推迟到 Setprotocol.PromptFacade 阶段，
-	// 以便使用 promptMgr 提供的内嵌文件系统能力，避免模块循环依赖。
-
-	// global agent memory setup is removed as agent is now per-session
-
-	// 注入 embedded FS 和运行时配置目录到 memory 包（三层提示词加载的 Layer 0/1）
-	// 必须在 LoadSoulMD / DefaultIdentity 之前完成
-	// 注入 embedded FS 和运行时配置目录到 memory 包（三层提示词加载的 Layer 0/1）
-	// 改为通过 Setprotocol.PromptFacade 注入
-	//
-	//
-	//
+	// 系统提示词模板（含 embedded FS / 三层加载 Layer 0/1）的初始化推迟到
+	// Setprotocol.PromptFacade 阶段，以便使用 promptMgr 提供的内嵌文件系统能力，
+	// 避免模块循环依赖；必须在 LoadSoulMD / DefaultIdentity 之前完成。
 	s.serverPlatform = os.Getenv("POLARIS_PLATFORM")
 	if s.serverPlatform == "" {
 		s.serverPlatform = "webui"
