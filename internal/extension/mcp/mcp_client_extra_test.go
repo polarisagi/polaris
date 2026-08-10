@@ -51,7 +51,7 @@ func TestMCPClient_CallToolTainted(t *testing.T) {
 		Timeout:   2 * time.Second,
 		Trusted:   false,
 	}
-	client := NewMCPClient(cfg, clientHTTP)
+	client := NewMCPClient(cfg, testSafeHTTP(clientHTTP.Transport))
 
 	ctx := context.Background()
 	text, imgs, maxTaint, err := client.CallToolTainted(ctx, "my_tool", map[string]any{"arg": "val"})
@@ -119,7 +119,7 @@ func TestMCPClient_SSE(t *testing.T) {
 		URL:       "http://dummy",
 		Timeout:   2 * time.Second,
 	}
-	client := NewMCPClient(cfg, clientHTTP)
+	client := NewMCPClient(cfg, testSafeHTTP(clientHTTP.Transport))
 	defer client.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,7 +139,7 @@ func TestMCPClient_SSE(t *testing.T) {
 }
 
 func TestMCPClient_Dispatch_ServerRequest(t *testing.T) {
-	client := NewMCPClient(MCPClientConfig{Transport: MCPStreamableHTTP}, http.DefaultClient)
+	client := NewMCPClient(MCPClientConfig{Transport: MCPStreamableHTTP}, testSafeHTTP(nil))
 	var called int32
 	client.SetServerRequestHandler(func(ctx context.Context, method string, id int64, params json.RawMessage) (json.RawMessage, error) {
 		atomic.StoreInt32(&called, 1)
@@ -171,7 +171,7 @@ func TestMCPClient_ConnectStdio(t *testing.T) {
 		Command:       "/bin/cat",
 		SandboxPolicy: "none",
 	}
-	client := NewMCPClient(cfg, nil)
+	client := NewMCPClient(cfg, testSafeHTTP(nil))
 	err := client.Connect(context.Background())
 	if err != nil {
 		t.Fatalf("connectStdio failed: %v", err)
@@ -218,7 +218,7 @@ func TestMCPClient_CallTool(t *testing.T) {
 		Transport: MCPStreamableHTTP,
 		URL:       "http://dummy",
 	}
-	client := NewMCPClient(cfg, clientHTTP)
+	client := NewMCPClient(cfg, testSafeHTTP(clientHTTP.Transport))
 
 	text, imgs, err := client.CallTool(context.Background(), "my_tool", nil)
 	if err != nil {

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -58,7 +58,7 @@ type MCPManager struct {
 	envelope         *sandbox.ExecEnvelope // 用于 CallTool 下沉
 	toolReg          ToolRegistrar         // 可选：MCP 工具同步到 InMemoryToolRegistry，使 Agent FSM 可发现
 	catalog          catalog.Catalog       // 新的统一工具目录（仅注册 schema 和 metadata）
-	httpClient       *http.Client
+	httpClient       network.SafeHTTPClient
 	policy           protocol.PolicyGate // 对 process_spawn 的策略检查
 	samplingProvider protocol.Provider   // 用于响应 MCP server 的 sampling/createMessage 请求，nil 时禁用 sampling
 	onToolsChanged   func()              // 工具集变更时通知调用方（如清除 buildToolSchemas 缓存）
@@ -90,13 +90,17 @@ func (m *MCPManager) IsPluginConnected(pluginID string) bool {
 	return false
 }
 
-func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
+// NewMCPManager 构造 MCP 管理器。httpClient 的 XR-06 约束见 NewMCPClient。
+func NewMCPManager(sbx SandboxToolRegistrar, httpClient network.SafeHTTPClient, policy protocol.PolicyGate) *MCPManager {
 	return NewMCPManagerWithContext(context.Background(), sbx, httpClient, policy)
 }
 
-func NewMCPManagerWithContext(ctx context.Context, sbx SandboxToolRegistrar, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
+func NewMCPManagerWithContext(ctx context.Context, sbx SandboxToolRegistrar, httpClient network.SafeHTTPClient, policy protocol.PolicyGate) *MCPManager {
 	if policy == nil {
 		panic("mcp_manager: policy gate not configured (fail-closed)")
+	}
+	if !httpClient.IsSafe() {
+		panic("mcp_manager: httpClient must be a valid network.SafeHTTPClient (XR-06)")
 	}
 	m := &MCPManager{
 		entries:    make(map[string]*mcpEntry),

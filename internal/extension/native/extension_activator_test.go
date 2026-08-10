@@ -3,12 +3,12 @@ package native
 import (
 	"context"
 	"database/sql"
-	"net/http"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/polarisagi/polaris/internal/extension/mcp"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
 
@@ -97,7 +97,7 @@ func TestExtensionActivator_FindAndActivate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mcpMgr := mcp.NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	mcpMgr := mcp.NewMCPManager(nil, network.NewSafeHTTPClient(nil), &mockPolicyGate{})
 	cog := &mockCognitiveSearcher{
 		results: []ScoredResult{
 			{ID: "ext_ext_1", Score: 0.9},

@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"net/http"
 	"testing"
 	"time"
 )
@@ -11,9 +10,9 @@ import (
 // 基本生命周期：CallToolAsync 立即返回 task_id（status=pending），dummy client
 // 必然调用失败，后台 goroutine 应最终把状态更新为 AsyncTaskFailed 并记录错误信息。
 func TestMCPManager_CallToolAsync_And_GetAsyncTaskResult(t *testing.T) {
-	mgr := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	mgr := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 
-	testClient := NewMCPClient(MCPClientConfig{Trusted: true}, nil)
+	testClient := NewMCPClient(MCPClientConfig{Trusted: true}, testSafeHTTP(nil))
 	mgr.mu.Lock()
 	mgr.entries["fake-1"] = &mcpEntry{name: "fake-1", client: testClient}
 	mgr.mu.Unlock()
@@ -51,14 +50,14 @@ func TestMCPManager_CallToolAsync_And_GetAsyncTaskResult(t *testing.T) {
 }
 
 func TestMCPManager_CallToolAsync_ServerNotFound(t *testing.T) {
-	mgr := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	mgr := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	if _, err := mgr.CallToolAsync(context.Background(), "non-existent", "tool1", nil); err == nil {
 		t.Fatalf("expected error for non-existent server")
 	}
 }
 
 func TestMCPManager_GetAsyncTaskResult_NotFound(t *testing.T) {
-	mgr := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	mgr := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	if _, ok := mgr.GetAsyncTaskResult("no-such-task"); ok {
 		t.Errorf("expected ok=false for unknown task_id")
 	}

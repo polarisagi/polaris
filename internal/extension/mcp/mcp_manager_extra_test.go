@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"database/sql"
-	"net/http"
 	"testing"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 )
 
 func TestMCPManager_AddRemoveUpdate(t *testing.T) {
-	mgr := NewMCPManager(nil, http.DefaultClient, &mockPolicyGate{})
+	mgr := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -98,7 +97,7 @@ func TestMCPManager_AddRemoveUpdate(t *testing.T) {
 	mgr.sandbox = sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
 
 	mgr.mu.Lock()
-	testClient := NewMCPClient(MCPClientConfig{Trusted: true}, nil)
+	testClient := NewMCPClient(MCPClientConfig{Trusted: true}, testSafeHTTP(nil))
 
 	// directly test registerTools
 	validTools := mgr.registerTools("fake-1", testClient, []MCPTool{

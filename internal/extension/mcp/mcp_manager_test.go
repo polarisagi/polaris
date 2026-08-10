@@ -30,7 +30,7 @@ func (d *dummySamplingProvider) ModelID() string                      { return "
 func (d *dummySamplingProvider) Close() error                         { return nil }
 
 func TestMakeSamplingHandler(t *testing.T) {
-	mgr := NewMCPManager(nil, nil, &mockPolicyGate{})
+	mgr := NewMCPManager(nil, testSafeHTTP(nil), &mockPolicyGate{})
 	mgr.SetSamplingProvider(&dummySamplingProvider{content: "dummy resp"})
 
 	handler := mgr.makeSamplingHandler()

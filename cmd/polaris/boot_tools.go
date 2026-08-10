@@ -246,7 +246,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 
 	memoryCatalog := catalog.NewMemoryCatalog()
 
-	mcpMgr := mcp.NewMCPManagerWithContext(ctx, inProcSandbox, sb.SafeHTTP, sb.Gate)
+	mcpMgr := mcp.NewMCPManagerWithContext(ctx, inProcSandbox, sb.SafeHTTPClient, sb.Gate)
 	// MCP 工具注册时同步到 InMemoryToolRegistry，Agent Kernel FSM 可发现 MCP 工具
 	mcpMgr.SetToolRegistrar(toolReg)
 	mcpMgr.SetCatalog(memoryCatalog)
