@@ -26,7 +26,10 @@ func TestEdgeWeightManager(t *testing.T) {
 
 	ewm := NewEdgeWeightManager(store)
 
-	w := ewm.ReinforcePath(ctx, "edge1", 0.5)
+	w, err2 := ewm.ReinforcePath(ctx, "edge1", 0.5)
+	if err2 != nil {
+		t.Fatalf("expected reinforce to succeed, got err: %v", err2)
+	}
 	if w <= 0.5 {
 		t.Fatal("expected weight to increase")
 	}
@@ -41,7 +44,10 @@ func TestEdgeWeightManager(t *testing.T) {
 		t.Errorf("expected storage_strength 1.05, got %v", ss)
 	}
 
-	w = ewm.ReinforcePath(ctx, "edge2", 1.0)
+	w, err2 = ewm.ReinforcePath(ctx, "edge2", 1.0)
+	if err2 != nil {
+		t.Fatalf("expected reinforce to succeed, got err: %v", err2)
+	}
 	if w > 1.0 {
 		t.Fatal("weight exceeded 1.0")
 	}
@@ -76,5 +82,24 @@ func TestEdgeWeightManager(t *testing.T) {
 	_ = store.QueryRowContext(ctx, "SELECT COUNT(*) FROM world_model_edges WHERE edge_id = 'edge3'").Scan(&c)
 	if c != 0 {
 		t.Error("expected edge3 to be pruned")
+	}
+}
+
+// TestEdgeWeightManager_ReinforcePath_WriteFailureReturnsError 验证 DB 写入失败时
+// ReinforcePath 返回未变更的原始权重与非 nil error，而不是一个只存在于内存里、
+// 与库中真实 strength 背离的"看起来已生效"的值（ADR-0094 决策四）。
+func TestEdgeWeightManager_ReinforcePath_WriteFailureReturnsError(t *testing.T) {
+	ctx := context.Background()
+	store := testutil.NewMockStore()
+	// 故意不建表：INSERT INTO world_model_edges 必然因表不存在而失败。
+	ewm := NewEdgeWeightManager(store)
+
+	const original = 0.42
+	w, err := ewm.ReinforcePath(ctx, "edge-missing-table", original)
+	if err == nil {
+		t.Fatal("expected error when underlying table does not exist, got nil")
+	}
+	if w != original {
+		t.Fatalf("expected unchanged weight %v on write failure, got %v", original, w)
 	}
 }
