@@ -63,7 +63,7 @@ func ValidateDAG(ctx context.Context, vCtx *DAGValidationContext) (err error) {
 	}
 
 	// L1-Taint
-	if err := validateTaintGate(vCtx); err != nil {
+	if err := validateTaintGate(ctx, vCtx); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "ValidateDAG", err)
 	}
 
@@ -102,14 +102,14 @@ func ValidateDAG(ctx context.Context, vCtx *DAGValidationContext) (err error) {
 //     （硬顶 TaintMedium）。
 //  2. SanitizeByUserReview —— vCtx.ReviewChecker（复用 ExemptionVault）持有对该
 //     node.Args 内容哈希匹配的 HITL 已批准豁免时，标记为 TaintUserReviewed 放行。
-func validateTaintGate(vCtx *DAGValidationContext) error {
+func validateTaintGate(ctx context.Context, vCtx *DAGValidationContext) error {
 	// TaintNone / TaintLow 不触发 TaintGate
 	if vCtx.ActiveTaintLevel < types.TaintMedium {
 		return nil
 	}
 
 	for _, node := range vCtx.Plan.Nodes {
-		if err := validateNodeTaint(vCtx, node); err != nil {
+		if err := validateNodeTaint(ctx, vCtx, node); err != nil {
 			return err
 		}
 	}

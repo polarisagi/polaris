@@ -224,16 +224,36 @@ jobs:
         run: |
           mkdir -p bin/lib
           cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
-      - name: Eval Gate (Adaptive)
+      # HE-4：Eval 门控不得静默跳过。
+      #
+      # 2026-08-10 修复：此前无论何种事件，缺 API Key 一律 `echo Skipped` 并以成功
+      # 退出。对本仓库自身的 push / 同仓 PR 而言，这等于「忘配 Secret == 关掉防退化
+      # 门控」，且分支保护看到的是绿灯——正是 HE-4 要拦的"跳过 Eval 直改阈值/Prompt/
+      # 权重"。
+      #
+      # 分两种场景，因为二者的"缺 Key"含义完全不同：
+      #   - fork PR：GitHub 按设计不下发 secrets，缺 Key 是平台行为而非配置疏漏。
+      #     此时无法运行真实 eval，标记为待人工门控（维护者在可信分支上复跑后再合并），
+      #     不阻断 fork 贡献者的其余检查。
+      #   - 其余（push / 同仓 PR / 手动触发）：secrets 本应可用，缺 Key = 配置失效，
+      #     直接 fail，把"门控没跑"这件事变成红灯而不是一行 warning。
+      - name: Eval Gate (HE-4 fail-closed)
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
         run: |
           if [ -n "$DEEPSEEK_API_KEY" ] || [ -n "$OPENAI_API_KEY" ]; then
             echo "::notice::Detected API Key. Running real eval --ci-gate..."
             go run ./cmd/polaris eval --ci-gate
-          else
-            echo "::warning::跳过 Eval 门控：未检测到 DEEPSEEK_API_KEY 或 OPENAI_API_KEY Secret。系统能力防退化验证已被降级。请在仓库 Settings -> Secrets 中配置。"
-            echo "Skipped."
+            exit $?
           fi
+
+          if [ "$IS_FORK_PR" = "true" ]; then
+            echo "::warning::fork PR 无法获取 secrets，Eval 门控未执行。合并前维护者必须在可信分支上复跑 \`go run ./cmd/polaris eval --ci-gate\`（HE-4）。"
+            exit 0
+          fi
+
+          echo "::error::未检测到 DEEPSEEK_API_KEY / OPENAI_API_KEY，Eval 门控无法执行。HE-4 禁止跳过 Eval 门控——请在仓库 Settings -> Secrets 中配置后重跑。"
+          exit 1

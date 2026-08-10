@@ -59,6 +59,11 @@ type DAGValidationContext struct {
 	// 生产方: internal/security/token.ExemptionVault（2026-07-14 复用 Task 8 已建的
 	// HITL 豁免令牌基础设施，而非另建一套人工复核存储）。
 	ReviewChecker TaintReviewChecker
+	// TaintAuditor 记录每次 Taint 受控降级（M11 §2.5「每次降级写 audit_log，
+	// 标注依据」）。nil 时降级仍生效，只是不落审计——保持既有行为不被 nil
+	// 依赖阻断，但生产装配必须注入，否则 HE-1 可观测性存在缺口。
+	// 生产方: cmd/polaris（auditTrailLogAdapter）；消费方: internal/execute/dag。
+	TaintAuditor AuditLogger
 }
 
 // TaintReviewChecker 判断某 AgentID 是否持有对指定内容有效的人工复核豁免

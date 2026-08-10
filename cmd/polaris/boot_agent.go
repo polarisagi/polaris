@@ -171,6 +171,12 @@ func buildAgent(
 	// S_VALIDATE TaintGate 人工复核豁免（M11 §2.5 SanitizeByUserReview，2026-07-14）：
 	// 与 tb.ToolReg 的出口污点检查共享同一个 ExemptionVault 实例。
 	a.InjectTaintReviewChecker(tb.ExemptionVault)
+	// Taint 受控降级审计（M11 §2.5「每次降级写 audit_log」，2026-08-10）：
+	// 复用 auditTrailLogAdapter 把 sb.AuditTrail 的 RecordAudit 桥接为
+	// protocol.AuditLogger 形状，与 BackgroundTaskScheduler 共用同一后端。
+	if sb.AuditTrail != nil {
+		a.InjectTaintAuditor(auditTrailLogAdapter{at: sb.AuditTrail})
+	}
 	a.InjectOutboxWriter(sb.Outbox)
 	// execute/dag.Runner/Validator 均无状态，buildAgent 同时服务 agent-0 与
 	// AgentPool 每次动态创建的 per-session Agent，此处注入而非仅在 agent-0
@@ -333,6 +339,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 真实免疫网关实现，属独立待设计项（见 polaris-m9-immune-system-dormant
 	// memory），此处不强行接入伪回调。
 	samplingMonitor := analysis.NewContinuousSamplingMonitor(nil)
+	// 7 天基线快照数据源（2026-08-10 接线）：不注入时 sevenDayAvg 恒为 0，
+	// attributeLocked 回落到内存滚动基线，持续性退化会被系统性低估为外部抖动。
+	samplingMonitor.InjectSnapshotStore(evalStore)
 	samplingMonitor.Start(ctx)
 	evalRunner.InjectL3ThresholdProvider(samplingMonitor)
 

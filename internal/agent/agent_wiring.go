@@ -156,6 +156,14 @@ func (a *Agent) InjectTaintReviewChecker(c protocol.TaintReviewChecker) {
 	a.Security.TaintReviewChecker = c
 }
 
+// InjectTaintAuditor 注入 Taint 受控降级的审计落盘器（M11 §2.5「每次降级写
+// audit_log，标注依据」，2026-08-10 补齐）。此前两条降级路径只打 slog.Info，
+// 降级事实不进审计链——事后追查"高污点数据是怎么进到写工具里的"时，运行日志
+// 很可能已轮转。nil 时降级照常生效但不落审计（不因审计缺失阻断执行）。
+func (a *Agent) InjectTaintAuditor(l protocol.AuditLogger) {
+	a.Security.TaintAuditor = l
+}
+
 // InjectWhisperChan 注入耳语接收通道（由顶层 wire 调用，可 nil）。
 func (a *Agent) InjectWhisperChan(ch <-chan protocol.MemoryWhisper) {
 	a.whisperChan = ch

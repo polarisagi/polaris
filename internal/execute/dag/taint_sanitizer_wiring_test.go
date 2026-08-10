@@ -125,7 +125,7 @@ func TestAttemptSchemaDowngrade_StrictSchemaDowngrades(t *testing.T) {
 		}},
 	}
 	node := protocol.ExecNode{ID: "n1", ToolName: "strict_tool", Args: []byte(`{"mode":"a"}`)}
-	got := attemptSchemaDowngrade(vCtx, node, types.TaintHigh)
+	got := attemptSchemaDowngrade(context.Background(), vCtx, node, types.TaintHigh)
 	if got != types.TaintMedium {
 		t.Errorf("expected downgrade to TaintMedium (hard cap), got %v", got)
 	}
@@ -143,7 +143,7 @@ func TestAttemptSchemaDowngrade_LooseSchemaNoDowngrade(t *testing.T) {
 		}},
 	}
 	node := protocol.ExecNode{ID: "n1", ToolName: "loose_tool", Args: []byte(`{"query":"anything"}`)}
-	got := attemptSchemaDowngrade(vCtx, node, types.TaintHigh)
+	got := attemptSchemaDowngrade(context.Background(), vCtx, node, types.TaintHigh)
 	if got != types.TaintHigh {
 		t.Errorf("expected no downgrade (level unchanged), got %v", got)
 	}
@@ -152,7 +152,7 @@ func TestAttemptSchemaDowngrade_LooseSchemaNoDowngrade(t *testing.T) {
 func TestAttemptSchemaDowngrade_UnknownToolNoDowngrade(t *testing.T) {
 	vCtx := &DAGValidationContext{ToolExecutor: &mockSchemaToolExecutor{tools: map[string]types.Tool{}}}
 	node := protocol.ExecNode{ID: "n1", ToolName: "ghost_tool", Args: []byte(`{}`)}
-	got := attemptSchemaDowngrade(vCtx, node, types.TaintHigh)
+	got := attemptSchemaDowngrade(context.Background(), vCtx, node, types.TaintHigh)
 	if got != types.TaintHigh {
 		t.Errorf("unregistered tool should not downgrade, got %v", got)
 	}
@@ -167,7 +167,7 @@ func TestAttemptUserReviewDowngrade_ValidReviewGrantsUserReviewed(t *testing.T) 
 		ReviewChecker: &mockReviewChecker{agentID: "agent-1", content: args},
 	}
 	node := protocol.ExecNode{ID: "n1", ToolName: "write_file", Args: args}
-	got := attemptUserReviewDowngrade(vCtx, node, types.TaintHigh)
+	got := attemptUserReviewDowngrade(context.Background(), vCtx, node, types.TaintHigh)
 	if got != types.TaintUserReviewed {
 		t.Errorf("expected TaintUserReviewed, got %v", got)
 	}
@@ -175,7 +175,7 @@ func TestAttemptUserReviewDowngrade_ValidReviewGrantsUserReviewed(t *testing.T) 
 
 func TestAttemptUserReviewDowngrade_NoCheckerNoChange(t *testing.T) {
 	node := protocol.ExecNode{ID: "n1", ToolName: "write_file", Args: []byte(`{}`)}
-	got := attemptUserReviewDowngrade(&DAGValidationContext{}, node, types.TaintHigh)
+	got := attemptUserReviewDowngrade(context.Background(), &DAGValidationContext{}, node, types.TaintHigh)
 	if got != types.TaintHigh {
 		t.Errorf("nil ReviewChecker must not change level, got %v", got)
 	}
@@ -187,7 +187,7 @@ func TestAttemptUserReviewDowngrade_MismatchedContentNoChange(t *testing.T) {
 		ReviewChecker: &mockReviewChecker{agentID: "agent-1", content: []byte("approved-content")},
 	}
 	node := protocol.ExecNode{ID: "n1", ToolName: "write_file", Args: []byte("different-content")}
-	got := attemptUserReviewDowngrade(vCtx, node, types.TaintHigh)
+	got := attemptUserReviewDowngrade(context.Background(), vCtx, node, types.TaintHigh)
 	if got != types.TaintHigh {
 		t.Errorf("mismatched content hash must not downgrade, got %v", got)
 	}
