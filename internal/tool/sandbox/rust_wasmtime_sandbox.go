@@ -20,7 +20,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -227,12 +226,12 @@ func runWasmtimeExecuteFFI(wasmBytes []byte, inputJSON string, workspaceDir stri
 		&outJSONLen,
 		&outErr,
 	)
-	runtime.KeepAlive(wasmBytes)
-	runtime.KeepAlive(inputCStr)
-	runtime.KeepAlive(workspaceCStr)
+	// ADR-0094 决策五：wasmtimeExecute 的 wasmBytes/inputJSON/workspaceDir 形参
+	// 类型均为 *byte（非 uintptr(unsafe.Pointer(...)) 的整数擦除写法），Go 编译器
+	// 与 GC 保证这三个指针实参在本次调用期间存活，此处不需要也不允许补
+	// runtime.KeepAlive——加了反而是给 GC 保活判据制造假阳性先例。
 
 	errStr := readAndFreeWasmtimeStr(outErr)
-
 	jsonBytes := readAndFreeWasmtimeBytes(outJSON, outJSONLen)
 
 	if rc != 0 {

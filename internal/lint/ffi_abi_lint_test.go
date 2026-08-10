@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/ffi"
@@ -74,79 +73,105 @@ func extractRustABIConst(t *testing.T, re *regexp.Regexp, src []byte, name strin
 	return v
 }
 
-// TestFFIKeepAliveBoundary (ADR-0094 决策五) AST 扫描 internal/tool/sandbox/，
-// 校验 Go→Rust purego FFI 调用函数后必须包含 runtime.KeepAlive 锚定防护。
+// ffiUintptrPointerTarget 识别 `uintptr(unsafe.Pointer(&x))` / `uintptr(unsafe.Pointer(&x[0]))`
+// 这一具体写法，返回被擦除为整数的底层标识符名（如 "x"）。
+// 只有这种写法才会丢失 GC 指针可达性（ADR-0094 决策五）；形参类型为 *T 或
+// unsafe.Pointer 时 GC 保证调用期存活，不在本判据范围内，避免假阳性。
+func ffiUintptrPointerTarget(expr ast.Expr) (string, bool) {
+	outer, ok := expr.(*ast.CallExpr)
+	if !ok || len(outer.Args) != 1 {
+		return "", false
+	}
+	if ident, ok := outer.Fun.(*ast.Ident); !ok || ident.Name != "uintptr" {
+		return "", false
+	}
+	inner, ok := outer.Args[0].(*ast.CallExpr)
+	if !ok || len(inner.Args) != 1 {
+		return "", false
+	}
+	sel, ok := inner.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "unsafe" || sel.Sel.Name != "Pointer" {
+		return "", false
+	}
+	unary, ok := inner.Args[0].(*ast.UnaryExpr)
+	if !ok || unary.Op != token.AND {
+		return "", false
+	}
+	switch x := unary.X.(type) {
+	case *ast.Ident:
+		return x.Name, true
+	case *ast.IndexExpr:
+		if base, ok := x.X.(*ast.Ident); ok {
+			return base.Name, true
+		}
+	}
+	return "", false
+}
+
+// TestFFIKeepAliveBoundary (ADR-0094 决策五) AST 扫描 internal/tool/sandbox/ 与
+// internal/ffi/，校验每一处 uintptr(unsafe.Pointer(&x)) 写法的 FFI 实参，在其
+// 所在函数体内都能找到对应的 runtime.KeepAlive(x)。
+//
+// 判据严格限定为"实参写法是否把指针擦成了 uintptr"，而不是"函数形参类型是否
+// 是 slice/string"——2026-08-10 复核发现旧版规则按函数形参类型判断，对
+// rust_wasmtime_sandbox.go 这种形参类型是 *byte（GC 天然保活，不需要
+// KeepAlive）的函数也会强制要求补 KeepAlive，产生假阳性，且给 rust_native_sandbox.go
+// 真正需要修的 uintptr(unsafe.Pointer(&x[0])) 写法留了不精确的空子。
 func TestFFIKeepAliveBoundary(t *testing.T) {
 	root := repoRoot(t)
 	var violations []violation
 
-	walkGoFilesUnder(t, root, "internal/tool/sandbox", nil, func(fset *token.FileSet, f *ast.File, relPath string) {
-		if strings.HasSuffix(relPath, "_test.go") {
-			return
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			fn, ok := n.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				return true
-			}
-			// 跳过 bindNativeSandbox / bindWasmtime 等仅执行 RegisterLibFunc 注册的入口
-			if strings.HasPrefix(fn.Name.Name, "bind") {
-				return true
-			}
-			hasFFICall := false
-			hasKeepAlive := false
+	for _, dir := range []string{"internal/tool/sandbox", "internal/ffi"} {
+		walkGoFilesUnder(t, root, dir, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+			ast.Inspect(f, func(n ast.Node) bool {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					return true
+				}
 
-			ast.Inspect(fn.Body, func(bn ast.Node) bool {
-				if sel, ok := bn.(*ast.SelectorExpr); ok {
-					if pkg, ok := sel.X.(*ast.Ident); ok {
-						if pkg.Name == "runtime" && sel.Sel.Name == "KeepAlive" {
-							hasKeepAlive = true
+				required := map[string]token.Pos{}
+				kept := map[string]bool{}
+
+				ast.Inspect(fn.Body, func(bn ast.Node) bool {
+					if call, ok := bn.(*ast.CallExpr); ok {
+						if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+							if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "runtime" && sel.Sel.Name == "KeepAlive" {
+								if len(call.Args) == 1 {
+									if ident, ok := call.Args[0].(*ast.Ident); ok {
+										kept[ident.Name] = true
+									}
+								}
+							}
+						}
+						for _, arg := range call.Args {
+							if name, ok := ffiUintptrPointerTarget(arg); ok {
+								if _, exists := required[name]; !exists {
+									required[name] = call.Pos()
+								}
+							}
 						}
 					}
-				}
-				if call, ok := bn.(*ast.CallExpr); ok {
-					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-						if strings.HasPrefix(sel.Sel.Name, "nativeSandbox") || strings.HasPrefix(sel.Sel.Name, "wasmtime") {
-							hasFFICall = true
-						}
-					} else if ident, ok := call.Fun.(*ast.Ident); ok {
-						if strings.HasPrefix(ident.Name, "nativeSandbox") || strings.HasPrefix(ident.Name, "wasmtime") {
-							hasFFICall = true
-						}
+					return true
+				})
+
+				for name, pos := range required {
+					if !kept[name] {
+						p := fset.Position(pos)
+						violations = append(violations, violation{
+							relPath: relPath,
+							line:    p.Line,
+							detail: "uintptr(unsafe.Pointer(&" + name + "...)) in function " + fn.Name.Name +
+								" 缺少对应的 runtime.KeepAlive(" + name + ")",
+						})
 					}
 				}
 				return true
 			})
-
-			// 校验：若函数形参中包含 slice/struct/SandboxContext 类型，且调用了 FFI 接口，则必须包含 KeepAlive
-			takesBufferArg := false
-			if fn.Type.Params != nil {
-				for _, param := range fn.Type.Params.List {
-					ast.Inspect(param.Type, func(tn ast.Node) bool {
-						if _, ok := tn.(*ast.ArrayType); ok {
-							takesBufferArg = true
-						}
-						if ident, ok := tn.(*ast.Ident); ok {
-							if ident.Name == "SandboxContext" || ident.Name == "string" {
-								takesBufferArg = true
-							}
-						}
-						return true
-					})
-				}
-			}
-
-			if hasFFICall && takesBufferArg && !hasKeepAlive {
-				pos := fset.Position(fn.Pos())
-				violations = append(violations, violation{
-					relPath: relPath,
-					line:    pos.Line,
-					detail:  "FFI call in function " + fn.Name.Name + " does not include runtime.KeepAlive",
-				})
-			}
-			return true
 		})
-	})
+	}
 
 	for _, v := range violations {
 		t.Errorf("FFIKeepAliveBoundary VIOLATED: %s:%d %s", v.relPath, v.line, v.detail)
