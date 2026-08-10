@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -145,6 +146,11 @@ func (l DataLayout) Migrate() {
 		if _, err := os.Stat(m.src); err != nil {
 			continue // 源不存在，跳过
 		}
-		_ = os.Rename(m.src, m.dst)
+		// 迁移失败不中断启动（旧布局仍可读），但必须留痕：吞掉的话，后续所有
+		// 子系统都在一个"半迁移"的目录布局上跑，现象是数据莫名读不到而无任何线索。
+		if err := os.Rename(m.src, m.dst); err != nil {
+			slog.Warn("config/layout: 旧布局目录迁移失败，将继续使用旧路径",
+				"src", m.src, "dst", m.dst, "err", err)
+		}
 	}
 }

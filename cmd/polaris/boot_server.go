@@ -410,7 +410,13 @@ func performHotRestart(sb *SubstrateBundle) {
 			}
 		}
 		if sb.Store != nil {
-			_ = sb.Store.Close()
+			// 热重启前的最后一次关库：Close 失败意味着可能有未刷盘数据，新进程
+			// 起来后会看到不一致的库。此处不阻断重启（旧二进制已准备退出，
+			// 阻断会把系统卡在"既没重启也没服务"的状态），但必须留痕——
+			// 吞掉的话，重启后的数据异常将完全无从溯源。
+			if err := sb.Store.Close(); err != nil {
+				slog.Error("polaris: store close failed before hot-restart, data may be unflushed", "err", err)
+			}
 		}
 	}
 

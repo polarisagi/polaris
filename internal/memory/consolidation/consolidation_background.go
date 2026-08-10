@@ -259,8 +259,15 @@ func (fm *ForgettingManager) deleteCognitiveIndex(eventUUID string) {
 	if fm.cognitive == nil || eventUUID == "" {
 		return
 	}
-	_ = fm.cognitive.FTSDelete("ep_" + eventUUID)
-	_ = fm.cognitive.VecDelete("ep_" + eventUUID)
+	// 悬挂索引必须可见：SQL 侧行已删而 FTS/Vec 条目还在时，检索会命中一条
+	// 取不回内容的"幽灵结果"。不向上返回错误（遗忘是尽力而为的后台清理，
+	// 单条失败不该中断整轮），但要留 Warn 供运维发现索引与主库开始发散。
+	if err := fm.cognitive.FTSDelete("ep_" + eventUUID); err != nil {
+		slog.Warn("forgetting: 认知索引 FTS 删除失败，可能残留悬挂索引", "event_uuid", eventUUID, "err", err)
+	}
+	if err := fm.cognitive.VecDelete("ep_" + eventUUID); err != nil {
+		slog.Warn("forgetting: 认知索引向量删除失败，可能残留悬挂索引", "event_uuid", eventUUID, "err", err)
+	}
 }
 
 func (fm *ForgettingManager) cleanupWithKV(ctx context.Context) error {

@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -99,7 +100,11 @@ func SetupLogger(dataDir string) io.Closer {
 	var closers []io.Closer
 
 	logsDir := filepath.Join(dataDir, "logs")
-	_ = os.MkdirAll(logsDir, 0o700) // 确保 logs/ 存在（MkdirAll 前已调用，防御性保留）
+	// 失败必须可见：logger 尚未建好，只能走 stderr。吞掉的话后续 lumberjack 会在
+	// 每次写日志时静默失败，表现为"服务在跑但没有任何日志"——最难排查的一类现象。
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "polaris: 创建日志目录 %s 失败（日志将无法落盘，请检查目录权限）: %v\n", logsDir, err)
+	}
 
 	// Main logger
 	mainPath := filepath.Join(logsDir, "polaris.log")
