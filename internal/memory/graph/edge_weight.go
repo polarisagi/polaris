@@ -36,7 +36,12 @@ func NewEdgeWeightManager(db protocol.SQLQuerier) *EdgeWeightManager {
 }
 
 // ReinforcePath 在图遍历经过某条边时进行强化。
-func (ewm *EdgeWeightManager) ReinforcePath(ctx context.Context, edgeID string, currentWeight float64) float64 {
+//
+// 返回 (float64, error)（ADR-0094 决策四）：DB 写入失败时不得返回"看起来已生效"
+// 的伪值——突触可塑性是世界模型的核心状态，调用方必须能感知持久化失败并自行
+// 决定是否重试/降级，而不是把一个只存在于内存里的权重当真。写成功时返回新权重
+// 与 nil error；写失败时返回未变更的原始 currentWeight 与非 nil error。
+func (ewm *EdgeWeightManager) ReinforcePath(ctx context.Context, edgeID string, currentWeight float64) (float64, error) {
 	// 真实更新存储中的 strength
 	query := `
 		INSERT INTO world_model_edges (edge_id, storage_strength, retrieval_strength, last_accessed_at)
@@ -47,18 +52,16 @@ func (ewm *EdgeWeightManager) ReinforcePath(ctx context.Context, edgeID string, 
 		    last_accessed_at = CURRENT_TIMESTAMP
 	`
 	if _, err := ewm.db.ExecContext(ctx, query, edgeID, ewm.reinforceRate, ewm.reinforceRate); err != nil {
-		// 写失败时下方返回的 newWeight 只存在于内存里，与库中真实 strength 不一致
-		// ——调用方拿到的是一个"看起来已生效"的值。突触可塑性是世界模型的核心
-		// 状态，静默不落盘会让图权重长期停在旧值而无人察觉。
-		slog.WarnContext(ctx, "edge_weight: reinforce persist failed, in-memory weight diverges from store",
+		slog.WarnContext(ctx, "edge_weight: reinforce persist failed, returning unchanged weight",
 			"edge_id", edgeID, "err", err)
+		return currentWeight, apperr.Wrap(apperr.CodeStorageUnavailable, "edge_weight: reinforce persist failed", err)
 	}
 
 	newWeight := currentWeight + ewm.reinforceRate
 	if newWeight > 1.0 {
 		newWeight = 1.0
 	}
-	return newWeight
+	return newWeight, nil
 }
 
 // DecayUnused (读时衰减, 防 WAL 写放大):

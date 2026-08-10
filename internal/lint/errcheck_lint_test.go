@@ -249,3 +249,196 @@ func TestGenerateErrcheckBaseline(t *testing.T) {
 	}
 	t.Logf("wrote %d baseline entries to %s", len(out), p)
 }
+
+// ─── ADR-0094 决策四：状态落盘不得静默吞错 ──────────────────────────────────
+//
+// 反例：internal/memory/graph/edge_weight.go 修复前的 ReinforcePath——DB 写入
+// 失败时仅 slog.WarnContext 记日志，函数签名不含 error 返回通道，却依然
+// `return currentWeight + reinforceRate`（一个凭空算出的"看起来已成功"的伪值），
+// 调用方完全不知道写入其实失败了。
+//
+// 检测范围严格限定为可判定的语法特征子集（本文件其余规则同样只用 go/ast，
+// 不接入 go/types，避免语义分析的复杂度与误报面）：
+//   - 函数返回值列表中不含 error（有 error 通道的函数不在本规则管辖——它们
+//     已经具备"显式返回 error"这条 ADR 允许的合规路径，即使个别调用点没用好
+//     也是另一类问题，不属于本规则要抓的"结构上无法报错"）；
+//   - 函数体内出现过 dbWriteMethodNames 启发式列表中的方法调用（缩小范围到
+//     "看起来在做持久化写"的函数，避免对无关代码的 `if err != nil` 误报）；
+//   - `if err != nil { ... }` 块内同时满足：调用了 slog.Warn*/Error* 记录日志，
+//     且 return 语句的返回表达式不是裸标识符（ADR 允许"返回未变更的旧值"，
+//     即 `return currentWeight` 这种直接透传参数的写法；`return currentWeight
+//     + reinforceRate` 这种由表达式现算出的新值才是本规则要拦的"伪造成功值"）。
+//
+// 这是"棘轮"性质的新规则（同 inv_HE1_NoSilentErrorDiscard），当前代码库应为
+// 零违规（edge_weight.go 已在本轮修复为 `(float64, error)`），新增代码若重蹈
+// 覆辙会被直接拦下。
+
+var dbWriteMethodNames = map[string]bool{
+	"ExecContext": true, "Exec": true, "Update": true, "Delete": true,
+	"Put": true, "Save": true,
+}
+
+// funcHasErrorReturn 判断函数签名的返回值列表中是否含 error 类型。
+func funcHasErrorReturn(fn *ast.FuncDecl) bool {
+	if fn.Type.Results == nil {
+		return false
+	}
+	for _, field := range fn.Type.Results.List {
+		if ident, ok := field.Type.(*ast.Ident); ok && ident.Name == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+// funcBodyMentionsDBWrite 粗粒度判断函数体内是否出现过 dbWriteMethodNames 中
+// 任一方法名的调用（不追踪接收者静态类型，纯裸名匹配，与本文件其余规则的
+// 精度取舍一致）。
+func funcBodyMentionsDBWrite(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if dbWriteMethodNames[sel.Sel.Name] {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// errIdentName 从形如 `<ident> != nil` 的条件表达式中提取错误变量名
+// （要求 ident 名为 "err" 或以 "err"/"Err" 结尾）；不匹配时返回空串。
+func errIdentName(cond ast.Expr) string {
+	be, ok := cond.(*ast.BinaryExpr)
+	if !ok || be.Op != token.NEQ {
+		return ""
+	}
+	ident, ok := be.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	rhs, ok := be.Y.(*ast.Ident)
+	if !ok || rhs.Name != "nil" {
+		return ""
+	}
+	if ident.Name == "err" || strings.HasSuffix(ident.Name, "Err") || strings.HasSuffix(ident.Name, "err") {
+		return ident.Name
+	}
+	return ""
+}
+
+// isSlogLogCall 判断调用是否形如 slog.Warn*(...)/slog.Error*(...)。
+func isSlogLogCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "slog" {
+		return false
+	}
+	return strings.HasPrefix(sel.Sel.Name, "Warn") || strings.HasPrefix(sel.Sel.Name, "Error")
+}
+
+// exprReferencesIdent 判断表达式子树内是否出现过指定名字的标识符引用。用于
+// 识别 `return Result{Err: apperr.Wrap(..., budgetErr)}` 这类把真实 error
+// 变量包进结构体字段/包装函数调用里向外传播的写法——这不是"伪造成功值"，
+// 是这个代码库另一种合规的错误传播惯用法（Result-with-Err-field，与
+// `(T, error)` 并存），只是语法上不是裸标识符。
+func exprReferencesIdent(expr ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if ident, ok := n.(*ast.Ident); ok && ident.Name == name {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// ifBlockLogsWithoutPropagating 判断 if 块「自身直属语句层」（不深入更内层的
+// 嵌套 if/else/block——那些会被外层 ast.Inspect 当作独立的 IfStmt 各自单独
+// 评估，避免把日志调用和 return 语句从两个互斥的兄弟分支里错误地凑成一对）
+// 内是否同时满足：调用了 slog.Warn*/Error*，且存在一个 return 语句的返回
+// 表达式既不是裸标识符（透传旧值），也不在子树内引用 errName（说明该表达式
+// 没有把真正的错误值传播出去，是凭空算出的"看起来已成功"的伪值）。
+func ifBlockLogsWithoutPropagating(block *ast.BlockStmt, errName string) bool {
+	hasLog := false
+	hasFabricatedReturn := false
+	for _, stmt := range block.List {
+		switch x := stmt.(type) {
+		case *ast.ExprStmt:
+			if call, ok := x.X.(*ast.CallExpr); ok && isSlogLogCall(call) {
+				hasLog = true
+			}
+		case *ast.ReturnStmt:
+			for _, res := range x.Results {
+				if _, isIdent := res.(*ast.Ident); isIdent {
+					continue // 裸标识符透传旧值，合规
+				}
+				if errName != "" && exprReferencesIdent(res, errName) {
+					continue // 表达式内部引用了被检查的 err 变量，视为已传播
+				}
+				hasFabricatedReturn = true
+			}
+		}
+	}
+	return hasLog && hasFabricatedReturn
+}
+
+// TestDBWriteFailureNotSilentlySwallowed (ADR-0094 决策四) 见本节顶部说明。
+func TestDBWriteFailureNotSilentlySwallowed(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				return true
+			}
+			if funcHasErrorReturn(fn) {
+				return true // 已具备合规的 error 传播通道，不在本规则管辖范围
+			}
+			if !funcBodyMentionsDBWrite(fn) {
+				return true
+			}
+			ast.Inspect(fn.Body, func(n2 ast.Node) bool {
+				ifStmt, ok := n2.(*ast.IfStmt)
+				if !ok {
+					return true
+				}
+				errName := errIdentName(ifStmt.Cond)
+				if errName == "" {
+					return true
+				}
+				if ifBlockLogsWithoutPropagating(ifStmt.Body, errName) {
+					pos := fset.Position(ifStmt.Pos())
+					violations = append(violations, violation{
+						relPath: relPath, line: pos.Line,
+						detail: fn.Name.Name + " 的 DB 写入失败分支只记日志、无 error 返回通道，却 return 了现算出的伪值（应返回未变更旧值或改签名显式返回 error）",
+					})
+				}
+				return true
+			})
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("DBWriteFailureNotSilentlySwallowed VIOLATED: %s", v)
+	}
+}
