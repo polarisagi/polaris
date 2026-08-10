@@ -164,12 +164,16 @@ HTTP/SSE、HITLGateway、ResourceGovernor、TaskQueue、Web UI 规约（Alpine.j
 
 读取流程：先 `Read offset=1 limit=10` 拿 §跳读 → 按行号 `Read offset=N limit=M` 精读目标章节。
 
-**行号机器维护**：§跳读 行号由 `tools/sync_doc_toc.go` 从实际 `## N.` headers 自动生成，禁手动编辑。改 markdown 后跑 `make docs-sync` 重写；CI `docs-toc` job 跑 `make docs-check`，drift 即 fail。新增章节 / 编辑结构后流程：
+**行号机器维护**：§跳读 行号由 `tools/sync_doc_toc.go` 从实际 `## N` headers 自动生成，禁手动编辑。改 markdown 后跑 `make docs-sync` 重写；CI `docs-toc` job 跑 `make docs-check`，drift 即 fail。新增章节 / 编辑结构后流程：
 1. 自由增删 `## N. Title` headers
 2. `make docs-sync` 刷新所有文件头 §跳读 行号
 3. 提交前 `make docs-check` 确认无 drift
 
-人工只维护 §跳读 中的 **title 文案** 和 **(SKIP)/(SOFT) 标记**，行号 100% 由脚本接管。子节锚（如 `10.1 PerformanceDrift`，无对应 `## 10.1.` header）保持不动。
+人工只维护 §跳读 中的 **title 文案** 和 **(SKIP)/(SOFT) 标记**，行号 100% 由脚本接管。
+
+**header id 可用形态**（`tools/sync_doc_toc.go` `docIDPattern` 为 SSoT）：`N` / `N.M`（子节，可多级）/ `N-bis`、`N-ter`、`N-quater`、`N-quinquies`…（拉丁序数后缀，通配 `-[a-z]+`）/ `§N-xxx`（带 § 前缀的补录节）。id 后的 `.` 可有可无。
+
+> 2026-08-10 追记（原文订正）：本段此前写「子节锚（如 `10.1 PerformanceDrift`，无对应 `## 10.1.` header）保持不动」。该断言不成立——`M03-Observability.md` 一直存在 `## 10.1 [PerformanceDrift]` header，只是当时的 `headerRe` 强制要求 id 后带 `.` 且 `.` 后带空白，认不出它。同类认不出的 header 全仓有 28 个（含 `## 8.（已删除）…`、`## 3-quinquies.`、`## §3-sexies`），它们的 §跳读 条目因此被当作"子节锚"原样保留，行号长年腐烂而 `make docs-check` 恒绿。规则已放宽（尾点可选 / 后缀通配 / § 前缀），"子节锚保持不动"仅对**真不存在的 header** 生效。
 
 `state.yaml` 同样有 §跳读（前 14 行注释块），按 `meta/par/staging/taint/...` 偏移精读。
 

@@ -2,7 +2,7 @@
 
 > Go | L3 治理层 | [Code-Package-Mapping] → internal/eval/> [HE-Rule-4]: Eval 第 0 行存在，失败 = PR 不能合并
 > 黄金测试集 + 轨迹回放 + 影子执行 + 回归基线 + 自动熔断
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 EvalCase / 2:58 Evaluator5层 / 3:78 轨迹录制 / 4:91 Runner / 5:124 Suite分区 / 6:157 IncidentToEval / 7:163 AutoBootstrap / 8:173 影子执行 / 9:181 连续采样 / 10:197 增量快照 / 11:209 回归检测 / 12:217 集成回放 / 13:221 InvariantTestSuite / 14:234 EvalStore / 15:238 闭环 / 17:244 279(SOFT)降级 / 18:286 依赖 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 EvalCase / 2:58 Evaluator5层 / 3:78 轨迹录制 / 4:91 Runner / 4.1:112 开放基准适配器 / 5:124 Suite分区 / 6:157 IncidentToEval / 7:163 AutoBootstrap / 8:173 影子执行 / 9:181 连续采样 / 10:197 增量快照 / 11:209 回归检测 / 12:217 集成回放 / 13:221 InvariantTestSuite / 14:234 EvalStore / 15:238 闭环 / 17:244 (SOFT)降级 / 16:263 RedTeam常态化对抗 / 17-bis:280 已知Bug修复记录 / 18:286 依赖 -->
 ## 0-bis. 职责边界
 
 | M12 **是** | M12 **不是** |
