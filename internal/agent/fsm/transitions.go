@@ -112,7 +112,7 @@ func (sm *StateMachine) registerTransitions() {
 					OnSuccess: sm.onPerceiveSuccess,
 					OnFailure: sm.onPerceiveFailure,
 					MaxRetry:  1,
-					ModelPool: "standard",
+					ModelPool: string(types.ModelPoolGeneral),
 				},
 			}, nil
 		},
@@ -257,7 +257,7 @@ func (sm *StateMachine) registerTransitions() {
 					OnSuccess: sm.onReflectSuccess,
 					OnFailure: sm.onReflectFailure,
 					MaxRetry:  0,
-					ModelPool: "standard",
+					ModelPool: string(types.ModelPoolGeneral),
 				},
 			}, nil
 		},
