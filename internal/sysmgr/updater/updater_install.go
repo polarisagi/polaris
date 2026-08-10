@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/downloader"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -87,8 +88,23 @@ func replaceUnixLibs(newLibDir, targetLibDir string) error {
 	return nil
 }
 
-// verifyChecksum 从 GitHub 直接下载 checksums.txt，验证 archivePath 的 SHA-256。
-// checksums.txt 不走 ghproxy 代理：即使镜像被篡改，仍以 GitHub 的校验值为权威。
+// verifyChecksum 下载 <archive>.sha256 并校验 archivePath 的 SHA-256。
+//
+// **信任模型（2026-08-10 订正 + 加固）**：本函数**优先直连 GitHub**取校验值；
+// 仅当直连完全不可达时才降级到镜像。降级会让校验值与归档可能来自同一个被污染的
+// 镜像，此时 SHA-256 只证明"下到的和该镜像宣称的一致"，不再证明"和 GitHub 发布的
+// 一致"——校验强度从「防篡改」退化为「防传输损坏」。
+//
+// 本函数原注释写的是「checksums.txt 不走 ghproxy 代理：即使镜像被篡改，仍以
+// GitHub 的校验值为权威」，与代码实际行为（`downloader.CandidateURLs` 含代理节点）
+// 直接矛盾。该矛盾是有安全后果的注释漂移：读注释的人会以为供应链信任锚点还在
+// GitHub，实际上早已可以整体落到镜像上。保留降级能力（中国大陆完全无法访问
+// GitHub 的环境下，不降级等于无法更新），但把降级这件事变成**显式、可观测、
+// 会告知用户**的事件，而不是一行与事实相反的注释。
+//
+// 彻底的解法是非对称签名（cosign/sigstore）——校验值本身带发布者签名，镜像再怎么
+// 篡改也伪造不出签名。该项需要 release 流水线接入签名步骤，属独立立项，
+// 见 `docs/arch/decisions/ADR-0095-updater-supply-chain-and-schema-downgrade-guard.md`。
 //
 //nolint:gocyclo
 func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, archivePath string) error {
@@ -105,10 +121,10 @@ func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, arch
 	var data []byte
 	var downloadErr error
 
-	// 尝试 downloader 提供的候选节点（直连优先，失败后尝试代理）
-	// 这里放宽了严格的不走代理限制：直连 GitHub 会优先尝试，若完全被阻断则降级使用镜像。
-	// 这对在中国大陆完全无法访问 GitHub 的环境是必须的。
-	for _, u := range downloader.CandidateURLs(ctx, c, checksumURL) {
+	// 候选节点顺序即信任顺序：CandidateURLs 首个元素是原始 GitHub URL（直连），
+	// 其后才是镜像。fromUpstream 记录本次校验值最终取自哪一档，供下方告警。
+	fromUpstream := false
+	for i, u := range downloader.CandidateURLs(ctx, c, checksumURL) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			downloadErr = apperr.Wrap(apperr.CodeInternal, "checksum request", err)
@@ -134,11 +150,23 @@ func (m *Manager) verifyChecksum(ctx context.Context, version, archiveName, arch
 		}
 		// 成功下载
 		downloadErr = nil
+		fromUpstream = i == 0
 		break
 	}
 
 	if downloadErr != nil {
 		return downloadErr
+	}
+
+	if !fromUpstream {
+		// 校验值来自镜像 = 供应链信任锚点已从 GitHub 转移到镜像运营方。
+		// 归档大概率也走同一镜像，两者被同一方替换时 SHA-256 比对必然通过。
+		// 不阻断更新（否则 GitHub 不可达的环境永远无法升级），但必须留下
+		// Error 级痕迹 + 指标，让"这次更新是在弱信任模式下完成的"可被审计。
+		slog.Error("updater: 校验值取自镜像而非 GitHub 直连，本次更新处于弱信任模式"+
+			"（镜像若被污染，SHA-256 校验无法发现替换）",
+			"archive", archiveName, "version", version)
+		metrics.GlobalUpdaterWeakTrustVerifyTotal.Add(1)
 	}
 
 	// 格式：<sha256hex>  <filename> (单行文件)
