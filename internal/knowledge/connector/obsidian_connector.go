@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,7 +187,14 @@ func (c *ObsidianConnector) Watch(ctx context.Context) (<-chan types.ChangeEvent
 			if c.isExcluded(path) {
 				return filepath.SkipDir
 			}
-			_ = c.watcher.Add(path)
+			// 加不上就是这个目录的变更从此完全静默（inotify 句柄耗尽 / 权限不足
+			// 是最常见的两种原因，且两者都不会让 Watch 整体失败）。不中断遍历
+			// ——部分目录能监视好过一个都没有——但必须留痕，否则表现为
+			// "Obsidian 里改了文件，知识库死活不更新"且无任何线索。
+			if err := c.watcher.Add(path); err != nil {
+				slog.Warn("obsidian_connector: 目录监视注册失败，该目录变更将不会被感知",
+					"path", path, "err", err)
+			}
 		}
 		return nil
 	})

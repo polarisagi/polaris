@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sort"
 
@@ -91,11 +92,29 @@ func (s *SurrealCacheStore) Delete(keys []string) error {
 		return nil
 	}
 
-	// We don't have a direct VecDelete in SurrealDBCoreStore according to the current code,
-	// so we only delete from KV. Orphaned vectors won't return results from KV lookup.
+	// 向量与 KV 双删（2026-08-10）：此前只删 KV 并注释「SurrealDBCoreStore 没有
+	// VecDelete」——该前提早已不成立，`internal/store/surreal_store_ext.go` 提供
+	// `VecDelete(id string) error`。只删 KV 会让 HNSW 索引里的向量永久滞留：
+	// 查不出结果（KV 已无对应条目）却一直占内存，长跑后无界累积，违反
+	// [Tier-0-Limit]（2GB VPS 可运行）。向量 ID 与 Put 中 VecUpsert 一致用裸 key，
+	// 不带 "semantic_cache:" 前缀。
+	//
+	// 错误不再吞：逐键继续、末尾聚合返回。单键失败不应让其余键留在缓存里
+	// （删除是幂等清理动作），但调用方必须能知道清理未完全成功。
+	var errs []error
 	for _, k := range keys {
 		key := []byte("semantic_cache:" + k)
-		_ = s.kvStore.Delete(context.Background(), key)
+		if err := s.kvStore.Delete(context.Background(), key); err != nil {
+			errs = append(errs, apperr.Wrap(apperr.CodeInternal, "SurrealCacheStore.Delete: kv "+k, err))
+		}
+		if s.coreStore != nil {
+			if err := s.coreStore.VecDelete(k); err != nil {
+				errs = append(errs, apperr.Wrap(apperr.CodeInternal, "SurrealCacheStore.Delete: vec "+k, err))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return apperr.Wrap(apperr.CodeInternal, "SurrealCacheStore.Delete", errors.Join(errs...))
 	}
 	return nil
 }

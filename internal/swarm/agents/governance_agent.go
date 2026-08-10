@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
@@ -155,16 +156,20 @@ func probeMemoryLinux() float64 {
 
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
+		// 解析失败留 Warn 后走 fallback：/proc/meminfo 格式变化会让 total 保持 0，
+		// 下方 `if total > 0` 已挡住除零，但静默降级意味着治理 Agent 长期用
+		// 兜底估值做内存压力判断而没人知道。
+		v, ok, matched := parseMemInfoLine(line)
+		if !matched {
+			continue
+		}
+		if !ok {
+			return probeMemoryFallback()
+		}
 		if strings.HasPrefix(line, "MemTotal:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				total, _ = strconv.ParseFloat(parts[1], 64)
-			}
-		} else if strings.HasPrefix(line, "MemAvailable:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				avail, _ = strconv.ParseFloat(parts[1], 64)
-			}
+			total = v
+		} else {
+			avail = v
 		}
 	}
 
@@ -172,6 +177,25 @@ func probeMemoryLinux() float64 {
 		return avail / total
 	}
 	return probeMemoryFallback()
+}
+
+// parseMemInfoLine 解析 /proc/meminfo 的 MemTotal/MemAvailable 行。
+// 返回 (值, 解析成功, 是否是关注的行)——三返回值是为了让调用方区分
+// "这行不关我事"（跳过）与"这行该解析但解析失败"（走 fallback）两种情况。
+func parseMemInfoLine(line string) (val float64, ok, matched bool) {
+	if !strings.HasPrefix(line, "MemTotal:") && !strings.HasPrefix(line, "MemAvailable:") {
+		return 0, false, false
+	}
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return 0, false, true
+	}
+	v, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		slog.Warn("governance_agent: /proc/meminfo 数值解析失败，转用兜底内存探测", "raw", line, "err", err)
+		return 0, false, true
+	}
+	return v, true, true
 }
 
 func probeMemoryDarwin() float64 {

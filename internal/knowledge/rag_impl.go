@@ -108,7 +108,14 @@ func (p *DefaultIngestionPipeline) persistChunks(ctx context.Context, tx *sql.Tx
 			return apperr.Wrap(apperr.CodeInternal, "ingestion: insert chunk", err)
 		}
 		if p.searchEngine != nil {
-			_ = p.searchEngine.AddDocument(ctx, c.ID, c.Content)
+			// 检索索引写入失败必须阻断整次摄取：此前 `_ =` 吞掉后，rag_chunks 里
+			// 有行、BM25/向量索引里没有，形成"入库了但永远检索不到"的双写不一致。
+			// 该状态在增量摄取（checkIngestCache 按 content_hash 命中即跳过）下会
+			// 被永久固化——重新摄取同一文档不会修复索引。故直接返回错误让整次
+			// Ingest 失败，由调用方重试。
+			if err := p.searchEngine.AddDocument(ctx, c.ID, c.Content); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "ingestion: index chunk "+c.ID, err)
+			}
 		}
 	}
 	return nil
