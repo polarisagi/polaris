@@ -16,6 +16,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -133,6 +134,7 @@ func RustSandboxExecV2(ctx protocol.SandboxContext, timeoutMs uint64) (*RustSand
 
 	var outJSON, outErr uintptr
 	code := nativeSandboxExecV2(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+	runtime.KeepAlive(inputCStr)
 
 	errStr := readAndFreeRustStr(outErr)
 	jsonStr := readAndFreeRustStr(outJSON)
@@ -165,6 +167,7 @@ func RustSandboxWrapArgv(ctx protocol.SandboxContext) (*protocol.WrapArgvResult,
 
 	var outJSON, outErr uintptr
 	code := nativeSandboxWrapArgv(uintptr(unsafe.Pointer(&inputCStr[0])), &outJSON, &outErr)
+	runtime.KeepAlive(inputCStr)
 
 	errStr := readAndFreeRustStr(outErr)
 	jsonStr := readAndFreeRustStr(outJSON)
