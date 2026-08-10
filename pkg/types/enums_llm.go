@@ -40,3 +40,12 @@ const (
 	// 消费方须把它当作旁路信息渲染，**不得**计入助手回复正文或写进消息历史。
 	StreamSystemNotice
 )
+
+// ModelPool 模型池强类型枚举（ADR-0094 决策八）。
+type ModelPool string
+
+const (
+	ModelPoolBudget    ModelPool = "budget"
+	ModelPoolStandard  ModelPool = "standard"
+	ModelPoolReasoning ModelPool = "reasoning"
+)

@@ -139,6 +139,25 @@ func Test_inv_FileLineLimit(t *testing.T) {
 	}
 }
 
+// TestModelPoolEnumStrictTyping (ADR-0094 决策八) 校验 types.ModelPool 枚举及其合法取值定义。
+func TestModelPoolEnumStrictTyping(t *testing.T) {
+	root := repoRoot(t)
+	targetFile := filepath.Join(root, "pkg", "types", "enums_llm.go")
+
+	data, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("TestModelPoolEnumStrictTyping: read %s failed: %v", targetFile, err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "type ModelPool string") ||
+		!strings.Contains(content, "ModelPoolBudget") ||
+		!strings.Contains(content, "ModelPoolStandard") ||
+		!strings.Contains(content, "ModelPoolReasoning") {
+		t.Errorf("ModelPoolEnumStrictTyping VIOLATED: types.ModelPool enum declaration missing or incomplete in pkg/types/enums_llm.go")
+	}
+}
+
 func checkFileLineLimit(t *testing.T, root, relPath string, exempt map[string]bool, violations *[]violation) {
 	t.Helper()
 	for _, suf := range fileLineLimitExemptSuffixes {
