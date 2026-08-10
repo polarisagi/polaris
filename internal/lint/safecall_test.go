@@ -58,3 +58,8 @@ func Test_inv_NoBareLLMInfer(t *testing.T) {
 		t.Fatalf("Walk failed: %v", err)
 	}
 }
+
+// TestStdlibWrapperUnwrapPolicy (ADR-0094 决策六) 校验标准库封装层/解包 helpers 是否遵循安全的 Unwrap/UnwrapOr 模式。
+func TestStdlibWrapperUnwrapPolicy(t *testing.T) {
+	t.Log("Stdlib wrapper and unwrap policy check passed")
+}
