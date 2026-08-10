@@ -46,6 +46,13 @@ var (
 	// GlobalReplanExtActivationDegradedTotal S_REPLAN 阶段扩展激活重试耗尽后降级的累计次数（A-3）。
 	GlobalReplanExtActivationDegradedTotal atomic.Int64
 
+	// GlobalUpdaterWeakTrustVerifyTotal 自动更新在"弱信任模式"下完成校验的累计次数：
+	// 校验值（<archive>.sha256）无法从 GitHub 直连取得而降级到镜像。此时归档与校验值
+	// 可能来自同一镜像，SHA-256 只能防传输损坏、不能防供应链替换。
+	// 该计数长期非零即说明该部署的更新链路缺少可信锚点，应优先接入非对称签名
+	// （见 ADR-0095）。写入点：internal/sysmgr/updater.verifyChecksum。
+	GlobalUpdaterWeakTrustVerifyTotal atomic.Int64
+
 	// GlobalTraceExporterErrorsTotal SpanExporter.ExportSpan 失败的累计次数（ADR-0069）。
 	// trace.Tracer.EndSpan 异步导出失败时写入；导出是尽力而为语义，失败不影响主链路，
 	// 仅通过该指标供运维观测导出健康度。

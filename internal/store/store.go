@@ -125,6 +125,41 @@ func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 // embed.FS OpenSQLite（消灭已安装二进制启动失败），本函数是被主动替换掉的旧
 // 实现，全仓（含测试）零调用点。
 
+// guardSchemaDowngrade 在库的 schema 版本高于本二进制内嵌版本时拒绝启动。
+//
+// 只比较最高版本号而非逐个比对：迁移编号单调递增且不复用（`CLAUDE.md §项目结构`
+// DDL 修改策略 + `decisions/README.md` 三项不可变），"库里有本二进制不认识的版本号"
+// 与"库比二进制新"是等价命题。
+func (s *SQLiteStore) guardSchemaDowngrade(entries []fs.DirEntry, applied map[int]bool) error {
+	embeddedMax := 0
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		var ver int
+		if _, err := fmt.Sscanf(e.Name(), "%03d", &ver); err != nil {
+			continue
+		}
+		if ver > embeddedMax {
+			embeddedMax = ver
+		}
+	}
+	appliedMax := 0
+	for v := range applied {
+		if v > appliedMax {
+			appliedMax = v
+		}
+	}
+	if appliedMax > embeddedMax {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf(
+			"schema 版本降级：数据库已应用到 v%03d，本二进制仅内嵌到 v%03d。"+
+				"旧二进制在新 schema 上运行会静默写入不符合新约束的数据，已拒绝启动。"+
+				"请换回 >= v%03d 的版本，或使用一个全新的数据目录。",
+			appliedMax, embeddedMax, appliedMax))
+	}
+	return nil
+}
+
 // runMigrations 按文件名数字前缀升序执行尚未应用的 *.sql 迁移文件。
 // 每个文件对应一个版本号（前三位数字）；每次迁移单独事务，崩溃恢复安全。
 func (s *SQLiteStore) runMigrations() error { //nolint:gocyclo
@@ -187,6 +222,19 @@ func (s *SQLiteStore) runMigrations() error { //nolint:gocyclo
 	entries, err := s.schemaFS.ReadDir(".")
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "read schema dir", err)
+	}
+
+	// 降级保护（2026-08-10 新增）：库里已应用的最高 schema 版本若超出本二进制
+	// 内嵌的最高版本，说明这是"旧二进制 + 新库"——自动更新回滚、多实例共享
+	// 数据目录、手工换回旧包都会造成这一局面。
+	//
+	// 迁移系统本身只向前：它只会跳过 applied 里已有的版本，对"库比我新"完全
+	// 无感，于是旧代码会直接在新表结构上跑，撞见新增的 NOT NULL 列、被拆分的表、
+	// 变更的约束时才炸——错误信息指向某条具体 SQL，完全看不出根因是版本错配，
+	// 且此前可能已写入若干条不符合新约束的脏数据。fail-closed 在这里挡住，
+	// 代价是启动失败一次，收益是不产生静默的数据腐败。
+	if err := s.guardSchemaDowngrade(entries, applied); err != nil {
+		return err
 	}
 	var pending []mig //nolint:prealloc
 	for _, e := range entries {
