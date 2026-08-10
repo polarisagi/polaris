@@ -5,7 +5,7 @@
 > M8 描述的编排语义/不变量不变，仅物理归属调整；`internal/swarm` 现在是消费方而非实现方。
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:112 Supervisor / 2-bis:131 常驻角色Agent / 3:148 编排模式 / 3-bis:178(已删除,见ADR-0062) / 3-ter:189 PipelineOrchestrator / 4:283 AgentCard / 5:295 Task分解 / 8:333 拓扑自演化(已删除,见ADR-0062) / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:318 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out -->
+<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:112 Supervisor / 2-bis:131 常驻角色Agent / 3:148 编排模式 / 3-bis:181 (已删除,见ADR-0062) / 3-ter:189 PipelineOrchestrator / 3-quater:230 PatternDAGExecutor / 3-quinquies:244 StateGraphExecutor / 4:283 AgentCard / 5:295 Task分解 / 8:313 拓扑自演化(已删除,见ADR-0062) / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:366 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out / §3-sexies:451 PatternDebate -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
