@@ -1,9 +1,11 @@
 package dag
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -16,10 +18,10 @@ import (
 //   - SanitizeByUserReview —— HITL 人工复核豁免（复用 ExemptionVault）。
 
 // validateNodeTaint 对单个 DAG 节点执行降级尝试 + 分级拦截判定。
-func validateNodeTaint(vCtx *DAGValidationContext, node protocol.ExecNode) error {
-	level := attemptSchemaDowngrade(vCtx, node, vCtx.ActiveTaintLevel)
+func validateNodeTaint(ctx context.Context, vCtx *DAGValidationContext, node protocol.ExecNode) error {
+	level := attemptSchemaDowngrade(ctx, vCtx, node, vCtx.ActiveTaintLevel)
 	if level >= types.TaintHigh && level != types.TaintUserReviewed {
-		level = attemptUserReviewDowngrade(vCtx, node, level)
+		level = attemptUserReviewDowngrade(ctx, vCtx, node, level)
 	}
 
 	switch {
@@ -72,7 +74,7 @@ func validateNodeTaint(vCtx *DAGValidationContext, node protocol.ExecNode) error
 // InputSchema 对所有字符串叶子字段都有 format/pattern/enum/const 约束时生效
 // （hasStrictSchema），裸 {"type":"string"} 一律拒绝降级（fail-closed）。
 // level < TaintMedium 或工具未注册时原样返回，不做无意义降级尝试。
-func attemptSchemaDowngrade(vCtx *DAGValidationContext, node protocol.ExecNode, level types.TaintLevel) types.TaintLevel {
+func attemptSchemaDowngrade(ctx context.Context, vCtx *DAGValidationContext, node protocol.ExecNode, level types.TaintLevel) types.TaintLevel {
 	if level < types.TaintMedium || vCtx.ToolExecutor == nil {
 		return level
 	}
@@ -93,13 +95,15 @@ func attemptSchemaDowngrade(vCtx *DAGValidationContext, node protocol.ExecNode, 
 		slog.Info("s_validate: taint downgraded via SanitizeBySchema (M11 §2.5)",
 			"node_id", node.ID, "tool", node.ToolName,
 			"from", level.String(), "to", downgraded.Source.OriginTaintLevel.String())
+		auditTaintDowngrade(ctx, vCtx, node, "SanitizeBySchema", schemaGuardBasis(tool),
+			level, downgraded.Source.OriginTaintLevel)
 	}
 	return downgraded.Source.OriginTaintLevel
 }
 
 // attemptUserReviewDowngrade 尝试 M11 §2.5 SanitizeByUserReview 降级：
 // vCtx.ReviewChecker 为 nil（未注入）时原样返回，不影响既有拦截行为。
-func attemptUserReviewDowngrade(vCtx *DAGValidationContext, node protocol.ExecNode, level types.TaintLevel) types.TaintLevel {
+func attemptUserReviewDowngrade(ctx context.Context, vCtx *DAGValidationContext, node protocol.ExecNode, level types.TaintLevel) types.TaintLevel {
 	if vCtx.ReviewChecker == nil || !vCtx.ReviewChecker.IsReviewed(vCtx.AgentID, node.Args) {
 		return level
 	}
@@ -111,7 +115,88 @@ func attemptUserReviewDowngrade(vCtx *DAGValidationContext, node protocol.ExecNo
 	reviewed := taint.SanitizeByUserReview(ts, "hitl:"+vCtx.AgentID)
 	slog.Info("s_validate: taint downgraded via SanitizeByUserReview (M11 §2.5)",
 		"node_id", node.ID, "tool", node.ToolName, "agent_id", vCtx.AgentID)
+	auditTaintDowngrade(ctx, vCtx, node, "SanitizeByUserReview", "hitl_review",
+		level, reviewed.Source.OriginTaintLevel)
 	return reviewed.Source.OriginTaintLevel
+}
+
+// auditTaintDowngrade 将一次受控降级写入 audit_log。
+//
+// M11 §2.5 原文：「自动降级绝对禁止。每次降级写入 audit_log」「审计: 每次降级写
+// audit_log，标注依据（format_guard / pattern_guard / enum_guard / const_guard /
+// type_only）」。此前两条降级路径只打 slog.Info——slog 是可轮转、可调级别、不进
+// 审计链的运行日志，不满足"降级路径可追溯"这条 HE-1 要求：真出了"高污点数据怎么
+// 进到网络写工具里的"这类问题时，slog 很可能已经轮转掉了。
+//
+// 审计写失败不阻断降级：降级判定本身已经完成且是安全收紧方向的反面（放行），
+// 此刻回退会让一个合法请求因审计后端故障而失败。但必须留 Error 级痕迹——
+// M11 §13 对 audit_log 写入失败的 fail-closed 要求针对的是副作用执行路径，
+// 由 ExecuteTool 侧的审计拦截器承担，不在校验期重复实现。
+func auditTaintDowngrade(
+	ctx context.Context, vCtx *DAGValidationContext, node protocol.ExecNode,
+	method, basis string, from, to types.TaintLevel,
+) {
+	if vCtx.TaintAuditor == nil {
+		return
+	}
+	err := vCtx.TaintAuditor.Log(ctx, "taint_downgrade", map[string]any{
+		"method":     method, // SanitizeBySchema | SanitizeByUserReview
+		"basis":      basis,  // format_guard / pattern_guard / enum_guard / const_guard / hitl_review
+		"from":       from.String(),
+		"to":         to.String(),
+		"node_id":    node.ID,
+		"tool":       node.ToolName,
+		"agent_id":   vCtx.AgentID,
+		"session_id": vCtx.SessionID,
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "s_validate: taint 降级审计写入失败，本次降级不可追溯（M11 §2.5）",
+			"node_id", node.ID, "method", method, "err", err)
+	}
+}
+
+// schemaGuardBasis 归纳本次 SanitizeBySchema 降级所依据的约束类型，对应 M11 §2.5
+// 要求标注的 format_guard / pattern_guard / enum_guard / const_guard / type_only。
+// 一个 schema 可能同时具备多种约束，全部列出（逗号分隔）比只取第一种更有排查价值。
+func schemaGuardBasis(tool types.Tool) string {
+	root := normalizeSchemaMap(tool.InputSchema)
+	if root == nil {
+		return "type_only"
+	}
+	found := map[string]bool{}
+	collectSchemaGuards(root, found)
+	var basis []string
+	for _, k := range []string{"format_guard", "pattern_guard", "enum_guard", "const_guard"} {
+		if found[k] {
+			basis = append(basis, k)
+		}
+	}
+	if len(basis) == 0 {
+		return "type_only"
+	}
+	return strings.Join(basis, ",")
+}
+
+// collectSchemaGuards 递归收集 schema 树上出现过的约束类型。
+func collectSchemaGuards(node map[string]any, found map[string]bool) {
+	if props, ok := node["properties"].(map[string]any); ok {
+		for _, v := range props {
+			if child, ok := v.(map[string]any); ok {
+				collectSchemaGuards(child, found)
+			}
+		}
+	}
+	if items, ok := node["items"].(map[string]any); ok {
+		collectSchemaGuards(items, found)
+	}
+	for key, guard := range map[string]string{
+		"format": "format_guard", "pattern": "pattern_guard",
+		"enum": "enum_guard", "const": "const_guard",
+	} {
+		if _, ok := node[key]; ok {
+			found[guard] = true
+		}
+	}
 }
 
 // hasStrictSchema 判断工具声明的 InputSchema 是否对所有字符串字段都施加了

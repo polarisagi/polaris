@@ -153,6 +153,7 @@ func (a *Agent) GetStateMachine() *fsm.StateMachine {
 type SecurityBundle struct {
 	PolicyGate         protocol.PolicyGate          // Cedar 策略引擎（由 M11 提供）
 	TaintReviewChecker protocol.TaintReviewChecker  // S_VALIDATE TaintGate 人工复核豁免查询（M11 §2.5）；nil 时跳过
+	TaintAuditor       protocol.AuditLogger         // Taint 受控降级审计落盘（M11 §2.5 每次降级写 audit_log）；nil 时仅打 slog
 	TokenVault         *guard.PIITokenVault         // PII OpaqueToken 会话级可逆令牌库
 	PIIDetector        *guard.PIIDetector           // PII 检测与脱敏器
 	PIIDesensitizer    *guard.PIIDesensitizer       // 阶段03 R-02：格式保留假数据脱敏映射，按 SessionID 分区；终态需 ReleasePartition

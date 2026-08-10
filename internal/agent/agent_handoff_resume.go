@@ -170,6 +170,7 @@ func (a *Agent) ResumeAwaitingHandoff(childTaskID, resumeCtxJSON string) (restor
 			SessionID:        a.sCtx.SessionID,
 			SystemTier:       a.Config.SystemTier,
 			ReviewChecker:    a.Security.TaintReviewChecker,
+			TaintAuditor:     a.Security.TaintAuditor,
 		}
 		if verr := a.dagValidator.Validate(context.Background(), vCtx); verr != nil {
 			slog.Warn("agent: ResumeAwaitingHandoff snapshot DAG failed S_VALIDATE re-check, discarding and degrading to deadlock-avoidance only",

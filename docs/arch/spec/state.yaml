@@ -22,7 +22,7 @@ meta:
   go_package: internal/protocol
 
 # =============================================================================
-# §par: M4 Plan-Act-Reflect 12-state machine
+# §par: M4 Plan-Act-Reflect 13-state machine
 # =============================================================================
 
 par:
@@ -571,7 +571,7 @@ task_status:
       enforced_by: m8.reaper_skip_suspended + m8.hitl_timeout_handler
 
 # =============================================================================
-# §outbox: M2 OutboxEntry 4-state machine
+# §outbox: M2 OutboxEntry 6-state machine
 # =============================================================================
 
 outbox:
