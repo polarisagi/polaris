@@ -26,6 +26,9 @@ type InferenceRouter struct {
 	semanticCache     *search.SemanticCache
 	modelRegistry     *modelregistry.Registry
 	poolFallbackChain map[string][]string // Pool 级联降级链（GD-13-005）
+	// streamInterrupts 记录流式中断事件（inv_M1_04），nil 时不落 EventLog。
+	// 注入点见 InjectStreamInterruptRecorder（router_stream.go）。
+	streamInterrupts StreamInterruptRecorder
 }
 
 // LLMGovernor 用于限流 LLM 请求 (P0-3)

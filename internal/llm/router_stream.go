@@ -48,6 +48,10 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 				if ctx.Err() != nil {
 					errStr = ctx.Err().Error()
 				}
+				// inv_M1_04：ctx 取消同样是"流中断"，与预算守卫掐断一并落 EventLog。
+				// 用 context.WithoutCancel 派生：此刻 ctx 已 Done，直接拿它去写库
+				// 会当场返回 ctx.Err()，等于永远记不下这条最需要被记下的事件。
+				ir.recordStreamInterrupted(context.WithoutCancel(ctx), providerName, "context_cancelled:"+errStr)
 				select {
 				case out <- types.StreamEvent{
 					Type:    types.StreamCancelled,
@@ -93,6 +97,34 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 	return out
 }
 
+// StreamInterruptRecorder 记录流式中断事件（inv_M1_04：「流中断时 EventLog 追加
+// streaming_interrupted: true 字段，禁止静默丢弃」）。
+//
+// 接口定义在消费方（本包）而非 internal/store（HE-3）。nil 时中断仍照常发生，
+// 只是不落 EventLog——不因审计后端缺席阻断推理主路径。
+// 生产方: cmd/polaris（streamInterruptEventLogger，桥接 protocol.EventLogger）。
+type StreamInterruptRecorder interface {
+	RecordStreamInterrupted(ctx context.Context, provider, reason string)
+}
+
+// InjectStreamInterruptRecorder 注入流中断事件记录器（inv_M1_04）。
+func (ir *InferenceRouter) InjectStreamInterruptRecorder(r StreamInterruptRecorder) {
+	ir.streamInterrupts = r
+}
+
+// recordStreamInterrupted 落一条 streaming_interrupted 事件。
+//
+// 2026-08-10 补齐：inv_M1_04 自 M01 定稿起就要求流中断写 EventLog，但
+// internal/llm 全包检索不到 streaming_interrupted 字样——中断只体现为
+// slog.Warn + 一条 trace.RecordLLMCall，两者都不进 M2 events 表，事后无法按
+// 事件流复盘"这次对话为什么半截断了"。
+func (ir *InferenceRouter) recordStreamInterrupted(ctx context.Context, provider, reason string) {
+	if ir.streamInterrupts == nil {
+		return
+	}
+	ir.streamInterrupts.RecordStreamInterrupted(ctx, provider, reason)
+}
+
 // abortStream 因 StreamBudgetGuard/TrackStreamCost 硬阻断而中止流：向下游发一个
 // StreamCancelled 事件，并记录一条可观测的 LLM 调用结果，复用既有
 // trace.RecordLLMCall 管线（避免为此新增一套 Prometheus/OTel instrument）。
@@ -110,6 +142,7 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 func (ir *InferenceRouter) abortStream(ctx context.Context, out chan<- types.StreamEvent, providerName string, cause error) {
 	slog.Warn("inference_router: stream aborted by budget guard", "provider", providerName, "err", cause)
 	trace.RecordLLMCall(ctx, providerName, "", "stream_aborted:"+cause.Error(), 0, 0, 0, 0, 0)
+	ir.recordStreamInterrupted(ctx, providerName, "budget_guard:"+cause.Error())
 	select {
 	case out <- types.StreamEvent{Type: types.StreamCancelled, Content: cause.Error()}:
 	case <-ctx.Done():

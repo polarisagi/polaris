@@ -80,6 +80,9 @@ type SubstrateBundle struct {
 	// 安全三件套
 	KS         *security.KillSwitch
 	AuditTrail *security.AuditTrail
+	// EventLog 是 M2 events 表的串行写入口。inv_M1_04 的 streaming_interrupted
+	// 事件由 InferenceRouter 经 streamInterruptEventLogger 写入这里。
+	EventLog   protocol.EventLogger
 	AuditChain *audit.AuditChain
 
 	// 日志：LogFile 需调用方 defer Close（可 nil）
@@ -356,7 +359,6 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	})
 	eventLog := audit.NewSQLiteEventLog(dbWriter)
 	decisionLog := audit.NewSQLiteDecisionLog(dbWriter)
-	_ = eventLog // 待 M4 Agent Kernel 注入
 	slog.Info("polaris: mutation bus (database writer) started")
 
 	// ─── 2.9 AuditTrail ──────────────────────────────────────────────────────
@@ -625,6 +627,9 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		routerOpts = append(routerOpts, llm.WithSemanticCache(semanticCache))
 	}
 	router := llm.NewInferenceRouter(reg, dialer, routerOpts...)
+	// inv_M1_04：流中断必须落 EventLog。装配在此而非 llm 包内部——EventLogger
+	// 属 L0 存储层，internal/llm 只声明消费端接口（HE-3）。
+	router.InjectStreamInterruptRecorder(streamInterruptEventLogger{eventLog: eventLog})
 	slog.Info("polaris: inference router initialized")
 
 	committed = true
@@ -636,6 +641,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		TBR:                      tbr,
 		KS:                       ks,
 		AuditTrail:               auditTrail,
+		EventLog:                 eventLog,
 		AuditChain:               auditChain,
 		LogFile:                  logFile,
 		LogStore:                 logStore,
