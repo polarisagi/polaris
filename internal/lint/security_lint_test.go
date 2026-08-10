@@ -227,8 +227,19 @@ func TestFailClosedSafetyVerdict(t *testing.T) {
 	}
 }
 
-// TestStructuredSinksAntiInjection (ADR-0094 决策七) 校验审计日志和结构化 Sink 接收参数防注入。
-func TestStructuredSinksAntiInjection(t *testing.T) {
+// TestNoRawStringIntoStructuredSink (ADR-0094 决策六，原名 TestStructuredSinksAntiInjection)
+// 校验 internal/store/audit/ 下 SQL Exec/Query 系列调用不得用字符串 "+" 拼接
+// 构造查询语句本身。
+//
+// 范围维持原状（仅 audit/）而不放大到全仓：2026-08-10 复核曾尝试放大到
+// internal/ + pkg/ 全仓，结果对 11 处"+"拼接触发误报——这些拼接的操作数
+// 全部是编译期 const 列名列表（core_memory.go coreMemorySelectCols）或由
+// len(args) 驱动的占位符生成（sqlite_blackboard_ops.go "?" + strings.Repeat(...)），
+// 不携带任何运行时不可信数据，语法层面的"+"拼接检测无法区分这两类操作数
+// 与真正的注入面。收窄回原范围，避免规则本身背离 CLAUDE.md
+// "先验证规则本身再决定是否收窄" 的教训。真正需要全仓覆盖的新检查项见
+// TestFTS5MatchArgsUseQuoteHelper。
+func TestNoRawStringIntoStructuredSink(t *testing.T) {
 	root := repoRoot(t)
 	fset := token.NewFileSet()
 	var violations []string
@@ -245,7 +256,6 @@ func TestStructuredSinksAntiInjection(t *testing.T) {
 		rel, _ := filepath.Rel(root, path)
 
 		ast.Inspect(f, func(n ast.Node) bool {
-			// 校验 QueryContext / ExecContext 不得含有 Sprintf / + 字符串拼接构建 SQL
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -268,5 +278,70 @@ func TestStructuredSinksAntiInjection(t *testing.T) {
 
 	if len(violations) > 0 {
 		t.Errorf("Found %d structured sink injection violations:\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}
+
+// TestFTS5MatchArgsUseQuoteHelper (ADR-0094 决策六) 全仓（internal/ + pkg/）扫描：
+// 含 "MATCH ?" 的 SQLite FTS5 查询语句所在调用，其绑定参数必须经
+// util.QuoteFTS5 / util.QuoteFTS5Query 转义——反例见 2026-08-10 修复前的
+// graph_traverser.go（entityName 直拼）/ retriever.go / rag_retrieval.go /
+// repo_chat.go（用户查询词直拼）。与 SQL 字符串拼接检查不同，FTS5 语法字符
+// （"、*、:、AND/OR/NOT）出现在合法用户输入中是常态而非攻击特征，无法用
+// "是否是 const/是否含运行时变量" 来降噪，因此该检查天然不会像上面的
+// concat 检查那样对良性拼接产生误报，可以安全地覆盖全仓。
+func TestFTS5MatchArgsUseQuoteHelper(t *testing.T) {
+	root := repoRoot(t)
+	var violations []violation
+
+	walkRepoGoFiles(t, root, nil, func(fset *token.FileSet, f *ast.File, relPath string) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "QueryContext", "ExecContext", "QueryRowContext":
+			default:
+				return true
+			}
+			if len(call.Args) < 2 {
+				return true
+			}
+			lit, ok := call.Args[1].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING || !strings.Contains(lit.Value, "MATCH ?") {
+				return true
+			}
+			hasQuoteHelper := false
+			for _, arg := range call.Args[2:] {
+				argCall, ok := arg.(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				argSel, ok := argCall.Fun.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				if pkg, ok := argSel.X.(*ast.Ident); ok && pkg.Name == "util" &&
+					(argSel.Sel.Name == "QuoteFTS5" || argSel.Sel.Name == "QuoteFTS5Query") {
+					hasQuoteHelper = true
+				}
+			}
+			if !hasQuoteHelper {
+				pos := fset.Position(call.Pos())
+				violations = append(violations, violation{
+					relPath: relPath, line: pos.Line,
+					detail: `FTS5 "MATCH ?" 查询的绑定参数未经 util.QuoteFTS5/QuoteFTS5Query 转义`,
+				})
+			}
+			return true
+		})
+	})
+
+	for _, v := range violations {
+		t.Errorf("FTS5MatchArgsUseQuoteHelper VIOLATED: %s", v)
 	}
 }

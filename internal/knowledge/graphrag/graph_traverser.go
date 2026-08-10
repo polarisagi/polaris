@@ -7,6 +7,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 const (
@@ -318,7 +319,7 @@ func (gt *GraphTraverser) chunksForEntity(ctx context.Context, entityName string
 			SELECT rowid FROM rag_chunks_fts
 			WHERE rag_chunks_fts MATCH ?
 			ORDER BY rank LIMIT ?
-		) AND rc.deleted_at IS NULL`, entityName, limit)
+		) AND rc.deleted_at IS NULL`, util.QuoteFTS5(entityName), limit)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "GraphTraverser.chunksForEntity", err)
 	}
