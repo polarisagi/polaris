@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/gateway/authcontext"
@@ -28,7 +29,15 @@ type PromptAssemblyService struct {
 	AmbientMaxChars         int
 	MCPMgr                  MCPManager
 	skillEmbedCacheMu       sync.RWMutex
-	skillEmbedCache         map[string][]float32
+	skillEmbedCache         map[string]*skillEmbedEntry
+}
+
+// skillEmbedEntry 是技能文本→向量缓存的条目。
+// storedAt 供 TTL 判定，lastUsed 供满载时的 LRU 淘汰（A-06 要求容量 + 过期双控）。
+type skillEmbedEntry struct {
+	vec      []float32
+	storedAt time.Time
+	lastUsed time.Time
 }
 
 func NewPromptAssemblyService(
@@ -60,7 +69,7 @@ func NewPromptAssemblyService(
 		AmbientMaxChars:       ambientMaxChars,
 		MCPMgr:                mcpMgr,
 		ActivatedSystemPrompt: activatedSystemPrompt,
-		skillEmbedCache:       make(map[string][]float32),
+		skillEmbedCache:       make(map[string]*skillEmbedEntry),
 	}
 }
 
