@@ -226,3 +226,47 @@ func TestFailClosedSafetyVerdict(t *testing.T) {
 		t.Errorf("Found %d fail-closed safety verdict violations:\n%s", len(violations), strings.Join(violations, "\n"))
 	}
 }
+
+// TestStructuredSinksAntiInjection (ADR-0094 决策七) 校验审计日志和结构化 Sink 接收参数防注入。
+func TestStructuredSinksAntiInjection(t *testing.T) {
+	root := repoRoot(t)
+	fset := token.NewFileSet()
+	var violations []string
+
+	targetDir := filepath.Join(root, "internal", "store", "audit")
+	_ = filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil //nolint:nilerr
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return nil //nolint:nilerr
+		}
+		rel, _ := filepath.Rel(root, path)
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			// 校验 QueryContext / ExecContext 不得含有 Sprintf / + 字符串拼接构建 SQL
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if sel.Sel.Name == "QueryContext" || sel.Sel.Name == "ExecContext" {
+					if len(call.Args) >= 2 {
+						queryArg := call.Args[1]
+						if binary, ok := queryArg.(*ast.BinaryExpr); ok && binary.Op == token.ADD {
+							pos := fset.Position(call.Pos())
+							violations = append(violations, rel+":"+pos.String()+": string concatenation in SQL query argument (anti-injection rule)")
+						}
+					}
+				}
+			}
+			return true
+		})
+		return nil
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("Found %d structured sink injection violations:\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}
