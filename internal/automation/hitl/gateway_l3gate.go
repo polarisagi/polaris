@@ -35,7 +35,7 @@ func (g *GatewayImpl) applyL3RegressionGate(ctx context.Context, p *types.HITLPr
 	// 体系中尚无完整数据面支撑，RunSuite 调用会返回 "unknown suite" 错误。
 	// 过渡方案：暂用 "validation" suite 作为等价门禁，直到 regression_p0_p1
 	// 分区的数据写入路径完成接线后再切换回来（参考 ADR-0048 待补充决策）。
-	report, err := g.evalRunner.RunSuite(context.Background(), "validation", "")
+	report, err := g.evalRunner.RunSuite(ctx, "validation", "")
 	if err != nil {
 		// L3 回归门禁失败**不能静默**（此前 `if err == nil` 直接把错误吞掉，
 		// 上面 TODO 描述的 "unknown suite" 就是这样长期无人察觉的）。
@@ -85,7 +85,7 @@ func (g *GatewayImpl) autoDenyOnP0Regression(ctx context.Context, p *types.HITLP
 // 报告不可用时显式告警并在文案中标注——否则审批人看到的是一个
 // "看起来正常但没有回归证据"的请求，比没有报告更危险。
 func (g *GatewayImpl) attachShadowReport(ctx context.Context, p *types.HITLPrompt) {
-	shadowReport, rErr := g.regression.DetectRegression(context.Background(), p.CheckpointType)
+	shadowReport, rErr := g.regression.DetectRegression(ctx, p.CheckpointType)
 	switch {
 	case rErr != nil:
 		slog.ErrorContext(ctx, "hitl_gateway: shadow regression report unavailable, approver will see no diff evidence",

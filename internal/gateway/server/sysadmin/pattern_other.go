@@ -1,7 +1,6 @@
 package sysadmin
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -25,7 +24,7 @@ func (h *SysAdminHandler) HandleMapReduceRun(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	res, err := h.MapReduceExec.Execute(context.Background(), req.ParentTaskID, req.SubTasks)
+	res, err := h.MapReduceExec.Execute(r.Context(), req.ParentTaskID, req.SubTasks)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -50,7 +49,7 @@ func (h *SysAdminHandler) HandleParallelRun(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	err := h.ParallelExec.Execute(context.Background(), req.ParentTaskID, req.SubTasks)
+	err := h.ParallelExec.Execute(r.Context(), req.ParentTaskID, req.SubTasks)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -75,7 +74,7 @@ func (h *SysAdminHandler) HandleSequentialRun(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	err := h.SequentialExec.Execute(context.Background(), req.ParentTaskID, req.SubTasks)
+	err := h.SequentialExec.Execute(r.Context(), req.ParentTaskID, req.SubTasks)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -102,7 +101,7 @@ func (h *SysAdminHandler) HandleSwarmRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	err := h.SwarmCoord.Handoff(context.Background(), req.TaskID, req.AgentID, req.HandoffNote, req.Depth)
+	err := h.SwarmCoord.Handoff(r.Context(), req.TaskID, req.AgentID, req.HandoffNote, req.Depth)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

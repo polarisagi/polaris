@@ -39,7 +39,9 @@ func (h *SysAdminHandler) HandleListTools(w http.ResponseWriter, r *http.Request
 	var tools []ToolInfo
 
 	if h.Catalog != nil {
-		entries := h.Catalog.List(context.Background(), types.TrustUntrusted)
+		// r.Context() 而非 context.Background()：客户端断开时应能取消下游查询，
+		// 且 TraceID 需沿请求链传播（HE-1）。
+		entries := h.Catalog.List(r.Context(), types.TrustUntrusted)
 		for _, e := range entries {
 			if e.Source == types.ToolSkill {
 				continue // 技能已经在单独的面板（/v1/skills）展示，避免在工具列表重复
@@ -99,8 +101,8 @@ func (h *SysAdminHandler) HandleListSkills(w http.ResponseWriter, r *http.Reques
 
 // HandleListToolSchemas 返回可注入 LLM 的 tool schema 列表（供调试用）。
 // 复用 buildToolSchemas，暴露给前端检查工具注入是否正确。
-func (h *SysAdminHandler) HandleListToolSchemas(w http.ResponseWriter, _ *http.Request) {
-	schemas := h.BuildToolSchemas()
+func (h *SysAdminHandler) HandleListToolSchemas(w http.ResponseWriter, r *http.Request) {
+	schemas := h.buildToolSchemasCtx(r.Context())
 	if schemas == nil {
 		schemas = []types.ToolSchema{}
 	}
@@ -184,11 +186,18 @@ func (h *SysAdminHandler) HandleInstallSkill(w http.ResponseWriter, r *http.Requ
 // Provider（如 OpenAI function calling）会导致整次请求被拒绝。此前
 // mcp.IsValidLLMName 虽已导出并注明"供 sysadmin.BuildToolSchemas 等外部包
 // 防御性过滤使用"，但从未被实际调用过。
+// 无 ctx 重载：作为 `func() []types.ToolSchema` 回调注入 cronadmin/workflowadmin/
+// channelsadmin（三处后台执行器），签名由那三个包的字段类型固定。后台路径本就没有
+// 请求生存期可继承，用 context.Background() 是正确的；HTTP 路径走 buildToolSchemasCtx。
 func (h *SysAdminHandler) BuildToolSchemas() []types.ToolSchema {
+	return h.buildToolSchemasCtx(context.Background())
+}
+
+func (h *SysAdminHandler) buildToolSchemasCtx(ctx context.Context) []types.ToolSchema {
 	if h.Catalog == nil {
 		return nil
 	}
-	schemas := h.Catalog.Schemas(context.Background(), types.TrustUntrusted)
+	schemas := h.Catalog.Schemas(ctx, types.TrustUntrusted)
 	filtered := make([]types.ToolSchema, 0, len(schemas))
 	for _, s := range schemas {
 		if !mcp.IsValidLLMName(s.Name) {
