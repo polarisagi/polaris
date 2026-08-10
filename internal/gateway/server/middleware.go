@@ -81,7 +81,10 @@ type RateLimitManager struct {
 	defaultMax   int
 }
 
-func NewRateLimitManager(rate, max int) *RateLimitManager {
+func NewRateLimitManager(parentCtx context.Context, rate, max int) *RateLimitManager {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	rm := &RateLimitManager{
 		limiters:     make(map[string]*RateLimiter),
 		lastSeen:     make(map[string]time.Time),
@@ -89,26 +92,31 @@ func NewRateLimitManager(rate, max int) *RateLimitManager {
 		defaultRate:  rate,
 		defaultMax:   max,
 	}
-	concurrent.SafeGo(context.Background(), "gateway.server.rate_limit_cleanup_loop", func(context.Context) {
-		rm.cleanupLoop()
+	concurrent.SafeGo(parentCtx, "gateway.server.rate_limit_cleanup_loop", func(ctx context.Context) {
+		rm.cleanupLoop(ctx)
 	})
 	return rm
 }
 
 // cleanupLoop 每 5 分钟清理超过 15 分钟未活跃的限流桶，防止内存无界增长。
-func (rm *RateLimitManager) cleanupLoop() {
+func (rm *RateLimitManager) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		cutoff := time.Now().Add(-15 * time.Minute)
-		rm.mu.Lock()
-		for key, t := range rm.lastSeen {
-			if t.Before(cutoff) {
-				delete(rm.limiters, key)
-				delete(rm.lastSeen, key)
+	for {
+		select {
+		case <-ticker.C:
+			cutoff := time.Now().Add(-15 * time.Minute)
+			rm.mu.Lock()
+			for key, t := range rm.lastSeen {
+				if t.Before(cutoff) {
+					delete(rm.limiters, key)
+					delete(rm.lastSeen, key)
+				}
 			}
+			rm.mu.Unlock()
+		case <-ctx.Done():
+			return
 		}
-		rm.mu.Unlock()
 	}
 }
 
@@ -145,42 +153,42 @@ type AuthManager struct {
 	lockedAt map[string]time.Time
 }
 
-func NewAuthManager() *AuthManager {
+func NewAuthManager(parentCtx context.Context) *AuthManager {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	am := &AuthManager{
 		failures: make(map[string]int),
 		lockedAt: make(map[string]time.Time),
 	}
-	concurrent.SafeGo(context.Background(), "gateway.server.auth_cleanup_loop", func(context.Context) {
-		am.cleanupLoop()
+	concurrent.SafeGo(parentCtx, "gateway.server.auth_cleanup_loop", func(ctx context.Context) {
+		am.cleanupLoop(ctx)
 	})
 	return am
 }
 
-func (am *AuthManager) cleanupLoop() {
+func (am *AuthManager) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		am.mu.Lock()
-		for ip, lockedTime := range am.lockedAt {
-			if time.Since(lockedTime) > 5*time.Minute {
-				delete(am.failures, ip)
-				delete(am.lockedAt, ip)
+	for {
+		select {
+		case <-ticker.C:
+			am.mu.Lock()
+			for ip, lockedTime := range am.lockedAt {
+				if time.Since(lockedTime) > 5*time.Minute {
+					delete(am.failures, ip)
+					delete(am.lockedAt, ip)
+				}
 			}
+			am.mu.Unlock()
+		case <-ctx.Done():
+			return
 		}
-		// Also clean up IPs with failures but no lock if they haven't failed recently
-		// To be precise we can just clear all failures that aren't locked if we want
-		// But clearing locked is enough to prevent unbounded growth of locked IPs.
-		// Let's clear failures for IPs that aren't locked at all.
-		for ip := range am.failures {
-			if _, locked := am.lockedAt[ip]; !locked {
-				delete(am.failures, ip)
-			}
-		}
-		am.mu.Unlock()
 	}
 }
 
 func (am *AuthManager) IsLocked(ip string) bool {
+
 	am.mu.Lock()
 	defer am.mu.Unlock()
 

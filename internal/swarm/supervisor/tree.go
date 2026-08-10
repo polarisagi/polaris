@@ -51,8 +51,11 @@ type Supervisor struct {
 
 // NewSupervisor 创建一个新的 Supervisor 引擎。
 // 架构要求指数退避：100ms → 30s。
-func NewSupervisor(maxRestarts int, timeWindow time.Duration) *Supervisor {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewSupervisor(parent context.Context, maxRestarts int, timeWindow time.Duration) *Supervisor {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	return &Supervisor{
 		workers:     make(map[string]*WorkerEntry),
 		policy:      OneForOne,

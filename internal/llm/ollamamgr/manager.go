@@ -253,6 +253,15 @@ func StartOllama(ctx context.Context, httpClient *http.Client, binPath string) (
 	// 轮询等待端口启动
 	ready := false
 	for i := 0; i < 30; i++ { // 等待最多 30 秒
+		select {
+		case <-ctx.Done():
+			if err := cmd.Process.Kill(); err != nil {
+				slog.WarnContext(ctx, "ollamamgr: failed to kill process on cancellation", "err", err)
+			}
+			return nil, apperr.Wrap(apperr.CodeCancelled, "ollama startup cancelled", ctx.Err())
+
+		case <-time.After(1 * time.Second):
+		}
 		resp, err := httpClient.Get("http://localhost:11434/")
 		if err == nil {
 			resp.Body.Close()
@@ -261,12 +270,13 @@ func StartOllama(ctx context.Context, httpClient *http.Client, binPath string) (
 				break
 			}
 		}
-		time.Sleep(1 * time.Second)
 	}
 
 	if !ready {
 		// 如果没启动成功，杀死僵尸进程
-		_ = cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			slog.WarnContext(ctx, "ollamamgr: failed to kill process", "err", err)
+		}
 		return nil, apperr.New(apperr.CodeTimeout, "ollama failed to become ready on port 11434")
 	}
 

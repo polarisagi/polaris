@@ -91,6 +91,10 @@ func (m *MCPManager) IsPluginConnected(pluginID string) bool {
 }
 
 func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
+	return NewMCPManagerWithContext(context.Background(), sbx, httpClient, policy)
+}
+
+func NewMCPManagerWithContext(ctx context.Context, sbx SandboxToolRegistrar, httpClient *http.Client, policy protocol.PolicyGate) *MCPManager {
 	if policy == nil {
 		panic("mcp_manager: policy gate not configured (fail-closed)")
 	}
@@ -102,7 +106,7 @@ func NewMCPManager(sbx SandboxToolRegistrar, httpClient *http.Client, policy pro
 		asyncTasks: newAsyncTaskCache(),
 		starting:   make(map[string]struct{}),
 	}
-	m.startAsyncTaskSweeper()
+	m.startAsyncTaskSweeper(ctx)
 	return m
 }
 

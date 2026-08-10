@@ -154,7 +154,8 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 			finishedAt = time.Now().UTC().Format(time.RFC3339)
 			// 更新 run 记录
-			if err := ca.AutomationRepo.UpdateRunStatus(ctx, runID, status, errMsg, time.Now().UTC().Format(time.RFC3339), 0); err != nil {
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, status, errMsg, time.Now().UTC().Format(time.RFC3339), 0); err != nil {
+
 				slog.Warn("automation: update run failed", "run", runID, "err", err)
 			}
 

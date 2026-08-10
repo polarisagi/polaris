@@ -25,18 +25,30 @@ import (
 //
 //	Phase1 停流 → Phase2 排干 → Phase3 刷盘 → Phase4 释放
 type Bootstrapper struct {
-	modules map[string]Bootable
-	deps    *DependencyMap
-	kmsKey  []byte // 内存级 KMS 密钥，Ignite 完成后立即清零
+	modules  map[string]Bootable
+	deps     *DependencyMap
+	kmsKey   []byte // 内存级 KMS 密钥，Ignite 完成后立即清零
+	rootCtx  context.Context
+	cancelFn context.CancelFunc
 }
 
 // NewBootstrapper 创建启动器。kmsKey 为可选主密钥（nil = 无 KMS）。
 func NewBootstrapper(kmsKey []byte) *Bootstrapper {
+	rootCtx, cancel := context.WithCancel(context.Background())
+	deps := NewDependencyMap()
+	deps.Register("RootContext", rootCtx)
 	return &Bootstrapper{
-		modules: make(map[string]Bootable),
-		deps:    NewDependencyMap(),
-		kmsKey:  kmsKey,
+		modules:  make(map[string]Bootable),
+		deps:     deps,
+		kmsKey:   kmsKey,
+		rootCtx:  rootCtx,
+		cancelFn: cancel,
 	}
+}
+
+// RootContext 返回由 Bootstrapper 统一管理的根生命周期 context。
+func (b *Bootstrapper) RootContext() context.Context {
+	return b.rootCtx
 }
 
 // RegisterModule 注册一个命名模块。同名模块后注册覆盖前者。
@@ -74,6 +86,9 @@ func (b *Bootstrapper) Ignite(ctx context.Context) error {
 
 	// 2. 按拓扑顺序初始化
 	for _, name := range order {
+		if err := ctx.Err(); err != nil {
+			return apperr.Wrap(apperr.CodeCancelled, "bootstrap: 启动被中断", err)
+		}
 		mod := b.modules[name]
 		if err := mod.Init(b.deps); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("bootstrap: module %s init failed", name), err)
@@ -105,6 +120,7 @@ func (b *Bootstrapper) ListenAndServe(ctx context.Context) {
 	case <-ctx.Done():
 	}
 
+	b.cancelFn() // 触发根 context 取消，下发通知到所有后台协程
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	b.gracefulShutdown(shutdownCtx)
