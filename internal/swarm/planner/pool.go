@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,6 +20,15 @@ type SandboxExecutor interface {
 	Execute(ctx context.Context, cmd string, args []string, workDir string, timeout time.Duration) ([]byte, error)
 }
 
+// WorkspaceStager 是 workerEngineA 落盘候选补丁供沙箱编译/测试所需的最小接口
+// （HE-3：接口在调用方定义，不反向依赖 internal/vfs 具体类型）。真实实现为
+// *vfs.WorkspaceManager.StageEphemeralFile——落盘目标纳入 WorkspaceManager 管辖
+// 的 rootDir 配额/GC 体系，而非裸 os.MkdirTemp/os.WriteFile 直接触碰宿主机
+// 系统级 /tmp（脱离 VFS 隔离边界，见 workerEngineA 原 TODO(HE-3)）。
+type WorkspaceStager interface {
+	StageEphemeralFile(namespace, filename string, data []byte) (absPath string, cleanup func(), err error)
+}
+
 // PlannerPool 管理多个并发的思考流，并将最佳结果（通过耳语）汇报给主脑。
 type PlannerPool struct {
 	goal        string
@@ -28,7 +36,15 @@ type PlannerPool struct {
 	whisperChan chan<- protocol.MemoryWhisper // 结果返回通道
 	provider    protocol.Provider
 	sandbox     SandboxExecutor
+	workspace   WorkspaceStager
 	decomposer  *TaskDecomposer
+}
+
+// SetWorkspace 注入 WorkspaceStager（通常为 *vfs.WorkspaceManager），供
+// workerEngineA 落盘候选补丁到沙箱可执行的真实路径。未注入时 workerEngineA
+// 直接跳过编译评分（返回零分工作结果），不再回退到裸文件系统调用。
+func (p *PlannerPool) SetWorkspace(ws WorkspaceStager) {
+	p.workspace = ws
 }
 
 // NewPlannerPool 创建 PlannerPool。toolLookup 可传 nil（decomposer 跳过白名单校验）。
@@ -75,11 +91,21 @@ func (p *PlannerPool) Run(ctx context.Context) {
 		close(resultChan)
 	})
 
-	// 收集所有结果，选得分最高的推送
+	// 收集所有结果，选得分最高的推送。
+	// 不能用零值 workerResult{} 做初始 best 再靠 `res.score > best.score` 筛选——
+	// workerEngineA 在 p.sandbox 未注入（compileScore 恒为 0.0）等场景下，所有
+	// worker 的 score 都等于零值 best.score，`0.0 > 0.0` 恒假，导致合法的
+	// （score=0 但 content 非空的）结果被整体静默丢弃，best.content 全程保持
+	// ""，最终 whisper 完全不推送。用 hasResult 标记首个结果，之后按分数择优。
 	var best workerResult
+	hasResult := false
 	for res := range resultChan {
-		if res.score > best.score {
+		if res.content == "" {
+			continue
+		}
+		if !hasResult || res.score > best.score {
 			best = res
+			hasResult = true
 		}
 	}
 
@@ -95,8 +121,6 @@ func (p *PlannerPool) Run(ctx context.Context) {
 	}
 }
 
-// TODO(HE-3): 直接操作本地文件系统（os.MkdirTemp, os.WriteFile）破坏了沙盒边界，
-// 需重构注入 WorkspaceManager 依赖隔离物理资源访问。
 func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultChan chan<- workerResult) {
 	if p.provider == nil {
 		return
@@ -127,24 +151,26 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	}
 	patchStr := resp.Content
 
-	// 减少对宿主机当前目录的依赖
-	wd := os.TempDir()
+	if p.workspace == nil {
+		// 未注入 WorkspaceStager（如 boot_agent.go 未接线 vfs.WorkspaceManager 的
+		// 测试/降级场景）：不再回退到裸 os.MkdirTemp/os.WriteFile 触碰宿主机系统级
+		// /tmp，直接跳过编译评分。
+		return
+	}
 
-	tmpDir, err := os.MkdirTemp("", "planner-pool-*")
+	namespace := fmt.Sprintf("planner-pool-worker-%d", workerID)
+	testFile, cleanup, err := p.workspace.StageEphemeralFile(namespace, "patch_gen.go", []byte(patchStr))
 	if err != nil {
 		return
 	}
-	defer os.RemoveAll(tmpDir)
+	defer cleanup()
 
-	// 严格验证路径以防逃逸
-	if !strings.HasPrefix(filepath.Clean(tmpDir), filepath.Clean(os.TempDir())) {
-		return
-	}
-
-	testFile := filepath.Join(tmpDir, "patch_gen.go")
-	if err := os.WriteFile(testFile, []byte(patchStr), 0600); err != nil {
-		return
-	}
+	// go build/test 的目标目录取落盘文件的父目录（WorkspaceManager rootDir 下
+	// 的真实路径），沙箱工作目录同取该目录——两者此前分别为 tmpDir（构建目标）
+	// 与 os.TempDir()（sandbox workDir），落盘迁移到 WorkspaceManager 后统一为
+	// 同一目录，语义不变（sandbox.Execute 仍以 "go build <dir>" 形式指定目标）。
+	tmpDir := filepath.Dir(testFile)
+	wd := tmpDir
 
 	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel1()
