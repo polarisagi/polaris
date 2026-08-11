@@ -126,7 +126,7 @@
   "internal/observability/metrics/instruments.go": "faa96e1cedbb8c46771a0435671995f785b78a3a65ebbec48add49f200f64186",
   "internal/observability/metrics/instruments_init.go": "53a617230c4d375b5cf9cc59a312e6204ddaf03371f8ccbf5c82bbd969fca86b",
   "internal/observability/metrics/instruments_test.go": "c2b31088f899be0c0ee614bae3360aaaffdf755004028c6127ced032ab221260",
-  "internal/observability/metrics/metrics.go": "2425872e9d24acba868bba0454f60119097893aa77b0b6bba1bc807875ce9235",
+  "internal/observability/metrics/metrics.go": "6501d14c8fd0289afd52176204ad95021749873d7c9599847ffb5eb3cce59b1f",
   "internal/observability/metrics/metrics_handler.go": "83f0d7a064d80bc922b7bc2ce3221140f6ecbfa82cf0bb42d001f8d96c32f16a",
   "internal/observability/metrics/metrics_surprise.go": "5022ddee7d6f2c5757aa7ea81c32ef5322624415dc3859682d18640206239a0c",
   "internal/observability/metrics/metrics_test.go": "519a62b54cf37fdacca8bfdeaa8dfe90b01c2be4b7d2c03a7d8fdb9e0ae3eb48",

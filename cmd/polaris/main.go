@@ -64,6 +64,8 @@ func run() error { //nolint:gocyclo
 			return runCSVFanoutCmd(os.Args[2:])
 		case "allowlist":
 			return runAllowlistCmd(os.Args[2:])
+		case "release-key":
+			return runReleaseKeyCmd(os.Args[2:])
 		case "skill":
 			return runSkillCmd(os.Args[2:])
 		case "eval":

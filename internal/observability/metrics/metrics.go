@@ -46,12 +46,28 @@ var (
 	// GlobalReplanExtActivationDegradedTotal S_REPLAN 阶段扩展激活重试耗尽后降级的累计次数（A-3）。
 	GlobalReplanExtActivationDegradedTotal atomic.Int64
 
-	// GlobalUpdaterWeakTrustVerifyTotal 自动更新在"弱信任模式"下完成校验的累计次数：
-	// 校验值（<archive>.sha256）无法从 GitHub 直连取得而降级到镜像。此时归档与校验值
-	// 可能来自同一镜像，SHA-256 只能防传输损坏、不能防供应链替换。
-	// 该计数长期非零即说明该部署的更新链路缺少可信锚点，应优先接入非对称签名
-	// （见 ADR-0095）。写入点：internal/sysmgr/updater.verifyChecksum。
+	// ── 自动更新供应链可观测（ADR-0095）──────────────────────────────────────
+	// 四个计数共同刻画"本次更新的信任强度"，写入点均在
+	// internal/sysmgr/updater.anchorChecksumTrust。
+
+	// GlobalUpdaterWeakTrustVerifyTotal 在"弱信任模式"下完成校验的累计次数：
+	// 签名未开通 **且** 校验值降级到镜像取得。此时归档与校验值可能来自同一镜像，
+	// SHA-256 只能防传输损坏、不能防供应链替换。签名开通后该计数恒不再增长。
 	GlobalUpdaterWeakTrustVerifyTotal atomic.Int64
+
+	// GlobalUpdaterSigningNotProvisionedTotal 因内嵌信任根为空（releasekeys/ 无公钥）
+	// 而跳过验签的累计次数。非零 = 该二进制构建时发布签名尚未开通，属"功能未开通"
+	// 而非降级；开通流程见 internal/sysmgr/updater/releasekeys/README.md。
+	GlobalUpdaterSigningNotProvisionedTotal atomic.Int64
+
+	// GlobalUpdaterSignatureVerifiedTotal 校验值签名验证通过的累计次数。
+	// 此状态下校验值取自镜像亦安全——镜像伪造不出内嵌公钥的签名。
+	GlobalUpdaterSignatureVerifiedTotal atomic.Int64
+
+	// GlobalUpdaterSignatureRejectedTotal 因签名缺失或验签失败而拒绝安装的累计次数。
+	// **非零必须当安全事件排查**：可能是发布流水线未产出签名，也可能是中间人剥离
+	// .sig 试图把客户端降级回纯 checksum 模式（signature stripping）。
+	GlobalUpdaterSignatureRejectedTotal atomic.Int64
 
 	// GlobalTraceExporterErrorsTotal SpanExporter.ExportSpan 失败的累计次数（ADR-0069）。
 	// trace.Tracer.EndSpan 异步导出失败时写入；导出是尽力而为语义，失败不影响主链路，

@@ -67,6 +67,12 @@ type Manager struct {
 	restartFn    func()
 	executableFn func() (string, error)
 	exitFn       func(int)
+
+	// releaseKeys 本 Manager 使用的发布签名信任根，New 时从内嵌公钥集快照。
+	// 做成字段而非直接读全局，是为了让"签名已开通"这条 fail-closed 路径可测——
+	// 全局 trustStore 是 sync.OnceValue，求值后改不回去，测试无法构造已开通状态。
+	// 空切片 = 签名未开通，见 anchorChecksumTrust。
+	releaseKeys []releaseKey
 }
 
 // New 创建 Manager。currentVersion / commitHash / buildDate 由 main.Version 等 ldflags 变量传入。
@@ -76,6 +82,7 @@ func New(currentVersion, commitHash, buildDate string, client *http.Client) *Man
 		commitHash:   commitHash,
 		buildDate:    buildDate,
 		client:       client,
+		releaseKeys:  trustStore(),
 		executableFn: os.Executable,
 		exitFn: func(code int) {
 			slog.Warn("updater: restart requested, exiting", "code", code)
@@ -263,9 +270,14 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 		return
 	}
 
-	// ── 安全校验：下载 checksums.txt 并验证 SHA-256 ──────────────────────────
-	// checksums.txt 直接从 GitHub 下载（不走 ghproxy），锚定信任链。
-	// 即使二进制来自镜像代理，校验值仍以 GitHub 为准，防御被篡改的镜像。
+	// ── 安全校验：取 <archive>.sha256（及其签名）并验证归档 SHA-256 ───────────
+	// 信任锚点的建立见 verifyChecksum → anchorChecksumTrust：签名已开通时用内嵌
+	// 公钥验签，此时校验值取自镜像亦安全；未开通时退回纯 checksum 并告警。
+	//
+	// 2026-08-10 订正：此处原注释写「checksums.txt 直接从 GitHub 下载（不走
+	// ghproxy），锚定信任链。即使二进制来自镜像代理，校验值仍以 GitHub 为准」
+	// ——与 verifyChecksum 的实际行为（走 downloader.CandidateURLs，含镜像）矛盾。
+	// 同一处失真在 verifyChecksum 的函数注释上也有一份，两处已一并订正（ADR-0095）。
 	m.setStatus(StatusVerifying)
 	if err := m.verifyChecksum(ctx, version, archiveName, archivePath); err != nil {
 		slog.Error("updater: checksum verification failed", "err", err)
