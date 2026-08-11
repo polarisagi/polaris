@@ -100,3 +100,15 @@ repomix-output.xml
 pkg/swarm/orchestrator/test_fanout_out.csv
 internal/execute/orchestrator/test_fanout_out.csv
 docs/research/
+
+# ── 私钥防误提交（ADR-0095 决策二）────────────────────────────────────────────
+# cosign generate-key-pair 会在当前目录产出 cosign.key（加密私钥）。发布私钥只应
+# 存在于 GitHub Secrets，绝不入库。这里是最后一道防线——正确做法是在仓库外的临时
+# 目录生成密钥，上传 Secret 后立即安全删除（macOS: rm -P）。
+#
+# 注意 releasekeys/*.pem 是**公钥**，必须入库（客户端内嵌信任根），故不在此忽略；
+# 下面只挡私钥常见文件名。
+cosign.key
+*.key
+!internal/protocol/schema/*.key
+signing-key*
