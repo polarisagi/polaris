@@ -119,7 +119,7 @@ docs-refs:
 # 看见一次，而不是悄悄成为永久状态。
 # 致命组合（有公钥无私钥）只有 CI 判得出，故本目标恒不 fail 构建。
 release-signing-status:
-	@env GOOS= GOARCH= $(GO) run tools/release_signing_gate.go > /dev/null
+	@env GOOS= GOARCH= $(GO) run tools/release_signing_gate.go -report-only > /dev/null
 
 # 重新生成 docs/*.md 里 BEGIN/END GENERATED 标记之间的内容（从代码机械提取的罗列型
 # 内容，如路由清单），写回文件。见 tools/docs_gen.go 头部说明（P4-A，docs-optimization-plan.md）。
