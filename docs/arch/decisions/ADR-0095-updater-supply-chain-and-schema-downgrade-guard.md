@@ -109,6 +109,8 @@ cosign v3 正朝 bundle + 透明日志 + keyless 演进，而本项目要的恰�
 **停用签名同理不能直接删 Secret**：客户端二进制里仍内嵌公钥、仍 fail-closed，删 Secret 会让流水线发出不带签名的包而客户端全部拒装。须先移除公钥并发一个过渡版本。
 
 - 操作手册：`internal/sysmgr/updater/releasekeys/README.md`
+- 一键脚本：`scripts/release-signing.sh`（`init` / `rotate` / `status` / `verify` / `retire`）。**`rotate` 用 git 状态把「先推公钥、后换 Secret」做成硬约束**——这条顺序写在文档里指望人记得是不够的：密钥操作一年做不了几次，等到真要做时细节早忘光，而那恰恰是最不能出错的时刻。`retire` 刻意不代做删 Secret 那一步，只讲清为什么不能跳过前置。
+- **密钥不随发版轮换**：一把密钥签所有 release，流水线自动完成。只有泄漏、数年一次的卫生轮换或算法迁移才需要 rotate。
 - **反例守护**：`TestVerifyReleaseSignature/轮换期新旧公钥并存_两者均通过`
 
 ### 运维自检入口

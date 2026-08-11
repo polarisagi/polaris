@@ -11,6 +11,7 @@
 | `restart.sh` | 本地开发机 | **开发联调热启**：停止本地旧进程 → 重新构建前/后端代码 → 在 `28889` 开发测试端口启动程序。附加 `--full` 参数可强制重编底层 Rust FFI。 |
 | `ci_test.sh` | CI 环境 | **全链路自动化测试**：由 GitHub Actions 自动触发，执行 Lint 检查、Go/Rust 单测及基准测试。 |
 | `constitutional_review.sh`| CI 环境 | **AI 宪法审查**：PR 提交时触发，调用 LLM 严格依据 `CLAUDE.md` 架构准则对 Diff 代码进行违例拦截与审查。 |
+| `release-signing.sh` | 维护者本机 | **发布签名密钥管理**（ADR-0095）：`init` 开通 / `rotate` 轮换 / `status` 查看 / `verify` 离线验签 / `retire` 停用。**密钥不随发版轮换**——一把密钥签所有 release，流水线自动完成。脚本不含任何秘密（它生成密钥并推进 GitHub Secrets），私钥从不落进仓库。 |
 
 ---
 

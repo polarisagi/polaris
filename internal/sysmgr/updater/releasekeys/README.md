@@ -28,7 +28,30 @@ openssl**。理由见 `signer.go` 头部：cosign v3 已移除分离式签名路
 放行，只能从镜像取得时**拒绝安装**（无任何可用锚点）。开通签名后镜像路径重新
 可用且安全。
 
-## 开通（一次性，需要仓库管理员执行）
+## 密钥不需要每次发版轮换
+
+**一把密钥签所有 release。** 生成一次之后，每个 `v*` tag 由流水线自动用同一把
+私钥签名，无需任何人工介入。只有下列情形才需要 `rotate`：
+
+- 私钥可能泄漏（误提交、CI 日志泄露、人员交接）
+- 长期卫生轮换（数年一次即可）
+- 算法迁移
+
+## 一键脚本（推荐）
+
+```bash
+scripts/release-signing.sh init                  # 首次开通
+scripts/release-signing.sh status                # 查看当前状态
+scripts/release-signing.sh rotate                # 轮换（强制「先推公钥后换 Secret」）
+scripts/release-signing.sh verify <文件> <签名>   # 离线验签
+scripts/release-signing.sh retire                # 停用（含防锁死前置检查）
+```
+
+脚本把下面的手工步骤连同前置检查、公私钥配对校验、端到端自检、私钥安全删除
+（`trap` 覆盖中断路径）一并做掉。**脚本本身不含任何秘密**——它生成密钥并推进
+GitHub Secrets，私钥从不落进仓库，故随仓库入库。
+
+## 手工步骤（脚本的等价展开，供理解与应急）
 
 ```bash
 # 1. 生成 ECDSA P-256 私钥（未加密 PKCS#8）与公钥。在仓库外的目录做。
