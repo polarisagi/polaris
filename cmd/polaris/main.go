@@ -66,6 +66,10 @@ func run() error { //nolint:gocyclo
 			return runAllowlistCmd(os.Args[2:])
 		case "release-key":
 			return runReleaseKeyCmd(os.Args[2:])
+		case "unseal":
+			return runUnsealCmd(os.Args[2:])
+		case "seal-status":
+			return runSealStatusCmd()
 		case "skill":
 			return runSkillCmd(os.Args[2:])
 		case "eval":
