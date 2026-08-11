@@ -11,7 +11,7 @@ import (
 // 为什么这段逻辑在 Go 里而不是写在 release.yml 的 shell 里：
 //
 // 签名是**两侧协议**——流水线负责产出 .sig，客户端负责验 .sig，两侧对"现在是否
-// 该有签名"的判断必须永远一致。如果流水线用 shell 里的 `[ -n "$COSIGN_PRIVATE_KEY" ]`
+// 该有签名"的判断必须永远一致。如果流水线用 shell 里的 `[ -n "$POLARIS_RELEASE_PRIVATE_KEY" ]`
 // 自己判一套，客户端用 `len(m.releaseKeys) == 0` 判另一套，两套判断迟早漂移，
 // 而漂移的表现是"发出去的包客户端装不上"——最贵的一类故障。
 //
@@ -85,12 +85,12 @@ func (s SigningState) Explain(trustedKeyCount int) string {
 		return fmt.Sprintf("发布签名已开通：内嵌 %d 个可信公钥，流水线持有私钥。"+
 			"本次将签名并对照已提交的公钥自验。", trustedKeyCount)
 	case SigningBroken:
-		return fmt.Sprintf("**致命**：仓库已内嵌 %d 个可信公钥，但流水线取不到 COSIGN_PRIVATE_KEY。\n"+
+		return fmt.Sprintf("**致命**：仓库已内嵌 %d 个可信公钥，但流水线取不到 POLARIS_RELEASE_PRIVATE_KEY。\n"+
 			"客户端在内嵌公钥后即转为 fail-closed（取不到 .sig 一律拒装，防签名剥离），"+
 			"因此这次若发出不带签名的 release，**每一个已升级的客户端都将无法安装**，"+
 			"而流水线本身不会有任何报错。\n"+
 			"处置二选一：\n"+
-			"  (a) 配置 COSIGN_PRIVATE_KEY / COSIGN_PASSWORD Secret（推荐）。\n"+
+			"  (a) 配置 POLARIS_RELEASE_PRIVATE_KEY Secret（推荐）。\n"+
 			"      轮换密钥的正确顺序是【先提交新公钥进 releasekeys/，再把 Secret 换成新私钥】——\n"+
 			"      新旧公钥并存期间两把私钥签的都验得过；反序（先换 Secret 后提交公钥）会让\n"+
 			"      自验找不到匹配的已提交公钥而中止发布。\n"+

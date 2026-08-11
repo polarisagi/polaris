@@ -66,10 +66,10 @@ func TestResolveSigningState(t *testing.T) {
 func TestSigningBrokenExplainIsActionable(t *testing.T) {
 	msg := SigningBroken.Explain(1)
 	for _, want := range []string{
-		"COSIGN_PRIVATE_KEY", // 根因
-		"fail-closed",        // 为什么会炸
-		"无法安装",               // 后果
-		"(a)", "(b)",         // 两条处置路径
+		"POLARIS_RELEASE_PRIVATE_KEY", // 根因
+		"fail-closed",                 // 为什么会炸
+		"无法安装",                        // 后果
+		"(a)", "(b)",                  // 两条处置路径
 		"锁死", // 对"直接删公钥"这一错误直觉的预先拦截
 	} {
 		if !strings.Contains(msg, want) {

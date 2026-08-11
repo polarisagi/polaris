@@ -44,8 +44,23 @@ keyless 免去长期私钥管理，代价是客户端离线验证需要 `sigstor
 
 当前 polaris 是 111 个模块 / 31.4 MB，接入 keyless 后约 479 个模块 / 45 MB。**用"为修供应链问题而新增 368 个未审计的传递依赖"来换"免去一把私钥的管理"，在本项目上是净负收益**——[Tier-0-Limit] 要求 2GB VPS 可运行，依赖表也是刻意精简的（对照 `M06 §2` 技能加载同样明确选择"本地离线签名，非 cosign"）。
 
-固定密钥方案：ECDSA P-256，私钥只存在于 GitHub Secrets（`COSIGN_PRIVATE_KEY` / `COSIGN_PASSWORD`），签名由流水线的 `cosign sign-blob` 完成；公钥集内嵌在二进制（`internal/sysmgr/updater/releasekeys/*.pem`），验证走 Go 标准库，**零新增依赖**。签名格式与 cosign 完全兼容，用户可用 `cosign verify-blob --key cosign.pub` 独立自验，不被本实现绑架。
+固定密钥方案：ECDSA P-256 / SHA-256 / ASN.1 DER，私钥（未加密 PKCS#8）只存在于 GitHub Secrets（`POLARIS_RELEASE_PRIVATE_KEY`）；公钥集内嵌在二进制（`internal/sysmgr/updater/releasekeys/*.pem`）。**签名与验签均由 Go 标准库完成，零新增依赖，且不依赖任何外部签名工具**。
 
+### 为什么签名侧也不用 cosign / openssl（2026-08-11 实测推翻原方案）
+
+原方案是流水线跑 `cosign sign-blob --output-signature`。落地前用真实 cosign 验证时发现这条路已经不通：
+
+| 工具 | 实测结果（cosign v3.1.3 / OpenSSL 3 homebrew） |
+|---|---|
+| `cosign sign-blob --output-signature` | **报错中止**：`must specify --bundle with --new-bundle-format`。`--output-signature` 与 `--new-bundle-format` 双双标记废弃，后者提示"未来唯一格式" |
+| `cosign verify-blob --signature` | 废弃，且默认查 Rekor；`--insecure-ignore-tlog` 下报 `Invalid IEEE_P1363 encoded bytes`——期望 P1363(r‖s) 而非 ASN.1 DER，**签名字节格式也换了** |
+| `openssl dgst -sign`（加密 PKCS#8 私钥） | `-passin pass:` / `env:` 均被忽略而去开控制台读口令（provider 缺陷）。同一脚本在不同 openssl 构建上表现不同 |
+
+cosign v3 正朝 bundle + 透明日志 + keyless 演进，而本项目要的恰恰是它在弃用的那条路（离线、分离式、无 Rekor）。跟着它的弃用节奏走等于给发布流水线绑一颗定时炸弹；openssl 的 provider 差异放进 CI 则是不可复现的失败。
+
+而所需原语只是 ECDSA-P256-SHA256 + DER —— 一个 40 年历史的标准，Go 标准库直接支持，跨平台一致、可单测。改由 `tools/release_sign.go` 完成签名后：流水线少一个 cosign 安装步骤、脱离弃用跑步机、格式由自己的单测锁死。用户仍可用纯 openssl 独立核验（验签只用公钥，不触发上述加密私钥缺陷）。
+
+- **反例守护**：`signer_test.go` `TestSignVerifyRoundTrip` 锁死签名侧与验签侧的格式对齐——两侧分别由流水线与客户端执行，隔着一次发布才碰面，格式对不上的后果是"发出去的包所有客户端都装不上"且要等真发版才暴露。
 - **重新评估触发条件**：Go 生态出现一个不拖 100+ 传递依赖的 sigstore 验证库；或本项目已因其他原因引入同等量级依赖，使边际成本归零。
 
 ### 开通状态是四象限，不是开关
@@ -54,7 +69,7 @@ keyless 免去长期私钥管理，代价是客户端离线验证需要 `sigstor
 
 | 公钥 | 私钥 | 状态 | 流水线 | 客户端 |
 |---|---|---|---|---|
-| 无 | 无 | `disabled` | 跳过签名 + `::warning::` | 退回纯 checksum + Warn + `signing_not_provisioned` 指标 |
+| 无 | 无 | `disabled` | 跳过签名 + `::warning::` | 退回锚点 B（GitHub 直连），仅镜像可达时拒装 |
 | 无 | 有 | `forward` | 签名（此刻无人验证，告警提示） | 同上 |
 | 有 | 有 | `enforced` | 签名 + 对照**已提交公钥**自验 | **fail-closed** |
 | 有 | 无 | `broken` | **中止发布** | fail-closed（会拒绝这次发布的包） |
@@ -98,7 +113,7 @@ keyless 免去长期私钥管理，代价是客户端离线验证需要 `sigstor
 
 ### 运维自检入口
 
-`polaris release-key show` 列出内嵌公钥指纹；`polaris release-key verify <文件> <签名>` 用**与 updater 完全相同的**内嵌公钥与验签代码离线校验手工下载的产物，无需安装 cosign。刻意不提供 `genkey`/`sign`：私钥处理留给 `cosign generate-key-pair` 与流水线，在客户端再实现一套只会多出一条可能泄漏私钥的代码路径。
+`polaris release-key show` 列出内嵌公钥指纹；`polaris release-key verify <文件> <签名>` 用**与 updater 完全相同的**内嵌公钥与验签代码离线校验手工下载的产物，无需安装 cosign。刻意不提供 `genkey`/`sign`：私钥处理留给 `openssl` 生成与流水线签名，在客户端再实现一套只会多出一条可能泄漏私钥的代码路径。
 
 > 不要因为"checksum 已经校验过了"就认为供应链问题已闭环——校验值本身的来源才是问题所在。
 

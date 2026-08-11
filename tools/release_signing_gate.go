@@ -3,7 +3,7 @@
 // release_signing_gate 供 .github/workflows/release.yml 判定本次发布的签名状态。
 //
 // 存在理由：签名是流水线与客户端的**双侧协议**，两侧对"现在是否该有签名"的判断
-// 必须永远一致。若流水线在 YAML 里用 shell 自己判一套（`[ -n "$COSIGN_PRIVATE_KEY" ]`）、
+// 必须永远一致。若流水线在 YAML 里用 shell 自己判一套（`[ -n "$POLARIS_RELEASE_PRIVATE_KEY" ]`）、
 // 客户端用 Go 判另一套，两套判断迟早漂移，而漂移的表现是"发出去的包客户端装不上"。
 // 本工具把判定权交还给 internal/sysmgr/updater：读同一个信任根、跑同一个函数。
 //
@@ -50,7 +50,7 @@ func main() {
 
 	// 私钥不经本进程之手，只判断 CI 是否拿得到它——避免多一条私钥可能被打印/
 	// 落盘的代码路径。签名动作本身仍由 cosign 完成。
-	hasPrivateKey := os.Getenv("COSIGN_PRIVATE_KEY") != ""
+	hasPrivateKey := os.Getenv("POLARIS_RELEASE_PRIVATE_KEY") != ""
 
 	state, keyCount, err := updater.ResolveSigningStateFromTrustStore(hasPrivateKey)
 	if err != nil && !*reportOnly {
@@ -60,7 +60,7 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"发布签名：已内嵌 %d 个公钥；本地无 COSIGN_PRIVATE_KEY（正常——发布私钥只存在于 GitHub Secrets）。\n"+
+			"发布签名：已内嵌 %d 个公钥；本地无 POLARIS_RELEASE_PRIVATE_KEY（正常——发布私钥只存在于 GitHub Secrets）。\n"+
 				"实际签名状态由 release 流水线判定。\n", keyCount)
 		fmt.Printf("state=%s\nshould_sign=false\nkey_count=%d\n", state, keyCount)
 		return

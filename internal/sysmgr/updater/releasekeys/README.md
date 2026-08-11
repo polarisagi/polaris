@@ -1,38 +1,64 @@
 # Release 签名公钥信任根
 
-本目录内的 `*.pem` 文件是 **发布产物签名的可信公钥集**，随二进制一起编译进程序
+本目录内的 `*.pem` 是 **发布产物签名的可信公钥集**，随二进制编译进程序
 （`internal/sysmgr/updater/signature.go` 的 `//go:embed`）。
 
 决策与理由见 `docs/arch/decisions/ADR-0095-updater-supply-chain-and-schema-downgrade-guard.md`。
+
+## 密码学参数
+
+| 项 | 取值 |
+|---|---|
+| 算法 | ECDSA P-256 |
+| 摘要 | SHA-256 |
+| 签名编码 | ASN.1 DER，再 base64（`<archive>.sha256.sig` 的内容） |
+| 私钥格式 | 未加密 PKCS#8 或 SEC1 PEM |
+| 公钥格式 | SPKI PEM（本目录内的 `*.pem`） |
+
+签名与验签均由 Go 标准库完成（`signer.go` / `signature.go`），**不依赖 cosign 或
+openssl**。理由见 `signer.go` 头部：cosign v3 已移除分离式签名路径，openssl 3 的
+加密 PKCS#8 解码路径存在 provider 缺陷，二者都不适合作为发布流水线的地基；
+而 ECDSA-P256-SHA256/DER 是标准原语，Go 标准库直接支持。
 
 ## 当前状态
 
 **目录内暂无 `.pem` —— 签名尚未开通。**
 
-此状态下 updater 按"信任根未配置"处理：跳过验签、退回纯 checksum 校验，
-并在每次更新时打 Warn + 累加 `polaris_updater_signing_not_provisioned_total`。
-**这不是静默降级**，是"功能未开通"，且可观测。
+此状态下 updater 的信任锚点退回「GitHub 直连 TLS」：校验值取自 github.com 直连时
+放行，只能从镜像取得时**拒绝安装**（无任何可用锚点）。开通签名后镜像路径重新
+可用且安全。
 
 ## 开通（一次性，需要仓库管理员执行）
 
 ```bash
-# 1. 生成密钥对（私钥会用你输入的口令加密）
-cosign generate-key-pair
-#    产出 cosign.key（私钥，加密）+ cosign.pub（公钥，SPKI PEM）
+# 1. 生成 ECDSA P-256 私钥（未加密 PKCS#8）与公钥。在仓库外的目录做。
+mkdir -p ~/polaris-signing && cd ~/polaris-signing
+openssl ecparam -genkey -name prime256v1 -noout \
+  | openssl pkcs8 -topk8 -nocrypt -out release.key
+openssl pkey -in release.key -pubout -out release.pub
 
-# 2. 私钥与口令存进 GitHub Secrets，本地删除私钥
-gh secret set COSIGN_PRIVATE_KEY < cosign.key
-gh secret set COSIGN_PASSWORD          # 交互输入第 1 步的口令
-shred -u cosign.key                    # macOS: rm -P cosign.key
+# 2. 私钥存进 GitHub Secrets（仓库目录下执行，gh 会自动定位仓库）
+cd /path/to/polaris
+gh secret set POLARIS_RELEASE_PRIVATE_KEY < ~/polaris-signing/release.key
 
 # 3. 公钥落盘进本目录并提交
-cp cosign.pub internal/sysmgr/updater/releasekeys/release-2026.pem
-go test ./internal/sysmgr/updater/     # TestEmbeddedTrustStoreParses 校验格式
+cp ~/polaris-signing/release.pub internal/sysmgr/updater/releasekeys/release-2026.pem
+go test ./internal/sysmgr/updater/     # 校验公钥格式与签名/验签 round-trip
 git add internal/sysmgr/updater/releasekeys/release-2026.pem
+
+# 4. 立即安全删除本地私钥（macOS 用 rm -P，Linux 用 shred -u）
+rm -P ~/polaris-signing/release.key && rmdir ~/polaris-signing
 ```
 
-提交后**下一个 release 起自动签名，客户端自动转为 fail-closed 验签**——
-代码侧无需任何改动，信任根一非空就生效。
+提交后**下一个 `v*` tag 起自动签名，客户端自动转为 fail-closed 验签**——代码侧
+无需任何改动，信任根一非空就生效。
+
+### 私钥为何不加口令
+
+私钥只存在于 GitHub Secrets（静态加密、仅注入工作流进程）。再加一层口令意味着
+口令也得存进同一个 Secrets 库——能拿到其一的攻击者基本也拿得到其二，防御增益接近
+于零，却换来一整类「CI 读不到口令」的失败模式。口令真正的价值是保护**磁盘上的
+密钥副本**，而正确做法是生成后立即删除本地副本（上面第 4 步）。
 
 ## 轮换
 
@@ -45,11 +71,13 @@ git add internal/sysmgr/updater/releasekeys/release-2026.pem
    已提交公钥，发布中止。按正确顺序则全程无中断：并存期两把私钥签的都验得过。
 
 ```bash
-cosign generate-key-pair                                             # ① 生成新密钥对
-cp cosign.pub internal/sysmgr/updater/releasekeys/release-2027.pem   # ② 新公钥入库（旧的先别删）
+openssl ecparam -genkey -name prime256v1 -noout \
+  | openssl pkcs8 -topk8 -nocrypt -out release.key          # ① 新密钥对
+openssl pkey -in release.key -pubout -out release.pub
+cp release.pub internal/sysmgr/updater/releasekeys/release-2027.pem   # ② 新公钥入库（旧的先别删）
 git add internal/sysmgr/updater/releasekeys/release-2027.pem && git commit && git push
-gh secret set COSIGN_PRIVATE_KEY < cosign.key                        # ③ 再让 CI 改用新私钥
-shred -u cosign.key
+gh secret set POLARIS_RELEASE_PRIVATE_KEY < release.key      # ③ 再让 CI 改用新私钥
+rm -P release.key
 # ④ 发一个 release → 等绝大多数客户端升到含新公钥的版本 → 再删 release-2026.pem
 ```
 
@@ -60,6 +88,19 @@ shred -u cosign.key
 旧版本。正确做法是先从本目录移除公钥并发一个过渡版本，待客户端升级后再停签名。
 
 `tools/release_signing_gate.go` 会在 release 流水线里拦住这个组合并给出同样的提示。
+
+## 用户如何独立核验（不装任何专用工具）
+
+```bash
+# 方式一：用 polaris 自带命令（与 updater 用同一份内嵌公钥和验签代码）
+polaris release-key verify polaris-linux-amd64.tar.gz.sha256 \
+                           polaris-linux-amd64.tar.gz.sha256.sig
+
+# 方式二：纯 openssl（验签用的是公钥，不涉及加密私钥，无 provider 缺陷问题）
+base64 -d < polaris-linux-amd64.tar.gz.sha256.sig > sig.der
+openssl dgst -sha256 -verify release.pub -signature sig.der \
+             polaris-linux-amd64.tar.gz.sha256
+```
 
 ## 文件命名
 
