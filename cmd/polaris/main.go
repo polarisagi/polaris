@@ -159,19 +159,7 @@ func run() error { //nolint:gocyclo
 	if len(os.Args) > 2 && os.Args[1] == "eval" {
 		switch os.Args[2] {
 		case "--ci-gate":
-			slog.Info("polaris: running eval --ci-gate validation suite")
-			report, runErr := ab.EvalRunner.RunSuite(ctx, "validation", "ci")
-			if runErr != nil {
-				return apperr.Wrap(apperr.CodeInternal, "eval ci-gate execution failed", runErr)
-			}
-			if report.Status == "failed" {
-				return apperr.New(apperr.CodeInternal, fmt.Sprintf(
-					"eval ci-gate failed: pass=%d fail=%d safety_fail=%d",
-					report.PassCount, report.FailCount, report.SafetyFail,
-				))
-			}
-			slog.Info("polaris: eval ci-gate passed", "pass_count", report.PassCount)
-			return nil
+			return runEvalCIGate(ctx, ab)
 		case "bench":
 			return runEvalBenchCmdWithDeps(os.Args[3:], ab.EvalStore, ab.EvalRunner)
 		}
