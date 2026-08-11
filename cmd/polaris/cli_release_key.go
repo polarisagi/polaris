@@ -53,10 +53,10 @@ func printReleaseKeyHelp() {
   polaris release-key verify polaris-linux-amd64.tar.gz.sha256 \
                              polaris-linux-amd64.tar.gz.sha256.sig
 
-等价的 cosign 写法（需自行获取 cosign.pub）：
-  cosign verify-blob --key cosign.pub \
-    --signature polaris-linux-amd64.tar.gz.sha256.sig \
-    polaris-linux-amd64.tar.gz.sha256
+等价的纯 openssl 写法（需自行获取 release.pub）：
+  base64 -d < polaris-linux-amd64.tar.gz.sha256.sig > sig.der
+  openssl dgst -sha256 -verify release.pub -signature sig.der \
+               polaris-linux-amd64.tar.gz.sha256
 `)
 }
 
@@ -65,7 +65,7 @@ func runReleaseKeyShow() error {
 	if len(fps) == 0 {
 		fmt.Println("发布签名：未开通（本二进制内嵌信任根为空）")
 		fmt.Println()
-		fmt.Println("此状态下自动更新只做 SHA-256 校验，无法抵御被污染的镜像。")
+		fmt.Println("此状态下自动更新的信任锚点退回「GitHub 直连 TLS」：校验值只能从镜像取得时拒绝安装。")
 		fmt.Println("开通流程见 internal/sysmgr/updater/releasekeys/README.md")
 		return nil
 	}
@@ -75,7 +75,7 @@ func runReleaseKeyShow() error {
 	}
 	fmt.Println()
 	fmt.Println("指纹 = SHA-256(SPKI DER) 前 8 字节，可用系统工具交叉核对：")
-	fmt.Println("  openssl pkey -pubin -in cosign.pub -outform DER | sha256sum")
+	fmt.Println("  openssl pkey -pubin -in release.pub -outform DER | shasum -a 256")
 	return nil
 }
 
