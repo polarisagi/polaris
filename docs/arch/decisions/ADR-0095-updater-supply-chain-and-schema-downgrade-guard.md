@@ -9,14 +9,20 @@
 
 ## 决策一：checksum 降级到镜像必须显式、可观测
 
-`verifyChecksum` 优先直连 GitHub 取 `<archive>.sha256`；仅当直连完全不可达时降级到镜像候选节点。降级路径保留（中国大陆完全无法访问 GitHub 的部署不降级等于无法更新），但**必须**同时满足：
+**信任锚点必须独立于"从哪里下载"。** 归档可以来自任何镜像——它的完整性由校验值承接；真正需要独立锚定的是**校验值本身**。一旦校验值也从镜像取得，信任锚点就整体转移给镜像运营方，归档与校验值被同一方替换时 SHA-256 比对必然通过，"校验"退化成"自洽性检查"。
 
-1. 打 `slog.Error` 明示本次更新处于弱信任模式；
-2. 累加 `metrics.GlobalUpdaterWeakTrustVerifyTotal`。
+故 `anchorChecksumTrust` 要求校验值由以下两个锚点之一支撑，**二者皆无则拒绝安装**：
 
-**禁止**在注释里声称校验值以 GitHub 为权威而代码实际允许走镜像。
+| 锚点 | 强度 | 说明 |
+|---|---|---|
+| **A — 发布签名** | 强 | `.sha256.sig` 经内嵌公钥验签通过。独立于传输路径，校验值取自任何镜像都安全 |
+| **B — GitHub 直连 TLS** | 弱但可用 | 校验值取自 `CandidateURLs` 首元素（原始 github.com URL）。信任面含 CA 体系与 GitHub 自身，但不受镜像运营方控制 |
 
-- **反例守护**：本函数原注释写「checksums.txt 不走 ghproxy 代理：即使镜像被篡改，仍以 GitHub 的校验值为权威」，而代码用 `downloader.CandidateURLs`（含代理节点）取校验值。读注释的人会以为供应链信任锚点仍在 GitHub，实际上校验值与归档可能来自同一个被污染的镜像——此时 SHA-256 只证明"下到的和该镜像宣称的一致"，防篡改能力退化为防传输损坏，而没有任何日志或指标暴露这一事实。
+2026-08-11 收紧（此前是 Warn + 放行）：告警放行等于把一个无法证明来源的二进制装进用户机器，而 polaris 装完会自我替换并重启、且持有 LLM 凭据与工具执行能力。**「留了日志」不构成放行理由——没有人在更新成功时读日志。**
+
+- **代价边界**：GitHub 完全不可达（无代理的大陆网络）**且**签名未开通时，自动更新被拒，需手动下载。这不是遗漏而是刻意取舍——该场景下确实无法证明产物来源。开通签名即让这条路径重新可用**且更安全**（锚点 A 不依赖能否直连 GitHub）。
+- **禁止**在注释里声称校验值以 GitHub 为权威而代码实际允许走镜像。
+- **反例守护**：`checksum_trust_test.go` `TestAnchorChecksumTrust_AnchorB` / `_NoAnchorIsRejected` / `_SignatureRescuesMirrorPath`。原注释写「checksums.txt 不走 ghproxy 代理：即使镜像被篡改，仍以 GitHub 的校验值为权威」，而代码用 `downloader.CandidateURLs`（含代理节点）取校验值——读注释的人会以为信任锚点仍在 GitHub，实际上早已可整体落到镜像上。上述两锚点模型才真正兑现了那句话原本承诺的性质。
 - **门控**：注释与代码的一致性无法机械判定，靠本 ADR + 代码内追记锚定。指标非零可在运维侧告警。
 
 ## 决策二：非对称签名用 **cosign 固定密钥**，不用 keyless
@@ -76,6 +82,8 @@ keyless 免去长期私钥管理，代价是客户端离线验证需要 `sigstor
 签名已开通却取不到 `.sig` 时**拒绝安装**，不得回退到纯 checksum。否则"开通签名"这件事可以被网络侧单方面撤销：中间人只要丢掉 `.sig` 请求，客户端就自动降级回可被镜像伪造的模式，签名等于没做。
 
 - **反例守护**：`internal/sysmgr/updater/checksum_trust_test.go` `TestAnchorChecksumTrust_SignatureStrippedIsRejected`。后续重构若图省事写成"取不到 .sig 就跳过"，该用例立刻红。
+
+**该规则横向适用于全仓所有验签点**，不限于 updater。2026-08-11 按此规则复查了全部密钥/签名校验位置（capability_token / local_only allowlist / taint HMAC Unseal / skill Signer / 各 webhook HMAC），只查出一处同类缺陷：`internal/eval/founding_anchor.go` `VerifySignature` 原写作 `Signature == "" || pubKey == nil → true`——攻击者改完 fingerprint 再把 signature 字段删掉即可绕过篡改检测，而该校验的全部目的正是发现文件被改过。已收紧为"配了公钥就必须有签名"，回归防护见 `founding_anchor_test.go`。
 
 ### 密钥轮换：新旧公钥必须并存一段时间
 

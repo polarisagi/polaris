@@ -211,10 +211,26 @@ func LoadOrCreate(dataDir string, privKey ed25519.PrivateKey, trajectories []har
 	return anchor, true, nil
 }
 
-// VerifySignature 校验锚点签名。pubKey 为 nil 时开发模式放行。
+// VerifySignature 校验锚点签名。
+//
+// pubKey 为 nil = 未配置签名密钥（开发模式），无从校验，放行。
+//
+// pubKey 非 nil 时**签名缺失一律判失败**（2026-08-11 收紧）：此前写的是
+// `anchor.Signature == "" || pubKey == nil → true`，意味着攻击者只要把磁盘上锚点
+// 文件里的 signature 字段删掉，就能让校验直接放行——而校验的全部目的正是发现该
+// 文件被改过。这与 updater 侧的签名剥离（signature stripping）是同一类缺陷：
+// **一旦签名机制被启用，"没有签名"就必须等价于"签名错误"，否则该机制可被单方面
+// 撤销**（见 ADR-0095 决策二同名小节）。
+//
+// 收紧的副作用是可接受的：启用签名前创建的旧锚点会被判为失败 → 调用方
+// （cmd/polaris/boot_agent.go verifyOrDiscard）按"锚点尚未创建"降级 → 下一 tick
+// 重新创建并签名。不会 panic，也不会丢失可信数据。
 func VerifySignature(anchor *FoundingAnchor, pubKey ed25519.PublicKey) bool {
-	if anchor.Signature == "" || pubKey == nil {
+	if pubKey == nil {
 		return true
+	}
+	if anchor.Signature == "" {
+		return false
 	}
 	payload, err := json.Marshal(anchor.Fingerprint)
 	if err != nil {
