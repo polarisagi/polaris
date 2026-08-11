@@ -83,13 +83,52 @@ func (f *trustFixture) newManager(provisioned bool, sigBody []byte) *Manager {
 	return m
 }
 
-func TestAnchorChecksumTrust_SigningNotProvisioned(t *testing.T) {
+// TestAnchorChecksumTrust_AnchorB 签名未开通 + 校验值取自 GitHub 直连：
+// 锚点 B（TLS）成立，放行。这是绝大多数用户今天走的路径，必须保持可用。
+func TestAnchorChecksumTrust_AnchorB(t *testing.T) {
 	f := newTrustFixture(t)
-	// 信任根为空 = 签名未开通：必须放行（否则本特性一落地就卡死所有存量部署的
-	// 更新），且不去取 .sig（服务端根本没提供）。
 	m := f.newManager(false, nil)
 	if err := m.verifyChecksum(context.Background(), testVersion, testArchive, f.archivePath); err != nil {
-		t.Fatalf("签名未开通时应退回纯 checksum 校验并放行，实际: %v", err)
+		t.Fatalf("签名未开通但校验值取自 GitHub 直连时应放行（锚点 B），实际: %v", err)
+	}
+}
+
+// TestAnchorChecksumTrust_NoAnchorIsRejected 两个锚点都不成立时必须拒装。
+//
+// 这是 2026-08-11 收紧的核心：签名未开通 **且** 校验值只能从镜像取得时，归档与
+// 校验值可能出自同一个被污染的镜像，SHA-256 比对必然通过——"校验"退化成"自洽性
+// 检查"。此前是 Warn + 放行，等于把一个无法证明来源的二进制装进用户机器，而
+// polaris 装完会自我替换、重启、且持有 LLM 凭据与工具执行能力。
+func TestAnchorChecksumTrust_NoAnchorIsRejected(t *testing.T) {
+	f := newTrustFixture(t)
+	// 直接调 anchorChecksumTrust 并置 fromUpstream=false，而不是去 mock 一个
+	// "GitHub 不通、镜像通"的网络：候选节点顺序由 downloader 的代理探测决定，
+	// 在测试里复现那个环境既脆弱又与本函数要验的语义无关。fromUpstream 本身
+	// 就是"校验值是否取自直连"的完整表达。
+	m := f.newManager(false, nil)
+	err := m.anchorChecksumTrust(context.Background(), testVersion, testArchive, []byte(f.checksumDoc), false)
+	if err == nil {
+		t.Fatal("签名未开通且校验值只能取自镜像时必须拒绝安装——此时无任何可用信任锚点")
+	}
+	// 拒绝时必须告诉用户怎么办，否则只是把故障甩给用户。
+	for _, want := range []string{"镜像", "releasekeys/README.md", "手动下载"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("拒装错误信息缺少处置指引 %q，实际: %v", want, err)
+		}
+	}
+}
+
+// TestAnchorChecksumTrust_SignatureRescuesMirrorPath 签名开通后，镜像路径恢复可用。
+//
+// 这正是开通签名的产品价值：锚点 A 不依赖能否直连 GitHub，因此 GitHub 完全不可达
+// 的用户重新获得自动更新能力，**且比开通前更安全**（镜像伪造不出签名）。
+func TestAnchorChecksumTrust_SignatureRescuesMirrorPath(t *testing.T) {
+	f := newTrustFixture(t)
+	sig := signLikeCosign(t, f.priv, []byte(f.checksumDoc))
+	m := f.newManager(true, []byte(sig))
+	// fromUpstream=false：校验值取自镜像。有锚点 A 时这不再是问题。
+	if err := m.anchorChecksumTrust(context.Background(), testVersion, testArchive, []byte(f.checksumDoc), false); err != nil {
+		t.Fatalf("签名开通后镜像路径应恢复可用（锚点 A 与传输路径无关），实际: %v", err)
 	}
 }
 

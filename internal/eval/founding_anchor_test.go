@@ -107,6 +107,23 @@ func TestFoundingAnchor(t *testing.T) {
 			t.Errorf("expected verification to fail for tampered fingerprint")
 		}
 
+		// 2026-08-11 回归防护：签名被**剥离**（signature 字段清空）必须同样判失败。
+		// 此前 VerifySignature 写的是 `Signature == "" || pubKey == nil → true`，
+		// 攻击者改完 fingerprint 再把 signature 删掉即可绕过上面那条篡改检测——
+		// 校验的全部目的正是发现该文件被改过。与 updater 的 signature stripping
+		// 同类（ADR-0095 决策二）。
+		stripped := *anchor
+		stripped.Fingerprint.OutputLenP50 = anchor.Fingerprint.OutputLenP50 + 999
+		stripped.Signature = ""
+		if VerifySignature(&stripped, pub) {
+			t.Errorf("签名被剥离时必须判失败，否则「篡改内容 + 删签名」可完全绕过校验")
+		}
+
+		// pubKey 为 nil = 未配置签名密钥的开发模式，无从校验，放行。
+		if !VerifySignature(&stripped, nil) {
+			t.Errorf("未配置公钥时应放行（开发模式），不应因此阻断启动")
+		}
+
 		// 错误公钥同样必须校验失败。
 		wrongPub, _, _ := ed25519.GenerateKey(nil)
 		if VerifySignature(anchor, wrongPub) {

@@ -125,35 +125,56 @@ func (m *Manager) fetchReleaseAsset(ctx context.Context, rawURL, label string) (
 
 // anchorChecksumTrust 确立"校验值本身可信"这一前提，是整条更新链的信任锚点。
 //
-// 两种模式，取决于发布签名是否已开通（internal/sysmgr/updater/releasekeys/ 是否
-// 有公钥）：
+// # 信任锚点必须独立于"从哪里下载"
 //
-//   - **已开通（fail-closed）**：必须取到 <archive>.sha256.sig 且用内嵌公钥验签通过。
-//     验签成立后校验值来自哪个节点就无关紧要了——镜像伪造不出签名。这正是签名
-//     相对纯 checksum 的全部价值所在，也是本函数存在的理由。
-//   - **未开通**：退回纯 checksum。此时校验值取自镜像意味着信任锚点已转移到镜像
-//     运营方（归档大概率走同一镜像，两者被同一方替换时 SHA-256 比对必然通过），
-//     SHA-256 从「防篡改」退化为「防传输损坏」。不阻断更新——GitHub 完全不可达的
-//     环境不降级等于无法升级——但必须留 Error 级痕迹 + 指标，让"本次更新在弱信任
-//     模式下完成"可被审计。
+// 归档可以来自任何地方——它的完整性由校验值承接。真正需要独立锚定的是**校验值
+// 本身**：一旦校验值也从镜像取得，信任锚点就整体转移给了镜像运营方，归档与校验值
+// 被同一方替换时 SHA-256 比对必然通过，"校验"退化为"自洽性检查"。
 //
-// 2026-08-10 注：本函数原先只有第二种模式，且注释写的是「checksums.txt 不走
-// ghproxy 代理：即使镜像被篡改，仍以 GitHub 的校验值为权威」——与代码实际行为
-// （CandidateURLs 含代理节点）直接矛盾。读注释的人会以为信任锚点还在 GitHub，
-// 实际上早已可以整体落到镜像上。签名开通后该矛盾才真正消解。
+// 因此校验值必须由以下两个锚点之一支撑，二者皆无则**拒绝安装**：
+//
+//   - **锚点 A — 发布签名**（强）：<archive>.sha256.sig 经内嵌公钥验签通过。
+//     此锚点独立于传输路径，校验值取自任何镜像都安全——镜像没有私钥。
+//     这是签名相对纯 checksum 的全部价值所在。
+//   - **锚点 B — GitHub 直连 TLS**（弱但可用）：校验值取自 CandidateURLs 首元素
+//     （原始 github.com URL）。锚点是 GitHub 的证书与基础设施，虽不如 A 独立
+//     （信任面含 CA 体系与 GitHub 自身），但至少不受镜像运营方控制。
+//
+// # 为什么"两者皆无"必须拒装而非告警放行
+//
+// 2026-08-11 收紧（此前是 Warn + 放行）：告警放行等于把一个无法证明来源的二进制
+// 装进用户机器，而 polaris 装完会自我替换并重启、且持有 LLM 凭据与工具执行能力。
+// 「留了日志」不构成放行理由——没有人在更新成功时读日志。
+//
+// 代价边界：GitHub 完全不可达（无代理的大陆网络）且签名未开通时，自动更新会被
+// 拒绝，用户需手动下载。这不是遗漏而是刻意取舍——该场景下确实无法证明产物来源。
+// 开通发布签名即可让这条路径重新可用**且安全**（锚点 A 不依赖能否直连 GitHub），
+// 流程见 internal/sysmgr/updater/releasekeys/README.md。
+//
+// 2026-08-10 注：本函数原注释写的是「checksums.txt 不走 ghproxy 代理：即使镜像
+// 被篡改，仍以 GitHub 的校验值为权威」——与代码实际行为（CandidateURLs 含代理
+// 节点）直接矛盾。读注释的人会以为信任锚点还在 GitHub，实际上早已可以整体落到
+// 镜像上。上述两锚点模型才真正兑现了那句话原本承诺的性质。
 func (m *Manager) anchorChecksumTrust(ctx context.Context, version, archiveName string, checksumData []byte, fromUpstream bool) error {
 	if len(m.releaseKeys) == 0 {
-		slog.Warn("updater: 发布签名尚未开通（内嵌信任根为空），本次仅做 SHA-256 校验",
-			"archive", archiveName, "version", version,
-			"howto", "internal/sysmgr/updater/releasekeys/README.md")
 		metrics.GlobalUpdaterSigningNotProvisionedTotal.Add(1)
-		if !fromUpstream {
-			slog.Error("updater: 校验值取自镜像而非 GitHub 直连，本次更新处于弱信任模式"+
-				"（镜像若被污染，SHA-256 校验无法发现替换）",
-				"archive", archiveName, "version", version)
-			metrics.GlobalUpdaterWeakTrustVerifyTotal.Add(1)
+		if fromUpstream {
+			// 锚点 B 成立：校验值取自 github.com 直连，未经镜像之手。
+			slog.Warn("updater: 发布签名尚未开通，本次信任锚点为 GitHub 直连 TLS（弱于发布签名）",
+				"archive", archiveName, "version", version,
+				"howto", "internal/sysmgr/updater/releasekeys/README.md")
+			return nil
 		}
-		return nil
+		// 两个锚点都不成立 —— 无法证明该产物来自官方，拒绝安装。
+		metrics.GlobalUpdaterWeakTrustVerifyTotal.Add(1)
+		slog.Error("updater: 拒绝安装——无可用信任锚点",
+			"archive", archiveName, "version", version)
+		return apperr.New(apperr.CodeInternal,
+			"updater: 拒绝安装 "+archiveName+"：校验值只能取自镜像（GitHub 直连不可达），"+
+				"而本二进制未内嵌发布公钥，无法证明该产物来自官方。"+
+				"镜像同时提供归档与校验值时，SHA-256 比对必然通过，起不到防篡改作用。\n"+
+				"处置：(a) 让维护者开通发布签名（见 internal/sysmgr/updater/releasekeys/README.md），"+
+				"开通后经镜像更新亦安全；(b) 或从 GitHub Releases 手动下载并自行核对校验值。")
 	}
 
 	sigURL := fmt.Sprintf(
