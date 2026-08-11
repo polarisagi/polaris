@@ -174,6 +174,22 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 	layout.Migrate()
 
+	// ─── 0.35 日志初始化 ─────────────────────────────────────────────────────
+	//
+	// 位置紧跟数据目录就绪之后，**先于任何可能失败的启动步骤**。
+	//
+	// 2026-08-11 前移：原先排在 KillSwitch 检查之后。后果是任何在此之前失败的
+	// 启动路径都写不进日志文件——用户实际遭遇的正是这个：系统因 .fullstop 封存
+	// 拒绝启动，守护进程每 10s 重启一次，而 logs/ 下**根本没有 polaris.error.log**
+	// （lumberjack 在首次写入时才建文件，而 SetupLogger 压根没被执行到）。
+	// 启动失败恰恰是最需要日志的时刻，却是唯一拿不到日志的时刻。
+	//
+	// 前移的前提：SetupLogger 只依赖 dataDir，上面 MkdirAll 已保证目录存在。
+	logFile := observability.SetupLogger(dataDir)
+	logStore := server.NewLogStore(slog.Default().Handler(), 500)
+	slog.SetDefault(slog.New(logStore))
+	slog.Info("polaris: logger initialized", "data_dir", dataDir)
+
 	vault, err := credential.NewVaultInDir(dataDir)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "credential.NewVaultInDir", err)
@@ -214,21 +230,38 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	// ─── 0.35 KillSwitch ────────────────────────────────────────────────────
 	if security.IsFullStopFilePresent(dataDir) {
-		return nil, apperr.New(apperr.CodeInternal,
-			"system is sealed (.fullstop exists in "+dataDir+"); remove the file to restart")
+		// 报错必须带上封存现场。.fullstop 里存着 timestamp/reason/actor，而原实现
+		// 只说"remove the file to restart"——用户面对一个可能是几天前写下的封存，
+		// 既不知道发生过什么，也无从判断删掉安不安全，更不知道有 unseal 命令。
+		return nil, apperr.New(apperr.CodeInternal, security.DescribeSeal(dataDir))
 	}
 	ks := security.NewKillSwitch(dataDir, tbr)
+	// 性能漂移只告警，**不触发 KillSwitch**。
+	//
+	// 2026-08-11 修复：此处原本在 DriftLevelCritical（RelativeDrop >= 0.8）时直接
+	// 调 ks.ManualFullStop("performance_drift", ...)，越过 Stage 1/2 一步跳到最高档
+	// 封存。这违反 M11 §4.1 的 KillSwitch 三阶 FSM 触发条件表——Stage 3 FULLSTOP
+	// 的触发条件只有三项：「Stage 2 未在 15min 内审批 / 致命违规 / 管理员手动」，
+	// **性能漂移不在其中**。M11 对同类质量信号的一贯立场也是"超阈值告警不自动降级"
+	// （§2 Taint 统计监控）。
+	//
+	// 后果不是理论上的：一次漂移写下的 .fullstop 会让进程此后**永久拒绝启动**
+	// （封存态无过期），而守护进程每 10s 重启一次、每次都撞同一堵墙。用户实际
+	// 遭遇：8 天前的一次漂移把重装后的全新安装直接 brick 掉。
+	//
+	// 吞吐下降是质量问题，该由 M9 自进化环与告警渠道处理；把它升级成需要人工
+	// 解封的安全熔断，是拿一个"系统变慢了"的信号去执行"系统可能被攻陷了"的处置。
 	metrics.GlobalPerformanceDrift().RegisterListener(func(alert metrics.DriftAlert) {
-		slog.Warn("polaris: performance drift detected",
+		logDrift := slog.Warn
+		if alert.Level() == metrics.DriftLevelCritical {
+			logDrift = slog.Error
+		}
+		logDrift("polaris: performance drift detected",
 			"level", alert.Level(),
 			"current_rate", alert.CurrentRate,
 			"baseline_rate", alert.BaselineRate,
 			"relative_drop", alert.RelativeDrop,
 			"window_size", alert.WindowSize)
-		if alert.Level() == metrics.DriftLevelCritical {
-			slog.Error("polaris: critical performance drift! Triggering KillSwitch FullStop")
-			ks.ManualFullStop("performance_drift", "Critical performance drift detected")
-		}
 	})
 
 	ks.StateChangeCallback = func(newState types.KillState, _ string) {
@@ -237,11 +270,6 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 
 	promptMgr := prompt.NewManager(filepath.Join(cfgPath, ".."), configs.FS)
 
-	// ─── 0.4 日志初始化 ──────────────────────────────────────────────────────
-	logFile := observability.SetupLogger(dataDir)
-	logStore := server.NewLogStore(slog.Default().Handler(), 500)
-	slog.SetDefault(slog.New(logStore))
-	slog.Info("polaris: logger initialized", "data_dir", dataDir)
 	if autoConf != nil {
 		slog.Info("polaris: hardware probed",
 			"tier", autoConf.Config.Tier,

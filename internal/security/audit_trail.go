@@ -82,6 +82,23 @@ func (at *AuditTrail) Record(record *AuditRecord) error {
 	if record.Timestamp == 0 {
 		record.Timestamp = time.Now().UnixMicro()
 	}
+	// EventID 必须在算 hash **之前**补齐。
+	//
+	// 2026-08-11 修复：此前这段补齐逻辑写在下方持久化分支里（`if at.repo != nil`
+	// 内），即 **hash 先算、EventID 后填**，而落库存的是填完 EventID 的版本。
+	// 重启恢复时按存量记录重算 hash，自然对不上——于是
+	// `VerifyIntegrity` 报 "integrity check failed at index 0"，
+	// `RecoverOnStartup` 返回错误，`bootSubstrate` 直接中止启动。
+	//
+	// 后果不是边角情况：EventID 走自动生成是常规路径（调用方通常不自己指定），
+	// 且只在 at.repo != nil（生产）时触发——**只要有审计记录落库，下一次重启
+	// 必然失败**。用户实测：开发库里仅 1 条审计记录，重启即 brick。
+	//
+	// 凡是参与持久化的字段都必须在 hash 之前定型；hash 之后再改结构体，等于
+	// 存下一个自己验不过的记录。
+	if record.EventID == "" {
+		record.EventID = fmt.Sprintf("audit_%d", record.Timestamp)
+	}
 
 	data := serializeRecord(record)
 	hash := sha256.Sum256(data)
@@ -90,10 +107,6 @@ func (at *AuditTrail) Record(record *AuditRecord) error {
 	// 持久化到数据库
 	if at.repo != nil {
 		id := record.EventID
-		if id == "" {
-			id = fmt.Sprintf("audit_%d", record.Timestamp)
-			record.EventID = id
-		}
 		actor := record.AgentID
 		if actor == "" {
 			actor = "system"
@@ -118,33 +131,6 @@ func (at *AuditTrail) Record(record *AuditRecord) error {
 	at.records = append(at.records, record)
 	at.lastHash = record.RecordHash
 	return nil
-}
-
-// VerifyIntegrity 遍历 hash chain 验证完整性。
-// 发现断裂返回 (false, brokenIndex)；完整返回 (true, -1)。
-func (at *AuditTrail) VerifyIntegrity() (bool, int) {
-	at.mu.RLock()
-	defer at.mu.RUnlock()
-
-	for i, r := range at.records {
-		// 检查 PrevHash 链接
-		if i > 0 {
-			if r.PrevHash != at.records[i-1].RecordHash {
-				return false, i
-			}
-		} else if at.epochStartHash != "" {
-			if r.PrevHash != at.epochStartHash {
-				return false, 0
-			}
-		}
-		// 重算 RecordHash 校验数据未被篡改
-		data := serializeRecord(r)
-		hash := sha256.Sum256(data)
-		if hex.EncodeToString(hash[:]) != r.RecordHash {
-			return false, i
-		}
-	}
-	return true, -1
 }
 
 // RotateIfNeeded 当估算体积达到 100MB 时执行 Epoch 轮转。
@@ -297,9 +283,23 @@ func (at *AuditTrail) recoverFromDB() error {
 	}
 	at.mu.Unlock()
 
-	ok, idx := at.VerifyIntegrity()
-	if !ok {
-		return apperr.New(apperr.CodeInternal, fmt.Sprintf("audit: integrity check failed on DB recovery at index %d", idx))
+	at.mu.RLock()
+	idx, why := at.verifyIntegrityLocked()
+	total := len(at.records)
+	at.mu.RUnlock()
+	if idx >= 0 {
+		// 报错必须说清「哪一条、哪项检查、看到了什么」。原实现只有
+		// "integrity check failed on DB recovery at index 0"，运维拿到它既不知道
+		// 是链接断了还是内容被改，也不知道下一步该看什么——而这条错误会直接
+		// 中止启动，是最需要可诊断性的位置。
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf(
+			"audit: 审计链完整性校验失败，拒绝启动。\n"+
+				"  断裂位置: 第 %d 条（共恢复 %d 条）\n"+
+				"  失败原因: %s\n"+
+				"  审计事件存于 events 表 topic='audit.policy'。\n"+
+				"  这是 fail-closed 设计：审计链是安全事件的唯一事后凭据，"+
+				"带着一条已知断裂的链继续运行，等于让后续所有审计记录都失去证明力。",
+			idx, total, why))
 	}
 
 	return nil
