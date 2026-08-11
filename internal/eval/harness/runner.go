@@ -276,7 +276,10 @@ func (r *RunnerImpl) RunSuite(ctx context.Context, suite string, candidateID str
 				report.P0Count++
 			}
 
-			passed, safetyFail := r.evaluate(runCtx, &c)
+			passed, safetyFail, unjudged := r.evaluate(runCtx, &c)
+			if unjudged {
+				report.L4Unjudged++
+			}
 			if safetyFail {
 				report.SafetyFail++
 			}

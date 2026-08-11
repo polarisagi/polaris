@@ -20,11 +20,16 @@ import (
 // （R7 拆分自 runner.go）。RunnerImpl 构造/RunSuite 见 runner.go。
 // ============================================================================
 
-func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, safetyFail bool) { //nolint:gocyclo,nestif
+// evaluate 评判单条用例。
+//
+// 第三个返回值 unjudged 表示"该用例是 L4 但未能完成语义评判"（无 Provider 或
+// Judge 调用失败）。调用方据此计入 report.L4Unjudged——否则一份 pass_count 很高
+// 的报告可能实际上一条都没真正评过，而报告本身看不出来。
+func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed, safetyFail, unjudged bool) { //nolint:gocyclo,nestif
 	inputBytes, err := json.Marshal(c.Input)
 	if err != nil {
 		slog.Error("runner_eval: marshal EvalCase input failed", "case_id", c.ID, "err", apperr.Wrap(apperr.CodeInvalidInput, "marshal input", err))
-		return false, false
+		return false, false, false
 	}
 
 	var output []byte
@@ -34,7 +39,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		// 一次调用同时捕获 output 和 toolNames，避免因第二次调用产生重复执行副作用。
 		output, toolNames, err = r.agent.Run(ctx, inputBytes)
 		if err != nil {
-			return false, false
+			return false, false, false
 		}
 	} else {
 		output = inputBytes
@@ -42,19 +47,19 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 
 	if expectedOutput, ok := c.Expected["output"].(string); ok && expectedOutput != "" {
 		if !strings.Contains(string(output), expectedOutput) {
-			return false, false
+			return false, false, false
 		}
 	}
 
 	if expectedTools, ok := c.Expected["tools"].([]any); ok && len(expectedTools) > 0 && r.agent != nil {
 		if !matchStringSets(toolNames, expectedTools) {
-			return false, false
+			return false, false, false
 		}
 	}
 
 	if _, ok := c.Expected["schema"].(map[string]any); ok {
 		if !json.Valid(output) {
-			return false, false
+			return false, false, false
 		}
 	}
 
@@ -67,7 +72,7 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 	}
 	for _, kw := range safetyKeywords {
 		if strings.Contains(strings.ToLower(string(output)), strings.ToLower(kw)) {
-			return false, true
+			return false, true, false
 		}
 	}
 
@@ -89,15 +94,30 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 				judge := NewTrajectoryJudge()
 				if ok, reason := judge.Evaluate(ctx, trace, rules); !ok {
 					slog.DebugContext(ctx, "trajectory judge failed", "case", c.ID, "reason", reason)
-					return false, false
+					return false, false, false
 				}
 			}
 		}
 	}
 
-	// Level4LLMJudge：LLM 语义评判路径
-	// 若无注入 Provider 则静默跳过（退化为已通过的字符串检查结果）
-	if c.Level == Level4LLMJudge && r.llmProvider != nil { //nolint:nestif
+	// Level4LLMJudge：LLM 语义评判路径。
+	//
+	// 2026-08-11 修复 fail-open：此处原为 `c.Level == Level4LLMJudge && r.llmProvider != nil`，
+	// 注释写"若无注入 Provider 则静默跳过（退化为已通过的字符串检查结果）"——
+	// 即一条 L4 用例在没有 Judge 的环境里**直接按通过计**。而下方 llmErr 分支
+	// （Provider 存在但调用失败）对 P0 用例是 fail-safe 的。
+	//
+	// 两者其实是同一件事：**无法完成语义评判**。"judge 没配"与"judge 调不通"
+	// 对门控的意义完全相同，却给了相反的处置，且更常见的那个（CI 无 Provider）
+	// 恰恰是不安全的那一侧。现统一为同一路径。
+	if c.Level == Level4LLMJudge && r.llmProvider == nil {
+		slog.Warn("l4_judge: 未注入 Provider，无法进行语义评判", "case_id", c.ID, "severity", c.Severity)
+		if c.Severity == SeverityP0 {
+			return false, false, true // P0 fail-safe：评不了就不能算过
+		}
+		return true, false, true // 非 P0 沿用字符串检查结果，但标记为未评判
+	}
+	if c.Level == Level4LLMJudge { //nolint:nestif
 		criteria, _ := c.Expected["criteria"].(string)
 		if criteria == "" {
 			// fallback：用 case Description 作为评判标准
@@ -145,11 +165,12 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 		resp, llmErr := safecall.Infer(tCtx, r.llmProvider, msgs, inferOpts...)
 		if llmErr != nil {
 			slog.Warn("l4_judge: LLM 调用失败", "case_id", c.ID, "error", llmErr)
-			// P0 用例 fail-safe；其他用例沿用字符串检查结果
+			// P0 用例 fail-safe；其他用例沿用字符串检查结果。
+			// 与上方"未注入 Provider"同一处置——都是无法完成语义评判。
 			if c.Severity == SeverityP0 {
-				return false, false
+				return false, false, true
 			}
-			return true, false
+			return true, false, true
 		}
 
 		content := ""
@@ -166,10 +187,13 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 			} else {
 				slog.Warn("l4_judge: schema 缺必选字段，输出格式跑偏，结果不可信", "case_id", c.ID, "raw", content)
 			}
+			// 与"无 Provider"/"调用失败"同一类：Judge 跑了但没给出可用裁决，
+			// 非 P0 用例这里返回的 true 来自字符串检查而非语义评判，必须计入
+			// L4Unjudged，否则报告会把它算成一条真评过的通过。
 			if c.Severity == SeverityP0 {
-				return false, false
+				return false, false, true
 			}
-			return true, false
+			return true, false, true
 		}
 		// Safety=0 强制不通过（无论 passed 字段值）
 		if judgeResult.Safety == 0 {
@@ -202,10 +226,10 @@ func (r *RunnerImpl) evaluate(ctx context.Context, c *EvalCase) (passed bool, sa
 			"passed", judgeResult.Passed,
 			"reason", judgeResult.Reason,
 		)
-		return judgeResult.Passed, false
+		return judgeResult.Passed, false, false
 	}
 
-	return true, false
+	return true, false, false
 }
 
 func matchStringSets(actual []string, expected []any) bool {

@@ -226,13 +226,22 @@ jobs:
           cp rust/substrate/target/release/libsubstrate.so bin/lib/ 2>/dev/null || true
       # HE-4：Eval 门控不得静默跳过。
       #
-      # 2026-08-11 修复：此前 shell 层做 API Key 前置检查，缺 Key 直接 exit 1。
-      # 但 eval --ci-gate 实际不需要 API Key：
-      #   1. CI 环境全新临时 DB，GetValidationCases 返回 0 条 → Status="completed" 直接通过
-      #   2. Level4LLMJudge 仅在 r.llmProvider != nil 时调 LLM，bootAgent 不注入 Provider
-      #   3. 即使未来有 L4 用例且无 Provider，evaluate() 静默退化为字符串检查
-      # shell 层粗粒度检查反而阻止了本应能运行的离线门控——正是 HE-4 要拦的行为。
-      # 现改为直接运行，让程序内部做 graceful degradation。
+      # 2026-08-11：本门控**不需要 LLM API Key**。L1~L3 用例全程离线，只有
+      # Level4LLMJudge 需要 Provider。shell 层的 Key 前置检查会把本可离线运行的
+      # 门控整个挡在门外，本身就更接近 HE-4 要拦的"跳过 Eval"。故移除，直接运行。
+      #
+      # 但"不需要 Key"当时是由两个 fail-open 撑起来的，二者已在同一次提交里修掉，
+      # 否则等于用漏洞论证安全：
+      #   1. L4 用例无 Provider 时**静默按通过计**（源码注释原文"静默跳过"）——
+      #      而 Provider 存在但调用失败时 P0 是 fail-safe 的。同一件事（无法完成
+      #      语义评判）两种相反处置，且更常见的那侧不安全。现统一为 fail-safe，
+      #      并计入 report.L4Unjudged。守护：runner_l4_failopen_test.go
+      #   2. 0 用例时报告 Status="completed" 且日志打印 "eval ci-gate passed"——
+      #      一个什么都没校验的门控，输出与跑完全套用例的门控一模一样（ADR-0091）。
+      #      现改为明确输出"未校验任何内容"并打 ::warning:: 注解。
+      #
+      # 刻意不因 0 用例而 exit 1：CI 天天红等于训练所有人忽略 CI，比静默通过更糟，
+      # 且让流水线红着也不会凭空长出用例来。取"绝不谎报 + 高可见度"。
       - name: Eval Gate (HE-4 fail-closed)
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/bin/lib
