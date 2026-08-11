@@ -287,32 +287,41 @@ jobs:
       # 这直接消解了 mirror 降级问题：校验值即使取自 ghproxy 镜像也无法被伪造，
       # 因为镜像没有私钥。见 internal/sysmgr/updater/anchorChecksumTrust。
       #
-      # 未配置 COSIGN_PRIVATE_KEY 时**跳过而非失败**：签名开通是仓库管理员的
-      # 一次性动作（流程见 internal/sysmgr/updater/releasekeys/README.md），
-      # 在此之前 release 必须仍能正常发出，否则本改动会当场卡死发布流程。
-      # 客户端侧对应"信任根为空 → 退回 checksum 并告警"，两侧状态严格对齐。
+      # 状态判定不在此处写 shell，而是调用 tools/release_signing_gate.go：
+      # 签名是流水线与客户端的**双侧协议**，两侧对"现在是否该有签名"的判断必须
+      # 永远一致。若这里用 `[ -n "$COSIGN_PRIVATE_KEY" ]` 自判一套、客户端用
+      # Go 判另一套，两套迟早漂移，而漂移的表现是"发出去的包客户端装不上"。
+      # 现在两侧读同一个信任根（releasekeys/*.pem）、跑同一个函数
+      # （updater.ResolveSigningState，四象限见其文档注释与单测）。
+      #
+      # 四象限中三种放行、一种阻断：
+      #   无公钥无私钥 → 跳过签名（本特性落地初期的正常态，发布不受影响）
+      #   有私钥无公钥 → 签，但告警：此刻还没有客户端会验它
+      #   公钥私钥齐备 → 签 + 对照**已提交的公钥**自验
+      #   有公钥无私钥 → **阻断**：客户端已 fail-closed，此时发不带签名的 release
+      #                  会被每一个已升级客户端拒绝安装，而流水线本身全绿
       # ─────────────────────────────────────────────────────────────
-      - name: Check signing key availability
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Resolve release signing state
         id: signing
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-        run: |
-          if [ -n "$COSIGN_PRIVATE_KEY" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::未配置 COSIGN_PRIVATE_KEY，本次 release 不带签名。客户端将退回纯 SHA-256 校验（弱信任模式）。开通流程见 internal/sysmgr/updater/releasekeys/README.md"
-          fi
+        run: env GOOS= GOARCH= go run tools/release_signing_gate.go >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
-        if: steps.signing.outputs.enabled == 'true'
+        if: steps.signing.outputs.should_sign == 'true'
         uses: sigstore/cosign-installer@v3
 
       - name: Sign checksum files
-        if: steps.signing.outputs.enabled == 'true'
+        if: steps.signing.outputs.should_sign == 'true'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD:    ${{ secrets.COSIGN_PASSWORD }}
+          SIGNING_STATE:      ${{ steps.signing.outputs.state }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -328,13 +337,44 @@ jobs:
               "$f"
             echo "signed: $f -> $f.sig"
           done
-          # 自验一遍再发布：把公钥从私钥导出后本地 verify，确保发出去的签名
-          # 客户端一定验得过。签名产出后不自验，等于把验证成本推给用户。
-          cosign public-key --key env://COSIGN_PRIVATE_KEY > cosign.pub
-          for f in "${files[@]}"; do
-            cosign verify-blob --key cosign.pub --signature "$f.sig" "$f"
-          done
-          echo "全部签名已自验通过（${#files[@]} 个）"
+
+          # ── 自验：必须对照**仓库里已提交的公钥**，而不是从私钥导出的公钥 ──
+          #
+          # 用 `cosign public-key --key env://COSIGN_PRIVATE_KEY` 导出来验，只能
+          # 证明"签名与私钥匹配"——这在数学上恒成立，等于什么都没验。真正要回答的
+          # 问题是"客户端二进制里内嵌的那把公钥，验不验得过这个签名"。
+          # 两者在轮换场景下会分叉：Secret 换了新私钥而 releasekeys/ 还是旧公钥时，
+          # 前一种自验照样全绿，后一种当场报错——而客户端的遭遇与后者一致。
+          #
+          # 判定语义必须与客户端 verifyWithKeys 一致：**任一**已提交公钥验过即可，
+          # 不是每一把都要验过。轮换期 releasekeys/ 会同时存在新旧两把公钥，而
+          # 私钥只有一把——要求"每把都验过"会让轮换期的每次发布都失败。
+          if [ "$SIGNING_STATE" = "enforced" ]; then
+            pubkeys=(internal/sysmgr/updater/releasekeys/*.pem)
+            for f in "${files[@]}"; do
+              ok=false
+              for pub in "${pubkeys[@]}"; do
+                if cosign verify-blob --key "$pub" --signature "$f.sig" "$f" 2>/dev/null; then
+                  echo "verified: $f <- $(basename "$pub")"
+                  ok=true
+                  break
+                fi
+              done
+              if [ "$ok" = false ]; then
+                echo "::error title=签名自验失败::$f 的签名无法被 releasekeys/ 中任何一把已提交公钥验证。客户端内嵌的正是这些公钥，此包一旦发出，所有已升级客户端都将拒绝安装。最常见原因：Secret 里的私钥已轮换但新公钥尚未提交进 releasekeys/。"
+                exit 1
+              fi
+            done
+            echo "全部签名已对照已提交公钥自验通过（${#files[@]} 个产物 / ${#pubkeys[@]} 把公钥）"
+          else
+            # forward 态：仓库尚无公钥可对照，退而验证签名自洽（至少能拦住
+            # cosign 产出损坏文件这类低级故障）。
+            cosign public-key --key env://COSIGN_PRIVATE_KEY > /tmp/derived.pub
+            for f in "${files[@]}"; do
+              cosign verify-blob --key /tmp/derived.pub --signature "$f.sig" "$f"
+            done
+            echo "::warning::releasekeys/ 尚无公钥，本次仅做签名自洽性校验；提交 cosign.pub 后才会对照客户端信任根自验"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

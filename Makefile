@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode check-all
+.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
 
 GO := go
 CARGO := cargo
@@ -113,6 +113,14 @@ docs-lint:
 docs-refs:
 	@bash scripts/docs-refs.sh
 
+# 发布签名开通状态（ADR-0095 决策二）。
+# 本地跑只看得到「公钥侧」——私钥在 GitHub Secrets 里，四象限的完整判定发生在
+# release.yml。此处的价值是让"签名尚未开通"这个中间态在每次 check-all 时都被
+# 看见一次，而不是悄悄成为永久状态。
+# 致命组合（有公钥无私钥）只有 CI 判得出，故本目标恒不 fail 构建。
+release-signing-status:
+	@env GOOS= GOARCH= $(GO) run tools/release_signing_gate.go > /dev/null
+
 # 重新生成 docs/*.md 里 BEGIN/END GENERATED 标记之间的内容（从代码机械提取的罗列型
 # 内容，如路由清单），写回文件。见 tools/docs_gen.go 头部说明（P4-A，docs-optimization-plan.md）。
 docs-gen:
@@ -214,10 +222,11 @@ rust-deny:
 # check-all: 完整质量门禁（CI 用）
 # 顺序: fmt → lint → test → test-race → rust-lint → rust-test → rust-deny → deadcode
 #      → docs-check（§跳读行号）→ docs-lint（代码块禁令）→ docs-refs（失效路径引用）
+#      → release-signing-status（发布签名开通状态，只报不拦）
 #      → docs-gen-check（生成块与源一致性，2026-08-09 并入）
 #      → fuzz-taint / fuzz-skill（各 30s，2026-08-09 并入）
 #
 # 2026-08-09：fuzz-taint / fuzz-skill 此前只是可手动调用的 target，从未进入 CI。
 # 三个 fuzz 目标合计 90s，守的是 Taint 五级传播（HE-2 的密码学可验证边界）与
 # Skill 校验管线——正是最不该只靠人工偶尔想起来跑一次的两处。
-check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check fuzz-taint fuzz-skill
+check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check release-signing-status fuzz-taint fuzz-skill
