@@ -277,6 +277,65 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # ─────────────────────────────────────────────────────────────
+      # 供应链签名（ADR-0095 决策二）
+      #
+      # 签的是每个 <archive>.sha256 而非归档本身：客户端本来就要下载 .sha256，
+      # 签名让这个几十字节的文件变得可信，归档的完整性再由其中的 SHA-256 承接。
+      # 一次签名同时锚住"校验值"与"归档"，且客户端无需把整个归档喂给验签器。
+      #
+      # 这直接消解了 mirror 降级问题：校验值即使取自 ghproxy 镜像也无法被伪造，
+      # 因为镜像没有私钥。见 internal/sysmgr/updater/anchorChecksumTrust。
+      #
+      # 未配置 COSIGN_PRIVATE_KEY 时**跳过而非失败**：签名开通是仓库管理员的
+      # 一次性动作（流程见 internal/sysmgr/updater/releasekeys/README.md），
+      # 在此之前 release 必须仍能正常发出，否则本改动会当场卡死发布流程。
+      # 客户端侧对应"信任根为空 → 退回 checksum 并告警"，两侧状态严格对齐。
+      # ─────────────────────────────────────────────────────────────
+      - name: Check signing key availability
+        id: signing
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        run: |
+          if [ -n "$COSIGN_PRIVATE_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置 COSIGN_PRIVATE_KEY，本次 release 不带签名。客户端将退回纯 SHA-256 校验（弱信任模式）。开通流程见 internal/sysmgr/updater/releasekeys/README.md"
+          fi
+
+      - name: Install cosign
+        if: steps.signing.outputs.enabled == 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksum files
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD:    ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(artifacts/*.sha256)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::artifacts/ 下没有 .sha256 文件，package 阶段产物异常"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            cosign sign-blob --yes \
+              --key env://COSIGN_PRIVATE_KEY \
+              --output-signature "$f.sig" \
+              "$f"
+            echo "signed: $f -> $f.sig"
+          done
+          # 自验一遍再发布：把公钥从私钥导出后本地 verify，确保发出去的签名
+          # 客户端一定验得过。签名产出后不自验，等于把验证成本推给用户。
+          cosign public-key --key env://COSIGN_PRIVATE_KEY > cosign.pub
+          for f in "${files[@]}"; do
+            cosign verify-blob --key cosign.pub --signature "$f.sig" "$f"
+          done
+          echo "全部签名已自验通过（${#files[@]} 个）"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
