@@ -121,6 +121,12 @@ func TestManager_VerifyChecksum(t *testing.T) {
 	}
 
 	m := New("v1.0.0", "abc", "2024", client)
+	// 显式置空信任根：本用例的范围是"SHA-256 计算与比对是否正确"，写于发布签名
+	// 存在之前。New 现在会从 releasekeys/ 快照真实信任根，一旦仓库提交了公钥，
+	// 客户端即转 fail-closed 并要求 .sig，而本用例的 mock 不提供签名——
+	// 于是它会以"签名缺失"失败，掩盖掉它真正要测的东西。
+	// 签名相关的信任状态由 checksum_trust_test.go 专门覆盖。
+	m.releaseKeys = nil
 	err := m.verifyChecksum(context.Background(), "v1.7.6", "polaris-test.tar.gz", archivePath)
 	if err != nil {
 		t.Errorf("expected success, got %v", err)
