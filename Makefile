@@ -62,9 +62,57 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint: taint-check fsm-check policy-gate-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
+
+panic-check:
+	@echo "=== [F-12/E1] Framework panic ratchet gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/panic_lint.go
+
+nolint-check:
+	@echo "=== [F-11] Stale nolint:unused suppression gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/nolint_unused_lint.go
+
+todo-check:
+	@echo "=== [F-10] Active TODO inventory gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/todo_lint.go
+
+route-check:
+	@echo "=== [F-8a] HTTP Route coverage gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/route_coverage_check.go
+
+ffi-check:
+	@echo "=== [F-8b] Rust FFI symbol coverage gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/ffi_symbol_check.go
+
+rows-err-check:
+	@echo "=== [F-7] SQL rows.Err() ratchet gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/rows_err_lint.go
+
+must-check-error-check:
+	@echo "=== [F-6] Must-check-error gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/must_check_error_lint.go
+
+task-state-check:
+	@echo "=== [inv_M8_03] Task state transition gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/task_state_lint.go
+
+fsm-io-check:
+	@echo "=== [inv_FSM_B1] FSM Effects IO gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/fsm_io_lint.go
+
+taint-typed-fields-check:
+	@echo "=== [F-3] Taint typed fields gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/taint_typed_fields_check.go
+
+no-backdoor-check:
+	@echo "=== [inv_M7_01] Capability Token gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/no_backdoor_lint.go
+
+safe-dialer-check:
+	@echo "=== [inv_safe_dialer_01] Safe Dialer lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/safe_dialer_lint.go
 
 taint-check:
 	@echo "=== [GD-14-004] Taint propagation check ==="

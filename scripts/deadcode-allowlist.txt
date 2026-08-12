@@ -26,3 +26,51 @@ internal/ffi/llama.go: unreachable func: LlamaRerank # 门控假阳性，tier1 �
 # ── 已归档决策：刻意保留不接入 ──
 internal/security/taint/taint_sanitizer.go: unreachable func: SanitizeByDeterministicTransform # M11 §2.5 四降级器之一，ADR-0007 刻意保留不接入，ADR-0062 恢复
 internal/observability/trace/tracer.go: unreachable func: Tracer.RegisterExporter # ADR-0069，boot 期改走 SetDefaultExporters（NewTracer 自动附加），RegisterExporter 保留作为单 Tracer 实例的手动注册入口，2026-07-23 接入 boot 后复核仍为生产不可达
+
+# ── Rust Substrate C-FFI 导出符号（ADR-0011）──
+cedar_load_policies
+cedar_policy_count
+cedar_free_bytes
+vec_cosine_f32
+wasmtime_init
+wasmtime_pool_init
+wasmtime_execute
+wasmtime_free_bytes
+wasmtime_free_string
+wasmtime_ping
+llama_infer_load
+llama_infer_unload
+llama_infer_generate
+llama_infer_embed
+llama_infer_rerank
+llama_infer_evict_kv_cache
+llama_infer_free_string
+surreal_open
+surreal_purge
+surreal_stats
+surreal_free_string
+surreal_free_buf
+surreal_set_worker_threads
+surreal_kv_get
+surreal_kv_put
+surreal_kv_delete
+surreal_kv_scan
+surreal_fts_index
+surreal_fts_search
+surreal_fts_delete
+surreal_vec_upsert
+surreal_vec_knn
+surreal_vec_delete
+surreal_vec_set_mode
+surreal_graph_relate
+surreal_graph_delete_edges
+surreal_graph_spreading_activation
+native_sandbox_exec
+native_sandbox_exec_v2
+native_sandbox_probe_tools
+native_sandbox_free_string
+native_sandbox_wrap_argv
+llama_infer_status
+surreal_graph_traverse
+cedar_evaluate
+substrate_abi_version

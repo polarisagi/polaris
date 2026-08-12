@@ -12,7 +12,6 @@ import (
 // 从 cron_handlers.go 拆出（R7 文件行数治理，2026-07-07）：本文件收录"模板发现 +
 // Webhook 触发"两类与 /v1/automations CRUD 语义不同的入口，逻辑不变。
 
-//nolint:unused
 func (ca *CronAdmin) HandleListAutomationTemplates(w http.ResponseWriter, r *http.Request) {
 	filterSource := r.URL.Query().Get("source")
 	filterTag := r.URL.Query().Get("tag")

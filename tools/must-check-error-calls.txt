@@ -1,0 +1,13 @@
+# tools/must-check-error-calls.txt
+# 必须检查 error 返回值的关键函数方法匹配列表 (F-6)
+# 形式为 _ = funcCall(...) 或 _, _ = funcCall(...) 时必须报错。
+# 排除：defer 语句、_test.go 文件、testutil 包、Close()/Rollback()。
+
+.Put
+.Append
+.Exec
+.ExecContext
+.RunSuite
+.RunBenchmarkDataset
+filepath.EvalSymlinks
+os.WriteFile

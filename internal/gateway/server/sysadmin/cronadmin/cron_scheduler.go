@@ -70,8 +70,6 @@ func (ca *CronAdmin) StartCronRunner(ctx context.Context) {
 }
 
 // cronTick 扫描 next_run_at <= NOW() 的任务并触发执行。
-//
-//nolint:unused
 func (ca *CronAdmin) cronTick(ctx context.Context) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// GD-9-001 复核修复：改走 AutomationRepo.ListDueAutomations，不再由 Gateway
@@ -97,8 +95,6 @@ func (ca *CronAdmin) cronTick(ctx context.Context) {
 }
 
 // eventTick 处理内部事件触发的 automation (trigger_type='event' or 'both').
-//
-//nolint:unused
 func (ca *CronAdmin) eventTick(ctx context.Context) {
 	// GD-9-001 复核修复：提取当前增量事件 (since lastEventOffset)，改走
 	// EventRepo.ListEventsSince，不再由 Gateway 层直接拼接执行 SQL。
