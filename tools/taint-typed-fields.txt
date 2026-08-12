@@ -4,7 +4,15 @@
 #
 # 规则说明：在安全边界传递的敏感/不可信数据字段禁止退化为裸 string 或 []byte。
 # AST 工具 tools/taint_typed_fields_check.go 读取本表并断言每个字段的实际声明类型。
+#
+# 特殊期望类型 FORBIDDEN：语义反转为「该字段必须不存在」。用于那些"看起来很安全相关、
+# 实际由调用方自报"的字段——留着比没有更危险，因为它会诱导后来者拿它做安全判定。
 
 internal/protocol/codeact.go:CodeActResult.Output -> taint.TaintedString
 internal/agent/provider.go:CodeActResult.Output -> taint.TaintedString
 internal/agent/fsm/state_machine.go:StateContext.RawIntentTS -> taint.TaintedString
+
+# C-8：CodeActRequest 的污点等级字段由调用方（LLM tool-call / HTTP body）自报，
+# 全仓零读取点，沙箱执行侧硬编码 TaintHigh。2026-08-12 删除，禁止重新引入。
+internal/protocol/codeact.go:CodeActRequest.TaintLevel -> FORBIDDEN
+internal/agent/provider.go:CodeActRequest.TaintLevel -> FORBIDDEN

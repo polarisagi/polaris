@@ -1,42 +1,46 @@
 # tools/route-coverage-allowlist.txt
-# 明确前置条件未满足、暂未接入路由的 HTTP Handler 方法豁免白名单 (F-8a)
-# 格式：<文件相对路径>:<方法名> 或 <方法名>
+# F-8a 路由接线对账的存量基线（ADR-0088 存量债棘轮：只禁增量，不豁免新增）
+#
+# 格式：<方法名>   # <为何暂未接线>
+#
+# 【2026-08-12 审计】本文件上一版有 38 条无理由的裸方法名，逐条核对后：
+#   - 19 条对应的 handler **本来就已注册**（HandleModelUpgrade 等），放进来纯属噪声——
+#     它们哪天被摘掉路由，门控反而不会报，白名单成了回归的掩体；
+#   - 7 条对应的 handler **根本不存在**（HandleUpdatePrompt / HandleDeletePrompt /
+#     HandleListPromptVersions / HandleGetHistory / handleGetPrompt / handleSetPrompt /
+#     handleResetPrompt），是照着 server_routes.go 里的占位注释抄出来的；
+#   - 6 条对应「被注释挂起的路由注册」，那些注释指向的函数同样不存在，已直接删注释；
+#   - HandleVFSUpload 已接线——web/src/js/store/chat.js 一直在 POST /v1/workspace/upload，
+#     即前端上传功能长期 404，不是「前置条件未满足」。
+# 结论：真实存量为下方 18 条。教训同 deadcode-allowlist.txt——白名单只许逐条审计后
+# 收窄，禁止为了让门控转绿批量填充（ADR-0091）。
+#
+# 下方 18 条的共同状态：handler 实现完整、无路由、无生产调用方。接线各自需先定路径与
+# 鉴权档位（见 server_handlers_hitl.go 的敏感级讨论），不是一行注册能了结的，故挂账。
+# **新增 handler 不得往本文件里加**——要么接线，要么不写。
 
+# ── Provider 模型生命周期（缺 admin 鉴权档位判定）──
 HandleModelUpgrade
 HandleModelDeprecate
+
+# ── Agent Profile / App 管理（整组 CRUD 未接线，缺前端消费方）──
 HandleListAgentProfiles
 HandleListApps
 HandleGetApp
 HandleUpdateApp
 HandleDeleteApp
 HandleSetAppEnabled
-HandleCSVFanout
-HandleGetMMDCanvas
-HandleBenchmark
-HandleMCPNetworkApproval
+
+# ── 多 Agent 编排模式触发端点（M8，缺路径规划与并发配额判定）──
 HandlePatternDAGRun
 HandleMapReduceRun
 HandleParallelRun
 HandleSequentialRun
 HandleSwarmRun
 HandlePipelineRun
-HandleVFSUpload
-HandleGetPrompt
-HandleUpdatePrompt
-HandleDeletePrompt
-HandleListPromptVersions
-HandleGetHistory
-HandleListToolSchemas
-HandleCreateMCP
-HandleCreateSkill
-HandleCreatePlugin
-HandleCreateApp
-HandleOpenAIChat
-handleGetPrompt
-handleSetPrompt
-handleResetPrompt
-handleListToolSchemas
-handleCreateMCP
-handleCreatePlugin
-handleCreateApp
-handleOpenAIChat
+
+# ── 其余单点 ──
+HandleCSVFanout
+HandleGetMMDCanvas
+HandleBenchmark
+HandleMCPNetworkApproval
