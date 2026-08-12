@@ -265,6 +265,7 @@ Syscall 防逃逸: Go 堆缓冲区（严禁线性内存切片）→ 独立 gorou
 6. **Audit Trail**
 
 **`workspace_write(artifactID,data)->(int,error)`**:
+> 2026-08-12 复核：该工具目前未实现，以下内容为设计超前描述。
 1. **路径白名单校验**: 仅允许写入以下三类路径:
    - (a) `~/.polarisagi/polaris/workspace/<task_id>/`（M2 WorkspaceManager 托管目录）
    - (b) 经 `[Sandbox-L2]` 显式挂载的临时目录 `/tmp/sandbox/{skill_id}/`

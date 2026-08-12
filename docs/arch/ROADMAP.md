@@ -90,6 +90,26 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 
 永远不在计划。违反单机硬约束（单进程主体，禁独立进程 DB（Database，数据库），禁 sidecar）。
 
+### 原生多模态输入与 Computer Use（候选，来源 GD-14-002）
+
+前置条件（缺一不可）：
+1. Tier-0（2GB）实测：单帧图片经 protocol 事件流 → PromptBuilder → Provider 的
+   峰値内存与 token 开销；超限则本特性整体走硬件门控解锁（Tier1+），不得作硬依赖。
+2. Agent 侧文件产物管理链路就绪（见 M07 workspace_write 的实现状态）。
+3. Provider 能力探测：configs/defaults.toml 推荐的 DeepSeek V4 是否支持视觉输入，
+   不支持则需要按 role 分流到第二 Provider，这会牧动模型角色配置模型。
+
+2026-08-12 裁决：本轮不实施，理由见 local_playground/upgrade/07-GD设计条目裁决.md。
+
+### 沙箱内存快照（Freeze/Thaw）（候选，来源 GD-14-004）
+
+重新评估触发条件（任一满足即可重议）：
+- L4 长驻会话（SandboxPersistent）在生产中出现实测的唤醒延迟问题，且有 metric 佐证；
+- ADR-0086 的 Agent 层快照被证明不足以无损续跑（出现具体的续跑失败案例）。
+
+2026-08-12 裁决：本轮不实施。当前 L2 为一次性执行不驻留依赖，问题域仅覆盖 L4，
+而 L4 尚无唤醒延迟的实测数据。理由详见 local_playground/upgrade/07-GD设计条目裁决.md。
+
 ---
 
 ## 4. 工程纪律
