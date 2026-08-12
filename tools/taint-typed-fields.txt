@@ -1,0 +1,10 @@
+# tools/taint-typed-fields.txt
+# 跨模块/跨界承载不可信数据的结构体字段白名单与强类型强约束表 (F-3)
+# 格式：<文件相对路径>:<结构体名>.<字段名> -> <期望类型>
+#
+# 规则说明：在安全边界传递的敏感/不可信数据字段禁止退化为裸 string 或 []byte。
+# AST 工具 tools/taint_typed_fields_check.go 读取本表并断言每个字段的实际声明类型。
+
+internal/protocol/codeact.go:CodeActResult.Output -> taint.TaintedString
+internal/agent/provider.go:CodeActResult.Output -> taint.TaintedString
+internal/agent/fsm/state_machine.go:StateContext.RawIntentTS -> taint.TaintedString

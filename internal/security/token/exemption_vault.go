@@ -9,7 +9,7 @@ import (
 // TaintBlocked→HITL 审批→颁发豁免令牌 转义路径）。
 //
 // 2026-07-14 补齐：铸造点 automation/hitl.GatewayImpl.Respond 此前只有
-// `// TODO(Task 8): Insert token into vault or blackboard` 占位注释，令牌铸造后
+// 历史：`// TODO(Task 8): Insert token into vault or blackboard` 占位注释，令牌铸造后
 // 无处存放，下一次工具执行也无从查询——即便铸造成功，转义路径依然形同虚设。
 // 本 Vault 是该 TODO 的落地实现：进程级单例，按 AgentID 索引（一个 Agent 会话
 // 在同一时间只应有一个待处理的豁免上下文，覆盖写符合"最新审批结果生效"的直觉），

@@ -330,7 +330,9 @@ func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *provid
 	// 原计划的落地目标已不存在，遂一并清理。
 
 	if useCache && len(resp.ToolCalls) == 0 {
-		_ = ir.semanticCache.Put(ckey, resp.Content, resp.Model)
+		if cErr := ir.semanticCache.Put(ckey, resp.Content, resp.Model); cErr != nil {
+			slog.WarnContext(ctx, "router: semantic cache put failed", "key", ckey, "err", cErr)
+		}
 	}
 }
 

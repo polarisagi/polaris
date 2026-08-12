@@ -75,6 +75,9 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("get ws endpoint: %v", err), err)
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	if host != nil && host.SafeDialer() != nil {
+		dialer.NetDialContext = host.SafeDialer().DialContext // A-2：注入 SafeDialer，防 SSRF（inv_safe_dialer_01）
+	}
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dial: %v", err), err)

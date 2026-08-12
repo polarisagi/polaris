@@ -101,7 +101,9 @@ func truncateExecResult(sessionID string, raw []byte) []byte {
 	// 创建目录（best-effort，失败不阻断）
 	if err := os.MkdirAll(logDir, 0700); err == nil {
 		logPath := filepath.Join(logDir, logID+".txt")
-		_ = os.WriteFile(logPath, raw, 0600)
+		if wErr := os.WriteFile(logPath, raw, 0600); wErr != nil {
+			slog.Warn("agent_execute_result: write log file failed", "path", logPath, "err", wErr)
+		}
 	}
 
 	// 截取前 512 字节作为内联预览，其余引用 log_ref

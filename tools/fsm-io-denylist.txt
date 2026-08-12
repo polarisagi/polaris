@@ -1,0 +1,13 @@
+# tools/fsm-io-denylist.txt
+# FSM Effects 闭包内禁止包含的 IO 调用方法名称集合 (F-4)
+# 原因：Effects 函数在 FSM 持锁状态下执行，锁内执行 IO 必然导致死锁（B-1 案件）
+# 规则：禁止以下 IO 方法直接在 Effects 闭包内同步调用，除非在 concurrent.SafeGo 内异步发起。
+
+MatchIntent
+FindAndActivate
+Retrieve
+Search
+Query
+ExecContext
+Embed
+Rerank

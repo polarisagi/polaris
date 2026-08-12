@@ -51,12 +51,16 @@ func RunMattermostPoller(ctx context.Context, host PollerHost, channelID, mmURL,
 	}
 }
 
+//nolint:gocyclo // Mattermost WebSocket 协议交互与事件派发，多分支符合协议映射层结构
 func mattermostConnect(ctx context.Context, host PollerHost, channelID, mmURL, token, botUserID string, allowedUsers map[string]bool, cfg map[string]any) error {
 	wsURL := strings.Replace(mmURL, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	wsURL += "/api/v4/websocket"
 
 	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	if host != nil && host.SafeDialer() != nil {
+		dialer.NetDialContext = host.SafeDialer().DialContext // A-2：注入 SafeDialer，防 SSRF（inv_safe_dialer_01）
+	}
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mattermost: dial: %v", err), err)

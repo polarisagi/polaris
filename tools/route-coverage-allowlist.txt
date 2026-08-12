@@ -1,0 +1,42 @@
+# tools/route-coverage-allowlist.txt
+# 明确前置条件未满足、暂未接入路由的 HTTP Handler 方法豁免白名单 (F-8a)
+# 格式：<文件相对路径>:<方法名> 或 <方法名>
+
+HandleModelUpgrade
+HandleModelDeprecate
+HandleListAgentProfiles
+HandleListApps
+HandleGetApp
+HandleUpdateApp
+HandleDeleteApp
+HandleSetAppEnabled
+HandleCSVFanout
+HandleGetMMDCanvas
+HandleBenchmark
+HandleMCPNetworkApproval
+HandlePatternDAGRun
+HandleMapReduceRun
+HandleParallelRun
+HandleSequentialRun
+HandleSwarmRun
+HandlePipelineRun
+HandleVFSUpload
+HandleGetPrompt
+HandleUpdatePrompt
+HandleDeletePrompt
+HandleListPromptVersions
+HandleGetHistory
+HandleListToolSchemas
+HandleCreateMCP
+HandleCreateSkill
+HandleCreatePlugin
+HandleCreateApp
+HandleOpenAIChat
+handleGetPrompt
+handleSetPrompt
+handleResetPrompt
+handleListToolSchemas
+handleCreateMCP
+handleCreatePlugin
+handleCreateApp
+handleOpenAIChat
