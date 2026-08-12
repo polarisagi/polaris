@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -86,7 +87,7 @@ type
 // AgentController 供 gateway 调用的 Agent 控制接口（consumer-side）
 AgentController interface {
 	AgentID() string
-	SetTaskIntent(intent []byte)
+	SetTaskIntent(intent taint.TaintedString)
 	// SetSpawnDepth 注入本次执行继承的委派链深度（ADR-0084），供
 	// transfer_to_agent 投递子任务时据此计算 SpawnDepth+1。depth<=0 等同于
 	// 顶层任务（默认零值），与引入本机制前的行为一致。

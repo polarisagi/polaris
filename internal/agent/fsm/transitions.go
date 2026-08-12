@@ -410,14 +410,11 @@ func (sm *StateMachine) registerTransitions() {
 
 // trySystem1Bypass 尝试短路 LLM 思考，直接命中已有技能并组装成验证态（GD-13-004）
 func (sm *StateMachine) trySystem1Bypass(ctx context.Context, sCtx *StateContext) protocol.Effect {
-	if sm.skillMatcher == nil {
+	if !sCtx.HasPreMatch {
 		return nil
 	}
-	surpriseIndex := metrics.GlobalSurpriseIndex().Current()
-	if surpriseIndex >= 0.3 {
-		return nil
-	}
-	skillID, score, err := sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
+	// B-1：使用在 Dispatch 锁外提前预取的结果，防止锁内 IO 导致死锁（inv_FSM_B1）
+	skillID, score, err := sCtx.PreMatchSkillID, sCtx.PreMatchScore, sCtx.PreMatchErr
 	if err != nil || skillID == "" {
 		return nil
 	}

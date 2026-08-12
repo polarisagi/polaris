@@ -39,6 +39,9 @@ var (
 	// V2 函数指针（Go 侧唯一执行路径，CmdRunner 已全量迁移，不再绑定 V1 native_sandbox_exec）
 	nativeSandboxExecV2   func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxWrapArgv func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
+
+	// TODO(C-4): 遗留 V1 FFI 占位符，待后续调度层（Agent）接入
+	nativeSandboxExec func(cmd uintptr, args uintptr, workdir uintptr, outJSON *uintptr, outErr *uintptr) int32
 )
 
 func bindNativeSandbox() error {
@@ -55,6 +58,7 @@ func bindNativeSandbox() error {
 			defer func() { recover() }() //nolint:errcheck
 			purego.RegisterLibFunc(&nativeSandboxExecV2, lib, "native_sandbox_exec_v2")
 			purego.RegisterLibFunc(&nativeSandboxWrapArgv, lib, "native_sandbox_wrap_argv")
+			purego.RegisterLibFunc(&nativeSandboxExec, lib, "native_sandbox_exec") // TODO(C-4)
 		}()
 	})
 	return nativeErr

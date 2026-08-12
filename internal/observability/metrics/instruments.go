@@ -52,6 +52,7 @@ var (
 
 	// [F-09] Retrieval Explain Bits
 	InstrRetrievalExplainBitsTotal metric.Int64Counter
+	InstrRetrievalLatencyMs        metric.Float64Histogram // 记录检索各阶段延迟（D-2）
 
 	// [GR-1-003] M10 Rerank 可观测性：RAG 链路中最耗时的重排步骤此前完全无埋点。
 	InstrRerankLatencyMs  metric.Float64Histogram // Rerank 单次调用耗时（ms）

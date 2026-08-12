@@ -62,6 +62,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/preferences", s.sysadminHandler.HandleGetPreferences)
 	mux.HandleFunc("PUT /v1/preferences/{key}", s.sysadminHandler.HandleSetPreference)
 
+	// TODO(C-1): 路由待接入——前置条件未满足:
+	// 1. PromptRepository 接入 handler.Dependencies
+	// 2. 权限模型确认：sysadmin-only or agent-allowed
+	// 校验日期: 2026-08-12
 	// 提示词管理 API（三层所有权：Layer 1 用户自定义层，读写 ~/.polarisagi/polaris/config/prompts/）
 	// Layer 0（embedded 内置默认）和 Layer 2（M9 优化）不通过此 API 暴露
 	// mux.HandleFunc("...", s.xx.HandleListPromptVersions)
@@ -92,8 +96,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)
 	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.AudioService.HandleAudioSpeech)
 
+	// TODO(C-3): 路由待接入——前置条件未满足:
+	// 1. 明确上传文件的 VFS 命名空间和配额限制
+	// 2. 接口是否需限制文件类型
+	// 2026-08-12 取证加记
 	// VFS 通用文件上传
-	// mux.HandleFunc("...", s.xx.HandleUpload)
+	// mux.HandleFunc("...", s.xx.HandleVFSUpload)
 
 	// 全文搜索 API（FTS5）
 	mux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch)

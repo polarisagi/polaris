@@ -1,4 +1,5 @@
 // Package bootstrap 实现 Polaris 模块生命周期统一编排。
+// 【注】当前生产环境暂未接线，本包作为目标编排契约予以保留（详见 ADR-0088）。
 // 设计来源：参照 polaris-agent internal/bootstrap/（Bootable + DependencyMap + Kahn 拓扑排序）。
 //
 // 核心思路：
@@ -11,7 +12,10 @@
 //   - 在 Init 完成前调用模块的业务方法
 package bootstrap
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // ─── 依赖注入 ──────────────────────────────────────────────────────────────────
 
@@ -36,13 +40,13 @@ func (m *DependencyMap) Get(name string) any {
 	return m.deps[name]
 }
 
-// MustGet 取依赖，不存在 panic（用于确认性断言）。
-func (m *DependencyMap) MustGet(name string) any {
+// MustGetE 取依赖，不存在返回 error（用于确认性断言）。
+func (m *DependencyMap) MustGetE(name string) (any, error) {
 	v, ok := m.deps[name]
 	if !ok {
-		panic("bootstrap: missing required dependency: " + name)
+		return nil, fmt.Errorf("bootstrap: missing required dependency: %s", name)
 	}
-	return v
+	return v, nil
 }
 
 // ─── 生命周期契约 ──────────────────────────────────────────────────────────────

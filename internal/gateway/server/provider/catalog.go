@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/polaris/pkg/types"
 
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -290,6 +291,7 @@ func (h *ProviderHandler) fetchCatalogModels(ctx context.Context, catalogID stri
 	for mrows.Next() {
 		var cm catalogModelRow
 		if err := mrows.Scan(&cm.modelID, &cm.displayName, &cm.recommendedRole); err != nil {
+			slog.WarnContext(ctx, "provider catalog: scan model row failed", "err", err)
 			continue
 		}
 		if cm.recommendedRole == "general" {
@@ -297,6 +299,8 @@ func (h *ProviderHandler) fetchCatalogModels(ctx context.Context, catalogID stri
 		}
 		catalogModels = append(catalogModels, cm)
 	}
-	_ = mrows.Close()
+	if err := mrows.Err(); err != nil {
+		return nil, false, apperr.Wrap(apperr.CodeInternal, "Server.fetchCatalogModels rows error", err)
+	}
 	return catalogModels, hasGeneral, nil
 }

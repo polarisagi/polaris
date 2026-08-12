@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/action/codeact"
@@ -106,7 +107,7 @@ type agentInvokerAdapter struct {
 }
 
 func (a *agentInvokerAdapter) InvokeAgent(ctx context.Context, intent string, opts ...any) (string, error) {
-	a.agent.SetTaskIntent([]byte(intent))
+	a.agent.SetTaskIntent(taint.NewTaintedString(string(intent), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
 	err := a.agent.SendIntent(types.TriggerIntentReceived)
 	return a.agent.AgentID(), err
 }

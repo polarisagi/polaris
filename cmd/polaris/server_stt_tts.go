@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/llm/stt"
 	"github.com/polarisagi/polaris/internal/llm/tts"
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -80,11 +81,11 @@ func initSTTEngine(ctx context.Context, s *server.Server, dataDir string, gate *
 //   - "edge"    → EdgeProvider（Microsoft Edge TTS WebSocket，无需下载，立即可用）
 //   - "http"    → HTTPProvider（外部 sidecar，如 CosyVoice 2 / Qwen3-TTS）
 //   - ""/"sherpa" → SherpaProvider（sherpa-onnx 本地 Kokoro，异步下载后激活）
-func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, httpClient *http.Client, ttsConfig config.TTSConfig) {
+func initTTSEngine(ctx context.Context, s *server.Server, dataDir string, gate *probe.FeatureGate, httpClient *http.Client, ttsConfig config.TTSConfig, safeDialer *network.SafeDialer) {
 	switch ttsConfig.Provider {
 	case "edge":
 		// Edge TTS：免费、无需下载、立即激活，不受 FeatureGate 门控（无内存开销）
-		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice)
+		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice, safeDialer)
 		s.SetTTSProvider(&ttsAdapter{inner: p})
 		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice)
 		return

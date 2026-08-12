@@ -91,7 +91,7 @@ func TestHandleUpgradePlugin_FailureDoesNotClearInstallPath(t *testing.T) {
 	h := &PluginHandler{
 		DB:                   db,
 		ExtRepo:              repo.NewSQLiteExtensionRepository(db),
-		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil),
+		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil, nil),
 		ClearToolSchemaCache: func() {},
 	}
 
@@ -141,7 +141,7 @@ func TestHandleUpgradePlugin_AlreadyUpToDate(t *testing.T) {
 	h := &PluginHandler{
 		DB:                   db,
 		ExtRepo:              repo.NewSQLiteExtensionRepository(db),
-		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil),
+		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil, nil),
 		ClearToolSchemaCache: func() {},
 	}
 
@@ -187,7 +187,7 @@ func TestHandleUpgradePlugin_Success(t *testing.T) {
 	h := &PluginHandler{
 		DB:                   db,
 		ExtRepo:              repo.NewSQLiteExtensionRepository(db),
-		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil),
+		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil, nil),
 		ClearToolSchemaCache: func() {},
 	}
 
@@ -240,7 +240,7 @@ func TestHandleUpgradePlugin_SkillPlugin_FileSyncFailure_PreservesInstallPath(t 
 	h := &PluginHandler{
 		DB:                   db,
 		ExtRepo:              repo.NewSQLiteExtensionRepository(db),
-		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil),
+		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil, nil),
 		ClearToolSchemaCache: func() {},
 		DataDir:              t.TempDir(),
 	}

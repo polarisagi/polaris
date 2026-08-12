@@ -11,7 +11,6 @@ import (
 	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/observability/probe"
-	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"context"
 	"database/sql"
@@ -157,7 +156,6 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		// 相对进程 CWD（而非 dataDir）解析路径；同一 Dependencies 结构体的其他字段
 		// 早已能拿到 s.dataDir，此处透传而非发明新配置源。
 		ContextRefExpander: authcontext.NewContextRefExpander(httpClient, authcontext.WithWorkDir(s.dataDir)),
-		TaintTracker:       taint.NewTaintTracker(), // [W-2-C] 接入 TaintTracker
 	})
 	s.sysadminHandler = sysadmin.NewSysAdminHandler(sysadmin.Dependencies{
 		SystemRepo:     s.systemRepo,

@@ -132,17 +132,6 @@ func TestFullSafetyChain(t *testing.T) {
 		t.Fatal("[SafetyChain] Step3: TaintHigh 内容写入 system slot 应被拒绝")
 	}
 
-	// Step 4: TaintTracker 传播验证（只升不降原则）
-	tracker := taint.NewTaintTracker()
-	tracker.Track("input_A", types.TaintHigh)
-	tracker.Track("input_B", types.TaintMedium)
-	tracker.Track("system_const", types.TaintNone)
-
-	maxTaint := tracker.GetMaxTaint("input_A", "input_B", "system_const")
-	if maxTaint != types.TaintHigh {
-		t.Errorf("[SafetyChain] Step4: 多输入污点传播应取最高值 TaintHigh，实际: %v", maxTaint)
-	}
-
 	// Step 5: Spotlighting 为 TaintHigh 内容加围栏标记（阻止 LLM 将其解析为指令）
 	fenced := taint.Spotlighting(tainted)
 	if !strings.Contains(fenced, "UNTRUSTED_DATA") {

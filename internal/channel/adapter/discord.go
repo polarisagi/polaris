@@ -114,6 +114,9 @@ func DiscordConnect( //nolint:gocyclo
 	cfg map[string]any,
 ) (canResume bool, newSessionID, newResumeURL string, finalSeq int64) {
 	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	if host != nil && host.SafeDialer() != nil {
+		dialer.NetDialContext = host.SafeDialer().DialContext // A-2：注入 SafeDialer，防 SSRF
+	}
 	conn, _, err := dialer.DialContext(ctx, gatewayURL, nil)
 	if err != nil {
 		slog.Warn("discord: dial failed", "channel", channelID, "err", err)

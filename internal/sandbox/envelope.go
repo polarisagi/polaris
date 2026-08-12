@@ -114,7 +114,15 @@ func (e *ExecEnvelope) PersistentSandboxAvailable() bool {
 	return e.router != nil && e.router.PersistentAvailable()
 }
 
+// RequiresCapabilityToken 返回该工具是否必须持有效能力令牌（inv_M7_01）。
+// CapReadOnly 之上（CapWriteLocal / CapWriteNetwork / CapPrivileged）一律要求；
+// 只读豁免理由：read_file/glob/grep 等大量内置只读工具不带 token，直接改会全线红。
+//
 //nolint:gocyclo
+func RequiresCapabilityToken(c types.CapabilityLevel) bool {
+	return c > types.CapReadOnly
+}
+
 func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResult, error) {
 	start := time.Now()
 
@@ -176,7 +184,7 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 	}
 
 	// Step 3: Capability Token（Privileged 强制；走 boot 注入的统一校验，语义同 tool.go）
-	if req.Tool.Capability >= types.CapPrivileged {
+	if RequiresCapabilityToken(req.Tool.Capability) {
 		if req.CapToken == nil || e.tokenVerifier == nil || e.tokenVerifier.Verify(req.CapToken) != nil {
 			return &ExecResult{Success: false, //nolint:nilerr
 				Error:     "exec_envelope: privileged action requires valid capability token",

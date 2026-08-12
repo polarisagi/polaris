@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"sort"
 	"strings"
 	"sync"
@@ -101,8 +102,10 @@ func newFakeAgentController() *fakeAgentController {
 	return &fakeAgentController{streamCh: make(chan types.AgentStreamEvent)}
 }
 
-func (f *fakeAgentController) AgentID() string                                 { return "fake" }
-func (f *fakeAgentController) SetTaskIntent(intent []byte)                     { f.intent = intent }
+func (f *fakeAgentController) AgentID() string { return "fake" }
+func (f *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
+	f.intent = intent.UnsafeContent()
+}
 func (f *fakeAgentController) SetSpawnDepth(depth int)                         {}
 func (f *fakeAgentController) SetMemoryNamespace(ns string)                    {}
 func (f *fakeAgentController) SurpriseIndex() float64                          { return 0 }

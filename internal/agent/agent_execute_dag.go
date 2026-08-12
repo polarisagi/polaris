@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"strings"
 	"time"
@@ -248,8 +249,12 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "code_act: execute failed", err)
 			}
+			safeOut, err := taint.SanitizeToSafe(caResult.Output)
+			if err != nil {
+				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: taint check failed", err)
+			}
 			return &types.ToolResult{
-				Output:    caResult.Output,
+				Output:    []byte(safeOut.IntoMessage("").Content),
 				Success:   caResult.ExitCode == 0,
 				LatencyMs: caResult.LatencyMs,
 			}, nil

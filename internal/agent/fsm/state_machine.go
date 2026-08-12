@@ -84,11 +84,18 @@ type StateContext struct {
 	// 过滤逻辑）改用 NamespaceID 而非 SessionID，使同一 Namespace 下的多个 Worker
 	// Agent 能检索到彼此写入的记忆片段；不同 Namespace 之间仍然隔离。
 	// 由 Worker 在 Run() 前通过 SetMemoryNamespace() 注入（对应 types.TaskEntry.Namespace）。
-	NamespaceID          string
-	RawIntentTS          taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
-	TaskModel            *TaskModel          // S_PERCEIVE 产出
-	DAGModel             *DAGModel           // S_PLAN 产出
-	Reflection           *ReflectionModel    // S_REFLECT 产出
+	NamespaceID string
+	RawIntentTS taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
+	TaskModel   *TaskModel          // S_PERCEIVE 产出
+	DAGModel    *DAGModel           // S_PLAN 产出
+
+	// B-1 pre-match (Internal)
+	PreMatchSkillID string
+	PreMatchScore   float64
+	PreMatchErr     error
+	HasPreMatch     bool
+
+	Reflection           *ReflectionModel // S_REFLECT 产出
 	ExecuteResult        []byte
 	ExecuteImageParts    []types.ImagePart
 	MaxReplan            int
@@ -456,6 +463,15 @@ func (sm *StateMachine) dispatchReplanExtensionActivation(ctx context.Context, s
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。
 // 返回的 effects 由 Agent.Run 消费——LLMFillEffect 调 LLM，DeterministicEffect 直接执行。
 func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigger types.AgentTrigger) ([]protocol.Effect, error) {
+	// B-1：全局语义检索已移至锁外执行，防止锁内 IO 导致死锁（inv_FSM_B1）
+	if trigger == types.TriggerIntentReceived && sm.skillMatcher != nil {
+		surpriseIndex := metrics.GlobalSurpriseIndex().Current()
+		if surpriseIndex < 0.3 {
+			sCtx.PreMatchSkillID, sCtx.PreMatchScore, sCtx.PreMatchErr = sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
+			sCtx.HasPreMatch = true
+		}
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

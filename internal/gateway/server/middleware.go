@@ -75,7 +75,7 @@ func builtinClientQuotas() map[string]clientQuota {
 type RateLimitManager struct {
 	mu           sync.RWMutex
 	limiters     map[string]*RateLimiter
-	lastSeen     map[string]time.Time
+	lastSeen     sync.Map               // string -> time.Time
 	clientLimits map[string]clientQuota // clientType → 配额
 	defaultRate  int
 	defaultMax   int
@@ -87,7 +87,6 @@ func NewRateLimitManager(parentCtx context.Context, rate, max int) *RateLimitMan
 	}
 	rm := &RateLimitManager{
 		limiters:     make(map[string]*RateLimiter),
-		lastSeen:     make(map[string]time.Time),
 		clientLimits: builtinClientQuotas(),
 		defaultRate:  rate,
 		defaultMax:   max,
@@ -106,14 +105,25 @@ func (rm *RateLimitManager) cleanupLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			cutoff := time.Now().Add(-15 * time.Minute)
-			rm.mu.Lock()
-			for key, t := range rm.lastSeen {
-				if t.Before(cutoff) {
-					delete(rm.limiters, key)
-					delete(rm.lastSeen, key)
+			var keysToDelete []string
+			rm.lastSeen.Range(func(key, value any) bool {
+				if t, ok := value.(time.Time); ok && t.Before(cutoff) {
+					keysToDelete = append(keysToDelete, key.(string))
 				}
+				return true
+			})
+			if len(keysToDelete) > 0 {
+				rm.mu.Lock()
+				for _, key := range keysToDelete {
+					if tAny, ok := rm.lastSeen.Load(key); ok {
+						if t, isTime := tAny.(time.Time); isTime && t.Before(cutoff) {
+							delete(rm.limiters, key)
+							rm.lastSeen.Delete(key)
+						}
+					}
+				}
+				rm.mu.Unlock()
 			}
-			rm.mu.Unlock()
 		case <-ctx.Done():
 			return
 		}
@@ -139,9 +149,7 @@ func (rm *RateLimitManager) Allow(key string, clientType string) bool {
 		rm.mu.Unlock()
 	}
 
-	rm.mu.Lock()
-	rm.lastSeen[key] = time.Now()
-	rm.mu.Unlock()
+	rm.lastSeen.Store(key, time.Now())
 
 	return limiter.Allow()
 }

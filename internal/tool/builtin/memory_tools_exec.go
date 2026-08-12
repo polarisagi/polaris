@@ -62,7 +62,9 @@ func MakeMemoryWriteFn(writer *retrieval.ExclusiveWriter) sandbox.InProcessFn {
 			Properties:  props,
 		}
 
-		if err := writer.UpsertFactExclusive(ctx, &ent, types.TaintNone); err != nil {
+		if err := writer.UpsertFactExclusive(ctx, &ent, types.TaintHigh); err != nil {
+			// C-7：第三参数是 maxTaint，原传 TaintNone 导致 Agent 写入的记忆被错误降级为 TaintNone。
+			// 这里的内容来自用户输入（经 Agent 过滤），污点等级为 TaintHigh 是正确的。
 			metrics.RecordMemoryToolCall(ctx, "memory_write", false)
 			return nil, apperr.Wrap(apperr.CodeInternal, "memory_write: upsert failed", err)
 		}

@@ -85,7 +85,7 @@ func TestMCPServersHandlers(t *testing.T) {
 	h := &MCPAdmin{
 		DB:         db,
 		ExtRepo:    repo.NewSQLiteExtensionRepository(db),
-		InstallMgr: marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil),
+		InstallMgr: marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil, nil),
 	}
 
 	// List MCP Servers

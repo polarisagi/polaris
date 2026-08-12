@@ -6,8 +6,10 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
+	"time"
 )
 
 // ============================================================================
@@ -168,7 +170,9 @@ func recall(ctx context.Context, source DocumentSource, query string,
 	wg.Add(1)
 	concurrent.SafeGo(ctx, "hybrid_search.bm25", func(ctx context.Context) {
 		defer wg.Done()
+		startBM25 := time.Now()
 		res, err := source.SearchBM25(ctx, query, width)
+		metrics.RecordRetrievalLatency(ctx, "bm25", time.Since(startBM25).Milliseconds())
 		if err != nil {
 			r.bm25Err = err
 			return
@@ -180,7 +184,9 @@ func recall(ctx context.Context, source DocumentSource, query string,
 		wg.Add(1)
 		concurrent.SafeGo(ctx, "hybrid_search.vector", func(ctx context.Context) {
 			defer wg.Done()
+			startVector := time.Now()
 			res, err := source.SearchVector(ctx, embedding, width)
+			metrics.RecordRetrievalLatency(ctx, "vector", time.Since(startVector).Milliseconds())
 			if err != nil {
 				slog.WarnContext(ctx, "hybrid_search: vector recall failed, degrading", "err", err)
 				return
@@ -225,6 +231,11 @@ func HybridSearch(
 	embedding []float32,
 	config HybridSearchConfig,
 ) ([]types.ScoredFragment, error) {
+	startTotal := time.Now()
+	defer func() {
+		metrics.RecordRetrievalLatency(ctx, "fused", time.Since(startTotal).Milliseconds())
+	}()
+
 	width := config.RecallWidth
 	if width <= 0 {
 		width = config.TopK * 3

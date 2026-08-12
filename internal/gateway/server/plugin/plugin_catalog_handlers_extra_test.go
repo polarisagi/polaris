@@ -82,7 +82,7 @@ func TestPluginCatalogHandlersExtra(t *testing.T) {
 	h := &PluginHandler{
 		DB:                   db,
 		ExtRepo:              repo.NewSQLiteExtensionRepository(db),
-		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil),
+		InstallMgr:           marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, repo.NewSQLiteSystemRepository(db), nil, nil, nil),
 		ClearToolSchemaCache: func() {},
 	}
 

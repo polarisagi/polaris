@@ -320,14 +320,23 @@ func (bb *SQLiteBlackboard) CompleteTask(ctx context.Context, taskID, agentID st
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// B-3 修复：如果是 claimed 状态直接完成，内部强制先推到 running 态以记录历史轨迹
+	_, execErr := tx.ExecContext(ctx, `
+		UPDATE tasks SET status=?, updated_at=datetime('now')
+		WHERE task_id=? AND claimed_by=? AND status=?`,
+		statusRunning, taskID, agentID, statusClaimed)
+	if execErr != nil {
+		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask: set running", execErr)
+	}
+
 	// [修复] 此前 UPDATE 语句未写入 result 参数——tasks 表长期只有 result_taint
 	// 没有 result 本体列，导致 CompleteTask 接收的产出内容被静默丢弃，PeekTask
 	// 永远读不到真实结果（见 007_tasks.sql result 列注释）。
 	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status=?, result=?, version=version+1, updated_at=datetime('now')
-		WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,
-		statusDone, result, taskID, agentID, statusClaimed, statusRunning,
+		WHERE task_id=? AND claimed_by=? AND status=?`,
+		statusDone, result, taskID, agentID, statusRunning,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.CompleteTask", err)

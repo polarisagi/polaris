@@ -147,16 +147,16 @@ func (r *InMemoryToolRegistry) List() []types.Tool {
 }
 
 func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, input []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
-	cached, ok, idempotencyKey := r.checkIdempotency(ctx)
-	if ok {
-		return cached, nil
-	}
-
 	tool, err := r.Lookup(name)
 	if err != nil {
 		// [2026-08-02 S-06 抽样复查] Lookup 对未注册工具返回 CodeNotFound，
 		// 此前恒被 CodeInternal 覆盖成 500，本应是 404。
 		return nil, apperr.Wrap(apperr.CodeOf(err), "InMemoryToolRegistry.ExecuteTool", err)
+	}
+
+	cached, ok, idempotencyKey := r.checkIdempotency(ctx, name)
+	if ok {
+		return cached, nil
 	}
 
 	// 预执行校验 (RateLimit, DryRun)

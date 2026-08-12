@@ -10,7 +10,6 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -73,7 +72,6 @@ type Dependencies struct {
 	TTSEngine             *atomic.Pointer[TTSProviderBox]
 	ContextRefExpander    *authcontext.ContextRefExpander
 	OutboxWriter          protocol.OutboxWriter
-	TaintTracker          *taint.TaintTracker
 }
 
 // NewChatHandler 故意不做构造函数级 fail-closed nil 强制校验（2026-07-08 复核
@@ -96,7 +94,6 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		deps.ChatRepo,
 		deps.DB,
 		deps.OutboxWriter,
-		deps.TaintTracker,
 		nil,
 		deps.Registry,
 	)

@@ -8,7 +8,6 @@ import (
 
 	"github.com/polarisagi/polaris/internal/eval/analysis"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -17,7 +16,6 @@ type ChatPersistenceService struct {
 	ChatRepo        protocol.ChatRepository
 	DB              protocol.SQLQuerier
 	OutboxWriter    protocol.OutboxWriter
-	TaintTracker    *taint.TaintTracker
 	SamplingMonitor *analysis.ContinuousSamplingMonitor
 	Registry        protocol.LLMRegistry
 }
@@ -26,7 +24,6 @@ func NewChatPersistenceService(
 	chatRepo protocol.ChatRepository,
 	db protocol.SQLQuerier,
 	outboxWriter protocol.OutboxWriter,
-	taintTracker *taint.TaintTracker,
 	samplingMonitor *analysis.ContinuousSamplingMonitor,
 	registry protocol.LLMRegistry,
 ) *ChatPersistenceService {
@@ -34,7 +31,6 @@ func NewChatPersistenceService(
 		ChatRepo:        chatRepo,
 		DB:              db,
 		OutboxWriter:    outboxWriter,
-		TaintTracker:    taintTracker,
 		SamplingMonitor: samplingMonitor,
 		Registry:        registry,
 	}

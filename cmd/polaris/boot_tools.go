@@ -293,7 +293,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 注入网络审批存储：MCPManager 查询 preferences 表以决定 TrustTier<=2 MCP 的网络隔离策略。
 	mcpMgr.SetNetApprovalStore(sysRepo)
 
-	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap)
+	installMgr := marketplace.NewManager(extRepo, mcpMgr, sb.Gate, prefsRepo, sb.AuditTrail, sb.TrustMap, sb.Outbox)
 	// mktInstallerAdapter：postInstallSteps 的文件下载分支此前因 WithInstaller
 	// 从未调用而永久跳过（ADR-0062）；mktClient.Install 是完整实现，直接注入。
 	installMgr.WithInstaller(&mktInstallerAdapter{client: mktClient})

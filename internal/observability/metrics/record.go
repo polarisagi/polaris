@@ -280,3 +280,10 @@ func RecordAgentHandoffSnapshotOversized(ctx context.Context) {
 		InstrAgentHandoffSnapshotOversizedTotal.Add(ctx, 1)
 	}
 }
+
+// RecordRetrievalLatency 记录检索各阶段延迟（D-2）
+func RecordRetrievalLatency(ctx context.Context, stage string, ms int64) {
+	if InstrRetrievalLatencyMs != nil {
+		InstrRetrievalLatencyMs.Record(ctx, float64(ms), metric.WithAttributes(attribute.String("stage", stage)))
+	}
+}

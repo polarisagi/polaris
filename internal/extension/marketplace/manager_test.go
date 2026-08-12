@@ -99,7 +99,7 @@ func TestManager_Authorize(t *testing.T) {
 
 	pg := &mockPolicyGate{allowed: true}
 	pr := &mockPrefs{}
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, pg, pr, nil, map[string]int{"trusted": 4})
+	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, pg, pr, nil, map[string]int{"trusted": 4}, nil)
 
 	ctx := context.Background()
 	req := protocol.ExtensionInstallRequest{Publisher: "trusted", TrustTier: 1}
@@ -128,7 +128,7 @@ func TestManager_AuthorizeAction(t *testing.T) {
 	defer db.Close()
 
 	pg := &mockPolicyGate{allowed: true}
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, pg, nil, nil, nil)
+	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, pg, nil, nil, nil, nil)
 
 	ctx := context.Background()
 	err := mgr.AuthorizeAction(ctx, "system", "manage", nil)
@@ -170,7 +170,7 @@ func TestManager_InstallExtension(t *testing.T) {
 	extRepo := repo.NewSQLiteExtensionRepository(db)
 	fsm := lifecycle.NewInstallFSM(extRepo)
 	fsm.RegisterInstaller(&mockFSMInstaller{extType: types.ExtType("mcp"), extRepo: extRepo})
-	mgr := NewManager(extRepo, nil, pg, pr, nil, nil).
+	mgr := NewManager(extRepo, nil, pg, pr, nil, nil, nil).
 		WithInstaller(inst).
 		WithInstallFSM(fsm)
 
@@ -206,7 +206,7 @@ func TestManager_InstallExtension_LocalPath(t *testing.T) {
 	fsm := lifecycle.NewInstallFSM(extRepo)
 	fsm.RegisterInstaller(&mockFSMInstaller{extType: types.ExtType("skill"), extRepo: extRepo})
 	pr := &mockPrefs{}
-	mgr := NewManager(extRepo, nil, pg, pr, nil, nil).
+	mgr := NewManager(extRepo, nil, pg, pr, nil, nil, nil).
 		WithInstallFSM(fsm)
 
 	ctx := context.Background()
@@ -243,7 +243,7 @@ func TestManager_UninstallExtension(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), &mockRemover{}, nil, nil, nil, nil)
+	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), &mockRemover{}, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Setup data
@@ -275,7 +275,7 @@ func TestManager_UpdateInstance(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, nil, nil, nil, nil)
+	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	now := time.Now().Format(time.RFC3339)
@@ -321,7 +321,7 @@ func TestManager_InstallExtension_PolicyGateDenied_PreservesForbidden(t *testing
 	pg := &mockPolicyGate{allowed: false, reason: "forbidden: test policy"}
 	pr := &mockPrefs{}
 	extRepo := repo.NewSQLiteExtensionRepository(db)
-	mgr := NewManager(extRepo, nil, pg, pr, nil, nil)
+	mgr := NewManager(extRepo, nil, pg, pr, nil, nil, nil)
 
 	ctx := context.Background()
 	req := protocol.ExtensionInstallRequest{

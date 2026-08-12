@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -29,7 +30,7 @@ func TestNewSkillCreator(t *testing.T) {
 
 func TestGenerateSkill_NilLLM(t *testing.T) {
 	c := NewSkillCreator(nil, "base", nil, nil)
-	_, err := c.GenerateSkill(context.Background(), "intent")
+	_, err := c.GenerateSkill(context.Background(), taint.NewTaintedString("intent", taint.TaintSource{}, ""))
 	if err == nil {
 		t.Errorf("expected nil LLM error")
 	}
@@ -37,7 +38,7 @@ func TestGenerateSkill_NilLLM(t *testing.T) {
 
 func TestGenerateSkill_LLMError(t *testing.T) {
 	c := NewSkillCreator(&mockLLMClient{err: apperr.New(apperr.CodeInternal, "llm err")}, "base", nil, nil)
-	_, err := c.GenerateSkill(context.Background(), "intent")
+	_, err := c.GenerateSkill(context.Background(), taint.NewTaintedString("intent", taint.TaintSource{}, ""))
 	if err == nil {
 		t.Errorf("expected LLM error")
 	}
@@ -45,7 +46,7 @@ func TestGenerateSkill_LLMError(t *testing.T) {
 
 func TestGenerateSkill_ParseError(t *testing.T) {
 	c := NewSkillCreator(&mockLLMClient{ret: "invalid json"}, "base", nil, nil)
-	_, err := c.GenerateSkill(context.Background(), "intent")
+	_, err := c.GenerateSkill(context.Background(), taint.NewTaintedString("intent", taint.TaintSource{}, ""))
 	if err == nil {
 		t.Errorf("expected parse error")
 	}
@@ -53,7 +54,7 @@ func TestGenerateSkill_ParseError(t *testing.T) {
 
 func TestGenerateSkill_MissingName(t *testing.T) {
 	c := NewSkillCreator(&mockLLMClient{ret: `{"description":"test"}`}, "base", nil, nil)
-	_, err := c.GenerateSkill(context.Background(), "intent")
+	_, err := c.GenerateSkill(context.Background(), taint.NewTaintedString("intent", taint.TaintSource{}, ""))
 	if err == nil {
 		t.Errorf("expected missing name error")
 	}
@@ -62,7 +63,7 @@ func TestGenerateSkill_MissingName(t *testing.T) {
 func TestGenerateSkill_Success(t *testing.T) {
 	c := NewSkillCreator(&mockLLMClient{ret: "```json\n" + `{"name":"test-skill","description":"test","instructions":"do test"}` + "\n```"}, t.TempDir(), nil, nil)
 
-	_, err := c.GenerateSkill(context.Background(), "intent")
+	_, err := c.GenerateSkill(context.Background(), taint.NewTaintedString("intent", taint.TaintSource{}, ""))
 
 	// Expect failure because installMgr is nil
 	if err == nil {

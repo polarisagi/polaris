@@ -7,18 +7,16 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // codeActHTTPRequest POST /v1/agent/codeact 请求体。
 type codeActHTTPRequest struct {
-	Language        string           `json:"language"`      // "python" | "bash"
-	Code            string           `json:"code"`          // LLM 生成的代码
-	CapabilityID    string           `json:"capability_id"` // 能力令牌 ID（必填）
-	SessionID       string           `json:"session_id"`
-	AgentID         string           `json:"agent_id"`
-	TaintLevel      types.TaintLevel `json:"taint_level"`
-	StatefulSession bool             `json:"stateful_session"` // GD-4-002：跨调用 REPL 状态保持
+	Language        string `json:"language"`      // "python" | "bash"
+	Code            string `json:"code"`          // LLM 生成的代码
+	CapabilityID    string `json:"capability_id"` // 能力令牌 ID（必填）
+	SessionID       string `json:"session_id"`
+	AgentID         string `json:"agent_id"`
+	StatefulSession bool   `json:"stateful_session"` // GD-4-002：跨调用 REPL 状态保持
 }
 
 // codeActHTTPResponse POST /v1/agent/codeact 响应体。
@@ -52,7 +50,6 @@ func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 		CapabilityID:    req.CapabilityID,
 		SessionID:       req.SessionID,
 		AgentID:         req.AgentID,
-		TaintLevel:      req.TaintLevel,
 		StatefulSession: req.StatefulSession,
 	})
 	if err != nil {
@@ -63,7 +60,7 @@ func (s *Server) handleCodeAct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, codeActHTTPResponse{
-		Output:    string(result.Output),
+		Output:    result.Output.UnsafeContent(), // A-4: HTTP 响应允许读取污点内容
 		ExitCode:  result.ExitCode,
 		LatencyMs: result.LatencyMs,
 	})

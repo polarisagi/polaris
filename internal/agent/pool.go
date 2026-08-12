@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"sync"
 	"time"
@@ -261,7 +262,7 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	agent.SetMemoryNamespace(opt.Namespace)
 
 	intentBytes, _ := json.Marshal(intent)
-	agent.SetTaskIntent(intentBytes)
+	agent.SetTaskIntent(taint.NewTaintedString(string(intentBytes), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
 
 	stream := agent.SubscribeStream(ctx)
 	if err := agent.SendIntent(types.TriggerIntentReceived); err != nil {

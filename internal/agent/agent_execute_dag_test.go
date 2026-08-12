@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ type mockCodeActForExecuteDAG struct {
 
 func (m *mockCodeActForExecuteDAG) Execute(ctx context.Context, req CodeActRequest) (*CodeActResult, error) {
 	m.lastReq = &req
-	return &CodeActResult{ExitCode: 0, Output: []byte("mock output")}, nil
+	return &CodeActResult{ExitCode: 0, Output: taint.NewTaintedString("mock output", taint.TaintSource{}, "test")}, nil
 }
 
 func (m *mockCodeActForExecuteDAG) CheckSyntax(code, lang string) error {

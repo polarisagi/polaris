@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/agent"
@@ -21,7 +22,7 @@ type evalAgentAdapter struct {
 }
 
 func (a *evalAgentAdapter) Run(ctx context.Context, input []byte) ([]byte, []string, error) {
-	a.agent.SetTaskIntent(input)
+	a.agent.SetTaskIntent(taint.NewTaintedString(string(input), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "eval_input"))
 
 	errCh := make(chan error, 1)
 	concurrent.SafeGo(ctx, "adapters_eval.agent_run", func(ctx context.Context) {

@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -181,7 +182,10 @@ func (h *EvalAdmin) HandleBenchmark(w http.ResponseWriter, r *http.Request) {
 	// 后台评测任务。concurrent.SafeGo 提供 panic 恢复，避免裸 go func()
 	// 里的一次评测 panic 打挂整个 HTTP server 进程。
 	concurrent.SafeGo(context.Background(), "evaladmin.run_benchmark_dataset", func(ctx context.Context) {
-		_, _ = h.Runner.RunBenchmarkDataset(ctx, datasetName, casesAny, "manual")
+		_, err := h.Runner.RunBenchmarkDataset(ctx, datasetName, casesAny, "manual")
+		if err != nil {
+			slog.ErrorContext(ctx, "evaladmin: benchmark dataset failed", "dataset", datasetName, "error", err)
+		}
 	})
 
 	w.WriteHeader(http.StatusAccepted)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/network"
 	"net/http"
 	"strings"
 	"time"
@@ -32,19 +33,20 @@ const (
 // 特性：免费、无需 API 密钥、中国大陆可正常访问（speech.platform.bing.com 未被封锁）。
 // 输出：标准 WAV（16-bit PCM 单声道 24kHz）。
 type EdgeProvider struct {
-	voice string // 声线，如 "zh-CN-XiaoxiaoNeural"
-	rate  string // 语速，如 "+0%"
-	pitch string // 音调，如 "+0Hz"
+	safeDialer *network.SafeDialer
+	voice      string // 声线，如 "zh-CN-XiaoxiaoNeural"
+	rate       string // 语速，如 "+0%"
+	pitch      string // 音调，如 "+0Hz"
 }
 
 // NewEdgeProvider 返回 EdgeProvider。
 // voice 为空时使用默认中文女声 zh-CN-XiaoxiaoNeural（晓晓，音质最佳）。
 // 其他可选中文声线：zh-CN-YunxiNeural（云希，男）/ zh-CN-XiaoYiNeural（晓伊）。
-func NewEdgeProvider(voice string) *EdgeProvider {
+func NewEdgeProvider(voice string, safeDialer *network.SafeDialer) *EdgeProvider {
 	if voice == "" {
 		voice = "zh-CN-XiaoxiaoNeural"
 	}
-	return &EdgeProvider{voice: voice, rate: "+0%", pitch: "+0Hz"}
+	return &EdgeProvider{voice: voice, rate: "+0%", pitch: "+0Hz", safeDialer: safeDialer}
 }
 
 // Generate 调用 Edge TTS WebSocket 合成语音并返回 WAV 字节流。
@@ -52,7 +54,12 @@ func (p *EdgeProvider) Generate(ctx context.Context, text string) ([]byte, error
 	connID := strings.ReplaceAll(uuid.New().String(), "-", "")
 	wsURL := fmt.Sprintf("%s?TrustedClientToken=%s&ConnectionId=%s", edgeTTSWSURL, edgeTTSToken, connID)
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+	if p.safeDialer != nil {
+		dialer.NetDialContext = p.safeDialer.DialContext // A-2：注入 SafeDialer，防 SSRF
+	}
 	hdr := http.Header{}
 	hdr.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0")
 	hdr.Set("Origin", edgeTTSOrigin)
