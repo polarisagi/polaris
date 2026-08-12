@@ -10,8 +10,6 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// MCPKnowledgeConnector 将具备 knowledge-source 能力的 MCP 客户端适配为 KnowledgeSourceConnector。
-// Task 17：知识源插件化接口实现。
 // MCPClient 只声明本文件实际调用的两个方法（消费方定义接口，HE-3/R1.4），
 // 由 *mcp.MCPClient 结构性满足，调用方（mcp_installer.go）无需引入具体类型依赖。
 type MCPClient interface {
@@ -19,6 +17,8 @@ type MCPClient interface {
 	ResourcesRead(ctx context.Context, uri string) ([]mcp.MCPResourceContent, error)
 }
 
+// MCPKnowledgeConnector 将具备 knowledge-source 能力的 MCP 客户端适配为 KnowledgeSourceConnector。
+// Task 17：知识源插件化接口实现。
 type MCPKnowledgeConnector struct {
 	id     string
 	name   string

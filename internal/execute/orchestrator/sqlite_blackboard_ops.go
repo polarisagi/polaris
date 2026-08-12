@@ -209,7 +209,7 @@ var (
 	ErrStaleBlackboardLease = apperr.New(apperr.CodeInternal, "blackboard: lease expired or task not claimed by this agent")
 )
 
-// Ping 检测数据库连接是否存活（健康检查用）。
+// Ping 检测数据库连接是否存活，实现 Pinger 接口，供 HealthCheckGate 使用。
 func (bb *SQLiteBlackboard) Ping(ctx context.Context) error {
 	if err := bb.db.PingContext(ctx); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.Ping", err)

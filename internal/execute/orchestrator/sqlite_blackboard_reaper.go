@@ -302,5 +302,3 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 		})
 	}
 }
-
-// StopAll KillSwitch FullStop 响应：所有 Executing 任务进入 Suspended(oom_evicted)。

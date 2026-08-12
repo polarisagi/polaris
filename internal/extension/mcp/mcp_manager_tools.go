@@ -293,6 +293,3 @@ type DynamicConnectRequest struct {
 	URL        string // sse/http 模式：端点 URL
 	TrustTier  int    // TrustTier
 }
-
-// DynamicConnect 动态连接一个 MCP server 并注册其工具到沙箱。
-// 幂等：同名 server 已连接时直接返回 nil。
