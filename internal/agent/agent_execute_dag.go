@@ -239,12 +239,13 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 				return nil, apperr.Wrap(apperr.CodeForbidden, "code_act: JIT token mint failed", err)
 			}
 			caResult, err := a.codeAct.Execute(ctx, CodeActRequest{
-				Language:        lang,
-				Code:            codeArgs.Code,
-				CapabilityID:    jitTok.Claims.TokenID,
-				SessionID:       a.sCtx.SessionID,
-				AgentID:         a.ID,
-				TaintLevel:      taintLevel,
+				Language:     lang,
+				Code:         codeArgs.Code,
+				CapabilityID: jitTok.Claims.TokenID,
+				SessionID:    a.sCtx.SessionID,
+				AgentID:      a.ID,
+				// 不再传 TaintLevel：该字段已删（C-8）。CodeAct 侧对 LLM 生成代码
+				// 恒按 TaintHigh 处理，不采信调用方自报值。
 				StatefulSession: codeArgs.StatefulSession,
 			})
 			if err != nil {

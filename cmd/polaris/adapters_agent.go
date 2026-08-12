@@ -58,7 +58,6 @@ func (a *codeActAdapter) Execute(ctx context.Context, req agent.CodeActRequest) 
 		CapabilityID:    req.CapabilityID,
 		SessionID:       req.SessionID,
 		AgentID:         req.AgentID,
-		TaintLevel:      req.TaintLevel,
 		StatefulSession: req.StatefulSession,
 	})
 	if err != nil {
