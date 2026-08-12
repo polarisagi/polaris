@@ -19,6 +19,7 @@ local_playground/reports/gemini-review-findings-batch10.md|C3|GR-10-002
 local_playground/reports/gemini-review-findings-batch10.md|C3|GR-10-003
 local_playground/reports/gemini-review-findings-batch10.md|C6|batch10
 local_playground/reports/gemini-review-findings-batch10.md|C9|batch10
+local_playground/reports/gemini-review-findings-batch11.md|C6|batch11
 local_playground/reports/gemini-review-findings-batch12.md|C1|GR-12-001
 local_playground/reports/gemini-review-findings-batch12.md|C5|batch12
 local_playground/reports/gemini-review-findings-batch12.md|C6|batch12
@@ -62,6 +63,12 @@ local_playground/reports/gemini-review-findings-batch6.1.md|C6|batch6.1
 local_playground/reports/gemini-review-findings-batch6.2.md|C11|GR-6.2-001
 local_playground/reports/gemini-review-findings-batch6.2.md|C3|GR-6.2-001
 local_playground/reports/gemini-review-findings-batch6.2.md|C6|batch6.2
+local_playground/reports/gemini-review-findings-batch7.1.md|C3|GR-7.1-001
+local_playground/reports/gemini-review-findings-batch7.1.md|C3|GR-7.1-002
+local_playground/reports/gemini-review-findings-batch7.2.md|C11|GR-7.2-002
+local_playground/reports/gemini-review-findings-batch7.2.md|C3|GR-7.2-001
+local_playground/reports/gemini-review-findings-batch7.2.md|C3|GR-7.2-002
+local_playground/reports/gemini-review-findings-batch7.2.md|C3|GR-7.2-003
 local_playground/reports/gemini-review-findings-batch8.md|C1|GR-8-001
 local_playground/reports/gemini-review-findings-batch8.md|C1|GR-8-002
 local_playground/reports/gemini-review-findings-batch8.md|C1|GR-8-003
@@ -166,14 +173,9 @@ local_playground/reports/gemini-review-findings.md|C3|GR-9.1-005
 local_playground/reports/gemini-review-findings.md|C3|GR-9.1-006
 local_playground/reports/gemini-review-findings.md|C3|GR-9.2.1-001
 local_playground/reports/gemini-review-findings.md|C3|GR-9.2.1-002
-local_playground/reports/lint-backlog.md|C10|GR-03-03
 local_playground/reports/lint-backlog.md|C1|GR-03-01
 local_playground/reports/lint-backlog.md|C1|GR-03-02
 local_playground/reports/lint-backlog.md|C1|GR-03-03
 local_playground/reports/review-progress.md|C4|batch1
 local_playground/reports/review-progress.md|C4|batch12
 local_playground/reports/review-progress.md|C4|batch8
-#
-# 本基线全部是 2026-08-11 首轮 14 批的历史报告（自创条目格式、缺覆盖凭证节）。它们是历史
-# 记录，不重写；下一轮全量/增量按 review.md v4 格式重产出后逐批从本文件删除。
-# 批次 7.1/7.2/11 的 2026-08-12 重跑报告刻意不收录——活的产出，问题应当修而不是记账。
