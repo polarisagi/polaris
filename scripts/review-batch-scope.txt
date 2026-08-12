@@ -1,0 +1,34 @@
+# 审核批次范围表（机器可读版，SSoT 见 local_playground/prompt/review.md §5.0 批次表）
+#
+# 立此文件的原因：批次表原本只存在于提示词的 markdown 表格里，人（和 LLM）看得懂，
+# 脚本读不懂。后果是「某批次到底审没审」无法机械判定——2026-08-11 首轮批次 7
+# （swarm/learning/knowledge，11026 行）以 0 条发现 done 收场，且报告文件根本不存在，
+# 没有任何环节能指出问题。有了本文件，tools/review_check.go 的 C6 才能算出
+# 「本批次范围内哪些文件在报告里去向不明」。
+#
+# 格式：<批次号> <目录1> <目录2> ...   （目录相对仓库根，递归扫 .go/.rs，跳过 _test.go）
+# 改批次表时必须同步改这里，两处漂移会让 C6 失效——这正是它要拦的那类问题。
+
+1.1   internal/store pkg
+1.2   internal/observability internal/ffi internal/sysinfo internal/downloader
+2.1   internal/security
+2.2   internal/llm
+3     internal/protocol internal/config internal/lint internal/bootstrap cmd/polaris
+4.1   internal/agent
+4.2   internal/action
+5.1   internal/memory
+5.2   internal/tool
+6.1   internal/sandbox internal/prompt internal/vfs
+6.2   internal/execute
+7.1   internal/swarm internal/learning
+7.2   internal/knowledge
+8     internal/extension
+9.1   internal/gateway/server/middleware internal/gateway/server/logstream
+9.2   internal/gateway/server/chat internal/gateway/server/plugin internal/gateway/server/provider internal/gateway/server/sysadmin internal/gateway/egress internal/gateway/authcontext internal/gateway/types
+10.1  internal/automation internal/eval
+10.2  internal/channel internal/sysmgr internal/cli
+11    rust/substrate/src tools
+
+# 批次 12（docs 自审）、13（设计评审）、14（业界对标）不以源文件为范围，故不列。
+# 9.1 的 gateway/server 根级 .go 文件由 9.1 承担，但根目录不能整目录列（会吞掉 9.2 的子包），
+# 故此处只列 9.1 独占的子目录；根级文件的覆盖由报告「已审文件清单」节人工声明后由 C6 抽查。
