@@ -130,6 +130,26 @@ docs-gen:
 docs-gen-check:
 	env GOOS= GOARCH= $(GO) run tools/docs_gen.go -check
 
+# 注释漂移门控：doc comment 与其下方声明错位（早期机械拆分文件的残留病灶，
+# 根 CLAUDE.md §维度G 列为「已知系统性病灶」）。判别式见 tools/comment_drift.go 头部。
+# 首次接入即存量为 0（8 处实证漂移已订正），故 fail-closed，无 baseline 文件。
+comment-drift:
+	@env GOOS= GOARCH= $(GO) run tools/comment_drift.go
+
+# 审核报告门控：把 local_playground/reports/ 下审核产物的机械可判属性（条目 ID、
+# 枚举字段、行号真实性、进度表与产物一致性、覆盖凭证）纳入 CI。
+# 立此门控的实证依据见 tools/review_check.go 头部——审核提示词里靠模型自觉填写的
+# 机制实测 100% 空转，加条款无效，只有红灯有效。
+# 棘轮模式：scripts/review-check-baseline.txt 内的存量违规降为警告，只禁增量。
+review-check:
+	@env GOOS= GOARCH= $(GO) run tools/review_check.go
+
+# 合并各批次报告为全局报告 + 索引 + lint-backlog + 类别收敛统计（纯机械，禁改条目内容）。
+# 固化为工具而非每轮让 LLM 现写脚本——2026-08-11 那轮在 reports/ 下留下了
+# merge.py 与 merge_v2.py 两个临时版本，格式每轮重新漂一次。
+review-merge:
+	env GOOS= GOARCH= $(GO) run tools/review_merge.go
+
 rust-build:
 	CFLAGS= LDFLAGS= $(CARGO) build --release $(if $(CARGO_TARGET),--target $(CARGO_TARGET),) --manifest-path rust/substrate/Cargo.toml
 
@@ -229,4 +249,4 @@ rust-deny:
 # 2026-08-09：fuzz-taint / fuzz-skill 此前只是可手动调用的 target，从未进入 CI。
 # 三个 fuzz 目标合计 90s，守的是 Taint 五级传播（HE-2 的密码学可验证边界）与
 # Skill 校验管线——正是最不该只靠人工偶尔想起来跑一次的两处。
-check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check release-signing-status fuzz-taint fuzz-skill
+check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill
