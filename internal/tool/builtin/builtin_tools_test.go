@@ -18,6 +18,7 @@ import (
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
+	"github.com/polarisagi/polaris/internal/security/token"
 	"github.com/polarisagi/polaris/internal/tool/builtin/read_tool_ref"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -37,9 +38,9 @@ func (dummyPolicyGate) Review(_ context.Context, _ types.PolicyReviewRequest) (t
 	return types.PolicyReviewResult{Allowed: true}, nil
 }
 
-// mockToken 已删除：它铸造的能力令牌只经 protocol.CtxCapabilityToken 注入 ctx，
-// 而该键在生产中从未被写入、读取点不可达，随 ADR-0088 决策二一并删除。
-// 令牌配额的真实校验点是 token.TokenManager.Consume（由 codeact 侧测试覆盖）。
+type dummyTokenVerifier struct{}
+
+func (dummyTokenVerifier) Verify(_ *token.Token) error { return nil }
 
 // TestBuiltinTools_ReadFile_AllowedPath 验证 read_file 在白名单路径下能读取真实文件。
 func TestBuiltinTools_ReadFile_AllowedPath(t *testing.T) {
@@ -132,7 +133,7 @@ func TestBuiltinTools_ListDir(t *testing.T) {
 func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestBuiltinTools_WriteFile_AllowedPath(t *testing.T) {
 		"content": "written by agent",
 		"append":  false,
 	})
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
 	result, err := toolReg.ExecuteTool(ctx, "write_file", args, types.TaintNone)
 	if err != nil {
 		t.Fatalf("ExecuteTool write_file: %v", err)
@@ -223,11 +224,11 @@ func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 	runGit("config", "user.name", "polaris-test")
 
 	sbx := sandbox.NewInProcessSandbox(config.DefaultThresholds().M7Tool)
-	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", nil), config.DefaultThresholds().M7Tool)
+	toolReg := tool.NewInMemoryToolRegistry(sandbox.NewExecEnvelope(dummyPolicyGate{}, sandbox.NewSandboxRouter(sbx, nil, nil, "linux", 0), 0, "", dummyTokenVerifier{}), config.DefaultThresholds().M7Tool)
 	if err := RegisterBuiltinTools(sbx, toolReg, []string{tmpDir}, dummyDialerPtr, false, protocol.NetPolicyDeny, "", &config.Config{}, nil, "", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools: %v", err)
 	}
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), protocol.CtxCapabilityTokenKey{}, &token.Token{})
 
 	// 首次提交
 	if err := os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("v1\n"), 0o600); err != nil {
