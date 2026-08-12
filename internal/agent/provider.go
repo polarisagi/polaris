@@ -39,7 +39,8 @@ type CodeActRequest struct {
 	CapabilityID string // 能力令牌 ID（必须有效）
 	SessionID    string
 	AgentID      string
-	TaintLevel   types.TaintLevel
+	// TaintLevel 字段已随 protocol.CodeActRequest 一并删除（2026-08-12，C-8）：
+	// 调用方自报、全仓零读取点，沙箱执行侧硬编码 TaintHigh。
 	// StatefulSession 见 action/protocol.CodeActRequest 同名字段注释（GD-4-002）。
 	StatefulSession bool
 }

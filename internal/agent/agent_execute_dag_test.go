@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,17 @@ func (m *mockCodeActForExecuteDAG) IsAvailable() bool {
 	return true
 }
 
+// TestAgent_ExecuteDAG_F02_TaintLevel 守护「调用方自报的 taint_level 不得影响 CodeAct
+// 的污点判定」。
+//
+// 2026-08-12（C-8）改写：原断言检查 CodeActRequest.TaintLevel == TaintHigh。该字段已
+// 整体删除——它全仓零读取点，沙箱执行侧硬编码 TaintHigh，留着只会诱导后来者拿它做安全
+// 判定。删除后该性质由**类型结构**保证（根本没有传递污点等级的通道），比运行时断言更强。
+// 本用例保留并改为守护结构性质：DAG 节点 Args 里塞进恶意 "taint_level":0 时，
+// CodeAct 仍被正常调用且请求体不携带任何调用方可控的污点字段。
+// 若将来有人重新给 CodeActRequest 加回污点字段，本用例连同 tools/taint_typed_fields_check.go
+// 会一起把这次回退暴露出来。
 func TestAgent_ExecuteDAG_F02_TaintLevel(t *testing.T) {
-	// 新增单测：构造恶意 codeArgs.TaintLevel=0 但外部授信 taintLevel=High 的用例，断言实际执行使用的是 High
 	agent := NewAgentWithDefaults("test-agent")
 	agent.InjectToolExecutor(&mockToolExecutor{})
 	agent.InjectDAGRunner(&dummyDAGRunner{})
@@ -58,12 +68,15 @@ func TestAgent_ExecuteDAG_F02_TaintLevel(t *testing.T) {
 	// Call runExecuteDAG
 	_ = agent.runExecuteDAG(context.Background())
 
-	// Verify CodeActRequest TaintLevel
+	// 恶意 args 未阻断执行，且请求体不含任何调用方可控的污点字段。
 	if mockCA.lastReq == nil {
 		t.Fatalf("expected CodeAct to be called")
 	}
-	if mockCA.lastReq.TaintLevel != types.TaintHigh {
-		t.Errorf("expected TaintLevel %v, got %v", types.TaintHigh, mockCA.lastReq.TaintLevel)
+	if reflect.TypeOf(CodeActRequest{}).NumField() != 6 {
+		t.Fatalf("CodeActRequest 字段数变化，请确认未重新引入调用方可控的污点字段（C-8）")
+	}
+	if _, ok := reflect.TypeOf(CodeActRequest{}).FieldByName("TaintLevel"); ok {
+		t.Error("CodeActRequest 不得含 TaintLevel 字段：调用方自报值不可作为安全判定输入（C-8）")
 	}
 }
 
