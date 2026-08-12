@@ -22,6 +22,7 @@ import (
 
 var errCount int
 var callCount int
+var fileCount int
 
 func main() {
 	listPath := "tools/must-check-error-calls.txt"
@@ -42,6 +43,7 @@ func main() {
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.Contains(path, "testutil/") {
 				return nil
 			}
+			fileCount++
 			checkFile(fset, path, calls)
 			return nil
 		})
@@ -51,7 +53,11 @@ func main() {
 		}
 	}
 
-	fmt.Printf("must_check_error_lint: scanned %d critical call(s)\n", callCount)
+	// 打印「扫了多少文件」而不是「命中多少违规」：扫描规模是判断门控是否在工作的
+	// 唯一信号，命中数为 0 既可能是干净也可能是瞎（2026-08-12 本行原先打印 callCount，
+	// 恒显示 "scanned 0 critical call(s)"，与空转门控的输出完全一样，误导了一整轮复核）。
+	fmt.Printf("must_check_error_lint: scanned %d file(s), %d pattern(s); %d hit(s)\n",
+		fileCount, len(calls), callCount)
 	if errCount > 0 {
 		fmt.Fprintf(os.Stderr, "must_check_error_lint: FAIL — %d violation(s)\n", errCount)
 		os.Exit(1)

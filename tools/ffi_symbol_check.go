@@ -37,6 +37,16 @@ func main() {
 	fmt.Printf("ffi_symbol_check: found %d Rust C-FFI symbol(s), %d Go FFI binding(s)\n",
 		len(rustSymbols), len(goSymbols))
 
+	// 自检：Go 绑定数为 0 说明提取正则与实际调用形态失配，此时 S-G 会把全部
+	// Rust 符号误报为未绑定，白名单一加就「绿了」。这种恒绿门控与没有门控在 CI
+	// 输出上完全一样，必须直接判失败（2026-08-12 实测踩过一次）。
+	if len(rustSymbols) > 0 && len(goSymbols) == 0 {
+		fmt.Fprintln(os.Stderr,
+			"ffi_symbol_check: FAIL — Go 侧提取到 0 个 FFI 绑定，提取正则与实际调用形态失配；"+
+				"在修好提取逻辑之前本门控的结论一律不可信，禁止用白名单消化其输出")
+		os.Exit(1)
+	}
+
 	// 检查 Rust 有但 Go 未绑定 (S - G)
 	for sym, loc := range rustSymbols {
 		if goSymbols[sym] == "" && !allowlist[sym] {
@@ -47,7 +57,14 @@ func main() {
 	}
 
 	// 检查 Go 绑定了但 Rust 不存在 (G - S)
+	//
+	// 只对 substrate 绑定点生效：仓库里还有 sherpa-onnx 等第三方 dylib 的
+	// purego 绑定（internal/llm/stt|tts/sherpa.go），它们的符号本就不该出现在
+	// rust/substrate 里，拿 substrate 的符号表去判它们是量错了尺子。
 	for sym, loc := range goSymbols {
+		if !isSubstrateBindingSite(loc) {
+			continue
+		}
 		if len(rustSymbols) > 0 && rustSymbols[sym] == "" {
 			fmt.Printf("%s: Go 绑定了 Rust 不存在的 FFI 符号 %q（运行时必定失败，违反 F-8b）\n",
 				loc, sym)
@@ -96,6 +113,22 @@ func loadAllowlist(path string) (map[string]bool, error) {
 	return list, scanner.Err()
 }
 
+// isSubstrateBindingSite 判定该 Go 文件绑定的是不是 rust/substrate 那一个 dylib。
+// 判据：文件位于 internal/ffi/（substrate dylib 的加载与绑定归口），或显式 import
+// 了 internal/ffi（经由 ffi.Dylib 拿到 substrate handle 再自行 RegisterLibFunc）。
+// 其余 purego 绑定点（sherpa-onnx 等第三方库）不参与 substrate 符号表对账。
+func isSubstrateBindingSite(path string) bool {
+	norm := filepath.ToSlash(path)
+	if strings.HasPrefix(norm, "internal/ffi/") {
+		return true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), `polarisagi/polaris/internal/ffi"`)
+}
+
 func collectRustSymbols(dir string) map[string]string {
 	symbols := make(map[string]string)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -126,8 +159,15 @@ func collectRustSymbols(dir string) map[string]string {
 
 func collectGoSymbols(dirs []string) map[string]string {
 	symbols := make(map[string]string)
-	// RegisterLibFunc(..., "symbol_name") or RegisterFunc(..., "symbol_name")
-	regRe := regexp.MustCompile(`Register(?:Lib)?Func\([^,]+,\s*"([a-zA-Z0-9_]+)"`)
+	// purego 的实际签名是三参：RegisterLibFunc(fptr, handle, name) /
+	// RegisterFunc(fptr, cfn)。2026-08-12 复核：原正则写成两参
+	// `\([^,]+,\s*"..."`，与三参调用形态永不匹配，导致本门控恒返回
+	// 「0 Go FFI binding(s)」——46 个 Rust 符号被全量误报为未绑定，随后被整批
+	// 塞进 deadcode-allowlist.txt 掩盖。门控扫描数为 0 就是门控没在工作
+	// （ADR-0091：看门控在看哪里，比看门控报了什么更重要）。
+	regRe := regexp.MustCompile(`Register(?:Lib)?Func\(\s*&?[A-Za-z0-9_.\[\]]+\s*,\s*[A-Za-z0-9_.]+\s*,\s*"([a-zA-Z0-9_]+)"`)
+	// purego.Dlsym(lib, "symbol") 直接取符号地址的形态同样算绑定。
+	dlsymRe := regexp.MustCompile(`Dlsym\(\s*[A-Za-z0-9_.]+\s*,\s*"([a-zA-Z0-9_]+)"`)
 
 	for _, dir := range dirs {
 		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error { //nolint:errcheck
@@ -138,10 +178,11 @@ func collectGoSymbols(dirs []string) map[string]string {
 			if err != nil {
 				return nil
 			}
-			matches := regRe.FindAllStringSubmatch(string(data), -1)
-			for _, m := range matches {
-				if len(m) > 1 {
-					symbols[m[1]] = path
+			for _, re := range []*regexp.Regexp{regRe, dlsymRe} {
+				for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+					if len(m) > 1 {
+						symbols[m[1]] = path
+					}
 				}
 			}
 			return nil

@@ -19,6 +19,9 @@ import (
 	"strings"
 )
 
+// forbiddenMarker 在名单里作为期望类型出现时，语义反转为「该字段必须不存在」。
+const forbiddenMarker = "FORBIDDEN"
+
 type FieldRequirement struct {
 	FilePath     string
 	StructName   string
@@ -146,6 +149,17 @@ func checkField(fset *token.FileSet, req FieldRequirement) bool {
 		fmt.Fprintf(os.Stderr, "%s: 结构体 %s 未找到\n", req.FilePath, req.StructName)
 		errCount++
 		return false
+	}
+	// ExpectedType == "FORBIDDEN" 表示该字段必须不存在（C-8：调用方自报的污点等级
+	// 字段一旦重新引入，就会再次诱导后来者拿它做安全判定）。
+	if req.ExpectedType == forbiddenMarker {
+		if foundField {
+			fmt.Fprintf(os.Stderr, "%s: 结构体 %s 不得含字段 %s——该字段由调用方自报，不可作为安全判定输入（违反 F-3/C-8）\n",
+				req.FilePath, req.StructName, req.FieldName)
+			errCount++
+			return false
+		}
+		return true
 	}
 	if !foundField {
 		fmt.Fprintf(os.Stderr, "%s: 结构体 %s 中未找到字段 %s\n", req.FilePath, req.StructName, req.FieldName)
