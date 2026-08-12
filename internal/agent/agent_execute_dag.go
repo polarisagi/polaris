@@ -210,7 +210,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}, nil
 		}
 
-		if strings.HasPrefix(toolName, "code_act:") {
+		if strings.HasPrefix(toolName, "code_act:") { //nolint:nestif // code_act 执行路径包含 JIT Token 铸造、沙箱执行、污点降级三个阶段，内聚于此避免多参数传递
 			if a.codeAct == nil {
 				return nil, apperr.New(apperr.CodeInternal,
 					"agent: codeAct engine not injected; cannot execute code_act node")

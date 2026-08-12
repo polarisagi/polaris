@@ -144,7 +144,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		if s.agentPool != nil {
 			agent, release, err := s.agentPool.Acquire(r.Context(), "default")
 			if err == nil {
-				agent.SetTaskIntent(taint.NewTaintedString(string(req.Input), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
+				agent.SetTaskIntent(taint.NewTaintedString(req.Input, taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
 				release()
 			}
 		}
