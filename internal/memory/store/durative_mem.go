@@ -122,6 +122,7 @@ func (dm *DurativeMemoryManager) Consolidate(ctx context.Context) error {
 
 // ListGroups 检索语义匹配的持续性记忆簇（temporal 查询路径）。
 // query 为空时返回全部 active 簇（topK 截断）；BM25 对 Summary+Label 打分。
+//
 //nolint:gocyclo // D-6 包含扫描、反序列化、状态过滤、BM25 打分及堆排序，算法逻辑单一，拆分会引入不必要的接口开销
 func (dm *DurativeMemoryManager) ListGroups(ctx context.Context, query string, topK int) []DurativeGroup {
 	iter, err := dm.store.Scan(ctx, []byte("durative_group:"))
