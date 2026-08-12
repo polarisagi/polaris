@@ -62,16 +62,23 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/preferences", s.sysadminHandler.HandleGetPreferences)
 	mux.HandleFunc("PUT /v1/preferences/{key}", s.sysadminHandler.HandleSetPreference)
 
-	// TODO(C-1): 路由待接入——前置条件未满足:
-	// 1. PromptRepository 接入 handler.Dependencies
-	// 2. 权限模型确认：sysadmin-only or agent-allowed
-	// 校验日期: 2026-08-12
 	// 提示词管理 API（三层所有权：Layer 1 用户自定义层，读写 ~/.polarisagi/polaris/config/prompts/）
-	// Layer 0（embedded 内置默认）和 Layer 2（M9 优化）不通过此 API 暴露
-	// mux.HandleFunc("...", s.xx.HandleListPromptVersions)
-	// mux.HandleFunc("...", s.handleGetPrompt)
-	// mux.HandleFunc("...", s.handleSetPrompt)
-	// mux.HandleFunc("...", s.handleResetPrompt)
+	// Layer 0（embedded 内置默认）和 Layer 2（M9 优化）不通过此 API 暴露。
+	//
+	// 【状态：实现完整、刻意未接线，2026-08-12 复核】
+	// sysadmin/prompts.go 的 HandleGetPrompt/HandleSetPrompt/HandleResetPrompt 三者
+	// 已实现且 SysAdminHandler.PromptMgr 早已注入（server_lifecycle.go）——依赖不是
+	// 缺口。唯一真实缺口是写入侧的三项加固，缺任一项都不该开这个口子：
+	//   1. 审计：HandleSetPrompt/HandleResetPrompt 改的是系统核心指令，必须写
+	//      audit_log（HE-1），当前只写文件不留审计轨迹；
+	//   2. 注入校验：req.Value 是外部输入且会进 system prompt，需过
+	//      security/guard 的 SystemPromptGuard，当前直接落盘并热更新
+	//      (*h.SoulMDContent) = req.Value，绕过内存态校验；
+	//   3. 鉴权分级：写入属 TierCritical 还是 TierAdmin 需与 killswitch 的
+	//      loopback 豁免口径统一（见 server_handlers_hitl.go 的 RequireAuth 讨论）。
+	// 三项补齐后按 handler 注释里已写好的路径接线：
+	//   GET/PUT/DELETE /v1/config/prompts/{name}
+	// 跟踪：docs/arch/ROADMAP.md「提示词 Layer 1 写入接口」。
 
 	// M12 评测 API — V8-S2 Meta-Eval Sentinel（meta_holdout 隔离分区）运维接口，
 	// 见 internal/gateway/server/sysadmin/evaladmin。均要求 meta_auditor 签名
@@ -89,19 +96,19 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/sessions", s.chatHandler.HandleListSessions)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.chatHandler.HandleGetSession)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.chatHandler.HandleGetSessionContext)
-	// mux.HandleFunc("...", s.xx.HandleGetHistory)
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
 
 	// 语音识别 API
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)
 	mux.HandleFunc("POST /v1/audio/speech", s.chatHandler.AudioService.HandleAudioSpeech)
 
-	// TODO(C-3): 路由待接入——前置条件未满足:
-	// 1. 明确上传文件的 VFS 命名空间和配额限制
-	// 2. 接口是否需限制文件类型
-	// 2026-08-12 取证加记
-	// VFS 通用文件上传
-	// mux.HandleFunc("...", s.xx.HandleVFSUpload)
+	// VFS 通用文件上传（对话附件）。
+	// 2026-08-12 接线：此前 handler 已实现但从未注册，而 web/src/js/store/chat.js
+	// 的 uploadFile() 一直在 POST /v1/workspace/upload——即前端上传功能长期 404。
+	// 落地前已确认三项防护均在 handler 内就位：MaxBytesReader 100MB 上限、
+	// 文件名由服务端 UUID 生成（不采信客户端路径）、扩展名白名单外一律归档为
+	// .blob（见 sysadmin/vfs.go sanitizeUploadExt）。
+	mux.HandleFunc("POST /v1/workspace/upload", s.sysadminHandler.HandleVFSUpload)
 
 	// 全文搜索 API（FTS5）
 	mux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch)
@@ -154,7 +161,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// 工具 & Skill 管理 API
 	mux.HandleFunc("GET /v1/tools", s.sysadminHandler.HandleListTools)
-	// // mux.HandleFunc("...", s.handleListToolSchemas)
 	mux.HandleFunc("POST /v1/tools/{name}/execute", s.sysadminHandler.HandleExecuteTool)
 	mux.HandleFunc("GET /v1/skills", s.sysadminHandler.HandleListSkills)
 	mux.HandleFunc("POST /v1/skills/install", s.sysadminHandler.HandleInstallSkill)
@@ -197,12 +203,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/plugins/{id}/toggle", s.pluginHandler.HandleTogglePluginMCP)
 	mux.HandleFunc("POST /v1/plugins/{id}/upgrade", s.pluginHandler.HandleUpgradePlugin)
 
-	// Custom Entity Creation
-	// mux.HandleFunc("...", s.handleCreateMCP)
-	// mux.HandleFunc("...", s.sysadminHandler.HandleCreateSkill)
-	// mux.HandleFunc("...", s.handleCreatePlugin)
-	// mux.HandleFunc("...", s.handleCreateApp)
-
 	// 插件市场 API
 	mux.HandleFunc("GET /v1/plugins/marketplaces", s.pluginHandler.HandleListMarketplaces)
 	mux.HandleFunc("POST /v1/plugins/marketplaces", s.pluginHandler.HandleAddMarketplace)
@@ -210,9 +210,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/plugins/marketplaces/sync", s.pluginHandler.HandleSyncMarketplaces)
 	// /v1/plugins/sync 是 /v1/plugins/marketplaces/sync 的前端别名（Web UI plugins.js 硬编码路径）
 	mux.HandleFunc("POST /v1/plugins/sync", s.pluginHandler.HandleSyncMarketplaces)
-
-	// OpenAI 兼容端点（允许第三方 OpenAI SDK 客户端直接对接）
-	// mux.HandleFunc("...", s.handleOpenAIChat)
 
 	// 预算管理
 	mux.HandleFunc("GET /v1/config/budget", s.sysadminHandler.HandleGetBudget)

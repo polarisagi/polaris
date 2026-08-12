@@ -3,13 +3,10 @@ package server
 import (
 	"context"
 	"database/sql"
-	"net/http"
-	"os"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/extension/marketplace"
 	"github.com/polarisagi/polaris/internal/store/repo"
 )
@@ -59,6 +56,10 @@ func TestServerInitExtra(t *testing.T) {
 	}
 	s.SeedBuiltinConfig(nil, nil)
 	s.bootMarketplaceInit(context.Background())
-	s.InitSTTEngine(context.Background(), os.TempDir(), nil, http.DefaultClient, config.STTConfig{})
-	s.InitTTSEngine(context.Background(), os.TempDir(), nil, http.DefaultClient, config.TTSConfig{})
+	// 原先此处还调用 s.InitSTTEngine / s.InitTTSEngine。二者与
+	// cmd/polaris/server_stt_tts.go 的 initSTTEngine/initTTSEngine 逐行重复，
+	// 而生产启动只走后者；2026-08-12 复核确认前者零生产调用方（唯一调用点就是
+	// 本测试），且其 Edge TTS 分支构造 Provider 时 SafeDialer 传 nil——一旦有人
+	// 误接线，TTS 出站会绕过 SSRFGuard。已整体删除，STT/TTS 初始化的覆盖由
+	// cmd/polaris 侧承担。
 }

@@ -128,7 +128,8 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		TBR:          tbr,
 		DB:           db,
 	})
-	// STT/TTS 原子指针：启动时持有 nil 引擎，InitSTTEngine/InitTTSEngine 完成后原子替换为真实引擎。
+	// STT/TTS 原子指针：启动时持有 nil 引擎，由 cmd/polaris/server_stt_tts.go 的
+	// initSTTEngine/initTTSEngine 在异步下载完成后原子替换为真实引擎。
 	// 必须非 nil，否则 .Store()/.Load() 调用时 nil pointer dereference。
 	sttPtr := new(atomic.Pointer[chat.STTEngineBox])
 	ttsPtr := new(atomic.Pointer[chat.TTSProviderBox])

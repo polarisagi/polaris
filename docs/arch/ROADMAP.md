@@ -94,10 +94,10 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 
 前置条件（缺一不可）：
 1. Tier-0（2GB）实测：单帧图片经 protocol 事件流 → PromptBuilder → Provider 的
-   峰値内存与 token 开销；超限则本特性整体走硬件门控解锁（Tier1+），不得作硬依赖。
+   峰值内存与 token 开销；超限则本特性整体走硬件门控解锁（Tier1+），不得作硬依赖。
 2. Agent 侧文件产物管理链路就绪（见 M07 workspace_write 的实现状态）。
 3. Provider 能力探测：configs/defaults.toml 推荐的 DeepSeek V4 是否支持视觉输入，
-   不支持则需要按 role 分流到第二 Provider，这会牧动模型角色配置模型。
+   不支持则需要按 role 分流到第二 Provider，这会牵动模型角色配置模型。
 
 2026-08-12 裁决：本轮不实施，理由见 local_playground/upgrade/07-GD设计条目裁决.md。
 
@@ -109,6 +109,25 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 
 2026-08-12 裁决：本轮不实施。当前 L2 为一次性执行不驻留依赖，问题域仅覆盖 L4，
 而 L4 尚无唤醒延迟的实测数据。理由详见 local_playground/upgrade/07-GD设计条目裁决.md。
+
+### 提示词 Layer 1 写入接口（候选，来源 C-1）
+
+`internal/gateway/server/sysadmin/prompts.go` 的三个 handler 已实现完整，
+`SysAdminHandler.PromptMgr` 也早已注入，但路由刻意未注册。
+
+接线前置条件（缺一不可，三项都属写入侧加固）：
+1. **审计**：写入/重置系统核心指令必须落 `audit_log`（HE-1），当前只写文件不留轨迹；
+2. **注入校验**：`req.Value` 是外部输入且会进 system prompt，需过
+   `internal/security/guard` 的 SystemPromptGuard；当前 `(*h.SoulMDContent) = req.Value`
+   直接改内存态，绕过一切校验；
+3. **鉴权分级**：写入是 TierCritical 还是 TierAdmin，须与 killswitch 的 loopback
+   豁免口径统一后再定。
+
+三项补齐后按 handler 注释里已写好的路径接线：`GET/PUT/DELETE /v1/config/prompts/{name}`。
+
+2026-08-12 复核：GR-9-003 曾把这组 handler 报为「API 直接改系统提示词的 Prompt
+Injection 漏洞」，实为误报——路由从未注册，无生产入口。真实状态是「实现完整、
+刻意未接线」，记录于此以免下一轮重复发现。
 
 ---
 
