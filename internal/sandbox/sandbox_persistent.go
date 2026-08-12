@@ -43,6 +43,12 @@ import (
 //     ExecTimeout 熔断（stdin 被协议独占）。
 //   - 单会话同一时刻只能处理一次调用（execMu 串行化），高并发同 SessionID
 //     调用会排队等待，不会并行执行、也不会互相污染状态。
+//
+// （以上是本文件的设计说明，描述对象是下方的 PersistentSandbox 类型；此处刻意留空行
+// 与 PersistentSandboxConfig 断开，否则 Go 会把整段绑定为 Config 的 doc comment——
+// 那正是 tools/comment_drift.go 要拦的注释归属错位。）
+
+// PersistentSandboxConfig 是 PersistentSandbox 的构造参数，零值经 applyDefaults 补默认。
 type PersistentSandboxConfig struct {
 	// IdleTTL 会话空闲超过此时长会被后台回收（默认 10 分钟）。
 	IdleTTL time.Duration

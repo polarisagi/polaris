@@ -137,7 +137,7 @@ func (f *MemoryFacadeImpl) ListCoreMemory(ctx context.Context, agentID, sessionI
 	return blocks, nil
 }
 
-// Reflection 层调用
+// ListReflections 列出反思条目（下沉到 Reflection 层调用）。
 func (f *MemoryFacadeImpl) ListReflections(ctx context.Context, q types.ReflectionQuery) ([]types.ReflectionEntry, error) {
 	if rm := f.sys.Mem().Reflection(); rm != nil {
 		entries, err := rm.ListReflections(ctx, q)

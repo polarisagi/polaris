@@ -151,5 +151,3 @@ func (bb *SQLiteBlackboard) ResumeFromSuspended(ctx context.Context, taskID stri
 	}
 	return nil
 }
-
-// Ping 实现 Pinger 接口，P0 阶段 HealthCheckGate 使用。

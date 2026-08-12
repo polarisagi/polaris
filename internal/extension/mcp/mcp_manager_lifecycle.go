@@ -118,6 +118,7 @@ const maxLLMToolNameLen = 64
 
 // DynamicConnect 以运行时动态方式连接一个尚未持久化的 MCP Server（不经过 Add() 的 DB 写入路径），
 // 用于临时/一次性连接场景：校验 ServerName 合法性 → 建立连接 → 拉取并注册工具 → 登记到内存 entries。
+// 幂等：同名 server 已在 entries 中时直接返回 nil，不重复建连。
 func (m *MCPManager) DynamicConnect(ctx context.Context, req DynamicConnectRequest) error {
 	// ServerName 用作工具名前缀（mcp__<ServerName>__<tool>），必须满足 ^[a-zA-Z0-9_-]+$。
 	// Add() 已内置此校验；DynamicConnect 走独立路径，需显式检查。

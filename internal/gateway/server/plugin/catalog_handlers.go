@@ -22,6 +22,10 @@ import (
 	"github.com/polarisagi/polaris/pkg/util"
 )
 
+// HandleListPluginCatalog 返回扩展目录列表（用户自建 + 市场缓存）。
+// 排序规则：已安装优先 → 官方市场优先（SortOrder == 0）→ 名字字母序。
+// 已安装的条目只出现一次（installed=true），不在未安装区重复展示。
+// GET /v1/plugins/catalog
 func (h *PluginHandler) HandleListPluginCatalog(w http.ResponseWriter, r *http.Request) {
 	installed := h.GetInstalledCatalogIDs(r.Context())
 	result := make([]protocol.RegistryEntry, 0)
@@ -293,6 +297,3 @@ func cond(pred bool, a, b string) string {
 	}
 	return b
 }
-
-// downloadAndInstallExtension 异步下载并安装扩展，更新数据库。
-//
