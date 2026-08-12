@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -160,7 +161,7 @@ func writeSkillFiles(baseDir string, result GeneratedSkill) (string, error) {
 }
 
 // GenerateSkill takes a user's intent, calls the LLM, and creates the physical skill directory and SKILL.md.
-func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string, error) {
+func (c *SkillCreator) GenerateSkill(ctx context.Context, intent taint.TaintedString) (string, error) {
 	if c.llm == nil {
 		return "", apperr.New(apperr.CodeInternal, "skill_creator: LLM client is nil")
 	}
@@ -169,7 +170,7 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent string) (string
 	// 有界重试（含错误回灌）+ 熔断 + tracing/metrics 交由 StructuredGenerator
 	// 统一处理；解析失败时把错误摘要回灌进下一次重试的 prompt。
 	var result GeneratedSkill
-	genErr := c.structGen.Generate(ctx, skillCreatorSystemPrompt, intent, c.llm.GenerateJSON, func(raw string) error {
+	genErr := c.structGen.Generate(ctx, skillCreatorSystemPrompt, taint.Spotlighting(intent), c.llm.GenerateJSON, func(raw string) error {
 		parsed, perr := parseGeneratedSkill(raw)
 		if perr != nil {
 			return perr

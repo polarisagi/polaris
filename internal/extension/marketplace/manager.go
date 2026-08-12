@@ -40,7 +40,7 @@ type Manager struct {
 	outbox            protocol.OutboxWriter
 }
 
-func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int) *Manager {
+func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, pg protocol.PolicyGate, pr protocol.PreferencesRepo, at *security.AuditTrail, publisherTrustMap map[string]int, outbox protocol.OutboxWriter) *Manager {
 	if publisherTrustMap == nil {
 		publisherTrustMap = make(map[string]int)
 	}
@@ -51,6 +51,7 @@ func NewManager(extRepo protocol.ExtensionRepository, mcpMgr MCPRuntimeManager, 
 		prefsRepo:         pr,
 		auditTrail:        at,
 		publisherTrustMap: publisherTrustMap,
+		outbox:            outbox,
 	}
 }
 
@@ -274,15 +275,17 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 				"trust_tier":   inst.TrustTier,
 				"runtime_id":   inst.RuntimeID,
 			})
-			_ = m.outbox.Write(ctx, protocol.OutboxEntry{
+			if err := m.outbox.Write(ctx, protocol.OutboxEntry{
 				TargetEngine:   protocol.TopicMarketplace,
 				Operation:      "extension_uninstall",
 				Scope:          "extension",
 				Payload:        payload,
 				IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMarketplace, "extension_instance", inst.ID, "uninstall", 1)),
-			})
+			}); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: outbox write", err)
+			}
 		} else {
-			slog.Warn("marketplace: outbox writer not injected, extension uninstall will stall", "ext", inst.ID)
+			return apperr.New(apperr.CodeInternal, "Manager.UninstallExtension: outbox writer not injected, cannot complete uninstall")
 		}
 
 	}

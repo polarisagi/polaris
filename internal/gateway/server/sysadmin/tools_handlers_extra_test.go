@@ -45,7 +45,7 @@ func TestToolsHandlersExtra(t *testing.T) {
 		ChatRepo:     repo.NewSQLiteChatRepository(db),
 		ExtRepo:      repo.NewSQLiteExtensionRepository(db),
 		ProviderRepo: repo.NewSQLiteProviderRepository(db),
-		InstallMgr:   marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil),
+		InstallMgr:   marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil, nil),
 	}
 
 	// List Tools

@@ -55,7 +55,7 @@ func TestServerInitExtra(t *testing.T) {
 		chatRepo:     repo.NewSQLiteChatRepository(db),
 		extRepo:      repo.NewSQLiteExtensionRepository(db),
 		providerRepo: repo.NewSQLiteProviderRepository(db),
-		installMgr:   marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, nil, nil, nil, nil),
+		installMgr:   marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, nil, nil, nil, nil, nil),
 	}
 	s.SeedBuiltinConfig(nil, nil)
 	s.bootMarketplaceInit(context.Background())

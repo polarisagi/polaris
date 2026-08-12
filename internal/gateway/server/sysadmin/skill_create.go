@@ -8,6 +8,8 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/skill"
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // HandleCreateSkill 用户意图驱动的技能生成入口（2026-07-21 deadcode 审查补齐，
@@ -42,7 +44,10 @@ func (h *SysAdminHandler) HandleCreateSkill(w http.ResponseWriter, r *http.Reque
 	baseDir := filepath.Join(h.DataDir, "skills", "user_generated")
 	creator := skill.NewSkillCreator(&skill.ProviderLLMClient{Provider: p}, baseDir, h.InstallMgr, h.SkillReg)
 
-	pluginDir, err := creator.GenerateSkill(r.Context(), req.Intent)
+	intentTS := taint.NewTaintedString(req.Intent,
+		taint.TaintSource{Module: "gateway/sysadmin", OriginTaintLevel: types.TaintHigh},
+		"http_gateway:/v1/skills/create")
+	pluginDir, err := creator.GenerateSkill(r.Context(), intentTS)
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return

@@ -410,7 +410,7 @@ HybridRetriever 支持基于 `as_of` 时间戳的时空穿梭查询。当提供 
 
 ### 7.6 Evidence Subgraph Extraction
 
-**EvidenceSubgraphExtractor**（`internal/memory/graph/edge_weight.go`）:
+**EvidenceSubgraphExtractor**（`internal/memory/graph/edge_weight.go`）: [超前描述（2026-08-12 复核）：尚未实现]
 负责知识图谱的子图提取。基于种子实体执行有界 BFS（maxDepth=2，maxNodes=50）+ alpha 权重过滤（Personalized PageRank 近似剪枝），输出结构化实体列表辅助证据链检索。邻接表 key 格式：`adj:<entityID>`；边权重 key：`edge_w:<src>_<dst>`（见 upgrade-10）。
 
 ### 7.6 Edge Weight Reinforcement & Decay
@@ -424,7 +424,7 @@ HybridRetriever 支持基于 `as_of` 时间戳的时空穿梭查询。当提供 
 
 `semantic_connectivity_cache` 表 DDL 见 `internal/protocol/schema/004_semantic_memory.sql`（派生数据缓存，非事实源）。
 
-Effective Connectivity 被预计算为可 O(1) 查询的缓存表。ConnectivityPrecomputer 由 M9 BackgroundTaskScheduler 在每日凌晨 4:30 触发（与 Consolidation 3:00 错开 ≥90 分钟）。Tier 0 最多计算 200 个种子实体（约 20MB 内存），Tier 1+ 扩展到 1000 个。分批 50 实体/批，批间释放 CPU（Gosched），CPU 占用 >30% 或空闲内存 <2GB 时挂起。采用 INSERT OR REPLACE 全量覆盖旧缓存。
+Effective Connectivity 被预计算为可 O(1) 查询的缓存表。ConnectivityPrecomputer [超前描述（2026-08-12 复核）：尚未实现] 由 M9 BackgroundTaskScheduler 在每日凌晨 4:30 触发（与 Consolidation 3:00 错开 ≥90 分钟）。Tier 0 最多计算 200 个种子实体（约 20MB 内存），Tier 1+ 扩展到 1000 个。分批 50 实体/批，批间释放 CPU（Gosched），CPU 占用 >30% 或空闲内存 <2GB 时挂起。采用 INSERT OR REPLACE 全量覆盖旧缓存。
 
 ActivationMaximization 查询时 O(1) 完成——任务 embedding 搜索最相似的 20 个实体 → 按预计算的 effective_weight 排序 → 取 topK + BFS+PPR 构建最小激活子图。
 

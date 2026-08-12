@@ -1,6 +1,9 @@
 package protocol
 
-import "github.com/polarisagi/polaris/pkg/types"
+import (
+	"github.com/polarisagi/polaris/internal/security/taint"
+	"github.com/polarisagi/polaris/pkg/types"
+)
 
 // CodeActRequest CodeAct 执行请求。
 type CodeActRequest struct {
@@ -19,7 +22,7 @@ type CodeActRequest struct {
 
 // CodeActResult CodeAct 执行结果。
 type CodeActResult struct {
-	Output    []byte
+	Output    taint.TaintedString // 恒为 TaintHigh：沙箱执行 LLM 生成代码的产物，见 code_act.go Execute
 	ExitCode  int
 	LatencyMs int64
 }

@@ -84,6 +84,9 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 	lastEvent := make(map[string]time.Time)
 
 	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	if host != nil && host.SafeDialer() != nil {
+		dialer.NetDialContext = host.SafeDialer().DialContext // A-2：注入 SafeDialer，防 SSRF
+	}
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("ha: dial: %v", err), err)

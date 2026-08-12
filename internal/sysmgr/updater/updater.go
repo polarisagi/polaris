@@ -233,12 +233,14 @@ func (m *Manager) TriggerUpdate(ctx context.Context, version string) error {
 	ctxUpdate, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	concurrent.SafeGo(ctxUpdate, "sysmgr.updater.trigger_update", func(ctx context.Context) {
 		defer cancel()
-		m.doUpdate(ctx, version)
+		if err := m.doUpdate(ctx, version); err != nil {
+			slog.ErrorContext(ctx, "updater: doUpdate failed", "err", err)
+		}
 	})
 	return nil
 }
 
-func (m *Manager) doUpdate(ctx context.Context, version string) {
+func (m *Manager) doUpdate(ctx context.Context, version string) error {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 
@@ -267,7 +269,7 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 	if err := downloader.DownloadFile(ctx, m.client, downloadURL, archivePath); err != nil {
 		slog.Error("updater: download failed", "err", err)
 		m.setError("download failed: " + err.Error())
-		return
+		return err
 	}
 
 	// ── 安全校验：取 <archive>.sha256（及其签名）并验证归档 SHA-256 ───────────
@@ -283,7 +285,7 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 		slog.Error("updater: checksum verification failed", "err", err)
 		os.Remove(archivePath) //nolint:errcheck // 校验失败立即删除可疑文件
 		m.setError("checksum verification failed: " + err.Error())
-		return
+		return err
 	}
 
 	slog.Info("updater: download verified, installing", "archive", archivePath)
@@ -291,7 +293,7 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 
 	if err := m.applyUpdate(archivePath); err != nil {
 		m.setError(err.Error())
-		return
+		return err
 	}
 
 	slog.Info("updater: binary and libs replaced, restarting")
@@ -301,10 +303,23 @@ func (m *Manager) doUpdate(ctx context.Context, version string) {
 	if m.restartFn != nil {
 		m.restartFn()
 	} else {
-		exePath, _ := m.executableFn()
-		exePath, _ = filepath.EvalSymlinks(exePath)
+		exePath, err := m.executableFn()
+		if err != nil {
+			err = apperr.Wrap(apperr.CodeInternal, "updater: get executable path failed", err)
+			m.setError(err.Error())
+			return err
+		}
+		resolved, err := filepath.EvalSymlinks(exePath)
+		if err != nil {
+			// 解析失败在 symlink 部署下会替换错目标，ADR-0095 供应链边界
+			err = apperr.Wrap(apperr.CodeInternal, "updater: resolve executable symlink failed", err)
+			m.setError(err.Error())
+			return err
+		}
+		exePath = resolved
 		m.defaultRestart(exePath)
 	}
+	return nil
 }
 
 func (m *Manager) setStatus(s Status) {

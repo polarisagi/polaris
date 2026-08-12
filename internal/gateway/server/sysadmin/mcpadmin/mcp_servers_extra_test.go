@@ -101,7 +101,7 @@ func TestHandleMCPServers(t *testing.T) {
 	}
 
 	h := &MCPAdmin{DB: db, ExtRepo: repo.NewSQLiteExtensionRepository(db)}
-	h.InstallMgr = marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil)
+	h.InstallMgr = marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil, nil)
 
 	// List
 	req := httptest.NewRequest("GET", "/api/v1/mcp_servers", nil)

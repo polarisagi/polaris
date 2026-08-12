@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -45,7 +46,7 @@ type CodeActRequest struct {
 // CodeActResult agent 包本地定义的代码执行结果。
 // 字段与 action/protocol.CodeActResult 完全对应。
 type CodeActResult struct {
-	Output    []byte
+	Output    taint.TaintedString
 	ExitCode  int
 	LatencyMs int64
 }

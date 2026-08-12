@@ -650,3 +650,6 @@ Polaris 是一个足够强大的系统。根据哥德尔不完备性定理的工
 | KillSwitch 自动触发 | — | Stage 3 FULLSTOP 需人工 unseal |
 
 **禁止规则**：禁止用自动化机制替换上述任何外部锚点。越自动化的系统，越需要保留这些独立的验证节点。
+
+> `TaintUserReviewed`（值=4）是**旁路标记**而非污点强度序列的一员；一切 `>= TaintMedium` 的拦截判定必须显式排除它。枚举值 4 仅为编码占位，不表示"比 TaintHigh 更脏"。
+> 2026-08-12 追记：GR-2-004 取证确认此为 bug，修复见 safe_dialer_capability.go TaintEgressCheck。

@@ -284,7 +284,7 @@ func TestExecute_PolicyDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.ExitCode != 1 || !strings.Contains(string(res.Output), "policy denied") {
+	if res.ExitCode != 1 || !strings.Contains(res.Output.UnsafeContent(), "policy denied") {
 		t.Errorf("expected policy denied in output, got exit=%d output=%q", res.ExitCode, res.Output)
 	}
 }
@@ -351,7 +351,7 @@ func TestExecute_Success(t *testing.T) {
 	if res == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if string(res.Output) != "hello" {
+	if res.Output.UnsafeContent() != "hello" {
 		t.Errorf("output: got %q, want %q", res.Output, "hello")
 	}
 	if res.ExitCode != 0 {
@@ -417,7 +417,7 @@ func TestExecute_L4PersistentSession_StatePersistsAcrossCalls(t *testing.T) {
 	if res2.ExitCode != 0 {
 		t.Fatalf("call2 unexpected exit code %d, output=%q", res2.ExitCode, res2.Output)
 	}
-	if !strings.Contains(string(res2.Output), "bar") {
+	if !strings.Contains(res2.Output.UnsafeContent(), "bar") {
 		t.Fatalf("expected call2 to observe FOO=bar exported by call1 through a real persisted shell process, got output=%q", res2.Output)
 	}
 }

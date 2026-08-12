@@ -23,7 +23,7 @@ import (
 // 且未经 SanitizeByUserReview → 拒绝出站。
 func (sd *SafeDialer) TaintEgressCheck(taintLevels []types.TaintLevel) error {
 	for _, tl := range taintLevels {
-		if tl >= types.TaintMedium {
+		if tl >= types.TaintMedium && tl != types.TaintUserReviewed {
 			return &ErrDialerTaintBlocked{Level: tl}
 		}
 	}

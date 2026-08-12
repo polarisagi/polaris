@@ -305,7 +305,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		sttGate = sb.AutoConf.Gate
 	}
 	initSTTEngine(ctx, httpServer, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.STT)
-	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.TTS)
+	initTTSEngine(ctx, httpServer, sb.DataDir, sttGate, sb.SafeHTTP, sb.Cfg.Inference.TTS, sb.Dialer)
 
 	// ─── §11.6 后台向量回填触发器 (Dynamic Embedding Backfill)
 	// sb.Embedder 经 EmbeddingBatcher 合批接线后已是 *search.SyncBatcherAdapter，

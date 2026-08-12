@@ -234,21 +234,14 @@ func (a *Agent) memoryPartitionKey() string {
 }
 
 // SetTaskIntent 设置任务意图（供 M8 Orchestrator 注入黑板任务信息）。
-func (a *Agent) SetTaskIntent(intent []byte) {
-	intentStr := string(intent)
+func (a *Agent) SetTaskIntent(intentTS taint.TaintedString) {
+	intentStr := intentTS.UnsafeContent()
 	if a.sCtx.TaskModel == nil {
 		a.sCtx.TaskModel = &fsm.TaskModel{
 			Goal: intentStr,
 		}
 	}
-	a.sCtx.RawIntentTS = taint.NewTaintedString(
-		intentStr,
-		taint.TaintSource{
-			Module:           "m8_orchestrator",
-			OriginTaintLevel: types.TaintHigh,
-		},
-		"task_intent_input",
-	)
+	a.sCtx.RawIntentTS = intentTS
 
 	// 单调递增全局污点（只升不降）
 	if lv := a.sCtx.RawIntentTS.Level(); lv > a.sCtx.GlobalTaintLevel {

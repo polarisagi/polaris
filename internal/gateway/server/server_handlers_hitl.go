@@ -113,10 +113,13 @@ func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action st
 func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	clientIP := extractIP(r)
 	authCtx := authcontext.FromContext(r.Context())
-	clientType := "unknown"
-	if authCtx != nil {
-		clientType = authCtx.ClientType
+	if authCtx == nil {
+		// D-1: 本地 WebUI 访问在零认证配置下 authCtx 可能为 nil，
+		// 直接访问下列字段会 panic（GR-9.1-005）
+		authCtx = &authcontext.AuthContext{ClientType: "local_webui"}
 	}
+	clientType := authCtx.ClientType
+
 	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP, clientType) {
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
@@ -124,8 +127,9 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 
 	taskID := r.PathValue("taskID")
 
-	if !authCtx.Authenticated || (authCtx.UserID != "admin" && authCtx.UserID != "system") {
-		// MVP 阶段仅已认证的 admin 可操作。在多租户下需检查 task 所属 user。
+	isAdmin := authCtx.Authenticated && (authCtx.UserID == "admin" || authCtx.UserID == "system")
+	isLocalWebUI := authCtx.ClientType == "local_webui" || authCtx.ClientType == "local"
+	if !isAdmin && !isLocalWebUI {
 		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
 		return
 	}

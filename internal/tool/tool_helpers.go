@@ -163,9 +163,9 @@ func (rl *rateLimiter) Allow() bool {
 // ErrToolNotFound 工具未注册时返回的哨兵错误。
 var ErrToolNotFound = apperr.New(apperr.CodeInternal, "tool not found")
 
-func (r *InMemoryToolRegistry) checkIdempotency(ctx context.Context) (*types.ToolResult, bool, string) {
+func (r *InMemoryToolRegistry) checkIdempotency(ctx context.Context, toolName string) (*types.ToolResult, bool, string) {
 	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {
-		idempotencyKey := string(key)
+		idempotencyKey := toolName + "/" + string(key) // 工具名隔离，防止跨工具串味
 		if cachedResult, exists := r.idempotencyCache.get(idempotencyKey); exists {
 			slog.Debug("tool_registry: returning cached result for idempotency key", "key", idempotencyKey)
 			return cachedResult, true, idempotencyKey

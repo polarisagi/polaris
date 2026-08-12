@@ -7,6 +7,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -32,7 +33,12 @@ func (o *orchestrator) runFSMTurn(
 	// 先订阅后触发：订阅通道就绪前 FSM 不会开始产出，消除早期事件丢失竞态。
 	ch := agentCtrl.SubscribeStream(ctx)
 
-	agentCtrl.SetTaskIntent([]byte(input))
+	userTS := taint.NewTaintedString(input, taint.TaintSource{
+		Module:           "gateway/chat",
+		EventID:          sessionID,
+		OriginTaintLevel: types.TaintHigh,
+	}, "http_gateway")
+	agentCtrl.SetTaskIntent(userTS)
 	if err := agentCtrl.SendIntent(types.TriggerIntentReceived); err != nil {
 		slog.Warn("session: fsm advance failed or timeout", "err", err)
 		return "", "Agent 状态机未能接收本轮输入，请稍后重试", false

@@ -27,7 +27,12 @@ func (m *Manager) applyUpdate(archivePath string) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "resolve executable", err)
 	}
-	exePath, _ = filepath.EvalSymlinks(exePath)
+	resolved, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		// 解析失败在 symlink 部署下会替换错目标，ADR-0095 供应链边界
+		return apperr.Wrap(apperr.CodeInternal, "updater: resolve executable symlink failed", err)
+	}
+	exePath = resolved
 
 	newBinPath := exePath + ".new"
 	newLibDir := filepath.Join(filepath.Dir(exePath), "lib.new")

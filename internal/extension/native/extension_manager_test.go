@@ -301,7 +301,7 @@ func TestExtensionManager_InstallExtension(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	installMgr := marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil)
+	installMgr := marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, mockPolicyGate{}, mockPrefsRepo{}, nil, nil, nil)
 	outbox := mockOutbox{}
 
 	installFn := MakeExtensionInstallFn(repo.NewSQLiteExtensionRepository(db), nil, installMgr, nil, outbox)

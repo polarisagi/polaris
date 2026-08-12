@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -92,56 +91,6 @@ func (ts TaintedString) AppendToMap(m map[string]string, key string) bool {
 // 供 PromptBuilder 使用，避免调用方在 policy 豁免域外出现 .Content() 调用。
 func (ss SafeString) IntoMessage(role string) types.Message {
 	return types.Message{Role: role, Content: ss.content}
-}
-
-// =============================================================================
-// TaintTracker — 运行时污点传播追踪器（M11 §2.1 第一重防护）
-// 追踪每个字符串 ID 的污点等级，GetMaxTaint 实现 PropagateTaint 语义：
-// output = max(所有输入的 TaintLevel)，只升不降。
-// =============================================================================
-
-// TaintTracker 线程安全的运行时污点追踪器。
-type TaintTracker struct {
-	mu     sync.RWMutex
-	levels map[string]types.TaintLevel // id → TaintLevel
-}
-
-// NewTaintTracker 创建新的追踪器实例。
-func NewTaintTracker() *TaintTracker {
-	return &TaintTracker{
-		levels: make(map[string]types.TaintLevel),
-	}
-}
-
-// Track 记录字符串 ID 的污点等级。
-// 遵循单调不递减原则：只能升级，不能降级。
-func (tt *TaintTracker) Track(id string, level types.TaintLevel) {
-	tt.mu.Lock()
-	defer tt.mu.Unlock()
-	if existing, ok := tt.levels[id]; !ok || level > existing {
-		tt.levels[id] = level
-	}
-}
-
-// GetLevel 获取单个 ID 的当前污点等级。
-func (tt *TaintTracker) GetLevel(id string) types.TaintLevel {
-	tt.mu.RLock()
-	defer tt.mu.RUnlock()
-	return tt.levels[id]
-}
-
-// GetMaxTaint 实现 PropagateTaint 语义：返回所有指定 ID 中最高的污点等级。
-// 用于合并多个输入的污点，决定输出的最终污点等级。
-func (tt *TaintTracker) GetMaxTaint(ids ...string) types.TaintLevel {
-	tt.mu.RLock()
-	defer tt.mu.RUnlock()
-	var max types.TaintLevel
-	for _, id := range ids {
-		if l, ok := tt.levels[id]; ok && l > max {
-			max = l
-		}
-	}
-	return max
 }
 
 // =============================================================================

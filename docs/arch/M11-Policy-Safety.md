@@ -615,3 +615,8 @@ M11 故障默认 fail-closed (拒绝执行)，保障安全。与 OSMemoryGuard �
 | 全局字典 | TaintLevel/Taint-Prop/Taint-Sanitizer/KillSwitch 完整定义 | 00-Global-Dictionary §4, §5, §8 |
 | DDL | 001_events（审计轨迹 source）、006_decision_log（决策日志） | internal/protocol/schema/ |
 | 时序图 | KillSwitch 触发与响应链全流程 | DIAGRAMS.md#killswitch |
+
+> `TaintUserReviewed`（值=4）是**旁路标记**而非污点强度序列的一员；一切 `>= TaintMedium` 的拦截判定必须显式排除它。枚举值 4 仅为编码占位，不表示"比 TaintHigh 更脏"。
+> 2026-08-12 追记：GR-2-004 取证确认此为 bug，修复见 safe_dialer_capability.go TaintEgressCheck。
+
+2026-08-12 追记：经核对 gate_builtin_rules.go，“网络操作”对应的 permit 规则确实同时检查了 trust_level >= 3、approval_status == approved、capability_token_valid 三个条件。

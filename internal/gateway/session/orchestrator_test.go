@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"sync"
 	"testing"
 	"time"
@@ -171,10 +172,10 @@ func newFakeAgentController() *fakeAgentController {
 	return &fakeAgentController{events: make(chan types.AgentStreamEvent, 8)}
 }
 
-func (a *fakeAgentController) AgentID() string              { return "fake-agent" }
-func (a *fakeAgentController) SetTaskIntent(intent []byte)  {}
-func (a *fakeAgentController) SetSpawnDepth(depth int)      {}
-func (a *fakeAgentController) SetMemoryNamespace(ns string) {}
+func (a *fakeAgentController) AgentID() string                          { return "fake-agent" }
+func (a *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {}
+func (a *fakeAgentController) SetSpawnDepth(depth int)                  {}
+func (a *fakeAgentController) SetMemoryNamespace(ns string)             {}
 func (a *fakeAgentController) SendIntent(trigger types.AgentTrigger) error {
 	return a.sendErr
 }

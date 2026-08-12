@@ -185,6 +185,9 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	// 污点等级 → 施加限制：语义为"只增不减"，故用 >=，禁止用 ==（否则更高污点等级绕过白名单）。
+	// 注意：此处 >= TaintMedium 是「白名单域名收紧」语义（越脏越收紧），
+	// TaintUserReviewed 落入白名单限制是合理的，不同于 TaintEgressCheck 的「拦截」语义，
+	// 故此处不加 != TaintUserReviewed 排除（2026-08-12 A-3 取证确认）。
 	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium {
 		allowed := false
 		for _, d := range sd.allowedDomains {
@@ -269,7 +272,10 @@ func (sd *SafeDialer) dialerControl(network, address string, c syscall.RawConn) 
 
 	ip := net.ParseIP(host)
 	if ip == nil {
-		return nil // 无法解析，让后续 Dial 报错
+		// fail-closed：本函数是 socket 级最后闸门，无法判定即拒绝。
+		// 原实现 return nil 依赖"后续 Dial 会报错"，但 net.Dialer 能处理
+		// ParseIP 处理不了的形式（如 IPv6 Zone Index），依赖不成立（A-1）。
+		return apperr.New(apperr.CodeForbidden, "safe_dialer: unparseable address in dialer control, blocked (fail-closed)")
 	}
 
 	// local_only 非 loopback 拒绝由 NetworkSandbox 通过 SetDialerControl 注入
@@ -303,15 +309,6 @@ func (sd *SafeDialer) InjectWebSocketDialer(wsDialer interface {
 	SetNetDialContext(func(context.Context, string, string) (net.Conn, error))
 }) {
 	wsDialer.SetNetDialContext(sd.DialContext)
-}
-
-// InjectGRPCDialer 将 SafeDialer 注入 gRPC 连接。
-func (sd *SafeDialer) InjectGRPCDialer(opts interface {
-	SetDialOption(func(context.Context, string) (net.Conn, error))
-}) {
-	opts.SetDialOption(func(ctx context.Context, addr string) (net.Conn, error) {
-		return sd.DialContext(ctx, "tcp", addr)
-	})
 }
 
 // SetLocalOnlyFilter 注入 local_only IP 过滤回调。

@@ -226,9 +226,16 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 		TaintLevel: maxTaint,
 	}
 
-	data, _ := json.Marshal(group)
-	_ = dm.store.Put(ctx, []byte("durative_group:"+groupID), data)
+	data, err := json.Marshal(group)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "durative_mem: marshal group failed", err)
+	}
+	err = dm.store.Put(ctx, []byte("durative_group:"+groupID), data)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "durative_mem: put group failed", err)
+	}
 
+	var mapErrs []error
 	for _, evID := range eventIDs {
 		mappingEv := types.Event{
 			ID:      "mapping_" + groupID + "_" + evID,
@@ -236,9 +243,16 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 			TaskID:  "system",
 			Payload: []byte(fmt.Sprintf(`{"event_id":"%s", "group_id":"%s"}`, evID, groupID)),
 		}
-		_ = dm.episodic.Append(ctx, mappingEv, types.TaintNone)
+		if err := dm.episodic.Append(ctx, mappingEv, types.TaintNone); err != nil {
+			mapErrs = append(mapErrs, err)
+		}
 
-		_ = dm.store.Put(ctx, []byte("group_mapping:"+evID), []byte(groupID))
+		if err := dm.store.Put(ctx, []byte("group_mapping:"+evID), []byte(groupID)); err != nil {
+			mapErrs = append(mapErrs, err)
+		}
+	}
+	if len(mapErrs) > 0 {
+		slog.ErrorContext(ctx, "durative_mem: partially failed to create mappings", "group_id", groupID, "errors", mapErrs)
 	}
 
 	return nil

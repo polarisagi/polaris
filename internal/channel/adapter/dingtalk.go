@@ -49,6 +49,9 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dingtalk: get endpoint: %v", err), err)
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	if host != nil && host.SafeDialer() != nil {
+		dialer.NetDialContext = host.SafeDialer().DialContext // A-2：注入 SafeDialer，防 SSRF
+	}
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dingtalk: dial: %v", err), err)

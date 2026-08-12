@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"database/sql"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"strings"
 	"testing"
 	"time"
@@ -22,8 +23,8 @@ type mockAgentController struct {
 	sendIntentErr   error
 }
 
-func (m *mockAgentController) SetTaskIntent(intent []byte) {
-	m.intentSet = intent
+func (m *mockAgentController) SetTaskIntent(intent taint.TaintedString) {
+	m.intentSet = []byte(intent.UnsafeContent())
 }
 
 func (m *mockAgentController) SetSpawnDepth(depth int) {}
@@ -79,7 +80,7 @@ func Test_SSE_AgentFSM_Injection(t *testing.T) {
 	}
 
 	var ctrl protocol.AgentController = agent
-	ctrl.SetTaskIntent([]byte("hello world"))
+	ctrl.SetTaskIntent(taint.NewTaintedString("hello world", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
 	if string(agent.intentSet) != "hello world" {
 		t.Errorf("Expected 'hello world', got %s", agent.intentSet)
 	}

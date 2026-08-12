@@ -186,6 +186,13 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	ie.capture("polaris.ffi.errors_total", err)
 
 	// [GR-1-003] Rerank 指标：调用延迟 + 结果计数，排查 RAG 重排步骤性能瓶颈与降级频率。
+	InstrRetrievalLatencyMs, err = meter.Float64Histogram(
+		"polaris.retrieval.latency_ms",
+		metric.WithDescription("Retrieval execution latency in ms (label: stage)"),
+		metric.WithExplicitBucketBoundaries(1, 5, 10, 25, 50, 100, 250, 500, 1000),
+	)
+	ie.capture("polaris.retrieval.latency_ms", err)
+
 	InstrRerankLatencyMs, err = meter.Float64Histogram(
 		"polaris.rerank.call_latency_ms",
 		metric.WithDescription("Reranker 单次调用延迟（ms）(label: outcome)"),

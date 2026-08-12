@@ -777,3 +777,5 @@ exec 原语不在本包，定义在 `internal/sysmgr/osutils/script.go`，由 Ho
 相互独立、互不调用。
 
 > **✅ 已修复（native_sandbox mutex 中毒）**：`rust/substrate/src/native_sandbox/mod.rs` 中 stdout/stderr 采集子线程的 `buf.lock().unwrap()` 已改为 `unwrap_or_else(|e| e.into_inner())`，锁中毒时取回内部数据而非 panic，子线程不再因锁异常丢失输出。
+
+`capability_token_valid` 表示本次请求是否携带通过 `tokenVerifier.Verify` 的能力令牌，与 `tool.Capability` 级别无关。根据 `ExecEnvelope.Execute` Step 1 的逻辑，`tokenVerifier.Verify` 成功 → true，否则 false。2026-08-12 复核：原描述"根据 tool.Capability <= CapReadOnly 动态设置"与代码不符，已订正。

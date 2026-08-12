@@ -74,6 +74,10 @@ func (s *Server) SeedBuiltinConfig(marketplacesData, registryData []byte) {
 	}
 }
 
+// TODO(C-2): 工厂尚未在 boot_server.go 接入，前置条件:
+// 1. AudioPipeline 设计确认（STT → Agent → TTS 管线路径）
+// 2. 配置项 [audio] 在 configs/defaults.toml 加入
+// 2026-08-12 取证加记
 // InitSTTEngine 按 FeatureGate 门控初始化 STT 引擎。
 // 必须在 NewServer 之后、Start 之前调用（或与 Start 并发，mock 引擎已就绪）。
 // 流程：
@@ -126,6 +130,10 @@ func (s *Server) InitSTTEngine(ctx context.Context, dataDir string, gate *probe.
 	})
 }
 
+// TODO(C-2): 工厂尚未在 boot_server.go 接入，前置条件:
+// 1. AudioPipeline 设计确认（STT → Agent → TTS 管线路径）
+// 2. 配置项 [audio] 在 configs/defaults.toml 加入
+// 2026-08-12 取证加记
 // InitTTSEngine 初始化 TTS Provider 并注入 ChatHandler。
 //
 // 三条路径由 ttsConfig.Provider 决定：
@@ -136,7 +144,7 @@ func (s *Server) InitTTSEngine(ctx context.Context, dataDir string, gate *probe.
 	switch ttsConfig.Provider {
 	case "edge":
 		// Edge TTS：免费、无需下载、立即激活，不受 FeatureGate 门控（无内存开销）
-		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice)
+		p := tts.NewEdgeProvider(ttsConfig.EdgeVoice, nil)
 		s.SetTTSProvider(p)
 		slog.Info("tts: Edge TTS active", "voice", ttsConfig.EdgeVoice)
 		return

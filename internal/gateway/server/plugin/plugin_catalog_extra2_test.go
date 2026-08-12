@@ -39,7 +39,7 @@ func getDummyServerWithInstallMgr(t *testing.T) *PluginHandler {
 	}
 	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
 	db.SetMaxOpenConns(1)
-	mgr := marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, &dummyPreferences{}, nil, nil)
+	mgr := marketplace.NewManager(repo.NewSQLiteExtensionRepository(db), nil, &dummyPolicyGate{}, &dummyPreferences{}, nil, nil, nil)
 	return &PluginHandler{DB: db, InstallMgr: mgr}
 }
 

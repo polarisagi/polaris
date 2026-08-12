@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"os"
 
@@ -371,7 +372,7 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 	}
 
 	return &protocol.CodeActResult{
-		Output:    out,
+		Output:    taint.NewTaintedString(string(out), taint.TaintSource{Module: "action/codeact", OriginTaintLevel: types.TaintHigh}, "codeact_sandbox"),
 		ExitCode:  exitCode,
 		LatencyMs: res.LatencyMs,
 	}, nil
