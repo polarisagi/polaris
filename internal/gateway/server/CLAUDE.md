@@ -1,18 +1,17 @@
 # internal/gateway/server — AI 导航索引
 
 > **背景**：此目录含 150+ 文件。Go struct-method 绑定约束（`func (s *Server) ...`）导致顶层处理函数无法拆分为独立子包，因此将**路由处理**按功能域放入 4 个子包，**核心基础设施**留在顶层。
->
-> **请通过本文件定位目标，避免执行高代价的 `ls` / `grep` 扫描。**
+> 2026-08-12 复核：已修正 R7 拆分后的真实文件名称。
 
 ## 顶层文件（核心基础设施）
 
 | 文件 | 职责 |
 |------|------|
-| `server.go` | HTTP Server 生命周期、路由注册入口、依赖注入 |
-| `middleware.go` | 认证 / 限流 / 日志等全局中间件链 |
+| `server_core.go` / `server_lifecycle.go` | HTTP Server 生命周期、核心定义 |
+| `server_routes.go` / `server_handlers.go` | 路由注册入口、请求处理函数 |
+| `server_init.go` | 依赖注入与初始化 |
+| `middleware.go` / `middleware_auth.go` | 认证 / 限流 / 日志等全局中间件链 |
 | `logstream.go` | SSE 日志流推送（Agent 日志实时输出到前端） |
-| `context.go` | 请求上下文封装（从 HTTP Request 提取 Agent/Session ID） |
-| `contextref.go` | ContextRef 跨请求引用（长连接场景） |
 
 ## 子包索引
 

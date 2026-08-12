@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -58,7 +59,6 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 //
 // 使用 embedded FS 而非相对路径 os.ReadFile，确保二进制在任意工作目录下均可运行。
 //
-//nolint:unused
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	var (
 		raw    []byte
@@ -144,7 +144,7 @@ func (s *Server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		if s.agentPool != nil {
 			agent, release, err := s.agentPool.Acquire(r.Context(), "default")
 			if err == nil {
-				agent.SetTaskIntent([]byte(req.Input))
+				agent.SetTaskIntent(taint.NewTaintedString(string(req.Input), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys")
 				release()
 			}
 		}

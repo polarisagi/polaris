@@ -120,6 +120,7 @@ EvalResult:
 
 `GetAdapter(name)` 为四者的统一工厂（键：`tau-bench` / `terminal` / `locomo` / `longmemeval`），未知名返回 nil。
 - **CLI**：`polaris eval bench --suite=<suite> --data=<path> [--out=<report.json>]`（`cmd/polaris/cli_eval_bench.go`）。**现状边界**：该命令目前仅执行"加载并转换数据集"这一步，尚未接入 `RunnerImpl` 实际跑 Agent（`RunnerImpl.RunSuite` 依赖完整 Store/EvalStore/Agent 运行环境，与本命令期望的离线轻量用法不兼容，属独立工作量）；报告 JSON 如实标注 `executed:false`，不产出伪造的 pass/fail 结果。
+> 2026-08-12 复核：--execute 已在 cli_eval_bench.go 实现，ADR-0068 已追记，此处「尚未接入」运行前描述已正确。
 
 ## 5. Eval Suite 分区 (防 M9 过拟合)
 
