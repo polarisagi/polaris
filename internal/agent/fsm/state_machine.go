@@ -32,6 +32,12 @@ type Transition struct {
 	Effects func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error)
 }
 
+// system1BypassSurpriseCeiling 是走 System-1 短路（跳过 LLM，直接复用技能/上次计划）
+// 的 SurpriseIndex 上限。参数权威源：docs/arch/spec/state.yaml §system1_no_llm_call
+// （"SurpriseIndex < 0.3 → skill cache path only"）。此前 S_IDLE 与 S_PERCEIVE 两处
+// 各自硬编码 0.3，改一处漏一处即造成两条短路路径阈值不一致，故收敛为单一常量。
+const system1BypassSurpriseCeiling = 0.3
+
 // StateMachine 管理 Agent 状态生命周期。
 type StateMachine struct {
 	cb                         ContextBuilder
@@ -460,20 +466,57 @@ func (sm *StateMachine) dispatchReplanExtensionActivation(ctx context.Context, s
 	})
 }
 
+// skillPreMatch 是 System-1 短路所需的技能匹配结果（B-1：在 FSM 锁外算好再带进锁）。
+type skillPreMatch struct {
+	applied bool // 本轮是否真的执行了匹配（surpriseIndex 未超阈值且 matcher 已注入）
+	skillID string
+	score   float64
+	err     error
+}
+
+// preMatchSkill 在**不持 sm.mu** 的前提下完成技能语义检索（含 IO）。
+//
+// 第二个返回值表示「本次 trigger 是否需要覆写 sCtx 的 pre-match 字段」——
+// 对 TriggerIntentReceived 恒为 true（即使没匹配也要把上一轮的残值清掉），
+// 其余 trigger 为 false（不碰这组字段）。
+//
+// 为什么不能在锁内做：MatchIntent 走语义检索，耗时不可控，锁内调用会让所有并发
+// Dispatch 排队，违反 HE-5（FSM 锁内禁止 IO）。同类缺陷此前已修过一次
+// （GR-4-003 的 dispatchReplanExtensionActivation），B-1 是它在另一条路径上的复发。
+func (sm *StateMachine) preMatchSkill(sCtx *StateContext, trigger types.AgentTrigger) (skillPreMatch, bool) {
+	if trigger != types.TriggerIntentReceived {
+		return skillPreMatch{}, false
+	}
+	if sm.skillMatcher == nil {
+		return skillPreMatch{}, true
+	}
+	if metrics.GlobalSurpriseIndex().Current() >= system1BypassSurpriseCeiling {
+		// 超阈值：本轮不做 System-1 短路。仍返回 true，让调用方把上一轮的
+		// pre-match 残值清掉——否则阈值门等于形同虚设。
+		return skillPreMatch{}, true
+	}
+	pm := skillPreMatch{applied: true}
+	pm.skillID, pm.score, pm.err = sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
+	return pm, true
+}
+
 // Dispatch 接收触发事件，查找匹配转移，执行 guard + effects，推进状态。
 // 返回的 effects 由 Agent.Run 消费——LLMFillEffect 调 LLM，DeterministicEffect 直接执行。
 func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigger types.AgentTrigger) ([]protocol.Effect, error) {
-	// B-1：全局语义检索已移至锁外执行，防止锁内 IO 导致死锁（inv_FSM_B1）
-	if trigger == types.TriggerIntentReceived && sm.skillMatcher != nil {
-		surpriseIndex := metrics.GlobalSurpriseIndex().Current()
-		if surpriseIndex < 0.3 {
-			sCtx.PreMatchSkillID, sCtx.PreMatchScore, sCtx.PreMatchErr = sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
-			sCtx.HasPreMatch = true
-		}
-	}
+	// B-1：技能语义检索（含 IO）在锁外完成，结果先落局部变量，进锁后再写 sCtx——
+	// sCtx 的字段由 sm.mu 保护（同文件 dispatchReplanExtensionActivation 写
+	// ReplanExtActivationDegraded 时同样先取锁），锁外直接写会与并发 Dispatch 竞争。
+	pm, preMatchRelevant := sm.preMatchSkill(sCtx, trigger)
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if preMatchRelevant {
+		sCtx.HasPreMatch = pm.applied
+		sCtx.PreMatchSkillID = pm.skillID
+		sCtx.PreMatchScore = pm.score
+		sCtx.PreMatchErr = pm.err
+	}
 
 	current := sm.current
 

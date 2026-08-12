@@ -131,7 +131,7 @@ func (sm *StateMachine) registerTransitions() {
 				originTaint = types.TaintMedium
 			}
 			surpriseIndex := metrics.GlobalSurpriseIndex().Current()
-			if surpriseIndex < 0.3 && sCtx.DAGModel != nil && len(sCtx.DAGModel.Nodes) > 0 {
+			if surpriseIndex < system1BypassSurpriseCeiling && sCtx.DAGModel != nil && len(sCtx.DAGModel.Nodes) > 0 {
 				// SurpriseIndex 低于阈值，跳过 LLM 规划直接复用上次成功计划（GD-13-004）
 				return []protocol.Effect{
 					protocol.DeterministicEffect{
