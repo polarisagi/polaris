@@ -7,7 +7,11 @@
 // 设计原则：
 //   - 此文件是 Go 层的薄封装，不含任何平台特定逻辑（平台逻辑全在 Rust）
 //   - Go 侧统一走 V2（CmdRunner 已于 2026-07-02 从 V1 迁移完毕，见 cmd_runner_adapter.go）；
-//     Rust 侧仍保留 V1 FFI 导出（native_sandbox_exec）供未来场景复用，但 Go 侧不再绑定
+//     Rust 侧保留 V1 FFI 导出（native_sandbox_exec）不删、Go 侧不绑定，理由与重评
+//     触发条件见 ADR-0011 决策四，白名单条目在 scripts/deadcode-allowlist.txt。
+//     禁止为了让 make ffi-check 转绿而在此补一个空绑定——2026-08-12 出现过一次：
+//     补的绑定签名是 5 参而 Rust V1 实际是 3 参（req_json/out_json/out_err），
+//     一旦有人调用就是栈错位。门控报未绑定时的正解是删符号或登记白名单，不是造绑定。
 //   - Rust 不可用（dylib 缺失/符号未找到）时 fail-closed（返回 error），无 Go 侧降级路径
 //   - 通过 sync.Once + ffi.Load() 懒加载，与 Cedar/Surreal 共享同一 dylib 句柄
 
@@ -36,12 +40,10 @@ var (
 	nativeSandboxProbeTools func(outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxFreeString func(ptr uintptr)
 
-	// V2 函数指针（Go 侧唯一执行路径，CmdRunner 已全量迁移，不再绑定 V1 native_sandbox_exec）
+	// V2 函数指针（Go 侧唯一执行路径，CmdRunner 已全量迁移；V1 native_sandbox_exec
+	// 已于 2026-08-12 从 Rust 侧一并移除，不再存在可绑定的 V1 符号）
 	nativeSandboxExecV2   func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
 	nativeSandboxWrapArgv func(inputJSON uintptr, outJSON *uintptr, outErr *uintptr) int32
-
-	// TODO(C-4): 遗留 V1 FFI 占位符，待后续调度层（Agent）接入
-	nativeSandboxExec func(cmd uintptr, args uintptr, workdir uintptr, outJSON *uintptr, outErr *uintptr) int32
 )
 
 func bindNativeSandbox() error {
@@ -58,7 +60,6 @@ func bindNativeSandbox() error {
 			defer func() { recover() }() //nolint:errcheck
 			purego.RegisterLibFunc(&nativeSandboxExecV2, lib, "native_sandbox_exec_v2")
 			purego.RegisterLibFunc(&nativeSandboxWrapArgv, lib, "native_sandbox_wrap_argv")
-			purego.RegisterLibFunc(&nativeSandboxExec, lib, "native_sandbox_exec") // TODO(C-4)
 		}()
 	})
 	return nativeErr
