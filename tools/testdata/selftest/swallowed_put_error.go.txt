@@ -1,0 +1,12 @@
+// 负向样例（F-6 must_check_error_lint）：关键写操作的 error 被 _ 静默丢弃。
+package sandbox
+
+import "context"
+
+type selftestStore interface {
+	Put(ctx context.Context, k, v []byte) error
+}
+
+func selftestSwallowedPut(ctx context.Context, s selftestStore) {
+	_ = s.Put(ctx, []byte("k"), []byte("v"))
+}

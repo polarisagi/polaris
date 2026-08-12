@@ -58,6 +58,16 @@ func main() {
 	fmt.Println("task_state_lint: PASS")
 }
 
+// checkFile 在整个调用表达式上做判定，而不是只看 SQL 字符串字面量。
+//
+// 2026-08-12 修正：原实现只 Inspect *ast.BasicLit，然后在 SQL 文本里找
+// "statusclaimed" / "statusrunning" 这些**Go 标识符**。但状态常量是
+// ExecContext 的实参、从不出现在 SQL 文本里（SQL 里只有 `status IN (?,?)`
+// 这样的占位符），条件恒不成立——该规则自诞生起从未报过一次红。
+// 经 make lint-selftest 负向验证暴露。
+//
+// 正确形态：找到实参里含 "update tasks ... status" 的调用，再看同一调用的
+// 其余实参用了哪些状态常量，据此判定这条 CAS 允许的源状态集合。
 func checkFile(fset *token.FileSet, path string) {
 	node, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -65,28 +75,68 @@ func checkFile(fset *token.FileSet, path string) {
 	}
 
 	ast.Inspect(node, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
 			return true
 		}
-		str := strings.ToLower(lit.Value)
 
-		// 检查 UPDATE tasks SET status=...
-		if strings.Contains(str, "update tasks") && strings.Contains(str, "status") {
-			queryCount++
-			pos := fset.Position(lit.Pos())
+		sqlIdx, sqlText := findTasksUpdateSQL(call.Args)
+		if sqlIdx < 0 {
+			return true
+		}
+		queryCount++
 
-			// 如果是更新 status 为 statusDone/statusDone 的 SQL，检查 WHERE 条件是否包含 claimed (而非 running)
-			if strings.Contains(str, "statusdone") || strings.Contains(str, "status=") || strings.Contains(str, "status =") {
-				// 检查同一 SQL 字符串中是否有从 claimed 跳到 done
-				if (strings.Contains(str, "statusdone") || strings.Contains(str, "status=?")) &&
-					strings.Contains(str, "statusclaimed") && !strings.Contains(str, "statusrunning") {
-					fmt.Printf("%s:%d: SQL 尝试从 claimed 状态直接更新为 done 状态，跳过 running（违反 inv_M8_03 F-5）\n",
-						path, pos.Line)
-					errCount++
-				}
+		// 收集本次调用用到的状态常量标识符（跳过 SQL 字面量本身）。
+		states := map[string]bool{}
+		for i, arg := range call.Args {
+			if i == sqlIdx {
+				continue
 			}
+			if id, ok := arg.(*ast.Ident); ok {
+				states[id.Name] = true
+			}
+		}
+
+		// 只约束「成功完成」这一条边：done 必须来自 running。
+		//
+		// 不约束 → failed：失败/取消是中止路径，从 pending / claimed / running 任一
+		// 非终态发起都合法（认领后未启动就崩溃、租约过期、Saga 取消），强行要求先经
+		// running 会逼出一次假的状态推进。这与 inv_M8_03 的转移表一致：
+		//   pending -> claimed;  claimed -> running | failed;  running -> done | failed
+		//
+		// 2026-08-12：本条判据最初写成「终态一律只许来自 running」，一上线就把
+		// FailTask 与 CancelTask 两条合法中止路径判成违规——过严的门控最终会被整体
+		// 关掉，比漏报更糟，故收窄到 done。
+		if states["statusDone"] && states["statusClaimed"] {
+			pos := fset.Position(call.Pos())
+			fmt.Printf("%s:%d: CAS 允许 claimed 跳过 running 直达 done（违反 inv_M8_03 F-5）；SQL: %s\n",
+				path, pos.Line, condenseSQL(sqlText))
+			errCount++
 		}
 		return true
 	})
+}
+
+// findTasksUpdateSQL 返回实参中 tasks 表 UPDATE 语句的下标与原文，未命中返回 -1。
+func findTasksUpdateSQL(args []ast.Expr) (int, string) {
+	for i, arg := range args {
+		lit, ok := arg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		low := strings.ToLower(lit.Value)
+		if strings.Contains(low, "update tasks") && strings.Contains(low, "status") {
+			return i, lit.Value
+		}
+	}
+	return -1, ""
+}
+
+// condenseSQL 把多行 SQL 压成一行，便于在报错里一眼看清 WHERE 条件。
+func condenseSQL(s string) string {
+	s = strings.NewReplacer("\n", " ", "\t", " ", "`", "").Replace(s)
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.TrimSpace(s)
 }

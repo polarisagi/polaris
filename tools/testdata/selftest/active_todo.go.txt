@@ -1,0 +1,5 @@
+// 负向样例（F-10 todo_lint）：活跃 TODO 标记。
+package sandbox
+
+// TODO(selftest): 本行是 lint_selftest 注入的活跃 TODO 负向样例。
+func selftestActiveTODO() {}

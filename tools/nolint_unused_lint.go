@@ -128,40 +128,84 @@ func findSymbolAtLine(fset *token.FileSet, node *ast.File, line int) string {
 	return sym
 }
 
+// countProductionCallers 统计 symName 在生产代码中被引用的次数（不含其自身声明）。
+//
+// 2026-08-12 改为 AST 判定。原实现是逐行字符串匹配，并用
+// `!strings.Contains(l, "func ")` 跳过声明行——这个启发式同时吃掉了所有写在单行
+// 函数体里的真实调用（`func caller() int { return target() }`），属于会让失效抑制
+// 继续隐身的漏报方向。经 make lint-selftest 负向验证暴露：注入一个「有调用方却挂着
+// //nolint:unused」的样例，规则报 PASS。
+//
+// AST 版按标识符判定：统计所有名为 symName 的 *ast.Ident，再扣掉声明节点自身的
+// 名字节点，剩下的即引用。同名局部变量会被计入（保守方向——宁可少报「抑制失效」，
+// 不可漏报），这一取舍写在此处以免后来者误以为是缺陷。
 func countProductionCallers(roots []string, symName, declPath string) int {
 	if symName == "" {
 		return 0
 	}
 	count := 0
+	fset := token.NewFileSet()
 	for _, root := range roots {
 		filepath.Walk(root, func(path string, info os.FileInfo, err error) error { //nolint:errcheck
 			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
+			node, perr := parser.ParseFile(fset, path, nil, 0)
+			if perr != nil {
 				return nil
 			}
-			content := string(data)
-			// 简单包含匹配（排除定义声明所在行）
-			if strings.Contains(content, symName) {
-				lines := strings.Split(content, "\n")
-				for i, l := range lines {
-					if strings.Contains(l, symName) && !strings.Contains(l, "func ") && !strings.Contains(l, "type ") {
-						if path != declPath || i+1 > getDeclEndLine(declPath, symName) || i+1 < getDeclStartLine(declPath, symName) {
-							count++
+			ast.Inspect(node, func(n ast.Node) bool {
+				switch d := n.(type) {
+				case *ast.FuncDecl:
+					// 声明自身的名字节点不算引用；函数体照常继续遍历
+					// （同一函数内递归调用仍会被计入，符合"有人用"的语义）。
+					if d.Name != nil && d.Name.Name == symName {
+						if d.Recv != nil {
+							ast.Inspect(d.Recv, countIdent(symName, &count))
+						}
+						ast.Inspect(d.Type, countIdent(symName, &count))
+						if d.Body != nil {
+							ast.Inspect(d.Body, countIdent(symName, &count))
+						}
+						return false
+					}
+				case *ast.TypeSpec:
+					if d.Name != nil && d.Name.Name == symName {
+						ast.Inspect(d.Type, countIdent(symName, &count))
+						return false
+					}
+				case *ast.ValueSpec:
+					for _, nm := range d.Names {
+						if nm.Name == symName {
+							// 只跳过名字本身，初始化表达式仍算引用。
+							for _, v := range d.Values {
+								ast.Inspect(v, countIdent(symName, &count))
+							}
+							return false
 						}
 					}
+				case *ast.Ident:
+					if d.Name == symName {
+						count++
+					}
 				}
-			}
+				return true
+			})
 			return nil
 		})
 	}
 	return count
 }
 
-func getDeclStartLine(path, sym string) int { return 0 }
-func getDeclEndLine(path, sym string) int   { return 9999 }
+// countIdent 返回一个只做「同名标识符计数」的 ast.Inspect 回调。
+func countIdent(symName string, count *int) func(ast.Node) bool {
+	return func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == symName {
+			*count++
+		}
+		return true
+	}
+}
 
 func writeInventory(path string, items []string) {
 	os.MkdirAll(filepath.Dir(path), 0755) //nolint:errcheck

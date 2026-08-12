@@ -1,0 +1,12 @@
+// 负向样例（F-8b ffi_symbol_check）：Go 侧绑定了 Rust 不存在的 FFI 符号。
+// 落点必须在 internal/ffi/ 内——该目录被判定为 substrate 绑定点，
+// G-S 方向的对账只对这类文件生效（第三方 dylib 绑定不参与 substrate 符号表对账）。
+package ffi
+
+import "github.com/ebitengine/purego"
+
+var selftestPhantomFn func() int32
+
+func selftestBindPhantom(lib uintptr) {
+	purego.RegisterLibFunc(&selftestPhantomFn, lib, "selftest_symbol_that_does_not_exist")
+}
