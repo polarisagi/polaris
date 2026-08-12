@@ -1,0 +1,46 @@
+# tools/lint-selftest.txt —— 每条 lint 规则的负向用例清单
+#
+# 由 `make lint-selftest`（tools/lint_selftest.go）执行：注入违规样例 → 断言规则
+# 报红 → 还原 → 断言转绿。两步都过才算这条规则「能报红」。
+#
+# 立此清单的原因：负向验证这条纪律在 local_playground/prompt/fix.md 里写了三处，
+# 2026-08-12 实测 12 条门控全部自述 landed，其中 3 条从未验证且确实是瞎的
+# （ffi_symbol_check 恒扫到 0 个绑定、fsm_io_lint 抓不到一层间接调用、
+# must_check_error_lint 计数器误导）。靠自觉的机制实测 100% 空转，故改为判定。
+#
+# 格式（字段以 " | " 分隔，注意前后各一个空格）：
+#   add   | <RuleID> | <tool> | <临时落点，必须不存在> | <fixture 路径>
+#   patch | <RuleID> | <tool> | <目标文件> | <from 串> | <to 串>
+#
+# patch 模式用于「盯住特定位置」的规则——它们无法靠新增文件触发，只能把已修好的
+# 代码临时改回缺陷形态。from 串必须在目标文件中唯一命中；代码变动导致找不到时
+# 本门控会报错并指出需同步更新本清单（这正是我们要的：规则、代码、用例三者绑定）。
+# 串内不得出现 " | "；换行写 \n，制表符写 \t。
+
+# ── add 模式：扫全仓找模式的规则 ──────────────────────────────────────────────
+add | F-1 | tools/safe_dialer_lint.go | internal/channel/adapter/zz_selftest_bare_ws.go | tools/testdata/selftest/bare_websocket_dialer.go.txt
+add | F-6 | tools/must_check_error_lint.go | internal/tool/sandbox/zz_selftest_swallow.go | tools/testdata/selftest/swallowed_put_error.go.txt
+add | F-7 | tools/rows_err_lint.go | internal/tool/sandbox/zz_selftest_rows.go | tools/testdata/selftest/missing_rows_err.go.txt
+add | F-8b | tools/ffi_symbol_check.go | internal/ffi/zz_selftest_phantom.go | tools/testdata/selftest/phantom_ffi_binding.go.txt
+add | F-10 | tools/todo_lint.go | internal/tool/sandbox/zz_selftest_todo.go | tools/testdata/selftest/active_todo.go.txt
+add | F-11 | tools/nolint_unused_lint.go | internal/tool/sandbox/zz_selftest_nolint.go | tools/testdata/selftest/stale_nolint_unused.go.txt
+add | F-12 | tools/panic_lint.go | internal/tool/sandbox/zz_selftest_panic.go | tools/testdata/selftest/framework_panic.go.txt
+
+# ── patch 模式：盯住特定位置的规则 ───────────────────────────────────────────
+# F-2：把 Capability Token 校验收窄回「仅 Privileged」，即 inv_M7_01 的后门形态。
+patch | F-2 | tools/no_backdoor_lint.go | internal/sandbox/envelope.go | if RequiresCapabilityToken(req.Tool.Capability) && req.Kind != KindHookExecute { | if req.Tool.Capability >= types.CapPrivileged {
+
+# F-3：把已删除的调用方自报污点字段加回 CodeActRequest（C-8 禁止重新引入）。
+patch | F-3 | tools/taint_typed_fields_check.go | internal/protocol/codeact.go | \tAgentID      string\n | \tAgentID      string\n\tTaintLevel   int\n
+
+# F-4：把技能语义检索塞回 Effects 闭包间接调用的私有方法里，即 B-1 的原始形态。
+patch | F-4 | tools/fsm_io_lint.go | internal/agent/fsm/transitions.go | skillID, score, err := sCtx.PreMatchSkillID, sCtx.PreMatchScore, sCtx.PreMatchErr | skillID, score, err := sm.skillMatcher.MatchIntent(sCtx.RawIntentTS.UnsafeContent())
+
+# F-5：让 CompleteTask 允许 claimed 直接跳到 done，绕过 running（inv_M8_03 违规形态）。
+patch | F-5 | tools/task_state_lint.go | internal/execute/orchestrator/sqlite_blackboard.go | WHERE task_id=? AND claimed_by=? AND status=?`,\n\t\tstatusDone, result, taskID, agentID, statusRunning, | WHERE task_id=? AND claimed_by=? AND status IN (?,?)`,\n\t\tstatusDone, result, taskID, agentID, statusClaimed, statusRunning,
+
+# F-8a：把一条已注册路由改成注释挂起，即「未完成接线用注释假装存在」的形态。
+patch | F-8a | tools/route_coverage_check.go | internal/gateway/server/server_routes.go | \tmux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch) | \t// mux.HandleFunc("GET /v1/search", s.chatHandler.HandleSearch)
+
+# doc-counts：把 CLAUDE.md 里的模块数写错，模拟"计数漂移"。
+patch | doc-counts | tools/doc_counts_check.go | CLAUDE.md | 29 internal module / 4 layer | 99 internal module / 4 layer

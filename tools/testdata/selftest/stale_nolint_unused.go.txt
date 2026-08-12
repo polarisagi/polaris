@@ -1,0 +1,8 @@
+// 负向样例（F-11 nolint_unused_lint）：标了 //nolint:unused 但实际有生产调用方，
+// 属于失效抑制——这类注释会把「写了没接线」的符号遮盖起来，必须报红。
+package sandbox
+
+//nolint:unused
+func selftestStaleNolintTarget() int { return 1 }
+
+func selftestStaleNolintCaller() int { return selftestStaleNolintTarget() }

@@ -1,0 +1,8 @@
+// 负向样例（F-12 panic_lint）：框架层非 init()、非 cmd 入口处 panic。
+package sandbox
+
+func selftestFrameworkPanic(ok bool) {
+	if !ok {
+		panic("selftest: framework layer panic")
+	}
+}

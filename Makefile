@@ -70,6 +70,12 @@ panic-check:
 	@echo "=== [F-12/E1] Framework panic ratchet gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/panic_lint.go
 
+# lint-selftest 是「门控的门控」：逐条注入违规样例，证明每条规则确实能报红。
+# 不并入 lint（它会临时改写工作区文件，不适合与并发的编辑同跑），只挂 check-all。
+lint-selftest:
+	@echo "=== [meta] Lint rule negative-verification gate ==="
+	@env GOOS= GOARCH= $(GO) run tools/lint_selftest.go
+
 nolint-check:
 	@echo "=== [F-11] Stale nolint:unused suppression gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/nolint_unused_lint.go
@@ -297,4 +303,4 @@ rust-deny:
 # 2026-08-09：fuzz-taint / fuzz-skill 此前只是可手动调用的 target，从未进入 CI。
 # 三个 fuzz 目标合计 90s，守的是 Taint 五级传播（HE-2 的密码学可验证边界）与
 # Skill 校验管线——正是最不该只靠人工偶尔想起来跑一次的两处。
-check-all: fmt lint test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill
+check-all: fmt lint lint-selftest test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill

@@ -1,0 +1,16 @@
+// 负向样例（F-7 rows_err_lint）：for rows.Next() 循环后未检查 rows.Err()。
+package sandbox
+
+import "database/sql"
+
+func selftestMissingRowsErr(db *sql.DB) {
+	rows, err := db.Query("SELECT 1")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n int
+		_ = rows.Scan(&n)
+	}
+}

@@ -1,0 +1,14 @@
+// 负向样例（F-1 safe_dialer_lint）：裸 websocket.Dialer，未注入 NetDialContext。
+// 由 tools/lint_selftest.go 临时复制进 internal/channel/adapter/ 后立即删除。
+package adapter
+
+import (
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+func selftestBareWebSocketDialer() {
+	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	_, _, _ = dialer.Dial("wss://example.invalid/ws", nil)
+}
