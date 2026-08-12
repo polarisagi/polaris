@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"os"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"

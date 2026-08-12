@@ -2,12 +2,13 @@ package server
 
 import (
 	"encoding/json"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/observability/metrics"

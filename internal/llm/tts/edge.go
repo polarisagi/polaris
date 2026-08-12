@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/polarisagi/polaris/internal/security/network"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/network"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"

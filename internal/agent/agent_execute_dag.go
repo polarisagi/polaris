@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"

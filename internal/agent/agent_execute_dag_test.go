@@ -2,10 +2,11 @@ package agent
 
 import (
 	"context"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/execute/dag"

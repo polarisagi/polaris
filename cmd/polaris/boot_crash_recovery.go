@@ -35,10 +35,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/eval/harness"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -164,7 +165,7 @@ func recoverOneSession(ctx context.Context, db *sql.DB, pool protocol.AgentPool,
 	// internal/gateway/session 的交互式编排路径 /
 	// internal/agent/pool.go AcquireHeadless），消除早期事件丢失竞态。
 	stream := agentCtrl.SubscribeStream(recoverCtx)
-	agentCtrl.SetTaskIntent(taint.NewTaintedString(string(lastUserMsg), taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
+	agentCtrl.SetTaskIntent(taint.NewTaintedString(lastUserMsg, taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "sys"))
 	if sendErr := agentCtrl.SendIntent(types.TriggerIntentReceived); sendErr != nil {
 		slog.Warn("polaris: crash recovery failed to send intent", "session", sessionID, "err", sendErr)
 		return
