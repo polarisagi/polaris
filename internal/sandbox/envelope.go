@@ -123,6 +123,7 @@ func RequiresCapabilityToken(c types.CapabilityLevel) bool {
 	return c > types.CapReadOnly
 }
 
+//nolint:gocyclo // A-7 Capability Token 校验覆盖非只读工具后复杂度 24，Execute 是单一责任的执行闸门，拆分会破坏线性事务语义
 func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResult, error) {
 	start := time.Now()
 

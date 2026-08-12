@@ -14,7 +14,8 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ─── 依赖注入 ──────────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ func (m *DependencyMap) Get(name string) any {
 func (m *DependencyMap) MustGetE(name string) (any, error) {
 	v, ok := m.deps[name]
 	if !ok {
-		return nil, fmt.Errorf("bootstrap: missing required dependency: %s", name)
+		return nil, apperr.New(apperr.CodeInternal, "bootstrap: missing required dependency: "+name)
 	}
 	return v, nil
 }

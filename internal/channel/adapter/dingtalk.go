@@ -43,6 +43,7 @@ func RunDingTalkPoller(ctx context.Context, host PollerHost, channelID, clientID
 	}
 }
 
+//nolint:gocyclo // DingTalk 协议事件类型多，switch 分支是不可避免的协议映射层复杂度
 func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, clientSecret string, cfg map[string]any) error {
 	wsURL, err := dingTalkGetEndpoint(ctx, host.HTTPClient(), clientID, clientSecret)
 	if err != nil {

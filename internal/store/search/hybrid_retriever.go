@@ -6,10 +6,11 @@ import (
 	"sort"
 	"sync"
 
+	"time"
+
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
-	"time"
 )
 
 // ============================================================================
