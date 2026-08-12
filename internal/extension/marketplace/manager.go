@@ -260,34 +260,49 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 		return apperr.New(apperr.CodeNotFound, "extension not installed")
 	}
 
+	// fail-fast 必须先于任何状态推进：卸载靠 Outbox 异步投递驱动，outbox 为 nil 时
+	// 无人推进流程。若先把实例置成 uninstalling 再报错，实例就永久卡在该状态——
+	// 既装不了也卸不掉，比直接拒绝更糟。2026-08-12 复核：此判断此前位于循环内、
+	// UpdateInstanceStatus 之后，首个实例仍会被写成 uninstalling 才返回错误。
+	if m.outbox == nil {
+		return apperr.New(apperr.CodeInternal,
+			"Manager.UninstallExtension: outbox writer not injected, cannot complete uninstall")
+	}
+
 	for _, inst := range insts {
-		// Update status to uninstalling
+		// 状态推进失败即中止：状态没置成 uninstalling 却继续投递卸载消息，会让
+		// DB 与 Outbox 两侧对同一实例的认知分叉。
 		if err := m.extRepo.UpdateInstanceStatus(ctx, inst.ID, "uninstalling", ""); err != nil {
-			slog.Warn("marketplace: failed to update status to uninstalling", "ext", inst.ID, "err", err)
+			return apperr.Wrap(apperr.CodeInternal,
+				"Manager.UninstallExtension: update status to uninstalling", err)
 		}
 
-		if m.outbox != nil {
-			payload, _ := json.Marshal(map[string]any{
-				"instance_id":  inst.ID,
-				"catalog_id":   catalogID,
-				"install_path": inst.InstallPath,
-				"ext_type":     inst.ExtType,
-				"trust_tier":   inst.TrustTier,
-				"runtime_id":   inst.RuntimeID,
-			})
-			if err := m.outbox.Write(ctx, protocol.OutboxEntry{
-				TargetEngine:   protocol.TopicMarketplace,
-				Operation:      "extension_uninstall",
-				Scope:          "extension",
-				Payload:        payload,
-				IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMarketplace, "extension_instance", inst.ID, "uninstall", 1)),
-			}); err != nil {
-				return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: outbox write", err)
+		payload, err := json.Marshal(map[string]any{
+			"instance_id":  inst.ID,
+			"catalog_id":   catalogID,
+			"install_path": inst.InstallPath,
+			"ext_type":     inst.ExtType,
+			"trust_tier":   inst.TrustTier,
+			"runtime_id":   inst.RuntimeID,
+		})
+		if err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: marshal payload", err)
+		}
+		if err := m.outbox.Write(ctx, protocol.OutboxEntry{
+			TargetEngine:   protocol.TopicMarketplace,
+			Operation:      "extension_uninstall",
+			Scope:          "extension",
+			Payload:        payload,
+			IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMarketplace, "extension_instance", inst.ID, "uninstall", 1)),
+		}); err != nil {
+			// 投递失败：把状态回滚出 uninstalling，否则实例同样会卡死。
+			// 回滚失败只留痕，不覆盖原始错误——原始错误才是根因。
+			if rbErr := m.extRepo.UpdateInstanceStatus(ctx, inst.ID, "installed", err.Error()); rbErr != nil {
+				slog.Error("marketplace: outbox 投递失败后状态回滚也失败，实例可能卡在 uninstalling",
+					"ext", inst.ID, "rollback_err", rbErr)
 			}
-		} else {
-			return apperr.New(apperr.CodeInternal, "Manager.UninstallExtension: outbox writer not injected, cannot complete uninstall")
+			return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: outbox write", err)
 		}
-
 	}
 
 	return nil
