@@ -33,3 +33,16 @@
 > 在线请求路径（违反"仅限离线索引路径"边界），须立即整改而非追认扩大范围；
 > ② 若交叉编译/单二进制分发目标本身被放弃（如改为容器分发），purego 零 CGO
 > 纪律的前提才失效，重议整体桥接方式。
+
+## 决策四：native_sandbox V1 导出保留不删（2026-08-12）
+
+Go 侧 2026-07-02 起统一走 `native_sandbox_exec_v2`，V1 的 `native_sandbox_exec` 生产零绑定。裁定**保留 Rust 侧 V1 导出，登记 `scripts/deadcode-allowlist.txt`**，不删除。
+
+理由：V1 不是一个孤立的导出函数，而是一整条平行实现链——`native_sandbox_exec` → `dispatch_sandbox` → `exec_seatbelt`/`exec_bwrap`/`exec_wsl2`/`exec_bare`/`exec_namespace_fallback`，横跨 `dispatch.rs`/`seatbelt.rs`/`bwrap.rs`/`fallback.rs` 四个文件，并带一条覆盖真实沙箱执行的集成测试（`test_ffi_exec_echo`）。摘除它的回归面（三平台沙箱执行路径）大于「少维护一个导出符号」的收益，且 V2 的平台实现是 `*_v2` 变体、与 V1 共用平台探测但不共用执行体，删 V1 会连带削掉一条独立的平台行为验证。
+
+**重新评估触发条件**（任一满足即重议删除）：
+- V1 链路开始与 V2 产生行为分歧（同一 `SandboxContext` 两侧结果不一致），此时双实现从「冗余」变成「不一致源」，应删 V1 统一到 V2；
+- `dispatch_sandbox` 的平台降级规则被修改而 V2 未同步（反之亦然）——双实现漂移即触发；
+- Tier-0 dylib 体积成为约束，需要逐字节削减。
+
+**边界**：本决策只豁免 V1 这一个符号。其余 45 个 Rust C-FFI 导出经 2026-08-12 复核**全部有真实 Go 绑定**，不得援引本条批量登记白名单——那次批量登记的真因是 `tools/ffi_symbol_check.go` 提取正则失配导致的全量误报，已修复并加了「绑定数为 0 直接判失败」的自检。
