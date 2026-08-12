@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"time"
 

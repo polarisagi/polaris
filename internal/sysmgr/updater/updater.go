@@ -269,7 +269,7 @@ func (m *Manager) doUpdate(ctx context.Context, version string) error {
 	if err := downloader.DownloadFile(ctx, m.client, downloadURL, archivePath); err != nil {
 		slog.Error("updater: download failed", "err", err)
 		m.setError("download failed: " + err.Error())
-		return err
+		return apperr.Wrap(apperr.CodeInternal, "updater: download file", err)
 	}
 
 	// ── 安全校验：取 <archive>.sha256（及其签名）并验证归档 SHA-256 ───────────

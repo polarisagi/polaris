@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"golang.org/x/sync/errgroup"
 	_ "modernc.org/sqlite"
@@ -104,7 +105,7 @@ func newFakeAgentController() *fakeAgentController {
 
 func (f *fakeAgentController) AgentID() string { return "fake" }
 func (f *fakeAgentController) SetTaskIntent(intent taint.TaintedString) {
-	f.intent = intent.UnsafeContent()
+	f.intent = []byte(intent.UnsafeContent())
 }
 func (f *fakeAgentController) SetSpawnDepth(depth int)                         {}
 func (f *fakeAgentController) SetMemoryNamespace(ns string)                    {}

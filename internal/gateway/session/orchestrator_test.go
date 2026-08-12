@@ -2,10 +2,11 @@ package session
 
 import (
 	"context"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	gwtypes "github.com/polarisagi/polaris/internal/gateway/types"
 	"github.com/polarisagi/polaris/internal/protocol"

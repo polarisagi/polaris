@@ -2,8 +2,9 @@ package agent
 
 import (
 	"context"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"

@@ -3,10 +3,11 @@ package chat
 import (
 	"context"
 	"database/sql"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	_ "modernc.org/sqlite"
 

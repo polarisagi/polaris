@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"github.com/polarisagi/polaris/internal/security/taint"
 	"log/slog"
+
+	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/automation/hitl"
