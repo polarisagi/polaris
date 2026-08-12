@@ -62,3 +62,6 @@ type CtxTaintLevelKey struct{}
 
 // CtxAnomalyFilterKey 用于在 context 中传递 AnomalyDistanceFilter 实例 (按会话隔离)
 type CtxAnomalyFilterKey struct{}
+
+// CtxCapabilityTokenKey 用于在 context 中传递能力令牌 *token.Token (A-7/inv_M7_01)
+type CtxCapabilityTokenKey struct{}

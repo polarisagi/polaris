@@ -239,11 +239,17 @@ func (m *mockRemover) Remove(id string) {
 	m.removed = id
 }
 
+type mockOutbox struct{}
+
+func (m *mockOutbox) Write(ctx context.Context, entry protocol.OutboxEntry) error {
+	return nil
+}
+
 func TestManager_UninstallExtension(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), &mockRemover{}, nil, nil, nil, nil, nil)
+	mgr := NewManager(repo.NewSQLiteExtensionRepository(db), &mockRemover{}, nil, nil, nil, nil, &mockOutbox{})
 	ctx := context.Background()
 
 	// Setup data

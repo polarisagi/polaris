@@ -31,7 +31,10 @@ func TestSystem1Bypass(t *testing.T) {
 	})
 
 	sCtx := &StateContext{
-		RawIntentTS: taint.NewTaintedString("do this", taint.TaintSource{Module: "test"}, ""),
+		RawIntentTS:     taint.NewTaintedString("do this", taint.TaintSource{Module: "test"}, ""),
+		HasPreMatch:     true,
+		PreMatchSkillID: "test_skill",
+		PreMatchScore:   0.95,
 	}
 
 	effect := sm.trySystem1Bypass(context.Background(), sCtx)
@@ -52,9 +55,6 @@ func TestSystem1Bypass(t *testing.T) {
 }
 
 func TestSystem1Bypass_Conditions(t *testing.T) {
-	sCtx := &StateContext{
-		RawIntentTS: taint.NewTaintedString("do this", taint.TaintSource{Module: "test"}, ""),
-	}
 
 	tests := []struct {
 		name          string
@@ -66,7 +66,7 @@ func TestSystem1Bypass_Conditions(t *testing.T) {
 		expectBypass  bool
 	}{
 		{"No matcher", 0.1, "skill", 0.95, nil, true, false},
-		{"High surprise", 0.4, "skill", 0.95, nil, false, false},
+		{"High surprise", 0.4, "skill", 0.80, nil, false, false},
 		{"Low score", 0.1, "skill", 0.90, nil, false, false},
 		{"Empty skill", 0.1, "", 0.95, nil, false, false},
 		{"Perfect match", 0.1, "skill", 0.95, nil, false, true},
@@ -75,14 +75,13 @@ func TestSystem1Bypass_Conditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sm := NewStateMachine(&dummyContextBuilder{})
-			if !tt.matcherNil {
-				sm.SetSkillMatcher(&mockSkillMatcher{
-					skillID: tt.skillID,
-					score:   tt.score,
-					err:     tt.err,
-				})
+			sCtx := &StateContext{
+				RawIntentTS:     taint.NewTaintedString("do this", taint.TaintSource{Module: "test"}, ""),
+				HasPreMatch:     !tt.matcherNil,
+				PreMatchSkillID: tt.skillID,
+				PreMatchScore:   tt.score,
+				PreMatchErr:     tt.err,
 			}
-			metrics.GlobalSurpriseIndex().SetLastValue(tt.surpriseIndex)
 
 			effect := sm.trySystem1Bypass(context.Background(), sCtx)
 			if tt.expectBypass {

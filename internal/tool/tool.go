@@ -195,6 +195,11 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		return nil, err
 	}
 
+	var capTok *token.Token
+	if tok, ok := ctx.Value(protocol.CtxCapabilityTokenKey{}).(*token.Token); ok {
+		capTok = tok
+	}
+
 	// 统一由 Envelope 接管（包含权限验证、污点传播、日志记录）
 	execRes, execErr := r.envelope.Execute(ctx, sandbox.ExecRequest{
 		Principal:  sandbox.PrincipalAgent,
@@ -203,6 +208,7 @@ func (r *InMemoryToolRegistry) ExecuteTool(ctx context.Context, name string, inp
 		TrustTier:  tool.TrustTier,
 		Tool:       tool,
 		Input:      execInput,
+		CapToken:   capTok,
 		TaintLevel: taintLevel, // Envelope 将在执行后计算新的 TaintLevel
 		CPUQuotaMs: int(tool.Timeout.Milliseconds()),
 	})

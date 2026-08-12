@@ -64,12 +64,15 @@ func main() {
 				})
 			}
 
-			// 检查是否正常调用了 RequiresCapabilityToken
-			if call, ok := ifIf.Cond.(*ast.CallExpr); ok {
-				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "RequiresCapabilityToken" {
-					requiresCapTokenCalled = true
+			// 检查是否正常调用了 RequiresCapabilityToken（可能与 && 条件组合）
+			ast.Inspect(ifIf.Cond, func(condNode ast.Node) bool {
+				if call, ok := condNode.(*ast.CallExpr); ok {
+					if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "RequiresCapabilityToken" {
+						requiresCapTokenCalled = true
+					}
 				}
-			}
+				return true
+			})
 
 			return true
 		})

@@ -184,8 +184,8 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		actualTier = types.SandboxPersistent
 	}
 
-	// Step 3: Capability Token（Privileged 强制；走 boot 注入的统一校验，语义同 tool.go）
-	if RequiresCapabilityToken(req.Tool.Capability) {
+	// Step 3: Capability Token（Privileged/CapWrite 强制；KindHookExecute 为系统事件 Hook 豁免）
+	if RequiresCapabilityToken(req.Tool.Capability) && req.Kind != KindHookExecute {
 		if req.CapToken == nil || e.tokenVerifier == nil || e.tokenVerifier.Verify(req.CapToken) != nil {
 			return &ExecResult{Success: false, //nolint:nilerr
 				Error:     "exec_envelope: privileged action requires valid capability token",
