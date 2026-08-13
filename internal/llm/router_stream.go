@@ -183,17 +183,24 @@ func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.
 		slog.Warn("llm_router: stream target pool exhausted, attempting cross-pool fallback",
 			"original_pool", originalPool, "fallback_pool", fallbackPool, "provider", entry.name)
 
-		ch, err := entry.provider.StreamInfer(ctx, msgs, opts...)
-		entry.recordOutcome(err == nil, func() {
-			ir.registry.mu.RLock()
-			fn := ir.registry.onRecovery
-			name := entry.name
-			ir.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+		var ch <-chan types.StreamEvent
+		var err error
+		func() {
+			defer func() {
+				entry.recordOutcome(err == nil, func() {
+					ir.registry.mu.RLock()
+					fn := ir.registry.onRecovery
+					name := entry.name
+					ir.registry.mu.RUnlock()
+					if fn != nil {
+						fn(name)
+					}
+				})
+				ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+			}()
+			ch, err = entry.provider.StreamInfer(ctx, msgs, opts...)
+		}()
+
 		if err != nil {
 			slog.Warn("llm_router: stream fallback pool also failed, trying next",
 				"fallback_pool", fallbackPool, "err", err)
@@ -256,17 +263,24 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 			return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: stream all providers exhausted", protocol.ErrAllProvidersFailed)
 		}
 
-		ch, err := chosen.provider.StreamInfer(ctx, msgs, opts...)
-		chosen.recordOutcome(err == nil, func() {
-			ir.registry.mu.RLock()
-			fn := ir.registry.onRecovery
-			name := chosen.name
-			ir.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-		ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
+		var ch <-chan types.StreamEvent
+		var err error
+
+		func() {
+			defer func() {
+				chosen.recordOutcome(err == nil, func() {
+					ir.registry.mu.RLock()
+					fn := ir.registry.onRecovery
+					name := chosen.name
+					ir.registry.mu.RUnlock()
+					if fn != nil {
+						fn(name)
+					}
+				})
+				ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
+			}()
+			ch, err = chosen.provider.StreamInfer(ctx, msgs, opts...)
+		}()
 
 		if err == nil {
 			return ir.wrapStreamChannel(ctx, ch, req, chosen.name), nil

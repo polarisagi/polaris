@@ -69,17 +69,26 @@ func (ir *InferenceRouter) failover(ctx context.Context, msgs []types.Message, o
 			return ir.tryPoolFallback(ctx, msgs, opts, req)
 		}
 		start := time.Now()
-		resp, err := chosen.provider.Infer(ctx, msgs, opts...)
-		chosen.recordOutcome(err == nil, func() {
-			ir.registry.mu.RLock()
-			fn := ir.registry.onRecovery
-			name := chosen.name
-			ir.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-		ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
+
+		var resp *types.ProviderResponse
+		var err error
+
+		func() {
+			defer func() {
+				chosen.recordOutcome(err == nil, func() {
+					ir.registry.mu.RLock()
+					fn := ir.registry.onRecovery
+					name := chosen.name
+					ir.registry.mu.RUnlock()
+					if fn != nil {
+						fn(name)
+					}
+				})
+				ir.recordModelCallResult(ctx, chosen.name, chosen.provider.ModelID(), err == nil)
+			}()
+			resp, err = chosen.provider.Infer(ctx, msgs, opts...)
+		}()
+
 		if err == nil && resp != nil {
 			ir.recordFailoverMetrics(ctx, chosen, resp, start)
 			return resp, nil
@@ -134,17 +143,26 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 			continue
 		}
 		start := time.Now()
-		resp, err := entry.provider.Infer(ctx, msgs, opts...)
-		entry.recordOutcome(err == nil, func() {
-			ir.registry.mu.RLock()
-			fn := ir.registry.onRecovery
-			name := entry.name
-			ir.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+
+		var resp *types.ProviderResponse
+		var err error
+
+		func() {
+			defer func() {
+				entry.recordOutcome(err == nil, func() {
+					ir.registry.mu.RLock()
+					fn := ir.registry.onRecovery
+					name := entry.name
+					ir.registry.mu.RUnlock()
+					if fn != nil {
+						fn(name)
+					}
+				})
+				ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+			}()
+			resp, err = entry.provider.Infer(ctx, msgs, opts...)
+		}()
+
 		if err == nil && resp != nil {
 			ir.recordFailoverMetrics(ctx, entry, resp, start)
 			// 标记发生了 Pool 降级，让上层感知（如 SessionOrchestrator 发送系统通知）

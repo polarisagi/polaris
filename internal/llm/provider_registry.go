@@ -180,7 +180,7 @@ func (r *ProviderRegistry) PickProvider(role string) protocol.Provider {
 	if e == nil {
 		return nil
 	}
-	return e.provider
+	return &trackedProvider{Provider: e.provider, entry: e, registry: r}
 }
 
 // PickProviderByRecordID 尝试通过 model 记录的 UUID 前缀寻找对应的 Provider。
@@ -210,7 +210,7 @@ func (r *ProviderRegistry) PickProviderByRecordID(mID string) protocol.Provider 
 		}
 	}
 	if chosen != nil {
-		return chosen.provider
+		return &trackedProvider{Provider: chosen.provider, entry: chosen, registry: r}
 	}
 	return nil
 }
@@ -254,4 +254,40 @@ func (r *ProviderRegistry) best(req *types.InferRequest) *providerEntry {
 		}
 	}
 	return chosen
+}
+
+type trackedProvider struct {
+	protocol.Provider
+	entry    *providerEntry
+	registry *ProviderRegistry
+}
+
+func (tp *trackedProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (resp *types.ProviderResponse, err error) {
+	defer func() {
+		tp.entry.recordOutcome(err == nil, func() {
+			tp.registry.mu.RLock()
+			fn := tp.registry.onRecovery
+			name := tp.entry.name
+			tp.registry.mu.RUnlock()
+			if fn != nil {
+				fn(name)
+			}
+		})
+	}()
+	return tp.Provider.Infer(ctx, msgs, opts...)
+}
+
+func (tp *trackedProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (ch <-chan types.StreamEvent, err error) {
+	defer func() {
+		tp.entry.recordOutcome(err == nil, func() {
+			tp.registry.mu.RLock()
+			fn := tp.registry.onRecovery
+			name := tp.entry.name
+			tp.registry.mu.RUnlock()
+			if fn != nil {
+				fn(name)
+			}
+		})
+	}()
+	return tp.Provider.StreamInfer(ctx, msgs, opts...)
 }
