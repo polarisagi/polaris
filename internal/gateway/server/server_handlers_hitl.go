@@ -116,7 +116,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	if authCtx == nil {
 		// D-1: 本地 WebUI 访问在零认证配置下 authCtx 可能为 nil，
 		// 直接访问下列字段会 panic（GR-9.1-005）
-		authCtx = &authcontext.AuthContext{ClientType: "local_webui"}
+		authCtx = &authcontext.AuthContext{ClientType: authcontext.ClientTypeLocalWebUI}
 	}
 	clientType := authCtx.ClientType
 
@@ -128,7 +128,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
 
 	isAdmin := authCtx.Authenticated && (authCtx.UserID == "admin" || authCtx.UserID == "system")
-	isLocalWebUI := authCtx.ClientType == "local_webui" || authCtx.ClientType == "local"
+	isLocalWebUI := authCtx.ClientType == authcontext.ClientTypeLocalWebUI || authCtx.ClientType == authcontext.ClientTypeLocal
 	if !isAdmin && !isLocalWebUI {
 		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
 		return

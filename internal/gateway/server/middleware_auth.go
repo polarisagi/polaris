@@ -65,7 +65,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		}
 		// loopback 无 key：视为 webui 场景（页面加载并发多请求），用 webui quota 而非 unknown，
 		// 避免首屏并发 GET 打光 unknown 的 burst=20 导致误触 429。
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "webui", TraceID: traceID, Authenticated: false}), true
+		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeLocalWebUI, TraceID: traceID, Authenticated: false}), true
 	}
 
 	if authManager.IsLocked(clientIP) {
@@ -88,7 +88,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 
 	authManager.RecordSuccess(clientIP)
 	// MVP 阶段单一 API Key，统一记录为 admin
-	return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "admin", ClientType: "api", TraceID: traceID, Authenticated: true}), true
+	return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "admin", ClientType: authcontext.ClientTypeAPI, TraceID: traceID, Authenticated: true}), true
 
 }
 

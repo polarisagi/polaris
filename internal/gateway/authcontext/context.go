@@ -37,3 +37,10 @@ func FromContext(ctx context.Context) *AuthContext {
 		Authenticated: false,
 	}
 }
+
+const (
+    ClientTypeLocalWebUI = "local_webui"
+    ClientTypeLocal      = "local"
+    ClientTypeAPI        = "api"
+    ClientTypeSDK        = "sdk"
+)

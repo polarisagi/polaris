@@ -200,7 +200,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 已安装插件管理 API（对接 plugins 运行时表）
 	mux.HandleFunc("GET /v1/plugins", s.pluginHandler.HandleListPlugins)
 	mux.HandleFunc("PUT /v1/plugins/{id}", s.pluginHandler.HandleUpdatePlugin)
-	mux.HandleFunc("POST /v1/plugins/{id}/toggle", s.pluginHandler.HandleTogglePluginMCP)
+	mux.HandleFunc("POST /v1/plugins/{id}/mcp/{serverName}/toggle", s.pluginHandler.HandleTogglePluginMCP)
 	mux.HandleFunc("POST /v1/plugins/{id}/upgrade", s.pluginHandler.HandleUpgradePlugin)
 
 	// 插件市场 API
