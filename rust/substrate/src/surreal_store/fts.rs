@@ -116,9 +116,6 @@ pub unsafe extern "C" fn surreal_fts_search(
     k: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    if out_json.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
     // 入参 null 判断前置，避免 null 解引用 UB（GR-11-001）
     if query.is_null() {
         write_cstr(out_json, "[]");

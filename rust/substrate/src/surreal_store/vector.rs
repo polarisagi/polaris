@@ -123,9 +123,6 @@ pub unsafe extern "C" fn surreal_vec_knn(
     k: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    if out_json.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
     if query.is_null() || dim == 0 || k == 0 {
         write_cstr(out_json, "[]");
         return SURREAL_OK;

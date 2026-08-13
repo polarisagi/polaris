@@ -229,15 +229,17 @@ pub unsafe extern "C" fn wasmtime_execute(
     out_json_len: *mut usize,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
-    if (wasm_bytes.is_null() && wasm_len > 0)
-        || input_json.is_null()
-        || workspace_dir.is_null()
-        || out_json.is_null()
-        || out_json_len.is_null()
-        || out_err.is_null()
-    {
-        return -1;
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI 边界纵深防御）。
+    //
+    // 只守卫**无条件裸解引用**的入参：wasm_bytes 与 input_json。
+    // 刻意不守卫以下两类，守卫它们会把合法调用变成硬失败：
+    //   - workspace_dir：NULL 是本 ABI 文档化的「不挂载工作目录」哨兵值，
+    //     Go 侧 runWasmtimeExecuteFFI 在 workspaceDir=="" 时就是传 nil，
+    //     下方 `if !workspace_dir.is_null() && ...` 已正确处理该分支；
+    //   - out_json / out_json_len / out_err：出参由 write_cstr/write_bytes 系列
+    //     助手写入，助手自身已做 null 判定（见 lib.rs write_bytes）。
+    if (wasm_bytes.is_null() && wasm_len > 0) || input_json.is_null() {
+        return WASMTIME_ERR_INTERNAL;
     }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {

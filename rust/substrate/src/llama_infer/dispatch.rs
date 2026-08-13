@@ -46,9 +46,6 @@ pub unsafe extern "C" fn llama_infer_load(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
-        return -1;
-    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match li_read_cstr(input_json) {
@@ -98,9 +95,6 @@ pub unsafe extern "C" fn llama_infer_load(
 /// out_err 须为有效指针或 null。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn llama_infer_unload(out_err: *mut *mut c_char) -> c_int {
-    if out_err.is_null() {
-        return -1;
-    }
     let result = panic::catch_unwind(|| -> c_int {
         match unload_model() {
             Ok(()) => LI_OK,
@@ -129,9 +123,6 @@ pub unsafe extern "C" fn llama_infer_generate(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
-        return -1;
-    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match li_read_cstr(input_json) {
@@ -185,9 +176,6 @@ pub unsafe extern "C" fn llama_infer_embed(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
-        return -1;
-    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match li_read_cstr(input_json) {
@@ -241,9 +229,6 @@ pub unsafe extern "C" fn llama_infer_rerank(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
-        return -1;
-    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match li_read_cstr(input_json) {
@@ -293,9 +278,6 @@ pub unsafe extern "C" fn llama_infer_rerank(
 /// out_err 须为有效指针或 null。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn llama_infer_evict_kv_cache(out_err: *mut *mut c_char) -> c_int {
-    if out_err.is_null() {
-        return -1;
-    }
     let result = panic::catch_unwind(|| -> c_int {
         match evict_kv_cache() {
             Ok(()) => LI_OK,
@@ -323,9 +305,6 @@ pub unsafe extern "C" fn llama_infer_status(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if out_json.is_null() || out_err.is_null() {
-        return -1;
-    }
     let result = panic::catch_unwind(|| -> c_int {
         match status() {
             Ok(resp) => match serde_json::to_string(&resp) {

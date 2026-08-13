@@ -33,9 +33,6 @@ pub unsafe extern "C" fn surreal_graph_relate(
     to_len: usize,
     weight_bits: u64,
 ) -> c_int {
-    if from_ptr.is_null() || et_ptr.is_null() || to_ptr.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
     let result = panic::catch_unwind(move || {
         let weight = f64::from_bits(weight_bits);
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
@@ -98,9 +95,6 @@ pub unsafe extern "C" fn surreal_graph_delete_edges(
     et_ptr: *const u8,
     et_len: usize,
 ) -> c_int {
-    if from_ptr.is_null() || et_ptr.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
     let result = panic::catch_unwind(move || {
         let from = match unsafe { crate::slice_to_str(from_ptr, from_len) } {
             Ok(s) => s.to_string(),
@@ -160,9 +154,6 @@ pub unsafe extern "C" fn surreal_graph_spreading_activation(
     fan_out_limit: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    if start_ids_ptr.is_null() || out_json.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
     let result = panic::catch_unwind(move || {
         let energy_decay = f64::from_bits(energy_decay_bits);
         let dormancy_threshold = f64::from_bits(dormancy_threshold_bits);
@@ -304,9 +295,6 @@ pub unsafe extern "C" fn surreal_graph_traverse(
     max_depth: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    if start_ptr.is_null() || et_ptr.is_null() || out_json.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
     let result = panic::catch_unwind(move || {
         let start = match unsafe { crate::slice_to_str(start_ptr, start_len) } {
             Ok(s) => s.to_string(),
