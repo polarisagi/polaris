@@ -211,23 +211,37 @@ func TestSQLiteScheduler_InFlight(t *testing.T) {
 
 	var mu sync.Mutex
 	callCount := 0
+	started := make(chan struct{})
+	release := make(chan struct{})
 
 	dispatchFn := func(ctx context.Context, task *types.Task) error {
 		mu.Lock()
 		callCount++
+		first := callCount == 1
 		mu.Unlock()
-		// simulate long running task
-		time.Sleep(100 * time.Millisecond)
+		if first {
+			close(started) // 通知主协程：第一次派发确已进入执行中
+		}
+		<-release // 阻塞在此，模拟耗时超过扫描周期的任务
 		return nil
 	}
 
 	task := types.Task{ID: "task_inflight_1", MaxAttempts: 3}
 	scheduler.Submit(ctx, task)
 
-	// first scan triggers it
+	// 第一次扫描触发派发
 	scheduler.scanAndDispatch(ctx, dispatchFn)
 
-	// immediately scan again before the dispatch completes
+	// 必须等派发协程真正跑起来再做第二次扫描：dispatch 走 concurrent.SafeGo，
+	// 直接断言 callCount 只会读到"协程还没被调度"的 0，测的是 goroutine 启动
+	// 时序而不是 inFlight 去重（原实现即因此恒失败）。
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("首次派发未在 2s 内启动")
+	}
+
+	// 第一次派发仍在执行中，此时再扫描不应重复派发
 	scheduler.scanAndDispatch(ctx, dispatchFn)
 
 	mu.Lock()
@@ -236,6 +250,8 @@ func TestSQLiteScheduler_InFlight(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 call, got %d", count)
 	}
+
+	close(release) // 放行，让任务跑完并从 inFlight 摘除
 
 	// wait for it to complete
 	time.Sleep(200 * time.Millisecond)
