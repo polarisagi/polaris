@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -68,8 +69,9 @@ func (c *MCPClient) connectStdio(ctx context.Context) error {
 
 // readLoop 持续读取 stdout，dispatch JSON-RPC 响应。
 func (c *MCPClient) readLoop(r io.Reader) {
+	const mcpStdioMaxScanBytes = 16 * 1024 * 1024
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, mcpStdioMaxScanBytes), config.MaxScannerBufferCapacity)
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {

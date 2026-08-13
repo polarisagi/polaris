@@ -66,24 +66,20 @@ func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath s
 
 	partPath := destPath + ".part"
 
-	var offset int64
-	if fi, err := os.Stat(partPath); err == nil {
-		offset = fi.Size()
-		if offset > 0 {
-			slog.Info("downloader: resuming partial download",
-				"file", lastSegment(destPath), "offset_bytes", offset)
-		}
-	}
-
 	candidates := CandidateURLs(ctx, client, rawURL)
 	var lastErr error
 	for _, url := range candidates {
+		var offset int64
+		if fi, err := os.Stat(partPath); err == nil {
+			offset = fi.Size()
+			if offset > 0 {
+				slog.Info("downloader: resuming partial download",
+					"file", lastSegment(destPath), "offset_bytes", offset)
+			}
+		}
+
 		if err := downloadChunk(ctx, client, url, partPath, offset); err != nil {
 			slog.Warn("downloader: source failed, trying fallback", "url", url, "err", err)
-			// 更新 offset：本次可能已写入部分字节
-			if fi, statErr := os.Stat(partPath); statErr == nil {
-				offset = fi.Size()
-			}
 			lastErr = err
 			continue
 		}
