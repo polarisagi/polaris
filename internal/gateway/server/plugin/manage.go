@@ -259,7 +259,7 @@ func (h *PluginHandler) enablePluginComponents(ctx context.Context, pluginID, no
 
 // HandleTogglePluginMCP 切换插件内单个子 MCP 的启用状态。
 // 直接操作 mcp_servers.enabled（权威来源），不再通过 mcp_policy.enabled。
-// PATCH /v1/plugins/{id}/mcp/{serverName}
+// POST /v1/plugins/{id}/mcp/{serverName}/toggle
 func (h *PluginHandler) HandleTogglePluginMCP(w http.ResponseWriter, r *http.Request) { //nolint:nestif
 	if h.InstallMgr == nil {
 		http.Error(w, "install manager not initialized", http.StatusServiceUnavailable)
