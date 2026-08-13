@@ -62,14 +62,15 @@ type ExtraPath struct {
 // HybridSearchConfig 多路融合检索配置。
 // 权重按字面值生效：<=0 表示**关闭该路**（不是"用默认值"）。
 type HybridSearchConfig struct {
-	BM25Weight   float64
-	VectorWeight float64
-	GraphWeight  float64
-	RRFk         int // <=0 时取 60（RRF 标准常数，与 state.yaml 默认一致）
-	TopK         int // <=0 表示不截断；领域默认值由调用方解析
-	RecallWidth  int // 各路召回条数；<=0 时取 TopK*3
-	EnableRerank bool
-	Reranker     Reranker // 可选
+	BM25Weight           float64
+	VectorWeight         float64
+	GraphWeight          float64
+	RRFk                 int // <=0 时取 60
+	TopK                 int // <=0 表示不截断
+	RecallWidth          int // 各路召回条数
+	EnableRerank         bool
+	Reranker             Reranker // 可选
+	SingleRouteTimeoutMs int
 }
 
 // Reranker Cross-encoder 重排接口（consumer-side 定义）。
@@ -164,7 +165,7 @@ type recallResults struct {
 // 各路结果写入独立字段、读取发生在 wg.Wait() 之后，wg 建立 happens-before，
 // 无需额外加锁；bm25Err 同理。
 func recall(ctx context.Context, source DocumentSource, query string,
-	embedding []float32, width int) *recallResults {
+	embedding []float32, width int, singleRouteTimeoutMs int) *recallResults {
 	r := &recallResults{}
 	var wg sync.WaitGroup
 
@@ -172,9 +173,14 @@ func recall(ctx context.Context, source DocumentSource, query string,
 	concurrent.SafeGo(ctx, "hybrid_search.bm25", func(ctx context.Context) {
 		defer wg.Done()
 		startBM25 := time.Now()
-		res, err := source.SearchBM25(ctx, query, width)
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(singleRouteTimeoutMs)*time.Millisecond)
+		defer cancel()
+		res, err := source.SearchBM25(timeoutCtx, query, width)
 		metrics.RecordRetrievalLatency(ctx, "bm25", time.Since(startBM25).Milliseconds())
 		if err != nil {
+			if timeoutCtx.Err() == context.DeadlineExceeded {
+				metrics.RecordRetrievalRouteTimeout(ctx, "bm25")
+			}
 			r.bm25Err = err
 			return
 		}
@@ -186,9 +192,14 @@ func recall(ctx context.Context, source DocumentSource, query string,
 		concurrent.SafeGo(ctx, "hybrid_search.vector", func(ctx context.Context) {
 			defer wg.Done()
 			startVector := time.Now()
-			res, err := source.SearchVector(ctx, embedding, width)
+			timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(singleRouteTimeoutMs)*time.Millisecond)
+			defer cancel()
+			res, err := source.SearchVector(timeoutCtx, embedding, width)
 			metrics.RecordRetrievalLatency(ctx, "vector", time.Since(startVector).Milliseconds())
 			if err != nil {
+				if timeoutCtx.Err() == context.DeadlineExceeded {
+					metrics.RecordRetrievalRouteTimeout(ctx, "vector")
+				}
 				slog.WarnContext(ctx, "hybrid_search: vector recall failed, degrading", "err", err)
 				return
 			}
@@ -199,8 +210,13 @@ func recall(ctx context.Context, source DocumentSource, query string,
 	wg.Add(1)
 	concurrent.SafeGo(ctx, "hybrid_search.graph", func(ctx context.Context) {
 		defer wg.Done()
-		res, err := source.SearchGraph(ctx, query, width)
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(singleRouteTimeoutMs)*time.Millisecond)
+		defer cancel()
+		res, err := source.SearchGraph(timeoutCtx, query, width)
 		if err != nil {
+			if timeoutCtx.Err() == context.DeadlineExceeded {
+				metrics.RecordRetrievalRouteTimeout(ctx, "graph")
+			}
 			slog.WarnContext(ctx, "hybrid_search: graph recall failed, degrading", "err", err)
 			return
 		}
@@ -245,7 +261,12 @@ func HybridSearch(
 		width = 30
 	}
 
-	r := recall(ctx, source, query, embedding, width)
+	timeoutMs := config.SingleRouteTimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 800
+	}
+
+	r := recall(ctx, source, query, embedding, width, timeoutMs)
 	if r.bm25Err != nil {
 		return nil, r.bm25Err //nolint:wrapcheck // 由调用方按各自领域语义包装
 	}

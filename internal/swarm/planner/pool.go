@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -175,13 +176,24 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel1()
 
+	if err := ctx.Err(); err != nil {
+		slog.WarnContext(ctx, "planner_pool: parent context already canceled", "err", err)
+		return
+	}
+
 	var compileScore = 0.0
 
 	if p.sandbox != nil {
+		// NOTE: p.sandbox.Execute 同时传了 ctx 与 timeout 参数。若内部忽略传入的 ctx，则此处的 ctx.Err 检查只能挡住「发起前取消」。
 		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", tmpDir}, wd, 30*time.Second)
 		if buildErr == nil {
 			testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel2()
+
+			if err := ctx.Err(); err != nil {
+				slog.WarnContext(ctx, "planner_pool: parent context already canceled before test", "err", err)
+				return
+			}
 
 			out, testErr := p.sandbox.Execute(testCtx, "go", []string{"test", "-json", "-timeout", "20s", tmpDir}, wd, 20*time.Second)
 			if testErr == nil {

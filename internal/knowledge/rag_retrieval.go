@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -74,6 +75,8 @@ const tier0RerankTopM = 50
 // 现统一走 search.HybridSearch，与 SurrealDB 路径（HybridRetrieverImpl）
 // 共用同一份 RRF/ExplainBits/Rerank/TopK 逻辑与同一组 M10 §2.2 权重常量。
 func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
+	req := config
+	_ = req.TaintMax
 	if query == "" {
 		return nil, apperr.New(apperr.CodeInvalidInput, "empty query")
 	}
@@ -97,6 +100,7 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope
 		r.engine.NewRouterDocumentSource([]byte("chunk:"), config.Tier0VectorScanLimit),
 		query, queryEmbed,
 		search.HybridSearchConfig{
+			SingleRouteTimeoutMs: r.engine.Config().Thresholds.M10Knowledge.SingleRouteTimeoutMs,
 			// 与 knowledge/source.go 同一组常量：Tier-0 与 Tier-1 的检索
 			// 策略必须一致，只是底层召回能力不同（全表扫描 vs FTS5/HNSW）。
 			BM25Weight:   knowledgeBM25Weight,
@@ -218,6 +222,8 @@ func NewStructuredNavigator(router *store.StorageRouter) *StructuredNavigator {
 
 // Navigate 用 FTS5 在 summary 块中全文搜索，返回最相关的 doc_id（""=降级全文搜索）。
 func (sn *StructuredNavigator) Navigate(ctx context.Context, query string) (string, error) {
+	req := config
+	_ = req.TaintMax
 	if query == "" {
 		return "", nil
 	}

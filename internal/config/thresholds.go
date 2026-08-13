@@ -208,10 +208,11 @@ type M9SelfImproveThresholds struct {
 }
 
 type M10KnowledgeThresholds struct {
-	RAGFinalTopK        int `toml:"rag.final_top_k"`       // 5
-	RAGRerankTopM       int `toml:"rag.rerank_top_m"`      // 50
-	GraphRAGDailyBudget int `toml:"graphrag.daily_budget"` // 200 — graphrag_llm_call_daily_budget_ht0
-	ChunkSize           int `toml:"chunk.size"`            // 256
+	RAGFinalTopK         int `toml:"rag.final_top_k"`         // 5
+	RAGRerankTopM        int `toml:"rag.rerank_top_m"`        // 50
+	GraphRAGDailyBudget  int `toml:"graphrag.daily_budget"`   // 200 — graphrag_llm_call_daily_budget_ht0
+	ChunkSize            int `toml:"chunk.size"`              // 256
+	SingleRouteTimeoutMs int `toml:"single_route_timeout_ms"` // 800
 }
 
 type M11PolicyThresholds struct {
@@ -417,10 +418,11 @@ func DefaultThresholds() Thresholds {
 			PRMTrainBatchSize:              64,
 		},
 		M10Knowledge: M10KnowledgeThresholds{
-			RAGFinalTopK:        5,
-			RAGRerankTopM:       50,
-			GraphRAGDailyBudget: 200,
-			ChunkSize:           256,
+			RAGFinalTopK:         5,
+			RAGRerankTopM:        50,
+			GraphRAGDailyBudget:  200,
+			ChunkSize:            256,
+			SingleRouteTimeoutMs: 800,
 		},
 		M11Policy: M11PolicyThresholds{
 			CapDefaultTTLSeconds:         300,
