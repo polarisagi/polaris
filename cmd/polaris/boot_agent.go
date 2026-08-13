@@ -219,9 +219,7 @@ func buildAgent(
 		time.Duration(sb.Cfg.Thresholds.M4Kernel.ReplanExtensionActivationSecs) * time.Second,
 	)
 	a.InjectMemory(memory.NewMemoryFacade(memory.NewMemorySystemFromMemImpl(mb.Mem)))
-	if mb.Mem != nil {
-		a.SetMemoryInjector(mb.Mem)
-	}
+
 	a.SetLAMEngine(&lamPolicyAdapter{inner: lamEngine})
 	sc := surprise.NewSurpriseCalculator(mb.FallacyPool)
 	a.SetSurpriseCalc(sc)

@@ -3,9 +3,6 @@
 package memory
 
 import (
-	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -17,7 +14,6 @@ import (
 	"github.com/polarisagi/polaris/internal/observability/budget"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // Layer classifies memory into four levels per the 2026 consensus.
@@ -67,34 +63,6 @@ func NewMemImpl(store protocol.Store) *MemImpl {
 // sb.SurrealStore，实际启动分级逻辑中二者总是同时具备或同时缺失，不存在只解锁
 // graph 的中间状态。生产唯一使用 NewMemImpl（Tier0 基础）/NewMemImplWithDB
 // （Tier0+SQL）/NewMemImplFull（Tier1+，graph+cognitive+db 同时注入）。
-
-// InjectRelevantMemory 提取与 query 相关的高价值实体与文档片段，组装为上下文供 LLM 注入。
-func (m *MemImpl) InjectRelevantMemory(ctx context.Context, sessionID string, query string) (string, error) {
-	if query == "" {
-		return "", nil
-	}
-	cfg := types.RetrievalConfig{
-		FinalTopK:    10,
-		RerankTopM:   30,
-		BM25Weight:   0.3,
-		VectorWeight: 0.5,
-		GraphWeight:  0.2,
-	}
-	frags, err := m.retriever.Search(ctx, query, types.SearchScope{Type: "memory"}, cfg)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeInternal, "MemImpl.InjectRelevantMemory", err)
-	}
-
-	if len(frags) == 0 {
-		return "", nil
-	}
-
-	var sb strings.Builder
-	for _, f := range frags {
-		fmt.Fprintf(&sb, "- %s\n", f.Content)
-	}
-	return sb.String(), nil
-}
 
 // NewMemImplFull 创建全功能 MemImpl（SurrealDB FTS+HNSW + Graph + SQL 全路径）。
 // 适用于 Tier1+（SurrealDB 可用时由 main.go 调用）。

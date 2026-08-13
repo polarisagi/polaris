@@ -53,7 +53,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 
 	// 健康/指标端点始终放行（无需鉴权）
 	if _, isHealth := healthPathSet[r.URL.Path]; isHealth {
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: "unknown", TraceID: traceID, Authenticated: false}), true
+		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeUnknown, TraceID: traceID, Authenticated: false}), true
 	}
 
 	// 未配置 API Key：仅允许本机回环访问，防止远程未授权调用
@@ -169,14 +169,14 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		}
 
 		authCtx := authcontext.FromContext(ctx)
-		clientType := "unknown"
+		clientType := authcontext.ClientTypeUnknown
 		if authCtx != nil {
 			clientType = authCtx.ClientType
 		}
 
 		// 注入污点：默认本地客户端 TaintMedium，API 调用（外部网络） TaintHigh
 		taint := types.TaintMedium
-		if clientType == "api" {
+		if clientType == authcontext.ClientTypeAPI {
 			taint = types.TaintHigh
 		}
 		ctx = taint.InjectToContext(ctx)
@@ -196,7 +196,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if !limiter.Allow(clientIP+":"+clientType, clientType) {
+		if !limiter.Allow(clientIP+":"+string(clientType), string(clientType)) {
 			w.Header().Set("Retry-After", "30")
 			http.Error(w, "429 Too Many Requests", http.StatusTooManyRequests)
 			return

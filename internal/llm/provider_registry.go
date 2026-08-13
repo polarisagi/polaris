@@ -274,7 +274,7 @@ func (tp *trackedProvider) Infer(ctx context.Context, msgs []types.Message, opts
 			}
 		})
 	}()
-	return tp.Provider.Infer(ctx, msgs, opts...)
+	return tp.Provider.Infer(ctx, msgs, opts...) //nolint:wrapcheck
 }
 
 func (tp *trackedProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (ch <-chan types.StreamEvent, err error) {
@@ -289,5 +289,5 @@ func (tp *trackedProvider) StreamInfer(ctx context.Context, msgs []types.Message
 			}
 		})
 	}()
-	return tp.Provider.StreamInfer(ctx, msgs, opts...)
+	return tp.Provider.StreamInfer(ctx, msgs, opts...) //nolint:wrapcheck
 }

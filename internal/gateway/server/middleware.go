@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/gateway/authcontext"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -58,14 +59,14 @@ type clientQuota struct {
 // builtinClientQuotas M13 §1.5 配额表（SSoT: state.yaml §m13_gateway）。
 func builtinClientQuotas() map[string]clientQuota {
 	return map[string]clientQuota{
-		"cli":     {Rate: 50, Max: 100},
-		"webui":   {Rate: 30, Max: 60},
-		"a2a":     {Rate: 30, Max: 60},
-		"ws":      {Rate: 5, Max: 10},
-		"grpc":    {Rate: 50, Max: 100},
-		"admin":   {Rate: 10, Max: 20},
-		"api":     {Rate: 30, Max: 60},
-		"unknown": {Rate: 10, Max: 20},
+		string(authcontext.ClientTypeCLI):     {Rate: 50, Max: 100},
+		string(authcontext.ClientTypeWebUI):   {Rate: 30, Max: 60},
+		"a2a":                                 {Rate: 30, Max: 60},
+		"ws":                                  {Rate: 5, Max: 10},
+		"grpc":                                {Rate: 50, Max: 100},
+		"admin":                               {Rate: 10, Max: 20},
+		string(authcontext.ClientTypeAPI):     {Rate: 30, Max: 60},
+		string(authcontext.ClientTypeUnknown): {Rate: 10, Max: 20},
 	}
 }
 
