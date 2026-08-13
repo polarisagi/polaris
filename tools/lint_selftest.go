@@ -30,6 +30,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -82,6 +83,16 @@ func main() {
 	// 否则新增规则时只要不往清单里加，就能绕过本门控——那本门控自己就成了摆设。
 	missing := findUncoveredTools(cases)
 	missingIDs := findUncoveredRuleIDs(cases)
+
+	// 门控的副作用产物也要还原：todo_lint / nolint_unused_lint 每次运行都会重写
+	// 各自的 inventory。注入违规样例期间跑它们，样例就会被写进这些**受版本控制**
+	// 的文件里——实测 `make check-all` 因此每跑一次都把工作区留脏一行，
+	// 长期效果是训练所有人无视 git status。还原是本 harness 的职责，不是调用方的。
+	restoreSideEffects := snapshotFiles(
+		"local_playground/reports/todo-inventory.md",
+		"local_playground/reports/nolint-unused-inventory.md",
+	)
+	defer restoreSideEffects()
 
 	failed := 0
 	for _, c := range cases {
@@ -381,4 +392,34 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:60] + "..."
+}
+
+// snapshotFiles 记录若干文件的当前内容，返回还原函数。
+// 用于兜住门控运行时对受版本控制文件的副作用写入（见 main 中的调用点注释）。
+// 文件不存在时记为"原本不存在"，还原即删除。
+func snapshotFiles(paths ...string) func() {
+	type snap struct {
+		data    []byte
+		existed bool
+	}
+	snaps := make(map[string]snap, len(paths))
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		snaps[p] = snap{data: data, existed: err == nil}
+	}
+	return func() {
+		for p, s := range snaps {
+			if !s.existed {
+				_ = os.Remove(p)
+				continue
+			}
+			cur, err := os.ReadFile(p)
+			if err == nil && bytes.Equal(cur, s.data) {
+				continue // 未被改动，不必写回
+			}
+			if wErr := os.WriteFile(p, s.data, 0o600); wErr != nil {
+				fmt.Fprintf(os.Stderr, "lint_selftest: 还原副作用文件 %s 失败: %v（请手工 git checkout）\n", p, wErr)
+			}
+		}
+	}
 }
