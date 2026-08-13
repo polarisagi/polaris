@@ -8,6 +8,7 @@ import (
 
 	"time"
 
+	appconfig "github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -22,6 +23,10 @@ import (
 //     这条边界不是洁癖：memory 的 M05 §12.3 漂移降级正是通过把 VectorWeight
 //     显式置 0 来关闭向量路的，若本函数"好心"把 0 当未设置补成默认 0.6，
 //     降级开关就会被静默架空（本文件初版即有此缺陷）。
+//   - 例外：SingleRouteTimeoutMs 属**资源维度**而非领域策略，0 没有"关闭超时"
+//     的语义，因而在本函数内就地回落到全局 thresholds。这条例外是刻意的：
+//     把它摊给三个调用方各读一次配置，只会让"配了却没生效"的漏配更难发现
+//     （2026-08-13 轮实测：该 toml 键定义后零处读取，实际生效的一直是兜底常量）。
 //   - 各路召回的取数逻辑由 DocumentSource 实现方提供，本函数不感知存储细节。
 //
 // 确定性（HE-4 Eval 可复现）：融合结果的排序必须与 map 迭代顺序无关。
@@ -62,16 +67,25 @@ type ExtraPath struct {
 // HybridSearchConfig 多路融合检索配置。
 // 权重按字面值生效：<=0 表示**关闭该路**（不是"用默认值"）。
 type HybridSearchConfig struct {
-	BM25Weight           float64
-	VectorWeight         float64
-	GraphWeight          float64
-	RRFk                 int // <=0 时取 60
-	TopK                 int // <=0 表示不截断
-	RecallWidth          int // 各路召回条数
-	EnableRerank         bool
-	Reranker             Reranker // 可选
+	BM25Weight   float64
+	VectorWeight float64
+	GraphWeight  float64
+	RRFk         int // <=0 时取 60
+	TopK         int // <=0 表示不截断
+	RecallWidth  int // 各路召回条数
+	EnableRerank bool
+	Reranker     Reranker // 可选
+	// SingleRouteTimeoutMs 非主干路（vector/graph/extra）的单路硬超时。
+	// <=0 时回落到 thresholds.M10Knowledge.SingleRouteTimeoutMs，再 <=0 才用
+	// defaultSingleRouteTimeoutMs。BM25 主干路不受此值约束，见 recall 内注释。
 	SingleRouteTimeoutMs int
 }
+
+// defaultSingleRouteTimeoutMs 是配置与调用方双双缺省时的最后兜底。
+// 取值依据：向量/图召回在 Tier-0（SurrealDB kv-mem，2GB VPS）实测 P99 约 400ms，
+// 取其 2 倍留冗余——超过该值基本可判定为慢查询而非正常负载波动。
+// 该常量只是兜底，正常路径应由 thresholds 提供，改值请改 thresholds 而不是这里。
+const defaultSingleRouteTimeoutMs = 800
 
 // Reranker Cross-encoder 重排接口（consumer-side 定义）。
 type Reranker interface {
@@ -173,14 +187,12 @@ func recall(ctx context.Context, source DocumentSource, query string,
 	concurrent.SafeGo(ctx, "hybrid_search.bm25", func(ctx context.Context) {
 		defer wg.Done()
 		startBM25 := time.Now()
-		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(singleRouteTimeoutMs)*time.Millisecond)
-		defer cancel()
-		res, err := source.SearchBM25(timeoutCtx, query, width)
+		// BM25 是融合的主干路，刻意**不加**单路硬超时：它的错误会经 bm25Err
+		// 上抛终止整次检索，给它加独立 deadline 等于把"慢"升级成"整条链路失败"，
+		// 与本机制"单路慢不拖垮主干"的目的相反。BM25 的超时由父 ctx 统一裁决。
+		res, err := source.SearchBM25(ctx, query, width)
 		metrics.RecordRetrievalLatency(ctx, "bm25", time.Since(startBM25).Milliseconds())
 		if err != nil {
-			if timeoutCtx.Err() == context.DeadlineExceeded {
-				metrics.RecordRetrievalRouteTimeout(ctx, "bm25")
-			}
 			r.bm25Err = err
 			return
 		}
@@ -261,9 +273,16 @@ func HybridSearch(
 		width = 30
 	}
 
+	// 单路超时的权威值来自 state.yaml/thresholds（M10Knowledge.SingleRouteTimeoutMs）。
+	// 调用方未显式覆盖时在此就地取全局阈值——三个调用点各读一次配置只会让
+	// "配了却不生效"的漏配更难发现（本轮实测：该 toml 键定义后无人读取，
+	// 实际生效的一直是函数内的兜底常量）。
 	timeoutMs := config.SingleRouteTimeoutMs
 	if timeoutMs <= 0 {
-		timeoutMs = 800
+		timeoutMs = appconfig.CurrentThresholds().M10Knowledge.SingleRouteTimeoutMs
+	}
+	if timeoutMs <= 0 {
+		timeoutMs = defaultSingleRouteTimeoutMs
 	}
 
 	r := recall(ctx, source, query, embedding, width, timeoutMs)

@@ -75,8 +75,6 @@ const tier0RerankTopM = 50
 // 现统一走 search.HybridSearch，与 SurrealDB 路径（HybridRetrieverImpl）
 // 共用同一份 RRF/ExplainBits/Rerank/TopK 逻辑与同一组 M10 §2.2 权重常量。
 func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope types.SearchScope, config types.RetrievalConfig) ([]types.ScoredFragment, error) {
-	req := config
-	_ = req.TaintMax
 	if query == "" {
 		return nil, apperr.New(apperr.CodeInvalidInput, "empty query")
 	}

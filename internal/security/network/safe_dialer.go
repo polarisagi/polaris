@@ -358,35 +358,7 @@ func (sd *SafeDialer) resolveDNSBypass(ctx context.Context, host string) ([]net.
 
 	// 写回缓存（更新时间戳）
 	sd.dnsCacheMu.Lock()
-	//nolint:nestif
-	if len(sd.dnsCache) >= sd.dnsCacheMax && sd.dnsCache[host] == nil {
-		// 优先清理过期 TTL
-		now := time.Now()
-		evicted := false
-		for k, ts := range sd.dnsCacheTs {
-			if now.Sub(ts) >= sd.dnsCacheTTL {
-				delete(sd.dnsCache, k)
-				delete(sd.dnsCacheTs, k)
-				evicted = true
-				break
-			}
-		}
-		// 无过期则清理最旧 Ts
-		if !evicted {
-			var oldestKey string
-			var oldestTs time.Time
-			for k, ts := range sd.dnsCacheTs {
-				if oldestKey == "" || ts.Before(oldestTs) {
-					oldestKey = k
-					oldestTs = ts
-				}
-			}
-			if oldestKey != "" {
-				delete(sd.dnsCache, oldestKey)
-				delete(sd.dnsCacheTs, oldestKey)
-			}
-		}
-	}
+	sd.evictDNSCacheLocked(host)
 	sd.dnsCache[host] = result
 	sd.dnsCacheTs[host] = time.Now()
 	sd.dnsCacheMu.Unlock()

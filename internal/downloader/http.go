@@ -12,9 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // downloadChunk 向 url 发起 Range GET，将响应体写入 partPath。
@@ -58,12 +57,6 @@ func downloadChunk(ctx context.Context, client *http.Client, url, partPath strin
 	}
 	return nil
 }
-
-//nolint:gochecknoglobals
-var dlRestartCount = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "polaris_downloader_resume_restarts_total",
-	Help: "Total number of times a partial download was restarted due to metadata mismatch",
-})
 
 type partMeta struct {
 	ETag          string `json:"etag"`
@@ -115,7 +108,7 @@ func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath s
 					meta.ETag != currentMeta.ETag ||
 					meta.LastModified != currentMeta.LastModified ||
 					meta.ContentLength != currentMeta.ContentLength {
-					dlRestartCount.Inc()
+					metrics.RecordDownloaderResumeRestart(ctx)
 					os.Remove(partPath)
 					os.Remove(metaPath)
 					offset = 0

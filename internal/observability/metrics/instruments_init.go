@@ -193,6 +193,8 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	)
 	ie.capture("polaris.retrieval.latency_ms", err)
 
+	initDegradationInstruments(meter, ie)
+
 	InstrRerankLatencyMs, err = meter.Float64Histogram(
 		"polaris.rerank.call_latency_ms",
 		metric.WithDescription("Reranker 单次调用延迟（ms）(label: outcome)"),
