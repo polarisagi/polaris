@@ -51,8 +51,8 @@ func scriptExt(language string) string {
 //
 // namespace 优先取 SessionID（同一会话的多次 CodeAct 调用聚在同一子目录，
 // 便于排障时按会话查看），为空时退化为 AgentID，再为空时退化为固定值
-// ——三者均不参与安全判定，仅影响物理路径分组，SessionID/AgentID 本身
-// 已在 vfs.WorkspaceManager.StageEphemeralFile 内部做路径穿越净化。
+// ——三者均不参与安全判定，仅影响物理路径分组。namespace 和 filename
+// 均已在 vfs.WorkspaceManager.StageEphemeralFile 内部做严格的路径穿越净化。
 func (ca *CodeAct) stageScript(req protocol.CodeActRequest, code string) (path string, cleanup func(), err error) {
 	if ca.stagingBackend == nil {
 		tmpFile, werr := writeTempScript(req.Language, code)

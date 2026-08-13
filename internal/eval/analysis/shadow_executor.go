@@ -47,7 +47,10 @@ func NewShadowExecutor(
 	mockCache repo.MockResponseCache,
 	evalStore *harness.SQLiteEvalStore,
 	staging optimizer.StagingPipeline,
-) *ShadowExecutor {
+) (*ShadowExecutor, error) {
+	if provider == nil {
+		return nil, apperr.New(apperr.CodeInvalidInput, "shadow_executor: LLM judge provider 必须注入")
+	}
 	return &ShadowExecutor{
 		db:          db,
 		llmProvider: provider,
@@ -55,7 +58,7 @@ func NewShadowExecutor(
 		evalStore:   evalStore,
 		staging:     staging,
 		thresholds:  config.DefaultThresholds(),
-	}
+	}, nil
 }
 
 // ReplayMetrics 统计回放指标
@@ -211,7 +214,12 @@ func (e *ShadowExecutor) processSingleSample(ctx context.Context, s sampleData, 
 		return
 	}
 
-	passed, _ := e.scoreShadow(ctx, eventPayload.Request, eventPayload.Response, shadowResp)
+	passed, err := e.scoreShadow(ctx, eventPayload.Request, eventPayload.Response, shadowResp)
+	if err != nil {
+		slog.Warn("shadow_executor: score shadow failed", "offset", s.Offset, "error", err)
+		rm.Skipped++
+		return
+	}
 	rm.Evaluated++
 	if passed {
 		rm.Passed++
@@ -278,7 +286,7 @@ func computeOperationHash(method, body string) string {
 // scoreShadow 用 Judge LLM 对比 Baseline 输出和 Shadow 输出。
 func (e *ShadowExecutor) scoreShadow(ctx context.Context, req *types.InferRequest, baseline *types.InferResponse, shadow *types.ProviderResponse) (bool, error) {
 	if e.llmProvider == nil {
-		return true, nil // 降级放行
+		return false, apperr.New(apperr.CodeInternal, "shadow_executor: LLM judge provider 未注入，按 fail-closed 拒绝评分")
 	}
 
 	prompt := fmt.Sprintf(`你是一个严格的对比评判器。

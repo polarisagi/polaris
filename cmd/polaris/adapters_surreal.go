@@ -139,6 +139,7 @@ func (a *knowledgeBaseAdapter) SearchJSON(ctx context.Context, query string, top
 		Query:    query,
 		TopK:     topK,
 		DocScope: docScope,
+		TaintMax: types.TaintHigh,
 	})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "KnowledgeBase.Search 失败", err)
@@ -160,8 +161,9 @@ func (a *fsmKnowledgeAdapter) SearchRAG(ctx context.Context, query string, topK 
 		return nil, nil
 	}
 	results, err := a.kb.Search(ctx, knowledgepkg.KnowledgeBaseSearchRequest{
-		Query: query,
-		TopK:  topK,
+		Query:    query,
+		TopK:     topK,
+		TaintMax: types.TaintHigh,
 	})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "KnowledgeBase.Search 失败", err)

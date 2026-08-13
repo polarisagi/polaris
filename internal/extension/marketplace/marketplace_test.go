@@ -53,7 +53,7 @@ func TestMCPMarketplaceClient_Search(t *testing.T) {
 		}
 	})
 
-	client := NewMCPMarketplaceClient("http://dummy", "", clientHTTP)
+	client, _ := NewMCPMarketplaceClient("http://dummy", "", clientHTTP)
 	entries, err := client.Search(context.Background(), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestMCPMarketplaceClient_Search_Error(t *testing.T) {
 		}
 	})
 
-	client := NewMCPMarketplaceClient("http://dummy", "", clientHTTP)
+	client, _ := NewMCPMarketplaceClient("http://dummy", "", clientHTTP)
 	_, err := client.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("expected error")
@@ -86,7 +86,7 @@ func TestMCPMarketplaceClient_Search_Error(t *testing.T) {
 
 func TestMCPMarketplaceClient_Install_Stdio(t *testing.T) {
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, network.NewSafeHTTPClient(nil))
+	client, _ := NewMCPMarketplaceClient("", dir, network.NewSafeHTTPClient(nil))
 
 	pkg := protocol.RegistryEntry{
 		ID:          "test/pkg",
@@ -117,7 +117,7 @@ func TestMCPMarketplaceClient_Install_Stdio(t *testing.T) {
 
 func TestMCPMarketplaceClient_Install_HTTP(t *testing.T) {
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, network.NewSafeHTTPClient(nil))
+	client, _ := NewMCPMarketplaceClient("", dir, network.NewSafeHTTPClient(nil))
 
 	pkg := protocol.RegistryEntry{
 		ID:        "test/pkg",
@@ -161,7 +161,7 @@ func TestMCPMarketplaceClient_Install_Download(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	client := NewMCPMarketplaceClient("", dir, clientHTTP)
+	client, _ := NewMCPMarketplaceClient("", dir, clientHTTP)
 
 	pkg := protocol.RegistryEntry{
 		ID:       "test/download",
@@ -201,7 +201,7 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 		}
 	})
 
-	client := NewMCPMarketplaceClient("", t.TempDir(), clientHTTP)
+	client, _ := NewMCPMarketplaceClient("", t.TempDir(), clientHTTP)
 
 	// 1. Checksum matched
 	pkg1 := protocol.RegistryEntry{
@@ -272,5 +272,12 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 	_, err = client.Install(context.Background(), pkg5)
 	if err != nil {
 		t.Errorf("expected pass from checksum URL, got: %v", err)
+	}
+}
+
+func TestNewMCPMarketplaceClient_Nil(t *testing.T) {
+	_, err := NewMCPMarketplaceClient("", "", nil)
+	if err == nil {
+		t.Fatal("expected error for nil client")
 	}
 }

@@ -117,7 +117,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		}
 		staging := &mockStaging{}
 
-		exec := NewShadowExecutor(db, provider, cache, nil, staging)
+		exec, _ := NewShadowExecutor(db, provider, cache, nil, staging)
 		exec.thresholds.M12Eval.ShadowMinSamples = 0
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
 
@@ -148,7 +148,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		}
 		staging := &mockStaging{}
 
-		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, staging)
+		exec, _ := NewShadowExecutor(db, provider, &mockCache{}, nil, staging)
 		exec.thresholds.M12Eval.ShadowMinSamples = 0
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
 
@@ -176,7 +176,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		payload, _ := json.Marshal(map[string]any{"response": &types.InferResponse{Content: "x"}})
 		db.Exec(`INSERT INTO events(offset, type, payload) VALUES(1, 'llm_call', ?)`, payload)
 
-		exec := NewShadowExecutor(db, &mockProvider{}, &mockCache{}, nil, &mockStaging{})
+		exec, _ := NewShadowExecutor(db, &mockProvider{}, &mockCache{}, nil, &mockStaging{})
 		exec.thresholds.M12Eval.ShadowMinSamples = 0
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
 
@@ -204,7 +204,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		cache := &mockCache{}
 		staging := &mockStaging{}
 
-		exec := NewShadowExecutor(db, provider, cache, nil, staging)
+		exec, _ := NewShadowExecutor(db, provider, cache, nil, staging)
 		exec.thresholds.M12Eval.ShadowMinSamples = 2
 		exec.thresholds.M12Eval.ShadowPassRateThreshold = 0.95
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
@@ -241,7 +241,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		cache := &mockCache{}
 		staging := &mockStaging{}
 
-		exec := NewShadowExecutor(db, provider, cache, nil, staging)
+		exec, _ := NewShadowExecutor(db, provider, cache, nil, staging)
 		exec.thresholds.M12Eval.ShadowMinSamples = 2
 		exec.thresholds.M12Eval.ShadowPassRateThreshold = 0.95
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
@@ -271,7 +271,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		db.Exec(`INSERT INTO events(offset, type, payload) VALUES(1, 'llm_call', ?)`, payload)
 
 		provider := &mockProvider{inferResp: &types.ProviderResponse{Content: "shadow output"}}
-		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+		exec, _ := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
 		exec.thresholds.M12Eval.ShadowMinSamples = 0
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
 
@@ -299,7 +299,7 @@ func TestShadowExecutor_RunReplayBatch(t *testing.T) {
 		db.Exec(`INSERT INTO events(offset, type, payload) VALUES(1, 'llm_call', ?)`, payload)
 
 		provider := &mockProvider{inferResp: &types.ProviderResponse{Content: "shadow output"}}
-		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+		exec, _ := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
 		exec.thresholds.M12Eval.ShadowMinSamples = 0
 		exec.thresholds.M12Eval.ShadowSampleRate = 1.0
 
@@ -329,7 +329,7 @@ func TestShadowExecutor_ScoreShadow_SchemaValidation(t *testing.T) {
 
 	t.Run("缺少reason字段_fail_closed", func(t *testing.T) {
 		provider := &mockProvider{judgeResp: &types.ProviderResponse{Content: `{"passed":true}`}}
-		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+		exec, _ := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
 
 		passed, err := exec.scoreShadow(context.Background(), req, baseline, shadow)
 		if err != nil {
@@ -342,7 +342,7 @@ func TestShadowExecutor_ScoreShadow_SchemaValidation(t *testing.T) {
 
 	t.Run("json语法错误_fail_closed", func(t *testing.T) {
 		provider := &mockProvider{judgeResp: &types.ProviderResponse{Content: `not json at all`}}
-		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+		exec, _ := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
 
 		passed, err := exec.scoreShadow(context.Background(), req, baseline, shadow)
 		if err != nil {
@@ -355,7 +355,7 @@ func TestShadowExecutor_ScoreShadow_SchemaValidation(t *testing.T) {
 
 	t.Run("字段完整_正常通过", func(t *testing.T) {
 		provider := &mockProvider{judgeResp: &types.ProviderResponse{Content: `{"passed":true,"reason":"ok"}`}}
-		exec := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
+		exec, _ := NewShadowExecutor(db, provider, &mockCache{}, nil, &mockStaging{})
 
 		passed, err := exec.scoreShadow(context.Background(), req, baseline, shadow)
 		if err != nil {
@@ -365,4 +365,11 @@ func TestShadowExecutor_ScoreShadow_SchemaValidation(t *testing.T) {
 			t.Error("字段完整且 passed:true 时应正常通过")
 		}
 	})
+}
+
+func TestNewShadowExecutor_NilProvider(t *testing.T) {
+	_, err := NewShadowExecutor(&mockDB{}, nil, &mockCache{}, nil, &mockStaging{})
+	if err == nil {
+		t.Fatal("expected error when provider is nil")
+	}
 }

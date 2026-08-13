@@ -235,17 +235,37 @@ func (e *ContextRefExpander) resolveFile(_ context.Context, val string) (string,
 		}
 	}
 
-	// 解析为绝对路径
-	if !filepath.IsAbs(path) && e.workDir != "" {
-		path = filepath.Join(e.workDir, path)
+	if e.workDir == "" {
+		return "", 0, apperr.New(apperr.CodeForbidden, "contextref: workDir 未配置，按 fail-closed 拒绝文件引用")
+	}
+
+	root, err := filepath.Abs(filepath.Clean(e.workDir))
+	if err != nil {
+		return "", 0, apperr.Wrap(apperr.CodeInternal, "resolve workDir", err)
+	}
+
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
 	}
 
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", 0, apperr.Wrap(apperr.CodeInternal, "resolve path", err)
 	}
+
+	if _, err := os.Stat(abs); err == nil {
+		abs, err = filepath.EvalSymlinks(abs)
+		if err != nil {
+			return "", 0, apperr.Wrap(apperr.CodeInternal, "eval symlinks", err)
+		}
+	}
+
+	if !strings.HasPrefix(abs, root+string(filepath.Separator)) && abs != root {
+		return "", 0, apperr.New(apperr.CodeForbidden, "contextref: 路径穿越，拒绝访问")
+	}
+
 	if isSensitivePath(abs) {
-		return "", 0, apperr.New(apperr.CodeInternal, fmt.Sprintf("blocked: sensitive path %q", abs))
+		return "", 0, apperr.New(apperr.CodeForbidden, fmt.Sprintf("blocked: sensitive path %q", abs))
 	}
 
 	data, err := os.ReadFile(abs)
