@@ -5,7 +5,7 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::sync::{Arc, RwLock};
 
-use super::{STORE, SURREAL_ERR_PANIC, SURREAL_OK, SurrealStore, WORKER_THREADS};
+use super::{SURREAL_ERR_UTF8, STORE, SURREAL_ERR_PANIC, SURREAL_OK, SurrealStore, WORKER_THREADS};
 
 use std::sync::atomic::Ordering;
 
@@ -38,6 +38,9 @@ pub unsafe extern "C" fn surreal_open(
     db_path: *const c_char,
     vec_dim: c_int,
 ) -> c_int {
+    if db_path.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let bk = if backend.is_null() {
         "mem".to_string()
     } else {

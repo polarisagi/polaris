@@ -23,6 +23,9 @@ pub unsafe extern "C" fn surreal_vec_upsert(
     embed: *const f32,
     dim: usize,
 ) -> c_int {
+    if id.is_null() || embed.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
@@ -64,6 +67,9 @@ pub unsafe extern "C" fn surreal_vec_upsert(
 /// id 须为有效 NUL-terminated UTF-8 C 字符串。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
+    if id.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
@@ -110,6 +116,9 @@ pub unsafe extern "C" fn surreal_vec_knn(
     k: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
+    if out_json.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     if query.is_null() || dim == 0 || k == 0 {
         write_cstr(out_json, "[]");
         return SURREAL_OK;
