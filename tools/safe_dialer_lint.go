@@ -7,6 +7,7 @@
 //   - net.Dial / net.DialTimeout
 //   - http.Get / http.Post / http.PostForm
 //   - grpc.Dial / grpc.NewClient
+//   - smtp.SendMail / smtp.Dial
 //
 // 豁免：
 //   - internal/security/network/ 包自身
@@ -202,6 +203,11 @@ func checkBareCall(fset *token.FileSet, path string, call *ast.CallExpr) {
 	}
 	if pkgName == "grpc" && (fnName == "Dial" || fnName == "NewClient") {
 		fmt.Printf("%s:%d: 裸 grpc.%s() 调用，需通过 SafeDialer 注入 (inv_safe_dialer_01)\n",
+			path, pos.Line, fnName)
+		errCount++
+	}
+	if pkgName == "smtp" && (fnName == "SendMail" || fnName == "Dial") {
+		fmt.Printf("%s:%d: 裸 smtp.%s() 调用，需通过 SafeDialer 注入 (inv_safe_dialer_01)\n",
 			path, pos.Line, fnName)
 		errCount++
 	}

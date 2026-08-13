@@ -1,0 +1,4 @@
+# 格式：<文件路径>:<函数名>:<违规模式描述>
+# 规则：断言指定位置禁止出现硬编码污点常量
+internal/agent/context/memory_context.go:WriteUserData:OriginTaintLevel禁为字面量
+internal/knowledge/rag_retrieval.go:Search:Chunk组装必须存在req.TaintMax比较

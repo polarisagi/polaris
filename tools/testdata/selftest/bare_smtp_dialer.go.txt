@@ -1,0 +1,7 @@
+package adapter
+
+import "net/smtp"
+
+func selftestSMTPDialer() {
+	smtp.SendMail("addr", nil, "from", []string{"to"}, nil)
+}

@@ -20,6 +20,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -46,6 +47,9 @@ func main() {
 		checkHandlerFile(fset, path, registeredMethods, allowlist)
 		return nil
 	})
+
+	// 4. 检查路径参数一致性
+	checkPathValueConsistency(fset, routesFile, "internal/gateway/server", allowlist)
 
 	fmt.Printf("route_coverage_check: scanned %d HTTP Handler method(s)\n", handlerCount)
 	if errCount > 0 {
@@ -175,3 +179,92 @@ func isHTTPHandlerSignature(fn *ast.FuncDecl) bool {
 	// 简单断言有两个参数
 	return true
 }
+
+func checkPathValueConsistency(fset *token.FileSet, routesFile string, handlerDir string, allowlist map[string]bool) {
+	data, err := os.ReadFile(routesFile)
+	if err != nil {
+		return
+	}
+	content := string(data)
+	lines := strings.Split(content, "\n")
+	
+	registeredParams := make(map[string]map[string]bool)
+	rePattern := regexp.MustCompile(`mux\.HandleFunc\(".*? (.*?)", .*?\.([A-Za-z0-9_]+)\)`)
+	reParam := regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
+	
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		matches := rePattern.FindStringSubmatch(trimmed)
+		if len(matches) == 3 {
+			pattern := matches[1]
+			methodName := matches[2]
+			
+			if registeredParams[methodName] == nil {
+				registeredParams[methodName] = make(map[string]bool)
+			}
+			
+			paramMatches := reParam.FindAllStringSubmatch(pattern, -1)
+			for _, pm := range paramMatches {
+				registeredParams[methodName][pm[1]] = true
+			}
+		}
+	}
+	
+	filepath.Walk(handlerDir, func(path string, info os.FileInfo, err error) error { //nolint:errcheck
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		node, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return nil
+		}
+		
+		ast.Inspect(node, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Handle") {
+				return true
+			}
+			methodName := fn.Name.Name
+			
+			readKeys := make(map[string]token.Pos)
+			ast.Inspect(fn.Body, func(bn ast.Node) bool {
+				call, ok := bn.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "PathValue" {
+					return true
+				}
+				if len(call.Args) == 1 {
+					if blit, ok := call.Args[0].(*ast.BasicLit); ok && blit.Kind == token.STRING {
+						key := strings.Trim(blit.Value, "\"")
+						readKeys[key] = call.Pos()
+					}
+				}
+				return true
+			})
+			
+			if len(readKeys) > 0 {
+				allowedParams := registeredParams[methodName]
+				for key, pos := range readKeys {
+					if !allowedParams[key] {
+						// 检查白名单：只看方法名是否被豁免
+						if allowlist[methodName] || allowlist[fmt.Sprintf("%s:%s", path, methodName)] {
+							continue
+						}
+						p := fset.Position(pos)
+						fmt.Printf("%s:%d: Handler %s 读取了未注册的路径参数 %q（违反 L-02）\n", path, p.Line, methodName, key)
+						errCount++
+					}
+				}
+			}
+			return true
+		})
+		return nil
+	})
+}
+

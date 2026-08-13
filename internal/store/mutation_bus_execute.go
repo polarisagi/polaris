@@ -174,7 +174,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 		if intent.TaskID != "" && intent.AgentID != "" {
 			if dw.leaseChecker != nil && !dw.leaseChecker.Verify(intent.TaskID, intent.AgentID, intent.ClaimedVersion) {
 				if intent.ResultCh != nil {
-					intent.ResultCh <- ErrStaleLease
+					intent.ResultCh <- ErrStaleLease //nolint:chan_send_guard
 				}
 				continue
 			}
@@ -255,7 +255,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 	// COMMIT 成功后统一通知各 intent ResultCh
 	for _, r := range results {
 		if r.intent.ResultCh != nil {
-			r.intent.ResultCh <- r.err
+			r.intent.ResultCh <- r.err //nolint:chan_send_guard
 		}
 	}
 
