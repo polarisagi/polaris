@@ -62,13 +62,25 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check fail-closed-check chan-send-guard-check outbox-state-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
 
 panic-check:
 	@echo "=== [F-12/E1] Framework panic ratchet gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/panic_lint.go
+
+fail-closed-check:
+	@echo "=== [L-04] Fail-closed constructor gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/panic_lint.go
+
+chan-send-guard-check:
+	@echo "=== [L-05] Chan send guard gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/chan_send_guard_lint.go
+
+outbox-state-check:
+	@echo "=== [L-06] Outbox state gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/task_state_lint.go
 
 # lint-selftest 是「门控的门控」：逐条注入违规样例，证明每条规则确实能报红。
 # 不并入 lint（它会临时改写工作区文件，不适合与并发的编辑同跑），只挂 check-all。

@@ -48,6 +48,8 @@ func main() {
 		}
 	}
 
+	checkAssignDenylist(fset)
+
 	fmt.Printf("taint_typed_fields_check: scanned %d field requirement(s)\n", checkedCount)
 	if errCount > 0 {
 		fmt.Fprintf(os.Stderr, "taint_typed_fields_check: FAIL — %d violation(s)\n", errCount)
@@ -181,4 +183,103 @@ func exprToString(expr ast.Expr) string {
 		return "[]" + exprToString(t.Elt)
 	}
 	return fmt.Sprintf("%T", expr)
+}
+
+func checkAssignDenylist(fset *token.FileSet) {
+	baseline := make(map[string]bool)
+	baselinePath := "local_playground/reports/taint_typed_fields_check-baseline.md"
+	if bf, err := os.Open(baselinePath); err == nil {
+		scanner := bufio.NewScanner(bf)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" && !strings.HasPrefix(line, "#") {
+				baseline[line] = true
+			}
+		}
+		bf.Close()
+	}
+
+	listPath := "tools/taint-assign-denylist.txt"
+	f, err := os.Open(listPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "taint_typed_fields_check: parse list %s: %v\n", listPath, err)
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) < 3 {
+			continue
+		}
+		filePath, funcName, desc := parts[0], parts[1], parts[2]
+		
+		node, err := parser.ParseFile(fset, filePath, nil, 0)
+		if err != nil {
+			continue
+		}
+
+		ast.Inspect(node, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				return true
+			}
+			
+			if filePath == "internal/agent/context/memory_context.go" && funcName == "WriteUserData" {
+				ast.Inspect(fn.Body, func(bn ast.Node) bool {
+					call, ok := bn.(*ast.CallExpr)
+					if !ok { return true }
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if ok && sel.Sel.Name == "WriteUserData" {
+						ast.Inspect(call, func(cn ast.Node) bool {
+							kv, ok := cn.(*ast.KeyValueExpr)
+							if !ok { return true }
+							keyIdent, ok := kv.Key.(*ast.Ident)
+							if ok && keyIdent.Name == "OriginTaintLevel" {
+								if _, isSel := kv.Value.(*ast.SelectorExpr); isSel {
+									pos := fset.Position(kv.Pos())
+									key := fmt.Sprintf("%s:%d", filePath, pos.Line)
+									if !baseline[key] {
+										fmt.Printf("%s:%d: %s (违反 L-03)\n", filePath, pos.Line, desc)
+										errCount++
+									}
+								}
+							}
+							return true
+						})
+					}
+					return true
+				})
+			}
+
+			if filePath == "internal/knowledge/rag_retrieval.go" && funcName == "Search" && fn.Name.Name == "Search" {
+				hasTaintMax := false
+				ast.Inspect(fn.Body, func(bn ast.Node) bool {
+					sel, ok := bn.(*ast.SelectorExpr)
+					if ok && sel.Sel.Name == "TaintMax" {
+						if id, ok := sel.X.(*ast.Ident); ok && id.Name == "req" {
+							hasTaintMax = true
+						}
+					}
+					return true
+				})
+				
+				if !hasTaintMax {
+					pos := fset.Position(fn.Pos())
+					key := fmt.Sprintf("%s:%d", filePath, pos.Line)
+					if !baseline[key] {
+						fmt.Printf("%s:%d: %s (违反 L-03)\n", filePath, pos.Line, desc)
+						errCount++
+					}
+				}
+			}
+			
+			return true
+		})
+	}
 }

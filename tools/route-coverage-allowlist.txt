@@ -44,3 +44,9 @@ HandleCSVFanout
 HandleGetMMDCanvas
 HandleBenchmark
 HandleMCPNetworkApproval
+
+# L-02 path value inconsistencies
+HandleTogglePluginMCP
+HandleGetPrompt
+HandleSetPrompt
+HandleResetPrompt

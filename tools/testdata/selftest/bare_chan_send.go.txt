@@ -1,0 +1,10 @@
+package store
+
+type DummyTask struct {
+	ResultCh chan error
+}
+
+func selftestChanSend() {
+	d := DummyTask{}
+	d.ResultCh <- nil
+}

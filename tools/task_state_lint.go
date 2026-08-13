@@ -1,6 +1,6 @@
 //go:build ignore
 
-// task_state_lint 检查 tasks 表的 CAS 状态转移 SQL 是否符合 inv_M8_03 状态机定义（F-5）。
+// task_state_lint 检查 tasks 表的 CAS 状态转移 SQL 是否符合 inv_M8_03 状态机定义（F-5），以及 outbox_state_lint 检查。
 //
 // inv_M8_03 合法状态转移：
 //   pending  -> claimed
@@ -49,6 +49,8 @@ func main() {
 			os.Exit(2)
 		}
 	}
+
+	checkOutboxWorker(fset)
 
 	fmt.Printf("task_state_lint: scanned %d task state update query(ies)\n", queryCount)
 	if errCount > 0 {
@@ -140,3 +142,62 @@ func condenseSQL(s string) string {
 	}
 	return strings.TrimSpace(s)
 }
+
+func checkOutboxWorker(fset *token.FileSet) {
+	path := "internal/store/outbox_worker.go"
+	node, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return
+	}
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		ifStmt, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+
+		// Look for CrashRecoveryCount >= 3 or something like it
+		isCrashCountCheck := false
+		ast.Inspect(ifStmt.Cond, func(cn ast.Node) bool {
+			bin, ok := cn.(*ast.BinaryExpr)
+			if !ok {
+				return true
+			}
+			// Check right side == 3
+			if blit, ok := bin.Y.(*ast.BasicLit); ok && blit.Value == "3" {
+				if bin.Op == token.GEQ || bin.Op == token.GTR {
+					if id, ok := bin.X.(*ast.SelectorExpr); ok {
+						if id.Sel.Name == "CrashRecoveryCount" {
+							isCrashCountCheck = true
+						}
+					} else if id, ok := bin.X.(*ast.Ident); ok {
+						if id.Name == "CrashRecoveryCount" || strings.Contains(id.Name, "CrashRecovery") {
+							isCrashCountCheck = true
+						}
+					}
+				}
+			}
+			return true
+		})
+
+		if isCrashCountCheck {
+			// Ensure it does not return nil
+			ast.Inspect(ifStmt.Body, func(bn ast.Node) bool {
+				ret, ok := bn.(*ast.ReturnStmt)
+				if !ok {
+					return true
+				}
+				for _, res := range ret.Results {
+					if id, ok := res.(*ast.Ident); ok && id.Name == "nil" {
+						pos := fset.Position(ret.Pos())
+						fmt.Printf("%s:%d: CrashRecoveryCount>=3 的毒丸分支 return nil 违反 outbox_inv_03（违反 L-06）\n", path, pos.Line)
+						errCount++
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+}
+

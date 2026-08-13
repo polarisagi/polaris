@@ -261,7 +261,7 @@ func (dw *DatabaseWriter) drainCh() {
 			}
 			// 用零值 error 回告残留请求，让调用方能感知到请求已被处理（即使未落盘）
 			if intent.ResultCh != nil {
-				intent.ResultCh <- apperr.New(apperr.CodeInternal, "DatabaseWriter is restarting")
+				intent.ResultCh <- apperr.New(apperr.CodeInternal, "DatabaseWriter is restarting") //nolint:chan_send_guard
 			}
 		default:
 			return

@@ -119,8 +119,13 @@ func checkFile(fset *token.FileSet, path string, baseline map[string]bool) {
 				return true
 			}
 
-			fmt.Printf("%s:%d: 在非 init() 框架层函数 %q 内新增 panic() 调用（违反 [E1] 错误处理规范 F-12 与棘轮规则）\n",
-				path, pos.Line, fn.Name.Name)
+			if fn.Name.IsExported() && strings.HasPrefix(fn.Name.Name, "New") {
+				fmt.Printf("%s:%d: 导出构造函数 %q 内禁用 panic，请改为返回 error（违反 fail-closed 规范 L-04）\n",
+					path, pos.Line, fn.Name.Name)
+			} else {
+				fmt.Printf("%s:%d: 在非 init() 框架层函数 %q 内新增 panic() 调用（违反 [E1] 错误处理规范 F-12 与棘轮规则）\n",
+					path, pos.Line, fn.Name.Name)
+			}
 			errCount++
 			return true
 		})

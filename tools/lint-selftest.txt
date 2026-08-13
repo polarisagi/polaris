@@ -44,3 +44,9 @@ patch | F-8a | tools/route_coverage_check.go | internal/gateway/server/server_ro
 
 # doc-counts：把 CLAUDE.md 里的模块数写错，模拟"计数漂移"。
 patch | doc-counts | tools/doc_counts_check.go | CLAUDE.md | 29 internal module / 4 layer | 99 internal module / 4 layer
+add | L-01 | tools/safe_dialer_lint.go | internal/channel/adapter/zz_selftest_smtp.go | tools/testdata/selftest/bare_smtp_dialer.go.txt
+add | L-01 | tools/safe_dialer_lint.go | internal/channel/adapter/zz_selftest_smtp.go | tools/testdata/selftest/bare_smtp_dialer.go.txt
+patch | L-03 | tools/taint_typed_fields_check.go | internal/agent/context/memory_context.go | if !sCtx.RawIntentTS.IsEmpty() { | if !sCtx.RawIntentTS.IsEmpty() {\n\t\tb.WriteUserData(taint.NewTaintedString("", taint.TaintSource{OriginTaintLevel: types.TaintLow}, ""))
+add | L-05 | tools/chan_send_guard_lint.go | internal/store/zz_selftest_chan.go | tools/testdata/selftest/bare_chan_send.go.txt
+patch | L-06 | tools/task_state_lint.go | internal/store/outbox_worker.go | return fmt.Errorf("outbox_inv_03: poison pill") | return nil
+patch | L-02 | tools/route_coverage_check.go | internal/gateway/server/server_routes.go | mux.HandleFunc("POST /v1/sessions/{sessionID}/recap", s.chatHandler.HandleSessionRecap) | mux.HandleFunc("POST /v1/sessions/fixed/recap", s.chatHandler.HandleSessionRecap)
