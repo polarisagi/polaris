@@ -1,10 +1,34 @@
-internal/extension/mcp/mcp_manager.go:NewMCPManager
-internal/ffi/llama.go:LlamaEmbed
-internal/ffi/llama.go:LlamaRerank
-internal/security/taint/taint_sanitizer.go:SanitizeByDeterministicTransform
-internal/sysmgr/updater/signer.go:SignChecksumFile
-internal/sysmgr/updater/signer.go:ParseECDSAPrivateKeyPEM
-internal/sysmgr/updater/signer.go:PublicKeyPEMFromPrivate
-internal/sysmgr/updater/signing_state.go:ResolveSigningState
-internal/sysmgr/updater/signing_state.go:ResolveSigningStateFromTrustStore
-internal/vfs/workspace_manager.go:NewWorkspaceManager
+# wiring-allowlist.txt — [L-13] 包级接线可达性门控的豁免表。
+#
+# 判据：包不在 cmd/polaris 生产 import 闭包内即报红。豁免只有登记这一条路，
+# 且每条**必须**写明「为何暂不接线 + 去向」——ADR-0088 存量债处置边界要求的是
+# 台账，不是许可证。无理由条目等同静默放宽门控（见记忆「白名单要审计不要清空」：
+# 上一轮 13 条「测试假阳性」标签经复核全部证伪，实为「写了没接线」）。
+#
+# 格式：每行一个包相对路径（如 internal/cli），# 开头为注释。
+# 复核责任：每轮增量审核复核本表，条目消失（接线或删除）即移除，不得长期沉淀。
+
+# ── 测试/CI 专用包：按定义就不该出现在生产闭包里 ────────────────────────────────
+# 去向：永久豁免，除非其职责变化。
+internal/lint            # 不变量测试包，由 go test 驱动，不进二进制
+internal/memory/testutil # memory 各子包单测共用的 mock，仅被 _test.go 引用
+
+# ── 已立 ADR 明确「维持不接线」的目标契约 ───────────────────────────────────────
+# 去向：随各自 ADR 的重评触发条件复议，不在缺陷修复批次内处置。
+internal/bootstrap # ADR-0088 §决策七：四个重评触发条件 2026-08-07 实测全未满足，
+#                    且两阶段装配/顺序性副作用在 Bootable 契约下语义上无法表达。
+internal/cli #        CLAUDE.md §项目结构记为「已定义未接线的 CLI 引导契约」，
+#                    生产装配落点是 cmd/polaris/boot_*.go（与 ADR-0088 同口径）。
+
+# ── 存量：本轮新门控首次照出，未经审核流程，按 fix.md §1-2 不在本轮顺手修 ────────
+# 去向：已登记 local_playground/upgrade/99-遗留线索.md，等下一轮审核收编后处置。
+internal/extension        # 仅 provider.go 的 consumer-side 接口声明，零 import。
+#                           与本轮已删除的 security/provider.go（GR-2-003）同形态，
+#                           待下一轮按同一判据裁定「迁移消费点或删除」。
+internal/extension/models # 仅 doc.go 占位包，0 导出符号；注释自述「Tier 1+ 预留，
+#                           Tier 0 不激活」。待确认 FeatureGate.ModelExtensions 落地计划。
+internal/swarm            # 子包（planner/supervisor/topology）已接线，父包 startup.go
+#                           的 Phase/Pinger 分阶段启动编排零引用——与 internal/bootstrap
+#                           同类的「另一套未接线启动编排」，须一并裁定，不宜单独处置。
+internal/sysmgr/locale    # Detect 地区探测，8 个导出符号零引用；注释自述服务于
+#                           「用户画像/内容个性化」，该上层功能本身尚未落地。
