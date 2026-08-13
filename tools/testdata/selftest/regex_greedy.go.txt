@@ -1,0 +1,3 @@
+package sandbox
+import "regexp"
+var re = regexp.MustCompile("(?s).*")

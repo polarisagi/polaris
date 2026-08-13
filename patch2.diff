@@ -1,0 +1,20 @@
+--- internal/channel/adapter/email.go
++++ internal/channel/adapter/email.go
+@@ -92,7 +92,7 @@
+ 	}
+ }
+ 
+-func EmailSendMessage(smtpHost, smtpPort, address, password, to, subject, body string) error {
++func EmailSendMessage(ctx context.Context, dialer network.SafeDialer, smtpHost, smtpPort, address, password, to, subject, body string) error {
+ 	auth := smtp.PlainAuth("", address, password, smtpHost)
+ 	msg := []byte(
+ 		"From: " + address + "\r\n" +
+--- internal/channel/adapter/channels_extra_test.go
++++ internal/channel/adapter/channels_extra_test.go
+@@ -88,6 +88,6 @@
+ }
+ 
+ func TestEmailSendMessage_Coverage(t *testing.T) {
+-	_ = EmailSendMessage("host", "port", "addr", "pass", "to", "sub", "body")
++	_ = EmailSendMessage(context.Background(), nil, "host", "port", "addr", "pass", "to", "sub", "body")
+ }

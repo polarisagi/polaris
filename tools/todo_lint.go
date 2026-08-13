@@ -19,6 +19,7 @@
 // 存量输出：生成/更新 local_playground/reports/todo-inventory.md 保持追踪
 //
 // 使用：
+//
 //	go run tools/todo_lint.go
 //	go run tools/todo_lint.go -update-baseline   # 有意消化存量后重置基线
 package main

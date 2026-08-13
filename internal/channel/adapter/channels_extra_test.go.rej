@@ -1,0 +1,8 @@
+@@ -88,6 +88,6 @@
+ }
+ 
+ func TestEmailSendMessage_Coverage(t *testing.T) {
+-	_ = EmailSendMessage("host", "port", "addr", "pass", "to", "sub", "body")
++	_ = EmailSendMessage(context.Background(), nil, "host", "port", "addr", "pass", "to", "sub", "body")
+ }
+ 

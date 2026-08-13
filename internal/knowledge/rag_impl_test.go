@@ -101,7 +101,7 @@ func TestContextExpander_Empty(t *testing.T) {
 	router := store.NewStorageRouter(&mockSqliteStore{}, nil)
 	expander := NewContextExpander(router)
 
-	results, _ := expander.Expand(context.Background(), []Chunk{{ID: "c1", DocID: "d1"}})
+	results, _ := expander.Expand(context.Background(), []Chunk{{ID: "c1", DocID: "d1"}}, types.TaintLow)
 	if len(results) != 1 {
 		t.Errorf("expected 1 result")
 	}
@@ -127,7 +127,7 @@ func TestContextExpander_Hit(t *testing.T) {
 	// We'll skip deep DB test and just hit the early returns for now.
 	expander := NewContextExpander(router)
 
-	results, _ := expander.Expand(context.Background(), []Chunk{{ID: "c1", DocID: "d1"}})
+	results, _ := expander.Expand(context.Background(), []Chunk{{ID: "c1", DocID: "d1"}}, types.TaintLow)
 	if len(results) != 1 {
 		t.Errorf("expected 1 result")
 	}

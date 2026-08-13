@@ -232,12 +232,13 @@ func extractJSON(input string) string {
 	start := -1
 	count := 0
 	for i, c := range input {
-		if c == '{' {
+		switch c {
+		case '{':
 			if count == 0 {
 				start = i
 			}
 			count++
-		} else if c == '}' {
+		case '}':
 			count--
 			if count == 0 && start != -1 {
 				return input[start : i+1]

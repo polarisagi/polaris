@@ -6,6 +6,7 @@
 // 豁免：defer 语句、_test.go 文件、Close()/Rollback()
 //
 // 使用：
+//
 //	go run tools/must_check_error_lint.go
 package main
 

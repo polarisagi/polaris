@@ -3,12 +3,13 @@
 // route_coverage_check 检查 gateway Handler 方法与 server_routes.go 路由注册对账（F-8a）。
 //
 // 防御目标：
-//   1. 阻止 Handler 已实现但路由被遗漏/注释挂起（如提示词路由 C-1 / VFSUpload C-3 潜伏案件）
-//   2. 报告 server_routes.go 中被注释掉的 `// mux.Handle(` / `// mux.HandleFunc(`
+//  1. 阻止 Handler 已实现但路由被遗漏/注释挂起（如提示词路由 C-1 / VFSUpload C-3 潜伏案件）
+//  2. 报告 server_routes.go 中被注释掉的 `// mux.Handle(` / `// mux.HandleFunc(`
 //
 // 豁免：对于明确待接线前置条件的 handler，可以在注释/豁免名单 `tools/route-coverage-allowlist.txt` 标记。
 //
 // 使用：
+//
 //	go run tools/route_coverage_check.go
 package main
 
@@ -187,11 +188,11 @@ func checkPathValueConsistency(fset *token.FileSet, routesFile string, handlerDi
 	}
 	content := string(data)
 	lines := strings.Split(content, "\n")
-	
+
 	registeredParams := make(map[string]map[string]bool)
 	rePattern := regexp.MustCompile(`mux\.HandleFunc\(".*? (.*?)", .*?\.([A-Za-z0-9_]+)\)`)
 	reParam := regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
-	
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "//") {
@@ -201,18 +202,18 @@ func checkPathValueConsistency(fset *token.FileSet, routesFile string, handlerDi
 		if len(matches) == 3 {
 			pattern := matches[1]
 			methodName := matches[2]
-			
+
 			if registeredParams[methodName] == nil {
 				registeredParams[methodName] = make(map[string]bool)
 			}
-			
+
 			paramMatches := reParam.FindAllStringSubmatch(pattern, -1)
 			for _, pm := range paramMatches {
 				registeredParams[methodName][pm[1]] = true
 			}
 		}
 	}
-	
+
 	filepath.Walk(handlerDir, func(path string, info os.FileInfo, err error) error { //nolint:errcheck
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
@@ -221,14 +222,14 @@ func checkPathValueConsistency(fset *token.FileSet, routesFile string, handlerDi
 		if err != nil {
 			return nil
 		}
-		
+
 		ast.Inspect(node, func(n ast.Node) bool {
 			fn, ok := n.(*ast.FuncDecl)
 			if !ok || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Handle") {
 				return true
 			}
 			methodName := fn.Name.Name
-			
+
 			readKeys := make(map[string]token.Pos)
 			ast.Inspect(fn.Body, func(bn ast.Node) bool {
 				call, ok := bn.(*ast.CallExpr)
@@ -247,7 +248,7 @@ func checkPathValueConsistency(fset *token.FileSet, routesFile string, handlerDi
 				}
 				return true
 			})
-			
+
 			if len(readKeys) > 0 {
 				allowedParams := registeredParams[methodName]
 				for key, pos := range readKeys {
@@ -267,4 +268,3 @@ func checkPathValueConsistency(fset *token.FileSet, routesFile string, handlerDi
 		return nil
 	})
 }
-

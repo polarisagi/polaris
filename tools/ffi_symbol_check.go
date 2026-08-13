@@ -7,6 +7,7 @@
 //   - G - S 非空（Go 绑定了 Rust 不存在的符号）：运行时必然 panic/crash，强行报错
 //
 // 使用：
+//
 //	go run tools/ffi_symbol_check.go
 package main
 

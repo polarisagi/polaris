@@ -88,7 +88,7 @@ func TestPollers_Coverage(t *testing.T) {
 	_, _ = tgGetUpdates(ctx, http.DefaultClient, "token", 0)
 	tgDeleteWebhook(ctx, http.DefaultClient, "token")
 
-	_ = EmailSendMessage("host", "port", "addr", "pass", "to", "sub", "body")
+	_ = EmailSendMessage(context.Background(), nil, "host", "port", "addr", "pass", "to", "sub", "body")
 	_ = extractEmailAddress("test@test.com")
 
 	_ = LineSendMessage(ctx, http.DefaultClient, "token", "reply", "text")

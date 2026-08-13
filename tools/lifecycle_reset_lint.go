@@ -54,14 +54,14 @@ func main() {
 				if !ok || len(assign.Lhs) != 2 || assign.Tok != token.DEFINE {
 					continue
 				}
-				
+
 				okIdent, isIdent := assign.Lhs[1].(*ast.Ident)
 				if !isIdent {
 					continue
 				}
 
 				// Check for if !ok block
-				for i, stmt := range cc.Body {
+				for _, stmt := range cc.Body {
 					ifStmt, isIf := stmt.(*ast.IfStmt)
 					if !isIf {
 						continue

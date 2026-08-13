@@ -1,0 +1,23 @@
+--- internal/channel/adapter/email.go
++++ internal/channel/adapter/email.go
+@@ -92,7 +92,7 @@
+ 	}
+ }
+ 
+-func EmailSendMessage(ctx context.Context, dialer network.SafeDialer, smtpHost, smtpPort, address, password, to, subject, body string) error {
++func EmailSendMessage(ctx context.Context, dialer protocol.SafeDialer, smtpHost, smtpPort, address, password, to, subject, body string) error {
+ 	auth := smtp.PlainAuth("", address, password, smtpHost)
+ 	msg := []byte(
+ 		"From: " + address + "\r\n" +
+@@ -338,10 +338,7 @@
+ 		slog.Warn("email: smtp config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+ 		return nil
+ 	}
+-	d := a.dialer
+-	if d == nil {
+-		d = host.SafeDialer().(network.SafeDialer)
+-	}
++	d := host.SafeDialer()
+ 	if err := EmailSendMessage(ctx, d, smtpHost, smtpPort, address, password, msg.ChatID, "Re: [Polaris]", text); err != nil {
+ 		slog.Error("email: send failed", "to", msg.ChatID, "err", err)
+ 		return apperr.Wrap(apperr.CodeInternal, "email: send failed", err)

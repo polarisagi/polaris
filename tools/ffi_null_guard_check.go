@@ -36,12 +36,12 @@ func main() {
 			continue
 		}
 		strContent := string(content)
-		
+
 		matches := funcDeclRe.FindAllStringSubmatchIndex(strContent, -1)
 		for i, m := range matches {
 			funcName := strContent[m[2]:m[3]]
 			paramsStr := strContent[m[4]:m[5]]
-			
+
 			startIdx := m[1]
 			endIdx := len(strContent)
 			if i+1 < len(matches) {
@@ -52,7 +52,7 @@ func main() {
 			paramMatches := paramRe.FindAllStringSubmatch(paramsStr, -1)
 			for _, pm := range paramMatches {
 				paramName := pm[1]
-				
+
 				// check if is_null() or slice_to_str is used with this param
 				isNullCheck := strings.Contains(funcBody, paramName+".is_null()")
 				sliceToStrCheck := strings.Contains(funcBody, "slice_to_str("+paramName)

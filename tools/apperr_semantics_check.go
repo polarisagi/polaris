@@ -103,23 +103,35 @@ func main() {
 
 			if strings.Contains(msgLower, "rate limit") || strings.Contains(msgLower, "quota") || strings.Contains(msgLower, "exhausted") || strings.Contains(msgLower, "too many") {
 				expectedCode = "CodeResourceExhausted"
-				if strings.Contains(msgLower, "rate limit") { triggerKeyword = "rate limit" }
-				if strings.Contains(msgLower, "quota") { triggerKeyword = "quota" }
-				if strings.Contains(msgLower, "exhausted") { triggerKeyword = "exhausted" }
-				if strings.Contains(msgLower, "too many") { triggerKeyword = "too many" }
+				if strings.Contains(msgLower, "rate limit") {
+					triggerKeyword = "rate limit"
+				}
+				if strings.Contains(msgLower, "quota") {
+					triggerKeyword = "quota"
+				}
+				if strings.Contains(msgLower, "exhausted") {
+					triggerKeyword = "exhausted"
+				}
+				if strings.Contains(msgLower, "too many") {
+					triggerKeyword = "too many"
+				}
 			} else if strings.Contains(msgLower, "not found") {
 				expectedCode = "CodeNotFound"
 				triggerKeyword = "not found"
 			} else if strings.Contains(msgLower, "forbidden") || strings.Contains(msgLower, "denied") {
 				expectedCode = "CodeForbidden"
-				if strings.Contains(msgLower, "forbidden") { triggerKeyword = "forbidden" }
-				if strings.Contains(msgLower, "denied") { triggerKeyword = "denied" }
+				if strings.Contains(msgLower, "forbidden") {
+					triggerKeyword = "forbidden"
+				}
+				if strings.Contains(msgLower, "denied") {
+					triggerKeyword = "denied"
+				}
 			}
 
 			if expectedCode != "" && actualCode != expectedCode {
 				pos := fset.Position(call.Pos())
 				errLine := fmt.Sprintf("%s:%d: apperr message 含 %q 应使用 %s 错误码，实际是 %s", pos.Filename, pos.Line, triggerKeyword, expectedCode, actualCode)
-				
+
 				if baselineMap[errLine] {
 					// skipped by baseline
 				} else {

@@ -51,8 +51,8 @@ const (
 )
 
 type selfTestCase struct {
-	RuleID   string   // F-4 等，仅用于报告
-	Tool     string   // tools/xxx_lint.go
+	RuleID   string // F-4 等，仅用于报告
+	Tool     string // tools/xxx_lint.go
 	Mode     caseMode
 	Target   string // add: 复制到哪；patch: 改哪个文件
 	Fixture  string // add 模式的源文件
@@ -218,7 +218,8 @@ func findUncoveredTools(cases []selfTestCase) []string {
 		"tools/adr_index_check.go": true,
 		"tools/comment_refs.go":    true,
 		"tools/comment_drift.go":   true,
-		"tools/docs_refs.go":       true,
+		"tools/docs_refs.go":               true,
+		"tools/wiring_reachability_check.go": true,
 	}
 
 	entries, err := os.ReadDir("tools")

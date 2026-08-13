@@ -4,9 +4,11 @@
 //
 // 规则 [E1]：Panic 仅允许在 init() 与 cmd/polaris/ 进程入口。
 // 棘轮机制：存量 15 处不可恢复加密/安全/构造 panic 记录在 local_playground/reports/panic-baseline.md，
-//          本门控阻断任何**新增**的框架层 panic 调用。
+//
+//	本门控阻断任何**新增**的框架层 panic 调用。
 //
 // 使用：
+//
 //	go run tools/panic_lint.go
 package main
 

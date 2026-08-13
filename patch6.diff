@@ -1,0 +1,25 @@
+--- internal/automation/hitl/gateway.go
++++ internal/automation/hitl/gateway.go
+@@ -350,3 +350,21 @@
+ 	}
+ 	return res, nil
+ }
++
++// RequestApproval 发起审批请求，阻塞等待直到获取结果或超时。用于工具内部调用。
++func (g *GatewayImpl) RequestApproval(ctx context.Context, action string, req map[string]any) error {
++	prompt := types.HITLPrompt{
++		ID:             types.NewULID(),
++		AgentID:        "", // 暂留空，由调用方或外层补齐
++		CheckpointType: types.RiskLevelHigh,
++		PromptText:     fmt.Sprintf("Request action: %s\nParams: %v", action, req),
++		RequireMFA:     false,
++	}
++	resp, err := g.Prompt(ctx, prompt)
++	if err != nil {
++		return err
++	}
++	if resp.Decision != types.DecisionApproved {
++		return apperr.New(apperr.CodeForbidden, "hitl: request rejected")
++	}
++	return nil
++}

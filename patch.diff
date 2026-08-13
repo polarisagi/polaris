@@ -1,0 +1,11 @@
+--- internal/knowledge/rag_retrieval.go
++++ internal/knowledge/rag_retrieval.go
+@@ -221,8 +221,6 @@
+ 
+ // Navigate 用 FTS5 在 summary 块中全文搜索，返回最相关的 doc_id（""=降级全文搜索）。
+ func (sn *StructuredNavigator) Navigate(ctx context.Context, query string) (string, error) {
+-	req := config
+-	_ = req.TaintMax
+ 	if query == "" {
+ 		return "", nil
+ 	}

@@ -7,6 +7,7 @@
 //   - 若无生产调用方 → PASS，但输出到 local_playground/reports/nolint-unused-inventory.md 保持追踪
 //
 // 使用：
+//
 //	go run tools/nolint_unused_lint.go
 package main
 

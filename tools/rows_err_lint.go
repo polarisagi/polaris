@@ -4,9 +4,11 @@
 //
 // 特征：支持动态提取 iterator 变量名 (rows / mrows / pr / r 等)，防止硬编码 rows 导致漏检 (B-8 案件)。
 // 棘轮机制：存量 54 处历史漏检记录在 local_playground/reports/rows-err-baseline.md，
-//          本门控阻断任何**新增**的无 rows.Err() 校验 SQL 循环。
+//
+//	本门控阻断任何**新增**的无 rows.Err() 校验 SQL 循环。
 //
 // 使用：
+//
 //	go run tools/rows_err_lint.go
 package main
 

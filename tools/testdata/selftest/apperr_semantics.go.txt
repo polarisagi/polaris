@@ -1,0 +1,4 @@
+package sandbox
+import "github.com/polarisagi/polaris/pkg/apperr"
+func init() { err := apperr.New(apperr.CodeInternal, "rate limit exceeded")
+_ = err }

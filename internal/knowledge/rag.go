@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/polarisagi/polaris/internal/knowledge/graphrag"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 // DocumentRef refers to a document from a connector.

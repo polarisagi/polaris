@@ -38,6 +38,7 @@ RetrievalConfig struct {
 	OversampleN  int
 	RerankTopM   int
 	FinalTopK    int
+	TaintMax     TaintLevel
 	// AsOf 指定检索回溯时点（Unix 毫秒）。零值表示当前时间。
 	// 底层将统一应用 `valid_from <= asOf AND (valid_until = 0 OR valid_until > asOf)` 过滤。
 	AsOf int64
