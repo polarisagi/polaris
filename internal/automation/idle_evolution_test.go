@@ -127,3 +127,34 @@ func TestIdleEvolutionScheduler_NoDuplicateRun(t *testing.T) {
 		t.Errorf("Expected 1 run, got %d", runCount.Load())
 	}
 }
+
+func TestIdleEvolutionScheduler_NoLeakOnComplete(t *testing.T) {
+	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
+	hw := probe.NewHardwareProbe(0, 0)
+	s := NewIdleEvolutionScheduler(rg, hw)
+
+	var runCount atomic.Int32
+	s.WithConsolidate(func(ctx context.Context) error {
+		runCount.Add(1)
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s.tryRunIdleTasks(ctx)
+
+	// Wait for the wait_cleanup goroutine to finish
+	time.Sleep(100 * time.Millisecond)
+
+	s.mu.Lock()
+	count := len(s.cancelFuncs)
+	s.mu.Unlock()
+
+	if count != 0 {
+		t.Errorf("Expected cancelFuncs to be cleaned up, got %d", count)
+	}
+	if runCount.Load() != 1 {
+		t.Errorf("Expected 1 run, got %d", runCount.Load())
+	}
+}

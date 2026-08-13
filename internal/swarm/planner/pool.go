@@ -174,28 +174,26 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 	tmpDir := filepath.Dir(testFile)
 	wd := tmpDir
 
-	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel1()
-
 	if err := ctx.Err(); err != nil {
 		slog.WarnContext(ctx, "planner_pool: parent context already canceled", "err", err)
 		return
 	}
+	buildCtx, cancel1 := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel1()
 
 	var compileScore = 0.0
 
 	//nolint:nestif
 	if p.sandbox != nil {
-		// NOTE: p.sandbox.Execute 同时传了 ctx 与 timeout 参数。若内部忽略传入的 ctx，则此处的 ctx.Err 检查只能挡住「发起前取消」。
+		// NOTE: p.sandbox.Execute 事实上同时传了 ctx 与 timeout 参数。如果内部忽略了传入的 ctx（例如仅按 timeout 构建了新的超时控制），则此处的 ctx.Err 检查只能挡住发起前的取消，无法中断运行中的执行。如果实测确实如此，已记录在 99-遗留线索.md 备案。
 		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", tmpDir}, wd, 30*time.Second)
 		if buildErr == nil {
-			testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel2()
-
 			if err := ctx.Err(); err != nil {
 				slog.WarnContext(ctx, "planner_pool: parent context already canceled before test", "err", err)
 				return
 			}
+			testCtx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel2()
 
 			out, testErr := p.sandbox.Execute(testCtx, "go", []string{"test", "-json", "-timeout", "20s", tmpDir}, wd, 20*time.Second)
 			if testErr == nil {

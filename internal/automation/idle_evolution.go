@@ -117,16 +117,27 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 		s.mu.Unlock()
 		return
 	}
+
+	// 如果没有任何任务注入，直接返回
+	if s.consolidateFn == nil && s.forgettingFn == nil && s.graphPruneFn == nil {
+		s.mu.Unlock()
+		return
+	}
+
 	slog.InfoContext(ctx, "idle_evolution: idle window detected, starting background tasks")
 
 	taskCtx, cancel := context.WithCancel(ctx)
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
 	s.mu.Unlock()
 
+	var wg sync.WaitGroup
+
 	// Tier0 任务：巴固 + 记忆滤波
 	if s.consolidateFn != nil {
+		wg.Add(1)
 		idleEvolutionTasksTotal.WithLabelValues("consolidate", "started").Inc()
 		concurrent.SafeGo(ctx, "idle_evolution.consolidate", func(gctx context.Context) {
+			defer wg.Done()
 			if err := s.consolidateFn(taskCtx); err != nil {
 				slog.WarnContext(gctx, "idle_evolution: consolidate failed", "err", err)
 				idleEvolutionTasksTotal.WithLabelValues("consolidate", "failed").Inc()
@@ -136,8 +147,10 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 		})
 	}
 	if s.forgettingFn != nil {
+		wg.Add(1)
 		idleEvolutionTasksTotal.WithLabelValues("forgetting", "started").Inc()
 		concurrent.SafeGo(ctx, "idle_evolution.forgetting", func(gctx context.Context) {
+			defer wg.Done()
 			if err := s.forgettingFn(taskCtx); err != nil {
 				slog.WarnContext(gctx, "idle_evolution: forgetting failed", "err", err)
 				idleEvolutionTasksTotal.WithLabelValues("forgetting", "failed").Inc()
@@ -147,8 +160,10 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 		})
 	}
 	if s.graphPruneFn != nil {
+		wg.Add(1)
 		idleEvolutionTasksTotal.WithLabelValues("graph_prune", "started").Inc()
 		concurrent.SafeGo(ctx, "idle_evolution.graph_prune", func(gctx context.Context) {
+			defer wg.Done()
 			if err := s.graphPruneFn(taskCtx); err != nil {
 				slog.WarnContext(gctx, "idle_evolution: graph prune failed", "err", err)
 				idleEvolutionTasksTotal.WithLabelValues("graph_prune", "failed").Inc()
@@ -157,4 +172,17 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 			}
 		})
 	}
+
+	concurrent.SafeGo(ctx, "idle_evolution.wait_cleanup", func(gctx context.Context) {
+		wg.Wait()
+		cancel() // 释放资源
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// 清理 cancelFuncs。注意这里只清理当前启动的 cancel，避免误删后续新生成的 cancel
+		// 但最简单的是如果相等则置 nil，不过为了安全起见，通常 cancelFuncs 切片长度很小。
+		// 由于 run 机制保证同一时间只有一个在运行（if len > 0 return），可以直接清空。
+		s.cancelFuncs = nil
+	})
 }

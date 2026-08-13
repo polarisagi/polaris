@@ -225,6 +225,9 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 	l3Ticker := time.NewTicker(l3Interval)
 	defer l3Ticker.Stop()
 
+	// 注释：所有事件通道（taskEvents/heuristicEvents/l4TriggerCh/versionEvents/evalEvents）
+	// 在被关闭后都会被置为 nil，此时对应的 case 会被永久阻塞。
+	// 当所有事件通道都置为 nil 后，select 仅等待 ticker 与 ctx.Done() 是期望行为。
 	for {
 		select {
 		case <-ctx.Done():

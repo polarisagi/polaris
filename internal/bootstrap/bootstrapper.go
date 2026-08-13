@@ -30,6 +30,7 @@ type Bootstrapper struct {
 	kmsKey   []byte // 内存级 KMS 密钥，Ignite 完成后立即清零
 	rootCtx  context.Context
 	cancelFn context.CancelFunc
+	order    []string // 保存拓扑排序结果的名称序列，供安全关停按逆序使用
 }
 
 // NewBootstrapper 创建启动器。kmsKey 为可选主密钥（nil = 无 KMS）。
@@ -83,17 +84,20 @@ func (b *Bootstrapper) Ignite(ctx context.Context) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "bootstrap: dependency resolution failed", err)
 	}
+	b.order = order
 
 	// 2. 按拓扑顺序初始化
-	for _, name := range order {
+	for i, name := range order {
 		if err := ctx.Err(); err != nil {
 			return apperr.Wrap(apperr.CodeCancelled, "bootstrap: 启动被中断", err)
 		}
 		mod := b.modules[name]
 		if err := mod.Init(b.deps); err != nil {
+			b.rollbackInit(ctx, i-1)
 			return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("bootstrap: module %s init failed", name), err)
 		}
 		if !mod.Ready() {
+			b.rollbackInit(ctx, i-1)
 			return apperr.New(apperr.CodeInternal, fmt.Sprintf("bootstrap: module %s not ready after init", name))
 		}
 		// 初始化成功后将自身注册到依赖表，供后续模块使用
@@ -109,6 +113,28 @@ func (b *Bootstrapper) Ignite(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// rollbackInit 逆序回滚已经成功初始化的模块 [0..lastSuccessIdx]
+func (b *Bootstrapper) rollbackInit(ctx context.Context, lastSuccessIdx int) {
+	if lastSuccessIdx < 0 {
+		return
+	}
+	for i := lastSuccessIdx; i >= 0; i-- {
+		name := b.order[i]
+		mod := b.modules[name]
+
+		if c, ok := mod.(Stage4Closer); ok {
+			if err := c.Close(ctx); err != nil {
+				slog.Warn("bootstrap: rollback Close failed", "module", name, "err", err)
+			}
+		}
+		if f, ok := mod.(Stage3Flusher); ok {
+			if err := f.Flush(ctx); err != nil {
+				slog.Warn("bootstrap: rollback Flush failed", "module", name, "err", err)
+			}
+		}
+	}
 }
 
 // ListenAndServe 阻塞等待 SIGTERM/SIGINT，触发四阶优雅关停。
@@ -128,9 +154,18 @@ func (b *Bootstrapper) ListenAndServe(ctx context.Context) {
 
 // gracefulShutdown 执行四阶关停流水线。
 func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
+	if len(b.order) == 0 && len(b.modules) > 0 {
+		slog.Warn("bootstrap: graceful shutdown without predefined order (fallback to map iteration)")
+		b.shutdownFallback(ctx)
+	} else {
+		b.shutdownOrdered(ctx)
+	}
+}
+
+//nolint:nestif
+func (b *Bootstrapper) shutdownFallback(ctx context.Context) {
 	var shutdownErrors []error
 
-	// Phase 1：停流——熔断外部感知，停止接收新请求
 	for name, mod := range b.modules {
 		if s, ok := mod.(Stage1Stopper); ok {
 			if err := s.StopIngress(ctx); err != nil {
@@ -139,8 +174,6 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 			}
 		}
 	}
-
-	// Phase 2：排干——等待已接受的任务/队列处理完毕
 	for name, mod := range b.modules {
 		if d, ok := mod.(Stage2Drainer); ok {
 			if err := d.Drain(ctx); err != nil {
@@ -149,8 +182,6 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 			}
 		}
 	}
-
-	// Phase 3：刷盘——WAL Checkpoint，确保数据落盘
 	for name, mod := range b.modules {
 		if f, ok := mod.(Stage3Flusher); ok {
 			if err := f.Flush(ctx); err != nil {
@@ -159,8 +190,6 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 			}
 		}
 	}
-
-	// Phase 4：灭火——释放 DB 句柄、VFS 游标、子进程
 	for name, mod := range b.modules {
 		if c, ok := mod.(Stage4Closer); ok {
 			if err := c.Close(ctx); err != nil {
@@ -169,7 +198,54 @@ func (b *Bootstrapper) gracefulShutdown(ctx context.Context) {
 			}
 		}
 	}
+	if len(shutdownErrors) > 0 {
+		slog.Error("bootstrap: graceful shutdown completed with errors", "errors", shutdownErrors)
+	}
+}
 
+func (b *Bootstrapper) shutdownOrdered(ctx context.Context) {
+	var shutdownErrors []error
+
+	for i := len(b.order) - 1; i >= 0; i-- {
+		name := b.order[i]
+		mod := b.modules[name]
+		if s, ok := mod.(Stage1Stopper); ok {
+			if err := s.StopIngress(ctx); err != nil {
+				slog.Warn("bootstrap: StopIngress failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.StopIngress", name), err))
+			}
+		}
+	}
+	for i := len(b.order) - 1; i >= 0; i-- {
+		name := b.order[i]
+		mod := b.modules[name]
+		if d, ok := mod.(Stage2Drainer); ok {
+			if err := d.Drain(ctx); err != nil {
+				slog.Warn("bootstrap: Drain failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.Drain", name), err))
+			}
+		}
+	}
+	for i := len(b.order) - 1; i >= 0; i-- {
+		name := b.order[i]
+		mod := b.modules[name]
+		if f, ok := mod.(Stage3Flusher); ok {
+			if err := f.Flush(ctx); err != nil {
+				slog.Warn("bootstrap: Flush failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.Flush", name), err))
+			}
+		}
+	}
+	for i := len(b.order) - 1; i >= 0; i-- {
+		name := b.order[i]
+		mod := b.modules[name]
+		if c, ok := mod.(Stage4Closer); ok {
+			if err := c.Close(ctx); err != nil {
+				slog.Warn("bootstrap: Close failed", "module", name, "err", err)
+				shutdownErrors = append(shutdownErrors, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("%s.Close", name), err))
+			}
+		}
+	}
 	if len(shutdownErrors) > 0 {
 		slog.Error("bootstrap: graceful shutdown completed with errors", "errors", shutdownErrors)
 	}

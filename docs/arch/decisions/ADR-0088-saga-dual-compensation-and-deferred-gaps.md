@@ -203,6 +203,8 @@ B 之所以删除而非接线补活：`UndoFn` 是挂在**工具定义**上的�
 
 **将来立项时的 P0 前置**：先修三项契约缺陷（关停按 Ignite 拓扑逆序、`Init` 加 ctx、`Ignite` 失败时按已完成逆序调用 `Stage4Closer`）并补齐 `topologicalSort`／`Ignite` 单测，再谈迁移；且必须先给出两项"无法表达"问题的处置方案（新增二阶段回注钩子？假依赖边并逐条记录真实原因？），否则迁移在技术上做不完整。另需注意 `Bootstrapper.ListenAndServe` 自建 `signal.Notify` 与 `main.go` 既有两套信号处理（`signal.NotifyContext` + TripleCtrlCGuard 的 SIGINT 连续计数）不能共存。
 
+> 2026-08-13 追加：三项契约缺陷中的『关停 map 随机序』与『Ignite 无失败回滚』已于 2026-08-13 修复（GR-3-002 / GR-3-003）；`Init` 无 ctx 仍为保留缺口。修复不改变本 ADR 维持不接线的结论。
+
 ### 反例守护
 
 不得因"已登记 baseline/白名单"就认为条目已处理——它们是债务记录，处置状态是"待偿"。
