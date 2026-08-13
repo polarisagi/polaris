@@ -1,0 +1,7 @@
+# 活跃 TODO 存量基线（F-10 棘轮，ADR-0088 存量债处置边界）
+# 由 `go run tools/todo_lint.go -update-baseline` 生成。
+# 每行格式：<文件路径>|<TODO 正文>（不含行号，避免无关改动误报）。
+# 新增活跃 TODO 一律报红——挂起不是「写了没接线」的合法处置方式。
+
+internal/agent/agent_handoff_resume.go|// TODO(阶段06): 登记到 state.yaml 作为可配置阈值，当前为硬编码常量。
+internal/automation/hitl/gateway_l3gate.go|// TODO(GR-10-002): "regression_p0_p1" partition 当前在 EvalStore/control.Engine
