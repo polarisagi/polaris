@@ -27,7 +27,7 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.MaxBlackboardPending = 1024
 		p.MaxCoordinationToken = 500000
 		p.PipelineConcurrency = 8
-		p.GraphRAGLLMDailyBudget = 1000
+		p.GraphRAGConcurrentWorkers = 8
 		p.GraphRAGMaxEntities = 500000
 		p.RegressionBudgetMin = 30
 		p.PoolIntentHandler = 15
@@ -54,7 +54,7 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.MaxBlackboardPending = 512
 		p.MaxCoordinationToken = 350000
 		p.PipelineConcurrency = 6
-		p.GraphRAGLLMDailyBudget = 500
+		p.GraphRAGConcurrentWorkers = 4
 		p.GraphRAGMaxEntities = 200000
 		p.RegressionBudgetMin = 30
 		p.PoolIntentHandler = 10
@@ -81,7 +81,7 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.MaxBlackboardPending = 256
 		p.MaxCoordinationToken = 200000
 		p.PipelineConcurrency = 4
-		p.GraphRAGLLMDailyBudget = 200
+		p.GraphRAGConcurrentWorkers = 2
 		p.GraphRAGMaxEntities = 50000
 		p.RegressionBudgetMin = 20
 		p.PoolIntentHandler = 5
@@ -108,7 +108,7 @@ func (ac *AutoConfig) computeTierParameters(p *probe.TierParameters) {
 		p.MaxBlackboardPending = 128
 		p.MaxCoordinationToken = 100000
 		p.PipelineConcurrency = 2
-		p.GraphRAGLLMDailyBudget = 200
+		p.GraphRAGConcurrentWorkers = 1
 		p.GraphRAGMaxEntities = 50000
 		p.RegressionBudgetMin = 10
 		p.PoolIntentHandler = 5

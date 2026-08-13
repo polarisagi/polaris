@@ -321,6 +321,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	}
 
 	if mb.Mem != nil {
+		mb.Mem.InjectSkillRegistry(skillRegistry)
 		// U-1：builtin.SemanticMemWriter 是 protocol.SemanticMemory 的方法子集，
 		// 接口值结构子类型自动满足，直接传接口，禁止具体类型断言（P1-4 规则 3）。
 		exclusiveWriter := memretrieval.NewExclusiveWriter(mb.Mem.Semantic(), mb.CascadeInvalidator, sb.Store.DB())

@@ -46,7 +46,7 @@
 
 ```text
 api/proto/       Protobuf 原始定义
-cmd/polaris/     主入口（极简，初始化逻辑下推 internal/cli）
+cmd/polaris/     主入口（实际装配落点为 boot_*.go，维持手工装配，internal/cli 为未接线的 CLI 引导契约）
 configs/         嵌入式启动配置（随二进制打包）；threshold-examples/ 阈值覆盖示例（m*.toml）
 
 internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必读，子包细节以其为准不在此重复

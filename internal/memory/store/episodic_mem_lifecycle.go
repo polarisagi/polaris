@@ -220,29 +220,3 @@ func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, 
 	copy(events, em.events)
 	return events, nil
 }
-
-func (em *EpisodicMem) Forget(ctx context.Context) (int, error) {
-	cutoff := time.Now().Add(-30 * 24 * time.Hour)
-
-	em.mu.Lock()
-	var kept []types.Event
-	var toDelete []string
-	for _, ev := range em.events {
-		if !ev.CreatedAt.IsZero() && ev.CreatedAt.Before(cutoff) {
-			toDelete = append(toDelete, ev.ID)
-		} else {
-			kept = append(kept, ev)
-		}
-	}
-	em.events = kept
-	em.mu.Unlock()
-
-	for _, id := range toDelete {
-		// 同上：内存索引已更新，KV 删除失败留下不可达的孤儿记录。
-		if err := em.store.Delete(ctx, []byte("episodic:"+id)); err != nil {
-			slog.WarnContext(ctx, "episodic_mem: KV delete failed, orphan record leaked",
-				"id", id, "err", err)
-		}
-	}
-	return len(toDelete), nil
-}

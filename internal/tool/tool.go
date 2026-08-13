@@ -260,11 +260,7 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 	}
 	if lim, ok := r.limiters[limiterKey]; ok {
 		if !lim.Allow() {
-			return input, &types.ToolResult{
-				Success:    false,
-				Error:      fmt.Sprintf("tool_registry: rate limit exceeded for source %s", limiterKey),
-				TaintLevel: taintLevel,
-			}, nil
+			return input, nil, apperr.New(apperr.CodeResourceExhausted, fmt.Sprintf("tool_registry: rate limit exceeded for source %s", limiterKey))
 		}
 	}
 

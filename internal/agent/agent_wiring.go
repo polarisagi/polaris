@@ -26,11 +26,6 @@ type SurpriseReader interface {
 	CurrentSurprise() float64
 }
 
-// MemoryInjector 定义在消息组装前主动检索并注入相关记忆的接口。
-type MemoryInjector interface {
-	InjectRelevantMemory(ctx context.Context, sessionID string, query string) (string, error)
-}
-
 // SetPIIVault 注入 PIIVault，用于 Suspend 时持久化会话 PII。
 // vault 为 nil 时 Snapshot 调用被静默跳过（Tier0 无加密密钥场景）。
 func (a *Agent) SetPIIVault(vault *agentctx.SessionPIIVault) {
@@ -64,12 +59,6 @@ func (a *Agent) SetExtQuerier(q protocol.SQLQuerier) {
 // 非必须；nil 时静默跳过，不影响正常执行路径。
 func (a *Agent) SetToolCallRecorder(r ToolCallRecorder) {
 	a.toolCallRecorder = r
-}
-
-// SetMemoryInjector 注入主动记忆注入器。
-// 必须在 Agent 启动前调用。
-func (a *Agent) SetMemoryInjector(i MemoryInjector) {
-	a.memInjector = i
 }
 
 // SetCodeAct 注入 CodeAct 引擎，在 Agent 创建后 kernel 启动前调用。

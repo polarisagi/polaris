@@ -61,10 +61,16 @@ type Pool struct {
 	acquireTimeout time.Duration
 	idleTimeout    time.Duration
 
-	mu       sync.Mutex
-	sessions map[string]*poolEntry
-	sem      chan struct{}
-	killGate KillSwitchGate
+	mu             sync.Mutex
+	sessions       map[string]*poolEntry
+	sem            chan struct{}
+	killGate       KillSwitchGate
+	onSessionClose func(sessionID string)
+}
+
+func (p *Pool) WithSessionCloseCallback(cb func(string)) *Pool {
+	p.onSessionClose = cb
+	return p
 }
 
 // WithKillSwitchGate 注入 KillSwitch 熔断门（可选，nil 安全）。
@@ -333,6 +339,9 @@ func (p *Pool) GC() {
 		if entry.refs == 0 && now.Sub(entry.lastUsed) > p.idleTimeout {
 			entry.agent.Shutdown()
 			delete(p.sessions, id)
+			if p.onSessionClose != nil {
+				p.onSessionClose(id)
+			}
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/extension/llmgen"
 	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // pluginStructuredBackoff 结构化 JSON 纠错重试退避（阶段03 R-06），语义与
@@ -120,7 +121,7 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 	// 统一处理；解析失败时把错误摘要回灌进下一次重试的 prompt。
 	var result GeneratedPlugin
 	genErr := c.structGen.Generate(ctx, pluginCreatorSystemPrompt, intent, c.llm.GenerateJSON, func(raw string) error {
-		jsonStr := extractJSON(raw)
+		jsonStr := util.ExtractJSONBraces(raw)
 		var parsed GeneratedPlugin
 		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "plugin_creator: failed to parse generated plugin JSON", err)
@@ -229,24 +230,4 @@ func (c *PluginCreator) GeneratePlugin(ctx context.Context, intent string, trust
 func marshalArgs(args []string) string {
 	b, _ := json.Marshal(args)
 	return string(b)
-}
-
-func extractJSON(input string) string {
-	start := -1
-	count := 0
-	for i, c := range input {
-		switch c {
-		case '{':
-			if count == 0 {
-				start = i
-			}
-			count++
-		case '}':
-			count--
-			if count == 0 && start != -1 {
-				return input[start : i+1]
-			}
-		}
-	}
-	return input
 }

@@ -157,6 +157,7 @@ type M7ToolThresholds struct {
 	SandboxQuotaMs               int    `toml:"sandbox.quota_ms"`                   // 30000
 	WorkspaceMaxAgeSeconds       int    `toml:"workspace.max_age_seconds"`          // 604800
 	ExtUninstallHookTimeoutS     int    `toml:"ext_uninstall.hook_timeout_seconds"` // 180（D2：卸载 Hook 沙箱执行超时兜底）
+	MCPStdioMaxScanBytes         int    `toml:"mcp.stdio_max_scan_bytes"`           // 16777216
 	SandboxL4Enabled             bool   `toml:"sandbox.l4_enabled"`                 // false（D4/ADR-0008：Tier2+ 长驻会话沙箱，默认关闭，需运营者显式开启）
 	SandboxL4Backend             string `toml:"sandbox.l4_backend"`                 // "live_process_pool"（D4：诊断标签，实际后端固定为长驻进程池，非可插拔选项）
 	SandboxL4IdleTTLSeconds      int    `toml:"sandbox.l4_idle_ttl_seconds"`        // 600（D4：会话空闲超过此时长被后台回收）
@@ -228,6 +229,7 @@ type M11PolicyThresholds struct {
 	SafeDialerDNSCacheTTLSecond  int `toml:"safe_dialer.dns_cache_ttl_seconds"` // 30
 	SafeDialerTOCTOUDelayMs      int `toml:"safe_dialer.toctou_delay_ms"`       // 50
 	SafeDialerMaxIPsThreshold    int `toml:"safe_dialer.max_ips_threshold"`     // 20
+	SafeDialerDNSCacheSize       int `toml:"safe_dialer.dns_cache_size"`        // 1024
 }
 
 // M12EvalThresholds — LLM-as-Judge + 抽样核验阈值。
@@ -387,6 +389,7 @@ func DefaultThresholds() Thresholds {
 			SandboxQuotaMs:               30000,
 			WorkspaceMaxAgeSeconds:       604800,
 			ExtUninstallHookTimeoutS:     180,
+			MCPStdioMaxScanBytes:         16777216,
 			SandboxL4Enabled:             false,
 			SandboxL4Backend:             "live_process_pool",
 			SandboxL4IdleTTLSeconds:      600,
@@ -437,6 +440,7 @@ func DefaultThresholds() Thresholds {
 			SafeDialerDNSCacheTTLSecond:  30,
 			SafeDialerTOCTOUDelayMs:      50,
 			SafeDialerMaxIPsThreshold:    20,
+			SafeDialerDNSCacheSize:       1024,
 		},
 		M12Eval: M12EvalThresholds{
 			JudgeSingleConfidence:   0.90,

@@ -8,16 +8,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/polarisagi/polaris/internal/security/taint"
-
 	"time"
 
 	"github.com/polarisagi/polaris/internal/extension/llmgen"
 	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // skillStructuredBackoff 结构化 JSON 纠错重试退避（阶段03 R-06）：比
@@ -97,7 +96,7 @@ Do not include any Markdown wrappers like ` + "```json" + ` in the output.
 // （从 GenerateSkill 拆出，gocyclo 治理，行为不变）。
 func parseGeneratedSkill(response string) (GeneratedSkill, error) {
 	// Simple JSON extraction to handle model quirks
-	jsonStr := extractJSON(response)
+	jsonStr := util.ExtractJSONBraces(response)
 
 	var result GeneratedSkill
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
@@ -226,24 +225,4 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent taint.TaintedSt
 	}
 
 	return pluginDir, nil
-}
-
-func extractJSON(input string) string {
-	start := -1
-	count := 0
-	for i, c := range input {
-		switch c {
-		case '{':
-			if count == 0 {
-				start = i
-			}
-			count++
-		case '}':
-			count--
-			if count == 0 && start != -1 {
-				return input[start : i+1]
-			}
-		}
-	}
-	return input
 }

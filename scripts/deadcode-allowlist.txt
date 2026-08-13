@@ -47,3 +47,6 @@ internal/memory/memory.go: unreachable func: MemImpl.Consolidate
 internal/tool/catalog/composite.go: unreachable func: CompositeToolCatalog.Execute
 internal/security/provider.go: unreachable type: Provider
 internal/agent/repl.go: unreachable type: AgentREPL
+internal/cli/cli.go: unreachable type: AgentREPL  # 未接线的 CLI 引导契约，生产装配目前维持手工在 cmd/polaris/boot_*.go 进行
+internal/cli/cli.go: unreachable type: RateLimiterMiddleware  # 未接线的 CLI 引导契约，生产装配目前维持手工在 cmd/polaris/boot_*.go 进行
+internal/cli/cli.go: unreachable type: WebSocketHub  # 未接线的 CLI 引导契约，生产装配目前维持手工在 cmd/polaris/boot_*.go 进行

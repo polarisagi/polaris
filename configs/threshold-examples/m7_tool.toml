@@ -15,6 +15,7 @@ max_code_size_bytes = 16384
 'sandbox.quota_ms' = 30000
 'workspace.max_age_seconds' = 604800
 'ext_uninstall.hook_timeout_seconds' = 180
+'mcp.stdio_max_scan_bytes' = 16777216
 'sandbox.l4_enabled' = false
 'sandbox.l4_backend' = 'live_process_pool'
 'sandbox.l4_idle_ttl_seconds' = 600

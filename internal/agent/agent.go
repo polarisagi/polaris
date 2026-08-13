@@ -62,7 +62,6 @@ type Agent struct {
 	piiVault          *agentctx.SessionPIIVault // PII 快照，nil 时跳过（Tier0 无加密密钥场景）
 	extQuerier        protocol.SQLQuerier       // 用于查询已安装扩展；独立字段避免对 taskRepo 做错误类型断言
 	toolCallRecorder  ToolCallRecorder          // 可选；工具调用成功录制（M9 Logic Collapse 触发器）
-	memInjector       MemoryInjector            // NEW: 组装前主动记忆注入
 	codeAct           CodeActEngine             // LLM 代码执行引擎；nil 时 code_act 节点返回错误
 	skillCache        ScriptSkillCache          // 可选；nil 时 FastPath 跳过缓存查询
 	skillExecutor     protocol.SkillExecutor    // 可选；FastPath 缓存命中后执行 Python 脚本（M4 System 1）

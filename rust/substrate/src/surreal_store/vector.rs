@@ -34,7 +34,11 @@ pub unsafe extern "C" fn surreal_vec_upsert(
             Ok(s) => s.to_string(),
             Err(_) => return SURREAL_ERR_UTF8,
         };
-        let embed_vec = if dim == 0 { vec![] } else { unsafe { std::slice::from_raw_parts(embed, dim) }.to_vec() };
+        let embed_vec = if dim == 0 {
+            vec![]
+        } else {
+            unsafe { std::slice::from_raw_parts(embed, dim) }.to_vec()
+        };
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,

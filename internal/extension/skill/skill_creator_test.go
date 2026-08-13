@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/polarisagi/polaris/pkg/util"
+
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -72,12 +74,12 @@ func TestGenerateSkill_Success(t *testing.T) {
 }
 
 func TestExtractJSON(t *testing.T) {
-	s := extractJSON("some text\n```json\n{\"a\":1}\n```\nmore text")
+	s := util.ExtractJSONBraces("some text\n```json\n{\"a\":1}\n```\nmore text")
 	if s != "{\"a\":1}" {
 		t.Errorf("failed to extract json: %q", s)
 	}
 
-	s = extractJSON("{\"a\":1}")
+	s = util.ExtractJSONBraces("{\"a\":1}")
 	if s != "{\"a\":1}" {
 		t.Errorf("failed to extract json directly")
 	}

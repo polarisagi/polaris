@@ -133,9 +133,6 @@ func (ms *MemorySystemImpl) FlushTrigger(ctx context.Context) error {
 	return nil
 }
 
-// InjectRelevantMemory 由内嵌的 *MemImpl 通过方法提升（method promotion）提供，
-// 此前这里有一份逐行相同的重复实现（仅错误信息前缀不同），已删除（GR-5-002）。
-
 // Consolidate 触发 Episodic → Semantic 记忆蒸馏。
 func (ms *MemorySystemImpl) Consolidate(ctx context.Context) error {
 	err := ms.episodic.Consolidate(ctx, ms.semantic)
@@ -146,13 +143,6 @@ func (ms *MemorySystemImpl) Consolidate(ctx context.Context) error {
 }
 
 // Forget 驱逐超期低质量 Episodic 事件（TTL > 30 天）。
-func (ms *MemorySystemImpl) Forget(ctx context.Context) (int, error) {
-	n, err := ms.episodic.Forget(ctx)
-	if err != nil {
-		return n, apperr.Wrap(apperr.CodeInternal, "MemorySystemImpl.Forget", err)
-	}
-	return n, nil
-}
 
 // 编译期验证 MemorySystemImpl 实现 protocol.MemorySystem 接口
 var _ protocol.MemorySystem = (*MemorySystemImpl)(nil)
