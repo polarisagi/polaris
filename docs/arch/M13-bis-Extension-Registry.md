@@ -69,7 +69,7 @@ Polaris 原生格式（`SKILL.md` / `plugin.json`）由 `internal/extension/mark
 | origin | 含义 | trust_tier 默认值 |
 |--------|------|-----------------|
 | `builtin` | 程序内嵌生存工具（bash, search_extension, install_extension） | 4 TrustSystem |
-| `official` | 官方市场推荐包 | 3 TrustOfficial |
+| `official` | 官方市场推荐包（**计划态**，待 DDL 展建后生效） | 3 TrustOfficial |
 | `marketplace` | 第三方社区市场 | 继承 extension_catalog |
 | `user` | 用户手动创建/配置 | 1 TrustLocal |
 | `learned` | M9 自演化 promote | 1 TrustLocal |

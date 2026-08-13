@@ -625,7 +625,7 @@ Go 内存内统一为 `internal/security/` 的 `TaintLevel` 枚举类型 (int)�
 | `[SurpriseIndex]` | `internal/observability/` (Prometheus Gauge) / `internal/learning/` (M9 完整版推送) |
 | `[KillSwitch]` | `internal/security/` (FSM + 阶段变迁) |
 | `[Taint-Sanitizer]` | `internal/security/` (TaintedString / SafeString / Sanitize) |
-| 各模块 DDL | `internal/protocol/schema/001-006_*.sql` (架构 DDL 含中文注释) |
+| 各模块 DDL | `internal/protocol/schema/001-038_*.sql`（公权目录 `internal/protocol/schema/`，共 35 个） |
 
 ---
 

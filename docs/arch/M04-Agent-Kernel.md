@@ -43,7 +43,7 @@ System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath�
 
 ## 1. 状态机
 
-状态枚举权威定义见 `internal/protocol/types.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Complete/Failed)。`[HE-Rule-5]` LLM 填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)。
+状态枚举权威定义见 `pkg/types/enums_agent.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Complete/Failed)。`[HE-Rule-5]` LLM 填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)。
 
 `ReflectionModel` 结构：`{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后，若 `Learnings` 非空，逐条写入 episodic memory（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断状态流转至 S_COMPLETE。
 

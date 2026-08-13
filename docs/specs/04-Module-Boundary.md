@@ -43,7 +43,7 @@ L0 基础设施层 → L0 不可引用 L1/L2/L3
   internal/lint/       CI 静态扫描规则
 ```
 
-> **注意**：`internal/bootstrap/` 为跨层初始化编排器（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）。仅被 `cmd/polaris/` 引用，不属于 L0~L3 业务层，不可被任何 L0~L3 包反向引用。类比 `pkg/` 的角色但仅限初始化生命周期。
+> **注意**：`internal/bootstrap/` 为跨层初始化编排器（Bootable + DependencyMap + Kahn 拓扑排序，四阶优雅关停）。尚未被 L0~L3 业务层或 `cmd/polaris/` 实际引用，不属于 L0~L3 业务层，不可被任何 L0~L3 包反向引用。类比 `pkg/` 的角色但仅限初始化生命周期。
 
 ## B2 跨模块通信通道
 

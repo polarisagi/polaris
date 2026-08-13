@@ -105,6 +105,7 @@
 | 权限 | `CodeUnauthorized`, `CodeForbidden` |
 | 超时/取消 | `CodeTimeout`, `CodeCancelled` |
 | Provider/网络 | `CodeProviderExhausted`, `CodeNetworkUnavailable` |
+| 存储 | `CodeStorageUnavailable` |
 | 污点 | `CodeTaintViolation` |
 | 沙箱 | `CodeSandboxTier0Limit` |
 

@@ -94,10 +94,10 @@
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 52K | 状态机 + 全模块阈值（唯一权威） |
 | `M11-Policy-Safety.md` | L0 策略 | 41K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 38K | 见下方 [M07 补充](#m07-补充) |
-| `M02-Storage-Fabric.md` | L0 存储 | 29K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
+| `M02-Storage-Fabric.md` | L0 存储 | 16K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
 | `M05-Memory-System.md` | L1 记忆 | 31K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
 | `ARCHITECTURE.md` | 总览 | 10K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
-| `M04-Agent-Kernel.md` | L1 内核 | 26K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
+| `M04-Agent-Kernel.md` | L1 内核 | 21K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `M13-Interface-Scheduler.md` | L3 接口 | 28K | 见下方 [M13 补充](#m13-补充) |
 | `M13-bis-Extension-Registry.md` | L3 扩展 | 5K | 见下方 [M13-bis 补充](#m13-bis-补充) |
 | `M10-Knowledge-RAG.md` | L2 知识 | 25K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
