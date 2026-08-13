@@ -195,8 +195,8 @@ func TestProcess_PoisonPill_CrashRecoveryCount(t *testing.T) {
 
 	// crash_recovery_count >= 3 → 直接跳过，标记 dead
 	record := &OutboxRecord{ID: 1, TargetEngine: "surrealdb", CrashRecoveryCount: 3}
-	if err := w.Process(context.Background(), record); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := w.Process(context.Background(), record); !errors.Is(err, ErrPoisonPill) {
+		t.Fatalf("expected ErrPoisonPill, got: %v", err)
 	}
 	if handlerCalled {
 		t.Error("handler should NOT be called for poison pill")
@@ -452,5 +452,37 @@ func TestLoadCursorSafe_QueryFailure_ReturnsNotOK_S02(t *testing.T) {
 	}
 	if cursor != 0 {
 		t.Errorf("expected cursor=0 as safe zero-value alongside ok=false, got %d", cursor)
+	}
+}
+
+func TestProcessAndMark_PoisonPill_MarksDead(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+
+	// Record has CrashRecoveryCount = 3, should be marked dead
+	now := time.Now().UnixMilli()
+	_, err := db.Exec(`INSERT INTO outbox (id, created_at, target_engine, operation, scope, payload, idempotency_key, status, crash_recovery_count) 
+		VALUES (5001, ?, 'test', 'fail', 'system', X'CAFE', 'key5001', 'pending', 3)`, now)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	record := &OutboxRecord{ID: 5001, TargetEngine: "test", CrashRecoveryCount: 3}
+	err = w.processAndMark(context.Background(), record)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var status string
+	var errStr sql.NullString
+	if err := db.QueryRow(`SELECT status, last_error FROM outbox WHERE id=5001`).Scan(&status, &errStr); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "dead" {
+		t.Errorf("expected status 'dead', got %q", status)
+	}
+	if !errStr.Valid || errStr.String != ErrPoisonPill.Error() {
+		t.Errorf("expected error %q, got %v", ErrPoisonPill.Error(), errStr)
 	}
 }

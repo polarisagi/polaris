@@ -25,6 +25,10 @@ var ErrVersionStale = apperr.New(apperr.CodeConflict, "outbox: version stale")
 // 哨兵错误：保持包级变量语义，供 errors.Is 精确匹配（R1.3 豁免条件）。
 var ErrUnknownTargetEngine = apperr.New(apperr.CodeInvalidInput, "outbox: unknown target engine")
 
+// ErrPoisonPill outbox 毒丸（崩溃重试超过3次），触发 dead 状态。
+// 哨兵错误：保持包级变量语义，供 errors.Is 精确匹配（R1.3 豁免条件）。
+var ErrPoisonPill = errors.New("outbox_inv_03: poison pill") //nolint:wrapcheck
+
 // OutboxWorker — 跨引擎投递 Worker。
 // 消费 M2 outbox 表，将投影写入目标引擎（[Storage-SQLite] / [Storage-SurrealDB-Core]）。
 // 架构文档: docs/arch/M02-Storage-Fabric.md §2.5
@@ -284,7 +288,17 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 
 	if errors.Is(err, ErrUnknownTargetEngine) {
 		_, execErr := w.db.ExecContext(ctx,
-			"UPDATE outbox SET status='dead', processed_at=?, error=? WHERE id=?",
+			"UPDATE outbox SET status='dead', processed_at=?, last_error=? WHERE id=?",
+			now, err.Error(), record.ID)
+		if execErr != nil {
+			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr)
+		}
+		return nil
+	}
+
+	if errors.Is(err, ErrPoisonPill) {
+		_, execErr := w.db.ExecContext(ctx,
+			"UPDATE outbox SET status='dead', processed_at=?, last_error=? WHERE id=?",
 			now, err.Error(), record.ID)
 		if execErr != nil {
 			return apperr.Wrap(apperr.CodeInternal, "OutboxWorker.processAndMark: mark dead failed", execErr)
@@ -293,7 +307,7 @@ func (w *OutboxWorker) processAndMark(ctx context.Context, record *OutboxRecord)
 	}
 
 	newAttempts := record.Attempts + 1
-	if newAttempts >= w.maxRetries || record.CrashRecoveryCount >= 3 {
+	if newAttempts >= w.maxRetries {
 		_, execErr := w.db.ExecContext(ctx,
 			"UPDATE outbox SET status='dead', attempts=?, processed_at=?, crash_recovery_count=crash_recovery_count+1 WHERE id=?",
 			newAttempts, now, record.ID)
@@ -362,7 +376,7 @@ func (w *OutboxWorker) Process(ctx context.Context, record *OutboxRecord) error 
 	if record.CrashRecoveryCount >= 3 {
 		metrics.GlobalOutboxDeadLetterTotal.Add(1)
 		slog.Error("outbox message dead (poison pill)", "id", record.ID, "target", record.TargetEngine)
-		return apperr.New(apperr.CodeInternal, "outbox_inv_03: poison pill")
+		return ErrPoisonPill
 	}
 
 	if check, ok := w.versionCheck[record.TargetEngine]; ok && check != nil {

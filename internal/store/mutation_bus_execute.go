@@ -174,7 +174,11 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 		if intent.TaskID != "" && intent.AgentID != "" {
 			if dw.leaseChecker != nil && !dw.leaseChecker.Verify(intent.TaskID, intent.AgentID, intent.ClaimedVersion) {
 				if intent.ResultCh != nil {
-					intent.ResultCh <- ErrStaleLease //nolint:chan_send_guard
+					// ResultCh 由调用方创建（cap 1），单写者不得阻塞在他人的 channel 上；default 分支对应调用方已因超时退场
+					select {
+					case intent.ResultCh <- ErrStaleLease: //nolint:chan_send_guard
+					default:
+					}
 				}
 				continue
 			}
@@ -255,7 +259,11 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 	// COMMIT 成功后统一通知各 intent ResultCh
 	for _, r := range results {
 		if r.intent.ResultCh != nil {
-			r.intent.ResultCh <- r.err //nolint:chan_send_guard
+			// ResultCh 由调用方创建（cap 1），单写者不得阻塞在他人的 channel 上；default 分支对应调用方已因超时退场
+			select {
+			case r.intent.ResultCh <- r.err: //nolint:chan_send_guard
+			default:
+			}
 		}
 	}
 
