@@ -5,7 +5,7 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::sync::{Arc, RwLock};
 
-use super::{STORE, SURREAL_ERR_PANIC, SURREAL_ERR_UTF8, SURREAL_OK, SurrealStore, WORKER_THREADS};
+use super::{STORE, SURREAL_ERR_PANIC, SURREAL_OK, SurrealStore, WORKER_THREADS};
 
 use std::sync::atomic::Ordering;
 
@@ -38,9 +38,9 @@ pub unsafe extern "C" fn surreal_open(
     db_path: *const c_char,
     vec_dim: c_int,
 ) -> c_int {
-    if db_path.is_null() {
-        return SURREAL_ERR_UTF8;
-    }
+    // 刻意不对 backend / db_path 做 null 早退：两者的 NULL 都是本 ABI 文档化的
+    // 合法哨兵（backend=NULL → "mem"；db_path=NULL → 空路径，即内存库），
+    // 下面两个 if 分支就是它们的处理点。早退会把合法调用变成打不开库。
     let bk = if backend.is_null() {
         "mem".to_string()
     } else {

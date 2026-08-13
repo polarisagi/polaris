@@ -163,9 +163,6 @@ pub unsafe extern "C" fn cedar_load_policies(
     out_err_ptr: *mut *const u8,
     out_err_len: *mut usize,
 ) -> c_int {
-    if policies_ptr.is_null() || out_err_ptr.is_null() || out_err_len.is_null() {
-        return -1;
-    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             // 解析输入字符串
@@ -246,15 +243,6 @@ pub unsafe extern "C" fn cedar_evaluate(
     out_reason_ptr: *mut *const u8,
     out_reason_len: *mut usize,
 ) -> c_int {
-    if principal_ptr.is_null()
-        || action_ptr.is_null()
-        || resource_ptr.is_null()
-        || context_ptr.is_null()
-        || out_reason_ptr.is_null()
-        || out_reason_len.is_null()
-    {
-        return -1;
-    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             // 解析四个输入参数
