@@ -110,6 +110,22 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 2026-08-12 裁决：本轮不实施。当前 L2 为一次性执行不驻留依赖，问题域仅覆盖 L4，
 而 L4 尚无唤醒延迟的实测数据。理由详见 local_playground/upgrade/07-GD设计条目裁决.md。
 
+### 节点级 Time-Travel 状态分叉重放（候选，来源 2026-08-13 轮次 GD-14-002）
+
+现状：`035_task_checkpoints.sql` 主键 (task_id, node_id, attempt)，已覆盖崩溃恢复
+（ADR-0076）与 handoff 挂起恢复（resume_ctx_json，ADR-0086），但无 step_sequence /
+parent_checkpoint_id，不支持「倒带到第 N 步并注入修改后参数分叉重跑」。
+
+前置条件（缺一不可）：
+1. 出现实测案例：复杂多步任务中途逻辑偏离，现有 (node_id, attempt) 粒度 +
+   ADR-0086 恢复上下文确实无法定位/续跑，只能整体重跑。需附具体任务与 token 消耗数据。
+2. 分叉后的 Saga 补偿语义已定义：现有实现已明确拒绝「MaxVisits>1 与 Compensation
+   同时声明」（pattern_state_graph.go:288-291，理由是补偿逆序语义未定义）。状态分叉
+   会产生同一节点的多条并行历史，补偿逆序问题比 MaxVisits>1 更复杂，必须先有定义。
+3. Tier-0 实测：每轮增量 state delta 的 SQLite 体积与写放大，在 2GB VPS 上的实际开销。
+
+2026-08-13 裁决：本轮不实施。属新功能非缺陷，且三项前置条件均未评估。
+
 ### 提示词 Layer 1 写入接口（候选，来源 C-1）
 
 `internal/gateway/server/sysadmin/prompts.go` 的三个 handler 已实现完整，
@@ -217,6 +233,9 @@ Injection 漏洞」，实为误报——路由从未注册，无生产入口。�
 | 引入 Redis/Kafka/RabbitMQ | 违反单机硬约束 |
 | cgroups 做单机 App 内存隔离 | macOS/Windows 无此机制，应用进程内 Governor |
 | 已集成多模态 / M09 自主补全引擎 | M01/M13 已在底层及前端支持图片、视频分析与 TTS；M09 已实现缺失能力自主探测与合成 |
+| A2A 入站发现端点 / Agent Card 缺失 | **已实现**。`internal/gateway/server/server_routes.go:27-28` 注册 `GET /.well-known/agent-card.json` + `POST /v1/a2a/tasks`（ADR-0017 决策三），出站方向见 ADR-0084。反复被报为「缺失」，均因未 grep 路由表 |
+| 把生产启动迁移到 `internal/bootstrap.Bootstrapper` | `ARCHITECTURE.md §8.2` + `ADR-0088 §决策七`。四个重评触发条件 2026-08-07 实测全未满足；另有两项契约语义上无法表达（137 处 setter 反向回注、`protocol.ReplayMode` 独占窗口） |
+| WASI 0.2 Component Model 完整支持 | `ADR-0008 §决策五`。配置开关已开、功能未落地已如实记载；重评触发条件见该节 2026-08-09 追记 |
 
 ---
 

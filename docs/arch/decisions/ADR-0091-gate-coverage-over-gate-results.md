@@ -65,4 +65,10 @@ Taint 五级传播（HE-2 的密码学可验证边界）与 Skill 校验管线�
 - 全部 16 个 `internal/lint/testdata/*.json`：僵尸键 0。
 
 > 2026-08-13 补充：本论的「馈评-修复闭环」已自 2026-08-12 起全面远行，该论的“颈评方禁读报告”与“修复方必须读正文”互掖约束已确认减少误报
-
+> 
+> 2026-08-13 追记：本轮修复（2026-08-13）再次发现了三个「门控覆盖面存在盲区」的实证（各对应一个 P0/P1/P2 缺陷）：
+> 1. `tools/safe_dialer_lint.go` 覆盖了 `net.Dial`、`http.Get`、`grpc.Dial` 等，但**漏了 `net/smtp` 全族**，导致 `EmailAdapter` 出现 SSRF 旁路（GR-10-004, P0）。
+> 2. `tools/route_coverage_check.go` 比对了 handler 注册与实现，但**未比对**路由模式中的 `{param}` 与 handler 内 `r.PathValue("<key>")` 的键集合，导致 `TogglePluginMCP` 路由参数名不匹配而恒 400（GR-9-003, P2）。
+> 3. `tools/taint_typed_fields_check.go` 校验了结构体字段类型的合法性，但**未覆盖**赋值点直接写死常量的情况，导致 `BuildReflectContext` 发生污点硬编码降级（GR-4-002, P1）。
+> 
+> 这些实证进一步支撑了本 ADR 的核心观点：门控全绿不等于没有问题，仅代表门控未看见。

@@ -12,6 +12,12 @@ Polaris 架构要求遵循 `CLAUDE.md §不变量`（HE-1 ~ HE-7）。在系统�
 
 - **反例守护**：`security_audit_agent.parseAuditResult` 在无 JSON 时返回 `RiskLevel:"none"`；解析失败必须返回 `error` 拦截。
 - **门控**：`internal/lint/security_lint_test.go` `TestFailClosedSafetyVerdict`。
+- **2026-08-13 追记**：本轮新增了以下依赖缺失/边界断言的 fail-closed 判定点：
+  - `ShadowExecutor.scoreShadow`：LLM judge provider 未注入时拒绝评分。
+  - `KnowledgeBase.Search`：`TaintMax` 必须显式提供，零值拒绝检索。
+  - `ContextRefExpander.resolveFile`：`workDir` 必须配置且强制根目录约束，否则拒绝文件引用。
+  - `run_command`/`bash`：HITL 网关未注入时直接拒绝，不得回退执行。
+  - `NewMCPMarketplaceClient`：拒绝未经 `SafeDialer` 包装的客户端。
 
 ## 决策二：身份判定单源与 Authenticated 显式断言
 
