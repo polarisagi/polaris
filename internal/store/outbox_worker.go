@@ -27,7 +27,7 @@ var ErrUnknownTargetEngine = apperr.New(apperr.CodeInvalidInput, "outbox: unknow
 
 // ErrPoisonPill outbox 毒丸（崩溃重试超过3次），触发 dead 状态。
 // 哨兵错误：保持包级变量语义，供 errors.Is 精确匹配（R1.3 豁免条件）。
-var ErrPoisonPill = errors.New("outbox_inv_03: poison pill") //nolint:wrapcheck
+var ErrPoisonPill = apperr.New(apperr.CodeInternal, "outbox_inv_03: poison pill") //nolint:wrapcheck
 
 // OutboxWorker — 跨引擎投递 Worker。
 // 消费 M2 outbox 表，将投影写入目标引擎（[Storage-SQLite] / [Storage-SurrealDB-Core]）。
