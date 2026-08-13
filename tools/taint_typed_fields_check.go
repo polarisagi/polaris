@@ -262,7 +262,14 @@ func checkAssignDenylist(fset *token.FileSet) {
 				})
 			}
 
-			if filePath == "internal/knowledge/rag_retrieval.go" && funcName == "Search" && fn.Name.Name == "Search" {
+			// 必须连**接收者类型**一起判定：rag_retrieval.go 里有两个 Search，
+			// 只有 KnowledgeBase.Search 持有 req（KnowledgeBaseSearchRequest）并真正做
+			// TaintMax 过滤；DefaultHybridRetriever.Search 的入参叫 config，压根没有 req。
+			// 只按函数名匹配时，后者永远不可能合法满足断言——2026-08-13 轮的做法是
+			// 在它函数体里塞两行 `req := config; _ = req.TaintMax` 把文本凑出来，
+			// 门控转绿而过滤逻辑一行没有。判据必须落在真正执行过滤的那个函数上。
+			if filePath == "internal/knowledge/rag_retrieval.go" && funcName == "Search" &&
+				fn.Name.Name == "Search" && receiverTypeName(fn) == "KnowledgeBase" {
 				hasTaintMax := false
 				ast.Inspect(fn.Body, func(bn ast.Node) bool {
 					sel, ok := bn.(*ast.SelectorExpr)
@@ -287,4 +294,19 @@ func checkAssignDenylist(fset *token.FileSet) {
 			return true
 		})
 	}
+}
+
+// receiverTypeName 返回方法的接收者类型名（指针接收者去掉 *）；非方法返回 ""。
+func receiverTypeName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	expr := fn.Recv.List[0].Type
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	if id, ok := expr.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }

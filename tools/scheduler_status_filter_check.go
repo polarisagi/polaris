@@ -35,13 +35,13 @@ func main() {
 
 	ast.Inspect(scanAndDispatch.Body, func(n ast.Node) bool {
 		switch x := n.(type) {
-		case *ast.BasicLit:
-			if x.Kind == token.STRING && x.Value == `"running"` {
-				found = true
-			}
-		case *ast.IndexExpr:
-			if ident, ok := x.X.(*ast.Ident); ok && ident.Name == "inFlight" {
-				found = true
+		case *ast.BinaryExpr:
+			if x.Op == token.EQL {
+				if sel, ok := x.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Status" {
+					if lit, ok := x.Y.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `"running"` {
+						found = true
+					}
+				}
 			}
 		}
 		return !found

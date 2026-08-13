@@ -35,6 +35,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -79,6 +81,7 @@ func main() {
 	// 覆盖度断言：每个 tools/*_lint.go / *_check.go 都必须在清单里有至少一条用例。
 	// 否则新增规则时只要不往清单里加，就能绕过本门控——那本门控自己就成了摆设。
 	missing := findUncoveredTools(cases)
+	missingIDs := findUncoveredRuleIDs(cases)
 
 	failed := 0
 	for _, c := range cases {
@@ -98,7 +101,14 @@ func main() {
 		failed++
 	}
 
-	fmt.Printf("lint_selftest: %d 条用例，%d 条工具无覆盖\n", len(cases), len(missing))
+	for _, id := range missingIDs {
+		fmt.Fprintf(os.Stderr, "lint_selftest: 规则 %s 在 Makefile 中作为门控声明，却未在 %s 中登记负向用例"+
+			"——「新增一个 echo 就多一条门控」这条捷径不成立\n", id, listPath)
+		failed++
+	}
+
+	fmt.Printf("lint_selftest: %d 条用例，%d 条工具无覆盖，%d 条规则 ID 无覆盖\n",
+		len(cases), len(missing), len(missingIDs))
 	if failed > 0 {
 		fmt.Fprintf(os.Stderr, "lint_selftest: FAIL — %d 项未通过\n", failed)
 		os.Exit(1)
@@ -143,10 +153,31 @@ func (c selfTestCase) inject() (original []byte, restore func() error, err error
 		if _, statErr := os.Stat(c.Target); statErr == nil {
 			return nil, nil, fmt.Errorf("目标 %s 已存在，拒绝覆盖（清单里的落点应当是一个不存在的临时路径）", c.Target)
 		}
+		// 包级门控（如 L-13）的负向样例必须落在一个**新目录**里——一个孤儿包
+		// 不可能寄生在已有包的目录中。故 add 模式需要按需建目录，并在还原时
+		// 把自己建的目录一并删掉（只删自己建的那一层，不碰既有目录）。
+		dir := filepath.Dir(c.Target)
+		createdDir := ""
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+				return nil, nil, fmt.Errorf("创建目录 %s 失败: %w", dir, mkErr)
+			}
+			createdDir = dir
+		}
 		if wErr := os.WriteFile(c.Target, data, 0o600); wErr != nil {
 			return nil, nil, fmt.Errorf("写入 %s 失败: %w", c.Target, wErr)
 		}
-		return nil, func() error { return os.Remove(c.Target) }, nil
+		return nil, func() error {
+			if rmErr := os.Remove(c.Target); rmErr != nil {
+				return rmErr
+			}
+			if createdDir != "" {
+				// Remove（非 RemoveAll）：目录若在此期间被塞进别的东西就报错，
+				// 宁可留痕也不静默删掉不属于本 harness 的文件。
+				return os.Remove(createdDir)
+			}
+			return nil
+		}, nil
 
 	case modePatch:
 		orig, rErr := os.ReadFile(c.Target)
@@ -201,6 +232,52 @@ func asExitError(err error, target **exec.ExitError) bool {
 	return false
 }
 
+// findUncoveredRuleIDs 列出 Makefile 里声明了、但清单未覆盖的**规则 ID**。
+//
+// 为什么按工具文件查覆盖还不够（2026-08-13 实测）：`make lint` 里曾同时挂着
+// panic-check([F-12]) 与 fail-closed-check([L-04])，两个目标跑的是同一个
+// tools/panic_lint.go。按工具查覆盖时 F-12 的用例即可让 L-04 一并"被覆盖"，
+// 于是 L-04 在 lint-backlog 里被记为 landed，实际它声称的三条断言一条都没实现。
+// 只要门控计数按 Makefile 里的 [ID] 报出，覆盖度就必须也按 ID 校验——
+// 否则"新增一个 echo 就多一条门控"这条捷径永远存在。
+func findUncoveredRuleIDs(cases []selfTestCase) []string {
+	covered := make(map[string]bool, len(cases))
+	for _, c := range cases {
+		covered[c.RuleID] = true
+	}
+
+	data, err := os.ReadFile("Makefile")
+	if err != nil {
+		return nil
+	}
+	// 匹配形如：@echo "=== [L-07] Scheduler status filter gate lint ==="
+	re := regexp.MustCompile(`@echo\s+"===\s*\[([A-Za-z0-9./-]+)\]`)
+
+	// 豁免：非"扫描代码找缺陷"类的检查（由各自 make 目标直接验证），
+	// 以及以自身为判据的元门控。
+	exempt := map[string]bool{
+		"meta": true, "doc-counts": true,
+		"GD-14-004": true, "GD-14-006": true, // Makefile 内联的 grep 式检查，无独立工具
+	}
+
+	seen := map[string]bool{}
+	var missing []string
+	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+		// 形如 [F-12/E1] 的复合标签取第一段：清单里登记的是主 ID。
+		id := m[1]
+		if i := strings.Index(id, "/"); i > 0 {
+			id = id[:i]
+		}
+		if exempt[id] || covered[id] || seen[id] {
+			continue
+		}
+		seen[id] = true
+		missing = append(missing, id)
+	}
+	sort.Strings(missing)
+	return missing
+}
+
 // findUncoveredTools 列出 tools/ 下存在但清单未覆盖的门控脚本。
 func findUncoveredTools(cases []selfTestCase) []string {
 	covered := make(map[string]bool, len(cases))
@@ -218,8 +295,7 @@ func findUncoveredTools(cases []selfTestCase) []string {
 		"tools/adr_index_check.go": true,
 		"tools/comment_refs.go":    true,
 		"tools/comment_drift.go":   true,
-		"tools/docs_refs.go":               true,
-		"tools/wiring_reachability_check.go": true,
+		"tools/docs_refs.go":       true,
 	}
 
 	entries, err := os.ReadDir("tools")

@@ -1,0 +1,8 @@
+// Package zzselftestorphan 是 L-13 包级接线可达性门控的负向样例。
+// 本包刻意不被 cmd/polaris 的任何生产路径 import，也刻意不登记进
+// scripts/wiring-allowlist.txt —— 门控必须因此报红。
+// 由 make lint-selftest 注入/还原，不会长期存在于工作区。
+package zzselftestorphan
+
+// OrphanSymbol 只为让本包非空，无实际用途。
+func OrphanSymbol() string { return "orphan" }

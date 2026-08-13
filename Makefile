@@ -62,7 +62,7 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check fail-closed-check chan-send-guard-check outbox-state-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check chan-send-guard-check outbox-state-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
 
@@ -70,10 +70,10 @@ panic-check:
 	@echo "=== [F-12/E1] Framework panic ratchet gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/panic_lint.go
 
-fail-closed-check:
-	@echo "=== [L-04] Fail-closed constructor gate lint ==="
-	@env GOOS= GOARCH= $(GO) run tools/panic_lint.go
-
+# [L-04] 无独立目标：其唯一落地的断言「导出构造函数内禁 panic，应返回 error」
+# 已并入 tools/panic_lint.go（同一棵 AST、同一条棘轮），另起一个跑同一个二进制的
+# 目标只会让门控条数虚增。原清单里的另两条断言判定为 rejected，理由见
+# local_playground/reports/lint-backlog.md 对应行。
 chan-send-guard-check:
 	@echo "=== [L-05] Chan send guard gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/chan_send_guard_lint.go
