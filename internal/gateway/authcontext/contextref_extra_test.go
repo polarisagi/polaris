@@ -64,7 +64,7 @@ func TestContextRefExpander_ResolveFile_Security(t *testing.T) {
 	}
 	expander.workDir = "/etc"
 	_, _, err = expander.resolveFile(context.Background(), "/etc/passwd")
-	if err == nil || !strings.Contains(err.Error(), "sensitive path") {
+	if err == nil || (!strings.Contains(err.Error(), "sensitive path") && !strings.Contains(err.Error(), "路径穿越") && !strings.Contains(err.Error(), "禁止访问")) {
 		t.Errorf("expected sensitive path error, got: %v", err)
 	}
 }

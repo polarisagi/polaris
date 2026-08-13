@@ -20,6 +20,7 @@ use super::{
 /// doc_id/text 须为有效 NUL-terminated UTF-8 C 字符串。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c_char) -> c_int {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
     if doc_id.is_null() || text.is_null() {
         return SURREAL_ERR_UTF8;
     }
