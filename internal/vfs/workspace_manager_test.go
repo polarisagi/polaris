@@ -245,7 +245,9 @@ func TestWorkspaceManager_WithQuota_QuotaExhaustedDoesNotCallFn(t *testing.T) {
 }
 
 func TestWorkspaceManager_StageEphemeralFile_Security(t *testing.T) {
-	wm := &WorkspaceManager{rootDir: t.TempDir()}
+	// 必须走构造函数：结构体字面量会让配额字段为零值，WithQuota 直接判定
+	// 配额耗尽，测的就不是文件名净化而是配额分支了。
+	wm := NewWorkspaceManager(t.TempDir(), 1<<20, config.DefaultThresholds().M7Tool)
 
 	tests := []struct {
 		name     string
@@ -256,16 +258,24 @@ func TestWorkspaceManager_StageEphemeralFile_Security(t *testing.T) {
 		{"empty filename", "", true},
 		{"dot filename", ".", true},
 		{"dotdot filename", "..", true},
-		{"path traversal filename", "../script.py", false}, // it gets sanitized to script.py! wait, is that true?
+		// filepath.Base("../script.py") == "script.py"：穿越段被剥掉后仍是
+		// 合法文件名，落点仍在 <root>/_ephemeral_scripts/<ns>/ 内，故放行。
+		// 断言的是"落点不越界"，不是"含 .. 就报错"。
+		{"path traversal filename", "../script.py", false},
+		{"nested traversal filename", "../../../../etc/passwd", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, cleanup, err := wm.StageEphemeralFile("ns", tt.filename, []byte("test"))
+			abs, cleanup, err := wm.StageEphemeralFile("ns", tt.filename, []byte("test"))
 			if (err != nil) != tt.wantErr {
 				t.Errorf("StageEphemeralFile() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil {
+				// 核心断言：无论传入什么，落点必须在 rootDir 之内。
+				if !strings.HasPrefix(abs, wm.rootDir+string(filepath.Separator)) {
+					t.Errorf("落点越界：%s 不在 %s 之内", abs, wm.rootDir)
+				}
 				cleanup()
 			}
 		})

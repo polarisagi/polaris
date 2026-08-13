@@ -112,3 +112,8 @@ cosign.key
 *.key
 !internal/protocol/schema/*.key
 signing-key*
+
+# patch/merge 残留：2026-08-13 曾有 7 个 .orig/.rej 被提交进仓，
+# 其中 email.go.orig 是含 SSRF 漏洞的旧版完整副本。
+*.orig
+*.rej
