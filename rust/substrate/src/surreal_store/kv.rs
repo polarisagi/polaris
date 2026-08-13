@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::slice;
 
-use super::{
+use super::{SURREAL_ERR_UTF8, 
     KvRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_NOT_FOUND, SURREAL_OK,
     VRow, bytes_to_hex, get_store, hex_to_bytes, write_cstr,
 };
@@ -23,6 +23,9 @@ pub unsafe extern "C" fn surreal_kv_get(
     out_val: *mut *mut u8,
     out_len: *mut usize,
 ) -> c_int {
+    if key.is_null() || out_val.is_null() || out_len.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let key_owned = unsafe { slice::from_raw_parts(key, key_len) }.to_vec();
@@ -100,6 +103,9 @@ pub unsafe extern "C" fn surreal_kv_put(
     val: *const u8,
     val_len: usize,
 ) -> c_int {
+    if key.is_null() || val.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
@@ -137,6 +143,9 @@ pub unsafe extern "C" fn surreal_kv_put(
 /// key 须为 key_len 字节长的有效内存地址。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_int {
+    if key.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
@@ -178,6 +187,9 @@ pub unsafe extern "C" fn surreal_kv_scan(
     prefix_len: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
+    if prefix.is_null() || out_json.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let prefix_owned = if prefix_len == 0 {

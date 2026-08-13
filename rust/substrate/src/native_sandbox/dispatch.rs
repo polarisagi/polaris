@@ -372,6 +372,9 @@ pub unsafe extern "C" fn native_sandbox_exec(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
+    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
+        return -1;
+    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match ns_read_cstr(input_json) {
@@ -431,6 +434,9 @@ pub unsafe extern "C" fn native_sandbox_probe_tools(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
+    if out_json.is_null() || out_err.is_null() {
+        return -1;
+    }
     let result = panic::catch_unwind(|| -> c_int {
         let probe = probe_tools();
         match serde_json::to_string(&probe) {
@@ -480,6 +486,9 @@ pub unsafe extern "C" fn native_sandbox_exec_v2(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
+    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
+        return -1;
+    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match ns_read_cstr(input_json) {
@@ -538,6 +547,9 @@ pub unsafe extern "C" fn native_sandbox_wrap_argv(
     out_json: *mut *mut c_char,
     out_err: *mut *mut c_char,
 ) -> c_int {
+    if input_json.is_null() || out_json.is_null() || out_err.is_null() {
+        return -1;
+    }
     unsafe {
         let result = panic::catch_unwind(|| -> c_int {
             let json_str = match ns_read_cstr(input_json) {

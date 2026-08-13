@@ -20,6 +20,9 @@ use super::{
 /// doc_id/text 须为有效 NUL-terminated UTF-8 C 字符串。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_fts_index(doc_id: *const c_char, text: *const c_char) -> c_int {
+    if doc_id.is_null() || text.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     let result = panic::catch_unwind(move || {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
         let id = match unsafe { CStr::from_ptr(doc_id) }.to_str() {
@@ -112,6 +115,9 @@ pub unsafe extern "C" fn surreal_fts_search(
     k: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
+    if out_json.is_null() {
+        return SURREAL_ERR_UTF8;
+    }
     // 入参 null 判断前置，避免 null 解引用 UB（GR-11-001）
     if query.is_null() {
         write_cstr(out_json, "[]");
