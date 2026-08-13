@@ -48,7 +48,7 @@ func (o *orchestrator) runFSMTurn(
 	var replyBuilder []byte
 	var errBuilder string
 
-	windowSize := config.Get().Thresholds.Session.LeakScanWindowBytes
+	windowSize := config.CurrentThresholds().Session.LeakScanWindowBytes
 	if windowSize <= 0 {
 		windowSize = 20
 	}

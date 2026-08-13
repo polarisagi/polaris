@@ -65,7 +65,12 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		}
 		// loopback 无 key：视为 webui 场景（页面加载并发多请求），用 webui quota 而非 unknown，
 		// 避免首屏并发 GET 打光 unknown 的 burst=20 导致误触 429。
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeLocalWebUI, TraceID: traceID, Authenticated: false}), true
+		// 注入值保持 ClientTypeWebUI，不要改成 ClientTypeLocalWebUI：
+		// builtinClientQuotas 只有 webui 键，换成 local_webui 会查不到配额而落到
+		// defaultRate/defaultMax，正好把上面这段注释描述的首屏 429 问题再放回来。
+		// 中断权限判定不依赖这里的取值——ClientType.IsLocalTrusted() 已同时覆盖
+		// webui / local_webui / local 三者（GR-9-001 的修法就在那个函数里）。
+		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeWebUI, TraceID: traceID, Authenticated: false}), true
 	}
 
 	if authManager.IsLocked(clientIP) {
