@@ -233,24 +233,31 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 	}
 
 	start := time.Now()
-	resp, err := entry.provider.Infer(ctx, msgs, opts...)
-	ms := float64(time.Since(start).Milliseconds())
-	entry.recordLatency(ms)
-	entry.recordOutcome(err == nil, func() {
-		ir.registry.mu.RLock()
-		fn := ir.registry.onRecovery
-		name := entry.name
-		ir.registry.mu.RUnlock()
-		if fn != nil {
-			fn(name)
-		}
-	})
-	ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+
+	var err error
+	defer func() {
+		ms := float64(time.Since(start).Milliseconds())
+		entry.recordLatency(ms)
+		entry.recordOutcome(err == nil, func() {
+			ir.registry.mu.RLock()
+			fn := ir.registry.onRecovery
+			name := entry.name
+			ir.registry.mu.RUnlock()
+			if fn != nil {
+				fn(name)
+			}
+		})
+		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+	}()
+
+	resp, inferErr := entry.provider.Infer(ctx, msgs, opts...)
+	err = inferErr
+
 	if err != nil {
 		return ir.handleInferError(ctx, err, entry, msgs, opts, req)
 	}
 
-	ir.recordInferSuccess(ctx, entry, resp, ms, useCache, ckey)
+	ir.recordInferSuccess(ctx, entry, resp, float64(time.Since(start).Milliseconds()), useCache, ckey)
 	return resp, nil
 }
 
@@ -384,18 +391,24 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	}
 
 	start := time.Now()
-	ch, err := entry.provider.StreamInfer(ctx, msgs, opts...)
-	entry.recordLatency(float64(time.Since(start).Milliseconds()))
-	entry.recordOutcome(err == nil, func() {
-		ir.registry.mu.RLock()
-		fn := ir.registry.onRecovery
-		name := entry.name
-		ir.registry.mu.RUnlock()
-		if fn != nil {
-			fn(name)
-		}
-	})
-	ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+
+	var err error
+	defer func() {
+		entry.recordLatency(float64(time.Since(start).Milliseconds()))
+		entry.recordOutcome(err == nil, func() {
+			ir.registry.mu.RLock()
+			fn := ir.registry.onRecovery
+			name := entry.name
+			ir.registry.mu.RUnlock()
+			if fn != nil {
+				fn(name)
+			}
+		})
+		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+	}()
+
+	ch, streamErr := entry.provider.StreamInfer(ctx, msgs, opts...)
+	err = streamErr
 	if err != nil {
 		if ctx.Err() != nil {
 

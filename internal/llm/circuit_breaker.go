@@ -22,6 +22,7 @@ type circuitBreaker struct {
 	state       atomic.Int32
 	failures    atomic.Int32
 	openUntil   atomic.Int64 // unix nano
+	probing     atomic.Bool  // 保障单探针语义 (WP-7)
 	maxFailures int32
 	openDur     time.Duration
 }
@@ -49,13 +50,14 @@ func (cb *circuitBreaker) Allow() bool {
 	case circuitOpen:
 		if time.Now().UnixNano() > cb.openUntil.Load() {
 			if cb.state.CompareAndSwap(int32(circuitOpen), int32(circuitHalfOpen)) {
+				cb.probing.Store(true)
 				return true // 仅本次 CAS 成功的 goroutine 获得探测权
 			}
 			return false // 其余并发请求视为仍处于 Open
 		}
 		return false
 	case circuitHalfOpen:
-		return true
+		return cb.probing.CompareAndSwap(false, true)
 	}
 	return false
 }
@@ -64,10 +66,22 @@ func (cb *circuitBreaker) RecordSuccess() (recovered bool) {
 	prev := circuitState(cb.state.Load())
 	cb.failures.Store(0)
 	cb.state.Store(int32(circuitClosed))
-	return prev == circuitHalfOpen
+	if prev == circuitHalfOpen {
+		cb.probing.Store(false)
+		return true
+	}
+	return false
 }
 
 func (cb *circuitBreaker) RecordFailure() {
+	if circuitState(cb.state.Load()) == circuitHalfOpen {
+		cb.state.Store(int32(circuitOpen))
+		cb.openUntil.Store(time.Now().Add(cb.openDur).UnixNano())
+		cb.failures.Store(0)
+		cb.probing.Store(false)
+		return
+	}
+
 	n := cb.failures.Add(1)
 	if n >= cb.maxFailures {
 		cb.state.Store(int32(circuitOpen))
