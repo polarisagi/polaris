@@ -22,10 +22,9 @@ const StateGraphMaxTotalVisitBudget = 200
 //  4. 所有节点 effectiveMaxVisits（未声明或 <=0 时按 1 处理）之和不超过
 //     StateGraphMaxTotalVisitBudget（Tier-0 资源熔断）。
 //
-// nodes: 节点 ID 列表；edges: [from, to] 对列表；maxVisits: 节点 ID -> 声明的 MaxVisits；
-// isEntry: 节点 ID -> 是否显式标记为入口（参与循环反馈的节点入度恒 > 0，
-// 仅靠入度分析无法识别，需显式标记，见 WorkflowNodeSpec.IsEntry 注释）。
-func ValidateStateGraphTopology(nodes []string, edges [][2]string, maxVisits map[string]int, isEntry map[string]bool) error {
+// nodes: 节点 ID 列表；edges: 所有 [from, to] 边；uncondEdges: 全为无条件的 [from, to] 边；
+// maxVisits: 节点 ID -> 声明的 MaxVisits；isEntry: 节点 ID -> 是否显式标记为入口。
+func ValidateStateGraphTopology(nodes []string, edges [][2]string, uncondEdges [][2]string, maxVisits map[string]int, isEntry map[string]bool) error {
 	if len(nodes) > 50 {
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("node count %d exceeds circuit-breaker limit 50", len(nodes)))
 	}
@@ -66,5 +65,49 @@ func ValidateStateGraphTopology(nodes []string, edges [][2]string, maxVisits map
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("total visit budget %d exceeds circuit-breaker limit %d", totalBudget, StateGraphMaxTotalVisitBudget))
 	}
 
+	// 校验全无条件环（死锁隐患）
+	feedbacks := FeedbackEdges(uncondEdges)
+	if len(feedbacks) > 0 {
+		return apperr.New(apperr.CodeInvalidInput, "state graph contains unconditional cycles (no exit condition, semantics undefined)")
+	}
+
 	return nil
+}
+
+// FeedbackEdges 识别给定的边集中存在的回边（To 可达 From 的边）。
+func FeedbackEdges(edges [][2]string) map[[2]string]bool {
+	adj := make(map[string][]string)
+	for _, e := range edges {
+		adj[e[0]] = append(adj[e[0]], e[1])
+	}
+
+	feedback := make(map[[2]string]bool)
+	for _, e := range edges {
+		from, to := e[0], e[1]
+		if canReach(adj, to, from) {
+			feedback[e] = true
+		}
+	}
+	return feedback
+}
+
+func canReach(adj map[string][]string, start, target string) bool {
+	visited := make(map[string]bool)
+	var dfs func(node string) bool
+	dfs = func(node string) bool {
+		if node == target {
+			return true
+		}
+		if visited[node] {
+			return false
+		}
+		visited[node] = true
+		for _, next := range adj[node] {
+			if dfs(next) {
+				return true
+			}
+		}
+		return false
+	}
+	return dfs(start)
 }

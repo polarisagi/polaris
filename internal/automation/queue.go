@@ -48,6 +48,7 @@ type SQLiteScheduler struct {
 	invoker     protocol.AgentInvoker
 	gate        backgroundGate
 	outbox      protocol.OutboxWriter // 可选；nil 时跳过通知投递（GD-13-001）
+	inFlight    map[string]struct{}   // 记录本进程内正在运行的 Task ID
 }
 
 func (s *SQLiteScheduler) WithBackgroundGate(g backgroundGate) {
@@ -113,6 +114,7 @@ func NewSQLiteScheduler(store protocol.Store) *SQLiteScheduler {
 	return &SQLiteScheduler{
 		store:       store,
 		subscribers: make(map[string]map[chan types.TaskEvent]struct{}),
+		inFlight:    make(map[string]struct{}),
 	}
 }
 
@@ -156,6 +158,9 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 		}
 		stList = append(stList, st)
 	}
+	if err := iter.Err(); err != nil {
+		slog.Warn("scheduler: scan pending tasks iterator error", "err", err)
+	}
 	iter.Close() // 显式关闭迭代器，释放读事务锁，避免下面写更新时死锁
 
 	for _, st := range stList {
@@ -167,6 +172,15 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 		// 跳过已完成 / 已超出重试次数
 		if st.Status == "completed" || st.Status == "failed" {
 			continue
+		}
+		if st.Status == "running" {
+			s.mu.RLock()
+			_, ok := s.inFlight[st.Task.ID]
+			s.mu.RUnlock()
+			if ok {
+				continue
+			}
+			// 否则视为上次进程遗留的孤儿，允许接管重试
 		}
 		if st.Attempts >= maxAttempts {
 			// 超出重试次数，标记 failed 并通知
@@ -208,14 +222,24 @@ func (s *SQLiteScheduler) scanAndDispatch(ctx context.Context, dispatchFn Dispat
 
 		// CAS：更新为 running（防止多节点重复调度）
 		st.Status = "running"
+		// 置 running 时 Attempts 自增，孤儿接管时会再自增一次——这是期望行为（崩溃也算一次尝试）
 		st.Attempts++
 		if err := s.writeTask(ctx, &st); err != nil {
 			continue
 		}
 		s.publish(st.Task.ID, types.TaskEvent{TaskID: st.Task.ID, State: "started"})
 
+		s.mu.Lock()
+		s.inFlight[st.Task.ID] = struct{}{}
+		s.mu.Unlock()
+
 		taskCopy := st.Task
 		concurrent.SafeGo(ctx, "automation.scheduler.dispatch_task", func(ctx context.Context) {
+			defer func() {
+				s.mu.Lock()
+				delete(s.inFlight, st.Task.ID)
+				s.mu.Unlock()
+			}()
 			var dispErr error
 			s.mu.RLock()
 			inv := s.invoker
