@@ -289,7 +289,25 @@ func RecordRetrievalLatency(ctx context.Context, stage string, ms int64) {
 	}
 }
 
-// RecordRetrievalRouteTimeout 记录检索单路超时
+// RecordRetrievalRouteTimeout 记录混合检索单路超时降级（HE-1：能算就要上报）。
+//
+// 必须真正落到 Instrument 上：只打日志不打点的 Record* 函数比没有更糟——
+// 它在 metrics 包里、名字叫 Record，读代码的人会以为这条降级已经可观测，
+// 于是不会再去补埋点，而面板上永远看不到"向量路一直在静默降级"。
 func RecordRetrievalRouteTimeout(ctx context.Context, route string) {
 	slog.WarnContext(ctx, "retrieval route timeout", "route", route)
+	if InstrRetrievalRouteTimeouts != nil {
+		InstrRetrievalRouteTimeouts.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route)))
+	}
+}
+
+// RecordDownloaderResumeRestart 记录跨源续传因内容同一性校验不通过而清零重下。
+//
+// 埋点落在本包而不是 internal/downloader：ADR-0001 把「一等公民指标」的包级
+// 变量豁免限定在 observability/metrics，downloader 自建 promauto 计数器会直接
+// 触发 inv_NoGlobalVar（本轮实测已触发）。
+func RecordDownloaderResumeRestart(ctx context.Context) {
+	if InstrDownloaderResumeRestarts != nil {
+		InstrDownloaderResumeRestarts.Add(ctx, 1)
+	}
 }

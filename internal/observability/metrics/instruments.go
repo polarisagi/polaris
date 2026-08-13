@@ -178,4 +178,13 @@ func evaluateInstrumentInitErrs(ie *instrumentInitErrs) (degraded bool, fatal er
 	return degraded, fatal
 }
 
-var InstrRAGTaintDrops metric.Int64Counter
+// InstrRAGTaintDrops 记录 KnowledgeBase.Search 因超出 TaintMax 被过滤掉的 chunk 数（WP-1.2 / GR-7-001）。
+// InstrRetrievalRouteTimeouts 记录混合检索单路超时降级次数（WP-11 / GD-13-003），带 route 维度。
+// 两者的实例化在 instruments_init.go 的 initInstruments 中，声明与初始化必须成对——
+// 只声明不初始化会让所有埋点被 nil 判定静默跳过，面板恒为空却看不出是漏了初始化。
+// InstrDownloaderResumeRestarts 记录跨源续传因内容同一性校验不通过而重下的次数（WP-10.2 / GR-1-004）。
+var (
+	InstrRAGTaintDrops            metric.Int64Counter
+	InstrRetrievalRouteTimeouts   metric.Int64Counter
+	InstrDownloaderResumeRestarts metric.Int64Counter
+)

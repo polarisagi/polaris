@@ -70,7 +70,7 @@ func (c *MCPClient) connectStdio(ctx context.Context) error {
 
 // readLoop 持续读取 stdout，dispatch JSON-RPC 响应。
 func (c *MCPClient) readLoop(r io.Reader) {
-	mcpStdioMaxScanBytes := config.Get().Thresholds.M7Tool.MCPStdioMaxScanBytes
+	mcpStdioMaxScanBytes := config.CurrentThresholds().M7Tool.MCPStdioMaxScanBytes
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 4096), mcpStdioMaxScanBytes)
 	for scanner.Scan() {
