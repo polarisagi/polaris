@@ -104,8 +104,11 @@ def __ca_save_state__():
         except Exception:
             continue
         __ca_state[__ca_k] = __ca_v
-    with open(__CA_STATE_FILE__, "wb") as __ca_f:
-        __ca_pickle.dump(__ca_state, __ca_f)
+    try:
+        with open(__CA_STATE_FILE__, "wb") as __ca_f:
+            __ca_pickle.dump(__ca_state, __ca_f)
+    except Exception:
+        pass
 __ca_save_state__()
 `
 	return header + "\n" + code + "\n" + footer

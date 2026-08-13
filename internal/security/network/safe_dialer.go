@@ -352,6 +352,15 @@ func (sd *SafeDialer) resolveDNSBypass(ctx context.Context, host string) ([]net.
 
 	// 写回缓存（更新时间戳）
 	sd.dnsCacheMu.Lock()
+	const maxDNSCacheEntries = 1024
+	if len(sd.dnsCache) >= maxDNSCacheEntries && sd.dnsCache[host] == nil {
+		// Pseudo-random eviction using map iteration
+		for k := range sd.dnsCache {
+			delete(sd.dnsCache, k)
+			delete(sd.dnsCacheTs, k)
+			break
+		}
+	}
 	sd.dnsCache[host] = result
 	sd.dnsCacheTs[host] = time.Now()
 	sd.dnsCacheMu.Unlock()

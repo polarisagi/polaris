@@ -34,3 +34,16 @@ rust/substrate/src/native_sandbox/dispatch.rs: unreachable func: native_sandbox_
 # 永不匹配，扫描结果恒为「0 Go FFI binding(s)」——46 条全是误报。修好正则后 45 条
 # 自行消失，只剩上面这 1 条真条目。教训：门控扫描数为 0 时，先怀疑门控，不要用白名单
 # 消化它的输出（ADR-0091）。ffi_symbol_check 现已内置「绑定数为 0 直接判失败」的自检。
+
+# 待打通 2026H2 计划连接：记忆沉浸功能
+
+# 预留扩展接口，待实现方接入
+internal/security/provider.go: unreachable type: Provider
+internal/agent/repl.go: unreachable type: AgentREPL
+internal/memory/memory.go: unreachable func: MemImpl.InjectRelevantMemory
+internal/memory/memory.go: unreachable func: MemImpl.ExtractContext
+internal/memory/memory.go: unreachable func: MemImpl.Forget
+internal/memory/memory.go: unreachable func: MemImpl.Consolidate
+internal/tool/catalog/composite.go: unreachable func: CompositeToolCatalog.Execute
+internal/security/provider.go: unreachable type: Provider
+internal/agent/repl.go: unreachable type: AgentREPL

@@ -83,7 +83,7 @@ func (e *ScriptSkillExecutor) ExecuteSkill(ctx context.Context, skillID string, 
 
 	// P1-8 限流：Skill 执行速率上限 20 QPS
 	if !e.skillLimiter.Allow() {
-		return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("skill_executor: rate limit exceeded for skill %s", skillID))
+		return nil, apperr.New(apperr.CodeResourceExhausted, fmt.Sprintf("skill_executor: rate limit exceeded for skill %s", skillID))
 	}
 
 	meta, err := e.registry.Get(ctx, skillID, "")
