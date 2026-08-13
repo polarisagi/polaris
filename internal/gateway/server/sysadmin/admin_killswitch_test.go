@@ -101,7 +101,7 @@ func TestHandleKill_AnonymousRejected_WebUI(t *testing.T) {
 
 	body, _ := json.Marshal(KillSwitchReq{Reason: "emergency stop"})
 	req := httptest.NewRequest(http.MethodPost, "/_admin/killswitch", bytes.NewReader(body))
-	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "anonymous", ClientType: "webui", Authenticated: false})
+	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeWebUI, Authenticated: false})
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.HandleKill(w, req)
@@ -134,7 +134,7 @@ func TestHandleKill_AdminSucceeds(t *testing.T) {
 
 	body, _ := json.Marshal(KillSwitchReq{Reason: "manual emergency stop"})
 	req := httptest.NewRequest(http.MethodPost, "/_admin/killswitch", bytes.NewReader(body))
-	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin", ClientType: "api", Authenticated: true})
+	ctx := authcontext.WithAuthContext(req.Context(), &authcontext.AuthContext{UserID: "admin", ClientType: authcontext.ClientTypeAPI, Authenticated: true})
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.HandleKill(w, req)

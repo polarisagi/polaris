@@ -10,12 +10,24 @@ const (
 	authContextKey contextKey = "polaris_auth_context"
 )
 
+type ClientType string
+
+const (
+	ClientTypeUnknown    ClientType = "unknown"
+	ClientTypeWebUI      ClientType = "webui"
+	ClientTypeLocalWebUI ClientType = "local_webui"
+	ClientTypeLocal      ClientType = "local"
+	ClientTypeAPI        ClientType = "api"
+	ClientTypeSDK        ClientType = "sdk"
+	ClientTypeCLI        ClientType = "cli"
+)
+
 // AuthContext 封装了经过认证的客户端身份信息
 type AuthContext struct {
 	UserID        string
-	ClientType    string // e.g., "cli", "webui", "api"
-	TraceID       string // 全链路请求唯一追踪 ID
-	Authenticated bool   // 是否通过了有效凭证校验（如 API Key）
+	ClientType    ClientType // e.g., "cli", "webui", "api"
+	TraceID       string     // 全链路请求唯一追踪 ID
+	Authenticated bool       // 是否通过了有效凭证校验（如 API Key）
 }
 
 // WithAuthContext 将鉴权上下文注入请求 context 中
@@ -33,14 +45,12 @@ func FromContext(ctx context.Context) *AuthContext {
 	}
 	return &AuthContext{
 		UserID:        "anonymous",
-		ClientType:    "unknown",
+		ClientType:    ClientTypeUnknown,
 		Authenticated: false,
 	}
 }
 
-const (
-	ClientTypeLocalWebUI = "local_webui"
-	ClientTypeLocal      = "local"
-	ClientTypeAPI        = "api"
-	ClientTypeSDK        = "sdk"
-)
+// IsLocalTrusted 判定当前客户端是否为本地可信客户端。
+func (c ClientType) IsLocalTrusted() bool {
+	return c == ClientTypeLocalWebUI || c == ClientTypeWebUI || c == ClientTypeLocal
+}

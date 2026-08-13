@@ -120,7 +120,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	}
 	clientType := authCtx.ClientType
 
-	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP, clientType) {
+	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP, string(clientType)) {
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
@@ -128,7 +128,7 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
 
 	isAdmin := authCtx.Authenticated && (authCtx.UserID == "admin" || authCtx.UserID == "system")
-	isLocalWebUI := authCtx.ClientType == authcontext.ClientTypeLocalWebUI || authCtx.ClientType == authcontext.ClientTypeLocal
+	isLocalWebUI := authCtx.ClientType.IsLocalTrusted()
 	if !isAdmin && !isLocalWebUI {
 		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
 		return
