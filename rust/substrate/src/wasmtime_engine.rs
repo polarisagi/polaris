@@ -229,7 +229,8 @@ pub unsafe extern "C" fn wasmtime_execute(
     out_json_len: *mut usize,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if wasm_bytes.is_null()
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
+    if (wasm_bytes.is_null() && wasm_len > 0)
         || input_json.is_null()
         || workspace_dir.is_null()
         || out_json.is_null()
@@ -261,7 +262,11 @@ pub unsafe extern "C" fn wasmtime_execute(
                 }
             };
 
-            let bytes = std::slice::from_raw_parts(wasm_bytes, wasm_len);
+            let bytes = if wasm_len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(wasm_bytes, wasm_len)
+            };
 
             // 编译验证（在锁外执行，Engine 本身线程安全）
             let module = match Module::from_binary(&engine_arc.engine, bytes) {

@@ -23,12 +23,13 @@ pub unsafe extern "C" fn surreal_kv_get(
     out_val: *mut *mut u8,
     out_len: *mut usize,
 ) -> c_int {
-    if key.is_null() || out_val.is_null() || out_len.is_null() {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
+    if (key.is_null() && key_len > 0) || out_val.is_null() || out_len.is_null() {
         return SURREAL_ERR_UTF8;
     }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
-        let key_owned = unsafe { slice::from_raw_parts(key, key_len) }.to_vec();
+        let key_owned = if key_len == 0 { vec![] } else { unsafe { slice::from_raw_parts(key, key_len) }.to_vec() };
         let key_hex = bytes_to_hex(&key_owned);
         let store_arc = match get_store() {
             Some(s) => s,
@@ -103,13 +104,14 @@ pub unsafe extern "C" fn surreal_kv_put(
     val: *const u8,
     val_len: usize,
 ) -> c_int {
-    if key.is_null() || val.is_null() {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
+    if (key.is_null() && key_len > 0) || (val.is_null() && val_len > 0) {
         return SURREAL_ERR_UTF8;
     }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
-        let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
-        let v = bytes_to_hex(unsafe { slice::from_raw_parts(val, val_len) });
+        let k = bytes_to_hex(if key_len == 0 { &[] } else { unsafe { slice::from_raw_parts(key, key_len) } });
+        let v = bytes_to_hex(if val_len == 0 { &[] } else { unsafe { slice::from_raw_parts(val, val_len) } });
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -143,12 +145,13 @@ pub unsafe extern "C" fn surreal_kv_put(
 /// key 须为 key_len 字节长的有效内存地址。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_int {
-    if key.is_null() {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
+    if key.is_null() && key_len > 0 {
         return SURREAL_ERR_UTF8;
     }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
-        let k = bytes_to_hex(unsafe { slice::from_raw_parts(key, key_len) });
+        let k = bytes_to_hex(if key_len == 0 { &[] } else { unsafe { slice::from_raw_parts(key, key_len) } });
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -187,7 +190,8 @@ pub unsafe extern "C" fn surreal_kv_scan(
     prefix_len: usize,
     out_json: *mut *mut c_char,
 ) -> c_int {
-    if prefix.is_null() || out_json.is_null() {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（业务语义：prefix_len == 0 时使用空切片）
+    if (prefix.is_null() && prefix_len > 0) || out_json.is_null() {
         return SURREAL_ERR_UTF8;
     }
     let result = panic::catch_unwind(|| {

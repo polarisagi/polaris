@@ -23,7 +23,9 @@ pub unsafe extern "C" fn surreal_vec_upsert(
     embed: *const f32,
     dim: usize,
 ) -> c_int {
-    if id.is_null() || embed.is_null() {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB
+    // (对 embed，Go侧当前已检查 empty embedding 不传 nil，守卫为 ABI 边界纵深防御)
+    if id.is_null() || (embed.is_null() && dim > 0) {
         return SURREAL_ERR_UTF8;
     }
     let result = panic::catch_unwind(|| {
@@ -32,7 +34,7 @@ pub unsafe extern "C" fn surreal_vec_upsert(
             Ok(s) => s.to_string(),
             Err(_) => return SURREAL_ERR_UTF8,
         };
-        let embed_vec = unsafe { std::slice::from_raw_parts(embed, dim) }.to_vec();
+        let embed_vec = if dim == 0 { vec![] } else { unsafe { std::slice::from_raw_parts(embed, dim) }.to_vec() };
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -67,6 +69,7 @@ pub unsafe extern "C" fn surreal_vec_upsert(
 /// id 须为有效 NUL-terminated UTF-8 C 字符串。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn surreal_vec_delete(id: *const c_char) -> c_int {
+    // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（ABI边界纵深防御）
     if id.is_null() {
         return SURREAL_ERR_UTF8;
     }
