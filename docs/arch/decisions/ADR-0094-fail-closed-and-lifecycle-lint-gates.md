@@ -81,3 +81,6 @@ JSON 序列化、SQL FTS5 `MATCH` 查询以及 LLM Prompt 拼接三类结构化�
 - `internal/gateway/server/logstream.go`
 - `pkg/types/enums_llm.go`（2026-08-10 复核订正：原文档写 `pkg/types/models_pool.go`，`ModelPool` 强类型枚举实际定义在此文件）
 - `internal/lint/`
+
+> 2026-08-13 补充：已在 scripts/wiring-allowlist.txt 中建立棘轮基线，已接线后可移除
+

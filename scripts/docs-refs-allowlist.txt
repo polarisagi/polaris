@@ -78,3 +78,6 @@ cmd/gen_bare_error_baseline
 # internal/ffi/dylib_test.go 验证加载路径包含该目录，属于测试断言说明。
 rust/substrate/target/release
 
+tools/wiring_reachability_check.go
+internal/vfs/provider.go # ignore
+internal/xxx.go # example in wiring check
