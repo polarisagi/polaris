@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -47,13 +48,19 @@ func (o *orchestrator) runFSMTurn(
 	var replyBuilder []byte
 	var errBuilder string
 
+	windowSize := config.Get().Thresholds.Session.LeakScanWindowBytes
+	if windowSize <= 0 {
+		windowSize = 20
+	}
+	var leakWindow []byte
+
 	for {
 		select {
 		case ev, ok := <-ch:
 			if !ok {
 				return string(replyBuilder), errBuilder, false
 			}
-			stop := o.handleFSMEvent(sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder)
+			stop := o.handleFSMEvent(sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &leakWindow, windowSize)
 			if stop {
 				return string(replyBuilder), errBuilder, false
 			}
@@ -70,13 +77,15 @@ func (o *orchestrator) runFSMTurn(
 // handleFSMEvent 处理单条 FSM 流事件：按类型转发领域事件并累积 reply/inferErr
 // （原 chat/sse_stream_helpers.go handleStreamFSMEvent 迁入，行为不变）。
 // 返回 stop=true 时调用方应结束事件循环（task_done 状态事件）。
-func (o *orchestrator) handleFSMEvent(
+func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 	sink Sink,
 	sessionID string,
 	ev types.AgentStreamEvent,
 	systemPromptGuard *guard.SystemPromptGuard,
 	reply *[]byte,
 	inferErr *string,
+	leakWindow *[]byte,
+	windowSize int,
 ) (stop bool) {
 	// GD-13-001：处理子 Agent 嵌套事件，添加角色前缀
 	prefix := ""
@@ -91,9 +100,18 @@ func (o *orchestrator) handleFSMEvent(
 	case types.AgentStreamEventThinking:
 		_ = sink.Emit(Event{Kind: KindReasoning, Text: ev.Content})
 	case types.AgentStreamEventToken:
-		cleaned, err := systemPromptGuard.Scan(ev.Content, true)
+		fullText := string(*leakWindow) + ev.Content
+		_, err := systemPromptGuard.Scan(fullText, false)
+		cleaned, _ := systemPromptGuard.Scan(ev.Content, true)
 		if err != nil {
 			slog.Warn("session: system prompt leak detected", "session_id", sessionID, "err", err)
+			cleaned = ""      // 命中则清理本 token 可输出部分
+			*leakWindow = nil // 重置窗口，防止后续正常 token 一直被误判
+		} else {
+			*leakWindow = append(*leakWindow, ev.Content...)
+			if len(*leakWindow) > windowSize {
+				*leakWindow = (*leakWindow)[len(*leakWindow)-windowSize:]
+			}
 		}
 		_ = sink.Emit(Event{Kind: KindDelta, Text: cleaned})
 		*reply = append(*reply, cleaned...)

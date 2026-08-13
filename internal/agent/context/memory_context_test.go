@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/polarisagi/polaris/internal/security/taint"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
@@ -322,4 +324,36 @@ func TestBuildPlanContext_MCPToolInjection_S02(t *testing.T) {
 	if !catalogFound {
 		t.Fatalf("expected an external_catalog message, got none: %+v", msgs)
 	}
+}
+
+func TestBuildReflectContext_Taint(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("GlobalTaintLevel_High", func(t *testing.T) {
+		sCtx := &fsm.StateContext{
+			ExecuteResult:    []byte("some result"),
+			GlobalTaintLevel: types.TaintHigh,
+		}
+
+		taintLvl := types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)
+		require.Equal(t, types.TaintHigh, taintLvl)
+
+		msgs, err := BuildReflectContext(ctx, nil, sCtx)
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+	})
+
+	t.Run("GlobalTaintLevel_None", func(t *testing.T) {
+		sCtx := &fsm.StateContext{
+			ExecuteResult:    []byte("some result"),
+			GlobalTaintLevel: types.TaintNone,
+		}
+
+		taintLvl := types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)
+		require.Equal(t, types.TaintMedium, taintLvl)
+
+		msgs, err := BuildReflectContext(ctx, nil, sCtx)
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+	})
 }

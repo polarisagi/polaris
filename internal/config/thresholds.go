@@ -18,6 +18,11 @@ type Thresholds struct {
 	M11Policy       M11PolicyThresholds       `toml:"m11_policy"`
 	M12Eval         M12EvalThresholds         `toml:"m12_eval"`
 	M13Interface    M13InterfaceThresholds    `toml:"m13_interface"`
+	Session         SessionThresholds         `toml:"session"`
+}
+
+type SessionThresholds struct {
+	LeakScanWindowBytes int `toml:"leak_scan_window_bytes"` // 系统提示词最长特征串长度 × 2
 }
 
 type M1RouterThresholds struct {
@@ -459,6 +464,10 @@ func DefaultThresholds() Thresholds {
 			MaxConcurrentLLMCalls:          4,
 			LazyLoadToolThreshold:          40,
 			AmbientSkillMaxChars:           4000,
+		},
+		Session: SessionThresholds{
+			// 取系统提示词中通常的最长特征串长度（例如 "PolarisAGI" 10 字节），并 ×2 留作冗余
+			LeakScanWindowBytes: 20,
 		},
 	}
 }

@@ -358,7 +358,7 @@ func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 	if len(sCtx.ExecuteResult) > 0 {
 		b.WriteUserData(taint.NewTaintedString(
 			"Execution Result Summary:\n"+string(sCtx.ExecuteResult)+"\n\n",
-			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"execute_result"))
 	}
 	if len(sCtx.ExecuteImageParts) > 0 {

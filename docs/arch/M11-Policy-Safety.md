@@ -629,3 +629,6 @@ M11 故障默认 fail-closed (拒绝执行)，保障安全。与 OSMemoryGuard �
   2. `filepath.Abs(filepath.Clean(e.workDir))` 与 `filepath.EvalSymlinks` 联合使用，确保物理路径解析一致性，防止符号链接穿越。
   3. `strings.HasPrefix(abs, root+string(filepath.Separator))` 校验，断言目标路径必须在工作区根目录下。
   4. 对命中 `isSensitivePath` 的情况，拒绝错误码从 `CodeInternal` 修正为更准确的 `CodeForbidden`。
+
+## 16. 流式安全防护
+- 流式泄漏扫描按滑动窗口执行，窗口容量为配置阈值（`SessionThresholds.LeakScanWindowBytes`）。跨 turn 自动重置，避免跨会话污染。

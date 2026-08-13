@@ -93,6 +93,10 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 }
 
 func EmailSendMessage(ctx context.Context, dialer protocol.SafeDialer, smtpHost, smtpPort, address, password, to, subject, body string) error {
+	if dialer == nil {
+		return apperr.New(apperr.CodeInternal, "email: SafeDialer 未注入，拒绝 SMTP 连接（SSRF 防护）")
+	}
+
 	auth := smtp.PlainAuth("", address, password, smtpHost)
 	msg := []byte(
 		"From: " + address + "\r\n" +
@@ -107,15 +111,24 @@ func EmailSendMessage(ctx context.Context, dialer protocol.SafeDialer, smtpHost,
 	if err != nil {
 		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: SafeDialer DialContext 失败", err)
 	}
+	defer conn.Close()
+
+	if smtpPort == "465" {
+		conn = tls.Client(conn, &tls.Config{ServerName: smtpHost})
+	}
 
 	c, err := smtp.NewClient(conn, smtpHost)
 	if err != nil {
-		conn.Close()
 		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: smtp.NewClient 失败", err)
 	}
-	defer c.Close()
+	defer func() {
+		if err := c.Quit(); err != nil {
+			slog.Warn("email: smtp Quit 失败", "err", err)
+		}
+		c.Close()
+	}()
 
-	if ok, _ := c.Extension("STARTTLS"); ok {
+	if smtpPort != "465" {
 		config := &tls.Config{ServerName: smtpHost}
 		if err = c.StartTLS(config); err != nil {
 			return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: StartTLS 失败", err)
@@ -123,10 +136,8 @@ func EmailSendMessage(ctx context.Context, dialer protocol.SafeDialer, smtpHost,
 	}
 
 	if auth != nil {
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err = c.Auth(auth); err != nil {
-				return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Auth 失败", err)
-			}
+		if err = c.Auth(auth); err != nil {
+			return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Auth 失败", err)
 		}
 	}
 
@@ -150,8 +161,7 @@ func EmailSendMessage(ctx context.Context, dialer protocol.SafeDialer, smtpHost,
 		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Close body 失败", err)
 	}
 
-	//nolint:wrapcheck
-	return c.Quit()
+	return nil
 }
 
 // ─── 轻量 IMAP 客户端 ─────────────────────────────────────────────────────────
