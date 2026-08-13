@@ -21,7 +21,7 @@ type bashArgs struct {
 	Command string `json:"command"`
 }
 
-func MakeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.SandboxNetworkPolicy, bwrapPath string) sandbox.InProcessFn {
+func MakeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.SandboxNetworkPolicy, bwrapPath string, hitlGateway HITLGateway) sandbox.InProcessFn {
 	// 分级器只需构造一次：正则编译非零成本，工厂函数只在注册期调用一次，
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
 	riskClassifier := classifier.NewDefaultClassifier()
@@ -45,9 +45,14 @@ func MakeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.S
 			return nil, apperr.New(apperr.CodeForbidden,
 				fmt.Sprintf("bash: command denied: %s", verdict.Reason))
 		case classifier.RiskHITL:
-			// Phase1: 警告日志 + 继续执行（Phase2 将挂起等待 HITL 审批）
-			slog.Warn("bash: command requires human approval (HITL) — executing in Phase1 mode",
+			if hitlGateway == nil {
+				return nil, apperr.New(apperr.CodeForbidden, "bash: HITL gateway is nil, fail-closed for RiskHITL command")
+			}
+			slog.Warn("bash: command requires human approval (HITL), requesting approval",
 				"cmd", args.Command, "reason", verdict.Reason)
+			if err := hitlGateway.RequestApproval(ctx, "bash", map[string]any{"command": args.Command, "reason": verdict.Reason}); err != nil {
+				return nil, apperr.Wrap(apperr.CodeForbidden, "bash: HITL approval failed", err)
+			}
 		case classifier.RiskWarn:
 			slog.Warn("bash: elevated-risk command executing",
 				"cmd", args.Command, "reason", verdict.Reason)

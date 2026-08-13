@@ -252,7 +252,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	mcpMgr.SetCatalog(memoryCatalog)
 	mcpMgr.SetEnvelope(envelope)
 
-	mktClient := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTPClient)
+	mktClient, _ := marketplace.NewMCPMarketplaceClient("", sb.Layout.Extensions, sb.SafeHTTPClient)
 
 	hitlGateway := hitl.NewGateway(sb.Store)
 	hitlGateway.SetNotifier(hitl.NewChannelNotifier())
@@ -308,6 +308,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		cronRepo,
 		sb.Layout.Workspace,
 		&mcpAsyncTaskAdapter{inner: mcpMgr},
+		hitlGateway,
 	); err != nil {
 		slog.Warn("polaris: builtin OS tool registration partial failure", "err", err)
 	}

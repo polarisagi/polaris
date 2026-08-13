@@ -41,6 +41,10 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
+type HITLGateway interface {
+	RequestApproval(ctx context.Context, action string, req map[string]any) error
+}
+
 func RegisterBuiltinTools(
 	sbx *sandbox.InProcessSandbox,
 	toolReg *tool.InMemoryToolRegistry,
@@ -53,6 +57,7 @@ func RegisterBuiltinTools(
 	cronRepo protocol.CronRepository, // cron_* 工具依赖；nil 时不注册这三个工具
 	vfsRoot string, // WorkspaceManager 的根目录
 	asyncTaskProvider get_task_result.AsyncTaskProvider, // get_task_result 工具依赖（GD-08-001）；nil 时该工具始终降级返回 expired_or_not_found
+	hitlGateway HITLGateway,
 ) error {
 	// todoMu 保护 todo 文件的并发读写，防止多 Agent 同时写入导致数据丢失。
 	// 与 todo_write.MakeTodoWriteFn / todo_read.MakeTodoReadFn 共享，通过参数传递而非全局变量。
@@ -68,8 +73,8 @@ func RegisterBuiltinTools(
 		{"list_dir", list_dir.MakeListDirFn(allowedPaths)},
 		{"write_file", write_file.MakeWriteFileFn(allowedPaths)},
 		{"fetch_url", fetch_url.MakeFetchURLFn(dialer)},
-		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath)},
-		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath)},
+		{"bash", bash.MakeBashFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
+		{"run_command", run_command.MakeRunCommandFn(allowedPaths, sandboxEnabled, netPolicy, bwrapPath, hitlGateway)},
 		{"get_datetime", get_datetime.GetDatetimeFn},
 		{"csv_parse", csv_parse.CsvParseFn},
 		{"diff_text", diff_text.DiffTextFn},

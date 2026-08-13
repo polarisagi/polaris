@@ -164,7 +164,7 @@ func (ce *ContextExpander) SetBoundarySerializer(ser *taint.TaintBoundarySeriali
 }
 
 // Expand 给定一组 LeafChunk，返回带上下文的 AugmentedContext 列表。
-func (ce *ContextExpander) Expand(ctx context.Context, chunks []Chunk) ([]AugmentedContext, error) {
+func (ce *ContextExpander) Expand(ctx context.Context, chunks []Chunk, taintMax types.TaintLevel) ([]AugmentedContext, error) {
 	results := make([]AugmentedContext, 0, len(chunks))
 	for _, leaf := range chunks {
 		aug := AugmentedContext{Primary: leaf}
@@ -188,7 +188,14 @@ func (ce *ContextExpander) Expand(ctx context.Context, chunks []Chunk) ([]Augmen
 			// 反序列化 SectionPath（存储为逗号分隔字符串）
 			parent.SectionPath = strings.Split(sectionPath, ",")
 			parent.TaintLevel = verifyChunkTaint(ce.boundarySerializer, parent.ID, parent.Content, parent.TaintLevel, parent.TaintSource, taintHMAC)
-			aug.Parent = &parent
+			if types.TaintLevel(parent.TaintLevel) > taintMax {
+				slog.DebugContext(ctx, "knowledge: parent chunk filtered by TaintMax", "chunk_id", parent.ID, "chunk_taint", parent.TaintLevel, "req_taint_max", taintMax)
+				if metrics.InstrRAGTaintDrops != nil {
+					metrics.InstrRAGTaintDrops.Add(ctx, 1)
+				}
+			} else {
+				aug.Parent = &parent
+			}
 		}
 
 		// 查前一个兄弟（同 DocID、同父、chunk_index < 当前）
@@ -309,6 +316,10 @@ func NewKnowledgeBase(
 //
 //nolint:gocyclo
 func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequest) ([]AugmentedContext, error) {
+	if req.TaintMax == 0 {
+		return nil, apperr.New(apperr.CodeForbidden, "knowledge: TaintMax 未指定，按 fail-closed 拒绝检索")
+	}
+
 	deepRAG := kb.featureGate != nil && kb.featureGate.IsEnabled(probe.FeatureDeepRAG) &&
 		kb.planner != nil && kb.navigator != nil
 
@@ -342,6 +353,13 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 		}
 		for _, c := range chunks {
 			if _, dup := seen[c.Source]; !dup {
+				if types.TaintLevel(c.TaintLevel) > req.TaintMax {
+					slog.DebugContext(ctx, "knowledge: chunk filtered by TaintMax", "chunk_id", c.Source, "chunk_taint", c.TaintLevel, "req_taint_max", req.TaintMax)
+					if metrics.InstrRAGTaintDrops != nil {
+						metrics.InstrRAGTaintDrops.Add(ctx, 1)
+					}
+					continue
+				}
 				seen[c.Source] = struct{}{}
 				chunk := Chunk{
 					ID:          c.Source,
@@ -365,7 +383,7 @@ func (kb *KnowledgeBase) Search(ctx context.Context, req KnowledgeBaseSearchRequ
 	if len(allChunks) == 0 {
 		return nil, nil
 	}
-	return kb.expander.Expand(ctx, allChunks)
+	return kb.expander.Expand(ctx, allChunks, req.TaintMax)
 }
 
 func parseTaintLevel(s string) types.TaintLevel {

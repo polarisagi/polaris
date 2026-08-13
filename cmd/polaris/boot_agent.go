@@ -875,38 +875,42 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 发现 rollout_states 中停留在 Gate 2 的候选，回放历史流量并对比评分，
 	// 通过则调用 ConfirmShadow 推进到 Gate 3，不通过则 Rollback。
 	if rolloutStore != nil {
-		shadowExec := analysis.NewShadowExecutor(
+		shadowExec, err := analysis.NewShadowExecutor(
 			sb.Store.DB(),
 			sb.Router,
 			repo.NewSQLiteMockResponseCache(sb.Store.DB()),
 			evalStore,
 			rolloutStore,
 		)
-		concurrent.SafeGo(ctx, "shadow-executor-replay", func(ctx context.Context) {
-			// 5 分钟周期，与 boot_knowledge.go corpus-stats-flush 同量级；ADR-0025 §K
-			// 认定"分钟级延迟"对离线质量回归验证可接受，非实时链路无需更短周期。
-			ticker := time.NewTicker(5 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					versions, err := rolloutStore.ListPendingShadow(ctx)
-					if err != nil {
-						slog.Warn("shadow_executor: list pending shadow failed", "err", err)
-						continue
-					}
-					for _, v := range versions {
-						systemPromptOverride, opts := resolveShadowCandidateOpts(ctx, versionStore, v)
-						if err := shadowExec.RunReplayBatch(ctx, v, systemPromptOverride, opts); err != nil {
-							slog.Warn("shadow_executor: replay batch failed", "version", v, "err", err)
+		if err != nil {
+			slog.Error("boot: init ShadowExecutor failed, shadow replay skipped", "err", err)
+		} else {
+			concurrent.SafeGo(ctx, "shadow-executor-replay", func(ctx context.Context) {
+				// 5 分钟周期，与 boot_knowledge.go corpus-stats-flush 同量级；ADR-0025 §K
+				// 认定"分钟级延迟"对离线质量回归验证可接受，非实时链路无需更短周期。
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						versions, err := rolloutStore.ListPendingShadow(ctx)
+						if err != nil {
+							slog.Warn("shadow_executor: list pending shadow failed", "err", err)
+							continue
+						}
+						for _, v := range versions {
+							systemPromptOverride, opts := resolveShadowCandidateOpts(ctx, versionStore, v)
+							if err := shadowExec.RunReplayBatch(ctx, v, systemPromptOverride, opts); err != nil {
+								slog.Warn("shadow_executor: replay batch failed", "version", v, "err", err)
+							}
 						}
 					}
 				}
-			}
-		})
-		slog.Info("polaris: ShadowExecutor periodic replay trigger started (5min interval)")
+			})
+			slog.Info("polaris: ShadowExecutor periodic replay trigger started (5min interval)")
+		}
 	}
 
 	if sb.ResourceGov != nil && sb.AutoConf != nil && tb.ConsolidationPipeline != nil && tb.ForgettingManager != nil {

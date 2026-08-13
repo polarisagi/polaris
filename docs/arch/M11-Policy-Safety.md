@@ -620,3 +620,12 @@ M11 故障默认 fail-closed (拒绝执行)，保障安全。与 OSMemoryGuard �
 > 2026-08-12 追记：GR-2-004 取证确认此为 bug，修复见 safe_dialer_capability.go TaintEgressCheck。
 
 2026-08-12 追记：经核对 gate_builtin_rules.go，“网络操作”对应的 permit 规则确实同时检查了 trust_level >= 3、approval_status == approved、capability_token_valid 三个条件。
+
+## 15. ContextRefExpander 任意文件读漏洞（GR-9-002）修复
+
+- **漏洞点**：`contextref.go` 引用展开功能未校验工作目录边界，允许 `@file:///etc/passwd` 等绝对路径及 `../../` 路径穿越读取任意文件。
+- **修复**：
+  1. `e.workDir == ""` 时 fail-closed 返回 `CodeForbidden`。
+  2. `filepath.Abs(filepath.Clean(e.workDir))` 与 `filepath.EvalSymlinks` 联合使用，确保物理路径解析一致性，防止符号链接穿越。
+  3. `strings.HasPrefix(abs, root+string(filepath.Separator))` 校验，断言目标路径必须在工作区根目录下。
+  4. 对命中 `isSensitivePath` 的情况，拒绝错误码从 `CodeInternal` 修正为更准确的 `CodeForbidden`。

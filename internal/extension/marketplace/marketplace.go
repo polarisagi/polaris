@@ -31,20 +31,19 @@ type MCPMarketplaceClient struct {
 }
 
 // NewMCPMarketplaceClient 创建市场客户端。
-// httpClient 必须是经 SafeDialer 包装的客户端（来自 network.NewSafeHTTPClient）；
-// 传 nil 时降级为裸 http.Client（仅测试场景允许）。
-func NewMCPMarketplaceClient(registryURL, baseInstallDir string, httpClient network.SafeHTTPClient) *MCPMarketplaceClient {
+// httpClient 必须是经 SafeDialer 包装的客户端（来自 network.NewSafeHTTPClient）。
+func NewMCPMarketplaceClient(registryURL, baseInstallDir string, httpClient network.SafeHTTPClient) (*MCPMarketplaceClient, error) {
 	if registryURL == "" {
 		registryURL = "https://registry.modelcontextprotocol.io/v0.1"
 	}
-	if !httpClient.IsSafe() {
-		panic("marketplace: httpClient must be a valid network.SafeHTTPClient")
+	if httpClient == nil || !httpClient.IsSafe() {
+		return nil, apperr.New(apperr.CodeInvalidInput, "marketplace: httpClient 必须是经 SafeDialer 包装的 SafeHTTPClient")
 	}
 	return &MCPMarketplaceClient{
 		httpClient:     httpClient,
 		registryURL:    registryURL,
 		baseInstallDir: baseInstallDir,
-	}
+	}, nil
 }
 
 // mcpRegistryResponse 对应 registry.modelcontextprotocol.io /v0.1/servers 响应体。

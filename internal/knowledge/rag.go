@@ -138,6 +138,6 @@ type SubQuery struct {
 type KnowledgeBaseSearchRequest struct {
 	Query    string
 	TopK     int
-	DocScope string // 限定检索范围（docID），"" 表示全局
-	TaintMax int    // 最高允许的 TaintLevel
+	DocScope string           // 限定检索范围（docID），"" 表示全局
+	TaintMax types.TaintLevel // 最高允许的 TaintLevel
 }

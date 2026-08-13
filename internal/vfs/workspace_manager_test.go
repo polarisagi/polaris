@@ -243,3 +243,31 @@ func TestWorkspaceManager_WithQuota_QuotaExhaustedDoesNotCallFn(t *testing.T) {
 		t.Error("配额超限时不应调用 fn")
 	}
 }
+
+func TestWorkspaceManager_StageEphemeralFile_Security(t *testing.T) {
+	wm := &WorkspaceManager{rootDir: t.TempDir()}
+
+	tests := []struct {
+		name     string
+		filename string
+		wantErr  bool
+	}{
+		{"valid filename", "script.py", false},
+		{"empty filename", "", true},
+		{"dot filename", ".", true},
+		{"dotdot filename", "..", true},
+		{"path traversal filename", "../script.py", false}, // it gets sanitized to script.py! wait, is that true?
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, cleanup, err := wm.StageEphemeralFile("ns", tt.filename, []byte("test"))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("StageEphemeralFile() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil {
+				cleanup()
+			}
+		})
+	}
+}

@@ -49,8 +49,13 @@ func (wm *WorkspaceManager) StageEphemeralFile(namespace, filename string, data 
 		safeNS = "default"
 	}
 
+	safeName := filepath.Base(filepath.Clean(filename))
+	if safeName == "" || safeName == "." || safeName == ".." || safeName == string(filepath.Separator) {
+		return "", nil, apperr.New(apperr.CodeForbidden, "vfs: invalid filename for ephemeral file")
+	}
+
 	size := int64(len(data))
-	full := filepath.Join(wm.rootDir, ephemeralScriptsSubdir, safeNS, filename)
+	full := filepath.Join(wm.rootDir, ephemeralScriptsSubdir, safeNS, safeName)
 
 	// 阶段03 R-07：CheckQuota/ReleaseQuota 裸配对改用 WithQuota 闭包收敛。
 	// fn 返回 error 时 WithQuota 自动归还预占份额；返回 nil（写入成功）时
