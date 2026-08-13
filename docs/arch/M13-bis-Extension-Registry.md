@@ -1,7 +1,7 @@
 # 模块 13-bis: Extension Registry
 
 > 扩展系统的市场、安装、路由三层模型。覆盖 MCP（Model Context Protocol，模型上下文协议） / Skill / Plugin / App / Automation / Agent 六类扩展。[HE-Rule-3] [HE-Rule-6]
-<!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:79 技能执行模式 / 4:105 工具懒加载 / 5:134 安装流 / 6:230 信任门控 / 7:277 文件系统 / 8:308 调用路由 / 9:347 自动化 / 10:425 跨代理协作 / 11:451 学习技能归并 / 12:465 表引用 -->
+<!-- §跳读: 0:8 职责边界 / 1:22 能力分层 / 2:41 扩展类型 / 3:78 技能执行模式 / 4:104 工具懒加载 / 5:133 安装流 / 6:229 信任门控 / 7:276 文件系统 / 8:307 调用路由 / 9:346 自动化 / 10:424 跨代理协作 / 11:450 学习技能归并 / 12:464 表引用 -->
 
 ---
 
@@ -69,8 +69,7 @@ Polaris 原生格式（`SKILL.md` / `plugin.json`）由 `internal/extension/mark
 | origin | 含义 | trust_tier 默认值 |
 |--------|------|-----------------|
 | `builtin` | 程序内嵌生存工具（bash, search_extension, install_extension） | 4 TrustSystem |
-| `official` | 官方市场推荐包（**计划态**，待 DDL 展建后生效） | 3 TrustOfficial |
-| `marketplace` | 第三方社区市场 | 继承 extension_catalog |
+| `marketplace` | 第三方社区市场（官方市场包由 `origin='marketplace'` + `trust_tier=3` 表达，不存在 `origin='official'`） | 继承 extension_catalog |
 | `user` | 用户手动创建/配置 | 1 TrustLocal |
 | `learned` | M9 自演化 promote | 1 TrustLocal |
 

@@ -45,6 +45,7 @@ var beginRe = regexp.MustCompile(`^<!-- BEGIN GENERATED: (\S+) · 源: .* -->\s*
 // 不含首尾空行、不含标记行。
 var generators = map[string]func() (string, error){
 	"m13-route-inventory": genM13RouteInventory,
+	"arch-index-table": genArchIndexTable,
 }
 
 func main() {
@@ -248,5 +249,67 @@ func genM13RouteInventory() (string, error) {
 	fmt.Fprintf(&b, "\n共 %d 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，"+
 		"不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——"+
 		"手写罗列携带跨小节引用与语义分组，不由本表自动替换。\n", len(routes))
+	return b.String(), nil
+}
+
+// genArchIndexTable 自动计算 docs/arch 下文档的 est_tok（bytes/2.2）并生成表格
+func genArchIndexTable() (string, error) {
+	// 换算口径：中文为主的 md 约 bytes / 2.2 ≈ token
+	const bytesPerToken = 2.2
+
+	type docEntry struct {
+		file string
+		domain string
+		desc string
+		path string
+		tok int
+	}
+	
+	entries := []docEntry{
+		{"`spec/state.yaml`", "SSoT（Single Source of Truth，唯一权威源） 规约", "状态机 + 全模块阈值（唯一权威）", "docs/arch/spec/state.yaml", 0},
+		{"`M11-Policy-Safety.md`", "L0 策略", "五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard", "docs/arch/M11-Policy-Safety.md", 0},
+		{"`M07-Tool-Action-Layer.md`", "L1 工具", "见下方 [M07 补充](#m07-补充)", "docs/arch/M07-Tool-Action-Layer.md", 0},
+		{"`M02-Storage-Fabric.md`", "L0 存储", "三轴存储、EventLog、MutationBus、Outbox、SchemaManager", "docs/arch/M02-Storage-Fabric.md", 0},
+		{"`M05-Memory-System.md`", "L1 记忆", "四层记忆、PromptBuilder、HybridRetriever、Consolidation", "docs/arch/M05-Memory-System.md", 0},
+		{"`ARCHITECTURE.md`", "总览", "见下方 [ARCHITECTURE 补充](#architecture-补充)", "docs/arch/ARCHITECTURE.md", 0},
+		{"`M04-Agent-Kernel.md`", "L1 内核", "状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga", "docs/arch/M04-Agent-Kernel.md", 0},
+		{"`M13-Interface-Scheduler.md`", "L3 接口", "见下方 [M13 补充](#m13-补充)", "docs/arch/M13-Interface-Scheduler.md", 0},
+		{"`M13-bis-Extension-Registry.md`", "L3 扩展", "见下方 [M13-bis 补充](#m13-bis-补充)", "docs/arch/M13-bis-Extension-Registry.md", 0},
+		{"`M10-Knowledge-RAG.md`", "L2 知识", "文档树、6 阶段摄入、GraphRAG、IncrementalIndexer", "docs/arch/M10-Knowledge-RAG.md", 0},
+		{"`M09-Self-Improvement-Engine.md`", "L2 自演化", "五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum", "docs/arch/M09-Self-Improvement-Engine.md", 0},
+		{"`M06-Skill-Library.md`", "L1 技能", "技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索", "docs/arch/M06-Skill-Library.md", 0},
+		{"`M03-Observability.md`", "L0 可观测", "OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig", "docs/arch/M03-Observability.md", 0},
+		{"`00-Global-Dictionary.md`", "字典", "全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理", "docs/arch/00-Global-Dictionary.md", 0},
+		{"`M01-Inference-Runtime.md`", "L0 推理", "Provider Router、Model Pool、CircuitBreaker、SemanticCache", "docs/arch/M01-Inference-Runtime.md", 0},
+		{"`M08-Multi-Agent-Orchestrator.md`", "L2 协同", "Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式", "docs/arch/M08-Multi-Agent-Orchestrator.md", 0},
+		{"`M12-Eval-Harness.md`", "L3 评测", "EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控", "docs/arch/M12-Eval-Harness.md", 0},
+		{"`ROADMAP.md`", "路线", "时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载）", "docs/arch/ROADMAP.md", 0},
+		{"`DIAGRAMS.md`", "图谱", "时序图（**人类参考**，AI 默认不加载）", "docs/arch/DIAGRAMS.md", 0},
+		{"`Module-Dependency-Axioms.md`", "依赖公理", "包间依赖方向、防循环依赖底线、领域模型正交性", "docs/arch/Module-Dependency-Axioms.md", 0},
+	}
+	
+	for i := range entries {
+		st, err := os.Stat(entries[i].path)
+		if err == nil {
+			size := st.Size()
+			// round to K
+			tok := int(float64(size) / bytesPerToken / 1000.0)
+            if float64(size)/bytesPerToken/1000.0 - float64(tok) > 0.0 {
+                tok++
+            }
+			entries[i].tok = tok
+		}
+	}
+	
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].tok > entries[j].tok
+	})
+	
+	var b strings.Builder
+	b.WriteString("| 文件 | 域 | est_tok | 内容摘要 |\n")
+	b.WriteString("|------|----|---------|----------|\n")
+	for _, e := range entries {
+		fmt.Fprintf(&b, "| %s | %s | %dK | %s |\n", e.file, e.domain, e.tok, e.desc)
+	}
 	return b.String(), nil
 }
