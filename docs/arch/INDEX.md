@@ -89,28 +89,30 @@
 
 ## §1 文档清单（按 token 量降序）
 
+<!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 52K | 状态机 + 全模块阈值（唯一权威） |
-| `M11-Policy-Safety.md` | L0 策略 | 41K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
-| `M07-Tool-Action-Layer.md` | L1 工具 | 38K | 见下方 [M07 补充](#m07-补充) |
-| `M02-Storage-Fabric.md` | L0 存储 | 16K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
-| `M05-Memory-System.md` | L1 记忆 | 31K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
-| `ARCHITECTURE.md` | 总览 | 10K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
+| `M13-Interface-Scheduler.md` | L3 接口 | 35K | 见下方 [M13 补充](#m13-补充) |
+| `M07-Tool-Action-Layer.md` | L1 工具 | 32K | 见下方 [M07 补充](#m07-补充) |
+| `M05-Memory-System.md` | L1 记忆 | 27K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
+| `M11-Policy-Safety.md` | L0 策略 | 26K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
+| `00-Global-Dictionary.md` | 字典 | 24K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
+| `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 22K | 状态机 + 全模块阈值（唯一权威） |
 | `M04-Agent-Kernel.md` | L1 内核 | 21K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
-| `M13-Interface-Scheduler.md` | L3 接口 | 28K | 见下方 [M13 补充](#m13-补充) |
-| `M13-bis-Extension-Registry.md` | L3 扩展 | 5K | 见下方 [M13-bis 补充](#m13-bis-补充) |
-| `M10-Knowledge-RAG.md` | L2 知识 | 25K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
-| `M09-Self-Improvement-Engine.md` | L2 自演化 | 25K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
-| `M06-Skill-Library.md` | L1 技能 | 23K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
-| `M03-Observability.md` | L0 可观测 | 22K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
-| `00-Global-Dictionary.md` | 字典 | 23K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
-| `M01-Inference-Runtime.md` | L0 推理 | 19K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
-| `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 17K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
-| `M12-Eval-Harness.md` | L3 评测 | 17K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |
-| `ROADMAP.md` | 路线 | 7K | 时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载） |
-| `DIAGRAMS.md` | 图谱 | 14K | 时序图（**人类参考**，AI 默认不加载） |
-| `Module-Dependency-Axioms.md` | 依赖公理 | 5K | 包间依赖方向、防循环依赖底线、领域模型正交性 |
+| `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 20K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
+| `M09-Self-Improvement-Engine.md` | L2 自演化 | 18K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
+| `M02-Storage-Fabric.md` | L0 存储 | 17K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |
+| `M10-Knowledge-RAG.md` | L2 知识 | 16K | 文档树、6 阶段摄入、GraphRAG、IncrementalIndexer |
+| `M13-bis-Extension-Registry.md` | L3 扩展 | 16K | 见下方 [M13-bis 补充](#m13-bis-补充) |
+| `M01-Inference-Runtime.md` | L0 推理 | 16K | Provider Router、Model Pool、CircuitBreaker、SemanticCache |
+| `M06-Skill-Library.md` | L1 技能 | 15K | 技能三件套、Logic Collapse（Python+ContainerSandbox）、三级检索 |
+| `M03-Observability.md` | L0 可观测 | 13K | OTel（OpenTelemetry）、TokenBurnRate（CANONICAL）、SurpriseIndex 基础、AutoConfig |
+| `M12-Eval-Harness.md` | L3 评测 | 12K | EvalCase、五层 Evaluator、TrajectoryReplayer、CI 门控 |
+| `ARCHITECTURE.md` | 总览 | 10K | 见下方 [ARCHITECTURE 补充](#architecture-补充) |
+| `ROADMAP.md` | 路线 | 8K | 时间敏感项 / 工程现状 / 未完成研究方向 / 工程纪律 / 拒绝清单（**人类参考**，AI 默认不加载） |
+| `DIAGRAMS.md` | 图谱 | 6K | 时序图（**人类参考**，AI 默认不加载） |
+| `Module-Dependency-Axioms.md` | 依赖公理 | 4K | 包间依赖方向、防循环依赖底线、领域模型正交性 |
+<!-- END GENERATED: arch-index-table -->
 
 #### M07 补充
 MCP（Model Context Protocol，模型上下文协议）/A2A（Agent-to-Agent，智能体间通信）、Rust 沙箱三级分级、Capability Token、Workspace Bridge。

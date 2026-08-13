@@ -201,7 +201,7 @@ DDL 权威定义见 `internal/protocol/schema/007_tasks.sql`。以下为文档�
 | `pipeline_id` / `pipeline_stage` | TEXT (nullable) | 流水线阶段 handoff 字段（M08 §5 Pipeline Protocol）：所属流水线实例 ID / 阶段名称（research/plan/execute/verify） |
 | `context_payload` | TEXT (nullable) | 前序阶段结构化产出（JSON），Agent S_PERCEIVE 优先读取 |
 | `namespace` | TEXT (nullable) | 协同任务共享记忆命名空间（GD-14-001），同一 namespace 下多个 Worker Agent 可互相检索 episodic 记忆片段 |
-| `spawn_depth` | INTEGER DEFAULT 0 | 子任务嵌套深度（ADR-0084 补齐），防止嵌套调用无限展开 |
+| `spawn_depth` | INTEGER DEFAULT 0 | `TaskEntry.SpawnDepth` 持久化落点，`transfer_to_agent` 委派深度限制，`ADR-0084` 引入 |
 | `trace_id` / `span_id` | TEXT (nullable) | 分布式追踪标识，关联 OTel Span |
 | `tokens_input` / `tokens_output` / `tokens_cache_read` | INTEGER DEFAULT 0 | 本任务累计 LLM 输入/输出/缓存命中 token 数（per-task observability，HE-Rule-1） |
 | `cost_usd` | REAL DEFAULT 0.0 | 本任务估算费用 |
@@ -431,7 +431,7 @@ Outbox Worker 与 MutationBus 写路径共用 writer 连接，由单写者串行
 | M11 Policy Safety | CredentialVault 为前置屏障（StorageFabric.Open() 须在 Init() 之后） | M11 §5.2 |
 | 接口定义 | Store/Transaction/Iterator/MutationIntent/DatabaseWriter | internal/protocol/interfaces_store.go, internal/store/ |
 | 全局字典 | HE-Rule-6 State-in-DB、EventLog/MutationBus/Idempotency-Key 定义 | 00-Global-Dictionary §6 |
-| DDL | 全部 DDL（001_events 至 038_idempotent_cache，共 35 份，权威目录 `internal/protocol/schema/`） | internal/protocol/schema/ |
+| DDL | 全部 DDL（001_events 至 038_idempotent_cache，共 35 份（025~027 为刻意预留跳号），权威目录 `internal/protocol/schema/`） | internal/protocol/schema/ |
 | DDL 约束 (entities 表) | `UNIQUE(name, type)` 约束位于 `004_semantic_memory.sql`，支持 GraphWriter OpUpsert 的幂等 ON CONFLICT 语义（M10 §2.7） | internal/protocol/schema/004_semantic_memory.sql |
 | tasks 表新增列 | `pii_vault_blob TEXT`（nullable）—— SessionPIIVault.SuspendSnapshot 落盘字段（M11 §5.1）; `suspend_reason TEXT`（nullable）—— 区分 hitl / provider_exhausted / killswitch; `provider_suspended_count INTEGER DEFAULT 0` | M4 §8, M11 §5.1 |
 | 时序图 | EventLog 写入与崩溃恢复全流程 | DIAGRAMS.md#eventlog |

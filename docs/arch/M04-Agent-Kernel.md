@@ -43,7 +43,7 @@ System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath�
 
 ## 1. 状态机
 
-状态枚举权威定义见 `pkg/types/enums_agent.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Complete/Failed)。`[HE-Rule-5]` LLM 填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)。
+状态枚举权威定义见 `pkg/types/enums_agent.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed)。`[HE-Rule-5]` LLM 填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)。
 
 `ReflectionModel` 结构：`{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后，若 `Learnings` 非空，逐条写入 episodic memory（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断状态流转至 S_COMPLETE。
 
@@ -441,7 +441,7 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 | M4→M11 | TaintGate / PolicyGate / KillSwitch | 查阅，仅响应不主动触发。M11 §2, §4 |
 | M4→M11 | SessionPIIVault | Suspend 时落 pii_vault_blob；Restore/SecureZero 跟随 FSM 终态。M11 §5.1 |
 | M8→M4 | Blackboard.CAS Claim / LeaseHeartbeat | 多 Agent 调度入口。M8 §1 |
-| Schema | AgentState 枚举、DDL（Data Definition Language，数据定义语言） 001_events / 003_episodic_memory / 007_tasks（含 pii_vault_blob / suspend_reason / provider_suspended_count）| `internal/protocol/types.go`, `internal/protocol/schema/` |
+| Schema | AgentState 枚举、DDL（Data Definition Language，数据定义语言） 001_events / 003_episodic_memory / 007_tasks（含 pii_vault_blob / suspend_reason / provider_suspended_count）| `pkg/types/enums_agent.go`, `internal/protocol/schema/` |
 | 全局字典 | HE-Rule-5 状态机控制流、XR-01 | 00-Global-Dictionary §1-bis, §1-ter |
 | 时序图 | EventLog 回放、KillSwitch 响应链 | DIAGRAMS.md#eventlog, #killswitch |
 
