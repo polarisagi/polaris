@@ -177,3 +177,5 @@ func evaluateInstrumentInitErrs(ie *instrumentInitErrs) (degraded bool, fatal er
 	}
 	return degraded, fatal
 }
+
+var InstrRAGTaintDrops metric.Int64Counter

@@ -1,6 +1,10 @@
 package authcontext
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +58,7 @@ func TestContextRefExpander_ResolveFile_Security(t *testing.T) {
 	// 5. Sensitive path
 	sensitivePath := "/etc/passwd"
 	_, _, err = expander.resolveFile(context.Background(), sensitivePath)
+	//nolint:staticcheck
 	if err == nil || !strings.Contains(err.Error(), "路径穿越") { // Actually, this will hit path traversal first if not in /etc workdir
 		// If we set workDir to /etc, it will hit sensitive path
 	}

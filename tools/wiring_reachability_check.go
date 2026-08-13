@@ -18,7 +18,7 @@ func main() {
 	cmd.Stderr = &out
 	err := cmd.Run()
 	output := out.String()
-	
+
 	if err != nil && !strings.Contains(output, "unreachable") && !strings.Contains(output, "deadcode:") {
 		// If it's a compile error, we just print it and fail
 		fmt.Fprintf(os.Stderr, "deadcode failed: %v\n%s\n", err, output)
@@ -39,19 +39,19 @@ func main() {
 	}
 
 	hasError := false
-	
+
 	lines := strings.Split(output, "\n")
-	// deadcode output format: 
+	// deadcode output format:
 	// path/to/file.go:line:col: unreachable func: FuncName
-	
+
 	funcRe := regexp.MustCompile(`^(.*internal/.*\.go):\d+:\d+:\s*(?:unreachable func:\s*([A-Z]\w*)|.*)$`)
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		
+
 		if !strings.Contains(line, "internal/") {
 			continue
 		}
@@ -69,12 +69,12 @@ func main() {
 		}
 
 		funcName := m[2]
-		
+
 		// Only care about exported functions
 		if !isExported(funcName) {
 			continue
 		}
-		
+
 		matchKey := fmt.Sprintf("%s:%s", filePath, funcName)
 		if allowlistMap[matchKey] || allowlistMap[filePath] {
 			continue

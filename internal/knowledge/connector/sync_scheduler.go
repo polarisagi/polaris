@@ -105,7 +105,8 @@ func (s *SyncScheduler) Start(ctx context.Context) error {
 
 		case ev, ok := <-events:
 			if !ok {
-				return nil
+				events = nil
+				continue
 			}
 			s.mu.Lock()
 			s.pending[ev.Ref.URI] = &pendingEvent{

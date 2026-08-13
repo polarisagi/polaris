@@ -122,6 +122,7 @@ func (p *PlannerPool) Run(ctx context.Context) {
 	}
 }
 
+//nolint:gocyclo
 func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultChan chan<- workerResult) {
 	if p.provider == nil {
 		return
@@ -183,6 +184,7 @@ func (p *PlannerPool) workerEngineA(ctx context.Context, workerID int, resultCha
 
 	var compileScore = 0.0
 
+	//nolint:nestif
 	if p.sandbox != nil {
 		// NOTE: p.sandbox.Execute 同时传了 ctx 与 timeout 参数。若内部忽略传入的 ctx，则此处的 ctx.Err 检查只能挡住「发起前取消」。
 		_, buildErr := p.sandbox.Execute(buildCtx, "go", []string{"build", tmpDir}, wd, 30*time.Second)

@@ -1,0 +1,7 @@
+package test
+
+import "regexp"
+
+func do() {
+	regexp.MustCompile(`(?s).*`)
+}

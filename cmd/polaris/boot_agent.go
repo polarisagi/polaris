@@ -874,6 +874,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// local_playground 会话记录），Gate 2 对 GEPA 候选完全不构成门禁。现周期性
 	// 发现 rollout_states 中停留在 Gate 2 的候选，回放历史流量并对比评分，
 	// 通过则调用 ConfirmShadow 推进到 Gate 3，不通过则 Rollback。
+	//nolint:nestif
 	if rolloutStore != nil {
 		shadowExec, err := analysis.NewShadowExecutor(
 			sb.Store.DB(),

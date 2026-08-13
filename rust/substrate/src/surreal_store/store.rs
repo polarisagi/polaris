@@ -5,7 +5,7 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::sync::{Arc, RwLock};
 
-use super::{SURREAL_ERR_UTF8, STORE, SURREAL_ERR_PANIC, SURREAL_OK, SurrealStore, WORKER_THREADS};
+use super::{STORE, SURREAL_ERR_PANIC, SURREAL_ERR_UTF8, SURREAL_OK, SurrealStore, WORKER_THREADS};
 
 use std::sync::atomic::Ordering;
 

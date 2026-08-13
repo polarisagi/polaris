@@ -4,9 +4,9 @@ use std::os::raw::{c_char, c_int};
 use std::panic;
 use std::slice;
 
-use super::{SURREAL_ERR_UTF8, 
-    KvRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_NOT_FOUND, SURREAL_OK,
-    VRow, bytes_to_hex, get_store, hex_to_bytes, write_cstr,
+use super::{
+    KvRow, SURREAL_ERR_LOCK, SURREAL_ERR_PANIC, SURREAL_ERR_QUERY, SURREAL_ERR_UTF8,
+    SURREAL_NOT_FOUND, SURREAL_OK, VRow, bytes_to_hex, get_store, hex_to_bytes, write_cstr,
 };
 
 // ─── surreal_kv_get ───────────────────────────────────────────────────────────

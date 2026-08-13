@@ -1,0 +1,10 @@
+internal/extension/mcp/mcp_manager.go:NewMCPManager
+internal/ffi/llama.go:LlamaEmbed
+internal/ffi/llama.go:LlamaRerank
+internal/security/taint/taint_sanitizer.go:SanitizeByDeterministicTransform
+internal/sysmgr/updater/signer.go:SignChecksumFile
+internal/sysmgr/updater/signer.go:ParseECDSAPrivateKeyPEM
+internal/sysmgr/updater/signer.go:PublicKeyPEMFromPrivate
+internal/sysmgr/updater/signing_state.go:ResolveSigningState
+internal/sysmgr/updater/signing_state.go:ResolveSigningStateFromTrustStore
+internal/vfs/workspace_manager.go:NewWorkspaceManager

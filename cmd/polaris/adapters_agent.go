@@ -155,7 +155,7 @@ func (a *knowledgeAdapter) Search(ctx context.Context, q string, depth int) ([]a
 	req := knowledgepkg.KnowledgeBaseSearchRequest{
 		Query:    q,
 		TopK:     topK,
-		TaintMax: int(types.TaintHigh),
+		TaintMax: types.TaintHigh,
 	}
 	res, err := a.kb.Search(ctx, req)
 	if err != nil {

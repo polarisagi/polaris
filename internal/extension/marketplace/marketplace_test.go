@@ -276,7 +276,7 @@ func TestMCPMarketplaceClient_Install_ChecksumVerification(t *testing.T) {
 }
 
 func TestNewMCPMarketplaceClient_Nil(t *testing.T) {
-	_, err := NewMCPMarketplaceClient("", "", nil)
+	_, err := NewMCPMarketplaceClient("", "", network.SafeHTTPClient{})
 	if err == nil {
 		t.Fatal("expected error for nil client")
 	}

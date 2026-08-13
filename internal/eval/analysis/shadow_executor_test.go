@@ -368,7 +368,7 @@ func TestShadowExecutor_ScoreShadow_SchemaValidation(t *testing.T) {
 }
 
 func TestNewShadowExecutor_NilProvider(t *testing.T) {
-	_, err := NewShadowExecutor(&mockDB{}, nil, &mockCache{}, nil, &mockStaging{})
+	_, err := NewShadowExecutor(nil, nil, &mockCache{}, nil, &mockStaging{})
 	if err == nil {
 		t.Fatal("expected error when provider is nil")
 	}

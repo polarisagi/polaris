@@ -36,7 +36,7 @@ func NewMCPMarketplaceClient(registryURL, baseInstallDir string, httpClient netw
 	if registryURL == "" {
 		registryURL = "https://registry.modelcontextprotocol.io/v0.1"
 	}
-	if httpClient == nil || !httpClient.IsSafe() {
+	if !httpClient.IsSafe() {
 		return nil, apperr.New(apperr.CodeInvalidInput, "marketplace: httpClient 必须是经 SafeDialer 包装的 SafeHTTPClient")
 	}
 	return &MCPMarketplaceClient{

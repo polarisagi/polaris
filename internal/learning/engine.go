@@ -233,7 +233,8 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 		// 内环：任务完成事件 → Reflexion（失败）或 HeuristicsWriter（成功）
 		case ev, ok := <-e.taskEvents:
 			if !ok {
-				return nil
+				e.taskEvents = nil
+				continue
 			}
 			if ev.Seq > 0 && ev.Seq <= cursors["task"] {
 				continue // 幂等跳过
@@ -300,7 +301,8 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 		// 外环：版本变更 → Rollout 门控推进
 		case ev, ok := <-e.versionEvents:
 			if !ok {
-				return nil
+				e.versionEvents = nil
+				continue
 			}
 			if ev.Seq > 0 && ev.Seq <= cursors["version"] {
 				continue

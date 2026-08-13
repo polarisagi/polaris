@@ -6,6 +6,7 @@
 // 利用 AST 检查文件中的真实声明。防止重现 CodeActResult.Output 退化为裸 []byte 导致污点丢失（A-4）。
 //
 // 使用：
+//
 //	go run tools/taint_typed_fields_check.go
 package main
 
@@ -218,7 +219,7 @@ func checkAssignDenylist(fset *token.FileSet) {
 			continue
 		}
 		filePath, funcName, desc := parts[0], parts[1], parts[2]
-		
+
 		node, err := parser.ParseFile(fset, filePath, nil, 0)
 		if err != nil {
 			continue
@@ -229,16 +230,20 @@ func checkAssignDenylist(fset *token.FileSet) {
 			if !ok || fn.Body == nil {
 				return true
 			}
-			
+
 			if filePath == "internal/agent/context/memory_context.go" && funcName == "WriteUserData" {
 				ast.Inspect(fn.Body, func(bn ast.Node) bool {
 					call, ok := bn.(*ast.CallExpr)
-					if !ok { return true }
+					if !ok {
+						return true
+					}
 					sel, ok := call.Fun.(*ast.SelectorExpr)
 					if ok && sel.Sel.Name == "WriteUserData" {
 						ast.Inspect(call, func(cn ast.Node) bool {
 							kv, ok := cn.(*ast.KeyValueExpr)
-							if !ok { return true }
+							if !ok {
+								return true
+							}
 							keyIdent, ok := kv.Key.(*ast.Ident)
 							if ok && keyIdent.Name == "OriginTaintLevel" {
 								if _, isSel := kv.Value.(*ast.SelectorExpr); isSel {
@@ -268,7 +273,7 @@ func checkAssignDenylist(fset *token.FileSet) {
 					}
 					return true
 				})
-				
+
 				if !hasTaintMax {
 					pos := fset.Position(fn.Pos())
 					key := fmt.Sprintf("%s:%d", filePath, pos.Line)
@@ -278,7 +283,7 @@ func checkAssignDenylist(fset *token.FileSet) {
 					}
 				}
 			}
-			
+
 			return true
 		})
 	}

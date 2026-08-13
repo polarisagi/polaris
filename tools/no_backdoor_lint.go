@@ -7,8 +7,8 @@
 // `if req.Tool.Capability >= types.CapPrivileged` 则只防特权工具，中等/写入工具无保护。
 //
 // 本工具扫描 internal/sandbox/envelope.go：
-//   1. 确认 Execute 函数体内调用了 RequiresCapabilityToken
-//   2. 确认该调用**未被包在** `Capability >= CapPrivileged` 或 `Capability == CapPrivileged` 条件块内
+//  1. 确认 Execute 函数体内调用了 RequiresCapabilityToken
+//  2. 确认该调用**未被包在** `Capability >= CapPrivileged` 或 `Capability == CapPrivileged` 条件块内
 //
 // 负向验证：将 RequiresCapabilityToken 改回 `>= CapPrivileged` 条件 → 本门控报红。
 package main

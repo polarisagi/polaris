@@ -229,7 +229,13 @@ pub unsafe extern "C" fn wasmtime_execute(
     out_json_len: *mut usize,
     out_err: *mut *mut c_char,
 ) -> c_int {
-    if wasm_bytes.is_null() || input_json.is_null() || workspace_dir.is_null() || out_json.is_null() || out_json_len.is_null() || out_err.is_null() {
+    if wasm_bytes.is_null()
+        || input_json.is_null()
+        || workspace_dir.is_null()
+        || out_json.is_null()
+        || out_json_len.is_null()
+        || out_err.is_null()
+    {
         return -1;
     }
     unsafe {

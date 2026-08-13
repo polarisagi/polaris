@@ -362,7 +362,7 @@ func (w *OutboxWorker) Process(ctx context.Context, record *OutboxRecord) error 
 	if record.CrashRecoveryCount >= 3 {
 		metrics.GlobalOutboxDeadLetterTotal.Add(1)
 		slog.Error("outbox message dead (poison pill)", "id", record.ID, "target", record.TargetEngine)
-		return fmt.Errorf("outbox_inv_03: poison pill")
+		return apperr.New(apperr.CodeInternal, "outbox_inv_03: poison pill")
 	}
 
 	if check, ok := w.versionCheck[record.TargetEngine]; ok && check != nil {

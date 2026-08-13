@@ -3,13 +3,15 @@
 // task_state_lint 检查 tasks 表的 CAS 状态转移 SQL 是否符合 inv_M8_03 状态机定义（F-5），以及 outbox_state_lint 检查。
 //
 // inv_M8_03 合法状态转移：
-//   pending  -> claimed
-//   claimed  -> running | failed
-//   running  -> done | failed
+//
+//	pending  -> claimed
+//	claimed  -> running | failed
+//	running  -> done | failed
 //
 // 违规：允许 claimed 直接跳到 done（绕过 running 导致认领超时乱序）。
 //
 // 使用：
+//
 //	go run tools/task_state_lint.go
 package main
 
@@ -200,4 +202,3 @@ func checkOutboxWorker(fset *token.FileSet) {
 		return true
 	})
 }
-

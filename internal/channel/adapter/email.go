@@ -92,7 +92,7 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 	}
 }
 
-func EmailSendMessage(smtpHost, smtpPort, address, password, to, subject, body string) error {
+func EmailSendMessage(ctx context.Context, dialer protocol.SafeDialer, smtpHost, smtpPort, address, password, to, subject, body string) error {
 	auth := smtp.PlainAuth("", address, password, smtpHost)
 	msg := []byte(
 		"From: " + address + "\r\n" +
@@ -102,10 +102,56 @@ func EmailSendMessage(smtpHost, smtpPort, address, password, to, subject, body s
 			"\r\n" +
 			body + "\r\n",
 	)
-	if err := smtp.SendMail(smtpHost+":"+smtpPort, auth, address, []string{to}, msg); err != nil {
-		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: SendMail 失败", err)
+	addr := smtpHost + ":" + smtpPort
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: SafeDialer DialContext 失败", err)
 	}
-	return nil
+
+	c, err := smtp.NewClient(conn, smtpHost)
+	if err != nil {
+		conn.Close()
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: smtp.NewClient 失败", err)
+	}
+	defer c.Close()
+
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		config := &tls.Config{ServerName: smtpHost}
+		if err = c.StartTLS(config); err != nil {
+			return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: StartTLS 失败", err)
+		}
+	}
+
+	if auth != nil {
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err = c.Auth(auth); err != nil {
+				return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Auth 失败", err)
+			}
+		}
+	}
+
+	if err = c.Mail(address); err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Mail 失败", err)
+	}
+	if err = c.Rcpt(to); err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Rcpt 失败", err)
+	}
+
+	w, err := c.Data()
+	if err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Data 失败", err)
+	}
+	_, err = w.Write(msg)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Write msg 失败", err)
+	}
+	err = w.Close()
+	if err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "email: Close body 失败", err)
+	}
+
+	//nolint:wrapcheck
+	return c.Quit()
 }
 
 // ─── 轻量 IMAP 客户端 ─────────────────────────────────────────────────────────
@@ -293,7 +339,8 @@ func (a *EmailAdapter) Send(ctx context.Context, host Host, cfg map[string]any, 
 		slog.Warn("email: smtp config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
 		return nil
 	}
-	if err := EmailSendMessage(smtpHost, smtpPort, address, password, msg.ChatID, "Re: [Polaris]", text); err != nil {
+	d := host.SafeDialer()
+	if err := EmailSendMessage(ctx, d, smtpHost, smtpPort, address, password, msg.ChatID, "Re: [Polaris]", text); err != nil {
 		slog.Error("email: send failed", "to", msg.ChatID, "err", err)
 		return apperr.Wrap(apperr.CodeInternal, "email: send failed", err)
 	}

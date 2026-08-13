@@ -246,7 +246,13 @@ pub unsafe extern "C" fn cedar_evaluate(
     out_reason_ptr: *mut *const u8,
     out_reason_len: *mut usize,
 ) -> c_int {
-    if principal_ptr.is_null() || action_ptr.is_null() || resource_ptr.is_null() || context_ptr.is_null() || out_reason_ptr.is_null() || out_reason_len.is_null() {
+    if principal_ptr.is_null()
+        || action_ptr.is_null()
+        || resource_ptr.is_null()
+        || context_ptr.is_null()
+        || out_reason_ptr.is_null()
+        || out_reason_len.is_null()
+    {
         return -1;
     }
     unsafe {

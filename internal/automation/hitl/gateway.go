@@ -359,3 +359,22 @@ func (g *GatewayImpl) Pending(ctx context.Context) ([]types.HITLPrompt, error) {
 
 // ChannelNotifier/NewChannelNotifier/SetDispatcher/Notify/BroadcastTainted
 // 见 gateway_notify.go（R7 拆分）。
+
+// RequestApproval 发起审批请求，阻塞等待直到获取结果或超时。用于工具内部调用。
+func (g *GatewayImpl) RequestApproval(ctx context.Context, action string, req map[string]any) error {
+	prompt := types.HITLPrompt{
+		ID:             fmt.Sprintf("%d", time.Now().UnixNano()),
+		AgentID:        "", // 暂留空，由调用方或外层补齐
+		CheckpointType: "tool_execution",
+		PromptText:     fmt.Sprintf("Request action: %s\nParams: %v", action, req),
+		RiskLevel:      int(types.RiskHigh),
+	}
+	resp, err := g.Prompt(ctx, prompt)
+	if err != nil {
+		return err
+	}
+	if !resp.Approved {
+		return apperr.New(apperr.CodeForbidden, "hitl: request rejected")
+	}
+	return nil
+}

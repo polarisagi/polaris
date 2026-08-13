@@ -62,7 +62,7 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check fail-closed-check chan-send-guard-check outbox-state-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check fail-closed-check chan-send-guard-check outbox-state-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
 
@@ -81,6 +81,34 @@ chan-send-guard-check:
 outbox-state-check:
 	@echo "=== [L-06] Outbox state gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/task_state_lint.go
+
+scheduler-status-check:
+	@echo "=== [L-07] Scheduler status filter gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/scheduler_status_filter_check.go
+
+ffi-null-guard-check:
+	@echo "=== [L-08] FFI NULL guard gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/ffi_null_guard_check.go
+
+lifecycle-reset-check:
+	@echo "=== [L-09] Lifecycle reset gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/lifecycle_reset_lint.go
+
+bounded-cache-check:
+	@echo "=== [L-10] Bounded cache gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/bounded_cache_check.go
+
+apperr-semantics-check:
+	@echo "=== [L-11] AppErr semantics gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/apperr_semantics_check.go
+
+regex-greedy-check:
+	@echo "=== [L-12] Regex greedy gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/regex_greedy_check.go
+
+wiring-check:
+	@echo "=== [L-13] Wiring reachability gate lint ==="
+	@env GOOS= GOARCH= $(GO) run tools/wiring_reachability_check.go
 
 # lint-selftest 是「门控的门控」：逐条注入违规样例，证明每条规则确实能报红。
 # 不并入 lint（它会临时改写工作区文件，不适合与并发的编辑同跑），只挂 check-all。
