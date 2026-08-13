@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -286,4 +287,9 @@ func RecordRetrievalLatency(ctx context.Context, stage string, ms int64) {
 	if InstrRetrievalLatencyMs != nil {
 		InstrRetrievalLatencyMs.Record(ctx, float64(ms), metric.WithAttributes(attribute.String("stage", stage)))
 	}
+}
+
+// RecordRetrievalRouteTimeout 记录检索单路超时
+func RecordRetrievalRouteTimeout(ctx context.Context, route string) {
+	slog.WarnContext(ctx, "retrieval route timeout", "route", route)
 }
