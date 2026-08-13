@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -374,5 +375,47 @@ func TestStateGraphExecutor_RejectsInvalidTopology(t *testing.T) {
 
 	if err := executor.Execute(ctx, "parent", spec); err == nil {
 		t.Fatal("expected topology error for graph with no entry node")
+	}
+}
+
+func TestStateGraphExecutor_DeadlockAndJoin(t *testing.T) {
+	bb := setupPatternBlackboard(t)
+	executor := NewStateGraphExecutor(bb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// X -> A (condition: v=1), X -> B (condition: v=2).
+	// A -> C (uncond), B -> C (uncond).
+	// X always outputs v=1. So A runs, B doesn't.
+	// C waits for A and B. Since B never runs, C deadlocks.
+	spec := protocol.WorkflowGraphSpec{
+		Nodes: []protocol.WorkflowNodeSpec{
+			{ID: "X", CapabilityType: "capX", IsEntry: true},
+			{ID: "A", CapabilityType: "capA"},
+			{ID: "B", CapabilityType: "capB"},
+			{ID: "C", CapabilityType: "capC"},
+		},
+		Edges: []protocol.WorkflowEdgeSpec{
+			{From: "X", To: "A", Condition: &protocol.EdgeCondition{Field: "v", Op: protocol.CondEquals, Value: "1"}},
+			{From: "X", To: "B", Condition: &protocol.EdgeCondition{Field: "v", Op: protocol.CondEquals, Value: "2"}},
+			{From: "A", To: "C"},
+			{From: "B", To: "C"},
+		},
+	}
+
+	runStateGraphMockWorkers(ctx, t, bb, func(capType string) []byte {
+		if capType == "capX" {
+			return []byte(`{"v":"1"}`)
+		}
+		return []byte(`{}`)
+	})
+
+	err := executor.Execute(ctx, "parent", spec)
+	if err == nil {
+		t.Fatal("expected deadlock error, got nil")
+	}
+	if !strings.Contains(err.Error(), "deadlocked") {
+		t.Fatalf("expected deadlocked error, got: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package automation
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -200,5 +201,84 @@ func TestSQLiteScheduler_Subscribe(t *testing.T) {
 		}
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("timeout waiting for event")
+	}
+}
+
+func TestSQLiteScheduler_InFlight(t *testing.T) {
+	store := newMockStore()
+	scheduler := NewSQLiteScheduler(store)
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	callCount := 0
+
+	dispatchFn := func(ctx context.Context, task *types.Task) error {
+		mu.Lock()
+		callCount++
+		mu.Unlock()
+		// simulate long running task
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	}
+
+	task := types.Task{ID: "task_inflight_1", MaxAttempts: 3}
+	scheduler.Submit(ctx, task)
+
+	// first scan triggers it
+	scheduler.scanAndDispatch(ctx, dispatchFn)
+
+	// immediately scan again before the dispatch completes
+	scheduler.scanAndDispatch(ctx, dispatchFn)
+
+	mu.Lock()
+	count := callCount
+	mu.Unlock()
+	if count != 1 {
+		t.Fatalf("expected 1 call, got %d", count)
+	}
+
+	// wait for it to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// verify completed status and attempts
+	val, _ := store.Get(ctx, []byte("scheduler:task:task_inflight_1"))
+	var st storedTask
+	json.Unmarshal(val, &st)
+	if st.Attempts != 1 {
+		t.Fatalf("expected Attempts=1, got %d", st.Attempts)
+	}
+	if st.Status != "completed" {
+		t.Fatalf("expected Status=completed, got %s", st.Status)
+	}
+
+	// now mock an orphan running task
+	stOrphan := storedTask{
+		Task:     types.Task{ID: "task_orphan_1", MaxAttempts: 3},
+		Status:   "running",
+		Attempts: 1,
+	}
+	valOrphan, _ := json.Marshal(stOrphan)
+	store.Put(ctx, []byte("scheduler:task:task_orphan_1"), valOrphan)
+
+	// scan should pick it up since it's not inFlight
+	scheduler.scanAndDispatch(ctx, dispatchFn)
+
+	// Wait for the async dispatch to run
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	countOrphan := callCount
+	mu.Unlock()
+	if countOrphan != 2 {
+		val, _ := store.Get(ctx, []byte("scheduler:task:task_orphan_1"))
+		t.Fatalf("expected 2 calls total, got %d. DB value: %s", countOrphan, string(val))
+	}
+
+	valOrphan2, _ := store.Get(ctx, []byte("scheduler:task:task_orphan_1"))
+	var stOrphan2 storedTask
+	json.Unmarshal(valOrphan2, &stOrphan2)
+	// Initial attempt was 1, picking up orphan triggers attempt++
+	if stOrphan2.Attempts != 2 {
+		t.Fatalf("expected orphan Attempts=2, got %d", stOrphan2.Attempts)
 	}
 }

@@ -145,8 +145,22 @@ func (se *StateGraphExecutor) Execute(ctx context.Context, parentTaskID string, 
 			}
 		}
 	}
+	if len(run.inFlight) == 0 && run.hasBlockedNodes() {
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("state graph deadlocked: 0 tasks in-flight but not all triggered nodes completed, nodeVisits=%v, arrivedPreds=%v", run.visits, run.arrivedPreds))
+	}
 
 	return nil
+}
+
+func (r *stateGraphRun) hasBlockedNodes() bool {
+	// 判断是否有因为 AND-Join 前驱未全部到达而卡住的节点
+	for node, required := range r.requiredPreds {
+		arrived := r.arrivedPreds[node]
+		if len(arrived) > 0 && len(arrived) < len(required) {
+			return true
+		}
+	}
+	return false
 }
 
 // postEntryNodes 投递所有入口节点：入度为 0，或被显式标记 IsEntry（参与循环
@@ -292,23 +306,33 @@ func (se *StateGraphExecutor) initializeStateGraph(spec *protocol.WorkflowGraphS
 	}
 
 	edgePairs := make([][2]string, 0, len(spec.Edges))
+	uncondEdges := make([][2]string, 0)
 	outEdges := make(map[string][]protocol.WorkflowEdgeSpec, len(spec.Nodes))
-	// requiredPreds：仅统计无条件（Condition==nil）且非自环（From!=To）的"硬依赖"边，
-	// 用于 AND-Join 记账（arriveJoin）。条件边/自环边不计入——它们表达路由分支或
-	// 重试循环，语义上是"任一满足即触发"，不是"依赖"。
+
+	// requiredPreds：仅统计无条件（Condition==nil）且非自环（From!=To）且非回边的"硬依赖"边
 	requiredPreds := make(map[string]map[string]bool, len(spec.Nodes))
+
+	for _, e := range spec.Edges {
+		if e.Condition == nil && e.From != e.To {
+			uncondEdges = append(uncondEdges, [2]string{e.From, e.To})
+		}
+	}
+	feedbacks := graph.FeedbackEdges(uncondEdges)
+
 	for _, e := range spec.Edges {
 		edgePairs = append(edgePairs, [2]string{e.From, e.To})
 		outEdges[e.From] = append(outEdges[e.From], e)
 		if e.Condition == nil && e.From != e.To {
-			if requiredPreds[e.To] == nil {
-				requiredPreds[e.To] = make(map[string]bool, 2)
+			if !feedbacks[[2]string{e.From, e.To}] {
+				if requiredPreds[e.To] == nil {
+					requiredPreds[e.To] = make(map[string]bool, 2)
+				}
+				requiredPreds[e.To][e.From] = true
 			}
-			requiredPreds[e.To][e.From] = true
 		}
 	}
 
-	if err := graph.ValidateStateGraphTopology(nodes, edgePairs, maxVisits, isEntry); err != nil {
+	if err := graph.ValidateStateGraphTopology(nodes, edgePairs, uncondEdges, maxVisits, isEntry); err != nil {
 		return nil, nil, nil, nil, apperr.Wrap(apperr.CodeInvalidInput, "invalid state graph topology", err)
 	}
 

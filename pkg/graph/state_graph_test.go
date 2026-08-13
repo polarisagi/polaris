@@ -13,7 +13,7 @@ func TestValidateStateGraphTopology_AllowsCycleWithExplicitEntry(t *testing.T) {
 	maxVisits := map[string]int{"executor": 3, "verifier": 3}
 	isEntry := map[string]bool{"executor": true}
 
-	if err := ValidateStateGraphTopology(nodes, edges, maxVisits, isEntry); err != nil {
+	if err := ValidateStateGraphTopology(nodes, edges, nil, maxVisits, isEntry); err != nil {
 		t.Fatalf("expected cycle with explicit entry + bounded MaxVisits to be accepted, got: %v", err)
 	}
 }
@@ -26,7 +26,7 @@ func TestValidateStateGraphTopology_RejectsNoEntryNode(t *testing.T) {
 		{"b", "a"},
 	}
 
-	err := ValidateStateGraphTopology(nodes, edges, nil, nil)
+	err := ValidateStateGraphTopology(nodes, edges, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for graph with no entry node")
 	}
@@ -38,7 +38,7 @@ func TestValidateStateGraphTopology_RejectsUndeclaredNodeReference(t *testing.T)
 		{"a", "ghost"},
 	}
 
-	err := ValidateStateGraphTopology(nodes, edges, nil, nil)
+	err := ValidateStateGraphTopology(nodes, edges, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for edge referencing undeclared node")
 	}
@@ -49,7 +49,7 @@ func TestValidateStateGraphTopology_RejectsBudgetOverflow(t *testing.T) {
 	edges := [][2]string{{"a", "b"}}
 	maxVisits := map[string]int{"a": 1, "b": StateGraphMaxTotalVisitBudget} // sum 超过上限
 
-	err := ValidateStateGraphTopology(nodes, edges, maxVisits, nil)
+	err := ValidateStateGraphTopology(nodes, edges, nil, maxVisits, nil)
 	if err == nil {
 		t.Fatal("expected error for total visit budget overflow")
 	}
@@ -60,7 +60,7 @@ func TestValidateStateGraphTopology_RejectsNodeCountOverflow(t *testing.T) {
 	for i := range nodes {
 		nodes[i] = string(rune('a' + i%26))
 	}
-	err := ValidateStateGraphTopology(nodes, nil, nil, nil)
+	err := ValidateStateGraphTopology(nodes, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for node count exceeding circuit-breaker limit")
 	}
@@ -73,7 +73,21 @@ func TestValidateStateGraphTopology_DefaultMaxVisitsIsOne(t *testing.T) {
 		{"a", "b"},
 		{"b", "c"},
 	}
-	if err := ValidateStateGraphTopology(nodes, edges, nil, nil); err != nil {
+	if err := ValidateStateGraphTopology(nodes, edges, nil, nil, nil); err != nil {
 		t.Fatalf("expected simple linear graph to pass with default MaxVisits=1, got: %v", err)
+	}
+}
+
+func TestValidateStateGraphTopology_RejectsUnconditionalCycle(t *testing.T) {
+	nodes := []string{"a", "b", "c"}
+	edges := [][2]string{
+		{"a", "b"},
+		{"b", "c"},
+		{"c", "a"},
+	}
+	isEntry := map[string]bool{"a": true}
+	err := ValidateStateGraphTopology(nodes, edges, edges, nil, isEntry)
+	if err == nil {
+		t.Fatal("expected error for unconditional cycle")
 	}
 }
