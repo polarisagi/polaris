@@ -17,17 +17,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// ErrVersionStale outbox 版本号过时（incoming_version <= existing_version），触发跳过。
-// 哨兵错误：保持包级变量语义，供 errors.Is 精确匹配（R1.3 豁免条件）。
-var ErrVersionStale = apperr.New(apperr.CodeConflict, "outbox: version stale")
-
-// ErrUnknownTargetEngine outbox 目标引擎未注册，触发 dead 状态。
-// 哨兵错误：保持包级变量语义，供 errors.Is 精确匹配（R1.3 豁免条件）。
-var ErrUnknownTargetEngine = apperr.New(apperr.CodeInvalidInput, "outbox: unknown target engine")
-
-// ErrPoisonPill outbox 毒丸（崩溃重试超过3次），触发 dead 状态。
-// 哨兵错误：保持包级变量语义，供 errors.Is 精确匹配（R1.3 豁免条件）。
-var ErrPoisonPill = apperr.New(apperr.CodeInternal, "outbox_inv_03: poison pill") //nolint:wrapcheck
+// 哨兵错误 ErrVersionStale / ErrUnknownTargetEngine / ErrPoisonPill 见 outbox_errors.go。
 
 // OutboxWorker — 跨引擎投递 Worker。
 // 消费 M2 outbox 表，将投影写入目标引擎（[Storage-SQLite] / [Storage-SurrealDB-Core]）。
