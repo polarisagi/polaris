@@ -27,6 +27,10 @@ const (
 )
 
 // sensitiveBlockedPaths 敏感路径前缀——命中则拒绝展开。
+//
+// 定位：workDir 根目录断言（见 resolveFile）才是**主控制**，本表是"即便落在
+// 工作区内也永不内联"的第二层。因此这里只收录与凭据/账户强相关的路径片段，
+// 不试图穷举系统文件——穷举黑名单在主控制存在时既无必要也不可能完备。
 func sensitiveBlockedPaths() []string {
 	return []string{
 		".ssh", ".aws", ".kube", ".docker",
@@ -34,6 +38,11 @@ func sensitiveBlockedPaths() []string {
 		".config/gcloud", ".config/gh",
 		"credentials", ".env",
 		".git/config",
+		// 类 Unix 账户与凭据文件：把 workDir 配到 /etc 这类宽目录时，
+		// 根目录断言会全部放行，仍需本层兜住（2026-08-13 轮实测缺口）。
+		// 刻意写成不带前导斜杠的**路径片段**，与上面几条同构：resolveFile 会对
+		// abs 解符号链接，macOS 上 /etc → /private/etc，写死绝对前缀会匹配不上。
+		"etc/passwd", "etc/shadow", "etc/sudoers",
 	}
 }
 
@@ -242,6 +251,13 @@ func (e *ContextRefExpander) resolveFile(_ context.Context, val string) (string,
 	root, err := filepath.Abs(filepath.Clean(e.workDir))
 	if err != nil {
 		return "", 0, apperr.Wrap(apperr.CodeInternal, "resolve workDir", err)
+	}
+	// root 也必须解一次符号链接：下面对 abs 解了链接，只解一侧会让两边处于
+	// 不同的命名空间。macOS 的 /var → /private/var、Linux 上把数据目录挂在
+	// 软链背后都属此列——那种情况下 HasPrefix 恒不成立，整个 @file 引用功能
+	// 会被自己的越界断言全量拒绝（2026-08-13 轮实测：本机全部用例被拒）。
+	if resolvedRoot, symErr := filepath.EvalSymlinks(root); symErr == nil {
+		root = resolvedRoot
 	}
 
 	if !filepath.IsAbs(path) {
