@@ -29,7 +29,11 @@ pub unsafe extern "C" fn surreal_kv_get(
     }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
-        let key_owned = if key_len == 0 { vec![] } else { unsafe { slice::from_raw_parts(key, key_len) }.to_vec() };
+        let key_owned = if key_len == 0 {
+            vec![]
+        } else {
+            unsafe { slice::from_raw_parts(key, key_len) }.to_vec()
+        };
         let key_hex = bytes_to_hex(&key_owned);
         let store_arc = match get_store() {
             Some(s) => s,
@@ -110,8 +114,16 @@ pub unsafe extern "C" fn surreal_kv_put(
     }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
-        let k = bytes_to_hex(if key_len == 0 { &[] } else { unsafe { slice::from_raw_parts(key, key_len) } });
-        let v = bytes_to_hex(if val_len == 0 { &[] } else { unsafe { slice::from_raw_parts(val, val_len) } });
+        let k = bytes_to_hex(if key_len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(key, key_len) }
+        });
+        let v = bytes_to_hex(if val_len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(val, val_len) }
+        });
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,
@@ -151,7 +163,11 @@ pub unsafe extern "C" fn surreal_kv_delete(key: *const u8, key_len: usize) -> c_
     }
     let result = panic::catch_unwind(|| {
         // 入参转换在 catch_unwind 内，确保 panic 不跨越 FFI 边界（P1-7）
-        let k = bytes_to_hex(if key_len == 0 { &[] } else { unsafe { slice::from_raw_parts(key, key_len) } });
+        let k = bytes_to_hex(if key_len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(key, key_len) }
+        });
         let store_arc = match get_store() {
             Some(s) => s,
             None => return SURREAL_ERR_LOCK,

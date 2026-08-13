@@ -31,9 +31,9 @@ type TierParameters struct {
 	MaxCoordinationToken int `json:"max_coordination_token"`
 
 	// M10 Knowledge RAG
-	PipelineConcurrency    int `json:"pipeline_concurrency"`
-	GraphRAGLLMDailyBudget int `json:"graphrag_llm_daily_budget"`
-	GraphRAGMaxEntities    int `json:"graphrag_max_entities"`
+	PipelineConcurrency       int `json:"pipeline_concurrency"`
+	GraphRAGConcurrentWorkers int `json:"graphrag_concurrent_workers"`
+	GraphRAGMaxEntities       int `json:"graphrag_max_entities"`
 
 	// M12 Eval
 	RegressionBudgetMin int `json:"regression_budget_min"`

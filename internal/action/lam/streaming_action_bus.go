@@ -99,7 +99,7 @@ func (b *StreamingActionBus) StreamAction(ctx context.Context, action Continuous
 
 	// 令牌桶速率控制
 	if err := b.rateLimiter.Acquire(ctx); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("streaming_action_bus: rate limit: %v", err), err)
+		return apperr.Wrap(apperr.CodeResourceExhausted, fmt.Sprintf("streaming_action_bus: rate limit: %v", err), err)
 	}
 
 	// 向量钳制

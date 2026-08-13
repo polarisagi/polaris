@@ -204,9 +204,6 @@ func (f *MemoryFacadeImpl) List(ctx context.Context, query *RetrievalQuery) ([]M
 func (f *MemoryFacadeImpl) Consolidate(ctx context.Context) error {
 	return f.sys.Consolidate(ctx)
 }
-func (f *MemoryFacadeImpl) Forget(ctx context.Context) (int, error) {
-	return f.sys.Forget(ctx)
-}
 
 // System 返回底层 MemorySystemImpl（高级入口）
 func (f *MemoryFacadeImpl) System() *MemorySystemImpl { return f.sys }

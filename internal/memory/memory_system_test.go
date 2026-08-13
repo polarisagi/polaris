@@ -88,14 +88,6 @@ func TestMemorySystemWriteRetrieveForget(t *testing.T) {
 		ID: "zero1", // Zero time
 	}, types.TaintNone)
 
-	removed, err := memSys.Forget(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed != 1 {
-		t.Errorf("Expected 1 removed event, got %d", removed)
-	}
-
 	// Test Mem getter
 	if memSys.Mem() == nil {
 		t.Fatal("Mem() returned nil")

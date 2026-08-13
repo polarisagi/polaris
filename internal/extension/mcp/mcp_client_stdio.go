@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -68,7 +70,7 @@ func (c *MCPClient) connectStdio(ctx context.Context) error {
 
 // readLoop 持续读取 stdout，dispatch JSON-RPC 响应。
 func (c *MCPClient) readLoop(r io.Reader) {
-	const mcpStdioMaxScanBytes = 16 * 1024 * 1024
+	mcpStdioMaxScanBytes := config.Get().Thresholds.M7Tool.MCPStdioMaxScanBytes
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 4096), mcpStdioMaxScanBytes)
 	for scanner.Scan() {
@@ -84,7 +86,11 @@ func (c *MCPClient) readLoop(r io.Reader) {
 		c.dispatch(&resp)
 	}
 	if err := scanner.Err(); err != nil {
-		slog.Debug("mcp: readLoop scan error", "server", c.cfg.ServerName, "err", err)
+		if errors.Is(err, bufio.ErrTooLong) {
+			slog.Error("mcp: readLoop scan error: line too long", "server", c.cfg.ServerName, "limit", mcpStdioMaxScanBytes)
+		} else {
+			slog.Debug("mcp: readLoop scan error", "server", c.cfg.ServerName, "err", err)
+		}
 	}
 	c.Close()
 }

@@ -8,3 +8,4 @@ l3_improvement_cooldown_seconds = 600
 'safe_dialer.dns_cache_ttl_seconds' = 30
 'safe_dialer.toctou_delay_ms' = 50
 'safe_dialer.max_ips_threshold' = 20
+'safe_dialer.dns_cache_size' = 1024

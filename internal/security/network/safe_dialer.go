@@ -52,6 +52,7 @@ type SafeDialer struct {
 	dnsCacheTTL time.Duration       // 从 config 注入
 	dnsCacheMu  sync.RWMutex
 	dnsCacheTs  map[string]time.Time
+	dnsCacheMax int // 缓存容量上限
 
 	// QUIC/HTTP3 已禁用 — 禁止 UDP 绕过 DialContext。
 	// Go net/http 默认不启用 QUIC；quic-go 通过 dialer.Control 在 SafeDialer 中显式拒绝 UDP。
@@ -87,6 +88,10 @@ var _ protocol.SafeDialer = (*SafeDialer)(nil)
 // NewSafeDialer 初始化安全拨号器。
 func NewSafeDialer(taintLevel int, allowedDomains []string, m11 config.M11PolicyThresholds) *SafeDialer {
 	ttl := 30 * time.Second
+	cacheSize := 1024
+	if m11.SafeDialerDNSCacheSize > 0 {
+		cacheSize = m11.SafeDialerDNSCacheSize
+	}
 	if m11.SafeDialerDNSCacheTTLSecond > 0 {
 		ttl = time.Duration(m11.SafeDialerDNSCacheTTLSecond) * time.Second
 	}
@@ -103,6 +108,7 @@ func NewSafeDialer(taintLevel int, allowedDomains []string, m11 config.M11Policy
 		dnsCache:        make(map[string][]net.IP),
 		dnsCacheTTL:     ttl,
 		dnsCacheTs:      make(map[string]time.Time),
+		dnsCacheMax:     cacheSize,
 		quicDisabled:    true, // 禁用 QUIC/HTTP3 — 防止 UDP 绕过 DialContext
 		taintLevel:      taintLevel,
 		allowedDomains:  allowedDomains,
@@ -352,13 +358,33 @@ func (sd *SafeDialer) resolveDNSBypass(ctx context.Context, host string) ([]net.
 
 	// 写回缓存（更新时间戳）
 	sd.dnsCacheMu.Lock()
-	const maxDNSCacheEntries = 1024
-	if len(sd.dnsCache) >= maxDNSCacheEntries && sd.dnsCache[host] == nil {
-		// Pseudo-random eviction using map iteration
-		for k := range sd.dnsCache {
-			delete(sd.dnsCache, k)
-			delete(sd.dnsCacheTs, k)
-			break
+	//nolint:nestif
+	if len(sd.dnsCache) >= sd.dnsCacheMax && sd.dnsCache[host] == nil {
+		// 优先清理过期 TTL
+		now := time.Now()
+		evicted := false
+		for k, ts := range sd.dnsCacheTs {
+			if now.Sub(ts) >= sd.dnsCacheTTL {
+				delete(sd.dnsCache, k)
+				delete(sd.dnsCacheTs, k)
+				evicted = true
+				break
+			}
+		}
+		// 无过期则清理最旧 Ts
+		if !evicted {
+			var oldestKey string
+			var oldestTs time.Time
+			for k, ts := range sd.dnsCacheTs {
+				if oldestKey == "" || ts.Before(oldestTs) {
+					oldestKey = k
+					oldestTs = ts
+				}
+			}
+			if oldestKey != "" {
+				delete(sd.dnsCache, oldestKey)
+				delete(sd.dnsCacheTs, oldestKey)
+			}
 		}
 	}
 	sd.dnsCache[host] = result

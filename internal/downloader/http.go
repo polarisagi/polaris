@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"sync"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // downloadChunk 向 url 发起 Range GET，将响应体写入 partPath。
@@ -56,25 +59,76 @@ func downloadChunk(ctx context.Context, client *http.Client, url, partPath strin
 	return nil
 }
 
+//nolint:gochecknoglobals
+var dlRestartCount = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "polaris_downloader_resume_restarts_total",
+	Help: "Total number of times a partial download was restarted due to metadata mismatch",
+})
+
+type partMeta struct {
+	ETag          string `json:"etag"`
+	LastModified  string `json:"last_modified"`
+	ContentLength int64  `json:"content_length"`
+}
+
 // downloadResume 按候选地址顺序将 rawURL 下载到 destPath，支持跨源断点续传。
 // 临时文件为 destPath+".part"；完成后原子重命名。
 // 若 destPath 已存在则幂等返回。
+//
+//nolint:gocyclo
 func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath string) error {
 	if _, err := os.Stat(destPath); err == nil {
 		return nil
 	}
 
 	partPath := destPath + ".part"
+	metaPath := partPath + ".meta"
 
 	candidates := CandidateURLs(ctx, client, rawURL)
 	var lastErr error
 	for _, url := range candidates {
+		var currentMeta partMeta
+		headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+		if err == nil {
+			if headResp, err := client.Do(headReq); err == nil {
+				currentMeta.ETag = headResp.Header.Get("ETag")
+				currentMeta.LastModified = headResp.Header.Get("Last-Modified")
+				currentMeta.ContentLength = headResp.ContentLength
+				headResp.Body.Close()
+			}
+		}
+
 		var offset int64
-		if fi, err := os.Stat(partPath); err == nil {
+		if fi, err := os.Stat(partPath); err == nil { //nolint:nestif
 			offset = fi.Size()
 			if offset > 0 {
-				slog.Info("downloader: resuming partial download",
-					"file", lastSegment(destPath), "offset_bytes", offset)
+				var meta partMeta
+				metaData, metaErr := os.ReadFile(metaPath)
+				if metaErr == nil {
+					if unmarshalErr := json.Unmarshal(metaData, &meta); unmarshalErr != nil {
+						slog.Debug("downloader: failed to parse meta file", "err", unmarshalErr)
+					}
+				}
+
+				// 换源同样比对。无这些 header 的视为不一致。
+				if meta.ETag == "" || meta.LastModified == "" ||
+					meta.ETag != currentMeta.ETag ||
+					meta.LastModified != currentMeta.LastModified ||
+					meta.ContentLength != currentMeta.ContentLength {
+					dlRestartCount.Inc()
+					os.Remove(partPath)
+					os.Remove(metaPath)
+					offset = 0
+				} else {
+					slog.Info("downloader: resuming partial download", "file", lastSegment(destPath), "offset_bytes", offset)
+				}
+			}
+		}
+
+		if offset == 0 {
+			b, _ := json.Marshal(currentMeta)
+			if writeErr := os.WriteFile(metaPath, b, 0644); writeErr != nil {
+				slog.Debug("downloader: failed to write meta file", "err", writeErr)
 			}
 		}
 
@@ -86,6 +140,7 @@ func downloadResume(ctx context.Context, client *http.Client, rawURL, destPath s
 		if err := os.Rename(partPath, destPath); err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "downloader: rename downloaded file failed", err)
 		}
+		os.Remove(metaPath)
 		return nil
 	}
 	return apperr.Wrap(apperr.CodeInternal, "downloader: all sources failed", lastErr)

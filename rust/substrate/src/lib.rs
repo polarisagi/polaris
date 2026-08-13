@@ -780,13 +780,25 @@ pub unsafe extern "C" fn vec_cosine_f32(
     b_len: usize,
 ) -> f32 {
     // 入参 null 判断在 catch_unwind 外前置检查，避免 null 解引用 UB（Go 侧当前不可能传 nil，守卫为 ABI 边界纵深防御）
-    if (a_ptr.is_null() && a_len > 0) || (b_ptr.is_null() && b_len > 0) || a_len == 0 || a_len != b_len {
+    if (a_ptr.is_null() && a_len > 0)
+        || (b_ptr.is_null() && b_len > 0)
+        || a_len == 0
+        || a_len != b_len
+    {
         return 0.0_f32;
     }
     std::panic::catch_unwind(|| {
         // Safety: 调用方保证 ptr 有效且生命周期覆盖此调用
-        let a = if a_len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(a_ptr, a_len) } };
-        let b = if b_len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(b_ptr, b_len) } };
+        let a = if a_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(a_ptr, a_len) }
+        };
+        let b = if b_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(b_ptr, b_len) }
+        };
 
         let mut dot = 0.0_f32;
         let mut na = 0.0_f32;

@@ -96,7 +96,7 @@ func TestCredential_RecordResult_RateLimit(t *testing.T) {
 	}
 
 	// 模拟 429 错误
-	err := apperr.New(apperr.CodeInternal, "[INTERNAL] api error (status 429): rate limit exceeded")
+	err := apperr.New(apperr.CodeResourceExhausted, "[RESOURCE_EXHAUSTED] api error (status 429): rate limit exceeded")
 	c.RecordResult(err)
 
 	if c.Available() {
