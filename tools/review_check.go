@@ -32,9 +32,11 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -387,6 +389,132 @@ func (c *checker) checkEntry(file string, e entry) {
 		if sev := e.fields["严重级"]; (sev == "P0" || sev == "P1") && len([]rune(rebut)) < 10 {
 			c.add("C11", file, e.id, "P0/P1 的「反证」不得少于 10 字：须给出反证过程或可达路径")
 		}
+	}
+
+	// C12 「不存在」类断言必须可复现，且由本门控实跑复核。
+	c.checkAbsenceClaim(file, e)
+
+	// C13 GD 提议必须先过一遍已决议拒绝清单。
+	c.checkRejectedProposal(file, e)
+}
+
+// rejectedProposals 是 ROADMAP §5 拒绝清单的机械索引，惰性加载。
+var rejectedProposals []rejectedProposal //nolint:gochecknoglobals // 进程内只读缓存，与同文件 baseline 同类
+
+type rejectedProposal struct{ key, reason string }
+
+// loadRejectedProposals 读取 scripts/rejected-proposals.txt。文件缺失视为空表（不阻断）。
+func loadRejectedProposals() []rejectedProposal {
+	if rejectedProposals != nil {
+		return rejectedProposals
+	}
+	rejectedProposals = []rejectedProposal{}
+	data, err := os.ReadFile("scripts/rejected-proposals.txt")
+	if err != nil {
+		return rejectedProposals
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			continue
+		}
+		rejectedProposals = append(rejectedProposals,
+			rejectedProposal{key: key, reason: strings.TrimSpace(parts[1])})
+	}
+	return rejectedProposals
+}
+
+// checkRejectedProposal 对 GD/DS 设计条目做「是否早已被决议拒绝」的机械比对。
+//
+// 判据刻意用**精确子串**而非模糊匹配：宁可漏也不误伤。误伤会让人学会无视这条门控，
+// 那比漏报更贵（同 ADR-0081 决策一「淹没真实缺陷比漏报更致命」的判断）。
+//
+// 立此判定的原因：GD 编号是批次内序号、跨轮复用（同一个 GD-14-002 在三轮里分别指
+// A2A / LoCoMo / Time-Travel），按 ID 检索不到历史裁决；而 ROADMAP §5 那张拒绝清单
+// 从来没有被任何门控读过，只是给人看的。两者叠加，A2A 入站端点连提 5 轮。
+func (c *checker) checkRejectedProposal(file string, e entry) {
+	if e.kind != "GD" && e.kind != "DS" {
+		return
+	}
+	hay := e.title + " " + e.fields["现状"] + " " + e.fields["建议方案"] + " " + e.fields["挑战"]
+	for _, rp := range loadRejectedProposals() {
+		if strings.Contains(hay, rp.key) {
+			c.add("C13", file, e.id,
+				"该提议命中已决议拒绝清单（key=%q）：%s。"+
+					"若确有新论据要求重议，须先在 ROADMAP §5 对应行追记触发条件并移除该 key，"+
+					"不得直接重提——同一提议反复提交不构成重新引入理由（七筛第 7 条）",
+				rp.key, rp.reason)
+			return
+		}
+	}
+}
+
+// absenceClaimRe 匹配「反证」里声称某物不存在的措辞。
+//
+// 立此判定的原因（2026-08-13 实测）：GD-14-001 的反证写「查 cmd/polaris/boot_server.go
+// 与 internal/gateway/server/ 确认无 well-known 路由注册」，而 server_routes.go:27 就注册着
+// `GET /.well-known/agent-card.json`。C11 只检查这句话**写没写**，不检查它**是否为真**——
+// 于是同一条「缺失」提议靠一句假反证连提 5 轮。断言不可复现，就等于没有断言。
+var absenceClaimRe = regexp.MustCompile(`(确认无|全仓无|全仓零|零处|不存在|没有任何|未注册|未实现|无任何)`)
+
+// verifyPatternRe 提取「反证命令」字段里的 grep 模式（反引号包裹）。
+var verifyPatternRe = regexp.MustCompile("`([^`]+)`")
+
+// checkAbsenceClaim 对声称「某物不存在」的条目，要求给出可复现的检索模式，
+// 并**当场实跑**——命中即说明该断言不成立。
+//
+// 安全性：模式以 exec.Command 的独立实参传给 grep，不经 shell，不存在命令注入。
+func (c *checker) checkAbsenceClaim(file string, e entry) {
+	if e.kind != "GR" && e.kind != "GD" {
+		return
+	}
+	claim := e.fields["反证"] + " " + e.fields["现状"]
+	if !absenceClaimRe.MatchString(claim) {
+		return
+	}
+
+	raw := strings.TrimSpace(e.fields["反证命令"])
+	if raw == "" {
+		c.add("C12", file, e.id,
+			"「反证」声称某物不存在，但未给出「反证命令」字段。"+
+				"不可复现的缺失断言不算反证——请补一行 `- 反证命令: \\`<grep 模式>\\``，"+
+				"本门控会实跑该模式，命中即判该断言不成立")
+		return
+	}
+	m := verifyPatternRe.FindStringSubmatch(raw)
+	if m == nil {
+		c.add("C12", file, e.id, "「反证命令」须用反引号包裹一个 grep 模式，实际内容: %q", raw)
+		return
+	}
+	pattern := m[1]
+
+	// -r 递归、-n 行号、--include 只看源码与文档、-- 终止选项解析（防模式以 - 开头）
+	args := []string{"-rn", "--include=*.go", "--include=*.rs", "--include=*.sql", "--include=*.md",
+		"--exclude-dir=local_playground", "--exclude=*_test.go", "--", pattern,
+		"cmd", "internal", "pkg", "rust", "docs"}
+	out, err := exec.Command("grep", args...).Output() //nolint:gosec // pattern 作为独立实参传入，不经 shell
+	if err != nil {
+		// grep 退出码 1 = 无匹配，正是断言成立的情形；其余（2=用法错误）才是问题。
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return
+		}
+		c.add("C12", file, e.id, "「反证命令」模式 %q 执行失败（grep 用法错误？）: %v", pattern, err)
+		return
+	}
+	hits := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(hits) > 0 && hits[0] != "" {
+		c.add("C12", file, e.id,
+			"「反证」声称不存在，但按其自述的模式 %q 实跑命中 %d 处，首处: %s —— 该断言不成立",
+			pattern, len(hits), hits[0])
 	}
 }
 
@@ -799,9 +927,18 @@ func readBaseline(path string) map[string]bool {
 
 func writeBaseline(path string, ps []problem) error {
 	var sb strings.Builder
-	sb.WriteString("# review-check 存量违规基线（棘轮：只禁增量，不要求存量清零）\n")
-	sb.WriteString("# 生成: go run tools/review_check.go -update-baseline\n")
-	sb.WriteString("# 收窄纪律同 deadcode 白名单——只许逐条审计后删除，禁止批量填充（见根 CLAUDE.md 与 ADR-0089）\n")
+	// 保留既有文件的**头部注释块**再写条目。
+	//
+	// 原实现每次重写都用三行固定表头覆盖全文，于是「收窄纪律……只许逐条审计后删除」
+	// 这条要求在物理上无法遵守——写下的理由会被下一次 -update-baseline 抹掉。
+	// 一个不能记录理由的台账，等于只剩许可证功能（2026-08-15 实测）。
+	if head := existingHeader(path); head != "" {
+		sb.WriteString(head)
+	} else {
+		sb.WriteString("# review-check 存量违规基线（棘轮：只禁增量，不要求存量清零）\n")
+		sb.WriteString("# 生成: go run tools/review_check.go -update-baseline\n")
+		sb.WriteString("# 收窄纪律同 deadcode 白名单——只许逐条审计后删除，禁止批量填充（见根 CLAUDE.md 与 ADR-0089）\n")
+	}
 	seen := map[string]bool{}
 	for _, p := range ps {
 		if seen[p.sig()] {
@@ -842,4 +979,22 @@ func containsStr(ss []string, s string) bool {
 func fail(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "review-check: "+format+"\n", a...)
 	os.Exit(2)
+}
+
+// existingHeader 读取 baseline 文件开头连续的注释行（含空行），原样返回。
+// 遇到第一条非注释、非空行即停——后面是条目区，由 writeBaseline 重新生成。
+func existingHeader(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, line := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(line)
+		if t != "" && !strings.HasPrefix(t, "#") {
+			break
+		}
+		sb.WriteString(line + "\n")
+	}
+	return sb.String()
 }

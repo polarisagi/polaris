@@ -57,3 +57,4 @@ patch | L-10 | tools/bounded_cache_check.go | internal/extension/mcp/mcp_client_
 add | L-11 | tools/apperr_semantics_check.go | internal/zz_selftest_apperr.go | tools/testdata/selftest/L11_apperr.go.txt
 add | L-12 | tools/regex_greedy_check.go | internal/zz_selftest_regex.go | tools/testdata/selftest/L12_regex.go.txt
 add | L-13 | tools/wiring_reachability_check.go | internal/zzselftestorphan/orphan.go | tools/testdata/selftest/L13_orphan_pkg.go.txt
+patch | L-03 | tools/taint_typed_fields_check.go | internal/knowledge/rag_retrieval.go | if c.TaintLevel > req.TaintMax { | if c.TaintLevel > 99 {

@@ -1,0 +1,32 @@
+# rejected-proposals.txt — ROADMAP.md §5「主动决议拒绝清单」的机械索引。
+#
+# 立此文件的原因（2026-08-13 实证）：ROADMAP §5 的引言写着「同一来源反复提议不构成
+# 重新引入理由（七筛第 7 条）」，但那张表**从来没有被任何门控读过**——它只是给人看的。
+# 结果 A2A 入站端点这一条连提 5 轮（20260723 / 20260731 / 20260801 / 20260810 / 20260813），
+# 每轮都要人重新推翻一次；而 GD 编号是批次内序号、跨轮复用（同一个 GD-14-002 在三轮里
+# 分别指 A2A / LoCoMo / Time-Travel），按 ID 根本检索不到历史裁决。
+#
+# 用法：`review_check` 的 C13 对每条 GD 的标题与「现状」做**精确子串**匹配，命中即报红，
+# 并把拒绝理由原样打回。不用模糊匹配——宁可漏也不误伤，误伤会让人学会无视这条门控。
+#
+# 维护：ROADMAP §5 新增一行时，同步在此加一条 key。key 取该提议最不可能被别的议题
+# 复用的短语；太泛的 key（如「记忆」「沙箱」）会误伤，宁可留空不加。
+#
+# 格式：<精确子串 key> | <一句话理由 + 权威出处>
+
+well-known | 已实现：server_routes.go 注册 GET /.well-known/agent-card.json + POST /v1/a2a/tasks（ADR-0017 决策三 / ADR-0084）。ROADMAP §5
+agent-card | 同上，A2A 入站发现端点已实现。ROADMAP §5
+Agent Card | 同上，A2A 入站发现端点已实现。ROADMAP §5
+bootstrap.Bootstrapper | 维持不接线：ARCHITECTURE.md §8.2 + ADR-0088 §决策七，四个重评触发条件 2026-08-07 实测全未满足。ROADMAP §5
+WASI 0.2 | 不实施：ADR-0008 §决策五已记载「配置开关已开、功能未落地」及重评触发条件。ROADMAP §5
+Component Model | 同上，Wasm Component Model 完整支持已被明确拒绝。ROADMAP §5
+Redis | 违反单机硬约束（禁独立进程 DB / 禁 sidecar）。ROADMAP §5
+Kafka | 同上，违反单机硬约束。ROADMAP §5
+RabbitMQ | 同上，违反单机硬约束。ROADMAP §5
+跨节点 | 永远不在计划：违反单机硬约束。ROADMAP §3.4
+DID | 无成熟生产实现，不替代 OIDC 做 MCP 认证。ROADMAP §5
+图向量统一引擎 | 2026 无成熟嵌入式 Vector-Graph DBMS。ROADMAP §5
+Neuromodulator | 不可工程化，Policy 层 stress-mode 切换可替代。ROADMAP §5
+Stigmergy | 昆虫学比喻不引入命名，机制本身已采纳。ROADMAP §5
+突触可塑性 | 神经科学比喻不引入命名，机制本身已采纳。ROADMAP §5
+cgroups | macOS/Windows 无此机制，改用应用进程内 Governor。ROADMAP §5
