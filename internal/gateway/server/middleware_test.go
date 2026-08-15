@@ -145,8 +145,12 @@ func TestCheckAuth(t *testing.T) {
 		t.Errorf("healthz should pass without auth")
 	}
 
+	// 零认证模式的回环判定取 TCP 对端（peerIP），不取传入的 clientIP——
+	// 后者可能源自 X-Forwarded-For。这里必须显式设置 RemoteAddr，
+	// 否则 httptest 默认填的是 192.0.2.1:1234（非回环）。
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/v1/plugins/install", nil)
+	req.RemoteAddr = "127.0.0.1:51234"
 	_, ok = s.checkAuth(w, req, "127.0.0.1", "", am)
 	if !ok {
 		t.Errorf("admin write from localhost should pass if no secret")
@@ -154,9 +158,21 @@ func TestCheckAuth(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/v1/plugins/install", nil)
+	req.RemoteAddr = "8.8.8.8:51234"
 	_, ok = s.checkAuth(w, req, "8.8.8.8", "", am)
 	if ok {
 		t.Errorf("admin write from remote should fail if no secret")
+	}
+
+	// 关键回归：远程连接 + 伪造 X-Forwarded-For 回环，且 clientIP 已被 extractIP
+	// 带偏成 127.0.0.1——鉴权仍必须按 TCP 对端拒绝。
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/v1/plugins/install", nil)
+	req.RemoteAddr = "203.0.113.9:51234"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	_, ok = s.checkAuth(w, req, "127.0.0.1", "", am)
+	if ok {
+		t.Errorf("伪造 X-Forwarded-For 回环不得解锁零认证模式")
 	}
 
 	w = httptest.NewRecorder()
