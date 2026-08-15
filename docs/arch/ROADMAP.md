@@ -99,7 +99,7 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 3. Provider 能力探测：configs/defaults.toml 推荐的 DeepSeek V4 是否支持视觉输入，
    不支持则需要按 role 分流到第二 Provider，这会牵动模型角色配置模型。
 
-2026-08-12 裁决：本轮不实施，理由见 local_playground/upgrade/07-GD设计条目裁决.md。
+2026-08-12 裁决：本轮不实施，理由见 local_playground/bake/20260812/upgrade/07-GD设计条目裁决.md。
 
 ### 沙箱内存快照（Freeze/Thaw）（候选，来源 GD-14-004）
 
@@ -108,7 +108,7 @@ M10 HybridRetriever 补充 ColBERT 级别的 Late-Interaction 重排层。**前�
 - ADR-0086 的 Agent 层快照被证明不足以无损续跑（出现具体的续跑失败案例）。
 
 2026-08-12 裁决：本轮不实施。当前 L2 为一次性执行不驻留依赖，问题域仅覆盖 L4，
-而 L4 尚无唤醒延迟的实测数据。理由详见 local_playground/upgrade/07-GD设计条目裁决.md。
+而 L4 尚无唤醒延迟的实测数据。理由详见 local_playground/bake/20260812/upgrade/07-GD设计条目裁决.md。
 
 ### 节点级 Time-Travel 状态分叉重放（候选，来源 2026-08-13 轮次 GD-14-002）
 
