@@ -270,13 +270,20 @@ func checkAssignDenylist(fset *token.FileSet) {
 			// 门控转绿而过滤逻辑一行没有。判据必须落在真正执行过滤的那个函数上。
 			if filePath == "internal/knowledge/rag_retrieval.go" && funcName == "Search" &&
 				fn.Name.Name == "Search" && receiverTypeName(fn) == "KnowledgeBase" {
+				// 判据必须是「chunk 的污点等级与 req.TaintMax 做比较」这个**具体形状**，
+				// 不能只要函数体里出现过 req.TaintMax 就算过——入口那句
+				// `if req.TaintMax == 0 { fail-closed }` 本身就含该选择器，
+				// 于是把真正的过滤逻辑整段删掉，判据依然成立。
+				// 一条能被"另一处无关引用"顺带满足的断言，等于没有断言。
 				hasTaintMax := false
 				ast.Inspect(fn.Body, func(bn ast.Node) bool {
-					sel, ok := bn.(*ast.SelectorExpr)
-					if ok && sel.Sel.Name == "TaintMax" {
-						if id, ok := sel.X.(*ast.Ident); ok && id.Name == "req" {
-							hasTaintMax = true
-						}
+					bin, ok := bn.(*ast.BinaryExpr)
+					if !ok {
+						return true
+					}
+					if isReqTaintMax(bin.Y) && isTaintLevelSelector(bin.X) ||
+						isReqTaintMax(bin.X) && isTaintLevelSelector(bin.Y) {
+						hasTaintMax = true
 					}
 					return true
 				})
@@ -309,4 +316,24 @@ func receiverTypeName(fn *ast.FuncDecl) string {
 		return id.Name
 	}
 	return ""
+}
+
+// isReqTaintMax 判断表达式是否为 `req.TaintMax`。
+func isReqTaintMax(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "TaintMax" {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == "req"
+}
+
+// isTaintLevelSelector 判断表达式是否为 `<任意>.TaintLevel`（可套一层类型转换）。
+// 覆盖 `c.TaintLevel > req.TaintMax` 与 `types.TaintLevel(x.TaintLevel) > req.TaintMax` 两种写法。
+func isTaintLevelSelector(e ast.Expr) bool {
+	if call, ok := e.(*ast.CallExpr); ok && len(call.Args) == 1 {
+		e = call.Args[0]
+	}
+	sel, ok := e.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "TaintLevel"
 }

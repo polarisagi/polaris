@@ -2,28 +2,59 @@
 # 生成: go run tools/review_check.go -update-baseline
 # 收窄纪律同 deadcode 白名单——只许逐条审计后删除，禁止批量填充（见根 CLAUDE.md 与 ADR-0089）
 #
-# 2026-08-13 复核轮：178 → 23。**净收窄 155 条，无新增语义**。
+# 本头部注释由 -update-baseline **保留**（2026-08-15 起）。此前每次重写都会用固定表头
+# 覆盖全文，导致「逐条带理由」这条纪律在物理上无法遵守——写下的理由会被下一次
+# 重生成抹掉。一个不能记录理由的台账只剩许可证功能。
+#
+# ── 2026-08-13 复核轮：178 → 23，净收窄 155 条，无新增语义 ──
 # 缩减来自修复本身：GR 条目落地后，报告正文里引用的位置随之失效——
 #   - C2「文件不存在」：internal/security/provider.go、internal/vfs/provider.go 已按
 #     GR-2-003 / GR-6-003 删除；
 #   - C2「行号越界」：skill_creator.go 因 GR-8-002 改写后由 234 行缩到 229 行；
 #   - C3「缺证据字段」：batch5/batch8 若干条目本就缺该字段，属报告侧存量。
-# 这些位置**不允许**回头去改报告正文来消违规——审核报告是修复前状态的证据链，
+#
+# ── 2026-08-15 复核轮：23 → 43，新增 20 条全部来自两条**新判据**对既有报告的追溯命中 ──
+#   - C12「不存在类断言必须可复现」：历史条目写于该字段存在之前，没有「反证命令」可填；
+#   - C13「提议命中 ROADMAP §5 拒绝清单」：追溯命中 GD-13-001（bootstrap 接线）、
+#     GD-14-001（A2A 入站端点）、GD-14-004（WASI 0.2）——正是本轮逐条驳回的那三条，
+#     反过来印证这两条判据确实指向真问题。
+#
+# 以上两批都**不允许**回头改报告正文来消违规：审核报告是修复前状态的证据链，
 # 改它等于篡改历史（fix.md §7-3 三项不可变）。故只能以 baseline 承接。
 # 复核责任：下一轮增量审核时，凡对应报告已归档进 bake/ 的条目应一并移除。
+local_playground/reports/gemini-review-design-batch13.md|C13|GD-13-001
+local_playground/reports/gemini-review-design-batch14.md|C13|GD-14-001
+local_playground/reports/gemini-review-design-batch14.md|C13|GD-14-004
+local_playground/reports/gemini-review-design.md|C13|GD-13-001
+local_playground/reports/gemini-review-design.md|C13|GD-14-001
+local_playground/reports/gemini-review-design.md|C13|GD-14-004
+local_playground/reports/gemini-review-findings-batch10.md|C12|GR-10-003
+local_playground/reports/gemini-review-findings-batch10.md|C12|GR-10-005
 local_playground/reports/gemini-review-findings-batch11.md|C6|batch11
+local_playground/reports/gemini-review-findings-batch12.md|C12|GR-12-007
+local_playground/reports/gemini-review-findings-batch2.md|C12|GR-2-002
+local_playground/reports/gemini-review-findings-batch2.md|C12|GR-2-003
 local_playground/reports/gemini-review-findings-batch2.md|C2|GR-2-003
+local_playground/reports/gemini-review-findings-batch4.md|C12|GR-4-001
 local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-001
 local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-002
 local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-003
 local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-004
 local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-005
+local_playground/reports/gemini-review-findings-batch6.md|C12|GR-6-003
 local_playground/reports/gemini-review-findings-batch6.md|C2|GR-6-003
 local_playground/reports/gemini-review-findings-batch8.md|C2|GR-8-002
 local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-001
 local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-002
 local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-003
 local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-004
+local_playground/reports/gemini-review-findings.md|C12|GR-10-003
+local_playground/reports/gemini-review-findings.md|C12|GR-10-005
+local_playground/reports/gemini-review-findings.md|C12|GR-12-007
+local_playground/reports/gemini-review-findings.md|C12|GR-2-002
+local_playground/reports/gemini-review-findings.md|C12|GR-2-003
+local_playground/reports/gemini-review-findings.md|C12|GR-4-001
+local_playground/reports/gemini-review-findings.md|C12|GR-6-003
 local_playground/reports/gemini-review-findings.md|C2|GR-8-002
 local_playground/reports/gemini-review-findings.md|C3|GR-5-001
 local_playground/reports/gemini-review-findings.md|C3|GR-5-002

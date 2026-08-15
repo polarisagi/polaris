@@ -33,7 +33,12 @@ ALLOWLIST="scripts/docs-refs-allowlist.txt"
 # 已知文件扩展名：basename 命中这些才认定为"文件路径"，否则带点即判为符号点记法
 KNOWN_EXT='go|rs|sql|md|toml|yaml|yml|json|txt|tmpl|sh|ps1|lock|mod|wasm|proto'
 # 仓库顶层目录（引用必须以其中之一开头才纳入检查）
-TOP_DIRS='internal|pkg|cmd|rust|configs|api|scripts|tools|web|docs'
+#
+# 2026-08-15 并入 local_playground：每轮升级结束后 upgrade/ 会被归档到
+# bake/<日期>/upgrade/，活文档里指向它的引用随之全部失效，而此前该目录不在
+# TOP_DIRS 内，这类失效一次都没被报出来。加入后当场照出两处存量
+# （ROADMAP §3 的两条裁决出处、M08 §2 的 P2-4 出处），均已订正为 bake/ 下的真实路径。
+TOP_DIRS='internal|pkg|cmd|rust|configs|api|scripts|tools|web|docs|local_playground'
 
 mapfile -t FILES < <(
 	find docs/arch -maxdepth 2 -name '*.md' -type f -not -path 'docs/arch/decisions/*'
