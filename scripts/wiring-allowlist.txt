@@ -5,7 +5,7 @@
 # 台账，不是许可证。无理由条目等同静默放宽门控（见记忆「白名单要审计不要清空」：
 # 上一轮 13 条「测试假阳性」标签经复核全部证伪，实为「写了没接线」）。
 #
-# 格式：每行一个包相对路径（如 internal/cli），# 开头为注释。
+# 格式：每行一个包相对路径（如 internal/cli），# 起为注释（行首或行内均可）。
 # 复核责任：每轮增量审核复核本表，条目消失（接线或删除）即移除，不得长期沉淀。
 
 # ── 测试/CI 专用包：按定义就不该出现在生产闭包里 ────────────────────────────────
@@ -13,22 +13,28 @@
 internal/lint            # 不变量测试包，由 go test 驱动，不进二进制
 internal/memory/testutil # memory 各子包单测共用的 mock，仅被 _test.go 引用
 
-# ── 已立 ADR 明确「维持不接线」的目标契约 ───────────────────────────────────────
-# 去向：随各自 ADR 的重评触发条件复议，不在缺陷修复批次内处置。
+# ── 已定义未接线，且有规范性文档指向它作为目标契约 ──────────────────────────────
+# 判据：有正式文档把它写成「应当如此」的结构，删掉等于抹掉设计意图。
+# 处置：保留代码 + 文档如实记载未接线状态 + 在此登记。
 internal/bootstrap # ADR-0088 §决策七：四个重评触发条件 2026-08-07 实测全未满足，
 #                    且两阶段装配/顺序性副作用在 Bootable 契约下语义上无法表达。
 internal/cli #        CLAUDE.md §项目结构记为「已定义未接线的 CLI 引导契约」，
 #                    生产装配落点是 cmd/polaris/boot_*.go（与 ADR-0088 同口径）。
+internal/swarm #      startup.go 的 PhasedStartup 分阶段启动契约零接线。
+#                    这是仓库里第二套未接线的启动编排（第一套是 internal/bootstrap）。
+#                    2026-08-15：M08 §1.9 原写「✅ 已实现 …SQLiteBlackboard 接入 P0
+#                    健康检查」，实测零处引用 NewPhasedStartup、无任何 PhaseEntry 注册，
+#                    该节已订正为「已定义未接线」。去向：与 bootstrap 一并裁决，
+#                    不宜单独处置其一（同上 ADR-0088 的重评触发条件）。
+internal/sysmgr/locale # CLAUDE.md §项目结构列为「locale/ 本地化」。Detect 做时区 +
+#                    GeoIP 地区探测，8 个符号零引用；它服务的上层功能（用户画像/
+#                    内容个性化）本身尚未落地。去向：上层功能立项时接线，或届时一并删除。
 
-# ── 存量：本轮新门控首次照出，未经审核流程，按 fix.md §1-2 不在本轮顺手修 ────────
-# 去向：已登记 local_playground/upgrade/99-遗留线索.md，等下一轮审核收编后处置。
-internal/extension        # 仅 provider.go 的 consumer-side 接口声明，零 import。
-#                           与本轮已删除的 security/provider.go（GR-2-003）同形态，
-#                           待下一轮按同一判据裁定「迁移消费点或删除」。
-internal/extension/models # 仅 doc.go 占位包，0 导出符号；注释自述「Tier 1+ 预留，
-#                           Tier 0 不激活」。待确认 FeatureGate.ModelExtensions 落地计划。
-internal/swarm            # 子包（planner/supervisor/topology）已接线，父包 startup.go
-#                           的 Phase/Pinger 分阶段启动编排零引用——与 internal/bootstrap
-#                           同类的「另一套未接线启动编排」，须一并裁定，不宜单独处置。
-internal/sysmgr/locale    # Detect 地区探测，8 个导出符号零引用；注释自述服务于
-#                           「用户画像/内容个性化」，该上层功能本身尚未落地。
+# ── 已删除（保留记录，防止下轮重新长出来）────────────────────────────────────────
+# internal/extension        2026-08-15 删除 provider.go：其声明的 EmbedSearcher 全仓零实现零引用，
+#                           而注释点名的消费方 native.ExtensionActivator 实际用的是
+#                           CognitiveSearcher + EmbedFn，契约早已被另一套设计取代。
+#                           删后 internal/extension 不再是 Go 包（子包不受影响）。
+# internal/extension/models 2026-08-15 删除：仅 doc.go 占位，0 导出符号，注释声称的激活条件
+#                           FeatureGate.ModelExtensions 全仓不存在——属臆测开发的产物
+#                           （CLAUDE.md 硬约束「禁止超前抽象、臆测开发」）。

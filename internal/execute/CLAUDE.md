@@ -64,8 +64,9 @@ StateGraphExecutor），但作用域不同：`dag` 是单个 Agent 内部工具�
 - `internal/agent/provider.go` — `DAGRunner`/`DAGValidator`（`dag` 子包实现，
   `execute/dag.Runner`/`execute/dag.Validator` 由 `cmd/polaris/boot_agent.go`
   构造并注入，二者均无状态，可全局共享同一实例）
-- `internal/swarm/provider.go` — `orchestrator` 子包的消费方声明（Blackboard/
-  LLMInfer/OutboxWriter 等，见该文件 `@consumer` 注释）
+- `orchestrator` 子包的消费方接口就地声明在该子包内。2026-08-15 前本条指向
+  swarm 包下的 `provider.go`，那三个接口（Blackboard/LLMInfer/OutboxWriter）
+  全仓零消费方，已随该文件一并删除——编排实现在本模块，声明不应寄居在 swarm 包
 
 ## 不可变内核保护
 
