@@ -5,7 +5,7 @@
 > M8 描述的编排语义/不变量不变，仅物理归属调整；`internal/swarm` 现在是消费方而非实现方。
 
 > 单机黑板 + CAS（Compare-And-Swap，比较并交换） 原子认领 + Supervisor Tree | Go goroutine + channel + CAS | [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:112 Supervisor / 2-bis:131 常驻角色Agent / 3:148 编排模式 / 3-bis:181 (已删除,见ADR-0062) / 3-ter:189 PipelineOrchestrator / 3-quater:230 PatternDAGExecutor / 3-quinquies:244 StateGraphExecutor / 4:283 AgentCard / 5:295 Task分解 / 8:313 拓扑自演化(已删除,见ADR-0062) / 10:321 (SOFT)降级 / 11:340 跨模块契约 / 11.2:366 已知实现缺口 / 12:380 Custom Agent / 13:418 CSV Fan-out / §3-sexies:451 PatternDebate -->
+<!-- §跳读: 0-bis:9 职责 / 0-ter:23 不变量速查 / 1:36 黑板+CAS(核心) / 2:124 Supervisor / 2-bis:143 常驻角色Agent / 3:160 编排模式 / 3-bis:193 (已删除,见ADR-0062) / 3-ter:201 PipelineOrchestrator / 3-quater:242 PatternDAGExecutor / 3-quinquies:256 StateGraphExecutor / 4:295 AgentCard / 5:307 Task分解 / 8:325 拓扑自演化(已删除,见ADR-0062) / 10:333 (SOFT)降级 / 11:352 跨模块契约 / 11.2:378 已知实现缺口 / 12:392 Custom Agent / 13:430 CSV Fan-out / §3-sexies:463 PatternDebate -->
 ## 0-bis. 职责边界
 
 | M8 **是** | M8 **不是** |
@@ -105,7 +105,19 @@ TaskEntry 包含 Priority 字段，与 M13 ResourceGovernor 统一优先级体�
 
 ### 1.9 Phased Startup
 
-✅ **已实现**：`internal/swarm/startup.go` 提供分阶段启动（PhasedStartup），按 P0→P4 顺序启动，每阶段 30s 健康检查门控（并行 Ping）；P0 失败 panic（策略真空不可接受），P1-P4 失败返回 error；SQLiteBlackboard 接入 P0 健康检查。
+⚠️ **已定义未接线**（2026-08-15 核查）：`internal/swarm/startup.go` 定义了分阶段启动契约
+（`PhasedStartup`/`Pinger`/`PhaseEntry`）——按 P0→P4 顺序启动，每阶段 30s 健康检查门控（并行 Ping），
+P0 失败 panic（策略真空不可接受），P1-P4 失败返回 error。
+
+但**生产路径从未调用**：全仓零处引用 `NewPhasedStartup`，也没有任何子系统被注册进
+`PhaseEntry`（原文所称"SQLiteBlackboard 接入 P0 健康检查"在代码中不存在对应注册点）。
+生产启动实际走 `cmd/polaris/boot_*.go` 的手工装配链。
+
+与 `internal/bootstrap` 的关系：这是仓库里**第二套**未接线的启动编排契约。
+`ARCHITECTURE.md §8.2` + `ADR-0088 §决策七` 已就 bootstrap 裁决"维持不接线"，
+理由是它被 `ARCHITECTURE.md` 与 `Module-Dependency-Axioms.md §4` 共同指为目标契约；
+本节此前的"✅ 已实现"是唯一指向 `swarm/startup.go` 的陈述，且与代码相反。
+若将来要收敛启动编排，两套须一并裁决，不宜单独处置其一。
 
 ---
 
@@ -141,7 +153,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 
 产品侧设想的 Librarian（对接用户本地知识库如 Obsidian/Notion，整理内容、辅助 AI 理解用户/办公）**不新建独立 swarm 角色**——2026-07-03 系统级决策：这类"周期性把外部信息摄入进 Agent 可用知识"的职能与 MemoryAgent 已经承担的 Extension Librarian 调度是同一性质的工作，收编进 **MemoryAgent** 的调度范围，不单独起一个常驻 goroutine（避免 Tier-0 内存预算和 Supervisor 挂载点的边际浪费，两者也没有独立扩缩容/故障隔离的必要性）。
 
-**代码现状**：`internal/knowledge/connector/` 下 `obsidian_connector.go` 与 `notion_connector.go` 均已完整实现（List/Fetch/Watch/SyncConfig 等方法齐全），但两者目前都还未被 MemoryAgent 所在的 `internal/swarm/` 引用调度——即"收编进 MemoryAgent 调度"这一决策的连接器代码本体已就绪，调度接入这一步尚未完成，Obsidian 与 Notion 处于同一未接线状态，并非"Obsidian 已接入、Notion 待实现"的差异化状态。若未来知识库同步的复杂度/调用量确实超出 MemoryAgent 承载范围，再考虑拆分独立角色。详见 `local_playground/upgrade/2026-07-03-architecture-gap-remediation.md` P2-4。
+**代码现状**：`internal/knowledge/connector/` 下 `obsidian_connector.go` 与 `notion_connector.go` 均已完整实现（List/Fetch/Watch/SyncConfig 等方法齐全），但两者目前都还未被 MemoryAgent 所在的 `internal/swarm/` 引用调度——即"收编进 MemoryAgent 调度"这一决策的连接器代码本体已就绪，调度接入这一步尚未完成，Obsidian 与 Notion 处于同一未接线状态，并非"Obsidian 已接入、Notion 待实现"的差异化状态。若未来知识库同步的复杂度/调用量确实超出 MemoryAgent 承载范围，再考虑拆分独立角色。详见 `local_playground/bake/20260703/2026-07-03-architecture-gap-remediation.md` P2-4。
 
 ---
 

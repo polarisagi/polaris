@@ -33,8 +33,13 @@
 
 ## 消费端接口声明位置
 
-`internal/swarm/provider.go` — 已声明：OutboxWriter、LLMInfer、SwarmMetrics。
-新增外部依赖时先在此文件声明接口，由 `bootstrap` 注入。
+新增外部依赖时，在本包内新建 `provider.go` 声明消费端接口（HE-3：接口在调用方定义），
+由 `cmd/polaris/boot_*.go` 装配时注入具体实现。
+
+> 2026-08-15：本包原有的 `provider.go` 已删除。它声明的 OutboxWriter / LLMInfer /
+> SwarmMetrics 三个接口全仓零消费方——`swarm/agents` 用的是自己的 `LLMInferFunc`（函数型契约），
+> Blackboard 编排实际落在 `internal/execute/orchestrator` 且有自己的声明。
+> 保留一个空的占位文件没有意义（同 GR-6-003 判例），约定本身写在这里即可。
 
 ## 防死锁约束
 
