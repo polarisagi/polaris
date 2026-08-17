@@ -1,9 +1,25 @@
 //go:build ignore
 
-// taint_typed_fields_check 校验关键跨界结构体字段是否保持为 taint.TaintedString 类型（F-3）。
+// taint_typed_fields_check 守污点类型体系的三条断言：
 //
-// 读取 tools/taint-typed-fields.txt 约定的 字段 -> 类型 约束，
-// 利用 AST 检查文件中的真实声明。防止重现 CodeActResult.Output 退化为裸 []byte 导致污点丢失（A-4）。
+//	[F-3]  关键跨界结构体字段保持 taint.TaintedString 类型（表驱动，见 taint-typed-fields.txt）
+//	[L-03] 赋值黑名单：禁止把污点等级写成常量（见 taint-assign-denylist.txt）
+//	[L-15] 禁止裸 TaintedString{} 复合字面量构造（2026-08-17 新增）
+//
+// ── F-3 ──
+// 读取 tools/taint-typed-fields.txt 约定的 字段 -> 类型 约束，利用 AST 检查真实声明。
+// 防止重现 CodeActResult.Output 退化为裸 []byte 导致污点丢失（A-4）。
+//
+// ── L-15 ──
+// 2026-08-17 从 Makefile 的内联 `grep -rn 'TaintedString{'` 目标搬进来并 AST 化。
+// 裸复合字面量能凭空造出一个 TaintLevel 任意（含 TaintNone）的 TaintedString，
+// 绕过 inv_M11_02「只升不降、output = max(inputs)」——污点体系的全部保证都建立在
+// 「TaintedString 只能由构造函数产出」之上，这条就是守住那个入口。
+//
+// 原目标的问题有三：挂在 GD-14-004 这个**批次内序号**下（review_check.go 自己写明
+// GD 编号跨轮复用），而同一个 GD-14-004 此刻还标着另外两条互不相干的断言；作为
+// "Makefile 内联 grep" 被整体豁免于负向验证；且 grep 判据靠三段 `grep -v` 排除
+// 构造函数所在行，字符串字面量与注释里出现该串同样会命中。改为稳定的 L-15。
 //
 // 使用：
 //
@@ -18,7 +34,12 @@ import (
 	"go/token"
 	"os"
 	"strings"
+
+	"github.com/polarisagi/polaris/tools/lintutil"
 )
+
+// taintPkgDir 是 TaintedString 的定义处，构造函数就住在这里，理应豁免 L-15。
+const taintPkgDir = "internal/security/taint/"
 
 // forbiddenMarker 在名单里作为期望类型出现时，语义反转为「该字段必须不存在」。
 const forbiddenMarker = "FORBIDDEN"
@@ -52,11 +73,41 @@ func main() {
 	checkAssignDenylist(fset)
 
 	fmt.Printf("taint_typed_fields_check: scanned %d field requirement(s)\n", checkedCount)
-	if errCount > 0 {
-		fmt.Fprintf(os.Stderr, "taint_typed_fields_check: FAIL — %d violation(s)\n", errCount)
-		os.Exit(1)
-	}
-	fmt.Println("taint_typed_fields_check: PASS")
+
+	// L-15 走 lintutil 的报告器；F-3/L-03 两部分仍用本文件的 errCount，
+	// 通过 AddViolations 合流，使退出码涵盖三条断言。
+	r := lintutil.NewReporter("taint-typed-fields-check", nil) // fail-closed：污点入口不接受存量
+	checkBareConstruction(r)
+	r.AddViolations(errCount)
+	r.RequireAnchors(1, "L-15 的判据锚在 TaintedString 复合字面量上；"+
+		"internal/security/taint 里的构造函数至少贡献一处，锚点归零说明类型改名或包搬走了")
+	r.Done()
+}
+
+// checkBareConstruction 实现 L-15：禁止在 taint 包之外用复合字面量直接造 TaintedString。
+//
+// 判据面刻意**包含** taint 包自身（构造函数在那里，是合法来源），既作为锚点证明规则
+// 还看得见东西，也避免"全仓零命中"与"规则瞎了"混为一谈；只在报违规时豁免该目录。
+func checkBareConstruction(r *lintutil.Reporter) {
+	lintutil.Walk(r, lintutil.WalkOptions{}, func(f lintutil.File) {
+		ast.Inspect(f.AST, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			typeName := lintutil.ExprText(lit.Type)
+			if typeName != "TaintedString" && typeName != "taint.TaintedString" {
+				return true
+			}
+			r.Anchor()
+			if strings.HasPrefix(f.Path, taintPkgDir) {
+				return true // 构造函数的家，合法来源
+			}
+			r.Violation(f.At(lit), "裸 %s{...} 复合字面量构造——TaintedString 只能经构造函数产出，"+
+				"直接构造可凭空指定 TaintLevel 并绕过 inv_M11_02「只升不降」（违反 L-15）", typeName)
+			return true
+		})
+	})
 }
 
 func parseList(path string) ([]FieldRequirement, error) {

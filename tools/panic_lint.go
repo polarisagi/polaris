@@ -1,137 +1,61 @@
 //go:build ignore
 
-// panic_lint 扫描 internal/ 与 pkg/ 下违反 [E1] 的框架层 panic Call（F-12）。
+// panic_lint 拦截框架层新增的 panic 调用（F-12 / [E1]，并含 L-04 的导出构造函数子句）。
 //
-// 规则 [E1]：Panic 仅允许在 init() 与 cmd/polaris/ 进程入口。
-// 棘轮机制：存量不可恢复加密/安全/构造 panic 记录在 tools/baselines/panic-baseline.md，
+// 规则 [E1]：panic 仅允许出现在 init() 与 cmd/polaris/ 进程入口。库代码里 panic 等于
+// 把「这台机器上的一个请求出错」升级成「整个进程死掉」，而 Agent 进程持有的是长驻会话。
 //
-//	本门控阻断任何**新增**的框架层 panic 调用。
+// 扫描根刻意是 internal + pkg，**不含 cmd/**：cmd/polaris 是进程入口，[E1] 明确允许。
+// 这是有据的收窄，别按"统一三根"的直觉改掉。
 //
-// 使用：
-//
-//	go run tools/panic_lint.go
+// 豁免：init() 函数体；recover 后原样重抛（panic(r) / panic(err) / panic(rec)）。
+// 棘轮：存量记在 tools/baselines/panic-baseline.md，键为 path:line:FuncName。
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/polarisagi/polaris/tools/lintutil"
 )
 
-var errCount int
-var panicCount int
-var baselineCount int
+// rethrowArgs 是 recover 后原样重抛的惯用参数名。按名字放行是个近似：没有类型信息时
+// 无法证明这个 r 真的来自 recover()，但收紧到「必须在 defer+recover 块内」会把
+// 几处合法的跨函数重抛判成违规——过严的门控最终会被整体关掉，比漏报更糟。
+var rethrowArgs = map[string]bool{"r": true, "err": true, "rec": true}
 
 func main() {
-	baselinePath := "tools/baselines/panic-baseline.md"
-	baselineMap, _ := loadBaseline(baselinePath)
+	r := lintutil.NewReporter("panic-lint", lintutil.LoadBaseline("panic-baseline.md"))
 
-	roots := []string{"internal", "pkg"}
-	fset := token.NewFileSet()
-
-	for _, root := range roots {
-		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
+	lintutil.Walk(r, lintutil.WalkOptions{Roots: []string{"internal", "pkg"}}, func(f lintutil.File) {
+		lintutil.FuncDecls(f, func(fn *ast.FuncDecl) {
+			if fn.Name.Name == "init" {
+				return
 			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			checkFile(fset, path, baselineMap)
-			return nil
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "panic_lint: walk %s: %v\n", root, err)
-			os.Exit(2)
-		}
-	}
-
-	fmt.Printf("panic_lint: scanned %d framework panic call(s) (baseline: %d stock item(s))\n", panicCount, baselineCount)
-	if errCount > 0 {
-		fmt.Fprintf(os.Stderr, "panic_lint: FAIL — %d NEW violation(s) not in baseline\n", errCount)
-		os.Exit(1)
-	}
-	fmt.Println("panic_lint: PASS")
-}
-
-func loadBaseline(path string) (map[string]bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	bm := make(map[string]bool)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		bm[line] = true
-	}
-	return bm, scanner.Err()
-}
-
-func checkFile(fset *token.FileSet, path string, baseline map[string]bool) {
-	node, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		return
-	}
-
-	ast.Inspect(node, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			return true
-		}
-
-		if fn.Name.Name == "init" {
-			return false
-		}
-
-		ast.Inspect(fn.Body, func(bodyNode ast.Node) bool {
-			call, ok := bodyNode.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			ident, ok := call.Fun.(*ast.Ident)
-			if !ok || ident.Name != "panic" {
-				return true
-			}
-
-			panicCount++
-
-			if len(call.Args) == 1 {
-				if argIdent, ok := call.Args[0].(*ast.Ident); ok {
-					if argIdent.Name == "r" || argIdent.Name == "err" || argIdent.Name == "rec" {
-						return true
+			lintutil.Calls(fn.Body, func(call *ast.CallExpr) {
+				ident, ok := call.Fun.(*ast.Ident)
+				if !ok || ident.Name != "panic" {
+					return
+				}
+				r.Anchor()
+				if len(call.Args) == 1 {
+					if arg, ok := call.Args[0].(*ast.Ident); ok && rethrowArgs[arg.Name] {
+						return
 					}
 				}
-			}
-
-			pos := fset.Position(call.Pos())
-			key := fmt.Sprintf("%s:%d:%s", path, pos.Line, fn.Name.Name)
-			if baseline[key] {
-				baselineCount++
-				return true
-			}
-
-			if fn.Name.IsExported() && strings.HasPrefix(fn.Name.Name, "New") {
-				fmt.Printf("%s:%d: 导出构造函数 %q 内禁用 panic，请改为返回 error（违反 fail-closed 规范 L-04）\n",
-					path, pos.Line, fn.Name.Name)
-			} else {
-				fmt.Printf("%s:%d: 在非 init() 框架层函数 %q 内新增 panic() 调用（违反 [E1] 错误处理规范 F-12 与棘轮规则）\n",
-					path, pos.Line, fn.Name.Name)
-			}
-			errCount++
-			return true
+				key := fmt.Sprintf("%s:%s", f.At(call), fn.Name.Name)
+				if fn.Name.IsExported() && len(fn.Name.Name) > 3 && fn.Name.Name[:3] == "New" {
+					r.Violation(key, "导出构造函数 %q 内禁用 panic，请改为返回 error（违反 fail-closed 规范 L-04）",
+						fn.Name.Name)
+					return
+				}
+				r.Violation(key, "在非 init() 的框架层函数 %q 内新增 panic() 调用——"+
+					"库代码 panic 会把单次请求出错升级成进程退出（违反 [E1] F-12 与棘轮规则）", fn.Name.Name)
+			})
 		})
-
-		return true
 	})
+
+	r.RequireAnchors(1, "判据锚在框架层的 panic() 调用上；基线里登记着存量，"+
+		"锚点归零说明扫描面而非代码变了")
+	r.Done()
 }

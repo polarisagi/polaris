@@ -269,9 +269,14 @@ func findUncoveredRuleIDs(cases []selfTestCase) []string {
 
 	// 豁免：非"扫描代码找缺陷"类的检查（由各自 make 目标直接验证），
 	// 以及以自身为判据的元门控。
+	//
+	// 2026-08-17 删除 GD-14-004 / GD-14-006 两条豁免。它们的理由曾是「Makefile 内联的
+	// grep 式检查，无独立工具」——而那正是问题本身：三条规则因此从未被证明能报红，
+	// 其中 policy-gate-check 实测恒绿。判定已 AST 化并入既有工具（L-15/L-16/L-17），
+	// 三条都在清单里有负向用例。**豁免表每多一条，这本账就少覆盖一条**，
+	// 加豁免前先问能不能把规则做到可验证。
 	exempt := map[string]bool{
 		"meta": true, "doc-counts": true,
-		"GD-14-004": true, "GD-14-006": true, // Makefile 内联的 grep 式检查，无独立工具
 	}
 
 	seen := map[string]bool{}
