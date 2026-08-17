@@ -30,10 +30,10 @@ add | F-12 | tools/panic_lint.go | internal/tool/sandbox/zz_selftest_panic.go | 
 # F-2：把 Capability Token 校验收窄回「仅 Privileged」，即 inv_M7_01 的后门形态。
 patch | F-2 | tools/no_backdoor_lint.go | internal/sandbox/envelope.go | if RequiresCapabilityToken(req.Tool.Capability) && req.Kind != KindHookExecute { | if req.Tool.Capability >= types.CapPrivileged {
 
-# GD-14-004：拆掉 Authorize 里的 PolicyGate fail-closed 判定。
+# L-17：拆掉 Authorize 里的 PolicyGate fail-closed 判定。
 # 2026-08-17 从 Makefile 的恒绿 policy-gate-check 目标搬进 no_backdoor_lint 后补的负向用例——
-# 原目标从未被负向验证过，正因如此它恒绿了很久也没人发现。
-patch | GD-14-004 | tools/no_backdoor_lint.go | internal/extension/marketplace/manager.go | if m.policyGate == nil {\n\t\treturn apperr.New(apperr.CodeInternal, "policy gate not configured (fail-closed)")\n\t}\n\tmode, err := m.prefsRepo.GetPermissionMode(ctx) | mode, err := m.prefsRepo.GetPermissionMode(ctx)
+# 原目标从未被负向验证过（它作为"内联 grep"整体豁免于本清单），正因如此它恒绿了很久没人发现。
+patch | L-17 | tools/no_backdoor_lint.go | internal/extension/marketplace/manager.go | if m.policyGate == nil {\n\t\treturn apperr.New(apperr.CodeInternal, "policy gate not configured (fail-closed)")\n\t}\n\tmode, err := m.prefsRepo.GetPermissionMode(ctx) | mode, err := m.prefsRepo.GetPermissionMode(ctx)
 
 # F-3：把已删除的调用方自报污点字段加回 CodeActRequest（C-8 禁止重新引入）。
 patch | F-3 | tools/taint_typed_fields_check.go | internal/protocol/codeact.go | \tAgentID      string\n | \tAgentID      string\n\tTaintLevel   int\n
@@ -67,3 +67,9 @@ add | L-11 | tools/apperr_semantics_check.go | internal/zz_selftest_apperr.go | 
 add | L-12 | tools/regex_greedy_check.go | internal/zz_selftest_regex.go | tools/testdata/selftest/L12_regex.go.txt
 add | L-13 | tools/wiring_reachability_check.go | internal/zzselftestorphan/orphan.go | tools/testdata/selftest/L13_orphan_pkg.go.txt
 patch | L-03 | tools/taint_typed_fields_check.go | internal/knowledge/rag_retrieval.go | if c.TaintLevel > req.TaintMax { | if c.TaintLevel > 99 {
+
+# ── 2026-08-17：三条内联 grep 门控 AST 化后补的负向用例 ────────────────────────
+# 它们此前作为「Makefile 内联 grep 式检查」被整体豁免于本清单，于是从未被证明能报红；
+# policy-gate-check 实测恒绿。豁免表每多一条，这本账就少覆盖一条。
+add | L-15 | tools/taint_typed_fields_check.go | internal/tool/sandbox/zz_selftest_taint.go | tools/testdata/selftest/L15_bare_taint.go.txt
+add | L-16 | tools/fsm_io_lint.go | internal/agent/fsm/zz_selftest_goto.go | tools/testdata/selftest/L16_fsm_goto.go.txt

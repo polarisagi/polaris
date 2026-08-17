@@ -1,0 +1,7 @@
+package sandbox
+
+import "github.com/polarisagi/polaris/internal/security/taint"
+
+// zzSelftestBareTaint 是 [L-15] 的负向用例：在 taint 包之外用复合字面量直接构造
+// TaintedString，绕过构造函数即可凭空指定污点等级。门控必须因此报红。
+var zzSelftestBareTaint = taint.TaintedString{}

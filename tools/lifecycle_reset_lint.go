@@ -1,127 +1,100 @@
 //go:build ignore
 
+// lifecycle_reset_lint 拦截 select 多路接收里「任一源通道关闭即终止整个循环」的写法（L-09）。
+//
+// 判据：`case ev, ok := <-ch:` 的 `if !ok { ... return nil }` 分支。
+// 多路 select 里某个源关闭是常态（订阅取消、上游重建），此时正确做法是把该通道置 nil
+// 让它退出 select 的候选集，然后 continue；直接 return nil 会把其余仍活跃的源一并放弃，
+// 表现为「重建一次上游，整条消费链静默停摆」。
+//
+// 确需退出时在 return 行加 //nolint:lifecycle_reset 并说明理由。
+//
+// 扫描根 2026-08-17 从单 "internal" 扩到全仓三根（ADR-0089）。扩根前已实测 0 新增命中。
 package main
 
 import (
-	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/polarisagi/polaris/tools/lintutil"
 )
 
-// scanRoots 是本仓所有 Go 源码根。2026-08-17 从单 "internal" 扩到三根：扫描根不一致
-// 本身就是一种静默漏检（ADR-0089）。扩根前已实测 cmd/ 与 pkg/ 上 0 新增命中。
-var scanRoots = []string{"internal", "cmd", "pkg"}
-
 func main() {
-	fset := token.NewFileSet()
-	var goFiles []string
-	for _, root := range scanRoots {
-		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-				goFiles = append(goFiles, path)
-			}
-			return nil
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Walk %s failed: %v\n", root, err)
-			os.Exit(2)
-		}
-	}
+	r := lintutil.NewReporter("lifecycle-reset-check", lintutil.LoadBaseline("lifecycle-reset-baseline.md"))
 
-	hasError := false
-	for _, path := range goFiles {
-		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if err != nil {
-			continue
-		}
+	lintutil.Walk(r, lintutil.WalkOptions{NeedComments: true}, func(f lintutil.File) {
+		exempt := lintutil.NolintLines(f, "lifecycle_reset")
 
-		ast.Inspect(f, func(n ast.Node) bool {
-			// Find select statement
-			selStmt, ok := n.(*ast.SelectStmt)
+		ast.Inspect(f.AST, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectStmt)
 			if !ok {
 				return true
 			}
-
-			for _, comm := range selStmt.Body.List {
-				cc, ok := comm.(*ast.CommClause)
+			for _, clause := range sel.Body.List {
+				cc, ok := clause.(*ast.CommClause)
 				if !ok {
 					continue
 				}
-
-				// Check for case ev, ok := <-ch:
-				assign, ok := cc.Comm.(*ast.AssignStmt)
-				if !ok || len(assign.Lhs) != 2 || assign.Tok != token.DEFINE {
+				okIdent := commaOkIdent(cc.Comm)
+				if okIdent == "" {
 					continue
 				}
-
-				okIdent, isIdent := assign.Lhs[1].(*ast.Ident)
-				if !isIdent {
-					continue
-				}
-
-				// Check for if !ok block
-				for _, stmt := range cc.Body {
-					ifStmt, isIf := stmt.(*ast.IfStmt)
-					if !isIf {
+				r.Anchor()
+				for _, ret := range bailoutReturns(cc.Body, okIdent) {
+					if exempt[f.Fset.Position(ret.Pos()).Line] {
 						continue
 					}
-
-					unary, isUnary := ifStmt.Cond.(*ast.UnaryExpr)
-					if !isUnary || unary.Op != token.NOT {
-						continue
-					}
-					condIdent, isCondIdent := unary.X.(*ast.Ident)
-					if !isCondIdent || condIdent.Name != okIdent.Name {
-						continue
-					}
-
-					// Check if last stmt is return nil
-					if len(ifStmt.Body.List) > 0 {
-						lastStmt := ifStmt.Body.List[len(ifStmt.Body.List)-1]
-						if retStmt, isRet := lastStmt.(*ast.ReturnStmt); isRet {
-							if len(retStmt.Results) == 1 {
-								if retIdent, isId := retStmt.Results[0].(*ast.Ident); isId && retIdent.Name == "nil" {
-									// Check nolint
-									hasNolint := false
-									if f.Comments != nil {
-										for _, cg := range f.Comments {
-											for _, c := range cg.List {
-												if fset.Position(c.Pos()).Line == fset.Position(retStmt.Pos()).Line {
-													if strings.Contains(c.Text, "//nolint:lifecycle_reset") {
-														hasNolint = true
-													}
-												}
-											}
-										}
-									}
-									if !hasNolint {
-										pos := fset.Position(retStmt.Pos())
-										// 2026-08-17：原报错文案是一串乱码（「将迎来弹道第一个源就吴杀全部协程」），
-										// 读者无从判断该改什么。改为直述判据与修法。
-										fmt.Fprintf(os.Stderr, "%s:%d: select 的 !ok 分支直接 return nil——任一源通道关闭即终止整个循环，"+
-											"其余仍活跃的源被一并放弃（违反 L-09）。应把该通道置 nil 后 continue，"+
-											"确需退出时加 //nolint:lifecycle_reset 并说明理由\n", pos.Filename, pos.Line)
-										hasError = true
-									}
-								}
-							}
-						}
-					}
+					r.Violation(f.At(ret), "select 的 !ok 分支直接 return nil——任一源通道关闭即终止整个循环，"+
+						"其余仍活跃的源被一并放弃（违反 L-09）。应把该通道置 nil 后 continue，"+
+						"确需退出时加 //nolint:lifecycle_reset 并说明理由")
 				}
 			}
 			return true
 		})
-	}
+	})
 
-	if hasError {
-		os.Exit(1)
+	r.RequireAnchors(1, "判据锚在 select 的 `case v, ok := <-ch:` 形态上；全仓一个都没有属异常")
+	r.Done()
+}
+
+// commaOkIdent 返回 `case v, ok := <-ch:` 里 ok 变量的名字，非该形态返回空串。
+func commaOkIdent(comm ast.Stmt) string {
+	assign, ok := comm.(*ast.AssignStmt)
+	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != 2 {
+		return ""
 	}
-	fmt.Println("lifecycle-reset-check ok")
+	id, ok := assign.Lhs[1].(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	return id.Name
+}
+
+// bailoutReturns 找出 `if !<okIdent> { ...; return nil }` 里那条 return。
+func bailoutReturns(body []ast.Stmt, okIdent string) []*ast.ReturnStmt {
+	var out []*ast.ReturnStmt
+	for _, stmt := range body {
+		ifStmt, ok := stmt.(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		unary, ok := ifStmt.Cond.(*ast.UnaryExpr)
+		if !ok || unary.Op != token.NOT {
+			continue
+		}
+		if id, ok := unary.X.(*ast.Ident); !ok || id.Name != okIdent {
+			continue
+		}
+		if len(ifStmt.Body.List) == 0 {
+			continue
+		}
+		last, ok := ifStmt.Body.List[len(ifStmt.Body.List)-1].(*ast.ReturnStmt)
+		if !ok || len(last.Results) != 1 {
+			continue
+		}
+		if id, ok := last.Results[0].(*ast.Ident); ok && id.Name == "nil" {
+			out = append(out, last)
+		}
+	}
+	return out
 }

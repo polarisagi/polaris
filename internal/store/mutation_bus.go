@@ -263,7 +263,7 @@ func (dw *DatabaseWriter) drainCh() {
 			if intent.ResultCh != nil {
 				// ResultCh 由调用方创建（cap 1），单写者不得阻塞在他人的 channel 上；default 分支对应调用方已因超时退场
 				select {
-				case intent.ResultCh <- apperr.New(apperr.CodeInternal, "DatabaseWriter is restarting"): //nolint:chan_send_guard
+				case intent.ResultCh <- apperr.New(apperr.CodeInternal, "DatabaseWriter is restarting"):
 				default:
 				}
 			}
