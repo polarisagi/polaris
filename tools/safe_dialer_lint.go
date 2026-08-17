@@ -5,12 +5,28 @@
 // 出站连接必须经 SafeDialer，否则 SSRFGuard 的私网/环回拦截形同虚设——攻击者只要让
 // Agent 去请求一个 169.254.169.254 之类的地址就能读到云元数据。
 //
-// 判据两类：
-//  1. 裸调用：net.Dial / net.DialTimeout、http.Get/Post/PostForm（走 DefaultClient）、
+// 判据三类：
+//  1. 裸调用：net.Dial / net.DialContext / net.DialTimeout、http.Get/Post/Head/PostForm、
 //     grpc.Dial / grpc.NewClient、smtp.SendMail / smtp.Dial；
-//  2. websocket.Dialer 复合字面量在同函数内未注入 NetDialContext。
+//  2. 裸**引用**：http.DefaultClient / http.DefaultTransport（不必是调用——把
+//     DefaultClient 赋给字段同样绕过 SafeDialer，只查 CallExpr 会漏掉这一整类）；
+//  3. websocket.Dialer 复合字面量在同函数内未注入 NetDialContext。
 //
 // 豁免：internal/security/network/ 包自身（SafeDialer 的实现处）与 _test.go。
+//
+// ── 2026-08-17：与 internal/lint 的重复判据合并 ──
+//
+// 本仓有两套静态分析：tools/（make lint，AST 单文件扫描）与 internal/lint/（go test，
+// 不变量测试）。二者的**判据命名空间此前是重叠的**，出站连接这条正是撞在一起的：
+// internal/lint/inv_lint_test.go 的 Test_inv_M11_05_NoRawNetDial 与
+// Test_inv_M1_01_NoRawHTTPCalls 与本规则查的是同一件事，而且**已经漂了**——
+//
+//	本规则独有：net.DialTimeout、http.PostForm、smtp.*、websocket.Dialer、扫 cmd/
+//	那两条独有：net.DialContext、http.Head、http.DefaultClient 的非调用引用
+//
+// 也就是说两边各自放过了对方能抓的形态，而任何一方绿灯都会被读成"这条不变量守住了"。
+// 现取并集归本规则单一所有（新增形态全仓 0 命中，合并零成本），那两条测试改为指向注记。
+// 判据只能有一个归属：两份实现不会同步演进，只会各自腐烂到互相掩盖。
 package main
 
 import (
@@ -24,14 +40,22 @@ var bareCalls = map[string]struct {
 	fns    map[string]bool
 	reason string
 }{
-	"net":  {map[string]bool{"Dial": true, "DialTimeout": true}, "必须通过 SafeDialer.DialContext"},
-	"http": {map[string]bool{"Get": true, "Post": true, "PostForm": true}, "走的是 DefaultClient，需注入 SafeDialer Transport"},
+	"net":  {map[string]bool{"Dial": true, "DialContext": true, "DialTimeout": true}, "必须通过 SafeDialer.DialContext"},
+	"http": {map[string]bool{"Get": true, "Post": true, "Head": true, "PostForm": true}, "走的是 DefaultClient，需注入 SafeDialer Transport"},
 	"grpc": {map[string]bool{"Dial": true, "NewClient": true}, "需通过 SafeDialer 注入"},
 	"smtp": {map[string]bool{"SendMail": true, "Dial": true}, "需通过 SafeDialer 注入"},
 }
 
+// bareRefs 是禁止**引用**（不必是调用）的包成员：把 http.DefaultClient 赋给一个字段
+// 或作为参数传出去，同样绕过 SafeDialer，而只查 CallExpr 看不见这一类。
+var bareRefs = map[string]map[string]bool{
+	"http": {"DefaultClient": true, "DefaultTransport": true},
+}
+
 func main() {
-	r := lintutil.NewReporter("safe-dialer-lint", nil) // fail-closed：出站边界不接受存量
+	// 棘轮：合并两套系统的判据后，http.DefaultTransport 的非调用引用首次进入判据面，
+	// 一次暴露 4 处存量（1 处刻意豁免 + 3 处 nil 回落）。逐条理由见基线文件。
+	r := lintutil.NewReporter("safe-dialer-lint", lintutil.LoadBaseline("safe-dialer-baseline.md"))
 
 	opts := lintutil.WalkOptions{ExcludeContains: []string{"internal/security/network/"}}
 	lintutil.Walk(r, opts, func(f lintutil.File) {
@@ -46,6 +70,25 @@ func main() {
 			}
 			r.Anchor()
 			r.Violation(f.At(call), "裸 %s.%s() 调用，%s（违反 inv_safe_dialer_01）", pkg, fn, entry.reason)
+		})
+
+		// 裸引用：http.DefaultClient / DefaultTransport，不必是调用。
+		ast.Inspect(f.AST, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if !bareRefs[pkg.Name][sel.Sel.Name] {
+				return true
+			}
+			r.Anchor()
+			r.Violation(f.At(sel), "裸引用 %s.%s——它承载的是全局默认 Transport，"+
+				"任何经它发出的请求都不过 SSRFGuard（违反 inv_safe_dialer_01）", pkg.Name, sel.Sel.Name)
+			return true
 		})
 
 		lintutil.FuncDecls(f, func(fd *ast.FuncDecl) {

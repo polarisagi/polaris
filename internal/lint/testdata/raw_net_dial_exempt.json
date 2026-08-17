@@ -1,3 +1,0 @@
-{
-  "_comment": "M11-05 禁裸 net.Dial 的豁免表。2026-08-08：同 raw_http_calls_exempt，原键为重构前路径，扫描根接回 internal/ 后全仓零违规，豁免表清空。"
-}
