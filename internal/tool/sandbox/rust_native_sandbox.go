@@ -8,7 +8,7 @@
 //   - 此文件是 Go 层的薄封装，不含任何平台特定逻辑（平台逻辑全在 Rust）
 //   - Go 侧统一走 V2（CmdRunner 已于 2026-07-02 从 V1 迁移完毕，见 cmd_runner_adapter.go）；
 //     Rust 侧保留 V1 FFI 导出（native_sandbox_exec）不删、Go 侧不绑定，理由与重评
-//     触发条件见 ADR-0011 决策四，白名单条目在 scripts/deadcode-allowlist.txt。
+//     触发条件见 ADR-0011 决策四，白名单条目在 tools/baselines/deadcode-allowlist.txt。
 //     禁止为了让 make ffi-check 转绿而在此补一个空绑定——2026-08-12 出现过一次：
 //     补的绑定签名是 5 参而 Rust V1 实际是 3 参（req_json/out_json/out_err），
 //     一旦有人调用就是栈错位。门控报未绑定时的正解是删符号或登记白名单，不是造绑定。

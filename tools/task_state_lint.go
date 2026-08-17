@@ -145,12 +145,26 @@ func condenseSQL(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// checkOutboxWorker 断言 L-06：毒丸分支（CrashRecoveryCount 超阈）不得 return nil，
+// 否则崩溃恢复计数用尽的消息会被当作处理成功而丢弃。
+//
+// 2026-08-17 两处修正：
+//
+//  1. 原实现在文件打不开/解析失败时直接 `return`，静默当作通过。锚点消失必须表现为
+//     红灯——这正是 ADR-0091 那四种门控失真形态里的第一种（豁免自己）。改为 exit 2。
+//  2. 原实现要求阈值是**字面量 3**（`bin.Y` 必须是 BasicLit "3"）。把 3 提成命名常量
+//     是一次纯粹的良性重构，却会让本规则从此一无所获且继续打印 PASS。判据改为
+//     「CrashRecoveryCount 与任何东西比较」，不再绑死右操作数的形态。
 func checkOutboxWorker(fset *token.FileSet) {
 	path := "internal/store/outbox_worker.go"
 	node, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		return
+		fmt.Fprintf(os.Stderr, "task_state_lint: FAIL — 无法解析 L-06 的锚点文件 %s：%v。"+
+			"文件被移动或改名时必须同步本规则，而不是让门控静默通过\n", path, err)
+		os.Exit(2)
 	}
+
+	anchorFound := false
 
 	ast.Inspect(node, func(n ast.Node) bool {
 		ifStmt, ok := n.(*ast.IfStmt)
@@ -158,31 +172,30 @@ func checkOutboxWorker(fset *token.FileSet) {
 			return true
 		}
 
-		// Look for CrashRecoveryCount >= 3 or something like it
+		// 找 CrashRecoveryCount 的上界比较；右操作数是字面量还是命名常量都算。
 		isCrashCountCheck := false
 		ast.Inspect(ifStmt.Cond, func(cn ast.Node) bool {
 			bin, ok := cn.(*ast.BinaryExpr)
 			if !ok {
 				return true
 			}
-			// Check right side == 3
-			if blit, ok := bin.Y.(*ast.BasicLit); ok && blit.Value == "3" {
-				if bin.Op == token.GEQ || bin.Op == token.GTR {
-					if id, ok := bin.X.(*ast.SelectorExpr); ok {
-						if id.Sel.Name == "CrashRecoveryCount" {
-							isCrashCountCheck = true
-						}
-					} else if id, ok := bin.X.(*ast.Ident); ok {
-						if id.Name == "CrashRecoveryCount" || strings.Contains(id.Name, "CrashRecovery") {
-							isCrashCountCheck = true
-						}
-					}
+			if bin.Op != token.GEQ && bin.Op != token.GTR {
+				return true
+			}
+			if id, ok := bin.X.(*ast.SelectorExpr); ok {
+				if id.Sel.Name == "CrashRecoveryCount" {
+					isCrashCountCheck = true
+				}
+			} else if id, ok := bin.X.(*ast.Ident); ok {
+				if strings.Contains(id.Name, "CrashRecovery") {
+					isCrashCountCheck = true
 				}
 			}
 			return true
 		})
 
 		if isCrashCountCheck {
+			anchorFound = true
 			// Ensure it does not return nil
 			ast.Inspect(ifStmt.Body, func(bn ast.Node) bool {
 				ret, ok := bn.(*ast.ReturnStmt)
@@ -192,7 +205,8 @@ func checkOutboxWorker(fset *token.FileSet) {
 				for _, res := range ret.Results {
 					if id, ok := res.(*ast.Ident); ok && id.Name == "nil" {
 						pos := fset.Position(ret.Pos())
-						fmt.Printf("%s:%d: CrashRecoveryCount>=3 的毒丸分支 return nil 违反 outbox_inv_03（违反 L-06）\n", path, pos.Line)
+						fmt.Printf("%s:%d: CrashRecoveryCount 超阈的毒丸分支 return nil，消息会被当作处理成功而丢弃"+
+							"（违反 outbox_inv_03 / L-06）\n", path, pos.Line)
 						errCount++
 					}
 				}
@@ -201,4 +215,11 @@ func checkOutboxWorker(fset *token.FileSet) {
 		}
 		return true
 	})
+
+	if !anchorFound {
+		fmt.Fprintf(os.Stderr, "task_state_lint: FAIL — 在 %s 里找不到任何 CrashRecoveryCount 上界判定。"+
+			"L-06 的判据锚在这个比较上，字段改名或毒丸逻辑被移走都会走到这里；"+
+			"请同步本规则而非让它继续静默通过（exit 2）\n", path)
+		os.Exit(2)
+	}
 }

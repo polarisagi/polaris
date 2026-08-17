@@ -1,4 +1,4 @@
-# tools/route-coverage-allowlist.txt
+# tools/baselines/route-coverage-allowlist.txt
 # F-8a 路由接线对账的存量基线（ADR-0088 存量债棘轮：只禁增量，不豁免新增）
 #
 # 格式：<方法名>   # <为何暂未接线>

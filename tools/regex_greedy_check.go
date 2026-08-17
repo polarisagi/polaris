@@ -12,21 +12,37 @@ import (
 	"strings"
 )
 
+// scanRoots 是本仓所有 Go 源码根。2026-08-17 从单 "internal" 扩到三根：扫描根不一致
+// 本身就是一种静默漏检（ADR-0089）。扩根前已实测 cmd/ 与 pkg/ 上 0 新增命中。
+var scanRoots = []string{"internal", "cmd", "pkg"}
+
+// isScannedPath 判定一行 baseline 文本是否为路径记录（以某个扫描根开头）。
+func isScannedPath(line string) bool {
+	for _, root := range scanRoots {
+		if strings.HasPrefix(line, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	fset := token.NewFileSet()
 	var goFiles []string
-	err := filepath.Walk("internal", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	for _, root := range scanRoots {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
+				goFiles = append(goFiles, path)
+			}
 			return nil
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Walk %s failed: %v\n", root, err)
+			os.Exit(2)
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
-			goFiles = append(goFiles, path)
-		}
-		return nil
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Walk failed: %v\n", err)
-		os.Exit(2)
 	}
 
 	baselineMap := make(map[string]bool)
@@ -35,14 +51,14 @@ func main() {
 		lines := strings.Split(string(baselineBytes), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "internal/") {
+			if isScannedPath(line) {
 				baselineMap[line] = true
 			}
 		}
 	}
 
 	allowlistMap := make(map[string]bool)
-	allowlistBytes, err := os.ReadFile("scripts/regex-greedy-allowlist.txt")
+	allowlistBytes, err := os.ReadFile("tools/baselines/regex-greedy-allowlist.txt")
 	if err == nil {
 		lines := strings.Split(string(allowlistBytes), "\n")
 		for _, line := range lines {

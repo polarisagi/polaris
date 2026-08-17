@@ -29,7 +29,7 @@ import (
 
 const (
 	modulePath    = "github.com/polarisagi/polaris"
-	allowlistPath = "scripts/wiring-allowlist.txt"
+	allowlistPath = "tools/baselines/wiring-allowlist.txt"
 )
 
 func main() {
