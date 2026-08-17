@@ -1,3 +1,0 @@
-{
-  "_comment": "M1-01 禁裸 HTTP 调用的豁免表。2026-08-08：原唯一键 pkg/substrate/security/safe_dialer.go 是重构前路径；规则扫描根接回 internal/ 后 全仓零违规，故豁免表清空——新增豁免必须写明为何该文件必须裸调 HTTP。"
-}
