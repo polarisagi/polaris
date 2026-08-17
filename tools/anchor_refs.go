@@ -14,7 +14,7 @@
 //     每处引用是否命中。
 //  2. 本工具首跑即预期存在大量存量漂移（历史注释从未被这类门控扫过），故采用
 //     baseline 棘轮模式（ADR-0088 先例）：只对"baseline 中没有、新增的"引用报错，
-//     不要求存量清零。baseline 文件 scripts/anchor-refs-baseline.txt 随代码提交，
+//     不要求存量清零。baseline 文件 tools/baselines/anchor-refs-baseline.txt 随代码提交，
 //     人工确认某条是真实修复后才能把它从 baseline 里删掉（少了才是进步，多了才报错）。
 //  3. 章节号记法比路径字面量更不规则（"0-bis"、"8.6"、纯数字、极少数历史遗留记法
 //     在现有标题里找不到对应——这本身就是门控要抓的漂移，不是解析 bug），故本工具
@@ -32,7 +32,7 @@ import (
 	"strings"
 )
 
-const baselinePath = "scripts/anchor-refs-baseline.txt"
+const baselinePath = "tools/baselines/anchor-refs-baseline.txt"
 
 var (
 	// 模块代号：M + 两位数字，可选 -bis 后缀（M13 / M13-bis）

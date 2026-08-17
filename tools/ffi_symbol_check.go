@@ -3,7 +3,7 @@
 // ffi_symbol_check 检查 Rust 侧 C-ABI 导出符号与 Go 侧 purego/FFI 注册符号的双向对账（F-8b）。
 //
 // 规则：
-//   - S - G 非空（Rust 导出了但 Go 未绑定）：报告可能遗漏的死符号，或需登记在 scripts/deadcode-allowlist.txt
+//   - S - G 非空（Rust 导出了但 Go 未绑定）：报告可能遗漏的死符号，或需登记在 tools/baselines/deadcode-allowlist.txt
 //   - G - S 非空（Go 绑定了 Rust 不存在的符号）：运行时必然 panic/crash，强行报错
 //
 // 使用：
@@ -25,7 +25,7 @@ var errCount int
 func main() {
 	rustDir := "rust/substrate/src"
 	goDirs := []string{"internal", "cmd", "pkg"}
-	allowlistPath := "scripts/deadcode-allowlist.txt"
+	allowlistPath := "tools/baselines/deadcode-allowlist.txt"
 
 	allowlist, _ := loadAllowlist(allowlistPath)
 

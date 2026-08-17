@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -153,9 +154,14 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			defer cancel()
 		}
 
+		// L-10：单行上限走 M1Router.MaxStreamBufferKB。该阀值早已存在（默认 256 KB，
+		// 由 observability/auto_config_tiers.go 按 Tier 放大到 512/1024 KB），
+		// 且 internal/llm/router_stream.go 就是这么用的——此处却硬编码 1 MiB，
+		// 于是运营侧调阀值与 Tier 自适应对真正解码 SSE 的这一段完全不起作用。
+		maxBufBytes := config.CurrentThresholds().M1Router.MaxStreamBufferKB * 1024
 		scanner := bufio.NewScanner(httpResp.Body)
 		buf := make([]byte, 4096)
-		scanner.Buffer(buf, 1024*1024)
+		scanner.Buffer(buf, maxBufBytes)
 
 		// 跨 chunk 聚合 tool_call 参数：index → 状态
 		toolBuilders := map[int]*toolCallState{}

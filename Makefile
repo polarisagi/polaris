@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
+.PHONY: build run test lint clean rust-build rust-test build-ui dev-ui docs-sync docs-check docs-lint docs-gen docs-gen-check gen-threshold-examples generate-manifest manifest-check build-backend build-tier1 test-race rust-lint rust-audit fuzz-taint rust-deny deadcode release-signing-status check-all
 
 GO := go
 CARGO := cargo
@@ -62,7 +62,7 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check policy-gate-check chan-send-guard-check outbox-state-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check chan-send-guard-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
 
@@ -77,10 +77,6 @@ panic-check:
 chan-send-guard-check:
 	@echo "=== [L-05] Chan send guard gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/chan_send_guard_lint.go
-
-outbox-state-check:
-	@echo "=== [L-06] Outbox state gate lint ==="
-	@env GOOS= GOARCH= $(GO) run tools/task_state_lint.go
 
 scheduler-status-check:
 	@echo "=== [L-07] Scheduler status filter gate lint ==="
@@ -140,8 +136,15 @@ must-check-error-check:
 	@echo "=== [F-6] Must-check-error gate lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/must_check_error_lint.go
 
+# [inv_M8_03] 与 [L-06] 是同一个二进制里的两条独立断言（checkFile / checkOutboxWorker）。
+#
+# 2026-08-17 合并：此前它们各挂一个目标（task-state-check / outbox-state-check）且**都在
+# lint 里**，同一个 tools/task_state_lint.go 被完整跑两遍。与本文件上方 L-04 处的裁决
+# 同理——目标数不等于门控条数，门控条数按 [ID] 计（tools/lint_selftest.go 的
+# findUncoveredRuleIDs 就是这么数的），故两条 ID 各保留一行 echo，二进制只跑一次。
 task-state-check:
 	@echo "=== [inv_M8_03] Task state transition gate lint ==="
+	@echo "=== [L-06] Outbox poison-pill state gate lint（同一二进制内的第二条断言）==="
 	@env GOOS= GOARCH= $(GO) run tools/task_state_lint.go
 
 fsm-io-check:
@@ -172,12 +175,14 @@ fsm-check:
 		&& echo "PASS: No goto found in FSM package" \
 		|| (echo "FAIL: goto detected in FSM package" && exit 1)
 
-policy-gate-check:
-	@echo "=== [GD-14-004] PolicyGate fail-closed check ==="
-	@if grep -rn 'policyGate\.Review\|gate\.Review' internal/ --include="*.go" | grep -v "_test.go" > /dev/null; then \
-		echo "INFO: Found PolicyGate Review usages, please ensure they are guarded by nil checks"; \
-	fi
-	@echo "PASS: PolicyGate check done"
+# [GD-14-004] PolicyGate fail-closed：2026-08-17 删除本目标，判定并入 no-backdoor-check。
+#
+# 原目标是一个**恒绿门控**：无论 grep 结果如何都只 echo 一行 INFO，然后无条件
+# `echo "PASS"` 退出 0——它连自己打印的那句"请确保有 nil 判定"都没有校验过。
+# 按 ADR-0091，恒绿的门控比没有门控更糟：它占着一条门控计数，让人以为这条不变式
+# 有人看着。判定本身是真的且机械可判（授权入口在调用 PolicyGate.Review 前必须先有
+# `== nil` 的 fail-closed 分支），故移进 tools/no_backdoor_lint.go——那里本就是
+# 「授权不得被绕过」这一族的规则，且已有锚点自毁断言与负向用例。
 
 clean:
 	rm -rf bin/ bin/lib
@@ -202,7 +207,7 @@ docs-lint:
 	echo "docs-lint ok"
 
 # 失效路径引用门控: 活文档(docs/arch/*.md + CLAUDE.md)与全仓 .go 注释里写的代码路径必须真实存在。
-# 白名单 scripts/docs-refs-allowlist.txt 仅收「文档在记载已删除/已迁移路径」的历史注记。
+# 白名单 tools/baselines/docs-refs-allowlist.txt 仅收「文档在记载已删除/已迁移路径」的历史注记。
 # 不扫 docs/arch/decisions/——ADR 按定义记录写作当时的事实，改它等于篡改历史。
 docs-refs:
 	@bash scripts/docs-refs.sh
@@ -234,7 +239,7 @@ comment-drift:
 # 枚举字段、行号真实性、进度表与产物一致性、覆盖凭证）纳入 CI。
 # 立此门控的实证依据见 tools/review_check.go 头部——审核提示词里靠模型自觉填写的
 # 机制实测 100% 空转，加条款无效，只有红灯有效。
-# 棘轮模式：scripts/review-check-baseline.txt 内的存量违规降为警告，只禁增量。
+# 棘轮模式：tools/baselines/review-check-baseline.txt 内的存量违规降为警告，只禁增量。
 review-check:
 	@env GOOS= GOARCH= $(GO) run tools/review_check.go
 
@@ -271,6 +276,21 @@ gen-threshold-examples:
 generate-manifest:
 	env GOOS= GOARCH= $(GO) run tools/generate_manifest.go
 
+# CI 用：只校验内核完整性清单与源码是否一致，drift 时退出非零，不写回文件。
+#
+# 2026-08-17 立此门控：清单只在 build* 目标下被重写，于是「改了内核源码但没 build」
+# 的提交会让 kernel_manifest.json 永久停在旧哈希上，而 check-all 全程看不见。实测
+# 它已经停在 2026-08-13 的 cb7ca5d——14 个文件哈希漂移、3 个新文件未登记，
+# `go run ./cmd/polaris` 在启动 §0.5 直接拒绝启动。与 docs-gen-check 同一形态：
+# 生成物与源的一致性必须由门控保证，不能靠"记得跑一下 build"。
+#
+# 本目标刻意不打带方括号规则号的 === 报头：那个报头格式是 lint_selftest 数「代码缺陷类
+# 门控」条数的依据，本目标与 docs-gen-check 同类（生成物一致性），不该被计进那本账。
+# （注意：lint_selftest 是对 Makefile 做正则文本扫描，连注释一起扫——所以这段说明里
+# 也不能出现那个报头的字面写法，否则注释本身会被当成一条门控声明。）
+manifest-check:
+	env GOOS= GOARCH= $(GO) run tools/generate_manifest.go -check
+
 all: tidy fmt lint test build gen-threshold-examples
 
 # ─── 质量保障扩展 ─────────────────────────────────────────────────────────────
@@ -279,7 +299,7 @@ all: tidy fmt lint test build gen-threshold-examples
 deadcode:
 	@$(GO) run golang.org/x/tools/cmd/deadcode@latest ./cmd/polaris/... > .deadcode.out || true
 	@sed 's/:[0-9]*:[0-9]*:/:/g' .deadcode.out > .deadcode_clean.out
-	@sed 's/ *#.*//' scripts/deadcode-allowlist.txt > .allowlist_clean.tmp
+	@sed 's/ *#.*//' tools/baselines/deadcode-allowlist.txt > .allowlist_clean.tmp
 	@grep -vF -f .allowlist_clean.tmp .deadcode_clean.out > .deadcode_diff.out || true
 	@if [ -s .deadcode_diff.out ]; then \
 		echo "FAIL: Deadcode found:"; \
@@ -343,4 +363,6 @@ rust-deny:
 # 2026-08-09：fuzz-taint / fuzz-skill 此前只是可手动调用的 target，从未进入 CI。
 # 三个 fuzz 目标合计 90s，守的是 Taint 五级传播（HE-2 的密码学可验证边界）与
 # Skill 校验管线——正是最不该只靠人工偶尔想起来跑一次的两处。
-check-all: fmt lint lint-selftest test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill
+#      → manifest-check（内核完整性清单与源一致性，2026-08-17 并入；此前无人校验，
+#        实测清单已停在四天前的提交上，源码模式启动被 §0.5 拒绝）
+check-all: fmt lint lint-selftest test test-race rust-lint rust-test rust-deny deadcode docs-check docs-lint docs-refs docs-gen-check manifest-check comment-drift review-check release-signing-status fuzz-taint fuzz-skill

@@ -13,7 +13,7 @@
 #
 # 2026-08-09 并入 tools/anchor_refs.go：校验 "M13 §1.2" 这类模块章节锚点引用
 # （与上面的路径字面量是两类判定对象，不能共用同一套正则——见该文件头部说明）。
-# 采用 baseline 棘轮模式，白名单见 scripts/anchor-refs-baseline.txt。
+# 采用 baseline 棘轮模式，白名单见 tools/baselines/anchor-refs-baseline.txt。
 #
 # 刻意不扫 docs/arch/decisions/（ADR）：ADR 是决策档案，按定义记录的是**写作当时**
 # 的代码事实。事后把 ADR 正文里的旧路径改成新路径，等于篡改历史记录，会让
@@ -22,14 +22,14 @@
 # 刻意不报的三类（避免误报淹没真实缺陷）：
 #   1. 带点的非文件名 basename —— Go 符号点记法（`pkg/concurrent.SafeGo`、
 #      `internal/config.SandboxConfig`），扩展名不在已知白名单内即视为符号；
-#   2. 白名单条目 —— 见 scripts/docs-refs-allowlist.txt（合法历史注记：
+#   2. 白名单条目 —— 见 tools/baselines/docs-refs-allowlist.txt（合法历史注记：
 #      活文档正确记载"该路径已于某日删除/迁移，见 ADR-XXXX"，路径本就不该存在）；
 #   3. 非顶层目录开头的相对路径 / URL / REST 端点。
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-ALLOWLIST="scripts/docs-refs-allowlist.txt"
+ALLOWLIST="tools/baselines/docs-refs-allowlist.txt"
 # 已知文件扩展名：basename 命中这些才认定为"文件路径"，否则带点即判为符号点记法
 KNOWN_EXT='go|rs|sql|md|toml|yaml|yml|json|txt|tmpl|sh|ps1|lock|mod|wasm|proto'
 # 仓库顶层目录（引用必须以其中之一开头才纳入检查）

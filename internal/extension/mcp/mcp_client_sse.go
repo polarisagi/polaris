@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -54,8 +55,10 @@ func (c *MCPClient) connectSSE(ctx context.Context) error {
 
 func (c *MCPClient) readSSE(body io.ReadCloser, endpointCh chan<- string) {
 	defer body.Close()
+	// L-10：单行上限走 config 阀值，理由同 mcp_client_http.go。
+	maxScan := config.CurrentThresholds().M7Tool.MCPSSEMaxScanBytes
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), maxScan)
 	var event string
 	var dataLines []string
 	for scanner.Scan() {

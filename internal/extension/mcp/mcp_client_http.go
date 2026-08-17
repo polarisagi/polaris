@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -64,8 +65,11 @@ func (c *MCPClient) httpPostReceive(ctx context.Context, url string, body []byte
 }
 
 func (c *MCPClient) readSSESingleResponse(r io.Reader) (*mcpRPCResponse, error) {
+	// L-10：单行上限走 config 阀值，不写死。三条 MCP 传输路径（stdio / sse / http）
+	// 此前只有 stdio 接了阀值，另两条硬编码 1 MiB，运营侧调不动也看不见。
+	maxScan := config.CurrentThresholds().M7Tool.MCPSSEMaxScanBytes
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), maxScan)
 	var dataLines []string
 	for scanner.Scan() {
 		line := scanner.Text()

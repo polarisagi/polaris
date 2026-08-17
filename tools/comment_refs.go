@@ -16,7 +16,7 @@
 //  1. 更长记号的尾巴 —— 前一个字符是 '/' 或单词字符（URL 片段 /api/embed、
 //     标识符列表 boot_tools/boot_knowledge 里的 "tools/"）；
 //  2. Go 符号点记法 —— 任一路径段带点且扩展名不在已知集合（internal/config.SandboxConfig）；
-//  3. 白名单条目 —— scripts/docs-refs-allowlist.txt，与文档侧门控共用同一份；
+//  3. 白名单条目 —— tools/baselines/docs-refs-allowlist.txt，与文档侧门控共用同一份；
 //  4. 非顶层目录开头的相对路径。
 package main
 
@@ -30,7 +30,7 @@ import (
 	"strings"
 )
 
-const allowlistPath = "scripts/docs-refs-allowlist.txt"
+const allowlistPath = "tools/baselines/docs-refs-allowlist.txt"
 
 var (
 	// 顶层目录：引用必须以其中之一开头才纳入检查

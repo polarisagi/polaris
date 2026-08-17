@@ -46,7 +46,7 @@ import (
 
 const (
 	defaultReportDir = "local_playground/reports"
-	baselinePath     = "scripts/review-check-baseline.txt"
+	baselinePath     = "tools/baselines/review-check-baseline.txt"
 	scopePath        = "scripts/review-batch-scope.txt"
 )
 
