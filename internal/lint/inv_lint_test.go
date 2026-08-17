@@ -245,57 +245,27 @@ func isExemptZeroValueType(typeExpr ast.Expr) bool {
 
 // ─── inv_M1_01 ────────────────────────────────────────────────────────────────
 
-// Test_inv_M1_01_NoRawHTTPCalls 验证 pkg/ 中不存在裸 HTTP 调用。
-// inv_M1_01: 所有 LLM 调用经 Provider Router，禁止裸 http.Get/Post/Head 调用和
+// ─── inv_M1_01 / inv_M11_05：判据已移交 tools/safe_dialer_lint.go（2026-08-17）──
 //
-//	直接引用 http.DefaultClient。
+// 原先这里有 Test_inv_M1_01_NoRawHTTPCalls 与 Test_inv_M11_05_NoRawNetDial 两条测试，
+// 与 tools/safe_dialer_lint.go（inv_safe_dialer_01 / F-1 / L-01）查的是同一件事：
+// 出站连接必须经 SafeDialer。**两份实现已经漂了**——
 //
-// 被扫描的禁止模式：
-//   - http.Get(...)  / http.Post(...)  / http.Head(...) — 包级 HTTP 便捷函数
-//   - http.DefaultClient — 全局客户端直接引用（绕过 SafeDialer SSRF 防护）
-func Test_inv_M1_01_NoRawHTTPCalls(t *testing.T) {
-	root := repoRoot(t)
-	// 豁免列表由 testdata/raw_http_calls_exempt.json 管理，见该文件注释说明。
-	exempt := loadExemptFile(t, root, "raw_http_calls_exempt.json")
-
-	// 禁止的 http 包成员名（调用或引用均算违规）
-	forbiddenHTTPSelectors := map[string]bool{
-		"Get":           true,
-		"Post":          true,
-		"Head":          true,
-		"DefaultClient": true,
-	}
-
-	var violations []violation
-	walkRepoGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
-		ast.Inspect(f, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkgIdent, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if pkgIdent.Name != "http" {
-				return true
-			}
-			if forbiddenHTTPSelectors[sel.Sel.Name] {
-				pos := fset.Position(sel.Pos())
-				violations = append(violations, violation{
-					relPath: relPath,
-					line:    pos.Line,
-					detail:  fmt.Sprintf("http.%s — 裸 HTTP 调用/引用，须改用 substrate.NewSafeHTTPClient", sel.Sel.Name),
-				})
-			}
-			return true
-		})
-	})
-
-	for _, v := range violations {
-		t.Errorf("inv_M1_01 VIOLATED: %s", v)
-	}
-}
+//	这里独有：net.DialContext、http.Head、http.DefaultClient 的非调用引用
+//	那边独有：net.DialTimeout、http.PostForm、smtp.*、websocket.Dialer、扫 cmd/
+//
+// 即两边各自放过了对方能抓的形态，而任何一方绿灯都会被读成"这条不变量守住了"。
+// 判据只能有一个归属：两份实现不会同步演进，只会各自腐烂到互相掩盖。
+//
+// 现取并集归 tools/safe_dialer_lint.go 单一所有——它在 make lint 里、有棘轮基线、
+// 且在 tools/lint-selftest.txt 有负向用例（F-1 / L-01），三样这里都没有。
+// 合并当场抓出 4 处两套系统都没看见的 http.DefaultTransport 引用，其中 3 处是
+// 「nil 时回落到全局默认 Transport」这一形态（HE-2 明禁的 nil 安全门放行），
+// 已逐条记入 tools/baselines/safe-dialer-baseline.md 待定夺。
+//
+// 不要在这里重新加回这两条测试。要改判据，改 tools/safe_dialer_lint.go。
+// 豁免表 testdata/raw_http_calls_exempt.json、raw_net_dial_exempt.json 随之删除
+// （两者 2026-08-08 起即为空表）。
 
 // ─── inv_XR06 ─────────────────────────────────────────────────────────────────
 
@@ -346,63 +316,6 @@ func Test_inv_XR06_DownloaderNoRawTransport(t *testing.T) {
 }
 
 // ─── inv_M11_05 / inv_M7_06 ──────────────────────────────────────────────────
-
-// Test_inv_M11_05_NoRawNetDial 验证 pkg/ 中无裸 net.Dial / net.DialContext 调用。
-// inv_M11_05: 所有出站连接经 SafeDialer.DialContext 五阶段 SSRF 防护——HTTP/3 QUIC 禁用。
-// inv_M7_06:  所有出站连接强制经 M11 SafeDialer.DialContext——禁止裸 net.Dial/grpc.Dial。
-//
-// 扫描范围: pkg/ 下所有非测试 .go 文件中的 CallExpr（字符串字面量不触发）。
-// 精确匹配规则: CallExpr{Fun: SelectorExpr{X: Ident("net"), Sel: "Dial"/"DialContext"}}
-//
-//	或          CallExpr{Fun: SelectorExpr{X: Ident("grpc"), Sel: "Dial"/"NewClient"}}
-func Test_inv_M11_05_NoRawNetDial(t *testing.T) {
-	root := repoRoot(t)
-	// 豁免列表由 testdata/raw_net_dial_exempt.json 管理，见该文件注释说明。
-	exempt := loadExemptFile(t, root, "raw_net_dial_exempt.json")
-
-	// pkg="net", sel in {"Dial","DialContext"} 或 pkg="grpc", sel in {"Dial","NewClient"}
-	type forbidden struct{ pkg, sel string }
-	forbiddenDialCalls := []forbidden{
-		{"net", "Dial"},
-		{"net", "DialContext"},
-		{"grpc", "Dial"},
-		{"grpc", "NewClient"},
-	}
-
-	var violations []violation
-	walkRepoGoFiles(t, root, exempt, func(fset *token.FileSet, f *ast.File, relPath string) {
-		ast.Inspect(f, func(n ast.Node) bool {
-			// 仅检查 CallExpr 中的 Fun，避免变量名 net.Dialer 之类误报
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkgIdent, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			for _, fb := range forbiddenDialCalls {
-				if pkgIdent.Name == fb.pkg && sel.Sel.Name == fb.sel {
-					pos := fset.Position(call.Pos())
-					violations = append(violations, violation{
-						relPath: relPath,
-						line:    pos.Line,
-						detail:  fmt.Sprintf("%s.%s(...) — 裸网络拨号，须改用 substrate.SafeDialer.DialContext", fb.pkg, fb.sel),
-					})
-				}
-			}
-			return true
-		})
-	})
-
-	for _, v := range violations {
-		t.Errorf("inv_M11_05/inv_M7_06 VIOLATED: %s", v)
-	}
-}
 
 // ─── 辅助测试：验证扫描逻辑本身的正确性 ─────────────────────────────────────
 
