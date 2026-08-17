@@ -3,7 +3,7 @@
 // rows_err_lint 扫描所有 SQL for X.Next() 循环后是否包含对应的 X.Err() 检查（F-7）。
 //
 // 特征：支持动态提取 iterator 变量名 (rows / mrows / pr / r 等)，防止硬编码 rows 导致漏检 (B-8 案件)。
-// 棘轮机制：存量 54 处历史漏检记录在 local_playground/reports/rows-err-baseline.md，
+// 棘轮机制：存量历史漏检记录在 tools/baselines/rows-err-baseline.md，
 //
 //	本门控阻断任何**新增**的无 rows.Err() 校验 SQL 循环。
 //
@@ -28,7 +28,7 @@ var loopCount int
 var baselineCount int
 
 func main() {
-	baselinePath := "local_playground/reports/rows-err-baseline.md"
+	baselinePath := "tools/baselines/rows-err-baseline.md"
 	baselineMap, _ := loadBaseline(baselinePath)
 
 	roots := []string{"internal", "cmd", "pkg"}

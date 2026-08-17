@@ -30,7 +30,7 @@ func main() {
 	}
 
 	baselineMap := make(map[string]bool)
-	baselineBytes, err := os.ReadFile("local_playground/reports/regex-greedy-baseline.md")
+	baselineBytes, err := os.ReadFile("tools/baselines/regex-greedy-baseline.md")
 	if err == nil {
 		lines := strings.Split(string(baselineBytes), "\n")
 		for _, line := range lines {

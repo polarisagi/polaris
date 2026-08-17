@@ -182,9 +182,13 @@ func BuildPerceiveContext( //nolint:gocyclo
 		if types.TaintMedium > sCtx.GlobalTaintLevel {
 			sCtx.GlobalTaintLevel = types.TaintMedium
 		}
+		// 附加等级必须取 max(自身, 会话全局)（L-03）：写死 TaintMedium 时，
+		// 若本会话已因更脏的来源升到 TaintHigh，这段召回文本会被重新标成
+		// Medium，等于凭一次拼接把污点降级。与 BuildReflectContext 里
+		// execute_result 的处置保持一致。
 		b.WriteUserData(taint.NewTaintedString(
 			retrieved.String(),
-			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"retrieved_memory"))
 	}
 
@@ -325,9 +329,10 @@ func BuildPlanContext( //nolint:gocyclo
 		if types.TaintMedium > sCtx.GlobalTaintLevel {
 			sCtx.GlobalTaintLevel = types.TaintMedium
 		}
+		// 同 BuildPerceiveContext：附加等级取 max(自身, 会话全局)，禁写死常量（L-03）。
 		b.WriteUserData(taint.NewTaintedString(
 			retrieved.String(),
-			taint.TaintSource{OriginTaintLevel: types.TaintMedium},
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"retrieved_memory"))
 	}
 
