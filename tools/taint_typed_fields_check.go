@@ -188,7 +188,7 @@ func exprToString(expr ast.Expr) string {
 
 func checkAssignDenylist(fset *token.FileSet) {
 	baseline := make(map[string]bool)
-	baselinePath := "local_playground/reports/taint_typed_fields_check-baseline.md"
+	baselinePath := "tools/baselines/taint_typed_fields_check-baseline.md"
 	if bf, err := os.Open(baselinePath); err == nil {
 		scanner := bufio.NewScanner(bf)
 		for scanner.Scan() {

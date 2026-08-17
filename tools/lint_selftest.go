@@ -85,9 +85,12 @@ func main() {
 	missingIDs := findUncoveredRuleIDs(cases)
 
 	// 门控的副作用产物也要还原：todo_lint / nolint_unused_lint 每次运行都会重写
-	// 各自的 inventory。注入违规样例期间跑它们，样例就会被写进这些**受版本控制**
-	// 的文件里——实测 `make check-all` 因此每跑一次都把工作区留脏一行，
-	// 长期效果是训练所有人无视 git status。还原是本 harness 的职责，不是调用方的。
+	// 各自的 inventory。注入违规样例期间跑它们，样例就会被写进这些文件里——
+	// 曾经它们受版本控制，实测 `make check-all` 每跑一次都把工作区留脏一行，
+	// 长期效果是训练所有人无视 git status。2026-08-17 起 inventory 落在
+	// gitignore 的 local_playground/ 下（生成物不进版本库），棘轮基线则相反，
+	// 迁到受版本控制的 tools/baselines/——基线是门控状态，必须随规则一起走。
+	// 还原仍是本 harness 的职责：留下注入的假样例会污染下一次人工查阅。
 	restoreSideEffects := snapshotFiles(
 		"local_playground/reports/todo-inventory.md",
 		"local_playground/reports/nolint-unused-inventory.md",

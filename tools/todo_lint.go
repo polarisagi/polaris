@@ -9,7 +9,7 @@
 //   - tools/ / docs/ 目录
 //
 // 判定方式：**棘轮**（ADR-0088 存量债处置边界）。存量基线记于
-// local_playground/reports/todo-baseline.txt，新增活跃 TODO 一律报红。
+// tools/baselines/todo-baseline.txt，新增活跃 TODO 一律报红。
 //
 //	2026-08-12 改为棘轮：原实现只把活跃 TODO 写进 inventory 后无条件 PASS，
 //	即「记录而不阻断」。后果实测：同一轮里有人把 4 条本该做「接线/删除/登记」
@@ -37,7 +37,7 @@ import (
 var errCount int
 var todoCount int
 
-const baselinePath = "local_playground/reports/todo-baseline.txt"
+const baselinePath = "tools/baselines/todo-baseline.txt"
 
 func main() {
 	var updateBaseline bool
