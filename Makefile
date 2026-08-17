@@ -62,7 +62,7 @@ run:
 test:
 	$(GO) test ./internal/...
 
-lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check taint-check fsm-check chan-send-guard-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
+lint: safe-dialer-check no-backdoor-check taint-typed-fields-check fsm-io-check task-state-check must-check-error-check rows-err-check route-check ffi-check todo-check nolint-check panic-check chan-send-guard-check scheduler-status-check ffi-null-guard-check lifecycle-reset-check bounded-cache-check apperr-semantics-check regex-greedy-check wiring-check
 	golangci-lint run ./...
 	env GOOS=wasip1 GOARCH=wasm golangci-lint run ./internal/extension/skill/sdk/...
 
@@ -149,40 +149,44 @@ task-state-check:
 
 fsm-io-check:
 	@echo "=== [inv_FSM_B1] FSM Effects IO gate lint ==="
+	@echo "=== [L-16] FSM goto ban gate lint（同一二进制内的第二条断言）==="
 	@env GOOS= GOARCH= $(GO) run tools/fsm_io_lint.go
 
 taint-typed-fields-check:
 	@echo "=== [F-3] Taint typed fields gate lint ==="
+	@echo "=== [L-15] Bare TaintedString construction gate lint（同一二进制内的第三条断言）==="
 	@env GOOS= GOARCH= $(GO) run tools/taint_typed_fields_check.go
 
 no-backdoor-check:
 	@echo "=== [inv_M7_01] Capability Token gate lint ==="
+	@echo "=== [L-17] PolicyGate fail-closed gate lint（同一二进制内的第二条断言）==="
 	@env GOOS= GOARCH= $(GO) run tools/no_backdoor_lint.go
 
 safe-dialer-check:
 	@echo "=== [inv_safe_dialer_01] Safe Dialer lint ==="
 	@env GOOS= GOARCH= $(GO) run tools/safe_dialer_lint.go
 
-taint-check:
-	@echo "=== [GD-14-004] Taint propagation check ==="
-	@! grep -rn 'TaintedString{' internal/ --include="*.go" | grep -v "_test.go" | grep -v "internal/security/taint/" | grep -v "newTainted\|MakeTainted\|func.*TaintedString" \
-		&& echo "PASS: No raw TaintedString{} construction found" \
-		|| (echo "FAIL: Direct TaintedString{} construction detected" && exit 1)
-
-fsm-check:
-	@echo "=== [GD-14-006] FSM control flow check ==="
-	@! grep -rn 'goto ' internal/agent/fsm/ --include="*.go" | grep -v "_test.go" \
-		&& echo "PASS: No goto found in FSM package" \
-		|| (echo "FAIL: goto detected in FSM package" && exit 1)
-
-# [GD-14-004] PolicyGate fail-closed：2026-08-17 删除本目标，判定并入 no-backdoor-check。
+# ─── 2026-08-17：三条内联 grep 门控退役，判定 AST 化并入既有工具 ────────────────
 #
-# 原目标是一个**恒绿门控**：无论 grep 结果如何都只 echo 一行 INFO，然后无条件
-# `echo "PASS"` 退出 0——它连自己打印的那句"请确保有 nil 判定"都没有校验过。
-# 按 ADR-0091，恒绿的门控比没有门控更糟：它占着一条门控计数，让人以为这条不变式
-# 有人看着。判定本身是真的且机械可判（授权入口在调用 PolicyGate.Review 前必须先有
-# `== nil` 的 fail-closed 分支），故移进 tools/no_backdoor_lint.go——那里本就是
-# 「授权不得被绕过」这一族的规则，且已有锚点自毁断言与负向用例。
+# 退役的是 taint-check / fsm-check / policy-gate-check 三个目标。共同问题有两层：
+#
+# 1) **编号**。三者都挂在 GD-14-004 / GD-14-006 下，而 GD 是审核批次内的序号、跨轮
+#    复用（tools/review_check.go 的 GD 编号判定处写明「同一个 GD-14-002 在三轮里
+#    分别指不同的东西」）。结果是一个 GD-14-004 同时标着「禁裸 TaintedString 构造」
+#    与「PolicyGate fail-closed」两条毫不相干的断言，GD-14-006 同时标着「禁 goto」
+#    与 internal/lint/fsm_lint_test.go 里的「禁用 LLM 原始输出做控制流」。而
+#    tools/lint_selftest.go 正是**按 [ID] 数门控条数**的——编号撞车直接让那本账失真。
+#    常驻门控只能用稳定命名空间：F-* / L-* / inv_*。
+#
+# 2) **判据**。shell grep 认不出字符串字面量与注释里的同名串；policy-gate-check
+#    更是无论 grep 结果如何都无条件 echo PASS 退 0（恒绿门控，ADR-0091）。而且它们
+#    作为"Makefile 内联 grep"被整体豁免于 lint-selftest 的负向验证——三条规则从来
+#    没有被证明过能报红，这正是它们能长期空转而无人发现的原因。
+#
+# 去向（均已在 tools/lint-selftest.txt 登记负向用例，豁免同步删除）：
+#   [L-15] 禁裸 TaintedString{} 构造  → tools/taint_typed_fields_check.go
+#   [L-16] FSM 包内禁 goto            → tools/fsm_io_lint.go
+#   [L-17] PolicyGate fail-closed     → tools/no_backdoor_lint.go
 
 clean:
 	rm -rf bin/ bin/lib

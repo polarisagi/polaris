@@ -176,7 +176,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 				if intent.ResultCh != nil {
 					// ResultCh 由调用方创建（cap 1），单写者不得阻塞在他人的 channel 上；default 分支对应调用方已因超时退场
 					select {
-					case intent.ResultCh <- ErrStaleLease: //nolint:chan_send_guard
+					case intent.ResultCh <- ErrStaleLease:
 					default:
 					}
 				}
@@ -261,7 +261,7 @@ func (dw *DatabaseWriter) flushBatch(ctx context.Context) error { //nolint:gocyc
 		if r.intent.ResultCh != nil {
 			// ResultCh 由调用方创建（cap 1），单写者不得阻塞在他人的 channel 上；default 分支对应调用方已因超时退场
 			select {
-			case r.intent.ResultCh <- r.err: //nolint:chan_send_guard
+			case r.intent.ResultCh <- r.err:
 			default:
 			}
 		}

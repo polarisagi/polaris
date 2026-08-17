@@ -1,0 +1,13 @@
+package fsm
+
+// zzSelftestGoto 是 [L-16] 的负向用例：FSM 包内用 goto 承载控制流，
+// 使"这个状态能到哪些状态"无法再从 Transition 表读出。门控必须因此报红。
+func zzSelftestGoto() int {
+	i := 0
+loop:
+	i++
+	if i < 3 {
+		goto loop
+	}
+	return i
+}

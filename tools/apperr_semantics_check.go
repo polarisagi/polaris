@@ -1,171 +1,81 @@
 //go:build ignore
 
+// apperr_semantics_check 断言 apperr.New/Wrap 的错误码与消息语义一致（L-11 / R2.5）。
+//
+// 判据：消息里出现 "not found" / "forbidden" / "rate limit" 等语义关键词时，错误码必须是
+// 对应的 CodeNotFound / CodeForbidden / CodeResourceExhausted。错配会让 HTTP 层把 404
+// 报成 500——apperr.HTTPStatus 只看 Code，不看消息。
+//
+// 扫描根 2026-08-17 从单 "internal" 扩到全仓三根（ADR-0089 那类失效的复发；
+// cmd/ 与 pkg/ 里有 230 处 apperr.New/Wrap 从未被本规则看过）。扩根前已实测 0 新增命中。
+//
+// 棘轮：存量记在 tools/baselines/apperr-semantics-baseline.md，只禁增量。
 package main
 
 import (
-	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/polarisagi/polaris/tools/lintutil"
 )
 
-// scanRoots 是本仓所有 Go 源码根。与 must_check_error / rows_err / todo / nolint 等
-// 规则保持同一份清单——扫描根不一致本身就是一种静默漏检（ADR-0089）。
-var scanRoots = []string{"internal", "cmd", "pkg"}
-
-// isScannedPath 判定一行 baseline 文本是否以某个扫描根开头（即它是一条路径记录，
-// 而非 baseline 文件里的散文说明）。
-func isScannedPath(line string) bool {
-	for _, root := range scanRoots {
-		if strings.HasPrefix(line, root+"/") {
-			return true
-		}
-	}
-	return false
+// codeRules 是「消息关键词 → 应有错误码」的对照表。
+// 表驱动而非 if-else 链：新增一类语义只加一行，且顺序即优先级（先匹配先生效）。
+var codeRules = []struct {
+	keywords []string
+	code     string
+}{
+	{[]string{"rate limit", "quota", "exhausted", "too many"}, "CodeResourceExhausted"},
+	{[]string{"not found"}, "CodeNotFound"},
+	{[]string{"forbidden", "denied"}, "CodeForbidden"},
 }
 
 func main() {
-	fset := token.NewFileSet()
-	// 扫描根：2026-08-17 从单 "internal" 扩到三根。原因见 ADR-0089——「规则停在一个
-	// 扫描根上」是本仓复发过的失效形态，且 cmd/ 与 pkg/ 里有 230 处 apperr.New/Wrap
-	// 从未被本规则看过。扩根前已实测：cmd/ 与 pkg/ 上 0 新增命中，属零成本对齐而非还债。
-	var goFiles []string
-	for _, root := range scanRoots {
-		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
-				goFiles = append(goFiles, path)
-			}
-			return nil
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Walk %s failed: %v\n", root, err)
-			os.Exit(2)
-		}
-	}
+	r := lintutil.NewReporter("apperr-semantics-check", lintutil.LoadBaseline("apperr-semantics-baseline.md"))
 
-	baselineMap := make(map[string]bool)
-	baselineBytes, err := os.ReadFile("tools/baselines/apperr-semantics-baseline.md")
-	if err == nil {
-		lines := strings.Split(string(baselineBytes), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if isScannedPath(line) {
-				baselineMap[line] = true
+	lintutil.Walk(r, lintutil.WalkOptions{IncludeTests: true}, func(f lintutil.File) {
+		lintutil.Calls(f.AST, func(call *ast.CallExpr) {
+			recv, method, ok := lintutil.SelectorCall(call)
+			if !ok || recv != "apperr" || (method != "New" && method != "Wrap") {
+				return
 			}
-		}
-	}
-
-	hasError := false
-	for _, path := range goFiles {
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			continue
-		}
-
-		ast.Inspect(f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-
-			xIdent, ok := sel.X.(*ast.Ident)
-			if !ok || xIdent.Name != "apperr" {
-				return true
-			}
-
-			if sel.Sel.Name != "New" && sel.Sel.Name != "Wrap" {
-				return true
-			}
-
 			if len(call.Args) < 2 {
-				return true
+				return
 			}
+			r.Anchor()
 
-			codeArg := call.Args[0]
-			msgArg := call.Args[1]
-			if sel.Sel.Name == "Wrap" {
-				if len(call.Args) < 3 {
-					return true
-				}
-				codeArg = call.Args[0]
-				msgArg = call.Args[1]
-			}
-
-			codeSel, ok := codeArg.(*ast.SelectorExpr)
-			var actualCode string
-			if ok {
-				actualCode = codeSel.Sel.Name
-			} else {
-				actualCode = fmt.Sprintf("%v", codeArg)
-			}
-
-			msgLit, ok := msgArg.(*ast.BasicLit)
+			msgLit, ok := call.Args[1].(*ast.BasicLit)
 			if !ok || msgLit.Kind != token.STRING {
-				return true
+				return
 			}
+			msg := strings.ToLower(strings.Trim(msgLit.Value, `"`))
 
-			msg := strings.Trim(msgLit.Value, `"`)
-			msgLower := strings.ToLower(msg)
-
-			expectedCode := ""
-			triggerKeyword := ""
-
-			if strings.Contains(msgLower, "rate limit") || strings.Contains(msgLower, "quota") || strings.Contains(msgLower, "exhausted") || strings.Contains(msgLower, "too many") {
-				expectedCode = "CodeResourceExhausted"
-				if strings.Contains(msgLower, "rate limit") {
-					triggerKeyword = "rate limit"
-				}
-				if strings.Contains(msgLower, "quota") {
-					triggerKeyword = "quota"
-				}
-				if strings.Contains(msgLower, "exhausted") {
-					triggerKeyword = "exhausted"
-				}
-				if strings.Contains(msgLower, "too many") {
-					triggerKeyword = "too many"
-				}
-			} else if strings.Contains(msgLower, "not found") {
-				expectedCode = "CodeNotFound"
-				triggerKeyword = "not found"
-			} else if strings.Contains(msgLower, "forbidden") || strings.Contains(msgLower, "denied") {
-				expectedCode = "CodeForbidden"
-				if strings.Contains(msgLower, "forbidden") {
-					triggerKeyword = "forbidden"
-				}
-				if strings.Contains(msgLower, "denied") {
-					triggerKeyword = "denied"
-				}
+			want, trigger := expectedCode(msg)
+			if want == "" {
+				return
 			}
-
-			if expectedCode != "" && actualCode != expectedCode {
-				pos := fset.Position(call.Pos())
-				errLine := fmt.Sprintf("%s:%d: apperr message 含 %q 应使用 %s 错误码，实际是 %s", pos.Filename, pos.Line, triggerKeyword, expectedCode, actualCode)
-
-				if baselineMap[errLine] {
-					// skipped by baseline
-				} else {
-					fmt.Fprintf(os.Stderr, "%s（违反 L-11 R2.5）\n", errLine)
-					hasError = true
-				}
+			got := lintutil.ExprText(call.Args[0])
+			if strings.HasSuffix(got, "."+want) || got == want {
+				return
 			}
-
-			return true
+			r.Violation(f.At(call), "apperr message 含 %q 应使用 %s 错误码，实际是 %s（违反 L-11 R2.5）",
+				trigger, want, got)
 		})
-	}
+	})
 
-	if hasError {
-		os.Exit(1)
+	r.RequireAnchors(1, "判据锚在 apperr.New / apperr.Wrap 调用上；若统一错误构造入口改名，请同步本规则")
+	r.Done()
+}
+
+// expectedCode 返回消息应当对应的错误码与触发它的关键词。
+func expectedCode(msgLower string) (code, trigger string) {
+	for _, rule := range codeRules {
+		for _, kw := range rule.keywords {
+			if strings.Contains(msgLower, kw) {
+				return rule.code, kw
+			}
+		}
 	}
-	fmt.Println("apperr-semantics-check ok")
+	return "", ""
 }
