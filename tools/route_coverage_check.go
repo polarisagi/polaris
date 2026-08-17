@@ -6,7 +6,7 @@
 //  1. 阻止 Handler 已实现但路由被遗漏/注释挂起（如提示词路由 C-1 / VFSUpload C-3 潜伏案件）
 //  2. 报告 server_routes.go 中被注释掉的 `// mux.Handle(` / `// mux.HandleFunc(`
 //
-// 豁免：对于明确待接线前置条件的 handler，可以在注释/豁免名单 `tools/route-coverage-allowlist.txt` 标记。
+// 豁免：对于明确待接线前置条件的 handler，可以在注释/豁免名单 `tools/baselines/route-coverage-allowlist.txt` 标记。
 //
 // 使用：
 //
@@ -30,7 +30,7 @@ var handlerCount int
 
 func main() {
 	routesFile := "internal/gateway/server/server_routes.go"
-	allowlistPath := "tools/route-coverage-allowlist.txt"
+	allowlistPath := "tools/baselines/route-coverage-allowlist.txt"
 	allowlist, _ := loadAllowlist(allowlistPath)
 
 	// 1. 检查 server_routes.go 中是否存在被注释的路由

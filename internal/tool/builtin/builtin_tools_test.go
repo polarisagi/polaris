@@ -203,7 +203,7 @@ func TestBuiltinTools_FetchURL_PublicURL(t *testing.T) {
 
 // TestBuiltinTools_GitDiffAndCommit 覆盖 git_diff/git_commit 两个此前只有
 // 空壳占位文件、后被 git_text_tools.go 实现但从未注册进 defs 的工具
-// （GR-5-008，见 scripts/deadcode-allowlist.txt 历史记录）：验证注册后能
+// （GR-5-008，见 tools/baselines/deadcode-allowlist.txt 历史记录）：验证注册后能
 // 通过 ExecuteTool 正常调用真实 git 二进制，而不仅仅是"metadata 能加载"。
 func TestBuiltinTools_GitDiffAndCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

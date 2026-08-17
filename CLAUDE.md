@@ -115,7 +115,7 @@ rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥
 - `internal/` 禁全局可变变量（并发安全 + 测试隔离；ADR-0001 豁免仅限 observability/metrics 一等公民指标）
 - 跨模块走 `internal/protocol/` 结构化事件（禁字符串隐式耦合）
 - Rust 仅性能关键 FFI（维持语言边界）
-- **[强制] 提交前自检**：在执行 `git commit` 之前，必须先执行 `make lint`（或 `make fmt && make lint`）确保代码风格、圈复杂度等检查全部绿灯。**若本次改动涉及 `docs/arch/` 或包路径迁移，追加 `make docs-refs`**（失效路径引用门控，ADR-0081；白名单 `scripts/docs-refs-allowlist.txt` 仅收"文档在记载已删除/已迁移路径"的历史注记）。
+- **[强制] 提交前自检**：在执行 `git commit` 之前，必须先执行 `make lint`（或 `make fmt && make lint`）确保代码风格、圈复杂度等检查全部绿灯。**若本次改动涉及 `docs/arch/` 或包路径迁移，追加 `make docs-refs`**（失效路径引用门控，ADR-0081；白名单 `tools/baselines/docs-refs-allowlist.txt` 仅收"文档在记载已删除/已迁移路径"的历史注记）。
 - **[强制] 新增/修改门控规则**：`tools/*_lint.go`、`tools/*_check.go` 必须在 `tools/lint-selftest.txt` 登记负向用例，并使 `make lint-selftest` 通过（注入违规样例→报红→还原→转绿）。**未经负向验证的规则不算 landed**——一个永远不报警的门控与没有门控在 CI 输出上长得一模一样。判定由门控做，不接受自述（2026-08-12 实测：12 条自述 landed 的门控里 6 条抓不到它们声称要防的缺陷）。
 - **[强制] 配置变更策略**：凡修改 `internal/config/` 中的结构体定义，**必须**执行 `make gen-threshold-examples` 重新生成 TOML 配置文件并提交。禁止代码与配置模板脱节。
 - **[强制] DDL 修改策略**：`internal/protocol/schema/NNN_*.sql` 是 Schema SSoT，禁止以 ALTER TABLE / ADD COLUMN 补丁文件打补丁。

@@ -12,21 +12,41 @@ import (
 	"strings"
 )
 
+// scanRoots 是本仓所有 Go 源码根。与 must_check_error / rows_err / todo / nolint 等
+// 规则保持同一份清单——扫描根不一致本身就是一种静默漏检（ADR-0089）。
+var scanRoots = []string{"internal", "cmd", "pkg"}
+
+// isScannedPath 判定一行 baseline 文本是否以某个扫描根开头（即它是一条路径记录，
+// 而非 baseline 文件里的散文说明）。
+func isScannedPath(line string) bool {
+	for _, root := range scanRoots {
+		if strings.HasPrefix(line, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	fset := token.NewFileSet()
+	// 扫描根：2026-08-17 从单 "internal" 扩到三根。原因见 ADR-0089——「规则停在一个
+	// 扫描根上」是本仓复发过的失效形态，且 cmd/ 与 pkg/ 里有 230 处 apperr.New/Wrap
+	// 从未被本规则看过。扩根前已实测：cmd/ 与 pkg/ 上 0 新增命中，属零成本对齐而非还债。
 	var goFiles []string
-	err := filepath.Walk("internal", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	for _, root := range scanRoots {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
+				goFiles = append(goFiles, path)
+			}
 			return nil
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Walk %s failed: %v\n", root, err)
+			os.Exit(2)
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
-			goFiles = append(goFiles, path)
-		}
-		return nil
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Walk failed: %v\n", err)
-		os.Exit(2)
 	}
 
 	baselineMap := make(map[string]bool)
@@ -35,7 +55,7 @@ func main() {
 		lines := strings.Split(string(baselineBytes), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "internal/") {
+			if isScannedPath(line) {
 				baselineMap[line] = true
 			}
 		}
