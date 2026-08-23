@@ -14,6 +14,8 @@
 set -euo pipefail
 
 CONSTITUTION="docs/specs/00-Constitution.md"
+# /tmp/pr.diff 由 .github/workflows/constitutional-review.yml 的
+# "Generate Diff" step 生成并写入，此处路径为双方约定常量（不可随意修改）。
 DIFF_FILE="/tmp/pr.diff"
 MAX_DIFF_BYTES=100000  # 100KB 截断阈值，防 prompt 爆 context
 MODEL="${REVIEWER_MODEL:-deepseek-chat}"

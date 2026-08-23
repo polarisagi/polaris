@@ -1,5 +1,6 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# -e: 任何命令失败立即退出；-u: 引用未定义变量报错；-o pipefail: 管道任一步骤失败即报错
+set -euo pipefail
 
 REPO="polarisagi/polaris"
 BIN_NAME="polaris"
@@ -8,6 +9,10 @@ DATA_DIR="$HOME/.polarisagi/polaris"
 PLIST_LABEL="com.polarisagi.polaris"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 PORT=28888
+
+# 版本常量——升级时只改这两处，与 ci_test.sh GOLANGCI_LINT_VERSION 管理模式保持一致
+NVM_VERSION="v0.40.5"  # https://github.com/nvm-sh/nvm/releases
+NODE_VERSION="24"
 
 if [[ "$LANG" == *"zh"* ]] || [[ "$LC_ALL" == *"zh"* ]] || [[ "$LANGUAGE" == *"zh"* ]]; then
     LANG_ZH=true
@@ -141,14 +146,14 @@ if ! command -v node >/dev/null 2>&1; then
     msg "   🟢 正在安装 Node.js (通过 nvm)..." "   🟢 Installing Node.js (via nvm)..."
     export NVM_DIR="$HOME/.nvm"
     if [ -n "$GH_PROXY" ]; then
-        curl -o- "${GH_PROXY}https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh" | NVM_SOURCE="${GH_PROXY}https://github.com/nvm-sh/nvm.git" bash
+        curl -o- "${GH_PROXY}https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | NVM_SOURCE="${GH_PROXY}https://github.com/nvm-sh/nvm.git" bash
         # 为 nvm 设置国内节点镜像，防止 node 下载超时
         export NVM_NODEJS_ORG_MIRROR="https://npmmirror.com/mirrors/node/"
     else
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
+        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
     fi
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    nvm install 24
+    nvm install "$NODE_VERSION"
 fi
 
 msg "✅ 基础环境准备就绪 (Dependencies ready)。" "✅ Dependencies ready."
