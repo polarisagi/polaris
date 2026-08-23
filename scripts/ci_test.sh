@@ -50,27 +50,37 @@ if ! command -v golangci-lint &> /dev/null; then
     go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
     export PATH=$PATH:$(go env GOPATH)/bin
 fi
-run_step "[2/12] 执行跨平台 Go 静态检查 (macOS/Linux/Windows)" "golangci-lint run ./... && GOOS=linux golangci-lint run ./... && GOOS=windows golangci-lint run ./..."
+run_step "[2/13] 执行跨平台 Go 静态检查 (macOS/Linux/Windows)" "golangci-lint run ./... && GOOS=linux golangci-lint run ./... && GOOS=windows golangci-lint run ./..."
 
-run_step "[3/12] 执行 Rust 格式化与静态检查" "cargo fmt --manifest-path rust/substrate/Cargo.toml --check && cargo clippy --manifest-path rust/substrate/Cargo.toml -- -D warnings"
+run_step "[3/13] 执行 Rust 格式化与静态检查" "cargo fmt --manifest-path rust/substrate/Cargo.toml --check && cargo clippy --manifest-path rust/substrate/Cargo.toml -- -D warnings"
 
-run_step "[4/12] 执行 docs/arch 一致性检查" "make docs-check && make docs-lint && make docs-refs"
+# 对应 GitHub Actions 的 rust-lint-deny job（make rust-lint && make rust-deny）。
+# cargo deny check 扫描 Cargo.lock 中所有依赖的已知漏洞（rustsec advisories）、
+# 许可证合规性与来源可信度，是本地最容易漏检的安全门控（GR-7.4）。
+# 若 cargo-deny 未安装，自动安装。
+if ! command -v cargo-deny &> /dev/null; then
+    echo "未找到 cargo-deny，正在安装..."
+    cargo install cargo-deny --locked
+fi
+run_step "[4/13] 执行 Rust 依赖安全审计 (cargo deny)" "make rust-deny"
 
-run_step "[5/12] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
+run_step "[5/13] 执行 docs/arch 一致性检查" "make docs-check && make docs-lint && make docs-refs"
 
-run_step "[6/12] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out && go tool cover -func=coverage.out"
+run_step "[6/13] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
 
-run_step "[7/12] 运行 Rust 单元测试" "make rust-test"
+run_step "[7/13] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out && go tool cover -func=coverage.out"
 
-run_step "[8/12] 编译 Rust Substrate 模块" "make rust-build"
+run_step "[8/13] 运行 Rust 单元测试" "make rust-test"
 
-run_step "[9/12] 执行全量编译 (make build)" "make build"
+run_step "[9/13] 编译 Rust Substrate 模块" "make rust-build"
 
-run_step "[10/12] 验证多架构交叉编译 (Linux, Windows, macOS)" "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/polaris && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/polaris && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/polaris"
+run_step "[10/13] 执行全量编译 (make build)" "make build"
 
-run_step "[11/12] 验证生成的配置是否最新" "make gen-threshold-examples && git diff --exit-code configs/threshold-examples/"
+run_step "[11/13] 验证多架构交叉编译 (Linux, Windows, macOS)" "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/polaris && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/polaris && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/polaris"
 
-run_step "[12/12] 验证 Eval Harness Gate" "POLARIS_DATA_DIR=$(mktemp -d) go run ./cmd/polaris eval --ci-gate"
+run_step "[12/13] 验证生成的配置是否最新" "make gen-threshold-examples && git diff --exit-code configs/threshold-examples/"
+
+run_step "[13/13] 验证 Eval Harness Gate" "POLARIS_DATA_DIR=$(mktemp -d) go run ./cmd/polaris eval --ci-gate"
 
 echo ""
 echo "======================================"
