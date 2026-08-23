@@ -1,4 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# -e: 任何命令失败立即退出；-u: 引用未定义变量报错；-o pipefail: 管道任一步骤失败即报错
+# 注：已有的 || true 后缀与 set -e 完全兼容，无需修改。
+set -euo pipefail
 
 BIN_NAME="polaris"
 INSTALL_DIR="$HOME/.polarisagi/polaris/bin"
@@ -47,11 +50,18 @@ elif [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-# ── 2. 删除二进制 ─────────────────────────────────────────────────────────────
+# ── 2. 删除二进制及 Rust dylib ────────────────────────────────────────────────
 if [ -f "${INSTALL_DIR}/${BIN_NAME}" ]; then
     msg "🗑️  删除二进制: ${INSTALL_DIR}/${BIN_NAME}" \
         "🗑️  Removing binary: ${INSTALL_DIR}/${BIN_NAME}"
     rm -f "${INSTALL_DIR}/${BIN_NAME}"
+fi
+# install.sh 从 release tar.gz 解压时同步释放 lib/（含 libsubstrate.dylib/.so/.dll），
+# 卸载时一并清理，避免留下孤立的动态库文件。
+if [ -d "${INSTALL_DIR}/lib" ]; then
+    msg "🗑️  删除 Rust dylib: ${INSTALL_DIR}/lib/" \
+        "🗑️  Removing Rust dylib: ${INSTALL_DIR}/lib/"
+    rm -rf "${INSTALL_DIR}/lib"
 fi
 
 echo ""

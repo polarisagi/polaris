@@ -25,7 +25,9 @@
 #   2. 白名单条目 —— 见 tools/baselines/docs-refs-allowlist.txt（合法历史注记：
 #      活文档正确记载"该路径已于某日删除/迁移，见 ADR-XXXX"，路径本就不该存在）；
 #   3. 非顶层目录开头的相对路径 / URL / REST 端点。
-set -uo pipefail
+# -e: 任何命令失败立即退出（已有的 || exit 1 是双保险，-e 是兜底）
+# -u: 引用未定义变量报错；-o pipefail: 管道任一步骤失败即报错
+set -euo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
@@ -55,8 +57,9 @@ trap 'rm -f "$tmp_report"' EXIT
 
 for f in "${FILES[@]}"; do
 	[ -f "$f" ] || continue
-	# 逐行取出反引号内、以顶层目录开头的路径字面量
-	grep -noE "\`($TOP_DIRS)/[A-Za-z0-9_./-]+\`" "$f" 2>/dev/null |
+	# 逐行取出反引号内、以顶层目录开头的路径字面量。
+	# grep 无匹配时 exit 1 属于正常情况，加 || true 防止 set -e 误触。
+	{ grep -noE "\`($TOP_DIRS)/[A-Za-z0-9_./-]+\`" "$f" 2>/dev/null || true; } |
 		sed -E 's/`//g' |
 		while IFS=: read -r line ref; do
 			path="${ref%/}"
