@@ -81,8 +81,3 @@ rust/substrate/target/release
 tools/wiring_reachability_check.go
 internal/vfs/provider.go # ignore
 internal/xxx.go # example in wiring check
-
-# ── local_playground 架构分析报告（临时工作文档，不并入主分支）──
-# M08 §代码现状 第 156 行引用此文件作为「P2-4 决策依据」注记。
-# local_playground/ 是本地工作草稿目录，从不提交到主分支，路径注定不存在。
-local_playground/bake/20260703/2026-07-03-architecture-gap-remediation.md

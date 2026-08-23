@@ -153,7 +153,7 @@ Root(suture, OneForOne) → Agent-*(default-task-worker/agent-0/m9-engine/memory
 
 产品侧设想的 Librarian（对接用户本地知识库如 Obsidian/Notion，整理内容、辅助 AI 理解用户/办公）**不新建独立 swarm 角色**——2026-07-03 系统级决策：这类"周期性把外部信息摄入进 Agent 可用知识"的职能与 MemoryAgent 已经承担的 Extension Librarian 调度是同一性质的工作，收编进 **MemoryAgent** 的调度范围，不单独起一个常驻 goroutine（避免 Tier-0 内存预算和 Supervisor 挂载点的边际浪费，两者也没有独立扩缩容/故障隔离的必要性）。
 
-**代码现状**：`internal/knowledge/connector/` 下 `obsidian_connector.go` 与 `notion_connector.go` 均已完整实现（List/Fetch/Watch/SyncConfig 等方法齐全），但两者目前都还未被 MemoryAgent 所在的 `internal/swarm/` 引用调度——即"收编进 MemoryAgent 调度"这一决策的连接器代码本体已就绪，调度接入这一步尚未完成，Obsidian 与 Notion 处于同一未接线状态，并非"Obsidian 已接入、Notion 待实现"的差异化状态。若未来知识库同步的复杂度/调用量确实超出 MemoryAgent 承载范围，再考虑拆分独立角色。详见 `local_playground/bake/20260703/2026-07-03-architecture-gap-remediation.md` P2-4。
+**代码现状**：`internal/knowledge/connector/` 下 `obsidian_connector.go` 与 `notion_connector.go` 均已完整实现（List/Fetch/Watch/SyncConfig 等方法齐全），但两者目前都还未被 MemoryAgent 所在的 `internal/swarm/` 引用调度——即"收编进 MemoryAgent 调度"这一决策的连接器代码本体已就绪，调度接入这一步尚未完成，Obsidian 与 Notion 处于同一未接线状态，并非"Obsidian 已接入、Notion 待实现"的差异化状态。若未来知识库同步的复杂度/调用量确实超出 MemoryAgent 承载范围，再考虑拆分独立角色。
 
 ---
 
