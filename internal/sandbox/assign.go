@@ -35,8 +35,12 @@ func AssignSandboxTier(tool types.Tool, trustTier types.TrustTier, hwTier int, g
 		tier = types.SandboxContainer
 	}
 	if tier == types.SandboxContainer && hwTier == 0 {
-		// Tier-0 无容器运行时：根据 M07 §4.2，全平台拒绝，不降级 Wasm/NativeOS。
-		return 0, apperr.ErrTier0SandboxLimit
+		// Tier-0 无容器运行时：降级到 NativeOS（Rust bwrap/Seatbelt OS 级隔离）。
+		// CapPrivileged 由调用方在分级前拦截（M07 §4.2 + ADR-0008 决策四）。
+		if tool.Capability >= types.CapPrivileged {
+			return 0, apperr.ErrTier0SandboxLimit
+		}
+		return types.SandboxNativeOS, nil
 	}
 	return tier, nil
 }

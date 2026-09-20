@@ -32,7 +32,7 @@ type PromptBuilder interface {
 	WriteUserImages(imgs []types.ImagePart)
 	// WriteComputerUsePolicy 写入电脑操控权限的系统指令。
 	WriteComputerUsePolicy(mode string, anyAppEnabled, chromeEnabled bool)
-	// WriteToolHints 将工具自进化闭环产出的 <tool-hints> XML 块写入 ZoneImmutable。
+	// WriteToolHints 将工具自进化闭环产出的 <tool-hints> XML 块写入 ZoneMutableSkill（学习产物，信任度低于 ZoneImmutable）。
 	WriteToolHints(hint string)
 	// WriteExternalCatalog 写入第三方来源的工具/扩展目录（S-02）。
 	// kind 为目录类别（"tools" | "extensions"），ts 为渲染后的目录正文及其来源污点。

@@ -271,10 +271,15 @@ func (r *InMemoryToolRegistry) checkPreExecution(ctx context.Context, tool types
 		// 通过简单的 JSON 字符串替换实现（假设参数包含路径）
 		if taskID != "" && isFileWriteTool(tool) {
 			cowTaskID := taskID + ".cow"
-			// 简单的字符串替换（注意: 强依赖路径结构中包含 /taskID/）
+			// 仅当入参路径确实位于 /taskID/ 工作区内、且已被重写到 COW 目录时才放行真实执行；
+			// 未命中（绝对路径在工作区外、相对路径等）必须 fail-closed 落到下方模拟结果，
+			// 否则 ReplaceAll 空操作后原样写穿真实文件系统（GR-5.2-007）。
 			modifiedInput := bytes.ReplaceAll(input, []byte("/"+taskID+"/"), []byte("/"+cowTaskID+"/"))
-			slog.Debug("tool_registry: dry_run COW enabled, rewriting workspace path", "tool", tool.Name, "original_task", taskID)
-			return modifiedInput, nil, nil
+			if !bytes.Equal(modifiedInput, input) {
+				slog.Debug("tool_registry: dry_run COW enabled, rewriting workspace path", "tool", tool.Name, "original_task", taskID)
+				return modifiedInput, nil, nil
+			}
+			slog.Debug("tool_registry: dry_run COW not applicable (path outside task workspace), simulating", "tool", tool.Name)
 		}
 
 		// 其他工具：拦截所有，返回模拟结果；不执行真实副作用

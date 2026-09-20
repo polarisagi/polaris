@@ -213,3 +213,7 @@ B 之所以删除而非接线补活：`UndoFn` 是挂在**工具定义**上的�
 
 > 2026-08-13 补充：本论采用棘轮方式（lint-backlog.md + landed/rejected 尚未落地前禁开始修复 GR 缺陷），已导入 2026-08-09
 
+> **2026-09-20 复核**：Micro-DAG 中 ExecNode.Compensation 字段保留但不在 S_VALIDATE 中
+> 强制校验（validator.go 仅 slog.Info 观测留痕）。理由：(1) plan_dag schema/prompt 不产出
+> compensation，强制校验 = 系统瘫痪；(2) inv_M4_06 禁止不可逆操作自动回滚，write_network
+> 场景由 HITL 覆盖而非 Saga 自动补偿。Macro-DAG 的 Saga 机制不受影响。

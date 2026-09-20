@@ -218,7 +218,18 @@ func (c *MCPMarketplaceClient) Install(ctx context.Context, pkg protocol.Registr
 		return "", apperr.New(apperr.CodeInternal, "marketplace: package missing install command")
 	}
 
-	pluginDir := filepath.Join(c.baseInstallDir, strings.ReplaceAll(pkg.ID, "/", "_"))
+	// GR-8-003：pkg.ID / pkg.Command 来自远端市场元数据，不可信。原实现只把 "/"
+	// 替换成 "_"：ID 为 ".." 时 pluginDir 即 baseInstallDir 的父目录，紧接着的
+	// RemoveAll 会递归删除它；Windows 下 "\" 分隔符与 Command 中的 "../" 同样
+	// 可逃逸。目录名必须是单段本地名，Command 必须是 pluginDir 内的本地相对路径。
+	dirName := strings.NewReplacer("/", "_", "\\", "_").Replace(pkg.ID)
+	if !filepath.IsLocal(dirName) || dirName == "." || strings.ContainsRune(dirName, filepath.Separator) {
+		return "", apperr.New(apperr.CodeInvalidInput, "marketplace: invalid package id")
+	}
+	if !isRemote && !filepath.IsLocal(pkg.Command) && pkg.URL != "" && pkg.URL != "npx-mode" {
+		return "", apperr.New(apperr.CodeInvalidInput, "marketplace: package command escapes install dir")
+	}
+	pluginDir := filepath.Join(c.baseInstallDir, dirName)
 	_ = os.RemoveAll(pluginDir)
 	if err := os.MkdirAll(pluginDir, 0755); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "marketplace: failed to create directory", err)

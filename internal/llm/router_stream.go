@@ -30,7 +30,7 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 	out := make(chan types.StreamEvent)
 	maxBufBytes := ir.registry.cfg.MaxStreamBufferKB * 1024
 	if maxBufBytes <= 0 {
-		maxBufBytes = 256 * 1024 // 与 TrackStreamCost/M1RouterThresholds 默认值一致的兜底
+		maxBufBytes = 256 * 1024 // state.yaml §m1_router.max_stream_buffer_kb 默认值兜底
 	}
 	guard := NewStreamBudgetGuard(NewTokenBudget(req.MaxTokens), NewTokenBurnDetector(5000), maxBufBytes)
 	accumulatedBytes := 0
@@ -76,13 +76,11 @@ func (ir *InferenceRouter) wrapStreamChannel(ctx context.Context, ch <-chan type
 						ir.abortStream(ctx, out, providerName, gErr)
 						return
 					}
+					// 缓冲上限唯一判定点（GR-2.2-005）：取 cfg.MaxStreamBufferKB（随 Tier 放大），
+					// 此前其后还有 TrackStreamCost 硬编码 256KB 二次截断，使高 Tier 配置失效，已删除。
 					if accumulatedBytes > guard.GetMaxBufferSize() {
 						slog.Warn("stream size exceeded", "limit", guard.GetMaxBufferSize())
 						ir.abortStream(ctx, out, providerName, ErrResponseTooLarge)
-						return
-					}
-					if szErr := TrackStreamCost(ctx, accumulatedBytes, providerName); szErr != nil {
-						ir.abortStream(ctx, out, providerName, szErr)
 						return
 					}
 				}
@@ -125,7 +123,7 @@ func (ir *InferenceRouter) recordStreamInterrupted(ctx context.Context, provider
 	ir.streamInterrupts.RecordStreamInterrupted(ctx, provider, reason)
 }
 
-// abortStream 因 StreamBudgetGuard/TrackStreamCost 硬阻断而中止流：向下游发一个
+// abortStream 因 StreamBudgetGuard 硬阻断（预算/加速度/缓冲上限）而中止流：向下游发一个
 // StreamCancelled 事件，并记录一条可观测的 LLM 调用结果，复用既有
 // trace.RecordLLMCall 管线（避免为此新增一套 Prometheus/OTel instrument）。
 //

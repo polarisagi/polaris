@@ -281,7 +281,7 @@ func (rg *ResourceGovernor) WaitForCapacity(ctx context.Context) error {
 func (rg *ResourceGovernor) Release() {
 	rg.mu.Lock()
 	rg.inFlight--
-	rg.cond.Signal()
+	rg.cond.Broadcast() // GR-10.1-004：任务池与 LLM 池共用一个 cond，Signal 可能唤醒另一池的等待者而丢失唤醒
 	rg.mu.Unlock()
 }
 
@@ -353,6 +353,6 @@ func (rg *ResourceGovernor) WaitForLLMCapacity(ctx context.Context) error {
 func (rg *ResourceGovernor) ReleaseLLM() {
 	rg.mu.Lock()
 	rg.llmInFlight--
-	rg.cond.Signal()
+	rg.cond.Broadcast() // GR-10.1-004：任务池与 LLM 池共用一个 cond，Signal 可能唤醒另一池的等待者而丢失唤醒
 	rg.mu.Unlock()
 }

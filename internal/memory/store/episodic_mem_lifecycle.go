@@ -52,7 +52,9 @@ func (em *EpisodicMem) Consolidate(ctx context.Context, semantic *SemanticMem) e
 		fp0 := util.SimhashOf(string(recent[0].Payload))
 		fp1 := util.SimhashOf(string(recent[1].Payload))
 		fp2 := util.SimhashOf(string(recent[2].Payload))
-		if !util.IsSimilar(fp0, fp1) && !util.IsSimilar(fp1, fp2) {
+		// 两两相似才合并（GR-5.1-007）：原 && 只在两对都不相似时跳过，
+		// fp0≈fp1 而 fp2 无关时会把不相干事件压进同一摘要。fp0-fp2 一并校验，兑现"两两"。
+		if !util.IsSimilar(fp0, fp1) || !util.IsSimilar(fp1, fp2) || !util.IsSimilar(fp0, fp2) {
 			continue // 不够相似，跳过合并
 		}
 
@@ -103,8 +105,10 @@ func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before ti
 		return 0, nil
 	}
 
+	// episodic_events.timestamp 为毫秒（EpisodicProjectorHandler 写 UnixMilli）；
+	// 此前传秒级值，timestamp < 秒 恒假，冷冻永不生效（GR-5.1-002）。
 	query := "UPDATE episodic_events SET archived = 1 WHERE session_id = ? AND timestamp < ? AND archived = 0"
-	result, err := sqlStore.ExecContext(ctx, query, sessionID, before.Unix())
+	result, err := sqlStore.ExecContext(ctx, query, sessionID, before.UnixMilli())
 	if err != nil {
 		return 0, apperr.Wrap(apperr.CodeInternal, "episodic_mem: mark cold failed", err)
 	}
@@ -147,7 +151,7 @@ func (em *EpisodicMem) MarkCold(ctx context.Context, sessionID string, before ti
 		insertLog := `INSERT INTO episodic_events_change_log
 			(session_id, changed_at, change_type, affected_count)
 			VALUES (?, ?, 'mark_cold', ?)`
-		if _, err := sqlStore.ExecContext(ctx, insertLog, sessionID, time.Now().Unix(), affected); err != nil {
+		if _, err := sqlStore.ExecContext(ctx, insertLog, sessionID, time.Now().UnixMilli(), affected); err != nil {
 			return 0, apperr.Wrap(apperr.CodeInternal, "episodic_mem: write change_log failed", err)
 		}
 	}
@@ -190,6 +194,9 @@ func (em *EpisodicMem) ScanHighSalience(ctx context.Context, sinceID int64, minS
 		}
 		results = append(results, e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "EpisodicMem salience scan iterate", err)
+	}
 	return results, nil
 }
 
@@ -205,6 +212,10 @@ func (em *EpisodicMem) loadEventsFromStore(ctx context.Context) ([]types.Event, 
 		if jsonErr := json.Unmarshal(iter.Value(), &ev); jsonErr == nil {
 			loaded = append(loaded, ev)
 		}
+	}
+	if err := iter.Err(); err != nil {
+		iter.Close()
+		return nil, apperr.Wrap(apperr.CodeInternal, "EpisodicMem.loadEventsFromStore iterate", err)
 	}
 	iter.Close()
 

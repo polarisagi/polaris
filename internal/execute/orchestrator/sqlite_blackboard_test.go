@@ -150,7 +150,8 @@ func TestSQLiteBlackboard(t *testing.T) {
 
 	// Test SideEffectPreCheck
 	_ = bb.StartExecution(ctx, "batch-2", "worker-1")
-	err = bb.SideEffectPreCheck(ctx, "batch-2", "worker-1", 3)
+	// version: Post=0 → Claim=1 → StartExecution=2；RenewLease 不推进所有权纪元
+	err = bb.SideEffectPreCheck(ctx, "batch-2", "worker-1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

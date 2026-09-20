@@ -85,7 +85,8 @@ func TestClusterer_Cluster(t *testing.T) {
 		{ID: "e2", Name: "e2"},
 	}
 
-	labels, err := c.Cluster(ctx, nil, entities, adj)
+	var upsertFn func(ctx context.Context, entity *Entity) error
+	labels, err := c.Cluster(ctx, upsertFn, entities, adj)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

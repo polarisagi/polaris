@@ -237,17 +237,6 @@ type RepairResult struct {
 	JsonRepaired   bool
 }
 
-// TrackStreamCost 流式成本追踪。
-// 流正常结束 → 精确 API usage; 流中断 → 根据中断原因处理。
-func TrackStreamCost(ctx context.Context, accumulated int, provider string) error {
-	// FatalStreamAbort → 丢弃 accumulatedOutput → M4 S_REPLAN
-	// > MaxStreamBufferSize (256KB) → ErrResponseTooLarge
-	if accumulated > 256*1024 {
-		return ErrResponseTooLarge
-	}
-	return nil
-}
-
 var (
 	ErrFatalStreamAbort      = &StreamError{"fatal stream abort"}
 	ErrStreamBudgetExhausted = &StreamError{"stream budget exhausted"}

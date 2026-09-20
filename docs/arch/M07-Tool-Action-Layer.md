@@ -2,7 +2,7 @@
 
 > MCP（Model Context Protocol，模型上下文协议） 双向化 | 三级沙箱 | 能力分级 read_only→privileged | Go+Rust 沙箱 | [HE-Rule-2] [HE-Rule-5]
 > CANONICAL SOURCE: 沙箱架构、Rust 脚本沙箱、StreamingActionBus
-<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:180 三级沙箱(CANONICAL) / 5:377 PolicyGate / 6:436 Capability / 7:461 动作扩展 / 8:602 Usage演化 / 12:643 (SOFT)降级 / 13:661 跨模块契约 / 14:681 Plugin / 15:723 Hook -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:18 不变量速查 / 1:31 MCP双向 / 2:85 A2A（Agent-to-Agent，智能体间通信） / 3:113 注册 / 4:184 三级沙箱(CANONICAL) / 5:381 PolicyGate / 6:440 Capability / 7:465 动作扩展 / 8:608 Usage演化 / 12:649 (SOFT)降级 / 13:667 跨模块契约 / 14:687 Plugin / 15:729 Hook -->
 ## 0-bis. 职责边界
 
 - M7 **是**: 工具注册中心（ToolRegistry）+ 五大工具类别管理 | M7 **不是**: 工具的语义定义者（各模块注册自己的工具）
@@ -127,7 +127,7 @@ Schema 版本化（防技能断裂）: 新增可选字段=Patch, 新增必填字
 
 Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接执行，提供最高性能且受限于原生沙箱策略。
 
-核心内置工具清单（共 **42 个**，分 4 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配），严禁在外部或扩展层绕过它们：
+核心内置工具清单（共 **45 个**，分 6 个注册入口，均由 `cmd/polaris/boot_tools.go` 装配），严禁在外部或扩展层绕过它们（2026-09-20 追记 GR-12-008：原"42 个 / 4 入口"遗漏入口 5、6）：
 
 **入口 1 — `builtin.RegisterBuiltinTools`（31 个，元数据来自 `internal/tool/builtin/<name>/tool.yaml` + `schema.json`）**
 
@@ -150,6 +150,10 @@ Polaris L1 层提供生存套件（Survival Kit），以 Go 原生代码直接�
 **入口 3 — `builtin.RegisterSkillTools`（2 个，`internal/tool/builtin/skill_tools.go`）**：`skill_save`、`skill_generate`（Logic Collapse 蒸馏，详见 M06 §2.2）。
 
 **入口 4 — 惰性目录（`boot_tools.go:457`，`CompositeCatalog`）**：`tool_search`（工具数超过 `m13_interface.lazy_load_tool_threshold`＝40 时用于按需检索工具定义，避免全量 schema 撑爆 prompt）。
+
+**入口 5 — `builtin.RegisterA2ATools`（1 个，`internal/tool/builtin/a2a_tools.go`，ADR-0084）**：`list_a2a_agents`（列出可委派的 MCP A2A 远端 Agent；`transfer_to_agent` 由 DAG 执行路径另行注册）。
+
+**入口 6 — `native.RegisterExtensionTools`（2 个，`internal/extension/native/extension_tools.go`）**：`search_extension`、`install_extension`（按需检索/安装扩展，安装走 InstallManager + HITL）；第三参 `knowledgeSearcher` 非 nil 时额外注册 `knowledge_search`，生产装配当前传 nil 不注册。
 
 > 历史遗留的 Wasm 版 `file_read`/`file_write`/`web_fetch`/`shell_exec` 技能已全部废弃并清理。
 
@@ -197,6 +201,10 @@ Tier 0 L3 不可用: 全平台 Tier 0 内存不足启动 microVM (每 L3 ≥256M
 2. Capability提升: WriteNetwork+→Wasm；Privileged→Container
 3. SideProcessSpawn→Container
 4. Tier0 Container 请求全平台拒绝：`AssignSandboxTier` 返回 `(SandboxTier, error)`；hwTier==0 需要 Container 的工具返回 `ErrTier0SandboxLimit`，不区分 goos，不降级 Wasm，调用方必须显式处理（M07 §4.2）。
+
+> **2026-09-20 复核**：Tier-0 + Container 改为降级 SandboxNativeOS（Rust bwrap/Seatbelt OS 级隔离），
+> 不再返回 ErrTier0SandboxLimit。仅 CapPrivileged 保留 ErrTier0SandboxLimit。
+> 理由：NativeOS 具有 OS 原生隔离边界，不同于 ADR-0008 当时禁止的无隔离裸子进程。见 ADR-0008 决策四。
 
 **脚本风险评估默认沙箱等级**：来源不明或 LLM 生成的脚本默认分配 L2 Wasm 隔离等级；仅明确白名单来源（builtin）的脚本可走 L1 InProcess。
 
@@ -520,13 +528,15 @@ reasoning:  推理说明（仅日志，不转发 executor）
 
 **ExecutorFn 注入模式**: `executor ExecutorFn` 由调用方注入（通常 `action.NewComputerUseTool().Execute`），解耦 `internal/action/lam` 与 `internal/action` 父包，防止循环依赖。`executor=nil` → dry-run 模式，返回解析的动作 JSON 供调试。当前 boot 以 `sb.Router` 作为 VLM provider 注入，executor 暂为 nil（dry-run），待 Tier-1+ GUI 执行器接入后填充。
 
+> 2026-09-20 复核（GR-4.2-007）：`ExecuteAction` / `StreamBus` 当前**无生产调用入口**——`internal/tool/builtin` 不存在 computer_use 工具，Agent 仅经 `lamPolicyAdapter` 使用 `CheckPolicy`。在 GUI 执行器落地前刻意不接线（接上也只能得到 dry-run JSON，属假接线）；接入时须同时提供 builtin 工具与 executor，二者缺一不算完成。
+
 **Agent Kernel 集成**（ADR-0025 BUG-1）: `ComputerUseEngine` 提供导出方法 `CheckPolicy(ctx context.Context, actionJSON []byte) error`，由 `Agent.interceptComputerUse`（`internal/agent/agent_execute_util.go`）在 HITL 审批**前**调用，实施 Cedar `browser_automate/lam/{allow_net:true}` deny-by-default 预检。Agent struct 持有 `lamEngine *lam.ComputerUseEngine` 字段，boot 通过 `agent.SetLAMEngine(lamEngine)` 注入。`lamEngine==nil` 时跳过 Cedar 预检（nil-safe，兼容无 LAM 场景）。调用顺序：Cedar PolicyGate（快速拒绝）→ HITL 审批（人工确认）。
 
 **LAMConfig**:
 ```
 Enabled:        bool
 PerceptionMode: string  // "auto" (按内存自动降级) | "local_omniparser" (强制本地) | "cloud_vlm" (强制云端多模态)
-ResolverModel:  string  // 视觉解析模型，如 "deepseek-chat" 或 "claude-3-5-sonnet"
+ResolverModel:  string  // 视觉解析模型真实 ID；空串 = 由 InferenceRouter 按图像 Part 选 Vision Provider（boot 默认留空，GR-4.2-003）
 ```
 
 **ActionDiscretizer**（`internal/action/lam/continuous_action.go`）: 已实现基于余弦相似度的离散化投影（`Discretize` 方法，含 `keyToCentroid` + `cosineSim` 算法）。连续向量 → 离散工具调用，延迟 ~1-5ms。Vision 解析路径（DisplayServer）待 Tier-1+ 接入。

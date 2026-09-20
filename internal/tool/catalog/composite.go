@@ -66,7 +66,9 @@ func (c *CompositeCatalog) rebuild(ctx context.Context, minTrust types.TrustTier
 	seen := make(map[string]bool)
 	var result []protocol.CatalogEntry
 	for _, src := range c.sources {
-		for _, e := range src.List(ctx, minTrust) {
+		// cache 是全量视图，按 minTrust 过滤只发生在出口（GR-5.2-005）：此前以首次调用方的
+		// minTrust 取源，高信任首调会把低信任工具永久挡在缓存外，后续低门槛调用方再也看不到。
+		for _, e := range src.List(ctx, types.TrustUntrusted) {
 			if seen[e.Name] {
 				continue
 			}

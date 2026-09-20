@@ -370,9 +370,11 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 					continue
 				}
 				for _, c := range cases {
-					// [W-5-H] SyntheticCaseToEvalCase 接入
+					// [W-5-H] SyntheticCaseToEvalCase 接入。分区用 training（M09 §合成用例：
+					// SourceSynthetic 路由至 Training Set）；原先写 "synthetic" 不是合法分区，
+					// PutCase 恒返回错误，合成用例从未落库。
 					evalCase := eval.SyntheticCaseToEvalCase(c)
-					if err := evalStore.PutCase(ctx, "synthetic", "auto_gen", evalCase); err != nil {
+					if err := evalStore.PutCase(ctx, control.PartitionTraining, "auto_gen", evalCase); err != nil {
 						slog.Warn("failed to put synthetic eval case", "id", c.ID, "err", err)
 					}
 				}
@@ -521,8 +523,9 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 	streamBus := lam.NewStreamingActionBus(ds, 1000, 100.0) // 默认 1000 步，100 actions/sec
 
+	// ResolverModel 留空：由 Router 按图像 Part 选 Vision Provider（原 "default-vlm" 不是任何厂商的模型 ID）。
 	lamEngine := lam.NewComputerUseEngine(
-		lam.LAMConfig{Enabled: true, ResolverModel: "default-vlm"},
+		lam.LAMConfig{Enabled: true},
 		sb.Router, // VLM provider（动作解析）
 		nil,       // executor: 当前无 GUI 执行器，dry-run 模式
 		sb.Gate,   // Cedar PolicyGate（deny-by-default）

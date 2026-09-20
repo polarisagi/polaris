@@ -49,16 +49,20 @@ func (r *InMemoryToolRegistry) WithExemptionVault(v *token.ExemptionVault) *InMe
 // 捕获后发起 HITL 转义审批。r.taintEgressChecker 为 nil（未注入）时跳过，行为
 // 与改造前完全一致。
 func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.Tool, taintLevel types.TaintLevel, input []byte) error {
-	if r.taintEgressChecker == nil || taintLevel < types.TaintMedium || !hasNetworkEgressSideEffect(tool) {
+	// 装配字段经 With* 在 r.mu 下写入，此处同锁读出快照（GR-5.2-009）。
+	r.mu.RLock()
+	checker, vault := r.taintEgressChecker, r.exemptionVault
+	r.mu.RUnlock()
+	if checker == nil || taintLevel < types.TaintMedium || !hasNetworkEgressSideEffect(tool) {
 		return nil
 	}
 	var exemption *token.TaintExemptionToken
-	if r.exemptionVault != nil {
+	if vault != nil {
 		if agentID, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && agentID != "" {
-			exemption = r.exemptionVault.Lookup(agentID)
+			exemption = vault.Lookup(agentID)
 		}
 	}
-	if err := r.taintEgressChecker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {
+	if err := checker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {
 		return apperr.Wrap(apperr.CodeForbidden, "tool_registry: taint egress blocked", err)
 	}
 	return nil

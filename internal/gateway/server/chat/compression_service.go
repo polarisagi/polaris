@@ -184,7 +184,8 @@ func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs
 		return msgs, skip, nil
 	}
 
-	middle, tail := compact.SplitMessages(msgs, c.tailTokens)
+	head, body := compact.SplitPinnedHead(msgs) // GD-14-001：system 前缀不参与摘要
+	middle, tail := compact.SplitMessages(body, c.tailTokens)
 	if len(middle) == 0 {
 		// tail 已覆盖全部消息，无法进一步压缩
 		return msgs, skip, nil
@@ -212,7 +213,8 @@ func (c *CompressionService) compact(ctx context.Context, sessionID string, msgs
 		return msgs, skip, nil
 	}
 
-	newMsgs := make([]apptypes.Message, 0, 1+len(tail))
+	newMsgs := make([]apptypes.Message, 0, len(head)+1+len(tail))
+	newMsgs = append(newMsgs, head...)
 	newMsgs = append(newMsgs, summaryMsg)
 	newMsgs = append(newMsgs, tail...)
 

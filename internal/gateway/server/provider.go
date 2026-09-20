@@ -89,15 +89,6 @@ type PromptManager interface {
 	PlatformHintFor(platform string) string
 }
 
-// OTAUpdater server 包对 OTA 自更新管理器的消费端接口。
-// 实现：sysmgr/updater.Manager（nil 时禁用自动更新）
-type OTAUpdater interface {
-	// CheckUpdate 检查是否有新版本可用。
-	CheckUpdate(ctx context.Context) (hasUpdate bool, version string, err error)
-	// Apply 下载并应用更新（需系统重启生效）。
-	Apply(ctx context.Context) error
-}
-
 // CodeActEngine server 包对 CodeAct 引擎的消费端接口。
 type CodeActEngine interface {
 	ExecuteCode(ctx context.Context, req protocol.CodeActRequest) (*protocol.CodeActResult, error)

@@ -70,7 +70,7 @@ func (dm *DurativeMemoryManager) Consolidate(ctx context.Context) error {
 
 	var unclustered []types.ScoredEvent
 	for _, ev := range events {
-		pbEv, _ := ev.Event.(*types.Event)
+		pbEv := ev.EventPtr()
 		if pbEv == nil {
 			continue
 		}
@@ -179,7 +179,7 @@ func (dm *DurativeMemoryManager) ListGroups(ctx context.Context, query string, t
 func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []types.ScoredEvent) error {
 	prompt := "Check if the following events form a continuous semantic narrative. Output JSON: {\"is_continuous\": true, \"summary\": \"...\", \"label\": \"...\"}\n"
 	for _, ev := range cluster {
-		if pbEv, _ := ev.Event.(*types.Event); pbEv != nil {
+		if pbEv := ev.EventPtr(); pbEv != nil {
 			prompt += string(pbEv.Payload) + "\n"
 		}
 	}
@@ -215,7 +215,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 	eventIDs := make([]string, 0, len(cluster))
 
 	for _, ev := range cluster {
-		if pbEv, _ := ev.Event.(*types.Event); pbEv != nil {
+		if pbEv := ev.EventPtr(); pbEv != nil {
 			eventIDs = append(eventIDs, pbEv.ID)
 		}
 	}

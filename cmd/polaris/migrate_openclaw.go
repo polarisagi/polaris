@@ -82,6 +82,12 @@ func runMigrateOpenClaw(args []string) error { //nolint:gocyclo
 			overwrite = true
 		case args[i] == "--with-memory":
 			withMemory = true
+		case args[i] == "--stage=false":
+			stage = false
+		case args[i] == "--stage" || args[i] == "--stage=true":
+			stage = true
+		case args[i] == "--smart":
+			smart = true
 		case strings.HasPrefix(args[i], "--openclaw-dir="):
 			ocDir = strings.TrimPrefix(args[i], "--openclaw-dir=")
 		case strings.HasPrefix(args[i], "--clawhub-url="):
@@ -138,7 +144,7 @@ func printMigrateUsage() {
   --openclaw-dir=<path>指定 OpenClaw 数据目录（默认 ~/.openclaw）
   --with-memory         启用记忆迁移（默认 staging 隔离写入）
   --stage=false         记忆不入 staging, 直接写主线 events
-  --smart               LLM 启发式预压缩（去重+摘要, 减少低价值记忿）
+  --smart               LLM 启发式预压缩（去重+摘要, 减少低价值记忆）
   --clawhub-url=<url>  从 ClawHub 拉取技能（可选）
   --help              显示此帮助
 

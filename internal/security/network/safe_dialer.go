@@ -194,6 +194,12 @@ func (sd *SafeDialer) DialContext(ctx context.Context, network, address string) 
 	// 注意：此处 >= TaintMedium 是「白名单域名收紧」语义（越脏越收紧），
 	// TaintUserReviewed 落入白名单限制是合理的，不同于 TaintEgressCheck 的「拦截」语义，
 	// 故此处不加 != TaintUserReviewed 排除（2026-08-12 A-3 取证确认）。
+	//
+	// 刻意只看实例级 taintLevel、不读 ctx 污点（GR-2.1-002 复核 2026-09-19）：gateway 中间件
+	// 把"请求来源"污点（本地 Medium / 外部 API High）注入每个请求 ctx，经 ctx 传到拨号层的
+	// 是全部 LLM Provider 调用——按 ctx 收紧会把默认空白名单下的所有推理出站一并拒绝。
+	// 数据外发的污点拦截由 Gate4 / TaintEgressCheck 在工具层按"载荷"污点执行（M11 §6）；
+	// 本分支仅服务于显式以 taintLevel>=Medium 构造的专用 Dialer（当前生产无此实例）。
 	if types.TaintLevel(sd.taintLevel) >= types.TaintMedium {
 		allowed := false
 		for _, d := range sd.allowedDomains {

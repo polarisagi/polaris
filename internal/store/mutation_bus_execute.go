@@ -21,8 +21,8 @@ import (
 // validateTable 检查表名是否在白名单内；防止 SQL 注入。
 func validateTable(table string) error {
 	switch table {
-	case "tasks", "events", "workspace_vfs", "episodic_memory", "semantic_memory",
-		"knowledge_nodes", "knowledge_edges", "entities", "rag_chunks",
+	case "tasks", "events", "workspace_vfs", "semantic_memory",
+		"knowledge_nodes", "knowledge_edges", "rag_chunks",
 		"plugin_marketplaces", "preferences", "decision_log", "skills",
 		"self_improve", "outbox", "extension_instances", "notes",
 		"reflection_memory", "apps":

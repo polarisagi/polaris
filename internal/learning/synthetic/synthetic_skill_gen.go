@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -40,12 +41,13 @@ func (g *SyntheticSkillGen) Generate(ctx context.Context, name, description stri
 		return types.Tool{}, err
 	}
 
-	// Step 2: 持久化到 SkillRegistry（HE-6 State-in-DB）
+	// Step 2: 以"待审候选"持久化到 SkillRegistry（HE-6 State-in-DB）
 	if g.skillReg != nil {
-		if regErr := g.registerSkill(ctx, name, description, schema); regErr != nil {
+		if regErr := g.registerSkill(ctx, tool.Name, description, schema); regErr != nil {
 			// 重名视为幂等（已注册过），其余错误仅记录不中断
 			if !apperr.IsCode(regErr, apperr.CodeAlreadyExists) {
 				slog.Warn("synthetic_skill_gen: register failed", "err", regErr)
+				metrics.GlobalLearningSkillRegisterFailuresTotal.Add(1)
 			}
 		}
 	}
@@ -113,26 +115,40 @@ Output ONLY valid JSON. No markdown formatting or extra text.`, name, descriptio
 		raw.Version = "1.0.0"
 	}
 
+	// 工具名取调用方请求的名字而非 LLM 自拟的 raw.Name：LLM 输出不可信，若它
+	// 返回 "read_file" 之类的内置工具名，下游按名注册会覆盖真实工具（GR-7.1-004）。
 	tool := types.Tool{
-		Name:        raw.Name,
+		Name:        name,
 		Description: raw.Description,
 		Version:     raw.Version,
 		Capability:  types.CapReadOnly,
 		SideEffects: []types.SideEffect{types.SideNone},
 		RiskLevel:   types.RiskLow,
-		SandboxTier: types.SandboxInProcess,
+		// 合成产物只有 schema 没有实现，也未经审查：标最低信任，路由时由
+		// AssignSandboxTier 按 Source/TrustTier 决定隔离级别，不在此处硬编码进程内。
+		TrustTier:   types.TrustUntrusted,
 		Source:      types.ToolLLMGenerated,
 		InputSchema: raw.InputSchema,
 	}
 	return raw.InputSchema, tool, nil
 }
 
-// registerSkill 将生成结果写入 SkillRegistry。
+// registerSkill 将生成结果以待审候选写入 SkillRegistry。
 // 技能名格式：skill:{name}（SkillRegistry 强制要求此前缀）。
+//
+// GR-7.1-004 / learning CLAUDE.md [MUST NOT]"未经 M11 安全审查的 Logic Collapse
+// 输出不得部署为活跃技能"：
+//   - Deprecated=true：候选不进入 List/SkillSelector/SkillExecutor 的活跃集合，
+//     经审查后由人工/审查流程重新 Register 为非 deprecated 版本才生效；
+//   - 同名技能已存在时不写：Register 是 upsert，LLM 可控的名字若与用户已安装
+//     的技能同名，会把受信技能覆盖成未审查的合成内容。
 func (g *SyntheticSkillGen) registerSkill(ctx context.Context, name, description string, inputSchema map[string]any) error {
-	skillName := "skill:" + name
+	skillName := name
 	if !strings.HasPrefix(name, "skill:") {
 		skillName = "skill:" + name
+	}
+	if existing, err := g.skillReg.Get(ctx, skillName, ""); err == nil && existing != nil {
+		return apperr.New(apperr.CodeAlreadyExists, "synthetic_skill_gen: skill already exists, not overwriting")
 	}
 
 	schemaBytes, _ := json.Marshal(inputSchema)
@@ -145,9 +161,9 @@ func (g *SyntheticSkillGen) registerSkill(ctx context.Context, name, description
 		Sandbox:      1,
 		Capabilities: []string{"read_only"}, // SkillMeta.Capabilities 存字符串标签，非整数枚举
 		ExecMode:     "tool",
-		Trust:        types.TrustLocal, // 合成技能视为本地可信（用实例密钥）
-		Instructions: fmt.Sprintf("Synthetic skill: %s\nInput schema: %s", description, string(schemaBytes)),
-		Deprecated:   false,
+		Trust:        types.TrustLocal, // Registry 拒收 < TrustLocal；是否可用由 Deprecated 候选态控制
+		Instructions: fmt.Sprintf("Synthetic skill (pending review): %s\nInput schema: %s", description, string(schemaBytes)),
+		Deprecated:   true, // 待审候选，不进入活跃集合
 	}
 
 	if err := g.skillReg.Register(ctx, meta); err != nil {

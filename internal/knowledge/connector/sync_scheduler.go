@@ -81,9 +81,18 @@ func (s *SyncScheduler) Start(ctx context.Context) error {
 		slog.Warn("knowledge: initial full-sync failed", "connector", s.connector.ID(), "err", err)
 	}
 
+	// GR-7.2-005：Watch 失败（如 MCPKnowledgeConnector 不支持 Watch 返回
+	// CodeUnimplemented）不能让 Start 退出——那样周期兜底循环也一起停摆，
+	// 连接器只同步一次。Watch 不可用时退化为仅周期全量重同步；若连周期也未
+	// 声明，才没有任何同步手段可用，此时返回错误。
 	events, err := s.connector.Watch(ctx)
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.Start", err)
+		if s.connector.SyncConfig().DefaultInterval <= 0 {
+			return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.Start: watch unavailable and no resync interval", err)
+		}
+		slog.Info("knowledge: watch unavailable, falling back to periodic resync",
+			"connector", s.connector.ID(), "err", err)
+		events = nil
 	}
 
 	debounceTicker := time.NewTicker(s.debounceWin)

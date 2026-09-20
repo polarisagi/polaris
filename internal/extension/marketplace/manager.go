@@ -21,7 +21,7 @@ type ExtensionInstaller interface {
 	Install(ctx context.Context, target any) (installDir string, err error)
 }
 
-var ErrRequiresApproval = apperr.New(apperr.CodeForbidden, "installation requires user approval")
+var ErrRequiresApproval = apperr.NewSentinel(apperr.CodeForbidden, "installation requires user approval")
 
 // MCPRuntimeManager MCP 运行时管理的最小接口（消费方定义，防包循环）。
 type MCPRuntimeManager interface {
@@ -231,9 +231,10 @@ func (m *Manager) postInstallSteps(ctx context.Context, req protocol.ExtensionIn
 			LocalPath: installDir,
 			Config:    req.Config,
 		}
-		_, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType))
-		if err != nil {
-			slog.Warn("marketplace: InstallFSM execution failed", "err", err)
+		// GR-8-007：FSM 失败（实例已被置 failed）必须向上返回，原实现只 Warn 后
+		// return nil，调用方拿到"安装成功"而实例实际不可用。
+		if _, err := m.installFSM.Install(ctx, reqFSM, types.ExtType(req.ExtType)); err != nil {
+			return apperr.Wrap(apperr.CodeOf(err), "marketplace: install fsm failed", err)
 		}
 	}
 
@@ -289,11 +290,14 @@ func (m *Manager) UninstallExtension(ctx context.Context, catalogID string) erro
 			return apperr.Wrap(apperr.CodeInternal, "Manager.UninstallExtension: marshal payload", err)
 		}
 		if err := m.outbox.Write(ctx, protocol.OutboxEntry{
-			TargetEngine:   protocol.TopicMarketplace,
-			Operation:      "extension_uninstall",
-			Scope:          "extension",
-			Payload:        payload,
-			IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMarketplace, "extension_instance", inst.ID, "uninstall", 1)),
+			TargetEngine: protocol.TopicMarketplace,
+			Operation:    "extension_uninstall",
+			Scope:        "extension",
+			Payload:      payload,
+			// GR-8-006：幂等键须区分"安装代次"：同一实例 ID 卸载→重装→再卸载时，
+			// 固定 (inst.ID, version=1) 会与首次卸载撞键被 outbox 当重复丢弃。
+			// 以实例创建时间标识代次：同一次卸载的重试仍幂等，新一代安装得到新键。
+			IdempotencyKey: string(types.BuildIdempotencyKey(protocol.TopicMarketplace, "extension_instance", inst.ID+"@"+inst.CreatedAt, "uninstall", 1)),
 		}); err != nil {
 			// 投递失败：把状态回滚出 uninstalling，否则实例同样会卡死。
 			// 回滚失败只留痕，不覆盖原始错误——原始错误才是根因。

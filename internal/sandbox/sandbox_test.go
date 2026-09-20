@@ -125,9 +125,11 @@ func TestAssignSandboxTier(t *testing.T) {
 		{"mcp-write", types.ToolMCP, types.CapWriteNetwork, nil, 1, "linux", types.SandboxInProcess, nil, types.TrustCommunity},
 		{"llm-gen", types.ToolLLMGenerated, types.CapReadOnly, nil, 1, "linux", types.SandboxWasm, nil, types.TrustUntrusted},
 		{"privileged-spawn", types.ToolSkill, types.CapPrivileged, []types.SideEffect{types.SideProcessSpawn}, 1, "linux", types.SandboxContainer, nil, types.TrustSystem},
-		// Tier-0 无容器运行时：根据 M07 §4.2，全平台拒绝，返回 ErrTier0SandboxLimit。
-		{"tier0-linux-container", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", 0, apperr.ErrTier0SandboxLimit, types.TrustSystem},
-		{"tier0-darwin-downgrade", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", 0, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		// Tier-0 无容器运行时：CapPrivileged 拒绝，普通 Container 需求（如 spawn）降级为 NativeOS。
+		{"tier0-linux-container-privileged", types.ToolSkill, types.CapPrivileged, nil, 0, "linux", 0, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier0-darwin-downgrade-privileged", types.ToolSkill, types.CapPrivileged, nil, 0, "darwin", 0, apperr.ErrTier0SandboxLimit, types.TrustSystem},
+		{"tier0-linux-container-spawn", types.ToolSkill, types.CapReadOnly, []types.SideEffect{types.SideProcessSpawn}, 0, "linux", types.SandboxNativeOS, nil, types.TrustSystem},
+		{"tier0-darwin-downgrade-spawn", types.ToolSkill, types.CapReadOnly, []types.SideEffect{types.SideProcessSpawn}, 0, "darwin", types.SandboxNativeOS, nil, types.TrustSystem},
 		{"tier1-darwin-no-downgrade", types.ToolSkill, types.CapPrivileged, nil, 1, "darwin", types.SandboxContainer, nil, types.TrustSystem},
 	}
 	for _, tt := range tests {

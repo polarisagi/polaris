@@ -32,7 +32,11 @@ func (h *SysAdminHandler) HandleSetPreference(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Hot reload preference in Agent
+	// Hot reload preference in Agent（未注入时仅持久化，下次启动生效；不得对 nil 接口调用）
+	if h.Agent == nil {
+		httputil.WriteJSON(w, map[string]string{"status": "ok", "key": key, "value": req.Value})
+		return
+	}
 	h.Agent.SetPreferences(map[string]string{key: req.Value})
 	if h.Agent.Memory() != nil {
 		if core := h.Agent.Memory().ImmutableCore(); core != nil {

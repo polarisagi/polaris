@@ -1,0 +1,14 @@
+// 负向样例（L-11d apperr_semantics_check）：errors.Is 目标为按 Code 匹配的 apperr.New 哨兵。
+package sandbox
+
+import (
+	"errors"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+var errSelftestCodeSentinel = apperr.New(apperr.CodeInternal, "selftest sentinel")
+
+func selftestCodeSentinel(err error) bool {
+	return errors.Is(err, errSelftestCodeSentinel)
+}

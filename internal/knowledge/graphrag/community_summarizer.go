@@ -1,5 +1,9 @@
 package graphrag
 
+// 未接线：Leiden 社区摘要功能当前无生产调用方。
+// Clusterer.Cluster 零调用方，CommunityGenerativeSummarizer 已在 boot 中注入但从未执行。
+// 待 FeatureGraphRAGFull 门控启用时重新接线。2026-09-20 标注。
+
 import (
 	"context"
 	"encoding/json"

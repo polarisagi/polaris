@@ -40,7 +40,7 @@ S_EXECUTE/S_VALIDATE"的唯一控制流。
 ## 消费端接口声明位置
 
 `internal/agent/provider.go` — 已声明：CodeActEngine、ScriptSkillCache、
-LAMPolicyChecker、WorldModelUpdater。
+LAMPolicyChecker（世界模型消费端接口 WorldModel 声明于 agent.go）。
 新增外部依赖时先在此文件声明接口，由 `bootstrap` 注入，禁止直接 import 具体实现。
 
 ## FSM 并发约束

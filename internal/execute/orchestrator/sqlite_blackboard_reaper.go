@@ -209,14 +209,19 @@ func (bb *SQLiteBlackboard) archiveAndPurgeTerminalTasks(ctx context.Context, tt
 	}
 }
 
-// reap 扫描 expires_at 已过期的 claimed 任务。
+// reap 扫描 expires_at 已过期的 claimed/running 任务。
+//
+// expires_at 以 RFC3339（"2026-01-02T03:04:05Z"）写入，datetime('now') 返回
+// "2026-01-02 03:04:05"；两者直接做字符串比较时第 11 字符 'T'(0x54) > ' '(0x20)，
+// 同一 UTC 日内的过期租约永远判不出过期，只有跨过 UTC 午夜才被批量回收。
+// 必须先经 datetime() 归一化再比较。
 // 1. 并发调用所有过期任务的 cancel() 触发协程中止。
 // 2. 等待 5s 宽限期（供 M7 工具感知 ctx.Done() 并完成清理）。
 // 3. 宽限期结束后强制更新 DB：Status=Pending, Version++。
 func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 	rows, err := bb.db.QueryContext(ctx, `
 		SELECT task_id, claimed_by FROM tasks
-		WHERE status IN (?,?) AND expires_at < datetime('now')`,
+		WHERE status IN (?,?) AND datetime(expires_at) < datetime('now')`,
 		statusClaimed, statusRunning,
 	)
 	if err != nil {
@@ -231,6 +236,10 @@ func (bb *SQLiteBlackboard) reap(ctx context.Context) {
 		if rows.Scan(&r.taskID, &r.agentID) == nil {
 			expired = append(expired, r)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "blackboard: reap scan iteration failed, partial batch", "err", err)
+		metrics.RecordBlackboardScanError(ctx, "reap_lease_expire_scan")
 	}
 	rows.Close()
 

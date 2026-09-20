@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/credential"
@@ -53,7 +52,7 @@ func TestReloadProvidersCallback_LogError(t *testing.T) {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	loadProvidersFunc = func(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg provider.ProviderRegistry, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
+	loadProvidersFunc = func(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg providerReplacer, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
 		return apperr.New(apperr.CodeInternal, "simulated load error")
 	}
 

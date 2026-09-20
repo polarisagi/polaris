@@ -110,11 +110,16 @@ func (w *MCPA2AWorker) tryClaimAndExecute(ctx context.Context, taskID string) {
 	if snap.Status != types.TaskPending {
 		return
 	}
+	if !waitReplayDone(ctx) {
+		return
+	}
 
 	claimed, err := w.bb.ClaimTask(ctx, taskID, mcpA2AWorkerAgentID)
 	if err != nil || !claimed {
 		return // 被其他协程抢先认领，无视
 	}
+	ctx, release := HoldLease(ctx, w.bb, taskID, mcpA2AWorkerAgentID)
+	defer release()
 
 	// [ADR-0084 决策9] 执行前二次深度校验：PostTask 时的 resolveMaxDepth 校验
 	// 已经拦截绝大多数超限任务，此处是发起外部网络调用前的最后一道闸——防止

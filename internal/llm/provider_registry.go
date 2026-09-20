@@ -128,6 +128,21 @@ func (r *ProviderRegistry) UnregisterAll() {
 	r.entries = make(map[string]*providerEntry)
 }
 
+// ReplaceAll 以 build 回调构建的新条目集合原子替换整个注册表（GD-13-002）。
+// 构建在锁外完成，替换是单次指针交换：并发 selectBest 要么看到旧集合、要么看到
+// 新集合，不存在 UnregisterAll→逐个 Register 之间的空窗。
+func (r *ProviderRegistry) ReplaceAll(build func(register func(name, displayName, role string, p protocol.Provider))) {
+	next := make(map[string]*providerEntry)
+	build(func(name, displayName, role string, p protocol.Provider) {
+		e := newProviderEntry(name, displayName, p, r.cfg)
+		e.role = role
+		next[name] = e
+	})
+	r.mu.Lock()
+	r.entries = next
+	r.mu.Unlock()
+}
+
 // RegisterWithRole 注册带角色标记的 Provider（general | default | reasoning | budget，
 // 唯一 SSoT 见 router.go poolFallbackChain 与 pkg/types.ModelPool）。
 func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p protocol.Provider) {
@@ -141,36 +156,57 @@ func (r *ProviderRegistry) RegisterWithRole(name, displayName, role string, p pr
 // BestForRole 返回指定角色下 healthScore 最高的可用 entry。
 // 若 role 为空或无匹配则回退到全局 best()。
 func (r *ProviderRegistry) BestForRole(role string, req *types.InferRequest) *providerEntry {
+	return r.bestForRole(role, req, true)
+}
+
+func (r *ProviderRegistry) bestForRole(role string, req *types.InferRequest, acquire bool) *providerEntry {
 	if role == "" || role == "general" {
-		return r.best(req)
+		return r.bestWith(req, acquire)
 	}
 
-	chosen := r.findBestByRole(role)
+	chosen := r.findBestByRole(role, acquire)
 	if chosen == nil {
-		return r.best(req)
+		return r.bestWith(req, acquire)
 	}
 	return chosen
 }
 
-func (r *ProviderRegistry) findBestByRole(role string) *providerEntry {
+func (r *ProviderRegistry) findBestByRole(role string, acquire bool) *providerEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return selectBest(r.entries, func(_ string, e *providerEntry) bool {
+		return e.role == role || e.role == "general"
+	}, acquire)
+}
 
-	var chosen *providerEntry
-	bestScore := -1.0
-	for _, e := range r.entries {
-		if !e.cb.Allow() || !e.winBreaker.Allow() {
-			continue
+// selectBest 在 filter 通过且熔断可选的 entry 中按 healthScore 取最优（调用方持 r.mu 读锁）。
+// acquire=true 时对最终选中者调用 cb.Allow() 获取放行/探测权；并发下被他人抢走探测权则排除重选。
+// 候选过滤只用无副作用的 Available()，见 circuitBreaker.Available 注释。
+func selectBest(entries map[string]*providerEntry, filter func(name string, e *providerEntry) bool, acquire bool) *providerEntry {
+	var excluded map[*providerEntry]struct{}
+	for {
+		var chosen *providerEntry
+		bestScore := -1.0
+		for name, e := range entries {
+			if _, ex := excluded[e]; ex {
+				continue
+			}
+			if !e.cb.Available() || !e.winBreaker.Allow() || !filter(name, e) {
+				continue
+			}
+			if s := e.healthScore(); s > bestScore {
+				bestScore = s
+				chosen = e
+			}
 		}
-		if e.role != role && e.role != "general" {
-			continue
+		if chosen == nil || !acquire || chosen.cb.Allow() {
+			return chosen
 		}
-		if s := e.healthScore(); s > bestScore {
-			bestScore = s
-			chosen = e
+		if excluded == nil {
+			excluded = make(map[*providerEntry]struct{})
 		}
+		excluded[chosen] = struct{}{}
 	}
-	return chosen
 }
 
 // PickProvider 返回指定角色 healthScore 最优的 Provider，供外部直接发起推理。
@@ -195,20 +231,9 @@ func (r *ProviderRegistry) PickProviderByRecordID(mID string) protocol.Provider 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var chosen *providerEntry
-	bestScore := -1.0
-	for name, e := range r.entries {
-		if !strings.HasSuffix(name, "/"+suffix) {
-			continue
-		}
-		if !e.cb.Allow() || !e.winBreaker.Allow() {
-			continue
-		}
-		if s := e.healthScore(); s > bestScore {
-			bestScore = s
-			chosen = e
-		}
-	}
+	chosen := selectBest(r.entries, func(name string, _ *providerEntry) bool {
+		return strings.HasSuffix(name, "/"+suffix)
+	}, true)
 	if chosen != nil {
 		return &trackedProvider{Provider: chosen.provider, entry: chosen, registry: r}
 	}
@@ -217,7 +242,7 @@ func (r *ProviderRegistry) PickProviderByRecordID(mID string) protocol.Provider 
 
 // PickProviderName 返回指定角色最优 Provider 的注册名（含模型标识），供状态展示。
 func (r *ProviderRegistry) PickProviderName(role string) string {
-	e := r.BestForRole(role, nil)
+	e := r.bestForRole(role, nil, false) // 仅展示，不占探测权
 	if e == nil {
 		return ""
 	}
@@ -228,32 +253,26 @@ func (r *ProviderRegistry) PickProviderName(role string) string {
 }
 
 // best 按 healthScore 降序返回第一个 CircuitBreaker 允许且满足多模态能力要求的 entry。
+// 选中即获取放行权——仅用于即将发请求的路径；只读展示用 peekBest。
 func (r *ProviderRegistry) best(req *types.InferRequest) *providerEntry {
+	return r.bestWith(req, true)
+}
+
+// peekBest 与 best 同序但不获取熔断探测权（ModelID/Tokenizer 等只读查询用）。
+func (r *ProviderRegistry) peekBest(req *types.InferRequest) *providerEntry {
+	return r.bestWith(req, false)
+}
+
+func (r *ProviderRegistry) bestWith(req *types.InferRequest, acquire bool) *providerEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	needsVision := req != nil && req.HasImageParts()
 	needsVideo := req != nil && req.HasVideoParts()
-
-	var chosen *providerEntry
-	bestScore := -1.0
-	for _, e := range r.entries {
-		if !e.cb.Allow() || !e.winBreaker.Allow() {
-			continue
-		}
+	return selectBest(r.entries, func(_ string, e *providerEntry) bool {
 		caps := e.provider.Capabilities()
-		if needsVision && !caps.SupportsVision {
-			continue
-		}
-		if needsVideo && !caps.SupportsVideo {
-			continue
-		}
-		if s := e.healthScore(); s > bestScore {
-			bestScore = s
-			chosen = e
-		}
-	}
-	return chosen
+		return (!needsVision || caps.SupportsVision) && (!needsVideo || caps.SupportsVideo)
+	}, acquire)
 }
 
 type trackedProvider struct {

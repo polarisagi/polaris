@@ -23,11 +23,8 @@ func MakeWriteFileFn(allowedPaths []string) sandbox.InProcessFn {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "write_file: invalid args", err)
 		}
-		if err := guard.CheckAllowedPath(args.Path, allowedPaths); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "makeWriteFileFn", err)
-		}
-		if err := guard.CheckForbiddenPath(args.Path); err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "makeWriteFileFn", err)
+		if err := guard.CheckWritablePath(args.Path, allowedPaths); err != nil {
+			return nil, apperr.Wrap(apperr.CodeForbidden, "makeWriteFileFn", err)
 		}
 
 		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC

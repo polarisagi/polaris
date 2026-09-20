@@ -58,7 +58,7 @@ func (p *ConsolidationPipeline) summarizeSession(
 func summaryTaintLevel(events []types.ScoredEvent) types.TaintLevel {
 	var maxLevel types.TaintLevel
 	for _, se := range events {
-		if e, ok := se.Event.(*types.Event); ok && e != nil && e.TaintLevel > maxLevel {
+		if e := se.EventPtr(); e != nil && e.TaintLevel > maxLevel {
 			maxLevel = e.TaintLevel
 		}
 	}
@@ -81,14 +81,14 @@ func (p *ConsolidationPipeline) buildSummary(
 	limit := min(20, len(events))
 	for _, se := range events[:limit] {
 		sb.WriteString(string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).Type))
 		sb.WriteString(": ")
 		payload := string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
@@ -119,7 +119,7 @@ func (p *ConsolidationPipeline) buildSummary(
 	eventTypes := make(map[string]int)
 	for _, se := range events {
 		eventTypes[string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}

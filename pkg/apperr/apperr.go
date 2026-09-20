@@ -57,6 +57,8 @@ type Error struct {
 	Message    string
 	Cause      error
 	RetryAfter int // 可选，建议的重试间隔（秒），用于自动转换为 Retry-After HTTP 头
+	// sentinel 为 true 时按身份（指针）比较，见 NewSentinel。
+	sentinel bool
 }
 
 // WithRetryAfter 设置重试建议间隔并返回自身。
@@ -79,9 +81,22 @@ func (e *Error) Unwrap() error { return e.Cause }
 func (e *Error) Is(target error) bool {
 	var t *Error
 	if errors.As(target, &t) {
+		if t.sentinel {
+			return e == t // 哨兵按身份匹配，见 NewSentinel
+		}
 		return e.Code == t.Code
 	}
 	return false
+}
+
+// NewSentinel 构造按身份比较的包级哨兵错误。
+//
+// 用 New 构造的 *Error 作哨兵时，errors.Is(err, ErrX) 按 Code 比较：任意同码错误
+// 都会被判定为 ErrX（例：ErrReplanExhausted 为 CodeResourceExhausted，Provider
+// 限流错误也会被当成"重规划耗尽"）。凡是要被 errors.Is 判别的包级哨兵，一律
+// 用本函数构造；它仍携带 Code 供 CodeOf/HTTPStatus 路由，可被 Wrap 包裹后照常命中。
+func NewSentinel(code Code, msg string) *Error {
+	return &Error{Code: code, Message: msg, sentinel: true}
 }
 
 // New 构造一个不含 Cause 的应用错误。

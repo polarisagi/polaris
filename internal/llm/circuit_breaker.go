@@ -43,6 +43,25 @@ func newCircuitBreaker(cfg config.M1RouterThresholds) *circuitBreaker {
 	return cb
 }
 
+// Available 无副作用地判断是否可被选为候选（不获取 HalfOpen 探测权）。
+//
+// 选路必须用它而非 Allow（2026-09-19，GR-2.2-002 复核时发现）：选路循环对每个候选都调
+// Allow，冷却期满的 entry 会在"只是被比较、未被选中"时就 CAS 成 HalfOpen 并占住唯一探测权；
+// 之后它既不会被发请求、也就不会 RecordSuccess/Failure，probing 永不释放 → 该 Provider
+// 在进程生命周期内被永久排除。ModelID()/Tokenizer()/PickProviderName() 等只读调用同样会触发。
+func (cb *circuitBreaker) Available() bool {
+	switch circuitState(cb.state.Load()) {
+	case circuitClosed:
+		return true
+	case circuitOpen:
+		return time.Now().UnixNano() > cb.openUntil.Load()
+	case circuitHalfOpen:
+		return !cb.probing.Load()
+	}
+	return false
+}
+
+// Allow 获取放行（HalfOpen 下即获取唯一探测权）。只应对**最终选中并即将发请求**的 entry 调用。
 func (cb *circuitBreaker) Allow() bool {
 	switch circuitState(cb.state.Load()) {
 	case circuitClosed:

@@ -56,8 +56,7 @@ func (a *LineAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMess
 func (a *LineAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
 	accessToken, _ := cfg["channel_access_token"].(string)
 	if accessToken == "" {
-		slog.Warn("line: channel_access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "line: channel_access_token missing")
 	}
 	var err error
 	if msg.ReplyToken != "" {

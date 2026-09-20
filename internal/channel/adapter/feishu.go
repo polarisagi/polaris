@@ -83,6 +83,7 @@ func feishuWSConnect(ctx context.Context, host PollerHost, channelID, appID, app
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dial: %v", err), err)
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
@@ -289,8 +290,7 @@ func (a *FeishuAdapter) Send(ctx context.Context, host Host, cfg map[string]any,
 			domain = FeishuOpenBase
 		}
 		if appID == "" || appSecret == "" {
-			slog.Warn("feishu: app_id or app_secret missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-			return nil
+			return apperr.New(apperr.CodeInvalidInput, "feishu: app_id or app_secret missing")
 		}
 		t, err := FeishuGetTenantToken(ctx, host.HTTPClient(), domain, appID, appSecret)
 		if err != nil {

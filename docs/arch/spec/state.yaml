@@ -753,9 +753,9 @@ global_invariants:
   - id: g_inv_07
     name: idempotency_key_format
     predicate: |
-      All cross-module operations carry IdempotencyKey of format
-      '{module}-{op}-{sha256(payload)[:16]}-{nonce}'; conflict returns
-      original result without re-execution.
+      All cross-module operations carry IdempotencyKey built by types.BuildIdempotencyKey:
+      '{engine}:{entity_type}:{entity_id}:{operation}:{version}' (FSM-derived events may append a uniqueness suffix);
+      conflict returns original result without re-execution. [2026-09-20 追记 GR-12-001: 原 '-' 分隔哈希+nonce 格式从未落地，按全仓 20 处统一实现订正]
     enforced_by: m2.outbox + unit_test
 
   - id: g_inv_08
@@ -821,7 +821,7 @@ thresholds:
     outbox_backoff_max_ms: 8000
     eventlog_hot_days: 7
     eventlog_warm_days: 30
-    eventlog_cold_archive: parquet
+    eventlog_cold_archive: sqlite_attach # data/cold/events_archive.db（ADR-0011 零 CGO，M02 §3.1）；2026-09-20 追记 GR-12-002：原 parquet 已废弃
     event_payload_max_kb: 64
     eventlog_disk_watermark_pct: 20 # toml:"eventlog.disk_watermark_pct"，<=0 禁用门控
     eventlog_hot_row_limit: 1000000 # toml:"eventlog.hot_row_limit"
@@ -1177,9 +1177,9 @@ thresholds:
     re_eval_when:
       - mem_l*_free_mb: ["oom_guard_log P99 触发率 > 1%"]
 
-  m13_scheduler:
+  m13_interface:
     # 配置结构体: internal/config/thresholds.go M13InterfaceThresholds
-    # TOML key 格式: [m13_interface] 节下的 worker.* / timeout.* / hitl.* 子键
+    # TOML key 格式: [m13_interface] 节下的 worker.* / timeout.* / hitl.* 子键（2026-09-20 追记 GR-12-007：节名由 m13_scheduler 统一为 m13_interface）
     timeout_read_seconds: 10
     timeout_write_seconds: 60
     timeout_idle_seconds: 120

@@ -51,6 +51,12 @@ type DatabaseWriter struct {
 	wg           sync.WaitGroup
 	batch        []*MutationIntent
 	onPanic      func(err interface{}, stack []byte)
+
+	// closeMu 保护 closed 与 channel 关闭的原子性：Submit 在 RLock 下检查 closed 后再发送，
+	// Close 在 Lock 下置位并关闭 channel——否则停机窗口内仍在提交的生产者会
+	// "send on closed channel" panic（GR-3-001 停机序列修复的前提）。
+	closeMu sync.RWMutex
+	closed  bool
 }
 
 const (
@@ -81,17 +87,11 @@ func NewDatabaseWriter(db *sql.DB, lc LeaseChecker) *DatabaseWriter {
 // 严禁 default: sync execute 兜底——破坏单写者串行化。
 // 退避等待使用 time.NewTimer + ctx.Done()，保证 context 取消可立即返回，不阻塞调用方 goroutine。
 func (dw *DatabaseWriter) Submit(ctx context.Context, intent *MutationIntent) error {
-	targetCh := dw.ch
-	if intent.Priority == PriorityFlush {
-		targetCh = dw.priorityCh
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 	}
-
-	select {
-	case targetCh <- intent:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
-	default:
+	if sent, err := dw.trySend(intent); sent || err != nil {
+		return err
 	}
 
 	// 指数退避重试: 10ms→50ms→250ms→1s→2s
@@ -111,18 +111,33 @@ func (dw *DatabaseWriter) Submit(ctx context.Context, intent *MutationIntent) er
 			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 		case <-timer.C:
 		}
-		select {
-		case targetCh <- intent:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
-		default:
-			if i == len(backoff)-1 {
-				return ErrMutationBusOverloaded
-			}
+		if sent, err := dw.trySend(intent); sent || err != nil {
+			return err
+		}
+		if i == len(backoff)-1 {
+			return ErrMutationBusOverloaded
 		}
 	}
 	return ErrMutationBusOverloaded
+}
+
+// trySend 非阻塞投递。RLock 只覆盖一次 select，不跨退避等待，避免 Close 被长时间挡住。
+func (dw *DatabaseWriter) trySend(intent *MutationIntent) (sent bool, err error) {
+	dw.closeMu.RLock()
+	defer dw.closeMu.RUnlock()
+	if dw.closed {
+		return false, ErrDatabaseWriterClosed
+	}
+	targetCh := dw.ch
+	if intent.Priority == PriorityFlush {
+		targetCh = dw.priorityCh
+	}
+	select {
+	case targetCh <- intent:
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // SubmitBatch ETL 专用批量提交。
@@ -193,7 +208,7 @@ func (dw *DatabaseWriter) Run(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
-			dw.flushBatch(ctx) //nolint:errcheck
+			dw.finalFlush(ctx)
 			return
 		case <-ticker.C:
 			if len(dw.batch) > 0 {
@@ -201,18 +216,15 @@ func (dw *DatabaseWriter) Run(ctx context.Context) {
 			}
 		case intent, ok := <-dw.priorityCh:
 			if !ok {
-				// priorityCh 已关闭，必须先排空 ch 残留请求再退出；
-				// 否则等待 ResultCh 的调用方因 ch 无人消费而永久阻塞（GR-1-001）
-				dw.drainCh()
-				dw.flushBatch(ctx) //nolint:errcheck
+				// priorityCh 已关闭（Close）：排空两条通道残留并落盘后退出，
+				// 否则等待 ResultCh 的调用方永久阻塞（GR-1-001）。
+				dw.finalFlush(ctx)
 				return
 			}
 			dw.appendAndFlush(ctx, intent)
 		case intent, ok := <-dw.ch:
 			if !ok {
-				// ch 已关闭，排空优先队列后退出
-				dw.drainPriorityCh()
-				dw.flushBatch(ctx) //nolint:errcheck
+				dw.finalFlush(ctx)
 				return
 			}
 			dw.appendAndFlush(ctx, intent)
@@ -223,11 +235,11 @@ func (dw *DatabaseWriter) Run(ctx context.Context) {
 func (dw *DatabaseWriter) drainPriorityOne(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
-		dw.flushBatch(ctx) //nolint:errcheck
+		dw.finalFlush(ctx)
 		return true
 	case intent, ok := <-dw.priorityCh:
 		if !ok {
-			dw.flushBatch(ctx) //nolint:errcheck
+			dw.finalFlush(ctx)
 			return true
 		}
 		dw.appendAndFlush(ctx, intent)
@@ -243,41 +255,50 @@ func (dw *DatabaseWriter) appendAndFlush(ctx context.Context, intent *MutationIn
 	}
 }
 
-// Close 排空 channel 残余 + 最终 flush。
-// 调用前调用方必须已取消传入 Run() 的 ctx，否则 wg.Wait() 可能死锁。
+// Close 停止接收新写入，排空 channel 残余并最终落盘，阻塞至 Run 退出。
+// 与 Run 的 ctx 无关：停机序列应先停掉所有生产者，再调用 Close（见 cmd/polaris/main.go §14）。
+// 幂等：重复调用只等待。
 func (dw *DatabaseWriter) Close() {
-	close(dw.ch)
-	close(dw.priorityCh)
+	dw.closeMu.Lock()
+	if !dw.closed {
+		dw.closed = true
+		close(dw.ch)
+		close(dw.priorityCh)
+	}
+	dw.closeMu.Unlock()
 	dw.wg.Wait()
 }
 
-// drainCh 排空普通通道残余（priorityCh 关闭后调用，避免 ch 中残留请求无人消费导致死锁）（GR-1-001）。
-func (dw *DatabaseWriter) drainCh() {
-	for {
-		select {
-		case intent, ok := <-dw.ch:
-			if !ok {
-				return
-			}
-			// 用零值 error 回告残留请求，让调用方能感知到请求已被处理（即使未落盘）
-			if intent.ResultCh != nil {
-				// ResultCh 由调用方创建（cap 1），单写者不得阻塞在他人的 channel 上；default 分支对应调用方已因超时退场
-				select {
-				case intent.ResultCh <- apperr.New(apperr.CodeInternal, "DatabaseWriter is restarting"):
-				default:
-				}
-			}
-		default:
-			return
+// IsClosed 供外层重启循环判断是否应停止重启 Run。
+func (dw *DatabaseWriter) IsClosed() bool {
+	dw.closeMu.RLock()
+	defer dw.closeMu.RUnlock()
+	return dw.closed
+}
+
+// finalFlush 退出前排空两条通道并落盘。
+// 必须脱离取消信号：ctx 已取消时 BeginTx/COMMIT 前检查都会直接失败，
+// 停机前最后一批写入（含审计事件）会被整批 failAll 丢弃。
+func (dw *DatabaseWriter) finalFlush(ctx context.Context) {
+	dw.drainInto(dw.priorityCh)
+	dw.drainInto(dw.ch)
+	for len(dw.batch) > 0 {
+		before := len(dw.batch)
+		if err := dw.flushBatch(context.WithoutCancel(ctx)); err != nil {
+			// L2：停机最终落盘失败只能留痕（进程即将退出，无重试载体）
+			slog.Error("db_writer: final flush failed, remaining batch lost", "pending", len(dw.batch), "err", err)
+		}
+		if len(dw.batch) >= before {
+			return // CompositeGroup 等待等场景未推进，避免空转
 		}
 	}
 }
 
-// drainPriorityCh 排空优先通道残余（ch 关闭后调用，避免丢失高优先级写入）。
-func (dw *DatabaseWriter) drainPriorityCh() {
+// drainInto 非阻塞排空指定通道残余到 batch（通道已关闭或已空即返回）。
+func (dw *DatabaseWriter) drainInto(ch chan *MutationIntent) {
 	for {
 		select {
-		case intent, ok := <-dw.priorityCh:
+		case intent, ok := <-ch:
 			if !ok {
 				return
 			}
@@ -289,10 +310,10 @@ func (dw *DatabaseWriter) drainPriorityCh() {
 }
 
 var (
-	ErrMutationBusOverloaded    = &MutationBusError{"mutation bus overloaded"}
-	ErrDatabaseWriterRestarting = &MutationBusError{"database writer restarting"}
-	ErrStaleLease               = &MutationBusError{"stale lease"}
-	ErrCompositeIncomplete      = &MutationBusError{"composite mutation incomplete"}
+	ErrMutationBusOverloaded = &MutationBusError{"mutation bus overloaded"}
+	ErrDatabaseWriterClosed  = &MutationBusError{"database writer closed"}
+	ErrStaleLease            = &MutationBusError{"stale lease"}
+	ErrCompositeIncomplete   = &MutationBusError{"composite mutation incomplete"}
 )
 
 type MutationBusError struct{ msg string }

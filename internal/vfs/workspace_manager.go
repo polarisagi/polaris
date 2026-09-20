@@ -65,8 +65,8 @@ func NewWorkspaceManagerWithContext(parentCtx context.Context, rootDir string, m
 	}
 	wm.rebuildManifests()
 	// gcWorker 负责异步清理墓碑目录；panic 不应导致 tombstone 永久堆积，用 SafeGo 保护
-	concurrent.SafeGo(parentCtx, "vfs.tombstone.gc", func(_ context.Context) {
-		wm.gcWorker()
+	concurrent.SafeGo(parentCtx, "vfs.tombstone.gc", func(ctx context.Context) {
+		wm.gcWorker(ctx)
 	})
 	// ephemeral 脚本孤儿巡检：进程崩溃/panic 导致 StageEphemeralFile 返回的
 	// cleanup() 未被调用时的兜底回收，独立于 7 天周期的 GC()（后者面向持久
@@ -86,15 +86,30 @@ func NewWorkspaceManagerWithContext(parentCtx context.Context, rootDir string, m
 	return wm
 }
 
-func (wm *WorkspaceManager) gcWorker() {
-	for path := range wm.gcCh {
+// gcWorker 消费墓碑队列直到 ctx 取消（GR-6.1-003）：原实现 for-range 一个永不
+// 关闭的 channel 且丢弃 ctx，进程内每构造一个 WorkspaceManager（热重启、测试）
+// 就泄漏一个常驻 goroutine。不关闭 gcCh 而是监听 ctx：GC() 仍可能在关停窗口
+// 并发投递，关闭 channel 会让投递方 panic；未消费的墓碑目录由下次启动的
+// rebuildManifests 识别并回收。
+func (wm *WorkspaceManager) gcWorker(ctx context.Context) {
+	for {
+		var path string
+		select {
+		case <-ctx.Done():
+			return
+		case path = <-wm.gcCh:
+		}
 		// 后台回收失败只告警不重试：目录会留到下一次同 taskID 复用或人工清理，
 		// 不影响正确性；但持续失败意味着磁盘在泄漏，必须可观测。
 		if err := os.RemoveAll(path); err != nil {
 			slog.Warn("vfs: workspace gc failed, directory leaked", "path", path, "err", err)
 		}
-		// Sleep briefly to reduce I/O pressure on disk during background cleanup
-		time.Sleep(100 * time.Millisecond)
+		// 两次回收之间短暂停顿以削峰磁盘 IO；用 select 使关停不必等满间隔
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 
@@ -105,6 +120,9 @@ func (wm *WorkspaceManager) gcWorker() {
 // 归零重计 7 天）两种情况下不一致——重启后可能人为延长任务工作区寿命，
 // 或反过来因 ModTime 早于真实创建时间（罕见但可能）过早回收。
 const createdAtMarkerFile = ".wm_created_at"
+
+// tombstoneInfix GC 把过期工作区原子改名为 "<dir>.tombstone.<unix>" 后异步删除。
+const tombstoneInfix = ".tombstone."
 
 // rebuildManifests 扫描 rootDir 重建 manifests，避免重启后 quota/GC 失效。
 // 仅在构造时调用（单线程），无需加锁，但调用后初始化 totalSize 原子计数器。
@@ -120,6 +138,27 @@ func (wm *WorkspaceManager) rebuildManifests() {
 		}
 		taskID := e.Name()
 		dir := filepath.Join(wm.rootDir, taskID)
+		// GR-6.1-009：根目录下并非每个子目录都是任务工作区——
+		//   - 墓碑目录（上次进程在 gcWorker 消费前退出遗留）：直接重新入队回收；
+		//   - _ephemeral_scripts：由 SweepEphemeralOrphans 按秒级寿命独立管理；
+		//   - 其余无 createdAt 标记的目录（如 episodic 溢出载荷 logs/events/）是
+		//     WriteFile 直写的持久数据，不属于任何 taskID，若按任务建清单会被
+		//     7 天 GC 当作过期工作区整目录删除，造成情景记忆载荷永久丢失。
+		// 只有 Create() 写过标记文件的目录才是可回收的任务工作区。
+		if strings.Contains(taskID, tombstoneInfix) {
+			select {
+			case wm.gcCh <- dir:
+			default:
+				slog.Warn("vfs: gc queue full at startup, stale tombstone left for next restart", "dir", dir)
+			}
+			continue
+		}
+		if taskID == ephemeralScriptsSubdir {
+			continue
+		}
+		if readCreatedAtMarker(dir) == 0 {
+			continue
+		}
 		var totalSize int64
 		var files []WorkspaceFile
 		// Walk 错误只影响单个任务清单的完整性（下方按 files/totalSize 重建），
@@ -142,14 +181,8 @@ func (wm *WorkspaceManager) rebuildManifests() {
 			slog.Warn("vfs: workspace manifest rebuild walk failed, manifest may be incomplete",
 				"task_id", taskID, "dir", dir, "err", walkErr)
 		}
-		// 优先读取持久化的真实创建时间标记；缺失时（如升级前已存在的旧目录）
-		// 回退 ModTime 作为近似值，与修复前行为兼容。
+		// 上方已过滤无标记目录，这里的 createdAt 必为持久化的真实创建时间
 		createdAt := readCreatedAtMarker(dir)
-		if createdAt == 0 {
-			if info, _ := e.Info(); info != nil {
-				createdAt = info.ModTime().Unix()
-			}
-		}
 		wm.manifests[taskID] = &WorkspaceManifest{
 			TaskID:    taskID,
 			CreatedAt: createdAt,
@@ -331,53 +364,6 @@ func (wm *WorkspaceManager) ReadFile(relPath string, limit int64) ([]byte, error
 		return nil, apperr.Wrap(apperr.CodeInternal, "WorkspaceManager.ReadFile: failed to read limit", err)
 	}
 	return data, nil
-}
-
-// GC 回收 > 7 天的 workspace 目录。
-// activeTaskIDs 是调用方传入的当前仍活跃（running/suspended）任务 ID 集合；
-// 活跃任务的 workspace 无论年龄多大都不删除，防止删除正在运行的持久战任务数据。
-// now 为 Unix 秒，由调用方传入，便于测试覆盖。
-func (wm *WorkspaceManager) GC(now int64, activeTaskIDs []string) {
-	maxAgeSecs := int64(wm.cfg.WorkspaceMaxAgeSeconds)
-
-	// 构建活跃任务 ID 集合，O(1) 查找
-	active := make(map[string]struct{}, len(activeTaskIDs))
-	for _, id := range activeTaskIDs {
-		active[id] = struct{}{}
-	}
-
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
-	for key, m := range wm.manifests {
-		if _, isActive := active[key]; isActive {
-			continue // 活跃任务工作区不回收
-		}
-		if now-m.CreatedAt <= maxAgeSecs {
-			continue
-		}
-		dir := filepath.Join(wm.rootDir, key)
-		tombPath := dir + ".tombstone." + fmt.Sprint(now)
-		// 磁盘 IO（Rename/RemoveAll）在锁内执行。GC 是低频后台操作（调用间隔通常为小时级），
-		// 且 Rename 通常是原子 syscall（无实际数据移动），持锁期间的 IO 代价可接受。
-		// 若未来 GC 成为性能瓶颈，可改为：锁内只收集待删列表，锁外执行磁盘 IO。
-		if err := os.Rename(dir, tombPath); err == nil {
-			select {
-			case wm.gcCh <- tombPath:
-			default:
-				if errRm := os.RemoveAll(tombPath); errRm != nil {
-					slog.Warn("vfs: gc remove tombPath failed synchronously", "tombPath", tombPath, "err", errRm)
-				}
-			}
-		} else {
-			if errRm := os.RemoveAll(dir); errRm != nil {
-				slog.Warn("vfs: gc remove dir failed on rename fallback", "dir", dir, "err", errRm)
-			}
-		}
-		// 从原子计数器中减去回收的空间
-		atomic.AddInt64(&wm.totalSize, -m.TotalSize)
-		delete(wm.manifests, key)
-	}
 }
 
 // DirPath 返回任务工作区的物理路径（不创建）。

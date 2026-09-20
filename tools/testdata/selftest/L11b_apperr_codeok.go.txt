@@ -1,0 +1,8 @@
+// 负向样例（L-11b apperr_semantics_check）：以 CodeOK 构造错误表达"成功"。
+package sandbox
+
+import "github.com/polarisagi/polaris/pkg/apperr"
+
+func selftestCodeOK() error {
+	return apperr.New(apperr.CodeOK, "handshake handled")
+}

@@ -3,6 +3,5 @@
 
 'rag.final_top_k' = 5
 'rag.rerank_top_m' = 50
-'graphrag.daily_budget' = 200
 'chunk.size' = 256
 single_route_timeout_ms = 800

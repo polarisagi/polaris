@@ -59,6 +59,7 @@ func slackSocketConnect(ctx context.Context, host PollerHost, channelID, botToke
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dial: %v", err), err)
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	for {
 		if ctx.Err() != nil {
@@ -205,8 +206,7 @@ func (a *SlackAdapter) Extract(body []byte, r *http.Request) protocol.ChannelMes
 func (a *SlackAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
 	botToken, _ := cfg["bot_token"].(string)
 	if botToken == "" {
-		slog.Warn("slack: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "slack: bot_token missing")
 	}
 	if err := SlackSendMessage(ctx, host.HTTPClient(), botToken, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "slack", "err", err)

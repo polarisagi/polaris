@@ -130,6 +130,9 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 	if snap.Status != types.TaskPending {
 		return
 	}
+	if !waitReplayDone(ctx) {
+		return
+	}
 
 	claimed, err := w.bb.ClaimTask(ctx, taskID, defaultTaskWorkerAgentID)
 	if err != nil || !claimed {
@@ -144,6 +147,9 @@ func (w *DefaultTaskWorker) tryClaimAndExecute(ctx context.Context, taskID strin
 
 	bgCtx, cancel := context.WithTimeout(context.Background(), defaultTaskExecTimeout)
 	defer cancel()
+	// 执行最长 10 分钟，远超 60s 租约：必须心跳续约并向 Reaper 登记取消函数
+	bgCtx, release := HoldLease(bgCtx, w.bb, taskID, defaultTaskWorkerAgentID)
+	defer release()
 
 	// A16: 恢复跨 goroutine trace 连贯性
 	bgCtx = trace.ContextWithRemoteSpan(bgCtx, snap.TraceID, snap.SpanID)

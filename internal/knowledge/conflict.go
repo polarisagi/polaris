@@ -103,40 +103,55 @@ func (a *KnowledgeConflictArbiter) ArbitrateChunks(chunks []Chunk) []Chunk {
 		return chunks
 	}
 
-	// 按 SectionPath 归组，同 section 下的 chunk 相互比对
-	groups := make(map[string][]Chunk)
-	for _, c := range chunks {
-		sectionKey := strings.Join(c.SectionPath, "/")
-		groups[sectionKey] = append(groups[sectionKey], c)
-	}
-
-	var result []Chunk
-	for _, group := range groups {
-		if len(group) == 1 {
-			result = append(result, group[0])
+	// 按 SectionPath 归组，同 section 下的 chunk 相互比对。
+	// GR-7.2-002：SectionPath 缺失的 chunk（KnowledgeBase.Search 的检索结果不
+	// 携带该字段）没有"同一段落"可比对，必须原样放行；原实现把它们全部归入
+	// "" 组只留 1 个 winner，多结果检索恒被截断为 1 条。
+	// 输出保持输入顺序（上游已按相关度排序），只剔除败者；原实现按 map
+	// 迭代顺序重组，打乱了检索排名。
+	groups := make(map[string][]int)
+	for i, c := range chunks {
+		if len(c.SectionPath) == 0 {
 			continue
 		}
-		// 将同 section 的 chunk 转为 ConflictCandidate 仲裁
-		var cands []ConflictCandidate
-		for _, c := range group {
+		key := strings.Join(c.SectionPath, "/")
+		groups[key] = append(groups[key], i)
+	}
+
+	drop := make(map[int]bool)
+	for _, idxs := range groups {
+		if len(idxs) < 2 {
+			continue
+		}
+		cands := make([]ConflictCandidate, 0, len(idxs))
+		for _, i := range idxs {
 			cands = append(cands, ConflictCandidate{
-				Content:    c.Content,
-				SourceType: c.TaintSource,
-				SourceURI:  c.DocID,
+				Content:    chunks[i].Content,
+				SourceType: chunks[i].TaintSource,
+				SourceURI:  chunks[i].DocID,
 				UpdatedAt:  time.Now(), // chunk 无时间戳时以当前时间代替
 			})
 		}
-		winner, _ := a.Arbitrate(cands)
-		if winner != nil {
-			// 找回对应的原 chunk
-			for _, c := range group {
-				if c.Content == winner.Content {
-					result = append(result, c)
+		keep := idxs[0]
+		if winner, _ := a.Arbitrate(cands); winner != nil {
+			for _, i := range idxs {
+				if chunks[i].Content == winner.Content {
+					keep = i
 					break
 				}
 			}
-		} else {
-			result = append(result, group[0])
+		}
+		for _, i := range idxs {
+			if i != keep {
+				drop[i] = true
+			}
+		}
+	}
+
+	result := make([]Chunk, 0, len(chunks)-len(drop))
+	for i, c := range chunks {
+		if !drop[i] {
+			result = append(result, c)
 		}
 	}
 	return result

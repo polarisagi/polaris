@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	llmparent "github.com/polarisagi/polaris/internal/llm"
 )
 
 func TestOpenAICompatibleEmbedding(t *testing.T) {
@@ -33,7 +35,7 @@ func TestOpenAICompatibleEmbedding(t *testing.T) {
 		}),
 	}
 
-	adapter := NewOpenAICompatibleEmbeddingAdapter("http://dummy", "test-model", []byte("test-key"), client)
+	adapter := NewOpenAICompatibleEmbeddingAdapter("http://dummy", "test-model", llmparent.NewCredentialPool([]string{"test-key"}, llmparent.StrategyFillFirst), client)
 
 	// Test Embed
 	vec := adapter.Embed("test text")

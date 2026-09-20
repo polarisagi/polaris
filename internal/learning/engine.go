@@ -268,7 +268,15 @@ func (e *Engine) Start(ctx context.Context) error { //nolint:gocyclo
 			// [W-5-G] IncidentToEvalConverter 接入
 			// High-severity incident fallback -> convert to eval case
 			if e.incidentConverter != nil && strings.Contains(ev.Heuristic, "high-severity") {
-				payload, _ := json.Marshal(ev)
+				// GR-10.1-003：转换器按 analysis.IncidentPayload 反序列化
+				// （input/expected/details/...）；原先直接序列化 HeuristicGeneratedPayload，
+				// 字段全部对不上，生成的用例 Input/Expected/Description 均为空。
+				// 此处按事故载荷契约组装；learning 不依赖 eval 包，契约以 JSON 字段名对齐。
+				payload, _ := json.Marshal(map[string]any{
+					"input":    map[string]any{"task_id": ev.TaskID, "task_type": ev.TaskType},
+					"expected": map[string]any{"avoid_rule": ev.AvoidRule},
+					"details":  ev.Heuristic,
+				})
 				concurrent.SafeGo(ctx, "learning.incident_convert", func(gctx context.Context) {
 					if id, err := e.incidentConverter(gctx, payload); err == nil && id != "" {
 						slog.Info("incident converted to eval case", "id", id)

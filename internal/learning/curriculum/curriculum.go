@@ -157,7 +157,7 @@ func (ag *AutoCurriculumGenerator) Generate(ctx context.Context, bb protocol.Bla
 		}
 
 		// 步骤 5 — 生成课程描述（MVP：模板生成，Tier 1+ 替换为 LLM）
-		skillSamples := ag.generateDescriptions(skill, maxPerSkill, currentSurpriseIndex)
+		skillSamples := ag.generateDescriptions(ctx, skill, maxPerSkill, currentSurpriseIndex)
 
 		for _, sample := range skillSamples {
 			if cycleCount >= maxPerCycle {
@@ -241,9 +241,9 @@ func (ag *AutoCurriculumGenerator) skillGapAnalysis(ctx context.Context) []strin
 
 // generateDescriptions 生成课程任务描述。
 // Tier1+（llmProvider 已注入）：调用 LLM 生成多样性描述；Tier0：模板降级。
-func (ag *AutoCurriculumGenerator) generateDescriptions(skill string, limit int, targetDifficulty float64) []*CurriculumSample {
+func (ag *AutoCurriculumGenerator) generateDescriptions(ctx context.Context, skill string, limit int, targetDifficulty float64) []*CurriculumSample {
 	if ag.llmProvider != nil {
-		if samples := ag.generateDescriptionsLLM(skill, limit, targetDifficulty); len(samples) > 0 {
+		if samples := ag.generateDescriptionsLLM(ctx, skill, limit, targetDifficulty); len(samples) > 0 {
 			return samples
 		}
 	}
@@ -268,8 +268,10 @@ func (ag *AutoCurriculumGenerator) generateDescriptions(skill string, limit int,
 }
 
 // generateDescriptionsLLM 通过 LLM 生成多样化课程描述（Tier1+）。
-func (ag *AutoCurriculumGenerator) generateDescriptionsLLM(skill string, limit int, targetDifficulty float64) []*CurriculumSample {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// ctx 由 Generate 透传（GR-7.1-005）：原实现自建 Background 根 ctx，关停/调度
+// 取消时 LLM 调用仍会跑满 10s 超时。
+func (ag *AutoCurriculumGenerator) generateDescriptionsLLM(ctx context.Context, skill string, limit int, targetDifficulty float64) []*CurriculumSample {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	prompt := fmt.Sprintf(
 		"Generate %d concise task descriptions for testing AI skill: %q.\n"+

@@ -123,7 +123,9 @@ func (h *PluginHandler) installMCPExtension(w http.ResponseWriter, r *http.Reque
 	extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string) {
 	resp, err := h.internalInstallMCP(r.Context(), extID, entry, req, now, false)
 	if err != nil {
-		http.Error(w, "mcp_servers insert: "+err.Error(), http.StatusInternalServerError)
+		// GR-9.2-007：按底层 apperr 码映射状态（PolicyGate 拒绝 → 403、依赖缺失 → 404），
+		// 不再一律 500 抹掉鉴权语义。
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 	httputil.WriteJSONStatus(w, http.StatusCreated, resp)
@@ -191,7 +193,9 @@ func (h *PluginHandler) installGenericExtension(w http.ResponseWriter, r *http.R
 	extID string, entry *protocol.RegistryEntry, req protocol.PluginInstallRequest, now string) {
 	resp, err := h.internalInstallGeneric(r.Context(), extID, entry, req, now, false)
 	if err != nil {
-		http.Error(w, "extension_instances insert: "+err.Error(), http.StatusInternalServerError)
+		// GR-9.2-007：按底层 apperr 码映射状态（PolicyGate 拒绝 → 403、依赖缺失 → 404），
+		// 不再一律 500 抹掉鉴权语义。
+		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
 	}
 	httputil.WriteJSONStatus(w, http.StatusCreated, resp)

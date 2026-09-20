@@ -4,6 +4,8 @@
 package main
 
 import (
+	"runtime"
+
 	"github.com/polarisagi/polaris/configs"
 	"github.com/polarisagi/polaris/internal/agent"
 	"github.com/polarisagi/polaris/internal/channel"
@@ -187,7 +189,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 
 		codeActEngine := codeact.NewCodeAct(
 			tb.Envelope,
-			nil, // toolExec 审计可选；nil 时跳过 RecordAudit 调用
+			sb.AuditTrail, // inv_global_07 全链路审计（GR-4.2-005：此前传 nil，生产从未写审计）
 			codeact.WithGovernanceAgent(&govAgentAdapter{inner: govAgent}),
 			codeact.WithASTChecker(&codeact.DefaultASTChecker{}),
 			codeact.WithPeerReviewer(&securityAuditReviewerAdapter{inner: auditAgent}),
@@ -254,6 +256,7 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 		performHotRestart(sb)
 	})
 	httpServer.SetUpdater(updMgr)
+	httpServer.SetAgentController(ab.Agent)
 
 	// ─── 其余 Server 装配 ─────────────────────────────────────────────────────
 	httpServer.SetInstallManager(tb.InstallMgr)
@@ -394,32 +397,22 @@ func bootLogicCollapseMonitor(sb *SubstrateBundle, tb *ToolBundle, ab *AgentBund
 func performHotRestart(sb *SubstrateBundle) {
 	// syscall.Exec 完全替换进程镜像，Go runtime 不执行任何 defer/finalizer。
 	// 关闭序列（与 graceful shutdown 保持一致）：
-	//   1. stop()         — 取消主 ctx，dbWriter.Run() flush 残余批次并退出
-	//   2. <-dbWriterDone — 确认 DatabaseWriter goroutine 完全退出
-	//   3. store.Close()  — SQLite WAL checkpoint + 清理 .db-wal / .db-shm
+	//   1. stop()           — 取消主 ctx，后台生产者退出
+	//   2. DBWriter.Close() — 单写者与信号 ctx 解耦（GR-3-001），须显式关闭以排空并落盘
+	//   3. <-dbWriterDone   — 确认 DatabaseWriter goroutine 完全退出
+	//   4. store.Close()    — SQLite WAL checkpoint + 清理 .db-wal / .db-shm
 	exe, _ := os.Executable()
 	slog.Info("polaris: initiating graceful db shutdown before exec-restart")
 
-	if sb != nil {
-		sb.Stop()
-		if sb.DBWriterDone != nil {
-			select {
-			case <-sb.DBWriterDone:
-			case <-time.After(5 * time.Second):
-				slog.Warn("polaris: dbWriter flush timeout during hot-restart, proceeding anyway")
-			}
-		}
-		if sb.Store != nil {
-			// 热重启前的最后一次关库：Close 失败意味着可能有未刷盘数据，新进程
-			// 起来后会看到不一致的库。此处不阻断重启（旧二进制已准备退出，
-			// 阻断会把系统卡在"既没重启也没服务"的状态），但必须留痕——
-			// 吞掉的话，重启后的数据异常将完全无从溯源。
-			if err := sb.Store.Close(); err != nil {
-				slog.Error("polaris: store close failed before hot-restart, data may be unflushed", "err", err)
-			}
-		}
-	}
+	shutdownSubstrateForRestart(sb)
 
+	// Windows 不支持 syscall.Exec：二进制替换与重新拉起由 OTA 更新脚本负责
+	// （updater.writeWindowsUpdateScript），此处在优雅关停完成后正常退出即可。
+	if runtime.GOOS == "windows" {
+		slog.Info("polaris: graceful shutdown done, exiting for windows update script")
+		exitFunc(0)
+		return
+	}
 	slog.Info("polaris: exec-restarting with new binary", "path", exe)
 	if err := execFunc(exe, os.Args, os.Environ()); err != nil {
 		slog.Error("polaris: hot-restart failed to exec new binary", "exe", exe, "args", os.Args, "err", err)
@@ -442,4 +435,37 @@ func (a *collapseMonitorAdapter) RecordSuccess(taskID, taskType string) {
 		SkillID: taskType,
 	}
 	a.monitor.RecordSuccess(context.Background(), traj, nil)
+}
+
+// shutdownSubstrateForRestart 热重启前的关停序列（从 performHotRestart 拆出以降低嵌套）：
+// 停后台生产者 → 停 EmbedBatcher → 关 DBWriter 并等待排空 → 关库。
+func shutdownSubstrateForRestart(sb *SubstrateBundle) {
+	if sb == nil {
+		return
+	}
+	sb.Stop()
+	sb.EmbedBatcher.Stop()
+	if sb.DBWriter != nil {
+		concurrent.SafeGo(context.Background(), "polaris.hot_restart.dbwriter_close", func(context.Context) { sb.DBWriter.Close() })
+	}
+	if sb.DBWriterDone != nil {
+		select {
+		case <-sb.DBWriterDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("polaris: dbWriter flush timeout during hot-restart, proceeding anyway")
+		}
+	}
+	if sb.Store != nil {
+		// 热重启前的最后一次关库：Close 失败意味着可能有未刷盘数据，新进程
+		// 起来后会看到不一致的库。此处不阻断重启（旧二进制已准备退出，
+		// 阻断会把系统卡在"既没重启也没服务"的状态），但必须留痕——
+		// 吞掉的话，重启后的数据异常将完全无从溯源。
+		// GD-13-004 评估：失败后仍继续 exec 是有意为之——已提交事务在 WAL 中持久，
+		// 新进程打开时由 SQLite 自动恢复；Go 打开的 fd 均带 O_CLOEXEC，exec 后旧句柄
+		// 与文件锁随之释放，不会与新进程互锁。重试无意义（sql.DB.Close 幂等，第二次
+		// 必返回 nil 会伪装成功），中止 exec 则把系统卡在"未服务也未重启"。
+		if err := sb.Store.Close(); err != nil {
+			slog.Error("polaris: store close failed before hot-restart, relying on WAL recovery in new process", "err", err)
+		}
+	}
 }

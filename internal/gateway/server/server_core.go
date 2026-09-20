@@ -1,6 +1,8 @@
 package server
 
 import (
+	"sync"
+
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	prepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/internal/tool/catalog"
@@ -84,8 +86,7 @@ type Server struct {
 	scriptRunner   plugin.HookRunner                                                              // install hook 沙箱执行器（ContainerSandbox.RunScript）
 	skillSignKey   []byte
 
-	updater *updater.Manager     // OTA 自更新管理器（可为 nil）
-	ks      *security.KillSwitch // [B1] KillSwitch
+	ks *security.KillSwitch // [B1] KillSwitch
 
 	// 系统提示词组装缓存（启动时一次性加载，运行期不变）
 	soulMDContent       string                // ~/.polarisagi/polaris/config/SOUL.md 内容
@@ -110,18 +111,18 @@ type Server struct {
 
 	tbr *metrics.TokenBurnRate
 
-	// lastEventOffset 记录上次 eventTick 已处理的最大 events.offset，防止重复触发。
-
 	rateLimiter      *rate.Limiter
 	interruptLimiter *RateLimitManager
-	auditTrail       AuditRecorder
-	outboxWriter     protocol.OutboxWriter // Interrupt 异步路由（nil 时降级为进程内直调）
-	providerHandler  *provider.ProviderHandler
-	pluginHandler    *plugin.PluginHandler
-	chatHandler      *chat.ChatHandler
-	sysadminHandler  *sysadmin.SysAdminHandler
-	codeActEngine    CodeActEngine // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
-	a2aCfg           config.A2AConfig
+	// interruptDebounce taskID → 占位；30s 窗口内同 task 重复中断返回 429
+	interruptDebounce sync.Map
+	auditTrail        AuditRecorder
+	outboxWriter      protocol.OutboxWriter // Interrupt 异步路由（nil 时降级为进程内直调）
+	providerHandler   *provider.ProviderHandler
+	pluginHandler     *plugin.PluginHandler
+	chatHandler       *chat.ChatHandler
+	sysadminHandler   *sysadmin.SysAdminHandler
+	codeActEngine     CodeActEngine // LLM 生成代码执行引擎门面（可为 nil，降级拒绝）
+	a2aCfg            config.A2AConfig
 }
 
 func (s *Server) SetAuditTrail(at AuditRecorder) { s.auditTrail = at }
@@ -189,6 +190,16 @@ func (s *Server) SetSwarmCoordinator(sc *orchestrator.SwarmCoordinator) {
 	}
 }
 
+// SetAgentController 回填 SysAdminHandler.Agent（GR-9.2-002）：该字段此前全仓
+// 无赋值，预算热更新、doctor 记忆诊断、mmd-canvas 均永久失效，
+// HandleSetPreference 更是直接对 nil 接口调用方法（panic）。
+// 注入的是常驻单例 agent-0；记忆门面为进程共享，诊断/画布对所有会话一致。
+func (s *Server) SetAgentController(a protocol.AgentController) {
+	if s.sysadminHandler != nil {
+		s.sysadminHandler.Agent = a
+	}
+}
+
 func (s *Server) SetInstallManager(m ExtensionInstaller) {
 	s.installMgr = m
 	if s.sysadminHandler != nil {
@@ -223,7 +234,7 @@ func (s *Server) SetPersonaRefiner(pr *agentctx.PersonaRefiner) {
 // 加入该 setter 会突破 400 行上限）。
 
 // SetAmbientSkillMaxChars 注入 ambient skill 全文注入的字符预算（M13-bis §3）。
-// SSoT: spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars。
+// SSoT: spec/state.yaml §thresholds.m13_interface.ambient_skill_max_chars。
 // <=0 时不覆盖，ChatHandler 侧回落 defaultAmbientMaxChars。
 func (s *Server) SetAmbientSkillMaxChars(n int) {
 	if s.chatHandler != nil && s.chatHandler.PromptService != nil && n > 0 {
@@ -280,8 +291,10 @@ func (s *Server) SetSkillSigningKey(k []byte) {
 	}
 }
 
+// SetUpdater 把 OTA 管理器转交 SysAdminHandler（唯一消费方）。Server 自身此前
+// 另存一份只写不读的 updater 字段，并在 provider.go 声明了一个与
+// updater.Manager 方法集不符、全仓无实现的 OTAUpdater 接口（GR-9.1-002），均已删除。
 func (s *Server) SetUpdater(u *updater.Manager) {
-	s.updater = u
 	if s.sysadminHandler != nil {
 		s.sysadminHandler.Updater = u
 	}
@@ -309,6 +322,11 @@ func (s *Server) SetMCPManager(m MCPManager) {
 	}
 	if s.chatHandler != nil {
 		s.chatHandler.MCPMgr = m
+		// GR-9.2-005：PromptAssemblyService 构造时 mcpMgr 传 nil，此前从未回填，
+		// Ambient 技能/MCP 段落组装永久跳过。
+		if s.chatHandler.PromptService != nil {
+			s.chatHandler.PromptService.MCPMgr = m
+		}
 	}
 }
 
@@ -317,6 +335,10 @@ func (s *Server) SetToolRegistry(r protocol.ToolRegistry) {
 	s.toolReg = r
 	if s.chatHandler != nil {
 		s.chatHandler.ToolReg = r
+		// GR-9.2-005：同上，内置工具清单（ic.BuiltinTools）依赖 PromptService.ToolReg。
+		if s.chatHandler.PromptService != nil {
+			s.chatHandler.PromptService.ToolReg = r
+		}
 	}
 }
 

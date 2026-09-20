@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
@@ -137,12 +138,56 @@ func (m *MCPManager) ApproveNetworkAccess(ctx context.Context, serverID string, 
 type MCPUpdateConfig = protocol.MCPUpdateConfig
 
 // makeSamplingHandler 构建 MCP server 主动请求处理器，支持 sampling/createMessage 和 roots/list。
-func (m *MCPManager) makeSamplingHandler() ServerRequestHandler {
+// sampling 防护参数（GD-14-002）：单次输出上限与每服务端每分钟 token 预算。
+const (
+	samplingMaxTokensPerCall  = 4096
+	samplingDefaultMaxTokens  = 1024
+	samplingTokenBudgetPerMin = 20000
+)
+
+// samplingBudget 每个 MCP server 一个的分钟级 token 预算（固定窗口）。
+type samplingBudget struct {
+	mu          sync.Mutex
+	windowStart time.Time
+	used        int
+}
+
+// reserve 预占 n 个 token；窗口内超额返回 false。
+func (b *samplingBudget) reserve(n int, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if now.Sub(b.windowStart) >= time.Minute {
+		b.windowStart, b.used = now, 0
+	}
+	if b.used+n > samplingTokenBudgetPerMin {
+		return false
+	}
+	b.used += n
+	return true
+}
+
+// makeSamplingHandler 构造单个 MCP server 的反向请求处理器。
+//
+// GD-14-002：sampling/createMessage 让第三方服务端借用宿主 Provider 与额度推理。
+// 原实现无任何门禁直接 Infer：任意已连接服务端都能烧光预算，并以 system 角色
+// 向宿主模型注入指令。现在依次执行：PolicyGate（仅 TrustOfficial+ 放行）→
+// 每服务端分钟级 token 预算 → 单次 max_tokens 封顶 → 消息角色降级（system→user，
+// 服务端提供的一律按不可信用户数据处理）。
+func (m *MCPManager) makeSamplingHandler(serverName string, trustTier int) ServerRequestHandler {
+	budget := &samplingBudget{}
 	return func(ctx context.Context, method string, id int64, params json.RawMessage) (json.RawMessage, error) {
 		switch method {
 		case "sampling/createMessage":
 			if m.samplingProvider == nil {
 				return nil, apperr.New(apperr.CodeInternal, "sampling: no provider configured")
+			}
+			if m.policy == nil {
+				return nil, apperr.New(apperr.CodeForbidden, "sampling: policy gate not configured (fail-closed)")
+			}
+			allowed, pErr := m.policy.IsAuthorized(ctx, "mcp_mgr", "mcp_sampling", serverName,
+				map[string]any{"trust_tier": trustTier})
+			if pErr != nil || !allowed {
+				return nil, apperr.New(apperr.CodeForbidden, fmt.Sprintf("sampling: denied by policy for server %q", serverName))
 			}
 			var req struct {
 				Messages  []types.Message `json:"messages"`
@@ -151,11 +196,22 @@ func (m *MCPManager) makeSamplingHandler() ServerRequestHandler {
 			if err := json.Unmarshal(params, &req); err != nil {
 				return nil, apperr.Wrap(apperr.CodeInvalidInput, "sampling: invalid params", err)
 			}
-			opts := []types.InferOption{}
-			if req.MaxTokens > 0 {
-				opts = append(opts, types.WithMaxTokens(req.MaxTokens))
+			maxTokens := req.MaxTokens
+			if maxTokens <= 0 {
+				maxTokens = samplingDefaultMaxTokens
 			}
-			resp, err := safecall.Infer(ctx, m.samplingProvider, req.Messages, opts...)
+			maxTokens = min(maxTokens, samplingMaxTokensPerCall)
+			if !budget.reserve(maxTokens, time.Now()) {
+				return nil, apperr.New(apperr.CodeResourceExhausted, fmt.Sprintf("sampling: token budget exhausted for server %q", serverName))
+			}
+			msgs := make([]types.Message, 0, len(req.Messages))
+			for _, msg := range req.Messages {
+				if msg.Role != "assistant" {
+					msg.Role = "user"
+				}
+				msgs = append(msgs, msg)
+			}
+			resp, err := safecall.Infer(ctx, m.samplingProvider, msgs, types.WithMaxTokens(maxTokens))
 			if err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "MCPManager.makeSamplingHandler", err)
 			}

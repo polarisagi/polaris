@@ -324,7 +324,9 @@ func TestExecuteTool_ShellTool_Uses_ShellLimiter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell 工具 ExecuteTool 不应 panic/error: %v", err)
 	}
-	expectedErr := "[SANDBOX_TIER0_LIMIT] exec_envelope: sandbox tier rejected: [SANDBOX_TIER0_LIMIT] container sandbox requires Linux or Tier-1+ hardware"
+	// Tier-0 + SideProcessSpawn → assign.go 降级到 NativeOS，但本测试未注入 NativeOSSandbox，
+	// 路由层报 Forbidden（ADR-0008 决策四：NativeOS 不可用时不再静默回退到无隔离执行）。
+	expectedErr := "[FORBIDDEN] exec_envelope: route failed (isolation unavailable): [FORBIDDEN] sandbox: NativeOS required for Tier-0 CodeAct but unavailable; refusing to downgrade"
 	if res.Success || res.Error != expectedErr {
 		t.Fatalf("shell 工具首次调用应 Success=false，Error 期望 %q，实际为 %q", expectedErr, res.Error)
 	}

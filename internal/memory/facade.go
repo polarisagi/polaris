@@ -89,7 +89,9 @@ func (f *MemoryFacadeImpl) ListEpisodicEvents(ctx context.Context, query types.E
 
 func (f *MemoryFacadeImpl) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
 	if err := f.sys.Mem().Episodic().Append(ctx, event, taintLevel); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "memory_facade: AppendEpisodicEvent 失败", err)
+		// 保留底层错误码：Agent.handleMemoryPersistenceFailure 以 CodeStorageUnavailable 判定熔断，
+		// apperr.IsCode 只看链上第一个 *Error，此前统一包成 CodeInternal 使熔断永不触发。
+		return apperr.Wrap(apperr.CodeOf(err), "memory_facade: AppendEpisodicEvent 失败", err)
 	}
 	return nil
 }

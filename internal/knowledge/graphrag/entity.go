@@ -257,18 +257,22 @@ type RelationExtractor struct {
 	llmClient LLMClient
 }
 
-// Extract 从实体列表中提取关系边。
-// 主路径: LLM 关系提取。回退: 同文档实体共现 → uses 关系。
-func (re *RelationExtractor) Extract(ctx context.Context, entities []*Entity) ([]*Relation, error) {
-	if re.llmClient != nil && len(entities) > 0 {
-		docText := entities[0].SourceDocID
+// Extract 从实体列表与原文中提取关系边。
+// 主路径: LLM 关系提取。回退: 同文档实体共现 → uses 关系（inferred=true）。
+//
+// GR-7.2-004：原实现把 entities[0].SourceDocID（文档 ID / 会话 ID）当作正文
+// 传给 LLM，关系抽取实际只看到一串实体名，退化为几乎必然失败→回退共现。
+// inferred 标记回退产物：n 个实体两两生成 n(n-1)/2 条"uses"边，只是启发式
+// 猜测，调用方不应把它们当作事实持久化进知识图谱。
+func (re *RelationExtractor) Extract(ctx context.Context, entities []*Entity, docText string) (rels []*Relation, inferred bool, err error) {
+	if re.llmClient != nil && len(entities) > 0 && docText != "" {
 		relations, err := re.llmClient.ExtractRelations(ctx, entities, docText)
 		if err == nil && len(relations) > 0 {
-			return relations, nil
+			return relations, false, nil
 		}
 	}
 
-	var rels []*Relation
+	rels = nil
 	for i := 0; i < len(entities); i++ {
 		for j := i + 1; j < len(entities); j++ {
 			rels = append(rels, &Relation{
@@ -278,5 +282,5 @@ func (re *RelationExtractor) Extract(ctx context.Context, entities []*Entity) ([
 			})
 		}
 	}
-	return rels, nil
+	return rels, true, nil
 }

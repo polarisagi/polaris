@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/prompt/templates"
@@ -63,6 +65,11 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		a.asyncIntent(types.TriggerValidateFail)
 		// 返回非致命 error 提示调用方失败原因，但不能让 Run 循环崩溃
 		return apperr.Wrap(apperr.CodeInternal, "s_validate failed", err)
+	}
+
+	// BlindZone HITL 检查点（GR-4.1-005）：S_PLAN 由 BlindZoneDetector 置位，此前无任何读取方。
+	if handled, err := a.runBlindZoneHITL(ctx, plan); handled {
+		return err
 	}
 
 	// L3: LLM 看门狗校验 (上提为标准 FSM Effect)
@@ -147,4 +154,49 @@ func (a *Agent) runL3Watchdog(ctx context.Context, vCtx *protocol.DAGValidationC
 
 	// 递归执行该 Effect，利用标准流程调用 LLM 并计费
 	return true, a.executeEffect(ctx, llmEff).Err
+}
+
+// runBlindZoneHITL 对盲区任务（该类任务屡次生产却无失败记忆闭环，系统对其可靠性无据可依）
+// 中含副作用的 DAG 请求人工确认。只读计划不打扰人（盲区的风险在于"做错事"，读不改变外部状态）。
+// handled=true 表示已给出最终结论（拒绝），调用方直接返回 err；false 表示继续后续校验。
+//
+// HITL 网关未装配时降级放行并告警：盲区是可靠性信号而非安全违规，与 L3 看门狗 fail-open 同口径，
+// 否则未配置审批渠道的部署会让所有盲区写操作永久卡死。
+func (a *Agent) runBlindZoneHITL(ctx context.Context, plan *protocol.DAGPlan) (bool, error) {
+	if !a.sCtx.BlindZoneHITLRequired || plan == nil {
+		return false, nil
+	}
+	var sideEffects []string
+	for _, node := range plan.Nodes {
+		t, err := a.toolRegistry.Lookup(node.ToolName)
+		if err != nil || t.Capability > types.CapReadOnly {
+			sideEffects = append(sideEffects, node.ToolName)
+		}
+	}
+	if len(sideEffects) == 0 {
+		return false, nil
+	}
+	if a.hitl == nil {
+		slog.WarnContext(ctx, "agent: blind-zone task requires HITL but no gateway is wired; proceeding",
+			"session_id", a.sCtx.SessionID, "tools", sideEffects)
+		return false, nil
+	}
+	resp, err := a.hitl.Prompt(ctx, types.HITLPrompt{
+		ID:             fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
+		AgentID:        a.sCtx.AgentID,
+		CheckpointType: "blind_zone",
+		PromptText: fmt.Sprintf("Blind-zone task (no failure-memory feedback for this task type). "+
+			"Plan performs side effects via: %s. Approve to execute.", strings.Join(sideEffects, ", ")),
+		TaintLevel: a.sessionTaint(),
+		DeadlineNs: time.Now().Add(10 * time.Minute).UnixNano(),
+	})
+	if err == nil && resp != nil && resp.Approved {
+		a.sCtx.BlindZoneHITLRequired = false // 本任务已获批，replan 后不重复打扰
+		return false, nil
+	}
+	a.asyncIntent(types.TriggerValidateFail)
+	if err != nil {
+		return true, apperr.Wrap(apperr.CodeForbidden, "s_validate: blind-zone HITL unavailable", err)
+	}
+	return true, apperr.New(apperr.CodeForbidden, "s_validate: blind-zone plan rejected by human reviewer")
 }

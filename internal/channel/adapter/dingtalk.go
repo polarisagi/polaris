@@ -58,6 +58,7 @@ func dingTalkConnect(ctx context.Context, host PollerHost, channelID, clientID, 
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("dingtalk: dial: %v", err), err)
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	for {
 		select {
@@ -204,8 +205,7 @@ func (a *DingTalkAdapter) Extract(body []byte, r *http.Request) protocol.Channel
 
 func (a *DingTalkAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
 	if msg.ReplyToken == "" {
-		slog.Warn("dingtalk: sessionWebhook missing, cannot reply", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "dingtalk: sessionWebhook missing, cannot reply")
 	}
 	if err := DingTalkSendMessage(ctx, host.HTTPClient(), msg.ReplyToken, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "dingtalk", "err", err)

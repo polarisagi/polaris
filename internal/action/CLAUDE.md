@@ -28,8 +28,8 @@ LLM 不在此层做决策；执行结果的语义判定权属于 `agent/fsm`。
 
 ## 消费端接口声明位置
 
-`internal/action/provider.go` — 声明 action 包对外部能力的消费端接口（ToolExecutor、PolicyStoreReader）。
-新增外部依赖时，必须先在 `provider.go` 声明接口，由 `bootstrap` 注入，禁止直接 import 具体实现。
+消费端接口就近声明于使用处（如 `codeact.AuditRecorder`）；新增外部依赖时在调用方包内声明接口，由 `bootstrap` 注入，禁止直接 import 具体实现。
+（2026-09-20 GR-4.2-006：原 `provider.go` 中 ToolExecutor/PolicyStoreReader 全仓零实现零消费，已删除。）
 
 ## 并发约束
 

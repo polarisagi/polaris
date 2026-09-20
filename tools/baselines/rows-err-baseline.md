@@ -3,11 +3,8 @@ internal/automation/cost_report.go:157:rows
 internal/automation/hitl/gateway.go:351:iter
 internal/channel/manager.go:95:rows
 internal/eval/analysis/shadow_executor.go:246:rows
-internal/eval/harness/store.go:113:iter
-internal/eval/harness/store.go:166:iter
 internal/execute/orchestrator/sqlite_blackboard_reaper.go:46:rows
 internal/execute/orchestrator/sqlite_blackboard_reaper.go:120:rows
-internal/execute/orchestrator/sqlite_blackboard_reaper.go:229:rows
 internal/extension/skill/skill_evolution.go:104:rows
 internal/extension/skill/sqlite_registry.go:244:rows
 internal/gateway/server/chat/system_prompt_ambient.go:179:rows
@@ -30,7 +27,6 @@ internal/gateway/server/sysadmin/export.go:131:msgRows
 internal/gateway/server/sysadmin/insightsadmin/insights.go:53:roleRows
 internal/gateway/server/sysadmin/insightsadmin/insights.go:77:trendRows
 internal/gateway/server/sysadmin/insightsadmin/insights.go:105:topRows
-internal/gateway/server/sysadmin/mcpadmin/mcp_servers.go:60:rows
 internal/gateway/server/sysadmin/workflowadmin/workflow_cron.go:38:rows
 internal/gateway/server/sysadmin/workflowadmin/workflow_cron.go:92:rows
 internal/gateway/server/sysadmin/workflowadmin/workflow_handlers.go:34:rows
@@ -38,7 +34,6 @@ internal/gateway/server/sysadmin/workflowadmin/workflow_handlers.go:363:rows
 internal/learning/curriculum/curriculum.go:232:rows
 internal/learning/optimizer/memf.go:116:rows
 internal/learning/optimizer/memf_heuristics.go:60:rows
-internal/memory/consolidation/consolidation_background.go:151:rows
 internal/memory/retrieval/cognitive_replayer.go:72:rows
 internal/memory/retrieval/cognitive_replayer.go:125:rows
 internal/memory/retrieval/cognitive_replayer.go:176:rows
@@ -46,12 +41,8 @@ internal/memory/retrieval/retriever_helpers.go:115:rows
 internal/memory/retrieval/source.go:56:iter
 internal/memory/retrieval/source.go:245:rIter
 internal/memory/store/durative_mem.go:139:iter
-internal/memory/store/episodic_mem_lifecycle.go:186:rows
-internal/memory/store/episodic_mem_lifecycle.go:203:iter
 internal/memory/store/reflection_mem.go:74:iter
 internal/memory/store/semantic_mem_query.go:274:rows
-internal/store/repo/repo_task_checkpoint.go:125:rows
-internal/store/repo/repo_task_checkpoint.go:159:rows
 internal/store/search/hybrid_retrieve.go:106:iter
 internal/store/search/hybrid_retrieve.go:149:iter
 internal/store/search/surreal_cache_store.go:133:it

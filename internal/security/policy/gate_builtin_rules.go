@@ -308,6 +308,15 @@ func (g *Gate) loadBuiltinRules() { //nolint:gocyclo
 			},
 		},
 		{
+			// GD-14-002：MCP server 反向发起 sampling/createMessage（借用宿主模型与
+			// 额度推理）仅对官方可信（TrustOfficial+）服务端放行；与 soft_constraints.cedar
+			// 同名规则等价。其余 fail-closed（deny-by-default）。
+			Name: "mcp_sampling_permit",
+			MatchFn: func(principal, action, _ string, ctx map[string]any) bool {
+				return action == "mcp_sampling" && principal == "mcp_mgr" && trustTierOf(ctx) >= 3
+			},
+		},
+		{
 			Name: "script_execute_permit",
 			MatchFn: func(_, action, _ string, ctx map[string]any) bool {
 				if action != "script_execute" {

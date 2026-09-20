@@ -117,8 +117,12 @@ func SanitizeByUserReview(ts TaintedString, reviewerID string) TaintedString {
 //
 // 两阶段防护：
 //  1. 结构层：TaintLevel > TaintLow 且非 TaintUserReviewed → 拒绝。
-//  2. 内容层：TaintLevel >= TaintMedium 时对内容执行注入模式扫描。
+//  2. 内容层：TaintLow（"受信内部数据"）执行注入模式扫描。
 //     命中高置信度注入特征 → 拒绝降级（避免"受信源内嵌恶意指令"绕过类型边界）。
+//
+// 内容层作用于 TaintLow 而非 >=TaintMedium（GR-2.1-001，M11 §2.5 2026-09-19 追记）：
+// 结构层已拒绝全部 >=TaintMedium，原条件使扫描物理不可达；"受信源的恶意内容"
+// 正是能通过结构层的 TaintLow。TaintNone（进程内常量/模板）不扫，避免系统模板误报。
 func SanitizeToSafe(ts TaintedString) (SafeString, error) {
 	if ts.Source.OriginTaintLevel > types.TaintLow && ts.Source.OriginTaintLevel != types.TaintUserReviewed {
 		return SafeString{}, apperr.New(apperr.CodeInternal,
@@ -126,8 +130,8 @@ func SanitizeToSafe(ts TaintedString) (SafeString, error) {
 				ts.Source.OriginTaintLevel))
 	}
 
-	// 内容层扫描：TaintMedium 及以上来源执行注入检测（TaintUserReviewed 跳过：人类已显式审查）
-	if ts.Source.OriginTaintLevel >= types.TaintMedium && ts.Source.OriginTaintLevel != types.TaintUserReviewed {
+	// 内容层扫描（TaintUserReviewed 跳过：人类已显式审查）
+	if ts.Source.OriginTaintLevel == types.TaintLow {
 		if found, desc := ScanInjectionPatterns(ts.content); found {
 			return SafeString{}, apperr.New(apperr.CodeInvalidInput,
 				fmt.Sprintf("policy: injection pattern detected (%s) — sanitize blocked; "+

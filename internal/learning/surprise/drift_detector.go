@@ -2,6 +2,8 @@ package surprise
 
 import (
 	"math"
+	"slices"
+	"sync"
 
 	"github.com/polarisagi/polaris/internal/store/search"
 )
@@ -9,7 +11,12 @@ import (
 // DriftDetector — Embedding 空间漂移检测。
 // 架构文档: docs/arch/M05-Memory-System.md §12.3
 
+// 并发模型（GR-7.1-001）：AddAnchor/RecordAnchor 由检索热路径在任意请求
+// goroutine 调用，Detect/DetectByTaskType 由 DriftOrchestrator 后台周期调用。
+// mu 只保护 anchors 切片本身；评分前先在锁内克隆快照，重新 Embed（可能是
+// 远程调用）在锁外进行，避免检索热路径被漂移检测阻塞。
 type DriftDetector struct {
+	mu             sync.RWMutex
 	anchors        []AnchorSample // 100 条锚定样本
 	checkInterval  int64          // 7d
 	driftThreshold float64        // 0.05
@@ -31,6 +38,8 @@ const maxAnchors = 200
 
 // AddAnchor 添加锚定样本。超过 maxAnchors 时淘汰最旧的一批（FIFO）。
 func (dd *DriftDetector) AddAnchor(anchor AnchorSample) {
+	dd.mu.Lock()
+	defer dd.mu.Unlock()
 	if len(dd.anchors) >= maxAnchors {
 		// 淘汰前 20%（FIFO）：ring-buffer 语义，避免 slice 频繁分配
 		drop := maxAnchors / 5
@@ -80,18 +89,17 @@ func (dd *DriftDetector) anchorCosineDist(a AnchorSample) (float64, bool) {
 	return 1.0 - dot/(math.Sqrt(n1)*math.Sqrt(n2)), true
 }
 
-// scoreAnchors 遍历锚点，返回 (cosineDeltaSum, driftedCount, unknownCount, knownCount)。
-func (dd *DriftDetector) scoreAnchors() (cosineDeltaSum float64, driftedCount, unknownCount, knownCount int) {
-	return dd.scoreAnchorsFiltered("")
+// snapshot 在读锁内克隆锚点切片（元素为值类型，其内部切片只读不改，浅拷贝即可）。
+func (dd *DriftDetector) snapshot() []AnchorSample {
+	dd.mu.RLock()
+	defer dd.mu.RUnlock()
+	return slices.Clone(dd.anchors)
 }
 
-// scoreAnchorsFiltered 与 scoreAnchors 逻辑一致，taskType 非空时只统计该 task_type 的锚点。
-// 供 DetectByTaskType 按 task_type 分组复用同一套评分逻辑（避免重复实现）。
-func (dd *DriftDetector) scoreAnchorsFiltered(taskType string) (cosineDeltaSum float64, driftedCount, unknownCount, knownCount int) {
-	for _, a := range dd.anchors {
-		if taskType != "" && a.TaskType != taskType {
-			continue
-		}
+// scoreAnchors 遍历给定锚点快照，返回 (cosineDeltaSum, driftedCount, unknownCount, knownCount)。
+// Detect 与 DetectByTaskType（按组传入子集）复用同一套评分逻辑。
+func (dd *DriftDetector) scoreAnchors(anchors []AnchorSample) (cosineDeltaSum float64, driftedCount, unknownCount, knownCount int) {
+	for _, a := range anchors {
 		if len(a.Expected) == 0 {
 			unknownCount++
 			continue
@@ -117,11 +125,12 @@ func (dd *DriftDetector) scoreAnchorsFiltered(taskType string) (cosineDeltaSum f
 // 3. changeRate > 0.4 且 cosineDelta > driftThreshold → NeedsReindex=true
 // 4. unknownRatio > 0.30 → 系统级告警
 func (dd *DriftDetector) Detect() (*DriftReport, error) {
-	if len(dd.anchors) < 5 {
+	anchors := dd.snapshot()
+	if len(anchors) < 5 {
 		return &DriftReport{UnknownRatio: 1.0, UnknownTaskTypeAlarm: true}, nil
 	}
 
-	cosineDeltaSum, driftedCount, unknownCount, knownCount := dd.scoreAnchors()
+	cosineDeltaSum, driftedCount, unknownCount, knownCount := dd.scoreAnchors(anchors)
 
 	cosineDelta, changeRate := 0.0, 0.0
 	if knownCount > 0 {
@@ -130,7 +139,7 @@ func (dd *DriftDetector) Detect() (*DriftReport, error) {
 	}
 
 	report := &DriftReport{
-		UnknownRatio: float64(unknownCount) / float64(len(dd.anchors)),
+		UnknownRatio: float64(unknownCount) / float64(len(anchors)),
 		ChangeRate:   changeRate,
 		CosineDelta:  cosineDelta,
 		NeedsReindex: changeRate > 0.4 && cosineDelta > dd.driftThreshold,
@@ -144,12 +153,12 @@ func (dd *DriftDetector) Detect() (*DriftReport, error) {
 // DetectByTaskType 按 task_type 分组检测漂移。
 // M05 §12.3 降级表要求"该 task_type 降级纯 BM25，其余不受影响"——原 Detect()
 // 只做全局聚合，AnchorSample.TaskType 字段从未被读取过（2026-07-21 deadcode
-// 审查发现的设计缺口）。本方法复用 scoreAnchorsFiltered 按组重新评分，
+// 审查发现的设计缺口）。本方法把分组子集传给 scoreAnchors 评分，
 // 判定阈值与 Detect() 保持一致（changeRate>0.4 且 cosineDelta>threshold）。
 // 样本数 <5 的组跳过（不产出降级信号，避免小样本噪声误判）。
 func (dd *DriftDetector) DetectByTaskType() map[string]*DriftReport {
 	byType := make(map[string][]AnchorSample)
-	for _, a := range dd.anchors {
+	for _, a := range dd.snapshot() {
 		if a.TaskType == "" {
 			continue
 		}
@@ -161,7 +170,7 @@ func (dd *DriftDetector) DetectByTaskType() map[string]*DriftReport {
 		if len(anchors) < 5 {
 			continue
 		}
-		cosineDeltaSum, driftedCount, unknownCount, knownCount := dd.scoreAnchorsFiltered(taskType)
+		cosineDeltaSum, driftedCount, unknownCount, knownCount := dd.scoreAnchors(anchors)
 		cosineDelta, changeRate := 0.0, 0.0
 		if knownCount > 0 {
 			cosineDelta = cosineDeltaSum / float64(knownCount)

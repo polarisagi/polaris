@@ -35,7 +35,7 @@ type ExecutorFn func(ctx context.Context, input []byte) ([]byte, error)
 // LAMConfig 大动作模型配置。
 type LAMConfig struct {
 	Enabled       bool
-	ResolverModel string // VLM 动作解析模型，e.g. "deepseek-chat"（budget 层）
+	ResolverModel string // VLM 动作解析模型 ID（真实厂商模型名）；空 = 由 Router 按 Vision 能力选路
 }
 
 // ComputerUseEngine 实现 LargeActionModel：intent + ScreenState → VLM → action → 执行。
@@ -223,7 +223,19 @@ func (e *ComputerUseEngine) resolveAction(ctx context.Context, intent string, st
 	// P-1：每次 LLM 调用自持超时（90s），不信任上层 ctx 一定带 deadline（A-05）。
 	inferCtx, inferCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer inferCancel()
-	resp, err := safecall.Infer(inferCtx, e.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	// 透传确定性温度与 JSON Schema 约束（GR-4.2-003：此前只传 MaxTokens，req 上构造的
+	// Temperature/ResponseFormat 全部丢失）。Model 仅在显式配置时覆盖——为空时交由
+	// InferenceRouter 按消息中的图像 Part 选具备 Vision 能力的 Provider，避免把占位名
+	// 当真实模型 ID 发给厂商。
+	opts := []types.InferOption{
+		types.WithMaxTokens(req.MaxTokens),
+		types.WithTemperature(req.Temperature),
+		types.WithResponseFormat(req.ResponseFormat),
+	}
+	if req.Model != "" {
+		opts = append(opts, types.WithModel(req.Model))
+	}
+	resp, err := safecall.Infer(inferCtx, e.provider, req.Messages, opts...)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("lam: VLM resolve action: %v", err), err)
 	}

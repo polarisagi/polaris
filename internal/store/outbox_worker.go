@@ -345,9 +345,10 @@ func (w *OutboxWorker) loadCursorSafe(ctx context.Context) (cursor int64, ok boo
 // [MUST] 游标只能单调递增：WHERE 子句物理阻断游标回溯，防止重放历史消息。
 // 若外部传入比当前值更小的 cursor（理论上不应发生），SQL 静默忽略，不报错。
 // L2：持久化失败下次仍会重复处理（幂等键兜底），Warn + counter 即可，不阻断 Run 循环。
+// sys_config.value 是 TEXT 列，裸比较走字典序（'10' < '9'），跨位数时游标会冻结，必须 CAST（GR-1.1-002）。
 func (w *OutboxWorker) saveCursor(ctx context.Context, cursor int64) {
 	if _, err := w.db.ExecContext(ctx,
-		"INSERT INTO sys_config(key,value) VALUES('outbox_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE excluded.value > sys_config.value",
+		"INSERT INTO sys_config(key,value) VALUES('outbox_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(excluded.value AS INTEGER) > CAST(sys_config.value AS INTEGER)",
 		cursor); err != nil {
 		slog.WarnContext(ctx, "store/outbox: 游标持久化失败，下次重启将重复处理（幂等键兜底）", "cursor", cursor, "err", err)
 		metrics.RecordOutboxCursorError(ctx, "save")

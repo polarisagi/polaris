@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/memory/store"
@@ -40,6 +41,7 @@ type HybridRetrieverImpl struct {
 	cognitive     protocol.CognitiveSearcher   // Tier1+：SurrealDB FTS+HNSW，nil 时降级 Tier0
 	semantic      protocol.SemanticMemory      // P0-2：第 6 路（semantic_entities）
 	classifier    *SemanticQueryClassifier     // 查询意图分类（temporal 激活第 5 路）；实例持有，禁全局
+	classifierMu  sync.Once                    // 保护 classifier 惰性构造（并发 Search 首次调用，GR-5.1-006）
 
 	// driftDetector/driftRegistry — M05 §12.3 Embedding 漂移响应编排（2026-07-21
 	// deadcode 审查补齐）。两者均为可选注入，nil 时 Search 完全跳过漂移采样/
@@ -96,9 +98,11 @@ func (hr *HybridRetrieverImpl) InjectEmbedder(e Embedder) {
 
 // queryClassifier 返回分类器实例（惰性构造；原型未初始化时内部自动走 Tier-0 降级）。
 func (hr *HybridRetrieverImpl) queryClassifier() *SemanticQueryClassifier {
-	if hr.classifier == nil {
-		hr.classifier = NewSemanticQueryClassifier()
-	}
+	hr.classifierMu.Do(func() {
+		if hr.classifier == nil {
+			hr.classifier = NewSemanticQueryClassifier()
+		}
+	})
 	return hr.classifier
 }
 

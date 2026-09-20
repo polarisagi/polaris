@@ -138,3 +138,13 @@ func TestArbitrateChunks_Empty(t *testing.T) {
 		t.Errorf("expected nil for empty input, got %v", result)
 	}
 }
+
+// GR-7.2-002：无 SectionPath 的多条检索结果不得被仲裁截断为 1 条，且保持原顺序。
+func TestArbitrateChunks_EmptySectionPathPassthrough(t *testing.T) {
+	a := NewKnowledgeConflictArbiter()
+	in := []Chunk{{ID: "a", Content: "x"}, {ID: "b", Content: "y"}, {ID: "c", Content: "z"}}
+	out := a.ArbitrateChunks(in)
+	if len(out) != 3 || out[0].ID != "a" || out[2].ID != "c" {
+		t.Fatalf("unexpected arbitration result: %+v", out)
+	}
+}

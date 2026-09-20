@@ -91,6 +91,21 @@ ScoredEvent struct {
 	Event any
 }
 
+// EventPtr 取出 *Event，值类型与指针类型均可（GR-5.1-003）。
+//
+// Event 字段是 any：此前全仓 30 余处以 se.Event.(*types.Event) 断言，生产者一旦放入
+// 值类型（PerMessageExtractor 曾如此），下游断言静默得到 nil，整条抽取管道空转而无报错。
+// 所有读取方统一走本方法，生产者写值或写指针都不再影响语义。
+func (s ScoredEvent) EventPtr() *Event {
+	switch v := s.Event.(type) {
+	case *Event:
+		return v
+	case Event:
+		return &v
+	}
+	return nil
+}
+
 type
 
 // SalienceEvent 高显著性情景事件的轻量摘要（episodic_events 物化表投影）。

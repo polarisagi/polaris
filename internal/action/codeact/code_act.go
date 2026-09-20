@@ -35,7 +35,7 @@ import (
 // LevelChecker 接口仅用于级别断言，由三个沙箱实现通过 Level() 满足。
 type CodeAct struct {
 	envelope       *sandbox.ExecEnvelope
-	toolExec       protocol.ToolExecutor
+	auditor        AuditRecorder          // inv_global_07 全链路审计；nil 时跳过（仅测试）
 	govAgent       govAgent               // 可选的安全校验网关 (L1)
 	astChecker     ASTChecker             // L0 AST 检查器
 	reviewer       LLMPeerReviewer        // L2 LLM 同行评审
@@ -115,10 +115,19 @@ func WithTokenManager(mgr tokenManager) CodeActOption {
 
 // CodeActRequest CodeAct 执行请求。
 
-func NewCodeAct(envelope *sandbox.ExecEnvelope, toolExec protocol.ToolExecutor, opts ...CodeActOption) *CodeAct {
+// AuditRecorder CodeAct 审计写入的消费端接口（生产由 security.AuditTrail 满足）。
+//
+// 2026-09-20（GR-4.2-005 复核）：此前依赖整个 protocol.ToolExecutor（4 个方法）却只用
+// RecordAudit，而全仓无生产类型同时实现这 4 个方法，装配点只能传 nil——inv_global_07
+// 要求的 CodeAct 全链路审计在生产中从未写入过一条。收窄为单方法接口后直接注入 AuditTrail。
+type AuditRecorder interface {
+	RecordAudit(ctx context.Context, toolName string, payload []byte) error
+}
+
+func NewCodeAct(envelope *sandbox.ExecEnvelope, auditor AuditRecorder, opts ...CodeActOption) *CodeAct {
 	ca := &CodeAct{
 		envelope: envelope,
-		toolExec: toolExec,
+		auditor:  auditor,
 	}
 	for _, opt := range opts {
 		opt(ca)
@@ -181,7 +190,7 @@ func (ca *CodeAct) validatePolicyAndEnv(ctx context.Context, req protocol.CodeAc
 	// "还能用几次"是有状态语义，必须在真正放行副作用之前单独消费一次。
 	// 本处是 code_act 唯一的执行入口，放在这里等价于"每次真实执行消费一次"。
 	if consumeErr := ca.tokenMgr.Consume(req.CapabilityID); consumeErr != nil {
-		return apperr.Wrap(apperr.CodeForbidden, "code_act: capability token exhausted", consumeErr)
+		return apperr.Wrap(apperr.CodeForbidden, "code_act: capability token consumption refused", consumeErr)
 	}
 
 	return nil
@@ -305,7 +314,11 @@ func (ca *CodeAct) Execute(ctx context.Context, req protocol.CodeActRequest) (*p
 	execReq := sandbox.ExecRequest{
 		Principal: sandbox.PrincipalAgent, Kind: sandbox.KindScriptExecute,
 		Resource: "codeact:" + req.Language, TrustTier: types.TrustUntrusted,
-		Tool:  types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated},
+		// SideProcessSpawn 强制 AssignSandboxTier 分配 Sbx-L3（inv_global_07，GR-4.2-001）：
+		// 仅标 ToolLLMGenerated 只会得到 SandboxWasm——wasmtime 在场时脚本被送进
+		// WasmtimeExecute（ScriptBytes 为空，必然失败），不在场时才偶然回落到 Container。
+		Tool: types.Tool{Name: "codeact:" + req.Language, Source: types.ToolLLMGenerated,
+			SideEffects: []types.SideEffect{types.SideProcessSpawn}},
 		Input: []byte("{}"), ScriptPath: tmpFile,
 		CapToken:   tok,
 		TaintLevel: types.TaintHigh, CPUQuotaMs: 30000,
@@ -356,8 +369,11 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 	}
 
 	// 全链路审计：写入 EventLog（inv_global_07 要求）
-	if ca.toolExec != nil {
+	if ca.auditor != nil {
+		// M07 §7.4：审计须含完整代码与输出（输出为上方二次 PII 脱敏后的版本）。
 		auditPayload, _ := json.Marshal(map[string]any{
+			"code":          req.Code,
+			"output":        string(out),
 			"session_id":    req.SessionID,
 			"agent_id":      req.AgentID,
 			"language":      req.Language,
@@ -366,7 +382,7 @@ func (ca *CodeAct) finalizeExecuteResult(ctx context.Context, req protocol.CodeA
 			"exit_code":     exitCode,
 			"latency_ms":    res.LatencyMs,
 		})
-		if auditErr := ca.toolExec.RecordAudit(ctx, "code_act", auditPayload); auditErr != nil {
+		if auditErr := ca.auditor.RecordAudit(ctx, "code_act", auditPayload); auditErr != nil {
 			slog.Error("codeact: audit record failed, compliance trail broken",
 				"err", auditErr)
 		}

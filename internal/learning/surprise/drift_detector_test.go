@@ -104,3 +104,20 @@ func TestDriftDowngradeRegistry(t *testing.T) {
 		t.Fatal("ClearAll should remove all downgrade flags")
 	}
 }
+
+// GR-7.1-001：检索热路径并发 RecordAnchor 与后台 Detect 不得产生数据竞争（-race 下验证）。
+func TestDriftDetector_ConcurrentRecordAndDetect(t *testing.T) {
+	dd := NewDriftDetector(0, 0.05, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			dd.RecordAnchor("qa", "q", []float32{1}, []string{"x"})
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_, _ = dd.Detect()
+		_ = dd.DetectByTaskType()
+	}
+	<-done
+}

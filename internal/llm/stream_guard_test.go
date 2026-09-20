@@ -82,18 +82,6 @@ func TestJSONRepair(t *testing.T) {
 	}
 }
 
-func TestTrackStreamCost(t *testing.T) {
-	err := TrackStreamCost(context.Background(), 10, "test")
-	if err != nil {
-		t.Errorf("expected nil error")
-	}
-
-	err = TrackStreamCost(context.Background(), 300000, "test")
-	if err != ErrResponseTooLarge {
-		t.Errorf("expected ErrResponseTooLarge")
-	}
-}
-
 func TestStreamError(t *testing.T) {
 	err := &StreamError{"oops"}
 	if err.Error() != "oops" {

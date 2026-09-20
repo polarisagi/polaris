@@ -59,7 +59,7 @@ func RunEmailPoller(ctx context.Context, host PollerHost, channelID string, cfg 
 		case <-ticker.C:
 		}
 		if host.SafeDialer() == nil {
-			slog.Error("email: SafeDialer 未注入，拒绝 IMAP 连接（SSRF 防护）", "channel", channelID, "err", apperr.New(apperr.CodeInternal, "log event"))
+			slog.Error("email: SafeDialer 未注入，拒绝 IMAP 连接（SSRF 防护）", "channel", channelID)
 			return
 		}
 		msgs, err := imapFetchUnseen(ctx, host.SafeDialer().DialContext, imapHost+":"+imapPort, address, password)
@@ -346,8 +346,7 @@ func (a *EmailAdapter) Send(ctx context.Context, host Host, cfg map[string]any, 
 		smtpPort = "587"
 	}
 	if smtpHost == "" || address == "" || password == "" {
-		slog.Warn("email: smtp config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "email: smtp config missing")
 	}
 	d := host.SafeDialer()
 	if err := EmailSendMessage(ctx, d, smtpHost, smtpPort, address, password, msg.ChatID, "Re: [Polaris]", text); err != nil {

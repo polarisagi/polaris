@@ -126,8 +126,7 @@ func (a *TeamsAdapter) Send(ctx context.Context, host Host, cfg map[string]any, 
 	clientSecret, _ := cfg["client_secret"].(string)
 
 	if tenantID == "" || clientID == "" || clientSecret == "" {
-		slog.Warn("teams: config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "teams: config missing")
 	}
 	tok, err := TeamsGetAccessToken(ctx, host.HTTPClient(), tenantID, clientID, clientSecret)
 	if err != nil {

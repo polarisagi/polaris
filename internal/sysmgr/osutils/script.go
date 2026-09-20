@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // sanitizeHookEnv 从父进程环境中仅提取白名单内的变量。
@@ -99,8 +101,10 @@ func RunScript(ctx context.Context, path string, env []string, timeout time.Dura
 	cmd.Stderr = &buf
 
 	if runErr := cmd.Run(); runErr != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return 1, buf.String(), nil
+		// GR-10.2-006：超时必须作为错误返回（保留 DeadlineExceeded 身份供 errors.Is），
+		// 原先返回 nil 让调用方的超时分支永远走不到，超时被当作普通非零退出码。
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return 1, buf.String(), context.DeadlineExceeded
 		}
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
@@ -109,4 +113,16 @@ func RunScript(ctx context.Context, path string, env []string, timeout time.Dura
 		return 1, buf.String(), runErr
 	}
 	return 0, buf.String(), nil
+}
+
+// StartDetachedWindowsScript 以脱离当前进程的方式启动 Windows 批处理（OTA 更新脚本）。
+// 脚本需要在本进程退出、释放可执行文件锁之后才能完成替换，因此必须 detached 启动
+// 且不等待；`start "" /B` 由 cmd 派生独立进程后立即返回。
+func StartDetachedWindowsScript(scriptPath string) error {
+	cmd := exec.Command("cmd", "/C", "start", "", "/B", scriptPath)
+	cmd.Env = sanitizeHookEnv()
+	if err := cmd.Start(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "osutils: start detached script", err)
+	}
+	return nil
 }

@@ -3,7 +3,7 @@
 > 四层记忆（Working / Episodic / Semantic / Procedural），多存储引擎绑定，[Tier-0-Limit]
 > Go（记忆管理器 + 检索路由 + Consolidation），Rust（Embedding 计算 via M1）
 > [HE-Rule-4] [HE-Rule-5] [HE-Rule-6]
-<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:127 L1 Episodic / 4:229 L2 Semantic / 5:271 L3 Procedural / 5-bis:281 Memory-Write-Tool(Agent主动写) / 6:325 写路径 / 7:337 HybridRetriever / 8:423 EffConn / 9:433 Consolidation / 10:469 Forgetting / 11:486 PromptBuilder / 12:562 Drift / 14:600 (SOFT)降级 / 15:624 依赖 / 16:640 实现状态+2026研究对照 / 13:666 MemoryAgent(Swarm集成) -->
+<!-- §跳读: 0-bis:7 职责 / 0-ter:19 不变量速查 / 1:30 四层映射 / 2:41 L0 Working / 3:127 L1 Episodic / 4:229 L2 Semantic / 5:271 L3 Procedural / 5-bis:281 Memory-Write-Tool(Agent主动写) / 6:332 写路径 / 7:344 HybridRetriever / 8:430 EffConn / 9:440 Consolidation / 10:476 Forgetting / 11:493 PromptBuilder / 12:569 Drift / 14:607 (SOFT)降级 / 15:631 依赖 / 16:647 实现状态+2026研究对照 / 13:673 MemoryAgent(Swarm集成) -->
 ## 0-bis. 职责边界
 
 - M5 **是**: 四层记忆（Working/Episodic/Semantic/Procedural）的读写管理器 | M5 **不是**: 记忆的物理存储引擎（那是 M2）
@@ -294,21 +294,28 @@ L3 Procedural 技能索引相关 DDL 实质托管于 M2 SurrealKV KV 引擎（`i
 | `memory_search` | `CapReadOnly` | 混合检索（BM25 + vector + graph，`HybridRetriever`），返回最相关事实，支持 `as_of` 时空穿梭查询 |
 | `memory_append` | `CapWriteLocal` | 追加属性到已有实体（`UpsertFact` upsert 语义，不覆盖 description） |
 | `memory_expire` | `CapWriteLocal` | 标记实体失效（`SemanticMemWriter.MarkEntityExpired`，直接置 `semantic_entities.status='expired'`），含 reason 审计字段 |
+| `memory_page_out` | `CapWriteLocal` | 将不再需要每轮可见的 Core Memory 块换出（ADR-0082 MemFS 分页，`protocol.CoreMemory`） |
+| `memory_page_in` | `CapWriteLocal` | 将已换出的 Core Memory 块换回每轮可见（ADR-0082） |
 | `memory_reflect`| `CapWriteLocal` | 记录系统反思、洞察或长期决策到 ReflectionMemory |
+| `core_memory_edit` | `CapWriteLocal` | 编辑 Core Memory 块（ADR-0082，定义于 `core_memory_edit.go`） |
 
-所有 5 个工具 `SandboxTier = SandboxInProcess`、`RiskLevel = RiskLow`，经 PolicyGate 五阶段后在 InProcessSandbox 执行。
+> 2026-09-20 追记（GR-12-003）：原表与签名停留在 5 工具 / 4 参数版本，按 `internal/tool/builtin/memory_tools.go` 现状订正为 8 工具并补齐注册入参。
+
+所有 8 个工具 `SandboxTier = SandboxInProcess`、`RiskLevel = RiskLow`，经 PolicyGate 五阶段后在 InProcessSandbox 执行。
 
 ### 5-bis.3 注册路径
 
 ```
 boot_tools.go（或 boot_agent.go）
-  └─ builtin.RegisterMemoryTools(sbx, toolReg, semanticWriter, retriever)
+  └─ builtin.RegisterMemoryTools(sbx, toolReg, exclusiveWriter, semanticWriter, retriever, reflection, coreMemory)
         ├─ sbx.Register(tool.Name, fn)         // InProcessSandbox 执行函数
         └─ toolReg.Register(tool)              // InMemoryToolRegistry 工具元数据
 ```
 
 - `semanticWriter`：`SemanticMemWriter` 接口，实现方为 `internal/memory/store/semantic_mem.go`
 - `retriever`：`protocol.HybridRetriever` 接口，实现方为 `internal/memory/retrieval/retriever.go`
+- `exclusiveWriter`：`retrieval.ExclusiveWriter`，写工具的串行化入口
+- `reflection`：`protocol.ReflectionMemory`（`memory_reflect`）；`coreMemory`：`protocol.CoreMemory`（`memory_page_out/in`）
 - 工具元数据**内联构造**（不走 `tool.LoadBuiltinToolMeta` embed FS），防止 `builtin/<name>/` 目录缺失时静默跳过。
 
 ### 5-bis.4 与被动写路径的关系

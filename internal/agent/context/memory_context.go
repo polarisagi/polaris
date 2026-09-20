@@ -102,7 +102,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 		if len(events) > 0 {
 			retrieved.WriteString("Relevant Historical Episodic Memories:\n")
 			for _, e := range events {
-				if pbEv, _ := e.Event.(*types.Event); pbEv != nil {
+				if pbEv := e.EventPtr(); pbEv != nil {
 					fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
 				}
 			}
@@ -212,15 +212,11 @@ func BuildPlanContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cata catalog.Catalog, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
+	// 系统指令区只放进程内常量（TaintNone）。TaskModel 由 LLM 从外部意图解析而来、
+	// GroundingGap 来自外部知识评估，二者都属数据而非指令：此前拼进 sysPrompt 并以
+	// TaintNone 写入 ZoneImmutable，等于把外部可控文本提权为系统指令（GR-4.1-003）。
 	var sysPrompt strings.Builder
-	sysPrompt.WriteString("Generate an execution DAG based on the fsm.TaskModel.\n\n")
-	if sCtx.TaskModel != nil {
-		taskJson, _ := json.Marshal(sCtx.TaskModel)
-		sysPrompt.WriteString("<task_model>\n" + string(taskJson) + "\n</task_model>\n\n")
-	}
-	if sCtx.GroundingGap != "" {
-		sysPrompt.WriteString("<grounding_gap source=\"untrusted\">\n" + sCtx.GroundingGap + "\n</grounding_gap>\n(Please address this gap explicitly in the plan.)\n\n")
-	}
+	sysPrompt.WriteString("Generate an execution DAG based on the fsm.TaskModel provided in the user data section.\n\n")
 	if hint := contextPressureHint(sCtx); hint != "" {
 		sysPrompt.WriteString(hint + "\n\n")
 	}
@@ -231,6 +227,21 @@ func BuildPlanContext( //nolint:gocyclo
 		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext: sanitize instr", err)
 	}
 	b.WriteInstruction(safe)
+
+	if sCtx.TaskModel != nil {
+		taskJSON, _ := json.Marshal(sCtx.TaskModel)
+		b.WriteUserData(taint.NewTaintedString(
+			"<task_model>\n"+string(taskJSON)+"\n</task_model>",
+			taint.TaintSource{Module: "task_model", OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
+			"m4_task_model"))
+	}
+	if sCtx.GroundingGap != "" {
+		b.WriteUserData(taint.NewTaintedString(
+			"<grounding_gap>\n"+sCtx.GroundingGap+"\n</grounding_gap>\n(Address this gap explicitly in the plan.)",
+			// 世界模型对外部知识的评估：至少 TaintHigh，且不低于会话已累积污点（L-03：禁止常量）
+			taint.TaintSource{Module: "world_model", OriginTaintLevel: types.PropagateTaint(types.TaintHigh, sCtx.GlobalTaintLevel)},
+			"grounding_gap"))
+	}
 
 	// S-02：已安装扩展自述信息来源不可信，单独进入 ZoneExternalCatalog。
 	if sCtx.InstalledExtensionsInfo != "" {
@@ -284,7 +295,7 @@ func BuildPlanContext( //nolint:gocyclo
 	if len(events) > 0 {
 		retrieved.WriteString("Historical execution experiences for reference:\n")
 		for _, e := range events {
-			if pbEv, _ := e.Event.(*types.Event); pbEv != nil {
+			if pbEv := e.EventPtr(); pbEv != nil {
 				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
 			}
 		}

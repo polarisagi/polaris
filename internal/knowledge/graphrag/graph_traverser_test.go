@@ -51,6 +51,8 @@ func setupTraverserTestDB(t *testing.T) *sql.DB {
 			content TEXT,
 			taint_level INTEGER DEFAULT 0,
 			taint_source TEXT,
+			taint_hmac TEXT,
+			source_uri TEXT,
 			deleted_at INTEGER
 		);
 	`)

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -19,9 +20,9 @@ func TestWriteToolHints_EmptySkipped(t *testing.T) {
 	}
 }
 
-// TestWriteToolHints_WritesToImmutableZone 验证非空 hint 内容进入 ZoneImmutable
-// （2026-07-12 unwired-code-audit 补齐：PolicyEvolver 读侧此前完全无处可写）。
-func TestWriteToolHints_WritesToImmutableZone(t *testing.T) {
+// TestWriteToolHints_WritesToMutableSkillZone 验证非空 hint 进入 ZoneMutableSkill
+// （GR-6.1-010），且在 Build 顺序中位于 ZoneCoreMemory 之后。
+func TestWriteToolHints_WritesToMutableSkillZone(t *testing.T) {
 	b := NewPromptBuilder()
 	hint := "<tool-hints>\n  <tool name=\"boom\">FailureWarning: ...</tool>\n</tool-hints>"
 	b.WriteToolHints(hint)
@@ -34,6 +35,9 @@ func TestWriteToolHints_WritesToImmutableZone(t *testing.T) {
 	}
 	if msgs[0].Content != hint {
 		t.Fatalf("Content 不符预期: %q", msgs[0].Content)
+	}
+	if len(b.zones[protocol.ZoneMutableSkill]) != 1 || len(b.zones[protocol.ZoneImmutable]) != 0 {
+		t.Fatalf("hint 应只写入 ZoneMutableSkill")
 	}
 }
 

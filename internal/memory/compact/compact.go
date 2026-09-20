@@ -86,6 +86,20 @@ func RoughTokens(msgs []types.Message) int {
 	return total
 }
 
+// SplitPinnedHead 切出消息序列开头连续的 system 消息作为固定前缀（GD-14-001）。
+//
+// 压缩只作用于其后的对话历史：system 前缀（内核指令、ZoneImmutable 安全规约、
+// 工具定义）若被卷进 LLM 摘要，会 (1) 以 assistant 摘要的形式降级、弱化模型对
+// 安全规约与输出契约的遵循；(2) 每次压缩都改变前缀字节，Provider 侧 Prompt
+// Caching 命中率归零。固定前缀原样保留在压缩结果最前面。
+func SplitPinnedHead(msgs []types.Message) (head, rest []types.Message) {
+	i := 0
+	for i < len(msgs) && msgs[i].Role == "system" {
+		i++
+	}
+	return msgs[:i], msgs[i:]
+}
+
 // SplitMessages 从尾部向前积累，返回 (middle, tail）。
 // tail 保留约 tailTokens 个 token 的原始消息；middle 为其余部分（待压缩）。
 func SplitMessages(msgs []types.Message, tailTokens int) (middle, tail []types.Message) {

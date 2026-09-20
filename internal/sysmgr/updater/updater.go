@@ -67,6 +67,8 @@ type Manager struct {
 	restartFn    func()
 	executableFn func() (string, error)
 	exitFn       func(int)
+	// startScriptFn 启动 Windows 更新脚本（可注入，测试环境无 cmd.exe）
+	startScriptFn func(string) error
 
 	// releaseKeys 本 Manager 使用的发布签名信任根，New 时从内嵌公钥集快照。
 	// 做成字段而非直接读全局，是为了让"签名已开通"这条 fail-closed 路径可测——

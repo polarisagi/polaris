@@ -91,20 +91,20 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 	eventIDs := make([]string, 0, len(events))
 	for _, se := range events {
 		eventIDs = append(eventIDs, (func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).ID)
 		sb.WriteString(string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).Type))
 		sb.WriteString(": ")
 		sb.WriteString(string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}

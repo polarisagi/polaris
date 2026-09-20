@@ -58,8 +58,10 @@ func safePromptName(name string) error {
 	if filepath.IsAbs(name) {
 		return apperr.New(apperr.CodeInvalidInput, "prompt name must be relative")
 	}
-	clean := filepath.Clean(name)
-	if clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+	// GR-6.1-007：原实现手工匹配 "../"，Windows 下 Clean 产出 "..\\x" 可绕过。
+	// filepath.IsLocal 按宿主 OS 语义判定（含 Windows 盘符/保留设备名），
+	// 是标准库对"不逃逸出基目录的相对路径"的权威定义。
+	if !filepath.IsLocal(name) {
 		return apperr.New(apperr.CodeInvalidInput, "prompt name contains path traversal")
 	}
 	return nil
@@ -139,11 +141,13 @@ func (pm *Manager) WriteUserPrompt(name, content string) error {
 	if err := safePromptName(name); err != nil {
 		return err
 	}
-	dir := filepath.Join(pm.resolveConfigDir(), "prompts")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	// GR-6.1-008：name 可含子目录（如 "agents/coder.md"，embedded 默认提示词即按
+	// 子目录组织），必须建目标文件的父目录而不是只建 prompts/ 根。
+	path := filepath.Join(pm.resolveConfigDir(), "prompts", name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WriteUserPrompt", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "WriteUserPrompt: 写入文件失败", err)
 	}
 	return nil

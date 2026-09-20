@@ -217,7 +217,8 @@ func (gps *GeneticPromptSearch) GetParetoFront() []*PromptVersion {
 	return gps.paretoFront
 }
 
-// OptimizeTask 为 prompt.Manager 等解耦接口提供的入口，等价于 Optimize(ctx, taskType, nil)。
+// OptimizeTask 为 prompt.Manager 等解耦接口提供的入口，等价于 Optimize(ctx, taskType, nil)；
+// recent 为空时 Optimize 自行以 DB 近期版本为样本（GR-7.1-003）。
 func (po *PromptOptimizer) OptimizeTask(ctx context.Context, taskType string) error {
 	po.Optimize(ctx, taskType, nil)
 	return nil
@@ -232,8 +233,19 @@ func (po *PromptOptimizer) OptimizeTask(ctx context.Context, taskType string) er
 //
 // 产出经 [Taint-Prop] Gate → Ed25519 签名 → M5 ZoneMutableSkill（由调用方负责）。
 func (po *PromptOptimizer) Optimize(ctx context.Context, taskType string, recent []*PromptVersion) []*PromptVersion { //nolint:gocyclo
+	// 冷启动：从 DB 恢复历史版本（HE-Rule-6）。
+	// GR-7.1-003：外部入口 OptimizeTask（prompt.Manager.Optimize）不持有近期
+	// 版本、只能传 nil，原实现入口 len(recent)==0 直接 return，整条优化管线对
+	// 该入口恒空转。改为：调用方未提供 recent 时以 DB 近期版本充当 recent，
+	// 使对比分析/文本梯度仍有样本可用；两者都为空才真正无事可做。
+	var hist []*PromptVersion
+	if po.versionStore != nil {
+		if h, err := po.versionStore.ListRecent(ctx, taskType, 5); err == nil {
+			hist = h
+		}
+	}
 	if len(recent) == 0 {
-		return nil
+		recent, hist = hist, nil // 避免同一批版本在候选中出现两次
 	}
 
 	// 步骤 1 — MemAPO：从 PromptMemory 检索历史高分策略
@@ -248,13 +260,11 @@ func (po *PromptOptimizer) Optimize(ctx context.Context, taskType string, recent
 			})
 		}
 	}
-	// 冷启动：从 DB 恢复历史版本（HE-Rule-6）
-	if po.versionStore != nil {
-		if hist, err := po.versionStore.ListRecent(ctx, taskType, 5); err == nil {
-			candidates = append(candidates, hist...)
-		}
-	}
+	candidates = append(candidates, hist...)
 	candidates = append(candidates, recent...)
+	if len(candidates) == 0 {
+		return nil
+	}
 
 	// 步骤 2 — ContraPrompt：提取 AvoidRules 注入候选 prompt
 	var avoidRules []string

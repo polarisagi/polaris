@@ -226,9 +226,16 @@ func (a *ExtensionActivator) activateMCP(ctx context.Context, extID, runtimeID, 
 		return nil, nil // 连接失败不中断，跳过此扩展
 	}
 
+	// GR-8-005：沙箱内注册的工具名是 mcp__<server>__<tool>，只给 "mcp__<server>"
+	// 前缀会让 LLM 直接以前缀发起调用而找不到工具。连接成功后取该 server 已发现
+	// 的真实工具名；工具列表尚未就绪时退化为给出命名格式，由 LLM 经 search_tools 补全。
+	toolName := strings.Join(a.mcpMgr.ServerToolNames(runtimeID), ", ")
+	if toolName == "" {
+		toolName = "mcp__" + runtimeID + "__<tool>"
+	}
 	return &ActivatedToolHint{
 		ExtensionID: extID,
-		ToolName:    "mcp__" + runtimeID, // 与 MCPToolName 前缀对齐
+		ToolName:    toolName,
 		Description: snippet,
 	}, nil
 }

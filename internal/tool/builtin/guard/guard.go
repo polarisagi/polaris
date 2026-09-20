@@ -32,7 +32,7 @@ func CheckForbiddenPath(path string) error {
 
 	for _, f := range forbidden {
 		if cleanPath == f || strings.HasPrefix(cleanPath, f+string(filepath.Separator)) {
-			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("write_file: path is in forbidden directory: %s", path))
+			return apperr.New(apperr.CodeForbidden, fmt.Sprintf("path_guard: path is in forbidden directory: %s", path))
 		}
 	}
 	return nil
@@ -51,6 +51,59 @@ func CheckAllowedPath(path string, allowedPaths []string) error {
 	}
 	return apperr.New(apperr.CodeForbidden, fmt.Sprintf("path_guard: path %q not in allowed paths", path))
 
+}
+
+// CheckWritablePath 写入类工具的统一路径门控：白名单归属 + 敏感目录黑名单，二者缺一不可
+// （GR-5.2-003：此前仅 write_file 同时校验，str_replace_editor/multi_edit/notebook_edit
+// 只查白名单，allowedPaths 覆盖 $HOME 时可直接改写 ~/.ssh/authorized_keys 等）。
+// 已存在路径（或其最近已存在祖先）按符号链接解析后的真实路径再校验一次，
+// 防止白名单内的软链指向敏感目录。
+func CheckWritablePath(path string, allowedPaths []string) error {
+	if err := CheckAllowedPath(path, allowedPaths); err != nil {
+		return err
+	}
+	if err := CheckForbiddenPath(path); err != nil {
+		return err
+	}
+	if real, ok := resolveExistingPrefix(path); ok && real != filepath.Clean(path) {
+		if err := CheckAllowedPath(real, resolveAll(allowedPaths)); err != nil {
+			return apperr.Wrap(apperr.CodeForbidden, "path_guard: symlink escapes allowed paths", err)
+		}
+		if err := CheckForbiddenPath(real); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveExistingPrefix 对路径中已存在的最长前缀做 EvalSymlinks，再拼回尚不存在的尾部。
+func resolveExistingPrefix(path string) (string, bool) {
+	clean := filepath.Clean(path)
+	rest := ""
+	cur := clean
+	for {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, rest), true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+
+func resolveAll(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if real, ok := resolveExistingPrefix(p); ok {
+			out = append(out, real)
+		} else {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func IsPathAllowed(path string, allowedPaths []string) bool {

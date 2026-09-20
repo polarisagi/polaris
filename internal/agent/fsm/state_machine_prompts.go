@@ -124,16 +124,21 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 	// S-02：模板不再承载 ToolsSection/ExtensionsSection 占位符。
 	tmpl, _ := configs.LoadPromptTemplate("kernel/plan.md", nil)
 
-	if groundingGap != "" {
-		tmpl += "\n\nCritical Knowledge Gap:\n" + groundingGap + "\n(Please address this gap explicitly in the plan.)"
-	}
-
 	safeInst, _ := taint.SanitizeToSafe(taint.NewTaintedString(
 		tmpl,
 		taint.TaintSource{OriginTaintLevel: types.TaintNone},
 		"system_prompt",
 	))
 	b.WriteInstruction(safeInst)
+
+	// GroundingGap 来自世界模型对外部知识的评估，属不可信数据：进 ZoneUserData 围栏，
+	// 禁止拼进 TaintNone 的系统模板（GR-4.1-003，特权区注入）。
+	if groundingGap != "" {
+		b.WriteUserData(taint.NewTaintedString(
+			"Critical Knowledge Gap (address it explicitly in the plan):\n"+groundingGap,
+			taint.TaintSource{Module: "world_model", OriginTaintLevel: types.TaintHigh},
+			"grounding_gap"))
+	}
 
 	// S-02：外部工具/扩展目录（第三方来源，禁止混入 ZoneImmutable）。拆成独立方法
 	// 以控制 promptPlan 圈复杂度（R7/gocyclo）。
@@ -295,7 +300,9 @@ func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte
 				Payload:   []byte(`{"learning":` + fmt.Sprintf("%q", learning) + `}`),
 				CreatedAt: time.Now(),
 			}
-			if err := sCtx.Mem.AppendEpisodicEvent(ctx, event, types.TaintNone); err != nil {
+			// learning 是 LLM 反思产出：至少 TaintMedium（LLM 输出硬地板），并继承会话累计污点（GR-4.1-002）。
+			learnTaint := types.PropagateTaint(types.TaintMedium, sCtx.MaxTaintLevel)
+			if err := sCtx.Mem.AppendEpisodicEvent(ctx, event, learnTaint); err != nil {
 				slog.Warn("reflect: failed to write learning to episodic memory",
 					"session_id", sCtx.SessionID, "err", err)
 			}

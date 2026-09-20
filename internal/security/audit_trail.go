@@ -44,6 +44,10 @@ type AuditTrail struct {
 	epochStartHash string
 	archiveDir     string
 	repo           protocol.AuditRepository
+
+	// epochBytes 当前 epoch 已追加记录的序列化字节数（GR-2.1-005）：轮转由 Record 自驱动，
+	// 不再依赖从未有人提供的外部体积 gauge——否则 records 常驻内存无上界。
+	epochBytes int64
 }
 
 // NewAuditTrail 创建审计轨迹，archiveDir 为归档路径（e.g. ~/.polarisagi/polaris/audit/archive/）。
@@ -130,11 +134,17 @@ func (at *AuditTrail) Record(record *AuditRecord) error {
 
 	at.records = append(at.records, record)
 	at.lastHash = record.RecordHash
+	at.epochBytes += int64(len(data))
+	if at.epochBytes >= epochSizeLimitMB<<20 {
+		at.rotateLocked()
+	}
 	return nil
 }
 
 // RotateIfNeeded 当估算体积达到 100MB 时执行 Epoch 轮转。
 // currentSizeMB 由调用方传入（来自 M3 监控的 gauge）。
+//
+// 生产路径由 Record 按 epochBytes 自动触发；本方法保留给需要强制轮转的调用方（及测试）。
 func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 	if currentSizeMB < epochSizeLimitMB {
 		return nil
@@ -142,6 +152,12 @@ func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 
 	at.mu.Lock()
 	defer at.mu.Unlock()
+	at.rotateLocked()
+	return nil
+}
+
+// rotateLocked 封存当前 epoch 并开启新 epoch（须持有 at.mu）。
+func (at *AuditTrail) rotateLocked() {
 
 	// 追加 epoch_end 标记记录，封存当前 epoch
 	epochEnd := &AuditRecord{
@@ -217,8 +233,7 @@ func (at *AuditTrail) RotateIfNeeded(currentSizeMB int) error {
 
 	at.records = []*AuditRecord{epochStart}
 	at.lastHash = epochStart.RecordHash
-
-	return nil
+	at.epochBytes = int64(len(startData))
 }
 
 // RecoverOnStartup 扫描归档目录，校验跨 Epoch hash 链连续性，并从 DB 恢复尾部状态。

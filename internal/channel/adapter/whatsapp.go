@@ -53,8 +53,7 @@ func (a *WhatsappAdapter) Send(ctx context.Context, host Host, cfg map[string]an
 	phoneNumberID, _ := cfg["phone_number_id"].(string)
 	accessToken, _ := cfg["access_token"].(string)
 	if phoneNumberID == "" || accessToken == "" {
-		slog.Warn("whatsapp: phone_number_id or access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "whatsapp: phone_number_id or access_token missing")
 	}
 	if err := WhatsappSendMessage(ctx, host.HTTPClient(), phoneNumberID, accessToken, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "whatsapp", "err", err)

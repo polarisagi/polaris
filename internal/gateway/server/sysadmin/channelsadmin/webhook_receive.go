@@ -3,6 +3,7 @@ package channelsadmin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,6 +49,9 @@ func (h *ChannelsAdmin) HandleWebhookReceive(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.verifyWebhookSource(w, r, channelType, cfg, body); err != nil {
+		if errors.Is(err, ErrHandshakeHandled) {
+			return // 握手响应已写出
+		}
 		slog.Warn("webhook verification failed", "channel", channelID, "err", err)
 		httputil.RespondError(w, "", err, apperr.HTTPStatus(apperr.CodeOf(err)))
 		return
@@ -122,7 +126,7 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		p = h.Registry.PickProvider("general")
 	}
 	if p == nil {
-		slog.Warn("channel dispatch: no provider available", "channel", channelID, "err", apperr.New(apperr.CodeInternal, "log event"))
+		slog.Warn("channel dispatch: no provider available", "channel", channelID)
 		return
 	}
 

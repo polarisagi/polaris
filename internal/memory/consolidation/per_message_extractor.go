@@ -57,7 +57,7 @@ func (pe *PerMessageExtractor) HandleOutboxRecord(ctx context.Context, payload [
 	// 构造单条 ScoredEvent
 	events := []types.ScoredEvent{
 		{
-			Event: types.Event{
+			Event: &types.Event{
 				Type:    types.EventType(msg.EventType),
 				Payload: []byte(msg.Content),
 			},

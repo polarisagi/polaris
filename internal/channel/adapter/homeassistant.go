@@ -92,6 +92,7 @@ func haConnect(ctx context.Context, host PollerHost, channelID, haURL, haToken s
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("ha: dial: %v", err), err)
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	var msgID atomic.Int64
 	nextID := func() int64 { return msgID.Add(1) }
@@ -262,8 +263,7 @@ func (a *HomeAssistantAdapter) Send(ctx context.Context, host Host, cfg map[stri
 	haURL, _ := cfg["url"].(string)
 	haToken, _ := cfg["token"].(string)
 	if haURL == "" || haToken == "" {
-		slog.Warn("homeassistant: url or token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "homeassistant: url or token missing")
 	}
 	if err := HaSendPersistentNotification(ctx, host.HTTPClient(), haURL, haToken, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "homeassistant", "err", err)

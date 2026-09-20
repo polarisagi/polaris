@@ -1,0 +1,12 @@
+// 负向样例（L-11c apperr_semantics_check）：伪造 "log event" 错误充当日志属性。
+package sandbox
+
+import (
+	"log/slog"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
+)
+
+func selftestLogEvent() {
+	slog.Warn("config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
+}

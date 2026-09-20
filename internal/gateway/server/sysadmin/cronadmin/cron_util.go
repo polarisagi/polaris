@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/polarisagi/polaris/pkg/apperr"
-
 	"github.com/polarisagi/polaris/configs"
 
 	"gopkg.in/yaml.v3"
@@ -324,7 +322,7 @@ func (ca *CronAdmin) fetchRemoteTemplates(src automationSource) []automationTemp
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Warn("automation-templates: remote returned non-200", "id", src.ID, "status", resp.StatusCode, "err", apperr.New(apperr.CodeInternal, "log event"))
+		slog.Warn("automation-templates: remote returned non-200", "id", src.ID, "status", resp.StatusCode)
 		return nil
 	}
 

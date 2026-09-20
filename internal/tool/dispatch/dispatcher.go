@@ -108,7 +108,10 @@ func (d *Dispatcher) route(ctx context.Context, entry protocol.CatalogEntry, arg
 			// 拒绝时原样上抛 CodeForbidden，此前恒被 CodeInternal 覆盖成 500。
 			return nil, apperr.Wrap(apperr.CodeOf(err), "dispatch: execute skill "+entry.SkillName, err)
 		}
-		return &types.ToolResult{Success: true, Output: output, TaintLevel: entry.TaintLevel}, nil
+		// 输出污点 = max(入参污点, 技能来源信任等级对应的输出污点)（GR-5.2-004）：此分支不经
+		// ExecuteTool 的 only-up 传播，原样回传入参污点会把社区/本地技能输出漂白成调用方等级。
+		outTaint := types.PropagateTaint(entry.TaintLevel, types.TaintLevel(entry.TrustTier.TaintLevel()))
+		return &types.ToolResult{Success: true, Output: output, TaintLevel: outTaint}, nil
 	}
 
 	if d.toolReg == nil {

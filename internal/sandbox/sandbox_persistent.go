@@ -212,9 +212,28 @@ func (p *PersistentSandbox) getOrCreateSession(ctx context.Context, spec Sandbox
 	}
 	sess.touch()
 
+	// GR-6.1-005：spawn 在锁外，同 SessionID 并发首调会各自 spawn；原实现无条件覆盖 map，
+	// 被覆盖进程永不回收。重新加锁二次校验：复用已有存活会话并杀掉多余进程，否则替换旧会话；容量同步复检。
+	var surplus *liveSession
 	p.mu.Lock()
+	if existing, ok := p.sessions[spec.SessionID]; ok {
+		if existing.language == spec.Language && existing.alive() {
+			p.mu.Unlock()
+			sess.kill()
+			existing.touch()
+			return existing, nil
+		}
+		delete(p.sessions, spec.SessionID)
+		surplus = existing
+	}
+	if len(p.sessions) >= p.cfg.MaxSessions {
+		p.evictOldestLocked()
+	}
 	p.sessions[spec.SessionID] = sess
 	p.mu.Unlock()
+	if surplus != nil {
+		surplus.kill()
+	}
 	return sess, nil
 }
 

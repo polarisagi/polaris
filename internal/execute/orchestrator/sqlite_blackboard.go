@@ -267,7 +267,7 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 	}
 	if rows == 0 {
 		// 可能已是 running（幂等）或未认领（错误），见 startExecutionIdempotentCheck。
-		return bb.startExecutionIdempotentCheck(ctx, tx, taskID)
+		return bb.startExecutionIdempotentCheck(ctx, tx, taskID, agentID)
 	}
 	if err := bb.writeTaskEvent(ctx, tx, "agent:"+agentID, "task_running", taskID); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.StartExecution: write event", err)
@@ -291,9 +291,14 @@ func (bb *SQLiteBlackboard) StartExecution(ctx context.Context, taskID, agentID 
 // L3：读取失败时 status 保持零值 ""，与"未认领"分支走同一 ErrTaskNotOwned
 // 出口——语义上安全（不会误判为已 running），但需要计数以便区分"真的未
 // 认领"与"读取本身失败"两种情况，避免误判被长期掩盖。
-func (bb *SQLiteBlackboard) startExecutionIdempotentCheck(ctx context.Context, tx *sql.Tx, taskID string) error {
+//
+// GR-6.2-003：幂等成立的前提是"running 且持有者就是调用方"。原实现只看
+// status，任意其他 agent 对别人正在执行的任务调 StartExecution 都会得到
+// nil，误以为自己拿到了执行权。
+func (bb *SQLiteBlackboard) startExecutionIdempotentCheck(ctx context.Context, tx *sql.Tx, taskID, agentID string) error {
 	var status string
-	if scanErr := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE task_id=?", taskID).Scan(&status); scanErr != nil {
+	var claimedBy sql.NullString
+	if scanErr := tx.QueryRowContext(ctx, "SELECT status, claimed_by FROM tasks WHERE task_id=?", taskID).Scan(&status, &claimedBy); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			slog.DebugContext(ctx, "blackboard: start-execution status readback found no row (task deleted concurrently)", "task_id", taskID)
 		} else {
@@ -301,7 +306,7 @@ func (bb *SQLiteBlackboard) startExecutionIdempotentCheck(ctx context.Context, t
 		}
 		metrics.RecordBlackboardScanError(ctx, "start_execution_status_readback")
 	}
-	if status != statusRunning {
+	if status != statusRunning || !claimedBy.Valid || claimedBy.String != agentID {
 		return ErrTaskNotOwned
 	}
 	// already-running 幂等路径：不写事件，直接 Rollback 返回 nil

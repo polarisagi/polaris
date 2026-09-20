@@ -64,6 +64,9 @@ patch | L-09 | tools/lifecycle_reset_lint.go | internal/learning/engine.go | e.v
 # 负向用例必须注入**仓库里真实存在的写法**，否则它验证的是判据的舒适区。
 patch | L-10 | tools/bounded_cache_check.go | internal/extension/mcp/mcp_client_stdio.go | scanner.Buffer(make([]byte, 4096), mcpStdioMaxScanBytes) | scanner.Buffer(make([]byte, 4096), 16*1024*1024)
 add | L-11 | tools/apperr_semantics_check.go | internal/zz_selftest_apperr.go | tools/testdata/selftest/L11_apperr.go.txt
+add | L-11b | tools/apperr_semantics_check.go | internal/tool/sandbox/zz_selftest_codeok.go | tools/testdata/selftest/L11b_apperr_codeok.go.txt
+add | L-11c | tools/apperr_semantics_check.go | internal/tool/sandbox/zz_selftest_logevent.go | tools/testdata/selftest/L11c_apperr_log_event.go.txt
+add | L-11d | tools/apperr_semantics_check.go | internal/tool/sandbox/zz_selftest_codesentinel.go | tools/testdata/selftest/L11d_apperr_code_sentinel.go.txt
 add | L-12 | tools/regex_greedy_check.go | internal/zz_selftest_regex.go | tools/testdata/selftest/L12_regex.go.txt
 add | L-13 | tools/wiring_reachability_check.go | internal/zzselftestorphan/orphan.go | tools/testdata/selftest/L13_orphan_pkg.go.txt
 patch | L-03 | tools/taint_typed_fields_check.go | internal/knowledge/rag_retrieval.go | if c.TaintLevel > req.TaintMax { | if c.TaintLevel > 99 {

@@ -27,6 +27,12 @@ func NewSQLiteEvalStore(store protocol.Store, engine *control.Engine) *SQLiteEva
 	return &SQLiteEvalStore{store: store, engine: engine}
 }
 
+// 分区读取语义（GR-10.1-002）：key 中的 {agentRole} 段是**写入来源**（red_team /
+// incident / benchmark_loader / auto_gen …），而读取方 agentRole 是经 VerifyRequest/
+// CheckAccess 授权的**读者角色**（如 m9_optimizer）。两者不是同一命名空间，原实现
+// 用读者角色拼前缀，所有来源写入的用例都读不到、套件恒空。访问控制按分区粒度
+// 在上面两步完成，扫描范围即整个分区。
+
 // GetTrainingCases 获取用于训练和优化的评测用例 (Training Set)。
 func (s *SQLiteEvalStore) GetTrainingCases(ctx context.Context, agentRole string, signature []byte) ([]any, error) {
 	if err := s.engine.VerifyRequest(agentRole, control.PartitionTraining, signature, time.Now().Unix()); err != nil {
@@ -35,7 +41,7 @@ func (s *SQLiteEvalStore) GetTrainingCases(ctx context.Context, agentRole string
 	if err := s.engine.CheckAccess(agentRole, control.PartitionTraining); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetTrainingCases", err)
 	}
-	return s.scanCasesByPrefix(ctx, "eval:case:training:"+agentRole+":")
+	return s.scanCasesByPrefix(ctx, "eval:case:training:")
 }
 
 // GetValidationCases 获取用于泛化验证的评测用例 (Holdout Set)。
@@ -46,7 +52,7 @@ func (s *SQLiteEvalStore) GetValidationCases(ctx context.Context, agentRole stri
 	if err := s.engine.CheckAccess(agentRole, control.PartitionValidation); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetValidationCases", err)
 	}
-	return s.scanCasesByPrefix(ctx, "eval:case:validation:"+agentRole+":")
+	return s.scanCasesByPrefix(ctx, "eval:case:validation:")
 }
 
 // GetMetaHoldoutCases 获取 V8-S2 Meta-Eval Sentinel 专属分区的评测用例。
@@ -63,6 +69,8 @@ func (s *SQLiteEvalStore) GetMetaHoldoutCases(ctx context.Context, agentRole str
 	if err := s.engine.CheckAccess(agentRole, control.PartitionMetaHoldout); err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteEvalStore.GetMetaHoldoutCases", err)
 	}
+	// meta_holdout 的写入方恒为 RoleMetaAuditor（PutMetaHoldoutCase），读写同一角色，
+	// 保留按角色收窄前缀——额外隔离一层，防止其他来源误写入本分区后被 Sentinel 读到。
 	return s.scanCasesByPrefix(ctx, "eval:case:meta_holdout:"+agentRole+":")
 }
 
@@ -115,6 +123,9 @@ func (s *SQLiteEvalStore) scanCasesByPrefix(ctx context.Context, prefix string) 
 		if err := json.Unmarshal(iter.Value(), &c); err == nil {
 			cases = append(cases, c)
 		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteEvalStore.scanCasesByPrefix", err)
 	}
 	return cases, nil
 }
@@ -171,6 +182,9 @@ func (s *SQLiteEvalStore) GetPassRateAvgSince(ctx context.Context, since time.Ti
 				count++
 			}
 		}
+	}
+	if err := iter.Err(); err != nil {
+		return 0, apperr.Wrap(apperr.CodeStorageUnavailable, "SQLiteEvalStore.recentPassRate iterate", err)
 	}
 	if count == 0 {
 		return 0, nil
