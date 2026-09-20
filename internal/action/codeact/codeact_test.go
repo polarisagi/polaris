@@ -338,8 +338,8 @@ func TestExecute_SandboxLevelTooLow(t *testing.T) {
 	if err := run(1); err == nil || !strings.Contains(err.Error(), "L3/Container required") {
 		t.Errorf("tier1 without container: expected L3 refusal, got %v", err)
 	}
-	if err := run(0); err == nil || !strings.Contains(err.Error(), "SANDBOX_TIER0_LIMIT") {
-		t.Errorf("tier0: expected Tier0 limit, got %v", err)
+	if err := run(0); err == nil || !strings.Contains(err.Error(), "NativeOS required") {
+		t.Errorf("tier0: expected NativeOS required, got %v", err)
 	}
 	if wasm.calls != 0 {
 		t.Errorf("CodeAct must never reach the Wasm backend, got %d calls", wasm.calls)
