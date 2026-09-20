@@ -7,6 +7,7 @@ sandbox: in-process
 side_effects:
   - process-spawn
   - file-write
+  - network-call
 tags:
   - video
   - analysis

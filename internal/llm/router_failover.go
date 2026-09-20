@@ -5,11 +5,14 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/polarisagi/polaris/internal/observability/trace"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/pb"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // ============================================================================
@@ -47,7 +50,7 @@ func (ir *InferenceRouter) Capabilities() types.ProviderCapabilities {
 }
 
 func (ir *InferenceRouter) Tokenizer() protocol.TokenizerAdapter {
-	entry := ir.registry.best(nil)
+	entry := ir.registry.peekBest(nil)
 	if entry == nil {
 		return &SimpleTokenizer{}
 	}
@@ -180,29 +183,26 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 		protocol.ErrAllProvidersFailed)
 }
 
+// 与 provider_registry 其余择优同走 selectBest：双熔断（cb + winBreaker）一致生效（GR-2.2-002，
+// 此前漏检 winBreaker），且候选过滤不再占用 HalfOpen 探测权。
 func (ir *InferenceRouter) findBestProviderLockedMultiSkip(req *types.InferRequest, skipped map[string]struct{}) *providerEntry {
-	bestScore := -1.0
-	var chosen *providerEntry
-	for name, e := range ir.registry.entries {
-		if _, skip := skipped[name]; skip || !e.cb.Allow() {
-			continue
+	chosen := selectBest(ir.registry.entries, func(name string, e *providerEntry) bool {
+		if _, skip := skipped[name]; skip {
+			return false
 		}
 		if req != nil {
 			caps := e.provider.Capabilities()
 			if (req.HasImageParts() && !caps.SupportsVision) || (req.HasVideoParts() && !caps.SupportsVideo) {
-				continue
+				return false
 			}
 			// ModelPool 非空时严格按 role 过滤：只考虑 role 与 ModelPool 完全匹配的 Provider。
 			// "general" 不会自动透传到其他 Pool 的搜索结果；跨 Pool 降级由 tryPoolFallback 显式处理（GD-13-005）。
 			if req.ModelPool != "" && e.role != req.ModelPool {
-				continue
+				return false
 			}
 		}
-		if s := e.healthScore(); s > bestScore {
-			bestScore = s
-			chosen = e
-		}
-	}
+		return true
+	}, true)
 	return chosen
 }
 
@@ -217,9 +217,38 @@ func (ir *InferenceRouter) recordFailoverMetrics(ctx context.Context, chosen *pr
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
 		costUSD,
 	)
-	// 2026-07-08 移除 eventWriter 写事件分支，理由同 router.go Infer() 的对应
-	// 注释：protocol.EventWriter 零实现、恒不可达，观测已由上面的 trace.RecordLLMCall
-	// 覆盖。详见 local_playground/reports/phase4-hard-dep-and-deadcode-followup-20260708.md。
+
+	if ir.eventLogger != nil {
+		payload := &pb.LLMCallPayload{
+			Model:          resp.Model,
+			Provider:       chosen.name,
+			InputTokens:    int32(resp.Usage.InputTokens),
+			OutputTokens:   int32(resp.Usage.OutputTokens),
+			CacheHitTokens: int32(resp.Usage.CacheHitTokens),
+			CostUsd:        costUSD,
+			LatencyMs:      int64(ms),
+			FinishReason:   resp.FinishReason,
+			RouteTier:      chosen.role,
+		}
+		b, err := proto.Marshal(payload)
+		if err == nil {
+			now := time.Now().UnixMicro()
+			evID := util.GenerateHumanReadableID("evt", "llm call recorded failover")
+			ev := &pb.Event{
+				Id:             evID,
+				Topic:          "llm.call.recorded",
+				Actor:          "router",
+				Type:           "llm_call",
+				IdempotencyKey: string(types.BuildIdempotencyKey("llm", "call_recorded", evID, "record", 0)),
+				OccurredAt:     now,
+				CreatedAt:      now,
+				Payload:        b,
+			}
+			if err := ir.eventLogger.AppendEvent(context.Background(), ev); err != nil {
+				slog.Error("router: failed to write llm_call event (failover)", "err", err)
+			}
+		}
+	}
 }
 
 // ClearBytes API Key 使用后原地清零（防止 heap dump 泄漏敏感数据）。

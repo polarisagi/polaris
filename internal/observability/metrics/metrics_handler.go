@@ -100,28 +100,12 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		surpriseStaleGauge, _ := meter.Float64ObservableGauge("polaris.surprise_index.stale")
 		surrealSizeGauge, _ := meter.Float64ObservableGauge("polaris.surrealdb.index_size_mb")
 		killswitchGauge, _ := meter.Float64ObservableGauge("polaris.killswitch.stage")
-		cedarDegradedGauge, _ := meter.Float64ObservableGauge("polaris.cedar.degraded_total")
-		cedarFFILeaksGauge, _ := meter.Float64ObservableGauge("polaris.cedar.ffi_leaks_total")
-		outboxDeadLetterGauge, _ := meter.Float64ObservableGauge("polaris.outbox.dead_letter_total")
-		factualityJudgeUnavailableGauge, _ := meter.Float64ObservableGauge("polaris.factuality.judge_unavailable_total")
-
-		// V8-S4: BlindZone 路由计数
-		blindZoneGauge, _ := meter.Float64ObservableGauge(
-			"polaris.blind_zone.routing_total",
-			metric.WithDescription("因 BlindZone 检测强制升级为 System2 的累计次数"),
-		)
 
 		// V8-S3: 创始锚点漂移评分
 		// 注意：若 policy 包导入形成循环，使用函数变量注入（见 §3.3 循环依赖处理）
 		anchorDriftGauge, _ := meter.Float64ObservableGauge(
 			"polaris.founding_anchor.drift_score",
 			metric.WithDescription("与创始行为锚点的综合漂移评分 [0,1]"),
-		)
-
-		// GR-4-005 复核修复：LLMFillEffect.SchemaRef 结构校验失败累计次数。
-		schemaValidationFailureGauge, _ := meter.Float64ObservableGauge(
-			"polaris.agent.schema_validation_failure_total",
-			metric.WithDescription("LLMFillEffect 响应未通过 SchemaRef 结构校验的累计次数"),
 		)
 
 		// PerformanceDrift（M03 §10.1，2026-07-21 deadcode 审查补齐 gauge 暴露，见 legacyMetricsHandler 同名注释）
@@ -134,51 +118,21 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			metric.WithDescription("Performance drift detector baseline pass rate"),
 		)
 
-		// [阶段02-错误吞没整改] 无 label Global* 累计计数器的 gauge 暴露
-		memorySupersedeFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.memory.supersede_failures_total",
-			metric.WithDescription("语义超越标记失败累计次数"),
-		)
-		memoryEvictEventLostGauge, _ := meter.Float64ObservableGauge(
-			"polaris.memory.evict_event_lost_total",
-			metric.WithDescription("工作记忆驱逐事件归档失败累计次数"),
-		)
-		memoryFTSIndexFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.memory.fts_index_failures_total",
-			metric.WithDescription("情景记忆 FTS 索引写入失败累计次数"),
-		)
-		memoryColdArchiveDetachFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.memory.cold_archive_detach_failures_total",
-			metric.WithDescription("EventArchiver DETACH DATABASE 失败累计次数"),
-		)
-		blackboardFailTaskErrorsGauge, _ := meter.Float64ObservableGauge(
-			"polaris.blackboard.fail_task_errors_total",
-			metric.WithDescription("DebateWorker.FailTask 失败累计次数"),
-		)
-		learningCursorErrorsGauge, _ := meter.Float64ObservableGauge(
-			"polaris.learning.cursor_errors_total",
-			metric.WithDescription("自进化引擎游标扫描失败累计次数"),
-		)
-		learningSkillRegisterFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.learning.skill_register_failures_total",
-			metric.WithDescription("合成技能注册失败累计次数"),
-		)
-		gatewayPreferenceWriteFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.gateway.preference_write_failures_total",
-			metric.WithDescription("Gateway 偏好/系统提示词模板落库失败累计次数"),
-		)
-		schemaMigrationDiagWriteFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.store.schema_migration_diag_write_failures_total",
-			metric.WithDescription("SchemaManager 迁移版本诊断字段写入失败累计次数"),
-		)
-		cronNextRunWriteFailuresGauge, _ := meter.Float64ObservableGauge(
-			"polaris.tool.cron_next_run_write_failures_total",
-			metric.WithDescription("cron_create 回填 next_run_at 失败累计次数"),
-		)
+		// 无 label Global*Total 累计计数器：统一由 simpleCounters() 表驱动注册（GR-1.2-004）。
+		counters := simpleCounters()
+		counterGauges := make([]metric.Float64ObservableGauge, len(counters))
+		for i, c := range counters {
+			counterGauges[i], _ = meter.Float64ObservableGauge(c.name, metric.WithDescription(c.help))
+		}
 
 		// [2026-08-02 HE-1 补齐] 失败不再静默丢弃，改为记录日志+回退 legacy handler
 		// （与上方 InitMetrics 全部失败时的既有降级路径语义一致），否则本组 gauge
 		// 会在 /metrics 上无声消失且无日志线索。
+		observables := []metric.Observable{ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge,
+			surpriseStaleGauge, surrealSizeGauge, killswitchGauge, anchorDriftGauge, perfDriftPassRateGauge, perfDriftBaselineGauge}
+		for _, g := range counterGauges {
+			observables = append(observables, g)
+		}
 		_, cbErr := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 			o.ObserveFloat64(ema5sGauge, tbr.EMA5s())
 			o.ObserveFloat64(ema30sGauge, tbr.EMA30s())
@@ -198,33 +152,18 @@ func otelMetricsHandler(tbr *TokenBurnRate) http.Handler {
 			o.ObserveFloat64(surrealSizeGauge, float64(ls))
 
 			o.ObserveFloat64(killswitchGauge, float64(GlobalKillswitchStage.Load()))
-			o.ObserveFloat64(cedarDegradedGauge, float64(GlobalCedarDegradedTotal.Load()))
-			o.ObserveFloat64(cedarFFILeaksGauge, float64(GlobalCedarFFILeaksTotal.Load()))
-			o.ObserveFloat64(outboxDeadLetterGauge, float64(GlobalOutboxDeadLetterTotal.Load()))
-			o.ObserveFloat64(factualityJudgeUnavailableGauge, float64(GlobalFactualityJudgeUnavailableTotal.Load()))
-
-			o.ObserveFloat64(blindZoneGauge, float64(GlobalBlindZoneRoutingTotal.Load()))
 			o.ObserveFloat64(anchorDriftGauge, GetFoundingAnchorDriftScore())
-			o.ObserveFloat64(schemaValidationFailureGauge, float64(GlobalSchemaValidationFailureTotal.Load()))
 
 			pd := GlobalPerformanceDrift()
 			o.ObserveFloat64(perfDriftPassRateGauge, pd.CurrentPassRate())
 			o.ObserveFloat64(perfDriftBaselineGauge, pd.Baseline())
 
-			o.ObserveFloat64(memorySupersedeFailuresGauge, float64(GlobalMemorySupersedeFailuresTotal.Load()))
-			o.ObserveFloat64(memoryEvictEventLostGauge, float64(GlobalMemoryEvictEventLostTotal.Load()))
-			o.ObserveFloat64(memoryFTSIndexFailuresGauge, float64(GlobalMemoryFTSIndexFailuresTotal.Load()))
-			o.ObserveFloat64(memoryColdArchiveDetachFailuresGauge, float64(GlobalMemoryColdArchiveDetachFailuresTotal.Load()))
-			o.ObserveFloat64(blackboardFailTaskErrorsGauge, float64(GlobalBlackboardFailTaskErrorsTotal.Load()))
-			o.ObserveFloat64(learningCursorErrorsGauge, float64(GlobalLearningCursorErrorsTotal.Load()))
-			o.ObserveFloat64(learningSkillRegisterFailuresGauge, float64(GlobalLearningSkillRegisterFailuresTotal.Load()))
-			o.ObserveFloat64(gatewayPreferenceWriteFailuresGauge, float64(GlobalGatewayPreferenceWriteFailuresTotal.Load()))
-			o.ObserveFloat64(schemaMigrationDiagWriteFailuresGauge, float64(GlobalSchemaMigrationDiagWriteFailuresTotal.Load()))
-			o.ObserveFloat64(cronNextRunWriteFailuresGauge, float64(GlobalCronNextRunWriteFailuresTotal.Load()))
+			for i, c := range counters {
+				o.ObserveFloat64(counterGauges[i], float64(c.v.Load()))
+			}
 
 			return nil
-		}, ema5sGauge, ema30sGauge, totalCounter, throttleGauge, surpriseGauge, surpriseBasicGauge, surpriseStaleGauge, surrealSizeGauge, killswitchGauge, cedarDegradedGauge, cedarFFILeaksGauge, outboxDeadLetterGauge, factualityJudgeUnavailableGauge, blindZoneGauge, anchorDriftGauge, schemaValidationFailureGauge, perfDriftPassRateGauge, perfDriftBaselineGauge,
-			memorySupersedeFailuresGauge, memoryEvictEventLostGauge, memoryFTSIndexFailuresGauge, memoryColdArchiveDetachFailuresGauge, blackboardFailTaskErrorsGauge, learningCursorErrorsGauge, learningSkillRegisterFailuresGauge, gatewayPreferenceWriteFailuresGauge, schemaMigrationDiagWriteFailuresGauge, cronNextRunWriteFailuresGauge)
+		}, observables...)
 		if cbErr != nil {
 			slog.Error("observability: failed to register OTel observable gauge callback, falling back to legacy handler", "err", cbErr)
 			return
@@ -291,28 +230,11 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# TYPE polaris_surrealdb_index_size_mb gauge\n")
 		fmt.Fprintf(w, "polaris_surrealdb_index_size_mb %d\n", ls)
 
-		// ── Cedar Degraded Total ──────────────────────────────────────────────────
-		cd := GlobalCedarDegradedTotal.Load()
-		fmt.Fprintf(w, "# HELP polaris_cedar_degraded_total Total number of Cedar FFI evaluation failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_cedar_degraded_total counter\n")
-		fmt.Fprintf(w, "polaris_cedar_degraded_total %d\n", cd)
-
-		// ── Cedar FFI Leaks Total（阶段03 R-01：只增计数，不参与 KillSwitch 判定）──
-		fmt.Fprintf(w, "# HELP polaris_cedar_ffi_leaks_total Cumulative count of Cedar FFI goroutine leaks (timeout-triggered)\n")
-		fmt.Fprintf(w, "# TYPE polaris_cedar_ffi_leaks_total counter\n")
-		fmt.Fprintf(w, "polaris_cedar_ffi_leaks_total %d\n", GlobalCedarFFILeaksTotal.Load())
-
 		// ── KillSwitch Stage ──────────────────────────────────────────────────
 		stage := GlobalKillswitchStage.Load()
 		fmt.Fprintf(w, "# HELP polaris_killswitch_stage Current M13 KillSwitch stage\n")
 		fmt.Fprintf(w, "# TYPE polaris_killswitch_stage gauge\n")
 		fmt.Fprintf(w, "polaris_killswitch_stage %d\n", stage)
-
-		// ── Outbox Dead Letters ────────────────────────────────────────────────
-		dl := GlobalOutboxDeadLetterTotal.Load()
-		fmt.Fprintf(w, "# HELP polaris_outbox_dead_letter_total Total number of outbox messages dead\n")
-		fmt.Fprintf(w, "# TYPE polaris_outbox_dead_letter_total counter\n")
-		fmt.Fprintf(w, "polaris_outbox_dead_letter_total %d\n", dl)
 
 		// ── PerformanceDrift（M03 §10.1，2026-07-21 deadcode 审查补齐 gauge 暴露）──
 		// 检测器本体（Record/RegisterListener→KillSwitch）此前已生产接入
@@ -328,46 +250,12 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 		fmt.Fprintf(w, "# TYPE polaris_performance_drift_baseline gauge\n")
 		fmt.Fprintf(w, "polaris_performance_drift_baseline %g\n", pd.Baseline())
 
-		// ── [阶段02-错误吞没整改] 无 label Global* 累计计数器 ─────────────────────
-		fmt.Fprintf(w, "# HELP polaris_memory_supersede_failures_total Semantic supersede marking failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_memory_supersede_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_memory_supersede_failures_total %d\n", GlobalMemorySupersedeFailuresTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_memory_evict_event_lost_total Working memory eviction event archive failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_memory_evict_event_lost_total counter\n")
-		fmt.Fprintf(w, "polaris_memory_evict_event_lost_total %d\n", GlobalMemoryEvictEventLostTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_memory_fts_index_failures_total Episodic memory FTS index write failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_memory_fts_index_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_memory_fts_index_failures_total %d\n", GlobalMemoryFTSIndexFailuresTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_memory_cold_archive_detach_failures_total EventArchiver DETACH DATABASE failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_memory_cold_archive_detach_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_memory_cold_archive_detach_failures_total %d\n", GlobalMemoryColdArchiveDetachFailuresTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_blackboard_fail_task_errors_total DebateWorker.FailTask failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_blackboard_fail_task_errors_total counter\n")
-		fmt.Fprintf(w, "polaris_blackboard_fail_task_errors_total %d\n", GlobalBlackboardFailTaskErrorsTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_learning_cursor_errors_total Self-improve engine cursor scan failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_learning_cursor_errors_total counter\n")
-		fmt.Fprintf(w, "polaris_learning_cursor_errors_total %d\n", GlobalLearningCursorErrorsTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_learning_skill_register_failures_total Synthetic skill registration failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_learning_skill_register_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_learning_skill_register_failures_total %d\n", GlobalLearningSkillRegisterFailuresTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_gateway_preference_write_failures_total Gateway preference/prompt template write failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_gateway_preference_write_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_gateway_preference_write_failures_total %d\n", GlobalGatewayPreferenceWriteFailuresTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_store_schema_migration_diag_write_failures_total SchemaManager migration_version diagnostic field write failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_store_schema_migration_diag_write_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_store_schema_migration_diag_write_failures_total %d\n", GlobalSchemaMigrationDiagWriteFailuresTotal.Load())
-
-		fmt.Fprintf(w, "# HELP polaris_tool_cron_next_run_write_failures_total cron_create next_run_at backfill failures\n")
-		fmt.Fprintf(w, "# TYPE polaris_tool_cron_next_run_write_failures_total counter\n")
-		fmt.Fprintf(w, "polaris_tool_cron_next_run_write_failures_total %d\n", GlobalCronNextRunWriteFailuresTotal.Load())
+		// ── 无 label Global*Total 累计计数器（表驱动，见 metrics_counters.go）──────
+		for _, c := range simpleCounters() {
+			fmt.Fprintf(w, "# HELP %s %s\n", c.promName(), c.help)
+			fmt.Fprintf(w, "# TYPE %s counter\n", c.promName())
+			fmt.Fprintf(w, "%s %d\n", c.promName(), c.v.Load())
+		}
 	})
 }
 

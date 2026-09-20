@@ -22,9 +22,11 @@ type mockSandbox struct {
 	level  int
 	result *types.ToolResult
 	err    error
+	calls  int
 }
 
 func (m *mockSandbox) Run(_ context.Context, _ sandbox.SandboxSpec) (*types.ToolResult, error) {
+	m.calls++
 	return m.result, m.err
 }
 
@@ -306,33 +308,50 @@ func TestExecute_NilPolicyGate_FailClosed(t *testing.T) {
 	}
 }
 
+// fakeCmdRunner 替代 Rust bwrap/Seatbelt：记录调用并返回固定输出。
+type fakeCmdRunner struct {
+	out   []byte
+	calls int
+}
+
+func (f *fakeCmdRunner) RunCmd(_ context.Context, _ sandbox.CmdRunnerCfg) ([]byte, int, string, error) {
+	f.calls++
+	return f.out, 0, "fake", nil
+}
+
+// inv_global_07：CodeAct 必须落在 Sbx-L3，L3 不可用时拒绝，禁止降级到 Wasm（GR-4.2-001）。
 func TestExecute_SandboxLevelTooLow(t *testing.T) {
-	// sandbox level=2 < 需求 L3 → 拒绝
 	gate := &mockPolicyGate{allowed: true}
-	router := sandbox.NewSandboxRouter(nil, nil, nil, "linux", 0)
-	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
-	ca := NewCodeAct(envelope, &mockToolExecutor{},
-		WithGovernanceAgent(&mockGovAgent{}),
-		WithTokenManager(defaultMockTokenManager()),
-	)
-	_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
-		Language:     "python",
-		Code:         "x=1",
-		CapabilityID: "cap-1",
-	})
-	if err == nil || !strings.Contains(err.Error(), "isolation unavailable") {
-		t.Errorf("expected isolation error, got %v", err)
+	wasm := &mockSandbox{level: 2, result: &types.ToolResult{Output: []byte("wasm"), Success: true}}
+	run := func(hwTier int) error {
+		router := sandbox.NewSandboxRouter(nil, nil, wasm, "linux", hwTier) // 只有 Wasm 可用
+		envelope := sandbox.NewExecEnvelope(gate, router, hwTier, "linux", nil)
+		ca := NewCodeAct(envelope, &mockToolExecutor{},
+			WithGovernanceAgent(&mockGovAgent{}),
+			WithTokenManager(defaultMockTokenManager()),
+		)
+		_, err := ca.Execute(context.Background(), protocol.CodeActRequest{
+			Language: "python", Code: "x=1", CapabilityID: "cap-1",
+		})
+		return err
+	}
+	if err := run(1); err == nil || !strings.Contains(err.Error(), "L3/Container required") {
+		t.Errorf("tier1 without container: expected L3 refusal, got %v", err)
+	}
+	if err := run(0); err == nil || !strings.Contains(err.Error(), "SANDBOX_TIER0_LIMIT") {
+		t.Errorf("tier0: expected Tier0 limit, got %v", err)
+	}
+	if wasm.calls != 0 {
+		t.Errorf("CodeAct must never reach the Wasm backend, got %d calls", wasm.calls)
 	}
 }
 
 func TestExecute_Success(t *testing.T) {
 	gate := &mockPolicyGate{allowed: true}
-	sbx := &mockSandbox{
-		level:  3,
-		result: &types.ToolResult{Output: []byte("hello"), Success: true, LatencyMs: 10},
-	}
-	router := sandbox.NewSandboxRouter(nil, nil, sbx, "linux", 0)
-	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
+	runner := &fakeCmdRunner{out: []byte("hello")}
+	container := sandbox.NewContainerSandbox("", "linux", 1, runner, config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(nil, container, nil, "linux", 1)
+	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil)
 	exec := &mockToolExecutor{}
 	ca := NewCodeAct(envelope, exec,
 		WithGovernanceAgent(&mockGovAgent{}),
@@ -356,6 +375,9 @@ func TestExecute_Success(t *testing.T) {
 	}
 	if res.ExitCode != 0 {
 		t.Errorf("exit code: got %d, want 0", res.ExitCode)
+	}
+	if runner.calls != 1 {
+		t.Errorf("expected exactly one L3 container execution, got %d", runner.calls)
 	}
 }
 
@@ -431,9 +453,9 @@ func TestExecute_L4PersistentSession_StatePersistsAcrossCalls(t *testing.T) {
 // 路由失败）。
 func TestExecute_StatefulSessionWithoutL4_FallsBackToPickleWrap(t *testing.T) {
 	gate := &mockPolicyGate{allowed: true}
-	sbx := &mockSandbox{level: 2, result: &types.ToolResult{Output: []byte("ok"), Success: true}}
-	router := sandbox.NewSandboxRouter(nil, nil, sbx, "linux", 0) // 未 WithPersistent：L4 不可用
-	envelope := sandbox.NewExecEnvelope(gate, router, 0, "linux", nil)
+	container := sandbox.NewContainerSandbox("", "linux", 1, &fakeCmdRunner{out: []byte("ok")}, config.DefaultThresholds().M7Tool)
+	router := sandbox.NewSandboxRouter(nil, container, nil, "linux", 1) // 未 WithPersistent：L4 不可用 → 回落 Container
+	envelope := sandbox.NewExecEnvelope(gate, router, 1, "linux", nil)
 	tmpDir := t.TempDir()
 	ca := NewCodeAct(envelope, &mockToolExecutor{},
 		WithGovernanceAgent(&mockGovAgent{}),

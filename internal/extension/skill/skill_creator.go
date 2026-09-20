@@ -134,7 +134,7 @@ func writeSkillFiles(baseDir string, result GeneratedSkill) (string, error) {
 	}
 
 	// Write SKILL.md
-	skillContent := fmt.Sprintf("---\nname: %s\ndescription: %s\nexec_mode: %s\n---\n\n%s\n", result.Name, result.Description, result.ExecMode, result.Instructions)
+	skillContent := renderSkillMD(result)
 	skillPath := filepath.Join(skillsDir, "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte(skillContent), 0644); err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to write SKILL.md", err)
@@ -212,12 +212,17 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent taint.TaintedSt
 	}
 
 	if c.registry != nil {
+		// GR-8-004：Instructions 是 SKILL.md 全文（SkillMeta 约定，供 tool_use 返回
+		// 给 LLM 与 SkillSelector 匹配）；原实现漏填，SkillInstaller 又因无
+		// src/index.ts 跳过注册，落库技能恒为空壳。description 已含在 frontmatter 中。
 		meta := types.SkillMeta{
-			Name:      types.SkillPrefix + result.Name,
-			Version:   "1.0.0",
-			ExecMode:  result.ExecMode,
-			Trust:     types.TrustLocal,
-			RiskLevel: "low",
+			Name:         types.SkillPrefix + result.Name,
+			Version:      "1.0.0",
+			Runtime:      "script",
+			ExecMode:     result.ExecMode,
+			Trust:        types.TrustLocal,
+			RiskLevel:    "low",
+			Instructions: renderSkillMD(result),
 		}
 		if err := c.registry.Register(ctx, meta); err != nil {
 			return "", apperr.Wrap(apperr.CodeInternal, "skill_creator: failed to register skill in db", err)
@@ -225,4 +230,10 @@ func (c *SkillCreator) GenerateSkill(ctx context.Context, intent taint.TaintedSt
 	}
 
 	return pluginDir, nil
+}
+
+// renderSkillMD 生成 SKILL.md 全文；落盘文件与注册表 Instructions 共用同一渲染，
+// 保证两处内容一致。
+func renderSkillMD(result GeneratedSkill) string {
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\nexec_mode: %s\n---\n\n%s\n", result.Name, result.Description, result.ExecMode, result.Instructions)
 }

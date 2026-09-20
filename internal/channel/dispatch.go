@@ -5,7 +5,6 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 
 	"context"
-	"log/slog"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -19,6 +18,6 @@ func (m *Manager) SendReply(ctx context.Context, channelType, channelID string, 
 		}
 		return nil
 	}
-	slog.Warn("channels: SendReply not implemented for channel type", "type", channelType)
-	return nil
+	// GR-10.2-001：未知渠道必须向调用方报错，否则定时任务/自动回复把"回复丢失"当成功
+	return apperr.New(apperr.CodeInvalidInput, "channels: no adapter for channel type "+channelType)
 }

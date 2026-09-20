@@ -1,11 +1,13 @@
 package llm
 
 import (
+	"google.golang.org/protobuf/proto"
+
 	"github.com/polarisagi/polaris/internal/observability/trace"
+	"github.com/polarisagi/polaris/internal/protocol/pb"
 
 	"context"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/llm/modelregistry"
@@ -13,14 +15,13 @@ import (
 	"github.com/polarisagi/polaris/internal/store/search"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // InferenceRouter 实现 protocol.Provider，对上层透明地完成多厂商路由。
 // 架构文档: docs/arch/M01-Inference-Runtime.md §4
 type InferenceRouter struct {
 	registry          *ProviderRegistry
-	rateTracker       *RateLimitTracker
-	client            *http.Client
 	outboxWriter      protocol.OutboxWriter
 	governor          LLMGovernor
 	semanticCache     *search.SemanticCache
@@ -29,6 +30,7 @@ type InferenceRouter struct {
 	// streamInterrupts 记录流式中断事件（inv_M1_04），nil 时不落 EventLog。
 	// 注入点见 InjectStreamInterruptRecorder（router_stream.go）。
 	streamInterrupts StreamInterruptRecorder
+	eventLogger      protocol.EventLogger
 }
 
 // LLMGovernor 用于限流 LLM 请求 (P0-3)
@@ -90,6 +92,10 @@ func (ir *InferenceRouter) InjectOutboxWriter(w protocol.OutboxWriter) {
 	ir.outboxWriter = w
 }
 
+func (ir *InferenceRouter) InjectEventLogger(logger protocol.EventLogger) {
+	ir.eventLogger = logger
+}
+
 // InjectModelRegistry 启动期后置注入 ModelVersionRegistry（modelReg 的构造依赖
 // sb.Store.DB()，在 boot_memory.go 中晚于 router 本身构造完成，故提供 Inject*
 // 形式而非要求 boot_substrate.go 在构造 router 时就持有它，与 InjectOutboxWriter
@@ -101,32 +107,15 @@ func (ir *InferenceRouter) InjectModelRegistry(reg *modelregistry.Registry) {
 var _ protocol.Provider = (*InferenceRouter)(nil)
 
 func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts ...RouterOption) *InferenceRouter {
-	transport := &http.Transport{}
-	if dialer != nil {
-		transport.DialContext = dialer.DialContext
-	} else {
-		// [2026-08-02 S-03 复核] dialer==nil 时 transport.DialContext 保持零值，
-		// 退化为标准库默认拨号，绕过 SafeDialer 的 SSRF 防护（出站 LLM API 调用
-		// 不再受 EgressAllowedDomains/内网地址拦截约束）。核实生产唯一装配点
-		// cmd/polaris/boot_substrate.go:627 的 dialer 恒来自
-		// network.NewSafeDialer(...)（该构造函数不存在返回 nil 的分支），
-		// 故此分支当前生产不可达，nil 仅用于单测（httptest 本地服务器需绕过
-		// SafeDialer 才能连通 127.0.0.1）。此处补一条日志而非改为 fail-closed
-		// panic：既能在未来若真的因误改装配代码而意外触发时被立刻观测到
-		// （HE-1），又不破坏现有依赖 nil-dialer 直连本地测试服务器的测试用例。
-		slog.Warn("llm.NewInferenceRouter: dialer is nil, SafeDialer SSRF protection is bypassed for this router instance (expected only in tests)")
+	// dialer 形参保留作装配契约：生产恒传 SafeDialer，nil 仅见于单测。
+	// 2026-09-19（GR-2.2-006）：删除 rateTracker/client 两个孤儿字段——Router 自身从不发 HTTP
+	// （出站全部由各 Adapter 经 llmadapter.SetDefaultHTTPClient 注入的 SafeHTTPClient 完成），
+	// 此处构造的 RateLimitCapturingTransport 客户端全仓零读取，限速头从未被捕获。
+	if dialer == nil {
+		slog.Warn("llm.NewInferenceRouter: dialer is nil (expected only in tests)")
 	}
-	tracker := NewRateLimitTracker()
 	ir := &InferenceRouter{
-		registry:    reg,
-		rateTracker: tracker,
-		client: &http.Client{
-			Transport: &RateLimitCapturingTransport{
-				Inner:   transport,
-				Tracker: tracker,
-			},
-			Timeout: 120 * time.Second,
-		},
+		registry: reg,
 		// poolFallbackChain 定义当目标 Model Pool 所有 Provider 耗尽时的级联降级顺序（GD-13-005）。
 		// 可通过 RouterOption 覆盖，当前默认值适配 reasoning/general/default/budget 四档分层。
 		poolFallbackChain: map[string][]string{
@@ -167,7 +156,7 @@ func NewInferenceRouter(reg *ProviderRegistry, dialer protocol.SafeDialer, opts 
 }
 
 func (ir *InferenceRouter) ModelID() string {
-	entry := ir.registry.best(nil)
+	entry := ir.registry.peekBest(nil)
 	if entry == nil || entry.provider == nil {
 		return "unknown"
 	}
@@ -326,15 +315,39 @@ func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *provid
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheHitTokens,
 		costUSD,
 	)
-	// 2026-07-08 移除 eventWriter 写事件分支（复核
-	// code-quality-remediation-verification-20260707.md Phase 1.3 遗留项，
-	// 详见 local_playground/reports/phase4-hard-dep-and-deadcode-followup-20260708.md）：
-	// protocol.EventWriter 全仓库零实现，WithEventWriter 注入方法此前已被删除
-	// 导致 eventWriter 恒为 nil、这段代码永久不可达；LLM 调用观测已由上面的
-	// trace.RecordLLMCall（→ Prometheus/OTel InstrLLMCallsTotal 等）完整覆盖，
-	// 不存在观测缺口。ADR-0025 §H 曾计划将此处的裸 goroutine 迁移到 SafeGo 并
-	// 改经 event_buffer.go 批处理，但该 EventWriteBuffer 已确认零接线并删除，
-	// 原计划的落地目标已不存在，遂一并清理。
+
+	if ir.eventLogger != nil {
+		payload := &pb.LLMCallPayload{
+			Model:          resp.Model,
+			Provider:       entry.name,
+			InputTokens:    int32(resp.Usage.InputTokens),
+			OutputTokens:   int32(resp.Usage.OutputTokens),
+			CacheHitTokens: int32(resp.Usage.CacheHitTokens),
+			CostUsd:        costUSD,
+			LatencyMs:      int64(ms),
+			FinishReason:   resp.FinishReason,
+			RouteTier:      entry.role,
+		}
+		b, err := proto.Marshal(payload)
+		if err == nil {
+			now := time.Now().UnixMicro()
+			evID := util.GenerateHumanReadableID("evt", "llm call recorded")
+			ev := &pb.Event{
+				Id:             evID,
+				Topic:          "llm.call.recorded",
+				Actor:          "router",
+				Type:           "llm_call",
+				IdempotencyKey: string(types.BuildIdempotencyKey("llm", "call_recorded", evID, "record", 0)),
+				OccurredAt:     now,
+				CreatedAt:      now,
+				Payload:        b,
+			}
+			// 不阻塞主路径
+			if err := ir.eventLogger.AppendEvent(context.Background(), ev); err != nil {
+				slog.Error("router: failed to write llm_call event", "err", err)
+			}
+		}
+	}
 
 	if useCache && len(resp.ToolCalls) == 0 {
 		if cErr := ir.semanticCache.Put(ckey, resp.Content, resp.Model); cErr != nil {

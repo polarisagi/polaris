@@ -114,15 +114,9 @@ type LAMPolicyChecker interface {
 // 注意：agent 包允许 import tool/catalog（因为 tool/catalog 只定义接口，
 // 不 import agent，无循环风险）。此 ToolCatalog 接口为备用文档，不用于字段类型。
 
-// WorldModelUpdater Agent 对认知世界模型的消费端接口。
-// 实现：memory/graph.WorldModel（基于 SurrealDB 图的世界模型）
-// 禁止：agent 直接 import memory/graph
-type WorldModelUpdater interface {
-	// Update 根据工具执行结果更新世界模型节点。
-	Update(ctx context.Context, toolName string, result *types.ToolResult) error
-	// CheckBlindZone 检查任务描述是否落入已知盲区（返回命中的盲区描述）。
-	CheckBlindZone(ctx context.Context, taskDesc string) ([]string, error)
-}
+// 2026-09-20（GR-4.1-007）：删除 WorldModelUpdater——全仓无实现（memory/graph.WorldModel 从未
+// 提供 Update/CheckBlindZone）、无字段持有、无装配。世界模型的实际消费端接口是
+// WorldModel（agent.go 字段，S_PLAN 知识接地评估）；盲区检测由 BlindZoneDetector 承担。
 
 // ─── DAG 执行引擎消费端接口（2026-07-12 随 internal/execute 模块化新增）───────
 //

@@ -114,7 +114,7 @@ var (
 
 // ── ObservableGauge 的原子支撑值 ────────────────────────────────────────────
 
-// ActiveAgentsCount 由外部调用 SetActiveAgents() 更新。
+// ActiveAgentsCount 正在执行 Agent.Run() 的内核数，由 internal/agent Run 入口 Add(1)/退出 Add(-1) 维护。
 var ActiveAgentsCount atomic.Int64
 
 // TaskSuccessCount / TaskTotalCount 由 RecordTaskOutcome() 更新。

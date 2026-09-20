@@ -17,7 +17,6 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 		var args struct {
 			Code      string `json:"code"`
 			Input     string `json:"input"`
-			Network   bool   `json:"network_allowed"`
 			MaxPages  int    `json:"max_pages"`
 			Workspace string `json:"workspace"`
 			// TimeoutMs 墙钟超时预算（毫秒）；<=0 时 WasmtimeExecute 使用默认值 5000ms。
@@ -44,7 +43,9 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 			args.Input,
 			cleanWorkspace,
 			quota.MemoryPages,
-			args.Network,
+			// 网络权限只由工具声明的 Capability 决定，不接受调用方入参（GR-5.2-002：
+			// 此前 network_allowed 由 LLM 入参直接接管，write_local 工具可自行开启任意出站）。
+			spec.Capability >= types.CapWriteNetwork,
 			quota.Fuel,
 			10*1024*1024,
 			args.TimeoutMs,

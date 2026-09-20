@@ -106,15 +106,23 @@ func OpenSQLite(path string, schemaDir fs.ReadDirFS) (*SQLiteStore, error) {
 		return nil, apperr.Wrap(apperr.CodeInternal, "schema migration", err)
 	}
 
+	// 先 Recover 再 Apply（GR-1.1-005）：Recover 的职责是拦截"上次迁移中途崩溃"
+	// （in_progress）的库，必须在任何新迁移之前无条件执行；Apply 的错误原样上抛，
+	// 不得因 Recover 成功而被吞掉。
 	sm := NewSchemaManager(db, nil) // no Go migrations yet
-	if err := sm.ApplyMigrations(); err != nil {
-		if recErr := sm.Recover(); recErr != nil {
-			if readDB != db {
-				readDB.Close()
-			}
-			db.Close()
-			return nil, apperr.Wrap(apperr.CodeInternal, "schema recovery", recErr)
+	closeAll := func() {
+		if readDB != db {
+			readDB.Close()
 		}
+		db.Close()
+	}
+	if err := sm.Recover(); err != nil {
+		closeAll()
+		return nil, apperr.Wrap(apperr.CodeInternal, "schema recovery", err)
+	}
+	if err := sm.ApplyMigrations(); err != nil {
+		closeAll()
+		return nil, apperr.Wrap(apperr.CodeInternal, "schema go-migrations", err)
 	}
 
 	return s, nil

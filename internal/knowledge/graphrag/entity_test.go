@@ -104,7 +104,7 @@ func TestRelationExtractor_Extract(t *testing.T) {
 		{ID: "e2", Name: "e2"},
 	}
 
-	rels, err := re.Extract(ctx, entities)
+	rels, _, err := re.Extract(ctx, entities, "")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

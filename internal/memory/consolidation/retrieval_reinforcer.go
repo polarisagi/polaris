@@ -85,32 +85,60 @@ func (r *RetrievalReinforcer) Flush(ctx context.Context) error {
 	r.mu.Unlock()
 
 	now := time.Now().UnixMilli()
+	const q = `UPDATE episodic_events
+		SET retrieval_count = retrieval_count + ?, last_retrieved_at = ?
+		WHERE event_uuid = ?`
+
+	// GR-5.1-005：兑现"单事务批量"——此前循环内逐条 ExecContext（N 次 fsync），且任一条
+	// 失败即把整批（含已提交的行）加回 pending，下一周期重复累加。
+	if txDB, ok := r.db.(txBeginner); ok {
+		if err := r.flushTx(ctx, txDB, q, batch, now); err != nil {
+			r.requeue(batch) // 事务整体回滚，整批重试不会重复计数
+			return apperr.Wrap(apperr.CodeInternal, "retrieval_reinforcer: flush failed, counts retained for retry", err)
+		}
+		slog.DebugContext(ctx, "retrieval_reinforcer: flushed", "events", len(batch))
+		return nil
+	}
+
+	// 无事务能力的降级路径：逐条执行，只把失败的条目放回 pending。
+	failedBatch := make(map[string]int)
 	var failed error
-	applied := 0
 	for uuid, hits := range batch {
-		if _, err := r.db.ExecContext(ctx, `
-			UPDATE episodic_events
-			SET retrieval_count = retrieval_count + ?, last_retrieved_at = ?
-			WHERE event_uuid = ?`, hits, now, uuid); err != nil {
+		if _, err := r.db.ExecContext(ctx, q, hits, now, uuid); err != nil {
+			failedBatch[uuid] = hits
 			if failed == nil {
 				failed = err
 			}
-			continue
 		}
-		applied++
 	}
-
 	if failed != nil {
-		// 回滚未落盘的计数到 pending，等下一周期重试。
-		r.mu.Lock()
-		for uuid, hits := range batch {
-			r.pending[uuid] += hits
-		}
-		r.mu.Unlock()
-		return apperr.Wrap(apperr.CodeInternal, "retrieval_reinforcer: flush failed, counts retained for retry", failed)
+		r.requeue(failedBatch)
+		return apperr.Wrap(apperr.CodeInternal, "retrieval_reinforcer: flush partially failed, failed counts retained for retry", failed)
 	}
-	slog.DebugContext(ctx, "retrieval_reinforcer: flushed", "events", applied)
+	slog.DebugContext(ctx, "retrieval_reinforcer: flushed", "events", len(batch))
 	return nil
+}
+
+func (r *RetrievalReinforcer) flushTx(ctx context.Context, txDB txBeginner, q string, batch map[string]int, now int64) error {
+	tx, err := txDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err //nolint:wrapcheck // 调用方统一包装
+	}
+	for uuid, hits := range batch {
+		if _, err := tx.ExecContext(ctx, q, hits, now, uuid); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // 回滚失败无补救手段，原始错误已返回
+			return err        //nolint:wrapcheck // 调用方统一包装
+		}
+	}
+	return tx.Commit() //nolint:wrapcheck // 调用方统一包装
+}
+
+func (r *RetrievalReinforcer) requeue(batch map[string]int) {
+	r.mu.Lock()
+	for uuid, hits := range batch {
+		r.pending[uuid] += hits
+	}
+	r.mu.Unlock()
 }
 
 // PendingCount 返回尚未落盘的记忆条目数（观测/测试用）。

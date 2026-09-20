@@ -13,9 +13,10 @@ import (
 )
 
 // Get 读取键值。键不存在返回 apperr.ErrNotFound。
+// 只读路径一律落 readDB（GR-1.1-006）：WAL 下读已提交数据，不占用唯一的写连接。
 func (s *SQLiteStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 	var val []byte
-	err := s.db.QueryRowContext(ctx,
+	err := s.readDB.QueryRowContext(ctx,
 		"SELECT value FROM kv_store WHERE key = ?", key,
 	).Scan(&val)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -51,17 +52,18 @@ func (s *SQLiteStore) Delete(ctx context.Context, key []byte) error {
 
 // Scan 返回前缀扫描迭代器；调用方须在使用完毕后调用 Close()。
 // 使用范围查询（key >= prefix AND key < prefix_end）代替 LIKE，避免 BLOB 类型的 LIKE 匹配不可靠问题。
+// 迭代器持有连接直到 Close：落在写连接上时，迭代期间任何 Put 都会排队到迭代结束（或自锁）。
 func (s *SQLiteStore) Scan(ctx context.Context, prefix []byte) (protocol.Iterator, error) {
 	end := prefixSuccessor(prefix)
 	var rows *sql.Rows
 	var err error
 	if end == nil {
 		// 前缀全为 0xFF 的极端情况：无上界
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = s.readDB.QueryContext(ctx,
 			"SELECT key, value FROM kv_store WHERE key >= ? ORDER BY key", prefix,
 		)
 	} else {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = s.readDB.QueryContext(ctx,
 			"SELECT key, value FROM kv_store WHERE key >= ? AND key < ? ORDER BY key",
 			prefix, end,
 		)
@@ -131,7 +133,7 @@ func (s *SQLiteStore) ImportBackupRow(ctx context.Context, table string, row map
 
 // ListPreferences implements protocol.StoreExtPreferences.
 func (s *SQLiteStore) ListPreferences(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM preferences`)
+	rows, err := s.readDB.QueryContext(ctx, `SELECT key, value FROM preferences`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "ListPreferences", err)
 	}
@@ -237,13 +239,6 @@ func (s *SQLiteStore) DB() *sql.DB { return s.db }
 // 挤占唯一的写连接名额而无限期挂起。
 // 该连接池已在引擎层禁止写入（query_only=1），误用 ExecContext 会直接报错。
 func (s *SQLiteStore) ReadDB() *sql.DB { return s.readDB }
-
-// SQLQuerier 返回 SQLiteStore 作为 protocol.SQLQuerier 接口。
-// 适合需要同时传递 protocol.Store 和 protocol.SQLQuerier 的场景，避免调用方持有 *sql.DB。
-// @arch: docs/arch/M02-Storage-Fabric.md
-func (s *SQLiteStore) SQLQuerier() protocol.SQLQuerier {
-	return s.db
-}
 
 // Close 关闭读、写两个连接池。写连接优先关闭失败时仍尝试关闭读连接池，
 // 两者错误用 errors.Join 合并后统一走 apperr 包装，避免读连接泄漏。

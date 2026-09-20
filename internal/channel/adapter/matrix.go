@@ -34,7 +34,7 @@ func RunMatrixPoller(ctx context.Context, host PollerHost, channelID, homeserver
 			}
 			accessToken = tok
 		} else {
-			slog.Error("matrix: access_token or username+password required", "err", apperr.New(apperr.CodeInternal, "log event"))
+			slog.Error("matrix: access_token or username+password required")
 			return
 		}
 	}
@@ -232,8 +232,7 @@ func (a *MatrixAdapter) Send(ctx context.Context, host Host, cfg map[string]any,
 	homeserver, _ := cfg["homeserver"].(string)
 	accessToken, _ := cfg["access_token"].(string)
 	if homeserver == "" || accessToken == "" {
-		slog.Warn("matrix: homeserver or access_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "matrix: homeserver or access_token missing")
 	}
 	if err := a.SendMessage(ctx, host.HTTPClient(), homeserver, accessToken, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "matrix", "err", err)

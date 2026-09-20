@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/execute/orchestrator"
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/cronadmin"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
@@ -101,6 +102,10 @@ func (h *WorkflowAdmin) tryClaimAndExecuteStep(ctx context.Context, taskID strin
 	if err != nil || !claimed {
 		return
 	}
+	// 步骤执行（含 LLM/工具调用）可远超 60s 租约：心跳续约 + 向 Reaper 登记
+	// 取消函数（GR-6.2-001/005）。
+	ctx, release := orchestrator.HoldLease(ctx, h.Blackboard, taskID, workflowStepWorkerAgentID)
+	defer release()
 
 	var nodeIntent stepNodeIntent
 	if err := json.Unmarshal(snap.Intent, &nodeIntent); err != nil {

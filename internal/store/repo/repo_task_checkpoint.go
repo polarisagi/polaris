@@ -23,15 +23,15 @@ func NewSQLiteTaskCheckpointRepository(db protocol.BlackboardDB) *SQLiteTaskChec
 
 func (r *SQLiteTaskCheckpointRepository) GetCheckpoint(ctx context.Context, taskID, nodeID string, attempt int) (*types.TaskCheckpointRow, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT status, output_json, idempotency_key, taint_level, started_at, completed_at, error, resume_ctx_json
+		`SELECT status, output_json, idempotency_key, taint_level, started_at, completed_at, error, reason, resume_ctx_json
 		 FROM task_checkpoints WHERE task_id = ? AND node_id = ? AND attempt = ?`,
 		taskID, nodeID, attempt,
 	)
 	var cp types.TaskCheckpointRow
-	var outputJSON, idempotencyKey, errStr, resumeCtxJSON sql.NullString
+	var outputJSON, idempotencyKey, errStr, reasonStr, resumeCtxJSON sql.NullString
 	var startedAt, completedAt sql.NullInt64
 
-	err := row.Scan(&cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr, &resumeCtxJSON)
+	err := row.Scan(&cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr, &reasonStr, &resumeCtxJSON)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -47,6 +47,7 @@ func (r *SQLiteTaskCheckpointRepository) GetCheckpoint(ctx context.Context, task
 	cp.StartedAt = startedAt.Int64
 	cp.CompletedAt = completedAt.Int64
 	cp.Error = errStr.String
+	cp.Reason = reasonStr.String
 	cp.ResumeCtxJSON = resumeCtxJSON.String
 
 	return &cp, nil
@@ -54,15 +55,15 @@ func (r *SQLiteTaskCheckpointRepository) GetCheckpoint(ctx context.Context, task
 
 func (r *SQLiteTaskCheckpointRepository) GetLatestCheckpoint(ctx context.Context, taskID, nodeID string) (*types.TaskCheckpointRow, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error, resume_ctx_json
+		`SELECT attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error, reason, resume_ctx_json
 		 FROM task_checkpoints WHERE task_id = ? AND node_id = ? ORDER BY attempt DESC LIMIT 1`,
 		taskID, nodeID,
 	)
 	var cp types.TaskCheckpointRow
-	var outputJSON, idempotencyKey, errStr, resumeCtxJSON sql.NullString
+	var outputJSON, idempotencyKey, errStr, reasonStr, resumeCtxJSON sql.NullString
 	var startedAt, completedAt sql.NullInt64
 
-	err := row.Scan(&cp.Attempt, &cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr, &resumeCtxJSON)
+	err := row.Scan(&cp.Attempt, &cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr, &reasonStr, &resumeCtxJSON)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -77,6 +78,7 @@ func (r *SQLiteTaskCheckpointRepository) GetLatestCheckpoint(ctx context.Context
 	cp.StartedAt = startedAt.Int64
 	cp.CompletedAt = completedAt.Int64
 	cp.Error = errStr.String
+	cp.Reason = reasonStr.String
 	cp.ResumeCtxJSON = resumeCtxJSON.String
 
 	return &cp, nil
@@ -84,8 +86,10 @@ func (r *SQLiteTaskCheckpointRepository) GetLatestCheckpoint(ctx context.Context
 
 func (r *SQLiteTaskCheckpointRepository) UpsertCheckpoint(ctx context.Context, row types.TaskCheckpointRow) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO task_checkpoints (task_id, node_id, attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error, resume_ctx_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		// reason 必须落盘：AwaitingHandoffReconciler 以 reason='handoff_wait' 识别挂起点，
+		// 漏写会让重启恢复静默跳过全部 handoff 任务（GR-1.1-001）。
+		`INSERT INTO task_checkpoints (task_id, node_id, attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error, reason, resume_ctx_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(task_id, node_id, attempt) DO UPDATE SET
 		 status = excluded.status,
 		 output_json = excluded.output_json,
@@ -94,6 +98,7 @@ func (r *SQLiteTaskCheckpointRepository) UpsertCheckpoint(ctx context.Context, r
 		 started_at = excluded.started_at,
 		 completed_at = excluded.completed_at,
 		 error = excluded.error,
+		 reason = excluded.reason,
 		 resume_ctx_json = excluded.resume_ctx_json`,
 		row.TaskID, row.NodeID, row.Attempt, row.Status,
 		sql.NullString{String: row.OutputJSON, Valid: row.OutputJSON != ""},
@@ -102,6 +107,7 @@ func (r *SQLiteTaskCheckpointRepository) UpsertCheckpoint(ctx context.Context, r
 		sql.NullInt64{Int64: row.StartedAt, Valid: row.StartedAt != 0},
 		sql.NullInt64{Int64: row.CompletedAt, Valid: row.CompletedAt != 0},
 		sql.NullString{String: row.Error, Valid: row.Error != ""},
+		sql.NullString{String: row.Reason, Valid: row.Reason != ""},
 		sql.NullString{String: row.ResumeCtxJSON, Valid: row.ResumeCtxJSON != ""},
 	)
 	if err != nil {
@@ -112,7 +118,7 @@ func (r *SQLiteTaskCheckpointRepository) UpsertCheckpoint(ctx context.Context, r
 
 func (r *SQLiteTaskCheckpointRepository) ListCheckpointsByTask(ctx context.Context, taskID string) ([]types.TaskCheckpointRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT node_id, attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error
+		`SELECT node_id, attempt, status, output_json, idempotency_key, taint_level, started_at, completed_at, error, reason, resume_ctx_json
 		 FROM task_checkpoints WHERE task_id = ? ORDER BY node_id ASC, attempt ASC`,
 		taskID,
 	)
@@ -125,10 +131,10 @@ func (r *SQLiteTaskCheckpointRepository) ListCheckpointsByTask(ctx context.Conte
 	for rows.Next() {
 		var cp types.TaskCheckpointRow
 		cp.TaskID = taskID
-		var outputJSON, idempotencyKey, errStr sql.NullString
+		var outputJSON, idempotencyKey, errStr, reasonStr, resumeCtxJSON sql.NullString
 		var startedAt, completedAt sql.NullInt64
 
-		if err := rows.Scan(&cp.NodeID, &cp.Attempt, &cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr); err != nil {
+		if err := rows.Scan(&cp.NodeID, &cp.Attempt, &cp.Status, &outputJSON, &idempotencyKey, &cp.TaintLevel, &startedAt, &completedAt, &errStr, &reasonStr, &resumeCtxJSON); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskCheckpointRepository.ListCheckpointsByTask.Scan", err)
 		}
 		cp.OutputJSON = outputJSON.String
@@ -136,9 +142,12 @@ func (r *SQLiteTaskCheckpointRepository) ListCheckpointsByTask(ctx context.Conte
 		cp.StartedAt = startedAt.Int64
 		cp.CompletedAt = completedAt.Int64
 		cp.Error = errStr.String
-		// Reason/ResumeCtxJSON not populated in this query historically（StateGraph
-		// 消费方不需要）；两者已在 ListByStatus 中选取（AwaitingHandoffReconciler 消费方需要）。
+		cp.Reason = reasonStr.String
+		cp.ResumeCtxJSON = resumeCtxJSON.String
 		res = append(res, cp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskCheckpointRepository.ListCheckpointsByTask.rows", err)
 	}
 	return res, nil
 }
@@ -172,6 +181,9 @@ func (r *SQLiteTaskCheckpointRepository) ListByStatus(ctx context.Context, statu
 		cp.Reason = reasonStr.String
 		cp.ResumeCtxJSON = resumeCtxJSON.String
 		res = append(res, cp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteTaskCheckpointRepository.ListByStatus.rows", err)
 	}
 	return res, nil
 }

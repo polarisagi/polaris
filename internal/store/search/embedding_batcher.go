@@ -11,7 +11,16 @@ import (
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-var ErrBatcherSaturated = apperr.New(apperr.CodeResourceExhausted, "embedding batcher saturated")
+var (
+	ErrBatcherSaturated = apperr.New(apperr.CodeResourceExhausted, "embedding batcher saturated")
+	ErrBatcherStopped   = apperr.New(apperr.CodeCancelled, "embedding batcher stopped")
+)
+
+// 优先级取值：enqueue 以 0 为 High 队列，其余进 Low 队列。
+const (
+	PriorityHigh = 0 // SurpriseIndex、交互式查询、同步适配器
+	PriorityLow  = 1 // GraphRAG、Consolidation 等后台批量
+)
 
 // EmbeddingBatcher — Embedding API 批量调用优化器。
 // 架构文档: docs/arch/M01-Inference-Runtime.md §6.1
@@ -31,6 +40,12 @@ type EmbeddingBatcher struct {
 	// dedup: textHash → 等待该文本结果的 channel 列表（扇出）
 	// 同一文本重复入队时，只发出一次 API 调用，结果扇出至所有等待者。
 	dedupMap map[string][]chan EmbedResult
+
+	// 生命周期（GR-1.1-004）：Stop 取消后台循环；stopped 后新请求立即失败，
+	// 在途等待者收到 ErrBatcherStopped，而不是永久阻塞在 ResultCh 上。
+	cancel  context.CancelFunc
+	done    chan struct{}
+	stopped bool
 }
 
 // Start 启动后台批处理定时器。
@@ -41,11 +56,15 @@ func (b *EmbeddingBatcher) Start(ctx context.Context) {
 		return
 	}
 	b.timer = time.NewTimer(b.batchWindow)
+	ctx, b.cancel = context.WithCancel(ctx)
+	b.done = make(chan struct{})
 	concurrent.SafeGo(ctx, "embedding_batcher_timer", func(ctx context.Context) {
+		defer close(b.done)
 		for {
 			select {
 			case <-ctx.Done():
 				b.timer.Stop()
+				b.failPending(ErrBatcherStopped)
 				return
 			case <-b.timer.C:
 				b.flushQueue(ctx)
@@ -53,6 +72,37 @@ func (b *EmbeddingBatcher) Start(ctx context.Context) {
 			}
 		}
 	})
+}
+
+// Stop 停止后台批处理循环并等待其退出；未 Start 或重复调用均安全，nil 接收者安全。
+func (b *EmbeddingBatcher) Stop() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	cancel, done := b.cancel, b.done
+	b.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}
+
+// failPending 标记停止并以 err 回告所有排队中的等待者。
+func (b *EmbeddingBatcher) failPending(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stopped = true
+	res := EmbedResult{Error: err}
+	for key, chs := range b.dedupMap {
+		for _, ch := range chs {
+			ch <- res
+		}
+		delete(b.dedupMap, key)
+	}
+	b.pendingHigh = [len(b.pendingHigh)]EmbedRequest{}
+	b.pendingLow = [len(b.pendingLow)]EmbedRequest{}
 }
 
 // flushQueue 在定时器到期时执行，优先 High (最多 80)，用 Low 补齐 (最多 100)。
@@ -189,6 +239,15 @@ func (b *EmbeddingBatcher) enqueue(req EmbedRequest) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.stopped {
+		// ResultCh 可能由外部调用方构造为无缓冲/已满，持锁发送不得阻塞（L-05）
+		select {
+		case req.ResultCh <- EmbedResult{Error: ErrBatcherStopped}:
+		default:
+		}
+		return
+	}
+
 	// 去重：同 text 已在队列中 → 将 ResultCh 追加到扇出列表，不再占用队列槽位。
 	key := textHash(req.Text)
 	if _, exists := b.dedupMap[key]; exists {
@@ -197,7 +256,7 @@ func (b *EmbeddingBatcher) enqueue(req EmbedRequest) {
 	}
 	b.dedupMap[key] = []chan EmbedResult{req.ResultCh}
 
-	if req.Priority == 0 {
+	if req.Priority == PriorityHigh {
 		for i := range b.pendingHigh {
 			if b.pendingHigh[i].Text == "" {
 				b.pendingHigh[i] = req

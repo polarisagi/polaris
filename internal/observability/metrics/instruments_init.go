@@ -371,7 +371,7 @@ func registerObservableGauges(meter metric.Meter, ie *instrumentInitErrs) {
 		}
 		o.ObserveFloat64(memAllocMBGauge, float64(heapBytes)/1024.0/1024.0)
 
-		// agents active（外部通过 SetActiveAgents 更新）
+		// agents active（Agent.Run 生命周期维护，见 ActiveAgentsCount）
 		o.ObserveFloat64(agentsActiveGauge, float64(ActiveAgentsCount.Load()))
 
 		// task success rate

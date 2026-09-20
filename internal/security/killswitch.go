@@ -328,8 +328,13 @@ func (ks *KillSwitch) CheckKILLSWITCHFile() {
 	}
 	killFile := filepath.Join(dataDir, "KILLSWITCH")
 	if _, err := os.Stat(killFile); err == nil {
-		// 文件存在 → 触发 FullStop（持锁）
+		// 文件存在 → 触发 FullStop（持锁）。已处于 FullStop 时不重复迁移：
+		// 轮询周期 500ms，transitionLocked 每次都会推送 CRITICAL 通知。
 		ks.mu.Lock()
+		if ks.state == types.KillFullStop {
+			ks.mu.Unlock()
+			return
+		}
 		ks.actor = "operator"
 		needsWrite, reason := ks.triggerFullStop("operator", "KILLSWITCH file detected at "+killFile)
 		ks.mu.Unlock()

@@ -101,13 +101,31 @@ func (fm *ForgettingManager) PeriodicCleanup() error {
 // decayUpdateItem 是 cleanupWithSQL 分流出的"需更新 decay_weight"条目。
 type decayUpdateItem struct {
 	ID          int64
+	SessionID   string
 	DecayWeight float64
 }
 
 // archiveItem 是 cleanupWithSQL 分流出的"需归档"条目。
 type archiveItem struct {
 	ID        int64
+	SessionID string
 	EventUUID string
+}
+
+// changeLogSQL 按 003_episodic_memory.sql 的真实列写审计（GR-5.1-001）：
+// 此前写 event_id/operation/payload/occurred_at 四个不存在的列，事务路径 100% 回滚。
+const changeLogSQL = `INSERT INTO episodic_events_change_log(session_id, changed_at, change_type, affected_count) VALUES (?, ?, ?, 1)`
+
+// graphEdgeDeleter 消费端接口：归档时清理 episodic 节点的出边（GR-1.1-007）。
+// SurrealDBCoreStore 满足；Tier0 无图存储时为 nil。
+type graphEdgeDeleter interface {
+	GraphDeleteEdges(fromID, edgeType string) error
+}
+
+// WithGraphEdgeDeleter 注入图边清理能力（可选）。
+func (fm *ForgettingManager) WithGraphEdgeDeleter(g graphEdgeDeleter) *ForgettingManager {
+	fm.graph = g
+	return fm
 }
 
 // txBeginner 是可选的事务开启能力（db 未实现时降级为非事务单语句执行）。
@@ -136,7 +154,7 @@ func (fm *ForgettingManager) queryDecayCandidates(ctx context.Context, db protoc
 	// GD-14-003：一并取出检索强化信号（retrieval_count / last_retrieved_at），
 	// 让淘汰依据从"够不够旧"变为"有没有人用"。
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, salience, occurred_at, event_uuid,
+		SELECT id, session_id, salience, occurred_at, event_uuid,
 		       retrieval_count, COALESCE(last_retrieved_at, 0)
 		FROM episodic_events
 		WHERE archived = 0 AND salience < 1.0`)
@@ -150,12 +168,13 @@ func (fm *ForgettingManager) queryDecayCandidates(ctx context.Context, db protoc
 
 	for rows.Next() {
 		var id int64
+		var sessionID string
 		var salience float64
 		var occurredAt int64
 		var eventUUID string
 		var retrievalCount int
 		var lastRetrievedAt int64
-		if err := rows.Scan(&id, &salience, &occurredAt, &eventUUID, &retrievalCount, &lastRetrievedAt); err != nil {
+		if err := rows.Scan(&id, &sessionID, &salience, &occurredAt, &eventUUID, &retrievalCount, &lastRetrievedAt); err != nil {
 			continue
 		}
 
@@ -166,10 +185,13 @@ func (fm *ForgettingManager) queryDecayCandidates(ctx context.Context, db protoc
 			continue
 		}
 		if ageHours > 30*24 {
-			toArchive = append(toArchive, archiveItem{ID: id, EventUUID: eventUUID})
+			toArchive = append(toArchive, archiveItem{ID: id, SessionID: sessionID, EventUUID: eventUUID})
 		} else {
-			toUpdate = append(toUpdate, decayUpdateItem{ID: id, DecayWeight: decayWeight})
+			toUpdate = append(toUpdate, decayUpdateItem{ID: id, SessionID: sessionID, DecayWeight: decayWeight})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeInternal, "ForgettingManager scan iterate", err)
 	}
 	return toUpdate, toArchive, nil
 }
@@ -194,7 +216,7 @@ func (fm *ForgettingManager) applyDecayUpdates(ctx context.Context, db protocol.
 
 		_, err = tx.ExecContext(ctx, "UPDATE episodic_events SET decay_weight=? WHERE id=?", item.DecayWeight, item.ID)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, "INSERT INTO episodic_events_change_log(event_id, operation, payload, occurred_at) VALUES (?, 'UPDATE', ?, ?)", item.ID, fmt.Sprintf(`{"decay_weight":%f}`, item.DecayWeight), time.Now().UnixMilli())
+			_, err = tx.ExecContext(ctx, changeLogSQL, item.SessionID, time.Now().UnixMilli(), "decay_update")
 		}
 		if err != nil {
 			_ = tx.Rollback() //nolint:errcheck // 回滚失败无补救手段，错误来源已在下方日志中
@@ -232,7 +254,7 @@ func (fm *ForgettingManager) applyArchival(ctx context.Context, db protocol.SQLQ
 
 		_, err = tx.ExecContext(ctx, "UPDATE episodic_events SET archived=1, archive_offset=? WHERE id=?", now, item.ID)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, "INSERT INTO episodic_events_change_log(event_id, operation, payload, occurred_at) VALUES (?, 'ARCHIVE', '{}', ?)", item.ID, time.Now().UnixMilli())
+			_, err = tx.ExecContext(ctx, changeLogSQL, item.SessionID, time.Now().UnixMilli(), "archive")
 		}
 
 		if err != nil {
@@ -255,17 +277,29 @@ func (fm *ForgettingManager) applyArchival(ctx context.Context, db protocol.SQLQ
 
 // deleteCognitiveIndex 同步删除认知索引 FTS/Vec 条目（从 cleanupWithSQL 拆出，
 // gocyclo 治理，行为不变）。
+//
+// 索引 ID 必须与写入侧一致：EpisodicMem.ftsIndexAsync / CognitiveReplayer / OnlineReindexer
+// 均以裸 event_uuid 作 FTS/Vec 主键，此前这里删 "ep_"+uuid，删除恒落空、归档记忆的索引永久残留。
 func (fm *ForgettingManager) deleteCognitiveIndex(eventUUID string) {
-	if fm.cognitive == nil || eventUUID == "" {
+	if eventUUID == "" {
+		return
+	}
+	if fm.graph != nil {
+		// EpisodicGraphIndexer 以 "episodic:"+ev.ID 为节点写出边；空 edgeType = 全部出边。
+		if err := fm.graph.GraphDeleteEdges("episodic:"+eventUUID, ""); err != nil {
+			slog.Warn("forgetting: 图边删除失败，可能残留悬挂边", "event_uuid", eventUUID, "err", err)
+		}
+	}
+	if fm.cognitive == nil {
 		return
 	}
 	// 悬挂索引必须可见：SQL 侧行已删而 FTS/Vec 条目还在时，检索会命中一条
 	// 取不回内容的"幽灵结果"。不向上返回错误（遗忘是尽力而为的后台清理，
 	// 单条失败不该中断整轮），但要留 Warn 供运维发现索引与主库开始发散。
-	if err := fm.cognitive.FTSDelete("ep_" + eventUUID); err != nil {
+	if err := fm.cognitive.FTSDelete(eventUUID); err != nil {
 		slog.Warn("forgetting: 认知索引 FTS 删除失败，可能残留悬挂索引", "event_uuid", eventUUID, "err", err)
 	}
-	if err := fm.cognitive.VecDelete("ep_" + eventUUID); err != nil {
+	if err := fm.cognitive.VecDelete(eventUUID); err != nil {
 		slog.Warn("forgetting: 认知索引向量删除失败，可能残留悬挂索引", "event_uuid", eventUUID, "err", err)
 	}
 }
@@ -321,7 +355,11 @@ func (fm *ForgettingManager) cleanupWithKV(ctx context.Context) error {
 //     后续检索会重复命中，且下一轮会重复归档。
 func (fm *ForgettingManager) processForgettableItemKV(ctx context.Context, id string, decayWeight float64, ageHours float64, key, val []byte) {
 	tombstoneKey := fmt.Appendf(nil, "forgettable:%s", id)
-	tombstoneVal := fmt.Appendf(nil, `{"id":"%s","decay_weight":%.4f,"marked_at":%d}`, id, decayWeight, time.Now().UnixMilli())
+	// 记录热存储真实键（GR-5.1-008）：KV 事件键形如 events:session:{sid}:{ts}_{seq}，
+	// 无法由事件 id 反推；PhysicalCompact 必须按此键删除原条目。
+	tombstoneVal, _ := json.Marshal(map[string]any{
+		"id": id, "key": string(key), "decay_weight": decayWeight, "marked_at": time.Now().UnixMilli(),
+	})
 	if err := fm.store.Put(ctx, tombstoneKey, tombstoneVal); err != nil {
 		slog.ErrorContext(ctx, "forgetting: tombstone write failed, item will never be reclaimed",
 			"id", id, "decay_weight", decayWeight, "err", err)

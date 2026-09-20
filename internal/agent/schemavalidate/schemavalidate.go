@@ -193,3 +193,28 @@ func contains(list []string, v string) bool {
 	}
 	return false
 }
+
+// ValidateAgainst 以任意 JSON Schema 值（如工具注册的 Parameters）校验 raw。
+// 只支持本包子集（type/required/properties/items/字符串 enum）；schema 使用了
+// 子集外的构造（type 数组、非字符串 enum 等）导致无法解析时返回 nil——工具
+// schema 可能来自第三方 MCP，解析不了就不拦截，由执行层兜底，避免误伤合法调用。
+func ValidateAgainst(schema any, raw []byte) error {
+	if schema == nil {
+		return nil
+	}
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return nil //nolint:nilerr // 见函数注释：schema 不可解析时不拦截
+	}
+	var fs fieldSchema
+	if err := json.Unmarshal(b, &fs); err != nil {
+		return nil //nolint:nilerr
+	}
+	var data any
+	if len(raw) == 0 {
+		data = map[string]any{}
+	} else if err := json.Unmarshal(raw, &data); err != nil {
+		return apperr.Wrap(apperr.CodeInvalidInput, "schemavalidate: invalid json", err)
+	}
+	return validateValue("$", data, &fs)
+}

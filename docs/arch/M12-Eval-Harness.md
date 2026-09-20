@@ -92,12 +92,12 @@ EvalResult:
 
 `RunnerImpl` 及评测器接口定义分布于 `internal/eval/` 根目录与 `internal/eval/harness/`。
 
-**`internal/eval/harness/` 核心文件**：
-- `runner.go`: L1-L5 Evaluator + RunnerImpl
-- `sampling_monitor.go`: 连续采样监控（1% 流量滑动窗口退化检测）
+**核心文件**（路径相对 `internal/eval/`；2026-09-20 追记 GR-12-004：原清单把全部文件归在 `harness/` 下，按 R7 拆分后的实际位置订正）：
+- `harness/runner.go`: L1-L5 Evaluator + RunnerImpl
+- `analysis/sampling_monitor.go`: 连续采样监控（1% 流量滑动窗口退化检测）
 - `founding_anchor.go`: FoundingAnchor 演进保护
 - `synthetic_adapter.go`: L3→L2 转换（SyntheticCase→EvalCase）
-- `store.go`: SQLiteEvalStore
+- `harness/store.go`: SQLiteEvalStore
 
 **✅ 组件状态更新（2026-07-10）**：`ShadowExecutor`（`internal/eval/analysis/shadow_executor.go`）已恢复实现并完成生产接入——此前经历"实现→误删→重新实现→再次误删为死代码"的反复（详见 ADR-0025 §K 修订记录），根因是仅有实现、缺少顶层周期触发器与 `StagingPipeline` 未接入 M9Engine 两处集成缺口，而非设计本身有问题。现由 `cmd/polaris/boot_agent.go` 启动 5 分钟周期 goroutine，发现 `rollout_states` 中停留在 Gate 2(Shadow) 的候选并调用 `RunReplayBatch`。
 

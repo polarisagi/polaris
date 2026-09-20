@@ -6,17 +6,14 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -51,14 +48,42 @@ func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []
 		fmt.Fprintf(&sb, "- [%s] %s\n", item.Source, item.Content)
 	}
 
-	return append([]types.Message{{Role: "system", Content: sb.String()}}, msgs...)
+	// 召回内容是数据不是指令（GR-4.1-004）：记忆/RAG 可含外部摄取文本，此前以 Role "system"
+	// 裸拼插到最前，等于绕过 PromptBuilder 四区隔离把外部文本提权为系统指令。
+	// 改为 user 角色 + Spotlighting 围栏（与 PromptBuilder.WriteUserData 同形），
+	// 污点取 max(召回项, 会话累计, Medium) 只升不降；插在前导 system 段之后，保持系统区连续。
+	level := types.PropagateTaint(types.TaintMedium, ac.Taint, a.sessionTaint())
+	memMsg := types.Message{Role: "user", Content: taint.Spotlighting(taint.NewTaintedString(
+		sb.String(), taint.TaintSource{Module: "memory_assembler", OriginTaintLevel: level}, "assembled_context"))}
+	i := 0
+	for i < len(msgs) && msgs[i].Role == "system" {
+		i++
+	}
+	out := make([]types.Message, 0, len(msgs)+1)
+	out = append(out, msgs[:i]...)
+	out = append(out, memMsg)
+	return append(out, msgs[i:]...)
+}
+
+// sessionTaint 返回当前会话已观测到的最高污点：GlobalTaintLevel（跨轮累积）与原始意图污点取 max。
+func (a *Agent) sessionTaint() types.TaintLevel {
+	if a.sCtx == nil {
+		return types.TaintHigh // 无上下文时 fail-closed
+	}
+	// 与 toProtocolCtx 同口径；调用方含 effect 后台 goroutine，须持读锁。
+	a.sCtx.Mu.RLock()
+	defer a.sCtx.Mu.RUnlock()
+	return types.PropagateTaint(a.sCtx.GlobalTaintLevel, a.sCtx.RawIntentTS.Level())
 }
 
 func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 	if a.memory == nil {
 		return
 	}
-	if err := a.memory.AppendEpisodicEvent(ctx, ev, types.TaintNone); err != nil {
+	// 污点不得在落库时洗白（GR-4.1-002）：本函数的 9 个调用点构造 Event 时均未填 TaintLevel，
+	// 传 TaintNone 等于把源自外部意图/工具输出的事件记成"系统生成"，后续按 MaxTaint 过滤的
+	// 检索会放行它们。取会话累计污点（只升不降）作为下限，Append 内部再与 ev.TaintLevel 取 max。
+	if err := a.memory.AppendEpisodicEvent(ctx, ev, a.sessionTaint()); err != nil {
 		a.handleMemoryPersistenceFailure(ctx, err, ev)
 		return
 	}
@@ -137,7 +162,7 @@ func (a *Agent) emitOutbox(ctx context.Context, topic, op string, payload any, i
 // 熔断机制复用 agent_execute_dag.go capability_gap 先例，不新增 FSM 转换规则、
 // 不新增挂起态类型（HE-3 可组合原语 + ADR-0042 先例）：
 //  1. 设置 sCtx.SuspendReason，供 HITL/运维侧观测挂起原因；
-//  2. 经 outbox 异步投递 m9_storage_degraded 事件，供运维告警/自动恢复 Worker 消费；
+//  2. 累加 GlobalMemoryPersistenceFailuresTotal（/metrics 可见）；
 //  3. 调用 a.asyncIntent(TriggerInterruptReceived) —— 该 trigger 在
 //     fsm/state_machine.go Dispatch() 中作为状态无关的全局处理（见该文件 S_INTERRUPT
 //     通用处理分支），可从任意非终态直接进入 S_INTERRUPT，无需在 transitions.go
@@ -156,21 +181,10 @@ func (a *Agent) handleMemoryPersistenceFailure(ctx context.Context, err error, e
 		a.sCtx.SuspendReason = "memory_persistence_failure"
 	}
 
-	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
-		payloadBytes, _ := json.Marshal(map[string]string{
-			"error":      err.Error(),
-			"event_type": string(ev.Type),
-			"task_id":    ev.TaskID,
-		})
-		if _, execErr := sqlRepo.ExecContext(ctx, `
-			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, time.Now().UnixMilli(), "m9_storage_degraded", "upsert", "memory_persistence_failure",
-			payloadBytes, uuid.New().String(), "pending"); execErr != nil {
-			slog.Error("agent: memory persistence failure outbox write failed",
-				"agent_id", a.ID, "err", execErr)
-		}
-	}
+	// 不再写 m9_storage_degraded outbox（GR-4.1-006 复核）：该主题全仓无消费者，且触发条件
+	// 正是存储层不可用——往同一个不可用的库里写 outbox 本身就会失败。可观测性由上方 Error
+	// 日志 + SuspendReason + GlobalMemoryPersistenceFailuresTotal 承担。
+	metrics.GlobalMemoryPersistenceFailuresTotal.Add(1)
 
 	a.asyncIntent(types.TriggerInterruptReceived)
 }

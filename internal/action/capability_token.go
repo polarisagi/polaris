@@ -103,18 +103,6 @@ func NewJITToken(agentID string, ops []TokenOperation, sandboxTier int) (*token.
 // （agent_execute_dag.go）固定 depth=0 单层铸造，从未真正触发过跨层委托。
 // 详见 docs/arch/M07-Tool-Action-Layer.md §4.6 更新说明。
 
-// 哨兵错误统一改用 pkg/apperr（GR-Batch4 capability_token 修复）：原生 &TokenError{...}
-// 未接入 apperr 体系会导致令牌提权/越权失败时 Trace 栈丢失上游上下文（apperr.CodeOf/IsCode
-// 无法识别）。这里直接把哨兵变量本身的类型换成 *apperr.Error，而不是在每个 return 处再包一层
-// apperr.Wrap——调用方依赖的是"哨兵值本身被原样返回"（errors.Is 与 identity 比较均需成立），
-// 若在返回处再包一层 apperr.Wrap 会产生新对象，破坏既有比较语义；直接让哨兵本身就是
-// *apperr.Error，两种比较方式均不受影响，同时 apperr.IsCode(err, ...) 也能正确识别。
-//
-// ErrMaxDelegationDepth 已删除（2026-08-06）：委托链机制 2026-07-14 移除后，
-// 它的唯一 return 点（NewJITToken 的 depth>=3 分支）随 depth 参数一并消失，
-// 全仓无任何生产/测试引用。派生深度校验的现役实现是
-// execute/orchestrator 的 MaxSpawnDepth（PostTask/PostBatch 前置校验）。
-var (
-	ErrTokenExpired  = apperr.New(apperr.CodeUnauthorized, "token expired")
-	ErrPolicyRevoked = apperr.New(apperr.CodeForbidden, "policy revoked during execution")
-)
+// ErrTokenExpired / ErrPolicyRevoked 已删除（2026-09-20，GR-4.2-009）：全仓零引用——
+// 令牌过期的现役哨兵是 internal/security/token.ErrTokenExpired（Verify 路径返回），
+// "执行中策略撤销"从未有返回点。ErrMaxDelegationDepth 已于 2026-08-06 随委托链一并删除。

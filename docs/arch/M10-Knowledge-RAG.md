@@ -189,6 +189,13 @@ EntityExtractor/RelationExtractor/CrossDocumentLinker/Clusterer 实现见 `inter
 - 优先级: 优先处理用户最近 24h 活跃检索的知识库文档的图谱构建，48h+ 未访问的文档降级为低优先级。
 - Global Search: 默认启用高质量的后台 LLM 生成式摘要（Generative Summarization），废弃原“为了省钱而被迫采用的抽取式摘要”方案。
 
+> **2026-09-20 复核**：GraphWriter 已废弃并删除——其通过 MutationBus 写入不存在的 `entities` 表，
+> 与 DDL SSoT（`004_semantic_memory.sql` 的 `semantic_entities`）不兼容。
+> 实体/关系落库统一走 `SemanticMemory.UpsertFact / UpsertRelation`（persistGraph，见 build.go）。
+> Leiden 社区摘要代码保留但标记为未接线：Clusterer.Cluster 零调用方，
+> 待 FeatureGraphRAGFull 门控启用时重新接线经 SemanticMemory 落库。
+
+
 ### 2.7-bis 关系边双时态化 + AsOf 视图（ADR-0083）
 
 `semantic_relations`（事实=边）现与实体侧对齐双时态：新增 `valid_from`/`valid_until`/`status`/`superseded_by`（事务时间=`created_at`/`updated_at`，有效时间=`valid_from`/`valid_until`）。表级 `UNIQUE(source_id, target_id, relation_type)` 改为部分索引 `uq_semantic_rel_active ... WHERE status='active'`，允许同一三元组保留多条历史版本，仅约束"当前活跃版本"唯一。

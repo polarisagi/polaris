@@ -171,6 +171,9 @@ func (k *knowledgeDocumentSource) SearchGraph(ctx context.Context, query string,
 	}
 	results := make([]types.ScoredFragment, 0, len(gr))
 	for _, c := range gr {
+		// GR-7.2-006：图遍历召回的 chunk 与 BM25/向量两路一样必须过 taint_hmac
+		// 校验（inv_M11_02），校验失败按 verifyChunkTaint 约定升级污点。
+		c.TaintLevel = verifyChunkTaint(k.hr.boundarySerializer, c.ID, c.Content, c.TaintLevel, c.TaintSource, c.TaintHMAC)
 		results = append(results, k.chunkToFragment(c))
 	}
 	return results, nil

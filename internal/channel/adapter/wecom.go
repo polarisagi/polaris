@@ -63,6 +63,7 @@ func WecomConnect(ctx context.Context, host PollerHost, channelID, botID, secret
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("wecom: dial: %v", err), err)
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	deviceID := fmt.Sprintf("polaris-%s", channelID[:min(8, len(channelID))])
 	authMsg := map[string]any{
@@ -182,16 +183,23 @@ func (a *WecomAdapter) Send(ctx context.Context, host Host, cfg map[string]any, 
 	if channelID == "" {
 		return apperr.New(apperr.CodeInternal, "wecom: missing _channel_id in cfg")
 	}
-	if v, ok := a.wecomSends.Load(channelID); ok {
-		if ch, ok := v.(chan WecomSendMsg); ok {
-			select {
-			case ch <- WecomSendMsg{ChatID: msg.ChatID, Text: text}:
-			default:
-				slog.Warn("wecom: send channel full", "channel", channelID, "err", apperr.New(apperr.CodeInternal, "log event"))
-			}
-		}
+	// GR-10.2-005：无活跃长连接或发送队列已满都必须向调用方报错，不能静默丢消息。
+	v, ok := a.wecomSends.Load(channelID)
+	if !ok {
+		return apperr.New(apperr.CodeNetworkUnavailable, "wecom: poller not running for channel "+channelID)
 	}
-	return nil
+	ch, ok := v.(chan WecomSendMsg)
+	if !ok {
+		return apperr.New(apperr.CodeInternal, "wecom: invalid send queue type")
+	}
+	select {
+	case ch <- WecomSendMsg{ChatID: msg.ChatID, Text: text}:
+		return nil
+	case <-ctx.Done():
+		return apperr.Wrap(apperr.CodeCancelled, "wecom: send cancelled", ctx.Err())
+	default:
+		return apperr.New(apperr.CodeResourceExhausted, "wecom: send queue full for channel "+channelID)
+	}
 }
 
 func (a *WecomAdapter) StartPoller(host Host, channelID string, cfg map[string]any) bool {
@@ -205,6 +213,9 @@ func (a *WecomAdapter) StartPoller(host Host, channelID string, cfg map[string]a
 	sendCh := make(chan WecomSendMsg, 100)
 	a.wecomSends.Store(channelID, sendCh)
 	concurrent.SafeGo(ctx, "poller.wecom."+channelID, func(ctx context.Context) {
+		// 长连接退出（停用/重载）后注销发送队列，否则 Send 持续向无人消费的
+		// 队列投递直到填满。CompareAndDelete 防止误删重启后新注册的队列。
+		defer a.wecomSends.CompareAndDelete(channelID, sendCh)
 		RunWeComPoller(ctx, host, channelID, botID, secret, cfg, sendCh)
 	})
 	return true

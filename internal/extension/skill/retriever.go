@@ -27,6 +27,10 @@ type EmbedFn func(ctx context.Context, text string) ([]float32, error)
 // L1: vecIndex (SurrealDB Vector KNN)
 // L2: sigMatcher (Signature/Capabilities Matcher)
 // L3: depGraph (PPR Dependency Graph traversal via GraphSpreadingActivation)
+//
+// Deprecated: HybridRetriever 三级检索（VecKNN + 签名匹配 + 图扩散）已被
+// M13-bis CompositeCatalog + search_tools 统一工具发现机制替代。
+// 保留代码供未来演进参考。2026-09-20 标注废弃。
 type HybridRetriever struct {
 	registry  protocol.SkillRegistry
 	cognitive CognitiveSearcher

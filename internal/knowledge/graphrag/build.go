@@ -24,7 +24,6 @@ type DocFetcher interface {
 type GraphBuildPipeline struct {
 	entityExtractor   *EntityExtractor
 	relationExtractor *RelationExtractor
-	crossDocLinker    *CrossDocumentLinker
 	clusterer         *Clusterer
 	semanticMem       protocol.SemanticMemory
 	fetcher           DocFetcher // optional：nil 时将 docID 本身作为文本占位
@@ -49,7 +48,6 @@ func NewGraphBuildPipeline(llm LLMClient, tier int, semanticMem protocol.Semanti
 			concurrencyCap: 5,
 		},
 		relationExtractor: &RelationExtractor{llmClient: llm},
-		crossDocLinker:    &CrossDocumentLinker{linkedEntities: make(map[string][]string)},
 		clusterer:         NewClusterer(tier),
 		semanticMem:       semanticMem,
 	}
@@ -72,13 +70,7 @@ func (p *GraphBuildPipeline) Run(ctx context.Context, docID string) error {
 	if p.gate != nil && !p.gate.BackgroundPermit(3) {
 		return nil
 	}
-	// 获取文档文本（fetcher 注入时从 store 取；否则降级用 docID 占位）
-	docText := docID
-	if p.fetcher != nil {
-		if text, err := p.fetcher.FetchText(ctx, docID); err == nil && text != "" {
-			docText = text
-		}
-	}
+	docText := p.fetchDocText(ctx, docID)
 
 	entities, err := p.entityExtractor.Extract(ctx, docText)
 	if err != nil {
@@ -88,25 +80,26 @@ func (p *GraphBuildPipeline) Run(ctx context.Context, docID string) error {
 		return nil
 	}
 
-	edges, err := p.relationExtractor.Extract(ctx, entities)
+	for _, e := range entities {
+		if e.SourceDocID == "" {
+			e.SourceDocID = docID
+		}
+	}
+	edges, inferred, err := p.relationExtractor.Extract(ctx, entities, docText)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase2 relation extraction failed", err)
 	}
-
-	if err := p.crossDocLinker.Link(ctx, entities, edges); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: Phase3 cross-doc linking failed", err)
+	if err := p.persistGraph(ctx, docID, entities, edges, inferred); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline: persist entities/relations failed", err)
 	}
 
-	clusterAssignments := p.clusterer.ClusterEntities(collectEmbeddings(entities))
+	// Phase 3 CrossDocumentLinking 由 persistGraph 落库时的 semantic_entities
+	// UNIQUE(entity_type, name) 完成：不同文档抽出的同名同类实体归并为同一行，
+	// 关系边挂在同一 DBID 上即跨文档链接。原内存 CrossDocumentLinker 只把实体
+	// 自身 ID 追加进进程级 map、全仓无读取方，且无锁、随进程寿命无限增长
+	// （GR-7.2-007），已删除。
 
-	// Group entities by cluster ID
-	clusters := make(map[int][]int)
-	for idx, cID := range clusterAssignments {
-		if cID == -1 {
-			continue // Skip noise/unclassified
-		}
-		clusters[cID] = append(clusters[cID], idx)
-	}
+	clusters := p.groupClusters(entities)
 
 	// Phase 5: ConceptSynthesizer
 	if err := p.synthesizeConcepts(ctx, entities, clusters); err != nil {
@@ -142,7 +135,7 @@ func (p *GraphBuildPipeline) ExtractEntitiesAndRelations(ctx context.Context, so
 		}
 	}
 
-	edges, err := p.relationExtractor.Extract(ctx, entities)
+	edges, _, err := p.relationExtractor.Extract(ctx, entities, text)
 	if err != nil {
 		return nil, nil, apperr.Wrap(apperr.CodeInternal, "GraphBuildPipeline.ExtractEntitiesAndRelations: relation extraction failed", err)
 	}
@@ -276,32 +269,125 @@ func (p *GraphBuildPipeline) synthesizeOneCluster(ctx context.Context, entities 
 	return nil
 }
 
-func collectEmbeddings(entities []*Entity) [][]float32 {
-	embs := make([][]float32, 0, len(entities))
-	for _, e := range entities {
-		if len(e.Embedding) > 0 {
-			embs = append(embs, e.Embedding)
+// fetchDocText 获取文档文本（fetcher 注入时从 store 取；否则降级用 docID 占位）。
+func (p *GraphBuildPipeline) fetchDocText(ctx context.Context, docID string) string {
+	if p.fetcher != nil {
+		if text, err := p.fetcher.FetchText(ctx, docID); err == nil && text != "" {
+			return text
 		}
 	}
-	return embs
+	return docID
+}
+
+// groupClusters 聚类并按簇归组实体下标。clusterAssignments 的下标对应 embs（只含
+// 有向量的实体），必须经 embIdx 映射回 entities 下标；原实现直接当作 entities
+// 下标使用，任一实体缺向量时其后所有实体的簇归属整体错位。
+func (p *GraphBuildPipeline) groupClusters(entities []*Entity) map[int][]int {
+	embs, embIdx := collectEmbeddings(entities)
+	clusters := make(map[int][]int)
+	for i, cID := range p.clusterer.ClusterEntities(embs) {
+		if cID == -1 || i >= len(embIdx) {
+			continue // Skip noise/unclassified
+		}
+		clusters[cID] = append(clusters[cID], embIdx[i])
+	}
+	return clusters
+}
+
+// collectEmbeddings 返回有向量实体的向量列表及其在 entities 中的下标。
+func collectEmbeddings(entities []*Entity) ([][]float32, []int) {
+	embs := make([][]float32, 0, len(entities))
+	idx := make([]int, 0, len(entities))
+	for i, e := range entities {
+		if len(e.Embedding) > 0 {
+			embs = append(embs, e.Embedding)
+			idx = append(idx, i)
+		}
+	}
+	return embs, idx
+}
+
+// persistGraph 把 Phase1/2 产物写入语义图（GR-7.2-003 连带发现）。
+//
+// 原 Run 只在 Phase5 写入概念实体，文档抽取出的实体与关系从未落库——
+// Phase5 为概念建边时按 (type,name) 反查源实体 DBID 也因此恒失败，整条
+// 文档→知识图谱管线实际不产生任何图数据。写入走 SemanticMemory（与 Phase5、
+// M5 consolidation 同一落库入口），不使用无生产接线的 GraphWriter。
+//
+// 已存在的同名同类型实体不重写：UpsertFact 的 ON CONFLICT 会用本次（空）
+// properties 覆盖原值，文档摄取不应抹掉记忆侧已积累的实体属性，这里只需其 DBID。
+// 外部文档内容至少按 TaintMedium 入库。inferred（共现回退）关系不落库。
+func (p *GraphBuildPipeline) persistGraph(ctx context.Context, docID string, entities []*Entity, edges []*Relation, inferred bool) error {
+	if p.semanticMem == nil {
+		return nil
+	}
+	dbIDs, byID, err := p.persistEntities(ctx, entities)
+	if err != nil || inferred {
+		return err
+	}
+	return p.persistRelations(ctx, docID, edges, byID, dbIDs)
+}
+
+// docTaint 外部文档内容至少按 TaintMedium 入库。
+func docTaint(levels ...types.TaintLevel) types.TaintLevel {
+	t := types.TaintMedium
+	for _, l := range levels {
+		if l > t {
+			t = l
+		}
+	}
+	return t
+}
+
+// persistEntities 写入尚不存在的实体并返回 entity.ID → DBID 映射。
+func (p *GraphBuildPipeline) persistEntities(ctx context.Context, entities []*Entity) (map[string]int64, map[string]*Entity, error) {
+	dbIDs := make(map[string]int64, len(entities))
+	byID := make(map[string]*Entity, len(entities))
+	for _, e := range entities {
+		if e.Name == "" || e.Type == "" {
+			continue
+		}
+		byID[e.ID] = e
+		existing, err := p.semanticMem.GetEntity(ctx, e.Type, e.Name)
+		if err != nil || existing == nil {
+			if err := p.semanticMem.UpsertFact(ctx, *e, docTaint(e.TaintLevel)); err != nil {
+				return nil, nil, apperr.Wrap(apperr.CodeInternal, "persistGraph: upsert entity", err)
+			}
+			existing, err = p.semanticMem.GetEntity(ctx, e.Type, e.Name)
+			if err != nil || existing == nil {
+				continue
+			}
+		}
+		dbIDs[e.ID] = existing.DBID
+	}
+	return dbIDs, byID, nil
+}
+
+// persistRelations 写入端点均已落库的关系；端点缺失（LLM 幻觉/拼写偏差）不建悬空边。
+func (p *GraphBuildPipeline) persistRelations(ctx context.Context, docID string, edges []*Relation, byID map[string]*Entity, dbIDs map[string]int64) error {
+	for _, r := range edges {
+		from, to := byID[r.FromEntityID], byID[r.ToEntityID]
+		if from == nil || to == nil || dbIDs[from.ID] == 0 || dbIDs[to.ID] == 0 {
+			continue
+		}
+		taint := docTaint(from.TaintLevel, to.TaintLevel)
+		rel := *r
+		rel.FromDBID, rel.ToDBID = dbIDs[from.ID], dbIDs[to.ID]
+		rel.SourceDocID = docID
+		rel.TaintLevel = taint
+		if rel.Weight == 0 {
+			rel.Weight = 1.0
+		}
+		if err := p.semanticMem.UpsertRelation(ctx, rel, taint); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "persistGraph: upsert relation", err)
+		}
+	}
+	return nil
 }
 
 type Entity = types.Entity
 
 type Relation = types.Relation
-
-// CrossDocumentLinker 跨文档实体链接。
-// 新实体查同 Name+Type 已有实体 → CrossDocLink(EntityID, DocIDs[]).
-type CrossDocumentLinker struct {
-	linkedEntities map[string][]string // entityID → []docID
-}
-
-func (cdl *CrossDocumentLinker) Link(ctx context.Context, entities []*Entity, edges []*Relation) error {
-	for _, e := range entities {
-		cdl.linkedEntities[e.ID] = append(cdl.linkedEntities[e.ID], e.ID)
-	}
-	return nil
-}
 
 // EntityFetcher 提供按名称获取现有实体以便进行消歧的接口。
 type EntityFetcher interface {

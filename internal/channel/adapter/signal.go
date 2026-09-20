@@ -152,8 +152,7 @@ func (a *SignalAdapter) Send(ctx context.Context, host Host, cfg map[string]any,
 	apiURL, _ := cfg["api_url"].(string)
 	account, _ := cfg["account"].(string)
 	if apiURL == "" || account == "" {
-		slog.Warn("signal: api_url or account missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "signal: api_url or account missing")
 	}
 	if err := SignalSendMessage(ctx, host.HTTPClient(), apiURL, account, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "signal", "err", err)

@@ -37,14 +37,14 @@ func (p *ConsolidationPipeline) synthesizeUserProfile(
 	// 若 events 最新时间戳距上次合成 < 1 分钟，跳过（防重复合成）
 	if current != nil && len(events) > 0 {
 		newestTS := (func() *types.Event {
-			if e, _ := events[0].Event.(*types.Event); e != nil {
+			if e := events[0].EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).CreatedAt.UnixMilli()
 		for _, se := range events {
 			if ts := (func() *types.Event {
-				if e, _ := se.Event.(*types.Event); e != nil {
+				if e := se.EventPtr(); e != nil {
 					return e
 				}
 				return &types.Event{}
@@ -61,7 +61,7 @@ func (p *ConsolidationPipeline) synthesizeUserProfile(
 	var latestTS int64
 	for _, se := range events {
 		if ts := (func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
@@ -105,14 +105,14 @@ func (p *ConsolidationPipeline) llmSynthesizeProfile(
 	limit := min(15, len(events))
 	for _, se := range events[:limit] {
 		sb.WriteString(string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).Type))
 		sb.WriteString(": ")
 		payload := string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
@@ -185,7 +185,7 @@ func (p *ConsolidationPipeline) ruleSynthesizeProfile(
 
 	for _, se := range events {
 		eventTypFreq[string((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
@@ -196,7 +196,7 @@ func (p *ConsolidationPipeline) ruleSynthesizeProfile(
 			Name     string `json:"name"`
 		}
 		if err := json.Unmarshal((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
@@ -212,13 +212,13 @@ func (p *ConsolidationPipeline) ruleSynthesizeProfile(
 
 		// 收集近期摘要（最多 20 条）
 		if len(recentSummaries) < 20 && len((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).Payload) > 0 {
 			summary := string((func() *types.Event {
-				if e, _ := se.Event.(*types.Event); e != nil {
+				if e := se.EventPtr(); e != nil {
 					return e
 				}
 				return &types.Event{}
@@ -227,7 +227,7 @@ func (p *ConsolidationPipeline) ruleSynthesizeProfile(
 				summary = summary[:80]
 			}
 			recentSummaries = append(recentSummaries, string((func() *types.Event {
-				if e, _ := se.Event.(*types.Event); e != nil {
+				if e := se.EventPtr(); e != nil {
 					return e
 				}
 				return &types.Event{}
@@ -255,6 +255,7 @@ type ForgettingManager struct {
 	salienceThreshold float64
 
 	archiver *ColdArchiver
+	graph    graphEdgeDeleter // 可 nil（Tier0 无图存储）
 }
 
 // SampleOOMFeatures 提取 OOM 现场特征数据
@@ -263,7 +264,7 @@ func (p *ConsolidationPipeline) SampleOOMFeatures(events []types.ScoredEvent) ma
 	totalBytes := 0
 
 	for _, se := range events {
-		if e, ok := se.Event.(*types.Event); ok && e != nil {
+		if e := se.EventPtr(); e != nil {
 			typeDist[string(e.Type)]++
 			totalBytes += len(e.Payload)
 		}

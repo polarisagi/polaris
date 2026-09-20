@@ -156,7 +156,9 @@ func TestReplaceUnixLibs(t *testing.T) {
 
 func TestWriteWindowsUpdateScript(t *testing.T) {
 	m := &Manager{}
-	m.exitFn = func(code int) {}
+	m.exitFn = func(code int) { t.Error("writeWindowsUpdateScript must not exit the process (GR-10.2-003)") }
+	started := ""
+	m.startScriptFn = func(p string) error { started = p; return nil }
 
 	tmpDir := t.TempDir()
 	exePath := filepath.Join(tmpDir, "polaris.exe")
@@ -172,6 +174,9 @@ func TestWriteWindowsUpdateScript(t *testing.T) {
 	scriptPath := exePath + ".update.bat"
 	if _, err := os.Stat(scriptPath); err != nil {
 		t.Errorf("script not written: %v", err)
+	}
+	if started != scriptPath {
+		t.Errorf("update script not launched, started=%q", started)
 	}
 
 	time.Sleep(300 * time.Millisecond)

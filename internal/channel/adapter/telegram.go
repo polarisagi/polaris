@@ -167,8 +167,7 @@ func (a *TelegramAdapter) Extract(body []byte, r *http.Request) protocol.Channel
 func (a *TelegramAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
 	token, _ := cfg["bot_token"].(string)
 	if token == "" {
-		slog.Warn("telegram: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "telegram: bot_token missing")
 	}
 	payload, err := json.Marshal(map[string]any{"chat_id": msg.ChatID, "text": text})
 	if err != nil {
@@ -189,10 +188,9 @@ func (a *TelegramAdapter) Send(ctx context.Context, host Host, cfg map[string]an
 	if resp.StatusCode != http.StatusOK {
 		b, ioErr := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		if ioErr != nil {
-			slog.Warn("telegram: read non-200 body failed", "status", resp.StatusCode, "err", ioErr)
-		} else {
-			slog.Warn("telegram: sendMessage non-200", "status", resp.StatusCode, "body", string(b), "err", apperr.New(apperr.CodeInternal, "log event"))
+			return apperr.New(apperr.CodeInternal, fmt.Sprintf("telegram sendMessage %d", resp.StatusCode))
 		}
+		return apperr.New(apperr.CodeInternal, fmt.Sprintf("telegram sendMessage %d: %s", resp.StatusCode, b))
 	}
 	return nil
 }

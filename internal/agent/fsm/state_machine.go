@@ -631,7 +631,7 @@ const (
 )
 
 // ErrReplanExhausted Replan 次数耗尽
-var ErrReplanExhausted = apperr.New(apperr.CodeResourceExhausted, "replan guard: max replan count reached, escalate to HITL")
+var ErrReplanExhausted = apperr.NewSentinel(apperr.CodeResourceExhausted, "replan guard: max replan count reached, escalate to HITL")
 
 func isTerminalState(s types.AgentState) bool {
 	return s == types.AgentStateComplete || s == types.AgentStateFailed || s == types.AgentStateInterrupt

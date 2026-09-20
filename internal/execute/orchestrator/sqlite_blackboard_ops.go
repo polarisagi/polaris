@@ -14,13 +14,19 @@ import (
 )
 
 // RenewLease 续约（重置 expires_at = now + DefaultLeaseTTL）。
+//
+// GR-6.2-001：Reaper 同时回收 claimed 与 running 两态，续约也必须覆盖两态，
+// 否则 StartExecution 之后的任务无法续约、到期即被误杀。
+// 续约不递增 version：version 是所有权纪元（认领/状态迁移才变），
+// SideEffectPreCheck 以它做 fencing；若每 15s 心跳都 +1，持有者自己的
+// claimedVersion 会在首次心跳后失效，副作用前置校验全部误判为 stale。
 func (bb *SQLiteBlackboard) RenewLease(ctx context.Context, taskID, agentID string) error {
 	expiresAt := time.Now().Add(DefaultLeaseTTL).UTC().Format(time.RFC3339)
 	res, err := bb.db.ExecContext(ctx, `
 		UPDATE tasks
-		SET expires_at=?, updated_at=datetime('now'), version=version+1
-		WHERE task_id=? AND claimed_by=? AND status=?`,
-		expiresAt, taskID, agentID, statusClaimed,
+		SET expires_at=?, updated_at=datetime('now')
+		WHERE task_id=? AND claimed_by=? AND status IN (?, ?)`,
+		expiresAt, taskID, agentID, statusClaimed, statusRunning,
 	)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "blackboard.RenewLease", err)
@@ -205,8 +211,12 @@ func (bb *SQLiteBlackboard) broadcast(ev types.BlackboardEvent) {
 // ─── 错误类型 ────────────────────────────────────────────────────────────────
 
 var (
-	ErrTaskNotOwned         = apperr.New(apperr.CodeInternal, "blackboard: task not owned by this agent or in wrong state")
-	ErrStaleBlackboardLease = apperr.New(apperr.CodeInternal, "blackboard: lease expired or task not claimed by this agent")
+	// 两个哨兵使用互不相同、且不同于 CodeInternal 的错误码：apperr.Is 按 Code
+	// 比较，原先二者都是 CodeInternal，任意 DB 故障（同为 CodeInternal）都会被
+	// errors.Is 判成"租约失效/非持有者"，调用方据此放弃任务会把瞬时故障放大
+	// 成任务中止。
+	ErrTaskNotOwned         = apperr.NewSentinel(apperr.CodeForbidden, "blackboard: task not owned by this agent or in wrong state")
+	ErrStaleBlackboardLease = apperr.NewSentinel(apperr.CodeConflict, "blackboard: lease expired or task not claimed by this agent")
 )
 
 // Ping 检测数据库连接是否存活，实现 Pinger 接口，供 HealthCheckGate 使用。

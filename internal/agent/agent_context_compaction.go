@@ -76,7 +76,8 @@ func (a *Agent) hotPathCompact(ctx context.Context, msgs []types.Message, level 
 	}
 
 	// Stage 2/3：仅硬触发（>90%）执行，需要真实 LLM 调用生成锚点摘要。
-	middle, tail := compact.SplitMessages(msgs, hotPathHardTailTokens)
+	head, body := compact.SplitPinnedHead(msgs)
+	middle, tail := compact.SplitMessages(body, hotPathHardTailTokens)
 	if len(middle) == 0 {
 		// tail 已覆盖全部消息，无法进一步压缩（Stage 1 卸载结果已是最终结果）。
 		return msgs
@@ -98,7 +99,8 @@ func (a *Agent) hotPathCompact(ctx context.Context, msgs []types.Message, level 
 		Role:    "assistant",
 		Content: compact.SummaryPrefix + "\n\n" + summary,
 	}
-	newMsgs := make([]types.Message, 0, 1+len(tail))
+	newMsgs := make([]types.Message, 0, len(head)+1+len(tail))
+	newMsgs = append(newMsgs, head...) // 固定前缀字节级不变（GD-14-001）
 	newMsgs = append(newMsgs, summaryMsg)
 	newMsgs = append(newMsgs, tail...)
 

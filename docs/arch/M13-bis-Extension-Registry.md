@@ -89,7 +89,7 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 **ambient 加载规则**：
 - 查询 `skills WHERE exec_mode='ambient' AND deprecated=0`，按 `ambient_priority`（`'always'|'auto'|'index_only'`，DDL `008_skills.sql`，默认 `'auto'`）与 trust_tier 排序；`always` 强制注入全文，`index_only` 仅注入索引摘要不注入全文
 - 注入位置：system prompt ImmutableCore 区末尾，TaintedData 区之前
-- 总字符限制：ambient skills 合计 ≤ `spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars`（默认 4000 字符，不得占用超过 ~10% 上下文窗口）。超预算的 skill 降级为 index-only（仅注入名称+描述行并 WARN）。链路：state.yaml → `config.M13InterfaceThresholds.AmbientSkillMaxChars` → `Server.SetAmbientSkillMaxChars` → `ChatHandler.AmbientMaxChars`；未注入时回落 `defaultAmbientMaxChars = 4000`。大上下文窗口模型可经 `[m13_interface] ambient_skill_max_chars` 调高
+- 总字符限制：ambient skills 合计 ≤ `spec/state.yaml §thresholds.m13_interface.ambient_skill_max_chars`（默认 4000 字符，不得占用超过 ~10% 上下文窗口）。超预算的 skill 降级为 index-only（仅注入名称+描述行并 WARN）。链路：state.yaml → `config.M13InterfaceThresholds.AmbientSkillMaxChars` → `Server.SetAmbientSkillMaxChars` → `ChatHandler.AmbientMaxChars`；未注入时回落 `defaultAmbientMaxChars = 4000`。大上下文窗口模型可经 `[m13_interface] ambient_skill_max_chars` 调高
   > **✅ 已修复（2026-07-28，DR-4-005）**：此前 `system_prompt.go` 硬编码 `maxFullTextChars = 128_000`（≈32K tokens），超本条设计约束 32 倍，在 Tier-0（2GB VPS）上单靠 ambient skill 即可打爆整个 prompt 预算；且文档引用的模块键 `m13_ext` 在 `state.yaml`/`thresholds.go` 中并不存在（实际为 `m13_scheduler` / `[m13_interface]`）。现已参数化并统一键名。
 - 超限时优先保留 trust_tier 高的，其余截断并 WARN
 
@@ -103,7 +103,7 @@ Skill 有两种执行模式，在 SKILL.md frontmatter 的 `exec_mode` 字段声
 
 ## 4. 工具发现与懒加载
 
-当已安装工具总数超过 `spec/state.yaml §thresholds.m13_scheduler.lazy_load_tool_threshold`（默认 40），切换到懒加载模式，避免 context 爆炸。
+当已安装工具总数超过 `spec/state.yaml §thresholds.m13_interface.lazy_load_tool_threshold`（默认 40），切换到懒加载模式，避免 context 爆炸。
 
 工具激活状态跟踪已通过 `internal/tool/catalog/composite.go` 基于 `session_id` 实现。`BuildToolSchemas()` 会根据阈值动态过滤未激活的非核心工具。
 
@@ -308,7 +308,7 @@ Plugin Bundle（`§5.3`）安装时子组件写入全局表，但**只过一次�
 
 ### 8.1 工具列表构建（每次推理请求）
 
-懒加载阈值见 `spec/state.yaml §thresholds.m13_scheduler.lazy_load_tool_threshold`（默认 40）。
+懒加载阈值见 `spec/state.yaml §thresholds.m13_interface.lazy_load_tool_threshold`（默认 40）。
 
 `totalTools() ≤ LazyLoadThreshold` 时全量返回 builtin + mcp + script runtime skill（exec_mode=tool）；超限时仅返回核心 builtin + `search_tools` 元工具。`skillToolSchemas()` 仅暴露 runtime='script' AND exec_mode='tool' 的技能，工具名格式为 `skill__{slug}`。Logic Collapse 脚本技能经 `execute_skill` 工具调用，不进入此列表。
 

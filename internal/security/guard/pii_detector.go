@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -94,6 +95,10 @@ func (d *PIIDetector) RedactWithMode(ctx context.Context, text string, mode stri
 	if len(matches) == 0 {
 		return text, 0, nil
 	}
+	// 倒序替换的前提是区间按 Start 升序且互不重叠（GR-2.1-003）：detectByRules 按规则
+	// 声明顺序追加、Presidio 合并也不排序，多规则命中同一片段（手机号∩身份证∩卡号）
+	// 时区间还会重叠——任一条件不满足，前一次替换改变长度后后续偏移全部错位。
+	matches = nonOverlappingByStart(text, matches)
 	// 从后往前替换：保持已处理片段前的字节偏移不变
 	out := text
 	for i := len(matches) - 1; i >= 0; i-- {
@@ -124,6 +129,36 @@ func (d *PIIDetector) RedactWithMode(ctx context.Context, text string, mode stri
 		out = out[:m.Start] + replacement + out[m.End:]
 	}
 	return out, len(matches), nil
+}
+
+// nonOverlappingByStart 按 Start 升序排序并剔除重叠区间：同起点取更长者，
+// 与已保留区间重叠的后续命中丢弃（被更早/更长的区间整体覆盖脱敏）。
+func nonOverlappingByStart(text string, matches []PIIMatch) []PIIMatch {
+	sorted := slices.Clone(matches)
+	slices.SortStableFunc(sorted, func(a, b PIIMatch) int {
+		if a.Start != b.Start {
+			return a.Start - b.Start
+		}
+		return b.End - a.End
+	})
+	out := sorted[:0]
+	lastEnd := -1
+	for _, m := range sorted {
+		if m.Start < lastEnd {
+			if m.End > lastEnd { // 部分重叠：扩展已保留区间，确保整段被覆盖
+				last := &out[len(out)-1]
+				last.End = m.End
+				if last.Start >= 0 && last.End <= len(text) {
+					last.Value = text[last.Start:last.End]
+				}
+				lastEnd = m.End
+			}
+			continue
+		}
+		out = append(out, m)
+		lastEnd = m.End
+	}
+	return out
 }
 
 // HasPII 快速判断是否含 PII（不返回详情）。
@@ -160,7 +195,7 @@ func defaultPIIRules() []*piiRule {
 		{
 			// 中国大陆手机号
 			name:    "phone_cn",
-			pattern: regexp.MustCompile(`(?:(?:\+?86)|0)?\s*1[3-9]\d{9}`),
+			pattern: regexp.MustCompile(`(?:(?:\+?86|0)\s*)?1[3-9]\d{9}`), // 空白只允许出现在区号之后，否则会吞掉号码前的分隔空格
 			score:   0.90,
 		},
 		{

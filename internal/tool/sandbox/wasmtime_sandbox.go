@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -30,7 +31,23 @@ func (s *WasmtimeSandbox) Level() int {
 }
 
 // Run 执行 Wasm 沙箱调用。
-func (s *WasmtimeSandbox) Run(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+//
+// 与 InProcessSandbox 同口径上报工具调用/沙箱执行指标（GR-5.2-006，HE-1），并把输入污点
+// 带回结果（ExecEnvelope 仍会再做 only-up，此处保证直调路径也不丢失）。
+func (s *WasmtimeSandbox) Run(ctx context.Context, spec sandbox.SandboxSpec) (result *types.ToolResult, runErr error) {
+	tierLabel := trace.SandboxTierLabel(int(types.SandboxWasm))
+	obsStart := time.Now()
+	defer func() {
+		status := "success"
+		if runErr != nil || (result != nil && !result.Success) {
+			status = "error"
+		}
+		if result != nil && result.TaintLevel < spec.TaintLevel {
+			result.TaintLevel = spec.TaintLevel
+		}
+		trace.RecordToolCall(ctx, spec.ToolName, status, tierLabel, float64(time.Since(obsStart).Milliseconds()))
+		trace.RecordSandboxExecution(ctx, tierLabel)
+	}()
 	if spec.DryRunMode {
 		// Wasm 模式下直接返回 Mocked Result
 		outJSON := `{"mocked": true, "tool": "` + spec.ToolName + `"}`

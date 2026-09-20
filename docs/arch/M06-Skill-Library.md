@@ -1,7 +1,7 @@
 # 模块 6: Skill Library
 
 > 可命名、可参数化、可索引的复用技能。Go 主导管理+检索+Logic Collapse，script runtime（Python，ContainerSandbox 执行）。[HE-Rule-3] [HE-Rule-5]
-<!-- §跳读: 0-bis:5 职责 / 0-ter:15 不变量速查 / 1:26 技能表征 / 2:62 生命周期(CANONICAL) / 3:214 检索系统 / 4:241 演化 / 5:277 脚本缓存 / 7:312 (SOFT)降级 / 8:326 依赖 / 9:339 AgentSkills标准格式适配 -->
+<!-- §跳读: 0-bis:5 职责 / 0-ter:15 不变量速查 / 1:26 技能表征 / 2:62 生命周期(CANONICAL) / 3:215 检索系统 / 4:242 演化 / 5:278 脚本缓存 / 7:313 (SOFT)降级 / 8:327 依赖 / 9:340 AgentSkills标准格式适配 -->
 ## 0-bis. 职责边界
 
 - M6 **是**: 技能注册、索引、检索、生命周期管理 | M6 **不是**: 技能沙箱执行（那是 M7）
@@ -185,7 +185,8 @@ M9 BackgroundTaskScheduler 允许多个 Logic Collapse 任务并发排队（L1 �
 3. 若 `semantic_cluster_id` 相同（同语义重复提交）：按 `version++` 正常更新，不视为冲突。
 4. 覆盖写完成后，M4 DAGNode 中已有对旧版本 `skill:X` 的技能引用不受影响（引用锁定 `skill:X@v{N}`，新版本为 `skill:X@v{N+1}`），遵循 §1.2 版本约束规则。
 
-**Skill 存储物理路径**: 遵循 M2 Outbox 模式。SQLite 单事务原子写入 `skills` 表 + `events` 表 (`SkillCreatedEvent`) + `outbox` 表 (`target_engine='SurrealDB-Core'`)。Outbox Worker 异步投影脚本 blob 到 SurrealDB-Core KV [Storage-SurrealDB-Core]。SKILL.md + src/ + test/ 为文件系统 Ground Truth (Git 版本控制) [Storage-SQLite]。
+**Skill 存储物理路径**: `SkillRegistry.Register`（`internal/extension/skill/sqlite_registry.go`）直写 SQLite `skills` 表（`ON CONFLICT(name) DO UPDATE` 幂等 upsert，元数据 + `instructions` 全文）；SKILL.md + src/ + test/ 为文件系统 Ground Truth (Git 版本控制) [Storage-SQLite]。
+> 2026-09-20 追记（GR-12-005）：此处原写"单事务写 skills + events(`SkillCreatedEvent`) + outbox，Outbox Worker 异步投影脚本 blob 到 SurrealDB-Core KV"——该事件类型与投影链路从未实现，按代码事实订正。
 
 **技能创建后演化**: Logic Collapse 仅在创建时做一次轨迹→脚本蒸馏。Hermes 双环模式表明,技能可通过持续使用轨迹(成功率、边缘案例分布)自动触发再生成——不依赖初始聚类,而是基于在线反馈(成功率、用户纠错频率)驱动 vN→vN+1 迭代。预留 `skill_evolution_trigger` 接口: 当技能近 N 次使用成功率低于阈值或出现新语义类别轨迹时, M9 BackgroundTaskScheduler 将其排入再生成队列。当前 phase 不做,仅标注设计空间。
 
@@ -222,6 +223,10 @@ SkillRetriever 三层架构，`internal/extension/skill/retriever.go` 的 `Hybri
 - **L3 depGraph**：PPR 遍历技能依赖图（alpha=0.6，depth=2）
 
 并行三路检索后加权融合；上下文预算 hydration 渐进披露（name+desc → workflow summary → full instructions）截断。L1 降级链：embedding 维度变化时切换 FTS5/BM25 文本检索 + Lazy Re-embedding 后台重嵌；`cognitive`/`embedFn` 不可用时整体降级为 `SQLiteRegistryImpl` 内存二次过滤（`fallbackSelect`）。
+
+> **2026-09-20 复核**：HybridRetriever 三级检索设计保留为未来演进参考。
+> 当前技能发现由 search_tools 统一承担——技能以 ToolSkill 源进入 CompositeCatalog，
+> search_tools 经向量检索动态激活。HybridRetriever 代码标注废弃（boot_tools.go 中不再实例化）。
 
 ### 3.2 结构签名匹配
 

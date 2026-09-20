@@ -52,7 +52,14 @@ func (bb *SQLiteBlackboard) RegisterCancelFunc(taskID string, cancel context.Can
 	bb.cancels[taskID] = cancel
 }
 
-// removeCancelFunc 内部辅助方法，清理取消函数。
+// UnregisterCancelFunc 执行结束后注销取消函数（与 RegisterCancelFunc 成对）。
+func (bb *SQLiteBlackboard) UnregisterCancelFunc(taskID string) {
+	bb.mu.Lock()
+	defer bb.mu.Unlock()
+	bb.removeCancelFunc(taskID)
+}
+
+// removeCancelFunc 内部辅助方法，清理取消函数；调用方必须已持有 bb.mu。
 func (bb *SQLiteBlackboard) removeCancelFunc(taskID string) {
 	if bb.cancels != nil {
 		delete(bb.cancels, taskID)

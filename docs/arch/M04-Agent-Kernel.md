@@ -191,6 +191,16 @@ DAGExecutor 实现见 `internal/agent/`（旧版 `internal/agent/` 顶层文件�
 0. 调用 M8 Blackboard.BeginExecution(taskID, agentID): CAS Claimed→Executing（首次工具调用前的状态转移，闭合 Pending→Claimed→Executing→Done/Failed 完整生命周期）
 1. findReadyNodes: DependsOn ⊆ completedSet → 就绪，同批字典序优先
 2. 副作用分类: read_only/pure → 并发; write_local/write_network → 必须声明 CompensationAction
+
+> **2026-09-20 复核**：废弃 Micro-DAG 中 "write_* 节点必须声明 CompensationAction" 条款。
+> 理由：(1) inv_M4_06（不变量）禁止不可逆操作（write_network/privileged）自动回滚，必须 HITL；
+> (2) plan_dag schema 和 plan prompt 不产出 compensation 字段，LLM 不生成补偿声明；
+> (3) 强制校验会导致全系统所有含写操作的计划 100% 无法通过 S_VALIDATE。
+> 
+> 新规则（分级处理）：
+> - write_local：回滚由 VFS 快照 + Git revert 承担（确定性、不依赖 LLM 声明）
+> - write_network / privileged：由 S_VALIDATE BlindZoneHITL 拦截（inv_M4_06）
+> - CompensationAction 仅保留给 Macro-DAG（跨 Agent 编排的人工预定义静态补偿步骤）
 3. 启动 LeaseHeartbeat goroutine: 每 15s(±5s jitter) 续期，防 M8 Reaper 误判超时
 4. errgroup 并发执行，sem channel 限制并发度 (`spec/state.yaml §m4_kernel.max_concurrent_nodes`)
 5. 任意失败 → 已完成并行节点逆序 Undo 补偿
@@ -266,6 +276,10 @@ RouteReasoning:
 0. si = `Agent.surpriseCalc.CurrentSurprise()`（已注入时）或 `metrics.GlobalSurpriseIndex().ComputeBasic(nil, toolSeq)`（退化路径）→ 两者均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath；正式 FastPath 仅在 `0 < si < 0.3` 时激活。**
 1. `0 < si < 0.3` → FastPath：合成 S_PERCEIVE 结果跳过 LLM，S_PLAN 阶段同样旁路 LLM（保留已有 DAGModel 或走空执行路径）。skillCache 命中直接执行 Wasm; 不兼容 fall through
 2. 未命中或 si>=0.3 → 调用 `M6.SkillSelector.SelectTopK(intent, K=5)` 选取候选工具/技能描述（**Tool Selection > Tool Design**：避免把全部工具列表塞给 LLM 导致选择崩溃）→ buildMessages → `providerRouter.Route`
+> **2026-09-20 复核**：SkillSelector.SelectTopK 已被 M13-bis CompositeCatalog 懒加载 + search_tools
+> 元工具替代（见 M13-bis §4）。当工具总数超过 LazyLoadThreshold 时，LLM 主动调用 search_tools
+> 进行语义检索与动态激活，覆盖 builtin + MCP + skill 全部工具源。System-1 意图匹配由
+> SkillIntentMatcher 独立承担（boot_agent.go）。原 SkillSelector 接口标注废弃。
 3. buildMessages: ImmutableCore + GoalDescription + DAG 上下文 + SkillSelector 选取的 top-K 工具描述
 
 **AgentPool（ADR-0025 §E）**：`ChatHandler` 持有 `AgentPool`（consumer-side 接口）而非单个 `AgentController`。每个 sessionID 对应独立 `Agent` 实例，容量由 `TierParams.MaxConcurrentAgents` 限制（Tier-0: 4）；超容量时 Acquire 等待 100ms 后返回 `CodeResourceExhausted`。Idle 超过 10 分钟的 session 由 `Pool.GC()` 低频回收。每个新建 Agent 实例由 `Pool.Acquire` 立即以其自身生命周期 ctx 启动常驻 `Run()` 事件循环（消费其内部 intent channel），语义与 Supervisor 对单例 `agent-0` 的启动方式一致；`GC()` 回收 idle session 时对应调用 `Shutdown()` 停止该循环（详见 ADR-0025 Addendum，2026-07-12 复核修复：此前该循环从未启动，per-session 会话 FSM 实际不会推进状态）。
@@ -385,6 +399,10 @@ M1 CircuitBreaker Open→Closed (§7.3) → M2 Outbox 投递 `target_engine:"m4_
 **FSM 终态 PII 清零**: M4 转 S_FAILED / S_COMPLETE 时，先于 WorkspaceManager GC 调 `SessionPIIVault.SecureZero(ctx, taskID)`，pii_vault_blob 先于 workspace 删除（GDPR 主动擦除）。无可执行节点 → `[ESCALATE]`。
 
 **Saga 补偿**: 确定性函数 + 预定义 HTTP（HyperText Transfer Protocol，超文本传输协议） 模板，禁止 LLM 参与。补偿前 M11 PolicyGate.Review 预检——FORBID → `[ESCALATE]` + `compensation_blocked_by_policy_revocation` 审计。非权限型失败重试 3 次（exponential backoff）。
+
+> **2026-09-20 复核**：Micro-DAG（单 Agent 内部）的 CompensationAction 字段保留但不强制校验。
+> 原因见 §4.3 复核。Macro-DAG（跨 Agent 编排，state_graph_saga.go / pipeline_compensation.go）
+> 中人工预定义的 compensation_tool / compensation_args 继续有效。
 
 完整时序见 `DIAGRAMS.md#eventlog`。
 

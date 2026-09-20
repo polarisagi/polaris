@@ -135,7 +135,7 @@ func (s *PromptAssemblyService) InjectSystemPrompt(ctx context.Context, agentCtr
 
 const (
 	// defaultAmbientMaxChars ambient skill 全文注入总预算的兜底值（字符）。
-	// 权威值来自 spec/state.yaml §thresholds.m13_scheduler.ambient_skill_max_chars
+	// 权威值来自 spec/state.yaml §thresholds.m13_interface.ambient_skill_max_chars
 	// → cfg.Thresholds.M13Interface.AmbientSkillMaxChars → ChatHandler.AmbientMaxChars；
 	// 此常量仅在未注入（如单元测试直接构造 ChatHandler）时生效。
 	//

@@ -228,13 +228,14 @@ func (sn *StructuredNavigator) Navigate(ctx context.Context, query string) (stri
 	}
 
 	// FTS5 全文搜索 summary 块，取 BM25 rank 最高的 doc_id
-	// summary 块在摘要生成完成前为空，此时返回 "" 自动降级全文搜索
+	// summary 块在摘要生成完成前为空，此时返回 "" 自动降级全文搜索。GR-7.2-001：落盘类型为
+	// doc/chap/para_summary（rag_summary_tree.go），原条件 = 'summary' 永不命中。
 	row := db.QueryRowContext(ctx, `
         SELECT rc.doc_id
         FROM rag_chunks_fts fts
         JOIN rag_chunks rc ON rc.rowid = fts.rowid
         WHERE rag_chunks_fts MATCH ?
-          AND rc.chunk_type = 'summary' AND rc.deleted_at IS NULL
+          AND rc.chunk_type IN ('doc_summary', 'chap_summary', 'para_summary') AND rc.deleted_at IS NULL
         ORDER BY rank
         LIMIT 1`, util.QuoteFTS5Query(query))
 

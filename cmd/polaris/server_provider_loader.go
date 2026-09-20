@@ -1,7 +1,6 @@
 package main
 
 import (
-	"github.com/polarisagi/polaris/internal/gateway/server/provider"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 
@@ -17,9 +16,15 @@ import (
 	"github.com/polarisagi/polaris/internal/security/credential"
 )
 
+// providerReplacer LoadProvidersFromDB 所需的注册表能力：整体原子替换（GD-13-002）。
+// 实现：*llm.ProviderRegistry。
+type providerReplacer interface {
+	ReplaceAll(build func(register func(name, displayName, role string, p protocol.Provider)))
+}
+
 // LoadProvidersFromDB 从 providers + provider_models 两表 JOIN，
 // 每个启用的 (provider, model) 组合注册一个带角色的 Adapter 到 ProviderRegistry。
-func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg provider.ProviderRegistry, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
+func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *credential.Vault, reg providerReplacer, httpClient *http.Client, tbr *metrics.TokenBurnRate) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT p.id, p.name, p.type, COALESCE(p.base_url, ''), COALESCE(p.api_key, ''), COALESCE(p.project_id, ''), COALESCE(p.location, ''),
 		       m.id, COALESCE(m.name, ''), m.model_id, m.role
@@ -32,7 +37,17 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 	}
 	defer rows.Close()
 
-	reg.UnregisterAll()
+	// GD-13-002：先在本地收集全部 (name, provider) 再一次性原子替换注册表。
+	// 原实现先 UnregisterAll 再逐个注册，重载窗口内并发推理会看到空注册表
+	// 而报 "no provider available"；查询中途出错也会留下半套 Provider。
+	type staged struct {
+		name, displayName, role string
+		p                       protocol.Provider
+	}
+	var next []staged
+	stage := func(name, displayName, role string, p protocol.Provider) {
+		next = append(next, staged{name, displayName, role, p})
+	}
 
 	for rows.Next() {
 		var pID, pName, typ, baseURL, apiKeyStr, projectID, location string
@@ -69,30 +84,18 @@ func LoadProvidersFromDB(ctx context.Context, db protocol.SQLQuerier, vault *cre
 		}
 		displayName = fmt.Sprintf("[%s] %s", pName, displayName)
 
-		switch typ {
-		case "openai_compat":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr))
-		case "anthropic":
-			// WithAnthropicPromptCaching：向 system prompt + 最后一个 tool + 最近
-			// 2 条非 system 消息注入 cache_control:{type:"ephemeral"} 断点，命中时
-			// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
-			// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现
-			// 但从未有调用方传入该 Option，一直处于未激活状态。
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching()))
-		case "deepseek":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr))
-		case "google_agent_platform":
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr))
-		case "ollama":
-			if baseURL == "" {
-				baseURL = "http://localhost:11434"
-			}
-			reg.RegisterWithRole(name, displayName, role, llmadapter.NewOpenAIAdapter(baseURL+"/v1", modelID, credPool, httpClient, tbr))
+		if p := buildProviderAdapter(typ, baseURL, modelID, projectID, location, credPool, httpClient, tbr); p != nil {
+			stage(name, displayName, role, p)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "rows error", err)
 	}
+	reg.ReplaceAll(func(register func(name, displayName, role string, p protocol.Provider)) {
+		for _, e := range next {
+			register(e.name, e.displayName, e.role, e.p)
+		}
+	})
 	return nil
 }
 
@@ -110,4 +113,30 @@ func splitAPIKeys(raw string) []string {
 		}
 	}
 	return keys
+}
+
+// buildProviderAdapter 按厂商类型构造 Adapter；未知类型返回 nil（跳过）。
+// 从 LoadProvidersFromDB 拆出以控制圈复杂度（gocyclo）。
+func buildProviderAdapter(typ, baseURL, modelID, projectID, location string, credPool *llm.CredentialPool, httpClient *http.Client, tbr *metrics.TokenBurnRate) protocol.Provider {
+	switch typ {
+	case "openai_compat":
+		return llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr)
+	case "anthropic":
+		// WithAnthropicPromptCaching：向 system prompt + 最后一个 tool + 最近
+		// 2 条非 system 消息注入 cache_control:{type:"ephemeral"} 断点，命中时
+		// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
+		// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现
+		// 但从未有调用方传入该 Option，一直处于未激活状态。
+		return llmadapter.NewAnthropicAdapter(modelID, credPool, httpClient, tbr, llmadapter.WithAnthropicPromptCaching())
+	case "deepseek":
+		return llmadapter.NewDeepSeekAdapter(credPool, httpClient, modelID, tbr)
+	case "google_agent_platform":
+		return llmadapter.NewGoogleAgentPlatformAdapter(modelID, projectID, location, credPool, httpClient, tbr)
+	case "ollama":
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		return llmadapter.NewOpenAIAdapter(baseURL+"/v1", modelID, credPool, httpClient, tbr)
+	}
+	return nil
 }

@@ -48,7 +48,11 @@ func (d *DefaultASTChecker) CheckPython(code []byte) error {
 	// 单次 Walk 同时收集别名和检查调用，按 Python 语义顺序（别名可在调用后声明，
 	// 但恶意代码通常先导入后使用；保守策略：任意顺序均检查）。
 	dangerousAliases := make(map[string]string) // alias → original module
+	// dangerousNames：from-import 直接引入的危险函数（from os import system as s → "s"→"os.system"）。
+	// GR-4.2-002：此前只处理 ast.Import，from os import system; system("…") 整条绕过。
+	dangerousNames := make(map[string]string)
 
+	// 两遍扫描：先收齐全部导入再查调用，调用出现在导入语句之前（函数体内、条件分支）同样拦截。
 	var visitErr error
 	ast.Walk(mod, func(node ast.Ast) bool {
 		if visitErr != nil || node == nil {
@@ -56,20 +60,24 @@ func (d *DefaultASTChecker) CheckPython(code []byte) error {
 		}
 		switch n := node.(type) {
 		case *ast.Import:
-			// 收集危险模块别名（import os as o → dangerousAliases["o"]="os"）
-			for _, alias := range n.Names {
-				modName := string(alias.Name)
-				switch modName {
-				case "os", "subprocess", "ctypes", "cffi":
-					asName := string(alias.AsName)
-					if asName == "" {
-						asName = modName
-					}
-					dangerousAliases[asName] = modName
-				}
+			collectPythonImportAliases(n, dangerousAliases)
+		case *ast.ImportFrom:
+			visitErr = collectPythonFromImport(n, dangerousNames)
+			if visitErr != nil {
+				return false
 			}
-		case *ast.Call:
-			visitErr = d.checkPythonCall(n, dangerousAliases)
+		}
+		return true
+	})
+	if visitErr != nil {
+		return visitErr
+	}
+	ast.Walk(mod, func(node ast.Ast) bool {
+		if visitErr != nil || node == nil {
+			return visitErr == nil && node == nil
+		}
+		if n, ok := node.(*ast.Call); ok {
+			visitErr = d.checkPythonCall(n, dangerousAliases, dangerousNames)
 			if visitErr != nil {
 				return false
 			}
@@ -77,6 +85,75 @@ func (d *DefaultASTChecker) CheckPython(code []byte) error {
 		return true
 	})
 	return visitErr
+}
+
+// collectPythonImportAliases 收集危险模块别名（import os as o → aliases["o"]="os"）。
+func collectPythonImportAliases(n *ast.Import, aliases map[string]string) {
+	for _, alias := range n.Names {
+		modName := string(alias.Name)
+		if !isDangerousPythonModule(modName) {
+			continue
+		}
+		asName := string(alias.AsName)
+		if asName == "" {
+			asName = modName
+		}
+		aliases[asName] = modName
+	}
+}
+
+func isDangerousPythonModule(mod string) bool {
+	switch mod {
+	case "os", "subprocess", "ctypes", "cffi", "pty", "posix":
+		return true
+	}
+	return false
+}
+
+// isDangerousPythonFunc 判断 module.fn 是否属于进程派生/命令执行类调用。
+func isDangerousPythonFunc(mod, fn string) bool {
+	switch mod {
+	case "os", "posix":
+		switch fn {
+		case "system", "popen", "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
+			"spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe",
+			"posix_spawn", "posix_spawnp", "fork", "forkpty":
+			return true
+		}
+	case "subprocess":
+		switch fn {
+		case "Popen", "run", "call", "check_output", "check_call", "getoutput", "getstatusoutput":
+			return true
+		}
+	case "pty":
+		return fn == "spawn" || fn == "fork"
+	case "ctypes", "cffi":
+		return true
+	}
+	return false
+}
+
+// collectPythonFromImport 处理 from X import Y [as Z]：危险模块的通配导入直接拒绝，
+// 危险函数记录到 dangerousNames 供调用检查使用。
+func collectPythonFromImport(n *ast.ImportFrom, dangerousNames map[string]string) error {
+	mod := string(n.Module)
+	if !isDangerousPythonModule(mod) {
+		return nil
+	}
+	for _, alias := range n.Names {
+		name := string(alias.Name)
+		if name == "*" {
+			return apperr.New(apperr.CodeForbidden, "l0_ast: python wildcard import from dangerous module: "+mod)
+		}
+		if isDangerousPythonFunc(mod, name) {
+			asName := string(alias.AsName)
+			if asName == "" {
+				asName = name
+			}
+			dangerousNames[asName] = mod + "." + name
+		}
+	}
+	return nil
 }
 
 // checkPythonStringPatterns 字符串模式预检，覆盖 AST 静态分析盲区。
@@ -102,13 +179,16 @@ func (d *DefaultASTChecker) checkPythonStringPatterns(code []byte) error {
 }
 
 // checkPythonCall 检查单个 Call 节点，使用 dangerousAliases 追踪模块别名。
-func (d *DefaultASTChecker) checkPythonCall(n *ast.Call, dangerousAliases map[string]string) error {
-	// 内置危险函数
+func (d *DefaultASTChecker) checkPythonCall(n *ast.Call, dangerousAliases, dangerousNames map[string]string) error {
+	// 内置危险函数 + from-import 引入的危险函数
 	if name, ok := n.Func.(*ast.Name); ok {
 		id := string(name.Id)
 		switch id {
 		case "eval", "exec", "__import__":
 			return apperr.New(apperr.CodeForbidden, "l0_ast: python dangerous builtin call: "+id)
+		}
+		if orig, ok := dangerousNames[id]; ok {
+			return apperr.New(apperr.CodeForbidden, "l0_ast: python dangerous call via from-import: "+id+" ("+orig+")")
 		}
 		return nil
 	}
@@ -131,22 +211,9 @@ func (d *DefaultASTChecker) checkPythonCall(n *ast.Call, dangerousAliases map[st
 		origPkg = orig
 	}
 
-	switch origPkg {
-	case "os":
-		switch attrName {
-		case "system", "popen", "execv", "execve", "execvp", "execvpe",
-			"spawnl", "spawnle", "spawnlp", "spawnlpe":
-			return apperr.New(apperr.CodeForbidden, "l0_ast: python dangerous os call: "+pkg+"."+attrName)
-		}
-	case "subprocess":
-		switch attrName {
-		case "Popen", "run", "call", "check_output", "check_call":
-			return apperr.New(apperr.CodeForbidden, "l0_ast: python dangerous subprocess call: "+pkg+"."+attrName)
-		}
-	case "ctypes", "cffi":
-		return apperr.New(apperr.CodeForbidden, "l0_ast: python dangerous FFI call: "+pkg+"."+attrName)
+	if isDangerousPythonFunc(origPkg, attrName) {
+		return apperr.New(apperr.CodeForbidden, "l0_ast: python dangerous call: "+pkg+"."+attrName+" ("+origPkg+")")
 	}
-
 	return nil
 }
 
@@ -217,14 +284,28 @@ func (d *DefaultASTChecker) checkBashStringPatterns(code string) error {
 	return nil
 }
 
+// checkBashRM 只解析选项位（GR-4.2-008）：此前对每个参数做 Contains("-r"/"-f")，
+// 文件名 my-file.txt 误判为危险、大写 -R 与 --recursive/--force 长选项漏判。
+// 规则保持原有保守度：出现递归或强制任一标志即拒绝；"--" 之后均为操作数。
 func (d *DefaultASTChecker) checkBashRM(cmd *syntax.CallExpr) error {
 	for _, arg := range cmd.Args[1:] {
-		if len(arg.Parts) > 0 {
-			if word, ok := arg.Parts[0].(*syntax.Lit); ok {
-				if strings.Contains(word.Value, "-r") || strings.Contains(word.Value, "-f") {
-					return apperr.New(apperr.CodeForbidden, "l0_ast: bash dangerous command: rm -rf")
-				}
-			}
+		if len(arg.Parts) == 0 {
+			continue
+		}
+		word, ok := arg.Parts[0].(*syntax.Lit)
+		if !ok {
+			continue
+		}
+		v := word.Value
+		switch {
+		case v == "--":
+			return nil
+		case v == "--recursive" || v == "--force":
+			return apperr.New(apperr.CodeForbidden, "l0_ast: bash dangerous command: rm "+v)
+		case strings.HasPrefix(v, "--"):
+			continue
+		case strings.HasPrefix(v, "-") && strings.ContainsAny(v[1:], "rRf"):
+			return apperr.New(apperr.CodeForbidden, "l0_ast: bash dangerous command: rm "+v)
 		}
 	}
 	return nil

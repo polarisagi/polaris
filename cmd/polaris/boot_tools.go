@@ -398,6 +398,30 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// 初始化 WorkspaceManager 与 ToolRefOffloader
 	const workspaceMaxSize = 500 * 1024 * 1024 // Tier0 quota，来源：internal/vfs/workspace_manager.go §Tier0=500MB
 	vfsWM := vfs.NewWorkspaceManagerWithContext(ctx, sb.Layout.Workspace, workspaceMaxSize, config.DefaultThresholds().M7Tool)
+	// GR-6.1-004：周期 GC 接线。活跃集合同时收录 task_id 与 session_id——
+	// 工作区键由调用方决定（Offload 的 taskID 可能是会话级 ID），两者都放进
+	// 保护集合才不会误删仍在进行中的会话工作区。未知状态一律视为活跃（只
+	// 排除明确终态），新增状态时默认安全。
+	vfsWM.StartPeriodicGC(ctx, func(qctx context.Context) ([]string, error) {
+		rows, err := sb.Store.ReadDB().QueryContext(qctx,
+			`SELECT task_id, session_id FROM tasks WHERE status NOT IN ('done', 'failed', 'cancelled')`)
+		if err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "vfs gc: query active tasks", err)
+		}
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var tid, sid string
+			if err := rows.Scan(&tid, &sid); err != nil {
+				return nil, apperr.Wrap(apperr.CodeInternal, "vfs gc: scan active task", err)
+			}
+			ids = append(ids, tid, sid)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "vfs gc: iterate active tasks", err)
+		}
+		return ids, nil
+	})
 	toolRefOffloader := memory.NewToolRefOffloader(sb.Store.DB(), vfsWM)
 
 	// GR-5-001 补线：bootMemory 早于 bootTools 执行（vfsWM 尚不存在），episodic
@@ -426,13 +450,6 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// GapFillWorker 构造函数不接受 skillRegistry，通过 SetSkillRegistry 后注入解耦初始化顺序。
 	gapFillWorker.SetSkillRegistry(skillRegistry)
 	slog.Info("polaris: GapFillWorker.SkillRegistry injected (HE-6 State-in-DB now active)")
-	var skillSelector protocol.SkillSelector
-	if sb.SurrealStore != nil {
-		skillSelector = skill.NewHybridRetriever(skillRegistry, sb.SurrealStore, skill.EmbedFn(nativeEmbedFn))
-	} else {
-		skillSelector = skill.NewHybridRetriever(skillRegistry, nil, nil)
-	}
-	_ = skillSelector
 
 	// ─── [P1-FIX] M13-bis：注入运行时注册器 ──────────────────────────────────
 	// installMgr 在上方创建时 skillRegistry 还未初始化，此处补注入。
@@ -443,7 +460,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	knowledgeConnRegistry := connector.NewRegistry()
 	installFSM := lifecycle.NewInstallFSM(extRepo)
 	installFSM.RegisterInstaller(lifecycle.NewMCPInstaller(extRepo, mcpMgr).WithRegistry(knowledgeConnRegistry))
-	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry))
+	installFSM.RegisterInstaller(lifecycle.NewPluginInstaller(extRepo, mcpMgr, skillRegistry).WithPolicyGate(sb.Gate))
 	// [W-2-B] 接入 SkillValidationPipeline
 	signingKey := []byte(sb.Cfg.System.DataEncryptionKey)
 	// WithMaxCodeSize 2026-07-21 deadcode 审查修复：该 Option 从未被传入，
@@ -568,6 +585,9 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 		cogn = &surrealCognAdapter{s: sb.SurrealStore}
 	}
 	forgettingMgr := consolidation.NewForgettingManager(sb.Store, cogn, 0.01)
+	if sb.SurrealStore != nil {
+		forgettingMgr.WithGraphEdgeDeleter(sb.SurrealStore)
+	}
 	coldArchiver := consolidation.NewColdArchiver(sb.Store)
 
 	coldDBDir := filepath.Join(sb.DataDir, "cold")

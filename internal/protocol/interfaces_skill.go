@@ -29,6 +29,10 @@ SkillRegistry interface {
 type
 
 // SkillSelector — 启发式 + 向量 + 排序公式。不调 LLM。
+//
+// Deprecated: SkillSelector 已被 M13-bis CompositeCatalog 懒加载 + search_tools 元工具替代。
+// 保留接口定义供未来向量增强 search_tools 时参考，不在生产中使用。
+// 2026-09-20 标注废弃。
 SkillSelector interface {
 	Select(ctx context.Context, hint types.TaskHint) ([]types.SkillMeta, error)
 }

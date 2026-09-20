@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -82,7 +83,21 @@ func (d *PerformanceDriftDetector) RegisterListener(f func(DriftAlert)) {
 // Record 记录一次任务评分（1.0=成功，0.0=失败）。
 // 超过 windowSize 时滑动驱逐最旧记录。
 // 每次记录后检测漂移，漂移则触发 OnDrift。
+//
+// 监听器在释放锁之后调用（GR-1.2-005）：锁内回调会让慢监听器阻塞所有 Record/读取方，
+// 监听器若回读 CurrentPassRate/Baseline 则同锁自死锁。
 func (d *PerformanceDriftDetector) Record(score float64) {
+	alert, listeners, fire := d.recordLocked(score)
+	if !fire {
+		return
+	}
+	for _, f := range listeners {
+		f(alert)
+	}
+}
+
+// recordLocked 在锁内更新窗口/基线并判定是否告警，返回告警与监听器快照。
+func (d *PerformanceDriftDetector) recordLocked(score float64) (DriftAlert, []func(DriftAlert), bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -95,7 +110,7 @@ func (d *PerformanceDriftDetector) Record(score float64) {
 	d.baseline = d.baseline*0.99 + score*0.01
 
 	if len(d.window) < d.windowSize/2 {
-		return // 窗口未满一半，不检测
+		return DriftAlert{}, nil, false // 窗口未满一半，不检测
 	}
 
 	current := d.windowPassRate()
@@ -104,7 +119,7 @@ func (d *PerformanceDriftDetector) Record(score float64) {
 		if relativeDrop > d.driftThreshold {
 			// 防止短时间内重复告警（冷却期 5 分钟）
 			if time.Since(d.lastDriftAt) < 5*time.Minute {
-				return
+				return DriftAlert{}, nil, false
 			}
 			d.lastDriftAt = time.Now()
 			if len(d.listeners) > 0 {
@@ -115,12 +130,11 @@ func (d *PerformanceDriftDetector) Record(score float64) {
 					RelativeDrop: relativeDrop,
 					WindowSize:   len(d.window),
 				}
-				for _, f := range d.listeners {
-					f(alert)
-				}
+				return alert, slices.Clone(d.listeners), true
 			}
 		}
 	}
+	return DriftAlert{}, nil, false
 }
 
 // CurrentPassRate 返回当前 rolling window 通过率（调用方持有的锁之外调用）。

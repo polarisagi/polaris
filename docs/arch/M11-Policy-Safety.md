@@ -3,7 +3,7 @@
 > Go + Rust(Cedar CGO-Free FFI (purego)) | [Module-Topology] L0 | [Code-Package-Mapping] internal/
 > 设计约束: 三层宪法 + Taint Tracking 主防线 + Cedar 策略引擎 + KillSwitch | [HE-Rule-2] 可验证执行
 > 更新日期: 2026-04-30
-<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:229 Cedar / 4:297 KillSwitch / 5:375 隐私 / 6:446 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:473 Factuality / 7:499 审计 / 8:523 多Agent宪法 / 9:559 威胁监控 / 13:573 降级 / 14:605 跨模块契约 / 15:624 任意文件读 / 16:633 流式安全防护 -->
+<!-- §跳读: 0:10 职责 / 0-ter:47 不变量速查 / 1:60 三层宪法 / 2:88 Taint / 3:231 Cedar / 4:299 KillSwitch / 5:377 隐私 / 6:448 SSRF（Server-Side Request Forgery，服务端请求伪造） / 6.5:475 Factuality / 7:501 审计 / 8:525 多Agent宪法 / 9:561 威胁监控 / 13:575 降级 / 14:607 跨模块契约 / 15:626 任意文件读 / 16:635 流式安全防护 -->
 
 ---
 
@@ -197,10 +197,10 @@ Taint 统计监控: [SurpriseIndex] gauge taint.high_ratio, 超阈值告警不�
 
 **内容层注入检测（`ScanInjectionPatterns`）** — 与结构层 Taint 正交的第二道防线：
   实现见: `internal/security/`
-  触发位置: `SanitizeToSafe` 内部，结构层（Level 检查）通过后，TaintLevel >= TaintMedium 时执行。
+  触发位置: `SanitizeToSafe` 内部，结构层（Level 检查）通过后，TaintLevel == TaintLow 时执行。
   设计原则: 结构层（Taint Level）保证"来源可溯"，内容层（注入扫描）防止"受信源的恶意内容"绕过类型边界。
 
-  `SanitizeToSafe` 执行两阶段防护：第一阶段（结构层）检查 TaintLevel，`TaintLevel > TaintLow` 且非 `TaintUserReviewed` 时直接拒绝；第二阶段（内容层）对 `TaintLevel >= TaintMedium` 的内容执行 `ScanInjectionPatterns`，命中任意高置信度注入模式则拒绝，未命中才构造 `SafeString{}`。
+  `SanitizeToSafe` 执行两阶段防护：第一阶段（结构层）检查 TaintLevel，`TaintLevel > TaintLow` 且非 `TaintUserReviewed` 时直接拒绝；第二阶段（内容层）对 `TaintLevel == TaintLow` 的内容执行 `ScanInjectionPatterns`，命中任意高置信度注入模式则拒绝，未命中才构造 `SafeString{}`。
 
   `ScanInjectionPatterns` 规则集（16 条，OWASP LLM01 常见间接注入手法）：
   - 角色覆盖: `ignore previous instructions` / `ignore all previous` / `disregard previous` / `forget your instructions`
@@ -210,7 +210,9 @@ Taint 统计监控: [SurpriseIndex] gauge taint.high_ratio, 超阈值告警不�
   - Token 边界注入: `</s>` / `<|im_start|>` / `<|im_end|>`
 
   扫描在 Unicode 归一化的小写文本上执行（折叠空白 + toLower），防止大小写/空格变体绕过。
-  假阳性设计原则: 扫描只在 `TaintLevel >= TaintMedium` 启用（系统内部生成内容 TaintNone/TaintLow 不扫描），且均为高置信度模式（无正则），最大限度减少误报。
+  假阳性设计原则: 扫描只在 `TaintLevel == TaintLow` 启用（进程内常量/模板 TaintNone 不扫描），且均为高置信度模式（无正则），最大限度减少误报。
+
+  > 2026-09-19 复核（GR-2.1-001）：原文写作"第二阶段对 `>= TaintMedium` 扫描、TaintNone/TaintLow 不扫描"，与第一阶段"`> TaintLow` 直接拒绝"互斥——能进入第二阶段的只有 None/Low/UserReviewed，扫描物理不可达，第二道防线形同虚设。按本节设计原则"防止受信源的恶意内容"，受信源即 TaintLow（`受信内部数据`），故扫描收敛到 TaintLow；TaintNone 仍豁免以避免系统模板误报。门控证据：`taint_sanitizer_test.go` TestSanitizeToSafe_ContentScanReachable。
   `TaintUserReviewed` 来源绕过内容层扫描（人类已审查），直接构造 SafeString。
 
   **与 Spotlighting 的分工**（§2.2）：
@@ -385,10 +387,10 @@ approval:
 首次进入 PII 场景（开启 Notion/Gmail Connector 等）主动告警："Tier 0 仅基础防护，建议升级 Tier 1+ 启用 Presidio"。
 
 **RedactMode**:
-- **RedactBlock**: 含 PII → `ErrPIIDetected`, 阻止执行
+- **RedactBlock**: ⚠️ 未实现（设计保留）。2026-09-20 追记（GR-12-006）：此处原写"含 PII → `ErrPIIDetected`, 阻止执行"，全仓无 `RedactBlock` 模式与 `ErrPIIDetected` 类型，当前 PII 处置仅有下方替换/令牌化与告警两类，调用方不得依赖"检测即阻断"语义
 - **RedactReplace/SessionTokenizer/OpaqueToken**: ✅ 已实现（PIIDesensitizer 格式保留假数据 + PIITokenVault 会话级可逆令牌，二者分工不同，互不替代。PIITokenVault 和崩溃恢复用途的 SessionPIIVault 各自独立）
   - **PIIDesensitizer 映射回收**（ADR-0087，`internal/security/guard/pii_desensitizer.go`）：original→fake 映射按分区（通常=SessionID）LRU 有界，单分区 `pii_mapping_max_entries=10000` 条、分区数上限 `pii_partition_max_entries=256`（`state.yaml §m11_policy`），取代原无界增长设计（一致性仅在窗口内保证，被淘汰原值再次出现得到新假值）。无 SessionID 时落入 `piiGlobalPartition="global"` 兜底分区，仅受条目数约束，不能被精确回收。
-- **RedactWarn**: 含 PII → warn 日志继续
+- **RedactWarn**: 含 PII → warn 日志继续（行为存在，但无同名枚举常量）
 
 **PIIGuard 双向防护**: PIIGuard 同时在输入端（M4→M7 工具参数 SecureUnredact 之前）和输出端（M7 ToolResult→EventLog PostExecution Redact，M7 §4.3 Step 5）工作。输入端阻止 PII 进入 LLM Provider，输出端阻止 PII 进入不可变审计轨迹。Tier 0 仅保证结构化 PII 模式检测覆盖两端。
 

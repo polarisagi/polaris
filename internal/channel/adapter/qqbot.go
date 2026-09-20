@@ -125,6 +125,7 @@ func qqbotConnect( //nolint:gocyclo
 		return false, "", lastSeq
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	var seq atomic.Int64
 	seq.Store(lastSeq)
@@ -374,8 +375,7 @@ func (a *QQBotAdapter) Send(ctx context.Context, host Host, cfg map[string]any, 
 	token, _ := cfg["_qqbot_token"].(string)
 	msgType, _ := cfg["_qqbot_msg_type"].(string)
 	if token == "" {
-		slog.Warn("qqbot: access token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "qqbot: access token missing")
 	}
 	if err := QqbotSendMessage(ctx, host.HTTPClient(), token, msgType, msg.ChatID, text, cfg); err != nil {
 		slog.Error("channels: send reply failed", "type", "qqbot", "err", err)

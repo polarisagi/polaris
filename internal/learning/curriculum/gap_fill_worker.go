@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/store"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -97,20 +96,21 @@ func (w *GapFillWorker) extractMissingTool(errStr string) string {
 }
 
 func (w *GapFillWorker) synthesizeSkill(ctx context.Context, toolName string) error {
-	// w.skillReg nil 时降级：技能仍生成（供即时工具调用），但不持久化（Tier-0 降级场景）。
-	gen := synthetic.NewSyntheticSkillGen(w.provider, w.skillReg)
-	skill, err := gen.Generate(ctx, toolName, "Auto-synthesized skill for "+toolName)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)
-	}
-	// L1（GR-7-002）：注册失败意味着本次 LLM 合成成本已花掉但成果彻底丢失
-	// （既未持久化到 skillReg，也未挂进即时可调用的 registry），必须向上
-	// 返回错误，交由 HandleOutbox 的 outbox 重试机制重新触发合成。
+	// GR-7.1-004：合成产物只落 SkillRegistry 待审候选，不再挂进即时可调用的
+	// 工具注册表——
+	//   1) 合成结果只有 schema 没有实现，挂进去只会在工具目录里多一个"调用
+	//      必失败"的幽灵工具；
+	//   2) InMemoryToolRegistry.Register 按名覆盖，toolName 来自 LLM 调用失败的
+	//      报错文本（可被提示注入操纵），同名即覆盖内置工具；
+	//   3) learning CLAUDE.md 禁止未经 M11 审查的 Logic Collapse 输出直接生效。
 	if w.registry != nil {
-		if err := w.registry.Register(skill); err != nil {
-			metrics.GlobalLearningSkillRegisterFailuresTotal.Add(1)
-			return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill: registry.Register 失败", err)
+		if _, err := w.registry.Lookup(toolName); err == nil {
+			return nil // 工具其实存在（竞态/名字解析偏差），无缺口可补
 		}
+	}
+	gen := synthetic.NewSyntheticSkillGen(w.provider, w.skillReg)
+	if _, err := gen.Generate(ctx, toolName, "Auto-synthesized skill for "+toolName); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "GapFillWorker.synthesizeSkill", err)
 	}
 	return nil
 }

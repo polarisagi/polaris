@@ -56,9 +56,7 @@ func (a *Agent) handleCapabilityGap(ctx context.Context, err error) error {
 	}
 	a.sCtx.SuspendReason = "capability_gap"
 
-	// 通过 outbox 异步投递 m9_capability_gap 事件，触发 GapFillWorker 进行能力补全
 	if sqlRepo, ok := a.taskRepo.(protocol.SQLQuerier); ok && sqlRepo != nil {
-		payloadBytes, _ := json.Marshal(map[string]string{"error": err.Error()})
 		if _, execErr := sqlRepo.ExecContext(ctx, `
 			INSERT INTO background_tasks (id, agent_id, status, type, args_json, created_at)
 			VALUES (?, ?, 'pending', 'prompt_optimization', ?, ?)
@@ -66,14 +64,12 @@ func (a *Agent) handleCapabilityGap(ctx context.Context, err error) error {
 			slog.Error("agent: db exec failed in post-execute side-effect",
 				"agent_id", a.ID, "err", execErr)
 		}
-		if _, execErr := sqlRepo.ExecContext(ctx, `
-			INSERT INTO outbox (created_at, target_engine, operation, scope, payload, idempotency_key, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, time.Now().UnixMilli(), "m9_capability_gap", "upsert", "capability_gap", payloadBytes, uuid.New().String(), "pending"); execErr != nil {
-			slog.Error("agent: db exec failed in post-execute side-effect",
-				"agent_id", a.ID, "err", execErr)
-		}
 	}
+	// 经统一 outbox 抽象投递 m9_capability_gap，触发 GapFillWorker 能力补全（GR-4.1-006）：
+	// 此前强转 SQLQuerier 裸写 outbox 表、幂等键用随机 UUID，旁路了 emitOutbox 的构造校验与
+	// "规范前缀 + 唯一性后缀"幂等键约定（types.BuildIdempotencyKey）。
+	a.emitOutbox(ctx, protocol.TopicCapabilityGap, "upsert", map[string]string{"error": err.Error()},
+		a.outboxIdemKey(protocol.TopicCapabilityGap, "session", a.sCtx.SessionID, "gap"), "capability_gap")
 
 	a.asyncIntent(types.TriggerInterruptReceived)
 	return nil
@@ -324,20 +320,20 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			signature := fmt.Sprintf(`"tool":"%s"`, toolName)
 			for _, e := range events {
 				if strings.Contains(string((func() *types.Event {
-					if e, _ := e.Event.(*types.Event); e != nil {
+					if e := e.EventPtr(); e != nil {
 						return e
 					}
 					return &types.Event{}
 				}()).Payload), signature) {
 					if (func() *types.Event {
-						if e, _ := e.Event.(*types.Event); e != nil {
+						if e := e.EventPtr(); e != nil {
 							return e
 						}
 						return &types.Event{}
 					}()).Type == types.EventActionPending {
 						hasPending = true
 					} else if (func() *types.Event {
-						if e, _ := e.Event.(*types.Event); e != nil {
+						if e := e.EventPtr(); e != nil {
 							return e
 						}
 						return &types.Event{}

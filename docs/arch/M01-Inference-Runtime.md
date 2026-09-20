@@ -5,7 +5,7 @@
 > **实现语言**：Go　|　**代码位置**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:162 Token预算 / 6:240 SemanticCache / 7:286 Fallback / 8:350 本地推理local_only / 9:403 ModelVersion / 12:440 (SOFT)降级 / 10:457 凭证池+速率追踪 / 13:475 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:162 Token预算 / 6:240 SemanticCache / 7:286 Fallback / 8:350 本地推理local_only / 9:403 ModelVersion / 12:440 (SOFT)降级 / 10:457 凭证池+速率追踪 / 13:477 依赖 -->
 
 ---
 
@@ -137,6 +137,8 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 ### 4.5 Route 方法
 
 实现见 `internal/llm/`（`InferenceRouter`）。Provider 选择按健康分降序 + CircuitBreaker 状态 + 多模态能力过滤；失败则 Failover，全部不可用返回 `ErrAllProvidersFailed`。
+
+> **2026-09-20 复核**：GR-10.1-001。InferenceRouter 作为成本数据的唯一真实生产者，在成功调用及 failover 后会产出 topic 为 `llm.call.recorded` 的事件至 events 表，记录使用量和成本。
 
 **熔断器由 `ProviderRegistry` 直接持有**（`internal/llm/provider_registry.go`），无独立 `fallback.go` 或 `FallbackExecutor` 类型：
 - `circuitBreaker`（`internal/llm/circuit_breaker.go`）：基于连续失败次数的标准 3 态熔断器（Closed/Open/HalfOpen）。
@@ -461,6 +463,8 @@ DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/sche
 **CredentialPool**：多 API Key 线程安全池，支持四种选择策略（FillFirst / RoundRobin / Random / LeastUsed）。按策略选取冷却期已过的凭证，失败后按错误类型设置冷却期（Auth 5min / Billing+RateLimit 60min / AuthPermanent 30天）。
 
 **RateLimitTracker**：解析 Provider HTTP 响应头中的 12 个速率限制字段（分钟/小时 × 请求/Token），提供退避延迟建议。以 RoundTripper 包装层自动捕获限速头，无需改动各 Adapter。退避算法采用去相关抖动指数策略（防雷群效应）。
+
+> 2026-09-19 订正（GR-2.2-006）：`RateLimitTracker` / `RateLimitCapturingTransport` 目前是**库组件**，未接入生产出站链路——此前唯一构造点在 `InferenceRouter` 内部且全仓零读取（Router 不直接发 HTTP），已随孤儿字段一并删除。限速后的冷却现由 `ClassifyError` → `CredentialPool` 冷却（RateLimit 60min）承担；若要按响应头精确退避，须在 `boot_substrate.go` 的 SafeHTTPClient 外层包 `RateLimitCapturingTransport` 并让选路读取 `Tracker.Get`，二者缺一即为假接线。
 
 **`ClassifyError`（`error_classifier.go`）**：提取 HTTP 状态码 + 关键词，分类为 17 种失败原因，返回 `*ClassifiedError`，包含可重试性、上下文压缩、凭证轮换、降级策略在内的恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 Provider 错误体格式。
 

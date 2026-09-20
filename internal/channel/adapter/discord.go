@@ -123,6 +123,7 @@ func DiscordConnect( //nolint:gocyclo
 		return false, "", "", lastSeq
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	var seq atomic.Int64
 	seq.Store(lastSeq)
@@ -286,8 +287,7 @@ func (a *DiscordAdapter) Extract(body []byte, r *http.Request) protocol.ChannelM
 func (a *DiscordAdapter) Send(ctx context.Context, host Host, cfg map[string]any, msg protocol.ChannelMessage, text string) error {
 	token, _ := cfg["bot_token"].(string)
 	if token == "" {
-		slog.Warn("discord: bot_token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "discord: bot_token missing")
 	}
 	if err := DiscordSendMessage(ctx, host.HTTPClient(), token, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "discord", "err", err)

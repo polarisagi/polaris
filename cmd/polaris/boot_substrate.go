@@ -120,6 +120,8 @@ type SubstrateBundle struct {
 	// WaitReady() 信号或真批量 EmbedBatch()（如 boot_server.go §11.6 回填触发器、插件目录预计算器），
 	// 须直接使用本字段而非对 Embedder 做类型断言。恒非 nil（bootSubstrate 无条件构造）。
 	DynEmbedder *llm.DynamicEmbedder
+	// EmbedBatcher Embedder 背后的合批器；停机序列在生产者停止后调用 Stop()（GR-1.1-004）。
+	EmbedBatcher *search.EmbeddingBatcher
 
 	// 训练适配器（门控，M9 流水线消费；当前作占位）
 	QLoRA    *llmadapter.QLoRAAdapter
@@ -296,6 +298,22 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		}
 	})
 
+	// ─── 0.65 KILLSWITCH 文件熔断（M11 §4.1 触发条件表：文件存在 → FullStop，<500ms）──
+	// GR-2.1-004：CheckKILLSWITCHFile 此前无生产调用方，运维 touch 文件不生效。
+	// 轮询而非 fsnotify：Tier-0 无额外依赖，单次 os.Stat 开销可忽略。
+	concurrent.SafeGo(ctx, "boot_substrate.killswitch_file_watch", func(ctx context.Context) {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ks.CheckKILLSWITCHFile()
+			}
+		}
+	})
+
 	// ─── 0.7 内存压力监控（每 5s 轮询，驱动 FeatureGate 运行时降级）──────────
 	concurrent.SafeGo(ctx, "boot_substrate.memory_watcher", func(ctx context.Context) {
 		autoConf.RunMemoryWatcher(ctx)
@@ -374,11 +392,15 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		slog.Warn("polaris: StorageFabric triggering DatabaseWriter restart after panic")
 	})
 
-	concurrent.SafeGo(ctx, "boot_substrate.db_writer", func(ctx context.Context) {
+	// 单写者生命周期与信号 ctx 解耦（GR-3-001）：SIGTERM 后 HTTP 排空、Supervisor 停止期间
+	// 仍有合法写入（审计事件、决策日志），writer 必须活到所有生产者停下，
+	// 由 main §14 显式 Close() 触发排空落盘；Close 后不再重启 Run。
+	writerCtx := context.WithoutCancel(ctx)
+	concurrent.SafeGo(writerCtx, "boot_substrate.db_writer", func(ctx context.Context) {
 		defer close(dbWriterDoneCh)
 		for {
 			dbWriter.Run(ctx)
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || dbWriter.IsClosed() {
 				return
 			}
 			// 退出且未被 cancel 时，说明发生了 panic 或异常，触发 StorageFabric 重启机制
@@ -519,7 +541,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		return dynEmbedder.EmbedBatch(ctx, texts)
 	}
 	batcher := search.NewEmbeddingBatcher(10*time.Millisecond, 100, embedFn)
-	batcher.Start(context.Background())
+	// 与单写者同理脱离信号 ctx：HTTP 排空期间仍有检索需要 embedding，由停机序列显式 Stop。
+	batcher.Start(context.WithoutCancel(ctx))
 	embedder = search.NewSyncBatcherAdapter(batcher)
 
 	// 智能判定优先级的核心逻辑
@@ -565,14 +588,18 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		})
 	} else if cfg.Embedding.BaseURL != "" {
 		// 2. 远程 API 绝对兜底逻辑 (只在本地跑不起且强制配置时才用)
-		apiKey := []byte(cfg.Embedding.APIKey)
-		if len(apiKey) == 0 {
-			apiKey = []byte(os.Getenv("POLARIS_EMBEDDING_API_KEY"))
+		apiKey := cfg.Embedding.APIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("POLARIS_EMBEDDING_API_KEY")
+		}
+		var embedKeys []string
+		if apiKey != "" {
+			embedKeys = []string{apiKey}
 		}
 		adapter := llmadapter.NewOpenAICompatibleEmbeddingAdapter(
 			cfg.Embedding.BaseURL,
 			cfg.Embedding.Model,
-			apiKey,
+			llm.NewCredentialPool(embedKeys, llm.StrategyFillFirst),
 			safeHTTPClient.Client,
 		)
 		dynEmbedder.Set(adapter)
@@ -692,6 +719,7 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 		Router:                   router,
 		Embedder:                 embedder,
 		DynEmbedder:              dynEmbedder,
+		EmbedBatcher:             batcher,
 		QLoRA:                    qloraAdapter,
 		PRM:                      prmAdapter,
 		Steering:                 steeringAdapter,

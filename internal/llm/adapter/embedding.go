@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	llmparent "github.com/polarisagi/polaris/internal/llm"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
@@ -96,24 +97,31 @@ func (e *OllamaEmbeddingAdapter) EmbedBatch(ctx context.Context, texts []string)
 // 对接任何支持 POST /v1/embeddings 的 Provider（OpenAI 协议）。
 // 实现 search.Embedder 接口（Embed 单条）和 EmbedBatch（批量，减少 HTTP 往返）。
 // 相比 OllamaEmbeddingAdapter：不绑定本地 Ollama 进程，可用 DeepSeek / OpenAI 等云端 API。
+//
+// 凭证走 CredentialPool（GR-2.2-003，inv_M1_06 / XR-09）：与推理适配器同一取用模型——
+// 每次请求 Pick → CredFn 取局部拷贝 → 用后 ClearBytes，失败分类驱动冷却轮换；
+// 不再在适配器结构体上常驻一份明文切片。
 type OpenAICompatibleEmbeddingAdapter struct {
-	model   string
-	apiKey  []byte
-	baseURL string
-	client  *http.Client
+	model    string
+	credPool *llmparent.CredentialPool // Len()==0 表示端点无需鉴权
+	baseURL  string
+	client   *http.Client
 }
 
 // NewOpenAICompatibleEmbeddingAdapter 构造 OpenAI 兼容 Embedding 适配器。
-// apiKey 为空时由调用方从环境变量中读取。
-func NewOpenAICompatibleEmbeddingAdapter(baseURL, model string, apiKey []byte, hc *http.Client) *OpenAICompatibleEmbeddingAdapter {
+// credPool 可为 nil 或空池（本地/内网无鉴权端点）。
+func NewOpenAICompatibleEmbeddingAdapter(baseURL, model string, credPool *llmparent.CredentialPool, hc *http.Client) *OpenAICompatibleEmbeddingAdapter {
 	if hc == nil {
 		hc = defaultHTTPClient()
 	}
+	if credPool == nil {
+		credPool = llmparent.NewCredentialPool(nil, llmparent.StrategyFillFirst)
+	}
 	return &OpenAICompatibleEmbeddingAdapter{
-		model:   model,
-		apiKey:  apiKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  hc,
+		model:    model,
+		credPool: credPool,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		client:   hc,
 	}
 }
 
@@ -157,19 +165,34 @@ func (e *OpenAICompatibleEmbeddingAdapter) EmbedBatch(ctx context.Context, texts
 		return nil, apperr.Wrap(apperr.CodeInternal, "build embed req", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	cleanup := setAuthHeader(req, e.apiKey)
-	defer cleanup()
+	var cred *llmparent.PooledCredential
+	if e.credPool.Len() > 0 {
+		if cred = e.credPool.Pick(); cred == nil {
+			return nil, apperr.New(apperr.CodeResourceExhausted, "embed: no available credential (all keys cooling down)")
+		}
+		apiKey := cred.CredFn()()
+		defer llmparent.ClearBytes(apiKey)
+		cleanup := setAuthHeader(req, apiKey)
+		defer cleanup()
+	}
 
 	resp, err := e.client.Do(req)
 	if err != nil {
+		if cred != nil {
+			cred.RecordResult(err)
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "embed http", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, apperr.New(apperr.CodeInternal,
+		statusErr := apperr.New(apperr.CodeInternal,
 			fmt.Sprintf("embed status %d: %s", resp.StatusCode, raw))
+		if cred != nil {
+			cred.RecordResult(statusErr)
+		}
+		return nil, statusErr
 	}
 
 	var out openAIEmbedResp

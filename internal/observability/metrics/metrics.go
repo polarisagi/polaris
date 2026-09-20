@@ -78,6 +78,8 @@ var (
 	// GlobalMemorySupersedeFailuresTotal 语义超越（MarkEntitySuperseded）失败累计次数，
 	// 失败意味着旧信念与新信念并存（事实层数据损坏）。
 	GlobalMemorySupersedeFailuresTotal atomic.Int64
+	// GlobalMemoryPersistenceFailuresTotal Agent 情景记忆写入遇存储层不可用而触发 FSM 熔断的累计次数。
+	GlobalMemoryPersistenceFailuresTotal atomic.Int64
 	// GlobalMemoryEvictEventLostTotal 工作记忆驱逐事件归档失败累计次数（影响审计链重建）。
 	GlobalMemoryEvictEventLostTotal atomic.Int64
 	// GlobalMemoryFTSIndexFailuresTotal 情景记忆 FTS 索引写入失败累计次数（持续性能退化）。

@@ -2,6 +2,7 @@ package graphrag
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
@@ -179,17 +180,31 @@ func (c *Clusterer) WithSummarizer(s *CommunityGenerativeSummarizer) {
 }
 
 // Cluster 执行完整聚类流程（包含 Leiden 检测与摘要生成）。
+// 未接线（2026-09-20）：当前无生产调用方，待 FeatureGraphRAGFull 门控启用时经 SemanticMemory 落库。
 //
 //nolint:gocyclo,nestif
-func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*Entity, adjacency [][]float64) ([]int, error) {
+func (c *Clusterer) Cluster(ctx context.Context, upsertFn func(ctx context.Context, entity *Entity) error, entities []*Entity, adjacency [][]float64) ([]int, error) {
 	if c.leiden == nil {
-		return c.ClusterEntities(collectEmbeddings(entities)), nil
+		// 返回值按 entities 下标对齐：无向量实体记 -1（噪声），不能直接返回
+		// 只含有向量实体的聚类结果（下标会错位）。
+		embs, idx := collectEmbeddings(entities)
+		sub := c.ClusterEntities(embs)
+		labels := make([]int, len(entities))
+		for i := range labels {
+			labels[i] = -1
+		}
+		for i, l := range sub {
+			if i < len(idx) {
+				labels[idx[i]] = l
+			}
+		}
+		return labels, nil
 	}
 
 	c.leiden.SetAdjacency(adjacency)
 	labels := c.leiden.DetectCommunities(adjacency)
 
-	if c.summarizer != nil && gw != nil {
+	if c.summarizer != nil && upsertFn != nil {
 		communities := make(map[int][]string)
 		// 同步计算每个社区的最高污点级别，确保摘要节点不低于其成员的最高污点
 		communityMaxTaint := make(map[int]types.TaintLevel)
@@ -216,13 +231,16 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 				"level":    1, // Level 1 社区摘要
 			}
 			entity := &Entity{
-				ID:         "community:leiden:" + string(rune(s.CommunityID)),
-				Name:       "Community Summary",
+				// GR-7.2-003：名字须随社区 ID 区分——semantic_entities 以
+				// (entity_type, name) 唯一，固定名会让所有社区互相覆盖；ID 原用
+				// string(rune(id))，id=0 时产生 \x00 字节。
+				ID:         fmt.Sprintf("community:leiden:%d", s.CommunityID),
+				Name:       fmt.Sprintf("Community %d Summary", s.CommunityID),
 				Type:       "Community",
 				Properties: props,
 				TaintLevel: communityMaxTaint[s.CommunityID], // 继承成员最高污点，防止外部数据洗白
 			}
-			if err := gw.UpsertEntity(ctx, entity); err != nil {
+			if err := upsertFn(ctx, entity); err != nil {
 				metrics.RecordKnowledgeGraphWriteFailure(ctx, "cluster_level1_upsert")
 				return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster: Level 1 Upsert", err)
 			}
@@ -272,13 +290,13 @@ func (c *Clusterer) Cluster(ctx context.Context, gw *GraphWriter, entities []*En
 					"level":    2, // Level 2 社区摘要
 				}
 				entity := &Entity{
-					ID:         "community:leiden:l2:" + string(rune(s.CommunityID)),
-					Name:       "Super Community Summary",
+					ID:         fmt.Sprintf("community:leiden:l2:%d", s.CommunityID),
+					Name:       fmt.Sprintf("Super Community %d Summary", s.CommunityID),
 					Type:       "Community",
 					Properties: props,
 					TaintLevel: l2MaxTaint[s.CommunityID],
 				}
-				if err := gw.UpsertEntity(ctx, entity); err != nil {
+				if err := upsertFn(ctx, entity); err != nil {
 					metrics.RecordKnowledgeGraphWriteFailure(ctx, "cluster_level2_upsert")
 					return labels, apperr.Wrap(apperr.CodeInternal, "Clusterer.Cluster: Level 2 Upsert", err)
 				}

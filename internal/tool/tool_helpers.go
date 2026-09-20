@@ -140,9 +140,9 @@ func newRateLimiter(qps int64) *rateLimiter {
 
 func (rl *rateLimiter) Allow() bool {
 	now := time.Now().UnixNano()
-	if now >= rl.refillAt.Load() {
-		// CAS 保证只有一个 goroutine 执行刷新，避免多次 Store 竞态。
-		old := rl.refillAt.Load()
+	// 只读一次 refillAt 作为 CAS 期望值（GR-5.2-008）：此前判定后再 Load 一次，慢协程会拿到
+	// 胜者刚推进的新值去 CAS 并成功，同一窗口内重复重置令牌，击穿 QPS 上限。
+	if old := rl.refillAt.Load(); now >= old {
 		if rl.refillAt.CompareAndSwap(old, now+int64(time.Second)) {
 			rl.tokens.Store(rl.maxQPS)
 		}
@@ -161,7 +161,9 @@ func (rl *rateLimiter) Allow() bool {
 }
 
 // ErrToolNotFound 工具未注册时返回的哨兵错误。
-var ErrToolNotFound = apperr.New(apperr.CodeInternal, "tool not found")
+// 用 CodeNotFound（GR-5.2-010）：寻址错误不是 5xx；且 apperr.Is 按 Code 比较，
+// CodeInternal 会让 errors.Is(任意内部错误, ErrToolNotFound) 为真。
+var ErrToolNotFound = apperr.New(apperr.CodeNotFound, "tool not found")
 
 func (r *InMemoryToolRegistry) checkIdempotency(ctx context.Context, toolName string) (*types.ToolResult, bool, string) {
 	if key, ok := ctx.Value(protocol.CtxIdempotencyKey{}).(types.IdempotencyKey); ok && key != "" {

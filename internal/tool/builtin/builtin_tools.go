@@ -79,7 +79,7 @@ func RegisterBuiltinTools(
 		{"get_datetime", get_datetime.GetDatetimeFn},
 		{"csv_parse", csv_parse.CsvParseFn},
 		{"diff_text", diff_text.DiffTextFn},
-		{"video_analysis", video_analysis.MakeExecuteVideoAnalysisFn(sandboxEnabled, bwrapPath)},
+		{"video_analysis", video_analysis.MakeExecuteVideoAnalysisFn(allowedPaths, dialer, sandboxEnabled, bwrapPath)},
 		{"tts_edge", tts_edge.MakeExecuteEdgeTTSFn(sandboxEnabled, bwrapPath)},
 		{"sys_probe", sys_probe.SysProbeFn},
 		{"str_replace_editor", str_replace_editor.MakeStrReplaceEditorFn(allowedPaths)},

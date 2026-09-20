@@ -9,42 +9,38 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	"github.com/polarisagi/polaris/internal/protocol/pb"
+
 	_ "modernc.org/sqlite"
 )
 
-func TestExtractJSONString(t *testing.T) {
-	data := []byte(`{"provider":"deepseek", "other": "value"}`)
-	if extractJSONString(data, "provider") != "deepseek" {
-		t.Errorf("Expected deepseek")
-	}
-	if extractJSONString(data, "missing") != "" {
-		t.Errorf("Expected empty")
-	}
-}
-
-func TestExtractJSONInt(t *testing.T) {
-	data := []byte(`{"input_tokens":1000, "other": "value"}`)
-	if extractJSONInt(data, "input_tokens") != 1000 {
-		t.Errorf("Expected 1000")
-	}
-	if extractJSONInt(data, "missing") != 0 {
-		t.Errorf("Expected 0")
-	}
-}
-
 func TestParseInferencePayload(t *testing.T) {
-	payload := []byte(`{"provider":"deepseek","task_type":"agent.task","session_id":"s1","call_type":"llm","input_tokens":1000,"output_tokens":200}`)
-	tokens, provider, taskType, sessionID, callType := parseInferencePayload(payload, "topic", "actor", "evType")
+	pbPayload := &pb.LLMCallPayload{
+		Provider:     "deepseek",
+		InputTokens:  1000,
+		OutputTokens: 200,
+		CostUsd:      0.324, // custom cost
+	}
+	payload, _ := proto.Marshal(pbPayload)
+	tokens, provider, _, _, callType, costUSD := parseInferencePayload(payload, "topic", "actor", "evType")
 	if tokens != 1200 {
 		t.Errorf("Expected 1200, got %d", tokens)
 	}
-	if provider != "deepseek" || taskType != "agent.task" || sessionID != "s1" || callType != "llm" {
+	if provider != "deepseek" || callType != "evType" {
 		t.Errorf("Mismatch in parsed fields")
+	}
+	if costUSD != 0.324 {
+		t.Errorf("Expected cost 0.324, got %v", costUSD)
 	}
 
 	// Missing provider -> falls back to actor
-	payload2 := []byte(`{"input_tokens":100}`)
-	_, p2, _, _, _ := parseInferencePayload(payload2, "topic", "default_actor", "evType")
+	pbPayload2 := &pb.LLMCallPayload{
+		InputTokens: 100,
+	}
+	payload2, _ := proto.Marshal(pbPayload2)
+	_, p2, _, _, _, _ := parseInferencePayload(payload2, "topic", "default_actor", "evType")
 	if p2 != "default_actor" {
 		t.Errorf("Expected default_actor, got %s", p2)
 	}
@@ -73,9 +69,13 @@ func TestGenerateCostReport(t *testing.T) {
 	now := time.Now()
 	monthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, time.UTC)
 	// Insert dummy event inside the range
-	payload := `{"provider":"deepseek","task_type":"t1","session_id":"s1","call_type":"c1","input_tokens":1000000,"output_tokens":0}`
+	pbPayload := &pb.LLMCallPayload{
+		Provider:    "deepseek",
+		InputTokens: 1000000,
+	}
+	payload, _ := proto.Marshal(pbPayload)
 	db.Exec(`INSERT INTO events (topic, actor, type, payload, created_at) VALUES (?, ?, ?, ?, ?)`,
-		"llm.test", "actor", "type", payload, monthStart.UnixMicro()+1000)
+		"llm.call.recorded", "actor", "type", payload, monthStart.UnixMilli()+1000)
 
 	reporter := NewCostReporter()
 	tmpDir := t.TempDir()
@@ -94,14 +94,8 @@ func TestGenerateCostReport(t *testing.T) {
 	if !strings.Contains(string(content), "- deepseek: $0.27") {
 		t.Errorf("Expected cost for deepseek to be $0.27, got:\n%s", string(content))
 	}
-	if !strings.Contains(string(content), "- t1: $0.27") {
-		t.Errorf("Expected cost for t1 to be $0.27")
-	}
-	if !strings.Contains(string(content), "- s1: $0.27") {
-		t.Errorf("Expected cost for s1 to be $0.27")
-	}
-	if !strings.Contains(string(content), "- c1: $0.27") {
-		t.Errorf("Expected cost for c1 to be $0.27")
+	if !strings.Contains(string(content), "- type: $0.27") { // evType was passed as "type", so call_type="type"
+		t.Errorf("Expected cost for type to be $0.27")
 	}
 }
 

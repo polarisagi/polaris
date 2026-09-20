@@ -197,7 +197,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		if tw != nil {
 			tw.WriteError("empty_response", inferErr)
 		}
-		o.emitError(sink, "empty_response", inferErr, sessionID, apperr.New(apperr.CodeInternal, "log event"))
+		o.emitError(sink, "empty_response", inferErr, sessionID, apperr.New(apperr.CodeInternal, inferErr))
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
 

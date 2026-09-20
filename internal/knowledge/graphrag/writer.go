@@ -4,124 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
-
-	"github.com/polarisagi/polaris/pkg/types"
-
-	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/llm/safecall"
 	"github.com/polarisagi/polaris/internal/protocol"
-	"github.com/polarisagi/polaris/internal/store"
+	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// GraphWriter 负责将实体写入数据库，通过 MutationBus 实现单写者串行化，
-// 并在写入前执行实体消歧（基于余弦相似度，保留 version 高者）。
-// 架构文档: docs/arch/M10-Knowledge-RAG.md §2.8
-type GraphWriter struct {
-	bus        *store.DatabaseWriter
-	fetcher    EntityFetcher
-	semanticDB protocol.SQLQuerier // B2: 桥接检查 semantic_entities
-}
-
-// SetSemanticDB 注入语义记忆底层 DB 以便写入期去重。
-func (gw *GraphWriter) SetSemanticDB(db protocol.SQLQuerier) {
-	gw.semanticDB = db
-}
-
-// UpsertEntity 提交实体写入意图。写入前通过余弦相似度消歧，LWW 语义保留 version 较高者。
-func (gw *GraphWriter) UpsertEntity(ctx context.Context, e *Entity) error {
-	if gw.fetcher != nil {
-		existing, err := gw.fetcher.GetEntityByName(ctx, e.Name)
-		if err == nil && existing != nil {
-			sim := CosineSimilarity(existing.Embedding, e.Embedding)
-			if sim > 0.95 && e.SyncVersion <= existing.SyncVersion {
-				return nil
-			}
-		}
-	}
-
-	// B2: 同样检查 semantic_entities 侧是否存在同名同类型高相似度实体
-	// L1：写入失败 → 图谱缺节点，必须向上传播到 GraphBuildOutboxHandler，由
-	// outbox 重试机制接手（这是本仓库对该类失败的正确重试载体，而非在此吞没）。
-	skip, err := gw.upsertToSemanticDB(ctx, e)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "graph_writer: upsertToSemanticDB 失败", err)
-	}
-	if skip {
-		return nil
-	}
-
-	intent := &store.MutationIntent{
-		Table:          "entities",
-		Operation:      "upsert",
-		Key:            []byte(e.Name),
-		Payload:        []byte(e.ID),
-		ClaimedVersion: e.SyncVersion,
-	}
-	if err := gw.bus.Submit(ctx, intent); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "graph_writer: Submit 失败", err)
-	}
-	return nil
-}
-
-// upsertToSemanticDB 向 semantic_entities 写入 graphrag_ingest 来源的实体。
-// 返回 skip=true 表示已被高相似度低版本实体去重跳过（调用方应跳过后续写入）。
-// err 非 nil 表示落库本身失败（L1：调用方必须向上传播，见 UpsertEntity）。
-func (gw *GraphWriter) upsertToSemanticDB(ctx context.Context, e *Entity) (skip bool, err error) {
-	if gw.semanticDB == nil {
-		return false, nil
-	}
-	var existingEmbedding []byte
-	var existingVersion int64
-	var dbid int64
-	lookupErr := gw.semanticDB.QueryRowContext(ctx, "SELECT id, embedding, version FROM semantic_entities WHERE entity_type = ? AND name = ?", e.Type, e.Name).Scan(&dbid, &existingEmbedding, &existingVersion)
-	if lookupErr == nil && len(existingEmbedding) > 0 {
-		embFloats := bytesToFloat32s(existingEmbedding)
-		sim := CosineSimilarity(embFloats, e.Embedding)
-		if sim > 0.95 && e.SyncVersion <= existingVersion {
-			return true, nil // 高相似度低版本：跳过
-		}
-		// Update existing entity in semantic_entities if it exists but version is higher or sim is low
-		if _, execErr := gw.semanticDB.ExecContext(ctx, `UPDATE semantic_entities SET embedding = ?, version = ?, source_type = 'graphrag_ingest', updated_at = strftime('%s','now')*1000 WHERE id = ?`, float32sToBytes(e.Embedding), e.SyncVersion, dbid); execErr != nil {
-			return false, apperr.Wrap(apperr.CodeInternal, "upsertToSemanticDB: update failed", execErr)
-		}
-	} else {
-		// Insert new entity into semantic_entities
-		if _, execErr := gw.semanticDB.ExecContext(ctx, `INSERT INTO semantic_entities (entity_type, name, properties, embedding, version, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'graphrag_ingest', strftime('%s','now')*1000, strftime('%s','now')*1000)`, e.Type, e.Name, "{}", float32sToBytes(e.Embedding), e.SyncVersion); execErr != nil {
-			return false, apperr.Wrap(apperr.CodeInternal, "upsertToSemanticDB: insert failed", execErr)
-		}
-	}
-	return false, nil
-}
-
-func float32sToBytes(f []float32) []byte {
-	if len(f) == 0 {
-		return nil
-	}
-	b := make([]byte, len(f)*4)
-	for i, v := range f {
-		bits := math.Float32bits(v)
-		b[i*4] = byte(bits)
-		b[i*4+1] = byte(bits >> 8)
-		b[i*4+2] = byte(bits >> 16)
-		b[i*4+3] = byte(bits >> 24)
-	}
-	return b
-}
-
-func bytesToFloat32s(b []byte) []float32 {
-	if len(b)%4 != 0 {
-		return nil
-	}
-	floats := make([]float32, len(b)/4)
-	for i := range floats {
-		bits := uint32(b[i*4]) | uint32(b[i*4+1])<<8 | uint32(b[i*4+2])<<16 | uint32(b[i*4+3])<<24
-		floats[i] = math.Float32frombits(bits)
-	}
-	return floats
-}
+// entityPropsJSON 序列化实体 properties（GR-7.2-003：原写死 "{}"，社区摘要的
+// level/summary 等载荷全部丢失，source.go 按 json_extract(properties,'$.level') 的查询恒空）。
 
 // ---------------------------------------------------------------------------
 // LLMClient LLM 调用接口（图构建专用）。

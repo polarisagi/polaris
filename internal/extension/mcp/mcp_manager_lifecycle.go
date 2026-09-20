@@ -57,6 +57,23 @@ func (m *MCPManager) ListToolSchemas() []types.ToolSchema {
 	return result
 }
 
+// ServerToolNames 返回指定 server 已发现工具的完整调用名（mcp__<server>__<tool>）。
+// 供按需激活路径把真实可调用名告知 LLM（GR-8-005）。
+func (m *MCPManager) ServerToolNames(serverName string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var names []string
+	for _, e := range m.entries {
+		if e.name != serverName {
+			continue
+		}
+		for _, t := range e.tools {
+			names = append(names, MCPToolName(e.name, t.Name))
+		}
+	}
+	return names
+}
+
 // RestoreServersFromDB 启动时从数据库加载并异步连接所有已启用的 MCP Server。
 // 统一加载独立安装的 MCP（plugin_id=”）和插件内嵌的 MCP（plugin_id != ”）。
 // dataDir 用于展开 args/url 中的 {DATA_DIR} 占位符；plugin MCP 的工作目录由 work_dir 字段提供。

@@ -156,9 +156,19 @@ func (a *LocalAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...
 	if options.ResponseFormat != nil && options.ResponseFormat.Type == "gbnf" {
 		req.Grammar = options.ResponseFormat.Grammar
 	}
+	// 不套 context.WithTimeout（GR-2.2-004 复核）：llama_infer_generate 是 run-to-completion
+	// 同步 FFI，不感知 Go ctx，超时 ctx 在此是安慰剂；生成时长由 Rust 侧 max_tokens
+	// （未指定时默认 512）物理封顶。能做的是进入 FFI 前尊重已取消/超时的 ctx。
+	if err := ctx.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeCancelled, "local adapter: infer", err)
+	}
 	resp, err := ffi.LlamaGenerate(ctx, req)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "local adapter: infer", err)
+	}
+	// P-2：空响应显式报错，与其余适配器一致，避免上层把空串当作合法终止回复。
+	if resp.Text == "" {
+		return nil, apperr.New(apperr.CodeInternal, "llm: empty response from provider (local, finish_reason="+resp.FinishReason+")")
 	}
 	if a.tbr != nil && (resp.PromptTokens > 0 || resp.TokensGenerated > 0) {
 		a.tbr.Add(int64(resp.PromptTokens) + int64(resp.TokensGenerated))

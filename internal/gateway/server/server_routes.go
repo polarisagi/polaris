@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/a2a"
@@ -12,6 +15,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("GET /v1/doctor", s.sysadminHandler.HandleDoctor)
+	// M13 §接口清单：OpenAI 兼容端点（第三方客户端接入）。处理器与单测早已完备但
+	// 路由从未注册，生产 404（GR-9.2-001）。经 /v1/ 前缀统一鉴权中间件保护。
+	mux.HandleFunc("POST /v1/chat/completions", s.sysadminHandler.HandleOpenAIChat)
 	mux.Handle("GET /metrics", metrics.MetricsHandler(s.tbr))
 	mux.HandleFunc("GET /v1/logs/stream", s.handleLogStream)
 	mux.HandleFunc("POST /v1/agent/query", s.handleAgentQuery)
@@ -165,7 +171,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/skills", s.sysadminHandler.HandleListSkills)
 	mux.HandleFunc("POST /v1/skills/install", s.sysadminHandler.HandleInstallSkill)
 	// 用户意图驱动的技能生成入口（P3-2 SkillCreator，2026-07-21 deadcode 审查补齐）
-	mux.HandleFunc("POST /v1/skills/create", s.sysadminHandler.HandleCreateSkill)
+	// GR-9.2-006：M13 接口清单与 Web UI（web/src/js/store/plugins.js submitCreation）
+	// 约定 /v1/{skills,plugins,apps,mcp}/create 为"直接创建自定义记录"端点，
+	// 实现在 PluginHandler，但除 skills 外均未注册（生产 404）。skills/create 同一路径
+	// 承载两种语义：CLI 发 {"intent":...} 走 LLM 生成，UI 发 {"name",...} 走手工记录，
+	// 按请求体分派。
+	mux.HandleFunc("POST /v1/skills/create", s.handleSkillCreate)
+	mux.HandleFunc("POST /v1/plugins/create", s.pluginHandler.HandleCreatePlugin)
+	mux.HandleFunc("POST /v1/apps/create", s.pluginHandler.HandleCreateApp)
+	mux.HandleFunc("POST /v1/mcp/create", s.pluginHandler.HandleCreateMCP)
 
 	// MCP Server 管理 API
 	mux.HandleFunc("GET /v1/mcp-servers", s.sysadminHandler.MCP.HandleListMCPServers)
@@ -223,4 +237,29 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/system/version", s.sysadminHandler.HandleGetVersion)
 	mux.HandleFunc("POST /v1/system/update", s.sysadminHandler.HandleTriggerUpdate)
 
+}
+
+// handleSkillCreate 按请求体分派 POST /v1/skills/create：含非空 intent 字段 →
+// SysAdminHandler（LLM 生成 SKILL.md，CLI `polaris skill create` 使用）；否则 →
+// PluginHandler（按 name/description/repo_url 手工创建记录，Web UI 使用）。
+func (s *Server) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body failed", http.StatusBadRequest)
+		return
+	}
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var probe struct {
+		Intent string `json:"intent"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if probe.Intent != "" {
+		s.sysadminHandler.HandleCreateSkill(w, r)
+		return
+	}
+	s.pluginHandler.HandleCreateSkill(w, r)
 }

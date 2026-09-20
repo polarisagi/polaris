@@ -115,7 +115,11 @@ pub extern "C" fn wasmtime_pool_init(_n: c_int) -> c_int {
                         let _ = GLOBAL_ENGINE.set(Arc::new(state));
                         *initialized = true;
                     }
-                    Err(_) => panic!("EngineState::new failed"),
+                    // GR-11-001：不得在 FFI 边界内 panic——即便被 catch_unwind 兜住，
+                    // 持锁 panic 也会毒化 INIT，之后每次调用都在 lock().unwrap() 再 panic，
+                    // 永远无法重试初始化；若将来 profile 改为 panic=abort 则直接杀进程。
+                    // 与 wasmtime_init 一致：返回错误码，由 Go 侧决定降级。
+                    Err(_) => return WASMTIME_ERR_INTERNAL,
                 }
             } else {
                 *initialized = true;

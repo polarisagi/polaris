@@ -82,3 +82,11 @@ LLM 生成代码（CodeAct/Wasm）进沙箱前经三层串行防线，取代原�
 > ③ 决策六的 `allow_trusted_inprocess_fallback` 默认值若要改真，须先有稳定性维度的
 > 独立评估（资源限额/超时熔断），不能因为"来源可信"就跳过该评估。
 
+
+> **2026-09-20 复核（决策四）**：决策一对"原生子进程"的禁令写于 NativeOSSandbox 实现之前。
+> 当时 L3 仅指 Firecracker/gVisor 重型 microVM，"原生子进程"指无隔离的 exec.Command。
+> 现 NativeOSSandbox 经 Rust FFI 调用 bwrap（Linux namespace+seccomp）/ Seatbelt（macOS sandbox-exec），
+> 具有物理可验证的隔离边界（HE-2），不属于决策一禁止的"无沙箱原生 exec"。
+> 
+> 新规则：Tier-0 + SandboxContainer 请求 → 降级为 SandboxNativeOS（bwrap/Seatbelt）。
+> CapPrivileged 操作在 Tier-0 仍返回 ErrTier0SandboxLimit（bwrap/Seatbelt 无法替代 microVM 硬件虚拟化边界）。

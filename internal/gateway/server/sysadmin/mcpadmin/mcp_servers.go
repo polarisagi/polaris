@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +19,19 @@ import (
 )
 
 // types.MCPServerConfig MCP Server REST API 数据结构。
+
+// networkApprovalStatus 网络审批状态，仅对 TrustTier<=2 且 RequiresNetwork 的服务器有意义。
+func networkApprovalStatus(c *types.MCPServerConfig, approvalMap map[string]string) string {
+	if !c.RequiresNetwork || c.TrustTier > 2 {
+		return c.NetworkApprovalStatus
+	}
+	switch approvalMap[c.ID] {
+	case "approved", "denied":
+		return approvalMap[c.ID]
+	default:
+		return "pending"
+	}
+}
 
 func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) {
 	// 统一查询：独立安装的 MCP（plugin_id=''）和插件内嵌的 MCP（plugin_id!=''）都在 mcp_servers 表中。
@@ -75,18 +89,12 @@ func (h *MCPAdmin) HandleListMCPServers(w http.ResponseWriter, r *http.Request) 
 			c.ToolCount = len(info.Tools)
 			c.Error = info.Error
 		}
-		// 填充网络审批状态（仅对 TrustTier<=2 && RequiresNetwork=true 的服务器有意义）
-		if c.RequiresNetwork && c.TrustTier <= 2 {
-			switch approvalMap[c.ID] {
-			case "approved":
-				c.NetworkApprovalStatus = "approved"
-			case "denied":
-				c.NetworkApprovalStatus = "denied"
-			default:
-				c.NetworkApprovalStatus = "pending"
-			}
-		}
+		c.NetworkApprovalStatus = networkApprovalStatus(c, approvalMap)
 		list = append(list, c)
+	}
+	if err := rows.Err(); err != nil {
+		httputil.RespondError(w, "", err, http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -110,9 +118,17 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 	if principal == "" {
 		principal = "user"
 	}
+	// 先确定 server ID：extension_instances 与 mcp_servers 两侧须用同一标识关联。
+	// GR-9.2-004：原实现写死 ExtensionID="mcp_pending" 且不设 RuntimeID，第二个
+	// 自定义 MCP 与第一个撞同一实例行，删除时 extension_instances 留下孤儿。
+	if c.ID == "" {
+		c.ID = "mcp_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
 	installReq := protocol.ExtensionInstallRequest{
 		Principal:   principal,
-		ExtensionID: "mcp_pending",
+		ExtensionID: c.ID,
+		RuntimeID:   c.ID,
+		Name:        c.Name,
 		ExtType:     "mcp",
 		TrustTier:   c.TrustTier,
 		Publisher:   "user",
@@ -122,16 +138,13 @@ func (h *MCPAdmin) HandleCreateMCPServer(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "policy denied: "+err.Error(), http.StatusForbidden)
 		return
 	}
+	installReq.BypassAuth = true // 上面已做同一授权，避免 InstallExtension 内重复评估
 
 	if err := h.InstallMgr.InstallExtension(r.Context(), installReq); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
 	}
 
-	// 生成 ID 并持久化到 mcp_servers（State-in-DB，重启可恢复）
-	if c.ID == "" {
-		c.ID = "mcp_" + fmt.Sprintf("%d", time.Now().UnixNano())
-	}
 	argsBytes, _ := json.Marshal(c.Args)
 	envBytes, _ := json.Marshal(c.Env)
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -288,6 +301,11 @@ func (h *MCPAdmin) HandleDeleteMCPServer(w http.ResponseWriter, r *http.Request)
 	if err := h.ExtRepo.DeleteMCPServer(r.Context(), id); err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
+	}
+	// 同步清理创建时写入的 extension_instances 行（ExtensionID=server ID），
+	// 不存在（历史数据/创建失败）时忽略。
+	if err := h.ExtRepo.DeleteInstance(r.Context(), id); err != nil {
+		slog.Warn("mcpadmin: delete extension instance failed", "id", id, "err", err)
 	}
 	if h.ClearToolSchemaCache != nil {
 		h.ClearToolSchemaCache()

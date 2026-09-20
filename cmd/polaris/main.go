@@ -210,20 +210,27 @@ func run() error { //nolint:gocyclo
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("polaris: HTTP 服务未在超时内排空，存在被切断的在途请求", "err", err)
 	}
-	ab.ReaperStop() // 显式提前停止 Reaper，确保在 dbWriter 排空前释放
+	// 停机顺序 = 生产者先停、单写者后停（GR-3-001）：Supervisor workers 与 Reaper 都会写库，
+	// 若留给 defer（LIFO 晚于本函数体）执行，它们会在 DBWriter.Close 之后继续提交。
+	// 两者 Stop 均幂等，上方 defer 保留作异常返回路径兜底。
+	ab.Supervisor.Stop()
+	ab.ReaperStop()
+	sb.EmbedBatcher.Stop()
 
-	if rep, err := sb.AuditChain.VerifyChain(shutdownCtx, 0); err != nil {
-		slog.Error("audit: chain verify failed on shutdown", "err", err)
-	} else if !rep.Valid {
-		slog.Error("audit: chain integrity broken", "report", rep)
-	}
-
+	// 单写者：停止接收 → 排空残余 → 最终落盘；超时则放弃等待（进程即将退出）。
+	concurrent.SafeGo(context.Background(), "polaris.shutdown.dbwriter_close", func(context.Context) { sb.DBWriter.Close() })
 	select {
 	case <-sb.DBWriterDone:
 	case <-shutdownCtx.Done():
 		slog.Warn("polaris: database writer flush timeout during shutdown")
 	}
-	sb.DBWriter.Close()
+
+	// 审计链校验放在最终落盘之后，才能覆盖停机窗口内写入的事件。
+	if rep, err := sb.AuditChain.VerifyChain(shutdownCtx, 0); err != nil {
+		slog.Error("audit: chain verify failed on shutdown", "err", err)
+	} else if !rep.Valid {
+		slog.Error("audit: chain integrity broken", "report", rep)
+	}
 
 	slog.Info("polaris: shutdown complete")
 	return nil

@@ -313,7 +313,7 @@ func (gt *GraphTraverser) fetchEntityName(ctx context.Context, entityID int64) (
 // chunksForEntity 按实体名称在 rag_chunks_fts 中检索关联 chunk。
 func (gt *GraphTraverser) chunksForEntity(ctx context.Context, entityName string, limit int) ([]Chunk, error) {
 	rows, err := gt.db.QueryContext(ctx, `
-		SELECT rc.id, rc.doc_id, rc.content, rc.taint_level, rc.taint_source
+		SELECT rc.id, rc.doc_id, rc.content, rc.taint_level, rc.taint_source, rc.taint_hmac, rc.source_uri
 		FROM rag_chunks rc
 		WHERE rc.rowid IN (
 			SELECT rowid FROM rag_chunks_fts
@@ -327,11 +327,16 @@ func (gt *GraphTraverser) chunksForEntity(ctx context.Context, entityName string
 	var chunks []Chunk
 	for rows.Next() {
 		var c Chunk
-		var ts sql.NullString
-		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &c.TaintLevel, &ts); err == nil {
+		var ts, th, uri sql.NullString
+		// GR-7.2-006：带出 taint_hmac 与 source_uri。HMAC 校验在 knowledge 包
+		// （SearchGraph）用 TaintBoundarySerializer 完成——graphrag 不持有密钥，
+		// 与其余检索路径（retriever.go/ContextExpander）保持同一校验点。
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &c.TaintLevel, &ts, &th, &uri); err == nil {
 			if ts.Valid {
 				c.TaintSource = ts.String
 			}
+			c.TaintHMAC = th.String
+			c.SourceURI = uri.String
 			chunks = append(chunks, c)
 		}
 	}

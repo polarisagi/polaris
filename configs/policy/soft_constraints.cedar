@@ -62,6 +62,10 @@ when { context.trust_tier >= 3 };
 permit (principal == Principal::"mcp_mgr", action == Action::"process_spawn", resource is Resource)
 when { context.trust_tier == 2 && context.sandbox_auto == true };
 
+// MCP sampling/createMessage（服务端借用宿主模型推理）：仅官方可信服务端放行（GD-14-002）
+permit (principal == Principal::"mcp_mgr", action == Action::"mcp_sampling", resource is Resource)
+when { context.trust_tier >= 3 };
+
 // Skill / CodeAct 脚本：Local+ 放行（隔离等级由 SandboxFloor 保证）
 permit (principal == Principal::"agent", action == Action::"script_execute", resource is Resource)
 when { context.trust_tier >= 1 };

@@ -82,8 +82,11 @@ func (h *HookRunner) exec(event string, env map[string]string, timeout time.Dura
 	ctx := context.Background()
 	exitCode, output, runErr := osutils.RunScript(ctx, path, buildHookEnv(env), timeout)
 	if runErr != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			slog.Warn("hook: timeout", "event", event, "timeout", timeout, "err", apperr.New(apperr.CodeInternal, "log event"))
+		// 超时判定看 runErr 而非外层 ctx：超时 ctx 在 RunScript 内部派生，外层
+		// Background ctx 永远不会 DeadlineExceeded。
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			slog.Warn("hook: timeout", "event", event, "timeout", timeout)
+			return exitCode, output, apperr.Wrap(apperr.CodeTimeout, "hooks: script timed out", runErr)
 		}
 		return exitCode, output, apperr.Wrap(apperr.CodeInternal, "hooks: RunScript 执行失败", runErr)
 	}

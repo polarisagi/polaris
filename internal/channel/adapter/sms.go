@@ -77,8 +77,7 @@ func (a *SmsAdapter) Send(ctx context.Context, host Host, cfg map[string]any, ms
 	fromNumber, _ := cfg["from_number"].(string)
 
 	if accountSID == "" || authToken == "" || fromNumber == "" {
-		slog.Warn("sms: twilio config missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "sms: twilio config missing")
 	}
 	if err := TwilioSendSMS(ctx, host.HTTPClient(), accountSID, authToken, fromNumber, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "sms", "err", err)

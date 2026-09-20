@@ -3,7 +3,6 @@ package consolidation
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -39,15 +38,20 @@ func (ca *ColdArchiver) PhysicalCompact() error {
 
 	for iter.Next() {
 		var tombstone struct {
-			ID string `json:"id"`
+			ID  string `json:"id"`
+			Key string `json:"key"`
 		}
 		if err := json.Unmarshal(iter.Value(), &tombstone); err != nil || tombstone.ID == "" {
 			continue
 		}
 
-		// 删除原事件（可能已被归档，Delete 幂等）
-		eventKey := fmt.Appendf(nil, "events:%s", tombstone.ID)
-		keysToDelete = append(keysToDelete, eventKey)
+		// 删除原事件（可能已被归档，Delete 幂等）。按 tombstone 记录的真实键删除（GR-5.1-008）：
+		// 此前拼 "events:"+id，而热存储键是 events:session:{sid}:{ts}_{seq}，删除恒落空、
+		// tombstone 却被删掉，原条目从此既不可遗忘也不再被标记。旧格式 tombstone 无 key，
+		// 只清 tombstone、保留原条目，由下一轮 PeriodicCleanup 以新格式重新标记。
+		if tombstone.Key != "" {
+			keysToDelete = append(keysToDelete, []byte(tombstone.Key))
+		}
 		// 删除 tombstone 自身
 		keysToDelete = append(keysToDelete, iter.Key())
 		deleted++

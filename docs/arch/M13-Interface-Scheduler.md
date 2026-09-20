@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:437 对内调度 / 3:557 MCP / 6:575 (SOFT)降级 / 6-bis:588 已知Bug修复记录 / 7:600 跨模块契约 / 8:617 Web UI 规约 / 8.6:763 插件聚合市场DB+流 / 8.7:799 自动化中心DB+流+工作流 / 8.8:915 电脑操控权限+Preferences / 8.9:955 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:441 对内调度 / 3:561 MCP / 6:579 (SOFT)降级 / 6-bis:592 已知Bug修复记录 / 7:604 跨模块契约 / 8:621 Web UI 规约 / 8.6:767 插件聚合市场DB+流 / 8.7:803 自动化中心DB+流+工作流 / 8.8:919 电脑操控权限+Preferences / 8.9:959 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -67,7 +67,9 @@ AgentREPL: 逐行读 stdin，"/" 前缀→内置命令（/help /sessions /switch
 - 迁移后 `polaris memory process-staging` 触发去重→Salience重算→提升主线
 - 技能 SKILL.md 仅拷贝源码并标注"需人工编译为 Wasm"
 
-月度成本报告：cron `0 0 1 * *` → 生成 `monthly_cost_report.md`，含 by_provider / by_task_type / by_session / by_call_type 四维度。实现见 `internal/gateway/`：查询 `events` 表上月 `inference.*` 事件，从 payload 提取 input_tokens + output_tokens，按内置 provider 成本系数（deepseek ¥0.27/1M、anthropic $3/1M 等）计算实际费用并聚合。DB（Database，数据库） 不可用时降级为空报告。`polaris config budget set <amount>` 配置 monthly_budget，写入 `kv_store`（键 `config:budget:monthly_usd`）。
+月度成本报告：cron `0 0 1 * *` → 生成 `monthly_cost_report.md`，含 by_provider / by_task_type / by_session / by_call_type 四维度。实现见 `internal/gateway/`：查询 `events` 表上月 `llm.call.recorded` 事件，从 payload 提取 input_tokens + output_tokens，按内置 provider 成本系数（deepseek ¥0.27/1M、anthropic $3/1M 等）计算实际费用并聚合。DB（Database，数据库） 不可用时降级为空报告。`polaris config budget set <amount>` 配置 monthly_budget，写入 `kv_store`（键 `config:budget:monthly_usd`）。
+
+> **2026-09-20 复核**：GR-10.1-001。月度成本报告订阅的推理事件 topic 从 `inference.*` 订正为 `llm.call.recorded`。
 
 ### 1.2 HTTP REST API
 
@@ -310,6 +312,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | GET | `/v1/approvals/pending` | `handleGetPendingApprovals` |
 | GET | `/v1/apps` | `sysadminHandler.HandleListApps` |
 | POST | `/v1/apps` | `sysadminHandler.HandleCreateApp` |
+| POST | `/v1/apps/create` | `pluginHandler.HandleCreateApp` |
 | DELETE | `/v1/apps/{id}` | `sysadminHandler.HandleDeleteApp` |
 | GET | `/v1/apps/{id}` | `sysadminHandler.HandleGetApp` |
 | PUT | `/v1/apps/{id}` | `sysadminHandler.HandleUpdateApp` |
@@ -328,6 +331,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/channels` | `sysadminHandler.Channels.HandleCreateChannel` |
 | DELETE | `/v1/channels/{channelID}` | `sysadminHandler.Channels.HandleDeleteChannel` |
 | PUT | `/v1/channels/{channelID}` | `sysadminHandler.Channels.HandleUpdateChannel` |
+| POST | `/v1/chat/completions` | `sysadminHandler.HandleOpenAIChat` |
 | GET | `/v1/config` | `handleGetConfig` |
 | GET | `/v1/config/budget` | `sysadminHandler.HandleGetBudget` |
 | PUT | `/v1/config/budget` | `sysadminHandler.HandleSetBudget` |
@@ -351,8 +355,10 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | PUT | `/v1/mcp-servers/{serverID}` | `sysadminHandler.MCP.HandleUpdateMCPServer` |
 | PUT | `/v1/mcp-servers/{serverID}/network-access` | `sysadminHandler.MCP.HandleMCPNetworkApproval` |
 | POST | `/v1/mcp-servers/{serverID}/test` | `sysadminHandler.MCP.HandleTestMCPServer` |
+| POST | `/v1/mcp/create` | `pluginHandler.HandleCreateMCP` |
 | GET | `/v1/plugins` | `pluginHandler.HandleListPlugins` |
 | GET | `/v1/plugins/catalog` | `pluginHandler.HandleListPluginCatalog` |
+| POST | `/v1/plugins/create` | `pluginHandler.HandleCreatePlugin` |
 | POST | `/v1/plugins/install` | `pluginHandler.HandleInstallPlugin` |
 | GET | `/v1/plugins/marketplaces` | `pluginHandler.HandleListMarketplaces` |
 | POST | `/v1/plugins/marketplaces` | `pluginHandler.HandleAddMarketplace` |
@@ -384,7 +390,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | GET | `/v1/sessions/{sessionID}/context` | `chatHandler.HandleGetSessionContext` |
 | POST | `/v1/sessions/{sessionID}/recap` | `chatHandler.HandleSessionRecap` |
 | GET | `/v1/skills` | `sysadminHandler.HandleListSkills` |
-| POST | `/v1/skills/create` | `sysadminHandler.HandleCreateSkill` |
+| POST | `/v1/skills/create` | `handleSkillCreate` |
 | POST | `/v1/skills/install` | `sysadminHandler.HandleInstallSkill` |
 | GET | `/v1/status` | `handleStatus` |
 | POST | `/v1/system/update` | `sysadminHandler.HandleTriggerUpdate` |
@@ -402,7 +408,7 @@ TOML 配置：`configs/defaults.toml [compressor]`。
 | POST | `/v1/workflows/{id}/trigger` | `sysadminHandler.Workflow.HandleTriggerWorkflow` |
 | POST | `/v1/workspace/upload` | `sysadminHandler.HandleVFSUpload` |
 
-共 116 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
+共 120 条，提取自 `internal/gateway/server/server_routes.go`（`mux.HandleFunc`/`mux.Handle` 全量扫描，不含 `server_init.go` 里的静态资源兜底路由）。本表是代码事实的权威快照，供与上方 §1.2 手写分组罗列交叉核对——手写罗列携带跨小节引用与语义分组，不由本表自动替换。
 <!-- END GENERATED: m13-route-inventory -->
 
 ### 1.3 WebSocket [计划：可选升级路径]
@@ -508,7 +514,7 @@ TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatch
 **HITLStore**: KV prefix scan 实现（`internal/automation/hitl/`，GatewayImpl）。`Put(hitl:pending:{id}) / Delete(hitl:pending:{id}) / Scan(hitl:pending: 前缀) / Put(hitl:archive:{id}:{ts})`。内存 waiters map 分发审批响应，不依赖 SQL 行状态机。
 
 **ApprovalRequest**:
-- `ID / AgentID / Action(string) / Detail(string) / RiskLevel(string) / CreatedAt / Timeout`（默认值见 `spec/state.yaml §m13_scheduler.hitl_default_deadline_minutes_normal`，紧急/长程档见同节 `_urgent` / `_long`，Per-TaskType 可覆盖）
+- `ID / AgentID / Action(string) / Detail(string) / RiskLevel(string) / CreatedAt / Timeout`（默认值见 `spec/state.yaml §m13_interface.hitl_default_deadline_minutes_normal`，紧急/长程档见同节 `_urgent` / `_long`，Per-TaskType 可覆盖）
 - `TimeoutPolicy`: `kill_pause`(默认) / `auto_deny` / `auto_approve`(policy_version>=2+管理员授权)
 - `Status`: `pending / approved / denied / timeout`
 
@@ -595,7 +601,7 @@ TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatch
 
 ## 默认参数
 
-完整阈值与重评触发条件: `spec/state.yaml §thresholds.m13_scheduler`。
+完整阈值与重评触发条件: `spec/state.yaml §thresholds.m13_interface`。
 
 ## 7. 跨模块依赖与契约
 

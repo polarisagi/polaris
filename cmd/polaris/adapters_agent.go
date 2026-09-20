@@ -125,7 +125,7 @@ func (a *episodicMemAdapter) Query(ctx context.Context, q string, maxTaint types
 	}
 	var items []agentctx.ContextItem
 	for _, r := range res {
-		if ev, ok := r.Event.(*types.Event); ok && ev != nil {
+		if ev := r.EventPtr(); ev != nil {
 			content := fmt.Sprintf("[%s] %s: %s", ev.CreatedAt.Format(time.RFC3339), ev.Type, string(ev.Payload))
 			items = append(items, agentctx.ContextItem{
 				Content:   content,

@@ -15,6 +15,7 @@ import (
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/memory/compact"
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/guard"
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -136,6 +137,7 @@ type Agent struct {
 
 	effectDone    chan EffectResult // effect 异步完成回传（缓冲 1，防止 goroutine 泄漏）
 	effectRunning atomic.Bool       // 串行保证：同一时刻只有一个 effect 在执行
+	effectIdle    chan struct{}     // effectRunning 释放信号（缓冲 1，非阻塞投递），替代 1ms 轮询
 }
 
 // Done 返回一个在 Run() 循环真正退出时关闭的 channel。
@@ -222,6 +224,7 @@ func NewAgent(id string, taskRepo protocol.TaskReadRepository, provider protocol
 		},
 		cwm:        NewContextWindowManager(0),
 		effectDone: make(chan EffectResult, 1),
+		effectIdle: make(chan struct{}, 1),
 	}
 	agent.sm.SetIntentDispatcher(agent.asyncIntent)
 	return agent
@@ -291,6 +294,23 @@ func (a *Agent) clearInFlight() {
 	}
 }
 
+// handleEffectResult 处理一个已完成 effect 的回传；done=true 表示已进入终态、Run 应返回 nil。
+func (a *Agent) handleEffectResult(ctx context.Context, result EffectResult) (done bool, err error) {
+	if result.Err != nil {
+		return true, apperr.Wrap(apperr.CodeInternal, "Agent.Run", result.Err)
+	}
+	if result.Transition != 0 {
+		a.asyncIntent(result.Transition)
+	}
+	// 终态检查 (可能被 effect transition 修改)
+	current := a.sm.Current()
+	if current == types.AgentStateComplete || current == types.AgentStateFailed {
+		a.handleTerminalState(ctx, current)
+		return true, nil
+	}
+	return false, nil
+}
+
 // Run 启动 Agent 事件循环（Suspend-on-Idle）。
 // 空闲时阻塞在 intent channel 上，不轮询——符合 par_inv_05。
 //
@@ -306,6 +326,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	// 若进程在两者之间崩溃，标记残留，供 boot 阶段崩溃恢复驱动器识别。
 	a.markInFlight(ctx)
 	defer a.clearInFlight()
+
+	// polaris.agents_active：以 Run() 生命周期计数（GR-1.2-003，此前全仓无写入方，指标恒 0）。
+	metrics.ActiveAgentsCount.Add(1)
+	defer metrics.ActiveAgentsCount.Add(-1)
 
 	// 从 AgentConfig 初始化步骤预算（仅在首次 Run 时设置，支持外部注入覆盖）
 	if a.Config.MaxSteps > 0 && a.sCtx.MaxStepsLimit == 0 {
@@ -378,19 +402,31 @@ func (a *Agent) Run(ctx context.Context) error {
 
 			// 执行 Effects: LLMFillEffect → 调 LLM；DeterministicEffect → 直接执行
 			for _, effect := range effects {
-				// 串行保证：若上一个 effect 未完成，自旋等待其完成，防止并发竞态导致 effect 丢失
+				// 串行保证：上一个 effect 未完成时等待其释放。等待期间必须同时消费 effectDone
+				// （GR-4.1-001）：effectDone 容量 1，若其中压着一个未读结果，正在运行的 effect
+				// 会阻塞在发送上、永远走不到释放 effectRunning 的 defer，主循环在此死等。
 				for !a.effectRunning.CompareAndSwap(false, true) {
 					select {
 					case <-ctx.Done():
 						return ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份
-					case <-time.After(1 * time.Millisecond):
+					case result := <-a.effectDone:
+						if done, err := a.handleEffectResult(ctx, result); done || err != nil {
+							return err
+						}
+					case <-a.effectIdle:
 					}
 				}
 				concurrent.SafeGo(ctx, "agent.executeEffect", func(execCtx context.Context) {
 					// panic 由 SafeGo 外层 recover（打日志+计量），goroutine 静默退出。
-					// 此处 defer 保证无论正常返回还是 panic，effectRunning 都能解锁，
+					// 此处 defer 保证无论正常返回还是 panic，effectRunning 都能解锁并发出空闲信号，
 					// 避免主循环在 effectDone select 上永久阻塞。
-					defer a.effectRunning.Store(false)
+					defer func() {
+						a.effectRunning.Store(false)
+						select {
+						case a.effectIdle <- struct{}{}:
+						default:
+						}
+					}()
 					result := a.executeEffect(execCtx, effect)
 					select {
 					case a.effectDone <- result:
@@ -410,18 +446,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 
 		case result := <-a.effectDone:
-			if result.Err != nil {
-				return apperr.Wrap(apperr.CodeInternal, "Agent.Run", result.Err)
-			}
-			if result.Transition != 0 {
-				a.asyncIntent(result.Transition)
-			}
-
-			// 终态检查 (可能被 effect transition 修改)
-			current := a.sm.Current()
-			if current == types.AgentStateComplete || current == types.AgentStateFailed {
-				a.handleTerminalState(ctx, current)
-				return nil
+			if done, err := a.handleEffectResult(ctx, result); done || err != nil {
+				return err
 			}
 
 		case <-idleTimer.C:
@@ -446,6 +472,6 @@ func (a *Agent) Run(ctx context.Context) error {
 // ============================================================================
 
 var (
-	ErrReplanExhausted = apperr.New(apperr.CodeResourceExhausted, "replan guard: max replan count reached, escalate to HITL")
+	ErrReplanExhausted = apperr.NewSentinel(apperr.CodeResourceExhausted, "replan guard: max replan count reached, escalate to HITL")
 	ErrIdleTimeout     = apperr.New(apperr.CodeResourceExhausted, "agent idle timeout")
 )

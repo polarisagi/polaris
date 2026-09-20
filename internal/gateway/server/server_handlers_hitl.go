@@ -110,6 +110,9 @@ func (s *Server) dispatchInterruptRequest(ctx context.Context, taskID, action st
 	release()
 }
 
+// interruptDebounceWindow 单 task 中断防抖窗口（M13 §1.2.5）。
+const interruptDebounceWindow = 30 * time.Second
+
 func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	clientIP := extractIP(r)
 	authCtx := authcontext.FromContext(r.Context())
@@ -120,7 +123,9 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	}
 	clientType := authCtx.ClientType
 
-	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP, string(clientType)) {
+	// GR-9.1-001：限流键与全局中间件同一命名空间（clientIP:clientType，M13 §1.5）；
+	// 裸 IP 会让同 IP 不同 clientType 共用首个访问者配额创建的桶。
+	if s.interruptLimiter != nil && !s.interruptLimiter.Allow(clientIP+":"+string(clientType), string(clientType)) {
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
@@ -133,6 +138,14 @@ func (s *Server) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden: unauthorized user", http.StatusForbidden)
 		return
 	}
+
+	// M13 §1.2.5 单 task 防抖：同一 task 30s 内重复中断 → 429。按 task 计而非按
+	// 客户端计——多个客户端对同一任务连点中断同样会造成状态机抖动。
+	if _, dup := s.interruptDebounce.LoadOrStore(taskID, struct{}{}); dup {
+		http.Error(w, "interrupt for this task already in progress, retry later", http.StatusTooManyRequests)
+		return
+	}
+	time.AfterFunc(interruptDebounceWindow, func() { s.interruptDebounce.Delete(taskID) })
 
 	var req struct {
 		Action   string `json:"action"`   // "resume" | "redirect" | "abort"

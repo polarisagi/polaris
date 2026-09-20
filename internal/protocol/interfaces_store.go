@@ -230,7 +230,6 @@ type
 TaskReadRepository interface {
 	GetTaskProviderSuspendCount(ctx context.Context, taskID string) (int, error)
 	GetTaskIntentTaint(ctx context.Context, taskID string) (int, error)
-	AggregateTokenCosts(ctx context.Context, startMs, endMs int64) ([]types.TokenCostAgg, error)
 }
 
 type

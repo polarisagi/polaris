@@ -37,7 +37,8 @@
 
 ### 2.1 字符串与字节传递
 
-> **实际约定（ptr+len）**：FFI 边界全面采用 `*const u8 + usize` 风格，**不使用 NUL 终止字符串**（无 `*const c_char` / `CStr`）。
+> **实际约定（两种并存）**：Cedar 策略引擎（`lib.rs`）采用 `*const u8 + usize`（ptr+len）风格；`surreal_store/`、`wasmtime_engine.rs`、`native_sandbox/`、`llama_infer/` 的多数入口（如 `native_sandbox_exec` / `wasmtime_execute` 的 `input_json`、`surreal_fts_index` 的 `doc_id`）仍使用 NUL 结尾的 `*const c_char`，其 Rust→Go 字符串由配对的 `*_free_string` 释放。新增符号优先采用 ptr+len。
+> 2026-09-20 追记（GR-11-003）：此处原称"全面 ptr+len、无 `*const c_char`"，与源码不符，按实际订正。
 
 | 场景 | Go 侧 | Rust 侧 |
 |------|-------|---------|
@@ -120,10 +121,12 @@ Rust 侧通过 `write_bytes(out_err_ptr, out_err_len, "message")` 写入，Go �
 
 **所有 FFI 导出符号声明位置**：
 - Cedar → `rust/substrate/src/lib.rs`
-- SurrealDB → `rust/substrate/src/surreal_store.rs`
-- native_sandbox → `rust/substrate/src/native_sandbox.rs`
+- SurrealDB → `rust/substrate/src/surreal_store/`（按能力拆分：kv/fts/vector/graph/store）
+- Wasmtime → `rust/substrate/src/wasmtime_engine.rs`
+- native_sandbox → `rust/substrate/src/native_sandbox/dispatch.rs`（及 `engine.rs`）
+- 本地推理 → `rust/substrate/src/llama_infer/dispatch.rs`（tier1 feature）
 
-禁止在其他文件散落 `#[no_mangle] pub extern "C"` 符号。
+禁止在上述模块之外散落 `#[no_mangle] pub extern "C"` 符号。（2026-09-20 追记 GR-11-003：原列单文件路径，已随目录拆分订正。）
 
 ## 7. 符号清单（ABI 1.1）
 

@@ -34,7 +34,7 @@ func TestPIIDetector(t *testing.T) {
 		t.Fatalf("expected 3 redacted items")
 	}
 
-	if redacted != "My email is [REDACTED:email] and my phone is[REDACTED:phone_cn]. My AWS key is [REDACTED:aws_key]." {
+	if redacted != "My email is [REDACTED:email] and my phone is [REDACTED:phone_cn]. My AWS key is [REDACTED:aws_key]." {
 		t.Fatalf("unexpected redacted text: %s", redacted)
 	}
 

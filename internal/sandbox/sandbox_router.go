@@ -254,25 +254,39 @@ func (r *SandboxRouter) Execute(ctx context.Context, tool types.Tool, input []by
 		TaintLevel:  taintLevel,
 	}
 
-	// D-B6-04：统一注册可取消 context，供 KillIdleSandboxes/KillAllNonCritical
-	// 在 OOM 压力下强制终止在执行的沙箱任务。Execute 是所有 tier（Wasm/
-	// Container/NativeOS/InProcess/Remote）唯一的执行入口，在此处单点注册
-	// 即可覆盖全部 tier，无需侵入各 SandboxProvider 具体实现。
-	execCtx, cancel := context.WithCancel(ctx)
-	key := fmt.Sprintf("%s-%d", tool.Name, r.execSeq.Add(1))
-	r.mu.Lock()
-	r.activeExecs[key] = cancel
-	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		delete(r.activeExecs, key)
-		r.mu.Unlock()
-		cancel()
-	}()
+	execCtx, done := r.trackExec(ctx, tool.Name)
+	defer done()
 
 	res, err := provider.Run(execCtx, spec)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("sandbox run tool %q", tool.Name), err)
 	}
+	// GR-6.1-006：各 provider（Container/Persistent 等）构造 ToolResult 时并不
+	// 回填输入污点；ExecEnvelope 路径在 Step 5 统一 only-up，本入口此前直接透传
+	// provider 结果，输出污点可能低于输入。在路由出口统一收口，而不是要求每个
+	// provider 的每个 return 各自记得填。
+	if res != nil && res.TaintLevel < taintLevel {
+		res.TaintLevel = taintLevel
+	}
 	return res, nil
+}
+
+// trackExec 注册可取消 context，供 KillIdleSandboxes/KillAllNonCritical 在 OOM 压力下
+// 强制终止在执行的沙箱任务（D-B6-04）。返回的 done 必须在执行结束后调用。
+//
+// 生产唯一执行入口是 ExecEnvelope.Execute（RouteByTier → provider.Run），此前注册只写在
+// 本文件的 Execute 里而生产从不经过它，activeExecs 恒空、OOM 熔断取消不到任何任务
+// （GR-6.1-001）。两条入口现在共用本方法。
+func (r *SandboxRouter) trackExec(ctx context.Context, name string) (context.Context, func()) {
+	execCtx, cancel := context.WithCancel(ctx)
+	key := fmt.Sprintf("%s-%d", name, r.execSeq.Add(1))
+	r.mu.Lock()
+	r.activeExecs[key] = cancel
+	r.mu.Unlock()
+	return execCtx, func() {
+		r.mu.Lock()
+		delete(r.activeExecs, key)
+		r.mu.Unlock()
+		cancel()
+	}
 }

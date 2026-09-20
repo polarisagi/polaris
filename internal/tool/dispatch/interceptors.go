@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
+
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -33,7 +35,11 @@ func AuditInterceptor(at AuditLogger) Interceptor {
 	}
 }
 
-// SchemaValidateInterceptor 对输入参数进行基础 JSON 校验，防止透传脏数据导致运行时崩溃。
+// SchemaValidateInterceptor 按工具注册的 Parameters（JSON Schema）校验参数。
+//
+// GD-14-003：原实现只检查 JSON 语法，缺必填字段/类型错误的参数穿透到沙箱执行层
+// 才炸，错误远离根因。现校验 required/type/properties/items/enum 子集，失败返回
+// CodeInvalidInput 并带字段路径，供 FSM 在 S_REPLAN 把具体错误回传 LLM 纠正。
 func SchemaValidateInterceptor() Interceptor {
 	return func(ctx context.Context, entry protocol.CatalogEntry, args []byte, next ExecFn) (*types.ToolResult, error) {
 		if len(args) > 0 {
@@ -42,6 +48,10 @@ func SchemaValidateInterceptor() Interceptor {
 				slog.WarnContext(ctx, "dispatch: schema validation failed (invalid json)", "tool", entry.Name, "err", err)
 				return nil, apperr.Wrap(apperr.CodeInvalidInput, "tool args validation failed: invalid json", err)
 			}
+		}
+		if err := schemavalidate.ValidateAgainst(entry.Parameters, args); err != nil {
+			slog.WarnContext(ctx, "dispatch: schema validation failed", "tool", entry.Name, "err", err)
+			return nil, apperr.Wrap(apperr.CodeInvalidInput, "tool args validation failed", err)
 		}
 		return next(ctx, entry, args)
 	}

@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/protocol/pb"
 )
 
 // StartMonthlyCostReport 启动月度成本报告生成后台任务。
@@ -137,18 +140,17 @@ func (r *CostReporter) generateCostReport(ctx context.Context, dir string, db pr
 }
 
 // aggregateCosts 从 events 表聚合上月 LLM 调用成本。
-// 事件 payload 中包含 provider / task_type / session_id / call_type / tokens 字段。
 func (r *CostReporter) aggregateCosts(ctx context.Context, db protocol.SQLQuerier,
 	start, end time.Time,
 	byProvider, byTaskType, bySession, byCallType map[string]float64,
 ) {
-	// 从 events 表读取推理事件（topic 前缀 'llm.'）
+	// 从 events 表读取推理事件（topic 'llm.call.recorded'）
 	rows, err := db.QueryContext(ctx, `
 		SELECT topic, actor, type, payload
 		FROM events
 		WHERE created_at >= ? AND created_at < ?
-		  AND topic LIKE 'llm.%'
-	`, start.UnixMicro(), end.UnixMicro())
+		  AND topic = 'llm.call.recorded'
+	`, start.UnixMilli(), end.UnixMilli())
 	if err != nil {
 		return
 	}
@@ -161,14 +163,19 @@ func (r *CostReporter) aggregateCosts(ctx context.Context, db protocol.SQLQuerie
 			continue
 		}
 
-		// 从 payload 解析 tokens 和 provider 信息
-		tokens, provider, taskType, sessionID, callType := parseInferencePayload(payload, topic, actor, evType)
+		tokens, provider, taskType, sessionID, callType, costUSD := parseInferencePayload(payload, topic, actor, evType)
 		if tokens <= 0 || provider == "" {
 			continue
 		}
 
-		rate := r.providerRate[provider]
-		cost := float64(tokens) * rate / 1_000_000.0
+		// 使用记录的真实成本，如果为 0 则使用费率估算
+		var cost float64
+		if costUSD > 0 {
+			cost = costUSD
+		} else {
+			rate := r.providerRate[provider]
+			cost = float64(tokens) * rate / 1_000_000.0
+		}
 
 		byProvider[provider] += cost
 		if taskType != "" {
@@ -181,79 +188,30 @@ func (r *CostReporter) aggregateCosts(ctx context.Context, db protocol.SQLQuerie
 			byCallType[callType] += cost
 		}
 	}
+	// F-7：迭代中途出错会表现为静默少行，必须检查 rows.Err()
+	if err := rows.Err(); err != nil {
+		slog.Warn("cost_report: 事件迭代异常", "err", err)
+	}
 }
 
 // parseInferencePayload 从推理事件中提取成本相关字段。
-// payload 约定格式（JSON，字段均可选）：
-//
-//	{"provider":"deepseek","task_type":"agent.task","session_id":"...","call_type":"llm",
-//	 "input_tokens":1000,"output_tokens":200}
-func parseInferencePayload(payload []byte, _ /* topic */, actor, evType string) (tokens int, provider, taskType, sessionID, callType string) {
-	provider = extractJSONString(payload, "provider")
-	taskType = extractJSONString(payload, "task_type")
-	sessionID = extractJSONString(payload, "session_id")
-	callType = extractJSONString(payload, "call_type")
+func parseInferencePayload(payload []byte, _ /* topic */, actor, evType string) (tokens int, provider, taskType, sessionID, callType string, costUSD float64) {
+	var pbPayload pb.LLMCallPayload
+	if err := proto.Unmarshal(payload, &pbPayload); err != nil {
+		return
+	}
 
-	inputTokens := extractJSONInt(payload, "input_tokens")
-	outputTokens := extractJSONInt(payload, "output_tokens")
-	tokens = inputTokens + outputTokens
+	provider = pbPayload.Provider
+	tokens = int(pbPayload.InputTokens + pbPayload.OutputTokens)
+	costUSD = pbPayload.CostUsd
 
 	if provider == "" {
 		provider = actor
 	}
-	if callType == "" {
-		callType = evType
-	}
+	callType = evType
+
+	// Protobuf definition currently doesn't have task_type and session_id natively,
+	// they might be in the event's actor or topic, but we'll leave them empty for now
+	// or extract if we added them to proto. The user request didn't specify adding them.
 	return
-}
-
-// extractJSONString 从 JSON 字节中提取指定 key 的字符串值（轻量实现）。
-func extractJSONString(data []byte, key string) string {
-	needle := `"` + key + `":"`
-	start := indexOf(data, []byte(needle))
-	if start < 0 {
-		return ""
-	}
-	start += len(needle)
-	end := indexOf(data[start:], []byte(`"`))
-	if end < 0 {
-		return ""
-	}
-	return string(data[start : start+end])
-}
-
-// extractJSONInt 从 JSON 字节中提取指定 key 的整数值（轻量实现）。
-func extractJSONInt(data []byte, key string) int {
-	needle := `"` + key + `":`
-	start := indexOf(data, []byte(needle))
-	if start < 0 {
-		return 0
-	}
-	start += len(needle)
-	n := 0
-	for i := start; i < len(data); i++ {
-		c := data[i]
-		if c >= '0' && c <= '9' {
-			n = n*10 + int(c-'0')
-		} else if i > start {
-			break
-		}
-	}
-	return n
-}
-
-func indexOf(s, sep []byte) int {
-	for i := 0; i <= len(s)-len(sep); i++ {
-		match := true
-		for j := range sep {
-			if s[i+j] != sep[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
 }

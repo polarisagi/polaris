@@ -17,6 +17,13 @@ import (
 )
 
 // verifyWebhookSource 统一校验 Webhook 来源。如果验证失败或处理了特定的握手请求则返回 false。
+// ErrHandshakeHandled 表示平台握手（WhatsApp hub.challenge / Teams validationToken /
+// 飞书 url_verification）已在 verifyWebhookSource 内写完响应，调用方只需结束处理
+// （GR-9.2-003）。原实现返回 apperr(CodeOK)，调用方按错误处理再次 RespondError，
+// 向已写出的挑战响应追加错误体，平台校验挑战值失败、渠道注册失败。
+// 用 apperr.NewSentinel（按身份比较）：普通 apperr.New 按 Code 比较，不适合做控制流标记。
+var ErrHandshakeHandled = apperr.NewSentinel(apperr.CodeCancelled, "webhook handshake handled")
+
 func (h *ChannelsAdmin) verifyWebhookSource(w http.ResponseWriter, r *http.Request, channelType string, cfg map[string]any, body []byte) error {
 	switch channelType {
 	case "line":
@@ -60,7 +67,7 @@ func (h *ChannelsAdmin) verifyWhatsAppWebhook(w http.ResponseWriter, r *http.Req
 			return apperr.New(apperr.CodeUnauthorized, "whatsapp webhook: verify_token mismatch")
 		}
 		w.Write([]byte(challenge)) //nolint:errcheck
-		return apperr.New(apperr.CodeOK, "hub challenge handled")
+		return ErrHandshakeHandled
 	}
 
 	// POST：验证 X-Hub-Signature-256
@@ -95,7 +102,7 @@ func (h *ChannelsAdmin) verifyTeamsWebhook(w http.ResponseWriter, r *http.Reques
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte(vt)) //nolint:errcheck
-		return apperr.New(apperr.CodeOK, "validationToken handled")
+		return ErrHandshakeHandled
 	}
 
 	expectedState, _ := cfg["client_state"].(string)
@@ -211,7 +218,7 @@ func (h *ChannelsAdmin) verifyFeishuWebhook(w http.ResponseWriter, r *http.Reque
 		resp, _ := json.Marshal(map[string]string{"challenge": probe.Challenge})
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(resp) //nolint:errcheck
-		return apperr.New(apperr.CodeOK, "feishu url_verification handled")
+		return ErrHandshakeHandled
 	}
 
 	if encryptKey, _ := cfg["encrypt_key"].(string); encryptKey != "" {

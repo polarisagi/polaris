@@ -289,7 +289,7 @@ func (p *ConsolidationPipeline) MarkColdEpisodicEvents(ctx context.Context, sess
 func computeMaxTaint(events []types.ScoredEvent) types.TaintLevel {
 	maxTaint := types.TaintNone
 	for _, ev := range events {
-		if event, _ := ev.Event.(*types.Event); event != nil {
+		if event := ev.EventPtr(); event != nil {
 			if event.TaintLevel > maxTaint {
 				maxTaint = event.TaintLevel
 			}

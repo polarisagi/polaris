@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -49,11 +51,22 @@ type DebateJobIntent struct {
 type DebateWorker struct {
 	bb protocol.Blackboard
 	de *DebateExecutor
+
+	// wakeMu/inFlight/pendingWake 防"丢失唤醒"：子任务可能在父任务 Execute
+	// 仍在跑（尚未进入 suspended）时就完成，此时恢复事件看到父任务处于
+	// running 只能放弃；记下待唤醒标记，父任务挂起后立即自行补一次恢复。
+	wakeMu      sync.Mutex
+	inFlight    map[string]bool
+	pendingWake map[string]bool
 }
+
+// debateSuspendTTL 辩论等待子任务期间的挂起时长上限（写入 expires_at，仅作
+// 运维可观测的截止戳；挂起态不受租约 Reaper 回收，由子任务终态事件唤醒）。
+const debateSuspendTTL = time.Hour
 
 // NewDebateWorker 构造 DebateWorker。bb 和 de 必须非 nil。
 func NewDebateWorker(bb protocol.Blackboard, de *DebateExecutor) *DebateWorker {
-	return &DebateWorker{bb: bb, de: de}
+	return &DebateWorker{bb: bb, de: de, inFlight: map[string]bool{}, pendingWake: map[string]bool{}}
 }
 
 // RunLoop 是本 Worker 的主守护协程，应在 boot 阶段注册到 Supervisor 或以
@@ -129,8 +142,17 @@ func debateParentFromChildID(childID string) string {
 	return withoutSpeaker[:secondLastDash] // "<parentID>"
 }
 
-// tryClaimAndResume 检查 taskID 是否为 pending 的 debate 任务，CAS 认领后驱动
-// DebateExecutor.Execute 状态机直到挂起或终态。已被认领/不在 Pending 的任务静默跳过。
+// tryClaimAndResume 驱动 debate 任务的 DebateExecutor.Execute 状态机直到挂起或终态。
+//
+// GR-6.2-002：两条入口的所有权获取方式不同——
+//   - 新任务（pending）：ClaimTask → StartExecution（claimed→running）；
+//   - 子任务终态唤醒（suspended，claimed_by=本 Worker）：ResumeFromHITL
+//     （suspended→running，SQL 内校验 claimed_by）。
+//
+// 原实现两条路径都要求 pending 并重复 ClaimTask，首轮挂起后父任务处于
+// claimed，唤醒永远被拦下，辩论停滞到租约被 Reaper 回收为止。
+// Execute 返回 "suspend" 时调用 SuspendForHITL 进入挂起态：挂起期间不持有
+// 租约，也不会被租约 Reaper 当成超时任务回收。
 func (w *DebateWorker) tryClaimAndResume(ctx context.Context, taskID string) {
 	snap, err := w.bb.PeekTask(ctx, taskID)
 	if err != nil || snap == nil {
@@ -139,8 +161,11 @@ func (w *DebateWorker) tryClaimAndResume(ctx context.Context, taskID string) {
 	if snap.Type != DebateTaskType {
 		return // 不是 debate 类型任务
 	}
-	if snap.Status != types.TaskPending {
-		return // 非 Pending（已认领/完成/失败），不干预
+	if !w.resumable(taskID, snap.Status) {
+		return
+	}
+	if !waitReplayDone(ctx) {
+		return
 	}
 
 	var job DebateJobIntent
@@ -159,18 +184,28 @@ func (w *DebateWorker) tryClaimAndResume(ctx context.Context, taskID string) {
 		job.MaxRounds = 3 // 默认轮次
 	}
 
-	claimed, err := w.bb.ClaimTask(ctx, taskID, debateWorkerAgentID)
-	if err != nil || !claimed {
-		return // 被其他协程抢先认领，无视
+	if !w.acquire(ctx, taskID, snap.Status) {
+		return // 被其他协程抢先认领/恢复，无视
 	}
+	w.wakeMu.Lock()
+	w.inFlight[taskID] = true
+	w.wakeMu.Unlock()
+	defer func() {
+		w.wakeMu.Lock()
+		delete(w.inFlight, taskID)
+		delete(w.pendingWake, taskID)
+		w.wakeMu.Unlock()
+	}()
 
-	// 调用 DebateExecutor.Execute 进入或恢复状态机
-	verdict, err := w.de.Execute(ctx, taskID, job.Proponent, job.Opponent, job.Judge, job.MaxRounds)
+	execCtx, release := HoldLease(ctx, w.bb, taskID, debateWorkerAgentID)
+	verdict, err := w.de.Execute(execCtx, taskID, job.Proponent, job.Opponent, job.Judge, job.MaxRounds)
+	release()
 	if err != nil {
 		errMsg := err.Error()
 		if errMsg == "suspend" {
-			// 挂起等待子任务终态，由 RunLoop 的 task_completed/task_failed 事件再次触发
-			slog.Debug("debate worker: task suspended, waiting for sub-task completion", "task_id", taskID)
+			if w.suspendAndMaybeWake(ctx, taskID) {
+				w.tryClaimAndResume(ctx, taskID)
+			}
 			return
 		}
 		// 真实错误，标记失败
@@ -187,4 +222,56 @@ func (w *DebateWorker) tryClaimAndResume(ctx context.Context, taskID string) {
 	if err := w.bb.CompleteTask(ctx, taskID, debateWorkerAgentID, verdict); err != nil {
 		slog.Warn("debate worker: CompleteTask failed", "task_id", taskID, "err", err)
 	}
+}
+
+// acquire 按任务当前状态获取执行所有权：pending 走认领+开始执行，suspended
+// 走恢复（SQL 内校验 claimed_by 为本 Worker）。
+func (w *DebateWorker) acquire(ctx context.Context, taskID string, status types.TaskStatus) bool {
+	if status == types.TaskSuspended {
+		return w.bb.ResumeFromHITL(ctx, taskID, debateWorkerAgentID, true) == nil
+	}
+	claimed, err := w.bb.ClaimTask(ctx, taskID, debateWorkerAgentID)
+	if err != nil || !claimed {
+		return false
+	}
+	if err := w.bb.StartExecution(ctx, taskID, debateWorkerAgentID); err != nil {
+		slog.Warn("debate worker: StartExecution failed after claim", "task_id", taskID, "err", err)
+		return false
+	}
+	return true
+}
+
+// suspendAndMaybeWake 挂起父任务等待子任务终态；若 Execute 期间已有子任务
+// 完成（pendingWake），挂起后立即补一次恢复，避免丢失唤醒导致永久挂起。
+// 返回 true 表示调用方应立即再恢复一次。
+func (w *DebateWorker) suspendAndMaybeWake(ctx context.Context, taskID string) bool {
+	deadline := time.Now().Add(debateSuspendTTL).Unix()
+	if err := w.bb.SuspendForHITL(ctx, taskID, debateWorkerAgentID, deadline); err != nil {
+		slog.Warn("debate worker: suspend failed, task left for lease reaper", "task_id", taskID, "err", err)
+		return false
+	}
+	slog.Debug("debate worker: task suspended, waiting for sub-task completion", "task_id", taskID)
+	w.wakeMu.Lock()
+	wake := w.pendingWake[taskID]
+	delete(w.pendingWake, taskID)
+	delete(w.inFlight, taskID)
+	w.wakeMu.Unlock()
+	return wake
+}
+
+// resumable 判断当前状态是否可由本次调用驱动：pending/suspended 可以；
+// claimed/executing 说明父任务 Execute 仍在跑，记下待唤醒由其挂起后自行补一次恢复；
+// 终态不干预。
+func (w *DebateWorker) resumable(taskID string, status types.TaskStatus) bool {
+	switch status {
+	case types.TaskPending, types.TaskSuspended:
+		return true
+	case types.TaskClaimed, types.TaskExecuting:
+		w.wakeMu.Lock()
+		if w.inFlight[taskID] {
+			w.pendingWake[taskID] = true
+		}
+		w.wakeMu.Unlock()
+	}
+	return false
 }

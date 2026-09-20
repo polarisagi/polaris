@@ -231,19 +231,22 @@ func validateHeuristic(vCtx *DAGValidationContext) error {
 		}
 	}
 
-	// 3. 不可逆副作用节点（write_network / write_local）必须声明 Compensation
-	irreversibleTypes := map[string]bool{
-		"write_network": true,
-		"write_local":   true,
-	}
+	// 3. 副作用节点缺失 Compensation 声明：只告警，不拦截（GR-6.2-004）。
+	//
+	// 原实现用 "write_network"/"write_local" 这两个 Capability 名去匹配
+	// node.ToolName（具体工具名），命中率恒为 0，规则从未生效。改为按工具
+	// Capability 判定后，若直接拦截会拒绝几乎所有含写操作的计划——plan_dag
+	// schema 与规划 prompt 均未要求 LLM 产出 compensation 字段——并与
+	// inv_M4_06（不可逆操作走显式 HITL 而非自动回滚）的处置口径冲突。
+	// M04 §4.3"write_* 必须声明 CompensationAction"与 inv_M4_06 的取舍待
+	// 架构决策；在此之前以可观测告警替代静默失效的拦截。
 	for _, node := range vCtx.Plan.Nodes {
-		if irreversibleTypes[node.ToolName] && node.Compensation == nil {
-			return &DAGValidationError{
-				Layer:  "L2_heuristic",
-				NodeID: node.ID,
-				Reason: fmt.Sprintf("heuristic block: node %q (tool=%q) has side effects but missing Compensation declaration (Saga safety)", node.ID, node.ToolName),
-			}
+		if node.Compensation != nil || isReadOnlyTool(node.ToolName, vCtx.ToolExecutor) {
+			continue
 		}
+		slog.Info("dag_validator: side-effect node has no compensation declared",
+			"node_id", node.ID, "tool", node.ToolName,
+			"write_network", isWriteNetworkTool(node.ToolName, vCtx.ToolExecutor))
 	}
 
 	return nil

@@ -270,12 +270,14 @@ func (fg *FeatureGate) computeState(f Feature, rule featureRule, availableMB uin
 	}
 
 	// 4. Memory abundance → fully enabled
-	if availableMB >= rule.MinMemoryMB {
+	// 规则语义（featureRule 字段注释）：DegradeMemoryMB > MinMemoryMB，
+	// ≥Degrade 全量、[Min, Degrade) 降级、<Min 禁用。此前先判 Min 使降级区间不可达（GR-1.2-001）。
+	if availableMB >= rule.DegradeMemoryMB {
 		return FeatureEnabled
 	}
 
 	// 5. Degraded zone
-	if availableMB >= rule.DegradeMemoryMB {
+	if availableMB >= rule.MinMemoryMB {
 		return FeatureDegraded
 	}
 

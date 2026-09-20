@@ -106,16 +106,17 @@ func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db
 		scanLimit = 500
 	}
 	// 按时间倒序提取最近的 scanLimit 条带向量记录参与相似度计算
-	rows, queryErr := db.QueryContext(ctx, fmt.Sprintf("SELECT content, embedding FROM episodic_events WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT %d", scanLimit))
+	rows, queryErr := db.QueryContext(ctx, fmt.Sprintf("SELECT id, event_uuid, content, embedding FROM episodic_events WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT %d", scanLimit))
 	if queryErr != nil {
 		return vectorResults
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var content string
+		var rowID int64
+		var eventUUID, content string
 		var embBlob []byte
-		if scanErr := rows.Scan(&content, &embBlob); scanErr != nil {
+		if scanErr := rows.Scan(&rowID, &eventUUID, &content, &embBlob); scanErr != nil {
 			continue
 		}
 
@@ -135,13 +136,24 @@ func (hr *HybridRetrieverImpl) fetchVectorResultsFromSQL(ctx context.Context, db
 			vectorResults = append(vectorResults, types.ScoredFragment{
 				Content:      content,
 				Score:        score,
-				Source:       content,
+				Source:       episodicSource(eventUUID, rowID),
 				EvidenceType: evidType,
 				TaintLevel:   types.TaintHigh,
 			})
 		}
 	}
 	return vectorResults
+}
+
+// episodicSource 与 BM25/Cognitive 路径同一命名："episodic:{event_uuid}"（GR-5.1-004）。
+// 此前 Tier-0 向量路径把正文当 Source：RRF 按 Source 融合时同一事件被拆成两条，
+// RetrievalReinforcer 只认 "episodic:" 前缀，向量命中从不获得抗遗忘强化。
+// event_uuid 为空（历史行未回填）时退回行号，仍保证可去重、且不会误入强化。
+func episodicSource(eventUUID string, rowID int64) string {
+	if eventUUID != "" {
+		return "episodic:" + eventUUID
+	}
+	return fmt.Sprintf("episodic_row:%d", rowID)
 }
 
 func (hr *HybridRetrieverImpl) searchCognitiveFTS(ctx context.Context, query string, finalTopK int, asOf int64) []types.ScoredFragment {

@@ -66,6 +66,7 @@ func mattermostConnect(ctx context.Context, host PollerHost, channelID, mmURL, t
 		return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("mattermost: dial: %v", err), err)
 	}
 	defer conn.Close()
+	defer closeOnCancel(ctx, conn)()
 
 	// 认证挑战发不出去就没有后续可言：连接虽在，但服务端永远不会推事件，
 	// 下面的 for 循环会静默空转到 ctx 取消。此前 `_ =` 吞掉后，现象是
@@ -159,8 +160,7 @@ func (a *MattermostAdapter) Send(ctx context.Context, host Host, cfg map[string]
 	mmURL, _ := cfg["url"].(string)
 	token, _ := cfg["token"].(string)
 	if mmURL == "" || token == "" {
-		slog.Warn("mattermost: url or token missing", "err", apperr.New(apperr.CodeInternal, "log event"))
-		return nil
+		return apperr.New(apperr.CodeInvalidInput, "mattermost: url or token missing")
 	}
 	if err := MattermostSendMessage(ctx, host.HTTPClient(), mmURL, token, msg.ChatID, text); err != nil {
 		slog.Error("channels: send reply failed", "type", "mattermost", "err", err)

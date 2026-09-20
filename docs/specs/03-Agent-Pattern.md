@@ -105,6 +105,9 @@ CodeAct 是 Ad-hoc 一次性代码执行，不沉淀为 Skill。
 3. 代码字段 `[TaintLevel] ≤ Medium`
 4. 环境支持 L3 microVM（**Tier-0 确定返回 `ErrTier0SandboxLimit`**，禁止降级执行）
 
+> **2026-09-20 复核**：CodeAct 在 Tier-0 走 SandboxNativeOS（bwrap/Seatbelt），非无隔离执行。
+> 前置条件 4 修正为：环境支持 L3 microVM 或 NativeOS（Tier-0 降级路径）。见 ADR-0008 决策四。
+
 **禁止：**
 - 将 CodeAct 当作“快捷 Skill”高频重复调用——高频可复用模式进入 Logic Collapse / Auto-Curriculum
 - Tier-0 下任何形式的 CodeAct（没有安全容器即无隔离边界）

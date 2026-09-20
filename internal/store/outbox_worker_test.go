@@ -486,3 +486,21 @@ func TestProcessAndMark_PoisonPill_MarksDead(t *testing.T) {
 		t.Errorf("expected error %q, got %v", ErrPoisonPill.Error(), errStr)
 	}
 }
+
+// GR-1.1-002：游标跨位数（9→10、99→100）必须能推进，且仍拒绝回溯。
+func TestSaveCursor_CrossesDigitBoundary(t *testing.T) {
+	db := setupOutboxDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE sys_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create sys_config: %v", err)
+	}
+	w := NewOutboxWorker(db, 5, 3, 100, 8000)
+	ctx := context.Background()
+	for _, c := range []int64{9, 10, 99, 100, 50} {
+		w.saveCursor(ctx, c)
+	}
+	got, ok := w.loadCursorSafe(ctx)
+	if !ok || got != 100 {
+		t.Fatalf("cursor = %d ok=%v, want 100 (monotonic across digit boundaries)", got, ok)
+	}
+}

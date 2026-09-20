@@ -217,7 +217,9 @@ func (e *ExecEnvelope) Execute(ctx context.Context, req ExecRequest) (*ExecResul
 		SessionID:   req.SessionID,
 		Language:    req.Language,
 	}
-	toolResult, execErr := provider.Run(ctx, spec)
+	execCtx, done := e.router.trackExec(ctx, req.Resource)
+	toolResult, execErr := provider.Run(execCtx, spec)
+	done()
 	if execErr != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "exec_envelope: execution failed", execErr)
 	}

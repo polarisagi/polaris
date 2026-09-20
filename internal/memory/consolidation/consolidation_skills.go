@@ -30,12 +30,12 @@ func (p *ConsolidationPipeline) updateSkills(
 	toolCounts := make(map[string]int)
 	for _, se := range events {
 		if (func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).Type != "tool_result" && (func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
@@ -49,7 +49,7 @@ func (p *ConsolidationPipeline) updateSkills(
 			Success  bool   `json:"success"`
 		}
 		if err := json.Unmarshal((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}

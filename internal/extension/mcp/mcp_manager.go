@@ -239,7 +239,7 @@ func (m *MCPManager) Add(ctx context.Context, serverID, name string, cfg MCPClie
 		return storeFailed(wrapped)
 	}
 	if samplingProv != nil {
-		client.SetServerRequestHandler(m.makeSamplingHandler())
+		client.SetServerRequestHandler(m.makeSamplingHandler(name, cfg.TrustTier))
 	}
 	if err := client.Initialize(ctx); err != nil {
 		client.Close()

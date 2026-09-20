@@ -127,11 +127,16 @@ func (b *PromptBuilder) WriteComputerUsePolicy(mode string, anyAppEnabled, chrom
 	})
 }
 
+// WriteToolHints 写入 PolicyEvolver 学习产出的 <tool-hints> 块到 ZoneMutableSkill
+// （GR-6.1-010）。原实现写 ZoneImmutable，导致 ZoneMutableSkill 全仓无写入方、
+// Build 中恒空；更关键的是 hints 由运行时失败统计学习而来、随时间变化，按
+// M05 §2 的 Zone 语义属于"可变技能"，放进 Immutable 区等于把学习产物提升到
+// 与人工系统指令同等的信任级别。
 func (b *PromptBuilder) WriteToolHints(hint string) {
 	if hint == "" {
 		return
 	}
-	b.zones[protocol.ZoneImmutable] = append(b.zones[protocol.ZoneImmutable], types.Message{
+	b.zones[protocol.ZoneMutableSkill] = append(b.zones[protocol.ZoneMutableSkill], types.Message{
 		Role:    "system",
 		Content: hint,
 	})

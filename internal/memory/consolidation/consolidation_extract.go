@@ -26,13 +26,13 @@ func (p *ConsolidationPipeline) extractEntitiesAndRelations(
 	var sb strings.Builder
 	for _, se := range events {
 		if len((func() *types.Event {
-			if e, _ := se.Event.(*types.Event); e != nil {
+			if e := se.EventPtr(); e != nil {
 				return e
 			}
 			return &types.Event{}
 		}()).Payload) > 0 {
 			sb.Write((func() *types.Event {
-				if e, _ := se.Event.(*types.Event); e != nil {
+				if e := se.EventPtr(); e != nil {
 					return e
 				}
 				return &types.Event{}

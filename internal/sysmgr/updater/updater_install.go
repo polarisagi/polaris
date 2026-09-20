@@ -14,12 +14,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/downloader"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/internal/sysmgr/osutils"
 	"github.com/polarisagi/polaris/pkg/apperr"
-	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
 func (m *Manager) applyUpdate(archivePath string) error {
@@ -319,10 +318,17 @@ del "%%~f0"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "write windows update script", err)
 	}
-	concurrent.SafeGo(context.Background(), "sysmgr.updater.windows_delayed_exit", func(context.Context) {
-		time.Sleep(200 * time.Millisecond)
-		m.exitFn(0)
-	})
+	// GR-10.2-003：原实现写完脚本从不启动它，而是 200ms 后无条件 os.Exit——
+	// 抢在 doUpdate 的 restartFn（优雅关停：DBWriter 排空、WAL checkpoint）之前
+	// 退出，且更新脚本根本没跑，新版本不会生效。改为：detached 启动脚本（其内
+	// timeout 2s 等待本进程退出释放文件锁），退出时机统一交给 doUpdate→restartFn。
+	start := m.startScriptFn
+	if start == nil {
+		start = osutils.StartDetachedWindowsScript
+	}
+	if err := start(scriptPath); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "start windows update script", err)
+	}
 	return nil
 }
 

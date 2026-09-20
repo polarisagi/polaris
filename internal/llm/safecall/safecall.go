@@ -60,6 +60,9 @@ func StreamInfer(ctx context.Context, provider protocol.Provider, msgs []types.M
 		timeoutSec = cfg.Thresholds.M1Router.SafecallStreamIdleTimeoutSec
 	}
 
+	// 底层流绑定可取消的子 ctx（GR-2.2-001）：idle timeout / 转发协程退出时必须主动取消，
+	// 否则 provider 的 HTTP 读取与解码协程要等调用方父 ctx 结束才释放。
+	ctx, cancel := context.WithCancel(ctx)
 	ctx, span := otel.Tracer("llm").Start(ctx, "safecall.StreamInfer")
 
 	start := time.Now()
@@ -70,15 +73,18 @@ func StreamInfer(ctx context.Context, provider protocol.Provider, msgs []types.M
 	}
 	if err != nil {
 		span.End()
+		cancel()
 		return nil, apperr.Wrap(apperr.CodeProviderExhausted, "llm streaminfer failed", err)
 	}
 	if evChan == nil {
 		span.End()
+		cancel()
 		return nil, apperr.New(apperr.CodeInternal, "llm streaminfer returned nil channel with nil error")
 	}
 
 	outChan := make(chan types.StreamEvent)
 	concurrent.SafeGo(ctx, "safecall.StreamInfer", func(ctx context.Context) {
+		defer cancel()
 		defer span.End()
 		defer close(outChan)
 		if metrics.InstrLLMLatencyMs != nil {
