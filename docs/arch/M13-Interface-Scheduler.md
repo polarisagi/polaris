@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:441 对内调度 / 3:561 MCP / 6:579 (SOFT)降级 / 6-bis:592 已知Bug修复记录 / 7:604 跨模块契约 / 8:621 Web UI 规约 / 8.6:767 插件聚合市场DB+流 / 8.7:803 自动化中心DB+流+工作流 / 8.8:919 电脑操控权限+Preferences / 8.9:959 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:443 对内调度 / 3:563 MCP / 6:581 (SOFT)降级 / 6-bis:594 已知Bug修复记录 / 7:606 跨模块契约 / 8:623 Web UI 规约 / 8.6:769 插件聚合市场DB+流 / 8.7:805 自动化中心DB+流+工作流 / 8.8:921 电脑操控权限+Preferences / 8.9:961 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
