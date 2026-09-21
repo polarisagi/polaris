@@ -28,7 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "app", "msi", "appimage", "deb"],
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "category": "DeveloperTool",
     "shortDescription": "Polaris 桌面外壳",
     "longDescription": "Polaris 自托管 AI Agent 的桌面外壳。守护进程与本外壳分开安装（见 ADR-0096 决策四）。"
