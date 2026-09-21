@@ -91,6 +91,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 		// 1. 查询相关的历史 Episodic 事件
 		query := types.EpisodicQuery{
 			Semantic:      intent,
+			ProjectID:     scopeProjectID(sCtx), // P1：情景记忆按项目隔离（ADR-0097 决策三修订）
 			K:             3,
 			MaxTaintLevel: types.TaintHigh,
 		}
@@ -151,7 +152,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 
 	// 4. L2 语义记忆
 	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
-		ftsResults, err := cognitive.FTSSearch(sCtx.TaskModel.Goal, 5)
+		ftsResults, err := projectScopedFTS(ctx, memory, cognitive, sCtx.TaskModel.Goal, 5, scopeProjectID(sCtx)) // P3
 		if err == nil && len(ftsResults) > 0 {
 			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {
@@ -284,6 +285,7 @@ func BuildPlanContext( //nolint:gocyclo
 	}
 	query := types.EpisodicQuery{
 		Semantic:      queryStr,
+		ProjectID:     scopeProjectID(sCtx), // P2
 		K:             5,
 		MaxTaintLevel: types.TaintHigh,
 	}
@@ -317,7 +319,7 @@ func BuildPlanContext( //nolint:gocyclo
 
 	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
 		queryTopic := sCtx.TaskModel.Goal
-		ftsResults, err := cognitive.FTSSearch(queryTopic, 5)
+		ftsResults, err := projectScopedFTS(ctx, memory, cognitive, queryTopic, 5, scopeProjectID(sCtx)) // P4
 		if err == nil && len(ftsResults) > 0 {
 			retrieved.WriteString("Semantic Memory (L2):\n")
 			for _, r := range ftsResults {

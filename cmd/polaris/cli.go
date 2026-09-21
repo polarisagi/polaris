@@ -160,6 +160,7 @@ func printCLIHelp() {
 	fmt.Println(t("help_desc_init"))
 	fmt.Println(t("help_desc_chat"))
 	fmt.Println(t("help_desc_cmd"))
+	fmt.Println(t("help_desc_proj"))
 	fmt.Println(t("help_desc_stat"))
 	fmt.Println(t("help_desc_ver"))
 	fmt.Println(t("help_desc_help"))
@@ -382,39 +383,103 @@ func runChatCmd(args []string) error {
 		return err
 	}
 
-	// 单次问答模式：polaris chat "message"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		msg := strings.Join(args, " ")
-		sid, err := cliStreamChat(msg, cliLoadSession())
+	opts, err := parseChatArgs(args)
+	if err != nil {
+		return err
+	}
+	project, err := resolveChatProject(opts.projectRef)
+	if err != nil {
+		return err
+	}
+	projectID := ""
+	if project != nil {
+		projectID = project.ID
+	}
+
+	sessionID := opts.sessionID
+	if sessionID == "" {
+		sessionID = cliContinuableSession(projectID)
+	}
+
+	// 单次问答模式：polaris chat [flags] "message"
+	if opts.message != "" {
+		sid, err := cliStreamChat(opts.message, sessionID, projectID)
 		if sid != "" {
 			cliSaveSession(sid)
 		}
 		fmt.Println()
 		return err
 	}
-
-	// 解析 --session <id>
-	var sessionID string
-	for i, arg := range args {
-		if (arg == "--session" || arg == "-s") && i+1 < len(args) {
-			sessionID = args[i+1]
-		} else if strings.HasPrefix(arg, "--session=") {
-			sessionID = strings.TrimPrefix(arg, "--session=")
-		}
-	}
-	if sessionID == "" {
-		sessionID = cliLoadSession()
-	}
-
-	return runChatREPL(sessionID)
+	return runChatREPL(sessionID, project)
 }
 
-func runChatREPL(initialSession string) error { //nolint:gocyclo
+// chatArgs polaris chat 的参数。
+type chatArgs struct {
+	sessionID  string
+	projectRef string
+	message    string // 非空 = 单次问答
+}
+
+func parseChatArgs(args []string) (chatArgs, error) {
+	var o chatArgs
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case (a == "--session" || a == "-s") && i+1 < len(args):
+			i++
+			o.sessionID = args[i]
+		case strings.HasPrefix(a, "--session="):
+			o.sessionID = strings.TrimPrefix(a, "--session=")
+		case (a == "--project" || a == "-p") && i+1 < len(args):
+			i++
+			o.projectRef = args[i]
+		case strings.HasPrefix(a, "--project="):
+			o.projectRef = strings.TrimPrefix(a, "--project=")
+		case strings.HasPrefix(a, "-") && len(rest) == 0:
+			return o, apperr.New(apperr.CodeInvalidInput, "未知参数: "+a)
+		default:
+			rest = append(rest, a)
+		}
+	}
+	o.message = strings.Join(rest, " ")
+	return o, nil
+}
+
+// cliContinuableSession 返回可续接的上次会话：仅当它属于本次解析出的项目时续接。
+// 否则在项目 B 的目录里运行 polaris chat 会接着项目 A 的会话聊——会话归属以库内
+// 为准（ADR-0097 决策一），届时 project_id 被忽略，用户却以为自己在 B 里。
+func cliContinuableSession(projectID string) string {
+	last := cliLoadSession()
+	if last == "" {
+		return ""
+	}
+	want := projectID
+	if want == "" {
+		want = "default"
+	}
+	got, ok := cliSessionProject(last)
+	if !ok {
+		return last // 查不到归属（旧守护进程）→ 维持既有续接行为
+	}
+	if got != want {
+		return ""
+	}
+	return last
+}
+
+func runChatREPL(initialSession string, project *cliProject) error { //nolint:gocyclo
+	projectID := ""
+	if project != nil {
+		projectID = project.ID
+	}
 	// 非 TTY（管道输入）时省略 banner
 	if cliTTY {
 		fmt.Println()
 		fmt.Println(clr(ansiBold+ansiAccent, t("chat_banner")) + clr(ansiDim, t("chat_quit_hint")))
 		fmt.Println(clr(ansiDim, t("chat_nav")))
+		if project != nil {
+			fmt.Printf("  %s %s\n", clr(ansiDim, t("chat_proj_lbl")), clr(ansiDim, project.Name))
+		}
 		if initialSession != "" {
 			fmt.Printf("  %s %s\n", clr(ansiDim, t("chat_sess_lbl")), clr(ansiDim, trimID(initialSession)))
 		}
@@ -451,7 +516,7 @@ func runChatREPL(initialSession string) error { //nolint:gocyclo
 			}
 			continue
 		case "/sessions":
-			cliPrintSessions()
+			cliPrintSessions(projectID)
 			continue
 		case "/clear":
 			if cliTTY {
@@ -473,7 +538,7 @@ func runChatREPL(initialSession string) error { //nolint:gocyclo
 			fmt.Println()
 			fmt.Print(clr(ansiAccent, t("chat_agent")))
 		}
-		newSID, err := cliStreamChat(input, sessionID)
+		newSID, err := cliStreamChat(input, sessionID, projectID)
 		if cliTTY {
 			fmt.Println()
 		}
@@ -491,11 +556,16 @@ func runChatREPL(initialSession string) error { //nolint:gocyclo
 }
 
 // cliStreamChat 通过 SSE 发送消息并流式打印 token。返回 sessionID（可能新建）。
-func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
-	body, _ := json.Marshal(map[string]string{
+// projectID 仅对新会话生效（已存在会话以库内归属为准，ADR-0097 决策一）。
+func cliStreamChat(input, sessionID, projectID string) (string, error) { //nolint:gocyclo
+	payload := map[string]string{
 		"input":      input,
 		"session_id": sessionID,
-	})
+	}
+	if sessionID == "" && projectID != "" {
+		payload["project_id"] = projectID
+	}
+	body, _ := json.Marshal(payload)
 	req, err := cliNewRequest("POST", "/v1/agent/stream", bytes.NewReader(body))
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "构造流式请求失败", err)
@@ -568,9 +638,14 @@ func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
 	return newSID, nil
 }
 
-func cliPrintSessions() {
+// cliPrintSessions projectID 非空时只列该项目的会话。
+func cliPrintSessions(projectID string) {
+	path := "/v1/sessions"
+	if projectID != "" {
+		path += "?project_id=" + url.QueryEscape(projectID)
+	}
 	var result map[string]any
-	if err := cliGet("/v1/sessions", &result); err != nil {
+	if err := cliGet(path, &result); err != nil {
 		fmt.Fprintln(os.Stderr, clr(ansiError, "  ✗ "+err.Error()))
 		return
 	}

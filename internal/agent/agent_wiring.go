@@ -193,6 +193,7 @@ func (a *Agent) SetTaskID(ctx context.Context, id string) {
 // 引入本机制前的默认行为。
 func (a *Agent) SetMemoryNamespace(ns string) {
 	a.sCtx.NamespaceID = ns
+	a.projectNamespace.Store(ns)
 }
 
 // SetSpawnDepth 由 Worker 在调用 Run() 前注入本次执行继承的委派链深度

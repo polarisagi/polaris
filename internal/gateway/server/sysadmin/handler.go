@@ -51,6 +51,7 @@ type SysAdminHandler struct {
 	Hooks          *HookRunner
 	DataDir        string
 	ChatRepo       protocol.ChatRepository
+	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
 	ProviderRepo   protocol.ProviderRepository
 	AppRepo        repo.AppRepository
 	ServerAddr     string
@@ -113,6 +114,7 @@ type Dependencies struct {
 	Hooks          *HookRunner
 	DataDir        string
 	ChatRepo       protocol.ChatRepository
+	ProjectRepo    repo.ProjectRepository // 备份导出/恢复（ADR-0097）
 	ProviderRepo   protocol.ProviderRepository
 	AppRepo        repo.AppRepository
 	ServerAddr     string
@@ -165,6 +167,7 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		Hooks:             deps.Hooks,
 		DataDir:           deps.DataDir,
 		ChatRepo:          deps.ChatRepo,
+		ProjectRepo:       deps.ProjectRepo,
 		ProviderRepo:      deps.ProviderRepo,
 		AppRepo:           deps.AppRepo,
 		ServerAddr:        deps.ServerAddr,

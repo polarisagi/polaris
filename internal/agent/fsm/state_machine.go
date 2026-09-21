@@ -91,6 +91,9 @@ type StateContext struct {
 	// Agent 能检索到彼此写入的记忆片段；不同 Namespace 之间仍然隔离。
 	// 由 Worker 在 Run() 前通过 SetMemoryNamespace() 注入（对应 types.TaskEntry.Namespace）。
 	NamespaceID string
+	// ProjectID 当前会话所属项目（ADR-0097 决策三修订）：感知/规划阶段的情景记忆
+	// 检索按它过滤。由 Agent.refreshWorkspaceContext 在 Mu 下写入；无项目 = 默认项目。
+	ProjectID   string
 	RawIntentTS taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
 	TaskModel   *TaskModel          // S_PERCEIVE 产出
 	DAGModel    *DAGModel           // S_PLAN 产出

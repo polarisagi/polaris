@@ -284,6 +284,8 @@ Alpine.store('chat', {
       body: {
         input,
         session_id: this.sessionID,
+        // 仅新会话携带：已存在会话的归属以库内为准（ADR-0097）
+        project_id: this.sessionID ? undefined : (Alpine.store('projects').current || undefined),
         run_id: runID,
         attachments: attachmentsPayload,
         model_id: this.selectedModel || undefined,
@@ -623,6 +625,9 @@ Alpine.store('chat', {
       const r = await fetch(`/v1/sessions/${sessionID}?max_chars=50000`, { headers: authHeaders() })
       if (!r.ok) return
       const d = await r.json()
+      // 归档项目不接收新会话：恢复其中的会话时不把它设为"当前项目"，否则随后点"新会话"会被拒。
+      const proj = d.project_id ? Alpine.store('projects').byID(d.project_id) : null
+      if (proj && !proj.archived) Alpine.store('projects').setCurrent(d.project_id)
       this.messages = (d.messages || []).map(m => ({
         role: m.role,
         content: sanitizeContent(m.content),

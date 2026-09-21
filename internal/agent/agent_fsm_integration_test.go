@@ -168,6 +168,10 @@ func (m *mockMemoryForIntegration) ListEpisodicEvents(ctx context.Context, query
 func (m *mockMemoryForIntegration) AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error {
 	return m.episodic.Append(ctx, event, taintLevel)
 }
+func (m *mockMemoryForIntegration) EpisodicProjectOf(ctx context.Context, id string) (string, bool) {
+	return "", false
+}
+
 func (m *mockMemoryForIntegration) ArchiveEpisodic(ctx context.Context, sessionID string) error {
 	return nil
 }

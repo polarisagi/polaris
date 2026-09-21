@@ -33,7 +33,7 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 	}
 	req.SessionID = sessionID
 
-	if err := o.persistence.EnsureSession(ctx, sessionID); err != nil {
+	if err := o.persistence.EnsureSessionInProject(ctx, sessionID, req.ProjectID); err != nil {
 		o.emitError(sink, "session_error", err.Error(), sessionID, err)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}

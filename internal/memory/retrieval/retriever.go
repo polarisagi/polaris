@@ -157,7 +157,11 @@ func (hr *HybridRetrieverImpl) Search(ctx context.Context, query string, scope t
 		semanticType: semanticType,
 	}
 
-	merged, err := search.HybridSearch(ctx, src, query, queryF32, search.HybridSearchConfig{
+	// 读取面 P6（ADR-0097 决策三修订）：整个 DocumentSource 经项目作用域包装，七路产出
+	// 统一过滤。不限 scope.Type——Tier1 向量路对 semantic 范围同样会召回情景事件。
+	scoped := newProjectScopedSource(src, hr.store, scope.ProjectID)
+
+	merged, err := search.HybridSearch(ctx, scoped, query, queryF32, search.HybridSearchConfig{
 		BM25Weight:   bw,
 		VectorWeight: vw,
 		GraphWeight:  gw,

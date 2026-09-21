@@ -64,6 +64,7 @@ type
 StateContext struct {
 	AgentID              string
 	SessionID            string
+	ProjectID            string           // 当前会话所属项目（情景记忆写入打标，ADR-0097 决策三修订）
 	MaxTaintLevel        types.TaintLevel // 继承自上下文请求的最高污点等级 (Taint Washing Fix)
 	Mem                  MemoryFacade
 	Tools                AgentToolExecutor

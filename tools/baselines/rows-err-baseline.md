@@ -18,9 +18,6 @@ internal/gateway/server/plugin/manage.go:133:rows
 internal/gateway/server/plugin/manage.go:214:mcpRows
 internal/gateway/server/plugin/manage.go:240:mcpRows
 internal/gateway/server/plugin/sync.go:153:rows
-internal/gateway/server/sysadmin/budget.go:96:sessRows
-internal/gateway/server/sysadmin/budget.go:113:msgRows
-internal/gateway/server/sysadmin/budget.go:129:kvRows
 internal/gateway/server/sysadmin/channelsadmin/channels_crud.go:38:rows
 internal/gateway/server/sysadmin/export.go:105:rows
 internal/gateway/server/sysadmin/export.go:131:msgRows
@@ -40,7 +37,6 @@ internal/memory/retrieval/cognitive_replayer.go:176:rows
 internal/memory/retrieval/retriever_helpers.go:115:rows
 internal/memory/retrieval/source.go:56:iter
 internal/memory/retrieval/source.go:245:rIter
-internal/memory/store/durative_mem.go:139:iter
 internal/memory/store/reflection_mem.go:74:iter
 internal/memory/store/semantic_mem_query.go:274:rows
 internal/store/search/hybrid_retrieve.go:106:iter

@@ -35,6 +35,8 @@ const maxRemoteVideoBytes = 200 << 20
 //   - 抽帧失败返回错误，不再伪造 mock 帧冒充成功结果。
 func MakeExecuteVideoAnalysisFn(allowedPaths []string, dialer protocol.SafeDialer, sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, args []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var req struct {
 			VideoURI    string `json:"video_uri"`
 			IntervalSec int    `json:"interval_sec"`
@@ -59,7 +61,7 @@ func MakeExecuteVideoAnalysisFn(allowedPaths []string, dialer protocol.SafeDiale
 		}
 		defer os.RemoveAll(tmpDir)
 
-		input, inputDir, err := resolveVideoInput(ctx, req.VideoURI, tmpDir, allowedPaths, dialer)
+		input, inputDir, err := resolveVideoInput(ctx, req.VideoURI, tmpDir, paths, dialer)
 		if err != nil {
 			return nil, err
 		}

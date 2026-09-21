@@ -103,6 +103,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/sessions/{sessionID}", s.chatHandler.HandleGetSession)
 	mux.HandleFunc("GET /v1/sessions/{sessionID}/context", s.chatHandler.HandleGetSessionContext)
 	mux.HandleFunc("DELETE /v1/sessions/{sessionID}", s.chatHandler.HandleDeleteSession)
+	mux.HandleFunc("PUT /v1/sessions/{sessionID}/project", s.chatHandler.HandleMoveSession)
+
+	// 项目 API（ADR-0097）。读写均限本地可信客户端 / admin，见 chat/projects.go requireProjectAccess。
+	mux.HandleFunc("GET /v1/projects", s.chatHandler.HandleListProjects)
+	mux.HandleFunc("POST /v1/projects", s.chatHandler.HandleCreateProject)
+	mux.HandleFunc("GET /v1/projects/{id}", s.chatHandler.HandleGetProject)
+	mux.HandleFunc("PUT /v1/projects/{id}", s.chatHandler.HandleUpdateProject)
+	mux.HandleFunc("DELETE /v1/projects/{id}", s.chatHandler.HandleDeleteProject)
 
 	// 语音识别 API
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.chatHandler.AudioService.HandleAudioTranscriptions)

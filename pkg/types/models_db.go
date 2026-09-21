@@ -4,12 +4,29 @@ type
 
 // ChatSessionRow 对应 chat_sessions 表一行。
 ChatSessionRow struct {
-	ID             string
-	Title          string
+	ID    string
+	Title string
+	// ProjectID 所属项目（ADR-0097）。空串在写入侧按 "default" 处理。
+	ProjectID      string
 	ThrashingIndex float64
 	CreatedAt      string
 	UpdatedAt      string
 	MessageCount   int
+}
+
+type
+
+// ProjectRow 对应 projects 表一行（ADR-0097）。
+ProjectRow struct {
+	ID           string
+	Name         string
+	RootPath     string // 规范路径；空串 = 无目录项目
+	Instructions string
+	Trusted      bool
+	Archived     bool
+	CreatedAt    string
+	UpdatedAt    string
+	SessionCount int // 仅列表查询填充
 }
 
 type

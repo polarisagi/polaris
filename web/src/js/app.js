@@ -10,6 +10,7 @@ import './store/i18n.js'
 import './store/modelRoles.js'
 import './store/approvals.js'
 import './store/sessions.js'
+import './store/projects.js'
 import './store/skills.js'
 import './store/toast.js'
 import './store/providers.js'
@@ -106,6 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
   history.replaceState({}, '', page === 'chat' ? '/' : `/${page}`)
   
   if (page === 'settings' || page === 'chat') { Alpine.store('providers').load(); Alpine.store('modelRoles').load() }
+  if (page === 'projects' || page === 'chat' || page === 'sessions') Alpine.store('projects').load()
   if (page === 'sessions')   Alpine.store('sessions').load()
   if (page === 'skills')     Alpine.store('skills').load()
   if (page === 'plugins')    Alpine.store('plugins').load()

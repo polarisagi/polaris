@@ -43,6 +43,8 @@ type RetrievalQuery struct {
 	TopK      int       `json:"top_k"`
 	Strategy  string    `json:"strategy"` // "vector" | "fts" | "graph" | "hybrid"
 	MaxTaint  int       `json:"max_taint,omitempty"`
+	// ProjectID 情景记忆的项目作用域（ADR-0097 决策三修订）；空 = 默认项目（fail-closed）。
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 func NewMemImpl(store protocol.Store) *MemImpl {

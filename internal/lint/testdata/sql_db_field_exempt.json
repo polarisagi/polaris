@@ -10,6 +10,7 @@
   "internal/store/repo/repo_chat.go": true,
   "internal/store/repo/repo_cron.go": true,
   "internal/store/repo/repo_event.go": true,
+  "internal/store/repo/repo_project.go": true,
   "internal/store/repo/repo_extension.go": true,
   "internal/store/repo/repo_mock.go": true,
   "internal/store/repo/repo_modelversion.go": true,

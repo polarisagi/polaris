@@ -16,7 +16,7 @@
   M12Eval 增加一个没人会调的旋钮。
 - internal/eval/harness/benchmark/swebench.go:92 同上（SWE-bench 数据集，10 MiB/行）。
 - internal/eval/harness/benchmark/gaia.go:45 同上（GAIA 数据集，4 MiB/行）。
-- cmd/polaris/cli.go:426 本地交互式 stdin 读取（64 KiB/行）。输入来自终端用户自己，
+- cmd/polaris/cli.go:491 本地交互式 stdin 读取（64 KiB/行）。输入来自终端用户自己，
   进程入口层不引 config 阀值与 cmd/ 的既有取向一致（参见 panic_lint 对 cmd/ 的豁免）。
 
 若上述任一条改为读取外部/远端输入，必须同时从本基线移除并接 config 阀值。

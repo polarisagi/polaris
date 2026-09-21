@@ -25,8 +25,10 @@ import (
 // 输出：结构化文件变更列表 + 统计 + 原始 unified diff（上限 1MB）。
 func MakeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args struct {
-			Path   string `json:"path"`   // git 仓库根目录，必须在 allowedPaths 内
+			Path   string `json:"path"`   // git 仓库根目录，必须在 paths 内
 			Ref1   string `json:"ref1"`   // 起始 ref（可选，如 "HEAD~1"、branch 名、commit hash）
 			Ref2   string `json:"ref2"`   // 结束 ref（可选；配合 ref1 使用）
 			File   string `json:"file"`   // 限定单文件（可选，相对于 path 的路径）
@@ -38,7 +40,7 @@ func MakeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string)
 		if args.Path == "" {
 			return nil, apperr.New(apperr.CodeInternal, "git_diff: path is required")
 		}
-		if err := guard.CheckAllowedPath(args.Path, allowedPaths); err != nil {
+		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "MakeGitDiffFn", err)
 		}
 		workDir := filepath.Clean(args.Path)
@@ -127,6 +129,8 @@ func MakeGitDiffFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string)
 // 调用方对提交内容负责；此工具仅执行机械操作，不做内容审查。
 func MakeGitCommitFn(allowedPaths []string, sandboxEnabled bool, bwrapPath string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args struct {
 			Path       string   `json:"path"`        // git 仓库根目录
 			Message    string   `json:"message"`     // commit 消息
@@ -142,7 +146,7 @@ func MakeGitCommitFn(allowedPaths []string, sandboxEnabled bool, bwrapPath strin
 		if args.Message == "" {
 			return nil, apperr.New(apperr.CodeInternal, "git_commit: message is required")
 		}
-		if err := guard.CheckAllowedPath(args.Path, allowedPaths); err != nil {
+		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "MakeGitCommitFn", err)
 		}
 		workDir := filepath.Clean(args.Path)

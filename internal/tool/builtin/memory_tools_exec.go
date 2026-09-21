@@ -110,7 +110,12 @@ func MakeMemorySearchFn(retriever protocol.HybridRetriever) sandbox.InProcessFn 
 			AsOf:         args.AsOf,
 		}
 
-		scope := types.SearchScope{Type: "memory"}
+		// 读取面 P6（ADR-0097 决策三修订）：情景记忆限定在调用方会话所属项目。项目 ID 由
+		// agent 随执行 ctx 注入；未注入（非 agent 调用）按默认项目处理，fail-closed。
+		scope := types.SearchScope{Type: "memory", ProjectID: protocol.ProjectIDFrom(ctx)}
+		if scope.ProjectID == "" {
+			scope.ProjectID = types.DefaultProjectID
+		}
 		if args.Layer != "" {
 			scope.Type = args.Layer
 		}

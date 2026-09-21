@@ -17,11 +17,13 @@ type readFileArgs struct {
 
 func MakeReadFileFn(allowedPaths []string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args readFileArgs
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "read_file: invalid args", err)
 		}
-		if err := guard.CheckAllowedPath(args.Path, allowedPaths); err != nil {
+		if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeReadFileFn", err)
 		}
 

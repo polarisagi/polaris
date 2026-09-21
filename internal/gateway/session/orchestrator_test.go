@@ -44,6 +44,7 @@ type fakePersistence struct {
 	saved    []savedMessage
 	titled   string
 	touched  bool
+	projects map[string]string // sessionID → 首次绑定的 projectID（ADR-0097）
 }
 
 type savedMessage struct {
@@ -58,6 +59,19 @@ func (p *fakePersistence) EnsureSession(ctx context.Context, sessionID string) e
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sessions[sessionID] = true
+	return nil
+}
+
+func (p *fakePersistence) EnsureSessionInProject(ctx context.Context, sessionID, projectID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sessions[sessionID] = true
+	if p.projects == nil {
+		p.projects = map[string]string{}
+	}
+	if _, exists := p.projects[sessionID]; !exists {
+		p.projects[sessionID] = projectID
+	}
 	return nil
 }
 
@@ -290,6 +304,29 @@ func TestRunTurn_Interactive_HappyPath(t *testing.T) {
 	}
 	if !pool.releaseCalled {
 		t.Error("expected Acquire release() to be called")
+	}
+}
+
+// TestRunTurn_Interactive_BindsProject 验证交互式路径把 Request.ProjectID 传给
+// EnsureSessionInProject（ADR-0097）；已存在会话不被改归属由 store 层
+// TestChatRepo_CreateSessionDoesNotRehome 覆盖。
+func TestRunTurn_Interactive_BindsProject(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "ok"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+
+	persistence := newFakePersistence()
+	pool := &fakeAgentPool{ctrl: ctrl}
+	orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool)
+
+	if _, err := orc.RunTurn(context.Background(),
+		Request{SessionID: "s-proj", ProjectID: "prj_a", Input: "hi", Channel: "web"}, &recordingSink{}); err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if got := persistence.projects["s-proj"]; got != "prj_a" {
+		t.Errorf("session project = %q, want prj_a", got)
 	}
 }
 

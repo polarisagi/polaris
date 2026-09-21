@@ -129,6 +129,7 @@ func buildAgent(
 	bb *orchestrator.SQLiteBlackboard,
 	workspaceCtxLoader *agentctx.WorkspaceContextLoader,
 	workspaceRoot string,
+	projectResolver func(ctx context.Context, sessionID string) *agentctx.ProjectContext,
 ) *sysagent.Agent {
 	a := sysagent.NewAgent(sessionID, taskRepo, sb.Router)
 	a.SetExtQuerier(sb.Store.DB())
@@ -255,9 +256,14 @@ func buildAgent(
 	// GD-14-005 工作区上下文协议：装载器为进程级共享（无状态，只读配置）。
 	// 信任列表默认为空 → 所有工作区上下文按 TaintHigh 走 ZoneExternalCatalog；
 	// 用户在 [agent] trusted_workspace_roots 中显式声明的路径才进 ZoneImmutable。
-	if workspaceCtxLoader != nil && workspaceRoot != "" {
+	// ADR-0097：项目提供用户自己的工作目录 / 指令，workspaceRoot 为空（无 VFS 根）
+	// 时也要注入 loader，否则项目上下文永远不会被装载。
+	if workspaceCtxLoader != nil {
 		a.InjectWorkspaceContextLoader(workspaceCtxLoader, workspaceRoot)
 	}
+	// 项目解析与上下文装载解耦：即便未启用工作区上下文，项目工作目录仍驱动工具访问根
+	// （ADR-0097 决策五）。
+	a.InjectProjectContextResolver(projectResolver)
 	return a
 }
 
@@ -553,7 +559,22 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		workspaceRoot = tb.VFSWorkspace.GetRootDir()
 	}
 
-	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot)
+	// ADR-0097：会话 → 项目的上下文解析。每轮现取（改项目指令/信任下一轮生效）；
+	// 查询失败只降级为"无项目上下文"，不阻断对话。
+	projectRepo := repo.NewSQLiteProjectRepository(sb.Store.DB())
+	projectResolver := func(rctx context.Context, sessionID string) *agentctx.ProjectContext {
+		p, perr := projectRepo.GetProjectBySession(rctx, sessionID)
+		if perr != nil {
+			slog.Warn("polaris: resolve project context failed", "session", sessionID, "err", perr)
+			return nil
+		}
+		if p == nil {
+			return nil
+		}
+		return &agentctx.ProjectContext{ID: p.ID, Root: p.RootPath, Trusted: p.Trusted, Instructions: p.Instructions}
+	}
+
+	agent := buildAgent("agent-0", sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver)
 
 	maxConcurrent := sb.Cfg.System.MaxAgents
 	if maxConcurrent <= 0 {
@@ -561,7 +582,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	}
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
-		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot)
+		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver)
 	}, maxConcurrent).WithSessionCloseCallback(func(sessionID string) {
 		if tb.Catalog != nil {
 			if cc, ok := tb.Catalog.(interface{ CleanupSession(string) }); ok {

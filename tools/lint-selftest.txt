@@ -76,3 +76,10 @@ patch | L-03 | tools/taint_typed_fields_check.go | internal/knowledge/rag_retrie
 # policy-gate-check 实测恒绿。豁免表每多一条，这本账就少覆盖一条。
 add | L-15 | tools/taint_typed_fields_check.go | internal/tool/sandbox/zz_selftest_taint.go | tools/testdata/selftest/L15_bare_taint.go.txt
 add | L-16 | tools/fsm_io_lint.go | internal/agent/fsm/zz_selftest_goto.go | tools/testdata/selftest/L16_fsm_goto.go.txt
+# L-18：拆掉 HybridRetriever 的项目作用域包装（ADR-0097 决策三修订读取面 P6），即"七路召回各自
+# 裸奔"的形态。跨项目泄漏用例（Tier0/Tier1 端到端）必须转红。
+patch | L-18 | tools/memory_isolation_check.go | internal/memory/retrieval/retriever.go | scoped := newProjectScopedSource(src, hr.store, scope.ProjectID) | scoped := search.ExtendedDocumentSource(src)
+# L-18（续）：拆掉情景层的项目过滤（P1/P2/P5 的共同底层过滤点）。
+patch | L-18 | tools/memory_isolation_check.go | internal/memory/store/episodic_mem.go | if q.ProjectID != "" && ev.EffectiveProjectID() != q.ProjectID { | if false {
+# L-18（续）：感知/规划阶段直读共享 FTS 时不再剔除他项目事件（P3/P4）。
+patch | L-18 | tools/memory_isolation_check.go | internal/agent/context/memory_project_scope.go | isEpisodic && owner != projectID { | false && isEpisodic && owner != projectID {

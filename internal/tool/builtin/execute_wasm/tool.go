@@ -14,6 +14,8 @@ import (
 
 func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 	return func(ctx context.Context, spec sandbox.SandboxSpec) (*types.ToolResult, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args struct {
 			Code      string `json:"code"`
 			Input     string `json:"input"`
@@ -27,7 +29,7 @@ func MakeExecuteWasmFn(allowedPaths []string) sandbox.InProcessRichFn {
 		}
 
 		cleanWorkspace := filepath.Clean(args.Workspace)
-		if !guard.IsPathAllowed(cleanWorkspace, allowedPaths) {
+		if !guard.IsPathAllowed(cleanWorkspace, paths) {
 			return nil, apperr.New(apperr.CodeInternal, "workspace path not allowed")
 		}
 

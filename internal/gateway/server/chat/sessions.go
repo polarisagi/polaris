@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
+	apptypes "github.com/polarisagi/polaris/pkg/types"
 )
 
 // ─── 会话 CRUD HTTP 处理器 ──────────────────────────────────────────────────
@@ -22,7 +23,16 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	sessions, err := h.PersistenceService.ChatRepo.ListSessions(r.Context(), 200)
+	// ?project_id= 按项目过滤（ADR-0097）；缺省 = 全部项目，保持既有客户端行为。
+	var (
+		sessions []apptypes.ChatSessionRow
+		err      error
+	)
+	if pid := strings.TrimSpace(r.URL.Query().Get("project_id")); pid != "" {
+		sessions, err = h.PersistenceService.ChatRepo.ListProjectSessions(r.Context(), pid, 200)
+	} else {
+		sessions, err = h.PersistenceService.ChatRepo.ListSessions(r.Context(), 200)
+	}
 	if err != nil {
 		httputil.RespondError(w, "", err, http.StatusInternalServerError)
 		return
@@ -31,6 +41,7 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 	type sessionRow struct {
 		ID             string  `json:"id"`
 		Title          string  `json:"title"`
+		ProjectID      string  `json:"project_id"`
 		ThrashingIndex float64 `json:"thrashing_index"`
 		CreatedAt      string  `json:"created_at"`
 		UpdatedAt      string  `json:"updated_at"`
@@ -42,6 +53,7 @@ func (h *ChatHandler) HandleListSessions(w http.ResponseWriter, r *http.Request)
 		sr := sessionRow{
 			ID:             row.ID,
 			Title:          row.Title,
+			ProjectID:      row.ProjectID,
 			ThrashingIndex: row.ThrashingIndex,
 			CreatedAt:      row.CreatedAt,
 			UpdatedAt:      row.UpdatedAt,
@@ -114,7 +126,12 @@ func (h *ChatHandler) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 	if msgs == nil {
 		msgs = []msgRow{}
 	}
-	httputil.WriteJSON(w, map[string]any{"session_id": sessionID, "messages": msgs})
+	// project_id 供前端恢复会话时同步"当前项目"（ADR-0097）；会话行不存在时省略。
+	resp := map[string]any{"session_id": sessionID, "messages": msgs}
+	if row, gerr := h.PersistenceService.ChatRepo.GetSession(r.Context(), sessionID); gerr == nil && row != nil {
+		resp["project_id"] = row.ProjectID
+	}
+	httputil.WriteJSON(w, resp)
 }
 
 func parseTaskDuration(createdStr, updatedStr string) int64 {

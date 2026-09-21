@@ -56,7 +56,8 @@ func newTestChatDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS chat_sessions (
-			id TEXT PRIMARY KEY, title TEXT, created_at DATETIME, updated_at DATETIME
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL DEFAULT 'default', title TEXT, created_at DATETIME, updated_at DATETIME
 		);
 		CREATE TABLE IF NOT EXISTS chat_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

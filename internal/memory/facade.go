@@ -96,6 +96,17 @@ func (f *MemoryFacadeImpl) AppendEpisodicEvent(ctx context.Context, event types.
 	return nil
 }
 
+// EpisodicProjectOf 见 protocol.MemoryFacade 同名方法。底层情景层不支持反查时按
+// "是情景事件、属默认项目"处理：fail-closed，不让无法判定归属的内容进入具名项目。
+func (f *MemoryFacadeImpl) EpisodicProjectOf(ctx context.Context, id string) (string, bool) {
+	if po, ok := f.sys.Mem().Episodic().(interface {
+		ProjectOf(ctx context.Context, eventID string) (string, bool)
+	}); ok {
+		return po.ProjectOf(ctx, id)
+	}
+	return types.DefaultProjectID, true
+}
+
 // ArchiveEpisodic 将会话的历史事件标记为冷数据（滑动窗口边界 = 当前时刻）。
 // 语义对齐 ConsolidationPipeline.MarkColdEpisodicEvents（M05 §3.2 Session Compaction）。
 func (f *MemoryFacadeImpl) ArchiveEpisodic(ctx context.Context, sessionID string) error {

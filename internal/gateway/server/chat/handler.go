@@ -22,6 +22,7 @@ type ChatHandler struct {
 	AgentPool      protocol.AgentPool
 	Blackboard     protocol.Blackboard
 	ChannelRepo    repo.ChannelRepository
+	ProjectRepo    repo.ProjectRepository // ADR-0097
 	ProviderRepo   protocol.ProviderRepository
 	SystemRepo     repo.SystemRepository
 	Registry       protocol.LLMRegistry
@@ -54,6 +55,7 @@ type Dependencies struct {
 	DB                    protocol.SQLQuerier
 	ChatRepo              protocol.ChatRepository
 	ChannelRepo           repo.ChannelRepository
+	ProjectRepo           repo.ProjectRepository // ADR-0097
 	ProviderRepo          protocol.ProviderRepository
 	SystemRepo            repo.SystemRepository
 	AgentPool             protocol.AgentPool
@@ -123,6 +125,7 @@ func NewChatHandler(deps Dependencies) *ChatHandler {
 		AgentPool:          deps.AgentPool,
 		Blackboard:         deps.Blackboard,
 		ChannelRepo:        deps.ChannelRepo,
+		ProjectRepo:        deps.ProjectRepo,
 		ProviderRepo:       deps.ProviderRepo,
 		SystemRepo:         deps.SystemRepo,
 		Registry:           deps.Registry,

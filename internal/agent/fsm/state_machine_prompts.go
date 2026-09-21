@@ -297,6 +297,7 @@ func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte
 				Status:    types.StatusDone,
 				TaskID:    sCtx.SessionID,
 				AgentID:   sCtx.AgentID,
+				ProjectID: sCtx.ProjectID, // bgCtx 不携带项目，须显式打标（ADR-0097 决策三修订）
 				Payload:   []byte(`{"learning":` + fmt.Sprintf("%q", learning) + `}`),
 				CreatedAt: time.Now(),
 			}

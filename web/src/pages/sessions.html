@@ -26,17 +26,18 @@
     <!-- Sessions List -->
     <div class="space-y-3">
       <template x-for="sess in $store.sessions.list" :key="sess.id">
-        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors cursor-pointer" @click="$store.sessions.openSession(sess.id)">
+        <div class="card bg-base-200 border border-base-300 shadow-sm hover:border-primary transition-colors cursor-pointer" @click="$store.projects.openSession(sess)">
           <div class="card-body p-4 flex-row items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-1">
                 <span x-show="sess.source && sess.source !== 'web'" x-text="$store.sessions.sourceIcon(sess.source)" class="text-base-content/60" :title="sess.source"></span>
                 <h3 class="font-bold text-sm truncate" x-text="sess.title || sess.id"></h3>
+                <span x-show="sess.project_id && sess.project_id !== 'default'" class="badge badge-ghost badge-sm shrink-0" x-text="$store.projects.name(sess.project_id)"></span>
               </div>
               <p class="text-xs text-base-content/70 font-mono" x-text="`${sess.id.slice(0,12)}…  ·  ${$store.i18n.t('sessions_msg_count').replace('{0}', sess.message_count || 0)}  ·  ${new Date(sess.updated_at || sess.created_at).toLocaleString('zh-CN')}`"></p>
             </div>
             <div class="flex gap-2 shrink-0">
-              <button class="btn btn-sm btn-ghost" @click.stop="$store.sessions.openSession(sess.id)" x-text="$store.i18n.t('sessions_continue')"></button>
+              <button class="btn btn-sm btn-ghost" @click.stop="$store.projects.openSession(sess)" x-text="$store.i18n.t('sessions_continue')"></button>
               <button class="btn btn-sm btn-ghost text-error hover:bg-error/10" @click.stop="$store.sessions.deleteSession(sess.id)" x-text="$store.i18n.t('sessions_delete')"></button>
             </div>
           </div>

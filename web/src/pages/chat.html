@@ -22,6 +22,18 @@
        }
      }">
 
+  <!-- 当前项目（ADR-0097）：仅新会话可切换，已有会话的归属固定 -->
+  <div class="mx-auto w-full max-w-5xl px-4 pt-3 shrink-0 flex items-center gap-2 text-xs text-base-content/60"
+       x-show="$store.projects.active.length > 1" x-cloak>
+    <span x-text="$store.i18n.t('projects_chat_label')"></span>
+    <select class="select select-ghost select-xs" :disabled="!!$store.chat.sessionID"
+            @change="$store.projects.setCurrent($event.target.value)">
+      <template x-for="p in $store.projects.active" :key="p.id">
+        <option :value="p.id" :selected="p.id === $store.projects.current" x-text="p.name"></option>
+      </template>
+    </select>
+  </div>
+
   <!-- Thinking Panel -->
   <div class="mx-auto mt-4 w-full max-w-5xl flex justify-start px-4 shrink-0" x-show="$store.chat.thinkingText" x-cloak>
     <div class="border border-base-300 rounded-[1.25rem] overflow-hidden bg-base-200/50 w-fit max-w-2xl shadow-sm">

@@ -80,6 +80,17 @@ type Agent struct {
 	// 信任的工作区，其 AGENTS.md/CLAUDE.md 只进 ZoneExternalCatalog。
 	workspaceCtxLoader *agentctx.WorkspaceContextLoader
 	workspaceRoot      string
+	// projectResolver 按会话反查所属项目的工作区上下文输入（ADR-0097）。
+	// 每轮感知阶段现取（而非装配时快照）：用户在会话中途改了项目指令 / 信任开关
+	// 应当下一轮生效。返回 nil = 会话尚无项目（或查询失败），回退 workspaceRoot 行为。
+	projectResolver func(ctx context.Context, sessionID string) *agentctx.ProjectContext
+	// projectRoot 本会话项目工作目录（string），由 refreshWorkspaceContext 在无 effect
+	// 运行的窗口写入、executeEffect 读取注入 ctx（ADR-0097 决策五）。atomic 因二者跨 goroutine。
+	projectRoot atomic.Value
+	// projectID 本会话所属项目 ID（string），情景记忆打标与检索过滤用（ADR-0097 决策三修订）。
+	projectID atomic.Value
+	// projectNamespace SetMemoryNamespace 的原子副本，供项目解析回退使用（决策三补）。
+	projectNamespace atomic.Value
 
 	// sagaRecorder 本轮 DAG 执行的 Saga 补偿结果记录器，由 runExecuteDAG 每次新建，
 	// 经 ctx 交给 execute/dag 的 runCompensation 写入，经 buildStateContext 交给
@@ -355,6 +366,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		select {
 		case trigger := <-a.intent:
 			idleTimer.Reset(time.Duration(idleTimeout) * time.Second)
+			// ADR-0097 决策三补：headless 子 Agent 的命名空间在 SendIntent 之前才注入，
+			// 循环顶部那次刷新可能早于注入。新意图到达时补刷一次，使首个 effect
+			// 即带上正确的项目作用域（项目 ID / 工作目录 / 项目指令）。
+			if trigger == types.TriggerIntentReceived && !a.effectRunning.Load() {
+				a.refreshWorkspaceContext(ctx)
+			}
 			// Adaptive Max-Steps: 步骤计数 + 预算熔断
 			a.sCtx.Mu.Lock()
 			a.sCtx.StepsUsed++

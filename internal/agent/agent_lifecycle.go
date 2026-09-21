@@ -63,6 +63,7 @@ func (a *Agent) toProtocolCtx() protocol.StateContext {
 	return protocol.StateContext{
 		AgentID:              a.ID,
 		SessionID:            sessionID,
+		ProjectID:            a.currentProjectID(),
 		MaxTaintLevel:        maxTaint,
 		Mem:                  a.memory,
 		Tools:                a.toolRegistry,
@@ -153,38 +154,6 @@ func (a *Agent) refreshInstalledExtensions(ctx context.Context) {
 		a.sCtx.InstalledExtensionsInfo = ""
 	}
 	a.sCtx.Mu.Unlock()
-}
-
-// refreshWorkspaceContext 探测并装载工作区标准上下文文档（GD-14-005）。
-//
-// 与 refreshInstalledExtensions 并列在感知阶段刷新，而非启动时装载一次：
-// 工作区在会话过程中可能被切换（VFS GetRootDir 变化），且用户可能在会话中
-// 修改 AGENTS.md——每轮重读的成本是几次 stat + 小文件读，远低于装载过期约束
-// 带来的行为不一致。
-//
-// 信任边界在 loader 内部判定（见 WorkspaceContextLoader.isTrusted）：
-// 未在配置中显式声明信任的工作区，其上下文一律走 Untrusted 通道。
-func (a *Agent) refreshWorkspaceContext(ctx context.Context) {
-	if a.workspaceCtxLoader == nil || a.workspaceRoot == "" {
-		return
-	}
-	docs := a.workspaceCtxLoader.Load(ctx, a.workspaceRoot)
-
-	a.sCtx.Mu.Lock()
-	a.sCtx.WorkspaceContextTrusted = agentctx.RenderTrusted(docs)
-	if ts := agentctx.RenderUntrusted(docs); !ts.IsEmpty() {
-		a.sCtx.WorkspaceContextUntrusted = ts.UnsafeContent()
-	} else {
-		a.sCtx.WorkspaceContextUntrusted = ""
-	}
-	a.sCtx.Mu.Unlock()
-}
-
-// InjectWorkspaceContextLoader 注入工作区上下文装载器与工作区根目录。
-// 任一为空即整体禁用该能力（与未接线时行为一致）。
-func (a *Agent) InjectWorkspaceContextLoader(l *agentctx.WorkspaceContextLoader, root string) {
-	a.workspaceCtxLoader = l
-	a.workspaceRoot = root
 }
 
 // InjectExtensionActivator 注入按需扩展激活器。

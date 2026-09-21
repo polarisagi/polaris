@@ -17,6 +17,8 @@ import (
 //nolint:gocyclo
 func MakeDataQueryFn(allowedPaths []string) sandbox.InProcessFn {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args struct {
 			Query    string `json:"query"`
 			Database string `json:"database"`
@@ -36,7 +38,7 @@ func MakeDataQueryFn(allowedPaths []string) sandbox.InProcessFn {
 		}
 
 		// 路径白名单校验（与 read_file 共用机制）
-		if err := guard.CheckAllowedPath(args.Database, allowedPaths); err != nil {
+		if err := guard.CheckAllowedPath(args.Database, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeForbidden, "data_query: database path not allowed", err)
 		}
 
