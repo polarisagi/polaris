@@ -2,7 +2,7 @@
 
 > 对外: CLI + HTTP（HyperText Transfer Protocol，超文本传输协议）/SSE（Server-Sent Events，服务器发送事件） + MCP（Model Context Protocol，模型上下文协议） + Web UI; 对内: 任务队列 + 定时任务 + HITL（Human-in-the-loop，人机协同）
 > Go; [HE-Rule-1]; [Tier-0-Limit]; [Phase0-Bootstrapping]
-<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:443 对内调度 / 3:563 MCP / 6:581 (SOFT)降级 / 6-bis:594 已知Bug修复记录 / 7:606 跨模块契约 / 8:623 Web UI 规约 / 8.6:769 插件聚合市场DB+流 / 8.7:805 自动化中心DB+流+工作流 / 8.8:921 电脑操控权限+Preferences / 8.9:961 前端组件规范 -->
+<!-- §跳读: 0-bis:6 职责 / 0-ter:21 不变量速查 / 1:35 对外接口 / 2:463 对内调度 / 3:583 MCP / 6:601 (SOFT)降级 / 6-bis:614 已知Bug修复记录 / 7:626 跨模块契约 / 8:643 Web UI 规约 / 8.6:789 插件聚合市场DB+流 / 8.7:825 自动化中心DB+流+工作流 / 8.8:941 电脑操控权限+Preferences / 8.9:981 前端组件规范 -->
 ## 0-bis. 职责边界
 
 | M13 **是** | M13 **不是** |
@@ -40,6 +40,7 @@
 polaris query "..."
 polaris chat
 polaris serve
+polaris service install|uninstall|status
 polaris config get|set <k> <v>
 polaris config history
 polaris config revert <version>
@@ -55,7 +56,26 @@ polaris migrate openclaw [--dry-run] [--with-memory] [--smart] [--stage]
 polaris memory process-staging
 ```
 
-AgentREPL: 逐行读 stdin，"/" 前缀→内置命令（/help /sessions /switch /skills /memory /status /quit），否则→ StreamInfer，EventToken→stdout。实现位于 `internal/gateway/`。
+REPL: 逐行读 stdin，"/" 前缀→内置命令（/help /sessions /switch /skills /memory /status /quit），否则→ POST /v1/agent/stream，SSE token→stdout。实现位于 `cmd/polaris/cli.go`。
+
+**CLI 是薄客户端**（ADR-0096 决策一）：全部命令经 HTTP/SSE 调用守护进程，不直连数据库与内核。服务发现与凭证注入在 `cmd/polaris/cli_endpoint.go`——解析顺序为 `POLARIS_SERVER_URL` → `run/polaris.port` + `run/polaris.token` → 兜底 `localhost:28888`；端口不写死，守护进程可配 `port = 0` 由内核分配。
+
+### 1.1.1 桌面外壳
+
+`desktop/`（Tauri v2，ADR-0096）。与 CLI 同为薄客户端：窗口直接加载 `http://127.0.0.1:<port>`，
+跑的就是 `web/` 那套 UI，外壳不打包前端资源、不承载业务 IPC。
+
+启动判定（`desktop/src-tauri/src/startup.rs`）：找 polaris 二进制 → 跑 `polaris service status --json`
+拿运行时状态 → 未运行则宿主模式拉起 + 指数退避轮询，已运行则**两段式探测**（`/healthz` 判存活、
+带令牌的端点判凭证）后附着。路径解析不在 Rust 侧重做一遍——问 Go 二进制，SSoT 仍是 `config.DataLayout`。
+
+外壳内只有两张纯静态页（启动页与故障页），故障页覆盖「核心未安装 / 启动超时 / 凭证不匹配 /
+运行时状态异常」四态，不调用任何 `/v1` 端点。生命周期见 ADR-0096 决策七；四个场景由
+`make desktop-smoke` 实跑校验。
+
+`polaris service` 把守护进程注册给系统服务管理器（launchd LaunchAgent / systemd --user / Windows 计划任务），一律用户级，不用系统级——数据目录在用户 home 下，以 root 跑会把文件属主弄成 root。
+
+> 2026-09-21 订正：原文写「AgentREPL … 实现位于 `internal/gateway/`」，两处均与代码不符——`AgentREPL` 是 `internal/cli` 里从未接线的类型（该包已按 ADR-0096 决策六删除），真实实现一直在 `cmd/polaris/cli.go`。
 
 配置版本控制: 用户配置每次变更原子记录到 events 表（source_type='user_config_change'），享受 EventLog 完整审计 + 回滚能力。`polaris config history` 显示变更历史；`polaris config revert <version>` 回退；`polaris config diff <v1> <v2>` 对比差异。
 

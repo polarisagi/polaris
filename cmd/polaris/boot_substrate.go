@@ -148,15 +148,12 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 
 	// ─── 1. 配置加载 ─────────────────────────────────────────────────────────
-	cfgPath := os.Getenv("POLARIS_CONFIG")
-	if cfgPath != "" {
+	cfgPath := configFilePath()
+	if os.Getenv("POLARIS_CONFIG") != "" {
 		// 显式配置路径缺失 → fail-fast，避免掩盖运维挂载问题
 		if _, statErr := os.Stat(cfgPath); os.IsNotExist(statErr) {
 			return nil, apperr.New(apperr.CodeInternal, "POLARIS_CONFIG file not found: "+cfgPath)
 		}
-	} else {
-		home, _ := os.UserHomeDir()
-		cfgPath = filepath.Join(home, ".polarisagi/polaris", "config.toml")
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -886,4 +883,15 @@ func initSurrealStore(
 		"worker_threads", workerThreads,
 	)
 	return st
+}
+
+// configFilePath 返回配置文件路径：POLARIS_CONFIG 优先，否则用默认根目录下的 config.toml。
+// 守护进程与 CLI 客户端共用同一判定——两份实现必然漂移其一，而漂移的表现是
+// "CLI 读的配置和服务跑的配置不是同一份"，排查时毫无线索。
+func configFilePath() string {
+	if p := os.Getenv("POLARIS_CONFIG"); p != "" {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".polarisagi/polaris", "config.toml")
 }

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -245,6 +246,12 @@ func (s *Server) Start() error {
 		return apperr.Wrap(apperr.CodeInternal, "failed to listen on tcp address", err)
 	}
 
+	// 记录**实际**绑定地址：配置端口为 0 时内核分配的端口只有这里知道，
+	// 而 run/polaris.port 必须写实际值，否则客户端连向 0 号端口（ADR-0096 决策六）。
+	// 写在 Serve 之前、与调用方同一 goroutine，BoundAddr 的读取方是 Start 返回后的
+	// 调用方，二者之间无并发窗口。
+	s.boundAddr = ln.Addr().String()
+
 	concurrent.SafeGo(context.Background(), "gateway.server.http_serve", func(context.Context) {
 		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("polaris-server: serve error", "err", err)
@@ -319,4 +326,38 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// BoundPort 返回监听器实际绑定的端口，仅在 Start() 成功返回后有效。
+//
+// 调用方（cmd/polaris）据此写 run/polaris.port。配置端口为 0 时，配置值与实际
+// 绑定值不同，写配置值会让所有客户端连向一个不存在的端口，且服务端一切正常，
+// 排查时无任何线索指向端口来源。
+func (s *Server) BoundPort() (int, error) {
+	if s.boundAddr == "" {
+		return 0, apperr.New(apperr.CodeInternal, "gateway: 服务尚未绑定端口")
+	}
+	_, portStr, err := net.SplitHostPort(s.boundAddr)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "gateway: 解析绑定地址失败 "+s.boundAddr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, apperr.Wrap(apperr.CodeInternal, "gateway: 绑定端口非整数 "+portStr, err)
+	}
+	return port, nil
+}
+
+// SetLocalToken 注入本次启动的本地令牌（ADR-0096 决策五）。
+// 必须在 Start() 之前调用；传空串等于不启用本地令牌鉴权。
+func (s *Server) SetLocalToken(token string) {
+	s.localToken.Store(&token)
+}
+
+// LocalToken 返回本地令牌，未注入时为空串。
+func (s *Server) LocalToken() string {
+	if p := s.localToken.Load(); p != nil {
+		return *p
+	}
+	return ""
 }

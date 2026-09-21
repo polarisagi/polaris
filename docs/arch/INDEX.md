@@ -92,13 +92,13 @@
 <!-- BEGIN GENERATED: arch-index-table · 源: docs/arch/*.md · 勿手改，改源后跑 make docs-gen -->
 | 文件 | 域 | est_tok | 内容摘要 |
 |------|----|---------|----------|
-| `M13-Interface-Scheduler.md` | L3 接口 | 35K | 见下方 [M13 补充](#m13-补充) |
+| `M13-Interface-Scheduler.md` | L3 接口 | 36K | 见下方 [M13 补充](#m13-补充) |
 | `M07-Tool-Action-Layer.md` | L1 工具 | 32K | 见下方 [M07 补充](#m07-补充) |
 | `M05-Memory-System.md` | L1 记忆 | 27K | 四层记忆、PromptBuilder、HybridRetriever、Consolidation |
 | `M11-Policy-Safety.md` | L0 策略 | 26K | 五防线、Cedar、TaintedString、KillSwitch、PII（Personally Identifiable Information，个人可识别信息） Vault、SSRFGuard |
 | `00-Global-Dictionary.md` | 字典 | 24K | 全 `[Concept]` 标签定义、XR-01~07 跨模块规则、公理 |
 | `spec/state.yaml` | SSoT（Single Source of Truth，唯一权威源） 规约 | 22K | 状态机 + 全模块阈值（唯一权威） |
-| `M04-Agent-Kernel.md` | L1 内核 | 21K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
+| `M04-Agent-Kernel.md` | L1 内核 | 22K | 状态机 13 态、S_VALIDATE 四层、System 1/1.5/2 路由、Saga |
 | `M08-Multi-Agent-Orchestrator.md` | L2 协同 | 20K | Blackboard、CAS（Compare-And-Swap，比较并交换） 认领、Reaper、Supervisor Tree、7 编排模式 |
 | `M09-Self-Improvement-Engine.md` | L2 自演化 | 18K | 五条无梯度路线、SurpriseIndex 完整版、MEMF（Memory of Errors and Mistakes Framework，错误记忆框架）、Auto-Curriculum |
 | `M02-Storage-Fabric.md` | L0 存储 | 17K | 三轴存储、EventLog、MutationBus、Outbox、SchemaManager |

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -55,8 +56,105 @@ var healthPathSet = map[string]struct{}{
 	"/.well-known/agent-card.json": {},
 }
 
-// checkAuth 执行 API Key 校验和匿名写保护，返回注入了身份的 context。
+// localTokenCookie 是 Web UI 携带本地令牌的 Cookie 名。
+//
+// 为什么 Web UI 走 Cookie 而不是改前端加请求头：同源 fetch 与 EventSource 自动携带
+// Cookie，20 余处调用点与 sse.js 一行不用改；HttpOnly 挡住页面内 JS 读取；
+// SameSite=Strict 加上 §checkOrigin 的同源校验挡住 CSRF。令牌经 DNS rebinding
+// 也拿不到——重绑定后浏览器认定的源是攻击者域名，不会带上本源的 Cookie。
+const localTokenCookie = "polaris_local"
+
+// anonymousLoopbackEnvKey 是取消回环豁免后的逃生阀（ADR-0096 决策五）。
+// 默认关闭。它服务的是"本机裸调 /v1/chat/completions 的第三方 OpenAI 兼容客户端"
+// 这一存量场景的迁移期，不是长期状态。
+const anonymousLoopbackEnvKey = "POLARIS_ALLOW_ANONYMOUS_LOOPBACK"
+
+// presentedToken 取请求携带的令牌（Authorization: Bearer 优先，其次 X-API-Key）。
+func presentedToken(r *http.Request) string {
+	if v := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); v != "" {
+		return v
+	}
+	return r.Header.Get("X-API-Key")
+}
+
+// tokenEqual 恒定时间比较，防时序攻击。空串一律不匹配——否则未配置令牌时
+// 任何不带凭证的请求都会"匹配成功"。
+func tokenEqual(presented, expected string) bool {
+	if presented == "" || expected == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) == 1
+}
+
+// isStaticShellRequest 判定是否为 Web UI 静态外壳请求（SPA 的 HTML/JS/CSS）。
+//
+// 它必须免鉴权，否则首屏陷入死锁：Cookie 由服务端在返回首页时下发，而首页本身
+// 要鉴权才能拿到——第一次访问永远拿不到 Cookie。外壳里没有任何用户数据，数据
+// 一律经 /v1 获取；令牌只在 §issueLocalTokenCookie 里对回环对端下发，远程访问者
+// 能看到空壳但取不到令牌，所有 /v1 调用仍会 401。
+func isStaticShellRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	p := r.URL.Path
+	return !strings.HasPrefix(p, "/v1/") && !strings.HasPrefix(p, "/_admin")
+}
+
+// checkOrigin 判定请求来源与目标主机是否同源，用于 Cookie 分支的 CSRF 防护。
+//
+// 无 Origin 头视为非浏览器客户端（CLI/脚本/curl）——它们不会被跨站诱导发起请求，
+// CSRF 的前提不成立。有 Origin 则必须与 Host 完全一致。
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
+}
+
+// isLoopbackHost 判定 Host 头指向的是否为本机回环名/地址。
+//
+// 用于逃生阀分支的 DNS rebinding 防护：重绑定攻击中，浏览器发出的 Host 是攻击者
+// 域名（evil.example），即便 TCP 对端确实是 127.0.0.1。只看对端不看 Host 的判定
+// 会把这种请求当成本机访问放行。
+func isLoopbackHost(host string) bool {
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	h = strings.Trim(h, "[]")
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// newAuthContext 组装带身份的 context。
+func newAuthContext(ctx context.Context, userID string, ct authcontext.ClientType, traceID string, authed bool) context.Context {
+	return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{
+		UserID: userID, ClientType: ct, TraceID: traceID, Authenticated: authed,
+	})
+}
+
+// checkAuth 执行凭证校验，返回注入了身份的 context。
 // 校验失败时直接写响应并返回 false，调用方应立即 return。
+//
+// 判定顺序固定（ADR-0096 决策五），四条分支之外一律 401：
+//
+//	① 健康端点与静态外壳 —— 免鉴权（前者供探活，后者是 Cookie 下发的前提）
+//	② POLARIS_API_KEY    —— 远程部署凭证，身份 admin / ClientTypeAPI
+//	③ 本地令牌（请求头） —— CLI 与桌面外壳，身份 ClientTypeLocal
+//	④ 本地令牌（Cookie） —— Web UI，需同源，身份 ClientTypeWebUI
+//	⑤ 逃生阀             —— 显式开启 + TCP 对端回环 + Host 回环，匿名
+//
+// 2026-09-21 取消了"未配置 API Key 时回环即凭证"：那条分支让本机任意进程、以及
+// 浏览器页面经简单请求即可取得完整权限。桌面版把这个前提彻底改变了——守护进程
+// 会长期在普通用户机器上运行。
 func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, expectedKey string, authManager *AuthManager) (context.Context, bool) {
 	ctx := r.Context()
 
@@ -65,35 +163,12 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 	_, _ = rand.Read(b)
 	traceID := "req_" + hex.EncodeToString(b)
 
-	// 健康/指标端点始终放行（无需鉴权）
+	// ① 健康/指标端点与静态外壳：始终放行
 	if _, isHealth := healthPathSet[r.URL.Path]; isHealth {
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeUnknown, TraceID: traceID, Authenticated: false}), true
+		return newAuthContext(ctx, "anonymous", authcontext.ClientTypeUnknown, traceID, false), true
 	}
-
-	// 未配置 API Key：仅允许本机回环访问，防止远程未授权调用。
-	//
-	// 这里刻意**不用** clientIP（extractIP 的产物），而是直接取 TCP 层 RemoteAddr：
-	// 在零认证模式下「来自回环」本身就是唯一的身份凭证，那这个判定的输入就不能是
-	// 客户端可影响的数据。extractIP 在 POLARIS_TRUSTED_PROXY=1 时会采信
-	// X-Forwarded-For——该开关的前提是「前面真的有一个会重写该头的反代」；
-	// 一旦运营者开了开关却没有真反代（或反代被绕过直连），攻击者只需发一个
-	// `X-Forwarded-For: 127.0.0.1` 就能让本判定为真，直接拿到零认证的完整权限。
-	// RemoteAddr 由内核填写、不可伪造，用它做鉴权判定，用 clientIP 做限流/锁定
-	// （后者被伪造的最坏后果只是限流桶算错，不是越权）。
-	if expectedKey == "" {
-		if !isLoopback(peerIP(r)) {
-			slog.Warn("http: POLARIS_API_KEY not set, rejecting non-localhost request", "ip", clientIP, "path", r.URL.Path)
-			http.Error(w, "403 Forbidden: POLARIS_API_KEY not configured; set it in environment or restrict to localhost", http.StatusForbidden)
-			return ctx, false
-		}
-		// loopback 无 key：视为 webui 场景（页面加载并发多请求），用 webui quota 而非 unknown，
-		// 避免首屏并发 GET 打光 unknown 的 burst=20 导致误触 429。
-		// 注入值保持 ClientTypeWebUI，不要改成 ClientTypeLocalWebUI：
-		// builtinClientQuotas 只有 webui 键，换成 local_webui 会查不到配额而落到
-		// defaultRate/defaultMax，正好把上面这段注释描述的首屏 429 问题再放回来。
-		// 中断权限判定不依赖这里的取值——ClientType.IsLocalTrusted() 已同时覆盖
-		// webui / local_webui / local 三者（GR-9-001 的修法就在那个函数里）。
-		return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "anonymous", ClientType: authcontext.ClientTypeWebUI, TraceID: traceID, Authenticated: false}), true
+	if isStaticShellRequest(r) {
+		return newAuthContext(ctx, "anonymous", authcontext.ClientTypeWebUI, traceID, false), true
 	}
 
 	if authManager.IsLocked(clientIP) {
@@ -102,22 +177,71 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		return ctx, false
 	}
 
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" {
-		token = r.Header.Get("X-API-Key")
+	presented := presentedToken(r)
+
+	// ② 远程 API Key
+	if tokenEqual(presented, expectedKey) {
+		authManager.RecordSuccess(clientIP)
+		// MVP 阶段单一 API Key，统一记录为 admin
+		return newAuthContext(ctx, "admin", authcontext.ClientTypeAPI, traceID, true), true
 	}
 
-	// 恒定时间比较防御时序攻击
-	if subtle.ConstantTimeCompare([]byte(token), []byte(expectedKey)) != 1 {
+	// ③ 本地令牌（请求头）：CLI / 桌面外壳。身份是 ClientTypeLocal，
+	// IsLocalTrusted() 覆盖它——本机已完成令牌校验，与 webui 同级可信。
+	localToken := s.LocalToken()
+	if tokenEqual(presented, localToken) {
+		authManager.RecordSuccess(clientIP)
+		return newAuthContext(ctx, "local", authcontext.ClientTypeLocal, traceID, true), true
+	}
+
+	// ④ 本地令牌（Cookie）：Web UI。跨站请求带不上 Strict Cookie，
+	// 这里的同源校验是第二道——防的是 Cookie 策略被浏览器实现差异削弱的情况。
+	if c, err := r.Cookie(localTokenCookie); err == nil && tokenEqual(c.Value, localToken) {
+		if !checkOrigin(r) {
+			slog.Warn("http: 拒绝跨源 Cookie 鉴权", "origin", r.Header.Get("Origin"), "host", r.Host, "path", r.URL.Path)
+			http.Error(w, "403 Forbidden: cross-origin request rejected", http.StatusForbidden)
+			return ctx, false
+		}
+		authManager.RecordSuccess(clientIP)
+		return newAuthContext(ctx, "local", authcontext.ClientTypeWebUI, traceID, true), true
+	}
+
+	// ⑤ 逃生阀：三个条件同时成立才放行，缺一不可。
+	if os.Getenv(anonymousLoopbackEnvKey) == "1" && isLoopback(peerIP(r)) && isLoopbackHost(r.Host) {
+		// 这里刻意**不用** clientIP（extractIP 的产物），而是直接取 TCP 层 RemoteAddr：
+		// extractIP 在 POLARIS_TRUSTED_PROXY=1 时会采信 X-Forwarded-For——该开关的前提是
+		// 「前面真的有一个会重写该头的反代」；一旦运营者开了开关却没有真反代（或反代被
+		// 绕过直连），攻击者只需发一个 `X-Forwarded-For: 127.0.0.1` 就能让本判定为真。
+		// RemoteAddr 由内核填写、不可伪造，用它做鉴权判定，用 clientIP 做限流/锁定
+		// （后者被伪造的最坏后果只是限流桶算错，不是越权）。
+		return newAuthContext(ctx, "anonymous", authcontext.ClientTypeWebUI, traceID, false), true
+	}
+
+	// 只在"确实尝试过凭证"时计失败：无凭证的探测（如尚未拿到 Cookie 的首屏并发
+	// 请求）若也计数，本机用户会把自己锁进 429。
+	if presented != "" {
 		authManager.RecordFailure(clientIP)
-		http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
-		return ctx, false
 	}
+	http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+	return ctx, false
+}
 
-	authManager.RecordSuccess(clientIP)
-	// MVP 阶段单一 API Key，统一记录为 admin
-	return authcontext.WithAuthContext(ctx, &authcontext.AuthContext{UserID: "admin", ClientType: authcontext.ClientTypeAPI, TraceID: traceID, Authenticated: true}), true
-
+// issueLocalTokenCookie 向**回环对端**下发本地令牌 Cookie，供 Web UI 后续调用 /v1。
+//
+// 只认 TCP 对端（peerIP），不认 Host、不认任何请求头：Host 可伪造，而这里要发出去的
+// 是等价于完整 API 权限的凭证。远程访问者拿到的是没有 Cookie 的空壳页面。
+func (s *Server) issueLocalTokenCookie(w http.ResponseWriter, r *http.Request) {
+	token := s.LocalToken()
+	if token == "" || !isLoopback(peerIP(r)) {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     localTokenCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
 }
 
 // withMiddleware 挂载所有基础网关级别的安全防护（Auth + Rate Limit + CORS + Logging + Panic Recovery）
@@ -137,7 +261,10 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 	expectedKey := os.Getenv("POLARIS_API_KEY")
 	if expectedKey == "" {
-		slog.Warn("http: POLARIS_API_KEY not set — non-localhost requests will be rejected with 403; set POLARIS_API_KEY to enable remote access")
+		slog.Info("http: POLARIS_API_KEY 未设置——远程访问不可用；本机客户端用 run/polaris.token 鉴权")
+	}
+	if os.Getenv(anonymousLoopbackEnvKey) == "1" {
+		slog.Warn("http: " + anonymousLoopbackEnvKey + "=1 已开启——本机任意进程可无凭证调用完整 API，仅用于存量客户端迁移期")
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

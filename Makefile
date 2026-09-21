@@ -188,6 +188,27 @@ safe-dialer-check:
 #   [L-16] FSM 包内禁 goto            → tools/fsm_io_lint.go
 #   [L-17] PolicyGate fail-closed     → tools/no_backdoor_lint.go
 
+# ─── 桌面外壳（ADR-0096）────────────────────────────────────────────────────
+# 外壳是独立的 Rust crate，不进 Go 的构建矩阵：它链接各平台自己的 WebView，
+# 无法交叉编译（见 .github/workflows/release.yml 的 desktop job 注释）。
+
+desktop-build:
+	cd desktop/src-tauri && cargo build --release
+
+desktop-test:
+	cd desktop/src-tauri && cargo test
+
+desktop-lint:
+	cd desktop/src-tauri && cargo fmt --check && cargo clippy -- -D warnings
+
+# 需要先 cargo install tauri-cli --version "^2"
+desktop-bundle:
+	cd desktop/src-tauri && cargo tauri build
+
+# 外壳的四个生命周期场景——现有 Go 门控一条都覆盖不到（进程生命周期、跨平台差异）。
+desktop-smoke:
+	POLARIS_BIN=$(PWD)/bin/polaris ./desktop/smoke.sh
+
 clean:
 	rm -rf bin/ bin/lib
 	$(CARGO) clean --manifest-path rust/substrate/Cargo.toml

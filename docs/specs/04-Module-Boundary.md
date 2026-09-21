@@ -13,7 +13,6 @@ L3 接口/治理层 → L3 可引用 L2, L1, L0
   internal/eval/       评估与 Benchmark 引擎
   internal/channel/    聊天平台双向适配器（TG/Discord）
   internal/sysmgr/     系统资源管理（更新/本地化；downloader/sysinfo 已迁出至 L0，见下）
-  internal/cli/        命令行引导
     ↑
 L2 协同/知识层 → L2 可引用 L1, L0；不可引用 L3
   internal/swarm/      多 Agent 协同（Orchestrator/Planner/Supervisor/Topology）

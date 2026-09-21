@@ -41,7 +41,6 @@ Arch-L4: internal/gateway            ← 接口/治理层
           internal/channel
           internal/sysmgr
 Arch-L8: internal/bootstrap          ← 装配层（DI 容器）
-          internal/cli
 Arch-LX: internal/protocol           ← 跨层共享契约（特殊，不属于任意业务层）
 ```
 

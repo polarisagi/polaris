@@ -261,11 +261,146 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────
+  # 3.5 桌面外壳（ADR-0096）
+  #
+  # Tauri **不支持交叉编译**：外壳链接各平台自己的 WebView（WKWebView /
+  # WebView2 / WebKitGTK），必须在目标 OS 上构建。故这里是三种 runner 的独立
+  # 矩阵，与上面单 runner 交叉编译 Go 的逻辑并行存在，刻意不合并。
+  #
+  # 产物里**不含** polaris 二进制：守护进程与 dylib 装在 app bundle 之外
+  # （决策四），由 install.sh / tar.gz 渠道安装。外壳只是启动器，因此它的版本
+  # 与守护进程解耦，/healthz 回报的 version 用于运行期比对。
+  #
+  # 无平台签名证书（决策八）：macOS 仅做 ad-hoc 签名（codesign -s -，Apple
+  # Silicon 的硬要求），不公证；Windows 不做 Authenticode。主分发渠道是命令行
+  # 安装脚本——curl/Invoke-WebRequest 不写隔离属性/MOTW，故不触发 Gatekeeper
+  # 与 SmartScreen。安装包的完整性由 .sha256 + 发布签名承接（ADR-0095）。
+  # ───────────────────────────────────────────────
+  desktop:
+    name: Desktop Shell (${{ matrix.name }})
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: darwin-arm64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+          - name: darwin-amd64
+            runner: macos-latest
+            rust_target: x86_64-apple-darwin
+          - name: windows-amd64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - name: linux-amd64
+            runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      # WebKitGTK 与 AppImage 打包依赖，仅 Linux 需要
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+
+      # 外壳版本必须与守护进程同源于 git tag：外壳启动时会比对 /healthz 回报的版本
+      # （startup.rs compatible()），0.x 阶段主次版本不同即判不兼容。不盖版本号的话，
+      # 外壳永远是 Cargo.toml 里的占位版本，每个正式发布都会被自己的外壳拒绝。
+      - name: Stamp version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          python3 - "$V" <<'PY'
+          import json, re, sys
+          v = sys.argv[1]
+          p = "desktop/src-tauri/tauri.conf.json"
+          c = json.load(open(p, encoding="utf-8"))
+          c["version"] = v
+          json.dump(c, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          p = "desktop/src-tauri/Cargo.toml"
+          s = open(p, encoding="utf-8").read()
+          s = re.sub(r'(?m)^version = "[^"]*"', f'version = "{v}"', s, count=1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+          grep -m1 '^version' desktop/src-tauri/Cargo.toml
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build desktop bundle
+        working-directory: desktop/src-tauri
+        run: cargo tauri build --target ${{ matrix.rust_target }}
+
+      # ad-hoc 签名：Apple Silicon 拒绝加载无签名可执行文件。免费、不需账号。
+      - name: Ad-hoc sign (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop/src-tauri
+        run: |
+          set -euo pipefail
+          APP=$(find target/${{ matrix.rust_target }}/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="desktop_pkg"
+          mkdir -p "$OUT"
+          BUNDLE="desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          NAME="polaris-desktop-${{ matrix.name }}"
+          case "${{ runner.os }}" in
+            macOS)
+              # .app 以 tar.gz 分发供安装脚本使用（curl+tar 不写隔离属性）；
+              # .dmg 供浏览器下载场景，用户需手动放行一次。
+              APP=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' | head -1)
+              tar -czf "$OUT/${NAME}.tar.gz" -C "$(dirname "$APP")" "$(basename "$APP")"
+              find "$BUNDLE/dmg" -name '*.dmg' -exec cp {} "$OUT/${NAME}.dmg" \; || true
+              ;;
+            Windows)
+              find "$BUNDLE/msi" -name '*.msi' -exec cp {} "$OUT/${NAME}.msi" \; || true
+              ;;
+            Linux)
+              find "$BUNDLE/appimage" -name '*.AppImage' -exec cp {} "$OUT/${NAME}.AppImage" \; || true
+              find "$BUNDLE/deb" -name '*.deb' -exec cp {} "$OUT/${NAME}.deb" \; || true
+              ;;
+          esac
+          cd "$OUT"
+          for f in *; do
+            [ -f "$f" ] || continue
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$f" > "$f.sha256"
+            else
+              shasum -a 256 "$f" > "$f.sha256"
+            fi
+          done
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: polaris-desktop-${{ matrix.name }}
+          path: desktop_pkg/*
+          retention-days: 1
+
+  # ───────────────────────────────────────────────
   # 4. 发布 GitHub Release
   # ───────────────────────────────────────────────
   publish:
     name: Publish GitHub Release
-    needs: [package]
+    needs: [package, desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

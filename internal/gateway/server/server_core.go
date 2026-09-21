@@ -42,8 +42,16 @@ type Server struct {
 	// 实例化，是一段未接线的独立机制，见 99-遗留线索.md）。withMiddleware 内
 	// 长驻的 RateLimitManager/AuthManager 清理协程必须锚定在这个真根 context
 	// 上才能在进程收到 SIGINT/SIGTERM 时真正退出，而不是永久驻留。
-	rootCtx        context.Context
-	addr           string
+	rootCtx context.Context
+	addr    string
+	// boundAddr 是监听器实际绑定的地址（addr 端口为 0 时二者不同）。
+	// 仅 Start() 内写入，调用方在 Start() 返回后读，无并发窗口。
+	boundAddr string
+	// localToken 是本次启动的本地令牌（与 run/polaris.token 同值）。
+	// 由 cmd/polaris 在 Start() 之前经 SetLocalToken 注入；请求处理期只读。
+	// 用 atomic 而非裸字段：注入发生在装配阶段，而读发生在每个请求的处理协程里，
+	// 裸字段会被 -race 判为竞态（即便实际时序上无重叠）。
+	localToken     atomic.Pointer[string]
 	srv            *http.Server
 	isReady        atomic.Bool
 	agentPool      protocol.AgentPool

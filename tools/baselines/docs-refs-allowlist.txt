@@ -81,3 +81,10 @@ rust/substrate/target/release
 tools/wiring_reachability_check.go
 internal/vfs/provider.go # ignore
 internal/xxx.go # example in wiring check
+
+# ── ADR-0096 决策六：internal/cli 于 2026-09-21 删除 ──
+# ARCHITECTURE.md §8.3 保留该节记载删除事实与理由（AgentREPL 直连内核，与
+# 「客户端只走 HTTP/SSE」冲突）。删节会让"当初为什么有这个包、又为什么删"失去
+# 可追溯性，下一个人将重新造一遍。
+internal/cli/
+internal/cli # M13 §1.1 的 2026-09-21 订正注记：点名原文写错的实现位置（该包已删除）

@@ -4,7 +4,7 @@
 >
 > **代码位置**：根目录
 >
-<!-- §跳读: 0-bis:11 哲学 / 0:24 SSoT / 1:32 定位约束 / 2:81 (SOFT)部署 / 3:94 Staging / 4:122 HT0预算 / 5:153 变更控制 / 6:170 配置层 / 8:193 启动与关停协议 / 7:240 当前实现状态 -->
+<!-- §跳读: 0-bis:11 哲学 / 0:24 SSoT / 1:32 定位约束 / 2:81 (SOFT)部署 / 3:94 Staging / 4:122 HT0预算 / 5:153 变更控制 / 6:170 配置层 / 8:193 启动与关停协议 / 7:242 当前实现状态 -->
 
 ---
 
@@ -227,9 +227,11 @@ Default 代码常量 < ~/.polarisagi/polaris/config/m*.toml（或 POLARIS_THRESH
 >
 > 是否把生产启动迁移到 `Bootstrapper`：当前 6 阶段线性链只有 ~6 个节点、依赖关系由函数签名静态可验、且已稳定运行，换成运行期拓扑排序在正确性上无增益，反而把编译期错误降级为运行期错误。迁移的真实收益出现在"模块数量增长到手工排序易错"或"需要按 Tier/FeatureGate 动态增删模块"之后——满足其一再立 ADR 评估。**注意四阶关停接口并非拿来即用**：2026-08-07 接线可行性复核已查出三项契约缺陷（关停四阶内部按 map 随机序、`Init` 无 ctx、`Ignite` 无失败回滚）与两项契约无法表达的装配形态（137 处 setter 回注含反向回注、`protocol.ReplayMode` 进程级独占窗口），立项时须先行处置——详见 `decisions/ADR-0088 §决策七 → internal/bootstrap 接线可行性复核（2026-08-07）`。
 
-### 8.3 `internal/cli/`：已定义未接线的 CLI 引导契约
+### 8.3 `internal/cli/`：已于 2026-09-21 删除
 
-`internal/cli/`（包含 `AgentREPL` / `RateLimiterMiddleware` / `WebSocketHub` 等）当前为未接线的 CLI 引导组件。与 `internal/bootstrap` 类似，主程序的实际装配落点维持在 `cmd/polaris/boot_*.go`（手工装配）。这些组件已在白名单中备案，保留作为未来的命令行交互能力扩展。
+该包曾是未接线的 CLI 引导契约（`AgentREPL` / `RateLimiterMiddleware` / `WebSocketHub`），在 wiring 白名单中备案。2026-09-21 按 ADR-0096 决策六删除，理由是其中的 `AgentREPL` 依赖 `InferFn` 直连内核，与"客户端与内核之间只有 HTTP/SSE 一条路"的约束正面冲突——留着它等于保留一条与既定架构相悖的目标契约。
+
+命令行版的实际实现在 `cmd/polaris/cli*.go`（HTTP 客户端，不直连数据库与内核）；服务发现所需的运行时状态读写下沉在 `internal/runtimeinfo`。装配层落点仍是 `cmd/polaris/boot_*.go`，不受本次删除影响。
 
 ---
 

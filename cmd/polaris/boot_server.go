@@ -50,7 +50,7 @@ var (
 
 // bootServer 执行 §11~§11.5 初始化：装配 HTTP Server、OTA 管理器、STT/TTS，并调用 Start()。
 // 返回 *server.Server，调用方 run() 负责 Shutdown。
-func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, ab *AgentBundle) (*server.Server, error) { //nolint:gocyclo
+func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *ToolBundle, ab *AgentBundle, localToken string) (*server.Server, error) { //nolint:gocyclo
 	if sb.Cfg.Security.LocalOnlyMode {
 		slog.Info("polaris: initializing local_only network sandbox")
 		// maxAllowlistSize=5：M11-Policy-Safety.md §5.3 明确规定 Tier3 local_only
@@ -331,6 +331,10 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	// V-3 核实：SystemPromptGuard 已在内部组件级完成拦截器接线，无需在 boot 层全局注入。
 	// - SSE 交互路径：已在 internal/gateway/server/chat/sse.go 接入
 	// - Headless 路径：已在 internal/agent/pool.go 接入
+
+	// 本地令牌必须在 Start() 之前注入：Start 之后立刻有请求进来（Web UI 首屏），
+	// 那时若令牌还没到位，Cookie 分支会全部落空，表现为界面一片 401。
+	httpServer.SetLocalToken(localToken)
 
 	if err := httpServer.Start(); err != nil {
 		slog.Error("polaris: failed to start HTTP server", "err", err)

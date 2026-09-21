@@ -46,7 +46,7 @@
 
 ```text
 api/proto/       Protobuf 原始定义
-cmd/polaris/     主入口（实际装配落点为 boot_*.go，维持手工装配，internal/cli 为未接线的 CLI 引导契约）
+cmd/polaris/     主入口（实际装配落点为 boot_*.go，维持手工装配；CLI 客户端 cli*.go 一律走 HTTP，不直连内核与数据库，ADR-0096 决策一）
 configs/         嵌入式启动配置（随二进制打包）；threshold-examples/ 阈值覆盖示例（m*.toml）
 
 internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必读，子包细节以其为准不在此重复
@@ -96,6 +96,7 @@ internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
   ffi/           Rust dylib 零 CGO 桥接（purego）
   sysinfo/       系统信息采集（硬件探针；供 agent 硬件分级 / sys_probe 工具）
   downloader/    通用资源下载（HTTP/Git + 系统代理探测；模型二进制与插件包共用）
+  runtimeinfo/   run/ 运行时状态读写（端口/令牌/PID；守护进程写、CLI 与桌面外壳读，ADR-0096）
   # sysinfo/ downloader/ 2026-07-07 自 sysmgr/ 迁入 L0：被 L0/L1/L2 广泛引用，不含 L3 治理语义
 
   # --- 通用契约（所有层均可引用）---
@@ -107,6 +108,11 @@ internal/        29 模块 / 4 层。★ = 该目录有 CLAUDE.md，进入时必
 pkg/             通用工具（无业务逻辑，任意层可引用）
   apperr/        统一错误类型 apperr.New/Wrap/IsCode/HTTPStatus（禁裸 error 泄漏调用链）
   types/ version/  基础共享类型 / 版本信息
+
+desktop/         桌面外壳（Tauri v2，ADR-0096）。只做进程管理/窗口/托盘/通知，
+                 **禁止任何业务语义的 Tauri command**——客户端与内核之间只有 HTTP/SSE 一条路。
+                 窗口加载守护进程地址而非打包前端，故 web/ 一行不用改。不支持交叉编译，
+                 CI 走三种 runner（见 .github/workflows/release.yml desktop job）。
 
 rust/substrate/  Rust FFI 库（Cedar 策略引擎 + SurrealDB-Core，purego 桥接，ADR-0011）
 ```

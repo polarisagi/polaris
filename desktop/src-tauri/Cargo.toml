@@ -1,0 +1,25 @@
+[package]
+name = "polaris-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Polaris 桌面外壳：进程管理 + 窗口 + 托盘，不承载任何业务逻辑"
+license = "Apache-2.0"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 刻意不引 HTTP 客户端：外壳只需要对 127.0.0.1 发两个 GET 并读状态行，
+# 为此拉进一整套 TLS 栈（reqwest/ureq 默认带 rustls 或 native-tls）不划算——
+# 同 ADR-0095 决策二拒绝 sigstore-go 的理由：368 个传递依赖换一件小事。
+# 实现见 src/probe.rs，标准库 TcpStream 三十行。
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

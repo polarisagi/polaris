@@ -47,13 +47,12 @@ func clr(code, s string) string {
 
 // ── 服务地址 ─────────────────────────────────────────────────────────────────
 
-func cliServerURL() string {
-	if u := os.Getenv("POLARIS_SERVER_URL"); u != "" {
-		return strings.TrimRight(u, "/")
-	}
-	return "http://localhost:28888"
-}
-
+// cliCheckServer 两段式探活：先 /healthz 判存活，再用凭证探一个需鉴权的端点。
+//
+// 只探 /healthz 是不够的——它在 healthPathSet 白名单里，免鉴权，探通只证明
+// "有进程在听"，不证明"本客户端能调 API"。守护进程若由另一账号启动或设了
+// POLARIS_API_KEY，单探 healthz 会让后续每个命令各自 401，而用户看到的是
+// "服务明明是好的"（同 ADR-0096 决策七对桌面外壳的要求）。
 func cliCheckServer() error {
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Get(cliServerURL() + "/healthz")
@@ -64,6 +63,27 @@ func cliCheckServer() error {
 	if resp.StatusCode != 200 {
 		return apperr.New(apperr.CodeNetworkUnavailable, fmt.Sprintf(t("err_health"), resp.StatusCode))
 	}
+
+	req, err := cliNewRequest("GET", "/v1/config", nil)
+	if err != nil {
+		return err
+	}
+	authResp, err := c.Do(req)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeNetworkUnavailable, "凭证探测请求失败", err)
+	}
+	defer authResp.Body.Close()
+	if authResp.StatusCode == http.StatusUnauthorized || authResp.StatusCode == http.StatusForbidden {
+		hint := "凭证不可用：服务在运行，但本次调用未通过鉴权。"
+		if tgt := cliEndpoint(); tgt.Err != nil {
+			hint += " 运行时状态读取失败：" + tgt.Err.Error()
+		} else if cliAuthToken() == "" {
+			hint += " 未发现本地令牌——若连接的是远程实例，请设置 POLARIS_API_KEY。"
+		} else {
+			hint += " 本地令牌与服务端不一致（服务可能由其他账号启动，或启动时设置了 POLARIS_API_KEY）。"
+		}
+		return apperr.New(apperr.CodeUnauthorized, hint)
+	}
 	return nil
 }
 
@@ -72,7 +92,11 @@ func cliCheckServer() error {
 var cliHTTP = &http.Client{Timeout: 15 * time.Second}
 
 func cliGet(path string, out any) error {
-	resp, err := cliHTTP.Get(cliServerURL() + path)
+	req, err := cliNewRequest("GET", path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := cliHTTP.Do(req)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeNetworkUnavailable, "GET "+path+" 请求失败", err)
 	}
@@ -97,9 +121,9 @@ func cliRequest(method, path string, body any, out any) error {
 		b, _ := json.Marshal(body)
 		buf = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, cliServerURL()+path, buf)
+	req, err := cliNewRequest(method, path, buf)
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, method+" "+path+" 构造请求失败", err)
+		return err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -472,7 +496,7 @@ func cliStreamChat(input, sessionID string) (string, error) { //nolint:gocyclo
 		"input":      input,
 		"session_id": sessionID,
 	})
-	req, err := http.NewRequest("POST", cliServerURL()+"/v1/agent/stream", bytes.NewReader(body))
+	req, err := cliNewRequest("POST", "/v1/agent/stream", bytes.NewReader(body))
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "构造流式请求失败", err)
 	}
@@ -672,7 +696,11 @@ func runExport(args []string) error {
 		outFile = args[0]
 	}
 
-	resp, err := cliHTTP.Get(cliServerURL() + "/v1/export/backup")
+	expReq, err := cliNewRequest("GET", "/v1/export/backup", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := cliHTTP.Do(expReq)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "export", err)
 	}
@@ -716,7 +744,7 @@ func runImport(args []string) error {
 	}
 	defer f.Close()
 
-	req, err := http.NewRequest("POST", cliServerURL()+"/v1/import/backup", f)
+	req, err := cliNewRequest("POST", "/v1/import/backup", f)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "import", err)
 	}
