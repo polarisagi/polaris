@@ -183,7 +183,15 @@ func (dw *DatabaseWriter) InjectOnPanic(cb func(err interface{}, stack []byte)) 
 
 // Run 启动 DatabaseWriter 消费循环（由 M2 StorageFabric.Open() 调用）。
 func (dw *DatabaseWriter) Run(ctx context.Context) {
+	dw.closeMu.RLock()
+	if dw.closed {
+		dw.closeMu.RUnlock()
+		dw.finalFlush(context.WithoutCancel(ctx))
+		return
+	}
 	dw.wg.Add(1)
+	dw.closeMu.RUnlock()
+
 	defer dw.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {

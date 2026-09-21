@@ -15,7 +15,14 @@ func TestDatabaseWriter_CloseDrainsAndRejects(t *testing.T) {
 	done := make(chan struct{})
 	go func() { dw.Run(context.Background()); close(done) }()
 
-	for i := 0; i < 10; i++ {
+	// Ensure Run has started and is processing before we submit the batch and Close.
+	res := make(chan error, 1)
+	if err := dw.Submit(context.Background(), &MutationIntent{Table: "tasks", Operation: "insert", Key: []byte("ping"), ResultCh: res}); err != nil {
+		t.Fatalf("submit ping: %v", err)
+	}
+	<-res
+
+	for i := 0; i < 9; i++ { // submit 9 more to make it 10 total
 		intent := &MutationIntent{Table: "tasks", Operation: "insert",
 			Key: []byte{byte('a' + i)}, Payload: []byte("p")}
 		if err := dw.Submit(context.Background(), intent); err != nil {
