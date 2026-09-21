@@ -12,6 +12,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/gateway/httputil"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
+	"github.com/polarisagi/polaris/pkg/version"
 
 	"github.com/google/uuid"
 
@@ -32,6 +33,10 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"status":                 "ok",
 		"degraded_metrics":       metrics.InstrumentsDegraded(),
 		"degraded_system_prompt": s.systemPromptDegraded.Load(),
+		// 版本随探活返回：桌面外壳与守护进程分开安装、各自更新（ADR-0096 决策四），
+		// 外壳必须能在附着前看出版本是否匹配——否则新外壳连上旧守护进程后，
+		// 表现是某些界面功能"莫名其妙不工作"，而两端各自看起来都正常。
+		"version": version.Version,
 	}
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Warn("server: healthz encode failed", "err", err)

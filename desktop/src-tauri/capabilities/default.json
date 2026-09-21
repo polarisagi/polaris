@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "外壳窗口的权限集。刻意保持为空：窗口里跑的是守护进程提供的 Web UI，它只经 HTTP/SSE 与内核通信，不需要也不应该拿到任何 Tauri API（ADR-0096 决策一）。",
+  "windows": ["main"],
+  "permissions": []
+}

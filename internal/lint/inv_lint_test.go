@@ -390,11 +390,12 @@ func Test_inv_NoCrossLayerImport(t *testing.T) {
 	//   L0: store/observability/security/llm/ffi/protocol/config
 	//   L1: agent/action/memory/tool/sandbox/prompt/vfs
 	//   L2: swarm/learning/knowledge/extension
-	//   L3: gateway/automation/eval/channel/sysmgr/cli
+	//   L3: gateway/automation/eval/channel/sysmgr
+	//   （原 L3 的 cli 于 2026-09-21 删除，见 ADR-0096 决策六）
 	// 依赖方向必须单向 L0←L1←L2←L3（R1.7），即低层禁止反向 import 高层。
 	l1 := []string{"agent", "action", "memory", "tool", "sandbox", "prompt", "vfs"}
 	l2 := []string{"swarm", "learning", "knowledge", "extension"}
-	l3 := []string{"gateway", "automation", "eval", "channel", "sysmgr", "cli"}
+	l3 := []string{"gateway", "automation", "eval", "channel", "sysmgr"}
 
 	forbiddenFor := func(pkgs ...string) []string {
 		out := make([]string, 0, len(pkgs))

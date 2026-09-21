@@ -6,6 +6,20 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-21（ADR-0096 桌面版/命令行版形态 — 含**破坏性变更**）
+
+`docs/arch/decisions/ADR-0096-desktop-shell-and-daemon-client-split.md` 新增（八条决策）：
+
+- 守护进程 + 薄客户端（Web/桌面/CLI 共用 `HTTP /v1 + SSE` 唯一业务通道）；桌面外壳选 Tauri v2 + 独立 sidecar 进程，驳回 Wails（CGO 破坏交叉编译矩阵 / 绑定绕过网关中间件 / 生命周期绑窗口）。
+- 无平台签名证书下的分发：命令行安装为主渠道，信任锚点全部落到 cosign（ADR-0095）；守护进程与 dylib 装在 app bundle 之外，故 `sysmgr/updater` 的就地替换在两条渠道行为一致。
+- **[破坏性] 取消「未配置 API Key 时回环即凭证」**：本机客户端改用 `run/polaris.token`（CLI/桌面壳走请求头，Web UI 走 HttpOnly + SameSite=Strict Cookie，前端零改动）。迁移期逃生阀 `POLARIS_ALLOW_ANONYMOUS_LOOPBACK=1`（默认关），供本机裸调 `/v1` 的第三方 OpenAI 兼容客户端过渡；静态外壳与 `/healthz` 等健康端点不受影响。
+- `internal/cli`（在册未接线包）删除：`AgentREPL` 依赖 `InferFn` 直连内核，与唯一业务通道的约束冲突。
+- 新增 `internal/runtimeinfo`（run/ 状态读写）、`polaris serve`、`polaris service install|uninstall|status`；单实例锁用 flock/LockFileEx，不用 PID 探活。
+- 新增 `desktop/`（Tauri v2 外壳）：启动判定状态机（宿主/附着/四态故障页）、托盘、关窗收托盘；`make desktop-build|test|lint|bundle|smoke`。
+- 服务注册归并为单一实现：`scripts/install.sh` / `install.ps1` 不再自写 launchd plist 与计划任务，改调 `polaris service install`（此前两份实现标签不同，装上即产生两个注册项）。
+- `/healthz` 响应增加 `version`：外壳与守护进程分开安装、各自更新，需在附着前比对版本。
+- `polaris service status` 判活改以单实例锁为准（新增 `probeInstanceLock`），`kill -9` 残留的 run/ 文件报 `stale`；守护进程取锁改为约 1 秒短暂重试。
+
 ## 2026-08-09（新增 ADR-0094 Fail-Closed 安全判定与生命周期锚定 Lint 门控）
 
 `docs/arch/decisions/ADR-0094-fail-closed-and-lifecycle-lint-gates.md` 新增：

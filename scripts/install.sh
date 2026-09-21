@@ -332,96 +332,114 @@ rm -rf "$TMP_DIR"
 msg "✅ 程序已安装: ${INSTALL_DIR}/${BIN_NAME}" \
     "✅ Binary installed: ${INSTALL_DIR}/${BIN_NAME}"
 
-# ── 6. 配置系统服务 ───────────────────────────────────────────────────────────
-# 提前准备服务所需要的 PATH 环境变量
-NVM_BIN_PATH=""
-if [ -s "$HOME/.nvm/nvm.sh" ]; then
-    \. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
-    NVM_BIN_PATH=$(dirname "$(nvm which current 2>/dev/null)" 2>/dev/null || echo "")
+# ── 6. macOS ad-hoc 签名 ──────────────────────────────────────────────────────
+# Apple Silicon 拒绝加载无签名的可执行文件与 dylib。ad-hoc 签名（codesign -s -）
+# 免费、不需要开发者账号，且本脚本走 curl 下载——不会写 com.apple.quarantine
+# 属性，故 Gatekeeper 不介入（ADR-0096 决策八）。
+if [ "$OS" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "${INSTALL_DIR}/${BIN_NAME}" 2>/dev/null || true
+    for lib in "${INSTALL_DIR}"/lib/*.dylib; do
+        [ -e "$lib" ] && codesign --force --sign - "$lib" 2>/dev/null || true
+    done
+    # 浏览器下载过的副本可能带隔离属性，顺手清掉（本脚本自己下的没有）
+    xattr -dr com.apple.quarantine "${INSTALL_DIR}" 2>/dev/null || true
 fi
 
-SERVICE_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.cargo/bin:${HOME}/.local/bin:${INSTALL_DIR}"
-if [ -n "$NVM_BIN_PATH" ]; then
-    SERVICE_PATH="${NVM_BIN_PATH}:${SERVICE_PATH}"
+# ── 6.5 配置系统服务 ──────────────────────────────────────────────────────────
+# 委托给 `polaris service install`，本脚本**不再自写** plist / systemd 单元。
+# 两份实现必然漂移其一：标签、ExecStart 参数、日志路径各写一遍，改了一处忘了
+# 另一处的结果是"装出来的服务和 polaris service status 看到的不是同一个"。
+# 单一实现见 cmd/polaris/cli_service.go（ADR-0096 决策一）。
+msg "⚙️  注册系统服务..." "⚙️  Registering system service..."
+if "${INSTALL_DIR}/${BIN_NAME}" service install; then
+    msg "✅ 服务已注册并启动，随登录自动运行。" \
+        "✅ Service registered and started, auto-starts on login."
+else
+    msg "⚠️  服务注册失败，可稍后手动执行：${INSTALL_DIR}/${BIN_NAME} service install" \
+        "⚠️  Service registration failed. Run manually later: ${INSTALL_DIR}/${BIN_NAME} service install"
 fi
 
-if [ "$OS" = "darwin" ]; then
-    msg "⚙️  配置 macOS launchd 后台服务..." "⚙️  Configuring macOS launchd service..."
-    mkdir -p "$HOME/Library/LaunchAgents"
-    mkdir -p "$DATA_DIR/logs"
+# ── 6.8 桌面外壳（可选）──────────────────────────────────────────────────────
+# 外壳与守护进程**分开安装**（ADR-0096 决策四）：守护进程装在 bin/ 下由自身的
+# updater 就地更新，外壳装在系统常规位置。这样就地替换二进制永远发生在 app
+# bundle 之外，不触碰任何签名结构。
+#
+# 默认跳过：无图形界面的服务器装它没有意义。POLARIS_WITH_DESKTOP=1 时安装，
+# 或 --with-desktop 参数。
+WITH_DESKTOP="${POLARIS_WITH_DESKTOP:-0}"
+for arg in "$@"; do
+    [ "$arg" = "--with-desktop" ] && WITH_DESKTOP=1
+done
 
-    cat > "$PLIST_PATH" <<PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${PLIST_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${INSTALL_DIR}/${BIN_NAME}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>WorkingDirectory</key>
-    <string>${HOME}</string>
-    <key>StandardOutPath</key>
-    <string>${DATA_DIR}/logs/polaris.log</string>
-    <key>StandardErrorPath</key>
-    <string>${DATA_DIR}/logs/polaris.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>${HOME}</string>
-        <key>PATH</key>
-        <string>${SERVICE_PATH}</string>
-    </dict>
-</dict>
-</plist>
-PLIST_EOF
+if [ "$WITH_DESKTOP" = "1" ]; then
+    DESKTOP_NAME="polaris-desktop-${OS}-${ARCH}"
+    case "$OS" in
+        darwin)  DESKTOP_ARCHIVE="${DESKTOP_NAME}.tar.gz" ;;
+        linux)   DESKTOP_ARCHIVE="${DESKTOP_NAME}.AppImage" ;;
+        *)       DESKTOP_ARCHIVE="" ;;
+    esac
 
-    launchctl load "$PLIST_PATH"
-    msg "✅ macOS 服务已配置，随登录自动启动。" \
-        "✅ macOS service configured, auto-starts on login."
+    if [ -z "$DESKTOP_ARCHIVE" ]; then
+        msg "⏭️  本平台暂无桌面外壳产物，已跳过。" "⏭️  No desktop bundle for this platform, skipped."
+    else
+        msg "🖥️  正在安装桌面外壳..." "🖥️  Installing desktop shell..."
+        DESKTOP_TMP="$(mktemp -d)"
+        DESKTOP_URL="${GITHUB_BASE}/${DESKTOP_ARCHIVE}"
+        if curl -sSLf --max-time 300 -o "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" "$DESKTOP_URL"; then
+            # 与二进制同样的完整性校验：下载 .sha256 后比对，失败即放弃安装外壳
+            # （但不影响已装好的守护进程——外壳只是界面）。
+            if curl -sSLf --max-time 30 -o "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}.sha256" "${DESKTOP_URL}.sha256"; then
+                EXPECT=$(awk '{print $1}' "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}.sha256")
+                ACTUAL=$(openssl dgst -sha256 "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" | awk '{print $NF}')
+                if [ "$EXPECT" != "$ACTUAL" ]; then
+                    msg "⚠️  桌面外壳校验失败，已跳过安装。" "⚠️  Desktop bundle checksum mismatch, skipped."
+                    rm -rf "$DESKTOP_TMP"
+                    DESKTOP_ARCHIVE=""
+                fi
+            else
+                msg "⚠️  桌面外壳校验和不可得，已跳过安装。" "⚠️  Desktop checksum unavailable, skipped."
+                rm -rf "$DESKTOP_TMP"
+                DESKTOP_ARCHIVE=""
+            fi
+        else
+            msg "⚠️  桌面外壳下载失败，已跳过（守护进程不受影响）。" \
+                "⚠️  Desktop download failed, skipped (daemon unaffected)."
+            rm -rf "$DESKTOP_TMP"
+            DESKTOP_ARCHIVE=""
+        fi
 
-elif [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
-    msg "⚙️  配置 Linux 用户级 systemd 服务..." "⚙️  Configuring Linux user systemd service..."
-    SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-    mkdir -p "$SYSTEMD_USER_DIR"
-    mkdir -p "$DATA_DIR/logs"
-
-    cat > "$SYSTEMD_USER_DIR/${BIN_NAME}.service" <<UNIT_EOF
-[Unit]
-Description=PolarisAGI Polaris AI Agent
-After=network.target
-
-[Service]
-Environment="PATH=${SERVICE_PATH}"
-ExecStart=${INSTALL_DIR}/${BIN_NAME}
-Restart=on-failure
-RestartSec=5
-WorkingDirectory=${HOME}
-StandardOutput=append:${DATA_DIR}/logs/polaris.log
-StandardError=append:${DATA_DIR}/logs/polaris.log
-
-[Install]
-WantedBy=default.target
-UNIT_EOF
-
-    loginctl enable-linger "$USER" 2>/dev/null || true
-    systemctl --user daemon-reload
-    systemctl --user enable "$BIN_NAME"
-    systemctl --user restart "$BIN_NAME"
-    msg "✅ systemd 用户服务已启动。查看状态: systemctl --user status polaris" \
-        "✅ systemd user service started. Check: systemctl --user status polaris"
+        if [ -n "$DESKTOP_ARCHIVE" ] && [ "$OS" = "darwin" ]; then
+            tar -xzf "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" -C "$DESKTOP_TMP"
+            APP_PATH=$(find "$DESKTOP_TMP" -maxdepth 1 -name '*.app' | head -1)
+            if [ -n "$APP_PATH" ]; then
+                rm -rf "/Applications/$(basename "$APP_PATH")"
+                cp -R "$APP_PATH" /Applications/
+                # ad-hoc 签名 + 清隔离属性：Apple Silicon 要求有签名，而本脚本
+                # 走 curl 下载不会写隔离属性，二者合起来即可双击直接运行。
+                codesign --force --deep --sign - "/Applications/$(basename "$APP_PATH")" 2>/dev/null || true
+                xattr -dr com.apple.quarantine "/Applications/$(basename "$APP_PATH")" 2>/dev/null || true
+                msg "✅ 桌面外壳已安装到 /Applications/$(basename "$APP_PATH")" \
+                    "✅ Desktop shell installed to /Applications/$(basename "$APP_PATH")"
+            fi
+        elif [ -n "$DESKTOP_ARCHIVE" ] && [ "$OS" = "linux" ]; then
+            mkdir -p "$HOME/.local/bin"
+            install -m 0755 "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" "$HOME/.local/bin/polaris-desktop"
+            msg "✅ 桌面外壳已安装：~/.local/bin/polaris-desktop" \
+                "✅ Desktop shell installed: ~/.local/bin/polaris-desktop"
+        fi
+        rm -rf "$DESKTOP_TMP"
+    fi
 fi
 
 # ── 7. PATH 提示 ──────────────────────────────────────────────────────────────
 echo ""
-msg "🎉 安装完成！请访问 http://127.0.0.1:${PORT} 打开控制台。" \
-    "🎉 Installation complete! Visit http://127.0.0.1:${PORT} to open the console."
+# 地址取自守护进程自己报告的实际端口——配置 port = 0 时它由内核分配，
+# 写死 28888 会把用户指向一个不存在的地址。
+CONSOLE_URL=$("${INSTALL_DIR}/${BIN_NAME}" service status --json 2>/dev/null \
+    | sed -n 's/.*"base_url": *"\([^"]*\)".*/\1/p')
+[ -z "$CONSOLE_URL" ] && CONSOLE_URL="http://127.0.0.1:${PORT}"
+msg "🎉 安装完成！请访问 ${CONSOLE_URL} 打开控制台。" \
+    "🎉 Installation complete! Visit ${CONSOLE_URL} to open the console."
 msg "💡 若需命令行直接使用 polaris，请将以下路径加入 PATH：" \
     "💡 To use polaris in CLI, add to PATH:"
 echo "   export PATH=\"\$PATH:${INSTALL_DIR}\""

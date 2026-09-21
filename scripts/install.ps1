@@ -239,42 +239,40 @@ Unblock-File -Path $FinalExe -ErrorAction SilentlyContinue
 
 Write-Msg -zh "✅ 程序及依赖已安装: $InstallDir" -en "✅ Binary and dependencies installed: $InstallDir" -Color Green
 
-# ── 6. 配置开机自启（Windows 任务计划）───────────────────────────────────────
-Write-Msg -zh "⚙️  配置开机自启（任务计划程序）..." `
-           -en "⚙️  Configuring startup (Task Scheduler)..." -Color Cyan
+# ── 6. 配置开机自启 ──────────────────────────────────────────────────────────
+# 委托给 `polaris service install`，本脚本**不再自写**任务计划。
+# 两份实现必然漂移其一：任务名、启动参数、权限级别各写一遍，改了一处忘了另一处
+# 的结果是"装出来的任务和 polaris service status 看到的不是同一个"。
+# 单一实现见 cmd/polaris/cli_service.go（ADR-0096 决策一）。
+Write-Msg -zh "⚙️  注册系统服务..." -en "⚙️  Registering system service..." -Color Cyan
 
 # 移除旧的注册表自启（历史遗留清理）
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
     -Name $TaskName -ErrorAction SilentlyContinue
 
-try {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-
-    $Action    = New-ScheduledTaskAction -Execute $FinalExe
-    $Trigger   = New-ScheduledTaskTrigger -AtLogOn
-    $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    $Settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -MultipleInstances IgnoreNew
-
-    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
-        -Principal $Principal -Settings $Settings -Force | Out-Null
-
-    Write-Msg -zh "✅ 已注册任务计划：登录时自动后台启动。" `
-               -en "✅ Task Scheduler registered: auto-starts on login." -Color Green
-} catch {
-    Write-Msg -zh "⚠️  任务计划注册失败，回退到注册表自启。" `
-               -en "⚠️  Task Scheduler failed, falling back to registry startup." -Color Yellow
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
-        -Name $TaskName -Value "`"$FinalExe`""
+& $FinalExe service install
+if ($LASTEXITCODE -eq 0) {
+    Write-Msg -zh "✅ 服务已注册并启动，登录时自动运行。" `
+               -en "✅ Service registered and started, auto-starts on login." -Color Green
+} else {
+    Write-Msg -zh "⚠️  服务注册失败，可稍后手动执行：$FinalExe service install" `
+               -en "⚠️  Service registration failed. Run manually later: $FinalExe service install" -Color Yellow
 }
 
-# ── 7. 启动服务 ──────────────────────────────────────────────────────────────
-Write-Msg -zh "🚀 正在启动 Polaris..." -en "🚀 Starting Polaris..." -Color Cyan
-Start-Process -FilePath $FinalExe -WindowStyle Hidden -ErrorAction SilentlyContinue
+# ── 7. 等待就绪 ──────────────────────────────────────────────────────────────
+# 不再额外 Start-Process：service install 已经启动了守护进程，重复启动会被单实例
+# 锁拒绝，在日志里留下一条看起来像故障的 ALREADY_EXISTS。
 Start-Sleep -Seconds 2
 
 Write-Host ""
 Write-Msg -zh "🎉 安装完成！Polaris 已在后台运行，下次登录将自动启动。" `
            -en "🎉 Installation complete! Polaris is running and will auto-start on next login." -Color Green
-Write-Msg -zh "   请访问: http://127.0.0.1:$Port" -en "   Visit: http://127.0.0.1:$Port" -Color Yellow
+# 地址取自守护进程自己报告的实际端口（配置 port = 0 时由内核分配）
+$ConsoleUrl = "http://127.0.0.1:$Port"
+try {
+    $rt = & $FinalExe service status --json | ConvertFrom-Json
+    if ($rt.base_url) { $ConsoleUrl = $rt.base_url }
+} catch { }
+Write-Msg -zh "   请访问: $ConsoleUrl" -en "   Visit: $ConsoleUrl" -Color Yellow
 Write-Host ""
 if ($IsZh) { Read-Host "按回车键退出" } else { Read-Host "Press Enter to exit" }

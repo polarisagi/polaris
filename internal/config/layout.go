@@ -31,7 +31,8 @@ type DataLayout struct {
 	Cache      string // Root/cache       — HTTP / 推理缓存
 	Hooks      string // Root/hooks       — 用户事件 Hook 脚本
 	Tmp        string // Root/tmp         — 临时下载 / 解压暂存
-	Bin        string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist）
+	Bin        string // Root/bin         — 二进制依赖 / 安装目录（如 ollama-dist、桌面版的 polaris 本体）
+	Run        string // Root/run         — 运行时状态：端口/令牌/PID，仅本机有效，不随备份迁移
 
 	// 派生路径（从上方字段组合，避免调用方再次拼接）
 	SQLiteDB     string // Data/polaris.db
@@ -39,6 +40,14 @@ type DataLayout struct {
 	AuditArchive string // Audit/archive
 	ConfigPrompt string // Config/prompts
 	SkillSignKey string // Config/skill_signing.key
+
+	// run/ 下三个运行时文件。写入方是守护进程，读取方是 CLI 与桌面外壳
+	// （ADR-0096 决策六）；读写语义（原子写、0600 校验）在 internal/runtimeinfo，
+	// 路径只在本文件定义——本结构是路径 SSoT，见文件头约定。
+	RunPID   string // Run/polaris.pid
+	RunPort  string // Run/polaris.port
+	RunToken string // Run/polaris.token
+	RunLock  string // Run/polaris.lock — 单实例锁，判据是 flock 本身而非文件内容
 
 	// LocalOnlyAllowlistFile local_only 网络白名单配置文件（M11 §5.3）。
 	// 运营用 `polaris allowlist genkey/sign` 离线生成配套 <file>.sig 签名，
@@ -68,6 +77,7 @@ func NewDataLayout(root string, overrides DirsConfig) DataLayout {
 		Cache:      filepath.Join(root, "cache"),
 		Hooks:      filepath.Join(root, "hooks"),
 		Tmp:        filepath.Join(root, "tmp"),
+		Run:        filepath.Join(root, "run"),
 	}
 	// 可覆盖的四个路径：logs、data（db）、workspace、models
 	d.Logs = pick(overrides.LogsDir, filepath.Join(root, "logs"))
@@ -83,6 +93,10 @@ func NewDataLayout(root string, overrides DirsConfig) DataLayout {
 	d.ConfigPrompt = filepath.Join(d.Config, "prompts")
 	d.SkillSignKey = filepath.Join(d.Config, "skill_signing.key")
 	d.LocalOnlyAllowlistFile = filepath.Join(d.Config, "local_only_network_allowlist.toml")
+	d.RunPID = filepath.Join(d.Run, "polaris.pid")
+	d.RunPort = filepath.Join(d.Run, "polaris.port")
+	d.RunToken = filepath.Join(d.Run, "polaris.token")
+	d.RunLock = filepath.Join(d.Run, "polaris.lock")
 	return d
 }
 
@@ -115,6 +129,7 @@ func (l DataLayout) MkdirAll() error {
 		l.Hooks,
 		l.Tmp,
 		l.Bin,
+		l.Run,
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {

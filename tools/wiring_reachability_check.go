@@ -5,7 +5,7 @@
 // 立此门控的原因（ADR-0091：先看门控在看哪里）：
 // 既有 `make deadcode` 走 golang.org/x/tools 的 deadcode，判据是**函数级**可达性，
 // 且以整个 module 为根——一个包只要被单测引用，其符号就"可达"，包本身是否被生产
-// 入口接线它看不出来。`internal/cli`（AgentREPL/RateLimiterMiddleware/WebSocketHub，
+// 入口接线它看不出来。曾经的 CLI 引导契约包（AgentREPL/RateLimiterMiddleware/WebSocketHub，
 // 全仓零生产 import）正是这样长期逃逸的。
 //
 // 本门控只回答 deadcode 回答不了的那一个问题：**从生产入口 cmd/polaris 出发，
@@ -98,7 +98,7 @@ func listPackages(args ...string) ([]string, error) {
 	return pkgs, nil
 }
 
-// loadAllowlist 读取白名单。每行一个包相对路径（如 internal/cli），# 开头为注释。
+// loadAllowlist 读取白名单。每行一个包相对路径（如 internal/bootstrap），# 开头为注释。
 func loadAllowlist(path string) (map[string]bool, error) {
 	f, err := os.Open(path)
 	if err != nil {

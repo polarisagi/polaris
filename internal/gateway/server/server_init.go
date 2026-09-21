@@ -73,7 +73,12 @@ func (s *Server) setupWebUI(mux *http.ServeMux) {
 	if os.Getenv("DEV_MODE") == "1" {
 		target, _ := url.Parse("http://localhost:5173")
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		mux.Handle("/", proxy)
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// DEV_MODE 下前端由 Vite 提供，但 Cookie 仍须由本服务下发：
+			// 令牌是本进程生成的，Vite 无从得知。
+			s.issueLocalTokenCookie(w, r)
+			proxy.ServeHTTP(w, r)
+		})
 		return
 	}
 
@@ -88,6 +93,10 @@ func (s *Server) setupWebUI(mux *http.ServeMux) {
 			http.NotFound(w, r)
 			return
 		}
+
+		// 本地令牌 Cookie：Web UI 靠它调用 /v1（ADR-0096 决策五）。
+		// 下发条件见 issueLocalTokenCookie——只给回环对端。
+		s.issueLocalTokenCookie(w, r)
 
 		// Clean the path to check if it exists in the embed FS
 		p := strings.TrimPrefix(r.URL.Path, "/")

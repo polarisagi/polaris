@@ -98,6 +98,7 @@ ADR 被代码引用时，源文件头部加：
 | 0093 | M12 Eval Harness 评测隔离层设计（2026-08-09 由 0051 改号，原编号与已删除 ADR 撞号，见该文件顶部改号说明） | Accepted | 2026-07-28 |
 | 0094 | Fail-Closed 安全判定与生命周期锚定 Lint 门控 | Accepted | 2026-08-09 |
 | 0095 | 自动更新供应链信任模型（cosign 固定密钥签名）与 Schema 降级门控 | Accepted | 2026-08-10 |
+| 0096 | 桌面版/命令行版形态：守护进程 + 薄客户端，Tauri v2 外壳（含无证书分发、安装布局与本地令牌） | Proposed | 2026-09-21 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

@@ -30,6 +30,12 @@ func run() error { //nolint:gocyclo
 	// ─── 0. 子命令分发 ──────────────────────────────────────────────────────
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "serve":
+			// 显式启动守护进程：不在此返回，落到 switch 之外走完整 boot 流程。
+			// 无参数启动等价于本命令，保留是为了让 service 单元文件与文档里的
+			// 命令行自解释（"polaris" 单独一个词看不出它是在起服务还是在等输入）。
+		case "service":
+			return runServiceCmd(os.Args[2:])
 		case "init", "setup":
 			return runInit()
 		case "chat":
@@ -112,6 +118,15 @@ func run() error { //nolint:gocyclo
 	defer sb.Store.Close()
 	ks = sb.KS // TripleCtrlCGuard goroutine 现在可安全引用 ks
 
+	// ─── §4.05 单实例锁 + 本地令牌（ADR-0096 决策五/六）────────────────────
+	// 位置紧跟 bootSubstrate：它之后的每一步都在改写共享数据目录，两个实例并发
+	// 走到那里会互相覆盖数据库与配置，现象却只是零星数据错乱，不指向"跑了两份"。
+	rt, err := acquireRuntime(sb.Layout)
+	if err != nil {
+		return err
+	}
+	defer rt.release()
+
 	// ─── §4.10~§5 记忆系统 + MEMF ──────────────────────────────────────────
 	mb, err := bootMemory(ctx, sb)
 	if err != nil {
@@ -170,13 +185,25 @@ func run() error { //nolint:gocyclo
 	}
 
 	// ─── §11 M13 Interface Server ────────────────────────────────────────────
-	httpSrv, err := bootServer(ctx, sb, mb, tb, ab)
+	httpSrv, err := bootServer(ctx, sb, mb, tb, ab, rt.Token)
 	if err != nil {
 		return err
 	}
 	concurrent.SafeGo(ctx, "main.mcp_restore_servers", func(ctx context.Context) {
 		tb.MCPMgr.RestoreServersFromDB(ctx, tb.ExtRepo, sb.DataDir)
 	})
+
+	// ─── §11.9 发布运行时状态 ───────────────────────────────────────────────
+	// 端口取**实际绑定值**（配置为 0 时由内核分配）。写失败不阻断服务：服务本身
+	// 是好的，只是本机客户端要靠 POLARIS_SERVER_URL 手动指定——但必须留痕，
+	// 否则表现为"CLI 连不上一个正在运行的服务"且无任何线索。
+	if port, perr := httpSrv.BoundPort(); perr != nil {
+		slog.Warn("polaris: 未能取得实际绑定端口，运行时状态未发布", "err", perr)
+	} else if perr = rt.publish(port); perr != nil {
+		slog.Warn("polaris: 运行时状态发布失败，本机客户端需手动指定地址", "err", perr, "port", port)
+	} else {
+		slog.Info("polaris: 运行时状态已发布", "port", port, "run_dir", sb.Layout.Run)
+	}
 
 	// ─── §12 启动摘要 ────────────────────────────────────────────────────────
 	printStartupSummary(sb.Cfg, sb.Gate, sb.Router, mb.Mem, kb.Ingester, kb.Retriever,
