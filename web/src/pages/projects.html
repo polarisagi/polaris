@@ -1,0 +1,157 @@
+<!-- 项目页（ADR-0097）：项目 = 会话的运行上下文容器（工作目录 + 指令 + 信任 + 会话集合） -->
+<div x-show="$store.nav.page === 'projects'" x-cloak class="flex-1 overflow-y-auto min-h-0 p-6 bg-base-100">
+  <div class="max-w-6xl mx-auto w-full flex flex-col">
+    <div class="mb-6 border-b border-base-300 pb-4 flex justify-between items-end">
+      <div>
+        <h2 class="text-2xl font-bold text-base-content" x-text="$store.i18n.t('projects_title')"></h2>
+        <p class="text-sm text-base-content/60 mt-1" x-text="$store.i18n.t('projects_desc')"></p>
+      </div>
+      <div class="flex items-center gap-3">
+        <label class="label cursor-pointer gap-2 p-0">
+          <span class="text-xs text-base-content/60" x-text="$store.i18n.t('projects_show_archived')"></span>
+          <input type="checkbox" class="toggle toggle-xs" x-model="$store.projects.showArchived">
+        </label>
+        <button class="btn btn-primary btn-sm" @click="$store.projects.openCreate()" x-text="$store.i18n.t('projects_new')"></button>
+      </div>
+    </div>
+
+    <div x-show="$store.projects.loading" class="flex justify-center py-16"><span class="loading loading-spinner loading-lg text-primary"></span></div>
+
+    <div class="grid grid-cols-1 md:grid-cols-[18rem_1fr] gap-6" x-show="!$store.projects.loading">
+      <!-- 项目列表 -->
+      <div class="space-y-2">
+        <template x-for="p in $store.projects.list.filter(x => $store.projects.showArchived || !x.archived)" :key="p.id">
+          <div class="card bg-base-200 border cursor-pointer transition-colors"
+               :class="$store.projects.selectedID === p.id ? 'border-primary' : 'border-base-300 hover:border-primary/60'"
+               @click="$store.projects.openProject(p.id)">
+            <div class="card-body p-3 gap-1">
+              <div class="flex items-center gap-2">
+                <h3 class="font-bold text-sm truncate flex-1" x-text="p.name"></h3>
+                <span x-show="p.archived" class="badge badge-ghost badge-sm" x-text="$store.i18n.t('projects_archived')"></span>
+                <span x-show="p.trusted" class="badge badge-warning badge-sm" x-text="$store.i18n.t('projects_trusted_badge')"></span>
+              </div>
+              <p class="text-xs text-base-content/60 font-mono truncate"
+                 x-text="p.root_path || $store.i18n.t('projects_no_dir')" :title="p.root_path"></p>
+              <p class="text-xs text-base-content/50" x-text="$store.i18n.t('projects_session_count').replace('{0}', p.session_count)"></p>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 项目详情 -->
+      <div>
+        <div x-show="!$store.projects.selected" class="flex flex-col items-center justify-center py-20 text-base-content/60">
+          <p x-text="$store.i18n.t('projects_pick_hint')"></p>
+        </div>
+
+        <template x-if="$store.projects.selected">
+          <div class="space-y-5">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <h3 class="text-xl font-bold truncate" x-text="$store.projects.selected.name"></h3>
+                <p class="text-xs text-base-content/60 font-mono mt-1 break-all"
+                   x-text="$store.projects.selected.root_path || $store.i18n.t('projects_no_dir')"></p>
+              </div>
+              <div class="flex gap-2 shrink-0">
+                <button class="btn btn-primary btn-sm" @click="$store.projects.startChat($store.projects.selected.id)"
+                        x-text="$store.i18n.t('projects_new_chat')"></button>
+                <button class="btn btn-ghost btn-sm" @click="$store.projects.openEdit($store.projects.selected)"
+                        x-text="$store.i18n.t('projects_edit')"></button>
+                <template x-if="!$store.projects.selected.is_default">
+                  <div class="flex gap-2">
+                    <button class="btn btn-ghost btn-sm"
+                            @click="$store.projects.setArchived($store.projects.selected, !$store.projects.selected.archived)"
+                            x-text="$store.projects.selected.archived ? $store.i18n.t('projects_unarchive') : $store.i18n.t('projects_archive')"></button>
+                    <button class="btn btn-ghost btn-sm text-error hover:bg-error/10"
+                            @click="$store.projects.remove($store.projects.selected)"
+                            x-text="$store.i18n.t('projects_delete')"></button>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div x-show="$store.projects.selected.instructions" class="bg-base-200 rounded-lg p-3 border border-base-300">
+              <p class="text-xs font-bold text-base-content/60 mb-1" x-text="$store.i18n.t('projects_instructions')"></p>
+              <p class="text-sm whitespace-pre-wrap" x-text="$store.projects.selected.instructions"></p>
+            </div>
+
+            <div>
+              <h4 class="text-sm font-bold text-base-content/70 mb-2" x-text="$store.i18n.t('projects_sessions')"></h4>
+              <div x-show="$store.projects.sessionsLoading" class="py-6 flex justify-center"><span class="loading loading-spinner text-primary"></span></div>
+              <p x-show="!$store.projects.sessionsLoading && $store.projects.sessions.length === 0"
+                 class="text-sm text-base-content/50 py-4" x-text="$store.i18n.t('projects_empty_sessions')"></p>
+              <div class="space-y-2">
+                <template x-for="sess in $store.projects.sessions" :key="sess.id">
+                  <div class="card bg-base-200 border border-base-300 hover:border-primary transition-colors cursor-pointer"
+                       @click="$store.projects.openSession(sess)">
+                    <div class="card-body p-3 flex-row items-center justify-between gap-3">
+                      <div class="min-w-0 flex-1">
+                        <h5 class="font-bold text-sm truncate" x-text="sess.title || sess.id"></h5>
+                        <p class="text-xs text-base-content/60 font-mono"
+                           x-text="`${$store.i18n.t('sessions_msg_count').replace('{0}', sess.message_count || 0)}  ·  ${new Date(sess.updated_at || sess.created_at).toLocaleString('zh-CN')}`"></p>
+                      </div>
+                      <select class="select select-bordered select-xs shrink-0" @click.stop
+                              :title="$store.i18n.t('projects_move_to')"
+                              @change="$store.projects.moveSession(sess.id, $event.target.value)">
+                        <template x-for="p in $store.projects.active" :key="p.id">
+                          <option :value="p.id" :selected="p.id === sess.project_id" x-text="p.name"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建 / 编辑 -->
+  <div class="modal" :class="{'modal-open': $store.projects.form.open}">
+    <div class="modal-box max-w-xl">
+      <h3 class="font-bold text-lg mb-4"
+          x-text="$store.projects.form.mode === 'create' ? $store.i18n.t('projects_new') : $store.i18n.t('projects_edit')"></h3>
+      <div class="space-y-4">
+        <label class="flex flex-col gap-1 w-full">
+          <span class="text-sm opacity-70" x-text="$store.i18n.t('projects_name')"></span>
+          <input type="text" class="input input-bordered w-full" maxlength="100" x-model="$store.projects.form.name">
+        </label>
+
+        <label class="flex flex-col gap-1 w-full" x-show="$store.projects.form.id !== 'default'">
+          <span class="text-sm opacity-70" x-text="$store.i18n.t('projects_root')"></span>
+          <input type="text" class="input input-bordered w-full font-mono text-sm" placeholder="/Users/me/code/my-repo"
+                 x-model="$store.projects.form.root_path"
+                 @input="if ($store.projects.form.mode === 'edit') $store.projects.form.trusted = false">
+          <span class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('projects_root_hint')"></span>
+        </label>
+
+        <label class="flex flex-col gap-1 w-full" x-show="$store.projects.form.id !== 'default'">
+          <span class="text-sm opacity-70" x-text="$store.i18n.t('projects_instructions')"></span>
+          <textarea class="textarea textarea-bordered w-full h-28" maxlength="8192" x-model="$store.projects.form.instructions"></textarea>
+          <span class="text-xs text-base-content/50 mt-1" x-text="$store.i18n.t('projects_instructions_hint')"></span>
+        </label>
+
+        <div x-show="$store.projects.form.id !== 'default' && $store.projects.form.root_path.trim()"
+             class="rounded-lg border border-warning/50 bg-warning/10 p-3">
+          <label class="label cursor-pointer justify-start gap-3 p-0">
+            <input type="checkbox" class="toggle toggle-warning toggle-sm" x-model="$store.projects.form.trusted">
+            <span class="font-medium text-sm" x-text="$store.i18n.t('projects_trusted')"></span>
+          </label>
+          <p class="text-xs text-base-content/60 mt-2" x-text="$store.i18n.t('projects_trusted_warn')"></p>
+        </div>
+
+        <p x-show="$store.projects.form.error" class="text-error text-sm" x-text="$store.projects.form.error"></p>
+      </div>
+      <div class="modal-action">
+        <button class="btn btn-ghost" @click="$store.projects.closeForm()" x-text="$store.i18n.t('projects_cancel')"></button>
+        <button class="btn btn-primary" :disabled="$store.projects.form.saving" @click="$store.projects.save()">
+          <span x-show="$store.projects.form.saving" class="loading loading-spinner loading-xs"></span>
+          <span x-text="$store.i18n.t('projects_save')"></span>
+        </button>
+      </div>
+    </div>
+    <div class="modal-backdrop" @click="$store.projects.closeForm()"></div>
+  </div>
+</div>

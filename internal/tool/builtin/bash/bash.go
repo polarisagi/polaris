@@ -12,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/sandbox"
 	"github.com/polarisagi/polaris/internal/security/classifier"
+	"github.com/polarisagi/polaris/internal/tool/builtin/guard"
 	"github.com/polarisagi/polaris/internal/tool/builtin/sandboxenv"
 	toolsb "github.com/polarisagi/polaris/internal/tool/sandbox"
 	"github.com/polarisagi/polaris/pkg/apperr"
@@ -26,6 +27,8 @@ func MakeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.S
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
 	riskClassifier := classifier.NewDefaultClassifier()
 	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args bashArgs
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "bash: invalid args", err)
@@ -59,8 +62,8 @@ func MakeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.S
 		}
 
 		workDir := ""
-		if len(allowedPaths) > 0 {
-			workDir = allowedPaths[0]
+		if len(paths) > 0 {
+			workDir = paths[0]
 		}
 
 		execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -84,7 +87,7 @@ func MakeBashFn(allowedPaths []string, sandboxEnabled bool, netPolicy protocol.S
 				CallerType:    protocol.CallerBuiltin,
 				Command:       args.Command,
 				Workdir:       workDir,
-				AllowedPaths:  allowedPaths,
+				AllowedPaths:  paths,
 				NetworkPolicy: ToSandboxNetPolicy(netPolicy),
 				BwrapPath:     bwrapPath, // Linux 用户自定义 bwrap 路径（空=自动查找）
 				TimeoutMs:     30_000,

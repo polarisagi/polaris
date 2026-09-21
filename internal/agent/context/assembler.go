@@ -16,6 +16,9 @@ type AssembleRequest struct {
 	IncludeKnowledge      bool
 	SurpriseHint          float64 // GlobalSurpriseIndex().Current()
 	SurpriseHintThreshold float64
+	// ProjectID 当前会话所属项目：情景记忆检索按它过滤（读取面 P5，ADR-0097 决策三修订）。
+	// 空按默认项目处理（MemoryRetriever 实现方负责）。
+	ProjectID string
 }
 
 type ContextItem struct {
@@ -31,7 +34,8 @@ type AssembledContext struct {
 }
 
 type MemoryRetriever interface {
-	Query(ctx context.Context, q string, maxTaint types.TaintLevel) ([]ContextItem, error)
+	// projectID 为情景记忆的项目作用域；空 = 默认项目（fail-closed）。
+	Query(ctx context.Context, q string, maxTaint types.TaintLevel, projectID string) ([]ContextItem, error)
 }
 
 type KnowledgeRetriever interface {
@@ -58,7 +62,7 @@ func (a *Assembler) Assemble(ctx context.Context, req AssembleRequest) (Assemble
 	wg.Add(1)
 	concurrent.SafeGo(ctx, "assembler.query_memory", func(ctx context.Context) {
 		defer wg.Done()
-		if items, err := a.mem.Query(ctx, req.Query, req.MaxTaint); err == nil {
+		if items, err := a.mem.Query(ctx, req.Query, req.MaxTaint, req.ProjectID); err == nil {
 			memItems = items
 		}
 	})

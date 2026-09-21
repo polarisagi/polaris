@@ -93,7 +93,10 @@ func (ms *MemorySystemImpl) Write(ctx context.Context, entry *MemoryEntry) error
 
 // List 通过 HybridRetriever 检索，返回 MemoryEntry 列表（R2.2：读多条 → List）。
 func (ms *MemorySystemImpl) List(ctx context.Context, q *RetrievalQuery) ([]MemoryEntry, error) {
-	scope := types.SearchScope{Type: "memory"}
+	scope := types.SearchScope{Type: "memory", ProjectID: q.ProjectID}
+	if scope.ProjectID == "" {
+		scope.ProjectID = types.DefaultProjectID
+	}
 	if q.Layer == LayerSemantic {
 		scope.Type = "semantic"
 	}

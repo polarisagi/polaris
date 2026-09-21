@@ -27,11 +27,13 @@ func MakeStrReplaceEditorFn(allowedPaths []string) sandbox.InProcessFn {
 	undoBuffer := make(map[string]string)
 	var undoBufferMu sync.Mutex
 	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args strReplaceEditorArgs
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "str_replace_editor: invalid args", err)
 		}
-		if err := guard.CheckWritablePath(args.Path, allowedPaths); err != nil {
+		if err := guard.CheckWritablePath(args.Path, paths); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "makeStrReplaceEditorFn", err)
 		}
 
@@ -91,7 +93,7 @@ func executeStrReplace(cleanPath string, args strReplaceEditorArgs, undoBuffer m
 
 	count := strings.Count(content, args.OldStr)
 	if count == 0 {
-		return nil, apperr.New(apperr.CodeInternal, "str_replace_editor: old_str not found in file")
+		return nil, apperr.New(apperr.CodeNotFound, "str_replace_editor: old_str not found in file")
 	}
 	if count > 1 {
 		return nil, apperr.New(apperr.CodeInternal, "str_replace_editor: old_str is not unique, matched multiple times. Please provide more context in old_str.")

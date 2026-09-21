@@ -65,3 +65,48 @@ type CtxAnomalyFilterKey struct{}
 
 // CtxCapabilityTokenKey 用于在 context 中传递能力令牌 *token.Token (A-7/inv_M7_01)
 type CtxCapabilityTokenKey struct{}
+
+// CtxProjectRootKey 会话所属项目的工作目录（规范路径，ADR-0097 决策五）。
+// 由 agent 在执行 effect 前注入（仅当项目绑定了目录且目录的规范路径未变），
+// 内置文件/命令工具据此把该目录追加为本次调用的可访问根——会话级收窄，
+// 不改动进程级 sandbox.allowed_paths。
+type CtxProjectRootKey struct{}
+
+// WithProjectRoot 注入项目工作目录；root 为空时原样返回。
+func WithProjectRoot(ctx context.Context, root string) context.Context {
+	if root == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxProjectRootKey{}, root)
+}
+
+// ProjectRootFrom 读取项目工作目录；未注入返回空串。
+func ProjectRootFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	root, _ := ctx.Value(CtxProjectRootKey{}).(string)
+	return root
+}
+
+// CtxProjectIDKey 会话所属项目 ID（ADR-0097 决策三修订）。由 agent 在执行 effect 前
+// 注入；EpisodicMem.Append 在事件未显式打标时以此兜底，memory_search 工具据此限定
+// 情景记忆检索范围。未注入视为默认项目（fail-closed：看不到带项目标记的记忆）。
+type CtxProjectIDKey struct{}
+
+// WithProjectID 注入项目 ID；id 为空时原样返回。
+func WithProjectID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, CtxProjectIDKey{}, id)
+}
+
+// ProjectIDFrom 读取项目 ID；未注入返回空串。
+func ProjectIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(CtxProjectIDKey{}).(string)
+	return id
+}

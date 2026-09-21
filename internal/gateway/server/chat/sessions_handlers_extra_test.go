@@ -23,6 +23,7 @@ func TestSessionsHandlersExtra(t *testing.T) {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS chat_sessions (
 			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL DEFAULT 'default',
 			title TEXT,
 			task_type TEXT,
 			is_pinned BOOLEAN,

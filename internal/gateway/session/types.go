@@ -82,7 +82,10 @@ type Attachment struct {
 // 是真正的领域逻辑（buildStreamUserMessage 原实现），随 A-03 Step2 迁入
 // RunTurn 内部处理，Request 只携带未解析的引用。
 type Request struct {
-	SessionID   string
+	SessionID string
+	// ProjectID 新会话归属的项目（ADR-0097）。仅交互式路径设置；空 = 默认项目。
+	// 已存在的会话以库内归属为准，本字段被忽略（INSERT OR IGNORE 语义）。
+	ProjectID   string
 	Input       string
 	ModelID     string
 	Attachments []Attachment
@@ -160,6 +163,9 @@ type HookRunner interface {
 // 无需额外包装）。
 type Persistence interface {
 	EnsureSession(ctx context.Context, sessionID string) error
+	// EnsureSessionInProject 同 EnsureSession，但新建会话时归属指定项目（ADR-0097）。
+	// 项目不存在返回错误；projectID 为空等价 EnsureSession（默认项目）。
+	EnsureSessionInProject(ctx context.Context, sessionID, projectID string) error
 	ListMessages(ctx context.Context, sessionID string) ([]types.Message, error)
 	SaveMessage(ctx context.Context, sessionID, role, content, toolCalls, reasoningContent string, durationMs int64) error
 	UpdateSessionTitle(ctx context.Context, sessionID, firstInput string) error

@@ -98,11 +98,14 @@ type
 // Event is the unit of structured coordination on the blackboard.
 // Natural language content goes in Payload; coordination metadata is typed.
 Event struct {
-	ID                string        `json:"id"`
-	Type              EventType     `json:"type"`
-	Status            EventStatus   `json:"status"`
-	TaskID            string        `json:"task_id"`
-	AgentID           string        `json:"agent_id,omitempty"`
+	ID      string      `json:"id"`
+	Type    EventType   `json:"type"`
+	Status  EventStatus `json:"status"`
+	TaskID  string      `json:"task_id"`
+	AgentID string      `json:"agent_id,omitempty"`
+	// ProjectID 情景记忆归属项目（ADR-0097 决策三修订）。空 = 默认项目——存量事件
+	// 全部产生于项目概念之前。读取统一经 EffectiveProjectID。
+	ProjectID         string        `json:"project_id,omitempty"`
 	Payload           []byte        `json:"payload,omitempty"`
 	ReasoningState    []byte        `json:"reasoning_state,omitempty"`
 	EmbedModelVersion string        `json:"embed_model_version,omitempty"`
@@ -143,4 +146,16 @@ EvalCompletedPayload struct {
 	BaselineP95Ms    float64 `json:"baseline_p95_ms"`
 	RunID            string  `json:"run_id"`
 	CreatedAt        int64   `json:"created_at"`
+}
+
+// DefaultProjectID 默认项目 ID 的唯一定义处。internal/protocol/repo.DefaultProjectID 引用它
+// （pkg/ 不得依赖 internal/，而情景事件归属判定在 pkg/types 内就要用到）。
+const DefaultProjectID = "default"
+
+// EffectiveProjectID 事件的有效归属项目：未打标视为默认项目。
+func (e *Event) EffectiveProjectID() string {
+	if e == nil || e.ProjectID == "" {
+		return DefaultProjectID
+	}
+	return e.ProjectID
 }

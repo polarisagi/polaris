@@ -30,7 +30,9 @@ func MakeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy prot
 	// 返回的闭包才是热路径（每次工具调用都会执行）。
 	riskClassifier := classifier.NewDefaultClassifier()
 	return func(ctx context.Context, input []byte) ([]byte, error) {
-		args, workDir, timeout, err := parseRunCommandArgs(input, allowedPaths)
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
+		args, workDir, timeout, err := parseRunCommandArgs(input, paths)
 		if err != nil {
 			return nil, err
 		}
@@ -80,7 +82,7 @@ func MakeRunCommandFn(allowedPaths []string, sandboxEnabled bool, netPolicy prot
 				CallerType:    protocol.CallerBuiltin,
 				Command:       args.Command,
 				Workdir:       workDir,
-				AllowedPaths:  allowedPaths,
+				AllowedPaths:  paths,
 				NetworkPolicy: bash.ToSandboxNetPolicy(netPolicy), // 构建工具通常需要网络（下载依赖），由上层配置控制
 				EnvExtra:      []string{"GOCACHE=/tmp/gocache", "CARGO_HOME=/tmp/cargo", "npm_config_cache=/tmp/npm"},
 				BwrapPath:     bwrapPath, // Linux 用户自定义 bwrap 路径（空=自动查找）

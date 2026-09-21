@@ -3,11 +3,13 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	protorepo "github.com/polarisagi/polaris/internal/protocol/repo"
 	"github.com/polarisagi/polaris/pkg/types"
 	"github.com/polarisagi/polaris/pkg/util"
 )
@@ -27,21 +29,59 @@ func NewSQLiteChatRepository(db *sql.DB) *SQLiteChatRepository {
 
 // CreateSession 创建一个新会话
 func (r *SQLiteChatRepository) CreateSession(ctx context.Context, row types.ChatSessionRow) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO chat_sessions(id, title, thrashing_index, created_at, updated_at) VALUES(?, ?, ?, ?, ?)`,
-		row.ID, row.Title, row.ThrashingIndex, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	// project_id 空串按默认项目处理；INSERT OR IGNORE 保证已存在会话不被改归属
+	// （聊天请求带不同 project_id 时以库内为准，ADR-0097 决策一）。
+	projectID := row.ProjectID
+	if projectID == "" {
+		projectID = protorepo.DefaultProjectID
+	}
+	// INSERT ... SELECT 以项目存在且未归档为前提：归档项目不再接收新会话，
+	// 但其中已有会话照常可用（它们走 INSERT OR IGNORE 的"已存在"分支）。
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := r.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO chat_sessions(id, title, project_id, thrashing_index, created_at, updated_at)
+		 SELECT ?, ?, p.id, ?, ?, ? FROM projects p WHERE p.id = ? AND p.archived = 0`,
+		row.ID, row.Title, row.ThrashingIndex, now, now, projectID)
 	if err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY") {
+			return apperr.Wrap(apperr.CodeNotFound, "project not found", err)
+		}
 		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.CreateSession", err)
 	}
-	return nil
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	return r.explainNoInsert(ctx, row.ID, projectID)
+}
+
+// explainNoInsert 区分 CreateSession 未插入的三种原因：会话已存在（正常）、
+// 项目不存在、项目已归档。
+func (r *SQLiteChatRepository) explainNoInsert(ctx context.Context, sessionID, projectID string) error {
+	var one int
+	err := r.db.QueryRowContext(ctx, `SELECT 1 FROM chat_sessions WHERE id=?`, sessionID).Scan(&one)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.CreateSession check session", err)
+	}
+	var archived int
+	err = r.db.QueryRowContext(ctx, `SELECT archived FROM projects WHERE id=?`, projectID).Scan(&archived)
+	if err == sql.ErrNoRows {
+		return apperr.Wrap(apperr.CodeNotFound, "project not found", err)
+	}
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.CreateSession check project", err)
+	}
+	return apperr.New(apperr.CodeInvalidInput, "项目已归档，不能在其中新建会话")
 }
 
 // GetSession 获取会话信息
 func (r *SQLiteChatRepository) GetSession(ctx context.Context, id string) (*types.ChatSessionRow, error) {
 	var row types.ChatSessionRow
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, title, thrashing_index, created_at, updated_at FROM chat_sessions WHERE id=?`, id,
-	).Scan(&row.ID, &row.Title, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt)
+		`SELECT id, title, project_id, thrashing_index, created_at, updated_at FROM chat_sessions WHERE id=?`, id,
+	).Scan(&row.ID, &row.Title, &row.ProjectID, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -51,14 +91,30 @@ func (r *SQLiteChatRepository) GetSession(ctx context.Context, id string) (*type
 	return &row, nil
 }
 
-// ListSessions 列出最近的会话
+// ListSessions 列出最近的会话（全部项目）
 func (r *SQLiteChatRepository) ListSessions(ctx context.Context, limit int) ([]types.ChatSessionRow, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT cs.id, cs.title, cs.thrashing_index, cs.created_at, cs.updated_at, COUNT(cm.id) AS message_count 
-		FROM chat_sessions cs 
-		LEFT JOIN chat_messages cm ON cm.session_id = cs.id 
-		GROUP BY cs.id 
-		ORDER BY cs.updated_at DESC LIMIT ?`, limit)
+	return r.listSessions(ctx, "", limit)
+}
+
+// ListProjectSessions 列出某项目下最近的会话。
+func (r *SQLiteChatRepository) ListProjectSessions(ctx context.Context, projectID string, limit int) ([]types.ChatSessionRow, error) {
+	return r.listSessions(ctx, projectID, limit)
+}
+
+// listSessions projectID 为空 = 不按项目过滤。
+func (r *SQLiteChatRepository) listSessions(ctx context.Context, projectID string, limit int) ([]types.ChatSessionRow, error) {
+	q := `SELECT cs.id, cs.title, cs.project_id, cs.thrashing_index, cs.created_at, cs.updated_at, COUNT(cm.id) AS message_count
+		FROM chat_sessions cs
+		LEFT JOIN chat_messages cm ON cm.session_id = cs.id `
+	args := []any{}
+	if projectID != "" {
+		q += `WHERE cs.project_id = ? `
+		args = append(args, projectID)
+	}
+	q += `GROUP BY cs.id ORDER BY cs.updated_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions", err)
 	}
@@ -67,7 +123,7 @@ func (r *SQLiteChatRepository) ListSessions(ctx context.Context, limit int) ([]t
 	var result []types.ChatSessionRow
 	for rows.Next() {
 		var row types.ChatSessionRow
-		if err := rows.Scan(&row.ID, &row.Title, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt, &row.MessageCount); err != nil {
+		if err := rows.Scan(&row.ID, &row.Title, &row.ProjectID, &row.ThrashingIndex, &row.CreatedAt, &row.UpdatedAt, &row.MessageCount); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions scan", err)
 		}
 		result = append(result, row)
@@ -76,6 +132,22 @@ func (r *SQLiteChatRepository) ListSessions(ctx context.Context, limit int) ([]t
 		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.ListSessions rows", err)
 	}
 	return result, nil
+}
+
+// SetSessionProject 把会话移动到另一个项目。会话不存在 / 项目不存在均返回 CodeNotFound。
+func (r *SQLiteChatRepository) SetSessionProject(ctx context.Context, sessionID, projectID string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE chat_sessions SET project_id=? WHERE id=?`, projectID, sessionID)
+	if err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY") {
+			return apperr.Wrap(apperr.CodeNotFound, "project not found", err)
+		}
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteChatRepository.SetSessionProject", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.New(apperr.CodeNotFound, "session not found")
+	}
+	return nil
 }
 
 // UpdateSessionTitle 更新会话标题
@@ -212,10 +284,13 @@ func (r *SQLiteChatRepository) SearchMessages(ctx context.Context, query string,
 
 // --- Additional mutations ---
 
-func (r *SQLiteChatRepository) RestoreSession(ctx context.Context, id, title string, thrashing float64, createdAt, updatedAt string) error {
+// RestoreSession 备份恢复。projectID 在本库不存在（旧备份无该字段 / 项目未随备份恢复）
+// 时落默认项目，而不是因外键失败丢掉整个会话。
+func (r *SQLiteChatRepository) RestoreSession(ctx context.Context, id, title, projectID string, thrashing float64, createdAt, updatedAt string) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO chat_sessions(id, title, thrashing_index, created_at, updated_at) VALUES(?,?,?,?,?)`,
-		id, title, thrashing, createdAt, updatedAt)
+		`INSERT OR IGNORE INTO chat_sessions(id, title, project_id, thrashing_index, created_at, updated_at)
+		 VALUES(?, ?, COALESCE((SELECT id FROM projects WHERE id = ?), ?), ?, ?, ?)`,
+		id, title, projectID, protorepo.DefaultProjectID, thrashing, createdAt, updatedAt)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "db error", err)
 	}

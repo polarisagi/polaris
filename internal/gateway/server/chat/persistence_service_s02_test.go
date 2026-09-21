@@ -26,7 +26,8 @@ func TestTouchSession_RespectsParentCancellation_S02(t *testing.T) {
 
 	if _, err := db.Exec(`
 		CREATE TABLE chat_sessions (
-			id TEXT PRIMARY KEY, title TEXT, updated_at DATETIME
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL DEFAULT 'default', title TEXT, updated_at DATETIME
 		)`); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
@@ -58,7 +59,8 @@ func TestTouchSession_NormalContext_Succeeds_S02(t *testing.T) {
 
 	if _, err := db.Exec(`
 		CREATE TABLE chat_sessions (
-			id TEXT PRIMARY KEY, title TEXT, updated_at DATETIME
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL DEFAULT 'default', title TEXT, updated_at DATETIME
 		)`); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}

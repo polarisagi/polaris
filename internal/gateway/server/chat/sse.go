@@ -53,6 +53,14 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// project_id 与 session_id 同一白名单：格式非法在边界即拒绝，项目是否存在由
+	// EnsureSessionInProject 的外键约束判定（不存在 → session_error）。
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID != "" && !session.SessionIDPattern.MatchString(projectID) {
+		httputil.RespondError(w, "", apperr.New(apperr.CodeInvalidInput, "invalid project_id"), http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -80,6 +88,7 @@ func (s *ChatHandler) HandleAgentStream(w http.ResponseWriter, r *http.Request) 
 
 	domainReq := session.Request{
 		SessionID:       sessionID,
+		ProjectID:       projectID,
 		Input:           req.Input,
 		ModelID:         req.ModelID,
 		Attachments:     toDomainAttachments(req.Attachments),

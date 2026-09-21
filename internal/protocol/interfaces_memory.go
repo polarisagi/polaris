@@ -46,6 +46,9 @@ MemoryFacade interface {
 	ListEpisodicEvents(ctx context.Context, query types.EpisodicQuery) ([]types.ScoredEvent, error)
 	AppendEpisodicEvent(ctx context.Context, event types.Event, taintLevel types.TaintLevel) error
 	ArchiveEpisodic(ctx context.Context, sessionID string) error
+	// EpisodicProjectOf 反查情景事件的归属项目（ADR-0097 决策三修订）；isEpisodic=false 表示
+	// id 不是情景事件（SurrealDB 共享 FTS 中的实体/扩展条目等），调用方应放行。
+	EpisodicProjectOf(ctx context.Context, id string) (projectID string, isEpisodic bool)
 
 	// Working 层调用
 	AddWorkingContext(ctx context.Context, text string) error

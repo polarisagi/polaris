@@ -142,7 +142,10 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 	if a.Security.AnomalyFilter != nil {
 		ctx = context.WithValue(ctx, protocol.CtxAnomalyFilterKey{}, a.Security.AnomalyFilter)
 	}
-	return ctx
+	// ADR-0097 决策五：项目会话的工作目录随任务域 ctx 注入，内置文件/命令工具据此追加访问根。
+	// 决策三修订：项目 ID 同路注入，供情景记忆写入兜底打标与 memory_search 限定范围。
+	ctx = protocol.WithProjectID(ctx, a.currentProjectID())
+	return protocol.WithProjectRoot(ctx, a.currentProjectRoot())
 }
 
 // tokenizeMessagesForLLM 在消息送入 LLM Provider 前，对每条 message.Content 做 PII 令牌化。

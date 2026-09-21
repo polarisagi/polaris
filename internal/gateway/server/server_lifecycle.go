@@ -100,6 +100,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 	s.cronRepo = repo.NewSQLiteCronRepository(rwDB)
 	s.workflowRepo = repo.NewSQLiteWorkflowRepository(rwDB)
 	s.appRepo = repo.NewSQLiteAppRepository(rwDB)
+	s.projectRepo = repo.NewSQLiteProjectRepository(rwDB)
 
 	// 系统提示词模板（含 embedded FS / 三层加载 Layer 0/1）的初始化推迟到
 	// Setprotocol.PromptFacade 阶段，以便使用 promptMgr 提供的内嵌文件系统能力，
@@ -138,6 +139,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		DB:                    db,
 		ChatRepo:              s.chatRepo,
 		ChannelRepo:           s.channelRepo,
+		ProjectRepo:           s.projectRepo,
 		ProviderRepo:          s.providerRepo,
 		SystemRepo:            s.systemRepo,
 		AgentPool:             agentPool,
@@ -160,6 +162,7 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		ContextRefExpander: authcontext.NewContextRefExpander(httpClient, authcontext.WithWorkDir(s.dataDir)),
 	})
 	s.sysadminHandler = sysadmin.NewSysAdminHandler(sysadmin.Dependencies{
+		ProjectRepo:    s.projectRepo,
 		SystemRepo:     s.systemRepo,
 		BudgetRepo:     s.budgetRepo,
 		WorkflowRepo:   s.workflowRepo,

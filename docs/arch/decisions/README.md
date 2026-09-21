@@ -99,6 +99,7 @@ ADR 被代码引用时，源文件头部加：
 | 0094 | Fail-Closed 安全判定与生命周期锚定 Lint 门控 | Accepted | 2026-08-09 |
 | 0095 | 自动更新供应链信任模型（cosign 固定密钥签名）与 Schema 降级门控 | Accepted | 2026-08-10 |
 | 0096 | 桌面版/命令行版形态：守护进程 + 薄客户端，Tauri v2 外壳（含无证书分发、安装布局与本地令牌） | Proposed | 2026-09-21 |
+| 0097 | 项目（Project）模型：会话运行上下文容器，绑定工作目录，信任下沉，记忆项目隔离（规范，未实施） | Accepted | 2026-09-21 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

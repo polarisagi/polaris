@@ -20,8 +20,9 @@ import (
 
 // mockMemory 用于测试记忆上下文组装
 type mockMemory struct {
-	episodic *mockEpisodicMem
-	working  *mockWorkingMem
+	episodic      *mockEpisodicMem
+	working       *mockWorkingMem
+	eventProjects map[string]string // EpisodicProjectOf 反查表：事件 ID → 项目；缺席 = 非情景事件
 }
 
 func (m *mockMemory) GetMemoryPressure() *budget.ResourceBudget {
@@ -43,9 +44,16 @@ func (m *mockMemory) AppendEpisodicEvent(ctx context.Context, event types.Event,
 	return nil
 }
 func (m *mockMemory) ArchiveEpisodic(ctx context.Context, sessionID string) error { return nil }
-func (m *mockMemory) AddWorkingContext(ctx context.Context, text string) error    { return nil }
-func (m *mockMemory) SetWorkingScratch(key string, val []byte)                    {}
-func (m *mockMemory) ImmutableCore() protocol.ImmutableCore                       { return m.working.Immutable() }
+func (m *mockMemory) EpisodicProjectOf(ctx context.Context, id string) (string, bool) {
+	if m.eventProjects == nil {
+		return "", false
+	}
+	p, ok := m.eventProjects[id]
+	return p, ok
+}
+func (m *mockMemory) AddWorkingContext(ctx context.Context, text string) error { return nil }
+func (m *mockMemory) SetWorkingScratch(key string, val []byte)                 {}
+func (m *mockMemory) ImmutableCore() protocol.ImmutableCore                    { return m.working.Immutable() }
 func (m *mockMemory) ListCoreMemory(ctx context.Context, agentID, sessionID string) ([]types.CoreMemoryBlock, error) {
 	return nil, nil
 }

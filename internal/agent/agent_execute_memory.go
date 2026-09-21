@@ -30,6 +30,7 @@ func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []
 	req := agentctx.AssembleRequest{
 		Query:                 a.sCtx.TaskModel.Goal,
 		SessionKey:            a.sCtx.SessionID,
+		ProjectID:             a.currentProjectID(),
 		MaxTokens:             2000,
 		MaxTaint:              maxT,
 		IncludeKnowledge:      true,
@@ -79,6 +80,11 @@ func (a *Agent) sessionTaint() types.TaintLevel {
 func (a *Agent) writeEpisodicWithExtract(ctx context.Context, ev types.Event) {
 	if a.memory == nil {
 		return
+	}
+	// 项目归属显式打标（ADR-0097 决策三修订）：不依赖调用方 ctx 是否经过 withTaskScopeCtx
+	// ——本函数的部分调用点在后台 goroutine 里，ctx 未必携带项目。
+	if ev.ProjectID == "" {
+		ev.ProjectID = a.currentProjectID()
 	}
 	// 污点不得在落库时洗白（GR-4.1-002）：本函数的 9 个调用点构造 Event 时均未填 TaintLevel，
 	// 传 TaintNone 等于把源自外部意图/工具输出的事件记成"系统生成"，后续按 MaxTaint 过滤的

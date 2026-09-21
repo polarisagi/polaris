@@ -40,6 +40,8 @@ func run() error { //nolint:gocyclo
 			return runInit()
 		case "chat":
 			return runChatCmd(os.Args[2:])
+		case "project", "projects":
+			return runProjectCmd(os.Args[2:])
 		case "status":
 			return runCLIStatus()
 		case "export":

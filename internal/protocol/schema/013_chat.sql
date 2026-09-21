@@ -2,9 +2,29 @@
 -- 013_chat: Web UI 对话历史 + FTS5 全文检索
 -- ============================================================================
 
+-- projects: 会话的运行上下文容器（ADR-0097）。
+-- root_path 为空串 = 无目录项目（纯聊天）；非空时存**规范路径**（Abs + EvalSymlinks，
+-- 写入侧保证），信任判定依赖此规范化，禁止存用户输入的原始路径。
+-- trusted 仅表示用户对 root_path 内 AGENTS.md/CLAUDE.md 的显式信任（ADR-0088 决策三），
+-- 默认 0；instructions 是用户自撰项目指令（写入面限本地可信客户端，见 ADR-0097 决策二）。
+-- 'default' 项目恒存在：存量会话 / channel 会话 / 无头会话一律归属它，不可删除。
+CREATE TABLE IF NOT EXISTS projects (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    root_path    TEXT NOT NULL DEFAULT '',
+    instructions TEXT NOT NULL DEFAULT '',
+    trusted      INTEGER NOT NULL DEFAULT 0 CHECK(trusted IN (0,1)),
+    archived     INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+INSERT OR IGNORE INTO projects(id, name) VALUES('default', '默认项目');
+
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id              TEXT PRIMARY KEY,
     title           TEXT NOT NULL DEFAULT '',
+    project_id      TEXT NOT NULL DEFAULT 'default' REFERENCES projects(id),
     thrashing_index REAL NOT NULL DEFAULT 0.0,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -30,6 +50,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_msg_dedupe_key ON chat_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
 

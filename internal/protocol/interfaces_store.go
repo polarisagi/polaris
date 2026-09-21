@@ -92,6 +92,10 @@ ChatRepository interface {
 	CreateSession(ctx context.Context, row types.ChatSessionRow) error
 	GetSession(ctx context.Context, id string) (*types.ChatSessionRow, error)
 	ListSessions(ctx context.Context, limit int) ([]types.ChatSessionRow, error)
+	// ListProjectSessions 列出某项目下最近的会话（ADR-0097）。
+	ListProjectSessions(ctx context.Context, projectID string, limit int) ([]types.ChatSessionRow, error)
+	// SetSessionProject 移动会话到另一个项目；会话或项目不存在返回 CodeNotFound。
+	SetSessionProject(ctx context.Context, sessionID, projectID string) error
 	UpdateSessionTitle(ctx context.Context, id, title string) error
 	UpdateSessionThrashingIndex(ctx context.Context, id string, idx float64) error
 	DeleteSession(ctx context.Context, id string) error
@@ -106,7 +110,7 @@ ChatRepository interface {
 	SearchMessages(ctx context.Context, query string, limit int) ([]types.ChatMessageRow, error)
 
 	// Additional mutations required by gateway/server
-	RestoreSession(ctx context.Context, id, title string, thrashing float64, createdAt, updatedAt string) error
+	RestoreSession(ctx context.Context, id, title, projectID string, thrashing float64, createdAt, updatedAt string) error
 	RestoreMessage(ctx context.Context, id, sessionID, role, content, createdAt string) error
 	TouchSession(ctx context.Context, id string) error
 	ClearNonSystemMessages(ctx context.Context, sessionID string) error

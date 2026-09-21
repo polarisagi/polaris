@@ -159,7 +159,9 @@ func (g *grepRunner) result() ([]byte, error) {
 }
 
 func MakeGrepFn(allowedPaths []string) sandbox.InProcessFn {
-	return func(_ context.Context, input []byte) ([]byte, error) {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		// ADR-0097 决策五：项目会话追加项目工作目录为可访问根（会话级，不改进程级白名单）。
+		paths := guard.ScopedPaths(ctx, allowedPaths)
 		var args grepArgs
 		if err := json.Unmarshal(input, &args); err != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "grep: invalid args", err)
@@ -167,7 +169,7 @@ func MakeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 		if args.Pattern == "" {
 			return nil, apperr.New(apperr.CodeInternal, "grep: pattern is required")
 		}
-		if len(allowedPaths) == 0 {
+		if len(paths) == 0 {
 			return nil, apperr.New(apperr.CodeInternal, "grep: no allowed paths configured")
 		}
 		if err := grepValidateMode(args.OutputMode); err != nil {
@@ -183,9 +185,9 @@ func MakeGrepFn(allowedPaths []string) sandbox.InProcessFn {
 			return nil, apperr.New(apperr.CodeInternal, fmt.Sprintf("grep: invalid pattern: %v", err))
 		}
 
-		searchRoots := allowedPaths
+		searchRoots := guard.SearchRoots(ctx, allowedPaths)
 		if args.Path != "" {
-			if err := guard.CheckAllowedPath(args.Path, allowedPaths); err != nil {
+			if err := guard.CheckAllowedPath(args.Path, paths); err != nil {
 				return nil, apperr.Wrap(apperr.CodeInternal, "makeGrepFn", err)
 			}
 			searchRoots = []string{filepath.Clean(args.Path)}

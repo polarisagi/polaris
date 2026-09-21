@@ -27,9 +27,16 @@ func TestBudgetHandlers(t *testing.T) {
 			value TEXT,
 			updated_at DATETIME
 		);
+		CREATE TABLE IF NOT EXISTS projects (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL DEFAULT '',
+			instructions TEXT NOT NULL DEFAULT '', trusted INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+		);
+		INSERT OR IGNORE INTO projects(id, name) VALUES('default', '默认项目');
 		CREATE TABLE IF NOT EXISTS chat_sessions (
 			id TEXT PRIMARY KEY,
 			title TEXT,
+			project_id TEXT NOT NULL DEFAULT 'default',
 			thrashing_index REAL,
 			created_at DATETIME,
 			updated_at DATETIME

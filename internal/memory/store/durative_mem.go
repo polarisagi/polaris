@@ -31,6 +31,17 @@ type DurativeGroup struct {
 	TopicVector []float32        `json:"topic_vector"`
 	Status      string           `json:"status"` // "active", "closed", "archived"
 	TaintLevel  types.TaintLevel `json:"taint_level"`
+	// ProjectID 簇的归属项目 = 成员事件的归属项目（聚类按项目分桶，簇内同属一个项目；
+	// ADR-0097 决策三修订）。空 = 默认项目。
+	ProjectID string `json:"project_id,omitempty"`
+}
+
+// EffectiveProjectID 簇的有效归属项目：未打标视为默认项目。
+func (g *DurativeGroup) EffectiveProjectID() string {
+	if g == nil || g.ProjectID == "" {
+		return types.DefaultProjectID
+	}
+	return g.ProjectID
 }
 
 // DurativeMemoryManager 负责将孤立 Episodic 事件聚类为持续性记忆簇。
@@ -80,8 +91,35 @@ func (dm *DurativeMemoryManager) Consolidate(ctx context.Context) error {
 		}
 	}
 
+	// 按项目分桶后各自聚类：簇摘要由 LLM 从成员事件原文生成，跨项目混簇会把 A 项目的
+	// 内容摘进 B 项目可见的簇里（ADR-0097 决策三修订）。
+	for _, bucket := range bucketByProject(unclustered) {
+		dm.consolidateBucket(ctx, bucket)
+	}
+	return nil
+}
+
+// bucketByProject 按事件归属项目分桶，保持桶内原有顺序（聚类依赖时间邻近）。
+func bucketByProject(events []types.ScoredEvent) [][]types.ScoredEvent {
+	index := map[string]int{}
+	var buckets [][]types.ScoredEvent
+	for _, ev := range events {
+		pid := ev.EventPtr().EffectiveProjectID()
+		i, ok := index[pid]
+		if !ok {
+			i = len(buckets)
+			index[pid] = i
+			buckets = append(buckets, nil)
+		}
+		buckets[i] = append(buckets[i], ev)
+	}
+	return buckets
+}
+
+// consolidateBucket 对同一项目的孤立事件聚类并生成持续簇。
+func (dm *DurativeMemoryManager) consolidateBucket(ctx context.Context, unclustered []types.ScoredEvent) {
 	if len(unclustered) < dm.minGroupSize {
-		return nil
+		return
 	}
 
 	var clusters [][]types.ScoredEvent
@@ -116,8 +154,6 @@ func (dm *DurativeMemoryManager) Consolidate(ctx context.Context) error {
 			slog.Warn("durative_mem: processCluster failed", "err", err)
 		}
 	}
-
-	return nil
 }
 
 // ListGroups 检索语义匹配的持续性记忆簇（temporal 查询路径）。
@@ -151,6 +187,10 @@ func (dm *DurativeMemoryManager) ListGroups(ctx context.Context, query string, t
 		if s > 0 {
 			candidates = append(candidates, scored{group: g, score: s})
 		}
+	}
+	// 迭代中途出错表现为静默少簇；只读检索路径不中断，留痕即可（F-7）。
+	if err := iter.Err(); err != nil {
+		slog.WarnContext(ctx, "durative_mem: ListGroups iterate failed", "err", err)
 	}
 
 	// 按分数降序排列
@@ -213,6 +253,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 	groupID := fmt.Sprintf("group_%d", time.Now().UnixNano())
 	maxTaint := types.TaintMedium
 	eventIDs := make([]string, 0, len(cluster))
+	projectID := cluster[0].EventPtr().EffectiveProjectID() // 桶内同项目（bucketByProject）
 
 	for _, ev := range cluster {
 		if pbEv := ev.EventPtr(); pbEv != nil {
@@ -227,6 +268,7 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 		EventIDs:   eventIDs,
 		Status:     "active",
 		TaintLevel: maxTaint,
+		ProjectID:  projectID,
 	}
 
 	data, err := json.Marshal(group)
@@ -241,10 +283,11 @@ func (dm *DurativeMemoryManager) processCluster(ctx context.Context, cluster []t
 	var mapErrs []error
 	for _, evID := range eventIDs {
 		mappingEv := types.Event{
-			ID:      "mapping_" + groupID + "_" + evID,
-			Type:    "memory_group_mapping_created",
-			TaskID:  "system",
-			Payload: []byte(fmt.Sprintf(`{"event_id":"%s", "group_id":"%s"}`, evID, groupID)),
+			ID:        "mapping_" + groupID + "_" + evID,
+			Type:      "memory_group_mapping_created",
+			TaskID:    "system",
+			ProjectID: projectID,
+			Payload:   []byte(fmt.Sprintf(`{"event_id":"%s", "group_id":"%s"}`, evID, groupID)),
 		}
 		if err := dm.episodic.Append(ctx, mappingEv, types.TaintNone); err != nil {
 			mapErrs = append(mapErrs, err)

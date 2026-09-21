@@ -37,8 +37,18 @@ func NewChatPersistenceService(
 }
 
 func (s *ChatPersistenceService) EnsureSession(ctx context.Context, sessionID string) error {
-	err := s.ChatRepo.CreateSession(ctx, types.ChatSessionRow{ID: sessionID, Title: ""})
+	return s.EnsureSessionInProject(ctx, sessionID, "")
+}
+
+// EnsureSessionInProject 见 session.Persistence 同名方法（ADR-0097）。
+// 保留 apperr 的 Code（NotFound=项目不存在），不再一律降级为 Internal。
+func (s *ChatPersistenceService) EnsureSessionInProject(ctx context.Context, sessionID, projectID string) error {
+	err := s.ChatRepo.CreateSession(ctx, types.ChatSessionRow{ID: sessionID, Title: "", ProjectID: projectID})
 	if err != nil {
+		// 项目不存在（NotFound）/ 项目已归档（InvalidInput）是用户可理解的拒绝，保留 Code。
+		if code := apperr.CodeOf(err); code == apperr.CodeNotFound || code == apperr.CodeInvalidInput {
+			return apperr.Wrap(code, "Server.ensureSession", err)
+		}
 		return apperr.Wrap(apperr.CodeInternal, "Server.ensureSession", err)
 	}
 	return nil

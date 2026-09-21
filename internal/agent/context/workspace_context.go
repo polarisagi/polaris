@@ -92,6 +92,55 @@ func NewWorkspaceContextLoader(trustedRoots []string) *WorkspaceContextLoader {
 // rootDir 为空或不可读时返回 nil（无上下文），不返回错误——工作区没有约束
 // 文档是完全正常的状态，不是故障。单个文件读取失败同样跳过而非整体失败。
 func (l *WorkspaceContextLoader) Load(_ context.Context, rootDir string) []WorkspaceContext {
+	return l.loadFiles(rootDir, false)
+}
+
+// ProjectContext 一个项目对工作区上下文装载的输入（ADR-0097）。
+type ProjectContext struct {
+	// ID 项目 ID：情景记忆写入打标与读取过滤的归属键（ADR-0097 决策三修订）。
+	ID string
+	// Root 项目工作目录的**规范路径**（写入侧已 Abs + EvalSymlinks）；空 = 无目录项目。
+	Root string
+	// Trusted 用户对 Root 内上下文文件的显式信任（项目级开关，与全局
+	// trusted_workspace_roots 取或）。
+	Trusted bool
+	// Instructions 用户自撰的项目指令；写入面限本地可信客户端（ADR-0097 决策二），
+	// 故按可信文档并入，不经 TaintHigh 围栏。
+	Instructions string
+}
+
+// projectInstructionsRelPath 项目指令在 Prompt 中的来源标注。
+const projectInstructionsRelPath = "project:instructions"
+
+// ListForProject 装载项目工作区上下文：Root 内的标准上下文文件 + 项目指令。
+//
+// 信任判定：项目 Trusted 或命中全局 trusted_workspace_roots 才可信；且 Trusted
+// 只对**规范路径未变**的目录生效——Root 存库后若被替换成指向别处的软链，
+// EvalSymlinks 结果与存库路径不一致，信任自动失效（降级为围栏区），
+// 避免"信任 /a/proj、之后 /a/proj 被换成指向 /etc 的软链"绕过前缀判定。
+func (l *WorkspaceContextLoader) ListForProject(_ context.Context, pc ProjectContext) []WorkspaceContext {
+	var out []WorkspaceContext
+	if pc.Root != "" {
+		explicit := false
+		if abs, err := filepath.Abs(pc.Root); err == nil {
+			if resolved, err := filepath.EvalSymlinks(abs); err == nil && resolved == abs {
+				explicit = pc.Trusted
+			}
+		}
+		out = l.loadFiles(pc.Root, explicit)
+	}
+	if ins := strings.TrimSpace(pc.Instructions); ins != "" {
+		if len(ins) > maxWorkspaceContextBytes {
+			ins = ins[:maxWorkspaceContextBytes]
+		}
+		out = append(out, WorkspaceContext{RelPath: projectInstructionsRelPath, Content: ins, Trusted: true})
+	}
+	return out
+}
+
+// loadFiles 探测并读取 rootDir 内的标准上下文文件。explicitTrust 为项目级显式信任，
+// 与全局信任列表取或。
+func (l *WorkspaceContextLoader) loadFiles(rootDir string, explicitTrust bool) []WorkspaceContext {
 	if rootDir == "" {
 		return nil
 	}
@@ -99,7 +148,12 @@ func (l *WorkspaceContextLoader) Load(_ context.Context, rootDir string) []Works
 	if err != nil {
 		return nil
 	}
-	trusted := l.isTrusted(absRoot)
+	// 文件级软链逃逸防御需要根的真实路径；根本身不可解析（不存在/无权限）则无内容可读。
+	realRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return nil
+	}
+	trusted := explicitTrust || l.isTrusted(absRoot)
 
 	var out []WorkspaceContext
 	for _, name := range workspaceContextFiles() {
@@ -110,11 +164,17 @@ func (l *WorkspaceContextLoader) Load(_ context.Context, rootDir string) []Works
 		if !strings.HasPrefix(full, absRoot+string(os.PathSeparator)) {
 			continue
 		}
-		info, statErr := os.Stat(full)
+		// 软链逃逸防御：仓库内的 AGENTS.md 可以是指向 ~/.ssh/id_rsa 之类的软链，
+		// 名字校验拦不住；解析后的真实路径必须仍在根的真实路径之内。
+		realFull, linkErr := filepath.EvalSymlinks(full)
+		if linkErr != nil || !strings.HasPrefix(realFull, realRoot+string(os.PathSeparator)) {
+			continue
+		}
+		info, statErr := os.Stat(realFull)
 		if statErr != nil || info.IsDir() {
 			continue
 		}
-		data, readErr := os.ReadFile(full) //nolint:gosec // full 已校验在 absRoot 之内
+		data, readErr := os.ReadFile(realFull) //nolint:gosec // realFull 已校验在 realRoot 之内
 		if readErr != nil {
 			continue
 		}

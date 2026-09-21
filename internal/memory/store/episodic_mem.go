@@ -66,6 +66,11 @@ func NewEpisodicMemWithCognitive(store protocol.Store, indexer EpisodicIndexer, 
 
 func (em *EpisodicMem) Append(ctx context.Context, ev types.Event, taint types.TaintLevel) error {
 	ev.TaintLevel = types.PropagateTaint(ev.TaintLevel, taint) // only-up：取 max，禁降级
+	// 项目归属（ADR-0097 决策三修订）：写入方显式打标优先；未打标时取 agent 执行 ctx
+	// 注入的项目。二者皆无 = 默认项目（后台/系统事件）。
+	if ev.ProjectID == "" {
+		ev.ProjectID = protocol.ProjectIDFrom(ctx)
+	}
 
 	// Payload 门控：超限落盘 + log_ref 替换
 	if len(ev.Payload) > maxEpisodicPayloadBytes {
@@ -145,6 +150,9 @@ func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]type
 		if q.SessionID != "" && ev.TaskID != q.SessionID {
 			continue
 		}
+		if q.ProjectID != "" && ev.EffectiveProjectID() != q.ProjectID {
+			continue
+		}
 		if ev.TaintLevel > q.MaxTaintLevel { // 超过请求上限 → 过滤
 			continue
 		}
@@ -187,4 +195,21 @@ func (em *EpisodicMem) Query(ctx context.Context, q types.EpisodicQuery) ([]type
 		results = results[:q.K]
 	}
 	return results, nil
+}
+
+// ProjectOf 返回情景事件的有效归属项目（ADR-0097 决策三修订）。isEpisodic=false 表示
+// eventID 不是情景事件（如 SurrealDB 共享 FTS 里的实体/扩展条目）——调用方据此放行
+// 全局层条目、只对情景事件按项目过滤。
+func (em *EpisodicMem) ProjectOf(ctx context.Context, eventID string) (projectID string, isEpisodic bool) {
+	raw, err := em.store.Get(ctx, []byte("episodic:"+strings.TrimPrefix(eventID, "episodic:")))
+	if err != nil || len(raw) == 0 {
+		return "", false
+	}
+	var ev types.Event
+	if json.Unmarshal(raw, &ev) != nil {
+		// 键存在但解码失败：确属情景事件却无法判定归属 → 按默认项目处理（fail-closed，
+		// 不会让它出现在任何具名项目里）。
+		return types.DefaultProjectID, true
+	}
+	return ev.EffectiveProjectID(), true
 }

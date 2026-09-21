@@ -118,8 +118,11 @@ type episodicMemAdapter struct {
 	ep protocol.EpisodicMemory
 }
 
-func (a *episodicMemAdapter) Query(ctx context.Context, q string, maxTaint types.TaintLevel) ([]agentctx.ContextItem, error) {
-	res, err := a.ep.Query(ctx, types.EpisodicQuery{Semantic: q, MaxTaintLevel: maxTaint, K: 10})
+func (a *episodicMemAdapter) Query(ctx context.Context, q string, maxTaint types.TaintLevel, projectID string) ([]agentctx.ContextItem, error) {
+	if projectID == "" {
+		projectID = types.DefaultProjectID // fail-closed：未声明作用域不得看到具名项目的记忆
+	}
+	res, err := a.ep.Query(ctx, types.EpisodicQuery{Semantic: q, ProjectID: projectID, MaxTaintLevel: maxTaint, K: 10})
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "query episodic memory", err)
 	}
