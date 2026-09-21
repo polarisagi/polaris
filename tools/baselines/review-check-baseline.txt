@@ -22,46 +22,60 @@
 # 以上两批都**不允许**回头改报告正文来消违规：审核报告是修复前状态的证据链，
 # 改它等于篡改历史（fix.md §7-3 三项不可变）。故只能以 baseline 承接。
 # 复核责任：下一轮增量审核时，凡对应报告已归档进 bake/ 的条目应一并移除。
-local_playground/reports/gemini-review-design-batch13.md|C13|GD-13-001
-local_playground/reports/gemini-review-design-batch14.md|C13|GD-14-001
-local_playground/reports/gemini-review-design-batch14.md|C13|GD-14-004
-local_playground/reports/gemini-review-design.md|C13|GD-13-001
-local_playground/reports/gemini-review-design.md|C13|GD-14-001
-local_playground/reports/gemini-review-design.md|C13|GD-14-004
-local_playground/reports/gemini-review-findings-batch10.md|C12|GR-10-003
-local_playground/reports/gemini-review-findings-batch10.md|C12|GR-10-005
-local_playground/reports/gemini-review-findings-batch11.md|C6|batch11
-local_playground/reports/gemini-review-findings-batch12.md|C12|GR-12-007
-local_playground/reports/gemini-review-findings-batch2.md|C12|GR-2-002
-local_playground/reports/gemini-review-findings-batch2.md|C12|GR-2-003
-local_playground/reports/gemini-review-findings-batch2.md|C2|GR-2-003
-local_playground/reports/gemini-review-findings-batch4.md|C12|GR-4-001
-local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-001
-local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-002
-local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-003
-local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-004
-local_playground/reports/gemini-review-findings-batch5.md|C3|GR-5-005
-local_playground/reports/gemini-review-findings-batch6.md|C12|GR-6-003
-local_playground/reports/gemini-review-findings-batch6.md|C2|GR-6-003
-local_playground/reports/gemini-review-findings-batch8.md|C2|GR-8-002
-local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-001
-local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-002
-local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-003
-local_playground/reports/gemini-review-findings-batch8.md|C3|GR-8-004
-local_playground/reports/gemini-review-findings.md|C12|GR-10-003
-local_playground/reports/gemini-review-findings.md|C12|GR-10-005
-local_playground/reports/gemini-review-findings.md|C12|GR-12-007
-local_playground/reports/gemini-review-findings.md|C12|GR-2-002
-local_playground/reports/gemini-review-findings.md|C12|GR-2-003
-local_playground/reports/gemini-review-findings.md|C12|GR-4-001
-local_playground/reports/gemini-review-findings.md|C12|GR-6-003
-local_playground/reports/gemini-review-findings.md|C2|GR-8-002
-local_playground/reports/gemini-review-findings.md|C3|GR-5-001
-local_playground/reports/gemini-review-findings.md|C3|GR-5-002
-local_playground/reports/gemini-review-findings.md|C3|GR-5-003
-local_playground/reports/gemini-review-findings.md|C3|GR-5-004
-local_playground/reports/gemini-review-findings.md|C3|GR-5-005
-local_playground/reports/gemini-review-findings.md|C3|GR-8-001
-local_playground/reports/gemini-review-findings.md|C3|GR-8-002
-local_playground/reports/gemini-review-findings.md|C3|GR-8-003
-local_playground/reports/gemini-review-findings.md|C3|GR-8-004
+# ── 2026-09-21 ADR-0096 P0：batch3 的 C6 由本轮新增文件触发 ──
+# batch3 的审核范围是 cmd/polaris，而 boot_runtime.go / cli_endpoint.go / cli_service.go /
+# instance_lock_{unix,windows}.go 是该报告写成之后才新增的文件，报告里当然没有它们。
+# 不回头改报告正文：审核报告是修复前状态的证据链，改它等于篡改历史（fix.md §7-3）。
+# 复核责任：下一轮审核覆盖 cmd/polaris 时，这些文件会进入新报告，届时本条应移除。
+local_playground/reports/gemini-review-findings-batch3.md|C6|batch3
+
+# ── 2026-09-21 复核轮：44 → 20，删 43 条死条目、收 19 条新增 ──
+#
+# 【删除 43 条】逐条以 `review_check.go -strict` 的完整违规集合比对，不在集合内即删：
+#   - 13 条：所指报告已不在 reports/（上一轮 2026-08-16 归档进 bake/），条目随之失效。
+#     本应在归档时一并移除（见本文件头部「复核责任」），当时漏做。
+#   - 30 条：报告文件仍在，但同名文件已被 2026-09-20 轮的新报告覆盖，旧键对应的违规
+#     不复存在（含 2026-08-13 / 08-15 两批注记所述的全部条目，及 GD-13/14 的 C13 三条）。
+#   删除不影响门控现状：这些条目当前不匹配任何违规；若将来某份报告重新出现同一键，
+#   它会被当作新违规报出——那正是应有的行为（新一轮、新证据）。
+#
+# 【新增 19 条】2026-09-20 轮报告（gemini-review-findings*.md，GR 131 条）经
+# gemini-review-verdicts-2026-09-20.md 裁决：130 fixed / 1 rejected / 0 open，本轮已结案。
+# 下列违规全部是**修复落地使报告里的位置引用失效**，报告描述的是修复前的代码——
+# 不是报告写错。每条均回 git 历史取证（`git log -S` / `--diff-filter`）：
+#
+#   GR-2.1-004  C12  修复新增 KILLSWITCH 500ms 轮询；`ks.CheckKILLSWITCHFile()` 首次出现于 f8c54c5
+#   GR-4.2-006  C2   修复删除 internal/action/provider.go（f8c54c5）
+#   GR-4.2-009  C2   修复删除两个零引用哨兵，capability_token.go 缩至 109 行
+#   GR-6.1-002  C12  `return types.SandboxNativeOS` 于 1c504d7（07-23）被删、f8c54c5 按
+#                    ADR-0008 决策四重新启用；报告写于其间，当时断言成立
+#   GR-6.1-004  C12  修复前唯一一处 `wm.GC(` 在 workspace_manager_test.go，生产零调用；
+#              C2   f8c54c5 新增 StartPeriodicGC（生产调用在新文件 workspace_manager_gc.go），
+#                    workspace_manager.go 随之缩至 374 行
+#   GR-7.2-004  C2   修复为 Extract 增加 docText 参数，writer.go 改写后缩至 145 行
+#   GR-10.2-004 C2   修复删除零实现零消费的 ChatRepo/AgentInfer，provider.go 缩至 12 行
+#   batch1.2 / 6.1 / 6.2 / 10.2  C6  报告范围内出现未登记文件：metrics_counters.go、
+#                    workspace_manager_gc.go、lease_keeper.go、ws_lifecycle.go，
+#                    四个文件均由修复提交 f8c54c5 新建，报告写成时不存在
+#
+# 不改报告正文（证据链，fix.md §7-3）。不代为归档进 bake/：review.md §2 规定 bake/ 为
+# 用户手工维护。复核责任：本轮报告归档进 bake/ 后，本节 19 条连同上方 batch3 一条应一并移除。
+local_playground/reports/gemini-review-findings-batch1.2.md|C6|batch1.2
+local_playground/reports/gemini-review-findings-batch10.2.md|C2|GR-10.2-004
+local_playground/reports/gemini-review-findings-batch10.2.md|C6|batch10.2
+local_playground/reports/gemini-review-findings-batch2.1.md|C12|GR-2.1-004
+local_playground/reports/gemini-review-findings-batch4.2.md|C2|GR-4.2-006
+local_playground/reports/gemini-review-findings-batch4.2.md|C2|GR-4.2-009
+local_playground/reports/gemini-review-findings-batch6.1.md|C12|GR-6.1-002
+local_playground/reports/gemini-review-findings-batch6.1.md|C12|GR-6.1-004
+local_playground/reports/gemini-review-findings-batch6.1.md|C2|GR-6.1-004
+local_playground/reports/gemini-review-findings-batch6.1.md|C6|batch6.1
+local_playground/reports/gemini-review-findings-batch6.2.md|C6|batch6.2
+local_playground/reports/gemini-review-findings-batch7.2.md|C2|GR-7.2-004
+local_playground/reports/gemini-review-findings.md|C12|GR-2.1-004
+local_playground/reports/gemini-review-findings.md|C12|GR-6.1-002
+local_playground/reports/gemini-review-findings.md|C12|GR-6.1-004
+local_playground/reports/gemini-review-findings.md|C2|GR-10.2-004
+local_playground/reports/gemini-review-findings.md|C2|GR-4.2-009
+local_playground/reports/gemini-review-findings.md|C2|GR-6.1-004
+local_playground/reports/gemini-review-findings.md|C2|GR-7.2-004
