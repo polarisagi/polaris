@@ -336,15 +336,23 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			if err != nil {
 				return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)}
 			}
-			// GD-13-005 接线：llmEff.ModelPool 既是模型名提示（WithModel），也是
-			// 目标 Provider 角色池（WithModelPool，如 S_VALIDATE 固定用 "reasoning"）。
-			// 此前只传了 WithModel → req.ModelPool 恒为空 → 跨 Pool 级联降级在
-			// 生产中从未被触发过（该特性唯一的写入口就是 WithModelPool）。
+			// GD-13-005 接线：llmEff.ModelPool 是目标 Provider **角色池**
+			// （合法值 reasoning/general/default/budget，见 protocol/interfaces_agent.go
+			// LLMFillEffect.ModelPool 注释），不是模型名。
 			// Pool 是偏好而非硬约束：目标池无可用 Provider 时路由会沿降级链回退，
 			// 链尾还有一次不限 role 的全局兜底（见 router_failover.go tryPoolFallback），
 			// 因此对"只注册了一个无角色本地 Provider"的 Tier-0 部署不构成回归。
+			//
+			// [2026-09-22 根因修复] 此处原先还多传了一个 types.WithModel(llmEff.ModelPool)，
+			// 把池名当模型名发给 Provider：adapter 侧 `if req.Model != "" { apiReq.Model =
+			// resolveOpenAIModel(req.Model) }`（openai.go:180-183）会用它**覆盖**掉
+			// provider_models 表按 role 配好的真实模型 ID，于是发往 DeepSeek 的请求
+			// 里 model 字段字面就是 "general"，被 400 拒绝：
+			//   "The supported API model names are deepseek-flash, deepseek-v4-pro,
+			//    but you passed general."
+			// 池 → 模型 ID 的映射本来就由 provider_models（role 列）在 Provider 注册时
+			// 完成，adapter 自带的 a.model 才是正确值，这里必须留空不覆盖。
 			inferOpts := []types.InferOption{
-				types.WithModel(llmEff.ModelPool),
 				types.WithModelPool(llmEff.ModelPool),
 				types.WithThinkingMode(llmEff.ThinkingMode),
 			}
@@ -383,6 +391,20 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			}
 
 			if inferErr != nil {
+				// [HE-1/HE-2] 推理失败此前只经 llmEff.OnFailure 转成状态转移，错误
+				// 本身既不落日志也不进事件流：FSM 一路转到 S_FAILED，SSE 订阅者
+				// 收到的是"没有 token、没有错误、流正常结束"，最终只剩一条无法
+				// 归因的"推理返回空内容，请检查模型配置或重试"。这是本包
+				// CLAUDE.md「MUST NOT 将 LLM 幻觉/失败响应静默视为成功」的直接
+				// 违反，也是 2026-09-22 empty_response 排查中三次误判的真正根因。
+				slog.ErrorContext(ctx, "kernel: llm inference failed",
+					"agent_id", a.ID, "session", a.sCtx.SessionID,
+					"state", a.sm.Current(), "model_pool", llmEff.ModelPool, "err", inferErr)
+				a.publishStreamEvent(types.AgentStreamEvent{
+					Type:       types.AgentStreamEventError,
+					Content:    "推理失败：" + inferErr.Error(),
+					TaintLevel: a.sCtx.GlobalTaintLevel,
+				})
 				if errors.Is(inferErr, protocol.ErrAllProvidersFailed) {
 					a.sCtx.ProviderSuspendCount++
 					if a.sCtx.ProviderSuspendCount >= 5 && a.hitl != nil {
@@ -396,7 +418,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 						if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
 							a.sCtx.ProviderSuspendCount = 0
 						} else {
-							return EffectResult{Err: apperr.New(apperr.CodeInternal, "provider_exhausted hitl denied")}
+							return EffectResult{Err: apperr.New(apperr.CodeResourceExhausted, "provider_exhausted hitl denied")}
 						}
 					} else {
 						// 写 DB：标记任务为 suspended，供 recovery.go 恢复扫描

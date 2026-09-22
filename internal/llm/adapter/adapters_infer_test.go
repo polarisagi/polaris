@@ -243,3 +243,64 @@ func TestAdapters_Infer(t *testing.T) {
 		}
 	})
 }
+
+// TestOpenAIAdapter_ModelResolution 锁定"模型 ID 归属 Provider 配置"这条契约：
+// req.Model 为空时必须用 adapter 自身配置的模型（由 provider_models 表按 role
+// 注入），非空时才覆盖。
+//
+// 2026-09-22 回归背景：internal/agent 曾用 types.WithModel(llmEff.ModelPool) 把
+// **角色池名**（general/reasoning/...）塞进 req.Model，覆盖掉这里配好的真实模型
+// ID，导致发往 DeepSeek 的请求 model 字段字面是 "general" 并被 400 拒绝
+// （"The supported API model names are ..., but you passed general."）。该错误
+// 此前被 Agent 侧静默吞掉，只在用户侧表现为"推理返回空内容"。
+func TestOpenAIAdapter_ModelResolution(t *testing.T) {
+	credPool := llmparent.NewCredentialPool([]string{"test-key"}, llmparent.StrategyFillFirst)
+	msgs := []types.Message{{Role: "user", Content: "Hi"}}
+
+	mockResp := map[string]interface{}{
+		"choices": []map[string]interface{}{
+			{"index": 0, "message": map[string]interface{}{"role": "assistant", "content": "ok"}, "finish_reason": "stop"},
+		},
+	}
+	bodyBytes, _ := json.Marshal(mockResp)
+
+	for _, tc := range []struct {
+		name      string
+		reqModel  string
+		wantModel string
+	}{
+		{"空 Model 用 Provider 配置", "", "deepseek-v4-pro"},
+		{"显式 Model 覆盖", "deepseek-flash", "deepseek-flash"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sentModel string
+			client := &http.Client{Transport: &MockTransport{
+				RoundTripFunc: func(req *http.Request) (*http.Response, error) {
+					var payload struct {
+						Model string `json:"model"`
+					}
+					raw, _ := io.ReadAll(req.Body)
+					_ = json.Unmarshal(raw, &payload)
+					sentModel = payload.Model
+					return &http.Response{
+						StatusCode: 200,
+						Body:       io.NopCloser(bytes.NewBuffer(bodyBytes)),
+						Header:     make(http.Header),
+					}, nil
+				},
+			}}
+
+			adapter := NewOpenAIAdapter("https://api.deepseek.com", "deepseek-v4-pro", credPool, client, nil)
+			var opts []types.InferOption
+			if tc.reqModel != "" {
+				opts = append(opts, types.WithModel(tc.reqModel))
+			}
+			if _, err := adapter.Infer(context.Background(), msgs, opts...); err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if sentModel != tc.wantModel {
+				t.Errorf("model sent to API = %q, want %q", sentModel, tc.wantModel)
+			}
+		})
+	}
+}
