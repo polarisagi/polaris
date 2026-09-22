@@ -192,10 +192,9 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		// 唯一构造点 orchestrator.NewSQLiteBlackboard（boot_agent.go）恒满足此断言；
 		// 非该类型时退化为 nil（双返回值形式，不 panic），RunStepWorkerLoop 对 nil
 		// Blackboard 有显式判空处理。
-		Blackboard:        blackboardConcrete(bb),
-		StreamIdleTimeout: time.Duration(config.DefaultThresholds().M1Router.SafecallStreamIdleTimeoutSec) * time.Second,
-		Vault:             vault,
-		RWDB:              rwDB,
+		Blackboard:           blackboardConcrete(bb),
+		StreamIdleTimeout:    time.Duration(config.DefaultThresholds().M1Router.SafecallStreamIdleTimeoutSec) * time.Second,
+		RotateVaultMasterKey: newVaultMasterKeyRotator(rwDB, vault, dataDir),
 	})
 	s.pluginHandler = plugin.NewPluginHandler(plugin.Dependencies{
 		ExtRepo:              s.extRepo,
