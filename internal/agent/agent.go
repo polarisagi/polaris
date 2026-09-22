@@ -308,6 +308,15 @@ func (a *Agent) clearInFlight() {
 // handleEffectResult 处理一个已完成 effect 的回传；done=true 表示已进入终态、Run 应返回 nil。
 func (a *Agent) handleEffectResult(ctx context.Context, result EffectResult) (done bool, err error) {
 	if result.Err != nil {
+		// [HE-1] Effect 错误此前**只**经 Run() 返回值上抛：Run 退出 → agent
+		// goroutine 结束 → 订阅 SubscribeStream 的会话既收不到错误事件、也等不到
+		// channel 关闭（订阅通道只在订阅 ctx 结束时才关），整个回合就这么挂在那里
+		// 直到上游超时。先把错误发进流再退出，让用户拿到真实原因而不是干等。
+		a.publishStreamEvent(types.AgentStreamEvent{
+			Type:       types.AgentStreamEventError,
+			Content:    "Agent 执行失败：" + result.Err.Error(),
+			TaintLevel: a.sCtx.GlobalTaintLevel,
+		})
 		return true, apperr.Wrap(apperr.CodeInternal, "Agent.Run", result.Err)
 	}
 	if result.Transition != 0 {
