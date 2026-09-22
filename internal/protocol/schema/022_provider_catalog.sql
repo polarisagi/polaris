@@ -71,7 +71,7 @@ INSERT OR IGNORE INTO sys_provider_models (id, catalog_provider_id, model_id, di
 
 -- ── DeepSeek（两模型：flash=对话，pro=推理）────────────────────────────────
 -- 官方推荐模型，旧版 deepseek-chat/deepseek-reasoner 别名已停用
-('deepseek:deepseek-v4-flash',    'deepseek',  'deepseek-v4-flash',    'DeepSeek V4 Flash',   'default',   0),
+('deepseek:deepseek-flash',       'deepseek',  'deepseek-flash',       'DeepSeek Flash',      'default',   0),
 ('deepseek:deepseek-v4-pro',      'deepseek',  'deepseek-v4-pro',      'DeepSeek V4 Pro',     'reasoning', 1),
 
 -- ── Anthropic（三模型：haiku=对话，sonnet=通用，opus=推理）────────────────

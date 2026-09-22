@@ -45,7 +45,7 @@ func TestDecisionLogger(t *testing.T) {
 		AgentID:      "agent-007",
 		DecisionType: "route_model",
 		Context:      ctxJSON,
-		Choice:       "deepseek-v4-flash",
+		Choice:       "deepseek-flash",
 		Alternatives: altJSON,
 		Reason:       "best balance",
 	}

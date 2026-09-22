@@ -53,7 +53,7 @@ bin_dir       = ""   # 示例："/opt/polarisagi/bin" — 二进制依赖存放�
 github_proxy = "auto"
 
 [inference]
-default_provider = "deepseek-v4-flash"
+default_provider = "deepseek-flash"
 reasoning_provider = "deepseek-v4-pro"
 structured_output = "grammar"
 # 嵌入向量维度（须与实际嵌入模型一致，同时决定 SurrealDB HNSW DIMENSION）。

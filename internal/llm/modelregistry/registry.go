@@ -314,7 +314,7 @@ var staticResolverMappings = []staticMapping{
 	{"openai", "gpt-4", "gpt-4o-mini"},
 	{"openai", "gpt-4-turbo", "gpt-4o"},
 	{"openai", "gpt-4-turbo-preview", "gpt-4o"},
-	{"deepseek", "deepseek-chat", "deepseek-v4-flash"},
+	{"deepseek", "deepseek-chat", "deepseek-flash"},
 	{"deepseek", "deepseek-reasoner", "deepseek-v4-pro"},
 }
 
