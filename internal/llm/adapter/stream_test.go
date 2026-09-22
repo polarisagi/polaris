@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,5 +70,54 @@ func TestSSEParser_DeepSeek(t *testing.T) {
 
 	if results[0] != "Hello " || results[1] != "world!" {
 		t.Errorf("unexpected content: %v", results)
+	}
+}
+
+// TestSSEParser_MalformedBody 复现 2026-09-22 empty_response 排查中发现的另一个
+// 同族根因：网关/代理对 base_url 返回 HTTP 200，但 body 不是合法 SSE 帧（例如一段
+// HTML 或纯文本错误页）。此前每一行都被 `data, ok := strings.CutPrefix(...)` 的
+// !ok 分支静默 continue，scanner.Scan() 最终正常返回 false（真 EOF），函数直接
+// 落到 defer close(ch)，ch 里空空如也、没有任何错误——与上游误判为"推理成功但
+// 为空"是同一缺陷类。必须能产出 StreamError，不能悄无声息地把 ch 关空。
+func TestSSEParser_MalformedBody(t *testing.T) {
+	client := &OpenAICompatibleClient{
+		BaseURL: "http://dummy",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+				body := io.NopCloser(strings.NewReader("<html><body>502 Bad Gateway</body></html>\n"))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       body,
+					Header:     http.Header{"Content-Type": []string{"text/html"}},
+				}
+			}),
+		},
+	}
+
+	req := &types.InferRequest{
+		Messages: []types.Message{{Role: "user", Content: "hi"}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch, err := client.SendStreamRequest(ctx, nil, []byte("test-key"), translateRequest(req, true), 0)
+	if err != nil {
+		t.Fatalf("expected no error at request time, got %v", err)
+	}
+
+	var gotErr bool
+	for ev := range ch {
+		if ev.Type == types.StreamError {
+			gotErr = true
+		}
+		if ev.Type == types.StreamTextDelta && ev.Content != "" {
+			t.Fatalf("unexpected content from malformed body: %q", ev.Content)
+		}
+	}
+
+	if !gotErr {
+		t.Fatal("expected StreamError for malformed non-SSE 200 body, got silent empty channel")
 	}
 }

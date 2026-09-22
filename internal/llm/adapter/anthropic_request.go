@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -188,6 +189,14 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 	var toolInputBuf strings.Builder
 	inToolBlock := false
 	inThinkingBlock := false // 标记当前是否在处理 extended thinking block
+	// parsedAny 标记是否曾经成功解析出至少一帧合法 SSE data（无论帧类型/是否
+	// 产出可见内容）。HTTP 200 但网关/代理返回一段 HTML、纯文本错误页或空 body
+	// 时，每一行都会在下方 continue 处被跳过，scanner.Scan() 最终正常返回
+	// false（真 EOF，此前连 scanner.Err() 都没检查），函数直接落到末尾返回，
+	// ch 里空空如也且没有任何错误信号——与本文件同族的 empty_response 缺陷。
+	// message_stop 帧会在下方 case 里直接 return，走不到函数末尾，因此末尾的
+	// 判定只覆盖"整段响应体一帧合法 SSE data 都没解出来"的情形。
+	parsedAny := false
 
 	for scanner.Scan() {
 		select {
@@ -228,6 +237,7 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 		if err := json.Unmarshal([]byte(data), &frame); err != nil {
 			continue
 		}
+		parsedAny = true
 
 		switch frame.Type {
 		case "message_start":
@@ -310,6 +320,21 @@ func (a *AnthropicAdapter) parseAnthropicStream(ctx context.Context, model strin
 			}
 		case "message_stop":
 			return
+		}
+	}
+
+	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
+		select {
+		case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("stream read: %v", err)}:
+		case <-ctx.Done():
+		}
+		return
+	}
+
+	if !parsedAny {
+		select {
+		case ch <- types.StreamEvent{Type: types.StreamError, Content: "provider returned a 200 response with no valid SSE data frame"}:
+		case <-ctx.Done():
 		}
 	}
 }
