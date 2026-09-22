@@ -8,98 +8,21 @@
 package automation
 
 import (
-	"bufio"
 	"context"
-	"os"
-	"runtime"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/probe"
-	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
-// cpuSampler 读取 /proc/stat 计算真实 CPU 占用率（M13 §3 ResourceGovernor）。
-// 非 Linux 平台降级为 goroutine 数量启发式（只改 cpuProbeFn，接口不变）。
-// 采样结果缓存 1s，避免高频 syscall 开销。
-type cpuSampler struct {
-	mu        sync.Mutex
-	lastIdle  uint64
-	lastTotal uint64
-	lastTime  time.Time
-	lastPct   float64
-}
-
-// Usage 返回系统 CPU 占用率百分比（0–100）。
-func (cs *cpuSampler) Usage() float64 {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	if time.Since(cs.lastTime) < time.Second && cs.lastTotal > 0 {
-		return cs.lastPct
-	}
-
-	idle, total, err := readProcStatCPU()
-	if err != nil {
-		// 非 Linux 或 /proc/stat 不可读：降级为 goroutine 启发式
-		g := runtime.NumGoroutine()
-		switch {
-		case g > 100:
-			return 80.0
-		case g > 50:
-			return 50.0
-		default:
-			return 20.0
-		}
-	}
-
-	if cs.lastTotal > 0 && total > cs.lastTotal {
-		dTotal := total - cs.lastTotal
-		dIdle := idle - cs.lastIdle
-		if dTotal > 0 {
-			cs.lastPct = float64(dTotal-dIdle) / float64(dTotal) * 100
-		}
-	}
-	cs.lastIdle = idle
-	cs.lastTotal = total
-	cs.lastTime = time.Now()
-	return cs.lastPct
-}
-
-// readProcStatCPU 解析 /proc/stat 第一行，返回 (idle, total) CPU 时钟滴答数。
-// 格式：cpu user nice system idle iowait irq softirq steal ...
-func readProcStatCPU() (idle, total uint64, err error) {
-	f, err := os.Open("/proc/stat")
-	if err != nil {
-		return 0, 0, apperr.Wrap(apperr.CodeInternal, "readProcStatCPU", err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	if !scanner.Scan() {
-		return 0, 0, apperr.New(apperr.CodeInternal, "scheduler/cpu: empty /proc/stat")
-	}
-	fields := strings.Fields(scanner.Text())
-	if len(fields) < 5 || fields[0] != "cpu" {
-		return 0, 0, apperr.New(apperr.CodeInternal, "scheduler/cpu: unexpected /proc/stat format")
-	}
-
-	for i, f := range fields[1:] {
-		v, e := strconv.ParseUint(f, 10, 64)
-		if e != nil {
-			continue
-		}
-		total += v
-		if i == 3 { // index 3 (fields[4]) = idle
-			idle = v
-		}
-	}
-	return idle, total, nil
-}
+// CPU 与内存探针已于 2026-09-22 归口到 internal/observability/probe
+// （CLAUDE.md：probe/ = 硬件与内存探针）。本文件原有的私有 cpuSampler 只实现了
+// Linux 的 /proc/stat，其余平台降级成"goroutine 数量启发式"——Polaris 常驻
+// goroutine 远超 100，于是 macOS/Windows 上恒定返回 80.0，与判据
+// `cpuUsage > cpu_l1_pct(80.0)` 擦边而过，纯属侥幸；现由 probe 包提供三平台
+// 真实实现（linux /proc/stat 增量、darwin vm.loadavg、windows GetSystemTimes）。
 
 // TaskStatus 任务生命周期枚举。
 // 与 types.Task.Status 对齐。
@@ -160,7 +83,6 @@ func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *
 		cfg.CPUL1Pct = 70.0
 		cfg.CPUL2Pct = 90.0
 	}
-	cpu := &cpuSampler{}
 	rg := &ResourceGovernor{
 		maxConcurrent: maxConcurrent,
 		cfg:           cfg,
@@ -177,8 +99,7 @@ func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *
 		memProbeFn: func() int64 {
 			return int64(probe.ProbeAvailableMemoryMB())
 		},
-		// 使用 /proc/stat 真实 CPU 占用率；非 Linux 自动降级为 goroutine 启发式。
-		cpuProbeFn: cpu.Usage,
+		cpuProbeFn: probe.ProbeCPUUsagePercent,
 	}
 	rg.cond = sync.NewCond(&rg.mu)
 	return rg
@@ -294,7 +215,33 @@ func (rg *ResourceGovernor) Release() {
 	rg.mu.Unlock()
 }
 
-// AdmitLLM 专门为 LLM 请求分配并发额度，结合基础降级判断
+// AdmitLLM 为 LLM 请求分配并发额度，并回报当前资源降级等级。
+//
+// priority 语义（2026-09-22 重新定义，见下）：
+//   - 0：用户可见推理（交互式对话）。**只受并发上限约束**，内存/CPU 水位线
+//     只影响回报的 degradeLevel，不构成拒绝理由。
+//   - ≥1：可降级的后台推理（自进化、批量提炼等）。保留三级水位线闸门。
+//
+// 为什么用户可见推理不再受内存/CPU 闸门约束：
+//
+//	(1) 拒绝一次**远程** LLM 调用并不能缓解本机内存压力——它消耗的是一个 socket
+//	    与几百 KB 流式缓冲，真正吃内存的是本地模型权重、沙箱与后台任务。用内存
+//	    水位线去拦远程 API 调用，付出的是"产品核心功能不可用"，换回的是几乎为零
+//	    的内存回收。
+//	(2) 本地推理确实吃内存，但它有自己的、更精确的治理链路：FeatureGate 按 Tier
+//	    决定是否解锁本地推理、AutoConfig 内存压力回调驱动 local model unloader
+//	    卸载权重。重复在这里加一道粗粒度闸门只会误伤远程调用。
+//	(3) 旧语义在实现层面本就是空转：AdmitLLM 全仓唯一调用方是
+//	    InferenceRouter.acquireLLMCapacity，且恒传 priority=1，而两道闸门都是
+//	    `&& priority != 0` 才生效——等于"交互式对话"是唯一被拦的对象，而本该被
+//	    限流的后台任务走的是 Admit()，那个方法至今无人调用。设计意图整个反了。
+//	(4) 被拒时的表现也不可接受：WaitForLLMCapacity 只等 llmInFlight，压根不等内存
+//	    恢复，于是必然在 60 秒后被同一道闸门再拒一次，用户侧只看到一句"推理返回
+//	    空内容"。等待机制与拒绝理由根本不匹配。
+//
+// 内存真正见底时的正确降级顺序是"先停后台自进化、再停本地模型、最后才是对话"，
+// 而不是反过来先掐对话。degradeLevel 照常回报，供调用方做质量降级（缩短上下文、
+// 关闭并行工具调用等），这才是这个信号该有的用法。
 func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
 	rg.mu.Lock()
 	if rg.activityCallback != nil {
@@ -302,34 +249,38 @@ func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
 	}
 	defer rg.mu.Unlock()
 
-	freeMemMB := rg.memProbeFn()
-	cpuUsage := rg.cpuProbeFn()
-	degradeLevel := 0
+	degradeLevel := rg.degradeLevelLocked()
 
-	if freeMemMB < int64(rg.cfg.MemL1FreeMB) || cpuUsage > rg.cfg.CPUL1Pct {
-		degradeLevel = 1
-	}
-	if freeMemMB < int64(rg.cfg.MemL2FreeMB) || cpuUsage > rg.cfg.CPUL2Pct {
-		degradeLevel = 2
+	// 后台可降级推理：维持三级水位线闸门。
+	if priority != 0 && degradeLevel >= 2 {
+		return false, degradeLevel
 	}
 
-	if freeMemMB < int64(rg.cfg.MemL3FreeMB) && priority != 0 {
-		return false, 3
-	}
-	if freeMemMB < int64(rg.cfg.MemL3FreeMB) {
-		degradeLevel = 3
-	}
-	if (cpuUsage > rg.cfg.CPUL1Pct || freeMemMB < int64(rg.cfg.MemL2FreeMB)) && priority != 0 {
-		return false, 2
-	}
-
-	// 检查 LLM 并发上限
+	// 并发上限对所有优先级一视同仁——它是吞吐与公平性控制，且有配套的
+	// WaitForLLMCapacity 等待机制，拒绝后调用方能真正等到额度释放。
 	if rg.maxConcurrentLLMCalls > 0 && rg.llmInFlight >= rg.maxConcurrentLLMCalls {
 		return false, degradeLevel
 	}
 
 	rg.llmInFlight++
 	return true, degradeLevel
+}
+
+// degradeLevelLocked 按内存/CPU 水位线计算当前降级等级（0–3）。调用方需持有 rg.mu。
+func (rg *ResourceGovernor) degradeLevelLocked() int {
+	freeMemMB := rg.memProbeFn()
+	cpuUsage := rg.cpuProbeFn()
+
+	switch {
+	case freeMemMB < int64(rg.cfg.MemL3FreeMB):
+		return 3
+	case freeMemMB < int64(rg.cfg.MemL2FreeMB) || cpuUsage > rg.cfg.CPUL2Pct:
+		return 2
+	case freeMemMB < int64(rg.cfg.MemL1FreeMB) || cpuUsage > rg.cfg.CPUL1Pct:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // WaitForLLMCapacity 阻塞直到 LLM 容量释放或上下文取消
