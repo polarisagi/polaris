@@ -19,12 +19,12 @@ type DeepSeekAdapter struct {
 	credPool     *llmparent.CredentialPool
 	client       *OpenAICompatibleClient
 	capabilities types.ProviderCapabilities
-	modelID      string // 通过配置注入，默认 "deepseek-v4-flash"
+	modelID      string // 通过配置注入，默认 "deepseek-flash"
 	tbr          *metrics.TokenBurnRate
 }
 
 // NewDeepSeekAdapter 构造 DeepSeek 适配器。
-// modelID 传 "" 时默认使用 "deepseek-v4-flash"（V4 Flash，低成本推理）；
+// modelID 传 "" 时默认使用 "deepseek-flash"（V4 Flash，低成本推理）；
 // 传 "deepseek-v4-pro" 时启用 1M context 上限。
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
 // llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
@@ -33,7 +33,7 @@ func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Cli
 		httpClient = defaultHTTPClient()
 	}
 	if modelID == "" {
-		modelID = "deepseek-v4-flash"
+		modelID = "deepseek-flash"
 	}
 
 	maxCtx := 65536 // v4-flash 默认
@@ -225,7 +225,7 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 func resolveDeepSeekModel(model string) string {
 	switch model {
 	case "", "deepseek-chat":
-		return "deepseek-v4-flash"
+		return "deepseek-flash"
 	case "deepseek-reasoner":
 		return "deepseek-v4-pro"
 	default:

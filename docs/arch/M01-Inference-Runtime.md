@@ -431,7 +431,7 @@ DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/sche
 
 `internal/llm/adapter/{anthropic,openai,deepseek}.go` 的 `resolveXXXModel()` 函数**未被删除或改动**（dev prompt 显式要求保留为无数据库依赖的编译期兜底路径）。
 
-`Registry.SeedFromStaticResolvers(ctx)` 将这些函数内硬编码的废弃名映射（如 `claude-3-opus-20240229 → claude-3-5-sonnet-latest`、`gpt-4 → gpt-4o-mini`、`deepseek-chat → deepseek-v4-flash` 等 10 条）幂等灌入 registry 表（`CompatibilityScore=1.0`，视为已长期生产验证），供需要 DB 侧结构化查询兼容性评分/继任模型的调用方使用。
+`Registry.SeedFromStaticResolvers(ctx)` 将这些函数内硬编码的废弃名映射（如 `claude-3-opus-20240229 → claude-3-5-sonnet-latest`、`gpt-4 → gpt-4o-mini`、`deepseek-chat → deepseek-flash` 等 10 条）幂等灌入 registry 表（`CompatibilityScore=1.0`，视为已长期生产验证），供需要 DB 侧结构化查询兼容性评分/继任模型的调用方使用。
 
 已存在条目不覆盖，避免抹掉运营中产生的真实评分数据。启动时由 `bootMemory`（`cmd/polaris/boot_memory.go`）自动调用一次。
 
