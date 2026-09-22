@@ -895,3 +895,58 @@ func configFilePath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".polarisagi/polaris", "config.toml")
 }
+
+// admitBackground 是 boot 层各后台 ticker 的统一资源准入入口。
+//
+// 周期性后台工作（重索引、向量回填、知识同步、时序过期…）在每轮开始前调用它，
+// 拿到 release 才执行、用完立即 release；拿不到就跳过本轮，等下个 tick 再试。
+// 治理器缺席（极简装配/测试）时恒放行，保持"治理是增强而非前置依赖"。
+//
+// [2026-09-22] 接线背景见 automation.ResourceGovernor.AdmitBackground 注释：
+// 此前后台工作完全不受限，清库重启后 148 个扩展的向量回填 + 模型下载 + 知识
+// 连接器全量同步同时抢占本地嵌入引擎，把交互式检索挤到连续 30 秒超时。
+func admitBackground(sb *SubstrateBundle, work string) (release func(), ok bool) {
+	if sb == nil || sb.ResourceGov == nil {
+		return func() {}, true
+	}
+	return sb.ResourceGov.AdmitBackground(work)
+}
+
+// waitForBackgroundSlot 供"只跑一次、跳过即永久缺失"的一次性后台工作使用
+// （典型：插件向量回填）：拿不到额度时退避重试，而不是像周期性 ticker 那样
+// 直接跳过本轮。ctx 取消时返回 ok=false。
+func waitForBackgroundSlot(ctx context.Context, sb *SubstrateBundle, work string) (release func(), ok bool) {
+	const (
+		retryInterval = 30 * time.Second
+		maxWait       = 30 * time.Minute
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		if release, admitted := admitBackground(sb, work); admitted {
+			return release, true
+		}
+		if time.Now().After(deadline) {
+			// 超过上限仍拿不到额度：强行开跑。一次性回填缺席的代价（向量永久
+			// 缺失、语义检索长期降级）高于短时资源争用，且此时已退避了 30 分钟。
+			slog.Warn("polaris: background slot wait exceeded limit, proceeding anyway", "work", work)
+			return func() {}, true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
+// backgroundEmbedder 返回低优先级嵌入器，供批量/周期性后台工作使用。
+// 合批器缺席时回退到默认 Embedder（可能为 nil，调用方本就需判空）。
+func backgroundEmbedder(sb *SubstrateBundle) search.Embedder {
+	if sb == nil || sb.EmbedBatcher == nil {
+		if sb == nil {
+			return nil
+		}
+		return sb.Embedder
+	}
+	return search.NewBackgroundEmbedder(sb.EmbedBatcher)
+}

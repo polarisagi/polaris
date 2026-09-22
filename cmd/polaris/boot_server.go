@@ -317,12 +317,22 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	if sb.DynEmbedder != nil {
 		concurrent.SafeGo(context.Background(), "boot_server.vector_backfill", func(ctx context.Context) {
 			<-sb.DynEmbedder.WaitReady()
+			if httpServer.PluginHandler() == nil {
+				return
+			}
+			// 资源准入：这是全系统最重的一次性后台负载——实测清库重启后它要把
+			// 148 个扩展逐条过本地嵌入引擎，与 STT 模型下载、知识连接器全量同步
+			// 撞在一起，直接把交互式检索挤到连续 30 秒超时。拿不到额度就退避重试，
+			// 而不是取消（回填只跑一次，跳过等于向量永久缺失）。
+			release, ok := waitForBackgroundSlot(ctx, sb, "plugin_vector_backfill")
+			if !ok {
+				slog.Warn("polaris: plugin vector backfill aborted (shutting down or never admitted)")
+				return
+			}
+			defer release()
 			slog.Info("polaris: Dynamic Embedder ready, triggering background plugin vector backfill...")
-			if httpServer.PluginHandler() != nil {
-				_, err := httpServer.PluginHandler().SyncAllMarketplaces(ctx, true)
-				if err != nil {
-					slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
-				}
+			if _, err := httpServer.PluginHandler().SyncAllMarketplaces(ctx, true); err != nil {
+				slog.Warn("polaris: Background vector backfill encountered errors", "err", err)
 			}
 		})
 	}
