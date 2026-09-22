@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
@@ -163,10 +164,18 @@ func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *
 	rg := &ResourceGovernor{
 		maxConcurrent: maxConcurrent,
 		cfg:           cfg,
+		// [2026-09-22 根因修复] 原实现返回的是 `m.Sys - m.HeapAlloc`——Go 运行时
+		// 自己向 OS 要到、但当前不在存活堆对象里的字节数，与"系统还剩多少可用
+		// 内存"毫无关系，量级只有几百 MB 且随 GC 时机剧烈抖动。它被拿去和
+		// mem_l2_free_mb=1024 / mem_l3_free_mb=512 这两个**系统级** MB 阈值比较，
+		// 于是 AdmitLLM 的降级闸门按 GC 节奏随机误触发：一旦落到阈值以下，所有
+		// priority != 0 的推理（而交互式对话是唯一调用方，恒传 1）被直接拒绝，
+		// 表现为用户侧 60 秒后拿到一条无法归因的"推理返回空内容"。
+		// 改用 probe 包的平台原生探针（darwin/linux 各自实现，启动日志里
+		// "AutoConfig: ... ram=16384MB(avail=6553MB)" 用的就是它），
+		// 其内部已含探测失败时的保守兜底，不需要在这里再造一份。
 		memProbeFn: func() int64 {
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-			return int64(m.Sys-m.HeapAlloc) / (1024 * 1024)
+			return int64(probe.ProbeAvailableMemoryMB())
 		},
 		// 使用 /proc/stat 真实 CPU 占用率；非 Linux 自动降级为 goroutine 启发式。
 		cpuProbeFn: cpu.Usage,

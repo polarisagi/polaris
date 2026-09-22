@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -277,9 +278,18 @@ func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
 	if err != nil {
 		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: timeout waiting for LLM capacity", err).WithRetryAfter(10)
 	}
-	admitted, _ = ir.governor.AdmitLLM(1)
+	// [HE-1] degradeLevel 此前两处都被 `_` 丢弃：准入被拒时调用方拿到的是一句
+	// 不带原因的 "failed to acquire LLM capacity"，无从区分"并发满"（等待有意义）
+	// 与"内存/CPU 降级闸门"（等待毫无意义——WaitForLLMCapacity 只等 llmInFlight，
+	// 压根不等内存恢复，于是必然立刻再被同一道闸门拒掉）。2026-09-22 的
+	// empty_response 排查里，这个被丢弃的 1 字节正是唯一能直指根因的信号。
+	admitted, level := ir.governor.AdmitLLM(1)
 	if !admitted {
-		return apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: failed to acquire LLM capacity", nil).WithRetryAfter(10)
+		slog.WarnContext(ctx, "inference_router: LLM admission denied by resource governor",
+			"degrade_level", level)
+		return apperr.Wrap(apperr.CodeResourceExhausted,
+			fmt.Sprintf("inference_router: failed to acquire LLM capacity (resource governor degrade level %d: 1=内存/CPU 警戒 2=阻塞后台 3=内存濒死)", level),
+			nil).WithRetryAfter(10)
 	}
 	return nil
 }
