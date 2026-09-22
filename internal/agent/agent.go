@@ -404,7 +404,15 @@ func (a *Agent) Run(ctx context.Context) error {
 				}
 			}
 
+			fromState := a.sm.Current()
 			effects, err := a.sm.Dispatch(ctx, a.sCtx, trigger)
+			// [HE-1] FSM 推进是交互式回合的主控制流，此前全程无埋点：一旦回合
+			// 空转（不产 token 也不报错），日志里没有任何线索可区分"没触发状态
+			// 转移""转移了但没产生 Effect""Effect 产出了但没调 LLM"。回合级日志
+			// 量极小（每轮 1~N 条），值得常驻。
+			slog.InfoContext(ctx, "kernel: fsm dispatched",
+				"agent_id", a.ID, "session", a.sCtx.SessionID, "trigger", trigger,
+				"from", fromState, "to", a.sm.Current(), "effects", len(effects), "err", err)
 			if err != nil {
 				if errors.Is(err, fsm.ErrReplanExhausted) {
 					// sm.Dispatch 内部已经将状态转移至 S_FAILED，此处直接返回该错误
@@ -458,11 +466,20 @@ func (a *Agent) Run(ctx context.Context) error {
 			// 终态检查
 			current := a.sm.Current()
 			if current == types.AgentStateComplete || current == types.AgentStateFailed {
+				slog.InfoContext(ctx, "kernel: terminal state reached",
+					"agent_id", a.ID, "session", a.sCtx.SessionID, "state", current)
 				a.handleTerminalState(ctx, current)
 				return nil
 			}
 
 		case result := <-a.effectDone:
+			if result.Err != nil {
+				// [HE-1] Effect 错误此前只经 Run() 返回值上抛，既不进流、也只在
+				// pool.go 那层打一条不含错误来源阶段的 warn。
+				slog.WarnContext(ctx, "kernel: effect failed",
+					"agent_id", a.ID, "session", a.sCtx.SessionID,
+					"state", a.sm.Current(), "err", result.Err)
+			}
 			if done, err := a.handleEffectResult(ctx, result); done || err != nil {
 				return err
 			}

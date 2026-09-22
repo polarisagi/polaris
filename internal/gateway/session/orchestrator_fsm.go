@@ -47,6 +47,10 @@ func (o *orchestrator) runFSMTurn(
 
 	var replyBuilder []byte
 	var errBuilder string
+	// [HE-1] 回合终止方式此前完全不可观测：channel 关闭、task_done、ctx 取消
+	// 三条出口在"回复为空且无错误"时表现完全一致，日志里只剩一条无法定位的
+	// "推理返回空内容"。记录事件计数与出口分支，使空回合可归因。
+	evCount := 0
 
 	windowSize := config.CurrentThresholds().Session.LeakScanWindowBytes
 	if windowSize <= 0 {
@@ -58,10 +62,15 @@ func (o *orchestrator) runFSMTurn(
 		select {
 		case ev, ok := <-ch:
 			if !ok {
+				slog.WarnContext(ctx, "session: fsm stream closed without task_done",
+					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_err", errBuilder)
 				return string(replyBuilder), errBuilder, false
 			}
+			evCount++
 			stop := o.handleFSMEvent(sink, sessionID, ev, systemPromptGuard, &replyBuilder, &errBuilder, &leakWindow, windowSize)
 			if stop {
+				slog.InfoContext(ctx, "session: fsm turn done",
+					"session", sessionID, "events", evCount, "reply_bytes", len(replyBuilder), "infer_err", errBuilder)
 				return string(replyBuilder), errBuilder, false
 			}
 		case <-ctx.Done():
