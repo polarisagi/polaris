@@ -298,13 +298,17 @@ func (o *orchestrator) acquireInteractiveAgent(ctx context.Context, sink Sink, r
 
 	var aerr *apperr.Error
 	if errors.As(err, &aerr) && aerr.Code == apperr.CodeResourceExhausted {
-		// 后台计算请求
-		if req.RunID != "" || req.ReasoningEffort == "background" {
-			o.emitError(sink, "system_notice", "后台提炼排队中", sessionID, nil)
-			return nil, nil, false
-		}
-		// 前台对话请求：非错误性状态提示（保留独立 wire 事件名 "system_notice"，
-		// 不经 emitError——原实现不记录日志，仅推送提示）。
+		// [2026-09-22 复核修正] acquireInteractiveAgent 只服务 runInteractive
+		// 这一条交互式路径——Cron/Workflow/Webhook 等真正的后台任务恒定走
+		// AcquireHeadless（orchestrator_headless.go），从不经过这里，
+		// 因此走到本分支的请求 100% 是前台对话，不存在"后台提炼请求"需要
+		// 区分。此前用 req.RunID != "" 判定"是否后台"已失效：
+		// web/src/js/store/chat.js 的 submit() 每次提交都会生成幂等去重用的
+		// run_id（与是否后台任务无关），前端 UI（chat.html 的 reasoning-effort
+		// 下拉框）也从未提供 "background" 这个可选值——导致该条件对所有真实
+		// 前台请求恒为真，池子一旦短暂繁忙就弹出不可重试的硬错误
+		// "后台提炼排队中"，而非本该展示的可重试降级提示（保留独立 wire
+		// 事件名 "system_notice"，不经 emitError——原实现不记录日志，仅推送提示）。
 		_ = sink.Emit(Event{Kind: KindSystemNotice, Payload: map[string]any{
 			"message": "系统当前负载较高，已为您转入沙箱保护模式，稍等片刻",
 			"retry":   true,
