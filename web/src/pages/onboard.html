@@ -102,7 +102,7 @@
             <div class="label"><span class="label-text font-medium">Base URL</span></div>
             <input id="ob-base-url" name="ob-base-url" class="input input-bordered w-full" type="url"
                    x-model="$store.onboard.providerForm.base_url"
-                   :placeholder="$store.onboard.providerForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com'" />
+                   :placeholder="$store.onboard.providerForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com/v1'" />
           </label>
         </template>
         <template x-if="$store.onboard.providerForm.type !== 'ollama'">
