@@ -194,6 +194,8 @@ func NewServer(ctx context.Context, addr string, dataDir string, agentPool proto
 		// Blackboard 有显式判空处理。
 		Blackboard:        blackboardConcrete(bb),
 		StreamIdleTimeout: time.Duration(config.DefaultThresholds().M1Router.SafecallStreamIdleTimeoutSec) * time.Second,
+		Vault:             vault,
+		RWDB:              rwDB,
 	})
 	s.pluginHandler = plugin.NewPluginHandler(plugin.Dependencies{
 		ExtRepo:              s.extRepo,

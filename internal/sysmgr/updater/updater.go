@@ -102,6 +102,23 @@ func New(currentVersion, commitHash, buildDate string, client *http.Client) *Man
 // SetRestartFn 注入自定义重启函数（测试或服务管理器场景）。
 func (m *Manager) SetRestartFn(fn func()) { m.restartFn = fn }
 
+// Restart 立即触发与 OTA 更新末尾相同的优雅重启路径（graceful db shutdown +
+// exec-restart / windows 更新脚本），供非版本升级场景复用——例如
+// vault 主密钥轮换后需要让守护进程从新 key 重新加载（sysadmin.HandleVaultRotateMasterKey）。
+// 不经过 doUpdate 的版本比较/下载/校验流程，调用方需自行确保重启前的状态已落盘。
+func (m *Manager) Restart() {
+	if m.restartFn != nil {
+		m.restartFn()
+		return
+	}
+	exe, err := m.executableFn()
+	if err != nil {
+		slog.Error("updater: Restart: get executable path failed", "err", err)
+		return
+	}
+	m.defaultRestart(exe)
+}
+
 // GetVersionInfo 返回当前缓存的版本信息（线程安全）。
 func (m *Manager) GetVersionInfo() VersionInfo {
 	m.mu.RLock()

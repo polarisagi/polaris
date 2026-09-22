@@ -1,15 +1,10 @@
 package main
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 
 	"github.com/polarisagi/polaris/internal/security/credential"
-	"github.com/polarisagi/polaris/internal/store/repo"
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
@@ -45,62 +40,28 @@ func runVaultInit() error {
 	return nil
 }
 
+// runVaultRotate 通过 HTTP 触发内核执行主密钥轮换（ADR-0096 决策一）。
+// 轮换本身（解密/重新加密/原子替换 vault.key）在内核侧
+// internal/gateway/server/sysadmin/vault_admin.go 的 HandleVaultRotateMasterKey
+// 完成——该操作必须与内核共享同一个 *sql.DB 写连接与同一份运行时 credential.Vault
+// 实例，CLI 侧不再另开数据库连接。轮换完成后内核会自行重启以从新 vault.key 重新
+// 加载，CLI 只需告知用户服务将短暂中断。
 func runVaultRotate() error {
-	dataDir, err := resolveDataDirBase(nil)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate failed", err)
+	if err := cliCheckServer(); err != nil {
+		return err
 	}
-	keyPath := filepath.Join(dataDir, "vault.key")
-	dbPath := filepath.Join(dataDir, "data", "polaris.db")
-
-	oldVault, err := credential.NewVaultInDir(dataDir)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate: failed to load existing vault", err)
+	var resp struct {
+		Status           string `json:"status"`
+		ProvidersRotated int    `json:"providers_rotated"`
+		Restarting       bool   `json:"restarting"`
 	}
-
-	// Generate new key
-	newKey, err := credential.GenerateNewKey(keyPath + ".new")
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate: failed to generate new key", err)
+	if err := cliPost("/v1/vault/rotate-master-key", nil, &resp); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "vault rotate-master-key failed", err)
 	}
-
-	newVault, err := credential.NewVaultWithKey(newKey)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate: failed to load new vault", err)
+	slog.Info("polaris: credential master key rotated successfully", "providers_updated", resp.ProvidersRotated)
+	fmt.Printf("%s  主密钥已轮换（%d 个 provider 已重新加密）\n", clr(ansiOk, "✓"), resp.ProvidersRotated)
+	if resp.Restarting {
+		fmt.Println(clr(ansiDim, "  守护进程正在重启以加载新密钥，片刻后恢复可用。"))
 	}
-
-	// Connect to DB and rotate.
-	// 驱动名必须是 "sqlite"（modernc.org/sqlite，纯 Go，ADR-0011 零 CGO 约束），
-	// 而非 "sqlite3"（mattn/go-sqlite3，仅在测试文件里注册，main 包从未 blank-import，
-	// 用 "sqlite3" 会导致运行时 "unknown driver" 报错）。
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate: failed to open db", err)
-	}
-	defer db.Close()
-
-	oldRepo := repo.NewSQLiteProviderRepository(db).WithVault(oldVault)
-	newRepo := repo.NewSQLiteProviderRepository(db).WithVault(newVault)
-
-	providers, err := oldRepo.ListProviders(context.Background())
-	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate: failed to list providers", err)
-	}
-
-	for _, p := range providers {
-		if p.APIKey != "" {
-			err = newRepo.UpdateProviderAPIKey(context.Background(), p.ID, p.APIKey, p.UpdatedAt)
-			if err != nil {
-				return apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("vault rotate: failed to update provider %s", p.ID), err)
-			}
-		}
-	}
-
-	// Atomically swap keys
-	if err := os.Rename(keyPath+".new", keyPath); err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "vault rotate: failed to swap keys", err)
-	}
-
-	slog.Info("polaris: credential master key rotated successfully", "providers_updated", len(providers))
 	return nil
 }

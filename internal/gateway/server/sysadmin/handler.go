@@ -1,6 +1,7 @@
 package sysadmin
 
 import (
+	"database/sql"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
@@ -11,6 +12,7 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/workflowadmin"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 
+	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 
 	"net/http"
@@ -87,6 +89,14 @@ type SysAdminHandler struct {
 	SkillSignKey       []byte
 	LastEventOffset    int64
 
+	// Vault/RWDB 供 HandleVaultRotateMasterKey 使用（ADR-0096 决策一修复：
+	// 主密钥轮换此前由 cmd/polaris/cli_vault.go 直连 SQLite 完成，绕过唯一业务
+	// 通道）。RWDB 是读写连接池，与 server_lifecycle.go 构造 s.providerRepo
+	// 用的是同一个 *sql.DB；Vault 是启动时同一份 credential.NewVaultInDir(dataDir)
+	// 实例，二者保持与 NewServer 内部状态同源，不另开连接/另生成 key。
+	Vault *credential.Vault
+	RWDB  *sql.DB
+
 	Embedder search.Embedder
 
 	Insights   *insightsadmin.InsightsAdmin
@@ -139,6 +149,8 @@ type Dependencies struct {
 	SequentialExec *orchestrator.SequentialExecutor
 	SwarmCoord     *orchestrator.SwarmCoordinator
 	KillSwitch     *security.KillSwitch
+	Vault          *credential.Vault
+	RWDB           *sql.DB
 	ChannelMgr     interface {
 		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
@@ -186,6 +198,8 @@ func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 		SwarmCoord:        deps.SwarmCoord,
 		ChannelMgr:        deps.ChannelMgr,
 		KillSwitch:        deps.KillSwitch,
+		Vault:             deps.Vault,
+		RWDB:              deps.RWDB,
 		StreamIdleTimeout: deps.StreamIdleTimeout,
 		Insights:          insightsadmin.NewInsightsAdmin(deps.DB),
 		// Store/Sentinel 均先 nil 构造（此时 AgentBundle 尚未构建），Server.SetEvalAdmin
