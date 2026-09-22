@@ -402,6 +402,23 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	if err := ir.acquireLLMCapacity(ctx); err != nil {
 		return nil, err
 	}
+	// [2026-09-22 修复] acquireLLMCapacity 拿到的 LLM 并发额度此前只在成功路径
+	// （wrapStreamChannel 内部的 deferred ReleaseLLM，流真正关闭时才释放）归还；
+	// 本函数的每一条错误返回路径（含下方 streamFailover 兜底全部失败的情形）
+	// 都不释放，额度永久泄漏——连续几次失败调用（如 Provider 配置错误）就能
+	// 耗尽默认上限，此后即便 Provider 已恢复健康，所有请求也会卡在
+	// WaitForLLMCapacity 直到超时，表现为"推理返回空内容"且日志无任何可追溯
+	// 错误（真实复现：DeepSeek base_url 配置错误导致连续失败，两轮对话内耗尽
+	// 默认 4 个并发额度）。released 标记确保：成功路径把释放责任移交给
+	// wrapStreamChannel（语义不变，流关闭时释放），其余路径在此兜底释放。
+	released := false
+	if ir.governor != nil {
+		defer func() {
+			if !released {
+				ir.governor.ReleaseLLM()
+			}
+		}()
+	}
 
 	start := time.Now()
 
@@ -434,9 +451,14 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.StreamInfer: non-retryable ("+string(ce.Reason)+")", err)
 		}
 
-		return ir.streamFailover(ctx, msgs, opts, req, entry.name)
+		fch, ferr := ir.streamFailover(ctx, msgs, opts, req, entry.name)
+		if ferr == nil {
+			released = true
+		}
+		return fch, ferr
 	}
 
+	released = true
 	return ir.wrapStreamChannel(ctx, ch, req, entry.name), nil
 }
 
