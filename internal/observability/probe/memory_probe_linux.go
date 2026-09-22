@@ -66,25 +66,29 @@ func parseMeminfoKB(line string) uint64 {
 // probeCgroupMemory 读取当前进程所属 cgroup 的内存上限与已用量（v2 优先，回退 v1）。
 // ok=false 表示不在受限 cgroup 内（未容器化，或上限为 "max"/极大值）。
 func probeCgroupMemory() (limit, available uint64, ok bool) {
-	// cgroup v2：统一层级，上限 "max" 表示不限。
-	if l, err := readUintFile("/sys/fs/cgroup/memory.max"); err == nil && l > 0 {
+	// cgroup v2：统一层级，上限 "max" 表示不限（解析失败即视为不限）。
+	if l, ok := readUintFile("/sys/fs/cgroup/memory.max"); ok && l > 0 {
 		used, _ := readUintFile("/sys/fs/cgroup/memory.current")
 		return l, saturatingSub(l, used), true
 	}
 	// cgroup v1：未设上限时是一个接近 uint64 max 的哨兵值（PAGE_COUNTER_MAX×PAGE_SIZE）。
-	if l, err := readUintFile("/sys/fs/cgroup/memory/memory.limit_in_bytes"); err == nil && l > 0 && l < 1<<62 {
+	if l, ok := readUintFile("/sys/fs/cgroup/memory/memory.limit_in_bytes"); ok && l > 0 && l < 1<<62 {
 		used, _ := readUintFile("/sys/fs/cgroup/memory/memory.usage_in_bytes")
 		return l, saturatingSub(l, used), true
 	}
 	return 0, 0, false
 }
 
-func readUintFile(path string) (uint64, error) {
+// readUintFile 读取 cgroup 伪文件里的单个无符号整数。
+// 返回 ok=false 表示"文件不存在 / 内容不是数字"（典型：cgroup v2 的 "max"），
+// 两者对调用方是同一种情况——没有可用的上限值，故不返回 error。
+func readUintFile(path string) (uint64, bool) {
 	b, err := os.ReadFile(path) //nolint:gosec // 固定的 cgroup 伪文件路径，非外部输入
 	if err != nil {
-		return 0, err //nolint:wrapcheck // 调用方只判定成败，不消费错误内容
+		return 0, false
 	}
-	return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64) //nolint:wrapcheck // 同上
+	v, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	return v, err == nil
 }
 
 func saturatingSub(a, b uint64) uint64 {
