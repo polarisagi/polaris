@@ -425,7 +425,7 @@
                 <label for="add-custom-base-url" class="label"><span class="label-text font-bold">Base URL</span></label>
                 <input id="add-custom-base-url" name="add-custom-base-url" type="url" class="input input-bordered w-full"
                   x-model="$store.providers.addForm.base_url"
-                  :placeholder="$store.providers.addForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com/v1'" />
+                  :placeholder="$store.providers.addForm.type === 'ollama' ? 'http://localhost:11434' : 'https://api.deepseek.com'" />
               </div>
             </template>
             <template x-if="$store.providers.addForm.type !== 'ollama'">
