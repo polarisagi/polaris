@@ -1,7 +1,6 @@
 package sysadmin
 
 import (
-	"database/sql"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/channelsadmin"
@@ -12,7 +11,6 @@ import (
 	"github.com/polarisagi/polaris/internal/gateway/server/sysadmin/workflowadmin"
 	"github.com/polarisagi/polaris/internal/protocol/repo"
 
-	"github.com/polarisagi/polaris/internal/security/credential"
 	"github.com/polarisagi/polaris/internal/sysmgr/updater"
 
 	"net/http"
@@ -89,13 +87,12 @@ type SysAdminHandler struct {
 	SkillSignKey       []byte
 	LastEventOffset    int64
 
-	// Vault/RWDB 供 HandleVaultRotateMasterKey 使用（ADR-0096 决策一修复：
-	// 主密钥轮换此前由 cmd/polaris/cli_vault.go 直连 SQLite 完成，绕过唯一业务
-	// 通道）。RWDB 是读写连接池，与 server_lifecycle.go 构造 s.providerRepo
-	// 用的是同一个 *sql.DB；Vault 是启动时同一份 credential.NewVaultInDir(dataDir)
-	// 实例，二者保持与 NewServer 内部状态同源，不另开连接/另生成 key。
-	Vault *credential.Vault
-	RWDB  *sql.DB
+	// RotateVaultMasterKey 供 HandleVaultRotateMasterKey 使用（ADR-0096 决策一修复：
+	// 主密钥轮换此前由 cmd/polaris/cli_vault.go 直连 SQLite 完成，绕过唯一业务通道）。
+	// 实现闭包在 server_lifecycle.go 内构造，捕获 rwDB/vault 两个局部变量而非存成
+	// 结构体字段——sysadmin 包不持有 *sql.DB（inv_NoRawSQLDBField 禁止 storage 层外
+	// 的包声明 *sql.DB 字段）。
+	RotateVaultMasterKey func(ctx context.Context) (int, error)
 
 	Embedder search.Embedder
 
@@ -135,23 +132,22 @@ type Dependencies struct {
 	// Registry），而非重新构造一份等价对象——三个 Headless 子结构体
 	// （Workflow/Cron/Channels）与 chat SSE 入口共享同一套服务器级依赖，见
 	// server_lifecycle.go 装配注释。
-	SessionOrch    session.Orchestrator
-	Registry       protocol.LLMRegistry
-	Router         protocol.ProviderRouter
-	HTTPClient     *http.Client
-	ExtRepo        protocol.ExtensionRepository
-	HITLGateway    protocol.HITL
-	Blackboard     *orchestrator.SQLiteBlackboard
-	PipelineOrch   *orchestrator.PipelineOrchestrator
-	PatternDAGExec *orchestrator.PatternDAGExecutor
-	MapReduceExec  *orchestrator.MapReduceExecutor
-	ParallelExec   *orchestrator.ParallelExecutor
-	SequentialExec *orchestrator.SequentialExecutor
-	SwarmCoord     *orchestrator.SwarmCoordinator
-	KillSwitch     *security.KillSwitch
-	Vault          *credential.Vault
-	RWDB           *sql.DB
-	ChannelMgr     interface {
+	SessionOrch          session.Orchestrator
+	Registry             protocol.LLMRegistry
+	Router               protocol.ProviderRouter
+	HTTPClient           *http.Client
+	ExtRepo              protocol.ExtensionRepository
+	HITLGateway          protocol.HITL
+	Blackboard           *orchestrator.SQLiteBlackboard
+	PipelineOrch         *orchestrator.PipelineOrchestrator
+	PatternDAGExec       *orchestrator.PatternDAGExecutor
+	MapReduceExec        *orchestrator.MapReduceExecutor
+	ParallelExec         *orchestrator.ParallelExecutor
+	SequentialExec       *orchestrator.SequentialExecutor
+	SwarmCoord           *orchestrator.SwarmCoordinator
+	KillSwitch           *security.KillSwitch
+	RotateVaultMasterKey func(ctx context.Context) (int, error)
+	ChannelMgr           interface {
 		protocol.ChannelFacade
 		Start(channelType, channelID string, cfg map[string]any)
 		Stop(channelID string)
@@ -168,40 +164,39 @@ type Dependencies struct {
 // goroutine（已修复为 concurrent.SafeGo），非构造函数。
 func NewSysAdminHandler(deps Dependencies) *SysAdminHandler {
 	h := &SysAdminHandler{
-		DB:                deps.DB,
-		SystemRepo:        deps.SystemRepo,
-		BudgetRepo:        deps.BudgetRepo,
-		ChannelRepo:       deps.ChannelRepo,
-		EventRepo:         deps.EventRepo,
-		CronRepo:          deps.CronRepo,
-		WorkflowRepo:      deps.WorkflowRepo,
-		MCPMgr:            deps.MCPMgr,
-		Hooks:             deps.Hooks,
-		DataDir:           deps.DataDir,
-		ChatRepo:          deps.ChatRepo,
-		ProjectRepo:       deps.ProjectRepo,
-		ProviderRepo:      deps.ProviderRepo,
-		AppRepo:           deps.AppRepo,
-		ServerAddr:        deps.ServerAddr,
-		AutomationRepo:    deps.AutomationRepo,
-		Chat:              deps.Chat,
-		Registry:          deps.Registry,
-		Router:            deps.Router,
-		HTTPClient:        deps.HTTPClient,
-		ExtRepo:           deps.ExtRepo,
-		HITLGateway:       deps.HITLGateway,
-		PipelineOrch:      deps.PipelineOrch,
-		PatternDAGExec:    deps.PatternDAGExec,
-		MapReduceExec:     deps.MapReduceExec,
-		ParallelExec:      deps.ParallelExec,
-		SequentialExec:    deps.SequentialExec,
-		SwarmCoord:        deps.SwarmCoord,
-		ChannelMgr:        deps.ChannelMgr,
-		KillSwitch:        deps.KillSwitch,
-		Vault:             deps.Vault,
-		RWDB:              deps.RWDB,
-		StreamIdleTimeout: deps.StreamIdleTimeout,
-		Insights:          insightsadmin.NewInsightsAdmin(deps.DB),
+		DB:                   deps.DB,
+		SystemRepo:           deps.SystemRepo,
+		BudgetRepo:           deps.BudgetRepo,
+		ChannelRepo:          deps.ChannelRepo,
+		EventRepo:            deps.EventRepo,
+		CronRepo:             deps.CronRepo,
+		WorkflowRepo:         deps.WorkflowRepo,
+		MCPMgr:               deps.MCPMgr,
+		Hooks:                deps.Hooks,
+		DataDir:              deps.DataDir,
+		ChatRepo:             deps.ChatRepo,
+		ProjectRepo:          deps.ProjectRepo,
+		ProviderRepo:         deps.ProviderRepo,
+		AppRepo:              deps.AppRepo,
+		ServerAddr:           deps.ServerAddr,
+		AutomationRepo:       deps.AutomationRepo,
+		Chat:                 deps.Chat,
+		Registry:             deps.Registry,
+		Router:               deps.Router,
+		HTTPClient:           deps.HTTPClient,
+		ExtRepo:              deps.ExtRepo,
+		HITLGateway:          deps.HITLGateway,
+		PipelineOrch:         deps.PipelineOrch,
+		PatternDAGExec:       deps.PatternDAGExec,
+		MapReduceExec:        deps.MapReduceExec,
+		ParallelExec:         deps.ParallelExec,
+		SequentialExec:       deps.SequentialExec,
+		SwarmCoord:           deps.SwarmCoord,
+		ChannelMgr:           deps.ChannelMgr,
+		KillSwitch:           deps.KillSwitch,
+		RotateVaultMasterKey: deps.RotateVaultMasterKey,
+		StreamIdleTimeout:    deps.StreamIdleTimeout,
+		Insights:             insightsadmin.NewInsightsAdmin(deps.DB),
 		// Store/Sentinel 均先 nil 构造（此时 AgentBundle 尚未构建），Server.SetEvalAdmin
 		// 后置回填时对本对象的字段做原地赋值而非替换整个指针——server_routes.go 注册路由
 		// 时捕获的是 h.Eval 这个指针本身，必须保持稳定，否则回填对已注册路由不可见
