@@ -5,9 +5,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// cancelledStreamProvider 只产出一个 StreamCancelled 事件即关闭流，模拟
+// ctx 超时/预算守卫硬阻断在还没输出任何摘要文本前就打断 Summarize 调用。
+type cancelledStreamProvider struct{}
+
+func (p *cancelledStreamProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+	return nil, nil
+}
+
+func (p *cancelledStreamProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	ch := make(chan types.StreamEvent, 1)
+	ch <- types.StreamEvent{Type: types.StreamCancelled, Content: "context deadline exceeded"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *cancelledStreamProvider) Capabilities() types.ProviderCapabilities {
+	return types.ProviderCapabilities{}
+}
+func (p *cancelledStreamProvider) Tokenizer() protocol.TokenizerAdapter { return nil }
+func (p *cancelledStreamProvider) ModelID() string                      { return "mock-cancelled" }
+
+var _ protocol.Provider = (*cancelledStreamProvider)(nil)
 
 // 以下测试 2026-07-22 从 internal/gateway/server/chat/compressor_test.go 随
 // 算法本体一并迁移（M4/M5 共享压缩算法抽取，见 compact.go doc 注释），
@@ -76,6 +100,21 @@ func TestCalcSummaryBudget(t *testing.T) {
 	}
 	if CalcSummaryBudget(small, DefaultSummaryRatio, DefaultMinSummaryTokens, DefaultMaxSummaryTokens) != DefaultMinSummaryTokens {
 		t.Errorf("expected %d for small", DefaultMinSummaryTokens)
+	}
+}
+
+// TestSummarize_StreamCancelled 复现 empty_response 同族根因在 compact.Summarize
+// 里的版本：流被中断且未产出任何摘要文本时必须返回错误，不能返回 ("", nil)——
+// 那会被 orchestrator_interactive.go 的自动压缩逻辑当作"摘要成功但为空"，
+// 静默丢弃压缩前的原始上下文。
+func TestSummarize_StreamCancelled(t *testing.T) {
+	msgs := []types.Message{{Role: "user", Content: "hello"}}
+	summary, err := Summarize(context.Background(), msgs, 100, &cancelledStreamProvider{})
+	if err == nil {
+		t.Fatalf("expected error, got nil (summary=%q) — StreamCancelled 被静默当作成功", summary)
+	}
+	if !apperr.IsCode(err, apperr.CodeCancelled) {
+		t.Errorf("expected error code %s, got err: %v", apperr.CodeCancelled, err)
 	}
 }
 
