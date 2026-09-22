@@ -108,8 +108,12 @@ type Request struct {
 	// 保留字段是为了不改变 Headless 三个既有调用方（workflow_engine.go /
 	// cron_runner.go）此前传自动化任务名（而非用户输入原文）作为标题的行为。
 	TitleHint string
-	// RunID / ReasoningEffort 原 agentStreamRequest 字段，仅交互式路径在
-	// AgentPool 资源耗尽降级判定时使用（区分后台提炼请求 vs 前台对话请求）。
+	// RunID 前端幂等去重键（web/src/js/store/chat.js dedupeRunID），后端当前
+	// 未消费（[2026-09-22] 此前 orchestrator_interactive.go 曾误用它区分
+	// "后台提炼请求 vs 前台对话请求"——但 RunID 在每次交互式提交时恒为非空，
+	// 与是否后台任务无关，已删除该误判分支，字段随 wire 协议保留）。
+	// ReasoningEffort 前端推理强度选择（chat.html 下拉框 auto/low/medium/
+	// high），后端当前未消费，预留给未来接入实际模型参数。
 	RunID           string
 	ReasoningEffort string
 	// Metadata 额外注入 message.before/message.after/turn.stop 等 Hook 环境变量
