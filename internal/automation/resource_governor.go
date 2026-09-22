@@ -9,12 +9,30 @@ package automation
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/probe"
 	"github.com/polarisagi/polaris/pkg/concurrent"
+)
+
+// backgroundAdmissionTotal 后台工作准入结果计数（HE-1：限流必须可观测，
+// 否则"后台任务为什么没跑"只能靠猜）。status: admitted / denied_pressure / denied_busy。
+//
+// custom-nolint:global-var
+//
+//nolint:gochecknoglobals // Prometheus 指标，与 idleEvolutionTasksTotal 同属一等公民（ADR-0001）
+var backgroundAdmissionTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "polaris_background_admission_total",
+		Help: "Background work admission decisions by ResourceGovernor.",
+	},
+	[]string{"work", "status"},
 )
 
 // CPU 与内存探针已于 2026-09-22 归口到 internal/observability/probe
@@ -99,7 +117,7 @@ func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *
 		memProbeFn: func() int64 {
 			return int64(probe.ProbeAvailableMemoryMB())
 		},
-		cpuProbeFn: probe.ProbeCPUUsagePercent,
+		cpuProbeFn: probe.NewCPUSampler().Usage,
 	}
 	rg.cond = sync.NewCond(&rg.mu)
 	return rg
@@ -135,25 +153,9 @@ func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 	}
 	defer rg.mu.Unlock()
 
-	freeMemMB := rg.memProbeFn()
-	cpuUsage := rg.cpuProbeFn()
-	degradeLevel := 0
-
-	if freeMemMB < int64(rg.cfg.MemL1FreeMB) || cpuUsage > rg.cfg.CPUL1Pct {
-		degradeLevel = 1
-	}
-	if freeMemMB < int64(rg.cfg.MemL2FreeMB) || cpuUsage > rg.cfg.CPUL2Pct {
-		degradeLevel = 2
-	}
-
-	if freeMemMB < int64(rg.cfg.MemL3FreeMB) && priority != 0 {
-		return false, 3
-	}
-	if freeMemMB < int64(rg.cfg.MemL3FreeMB) {
-		degradeLevel = 3
-	}
-	if (cpuUsage > rg.cfg.CPUL1Pct || freeMemMB < int64(rg.cfg.MemL2FreeMB)) && priority != 0 {
-		return false, 2
+	deny, degradeLevel := rg.denyDegradableLocked()
+	if deny && priority != 0 {
+		return false, degradeLevel
 	}
 
 	if priority == 0 {
@@ -171,6 +173,55 @@ func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 
 	rg.inFlight++
 	return true, degradeLevel
+}
+
+// AdmitBackground 后台工作准入闸门：周期性重索引、向量回填、知识同步、记忆巩固
+// 等"可以下次再跑"的工作在每轮开始前调用，拿到 release 才执行，用完必须调用
+// release（惯用 `defer release()`）。
+//
+// [2026-09-22 接线] 此前 ResourceGovernor 只有 Admit/AdmitLLM 两个入口，而 Admit
+// 全仓无人调用——真实效果是"该被限流的后台任务完全不受限，该被保活的用户对话
+// 反而被内存/CPU 闸门拦死"，设计意图整个反了。实测表现：清库重启后，148 个扩展
+// 的向量回填 + STT 模型下载 + 知识连接器全量同步同时抢占本地嵌入引擎，交互式
+// 检索（Knowledge.Search）连续 30 秒超时。
+//
+// 与 Admit / AdmitLLM 的三点差异，都源于后台工作与用户请求不同的语义：
+//  1. **不触发 activityCallback**。活跃标记的含义是"用户在用系统"，供
+//     IdleEvolutionScheduler 判定空闲窗口；后台工作自己打这个标记，会把空闲窗口
+//     永久顶掉，自进化从此再也不会启动。
+//  2. **拿不到额度直接返回 false，不排队**。后台工作的语义是"这轮跳过，下个
+//     tick 再来"；排队只会让压力解除的瞬间所有积压任务一次性涌出，再次压垮系统。
+//  3. **判据用 denyDegradableLocked**，即内存低于 L2 或 CPU 超过 L1 即拒，
+//     对齐配置里"L2 阻塞：挂起所有后台任务""CPU 阈值：降低后台任务优先级"。
+func (rg *ResourceGovernor) AdmitBackground(name string) (release func(), admitted bool) {
+	// nil 接收者保护：本方法是以**接口**形式注入各后台组件的（如
+	// connector.BackgroundAdmitter），而 boot 层的 sb.ResourceGov 允许为 nil。
+	// 一个 nil 的 *ResourceGovernor 装进接口后接口本身非 nil，调用方的
+	// `if s.admitter != nil` 拦不住——不在这里兜住就是一次空指针 panic。
+	// 治理器缺席时放行，保持"治理是增强而非前置依赖"。
+	if rg == nil {
+		return func() {}, true
+	}
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+
+	deny, degradeLevel := rg.denyDegradableLocked()
+	if deny {
+		backgroundAdmissionTotal.WithLabelValues(name, "denied_pressure").Inc()
+		slog.Debug("resource_governor: background work skipped under pressure",
+			"work", name, "degrade_level", degradeLevel)
+		return nil, false
+	}
+	if rg.maxConcurrent > 0 && rg.inFlight >= rg.maxConcurrent {
+		backgroundAdmissionTotal.WithLabelValues(name, "denied_busy").Inc()
+		return nil, false
+	}
+
+	rg.inFlight++
+	backgroundAdmissionTotal.WithLabelValues(name, "admitted").Inc()
+
+	var once sync.Once
+	return func() { once.Do(rg.Release) }, true
 }
 
 // InFlight 返回当前进行中的任务数。
@@ -249,10 +300,10 @@ func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
 	}
 	defer rg.mu.Unlock()
 
-	degradeLevel := rg.degradeLevelLocked()
+	deny, degradeLevel := rg.denyDegradableLocked()
 
-	// 后台可降级推理：维持三级水位线闸门。
-	if priority != 0 && degradeLevel >= 2 {
+	// 后台可降级推理：维持水位线闸门。
+	if priority != 0 && deny {
 		return false, degradeLevel
 	}
 
@@ -266,21 +317,32 @@ func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
 	return true, degradeLevel
 }
 
-// degradeLevelLocked 按内存/CPU 水位线计算当前降级等级（0–3）。调用方需持有 rg.mu。
-func (rg *ResourceGovernor) degradeLevelLocked() int {
+// denyDegradableLocked 判定"可降级工作"（后台任务 / 后台推理）当前是否应被拒绝，
+// 并一并返回降级等级。调用方需持有 rg.mu。
+//
+// 判据逐条对齐 configs/defaults.toml [system.resource_governor] 对各水位线的定义，
+// 不再凭等级序号隐式推导——那正是旧实现把"降低后台任务优先级"的 CPU 阈值
+// 套到用户对话上的原因：
+//
+//	mem_l3_free_mb "L3 濒死：强杀耗存最大的子进程" → 必拒
+//	mem_l2_free_mb "L2 阻塞：挂起所有后台任务"     → 内存低于 L2 即拒
+//	cpu_l1_pct     "CPU 阈值：降低后台任务优先级"  → CPU 超过 L1 即拒
+//	mem_l1_free_mb "L1 警告：停止拉起新 Agent"     → 仅计入等级，不单独拒绝
+func (rg *ResourceGovernor) denyDegradableLocked() (deny bool, degradeLevel int) {
 	freeMemMB := rg.memProbeFn()
 	cpuUsage := rg.cpuProbeFn()
 
 	switch {
 	case freeMemMB < int64(rg.cfg.MemL3FreeMB):
-		return 3
+		degradeLevel = 3
 	case freeMemMB < int64(rg.cfg.MemL2FreeMB) || cpuUsage > rg.cfg.CPUL2Pct:
-		return 2
+		degradeLevel = 2
 	case freeMemMB < int64(rg.cfg.MemL1FreeMB) || cpuUsage > rg.cfg.CPUL1Pct:
-		return 1
-	default:
-		return 0
+		degradeLevel = 1
 	}
+
+	deny = degradeLevel >= 2 || cpuUsage > rg.cfg.CPUL1Pct
+	return deny, degradeLevel
 }
 
 // WaitForLLMCapacity 阻塞直到 LLM 容量释放或上下文取消

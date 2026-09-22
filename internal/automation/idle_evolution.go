@@ -110,6 +110,37 @@ func (s *IdleEvolutionScheduler) isIdle() bool {
 	return idleDur > s.idleThreshold && s.rg.InFlight() == 0
 }
 
+// launchIdleTask 启动一个空闲期后台任务。fn 为 nil 时不做任何事。
+//
+// 空闲判定（无用户活动 + InFlight==0）回答的是"现在该不该打扰用户"，
+// 而 AdmitBackground 回答的是"现在机器扛不扛得住"——两者正交，都必须过。
+// 此前只有前者：清库重启那种"用户没操作、但机器正在下模型 + 回填 148 个扩展
+// 向量"的场景下，空闲判定为真，于是又把巩固/遗忘/剪枝一股脑压了上去。
+func (s *IdleEvolutionScheduler) launchIdleTask(
+	ctx, taskCtx context.Context, wg *sync.WaitGroup, name string, fn func(context.Context) error,
+) {
+	if fn == nil {
+		return
+	}
+	release, ok := s.rg.AdmitBackground("idle_" + name)
+	if !ok {
+		idleEvolutionTasksTotal.WithLabelValues(name, "skipped_pressure").Inc()
+		return
+	}
+	wg.Add(1)
+	idleEvolutionTasksTotal.WithLabelValues(name, "started").Inc()
+	concurrent.SafeGo(ctx, "idle_evolution."+name, func(gctx context.Context) {
+		defer wg.Done()
+		defer release()
+		if err := fn(taskCtx); err != nil {
+			slog.WarnContext(gctx, "idle_evolution: task failed", "task", name, "err", err)
+			idleEvolutionTasksTotal.WithLabelValues(name, "failed").Inc()
+			return
+		}
+		idleEvolutionTasksTotal.WithLabelValues(name, "success").Inc()
+	})
+}
+
 func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 	s.mu.Lock()
 	if len(s.cancelFuncs) > 0 {
@@ -132,48 +163,13 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 
 	var wg sync.WaitGroup
 
-	// Tier0 任务：巴固 + 记忆滤波
-	if s.consolidateFn != nil {
-		wg.Add(1)
-		idleEvolutionTasksTotal.WithLabelValues("consolidate", "started").Inc()
-		concurrent.SafeGo(ctx, "idle_evolution.consolidate", func(gctx context.Context) {
-			defer wg.Done()
-			if err := s.consolidateFn(taskCtx); err != nil {
-				slog.WarnContext(gctx, "idle_evolution: consolidate failed", "err", err)
-				idleEvolutionTasksTotal.WithLabelValues("consolidate", "failed").Inc()
-			} else {
-				idleEvolutionTasksTotal.WithLabelValues("consolidate", "success").Inc()
-			}
-		})
-	}
-	if s.forgettingFn != nil {
-		wg.Add(1)
-		idleEvolutionTasksTotal.WithLabelValues("forgetting", "started").Inc()
-		concurrent.SafeGo(ctx, "idle_evolution.forgetting", func(gctx context.Context) {
-			defer wg.Done()
-			if err := s.forgettingFn(taskCtx); err != nil {
-				slog.WarnContext(gctx, "idle_evolution: forgetting failed", "err", err)
-				idleEvolutionTasksTotal.WithLabelValues("forgetting", "failed").Inc()
-			} else {
-				idleEvolutionTasksTotal.WithLabelValues("forgetting", "success").Inc()
-			}
-		})
-	}
-	if s.graphPruneFn != nil {
-		wg.Add(1)
-		idleEvolutionTasksTotal.WithLabelValues("graph_prune", "started").Inc()
-		concurrent.SafeGo(ctx, "idle_evolution.graph_prune", func(gctx context.Context) {
-			defer wg.Done()
-			if err := s.graphPruneFn(taskCtx); err != nil {
-				slog.WarnContext(gctx, "idle_evolution: graph prune failed", "err", err)
-				idleEvolutionTasksTotal.WithLabelValues("graph_prune", "failed").Inc()
-			} else {
-				idleEvolutionTasksTotal.WithLabelValues("graph_prune", "success").Inc()
-			}
-		})
-	}
+	// Tier0 任务：巩固 + 记忆滤波 + 图剪枝。三者原为三段逐字重复的样板，
+	// 2026-09-22 随资源准入接线一并收敛为 launchIdleTask。
+	s.launchIdleTask(ctx, taskCtx, &wg, "consolidate", s.consolidateFn)
+	s.launchIdleTask(ctx, taskCtx, &wg, "forgetting", s.forgettingFn)
+	s.launchIdleTask(ctx, taskCtx, &wg, "graph_prune", s.graphPruneFn)
 
-	concurrent.SafeGo(ctx, "idle_evolution.wait_cleanup", func(gctx context.Context) {
+	concurrent.SafeGo(ctx, "idle_evolution.wait_cleanup", func(_ context.Context) {
 		wg.Wait()
 		cancel() // 释放资源
 
