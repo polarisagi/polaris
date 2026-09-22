@@ -37,6 +37,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_admin/kill", s.sysadminHandler.HandleKill)
 	mux.HandleFunc("POST /_admin/unseal", s.sysadminHandler.HandleUnseal)
 
+	// credential.Vault 主密钥轮换（ADR-0096 决策一修复，见 vault_admin.go 文件头注释）
+	mux.HandleFunc("POST /v1/vault/rotate-master-key", s.sysadminHandler.HandleVaultRotateMasterKey)
+
 	// 厂商字典 API（只读，内置种子）
 	mux.HandleFunc("GET /v1/catalog/providers", s.providerHandler.HandleListCatalogProviders)
 
