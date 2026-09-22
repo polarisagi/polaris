@@ -13,39 +13,83 @@ import (
 )
 
 func probeOSMemory() (total uint64, available uint64) {
+	total, available = probeHostMemory()
+	if total == 0 {
+		return fallbackMemoryProbe()
+	}
+	// 容器内 /proc/meminfo 报的是**宿主机**内存（procfs 未被 lxcfs 之类改写时），
+	// 而进程实际能用的是 cgroup 上限。Tier-0 的目标部署形态就包含 2GB VPS 上的
+	// 容器，若按宿主机 64GB 判定 Tier，会直接把本地推理/大并发等能力错误解锁，
+	// 随后被 OOM Killer 收场。取两者较小值。
+	if cgTotal, cgAvail, ok := probeCgroupMemory(); ok && cgTotal < total {
+		return cgTotal, cgAvail
+	}
+	return total, available
+}
+
+func probeHostMemory() (total uint64, available uint64) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		// Fallback to sysinfo
 		var si unix.Sysinfo_t
-		if err := unix.Sysinfo(&si); err == nil {
+		if sysErr := unix.Sysinfo(&si); sysErr == nil {
 			total = si.Totalram * uint64(si.Unit)
 			available = (si.Freeram + si.Bufferram) * uint64(si.Unit)
-			if total > 0 {
-				return total, available
-			}
 		}
-		return fallbackMemoryProbe()
+		return total, available
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if len(line) > 13 && line[:13] == "MemAvailable:" {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				val, _ := strconv.ParseUint(fields[1], 10, 64)
-				available = val * 1024 // kB to bytes
-			}
-		} else if len(line) > 9 && line[:9] == "MemTotal:" {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				val, _ := strconv.ParseUint(fields[1], 10, 64)
-				total = val * 1024 // kB to bytes
-			}
+		switch {
+		case strings.HasPrefix(line, "MemAvailable:"):
+			available = parseMeminfoKB(line)
+		case strings.HasPrefix(line, "MemTotal:"):
+			total = parseMeminfoKB(line)
 		}
 	}
-	if total == 0 {
-		return fallbackMemoryProbe()
-	}
 	return total, available
+}
+
+func parseMeminfoKB(line string) uint64 {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return 0
+	}
+	val, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return val * 1024 // kB → bytes
+}
+
+// probeCgroupMemory 读取当前进程所属 cgroup 的内存上限与已用量（v2 优先，回退 v1）。
+// ok=false 表示不在受限 cgroup 内（未容器化，或上限为 "max"/极大值）。
+func probeCgroupMemory() (limit, available uint64, ok bool) {
+	// cgroup v2：统一层级，上限 "max" 表示不限。
+	if l, err := readUintFile("/sys/fs/cgroup/memory.max"); err == nil && l > 0 {
+		used, _ := readUintFile("/sys/fs/cgroup/memory.current")
+		return l, saturatingSub(l, used), true
+	}
+	// cgroup v1：未设上限时是一个接近 uint64 max 的哨兵值（PAGE_COUNTER_MAX×PAGE_SIZE）。
+	if l, err := readUintFile("/sys/fs/cgroup/memory/memory.limit_in_bytes"); err == nil && l > 0 && l < 1<<62 {
+		used, _ := readUintFile("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+		return l, saturatingSub(l, used), true
+	}
+	return 0, 0, false
+}
+
+func readUintFile(path string) (uint64, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // 固定的 cgroup 伪文件路径，非外部输入
+	if err != nil {
+		return 0, err //nolint:wrapcheck // 调用方只判定成败，不消费错误内容
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64) //nolint:wrapcheck // 同上
+}
+
+func saturatingSub(a, b uint64) uint64 {
+	if b >= a {
+		return 0
+	}
+	return a - b
 }
