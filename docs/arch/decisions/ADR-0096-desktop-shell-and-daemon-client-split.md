@@ -191,3 +191,5 @@
 | 2026-09-21 | 追记修订三：状态转 Accepted；路径订正——守护进程安装位置写为 `DataLayout.Bin`（`~/.polarisagi/polaris/bin`，既有字段），run/ 三文件路径归入 DataLayout 而非由 runtimeinfo 自行推导，遵从 layout.go 的路径 SSoT 约定。 |
 | 2026-09-21 | 实施追记：P0（T1~T7）与 P2 外壳骨架落地。三处与初稿的差异已并入正文——服务注册归并为单一实现（决策一）、`/healthz` 带版本号（决策四）、外壳经 `service status --json` 发现运行时状态（决策七）。 |
 | 2026-09-21 | 实施追记二：外壳实跑七个分支（宿主/附着/凭证不匹配/崩溃检测/陈旧状态/核心缺失/版本不兼容）后并入正文——判活改以单实例锁为准、退出改为两个显式菜单项、新增后台巡检；新增「范围裁决」节记录不做的五项及理由。 |
+| 2026-09-22 | 分发合并：GitHub Release 不再分"核心"和"桌面"两类产物。每平台/架构组合只出一个归档，内含守护进程 + Rust dylib + 桌面外壳（有桌面版的平台）+ configs。安装脚本从统一归档中提取桌面外壳并放到平台常规位置（macOS → `/Applications/`，Linux → `~/.local/bin/` + `.desktop` 文件，Windows → 开始菜单快捷方式）。决策四"分开安装"的语义收窄为"运行时分离"而非"分发渠道分离"——updater 仍只替换 `bin/` 与 `lib/`，不触碰桌面外壳。`tauri.conf.json` 移除 `dmg` 和 `deb` bundle targets；Windows 改用原始 exe 而非 `.msi`。 |
+| 2026-09-22 | 分发合并补遗：卸载脚本（`uninstall.sh`/`uninstall.ps1`）与安装脚本同步补齐桌面外壳的清理/去重——此前只删 `bin/polaris`、`bin/lib`，桌面外壳落地后残留的解压原件和开始菜单快捷方式未清理。`tauri.conf.json` 的 `msi` bundle target 一并移除（release.yml 的 Windows 分支已改为直接拷贝原始 exe，不再消费 `.msi` 产物，遗留的 `msi` 目标只是白跑一次打包）；此项未经真实 CI 验证，待下次打 tag 触发 `desktop` job 确认 Tauri v2 在目标平台无可用 bundle target 时是否静默跳过而非报错，如报错则回退保留 `msi`。 |

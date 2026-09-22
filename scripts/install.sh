@@ -359,76 +359,47 @@ else
         "⚠️  Service registration failed. Run manually later: ${INSTALL_DIR}/${BIN_NAME} service install"
 fi
 
-# ── 6.8 桌面外壳（可选）──────────────────────────────────────────────────────
-# 外壳与守护进程**分开安装**（ADR-0096 决策四）：守护进程装在 bin/ 下由自身的
-# updater 就地更新，外壳装在系统常规位置。这样就地替换二进制永远发生在 app
-# bundle 之外，不触碰任何签名结构。
-#
-# 默认跳过：无图形界面的服务器装它没有意义。POLARIS_WITH_DESKTOP=1 时安装，
-# 或 --with-desktop 参数。
-WITH_DESKTOP="${POLARIS_WITH_DESKTOP:-0}"
-for arg in "$@"; do
-    [ "$arg" = "--with-desktop" ] && WITH_DESKTOP=1
-done
-
-if [ "$WITH_DESKTOP" = "1" ]; then
-    DESKTOP_NAME="polaris-desktop-${OS}-${ARCH}"
-    case "$OS" in
-        darwin)  DESKTOP_ARCHIVE="${DESKTOP_NAME}.tar.gz" ;;
-        linux)   DESKTOP_ARCHIVE="${DESKTOP_NAME}.AppImage" ;;
-        *)       DESKTOP_ARCHIVE="" ;;
-    esac
-
-    if [ -z "$DESKTOP_ARCHIVE" ]; then
-        msg "⏭️  本平台暂无桌面外壳产物，已跳过。" "⏭️  No desktop bundle for this platform, skipped."
-    else
-        msg "🖥️  正在安装桌面外壳..." "🖥️  Installing desktop shell..."
-        DESKTOP_TMP="$(mktemp -d)"
-        DESKTOP_URL="${GITHUB_BASE}/${DESKTOP_ARCHIVE}"
-        if curl -sSLf --max-time 300 -o "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" "$DESKTOP_URL"; then
-            # 与二进制同样的完整性校验：下载 .sha256 后比对，失败即放弃安装外壳
-            # （但不影响已装好的守护进程——外壳只是界面）。
-            if curl -sSLf --max-time 30 -o "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}.sha256" "${DESKTOP_URL}.sha256"; then
-                EXPECT=$(awk '{print $1}' "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}.sha256")
-                ACTUAL=$(openssl dgst -sha256 "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" | awk '{print $NF}')
-                if [ "$EXPECT" != "$ACTUAL" ]; then
-                    msg "⚠️  桌面外壳校验失败，已跳过安装。" "⚠️  Desktop bundle checksum mismatch, skipped."
-                    rm -rf "$DESKTOP_TMP"
-                    DESKTOP_ARCHIVE=""
-                fi
-            else
-                msg "⚠️  桌面外壳校验和不可得，已跳过安装。" "⚠️  Desktop checksum unavailable, skipped."
-                rm -rf "$DESKTOP_TMP"
-                DESKTOP_ARCHIVE=""
-            fi
-        else
-            msg "⚠️  桌面外壳下载失败，已跳过（守护进程不受影响）。" \
-                "⚠️  Desktop download failed, skipped (daemon unaffected)."
-            rm -rf "$DESKTOP_TMP"
-            DESKTOP_ARCHIVE=""
+# ── 6.8 桌面外壳安装 ─────────────────────────────────────────────────────────
+# 统一归档内含 desktop/ 目录（有桌面版的平台才存在）。安装脚本将桌面外壳放到
+# 系统常规位置，使其可被 Finder / 应用启动器发现。守护进程与桌面外壳同包分发，
+# 不再单独下载（ADR-0096 决策四的"分开安装"指运行时分离，不指分发渠道）。
+DESKTOP_SRC="${INSTALL_DIR}/desktop"
+if [ -d "$DESKTOP_SRC" ]; then
+    if [ "$OS" = "darwin" ]; then
+        APP_PATH=$(find "$DESKTOP_SRC" -maxdepth 1 -name '*.app' | head -1)
+        if [ -n "$APP_PATH" ]; then
+            APP_NAME=$(basename "$APP_PATH")
+            # 安放到 /Applications 并 ad-hoc 签名 + 清隔离属性
+            rm -rf "/Applications/${APP_NAME}"
+            cp -R "$APP_PATH" "/Applications/${APP_NAME}"
+            codesign --force --deep --sign - "/Applications/${APP_NAME}" 2>/dev/null || true
+            xattr -dr com.apple.quarantine "/Applications/${APP_NAME}" 2>/dev/null || true
+            msg "✅ 桌面外壳已安装到 /Applications/${APP_NAME}" \
+                "✅ Desktop shell installed to /Applications/${APP_NAME}"
         fi
-
-        if [ -n "$DESKTOP_ARCHIVE" ] && [ "$OS" = "darwin" ]; then
-            tar -xzf "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" -C "$DESKTOP_TMP"
-            APP_PATH=$(find "$DESKTOP_TMP" -maxdepth 1 -name '*.app' | head -1)
-            if [ -n "$APP_PATH" ]; then
-                rm -rf "/Applications/$(basename "$APP_PATH")"
-                cp -R "$APP_PATH" /Applications/
-                # ad-hoc 签名 + 清隔离属性：Apple Silicon 要求有签名，而本脚本
-                # 走 curl 下载不会写隔离属性，二者合起来即可双击直接运行。
-                codesign --force --deep --sign - "/Applications/$(basename "$APP_PATH")" 2>/dev/null || true
-                xattr -dr com.apple.quarantine "/Applications/$(basename "$APP_PATH")" 2>/dev/null || true
-                msg "✅ 桌面外壳已安装到 /Applications/$(basename "$APP_PATH")" \
-                    "✅ Desktop shell installed to /Applications/$(basename "$APP_PATH")"
-            fi
-        elif [ -n "$DESKTOP_ARCHIVE" ] && [ "$OS" = "linux" ]; then
+    elif [ "$OS" = "linux" ]; then
+        APPIMAGE=$(find "$DESKTOP_SRC" -maxdepth 1 -name '*.AppImage' | head -1)
+        if [ -n "$APPIMAGE" ]; then
             mkdir -p "$HOME/.local/bin"
-            install -m 0755 "${DESKTOP_TMP}/${DESKTOP_ARCHIVE}" "$HOME/.local/bin/polaris-desktop"
+            install -m 0755 "$APPIMAGE" "$HOME/.local/bin/polaris-desktop"
+            # 创建 .desktop 文件供应用启动器发现
+            mkdir -p "$HOME/.local/share/applications"
+            cat > "$HOME/.local/share/applications/polaris-desktop.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Polaris
+Comment=Polaris AI Agent Desktop
+Exec=$HOME/.local/bin/polaris-desktop
+Icon=polaris
+Terminal=false
+Categories=Development;
+DESKTOP
             msg "✅ 桌面外壳已安装：~/.local/bin/polaris-desktop" \
                 "✅ Desktop shell installed: ~/.local/bin/polaris-desktop"
         fi
-        rm -rf "$DESKTOP_TMP"
     fi
+    # 已复制到系统常规位置，bin/ 下的解压原件不再需要，清掉避免永久占用磁盘
+    rm -rf "$DESKTOP_SRC"
 fi
 
 # ── 7. PATH 提示 ──────────────────────────────────────────────────────────────

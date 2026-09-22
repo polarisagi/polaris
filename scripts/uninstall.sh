@@ -64,6 +64,22 @@ if [ -d "${INSTALL_DIR}/lib" ]; then
     rm -rf "${INSTALL_DIR}/lib"
 fi
 
+# ── 3. 删除桌面外壳 ───────────────────────────────────────────────────────────
+# install.sh 将统一归档内的 desktop/ 复制到系统常规位置后即清空原件（不留副本），
+# 故这里直接清理落地位置：macOS → /Applications，Linux → ~/.local/bin + .desktop。
+if [ "$OS" = "darwin" ] && [ -d "/Applications/Polaris.app" ]; then
+    msg "🗑️  删除桌面外壳: /Applications/Polaris.app" \
+        "🗑️  Removing desktop shell: /Applications/Polaris.app"
+    rm -rf "/Applications/Polaris.app"
+elif [ "$OS" = "linux" ]; then
+    if [ -f "$HOME/.local/bin/polaris-desktop" ]; then
+        msg "🗑️  删除桌面外壳: ~/.local/bin/polaris-desktop" \
+            "🗑️  Removing desktop shell: ~/.local/bin/polaris-desktop"
+        rm -f "$HOME/.local/bin/polaris-desktop"
+    fi
+    rm -f "$HOME/.local/share/applications/polaris-desktop.desktop"
+fi
+
 echo ""
 msg "⚠️  数据目录 ~/.polarisagi/polaris 已保留（含数据库、配置、模型）。" \
     "⚠️  Data directory ~/.polarisagi/polaris has been kept (DB, configs, models)."

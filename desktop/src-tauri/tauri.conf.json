@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app", "msi", "appimage", "deb"],
+    "targets": ["app", "appimage"],
     "icon": ["icons/icon.png", "icons/icon.ico"],
     "category": "DeveloperTool",
     "shortDescription": "Polaris 桌面外壳",
