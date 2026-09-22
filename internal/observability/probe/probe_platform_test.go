@@ -42,12 +42,13 @@ func TestProbeOSMemory_NotFallback(t *testing.T) {
 	t.Logf("%s: total=%d MB available=%d MB", runtime.GOOS, total/1024/1024, available/1024/1024)
 }
 
-// TestProbeCPUUsagePercent_InRange 校验 CPU 探针取值域。
+// TestCPUSampler_InRange 校验 CPU 探针取值域。
 // 旧实现在非 Linux 平台按 goroutine 数量返回固定的 20/50/80，本测试不区分
 // 平台断言具体值（CI runner 负载不可控），只守住取值域与不 panic。
-func TestProbeCPUUsagePercent_InRange(t *testing.T) {
+func TestCPUSampler_InRange(t *testing.T) {
+	s := NewCPUSampler()
 	for range 3 {
-		v := ProbeCPUUsagePercent()
+		v := s.Usage()
 		if v < 0 || v > 100 {
 			t.Fatalf("CPU 占用率越界: %f", v)
 		}

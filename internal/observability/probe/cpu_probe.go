@@ -17,16 +17,25 @@ import (
 // `cpuUsage > cpu_l1_pct(80.0)`——严格大于，差一点点就全线拒绝服务，纯属侥幸。
 // 探针归口到本包（CLAUDE.md：probe/ = 硬件与内存探针），供任意调用方复用。
 
-// cpuSampler 带 1 秒缓存的 CPU 占用率采样器（增量型实现需要两次采样间隔，
-// 缓存同时兼顾"避免高频 syscall"与"增量窗口不至于过短而失真"）。
-type cpuSampler struct {
+// CPUSampler 带 1 秒缓存的 CPU 占用率采样器。
+//
+// 增量型实现需要保存上一次快照才能算出增量，因此采样器本身是有状态的；由调用方
+// 持有实例而非放包级单例，既满足 R1.3（禁止全局可变变量），也让测试能各自持有
+// 独立采样器互不干扰。零值可直接使用。
+type CPUSampler struct {
 	mu       sync.Mutex
 	state    cpuSampleState
 	lastTime time.Time
 	lastPct  float64
 }
 
-func (cs *cpuSampler) usage() float64 {
+// NewCPUSampler 创建一个 CPU 占用率采样器。
+func NewCPUSampler() *CPUSampler { return &CPUSampler{} }
+
+// Usage 返回系统 CPU 占用率百分比（0–100）。
+// 首次调用因无上一次快照可能返回 0，后续调用给出增量真实值。
+// 采样结果缓存 1 秒：既避免高频 syscall，也保证增量窗口不至于短到失真。
+func (cs *CPUSampler) Usage() float64 {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -52,17 +61,4 @@ func clampPercent(v float64) float64 {
 	default:
 		return v
 	}
-}
-
-// defaultCPUSampler 进程级采样器。增量型 CPU 占用率必须跨调用保存上一次快照才能
-// 算出增量，天然是单例；内部自带 mutex，对外只读。等价于 metrics 一等公民指标的
-// 豁免情形（ADR-0001）。
-//
-//nolint:gochecknoglobals // 理由见上
-var defaultCPUSampler cpuSampler
-
-// ProbeCPUUsagePercent 返回系统 CPU 占用率百分比（0–100）。
-// 首次调用因无上一次快照可能返回 0，后续调用给出增量真实值。
-func ProbeCPUUsagePercent() float64 {
-	return defaultCPUSampler.usage()
 }

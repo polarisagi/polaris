@@ -7,7 +7,8 @@
     "rust_sandbox": "Rust FFI 沙箱函数指针需包级注册（ADR-0008/0011）",
     "sdk_hooks": "Skill SDK 注册表由运行时动态注入，无法注入式替换",
     "version_info": "Go build ldflags -X 要求使用包级别变量注入",
-    "static_table": "编译期常量查找表，Go 无 const 数组/结构体语法，只能用 var 表达；声明后只读不再修改"
+    "static_table": "编译期常量查找表，Go 无 const 数组/结构体语法，只能用 var 表达；声明后只读不再修改",
+    "os_syscall_bindings": "Windows LazyDLL/LazyProc 系统调用绑定必须包级（与 ffi_bindings 同源约束，内部自带 sync.Once，声明后只读）"
   },
   "pkg/version/version.go": true,
   "internal/config/config.go": true,
@@ -24,5 +25,9 @@
   "internal/tool/sandbox/rust_wasmtime_sandbox.go": true,
   "internal/extension/skill/sdk/sdk.go": true,
   "internal/llm/modelregistry/registry.go": true,
-  "internal/gateway/server/middleware_auth.go": true
+  "internal/gateway/server/middleware_auth.go": true,
+  "internal/automation/resource_governor.go": true,
+  "internal/observability/probe/memory_probe_windows.go": true,
+  "internal/observability/probe/cpu_probe_windows.go": true,
+  "internal/observability/probe/process_rss_windows.go": true
 }
