@@ -102,6 +102,60 @@ func TestOpenAIChat_Stream(t *testing.T) {
 	}
 }
 
+// TestOpenAIChat_Sync_StreamCancelled 复现 empty_response 同族根因在 OpenAI 兼容
+// 接口非流式路径的版本：流未产出任何内容即被中断（ctx 超时/预算守卫硬阻断）时
+// 必须返回错误状态码，不能返回 200 + 空 content——外部客户端会把它当成一次
+// "正常但空"的生成结果，无法区分真实空回复与服务端故障。
+func TestOpenAIChat_Sync_StreamCancelled(t *testing.T) {
+	registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
+	registry.RegisterWithRole("mock", "mock", "default", &mockStreamProvider{
+		chunks: []types.StreamEvent{
+			{Type: types.StreamCancelled, Content: "context deadline exceeded"},
+		},
+	})
+
+	router := llm.NewInferenceRouter(registry, nil)
+	h := &SysAdminHandler{Registry: registry, Router: router}
+
+	reqBody := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+	w := httptest.NewRecorder()
+
+	h.HandleOpenAIChat(w, req)
+
+	if w.Result().StatusCode == http.StatusOK {
+		t.Fatalf("expected non-200 on cancelled stream, got 200 body=%s", w.Body.String())
+	}
+}
+
+// TestOpenAIChat_Stream_StreamCancelled 同上，流式 SSE 路径版本：中断事件必须
+// 携带非 "stop" 的 finish_reason，不能让客户端把中断误判为正常生成完毕。
+func TestOpenAIChat_Stream_StreamCancelled(t *testing.T) {
+	registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
+	registry.RegisterWithRole("mock", "mock", "default", &mockStreamProvider{
+		chunks: []types.StreamEvent{
+			{Type: types.StreamCancelled, Content: "context deadline exceeded"},
+		},
+	})
+
+	router := llm.NewInferenceRouter(registry, nil)
+	h := &SysAdminHandler{Registry: registry, Router: router}
+
+	reqBody := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(reqBody))
+	w := httptest.NewRecorder()
+
+	h.HandleOpenAIChat(w, req)
+
+	body := w.Body.String()
+	if strings.Contains(body, `"finish_reason":"stop"`) {
+		t.Errorf("cancelled stream must not report finish_reason=stop: %s", body)
+	}
+	if !strings.Contains(body, "cancelled") {
+		t.Errorf("expected cancellation to be surfaced in stream output: %s", body)
+	}
+}
+
 func TestOpenAIChat_Errors(t *testing.T) {
 	registry := llm.NewProviderRegistry(config.M1RouterThresholds{})
 	router := llm.NewInferenceRouter(registry, nil)

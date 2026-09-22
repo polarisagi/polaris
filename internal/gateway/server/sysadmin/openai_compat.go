@@ -212,6 +212,19 @@ func (h *SysAdminHandler) HandleOpenAIChatStream(w http.ResponseWriter, r *http.
 					ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
 					Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: " + ev.Content + "]"}}},
 				})
+			} else if ev.Type == types.StreamCancelled {
+				// 流被中断（ctx 超时/取消或预算守卫硬阻断）：此前无分支处理，
+				// 直接落进下一次循环的 !ok 分支发 finish_reason=stop，外部
+				// OpenAI 兼容客户端看到的是"正常结束但内容为空"，无法区分
+				// 成功空响应与故障中断。
+				stop := "error"
+				h.writeOAIChunk(w, flusher, oaiChunk{
+					ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+					Choices: []oaiChoice{{Index: 0, Delta: oaiDelta{Content: "[error: stream cancelled: " + ev.Content + "]"}, FinishReason: &stop}},
+				})
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				flusher.Flush()
+				return
 			}
 		case <-timer.C:
 			// 响应流超时，提前结束
@@ -256,6 +269,12 @@ func (h *SysAdminHandler) HandleOpenAIChatSync(w http.ResponseWriter, r *http.Re
 				http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, truncate(ev.Content, 200)), http.StatusInternalServerError)
 				return
 			}
+		case types.StreamCancelled:
+			// 流中断（ctx 超时/取消或预算守卫硬阻断）：此前无分支处理，for 循环
+			// 结束后径直拿累计的空 sb 拼 200 响应，外部客户端拿到的是一条
+			// "生成成功但内容为空"的合法 completion，无法区分真实空回复与故障。
+			http.Error(w, fmt.Sprintf(`{"error":{"message":"stream cancelled: %s","type":"server_error"}}`, truncate(ev.Content, 200)), http.StatusGatewayTimeout)
+			return
 		}
 	}
 

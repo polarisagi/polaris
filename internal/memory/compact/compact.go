@@ -176,6 +176,11 @@ func Summarize(ctx context.Context, msgs []types.Message, maxTokens int, provide
 			if ev.Content != "" {
 				return "", apperr.New(apperr.CodeInternal, fmt.Sprintf("compact.Summarize stream: %s", ev.Content))
 			}
+		case types.StreamCancelled:
+			// 流中断（ctx 超时/取消或预算守卫硬阻断）此前无分支处理：ch 关闭后
+			// 直接 return "", nil，被调用方（orchestrator_interactive.go 自动压缩）
+			// 当作"摘要成功但为空"写回历史，静默丢失被压缩前的原始上下文。
+			return "", apperr.New(apperr.CodeCancelled, fmt.Sprintf("compact.Summarize stream cancelled: %s", ev.Content))
 		}
 	}
 	return strings.TrimSpace(result.String()), nil
