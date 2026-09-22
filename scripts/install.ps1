@@ -259,6 +259,32 @@ if ($LASTEXITCODE -eq 0) {
                -en "⚠️  Service registration failed. Run manually later: $FinalExe service install" -Color Yellow
 }
 
+# ── 6.5 桌面外壳安装 ─────────────────────────────────────────────────────────
+# 统一归档内含 desktop/ 目录（有桌面版的平台才存在）。将桌面外壳 exe 保留在
+# 安装目录内，并创建开始菜单快捷方式使其可被发现。
+$DesktopSrc = "$InstallDir\desktop"
+if (Test-Path $DesktopSrc) {
+    $DesktopExe = Get-ChildItem -Path $DesktopSrc -Filter "*.exe" | Select-Object -First 1
+    if ($DesktopExe) {
+        # 创建开始菜单快捷方式
+        $StartMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+        $ShortcutPath = "$StartMenuDir\Polaris.lnk"
+        try {
+            $WScriptShell = New-Object -ComObject WScript.Shell
+            $Shortcut = $WScriptShell.CreateShortcut($ShortcutPath)
+            $Shortcut.TargetPath = $DesktopExe.FullName
+            $Shortcut.WorkingDirectory = $InstallDir
+            $Shortcut.Description = "Polaris AI Agent Desktop"
+            $Shortcut.Save()
+            Write-Msg -zh "✅ 桌面外壳已安装，开始菜单快捷方式已创建。" `
+                       -en "✅ Desktop shell installed, Start Menu shortcut created." -Color Green
+        } catch {
+            Write-Msg -zh "⚠️  快捷方式创建失败，桌面外壳仍可在 $($DesktopExe.FullName) 直接运行。" `
+                       -en "⚠️  Shortcut creation failed. Desktop shell is still at $($DesktopExe.FullName)" -Color Yellow
+        }
+    }
+}
+
 # ── 7. 等待就绪 ──────────────────────────────────────────────────────────────
 # 不再额外 Start-Process：service install 已经启动了守护进程，重复启动会被单实例
 # 锁拒绝，在日志里留下一条看起来像故障的 ALREADY_EXISTS。

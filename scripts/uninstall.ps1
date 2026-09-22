@@ -39,6 +39,20 @@ if (Test-Path $FinalExe) {
     Remove-Item -Path $FinalExe -Force -ErrorAction SilentlyContinue
 }
 
+# ── 3.5 删除桌面外壳 ─────────────────────────────────────────────────────────
+# install.ps1 把统一归档内 desktop/ 下的 exe 留在原地，并在开始菜单建快捷方式，
+# 卸载时一并清理，否则留下失效快捷方式和孤儿目录。
+$ShortcutPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Polaris.lnk"
+if (Test-Path $ShortcutPath) {
+    Write-Msg -zh "🗑️  删除开始菜单快捷方式..." -en "🗑️  Removing Start Menu shortcut..." -Color Cyan
+    Remove-Item -Path $ShortcutPath -Force -ErrorAction SilentlyContinue
+}
+$DesktopDir = "$InstallDir\desktop"
+if (Test-Path $DesktopDir) {
+    Write-Msg -zh "🗑️  删除桌面外壳: $DesktopDir" -en "🗑️  Removing desktop shell: $DesktopDir" -Color Cyan
+    Remove-Item -Path $DesktopDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host ""
 Write-Msg -zh "✅ 卸载完成！" -en "✅ Uninstallation complete!" -Color Green
 Write-Host ""

@@ -1,28 +1,25 @@
 name: Release
 
 # ═══════════════════════════════════════════════════════════════════════
-# 优化摘要（对比旧版）
+# 发布流程
 #
-# 旧流程关键路径：
-#   build-frontend (3min)
-#     → build-go [6×ubuntu, 并行] (~4min)
-#       → build-rust [6×各平台, 串行等待 Go] (~20min macOS/Win)
-#         → package → publish
-#   总计 ~30min；macOS 占 2 个 runner
+# 关键路径：
+#   prepare (ensure-rust, ~30s) ──┐
+#   build-frontend (~3min) ───────┤ 并行
+#   build-go [6×ubuntu] (~4min) ──┘
+#     → package (下载预编译 Rust, ~30s)
+#       ↘ desktop [4×各平台 runner] (~10min)   并行
+#         → publish：合并 core + desktop 为每平台单一归档 → GitHub Release
 #
-# 新流程关键路径：
-#   prepare (30s) ─┐
-#   build-frontend ─┤ 并行
-#   build-go ───────┘
-#     → package (下载预编译 Rust, ~30s) → publish
-#   总计 ~8-10min；零 Rust 编译开销
+# 最终产物：每系统/架构组合一个归档（6 个），含守护进程 + 桌面外壳 + configs。
+# 无桌面版的平台（linux-arm64 / windows-arm64）归档仅含核心。
 #
-# 优化点一览：
+# 设计要点：
 #   ① Rust 完全剥离 — 产物存 GitHub pre-release（rust-build.yml 维护）
-#   ② prepare job 与 build-frontend 并行，提前拿到 Rust hash
-#   ③ build-go 全部 ubuntu-latest 纯交叉编译，Go module cache 命中极快
-#   ④ 并发控制：同一 tag 只允许一个 release 流水线运行
-#   ⑤ 找不到预编译产物时 fail-fast 并给出可操作提示
+#   ② Go 全部 ubuntu-latest 纯交叉编译，Go module cache 命中极快
+#   ③ Tauri 不支持交叉编译，desktop job 走三种 runner
+#   ④ publish 合并 package + desktop 产物，消除"带桌面/不带桌面"的分裂
+#   ⑤ 并发控制：同一 tag 只允许一个 release 流水线运行
 # ═══════════════════════════════════════════════════════════════════════
 
 env:
@@ -261,20 +258,18 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────
-  # 3.5 桌面外壳（ADR-0096）
+  # 3.5 桌面外壳构建（ADR-0096）
   #
   # Tauri **不支持交叉编译**：外壳链接各平台自己的 WebView（WKWebView /
   # WebView2 / WebKitGTK），必须在目标 OS 上构建。故这里是三种 runner 的独立
   # 矩阵，与上面单 runner 交叉编译 Go 的逻辑并行存在，刻意不合并。
   #
-  # 产物里**不含** polaris 二进制：守护进程与 dylib 装在 app bundle 之外
-  # （决策四），由 install.sh / tar.gz 渠道安装。外壳只是启动器，因此它的版本
-  # 与守护进程解耦，/healthz 回报的 version 用于运行期比对。
+  # 产物在 publish job 中与 core 归档合并为每平台单一包，不单独发布。
   #
   # 无平台签名证书（决策八）：macOS 仅做 ad-hoc 签名（codesign -s -，Apple
-  # Silicon 的硬要求），不公证；Windows 不做 Authenticode。主分发渠道是命令行
-  # 安装脚本——curl/Invoke-WebRequest 不写隔离属性/MOTW，故不触发 Gatekeeper
-  # 与 SmartScreen。安装包的完整性由 .sha256 + 发布签名承接（ADR-0095）。
+  # Silicon 的硬要求），不公证；Windows 不做 Authenticode。安装脚本走
+  # curl/Invoke-WebRequest 不写隔离属性/MOTW，故不触发 Gatekeeper
+  # 与 SmartScreen（ADR-0095）。
   # ───────────────────────────────────────────────
   desktop:
     name: Desktop Shell (${{ matrix.name }})
@@ -360,34 +355,23 @@ jobs:
           set -euo pipefail
           OUT="desktop_pkg"
           mkdir -p "$OUT"
-          BUNDLE="desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          RELEASE_DIR="desktop/src-tauri/target/${{ matrix.rust_target }}/release"
+          BUNDLE="${RELEASE_DIR}/bundle"
           NAME="polaris-desktop-${{ matrix.name }}"
           case "${{ runner.os }}" in
             macOS)
-              # .app 以 tar.gz 分发供安装脚本使用（curl+tar 不写隔离属性）；
-              # .dmg 供浏览器下载场景，用户需手动放行一次。
               APP=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' | head -1)
               tar -czf "$OUT/${NAME}.tar.gz" -C "$(dirname "$APP")" "$(basename "$APP")"
-              find "$BUNDLE/dmg" -name '*.dmg' -exec cp {} "$OUT/${NAME}.dmg" \; || true
               ;;
             Windows)
-              find "$BUNDLE/msi" -name '*.msi' -exec cp {} "$OUT/${NAME}.msi" \; || true
+              # 收集原始可执行文件而非 .msi——统一归档内不嵌套安装器
+              cp "${RELEASE_DIR}/polaris-desktop.exe" "$OUT/${NAME}.exe"
               ;;
             Linux)
               find "$BUNDLE/appimage" -name '*.AppImage' -exec cp {} "$OUT/${NAME}.AppImage" \; || true
-              find "$BUNDLE/deb" -name '*.deb' -exec cp {} "$OUT/${NAME}.deb" \; || true
               ;;
           esac
-          cd "$OUT"
-          for f in *; do
-            [ -f "$f" ] || continue
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$f" > "$f.sha256"
-            else
-              shasum -a 256 "$f" > "$f.sha256"
-            fi
-          done
-          ls -la
+          ls -la "$OUT"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -397,6 +381,11 @@ jobs:
 
   # ───────────────────────────────────────────────
   # 4. 发布 GitHub Release
+  #
+  # 合并 package（core 二进制 + Rust dylib + configs）与 desktop（外壳）
+  # 的产物为每平台单一归档，消除 GitHub Release 页面上"带桌面 / 不带桌面"
+  # 的分裂。无桌面版的平台（linux-arm64 / windows-arm64）原样发布。
+  # 合并不违反 ADR-0096 决策四——安装脚本仍将二者放到各自位置。
   # ───────────────────────────────────────────────
   publish:
     name: Publish GitHub Release
@@ -405,12 +394,134 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download all release artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: polaris-*
-          path: artifacts
+          path: all_artifacts
           merge-multiple: true
+
+      # 按文件名将产物分流：polaris-desktop-* → desktop/，其余 → core/
+      - name: Separate core and desktop artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p core_artifacts desktop_artifacts
+          shopt -s nullglob
+          for f in all_artifacts/*; do
+            [ -f "$f" ] || continue
+            bn=$(basename "$f")
+            if [[ "$bn" == polaris-desktop-* ]]; then
+              mv "$f" desktop_artifacts/
+            else
+              mv "$f" core_artifacts/
+            fi
+          done
+          rm -rf all_artifacts
+          echo "Core:"; ls core_artifacts/ 2>/dev/null || echo "  (empty)"
+          echo "Desktop:"; ls desktop_artifacts/ 2>/dev/null || echo "  (empty)"
+
+      # ─────────────────────────────────────────────────────────────
+      # 合并产物：将每平台的桌面外壳嵌入对应的核心归档
+      #
+      # 最终每平台只有一个归档，内部布局：
+      #   polaris-{os}-{arch}/
+      #   ├── polaris[.exe]      (Go 守护进程)
+      #   ├── lib/               (Rust dylib)
+      #   ├── desktop/           (桌面外壳，仅有桌面版的平台存在)
+      #   │   └── Polaris.app/ | polaris-desktop.exe | polaris-desktop (AppImage)
+      #   ├── configs/
+      #   └── LICENSE
+      # ─────────────────────────────────────────────────────────────
+      - name: Merge core + desktop into unified packages
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          # 桌面产物与核心归档的平台对应关系
+          # 格式：platform:desktop_file_extension
+          DESKTOP_PLATFORMS="darwin-arm64:tar.gz darwin-amd64:tar.gz windows-amd64:exe linux-amd64:AppImage"
+
+          # 遍历所有核心归档
+          shopt -s nullglob
+          for core_archive in core_artifacts/polaris-*.tar.gz core_artifacts/polaris-*.zip; do
+            [ -f "$core_archive" ] || continue
+            # 跳过 .sha256 和 .sig 文件（glob 不会匹配，但防御性检查）
+            [[ "$core_archive" == *.sha256 ]] && continue
+            [[ "$core_archive" == *.sig ]] && continue
+
+            BASENAME=$(basename "$core_archive")
+            # 提取平台名：polaris-linux-amd64.tar.gz → linux-amd64
+            PLATFORM=$(echo "$BASENAME" | sed 's/^polaris-//;s/\.tar\.gz$//;s/\.zip$//')
+
+            echo "━━━ Processing $PLATFORM ━━━"
+
+            # 解压核心归档到工作目录
+            WORK="work-${PLATFORM}"
+            mkdir -p "$WORK"
+            if [[ "$core_archive" == *.zip ]]; then
+              unzip -q "$core_archive" -d "$WORK"
+            else
+              tar -xzf "$core_archive" -C "$WORK"
+            fi
+
+            # 查找并嵌入对应的桌面产物
+            DESKTOP_EXT=""
+            for mapping in $DESKTOP_PLATFORMS; do
+              p="${mapping%%:*}"
+              e="${mapping##*:}"
+              if [ "$p" = "$PLATFORM" ]; then
+                DESKTOP_EXT="$e"
+                break
+              fi
+            done
+
+            if [ -n "$DESKTOP_EXT" ]; then
+              DESKTOP_FILE="desktop_artifacts/polaris-desktop-${PLATFORM}.${DESKTOP_EXT}"
+              if [ -f "$DESKTOP_FILE" ]; then
+                DEST="$WORK/polaris-${PLATFORM}/desktop"
+                mkdir -p "$DEST"
+                case "$DESKTOP_EXT" in
+                  tar.gz)
+                    # macOS: 解开 .tar.gz 取出 .app 目录
+                    tar -xzf "$DESKTOP_FILE" -C "$DEST"
+                    ;;
+                  *)
+                    # Windows (.msi) / Linux (.AppImage): 直接复制
+                    cp "$DESKTOP_FILE" "$DEST/"
+                    ;;
+                esac
+                echo "  ✓ 嵌入桌面外壳 ($DESKTOP_EXT)"
+              else
+                echo "  ⚠ 桌面产物 $DESKTOP_FILE 不存在，仅发布核心"
+              fi
+            else
+              echo "  ℹ $PLATFORM 无桌面版，仅发布核心"
+            fi
+
+            # 重新打包
+            cd "$WORK"
+            if [[ "$core_archive" == *.zip ]]; then
+              zip -r "../release/$BASENAME" "polaris-${PLATFORM}"
+            else
+              tar -czf "../release/$BASENAME" "polaris-${PLATFORM}"
+            fi
+            cd ..
+            rm -rf "$WORK"
+            echo "  ✓ 已生成 $BASENAME"
+          done
+
+          # 生成 SHA256 校验和
+          cd release
+          for f in *; do
+            [ -f "$f" ] || continue
+            sha256sum "$f" > "$f.sha256"
+          done
+
+          echo ""
+          echo "═══ 最终发布产物 ═══"
+          ls -la
+          echo ""
+          echo "产物总数: $(ls -1 | wc -l)"
 
       # ─────────────────────────────────────────────────────────────
       # 供应链签名（ADR-0095 决策二）
@@ -448,9 +559,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(artifacts/*.sha256)
+          files=(release/*.sha256)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::artifacts/ 下没有 .sha256 文件，package 阶段产物异常"
+            echo "::error::release/ 下没有 .sha256 文件，package 阶段产物异常"
             exit 1
           fi
           # release_sign 内部签完即对照 releasekeys/ 已提交公钥自验，
@@ -460,5 +571,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/*
+          files: release/*
           generate_release_notes: true
