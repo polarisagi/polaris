@@ -62,10 +62,25 @@ CREATE TABLE IF NOT EXISTS outbox (
     next_retry_at   INTEGER,
     -- ↑ 下次重试时间（Unix 毫秒）。NULL 表示不需要重试或立即处理。
 
-    crash_recovery_count INTEGER NOT NULL DEFAULT 0
+    crash_recovery_count INTEGER NOT NULL DEFAULT 0,
     -- ↑ 连续崩溃计数。Worker 执行 FFI 前原子递增。
     --   >= 3 → 标记 status='dead'（毒丸驱逐），阻断确定性崩溃循环。
     --   注意: 此计数器在每次处理前递增，不由 Worker 重置——仅成功的处理会重置它。
+
+    updated_at      INTEGER,
+    -- ↑ 最近一次状态变更时间（Unix 毫秒）。OutboxWorker 抢占记录（pending/failed
+    --   → processing）时写入。
+
+    processed_at    INTEGER
+    -- ↑ 终态落定时间（Unix 毫秒）。status 变为 done/skipped/dead 时写入。
+    --
+    -- [2026-09-22 修复] 以上两列此前**不存在于本文件**，而 OutboxWorker 的每一条
+    -- 状态流转 SQL 都在写它们（outbox_worker.go processAndMark）。后果是抢占
+    -- UPDATE 恒定报 "no such column: updated_at"，记录永远停在 pending 被反复重试，
+    -- **整条 outbox 投影管线从未跑通过**——情景记忆抽取、项目事件、知识图谱构建、
+    -- 社区摘要、压缩聚类全部静默失效。单元测试却是绿的：outbox_worker_test.go
+    -- 自己手写了一张**带这两列**的表，与本文件长期脱节（该测试现已改为直接加载
+    -- 本文件，杜绝再次漂移）。
 );
 
 -- 待重试失败记录（按 ID 排序，保证 FIFO）

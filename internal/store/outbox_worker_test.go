@@ -9,6 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/polarisagi/polaris/internal/protocol/schema"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -21,23 +22,17 @@ func setupOutboxDB(t *testing.T) *sql.DB {
 	}
 	// :memory: 每条连接都是独立空库（无 cache=shared），池开出第二条即读到空表。
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`
-		CREATE TABLE outbox (
-			id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-			created_at           INTEGER NOT NULL,
-			target_engine        TEXT NOT NULL,
-			operation            TEXT NOT NULL,
-			scope                TEXT NOT NULL,
-			payload              BLOB NOT NULL,
-			idempotency_key      TEXT NOT NULL UNIQUE,
-			status               TEXT NOT NULL DEFAULT 'pending',
-			attempts             INTEGER NOT NULL DEFAULT 0,
-			last_error           TEXT,
-			next_retry_at        INTEGER,
-			crash_recovery_count INTEGER NOT NULL DEFAULT 0,
-			updated_at           INTEGER,
-			processed_at         INTEGER
-		)`)
+	// [2026-09-22] 直接加载生产 DDL，不再手写副本。
+	//
+	// 原实现在这里手写了一张 outbox 表，且比 002_outbox.sql **多出**
+	// updated_at / processed_at 两列。于是 OutboxWorker 写这两列的 SQL 在测试里
+	// 一路绿灯，在生产上却恒定报 "no such column"，整条投影管线从未跑通。
+	// 测试建表与 Schema SSoT 脱节，等于用一张不存在的表证明代码正确。
+	ddl, err := schema.FS.ReadFile("002_outbox.sql")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	_, err = db.Exec(string(ddl))
 	if err != nil {
 		t.Fatalf("create table: %v", err)
 	}
