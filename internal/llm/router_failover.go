@@ -270,7 +270,11 @@ func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
 	if ir.governor == nil {
 		return nil
 	}
-	admitted, _ := ir.governor.AdmitLLM(1)
+	// priority=0 = 用户可见推理：只受并发上限约束，不被内存/CPU 水位线拒绝
+	// （理由见 automation.ResourceGovernor.AdmitLLM 的 priority 语义说明）。
+	// 本路由是全系统唯一的 LLM 调用出口，交互式对话全部经由此处；后台可降级
+	// 推理若将来需要区分，应在 InferRequest 上显式携带而非在此硬编码。
+	admitted, _ := ir.governor.AdmitLLM(0)
 	if admitted {
 		return nil
 	}
@@ -283,7 +287,7 @@ func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
 	// 与"内存/CPU 降级闸门"（等待毫无意义——WaitForLLMCapacity 只等 llmInFlight，
 	// 压根不等内存恢复，于是必然立刻再被同一道闸门拒掉）。2026-09-22 的
 	// empty_response 排查里，这个被丢弃的 1 字节正是唯一能直指根因的信号。
-	admitted, level := ir.governor.AdmitLLM(1)
+	admitted, level := ir.governor.AdmitLLM(0)
 	if !admitted {
 		slog.WarnContext(ctx, "inference_router: LLM admission denied by resource governor",
 			"degrade_level", level)
