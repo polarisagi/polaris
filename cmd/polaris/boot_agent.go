@@ -1047,7 +1047,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 	// 摄取实现，PipelineImpl 已删除。
 	for _, conn := range tb.KnowledgeConnRegistry.GetAll() {
 		c := conn
-		syncScheduler := connector.NewSyncScheduler(c, kb.Ingester, 0)
+		syncScheduler := connector.NewSyncScheduler(c, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
 		sv.AddWorker(fmt.Sprintf("sync-scheduler-%s", c.Name()), func(ctx context.Context) error {
 			return syncScheduler.Start(ctx)
 		})
@@ -1094,7 +1094,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		if err != nil {
 			slog.Error("polaris: failed to init ObsidianConnector", "err", err)
 		} else {
-			obsidianSched := connector.NewSyncScheduler(obsidianConn, kb.Ingester, 0)
+			obsidianSched := connector.NewSyncScheduler(obsidianConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
 			memoryAgent.RegisterSyncScheduler(obsidianSched)
 			slog.Info("polaris: ObsidianConnector registered to MemoryAgent")
 		}
@@ -1117,7 +1117,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 			if err != nil {
 				slog.Error("polaris: failed to init NotionConnector, skipping", "err", err)
 			} else {
-				notionSched := connector.NewSyncScheduler(notionConn, kb.Ingester, 0)
+				notionSched := connector.NewSyncScheduler(notionConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
 				memoryAgent.RegisterSyncScheduler(notionSched)
 				slog.Info("polaris: NotionConnector registered to MemoryAgent")
 			}
@@ -1130,7 +1130,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 		// 条 SyncScheduler + RegisterSyncScheduler 接入方式。
 		if tb.KnowledgeConnRegistry != nil {
 			for _, mcpConn := range tb.KnowledgeConnRegistry.GetAll() {
-				mcpSched := connector.NewSyncScheduler(mcpConn, kb.Ingester, 0)
+				mcpSched := connector.NewSyncScheduler(mcpConn, kb.Ingester, 0).WithAdmitter(sb.ResourceGov)
 				memoryAgent.RegisterSyncScheduler(mcpSched)
 				slog.Info("polaris: MCP knowledge source connector registered to MemoryAgent", "id", mcpConn.ID())
 			}

@@ -192,17 +192,21 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 	if sb.AutoConf != nil && sb.AutoConf.Config.LocalEmbeddingModel != "" {
 		embedModelName = sb.AutoConf.Config.LocalEmbeddingModel
 	}
+	// 重索引是批量后台负载：走 Low 优先级嵌入队列，把 High 队列让给用户的
+	// 交互式检索（EmbeddingBatcher 的双队列此前因无人提交 Low 而形同虚设，
+	// 见 search.BackgroundEmbedder 注释）。
+	bgEmbedder := backgroundEmbedder(sb)
 	var onlineReindexer *retrieval.OnlineReindexer
 	if sb.SurrealStore != nil {
 		onlineReindexer = retrieval.NewOnlineReindexerWithCognitive(
 			sb.Store.DB(),
-			&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
+			&memEmbedderAdapter{e: bgEmbedder, model: embedModelName},
 			&surrealCognAdapter{s: sb.SurrealStore},
 		)
 	} else {
 		onlineReindexer = retrieval.NewOnlineReindexer(
 			sb.Store.DB(),
-			&memEmbedderAdapter{e: sb.Embedder, model: embedModelName},
+			&memEmbedderAdapter{e: bgEmbedder, model: embedModelName},
 		)
 	}
 	concurrent.SafeGo(ctx, "boot_memory.reindex_ticker", func(ctx context.Context) {
@@ -213,9 +217,16 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 			case <-ctx.Done():
 				return
 			case <-reindexTicker.C:
+				// 重索引把整批文档重新过一遍本地嵌入引擎，是 Tier-0 机器上最容易
+				// 把交互式检索挤到超时的后台负载之一，先过资源准入。
+				release, ok := admitBackground(sb, "online_reindex")
+				if !ok {
+					continue
+				}
 				if _, _, err := onlineReindexer.Run(ctx); err != nil {
 					slog.Warn("polaris: online reindexer failed", "err", err)
 				}
+				release()
 			}
 		}
 	})
@@ -233,11 +244,16 @@ func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 			case <-ctx.Done():
 				return
 			case <-expireTicker.C:
+				release, ok := admitBackground(sb, "temporal_expire")
+				if !ok {
+					continue
+				}
 				if expired, err := temporalExpirer.ExpireStale(ctx); err != nil {
 					slog.Warn("polaris: temporal expirer failed", "err", err)
 				} else if expired > 0 {
 					slog.Info("polaris: temporal expirer: expired entities", "count", expired)
 				}
+				release()
 			}
 		}
 	})

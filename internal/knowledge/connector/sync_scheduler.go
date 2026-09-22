@@ -45,9 +45,24 @@ type SyncScheduler struct {
 	taintLevel  int
 	debounceWin time.Duration
 	maxRetry    int
+	admitter    BackgroundAdmitter // 可 nil（未注入治理器时全量同步不受限）
 
 	mu      sync.Mutex
 	pending map[string]*pendingEvent // uri → 待处理事件（防抖）
+}
+
+// BackgroundAdmitter 后台工作资源准入闸门。
+//
+// 消费端接口（HE-3：接口在调用方定义）。生产方为
+// automation.ResourceGovernor，由 cmd/polaris 注入。
+type BackgroundAdmitter interface {
+	AdmitBackground(work string) (release func(), admitted bool)
+}
+
+// WithAdmitter 注入资源准入闸门，返回自身以便链式调用。
+func (s *SyncScheduler) WithAdmitter(a BackgroundAdmitter) *SyncScheduler {
+	s.admitter = a
+	return s
 }
 
 type pendingEvent struct {
@@ -137,7 +152,21 @@ func (s *SyncScheduler) Start(ctx context.Context) error {
 }
 
 // fullSync 执行全量初始摄入（幂等，已存在则 upsert）。
+//
+// [2026-09-22] 全量同步会把连接器下的所有文档逐条过一遍摄入管线（分块 + 嵌入），
+// 是与交互式检索抢占同一个本地嵌入引擎的重负载。先过资源准入：拿不到额度就
+// 跳过本轮，等下一个 resync 周期——全量同步本就是幂等兜底，晚一轮没有任何损失，
+// 而把用户的检索挤到超时有。
 func (s *SyncScheduler) fullSync(ctx context.Context) error {
+	if s.admitter != nil {
+		release, ok := s.admitter.AdmitBackground("knowledge_full_sync")
+		if !ok {
+			slog.Debug("knowledge: full-sync skipped under resource pressure", "connector", s.connector.ID())
+			return nil
+		}
+		defer release()
+	}
+
 	refs, err := s.connector.List(ctx)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "SyncScheduler.fullSync", err)
