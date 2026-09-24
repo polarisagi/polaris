@@ -61,15 +61,34 @@ type Pool struct {
 	acquireTimeout time.Duration
 	idleTimeout    time.Duration
 
-	mu             sync.Mutex
-	sessions       map[string]*poolEntry
-	sem            chan struct{}
+	mu       sync.Mutex
+	sessions map[string]*poolEntry
+	sem      chan struct{}
+	// bgSem 后台（headless）额外占用的份额信号量，nil 表示不预留。见 WithInteractiveReserve。
+	bgSem          chan struct{}
 	killGate       KillSwitchGate
 	onSessionClose func(sessionID string)
 }
 
 func (p *Pool) WithSessionCloseCallback(cb func(string)) *Pool {
 	p.onSessionClose = cb
+	return p
+}
+
+// WithInteractiveReserve 为交互会话预留 reserved 个槽位（ADR-0025 §E 2026-09-25 追记）。
+//
+// 交互 Acquire 只等 100ms，后台 AcquireHeadless 可排队 10 分钟：共用一个信号量时后台
+// 必然把槽位排满，用户对话被拒。后台须先拿 bgSem（容量 maxSize-reserved，下限 1——
+// 单槽部署上后台仍要能跑），再拿总信号量。须在首次 Acquire 前调用。
+func (p *Pool) WithInteractiveReserve(reserved int) *Pool {
+	if reserved <= 0 {
+		return p
+	}
+	n := max(1, p.maxSize-reserved)
+	p.bgSem = make(chan struct{}, n)
+	for range n {
+		p.bgSem <- struct{}{}
+	}
 	return p
 }
 
@@ -142,13 +161,42 @@ func (p *Pool) newPoolEntry(sessionID string) *poolEntry {
 	return &poolEntry{agent: ag}
 }
 
+// acquireSlots 获取容量令牌；后台先拿份额令牌，保证至少 reserved 个槽位恒为交互保留。
+// 超时语义由传入的 ctx 决定。返回的 release 归还全部已取令牌。
+func (p *Pool) acquireSlots(ctx context.Context, background bool) (func(), error) {
+	bgHeld := false
+	if background && p.bgSem != nil {
+		select {
+		case <-p.bgSem:
+			bgHeld = true
+		case <-ctx.Done():
+			return nil, apperr.New(apperr.CodeResourceExhausted, "agent pool: background share exhausted")
+		}
+	}
+	releaseBg := func() {
+		if bgHeld {
+			p.bgSem <- struct{}{}
+		}
+	}
+	select {
+	case <-p.sem:
+	case <-ctx.Done():
+		releaseBg()
+		return nil, apperr.New(apperr.CodeResourceExhausted, "agent pool: capacity exhausted")
+	}
+	return func() {
+		p.sem <- struct{}{}
+		releaseBg()
+	}, nil
+}
+
 // acquireInner 是 Acquire 和 AcquireHeadless 的公共内部实现。
 // ctx 的超时语义由调用方控制：
 //   - Acquire 传入以 p.acquireTimeout（100ms）包裹后的 ctx，适合交互式 SSE 路径，
 //     不让用户等待。
 //   - AcquireHeadless 直接传入上层 bgCtx（默认 10 分钟），允许后台课程/Workflow
 //     任务在 pool 短暂繁忙时排队等待空闲 slot，而非立即返回 CodeResourceExhausted。
-func (p *Pool) acquireInner(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
+func (p *Pool) acquireInner(ctx context.Context, sessionID string, background bool) (protocol.AgentController, func(), error) {
 	// KillSwitch 熔断检查：Pause/FullStop 阶段拒绝启动任何新 Agent 执行
 	// （进行中的 Agent 不受影响，语义对齐 KillPause 注释"中止并保存进行中请求的状态"——
 	// 由 KillSwitch 状态变迁时的上层编排负责，此处只负责"不再开新的"）。
@@ -156,11 +204,9 @@ func (p *Pool) acquireInner(ctx context.Context, sessionID string) (protocol.Age
 		return nil, nil, apperr.New(apperr.CodeInternal, "agent pool: system sealed by killswitch, rejecting new agent execution")
 	}
 
-	// 等待容量令牌（超时语义由传入的 ctx 决定）
-	select {
-	case <-p.sem:
-	case <-ctx.Done():
-		return nil, nil, apperr.New(apperr.CodeResourceExhausted, "agent pool: capacity exhausted")
+	releaseSlots, err := p.acquireSlots(ctx, background)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	p.mu.Lock()
@@ -213,7 +259,7 @@ func (p *Pool) acquireInner(ctx context.Context, sessionID string) (protocol.Age
 			}
 		}
 
-		p.sem <- struct{}{} // 归还令牌
+		releaseSlots()
 	}
 	return agent, release, nil
 }
@@ -224,7 +270,7 @@ func (p *Pool) acquireInner(ctx context.Context, sessionID string) (protocol.Age
 func (p *Pool) Acquire(ctx context.Context, sessionID string) (protocol.AgentController, func(), error) {
 	acquireCtx, cancel := context.WithTimeout(ctx, p.acquireTimeout)
 	defer cancel()
-	return p.acquireInner(acquireCtx, sessionID)
+	return p.acquireInner(acquireCtx, sessionID, false)
 }
 
 // AcquireHeadless 供 Cron/Workflow/Webhook 等非交互式触发方注入 Intent 并同步获取最终结果，
@@ -251,7 +297,7 @@ func (p *Pool) AcquireHeadless(ctx context.Context, intent types.Intent, opts ..
 	}
 	// headless 任务使用 ctx 自身超时（由 defaultTaskWorker 传入的 bgCtx，最长 10 分钟），
 	// 而非 p.acquireTimeout 的 100ms——后台批量任务应排队而非立即失败。
-	agent, release, err := p.acquireInner(ctx, sessionID)
+	agent, release, err := p.acquireInner(ctx, sessionID, true)
 	if err != nil {
 		return nil, err
 	}
