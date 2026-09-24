@@ -42,26 +42,9 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 				})
 			}
 		case types.StreamToolCall:
-			// adapter 侧（stream.go/anthropic_request.go/google_request.go）已把
-			// 原生 tool_use/tool_calls 事件统一打包为 {"id","name","input"} JSON，
-			// 这里是全链路中第一个真正消费 StreamToolCall 的地方——此前该事件类型
-			// 只被产出、从未被读取，原生 function-calling 通路因此实际死管线。
-			var tc struct {
-				ID    string          `json:"id"`
-				Name  string          `json:"name"`
-				Input json.RawMessage `json:"input"`
+			if tc, ok := a.acceptStreamToolCall(ev.Content, audience); ok {
+				toolCalls = append(toolCalls, tc)
 			}
-			if jsonErr := json.Unmarshal([]byte(ev.Content), &tc); jsonErr != nil {
-				slog.Warn("agent: doStreamInfer failed to parse StreamToolCall payload, skipping", "err", jsonErr)
-				continue
-			}
-			toolCalls = append(toolCalls, types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input})
-			a.publishStreamEvent(types.AgentStreamEvent{
-				Type:       types.AgentStreamEventToolCall,
-				TaintLevel: a.sCtx.GlobalTaintLevel,
-				ToolName:   tc.Name,
-				ToolInput:  tc.Input,
-			})
 		case types.StreamSystemNotice:
 			// 跨 Model Pool 降级提示（GD-13-005）：只透传给前端展示，
 			// **不**写进 content/reasoning——它不是模型输出，混进正文会污染
@@ -102,4 +85,33 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 		ToolCalls:        toolCalls,
 		Usage:            usage,
 	}, nil
+}
+
+// acceptStreamToolCall 解析 adapter 统一打包的 {"id","name","input"} 工具调用。
+//
+// adapter 侧（stream.go/anthropic_request.go/google_request.go）已把原生 tool_use/
+// tool_calls 事件统一打包；这里是全链路第一个真正消费 StreamToolCall 的地方——此前
+// 该事件只被产出、从未被读取，原生 function-calling 通路实际是死管线。
+// 规划阶段的工具调用只是意图：尚未过 S_VALIDATE，可能被拒。此前在此发布 ToolCall
+// 事件，前端对被拒工具也显示"正在执行"，真正执行时（agent_execute_dag.go）又发一次
+// （2026-09-25 实测）。受众原则同文本增量（ADR-0098 决策一）。
+func (a *Agent) acceptStreamToolCall(payload string, audience protocol.LLMAudience) (types.InferToolCall, bool) {
+	var tc struct {
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(payload), &tc); err != nil {
+		slog.Warn("agent: doStreamInfer failed to parse StreamToolCall payload, skipping", "err", err)
+		return types.InferToolCall{}, false
+	}
+	if audience == protocol.AudienceUser {
+		a.publishStreamEvent(types.AgentStreamEvent{
+			Type:       types.AgentStreamEventToolCall,
+			TaintLevel: a.sCtx.GlobalTaintLevel,
+			ToolName:   tc.Name,
+			ToolInput:  tc.Input,
+		})
+	}
+	return types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input}, true
 }
