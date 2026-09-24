@@ -149,6 +149,11 @@ func buildAgent(
 	a.Config.SurpriseHintThreshold = sb.Cfg.Thresholds.M4Kernel.SurpriseHintThreshold
 	a.InjectHITL(tb.HITLGateway)
 	a.InjectToolExecutor(tb.Dispatcher)
+	// S_VALIDATE L1 PolicyGate：与 Dispatcher 执行链路同一个 Cedar 门（deny-by-default）。
+	// 此前全仓零调用点，DAGValidator 恒拿到 nil 按 fail-closed 拒绝——FSM 规划出的
+	// 任何工具 DAG 都过不了校验（2026-09-25 实测 `PolicyGate is nil (fail-closed)`；
+	// 此前 Plan 阶段本身恒解析失败，从未走到这里，缺陷被掩盖）。
+	a.InjectPolicyGate(sb.Gate)
 	// 2026-08-02 补齐接线：InjectCatalog 此前全仓零调用点，导致
 	// a.catalog/fsm 上下文构建器的 cata 恒为 nil——BuildToolListSection
 	// （agent/context/tool_list_section.go）与 S_PLAN 原生 function-calling

@@ -16,7 +16,7 @@ import (
 type ExecKind string
 
 const (
-	KindToolExecute     ExecKind = "tool_execute"
+	KindToolExecute     ExecKind = protocol.PolicyActionToolExecute
 	KindProcessSpawn    ExecKind = "process_spawn"
 	KindScriptExecute   ExecKind = "script_execute"
 	KindHookExecute     ExecKind = "hook_execute"
@@ -24,7 +24,7 @@ const (
 )
 
 const (
-	PrincipalAgent  = "agent"
+	PrincipalAgent  = protocol.PolicyPrincipalAgent
 	PrincipalMCPMgr = "mcp_mgr"
 )
 
