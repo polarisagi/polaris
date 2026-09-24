@@ -11,6 +11,7 @@ import (
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // parsePlanOnSuccess 将 LLM 返回的 DAG JSON 解析为 DAGModel 并写入 sCtx，消除 S_PLAN / S_REPLAN 重复逻辑。
@@ -25,6 +26,19 @@ import (
 // 还是结构缺陷——调用方（S_PLAN/S_REPLAN 的既有降级测试）依赖的正是这一套统一语义，
 // 不能只加校验不接入降级路径，也不能绕开降级路径直接判失败。
 func parsePlanOnSuccess(sCtx *StateContext, pCtx protocol.StateContext, content []byte) (types.State, error) {
+	// [2026-09-22 修复] 先把 LLM 文本归一化成纯 JSON 再解析。
+	//
+	// 模型（实测 DeepSeek，其他家同样普遍）会把 DAG 包在 ```json ... ``` 代码
+	// 围栏里返回，而这里原本直接 json.Unmarshal 原文，必然失败：
+	//   schemavalidate: plan_dag: invalid JSON: invalid character '`' ...
+	// 失败后走"复用缓存 DAGModel"降级，而首轮没有缓存 → S_PLAN_FAILED → 重规划
+	// → TriggerReplanExhausted → S_FAILED。也就是说**每一个需要规划的任务都必然
+	// 失败**，Agent 实际只能产出对话文本、从不真正执行计划；而这条警告在
+	// 2026-09-22 补上 FSM 回合埋点之前根本看不见。
+	// 复用 pkg/util.ExtractJSONBraces（括号配对且尊重字符串字面量的 canonical
+	// 实现），未找到 JSON 结构时原样返回，错误照常在下面暴露。
+	content = []byte(util.ExtractJSONBraces(string(content)))
+
 	var protocolPlan types.DAGModel
 	unmarshalErr := json.Unmarshal(content, &protocolPlan)
 	reason := unmarshalErr
