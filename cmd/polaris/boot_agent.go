@@ -588,7 +588,7 @@ func bootAgent(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *T
 
 	agentPool := sysagent.NewPool(func(sessionID string) *sysagent.Agent {
 		return buildAgent(sessionID, sb, mb, tb, kb, taskRepo, epAdapter, knowAdapter, lamEngine, reflectionWorker, prefs, ctx, personaRefiner, blackboard, workspaceCtxLoader, workspaceRoot, projectResolver)
-	}, maxConcurrent).WithSessionCloseCallback(func(sessionID string) {
+	}, maxConcurrent).WithInteractiveReserve(sb.Cfg.Thresholds.M8Orchestrator.AgentsInteractiveReserved).WithSessionCloseCallback(func(sessionID string) {
 		if tb.Catalog != nil {
 			if cc, ok := tb.Catalog.(interface{ CleanupSession(string) }); ok {
 				cc.CleanupSession(sessionID)

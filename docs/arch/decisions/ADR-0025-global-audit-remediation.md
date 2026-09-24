@@ -18,6 +18,7 @@
 ## 决策二：Phase 1-2 系统加固（原 ADR-0029，含原 ADR-0038）
 
 - **E — AgentPool**：`internal/agent/pool.go` 实现 per-session Agent（`sync.Map`+信号量，容量见 `state.yaml §thresholds`），替代全服务器单例共享 `sCtx` 的并发覆盖问题。Acquire 超时 100ms 拒绝；Idle 超 10 分钟 GC 回收（回收时须调用 `agent.Shutdown()` 防 goroutine 泄漏）。
+  - 2026-09-25 追记：交互与后台共用同一信号量时，后台 `AcquireHeadless`（等待上限 10 分钟）会把槽位排满，交互 `Acquire`（100ms）必然落空，用户只收到"系统当前负载较高"（2026-09-25 实测：3 个课程/自动化 headless 任务 + 1 个在途会话占满 Tier-0 的 4 槽）。现后台额外占用一个容量为 `maxSize − agents.interactive_reserved`（下限 1）的后台信号量，至少 1 个槽位恒为交互保留。与 fe4818d/e56da29「资源压力下优先保住用户对话」同一原则。
 - **F — VFS 墓碑**：工作区删除改为原子 `os.Rename` 到墓碑路径+异步 GC，替代直接 `os.RemoveAll`（防僵尸 fd）；关键文件读取新增 `safeOpen`（`O_NOFOLLOW` 防符号链接绕过）。
 - **G — SQL Fitness 评估器**：M9 自进化课程样本前置 SQL 预筛（7 天窗口 `fitness = 成功率×(1-平均预测误差)`，<0.5 且样本≥5 直接拒绝不调 LLM），降低 LLM-as-Judge 调用成本。
 - **H — SafeGo 全量迁移**：`embedding_batcher`/`channel/adapter/`/`planner/pool.go` 等中高风险裸 goroutine 迁移至 `pkg/concurrent.SafeGo`，防 panic 导致功能静默失效。
