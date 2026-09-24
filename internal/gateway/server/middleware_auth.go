@@ -171,39 +171,27 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, clientIP, exp
 		return newAuthContext(ctx, "anonymous", authcontext.ClientTypeWebUI, traceID, false), true
 	}
 
+	presented := presentedToken(r)
+
+	// 本地令牌先于 IP 冷却判定（ADR-0096 决策五 2026-09-25 追记）：回环上所有本机
+	// 客户端共用 127.0.0.1，重启后旧外壳持旧令牌轮询触发的冷却会把持正确令牌的
+	// CLI/新窗口一并锁死；本地令牌为随机 256 位，冷却对它无防护价值，只剩误伤。
+	// 远程 API Key 可能是用户自设的弱口令，仍在冷却之后判定。
+	if actx, ok, handled := s.checkLocalToken(w, r, presented, clientIP, traceID, authManager); handled {
+		return actx, ok
+	}
+
 	if authManager.IsLocked(clientIP) {
 		w.Header().Set("Retry-After", "300")
 		http.Error(w, "429 Too Many Requests - Auth Cooldown", http.StatusTooManyRequests)
 		return ctx, false
 	}
 
-	presented := presentedToken(r)
-
 	// ② 远程 API Key
 	if tokenEqual(presented, expectedKey) {
 		authManager.RecordSuccess(clientIP)
 		// MVP 阶段单一 API Key，统一记录为 admin
 		return newAuthContext(ctx, "admin", authcontext.ClientTypeAPI, traceID, true), true
-	}
-
-	// ③ 本地令牌（请求头）：CLI / 桌面外壳。身份是 ClientTypeLocal，
-	// IsLocalTrusted() 覆盖它——本机已完成令牌校验，与 webui 同级可信。
-	localToken := s.LocalToken()
-	if tokenEqual(presented, localToken) {
-		authManager.RecordSuccess(clientIP)
-		return newAuthContext(ctx, "local", authcontext.ClientTypeLocal, traceID, true), true
-	}
-
-	// ④ 本地令牌（Cookie）：Web UI。跨站请求带不上 Strict Cookie，
-	// 这里的同源校验是第二道——防的是 Cookie 策略被浏览器实现差异削弱的情况。
-	if c, err := r.Cookie(localTokenCookie); err == nil && tokenEqual(c.Value, localToken) {
-		if !checkOrigin(r) {
-			slog.Warn("http: 拒绝跨源 Cookie 鉴权", "origin", r.Header.Get("Origin"), "host", r.Host, "path", r.URL.Path)
-			http.Error(w, "403 Forbidden: cross-origin request rejected", http.StatusForbidden)
-			return ctx, false
-		}
-		authManager.RecordSuccess(clientIP)
-		return newAuthContext(ctx, "local", authcontext.ClientTypeWebUI, traceID, true), true
 	}
 
 	// ⑤ 逃生阀：三个条件同时成立才放行，缺一不可。
@@ -368,4 +356,38 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// checkLocalToken 本地令牌两条分支（③ 请求头 / ④ Cookie）。handled=false 表示请求
+// 未携带有效本地令牌，交由后续分支继续判定。
+func (s *Server) checkLocalToken(w http.ResponseWriter, r *http.Request, presented, clientIP, traceID string, authManager *AuthManager) (context.Context, bool, bool) {
+	ctx := r.Context()
+	// 冷却期内的本地令牌成功不复位该 IP 的失败计数：否则本机正常流量会把针对
+	// API Key 的冷却一并清掉，旁路了它对弱口令猜测的限制。
+	recordSuccess := func() {
+		if !authManager.IsLocked(clientIP) {
+			authManager.RecordSuccess(clientIP)
+		}
+	}
+	// ③ 本地令牌（请求头）：CLI / 桌面外壳。身份是 ClientTypeLocal，
+	// IsLocalTrusted() 覆盖它——本机已完成令牌校验，与 webui 同级可信。
+	localToken := s.LocalToken()
+	if tokenEqual(presented, localToken) {
+		recordSuccess()
+		return newAuthContext(ctx, "local", authcontext.ClientTypeLocal, traceID, true), true, true
+	}
+
+	// ④ 本地令牌（Cookie）：Web UI。跨站请求带不上 Strict Cookie，
+	// 这里的同源校验是第二道——防的是 Cookie 策略被浏览器实现差异削弱的情况。
+	if c, err := r.Cookie(localTokenCookie); err == nil && tokenEqual(c.Value, localToken) {
+		if !checkOrigin(r) {
+			slog.Warn("http: 拒绝跨源 Cookie 鉴权", "origin", r.Header.Get("Origin"), "host", r.Host, "path", r.URL.Path)
+			http.Error(w, "403 Forbidden: cross-origin request rejected", http.StatusForbidden)
+			return ctx, false, true
+		}
+		recordSuccess()
+		return newAuthContext(ctx, "local", authcontext.ClientTypeWebUI, traceID, true), true, true
+	}
+
+	return ctx, false, false
 }
