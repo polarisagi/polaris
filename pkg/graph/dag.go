@@ -6,7 +6,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// ValidateTopology L0 拓扑校验（<1ms）：节点数熔断、DFS 环检测、深度熔断、孤立节点。
+// ValidateTopology L0 拓扑校验（<1ms）：节点数熔断、悬空依赖、DFS 环检测、深度熔断。
 // nodes 为所有节点 ID 的列表，adj 为 adjacency list (nodeID -> dependsOnIDs)。
 // 注意：adj 表示依赖关系，即边是从当前节点指向其依赖的节点（有向边表示 "depends on"）。
 func ValidateTopology(nodes []string, adj map[string][]string) error { //nolint:gocyclo
@@ -14,20 +14,17 @@ func ValidateTopology(nodes []string, adj map[string][]string) error { //nolint:
 		return apperr.New(apperr.CodeInternal, fmt.Sprintf("node count %d exceeds circuit-breaker limit 50", len(nodes)))
 	}
 
-	// 孤立节点检测（无入边也无出边，且依赖集为空）
-	inDeg := make(map[string]int)
-	outDeg := make(map[string]int)
+	// 悬空依赖：依赖指向未定义节点（LLM 写错 ID）。此前的"孤立节点"规则把无边的
+	// 独立节点判非法，与原生并行 tool_calls 冲突，却对真正的依赖错误漏检——DFS
+	// 会直接递归进未定义 ID（ADR-0098 决策五）。
+	defined := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		defined[n] = true
+	}
 	for _, n := range nodes {
 		for _, dep := range adj[n] {
-			outDeg[dep]++
-			inDeg[n]++
-		}
-	}
-	if len(nodes) > 1 {
-		for _, n := range nodes {
-			if inDeg[n] == 0 && outDeg[n] == 0 && len(adj[n]) == 0 {
-				// 唯一节点时孤立是合法的
-				return apperr.New(apperr.CodeInternal, fmt.Sprintf("isolated node: %s", n))
+			if !defined[dep] {
+				return apperr.New(apperr.CodeInvalidInput, fmt.Sprintf("node %s depends on undefined node: %s", n, dep))
 			}
 		}
 	}

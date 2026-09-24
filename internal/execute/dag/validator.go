@@ -156,6 +156,35 @@ func isReadOnlyTool(toolName string, registry protocol.AgentToolExecutor) bool {
 	return false
 }
 
+// policyReviewContext 构造与执行闸门同形的授权上下文（sandbox.ExecEnvelope.Execute）。
+//
+// 此前以工具名作 action、会话 ID 作 principal 发问，策略模型里没有任何规则认识，
+// 真实 Gate 对一切工具返回 "denied by default"（2026-09-25 实测）。能力令牌在规划期
+// 尚未签发，如实填 false：trust<3 的工具在执行闸门同样需要令牌，此处拒绝与之一致。
+// 查不到工具元数据时不带 trust_tier（视为 0），由策略按 deny-by-default 拒绝。
+func policyReviewContext(vCtx *DAGValidationContext, node protocol.ExecNode) map[string]any {
+	ctx := map[string]any{
+		"kind":                   protocol.PolicyActionToolExecute,
+		"capability_token_valid": false,
+		"agent_id":               vCtx.AgentID,
+		"node_id":                node.ID,
+		"session_id":             vCtx.SessionID,
+		"taint_level":            vCtx.ActiveTaintLevel.String(),
+		"node_args_sz":           len(node.Args),
+		"monthly_spend_usd":      vCtx.MonthlySpendUSD,
+		"monthly_budget_usd":     vCtx.MonthlyBudgetUSD,
+	}
+	if vCtx.ToolExecutor == nil {
+		return ctx
+	}
+	if tool, err := vCtx.ToolExecutor.Lookup(node.ToolName); err == nil {
+		ctx["trust_tier"] = int(tool.TrustTier)
+		ctx["risk_level"] = int(tool.RiskLevel)
+		ctx["tool_source"] = string(tool.Source)
+	}
+	return ctx
+}
+
 // validatePolicyGate 实现 L1 第二道：Cedar PolicyGate 防线（deny-by-default）。
 // 逐节点调用 PolicyGate.Review，任一节点被 Forbid → 整体 DAG 拒绝。
 // fail-closed: PolicyGate 调用超时或出错 → 拒绝。
@@ -170,16 +199,10 @@ func validatePolicyGate(ctx context.Context, vCtx *DAGValidationContext) error {
 
 	for _, node := range vCtx.Plan.Nodes {
 		req := types.PolicyReviewRequest{
-			Principal: vCtx.AgentID,
-			Action:    node.ToolName,
-			Resource:  node.ID,
-			Context: map[string]any{
-				"session_id":         vCtx.SessionID,
-				"taint_level":        vCtx.ActiveTaintLevel.String(),
-				"node_args_sz":       len(node.Args),
-				"monthly_spend_usd":  vCtx.MonthlySpendUSD,
-				"monthly_budget_usd": vCtx.MonthlyBudgetUSD,
-			},
+			Principal: protocol.PolicyPrincipalAgent,
+			Action:    protocol.PolicyActionToolExecute,
+			Resource:  node.ToolName,
+			Context:   policyReviewContext(vCtx, node),
 		}
 
 		result, err := vCtx.PolicyGate.Review(ctx, req)
