@@ -15,6 +15,7 @@ import (
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // ============================================================================
@@ -275,6 +276,10 @@ func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte
 	// GR-4-005 复核修复：ReflectionModel 所有字段都是可选的（零值合法），schema 校验
 	// 失败时不改变既有"记录日志后仍推进 S_REFLECT_DONE"的降级语义（Reflect 阶段本来
 	// 就是尽力而为，不阻断主流程），仅补上此前完全没有的可观测性埋点。
+	// 与 parsePlanOnSuccess 同理：先剥掉模型惯用的 ```json 代码围栏再解析，
+	// 否则反思结果恒定解析失败、静默退化成空 ReflectionModel（2026-09-22）。
+	fill = []byte(util.ExtractJSONBraces(string(fill)))
+
 	if schemaErr := schemavalidate.Validate("reflect_result", fill); schemaErr != nil {
 		slog.Warn("reflect: content failed schema validation", "err", schemaErr)
 	}
