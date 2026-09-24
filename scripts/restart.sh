@@ -174,23 +174,37 @@ for i in {1..20}; do
   fi
 done
 
-# 替换桌面外壳：放在守护进程确认就绪之后——外壳启动即经 service status 连接，
+# 桌面外壳：放在守护进程确认就绪之后——外壳启动即经 service status 连接，
 # 守护进程起不来时换上新外壳只会多一个报错窗口；且回滚只覆盖守护进程二进制。
-deploy_desktop() {
-  $BUILD_DESKTOP || return 0
+#
+# 即使 --no-desktop 不替换外壳，仍在运行的外壳也要重启：守护进程每次启动都轮换
+# run/polaris.token，旧窗口持旧 Cookie 轮询 /v1 会连续 401，触发按 IP 的鉴权冷却，
+# 连带把同在 127.0.0.1 上的 CLI 与新窗口一起锁 5 分钟（2026-09-25 实测）。
+DESKTOP_PROC_PATTERN="$DESKTOP_INSTALL"
+[[ "$OS" == "Darwin" ]] && DESKTOP_PROC_PATTERN="$DESKTOP_INSTALL/Contents/MacOS/"
+
+stop_desktop() {
+  pgrep -f "$DESKTOP_PROC_PATTERN" &>/dev/null || return 1
+  [[ "$OS" == "Darwin" ]] && osascript -e "quit app \"$DESKTOP_APP_NAME\"" 2>/dev/null
+  for i in {1..10}; do
+    pgrep -f "$DESKTOP_PROC_PATTERN" &>/dev/null || return 0
+    [[ $i -ge 4 ]] && pkill -f "$DESKTOP_PROC_PATTERN" 2>/dev/null
+    sleep 0.5
+  done
+  return 0
+}
+
+start_desktop() {
+  case "$OS" in
+    Darwin) open "$DESKTOP_INSTALL" ;;
+    Linux)  (nohup "$DESKTOP_INSTALL" >/dev/null 2>&1 &) ;;
+  esac
+}
+
+install_desktop() {
   echo "→ 替换桌面外壳 ($DESKTOP_INSTALL)..."
-  local was_running=false
   case "$OS" in
     Darwin)
-      if pgrep -f "$DESKTOP_INSTALL/Contents/MacOS/" &>/dev/null; then
-        was_running=true
-        osascript -e "quit app \"$DESKTOP_APP_NAME\"" 2>/dev/null || true
-        for i in {1..10}; do
-          pgrep -f "$DESKTOP_INSTALL/Contents/MacOS/" &>/dev/null || break
-          sleep 0.5
-          [[ $i -eq 10 ]] && pkill -f "$DESKTOP_INSTALL/Contents/MacOS/" 2>/dev/null || true
-        done
-      fi
       # 整包替换而非覆盖拷贝：旧包里已删除的资源不得残留在新包中
       rm -rf "$DESKTOP_INSTALL"
       ditto "$DESKTOP_ARTIFACT" "$DESKTOP_INSTALL"
@@ -198,21 +212,27 @@ deploy_desktop() {
       # 包级签名校验不过（"code has no resources"）；补一次包级 ad-hoc 签名，
       # 否则系统对其通知/钥匙串等按身份授权的能力会随每次替换失效或拒绝。
       codesign --force --deep --sign - "$DESKTOP_INSTALL" >/dev/null 2>&1 || true
-      $was_running && open "$DESKTOP_INSTALL"
       ;;
     Linux)
-      if pgrep -f "$DESKTOP_INSTALL" &>/dev/null; then
-        was_running=true
-        pkill -f "$DESKTOP_INSTALL" 2>/dev/null || true
-        sleep 1
-      fi
       mkdir -p "$(dirname "$DESKTOP_INSTALL")"
       cp "$DESKTOP_ARTIFACT" "$DESKTOP_INSTALL"
       chmod +x "$DESKTOP_INSTALL"
-      $was_running && (nohup "$DESKTOP_INSTALL" >/dev/null 2>&1 &)
       ;;
   esac
-  echo "✓ 桌面外壳已替换$($was_running && echo '并重新拉起' || true)"
+}
+
+deploy_desktop() {
+  local was_running=false
+  stop_desktop && was_running=true
+  if $BUILD_DESKTOP; then
+    install_desktop
+  fi
+  if $was_running; then
+    start_desktop
+    echo "✓ 桌面外壳已重新拉起（附着新令牌）"
+  elif $BUILD_DESKTOP; then
+    echo "✓ 桌面外壳已替换"
+  fi
 }
 
 if $READY; then
