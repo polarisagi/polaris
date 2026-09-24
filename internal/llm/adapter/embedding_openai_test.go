@@ -38,7 +38,7 @@ func TestOpenAICompatibleEmbedding(t *testing.T) {
 	adapter := NewOpenAICompatibleEmbeddingAdapter("http://dummy", "test-model", llmparent.NewCredentialPool([]string{"test-key"}, llmparent.StrategyFillFirst), client)
 
 	// Test Embed
-	vec := adapter.Embed("test text")
+	vec := adapter.Embed(context.Background(), "test text")
 	if len(vec) != 3 || vec[0] != 0.1 || vec[1] != 0.2 || vec[2] != 0.3 {
 		t.Fatalf("unexpected embed result: %v", vec)
 	}

@@ -255,6 +255,8 @@ TokenBurnDetector 仅做单流加速度检测，系统级燃烧速率从 M3 `pol
 - High 队列容量达 80% → 指数退避（50ms 初始，max 2s）
 - Low 队列容量达 80% → 强制排队 30ms
 
+> 2026-09-25 复核（ADR-0099）：上述"单循环混装一批 + 20% 防饥饿 + Low 升 High"导致交互请求排在后台大批次之后（实测 100 条/批 13.8s，交互嵌入稳定 30s 超时）。现为 High/Low **各自独立 flush 循环**；Low 单批上限 `low_max_batch_size=8`（约束其在串行后端上的占用，实测 ≈1s）；每次下游调用 `call_timeout_s=30` 独立超时；`search.Embedder.Embed(ctx, text)` 携带调用方 ctx。原防饥饿与升级机制随双通道取消。
+
 **文本去重（dedup）**：相同文本重复入队时，仅占用一个队列槽位，额外等待者追加到扇出列表。API 调用返回后，结果同步广播给所有等待同一文本的调用方。消除并发场景下对相同文本的重复 Embedding API 调用。
 
 文本在发往远程 API 前，必须经过 [PIIGuard]（PII（Personally Identifiable Information，个人可识别信息）：Personally Identifiable Information，个人可识别信息）红化预处理。

@@ -3,7 +3,7 @@
 
 max_replan_attempts = 3
 default_budget = 50000
-max_steps = 10
+max_steps = 24
 tier0_max_concurrent = 4
 suspend_idle_threshold_minutes = 5
 'plan_dag.max_nodes' = 50

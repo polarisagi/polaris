@@ -51,11 +51,11 @@ func (e *HybridSearchEngine) Stats() *CorpusStats {
 // EmbedQuery 计算查询向量；未注入 embedder（纯 FTS 降级）时返回 nil。
 // 暴露它而非让调用方持有 embedder：向量召回与查询编码必须用同一个模型实例，
 // 分开持有会在 Tier 切换时出现"用 A 模型编码、拿 B 模型的向量库比对"。
-func (e *HybridSearchEngine) EmbedQuery(query string) []float32 {
+func (e *HybridSearchEngine) EmbedQuery(ctx context.Context, query string) []float32 {
 	if e.embedder == nil || query == "" {
 		return nil
 	}
-	return e.embedder.Embed(query)
+	return e.embedder.Embed(ctx, query)
 }
 
 func (e *HybridSearchEngine) AddDocument(ctx context.Context, id, content string) error {

@@ -87,7 +87,7 @@ func TestMaxSimScore_MultiToken(t *testing.T) {
 // mockEmbedder 对文本返回固定向量（按内容哈希区分）。
 type mockEmbedder struct{}
 
-func (mockEmbedder) Embed(text string) []float32 {
+func (mockEmbedder) Embed(_ context.Context, text string) []float32 {
 	// 简单：每个词的首字母 ASCII 映射为向量维度
 	vec := make([]float32, 26)
 	for _, b := range []byte(text) {

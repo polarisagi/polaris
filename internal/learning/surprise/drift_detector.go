@@ -1,6 +1,7 @@
 package surprise
 
 import (
+	"context"
 	"math"
 	"slices"
 	"sync"
@@ -71,7 +72,8 @@ func (dd *DriftDetector) anchorCosineDist(a AnchorSample) (float64, bool) {
 	if dd.embedder == nil || len(a.Embedding) == 0 {
 		return 0, false
 	}
-	qVec := dd.embedder.Embed(a.Query)
+	// 漂移检测是后台周期任务，无上游请求截止；Embedder 适配器自带 30s 上限。
+	qVec := dd.embedder.Embed(context.Background(), a.Query)
 	if len(qVec) == 0 || len(qVec) != len(a.Embedding) {
 		return 0, false
 	}

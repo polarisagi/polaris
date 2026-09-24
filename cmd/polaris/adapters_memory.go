@@ -23,8 +23,8 @@ type memEmbedderAdapter struct {
 	model string
 }
 
-func (a *memEmbedderAdapter) Embed(_ context.Context, text string) ([]float32, error) {
-	v := a.e.Embed(text)
+func (a *memEmbedderAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
+	v := a.e.Embed(ctx, text)
 	if len(v) == 0 {
 		// search.Embedder 无 error 返回；nil 向量唯一语义是 Embedder 暂不可用（如 Ollama 未启动）。
 		// 转换为 error 让 OnlineReindexer 可区分失败与正常空结果，避免写入零向量污染索引。

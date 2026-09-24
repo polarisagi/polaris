@@ -63,7 +63,7 @@ func (idx *EmbeddingIndexer) IndexEntries(ctx context.Context, entries []Catalog
 			// 逐条降级（不支持批量的 Embedder）
 			vecs = make([][]float32, len(entries))
 			for i, t := range texts {
-				vecs[i] = idx.embedder.Embed(t)
+				vecs[i] = idx.embedder.Embed(ctx, t)
 			}
 		}
 	}

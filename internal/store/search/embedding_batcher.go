@@ -16,65 +16,136 @@ var (
 	ErrBatcherStopped   = apperr.New(apperr.CodeCancelled, "embedding batcher stopped")
 )
 
-// 优先级取值：enqueue 以 0 为 High 队列，其余进 Low 队列。
+// 优先级取值：0 为 High（交互），其余进 Low（后台批量）。
 const (
 	PriorityHigh = 0 // SurpriseIndex、交互式查询、同步适配器
-	PriorityLow  = 1 // GraphRAG、Consolidation 等后台批量
+	PriorityLow  = 1 // GraphRAG、Consolidation、回填等后台批量
+)
+
+const (
+	highQueueCap          = 180
+	lowQueueCap           = 76
+	defaultLowMaxBatch    = 8
+	defaultCallTimeout    = 30 * time.Second
+	defaultBatchWindow    = 10 * time.Millisecond
+	defaultHighMaxBatch   = 100
+	laneNameHigh, laneLow = "high", "low"
 )
 
 // EmbeddingBatcher — Embedding API 批量调用优化器。
-// 架构文档: docs/arch/M01-Inference-Runtime.md §6.1
+// 架构文档: docs/arch/M01-Inference-Runtime.md §6.1、ADR-0099
+//
+// High 与 Low 两条通道各自独立 flush、各自至多一个在途调用：交互请求永不在本进程
+// 内排到后台大批次之后（此前单循环混装一批，实测 100 条/批 13.8s，交互嵌入稳定
+// 30s 超时）。Low 单批上限收紧，约束它在串行后端上占用的时长。
+type EmbeddingBatcher struct {
+	batchWindow  time.Duration
+	maxBatchSize int // High 单批上限（兼作"大请求直发"阈值）
+	callTimeout  time.Duration
+	embedFn      EmbedFn
+
+	mu      sync.Mutex
+	high    *embedLane
+	low     *embedLane
+	cancel  context.CancelFunc
+	done    chan struct{}
+	started bool
+	stopped bool
+}
 
 // EmbedFn M1 Embedding API 调用函数类型（依赖注入，可 mock）。
 type EmbedFn func(ctx context.Context, texts []string, model string) ([][]float32, error)
 
-type EmbeddingBatcher struct {
-	pendingHigh  [180]EmbedRequest // PriorityHigh: SurpriseIndex、交互式查询
-	pendingLow   [76]EmbedRequest  // PriorityLow: GraphRAG、Consolidation
-	batchWindow  time.Duration     // 10ms
-	maxBatchSize int               // 100
-	mu           sync.Mutex
-	timer        *time.Timer
-	embedFn      EmbedFn // M1 Embedding API 注入点
-
-	// dedup: textHash → 等待该文本结果的 channel 列表（扇出）
-	// 同一文本重复入队时，只发出一次 API 调用，结果扇出至所有等待者。
-	dedupMap map[string][]chan EmbedResult
-
-	// 生命周期（GR-1.1-004）：Stop 取消后台循环；stopped 后新请求立即失败，
-	// 在途等待者收到 ErrBatcherStopped，而不是永久阻塞在 ResultCh 上。
-	cancel  context.CancelFunc
-	done    chan struct{}
-	stopped bool
+// embedLane 单条优先级通道。pending/dedup 受 EmbeddingBatcher.mu 保护；
+// callMu 串行化本通道的下游调用（flush 循环与大请求直发共用），保证至多一个在途。
+type embedLane struct {
+	name     string
+	capacity int
+	maxBatch int
+	pending  []EmbedRequest
+	// dedup: textHash → 等待该文本结果的 channel（扇出）。按通道隔离：跨通道共享会让
+	// High 请求挂到排队中的 Low 条目上，重新引入队头阻塞。
+	dedup  map[string][]chan EmbedResult
+	callMu sync.Mutex
 }
 
-// Start 启动后台批处理定时器。
+func newEmbedLane(name string, capacity, maxBatch int) *embedLane {
+	return &embedLane{name: name, capacity: capacity, maxBatch: maxBatch, dedup: make(map[string][]chan EmbedResult)}
+}
+
+// NewEmbeddingBatcher 创建 EmbeddingBatcher，embedFn 为 M1 Embedding API（nil 则 flushBatch 报错）。
+// maxBatchSize 为 High 单批上限；Low 单批上限与下游超时经 WithLaneLimits 调整。
+func NewEmbeddingBatcher(batchWindow time.Duration, maxBatchSize int, embedFn EmbedFn) *EmbeddingBatcher {
+	if batchWindow <= 0 {
+		batchWindow = defaultBatchWindow
+	}
+	if maxBatchSize <= 0 {
+		maxBatchSize = defaultHighMaxBatch
+	}
+	return &EmbeddingBatcher{
+		batchWindow:  batchWindow,
+		maxBatchSize: maxBatchSize,
+		callTimeout:  defaultCallTimeout,
+		embedFn:      embedFn,
+		high:         newEmbedLane(laneNameHigh, highQueueCap, maxBatchSize),
+		low:          newEmbedLane(laneLow, lowQueueCap, min(defaultLowMaxBatch, maxBatchSize)),
+	}
+}
+
+// WithLaneLimits 设置 Low 单批上限与单次下游调用超时（ADR-0099，阈值
+// thresholds.m1_router.embed.*）。须在 Start 前调用；非正值保持默认。
+func (b *EmbeddingBatcher) WithLaneLimits(lowMaxBatch int, callTimeout time.Duration) *EmbeddingBatcher {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if lowMaxBatch > 0 {
+		b.low.maxBatch = min(lowMaxBatch, b.maxBatchSize)
+	}
+	if callTimeout > 0 {
+		b.callTimeout = callTimeout
+	}
+	return b
+}
+
+// Start 启动两条通道各自的 flush 循环。
 func (b *EmbeddingBatcher) Start(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.timer != nil {
+	if b.started {
 		return
 	}
-	b.timer = time.NewTimer(b.batchWindow)
+	b.started = true
 	ctx, b.cancel = context.WithCancel(ctx)
 	b.done = make(chan struct{})
-	concurrent.SafeGo(ctx, "embedding_batcher_timer", func(ctx context.Context) {
-		defer close(b.done)
-		for {
-			select {
-			case <-ctx.Done():
-				b.timer.Stop()
-				b.failPending(ErrBatcherStopped)
-				return
-			case <-b.timer.C:
-				b.flushQueue(ctx)
-				b.timer.Reset(b.batchWindow)
-			}
-		}
+
+	var wg sync.WaitGroup
+	for _, ln := range []*embedLane{b.high, b.low} {
+		wg.Add(1)
+		concurrent.SafeGo(ctx, "embedding_batcher_"+ln.name, func(ctx context.Context) {
+			defer wg.Done()
+			b.runLane(ctx, ln)
+		})
+	}
+	concurrent.SafeGo(ctx, "embedding_batcher_stop", func(context.Context) {
+		wg.Wait()
+		b.failPending(ErrBatcherStopped)
+		close(b.done)
 	})
 }
 
-// Stop 停止后台批处理循环并等待其退出；未 Start 或重复调用均安全，nil 接收者安全。
+func (b *EmbeddingBatcher) runLane(ctx context.Context, ln *embedLane) {
+	ticker := time.NewTicker(b.batchWindow)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.flushLane(ctx, ln)
+		}
+	}
+}
+
+// Stop 停止 flush 循环并等待其退出；未 Start 或重复调用均安全，nil 接收者安全。
 func (b *EmbeddingBatcher) Stop() {
 	if b == nil {
 		return
@@ -95,96 +166,62 @@ func (b *EmbeddingBatcher) failPending(err error) {
 	defer b.mu.Unlock()
 	b.stopped = true
 	res := EmbedResult{Error: err}
-	for key, chs := range b.dedupMap {
-		for _, ch := range chs {
-			ch <- res
+	for _, ln := range []*embedLane{b.high, b.low} {
+		for key, chs := range ln.dedup {
+			for _, ch := range chs {
+				ch <- res
+			}
+			delete(ln.dedup, key)
 		}
-		delete(b.dedupMap, key)
+		ln.pending = nil
 	}
-	b.pendingHigh = [len(b.pendingHigh)]EmbedRequest{}
-	b.pendingLow = [len(b.pendingLow)]EmbedRequest{}
 }
 
-// flushQueue 在定时器到期时执行，优先 High (最多 80)，用 Low 补齐 (最多 100)。
-func (b *EmbeddingBatcher) flushQueue(ctx context.Context) {
+// flushLane 取出本通道至多 maxBatch 条并调用下游，结果扇出给全部等待者。
+func (b *EmbeddingBatcher) flushLane(ctx context.Context, ln *embedLane) {
 	b.mu.Lock()
-	var toProcess []EmbedRequest
-
-	// Drain High: max 80
-	for i := range b.pendingHigh {
-		if b.pendingHigh[i].Text != "" {
-			toProcess = append(toProcess, b.pendingHigh[i])
-			b.pendingHigh[i] = EmbedRequest{} // clear
-			if len(toProcess) >= int(float64(b.maxBatchSize)*0.8) {
-				break
-			}
-		}
-	}
-
-	// Drain Low: fill up to 100
-	for i := range b.pendingLow {
-		if len(toProcess) >= b.maxBatchSize {
-			break
-		}
-		if b.pendingLow[i].Text != "" {
-			toProcess = append(toProcess, b.pendingLow[i])
-			b.pendingLow[i] = EmbedRequest{} // clear
-		}
-	}
-	b.mu.Unlock()
-
-	if len(toProcess) == 0 {
+	n := min(len(ln.pending), ln.maxBatch)
+	if n == 0 {
+		b.mu.Unlock()
 		return
 	}
+	batch := append([]EmbedRequest(nil), ln.pending[:n]...)
+	ln.pending = append(ln.pending[:0], ln.pending[n:]...)
+	b.mu.Unlock()
 
-	texts := make([]string, len(toProcess))
-	for i, req := range toProcess {
+	texts := make([]string, len(batch))
+	for i, req := range batch {
 		texts[i] = req.Text
 	}
-	// Call flushBatch
-	// Note: We use the first request's model as a simplification,
-	// assuming batches group by model in practice.
-	model := "default"
-	if len(toProcess) > 0 {
-		model = toProcess[0].Model
-	}
-	results, batchErr := b.flushBatch(ctx, texts, model)
+	// 批内按首条请求的模型调用：同一进程的嵌入模型全局唯一（DynamicEmbedder）。
+	results, batchErr := b.callLane(ctx, ln, texts, batch[0].Model)
 
-	// 扇出：将结果发送给所有等待同一文本的 channel（去重场景下可能有多个等待者）。
 	b.mu.Lock()
-	for i, req := range toProcess {
-		key := textHash(req.Text)
-		var res EmbedResult
-		if batchErr != nil {
-			res = EmbedResult{Error: batchErr}
-		} else if i < len(results) {
-			res = results[i]
-		} else {
+	defer b.mu.Unlock()
+	for i, req := range batch {
+		res := EmbedResult{Error: batchErr}
+		if batchErr == nil {
 			res = EmbedResult{Error: apperr.New(apperr.CodeInternal, "missing result")}
+			if i < len(results) {
+				res = results[i]
+			}
 		}
-		// 扇出至所有等待者
-		for _, ch := range b.dedupMap[key] {
+		key := textHash(req.Text)
+		for _, ch := range ln.dedup[key] {
 			ch <- res
 		}
-		delete(b.dedupMap, key)
+		delete(ln.dedup, key)
 	}
-	b.mu.Unlock()
 }
 
-// NewEmbeddingBatcher 创建 EmbeddingBatcher，embedFn 为 M1 Embedding API（nil 则 flushBatch 报错）。
-func NewEmbeddingBatcher(batchWindow time.Duration, maxBatchSize int, embedFn EmbedFn) *EmbeddingBatcher {
-	if batchWindow <= 0 {
-		batchWindow = 10 * time.Millisecond
-	}
-	if maxBatchSize <= 0 {
-		maxBatchSize = 100
-	}
-	return &EmbeddingBatcher{
-		batchWindow:  batchWindow,
-		maxBatchSize: maxBatchSize,
-		embedFn:      embedFn,
-		dedupMap:     make(map[string][]chan EmbedResult),
-	}
+// callLane 串行化本通道的下游调用并施加单次超时：后端挂起只让该批失败，
+// 不再冻结整条队列（此前用批处理器的长生命周期 ctx，无上限）。
+func (b *EmbeddingBatcher) callLane(ctx context.Context, ln *embedLane, texts []string, model string) ([]EmbedResult, error) {
+	ln.callMu.Lock()
+	defer ln.callMu.Unlock()
+	cctx, cancel := context.WithTimeout(ctx, b.callTimeout)
+	defer cancel()
+	return b.flushBatch(cctx, texts, model)
 }
 
 // textHash 为文本生成去重键（SHA-256 前 16 字节，碰撞率可忽略）。
@@ -207,26 +244,33 @@ type EmbedResult struct {
 	Error  error
 }
 
-// Embed 提交 embedding 请求。
-// IF len(texts) >= maxBatchSize → 直接发单批。
-// 否则入队 pendingHigh|Low, 启动/重置 10ms timer。
-// timer 到期: drain pendingHigh max 80 条 → drain pendingLow 补齐至 100。
-// 保留 20% 槽位给 Low (防饥饿)。
-// Aging: Low 排队 >100ms → 自动升 High。
-// 背压: High cap 80%→ErrBatcherSaturated 指数退避(50ms, max 2s);
+func (b *EmbeddingBatcher) laneOf(priority int) *embedLane {
+	if priority == PriorityHigh {
+		return b.high
+	}
+	return b.low
+}
+
+// Embed 提交 embedding 请求并等待结果。
 //
-//	Low cap 80%→排队 30ms→连续3次后指数退避。
+// len(texts) 达到本通道单批上限 → 按上限切块直发（仍经 callMu 串行，与 flush 循环
+// 共享"至多一个在途"约束）；否则全部入队后统一等待——此前逐条入队、逐条等待，
+// N 条文本要串行等 N 个 flush 周期。
 func (b *EmbeddingBatcher) Embed(ctx context.Context, texts []string, model string, priority int) ([]EmbedResult, error) {
-	if len(texts) >= b.maxBatchSize {
-		return b.flushBatch(ctx, texts, model)
+	ln := b.laneOf(priority)
+	if len(texts) >= ln.maxBatch {
+		return b.embedDirect(ctx, ln, texts, model)
 	}
 
-	results := make([]EmbedResult, len(texts))
+	chans := make([]chan EmbedResult, len(texts))
 	for i, text := range texts {
-		req := EmbedRequest{Text: text, Model: model, Priority: priority, ResultCh: make(chan EmbedResult, 1)}
-		b.enqueue(req)
+		chans[i] = make(chan EmbedResult, 1)
+		b.enqueue(ln, EmbedRequest{Text: text, Model: model, Priority: priority, ResultCh: chans[i]})
+	}
+	results := make([]EmbedResult, len(texts))
+	for i, ch := range chans {
 		select {
-		case r := <-req.ResultCh:
+		case r := <-ch:
 			results[i] = r
 		case <-ctx.Done():
 			return results, ctx.Err() //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
@@ -235,7 +279,20 @@ func (b *EmbeddingBatcher) Embed(ctx context.Context, texts []string, model stri
 	return results, nil
 }
 
-func (b *EmbeddingBatcher) enqueue(req EmbedRequest) {
+func (b *EmbeddingBatcher) embedDirect(ctx context.Context, ln *embedLane, texts []string, model string) ([]EmbedResult, error) {
+	out := make([]EmbedResult, 0, len(texts))
+	for start := 0; start < len(texts); start += ln.maxBatch {
+		end := min(start+ln.maxBatch, len(texts))
+		res, err := b.callLane(ctx, ln, texts[start:end], model)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, res...)
+	}
+	return out, nil
+}
+
+func (b *EmbeddingBatcher) enqueue(ln *embedLane, req EmbedRequest) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -248,35 +305,21 @@ func (b *EmbeddingBatcher) enqueue(req EmbedRequest) {
 		return
 	}
 
-	// 去重：同 text 已在队列中 → 将 ResultCh 追加到扇出列表，不再占用队列槽位。
+	// 去重：同 text 已在本通道排队 → 追加到扇出列表，不再占用队列槽位。
 	key := textHash(req.Text)
-	if _, exists := b.dedupMap[key]; exists {
-		b.dedupMap[key] = append(b.dedupMap[key], req.ResultCh)
+	if _, exists := ln.dedup[key]; exists {
+		ln.dedup[key] = append(ln.dedup[key], req.ResultCh)
 		return
 	}
-	b.dedupMap[key] = []chan EmbedResult{req.ResultCh}
-
-	if req.Priority == PriorityHigh {
-		for i := range b.pendingHigh {
-			if b.pendingHigh[i].Text == "" {
-				b.pendingHigh[i] = req
-				return
-			}
+	if len(ln.pending) >= ln.capacity {
+		select {
+		case req.ResultCh <- EmbedResult{Error: ErrBatcherSaturated}:
+		default:
 		}
+		return
 	}
-	for i := range b.pendingLow {
-		if b.pendingLow[i].Text == "" {
-			b.pendingLow[i] = req
-			return
-		}
-	}
-
-	// Queue is full, send saturation error and delete from dedupMap
-	res := EmbedResult{Error: ErrBatcherSaturated}
-	for _, ch := range b.dedupMap[key] {
-		ch <- res
-	}
-	delete(b.dedupMap, key)
+	ln.dedup[key] = []chan EmbedResult{req.ResultCh}
+	ln.pending = append(ln.pending, req)
 }
 
 func (b *EmbeddingBatcher) flushBatch(ctx context.Context, texts []string, model string) ([]EmbedResult, error) {

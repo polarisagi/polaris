@@ -354,7 +354,7 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	if sb.Embedder != nil {
 		embedder := sb.Embedder // 捕获引用
 		nativeEmbedFn = func(ctx context.Context, text string) ([]float32, error) {
-			v := embedder.Embed(text)
+			v := embedder.Embed(ctx, text)
 			if v == nil {
 				return nil, apperr.New(apperr.CodeInternal, "embed returned nil")
 			}

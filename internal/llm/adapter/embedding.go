@@ -39,8 +39,7 @@ func NewOllamaEmbeddingAdapter(model string, httpClient *http.Client) *OllamaEmb
 }
 
 // Embed 将文本转换为 float32 向量（实现 substrate.Embedder 接口）。
-func (e *OllamaEmbeddingAdapter) Embed(text string) []float32 {
-	ctx := context.Background()
+func (e *OllamaEmbeddingAdapter) Embed(ctx context.Context, text string) []float32 {
 	vecs, err := e.EmbedBatch(ctx, []string{text})
 	if err != nil || len(vecs) == 0 {
 		return nil
@@ -126,8 +125,8 @@ func NewOpenAICompatibleEmbeddingAdapter(baseURL, model string, credPool *llmpar
 }
 
 // Embed 实现 search.Embedder 接口（单条文本）。
-func (e *OpenAICompatibleEmbeddingAdapter) Embed(text string) []float32 {
-	vecs, err := e.EmbedBatch(context.Background(), []string{text})
+func (e *OpenAICompatibleEmbeddingAdapter) Embed(ctx context.Context, text string) []float32 {
+	vecs, err := e.EmbedBatch(ctx, []string{text})
 	if err != nil || len(vecs) == 0 {
 		return nil
 	}

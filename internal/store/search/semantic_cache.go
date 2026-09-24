@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
@@ -47,8 +48,11 @@ type CacheStore interface {
 }
 
 // Embedder 文本向量化接口（M1 提供）。
+//
+// ctx 贯穿到下游 HTTP 请求（ADR-0099）：此前无 ctx，适配器内部固定 Background+30s，
+// 调用方的截止时间传不下去，交互检索与 Agent 召回只能干等到 30s 超时。
 type Embedder interface {
-	Embed(text string) []float32
+	Embed(ctx context.Context, text string) []float32
 }
 
 type SemanticCache struct {
@@ -121,7 +125,7 @@ func NewSemanticCache(
 //
 // TTL 由 CacheStore.FindClosest 过滤，或由 Get 在返回前二次校验。
 // store=nil 或 embedder=nil 时始终返回 ("", false)。
-func (c *SemanticCache) Get(key CacheKey) (string, bool) {
+func (c *SemanticCache) Get(ctx context.Context, key CacheKey) (string, bool) {
 	if c.store == nil || c.embedder == nil {
 		return "", false
 	}
@@ -130,7 +134,7 @@ func (c *SemanticCache) Get(key CacheKey) (string, bool) {
 
 	// 向量化当前请求（拼接消息内容作为语义代表）
 	queryText := strings.Join(key.Messages, "\n")
-	embedding := c.embedder.Embed(queryText)
+	embedding := c.embedder.Embed(ctx, queryText)
 	if len(embedding) == 0 {
 		return "", false
 	}
@@ -172,13 +176,13 @@ func (c *SemanticCache) Get(key CacheKey) (string, bool) {
 //
 // 写入前检查容量：若 Count() >= maxEntries，淘汰 maxEntries/10 个最久未访问的条目（LRU）。
 // store=nil 或 embedder=nil 时为空操作。
-func (c *SemanticCache) Put(key CacheKey, response, model string) error {
+func (c *SemanticCache) Put(ctx context.Context, key CacheKey, response, model string) error {
 	if c.store == nil || c.embedder == nil {
 		return nil
 	}
 
 	queryText := strings.Join(key.Messages, "\n")
-	embedding := c.embedder.Embed(queryText)
+	embedding := c.embedder.Embed(ctx, queryText)
 	// embedding=nil 说明 Embedder 暂不可用（如 Ollama 未启动），跳过写入。
 	// 写入无向量的 entry 会使该条目永远无法被 FindClosest 命中，静默占用 LRU 槽位。
 	if len(embedding) == 0 {

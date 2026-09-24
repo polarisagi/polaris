@@ -205,4 +205,4 @@ func TestCompositeCatalog_Invalidate(t *testing.T) {
 // "懒加载可用"（Schemas() 只检查 Embedder != nil，不实际调用 Embed）。
 type fakeEmbedder struct{}
 
-func (fakeEmbedder) Embed(_ string) []float32 { return []float32{0.1, 0.2, 0.3} }
+func (fakeEmbedder) Embed(_ context.Context, _ string) []float32 { return []float32{0.1, 0.2, 0.3} }
