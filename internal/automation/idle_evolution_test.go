@@ -11,7 +11,7 @@ import (
 )
 
 func TestIdleEvolutionScheduler_IsIdle(t *testing.T) {
-	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
+	rg := newIdleMachineGovernor()
 	hw := probe.NewHardwareProbe(0, 0)
 	s := NewIdleEvolutionScheduler(rg, hw)
 
@@ -51,7 +51,7 @@ func TestIdleEvolutionScheduler_IsIdle(t *testing.T) {
 }
 
 func TestIdleEvolutionScheduler_TaskCancelOnActivity(t *testing.T) {
-	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
+	rg := newIdleMachineGovernor()
 	hw := probe.NewHardwareProbe(0, 0)
 	s := NewIdleEvolutionScheduler(rg, hw)
 	s.idleThreshold = 10 * time.Millisecond
@@ -102,7 +102,7 @@ func TestIdleEvolutionScheduler_TaskCancelOnActivity(t *testing.T) {
 }
 
 func TestIdleEvolutionScheduler_NoDuplicateRun(t *testing.T) {
-	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
+	rg := newIdleMachineGovernor()
 	hw := probe.NewHardwareProbe(0, 0)
 	s := NewIdleEvolutionScheduler(rg, hw)
 
@@ -129,7 +129,7 @@ func TestIdleEvolutionScheduler_NoDuplicateRun(t *testing.T) {
 }
 
 func TestIdleEvolutionScheduler_NoLeakOnComplete(t *testing.T) {
-	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
+	rg := newIdleMachineGovernor()
 	hw := probe.NewHardwareProbe(0, 0)
 	s := NewIdleEvolutionScheduler(rg, hw)
 
@@ -157,4 +157,16 @@ func TestIdleEvolutionScheduler_NoLeakOnComplete(t *testing.T) {
 	if runCount.Load() != 1 {
 		t.Errorf("Expected 1 run, got %d", runCount.Load())
 	}
+}
+
+// newIdleMachineGovernor 构造探针恒报"空闲机器"的治理器。
+//
+// 调度器经 AdmitBackground 读取内存/CPU 探针；用真实探针时，测试结果随宿主负载
+// 漂移——全仓 go test 并行编译把 CPU 打满，后台准入被拒，三个用例稳定失败，
+// 空闲时单独跑又通过（2026-09-25 实测）。测试验证的是调度逻辑，不是宿主负载。
+func newIdleMachineGovernor() *ResourceGovernor {
+	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{})
+	rg.memProbeFn = func() int64 { return 64 * 1024 }
+	rg.cpuProbeFn = func() float64 { return 0 }
+	return rg
 }
