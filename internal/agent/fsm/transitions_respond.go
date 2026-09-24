@@ -1,8 +1,11 @@
 package fsm
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+
+	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -26,12 +29,34 @@ func (sm *StateMachine) registerRespondTransitions() {
 		To:      types.AgentStateRespond,
 		Effects: sm.respondEffects,
 	})
-	// 空回复自环重试：此时尚未推出任何 token，重来不会造成重复输出。
+	// 空输出自环重试（ADR-0098 决策七）：S_RESPOND 此时尚未推出任何 token，
+	// 重来不会造成重复输出；S_PLAN 重试不改变任何已执行状态。
 	sm.add(Transition{
 		From:    types.AgentStateRespond,
-		Trigger: types.TriggerRespondReady,
+		Trigger: types.TriggerFillRetry,
 		To:      types.AgentStateRespond,
 		Effects: sm.respondEffects,
+	})
+	sm.add(Transition{
+		From:    types.AgentStatePlan,
+		Trigger: types.TriggerFillRetry,
+		To:      types.AgentStatePlan,
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return []protocol.Effect{sm.planEffect(sCtx)}, nil
+		},
+	})
+	// 观察—再规划（ADR-0098 决策八）：与校验失败 / 回滚共用 ReplanGuard，
+	// 重规划计数与 ReplanDone 由 handleReplanTransition 统一处理。
+	sm.add(Transition{
+		From:    types.AgentStateReflect,
+		Trigger: types.TriggerReflectContinue,
+		To:      types.AgentStateReplan,
+		Guard: func(ctx context.Context, sCtx *StateContext) bool {
+			return sm.replanCount < sCtx.MaxReplan
+		},
+		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			return nil, nil
+		},
 	})
 	sm.add(Transition{
 		From:    types.AgentStateRespond,
@@ -77,5 +102,36 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 		MaxRetry:  maxRetry,
 		ModelPool: string(types.ModelPoolGeneral),
 		Audience:  protocol.AudienceUser,
+	}
+}
+
+// planEffect S_PLAN 的 LLM 填空（Perceive→Plan、Replan→Plan、空输出自环三处共用）。
+//
+// 空输出（既无正文也无工具调用，fill 为空）按 MaxRetry 自环重试：DeepSeek 思考模式
+// 挂载工具时偶发只输出思考链就以 stop 结束（ADR-0098 决策七）。有内容但解析失败
+// 不在此重试——那是契约违反，交给既有的缓存复用 / S_PLAN_FAILED 语义。
+func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
+	const maxRetry = 1
+	originTaint := types.TaintMedium
+	if lv := sCtx.RawIntentTS.Source.OriginTaintLevel; lv != 0 {
+		originTaint = lv
+	}
+	return protocol.LLMFillEffect{
+		ThinkingMode: metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current()),
+		SchemaRef:    "plan_dag",
+		PromptFn: func(pCtx protocol.StateContext) []types.Message {
+			return sm.promptPlan(sCtx, pCtx)
+		},
+		OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
+			if len(bytes.TrimSpace(content)) == 0 && sCtx.PlanAttempts < maxRetry {
+				sCtx.PlanAttempts++
+				slog.Warn("plan: empty output (no content, no tool calls), retrying", "attempt", sCtx.PlanAttempts)
+				return "S_PLAN_RETRY", nil
+			}
+			return parsePlanOnSuccess(sCtx, pCtx, content)
+		},
+		OnFailure: sm.onPlanFailure,
+		MaxRetry:  maxRetry,
+		ModelPool: "reasoning",
 	}
 }

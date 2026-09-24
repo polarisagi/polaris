@@ -58,6 +58,8 @@ const (
 	TriggerAgentHandoffDone  // s_await_agent -> s_execute
 	TriggerRespondReady      // s_perceive/s_plan -> s_respond：无需执行工具，直答（ADR-0098）
 	TriggerRespondDone       // s_respond -> s_complete
+	TriggerFillRetry         // s_plan/s_respond 自环：推理成功但既无正文也无工具调用（ADR-0098 决策七）
+	TriggerReflectContinue   // s_reflect -> s_replan：目标未达成且预算尚余（ADR-0098 决策八）
 )
 
 // InterruptAction 定义中断处理语义。

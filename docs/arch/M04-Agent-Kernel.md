@@ -52,7 +52,8 @@ S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 
     │                                 │                                          │              │                         ↑
     │ NeedsTools=false                │ DAG 为空                                 └──Fail─→ S_REPLAN ─┘  └──Fail─→ S_ROLLBACK ──→ S_REPLAN
     └─────────────────────────────────┴──────────────→ S_RESPOND（直答）──────────────────────────────────────────────┘
-                                                    ReplanCount ≥ MaxReplanAttempts: S_REPLAN ──→ S_FAILED ([ESCALATE])
+                                                    ReplanCount ≥ MaxReplanAttempts: 转 S_RESPOND 说明失败（TurnDegraded，结果按失败计；ADR-0098 决策九）
+                                                    S_REFLECT(目标未达成) ──reflect_continue──→ S_REPLAN（决策八，共用 ReplanGuard）
 
   任意态 ──(UserInterrupt / KillSwitch)──→ S_INTERRUPT ──┬──Resume──→ 原状态
                                                           ├──Redirect─→ S_PLAN (用户修正意图)
@@ -97,15 +98,21 @@ ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel
 
 ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1 FatalStreamAbort / M1 JSON Repair 失败 / S_PLAN 拓扑失败。ReplanCount > MaxReplanAttempts → `TriggerReplanExhausted → S_FAILED` → `[ESCALATE]`。S_FAILED 为终态——不进入 S_ROLLBACK，不触发回滚补偿。任务移交 M13 HITL 人工决策。FSM 实现见 `internal/agent/fsm/state_machine.go`（`StateMachine`，唯一生产实现；此前文档提及的 `FallbackFSM`/`use_flowy` build tag 从未落地，2026-07-21 deadcode 审查确认零调用后已删除）。
 
+> 2026-09-25 修订（ADR-0098 决策九）：经 S_VALIDATE / S_ROLLBACK / S_REFLECT 进入 S_REPLAN 时预算已满，改转 S_RESPOND 说明失败（`TurnDegraded`，任务结果按失败计），不再直接 S_FAILED；S_FAILED 仍用于内核错误、KillSwitch、预算硬上限与感知/规划/回复阶段本身失败。
+
 ### 1.1 输出通道与 S_RESPOND（ADR-0098）
 
 - **受众**：`protocol.LLMFillEffect.Audience` 零值 `AudienceInternal`（fail-closed）；仅 S_RESPOND 的 Effect 为 `AudienceUser`。`doStreamInfer` 只对 User 受众发布 `AgentStreamEventToken`，内部阶段 token 仅累积供 OnSuccess 解析（`spec/state.yaml par_inv_06`）。思考链（Thinking）各阶段照常发布，不进回复正文。
 - **阶段进度**：每个 LLMFillEffect 开始时发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`，客户端本地化展示。
 - **路由**：S_PERCEIVE 产出 `TaskModel.NeedsTools`（`*bool`）。`false` → `S_PERCEIVE_DIRECT` → S_RESPOND；`true`/缺失/解析失败 → S_PLAN（保守）。S_PLAN 解析成功但 DAG 为空 → `S_PLAN_EMPTY` → S_RESPOND。
-- **空回复重试**：S_RESPOND 推理成功但正文为空时，按 Effect 的 `MaxRetry`（=1）经 `S_RESPOND_RETRY` 自环重试一次（此时未推出任何 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
+- **空输出重试**（ADR-0098 决策七）：S_PLAN / S_RESPOND 推理成功但既无正文也无工具调用时，按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环重试一次（S_RESPOND 此时未推出 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
+- **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。
+- **重规划耗尽转回复**（决策九）：进入 S_REPLAN 时预算已满 → S_RESPOND（`TurnDegraded=true`，任务结果按失败计），回复阶段据失败原因如实说明。
+- **步数上限**：`m4_kernel.max_steps=24`（回合内 FSM 触发次数），覆盖 7 步完整工具回合 + 观察循环 2 次 + 校验失败重规划 + 2 次空输出重试 + 耗尽转回复；截断经 `abortTurn` 收尾。
 - **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不以 S_FAILED 丢弃已执行回合的回复。
 - **回复上下文**：ImmutableCore + `kernel/respond.md` + 对话历史（TaintHigh）+ 本轮意图 +（执行路径）目标/执行结果/反思（TaintMedium 起）。无 tools。`agent/context/respond_context.go`。
 - **对话历史**：`AgentController.SetConversationHistory` 由 session 在 `SetTaskIntent` 前注入（剔除 system）；Perceive 与 Respond 使用，Plan 只消费自包含 Goal。上限 `thresholds.m4_kernel.conversation.history_max_messages/bytes`，自尾部截取。
+- **重规划闭环**（ADR-0098 决策六）：S_VALIDATE 拒绝 / S_EXECUTE 失败的原因写入 `StateContext.ReplanFeedback`（最近 3 条，每条 ≤400 字节），S_PLAN 与 S_RESPOND 的 prompt 均携带（TaintMedium 数据区）。无允许方案时 Plan 返回空计划 → S_RESPOND 说明限制，而非耗尽重试后报错。
 - **阶段契约 SSoT**：`configs/prompts/kernel/{perceive,plan,reflect,respond}.md`，记忆路径与降级路径同源加载；Perceive/Reflect 请求 `json_object` 约束解码。
 
 ---

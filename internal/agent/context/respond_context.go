@@ -46,5 +46,5 @@ func BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 	if memory != nil {
 		msgs = memory.ImmutableCore().PrependToMessages(msgs)
 	}
-	return msgs, nil
+	return fsm.AppendRespondReminder(msgs), nil
 }

@@ -179,6 +179,8 @@ func (sm *StateMachine) promptPlan(sCtx *StateContext, pCtx protocol.StateContex
 		safeHint, _ := taint.SanitizeToSafe(budgetTS)
 		b.WriteInstruction(safeHint)
 	}
+	WriteObservations(b, sCtx)
+	WriteReplanFeedback(b, sCtx)
 
 	msgs := b.Build()
 	if sCtx.EpochTracker != nil {

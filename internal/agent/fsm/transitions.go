@@ -146,12 +146,6 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerPerceiveDone,
 		To:      types.AgentStatePlan,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			var originTaint types.TaintLevel
-			if sCtx.RawIntentTS.Source.OriginTaintLevel != 0 {
-				originTaint = sCtx.RawIntentTS.Source.OriginTaintLevel
-			} else {
-				originTaint = types.TaintMedium
-			}
 			surpriseIndex := metrics.GlobalSurpriseIndex().Current()
 			if surpriseIndex < system1BypassSurpriseCeiling && sCtx.DAGModel != nil && len(sCtx.DAGModel.Nodes) > 0 {
 				// SurpriseIndex 低于阈值，跳过 LLM 规划直接复用上次成功计划（GD-13-004）
@@ -163,22 +157,7 @@ func (sm *StateMachine) registerTransitions() {
 					},
 				}, nil
 			}
-			thinkMode := metrics.SelectThinkingMode(sm.replanCount, originTaint, surpriseIndex)
-			return []protocol.Effect{
-				protocol.LLMFillEffect{
-					ThinkingMode: thinkMode,
-					SchemaRef:    "plan_dag",
-					PromptFn: func(pCtx protocol.StateContext) []types.Message {
-						return sm.promptPlan(sCtx, pCtx)
-					},
-					OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
-						return parsePlanOnSuccess(sCtx, pCtx, content)
-					},
-					OnFailure: sm.onPlanFailure,
-					MaxRetry:  1,
-					ModelPool: "reasoning",
-				},
-			}, nil
+			return []protocol.Effect{sm.planEffect(sCtx)}, nil
 		},
 	})
 
@@ -366,28 +345,7 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerReplanDone,
 		To:      types.AgentStatePlan,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			var originTaint types.TaintLevel
-			if sCtx.RawIntentTS.Source.OriginTaintLevel != 0 {
-				originTaint = sCtx.RawIntentTS.Source.OriginTaintLevel
-			} else {
-				originTaint = types.TaintMedium
-			}
-			thinkMode := metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current())
-			return []protocol.Effect{
-				protocol.LLMFillEffect{
-					ThinkingMode: thinkMode,
-					SchemaRef:    "plan_dag",
-					PromptFn: func(pCtx protocol.StateContext) []types.Message {
-						return sm.promptPlan(sCtx, pCtx)
-					},
-					OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
-						return parsePlanOnSuccess(sCtx, pCtx, content)
-					},
-					OnFailure: sm.onPlanFailure,
-					MaxRetry:  1,
-					ModelPool: "reasoning",
-				},
-			}, nil
+			return []protocol.Effect{sm.planEffect(sCtx)}, nil
 		},
 	})
 

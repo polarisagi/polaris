@@ -385,10 +385,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.sCtx.Mu.Unlock()
 
 			if limit > 0 && used > limit {
-				a.sm.ForceState(types.AgentStateFailed)
-				return apperr.New(apperr.CodeInternal,
-					fmt.Sprintf("MAX_STEPS_EXCEEDED: steps %d > limit %d",
-						used, limit))
+				// 经统一出口收尾：此前 ForceState 后直接返回，订阅方等不到 task_done（ADR-0098 决策七）。
+				stepErr := apperr.New(apperr.CodeInternal,
+					fmt.Sprintf("MAX_STEPS_EXCEEDED: steps %d > limit %d", used, limit))
+				a.abortTurn(ctx, stepErr)
+				return stepErr
 			}
 
 			// GR-4-004: 消费 pendingRedirectCh——如果有 InterruptRedirect 请求在途，

@@ -231,6 +231,10 @@ func BuildPlanContext( //nolint:gocyclo
 			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
 			"retrieved_memory"))
 	}
+	// 观察—再规划（决策八）：已执行轮次的结果，规划下一步而非重复。
+	// 重规划闭环（决策六）：告诉模型上一版为何被拒 / 为何未达成，避免原样重来。
+	fsm.WriteObservations(b, sCtx)
+	fsm.WriteReplanFeedback(b, sCtx)
 
 	msgs := b.Build()
 

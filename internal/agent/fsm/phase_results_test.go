@@ -140,7 +140,7 @@ func TestRespondEffect_RetriesEmptyReplyOnce(t *testing.T) {
 	if _, err := sm.Dispatch(t.Context(), sCtx, types.TriggerIntentReceived); err != nil {
 		t.Fatal(err)
 	}
-	if tr, ok := sm.transitions[types.AgentStateRespond][types.TriggerRespondReady]; !ok || tr.To != types.AgentStateRespond {
+	if tr, ok := sm.transitions[types.AgentStateRespond][types.TriggerFillRetry]; !ok || tr.To != types.AgentStateRespond {
 		t.Fatal("缺少 S_RESPOND 自环重试转移")
 	}
 }
@@ -170,5 +170,25 @@ func TestReplanTransition_SingleReplanDone(t *testing.T) {
 	}
 	if replanDone != 1 {
 		t.Fatalf("进入 S_REPLAN 应恰好产出 1 次 S_REPLAN_DONE，实际 %d", replanDone)
+	}
+}
+
+// TestPlanEffect_RetriesEmptyOutputOnce ADR-0098 决策七：S_PLAN 既无正文也无工具调用
+// 时自环重试一次，仍为空则按既有语义失败；有内容但解析失败不重试。
+func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	eff := sm.planEffect(sCtx)
+	if st, err := eff.OnSuccess(protocol.StateContext{}, []byte("  ")); err != nil || st != "S_PLAN_RETRY" {
+		t.Fatalf("首次空输出应重试，got %q %v", st, err)
+	}
+	if st, _ := eff.OnSuccess(protocol.StateContext{}, []byte("")); st != "S_PLAN_FAILED" {
+		t.Fatalf("超过 MaxRetry 应失败，got %q", st)
+	}
+	if st, _ := sm.planEffect(&StateContext{}).OnSuccess(protocol.StateContext{}, []byte("不是 JSON")); st != "S_PLAN_FAILED" {
+		t.Fatalf("有内容但解析失败不应走空输出重试，got %q", st)
+	}
+	if tr, ok := sm.transitions[types.AgentStatePlan][types.TriggerFillRetry]; !ok || tr.To != types.AgentStatePlan {
+		t.Fatal("缺少 S_PLAN 空输出自环")
 	}
 }

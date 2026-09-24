@@ -114,6 +114,10 @@ func triggerToString(t types.AgentTrigger) string {
 		return "respond_ready"
 	case types.TriggerRespondDone:
 		return "respond_done"
+	case types.TriggerFillRetry:
+		return "fill_retry"
+	case types.TriggerReflectContinue:
+		return "reflect_continue"
 	default:
 		return "unknown"
 	}
@@ -154,11 +158,11 @@ func TestFSM_Spec(t *testing.T) {
 	}
 
 	exemptTransitions := map[trKey]bool{
-		{"s_validate", "validate_fail", "s_failed"}:            true,
+		{"s_validate", "validate_fail", "s_respond"}:           true, // 耗尽转回复在 handleReplanTransition 内特判（ADR-0098 决策九）
 		{"s_execute", "step_failed_recoverable", "s_execute"}:  true,
 		{"s_execute", "step_failed_unrecoverable", "s_failed"}: true,
 		{"s_complete", "terminal", "s_idle"}:                   true,
-		{"s_rollback", "rollback_done", "s_failed"}:            true,
+		{"s_rollback", "rollback_done", "s_respond"}:           true, // 同上
 		{"s_failed", "terminal", "s_idle"}:                     true,
 	}
 

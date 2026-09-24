@@ -159,13 +159,14 @@ func isReadOnlyTool(toolName string, registry protocol.AgentToolExecutor) bool {
 // policyReviewContext 构造与执行闸门同形的授权上下文（sandbox.ExecEnvelope.Execute）。
 //
 // 此前以工具名作 action、会话 ID 作 principal 发问，策略模型里没有任何规则认识，
-// 真实 Gate 对一切工具返回 "denied by default"（2026-09-25 实测）。能力令牌在规划期
-// 尚未签发，如实填 false：trust<3 的工具在执行闸门同样需要令牌，此处拒绝与之一致。
-// 查不到工具元数据时不带 trust_tier（视为 0），由策略按 deny-by-default 拒绝。
+// 真实 Gate 对一切工具返回 "denied by default"（2026-09-25 实测）。
+// capability_token_valid：本校验通过即由 Agent JIT 签发一次性令牌（M07 §6、
+// ADR-0098 决策五），故此处按"通过即签发"评估；执行闸门再以真实令牌复核。
+// 查不到工具元数据时无从签发，按 false + 无 trust_tier 评估，由 deny-by-default 拒绝。
 func policyReviewContext(vCtx *DAGValidationContext, node protocol.ExecNode) map[string]any {
 	ctx := map[string]any{
 		"kind":                   protocol.PolicyActionToolExecute,
-		"capability_token_valid": false,
+		"capability_token_valid": false, // 查到工具元数据后改为 true，见函数注释
 		"agent_id":               vCtx.AgentID,
 		"node_id":                node.ID,
 		"session_id":             vCtx.SessionID,
@@ -178,6 +179,7 @@ func policyReviewContext(vCtx *DAGValidationContext, node protocol.ExecNode) map
 		return ctx
 	}
 	if tool, err := vCtx.ToolExecutor.Lookup(node.ToolName); err == nil {
+		ctx["capability_token_valid"] = true
 		ctx["trust_tier"] = int(tool.TrustTier)
 		ctx["risk_level"] = int(tool.RiskLevel)
 		ctx["tool_source"] = string(tool.Source)

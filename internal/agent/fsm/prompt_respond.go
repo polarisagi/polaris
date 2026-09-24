@@ -62,6 +62,11 @@ func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
 	if !rawIntent.IsEmpty() {
 		b.WriteUserData(rawIntent)
 	}
+	// 被拒/失败的尝试也要让回复阶段看到：否则无工具可用而直答时，回复会像什么都没
+	// 发生过，甚至声称已完成（ADR-0098 决策六）。
+	WriteReplanFeedback(b, sCtx)
+	// 观察—再规划（决策八）：多轮执行时据全部观察作答；观察含最后一轮，不再重复单轮结果。
+	hasObservations := WriteObservations(b, sCtx)
 	if len(result) == 0 && reflection == nil {
 		return
 	}
@@ -72,7 +77,7 @@ func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
 	if taskModel != nil && taskModel.Goal != "" {
 		sb.WriteString("<task_goal>\n" + taskModel.Goal + "\n</task_goal>\n")
 	}
-	if len(result) > 0 {
+	if len(result) > 0 && !hasObservations {
 		sb.WriteString("<execution_result>\n" + string(result) + "\n</execution_result>\n")
 	}
 	if reflection != nil {
@@ -82,6 +87,19 @@ func WriteRespondSections(b *prompt.PromptBuilder, sCtx *StateContext) {
 	b.WriteUserData(taint.NewTaintedString(sb.String(),
 		taint.TaintSource{Module: "execute", OriginTaintLevel: dataTaint}, "execute_result"))
 	b.WriteUserImages(images)
+}
+
+// AppendRespondReminder 在回复 prompt 最末追加收尾提醒（kernel/respond_reminder.md）。
+//
+// ImmutableCore 人格里写着"有工具就立即调用"并附工具清单，回复阶段却不挂工具：
+// 模型在信息不足时会以文本形式"调用"工具（2026-09-25 实测输出 `<tool_calls>` 标记）。
+// 契约已在 respond.md 声明，这里利用位置优势在末尾重申；只追加静态模板，不改人格。
+func AppendRespondReminder(msgs []types.Message) []types.Message {
+	reminder, err := configs.LoadPromptTemplate("kernel/respond_reminder.md", nil)
+	if err != nil || strings.TrimSpace(reminder) == "" {
+		return msgs
+	}
+	return append(msgs, types.Message{Role: "system", Content: strings.TrimSpace(reminder)})
 }
 
 // promptRespond S_RESPOND 的 PromptFn。有记忆系统时交给 ContextBuilder 注入人格、
@@ -100,7 +118,7 @@ func (sm *StateMachine) promptRespond(sCtx *StateContext, pCtx protocol.StateCon
 		b.WriteSystemEnvironment(sCtx.SysEnvSnapshot)
 	}
 	WriteRespondSections(b, sCtx)
-	msgs := b.Build()
+	msgs := AppendRespondReminder(b.Build())
 	if sCtx.EpochTracker != nil {
 		sCtx.ContextEpoch = sCtx.EpochTracker.check(msgs)
 	}

@@ -44,6 +44,7 @@ func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Sp
 
 	// 执行失败 → 触发 S_ROLLBACK
 	span.RecordError(err)
+	a.sCtx.RecordReplanFeedback("execution failed: " + err.Error())
 	a.asyncIntent(types.TriggerExecuteFail)
 	return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
 }
@@ -378,8 +379,13 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}, nil
 		}
 
+		capCtx, revokeCap, capErr := a.withJITCapability(ctx, toolName)
+		if capErr != nil {
+			return nil, capErr
+		}
 		start := time.Now()
-		res, err := a.toolRegistry.ExecuteWithTaint(ctx, toolName, args, taintLevel)
+		res, err := a.toolRegistry.ExecuteWithTaint(capCtx, toolName, args, taintLevel)
+		revokeCap()
 		latencyMs := time.Since(start).Milliseconds()
 
 		// Adaptive Max-Steps: 为每次工具调用打分，低分时收紧步骤预算
@@ -525,6 +531,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		raw = mergeResumedExecuteResult(priorExecuteResult, raw)
 	}
 	a.sCtx.ExecuteResult = truncateExecResult(a.sCtx.SessionID, raw)
+	// 观察—再规划（ADR-0098 决策八）：ExecuteResult 每轮覆盖，下一轮规划与最终回复
+	// 需要本回合的全部观察。
+	a.sCtx.RecordObservation(string(a.sCtx.ExecuteResult))
 	// 单次消费：清空 CompletedNodeIDs，防止同一 Agent 实例后续正常轮次
 	// （非恢复）误用本轮已经合并过的 PreCompletedNodes/priorExecuteResult。
 	a.sCtx.CompletedNodeIDs = nil

@@ -21,6 +21,8 @@ const (
 	routePlan             = "plan"
 	routePlanEmpty        = "plan_empty"
 	routePerceiveUnparsed = "perceive_unparsed"
+	routeContinue         = "reflect_continue"
+	routeReplanExhausted  = "replan_exhausted_reply"
 )
 
 // applyPerceiveResult 把 Perceive 输出解析进 TaskModel 并决定路由（ADR-0098 决策三）。
@@ -63,13 +65,44 @@ func (sm *StateMachine) applyPerceiveResult(sCtx *StateContext, fill []byte) (ty
 // applyReflectResult 在既有 onReflectSuccess（learning 落盘）之外，把反思结论留给
 // S_RESPOND：回复需据此如实报告"目标是否达成"，否则执行失败的回合会被写成成功。
 func (sm *StateMachine) applyReflectResult(sCtx *StateContext, pCtx protocol.StateContext, fill []byte) (types.State, error) {
+	raw := []byte(util.ExtractJSONBraces(string(fill)))
 	var ref ReflectionModel
-	if err := json.Unmarshal([]byte(util.ExtractJSONBraces(string(fill))), &ref); err == nil {
+	if err := json.Unmarshal(raw, &ref); err == nil {
 		sCtx.Mu.Lock()
 		sCtx.Reflection = &ref
 		sCtx.Mu.Unlock()
 	}
-	return sm.onReflectSuccess(pCtx, fill)
+	state, err := sm.onReflectSuccess(pCtx, fill)
+	if err != nil || state != "S_REFLECT_DONE" {
+		return state, err
+	}
+	if sm.shouldContinue(sCtx, raw) {
+		return "S_REFLECT_CONTINUE", nil
+	}
+	return state, nil
+}
+
+// shouldContinue 观察—再规划（ADR-0098 决策八）：反思**显式**判定目标未达成且重规划
+// 预算尚余时回到规划。字段缺失/解析失败按已达成处理——宁可少跑一轮，不因输出不
+// 规范空转。只在 replanCount+1 < MaxReplan 时继续，不把回合推进到耗尽分支。
+func (sm *StateMachine) shouldContinue(sCtx *StateContext, raw []byte) bool {
+	var probe struct {
+		GoalAchieved *bool
+		Errors       []string
+	}
+	if json.Unmarshal(raw, &probe) != nil || probe.GoalAchieved == nil || *probe.GoalAchieved {
+		return false
+	}
+	if sm.ReplanCount()+1 >= sCtx.MaxReplan {
+		return false
+	}
+	reason := "previous round did not achieve the goal"
+	if len(probe.Errors) > 0 {
+		reason += ": " + strings.Join(probe.Errors, "; ")
+	}
+	sCtx.RecordReplanFeedback(reason)
+	metrics.RecordTurnRoute(context.Background(), routeContinue)
+	return true
 }
 
 // onRespondSuccess 空回复不得静默当作完成（A-01）：用户会看到一轮什么都没有的回答。

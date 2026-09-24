@@ -270,7 +270,8 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				for range n {
 					concurrent.SafeGo(ctx, "agent.prm_candidate_infer", func(ctx context.Context) {
 						cResp, cErr := safecall.Infer(ctx, a.provider, baseMessages,
-							types.WithModel(llmEff.ModelPool),
+							// 池名走 WithModelPool，不得当模型 ID 传（同 e7e7ce6 修复的主路径）。
+							types.WithModelPool(llmEff.ModelPool),
 							types.WithThinkingMode(llmEff.ThinkingMode),
 							types.WithResponseFormat(&types.ResponseFormat{Type: "json_object"}),
 						)
