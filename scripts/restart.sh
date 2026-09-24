@@ -11,9 +11,16 @@
 # 二进制），不做数据库快照——DB 迁移风险仍在，改表前仍需遵守
 # CLAUDE.md「DDL 修改策略」。
 #
+# 2026-09-24 追加桌面外壳（desktop/，ADR-0096）打包：外壳与守护进程同批构建、
+# 同批替换，避免新守护进程配旧外壳（或反之）导致只在真实路径上出现的契约漂移
+# （外壳经 `polaris service status --json` 取端口/令牌，字段两侧须同版本）。
+# 外壳只替换已安装位置（macOS：/Applications/Polaris.app），替换前若在运行则
+# 先退出、替换后重新拉起；它自己经 service status 重新发现新端口，脚本不写端口。
+#
 # 用法：
-#   ./scripts/restart.sh          # 构建前端 + Go，热部署并重启常驻服务
-#   ./scripts/restart.sh --full   # 同上 + 重新构建 Rust FFI（Rust 代码有变更时使用）
+#   ./scripts/restart.sh               # 构建前端 + Go + 桌面外壳，热部署并重启
+#   ./scripts/restart.sh --full        # 同上 + 重新构建 Rust FFI（Rust 代码有变更时使用）
+#   ./scripts/restart.sh --no-desktop  # 跳过桌面外壳（只改了内核时省去数分钟 LTO 构建）
 
 set -euo pipefail
 
@@ -21,10 +28,13 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 FULL_BUILD=false
+BUILD_DESKTOP=true
 for arg in "$@"; do
-  if [[ "$arg" == "--full" ]]; then
-    FULL_BUILD=true
-  fi
+  case "$arg" in
+    --full)       FULL_BUILD=true ;;
+    --no-desktop) BUILD_DESKTOP=false ;;
+    *) echo "✗ 未知参数：$arg（可用：--full / --no-desktop）"; exit 1 ;;
+  esac
 done
 
 # ── 安装目录布局（与 scripts/install.sh / cli_service.go serviceLabel 一致）──
@@ -42,6 +52,21 @@ case "$OS" in
   *) echo "✗ 本脚本的服务热部署仅支持 macOS / Linux（当前：$OS）。Windows 请用 scripts/install.ps1 + polaris service。"; exit 1 ;;
 esac
 DYLIB_SRC="rust/substrate/target/release/$DYLIB"
+
+# 桌面外壳安装位置与产物（bundle 目标见 desktop/src-tauri/tauri.conf.json）
+DESKTOP_APP_NAME="Polaris"
+case "$OS" in
+  Darwin)
+    DESKTOP_BUNDLE="app"
+    DESKTOP_ARTIFACT="desktop/src-tauri/target/release/bundle/macos/$DESKTOP_APP_NAME.app"
+    DESKTOP_INSTALL="/Applications/$DESKTOP_APP_NAME.app"
+    ;;
+  Linux)
+    DESKTOP_BUNDLE="appimage"
+    DESKTOP_ARTIFACT=""   # AppImage 文件名带版本与架构，构建后按通配定位
+    DESKTOP_INSTALL="$HOME/.local/bin/polaris-desktop.AppImage"
+    ;;
+esac
 
 # ── 1. Rust FFI（--full 时重建；否则验证 dylib 存在）──────
 if $FULL_BUILD; then
@@ -77,6 +102,23 @@ echo "→ 构建 Go 后端..."
 mkdir -p bin/lib
 cp "$DYLIB_SRC" "bin/lib/$DYLIB"
 CGO_ENABLED=0 go build -o bin/polaris ./cmd/polaris
+
+# ── 3b. 桌面外壳（同样先构建、后替换：构建失败不停服务、不动已安装外壳）──
+if $BUILD_DESKTOP; then
+  echo "→ 构建桌面外壳 (desktop/, bundle=$DESKTOP_BUNDLE，首次约数分钟)..."
+  if ! cargo tauri --version &>/dev/null; then
+    echo "  未安装 tauri-cli，安装中（一次性，与 release.yml desktop job 同版本约束）..."
+    cargo install tauri-cli --version "^2" --locked
+  fi
+  (cd desktop/src-tauri && CFLAGS= LDFLAGS= cargo tauri build --bundles "$DESKTOP_BUNDLE")
+  if [[ "$OS" == "Linux" ]]; then
+    DESKTOP_ARTIFACT=$(ls -t desktop/src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1 || true)
+  fi
+  if [[ -z "$DESKTOP_ARTIFACT" || ! -e "$DESKTOP_ARTIFACT" ]]; then
+    echo "✗ 未找到桌面外壳构建产物：${DESKTOP_ARTIFACT:-bundle/appimage/*.AppImage}"
+    exit 1
+  fi
+fi
 
 # ── 4. 停止常驻服务 ───────────────────────────────────────
 # 直接走系统服务管理器停止，不依赖安装目录里现存二进制是否还能正常执行
@@ -132,9 +174,51 @@ for i in {1..20}; do
   fi
 done
 
+# 替换桌面外壳：放在守护进程确认就绪之后——外壳启动即经 service status 连接，
+# 守护进程起不来时换上新外壳只会多一个报错窗口；且回滚只覆盖守护进程二进制。
+deploy_desktop() {
+  $BUILD_DESKTOP || return 0
+  echo "→ 替换桌面外壳 ($DESKTOP_INSTALL)..."
+  local was_running=false
+  case "$OS" in
+    Darwin)
+      if pgrep -f "$DESKTOP_INSTALL/Contents/MacOS/" &>/dev/null; then
+        was_running=true
+        osascript -e "quit app \"$DESKTOP_APP_NAME\"" 2>/dev/null || true
+        for i in {1..10}; do
+          pgrep -f "$DESKTOP_INSTALL/Contents/MacOS/" &>/dev/null || break
+          sleep 0.5
+          [[ $i -eq 10 ]] && pkill -f "$DESKTOP_INSTALL/Contents/MacOS/" 2>/dev/null || true
+        done
+      fi
+      # 整包替换而非覆盖拷贝：旧包里已删除的资源不得残留在新包中
+      rm -rf "$DESKTOP_INSTALL"
+      ditto "$DESKTOP_ARTIFACT" "$DESKTOP_INSTALL"
+      # 本地构建无证书，tauri 产出的包只有链接器给可执行文件的 ad-hoc 签名，
+      # 包级签名校验不过（"code has no resources"）；补一次包级 ad-hoc 签名，
+      # 否则系统对其通知/钥匙串等按身份授权的能力会随每次替换失效或拒绝。
+      codesign --force --deep --sign - "$DESKTOP_INSTALL" >/dev/null 2>&1 || true
+      $was_running && open "$DESKTOP_INSTALL"
+      ;;
+    Linux)
+      if pgrep -f "$DESKTOP_INSTALL" &>/dev/null; then
+        was_running=true
+        pkill -f "$DESKTOP_INSTALL" 2>/dev/null || true
+        sleep 1
+      fi
+      mkdir -p "$(dirname "$DESKTOP_INSTALL")"
+      cp "$DESKTOP_ARTIFACT" "$DESKTOP_INSTALL"
+      chmod +x "$DESKTOP_INSTALL"
+      $was_running && (nohup "$DESKTOP_INSTALL" >/dev/null 2>&1 &)
+      ;;
+  esac
+  echo "✓ 桌面外壳已替换$($was_running && echo '并重新拉起' || true)"
+}
+
 if $READY; then
   echo "✓ Polaris 已部署并启动  http://localhost:${PORT}"
   rm -f "$PREV_BIN" 2>/dev/null || true
+  deploy_desktop
   exit 0
 fi
 
