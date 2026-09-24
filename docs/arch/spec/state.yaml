@@ -100,9 +100,10 @@ par:
       to: s_replan
       guard: { fn: replan_attempts_below_max }
 
+    # ADR-0098 决策九：预算耗尽转回复（TurnDegraded，结果按失败计），不再以报错结束回合。
     - from: s_validate
       event: validate_fail
-      to: s_failed
+      to: s_respond
       guard: { fn: replan_attempts_at_max }
 
     - from: s_execute
@@ -174,10 +175,16 @@ par:
         model_pool: general
         audience: user            # 唯一 audience=user 的 llm_fill
 
-    # 空回复重试（尚未推出任何 token，重试不会造成重复输出）；推理错误不走这里——
-    # Router 已全量 failover，且可能已流出部分 token。
+    # 空输出重试（ADR-0098 决策七）：推理成功但既无正文也无工具调用（DeepSeek 思考模式
+    # 挂载工具时偶发只出思考链），按 Effect MaxRetry 自环重试一次。推理错误不走这里——
+    # Router 已全量 failover；s_respond 此时尚未推出 token，重试不会重复输出。
+    - from: s_plan
+      event: fill_retry
+      to: s_plan
+      guard: { fn: plan_attempts_below_max_retry }
+
     - from: s_respond
-      event: respond_ready
+      event: fill_retry
       to: s_respond
       guard: { fn: respond_attempts_below_max_retry }
 
@@ -197,8 +204,14 @@ par:
 
     - from: s_rollback
       event: rollback_done
-      to: s_failed
+      to: s_respond
       guard: { fn: replan_attempts_at_max }
+
+    # ADR-0098 决策八：观察—再规划循环，与校验失败共用 ReplanGuard。
+    - from: s_reflect
+      event: reflect_continue
+      to: s_replan
+      guard: { fn: goal_not_achieved_and_replan_budget_left }
 
     - from: s_replan
       event: replan_done
@@ -853,7 +866,12 @@ thresholds:
     window_breaker_min_samples: 20
     window_breaker_threshold: 0.5
     window_breaker_cooldown_sec: 30
+    embed_batch_window_ms: 10        # toml:"embed.batch_window_ms"，ADR-0099
+    embed_high_max_batch_size: 100   # toml:"embed.high_max_batch_size"
+    embed_low_max_batch_size: 8      # toml:"embed.low_max_batch_size"，约束后台批在串行后端上的占用（实测 ~0.12s/条 → ≈1s）
+    embed_call_timeout_seconds: 30   # toml:"embed.call_timeout_s"，单次下游调用上限
     re_eval_when:
+      - embed_low_max_batch_size: ["backend_parallel_embed_supported", "backfill_backlog>1h"]
       - circuit_breaker_failure_count: ["false_open_rate>0.05", "miss_open_drift_p95"]
       - pre_flight_cost_estimate_tolerance_pct: ["long_tail_drift>0.30"]
       - cache_hit_ratio_warn: ["provider_pricing_change"]
@@ -939,6 +957,9 @@ thresholds:
     max_retry_plan: 2
     max_retry_reflect: 1
     max_replan_attempts: 3
+    # 回合内 FSM 触发次数上限（ADR-0098 决策七/八）。须覆盖 ReplanGuard 才是循环的真正上界：
+    # 完整工具回合 7 + 观察循环 2 次 × 5 + 校验失败重规划 1 次 × 3 + 空输出重试 2 + 耗尽转回复 1 = 23 → 24。
+    max_steps: 24 # toml:"max_steps"
     intent_channel_buffer: 16
     context_window_compress_pct: 0.80
     step_default_timeout_seconds: 60
@@ -1061,6 +1082,7 @@ thresholds:
   m8_multiagent:
     max_agents_desktop_ht0: 2
     max_agents_server_ht0: 3
+    pool_interactive_reserved_slots: 1 # toml:"agents.interactive_reserved"；AgentPool 为交互会话保留的槽位，后台 headless 只能用其余槽位
     max_blackboard_pending: 256
     max_coordination_token_per_task: 200000
     max_task_wall_clock_minutes: 30

@@ -61,7 +61,38 @@ Plan 阶段此前恒解析失败，Validate/Execute 从未被生产流量走到�
 - **回合唯一中止出口 `abortTurn`**：Dispatch/Effect 错误一律错误进流 + 强制 S_FAILED + `handleTerminalState`（发 task_done）；此前订阅方等不到 task_done 挂到超时，且 Pool 会把下一轮投给已无 Run() 的旧实例。
 - **S_REPLAN 单一 ReplanDone 产出方**：进入 S_REPLAN 的转移占位 Effect 与 handleReplanTransition 各投递一次 → 第二次命中 no transition。
 - **召回预算**：search.Embedder 无 ctx（下游固定 30s），内核在调用边界以 3s 预算放弃等待（`recallWithin` / `assembleWithBudget`），召回是增益不是关键路径。
+- **能力令牌 JIT 签发接线（M07 §6）**：通用工具路径此前从不签发令牌——写类工具必被执行闸门 Step 3 拒绝，trust<3（MCP/社区）工具因 `tool_execute_permit` 要求令牌而全部不可执行。现：节点通过 S_VALIDATE 后、调用前 JIT Mint（MaxCalls=1、TTL 5min），仅注入该次调用 ctx，返回即撤销（执行闸门只 Verify 不 Consume，撤销保证一次性）。L1 预检中 `capability_token_valid` 表达"通过本闸门即签发"（=true），执行闸门以真实令牌复核，纵深不减。
 - **流式 tool_calls 收尾补发**：非 `finish_reason=tool_calls` 收尾时已聚合的工具调用不再被静默丢弃。
+
+### 决策六：重规划闭环——失败原因回灌规划与回复
+
+S_VALIDATE 拒绝或 S_EXECUTE 失败后进入 S_REPLAN，此前重规划 prompt 与首次完全相同，模型不知道上一版为何被拒，反复产出同一计划直到 ReplanGuard 耗尽（2026-09-25 实测：`bash` 因 TaintHigh 参数被 L1_taint 拒绝，三次重规划均再选 `bash`）。
+
+- 失败原因以结构化短句写入 `StateContext.ReplanFeedback`（有界：最近 3 条、每条 ≤400 字节），来源为 Go 侧校验/执行错误，不含模型自由文本。
+- S_PLAN prompt 附 `<previous_attempts_failed>`（TaintMedium 数据区）；`kernel/plan.md` 规定：不得重复被拒方案，换用允许的工具；若允许的工具都无法达成目标则返回空计划——FSM 经 `S_PLAN_EMPTY` 转 S_RESPOND，由回复阶段如实说明限制。
+- S_RESPOND 同样看到这些原因，回复不得声称已完成被拒绝的操作。
+- 安全边界不变：被拒工具仍按 HE-2 拒绝；闭环只改变模型的下一次选择，不放宽任何门控。
+
+### 决策七：空输出重试与步数上限
+
+- 新增 `TriggerFillRetry`（枚举尾部追加）：S_PLAN / S_RESPOND 推理成功但**既无正文也无工具调用**时，按 Effect `MaxRetry`（=1）自环重试。实证：DeepSeek 思考模式挂载工具时偶发 `finish_reason=stop`、只有思考链（2026-09-25 `llm stream: ended without content or tool calls ... completion_tokens=316`）。S_RESPOND 原借用 `respond_ready` 的自环改为 `fill_retry`。
+- `m4_kernel.max_steps` 10 → 24：步数按回合内 FSM 触发计。S_RESPOND 使完整工具回合为 7 步，上限 10 使第 2 次重规划即被 MAX_STEPS 截断，ReplanGuard（3 次）形同虚设；上界应由 ReplanGuard 决定：7 + 观察循环 2×5（决策八）+ 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1 = 23 → 24。
+- MAX_STEPS 截断经 `abortTurn` 收尾（此前 ForceState 后直接返回，订阅方等不到 task_done 挂到超时，2026-09-25 实测）。
+
+### 决策八：观察—再规划循环
+
+一轮执行的结果不足以达成目标时（反思 `GoalAchieved` **显式为 false**），回到规划阶段继续，而不是带着不完整结果硬写回复（2026-09-25 实测：回复阶段模型因信息不足输出 `<tool_calls>` 标记试图继续调用工具）。
+
+- `S_REFLECT --reflect_continue--> S_REPLAN`（`TriggerReflectContinue`，枚举尾部追加），与校验失败 / 回滚共用同一 ReplanGuard，不新增循环上界；仅在 `replanCount+1 < MaxReplan` 时继续，否则直接回复（不触发耗尽）。
+- 每轮执行结果作为**观察**累积于 `StateContext.Observations`（最近 4 条、每条 ≤4KB），S_PLAN 据此规划下一步而非重复已做的事，S_RESPOND 据全部观察作答。
+- 反思字段缺失或解析失败按"已达成"处理：宁可少跑一轮，不因输出不规范空转。
+
+### 决策九：重规划耗尽转回复
+
+进入 S_REPLAN 时预算已满，改转 S_RESPOND（携带失败原因），由回复阶段如实说明，而非以 `replan guard: max replan count reached` 技术报错结束（2026-09-25 实测：模型连续选择被拒的 `bash` 直至耗尽，用户只收到报错）。
+
+- `StateContext.TurnDegraded=true`：回合以对话方式结束，但任务结果、漂移分与终态回调按**失败**计，指标不被"有回复"美化。
+- S_FAILED 保留给内核错误（`abortTurn`）、KillSwitch、预算硬上限、感知/规划/回复阶段本身的失败。
 
 ## 后果
 

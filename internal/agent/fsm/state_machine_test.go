@@ -183,13 +183,17 @@ func TestStateMachine_ReplanGuardExhaustion(t *testing.T) {
 	sm.Dispatch(ctx, sCtx, types.TriggerReplanDone)
 	sm.Dispatch(ctx, sCtx, types.TriggerPlanDone)
 
-	// 第 3 次 ValidateFail: replanCount 2→3, guard 耗尽 → 自动 S_FAILED
-	_, err = sm.Dispatch(ctx, sCtx, types.TriggerValidateFail)
-	if err == nil {
-		t.Fatal("第 3 次 replan 应返回 ErrReplanExhausted")
+	// 第 3 次 ValidateFail: replanCount 2→3, guard 耗尽 → 转 S_RESPOND 说明失败
+	// （ADR-0098 决策九：不再以报错结束回合，TurnDegraded 让终态指标按失败计）
+	effects, err := sm.Dispatch(ctx, sCtx, types.TriggerValidateFail)
+	if err != nil {
+		t.Fatalf("耗尽应转回复而非报错: %v", err)
 	}
-	if sm.Current() != types.AgentStateFailed {
-		t.Errorf("耗尽后应由 Dispatch 自动推进到 S_FAILED, 实际 %v", sm.Current())
+	if sm.Current() != types.AgentStateRespond || !sCtx.TurnDegraded {
+		t.Errorf("耗尽后应处于 S_RESPOND 且 TurnDegraded，实际 %v / %v", sm.Current(), sCtx.TurnDegraded)
+	}
+	if len(effects) != 1 || !effects[0].IsLLMFill() {
+		t.Error("耗尽转回复应挂 respond Effect")
 	}
 	if sm.ReplanCount() != 3 {
 		t.Errorf("ReplanCount 应为 3, 实际 %d", sm.ReplanCount())

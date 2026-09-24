@@ -59,8 +59,12 @@ func TestBuildRespondContext_DirectReply(t *testing.T) {
 	if len(mem.episodic.queries) != 0 {
 		t.Error("Respond 不应做情景记忆检索")
 	}
-	if last := msgs[len(msgs)-1]; last.Role != "user" || !strings.Contains(last.Content, "那你能做什么？") {
-		t.Errorf("本轮用户消息应位于末尾: %+v", last)
+	// 末尾是收尾提醒（利用位置优势重申"本阶段不调工具"），其前是本轮用户消息。
+	if last := msgs[len(msgs)-1]; last.Role != "system" || !strings.Contains(last.Content, "Tools are not available") {
+		t.Errorf("末条应为回复收尾提醒: %+v", last)
+	}
+	if prev := msgs[len(msgs)-2]; prev.Role != "user" || !strings.Contains(prev.Content, "那你能做什么？") {
+		t.Errorf("本轮用户消息应紧邻收尾提醒之前: %+v", prev)
 	}
 }
 

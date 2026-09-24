@@ -52,7 +52,7 @@ func NewSystemPromptGuard(tokenThreshold int) *SystemPromptGuard {
 // 占位符（{{ToolsSection}} 等）不影响窗口匹配——detectAndRedact 按 tokenThreshold
 // 连续词窗口比对，静态指令文本片段仍可命中。
 var KernelPromptFragments = sync.OnceValue(func() []string { //nolint:gochecknoglobals // sync.OnceValue 懒加载只读片段缓存，无可变状态；跨包共享单一加载逻辑（见上方注释）
-	names := []string{"kernel/perceive.md", "kernel/plan.md", "kernel/reflect.md", "kernel/respond.md"}
+	names := []string{"kernel/perceive.md", "kernel/plan.md", "kernel/reflect.md", "kernel/respond.md", "kernel/respond_reminder.md"}
 	frags := make([]string, 0, len(names))
 	for _, name := range names {
 		raw, err := configs.LoadPromptTemplate(name, nil)

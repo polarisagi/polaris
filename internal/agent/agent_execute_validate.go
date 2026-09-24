@@ -61,6 +61,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 	}
 
 	if err := a.dagValidator.Validate(ctx, vCtx); err != nil {
+		a.sCtx.RecordReplanFeedback(validationFeedback(plan, err))
 		// 校验失败→ 异步推送 TriggerValidateFail 以面向 FSM 的 S_REPLAN
 		a.asyncIntent(types.TriggerValidateFail)
 		// 返回非致命 error 提示调用方失败原因，但不能让 Run 循环崩溃

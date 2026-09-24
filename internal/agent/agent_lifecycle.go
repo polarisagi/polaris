@@ -37,11 +37,13 @@ func stateToTriggerMap() map[types.State]types.AgentTrigger {
 		"S_REFLECT_FAILED":  types.TriggerReplanExhausted,
 		"S_ROLLBACK_OK":     types.TriggerRollbackDone,
 		// ADR-0098：直答路由与回复合成态
-		"S_PERCEIVE_DIRECT": types.TriggerRespondReady,
-		"S_PLAN_EMPTY":      types.TriggerRespondReady,
-		"S_RESPOND_RETRY":   types.TriggerRespondReady,
-		"S_RESPOND_DONE":    types.TriggerRespondDone,
-		"S_RESPOND_FAILED":  types.TriggerReplanExhausted,
+		"S_PERCEIVE_DIRECT":  types.TriggerRespondReady,
+		"S_PLAN_EMPTY":       types.TriggerRespondReady,
+		"S_RESPOND_RETRY":    types.TriggerFillRetry,
+		"S_PLAN_RETRY":       types.TriggerFillRetry,
+		"S_REFLECT_CONTINUE": types.TriggerReflectContinue,
+		"S_RESPOND_DONE":     types.TriggerRespondDone,
+		"S_RESPOND_FAILED":   types.TriggerReplanExhausted,
 	}
 }
 
@@ -305,12 +307,14 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 		Content: "task_done",
 	})
 
-	// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）
-	trace.RecordTaskOutcome(ctx, current == types.AgentStateComplete)
+	// M3 埋点：任务终态记录（驱动 polaris_task_success_rate）。重规划耗尽转回复的回合
+	// 以 Complete 收尾但目标未达成（ADR-0098 决策九），指标按失败计，不被"有回复"美化。
+	succeeded := current == types.AgentStateComplete && !a.sCtx.TurnDegraded
+	trace.RecordTaskOutcome(ctx, succeeded)
 
 	// 接入运行时质量漂移检测（M03 §10.1）
 	score := 1.0
-	if current == types.AgentStateFailed {
+	if !succeeded {
 		score = 0.0
 	}
 	metrics.GlobalPerformanceDrift().Record(score)
@@ -349,6 +353,6 @@ func (a *Agent) handleTerminalState(ctx context.Context, current types.AgentStat
 		if sessionID == "" {
 			sessionID = a.sCtx.TaskID
 		}
-		a.terminalCallback(ctx, sessionID, "general", a.sm.ReplanCount(), current == types.AgentStateComplete)
+		a.terminalCallback(ctx, sessionID, "general", a.sm.ReplanCount(), succeeded)
 	}
 }

@@ -283,6 +283,8 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"agent_handoff_done":        types.TriggerAgentHandoffDone,
 		"respond_ready":             types.TriggerRespondReady,
 		"respond_done":              types.TriggerRespondDone,
+		"fill_retry":                types.TriggerFillRetry,
+		"reflect_continue":          types.TriggerReflectContinue,
 	}
 
 	allowedExtraEvents := map[string]bool{

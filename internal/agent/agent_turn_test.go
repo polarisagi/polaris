@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -34,5 +35,15 @@ func TestAbortTurn_EmitsErrorAndTaskDone(t *testing.T) {
 	}
 	if a.sm.Current() != types.AgentStateFailed {
 		t.Fatalf("中止后必须处于 S_FAILED（Pool 据此换新实例），实际 %v", a.sm.Current())
+	}
+}
+
+func TestValidationFeedback_NamesTool(t *testing.T) {
+	plan := &protocol.DAGPlan{Nodes: []protocol.ExecNode{{ID: "call_01_x", ToolName: "bash"}}}
+	err := apperr.Wrap(apperr.CodeInternal, "s_validate failed",
+		&protocol.DAGValidationError{Layer: "L1_taint", NodeID: "call_01_x", Reason: "TaintHigh args blocked"})
+	got := validationFeedback(plan, err)
+	if got != `plan rejected by L1_taint for tool "bash": TaintHigh args blocked` {
+		t.Fatalf("反馈须指明工具名而非节点 ID，得到 %q", got)
 	}
 }

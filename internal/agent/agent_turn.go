@@ -2,7 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -112,4 +116,27 @@ func (a *Agent) abortTurn(ctx context.Context, err error) {
 		a.sm.ForceState(types.AgentStateFailed)
 	}
 	a.handleTerminalState(ctx, types.AgentStateFailed)
+}
+
+// validationFeedback 把 S_VALIDATE 的结构化拒绝翻译成"哪个工具、被哪层、为何拒绝"，
+// 供重规划回灌（ADR-0098 决策六）。节点 ID 对模型无意义（call_xx 每次重生成），
+// 必须换成工具名，模型才知道该避开什么。
+func validationFeedback(plan *protocol.DAGPlan, err error) string {
+	var ve *protocol.DAGValidationError
+	if !errors.As(err, &ve) {
+		return "plan rejected by validator: " + err.Error()
+	}
+	tool := ""
+	if plan != nil {
+		for _, n := range plan.Nodes {
+			if n.ID == ve.NodeID {
+				tool = n.ToolName
+				break
+			}
+		}
+	}
+	if tool == "" {
+		return fmt.Sprintf("plan rejected by %s: %s", ve.Layer, ve.Reason)
+	}
+	return fmt.Sprintf("plan rejected by %s for tool %q: %s", ve.Layer, tool, ve.Reason)
 }

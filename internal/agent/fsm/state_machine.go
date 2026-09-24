@@ -98,6 +98,14 @@ type StateContext struct {
 	// ConversationHistory 本轮之前的对话（ADR-0098 决策四），已剔除 system 角色；
 	// 仅 Perceive/Respond 渲染进 prompt，按 TaintHigh 围栏。
 	ConversationHistory []types.Message
+	// ReplanFeedback 规划被拒 / 执行失败的原因（ADR-0098 决策六），经 RecordReplanFeedback 写入。
+	ReplanFeedback []string
+	// Observations 本回合各轮执行结果（ADR-0098 决策八），经 RecordObservation 写入。
+	Observations []string
+	// TurnDegraded 回合以回复收尾但未达成目标（重规划耗尽，决策九），终态指标按失败计。
+	TurnDegraded bool
+	// PlanAttempts S_PLAN 空输出已重试次数（ADR-0098 决策七）。
+	PlanAttempts int
 	// RespondAttempts S_RESPOND 空回复已重试次数（ADR-0098）。每回合新建 Agent，无需复位。
 	RespondAttempts int
 	TaskModel       *TaskModel // S_PERCEIVE 产出
@@ -407,10 +415,14 @@ func (sm *StateMachine) handleReplanTransition(ctx context.Context, sCtx *StateC
 	goalToActivate, needActivate := sm.shouldActivateExtensions(sCtx)
 
 	if sm.replanCount >= sCtx.MaxReplan {
-		// replan 耗尽 → 自动进阶 S_FAILED，返回 ErrReplanExhausted
-		sm.history = append(sm.history, current, t.To)
-		sm.current = types.AgentStateFailed
-		return nil, ErrReplanExhausted
+		// 预算耗尽转回复（ADR-0098 决策九）：由 S_RESPOND 据失败原因如实说明，而非以
+		// 技术报错结束回合；TurnDegraded 让终态指标仍按失败计。
+		sm.history = append(sm.history, current)
+		sm.current = types.AgentStateRespond
+		sCtx.TurnDegraded = true
+		sCtx.RecordReplanFeedback("replan budget exhausted: no permitted plan achieved the goal in this turn")
+		metrics.RecordTurnRoute(ctx, routeReplanExhausted)
+		return []protocol.Effect{sm.respondEffect(sCtx)}, nil
 	}
 
 	sm.history = append(sm.history, current)

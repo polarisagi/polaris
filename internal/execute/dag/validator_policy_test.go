@@ -33,10 +33,12 @@ func TestValidatePolicyGate_AsksSameQuestionAsExecEnvelope(t *testing.T) {
 		t.Fatalf("内置/官方工具（trust>=3）应通过 L1，与执行闸门 tool_execute_permit 一致: %v", err)
 	}
 
+	// trust<3（MCP/社区）：通过 L1 即 JIT 签发令牌（M07 §6），执行闸门以真实令牌复核。
+	// 此前按 false 评估，MCP 工具（含只读）永远无法执行。
 	community := &DAGValidationContext{Plan: plan, PolicyGate: gate, AgentID: "sess_x",
 		ToolExecutor: trustLookupExecutor{trust: types.TrustCommunity}}
-	if err := validatePolicyGate(context.Background(), community); err == nil {
-		t.Fatal("trust<3 且无能力令牌的工具必须被拒（与执行闸门一致，deny-by-default）")
+	if err := validatePolicyGate(context.Background(), community); err != nil {
+		t.Fatalf("trust<3 工具应按『通过即签发』通过 L1: %v", err)
 	}
 
 	unknown := &DAGValidationContext{Plan: plan, PolicyGate: gate, AgentID: "sess_x"}
