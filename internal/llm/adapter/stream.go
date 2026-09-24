@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -55,6 +56,22 @@ type OpenAIStreamChunk struct {
 		FinishReason string            `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *OpenAIUsage `json:"usage,omitempty"`
+}
+
+// flushPendingToolCalls 流结束（[DONE]/EOF）时补发已聚合但未发出的 tool_call。
+//
+// 此前只有 finish_reason == "tool_calls" 才发出：Provider 以其它 finish_reason
+// 收尾（或最后一块不带 finish_reason）时，已收齐的工具调用被静默丢弃，上游只看到
+// "有思考、无正文、无工具调用"的空响应（2026-09-25 实测 DeepSeek S_PLAN
+// content_bytes=0 reasoning_bytes=657）。
+func flushPendingToolCalls(ctx context.Context, ch chan<- types.StreamEvent, toolBuilders map[int]*toolCallState, finishReason string) {
+	if len(toolBuilders) == 0 {
+		return
+	}
+	slog.Warn("llm stream: flushing tool_calls not terminated by finish_reason=tool_calls",
+		"count", len(toolBuilders), "finish_reason", finishReason)
+	emitCollectedToolCalls(ctx, ch, toolBuilders)
+	clear(toolBuilders)
 }
 
 // emitCollectedToolCalls 在 finish_reason == "tool_calls" 到达时，把跨 chunk 聚合的所有
@@ -177,6 +194,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		// return，走不到这条判定，因此这里只覆盖"整段响应体没有一行是合法
 		// SSE data 帧"的情形，不影响模型确实生成 0 token 就正常收尾的合法场景。
 		emittedAny := false
+		lastFinishReason := ""
 
 		for scanner.Scan() {
 			select {
@@ -208,6 +226,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 				continue
 			}
 			if data == "[DONE]" {
+				flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
 				return
 			}
 
@@ -248,6 +267,9 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			choice := chunk.Choices[0]
 			delta := choice.Delta
+			if choice.FinishReason != "" {
+				lastFinishReason = choice.FinishReason
+			}
 
 			// 思考链 delta（DeepSeek thinking mode）
 			if delta.ReasoningContent != "" {
@@ -302,6 +324,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			}
 		}
 
+		flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
 		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 			select {
 			case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("stream read: %v", err)}:

@@ -121,3 +121,45 @@ func TestSSEParser_MalformedBody(t *testing.T) {
 		t.Fatal("expected StreamError for malformed non-SSE 200 body, got silent empty channel")
 	}
 }
+
+// TestSSEParser_ToolCallsFlushedWithoutToolCallsFinish 复现 2026-09-25 实测：Provider
+// 以非 "tool_calls" 的 finish_reason 收尾时，已聚合的工具调用在 [DONE] 处被静默丢弃，
+// 上游只看到"有思考、无正文、无工具调用"。
+func TestSSEParser_ToolCallsFlushedWithoutToolCallsFinish(t *testing.T) {
+	client := &OpenAICompatibleClient{
+		BaseURL: "http://dummy",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+				body := strings.Join([]string{
+					`data: {"id":"1","choices":[{"index":0,"delta":{"reasoning_content":"需要查系统信息"},"finish_reason":null}]}`,
+					`data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"sys_probe","arguments":"{\"kind\":"}}]},"finish_reason":null}]}`,
+					`data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"memory\"}"}}]},"finish_reason":"stop"}]}`,
+					`data: [DONE]`,
+				}, "\n\n") + "\n\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				}
+			}),
+		},
+	}
+	req := &types.InferRequest{Messages: []types.Message{{Role: "user", Content: "hi"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch, err := client.SendStreamRequest(ctx, nil, []byte("test-key"), translateRequest(req, true), 0)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	var calls []string
+	for ev := range ch {
+		if ev.Type == types.StreamToolCall {
+			calls = append(calls, ev.Content)
+		}
+	}
+	if len(calls) != 1 || !strings.Contains(calls[0], `"sys_probe"`) || !strings.Contains(calls[0], `"memory"`) {
+		t.Fatalf("工具调用应在流结束时补发，得到 %v", calls)
+	}
+}
