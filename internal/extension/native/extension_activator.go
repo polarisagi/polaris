@@ -141,7 +141,10 @@ func (a *ExtensionActivator) activateOne(ctx context.Context, extID, snippet str
 		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "activateOne: query failed", err)
 	}
-	if inst.Status != "installed" {
+	// 仓储契约：不存在返回 (nil, nil) 而非 not-found 错误（repo_extension.go GetInstance）。
+	// 检索命中的是全量扩展目录，其中多数并未安装——此前直接解引用 inst 在 S_REPLAN
+	// 扩展激活中必然 panic（2026-09-25 实测）。
+	if inst == nil || inst.Status != "installed" {
 		return nil, nil
 	}
 
