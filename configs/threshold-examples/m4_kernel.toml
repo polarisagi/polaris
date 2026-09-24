@@ -19,3 +19,5 @@ surprise_hint_threshold = 0.6
 'prm.max_candidates' = 3
 'prm.min_threshold' = 0.4
 'prm.scorer_model' = ''
+'conversation.history_max_messages' = 20
+'conversation.history_max_bytes' = 24576

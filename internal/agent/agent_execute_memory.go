@@ -9,14 +9,47 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	agentctx "github.com/polarisagi/polaris/internal/agent/context"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/apperr"
+	"github.com/polarisagi/polaris/pkg/concurrent"
 	"github.com/polarisagi/polaris/pkg/types"
 )
+
+// memoryAssembleBudget 单次 LLM 阶段前记忆召回的时间预算，与 StateMachine.bgCtx 一致。
+const memoryAssembleBudget = 3 * time.Second
+
+// assembleWithBudget 在调用边界强制召回预算。
+//
+// 召回是增益，不是回合关键路径：此前用无时限的 Effect ctx，嵌入后端卡住时
+// （2026-09-24 实测每次 30s 超时）每个 LLM 阶段都白等一轮，直答回合被拖到 90s+。
+// 只传带截止的 ctx 不够——search.Embedder 接口无 ctx，SyncBatcherAdapter 内部
+// 用 Background+30s，截止时间传不下去。故在此处按预算放弃等待：后台 goroutine
+// 受下游 30s 上限约束必然退出（A-13），结果写入容量 1 的通道后被丢弃，不阻塞。
+func (a *Agent) assembleWithBudget(ctx context.Context, req agentctx.AssembleRequest) (agentctx.AssembledContext, error) {
+	type result struct {
+		ac  agentctx.AssembledContext
+		err error
+	}
+	actx, cancel := context.WithTimeout(ctx, memoryAssembleBudget)
+	done := make(chan result, 1)
+	assembler := a.assembler
+	concurrent.SafeGo(actx, "agent.memory_assemble", func(gctx context.Context) {
+		ac, err := assembler.Assemble(gctx, req)
+		done <- result{ac, err}
+	})
+	defer cancel()
+	select {
+	case r := <-done:
+		return r.ac, r.err
+	case <-actx.Done():
+		return agentctx.AssembledContext{}, apperr.Wrap(apperr.CodeTimeout, "agent: memory assemble exceeded budget", actx.Err())
+	}
+}
 
 func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []types.Message {
 	if a.assembler == nil || a.sCtx.TaskModel == nil {
@@ -38,8 +71,13 @@ func (a *Agent) injectMemoryToMsgs(ctx context.Context, msgs []types.Message) []
 		SurpriseHintThreshold: a.Config.SurpriseHintThreshold,
 	}
 
-	ac, err := a.assembler.Assemble(ctx, req)
-	if err != nil || len(ac.Items) == 0 {
+	ac, err := a.assembleWithBudget(ctx, req)
+	if err != nil {
+		slog.WarnContext(ctx, "agent: memory assemble degraded, continuing without recalled context",
+			"session", a.sCtx.SessionID, "budget", memoryAssembleBudget, "err", err)
+		return msgs
+	}
+	if len(ac.Items) == 0 {
 		return msgs
 	}
 

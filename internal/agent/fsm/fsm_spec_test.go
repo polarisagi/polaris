@@ -65,6 +65,8 @@ func stateToString(s types.AgentState) string {
 		return "s_suspended"
 	case types.AgentStateAwaitAgent:
 		return "s_await_agent"
+	case types.AgentStateRespond:
+		return "s_respond"
 	default:
 		return "unknown"
 	}
@@ -108,6 +110,10 @@ func triggerToString(t types.AgentTrigger) string {
 		return "await_agent"
 	case types.TriggerAgentHandoffDone:
 		return "agent_handoff_done"
+	case types.TriggerRespondReady:
+		return "respond_ready"
+	case types.TriggerRespondDone:
+		return "respond_done"
 	default:
 		return "unknown"
 	}
@@ -187,6 +193,9 @@ func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory proto
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext) ([]types.Message, error) {
+	return nil, nil
+}
+func (d *dummyContextBuilder) BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *StateContext) ([]types.Message, error) {
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel) {

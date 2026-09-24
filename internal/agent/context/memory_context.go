@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/prompt"
@@ -28,17 +27,10 @@ func BuildPerceiveContext( //nolint:gocyclo
 	ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext, cognitive fsm.CognitiveSearcher) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
-	// 1. 可信系统指令（基础模板，不含第三方来源内容）
-	instr := "Structure the user intent into a fsm.TaskModel JSON.\n\n"
-	if hint := contextPressureHint(sCtx); hint != "" {
-		instr += hint + "\n\n"
+	// 1. 可信系统指令：阶段契约唯一来源 kernel/perceive.md（ADR-0098 决策三）
+	if err := writePhaseInstruction(b, sCtx, "kernel/perceive.md", "Structure the user intent into a TaskModel JSON object."); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext", err)
 	}
-	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
-		instr, taint.TaintSource{OriginTaintLevel: types.TaintNone}, "perceive_system_prompt"))
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPerceiveContext: sanitize instr", err)
-	}
-	b.WriteInstruction(safe)
 
 	// GD-14-005：用户显式声明信任的工作区约束文档，作为项目级系统指令写入
 	// ZoneImmutable。只有 WorkspaceContextLoader 判定 Trusted 的内容才会到这里
@@ -84,48 +76,29 @@ func BuildPerceiveContext( //nolint:gocyclo
 		b.WriteCoreMemory(blocks)
 	}
 
-	var retrieved strings.Builder
-
 	intent := sCtx.RawIntentTS.UnsafeContent()
-	if sCtx.TaskID != "" && intent != "" {
-		// 1. 查询相关的历史 Episodic 事件
-		query := types.EpisodicQuery{
-			Semantic:      intent,
-			ProjectID:     scopeProjectID(sCtx), // P1：情景记忆按项目隔离（ADR-0097 决策三修订）
-			K:             3,
-			MaxTaintLevel: types.TaintHigh,
-		}
-		events, err := memory.ListEpisodicEvents(ctx, query)
-		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
-		}
-
-		if len(events) > 0 {
-			retrieved.WriteString("Relevant Historical Episodic Memories:\n")
-			for _, e := range events {
-				if pbEv := e.EventPtr(); pbEv != nil {
-					fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
-				}
-			}
-		}
+	var goal string
+	if sCtx.TaskModel != nil {
+		goal = sCtx.TaskModel.Goal
 	}
-
-	// 2. 跨会话 Reflection 召回
-	if sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
-		reflections, rerr := memory.ListReflections(ctx, types.ReflectionQuery{
-			Topic: sCtx.TaskModel.Goal,
-			K:     3,
-		})
-		if rerr == nil && len(reflections) > 0 {
-			retrieved.WriteString("Cross-Session Reflections (past experience for similar tasks):\n")
-			for _, r := range reflections {
-				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n",
-					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
-			}
-		}
+	recalled, err := recallWithin(ctx, memory, cognitive, recallSpec{
+		episodic:         sCtx.TaskID != "" && intent != "",
+		episodicQuery:    intent,
+		episodicK:        3,
+		episodicHeader:   "Relevant Historical Episodic Memories:\n",
+		goal:             goal,
+		reflectionHeader: "Cross-Session Reflections (past experience for similar tasks):\n",
+		withProfile:      true,
+		projectID:        scopeProjectID(sCtx), // P1/P3
+		knowledge:        sCtx.KnowledgeSearcher,
+	})
+	if err := degradeOnRecallTimeout("BuildPerceiveContext", err); err != nil {
+		return nil, err
 	}
+	var retrieved strings.Builder
+	retrieved.WriteString(recalled)
 
-	// 3. 耳语线索注入
+	// 耳语线索：消费 channel，必须留在主路径（召回 goroutine 不得触碰 sCtx）。
 	if sCtx.WhisperChan != nil {
 		select {
 		case w := <-sCtx.WhisperChan:
@@ -133,42 +106,6 @@ func BuildPerceiveContext( //nolint:gocyclo
 				fmt.Fprintf(&retrieved, "## Memory Whisper (source: %s)\n%s\n", w.Source, w.Content)
 			}
 		default:
-		}
-	}
-
-	// 3.5 用户画像（P0-2：消费 default 用户画像）
-	if p, err := memory.GetUserProfile(ctx, "default"); err == nil && p != nil {
-		var summary []string
-		for _, sf := range p.StableFacts {
-			summary = append(summary, "- "+fmt.Sprint(sf))
-		}
-		for _, bp := range p.BehavioralPatterns {
-			summary = append(summary, "- "+fmt.Sprint(bp))
-		}
-		if len(summary) > 0 {
-			retrieved.WriteString("## User Profile (Context)\n" + strings.Join(summary, "\n") + "\n")
-		}
-	}
-
-	// 4. L2 语义记忆
-	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
-		ftsResults, err := projectScopedFTS(ctx, memory, cognitive, sCtx.TaskModel.Goal, 5, scopeProjectID(sCtx)) // P3
-		if err == nil && len(ftsResults) > 0 {
-			retrieved.WriteString("Semantic Memory (L2):\n")
-			for _, r := range ftsResults {
-				fmt.Fprintf(&retrieved, "- [score=%.2f] %s\n", r.Score, r.Snippet)
-			}
-		}
-	}
-
-	// 5. M10 知识库检索结果 (RAG)
-	if sCtx.KnowledgeSearcher != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
-		ragResults, err := sCtx.KnowledgeSearcher.SearchRAG(ctx, sCtx.TaskModel.Goal, 3)
-		if err == nil && len(ragResults) > 0 {
-			retrieved.WriteString("Knowledge Base (RAG):\n")
-			for _, r := range ragResults {
-				fmt.Fprintf(&retrieved, "- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content)
-			}
 		}
 	}
 
@@ -193,17 +130,13 @@ func BuildPerceiveContext( //nolint:gocyclo
 			"retrieved_memory"))
 	}
 
+	// 对话历史紧贴本轮意图之前：Perceive 需据此消解指代、产出自包含 Goal（ADR-0098）。
+	fsm.WriteConversationHistory(b, sCtx)
 	if !sCtx.RawIntentTS.IsEmpty() {
 		b.WriteUserData(sCtx.RawIntentTS)
 	}
 
-	msgs := b.Build()
-
-	if memory != nil {
-		msgs = memory.ImmutableCore().PrependToMessages(msgs)
-	}
-
-	return msgs, nil
+	return memory.ImmutableCore().PrependToMessages(b.Build()), nil
 }
 
 // BuildPlanContext 基于已解析的 fsm.TaskModel 和可用工具列表
@@ -216,18 +149,9 @@ func BuildPlanContext( //nolint:gocyclo
 	// 系统指令区只放进程内常量（TaintNone）。TaskModel 由 LLM 从外部意图解析而来、
 	// GroundingGap 来自外部知识评估，二者都属数据而非指令：此前拼进 sysPrompt 并以
 	// TaintNone 写入 ZoneImmutable，等于把外部可控文本提权为系统指令（GR-4.1-003）。
-	var sysPrompt strings.Builder
-	sysPrompt.WriteString("Generate an execution DAG based on the fsm.TaskModel provided in the user data section.\n\n")
-	if hint := contextPressureHint(sCtx); hint != "" {
-		sysPrompt.WriteString(hint + "\n\n")
+	if err := writePhaseInstruction(b, sCtx, "kernel/plan.md", "Generate an execution DAG based on the TaskModel provided in the user data section."); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext", err)
 	}
-
-	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
-		sysPrompt.String(), taint.TaintSource{OriginTaintLevel: types.TaintNone}, "plan_system_prompt"))
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "BuildPlanContext: sanitize instr", err)
-	}
-	b.WriteInstruction(safe)
 
 	if sCtx.TaskModel != nil {
 		taskJSON, _ := json.Marshal(sCtx.TaskModel)
@@ -277,66 +201,25 @@ func BuildPlanContext( //nolint:gocyclo
 		b.WriteCoreMemory(blocks)
 	}
 
-	var retrieved strings.Builder
-
 	var queryStr string
 	if sCtx.TaskModel != nil {
 		queryStr = sCtx.TaskModel.Goal
 	}
-	query := types.EpisodicQuery{
-		Semantic:      queryStr,
-		ProjectID:     scopeProjectID(sCtx), // P2
-		K:             5,
-		MaxTaintLevel: types.TaintHigh,
+	recalled, err := recallWithin(ctx, memory, cognitive, recallSpec{
+		episodic:         true,
+		episodicQuery:    queryStr,
+		episodicK:        5,
+		episodicHeader:   "Historical execution experiences for reference:\n",
+		goal:             queryStr,
+		reflectionHeader: "Cross-Session Reflections (execution patterns for similar tasks):\n",
+		projectID:        scopeProjectID(sCtx), // P2/P4
+		knowledge:        sCtx.KnowledgeSearcher,
+	})
+	if err := degradeOnRecallTimeout("BuildPlanContext", err); err != nil {
+		return nil, err
 	}
-	events, err := memory.ListEpisodicEvents(ctx, query)
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "failed to query episodic memory", err)
-	}
-
-	if len(events) > 0 {
-		retrieved.WriteString("Historical execution experiences for reference:\n")
-		for _, e := range events {
-			if pbEv := e.EventPtr(); pbEv != nil {
-				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n", pbEv.CreatedAt.Format(time.RFC3339), pbEv.Type, string(pbEv.Payload))
-			}
-		}
-	}
-
-	if memory != nil && queryStr != "" {
-		reflections, rerr := memory.ListReflections(ctx, types.ReflectionQuery{
-			Topic: queryStr,
-			K:     3,
-		})
-		if rerr == nil && len(reflections) > 0 {
-			retrieved.WriteString("Cross-Session Reflections (execution patterns for similar tasks):\n")
-			for _, r := range reflections {
-				fmt.Fprintf(&retrieved, "- [%s] %s: %s\n",
-					r.CreatedAt.Format(time.RFC3339), r.Strategy, r.Decision)
-			}
-		}
-	}
-
-	if cognitive != nil && sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
-		queryTopic := sCtx.TaskModel.Goal
-		ftsResults, err := projectScopedFTS(ctx, memory, cognitive, queryTopic, 5, scopeProjectID(sCtx)) // P4
-		if err == nil && len(ftsResults) > 0 {
-			retrieved.WriteString("Semantic Memory (L2):\n")
-			for _, r := range ftsResults {
-				fmt.Fprintf(&retrieved, "- [score=%.2f] %s\n", r.Score, r.Snippet)
-			}
-		}
-	}
-
-	if sCtx.KnowledgeSearcher != nil && queryStr != "" {
-		ragResults, err := sCtx.KnowledgeSearcher.SearchRAG(ctx, queryStr, 3)
-		if err == nil && len(ragResults) > 0 {
-			retrieved.WriteString("Knowledge Base (RAG):\n")
-			for _, r := range ragResults {
-				fmt.Fprintf(&retrieved, "- [score=%.2f] %s: %s\n", r.Score, r.Source, r.Content)
-			}
-		}
-	}
+	var retrieved strings.Builder
+	retrieved.WriteString(recalled)
 
 	if retrieved.Len() > 0 {
 		if types.TaintMedium > sCtx.GlobalTaintLevel {
@@ -365,14 +248,14 @@ func BuildPlanContext( //nolint:gocyclo
 func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	b := prompt.NewPromptBuilder()
 
-	instr := "Reflect on the execution result and evaluate the completion of the goal.\n\n"
-	safe, err := taint.SanitizeToSafe(taint.NewTaintedString(
-		instr, taint.TaintSource{OriginTaintLevel: types.TaintNone}, "reflect_system_prompt"))
-	if err != nil {
-		return nil, apperr.Wrap(apperr.CodeInternal, "BuildReflectContext: sanitize instr", err)
-	}
-	b.WriteInstruction(safe)
+	fsm.WriteKernelInstruction(b, "kernel/reflect.md", "Reflect on the execution result and evaluate the completion of the goal.")
 
+	// 没有目标就无从判定 GoalAchieved：此前反思只看到执行结果。
+	if sCtx.TaskModel != nil && sCtx.TaskModel.Goal != "" {
+		b.WriteUserData(taint.NewTaintedString("Task Goal: "+sCtx.TaskModel.Goal,
+			taint.TaintSource{OriginTaintLevel: types.PropagateTaint(types.TaintMedium, sCtx.GlobalTaintLevel)},
+			"m4_task_model"))
+	}
 	if len(sCtx.ExecuteResult) > 0 {
 		b.WriteUserData(taint.NewTaintedString(
 			"Execution Result Summary:\n"+string(sCtx.ExecuteResult)+"\n\n",
@@ -384,12 +267,8 @@ func BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx
 	}
 
 	msgs := b.Build()
-
 	if memory != nil {
-		if memory != nil {
-			msgs = memory.ImmutableCore().PrependToMessages(msgs)
-		}
+		msgs = memory.ImmutableCore().PrependToMessages(msgs)
 	}
-
 	return msgs, nil
 }

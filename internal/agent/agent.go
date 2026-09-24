@@ -312,11 +312,7 @@ func (a *Agent) handleEffectResult(ctx context.Context, result EffectResult) (do
 		// goroutine 结束 → 订阅 SubscribeStream 的会话既收不到错误事件、也等不到
 		// channel 关闭（订阅通道只在订阅 ctx 结束时才关），整个回合就这么挂在那里
 		// 直到上游超时。先把错误发进流再退出，让用户拿到真实原因而不是干等。
-		a.publishStreamEvent(types.AgentStreamEvent{
-			Type:       types.AgentStreamEventError,
-			Content:    "Agent 执行失败：" + result.Err.Error(),
-			TaintLevel: a.sCtx.GlobalTaintLevel,
-		})
+		a.abortTurn(ctx, result.Err)
 		return true, apperr.Wrap(apperr.CodeInternal, "Agent.Run", result.Err)
 	}
 	if result.Transition != 0 {
@@ -423,14 +419,13 @@ func (a *Agent) Run(ctx context.Context) error {
 				"agent_id", a.ID, "session", a.sCtx.SessionID, "trigger", trigger,
 				"from", fromState, "to", a.sm.Current(), "effects", len(effects), "err", err)
 			if err != nil {
-				if errors.Is(err, fsm.ErrReplanExhausted) {
-					// sm.Dispatch 内部已经将状态转移至 S_FAILED，此处直接返回该错误
-					return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
-				}
 				// context 取消由 M8 Reaper 触发——直接退出，不触发 S_ROLLBACK
-				if ctxErr := ctx.Err(); ctxErr != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, fsm.ErrReplanExhausted) {
 					return ctxErr //nolint:wrapcheck // 保留 context 哨兵身份，供调用方 errors.Is/== 判断
 				}
+				// ErrReplanExhausted：sm.Dispatch 内部已转 S_FAILED；其余为转移表缺口。
+				// 两者都必须经统一出口收尾，否则订阅方既收不到原因也等不到 task_done。
+				a.abortTurn(ctx, err)
 				return apperr.Wrap(apperr.CodeInternal, "Agent.Run", err)
 			}
 

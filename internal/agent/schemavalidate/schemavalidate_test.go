@@ -62,12 +62,22 @@ func TestValidate_ReflectResult_WrongFieldType(t *testing.T) {
 }
 
 func TestValidate_UnregisteredSchema_Passthrough(t *testing.T) {
-	// l3_watchdog / perceive_task 未注册到 schemas.json，应当直接放行（跳过校验语义）。
+	// l3_watchdog 未注册到 schemas.json，应当直接放行（跳过校验语义）。
+	// perceive_task 自 ADR-0098 起已注册（此前 SchemaRef 指向空条目、校验恒放行），见下方用例。
 	if err := Validate("l3_watchdog", []byte(`ALLOW`)); err != nil {
 		t.Fatalf("expected unregistered schema to pass through, got: %v", err)
 	}
-	if err := Validate("perceive_task", []byte(`{"anything":"goes"}`)); err != nil {
-		t.Fatalf("expected unregistered schema to pass through, got: %v", err)
+}
+
+func TestValidate_PerceiveTask(t *testing.T) {
+	if err := Validate("perceive_task", []byte(`{"Goal":"g","NeedsTools":false,"Complexity":0.1}`)); err != nil {
+		t.Fatalf("合法 TaskModel 被拒: %v", err)
+	}
+	if err := Validate("perceive_task", []byte(`{"anything":"goes"}`)); err == nil {
+		t.Fatal("缺 Goal 必须被拒")
+	}
+	if err := Validate("perceive_task", []byte(`{"Goal":"g","NeedsTools":"no"}`)); err == nil {
+		t.Fatal("NeedsTools 非布尔必须被拒：路由字段类型错误不得静默当作 false")
 	}
 }
 

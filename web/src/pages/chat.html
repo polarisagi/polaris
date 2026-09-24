@@ -233,8 +233,9 @@
 
         <!-- Thinking Bubble -->
         <div class="chat chat-start" x-show="$store.chat.state === 'SUBMITTING' || $store.chat.state === 'THINKING'" x-cloak>
-          <div class="chat-bubble bg-base-100/50 text-base-content border border-base-200">
+          <div class="chat-bubble bg-base-100/50 text-base-content border border-base-200 flex items-center gap-2">
             <span class="loading loading-dots loading-sm text-base-content/60"></span>
+            <span class="text-xs text-base-content/60" x-show="$store.chat.phase" x-text="$store.i18n.t('chat_phase_' + $store.chat.phase)"></span>
           </div>
         </div>
 

@@ -98,9 +98,9 @@ func (p *failIfCalledProvider) ModelID() string                      { return "f
 const planDAGJSON = `{"nodes":[{"id":"n1","action":"test_tool","params":{},"retry":0,"timeout":""}],"edges":[]}`
 
 // TestAgent_ReplayMode_FullTrajectory_NoRealCallsNoDuplicateToolExec 验证
-// M04 §8 崩溃恢复回放的核心安全属性：当录像覆盖 Perceive/Plan/Reflect 全部
-// 三次 LLM 调用时（对应"崩溃发生在 S_REFLECT 之后、Complete 状态转移事件
-// 落盘之前"这一安全窗口），重放期间：
+// M04 §8 崩溃恢复回放的核心安全属性：当录像覆盖 Perceive/Plan/Reflect/Respond 全部
+// 四次 LLM 调用时（对应"崩溃发生在 S_RESPOND 之后、Complete 状态转移事件
+// 落盘之前"这一安全窗口；ADR-0098 起 Complete 只能由 S_RESPOND 进入），重放期间：
 //  1. 真实 Provider 一次都不应被调用（全部由录像覆盖）；
 //  2. S_EXECUTE 的真实工具调用不应发生——原始崩溃会话里这一步已经真实执行
 //     过（否则不会有后续的 Reflect 调用被录制），重放时必须短路而不是重复
@@ -122,6 +122,7 @@ func TestAgent_ReplayMode_FullTrajectory_NoRealCallsNoDuplicateToolExec(t *testi
 		{Response: map[string]any{"content": "mock_success"}}, // S_PERCEIVE
 		{Response: map[string]any{"content": planDAGJSON}},    // S_PLAN
 		{Response: map[string]any{"content": "mock_success"}}, // S_REFLECT
+		{Response: map[string]any{"content": "已完成"}},          // S_RESPOND
 	})
 	protocol.SetReplayMode(true)
 	defer protocol.SetReplayMode(false) // 测试失败提前返回时的安全网，不影响其余测试的全局状态

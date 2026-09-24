@@ -10,7 +10,7 @@
 #   - Invariants are testable predicates (M12 Eval enforces)
 #   - All time values use monotonic ns offset (MonoNs); wall_clock is human display only
 # §跳读 (Read offset/limit 按需局部加载):
-#   meta:14 / par:24 (M4 PAR 12态) / staging:193 (M9 7阶段) / taint:326 (M11 污点)
+#   meta:14 / par:24 (M4 PAR 14态) / staging:193 (M9 7阶段) / taint:326 (M11 污点)
 #   kill_switch:417 (M11 D5) / task_status:467 (M8 7态) / outbox:555 (M2 4态)
 #   signals:633 (M3 信号) / global_invariants:679 / thresholds:745 (全模块阈值)
 # =============================================================================
@@ -22,14 +22,17 @@ meta:
   go_package: internal/protocol
 
 # =============================================================================
-# §par: M4 Plan-Act-Reflect 13-state machine
+# §par: M4 Plan-Act-Reflect 14-state machine
 # =============================================================================
 
 par:
   description: |
     M4 default state machine. Single Agent task lifecycle.
     LLM is co-processor; Go state machine owns control flow (invariant 6).
-    5 main states (perceive/plan/validate/execute/reflect) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended + s_await_agent = 13 states.
+    6 main states (perceive/plan/validate/execute/reflect/respond) + 2 recovery states (replan/rollback) + 2 terminal states (complete/failed) + idle + interrupt + suspended + s_await_agent = 14 states.
+    s_respond 是回合唯一的用户回复出口（ADR-0098）：直答（perceive 判定无需工具 / plan 得空 DAG）
+    与执行后（reflect 完成）两路汇入，s_complete 的唯一前驱。只有 s_respond 的 llm_fill 为
+    audience=user，其余阶段输出只进结构化解析、不向用户推送 token（par_inv_06）。
     s_await_agent 为 Multi-Agent 委派等待态，进入条件为 HandoffPoster.PostTask 成功后。
     s_interrupt 由 UserInterrupt 协议（POST /v1/agent/{taskID}/interrupt）从任意活跃态注入；
     Resume 路径返回 interruptFrom，Redirect 转 s_perceive，Abort 转 s_failed。
@@ -50,6 +53,7 @@ par:
     - s_interrupt
     - s_suspended
     - s_await_agent
+    - s_respond
 
   transitions:
     - from: s_idle
@@ -134,15 +138,52 @@ par:
 
     - from: s_reflect
       event: reflect_done
-      to: s_complete
+      to: s_respond
       effect:
         kind: llm_fill
         schema_ref: M4_ReflectionOutput
         prompt_fn: build_reflection_prompt
         on_success: emit_to_m9_reflexion_worker
-        on_failure: s_complete
+        on_failure: s_respond     # 反思尽力而为：工具已执行完的回合不因反思失败丢回复（ADR-0098）
         max_retry: 1
         model_pool: budget
+        audience: internal
+
+    # ADR-0098：直答路由。perceive 解析出 NeedsTools=false，由 Go 判定转入（非 LLM 驱动跳转）。
+    - from: s_perceive
+      event: respond_ready
+      to: s_respond
+      guard: { fn: task_model_needs_tools_false }
+
+    # ADR-0098：规划解析成功但 DAG 为空（含 System-1 FastPath 无缓存 DAG）→ 直答。
+    - from: s_plan
+      event: respond_ready
+      to: s_respond
+      guard: { fn: plan_dag_empty }
+
+    - from: s_respond
+      event: respond_done
+      to: s_complete
+      effect:
+        kind: llm_fill
+        schema_ref: none          # 自由文本，面向用户
+        prompt_fn: build_respond_prompt
+        on_success: publish_reply
+        on_failure: s_failed
+        max_retry: 1
+        model_pool: general
+        audience: user            # 唯一 audience=user 的 llm_fill
+
+    # 空回复重试（尚未推出任何 token，重试不会造成重复输出）；推理错误不走这里——
+    # Router 已全量 failover，且可能已流出部分 token。
+    - from: s_respond
+      event: respond_ready
+      to: s_respond
+      guard: { fn: respond_attempts_below_max_retry }
+
+    - from: s_respond
+      event: replan_exhausted
+      to: s_failed
 
     - from: s_complete
       event: terminal
@@ -207,6 +248,21 @@ par:
         S_VALIDATE L0 topology check rejects cycles via DFS three-color algorithm.
         Max nodes=50, max depth=10.
       enforced_by: m4.s_validate + unit_test
+
+    - id: par_inv_06
+      name: output_channel_isolation
+      predicate: |
+        Only llm_fill effects with audience=user (currently s_respond only) may publish
+        token events to stream subscribers. Internal effects (perceive/plan/reflect) accumulate
+        output for structured parsing only. LLMFillEffect.Audience zero value is internal (fail-closed).
+      enforced_by: m4.doStreamInfer + unit_test (ADR-0098)
+
+    - id: par_inv_07
+      name: complete_only_via_respond
+      predicate: |
+        s_complete is reachable only from s_respond. A turn that reaches s_complete has
+        emitted exactly one user-facing reply produced by s_respond.
+      enforced_by: fsm_spec_test + unit_test (ADR-0098)
 
 # =============================================================================
 # §staging: M9 Self-Improvement 7-stage pipeline
@@ -900,6 +956,8 @@ thresholds:
     prm_complexity_gate: 0.5 # toml:"prm.complexity_gate"
     prm_max_candidates: 3 # toml:"prm.max_candidates"
     prm_min_threshold: 0.4 # toml:"prm.min_threshold"
+    conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
+    conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - context_window_compress_pct: ["compress_recall_drop"]

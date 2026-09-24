@@ -76,6 +76,7 @@ func TestAgent_HappyPath(t *testing.T) {
 			types.AgentStateValidate,
 			types.AgentStateExecute,
 			types.AgentStateReflect,
+			types.AgentStateRespond, // ADR-0098：Complete 只能由 S_RESPOND 进入
 		}
 		if len(history) != len(expectedTransitions) {
 			t.Fatalf("history length mismatch, got %v, want %v, history: %v", len(history), len(expectedTransitions), history)
@@ -128,6 +129,9 @@ func (d *dummyContextBuilder) BuildPlanContext(ctx context.Context, memory proto
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildReflectContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
+	return nil, nil
+}
+func (d *dummyContextBuilder) BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
 	return nil, nil
 }
 func (d *dummyContextBuilder) BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, types.TaintLevel) {

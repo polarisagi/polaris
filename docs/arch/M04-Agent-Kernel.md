@@ -9,7 +9,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
-<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 2:99 Suspend-on-Idle / 3:115 S_VALIDATE / 4:164 DAG（Directed Acyclic Graph，有向无环图） / 5:261 System1/2 / 6:289 WorldModel / 7:300 推理预算 / 8:359 CrashRecovery / 8-bis:409 Handoff唤醒事件化+无损续跑 / 12:419 已知Bug修复记录 / 13:428 (SOFT)降级 / 14:446 跨模块契约 / 15:470 默认参数 -->
+<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 1.1:100 输出通道+S_RESPOND / 2:112 Suspend-on-Idle / 3:128 S_VALIDATE / 4:177 DAG（Directed Acyclic Graph，有向无环图） / 5:274 System1/2 / 6:302 WorldModel / 7:313 推理预算 / 8:372 CrashRecovery / 8-bis:422 Handoff唤醒事件化+无损续跑 / 12:432 已知Bug修复记录 / 13:441 (SOFT)降级 / 14:459 跨模块契约 / 15:483 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
@@ -43,23 +43,22 @@ System 1 路径零 LLM 调用——`0 < SurpriseIndex < 0.3` 时触发 FastPath�
 
 ## 1. 状态机
 
-状态枚举权威定义见 `pkg/types/enums_agent.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed)。`[HE-Rule-5]` LLM 填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)。
+状态枚举权威定义见 `pkg/types/enums_agent.go` (AgentState: Idle/Perceive/Plan/Validate/Execute/Reflect/Replan/Rollback/Interrupt/Suspended/AwaitAgent/Complete/Failed/Respond)。`[HE-Rule-5]` LLM 结构化填空三态输出: TaskModel(S_PERCEIVE) / DAGModel(S_PLAN) / ReflectionModel(S_REFLECT)；另有唯一面向用户的自由文本态 S_RESPOND（§1.1）。
 
 `ReflectionModel` 结构：`{GoalAchieved bool, Errors []string, Learnings []string}`。`onReflectSuccess` 解析后，若 `Learnings` 非空，逐条写入 episodic memory（`sCtx.Mem.Episodic().Append`，EventType="learning"）；写入失败仅 WARN，不阻断状态流转至 S_COMPLETE。
 
 ```
-S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 DAG)──→ S_VALIDATE ──┬──OK──→ S_EXECUTE ──┬──OK──→ S_REFLECT ──→ S_COMPLETE
-                                                    │                  │              │
-                                                    └──Fail─→ S_REPLAN ─┘              └──Fail─→ S_ROLLBACK ──→ S_REPLAN
-                                                         ↑                               Saga 逆序补偿           ↑
-                                                         └───────────────────────────────────────────────────────┘
+S_PERCEIVE ──(LLM_fill 理解任务)──→ S_PLAN ──(LLM_fill 生成 DAG)──→ S_VALIDATE ──┬──OK──→ S_EXECUTE ──┬──OK──→ S_REFLECT ──→ S_RESPOND ──→ S_COMPLETE
+    │                                 │                                          │              │                         ↑
+    │ NeedsTools=false                │ DAG 为空                                 └──Fail─→ S_REPLAN ─┘  └──Fail─→ S_ROLLBACK ──→ S_REPLAN
+    └─────────────────────────────────┴──────────────→ S_RESPOND（直答）──────────────────────────────────────────────┘
                                                     ReplanCount ≥ MaxReplanAttempts: S_REPLAN ──→ S_FAILED ([ESCALATE])
 
   任意态 ──(UserInterrupt / KillSwitch)──→ S_INTERRUPT ──┬──Resume──→ 原状态
                                                           ├──Redirect─→ S_PLAN (用户修正意图)
                                                           └──Abort────→ S_FAILED
 ```
-5 主执行态: Perceive / Plan / Validate / Execute / Reflect。2 恢复态: Replan / Rollback。1 中断态: Interrupt。1 挂起态: Suspended（Suspend-on-Idle 及 provider_exhausted 挂起）。1 等待态: AwaitAgent（`S_AWAIT_AGENT`，本 Agent 已把子任务 Handoff 给其他 Agent，阻塞等待其终态；由 `TriggerAwaitAgent` 进入、`TriggerAgentHandoffDone` 离开）。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **13 态**（`pkg/types/enums_agent.go` 定义 `AgentStateIdle` ~ `AgentStateAwaitAgent`，`transitions.go` 注册 19 条转移）。
+6 主执行态: Perceive / Plan / Validate / Execute / Reflect / Respond。2 恢复态: Replan / Rollback。1 中断态: Interrupt。1 挂起态: Suspended（Suspend-on-Idle 及 provider_exhausted 挂起）。1 等待态: AwaitAgent（`S_AWAIT_AGENT`，本 Agent 已把子任务 Handoff 给其他 Agent，阻塞等待其终态；由 `TriggerAwaitAgent` 进入、`TriggerAgentHandoffDone` 离开）。2 终态: Complete / Failed。加 Idle（空闲等待意图）。共 **14 态**（`pkg/types/enums_agent.go` 定义 `AgentStateIdle` ~ `AgentStateRespond`；`AgentStateRespond` 追加在枚举尾部，保持既有落盘状态值不变）。转移注册见 `transitions.go` + `transitions_respond.go`。
 ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel.max_replan_attempts`) 超限 → S_FAILED + `[ESCALATE]`
 
 **`[UserInterrupt]` 协议**（inv_global_08, < 200ms 传播）:
@@ -82,17 +81,32 @@ ReplanGuard (S_REPLAN 入口): `MaxReplanAttempts` (`spec/state.yaml §m4_kernel
 | S_VALIDATE | TriggerValidateFail | S_REPLAN |
 | S_EXECUTE | TriggerExecuteDone | S_REFLECT |
 | S_EXECUTE | TriggerExecuteFail | S_ROLLBACK |
-| S_REFLECT | TriggerReflectDone | S_COMPLETE |
+| S_REFLECT | TriggerReflectDone | S_RESPOND |
+| S_PERCEIVE | TriggerRespondReady | S_RESPOND |
+| S_PLAN | TriggerRespondReady | S_RESPOND |
+| S_RESPOND | TriggerRespondDone | S_COMPLETE |
+| S_RESPOND | TriggerReplanExhausted | S_FAILED |
 | S_ROLLBACK | TriggerRollbackDone | S_REPLAN |
 | S_REPLAN | TriggerReplanDone | S_PLAN |
 | S_REPLAN | TriggerReplanExhausted | S_FAILED |
 
 状态超时:
 - S_PLAN: 300s, S_EXECUTE: 600s (计算性状态)
-- S_PERCEIVE/S_VALIDATE/S_REFLECT/S_REPLAN: derivedTimeout = upstream_budget - elapsed, 安全地板 30s
+- S_PERCEIVE/S_VALIDATE/S_REFLECT/S_RESPOND/S_REPLAN: derivedTimeout = upstream_budget - elapsed, 安全地板 30s
 - S_IDLE/S_COMPLETE/S_FAILED/S_ROLLBACK: 终端/等待态, 无超时
 
 ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1 FatalStreamAbort / M1 JSON Repair 失败 / S_PLAN 拓扑失败。ReplanCount > MaxReplanAttempts → `TriggerReplanExhausted → S_FAILED` → `[ESCALATE]`。S_FAILED 为终态——不进入 S_ROLLBACK，不触发回滚补偿。任务移交 M13 HITL 人工决策。FSM 实现见 `internal/agent/fsm/state_machine.go`（`StateMachine`，唯一生产实现；此前文档提及的 `FallbackFSM`/`use_flowy` build tag 从未落地，2026-07-21 deadcode 审查确认零调用后已删除）。
+
+### 1.1 输出通道与 S_RESPOND（ADR-0098）
+
+- **受众**：`protocol.LLMFillEffect.Audience` 零值 `AudienceInternal`（fail-closed）；仅 S_RESPOND 的 Effect 为 `AudienceUser`。`doStreamInfer` 只对 User 受众发布 `AgentStreamEventToken`，内部阶段 token 仅累积供 OnSuccess 解析（`spec/state.yaml par_inv_06`）。思考链（Thinking）各阶段照常发布，不进回复正文。
+- **阶段进度**：每个 LLMFillEffect 开始时发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`，客户端本地化展示。
+- **路由**：S_PERCEIVE 产出 `TaskModel.NeedsTools`（`*bool`）。`false` → `S_PERCEIVE_DIRECT` → S_RESPOND；`true`/缺失/解析失败 → S_PLAN（保守）。S_PLAN 解析成功但 DAG 为空 → `S_PLAN_EMPTY` → S_RESPOND。
+- **空回复重试**：S_RESPOND 推理成功但正文为空时，按 Effect 的 `MaxRetry`（=1）经 `S_RESPOND_RETRY` 自环重试一次（此时未推出任何 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
+- **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不以 S_FAILED 丢弃已执行回合的回复。
+- **回复上下文**：ImmutableCore + `kernel/respond.md` + 对话历史（TaintHigh）+ 本轮意图 +（执行路径）目标/执行结果/反思（TaintMedium 起）。无 tools。`agent/context/respond_context.go`。
+- **对话历史**：`AgentController.SetConversationHistory` 由 session 在 `SetTaskIntent` 前注入（剔除 system）；Perceive 与 Respond 使用，Plan 只消费自包含 Goal。上限 `thresholds.m4_kernel.conversation.history_max_messages/bytes`，自尾部截取。
+- **阶段契约 SSoT**：`configs/prompts/kernel/{perceive,plan,reflect,respond}.md`，记忆路径与降级路径同源加载；Perceive/Reflect 请求 `json_object` 约束解码。
 
 ---
 
@@ -127,6 +141,11 @@ Agent 运行循环: 等待 intent channel 上的意图脉冲 → 唤醒推进状
 
 #### L0 补充
 节点数熔断 → DFS 三色环检测 → 深度熔断 → 孤立节点，阈值见 `spec/state.yaml §m4_kernel.plan_dag_max_nodes/max_depth`。
+
+> 2026-09-25 复核（ADR-0098 决策五）："孤立节点"改为"悬空依赖"。原规则把多节点 DAG 中无边的节点判为非法，与原生并行 tool_calls（`toolCallsToDAGJSON` 生成无边的独立节点，执行器并行调度）直接冲突，使一切并行工具调用在 L0 被拒；且它想拦的"依赖写错"反而漏检——DFS 对未定义的依赖 ID 直接递归不报错。现：依赖引用未定义节点 → 拒绝；无依赖的独立节点合法。
+
+#### L1 PolicyGate 请求形态（2026-09-25，ADR-0098 决策五）
+与执行闸门 `sandbox.ExecEnvelope` 同问：`(principal=agent, action=tool_execute, resource=<工具名>)` + `trust_tier/risk_level/tool_source`（经 ToolExecutor.Lookup）+ `capability_token_valid=false`（规划期未签发令牌）。词汇 SSoT：`internal/protocol/policy_vocab.go`。此前以工具名作 action、会话 ID 作 principal，策略模型无规则认识，deny-by-default 拒绝一切工具。
 
 #### L1 补充
 TaintGate + JSON Schema 双向校验 + Tool availability + PolicyGate（Cedar-Gate FORBID 优先）。

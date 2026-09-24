@@ -39,7 +39,7 @@ func NewSystemPromptGuard(tokenThreshold int) *SystemPromptGuard {
 	return &SystemPromptGuard{tokenThreshold: tokenThreshold}
 }
 
-// KernelPromptFragments 返回 FSM 内核阶段模板（perceive.md/plan.md/reflect.md）的
+// KernelPromptFragments 返回 FSM 内核阶段模板（perceive/plan/reflect/respond.md）的
 // 原始文本（未渲染占位符，LoadPromptTemplate(name, nil) 只解析不执行），供调用方
 // 注册进 SystemPromptGuard——这是"系统提示词"真正的主体，覆盖 S_PERCEIVE/S_PLAN/
 // S_REFLECT 全部 LLM 调用，与调用方各自可能持有的动态提示词（如 M9 GEPA 激活提示词）
@@ -52,7 +52,7 @@ func NewSystemPromptGuard(tokenThreshold int) *SystemPromptGuard {
 // 占位符（{{ToolsSection}} 等）不影响窗口匹配——detectAndRedact 按 tokenThreshold
 // 连续词窗口比对，静态指令文本片段仍可命中。
 var KernelPromptFragments = sync.OnceValue(func() []string { //nolint:gochecknoglobals // sync.OnceValue 懒加载只读片段缓存，无可变状态；跨包共享单一加载逻辑（见上方注释）
-	names := []string{"kernel/perceive.md", "kernel/plan.md", "kernel/reflect.md"}
+	names := []string{"kernel/perceive.md", "kernel/plan.md", "kernel/reflect.md", "kernel/respond.md"}
 	frags := make([]string, 0, len(names))
 	for _, name := range names {
 		raw, err := configs.LoadPromptTemplate(name, nil)

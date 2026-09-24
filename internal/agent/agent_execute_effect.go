@@ -124,6 +124,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 
 		var resp *types.ProviderResponse
 		var inferErr error
+		a.publishTurnPhase(a.sm.Current())
 
 		// 2. System 1/2 Routing & World Model Inference Skip
 		// 如果在 S_PERCEIVE 阶段，且 SurpriseIndex 很低 (<0.3)，走 FastPath 跳过 LLM
@@ -226,7 +227,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				// DAGModel 为 nil 时 runExecuteDAG 直接推进 ExecuteDone，
 				// 为非 nil 时执行已生成的 DAG（高置信路径）。
 				// SurpriseIndex == 0 表示"未计算"，不触发。
-				nextState = "S_PLAN_DONE"
+				nextState = a.fastPathPlanState()
 				err = nil
 				if a.memory != nil {
 					localIntent := a.sCtx.RawIntentTS.MarshalJSONString()
@@ -356,6 +357,9 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				types.WithModelPool(llmEff.ModelPool),
 				types.WithThinkingMode(llmEff.ThinkingMode),
 			}
+			if llmEff.ResponseFormat != nil {
+				inferOpts = append(inferOpts, types.WithResponseFormat(llmEff.ResponseFormat))
+			}
 			// 原生 LLM function-calling 并行通路（2026-07-14）：仅在 S_PLAN 阶段、且
 			// 工具目录非空时附加 Tools——resp.ToolCalls 非空时由下方 toolCallsToDAGJSON
 			// 转换为 DAGModel JSON 再喂给既有 OnSuccess，两条通路收敛到同一张 DAG 上，
@@ -386,7 +390,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				if streamErr != nil {
 					inferErr = streamErr
 				} else {
-					resp, inferErr = a.doStreamInfer(ctx, ch)
+					resp, inferErr = a.doStreamInfer(ctx, ch, llmEff.Audience)
 				}
 			}
 
@@ -516,6 +520,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 						"schema_ref", llmEff.SchemaRef, "state", a.sm.Current(), "err", schemaErr)
 				}
 				nextState, err = llmEff.OnSuccess(a.toProtocolCtx(), fillContent)
+				a.reportUnusableFill(ctx, nextState, err, resp)
 			}
 		}
 

@@ -249,6 +249,22 @@ const (
 	// 目前唯一来源是 LLM 跨 Model Pool 降级通知（GD-13-005）。
 	// 前端应作为提示条渲染；**不得**并入助手回复正文或写进消息历史。
 	AgentStreamEventNotice AgentStreamEventType = "notice"
+	// AgentStreamEventPhase 回合阶段进度（ADR-0098）。Content 为阶段键
+	// perceive/plan/execute/reflect/respond，客户端自行本地化；内部阶段不再推 token，
+	// 用户在首 token 前靠它感知进度。
+	AgentStreamEventPhase AgentStreamEventType = "phase"
+)
+
+// TurnPhase AgentStreamEventPhase 的 Content 取值（ADR-0098）。内核 → session → 客户端
+// 三方共享的结构化契约，客户端据此本地化展示，禁止改为自然语言状态串。
+type TurnPhase string
+
+const (
+	TurnPhasePerceive TurnPhase = "perceive"
+	TurnPhasePlan     TurnPhase = "plan"
+	TurnPhaseExecute  TurnPhase = "execute"
+	TurnPhaseReflect  TurnPhase = "reflect"
+	TurnPhaseRespond  TurnPhase = "respond"
 )
 
 // AgentStreamEvent defines a token-level or block-level structured event published during FSM reasoning.

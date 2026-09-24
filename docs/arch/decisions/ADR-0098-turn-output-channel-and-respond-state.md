@@ -1,0 +1,103 @@
+# ADR-0098: Agent 回合输出通道分离与 S_RESPOND 回复合成态
+
+- **状态**: Accepted
+- **日期**: 2026-09-25
+- **决策者**: 架构组
+- **相关模块**: M4 / M13（gateway/session）/ internal/protocol / pkg/types
+
+## 上下文
+
+2026-09-24 实测：桌面/Web 对话「你好。你是谁？」返回内容为 S_PLAN 阶段模型原始输出（散文 + ```json 围栏 DAG + 散文），回合实际以 `S_PLAN → S_FAILED` 结束。四个叠加根因（均有日志/代码实证）：
+
+1. `doStreamInfer` 把**所有** LLMFillEffect（Perceive/Plan/Reflect）的 token 一律以 `AgentStreamEventToken` 推给订阅者——内部结构化填空与用户回复共用一条通道。
+2. FSM 13 态中**不存在**产出用户回复的阶段；此前用户能看到文字，仅因 Plan 阶段模型"不守规矩"写了散文并被第 1 点泄出。
+3. 有记忆系统（生产路径）时 Perceive/Plan/Reflect prompt 由 `agent/context` 内联一句话生成，不加载 `configs/prompts/kernel/*.md`，**无输出 Schema**；模型自编格式，解析必然失败。Perceive 输出还从未被解析进 TaskModel（`onPerceiveSuccess` 只判非空）。
+4. session 只把本轮 `req.Input` 交给内核（`SetTaskIntent`），多轮对话历史从未进入 FSM；Pool 每轮终态后新建 Agent，内核对上文完全失忆。
+
+## 决策
+
+**内部阶段与用户回复物理分通道；新增 S_RESPOND 作为回合唯一的用户回复出口；Perceive 产出结构化路由字段，由 Go FSM 决定走直答还是规划执行。**
+
+### 决策一：输出受众（Audience）由 Effect 声明，零值 fail-closed
+
+- `protocol.LLMFillEffect.Audience`：`AudienceInternal`（零值）/ `AudienceUser`。只有 `AudienceUser` 的 Effect 其 token 才以 `AgentStreamEventToken` 发布；内部 Effect 的 token 只累积进 `resp.Content` 供 OnSuccess 解析。
+- 零值即 Internal：未来新增阶段忘记声明时默认**不外泄**（安全默认值优于 opt-out）。
+- 推理思考链（`AgentStreamEventThinking`）不受 Audience 约束，各阶段照常发布——它在前端独立渲染为"思考过程"，不进回复正文、不落消息历史。
+- 阶段进度以结构化 `AgentStreamEventPhase`（Content=阶段键 `perceive|plan|execute|reflect|respond`）发布，客户端自行本地化展示；禁止用自然语言状态串承载阶段语义（R1.6）。
+
+### 决策二：S_RESPOND 为第 14 态，是 Complete 的唯一前驱
+
+| From | Trigger | To | 条件 |
+|---|---|---|---|
+| S_PERCEIVE | TriggerRespondReady | S_RESPOND | TaskModel.NeedsTools == false（直答） |
+| S_PLAN | TriggerRespondReady | S_RESPOND | 解析成功且 DAG 为空（含 FastPath 无缓存 DAG） |
+| S_REFLECT | TriggerReflectDone | S_RESPOND | 原 → S_COMPLETE 改指向 |
+| S_RESPOND | TriggerRespondDone | S_COMPLETE | 回复非空 |
+| S_RESPOND | TriggerRespondReady | S_RESPOND | 空回复且未超 MaxRetry（自环重试，未推出 token） |
+| S_RESPOND | TriggerReplanExhausted | S_FAILED | 推理失败 / 重试后仍空回复（A-01），原因以错误事件发布 |
+
+- 枚举值**追加**在尾部（`AgentStateRespond` / `TriggerRespondReady` / `TriggerRespondDone`）：状态以 `%d` 落盘于 EventLog（崩溃恢复白名单按值匹配），插入中间会使历史事件错位。
+- S_RESPOND 是纯 LLM 协处理器态、无外部副作用，列入崩溃恢复重驱白名单。
+- 回复 prompt 输入：ImmutableCore（人格 + 用户偏好）+ `kernel/respond.md` + 有界对话历史 + 本轮用户消息 +（若执行过）任务目标、执行结果、反思结论。执行结果与反思按 TaintMedium 起、对话历史按 TaintHigh 进 UserData 围栏。
+
+### 决策三：内部阶段输出契约单源化 + 约束解码
+
+- `configs/prompts/kernel/{perceive,plan,reflect,respond}.md` 是阶段契约唯一来源，记忆路径与降级路径都加载它（此前记忆路径绕开模板）。
+- Perceive / Reflect 请求 `json_object` 约束解码；Plan 在附带原生 tools 时不加（部分 Provider 不支持二者并用），靠 tool_calls + 围栏剥离收敛。
+- Perceive 产出 `NeedsTools`：由 Go 解析、校验后决定路由；缺失或解析失败时**保守走 S_PLAN**（完整管线仍可在 Plan 得出空 DAG 后转直答），不因感知失败放弃回合。
+
+### 决策四：对话历史作为回合上下文进入内核
+
+- `protocol.AgentController.SetConversationHistory([]types.Message)`：session 在 `SetTaskIntent` 前注入本轮之前的历史（剔除 system 角色）。
+- 仅 Perceive（解析指代、产出自包含 Goal）与 Respond（连贯作答）使用；Plan 只消费自包含的 TaskModel.Goal，不重复携带历史（Tier-0 token 纪律）。
+- 历史按 `thresholds.m4_kernel.conversation.history_max_messages` / `history_max_bytes` 自尾部截取。
+
+### 决策五：S_RESPOND 使工具路径首次被真实执行，路径上的既有缺陷一并收口
+
+Plan 阶段此前恒解析失败，Validate/Execute 从未被生产流量走到；修复后暴露并收口：
+
+- **L1 PolicyGate 与执行闸门同问**：`(agent, tool_execute, <tool>)` + 工具 trust_tier 等元数据（`protocol/policy_vocab.go` 为词汇单源）；生产装配补 `InjectPolicyGate(sb.Gate)`（此前零调用点，L1 恒拿 nil 按 fail-closed 拒绝一切）。
+- **L0 孤立节点 → 悬空依赖**：无边独立节点（并行 tool_calls）合法；依赖指向未定义节点才拒绝。
+- **回合唯一中止出口 `abortTurn`**：Dispatch/Effect 错误一律错误进流 + 强制 S_FAILED + `handleTerminalState`（发 task_done）；此前订阅方等不到 task_done 挂到超时，且 Pool 会把下一轮投给已无 Run() 的旧实例。
+- **S_REPLAN 单一 ReplanDone 产出方**：进入 S_REPLAN 的转移占位 Effect 与 handleReplanTransition 各投递一次 → 第二次命中 no transition。
+- **召回预算**：search.Embedder 无 ctx（下游固定 30s），内核在调用边界以 3s 预算放弃等待（`recallWithin` / `assembleWithBudget`），召回是增益不是关键路径。
+- **流式 tool_calls 收尾补发**：非 `finish_reason=tool_calls` 收尾时已聚合的工具调用不再被静默丢弃。
+
+## 后果
+
+- **正向**: 用户永远只看到 S_RESPOND 的回复；内部 JSON 不再外泄（交互 SSE 与 headless 的 `AgentResult.Output` 同时修复）；纯对话从"Perceive+Plan 且必失败"变为 Perceive+Respond 两次调用；多轮对话恢复上下文连贯。
+- **负向**: 需执行工具的回合多一次 LLM 调用（Respond）；首 token 延迟增加一个 Perceive 往返，以阶段进度事件缓解。
+- **反例守护**:
+  - 提议"让 Plan/Reflect 直接把散文回复流给用户、省掉 S_RESPOND"——违反决策一/二：内部阶段输出契约是 JSON，泄出即本 ADR 所修缺陷的原样复现。
+  - 提议"LLMFillEffect 默认 AudienceUser、内部阶段显式声明 Internal"——违反决策一的 fail-closed 默认值。
+  - 提议"按 FSM 当前状态判断是否推 token"——受众是 Effect 的属性而非状态的属性（同一状态未来可能挂多个 Effect），且状态判断把输出安全绑在转移表形状上。
+
+## 被驳回的方案
+
+| 方案 | 驳回理由 |
+|------|---------|
+| 流式过滤器剥离 JSON 围栏，保留 Plan 散文作为回复 | 概率过滤当边界（HE-2）；模型换措辞即失效；Plan 失败时仍无回复 |
+| Perceive 与 Respond 合并为一次调用（先答后判路由） | 流式输出时尚不知是否需要工具，已推出的文字无法撤回；回到"内部输出外泄"原问题 |
+| 单一 ReAct 工具循环替代 FSM | 违反 HE-5（`while True: call LLM`）与 M4 §1 |
+
+## 引用代码
+
+- `pkg/types/enums_agent.go`（AgentStateRespond / TriggerRespondReady / TriggerRespondDone）
+- `internal/protocol/interfaces_agent.go`（LLMFillEffect.Audience / AgentController.SetConversationHistory）
+- `internal/agent/fsm/transitions_respond.go`（S_RESPOND 转移与 respond Effect）
+- `internal/agent/agent_execute_effect_helpers.go`（doStreamInfer 按 Audience 发布）
+- `internal/agent/context/respond_context.go`（BuildRespondContext）
+- `internal/gateway/session/orchestrator_fsm.go`（注入历史、Phase 事件映射）
+- `docs/arch/M04-Agent-Kernel.md §1.1`、`docs/arch/spec/state.yaml §par`
+
+## 重新评估触发条件
+
+- Eval Harness 显示纯对话回合 Perceive 路由误判率（应直答却走 Plan，或反之）> 10%。
+- 主力 Provider 支持"单次调用内结构化路由 + 流式正文"且可在首 token 前确定路由（可重提合并方案）。
+- 需要工具的回合中 Respond 调用的 token 占比 > 40% 且用户侧无质量差异证据。
+
+## 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-09-25 | 初稿 |

@@ -36,6 +36,8 @@ var (
 
 	// System 1 Bypass
 	InstrSystem1BypassTotal metric.Int64Counter
+	// 回合路由分布（ADR-0098）：direct / plan / plan_empty / perceive_unparsed
+	InstrTurnRouteTotal metric.Int64Counter
 
 	// [Task 14] M10 Embedding 可观测性
 	InstrEmbeddingLatencyMs  metric.Float64Histogram // embedding 调用延迟

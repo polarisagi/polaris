@@ -98,6 +98,10 @@ type M4KernelThresholds struct {
 	PRMMaxCandidates  int     `toml:"prm.max_candidates"`  // 3 — 文档: "研究数据显示 3 候选 ROI 最优"
 	PRMMinThreshold   float64 `toml:"prm.min_threshold"`   // 0.4 — 全部候选低于此分数时兜底取第一个候选
 	PRMScorerModel    string  `toml:"prm.scorer_model"`    // "" — 留空则沿用 Provider 默认路由，不强制指定 budget-tier 模型名
+
+	// 对话历史进入内核的上限（ADR-0098 决策四），自尾部截取；Perceive 与 Respond 各渲染一次。
+	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
+	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
 }
 
 type M5MemoryThresholds struct {
@@ -327,24 +331,26 @@ func DefaultThresholds() Thresholds {
 			},
 		},
 		M4Kernel: M4KernelThresholds{
-			MaxReplanAttempts:             3,
-			DefaultBudget:                 50000,
-			MaxSteps:                      10,
-			Tier0MaxConcurrent:            4,
-			SuspendIdleThresholdMin:       5,
-			PlanDAGMaxNodes:               50,
-			PlanDAGMaxDepth:               10,
-			L3WatchdogMaxPerHour:          10,
-			WorldModelSkipThreshold:       0.8,
-			SnapshotIntervalSteps:         1000,
-			SnapshotRetentionCount:        5,
-			ReplanExtensionActivationSecs: 3,
-			SurpriseHintThreshold:         0.6,
-			PRMEnabled:                    false,
-			PRMComplexityGate:             0.5,
-			PRMMaxCandidates:              3,
-			PRMMinThreshold:               0.4,
-			PRMScorerModel:                "",
+			MaxReplanAttempts:              3,
+			DefaultBudget:                  50000,
+			MaxSteps:                       10,
+			Tier0MaxConcurrent:             4,
+			SuspendIdleThresholdMin:        5,
+			PlanDAGMaxNodes:                50,
+			PlanDAGMaxDepth:                10,
+			L3WatchdogMaxPerHour:           10,
+			WorldModelSkipThreshold:        0.8,
+			SnapshotIntervalSteps:          1000,
+			SnapshotRetentionCount:         5,
+			ReplanExtensionActivationSecs:  3,
+			SurpriseHintThreshold:          0.6,
+			PRMEnabled:                     false,
+			PRMComplexityGate:              0.5,
+			PRMMaxCandidates:               3,
+			PRMMinThreshold:                0.4,
+			PRMScorerModel:                 "",
+			ConversationHistoryMaxMessages: 20,
+			ConversationHistoryMaxBytes:    24576,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

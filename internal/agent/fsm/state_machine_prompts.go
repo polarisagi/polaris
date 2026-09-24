@@ -318,6 +318,11 @@ func (sm *StateMachine) onReflectSuccess(sCtx protocol.StateContext, fill []byte
 	return types.State("S_REFLECT_DONE"), nil
 }
 
+// onReflectFailure 反思尽力而为（ADR-0098）：到这里工具已执行完毕，反思 LLM 失败
+// 只意味着 Respond 拿不到反思结论，不应以 S_FAILED 丢掉整轮回复。失败本身经日志
+// 与上游 executeEffect 的推理失败事件可见，不是静默吞错。
 func (sm *StateMachine) onReflectFailure(sCtx protocol.StateContext, err error) (types.State, error) {
-	return types.State("S_REFLECT_FAILED"), apperr.New(apperr.CodeInternal, "reflect: LLM fill failed")
+	slog.Warn("reflect: LLM fill failed, continuing to S_RESPOND without reflection",
+		"session_id", sCtx.SessionID, "err", err)
+	return types.State("S_REFLECT_DONE"), nil
 }

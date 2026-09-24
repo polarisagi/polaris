@@ -26,6 +26,7 @@ Alpine.store('chat', {
   reasoningEffort: 'auto',
   contextWarning: null,  // context_warning SSE 事件携带的数据
   compacting: false,     // status/compacting 事件期间为 true
+  phase: '',             // 回合阶段键 perceive/plan/execute/reflect/respond（status/phase 事件，ADR-0098）
 
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
 
@@ -274,6 +275,7 @@ Alpine.store('chat', {
     this.thinkingText = ''
     this.thinkingOpen = true
     this.errorMsg = ''
+    this.phase = ''
     this.state = 'SUBMITTING'
 
     const attachmentsPayload = [...this.attachments];
@@ -524,7 +526,9 @@ Alpine.store('chat', {
         this.contextWarning = data
         break
       case 'status':
-        if (data.type === 'compacting') {
+        if (data.type === 'phase') {
+          this.phase = data.phase || ''
+        } else if (data.type === 'compacting') {
           this.compacting = true
         } else if (data.type === 'compacted') {
           this.compacting = false
@@ -548,6 +552,7 @@ Alpine.store('chat', {
       return
     }
     this._finalizeMessage(false)
+    this.phase = ''
     this.state = 'COMPLETE'
     this.thinkingOpen = false
     this.thinkingText = ''
@@ -558,6 +563,7 @@ Alpine.store('chat', {
   _onError(err) {
     const isAbort = err.code === 'aborted' || err.code === 'interrupted'
     this._finalizeMessage(isAbort)
+    this.phase = ''
     this.state = 'ERROR'
     this.errorMsg = err.message || '连接中断'
     window._activeSseClient?.stop()

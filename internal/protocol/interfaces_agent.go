@@ -47,7 +47,25 @@ LLMFillEffect struct {
 	ModelPool      string // 合法值取自 pkg/types.ModelPool：reasoning / general / default / budget（不含 "standard"，SSoT 见 internal/llm/router.go poolFallbackChain）
 	ThinkingMode   types.ThinkingMode
 	IdempotencyKey types.IdempotencyKey
+	// Audience 决定本次推理的 token 是否作为用户回复发布（ADR-0098 决策一）。
+	// 零值 AudienceInternal：新增阶段忘记声明时默认不外泄。
+	Audience LLMAudience
+	// ResponseFormat 非 nil 时请求约束解码（如 json_object）。附带原生 tools 的
+	// 阶段不设，部分 Provider 不支持二者并用。
+	ResponseFormat *types.ResponseFormat
 }
+
+type
+
+// LLMAudience LLMFillEffect 输出的受众。
+LLMAudience uint8
+
+const (
+	// AudienceInternal 结构化填空，只供 OnSuccess 解析，不向订阅者推送 token。
+	AudienceInternal LLMAudience = iota
+	// AudienceUser 面向用户的回复，token 实时推送。当前仅 S_RESPOND 使用。
+	AudienceUser
+)
 
 type
 
@@ -90,6 +108,9 @@ type
 AgentController interface {
 	AgentID() string
 	SetTaskIntent(intent taint.TaintedString)
+	// SetConversationHistory 注入本轮之前的对话历史（ADR-0098 决策四），须在
+	// SendIntent 前调用。实现方剔除 system 角色并按阈值自尾部截取。
+	SetConversationHistory(history []types.Message)
 	// SetSpawnDepth 注入本次执行继承的委派链深度（ADR-0084），供
 	// transfer_to_agent 投递子任务时据此计算 SpawnDepth+1。depth<=0 等同于
 	// 顶层任务（默认零值），与引入本机制前的行为一致。

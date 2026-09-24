@@ -128,6 +128,14 @@ func GetFoundingAnchorDriftScore() float64 {
 	return 0.0
 }
 
+// RecordTurnRoute 记录回合路由决策（ADR-0098）。perceive_unparsed 占比升高即
+// Perceive 输出契约失效的信号，是 re_eval 的 Eval 输入之一。
+func RecordTurnRoute(ctx context.Context, route string) {
+	if InstrTurnRouteTotal != nil {
+		InstrTurnRouteTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route)))
+	}
+}
+
 // RecordSystem1Bypass 记录 System-1 Bypass 触发次数。
 func RecordSystem1Bypass(ctx context.Context, matched bool) {
 	if InstrSystem1BypassTotal != nil {
