@@ -72,10 +72,12 @@ func TestDoStreamInfer_AudienceGatesTokens(t *testing.T) {
 			defer cancel()
 			sub := a.SubscribeStream(ctx)
 
-			ch := make(chan types.StreamEvent, 3)
+			ch := make(chan types.StreamEvent, 4)
 			ch <- types.StreamEvent{Type: types.StreamThinking, Content: "思考"}
 			ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: `{"nodes":`}
 			ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: `[]}`}
+			// 规划阶段的工具调用意图同样只对 User 受众发布（尚未过校验，可能被拒）。
+			ch <- types.StreamEvent{Type: types.StreamToolCall, Content: `{"id":"c1","name":"bash","input":{}}`}
 			close(ch)
 
 			resp, err := a.doStreamInfer(ctx, ch, tc.audience)
@@ -85,17 +87,25 @@ func TestDoStreamInfer_AudienceGatesTokens(t *testing.T) {
 			if resp.Content != `{"nodes":[]}` {
 				t.Fatalf("content 必须完整累积供 OnSuccess 解析，得到 %q", resp.Content)
 			}
-			tokens, thinking := 0, 0
+			tokens, thinking, toolCalls := 0, 0, 0
 			for len(sub) > 0 {
 				switch (<-sub).Type {
 				case types.AgentStreamEventToken:
 					tokens++
 				case types.AgentStreamEventThinking:
 					thinking++
+				case types.AgentStreamEventToolCall:
+					toolCalls++
 				}
 			}
 			if tokens != tc.wantTokens {
 				t.Errorf("token 事件 %d 条，期望 %d", tokens, tc.wantTokens)
+			}
+			if wantTC := min(tc.wantTokens, 1); toolCalls != wantTC {
+				t.Errorf("工具调用事件 %d 条，期望 %d", toolCalls, wantTC)
+			}
+			if len(resp.ToolCalls) != 1 {
+				t.Errorf("工具调用必须累积进响应供规划解析，得到 %d", len(resp.ToolCalls))
 			}
 			if thinking != 1 {
 				t.Errorf("思考链不受受众约束，期望 1 条，得到 %d", thinking)
