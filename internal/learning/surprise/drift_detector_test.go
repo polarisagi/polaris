@@ -1,6 +1,9 @@
 package surprise
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // fakeDriftEmbedder 供测试使用的确定性 Embedder：query 命中 driftFor 时返回与
 // stored embedding 正交的向量（模拟漂移），否则返回与 stored embedding 相同的
@@ -9,7 +12,7 @@ type fakeDriftEmbedder struct {
 	driftFor map[string]bool
 }
 
-func (f *fakeDriftEmbedder) Embed(text string) []float32 {
+func (f *fakeDriftEmbedder) Embed(_ context.Context, text string) []float32 {
 	if f.driftFor[text] {
 		return []float32{0, 1, 0}
 	}

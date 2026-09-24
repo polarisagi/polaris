@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"testing"
 )
 
@@ -9,7 +10,7 @@ type mockEmbedder struct {
 	retVec    []float32
 }
 
-func (m *mockEmbedder) Embed(text string) []float32 {
+func (m *mockEmbedder) Embed(_ context.Context, text string) []float32 {
 	m.callCount++
 	return m.retVec
 }
@@ -25,7 +26,7 @@ func TestAmbientSkill(t *testing.T) {
 		Embedder: nil,
 	}
 	// relevanceScore is 0 for these texts
-	if s.isSkillRelevant(nil, query, name, desc, inst) != false {
+	if s.isSkillRelevant(context.Background(), nil, query, ambientSkill{name: name, desc: desc, inst: inst}) != false {
 		t.Fatalf("expected false for nil embedder with 0 token overlap")
 	}
 
@@ -33,7 +34,7 @@ func TestAmbientSkill(t *testing.T) {
 	s2 := &PromptAssemblyService{
 		Embedder: &mockEmbedder{retVec: nil},
 	}
-	if s2.isSkillRelevant(nil, query, name, desc, inst) != false {
+	if s2.isSkillRelevant(context.Background(), nil, query, ambientSkill{name: name, desc: desc, inst: inst}) != false {
 		t.Fatalf("expected false when queryVec is nil")
 	}
 
@@ -45,13 +46,13 @@ func TestAmbientSkill(t *testing.T) {
 	}
 	// cachedSkillEmbed will be called and return me.retVec
 	queryVec := []float32{1.0, 0.0}
-	if s3.isSkillRelevant(queryVec, query, name, desc, inst) != true {
+	if s3.isSkillRelevant(context.Background(), queryVec, query, ambientSkill{name: name, desc: desc, inst: inst}) != true {
 		t.Fatalf("expected true for identical vectors")
 	}
 
 	// cachedSkillEmbed should cache the vector
 	me.retVec = []float32{0.0, 1.0} // change the return vector, but cache should be hit
-	if s3.isSkillRelevant(queryVec, query, name, desc, inst) != true {
+	if s3.isSkillRelevant(context.Background(), queryVec, query, ambientSkill{name: name, desc: desc, inst: inst}) != true {
 		t.Fatalf("expected true due to cache hit")
 	}
 }

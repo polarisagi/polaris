@@ -45,12 +45,12 @@ func (d *DynamicEmbedder) WaitReady() <-chan struct{} {
 }
 
 // Embed 实现 search.Embedder 接口。
-func (d *DynamicEmbedder) Embed(text string) []float32 {
+func (d *DynamicEmbedder) Embed(ctx context.Context, text string) []float32 {
 	p := d.ptr.Load()
 	if p == nil || *p == nil {
 		return nil
 	}
-	return (*p).Embed(text)
+	return (*p).Embed(ctx, text)
 }
 
 // EmbedBatch 检查底层引擎是否支持批量操作。如果支持则透传调用，否则自动降级为逐条 Embed。
@@ -78,7 +78,7 @@ func (d *DynamicEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	// 逐条降级（不支持批量的普通 Embedder）
 	res := make([][]float32, len(texts))
 	for i, t := range texts {
-		res[i] = e.Embed(t)
+		res[i] = e.Embed(ctx, t)
 	}
 	return res, nil
 }

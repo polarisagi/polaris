@@ -79,11 +79,11 @@ func (a *surrealCognAdapter) FTSSearch(query string, k int) ([]types.CognitiveSe
 // ─── knowledgeEmbedderAdapter ─────────────────────────────────────────────────
 //
 // 将 search.Embedder 适配为 knowledge.VectorEmbedder。
-// search.Embedder.Embed(text string) []float32 → Embed(ctx, text) ([]float32, error)。
+// search.Embedder.Embed(ctx, text) []float32 → Embed(ctx, text) ([]float32, error)。
 type knowledgeEmbedderAdapter struct{ e search.Embedder }
 
-func (a *knowledgeEmbedderAdapter) Embed(_ context.Context, text string) ([]float32, error) {
-	return a.e.Embed(text), nil
+func (a *knowledgeEmbedderAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
+	return a.e.Embed(ctx, text), nil
 }
 
 // ─── colbertRerankerAdapter ────────────────────────────────────────────────────

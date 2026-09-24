@@ -20,3 +20,7 @@ window_breaker_window_secs = 60
 window_breaker_min_samples = 20
 window_breaker_threshold = 0.5
 window_breaker_cooldown_sec = 30
+'embed.batch_window_ms' = 10
+'embed.high_max_batch_size' = 100
+'embed.low_max_batch_size' = 8
+'embed.call_timeout_s' = 30

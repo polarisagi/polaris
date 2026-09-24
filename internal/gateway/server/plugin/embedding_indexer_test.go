@@ -28,7 +28,7 @@ type mockEmbedder struct {
 	retVec    []float32
 }
 
-func (m *mockEmbedder) Embed(text string) []float32 {
+func (m *mockEmbedder) Embed(_ context.Context, text string) []float32 {
 	m.callCount++
 	return m.retVec
 }

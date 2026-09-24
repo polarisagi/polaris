@@ -91,7 +91,7 @@ func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, d
 		return docs
 	}
 
-	qVecs := r.tokenVecs(query)
+	qVecs := r.tokenVecs(ctx, query)
 	if len(qVecs) == 0 {
 		metrics.RecordRerankCall(ctx, "fallback", float64(time.Since(start).Milliseconds()))
 		return docs
@@ -99,7 +99,7 @@ func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, d
 
 	result := make([]scoredDoc, len(docs))
 	for i, d := range docs {
-		dVecs := r.tokenVecs(d.Content)
+		dVecs := r.tokenVecs(ctx, d.Content)
 		result[i] = scoredDoc{doc: d, score: MaxSimScore(qVecs, dVecs)}
 	}
 
@@ -117,7 +117,7 @@ func (r *ApproximateColBERTReranker) Rerank(ctx context.Context, query string, d
 }
 
 // tokenVecs 将文本切分为重叠 n-gram 窗口，每窗口调用 Embedder 得到向量。
-func (r *ApproximateColBERTReranker) tokenVecs(text string) [][]float32 {
+func (r *ApproximateColBERTReranker) tokenVecs(ctx context.Context, text string) [][]float32 {
 	words := strings.Fields(text)
 	if len(words) == 0 {
 		return nil
@@ -128,7 +128,7 @@ func (r *ApproximateColBERTReranker) tokenVecs(text string) [][]float32 {
 	for i := 0; i < len(words); i += step {
 		end := min(i+r.window, len(words))
 		chunk := strings.Join(words[i:end], " ")
-		if v := r.embedder.Embed(chunk); len(v) > 0 {
+		if v := r.embedder.Embed(ctx, chunk); len(v) > 0 {
 			vecs = append(vecs, v)
 		}
 	}

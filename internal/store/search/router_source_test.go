@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"math"
 	"testing"
 )
@@ -57,10 +58,10 @@ func TestRouterDocumentSource_GraphReturnsEmptyNotError(t *testing.T) {
 // embedder）时查询编码返回 nil，融合层据此跳过向量路。
 func TestHybridSearchEngine_EmbedQueryNilEmbedder(t *testing.T) {
 	e := NewHybridSearchEngine(nil, nil)
-	if got := e.EmbedQuery("hello"); got != nil {
+	if got := e.EmbedQuery(context.Background(), "hello"); got != nil {
 		t.Fatalf("nil embedder must yield nil query vector, got %v", got)
 	}
-	if got := e.EmbedQuery(""); got != nil {
+	if got := e.EmbedQuery(context.Background(), ""); got != nil {
 		t.Fatalf("empty query must yield nil query vector, got %v", got)
 	}
 }

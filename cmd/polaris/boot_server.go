@@ -147,11 +147,11 @@ func bootServer(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle, tb *
 	})
 
 	// 设置插件同步向量索引器
-	// 传 sb.DynEmbedder（而非 sb.Embedder）：EmbeddingIndexer.IndexEntries 对多条目做真批量
-	// EmbedBatch，需要底层引擎的批量接口；sb.Embedder 是 SyncBatcherAdapter（单条合批语义），
-	// 类型断言拿不到 EmbedBatch，只会退化为逐条调用。
+	// 传低优先级 BackgroundEmbedder（ADR-0099）：它实现 EmbedBatch，经批处理器 Low 通道按
+	// 单批上限切块串行下发。此前直传 sb.DynEmbedder，一次把上百条扩展描述整批压给串行
+	// 后端（实测 100 条 13.8s），交互嵌入在后端排队而超时。
 	if sb.SurrealStore != nil {
-		idx := plugin.NewEmbeddingIndexer(&pluginCognIndexAdapter{s: sb.SurrealStore}, sb.DynEmbedder)
+		idx := plugin.NewEmbeddingIndexer(&pluginCognIndexAdapter{s: sb.SurrealStore}, backgroundEmbedder(sb))
 		httpServer.SetEmbeddingIndexer(idx)
 	}
 

@@ -62,9 +62,16 @@ func skillTextKey(name, desc, inst string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+// ambientSkill skills 表中 exec_mode='ambient' 的一行。
+type ambientSkill struct {
+	name, desc, inst, pluginID, priority string
+	trustTier                            int
+}
+
 // cachedSkillEmbed 从缓存读取或调用 Embedder 获取技能向量。
 // 失败时返回 nil（调用方降级 Tier 1）。
-func (s *PromptAssemblyService) cachedSkillEmbed(e search.Embedder, name, desc, inst string) []float32 {
+func (s *PromptAssemblyService) cachedSkillEmbed(ctx context.Context, e search.Embedder, sk ambientSkill) []float32 {
+	name, desc, inst := sk.name, sk.desc, sk.inst
 	key := skillTextKey(name, desc, inst)
 	now := time.Now()
 
@@ -82,7 +89,7 @@ func (s *PromptAssemblyService) cachedSkillEmbed(e search.Embedder, name, desc, 
 	s.skillEmbedCacheMu.Unlock()
 
 	text := name + " " + desc + " " + inst
-	v := e.Embed(text)
+	v := e.Embed(ctx, text)
 	if v == nil {
 		return nil
 	}
@@ -134,14 +141,14 @@ func (s *PromptAssemblyService) evictSkillEmbedLocked(now time.Time) {
 // Tier 2（Embedder 可用）：余弦相似度 >= EmbedThreshold。
 // Tier 1（降级）：词元重叠度 >= relevanceThreshold。
 // 任何错误静默降级 Tier 1，不中断聊天主流程。
-func (s *PromptAssemblyService) isSkillRelevant(queryVec []float32, query, name, desc, inst string) bool {
+func (s *PromptAssemblyService) isSkillRelevant(ctx context.Context, queryVec []float32, query string, sk ambientSkill) bool {
 	if s.Embedder == nil || queryVec == nil {
-		return relevanceScore(query, name, desc, inst) >= relevanceThreshold
+		return relevanceScore(query, sk.name, sk.desc, sk.inst) >= relevanceThreshold
 	}
 
-	skillVec := s.cachedSkillEmbed(s.Embedder, name, desc, inst)
+	skillVec := s.cachedSkillEmbed(ctx, s.Embedder, sk)
 	if skillVec == nil {
-		return relevanceScore(query, name, desc, inst) >= relevanceThreshold
+		return relevanceScore(query, sk.name, sk.desc, sk.inst) >= relevanceThreshold
 	}
 
 	threshold := s.EmbedThreshold
@@ -151,8 +158,9 @@ func (s *PromptAssemblyService) isSkillRelevant(queryVec []float32, query, name,
 	return ffi.VecCosineF32(queryVec, skillVec) >= float32(threshold)
 }
 
-// buildAmbientSkillsSection 按 trust_tier 和 ambient_priority 注入 ambient skill instructions
-func (s *PromptAssemblyService) buildAmbientSkillsSection(ctx context.Context, userQuery string) string {
+// listAmbientSkills 读完并关闭 Rows 后才返回：相关性判断要调嵌入（最长 30s），
+// 此前在 rows.Next() 循环内调用，全程占着 SQLite 读连接（R1.16）。
+func (s *PromptAssemblyService) listAmbientSkills(ctx context.Context) []ambientSkill {
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT name, description, instructions, plugin_id, ambient_priority, trust_tier
          FROM skills
@@ -160,9 +168,26 @@ func (s *PromptAssemblyService) buildAmbientSkillsSection(ctx context.Context, u
          ORDER BY trust_tier DESC,
                   CASE ambient_priority WHEN 'always' THEN 0 WHEN 'auto' THEN 1 ELSE 2 END ASC`)
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer rows.Close()
+	var out []ambientSkill
+	for rows.Next() {
+		var sk ambientSkill
+		if rows.Scan(&sk.name, &sk.desc, &sk.inst, &sk.pluginID, &sk.priority, &sk.trustTier) != nil {
+			continue
+		}
+		out = append(out, sk)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("ambient skills: rows iteration failed, using partial list", "err", err)
+	}
+	return out
+}
+
+// buildAmbientSkillsSection 按 trust_tier 和 ambient_priority 注入 ambient skill instructions
+func (s *PromptAssemblyService) buildAmbientSkillsSection(ctx context.Context, userQuery string) string {
+	skills := s.listAmbientSkills(ctx)
 
 	var indexLines []string
 	var fullTextParts []string
@@ -173,15 +198,11 @@ func (s *PromptAssemblyService) buildAmbientSkillsSection(ctx context.Context, u
 
 	var queryVec []float32
 	if s.Embedder != nil {
-		queryVec = s.Embedder.Embed(userQuery)
+		queryVec = s.Embedder.Embed(ctx, userQuery)
 	}
 
-	for rows.Next() {
-		var name, desc, inst, pluginID, ambientPriority string
-		var trustTier int
-		if rows.Scan(&name, &desc, &inst, &pluginID, &ambientPriority, &trustTier) != nil {
-			continue
-		}
+	for _, sk := range skills {
+		name, desc, inst, pluginID, ambientPriority := sk.name, sk.desc, sk.inst, sk.pluginID, sk.priority
 
 		mcpMark := ""
 		if s.MCPMgr != nil && s.MCPMgr.IsPluginConnected(pluginID) {
@@ -198,7 +219,7 @@ func (s *PromptAssemblyService) buildAmbientSkillsSection(ctx context.Context, u
 		}
 
 		if ambientPriority == "auto" {
-			if !s.isSkillRelevant(queryVec, userQuery, name, desc, inst) {
+			if !s.isSkillRelevant(ctx, queryVec, userQuery, sk) {
 				continue
 			}
 		}

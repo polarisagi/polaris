@@ -45,7 +45,7 @@ func newToolEmbeddingCache() *toolEmbeddingCache {
 	return &toolEmbeddingCache{byKey: make(map[string][]float32)}
 }
 
-func (c *toolEmbeddingCache) getOrEmbed(embedder search.Embedder, entry protocol.CatalogEntry) []float32 {
+func (c *toolEmbeddingCache) getOrEmbed(ctx context.Context, embedder search.Embedder, entry protocol.CatalogEntry) []float32 {
 	c.mu.Lock()
 	if v, ok := c.byKey[entry.Name]; ok {
 		c.mu.Unlock()
@@ -57,7 +57,7 @@ func (c *toolEmbeddingCache) getOrEmbed(embedder search.Embedder, entry protocol
 	if entry.Description != "" {
 		text = entry.Name + ": " + entry.Description
 	}
-	emb := embedder.Embed(text)
+	emb := embedder.Embed(ctx, text)
 
 	c.mu.Lock()
 	if _, exists := c.byKey[entry.Name]; !exists {
@@ -100,16 +100,16 @@ func (m *toolSearchMatcher) upsert(entry protocol.CatalogEntry, score float32) {
 
 // matchSemantic 用 query 与每个候选描述向量的余弦相似度做语义检索，
 // 命中阈值（semanticMatchThreshold）以上的候选才会被采纳。
-func (m *toolSearchMatcher) matchSemantic(all []protocol.CatalogEntry, query string) {
+func (m *toolSearchMatcher) matchSemantic(ctx context.Context, all []protocol.CatalogEntry, query string) {
 	if m.embedder == nil || query == "" {
 		return
 	}
-	queryEmb := m.embedder.Embed(query)
+	queryEmb := m.embedder.Embed(ctx, query)
 	if len(queryEmb) == 0 {
 		return
 	}
 	for _, t := range all {
-		candidateEmb := m.embCache.getOrEmbed(m.embedder, t)
+		candidateEmb := m.embCache.getOrEmbed(ctx, m.embedder, t)
 		if len(candidateEmb) == 0 {
 			continue
 		}
@@ -207,7 +207,7 @@ func MakeToolSearchFn(compCatalog *catalog.CompositeCatalog, embedder search.Emb
 		query := strings.TrimSpace(args.Query)
 
 		matcher := newToolSearchMatcher(embedder, embCache, len(all))
-		matcher.matchSemantic(all, query)
+		matcher.matchSemantic(ctx, all, query)
 		matcher.matchSubstring(all, query)
 
 		matches := matcher.sortedTop(toolSearchMaxResults)

@@ -188,7 +188,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 
 	normalizeInferRequest(req)
 
-	cached, ckey, useCache := ir.resolveSemanticCache(options, msgs, req.MaxTokens)
+	cached, ckey, useCache := ir.resolveSemanticCache(ctx, options, msgs, req.MaxTokens)
 	if cached != nil {
 		return cached, nil
 	}
@@ -252,7 +252,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 
 // resolveSemanticCache 检查语义缓存命中；未命中时返回可用于后续 Put 回写的 CacheKey
 // 及 useCache 标记（从 Infer 拆出，gocyclo 治理，行为不变）。
-func (ir *InferenceRouter) resolveSemanticCache(options *types.InferOptions, msgs []types.Message, maxTokens int) (cached *types.ProviderResponse, ckey search.CacheKey, useCache bool) {
+func (ir *InferenceRouter) resolveSemanticCache(ctx context.Context, options *types.InferOptions, msgs []types.Message, maxTokens int) (cached *types.ProviderResponse, ckey search.CacheKey, useCache bool) {
 	if ir.semanticCache == nil || options.CacheHints == nil {
 		return nil, search.CacheKey{}, false
 	}
@@ -266,7 +266,7 @@ func (ir *InferenceRouter) resolveSemanticCache(options *types.InferOptions, msg
 		TaskType:               options.CacheHints.TaskType,
 		Messages:               msgStrs,
 	}
-	if respStr, hit := ir.semanticCache.Get(ckey); hit {
+	if respStr, hit := ir.semanticCache.Get(ctx, ckey); hit {
 		return &types.ProviderResponse{
 			Content: respStr,
 			Usage: types.Usage{
@@ -350,7 +350,7 @@ func (ir *InferenceRouter) recordInferSuccess(ctx context.Context, entry *provid
 	}
 
 	if useCache && len(resp.ToolCalls) == 0 {
-		if cErr := ir.semanticCache.Put(ckey, resp.Content, resp.Model); cErr != nil {
+		if cErr := ir.semanticCache.Put(ctx, ckey, resp.Content, resp.Model); cErr != nil {
 			slog.WarnContext(ctx, "router: semantic cache put failed", "key", ckey, "err", cErr)
 		}
 	}

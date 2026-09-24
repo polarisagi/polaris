@@ -85,7 +85,7 @@ func (r *DefaultHybridRetriever) Search(ctx context.Context, query string, scope
 	}
 
 	var queryEmbed []float32
-	if emb := r.engine.EmbedQuery(query); len(emb) > 0 {
+	if emb := r.engine.EmbedQuery(ctx, query); len(emb) > 0 {
 		queryEmbed = emb
 	}
 

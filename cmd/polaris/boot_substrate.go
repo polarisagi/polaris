@@ -537,7 +537,11 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	embedFn := func(ctx context.Context, texts []string, _ string) ([][]float32, error) {
 		return dynEmbedder.EmbedBatch(ctx, texts)
 	}
-	batcher := search.NewEmbeddingBatcher(10*time.Millisecond, 100, embedFn)
+	// ADR-0099：High/Low 独立通道，Low 单批上限约束后台批在串行后端上的占用，
+	// 单次下游调用有界。阈值 SSoT：spec/state.yaml §m1_router.embed_*。
+	m1 := cfg.Thresholds.M1Router
+	batcher := search.NewEmbeddingBatcher(time.Duration(m1.EmbedBatchWindowMs)*time.Millisecond, m1.EmbedHighMaxBatchSize, embedFn).
+		WithLaneLimits(m1.EmbedLowMaxBatchSize, time.Duration(m1.EmbedCallTimeoutSeconds)*time.Second)
 	// 与单写者同理脱离信号 ctx：HTTP 排空期间仍有检索需要 embedding，由停机序列显式 Stop。
 	batcher.Start(context.WithoutCancel(ctx))
 	embedder = search.NewSyncBatcherAdapter(batcher)

@@ -104,3 +104,85 @@ func TestEmbed_LargeDirectFlush(t *testing.T) {
 		t.Errorf("expected 5 results, got %d", len(results))
 	}
 }
+
+// TestEmbed_HighNotBlockedByInflightLow 复现 2026-09-25 实测（ADR-0099）：后台 Low 批
+// 在下游执行期间（100 条约 14s），交互 High 请求被串行 flush 堵在其后，稳定 30s 超时。
+func TestEmbed_HighNotBlockedByInflightLow(t *testing.T) {
+	lowStarted := make(chan struct{})
+	releaseLow := make(chan struct{})
+	fn := func(_ context.Context, texts []string, _ string) ([][]float32, error) {
+		if strings.HasPrefix(texts[0], "bg") {
+			close(lowStarted)
+			<-releaseLow
+		}
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1}
+		}
+		return out, nil
+	}
+	b := NewEmbeddingBatcher(5*time.Millisecond, 100, fn)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { close(releaseLow); cancel(); b.Stop() }()
+	b.Start(ctx)
+
+	go func() { _, _ = b.Embed(ctx, []string{"bg-1"}, "m", PriorityLow) }()
+	<-lowStarted
+
+	hctx, hcancel := context.WithTimeout(ctx, time.Second)
+	defer hcancel()
+	res, err := b.Embed(hctx, []string{"user query"}, "m", PriorityHigh)
+	if err != nil || len(res) != 1 || res[0].Error != nil {
+		t.Fatalf("High 请求不得被在途 Low 批阻塞: err=%v res=%+v", err, res)
+	}
+}
+
+// TestEmbed_CallTimeoutUnfreezesLane 后端挂起只让该批失败，不冻结整条通道。
+func TestEmbed_CallTimeoutUnfreezesLane(t *testing.T) {
+	calls := 0
+	fn := func(ctx context.Context, texts []string, _ string) ([][]float32, error) {
+		calls++
+		if calls == 1 {
+			<-ctx.Done() // 模拟后端挂起
+			return nil, ctx.Err()
+		}
+		return [][]float32{{1}}, nil
+	}
+	b := NewEmbeddingBatcher(5*time.Millisecond, 100, fn).WithLaneLimits(0, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); b.Stop() }()
+	b.Start(ctx)
+
+	if res, _ := b.Embed(ctx, []string{"a"}, "m", PriorityHigh); res[0].Error == nil {
+		t.Fatal("首批应因下游超时失败")
+	}
+	res, err := b.Embed(ctx, []string{"b"}, "m", PriorityHigh)
+	if err != nil || res[0].Error != nil {
+		t.Fatalf("超时后通道必须恢复可用: err=%v res=%+v", err, res)
+	}
+}
+
+// TestEmbed_MultiTextSingleCycle 多文本一次入队、同批返回，而非逐条串行等待。
+func TestEmbed_MultiTextSingleCycle(t *testing.T) {
+	calls := 0
+	fn := func(_ context.Context, texts []string, _ string) ([][]float32, error) {
+		calls++
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{float32(i)}
+		}
+		return out, nil
+	}
+	b := NewEmbeddingBatcher(20*time.Millisecond, 100, fn)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); b.Stop() }()
+	b.Start(ctx)
+
+	res, err := b.Embed(ctx, []string{"x", "y", "z"}, "m", PriorityHigh)
+	if err != nil || len(res) != 3 {
+		t.Fatalf("err=%v len=%d", err, len(res))
+	}
+	if calls != 1 {
+		t.Fatalf("3 条文本应在同一批内完成，实际下游调用 %d 次", calls)
+	}
+}

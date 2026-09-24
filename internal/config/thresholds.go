@@ -45,6 +45,13 @@ type M1RouterThresholds struct {
 	WindowBreakerMinSamples       int     `toml:"window_breaker_min_samples"`
 	WindowBreakerThreshold        float64 `toml:"window_breaker_threshold"`
 	WindowBreakerCooldownSec      int     `toml:"window_breaker_cooldown_sec"`
+
+	// EmbeddingBatcher 调度（ADR-0099）：High/Low 独立 flush；Low 单批上限约束其在
+	// 串行后端上的占用；每次下游调用独立超时，后端挂起不冻结队列。
+	EmbedBatchWindowMs      int `toml:"embed.batch_window_ms"`     // 10
+	EmbedHighMaxBatchSize   int `toml:"embed.high_max_batch_size"` // 100
+	EmbedLowMaxBatchSize    int `toml:"embed.low_max_batch_size"`  // 8
+	EmbedCallTimeoutSeconds int `toml:"embed.call_timeout_s"`      // 30
 }
 
 type M2StorageThresholds struct {
@@ -79,7 +86,7 @@ type M3ObservabilityThresholds struct {
 type M4KernelThresholds struct {
 	MaxReplanAttempts             int     `toml:"max_replan_attempts"`            // 3
 	DefaultBudget                 int     `toml:"default_budget"`                 // 50000
-	MaxSteps                      int     `toml:"max_steps"`                      // 10
+	MaxSteps                      int     `toml:"max_steps"`                      // 24
 	Tier0MaxConcurrent            int     `toml:"tier0_max_concurrent"`           // 4 — 同 max_concurrent_nodes
 	SuspendIdleThresholdMin       int     `toml:"suspend_idle_threshold_minutes"` // 5
 	PlanDAGMaxNodes               int     `toml:"plan_dag.max_nodes"`             // 50
@@ -172,12 +179,14 @@ type M7ToolThresholds struct {
 }
 
 type M8OrchestratorThresholds struct {
-	LeaseTTLSeconds             int `toml:"lease.ttl_seconds"`                 // 60
-	HeartbeatSeconds            int `toml:"heartbeat.seconds"`                 // 15
-	HeartbeatJitter             int `toml:"heartbeat.jitter"`                  // 5
-	ReaperScanInterval          int `toml:"reaper.scan_interval_ms"`           // 1000
-	MaxAgentsDesktop            int `toml:"agents.max_desktop"`                // 2
-	MaxAgentsServer             int `toml:"agents.max_server"`                 // 3
+	LeaseTTLSeconds    int `toml:"lease.ttl_seconds"`       // 60
+	HeartbeatSeconds   int `toml:"heartbeat.seconds"`       // 15
+	HeartbeatJitter    int `toml:"heartbeat.jitter"`        // 5
+	ReaperScanInterval int `toml:"reaper.scan_interval_ms"` // 1000
+	MaxAgentsDesktop   int `toml:"agents.max_desktop"`      // 2
+	MaxAgentsServer    int `toml:"agents.max_server"`       // 3
+	// AgentsInteractiveReserved AgentPool 为交互会话保留的槽位（ADR-0025 §E 2026-09-25 追记）。
+	AgentsInteractiveReserved   int `toml:"agents.interactive_reserved"`       // 1
 	AgentRestartMaxInWindow     int `toml:"supervisor.restart_max_in_window"`  // 3
 	AgentRestartWindowSeconds   int `toml:"supervisor.restart_window_seconds"` // 60
 	SupervisorBackoffInitialMs  int `toml:"supervisor.backoff_initial_ms"`     // 200
@@ -299,6 +308,10 @@ func DefaultThresholds() Thresholds {
 			WindowBreakerMinSamples:       20,
 			WindowBreakerThreshold:        0.5,
 			WindowBreakerCooldownSec:      30,
+			EmbedBatchWindowMs:            10,
+			EmbedHighMaxBatchSize:         100,
+			EmbedLowMaxBatchSize:          8,
+			EmbedCallTimeoutSeconds:       30,
 		},
 		M2Storage: M2StorageThresholds{
 			SQLiteBusyTimeoutMs:      5000,
@@ -333,7 +346,7 @@ func DefaultThresholds() Thresholds {
 		M4Kernel: M4KernelThresholds{
 			MaxReplanAttempts:              3,
 			DefaultBudget:                  50000,
-			MaxSteps:                       10,
+			MaxSteps:                       24, // ADR-0098 决策七/八：7 + 观察循环 2×5 + 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1
 			Tier0MaxConcurrent:             4,
 			SuspendIdleThresholdMin:        5,
 			PlanDAGMaxNodes:                50,
@@ -411,6 +424,7 @@ func DefaultThresholds() Thresholds {
 			ReaperScanInterval:          1000,
 			MaxAgentsDesktop:            2,
 			MaxAgentsServer:             3,
+			AgentsInteractiveReserved:   1,
 			AgentRestartMaxInWindow:     3,
 			AgentRestartWindowSeconds:   60,
 			SupervisorBackoffInitialMs:  200,
