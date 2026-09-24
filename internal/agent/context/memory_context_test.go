@@ -169,7 +169,8 @@ func TestBuildPerceiveContext(t *testing.T) {
 	if msgs[1].Role != "system" {
 		t.Errorf("expected system role, got: %s", msgs[1].Role)
 	}
-	if !strings.Contains(sysContent, "Structure the user intent into a fsm.TaskModel JSON.") {
+	// 阶段契约来自 kernel/perceive.md（ADR-0098 决策三），须携带路由字段 Schema。
+	if !strings.Contains(sysContent, "TASK PERCEPTION") || !strings.Contains(sysContent, "NeedsTools") {
 		t.Errorf("expected instruction in system context, got: %s", sysContent)
 	}
 

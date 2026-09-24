@@ -6,6 +6,17 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（ADR-0098 回合输出通道分离与 S_RESPOND — 含**契约变更**）
+
+`docs/arch/decisions/ADR-0098-turn-output-channel-and-respond-state.md` 新增：
+
+- **[契约] `protocol.LLMFillEffect.Audience`**：零值 `AudienceInternal`（fail-closed）。只有 `AudienceUser`（当前仅 S_RESPOND）的 token 以 `AgentStreamEventToken` 发布；新增 LLM 阶段不声明即不外泄。`state.yaml par_inv_06`。
+- **[契约] FSM 第 14 态 `S_RESPOND`**：`AgentStateRespond` / `TriggerRespondReady` / `TriggerRespondDone` 追加在枚举尾部（状态值以 `%d` 落盘，禁止中间插入）。S_COMPLETE 只能由 S_RESPOND 进入（`par_inv_07`）；S_REFLECT 失败改为尽力而为继续进入 S_RESPOND。
+- **[契约] `protocol.AgentController.SetConversationHistory`**：session 每轮注入本轮之前的历史；阈值 `m4_kernel.conversation.history_max_messages/bytes`。
+- **[契约] `types.AgentStreamEventPhase` + `types.TurnPhase`**：阶段进度结构化事件，session 映射为 `status{type:"phase"}`。
+- 阶段契约 SSoT 收敛到 `configs/prompts/kernel/{perceive,plan,reflect,respond}.md`，记忆路径不再内联一句话指令；Perceive/Reflect 请求 `json_object` 约束解码；Perceive 输出 `NeedsTools` 由 Go 解析后路由直答。
+- 编写新 LLM 阶段时：默认内部受众；需要面向用户输出的只有 S_RESPOND，不得另开第二条用户输出通道。
+
 ## 2026-09-21（ADR-0096 桌面版/命令行版形态 — 含**破坏性变更**）
 
 `docs/arch/decisions/ADR-0096-desktop-shell-and-daemon-client-split.md` 新增（八条决策）：

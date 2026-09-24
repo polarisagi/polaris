@@ -115,6 +115,7 @@ func TestSpecParStates(t *testing.T) {
 		"s_interrupt":   types.AgentStateInterrupt,
 		"s_suspended":   types.AgentStateSuspended,
 		"s_await_agent": types.AgentStateAwaitAgent,
+		"s_respond":     types.AgentStateRespond,
 	}
 	yamlSet := make(map[string]bool, len(spec.Par.States))
 	for _, s := range spec.Par.States {
@@ -258,6 +259,7 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"s_interrupt":   types.AgentStateInterrupt,
 		"s_suspended":   types.AgentStateSuspended,
 		"s_await_agent": types.AgentStateAwaitAgent,
+		"s_respond":     types.AgentStateRespond,
 	}
 
 	expectedTriggers := map[string]types.AgentTrigger{
@@ -279,6 +281,8 @@ func TestSpecParTransitionsGoImplementation(t *testing.T) {
 		"resume":                    types.TriggerResume,
 		"await_agent":               types.TriggerAwaitAgent,
 		"agent_handoff_done":        types.TriggerAgentHandoffDone,
+		"respond_ready":             types.TriggerRespondReady,
+		"respond_done":              types.TriggerRespondDone,
 	}
 
 	allowedExtraEvents := map[string]bool{

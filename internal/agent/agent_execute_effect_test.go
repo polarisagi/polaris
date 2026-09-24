@@ -7,6 +7,7 @@ import (
 
 	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -64,7 +65,7 @@ func TestDoStreamInfer_StreamToolCall(t *testing.T) {
 	ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: ""}
 	close(ch)
 
-	resp, err := a.doStreamInfer(context.Background(), ch)
+	resp, err := a.doStreamInfer(context.Background(), ch, protocol.AudienceInternal)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestDoStreamInfer_StreamToolCall_MalformedPayloadSkipped(t *testing.T) {
 	ch <- types.StreamEvent{Type: types.StreamTextDelta, Content: "hello"}
 	close(ch)
 
-	resp, err := a.doStreamInfer(context.Background(), ch)
+	resp, err := a.doStreamInfer(context.Background(), ch, protocol.AudienceInternal)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

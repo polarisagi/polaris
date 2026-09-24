@@ -27,6 +27,23 @@
       }
     }
   },
+  "perceive_task": {
+    "type": "object",
+    "required": ["Goal"],
+    "properties": {
+      "Goal": { "type": "string" },
+      "SubTasks": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "Constraints": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "Complexity": { "type": "number" },
+      "NeedsTools": { "type": "boolean" }
+    }
+  },
   "reflect_result": {
     "type": "object",
     "properties": {

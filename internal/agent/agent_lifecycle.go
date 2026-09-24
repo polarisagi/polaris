@@ -36,6 +36,12 @@ func stateToTriggerMap() map[types.State]types.AgentTrigger {
 		"S_REFLECT_DONE":    types.TriggerReflectDone,
 		"S_REFLECT_FAILED":  types.TriggerReplanExhausted,
 		"S_ROLLBACK_OK":     types.TriggerRollbackDone,
+		// ADR-0098：直答路由与回复合成态
+		"S_PERCEIVE_DIRECT": types.TriggerRespondReady,
+		"S_PLAN_EMPTY":      types.TriggerRespondReady,
+		"S_RESPOND_RETRY":   types.TriggerRespondReady,
+		"S_RESPOND_DONE":    types.TriggerRespondDone,
+		"S_RESPOND_FAILED":  types.TriggerReplanExhausted,
 	}
 }
 
@@ -201,6 +207,14 @@ func (b *agentContextBuilder) BuildReflectContext(ctx context.Context, memory pr
 	msgs, err := agentctx.BuildReflectContext(ctx, memory, sCtx)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, "agentContextBuilder.BuildReflectContext", err)
+	}
+	return msgs, nil
+}
+
+func (b *agentContextBuilder) BuildRespondContext(ctx context.Context, memory protocol.MemoryFacade, sCtx *fsm.StateContext) ([]types.Message, error) {
+	msgs, err := agentctx.BuildRespondContext(ctx, memory, sCtx)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "agentContextBuilder.BuildRespondContext", err)
 	}
 	return msgs, nil
 }

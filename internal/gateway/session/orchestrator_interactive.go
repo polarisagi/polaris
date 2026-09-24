@@ -175,6 +175,9 @@ func (o *orchestrator) runInteractive(ctx context.Context, req Request, sink Sin
 		o.emitError(sink, "no_agent", "系统错误：未找到当前会话的 Agent 控制器", sessionID, nil)
 		return &Result{SessionID: sessionID, Aborted: true}, nil
 	}
+	// 内核按回合新建 Agent，对上文一无所知；历史须随每轮显式注入（ADR-0098 决策四）。
+	// 末条是本轮用户消息，已经以 SetTaskIntent 的污点意图形式进入内核，不重复携带。
+	agentCtrl.SetConversationHistory(history[:len(history)-1])
 	reply, inferErr, aborted = o.runFSMTurn(ctx, sink, sessionID, agentCtrl, req.Input)
 	if aborted {
 		// GD-13-004 部分缓解：客户端断连/中止时不再静默丢弃已产出的部分回复。

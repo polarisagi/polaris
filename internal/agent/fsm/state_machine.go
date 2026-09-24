@@ -95,8 +95,13 @@ type StateContext struct {
 	// 检索按它过滤。由 Agent.refreshWorkspaceContext 在 Mu 下写入；无项目 = 默认项目。
 	ProjectID   string
 	RawIntentTS taint.TaintedString // 原始自然语言意图 (外部输入，带污点)
-	TaskModel   *TaskModel          // S_PERCEIVE 产出
-	DAGModel    *DAGModel           // S_PLAN 产出
+	// ConversationHistory 本轮之前的对话（ADR-0098 决策四），已剔除 system 角色；
+	// 仅 Perceive/Respond 渲染进 prompt，按 TaintHigh 围栏。
+	ConversationHistory []types.Message
+	// RespondAttempts S_RESPOND 空回复已重试次数（ADR-0098）。每回合新建 Agent，无需复位。
+	RespondAttempts int
+	TaskModel       *TaskModel // S_PERCEIVE 产出
+	DAGModel        *DAGModel  // S_PLAN 产出
 
 	// B-1 pre-match (Internal)
 	PreMatchSkillID string
@@ -234,6 +239,9 @@ type TaskModel struct {
 	SubTasks    []string
 	Constraints []string
 	Complexity  float64
+	// NeedsTools Perceive 的路由判定（ADR-0098）。指针区分"模型明确说不需要"与
+	// "字段缺失"：只有前者走直答，缺失一律保守进 S_PLAN。
+	NeedsTools *bool
 }
 
 // DAGModel LLM 填槽产出——可执行的有向无环图。
@@ -391,7 +399,7 @@ func (sm *StateMachine) requeueStashedTriggers(ctx context.Context) {
 
 // handleReplanTransition 处理转入 S_REPLAN 的计数/耗尽检查与扩展激活分支
 // （从 Dispatch 拆出，gocyclo/nestif 治理，行为不变）。调用方需持有 sm.mu。
-func (sm *StateMachine) handleReplanTransition(ctx context.Context, sCtx *StateContext, current types.AgentState, t Transition, effects []protocol.Effect) ([]protocol.Effect, error) {
+func (sm *StateMachine) handleReplanTransition(ctx context.Context, sCtx *StateContext, current types.AgentState, t Transition) ([]protocol.Effect, error) {
 	sm.replanCount++
 
 	// S_REPLAN：尝试按需激活未加载的扩展，补充工具集后重规划。
@@ -407,6 +415,12 @@ func (sm *StateMachine) handleReplanTransition(ctx context.Context, sCtx *StateC
 
 	sm.history = append(sm.history, current)
 	sm.current = t.To
+
+	// 本函数是 TriggerReplanDone 的唯一产出方：各条 → S_REPLAN 转移声明的
+	// "S_REPLAN_DONE" 占位 Effect 必须丢弃，否则与下面的 Effect / 异步激活回调
+	// 各投递一次，第二次到达时已在 S_PLAN，命中 no transition 使 Run() 带错退出，
+	// 事件流收不到 task_done、客户端挂死（2026-09-25 实测）。
+	var effects []protocol.Effect
 
 	if !needActivate {
 		// 如果不需要激活，则直接返回一个空 effect 立即触发 ReplanDone
@@ -561,7 +575,7 @@ func (sm *StateMachine) Dispatch(ctx context.Context, sCtx *StateContext, trigge
 
 	// 特殊处理: S_REPLAN 计数 + 耗尽检查
 	if t.To == types.AgentStateReplan {
-		return sm.handleReplanTransition(ctx, sCtx, current, t, effects)
+		return sm.handleReplanTransition(ctx, sCtx, current, t)
 	}
 
 	// 记录历史

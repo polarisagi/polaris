@@ -67,10 +67,22 @@ func TestStateMachine_FullForwardPath(t *testing.T) {
 		t.Error("S_REFLECT 应产生 1 个 LLMFillEffect")
 	}
 
-	// 6. S_REFLECT → S_COMPLETE (正向终态)
-	_, err = sm.Dispatch(context.Background(), sCtx, types.TriggerReflectDone)
+	// 6. S_REFLECT → S_RESPOND（ADR-0098：执行路径必须经回复合成态）
+	effects, err = sm.Dispatch(context.Background(), sCtx, types.TriggerReflectDone)
 	if err != nil {
-		t.Fatalf("S_REFLECT → S_COMPLETE: %v", err)
+		t.Fatalf("S_REFLECT → S_RESPOND: %v", err)
+	}
+	if sm.Current() != types.AgentStateRespond {
+		t.Errorf("期望 S_RESPOND, 实际 %v", sm.Current())
+	}
+	if len(effects) != 1 || !effects[0].IsLLMFill() {
+		t.Error("S_RESPOND 应产生 1 个 LLMFillEffect")
+	}
+
+	// 7. S_RESPOND → S_COMPLETE (正向终态)
+	_, err = sm.Dispatch(context.Background(), sCtx, types.TriggerRespondDone)
+	if err != nil {
+		t.Fatalf("S_RESPOND → S_COMPLETE: %v", err)
 	}
 	if sm.Current() != types.AgentStateComplete {
 		t.Errorf("期望 S_COMPLETE, 实际 %v", sm.Current())
@@ -78,7 +90,7 @@ func TestStateMachine_FullForwardPath(t *testing.T) {
 
 	// 验证历史
 	history := sm.History()
-	expectedLen := 6
+	expectedLen := 7
 	if len(history) != expectedLen {
 		t.Errorf("历史应为 %d 步, 实际 %d: %v", expectedLen, len(history), history)
 	}

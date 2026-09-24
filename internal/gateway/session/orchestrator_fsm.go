@@ -134,6 +134,10 @@ func (o *orchestrator) handleFSMEvent( //nolint:gocyclo
 			*inferErr = ev.Content
 		}
 		o.emitError(sink, "fsm_error", ev.Content, sessionID, nil)
+	case types.AgentStreamEventPhase:
+		// 回合阶段进度（ADR-0098）：内部阶段不再推 token，客户端靠它在首 token 前
+		// 展示进度。阶段键原样透传，本地化由客户端负责。
+		_ = sink.Emit(Event{Kind: KindStatus, Payload: map[string]any{"type": "phase", "phase": ev.Content}})
 	case types.AgentStreamEventNotice:
 		// 系统旁路提示（当前唯一来源：LLM 跨 Model Pool 降级，GD-13-005）。
 		// 走 KindStatus 而非 KindDelta——它不是模型输出，绝不能进 *reply

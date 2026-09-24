@@ -81,6 +81,11 @@ func parsePlanOnSuccess(sCtx *StateContext, pCtx protocol.StateContext, content 
 		Nodes: execNodes,
 		Edges: execEdges,
 	}
+	// 解析成功但无节点 = 模型判定无需工具：直接合成回复，不空跑 Validate/Execute/Reflect。
+	if len(execNodes) == 0 {
+		metrics.RecordTurnRoute(context.Background(), routePlanEmpty)
+		return "S_PLAN_EMPTY", nil
+	}
 	return "S_PLAN_DONE", nil
 }
 
@@ -123,10 +128,13 @@ func (sm *StateMachine) registerTransitions() {
 					PromptFn: func(pCtx protocol.StateContext) []types.Message {
 						return sm.promptPerceive(sCtx, pCtx)
 					},
-					OnSuccess: sm.onPerceiveSuccess,
-					OnFailure: sm.onPerceiveFailure,
-					MaxRetry:  1,
-					ModelPool: string(types.ModelPoolGeneral),
+					OnSuccess: func(_ protocol.StateContext, fill []byte) (types.State, error) {
+						return sm.applyPerceiveResult(sCtx, fill)
+					},
+					OnFailure:      sm.onPerceiveFailure,
+					MaxRetry:       1,
+					ModelPool:      string(types.ModelPoolGeneral),
+					ResponseFormat: &types.ResponseFormat{Type: "json_object"},
 				},
 			}, nil
 		},
@@ -268,10 +276,13 @@ func (sm *StateMachine) registerTransitions() {
 					PromptFn: func(pCtx protocol.StateContext) []types.Message {
 						return sm.promptReflect(sCtx, pCtx)
 					},
-					OnSuccess: sm.onReflectSuccess,
-					OnFailure: sm.onReflectFailure,
-					MaxRetry:  0,
-					ModelPool: string(types.ModelPoolGeneral),
+					OnSuccess: func(pCtx protocol.StateContext, fill []byte) (types.State, error) {
+						return sm.applyReflectResult(sCtx, pCtx, fill)
+					},
+					OnFailure:      sm.onReflectFailure,
+					MaxRetry:       0,
+					ModelPool:      string(types.ModelPoolGeneral),
+					ResponseFormat: &types.ResponseFormat{Type: "json_object"},
 				},
 			}, nil
 		},
@@ -311,14 +322,13 @@ func (sm *StateMachine) registerTransitions() {
 		},
 	})
 
-	// S_REFLECT → S_COMPLETE: 反思完成 ⇒ 正向终态
+	// S_REFLECT → S_RESPOND: 反思完成 ⇒ 合成用户回复（ADR-0098，原直接进 S_COMPLETE，
+	// 执行路径因此从不产出回复）。
 	sm.add(Transition{
 		From:    types.AgentStateReflect,
 		Trigger: types.TriggerReflectDone,
-		To:      types.AgentStateComplete,
-		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
-			return nil, nil
-		},
+		To:      types.AgentStateRespond,
+		Effects: sm.respondEffects,
 	})
 
 	// S_ROLLBACK → S_REPLAN: Saga 逆序补偿完成
@@ -410,6 +420,8 @@ func (sm *StateMachine) registerTransitions() {
 			return nil, nil
 		},
 	})
+
+	sm.registerRespondTransitions()
 
 	// S_REFLECT → S_FAILED: 无法反思
 	sm.add(Transition{

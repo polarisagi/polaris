@@ -116,6 +116,7 @@ func (a *Agent) handleTaintEgressBlocked(ctx context.Context, err error) error {
 func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	ctx, span := otel.Tracer("agent").Start(ctx, "agent.runExecuteDAG")
 	defer span.End()
+	a.publishTurnPhase(types.AgentStateExecute)
 
 	if a.sCtx.DAGModel == nil {
 		// DAGModel 为空时跳过执行（等价于空 DAG），直接推进 ExecuteDone

@@ -31,7 +31,7 @@
 - **症状特征**：重启后插件市场/插件目录页面短暂为空，过一两分钟自己又有了。
 - **归类模块**：M13-bis
 - **根因类别**：1) 启动期后台全量同步尚未跑完（约 1~2 分钟）；2) 多个 polaris 进程共用同一个 `~/.polarisagi/polaris/data/polaris.db`（如 launchd 常驻实例 + 本地测试构建同时跑）。
-- **排查起点**：`internal/gateway/server/server_init.go` `bootMarketplaceInit`；`scripts/restart.sh` 的 `POLARIS_DATA_DIR` 隔离机制。
+- **排查起点**：`internal/gateway/server/server_init.go` `bootMarketplaceInit`；`lsof`/`pgrep -fl "polaris serve"` 确认是否有多个实例共用数据目录（`scripts/restart.sh` 自 2026-09-22 起直接热部署常驻服务，不再另起隔离沙箱实例）。
 
 ### 症状 5：怀疑外部阻塞式调用导致卡死
 - **症状特征**：怀疑"持有 DB 连接/Tx/未关闭 Rows 期间发起阻塞式外部调用（LLM/网络）"导致卡死。
@@ -80,6 +80,12 @@
 - **归类模块**：M04 / M08
 - **根因类别**：`TaskEntry.SpawnDepth` 从未被任何调用方赋值（恒为零值），校验逻辑本身没问题，只是永远拿到 0——传播链路（`agent_handoff.go` 构造 `TaskEntry` → `007_tasks.sql` 列 → `PeekTask` 回填 → `StateContext.SpawnDepth` → `SetSpawnDepth`）此前完全缺失。
 - **排查起点**：确认 `007_tasks.sql` 是否有 `spawn_depth` 列 + `sqlite_blackboard.go`/`sqlite_blackboard_ops.go` 的 `PostTask`/`PeekTask` 是否读写该列 + `agent_handoff.go` 构造 `entry.SpawnDepth` 时是否为 `a.sCtx.SpawnDepth + 1`；真实案例见 `ADR-0084` §引用代码（阶段05 P-03 实现 MCP A2A 时发现，2026-08-02）。
+
+### 症状 13：对话回复里夹带 JSON / DAG / TaskModel 等内部结构，或多轮对话"失忆"
+- **症状特征**：助手回复出现 ```json 围栏的 `nodes`/`dag`/`Goal` 等结构、同一段话重复两遍，日志伴随 `schema_ref=plan_dag ... invalid JSON` 与 `from=2 to=9`（S_PLAN→S_FAILED）；或第二轮起模型不记得上一轮内容。
+- **归类模块**：M04 / M13
+- **根因类别**：内部阶段 token 被当作用户回复推送（LLMFillEffect 受众未隔离）/ 无回复合成态 / 记忆路径 prompt 未加载阶段 Schema / session 未向内核注入对话历史（ADR-0098，2026-09-24 修复）。
+- **排查起点**：`internal/agent/agent_execute_effect_helpers.go` `doStreamInfer`（按 `Audience` 发布）→ `internal/agent/fsm/transitions_respond.go` → `internal/agent/context/respond_context.go`；历史注入看 `internal/gateway/session/orchestrator_fsm.go` `SetConversationHistory`。
 
 **维护规范**（避免列表随项目变大而失控）：
 - 每项只留"高命中率的路由信息"，具体排查过程留给排查起点指向的文件/章节，不要在列表里展开叙述。

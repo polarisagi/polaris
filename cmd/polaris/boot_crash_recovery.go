@@ -71,6 +71,7 @@ var crashRecoveryReDriveStates = map[string]bool{
 	fmt.Sprintf("%d", types.AgentStatePerceive): true,
 	fmt.Sprintf("%d", types.AgentStatePlan):     true,
 	fmt.Sprintf("%d", types.AgentStateReflect):  true,
+	fmt.Sprintf("%d", types.AgentStateRespond):  true, // ADR-0098：纯 LLM 回复合成，无外部副作用
 	"": true, // 无状态迁移记录：崩溃发生在第一次状态转移完成之前
 }
 

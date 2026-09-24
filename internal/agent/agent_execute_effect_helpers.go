@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -157,94 +156,6 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 	return nextState, err, false //nolint:wrapcheck
 }
 
-// doStreamInfer 从拆分出 Stream 事件循环
-
-func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent) (*types.ProviderResponse, error) {
-	var content strings.Builder
-	var reasoning strings.Builder
-	var usage types.Usage
-	var inferErr error
-	var toolCalls []types.InferToolCall
-
-	for ev := range ch {
-		switch ev.Type {
-		case types.StreamThinking:
-			reasoning.WriteString(ev.Content)
-			a.publishStreamEvent(types.AgentStreamEvent{
-				Type:       types.AgentStreamEventThinking,
-				Content:    ev.Content,
-				TaintLevel: a.sCtx.GlobalTaintLevel,
-			})
-		case types.StreamTextDelta:
-			content.WriteString(ev.Content)
-			a.publishStreamEvent(types.AgentStreamEvent{
-				Type:       types.AgentStreamEventToken,
-				Content:    ev.Content,
-				TaintLevel: a.sCtx.GlobalTaintLevel,
-			})
-		case types.StreamToolCall:
-			// adapter 侧（stream.go/anthropic_request.go/google_request.go）已把
-			// 原生 tool_use/tool_calls 事件统一打包为 {"id","name","input"} JSON，
-			// 这里是全链路中第一个真正消费 StreamToolCall 的地方——此前该事件类型
-			// 只被产出、从未被读取，原生 function-calling 通路因此实际死管线。
-			var tc struct {
-				ID    string          `json:"id"`
-				Name  string          `json:"name"`
-				Input json.RawMessage `json:"input"`
-			}
-			if jsonErr := json.Unmarshal([]byte(ev.Content), &tc); jsonErr != nil {
-				slog.Warn("agent: doStreamInfer failed to parse StreamToolCall payload, skipping", "err", jsonErr)
-				continue
-			}
-			toolCalls = append(toolCalls, types.InferToolCall{ID: tc.ID, Name: tc.Name, Input: tc.Input})
-			a.publishStreamEvent(types.AgentStreamEvent{
-				Type:       types.AgentStreamEventToolCall,
-				TaintLevel: a.sCtx.GlobalTaintLevel,
-				ToolName:   tc.Name,
-				ToolInput:  tc.Input,
-			})
-		case types.StreamSystemNotice:
-			// 跨 Model Pool 降级提示（GD-13-005）：只透传给前端展示，
-			// **不**写进 content/reasoning——它不是模型输出，混进正文会污染
-			// 助手回复内容与后续轮次的消息历史。
-			a.publishStreamEvent(types.AgentStreamEvent{
-				Type:       types.AgentStreamEventNotice,
-				Content:    ev.Content,
-				TaintLevel: a.sCtx.GlobalTaintLevel,
-			})
-		case types.StreamError:
-			if inferErr == nil {
-				inferErr = apperr.New(apperr.CodeProviderExhausted, ev.Content)
-			}
-		case types.StreamCancelled:
-			// 流被中断（router_stream.go wrapStreamChannel 的 ctx.Done() 分支，或
-			// StreamBudgetGuard 硬阻断）必须产生错误状态转移，不能放任 ch 直接
-			// 关闭——此前该分支缺失，content/inferErr 双双为空，被上游误判为
-			// "成功但空内容"，最终在 session 层只剩一条通用的"推理返回空内容，
-			// 请检查模型配置或重试"、日志无任何可追溯根因（直接违反本包 CLAUDE.md
-			// 「MUST NOT 将 LLM 幻觉/失败响应静默视为成功」）。
-			if inferErr == nil {
-				inferErr = apperr.New(apperr.CodeCancelled, "推理流被中断: "+ev.Content).WithRetryAfter(5)
-			}
-		}
-		if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
-			usage.InputTokens = ev.Usage.InputTokens
-			usage.OutputTokens = ev.Usage.OutputTokens
-			usage.CacheHitTokens = ev.Usage.CacheHitTokens
-		}
-	}
-
-	if inferErr != nil {
-		return nil, inferErr
-	}
-	return &types.ProviderResponse{
-		Content:          content.String(),
-		ReasoningContent: reasoning.String(),
-		ToolCalls:        toolCalls,
-		Usage:            usage,
-	}, nil
-}
-
 // recordLLMFillEffectMemory 是 executeEffect 中 HANDLE_MEM 标签体的拆出版本
 // （R7 文件行数治理，2026-07-07），逻辑与拆分前完全一致：LLMFillEffect 分支
 // 无论走 FastPath/PRM候选/标准单次推理哪条路径，最终都汇合到这里按 nextState
@@ -261,7 +172,8 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 		return
 	}
 	// 成功完成感知，将用户意图作为事件写入记忆（由于当前缺失 TaskIntent，仅做预留演示）
-	if nextState == "S_PERCEIVE_DONE" && a.memory != nil && (resp != nil || a.sCtx.SurpriseIndex < 0.3) {
+	perceived := nextState == "S_PERCEIVE_DONE" || nextState == "S_PERCEIVE_DIRECT"
+	if perceived && a.memory != nil && (resp != nil || a.sCtx.SurpriseIndex < 0.3) {
 		var content string
 		if resp != nil {
 			content = resp.Content

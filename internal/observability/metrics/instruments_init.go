@@ -63,6 +63,12 @@ func initInstruments(meter metric.Meter, ie *instrumentInitErrs) {
 	)
 	ie.capture("polaris.system1_bypass_total", err)
 
+	InstrTurnRouteTotal, err = meter.Int64Counter(
+		"polaris.cognition.turn_route_total",
+		metric.WithDescription("Agent 回合路由分布 (label: route=direct/plan/plan_empty/perceive_unparsed)，ADR-0098"),
+	)
+	ie.capture("polaris.cognition.turn_route_total", err)
+
 	InstrRetrievalExplainBitsTotal, err = meter.Int64Counter(
 		"polaris.retrieval.explain_bits_total",
 		metric.WithDescription("Retrieval explain bits distribution (label: bit)"),

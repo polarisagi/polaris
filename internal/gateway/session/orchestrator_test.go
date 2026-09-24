@@ -181,6 +181,7 @@ type fakeAgentController struct {
 	events      chan types.AgentStreamEvent
 	interrupted bool
 	sendErr     error
+	history     []types.Message
 }
 
 func newFakeAgentController() *fakeAgentController {
@@ -207,6 +208,7 @@ func (a *fakeAgentController) SubscribeStream(ctx context.Context) <-chan types.
 	return a.events
 }
 func (a *fakeAgentController) InjectReplayData(calls []protocol.ReplayLLMCall) {}
+func (a *fakeAgentController) SetConversationHistory(h []types.Message)        { a.history = h }
 
 // fakeAgentPool：Acquire 返回预置的 fakeAgentController；AcquireHeadless 返回
 // 预置的 AgentResult 或 error。
@@ -467,5 +469,49 @@ func TestRunTurn_Headless_HookBlocked(t *testing.T) {
 	}
 	if !res.Aborted {
 		t.Error("expected Aborted=true when hook blocks headless turn")
+	}
+}
+
+// TestRunTurn_Interactive_InjectsHistoryAndMapsPhase 验证 ADR-0098：
+//  1. 本轮之前的对话历史注入内核（不含本轮用户消息——它已作为污点意图进入）；
+//  2. 内核阶段事件映射为 status{type:"phase"}，且不计入回复正文。
+func TestRunTurn_Interactive_InjectsHistoryAndMapsPhase(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventPhase, Content: string(types.TurnPhasePerceive)}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventToken, Content: "记得"}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+
+	persistence := newFakePersistence()
+	persistence.history = []types.Message{
+		{Role: "user", Content: "我叫小明"},
+		{Role: "assistant", Content: "你好小明"},
+	}
+	pool := &fakeAgentPool{ctrl: ctrl}
+	orc := newTestOrchestrator(t, persistence, &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, pool)
+	sink := &recordingSink{}
+
+	res, err := orc.RunTurn(context.Background(), Request{SessionID: "s1", Input: "我叫什么", Channel: "web"}, sink)
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if res.Reply != "记得" {
+		t.Errorf("phase 事件不得混入回复正文，Reply = %q", res.Reply)
+	}
+	if len(ctrl.history) != 2 || ctrl.history[1].Content != "你好小明" {
+		t.Fatalf("内核收到的历史 = %+v，应为本轮之前的两条", ctrl.history)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	found := false
+	for _, e := range sink.events {
+		if e.Kind == KindStatus && e.Payload["type"] == "phase" {
+			found = e.Payload["phase"] == "perceive"
+		}
+	}
+	if !found {
+		t.Error("缺少 status{type:phase, phase:perceive} 事件")
 	}
 }

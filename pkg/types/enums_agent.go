@@ -28,6 +28,9 @@ const (
 	AgentStateInterrupt                    // S_INTERRUPT: 用户中断暂停态（非终态，可 Resume/Redirect/Abort）
 	AgentStateSuspended                    // S_SUSPENDED: 空闲挂起（Suspend-on-Idle）
 	AgentStateAwaitAgent                   // S_AWAIT_AGENT: 等待被委派的 Handoff 子任务终态
+	// S_RESPOND: 回合唯一的用户回复出口（ADR-0098）。追加在尾部而非按流程位置插入：
+	// 状态以 %d 落盘于 EventLog，插入中间会让历史事件与崩溃恢复白名单错位。
+	AgentStateRespond
 )
 
 // AgentTrigger 定义驱动 FSM 状态转移的触发器枚举。
@@ -53,6 +56,8 @@ const (
 	TriggerResume            // 从挂起状态恢复 → S_IDLE
 	TriggerAwaitAgent        // s_execute -> s_await_agent
 	TriggerAgentHandoffDone  // s_await_agent -> s_execute
+	TriggerRespondReady      // s_perceive/s_plan -> s_respond：无需执行工具，直答（ADR-0098）
+	TriggerRespondDone       // s_respond -> s_complete
 )
 
 // InterruptAction 定义中断处理语义。
