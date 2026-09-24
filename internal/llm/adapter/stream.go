@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -78,11 +80,11 @@ func flushPendingToolCalls(ctx context.Context, ch chan<- types.StreamEvent, too
 // tool_call 参数拼装/修复后逐个 emit 出去（从 SendStreamRequest 拆出，nestif 治理，行为不变）。
 // 返回 ctxDone=true 时调用方应立即从 SendStreamRequest 的 goroutine return。
 func emitCollectedToolCalls(ctx context.Context, ch chan<- types.StreamEvent, toolBuilders map[int]*toolCallState) (ctxDone bool) {
-	for idx := range len(toolBuilders) {
-		s, ok := toolBuilders[idx]
-		if !ok {
-			continue
-		}
+	// 按实际 index 排序遍历：此前 `for idx := range len(toolBuilders)` 只取 0..n-1，
+	// Provider 给出的 index 不从 0 开始或不连续时（DeepSeek 思考模式实测间歇出现），
+	// 已收齐的工具调用被静默跳过，上游只剩思考链与空正文。
+	for _, idx := range slices.Sorted(maps.Keys(toolBuilders)) {
+		s := toolBuilders[idx]
 		argsStr := s.arguments.String()
 		if argsStr == "" {
 			argsStr = "{}"
@@ -195,6 +197,17 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		// SSE data 帧"的情形，不影响模型确实生成 0 token 就正常收尾的合法场景。
 		emittedAny := false
 		lastFinishReason := ""
+		// 流级诊断（HE-1）：正文与工具调用双空时，上游只看到"模型没输出"，无从区分
+		// 截断（length）、内容过滤、只输出了思考链等根因。
+		var textBytes, reasoningBytes, completionTokens int
+		sawToolCall := false
+		logIfEmpty := func() {
+			if textBytes == 0 && !sawToolCall {
+				slog.Warn("llm stream: ended without content or tool calls",
+					"finish_reason", lastFinishReason, "reasoning_bytes", reasoningBytes,
+					"completion_tokens", completionTokens)
+			}
+		}
 
 		for scanner.Scan() {
 			select {
@@ -226,7 +239,9 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 				continue
 			}
 			if data == "[DONE]" {
+				sawToolCall = sawToolCall || len(toolBuilders) > 0
 				flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
+				logIfEmpty()
 				return
 			}
 
@@ -251,6 +266,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 				}
 				// API 返回的精确值优先；更新累计输出 token，供后续 cancel 补偿用
 				accumulatedOutputTokens = chunk.Usage.CompletionTokens
+				completionTokens = chunk.Usage.CompletionTokens
 			}
 
 			if len(chunk.Choices) == 0 {
@@ -273,6 +289,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			// 思考链 delta（DeepSeek thinking mode）
 			if delta.ReasoningContent != "" {
+				reasoningBytes += len(delta.ReasoningContent)
 				select {
 				case ch <- types.StreamEvent{Type: types.StreamThinking, Content: delta.ReasoningContent}:
 					emittedAny = true
@@ -283,6 +300,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			// 文本 delta
 			if delta.Content != "" {
+				textBytes += len(delta.Content)
 				// 无精确 usage 时累计字符估算，供 cancel 补偿参考
 				if chunk.Usage == nil {
 					accumulatedOutputTokens += len([]rune(delta.Content)) / 3
@@ -315,6 +333,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			if choice.FinishReason == "tool_calls" {
 				if len(toolBuilders) > 0 {
 					emittedAny = true
+					sawToolCall = true
 				}
 				if ctxDone := emitCollectedToolCalls(ctx, ch, toolBuilders); ctxDone {
 					return
@@ -324,7 +343,9 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			}
 		}
 
+		sawToolCall = sawToolCall || len(toolBuilders) > 0
 		flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
+		logIfEmpty()
 		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 			select {
 			case ch <- types.StreamEvent{Type: types.StreamError, Content: fmt.Sprintf("stream read: %v", err)}:

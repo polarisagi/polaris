@@ -163,3 +163,38 @@ func TestSSEParser_ToolCallsFlushedWithoutToolCallsFinish(t *testing.T) {
 		t.Fatalf("工具调用应在流结束时补发，得到 %v", calls)
 	}
 }
+
+// TestSSEParser_SparseToolCallIndex 工具调用 index 不从 0 开始时不得被静默跳过。
+func TestSSEParser_SparseToolCallIndex(t *testing.T) {
+	client := &OpenAICompatibleClient{
+		BaseURL: "http://dummy",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+				body := strings.Join([]string{
+					`data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_a","function":{"name":"sys_probe","arguments":"{}"}}]},"finish_reason":null}]}`,
+					`data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":3,"id":"call_b","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+					`data: [DONE]`,
+				}, "\n\n") + "\n\n"
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)),
+					Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
+			}),
+		},
+	}
+	req := &types.InferRequest{Messages: []types.Message{{Role: "user", Content: "hi"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ch, err := client.SendStreamRequest(ctx, nil, []byte("test-key"), translateRequest(req, true), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for ev := range ch {
+		if ev.Type == types.StreamToolCall {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("稀疏 index 的 2 个工具调用应全部发出，实际 %d", n)
+	}
+}
