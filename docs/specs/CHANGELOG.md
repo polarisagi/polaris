@@ -6,6 +6,14 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（ADR-0099 Embedding 调度 / ADR-0098 决策五～九 — 含**契约变更**）
+
+- **[契约] `search.Embedder.Embed(ctx, text)`**（ADR-0099）：调用方 ctx 贯穿到下游 HTTP；新增实现须遵守调用方截止时间，无上游 ctx 的调用点显式传 `context.Background()` 并注释原因。EmbeddingBatcher 改为 High/Low 独立通道，阈值 `m1_router.embed.*`。
+- **[契约] `TriggerFillRetry` / `TriggerReflectContinue`**（ADR-0098 决策七/八，枚举尾部追加）：空输出自环重试；反思判定未达成时回到规划（共用 ReplanGuard）。
+- **行为变更**：重规划耗尽不再进入 S_FAILED，而是转 S_RESPOND 说明失败（`TurnDegraded`，指标按失败计，决策九）；`m4_kernel.max_steps` 10 → 24。
+- **安全接线**：Agent 执行节点前 JIT 签发一次性能力令牌（M07 §6）；S_VALIDATE L1 与执行闸门同问 `(agent, tool_execute, <tool>)`；本地令牌先于 IP 鉴权冷却判定（ADR-0096 决策五追记）；AgentPool 交互预留槽位 `m8.agents.interactive_reserved`（ADR-0025 §E 追记）。
+- 编写新的内核阶段或改阶段契约模板时：须保持 `internal/agent/turn_contract_eval_test.go` 全绿（回合契约评测，HE-4）。
+
 ## 2026-09-25（ADR-0098 回合输出通道分离与 S_RESPOND — 含**契约变更**）
 
 `docs/arch/decisions/ADR-0098-turn-output-channel-and-respond-state.md` 新增：
