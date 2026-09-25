@@ -9,7 +9,7 @@
 > **一句话定位**：Go 状态机持有控制流，LLM（Large Language Model，大语言模型） 仅概率性填空。`[HE-Rule-5]` `[Tier-0-Limit]`
 >
 > **实现语言**：Go/Rust | **代码位置**：`internal/agent/`（DAG 执行引擎见 `internal/execute/dag/`）
-<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 1.1:100 输出通道+S_RESPOND / 2:112 Suspend-on-Idle / 3:128 S_VALIDATE / 4:177 DAG（Directed Acyclic Graph，有向无环图） / 5:274 System1/2 / 6:302 WorldModel / 7:313 推理预算 / 8:372 CrashRecovery / 8-bis:422 Handoff唤醒事件化+无损续跑 / 12:432 已知Bug修复记录 / 13:441 (SOFT)降级 / 14:459 跨模块契约 / 15:483 默认参数 -->
+<!-- §跳读: 0-bis:13 职责 / 0-ter:26 不变量速查 / 1:44 状态机 / 1.1:100 输出通道+S_RESPOND / 2:120 Suspend-on-Idle / 3:136 S_VALIDATE / 4:190 DAG（Directed Acyclic Graph，有向无环图） / 5:287 System1/2 / 6:315 WorldModel / 7:326 推理预算 / 8:385 CrashRecovery / 8-bis:435 Handoff唤醒事件化+无损续跑 / 12:445 已知Bug修复记录 / 13:454 (SOFT)降级 / 14:472 跨模块契约 / 15:496 默认参数 -->
 ## 0-bis. 职责边界
 
 | M4 **是** | M4 **不是** |
