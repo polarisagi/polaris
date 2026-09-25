@@ -89,7 +89,7 @@ func (ir *InferenceRouter) overflowFailover(ctx context.Context, msgs []types.Me
 		}()
 		if err == nil && resp != nil {
 			ir.recordFailoverMetrics(ctx, next, resp, start)
-			if nreq.ModelPool != req.ModelPool {
+			if nreq.ModelPool != req.ModelPool && isCapabilityDowngrade(req.ModelPool) {
 				resp.DegradedFromPool = req.ModelPool
 			}
 			slog.Info("inference_router: context overflow served by larger-window provider",
@@ -125,7 +125,7 @@ func (ir *InferenceRouter) streamOverflowFailover(ctx context.Context, msgs []ty
 			slog.Info("inference_router: stream context overflow served by larger-window provider",
 				"from", failed.name, "to", next.name, "window", next.provider.Capabilities().MaxContextTokens)
 			wrapped := ir.wrapStreamChannel(ctx, ch, nreq, next.name)
-			if nreq.ModelPool != req.ModelPool {
+			if nreq.ModelPool != req.ModelPool && isCapabilityDowngrade(req.ModelPool) {
 				return prependDegradeNotice(ctx, wrapped, req.ModelPool), nil
 			}
 			return wrapped, nil
@@ -138,4 +138,11 @@ func (ir *InferenceRouter) streamOverflowFailover(ctx context.Context, msgs []ty
 		failed, cause, window = next, err, next.provider.Capabilities().MaxContextTokens
 	}
 	return nil, requestFaultError("InferenceRouter.StreamInfer", failed.name, cause)
+}
+
+// isCapabilityDowngrade 报告从 pool 回落是否意味着模型能力下降、值得告知用户。只有贵档
+// reasoning 池回落才是；日常阶段请求的 default/general 池回落到其他档（例如用户只配了
+// general 角色的模型）不是降级，提示"高阶推理模型不可用"属误报（ADR-0101 决策七）。
+func isCapabilityDowngrade(pool string) bool {
+	return types.ModelPool(pool) == types.ModelPoolReasoning
 }

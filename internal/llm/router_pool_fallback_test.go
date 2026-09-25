@@ -115,3 +115,27 @@ func TestNoPoolSpecified_KeepsGlobalBest(t *testing.T) {
 		t.Fatalf("unpooled request must not be marked as degraded, got %q", resp.DegradedFromPool)
 	}
 }
+
+// 日常阶段请求 default 池、实际只有 general 角色模型时回落不是能力降级，不得向用户推送
+// "高阶推理模型不可用"（ADR-0101 决策七）。
+func TestCrossPoolFallback_DefaultPoolFallbackIsSilent(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+	reg.RegisterWithRole("general-p1", "GeneralP1", "general",
+		&mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 1.0}})
+	router := NewInferenceRouter(reg, nil)
+	msgs := []types.Message{{Role: "user", Content: "hi"}}
+
+	resp, err := router.Infer(context.Background(), msgs, types.WithModelPool("default"))
+	if err != nil || resp.DegradedFromPool != "" {
+		t.Fatalf("default-pool fallback must be silent, got err=%v degraded=%q", err, resp.DegradedFromPool)
+	}
+	ch, err := router.StreamInfer(context.Background(), msgs, types.WithModelPool("default"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ev := range ch {
+		if ev.Type == types.StreamSystemNotice {
+			t.Fatal("default-pool stream fallback must not emit a degrade notice")
+		}
+	}
+}

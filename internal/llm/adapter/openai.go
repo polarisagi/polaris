@@ -113,16 +113,14 @@ func (a *OpenAIAdapter) Infer(ctx context.Context, msgs []types.Message, opts ..
 		return nil, apperr.Wrap(apperr.CodeInternal, "OpenAIAdapter.Infer", err)
 	}
 
-	out := &types.ProviderResponse{
-		Model: resp.ID,
-		Usage: types.Usage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-		},
+	// Model 取响应回报的模型 ID（此前误填 resp.ID，即 chatcmpl-* 响应标识）。
+	model := resp.Model
+	if model == "" {
+		model = req.Model
 	}
-
-	if resp.Usage.PromptTokensDetails != nil {
-		out.Usage.CacheHitTokens = resp.Usage.PromptTokensDetails.CachedTokens
+	out := &types.ProviderResponse{
+		Model: model,
+		Usage: resp.Usage.toUsage(),
 	}
 
 	if out.Usage.InputTokens > 0 || out.Usage.OutputTokens > 0 {

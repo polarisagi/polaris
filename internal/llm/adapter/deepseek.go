@@ -24,8 +24,7 @@ type DeepSeekAdapter struct {
 }
 
 // NewDeepSeekAdapter 构造 DeepSeek 适配器。
-// modelID 传 "" 时默认使用 "deepseek-flash"（V4 Flash，低成本推理）；
-// 传 "deepseek-v4-pro" 时启用 1M context 上限。
+// modelID 传 "" 时默认使用 "deepseek-flash"（V4.1 Flash，低成本推理）。
 // credPool 支持多 API Key 轮换（P1 2026-07-12）：单 key 场景用
 // llmparent.NewCredentialPool(splitAPIKeys(key), llmparent.StrategyRoundRobin) 构造。
 func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Client, modelID string, tbr *metrics.TokenBurnRate) *DeepSeekAdapter {
@@ -36,9 +35,13 @@ func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Cli
 		modelID = "deepseek-flash"
 	}
 
-	maxCtx := 65536 // v4-flash 默认
+	// 费率为官方高峰价（USD / 1K token，api-docs.deepseek.com quick_start/pricing，2026-09），
+	// 供 llm_calls 费用估算与路由成本评分；此前 flash/pro 同为占位值 0.14/0.28（按 1K 计等于
+	// $140/百万，且两档无差别）。V4.1 Flash 与 V4 Pro 上下文均为 1M。
+	const maxCtx = 1_000_000
+	costIn, costOut, costHit := 0.0003, 0.0012, 0.000006 // deepseek-flash: $0.30 / $1.20 / $0.006 per 1M
 	if modelID == "deepseek-v4-pro" || modelID == "deepseek-reasoner" {
-		maxCtx = 1_000_000 // V4 Pro 支持 1M context
+		costIn, costOut, costHit = 0.00132, 0.00396, 0.000044 // $1.32 / $3.96 / $0.044 per 1M
 	}
 
 	c := &OpenAICompatibleClient{
@@ -55,8 +58,9 @@ func NewDeepSeekAdapter(credPool *llmparent.CredentialPool, httpClient *http.Cli
 			SupportsTools:     true,
 			SupportsThinking:  true,
 			MaxContextTokens:  maxCtx,
-			CostPer1KInput:    0.14, // 预估费率
-			CostPer1KOutput:   0.28,
+			CostPer1KInput:    costIn,
+			CostPer1KOutput:   costOut,
+			CostPer1KCacheHit: costHit,
 		},
 		tbr: tbr,
 	}
@@ -112,16 +116,14 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []types.Message, opts 
 		return nil, apperr.Wrap(apperr.CodeInternal, "DeepSeekAdapter.Infer", err)
 	}
 
-	out := &types.ProviderResponse{
-		Model: resp.ID,
-		Usage: types.Usage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-		},
+	// Model 取响应回报的模型 ID（此前误填 resp.ID，即 chatcmpl-* 响应标识）。
+	model := resp.Model
+	if model == "" {
+		model = d.modelID
 	}
-
-	if resp.Usage.PromptTokensDetails != nil {
-		out.Usage.CacheHitTokens = resp.Usage.PromptTokensDetails.CachedTokens
+	out := &types.ProviderResponse{
+		Model: model,
+		Usage: resp.Usage.toUsage(),
 	}
 
 	if out.Usage.InputTokens > 0 || out.Usage.OutputTokens > 0 {
