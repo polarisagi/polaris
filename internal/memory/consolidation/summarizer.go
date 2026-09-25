@@ -45,7 +45,7 @@ func (s *DefaultSummarizer) Summarize(ctx context.Context, text string, maxToken
 		return "", apperr.Wrap(apperr.CodeInternal, "failed to execute summary template", err)
 	}
 
-	resp, err := safecall.Infer(ctx, s.provider, []types.Message{{Role: "user", Content: buf.String()}}, types.WithMaxTokens(maxTokens))
+	resp, err := safecall.Infer(ctx, s.provider, []types.Message{{Role: "user", Content: buf.String()}}, types.WithMaxTokens(maxTokens), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("consolidate_summary"))
 	if err == nil && resp != nil {
 		return strings.TrimSpace(resp.Content), nil
 	}
@@ -58,7 +58,7 @@ func (s *DefaultSummarizer) InferRaw(ctx context.Context, prompt string, maxToke
 	if s.provider == nil {
 		return "", nil
 	}
-	resp, err := safecall.Infer(ctx, s.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(maxTokens))
+	resp, err := safecall.Infer(ctx, s.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(maxTokens), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("consolidate_summary"))
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "failed to infer", err)
 	}

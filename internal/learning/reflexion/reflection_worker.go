@@ -122,7 +122,7 @@ func (rw *ReflectionWorker) ConsolidateReflections(ctx context.Context, taskID s
 		sb.String(),
 	)
 
-	resp, err := safecall.Infer(ctx, rw.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512))
+	resp, err := safecall.Infer(ctx, rw.provider, []types.Message{{Role: "user", Content: prompt}}, types.WithMaxTokens(512), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("reflexion"))
 	if err != nil {
 		return apperr.Wrap(apperr.CodeInternal, "ReflectionWorker.ConsolidateReflections", err)
 	}

@@ -50,7 +50,7 @@ func (pc *ProviderLLMClient) ExtractEntities(ctx context.Context, text string) (
 	if pc.model != "" {
 		req.Model = pc.model
 	}
-	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("graphrag_extract"))
 	if err != nil || resp == nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LLM entity extraction failed: %v", err), err)
 	}
@@ -78,7 +78,7 @@ func (pc *ProviderLLMClient) ExtractRelations(ctx context.Context, entities []*E
 	if pc.model != "" {
 		req.Model = pc.model
 	}
-	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens))
+	resp, err := safecall.Infer(ctx, pc.provider, req.Messages, types.WithMaxTokens(req.MaxTokens), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("graphrag_extract"))
 	if err != nil || resp == nil {
 		return nil, apperr.Wrap(apperr.CodeInternal, fmt.Sprintf("LLM relation extraction failed: %v", err), err)
 	}
