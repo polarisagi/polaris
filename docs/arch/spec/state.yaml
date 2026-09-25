@@ -76,7 +76,7 @@ par:
         on_success: store_task_model
         on_failure: s_failed
         max_retry: 2
-        model_pool: budget
+        model_pool: general       # ADR-0101：代码实为 general（落 default=flash）；寒暄经 phatic_bypass 零 LLM
 
     - from: s_plan
       event: plan_done
@@ -88,7 +88,9 @@ par:
         on_success: store_dag
         on_failure: s_failed
         max_retry: 2
-        model_pool: budget
+        # ADR-0101 决策二：便宜池先行、失败再升级。complexity < plan_reasoning_complexity → general；
+        # 重规划 / 高复杂度 / SI≥high → reasoning。budget 池无 Provider 时降级链为空，选择不确定，弃用。
+        model_pool: cascade(general→reasoning)
 
     - from: s_validate
       event: validate_pass
@@ -979,6 +981,7 @@ thresholds:
     prm_min_threshold: 0.4 # toml:"prm.min_threshold"
     conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
     conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
+    plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0101 决策二：首轮规划升级 reasoning 池的复杂度阈值
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - context_window_compress_pct: ["compress_recall_drop"]

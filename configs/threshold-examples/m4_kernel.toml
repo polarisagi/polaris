@@ -21,3 +21,4 @@ surprise_hint_threshold = 0.6
 'prm.scorer_model' = ''
 'conversation.history_max_messages' = 20
 'conversation.history_max_bytes' = 24576
+'plan.reasoning_complexity' = 0.7

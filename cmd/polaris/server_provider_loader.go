@@ -122,7 +122,7 @@ func buildProviderAdapter(typ, baseURL, modelID, projectID, location string, cre
 	case "openai_compat":
 		return llmadapter.NewOpenAIAdapter(baseURL, modelID, credPool, httpClient, tbr)
 	case "anthropic":
-		// WithAnthropicPromptCaching：向 system prompt + 最后一个 tool + 最近
+		// WithAnthropicPromptCaching：向首/末 system block + 最近
 		// 2 条非 system 消息注入 cache_control:{type:"ephemeral"} 断点，命中时
 		// cache_read_input_tokens 费率约为正常输入的 1/10。纯收益、无下行
 		// 风险的能力（不改变响应内容，只影响计费/延迟），此前功能已完整实现

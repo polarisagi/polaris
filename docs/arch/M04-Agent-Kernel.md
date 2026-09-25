@@ -105,6 +105,8 @@ ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1
 - **受众**：`protocol.LLMFillEffect.Audience` 零值 `AudienceInternal`（fail-closed）；仅 S_RESPOND 的 Effect 为 `AudienceUser`。`doStreamInfer` 只对 User 受众发布 `AgentStreamEventToken`，内部阶段 token 仅累积供 OnSuccess 解析（`spec/state.yaml par_inv_06`）。思考链（Thinking）各阶段照常发布，不进回复正文。
 - **阶段进度**：每个 LLMFillEffect 开始时发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`，客户端本地化展示。
 - **路由**：S_PERCEIVE 产出 `TaskModel.NeedsTools`（`*bool`）。`false` → `S_PERCEIVE_DIRECT` → S_RESPOND；`true`/缺失/解析失败 → S_PLAN（保守）。S_PLAN 解析成功但 DAG 为空 → `S_PLAN_EMPTY` → S_RESPOND。
+- **零 LLM 寒暄快路**（ADR-0101 决策一）：`fsm.ClassifyIntentWeight` 判为 `IntentPhatic`（问候/致谢/告别，≤16 rune 整句匹配）时，S_IDLE→S_PERCEIVE 的 Effect 为 `DeterministicEffect`，直接 `S_PERCEIVE_DIRECT`（route=`phatic_bypass`），不调 Perceive、不召回记忆；`IntentAck`（好的/ok/同意）仍走 Perceive（可能授权上一轮提议动作），但跳过长期记忆召回。
+- **规划池级联**（ADR-0101 决策二）：首轮规划按 `TaskModel.Complexity` 选池——< `m4_kernel.plan.reasoning_complexity`(0.7) 走 `general`、不思考；重规划升级到 `reasoning` + ThinkingMax。
 - **空输出重试**（ADR-0098 决策七）：S_PLAN / S_RESPOND 推理成功但既无正文也无工具调用时，按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环重试一次（S_RESPOND 此时未推出 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
 - **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。超限结果首尾保留截断，全文经 `ToolRefOffloader` 卸载、预览首行给出 `read_tool_ref` 取回提示（ADR-0100 决策三）。LLM 请求被 Provider 以上下文超限拒绝（`protocol.ErrContextOverflow`）时，Agent 对固定前缀外的消息确定性修剪一次后重试（ADR-0100 决策二）。
 - **重规划耗尽转回复**（决策九）：进入 S_REPLAN 时预算已满 → S_RESPOND（`TurnDegraded=true`，任务结果按失败计），回复阶段据失败原因如实说明。
@@ -294,7 +296,7 @@ S_PLAN 阶段若任务复杂度触发子规划策略，异步启动规划器池�
 | System 1.5 | 0.3-0.6 | 毫秒-秒 | M1 Budget Pool |
 | System 2 | ≥0.6 | 秒级 | M1 Reasoning Pool |
 
-**`SelectThinkingMode` 注入**（与 System 路由正交）: M4 `transitions.go` 在 LLM 调用前调用 `SelectThinkingMode(SurpriseIndex, replanCount, TaintLevel)` 决定三档 `[ThinkingMode]`（Disabled / High / Max），通过 `protocol.WithThinkingMode(mode)` 作为 `InferOption` 传入 Adapter。档位触发条件与 Provider API（Application Programming Interface，应用程序接口） 映射见 M1 §5.2-bis。
+**`SelectThinkingMode` 注入**（与 System 路由正交）: M4 `transitions_respond.go` `planEffect` 在 LLM 调用前调用 `SelectThinkingMode(replanCount, TaskModel.Complexity, SurpriseIndex)` 与 `SelectPlanModelPool`（ADR-0101 决策二：便宜池先行、重规划升级；污点不参与）决定三档 `[ThinkingMode]`（Disabled / High / Max），通过 `protocol.WithThinkingMode(mode)` 作为 `InferOption` 传入 Adapter。档位触发条件与 Provider API（Application Programming Interface，应用程序接口） 映射见 M1 §5.2-bis。
 
 **SurpriseIndex 计算来源（ADR-0025（Architecture Decision Record，架构决策记录） BUG-D）**：`populateSessionContext` 优先从注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，三分量：Jaccard + MEMF + Markov）读取；未注入时退回 `ComputeBasic`（仅 Jaccard）。计算结果同步写入 `metrics.GlobalSurpriseIndex`，供 `SelectThinkingMode` 消费。`SurpriseReader` 为 consumer-side 接口，防 L1→L2 包循环。
 

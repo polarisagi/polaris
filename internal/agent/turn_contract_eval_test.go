@@ -205,6 +205,28 @@ func TestTurnContractEval_DirectReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
+// 场景 A'：寒暄零 LLM 感知（ADR-0101 决策一）——只调一次 Respond，Perceive/Plan 零调用。
+func TestTurnContractEval_PhaticSkipsPerceive(t *testing.T) {
+	p := newScriptedTurnProvider(map[string][]scriptedReply{
+		"respond": {{content: "你好！有什么可以帮你？"}},
+	})
+	out := runScriptedTurn(t, p, &allowPolicyGate{}, &mockToolExecutor{}, "你好呀")
+
+	if out.final != types.AgentStateComplete || out.reply != "你好！有什么可以帮你？" {
+		t.Fatalf("final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
+	}
+	if n := len(p.promptsOf("perceive")); n != 0 {
+		t.Errorf("寒暄不应调用 Perceive LLM，实际 %d 次", n)
+	}
+	if n := len(p.promptsOf("plan")); n != 0 {
+		t.Errorf("寒暄不应调用规划阶段，实际 %d 次", n)
+	}
+	if n := len(p.promptsOf("respond")); n != 1 {
+		t.Errorf("寒暄应恰好一次 Respond，实际 %d 次", n)
+	}
+	assertNoInternalArtifacts(t, out.reply)
+}
+
 // 场景 B：原始缺陷形态——规划阶段模型输出"散文 + 围栏 JSON + 散文"。
 // 修复前这段内容被逐 token 推给用户，且回合以 S_FAILED 结束。
 func TestTurnContractEval_MisbehavingPlanNeverLeaks(t *testing.T) {

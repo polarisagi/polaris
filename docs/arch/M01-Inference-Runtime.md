@@ -191,14 +191,16 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 > 权威定义见 00-Global-Dictionary §9-ter `[ThinkingMode]`；本节为映射表的实现细节展开，避免双份定义漂移。
 
-**`[ThinkingMode]`** —— `internal/observability/metrics/metrics_handler.go` 中 `SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 三档驱动（由 M4 `transitions.go` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
+**`[ThinkingMode]`** —— `internal/observability/metrics/metrics_handler.go` 中 `SelectThinkingMode(replanCount, complexity, surpriseIndex)` 三档驱动（2026-09-25 ADR-0101 决策二：输入由 maxTaint 改为 TaskModel.Complexity）（由 M4 `transitions.go` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
 
 | 档位 | 触发条件 | DeepSeek V4 Pro 映射 | Claude 映射 |
 |------|---------|----------------------|-------------|
-| `ThinkingDisabled` | SI < 0.3 且 replanCount=0 且 TaintLevel < 3 | 无 thinking 字段 | 无 thinking 字段 |
-| `ThinkingHigh` | 0.3 ≤ SI < 0.6 | `reasoning_effort="high"` + `thinking.type="enabled"` | `thinking.budget_tokens=4096` |
-| `ThinkingMax` | SI ≥ 0.6 或 replanCount > 0 或 TaintLevel ≥ 3 | `reasoning_effort="max"` + `thinking.type="enabled"` | `thinking.budget_tokens=16384` |
+| `ThinkingDisabled` | SI < 0.3 且 replanCount=0 且 Complexity < 0.7 | 无 thinking 字段 | 无 thinking 字段 |
+| `ThinkingHigh` | 0.3 ≤ SI < 0.6 或 Complexity ≥ 0.7（`m4_kernel.plan.reasoning_complexity`） | `reasoning_effort="high"` + `thinking.type="enabled"` | `thinking.budget_tokens=4096` |
+| `ThinkingMax` | SI ≥ 0.6 或 replanCount > 0 | `reasoning_effort="max"` + `thinking.type="enabled"` | `thinking.budget_tokens=16384` |
 
+> **规划池级联**（ADR-0101 决策二）：`SelectPlanModelPool` 同源判定——ThinkingMax 或 Complexity ≥ 0.7 → `reasoning`，否则 `general`（经 poolFallbackChain 落到 `default`）。污点不参与：旧规则下用户输入恒 TaintHigh，每轮规划恒为 Pro + ThinkingMax。
+>
 > **约束**：
 > - DeepSeek V4 Pro thinking 启用时温度强制为 0（API 要求）
 > - 多轮工具调用序列中，`reasoning_content` 必须随 assistant 消息回传至下一轮 prompt——Adapter 负责从响应中提取并写入 `ProviderResponse.ReasoningContent`；M4 通过 `StateContext.LastReasoningContent` 跨轮持有

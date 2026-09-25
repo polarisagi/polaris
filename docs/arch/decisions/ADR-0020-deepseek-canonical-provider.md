@@ -37,3 +37,11 @@ thinking 启用时 temperature 强制为 0；`reasoning_content` 须随 assistan
 > ② 本地模型定位若因硬件普及（如消费级设备 NPU 算力大幅提升）不再局限于
 > Tier-3 高级特权场景，重议其角色，但当前"非省钱降级方案"的定位不因单纯价格
 > 波动而改变。
+
+> 2026-09-25 追记（决策二触发条件修订，ADR-0101 决策二）：新事实——用户输入恒为 TaintHigh
+> （ADR-0098 决策七追记），"TaintLevel≥3 → ThinkingMax"令每个首轮规划恒为满档思考，
+> 且 `planEffect` 硬编码 reasoning 池，三档路由退化为常量。修订为
+> `SelectThinkingMode(replanCount, complexity, SI)`：replan>0 或 SI≥high → Max；
+> complexity≥`m4_kernel.plan.reasoning_complexity`(0.7) 或 SI≥low → High；否则 Disabled。
+> 污点不再是输入（安全由五防线承担）。规划池同源由 `SelectPlanModelPool` 选择。
+> 门控 `TestPlanEffect_CheapFirstCascade`。上表保留作历史。

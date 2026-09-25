@@ -112,6 +112,9 @@ func (sm *StateMachine) registerTransitions() {
 			if bypassEffect := sm.trySystem1Bypass(ctx, sCtx); bypassEffect != nil {
 				return []protocol.Effect{bypassEffect}, nil
 			}
+			if phatic := tryPhaticBypass(sCtx); phatic != nil {
+				return []protocol.Effect{phatic}, nil
+			}
 			// Unmatched case
 			metrics.RecordSystem1Bypass(ctx, false)
 			return []protocol.Effect{
@@ -385,6 +388,29 @@ func (sm *StateMachine) registerTransitions() {
 }
 
 // trySystem1Bypass 尝试短路 LLM 思考，直接命中已有技能并组装成验证态（GD-13-004）
+// tryPhaticBypass 寒暄/致谢/告别跳过 Perceive LLM 与记忆召回，直接进 S_RESPOND
+// （ADR-0101 决策一）。等价于 Perceive 以 NeedsTools=false 返回，但省掉一次 LLM
+// 往返与一轮 episodic/reflection/RAG 检索（含 embedding 调用）。
+// 短确认（IntentAck）不走这里：它可能是对上一轮提议动作的授权，须经 Perceive 消解。
+func tryPhaticBypass(sCtx *StateContext) protocol.Effect {
+	sCtx.Mu.RLock()
+	raw := sCtx.RawIntentTS
+	sCtx.Mu.RUnlock()
+	if raw.IsEmpty() || ClassifyIntentWeight(raw.UnsafeContent()) != IntentPhatic {
+		return nil
+	}
+	return protocol.DeterministicEffect{
+		Fn: func(ctx context.Context, _ protocol.StateContext) (types.State, error) {
+			noTools := false
+			sCtx.Mu.Lock()
+			sCtx.TaskModel = &TaskModel{Goal: raw.UnsafeContent(), Complexity: 0.1, NeedsTools: &noTools}
+			sCtx.Mu.Unlock()
+			metrics.RecordTurnRoute(ctx, routePhatic)
+			return "S_PERCEIVE_DIRECT", nil
+		},
+	}
+}
+
 func (sm *StateMachine) trySystem1Bypass(ctx context.Context, sCtx *StateContext) protocol.Effect {
 	if !sCtx.HasPreMatch {
 		return nil

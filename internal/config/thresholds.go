@@ -109,6 +109,11 @@ type M4KernelThresholds struct {
 	// 对话历史进入内核的上限（ADR-0098 决策四），自尾部截取；Perceive 与 Respond 各渲染一次。
 	ConversationHistoryMaxMessages int `toml:"conversation.history_max_messages"` // 20
 	ConversationHistoryMaxBytes    int `toml:"conversation.history_max_bytes"`    // 24576
+
+	// PlanReasoningComplexity 规划级联升级阈值（ADR-0101 决策二）：Perceive 给出的
+	// TaskModel.Complexity ≥ 此值时首轮规划即用 reasoning 池 + ThinkingHigh；
+	// 低于此值走 general 池，失败重规划时再升级。
+	PlanReasoningComplexity float64 `toml:"plan.reasoning_complexity"` // 0.7
 }
 
 type M5MemoryThresholds struct {
@@ -364,6 +369,7 @@ func DefaultThresholds() Thresholds {
 			PRMScorerModel:                 "",
 			ConversationHistoryMaxMessages: 20,
 			ConversationHistoryMaxBytes:    24576,
+			PlanReasoningComplexity:        0.7,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

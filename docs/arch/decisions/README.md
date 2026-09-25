@@ -103,6 +103,7 @@ ADR 被代码引用时，源文件头部加：
 | 0098 | Agent 回合输出通道分离（Effect Audience，零值 Internal）与 S_RESPOND 回复合成态；Perceive 结构化路由直答；对话历史进入内核 | Accepted | 2026-09-25 |
 | 0099 | Embedding 调度：High/Low 独立通道、Low 批上限、下游调用有界、Embedder 接口携带 ctx | Accepted | 2026-09-25 |
 | 0100 | DeepSeek Harness 设计评审：上下文溢出是请求侧故障（容量感知 failover、不计熔断、Agent 确定性修剪一次重试）；执行结果 spill 统一到 read_tool_ref 可取回通道、首尾保留截断 | Accepted | 2026-09-25 |
+| 0101 | Token 经济：零 LLM 寒暄快路 + 短确认精简感知；规划便宜池先行、失败再升级（ThinkingMode 去污点输入，修订 ADR-0020 决策二）；缓存稳定前缀（Anthropic 多断点、SysEnv 去易变量）；回合调用数压缩（Proposed） | Accepted | 2026-09-25 |
 
 
 > 代码审查中被驳回的重复性发现（含复现证据），见 `local_playground/upgrade/98-rejected-findings.md`。

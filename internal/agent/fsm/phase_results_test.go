@@ -1,6 +1,8 @@
 package fsm
 
 import (
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+
 	"errors"
 	"testing"
 
@@ -195,16 +197,51 @@ func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
 }
 
 // TestPlanEffect_RetryDisablesThinking 空输出重试须关闭思考：触发条件即"思考模式 +
-// 挂工具"，用户输入恒 TaintHigh 使首轮规划恒为 ThinkingMax，原样重试等于没有重试。
+// 挂工具"，原样重试等于没有重试。
 func TestPlanEffect_RetryDisablesThinking(t *testing.T) {
+	pinSurprise(t, 0.1)
 	sm := NewStateMachine(&dummyContextBuilder{})
-	sCtx := &StateContext{}
+	sCtx := &StateContext{TaskModel: &TaskModel{Goal: "重构模块", Complexity: 0.9}}
 	sCtx.RawIntentTS = taint.NewTaintedString("写个文件", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
-	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingMax {
-		t.Fatalf("首轮规划（TaintHigh）应为 ThinkingMax，got %q", m)
+	if m := sm.planEffect(sCtx).ThinkingMode; m == types.ThinkingDisabled {
+		t.Fatalf("高复杂度首轮规划应开启思考，got %q", m)
 	}
 	sCtx.PlanAttempts = 1
 	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingDisabled {
 		t.Fatalf("空输出重试应关闭思考，got %q", m)
 	}
+}
+
+// TestPlanEffect_CheapFirstCascade ADR-0101 决策二：规划便宜池先行、失败再升级；
+// 污点等级不再驱动思考深度（用户输入恒 TaintHigh，旧规则令每轮规划都走 Pro + 满档思考）。
+func TestPlanEffect_CheapFirstCascade(t *testing.T) {
+	pinSurprise(t, 0.1)
+	sm := NewStateMachine(&dummyContextBuilder{})
+	high := taint.NewTaintedString("列出目录", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
+
+	simple := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "列出目录", Complexity: 0.2}}
+	eff := sm.planEffect(simple)
+	if eff.ModelPool != string(types.ModelPoolGeneral) || eff.ThinkingMode != types.ThinkingDisabled {
+		t.Fatalf("简单任务（TaintHigh）应走 general 池且不思考，got pool=%q thinking=%q", eff.ModelPool, eff.ThinkingMode)
+	}
+
+	complexTask := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "迁移数据库", Complexity: 0.8}}
+	eff = sm.planEffect(complexTask)
+	if eff.ModelPool != string(types.ModelPoolReasoning) || eff.ThinkingMode != types.ThinkingHigh {
+		t.Fatalf("高复杂度任务应直接用 reasoning 池 + ThinkingHigh，got pool=%q thinking=%q", eff.ModelPool, eff.ThinkingMode)
+	}
+
+	sm.replanCount = 1
+	eff = sm.planEffect(simple)
+	if eff.ModelPool != string(types.ModelPoolReasoning) || eff.ThinkingMode != types.ThinkingMax {
+		t.Fatalf("重规划应升级到 reasoning 池 + ThinkingMax，got pool=%q thinking=%q", eff.ModelPool, eff.ThinkingMode)
+	}
+}
+
+// pinSurprise 固定进程级 SurpriseIndex，测试结束恢复。
+func pinSurprise(t *testing.T, v float64) {
+	t.Helper()
+	prev := metrics.GlobalSurpriseIndex().Current()
+	metrics.GlobalSurpriseIndex().SetLastValue(v)
+	t.Cleanup(func() { metrics.GlobalSurpriseIndex().SetLastValue(prev) })
 }

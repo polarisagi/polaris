@@ -22,9 +22,15 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 	// 转换 messages
 	var msgs []map[string]any
 	var system string
+	// systemParts 保留各 system 消息边界：缓存断点要落在"稳定前缀"之后（见下方
+	// Prompt Caching 段），整段拼接后只能在末尾打一个断点。
+	var systemParts []string
 	for _, m := range req.Messages {
 		if m.Role == "system" {
 			system += m.Content + "\n"
+			if t := strings.TrimSpace(m.Content); t != "" {
+				systemParts = append(systemParts, t)
+			}
 			continue
 		}
 		if len(m.Parts) > 0 {
@@ -96,21 +102,26 @@ func (a *AnthropicAdapter) buildAnthropicRequest(req *types.InferRequest, stream
 		payload["tools"] = anthropicTools
 	}
 
-	// Anthropic Prompt Caching：system_and_3 策略，最多 4 个断点。
-	// 断点 1: system prompt（跨会话稳定，命中率最高）
-	// 断点 2: tools 最后一项（工具列表会话内不变）
-	// 断点 3+4: 最近 2 条非 system 消息（缓存会话历史前缀，多轮对话收益显著）
+	// Anthropic Prompt Caching（ADR-0101 决策三），最多 4 个断点。缓存前缀顺序为
+	// tools → system → messages，断点缓存其之前的全部内容：
+	// 断点 1: 第一个 system block——ImmutableCore（人格/工具摘要/偏好，跨会话、跨阶段
+	//         稳定）连同其前的 tools 一并缓存。此前 system 整段拼接只在末尾打点，
+	//         阶段指令/核心记忆/工具目录任一变化即令人格前缀整段失配。
+	// 断点 2: 最后一个 system block——同阶段同会话内稳定的完整 system。
+	// 断点 3+4: 最近 2 条非 system 消息（会话历史前缀）。
 	if a.enablePromptCaching { //nolint:nestif
 		cacheMarker := map[string]string{"type": "ephemeral"}
 
-		// 断点 1 — system → text array + cache_control
-		if system != "" {
-			payload["system"] = []map[string]any{
-				{"type": "text", "text": strings.TrimSpace(system), "cache_control": cacheMarker},
+		if len(systemParts) > 0 {
+			blocks := make([]map[string]any, len(systemParts))
+			for i, part := range systemParts {
+				blocks[i] = map[string]any{"type": "text", "text": part}
 			}
-		}
-		// 断点 2 — tools 最后一项
-		if tools, ok := payload["tools"].([]map[string]any); ok && len(tools) > 0 {
+			blocks[0]["cache_control"] = cacheMarker
+			blocks[len(blocks)-1]["cache_control"] = cacheMarker
+			payload["system"] = blocks
+		} else if tools, ok := payload["tools"].([]map[string]any); ok && len(tools) > 0 {
+			// 无 system 时退回在 tools 末尾打点，保住工具定义前缀。
 			tools[len(tools)-1]["cache_control"] = cacheMarker
 		}
 		// 断点 3+4 — 最近 2 条非 system 消息（按序收集非 system 下标，取末尾 2 条）

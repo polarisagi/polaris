@@ -79,8 +79,9 @@ func (i *SystemInfo) FormatMarkdown() string {
 	sb.WriteString("### System Environment\n")
 	fmt.Fprintf(&sb, "- **OS**: %s %s (%s)\n", i.OSName, i.OSVersion, i.Architecture)
 	fmt.Fprintf(&sb, "- **CPU**: %d cores\n", i.CPUCores)
-	fmt.Fprintf(&sb, "- **Memory**: %s GB used / %s GB total\n", i.MemoryUsageGB, i.MemoryTotalGB)
-	fmt.Fprintf(&sb, "- **Disk (/)**: %s GB free\n", i.DiskFreeGB)
+	// 只写静态量：已用内存/磁盘剩余每次采样都不同，写进 prompt 头部会令 Provider
+	// 前缀缓存逐会话失配（ADR-0101 决策三），且进入上下文即过时；实时值走 sys_probe 工具。
+	fmt.Fprintf(&sb, "- **Memory**: %s GB total\n", i.MemoryTotalGB)
 	rootStatus := ""
 	if i.IsRoot {
 		rootStatus = " (Root/Admin privileges)"
