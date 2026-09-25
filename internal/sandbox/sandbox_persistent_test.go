@@ -298,6 +298,27 @@ func TestPersistentSandbox_IdleReapKillsSession(t *testing.T) {
 	t.Fatalf("expected idle session to be reaped within 2s, still have %d live sessions", n)
 }
 
+// 执行时长超过 IdleTTL 的命令不得被回收器在中途 kill（此前只看 lastUsedNano，
+// IdleReapKillsSession 在 -race 下 bash 启动偶尔超 50ms 即报 read stdout EOF）。
+func TestPersistentSandbox_IdleReapSkipsInFlightExec(t *testing.T) {
+	requireBash(t)
+	p := NewPersistentSandbox(bareArgvWrapper{}, PersistentSandboxConfig{
+		IdleTTL:      50 * time.Millisecond,
+		MaxSessions:  4,
+		ExecTimeout:  5 * time.Second,
+		ReapInterval: 10 * time.Millisecond,
+	})
+	defer p.Shutdown()
+
+	res, err := p.Run(context.Background(), SandboxSpec{SessionID: "long-exec", Language: "bash", ScriptBytes: []byte("sleep 0.3; echo done")})
+	if err != nil {
+		t.Fatalf("long exec killed mid-run: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success, got error %q", res.Error)
+	}
+}
+
 func TestPersistentSandbox_MaxSessionsEvictsOldest(t *testing.T) {
 	requireBash(t)
 	p := NewPersistentSandbox(bareArgvWrapper{}, PersistentSandboxConfig{
