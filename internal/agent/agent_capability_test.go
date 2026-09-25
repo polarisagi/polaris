@@ -63,3 +63,17 @@ func TestWithJITCapability_OnlyForValidatedCalls(t *testing.T) {
 		})
 	}
 }
+
+// TestWithTaskScopeCtx_BackgroundMarker 经 AcquireHeadless 获取的 Agent，其 effect ctx
+// 须标记为后台工作，LLM 额度才会按可降级优先级申请；交互获取须清除标记。
+func TestWithTaskScopeCtx_BackgroundMarker(t *testing.T) {
+	a := &Agent{ID: "agent-x"}
+	a.background.Store(true)
+	if !protocol.IsBackgroundWork(a.withTaskScopeCtx(context.Background())) {
+		t.Fatal("headless 获取的 Agent effect ctx 应带后台标记")
+	}
+	a.background.Store(false)
+	if protocol.IsBackgroundWork(a.withTaskScopeCtx(context.Background())) {
+		t.Fatal("交互获取的 Agent effect ctx 不得带后台标记")
+	}
+}

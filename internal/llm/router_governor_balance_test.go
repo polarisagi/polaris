@@ -4,8 +4,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/polarisagi/polaris/internal/config"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -83,5 +85,63 @@ func TestStreamInferWithTarget_ErrorReleasesGovernor(t *testing.T) {
 	}
 	if got := gov.current(); got != 0 {
 		t.Fatalf("llmInFlight must return to 0 on error path, got %d", got)
+	}
+}
+
+// pressureGovernor 记录请求优先级；priority≥1 恒被水位线拒绝，WaitForLLMCapacity 立即返回
+// （与真实实现一致：它只等并发额度，不等内存恢复）。
+type pressureGovernor struct {
+	mu         sync.Mutex
+	priorities []int
+}
+
+func (g *pressureGovernor) AdmitLLM(priority int) (bool, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.priorities = append(g.priorities, priority)
+	return priority == 0, 3
+}
+
+func (g *pressureGovernor) WaitForLLMCapacity(context.Context) error { return nil }
+func (g *pressureGovernor) ReleaseLLM()                              {}
+
+func (g *pressureGovernor) snapshot() []int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]int(nil), g.priorities...)
+}
+
+// TestAcquireLLMCapacity_BackgroundUsesDegradablePriority 后台工作以 priority=1 申请，
+// 被水位线拒绝时挂起到 ctx 结束，不得忙等（WaitForLLMCapacity 立即返回会让循环空转）。
+func TestAcquireLLMCapacity_BackgroundUsesDegradablePriority(t *testing.T) {
+	gov := &pressureGovernor{}
+	router := NewInferenceRouter(NewProviderRegistry(config.M1RouterThresholds{}), nil, WithGovernor(gov))
+
+	ctx, cancel := context.WithTimeout(protocol.WithBackgroundWork(context.Background()), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- router.acquireLLMCapacity(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("持续水位线压力下后台推理应在 ctx 到期后放弃")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ctx 到期后仍未返回：被水位线拒绝后在忙等（WaitForLLMCapacity 立即返回）")
+	}
+	bg := gov.snapshot()
+	if len(bg) == 0 || bg[0] != 1 {
+		t.Fatalf("后台工作应以 priority=1 申请，got %v", bg)
+	}
+	if len(bg) > 2 {
+		t.Fatalf("被水位线拒绝后应挂起而非忙等，100ms 内申请了 %d 次", len(bg))
+	}
+
+	if err := router.acquireLLMCapacity(context.Background()); err != nil {
+		t.Fatalf("用户可见推理不受水位线约束: %v", err)
+	}
+	if all := gov.snapshot(); all[len(all)-1] != 0 {
+		last := all[len(all)-1]
+		t.Fatalf("未标记后台的请求应以 priority=0 申请，got %d", last)
 	}
 }

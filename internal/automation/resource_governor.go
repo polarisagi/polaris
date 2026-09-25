@@ -268,34 +268,19 @@ func (rg *ResourceGovernor) Release() {
 
 // AdmitLLM 为 LLM 请求分配并发额度，并回报当前资源降级等级。
 //
-// priority 语义（2026-09-22 重新定义，见下）：
-//   - 0：用户可见推理（交互式对话）。**只受并发上限约束**，内存/CPU 水位线
-//     只影响回报的 degradeLevel，不构成拒绝理由。
-//   - ≥1：可降级的后台推理（自进化、批量提炼等）。保留三级水位线闸门。
+// priority（2026-09-22 重定义；调用方 InferenceRouter 按 protocol.IsBackgroundWork 选择）：
+//   - 0：用户可见推理。只受并发上限约束，水位线只影响回报的 degradeLevel；只有它
+//     刷新"用户活跃"时间（activityCallback）。
+//   - ≥1：可降级的后台推理（空闲自进化、headless 自动化）。另受水位线闸门约束。
 //
-// 为什么用户可见推理不再受内存/CPU 闸门约束：
-//
-//	(1) 拒绝一次**远程** LLM 调用并不能缓解本机内存压力——它消耗的是一个 socket
-//	    与几百 KB 流式缓冲，真正吃内存的是本地模型权重、沙箱与后台任务。用内存
-//	    水位线去拦远程 API 调用，付出的是"产品核心功能不可用"，换回的是几乎为零
-//	    的内存回收。
-//	(2) 本地推理确实吃内存，但它有自己的、更精确的治理链路：FeatureGate 按 Tier
-//	    决定是否解锁本地推理、AutoConfig 内存压力回调驱动 local model unloader
-//	    卸载权重。重复在这里加一道粗粒度闸门只会误伤远程调用。
-//	(3) 旧语义在实现层面本就是空转：AdmitLLM 全仓唯一调用方是
-//	    InferenceRouter.acquireLLMCapacity，且恒传 priority=1，而两道闸门都是
-//	    `&& priority != 0` 才生效——等于"交互式对话"是唯一被拦的对象，而本该被
-//	    限流的后台任务走的是 Admit()，那个方法至今无人调用。设计意图整个反了。
-//	(4) 被拒时的表现也不可接受：WaitForLLMCapacity 只等 llmInFlight，压根不等内存
-//	    恢复，于是必然在 60 秒后被同一道闸门再拒一次，用户侧只看到一句"推理返回
-//	    空内容"。等待机制与拒绝理由根本不匹配。
-//
-// 内存真正见底时的正确降级顺序是"先停后台自进化、再停本地模型、最后才是对话"，
-// 而不是反过来先掐对话。degradeLevel 照常回报，供调用方做质量降级（缩短上下文、
-// 关闭并行工具调用等），这才是这个信号该有的用法。
+// 用户可见推理不受内存/CPU 闸门约束：拒绝一次远程调用回收不了多少内存，本地推理
+// 另有 FeatureGate 与模型卸载治理；且 WaitForLLMCapacity 只等并发额度、不等内存
+// 恢复，被水位线拒绝的交互请求只会超时。内存见底时的降级顺序是"先停后台、
+// 再停本地模型、最后才是对话"。
 func (rg *ResourceGovernor) AdmitLLM(priority int) (bool, int) {
 	rg.mu.Lock()
-	if rg.activityCallback != nil {
+	// 后台推理不打活跃标记：否则空闲自进化自己的推理会把空闲窗口顶掉（同 AdmitBackground）。
+	if priority == 0 && rg.activityCallback != nil {
 		rg.activityCallback()
 	}
 	defer rg.mu.Unlock()
