@@ -1,6 +1,6 @@
 # ADR-0101: Token 经济——零 LLM 寒暄快路、规划便宜池先行级联、缓存稳定前缀
 
-- **状态**: Accepted（决策一～三）/ Proposed（决策四）
+- **状态**: Accepted（决策一～三、决策四 4a、决策五）/ Proposed（决策四 4b/4c）
 - **日期**: 2026-09-25
 - **决策者**: 架构组
 - **相关模块**: M01 / M04 / M05 / `internal/agent/fsm` / `internal/llm/adapter` / `internal/sysinfo`
@@ -46,12 +46,20 @@
 - `SysEnvSnapshot` 只写静态量（OS/CPU/总内存/用户/时区），易变量走 `sys_probe`。
 - DeepSeek/OpenAI 为自动前缀缓存，约束即"前缀字节级稳定"：ImmutableCore 已按 stable→volatile 排序、偏好排序输出（`immutable_core_prompt.go`），新增 prompt 段落必须追加在易变区之后。
 
-### 决策四（Proposed，下一阶段）：回合调用数压缩
+### 决策四：回合调用数压缩
 
 目标：直答回合 1 次 LLM、单步工具回合 2 次。
+
+**4a（Accepted，2026-09-25）简单任务成功跳过 Reflect LLM**：`trySkipReflect` 在"首轮（replanCount=0）+ `ExecAllSucceeded` + 0 < Complexity < `m4_kernel.reflect.skip_complexity`(0.4)"时以 `DeterministicEffect` 直接 `S_REFLECT_DONE`（route=`reflect_skipped`），并清空上一轮 `Reflection`。`ExecAllSucceeded` 由 `runExecuteDAG` 每次执行重置、全部节点 `Success` 且未降级重规划才置真。复杂度缺失（0）/偏高、存在失败、重规划轮次一律保留 LLM 反思。简单工具回合 4 次 LLM → 3 次。
+
+**4b/4c（Proposed，下一阶段）**：
 1. **Perceive 并入 Plan**：单次"作答或规划"调用挂原生 tools——模型直接给正文即回复（替代 S_PERCEIVE_DIRECT），给 tool_calls 即 DAG；Go FSM 仍持控制流（HE-5），LLM 输出只填槽。
 2. **Reflect 并入下一轮 Plan / Respond**：观察—再规划（ADR-0098 决策八）由下一次规划调用携带观察完成，全部节点成功且无继续信号时直接 Respond。
-3. 前置门控：`turn_contract_eval_test.go` 增补"每回合 LLM 调用数"断言与真实 Provider 回放 Eval（HE-4），先有基线再动 FSM 转移表。
+3. 前置门控（4b/4c）：`turn_contract_eval_test.go` 增补"每回合 LLM 调用数"断言与真实 Provider 回放 Eval（HE-4），先有基线再动 FSM 转移表。
+
+### 决策五：S_PLAN 工具定义去重
+
+S_PLAN 已经原生 function-calling 下发完整工具定义（`WithTools`），`BuildToolListSection` 此前又把"名称 + 描述 + 参数 JSON Schema"全文写进 prompt——最大的一块上下文每次规划计费两次（按每工具 ~200 token 计，30 个工具 ≈ 6K token/次）。改为文本目录只列名称（JSON-DAG 输出路径只需 action 合法取值）。无原生 tools 的 `LocalAdapter`（llama.cpp，`SupportsTools=false`）在适配器内把 `WithTools` 定义渲染为文本插在前导 system 之后（`withToolsAsText`），能力差异止于适配器层。附带收益：MCP 工具描述不再出现在文本目录，间接注入面收窄（S-02）。
 
 ## 后果
 
@@ -79,14 +87,18 @@
 - `internal/observability/metrics/metrics_handler.go`（`SelectThinkingMode` / `SelectPlanModelPool`）
 - `internal/agent/fsm/transitions_respond.go`（`planEffect`）
 - `internal/llm/adapter/anthropic_request.go`、`internal/sysinfo/sysinfo.go`
-- 门控：`TestTurnContractEval_PhaticSkipsPerceive`、`TestPlanEffect_CheapFirstCascade`、`TestClassifyIntentWeight`、`TestBuildAnthropicRequest_StablePrefixBreakpoint`
+- `internal/agent/fsm/transitions.go`（`trySkipReflect`）、`internal/agent/agent_execute_dag.go`（`ExecAllSucceeded`）
+- `internal/agent/context/tool_list_section.go`、`internal/llm/adapter/local.go`（`withToolsAsText`）
+- 门控：`TestTurnContractEval_SimpleToolTaskSkipsReflect`、`TestTrySkipReflect`、`TestBuildToolListSection_NamesOnly`、`TestWithToolsAsText`、`TestTurnContractEval_PhaticSkipsPerceive`、`TestPlanEffect_CheapFirstCascade`、`TestClassifyIntentWeight`、`TestBuildAnthropicRequest_StablePrefixBreakpoint`
 
 ## 重新评估触发条件
 
 1. `polaris.cognition.turn_route_total{route="phatic_bypass"}` 对应回合的用户负反馈率显著高于 `direct`，或出现寒暄误判吞掉任务的实例 → 收紧词表。
 2. 首轮 general 池规划导致的重规划率较基线上升超过 30% → 调低 `plan.reasoning_complexity` 或恢复首轮 ThinkingHigh。
-3. Provider 转为"思考深度由模型自适应"且贵/便宜模型价差 < 3× → 重议池级联的必要性。
+3. `reflect_skipped` 回合的用户纠正/重问率显著高于完整反思回合 → 调低或关闭 `reflect.skip_complexity`。
+4. Provider 转为"思考深度由模型自适应"且贵/便宜模型价差 < 3× → 重议池级联的必要性。
 
 ## 修订记录
 
 - 2026-09-25 创建。
+- 2026-09-25 决策四 4a 落地（简单任务跳过反思）；新增决策五（工具定义去重）。

@@ -106,6 +106,8 @@ ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1
 - **阶段进度**：每个 LLMFillEffect 开始时发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`，客户端本地化展示。
 - **路由**：S_PERCEIVE 产出 `TaskModel.NeedsTools`（`*bool`）。`false` → `S_PERCEIVE_DIRECT` → S_RESPOND；`true`/缺失/解析失败 → S_PLAN（保守）。S_PLAN 解析成功但 DAG 为空 → `S_PLAN_EMPTY` → S_RESPOND。
 - **零 LLM 寒暄快路**（ADR-0101 决策一）：`fsm.ClassifyIntentWeight` 判为 `IntentPhatic`（问候/致谢/告别，≤16 rune 整句匹配）时，S_IDLE→S_PERCEIVE 的 Effect 为 `DeterministicEffect`，直接 `S_PERCEIVE_DIRECT`（route=`phatic_bypass`），不调 Perceive、不召回记忆；`IntentAck`（好的/ok/同意）仍走 Perceive（可能授权上一轮提议动作），但跳过长期记忆召回。
+- **简单任务跳过反思**（ADR-0101 决策四 4a）：首轮、`ExecAllSucceeded` 且 0 < Complexity < `m4_kernel.reflect.skip_complexity`(0.4) 时 S_REFLECT 为 `DeterministicEffect`（route=`reflect_skipped`），直接转 S_RESPOND；其余情形照常 LLM 反思。
+- **工具定义去重**（ADR-0101 决策五）：S_PLAN 文本目录只列工具名，完整定义仅经原生 function-calling 下发；无原生 tools 的本地适配器自行渲染文本。
 - **规划池级联**（ADR-0101 决策二）：首轮规划按 `TaskModel.Complexity` 选池——< `m4_kernel.plan.reasoning_complexity`(0.7) 走 `general`、不思考；重规划升级到 `reasoning` + ThinkingMax。
 - **空输出重试**（ADR-0098 决策七）：S_PLAN / S_RESPOND 推理成功但既无正文也无工具调用时，按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环重试一次（S_RESPOND 此时未推出 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
 - **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。超限结果首尾保留截断，全文经 `ToolRefOffloader` 卸载、预览首行给出 `read_tool_ref` 取回提示（ADR-0100 决策三）。LLM 请求被 Provider 以上下文超限拒绝（`protocol.ErrContextOverflow`）时，Agent 对固定前缀外的消息确定性修剪一次后重试（ADR-0100 决策二）。

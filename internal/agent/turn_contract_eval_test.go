@@ -271,6 +271,31 @@ func TestTurnContractEval_ToolPathGroundedReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
+// 场景 C'：简单工具任务首轮全部成功 → 跳过 Reflect LLM（ADR-0101 决策四），
+// 回复仍基于执行结果。
+func TestTurnContractEval_SimpleToolTaskSkipsReflect(t *testing.T) {
+	exec := &mockToolExecutor{}
+	p := newScriptedTurnProvider(map[string][]scriptedReply{
+		"perceive": {{content: `{"Goal":"读取 README","NeedsTools":true,"Complexity":0.2}`}},
+		"plan": {{toolCalls: []types.InferToolCall{
+			{ID: "call_1", Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)},
+		}}},
+		"respond": {{content: "README 读取成功。"}},
+	})
+	out := runScriptedTurn(t, p, &allowPolicyGate{}, exec, "读一下 README")
+
+	if out.final != types.AgentStateComplete || out.reply != "README 读取成功。" {
+		t.Fatalf("final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
+	}
+	if n := len(p.promptsOf("reflect")); n != 0 {
+		t.Errorf("简单任务成功应跳过 Reflect LLM，实际调用 %d 次", n)
+	}
+	if rp := p.promptsOf("respond"); len(rp) != 1 || !strings.Contains(rp[0], "<observations>") {
+		t.Error("跳过反思后回复阶段仍必须看到执行结果")
+	}
+	assertNoInternalArtifacts(t, out.reply)
+}
+
 // 场景 D：重规划闭环——计划被安全闸门拒绝后，原因回灌规划与回复；无允许方案时
 // 空计划转直答说明限制，而非耗尽重试后报错（ADR-0098 决策六）。
 func TestTurnContractEval_RejectionFeedbackLoop(t *testing.T) {

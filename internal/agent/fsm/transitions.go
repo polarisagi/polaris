@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -244,6 +245,9 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerExecuteDone,
 		To:      types.AgentStateReflect,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			if skip := sm.trySkipReflect(sCtx); skip != nil {
+				return []protocol.Effect{skip}, nil
+			}
 			return []protocol.Effect{
 				protocol.LLMFillEffect{
 					SchemaRef: "reflect_result",
@@ -388,6 +392,32 @@ func (sm *StateMachine) registerTransitions() {
 }
 
 // trySystem1Bypass 尝试短路 LLM 思考，直接命中已有技能并组装成验证态（GD-13-004）
+// trySkipReflect 简单任务首轮执行全部成功时以确定性 Effect 代替 Reflect LLM
+// （ADR-0101 决策四）。Reflect 的两个产出在此场景下价值最低：观察—再规划只对
+// "看到结果才知道下一步"的多步任务有意义，而 Complexity<阈值 的任务按 Perceive
+// 标尺就是"一两个显而易见的工具调用"；成功路径的 learnings 信息量也最低。
+// 回复阶段照常拿到执行结果，未达成时由 Respond 如实说明。
+// 任一条件不满足（重规划中、存在软失败、复杂度缺失或偏高）都走原 LLM 反思。
+func (sm *StateMachine) trySkipReflect(sCtx *StateContext) protocol.Effect {
+	gate := config.CurrentThresholds().M4Kernel.ReflectSkipComplexity
+	sCtx.Mu.RLock()
+	ok := gate > 0 && sm.replanCount == 0 && sCtx.ExecAllSucceeded &&
+		sCtx.TaskModel != nil && sCtx.TaskModel.Complexity > 0 && sCtx.TaskModel.Complexity < gate
+	sCtx.Mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return protocol.DeterministicEffect{
+		Fn: func(ctx context.Context, _ protocol.StateContext) (types.State, error) {
+			sCtx.Mu.Lock()
+			sCtx.Reflection = nil // 不让上一轮的反思结论混入本轮回复
+			sCtx.Mu.Unlock()
+			metrics.RecordTurnRoute(ctx, routeReflectSkipped)
+			return "S_REFLECT_DONE", nil
+		},
+	}
+}
+
 // tryPhaticBypass 寒暄/致谢/告别跳过 Perceive LLM 与记忆召回，直接进 S_RESPOND
 // （ADR-0101 决策一）。等价于 Perceive 以 NeedsTools=false 返回，但省掉一次 LLM
 // 往返与一轮 episodic/reflection/RAG 检索（含 embedding 调用）。

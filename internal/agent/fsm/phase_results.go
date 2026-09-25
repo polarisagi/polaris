@@ -23,7 +23,8 @@ const (
 	routePerceiveUnparsed = "perceive_unparsed"
 	routeContinue         = "reflect_continue"
 	routeReplanExhausted  = "replan_exhausted_reply"
-	routePhatic           = "phatic_bypass" // ADR-0101 决策一：寒暄零 LLM 直答
+	routePhatic           = "phatic_bypass"   // ADR-0101 决策一：寒暄零 LLM 直答
+	routeReflectSkipped   = "reflect_skipped" // ADR-0101 决策四：简单任务成功跳过反思 LLM
 )
 
 // applyPerceiveResult 把 Perceive 输出解析进 TaskModel 并决定路由（ADR-0098 决策三）。
