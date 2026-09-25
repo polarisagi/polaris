@@ -6,6 +6,11 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（R7 文件行数改为软/硬双阈值）
+
+- **[阈值] R7 文件行数**：≤ 400 硬上限 → 软 500 / 硬 550。501–550 门控仅告警（`go test -v` 可见），> 550 拦截须拆分（`00-Constitution.md §R7`，`internal/lint/naming_and_size_test.go`）。
+- 存量名单 `file_line_limit_baseline.json` 只收 > 550 的文件；名单内文件降到 ≤ 550 时门控报红，须移出名单（ratchet 只减不增）。
+
 ## 2026-09-25（ADR-0102 Token 经济增量：寒暄快路 / 直答合并 / 按失败成因升级 / 反思跳过 — 含**契约变更**）
 
 - **行为变更**：寒暄/致谢/告别跳过 Perceive LLM 与记忆召回（`fsm.ClassifyIntentWeight`，route=`phatic_bypass`）；短确认仍走 Perceive 但不召回长期记忆；Anthropic system 按消息分 block、首块（ADR-0101 决策四的稳定层）与末块各一缓存断点；`SysEnvSnapshot` 去掉已用内存/磁盘剩余。
