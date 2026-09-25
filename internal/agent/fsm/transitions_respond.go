@@ -3,6 +3,7 @@ package fsm
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/config"
@@ -11,18 +12,20 @@ import (
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // registerRespondTransitions 注册 S_RESPOND 相关转移（ADR-0098 决策二）。
 // S_REFLECT → S_RESPOND 仍在 registerTransitions 里（原 S_REFLECT → S_COMPLETE 改指向），
 // 这里只放 S_RESPOND 新增的入边与出边；拆文件是因为 transitions.go 已超 R7 行数上限。
 func (sm *StateMachine) registerRespondTransitions() {
-	// 直答：Perceive 判定 NeedsTools=false（S_PERCEIVE_DIRECT）。
+	// 直答：Perceive 判定 NeedsTools=false（S_PERCEIVE_DIRECT）。Perceive 已同次产出回复
+	// 时不再调 LLM（ADR-0102 决策四 4b′）；只有这条入边消费 PreparedReply。
 	sm.add(Transition{
 		From:    types.AgentStatePerceive,
 		Trigger: types.TriggerRespondReady,
 		To:      types.AgentStateRespond,
-		Effects: sm.respondEffects,
+		Effects: sm.directRespondEffects,
 	})
 	// 直答：Plan 解析成功但 DAG 为空（S_PLAN_EMPTY），含 FastPath 无缓存 DAG。
 	sm.add(Transition{
@@ -78,6 +81,23 @@ func (sm *StateMachine) registerRespondTransitions() {
 	})
 }
 
+// directRespondEffects Perceive→Respond 入边。PreparedReply 非空时返回确定性 Effect：
+// 回复正文由 Agent 在执行该 Effect 时以 AudienceUser 发布（agent 层 publishPreparedReply），
+// S_RESPOND 仍是唯一向用户发布正文的状态（par_inv_06 不变），只是这一次不需要 LLM。
+func (sm *StateMachine) directRespondEffects(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+	sCtx.Mu.RLock()
+	prepared := sCtx.PreparedReply
+	sCtx.Mu.RUnlock()
+	if prepared == "" {
+		return sm.respondEffects(ctx, sCtx)
+	}
+	return []protocol.Effect{protocol.DeterministicEffect{
+		Fn: func(context.Context, protocol.StateContext) (types.State, error) {
+			return "S_RESPOND_DONE", nil
+		},
+	}}, nil
+}
+
 func (sm *StateMachine) respondEffects(_ context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
 	return []protocol.Effect{sm.respondEffect(sCtx)}, nil
 }
@@ -111,26 +131,25 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 // planEffect S_PLAN 的 LLM 填空（Perceive→Plan、Replan→Plan、空输出自环三处共用）。
 //
 // 空输出（既无正文也无工具调用，fill 为空）按 MaxRetry 自环重试：DeepSeek 思考模式
-// 挂载工具时偶发只输出思考链就以 stop 结束（ADR-0098 决策七）。有内容但解析失败
-// 不在此重试——那是契约违反，交给既有的缓存复用 / S_PLAN_FAILED 语义。
+// 挂载工具时偶发只输出思考链就以 stop 结束（ADR-0098 决策七），重试时关闭思考。
+//
+// 升级重试（ADR-0102 决策六，每回合至多一次）：规划产出不可用（无缓存 DAG 可复用）
+// 或规划模型自评超纲（escalate=true）时，按 RecordFailure 升级后在更高档位重试，
+// 而不是直接 S_PLAN_FAILED 丢掉整轮，或反过来一开始就让所有规划付 Pro 的价钱。
 func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 	const maxRetry = 1
-	originTaint := types.TaintMedium
-	if lv := sCtx.RawIntentTS.Source.OriginTaintLevel; lv != 0 {
-		originTaint = lv
+	var complexity float64
+	sCtx.Mu.RLock()
+	if sCtx.TaskModel != nil {
+		complexity = sCtx.TaskModel.Complexity
 	}
-	thinking := metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current())
-	if sm.replanCount == 0 {
-		// 用户输入恒为 TaintHigh，SelectThinkingMode 对首轮规划恒返回 max；首轮改用配置档位
-		// （默认 high，即 DeepSeek 默认），重规划仍按 SelectThinkingMode 升到 max（ADR-0101 决策三）。
-		if m := phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingPlanInitial); m != "" {
-			thinking = m
-		}
-	}
-	if sCtx.PlanAttempts > 0 {
+	escalation := sCtx.Escalation
+	noThinking := sCtx.PlanRetryNoThinking
+	sCtx.Mu.RUnlock()
+	pool, thinking, level := metrics.SelectPlanTier(escalation, complexity, metrics.GlobalSurpriseIndex().Current())
+	if noThinking {
 		// 空输出重试关闭思考：空输出的触发条件正是"思考模式 + 挂工具"（决策七实证），
-		// 原样重试只是再掷一次同一枚骰子。用户输入恒为 TaintHigh，SelectThinkingMode
-		// 对首轮规划恒返回 ThinkingMax，不在重试时换掉它，重试等于没有。
+		// 原样重试只是再掷一次同一枚骰子。
 		thinking = types.ThinkingDisabled
 	}
 	return protocol.LLMFillEffect{
@@ -142,15 +161,52 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 		OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
 			if len(bytes.TrimSpace(content)) == 0 && sCtx.PlanAttempts < maxRetry {
 				sCtx.PlanAttempts++
+				sCtx.PlanRetryNoThinking = true
 				slog.Warn("plan: empty output (no content, no tool calls), retrying", "attempt", sCtx.PlanAttempts)
 				return "S_PLAN_RETRY", nil
 			}
-			return parsePlanOnSuccess(sCtx, pCtx, content)
+			if level < 2 && planSelfEscalates(content) && sm.tryEscalatePlan(sCtx, FailureSelfEscalate) {
+				return "S_PLAN_RETRY", nil
+			}
+			state, err := parsePlanOnSuccess(sCtx, pCtx, content)
+			// 空输出耗尽重试属 Provider 行为问题（决策七），不按能力不足升级。
+			if state == "S_PLAN_FAILED" && len(bytes.TrimSpace(content)) > 0 && sm.tryEscalatePlan(sCtx, FailurePlanInvalid) {
+				return "S_PLAN_RETRY", nil
+			}
+			return state, err
 		},
 		OnFailure: sm.onPlanFailure,
 		MaxRetry:  maxRetry,
-		ModelPool: planModelPool(sm.replanCount),
+		ModelPool: string(pool),
 	}
+}
+
+// tryEscalatePlan 记录能力类失败并准许一次升级重试；本回合已用过则返回 false。
+func (sm *StateMachine) tryEscalatePlan(sCtx *StateContext, kind FailureKind) bool {
+	sCtx.Mu.Lock()
+	used := sCtx.PlanEscalated
+	if !used {
+		sCtx.PlanEscalated = true
+		sCtx.PlanRetryNoThinking = false
+	}
+	sCtx.Mu.Unlock()
+	if used {
+		return false
+	}
+	sCtx.RecordFailure(kind)
+	metrics.RecordTurnRoute(context.Background(), routePlanEscalated)
+	slog.Info("plan: escalating model tier and retrying", "kind", kind)
+	return true
+}
+
+// planSelfEscalates 规划模型是否声明本任务超出其能力（plan.md 规则 9）。
+// 只认顶层显式布尔 true；解析失败按未声明处理（交给常规解析路径）。
+func planSelfEscalates(content []byte) bool {
+	var probe struct {
+		Escalate bool `json:"escalate"`
+	}
+	raw := util.ExtractJSONBraces(string(content))
+	return json.Unmarshal([]byte(raw), &probe) == nil && probe.Escalate
 }
 
 // phaseThinking 把阶段思考档位配置转为 ThinkingMode；取值已在阈值加载时校验
@@ -158,16 +214,4 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 func phaseThinking(v string) types.ThinkingMode {
 	m, _ := types.ParseThinkingMode(v)
 	return m
-}
-
-// planModelPool 首轮规划走便宜档，只有重规划（首轮计划被拒或未达成目标）才升到
-// model_pool.plan_replan（默认 reasoning）。此前规划恒走 reasoning 池：S_PLAN 携带全部
-// 工具 schema 且思考档位最高，是单次最贵的调用，日常对话的费用几乎都落在贵档模型上
-// （ADR-0101 决策七）。
-func planModelPool(replanCount int) string {
-	th := config.CurrentThresholds().M4Kernel
-	if replanCount > 0 {
-		return th.ModelPoolPlanReplan
-	}
-	return th.ModelPoolPlanInitial
 }

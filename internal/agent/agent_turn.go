@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -52,6 +54,25 @@ func (a *Agent) publishTurnPhase(s types.AgentState) {
 	a.publishStreamEvent(types.AgentStreamEvent{
 		Type:    types.AgentStreamEventPhase,
 		Content: string(phase),
+	})
+}
+
+// publishPreparedReply 发布 Perceive 同次产出的直答（ADR-0102 决策四 4b′）并消费之。
+// 事件形态与 doStreamInfer 的 AudienceUser 文本增量一致，session 侧无需区分来源。
+func (a *Agent) publishPreparedReply() {
+	a.sCtx.Mu.Lock()
+	reply := a.sCtx.PreparedReply
+	a.sCtx.PreparedReply = ""
+	taintLevel := a.sCtx.GlobalTaintLevel
+	a.sCtx.Mu.Unlock()
+	a.publishTurnPhase(types.AgentStateRespond)
+	if reply == "" {
+		return
+	}
+	a.publishStreamEvent(types.AgentStreamEvent{
+		Type:       types.AgentStreamEventToken,
+		Content:    reply,
+		TaintLevel: taintLevel,
 	})
 }
 
@@ -128,6 +149,28 @@ func (a *Agent) abortTurn(ctx context.Context, err error) {
 		a.sm.ForceState(types.AgentStateFailed)
 	}
 	a.handleTerminalState(ctx, types.AgentStateFailed)
+}
+
+// validationFailureKind S_VALIDATE 拒绝的成因（ADR-0102 决策六）：只有 L0 结构错误计入升级。
+// 非 DAGValidationError（如 L1-Taint 包装错误、校验器缺失）按策略拒绝处理——升级模型不改变结论。
+func validationFailureKind(err error) fsm.FailureKind {
+	var ve *protocol.DAGValidationError
+	if errors.As(err, &ve) {
+		return fsm.ClassifyValidationLayer(ve.Layer)
+	}
+	return fsm.FailurePolicy
+}
+
+// executionFailureKind S_EXECUTE 失败的成因：瞬时/环境类（超时、网络、限流、取消、Provider 耗尽）
+// 不升级；其余视为工具报错（参数错、对象不存在等），重复出现才升级。
+func executionFailureKind(err error) fsm.FailureKind {
+	for _, c := range []apperr.Code{apperr.CodeTimeout, apperr.CodeCancelled, apperr.CodeNetworkUnavailable,
+		apperr.CodeResourceExhausted, apperr.CodeProviderExhausted, apperr.CodeStorageUnavailable, apperr.CodeConflict} {
+		if apperr.IsCode(err, c) {
+			return fsm.FailureTransient
+		}
+	}
+	return fsm.FailureToolError
 }
 
 // validationFeedback 把 S_VALIDATE 的结构化拒绝翻译成"哪个工具、被哪层、为何拒绝"，

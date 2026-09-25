@@ -37,13 +37,14 @@ type scriptedTurnProvider struct {
 	mu      sync.Mutex
 	script  map[string][]scriptedReply // phase → 按调用次序出队
 	prompts map[string][]string
+	pools   map[string][]string // phase → 每次调用请求的 ModelPool（ADR-0102 决策六评测）
 }
 
 func newScriptedTurnProvider(script map[string][]scriptedReply) *scriptedTurnProvider {
-	return &scriptedTurnProvider{script: script, prompts: map[string][]string{}}
+	return &scriptedTurnProvider{script: script, prompts: map[string][]string{}, pools: map[string][]string{}}
 }
 
-func (p *scriptedTurnProvider) next(msgs []types.Message) scriptedReply {
+func (p *scriptedTurnProvider) next(msgs []types.Message, opts ...types.InferOption) scriptedReply {
 	var all strings.Builder
 	for _, m := range msgs {
 		all.WriteString(m.Content + "\n")
@@ -58,6 +59,11 @@ func (p *scriptedTurnProvider) next(msgs []types.Message) scriptedReply {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prompts[phase] = append(p.prompts[phase], all.String())
+	var o types.InferOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	p.pools[phase] = append(p.pools[phase], o.ModelPool)
 	q := p.script[phase]
 	if len(q) == 0 {
 		return scriptedReply{content: "UNSCRIPTED_" + phase}
@@ -69,14 +75,14 @@ func (p *scriptedTurnProvider) next(msgs []types.Message) scriptedReply {
 	return r
 }
 
-func (p *scriptedTurnProvider) Infer(_ context.Context, msgs []types.Message, _ ...types.InferOption) (*types.ProviderResponse, error) {
-	r := p.next(msgs)
+func (p *scriptedTurnProvider) Infer(_ context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+	r := p.next(msgs, opts...)
 	return &types.ProviderResponse{Content: r.content, ToolCalls: r.toolCalls}, nil
 }
 
 // StreamInfer 把正文切成多帧并附带思考链，贴近真实流式形态。
-func (p *scriptedTurnProvider) StreamInfer(_ context.Context, msgs []types.Message, _ ...types.InferOption) (<-chan types.StreamEvent, error) {
-	r := p.next(msgs)
+func (p *scriptedTurnProvider) StreamInfer(_ context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	r := p.next(msgs, opts...)
 	ch := make(chan types.StreamEvent, len(r.content)+len(r.toolCalls)+2)
 	ch <- types.StreamEvent{Type: types.StreamThinking, Content: "思考中"}
 	for _, chunk := range strings.SplitAfter(r.content, "。") {
@@ -205,6 +211,47 @@ func TestTurnContractEval_DirectReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
+// 场景 A-1：寒暄零 LLM 感知（ADR-0102 决策一）——只调一次 Respond，Perceive/Plan 零调用。
+func TestTurnContractEval_PhaticSkipsPerceive(t *testing.T) {
+	p := newScriptedTurnProvider(map[string][]scriptedReply{
+		"respond": {{content: "你好！有什么可以帮你？"}},
+	})
+	out := runScriptedTurn(t, p, &allowPolicyGate{}, &mockToolExecutor{}, "你好呀")
+
+	if out.final != types.AgentStateComplete || out.reply != "你好！有什么可以帮你？" {
+		t.Fatalf("final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
+	}
+	if n := len(p.promptsOf("perceive")); n != 0 {
+		t.Errorf("寒暄不应调用 Perceive LLM，实际 %d 次", n)
+	}
+	if n := len(p.promptsOf("plan")); n != 0 {
+		t.Errorf("寒暄不应调用规划阶段，实际 %d 次", n)
+	}
+	if n := len(p.promptsOf("respond")); n != 1 {
+		t.Errorf("寒暄应恰好一次 Respond，实际 %d 次", n)
+	}
+	assertNoInternalArtifacts(t, out.reply)
+}
+
+// 场景 A-2：直答合并（ADR-0102 决策四 4b′）——Perceive 同次产出回复，整回合只调 1 次 LLM。
+func TestTurnContractEval_DirectReplyMergedIntoPerceive(t *testing.T) {
+	p := newScriptedTurnProvider(map[string][]scriptedReply{
+		"perceive": {{content: `{"Goal":"询问身份","NeedsTools":false,"Reply":"我是 Polaris，你的 AI 助手。"}`}},
+	})
+	out := runScriptedTurn(t, p, &allowPolicyGate{}, &mockToolExecutor{}, "你是谁？")
+
+	if out.final != types.AgentStateComplete || out.reply != "我是 Polaris，你的 AI 助手。" {
+		t.Fatalf("final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
+	}
+	if n := len(p.promptsOf("respond")); n != 0 {
+		t.Errorf("Perceive 已产出回复时不应再调 Respond LLM，实际 %d 次", n)
+	}
+	if strings.Join(out.phases, ",") != "perceive,respond" {
+		t.Errorf("phases = %v, want perceive,respond", out.phases)
+	}
+	assertNoInternalArtifacts(t, out.reply)
+}
+
 // 场景 B：原始缺陷形态——规划阶段模型输出"散文 + 围栏 JSON + 散文"。
 // 修复前这段内容被逐 token 推给用户，且回合以 S_FAILED 结束。
 func TestTurnContractEval_MisbehavingPlanNeverLeaks(t *testing.T) {
@@ -249,6 +296,31 @@ func TestTurnContractEval_ToolPathGroundedReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
+// 场景 C-1：简单工具任务首轮全部成功 → 跳过 Reflect LLM（ADR-0102 决策四），
+// 回复仍基于执行结果。
+func TestTurnContractEval_SimpleToolTaskSkipsReflect(t *testing.T) {
+	exec := &mockToolExecutor{}
+	p := newScriptedTurnProvider(map[string][]scriptedReply{
+		"perceive": {{content: `{"Goal":"读取 README","NeedsTools":true,"Complexity":0.2}`}},
+		"plan": {{toolCalls: []types.InferToolCall{
+			{ID: "call_1", Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)},
+		}}},
+		"respond": {{content: "README 读取成功。"}},
+	})
+	out := runScriptedTurn(t, p, &allowPolicyGate{}, exec, "读一下 README")
+
+	if out.final != types.AgentStateComplete || out.reply != "README 读取成功。" {
+		t.Fatalf("final=%v reply=%q errors=%v", out.final, out.reply, out.errors)
+	}
+	if n := len(p.promptsOf("reflect")); n != 0 {
+		t.Errorf("简单任务成功应跳过 Reflect LLM，实际调用 %d 次", n)
+	}
+	if rp := p.promptsOf("respond"); len(rp) != 1 || !strings.Contains(rp[0], "<observations>") {
+		t.Error("跳过反思后回复阶段仍必须看到执行结果")
+	}
+	assertNoInternalArtifacts(t, out.reply)
+}
+
 // 场景 D：重规划闭环——计划被安全闸门拒绝后，原因回灌规划与回复；无允许方案时
 // 空计划转直答说明限制，而非耗尽重试后报错（ADR-0098 决策六）。
 func TestTurnContractEval_RejectionFeedbackLoop(t *testing.T) {
@@ -271,6 +343,15 @@ func TestTurnContractEval_RejectionFeedbackLoop(t *testing.T) {
 	}
 	if rp := p.promptsOf("respond"); len(rp) != 1 || !strings.Contains(rp[0], "previous_attempts_failed") {
 		t.Error("回复阶段必须看到被拒原因，才能如实说明限制")
+	}
+	// ADR-0102 决策六：安全拒绝换更贵的模型也照样被拒，重规划须留在首轮的便宜池。
+	p.mu.Lock()
+	pools := append([]string(nil), p.pools["plan"]...)
+	p.mu.Unlock()
+	for i, pool := range pools {
+		if pool == string(types.ModelPoolReasoning) || pool != pools[0] {
+			t.Errorf("第 %d 次规划池 = %q（首轮 %q），安全拒绝后不应升级", i+1, pool, pools[0])
+		}
 	}
 	assertNoInternalArtifacts(t, out.reply)
 }

@@ -117,14 +117,14 @@ type M4KernelThresholds struct {
 
 	// 各阶段思考档位（ADR-0101 决策三）："" = 沿用 Provider 默认（DeepSeek 省略即 high），
 	// 其余取 disabled/low/high/max。推理 token 按输出价计费：结构化分类阶段无需深度思考；
-	// 首轮规划不再因用户输入恒为 TaintHigh 而恒为 max，重规划仍按 SelectThinkingMode 升档。
+	// 首轮规划不再因用户输入恒为 TaintHigh 而恒为 max；升档由 metrics.SelectPlanTier 按失败成因决定（ADR-0102 决策六）。
 	ThinkingPerceive    string `toml:"thinking.perceive"`     // "low"
 	ThinkingPlanInitial string `toml:"thinking.plan_initial"` // "high"
 	ThinkingReflect     string `toml:"thinking.reflect"`      // "low"
 	ThinkingRespond     string `toml:"thinking.respond"`      // ""
 
 	// 各阶段模型池（ADR-0101 决策七）：default=便宜档（flash/mini/haiku）、general=中档、
-	// reasoning=贵档（pro/opus/o3）。日常回合全部走便宜档，只有首轮规划失败后的重规划升档；
+	// reasoning=贵档（pro/opus/o3）。日常回合全部走便宜档，plan_replan 为规划阶梯升级后的目标池（ADR-0102 决策六）；
 	// 设 model_pool.plan_replan="default" 即完全不用贵档。
 	ModelPoolPerceive    string `toml:"model_pool.perceive"`     // "default"
 	ModelPoolPlanInitial string `toml:"model_pool.plan_initial"` // "default"
@@ -132,6 +132,14 @@ type M4KernelThresholds struct {
 	ModelPoolReflect     string `toml:"model_pool.reflect"`      // "default"
 	ModelPoolRespond     string `toml:"model_pool.respond"`      // "default"
 	ModelPoolValidate    string `toml:"model_pool.validate"`     // "default"
+
+	// PlanReasoningComplexity 规划阶梯起点阈值（ADR-0102 决策六）：Perceive（LLM）给出的
+	// TaskModel.Complexity ≥ 此值时首轮规划即用 model_pool.plan_replan 池 + ThinkingHigh；
+	// 低于此值从 model_pool.plan_initial / thinking.plan_initial 起步，能力类失败再升级。
+	PlanReasoningComplexity float64 `toml:"plan.reasoning_complexity"` // 0.7
+	// ReflectSkipComplexity 反思跳过阈值（ADR-0102 决策四 4a）：首轮执行全部成功且
+	// 0 < TaskModel.Complexity < 此值时不调 Reflect LLM，直接回复。0 = 关闭跳过。
+	ReflectSkipComplexity float64 `toml:"reflect.skip_complexity"` // 0.4
 }
 
 // Validate 校验 M4 阈值中需要解析的枚举字段，配置错误在加载时失败而非运行时静默回退。
@@ -420,6 +428,8 @@ func DefaultThresholds() Thresholds {
 			ModelPoolReflect:               "default",
 			ModelPoolRespond:               "default",
 			ModelPoolValidate:              "default",
+			PlanReasoningComplexity:        0.7,
+			ReflectSkipComplexity:          0.4,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

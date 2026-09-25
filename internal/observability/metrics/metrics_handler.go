@@ -259,30 +259,93 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 	})
 }
 
-// SelectThinkingMode 根据当前系统的运行时状态，决定应该使用哪个档位的 ThinkingMode。
-// 规则：
-// 1. 若重规划次数 > 0，或任务最大污点等级 >= 3（TaintHigh），或 SurpriseIndex > 0.6，则使用 ThinkingMax (Fail-safe/High-risk)
-// 2. 若 SurpriseIndex >= 0.3，则使用 ThinkingHigh (Moderate risk)
-// 3. 否则默认 ThinkingDisabled
-func SelectThinkingMode(replanCount int, maxTaint types.TaintLevel, surpriseIndex float64) types.ThinkingMode {
-	if replanCount > 0 || maxTaint >= types.TaintHigh {
-		return types.ThinkingMax
+// SelectPlanTier 规划阶段的模型池 + 思考档（ADR-0102 决策六；取代 SelectThinkingMode 的
+// "重规划即 Max"，并以 ADR-0101 决策三/七的阶段配置为阶梯两端）。
+// 分工：**LLM 判断语义难度，程序持有策略**——Perceive（便宜模型）给出 TaskModel.Complexity，
+// 规划模型可自评 escalate；是否升级、升到哪一级由本函数这张确定性阶梯表决定。
+//
+// 升级阶梯（level 越高越贵；base = model_pool.plan_initial + thinking.plan_initial，
+// escalated = model_pool.plan_replan）：
+//
+//	0  base 池      + base 档位           绝大多数任务
+//	1  base 池      + base 档位上调一档    便宜模型多想一点：陌生任务 / 首次能力类失败
+//	2  escalated 池 + ThinkingHigh        LLM 判定复杂 / 自评超纲 / 连续能力类失败
+//	3  escalated 池 + ThinkingMax         仍失败，或复杂且高度陌生
+//
+// level 由两部分相加：起点（Complexity ≥ plan.reasoning_complexity → 2；SI ≥ high → 加 1；
+// SI ≥ low → 至少 1）与 escalation。escalation 仅由能力类失败累计（计划结构不可用、
+// 工具重复报错、模型自评超纲），安全拒绝/瞬时故障/观察—再规划不计，见 fsm.RecordFailure。
+// 污点不参与：污点是来源安全标签，由五防线消费；思考深度是成本旋钮。
+func SelectPlanTier(escalation int, complexity, surpriseIndex float64) (pool types.ModelPool, thinking types.ThinkingMode, level int) {
+	c := loadPlanTierConfig()
+	if complexity >= c.complexGate {
+		level = 2
 	}
-	low, high := 0.30, 0.60
-	if cfg := config.Get(); cfg != nil {
-		t := cfg.Thresholds.M9SelfImprove
-		if t.SurpriseRouteLowThreshold > 0 {
-			low = t.SurpriseRouteLowThreshold
-		}
-		if t.SurpriseRouteHighThreshold > 0 {
-			high = t.SurpriseRouteHighThreshold
-		}
+	if surpriseIndex >= c.siHigh {
+		level++
+	} else if surpriseIndex >= c.siLow && level == 0 {
+		level = 1
 	}
-	if surpriseIndex >= high {
-		return types.ThinkingMax
+	if escalation > 0 {
+		level += escalation
 	}
-	if surpriseIndex >= low {
-		return types.ThinkingHigh
+	switch {
+	case level <= 0:
+		return c.basePool, c.baseThinking, 0
+	case level == 1:
+		return c.basePool, bumpThinking(c.baseThinking), 1
+	case level == 2:
+		return c.escalatedPool, types.ThinkingHigh, 2
+	default:
+		return c.escalatedPool, types.ThinkingMax, 3
 	}
-	return types.ThinkingDisabled
 }
+
+// planTierConfig SelectPlanTier 的阈值与阶梯两端；未加载配置时取与 DefaultThresholds 一致的兜底。
+type planTierConfig struct {
+	siLow, siHigh, complexGate float64
+	basePool, escalatedPool    types.ModelPool
+	baseThinking               types.ThinkingMode
+}
+
+func loadPlanTierConfig() planTierConfig {
+	c := planTierConfig{
+		siLow: 0.30, siHigh: 0.60, complexGate: DefaultPlanReasoningComplexity,
+		basePool: types.ModelPoolDefault, escalatedPool: types.ModelPoolReasoning, baseThinking: types.ThinkingHigh,
+	}
+	cfg := config.Get()
+	if cfg == nil {
+		return c
+	}
+	if t := cfg.Thresholds.M9SelfImprove; t.SurpriseRouteLowThreshold > 0 {
+		c.siLow = t.SurpriseRouteLowThreshold
+	}
+	if t := cfg.Thresholds.M9SelfImprove; t.SurpriseRouteHighThreshold > 0 {
+		c.siHigh = t.SurpriseRouteHighThreshold
+	}
+	k := cfg.Thresholds.M4Kernel
+	if k.PlanReasoningComplexity > 0 {
+		c.complexGate = k.PlanReasoningComplexity
+	}
+	if k.ModelPoolPlanInitial != "" {
+		c.basePool = types.ModelPool(k.ModelPoolPlanInitial)
+	}
+	if k.ModelPoolPlanReplan != "" {
+		c.escalatedPool = types.ModelPool(k.ModelPoolPlanReplan)
+	}
+	if m, ok := types.ParseThinkingMode(k.ThinkingPlanInitial); ok {
+		c.baseThinking = m
+	}
+	return c
+}
+
+// bumpThinking 思考档上调一档：未指定/关闭/low → high，high → max。
+func bumpThinking(m types.ThinkingMode) types.ThinkingMode {
+	if m == types.ThinkingHigh || m == types.ThinkingMax {
+		return types.ThinkingMax
+	}
+	return types.ThinkingHigh
+}
+
+// DefaultPlanReasoningComplexity plan.reasoning_complexity 未配置时的兜底（SSoT：spec/state.yaml）。
+const DefaultPlanReasoningComplexity = 0.7

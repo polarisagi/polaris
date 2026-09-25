@@ -1,6 +1,8 @@
 package fsm
 
 import (
+	"github.com/polarisagi/polaris/internal/observability/metrics"
+
 	"errors"
 	"testing"
 
@@ -175,8 +177,10 @@ func TestReplanTransition_SingleReplanDone(t *testing.T) {
 }
 
 // TestPlanEffect_RetriesEmptyOutputOnce ADR-0098 决策七：S_PLAN 既无正文也无工具调用
-// 时自环重试一次，仍为空则按既有语义失败；有内容但解析失败不重试。
+// 时自环重试一次，仍为空则按既有语义失败（空输出不按能力不足升级，ADR-0102 决策六）。
+// 有内容但解析失败：升级档位重试一次（决策六），再失败才 S_PLAN_FAILED。
 func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
+	pinSurprise(t, 0.1)
 	sm := NewStateMachine(&dummyContextBuilder{})
 	sCtx := &StateContext{}
 	eff := sm.planEffect(sCtx)
@@ -186,8 +190,19 @@ func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
 	if st, _ := eff.OnSuccess(protocol.StateContext{}, []byte("")); st != "S_PLAN_FAILED" {
 		t.Fatalf("超过 MaxRetry 应失败，got %q", st)
 	}
-	if st, _ := sm.planEffect(&StateContext{}).OnSuccess(protocol.StateContext{}, []byte("不是 JSON")); st != "S_PLAN_FAILED" {
-		t.Fatalf("有内容但解析失败不应走空输出重试，got %q", st)
+	if sCtx.Escalation != 0 {
+		t.Fatalf("空输出不应计入升级，got %d", sCtx.Escalation)
+	}
+
+	bad := &StateContext{}
+	if st, _ := sm.planEffect(bad).OnSuccess(protocol.StateContext{}, []byte("不是 JSON")); st != "S_PLAN_RETRY" {
+		t.Fatalf("有内容但不可用应升级重试一次，got %q", st)
+	}
+	if bad.Escalation != 1 {
+		t.Fatalf("计划不可用应升级一级，got %d", bad.Escalation)
+	}
+	if st, _ := sm.planEffect(bad).OnSuccess(protocol.StateContext{}, []byte("还是不是 JSON")); st != "S_PLAN_FAILED" {
+		t.Fatalf("每回合只升级重试一次，got %q", st)
 	}
 	if tr, ok := sm.transitions[types.AgentStatePlan][types.TriggerFillRetry]; !ok || tr.To != types.AgentStatePlan {
 		t.Fatal("缺少 S_PLAN 空输出自环")
@@ -195,35 +210,75 @@ func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
 }
 
 // TestPlanEffect_RetryDisablesThinking 空输出重试须关闭思考：触发条件即"思考模式 +
-// 挂工具"，原样重试等于没有重试。首轮规划取 m4_kernel.thinking.plan_initial（默认
-// high），不再因用户输入恒为 TaintHigh 而恒为 max（ADR-0101 决策三）；重规划仍升到 max。
+// 挂工具"，原样重试等于没有重试。
 func TestPlanEffect_RetryDisablesThinking(t *testing.T) {
+	pinSurprise(t, 0.1)
 	sm := NewStateMachine(&dummyContextBuilder{})
-	sCtx := &StateContext{}
-	sCtx.RawIntentTS = taint.NewTaintedString("写个文件", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
-	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingHigh {
-		t.Fatalf("首轮规划应取配置档位 high，got %q", m)
+	sCtx := &StateContext{TaskModel: &TaskModel{Goal: "重构模块", Complexity: 0.9}}
+	eff := sm.planEffect(sCtx)
+	if eff.ThinkingMode == types.ThinkingDisabled {
+		t.Fatalf("高复杂度首轮规划应开启思考，got %q", eff.ThinkingMode)
 	}
-	sm.replanCount = 1
-	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingMax {
-		t.Fatalf("重规划应升到 ThinkingMax，got %q", m)
+	if st, _ := eff.OnSuccess(protocol.StateContext{}, nil); st != "S_PLAN_RETRY" {
+		t.Fatalf("空输出应重试，got %q", st)
 	}
-	sm.replanCount = 0
-	sCtx.PlanAttempts = 1
 	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingDisabled {
 		t.Fatalf("空输出重试应关闭思考，got %q", m)
 	}
 }
 
-// 日常回合规划走便宜档，只有重规划升到贵档（ADR-0101 决策七）。
-func TestPlanEffect_ModelPoolEscalatesOnlyOnReplan(t *testing.T) {
+// TestPlanEffect_CheapFirstCascade ADR-0102 决策六（阶梯两端取 ADR-0101 决策三/七阶段配置）：LLM 判难度（Complexity）+ 程序持策略。
+// 便宜池先行；只有能力类失败才沿阶梯升级，安全拒绝/瞬时故障/观察—再规划不升级；
+// 污点等级不驱动思考深度（用户输入恒 TaintHigh）。
+func TestPlanEffect_CheapFirstCascade(t *testing.T) {
+	pinSurprise(t, 0.1)
 	sm := NewStateMachine(&dummyContextBuilder{})
-	sCtx := &StateContext{}
-	if p := sm.planEffect(sCtx).ModelPool; p != string(types.ModelPoolDefault) {
-		t.Fatalf("首轮规划应走 default 池，got %q", p)
+	high := taint.NewTaintedString("列出目录", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
+	tier := func(s *StateContext) (string, types.ThinkingMode) {
+		e := sm.planEffect(s)
+		return e.ModelPool, e.ThinkingMode
 	}
-	sm.replanCount = 1
-	if p := sm.planEffect(sCtx).ModelPool; p != string(types.ModelPoolReasoning) {
-		t.Fatalf("重规划应升到 reasoning 池，got %q", p)
+	expect := func(s *StateContext, pool types.ModelPool, mode types.ThinkingMode, msg string) {
+		t.Helper()
+		if p, m := tier(s); p != string(pool) || m != mode {
+			t.Fatalf("%s：want %s/%s, got %s/%s", msg, pool, mode, p, m)
+		}
 	}
+
+	simple := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "列出目录", Complexity: 0.2}}
+	// 默认配置：model_pool.plan_initial=default、thinking.plan_initial=high、plan_replan=reasoning
+	expect(simple, types.ModelPoolDefault, types.ThinkingHigh, "简单任务")
+
+	complexTask := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "迁移数据库", Complexity: 0.8}}
+	expect(complexTask, types.ModelPoolReasoning, types.ThinkingHigh, "LLM 判定复杂")
+
+	// 不升级的成因：安全拒绝 / 瞬时故障 / 观察—再规划 / 首次工具报错
+	sm.replanCount = 2
+	for _, k := range []FailureKind{FailurePolicy, FailureTransient, FailureGoalUnmet, FailureToolError} {
+		simple.RecordFailure(k)
+	}
+	expect(simple, types.ModelPoolDefault, types.ThinkingHigh, "非能力类失败不应升级（含重规划）")
+
+	// 能力类失败逐级升级
+	simple.RecordFailure(FailureToolError) // 第二次工具报错
+	expect(simple, types.ModelPoolDefault, types.ThinkingMax, "重复工具报错升一级：便宜池多想一档")
+	simple.RecordFailure(FailurePlanInvalid)
+	expect(simple, types.ModelPoolReasoning, types.ThinkingHigh, "再次能力失败升到 reasoning")
+	simple.RecordFailure(FailurePlanInvalid)
+	expect(simple, types.ModelPoolReasoning, types.ThinkingMax, "阶梯顶端")
+
+	// 规划模型自评超纲：直接到 reasoning
+	self := &StateContext{TaskModel: &TaskModel{Goal: "x", Complexity: 0.3}}
+	if st, _ := sm.planEffect(self).OnSuccess(protocol.StateContext{}, []byte(`{"escalate":true,"nodes":[],"edges":[]}`)); st != "S_PLAN_RETRY" {
+		t.Fatalf("自评超纲应升级重试，got %q", st)
+	}
+	expect(self, types.ModelPoolReasoning, types.ThinkingHigh, "自评超纲")
+}
+
+// pinSurprise 固定进程级 SurpriseIndex，测试结束恢复。
+func pinSurprise(t *testing.T, v float64) {
+	t.Helper()
+	prev := metrics.GlobalSurpriseIndex().Current()
+	metrics.GlobalSurpriseIndex().SetLastValue(v)
+	t.Cleanup(func() { metrics.GlobalSurpriseIndex().SetLastValue(prev) })
 }
