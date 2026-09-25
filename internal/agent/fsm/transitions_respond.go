@@ -3,12 +3,14 @@ package fsm
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // registerRespondTransitions 注册 S_RESPOND 相关转移（ADR-0098 决策二）。
@@ -126,22 +128,23 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 // planEffect S_PLAN 的 LLM 填空（Perceive→Plan、Replan→Plan、空输出自环三处共用）。
 //
 // 空输出（既无正文也无工具调用，fill 为空）按 MaxRetry 自环重试：DeepSeek 思考模式
-// 挂载工具时偶发只输出思考链就以 stop 结束（ADR-0098 决策七）。有内容但解析失败
-// 不在此重试——那是契约违反，交给既有的缓存复用 / S_PLAN_FAILED 语义。
+// 挂载工具时偶发只输出思考链就以 stop 结束（ADR-0098 决策七），重试时关闭思考。
+//
+// 升级重试（ADR-0101 决策六，每回合至多一次）：规划产出不可用（无缓存 DAG 可复用）
+// 或规划模型自评超纲（escalate=true）时，按 RecordFailure 升级后在更高档位重试，
+// 而不是直接 S_PLAN_FAILED 丢掉整轮，或反过来一开始就让所有规划付 Pro 的价钱。
 func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 	const maxRetry = 1
-	// ADR-0101 决策二：便宜池先行、失败再升级。复杂度缺失（Perceive 未解析/寒暄旁路）
-	// 按 0 处理——走便宜池；真不够用会以校验失败/目标未达成进入重规划，届时升级。
 	var complexity float64
 	sCtx.Mu.RLock()
 	if sCtx.TaskModel != nil {
 		complexity = sCtx.TaskModel.Complexity
 	}
+	escalation := sCtx.Escalation
+	noThinking := sCtx.PlanRetryNoThinking
 	sCtx.Mu.RUnlock()
-	surprise := metrics.GlobalSurpriseIndex().Current()
-	thinking := metrics.SelectThinkingMode(sm.replanCount, complexity, surprise)
-	pool := metrics.SelectPlanModelPool(sm.replanCount, complexity, surprise)
-	if sCtx.PlanAttempts > 0 {
+	pool, thinking := metrics.SelectPlanTier(escalation, complexity, metrics.GlobalSurpriseIndex().Current())
+	if noThinking {
 		// 空输出重试关闭思考：空输出的触发条件正是"思考模式 + 挂工具"（决策七实证），
 		// 原样重试只是再掷一次同一枚骰子。
 		thinking = types.ThinkingDisabled
@@ -155,13 +158,50 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 		OnSuccess: func(pCtx protocol.StateContext, content []byte) (types.State, error) {
 			if len(bytes.TrimSpace(content)) == 0 && sCtx.PlanAttempts < maxRetry {
 				sCtx.PlanAttempts++
+				sCtx.PlanRetryNoThinking = true
 				slog.Warn("plan: empty output (no content, no tool calls), retrying", "attempt", sCtx.PlanAttempts)
 				return "S_PLAN_RETRY", nil
 			}
-			return parsePlanOnSuccess(sCtx, pCtx, content)
+			if pool != types.ModelPoolReasoning && planSelfEscalates(content) && sm.tryEscalatePlan(sCtx, FailureSelfEscalate) {
+				return "S_PLAN_RETRY", nil
+			}
+			state, err := parsePlanOnSuccess(sCtx, pCtx, content)
+			// 空输出耗尽重试属 Provider 行为问题（决策七），不按能力不足升级。
+			if state == "S_PLAN_FAILED" && len(bytes.TrimSpace(content)) > 0 && sm.tryEscalatePlan(sCtx, FailurePlanInvalid) {
+				return "S_PLAN_RETRY", nil
+			}
+			return state, err
 		},
 		OnFailure: sm.onPlanFailure,
 		MaxRetry:  maxRetry,
 		ModelPool: string(pool),
 	}
+}
+
+// tryEscalatePlan 记录能力类失败并准许一次升级重试；本回合已用过则返回 false。
+func (sm *StateMachine) tryEscalatePlan(sCtx *StateContext, kind FailureKind) bool {
+	sCtx.Mu.Lock()
+	used := sCtx.PlanEscalated
+	if !used {
+		sCtx.PlanEscalated = true
+		sCtx.PlanRetryNoThinking = false
+	}
+	sCtx.Mu.Unlock()
+	if used {
+		return false
+	}
+	sCtx.RecordFailure(kind)
+	metrics.RecordTurnRoute(context.Background(), routePlanEscalated)
+	slog.Info("plan: escalating model tier and retrying", "kind", kind)
+	return true
+}
+
+// planSelfEscalates 规划模型是否声明本任务超出其能力（plan.md 规则 9）。
+// 只认顶层显式布尔 true；解析失败按未声明处理（交给常规解析路径）。
+func planSelfEscalates(content []byte) bool {
+	var probe struct {
+		Escalate bool `json:"escalate"`
+	}
+	raw := util.ExtractJSONBraces(string(content))
+	return json.Unmarshal([]byte(raw), &probe) == nil && probe.Escalate
 }

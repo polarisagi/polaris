@@ -163,7 +163,7 @@ func (si *SurpriseIndex) Current() float64 {
 	return si.lastValue
 }
 
-// SetLastValue 由外部（SurpriseCalculator）写入计算结果，供 SelectThinkingMode 读取。
+// SetLastValue 由外部（SurpriseCalculator）写入计算结果，供 SelectPlanTier 读取。
 // 线程安全：与 ComputeBasic 使用同一 mu 锁。
 // 写入即新鲜：生产路径只经此处回填，漏刷 staleness 会让 IsStale 在 120s 后恒真（GR-1.2-002）。
 func (si *SurpriseIndex) SetLastValue(v float64) {

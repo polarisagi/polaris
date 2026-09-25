@@ -111,6 +111,14 @@ type StateContext struct {
 	ExecAllSucceeded bool
 	// TurnDegraded 回合以回复收尾但未达成目标（重规划耗尽，决策九），终态指标按失败计。
 	TurnDegraded bool
+	// Escalation 本回合规划升级级数（ADR-0101 决策六），经 RecordFailure 按失败成因累计。
+	Escalation int
+	// ToolErrorCount 本回合工具报错次数；第二次起才计入 Escalation。
+	ToolErrorCount int
+	// PlanRetryNoThinking 下一次规划重试须关闭思考（仅空输出重试置位，升级重试清除）。
+	PlanRetryNoThinking bool
+	// PlanEscalated 本回合是否已用过一次"规划产出不可用/自评超纲 → 升级重试"，每回合至多一次。
+	PlanEscalated bool
 	// PlanAttempts S_PLAN 空输出已重试次数（ADR-0098 决策七）。
 	PlanAttempts int
 	// RespondAttempts S_RESPOND 空回复已重试次数（ADR-0098）。每回合新建 Agent，无需复位。

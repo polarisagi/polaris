@@ -259,16 +259,24 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 	})
 }
 
-// SelectThinkingMode 决定本次规划的思考档位（ADR-0101 决策二修订 ADR-0020 决策二）。
-// 规则：
-// 1. 重规划（replanCount > 0）或 SurpriseIndex ≥ high → ThinkingMax（便宜路径已失败/高度陌生，升级）
-// 2. 任务复杂度 ≥ plan.reasoning_complexity 或 SurpriseIndex ≥ low → ThinkingHigh
-// 3. 否则 ThinkingDisabled
+// SelectPlanTier 规划阶段的模型池 + 思考档（ADR-0101 决策六，取代决策二的
+// SelectThinkingMode/SelectPlanModelPool）。分工：**LLM 判断语义难度，程序持有策略**——
+// Perceive（便宜模型）给出 TaskModel.Complexity，规划模型可自评 escalate；
+// 是否真正升级、升到哪一级，由本函数这张确定性阶梯表决定，可审计、可单测。
 //
-// 不再以污点等级为输入：用户输入恒为 TaintHigh，旧规则令每个首轮规划都走 ThinkingMax，
-// 使"思考深度"退化为常量。污点是数据来源的安全标签，由 Taint/Cedar/PolicyGate 防线
-// 消费；思考深度是成本/质量旋钮，二者正交。
-func SelectThinkingMode(replanCount int, complexity, surpriseIndex float64) types.ThinkingMode {
+// 升级阶梯（level 越高越贵）：
+//
+//	0  general   + ThinkingDisabled   绝大多数任务
+//	1  general   + ThinkingHigh       便宜模型开思考：陌生任务 / 首次能力类失败
+//	2  reasoning + ThinkingHigh       LLM 判定复杂 / 自评超纲 / 连续能力类失败
+//	3  reasoning + ThinkingMax        仍失败，或复杂且高度陌生
+//
+// level 由两部分相加：起点（Complexity ≥ plan.reasoning_complexity → 2；SI ≥ high → 加 1；
+// SI ≥ low → 至少 1）与 escalation。escalation 仅由能力类失败累计（计划结构不可用、
+// 工具重复报错、模型自评超纲），安全拒绝/瞬时故障/观察—再规划不计，见 fsm.RecordFailure。
+//
+// 污点不参与：污点是来源安全标签，由五防线消费；思考深度是成本旋钮。
+func SelectPlanTier(escalation int, complexity, surpriseIndex float64) (types.ModelPool, types.ThinkingMode) {
 	low, high := 0.30, 0.60
 	complexGate := DefaultPlanReasoningComplexity
 	if cfg := config.Get(); cfg != nil {
@@ -283,31 +291,29 @@ func SelectThinkingMode(replanCount int, complexity, surpriseIndex float64) type
 			complexGate = g
 		}
 	}
-	if replanCount > 0 || surpriseIndex >= high {
-		return types.ThinkingMax
+	level := 0
+	if complexity >= complexGate {
+		level = 2
 	}
-	if complexity >= complexGate || surpriseIndex >= low {
-		return types.ThinkingHigh
+	if surpriseIndex >= high {
+		level++
+	} else if surpriseIndex >= low && level == 0 {
+		level = 1
 	}
-	return types.ThinkingDisabled
+	if escalation > 0 {
+		level += escalation
+	}
+	switch {
+	case level <= 0:
+		return types.ModelPoolGeneral, types.ThinkingDisabled
+	case level == 1:
+		return types.ModelPoolGeneral, types.ThinkingHigh
+	case level == 2:
+		return types.ModelPoolReasoning, types.ThinkingHigh
+	default:
+		return types.ModelPoolReasoning, types.ThinkingMax
+	}
 }
 
 // DefaultPlanReasoningComplexity plan.reasoning_complexity 未配置时的兜底（SSoT：spec/state.yaml）。
 const DefaultPlanReasoningComplexity = 0.7
-
-// SelectPlanModelPool 规划阶段的模型池级联（ADR-0101 决策二）：便宜池先行，
-// 失败（重规划）/高复杂度/高 Surprise 才升级到 reasoning 池。
-// 与 SelectThinkingMode 同源判定，避免"便宜模型 + 满档思考"或"贵模型 + 不思考"的错配。
-func SelectPlanModelPool(replanCount int, complexity, surpriseIndex float64) types.ModelPool {
-	mode := SelectThinkingMode(replanCount, complexity, surpriseIndex)
-	complexGate := DefaultPlanReasoningComplexity
-	if cfg := config.Get(); cfg != nil {
-		if g := cfg.Thresholds.M4Kernel.PlanReasoningComplexity; g > 0 {
-			complexGate = g
-		}
-	}
-	if mode == types.ThinkingMax || complexity >= complexGate {
-		return types.ModelPoolReasoning
-	}
-	return types.ModelPoolGeneral
-}

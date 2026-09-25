@@ -88,9 +88,11 @@ par:
         on_success: store_dag
         on_failure: s_failed
         max_retry: 2
-        # ADR-0101 决策二：便宜池先行、失败再升级。complexity < plan_reasoning_complexity → general；
-        # 重规划 / 高复杂度 / SI≥high → reasoning。budget 池无 Provider 时降级链为空，选择不确定，弃用。
-        model_pool: cascade(general→reasoning)
+        # ADR-0101 决策六：SelectPlanTier 四级阶梯 general/无→general/High→reasoning/High→reasoning/Max。
+        # 起点由 LLM 判定的 complexity（≥plan_reasoning_complexity → reasoning）与 SI 决定；只有能力类失败
+        # （L0 结构错误/计划不可解析/重复工具报错/规划模型 escalate）逐级升级，安全拒绝/瞬时故障/观察—再规划不升级。
+        # budget 池无 Provider 时降级链为空，选择不确定，弃用。
+        model_pool: tier_ladder(general→reasoning)
 
     - from: s_validate
       event: validate_pass
