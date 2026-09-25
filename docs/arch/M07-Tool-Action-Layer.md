@@ -416,6 +416,8 @@ permit(principal in Role::"Agent", action == Action::"call_tool", resource) when
 **trust_level 动态推导**: `InMemoryToolRegistry.ExecuteTool` 向 PolicyGate 传入的 `trust_level` 刷根据工具来源（`tool.Source`）动态计算：Builtin → 4（系统信任），MCP/A2A → 2（社区信任），其余 → 1。`capability_token_valid` 根据 `tool.Capability <= CapReadOnly` 动态设置。Cedar 策略中 `trust_level >= N` 的条件正确生效。
 
 > 2026-09-25 订正（ADR-0098 决策五）：上句 `capability_token_valid` 的描述与代码不符——执行闸门 `sandbox.ExecEnvelope` 实为"ctx 中持有且验签通过的令牌"。Agent 路径现按 §6 在节点通过 S_VALIDATE 后 JIT Mint（MaxCalls=1、TTL 5min），经 `protocol.CtxCapabilityTokenKey` 注入该次调用、返回即撤销；S_VALIDATE L1 预检以"通过即签发"评估该条件。
+>
+> 2026-09-25 复核（ADR-0098 决策五追记）：JIT 签发限定为本 Agent 最近一次通过 S_VALIDATE 的计划节点（工具名 + 参数字节一致），不在其中的调用（含未经 L1 校验的 Saga 补偿动作）拒签。令牌证明"调用属于已校验计划"，不是 trust<3 工具的独立审批。
 
 ### 5.3 Shadow Sink
 

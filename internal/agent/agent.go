@@ -92,6 +92,10 @@ type Agent struct {
 	projectID atomic.Value
 	// projectNamespace SetMemoryNamespace 的原子副本，供项目解析回退使用（决策三补）。
 	projectNamespace atomic.Value
+	// validatedCalls 最近一次通过 S_VALIDATE 的计划中全部"工具+参数"指纹（不可变快照），
+	// 能力令牌只为其中的调用 JIT 签发（agent_capability.go）。校验与执行在不同 effect
+	// goroutine，DAG 节点并发读取，故用原子指针整体替换。
+	validatedCalls atomic.Pointer[map[string]struct{}]
 
 	// sagaRecorder 本轮 DAG 执行的 Saga 补偿结果记录器，由 runExecuteDAG 每次新建，
 	// 经 ctx 交给 execute/dag 的 runCompensation 写入，经 buildStateContext 交给

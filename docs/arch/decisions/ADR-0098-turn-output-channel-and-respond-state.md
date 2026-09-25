@@ -62,6 +62,7 @@ Plan 阶段此前恒解析失败，Validate/Execute 从未被生产流量走到�
 - **S_REPLAN 单一 ReplanDone 产出方**：进入 S_REPLAN 的转移占位 Effect 与 handleReplanTransition 各投递一次 → 第二次命中 no transition。
 - **召回预算**：search.Embedder 无 ctx（下游固定 30s），内核在调用边界以 3s 预算放弃等待（`recallWithin` / `assembleWithBudget`），召回是增益不是关键路径。
 - **能力令牌 JIT 签发接线（M07 §6）**：通用工具路径此前从不签发令牌——写类工具必被执行闸门 Step 3 拒绝，trust<3（MCP/社区）工具因 `tool_execute_permit` 要求令牌而全部不可执行。现：节点通过 S_VALIDATE 后、调用前 JIT Mint（MaxCalls=1、TTL 5min），仅注入该次调用 ctx，返回即撤销（执行闸门只 Verify 不 Consume，撤销保证一次性）。L1 预检中 `capability_token_valid` 表达"通过本闸门即签发"（=true），执行闸门以真实令牌复核，纵深不减。
+  - > 2026-09-25 复核（订正"纵深不减"）：初稿按工具名无条件签发，而 L1 又以 `capability_token_valid=true` 评估，执行闸门对 trust<3 工具的令牌要求实为恒真，原句不成立。现令牌只为**本 Agent 最近一次通过 S_VALIDATE 的计划节点**签发——工具名与参数须与校验时逐字节一致（`agent_capability.go` `recordValidatedPlan` / `withJITCapability`；校验开始即作废旧依据，崩溃续跑在重校验通过后重建），Saga 补偿动作未经 L1 策略校验，不签发。令牌由此证明"该调用属于已校验计划"，**不构成对 trust<3 工具的独立审批**：此类工具的信任差异来自安装时的用户授权、L1_taint 人工复核（决策十）与 Cedar forbid；进程外 MCP 服务端的行为本不受本进程令牌约束，另加令牌审批只会是形式防线。
 - **流式 tool_calls 收尾补发**：非 `finish_reason=tool_calls` 收尾时已聚合的工具调用不再被静默丢弃。
 
 ### 决策六：重规划闭环——失败原因回灌规划与回复
@@ -144,3 +145,4 @@ S_VALIDATE L1_taint 拦截（用户输入恒 TaintHigh，由其派生参数的�
 | 日期 | 变更 |
 |------|------|
 | 2026-09-25 | 初稿 |
+| 2026-09-25 | 决策五复核：JIT 令牌绑定已校验计划节点（工具名+参数），订正"纵深不减" |
