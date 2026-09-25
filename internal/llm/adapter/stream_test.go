@@ -198,3 +198,38 @@ func TestSSEParser_SparseToolCallIndex(t *testing.T) {
 		t.Fatalf("稀疏 index 的 2 个工具调用应全部发出，实际 %d", n)
 	}
 }
+
+// TestSSEParser_ToolCallsAtEOFNotReportedAsEmpty 流只含工具调用、既无 finish_reason
+// 也无 [DONE] 就 EOF：补发工具调用后不得再追加"no valid SSE data frame"错误。
+func TestSSEParser_ToolCallsAtEOFNotReportedAsEmpty(t *testing.T) {
+	client := &OpenAICompatibleClient{
+		BaseURL: "http://dummy",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: mockRoundTripperFunc(func(req *http.Request) *http.Response {
+				body := `data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"sys_probe","arguments":"{}"}}]},"finish_reason":null}]}` + "\n\n"
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)),
+					Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
+			}),
+		},
+	}
+	req := &types.InferRequest{Messages: []types.Message{{Role: "user", Content: "hi"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ch, err := client.SendStreamRequest(ctx, nil, []byte("test-key"), translateRequest(req, true), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	for ev := range ch {
+		switch ev.Type {
+		case types.StreamToolCall:
+			calls++
+		case types.StreamError:
+			t.Fatalf("EOF 补发工具调用后不应再报流错误: %s", ev.Content)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("应补发 1 个工具调用，实际 %d", calls)
+	}
+}

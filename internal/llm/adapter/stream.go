@@ -343,7 +343,12 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			}
 		}
 
-		sawToolCall = sawToolCall || len(toolBuilders) > 0
+		if len(toolBuilders) > 0 {
+			// EOF 处补发的工具调用同样是有效信号：不置位会在补发之后再误报一条
+			// "no valid SSE data frame" 错误，上游同时收到工具调用与流错误。
+			sawToolCall = true
+			emittedAny = true
+		}
 		flushPendingToolCalls(ctx, ch, toolBuilders, lastFinishReason)
 		logIfEmpty()
 		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
@@ -363,7 +368,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 			// 了 0 token"在信号上完全没区别，最终只剩一条无法追溯根因的
 			// "推理返回空内容"。
 			select {
-			case ch <- types.StreamEvent{Type: types.StreamError, Content: "provider returned a 200 response with no valid SSE data frame (base_url 配置可能缺少 /v1 等路径前缀，或网关返回了非流式错误页)"}:
+			case ch <- types.StreamEvent{Type: types.StreamError, Content: "provider returned a 200 response with no valid SSE data frame (base_url 可能指向了错误的端点，或网关返回了非流式错误页)"}:
 			case <-ctx.Done():
 			}
 		}
