@@ -137,12 +137,21 @@ func verifyBinarySeal() error {
 	return nil
 }
 
+// IsKernelSourceFile 判定文件是否计入内核完整性清单：仅非测试的 .go 源码。
+// _test.go 不进二进制、不改变运行时行为，纳入只会让改测试也须重生成清单，否则
+// 源码模式拒绝启动；测试被削弱归 CI 与门控拦截，不是启动校验的职责。
+// 生成端 tools/generate_manifest.go 与本文件校验端共用此判定——两端不一致时，
+// 被一端排除的文件会被另一端报成"未登记新文件"而拒绝启动。
+func IsKernelSourceFile(path string) bool {
+	return filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go")
+}
+
 func hashPackageDir(dir string, currentManifest map[string]string) error {
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return apperr.Wrap(apperr.CodeInternal, "hashPackageDir", err)
 		}
-		if !info.IsDir() && filepath.Ext(path) == ".go" {
+		if !info.IsDir() && IsKernelSourceFile(path) {
 			f, err := os.Open(path)
 			if err != nil {
 				return apperr.Wrap(apperr.CodeInternal, "hashPackageDir", err)
