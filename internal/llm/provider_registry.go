@@ -180,11 +180,13 @@ func (r *ProviderRegistry) bestForRole(role string, req *types.InferRequest, acq
 	return chosen
 }
 
+// findBestByRole 只在 role 精确匹配的条目中择优。此前把 general 条目也算作候选，
+// 三模型厂商下 PickProvider("reasoning") 可能按健康分落到中档模型；无匹配时由调用方回退 bestWith。
 func (r *ProviderRegistry) findBestByRole(role string, acquire bool) *providerEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return selectBest(r.entries, func(_ string, e *providerEntry) bool {
-		return e.role == role || e.role == "general"
+		return e.role == role
 	}, acquire)
 }
 
@@ -294,6 +296,17 @@ func (r *ProviderRegistry) bestWith(req *types.InferRequest, acquire bool) *prov
 }
 
 const maxCostTier = 2
+
+// poolRoles 返回服务指定 Model Pool 的条目 role，按择优先后排列。
+// 通用池 = 对话模型：general 不再在 provider_models 里复制一行对话模型（复制行与原行各持一套
+// 凭据池/熔断器，且改对话模型后复制行不跟随），而是在路由层把 default 条目作为通用池首选；
+// role=general 的条目（手动添加或被独占角色挤下的备用模型）仅在对话模型不可用时兜底。
+func poolRoles(pool string) []string {
+	if types.ModelPool(pool) == types.ModelPoolGeneral {
+		return []string{string(types.ModelPoolDefault), string(types.ModelPoolGeneral)}
+	}
+	return []string{pool}
+}
 
 // costTier 按角色给出成本档位：0=便宜档（budget/default，以及未标角色的单 Provider 部署），
 // 1=中档（general），2=贵档（reasoning）。角色语义见 022_provider_catalog.sql 模型种子。

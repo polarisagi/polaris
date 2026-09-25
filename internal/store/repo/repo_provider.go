@@ -321,6 +321,63 @@ func (r *SQLiteProviderRepository) CreateProvider(ctx context.Context, p types.P
 	return nil
 }
 
+// ActiveModelRoles 口径与 HandleGetModelRoles 一致：禁用模型/厂商持有的角色视为空缺。
+func (r *SQLiteProviderRepository) ActiveModelRoles(ctx context.Context) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT DISTINCT m.role FROM provider_models m JOIN providers p ON p.id=m.provider_id
+		  WHERE m.enabled=1 AND p.enabled=1`)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ActiveModelRoles", err)
+	}
+	defer rows.Close()
+	held := make(map[string]bool)
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ActiveModelRoles scan", err)
+		}
+		held[role] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.ActiveModelRoles rows", err)
+	}
+	return held, nil
+}
+
+// CreateProviderWithModels 厂商与模型同事务落盘：此前分步写入，模型写失败被跳过后留下
+// "厂商已建、角色缺失"的半套配置且接口仍返回成功。
+func (r *SQLiteProviderRepository) CreateProviderWithModels(ctx context.Context, p types.ProviderRow, models []types.ProviderModelRow) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.CreateProviderWithModels begin", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO providers(id, name, type, base_url, api_key, project_id, location, sa_key_json, enabled, catalog_id, created_at, updated_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Name, p.Type, p.BaseURL, r.encrypt(p.APIKey), p.ProjectID, p.Location, p.SAKeyJSON,
+		p.Enabled, p.CatalogID, p.CreatedAt, p.UpdatedAt); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.CreateProviderWithModels provider", err)
+	}
+	for _, m := range models {
+		if m.Role == "default" || m.Role == "reasoning" {
+			if _, err := tx.ExecContext(ctx, `UPDATE provider_models SET role='general' WHERE role=?`, m.Role); err != nil {
+				return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.CreateProviderWithModels clear role", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO provider_models(id, provider_id, model_id, name, role, enabled, created_at, updated_at)
+			 VALUES(?,?,?,?,?,?,?,?)`,
+			m.ID, p.ID, m.ModelID, m.Name, m.Role, m.Enabled, m.CreatedAt, m.UpdatedAt); err != nil {
+			return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.CreateProviderWithModels model", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteProviderRepository.CreateProviderWithModels commit", err)
+	}
+	return nil
+}
+
 func (r *SQLiteProviderRepository) UpdateProvider(ctx context.Context, id string, p types.ProviderRow) error {
 	enabled := 0
 	if p.Enabled {

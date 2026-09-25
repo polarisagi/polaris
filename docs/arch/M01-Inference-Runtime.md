@@ -5,7 +5,7 @@
 > **实现语言**：Go　|　**代码位置**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:164 Token预算 / 6:249 SemanticCache / 7:297 Fallback / 8:361 本地推理local_only / 9:414 ModelVersion / 12:451 (SOFT)降级 / 10:468 凭证池+速率追踪 / 13:488 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:166 Token预算 / 6:251 SemanticCache / 7:299 Fallback / 8:363 本地推理local_only / 9:416 ModelVersion / 12:453 (SOFT)降级 / 10:470 凭证池+速率追踪 / 13:490 依赖 -->
 
 ---
 
@@ -110,9 +110,11 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 | Role | 候选模型示例 | 默认用途 |
 |------|------------|---------|
-| `general` | `<flash-class>`（DeepSeek V4 Flash 等）| 默认主路径（分类、摘要、路由判断、简单工具）|
-| `default` | `<standard-class>`（DeepSeek V4 / Claude Sonnet 4.6 等）| 代码生成、多步推理、复杂工具编排 |
-| `reasoning` | `<reasoning-class>`（DeepSeek V4 Pro / o-系列等）| 复杂架构决策、长链推理、自反思 |
+| `default`（对话） | `<flash-class>`（DeepSeek Flash / Claude Haiku 等）| 默认主路径（感知、直答、摘要、简单工具）|
+| `reasoning`（推理） | `<reasoning-class>`（DeepSeek V4 Pro / Claude Opus / o-系列等）| 复杂规划、重规划、长链推理 |
+| `general`（通用） | 恒等于对话模型，不单独配置 | `poolRoles("general") = [default, general]`：先取对话模型，`role=general` 的备用模型（手动添加或被独占角色挤下）仅兜底 |
+
+> 2026-09-25 追记（以代码为准订正）：原表为 `general`=flash / `default`=standard / `reasoning`=pro 三档。实际 catalog 种子与路由早已是 `default`=flash、`reasoning`=pro；catalog 曾为 `general` 复制一行模型（两模型厂商复制推理模型，三模型厂商另配中档模型），复制行与原行各持凭据池/熔断器，推理→通用降级会重试同一模型，且手动改对话模型后通用不跟随。现改为路由层派生（`internal/llm/provider_registry.go poolRoles`），catalog 只写 default/reasoning 并只补空缺（`internal/gateway/server/provider/catalog.go`）；跨 Pool 降级沿用已失败条目跳过集（`tryPoolFallback`/`streamPoolFallback`）。
 
 > **设计决策**：`configs/defaults.toml` 选 DeepSeek V4 系列组合（价格优势与 Tier-0 极速响应兼具）。系统已不再为普通设备维护本地模型策略（本地模型仅限 Tier-3 超高配置节点独立启用）。
 

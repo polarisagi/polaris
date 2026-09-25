@@ -197,11 +197,12 @@ export const zh = {
 
   // 模型角色
   roles_title:     '模型角色分配',
-  roles_subtitle:  '指定对话模型和推理模型，Router 按角色优先路由',
+  roles_subtitle:  '指定对话模型和推理模型，Router 按角色优先路由；通用自动跟随对话模型',
   roles_default:   '对话模型（快速）',
   roles_reasoning: '推理模型（深度）',
   roles_default_label: '对话',
   roles_reasoning_label: '推理',
+  roles_general_label: '通用',
   roles_none:      '— 不指定 —',
   roles_none_set:  '尚未配置',
   roles_edit:      '编辑',
@@ -826,11 +827,12 @@ export const en = {
 
   // Model roles
   roles_title:     'Model Role Assignment',
-  roles_subtitle:  'Assign chat and reasoning models; Router routes by role priority',
+  roles_subtitle:  'Assign chat and reasoning models; Router routes by role priority; General follows the chat model',
   roles_default:   'Chat Model (fast)',
   roles_reasoning: 'Reasoning Model (deep)',
   roles_default_label: 'Chat',
   roles_reasoning_label: 'Reasoning',
+  roles_general_label: 'General',
   roles_none:      '— Not specified —',
   roles_none_set:  'Not configured',
   roles_edit:      'Edit',

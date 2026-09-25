@@ -139,3 +139,55 @@ func TestCrossPoolFallback_DefaultPoolFallbackIsSilent(t *testing.T) {
 		}
 	}
 }
+
+// TestGeneralPool_PrefersDefaultModel 通用池 = 对话模型：default 条目优先于 general 备用条目，
+// 即便备用条目健康分更高（成本更低）。
+func TestGeneralPool_PrefersDefaultModel(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+	chat := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 5.0}}
+	spare := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}
+	reg.RegisterWithRole("chat", "Chat", "default", chat)
+	reg.RegisterWithRole("spare", "Spare", "general", spare)
+
+	router := NewInferenceRouter(reg, nil)
+	if _, err := router.Infer(context.Background(),
+		[]types.Message{{Role: "user", Content: "hi"}}, types.WithModelPool("general")); err != nil {
+		t.Fatalf("general pool must be served by default model, got err: %v", err)
+	}
+	if chat.callCount != 1 || spare.callCount != 0 {
+		t.Fatalf("expected chat=1 spare=0, got chat=%d spare=%d", chat.callCount, spare.callCount)
+	}
+}
+
+// TestPoolFallback_DoesNotRetrySameEntry 推理失败后沿 reasoning→general→default→"" 降级时，
+// 已失败条目不得在后续档位被原样重试（此前降级各档以 nil 跳过集择优）。
+func TestPoolFallback_DoesNotRetrySameEntry(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+	chat := &mockProvider{failCount: 100, caps: types.ProviderCapabilities{CostPer1KInput: 1.0}}
+	reg.RegisterWithRole("chat", "Chat", "default", chat)
+
+	router := NewInferenceRouter(reg, nil)
+	_, err := router.Infer(context.Background(),
+		[]types.Message{{Role: "user", Content: "hi"}}, types.WithModelPool("general"))
+	if err == nil {
+		t.Fatal("expected exhaustion error")
+	}
+	if chat.callCount != 1 {
+		t.Fatalf("failed entry must be tried once across fallback pools, got %d calls", chat.callCount)
+	}
+}
+
+// TestPickProvider_ExactRole PickProvider("reasoning") 只取 reasoning 条目，不混入 general 备用。
+func TestPickProvider_ExactRole(t *testing.T) {
+	reg := NewProviderRegistry(config.M1RouterThresholds{})
+	reasoning := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 9.0}}
+	spare := &mockProvider{caps: types.ProviderCapabilities{CostPer1KInput: 0.1}}
+	reg.RegisterWithRole("r", "R", "reasoning", reasoning)
+	reg.RegisterWithRole("g", "G", "general", spare)
+
+	for i := 0; i < 5; i++ {
+		if name := reg.BestForRole("reasoning", nil).name; name != "r" {
+			t.Fatalf("expected reasoning entry, got %q", name)
+		}
+	}
+}

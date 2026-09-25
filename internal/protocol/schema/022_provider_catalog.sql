@@ -4,15 +4,16 @@
 -- 设计意图：用户选择 sys_providers 条目、输入 API Key，系统自动填充
 --   provider type/base_url 并从 sys_provider_models 生成带角色的模型配置。
 --
--- 角色分配规则（recommended_role 直接写入 provider_models.role）：
---   default   → 日常对话首选（快速响应，普通对话/工具调用）
---   reasoning → 深度推理（慢但强，复杂规划/代码分析/Agent）
---   general   → 通用候补池（仅三模型厂商启用；两模型厂商不设此角色）
+-- 角色分配规则（recommended_role 写入 provider_models.role）：
+--   default   → 对话模型（快速响应，普通对话/工具调用）
+--   reasoning → 推理模型（慢但强，复杂规划/代码分析/Agent）
+--   通用       → 不入字典：通用池恒等于对话模型，由路由层派生（internal/llm poolRoles），
+--               不复制行，改对话模型后通用自动跟随。
 --
--- 两模型厂商（fast+pro 模式）：default + reasoning，路由器自动 fallback。
--- 三模型厂商（Anthropic/OpenAI/DashScope）：default + reasoning + general。
--- 无推理模型厂商（Google/Hunyuan/StepFun）：default + general（reasoning 路由
---   fallback 到 default，由 ProviderRegistry.BestForRole 保证）。
+-- 全部厂商统一 default + reasoning 两条；单模型厂商（Hunyuan/StepFun）仅 default，
+--   reasoning 请求经 poolFallbackChain 降级到通用/对话。
+-- from-catalog 只补空缺：全局已有启用的 default/reasoning 时，新厂商对应模型写为
+--   general（备用，参与负载均衡），不抢占现有角色（catalog.go HandleCreateProviderFromCatalog）。
 --
 -- 关联: M1(Inference Runtime), M13(Interface)
 -- ============================================================================
@@ -34,8 +35,7 @@ CREATE TABLE IF NOT EXISTS sys_provider_models (
     catalog_provider_id TEXT NOT NULL REFERENCES sys_providers(id),
     model_id            TEXT NOT NULL,                               -- 发给 API 的原始 model 名
     display_name        TEXT NOT NULL,
-    recommended_role    TEXT NOT NULL DEFAULT 'general'
-                            CHECK(recommended_role IN ('default','reasoning','general')),
+    recommended_role    TEXT NOT NULL CHECK(recommended_role IN ('default','reasoning')),
     display_order       INTEGER NOT NULL DEFAULT 0
 );
 
@@ -63,8 +63,8 @@ INSERT OR IGNORE INTO sys_providers (id, display_name, provider_type, default_ba
 ('ollama',    'Ollama (本地部署)',       'ollama',                'http://127.0.0.1:11434',                                    1, 15);
 
 -- ============================================================
--- 模型种子数据（精简至最新主力模型，按两模型/三模型规则分配角色）
--- display_order: 0=default 1=reasoning 2=general
+-- 模型种子数据（精简至最新主力模型，每厂商 default + reasoning）
+-- display_order: 0=default 1=reasoning
 -- ============================================================
 
 INSERT OR IGNORE INTO sys_provider_models (id, catalog_provider_id, model_id, display_name, recommended_role, display_order) VALUES
@@ -74,18 +74,15 @@ INSERT OR IGNORE INTO sys_provider_models (id, catalog_provider_id, model_id, di
 ('deepseek:deepseek-flash',       'deepseek',  'deepseek-flash',       'DeepSeek Flash',      'default',   0),
 ('deepseek:deepseek-v4-pro',      'deepseek',  'deepseek-v4-pro',      'DeepSeek V4 Pro',     'reasoning', 1),
 
--- ── Anthropic（三模型：haiku=对话，sonnet=通用，opus=推理）────────────────
+-- ── Anthropic（haiku=对话，opus=推理）──────────────────────────────────
 ('anthropic:claude-haiku-4-5',    'anthropic', 'claude-haiku-4-5',     'Claude Haiku 4.5',    'default',   0),
-('anthropic:claude-sonnet-4-6',   'anthropic', 'claude-sonnet-4-6',    'Claude Sonnet 4.6',   'general',   2),
 ('anthropic:claude-opus-4-8',     'anthropic', 'claude-opus-4-8',      'Claude Opus 4.8',     'reasoning', 1),
 
--- ── OpenAI（三模型：mini=对话，gpt-5.5=通用，o3=推理）───────────────────
+-- ── OpenAI（mini=对话，o3=推理）───────────────────────────────────────
 ('openai:gpt-5.4-mini',           'openai',    'gpt-5.4-mini',         'GPT-5.4 Mini',        'default',   0),
-('openai:gpt-5.5',                'openai',    'gpt-5.5',              'GPT-5.5',             'general',   2),
 ('openai:o3',                     'openai',    'o3',                   'o3',                  'reasoning', 1),
 
 -- ── Google AI Studio（两模型：flash=对话，pro=推理）────────────────
--- 只有两个模型，符合推理和通用同源逻辑
 ('google:gemini-3.5-flash',       'google',    'gemini-3.5-flash',     'Gemini 3.5 Flash',    'default',   0),
 ('google:gemini-3.1-pro',         'google',    'gemini-3.1-pro',       'Gemini 3.1 Pro',      'reasoning', 1),
 
@@ -93,9 +90,8 @@ INSERT OR IGNORE INTO sys_provider_models (id, catalog_provider_id, model_id, di
 ('moonshot:kimi-k2.6',            'moonshot',  'kimi-k2.6',            'Kimi K2.6',           'default',   0),
 ('moonshot:kimi-k2-thinking',     'moonshot',  'kimi-k2-thinking',     'Kimi K2 Thinking',    'reasoning', 1),
 
--- ── 阿里云通义千问（三模型：flash=对话，max=通用，max-thinking=推理）────────
+-- ── 阿里云通义千问（flash=对话，max-thinking=推理）───────────────────────
 ('dashscope:qwen3.6-flash',       'dashscope', 'qwen3.6-flash',        'Qwen 3.6 Flash',      'default',   0),
-('dashscope:qwen-3-max',          'dashscope', 'qwen-3-max',           'Qwen 3 Max',          'general',   2),
 ('dashscope:qwen3-max-thinking',  'dashscope', 'qwen3-max-thinking',   'Qwen 3 Max Thinking', 'reasoning', 1),
 
 -- ── 火山引擎豆包（两模型：lite=对话，pro=推理）───────────────────────────

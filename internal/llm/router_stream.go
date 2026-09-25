@@ -157,13 +157,17 @@ func (ir *InferenceRouter) abortStream(ctx context.Context, out chan<- types.Str
 //     wrapStreamChannel 处理，不再回到本函数。
 //
 // 链尾同样追加一次不限 role 的全局兜底（空串 Pool），理由见 tryPoolFallback。
-func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.Message, opts []types.InferOption, req *types.InferRequest) (<-chan types.StreamEvent, error) {
+// skipped 语义同 tryPoolFallback：已失败条目在降级各档不再入选。
+func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.Message, opts []types.InferOption, req *types.InferRequest, skipped map[string]struct{}) (<-chan types.StreamEvent, error) {
 	originalPool := req.ModelPool
 	if originalPool == "" {
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted,
 			"inference_router: stream all providers exhausted", protocol.ErrAllProvidersFailed)
 	}
 	fallbacks := append(append([]string{}, ir.poolFallbackChain[originalPool]...), "")
+	if skipped == nil {
+		skipped = make(map[string]struct{})
+	}
 	for _, fallbackPool := range fallbacks {
 		if ctx.Err() != nil {
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.streamPoolFallback: ctx cancelled", ctx.Err())
@@ -172,7 +176,7 @@ func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.
 		degradedReq.ModelPool = fallbackPool
 
 		ir.registry.mu.RLock()
-		entry := ir.findBestProviderLockedMultiSkip(&degradedReq, nil)
+		entry := ir.findBestProviderLockedMultiSkip(&degradedReq, skipped)
 		ir.registry.mu.RUnlock()
 		if entry == nil {
 			continue
@@ -194,6 +198,7 @@ func (ir *InferenceRouter) streamPoolFallback(ctx context.Context, msgs []types.
 			return ir.streamOverflowFailover(ctx, msgs, opts, req, entry, err)
 		}
 		if err != nil {
+			skipped[entry.name] = struct{}{}
 			slog.Warn("llm_router: stream fallback pool also failed, trying next",
 				"fallback_pool", fallbackPool, "err", err)
 			continue
@@ -253,7 +258,7 @@ func (ir *InferenceRouter) streamFailover(ctx context.Context, msgs []types.Mess
 			// 此前流式路径完全没有这一步——Task 07 只给非流式 Infer 加了降级，
 			// 而交互式对话走的恰恰是 StreamInfer，等于该特性在主用户路径上不生效。
 			if req.ModelPool != "" {
-				return ir.streamPoolFallback(ctx, msgs, opts, req)
+				return ir.streamPoolFallback(ctx, msgs, opts, req, skipped)
 			}
 			return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: stream all providers exhausted", protocol.ErrAllProvidersFailed)
 		}

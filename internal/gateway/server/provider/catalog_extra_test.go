@@ -1,14 +1,16 @@
 package provider
 
 import (
-	"github.com/polarisagi/polaris/internal/store/repo"
-
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/polarisagi/polaris/internal/store/repo"
+	"github.com/polarisagi/polaris/pkg/types"
 )
 
 func TestHandleListCatalogProviders(t *testing.T) {
@@ -39,12 +41,28 @@ func TestHandleListCatalogProviders(t *testing.T) {
 	}
 }
 
-func TestGetFallbackGeneralModel(t *testing.T) {
+func TestAssignCatalogRoles(t *testing.T) {
 	models := []catalogModelRow{
-		{modelID: "gpt-4o-mini", displayName: "GPT-4o Mini", recommendedRole: "reasoning"},
+		{modelID: "flash", displayName: "Flash", recommendedRole: "default"},
+		{modelID: "pro", displayName: "Pro", recommendedRole: "reasoning"},
 	}
-	model := getFallbackGeneralModel(models)
-	if model.modelID == "" {
-		t.Errorf("expected a fallback model")
+	roles := func(rows []types.ProviderModelRow) []string {
+		out := make([]string, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, r.ModelID+"="+r.Role)
+		}
+		return out
+	}
+
+	// 空缺：按推荐角色落位，通用不落行（路由层派生为对话模型）
+	got := roles(assignCatalogRoles(models, map[string]bool{}, "prov_x", "now"))
+	if want := []string{"flash=default", "pro=reasoning"}; !slices.Equal(got, want) {
+		t.Fatalf("vacant: got %v want %v", got, want)
+	}
+
+	// 已占用：不抢占，降为 general 备用
+	got = roles(assignCatalogRoles(models, map[string]bool{"default": true}, "prov_x", "now"))
+	if want := []string{"flash=general", "pro=reasoning"}; !slices.Equal(got, want) {
+		t.Fatalf("default held: got %v want %v", got, want)
 	}
 }
