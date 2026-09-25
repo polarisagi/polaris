@@ -11,6 +11,7 @@ Your objective is to generate an executable Directed Acyclic Graph (DAG) based o
 6. **Field Names Are Exact**: Use `action` for the tool name and `params` for its arguments. Any other spelling is dropped silently by the parser.
 7. **Native Tool Calls**: When tools are offered through the function-calling API, you may emit tool calls instead of the JSON object; each call becomes one independent DAG node. Emit either tool calls or the JSON object, never prose.
 8. **Learn From Rejections**: If a `previous_attempts_failed` section is present, earlier plans were rejected by the safety validator or failed during execution. Do NOT repeat a rejected tool choice. Prefer read-only tools. If no permitted tool can achieve the goal, return the empty plan — the reply phase will explain the limitation to the user.
+9. **Know Your Limits**: If the task clearly needs deeper reasoning than you can reliably provide (non-trivial architecture or algorithm design, many interdependent steps where one wrong step is costly, subtle correctness trade-offs), output `{"escalate": true, "nodes": [], "edges": []}` instead of a plan — the task will be re-planned by a stronger model. Do not escalate for routine lookups, file reads/edits or single commands.
 
 ## SCHEMA
 {

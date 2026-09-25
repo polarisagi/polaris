@@ -148,6 +148,12 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
+	// S_RESPOND 的确定性 Effect 只有一种来源：Perceive 已同次产出回复（ADR-0102 决策四 4b′）。
+	// 正文在此以用户受众发布，与 LLM 回复路径经 doStreamInfer 发布的事件同形。
+	if a.sm.Current() == types.AgentStateRespond {
+		a.publishPreparedReply()
+	}
+
 	if detEff.Fn != nil {
 		nextState, err = detEff.Fn(ctx, a.toProtocolCtx())
 	}

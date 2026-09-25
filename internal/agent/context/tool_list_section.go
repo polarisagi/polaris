@@ -2,15 +2,14 @@ package agentctx
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/polarisagi/polaris/internal/tool/catalog"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
-// BuildToolListSection 将注册表中所有工具格式化为 LLM 可读的工具定义段落。
-// 格式与 DAGNode.Action + DAGNode.Params 字段对齐，便于 LLM 直接引用。
+// BuildToolListSection 将注册表中的工具名称格式化为 DAGNode.Action 的合法取值清单
+// （完整定义走原生 function-calling，见函数体注释）。
 //
 // ctx 必须携带 protocol.CtxTaskIDKey（由调用方从 sCtx.SessionID 注入），否则
 // 懒加载模式下 search_tools 在上一轮激活的工具（CompositeCatalog.ActivateTool）
@@ -51,14 +50,20 @@ func BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, ty
 			maxTaint = t
 		}
 	}
-	// 只列名称与描述：同一批工具的完整参数 schema 已随 S_PLAN 请求经 function-calling
-	// 参数下发（agent_execute_effect.go WithTools），文本里再嵌一遍 JSON schema 等于每次
-	// 规划把全部工具定义付两次费（内置 56 个工具 schema 约 15KB，ADR-0101 决策五）。
+	// 只列名称（ADR-0102 决策五，收紧 ADR-0101 决策五的"名称 + 描述"）：S_PLAN 同时经
+	// 原生 function-calling 下发完整定义（agent_execute_effect.go WithTools），名称、描述、
+	// 参数 schema 都在其中，文本里再写描述仍是重复计费（内置 56 个工具）。JSON-DAG 输出路径只需知道
+	// action 的合法取值，参数结构模型可从原生工具定义读取；不支持原生 tools 的
+	// Provider 由其适配器自行把 schema 渲染成文本（adapter.renderToolsAsText）。
 	var sb strings.Builder
-	sb.WriteString("Available Tools List (The 'action' field of DAG nodes MUST be one of the following names; argument schemas are provided via the function-calling API):\n")
-	for _, t := range schemas {
-		fmt.Fprintf(&sb, "- %s: %s\n", t.Name, t.Description)
+	sb.WriteString("Available tool names (the 'action' field of DAG nodes MUST be one of these; " +
+		"descriptions and parameter schemas are provided via the function-calling tool definitions):\n")
+	for i, t := range schemas {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(t.Name)
 	}
-	sb.WriteByte('\n')
+	sb.WriteString("\n\n")
 	return sb.String(), maxTaint
 }

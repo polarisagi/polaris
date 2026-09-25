@@ -76,7 +76,7 @@ par:
         on_success: store_task_model
         on_failure: s_failed
         max_retry: 2
-        model_pool: budget
+        model_pool: cfg(model_pool_perceive)  # ADR-0101 决策七（默认 default）；寒暄经 phatic_bypass 零 LLM（ADR-0102 决策一）
 
     - from: s_plan
       event: plan_done
@@ -88,7 +88,11 @@ par:
         on_success: store_dag
         on_failure: s_failed
         max_retry: 2
-        model_pool: budget
+        # ADR-0102 决策六：SelectPlanTier 四级阶梯——0 plan_initial 池+thinking_plan_initial → 1 同池上调一档 →
+        # 2 plan_replan 池+high → 3 plan_replan 池+max。起点由 LLM 判定的 complexity（≥plan_reasoning_complexity → 2）
+        # 与 SI 决定；只有能力类失败（L0 结构错误/计划不可解析/重复工具报错/规划模型 escalate）逐级升级，
+        # 安全拒绝/瞬时故障/观察—再规划不升级。
+        model_pool: tier_ladder(model_pool_plan_initial→model_pool_plan_replan)
 
     - from: s_validate
       event: validate_pass
@@ -146,11 +150,13 @@ par:
         prompt_fn: build_reflection_prompt
         on_success: emit_to_m9_reflexion_worker
         on_failure: s_respond     # 反思尽力而为：工具已执行完的回合不因反思失败丢回复（ADR-0098）
+        # ADR-0102 决策四 4a：首轮 + 全部节点成功 + 0<complexity<reflect_skip_complexity → deterministic 跳过
         max_retry: 1
         model_pool: budget
         audience: internal
 
     # ADR-0098：直答路由。perceive 解析出 NeedsTools=false，由 Go 判定转入（非 LLM 驱动跳转）。
+    # ADR-0102 决策四 4b′：perceive 同次产出且通过 publishableReply 的 Reply → s_respond 为 deterministic 发布，不调 LLM。
     - from: s_perceive
       event: respond_ready
       to: s_respond
@@ -980,15 +986,17 @@ thresholds:
     conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
     conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
     thinking_perceive: low # toml:"thinking.perceive"，ADR-0101 决策三；"" = Provider 默认（DeepSeek 省略即 high）
-    thinking_plan_initial: high # toml:"thinking.plan_initial"，首轮规划；重规划仍按 SelectThinkingMode 升到 max
+    thinking_plan_initial: high # toml:"thinking.plan_initial"，规划阶梯 level 0 档位；升档见 plan_reasoning_complexity（ADR-0102 决策六）
     thinking_reflect: low # toml:"thinking.reflect"
     thinking_respond: "" # toml:"thinking.respond"，面向用户回复沿用 Provider 默认
     model_pool_perceive: default # toml:"model_pool.perceive"，ADR-0101 决策七；default=便宜档（flash/mini/haiku）
     model_pool_plan_initial: default # toml:"model_pool.plan_initial"
-    model_pool_plan_replan: reasoning # toml:"model_pool.plan_replan"，仅重规划升贵档；设 default 即不用贵档
+    model_pool_plan_replan: reasoning # toml:"model_pool.plan_replan"，规划阶梯 level ≥ 2 的目标池（仅能力类失败/LLM 判复杂/自评超纲时到达）；设 default 即不用贵档
     model_pool_reflect: default # toml:"model_pool.reflect"
     model_pool_respond: default # toml:"model_pool.respond"
     model_pool_validate: default # toml:"model_pool.validate"，L3 看门狗 fail-open
+    plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0102 决策六：LLM 判定 complexity ≥ 此值时规划阶梯起点为 level 2（plan_replan 池 + high）
+    reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0102 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - thinking_*: ["perceive_route_accuracy_drop", "reflect_goal_achieved_false_positive", "plan_schema_fail_rate>0.05"]

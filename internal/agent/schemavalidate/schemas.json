@@ -3,6 +3,7 @@
     "type": "object",
     "required": ["nodes", "edges"],
     "properties": {
+      "escalate": { "type": "boolean" },
       "nodes": {
         "type": "array",
         "items": {
@@ -41,7 +42,8 @@
         "items": { "type": "string" }
       },
       "Complexity": { "type": "number" },
-      "NeedsTools": { "type": "boolean" }
+      "NeedsTools": { "type": "boolean" },
+      "Reply": { "type": "string" }
     }
   },
   "reflect_result": {

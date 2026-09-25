@@ -39,7 +39,7 @@ var _ protocol.Provider = (*AnthropicAdapter)(nil)
 type AnthropicOption func(*AnthropicAdapter)
 
 // WithAnthropicPromptCaching 开启 Anthropic prompt caching。
-// 向 system prompt 和最后一个 tool 注入 cache_control:{type:"ephemeral"}，
+// 向首/末 system block 与最近 2 条消息注入 cache_control（ADR-0102 决策三），
 // 命中缓存时 cache_read_input_tokens 费率约为正常输入的 1/10。
 func WithAnthropicPromptCaching() AnthropicOption {
 	return func(a *AnthropicAdapter) {

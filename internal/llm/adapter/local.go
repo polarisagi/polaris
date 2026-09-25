@@ -2,6 +2,9 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/polarisagi/polaris/internal/ffi"
 	llmparent "github.com/polarisagi/polaris/internal/llm"
@@ -131,6 +134,43 @@ func (a *LocalAdapter) Probe(ctx context.Context) (protocol.LocalProbeResult, er
 	}, nil
 }
 
+// withToolsAsText llama.cpp 无原生 tool_call 协议（SupportsTools=false）：上层只在
+// prompt 中列工具名、完整定义经 WithTools 下发（ADR-0102 决策五），此处把定义渲染成
+// 文本插在前导 system 消息之后，模型据此按 JSON-DAG 契约输出。不修改入参切片。
+func withToolsAsText(msgs []types.Message, tools []types.ToolSchema) []types.Message {
+	text := renderToolsAsText(tools)
+	if text == "" {
+		return msgs
+	}
+	insertAt := 0
+	for insertAt < len(msgs) && msgs[insertAt].Role == "system" {
+		insertAt++
+	}
+	out := make([]types.Message, 0, len(msgs)+1)
+	out = append(out, msgs[:insertAt]...)
+	out = append(out, types.Message{Role: "system", Content: text})
+	return append(out, msgs[insertAt:]...)
+}
+
+// renderToolsAsText 工具定义的文本形态（名称 + 描述 + 参数 JSON Schema）。
+func renderToolsAsText(tools []types.ToolSchema) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Tool definitions:\n")
+	for _, t := range tools {
+		fmt.Fprintf(&sb, "- %s: %s", t.Name, t.Description)
+		if t.Parameters != nil {
+			if b, err := json.Marshal(t.Parameters); err == nil {
+				fmt.Fprintf(&sb, " (Parameters schema: %s)", b)
+			}
+		}
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func toLocalMessages(msgs []types.Message) []ffi.LlamaChatMessage {
 	out := make([]ffi.LlamaChatMessage, 0, len(msgs))
 	for _, m := range msgs {
@@ -146,6 +186,9 @@ func (a *LocalAdapter) Infer(ctx context.Context, msgs []types.Message, opts ...
 	options := &types.InferOptions{}
 	for _, opt := range opts {
 		opt(options)
+	}
+	if len(options.Tools) > 0 {
+		msgs = withToolsAsText(msgs, options.Tools)
 	}
 	req := ffi.LlamaGenerateRequest{
 		Messages:    toLocalMessages(msgs),

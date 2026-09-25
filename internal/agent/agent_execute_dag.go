@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/polaris/internal/security/taint"
@@ -33,6 +34,7 @@ func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Sp
 	}
 
 	if apperr.IsCode(err, apperr.CodeConflict) {
+		a.sCtx.RecordFailure(fsm.FailureTransient)
 		a.asyncIntent(types.TriggerExecuteFail)
 		return err //nolint:wrapcheck // Return directly for TOCTOU
 	}
@@ -46,6 +48,7 @@ func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Sp
 	// 执行失败 → 触发 S_ROLLBACK
 	span.RecordError(err)
 	a.sCtx.RecordReplanFeedback("execution failed: " + err.Error())
+	a.sCtx.RecordFailure(executionFailureKind(err))
 	a.asyncIntent(types.TriggerExecuteFail)
 	return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
 }
@@ -119,6 +122,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	ctx, span := otel.Tracer("agent").Start(ctx, "agent.runExecuteDAG")
 	defer span.End()
 	a.publishTurnPhase(types.AgentStateExecute)
+	a.sCtx.Mu.Lock()
+	a.sCtx.ExecAllSucceeded = false
+	a.sCtx.Mu.Unlock()
 
 	if a.sCtx.DAGModel == nil {
 		// DAGModel 为空时跳过执行（等价于空 DAG），直接推进 ExecuteDone
@@ -443,6 +449,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	// toolExecFn 包一层 TaskMermaidCanvas 追踪（M05 §11.3）：工具调用开始/结束均记录到
 	// 当前任务的符号化画布，供 gateway GET /v1/agent/mmd-canvas 只读展示。
 	// 独立包装而非侵入 toolExecFnInner 内部多处 return，避免遗漏分支。
+	// nodeFailures 统计工具软失败（Success=false 但无 Go 错误），DAG 引擎不把它当节点失败，
+	// Reflect 跳过判据需要它（ADR-0102 决策四）。并行节点并发调用，故用原子量。
+	var nodeFailures atomic.Int32
 	toolExecFn := func(ctx context.Context, toolName string, args []byte, taintLevel types.TaintLevel) (*types.ToolResult, error) {
 		toolUseID := uuid.New().String()
 		if a.memory != nil {
@@ -462,6 +471,9 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		})
 
 		res, err := toolExecFnInner(ctx, toolName, args, taintLevel)
+		if err != nil || res == nil || !res.Success {
+			nodeFailures.Add(1)
+		}
 
 		var outputContent string
 		if err != nil {
@@ -574,6 +586,10 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 	if maxNodeTaint > a.sCtx.GlobalTaintLevel {
 		a.sCtx.GlobalTaintLevel = maxNodeTaint
 	}
+
+	a.sCtx.Mu.Lock()
+	a.sCtx.ExecAllSucceeded = nodeFailures.Load() == 0 && !degradedReplan
+	a.sCtx.Mu.Unlock()
 
 	span.AddEvent("dag_execute_done")
 	a.asyncIntent(types.TriggerExecuteDone)
