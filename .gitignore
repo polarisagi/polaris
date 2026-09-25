@@ -120,3 +120,6 @@ signing-key*
 
 # 本地 CI 日志（scripts/ci_test.sh）
 /.ci-logs/
+
+# make test-ci 覆盖率产物
+coverage.out

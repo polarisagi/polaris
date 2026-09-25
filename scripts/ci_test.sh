@@ -274,7 +274,7 @@ run_step "[5/13] 执行 docs/arch 一致性检查" "make docs-check && make docs
 
 run_step "[6/13] 验证 Spec 一致性 (state.yaml SSoT)" "go test -run \"^TestSpec\" ./internal/protocol/... -v"
 
-run_step "[7/13] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "go test ./pkg/... ./internal/... -v -race -coverprofile=coverage.out && go tool cover -func=coverage.out"
+run_step "[7/13] 运行 Go 全量单元测试 (带竞争检测与覆盖率)" "make test-ci"
 
 run_step "[8/13] 运行 Rust 单元测试" "make rust-test"
 
