@@ -231,6 +231,22 @@
           </div>
         </div>
 
+        <!-- Approval Cards：回合内阻塞式人工审批（HITL），裁决经 /v1/approvals 回到内核 -->
+        <template x-for="ap in $store.chat.approvals" :key="ap.id">
+          <div class="chat chat-start">
+            <div class="chat-bubble bg-base-100 text-base-content border border-warning shadow-sm w-full max-w-2xl">
+              <div class="font-medium text-sm mb-1" x-text="$store.i18n.t('chat_approval_title')"></div>
+              <div class="text-xs text-base-content/70 mb-2" x-text="$store.i18n.t('chat_approval_hint')"></div>
+              <div class="text-xs mb-1" x-show="ap.tool"><span class="text-base-content/60" x-text="$store.i18n.t('chat_approval_tool')"></span> <code x-text="ap.tool"></code></div>
+              <pre class="text-xs bg-base-200 rounded p-2 max-h-48 overflow-auto whitespace-pre-wrap break-all" x-show="ap.input" x-text="ap.input"></pre>
+              <div class="flex gap-2 justify-end mt-2">
+                <button class="btn btn-sm btn-ghost" :disabled="ap.busy" @click="$store.chat.resolveApproval(ap.id, 'deny')" x-text="$store.i18n.t('chat_approval_deny')"></button>
+                <button class="btn btn-sm btn-warning" :disabled="ap.busy" @click="$store.chat.resolveApproval(ap.id, 'approve')" x-text="$store.i18n.t('chat_approval_approve')"></button>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <!-- Thinking Bubble -->
         <div class="chat chat-start" x-show="$store.chat.state === 'SUBMITTING' || $store.chat.state === 'THINKING'" x-cloak>
           <div class="chat-bubble bg-base-100/50 text-base-content border border-base-200 flex items-center gap-2">

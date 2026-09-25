@@ -59,7 +59,7 @@ func (r *InMemoryToolRegistry) checkTaintEgress(ctx context.Context, tool types.
 	var exemption *token.TaintExemptionToken
 	if vault != nil {
 		if agentID, ok := ctx.Value(protocol.CtxAgentIDKey{}).(string); ok && agentID != "" {
-			exemption = vault.Lookup(agentID)
+			exemption = vault.Lookup(agentID, input)
 		}
 	}
 	if err := checker.CheckEgressWithExemption(input, taintLevel, exemption); err != nil {

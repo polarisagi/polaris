@@ -92,7 +92,7 @@ func (a *Agent) handleTaintEgressBlocked(ctx context.Context, err error) error {
 	if errors.As(err, &blockedErr) {
 		exemptionContent = blockedErr.Data
 	}
-	hitlResp, hitlErr := a.hitl.Prompt(ctx, types.HITLPrompt{
+	hitlResp, hitlErr := a.promptHITLInTurn(ctx, types.HITLPrompt{
 		ID:                    fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
 		AgentID:               a.sCtx.AgentID,
 		CheckpointType:        "data_exfiltration",
@@ -100,7 +100,7 @@ func (a *Agent) handleTaintEgressBlocked(ctx context.Context, err error) error {
 		TaintLevel:            types.TaintMedium,
 		DeadlineNs:            time.Now().Add(10 * time.Minute).UnixNano(),
 		ExemptionFieldContent: exemptionContent,
-	})
+	}, "", exemptionContent)
 	if hitlErr == nil && hitlResp != nil && hitlResp.Approved {
 		// Token minted by hitl.Respond. Will retry on next plan/exec.
 		a.asyncIntent(types.TriggerExecuteFail)

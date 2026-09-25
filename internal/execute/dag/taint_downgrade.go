@@ -20,7 +20,11 @@ import (
 // validateNodeTaint 对单个 DAG 节点执行降级尝试 + 分级拦截判定。
 func validateNodeTaint(ctx context.Context, vCtx *DAGValidationContext, node protocol.ExecNode) error {
 	level := attemptSchemaDowngrade(ctx, vCtx, node, vCtx.ActiveTaintLevel)
-	if level >= types.TaintHigh && level != types.TaintUserReviewed {
+	// TaintMedium 的 write_network 拦截同样以 SanitizeByUserReview 为转义路径
+	// （M11 §2.5 / §3 附加 TaintLevel 约束"需经 SanitizeByUserReview 降至 TaintLow 或
+	// TaintUserReviewed 后方可放行"）；此前仅 TaintHigh 查询复核豁免，Medium 拦截
+	// 即便人工批准也无从放行。
+	if level >= types.TaintMedium && level != types.TaintUserReviewed {
 		level = attemptUserReviewDowngrade(ctx, vCtx, node, level)
 	}
 

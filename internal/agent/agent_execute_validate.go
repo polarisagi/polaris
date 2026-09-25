@@ -60,7 +60,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		return apperr.New(apperr.CodeInternal, "runValidateDAG: dagValidator is nil (fail-closed)")
 	}
 
-	if err := a.dagValidator.Validate(ctx, vCtx); err != nil {
+	if err := a.validateWithTaintReview(ctx, vCtx); err != nil {
 		a.sCtx.RecordReplanFeedback(validationFeedback(plan, err))
 		// 校验失败→ 异步推送 TriggerValidateFail 以面向 FSM 的 S_REPLAN
 		a.asyncIntent(types.TriggerValidateFail)
@@ -182,7 +182,7 @@ func (a *Agent) runBlindZoneHITL(ctx context.Context, plan *protocol.DAGPlan) (b
 			"session_id", a.sCtx.SessionID, "tools", sideEffects)
 		return false, nil
 	}
-	resp, err := a.hitl.Prompt(ctx, types.HITLPrompt{
+	resp, err := a.promptHITLInTurn(ctx, types.HITLPrompt{
 		ID:             fmt.Sprintf("hitl_%d", time.Now().UnixNano()),
 		AgentID:        a.sCtx.AgentID,
 		CheckpointType: "blind_zone",
@@ -190,7 +190,7 @@ func (a *Agent) runBlindZoneHITL(ctx context.Context, plan *protocol.DAGPlan) (b
 			"Plan performs side effects via: %s. Approve to execute.", strings.Join(sideEffects, ", ")),
 		TaintLevel: a.sessionTaint(),
 		DeadlineNs: time.Now().Add(10 * time.Minute).UnixNano(),
-	})
+	}, strings.Join(sideEffects, ", "), nil)
 	if err == nil && resp != nil && resp.Approved {
 		a.sCtx.BlindZoneHITLRequired = false // 本任务已获批，replan 后不重复打扰
 		return false, nil

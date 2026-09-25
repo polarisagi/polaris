@@ -27,6 +27,7 @@ Alpine.store('chat', {
   contextWarning: null,  // context_warning SSE 事件携带的数据
   compacting: false,     // status/compacting 事件期间为 true
   phase: '',             // 回合阶段键 perceive/plan/execute/reflect/respond（status/phase 事件，ADR-0098）
+  approvals: [],         // 本回合待用户确认的操作（status/approval_required 事件）；回合结束即清空
 
   get isActive() { return this.state !== 'IDLE' && this.state !== 'COMPLETE' && this.state !== 'ERROR' },
 
@@ -276,6 +277,7 @@ Alpine.store('chat', {
     this.thinkingOpen = true
     this.errorMsg = ''
     this.phase = ''
+    this.approvals = []
     this.state = 'SUBMITTING'
 
     const attachmentsPayload = [...this.attachments];
@@ -528,6 +530,9 @@ Alpine.store('chat', {
       case 'status':
         if (data.type === 'phase') {
           this.phase = data.phase || ''
+        } else if (data.type === 'approval_required') {
+          // 回合在内核侧阻塞等待裁决；超时按拒绝处理（后端 HITL 网关兜底）
+          this.approvals.push({ id: data.id, tool: data.tool || '', input: data.input || '', deadlineNs: data.deadline_ns || 0, busy: false })
         } else if (data.type === 'compacting') {
           this.compacting = true
         } else if (data.type === 'compacted') {
@@ -553,6 +558,7 @@ Alpine.store('chat', {
     }
     this._finalizeMessage(false)
     this.phase = ''
+    this.approvals = []
     this.state = 'COMPLETE'
     this.thinkingOpen = false
     this.thinkingText = ''
@@ -560,10 +566,31 @@ Alpine.store('chat', {
     Alpine.store('statusBar').poll()
   },
 
+  // resolveApproval 回复回合内的审批请求。裁决只经 HITL 网关（/v1/approvals），
+  // 这里不做任何本地放行判断。
+  async resolveApproval(id, action) {
+    const item = this.approvals.find(a => a.id === id)
+    if (!item || item.busy) return
+    item.busy = true
+    try {
+      const r = await fetch(`/v1/approvals/${encodeURIComponent(id)}/resolve`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ action, comment: '' }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      this.approvals = this.approvals.filter(a => a.id !== id)
+    } catch (err) {
+      item.busy = false
+      Alpine.store('toast').show('error', `${Alpine.store('i18n').t('chat_approval_failed')}: ${err.message}`)
+    }
+  },
+
   _onError(err) {
     const isAbort = err.code === 'aborted' || err.code === 'interrupted'
     this._finalizeMessage(isAbort)
     this.phase = ''
+    this.approvals = []
     this.state = 'ERROR'
     this.errorMsg = err.message || '连接中断'
     window._activeSseClient?.stop()

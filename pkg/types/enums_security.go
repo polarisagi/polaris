@@ -76,6 +76,11 @@ const (
 // 依赖，改名安全。
 const CheckpointDeviceControlReview = "device_control_review"
 
+// CheckpointTaintReview S_VALIDATE TaintGate 拦截后的人工复核 checkpoint
+// （M11 §2.5 SanitizeByUserReview）。TaintLevel>=TaintMedium，超时一律拒绝，
+// 批准即按节点参数内容哈希铸造 TaintExemptionToken。
+const CheckpointTaintReview = "taint_review"
+
 // TrustTier 五级信任体系（ADR-0016 §2.1）。
 // 替代 SignatureValid bool，使系统能区分技能/工具来源的信任级别。
 // 业务方法（ApprovalRequired 等）定义在本文件下方。
