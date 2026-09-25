@@ -82,11 +82,19 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 	sessionID := NewSessionID()
 
 	// 2. 写 run 记录（running 状态）
+	// trigger 列有 CHECK(cron/webhook/manual/event)，漏传即空串违反约束、整条插入失败；
+	// status 取 DDL 注释所列的 running（原 "pending" 不在其中，TimeoutRuns 只扫
+	// running，崩溃的 run 会永远不被标记 timeout）。
 	if err := ca.AutomationRepo.CreateRun(ctx, repo.AutomationRunRow{
 		ID:           runID,
 		AutomationID: a.ID,
-		Status:       "pending",
-		StartedAt:    time.Now().UTC().Format(time.RFC3339),
+		Trigger:      trigger,
+		Status:       "running",
+		// session_id 关联本次执行产生的会话，prompt_snapshot 固化执行时 prompt
+		// （automation 的 prompt 之后可能被修改），均为 DDL 定义的 run 记录字段。
+		SessionID:      sessionID,
+		PromptSnapshot: a.Prompt,
+		StartedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		slog.Warn("automation: insert run failed", "run", runID, "err", err)
 	}
@@ -154,7 +162,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 
 			finishedAt = time.Now().UTC().Format(time.RFC3339)
 			// 更新 run 记录
-			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, status, errMsg, time.Now().UTC().Format(time.RFC3339), 0); err != nil {
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, status, errMsg, time.Now().UTC().Format(time.RFC3339)); err != nil {
 
 				slog.Warn("automation: update run failed", "run", runID, "err", err)
 			}
@@ -163,9 +171,17 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 			ca.updateAutomationStats(a.ID, status, errMsg, finishedAt)
 		}()
 
+		// 放在 defer 注册之后：run 记录与 automation 统计仍按 error 收尾，
+		// 否则 nil 依赖在 RunTurn 处 panic，被 SafeGo 吞掉后状态永远停在 running。
+		if ca.SessionOrch == nil {
+			status = "error"
+			errMsg = "session orchestrator not configured"
+			return
+		}
+
 		if ca.HITLGateway != nil && a.RequiresHITL {
 			// 更新状态为 suspended，等待审批
-			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", "", 0); err != nil {
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "suspended", "", ""); err != nil {
 				slog.Warn("automation: update run status to suspended failed", "run", runID, "err", err)
 			}
 			if err := ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "suspended"); err != nil {
@@ -200,7 +216,7 @@ func (ca *CronAdmin) executeAutomation(ctx context.Context, a *automation, trigg
 				return
 			}
 			// 审批通过，继续执行
-			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "running", "", "", 0); err != nil {
+			if err := ca.AutomationRepo.UpdateRunStatus(bgCtx, runID, "running", "", ""); err != nil {
 				slog.Warn("automation: update run status to running failed", "run", runID, "err", err)
 			}
 			if err := ca.AutomationRepo.UpdateAutomationStatus(bgCtx, a.ID, "running"); err != nil {

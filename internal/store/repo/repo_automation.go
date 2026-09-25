@@ -281,19 +281,14 @@ func (r *SQLiteAutomationRepository) CreateRun(ctx context.Context, row repo.Aut
 	return nil
 }
 
-func (r *SQLiteAutomationRepository) UpdateRunStatus(ctx context.Context, id, status, errorMsg, completedAt string, durationMs int64) error {
-	if durationMs > 0 {
-		_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, error=?, completed_at=?, duration_ms=? WHERE id=?`,
-			status, errorMsg, completedAt, durationMs, id)
-		if err != nil {
-			return apperr.Wrap(apperr.CodeInternal, "error", err)
-		}
-		return nil
-	}
-	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, error=?, completed_at=? WHERE id=?`,
-		status, errorMsg, completedAt, id)
+// UpdateRunStatus 列名以 017_automations.sql 为准（error_msg / finished_at）。
+// 此前写的 error / completed_at / duration_ms 三列在 DDL 中均不存在，每次调用都
+// 以 SQL 错误失败，run 记录永远停在初始状态；DDL 无耗时列，durationMs 参数一并删除。
+func (r *SQLiteAutomationRepository) UpdateRunStatus(ctx context.Context, id, status, errorMsg, finishedAt string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE automation_runs SET status=?, error_msg=?, finished_at=? WHERE id=?`,
+		status, errorMsg, finishedAt, id)
 	if err != nil {
-		return apperr.Wrap(apperr.CodeInternal, "error", err)
+		return apperr.Wrap(apperr.CodeInternal, "SQLiteAutomationRepository.UpdateRunStatus", err)
 	}
 	return nil
 }
