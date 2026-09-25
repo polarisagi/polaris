@@ -283,6 +283,10 @@ type trackedProvider struct {
 
 func (tp *trackedProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (resp *types.ProviderResponse, err error) {
 	defer func() {
+		// 请求侧故障不说明 Provider 不健康，与路由的 recordAttempt 同一口径。
+		if isRequestFault(err, tp.entry.name) {
+			return
+		}
 		tp.entry.recordOutcome(err == nil, func() {
 			tp.registry.mu.RLock()
 			fn := tp.registry.onRecovery
@@ -298,6 +302,10 @@ func (tp *trackedProvider) Infer(ctx context.Context, msgs []types.Message, opts
 
 func (tp *trackedProvider) StreamInfer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (ch <-chan types.StreamEvent, err error) {
 	defer func() {
+		// 请求侧故障不说明 Provider 不健康，与路由的 recordAttempt 同一口径。
+		if isRequestFault(err, tp.entry.name) {
+			return
+		}
 		tp.entry.recordOutcome(err == nil, func() {
 			tp.registry.mu.RLock()
 			fn := tp.registry.onRecovery

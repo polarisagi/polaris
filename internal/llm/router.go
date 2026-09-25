@@ -227,16 +227,7 @@ func (ir *InferenceRouter) Infer(ctx context.Context, msgs []types.Message, opts
 	defer func() {
 		ms := float64(time.Since(start).Milliseconds())
 		entry.recordLatency(ms)
-		entry.recordOutcome(err == nil, func() {
-			ir.registry.mu.RLock()
-			fn := ir.registry.onRecovery
-			name := entry.name
-			ir.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+		ir.recordAttempt(ctx, entry, err)
 	}()
 
 	resp, inferErr := entry.provider.Infer(ctx, msgs, opts...)
@@ -291,6 +282,9 @@ func (ir *InferenceRouter) handleInferError(ctx context.Context, err error, entr
 	// provider，包括请求格式错误/永久认证失效/策略拦截这类换 provider 也无法
 	// 恢复的错误——既浪费时延，也可能把同一个畸形请求打到每一家 vendor。
 	// Retryable=false 且 ShouldFallback=false 是 Classify() 对这类错误的明确信号。
+	if isRequestFault(err, entry.name) {
+		return ir.overflowFailover(ctx, msgs, opts, req, entry, err)
+	}
 	if ce := ClassifyWithProvider(err, entry.name); !ce.Retryable && !ce.ShouldFallback {
 		slog.Warn("inference_router: non-retryable error, skip failover",
 			"provider", entry.name, "reason", ce.Reason, "err", err)
@@ -427,16 +421,7 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	var err error
 	defer func() {
 		entry.recordLatency(float64(time.Since(start).Milliseconds()))
-		entry.recordOutcome(err == nil, func() {
-			ir.registry.mu.RLock()
-			fn := ir.registry.onRecovery
-			name := entry.name
-			ir.registry.mu.RUnlock()
-			if fn != nil {
-				fn(name)
-			}
-		})
-		ir.recordModelCallResult(ctx, entry.name, entry.provider.ModelID(), err == nil)
+		ir.recordAttempt(ctx, entry, err)
 	}()
 
 	ch, streamErr := entry.provider.StreamInfer(ctx, msgs, opts...)
@@ -447,6 +432,11 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 			return nil, apperr.Wrap(apperr.CodeInternal, "InferenceRouter.StreamInfer", err)
 		}
 
+		if isRequestFault(err, entry.name) {
+			fch, ferr := ir.streamOverflowFailover(ctx, msgs, opts, req, entry, err)
+			released = ferr == nil
+			return fch, ferr
+		}
 		if ce := ClassifyWithProvider(err, entry.name); !ce.Retryable && !ce.ShouldFallback {
 			slog.Warn("inference_router: non-retryable stream error, skip failover",
 				"provider", entry.name, "reason", ce.Reason, "err", err)
