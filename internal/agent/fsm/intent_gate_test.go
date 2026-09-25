@@ -91,3 +91,49 @@ func TestTrySkipReflect(t *testing.T) {
 	sm.replanCount = 1
 	require.Nil(t, sm.trySkipReflect(mk(true, 0.2)), "重规划轮次必须反思（观察—再规划）")
 }
+
+// ADR-0101 决策四 4b′：Perceive 直答合并只在 NeedsTools=false 且 Reply 可发布时生效；
+// 只有 Perceive→Respond 入边消费 PreparedReply，其余入边照常调 Respond LLM。
+func TestPerceiveDirectReplyMerge(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+
+	sCtx := &StateContext{}
+	st, err := sm.applyPerceiveResult(sCtx, []byte(`{"Goal":"问候","NeedsTools":false,"Reply":"你好！"}`))
+	require.NoError(t, err)
+	require.Equal(t, types.State("S_PERCEIVE_DIRECT"), st)
+	require.Equal(t, "你好！", sCtx.PreparedReply)
+
+	effs, err := sm.directRespondEffects(context.Background(), sCtx)
+	require.NoError(t, err)
+	require.Len(t, effs, 1)
+	_, isDet := effs[0].(protocol.DeterministicEffect)
+	require.True(t, isDet, "已有回复时不得再调 Respond LLM")
+
+	// NeedsTools=true：Reply 一律忽略
+	sCtx = &StateContext{}
+	_, _ = sm.applyPerceiveResult(sCtx, []byte(`{"Goal":"读文件","NeedsTools":true,"Reply":"好的"}`))
+	require.Empty(t, sCtx.PreparedReply)
+
+	// 内部产物特征：退回 Respond LLM
+	sCtx = &StateContext{}
+	_, _ = sm.applyPerceiveResult(sCtx, []byte(`{"Goal":"x","NeedsTools":false,"Reply":"{\"Goal\":\"x\"}"}`))
+	require.Empty(t, sCtx.PreparedReply)
+	effs, _ = sm.directRespondEffects(context.Background(), sCtx)
+	_, isLLM := effs[0].(protocol.LLMFillEffect)
+	require.True(t, isLLM)
+}
+
+// 回合起点必须清空上一回合的直答：否则本回合走 System-1/FastPath/寒暄旁路到达
+// Perceive→Respond 时会发布陈旧回复（4b′）。
+func TestTurnStartClearsPreparedReply(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{
+		PreparedReply: "上一回合的回复",
+		RawIntentTS:   taint.NewTaintedString("帮我列出目录", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t"),
+	}
+	tr, ok := sm.transitions[types.AgentStateIdle][types.TriggerIntentReceived]
+	require.True(t, ok)
+	_, err := tr.Effects(context.Background(), sCtx)
+	require.NoError(t, err)
+	require.Empty(t, sCtx.PreparedReply)
+}

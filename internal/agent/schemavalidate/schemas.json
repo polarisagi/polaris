@@ -41,7 +41,8 @@
         "items": { "type": "string" }
       },
       "Complexity": { "type": "number" },
-      "NeedsTools": { "type": "boolean" }
+      "NeedsTools": { "type": "boolean" },
+      "Reply": { "type": "string" }
     }
   },
   "reflect_result": {

@@ -43,6 +43,25 @@ func (a *Agent) publishTurnPhase(s types.AgentState) {
 	})
 }
 
+// publishPreparedReply 发布 Perceive 同次产出的直答（ADR-0101 决策四 4b′）并消费之。
+// 事件形态与 doStreamInfer 的 AudienceUser 文本增量一致，session 侧无需区分来源。
+func (a *Agent) publishPreparedReply() {
+	a.sCtx.Mu.Lock()
+	reply := a.sCtx.PreparedReply
+	a.sCtx.PreparedReply = ""
+	taintLevel := a.sCtx.GlobalTaintLevel
+	a.sCtx.Mu.Unlock()
+	a.publishTurnPhase(types.AgentStateRespond)
+	if reply == "" {
+		return
+	}
+	a.publishStreamEvent(types.AgentStreamEvent{
+		Type:       types.AgentStreamEventToken,
+		Content:    reply,
+		TaintLevel: taintLevel,
+	})
+}
+
 // fastPathPlanState System-1 FastPath 旁路 S_PLAN 时的下一状态：没有可复用的 DAG
 // 就没有可执行的东西，直接转直答，而不是空跑 Validate/Execute/Reflect 三步。
 func (a *Agent) fastPathPlanState() types.State {

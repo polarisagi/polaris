@@ -1,6 +1,6 @@
 # ADR-0101: Token 经济——零 LLM 寒暄快路、规划便宜池先行级联、缓存稳定前缀
 
-- **状态**: Accepted（决策一～三、决策四 4a、决策五）/ Proposed（决策四 4b/4c）
+- **状态**: Accepted（决策一～五；决策四原 4b/4c 草案被 4b′ 取代，见下）
 - **日期**: 2026-09-25
 - **决策者**: 架构组
 - **相关模块**: M01 / M04 / M05 / `internal/agent/fsm` / `internal/llm/adapter` / `internal/sysinfo`
@@ -52,10 +52,13 @@
 
 **4a（Accepted，2026-09-25）简单任务成功跳过 Reflect LLM**：`trySkipReflect` 在"首轮（replanCount=0）+ `ExecAllSucceeded` + 0 < Complexity < `m4_kernel.reflect.skip_complexity`(0.4)"时以 `DeterministicEffect` 直接 `S_REFLECT_DONE`（route=`reflect_skipped`），并清空上一轮 `Reflection`。`ExecAllSucceeded` 由 `runExecuteDAG` 每次执行重置、全部节点 `Success` 且未降级重规划才置真。复杂度缺失（0）/偏高、存在失败、重规划轮次一律保留 LLM 反思。简单工具回合 4 次 LLM → 3 次。
 
-**4b/4c（Proposed，下一阶段）**：
-1. **Perceive 并入 Plan**：单次"作答或规划"调用挂原生 tools——模型直接给正文即回复（替代 S_PERCEIVE_DIRECT），给 tool_calls 即 DAG；Go FSM 仍持控制流（HE-5），LLM 输出只填槽。
-2. **Reflect 并入下一轮 Plan / Respond**：观察—再规划（ADR-0098 决策八）由下一次规划调用携带观察完成，全部节点成功且无继续信号时直接 Respond。
-3. 前置门控（4b/4c）：`turn_contract_eval_test.go` 增补"每回合 LLM 调用数"断言与真实 Provider 回放 Eval（HE-4），先有基线再动 FSM 转移表。
+**4b′（Accepted，2026-09-25）直答合并进 Perceive**：Perceive 契约新增可选字段 `Reply`——`NeedsTools=false` 时模型在同一次调用里写出最终回复。`applyPerceiveResult` 经 `publishableReply`（拦截 `"Goal"`/`"NeedsTools"`/`"nodes"`/tool-call 标记等内部产物特征）后存入 `StateContext.PreparedReply`；**只有** Perceive→Respond 入边（`directRespondEffects`）消费它，以 `DeterministicEffect` 进入 S_RESPOND，Agent 在该 Effect 中以用户受众发布正文（`publishPreparedReply`）。S_RESPOND 仍是唯一向用户发布正文的状态（par_inv_06 不变）。回合起点（S_IDLE→S_PERCEIVE）清空 `PreparedReply`，System-1/FastPath/寒暄旁路不会发布陈旧回复。`Reply` 为空或被拦截 → 照常 Respond LLM。直答回合 2 次 LLM → 1 次（route=`direct_merged`）。
+代价：直答不再逐 token 流式（整段一次发布）；回复由 Perceive（general 池、json_object）写出，与原 Respond 同池同思考档，质量口径不变。
+
+**原 4b/4c 草案（驳回）**：
+- "Perceive 并入 Plan（单次调用挂 tools，给正文即回复）"：Plan 是内部受众（ADR-0098 决策一），直答正文仍需 Respond 或流式泄漏风险回归；且去掉 Perceive 即失去 Complexity，决策二级联与 4a 失去判据。4b′ 以更小改动拿到直答 1 次调用。
+- "Reflect 并入下一轮 Plan"：单步工具回合反而多一次 Plan 调用（4 次不变）；简单任务已由 4a 跳过，复杂任务的反思（观察—再规划、learnings）保留价值。
+- 门控：`turn_contract_eval_test.go` 已对三条路由断言每回合 LLM 调用数（寒暄 1 次 Respond、直答合并 0 次 Respond、简单工具回合 0 次 Reflect）。
 
 ### 决策五：S_PLAN 工具定义去重
 
@@ -89,16 +92,19 @@ S_PLAN 已经原生 function-calling 下发完整工具定义（`WithTools`）�
 - `internal/llm/adapter/anthropic_request.go`、`internal/sysinfo/sysinfo.go`
 - `internal/agent/fsm/transitions.go`（`trySkipReflect`）、`internal/agent/agent_execute_dag.go`（`ExecAllSucceeded`）
 - `internal/agent/context/tool_list_section.go`、`internal/llm/adapter/local.go`（`withToolsAsText`）
-- 门控：`TestTurnContractEval_SimpleToolTaskSkipsReflect`、`TestTrySkipReflect`、`TestBuildToolListSection_NamesOnly`、`TestWithToolsAsText`、`TestTurnContractEval_PhaticSkipsPerceive`、`TestPlanEffect_CheapFirstCascade`、`TestClassifyIntentWeight`、`TestBuildAnthropicRequest_StablePrefixBreakpoint`
+- `internal/agent/fsm/phase_results.go`（`publishableReply`）、`internal/agent/fsm/transitions_respond.go`（`directRespondEffects`）、`internal/agent/agent_turn.go`（`publishPreparedReply`）、`configs/prompts/kernel/perceive.md`（`Reply`）
+- 门控：`TestTurnContractEval_DirectReplyMergedIntoPerceive`、`TestPerceiveDirectReplyMerge`、`TestTurnStartClearsPreparedReply`、`TestTurnContractEval_SimpleToolTaskSkipsReflect`、`TestTrySkipReflect`、`TestBuildToolListSection_NamesOnly`、`TestWithToolsAsText`、`TestTurnContractEval_PhaticSkipsPerceive`、`TestPlanEffect_CheapFirstCascade`、`TestClassifyIntentWeight`、`TestBuildAnthropicRequest_StablePrefixBreakpoint`
 
 ## 重新评估触发条件
 
 1. `polaris.cognition.turn_route_total{route="phatic_bypass"}` 对应回合的用户负反馈率显著高于 `direct`，或出现寒暄误判吞掉任务的实例 → 收紧词表。
 2. 首轮 general 池规划导致的重规划率较基线上升超过 30% → 调低 `plan.reasoning_complexity` 或恢复首轮 ThinkingHigh。
 3. `reflect_skipped` 回合的用户纠正/重问率显著高于完整反思回合 → 调低或关闭 `reflect.skip_complexity`。
-4. Provider 转为"思考深度由模型自适应"且贵/便宜模型价差 < 3× → 重议池级联的必要性。
+4. `direct_merged` 回合出现内部产物泄漏或用户对直答质量的负反馈显著高于 Respond LLM 路径 → 关闭合并（perceive.md 去掉 `Reply`）。
+5. Provider 转为"思考深度由模型自适应"且贵/便宜模型价差 < 3× → 重议池级联的必要性。
 
 ## 修订记录
 
 - 2026-09-25 创建。
 - 2026-09-25 决策四 4a 落地（简单任务跳过反思）；新增决策五（工具定义去重）。
+- 2026-09-25 决策四 4b′ 落地（直答合并进 Perceive）；原 4b/4c 草案驳回并记录理由。

@@ -110,6 +110,11 @@ func (sm *StateMachine) registerTransitions() {
 		Trigger: types.TriggerIntentReceived,
 		To:      types.AgentStatePerceive,
 		Effects: func(ctx context.Context, sCtx *StateContext) ([]protocol.Effect, error) {
+			// 回合起点清空上一回合的直答（4b′）：本回合任何不经 applyPerceiveResult 的
+			// 感知路径（System-1 旁路、FastPath、寒暄旁路）都不得发布陈旧回复。
+			sCtx.Mu.Lock()
+			sCtx.PreparedReply = ""
+			sCtx.Mu.Unlock()
 			if bypassEffect := sm.trySystem1Bypass(ctx, sCtx); bypassEffect != nil {
 				return []protocol.Effect{bypassEffect}, nil
 			}
