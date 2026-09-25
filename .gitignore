@@ -117,3 +117,6 @@ signing-key*
 # 其中 email.go.orig 是含 SSRF 漏洞的旧版完整副本。
 *.orig
 *.rej
+
+# 本地 CI 日志（scripts/ci_test.sh）
+/.ci-logs/
