@@ -380,6 +380,27 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 	}
 
 	normalizeInferRequest(req)
+
+	// 额度在选路之前获取：所有成功返回的流都经 wrapStreamChannel 在关闭时
+	// ReleaseLLM，含下方目标 Pool 为空直接走 streamPoolFallback 的分支——此前
+	// 该分支先于 acquire 返回，流关闭时"没借就还"，llmInFlight 逐轮变负，并发
+	// 上限实际失效（FSM 回合走 general 池，而 DeepSeek 种子只有 default/reasoning）。
+	if err := ir.acquireLLMCapacity(ctx); err != nil {
+		return nil, err
+	}
+	// [2026-09-22 修复] 额度此前只在成功路径（wrapStreamChannel 内部的 deferred
+	// ReleaseLLM，流真正关闭时才释放）归还；错误返回路径不释放，额度永久泄漏——
+	// 连续几次失败调用（如 Provider 配置错误）即可耗尽默认上限。released 标记确保：
+	// 成功路径把释放责任移交给 wrapStreamChannel，其余路径在此兜底释放。
+	released := false
+	if ir.governor != nil {
+		defer func() {
+			if !released {
+				ir.governor.ReleaseLLM()
+			}
+		}()
+	}
+
 	// ModelPool 非空时，初始选择也应严格按 role 过滤（GD-13-005）；
 	// ModelPool 为空时使用全局 best()。
 	var entry *providerEntry
@@ -394,30 +415,11 @@ func (ir *InferenceRouter) StreamInfer(ctx context.Context, msgs []types.Message
 		// 与 Infer 同构：目标 Pool 内无可用 Provider 时不直接拒绝，先走
 		// 流式跨 Pool 降级链（GD-13-005）。
 		if req.ModelPool != "" {
-			return ir.streamPoolFallback(ctx, msgs, opts, req)
+			fch, ferr := ir.streamPoolFallback(ctx, msgs, opts, req)
+			released = ferr == nil
+			return fch, ferr
 		}
 		return nil, apperr.Wrap(apperr.CodeResourceExhausted, "inference_router: all providers failed", protocol.ErrAllProvidersFailed).WithRetryAfter(30)
-	}
-
-	if err := ir.acquireLLMCapacity(ctx); err != nil {
-		return nil, err
-	}
-	// [2026-09-22 修复] acquireLLMCapacity 拿到的 LLM 并发额度此前只在成功路径
-	// （wrapStreamChannel 内部的 deferred ReleaseLLM，流真正关闭时才释放）归还；
-	// 本函数的每一条错误返回路径（含下方 streamFailover 兜底全部失败的情形）
-	// 都不释放，额度永久泄漏——连续几次失败调用（如 Provider 配置错误）就能
-	// 耗尽默认上限，此后即便 Provider 已恢复健康，所有请求也会卡在
-	// WaitForLLMCapacity 直到超时，表现为"推理返回空内容"且日志无任何可追溯
-	// 错误（真实复现：DeepSeek base_url 配置错误导致连续失败，两轮对话内耗尽
-	// 默认 4 个并发额度）。released 标记确保：成功路径把释放责任移交给
-	// wrapStreamChannel（语义不变，流关闭时释放），其余路径在此兜底释放。
-	released := false
-	if ir.governor != nil {
-		defer func() {
-			if !released {
-				ir.governor.ReleaseLLM()
-			}
-		}()
 	}
 
 	start := time.Now()
@@ -484,6 +486,11 @@ func (ir *InferenceRouter) StreamInferWithTarget(ctx context.Context, p protocol
 	ch, err := p.StreamInfer(ctx, msgs, opts...)
 	ir.recordModelCallResult(ctx, providerName, p.ModelID(), err == nil)
 	if err != nil {
+		// 与 StreamInfer 同一泄漏：额度只由 wrapStreamChannel 在流关闭时归还，
+		// 错误路径须在此释放。
+		if ir.governor != nil {
+			ir.governor.ReleaseLLM()
+		}
 		return nil, apperr.Wrap(apperr.CodeInternal, "StreamInferWithTarget", err)
 	}
 	return ir.wrapStreamChannel(ctx, ch, req, providerName), nil
