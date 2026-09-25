@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -190,5 +191,20 @@ func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
 	}
 	if tr, ok := sm.transitions[types.AgentStatePlan][types.TriggerFillRetry]; !ok || tr.To != types.AgentStatePlan {
 		t.Fatal("缺少 S_PLAN 空输出自环")
+	}
+}
+
+// TestPlanEffect_RetryDisablesThinking 空输出重试须关闭思考：触发条件即"思考模式 +
+// 挂工具"，用户输入恒 TaintHigh 使首轮规划恒为 ThinkingMax，原样重试等于没有重试。
+func TestPlanEffect_RetryDisablesThinking(t *testing.T) {
+	sm := NewStateMachine(&dummyContextBuilder{})
+	sCtx := &StateContext{}
+	sCtx.RawIntentTS = taint.NewTaintedString("写个文件", taint.TaintSource{OriginTaintLevel: types.TaintHigh}, "t")
+	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingMax {
+		t.Fatalf("首轮规划（TaintHigh）应为 ThinkingMax，got %q", m)
+	}
+	sCtx.PlanAttempts = 1
+	if m := sm.planEffect(sCtx).ThinkingMode; m != types.ThinkingDisabled {
+		t.Fatalf("空输出重试应关闭思考，got %q", m)
 	}
 }

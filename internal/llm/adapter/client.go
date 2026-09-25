@@ -46,9 +46,9 @@ type OpenAIRequest struct {
 }
 
 // ThinkingConfig DeepSeek extended thinking 控制体。
-// Type 固定为 "enabled"；BudgetTokens 可选（0 = 不限制）。
+// Type 为 "enabled" | "disabled"（后者仅 DeepSeek 适配器显式关闭时使用）；BudgetTokens 可选（0 = 不限制）。
 type ThinkingConfig struct {
-	Type         string `json:"type"` // 固定 "enabled"
+	Type         string `json:"type"` // "enabled" | "disabled"
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 

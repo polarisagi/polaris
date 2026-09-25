@@ -304,3 +304,25 @@ func TestOpenAIAdapter_ModelResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestDisableDeepSeekThinking DeepSeek 省略 thinking 字段即默认开启思考，
+// 显式 ThinkingDisabled 必须落为 thinking.type=disabled；未指定保持服务端默认。
+func TestDisableDeepSeekThinking(t *testing.T) {
+	req := translateRequest(&types.InferRequest{ThinkingMode: types.ThinkingDisabled}, false)
+	disableDeepSeekThinking(req, types.ThinkingDisabled)
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("显式 ThinkingDisabled 应发送 thinking.type=disabled，got %+v", req.Thinking)
+	}
+
+	unset := translateRequest(&types.InferRequest{}, false)
+	disableDeepSeekThinking(unset, "")
+	if unset.Thinking != nil {
+		t.Fatalf("未指定思考模式不应改写请求，got %+v", unset.Thinking)
+	}
+
+	maxReq := translateRequest(&types.InferRequest{ThinkingMode: types.ThinkingMax}, false)
+	disableDeepSeekThinking(maxReq, types.ThinkingMax)
+	if maxReq.Thinking == nil || maxReq.Thinking.Type != "enabled" {
+		t.Fatalf("ThinkingMax 不应被改写，got %+v", maxReq.Thinking)
+	}
+}

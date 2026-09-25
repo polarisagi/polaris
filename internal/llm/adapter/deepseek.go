@@ -96,6 +96,7 @@ func (d *DeepSeekAdapter) Infer(ctx context.Context, msgs []types.Message, opts 
 		ResponseFormat: options.ResponseFormat,
 	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
+	disableDeepSeekThinking(apiReq, req.ThinkingMode)
 	cred := d.credPool.Pick()
 	if cred == nil {
 		return nil, apperr.New(apperr.CodeResourceExhausted, "DeepSeekAdapter.Infer: no available credential (all keys cooling down)")
@@ -177,6 +178,7 @@ func (d *DeepSeekAdapter) StreamInfer(ctx context.Context, msgs []types.Message,
 		ResponseFormat: options.ResponseFormat,
 	}
 	apiReq := translateRequest(req, d.capabilities.SupportsVision)
+	disableDeepSeekThinking(apiReq, req.ThinkingMode)
 	cred := d.credPool.Pick()
 	if cred == nil {
 		if cancel != nil {
@@ -230,5 +232,18 @@ func resolveDeepSeekModel(model string) string {
 		return "deepseek-v4-pro"
 	default:
 		return model
+	}
+}
+
+// disableDeepSeekThinking 显式 ThinkingDisabled 时发送 thinking.type=disabled。
+//
+// DeepSeek 省略 thinking 字段即按"开启、effort=high"处理（api-docs.deepseek.com
+// guides/thinking_mode），translateRequest 的"不发送即关闭"对它不成立——此前
+// ThinkingDisabled 在 DeepSeek 上从未生效。只处理显式 disabled：未指定（空串）
+// 保持服务端默认，不改变未表态调用方的既有行为。不下沉到 translateRequest：
+// OpenAI 等兼容端点不认识该字段。
+func disableDeepSeekThinking(apiReq *OpenAIRequest, mode types.ThinkingMode) {
+	if mode == types.ThinkingDisabled {
+		apiReq.Thinking = &ThinkingConfig{Type: "disabled"}
 	}
 }
