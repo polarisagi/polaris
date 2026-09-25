@@ -491,6 +491,8 @@ FeatureGate: `FeatureWebUI` 控制是否注册 `/` 路由。关闭时仅 REST AP
 **并发治理（ResourceGovernor）**:
 全局并发控制由 `ResourceGovernor`（实际在 `internal/automation/resource_governor.go` 和 `internal/automation/queue.go`，非 `internal/gateway/`）实现三级降级准入。`Admit(priority)` 检测可用内存和 **真实 CPU 占用率**（`cpuSampler` 读 `/proc/stat` 双快照差分，1s 缓存；非 Linux 降级 goroutine 启发式）；按 L1/L2/L3 阈值返回准入决定。priority=0（交互式）允许超 `maxConcurrent` 上限 4×；低优先级任务在 L2 压力下直接拒绝。**LLM 专属并发限流**：ResourceGovernor 扩展了 LLM 并发维度（`AdmitLLM` 和 `WaitForLLMCapacity`），调用方（`InferenceRouter`）在发起 LLM 请求前会申请额度（受限于 `spec/state.yaml` 中的 `MaxConcurrentLLMCalls` 配置），避免在 Tier-0 等受限环境下因并发请求导致 OOM 或连接数耗尽，未引入额外的 GlobalSemaphore 模块，而是复用了 `ResourceGovernor` 的能力。
 
+> 2026-09-25 订正（与代码不符处）：① 探针已归口 `internal/observability/probe`（`CPUSampler`：linux `/proc/stat` 增量、darwin `vm.loadavg`÷核数、windows `GetSystemTimes`；内存探针 linux 容器内按 cgroup working set 计），`cpuSampler`/goroutine 启发式已删除。② `Admit` 全仓无调用方；后台工作走 `AdmitBackground(work)`（不排队、不打活跃标记，内存低于 L2 或 CPU 超 L1 即拒）。③ `AdmitLLM` priority 语义：0 = 用户可见推理，只受并发上限约束、唯一刷新活跃时间；1 = 后台推理（`protocol.WithBackgroundWork` 标记：空闲自进化、`AcquireHeadless`），另受水位线约束，被拒时由 `InferenceRouter` 按 2s 间隔挂起重试至 ctx 到期。
+
 TaskQueue 交付语义: **At-Least-Once**（`SQLiteScheduler.Start(ctx, dispatchFn)` 启动后台扫描 goroutine，每 5s 扫 `scheduler:task:` 前缀，CAS（Compare-And-Swap，比较并交换） 更新 storedTask.Status: pending → running → completed/failed；崩溃重启后自动重试直至 MaxAttempts）。幂等键 = Task.IdempotencyKey。
 
 **Agent 任务直通**（`protocol.AgentInvoker`）：当 `task.Type == "agent"` 时，扫描循环优先调用 `AgentInvoker.InvokeAgent(ctx, string(task.Payload))` 而非 `dispatchFn`。通过 `SQLiteScheduler.SetAgentInvoker` 注入（`boot_agent.go` 启动时绑定 `agentInvokerAdapter`）。未注入或任务类型非 "agent" 时回落 `dispatchFn`。接口定义见 `internal/protocol/interfaces_*.go`。
