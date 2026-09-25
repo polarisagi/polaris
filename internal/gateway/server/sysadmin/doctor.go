@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+
+	"github.com/polarisagi/polaris/internal/protocol"
 )
 
 // GET /v1/doctor
@@ -62,17 +64,8 @@ func (h *SysAdminHandler) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Provider 配置 ─────────────────────────────────────────────────
-	defaultP := h.Registry.PickProvider("default")
-	generalP := h.Registry.PickProvider("general")
-	if defaultP != nil || generalP != nil {
-		which := "default"
-		if defaultP == nil {
-			which = "general"
-		}
-		add("provider", true, fmt.Sprintf("active role: %s", which))
-	} else {
-		add("provider", false, "no enabled provider (add one in 模型 page)")
-	}
+	providerOK, providerDetail := doctorProviderCheck(h.Registry)
+	add("provider", providerOK, providerDetail)
 
 	// ── Cron 任务 ─────────────────────────────────────────────────────
 	var cronEnabled, cronTotal int
@@ -103,6 +96,24 @@ func (h *SysAdminHandler) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 		"ok":     allOK,
 		"checks": checks,
 	})
+}
+
+// doctorProviderCheck 返回 provider 检查项的 (ok, detail)。Registry 未注入时
+// 诊断接口须如实报告缺失依赖，而不是 nil panic 成 500（同 openai_compat.go 判空）。
+func doctorProviderCheck(reg protocol.LLMRegistry) (bool, string) {
+	if reg == nil {
+		return false, "provider registry not configured"
+	}
+	defaultP := reg.PickProvider("default")
+	generalP := reg.PickProvider("general")
+	switch {
+	case defaultP != nil:
+		return true, "active role: default"
+	case generalP != nil:
+		return true, "active role: general"
+	default:
+		return false, "no enabled provider (add one in 模型 page)"
+	}
 }
 
 // GET /v1/agent/mmd-canvas
