@@ -150,7 +150,9 @@ func TestPutMetaHoldoutCase_RequiresValidSignatureWhenConfigured(t *testing.T) {
 		t.Fatalf("expected nil error with valid signature, got %v", err)
 	}
 
-	cases, err := sWithKey.GetMetaHoldoutCases(context.Background(), control.RoleMetaAuditor, sig)
+	// 现签：复用上一步签名会在跨秒时失配（VerifyRequest 按校验瞬间的 Unix 秒重建消息）。
+	payload = []byte(fmt.Sprintf("%s:%s:%d", control.RoleMetaAuditor, control.PartitionMetaHoldout, time.Now().Unix()))
+	cases, err := sWithKey.GetMetaHoldoutCases(context.Background(), control.RoleMetaAuditor, ed25519.Sign(priv, payload))
 	if err != nil {
 		t.Fatalf("GetMetaHoldoutCases failed: %v", err)
 	}

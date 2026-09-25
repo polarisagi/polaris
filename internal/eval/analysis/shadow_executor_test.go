@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/learning/optimizer"
@@ -16,8 +17,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// mockProvider 模拟 LLM 推理
+// mockProvider 模拟 LLM 推理。mu 保护可变字段：MaybeSampleAndScore 经 SafeGo 并发调用 Infer，
+// Provider 契约本就要求并发安全。
 type mockProvider struct {
+	mu            sync.Mutex
 	inferResp     *types.ProviderResponse
 	inferErr      error
 	judgeResp     *types.ProviderResponse
@@ -27,6 +30,8 @@ type mockProvider struct {
 }
 
 func (m *mockProvider) Infer(ctx context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.callCount++
 	if len(msgs) > 0 && msgs[0].Role == "user" && strings.HasPrefix(msgs[0].Content, "你是一个严格的对比评判器") {
 		if m.judgeErr != nil {

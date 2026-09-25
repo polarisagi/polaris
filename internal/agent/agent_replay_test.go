@@ -108,6 +108,8 @@ const planDAGJSON = `{"nodes":[{"id":"n1","action":"test_tool","params":{},"retr
 //  3. FSM 最终仍能凭借录像 + 队列耗尽后的真实收尾推进到 Complete 终态；
 //  4. 队列耗尽后全局 ReplayMode 被正确复位为 false。
 func TestAgent_ReplayMode_FullTrajectory_NoRealCallsNoDuplicateToolExec(t *testing.T) {
+	// 回放队列按 Perceive/Plan/… 逐条对位消费；S_PLAN 被 System-1 旁路跳过会错位
+	pinSystem2Routing(t)
 	agent := NewAgentWithDefaults("test-replay-full")
 	provider := &failIfCalledProvider{}
 	agent.InjectProvider(provider)
@@ -162,6 +164,8 @@ func TestAgent_ReplayMode_FullTrajectory_NoRealCallsNoDuplicateToolExec(t *testi
 // 真实调用/真实工具执行完成——因为这些步骤在原始崩溃会话里从未真正跑过，
 // 不存在"重复副作用"风险。
 func TestAgent_ReplayMode_PartialTrajectory_FallsBackToRealExecution(t *testing.T) {
+	// 回放队列按 Perceive/Plan/… 逐条对位消费；S_PLAN 被 System-1 旁路跳过会错位
+	pinSystem2Routing(t)
 	agent := NewAgentWithDefaults("test-replay-partial")
 	provider := &mockProvider{} // 真实响应路径：S_PLAN 提示词命中默认 DAG 分支
 	agent.InjectProvider(provider)

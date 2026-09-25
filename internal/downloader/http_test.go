@@ -68,11 +68,7 @@ func TestDownloadFile(t *testing.T) {
 		}),
 	}
 
-	// 直接操作 proxyState 单例字段，绕过 probeOnce 触发探测。
-	s := getProxy()
-	old := s.resolved
-	s.resolved = "" // direct
-	defer func() { s.resolved = old }()
+	pinResolvedProxy(t, "") // direct
 
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "test.txt")
@@ -113,34 +109,28 @@ func TestDownloadExtract(t *testing.T) {
 
 func TestDownloadExtractLibs(t *testing.T) {
 	dir := t.TempDir()
-	// 绕过 probeOnce 避免触发外网镜像请求。
-	s := getProxy()
-	old := s.resolved
-	s.resolved = ""
-	defer func() { s.resolved = old }()
+	pinResolvedProxy(t, "")
 
-	// 使用短路超时：此测试只验证无效 URL 返回错误，不关心镜像降级细节。
+	// 候选列表含公网镜像，断网 client 让每个候选即刻失败，测试不出网。
+	offlineClient := &http.Client{Transport: erroringRoundTripper{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	err := DownloadExtractLibs(ctx, http.DefaultClient, "http://127.0.0.1:0/fake.bz2", dir)
+	err := DownloadExtractLibs(ctx, offlineClient, "http://127.0.0.1:0/fake.bz2", dir)
 	if err == nil {
 		t.Errorf("expected error connecting")
 	}
 }
 
 func TestDownloadExtractTarBz2_Gz(t *testing.T) {
-	// 绕过 probeOnce 避免触发外网镜像请求。
-	s := getProxy()
-	old := s.resolved
-	s.resolved = ""
-	defer func() { s.resolved = old }()
+	pinResolvedProxy(t, "")
 
-	// 使用短路超时：此测试只验证无效 URL 返回错误，不关心镜像降级细节。
+	// 候选列表含公网镜像，断网 client 让每个候选即刻失败，测试不出网。
+	offlineClient := &http.Client{Transport: erroringRoundTripper{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	err := DownloadExtractTarBz2(ctx, http.DefaultClient, "http://127.0.0.1:0/fake.bz2", t.TempDir(), nil)
+	err := DownloadExtractTarBz2(ctx, offlineClient, "http://127.0.0.1:0/fake.bz2", t.TempDir(), nil)
 	if err == nil {
 		t.Errorf("expected err")
 	}

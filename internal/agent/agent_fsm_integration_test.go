@@ -250,6 +250,8 @@ func (m *mockImmutableCoreForIntegration) Fields() *protocol.ImmutableCoreFields
 }
 
 func TestAgent_MemoryIntegration_HappyPath(t *testing.T) {
+	// 断言 plan_generated 需走 LLM 规划；预注入的 DAGModel 在低 SurpriseIndex 下会被 System-1 旁路复用
+	pinSystem2Routing(t)
 	agent := NewAgentWithDefaults("test-mem-agent")
 	agent.InjectProvider(&mockProvider{})
 	agent.InjectPolicyGate(&allowPolicyGate{})

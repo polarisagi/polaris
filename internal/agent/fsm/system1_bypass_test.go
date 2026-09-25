@@ -22,6 +22,9 @@ func (m *mockSkillMatcher) MatchIntent(rawIntent string) (string, float64, error
 }
 
 func TestSystem1Bypass(t *testing.T) {
+	// 进程级全局值：不恢复会让同包后续用例误入 System-1 旁路
+	prev := metrics.GlobalSurpriseIndex().Current()
+	t.Cleanup(func() { metrics.GlobalSurpriseIndex().SetLastValue(prev) })
 	metrics.GlobalSurpriseIndex().SetLastValue(0.1) // Low surprise index
 
 	sm := NewStateMachine(&dummyContextBuilder{})

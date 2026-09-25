@@ -21,18 +21,22 @@ func (m *mockSQLiteStore) Scan(ctx context.Context, prefix []byte) (protocol.Ite
 	return &mockIterator{values: m.vals}, nil
 }
 
-func testSignMetaAuditor() (ed25519.PublicKey, []byte) {
+// 返回现签函数而非预签名：VerifyRequest 用校验瞬间的 Unix 秒重建签名消息，
+// 预签名跨秒即失配，每次调用前现签才与生产路径一致。
+func testSignMetaAuditor() (ed25519.PublicKey, func() []byte) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	msg := []byte(fmt.Sprintf("%s:%s:%d", control.RoleMetaAuditor, control.PartitionMetaHoldout, time.Now().Unix()))
-	return pub, ed25519.Sign(priv, msg)
+	return pub, func() []byte {
+		msg := []byte(fmt.Sprintf("%s:%s:%d", control.RoleMetaAuditor, control.PartitionMetaHoldout, time.Now().Unix()))
+		return ed25519.Sign(priv, msg)
+	}
 }
 
 func TestMetaEvalSentinel(t *testing.T) {
-	pub, sig := testSignMetaAuditor()
+	pub, sign := testSignMetaAuditor()
 	s := NewMetaEvalSentinel(harness.NewSQLiteEvalStore(&mockSQLiteStore{}, control.NewEngine(map[string]ed25519.PublicKey{control.RoleMetaAuditor: pub})))
 
 	// Empty store should fail, but not due to auth.
-	res, err := s.RunMetaEvalSuite(context.Background(), sig)
+	res, err := s.RunMetaEvalSuite(context.Background(), sign())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +55,7 @@ func TestMetaEvalSentinel(t *testing.T) {
 	s.store = harness.NewSQLiteEvalStore(store, control.NewEngine(map[string]ed25519.PublicKey{control.RoleMetaAuditor: pub}))
 
 	// We only have 1 of each behavior type, but min required is 3, so it should fail
-	res, err = s.RunMetaEvalSuite(context.Background(), sig)
+	res, err = s.RunMetaEvalSuite(context.Background(), sign())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,10 +71,10 @@ func TestMetaEvalSentinel(t *testing.T) {
 // TestMetaEvalSentinel_ReadsMetaHoldoutNotValidation [V8-S2]
 func TestMetaEvalSentinel_ReadsMetaHoldoutNotValidation(t *testing.T) {
 	prefixStore := &prefixCapturingStore{}
-	pub, sig := testSignMetaAuditor()
+	pub, sign := testSignMetaAuditor()
 	s := NewMetaEvalSentinel(harness.NewSQLiteEvalStore(prefixStore, control.NewEngine(map[string]ed25519.PublicKey{control.RoleMetaAuditor: pub})))
 
-	if _, err := s.RunMetaEvalSuite(context.Background(), sig); err != nil {
+	if _, err := s.RunMetaEvalSuite(context.Background(), sign()); err != nil {
 		t.Fatal(err)
 	}
 
