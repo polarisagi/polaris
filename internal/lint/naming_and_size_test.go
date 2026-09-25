@@ -2,7 +2,7 @@
 //   - Test_inv_NoForbiddenVerbRoot：R2.2 动词词根扫描，防止 Load*/Query*/Fetch*/
 //     Retrieve* 类命名重新扩散（2026-07-06 审计 + 2026-07-07 复核修复了存量 33
 //     处违规，本文件是"不让它再长回来"的机械检查）。
-//   - Test_inv_FileLineLimit：R7 文件行数硬上限（≤400 行）CI 门控，覆盖存量代码
+//   - Test_inv_FileLineLimit：R7 文件行数软 500 / 硬 550 CI 门控，覆盖存量代码
 //     而不只是新增 diff（2026-07-07 复核发现原 .golangci.yml 配置对存量文件
 //     未生效，60 个文件早已超标却从未被拦下）。
 //
@@ -100,9 +100,15 @@ var fileLineLimitExemptSuffixes = []string{".pb.go"}
 // 每拆完一个从名单移除；新违规不得加入,必须当场拆分。
 const fileLineLimitBaselinePath = "file_line_limit_baseline.json"
 
-const fileLineLimitMax = 400
+// R7 文件行数双阈值（00-Constitution.md §R7，2026-09-25 由单一硬线 400 改）：
+// ≤ soft 达标；(soft, hard] 容差区只告警不拦截——400 附近的硬线曾逼出为 3 行超标拆出
+// 新文件的纯搬运拆分；> hard 必须拆分。
+const (
+	fileLineLimitSoft = 500
+	fileLineLimitHard = 550
+)
 
-// Test_inv_FileLineLimit 验证 R7"文件行数 ≤400"对存量代码同样生效，不只是
+// Test_inv_FileLineLimit 验证 R7 文件行数上限对存量代码同样生效，不只是
 // .golangci.yml 里对着 diff 生效的 lll 规则。
 //
 // 2026-07-07 新增背景：2026-07-06 审计发现 60 个文件超标，整改分支处理后仍有
@@ -120,23 +126,41 @@ func Test_inv_FileLineLimit(t *testing.T) {
 	// 让"还欠多少行数债"这个数字失真。本轮 internal/knowledge/ingester.go 被
 	// 删除即属此类。
 	for rel := range exempt {
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Stat(full); err != nil {
 			t.Errorf("%s 条目 %q 指向不存在的文件——拆分/删除文件后须同步清理该条目",
 				fileLineLimitBaselinePath, filepath.ToSlash(rel))
+			continue
+		}
+		// ratchet 只减不增：已降到硬线内的文件留在名单里会让它日后重新长胖而不报警。
+		if n := countFileLines(t, full); n <= fileLineLimitHard {
+			t.Errorf("%s 条目 %q 已降到 %d 行（≤ %d）——须从名单移除",
+				fileLineLimitBaselinePath, filepath.ToSlash(rel), n, fileLineLimitHard)
 		}
 	}
 
-	var violations []violation
-	walkGoFilesUnder(t, root, "internal", nil, func(_ *token.FileSet, _ *ast.File, relPath string) {
-		checkFileLineLimit(t, root, relPath, exempt, &violations)
-	})
-	walkGoFilesUnder(t, root, "pkg", nil, func(_ *token.FileSet, _ *ast.File, relPath string) {
-		checkFileLineLimit(t, root, relPath, exempt, &violations)
-	})
+	var violations, warnings []violation
+	for _, dir := range []string{"internal", "pkg"} {
+		walkGoFilesUnder(t, root, dir, nil, func(_ *token.FileSet, _ *ast.File, relPath string) {
+			checkFileLineLimit(t, root, relPath, exempt, &violations, &warnings)
+		})
+	}
 
+	for _, w := range warnings {
+		t.Logf("inv_FileLineLimit WARN: %s", w)
+	}
 	for _, v := range violations {
 		t.Errorf("inv_FileLineLimit VIOLATED: %s", v)
 	}
+}
+
+func countFileLines(t *testing.T, full string) int {
+	t.Helper()
+	data, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("read %s: %v", full, err)
+	}
+	return strings.Count(string(data), "\n")
 }
 
 // TestModelPoolEnumStrictTyping (ADR-0094 决策八) 校验 types.ModelPool 枚举定义完整，
@@ -215,7 +239,7 @@ func TestModelPoolEnumOnly(t *testing.T) {
 	}
 }
 
-func checkFileLineLimit(t *testing.T, root, relPath string, exempt map[string]bool, violations *[]violation) {
+func checkFileLineLimit(t *testing.T, root, relPath string, exempt map[string]bool, violations, warnings *[]violation) {
 	t.Helper()
 	for _, suf := range fileLineLimitExemptSuffixes {
 		if strings.HasSuffix(relPath, suf) {
@@ -225,20 +249,23 @@ func checkFileLineLimit(t *testing.T, root, relPath string, exempt map[string]bo
 	if exempt[relPath] {
 		return
 	}
-	full := filepath.Join(root, relPath)
-	data, err := os.ReadFile(full)
-	if err != nil {
-		t.Fatalf("read %s: %v", full, err)
-	}
-	lines := strings.Count(string(data), "\n")
-	if lines > fileLineLimitMax {
+	lines := countFileLines(t, filepath.Join(root, relPath))
+	switch {
+	case lines > fileLineLimitHard:
 		*violations = append(*violations, violation{
 			relPath: relPath,
 			line:    1,
 			detail: fmt.Sprintf(
-				"文件 %d 行，超过 R7 上限 %d 行 — 须按职责拆分；"+
+				"文件 %d 行，超过 R7 硬上限 %d 行 — 须按职责拆分；"+
 					"若属于已知存量债务，须登记进 internal/lint/testdata/%s 并附拆分计划，不得无理由静默豁免",
-				lines, fileLineLimitMax, fileLineLimitBaselinePath),
+				lines, fileLineLimitHard, fileLineLimitBaselinePath),
+		})
+	case lines > fileLineLimitSoft:
+		*warnings = append(*warnings, violation{
+			relPath: relPath,
+			line:    1,
+			detail: fmt.Sprintf("文件 %d 行，处于 R7 容差区（%d, %d]，不拦截；职责可分时顺手拆分",
+				lines, fileLineLimitSoft, fileLineLimitHard),
 		})
 	}
 }

@@ -253,13 +253,15 @@ AI 生成新错误码前必须 `grep -n "Code.*Code = " pkg/apperr/apperr.go` �
 | 维度 | 上限 | 处置 |
 |------|------|------|
 | 函数体行数 | ≤ 60 | 超出必须拆分，除非 ADR 豁免 |
-| 文件行数 | ≤ 400 | 超出必须按职责拆文件 |
+| 文件行数 | ≤ 500（软），≤ 550（硬） | 501–550 为容差区：门控告警不拦截，顺手可拆则拆；> 550 必须按职责拆文件 |
 | 嵌套深度 | ≤ 3 | 超出用 early return / 提取命名函数 |
 | 圈复杂度 (gocyclo) | ≤ 15 | 超出拆分 + 表驱动 |
 | 单函数参数数 | ≤ 5 | 超出用 struct 参数包 |
 | 包内文件数 | ≤ 20 | 超出考虑拆子包 |
 
-`.golangci.yml` 用 `gocyclo` / `nestif` / `lll` 机械化检查；CI fail-closed。
+`.golangci.yml` 用 `gocyclo` / `nestif` / `lll` 机械化检查；CI fail-closed。文件行数由 `internal/lint` `Test_inv_FileLineLimit` 检查。
+
+> 2026-09-25 追记：文件行数原为硬上限 ≤ 400。实测 400 附近的硬线逼出"为 3 行超标拆出 60 行新文件"一类纯搬运拆分（`repo_provider.go` 403 行），拆分本身不改善可读性、反而分散同一职责。改为软 500 / 硬 550 双阈值：容差区只告警，超 550 才强制拆分；存量名单同步收紧为只收 > 550 的文件。
 `funlen`（函数物理行数/语句数）不启用：与 `gocyclo` 高度冗余，且 Go 错误处理惯例天然拉长物理行数但不代表真实复杂，误报率偏高。复杂度治理职责收敛到 `gocyclo` 一家（判断依据见 `docs/arch/decisions/ADR-0013-lint-machinery-phase1.md` 修订记录 2026-07-04）。
 
 > Fail-Closed 安全判定、身份单源、后台协程生命周期锚定、状态落盘吞错、结构化载体防注入、stdlib 接口包装透传与模型池枚举规范及对应 Lint 门控，见 [`ADR-0094`](file:///Users/mrlaoliai/PolarisAGI/polaris/docs/arch/decisions/ADR-0094-fail-closed-and-lifecycle-lint-gates.md)。
