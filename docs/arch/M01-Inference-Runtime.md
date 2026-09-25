@@ -5,7 +5,7 @@
 > **实现语言**：Go　|　**代码位置**：`internal/llm/`
 >
 > **相关约束**：[HE-Rule-1]、[HE-Rule-2]、[HE-Rule-3]、[HE-Rule-4]、[HE-Rule-5]、[HE-Rule-6]、[Module-Topology]、[Code-Package-Mapping]、[Tier-0-Limit]、[Tier-1-Limit]
-<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:164 Token预算 / 6:242 SemanticCache / 7:288 Fallback / 8:352 本地推理local_only / 9:405 ModelVersion / 12:442 (SOFT)降级 / 10:459 凭证池+速率追踪 / 13:479 依赖 -->
+<!-- §跳读: 0:12 职责 / 0-ter:26 不变量速查 / 1:41 默认模型 / 2:47 Provider接口 / 3:55 Adapter / 4:82 Router / 4.4:98 ComplexityDeterminer / 4.5:107 Route方法 / 5:164 Token预算 / 6:242 SemanticCache / 7:290 Fallback / 8:354 本地推理local_only / 9:407 ModelVersion / 12:444 (SOFT)降级 / 10:461 凭证池+速率追踪 / 13:481 依赖 -->
 
 ---
 
