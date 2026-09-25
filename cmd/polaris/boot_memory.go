@@ -219,14 +219,11 @@ func startOnlineReindexer(ctx context.Context, sb *SubstrateBundle) func(context
 			case <-reindexTicker.C:
 				// 重索引把整批文档重新过一遍本地嵌入引擎，是 Tier-0 机器上最容易
 				// 把交互式检索挤到超时的后台负载之一，先过资源准入。
-				release, ok := admitBackground(sb, "online_reindex")
-				if !ok {
-					continue
-				}
-				if _, _, err := onlineReindexer.Run(ctx); err != nil {
-					slog.Warn("polaris: online reindexer failed", "err", err)
-				}
-				release()
+				runAdmittedBackground(sb, "online_reindex", func() {
+					if _, _, err := onlineReindexer.Run(ctx); err != nil {
+						slog.Warn("polaris: online reindexer failed", "err", err)
+					}
+				})
 			}
 		}
 	})
@@ -244,16 +241,13 @@ func startTemporalExpirer(ctx context.Context, sb *SubstrateBundle) {
 			case <-ctx.Done():
 				return
 			case <-expireTicker.C:
-				release, ok := admitBackground(sb, "temporal_expire")
-				if !ok {
-					continue
-				}
-				if expired, err := temporalExpirer.ExpireStale(ctx); err != nil {
-					slog.Warn("polaris: temporal expirer failed", "err", err)
-				} else if expired > 0 {
-					slog.Info("polaris: temporal expirer: expired entities", "count", expired)
-				}
-				release()
+				runAdmittedBackground(sb, "temporal_expire", func() {
+					if expired, err := temporalExpirer.ExpireStale(ctx); err != nil {
+						slog.Warn("polaris: temporal expirer failed", "err", err)
+					} else if expired > 0 {
+						slog.Info("polaris: temporal expirer: expired entities", "count", expired)
+					}
+				})
 			}
 		}
 	})
