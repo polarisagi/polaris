@@ -154,6 +154,10 @@ func (h *WorkflowAdmin) scanStepOutputErrors(ctx context.Context, runID string) 
 // 不 TouchSession），收敛至 session.Orchestrator.RunTurn(Headless:true) 统一
 // 实现，见 internal/gateway/session/orchestrator_headless.go 顶部注释。
 func (h *WorkflowAdmin) runWorkflowStep(ctx context.Context, sessionID, prompt, workingDir, reasoningEffort, name string) (string, error) {
+	// 未注入时返回步骤错误走正常失败路径，而非 nil panic 中断整条工作流。
+	if h.SessionOrch == nil {
+		return "", apperr.New(apperr.CodeInternal, "workflow step: session orchestrator not configured")
+	}
 	req := session.Request{
 		SessionID:       sessionID,
 		Input:           prompt,
