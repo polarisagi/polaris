@@ -106,7 +106,7 @@ ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1
 - **阶段进度**：每个 LLMFillEffect 开始时发布 `AgentStreamEventPhase`（Content=`perceive|plan|reflect|respond`），DAG 执行开始发布 `execute`；session 映射为 `status{type:"phase"}`，客户端本地化展示。
 - **路由**：S_PERCEIVE 产出 `TaskModel.NeedsTools`（`*bool`）。`false` → `S_PERCEIVE_DIRECT` → S_RESPOND；`true`/缺失/解析失败 → S_PLAN（保守）。S_PLAN 解析成功但 DAG 为空 → `S_PLAN_EMPTY` → S_RESPOND。
 - **空输出重试**（ADR-0098 决策七）：S_PLAN / S_RESPOND 推理成功但既无正文也无工具调用时，按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环重试一次（S_RESPOND 此时未推出 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
-- **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。
+- **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。超限结果首尾保留截断，全文经 `ToolRefOffloader` 卸载、预览首行给出 `read_tool_ref` 取回提示（ADR-0100 决策三）。LLM 请求被 Provider 以上下文超限拒绝（`protocol.ErrContextOverflow`）时，Agent 对固定前缀外的消息确定性修剪一次后重试（ADR-0100 决策二）。
 - **重规划耗尽转回复**（决策九）：进入 S_REPLAN 时预算已满 → S_RESPOND（`TurnDegraded=true`，任务结果按失败计），回复阶段据失败原因如实说明。
 - **步数上限**：`m4_kernel.max_steps=24`（回合内 FSM 触发次数），覆盖 7 步完整工具回合 + 观察循环 2 次 + 校验失败重规划 + 2 次空输出重试 + 耗尽转回复；截断经 `abortTurn` 收尾。
 - **S_REFLECT 失败**：反思尽力而为，LLM 失败仍转 S_RESPOND（不带反思结论），不以 S_FAILED 丢弃已执行回合的回复。
