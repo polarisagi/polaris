@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（审查修复：LLM 额度 / 能力令牌绑定 / 后台推理优先级 — 含**契约变更**）
+
+- **[契约] `protocol.WithBackgroundWork` / `IsBackgroundWork`**：可降级后台工作标记。空闲自进化任务 ctx 与 `AcquireHeadless` 获取的 Agent 的 effect ctx 自动带标记；InferenceRouter 据此以 priority=1 调 `AdmitLLM`（受水位线约束，被拒时 2s 间隔挂起至 ctx 到期），且不刷新用户活跃时间。新增后台 LLM 调用方须标记，否则按用户可见推理对待。
+- **[契约] JIT 能力令牌只为已通过 S_VALIDATE 的计划节点签发**（工具名 + 参数字节一致；ADR-0098 决策五复核）。执行路径上新增的工具调用来源若不经 S_VALIDATE，将拿不到令牌，写类与 trust<3 工具会被执行闸门拒绝。
+- **行为变更**：`StreamInfer` 在选路前获取 LLM 额度（修复跨池降级"没借就还"使 llmInFlight 变负）；linux 容器可用内存按 working set（扣除 inactive_file）计。
+
 ## 2026-09-25（ADR-0098 决策十 回合内人工审批 / 决策七追记 — 含**契约变更**）
 
 - **[契约] `types.AgentStreamEventApproval` + `AgentStreamEvent.DeadlineNs`**：回合内阻塞式 HITL 推给对话流，session 映射 `status{type:"approval_required", id, tool, input, deadline_ns}`；Agent 发起 HITL 一律经 `promptHITLInTurn`，不得直调 `hitl.Prompt` 使对话用户不可见。
