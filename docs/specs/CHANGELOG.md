@@ -10,6 +10,7 @@
 
 - **[契约] `metrics.SelectThinkingMode(replanCount, complexity, surpriseIndex)`**：第二参数由 `maxTaint` 改为 `TaskModel.Complexity`，污点不再驱动思考深度；新增 `metrics.SelectPlanModelPool`，规划池 general→reasoning 级联。新阈值 `m4_kernel.plan.reasoning_complexity`（0.7）。
 - **行为变更**：寒暄/致谢/告别跳过 Perceive LLM 与记忆召回（`fsm.ClassifyIntentWeight`，route=`phatic_bypass`）；短确认仍走 Perceive 但不召回长期记忆；Anthropic system 按消息分 block、首末块各一缓存断点；`SysEnvSnapshot` 去掉已用内存/磁盘剩余。
+- **行为变更（追加）**：简单任务（0<Complexity<`m4_kernel.reflect.skip_complexity`=0.4）首轮全部成功时跳过 Reflect LLM（route=`reflect_skipped`）；S_PLAN 文本工具目录只列名称，完整定义只走原生 tools，`LocalAdapter` 自行文本渲染。**新增不支持原生 tools 的适配器须同样渲染 `InferOptions.Tools`**。
 - 新增 prompt 段落时：稳定内容在前、易变内容在后，禁止在前缀写入时间戳/实时资源量/无序 map；新增 LLM 调用点须说明所用池与思考档的依据（ADR-0101 反例守护）。
 
 ## 2026-09-25（ADR-0100 DeepSeek Harness 评审：上下文溢出与执行结果 spill — 含**契约变更**）

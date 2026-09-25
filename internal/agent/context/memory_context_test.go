@@ -366,3 +366,24 @@ func TestBuildReflectContext_Taint(t *testing.T) {
 		require.Len(t, msgs, 2)
 	})
 }
+
+// ADR-0101 决策五：S_PLAN 的完整工具定义经原生 function-calling 下发，文本目录只列
+// 名称。若再把描述/参数 schema 写回文本，最大的一块上下文每次规划计费两次。
+func TestBuildToolListSection_NamesOnly(t *testing.T) {
+	cata := &fakeCatalog{entries: []protocol.CatalogEntry{
+		{Name: "read_file", Description: "Read a file from disk", Source: types.ToolBuiltin,
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}}},
+		{Name: "list_dir", Description: "List a directory", Source: types.ToolBuiltin},
+	}}
+	sec, _ := BuildToolListSection(context.Background(), cata)
+	for _, want := range []string{"read_file", "list_dir"} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("工具名 %q 应出现在目录中：%s", want, sec)
+		}
+	}
+	for _, leak := range []string{"Read a file from disk", `"properties"`} {
+		if strings.Contains(sec, leak) {
+			t.Errorf("文本目录不应重复原生工具定义（%q）：%s", leak, sec)
+		}
+	}
+}

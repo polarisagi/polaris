@@ -114,6 +114,9 @@ type M4KernelThresholds struct {
 	// TaskModel.Complexity ≥ 此值时首轮规划即用 reasoning 池 + ThinkingHigh；
 	// 低于此值走 general 池，失败重规划时再升级。
 	PlanReasoningComplexity float64 `toml:"plan.reasoning_complexity"` // 0.7
+	// ReflectSkipComplexity 反思跳过阈值（ADR-0101 决策四）：首轮执行全部成功且
+	// 0 < TaskModel.Complexity < 此值时不调 Reflect LLM，直接回复。0 = 关闭跳过。
+	ReflectSkipComplexity float64 `toml:"reflect.skip_complexity"` // 0.4
 }
 
 type M5MemoryThresholds struct {
@@ -370,6 +373,7 @@ func DefaultThresholds() Thresholds {
 			ConversationHistoryMaxMessages: 20,
 			ConversationHistoryMaxBytes:    24576,
 			PlanReasoningComplexity:        0.7,
+			ReflectSkipComplexity:          0.4,
 		},
 		M5Memory: M5MemoryThresholds{
 			EpisodicTTLDays:              30,

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/polarisagi/polaris/internal/ffi"
@@ -107,5 +108,27 @@ func TestLocalAdapter_ProbeGraceful(t *testing.T) {
 	}
 	if result.UsedMemoryBytes == 0 {
 		t.Error("expected non-zero UsedMemoryBytes from probe.MemoryProbe()")
+	}
+}
+
+// ADR-0101 决策五：无原生 tools 的本地适配器须把 WithTools 下发的定义渲染成文本，
+// 插在前导 system 之后，否则上层只列工具名时本地模型拿不到参数 schema。
+func TestWithToolsAsText(t *testing.T) {
+	msgs := []types.Message{
+		{Role: "system", Content: "persona"},
+		{Role: "system", Content: "plan"},
+		{Role: "user", Content: "list files"},
+	}
+	tools := []types.ToolSchema{{Name: "ls", Description: "list dir", Parameters: map[string]any{"type": "object"}}}
+	out := withToolsAsText(msgs, tools)
+	if len(out) != 4 || out[2].Role != "system" || !strings.Contains(out[2].Content, "ls: list dir") ||
+		!strings.Contains(out[2].Content, `{"type":"object"}`) {
+		t.Fatalf("工具定义应插在前导 system 之后：%+v", out)
+	}
+	if len(msgs) != 3 {
+		t.Fatal("不得修改入参切片")
+	}
+	if got := withToolsAsText(msgs, nil); len(got) != 3 {
+		t.Fatal("无工具时原样返回")
 	}
 }

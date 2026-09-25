@@ -22,3 +22,4 @@ surprise_hint_threshold = 0.6
 'conversation.history_max_messages' = 20
 'conversation.history_max_bytes' = 24576
 'plan.reasoning_complexity' = 0.7
+'reflect.skip_complexity' = 0.4

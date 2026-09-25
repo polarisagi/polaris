@@ -148,6 +148,7 @@ par:
         prompt_fn: build_reflection_prompt
         on_success: emit_to_m9_reflexion_worker
         on_failure: s_respond     # 反思尽力而为：工具已执行完的回合不因反思失败丢回复（ADR-0098）
+        # ADR-0101 决策四 4a：首轮 + 全部节点成功 + 0<complexity<reflect_skip_complexity → deterministic 跳过
         max_retry: 1
         model_pool: budget
         audience: internal
@@ -982,6 +983,7 @@ thresholds:
     conversation_history_max_messages: 20 # toml:"conversation.history_max_messages"，ADR-0098 决策四
     conversation_history_max_bytes: 24576 # toml:"conversation.history_max_bytes"，自尾部截取
     plan_reasoning_complexity: 0.7 # toml:"plan.reasoning_complexity"，ADR-0101 决策二：首轮规划升级 reasoning 池的复杂度阈值
+    reflect_skip_complexity: 0.4 # toml:"reflect.skip_complexity"，ADR-0101 决策四 4a：首轮全成功且复杂度低于此值跳过反思 LLM；0=关闭
     re_eval_when:
       - max_retry_*: ["schema_fail_rate>0.05"]
       - context_window_compress_pct: ["compress_recall_drop"]

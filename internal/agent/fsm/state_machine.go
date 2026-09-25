@@ -102,6 +102,9 @@ type StateContext struct {
 	ReplanFeedback []string
 	// Observations 本回合各轮执行结果（ADR-0098 决策八），经 RecordObservation 写入。
 	Observations []string
+	// ExecAllSucceeded 最近一次 S_EXECUTE 全部节点返回 Success（无 Go 错误、无工具软失败、
+	// 未降级重规划）。每次执行开始置 false，仅作 Reflect 可跳过的判据（ADR-0101 决策四）。
+	ExecAllSucceeded bool
 	// TurnDegraded 回合以回复收尾但未达成目标（重规划耗尽，决策九），终态指标按失败计。
 	TurnDegraded bool
 	// PlanAttempts S_PLAN 空输出已重试次数（ADR-0098 决策七）。
