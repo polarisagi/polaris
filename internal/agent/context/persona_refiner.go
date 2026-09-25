@@ -168,7 +168,7 @@ func (pr *PersonaRefiner) RefineAtSessionEnd(ctx context.Context, msgs []types.M
 		return nil //nolint:nilerr // 模板渲染失败不阻断会话结束流程，同 LLM 失败处理方式
 	}
 
-	resp, err := safecall.Infer(ctx, pr.provider, []types.Message{{Role: "user", Content: userPrompt}}, types.WithMaxTokens(200))
+	resp, err := safecall.Infer(ctx, pr.provider, []types.Message{{Role: "user", Content: userPrompt}}, types.WithMaxTokens(200), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("persona_refine"))
 	if err != nil {
 		return nil //nolint:nilerr // LLM 失败不阻断会话结束流程
 	}
