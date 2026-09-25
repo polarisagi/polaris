@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -133,11 +131,7 @@ func (a *Agent) markTaintReviewDenied(key string) {
 	a.taintReviewDenied[key] = true
 }
 
-// taintReviewKey 工具名 + 参数字节的内容哈希：与豁免令牌同口径，参数一变即视为新请求。
+// taintReviewKey 与豁免令牌同口径：参数一变即视为新请求。
 func taintReviewKey(node protocol.ExecNode) string {
-	h := sha256.New()
-	h.Write([]byte(node.ToolName))
-	h.Write([]byte{0})
-	h.Write(node.Args)
-	return hex.EncodeToString(h.Sum(nil))
+	return toolCallKey(node.ToolName, node.Args)
 }

@@ -379,7 +379,7 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 			}, nil
 		}
 
-		capCtx, revokeCap, capErr := a.withJITCapability(ctx, toolName)
+		capCtx, revokeCap, capErr := a.withJITCapability(ctx, toolName, args)
 		if capErr != nil {
 			return nil, capErr
 		}

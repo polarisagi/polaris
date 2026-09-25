@@ -19,6 +19,8 @@ import (
 // 与 S_EXECUTE 状态的 runExecuteDAG（工具调用/2PC/Saga）职责边界清晰，
 // 拆分不改变任何逻辑，仅为职责边界物理隔离。
 func (a *Agent) runValidateDAG(ctx context.Context) error {
+	// 旧计划的签发依据先作废：校验失败到下次通过之间不得为任何调用签发令牌。
+	a.validatedCalls.Store(nil)
 	var plan *protocol.DAGPlan
 	if a.sCtx.DAGModel != nil {
 		plan = &protocol.DAGPlan{
@@ -67,6 +69,7 @@ func (a *Agent) runValidateDAG(ctx context.Context) error {
 		// 返回非致命 error 提示调用方失败原因，但不能让 Run 循环崩溃
 		return apperr.Wrap(apperr.CodeInternal, "s_validate failed", err)
 	}
+	a.recordValidatedPlan(plan)
 
 	// BlindZone HITL 检查点（GR-4.1-005）：S_PLAN 由 BlindZoneDetector 置位，此前无任何读取方。
 	if handled, err := a.runBlindZoneHITL(ctx, plan); handled {

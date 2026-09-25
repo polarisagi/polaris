@@ -185,6 +185,7 @@ func (a *Agent) ResumeAwaitingHandoff(childTaskID, resumeCtxJSON string) (restor
 		return false
 	}
 
+	a.recordValidatedPlan(plan)
 	a.sCtx.Mu.Lock()
 	a.sCtx.DAGModel = snap.DAGModel
 	a.sCtx.ExecuteResult = snap.ExecuteResult

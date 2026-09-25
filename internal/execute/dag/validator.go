@@ -160,8 +160,9 @@ func isReadOnlyTool(toolName string, registry protocol.AgentToolExecutor) bool {
 //
 // 此前以工具名作 action、会话 ID 作 principal 发问，策略模型里没有任何规则认识，
 // 真实 Gate 对一切工具返回 "denied by default"（2026-09-25 实测）。
-// capability_token_valid：本校验通过即由 Agent JIT 签发一次性令牌（M07 §6、
-// ADR-0098 决策五），故此处按"通过即签发"评估；执行闸门再以真实令牌复核。
+// capability_token_valid：本校验通过即由 Agent 为该节点（工具名+参数一致）JIT 签发
+// 一次性令牌（M07 §6、ADR-0098 决策五），故此处按"通过即签发"评估；执行闸门再以真实
+// 令牌复核。令牌只证明"调用属于已校验计划"，不是 trust<3 工具的独立审批。
 // 查不到工具元数据时无从签发，按 false + 无 trust_tier 评估，由 deny-by-default 拒绝。
 func policyReviewContext(vCtx *DAGValidationContext, node protocol.ExecNode) map[string]any {
 	ctx := map[string]any{
