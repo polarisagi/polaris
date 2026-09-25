@@ -3,8 +3,10 @@ package consolidation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
 )
 
@@ -66,6 +68,9 @@ func (pe *PerMessageExtractor) HandleOutboxRecord(ctx context.Context, payload [
 	}
 
 	entities, relations, err := pe.pipeline.extractEntitiesAndRelations(ctx, msg.SessionID, events)
+	if errors.Is(err, protocol.ErrBackgroundDeferred) {
+		return err // outbox 推迟本条、不计失败；其余提取失败仍按非致命吞掉
+	}
 	if err != nil || (len(entities) == 0 && len(relations) == 0) {
 		return nil //nolint:nilerr // 提取失败非致命
 	}

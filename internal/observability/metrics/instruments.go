@@ -72,6 +72,7 @@ var (
 	// [阶段02-错误吞没整改] 带 label 的失败类指标，均为枚举有界值，无需 CardinalityGuard。
 	InstrOutboxProcessFailuresTotal    metric.Int64Counter // label: engine
 	InstrOutboxCursorErrorsTotal       metric.Int64Counter // label: kind
+	InstrOutboxDeferredTotal           metric.Int64Counter // label: engine
 	InstrMemoryJSONDecodeFailuresTotal metric.Int64Counter // label: table
 	InstrBlackboardScanErrorsTotal     metric.Int64Counter // label: op
 

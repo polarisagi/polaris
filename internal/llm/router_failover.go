@@ -276,22 +276,29 @@ func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
 	//
 	// 等待—重试直到拿到额度或 ctx 到期：一次 admit 抢输只是需要再等一轮，不是硬错误。
 	// WaitForLLMCapacity 只等并发额度；后台请求被水位线拒绝时它会立即返回，故按固定
-	// 间隔轮询压力解除——"挂起"而非失败，也不忙等。
+	// 间隔轮询压力解除——"挂起"而非失败，也不忙等。可推迟的后台工作不挂起：等过一轮
+	// 并发额度仍被拒即视为水位线拒绝，返回 ErrBackgroundDeferred 交调用方择机重试。
 	priority := 0
 	if protocol.IsBackgroundWork(ctx) {
 		priority = 1
 	}
+	deferrable := protocol.IsDeferrableBackgroundWork(ctx)
 	for attempt := 0; ; attempt++ {
 		admitted, level := ir.governor.AdmitLLM(priority)
 		if admitted {
 			return nil
+		}
+		if deferrable && attempt > 0 {
+			return apperr.Wrap(apperr.CodeResourceExhausted,
+				fmt.Sprintf("inference_router: background LLM deferred (degrade level %d)", level),
+				protocol.ErrBackgroundDeferred)
 		}
 		if attempt > 0 {
 			slog.WarnContext(ctx, "inference_router: LLM admission still denied after wait",
 				"degrade_level", level, "attempt", attempt, "priority", priority)
 		}
 		err := ir.governor.WaitForLLMCapacity(ctx)
-		if err == nil && priority != 0 {
+		if err == nil && priority != 0 && !deferrable {
 			select {
 			case <-ctx.Done():
 				err = ctx.Err()
