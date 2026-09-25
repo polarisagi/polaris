@@ -8,14 +8,8 @@ import (
 
 // probeOSMemory 读取 macOS 系统内存总量与可用量。
 //
-// [2026-09-22 重写] 原实现基于 sysctl "vm.vmtotal" 解析 struct vmtotal。该
-// sysctl 在现代 macOS 上**根本不存在**（实测 Darwin 27 返回 ENOENT），于是每次
-// 都落到最后那条 `available = total * 40 / 100` 的盲猜兜底上——本机 16GB 实际
-// 可用 2.5GB 时它恒报 6553MB。ResourceGovernor 拿这个数去比 mem_l2_free_mb
-// 阈值做准入判定，等于在拿一个常数做决策。原实现还有一条
-// `if available < 2GB { available = 2GB }` 的下限钳制：内存真的只剩 300MB 时
-// 它也报 2GB，把内存压力检测彻底失效掉，故一并删除——探针的职责是如实上报，
-// "太低了怎么办"是调用方的策略，不能在探针里粉饰。
+// 不用 vm.vmtotal（现代 macOS 已无此 sysctl，旧实现恒落到 total×40% 盲猜）；不做
+// 下限钳制——探针如实上报，低内存如何处置是调用方的策略。
 func probeOSMemory() (total uint64, available uint64) {
 	totalBytes, err := unix.SysctlUint64("hw.memsize")
 	if err != nil || totalBytes == 0 {

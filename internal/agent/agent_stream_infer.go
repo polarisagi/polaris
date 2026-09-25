@@ -59,12 +59,8 @@ func (a *Agent) doStreamInfer(ctx context.Context, ch <-chan types.StreamEvent, 
 				inferErr = apperr.New(apperr.CodeProviderExhausted, ev.Content)
 			}
 		case types.StreamCancelled:
-			// 流被中断（router_stream.go wrapStreamChannel 的 ctx.Done() 分支，或
-			// StreamBudgetGuard 硬阻断）必须产生错误状态转移，不能放任 ch 直接
-			// 关闭——此前该分支缺失，content/inferErr 双双为空，被上游误判为
-			// "成功但空内容"，最终在 session 层只剩一条通用的"推理返回空内容，
-			// 请检查模型配置或重试"、日志无任何可追溯根因（直接违反本包 CLAUDE.md
-			// 「MUST NOT 将 LLM 幻觉/失败响应静默视为成功」）。
+			// 流被中断（ctx 取消或 StreamBudgetGuard 硬阻断）必须成为错误，否则 ch 关闭时
+			// content/inferErr 双空，被误判为"成功但空"。
 			if inferErr == nil {
 				inferErr = apperr.New(apperr.CodeCancelled, "推理流被中断: "+ev.Content).WithRetryAfter(5)
 			}

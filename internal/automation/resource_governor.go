@@ -35,13 +35,6 @@ var backgroundAdmissionTotal = promauto.NewCounterVec(
 	[]string{"work", "status"},
 )
 
-// CPU 与内存探针已于 2026-09-22 归口到 internal/observability/probe
-// （CLAUDE.md：probe/ = 硬件与内存探针）。本文件原有的私有 cpuSampler 只实现了
-// Linux 的 /proc/stat，其余平台降级成"goroutine 数量启发式"——Polaris 常驻
-// goroutine 远超 100，于是 macOS/Windows 上恒定返回 80.0，与判据
-// `cpuUsage > cpu_l1_pct(80.0)` 擦边而过，纯属侥幸；现由 probe 包提供三平台
-// 真实实现（linux /proc/stat 增量、darwin vm.loadavg、windows GetSystemTimes）。
-
 // TaskStatus 任务生命周期枚举。
 // 与 types.Task.Status 对齐。
 type TaskStatus string
@@ -104,16 +97,8 @@ func NewResourceGovernor(maxConcurrent int, cfg config.ResourceGovernorConfig) *
 	rg := &ResourceGovernor{
 		maxConcurrent: maxConcurrent,
 		cfg:           cfg,
-		// [2026-09-22 根因修复] 原实现返回的是 `m.Sys - m.HeapAlloc`——Go 运行时
-		// 自己向 OS 要到、但当前不在存活堆对象里的字节数，与"系统还剩多少可用
-		// 内存"毫无关系，量级只有几百 MB 且随 GC 时机剧烈抖动。它被拿去和
-		// mem_l2_free_mb=1024 / mem_l3_free_mb=512 这两个**系统级** MB 阈值比较，
-		// 于是 AdmitLLM 的降级闸门按 GC 节奏随机误触发：一旦落到阈值以下，所有
-		// priority != 0 的推理（而交互式对话是唯一调用方，恒传 1）被直接拒绝，
-		// 表现为用户侧 60 秒后拿到一条无法归因的"推理返回空内容"。
-		// 改用 probe 包的平台原生探针（darwin/linux 各自实现，启动日志里
-		// "AutoConfig: ... ram=16384MB(avail=6553MB)" 用的就是它），
-		// 其内部已含探测失败时的保守兜底，不需要在这里再造一份。
+		// 水位线阈值是系统级 MB，须用系统可用内存；Go 运行时自身的 MemStats
+		// （Sys-HeapAlloc）随 GC 抖动，曾致准入随机误拒（2026-09-22）。
 		memProbeFn: func() int64 {
 			return int64(probe.ProbeAvailableMemoryMB())
 		},
@@ -179,20 +164,11 @@ func (rg *ResourceGovernor) Admit(priority int) (bool, int) {
 // 等"可以下次再跑"的工作在每轮开始前调用，拿到 release 才执行，用完必须调用
 // release（惯用 `defer release()`）。
 //
-// [2026-09-22 接线] 此前 ResourceGovernor 只有 Admit/AdmitLLM 两个入口，而 Admit
-// 全仓无人调用——真实效果是"该被限流的后台任务完全不受限，该被保活的用户对话
-// 反而被内存/CPU 闸门拦死"，设计意图整个反了。实测表现：清库重启后，148 个扩展
-// 的向量回填 + STT 模型下载 + 知识连接器全量同步同时抢占本地嵌入引擎，交互式
-// 检索（Knowledge.Search）连续 30 秒超时。
-//
-// 与 Admit / AdmitLLM 的三点差异，都源于后台工作与用户请求不同的语义：
-//  1. **不触发 activityCallback**。活跃标记的含义是"用户在用系统"，供
-//     IdleEvolutionScheduler 判定空闲窗口；后台工作自己打这个标记，会把空闲窗口
-//     永久顶掉，自进化从此再也不会启动。
-//  2. **拿不到额度直接返回 false，不排队**。后台工作的语义是"这轮跳过，下个
-//     tick 再来"；排队只会让压力解除的瞬间所有积压任务一次性涌出，再次压垮系统。
-//  3. **判据用 denyDegradableLocked**，即内存低于 L2 或 CPU 超过 L1 即拒，
-//     对齐配置里"L2 阻塞：挂起所有后台任务""CPU 阈值：降低后台任务优先级"。
+// 与 Admit / AdmitLLM 的差异：
+//  1. 不触发 activityCallback——活跃标记表示"用户在用系统"，后台自己打会把空闲窗口顶掉。
+//  2. 拿不到额度直接返回 false、不排队——"这轮跳过，下个 tick 再来"；排队会让压力
+//     解除瞬间积压任务一齐涌出。
+//  3. 判据 denyDegradableLocked：内存低于 L2 或 CPU 超过 L1 即拒。
 func (rg *ResourceGovernor) AdmitBackground(name string) (release func(), admitted bool) {
 	// nil 接收者保护：本方法是以**接口**形式注入各后台组件的（如
 	// connector.BackgroundAdmitter），而 boot 层的 sb.ResourceGov 允许为 nil。

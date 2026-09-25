@@ -31,11 +31,8 @@ func (a *SyncBatcherAdapter) Embed(ctx context.Context, text string) []float32 {
 // 但把请求投进 **Low** 队列，供批量/周期性后台工作（重索引、知识全量同步、
 // 插件向量回填）使用。
 //
-// [2026-09-22] EmbeddingBatcher 自带 High/Low 双队列、20% 反饥饿槽位与 Low
-// 排队超 100ms 自动升级的完整调度，但全仓检索显示 **PriorityLow 从未被任何
-// 调用方使用过**——所有嵌入请求，无论是用户一次检索还是 148 个扩展的批量回填，
-// 都从 SyncBatcherAdapter 走 PriorityHigh 挤在同一条队列里。于是该调度机制
-// 在生产中等同于不存在，实测表现为交互式 Knowledge.Search 连续 30 秒超时。
+// 此前 PriorityLow 无任何调用方，批量回填与交互检索挤在同一队列，交互式
+// Knowledge.Search 连续 30 秒超时（2026-09-22）；通道调度见 ADR-0099。
 type BackgroundEmbedder struct {
 	batcher *EmbeddingBatcher
 }

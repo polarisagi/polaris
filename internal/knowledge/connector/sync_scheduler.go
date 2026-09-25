@@ -153,10 +153,8 @@ func (s *SyncScheduler) Start(ctx context.Context) error {
 
 // fullSync 执行全量初始摄入（幂等，已存在则 upsert）。
 //
-// [2026-09-22] 全量同步会把连接器下的所有文档逐条过一遍摄入管线（分块 + 嵌入），
-// 是与交互式检索抢占同一个本地嵌入引擎的重负载。先过资源准入：拿不到额度就
-// 跳过本轮，等下一个 resync 周期——全量同步本就是幂等兜底，晚一轮没有任何损失，
-// 而把用户的检索挤到超时有。
+// 全量同步与交互检索争用本地嵌入引擎，先过资源准入；拿不到额度就等下个 resync 周期
+// （全量同步本就是幂等兜底，晚一轮无损）。
 func (s *SyncScheduler) fullSync(ctx context.Context) error {
 	if s.admitter != nil {
 		release, ok := s.admitter.AdmitBackground("knowledge_full_sync")

@@ -185,16 +185,8 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		// 跨 chunk 聚合 tool_call 参数：index → 状态
 		toolBuilders := map[int]*toolCallState{}
 		accumulatedOutputTokens := 0
-		// emittedAny 标记本次流是否真正给 ch 发过任何"有信号"事件（文本/思考/
-		// 工具调用/usage-only 收尾块）。响应体是 HTTP 200 但不是合法 SSE 帧
-		// （代理/网关异常返回一段 HTML、纯文本错误页或空 body）时，每一行都会
-		// 在下方 `data, ok := strings.CutPrefix(...)` 处被 `continue` 跳过，
-		// scanner.Scan() 最终正常返回 false（真 EOF，scanner.Err()==nil）——
-		// 循环外此前直接跌进 defer close(ch)，ch 里空空如也且没有任何错误，
-		// 与本文件其余分支已修复的" StreamCancelled 被静默吞掉"是同一缺陷类：
-		// 上游把"零信号"误判为"推理成功但为空"。见到 [DONE] 会在循环内部直接
-		// return，走不到这条判定，因此这里只覆盖"整段响应体没有一行是合法
-		// SSE data 帧"的情形，不影响模型确实生成 0 token 就正常收尾的合法场景。
+		// emittedAny 是否向 ch 发过任何有信号事件（文本/思考/工具调用/usage）。
+		// [DONE] 在循环内直接 return，故 EOF 处为 false 仅意味着整段 body 无合法帧。
 		emittedAny := false
 		lastFinishReason := ""
 		// 流级诊断（HE-1）：正文与工具调用双空时，上游只看到"模型没输出"，无从区分
@@ -361,12 +353,8 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 		}
 
 		if !emittedAny {
-			// 整段响应体读完（真 EOF，非 scanner 错误）却一行合法 SSE data 帧都
-			// 没解出来：多半是 base_url/网关配置错了，200 状态码后面跟的是一段
-			// HTML/纯文本错误页而不是 chat completion 流。不报错的话，上游
-			// （internal/agent doStreamInfer 等）拿到的是空 ch，与"模型正常生成
-			// 了 0 token"在信号上完全没区别，最终只剩一条无法追溯根因的
-			// "推理返回空内容"。
+			// 真 EOF 却一帧合法 SSE 都没有（200 + HTML/文本错误页）：不报错则上游
+			// 与"模型生成 0 token"无从区分。
 			select {
 			case ch <- types.StreamEvent{Type: types.StreamError, Content: "provider returned a 200 response with no valid SSE data frame (base_url 可能指向了错误的端点，或网关返回了非流式错误页)"}:
 			case <-ctx.Done():
