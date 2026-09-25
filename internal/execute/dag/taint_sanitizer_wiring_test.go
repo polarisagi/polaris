@@ -240,6 +240,30 @@ func TestValidateDAG_UserReviewDowngrade_AllowsHighTaintNonReadOnlyTool(t *testi
 	}
 }
 
+// M11 §3：TaintMedium 的 write_network 拦截同样以 SanitizeByUserReview 为转义路径。
+// 此前仅 TaintHigh 查询复核豁免，Medium 拦截即使人工批准也无从放行。
+func TestValidateDAG_UserReviewDowngrade_AllowsMediumTaintWriteNetwork(t *testing.T) {
+	args := []byte(`{"url":"https://example.com","body":"free text"}`)
+	toolExec := &mockSchemaToolExecutor{tools: map[string]types.Tool{
+		"post_webhook": {Name: "post_webhook", Capability: types.CapWriteNetwork},
+	}}
+	plan := &DAGPlan{Nodes: []protocol.ExecNode{{ID: "n1", ToolName: "post_webhook", Args: args}}}
+	vCtx := &DAGValidationContext{
+		Plan:             plan,
+		ActiveTaintLevel: types.TaintMedium,
+		PolicyGate:       allowAllGateForDagTest{},
+		ToolExecutor:     toolExec,
+		AgentID:          "agent-x",
+	}
+	if err := ValidateDAG(context.Background(), vCtx); err == nil {
+		t.Fatal("未经复核的 TaintMedium write_network 必须拦截")
+	}
+	vCtx.ReviewChecker = &mockReviewChecker{agentID: "agent-x", content: args}
+	if err := ValidateDAG(context.Background(), vCtx); err != nil {
+		t.Errorf("人工复核过的 TaintMedium write_network 应放行: %v", err)
+	}
+}
+
 func TestValidateDAG_NoDowngrade_StillBlocksAsBeforeBackwardCompat(t *testing.T) {
 	// 无 schema、无 review checker：行为应与降级功能引入前完全一致（回归防护）。
 	plan := &DAGPlan{Nodes: []protocol.ExecNode{{ID: "n1", ToolName: "write_file", Args: []byte(`{"content":"raw"}`)}}}

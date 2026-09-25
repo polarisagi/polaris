@@ -94,7 +94,7 @@ func (a *Agent) interceptComputerUse(ctx context.Context, toolName string, args 
 			// 才允许兜底为 auto_approve，与"设置 → 设备操控"承诺的语义一致。
 			PermissionMode: types.PermissionMode(mode),
 		}
-		respHITL, hitlErr := a.hitl.Prompt(ctx, prompt)
+		respHITL, hitlErr := a.promptHITLInTurn(ctx, prompt, toolName, args)
 		if hitlErr != nil || respHITL == nil || respHITL.OptionKey != "approve" {
 			if hitlErr != nil {
 				return apperr.Wrap(apperr.CodeForbidden, "HITL gateway denied computer use action", hitlErr)

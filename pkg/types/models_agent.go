@@ -253,6 +253,11 @@ const (
 	// perceive/plan/execute/reflect/respond，客户端自行本地化；内部阶段不再推 token，
 	// 用户在首 token 前靠它感知进度。
 	AgentStreamEventPhase AgentStreamEventType = "phase"
+	// AgentStreamEventApproval 回合内发起了阻塞式人工审批（HITL）。Content 为
+	// checkpoint ID，ToolName/ToolInput 为待审操作，DeadlineNs 为审批截止时间。
+	// 客户端就地渲染审批卡片，经 POST /v1/approvals/{id}/resolve 回复——审批的
+	// 唯一裁决通道仍是 HITL 网关，事件只负责让对话里的用户看见它。
+	AgentStreamEventApproval AgentStreamEventType = "approval"
 )
 
 // TurnPhase AgentStreamEventPhase 的 Content 取值（ADR-0098）。内核 → session → 客户端
@@ -277,4 +282,5 @@ type AgentStreamEvent struct {
 	ChildAgentRole string               `json:"child_agent_role,omitempty"` // 子 Agent 角色（委派场景嵌套事件，GD-13-001）
 	ParentTaskID   string               `json:"parent_task_id,omitempty"`   // 父任务 ID（委派场景嵌套事件）
 	IsNested       bool                 `json:"is_nested,omitempty"`        // 是否为子 Agent 嵌套事件
+	DeadlineNs     int64                `json:"deadline_ns,omitempty"`      // 仅 AgentStreamEventApproval：审批截止（绝对 Unix 纳秒）
 }

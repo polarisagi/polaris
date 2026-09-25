@@ -515,3 +515,38 @@ func TestRunTurn_Interactive_InjectsHistoryAndMapsPhase(t *testing.T) {
 		t.Error("缺少 status{type:phase, phase:perceive} 事件")
 	}
 }
+
+// TestRunTurn_Interactive_MapsApprovalRequest 回合内人工审批映射为
+// status{type:"approval_required"}，携带 checkpoint ID 与待审操作，且不计入回复正文。
+func TestRunTurn_Interactive_MapsApprovalRequest(t *testing.T) {
+	ctrl := newFakeAgentController()
+	go func() {
+		ctrl.events <- types.AgentStreamEvent{
+			Type: types.AgentStreamEventApproval, Content: "hitl_1",
+			ToolName: "write_file", ToolInput: []byte(`{"path":"a.txt"}`), DeadlineNs: 42,
+		}
+		ctrl.events <- types.AgentStreamEvent{Type: types.AgentStreamEventStatus, Content: "task_done"}
+	}()
+	orc := newTestOrchestrator(t, newFakePersistence(), &fakeHooks{}, &fakeSlash{}, &fakeCompression{}, &fakeAgentPool{ctrl: ctrl})
+	sink := &recordingSink{}
+
+	res, err := orc.RunTurn(context.Background(), Request{SessionID: "s1", Input: "写文件", Channel: "web"}, sink)
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if res.Reply != "" {
+		t.Errorf("审批事件不得混入回复正文，Reply = %q", res.Reply)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, e := range sink.events {
+		if e.Kind == KindStatus && e.Payload["type"] == "approval_required" {
+			if e.Payload["id"] != "hitl_1" || e.Payload["tool"] != "write_file" ||
+				e.Payload["input"] != `{"path":"a.txt"}` || e.Payload["deadline_ns"] != int64(42) {
+				t.Fatalf("审批事件字段不符: %+v", e.Payload)
+			}
+			return
+		}
+	}
+	t.Error("缺少 status{type:approval_required} 事件")
+}

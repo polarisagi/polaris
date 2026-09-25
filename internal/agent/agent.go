@@ -49,6 +49,7 @@ type Agent struct {
 	provider          protocol.Provider             // LLM 调用入口（由 M1 提供）
 	Security          SecurityBundle                // 安全组件包（GR-6-006）
 	hitl              protocol.HITL                 // 人工审批网关
+	taintReviewDenied map[string]bool               // 本回合被用户拒绝的 工具+参数 哈希；仅 S_VALIDATE Effect 读写，effectRunning 保证串行（agent_taint_review.go）
 	toolRegistry      protocol.AgentToolExecutor    // 工具执行表（由 M7 提供）
 	catalog           catalog.Catalog               // 工具目录（用于组装 Schema，由 M7 提供）
 	memory            protocol.MemoryFacade         // 四层记忆系统（由 M5 提供）
