@@ -1,6 +1,6 @@
 # ADR-0101: Token 经济——零 LLM 寒暄快路、规划便宜池先行级联、缓存稳定前缀
 
-- **状态**: Accepted（决策一～五；决策四原 4b/4c 草案被 4b′ 取代，见下）
+- **状态**: Accepted（决策一～六；决策二的触发规则被决策六取代；决策四原 4b/4c 草案被 4b′ 取代）
 - **日期**: 2026-09-25
 - **决策者**: 架构组
 - **相关模块**: M01 / M04 / M05 / `internal/agent/fsm` / `internal/llm/adapter` / `internal/sysinfo`
@@ -35,6 +35,8 @@
 
 ### 决策二：规划便宜池先行、失败再升级（修订 ADR-0020 决策二）
 
+> 2026-09-25 修订：下列"重规划即 Max"的触发规则被**决策六**取代（按失败成因升级、`SelectPlanTier` 单一阶梯）；"污点不参与""便宜池先行"原则不变。原文保留作历史。
+
 - `SelectThinkingMode(replanCount, complexity, SI)`：重规划或 SI≥high → Max；`complexity ≥ m4_kernel.plan.reasoning_complexity`(0.7) 或 SI≥low → High；否则 Disabled。**污点不再是输入**——污点是来源安全标签，由 Taint/Cedar/PolicyGate 消费；思考深度是成本旋钮，二者正交。
 - `SelectPlanModelPool`：ThinkingMax 或高复杂度 → `reasoning`；否则 `general`（经 poolFallbackChain 落到 `default` 即 flash）。
 - Perceive 模板为 `Complexity` 补评分标尺，使级联信号可用。
@@ -64,6 +66,31 @@
 
 S_PLAN 已经原生 function-calling 下发完整工具定义（`WithTools`），`BuildToolListSection` 此前又把"名称 + 描述 + 参数 JSON Schema"全文写进 prompt——最大的一块上下文每次规划计费两次（按每工具 ~200 token 计，30 个工具 ≈ 6K token/次）。改为文本目录只列名称（JSON-DAG 输出路径只需 action 合法取值）。无原生 tools 的 `LocalAdapter`（llama.cpp，`SupportsTools=false`）在适配器内把 `WithTools` 定义渲染为文本插在前导 system 之后（`withToolsAsText`），能力差异止于适配器层。附带收益：MCP 工具描述不再出现在文本目录，间接注入面收窄（S-02）。
 
+### 决策六：LLM 判难度、程序持策略；按失败成因升级（取代决策二的触发规则）
+
+新事实：决策二仍以 `replanCount > 0` 触发 reasoning + ThinkingMax。但重规划有五种成因，只有"模型能力不足"一类能靠换更强模型解决——安全闸门拒绝换 Pro 照样被拒；超时/限流换 Pro 照样超时；反思判定未达成是观察—再规划的正常推进。
+
+**分工**：
+- **LLM 给语义信号**（它能看懂任务，程序不能）：Perceive（便宜模型）输出 `Complexity`，模板给出锚定标尺并要求"两档间取低档——失败会自动升级"（便宜优先 + 兜底升级，对应 AutoMix/DiSRouter 一类自评路由；小模型自评校准有限，故只作起点，不作唯一依据）。规划模型可输出 `{"escalate": true}` 自评超纲（plan.md 规则 9）。
+- **程序持有策略**（确定性、可审计、可单测）：`metrics.SelectPlanTier(escalation, complexity, SI)` 一张阶梯表决定池与思考档；`escalation` 只由程序观测到的**能力类失败**累计。
+
+**阶梯**：0 general/无思考 → 1 general/High → 2 reasoning/High → 3 reasoning/Max。起点：Complexity ≥ 0.7 → 2；SI ≥ high → +1；SI ≥ low → 至少 1。
+
+**失败成因 → 升级**（`fsm.RecordFailure`）：
+
+| 成因 | 来源 | 升级 |
+|---|---|---|
+| `FailurePolicy` | S_VALIDATE L1_taint / L1_policy / L2_heuristic / L3_llm | 否 |
+| `FailureTransient` | 执行超时、网络、限流、取消、Provider 耗尽、TOCTOU 冲突 | 否 |
+| `FailureGoalUnmet` | 反思未达成 → 观察—再规划 | 否 |
+| `FailureToolError` | 工具报错（参数错、对象不存在） | 首次否，第二次起 +1 |
+| `FailurePlanInvalid` | S_VALIDATE L0 结构错误；规划输出有内容但不可解析 | +1 |
+| `FailureSelfEscalate` | 规划模型输出 `escalate=true` | 直接到 2 |
+
+**规划输出不可用的升级重试**：此前"有内容但解析失败"且无缓存 DAG 时直接 S_PLAN_FAILED 结束回合；现改为升一级后经 `TriggerFillRetry` 重试一次（与自评超纲共用每回合一次的额度 `PlanEscalated`）。空输出仍按 ADR-0098 决策七关闭思考重试，不计入升级（Provider 行为问题，非能力问题）。
+
+效果：重规划中最常见的安全拒绝与瞬时故障不再付 Pro + Max；真正的能力失败得到逐级而非一步到顶的升级（Flash 开思考往往已足够）。
+
 ## 后果
 
 - **正向**：寒暄回合 LLM 调用 2→1、召回 1→0；简单工具任务规划从 Pro+Max 降到 Flash+无思考（按 V4 定价，规划输入约 1/4、输出与思考 token 大幅下降）；Anthropic 人格前缀在阶段间共享缓存。
@@ -87,12 +114,14 @@ S_PLAN 已经原生 function-calling 下发完整工具定义（`WithTools`）�
 
 - `internal/agent/fsm/intent_gate.go`、`internal/agent/fsm/transitions.go`（`tryPhaticBypass`）
 - `internal/agent/context/memory_context.go`（`BuildPerceiveContext` 短确认精简召回）
-- `internal/observability/metrics/metrics_handler.go`（`SelectThinkingMode` / `SelectPlanModelPool`）
+- `internal/observability/metrics/metrics_handler.go`（`SelectPlanTier`；决策二的 `SelectThinkingMode`/`SelectPlanModelPool` 已由其取代删除）
+- `internal/agent/fsm/escalation.go`（`FailureKind`/`RecordFailure`）、`internal/agent/agent_turn.go`（`validationFailureKind`/`executionFailureKind`）、`internal/agent/fsm/transitions_respond.go`（`tryEscalatePlan`/`planSelfEscalates`）
 - `internal/agent/fsm/transitions_respond.go`（`planEffect`）
 - `internal/llm/adapter/anthropic_request.go`、`internal/sysinfo/sysinfo.go`
 - `internal/agent/fsm/transitions.go`（`trySkipReflect`）、`internal/agent/agent_execute_dag.go`（`ExecAllSucceeded`）
 - `internal/agent/context/tool_list_section.go`、`internal/llm/adapter/local.go`（`withToolsAsText`）
 - `internal/agent/fsm/phase_results.go`（`publishableReply`）、`internal/agent/fsm/transitions_respond.go`（`directRespondEffects`）、`internal/agent/agent_turn.go`（`publishPreparedReply`）、`configs/prompts/kernel/perceive.md`（`Reply`）
+- 门控（决策六）：`TestPlanEffect_CheapFirstCascade`、`TestPlanEffect_RetriesEmptyOutputOnce`、`TestFailureKindClassification`、`TestTurnContractEval_RejectionFeedbackLoop`（安全拒绝后规划池不升级）
 - 门控：`TestTurnContractEval_DirectReplyMergedIntoPerceive`、`TestPerceiveDirectReplyMerge`、`TestTurnStartClearsPreparedReply`、`TestTurnContractEval_SimpleToolTaskSkipsReflect`、`TestTrySkipReflect`、`TestBuildToolListSection_NamesOnly`、`TestWithToolsAsText`、`TestTurnContractEval_PhaticSkipsPerceive`、`TestPlanEffect_CheapFirstCascade`、`TestClassifyIntentWeight`、`TestBuildAnthropicRequest_StablePrefixBreakpoint`
 
 ## 重新评估触发条件
@@ -101,10 +130,12 @@ S_PLAN 已经原生 function-calling 下发完整工具定义（`WithTools`）�
 2. 首轮 general 池规划导致的重规划率较基线上升超过 30% → 调低 `plan.reasoning_complexity` 或恢复首轮 ThinkingHigh。
 3. `reflect_skipped` 回合的用户纠正/重问率显著高于完整反思回合 → 调低或关闭 `reflect.skip_complexity`。
 4. `direct_merged` 回合出现内部产物泄漏或用户对直答质量的负反馈显著高于 Respond LLM 路径 → 关闭合并（perceive.md 去掉 `Reply`）。
-5. Provider 转为"思考深度由模型自适应"且贵/便宜模型价差 < 3× → 重议池级联的必要性。
+5. `plan_escalated` 占规划调用比例 > 20%，或 level 0 规划的 S_VALIDATE L0 失败率显著高于 level ≥ 2 → 便宜模型规划能力不足，调低 `plan.reasoning_complexity` 或将起点提到 level 1。
+6. Provider 转为"思考深度由模型自适应"且贵/便宜模型价差 < 3× → 重议池级联的必要性。
 
 ## 修订记录
 
 - 2026-09-25 创建。
 - 2026-09-25 决策四 4a 落地（简单任务跳过反思）；新增决策五（工具定义去重）。
+- 2026-09-25 新增决策六（按失败成因升级、SelectPlanTier 阶梯），取代决策二触发规则。
 - 2026-09-25 决策四 4b′ 落地（直答合并进 Perceive）；原 4b/4c 草案驳回并记录理由。

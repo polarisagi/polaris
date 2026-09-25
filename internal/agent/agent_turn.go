@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/protocol"
+	"github.com/polarisagi/polaris/pkg/apperr"
 
 	"github.com/polarisagi/polaris/pkg/types"
 )
@@ -140,6 +142,28 @@ func (a *Agent) abortTurn(ctx context.Context, err error) {
 // validationFeedback 把 S_VALIDATE 的结构化拒绝翻译成"哪个工具、被哪层、为何拒绝"，
 // 供重规划回灌（ADR-0098 决策六）。节点 ID 对模型无意义（call_xx 每次重生成），
 // 必须换成工具名，模型才知道该避开什么。
+// validationFailureKind S_VALIDATE 拒绝的成因（ADR-0101 决策六）：只有 L0 结构错误计入升级。
+// 非 DAGValidationError（如 L1-Taint 包装错误、校验器缺失）按策略拒绝处理——升级模型不改变结论。
+func validationFailureKind(err error) fsm.FailureKind {
+	var ve *protocol.DAGValidationError
+	if errors.As(err, &ve) {
+		return fsm.ClassifyValidationLayer(ve.Layer)
+	}
+	return fsm.FailurePolicy
+}
+
+// executionFailureKind S_EXECUTE 失败的成因：瞬时/环境类（超时、网络、限流、取消、Provider 耗尽）
+// 不升级；其余视为工具报错（参数错、对象不存在等），重复出现才升级。
+func executionFailureKind(err error) fsm.FailureKind {
+	for _, c := range []apperr.Code{apperr.CodeTimeout, apperr.CodeCancelled, apperr.CodeNetworkUnavailable,
+		apperr.CodeResourceExhausted, apperr.CodeProviderExhausted, apperr.CodeStorageUnavailable, apperr.CodeConflict} {
+		if apperr.IsCode(err, c) {
+			return fsm.FailureTransient
+		}
+	}
+	return fsm.FailureToolError
+}
+
 func validationFeedback(plan *protocol.DAGPlan, err error) string {
 	var ve *protocol.DAGValidationError
 	if !errors.As(err, &ve) {

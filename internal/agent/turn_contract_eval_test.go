@@ -37,13 +37,14 @@ type scriptedTurnProvider struct {
 	mu      sync.Mutex
 	script  map[string][]scriptedReply // phase → 按调用次序出队
 	prompts map[string][]string
+	pools   map[string][]string // phase → 每次调用请求的 ModelPool（ADR-0101 决策六评测）
 }
 
 func newScriptedTurnProvider(script map[string][]scriptedReply) *scriptedTurnProvider {
-	return &scriptedTurnProvider{script: script, prompts: map[string][]string{}}
+	return &scriptedTurnProvider{script: script, prompts: map[string][]string{}, pools: map[string][]string{}}
 }
 
-func (p *scriptedTurnProvider) next(msgs []types.Message) scriptedReply {
+func (p *scriptedTurnProvider) next(msgs []types.Message, opts ...types.InferOption) scriptedReply {
 	var all strings.Builder
 	for _, m := range msgs {
 		all.WriteString(m.Content + "\n")
@@ -58,6 +59,11 @@ func (p *scriptedTurnProvider) next(msgs []types.Message) scriptedReply {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prompts[phase] = append(p.prompts[phase], all.String())
+	var o types.InferOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	p.pools[phase] = append(p.pools[phase], o.ModelPool)
 	q := p.script[phase]
 	if len(q) == 0 {
 		return scriptedReply{content: "UNSCRIPTED_" + phase}
@@ -69,14 +75,14 @@ func (p *scriptedTurnProvider) next(msgs []types.Message) scriptedReply {
 	return r
 }
 
-func (p *scriptedTurnProvider) Infer(_ context.Context, msgs []types.Message, _ ...types.InferOption) (*types.ProviderResponse, error) {
-	r := p.next(msgs)
+func (p *scriptedTurnProvider) Infer(_ context.Context, msgs []types.Message, opts ...types.InferOption) (*types.ProviderResponse, error) {
+	r := p.next(msgs, opts...)
 	return &types.ProviderResponse{Content: r.content, ToolCalls: r.toolCalls}, nil
 }
 
 // StreamInfer 把正文切成多帧并附带思考链，贴近真实流式形态。
-func (p *scriptedTurnProvider) StreamInfer(_ context.Context, msgs []types.Message, _ ...types.InferOption) (<-chan types.StreamEvent, error) {
-	r := p.next(msgs)
+func (p *scriptedTurnProvider) StreamInfer(_ context.Context, msgs []types.Message, opts ...types.InferOption) (<-chan types.StreamEvent, error) {
+	r := p.next(msgs, opts...)
 	ch := make(chan types.StreamEvent, len(r.content)+len(r.toolCalls)+2)
 	ch <- types.StreamEvent{Type: types.StreamThinking, Content: "思考中"}
 	for _, chunk := range strings.SplitAfter(r.content, "。") {
@@ -337,6 +343,15 @@ func TestTurnContractEval_RejectionFeedbackLoop(t *testing.T) {
 	}
 	if rp := p.promptsOf("respond"); len(rp) != 1 || !strings.Contains(rp[0], "previous_attempts_failed") {
 		t.Error("回复阶段必须看到被拒原因，才能如实说明限制")
+	}
+	// ADR-0101 决策六：安全拒绝换更贵的模型也照样被拒，重规划不得升级到 reasoning 池。
+	p.mu.Lock()
+	pools := append([]string(nil), p.pools["plan"]...)
+	p.mu.Unlock()
+	for i, pool := range pools {
+		if pool != string(types.ModelPoolGeneral) {
+			t.Errorf("第 %d 次规划池 = %q，安全拒绝后不应升级", i+1, pool)
+		}
 	}
 	assertNoInternalArtifacts(t, out.reply)
 }

@@ -26,6 +26,7 @@ const (
 	routePhatic           = "phatic_bypass"   // ADR-0101 决策一：寒暄零 LLM 直答
 	routeReflectSkipped   = "reflect_skipped" // ADR-0101 决策四：简单任务成功跳过反思 LLM
 	routeDirectMerged     = "direct_merged"   // ADR-0101 决策四 4b′：Perceive 同次调用产出回复
+	routePlanEscalated    = "plan_escalated"  // ADR-0101 决策六：规划不可用/自评超纲，升级重试
 )
 
 // applyPerceiveResult 把 Perceive 输出解析进 TaskModel 并决定路由（ADR-0098 决策三）。
@@ -125,6 +126,7 @@ func (sm *StateMachine) shouldContinue(sCtx *StateContext, raw []byte) bool {
 		reason += ": " + strings.Join(probe.Errors, "; ")
 	}
 	sCtx.RecordReplanFeedback(reason)
+	sCtx.RecordFailure(FailureGoalUnmet)
 	metrics.RecordTurnRoute(context.Background(), routeContinue)
 	return true
 }

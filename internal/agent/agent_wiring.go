@@ -255,7 +255,7 @@ func (a *Agent) SetTaskIntent(intentTS taint.TaintedString) {
 			// 完整三分量异步计算（MEMF + Markov + Jaccard），CurrentSurprise 返回上一轮滑动均值
 			a.surpriseCalc.SubmitToolSeq(a.sCtx.TaskID, toolSeq)
 			a.sCtx.SurpriseIndex = a.surpriseCalc.CurrentSurprise()
-			// 同步写入 GlobalSurpriseIndex，保持 SelectThinkingMode（transitions.go）读值一致
+			// 同步写入 GlobalSurpriseIndex，保持 SelectPlanTier（fsm/transitions_respond.go planEffect）读值一致
 			metrics.GlobalSurpriseIndex().SetLastValue(a.sCtx.SurpriseIndex)
 		} else {
 			// [A6] 不透传 ctx：SetTaskIntent 由外部在 Agent 循环之外触发，且 ComputeBasic 为纯 CPU 同步计算，不涉及 IO 或 Trace，无需 trace ctx 传播。

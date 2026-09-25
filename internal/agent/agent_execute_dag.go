@@ -34,6 +34,7 @@ func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Sp
 	}
 
 	if apperr.IsCode(err, apperr.CodeConflict) {
+		a.sCtx.RecordFailure(fsm.FailureTransient)
 		a.asyncIntent(types.TriggerExecuteFail)
 		return err //nolint:wrapcheck // Return directly for TOCTOU
 	}
@@ -47,6 +48,7 @@ func (a *Agent) handleDAGExecutionFailure(ctx context.Context, span oteltrace.Sp
 	// 执行失败 → 触发 S_ROLLBACK
 	span.RecordError(err)
 	a.sCtx.RecordReplanFeedback("execution failed: " + err.Error())
+	a.sCtx.RecordFailure(executionFailureKind(err))
 	a.asyncIntent(types.TriggerExecuteFail)
 	return apperr.Wrap(apperr.CodeInternal, "runExecuteDAG: DAG execution failed", err)
 }

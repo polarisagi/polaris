@@ -24,3 +24,4 @@ Your objective is to understand the user's latest message (in the context of the
 - 0.1–0.3: one or two obvious tool calls (read a file, list a directory, a single search).
 - 0.4–0.6: several dependent steps with a clear path.
 - 0.7–1.0: open-ended design, multi-file changes, ambiguous requirements, or irreversible/high-stakes actions.
+Scores ≥ 0.7 route planning to a slower, more expensive reasoning model. When torn between two bands, pick the lower one: plans that fail are automatically escalated to a stronger model.

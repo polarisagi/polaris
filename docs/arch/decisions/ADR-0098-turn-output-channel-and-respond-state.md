@@ -148,3 +148,5 @@ S_VALIDATE L1_taint 拦截（用户输入恒 TaintHigh，由其派生参数的�
 | 2026-09-25 | 决策五复核：JIT 令牌绑定已校验计划节点（工具名+参数），订正"纵深不减" |
 
 > 2026-09-25 追记（ADR-0101 决策四 4b′）：Perceive 契约新增可选 `Reply`，`NeedsTools=false` 时同次产出回复；Perceive→Respond 入边据此以确定性 Effect 进入 S_RESPOND 并由 Agent 以用户受众发布。决策一"只有 S_RESPOND 向用户发布正文"不变——Perceive 的流式 token 仍为内部受众，不逐 token 推送；发布前经 `publishableReply` 拦截内部产物特征。
+
+> 2026-09-25 追记（ADR-0101 决策六，修订决策七"有内容但解析失败不重试"）：规划输出有内容但不可用且无缓存 DAG 时，升一级模型档位经 `TriggerFillRetry` 重试一次（每回合一次，与规划模型自评超纲共用额度），再失败才 S_PLAN_FAILED。空输出重试语义不变。门控 `TestPlanEffect_RetriesEmptyOutputOnce`。

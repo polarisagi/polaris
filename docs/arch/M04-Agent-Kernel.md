@@ -109,7 +109,7 @@ ReplanGuard 覆盖全部 5 条路径: S_VALIDATE 失败 / S_ROLLBACK 完成 / M1
 - **直答合并**（ADR-0101 决策四 4b′）：Perceive 在 `NeedsTools=false` 时同次输出 `Reply`；经 `publishableReply` 检查后存入 `PreparedReply`，仅 Perceive→Respond 入边以确定性 Effect 发布（route=`direct_merged`），回合起点清空。`Reply` 缺失/被拦截 → 照常 Respond LLM。
 - **简单任务跳过反思**（ADR-0101 决策四 4a）：首轮、`ExecAllSucceeded` 且 0 < Complexity < `m4_kernel.reflect.skip_complexity`(0.4) 时 S_REFLECT 为 `DeterministicEffect`（route=`reflect_skipped`），直接转 S_RESPOND；其余情形照常 LLM 反思。
 - **工具定义去重**（ADR-0101 决策五）：S_PLAN 文本目录只列工具名，完整定义仅经原生 function-calling 下发；无原生 tools 的本地适配器自行渲染文本。
-- **规划池级联**（ADR-0101 决策二）：首轮规划按 `TaskModel.Complexity` 选池——< `m4_kernel.plan.reasoning_complexity`(0.7) 走 `general`、不思考；重规划升级到 `reasoning` + ThinkingMax。
+- **规划池阶梯**（ADR-0101 决策二/六）：LLM 在 Perceive 判 `Complexity`，程序经 `SelectPlanTier` 定池与思考档；只有能力类失败（L0 结构错误、计划不可解析、重复工具报错、规划模型 `escalate=true`）逐级升级，安全拒绝/瞬时故障/观察—再规划不升级。规划输出有内容但不可用时升级重试一次（每回合一次）。
 - **空输出重试**（ADR-0098 决策七）：S_PLAN / S_RESPOND 推理成功但既无正文也无工具调用时，按 Effect `MaxRetry`（=1）经 `TriggerFillRetry` 自环重试一次（S_RESPOND 此时未推出 token，不会重复输出）；推理错误不重试（Router 已全量 failover）。仍为空 → S_FAILED，失败原因以错误事件进入事件流。
 - **观察—再规划循环**（决策八）：反思 `GoalAchieved` 显式为 false 且 `replanCount+1 < MaxReplan` → `S_REFLECT --reflect_continue--> S_REPLAN`；每轮执行结果累积为 `StateContext.Observations`（最近 4 条、每条 ≤4KB），供下一轮规划与回复使用。超限结果首尾保留截断，全文经 `ToolRefOffloader` 卸载、预览首行给出 `read_tool_ref` 取回提示（ADR-0100 决策三）。LLM 请求被 Provider 以上下文超限拒绝（`protocol.ErrContextOverflow`）时，Agent 对固定前缀外的消息确定性修剪一次后重试（ADR-0100 决策二）。
 - **重规划耗尽转回复**（决策九）：进入 S_REPLAN 时预算已满 → S_RESPOND（`TurnDegraded=true`，任务结果按失败计），回复阶段据失败原因如实说明。
@@ -299,9 +299,9 @@ S_PLAN 阶段若任务复杂度触发子规划策略，异步启动规划器池�
 | System 1.5 | 0.3-0.6 | 毫秒-秒 | M1 Budget Pool |
 | System 2 | ≥0.6 | 秒级 | M1 Reasoning Pool |
 
-**`SelectThinkingMode` 注入**（与 System 路由正交）: M4 `transitions_respond.go` `planEffect` 在 LLM 调用前调用 `SelectThinkingMode(replanCount, TaskModel.Complexity, SurpriseIndex)` 与 `SelectPlanModelPool`（ADR-0101 决策二：便宜池先行、重规划升级；污点不参与）决定三档 `[ThinkingMode]`（Disabled / High / Max），通过 `protocol.WithThinkingMode(mode)` 作为 `InferOption` 传入 Adapter。档位触发条件与 Provider API（Application Programming Interface，应用程序接口） 映射见 M1 §5.2-bis。
+**`SelectPlanTier` 注入**（与 System 路由正交，ADR-0101 决策六）: M4 `transitions_respond.go` `planEffect` 在 LLM 调用前调用 `SelectPlanTier(sCtx.Escalation, TaskModel.Complexity, SurpriseIndex)` 得到规划的模型池与 `[ThinkingMode]`，分别经 `types.WithModelPool` / `protocol.WithThinkingMode` 传入。`sCtx.Escalation` 只由能力类失败累计（`fsm.RecordFailure`：S_VALIDATE 按层 `ClassifyValidationLayer`、执行按错误码 `executionFailureKind`、规划不可用/自评超纲 `tryEscalatePlan`），安全拒绝/瞬时故障/观察—再规划不升级。阶梯与 Provider 映射见 M1 §5.2-bis。
 
-**SurpriseIndex 计算来源（ADR-0025（Architecture Decision Record，架构决策记录） BUG-D）**：`populateSessionContext` 优先从注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，三分量：Jaccard + MEMF + Markov）读取；未注入时退回 `ComputeBasic`（仅 Jaccard）。计算结果同步写入 `metrics.GlobalSurpriseIndex`，供 `SelectThinkingMode` 消费。`SurpriseReader` 为 consumer-side 接口，防 L1→L2 包循环。
+**SurpriseIndex 计算来源（ADR-0025（Architecture Decision Record，架构决策记录） BUG-D）**：`populateSessionContext` 优先从注入的 `SurpriseReader`（`learning/surprise.SurpriseCalculator`，三分量：Jaccard + MEMF + Markov）读取；未注入时退回 `ComputeBasic`（仅 Jaccard）。计算结果同步写入 `metrics.GlobalSurpriseIndex`，供 `SelectPlanTier` 消费。`SurpriseReader` 为 consumer-side 接口，防 L1→L2 包循环。
 
 RouteReasoning:
 0. si = `Agent.surpriseCalc.CurrentSurprise()`（已注入时）或 `metrics.GlobalSurpriseIndex().ComputeBasic(nil, toolSeq)`（退化路径）→ 两者均不可用 → 0.5。**`si=0` 为默认零值，不触发 FastPath；正式 FastPath 仅在 `0 < si < 0.3` 时激活。**
