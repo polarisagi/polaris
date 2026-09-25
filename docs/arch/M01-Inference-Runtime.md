@@ -468,7 +468,7 @@ DDL SSoT（Single Source of Truth，唯一权威源）：`internal/protocol/sche
 
 > 2026-09-19 订正（GR-2.2-006）：`RateLimitTracker` / `RateLimitCapturingTransport` 目前是**库组件**，未接入生产出站链路——此前唯一构造点在 `InferenceRouter` 内部且全仓零读取（Router 不直接发 HTTP），已随孤儿字段一并删除。限速后的冷却现由 `ClassifyError` → `CredentialPool` 冷却（RateLimit 60min）承担；若要按响应头精确退避，须在 `boot_substrate.go` 的 SafeHTTPClient 外层包 `RateLimitCapturingTransport` 并让选路读取 `Tracker.Get`，二者缺一即为假接线。
 
-**`ClassifyError`（`error_classifier.go`）**：提取 HTTP 状态码 + 关键词，分类为 17 种失败原因，返回 `*ClassifiedError`，包含可重试性、上下文压缩、凭证轮换、降级策略在内的恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 Provider 错误体格式。
+**`ClassifyError`（`error_classifier.go`）**：提取 HTTP 状态码 + 关键词，分类为 17 种失败原因，返回 `*ClassifiedError`，包含可重试性、上下文压缩、凭证轮换、降级策略在内的恢复提示。覆盖 Anthropic/OpenAI/DeepSeek/Gemini/Ollama/阿里云/火山引擎等多 Provider 错误体格式。`ShouldCompress` 类错误（上下文超限 / payload 过大）是请求侧故障：路由不计入熔断与成功率，只 failover 到 `MaxContextTokens` 更大的 Provider，否则以 `protocol.ErrContextOverflow` 交还调用方（`router_request_fault.go`，ADR-0100 决策一）。
 
 ---
 

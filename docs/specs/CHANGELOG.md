@@ -6,6 +6,12 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（ADR-0100 DeepSeek Harness 评审：上下文溢出与执行结果 spill — 含**契约变更**）
+
+- **[契约] `protocol.ErrContextOverflow`**：上下文超限 / payload 过大是请求侧故障。InferenceRouter 不计入熔断与成功率，只 failover 到窗口更大的 Provider，否则返回包装该哨兵的错误；调用方须缩减请求后再试，不得当作 Provider 耗尽处理。新增 Provider 调用点记录健康度一律经 `recordAttempt`。
+- **行为变更**：Agent 收到该哨兵时对固定前缀外的消息首尾保留修剪一次后重试（不走 LLM 摘要）；执行结果 >4KB 经 `ToolRefOffloader` 卸载，预览首行给出 `read_tool_ref` 取回提示，`logs/exec_results/` 不再写入；观察截断改为首尾保留（`pkg/util.ElideMiddle`）。
+- 新增截断逻辑时：用 `util.ElideMiddle` 保留首尾，并给出可取回全文的引用或如实声明未保留。
+
 ## 2026-09-25（outbox 投影资源压力推迟 — 含**契约变更**）
 
 - **[契约] `protocol.WithDeferrableBackgroundWork` / `ErrBackgroundDeferred`**：串行消费队列（当前为 OutboxWorker）的后台 LLM 调用被水位线拒绝时，路由立即返回推迟哨兵而不挂起。outbox handler 及其下游**须沿错误链上抛**该哨兵（`apperr.Wrap` / `%w`），不得降级落库或吞成 nil；Worker 据此推迟 30s 且不计入 attempts / crash_recovery_count（M02 §2.5）。整合管线已接：抽取不再因推迟退回规则抽取，`Run` 不因推迟另投 OOM 重试。
