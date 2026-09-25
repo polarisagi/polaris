@@ -3,6 +3,7 @@ package sysadmin
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -46,4 +47,38 @@ func TestDoctorAndExportHandlers(t *testing.T) {
 	w = httptest.NewRecorder()
 	h.HandleExportTrajectories(w, req)
 	// Usually 200 or 500 if DB setup isn't perfect, but covers the handler entry point
+}
+
+// Registry 未注入时 doctor 须把 provider 项报为失败，而不是 nil panic。
+func TestHandleDoctor_NilRegistryReportsProviderFailure(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+
+	h := &SysAdminHandler{DB: db}
+	w := httptest.NewRecorder()
+	h.HandleDoctor(w, httptest.NewRequest("GET", "/api/v1/doctor", nil))
+
+	var body struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			OK     bool   `json:"ok"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range body.Checks {
+		if c.Name == "provider" {
+			if c.OK || c.Detail != "provider registry not configured" {
+				t.Fatalf("unexpected provider check: %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatal("provider check missing")
 }

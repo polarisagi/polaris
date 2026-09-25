@@ -133,3 +133,9 @@ func TestDispatchChannelMessage_NilSessionOrch(t *testing.T) {
 	h := &ChannelsAdmin{Registry: stubRegistry{}}
 	h.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, protocol.ChannelMessage{Text: "hi"})
 }
+
+// Registry 未注入：须按"无可用 provider"丢弃本条，不得 nil panic。
+func TestDispatchChannelMessage_NilRegistry(t *testing.T) {
+	h := &ChannelsAdmin{}
+	h.dispatchChannelMessage(context.Background(), "slack", "ch1", map[string]any{}, protocol.ChannelMessage{Text: "hi"})
+}

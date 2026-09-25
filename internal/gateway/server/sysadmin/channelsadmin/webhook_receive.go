@@ -121,9 +121,14 @@ func (h *ChannelsAdmin) dispatchChannelMessage(ctx context.Context, channelType,
 		}
 	}
 
-	p := h.Registry.PickProvider("default")
-	if p == nil {
-		p = h.Registry.PickProvider("general")
+	// Registry 未注入（降级运行/组件测试）与"无可用 provider"同样处理：记日志丢弃本条，
+	// 而非在 SafeGo 后台 goroutine 里 nil panic 被静默吞掉。
+	var p protocol.Provider
+	if h.Registry != nil {
+		p = h.Registry.PickProvider("default")
+		if p == nil {
+			p = h.Registry.PickProvider("general")
+		}
 	}
 	if p == nil {
 		slog.Warn("channel dispatch: no provider available", "channel", channelID)
