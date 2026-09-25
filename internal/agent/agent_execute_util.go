@@ -145,6 +145,9 @@ func (a *Agent) withTaskScopeCtx(ctx context.Context) context.Context {
 	// ADR-0097 决策五：项目会话的工作目录随任务域 ctx 注入，内置文件/命令工具据此追加访问根。
 	// 决策三修订：项目 ID 同路注入，供情景记忆写入兜底打标与 memory_search 限定范围。
 	ctx = protocol.WithProjectID(ctx, a.currentProjectID())
+	if a.background.Load() {
+		ctx = protocol.WithBackgroundWork(ctx)
+	}
 	return protocol.WithProjectRoot(ctx, a.currentProjectRoot())
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/polarisagi/polaris/internal/observability/probe"
+	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/concurrent"
 )
 
@@ -157,7 +158,8 @@ func (s *IdleEvolutionScheduler) tryRunIdleTasks(ctx context.Context) {
 
 	slog.InfoContext(ctx, "idle_evolution: idle window detected, starting background tasks")
 
-	taskCtx, cancel := context.WithCancel(ctx)
+	// 空闲任务的推理属于可降级后台工作：压力下挂起，且不刷新用户活跃时间。
+	taskCtx, cancel := context.WithCancel(protocol.WithBackgroundWork(ctx))
 	s.cancelFuncs = append(s.cancelFuncs, cancel)
 	s.mu.Unlock()
 

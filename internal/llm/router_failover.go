@@ -270,34 +270,41 @@ func (ir *InferenceRouter) acquireLLMCapacity(ctx context.Context) error {
 	if ir.governor == nil {
 		return nil
 	}
-	// priority=0 = 用户可见推理：只受并发上限约束，不被内存/CPU 水位线拒绝
-	// （理由见 automation.ResourceGovernor.AdmitLLM 的 priority 语义说明）。
-	// 本路由是全系统唯一的 LLM 调用出口，交互式对话全部经由此处；后台可降级
-	// 推理若将来需要区分，应在 InferRequest 上显式携带而非在此硬编码。
-	// 等待—重试循环，直到拿到额度或 ctx 到期。
+	// priority=0 用户可见推理：只受并发上限约束；priority=1 后台可降级推理
+	// （protocol.WithBackgroundWork 标记）：另受内存/CPU 水位线约束。语义见
+	// automation.ResourceGovernor.AdmitLLM。
 	//
-	// 旧实现是"admit → wait → 再 admit 一次，还不行就报错"。两个问题：
-	//  1. 第二次 admit 与其他等待者存在竞争，抢输一次就变成一条硬错误，而实际上
-	//     只是需要再等一轮——用户侧表现为随机失败。
-	//  2. degradeLevel 被 `_` 丢弃，报错只有一句不带原因的 "failed to acquire
-	//     LLM capacity"，无从区分"并发满"（等待有意义）与"水位线闸门"（等待毫无
-	//     意义，WaitForLLMCapacity 只等 llmInFlight、压根不等内存恢复）。
-	//     2026-09-22 empty_response 排查里，这个被丢弃的信号正是唯一能直指根因的线索。
-	// priority=0 下拒绝理由只可能是并发满，等待因此总是有意义的；degradeLevel
-	// 仍带进错误与日志，供后续定位。
+	// 等待—重试直到拿到额度或 ctx 到期：一次 admit 抢输只是需要再等一轮，不是硬错误。
+	// WaitForLLMCapacity 只等并发额度；后台请求被水位线拒绝时它会立即返回，故按固定
+	// 间隔轮询压力解除——"挂起"而非失败，也不忙等。
+	priority := 0
+	if protocol.IsBackgroundWork(ctx) {
+		priority = 1
+	}
 	for attempt := 0; ; attempt++ {
-		admitted, level := ir.governor.AdmitLLM(0)
+		admitted, level := ir.governor.AdmitLLM(priority)
 		if admitted {
 			return nil
 		}
 		if attempt > 0 {
 			slog.WarnContext(ctx, "inference_router: LLM admission still denied after wait",
-				"degrade_level", level, "attempt", attempt)
+				"degrade_level", level, "attempt", attempt, "priority", priority)
 		}
-		if err := ir.governor.WaitForLLMCapacity(ctx); err != nil {
+		err := ir.governor.WaitForLLMCapacity(ctx)
+		if err == nil && priority != 0 {
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-time.After(backgroundAdmitRetryInterval):
+			}
+		}
+		if err != nil {
 			return apperr.Wrap(apperr.CodeResourceExhausted,
 				fmt.Sprintf("inference_router: timeout waiting for LLM capacity (degrade level %d: 1=内存/CPU 警戒 2=阻塞后台 3=内存濒死)", level),
 				err).WithRetryAfter(10)
 		}
 	}
 }
+
+// backgroundAdmitRetryInterval 后台推理被水位线拒绝后的重试间隔。
+const backgroundAdmitRetryInterval = 2 * time.Second

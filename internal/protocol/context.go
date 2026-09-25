@@ -66,6 +66,25 @@ type CtxAnomalyFilterKey struct{}
 // CtxCapabilityTokenKey 用于在 context 中传递能力令牌 *token.Token (A-7/inv_M7_01)
 type CtxCapabilityTokenKey struct{}
 
+// CtxBackgroundWorkKey 标记当前调用链属于可降级的后台工作（空闲自进化、headless 自动化）。
+// InferenceRouter 据此以 priority=1 申请 LLM 额度：资源压力下挂起让位于用户对话，
+// 且不刷新"用户活跃"时间（否则后台自己的推理会把空闲窗口顶掉）。
+type CtxBackgroundWorkKey struct{}
+
+// WithBackgroundWork 标记后台工作。
+func WithBackgroundWork(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CtxBackgroundWorkKey{}, true)
+}
+
+// IsBackgroundWork 未标记即视为用户可见请求。
+func IsBackgroundWork(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	bg, _ := ctx.Value(CtxBackgroundWorkKey{}).(bool)
+	return bg
+}
+
 // CtxProjectRootKey 会话所属项目的工作目录（规范路径，ADR-0097 决策五）。
 // 由 agent 在执行 effect 前注入（仅当项目绑定了目录且目录的规范路径未变），
 // 内置文件/命令工具据此把该目录追加为本次调用的可访问根——会话级收窄，

@@ -225,3 +225,26 @@ func TestAdmitBackground(t *testing.T) {
 		release()
 	})
 }
+
+// TestAdmitLLM_OnlyUserFacingMarksActivity 后台推理不得刷新"用户活跃"时间：
+// 否则空闲自进化自己的推理会把空闲窗口顶掉，自进化再也等不到下一个窗口。
+func TestAdmitLLM_OnlyUserFacingMarksActivity(t *testing.T) {
+	rg := NewResourceGovernor(10, config.ResourceGovernorConfig{}).WithMaxConcurrentLLM(4)
+	rg.memProbeFn = func() int64 { return 8192 }
+	rg.cpuProbeFn = func() float64 { return 10.0 }
+	marks := 0
+	rg.OnActivity(func() { marks++ })
+
+	if admitted, _ := rg.AdmitLLM(1); !admitted {
+		t.Fatal("无压力时后台推理应准入")
+	}
+	if marks != 0 {
+		t.Fatal("后台推理不得打活跃标记")
+	}
+	if admitted, _ := rg.AdmitLLM(0); !admitted {
+		t.Fatal("用户可见推理应准入")
+	}
+	if marks != 1 {
+		t.Fatalf("用户可见推理应打活跃标记，got %d", marks)
+	}
+}

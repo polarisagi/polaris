@@ -96,6 +96,9 @@ type Agent struct {
 	// 能力令牌只为其中的调用 JIT 签发（agent_capability.go）。校验与执行在不同 effect
 	// goroutine，DAG 节点并发读取，故用原子指针整体替换。
 	validatedCalls atomic.Pointer[map[string]struct{}]
+	// background 本轮经 AcquireHeadless 获取：effect ctx 标记为后台工作，LLM 额度按
+	// 可降级优先级申请（withTaskScopeCtx）。每次获取时由 Pool 重写，同一会话可交替。
+	background atomic.Bool
 
 	// sagaRecorder 本轮 DAG 执行的 Saga 补偿结果记录器，由 runExecuteDAG 每次新建，
 	// 经 ctx 交给 execute/dag 的 runCompensation 写入，经 buildStateContext 交给
