@@ -249,6 +249,13 @@ func (m *Manager) TriggerUpdate(ctx context.Context, version string) error {
 		}
 	}
 
+	// 与 CheckForUpdates 同一 fail-closed 语义（XR-06）：client 未注入时同步拒绝，
+	// 而非放后台 goroutine 在 downloader 里对 nil *http.Client 解引用 panic——
+	// 那样调用方拿到 update_started，状态却永远停在 downloading。
+	if m.client == nil {
+		return apperr.New(apperr.CodeNetworkUnavailable, "updater: no SafeDialer-backed HTTP client configured (fail-closed, XR-06)")
+	}
+
 	ctxUpdate, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	concurrent.SafeGo(ctxUpdate, "sysmgr.updater.trigger_update", func(ctx context.Context) {
 		defer cancel()
