@@ -916,6 +916,17 @@ func admitBackground(sb *SubstrateBundle, work string) (release func(), ok bool)
 	return sb.ResourceGov.AdmitBackground(work)
 }
 
+// runAdmittedBackground 过准入后执行一轮周期性后台工作，拿不到额度即跳过本轮。
+// release 以 defer 归还：fn panic 被 SafeGo 兜住时额度照样归还，不永久占用 inFlight。
+func runAdmittedBackground(sb *SubstrateBundle, work string, fn func()) {
+	release, ok := admitBackground(sb, work)
+	if !ok {
+		return
+	}
+	defer release()
+	fn()
+}
+
 // waitForBackgroundSlot 供"只跑一次、跳过即永久缺失"的一次性后台工作使用
 // （典型：插件向量回填）：拿不到额度时退避重试，而不是像周期性 ticker 那样
 // 直接跳过本轮。ctx 取消时返回 ok=false。
