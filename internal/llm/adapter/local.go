@@ -135,7 +135,7 @@ func (a *LocalAdapter) Probe(ctx context.Context) (protocol.LocalProbeResult, er
 }
 
 // withToolsAsText llama.cpp 无原生 tool_call 协议（SupportsTools=false）：上层只在
-// prompt 中列工具名、完整定义经 WithTools 下发（ADR-0101 决策五），此处把定义渲染成
+// prompt 中列工具名、完整定义经 WithTools 下发（ADR-0102 决策五），此处把定义渲染成
 // 文本插在前导 system 消息之后，模型据此按 JSON-DAG 契约输出。不修改入参切片。
 func withToolsAsText(msgs []types.Message, tools []types.ToolSchema) []types.Message {
 	text := renderToolsAsText(tools)

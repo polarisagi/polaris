@@ -367,7 +367,7 @@ func TestBuildReflectContext_Taint(t *testing.T) {
 	})
 }
 
-// ADR-0101 决策五：S_PLAN 的完整工具定义经原生 function-calling 下发，文本目录只列
+// ADR-0102 决策五：S_PLAN 的完整工具定义经原生 function-calling 下发，文本目录只列
 // 名称。若再把描述/参数 schema 写回文本，最大的一块上下文每次规划计费两次。
 func TestBuildToolListSection_NamesOnly(t *testing.T) {
 	cata := &fakeCatalog{entries: []protocol.CatalogEntry{

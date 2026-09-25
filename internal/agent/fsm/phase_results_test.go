@@ -177,7 +177,7 @@ func TestReplanTransition_SingleReplanDone(t *testing.T) {
 }
 
 // TestPlanEffect_RetriesEmptyOutputOnce ADR-0098 决策七：S_PLAN 既无正文也无工具调用
-// 时自环重试一次，仍为空则按既有语义失败（空输出不按能力不足升级，ADR-0101 决策六）。
+// 时自环重试一次，仍为空则按既有语义失败（空输出不按能力不足升级，ADR-0102 决策六）。
 // 有内容但解析失败：升级档位重试一次（决策六），再失败才 S_PLAN_FAILED。
 func TestPlanEffect_RetriesEmptyOutputOnce(t *testing.T) {
 	pinSurprise(t, 0.1)
@@ -227,7 +227,7 @@ func TestPlanEffect_RetryDisablesThinking(t *testing.T) {
 	}
 }
 
-// TestPlanEffect_CheapFirstCascade ADR-0101 决策二/六：LLM 判难度（Complexity）+ 程序持策略。
+// TestPlanEffect_CheapFirstCascade ADR-0102 决策六（阶梯两端取 ADR-0101 决策三/七阶段配置）：LLM 判难度（Complexity）+ 程序持策略。
 // 便宜池先行；只有能力类失败才沿阶梯升级，安全拒绝/瞬时故障/观察—再规划不升级；
 // 污点等级不驱动思考深度（用户输入恒 TaintHigh）。
 func TestPlanEffect_CheapFirstCascade(t *testing.T) {
@@ -246,7 +246,8 @@ func TestPlanEffect_CheapFirstCascade(t *testing.T) {
 	}
 
 	simple := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "列出目录", Complexity: 0.2}}
-	expect(simple, types.ModelPoolGeneral, types.ThinkingDisabled, "简单任务")
+	// 默认配置：model_pool.plan_initial=default、thinking.plan_initial=high、plan_replan=reasoning
+	expect(simple, types.ModelPoolDefault, types.ThinkingHigh, "简单任务")
 
 	complexTask := &StateContext{RawIntentTS: high, TaskModel: &TaskModel{Goal: "迁移数据库", Complexity: 0.8}}
 	expect(complexTask, types.ModelPoolReasoning, types.ThinkingHigh, "LLM 判定复杂")
@@ -256,11 +257,11 @@ func TestPlanEffect_CheapFirstCascade(t *testing.T) {
 	for _, k := range []FailureKind{FailurePolicy, FailureTransient, FailureGoalUnmet, FailureToolError} {
 		simple.RecordFailure(k)
 	}
-	expect(simple, types.ModelPoolGeneral, types.ThinkingDisabled, "非能力类失败不应升级")
+	expect(simple, types.ModelPoolDefault, types.ThinkingHigh, "非能力类失败不应升级（含重规划）")
 
 	// 能力类失败逐级升级
 	simple.RecordFailure(FailureToolError) // 第二次工具报错
-	expect(simple, types.ModelPoolGeneral, types.ThinkingHigh, "重复工具报错升一级")
+	expect(simple, types.ModelPoolDefault, types.ThinkingMax, "重复工具报错升一级：便宜池多想一档")
 	simple.RecordFailure(FailurePlanInvalid)
 	expect(simple, types.ModelPoolReasoning, types.ThinkingHigh, "再次能力失败升到 reasoning")
 	simple.RecordFailure(FailurePlanInvalid)

@@ -132,7 +132,7 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 但在实际验证中发现，当前的单层 HealthScore 路由 + Role Pool（`general`/`default`/`reasoning`）+ ADR-0020（Architecture Decision Record，架构决策记录） ThinkingMode 三档设计已完全能覆盖“简单任务便宜模型、复杂任务深度思考”的核心诉求。为避免引入不必要的判断分支和复杂度，`determineComplexity` 及其相关代码已被彻底删除。
 
-注意与 ADR-0020 / ADR-0101 决策六（ThinkingMode + 规划池阶梯，`internal/observability/metrics/metrics_handler.go` 的 `SelectPlanTier`）区分：后者选的是”思考强度”而非”Provider”，两者是并行机制，不能互相替代。
+注意与 ADR-0020 / ADR-0102 决策六（ThinkingMode + 规划池阶梯，`internal/observability/metrics/metrics_handler.go` 的 `SelectPlanTier`）区分：后者选的是”思考强度”而非”Provider”，两者是并行机制，不能互相替代。
 
 ### 4.5 Route 方法
 
@@ -191,16 +191,18 @@ L1/L2 严格零 LLM 调用——L2 的“复杂度打分”是基于 ToolCount/o
 
 > 权威定义见 00-Global-Dictionary §9-ter `[ThinkingMode]`；本节为映射表的实现细节展开，避免双份定义漂移。
 
-**`[ThinkingMode]`** —— `internal/observability/metrics/metrics_handler.go` 中 `SelectPlanTier(escalation, complexity, surpriseIndex)` 同时决定规划的模型池与思考档（ADR-0101 决策六，由 M4 `transitions_respond.go` `planEffect` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
+**`[ThinkingMode]`** —— `internal/observability/metrics/metrics_handler.go` 中 `SelectPlanTier(escalation, complexity, surpriseIndex)` 同时决定规划的模型池与思考档（ADR-0102 决策六，由 M4 `transitions_respond.go` `planEffect` 调用），Adapter 翻译为 Provider-specific API 字段（`ReasoningEffort string` + `*ThinkingConfig`，见 `internal/llm/adapter/client.go`）：
 
 | level | 模型池 | 档位 | 进入条件 |
 |------|------|------|---------|
-| 0 | `general` | `ThinkingDisabled` | 默认 |
-| 1 | `general` | `ThinkingHigh` | SI ≥ 0.3；或一次能力类失败 |
-| 2 | `reasoning` | `ThinkingHigh` | Complexity ≥ 0.7（`m4_kernel.plan.reasoning_complexity`，LLM 在 Perceive 判定）；规划模型自评 `escalate`；或累计能力类失败 |
-| 3 | `reasoning` | `ThinkingMax` | 以上再叠加 SI ≥ 0.6 或继续失败 |
+| 0 | `m4_kernel.model_pool.plan_initial`（默认 default） | `m4_kernel.thinking.plan_initial`（默认 high） | 默认 |
+| 1 | 同上 | 上调一档（≤low→high，high→max） | SI ≥ 0.3；或一次能力类失败 |
+| 2 | `m4_kernel.model_pool.plan_replan`（默认 reasoning） | `ThinkingHigh` | Complexity ≥ 0.7（`m4_kernel.plan.reasoning_complexity`，LLM 在 Perceive 判定）；规划模型自评 `escalate`；或累计能力类失败 |
+| 3 | 同上 | `ThinkingMax` | 以上再叠加 SI ≥ 0.6 或继续失败 |
 
-档位 → Provider 映射：`ThinkingHigh` → DeepSeek `reasoning_effort="high"` / Claude `budget_tokens=4096`；`ThinkingMax` → `"max"` / `16384`；`ThinkingDisabled` → DeepSeek 显式 `thinking.type=disabled`。
+其余阶段（Perceive/Reflect/Respond/L3 看门狗）的池与思考档由 `m4_kernel.model_pool.*` / `thinking.*` 直接配置（ADR-0101 决策三/七），不走阶梯。
+
+档位 → Provider 映射：`ThinkingLow` → DeepSeek `reasoning_effort="low"`；`ThinkingHigh` → DeepSeek `reasoning_effort="high"` / Claude `budget_tokens=4096`；`ThinkingMax` → `"max"` / `16384`；`ThinkingDisabled` → DeepSeek 显式 `thinking.type=disabled`。
 
 > **能力类失败**（只有这些累计 escalation，`fsm.RecordFailure`）：S_VALIDATE L0 结构错误、规划输出有内容但不可解析、第二次起的工具报错、规划模型自评超纲。安全拒绝、瞬时故障（超时/网络/限流）、观察—再规划不升级——换更贵的模型不改变这些结果。污点不参与：旧规则下用户输入恒 TaintHigh，每轮规划恒为 Pro + ThinkingMax。
 >

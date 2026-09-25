@@ -102,16 +102,16 @@ type StateContext struct {
 	ReplanFeedback []string
 	// Observations 本回合各轮执行结果（ADR-0098 决策八），经 RecordObservation 写入。
 	Observations []string
-	// PreparedReply 本回合 Perceive 直答已产出的回复（ADR-0101 决策四 4b′）。每次 Perceive
+	// PreparedReply 本回合 Perceive 直答已产出的回复（ADR-0102 决策四 4b′）。每次 Perceive
 	// 结果落地时重写（含失败/寒暄旁路清空），只由 Perceive→Respond 边消费，
 	// 其它入边（Plan 空计划/反思/耗尽）一律走 Respond LLM，杜绝陈旧回复被发布。
 	PreparedReply string
 	// ExecAllSucceeded 最近一次 S_EXECUTE 全部节点返回 Success（无 Go 错误、无工具软失败、
-	// 未降级重规划）。每次执行开始置 false，仅作 Reflect 可跳过的判据（ADR-0101 决策四）。
+	// 未降级重规划）。每次执行开始置 false，仅作 Reflect 可跳过的判据（ADR-0102 决策四）。
 	ExecAllSucceeded bool
 	// TurnDegraded 回合以回复收尾但未达成目标（重规划耗尽，决策九），终态指标按失败计。
 	TurnDegraded bool
-	// Escalation 本回合规划升级级数（ADR-0101 决策六），经 RecordFailure 按失败成因累计。
+	// Escalation 本回合规划升级级数（ADR-0102 决策六），经 RecordFailure 按失败成因累计。
 	Escalation int
 	// ToolErrorCount 本回合工具报错次数；第二次起才计入 Escalation。
 	ToolErrorCount int
@@ -265,7 +265,7 @@ type TaskModel struct {
 	// NeedsTools Perceive 的路由判定（ADR-0098）。指针区分"模型明确说不需要"与
 	// "字段缺失"：只有前者走直答，缺失一律保守进 S_PLAN。
 	NeedsTools *bool
-	// Reply NeedsTools=false 时 Perceive 同一次调用产出的最终回复（ADR-0101 决策四 4b′）。
+	// Reply NeedsTools=false 时 Perceive 同一次调用产出的最终回复（ADR-0102 决策四 4b′）。
 	// 非空时 S_RESPOND 以确定性 Effect 发布它，不再调 LLM；空则照常走 Respond LLM。
 	Reply string
 }

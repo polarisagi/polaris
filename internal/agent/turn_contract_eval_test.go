@@ -37,7 +37,7 @@ type scriptedTurnProvider struct {
 	mu      sync.Mutex
 	script  map[string][]scriptedReply // phase → 按调用次序出队
 	prompts map[string][]string
-	pools   map[string][]string // phase → 每次调用请求的 ModelPool（ADR-0101 决策六评测）
+	pools   map[string][]string // phase → 每次调用请求的 ModelPool（ADR-0102 决策六评测）
 }
 
 func newScriptedTurnProvider(script map[string][]scriptedReply) *scriptedTurnProvider {
@@ -211,7 +211,7 @@ func TestTurnContractEval_DirectReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
-// 场景 A-1：寒暄零 LLM 感知（ADR-0101 决策一）——只调一次 Respond，Perceive/Plan 零调用。
+// 场景 A-1：寒暄零 LLM 感知（ADR-0102 决策一）——只调一次 Respond，Perceive/Plan 零调用。
 func TestTurnContractEval_PhaticSkipsPerceive(t *testing.T) {
 	p := newScriptedTurnProvider(map[string][]scriptedReply{
 		"respond": {{content: "你好！有什么可以帮你？"}},
@@ -233,7 +233,7 @@ func TestTurnContractEval_PhaticSkipsPerceive(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
-// 场景 A-2：直答合并（ADR-0101 决策四 4b′）——Perceive 同次产出回复，整回合只调 1 次 LLM。
+// 场景 A-2：直答合并（ADR-0102 决策四 4b′）——Perceive 同次产出回复，整回合只调 1 次 LLM。
 func TestTurnContractEval_DirectReplyMergedIntoPerceive(t *testing.T) {
 	p := newScriptedTurnProvider(map[string][]scriptedReply{
 		"perceive": {{content: `{"Goal":"询问身份","NeedsTools":false,"Reply":"我是 Polaris，你的 AI 助手。"}`}},
@@ -296,7 +296,7 @@ func TestTurnContractEval_ToolPathGroundedReply(t *testing.T) {
 	assertNoInternalArtifacts(t, out.reply)
 }
 
-// 场景 C-1：简单工具任务首轮全部成功 → 跳过 Reflect LLM（ADR-0101 决策四），
+// 场景 C-1：简单工具任务首轮全部成功 → 跳过 Reflect LLM（ADR-0102 决策四），
 // 回复仍基于执行结果。
 func TestTurnContractEval_SimpleToolTaskSkipsReflect(t *testing.T) {
 	exec := &mockToolExecutor{}
@@ -344,13 +344,13 @@ func TestTurnContractEval_RejectionFeedbackLoop(t *testing.T) {
 	if rp := p.promptsOf("respond"); len(rp) != 1 || !strings.Contains(rp[0], "previous_attempts_failed") {
 		t.Error("回复阶段必须看到被拒原因，才能如实说明限制")
 	}
-	// ADR-0101 决策六：安全拒绝换更贵的模型也照样被拒，重规划不得升级到 reasoning 池。
+	// ADR-0102 决策六：安全拒绝换更贵的模型也照样被拒，重规划须留在首轮的便宜池。
 	p.mu.Lock()
 	pools := append([]string(nil), p.pools["plan"]...)
 	p.mu.Unlock()
 	for i, pool := range pools {
-		if pool != string(types.ModelPoolGeneral) {
-			t.Errorf("第 %d 次规划池 = %q，安全拒绝后不应升级", i+1, pool)
+		if pool == string(types.ModelPoolReasoning) || pool != pools[0] {
+			t.Errorf("第 %d 次规划池 = %q（首轮 %q），安全拒绝后不应升级", i+1, pool, pools[0])
 		}
 	}
 	assertNoInternalArtifacts(t, out.reply)

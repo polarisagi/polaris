@@ -184,7 +184,14 @@ func (b *BackgroundTaskScheduler) audit(ctx context.Context, action string, meta
 
 // Start 启动后台守护协程（2 分钟轮询）。
 func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
-	// 保持原有：2 分钟 AutoCurriculum 生成（不修改）
+	// 2 分钟 AutoCurriculum 生成；generator 为 nil（self_improve.auto_curriculum 关闭）时不启动。
+	if b.generator != nil {
+		b.startCurriculumLoop(ctx)
+	}
+	b.startRedTeamLoop(ctx)
+}
+
+func (b *BackgroundTaskScheduler) startCurriculumLoop(ctx context.Context) {
 	concurrent.SafeGo(ctx, "curriculum-auto-generate", func(ctx context.Context) {
 		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
@@ -198,8 +205,10 @@ func (b *BackgroundTaskScheduler) Start(ctx context.Context) {
 			}
 		}
 	})
+}
 
-	// 新增：24 小时 Red Team 常态化探测（V8-S1）
+// startRedTeamLoop 24 小时 Red Team 常态化探测（V8-S1），不受课程开关影响。
+func (b *BackgroundTaskScheduler) startRedTeamLoop(ctx context.Context) {
 	if b.redTeam != nil {
 		concurrent.SafeGo(ctx, "curriculum-red-team-probe", func(ctx context.Context) {
 			ticker := time.NewTicker(24 * time.Hour)

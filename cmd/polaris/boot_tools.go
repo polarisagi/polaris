@@ -385,7 +385,11 @@ func bootTools(ctx context.Context, sb *SubstrateBundle, mb *MemoryBundle) (*Too
 	// ─── E5+E6 语义压缩 & 扩展馆员 & Episodic 投影 handlers ─────────────────
 	llmInfer := func(ctx context.Context, prompt string, opts ...types.InferOption) (string, error) {
 		if sb.Router != nil {
-			inferOpts := append([]types.InferOption{types.WithModel("reasoning")}, opts...)
+			// 池名走 WithModelPool，不得当模型 ID 传（同 e7e7ce6 修复的主路径）。后台抽取/摘要是
+			// 机械性任务：走便宜档 default 池并关闭思考——DeepSeek 省略 thinking 即按 effort=high
+			// 计推理 token（ADR-0101 决策三/七）。
+			// 调用方显式传入的 ThinkingMode 排在后面，仍可覆盖。
+			inferOpts := append([]types.InferOption{types.WithModelPool(string(types.ModelPoolDefault)), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("background_llm_infer")}, opts...)
 			resp, err := sb.Router.Infer(ctx, []types.Message{{Role: "user", Content: prompt}}, inferOpts...)
 			if err != nil {
 				return "", apperr.Wrap(apperr.CodeInternal, "boot_tools: llmInfer 失败", err)

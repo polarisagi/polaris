@@ -160,7 +160,7 @@ func Summarize(ctx context.Context, msgs []types.Message, maxTokens int, provide
 		{Role: "user", Content: "请为以下对话生成摘要：\n\n" + transcript},
 	}
 
-	ch, err := safecall.StreamInfer(ctx, provider, reqMsgs, types.WithMaxTokens(maxTokens), types.WithTemperature(0.3))
+	ch, err := safecall.StreamInfer(ctx, provider, reqMsgs, types.WithMaxTokens(maxTokens), types.WithTemperature(0.3), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("compact_summary"))
 	if err != nil {
 		return "", apperr.Wrap(apperr.CodeInternal, "compact.Summarize", err)
 	}

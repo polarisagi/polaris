@@ -138,5 +138,8 @@ func GetThresholds(dataDir string) (*Thresholds, error) {
 		}
 	}
 
+	if err := t.M4Kernel.Validate(); err != nil {
+		return nil, apperr.Wrap(apperr.CodeInvalidInput, "GetThresholds", err)
+	}
 	return &t, nil
 }

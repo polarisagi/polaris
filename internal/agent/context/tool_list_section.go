@@ -50,9 +50,9 @@ func BuildToolListSection(ctx context.Context, cata catalog.Catalog) (string, ty
 			maxTaint = t
 		}
 	}
-	// 只列名称（ADR-0101 决策五）：S_PLAN 同时经原生 function-calling 下发完整
-	// schema（agent_execute_effect.go WithTools），此前这里再把描述 + 参数 JSON Schema
-	// 全文写一遍，最大的一块上下文每次规划计费两次。JSON-DAG 输出路径只需知道
+	// 只列名称（ADR-0102 决策五，收紧 ADR-0101 决策五的"名称 + 描述"）：S_PLAN 同时经
+	// 原生 function-calling 下发完整定义（agent_execute_effect.go WithTools），名称、描述、
+	// 参数 schema 都在其中，文本里再写描述仍是重复计费（内置 56 个工具）。JSON-DAG 输出路径只需知道
 	// action 的合法取值，参数结构模型可从原生工具定义读取；不支持原生 tools 的
 	// Provider 由其适配器自行把 schema 渲染成文本（adapter.renderToolsAsText）。
 	var sb strings.Builder

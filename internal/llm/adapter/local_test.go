@@ -111,7 +111,7 @@ func TestLocalAdapter_ProbeGraceful(t *testing.T) {
 	}
 }
 
-// ADR-0101 决策五：无原生 tools 的本地适配器须把 WithTools 下发的定义渲染成文本，
+// ADR-0102 决策五：无原生 tools 的本地适配器须把 WithTools 下发的定义渲染成文本，
 // 插在前导 system 之后，否则上层只列工具名时本地模型拿不到参数 schema。
 func TestWithToolsAsText(t *testing.T) {
 	msgs := []types.Message{

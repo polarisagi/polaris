@@ -99,7 +99,7 @@ func (p *DefaultIngestionPipeline) summarizeText(ctx context.Context, prompt str
 	sCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	resp, err := safecall.Infer(sCtx, p.provider, []types.Message{{Role: "user", Content: prompt}},
-		types.WithMaxTokens(maxTokens))
+		types.WithMaxTokens(maxTokens), types.WithThinkingMode(types.ThinkingDisabled), types.WithPurpose("rag_summary_tree"))
 	if err != nil || resp == nil {
 		slog.WarnContext(ctx, "rag_impl: summary Infer failed, skipping this summary level", "error", err)
 		return ""

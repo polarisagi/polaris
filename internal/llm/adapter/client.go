@@ -40,7 +40,7 @@ type OpenAIRequest struct {
 	Tools          []OpenAITool          `json:"tools,omitempty"`
 	StreamOptions  *OpenAIStreamOptions  `json:"stream_options,omitempty"`
 	// DeepSeek thinking mode 控制
-	// ReasoningEffort: "high" | "max"（ThinkingDisabled 时不发送）
+	// ReasoningEffort: "low" | "high" | "max"（ThinkingDisabled 时不发送）
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 	Thinking        *ThinkingConfig `json:"thinking,omitempty"`
 }
@@ -96,6 +96,7 @@ type OpenAIToolDefinition struct {
 // OpenAIResponse 表示一个完整的非流式响应。
 type OpenAIResponse struct {
 	ID      string         `json:"id"`
+	Model   string         `json:"model"`
 	Choices []OpenAIChoice `json:"choices"`
 	Usage   OpenAIUsage    `json:"usage"`
 }
@@ -113,6 +114,30 @@ type OpenAIUsage struct {
 	PromptTokensDetails *struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details,omitempty"`
+	// DeepSeek 在顶层报告缓存命中/未命中（api-docs guides/kv_cache），不填 prompt_tokens_details。
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+	// 推理 token（DeepSeek 思考模式 / OpenAI o 系列），已含在 completion_tokens 内。
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details,omitempty"`
+}
+
+// toUsage 把 OpenAI 兼容 usage 规范化为 types.Usage：InputTokens 为全部输入（含命中），
+// CacheHitTokens 取 OpenAI 的 prompt_tokens_details 或 DeepSeek 的顶层字段。
+// 此前只读前者，DeepSeek 的缓存命中与推理 token 一直记为 0。
+func (u *OpenAIUsage) toUsage() types.Usage {
+	out := types.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
+	if u.PromptTokensDetails != nil {
+		out.CacheHitTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if u.PromptCacheHitTokens > 0 {
+		out.CacheHitTokens = u.PromptCacheHitTokens
+	}
+	if u.CompletionTokensDetails != nil {
+		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	return out
 }
 
 // SendRequest 发送一个非流式的 HTTP 请求。
@@ -160,6 +185,10 @@ func translateRequest(req *types.InferRequest, supportsVision bool) *OpenAIReque
 
 	// ThinkingMode 路由：enabled 时强制 Temperature=0，DeepSeek 要求
 	switch req.ThinkingMode {
+	case types.ThinkingLow:
+		out.ReasoningEffort = "low"
+		out.Thinking = &ThinkingConfig{Type: "enabled"}
+		out.Temperature = 0
 	case types.ThinkingHigh:
 		out.ReasoningEffort = "high"
 		out.Thinking = &ThinkingConfig{Type: "enabled"}

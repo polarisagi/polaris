@@ -6,14 +6,23 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
-## 2026-09-25（ADR-0101 Token 经济：寒暄快路 / 规划级联 / 缓存稳定前缀 — 含**契约变更**）
+## 2026-09-25（ADR-0102 Token 经济增量：寒暄快路 / 直答合并 / 按失败成因升级 / 反思跳过 — 含**契约变更**）
 
-- **[契约] `metrics.SelectThinkingMode(replanCount, complexity, surpriseIndex)`**：第二参数由 `maxTaint` 改为 `TaskModel.Complexity`，污点不再驱动思考深度；新增 `metrics.SelectPlanModelPool`，规划池 general→reasoning 级联。新阈值 `m4_kernel.plan.reasoning_complexity`（0.7）。
-- **行为变更**：寒暄/致谢/告别跳过 Perceive LLM 与记忆召回（`fsm.ClassifyIntentWeight`，route=`phatic_bypass`）；短确认仍走 Perceive 但不召回长期记忆；Anthropic system 按消息分 block、首末块各一缓存断点；`SysEnvSnapshot` 去掉已用内存/磁盘剩余。
-- **行为变更（追加）**：简单任务（0<Complexity<`m4_kernel.reflect.skip_complexity`=0.4）首轮全部成功时跳过 Reflect LLM（route=`reflect_skipped`）；S_PLAN 文本工具目录只列名称，完整定义只走原生 tools，`LocalAdapter` 自行文本渲染。**新增不支持原生 tools 的适配器须同样渲染 `InferOptions.Tools`**。
-- **[契约] `fsm.TaskModel.Reply` / `StateContext.PreparedReply`**（ADR-0101 决策四 4b′）：Perceive 在 `NeedsTools=false` 时同次输出回复，Perceive→Respond 入边以确定性 Effect 发布，直答回合 1 次 LLM。新增到达 S_RESPOND 的入边**不得**消费 `PreparedReply`；新增绕过 `applyPerceiveResult` 的感知路径须保证回合起点清空仍生效。
-- **[契约] `metrics.SelectPlanTier(escalation, complexity, SI)`**（ADR-0101 决策六）取代 `SelectThinkingMode`/`SelectPlanModelPool`；**[契约] `fsm.RecordFailure(FailureKind)`**：新增重规划来源须按成因记录（安全/瞬时/观察—再规划不升级，能力类才升级），不得直接改 `sCtx.Escalation`。规划输出有内容但不可用时升级重试一次（修订 ADR-0098 决策七）；plan 契约新增 `escalate`。
-- 新增 prompt 段落时：稳定内容在前、易变内容在后，禁止在前缀写入时间戳/实时资源量/无序 map；新增 LLM 调用点须说明所用池与思考档的依据（ADR-0101 反例守护）。
+- **行为变更**：寒暄/致谢/告别跳过 Perceive LLM 与记忆召回（`fsm.ClassifyIntentWeight`，route=`phatic_bypass`）；短确认仍走 Perceive 但不召回长期记忆；Anthropic system 按消息分 block、首块（ADR-0101 决策四的稳定层）与末块各一缓存断点；`SysEnvSnapshot` 去掉已用内存/磁盘剩余。
+- **行为变更（追加）**：简单任务（0<Complexity<`m4_kernel.reflect.skip_complexity`=0.4）首轮全部成功时跳过 Reflect LLM（route=`reflect_skipped`）；S_PLAN 文本工具目录只列名称（收紧 ADR-0101 决策五的"名称 + 描述"），完整定义只走原生 tools，`LocalAdapter` 自行文本渲染。**新增不支持原生 tools 的适配器须同样渲染 `InferOptions.Tools`**。
+- **[契约] `fsm.TaskModel.Reply` / `StateContext.PreparedReply`**（ADR-0102 决策四 4b′）：Perceive 在 `NeedsTools=false` 时同次输出回复，Perceive→Respond 入边以确定性 Effect 发布，直答回合 1 次 LLM。新增到达 S_RESPOND 的入边**不得**消费 `PreparedReply`；新增绕过 `applyPerceiveResult` 的感知路径须保证回合起点清空仍生效。
+- **[契约] `metrics.SelectPlanTier(escalation, complexity, SI)`**（ADR-0102 决策六）取代 `SelectThinkingMode`（重规划不再一律升到 Max，ADR-0101 决策三的首轮档位与决策七的阶段池成为阶梯两端）；**[契约] `fsm.RecordFailure(FailureKind)`**：新增重规划来源须按成因记录（安全/瞬时/观察—再规划不升级，能力类才升级），不得直接改 `sCtx.Escalation`。规划输出有内容但不可用时升级重试一次（修订 ADR-0098 决策七）；plan 契约新增 `escalate`。
+- 新增 prompt 段落时：稳定内容在前、易变内容在后，禁止在前缀写入时间戳/实时资源量/无序 map；新增 LLM 调用点须说明所用池与思考档的依据（ADR-0102 反例守护）。
+
+## 2026-09-25（ADR-0101 Token 消耗治理 — 含**契约变更**）
+
+- **[契约] 新增后台 LLM 调用须显式指定思考档位**：DeepSeek 省略 thinking 即按 effort=high 计推理 token；机械性任务（摘要/抽取/过滤/画像）用 `types.ThinkingDisabled`。新增 `types.ThinkingLow`。
+- **[契约] `ImmutableCore.PrependToMessages` 输出稳定层 + 易变层两条 system 消息**：按请求变化的内容不得拼入第一条 system 消息（前缀缓存按消息整块匹配）。
+- **[阈值] `m4_kernel.thinking.{perceive,plan_initial,reflect,respond}`** = low/high/low/""（state.yaml），加载时校验。
+- **[契约] `llm_calls` 表（039）+ `types.WithPurpose`**：每次 Provider 调用由注册表记录包装落库；新增 LLM 调用点须标注用途。`ProviderRegistry.Get` 返回原始实例（类型断言用），路由使用的是记录包装。
+- **[阈值] `m4_kernel.model_pool.*`**：日常阶段默认 `default`（便宜档），仅 `plan_replan=reasoning`；未指定池的请求按成本档位由低到高择优。新增调用点不得固定走 `reasoning` 池。
+- **行为变更**：`self_improve.auto_curriculum` 开始生效（默认关）；`memory_consolidate` 改为回合终态触发一次；S_PLAN 文本工具目录不再嵌参数 schema。
+- 新增后台自动任务须有配置开关；新增会随请求变化的提示词片段须放在稳定前缀之后。
 
 ## 2026-09-25（ADR-0100 DeepSeek Harness 评审：上下文溢出与执行结果 spill — 含**契约变更**）
 

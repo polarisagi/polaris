@@ -148,7 +148,7 @@ func (a *Agent) executeDeterministicEffect(ctx context.Context, effect protocol.
 		return "", nil, true
 	}
 
-	// S_RESPOND 的确定性 Effect 只有一种来源：Perceive 已同次产出回复（ADR-0101 决策四 4b′）。
+	// S_RESPOND 的确定性 Effect 只有一种来源：Perceive 已同次产出回复（ADR-0102 决策四 4b′）。
 	// 正文在此以用户受众发布，与 LLM 回复路径经 doStreamInfer 发布的事件同形。
 	if a.sm.Current() == types.AgentStateRespond {
 		a.publishPreparedReply()
@@ -262,13 +262,6 @@ func (a *Agent) recordLLMFillEffectMemory(ctx context.Context, nextState types.S
 		}, a.outboxIdemKey(protocol.TopicEpisodicProject, "agent_session", a.sCtx.SessionID, "reflect"),
 			"reflection_completed")
 
-		// 触发 Episodic → Semantic 4 阶段记忆蒸馏（ConsolidationPipeline，M5 §4）
-		if a.sCtx.SessionID != "" {
-			a.emitOutbox(ctx, protocol.TopicMemoryConsolidate, "memory_consolidate",
-				map[string]string{"session_id": a.sCtx.SessionID},
-				a.outboxIdemKey(protocol.TopicMemoryConsolidate, "agent_session", a.sCtx.SessionID, "consolidate"),
-				"memory_consolidate")
-		}
 	}
 }
 

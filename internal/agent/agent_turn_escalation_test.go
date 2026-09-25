@@ -8,7 +8,7 @@ import (
 	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
-// ADR-0101 决策六：只有能力类失败计入升级。安全拒绝与瞬时故障换更贵的模型不改变结果。
+// ADR-0102 决策六：只有能力类失败计入升级。安全拒绝与瞬时故障换更贵的模型不改变结果。
 func TestFailureKindClassification(t *testing.T) {
 	cases := []struct {
 		name string

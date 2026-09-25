@@ -155,7 +155,9 @@ func (ir *InferenceRouter) tryPoolFallback(ctx context.Context, msgs []types.Mes
 		if err == nil && resp != nil {
 			ir.recordFailoverMetrics(ctx, entry, resp, start)
 			// 标记发生了 Pool 降级，让上层感知（如 SessionOrchestrator 发送系统通知）
-			resp.DegradedFromPool = originalPool
+			if isCapabilityDowngrade(originalPool) {
+				resp.DegradedFromPool = originalPool
+			}
 			slog.Info("llm_router: cross-pool degraded inference succeeded",
 				"original_pool", originalPool, "actual_pool", fallbackPool)
 			return resp, nil

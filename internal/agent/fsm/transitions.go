@@ -1,6 +1,7 @@
 package fsm
 
 import (
+	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"context"
@@ -8,7 +9,6 @@ import (
 	"log/slog"
 
 	"github.com/polarisagi/polaris/internal/agent/schemavalidate"
-	"github.com/polarisagi/polaris/internal/config"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/apperr"
 	"github.com/polarisagi/polaris/pkg/types"
@@ -134,8 +134,9 @@ func (sm *StateMachine) registerTransitions() {
 					},
 					OnFailure:      sm.onPerceiveFailure,
 					MaxRetry:       1,
-					ModelPool:      string(types.ModelPoolGeneral),
+					ModelPool:      config.CurrentThresholds().M4Kernel.ModelPoolPerceive,
 					ResponseFormat: &types.ResponseFormat{Type: "json_object"},
+					ThinkingMode:   phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingPerceive),
 				},
 			}, nil
 		},
@@ -264,8 +265,9 @@ func (sm *StateMachine) registerTransitions() {
 					},
 					OnFailure:      sm.onReflectFailure,
 					MaxRetry:       0,
-					ModelPool:      string(types.ModelPoolGeneral),
+					ModelPool:      config.CurrentThresholds().M4Kernel.ModelPoolReflect,
 					ResponseFormat: &types.ResponseFormat{Type: "json_object"},
+					ThinkingMode:   phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingReflect),
 				},
 			}, nil
 		},
@@ -396,9 +398,8 @@ func (sm *StateMachine) registerTransitions() {
 	})
 }
 
-// trySystem1Bypass 尝试短路 LLM 思考，直接命中已有技能并组装成验证态（GD-13-004）
 // trySkipReflect 简单任务首轮执行全部成功时以确定性 Effect 代替 Reflect LLM
-// （ADR-0101 决策四）。Reflect 的两个产出在此场景下价值最低：观察—再规划只对
+// （ADR-0102 决策四）。Reflect 的两个产出在此场景下价值最低：观察—再规划只对
 // "看到结果才知道下一步"的多步任务有意义，而 Complexity<阈值 的任务按 Perceive
 // 标尺就是"一两个显而易见的工具调用"；成功路径的 learnings 信息量也最低。
 // 回复阶段照常拿到执行结果，未达成时由 Respond 如实说明。
@@ -424,7 +425,7 @@ func (sm *StateMachine) trySkipReflect(sCtx *StateContext) protocol.Effect {
 }
 
 // tryPhaticBypass 寒暄/致谢/告别跳过 Perceive LLM 与记忆召回，直接进 S_RESPOND
-// （ADR-0101 决策一）。等价于 Perceive 以 NeedsTools=false 返回，但省掉一次 LLM
+// （ADR-0102 决策一）。等价于 Perceive 以 NeedsTools=false 返回，但省掉一次 LLM
 // 往返与一轮 episodic/reflection/RAG 检索（含 embedding 调用）。
 // 短确认（IntentAck）不走这里：它可能是对上一轮提议动作的授权，须经 Perceive 消解。
 func tryPhaticBypass(sCtx *StateContext) protocol.Effect {
@@ -446,6 +447,7 @@ func tryPhaticBypass(sCtx *StateContext) protocol.Effect {
 	}
 }
 
+// trySystem1Bypass 尝试短路 LLM 思考，直接命中已有技能并组装成验证态（GD-13-004）
 func (sm *StateMachine) trySystem1Bypass(ctx context.Context, sCtx *StateContext) protocol.Effect {
 	if !sCtx.HasPreMatch {
 		return nil

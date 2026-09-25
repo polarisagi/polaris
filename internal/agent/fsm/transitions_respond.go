@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/polarisagi/polaris/internal/config"
+
 	"github.com/polarisagi/polaris/internal/observability/metrics"
 
 	"github.com/polarisagi/polaris/internal/protocol"
@@ -18,7 +20,7 @@ import (
 // 这里只放 S_RESPOND 新增的入边与出边；拆文件是因为 transitions.go 已超 R7 行数上限。
 func (sm *StateMachine) registerRespondTransitions() {
 	// 直答：Perceive 判定 NeedsTools=false（S_PERCEIVE_DIRECT）。Perceive 已同次产出回复
-	// 时不再调 LLM（ADR-0101 决策四 4b′）；只有这条入边消费 PreparedReply。
+	// 时不再调 LLM（ADR-0102 决策四 4b′）；只有这条入边消费 PreparedReply。
 	sm.add(Transition{
 		From:    types.AgentStatePerceive,
 		Trigger: types.TriggerRespondReady,
@@ -118,10 +120,11 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 			return state, err
 		},
 		// 推理错误不重试：Router 已全量 failover（P-7），且流可能已推出部分 token。
-		OnFailure: onRespondFailure,
-		MaxRetry:  maxRetry,
-		ModelPool: string(types.ModelPoolGeneral),
-		Audience:  protocol.AudienceUser,
+		OnFailure:    onRespondFailure,
+		MaxRetry:     maxRetry,
+		ModelPool:    config.CurrentThresholds().M4Kernel.ModelPoolRespond,
+		Audience:     protocol.AudienceUser,
+		ThinkingMode: phaseThinking(config.CurrentThresholds().M4Kernel.ThinkingRespond),
 	}
 }
 
@@ -130,7 +133,7 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 // 空输出（既无正文也无工具调用，fill 为空）按 MaxRetry 自环重试：DeepSeek 思考模式
 // 挂载工具时偶发只输出思考链就以 stop 结束（ADR-0098 决策七），重试时关闭思考。
 //
-// 升级重试（ADR-0101 决策六，每回合至多一次）：规划产出不可用（无缓存 DAG 可复用）
+// 升级重试（ADR-0102 决策六，每回合至多一次）：规划产出不可用（无缓存 DAG 可复用）
 // 或规划模型自评超纲（escalate=true）时，按 RecordFailure 升级后在更高档位重试，
 // 而不是直接 S_PLAN_FAILED 丢掉整轮，或反过来一开始就让所有规划付 Pro 的价钱。
 func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
@@ -143,7 +146,7 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 	escalation := sCtx.Escalation
 	noThinking := sCtx.PlanRetryNoThinking
 	sCtx.Mu.RUnlock()
-	pool, thinking := metrics.SelectPlanTier(escalation, complexity, metrics.GlobalSurpriseIndex().Current())
+	pool, thinking, level := metrics.SelectPlanTier(escalation, complexity, metrics.GlobalSurpriseIndex().Current())
 	if noThinking {
 		// 空输出重试关闭思考：空输出的触发条件正是"思考模式 + 挂工具"（决策七实证），
 		// 原样重试只是再掷一次同一枚骰子。
@@ -162,7 +165,7 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 				slog.Warn("plan: empty output (no content, no tool calls), retrying", "attempt", sCtx.PlanAttempts)
 				return "S_PLAN_RETRY", nil
 			}
-			if pool != types.ModelPoolReasoning && planSelfEscalates(content) && sm.tryEscalatePlan(sCtx, FailureSelfEscalate) {
+			if level < 2 && planSelfEscalates(content) && sm.tryEscalatePlan(sCtx, FailureSelfEscalate) {
 				return "S_PLAN_RETRY", nil
 			}
 			state, err := parsePlanOnSuccess(sCtx, pCtx, content)
@@ -204,4 +207,11 @@ func planSelfEscalates(content []byte) bool {
 	}
 	raw := util.ExtractJSONBraces(string(content))
 	return json.Unmarshal([]byte(raw), &probe) == nil && probe.Escalate
+}
+
+// phaseThinking 把阶段思考档位配置转为 ThinkingMode；取值已在阈值加载时校验
+// （M4KernelThresholds.Validate），空串表示不下发、沿用 Provider 默认。
+func phaseThinking(v string) types.ThinkingMode {
+	m, _ := types.ParseThinkingMode(v)
+	return m
 }

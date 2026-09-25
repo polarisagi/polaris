@@ -81,7 +81,7 @@ func BuildPerceiveContext( //nolint:gocyclo
 	if sCtx.TaskModel != nil {
 		goal = sCtx.TaskModel.Goal
 	}
-	// ADR-0101 决策一：短确认（好的/ok/同意）的语义完全在对话历史里，长期记忆
+	// ADR-0102 决策一：短确认（好的/ok/同意）的语义完全在对话历史里，长期记忆
 	// 召回对它零信息增益，却要付一轮 episodic/反思/语义/RAG 检索（含 embedding）
 	// 以及随之膨胀的 prompt。只保留画像与下方的对话历史。
 	leanAck := fsm.ClassifyIntentWeight(intent) == fsm.IntentAck

@@ -32,6 +32,18 @@ func turnPhaseOf(s types.AgentState) types.TurnPhase {
 	}
 }
 
+// llmPurposeOf 把发起 LLM 调用时的 FSM 状态映射为 llm_calls.purpose（ADR-0101 决策六）。
+// S_VALIDATE 的 L3 看门狗不是回合阶段，单独命名。
+func llmPurposeOf(s types.AgentState) string {
+	if s == types.AgentStateValidate {
+		return "validate_watchdog"
+	}
+	if phase := turnPhaseOf(s); phase != "" {
+		return string(phase)
+	}
+	return "kernel"
+}
+
 // publishTurnPhase 内部阶段不再推 token 后，用户在首个回复 token 前只能靠阶段
 // 事件感知进度；否则一次"规划 + 执行"的回合在界面上是长时间的空白。
 func (a *Agent) publishTurnPhase(s types.AgentState) {
@@ -45,7 +57,7 @@ func (a *Agent) publishTurnPhase(s types.AgentState) {
 	})
 }
 
-// publishPreparedReply 发布 Perceive 同次产出的直答（ADR-0101 决策四 4b′）并消费之。
+// publishPreparedReply 发布 Perceive 同次产出的直答（ADR-0102 决策四 4b′）并消费之。
 // 事件形态与 doStreamInfer 的 AudienceUser 文本增量一致，session 侧无需区分来源。
 func (a *Agent) publishPreparedReply() {
 	a.sCtx.Mu.Lock()
@@ -139,10 +151,7 @@ func (a *Agent) abortTurn(ctx context.Context, err error) {
 	a.handleTerminalState(ctx, types.AgentStateFailed)
 }
 
-// validationFeedback 把 S_VALIDATE 的结构化拒绝翻译成"哪个工具、被哪层、为何拒绝"，
-// 供重规划回灌（ADR-0098 决策六）。节点 ID 对模型无意义（call_xx 每次重生成），
-// 必须换成工具名，模型才知道该避开什么。
-// validationFailureKind S_VALIDATE 拒绝的成因（ADR-0101 决策六）：只有 L0 结构错误计入升级。
+// validationFailureKind S_VALIDATE 拒绝的成因（ADR-0102 决策六）：只有 L0 结构错误计入升级。
 // 非 DAGValidationError（如 L1-Taint 包装错误、校验器缺失）按策略拒绝处理——升级模型不改变结论。
 func validationFailureKind(err error) fsm.FailureKind {
 	var ve *protocol.DAGValidationError
@@ -164,6 +173,9 @@ func executionFailureKind(err error) fsm.FailureKind {
 	return fsm.FailureToolError
 }
 
+// validationFeedback 把 S_VALIDATE 的结构化拒绝翻译成"哪个工具、被哪层、为何拒绝"，
+// 供重规划回灌（ADR-0098 决策六）。节点 ID 对模型无意义（call_xx 每次重生成），
+// 必须换成工具名，模型才知道该避开什么。
 func validationFeedback(plan *protocol.DAGPlan, err error) string {
 	var ve *protocol.DAGValidationError
 	if !errors.As(err, &ve) {
