@@ -388,7 +388,7 @@ func (p *PersistentSandbox) reapIdleSessions() {
 	p.mu.Lock()
 	var toReap []*liveSession
 	for id, sess := range p.sessions {
-		if !sess.alive() || sess.idleSince() > p.cfg.IdleTTL {
+		if !sess.alive() || sess.idle(p.cfg.IdleTTL) {
 			toReap = append(toReap, sess)
 			delete(p.sessions, id)
 		}

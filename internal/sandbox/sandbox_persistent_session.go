@@ -39,11 +39,19 @@ type liveSession struct {
 	dead   atomic.Bool
 
 	lastUsedNano atomic.Int64
-	createdAt    time.Time
+	// inFlight 进行中（含排队等 execMu）的 exec 数。lastUsedNano 只在 exec 前后刷新，
+	// 单次执行超过 IdleTTL 时回收器会误判空闲并在执行中途 kill 进程；回收器据此跳过。
+	inFlight  atomic.Int32
+	createdAt time.Time
 }
 
 func (s *liveSession) touch() {
 	s.lastUsedNano.Store(time.Now().UnixNano())
+}
+
+// idle 会话无进行中 exec 且距上次使用已超过 ttl。
+func (s *liveSession) idle(ttl time.Duration) bool {
+	return s.inFlight.Load() == 0 && s.idleSince() > ttl
 }
 
 func (s *liveSession) idleSince() time.Duration {
@@ -83,6 +91,8 @@ type sessionExecResult struct {
 // 负责在收到 error 后从注册表移除并 kill 该会话，下一次调用会拿到全新会话，
 // 不会让一个协议已经"错位"的旧会话带病继续使用。
 func (s *liveSession) exec(ctx context.Context, code string) (*sessionExecResult, error) {
+	s.inFlight.Add(1)
+	defer s.inFlight.Add(-1)
 	s.execMu.Lock()
 	defer s.execMu.Unlock()
 
