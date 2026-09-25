@@ -249,13 +249,7 @@ func (c *OpenAICompatibleClient) SendStreamRequest(ctx context.Context, cancel c
 
 			var currentUsage types.Usage
 			if chunk.Usage != nil {
-				currentUsage = types.Usage{
-					InputTokens:  chunk.Usage.PromptTokens,
-					OutputTokens: chunk.Usage.CompletionTokens,
-				}
-				if chunk.Usage.PromptTokensDetails != nil {
-					currentUsage.CacheHitTokens = chunk.Usage.PromptTokensDetails.CachedTokens
-				}
+				currentUsage = chunk.Usage.toUsage()
 				// API 返回的精确值优先；更新累计输出 token，供后续 cancel 补偿用
 				accumulatedOutputTokens = chunk.Usage.CompletionTokens
 				completionTokens = chunk.Usage.CompletionTokens

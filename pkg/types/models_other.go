@@ -155,6 +155,11 @@ func WithThinkingMode(mode ThinkingMode) InferOption {
 	return func(o *InferOptions) { o.ThinkingMode = mode }
 }
 
+// WithPurpose 标注调用用途，写入 llm_calls 供按用途统计 token 与费用。
+func WithPurpose(purpose string) InferOption {
+	return func(o *InferOptions) { o.Purpose = purpose }
+}
+
 // WithMaxTokens 设置最大输出 token 数。
 func WithMaxTokens(n int) InferOption {
 	return func(o *InferOptions) { o.MaxTokens = n }

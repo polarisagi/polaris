@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -231,5 +232,25 @@ func TestSSEParser_ToolCallsAtEOFNotReportedAsEmpty(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("应补发 1 个工具调用，实际 %d", calls)
+	}
+}
+
+// ThinkingLow 须以 reasoning_effort=low 下发：结构化判定阶段依赖它压低推理 token。
+func TestTranslateRequest_ThinkingLow(t *testing.T) {
+	out := translateRequest(&types.InferRequest{ThinkingMode: types.ThinkingLow}, false)
+	if out.ReasoningEffort != "low" || out.Thinking == nil || out.Thinking.Type != "enabled" {
+		t.Fatalf("want effort=low enabled, got effort=%q thinking=%+v", out.ReasoningEffort, out.Thinking)
+	}
+}
+
+// DeepSeek 在 usage 顶层报告缓存命中，推理 token 在 completion_tokens_details；二者都须采集。
+func TestOpenAIUsage_DeepSeekFields(t *testing.T) {
+	var u OpenAIUsage
+	if err := json.Unmarshal([]byte(`{"prompt_tokens":1000,"completion_tokens":300,"prompt_cache_hit_tokens":800,"prompt_cache_miss_tokens":200,"completion_tokens_details":{"reasoning_tokens":250}}`), &u); err != nil {
+		t.Fatal(err)
+	}
+	got := u.toUsage()
+	if got.InputTokens != 1000 || got.CacheHitTokens != 800 || got.OutputTokens != 300 || got.ReasoningTokens != 250 {
+		t.Fatalf("usage = %+v", got)
 	}
 }

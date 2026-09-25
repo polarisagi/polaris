@@ -514,6 +514,8 @@ func bootSubstrate(ctx context.Context, stop context.CancelFunc) (*SubstrateBund
 	}
 
 	reg := llm.NewProviderRegistry(cfg.Thresholds.M1Router)
+	// 每次 LLM 调用写一行 llm_calls（用途/模型/token/费用，ADR-0101 决策六）。
+	reg.InjectUsageRecorder(ctx, repo.NewSQLiteLLMCallRepository(store.DB()))
 	// env var 中的 API Key 写入 DB（INSERT OR IGNORE），由 LoadProvidersFromDB 统一加载。
 	provider.SeedProvidersFromEnv(ctx, repo.NewSQLiteProviderRepository(store.DB()).WithVault(vault))
 
