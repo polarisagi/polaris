@@ -2,8 +2,11 @@ package updater
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/polarisagi/polaris/pkg/apperr"
 )
 
 // ── New / GetVersionInfo ───────────────────────────────────────────────────
@@ -81,8 +84,25 @@ func TestTriggerUpdate_AlreadyInProgress(t *testing.T) {
 	}
 }
 
-func TestTriggerUpdate_AcceptsIdleStatus(t *testing.T) {
+// failingClient 模拟已注入但出站全部失败的 SafeDialer client（mockTransport
+// handler 为空时一律返回错误），让 doUpdate 走下载失败分支而不触网。
+func failingClient() *http.Client {
+	return &http.Client{Transport: &mockTransport{}}
+}
+
+func TestTriggerUpdate_NilClientRejected(t *testing.T) {
 	m := New("v1.0.0", "", "", nil)
+	err := m.TriggerUpdate(context.Background(), "v1.7.6")
+	if !apperr.IsCode(err, apperr.CodeNetworkUnavailable) {
+		t.Fatalf("expected NETWORK_UNAVAILABLE for nil client, got: %v", err)
+	}
+	if st := m.GetVersionInfo().UpdateStatus; st != StatusIdle {
+		t.Errorf("status must stay idle when rejected, got %s", st)
+	}
+}
+
+func TestTriggerUpdate_AcceptsIdleStatus(t *testing.T) {
+	m := New("v1.0.0", "", "", failingClient())
 	// 注入 restartFn 防止 os.Exit；doUpdate 会失败（无网络），但 TriggerUpdate 本身应成功
 	m.SetRestartFn(func() {})
 	err := m.TriggerUpdate(context.Background(), "v1.7.6")
@@ -101,7 +121,7 @@ func TestTriggerUpdate_AcceptsIdleStatus(t *testing.T) {
 }
 
 func TestTriggerUpdate_AcceptsErrorStatus(t *testing.T) {
-	m := New("v1.0.0", "", "", nil)
+	m := New("v1.0.0", "", "", failingClient())
 	m.setError("previous failure")
 	m.SetRestartFn(func() {})
 	// Error 状态下允许重试
