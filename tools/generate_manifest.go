@@ -39,7 +39,8 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if !info.IsDir() && filepath.Ext(path) == ".go" {
+			// 与启动校验端共用同一判定（排除 _test.go），见 config.IsKernelSourceFile
+			if !info.IsDir() && config.IsKernelSourceFile(path) {
 				f, err := os.Open(path)
 				if err != nil {
 					return err

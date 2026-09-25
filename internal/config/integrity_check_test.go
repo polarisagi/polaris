@@ -163,3 +163,49 @@ func TestHashPackageDir(t *testing.T) {
 		t.Errorf("Hash mismatch. Expected %s, got %s", expectedHash, manifest[testFile])
 	}
 }
+
+// 负向用例：_test.go 不计入清单。生成端与校验端共用 IsKernelSourceFile，
+// 若任一端回退为"所有 .go"，此处断言即失败。
+func TestHashPackageDir_SkipsTestFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "kernel.go")
+	os.WriteFile(src, []byte("package k"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "kernel_test.go"), []byte("package k"), 0644)
+
+	manifest := make(map[string]string)
+	if err := hashPackageDir(tmpDir, manifest); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if len(manifest) != 1 {
+		t.Fatalf("Expected only kernel.go in manifest, got: %v", manifest)
+	}
+	if _, ok := manifest[src]; !ok {
+		t.Errorf("Expected %s in manifest, got: %v", src, manifest)
+	}
+}
+
+// 源码模式下新增/修改测试文件不得触发完整性失败（测试代码不进二进制）。
+func TestVerifyKernelIntegrity_DevMode_IgnoresTestFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWD, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(originalWD)
+
+	pkgs := ImmutableKernelPackages()
+	for _, pkg := range pkgs {
+		os.MkdirAll(filepath.Join(tmpDir, pkg), 0755)
+	}
+	os.WriteFile(filepath.Join(tmpDir, pkgs[0], "kernel.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, pkgs[0], "kernel_test.go"), []byte("package main"), 0644)
+
+	h := sha256.Sum256([]byte("package main"))
+	origManifest := kernelManifestJSON
+	defer func() { kernelManifestJSON = origManifest }()
+	kernelManifestJSON, _ = json.Marshal(map[string]string{
+		filepath.Join(pkgs[0], "kernel.go"): hex.EncodeToString(h[:]),
+	})
+
+	if err := VerifyKernelIntegrity(); err != nil {
+		t.Errorf("Expected test file to be ignored by integrity check, got: %v", err)
+	}
+}
