@@ -130,6 +130,11 @@ var (
 	// （internal/agent/schemavalidate，GR-4-005 复核修复）。持续增长说明 Prompt 模板与
 	// LLM 实际产出的结构存在系统性偏差，或模型幻觉率异常，值得单独告警而非静默降级。
 	GlobalSchemaValidationFailureTotal atomic.Int64
+
+	// GlobalContextOverflowRecoveryTotal Agent 因 ErrContextOverflow 修剪请求后重试的次数
+	// （internal/agent/agent_overflow_recovery.go）。持续增长说明热路径压缩阈值与实际
+	// Provider 窗口脱节（如小窗口本地模型），应调小 ContextWindowManager 容量。
+	GlobalContextOverflowRecoveryTotal atomic.Int64
 )
 
 // ── InitMetrics ─────────────────────────────────────────────────────────────

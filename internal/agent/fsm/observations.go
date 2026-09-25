@@ -7,11 +7,15 @@ import (
 	"github.com/polarisagi/polaris/internal/prompt"
 	"github.com/polarisagi/polaris/internal/security/taint"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 const (
-	maxObservations     = 4
-	maxObservationBytes = 4096
+	maxObservations = 4
+	// ObservationMaxBytes 单轮观察注入规划/回复 prompt 的字节上限。执行结果超过它时由
+	// agent 先卸载全文并在预览首行给出 read_tool_ref 提示（agent_execute_result.go），
+	// 故截断后仍可取回。
+	ObservationMaxBytes = 4096
 )
 
 // RecordObservation 记录一轮执行结果（ADR-0098 决策八）。
@@ -24,9 +28,7 @@ func (s *StateContext) RecordObservation(result string) {
 	if result == "" {
 		return
 	}
-	if len(result) > maxObservationBytes {
-		result = strings.ToValidUTF8(result[:maxObservationBytes], "") + "\n...[truncated]"
-	}
+	result = util.ElideMiddle(result, ObservationMaxBytes)
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 	s.Observations = append(s.Observations, result)

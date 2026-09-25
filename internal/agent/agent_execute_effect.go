@@ -334,6 +334,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 			// （见 agent_context_compaction.go 顶部注释），必须在 PII tokenize
 			// 之前压缩——压缩后消息更少，tokenize 扫描量也相应减少。
 			reqMsgs = a.hotPathCompactIfNeeded(ctx, reqMsgs)
+			preTokenizeMsgs := reqMsgs
 			reqMsgs, err = a.tokenizeMessagesForLLM(ctx, reqMsgs)
 			if err != nil {
 				return EffectResult{Err: apperr.Wrap(apperr.CodeInternal, "agent: failed to tokenize messages, fail-closed", err)}
@@ -379,12 +380,7 @@ func (a *Agent) executeEffect(ctx context.Context, effect protocol.Effect) Effec
 				resp = reconstructReplayResponse(call.Response)
 				inferErr = nil
 			} else {
-				ch, streamErr := safecall.StreamInfer(ctx, a.provider, reqMsgs, inferOpts...)
-				if streamErr != nil {
-					inferErr = streamErr
-				} else {
-					resp, inferErr = a.doStreamInfer(ctx, ch, llmEff.Audience)
-				}
+				resp, reqMsgs, inferErr = a.streamInferWithOverflowRecovery(ctx, preTokenizeMsgs, reqMsgs, inferOpts, llmEff.Audience)
 			}
 
 			if inferErr != nil {

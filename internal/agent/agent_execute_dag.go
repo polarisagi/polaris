@@ -16,6 +16,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/polarisagi/polaris/internal/action"
+	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/observability/trace"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/internal/security/policy"
@@ -530,10 +531,11 @@ func (a *Agent) runExecuteDAG(ctx context.Context) error { //nolint:gocyclo
 		// （下游反思阶段 Prompt 依赖 ExecuteResult 获知完整执行结果）。
 		raw = mergeResumedExecuteResult(priorExecuteResult, raw)
 	}
-	a.sCtx.ExecuteResult = truncateExecResult(a.sCtx.SessionID, raw)
+	view := a.spillExecResult(ctx, raw)
+	a.sCtx.ExecuteResult = view.render(maxExecResultBytes)
 	// 观察—再规划（ADR-0098 决策八）：ExecuteResult 每轮覆盖，下一轮规划与最终回复
-	// 需要本回合的全部观察。
-	a.sCtx.RecordObservation(string(a.sCtx.ExecuteResult))
+	// 需要本回合的全部观察。按观察上限单独投影，超限时预览首行带取回提示。
+	a.sCtx.RecordObservation(string(view.render(fsm.ObservationMaxBytes)))
 	// 单次消费：清空 CompletedNodeIDs，防止同一 Agent 实例后续正常轮次
 	// （非恢复）误用本轮已经合并过的 PreCompletedNodes/priorExecuteResult。
 	a.sCtx.CompletedNodeIDs = nil
