@@ -188,6 +188,8 @@ Taint 统计监控: [SurpriseIndex] gauge taint.high_ratio, 超阈值告警不�
 - 条件: 用户 `/approve` 命令确认
 - 结果: `data.Level = TaintUserReviewed`, `ApprovedBy = "user"`
 
+  > 2026-09-25 追记：交互对话中由 S_VALIDATE L1_taint 拦截触发（`CheckpointTaintReview`），以对话内审批卡片代替 `/approve` 命令；凭证为按节点参数字节哈希铸造的 TaintExemptionToken（ExemptionVault，每 Agent 多枚）。TaintMedium write_network 拦截同样适用。见 ADR-0098 决策十。
+
 **SanitizeByDeterministicTransform**:
 - 条件: 数据经纯函数转换
 - 结果: `data.Level = min(Level-1, TaintMedium)`

@@ -6,6 +6,13 @@
 
 格式：`YYYY-MM-DD | 文件 | 变更摘要`
 
+## 2026-09-25（ADR-0098 决策十 回合内人工审批 / 决策七追记 — 含**契约变更**）
+
+- **[契约] `types.AgentStreamEventApproval` + `AgentStreamEvent.DeadlineNs`**：回合内阻塞式 HITL 推给对话流，session 映射 `status{type:"approval_required", id, tool, input, deadline_ns}`；Agent 发起 HITL 一律经 `promptHITLInTurn`，不得直调 `hitl.Prompt` 使对话用户不可见。
+- **[契约] `ExemptionVault.Lookup(agentID, content)`**：每 Agent 多枚令牌、按内容哈希匹配（原 `Lookup(agentID)` 单枚覆盖写移除）。
+- **安全接线**：S_VALIDATE L1_taint 拦截发起 `CheckpointTaintReview`，批准后重新校验；TaintMedium write_network 同样查询复核豁免（M11 §2.5/§3）。
+- **行为变更**：S_PLAN 空输出重试改用 `ThinkingDisabled`；DeepSeek 适配器对显式 `ThinkingDisabled` 发送 `thinking.type=disabled`（此前未生效，服务端默认开启思考）。
+
 ## 2026-09-25（ADR-0099 Embedding 调度 / ADR-0098 决策五～九 — 含**契约变更**）
 
 - **[契约] `search.Embedder.Embed(ctx, text)`**（ADR-0099）：调用方 ctx 贯穿到下游 HTTP；新增实现须遵守调用方截止时间，无上游 ctx 的调用点显式传 `context.Background()` 并注释原因。EmbeddingBatcher 改为 High/Low 独立通道，阈值 `m1_router.embed.*`。

@@ -79,6 +79,8 @@ S_VALIDATE 拒绝或 S_EXECUTE 失败后进入 S_REPLAN，此前重规划 prompt
 - `m4_kernel.max_steps` 10 → 24：步数按回合内 FSM 触发计。S_RESPOND 使完整工具回合为 7 步，上限 10 使第 2 次重规划即被 MAX_STEPS 截断，ReplanGuard（3 次）形同虚设；上界应由 ReplanGuard 决定：7 + 观察循环 2×5（决策八）+ 校验失败 1×3 + 空输出重试 2 + 耗尽转回复 1 = 23 → 24。
 - MAX_STEPS 截断经 `abortTurn` 收尾（此前 ForceState 后直接返回，订阅方等不到 task_done 挂到超时，2026-09-25 实测）。
 
+> 2026-09-25 追记（空输出重试关闭思考）：上线后空 Plan 仍偶发"重试后依然为空 → S_PLAN_FAILED"。新事实两条：(1) 用户输入恒 TaintHigh，`SelectThinkingMode` 对首轮规划恒返回 ThinkingMax，原样重试是在同一触发条件下再试一次；(2) DeepSeek 省略 `thinking` 字段即默认开启思考（effort=high，api-docs.deepseek.com guides/thinking_mode），`translateRequest` 的"不发送即关闭"对它不成立——`ThinkingDisabled` 在 DeepSeek 上从未生效。处置：S_PLAN 空输出重试改用 `ThinkingDisabled`（`planEffect`，`PlanAttempts>0`）；DeepSeek 适配器对显式 `ThinkingDisabled` 发送 `thinking.type=disabled`，未指定（空串）保持服务端默认。副作用：经 Router 且未指定思考档的调用（`protocol.ApplyInferOptions` 默认 `ThinkingDisabled`）在 DeepSeek 上变为真正不思考，这是该枚举的设计语义，此前的"默认 high"是适配器缺陷。门控：`TestPlanEffect_RetryDisablesThinking`、`TestDisableDeepSeekThinking`（注入原缺陷均报红）。决策九"规划阶段本身的失败走 S_FAILED"不变。
+
 ### 决策八：观察—再规划循环
 
 一轮执行的结果不足以达成目标时（反思 `GoalAchieved` **显式为 false**），回到规划阶段继续，而不是带着不完整结果硬写回复（2026-09-25 实测：回复阶段模型因信息不足输出 `<tool_calls>` 标记试图继续调用工具）。
@@ -93,6 +95,16 @@ S_VALIDATE 拒绝或 S_EXECUTE 失败后进入 S_REPLAN，此前重规划 prompt
 
 - `StateContext.TurnDegraded=true`：回合以对话方式结束，但任务结果、漂移分与终态回调按**失败**计，指标不被"有回复"美化。
 - S_FAILED 保留给内核错误（`abortTurn`）、KillSwitch、预算硬上限、感知/规划/回复阶段本身的失败。
+
+### 决策十：回合内人工审批经对话流呈现
+
+S_VALIDATE L1_taint 拦截（用户输入恒 TaintHigh，由其派生参数的非只读工具必然被拦，ADR-0007）的既定转义路径是 SanitizeByUserReview（M11 §2.5），但此前 S_VALIDATE 从不发起复核，回合只能"解释为什么不能做"；Agent 发起的其余 HITL（盲区、出口污点、设备操控）只在自动化页轮询可见，对话里的用户看不到，回合挂到超时。
+
+- **发起**：`validateWithTaintReview`（agent_taint_review.go）在 L1_taint 节点级拦截时发起 `CheckpointTaintReview`，`ExemptionFieldContent` = 节点参数原始字节；批准后重新校验。每节点每回合至多送审一次（批准无效不空转），同一工具+参数被拒后本回合不再询问（拒绝原因写入 ReplanFeedback，模型改道或经 S_PLAN_EMPTY 转回复说明）。未装配 HITL 或 ReviewChecker 时不发起（批准无从生效）。
+- **呈现**：`types.AgentStreamEventApproval`（Content=checkpoint ID，ToolName/ToolInput/DeadlineNs）→ session 映射 `status{type:"approval_required"}` → Web 对话就地审批卡片 → `POST /v1/approvals/{id}/resolve`。事件只负责可见性，裁决唯一通道仍是 HITL 网关；四类 Agent 发起的 HITL 统一经 `promptHITLInTurn`。
+- **安全边界不变**：放行凭证是按参数字节哈希铸造的豁免令牌（HE-2），参数变一个字节即不匹配；`TaintLevel>=Medium` 超时一律拒绝（`resolveTimeoutAction`），信任评分降级不适用；Cedar / 能力令牌 / 执行闸门照常复核。
+- **ExemptionVault 每 Agent 多枚**（按内容哈希匹配，上限 16，最旧先淘汰）：原"每 Agent 一枚覆盖写"使多节点逐个批准时后者冲掉前者，审批永不收敛。
+- **TaintMedium write_network 同样查询复核豁免**：M11 §3 规定其转义路径为 SanitizeByUserReview，此前只有 TaintHigh 查询，Medium 拦截即使批准也无从放行。
 
 ## 后果
 
