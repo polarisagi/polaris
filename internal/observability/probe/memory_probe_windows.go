@@ -34,10 +34,7 @@ var (
 
 // probeOSMemory 读取 Windows 物理内存总量与可用量。
 //
-// [2026-09-22 实现] 此前本文件直接 `return fallbackMemoryProbe()`——那条兜底会
-// 硬编码 "假设总内存 8GB" 并用 `m.Sys - m.HeapAlloc`（Go 运行时自身的 arena 会计，
-// 与系统内存无关）充当可用量。于是 Windows 上的 Tier 分级、FeatureGate 硬件门控、
-// ResourceGovernor 准入判定全部建立在两个虚构数字上。
+// 经 LazyDLL 绑定 kernel32（纯 Go，免 CGO）；失败才退回 fallbackMemoryProbe 的保守估计。
 func probeOSMemory() (total uint64, available uint64) {
 	var st memoryStatusEx
 	st.Length = uint32(unsafe.Sizeof(st))

@@ -10,12 +10,7 @@ import (
 //   - darwin  sysctl vm.loadavg 的 1 分钟负载 ÷ 逻辑核数（压力代理值，见该文件注释）
 //   - windows GetSystemTimes 的 idle/kernel/user 增量（真实占用率）
 //
-// [2026-09-22] 此前全系统只有 internal/automation 里一个私有 cpuSampler：
-// 只实现了 Linux 的 /proc/stat，其余平台一律降级为"goroutine 数量启发式"
-// （>100 个 goroutine 就返回固定值 80.0）。Polaris 常驻 goroutine 本就远超 100，
-// 于是 macOS/Windows 上该探针恒定返回 80.0，而 ResourceGovernor 的判据恰好是
-// `cpuUsage > cpu_l1_pct(80.0)`——严格大于，差一点点就全线拒绝服务，纯属侥幸。
-// 探针归口到本包（CLAUDE.md：probe/ = 硬件与内存探针），供任意调用方复用。
+// 替代原 automation 私有 cpuSampler：它在非 Linux 平台以 goroutine 数量估算，恒返回 80.0。
 
 // CPUSampler 带 1 秒缓存的 CPU 占用率采样器。
 //

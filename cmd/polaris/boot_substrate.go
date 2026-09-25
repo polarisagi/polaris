@@ -906,9 +906,7 @@ func configFilePath() string {
 // 拿到 release 才执行、用完立即 release；拿不到就跳过本轮，等下个 tick 再试。
 // 治理器缺席（极简装配/测试）时恒放行，保持"治理是增强而非前置依赖"。
 //
-// [2026-09-22] 接线背景见 automation.ResourceGovernor.AdmitBackground 注释：
-// 此前后台工作完全不受限，清库重启后 148 个扩展的向量回填 + 模型下载 + 知识
-// 连接器全量同步同时抢占本地嵌入引擎，把交互式检索挤到连续 30 秒超时。
+// 背景与判据见 automation.ResourceGovernor.AdmitBackground。
 func admitBackground(sb *SubstrateBundle, work string) (release func(), ok bool) {
 	if sb == nil || sb.ResourceGov == nil {
 		return func() {}, true

@@ -33,12 +33,8 @@ var (
 
 // processPeakRSSBytes 返回本进程的峰值工作集（等价于 Linux 的 VmHWM）。
 //
-// [2026-09-22 实现] 此前本文件返回 runtime.MemStats.Sys，注释写明
-// "GetProcessMemoryInfo 需 CGO/syscall 绑定 psapi.dll，超出本次范围"。实际上
-// LazyDLL 绑定是纯 Go 的（CGO_ENABLED=0 照常可用），而 MemStats.Sys 只反映 Go
-// 运行时自己保留的地址空间，既不含 cgo/FFI 侧（Rust substrate dylib）的占用，
-// 也不是峰值——M11 §5.3 Tier3 本地模型内存守卫正是靠这个值判断"再加载一个模型
-// 会不会把机器打爆"，读数偏低会让守卫错误放行。
+// 不能用 runtime.MemStats.Sys：它只含 Go 运行时保留的地址空间、不含 FFI 侧且不是
+// 峰值，M11 §5.3 本地模型内存守卫据此会错误放行。LazyDLL 绑定 psapi 为纯 Go。
 func processPeakRSSBytes() uint64 {
 	var pmc processMemoryCounters
 	pmc.CB = uint32(unsafe.Sizeof(pmc))
