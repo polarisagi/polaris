@@ -5,15 +5,15 @@ package agent
 // 本文件收敛 DAG 执行结果的聚合/截断/污点计算，纯搬运无行为变更。
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"time"
 
+	"github.com/polarisagi/polaris/internal/agent/fsm"
 	"github.com/polarisagi/polaris/internal/protocol"
 	"github.com/polarisagi/polaris/pkg/types"
+	"github.com/polarisagi/polaris/pkg/util"
 )
 
 // mergeResumedExecuteResult 合并崩溃前快照的聚合结果（prior）与本次续跑新
@@ -88,31 +88,48 @@ func aggregateDAGResults(results []protocol.NodeResult) []byte {
 // maxExecResultBytes 注入 LLM 的工具执行结果最大字节数（≈ 2000 token × 4 bytes/token）。
 const maxExecResultBytes = 8000
 
-// truncateExecResult 截断过长的执行结果，超限部分落盘并返回 log_ref 占位符。
-// 落盘路径：~/.polarisagi/polaris/logs/exec_results/<logID>.txt
-// LLM 收到：原文（≤8KB）或 <log_ref id="<logID>" bytes="<N>" /> 提示符（>8KB）
-func truncateExecResult(sessionID string, raw []byte) []byte {
-	if len(raw) <= maxExecResultBytes {
-		return raw
-	}
+// execResultView 一轮 DAG 执行结果的模型可见投影。ExecuteResult（≤8KB，供反思/回复）
+// 与观察（≤4KB，供下一轮规划）按各自上限截断，但共享同一份卸载全文。
+type execResultView struct {
+	raw []byte
+	// ref 是取回全文的 read_tool_ref 调用提示；空串表示全文未保留。
+	ref string
+}
 
-	logID := fmt.Sprintf("%s-%d", sessionID, time.Now().UnixNano())
-	logDir := filepath.Join(os.ExpandEnv("$HOME"), ".polarisagi", "polaris", "logs", "exec_results")
-	// 创建目录（best-effort，失败不阻断）
-	if err := os.MkdirAll(logDir, 0700); err == nil {
-		logPath := filepath.Join(logDir, logID+".txt")
-		if wErr := os.WriteFile(logPath, raw, 0600); wErr != nil {
-			slog.Warn("agent_execute_result: write log file failed", "path", logPath, "err", wErr)
-		}
+// spillExecResult 超过观察上限的结果把全文卸载到任务工作区（与热路径 Stage 1、
+// 网关压缩共用 ToolRefOffloader），预览首行给出 read_tool_ref 调用提示。
+//
+// 此前超限结果写到 logs/exec_results/<session>-<纳秒>.txt，只回给模型一个
+// log_ref id：没有任何工具能按该 id 读回（read_tool_ref 只读工作区 tool_refs/），
+// 模型被告知"见日志"却无从取回；文件名可预测且非独占写入。卸载失败时如实声明
+// 全文未保留，不给出取不回的引用。
+func (a *Agent) spillExecResult(ctx context.Context, raw []byte) execResultView {
+	v := execResultView{raw: raw}
+	if len(raw) <= fsm.ObservationMaxBytes || a.toolOffloader == nil {
+		return v
 	}
+	taskID := a.memoryPartitionKey()
+	id, err := a.toolOffloader.Offload(ctx, taskID, raw)
+	if err != nil {
+		slog.WarnContext(ctx, "agent: exec result offload failed, preview only",
+			"session", a.sCtx.SessionID, "bytes", len(raw), "err", err)
+		return v
+	}
+	v.ref = fmt.Sprintf("read_tool_ref(task_id=%q, id=%q)", taskID, id)
+	return v
+}
 
-	// 截取前 512 字节作为内联预览，其余引用 log_ref
-	preview := raw[:512]
-	ref := fmt.Sprintf(
-		"<log_ref id=%q bytes=%d />\n[Preview]\n%s\n[...truncated, see log]",
-		logID, len(raw), preview,
-	)
-	return []byte(ref)
+// render 返回不超过 limit 字节的投影：未超限原样返回；超限时首行声明总长与取回方式，
+// 其后为首尾保留的预览（首行放在最前，任何后续的头部截断都不会丢掉取回提示）。
+func (v execResultView) render(limit int) []byte {
+	if len(v.raw) <= limit {
+		return v.raw
+	}
+	header := fmt.Sprintf("[output truncated: %d bytes total; full output not retained]\n", len(v.raw))
+	if v.ref != "" {
+		header = fmt.Sprintf("[output truncated: %d bytes total; full output: %s]\n", len(v.raw), v.ref)
+	}
+	return []byte(header + util.ElideMiddle(string(v.raw), limit-len(header)))
 }
 
 // maxNodeTaintLevel 计算 protocol.DAGPlan 中所有节点的最高污点等级。

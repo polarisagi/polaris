@@ -28,6 +28,7 @@ func simpleCounters() []counterSpec {
 		{"polaris.factuality.judge_unavailable_total", "Factuality judge unavailable count", &GlobalFactualityJudgeUnavailableTotal},
 		{"polaris.blind_zone.routing_total", "Forced System2 escalations due to BlindZone detection", &GlobalBlindZoneRoutingTotal},
 		{"polaris.agent.schema_validation_failure_total", "LLMFillEffect responses failing SchemaRef validation", &GlobalSchemaValidationFailureTotal},
+		{"polaris.agent.context_overflow_recovery_total", "LLM requests pruned and retried after context overflow", &GlobalContextOverflowRecoveryTotal},
 		{"polaris.agent.skill_cache_hit_total", "Skill cache hits in effect execution", &GlobalSkillCacheHitTotal},
 		{"polaris.agent.replan_ext_activation_degraded_total", "S_REPLAN extension activation degraded after retries exhausted", &GlobalReplanExtActivationDegradedTotal},
 		{"polaris.orchestrator.checkpoint_write_failures_total", "Debate/StateGraph checkpoint write failures", &GlobalCheckpointWriteFailuresTotal},
