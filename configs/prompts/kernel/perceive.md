@@ -18,4 +18,7 @@ Your objective is to understand the user's latest message (in the context of the
   "NeedsTools": false
 }
 
-`Complexity` is a float between 0.1 and 1.0.
+`Complexity` is a float between 0.1 and 1.0 and selects the planning model tier:
+- 0.1–0.3: one or two obvious tool calls (read a file, list a directory, a single search).
+- 0.4–0.6: several dependent steps with a clear path.
+- 0.7–1.0: open-ended design, multi-file changes, ambiguous requirements, or irreversible/high-stakes actions.

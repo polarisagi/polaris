@@ -112,15 +112,20 @@ func (sm *StateMachine) respondEffect(sCtx *StateContext) protocol.LLMFillEffect
 // 不在此重试——那是契约违反，交给既有的缓存复用 / S_PLAN_FAILED 语义。
 func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 	const maxRetry = 1
-	originTaint := types.TaintMedium
-	if lv := sCtx.RawIntentTS.Source.OriginTaintLevel; lv != 0 {
-		originTaint = lv
+	// ADR-0101 决策二：便宜池先行、失败再升级。复杂度缺失（Perceive 未解析/寒暄旁路）
+	// 按 0 处理——走便宜池；真不够用会以校验失败/目标未达成进入重规划，届时升级。
+	var complexity float64
+	sCtx.Mu.RLock()
+	if sCtx.TaskModel != nil {
+		complexity = sCtx.TaskModel.Complexity
 	}
-	thinking := metrics.SelectThinkingMode(sm.replanCount, originTaint, metrics.GlobalSurpriseIndex().Current())
+	sCtx.Mu.RUnlock()
+	surprise := metrics.GlobalSurpriseIndex().Current()
+	thinking := metrics.SelectThinkingMode(sm.replanCount, complexity, surprise)
+	pool := metrics.SelectPlanModelPool(sm.replanCount, complexity, surprise)
 	if sCtx.PlanAttempts > 0 {
 		// 空输出重试关闭思考：空输出的触发条件正是"思考模式 + 挂工具"（决策七实证），
-		// 原样重试只是再掷一次同一枚骰子。用户输入恒为 TaintHigh，SelectThinkingMode
-		// 对首轮规划恒返回 ThinkingMax，不在重试时换掉它，重试等于没有。
+		// 原样重试只是再掷一次同一枚骰子。
 		thinking = types.ThinkingDisabled
 	}
 	return protocol.LLMFillEffect{
@@ -139,6 +144,6 @@ func (sm *StateMachine) planEffect(sCtx *StateContext) protocol.LLMFillEffect {
 		},
 		OnFailure: sm.onPlanFailure,
 		MaxRetry:  maxRetry,
-		ModelPool: "reasoning",
+		ModelPool: string(pool),
 	}
 }

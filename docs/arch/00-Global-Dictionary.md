@@ -553,7 +553,7 @@ LLM 判断当前任务需要交由另一角色 Agent 处理时，直接调用内
 
 > 与 [System-1/1.5/2]（任务难度维度）正交，独立的"推理深度"维度。本节即权威定义。
 
-- `[ThinkingMode]`: Polaris 内部推理深度决策枚举，`ThinkingDisabled` / `ThinkingHigh` / `ThinkingMax` 三档。由 `internal/observability/metrics/metrics_handler.go` 的 `SelectThinkingMode(replanCount, maxTaint, surpriseIndex)` 计算，M4 `transitions.go` 在 LLM 调用前经 `protocol.WithThinkingMode` 注入 InferOption。**与 [ReasoningEffort] 是「决策层 → 抽象层」的映射关系，不是同义词**：ThinkingMode 是 Polaris 自己算出的"该想多深"，ReasoningEffort 是把它翻译成 Provider 能理解的字段。映射表见 M1 §5.2-bis。
+- `[ThinkingMode]`: Polaris 内部推理深度决策枚举，`ThinkingDisabled` / `ThinkingHigh` / `ThinkingMax` 三档。由 `internal/observability/metrics/metrics_handler.go` 的 `SelectThinkingMode(replanCount, complexity, surpriseIndex)` 计算（ADR-0101 决策二：污点不参与），M4 `transitions.go` 在 LLM 调用前经 `protocol.WithThinkingMode` 注入 InferOption。**与 [ReasoningEffort] 是「决策层 → 抽象层」的映射关系，不是同义词**：ThinkingMode 是 Polaris 自己算出的"该想多深"，ReasoningEffort 是把它翻译成 Provider 能理解的字段。映射表见 M1 §5.2-bis。
 - `[ReasoningEffort]`: Provider 抽象层一等公民字段，枚举 `low` / `medium` / `high`。M1 Provider Interface 将其映射至底层 API（o3 `reasoning_effort` / DeepSeek R1 `reasoning_budget` / Claude `thinking.budget_tokens`）。**与 task 难度无关**——同一 task 可在不同 effort 下执行。定义见 M1 §5.2-bis Test-Time Compute。由 [ThinkingMode] 映射而来，见上条。
 - `[ReasoningTokens]`: Provider 返回的 usage 字段，与 `output_tokens` 分计。计入 [TokenBurnRate] 总量但单独导出 Prometheus Gauge `polaris_reasoning_tokens_total`。
 - `[ReasoningState]`: 跨轮 reasoning 状态持久化。物理载体为 M5 `episodic_events.reasoning_state` 列（msgpack 加密 blob），用于推理模型多轮间继承思维链。Tier 0 默认 off（成本控制），Tier 1+ 启用。定义见 M5 §3.1 episodic_events 表。

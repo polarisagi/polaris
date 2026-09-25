@@ -259,16 +259,18 @@ func legacyMetricsHandler(tbr *TokenBurnRate) http.Handler {
 	})
 }
 
-// SelectThinkingMode 根据当前系统的运行时状态，决定应该使用哪个档位的 ThinkingMode。
+// SelectThinkingMode 决定本次规划的思考档位（ADR-0101 决策二修订 ADR-0020 决策二）。
 // 规则：
-// 1. 若重规划次数 > 0，或任务最大污点等级 >= 3（TaintHigh），或 SurpriseIndex > 0.6，则使用 ThinkingMax (Fail-safe/High-risk)
-// 2. 若 SurpriseIndex >= 0.3，则使用 ThinkingHigh (Moderate risk)
-// 3. 否则默认 ThinkingDisabled
-func SelectThinkingMode(replanCount int, maxTaint types.TaintLevel, surpriseIndex float64) types.ThinkingMode {
-	if replanCount > 0 || maxTaint >= types.TaintHigh {
-		return types.ThinkingMax
-	}
+// 1. 重规划（replanCount > 0）或 SurpriseIndex ≥ high → ThinkingMax（便宜路径已失败/高度陌生，升级）
+// 2. 任务复杂度 ≥ plan.reasoning_complexity 或 SurpriseIndex ≥ low → ThinkingHigh
+// 3. 否则 ThinkingDisabled
+//
+// 不再以污点等级为输入：用户输入恒为 TaintHigh，旧规则令每个首轮规划都走 ThinkingMax，
+// 使"思考深度"退化为常量。污点是数据来源的安全标签，由 Taint/Cedar/PolicyGate 防线
+// 消费；思考深度是成本/质量旋钮，二者正交。
+func SelectThinkingMode(replanCount int, complexity, surpriseIndex float64) types.ThinkingMode {
 	low, high := 0.30, 0.60
+	complexGate := DefaultPlanReasoningComplexity
 	if cfg := config.Get(); cfg != nil {
 		t := cfg.Thresholds.M9SelfImprove
 		if t.SurpriseRouteLowThreshold > 0 {
@@ -277,12 +279,35 @@ func SelectThinkingMode(replanCount int, maxTaint types.TaintLevel, surpriseInde
 		if t.SurpriseRouteHighThreshold > 0 {
 			high = t.SurpriseRouteHighThreshold
 		}
+		if g := cfg.Thresholds.M4Kernel.PlanReasoningComplexity; g > 0 {
+			complexGate = g
+		}
 	}
-	if surpriseIndex >= high {
+	if replanCount > 0 || surpriseIndex >= high {
 		return types.ThinkingMax
 	}
-	if surpriseIndex >= low {
+	if complexity >= complexGate || surpriseIndex >= low {
 		return types.ThinkingHigh
 	}
 	return types.ThinkingDisabled
+}
+
+// DefaultPlanReasoningComplexity plan.reasoning_complexity 未配置时的兜底（SSoT：spec/state.yaml）。
+const DefaultPlanReasoningComplexity = 0.7
+
+// SelectPlanModelPool 规划阶段的模型池级联（ADR-0101 决策二）：便宜池先行，
+// 失败（重规划）/高复杂度/高 Surprise 才升级到 reasoning 池。
+// 与 SelectThinkingMode 同源判定，避免"便宜模型 + 满档思考"或"贵模型 + 不思考"的错配。
+func SelectPlanModelPool(replanCount int, complexity, surpriseIndex float64) types.ModelPool {
+	mode := SelectThinkingMode(replanCount, complexity, surpriseIndex)
+	complexGate := DefaultPlanReasoningComplexity
+	if cfg := config.Get(); cfg != nil {
+		if g := cfg.Thresholds.M4Kernel.PlanReasoningComplexity; g > 0 {
+			complexGate = g
+		}
+	}
+	if mode == types.ThinkingMax || complexity >= complexGate {
+		return types.ModelPoolReasoning
+	}
+	return types.ModelPoolGeneral
 }
